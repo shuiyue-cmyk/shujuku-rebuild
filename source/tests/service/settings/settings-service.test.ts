@@ -500,33 +500,6 @@ describe('persistCurrentTemplatePresetName_ACU', () => {
   });
 });
 
-// ═══ setZeroTkOccupyMode_ACU ═══
-describe('setZeroTkOccupyMode_ACU', () => {
-  beforeEach(() => {
-    mockGetConfigStorage.mockReturnValue({ _isTavern: true });
-  });
-
-  it('启用时设置 zeroTkOccupyMode=true 且 outlineEntryEnabled=false', () => {
-    const cfg: any = { zeroTkOccupyMode: false, outlineEntryEnabled: true };
-    mockGetCurrentWorldbookConfig.mockReturnValue(cfg);
-    setZeroTkOccupyMode_ACU(true);
-    expect(cfg.zeroTkOccupyMode).toBe(true);
-    expect(cfg.outlineEntryEnabled).toBe(false);
-    expect(mockSettings.zeroTkOccupyModeDefault).toBe(true);
-    expect(mockGlobalMeta.zeroTkOccupyModeGlobal).toBe(true);
-    expect(mockSaveGlobalMeta).toHaveBeenCalled();
-  });
-
-  it('禁用时设置 zeroTkOccupyMode=false 且 outlineEntryEnabled=true', () => {
-    const cfg: any = { zeroTkOccupyMode: true, outlineEntryEnabled: false };
-    mockGetCurrentWorldbookConfig.mockReturnValue(cfg);
-    setZeroTkOccupyMode_ACU(false);
-    expect(cfg.zeroTkOccupyMode).toBe(false);
-    expect(cfg.outlineEntryEnabled).toBe(true);
-    expect(mockSettings.zeroTkOccupyModeDefault).toBe(false);
-  });
-});
-
 // ═══ applyTemplateScopeForCurrentChat_ACU ═══
 describe('applyTemplateScopeForCurrentChat_ACU', () => {
   it('chat_override 模式：使用聊天级模板覆盖', () => {

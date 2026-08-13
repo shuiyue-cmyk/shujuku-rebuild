@@ -195,10 +195,6 @@ export const dashboardCopy = {
       description:
         "默认关闭。开启后仅保留填表、规划等核心提示，其他浮窗通知不再弹出。",
     },
-    zeroTk: {
-      label: "0TK 占用模式",
-      description: "默认开启。开启后纪要概览不占用上下文。",
-    },
     plot: {
       label: "剧情推进",
       description:

@@ -11,11 +11,10 @@ import { $popupInstance_ACU } from '../state/ui-refs';
 import { saveSettingsAndNotify_ACU } from '../components/settings-ui-helpers';
 import { applyWorldbookEntryFilter_ACU, applyWorldbookListFilter_ACU, applyWorldbookSelectFilter_ACU, isEntryBlocked_ACU, populateImportWorldbookTargetSelector_ACU, populateWorldbookEntryList_ACU, populateWorldbookList_ACU, renderLazyWorldbookEntryItems_ACU, toggleLazyWorldbookEntryGroup_ACU, updateLazyWorldbookEntryCheckedState_ACU, updateWorldbookSourceView_ACU } from '../components/worldbook-selector';
 import { getLorebookEntriesByNames_ACU, getWorldBooks_ACU, updateReadableLorebookEntry_ACU } from '../../service/worldbook/pipeline';
-import { getInjectionTargetLorebook_ACU, getIsolationPrefix_ACU, updateOutlineTableEntry_ACU } from '../../service/worldbook/injection-engine';
+import { getInjectionTargetLorebook_ACU, getIsolationPrefix_ACU } from '../../service/worldbook/injection-engine';
 import { refreshMergedDataAndNotifyWithUI_ACU } from '../components/pipeline-ui-helpers';
 import { getCurrentWorldbookConfig_ACU } from '../../service/settings/settings-readers';
-import { setSummaryVectorIndexMode_ACU, setZeroTkOccupyMode_ACU } from '../../service/settings/settings-service';
-import { formatJsonToReadable_ACU } from '../../service/runtime/helpers-remaining';
+import { setSummaryVectorIndexMode_ACU } from '../../service/settings/settings-service';
 import { getCurrentVectorMemoryConfig_ACU, getDefaultVectorMemoryConfig_ACU, updateGlobalVectorMemoryConfigFields_ACU } from '../../service/vector/vector-memory-config';
 import { getAggregatedSummaryVectorIndexSnapshot_ACU } from '../../service/vector/summary-vector-index-state-service';
 import { defaultVectorMemoryConfig_ACU } from '../../shared/defaults';
@@ -479,42 +478,7 @@ export async function bindWorldbookEvents_ACU(): Promise<void> {
       }
 
       // [新增] "总结大纲(总体大纲)"条目启用开关
-      const $outlineEnabledToggle = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-outline-entry-enabled`);
-      if ($outlineEnabledToggle.length) {
-          $outlineEnabledToggle.off('change.acu_outline_toggle').on('change.acu_outline_toggle', async function() {
-              const modeEnabled = jQuery_API_ACU(this).is(':checked');
-              setZeroTkOccupyMode_ACU(modeEnabled);
-              showToastr_ACU(
-                  'info',
-                  `0TK占用模式已${modeEnabled ? '启用' : '禁用'}。`,
-              );
-
-              // 尝试立即同步世界书条目 enabled 状态（不强制全量更新）
-              try {
-                  if (currentJsonTableData_ACU) {
-                      const { outlineTable } = formatJsonToReadable_ACU(currentJsonTableData_ACU);
-                      await updateOutlineTableEntry_ACU(outlineTable, false);
-                  }
-                  const primaryLorebookName = await getInjectionTargetLorebook_ACU();
-                  if (primaryLorebookName && isWorldbookApiAvailable_ACU()) {
-                      const allEntries = await getLorebookEntries_ACU(primaryLorebookName);
-                      const existingIndexEntry = allEntries.find(e => e.comment && e.comment.endsWith('TavernDB-ACU-CustomExport-纪要索引'));
-                      if (existingIndexEntry) {
-                          const nextEnabled = !modeEnabled;
-                          if (existingIndexEntry.enabled !== nextEnabled) {
-                              await setLorebookEntries_ACU(primaryLorebookName, [{
-                                  uid: existingIndexEntry.uid,
-                                  enabled: nextEnabled,
-                              }]);
-                              logDebug_ACU(`0TK mode toggle: updated 纪要索引 entry. enabled=${nextEnabled}`);
-                          }
-                      }
-                  }
-              } catch (e) {
-                  logWarn_ACU('Failed to sync outline entry enabled state immediately:', e);
-              }
-          });
-      }
+      // 0TK 占用模式开关已剥离（恒开启），无绑定
 
       const $summaryVectorIndexModeToggle = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-summary-vector-index-mode-enabled`);
       if ($summaryVectorIndexModeToggle.length) {

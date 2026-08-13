@@ -3948,8 +3948,8 @@ const defaultWorldbookConfig_ACU = {
     manualSelection: [],
     enabledEntries: {},
     injectionTarget: 'character',
-    outlineEntryEnabled: true,
-    zeroTkOccupyMode: false,
+    outlineEntryEnabled: false, // 0TK 占用模式恒开启：大纲条目不占用上下文
+    zeroTkOccupyMode: true, // 0TK 占用模式恒开启（开关已剥离）
     summaryVectorIndexModeEnabled: false,
     // vectorMemory 保留引用以兼容旧数据迁移读取，但新数据写入 settings_ACU.vectorMemoryConfig
     vectorMemory: defaultVectorMemoryConfig_ACU,
@@ -82728,13 +82728,12 @@ function getCurrentCharSettings_ACU() {
     if (!settings_ACU.characterSettings) {
         settings_ACU.characterSettings = {};
     }
-    const globalZeroTkDefault = (typeof globalMeta_ACU?.zeroTkOccupyModeGlobal === 'boolean')
-        ? (globalMeta_ACU.zeroTkOccupyModeGlobal === true)
-        : (settings_ACU?.zeroTkOccupyModeDefault === true);
+    // 0TK 占用模式恒开启（开关已剥离）：大纲/纪要索引条目不占用上下文
+    const zeroTkOccupyMode = true;
     if (!settings_ACU.characterSettings[charId]) {
         const worldbookConfigForNewChat = JSON.parse(JSON.stringify(defaultWorldbookConfig_ACU));
-        worldbookConfigForNewChat.zeroTkOccupyMode = globalZeroTkDefault;
-        worldbookConfigForNewChat.outlineEntryEnabled = !globalZeroTkDefault;
+        worldbookConfigForNewChat.zeroTkOccupyMode = zeroTkOccupyMode;
+        worldbookConfigForNewChat.outlineEntryEnabled = !zeroTkOccupyMode;
         worldbookConfigForNewChat.summaryVectorIndexModeEnabled = globalMeta_ACU?.summaryVectorIndexModeGlobal === true;
         settings_ACU.characterSettings[charId] = {
             worldbookConfig: worldbookConfigForNewChat,
@@ -82746,7 +82745,7 @@ function getCurrentCharSettings_ACU() {
         const mergedCfg = deepMerge_ACU(JSON.parse(JSON.stringify(defaultWorldbookConfig_ACU)), existingCfg);
         const globalSummaryVectorIndexEnabled = globalMeta_ACU?.summaryVectorIndexModeGlobal === true;
         mergedCfg.summaryVectorIndexModeEnabled = globalSummaryVectorIndexEnabled;
-        mergedCfg.zeroTkOccupyMode = globalZeroTkDefault;
+        mergedCfg.zeroTkOccupyMode = zeroTkOccupyMode;
         mergedCfg.outlineEntryEnabled = !mergedCfg.zeroTkOccupyMode;
         settings_ACU.characterSettings[charId].worldbookConfig = mergedCfg;
     }
@@ -83071,7 +83070,6 @@ let settings_ACU = {
     specialIndexLocks: {},
     importWorldbookTarget: '',
     importPromptExcludeImportedWorldbookEntries: true,
-    zeroTkOccupyModeDefault: false,
     dataIsolationEnabled: false,
     dataIsolationCode: '',
     dataIsolationHistory: [],
@@ -83866,14 +83864,7 @@ function loadSettings_ACU() {
             // [Profile] 强制以 globalMeta.activeIsolationCode 作为当前标识
             settings_ACU.dataIsolationCode = activeCode;
             settings_ACU.dataIsolationEnabled = (activeCode !== '');
-            // 0TK / 纪要向量索引全局偏好：两者独立读取、独立写入，不再互斥投影
-            if (typeof globalMeta_ACU.zeroTkOccupyModeGlobal === 'boolean') {
-                settings_ACU.zeroTkOccupyModeDefault = (globalMeta_ACU.zeroTkOccupyModeGlobal === true);
-            }
-            else {
-                globalMeta_ACU.zeroTkOccupyModeGlobal = (settings_ACU.zeroTkOccupyModeDefault === true);
-                saveGlobalMeta_ACU();
-            }
+            // 纪要向量索引全局偏好（0TK 占用模式恒开启，开关已剥离）
             if (typeof globalMeta_ACU.summaryVectorIndexModeGlobal === 'boolean') {
                 settings_ACU.summaryVectorIndexModeDefault = (globalMeta_ACU.summaryVectorIndexModeGlobal === true);
             }
@@ -83910,13 +83901,6 @@ function loadSettings_ACU() {
             // [Profile] 强制以 globalMeta.activeIsolationCode 作为当前标识
             settings_ACU.dataIsolationCode = activeCode;
             settings_ACU.dataIsolationEnabled = (activeCode !== '');
-            if (typeof globalMeta_ACU.zeroTkOccupyModeGlobal === 'boolean') {
-                settings_ACU.zeroTkOccupyModeDefault = (globalMeta_ACU.zeroTkOccupyModeGlobal === true);
-            }
-            else {
-                globalMeta_ACU.zeroTkOccupyModeGlobal = (settings_ACU.zeroTkOccupyModeDefault === true);
-                saveGlobalMeta_ACU();
-            }
             if (typeof globalMeta_ACU.summaryVectorIndexModeGlobal === 'boolean') {
                 settings_ACU.summaryVectorIndexModeDefault = (globalMeta_ACU.summaryVectorIndexModeGlobal === true);
             }
@@ -84321,8 +84305,6 @@ function buildDefaultSettings_ACU() {
         tableUpdateLocks: {},
         // [新增] 总结表/总体大纲"编码索引列"特殊锁定（默认锁定）
         specialIndexLocks: {},
-        // [新增] 0TK占用模式全局默认值：新对话会继承这个值
-        zeroTkOccupyModeDefault: false,
         // [新增] 向量混合增强交火方案全局默认值：新对话会继承这个值
         summaryVectorIndexModeDefault: false,
         // [Profile] dataIsolationEnabled/code 由当前 profile 决定；history 走 globalMeta
@@ -84456,18 +84438,6 @@ function setGlobalPlotEnabled_ACU(modeEnabled) {
     globalMeta_ACU.plotEnabledGlobal = enabled;
     saveGlobalMeta_ACU();
     return enabled;
-}
-// [从 popup-bindings.ts / api-registry.ts 提取] 切换 0TK 占用模式的完整业务流程
-function setZeroTkOccupyMode_ACU(modeEnabled) {
-    const enabled = !!modeEnabled;
-    settings_ACU.zeroTkOccupyModeDefault = enabled;
-    globalMeta_ACU.zeroTkOccupyModeGlobal = enabled;
-    // 0TK 只控制大纲注入条目本身，不再强制关闭交火模式。
-    const cfg = getCurrentWorldbookConfig_ACU();
-    cfg.zeroTkOccupyMode = enabled;
-    cfg.outlineEntryEnabled = !enabled;
-    saveGlobalMeta_ACU();
-    saveSettings_ACU();
 }
 function setSummaryVectorIndexMode_ACU(modeEnabled) {
     const enabled = !!modeEnabled;
@@ -87118,39 +87088,7 @@ async function bindWorldbookEvents_ACU() {
         });
     }
     // [新增] "总结大纲(总体大纲)"条目启用开关
-    const $outlineEnabledToggle = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-outline-entry-enabled`);
-    if ($outlineEnabledToggle.length) {
-        $outlineEnabledToggle.off('change.acu_outline_toggle').on('change.acu_outline_toggle', async function () {
-            const modeEnabled = jQuery_API_ACU(this).is(':checked');
-            setZeroTkOccupyMode_ACU(modeEnabled);
-            showToastr_ACU('info', `0TK占用模式已${modeEnabled ? '启用' : '禁用'}。`);
-            // 尝试立即同步世界书条目 enabled 状态（不强制全量更新）
-            try {
-                if (currentJsonTableData_ACU) {
-                    const { outlineTable } = formatJsonToReadable_ACU(currentJsonTableData_ACU);
-                    await updateOutlineTableEntry_ACU(outlineTable, false);
-                }
-                const primaryLorebookName = await getInjectionTargetLorebook_ACU();
-                if (primaryLorebookName && isWorldbookApiAvailable_ACU()) {
-                    const allEntries = await getLorebookEntries_ACU(primaryLorebookName);
-                    const existingIndexEntry = allEntries.find(e => e.comment && e.comment.endsWith('TavernDB-ACU-CustomExport-纪要索引'));
-                    if (existingIndexEntry) {
-                        const nextEnabled = !modeEnabled;
-                        if (existingIndexEntry.enabled !== nextEnabled) {
-                            await setLorebookEntries_ACU(primaryLorebookName, [{
-                                    uid: existingIndexEntry.uid,
-                                    enabled: nextEnabled,
-                                }]);
-                            logDebug_ACU(`0TK mode toggle: updated 纪要索引 entry. enabled=${nextEnabled}`);
-                        }
-                    }
-                }
-            }
-            catch (e) {
-                logWarn_ACU('Failed to sync outline entry enabled state immediately:', e);
-            }
-        });
-    }
+    // 0TK 占用模式开关已剥离（恒开启），无绑定
     const $summaryVectorIndexModeToggle = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-summary-vector-index-mode-enabled`);
     if ($summaryVectorIndexModeToggle.length) {
         $summaryVectorIndexModeToggle.off('change.acu_summary_vector_index_mode').on('change.acu_summary_vector_index_mode', async function () {
@@ -99487,7 +99425,8 @@ async function upsertOriginalSummaryIndexEntry_ACU(content) {
     const comment = `${getIsolationPrefix_ACU()}TavernDB-ACU-CustomExport-纪要索引`;
     const entries = await getLorebookEntries_ACU(targetLorebook);
     const existing = entries.find((entry) => entry?.comment === comment);
-    const enabled = existing?.enabled ?? (worldbookConfig?.zeroTkOccupyMode !== true);
+    // 0TK 占用模式恒开启：新条目默认不启用（不占用上下文）
+    const enabled = existing?.enabled ?? false;
     const nextEntry = {
         ...(existing || {}),
         comment,
@@ -105394,11 +105333,9 @@ function createWorldbookAiApi(_ctx) {
                 return false;
             }
         },
-        // 设置 OutlineTable 条目启用状态
-        setOutlineEntryEnabled: async function (enabled) {
+        // 设置 OutlineTable 条目启用状态（0TK 占用模式恒开启：大纲条目不占用上下文，恒 disabled）
+        setOutlineEntryEnabled: async function () {
             try {
-                const isEnabled = !!enabled;
-                setZeroTkOccupyMode_ACU(!isEnabled);
                 if (currentJsonTableData_ACU) {
                     const { outlineTable } = formatJsonToReadable_ACU(currentJsonTableData_ACU);
                     await updateOutlineTableEntry_ACU(outlineTable, false);
@@ -105410,21 +105347,7 @@ function createWorldbookAiApi(_ctx) {
                 return false;
             }
         },
-        // 设置 0TK占用模式
-        setZeroTkOccupyMode: async function (modeEnabled) {
-            try {
-                setZeroTkOccupyMode_ACU(!!modeEnabled);
-                if (currentJsonTableData_ACU) {
-                    const { outlineTable } = formatJsonToReadable_ACU(currentJsonTableData_ACU);
-                    await updateOutlineTableEntry_ACU(outlineTable, false);
-                }
-                return true;
-            }
-            catch (e) {
-                logError_ACU('setZeroTkOccupyMode failed:', e);
-                return false;
-            }
-        },
+        // 设置 0TK占用模式（开关已剥离，恒开启，API 移除）
         // 读取指定世界书条目的 Skill 元数据。Skill 存在世界书 comment block 中，外部插件不需要解析内部格式。
         getWorldbookEntrySkillMeta: async function (bookName, uid) {
             try {
@@ -134187,10 +134110,6 @@ const dashboardCopy = {
             label: "静默提示框",
             description: "默认关闭。开启后仅保留填表、规划等核心提示，其他浮窗通知不再弹出。",
         },
-        zeroTk: {
-            label: "0TK 占用模式",
-            description: "默认开启。开启后纪要概览不占用上下文。",
-        },
         plot: {
             label: "剧情推进",
             description: "默认开启。详情前往对应页面；默认仅召回记忆，进阶版含剧情规划。仅推荐在测试或自由发挥时关闭。",
@@ -134768,12 +134687,6 @@ function useDashboardPage() {
                 description: dashboardCopy.toggles.toastMute.description,
                 value: settings_ACU.toastMuteEnabled === true,
             },
-            {
-                key: "zeroTkOccupyModeDefault",
-                label: dashboardCopy.toggles.zeroTk.label,
-                description: dashboardCopy.toggles.zeroTk.description,
-                value: settings_ACU.zeroTkOccupyModeDefault === true,
-            },
         ];
     });
     /** 高级设置 — 配置后基本不动；动了出问题是正常的。 */
@@ -134885,9 +134798,6 @@ function useDashboardPage() {
                 settings_ACU.plotSettings.enabled = next;
             }
             saveSettings_ACU();
-        }
-        else if (key === "zeroTkOccupyModeDefault") {
-            setZeroTkOccupyMode_ACU(!!value);
         }
         else if (key === "summaryVectorIndexModeEnabled") {
             setSummaryVectorIndexMode_ACU(!!value);

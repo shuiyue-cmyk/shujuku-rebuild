@@ -392,13 +392,7 @@ export   function loadSettings_ACU() {
               settings_ACU.dataIsolationCode = activeCode;
               settings_ACU.dataIsolationEnabled = (activeCode !== '');
 
-              // 0TK / 纪要向量索引全局偏好：两者独立读取、独立写入，不再互斥投影
-              if (typeof globalMeta_ACU.zeroTkOccupyModeGlobal === 'boolean') {
-                  settings_ACU.zeroTkOccupyModeDefault = (globalMeta_ACU.zeroTkOccupyModeGlobal === true);
-              } else {
-                  globalMeta_ACU.zeroTkOccupyModeGlobal = (settings_ACU.zeroTkOccupyModeDefault === true);
-                  saveGlobalMeta_ACU();
-              }
+              // 纪要向量索引全局偏好（0TK 占用模式恒开启，开关已剥离）
               if (typeof globalMeta_ACU.summaryVectorIndexModeGlobal === 'boolean') {
                   settings_ACU.summaryVectorIndexModeDefault = (globalMeta_ACU.summaryVectorIndexModeGlobal === true);
               } else {
@@ -437,12 +431,6 @@ export   function loadSettings_ACU() {
               // [Profile] 强制以 globalMeta.activeIsolationCode 作为当前标识
               settings_ACU.dataIsolationCode = activeCode;
               settings_ACU.dataIsolationEnabled = (activeCode !== '');
-              if (typeof globalMeta_ACU.zeroTkOccupyModeGlobal === 'boolean') {
-                  settings_ACU.zeroTkOccupyModeDefault = (globalMeta_ACU.zeroTkOccupyModeGlobal === true);
-              } else {
-                  globalMeta_ACU.zeroTkOccupyModeGlobal = (settings_ACU.zeroTkOccupyModeDefault === true);
-                  saveGlobalMeta_ACU();
-              }
               if (typeof globalMeta_ACU.summaryVectorIndexModeGlobal === 'boolean') {
                   settings_ACU.summaryVectorIndexModeDefault = (globalMeta_ACU.summaryVectorIndexModeGlobal === true);
               } else {
@@ -850,8 +838,6 @@ export   function buildDefaultSettings_ACU() {
           tableUpdateLocks: {},
           // [新增] 总结表/总体大纲"编码索引列"特殊锁定（默认锁定）
           specialIndexLocks: {},
-          // [新增] 0TK占用模式全局默认值：新对话会继承这个值
-          zeroTkOccupyModeDefault: false,
           // [新增] 向量混合增强交火方案全局默认值：新对话会继承这个值
           summaryVectorIndexModeDefault: false,
           // [Profile] dataIsolationEnabled/code 由当前 profile 决定；history 走 globalMeta
@@ -993,20 +979,6 @@ export function setGlobalPlotEnabled_ACU(modeEnabled: boolean): boolean {
     globalMeta_ACU.plotEnabledGlobal = enabled;
     saveGlobalMeta_ACU();
     return enabled;
-}
-
-// [从 popup-bindings.ts / api-registry.ts 提取] 切换 0TK 占用模式的完整业务流程
-export function setZeroTkOccupyMode_ACU(modeEnabled: boolean) {
-    const enabled = !!modeEnabled;
-    settings_ACU.zeroTkOccupyModeDefault = enabled;
-    globalMeta_ACU.zeroTkOccupyModeGlobal = enabled;
-
-    // 0TK 只控制大纲注入条目本身，不再强制关闭交火模式。
-    const cfg = getCurrentWorldbookConfig_ACU();
-    cfg.zeroTkOccupyMode = enabled;
-    cfg.outlineEntryEnabled = !enabled;
-    saveGlobalMeta_ACU();
-    saveSettings_ACU();
 }
 
 export function setSummaryVectorIndexMode_ACU(modeEnabled: boolean) {

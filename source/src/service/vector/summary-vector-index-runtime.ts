@@ -278,7 +278,8 @@ async function upsertOriginalSummaryIndexEntry_ACU(content: string): Promise<voi
     const comment = `${getIsolationPrefix_ACU()}TavernDB-ACU-CustomExport-纪要索引`;
     const entries = await getLorebookEntries_ACU(targetLorebook);
     const existing = entries.find((entry: any) => entry?.comment === comment);
-    const enabled = existing?.enabled ?? (worldbookConfig?.zeroTkOccupyMode !== true);
+    // 0TK 占用模式恒开启：新条目默认不启用（不占用上下文）
+    const enabled = existing?.enabled ?? false;
     const nextEntry = {
         ...(existing || {}),
         comment,

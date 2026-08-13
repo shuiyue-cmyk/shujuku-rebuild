@@ -243,7 +243,6 @@ export let settings_ACU: any = {
     specialIndexLocks: {},
     importWorldbookTarget: '',
     importPromptExcludeImportedWorldbookEntries: true,
-    zeroTkOccupyModeDefault: false,
     dataIsolationEnabled: false,
     dataIsolationCode: '',
     dataIsolationHistory: [],

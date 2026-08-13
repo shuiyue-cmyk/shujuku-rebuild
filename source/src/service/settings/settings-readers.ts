@@ -21,14 +21,12 @@ export function getCurrentCharSettings_ACU() {
     if (!settings_ACU.characterSettings) {
         settings_ACU.characterSettings = {};
     }
-    const globalZeroTkDefault =
-        (typeof globalMeta_ACU?.zeroTkOccupyModeGlobal === 'boolean')
-            ? (globalMeta_ACU.zeroTkOccupyModeGlobal === true)
-            : (settings_ACU?.zeroTkOccupyModeDefault === true);
+    // 0TK 占用模式恒开启（开关已剥离）：大纲/纪要索引条目不占用上下文
+    const zeroTkOccupyMode = true;
     if (!settings_ACU.characterSettings[charId]) {
         const worldbookConfigForNewChat = JSON.parse(JSON.stringify(defaultWorldbookConfig_ACU));
-        worldbookConfigForNewChat.zeroTkOccupyMode = globalZeroTkDefault;
-        worldbookConfigForNewChat.outlineEntryEnabled = !globalZeroTkDefault;
+        worldbookConfigForNewChat.zeroTkOccupyMode = zeroTkOccupyMode;
+        worldbookConfigForNewChat.outlineEntryEnabled = !zeroTkOccupyMode;
         worldbookConfigForNewChat.summaryVectorIndexModeEnabled = globalMeta_ACU?.summaryVectorIndexModeGlobal === true;
         settings_ACU.characterSettings[charId] = {
             worldbookConfig: worldbookConfigForNewChat,
@@ -43,7 +41,7 @@ export function getCurrentCharSettings_ACU() {
         );
         const globalSummaryVectorIndexEnabled = globalMeta_ACU?.summaryVectorIndexModeGlobal === true;
         mergedCfg.summaryVectorIndexModeEnabled = globalSummaryVectorIndexEnabled;
-        mergedCfg.zeroTkOccupyMode = globalZeroTkDefault;
+        mergedCfg.zeroTkOccupyMode = zeroTkOccupyMode;
         mergedCfg.outlineEntryEnabled = !mergedCfg.zeroTkOccupyMode;
         settings_ACU.characterSettings[charId].worldbookConfig = mergedCfg;
     } catch (e) {

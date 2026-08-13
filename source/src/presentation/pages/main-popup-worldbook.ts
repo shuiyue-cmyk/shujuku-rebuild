@@ -1,4 +1,4 @@
-﻿// main-popup-worldbook.ts
+// main-popup-worldbook.ts
 // Worldbook标签页（世界书）HTML生成
 
 import { SCRIPT_ID_PREFIX_ACU } from '../../shared/constants';
@@ -20,12 +20,7 @@ export function generateWorldbookTabHTML(): string {
                             </div>
                             <small class="notes">选择数据库条目（如全局、人物、大纲等）将被创建或更新到哪个世界书里。</small>
                         </div>
-                        <div class="qrf_settings_block checkbox-group" style="margin-top: 12px; margin-bottom: 6px;">
-                            <input type="checkbox" id="${SCRIPT_ID_PREFIX_ACU}-worldbook-outline-entry-enabled">
-                            <label for="${SCRIPT_ID_PREFIX_ACU}-worldbook-outline-entry-enabled"><strong>0TK占用模式</strong></label>
-                        </div>
-                        <hr style="border-color: var(--acu-border-2); margin: 15px 0;">
-                         <div class="qrf_settings_block_radio">
+                        <div class="qrf_settings_block_radio">
                             <label>世界书来源 (用于AI读取上下文):</label>
                             <div class="qrf_radio_group">
                                 <input type="radio" id="${SCRIPT_ID_PREFIX_ACU}-worldbook-source-character" name="${SCRIPT_ID_PREFIX_ACU}-worldbook-source" value="character" checked>

@@ -179,9 +179,6 @@ async function mountDashboardPage(
     setGlobalPlotEnabled_ACU: vi.fn((enabled: boolean) => {
       settings.plotSettings.enabled = enabled;
     }),
-    setZeroTkOccupyMode_ACU: vi.fn((enabled: boolean) => {
-      settings.zeroTkOccupyModeDefault = enabled;
-    }),
     setSummaryVectorIndexMode_ACU: vi.fn((enabled: boolean) => {
       settings.summaryVectorIndexModeDefault = enabled;
     }),
@@ -368,7 +365,6 @@ describe("DashboardPage", () => {
     expect(text).toContain("高级设置");
     expect(text).toContain("自动更新");
     expect(text).toContain("静默提示框");
-    expect(text).toContain("0TK 占用模式");
 
     const visibleToggleKeys = Array.from(
       document.querySelectorAll<HTMLButtonElement>(
@@ -379,7 +375,6 @@ describe("DashboardPage", () => {
       "flightMode",
       "autoUpdateEnabled",
       "toastMuteEnabled",
-      "zeroTkOccupyModeDefault",
     ]);
 
     // 默认在基础设置视图下，高级字段不可见
@@ -687,7 +682,6 @@ describe("DashboardPage", () => {
     expect(text).toContain("启用开发者选项");
     expect(text).not.toContain("启用SQL存储");
     expect(text).not.toContain("启用条件模板功能");
-    expect(text).not.toContain("0TK 占用模式");
 
     const visibleToggleKeys = Array.from(
       document.querySelectorAll<HTMLButtonElement>(

@@ -7,7 +7,6 @@ import { logDebug_ACU, logError_ACU } from '../../../shared/utils';
 import { callAIWithPreset_ACU } from '../../../service/ai/api-call';
 import { getChatArray_ACU } from '../../../service/chat/chat-service';
 import { currentJsonTableData_ACU } from '../../../service/runtime/state-manager';
-import { setZeroTkOccupyMode_ACU } from '../../../service/settings/settings-service';
 import { deleteAllGeneratedEntries_ACU, updateReadableLorebookEntry_ACU } from '../../../service/worldbook/pipeline';
 import { updateOutlineTableEntry_ACU } from '../../../service/worldbook/injection-engine';
 import { formatJsonToReadable_ACU } from '../../../service/runtime/helpers-remaining';
@@ -79,11 +78,9 @@ export function createWorldbookAiApi(_ctx: ApiGroupContext): Record<string, Func
             }
         },
 
-        // 设置 OutlineTable 条目启用状态
-        setOutlineEntryEnabled: async function(enabled: any) {
+        // 设置 OutlineTable 条目启用状态（0TK 占用模式恒开启：大纲条目不占用上下文，恒 disabled）
+        setOutlineEntryEnabled: async function() {
             try {
-                const isEnabled = !!enabled;
-                setZeroTkOccupyMode_ACU(!isEnabled);
                 if (currentJsonTableData_ACU) {
                     const { outlineTable } = formatJsonToReadable_ACU(currentJsonTableData_ACU);
                     await updateOutlineTableEntry_ACU(outlineTable, false);
@@ -95,20 +92,7 @@ export function createWorldbookAiApi(_ctx: ApiGroupContext): Record<string, Func
             }
         },
 
-        // 设置 0TK占用模式
-        setZeroTkOccupyMode: async function(modeEnabled: any) {
-            try {
-                setZeroTkOccupyMode_ACU(!!modeEnabled);
-                if (currentJsonTableData_ACU) {
-                    const { outlineTable } = formatJsonToReadable_ACU(currentJsonTableData_ACU);
-                    await updateOutlineTableEntry_ACU(outlineTable, false);
-                }
-                return true;
-            } catch (e) {
-                logError_ACU('setZeroTkOccupyMode failed:', e);
-                return false;
-            }
-        },
+        // 设置 0TK占用模式（开关已剥离，恒开启，API 移除）
 
         // 读取指定世界书条目的 Skill 元数据。Skill 存在世界书 comment block 中，外部插件不需要解析内部格式。
         getWorldbookEntrySkillMeta: async function(bookName: any, uid: any) {

@@ -53,7 +53,6 @@ import {
 
 beforeEach(() => {
   mockSettings.characterSettings = {};
-  mockSettings.zeroTkOccupyModeDefault = false;
   mockSettings.manualSelectedTables = [];
   mockSettings.hasManualSelection = false;
   mockSettings.importSelectedTables = [];
@@ -71,9 +70,9 @@ describe('getCurrentCharSettings_ACU', () => {
     // 验证默认配置的具体字段值（deepMerge 后应包含 defaultWorldbookConfig_ACU 的字段）
     expect(result.worldbookConfig.enabled).toBe(true);
     expect(result.worldbookConfig.maxEntries).toBe(10);
-    // zeroTkOccupyModeGlobal=false 时，zeroTkOccupyMode 应为 false
-    expect(result.worldbookConfig.zeroTkOccupyMode).toBe(false);
-    expect(result.worldbookConfig.outlineEntryEnabled).toBe(true);
+    // 0TK 占用模式恒开启：zeroTkOccupyMode=true、outlineEntryEnabled=false
+    expect(result.worldbookConfig.zeroTkOccupyMode).toBe(true);
+    expect(result.worldbookConfig.outlineEntryEnabled).toBe(false);
   });
   it('已有设置时 deepMerge 保留已有字段并补全缺失字段', () => {
     mockSettings.characterSettings['test-char'] = {
@@ -101,9 +100,9 @@ describe('getCurrentCharSettings_ACU', () => {
     expect(result.worldbookConfig).toBeDefined();
     // 验证 deepMerge 补全了 maxEntries
     expect(result.worldbookConfig.maxEntries).toBe(10);
-    // zeroTkOccupyMode 被强制设置为 globalZeroTkDefault
-    expect(result.worldbookConfig.zeroTkOccupyMode).toBe(false);
-    expect(result.worldbookConfig.outlineEntryEnabled).toBe(true);
+    // 0TK 占用模式恒开启
+    expect(result.worldbookConfig.zeroTkOccupyMode).toBe(true);
+    expect(result.worldbookConfig.outlineEntryEnabled).toBe(false);
   });
 });
 

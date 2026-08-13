@@ -87,11 +87,6 @@ export function generateDashboardTabHTML(): string {
                                 <input type="checkbox" id="${SCRIPT_ID_PREFIX_ACU}-prompt-template-enabled-checkbox">
                                 <label for="${SCRIPT_ID_PREFIX_ACU}-prompt-template-enabled-checkbox">启用条件模板功能（&lt;if&gt;条件判断）</label>
                             </div>
-                            <div class="checkbox-group">
-                                <input type="checkbox" id="${SCRIPT_ID_PREFIX_ACU}-worldbook-outline-entry-enabled">
-                                <label for="${SCRIPT_ID_PREFIX_ACU}-worldbook-outline-entry-enabled">0TK占用模式</label>
-                            </div>
-                            <small class="notes">0TK占用模式仍然作用于世界书注入链路，仅迁移到此处以提高可见性。</small>
                         </div>
                     </div>
                 </div>`;

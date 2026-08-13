@@ -291,8 +291,8 @@ export const defaultWorldbookConfig_ACU = {
   manualSelection: [] as string[],
   enabledEntries: {} as Record<string, string[]>,
   injectionTarget: 'character',
-  outlineEntryEnabled: true,
-  zeroTkOccupyMode: false,
+  outlineEntryEnabled: false, // 0TK 占用模式恒开启：大纲条目不占用上下文
+  zeroTkOccupyMode: true, // 0TK 占用模式恒开启（开关已剥离）
   summaryVectorIndexModeEnabled: false,
   // vectorMemory 保留引用以兼容旧数据迁移读取，但新数据写入 settings_ACU.vectorMemoryConfig
   vectorMemory: defaultVectorMemoryConfig_ACU,

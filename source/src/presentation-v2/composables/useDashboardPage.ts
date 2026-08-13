@@ -17,7 +17,6 @@ import {
   saveSettings_ACU,
   setGlobalPlotEnabled_ACU,
   setSummaryVectorIndexMode_ACU,
-  setZeroTkOccupyMode_ACU,
 } from "../../service/settings/settings-service";
 import { resolveTableHistoryStateFromChat_ACU } from "../../service/table/table-history";
 import { getCurrentTableDisplayData_ACU } from "../../service/settings/settings-readers";
@@ -822,12 +821,6 @@ export function useDashboardPage(): DashboardPageState {
         description: dashboardCopy.toggles.toastMute.description,
         value: settings_ACU.toastMuteEnabled === true,
       },
-      {
-        key: "zeroTkOccupyModeDefault",
-        label: dashboardCopy.toggles.zeroTk.label,
-        description: dashboardCopy.toggles.zeroTk.description,
-        value: settings_ACU.zeroTkOccupyModeDefault === true,
-      },
     ];
   });
 
@@ -958,8 +951,6 @@ export function useDashboardPage(): DashboardPageState {
         settings_ACU.plotSettings.enabled = next;
       }
       saveSettings_ACU();
-    } else if (key === "zeroTkOccupyModeDefault") {
-      setZeroTkOccupyMode_ACU(!!value);
     } else if (key === "summaryVectorIndexModeEnabled") {
       setSummaryVectorIndexMode_ACU(!!value);
     } else if (key === "developerOptionsEnabled") {
