@@ -11,21 +11,19 @@ const STORAGE_KEY = 'acu_v2_ui_state';
 function createSettings() {
   return {
     apiMode: 'custom',
-    apiConfig: { url: 'https://alpha.test', apiKey: '', model: 'ma', useMainApi: false, max_tokens: 1000, temperature: 0.7 },
+    apiConfig: { url: 'https://alpha.test', apiKey: '', model: 'ma', max_tokens: 1000, temperature: 0.7 },
     tavernProfile: '',
     streamingEnabled: false,
     apiPresets: [
       {
         name: 'alpha',
         apiMode: 'custom',
-        apiConfig: { url: 'https://alpha.test', apiKey: '', model: 'ma', useMainApi: false, max_tokens: 1000, temperature: 0.7 },
-        tavernProfile: '',
+        apiConfig: { url: 'https://alpha.test', apiKey: '', model: 'ma', max_tokens: 1000, temperature: 0.7 },
       },
       {
         name: 'beta',
         apiMode: 'custom',
-        apiConfig: { url: '', apiKey: '', model: '', useMainApi: true, max_tokens: 60000, temperature: 1 },
-        tavernProfile: '',
+        apiConfig: { url: 'https://beta.test', apiKey: '', model: 'beta-model', max_tokens: 60000, temperature: 1 },
       },
     ],
     defaultApiPresetName: 'alpha',
@@ -182,6 +180,20 @@ describe('ApiPage', () => {
     const nameInput = nameRow.querySelector('input') as HTMLInputElement;
     nameInput.value = 'first-api';
     nameInput.dispatchEvent(new Event('input', { bubbles: true }));
+    await Promise.resolve();
+
+    const urlRow = Array.from(page.querySelectorAll('.acu-form-row'))
+      .find(row => (row.textContent || '').includes('端点')) as HTMLElement;
+    const urlInput = urlRow.querySelector('input') as HTMLInputElement;
+    urlInput.value = 'https://first.test';
+    urlInput.dispatchEvent(new Event('input', { bubbles: true }));
+    await Promise.resolve();
+
+    const modelRow = Array.from(page.querySelectorAll('.acu-form-row'))
+      .find(row => (row.textContent || '').includes('模型名')) as HTMLElement;
+    const modelInput = modelRow.querySelector('input') as HTMLInputElement;
+    modelInput.value = 'first-model';
+    modelInput.dispatchEvent(new Event('input', { bubbles: true }));
     await Promise.resolve();
 
     const saveButton = Array.from(page.querySelectorAll<HTMLButtonElement>('button'))

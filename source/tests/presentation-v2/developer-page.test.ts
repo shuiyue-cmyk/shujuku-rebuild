@@ -105,43 +105,7 @@ describe('DeveloperPage', () => {
     const text = page!.textContent || '';
     expect(text).toContain('开发者 gated 字段');
     expect(text).toContain('填表执行参数');
-    expect(text).toContain('旧 UI 入口');
     expect(text).toContain('最大并发更新组数');
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('旧 UI 入口开关会写入 dev-options 并同步菜单显隐', async () => {
-    const { mount } = await mountDeveloperPage();
-    const { MENU_ITEM_CONTAINER_ID_ACU } = await import('../../src/shared/data-constants');
-
-    const legacyContainer = document.createElement('div');
-    legacyContainer.id = MENU_ITEM_CONTAINER_ID_ACU;
-    legacyContainer.style.display = 'none';
-    legacyContainer.setAttribute('tabindex', '-1');
-    document.body.appendChild(legacyContainer);
-
-    const toggle = document.querySelector(
-      'button[data-acu-toggle-key="legacyUiMenuVisible"]',
-    ) as HTMLButtonElement | null;
-    expect(toggle).not.toBeNull();
-    expect(toggle!.getAttribute('aria-checked')).toBe('false');
-
-    toggle!.click();
-    await Promise.resolve();
-
-    const persisted = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
-    expect(persisted?.devOptions?.legacyUiMenuVisible).toBe(true);
-    expect(legacyContainer.style.display).toBe('');
-    expect(legacyContainer.getAttribute('tabindex')).toBe('0');
-
-    toggle!.click();
-    await Promise.resolve();
-
-    const nextPersisted = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
-    expect(nextPersisted?.devOptions?.legacyUiMenuVisible).toBe(false);
-    expect(legacyContainer.style.display).toBe('none');
-    expect(legacyContainer.getAttribute('tabindex')).toBe('-1');
 
     mount.__resetAcuV2MountForTests();
   });

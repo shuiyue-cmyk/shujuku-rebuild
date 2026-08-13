@@ -19,7 +19,7 @@ https://github.com/shuiyue-cmyk/shujuku-rebuild
 ## 运行时依赖说明
 
 - **核心功能**（SQL 表格、模板、剧情推进预设导入、skill 化、可视化前端兼容、V2 界面）**不依赖酒馆助手**。
-- **可选增强**：已安装酒馆助手（JS-Slash-Runner）时，AI 主 API 调用（`TavernHelper.generateRaw`）与世界书读写走酒馆助手桥接，功能最完整；未安装时扩展照常启动，剧情推进的 AI 规划等可通过「自定义 API」模式（直接请求 `/api/backends/chat-completions/generate`）工作，缺桥接的能力会自动降级并给出提示。
+- **可选增强**：已安装酒馆助手（JS-Slash-Runner）时，世界书读写等部分能力走酒馆助手桥接；未安装时扩展照常启动，AI 调用统一走「自定义 API」（直接请求 `/api/backends/chat-completions/generate`），缺桥接的能力会自动降级并给出提示。
 
 ## 主要变化（相对 spv8.9.2）
 
@@ -30,6 +30,8 @@ https://github.com/shuiyue-cmyk/shujuku-rebuild
 | 智能续写 | 移除（含 v2 页面、旧弹窗区块与循环引擎） |
 | 严格 JSON 填表响应 | 移除（开发者选项开关、隔离提示词与 JSON 响应解析链路；填表统一走 `<tableEdit>` 协议） |
 | 默认剧情推进 | 默认启用「时间召回」内置预设（原「召回+补充」双系统默认不再使用） |
+| 酒馆主 API | 移除（`apiMode=tavern` 连接预设与「使用主 API」开关，AI 调用统一走自定义 API；`TavernHelper.generateRaw` 桥删除） |
+| 旧 UI 入口开关 | 移除（旧 UI 菜单入口已随入口重构剥离，开发者选项中的死开关一并删除） |
 | 酒馆助手硬依赖 | 移除启动门控与 `TavernHelper.generate` 钩子 |
 | 正文替换解锁 | 由隐藏的 `maxRetries==49` 解锁改为高级设置中的直接开关 |
 | 发布形态 | 纯标准扩展，仓库根目录直装 + GitHub 自动更新 |

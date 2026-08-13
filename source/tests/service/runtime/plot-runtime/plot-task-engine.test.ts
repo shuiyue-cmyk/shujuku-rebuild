@@ -77,7 +77,7 @@ const {
     mockSettings: {
       plotApiPreset: '',
       apiMode: 'custom',
-      apiConfig: { useMainApi: true },
+      apiConfig: { url: 'https://api.example.com', model: 'gpt-4' },
       plotSettings: {
         contextTurnCount: 2,
         contextExtractTags: '',
@@ -339,7 +339,6 @@ vi.mock('../../../../src/service/agent/agent-worldbook-skill-meta', () => ({
 }));
 
 import {
-  willPlotUseMainApiGenerateRaw_ACU,
   runPlotTasksRuntime_ACU,
   getWorldbookContentForPlot_ACU,
   getAgentControlledWorldbookEntriesForFinalPrompt_ACU,
@@ -351,7 +350,7 @@ beforeEach(() => {
 
   mockSettings.plotApiPreset = '';
   mockSettings.apiMode = 'custom';
-  mockSettings.apiConfig = { useMainApi: true };
+  mockSettings.apiConfig = { url: 'https://api.example.com', model: 'gpt-4' };
   mockSettings.plotSettings = {
     contextTurnCount: 2,
     contextExtractTags: '',
@@ -384,7 +383,7 @@ beforeEach(() => {
 
   mockGetApiConfigByPreset.mockReturnValue({
     apiMode: 'custom',
-    apiConfig: { useMainApi: true },
+    apiConfig: { url: 'https://api.example.com', model: 'gpt-4' },
   });
   mockGetChatArray.mockReturnValue([
     { is_user: false, mes: '前文AI-1' },
@@ -482,36 +481,6 @@ beforeEach(() => {
     skillCount: 0,
     bookNames: [],
     skillMetas: [],
-  });
-});
-
-describe('willPlotUseMainApiGenerateRaw_ACU', () => {
-  it('预设为非 tavern 且 useMainApi=true 时返回 true', () => {
-    mockGetApiConfigByPreset.mockReturnValue({
-      apiMode: 'custom',
-      apiConfig: { useMainApi: true },
-    });
-
-    expect(willPlotUseMainApiGenerateRaw_ACU()).toBe(true);
-  });
-
-  it('预设为 tavern 模式时返回 false', () => {
-    mockGetApiConfigByPreset.mockReturnValue({
-      apiMode: 'tavern',
-      apiConfig: { useMainApi: true },
-    });
-
-    expect(willPlotUseMainApiGenerateRaw_ACU()).toBe(false);
-  });
-
-  it('读取预设失败时回退到全局设置', () => {
-    mockSettings.apiMode = 'custom';
-    (mockSettings as any).useMainApi = true;
-    mockGetApiConfigByPreset.mockImplementation(() => {
-      throw new Error('preset broken');
-    });
-
-    expect(willPlotUseMainApiGenerateRaw_ACU()).toBe(true);
   });
 });
 
@@ -1777,38 +1746,6 @@ describe('runPlotTasksRuntime_ACU', () => {
         content: [['row_id', '字段'], ['1', '合并值']],
       },
     });
-  });
-
-  it('使用主 API 时会为每次任务执行递增 ignoreNextGenerationEndedCount', async () => {
-    mockGetApiConfigByPreset.mockReturnValue({
-      apiMode: 'custom',
-      apiConfig: { useMainApi: true },
-    });
-
-    const plotSettings = {
-      tasks: [
-        {
-          id: 'task-a',
-          name: '任务A',
-          stage: 1,
-          order: 1,
-          maxRetries: 1,
-          promptGroup: [{ role: 'user', content: 'task-a' }],
-        },
-        {
-          id: 'task-b',
-          name: '任务B',
-          stage: 1,
-          order: 2,
-          maxRetries: 1,
-          promptGroup: [{ role: 'user', content: 'task-b' }],
-        },
-      ],
-    };
-
-    await runPlotTasksRuntime_ACU(plotSettings, '当前输入');
-
-    expect(mockPlanningGuard.ignoreNextGenerationEndedCount).toBe(2);
   });
 
   it('标签来源按阶段切换：阶段1用历史，阶段1产出后阶段2用本轮', async () => {

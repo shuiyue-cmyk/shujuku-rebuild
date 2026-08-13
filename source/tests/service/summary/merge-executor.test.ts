@@ -24,7 +24,7 @@ vi.mock('../../../src/shared/defaults-json.js', () => ({
 
 let mockSettings: any = {
   apiMode: 'custom',
-  apiConfig: { useMainApi: true, url: '', model: '' },
+  apiConfig: { url: 'https://api.example.com', model: 'gpt-4' },
   tavernProfile: '',
   mergeTargetCount: 1,
   mergeBatchSize: 5,
@@ -103,7 +103,7 @@ describe('validateMergeParams_ACU', () => {
     vi.clearAllMocks();
     mockSettings = {
       apiMode: 'custom',
-      apiConfig: { useMainApi: true, url: '', model: '' },
+      apiConfig: { url: 'https://api.example.com', model: 'gpt-4' },
       tavernProfile: '',
       mergeTargetCount: 1,
       mergeBatchSize: 5,
@@ -116,7 +116,7 @@ describe('validateMergeParams_ACU', () => {
 
   it('API 未配置时返回错误', () => {
     mockSettings.apiMode = 'custom';
-    mockSettings.apiConfig = { useMainApi: false, url: '', model: '' };
+    mockSettings.apiConfig = { url: '', model: '' };
     const result = validateMergeParams_ACU('默认提示词');
     expect(result.valid).toBe(false);
     expect(result.error).toContain('API');
@@ -201,7 +201,7 @@ describe('prepareMergeSummary_ACU', () => {
     mockIsAutoUpdating = false;
     mockSettings = {
       apiMode: 'custom',
-      apiConfig: { useMainApi: true, url: '', model: '' },
+      apiConfig: { url: 'https://api.example.com', model: 'gpt-4' },
       tavernProfile: '',
       mergeTargetCount: 1,
       mergeBatchSize: 5,
@@ -583,7 +583,7 @@ describe('executeMergeBatches_ACU', () => {
     vi.clearAllMocks();
     mockSettings = {
       apiMode: 'custom',
-      apiConfig: { useMainApi: true, url: '', model: '' },
+      apiConfig: { url: 'https://api.example.com', model: 'gpt-4' },
       tavernProfile: '',
       charCardPrompt: [{ role: 'USER', content: '默认提示词', mainSlot: 'A', isMain: true }],
       streamingEnabled: false,
@@ -624,10 +624,10 @@ describe('executeMergeBatches_ACU', () => {
   });
 
   it('AI 返回有效数据时成功累积', async () => {
-    const { generateRaw_ACU } = await import('../../../src/service/ai/ai-service');
-    const { extractTableEditInner_ACU } = await import('../../../src/service/ai/prompt-builder');
+    const { extractTableEditInner_ACU, handleApiResponse_ACU } = await import('../../../src/service/ai/prompt-builder');
 
-    vi.mocked(generateRaw_ACU).mockResolvedValue(
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+    vi.mocked(handleApiResponse_ACU).mockResolvedValue(
       '<tableEdit><!-- insertRow(0, {"0": "合并纪要1"}) --></tableEdit>'
     );
     vi.mocked(extractTableEditInner_ACU).mockReturnValue({
@@ -654,10 +654,10 @@ describe('executeMergeBatches_ACU', () => {
   });
 
   it('AI 返回无效数据时重试后失败', async () => {
-    const { generateRaw_ACU } = await import('../../../src/service/ai/ai-service');
-    const { extractTableEditInner_ACU } = await import('../../../src/service/ai/prompt-builder');
+    const { extractTableEditInner_ACU, handleApiResponse_ACU } = await import('../../../src/service/ai/prompt-builder');
 
-    vi.mocked(generateRaw_ACU).mockResolvedValue('无效响应');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+    vi.mocked(handleApiResponse_ACU).mockResolvedValue('无效响应');
     vi.mocked(extractTableEditInner_ACU).mockReturnValue(null);
 
     const config = {
@@ -678,10 +678,10 @@ describe('executeMergeBatches_ACU', () => {
   });
 
   it('进度回调被正确调用', async () => {
-    const { generateRaw_ACU } = await import('../../../src/service/ai/ai-service');
-    const { extractTableEditInner_ACU } = await import('../../../src/service/ai/prompt-builder');
+    const { extractTableEditInner_ACU, handleApiResponse_ACU } = await import('../../../src/service/ai/prompt-builder');
 
-    vi.mocked(generateRaw_ACU).mockResolvedValue(
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+    vi.mocked(handleApiResponse_ACU).mockResolvedValue(
       "<tableEdit><!-- insertRow(0, {0: '合并纪要1'}) --></tableEdit>"
     );
     vi.mocked(extractTableEditInner_ACU).mockReturnValue({
@@ -713,10 +713,10 @@ describe('executeMergeBatches_ACU', () => {
   });
 
   it('多批次时正确拆分', async () => {
-    const { generateRaw_ACU } = await import('../../../src/service/ai/ai-service');
-    const { extractTableEditInner_ACU } = await import('../../../src/service/ai/prompt-builder');
+    const { extractTableEditInner_ACU, handleApiResponse_ACU } = await import('../../../src/service/ai/prompt-builder');
 
-    vi.mocked(generateRaw_ACU).mockResolvedValue(
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+    vi.mocked(handleApiResponse_ACU).mockResolvedValue(
       '<tableEdit><!-- insertRow(0, {"0": "合并纪要"}) --></tableEdit>'
     );
     vi.mocked(extractTableEditInner_ACU).mockReturnValue({
@@ -749,14 +749,15 @@ describe('executeMergeBatches_ACU', () => {
   });
 
   it('prompt 模板变量被正确替换', async () => {
-    const { generateRaw_ACU } = await import('../../../src/service/ai/ai-service');
-    const { extractTableEditInner_ACU } = await import('../../../src/service/ai/prompt-builder');
+    const { extractTableEditInner_ACU, handleApiResponse_ACU } = await import('../../../src/service/ai/prompt-builder');
 
     let capturedPrompt = '';
-    vi.mocked(generateRaw_ACU).mockImplementation(async (opts: any) => {
-      capturedPrompt = opts.ordered_prompts?.[0]?.content || '';
-      return "<tableEdit><!-- insertRow(0, {0: '合并纪要'}) --></tableEdit>";
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+    mockBuildCustomBody.mockImplementation((messages: any) => {
+      capturedPrompt = messages?.[0]?.content || '';
+      return { messages: [], model: 'gpt-4', max_tokens: 4096, temperature: 1.0, top_p: 0.95, stream: false };
     });
+    vi.mocked(handleApiResponse_ACU).mockResolvedValue("<tableEdit><!-- insertRow(0, {0: '合并纪要'}) --></tableEdit>");
     vi.mocked(extractTableEditInner_ACU).mockReturnValue({
       inner: "<!-- insertRow(0, {0: '合并纪要'}) -->",
       cleaned: '',
@@ -788,41 +789,6 @@ describe('executeMergeBatches_ACU', () => {
 describe('executeMergeBatches_ACU max_tokens 回退', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-  });
-
-  it('tavern 分支 max_tokens=0 不被 4096 覆盖', async () => {
-    mockSettings.apiMode = 'tavern';
-    mockSettings.apiConfig = { max_tokens: 0, model: 'gpt-4' };
-    mockSettings.tavernProfile = 'default';
-    mockSettings.charCardPrompt = [{ role: 'USER', content: '提示词', isMain: true, mainSlot: 'A' }];
-    mockSettings.streamingEnabled = false;
-
-    const { sendConnectionManagerRequest_ACU } = await import('../../../src/service/ai/ai-service');
-    const { extractTableEditInner_ACU } = await import('../../../src/service/ai/prompt-builder');
-
-    vi.mocked(sendConnectionManagerRequest_ACU).mockResolvedValue({
-      ok: true,
-      result: { choices: [{ message: { content: '<tableEdit>insertRow(0, {"0": "test"})</tableEdit>' } }] },
-    });
-    vi.mocked(extractTableEditInner_ACU).mockReturnValue({ inner: 'insertRow(0, {"0": "test"})' });
-
-    const config = {
-      summaryKey: 'sheet_0',
-      allSummaryRows: [['1', 'A']],
-      fullSummaryRows: [['1', 'A']],
-      startIndex: 0,
-      targetCount: 1,
-      batchSize: 5,
-      promptTemplate: '$A $TARGET_COUNT $BASE_DATA',
-      maxRetries: 1,
-    };
-
-    await executeMergeBatches_ACU(config);
-    expect(sendConnectionManagerRequest_ACU).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.any(Array),
-      0
-    );
   });
 
   it('custom 分支 max_tokens=0 不被 4096 覆盖', async () => {

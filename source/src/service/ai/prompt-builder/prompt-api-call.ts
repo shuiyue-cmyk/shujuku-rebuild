@@ -7,7 +7,7 @@ import { currentAbortController_ACU, trackAbortController_ACU, untrackAbortContr
 import { getApiConfigByPreset_ACU, buildCustomApiRequestBody_ACU } from '../api-call';
 import { currentJsonTableData_ACU, settings_ACU } from '../../runtime/state-manager';
 import { getPersonaDescription_ACU, getCharDescription_ACU } from '../../../data/gateways/host-state-gateway';
-import { isGenerateRawAvailable_ACU, generateRaw_ACU, sendConnectionManagerRequest_ACU, triggerSlash_ACU, getConnectionManagerProfiles_ACU, getHostRequestHeaders_ACU } from '../../../data/gateways/ai-gateway';
+import { getHostRequestHeaders_ACU } from '../../../data/gateways/ai-gateway';
 import { logDebug_ACU, logError_ACU, logWarn_ACU, normalizeExcludeRules_ACU } from '../../../shared/utils';
 import { applyExcludeRulesToText_ACU, getLatestAIMessageContent_ACU, getPlotFromHistory_ACU, parseIfBlocksInContent_ACU, parseRandomTags_ACU, replaceRandomVariables_ACU } from '../../runtime/helpers-remaining';
 import { replaceDbSqlVariables } from '../../runtime/template-vars/sql-query-var';
@@ -159,154 +159,28 @@ export class RetryableAiResponseError_ACU extends Error {
     logDebug_ACU(`使用API预设: ${effectiveTableApiPreset || '当前配置'}, 模式: ${effectiveApiMode}`);
 
     try {
-        if (effectiveApiMode === 'tavern') {
-        const profileId = effectiveTavernProfile;
-        if (!profileId) {
-            throw new Error('未选择酒馆连接预设。');
+        if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
+            throw new Error('自定义API的URL或模型未配置。');
         }
-            if (skipProfileSwitch) {
-                logDebug_ACU('ACU: 并发模式启用，跳过酒馆预设切换。');
-            }
+        const generateUrl = `/api/backends/chat-completions/generate`;
 
-        let originalProfile = '';
-        let responsePromise;
-        let rawResult;
+        const headers = { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' };
 
-        try {
-            if (!skipProfileSwitch) {
-                originalProfile = await triggerSlash_ACU('/profile');
-            }
-            const targetProfile = getConnectionManagerProfiles_ACU().find(p => p.id === profileId);
+        const body = JSON.stringify(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { stripModelPrefix: false }));
 
-            if (!targetProfile) {
-                throw new Error(`无法找到ID为 "${profileId}" 的连接预设。`);
-            }
-            if (!targetProfile.api) {
-                throw new Error(`预设 "${targetProfile.name || targetProfile.id}" 没有配置API。`);
-            }
-            if (!targetProfile.preset) {
-                throw new Error(`预设 "${targetProfile.name || targetProfile.id}" 没有选择预设。`);
-            }
+        logDebug_ACU('ACU: 调用新的后端生成API:', generateUrl, 'Model:', effectiveApiConfig.model);
+        const response = await fetch(generateUrl, { method: 'POST', headers, body, signal: abortSignal });
 
-            const targetProfileName = targetProfile.name || targetProfile.id;
-            if (!skipProfileSwitch) {
-                const currentProfile = await triggerSlash_ACU('/profile');
-
-                if (currentProfile !== targetProfileName) {
-                    const escapedProfileName = targetProfileName.replace(/"/g, '\\"');
-                    await triggerSlash_ACU(`/profile await=true "${escapedProfileName}"`);
-                }
-            }
-            
-            logDebug_ACU(`ACU: 通过酒馆连接预设 (ID: ${profileId}, Name: ${targetProfileName}) 发送请求...`);
-
-            responsePromise = sendConnectionManagerRequest_ACU(
-                profileId, 
-                messages, 
-                effectiveApiConfig.max_tokens ?? effectiveApiConfig.maxTokens ?? 4096
-            );
-
-            rawResult = await responsePromise;
-
-        } catch (error) {
-            logError_ACU(`ACU: 调用酒馆连接预设时出错:`, error);
-            try {
-                if (originalProfile && !skipProfileSwitch) {
-                    const currentProfileAfterCall = await triggerSlash_ACU('/profile');
-                    if (originalProfile !== currentProfileAfterCall) {
-                        const escapedOriginalProfile = originalProfile.replace(/"/g, '\\"');
-                        await triggerSlash_ACU(`/profile await=true "${escapedOriginalProfile}"`);
-                        logDebug_ACU(`ACU: 已恢复原酒馆连接预设: "${originalProfile}"`);
-                    }
-                }
-            } catch (restoreError) {
-                logError_ACU(`ACU: 恢复原预设时出错:`, restoreError);
-            }
-            throw new Error(`API请求失败 (酒馆预设): ${error.message}`);
-        } finally {
-            if (rawResult !== undefined) {
-                try {
-                    if (!skipProfileSwitch) {
-                        const currentProfileAfterCall = await triggerSlash_ACU('/profile');
-                        if (originalProfile && originalProfile !== currentProfileAfterCall) {
-                            const escapedOriginalProfile = originalProfile.replace(/"/g, '\\"');
-                            await triggerSlash_ACU(`/profile await=true "${escapedOriginalProfile}"`);
-                            logDebug_ACU(`ACU: 已恢复原酒馆连接预设: "${originalProfile}"`);
-                        }
-                    }
-                } catch (restoreError) {
-                    logError_ACU(`ACU: 恢复原预设时出错:`, restoreError);
-                }
-            }
+        if (!response.ok) {
+          const errTxt = await response.text();
+          throw new Error(`API请求失败: ${response.status} ${errTxt}`);
         }
 
-        if (rawResult && rawResult.ok && rawResult.result?.choices?.[0]?.message?.content) {
-            return rawResult.result.choices[0].message.content.trim();
-        } else if (rawResult && typeof rawResult.content === 'string') {
-            return rawResult.content.trim();
-        } else {
-            const errorMsg = rawResult?.error || JSON.stringify(rawResult);
-            throw new Error(`酒馆预设API调用返回无效响应: ${errorMsg}`);
+        const content = await handleApiResponse_ACU(response, abortSignal);
+        if (content) {
+            return content.trim();
         }
-
-    } else {
-        if (effectiveApiConfig.useMainApi && !forceDirectApi) {
-            logDebug_ACU('ACU: 通过酒馆主API发送请求（流式传输）...');
-            if (!isGenerateRawAvailable_ACU()) {
-                throw new Error('TavernHelper.generateRaw 函数不存在。请检查酒馆版本。');
-            }
-            const response = await generateRaw_ACU({
-                ordered_prompts: messages,
-                should_stream: settings_ACU.streamingEnabled || false,
-            });
-            if (typeof response !== 'string') {
-                throw new Error('主API调用未返回预期的文本响应。');
-            }
-            return response.trim();
-
-        } else {
-            if (forceDirectApi && effectiveApiConfig.useMainApi) {
-                if (effectiveApiConfig.url && effectiveApiConfig.model) {
-                    logDebug_ACU('ACU: 并发模式启用，强制使用独立API路径。');
-                } else {
-                    logWarn_ACU('ACU: 并发模式要求独立API，但URL或模型未配置，回退主API。');
-                    if (!isGenerateRawAvailable_ACU()) {
-                        throw new Error('TavernHelper.generateRaw 函数不存在。请检查酒馆版本。');
-                    }
-                    const response = await generateRaw_ACU({
-                        ordered_prompts: messages,
-                        should_stream: settings_ACU.streamingEnabled || false,
-                    });
-                    if (typeof response !== 'string') {
-                        throw new Error('主API调用未返回预期的文本响应。');
-                    }
-                    return response.trim();
-                }
-            }
-            if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
-                throw new Error('自定义API的URL或模型未配置。');
-            }
-            const generateUrl = `/api/backends/chat-completions/generate`;
-            
-            const headers = { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' };
-            
-            const body = JSON.stringify(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { stripModelPrefix: false }));
-            
-            logDebug_ACU('ACU: 调用新的后端生成API:', generateUrl, 'Model:', effectiveApiConfig.model);
-            const response = await fetch(generateUrl, { method: 'POST', headers, body, signal: abortSignal });
-            
-            if (!response.ok) {
-              const errTxt = await response.text();
-              throw new Error(`API请求失败: ${response.status} ${errTxt}`);
-            }
-            
-            const content = await handleApiResponse_ACU(response, abortSignal);
-            if (content) {
-                return content.trim();
-            }
-            throw new RetryableAiResponseError_ACU();
-        }
-        }
+        throw new RetryableAiResponseError_ACU();
     } finally {
         untrackAbortController_ACU(localAbortController);
         if (currentAbortController_ACU === localAbortController) {

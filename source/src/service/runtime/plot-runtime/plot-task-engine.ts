@@ -110,18 +110,6 @@ import { hasUsableWorldbookSkillMeta_ACU, resolveAgentWorldbookFilterAvailabilit
     return String(settings_ACU.plotApiPreset || '').trim();
   }
 
-  export function willPlotUseMainApiGenerateRaw_ACU(taskApiPreset: string = '') {
-    try {
-      const effectivePreset = String(taskApiPreset || '').trim() || String(settings_ACU.plotApiPreset || '').trim();
-      const apiPresetConfig: any = getApiConfigByPreset_ACU(effectivePreset) || {};
-      const effectiveApiMode = apiPresetConfig.apiMode ?? settings_ACU.apiMode;
-      const effectiveApiConfig = apiPresetConfig.apiConfig || settings_ACU.apiConfig || {};
-      return effectiveApiMode !== 'tavern' && !!effectiveApiConfig.useMainApi;
-    } catch (e) {
-      return settings_ACU.apiMode !== 'tavern' && !!settings_ACU.useMainApi;
-    }
-  }
-
   function sortPlotTasksForRuntime_ACU(tasks: any[]) {
     return (Array.isArray(tasks) ? [...tasks] : [])
       .filter(Boolean)
@@ -625,9 +613,6 @@ import { hasUsableWorldbookSkillMeta_ACU, resolveAgentWorldbookFilterAvailabilit
         checkPlotAbortRequested_ACU();
 
         const effectivePlotApiPreset = resolvePlotTaskApiPreset_ACU(normalizedTask);
-        if (willPlotUseMainApiGenerateRaw_ACU(effectivePlotApiPreset)) {
-          planningGuard_ACU.ignoreNextGenerationEndedCount++;
-        }
 
         let tempMessage = null;
         let apiError = null;

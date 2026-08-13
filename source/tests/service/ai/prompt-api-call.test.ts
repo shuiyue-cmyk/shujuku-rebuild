@@ -229,16 +229,21 @@ describe('handleApiResponse_ACU', () => {
 
 // ═══ callCustomOpenAI_ACU — prompt 组装 ═══
 describe('callCustomOpenAI_ACU — prompt 组装', () => {
+  beforeEach(() => {
+    mockGetApiConfigByPreset.mockReturnValue({
+      apiMode: 'custom',
+      apiConfig: { url: 'https://api.example.com', model: 'gpt-4', max_tokens: 4096, temperature: 1.0 },
+    });
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'AI回复' } }] }),
+    });
+  });
+
   it('占位符 $0/$1/$4/$6/$8/$9/$U/$C 被正确替换', async () => {
     mockSettings.charCardPrompt = [
       { role: 'USER', content: '表格:$0 消息:$1 世界书:$4 剧情:$6 额外:$8 内部已排除世界书:$9/$9 用户:$U 角色:$C' },
     ];
-    mockGetApiConfigByPreset.mockReturnValue({
-      apiMode: 'custom',
-      apiConfig: { useMainApi: true },
-      tavernProfile: '',
-    });
-    mockGenerateRaw.mockResolvedValue('AI回复');
 
     const result = await callCustomOpenAI_ACU({
       tableDataText: '表格数据',
@@ -250,7 +255,7 @@ describe('callCustomOpenAI_ACU — prompt 组装', () => {
 
     expect(result).toBe('AI回复');
     // 验证 generateRaw 收到的 messages 中占位符已被替换
-    const calledMessages = mockGenerateRaw.mock.calls[0][0].ordered_prompts;
+    const calledMessages = JSON.parse(mockFetch.mock.calls[0][1].body).messages;
     const content = calledMessages[0].content;
     expect(content).toContain('表格数据');
     expect(content).toContain('消息数据');
@@ -266,7 +271,6 @@ describe('callCustomOpenAI_ACU — prompt 组装', () => {
 
   it('if seed 优先使用 prepare 阶段冻结的填表上下文范围', async () => {
     mockSettings.charCardPrompt = [{ role: 'USER', content: '<if seed="批次关键词">命中</if>' }];
-    mockGenerateRaw.mockResolvedValue('AI回复');
     mockGetLatestAIMessageContent.mockReturnValue('聊天最新层，不应参与本批次判断');
     mockParseIfBlocksInContent.mockImplementation((text: string) => text);
 
@@ -286,7 +290,6 @@ describe('callCustomOpenAI_ACU — prompt 组装', () => {
 
   it('conditionalSeedContent 为空字符串时也不回退聊天最新层', async () => {
     mockSettings.charCardPrompt = [{ role: 'USER', content: '<if seed="批次关键词">命中</if>' }];
-    mockGenerateRaw.mockResolvedValue('AI回复');
     mockGetLatestAIMessageContent.mockReturnValue('聊天最新层，空范围时不得读取');
     mockParseIfBlocksInContent.mockImplementation((text: string) => text);
 
@@ -309,16 +312,10 @@ describe('callCustomOpenAI_ACU — prompt 组装', () => {
 
   it('charCardPrompt 为字符串时转为单段落', async () => {
     mockSettings.charCardPrompt = '纯字符串提示词 $0';
-    mockGetApiConfigByPreset.mockReturnValue({
-      apiMode: 'custom',
-      apiConfig: { useMainApi: true },
-      tavernProfile: '',
-    });
-    mockGenerateRaw.mockResolvedValue('AI回复');
 
     await callCustomOpenAI_ACU({ tableDataText: '数据' });
 
-    const calledMessages = mockGenerateRaw.mock.calls[0][0].ordered_prompts;
+    const calledMessages = JSON.parse(mockFetch.mock.calls[0][1].body).messages;
     expect(calledMessages).toHaveLength(1);
     expect(calledMessages[0].role).toBe('user');
     expect(calledMessages[0].content).toContain('数据');
@@ -327,22 +324,15 @@ describe('callCustomOpenAI_ACU — prompt 组装', () => {
   it('getPersonaDescription 抛错时 $U 替换为空字符串', async () => {
     mockSettings.charCardPrompt = [{ role: 'USER', content: '用户:$U' }];
     mockGetPersonaDescription.mockImplementation(() => { throw new Error('获取失败'); });
-    mockGetApiConfigByPreset.mockReturnValue({
-      apiMode: 'custom',
-      apiConfig: { useMainApi: true },
-      tavernProfile: '',
-    });
-    mockGenerateRaw.mockResolvedValue('AI回复');
 
     await callCustomOpenAI_ACU({});
 
-    const content = mockGenerateRaw.mock.calls[0][0].ordered_prompts[0].content;
+    const content = JSON.parse(mockFetch.mock.calls[0][1].body).messages[0].content;
     expect(content).toBe('用户:');
   });
 
   it('在 EJS 之前替换已确认的表名 token，并将未知 token 原样保留', async () => {
     mockSettings.charCardPrompt = [{ role: 'USER', content: '表:{{人物关系表}} 未知:{{不存在的表}}' }];
-    mockGenerateRaw.mockResolvedValue('AI回复');
     const ejsEvaluate = vi.fn(async (content: string) => content);
     (globalThis as any).EjsTemplate = { evalTemplate: ejsEvaluate };
     const resolveTableWorldbookContent = vi.fn(async (tableName: string) => (
@@ -354,7 +344,7 @@ describe('callCustomOpenAI_ACU — prompt 组装', () => {
     expect(resolveTableWorldbookContent).toHaveBeenCalledWith('人物关系表');
     expect(resolveTableWorldbookContent).toHaveBeenCalledWith('不存在的表');
     expect(ejsEvaluate).toHaveBeenCalledWith('表:<worldbook_context>\n关系正文\n</worldbook_context> 未知:{{不存在的表}}');
-    const content = mockGenerateRaw.mock.calls[0][0].ordered_prompts[0].content;
+    const content = JSON.parse(mockFetch.mock.calls[0][1].body).messages[0].content;
     expect(content).toContain('<worldbook_context>\n关系正文\n</worldbook_context>');
     expect(content).toContain('{{不存在的表}}');
     delete (globalThis as any).EjsTemplate;
@@ -364,45 +354,11 @@ describe('callCustomOpenAI_ACU — prompt 组装', () => {
     mockSettings.charCardPrompt = [{ role: 'USER', content: '$9' }];
     mockSettings.tableContextExcludeRules = ['已排除'];
     mockApplyExcludeRulesToText.mockImplementation((text: string) => text === '已排除的世界书正文' ? '过滤后的世界书' : text);
-    mockGenerateRaw.mockResolvedValue('AI回复');
 
     await callCustomOpenAI_ACU({ worldbookDatabaseExcludedContent: '已排除的世界书正文' });
 
     expect(mockApplyExcludeRulesToText).toHaveBeenCalledWith('已排除的世界书正文', expect.any(Object));
-    expect(mockGenerateRaw.mock.calls[0][0].ordered_prompts[0].content).toBe('过滤后的世界书');
-  });
-});
-
-// ═══ callCustomOpenAI_ACU — useMainApi 模式 ═══
-describe('callCustomOpenAI_ACU — useMainApi 模式', () => {
-  beforeEach(() => {
-    mockGetApiConfigByPreset.mockReturnValue({
-      apiMode: 'custom',
-      apiConfig: { useMainApi: true },
-      tavernProfile: '',
-    });
-  });
-
-  it('正常调用 generateRaw 并返回结果', async () => {
-    mockGenerateRaw.mockResolvedValue('  AI回复  ');
-    const result = await callCustomOpenAI_ACU({});
-    expect(result).toBe('AI回复');
-    expect(mockGenerateRaw).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ordered_prompts: expect.any(Array),
-        should_stream: false,
-      }),
-    );
-  });
-
-  it('generateRaw 不可用时抛错', async () => {
-    mockIsGenerateRawAvailable.mockReturnValue(false);
-    await expect(callCustomOpenAI_ACU({})).rejects.toThrow('generateRaw');
-  });
-
-  it('generateRaw 返回非字符串时抛错', async () => {
-    mockGenerateRaw.mockResolvedValue(42);
-    await expect(callCustomOpenAI_ACU({})).rejects.toThrow('未返回预期的文本响应');
+    expect(JSON.parse(mockFetch.mock.calls[0][1].body).messages[0].content).toBe('过滤后的世界书');
   });
 });
 
@@ -476,82 +432,17 @@ describe('callCustomOpenAI_ACU — custom fetch 模式', () => {
 
 });
 
-// ═══ callCustomOpenAI_ACU — tavern 模式 ═══
-describe('callCustomOpenAI_ACU — tavern 模式', () => {
-  beforeEach(() => {
-    mockGetApiConfigByPreset.mockReturnValue({
-      apiMode: 'tavern',
-      apiConfig: { max_tokens: 4096 },
-      tavernProfile: 'profile-1',
-    });
-  });
-
-  it('profileId 为空时抛错', async () => {
-    mockGetApiConfigByPreset.mockReturnValue({
-      apiMode: 'tavern',
-      apiConfig: {},
-      tavernProfile: '',
-    });
-    await expect(callCustomOpenAI_ACU({})).rejects.toThrow('未选择酒馆连接预设');
-  });
-
-  it('目标预设不存在时抛错', async () => {
-    mockGetConnectionManagerProfiles.mockReturnValue([]);
-    mockTriggerSlash.mockResolvedValue('原始预设');
-    await expect(callCustomOpenAI_ACU({})).rejects.toThrow('无法找到ID为');
-  });
-
-  it('预设无 API 配置时抛错', async () => {
-    mockGetConnectionManagerProfiles.mockReturnValue([
-      { id: 'profile-1', name: '预设1', api: '', preset: 'preset-1' },
-    ]);
-    mockTriggerSlash.mockResolvedValue('原始预设');
-    await expect(callCustomOpenAI_ACU({})).rejects.toThrow('没有配置API');
-  });
-
-  it('正常调用返回结果', async () => {
-    mockGetConnectionManagerProfiles.mockReturnValue([
-      { id: 'profile-1', name: '预设1', api: 'openai', preset: 'preset-1' },
-    ]);
-    mockTriggerSlash.mockResolvedValue('预设1');
-    mockSendConnectionManagerRequest.mockResolvedValue({
-      ok: true,
-      result: { choices: [{ message: { content: '酒馆回复' } }] },
-    });
-    const result = await callCustomOpenAI_ACU({});
-    expect(result).toBe('酒馆回复');
-    expect(mockSendConnectionManagerRequest).toHaveBeenCalledWith('profile-1', expect.any(Array), 4096);
-  });
-
-  it('max_tokens=0 透传给 sendConnectionManagerRequest_ACU', async () => {
-    mockGetApiConfigByPreset.mockReturnValue({
-      apiMode: 'tavern',
-      apiConfig: { max_tokens: 0 },
-      tavernProfile: 'profile-1',
-    });
-    mockGetConnectionManagerProfiles.mockReturnValue([
-      { id: 'profile-1', name: '预设1', api: 'openai', preset: 'preset-1' },
-    ]);
-    mockTriggerSlash.mockResolvedValue('预设1');
-    mockSendConnectionManagerRequest.mockResolvedValue({
-      ok: true,
-      result: { choices: [{ message: { content: '酒馆回复' } }] },
-    });
-    const result = await callCustomOpenAI_ACU({});
-    expect(result).toBe('酒馆回复');
-    expect(mockSendConnectionManagerRequest).toHaveBeenCalledWith('profile-1', expect.any(Array), 0);
-  });
-});
-
 // ═══ callCustomOpenAI_ACU — AbortController 管理 ═══
 describe('callCustomOpenAI_ACU — AbortController 管理', () => {
   it('finally 块中 untrack 并重置 currentAbortController', async () => {
     mockGetApiConfigByPreset.mockReturnValue({
       apiMode: 'custom',
-      apiConfig: { useMainApi: true },
-      tavernProfile: '',
+      apiConfig: { url: 'https://api.example.com', model: 'gpt-4', max_tokens: 4096 },
     });
-    mockGenerateRaw.mockResolvedValue('AI回复');
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'AI回复' } }] }),
+    });
 
     await callCustomOpenAI_ACU({});
 
@@ -566,10 +457,12 @@ describe('callCustomOpenAI_ACU — AbortController 管理', () => {
   it('使用外部传入的 AbortController', async () => {
     mockGetApiConfigByPreset.mockReturnValue({
       apiMode: 'custom',
-      apiConfig: { useMainApi: true },
-      tavernProfile: '',
+      apiConfig: { url: 'https://api.example.com', model: 'gpt-4', max_tokens: 4096 },
     });
-    mockGenerateRaw.mockResolvedValue('AI回复');
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'AI回复' } }] }),
+    });
     const externalController = new AbortController();
 
     await callCustomOpenAI_ACU({}, externalController);
@@ -582,10 +475,13 @@ describe('callCustomOpenAI_ACU — AbortController 管理', () => {
   it('API 调用失败后仍然执行 untrack', async () => {
     mockGetApiConfigByPreset.mockReturnValue({
       apiMode: 'custom',
-      apiConfig: { useMainApi: true },
-      tavernProfile: '',
+      apiConfig: { url: 'https://api.example.com', model: 'gpt-4' },
     });
-    mockIsGenerateRawAvailable.mockReturnValue(false);
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 500,
+      text: async () => 'boom',
+    });
 
     await expect(callCustomOpenAI_ACU({})).rejects.toThrow();
     expect(mockUntrackAbortController).toHaveBeenCalledTimes(1);
@@ -598,10 +494,12 @@ describe('callCustomOpenAI_ACU — AbortController 管理', () => {
     mockSettings.tableApiPreset = 'global-preset';
     mockGetApiConfigByPreset.mockReturnValue({
       apiMode: 'custom',
-      apiConfig: { useMainApi: true, url: '', model: '', max_tokens: 4096, temperature: 1.0 },
-      tavernProfile: '',
+      apiConfig: { url: 'https://api.example.com', model: 'gpt-4', max_tokens: 4096, temperature: 1.0 },
     });
-    mockGenerateRaw.mockResolvedValue('AI回复内容');
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'AI回复内容' } }] }),
+    });
 
     const dynamicContent = {
       tableDataText: '表格数据',
@@ -620,10 +518,12 @@ describe('callCustomOpenAI_ACU — AbortController 管理', () => {
     mockSettings.tableApiPreset = 'global-preset';
     mockGetApiConfigByPreset.mockReturnValue({
       apiMode: 'custom',
-      apiConfig: { useMainApi: true, url: '', model: '', max_tokens: 4096, temperature: 1.0 },
-      tavernProfile: '',
+      apiConfig: { url: 'https://api.example.com', model: 'gpt-4', max_tokens: 4096, temperature: 1.0 },
     });
-    mockGenerateRaw.mockResolvedValue('AI回复内容');
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'AI回复内容' } }] }),
+    });
 
     const dynamicContent = {
       tableDataText: '表格数据',
@@ -641,10 +541,12 @@ describe('callCustomOpenAI_ACU — AbortController 管理', () => {
     mockSettings.tableApiPreset = 'global-preset';
     mockGetApiConfigByPreset.mockReturnValue({
       apiMode: 'custom',
-      apiConfig: { useMainApi: true, url: '', model: '', max_tokens: 4096, temperature: 1.0 },
-      tavernProfile: '',
+      apiConfig: { url: 'https://api.example.com', model: 'gpt-4', max_tokens: 4096, temperature: 1.0 },
     });
-    mockGenerateRaw.mockResolvedValue('AI回复内容');
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'AI回复内容' } }] }),
+    });
 
     const dynamicContent = {
       tableDataText: '表格数据',

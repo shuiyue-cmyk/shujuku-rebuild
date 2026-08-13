@@ -4117,7 +4117,7 @@ export async function orchestrateManualUpdate_ACU(
             return { success: false, error: 'API未就绪。' };
         }
 
-        const apiIsConfigured = (settings_ACU.apiMode === 'custom' && (settings_ACU.apiConfig.useMainApi || (settings_ACU.apiConfig.url && settings_ACU.apiConfig.model))) || (settings_ACU.apiMode === 'tavern' && settings_ACU.tavernProfile);
+        const apiIsConfigured = !!(settings_ACU.apiConfig.url && settings_ACU.apiConfig.model);
         if (!apiIsConfigured) {
             return { success: false, error: 'API未配置，无法更新数据库。' };
         }

@@ -26,7 +26,7 @@ import {
   type ApiPresetBinding_ACU,
   type ApiPresetWriteResult_ACU,
 } from '../../service/settings/api-preset-service';
-import { fetchAvailableModels_ACU, getConnectionManagerProfiles_ACU } from '../../service/ai/ai-service';
+import { fetchAvailableModels_ACU } from '../../service/ai/ai-service';
 
 export type AcuV2ApiMode = ApiPresetApiMode_ACU;
 
@@ -44,7 +44,6 @@ interface ApiPresetState {
   currentConfigLabel: string;
   currentChatKey: string;
   streamingEnabled: boolean;
-  tavernProfiles: Array<{ id: string; name: string }>;
   modelOptions: string[];
   modelLoadStatus: 'idle' | 'loading' | 'success' | 'error';
   modelLoadError: string;
@@ -60,17 +59,13 @@ function getCurrentConfigAsPreset(name: string): AcuV2ApiPreset {
     name,
     apiMode: normalizeApiMode_ACU(settings_ACU.apiMode),
     apiConfig: normalizeApiConfig_ACU(settings_ACU.apiConfig),
-    tavernProfile: typeof settings_ACU.tavernProfile === 'string' ? settings_ACU.tavernProfile : '',
   };
 }
 
 function findPresetMatchingCurrentConfig(presets: AcuV2ApiPreset[]): AcuV2ApiPreset | null {
   const current = getCurrentConfigAsPreset('');
   return presets.find(preset => {
-    if (preset.apiMode !== current.apiMode) return false;
-    if (preset.tavernProfile !== current.tavernProfile) return false;
     return (
-      preset.apiConfig.useMainApi === current.apiConfig.useMainApi &&
       preset.apiConfig.url === current.apiConfig.url &&
       preset.apiConfig.apiKey === current.apiConfig.apiKey &&
       preset.apiConfig.model === current.apiConfig.model &&
@@ -85,21 +80,7 @@ function findPresetMatchingCurrentConfig(presets: AcuV2ApiPreset[]): AcuV2ApiPre
 
 function resolveCurrentConfigStatus(): { ready: boolean; label: string } {
   ensureApiSettingsShape_ACU();
-  const mode = normalizeApiMode_ACU(settings_ACU.apiMode);
   const config = normalizeApiConfig_ACU(settings_ACU.apiConfig);
-  const tavernProfile = typeof settings_ACU.tavernProfile === 'string'
-    ? settings_ACU.tavernProfile.trim()
-    : '';
-
-  if (mode === 'tavern') {
-    return tavernProfile
-      ? { ready: true, label: `酒馆连接预设 ${tavernProfile}` }
-      : { ready: false, label: '未选择酒馆连接预设' };
-  }
-
-  if (config.useMainApi) {
-    return { ready: true, label: '酒馆主 API' };
-  }
 
   if (config.url.trim() && config.model.trim()) {
     return { ready: true, label: config.model.trim() };
@@ -117,7 +98,6 @@ export const useApiPresetStore = defineStore('acu-v2-api-presets', {
     currentConfigLabel: '当前 API 配置不完整',
     currentChatKey: getCurrentChatKey_ACU(),
     streamingEnabled: false,
-    tavernProfiles: [],
     modelOptions: [],
     modelLoadStatus: 'idle',
     modelLoadError: '',
@@ -177,16 +157,6 @@ export const useApiPresetStore = defineStore('acu-v2-api-presets', {
     },
     deletePreset(name: string): boolean {
       return this.applyWriteResult(deleteApiPreset_ACU(name));
-    },
-    refreshTavernProfiles(): void {
-      try {
-        const profiles = getConnectionManagerProfiles_ACU() || [];
-        this.tavernProfiles = profiles
-          .filter((profile: any) => profile?.id)
-          .map((profile: any) => ({ id: String(profile.id), name: String(profile.name || profile.id) }));
-      } catch {
-        this.tavernProfiles = [];
-      }
     },
     async loadModelsForConfig(apiConfig: Partial<AcuV2ApiConfig>): Promise<boolean> {
       this.modelLoadStatus = 'loading';

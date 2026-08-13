@@ -283,31 +283,23 @@ import { replaceDbSqlVariables } from '../runtime/template-vars/sql-query-var';
    }
   
   /**
-   * 获取正文优化使用的API配置
+   * 获取正文优化使用的API配置（酒馆主 API 已剥离，恒为自定义模式）
    */
   async function getOptimizationApiConfig_ACU(presetName: string) {
     if (presetName && settings_ACU.apiPresets) {
       const preset = settings_ACU.apiPresets.find((p: any) => p.name === presetName);
       if (preset) {
-        if (preset.apiMode === 'tavern') {
-          return {
-            apiMode: 'tavern',
-            tavernProfile: preset.tavernProfile
-          };
-        } else {
-          return {
-            apiMode: 'custom',
-            apiConfig: preset.apiConfig
-          };
-        }
+        return {
+          apiMode: 'custom' as const,
+          apiConfig: preset.apiConfig
+        };
       }
     }
     
     // 使用当前默认配置
     return {
-      apiMode: settings_ACU.apiMode,
+      apiMode: 'custom' as const,
       apiConfig: settings_ACU.apiConfig,
-      tavernProfile: settings_ACU.tavernProfile
     };
   }
   

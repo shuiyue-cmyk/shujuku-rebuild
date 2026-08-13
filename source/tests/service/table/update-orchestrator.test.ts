@@ -37,7 +37,7 @@ vi.mock('../../../src/shared/env', () => ({
 let mockSettings: any = {
   autoUpdateEnabled: true,
   apiMode: 'custom',
-  apiConfig: { useMainApi: true, url: '', model: '' },
+  apiConfig: { url: 'https://api.example.com', model: 'gpt-4' },
   tavernProfile: '',
   autoUpdateThreshold: 3,
   updateBatchSize: 2,
@@ -1641,7 +1641,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     mockSettings = {
       ...mockSettings,
       apiMode: 'custom',
-      apiConfig: { useMainApi: true, url: '', model: '' },
+      apiConfig: { url: 'https://api.example.com', model: 'gpt-4' },
       autoUpdateThreshold: 3,
       updateBatchSize: 3,
       skipUpdateFloors: 0,
@@ -1685,7 +1685,7 @@ describe('orchestrateManualUpdate_ACU', () => {
 
   it('API 未配置时返回错误', async () => {
     mockSettings.apiMode = 'custom';
-    mockSettings.apiConfig = { useMainApi: false, url: '', model: '' };
+    mockSettings.apiConfig = { url: '', model: '' };
     mockSettings.tavernProfile = '';
     const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockProcessBatch, mockRefreshData);
     expect(result.success).toBe(false);
@@ -3451,7 +3451,7 @@ describe('orchestrateManualUpdate_ACU — 表级 API 预设覆盖', () => {
     mockSettings = {
       ...mockSettings,
       apiMode: 'custom',
-      apiConfig: { useMainApi: true, url: '', model: '' },
+      apiConfig: { url: 'https://api.example.com', model: 'gpt-4' },
       autoUpdateThreshold: 3,
       updateBatchSize: 3,
       skipUpdateFloors: 0,
@@ -6228,7 +6228,7 @@ describe('orchestrateManualCatchUp_ACU', () => {
     mockSettings = {
       ...mockSettings,
       apiMode: 'custom',
-      apiConfig: { useMainApi: true, url: '', model: '' },
+      apiConfig: { url: 'https://api.example.com', model: 'gpt-4' },
       skipUpdateFloors: 0,
       updateBatchSize: 1,
       tableMaxRetries: 1,

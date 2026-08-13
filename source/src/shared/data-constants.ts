@@ -11,7 +11,6 @@ import { SCRIPT_ID_PREFIX_ACU } from './constants';
 // 存储键常量
 // ═══════════════════════════════════════════════════════════════
 export const STORAGE_KEY_CUSTOM_TEMPLATE_ACU = `${SCRIPT_ID_PREFIX_ACU}_customTemplate`;
-export const MENU_ITEM_CONTAINER_ID_ACU = `${SCRIPT_ID_PREFIX_ACU}-extensions-menu-container`;
 export const STORAGE_KEY_ALL_SETTINGS_ACU = `${SCRIPT_ID_PREFIX_ACU}_allSettings_v2`;
 export const STORAGE_KEY_GLOBAL_META_ACU = `${SCRIPT_ID_PREFIX_ACU}_globalMeta_v1`;
 export const STORAGE_KEY_PROFILE_PREFIX_ACU = `${SCRIPT_ID_PREFIX_ACU}_profile_v1`;

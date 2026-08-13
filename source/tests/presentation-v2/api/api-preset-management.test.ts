@@ -7,8 +7,6 @@ import { describe, expect, it } from 'vitest';
 import {
   apiPresetDraftFromPreset,
   apiPresetFromDraft,
-  applyConnectionMode,
-  connectionModeFromDraft,
   createEmptyApiPresetDraft,
 } from '../../../src/presentation-v2/composables/useApiPresetManagement';
 
@@ -18,8 +16,6 @@ describe('api preset draft helpers', () => {
 
     expect(draft.name).toBe('');
     expect(draft.apiMode).toBe('custom');
-    expect(draft.useMainApi).toBe(true);
-    expect(connectionModeFromDraft(draft)).toBe('main');
   });
 
   it('把预设转换为可编辑草稿', () => {
@@ -30,38 +26,20 @@ describe('api preset draft helpers', () => {
         url: 'https://a.test',
         apiKey: 'k',
         model: 'gpt-4',
-        useMainApi: false,
         max_tokens: 4096,
         temperature: 0.7,
       },
-      tavernProfile: '',
     });
 
     expect(draft.name).toBe('preset-a');
     expect(draft.url).toBe('https://a.test');
     expect(draft.model).toBe('gpt-4');
-    expect(connectionModeFromDraft(draft)).toBe('custom');
-  });
-
-  it('连接方式切换会写回草稿字段', () => {
-    const draft = createEmptyApiPresetDraft();
-
-    applyConnectionMode(draft, 'tavern');
-    expect(draft.apiMode).toBe('tavern');
-    expect(draft.useMainApi).toBe(false);
-    expect(connectionModeFromDraft(draft)).toBe('tavern');
-
-    applyConnectionMode(draft, 'custom');
-    expect(draft.apiMode).toBe('custom');
-    expect(draft.useMainApi).toBe(false);
-    expect(connectionModeFromDraft(draft)).toBe('custom');
   });
 
   it('保存前归一化名称、端点、模型和数字参数', () => {
     const preset = apiPresetFromDraft({
       ...createEmptyApiPresetDraft(),
       name: '  preset-b  ',
-      useMainApi: false,
       url: '  https://b.test/v1  ',
       model: '  model-b  ',
       max_tokens: 128.8,
@@ -83,14 +61,12 @@ describe('api preset draft helpers', () => {
         url: 'https://x.test',
         apiKey: 'k',
         model: 'm',
-        useMainApi: false,
         max_tokens: 1000,
         temperature: 1,
         bodyParams: 'top_k: 50',
         excludeBodyParams: 'top_p',
         requestHeaders: 'X-Custom: val',
       },
-      tavernProfile: '',
     });
 
     expect(draft.bodyParams).toBe('top_k: 50');
@@ -111,11 +87,9 @@ describe('api preset draft helpers', () => {
         url: 'https://old.test',
         apiKey: '',
         model: 'old-model',
-        useMainApi: false,
         max_tokens: 2000,
         temperature: 0.5,
       } as any,
-      tavernProfile: '',
     });
 
     expect(draft.bodyParams).toBe('');

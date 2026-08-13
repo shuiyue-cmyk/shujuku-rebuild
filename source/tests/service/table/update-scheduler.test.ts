@@ -55,7 +55,7 @@ describe('checkAutoUpdatePreConditions_ACU', () => {
   const baseSettings = {
     autoUpdateEnabled: true,
     apiMode: 'custom',
-    apiConfig: { useMainApi: true, url: '', model: '' },
+    apiConfig: { url: 'https://api.example.com', model: 'gpt-4' },
     tavernProfile: '',
   };
 
@@ -97,34 +97,14 @@ describe('checkAutoUpdatePreConditions_ACU', () => {
     expect(result.code).toBe('chat_too_short');
   });
 
-  it('API 未配置时不可继续（custom 模式无 useMainApi）', () => {
+  it('API 未配置时不可继续', () => {
     const settings = {
       ...baseSettings,
-      apiConfig: { useMainApi: false, url: '', model: '' },
+      apiConfig: { url: '', model: '' },
     };
     const result = checkAutoUpdatePreConditions_ACU(settings, true, false, { sheet_0: {} }, 5);
     expect(result.canProceed).toBe(false);
     expect(result.code).toBe('api_not_configured');
-  });
-
-  it('tavern 模式有 profile 时可继续', () => {
-    const settings = {
-      ...baseSettings,
-      apiMode: 'tavern',
-      tavernProfile: 'my-profile',
-    };
-    const result = checkAutoUpdatePreConditions_ACU(settings, true, false, { sheet_0: {} }, 5);
-    expect(result.canProceed).toBe(true);
-  });
-
-  it('tavern 模式无 profile 时不可继续', () => {
-    const settings = {
-      ...baseSettings,
-      apiMode: 'tavern',
-      tavernProfile: '',
-    };
-    const result = checkAutoUpdatePreConditions_ACU(settings, true, false, { sheet_0: {} }, 5);
-    expect(result.canProceed).toBe(false);
   });
 
   // 原因码优先级契约：disabled → core APIs → in-flight → API config → runtime → chat length。
@@ -141,7 +121,7 @@ describe('checkAutoUpdatePreConditions_ACU', () => {
     },
     {
       name: 'core APIs 优先于 in-flight 与 API config',
-      settings: { ...baseSettings, apiConfig: { useMainApi: false, url: '', model: '' } },
+      settings: { ...baseSettings, apiConfig: { url: 'https://api.example.com', model: 'gpt-4' }, },
       coreReady: false,
       inFlight: true,
       table: null,
@@ -150,7 +130,7 @@ describe('checkAutoUpdatePreConditions_ACU', () => {
     },
     {
       name: 'in-flight 优先于 API config 与 runtime',
-      settings: { ...baseSettings, apiConfig: { useMainApi: false, url: '', model: '' } },
+      settings: { ...baseSettings, apiConfig: { url: 'https://api.example.com', model: 'gpt-4' }, },
       coreReady: true,
       inFlight: true,
       table: null,
@@ -159,7 +139,7 @@ describe('checkAutoUpdatePreConditions_ACU', () => {
     },
     {
       name: 'API config 优先于 runtime 与 chat length',
-      settings: { ...baseSettings, apiConfig: { useMainApi: false, url: '', model: '' } },
+      settings: { ...baseSettings, apiConfig: { url: '', model: '' } },
       coreReady: true,
       inFlight: false,
       table: null,

@@ -7,9 +7,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const { mockSettings, mockCurrentJsonTableDataRef } = vi.hoisted(() => ({
   mockSettings: {
-    apiMode: 'tavern',
-    tavernProfile: 'default',
-    apiConfig: { max_tokens: 4096, model: 'gpt-4', useMainApi: false, url: '', apiKey: '' },
+    apiMode: 'custom',
+    apiConfig: { max_tokens: 4096, model: 'gpt-4', url: 'https://api.example.com', apiKey: '' },
     charCardPrompt: [{ role: 'USER', content: '合并纪要', isMain: true, mainSlot: 'A' }],
     streamingEnabled: false,
     autoMergeEnabled: true,
@@ -80,9 +79,8 @@ import { extractTableEditInner_ACU } from '../../src/service/ai/prompt-builder';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockSettings.apiMode = 'tavern';
-  mockSettings.tavernProfile = 'default';
-  mockSettings.apiConfig = { max_tokens: 4096, model: 'gpt-4', useMainApi: false, url: '', apiKey: '' };
+  mockSettings.apiMode = 'custom';
+  mockSettings.apiConfig = { max_tokens: 4096, model: 'gpt-4', url: 'https://api.example.com', apiKey: '' };
   mockCurrentJsonTableDataRef.value = {
     sheet_0: { name: '背包物品表', content: [['row_id', '物品名'], ['1', '铁剑']] },
     sheet_1: {
@@ -104,7 +102,7 @@ describe('I4: 合并纪要完整流程', () => {
   describe('validateMergeParams_ACU — 参数校验', () => {
     it('API 未配置时返回 valid=false', () => {
       mockSettings.apiMode = 'custom';
-      mockSettings.apiConfig = { useMainApi: false, url: '', model: '' };
+      mockSettings.apiConfig = { url: '', model: '' };
       const result = validateMergeParams_ACU('默认提示词');
       expect(result.valid).toBe(false);
       expect(result.error).toContain('API');
@@ -151,10 +149,9 @@ describe('I4: 合并纪要完整流程', () => {
 
   describe('executeMergeBatches_ACU — 批次执行', () => {
     it('AI 返回有效数据时成功累积', async () => {
-      vi.mocked(sendConnectionManagerRequest_ACU).mockResolvedValue({
-        ok: true,
-        result: { choices: [{ message: { content: '<tableEdit>insertRow(0, {"0": "合并纪要"})</tableEdit>' } }] },
-      });
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+      const { handleApiResponse_ACU } = await import('../../src/service/ai/prompt-builder');
+      vi.mocked(handleApiResponse_ACU).mockResolvedValue('<tableEdit>insertRow(0, {"0": "合并纪要"})</tableEdit>');
       vi.mocked(extractTableEditInner_ACU).mockReturnValue({
         inner: 'insertRow(0, {"0": "合并纪要"})',
         cleaned: '',

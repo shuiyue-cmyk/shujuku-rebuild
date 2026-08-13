@@ -8,21 +8,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 function createSettings() {
   return {
     apiMode: 'custom',
-    apiConfig: { url: '', apiKey: '', model: '', useMainApi: true, max_tokens: 60000, temperature: 1 },
+    apiConfig: { url: '', apiKey: '', model: '', max_tokens: 60000, temperature: 1 },
     tavernProfile: '',
     streamingEnabled: false,
     apiPresets: [
       {
         name: 'alpha',
         apiMode: 'custom',
-        apiConfig: { url: 'https://alpha.test', apiKey: 'ka', model: 'ma', useMainApi: false, max_tokens: 1000, temperature: 0.7 },
-        tavernProfile: '',
+        apiConfig: { url: 'https://alpha.test', apiKey: 'ka', model: 'ma', max_tokens: 1000, temperature: 0.7 },
       },
       {
         name: 'beta',
-        apiMode: 'tavern',
-        apiConfig: { url: '', apiKey: '', model: '', useMainApi: true, max_tokens: 60000, temperature: 1 },
-        tavernProfile: 'profile-beta',
+        apiMode: 'custom',
+        apiConfig: { url: 'https://beta.test', apiKey: '', model: 'beta-model', max_tokens: 60000, temperature: 1 },
       },
     ],
     defaultApiPresetName: 'alpha',
@@ -112,8 +110,8 @@ describe('useApiPresetStore', () => {
 
     expect(store.activePresetName).toBe('beta');
     expect(settings.apiPresetBindingsByChat['chat-A'].presetName).toBe('beta');
-    expect(settings.apiMode).toBe('tavern');
-    expect(settings.tavernProfile).toBe('profile-beta');
+    expect(settings.apiMode).toBe('custom');
+    expect(settings.apiConfig.model).toBe('beta-model');
     expect(saveSettings).toHaveBeenCalled();
   });
 
@@ -126,12 +124,10 @@ describe('useApiPresetStore', () => {
     expect(store.savePreset({
       name: 'alpha',
       apiMode: 'custom',
-      tavernProfile: '',
       apiConfig: {
         url: 'https://alpha-2.test',
         apiKey: 'ka2',
         model: 'ma2',
-        useMainApi: false,
         max_tokens: 2048,
         temperature: 0.25,
         bodyParams: '{"top_p":0.9}',
@@ -146,7 +142,6 @@ describe('useApiPresetStore', () => {
       url: 'https://alpha-2.test',
       apiKey: 'ka2',
       model: 'ma2',
-      useMainApi: false,
       max_tokens: 2048,
       temperature: 0.25,
       bodyParams: '{"top_p":0.9}',
@@ -180,8 +175,7 @@ describe('useApiPresetStore', () => {
     expect(store.savePreset({
       name: 'renamed',
       apiMode: 'custom',
-      tavernProfile: '',
-      apiConfig: { url: 'https://r.test', apiKey: '', model: 'mr', useMainApi: false, max_tokens: 2048, temperature: 0.8 },
+      apiConfig: { url: 'https://r.test', apiKey: '', model: 'mr', max_tokens: 2048, temperature: 0.8 },
     }, 'alpha')).toBe(true);
 
     expect(store.defaultApiPresetName).toBe('renamed');
@@ -190,7 +184,6 @@ describe('useApiPresetStore', () => {
     expect(settings.apiConfig).toEqual(expect.objectContaining({
       url: 'https://r.test',
       model: 'mr',
-      useMainApi: false,
       max_tokens: 2048,
       temperature: 0.8,
     }));
@@ -205,15 +198,13 @@ describe('useApiPresetStore', () => {
 
     expect(store.savePreset({
       name: 'beta',
-      apiMode: 'tavern',
-      tavernProfile: 'profile-beta-2',
-      apiConfig: { url: '', apiKey: '', model: '', useMainApi: true, max_tokens: 777, temperature: 1.5, bodyParams: '{"a":1}', excludeBodyParams: '', requestHeaders: '' },
+      apiMode: 'custom',
+      apiConfig: { url: 'https://beta-2.test', apiKey: '', model: 'beta2', max_tokens: 777, temperature: 1.5, bodyParams: '{"a":1}', excludeBodyParams: '', requestHeaders: '' },
     }, 'beta')).toBe(true);
 
     expect(store.activePresetName).toBe('alpha');
     expect(settings.apiPresetBindingsByChat['chat-A'].presetName).toBe('alpha');
     expect(settings.apiConfig.url).toBe('');
-    expect(settings.apiConfig.useMainApi).toBe(true);
     expect(settings.apiConfig.max_tokens).toBe(60000);
   });
 });

@@ -237,9 +237,7 @@ describe('prepareAutoMergeBatches_ACU', () => {
 describe('executeAutoMergeBatch_ACU', () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    mockSettings.apiMode = 'tavern';
-    mockSettings.tavernProfile = 'default';
-    mockSettings.apiConfig = { max_tokens: 4096, model: 'gpt-4' };
+    mockSettings.apiConfig = { url: 'https://api.example.com', max_tokens: 4096, model: 'gpt-4' };
     mockSettings.charCardPrompt = [{ role: 'USER', content: '提示词', isMain: true, mainSlot: 'A' }];
     mockSettings.streamingEnabled = false;
   });
@@ -252,10 +250,9 @@ describe('executeAutoMergeBatch_ACU', () => {
 
   it('AI 返回有效 tableEdit 时累积合并行', async () => {
     mockExtractTableEditInner.mockReturnValue({ inner: 'insertRow(0, {"0": "合并纪要"})' });
-    mockSendConnectionManager.mockResolvedValue({
-      ok: true,
-      result: { choices: [{ message: { content: '<tableEdit>insertRow(0, {"0": "合并纪要"})</tableEdit>' } }] },
-    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+    const { handleApiResponse_ACU } = await import('../../../src/service/ai/prompt-builder');
+    vi.mocked(handleApiResponse_ACU).mockResolvedValue('<tableEdit>insertRow(0, {"0": "合并纪要"})</tableEdit>');
 
     const prepared = prepareAutoMergeBatches_ACU({
       startIndex: 0, endIndex: 3, targetCount: 3, batchSize: 3,
@@ -271,10 +268,9 @@ describe('executeAutoMergeBatch_ACU', () => {
 
   it('AI 返回无效内容时抛出错误', async () => {
     mockExtractTableEditInner.mockReturnValue(null);
-    mockSendConnectionManager.mockResolvedValue({
-      ok: true,
-      result: { choices: [{ message: { content: '无效内容' } }] },
-    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
+    const { handleApiResponse_ACU } = await import('../../../src/service/ai/prompt-builder');
+    vi.mocked(handleApiResponse_ACU).mockResolvedValue('无效内容');
 
     const prepared = prepareAutoMergeBatches_ACU({
       startIndex: 0, endIndex: 3, targetCount: 3, batchSize: 3,
@@ -337,9 +333,7 @@ describe('finalizeAutoMerge_ACU', () => {
 describe('executeAutoMergeBatch_ACU max_tokens 回退', () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    mockSettings.apiMode = 'tavern';
-    mockSettings.tavernProfile = 'default';
-    mockSettings.apiConfig = { max_tokens: 4096, model: 'gpt-4' };
+    mockSettings.apiConfig = { url: 'https://api.example.com', max_tokens: 4096, model: 'gpt-4' };
     mockSettings.charCardPrompt = [{ role: 'USER', content: '提示词', isMain: true, mainSlot: 'A' }];
     mockSettings.streamingEnabled = false;
   });
@@ -347,30 +341,6 @@ describe('executeAutoMergeBatch_ACU max_tokens 回退', () => {
   afterEach(async () => {
     try { await vi.runAllTimersAsync(); } catch (_) { /* ignore */ }
     vi.useRealTimers();
-  });
-
-  it('tavern 分支 max_tokens=0 不被 4096 覆盖', async () => {
-    mockSettings.apiConfig.max_tokens = 0;
-    mockExtractTableEditInner.mockReturnValue({ inner: 'insertRow(0, {"0": "test"})' });
-    mockSendConnectionManager.mockResolvedValue({
-      ok: true,
-      result: { choices: [{ message: { content: '<tableEdit>insertRow(0, {"0": "test"})</tableEdit>' } }] },
-    });
-
-    const prepared = prepareAutoMergeBatches_ACU({
-      startIndex: 0, endIndex: 3, targetCount: 3, batchSize: 3,
-      promptTemplate: '$A $BASE_DATA $TARGET_COUNT', isAutoMode: true,
-    });
-
-    const promise = executeAutoMergeBatch_ACU(prepared, prepared.batches[0], []);
-    for (let i = 0; i < 5; i++) await vi.advanceTimersByTimeAsync(6000);
-    await promise;
-
-    expect(mockSendConnectionManager).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.any(Array),
-      0
-    );
   });
 
   it('custom 分支 overrides 不含 temperature/topP/maxTokens', async () => {

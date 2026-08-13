@@ -12,7 +12,6 @@ export function useDevOptions() {
     developerOptionsEnabled,
     plotAdvanced,
     vectorIndexAdvanced,
-    legacyUiMenuVisible,
     warnLogEnabled,
   } = storeToRefs(store);
   return {
@@ -22,8 +21,6 @@ export function useDevOptions() {
     setPlotAdvanced: (enabled: boolean) => store.setPlotAdvanced(enabled),
     vectorIndexAdvanced,
     setVectorIndexAdvanced: (enabled: boolean) => store.setVectorIndexAdvanced(enabled),
-    legacyUiMenuVisible,
-    setLegacyUiMenuVisible: (enabled: boolean) => store.setLegacyUiMenuVisible(enabled),
     warnLogEnabled,
     setWarnLogEnabled: (enabled: boolean) => store.setWarnLogEnabled(enabled),
     refresh: () => store.refresh(),

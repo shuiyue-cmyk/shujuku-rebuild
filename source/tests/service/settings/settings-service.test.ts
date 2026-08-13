@@ -361,7 +361,6 @@ describe('buildDefaultSettings_ACU', () => {
   it('返回包含所有必要字段的默认设置对象', () => {
     const defaults = buildDefaultSettings_ACU();
     expect(defaults.apiConfig).toBeDefined();
-    expect(defaults.apiConfig.useMainApi).toBe(true);
     expect(defaults.autoUpdateThreshold).toBe(3);
     expect(defaults.autoUpdateEnabled).toBe(true);
     expect(defaults.maxConcurrentGroups).toBe(1);

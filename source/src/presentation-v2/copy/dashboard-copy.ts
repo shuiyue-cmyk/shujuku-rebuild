@@ -24,12 +24,6 @@ export const dashboardCopy = {
     unavailableSummary: "插件还没有拿到酒馆侧运行接口，当前 API 状态无法确认。",
     unconfiguredBadge: "未配置",
     configuredBadge: "已配置",
-    tavernPresetLabel(name: string): string {
-      return `酒馆连接预设 ${name}`;
-    },
-    tavernPresetMissingLabel: "酒馆连接预设",
-    tavernPresetMissingIssue: "未选择酒馆连接预设",
-    mainApiLabel: "酒馆主 API",
     customApiLabel: "自定义 API",
     endpointField: "端点",
     modelField: "模型",

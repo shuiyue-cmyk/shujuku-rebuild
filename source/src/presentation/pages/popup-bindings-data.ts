@@ -11,13 +11,13 @@ import { isSummaryOrOutlineTable_ACU, logDebug_ACU, logError_ACU, logWarn_ACU } 
 import { jQuery_API_ACU } from '../dom-utils';
 import { isSqliteMode } from '../../service/table/storage-mode';
 import { settings_ACU, currentChatFileIdentifier_ACU, currentJsonTableData_ACU } from '../../service/runtime/state-manager';
-import { $popupInstance_ACU, $charCardPromptToggle_ACU, $charCardPromptAreaDiv_ACU, $saveCharCardPromptButton_ACU, $resetCharCardPromptButton_ACU, $loadModelsButton_ACU, $saveApiConfigButton_ACU, $clearApiConfigButton_ACU, $useMainApiCheckbox_ACU, $streamingEnabledCheckbox_ACU, $customApiModelInput_ACU, $customApiModelSelect_ACU, $importTableSelectAll_ACU, $importTableSelectNone_ACU } from '../state/ui-refs';
+import { $popupInstance_ACU, $charCardPromptToggle_ACU, $charCardPromptAreaDiv_ACU, $saveCharCardPromptButton_ACU, $resetCharCardPromptButton_ACU, $loadModelsButton_ACU, $saveApiConfigButton_ACU, $clearApiConfigButton_ACU, $streamingEnabledCheckbox_ACU, $customApiModelInput_ACU, $customApiModelSelect_ACU, $importTableSelectAll_ACU, $importTableSelectNone_ACU } from '../state/ui-refs';
 import { saveSettingsAndNotify_ACU } from '../components/settings-ui-helpers';
 import { importCombinedSettings_ACU } from '../triggers/data-admin-ui';
 import { applyTemplateScopeForCurrentChat_ACU, getDataIsolationHistory_ACU, removeDataIsolationHistory_ACU, switchIsolationProfile_ACU, persistCurrentTemplatePresetName_ACU, setSummaryVectorIndexMode_ACU } from '../../service/settings/settings-service';
 // [V1 收敛] 以下写操作统一委托 service 层事务式函数，禁止 V1 直接写 settings_ACU。
 import { setFeatureApiPreset_ACU } from '../../service/settings/feature-preset-reference-service';
-import { setStreamingEnabled_ACU, setUseMainApi_ACU } from '../../service/settings/api-preset-service';
+import { setStreamingEnabled_ACU } from '../../service/settings/api-preset-service';
 import { setTableContextRules_ACU } from '../../service/settings/settings-write-service';
 import { deleteAllGeneratedEntries_ACU } from '../../service/worldbook/pipeline';
 import { refreshMergedDataAndNotifyWithUI_ACU, refreshPresetUIAfterSwitch_ACU } from '../components/pipeline-ui-helpers';
@@ -399,19 +399,6 @@ export async function bindDataEvents_ACU(): Promise<void> {
           $importTableSelectNone_ACU.on('click', handleImportSelectNone_ACU);
       }
 
-      if ($useMainApiCheckbox_ACU.length) {
-        $useMainApiCheckbox_ACU.on('change', function () {
-            const useMainApi = jQuery_API_ACU(this).is(':checked');
-            const result = setUseMainApi_ACU(useMainApi);
-            if (!result.ok) {
-              showToastr_ACU('error', result.message || '保存主API开关失败，已回滚。');
-              jQuery_API_ACU(this).prop('checked', !useMainApi);
-              return;
-            }
-            updateCustomApiInputsState_ACU();
-            showToastr_ACU('info', `自定义API已切换为 ${useMainApi ? '使用主API' : '使用独立配置'}`);
-        });
-      }
       // [新增] 流式传输开关事件监听
       if ($streamingEnabledCheckbox_ACU.length) {
         $streamingEnabledCheckbox_ACU.on('change', function () {

@@ -5,7 +5,6 @@ import { refreshCurrentPlotTaskApiPresetSelect_ACU } from '../../components/plot
 import { showToastr_ACU } from '../../theme/toast';
 import { ACU_TOAST_CATEGORY_ACU, SCRIPT_ID_PREFIX_ACU } from '../../../shared/constants';
 import { jQuery_API_ACU } from '../../dom-utils';
-import { getConnectionManagerProfiles_ACU } from '../../../service/ai/ai-service';
 import { settings_ACU } from '../../../service/runtime/state-manager';
 import { $popupInstance_ACU } from '../../state/ui-refs';
 import { renderOption_ACU } from '../../../shared/html-helpers';
@@ -20,71 +19,22 @@ import { saveApiPreset_ACU as serviceSaveApiPreset_ACU, deleteApiPreset_ACU as s
 
 
   // --- API / 设置 UI ---
-  export function updateApiModeView_ACU(apiMode: string) {
+  export function updateApiModeView_ACU(_apiMode: string) {
     if (!$popupInstance_ACU) return;
     const $customApiBlock = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-custom-api-settings-block`);
     const $tavernApiBlock = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-tavern-api-profile-block`);
 
-    if (apiMode === 'tavern') {
-        $customApiBlock.hide();
-        $tavernApiBlock.show();
-        loadTavernApiProfiles_ACU();
-    } else { // custom
-        $customApiBlock.show();
-        $tavernApiBlock.hide();
-    }
+    // 酒馆主 API（tavern）已剥离，恒显示自定义 API 配置块
+    $customApiBlock.show();
+    $tavernApiBlock.hide();
   }
 
   export function updateCustomApiInputsState_ACU() {
     if (!$popupInstance_ACU) return;
-    const useMainApi = settings_ACU.apiConfig.useMainApi;
+    // 酒馆主 API 已剥离，自定义 API 字段恒可编辑
     const $customApiFields = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-custom-api-fields`);
-    if (useMainApi) {
-        $customApiFields.css('opacity', '0.5');
-        $customApiFields.find('input, select, button').prop('disabled', true);
-    } else {
-        $customApiFields.css('opacity', '1.0');
-        $customApiFields.find('input, select, button').prop('disabled', false);
-    }
-  }
-
-  export async function loadTavernApiProfiles_ACU() {
-    if (!$popupInstance_ACU) return;
-    const $select = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-tavern-api-profile-select`);
-    const currentProfileId = settings_ACU.tavernProfile;
-    
-    $select.empty().append('<option value="">-- 请选择一个酒馆预设 --</option>');
-
-    try {
-        const tavernProfiles = getConnectionManagerProfiles_ACU();
-        if (!tavernProfiles || tavernProfiles.length === 0) {
-            $select.append(jQuery_API_ACU('<option>', { value: '', text: '未找到酒馆预设', disabled: true }));
-            return;
-        }
-
-        let foundCurrentProfile = false;
-        tavernProfiles.forEach(profile => {
-            if (profile.api && profile.preset) { // Ensure it's a valid API profile
-                const option = jQuery_API_ACU('<option>', {
-                    value: profile.id,
-                    text: profile.name || profile.id,
-                    selected: profile.id === currentProfileId
-                });
-                $select.append(option);
-                if (profile.id === currentProfileId) {
-                    foundCurrentProfile = true;
-                }
-            }
-        });
-
-        if (currentProfileId && foundCurrentProfile) {
-             $select.val(currentProfileId);
-        }
-
-    } catch (error) {
-        logError_ACU('加载酒馆API预设失败:', error);
-        showToastr_ACU('error', '无法加载酒馆API预设列表。');
-    }
+    $customApiFields.css('opacity', '1.0');
+    $customApiFields.find('input, select, button').prop('disabled', false);
   }
 
   // [V1 收敛] API 配置写权限已迁移至 V2（service 层单一权威）。

@@ -216,7 +216,6 @@ function normalizeDashboardApiConfig(value: any): {
   url: string;
   apiKey: string;
   model: string;
-  useMainApi: boolean;
   max_tokens: number;
   temperature: number;
 } {
@@ -228,7 +227,6 @@ function normalizeDashboardApiConfig(value: any): {
     url: typeof source.url === "string" ? source.url : "",
     apiKey: typeof source.apiKey === "string" ? source.apiKey : "",
     model: typeof source.model === "string" ? source.model : "",
-    useMainApi: source.useMainApi !== false,
     max_tokens:
       Number.isFinite(maxTokens) && maxTokens > 0
         ? Math.floor(maxTokens)
@@ -238,28 +236,9 @@ function normalizeDashboardApiConfig(value: any): {
 }
 
 function resolveApiConnectionStatus(input: {
-  apiMode: string;
   apiConfig: any;
-  tavernProfile: string;
 }): { ready: boolean; label: string; issue: string } {
-  const apiMode = input.apiMode === "tavern" ? "tavern" : "custom";
   const apiConfig = normalizeDashboardApiConfig(input.apiConfig);
-  const tavernProfile = String(input.tavernProfile || "").trim();
-  if (apiMode === "tavern") {
-    return tavernProfile
-      ? {
-          ready: true,
-          label: dashboardCopy.api.tavernPresetLabel(tavernProfile),
-          issue: "",
-        }
-      : {
-          ready: false,
-          label: dashboardCopy.api.tavernPresetMissingLabel,
-          issue: dashboardCopy.api.tavernPresetMissingIssue,
-        };
-  }
-  if (apiConfig.useMainApi)
-    return { ready: true, label: dashboardCopy.api.mainApiLabel, issue: "" };
   if (apiConfig.url.trim() && apiConfig.model.trim())
     return { ready: true, label: apiConfig.model.trim(), issue: "" };
   const missing = [
@@ -279,11 +258,6 @@ function apiPresetMatchesCurrentConfig(preset: any): boolean {
   const presetConfig = normalizeDashboardApiConfig(preset?.apiConfig);
   const currentConfig = normalizeDashboardApiConfig(settings_ACU.apiConfig);
   return (
-    String(preset?.apiMode || "custom") ===
-      String(settings_ACU.apiMode || "custom") &&
-    String(preset?.tavernProfile || "") ===
-      String(settings_ACU.tavernProfile || "") &&
-    presetConfig.useMainApi === currentConfig.useMainApi &&
     presetConfig.url === currentConfig.url &&
     presetConfig.apiKey === currentConfig.apiKey &&
     presetConfig.model === currentConfig.model &&
@@ -294,9 +268,7 @@ function apiPresetMatchesCurrentConfig(preset: any): boolean {
 
 function resolveCurrentApiPreset(): {
   name: string;
-  apiMode: string;
   apiConfig: any;
-  tavernProfile: string;
 } {
   const presets = Array.isArray(settings_ACU.apiPresets)
     ? settings_ACU.apiPresets.filter((item: any) =>
@@ -320,16 +292,12 @@ function resolveCurrentApiPreset(): {
   if (preset) {
     return {
       name: String(preset.name || "").trim(),
-      apiMode: String(preset.apiMode || "custom"),
       apiConfig: preset.apiConfig || {},
-      tavernProfile: String(preset.tavernProfile || ""),
     };
   }
   return {
     name: "",
-    apiMode: String(settings_ACU.apiMode || "custom"),
     apiConfig: settings_ACU.apiConfig || {},
-    tavernProfile: String(settings_ACU.tavernProfile || ""),
   };
 }
 

@@ -7,12 +7,6 @@
  */
 
 export {
-    isGenerateRawAvailable_ACU,
-    isConnectionManagerAvailable_ACU,
-    isTriggerSlashAvailable_ACU,
-    generateRaw_ACU,
-    sendConnectionManagerRequest_ACU,
-    triggerSlash_ACU,
     getConnectionManagerProfiles_ACU,
     getHostRequestHeaders_ACU,
 } from '../../data/gateways/ai-gateway';

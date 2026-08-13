@@ -4,14 +4,13 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockTavernHelper, mockSillyTavern, mockLogWarn } = vi.hoisted(() => ({
-  mockTavernHelper: {} as any,
+const { mockSillyTavern, mockLogWarn } = vi.hoisted(() => ({
   mockSillyTavern: {} as any,
   mockLogWarn: vi.fn(),
 }));
 
 vi.mock('../../../src/shared/host-api', () => ({
-  TavernHelper_API_ACU: mockTavernHelper,
+  TavernHelper_API_ACU: {},
   SillyTavern_API_ACU: mockSillyTavern,
 }));
 
@@ -20,31 +19,15 @@ vi.mock('../../../src/shared/utils', () => ({
 }));
 
 import {
-  isGenerateRawAvailable_ACU,
   isConnectionManagerAvailable_ACU,
-  isTriggerSlashAvailable_ACU,
-  generateRaw_ACU,
   sendConnectionManagerRequest_ACU,
-  triggerSlash_ACU,
   getConnectionManagerProfiles_ACU,
   getHostRequestHeaders_ACU,
 } from '../../../src/data/gateways/ai-gateway';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  Object.keys(mockTavernHelper).forEach(k => delete mockTavernHelper[k]);
   Object.keys(mockSillyTavern).forEach(k => delete mockSillyTavern[k]);
-});
-
-describe('isGenerateRawAvailable_ACU', () => {
-  it('不可用返回 false', () => {
-    expect(isGenerateRawAvailable_ACU()).toBe(false);
-  });
-
-  it('可用返回 true', () => {
-    mockTavernHelper.generateRaw = vi.fn();
-    expect(isGenerateRawAvailable_ACU()).toBe(true);
-  });
 });
 
 describe('isConnectionManagerAvailable_ACU', () => {
@@ -55,41 +38,6 @@ describe('isConnectionManagerAvailable_ACU', () => {
   it('可用返回 true', () => {
     mockSillyTavern.ConnectionManagerRequestService = { sendRequest: vi.fn() };
     expect(isConnectionManagerAvailable_ACU()).toBe(true);
-  });
-});
-
-describe('isTriggerSlashAvailable_ACU', () => {
-  it('不可用返回 false', () => {
-    expect(isTriggerSlashAvailable_ACU()).toBe(false);
-  });
-
-  it('可用返回 true', () => {
-    mockTavernHelper.triggerSlash = vi.fn();
-    expect(isTriggerSlashAvailable_ACU()).toBe(true);
-  });
-});
-
-describe('generateRaw_ACU', () => {
-  it('不可用时抛错', async () => {
-    await expect(generateRaw_ACU({ ordered_prompts: [] })).rejects.toThrow('generateRaw');
-  });
-
-  it('可用时返回生成文本', async () => {
-    mockTavernHelper.generateRaw = vi.fn().mockResolvedValue('生成的文本');
-    const result = await generateRaw_ACU({ ordered_prompts: [{ role: 'user', content: '你好' }] });
-    expect(result).toBe('生成的文本');
-  });
-
-  it('返回非字符串时转为字符串', async () => {
-    mockTavernHelper.generateRaw = vi.fn().mockResolvedValue(123);
-    const result = await generateRaw_ACU({ ordered_prompts: [] });
-    expect(result).toBe('123');
-  });
-
-  it('返回 null 时转为空字符串', async () => {
-    mockTavernHelper.generateRaw = vi.fn().mockResolvedValue(null);
-    const result = await generateRaw_ACU({ ordered_prompts: [] });
-    expect(result).toBe('');
   });
 });
 
@@ -105,18 +53,6 @@ describe('sendConnectionManagerRequest_ACU', () => {
     };
     const result = await sendConnectionManagerRequest_ACU('profile1', [{ role: 'user', content: '你好' }], 100);
     expect(result).toEqual(response);
-  });
-});
-
-describe('triggerSlash_ACU', () => {
-  it('不可用时返回空字符串', async () => {
-    expect(await triggerSlash_ACU('/help')).toBe('');
-    expect(mockLogWarn).toHaveBeenCalled();
-  });
-
-  it('可用时返回命令结果', async () => {
-    mockTavernHelper.triggerSlash = vi.fn().mockResolvedValue('命令结果');
-    expect(await triggerSlash_ACU('/help')).toBe('命令结果');
   });
 });
 

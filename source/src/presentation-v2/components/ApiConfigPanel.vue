@@ -43,75 +43,47 @@
       </AcuFormRow>
 
       <div class="acu-api-config-panel__editor-section">
-        <AcuFormRow label="连接方式">
-          <AcuSegmentedControl
-            :options="connectionModeOptions"
-            :model-value="activeConnectionMode"
-            aria-label="连接方式"
-            @update:model-value="setActiveConnectionMode($event)"
+        <AcuFormRow label="端点(基础URL)">
+          <AcuInput
+            v-model="activeDraft.url"
+            type="text"
+            placeholder="https://example.com/v1"
           />
         </AcuFormRow>
-
-        <template v-if="activeConnectionMode === 'custom'">
-          <AcuFormRow label="端点(基础URL)">
-            <AcuInput
-              v-model="activeDraft.url"
-              type="text"
-              placeholder="https://example.com/v1"
-            />
-          </AcuFormRow>
-          <AcuFormRow label="API 密钥">
-            <AcuInput
-              v-model="activeDraft.apiKey"
-              type="password"
-              autocomplete="off"
-            />
-          </AcuFormRow>
-          <AcuFormRow label="模型名">
-            <AcuInput v-model="activeDraft.model" type="text" />
-          </AcuFormRow>
-          <div class="acu-api-config-panel__inline-action">
-            <AcuButton @click="loadModelsForActive">加载模型</AcuButton>
-            <span
-              v-if="store.modelLoadStatus === 'loading'"
-              class="acu-api-config-panel__muted"
-              >加载中...</span
-            >
-            <span
-              v-else-if="store.modelLoadStatus === 'error'"
-              class="acu-api-config-panel__danger"
-              >{{ store.modelLoadError }}</span
-            >
-          </div>
-          <AcuFormRow v-if="store.modelOptions.length" label="模型列表">
-            <AcuSelect
-              :options="modelSelectOptions"
-              :model-value="activeDraft.model"
-              placeholder="请选择"
-              @update:model-value="activeDraft.model = $event"
-            />
-          </AcuFormRow>
-        </template>
-
-        <template v-if="activeConnectionMode === 'tavern'">
-          <AcuFormRow label="酒馆连接预设">
-            <AcuSelect
-              :options="tavernProfileOptions"
-              :model-value="activeDraft.tavernProfile"
-              placeholder="请选择"
-              @update:model-value="activeDraft.tavernProfile = $event"
-            />
-          </AcuFormRow>
-          <div class="acu-api-config-panel__inline-action">
-            <AcuButton @click="store.refreshTavernProfiles">刷新列表</AcuButton>
-          </div>
-        </template>
+        <AcuFormRow label="API 密钥">
+          <AcuInput
+            v-model="activeDraft.apiKey"
+            type="password"
+            autocomplete="off"
+          />
+        </AcuFormRow>
+        <AcuFormRow label="模型名">
+          <AcuInput v-model="activeDraft.model" type="text" />
+        </AcuFormRow>
+        <div class="acu-api-config-panel__inline-action">
+          <AcuButton @click="loadModelsForActive">加载模型</AcuButton>
+          <span
+            v-if="store.modelLoadStatus === 'loading'"
+            class="acu-api-config-panel__muted"
+            >加载中...</span
+          >
+          <span
+            v-else-if="store.modelLoadStatus === 'error'"
+            class="acu-api-config-panel__danger"
+            >{{ store.modelLoadError }}</span
+          >
+        </div>
+        <AcuFormRow v-if="store.modelOptions.length" label="模型列表">
+          <AcuSelect
+            :options="modelSelectOptions"
+            :model-value="activeDraft.model"
+            placeholder="请选择"
+            @update:model-value="activeDraft.model = $event"
+          />
+        </AcuFormRow>
       </div>
 
-      <div
-        v-if="activeConnectionMode === 'custom'"
-        class="acu-api-config-panel__two-col"
-      >
+      <div class="acu-api-config-panel__two-col">
         <AcuFormRow label="最大回复长度">
           <AcuInput
             v-model="activeDraft.max_tokens"
@@ -131,10 +103,7 @@
         </AcuFormRow>
       </div>
 
-      <div
-        v-if="activeConnectionMode === 'custom'"
-        class="acu-api-config-panel__editor-section"
-      >
+      <div class="acu-api-config-panel__editor-section">
         <AcuFormRow label="附加主体参数" hint="SillyTavern custom_include_body，填写 YAML object，会合并到最终模型请求体。">
           <AcuTextarea
             v-model="activeDraft.bodyParams"
@@ -187,11 +156,8 @@ import { computed, onMounted, reactive, ref, watch } from "vue";
 import {
   apiPresetDraftFromPreset,
   apiPresetFromDraft,
-  applyConnectionMode,
-  connectionModeFromDraft,
   createEmptyApiPresetDraft,
   type ApiPresetDraft,
-  type ConnectionMode,
 } from "../composables/useApiPresetManagement";
 import { useUiCloseGuard } from "../composables/useUiCloseGuard";
 import { apiCopy } from "../copy/api-copy";
@@ -210,8 +176,6 @@ import AcuPanel from "./_lib/AcuPanel.vue";
 import AcuTextarea from "./_lib/AcuTextarea.vue";
 import type { PresetDropdownItem } from "./_lib/AcuPresetDropdown.vue";
 import AcuPresetDropdown from "./_lib/AcuPresetDropdown.vue";
-import type { AcuSegmentedOption } from "./_lib/AcuSegmentedControl.vue";
-import AcuSegmentedControl from "./_lib/AcuSegmentedControl.vue";
 import AcuSelect, { type AcuSelectOption } from "./_lib/AcuSelect.vue";
 
 const store = useApiPresetStore();
@@ -224,9 +188,6 @@ const activeDraftSnapshot = ref("");
 const activeDraftError = ref("");
 const activeDraftSavedAt = ref<number | null>(null);
 
-const activeConnectionMode = computed<ConnectionMode>(() =>
-  connectionModeFromDraft(activeDraft),
-);
 const activeDraftDirty = computed(() => {
   if (formMode.value === "create")
     return JSON.stringify(activeDraft) !== activeDraftSnapshot.value;
@@ -235,16 +196,8 @@ const activeDraftDirty = computed(() => {
     JSON.stringify(activeDraft) !== activeDraftSnapshot.value
   );
 });
-const connectionModeOptions: AcuSegmentedOption[] = [
-  { value: "main", label: "酒馆主 API" },
-  { value: "custom", label: "自定义" },
-  { value: "tavern", label: "酒馆预设" },
-];
 const modelSelectOptions = computed<AcuSelectOption[]>(() =>
   store.modelOptions.map((m) => ({ value: m, label: m })),
-);
-const tavernProfileOptions = computed<AcuSelectOption[]>(() =>
-  store.tavernProfiles.map((p) => ({ value: p.id, label: p.name })),
 );
 const presetDropdownItems = computed<PresetDropdownItem[]>(() =>
   store.presets.map((p) => ({
@@ -255,7 +208,6 @@ const presetDropdownItems = computed<PresetDropdownItem[]>(() =>
 
 function refreshAll(): void {
   store.refreshFromSettings();
-  store.refreshTavernProfiles();
   syncActiveDraft();
 }
 
@@ -317,10 +269,7 @@ async function deletePreset(name: string): Promise<void> {
 }
 
 function presetMeta(preset: AcuV2ApiPreset): string {
-  if (preset.apiMode === "tavern") return "酒馆预设";
-  return preset.apiConfig.useMainApi
-    ? "酒馆主 API"
-    : preset.apiConfig.model || "自定义";
+  return preset.apiConfig.model || "自定义";
 }
 
 function validateActiveDraft(): boolean {
@@ -328,19 +277,13 @@ function validateActiveDraft(): boolean {
     activeDraftError.value = "预设名称不能为空。";
     return false;
   }
-  if (activeDraft.apiMode === "tavern" && !activeDraft.tavernProfile.trim()) {
-    activeDraftError.value = "请选择酒馆连接预设。";
+  if (!activeDraft.url.trim()) {
+    activeDraftError.value = "自定义 API 需要填写端点(基础URL)。";
     return false;
   }
-  if (activeDraft.apiMode === "custom" && !activeDraft.useMainApi) {
-    if (!activeDraft.url.trim()) {
-      activeDraftError.value = "自定义 API 需要填写端点(基础URL)。";
-      return false;
-    }
-    if (!activeDraft.model.trim()) {
-      activeDraftError.value = "自定义 API 需要填写模型。";
-      return false;
-    }
+  if (!activeDraft.model.trim()) {
+    activeDraftError.value = "自定义 API 需要填写模型。";
+    return false;
   }
   activeDraftError.value = "";
   return true;
@@ -365,11 +308,6 @@ function saveActiveDraft(): void {
   syncActiveDraft();
   activeDraftSavedAt.value = Date.now();
   toast.success("已保存当前 API 预设。");
-}
-
-function setActiveConnectionMode(value: string): void {
-  applyConnectionMode(activeDraft, value as ConnectionMode);
-  activeDraftSavedAt.value = null;
 }
 
 async function loadModelsForActive(): Promise<void> {

@@ -12,13 +12,12 @@ import { logWarn_ACU } from '../../shared/utils';
 
 // ═══ 类型 ═══
 
-export type ApiPresetApiMode_ACU = 'custom' | 'tavern';
+export type ApiPresetApiMode_ACU = 'custom';
 
 export interface ApiPresetApiConfig_ACU {
   url: string;
   apiKey: string;
   model: string;
-  useMainApi: boolean;
   max_tokens: number;
   maxTokens?: number; // [兼容] 历史字段别名，防止旧调用方 maxTokens 访问崩溃
   temperature: number;
@@ -31,7 +30,6 @@ export interface ApiPreset_ACU {
   name: string;
   apiMode: ApiPresetApiMode_ACU;
   apiConfig: ApiPresetApiConfig_ACU;
-  tavernProfile: string;
 }
 
 export interface ApiPresetBinding_ACU {
@@ -51,8 +49,9 @@ export interface ApiPresetWriteResult_ACU {
 
 // ═══ 归一化 ═══
 
-export function normalizeApiMode_ACU(value: unknown): ApiPresetApiMode_ACU {
-  return value === 'tavern' ? 'tavern' : 'custom';
+/** 酒馆主 API（tavern）已剥离，API 模式恒为自定义 */
+export function normalizeApiMode_ACU(_value: unknown): ApiPresetApiMode_ACU {
+  return 'custom';
 }
 
 export function normalizeApiConfig_ACU(value: any): ApiPresetApiConfig_ACU {
@@ -65,7 +64,6 @@ export function normalizeApiConfig_ACU(value: any): ApiPresetApiConfig_ACU {
     url: typeof source.url === 'string' ? source.url : '',
     apiKey: typeof source.apiKey === 'string' ? source.apiKey : '',
     model: typeof source.model === 'string' ? source.model : '',
-    useMainApi: source.useMainApi === true,
     max_tokens: Number.isFinite(maxTokens) && maxTokens >= 0 ? Math.floor(maxTokens) : 60000,
     maxTokens: Number.isFinite(maxTokens) && maxTokens >= 0 ? Math.floor(maxTokens) : 60000,
     temperature: Number.isFinite(temperature) ? temperature : 1,
@@ -88,7 +86,6 @@ export function normalizePreset_ACU(value: any): ApiPreset_ACU | null {
     name,
     apiMode: normalizeApiMode_ACU(value.apiMode),
     apiConfig: normalizeApiConfig_ACU(value.apiConfig),
-    tavernProfile: typeof value.tavernProfile === 'string' ? value.tavernProfile : '',
   };
 }
 
@@ -192,7 +189,7 @@ export function resolveApiConfigByPreset_ACU(presetName: string): {
     return {
       apiMode: preset.apiMode,
       apiConfig: preset.apiConfig,
-      tavernProfile: preset.tavernProfile,
+      tavernProfile: settings_ACU.tavernProfile,
       resolved: true,
     };
   }
@@ -215,7 +212,6 @@ export function reconcileApiBindingForCurrentChat_ACU(): { applied: boolean; pre
   if (!preset) return { applied: false, presetName: '' };
   settings_ACU.apiMode = preset.apiMode;
   settings_ACU.apiConfig = JSON.parse(JSON.stringify(preset.apiConfig));
-  settings_ACU.tavernProfile = preset.tavernProfile;
   return { applied: true, presetName: preset.name };
 }
 
@@ -352,7 +348,6 @@ export function setActivePresetForCurrentChat_ACU(name: string): ApiPresetWriteR
   settings_ACU.apiPresetBindingsByChat[chatKey] = { presetName: preset.name, updatedAt: Date.now() };
   settings_ACU.apiMode = preset.apiMode;
   settings_ACU.apiConfig = clone(preset.apiConfig);
-  settings_ACU.tavernProfile = preset.tavernProfile;
   return finalizeSave_ACU(snapshot);
 }
 
@@ -393,7 +388,6 @@ export function saveApiPreset_ACU(presetInput: ApiPreset_ACU, originalName = '')
     };
     settings_ACU.apiMode = preset.apiMode;
     settings_ACU.apiConfig = clone(preset.apiConfig);
-    settings_ACU.tavernProfile = preset.tavernProfile;
   }
 
   const result = finalizeSave_ACU(snapshot);
@@ -431,7 +425,6 @@ export function deleteApiPreset_ACU(name: string): ApiPresetWriteResult_ACU {
       if (fallback) {
         settings_ACU.apiMode = fallback.apiMode;
         settings_ACU.apiConfig = clone(fallback.apiConfig);
-        settings_ACU.tavernProfile = fallback.tavernProfile;
       }
     }
   }
@@ -460,38 +453,12 @@ export function setStreamingEnabled_ACU(enabled: boolean): ApiPresetWriteResult_
   return finalizeSave_ACU(snapshot);
 }
 
-/** 设置 API 配置是否使用主 API（apiConfig.useMainApi） */
-export function setUseMainApi_ACU(enabled: boolean): ApiPresetWriteResult_ACU {
-  ensureApiSettingsShape_ACU();
-  const snapshot = snapshotApiFields_ACU();
-  settings_ACU.apiConfig.useMainApi = !!enabled;
-  return finalizeSave_ACU(snapshot);
-}
-
-/** 设置当前 API 模式（apiMode） */
-export function setApiMode_ACU(mode: string): ApiPresetWriteResult_ACU {
-  ensureApiSettingsShape_ACU();
-  const normalized = normalizeApiMode_ACU(mode);
-  const snapshot = snapshotApiFields_ACU();
-  settings_ACU.apiMode = normalized;
-  return finalizeSave_ACU(snapshot);
-}
-
-/** 设置当前 tavern API profile（tavernProfile） */
-export function setTavernProfile_ACU(profileId: string): ApiPresetWriteResult_ACU {
-  ensureApiSettingsShape_ACU();
-  const snapshot = snapshotApiFields_ACU();
-  settings_ACU.tavernProfile = String(profileId || '');
-  return finalizeSave_ACU(snapshot);
-}
-
 /** 将当前配置保存为新预设 */
 export function saveCurrentConfigAsPreset_ACU(name: string): ApiPresetWriteResult_ACU {
   const preset: ApiPreset_ACU = {
     name: String(name || '').trim(),
     apiMode: normalizeApiMode_ACU(settings_ACU.apiMode),
     apiConfig: normalizeApiConfig_ACU(settings_ACU.apiConfig),
-    tavernProfile: typeof settings_ACU.tavernProfile === 'string' ? settings_ACU.tavernProfile : '',
   };
   return saveApiPreset_ACU(preset);
 }

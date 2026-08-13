@@ -225,7 +225,7 @@ export function checkAutoUpdatePreConditions_ACU(
         return { canProceed: false, reason: 'Auto update is disabled via settings.', code: 'auto_update_disabled' };
     }
 
-    const apiIsConfigured = (settings.apiMode === 'custom' && (settings.apiConfig.useMainApi || (settings.apiConfig.url && settings.apiConfig.model))) || (settings.apiMode === 'tavern' && settings.tavernProfile);
+    const apiIsConfigured = !!(settings.apiConfig.url && settings.apiConfig.model);
 
     if (!coreApisAreReady) {
         return { canProceed: false, reason: 'Pre-flight checks failed.', code: 'core_apis_not_ready' };

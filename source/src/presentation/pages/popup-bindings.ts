@@ -10,9 +10,7 @@ import { saveSettingsAndNotify_ACU, loadSettingsAndRefreshUI_ACU } from '../comp
 import { deleteAllGeneratedEntries_ACU, updateReadableLorebookEntry_ACU } from '../../service/worldbook/pipeline';
 import { populateInjectionTargetSelector_ACU, populateImportWorldbookTargetSelector_ACU } from '../components/worldbook-selector';
 import { updateCardUpdateStatusDisplay_ACU } from '../components/update-status-display';
-import { exportCharCardPromptToJson_ACU, loadCharCardPromptFromJson_ACU, loadTavernApiProfiles_ACU, updateApiModeView_ACU } from '../triggers/settings-ui-sync';
-// [V1 收敛] API 配置写权限统一委托 service 事务式函数。
-import { setApiMode_ACU, setTavernProfile_ACU } from '../../service/settings/api-preset-service';
+import { exportCharCardPromptToJson_ACU, loadCharCardPromptFromJson_ACU } from '../triggers/settings-ui-sync';
 
 // 子模块绑定函数
 import { bindStatusEvents_ACU } from './popup-bindings-status';
@@ -79,15 +77,10 @@ import { isSqliteMode } from '../../service/table/storage-mode';
         $importTableSelector_ACU: $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-import-table-selector`),
         $statusMessageSpan_ACU: $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-status-message`),
         $cardUpdateStatusDisplay_ACU: $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-card-update-status-display`),
-        $useMainApiCheckbox_ACU: $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-use-main-api-checkbox`),
         $streamingEnabledCheckbox_ACU: $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-streaming-enabled-checkbox`),
       });
       const $loadCharCardPromptFromJsonButton_ACU = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-load-char-card-prompt-from-json`);
       const $exportCharCardPromptToJsonButton_ACU = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-export-char-card-prompt-to-json`);
-
-      const $apiModeRadios = $popupInstance_ACU.find(`input[name="${SCRIPT_ID_PREFIX_ACU}-api-mode"]`);
-      const $tavernProfileSelect = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-tavern-api-profile-select`);
-      const $refreshTavernProfilesButton = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-refresh-tavern-api-profiles`);
 
       // Load existing settings into UI fields
       loadSettingsAndRefreshUI_ACU(); // This function will populate the fields
@@ -185,31 +178,7 @@ import { isSqliteMode } from '../../service/table/storage-mode';
             $advancedTab.find(`#acu-subtab-${subtabId}`).addClass('active');
         });
         
-        // API Mode switching logic
-        if ($apiModeRadios.length) {
-            $apiModeRadios.on('change', function() {
-                const selectedMode = String(jQuery_API_ACU(this).val() || '');
-                const result = setApiMode_ACU(selectedMode);
-                if (!result.ok) {
-                    showToastr_ACU('error', result.message || '保存API模式失败，已回滚。');
-                    return;
-                }
-                updateApiModeView_ACU(selectedMode);
-            });
-        }
-        if ($refreshTavernProfilesButton.length) {
-            $refreshTavernProfilesButton.on('click', loadTavernApiProfiles_ACU);
-        }
-        if ($tavernProfileSelect.length) {
-            $tavernProfileSelect.on('change', function() {
-                const result = setTavernProfile_ACU(String(jQuery_API_ACU(this).val() || ''));
-                if (!result.ok) {
-                    showToastr_ACU('error', result.message || '保存酒馆API预设失败，已回滚。');
-                    return;
-                }
-            });
-        }
-
+        // API Mode switching logic（酒馆主 API 已剥离，radio 不再存在）
 
       // ═══ 调用各子模块绑定函数 ═══
       await bindStatusEvents_ACU();

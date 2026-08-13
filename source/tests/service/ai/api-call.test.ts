@@ -73,11 +73,11 @@ describe('getApiConfigByPreset_ACU', () => {
 
   it('找到预设时返回预设配置', () => {
     mockSettings.apiPresets = [
-      { name: '预设A', apiMode: 'tavern', apiConfig: { url: 'http://a.com' }, tavernProfile: 'profileA' },
+      { name: '预设A', apiMode: 'custom', apiConfig: { url: 'http://a.com' } },
     ];
     const config = getApiConfigByPreset_ACU('预设A');
-    expect(config.apiMode).toBe('tavern');
-    expect(config.tavernProfile).toBe('profileA');
+    expect(config.apiMode).toBe('custom');
+    expect(config.apiConfig.url).toBe('http://a.com');
   });
 
   it('预设不存在时回退到当前配置', () => {
@@ -89,21 +89,6 @@ describe('getApiConfigByPreset_ACU', () => {
 
 // ═══ callApi_ACU ═══
 describe('callApi_ACU', () => {
-  it('tavern 模式使用 generateRaw', async () => {
-    mockSettings.plotApiPreset = '';
-    mockSettings.apiConfig = { useMainApi: true };
-    mockGenerateRaw.mockResolvedValue('AI 回复');
-    const result = await callApi_ACU([{ role: 'user', content: '你好' }], {});
-    expect(result).toBe('AI 回复');
-    expect(mockGenerateRaw).toHaveBeenCalled();
-  });
-
-  it('generateRaw 不可用时抛错', async () => {
-    mockSettings.apiConfig = { useMainApi: true };
-    mockIsGenerateRawAvailable.mockReturnValue(false);
-    await expect(callApi_ACU([{ role: 'user', content: '你好' }], {})).rejects.toThrow('generateRaw');
-  });
-
   it('自定义 API 模式使用 fetch', async () => {
     mockSettings.apiConfig = { url: 'https://api.example.com', model: 'gpt-4', apiKey: 'sk-test' };
     mockFetch.mockResolvedValue({ ok: true, text: () => Promise.resolve('response') });
@@ -144,31 +129,6 @@ describe('callAIWithPreset_ACU', () => {
     expect(result).toBeNull();
   });
 
-  it('tavern 模式调用 sendConnectionManagerRequest', async () => {
-    mockSettings.apiMode = 'tavern';
-    mockSendConnectionManager.mockResolvedValue({
-      result: { choices: [{ message: { content: 'AI 回复' } }] },
-    });
-    const result = await callAIWithPreset_ACU([{ role: 'user', content: '你好' }]);
-    expect(result).toBe('AI 回复');
-  });
-
-  it('tavern 模式返回无效响应时返回 null', async () => {
-    mockSettings.apiMode = 'tavern';
-    mockSendConnectionManager.mockResolvedValue({});
-    const result = await callAIWithPreset_ACU([{ role: 'user', content: '你好' }]);
-    expect(result).toBeNull();
-  });
-
-  it('useMainApi 模式使用 generateRaw', async () => {
-    mockSettings.apiMode = 'custom';
-    mockSettings.apiConfig = { useMainApi: true };
-    mockIsGenerateRawAvailable.mockReturnValue(true);
-    mockGenerateRaw.mockResolvedValue('AI 回复');
-    const result = await callAIWithPreset_ACU([{ role: 'user', content: '你好' }]);
-    expect(result).toBe('AI 回复');
-  });
-
   it('自定义 API 模式使用 fetch', async () => {
     mockSettings.apiConfig = { url: 'https://api.example.com', model: 'gpt-4', apiKey: 'sk-test' };
     mockFetch.mockResolvedValue({ ok: true });
@@ -179,11 +139,10 @@ describe('callAIWithPreset_ACU', () => {
 
   it('指定预设名使用对应预设', async () => {
     mockSettings.apiPresets = [
-      { name: '预设B', apiMode: 'tavern', apiConfig: {}, tavernProfile: 'profileB' },
+      { name: '预设B', apiMode: 'custom', apiConfig: { url: 'https://b.com', model: 'gpt-4', apiKey: 'sk-test' } },
     ];
-    mockSendConnectionManager.mockResolvedValue({
-      result: { choices: [{ message: { content: '预设B回复' } }] },
-    });
+    mockFetch.mockResolvedValue({ ok: true });
+    mockHandleApiResponse.mockResolvedValue('预设B回复');
     const result = await callAIWithPreset_ACU([{ role: 'user', content: '你好' }], '预设B');
     expect(result).toBe('预设B回复');
   });
@@ -208,56 +167,13 @@ describe('callAIWithPreset_ACU', () => {
     ).rejects.toThrow();
   });
 
-  it('tavern 分支在 signal 已 abort 且返回后抛 AbortError', async () => {
-    mockSettings.apiMode = 'tavern';
-    mockSendConnectionManager.mockResolvedValue({
-      result: { choices: [{ message: { content: 'AI 回复' } }] },
-    });
-    const controller = new AbortController();
-    controller.abort();
-    await expect(
-      callAIWithPreset_ACU([{ role: 'user', content: '你好' }], '', undefined, controller.signal),
-    ).rejects.toThrow('请求已取消');
-  });
-
 });
 
 // ═══ callCustomOpenAI_ACU_Direct ═══
 describe('callCustomOpenAI_ACU_Direct', () => {
-  it('tavern 模式直接发送消息', async () => {
-    mockSettings.apiMode = 'tavern';
-    mockSendConnectionManager.mockResolvedValue({
-      result: { choices: [{ message: { content: '直接回复' } }] },
-    });
-    const result = await callCustomOpenAI_ACU_Direct([{ role: 'user', content: '测试' }]);
-    expect(result).toBe('直接回复');
-    expect(mockSendConnectionManager).toHaveBeenCalled();
-  });
-
-  it('tavern 模式 max_tokens=0 透传给 sendConnectionManagerRequest', async () => {
-    mockSettings.apiMode = 'tavern';
-    mockSettings.apiConfig.max_tokens = 0;
-    mockSendConnectionManager.mockResolvedValue({
-      result: { choices: [{ message: { content: '直接回复' } }] },
-    });
-    const result = await callCustomOpenAI_ACU_Direct([{ role: 'user', content: '测试' }]);
-    expect(result).toBe('直接回复');
-    expect(mockSendConnectionManager).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.any(Array),
-      0,
-    );
-  });
-  it('custom 模式且 useMainApi 时使用 generateRaw', async () => {
+  it('custom 模式使用 fetch', async () => {
     mockSettings.apiMode = 'custom';
-    mockSettings.apiConfig.useMainApi = true;
-    mockGenerateRaw.mockResolvedValue('generateRaw回复');
-    const result = await callCustomOpenAI_ACU_Direct([{ role: 'user', content: '测试' }]);
-    expect(result).toBe('generateRaw回复');
-  });
-  it('custom 模式且非 useMainApi 时使用 fetch', async () => {
-    mockSettings.apiMode = 'custom';
-    mockSettings.apiConfig.useMainApi = false;
+    mockSettings.apiConfig = { url: 'https://api.example.com', model: 'gpt-4', apiKey: 'sk-test' };
     mockHandleApiResponse.mockResolvedValue('fetch回复');
     mockFetch.mockResolvedValue({ ok: true, json: async () => ({}) });
     const result = await callCustomOpenAI_ACU_Direct([{ role: 'user', content: '测试' }]);

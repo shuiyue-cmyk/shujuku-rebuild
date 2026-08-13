@@ -5,9 +5,8 @@ import { isSqliteMode } from '../table/storage-mode';
 import { handleApiResponse_ACU } from '../ai/prompt-builder';
 import { buildCustomApiRequestBody_ACU } from '../ai/api-call';
 import { currentJsonTableData_ACU, settings_ACU } from '../runtime/state-manager';
-import { sendConnectionManagerRequest_ACU, isGenerateRawAvailable_ACU, generateRaw_ACU } from '../../data/gateways/ai-gateway';
-import { getLastMessageIndex_ACU } from '../../data/gateways/chat-gateway';
 import { getHostRequestHeaders_ACU } from '../../data/gateways/ai-gateway';
+import { getLastMessageIndex_ACU } from '../../data/gateways/chat-gateway';
 import { updateReadableLorebookEntry_ACU } from '../worldbook/pipeline';
 import { logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
 import { runTableUpdateCommit_ACU } from '../table/table-update-commit';
@@ -197,26 +196,15 @@ export async function executeAutoMergeBatch_ACU(
             }
             const finalMessages = messagesToUse.map((m: any) => ({ role: m.role.toLowerCase(), content: m.content }));
 
-            if (settings_ACU.apiMode === 'tavern') {
-                const result = await sendConnectionManagerRequest_ACU(settings_ACU.tavernProfile, finalMessages, settings_ACU.apiConfig.max_tokens ?? settings_ACU.apiConfig.maxTokens ?? 4096);
-                if (result && result.ok) aiResponseText = result.result.choices[0].message.content;
-                else throw new Error('API请求返回不成功状态');
-            } else {
-                if (settings_ACU.apiConfig.useMainApi) {
-                    aiResponseText = isGenerateRawAvailable_ACU()
-                        ? await generateRaw_ACU({ ordered_prompts: finalMessages, should_stream: settings_ACU.streamingEnabled || false })
-                        : '';
-                } else {
-                    const res = await fetch(`/api/backends/chat-completions/generate`, {
-                        method: 'POST',
-                        headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-                        body: JSON.stringify(buildCustomApiRequestBody_ACU(finalMessages, settings_ACU.apiConfig, { stripModelPrefix: false }))
-                    });
-                    if (!res.ok) throw new Error(`API请求失败: ${res.status} ${await res.text()}`);
-                    aiResponseText = await handleApiResponse_ACU(res);
-                    if (!aiResponseText) throw new Error('API返回的数据格式不正确');
-                }
-            }
+            // 酒馆主 API（tavern / useMainApi）已剥离，恒走自定义 API
+            const res = await fetch(`/api/backends/chat-completions/generate`, {
+                method: 'POST',
+                headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
+                body: JSON.stringify(buildCustomApiRequestBody_ACU(finalMessages, settings_ACU.apiConfig, { stripModelPrefix: false }))
+            });
+            if (!res.ok) throw new Error(`API请求失败: ${res.status} ${await res.text()}`);
+            aiResponseText = await handleApiResponse_ACU(res);
+            if (!aiResponseText) throw new Error('API返回的数据格式不正确');
 
             const extractResult = extractTableEditInner_ACU(aiResponseText, { allowNoTableEditTags: true });
             if (!extractResult || !extractResult.inner) {

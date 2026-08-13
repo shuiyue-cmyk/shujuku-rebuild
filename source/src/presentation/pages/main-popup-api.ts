@@ -11,30 +11,8 @@ export function generateApiTabHTML(): string {
                 <div id="acu-tab-api" class="acu-tab-content">
                      <div class="acu-card">
                         <h3>API设置</h3>
-                        <div class="qrf_settings_block_radio">
-                            <label>API模式:</label>
-                            <div class="qrf_radio_group">
-                                <input type="radio" id="${SCRIPT_ID_PREFIX_ACU}-api-mode-custom" name="${SCRIPT_ID_PREFIX_ACU}-api-mode" value="custom" checked>
-                                <label for="${SCRIPT_ID_PREFIX_ACU}-api-mode-custom">自定义API</label>
-                                <input type="radio" id="${SCRIPT_ID_PREFIX_ACU}-api-mode-tavern" name="${SCRIPT_ID_PREFIX_ACU}-api-mode" value="tavern">
-                                <label for="${SCRIPT_ID_PREFIX_ACU}-api-mode-tavern">使用酒馆连接预设</label>
-                            </div>
-                        </div>
-
-                        <div id="${SCRIPT_ID_PREFIX_ACU}-tavern-api-profile-block" style="display: none; margin-top: 12px;">
-                            <label for="${SCRIPT_ID_PREFIX_ACU}-tavern-api-profile-select">酒馆连接预设:</label>
-                             <div class="input-group">
-                                <select id="${SCRIPT_ID_PREFIX_ACU}-tavern-api-profile-select"></select>
-                                <button id="${SCRIPT_ID_PREFIX_ACU}-refresh-tavern-api-profiles" title="刷新预设列表">刷新</button>
-                            </div>
-                            <small class="notes">选择一个你在酒馆主设置中已经配置好的连接预设。</small>
-                        </div>
 
                         <div id="${SCRIPT_ID_PREFIX_ACU}-custom-api-settings-block" style="margin-top: 12px;">
-                             <div class="checkbox-group">
-                                <input type="checkbox" id="${SCRIPT_ID_PREFIX_ACU}-use-main-api-checkbox">
-                                <label for="${SCRIPT_ID_PREFIX_ACU}-use-main-api-checkbox">使用主API (直接使用酒馆当前API和模型)</label>
-                            </div>
                              <div class="checkbox-group">
                                 <input type="checkbox" id="${SCRIPT_ID_PREFIX_ACU}-streaming-enabled-checkbox">
                                 <label for="${SCRIPT_ID_PREFIX_ACU}-streaming-enabled-checkbox">启用流式传输 (Streaming)</label>

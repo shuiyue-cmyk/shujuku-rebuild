@@ -16,10 +16,9 @@ function createSettings() {
   return {
     apiMode: "custom",
     apiConfig: {
-      url: "",
+      url: "https://api.example.com",
       apiKey: "",
-      model: "",
-      useMainApi: true,
+      model: "gpt-4",
       max_tokens: 60000,
       temperature: 1,
     },
@@ -30,10 +29,9 @@ function createSettings() {
         name: "table-fast",
         apiMode: "custom",
         apiConfig: {
-          url: "",
+          url: "https://api.example.com",
           apiKey: "",
-          model: "",
-          useMainApi: true,
+          model: "gpt-4",
           max_tokens: 1000,
           temperature: 1,
         },
@@ -507,7 +505,7 @@ describe("DashboardPage", () => {
     const settings = createSettings();
     settings.apiPresets = [];
     settings.defaultApiPresetName = "";
-    settings.apiConfig.useMainApi = false;
+    settings.apiConfig = { url: "", model: "" };
     const { mount } = await mountDashboardPage(settings);
 
     const healthItems = Array.from(
@@ -539,7 +537,6 @@ describe("DashboardPage", () => {
 
   it("API 健康追踪 API 页当前预设，而不是填表专用 API", async () => {
     const settings = createSettings();
-    settings.apiConfig.useMainApi = false;
     settings.tableApiPreset = "missing-table-only";
     const { mount } = await mountDashboardPage(settings);
 
@@ -550,7 +547,7 @@ describe("DashboardPage", () => {
     );
     const apiText = healthItems[0].textContent || "";
     expect(apiText).toContain('API 页当前预设 "table-fast" 已配置');
-    expect(apiText).toContain("使用酒馆主 API");
+    expect(apiText).toContain("使用gpt-4");
     expect(
       healthItems[0].querySelector(".acu-v2-dashboard-page__health-meta"),
     ).toBeNull();

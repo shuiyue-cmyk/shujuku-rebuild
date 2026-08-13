@@ -7,13 +7,11 @@
  * - plotAdvanced：编辑剧情推进预设抽屉中的"匹配替换"字段（sulv1-4 / zhaohui）
  *   是否显示。开关 UI 在开发者一级页内；与总开关相互独立。
  * - vectorIndexAdvanced：交火模式页中的"召回参数"与"归档与分块"面板是否显示。
- * - legacyUiMenuVisible：SillyTavern 扩展菜单中的旧 UI 入口是否显示，默认隐藏。
  * - warnLogEnabled：WARN 日志是否输出并写入运行日志，默认关闭。
  *
  * 新 UI 自有持久化，物理隔离于 settings_ACU。
  */
 import { defineStore } from 'pinia';
-import { applyLegacyUiMenuVisibility } from '../../shared/legacy-ui-menu-entry';
 import { setWarnLogEnabled as applyWarnLogEnabled } from '../../shared/log-buffer';
 import { readSection, writeSection } from './persistence';
 
@@ -26,8 +24,6 @@ export interface DevOptionsState {
   plotAdvanced: boolean;
   /** 交火模式页中的高级索引参数面板是否显示。与 developerOptionsEnabled 相互独立。 */
   vectorIndexAdvanced: boolean;
-  /** SillyTavern 扩展菜单中的旧 UI 入口是否显示。默认隐藏。 */
-  legacyUiMenuVisible: boolean;
   /** WARN 日志是否输出并写入运行日志。默认关闭。 */
   warnLogEnabled: boolean;
 }
@@ -36,7 +32,6 @@ interface PersistedShape {
   developerOptionsEnabled?: unknown;
   plotAdvanced?: unknown;
   vectorIndexAdvanced?: unknown;
-  legacyUiMenuVisible?: unknown;
   warnLogEnabled?: unknown;
 }
 
@@ -46,7 +41,6 @@ function loadFromStorage(): DevOptionsState {
     developerOptionsEnabled: raw.developerOptionsEnabled === true,
     plotAdvanced: raw.plotAdvanced === true,
     vectorIndexAdvanced: raw.vectorIndexAdvanced === true,
-    legacyUiMenuVisible: raw.legacyUiMenuVisible === true,
     warnLogEnabled: raw.warnLogEnabled === true,
   };
 }
@@ -56,7 +50,6 @@ function persist(state: DevOptionsState): void {
     developerOptionsEnabled: state.developerOptionsEnabled,
     plotAdvanced: state.plotAdvanced,
     vectorIndexAdvanced: state.vectorIndexAdvanced,
-    legacyUiMenuVisible: state.legacyUiMenuVisible,
     warnLogEnabled: state.warnLogEnabled,
   });
 }
@@ -80,11 +73,6 @@ export const useDevOptionsStore = defineStore('acu-v2-dev-options', {
       this.vectorIndexAdvanced = !!enabled;
       persist(this.$state);
     },
-    setLegacyUiMenuVisible(enabled: boolean): void {
-      this.legacyUiMenuVisible = !!enabled;
-      persist(this.$state);
-      applyLegacyUiMenuVisibility(this.legacyUiMenuVisible);
-    },
     setWarnLogEnabled(enabled: boolean): void {
       this.warnLogEnabled = !!enabled;
       applyWarnLogEnabled(this.warnLogEnabled);
@@ -95,9 +83,7 @@ export const useDevOptionsStore = defineStore('acu-v2-dev-options', {
       this.developerOptionsEnabled = next.developerOptionsEnabled;
       this.plotAdvanced = next.plotAdvanced;
       this.vectorIndexAdvanced = next.vectorIndexAdvanced;
-      this.legacyUiMenuVisible = next.legacyUiMenuVisible;
       this.warnLogEnabled = next.warnLogEnabled;
-      applyLegacyUiMenuVisibility(this.legacyUiMenuVisible);
       applyWarnLogEnabled(this.warnLogEnabled);
     },
   },

@@ -1890,7 +1890,6 @@ function safeJsonStringify_ACU(obj, fallback = '{}') {
  */
 const ACU_V2_STORAGE_KEY = 'acu_v2_ui_state';
 const ACU_V2_DEV_OPTIONS_SECTION_KEY = 'devOptions';
-const LEGACY_UI_MENU_VISIBLE_KEY = 'legacyUiMenuVisible';
 const WARN_LOG_ENABLED_KEY = 'warnLogEnabled';
 /**
  * 在 Vue/Pinia 尚未挂载时读取 WARN 日志开关，保证启动阶段也遵守持久化设置。
@@ -2812,7 +2811,6 @@ function applyOptimizations_ACU(originalContent, optimizations) {
 // 存储键常量
 // ═══════════════════════════════════════════════════════════════
 const STORAGE_KEY_CUSTOM_TEMPLATE_ACU = `${SCRIPT_ID_PREFIX_ACU}_customTemplate`;
-const MENU_ITEM_CONTAINER_ID_ACU = `${SCRIPT_ID_PREFIX_ACU}-extensions-menu-container`;
 const STORAGE_KEY_ALL_SETTINGS_ACU = `${SCRIPT_ID_PREFIX_ACU}_allSettings_v2`;
 const STORAGE_KEY_GLOBAL_META_ACU = `${SCRIPT_ID_PREFIX_ACU}_globalMeta_v1`;
 const STORAGE_KEY_PROFILE_PREFIX_ACU = `${SCRIPT_ID_PREFIX_ACU}_profile_v1`;
@@ -62111,19 +62109,13 @@ async function resolveCandidateScopeEntriesForTable_ACU(readContext, scopeNames,
 /**
  * data/gateways/ai-gateway.ts — AI 调用网关
  *
- * 封装 TavernHelper_API_ACU.generateRaw、triggerSlash
- * 以及 SillyTavern_API_ACU.ConnectionManagerRequestService.sendRequest 等 AI 调用方法。
+ * 封装 SillyTavern_API_ACU.ConnectionManagerRequestService 等宿主调用方法。
  * service 层通过本模块发起 AI 请求，不再直接调用宿主 API。
  *
+ * 酒馆主 API（TavernHelper.generateRaw / tavern 连接预设）已剥离。
  * 所有方法内置存在性检查，宿主 API 不可用时抛出明确错误。
  */
 // ═══ 可用性检查 ═══
-/**
- * 检查 generateRaw 是否可用
- */
-function isGenerateRawAvailable_ACU() {
-    return !!(TavernHelper_API_ACU && typeof TavernHelper_API_ACU.generateRaw === 'function');
-}
 /**
  * 检查 ConnectionManagerRequestService 是否可用
  */
@@ -62131,26 +62123,7 @@ function isConnectionManagerAvailable_ACU() {
     return !!(SillyTavern_API_ACU?.ConnectionManagerRequestService &&
         typeof SillyTavern_API_ACU.ConnectionManagerRequestService.sendRequest === 'function');
 }
-/**
- * 检查 triggerSlash 是否可用
- */
-function isTriggerSlashAvailable_ACU() {
-    return !!(TavernHelper_API_ACU && typeof TavernHelper_API_ACU.triggerSlash === 'function');
-}
 // ═══ AI 生成 ═══
-/**
- * 通过酒馆主 API 生成文本
- * @param options generateRaw 的参数（ordered_prompts、should_stream 等）
- * @returns 生成的文本
- * @throws 如果 generateRaw 不可用
- */
-async function generateRaw_ACU(options) {
-    if (!isGenerateRawAvailable_ACU()) {
-        throw new Error('TavernHelper.generateRaw 函数不存在。请检查酒馆版本。');
-    }
-    const response = await TavernHelper_API_ACU.generateRaw(options);
-    return typeof response === 'string' ? response : String(response ?? '');
-}
 /**
  * 通过 ConnectionManager 发送请求
  * @param profileId 配置文件 ID
@@ -62164,18 +62137,6 @@ async function sendConnectionManagerRequest_ACU(profileId, messages, maxTokens) 
         throw new Error('ConnectionManagerRequestService 不可用。请检查酒馆版本或连接管理器配置。');
     }
     return await SillyTavern_API_ACU.ConnectionManagerRequestService.sendRequest(profileId, messages, maxTokens);
-}
-/**
- * 触发斜杠命令
- * @param command 斜杠命令字符串
- * @returns 命令执行结果
- */
-async function triggerSlash_ACU(command) {
-    if (!isTriggerSlashAvailable_ACU()) {
-        logWarn_ACU('[AIGateway] triggerSlash 不可用，返回空字符串');
-        return '';
-    }
-    return await TavernHelper_API_ACU.triggerSlash(command);
 }
 // ═══ 配置读取 ═══
 /**
@@ -62359,142 +62320,23 @@ async function callCustomOpenAI_ACU(dynamicContent, abortController = null, opti
     logDebug_ACU('Final messages array being sent to API:', messages);
     logDebug_ACU(`使用API预设: ${effectiveTableApiPreset || '当前配置'}, 模式: ${effectiveApiMode}`);
     try {
-        if (effectiveApiMode === 'tavern') {
-            const profileId = effectiveTavernProfile;
-            if (!profileId) {
-                throw new Error('未选择酒馆连接预设。');
-            }
-            if (skipProfileSwitch) {
-                logDebug_ACU('ACU: 并发模式启用，跳过酒馆预设切换。');
-            }
-            let originalProfile = '';
-            let responsePromise;
-            let rawResult;
-            try {
-                if (!skipProfileSwitch) {
-                    originalProfile = await triggerSlash_ACU('/profile');
-                }
-                const targetProfile = getConnectionManagerProfiles_ACU().find(p => p.id === profileId);
-                if (!targetProfile) {
-                    throw new Error(`无法找到ID为 "${profileId}" 的连接预设。`);
-                }
-                if (!targetProfile.api) {
-                    throw new Error(`预设 "${targetProfile.name || targetProfile.id}" 没有配置API。`);
-                }
-                if (!targetProfile.preset) {
-                    throw new Error(`预设 "${targetProfile.name || targetProfile.id}" 没有选择预设。`);
-                }
-                const targetProfileName = targetProfile.name || targetProfile.id;
-                if (!skipProfileSwitch) {
-                    const currentProfile = await triggerSlash_ACU('/profile');
-                    if (currentProfile !== targetProfileName) {
-                        const escapedProfileName = targetProfileName.replace(/"/g, '\\"');
-                        await triggerSlash_ACU(`/profile await=true "${escapedProfileName}"`);
-                    }
-                }
-                logDebug_ACU(`ACU: 通过酒馆连接预设 (ID: ${profileId}, Name: ${targetProfileName}) 发送请求...`);
-                responsePromise = sendConnectionManagerRequest_ACU(profileId, messages, effectiveApiConfig.max_tokens ?? effectiveApiConfig.maxTokens ?? 4096);
-                rawResult = await responsePromise;
-            }
-            catch (error) {
-                logError_ACU(`ACU: 调用酒馆连接预设时出错:`, error);
-                try {
-                    if (originalProfile && !skipProfileSwitch) {
-                        const currentProfileAfterCall = await triggerSlash_ACU('/profile');
-                        if (originalProfile !== currentProfileAfterCall) {
-                            const escapedOriginalProfile = originalProfile.replace(/"/g, '\\"');
-                            await triggerSlash_ACU(`/profile await=true "${escapedOriginalProfile}"`);
-                            logDebug_ACU(`ACU: 已恢复原酒馆连接预设: "${originalProfile}"`);
-                        }
-                    }
-                }
-                catch (restoreError) {
-                    logError_ACU(`ACU: 恢复原预设时出错:`, restoreError);
-                }
-                throw new Error(`API请求失败 (酒馆预设): ${error.message}`);
-            }
-            finally {
-                if (rawResult !== undefined) {
-                    try {
-                        if (!skipProfileSwitch) {
-                            const currentProfileAfterCall = await triggerSlash_ACU('/profile');
-                            if (originalProfile && originalProfile !== currentProfileAfterCall) {
-                                const escapedOriginalProfile = originalProfile.replace(/"/g, '\\"');
-                                await triggerSlash_ACU(`/profile await=true "${escapedOriginalProfile}"`);
-                                logDebug_ACU(`ACU: 已恢复原酒馆连接预设: "${originalProfile}"`);
-                            }
-                        }
-                    }
-                    catch (restoreError) {
-                        logError_ACU(`ACU: 恢复原预设时出错:`, restoreError);
-                    }
-                }
-            }
-            if (rawResult && rawResult.ok && rawResult.result?.choices?.[0]?.message?.content) {
-                return rawResult.result.choices[0].message.content.trim();
-            }
-            else if (rawResult && typeof rawResult.content === 'string') {
-                return rawResult.content.trim();
-            }
-            else {
-                const errorMsg = rawResult?.error || JSON.stringify(rawResult);
-                throw new Error(`酒馆预设API调用返回无效响应: ${errorMsg}`);
-            }
+        if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
+            throw new Error('自定义API的URL或模型未配置。');
         }
-        else {
-            if (effectiveApiConfig.useMainApi && !forceDirectApi) {
-                logDebug_ACU('ACU: 通过酒馆主API发送请求（流式传输）...');
-                if (!isGenerateRawAvailable_ACU()) {
-                    throw new Error('TavernHelper.generateRaw 函数不存在。请检查酒馆版本。');
-                }
-                const response = await generateRaw_ACU({
-                    ordered_prompts: messages,
-                    should_stream: settings_ACU.streamingEnabled || false,
-                });
-                if (typeof response !== 'string') {
-                    throw new Error('主API调用未返回预期的文本响应。');
-                }
-                return response.trim();
-            }
-            else {
-                if (forceDirectApi && effectiveApiConfig.useMainApi) {
-                    if (effectiveApiConfig.url && effectiveApiConfig.model) {
-                        logDebug_ACU('ACU: 并发模式启用，强制使用独立API路径。');
-                    }
-                    else {
-                        logWarn_ACU('ACU: 并发模式要求独立API，但URL或模型未配置，回退主API。');
-                        if (!isGenerateRawAvailable_ACU()) {
-                            throw new Error('TavernHelper.generateRaw 函数不存在。请检查酒馆版本。');
-                        }
-                        const response = await generateRaw_ACU({
-                            ordered_prompts: messages,
-                            should_stream: settings_ACU.streamingEnabled || false,
-                        });
-                        if (typeof response !== 'string') {
-                            throw new Error('主API调用未返回预期的文本响应。');
-                        }
-                        return response.trim();
-                    }
-                }
-                if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
-                    throw new Error('自定义API的URL或模型未配置。');
-                }
-                const generateUrl = `/api/backends/chat-completions/generate`;
-                const headers = { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' };
-                const body = JSON.stringify(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { stripModelPrefix: false }));
-                logDebug_ACU('ACU: 调用新的后端生成API:', generateUrl, 'Model:', effectiveApiConfig.model);
-                const response = await fetch(generateUrl, { method: 'POST', headers, body, signal: abortSignal });
-                if (!response.ok) {
-                    const errTxt = await response.text();
-                    throw new Error(`API请求失败: ${response.status} ${errTxt}`);
-                }
-                const content = await handleApiResponse_ACU(response, abortSignal);
-                if (content) {
-                    return content.trim();
-                }
-                throw new RetryableAiResponseError_ACU();
-            }
+        const generateUrl = `/api/backends/chat-completions/generate`;
+        const headers = { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' };
+        const body = JSON.stringify(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { stripModelPrefix: false }));
+        logDebug_ACU('ACU: 调用新的后端生成API:', generateUrl, 'Model:', effectiveApiConfig.model);
+        const response = await fetch(generateUrl, { method: 'POST', headers, body, signal: abortSignal });
+        if (!response.ok) {
+            const errTxt = await response.text();
+            throw new Error(`API请求失败: ${response.status} ${errTxt}`);
         }
+        const content = await handleApiResponse_ACU(response, abortSignal);
+        if (content) {
+            return content.trim();
+        }
+        throw new RetryableAiResponseError_ACU();
     }
     finally {
         untrackAbortController_ACU(localAbortController);
@@ -63582,8 +63424,9 @@ function isSqlContent(content) {
 // 写操作流程：校验 → 快照 → 改内存 → saveSettings_ACU → 失败回滚。
 // ═══════════════════════════════════════════════════════════════
 // ═══ 归一化 ═══
-function normalizeApiMode_ACU(value) {
-    return value === 'tavern' ? 'tavern' : 'custom';
+/** 酒馆主 API（tavern）已剥离，API 模式恒为自定义 */
+function normalizeApiMode_ACU(_value) {
+    return 'custom';
 }
 function normalizeApiConfig_ACU(value) {
     const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
@@ -63595,7 +63438,6 @@ function normalizeApiConfig_ACU(value) {
         url: typeof source.url === 'string' ? source.url : '',
         apiKey: typeof source.apiKey === 'string' ? source.apiKey : '',
         model: typeof source.model === 'string' ? source.model : '',
-        useMainApi: source.useMainApi === true,
         max_tokens: Number.isFinite(maxTokens) && maxTokens >= 0 ? Math.floor(maxTokens) : 60000,
         maxTokens: Number.isFinite(maxTokens) && maxTokens >= 0 ? Math.floor(maxTokens) : 60000,
         temperature: Number.isFinite(temperature) ? temperature : 1,
@@ -63615,7 +63457,6 @@ function normalizePreset_ACU(value) {
         name,
         apiMode: normalizeApiMode_ACU(value.apiMode),
         apiConfig: normalizeApiConfig_ACU(value.apiConfig),
-        tavernProfile: typeof value.tavernProfile === 'string' ? value.tavernProfile : '',
     };
 }
 function normalizePresetList_ACU(value) {
@@ -63709,7 +63550,7 @@ function resolveApiConfigByPreset_ACU(presetName) {
         return {
             apiMode: preset.apiMode,
             apiConfig: preset.apiConfig,
-            tavernProfile: preset.tavernProfile,
+            tavernProfile: settings_ACU.tavernProfile,
             resolved: true,
         };
     }
@@ -63733,7 +63574,6 @@ function reconcileApiBindingForCurrentChat_ACU() {
         return { applied: false, presetName: '' };
     settings_ACU.apiMode = preset.apiMode;
     settings_ACU.apiConfig = JSON.parse(JSON.stringify(preset.apiConfig));
-    settings_ACU.tavernProfile = preset.tavernProfile;
     return { applied: true, presetName: preset.name };
 }
 // ═══ 写操作（事务式：快照 → 修改 → 保存 → 失败回滚） ═══
@@ -63869,7 +63709,6 @@ function setActivePresetForCurrentChat_ACU(name) {
     settings_ACU.apiPresetBindingsByChat[chatKey] = { presetName: preset.name, updatedAt: Date.now() };
     settings_ACU.apiMode = preset.apiMode;
     settings_ACU.apiConfig = clone$8(preset.apiConfig);
-    settings_ACU.tavernProfile = preset.tavernProfile;
     return finalizeSave_ACU(snapshot);
 }
 /** 保存/新建预设；oldName 存在时为重命名，原子更新所有引用 */
@@ -63913,7 +63752,6 @@ function saveApiPreset_ACU$1(presetInput, originalName = '') {
         };
         settings_ACU.apiMode = preset.apiMode;
         settings_ACU.apiConfig = clone$8(preset.apiConfig);
-        settings_ACU.tavernProfile = preset.tavernProfile;
     }
     const result = finalizeSave_ACU(snapshot);
     if (!result.ok)
@@ -63950,7 +63788,6 @@ function deleteApiPreset_ACU$1(name) {
             if (fallback) {
                 settings_ACU.apiMode = fallback.apiMode;
                 settings_ACU.apiConfig = clone$8(fallback.apiConfig);
-                settings_ACU.tavernProfile = fallback.tavernProfile;
             }
         }
     }
@@ -63977,35 +63814,12 @@ function setStreamingEnabled_ACU(enabled) {
     settings_ACU.streamingEnabled = !!enabled;
     return finalizeSave_ACU(snapshot);
 }
-/** 设置 API 配置是否使用主 API（apiConfig.useMainApi） */
-function setUseMainApi_ACU(enabled) {
-    ensureApiSettingsShape_ACU();
-    const snapshot = snapshotApiFields_ACU();
-    settings_ACU.apiConfig.useMainApi = !!enabled;
-    return finalizeSave_ACU(snapshot);
-}
-/** 设置当前 API 模式（apiMode） */
-function setApiMode_ACU(mode) {
-    ensureApiSettingsShape_ACU();
-    const normalized = normalizeApiMode_ACU(mode);
-    const snapshot = snapshotApiFields_ACU();
-    settings_ACU.apiMode = normalized;
-    return finalizeSave_ACU(snapshot);
-}
-/** 设置当前 tavern API profile（tavernProfile） */
-function setTavernProfile_ACU(profileId) {
-    ensureApiSettingsShape_ACU();
-    const snapshot = snapshotApiFields_ACU();
-    settings_ACU.tavernProfile = String(profileId || '');
-    return finalizeSave_ACU(snapshot);
-}
 /** 将当前配置保存为新预设 */
 function saveCurrentConfigAsPreset_ACU(name) {
     const preset = {
         name: String(name || '').trim(),
         apiMode: normalizeApiMode_ACU(settings_ACU.apiMode),
         apiConfig: normalizeApiConfig_ACU(settings_ACU.apiConfig),
-        tavernProfile: typeof settings_ACU.tavernProfile === 'string' ? settings_ACU.tavernProfile : '',
     };
     return saveApiPreset_ACU$1(preset);
 }
@@ -64095,41 +63909,26 @@ async function callApiWithPlotPreset_ACU(messages, presetName, abortSignal = nul
     const effectiveApiMode = apiPresetConfig.apiMode ?? settings_ACU.apiMode;
     const effectiveApiConfig = apiPresetConfig.apiConfig || settings_ACU.apiConfig || {};
     logDebug_ACU(`[剧情推进] 任务级API调用，预设: ${effectivePresetName || '当前配置'}, 模式: ${effectiveApiMode}`);
-    if (effectiveApiMode === 'tavern' || effectiveApiConfig.useMainApi) {
-        logDebug_ACU('[剧情推进] 通过酒馆主API发送请求（流式传输）...');
-        if (!isGenerateRawAvailable_ACU()) {
-            throw new Error('TavernHelper.generateRaw 函数不存在。请检查酒馆版本。');
-        }
-        const response = await generateRaw_ACU({
-            ordered_prompts: messages,
-            should_stream: settings_ACU.streamingEnabled || false,
-        });
-        if (typeof response !== 'string') {
-            throw new Error('主API调用未返回预期的文本响应。');
-        }
-        return response.trim();
+    // 酒馆主 API（tavern / useMainApi）已剥离，恒走自定义 API
+    if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
+        throw new Error('自定义API的URL或模型未配置。');
     }
-    else {
-        if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
-            throw new Error('自定义API的URL或模型未配置。');
-        }
-        const requestBody = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig);
-        const response = await fetch('/api/backends/chat-completions/generate', {
-            method: 'POST',
-            headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-            body: JSON.stringify(requestBody),
-            signal: abortSignal,
-        });
-        if (!response.ok) {
-            const errTxt = await response.text();
-            throw new Error(`API请求失败: ${response.status} ${errTxt}`);
-        }
-        const content = await handleApiResponse_ACU(response, abortSignal);
-        if (content) {
-            return content.trim();
-        }
-        throw new Error(`API调用返回无效响应`);
+    const requestBody = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig);
+    const response = await fetch('/api/backends/chat-completions/generate', {
+        method: 'POST',
+        headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+        signal: abortSignal,
+    });
+    if (!response.ok) {
+        const errTxt = await response.text();
+        throw new Error(`API请求失败: ${response.status} ${errTxt}`);
     }
+    const content = await handleApiResponse_ACU(response, abortSignal);
+    if (content) {
+        return content.trim();
+    }
+    throw new Error(`API调用返回无效响应`);
 }
 async function callApi_ACU(messages, apiSettings, abortSignal = null) {
     // [新增] 获取剧情推进使用的API配置（支持API预设）
@@ -64137,44 +63936,27 @@ async function callApi_ACU(messages, apiSettings, abortSignal = null) {
     const effectiveApiMode = apiPresetConfig.apiMode;
     const effectiveApiConfig = apiPresetConfig.apiConfig;
     logDebug_ACU(`[剧情推进] 使用API预设: ${settings_ACU.plotApiPreset || '当前配置'}, 模式: ${effectiveApiMode}`);
-    if (effectiveApiMode === 'tavern' || effectiveApiConfig.useMainApi) {
-        // 使用主API或酒馆预设（流式传输）
-        logDebug_ACU('[剧情推进] 通过酒馆主API发送请求（流式传输）...');
-        if (!isGenerateRawAvailable_ACU()) {
-            throw new Error('TavernHelper.generateRaw 函数不存在。请检查酒馆版本。');
-        }
-        const response = await generateRaw_ACU({
-            ordered_prompts: messages,
-            should_stream: settings_ACU.streamingEnabled || false,
-        });
-        if (typeof response !== 'string') {
-            throw new Error('主API调用未返回预期的文本响应。');
-        }
-        return response.trim();
+    // 酒馆主 API（tavern / useMainApi）已剥离，恒走自定义 API（流式传输）
+    if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
+        throw new Error('自定义API的URL或模型未配置。');
     }
-    else {
-        // 使用自定义API（流式传输）
-        if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
-            throw new Error('自定义API的URL或模型未配置。');
-        }
-        const requestBody = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig);
-        const response = await fetch('/api/backends/chat-completions/generate', {
-            method: 'POST',
-            headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-            body: JSON.stringify(requestBody),
-            signal: abortSignal,
-        });
-        if (!response.ok) {
-            const errTxt = await response.text();
-            throw new Error(`API请求失败: ${response.status} ${errTxt}`);
-        }
-        // 根据streamingEnabled设置选择响应处理方式
-        const content = await handleApiResponse_ACU(response, abortSignal);
-        if (content) {
-            return content.trim();
-        }
-        throw new Error(`API调用返回无效响应`);
+    const requestBody = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig);
+    const response = await fetch('/api/backends/chat-completions/generate', {
+        method: 'POST',
+        headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody),
+        signal: abortSignal,
+    });
+    if (!response.ok) {
+        const errTxt = await response.text();
+        throw new Error(`API请求失败: ${response.status} ${errTxt}`);
     }
+    // 根据streamingEnabled设置选择响应处理方式
+    const content = await handleApiResponse_ACU(response, abortSignal);
+    if (content) {
+        return content.trim();
+    }
+    throw new Error(`API调用返回无效响应`);
 }
 function getApiConfigByPreset_ACU(presetName) {
     // 委托 service 单一权威解析：空名返回当前配置；悬挂引用返回 resolved=false 并告警。
@@ -64190,24 +63972,15 @@ async function callCustomOpenAI_ACU_Direct(messages) {
     // ... For brevity, I will just call callCustomOpenAI_ACU with a hacked dynamicContent?
     // No, callCustomOpenAI_ACU relies on settings_ACU.charCardPrompt.
     // I should refactor callCustomOpenAI_ACU to accept direct messages, or duplicate the API calling part.
-    // Duplicating API calling logic for safety and isolation
-    if (settings_ACU.apiMode === 'tavern') {
-        const profileId = settings_ACU.tavernProfile;
-        return await sendConnectionManagerRequest_ACU(profileId, messages, settings_ACU.apiConfig.max_tokens ?? settings_ACU.apiConfig.maxTokens ?? 4096).then(r => r.result.choices[0].message.content);
+    // Duplicating API calling logic for safety and isolation（酒馆主 API 已剥离，恒走自定义 API）
+    if (!settings_ACU.apiConfig.url || !settings_ACU.apiConfig.model) {
+        throw new Error('自定义API的URL或模型未配置。');
     }
-    else {
-        // Custom API（流式传输）
-        if (settings_ACU.apiConfig.useMainApi) {
-            return await generateRaw_ACU({ ordered_prompts: messages, should_stream: settings_ACU.streamingEnabled || false });
-        }
-        else {
-            const requestBody = buildCustomApiRequestBody_ACU(messages, settings_ACU.apiConfig, { stripModelPrefix: false });
-            const res = await fetch('/api/backends/chat-completions/generate', { method: 'POST', headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' }, body: JSON.stringify(requestBody) });
-            // 根据streamingEnabled设置选择响应处理方式
-            const content = await handleApiResponse_ACU(res);
-            return content;
-        }
-    }
+    const requestBody = buildCustomApiRequestBody_ACU(messages, settings_ACU.apiConfig, { stripModelPrefix: false });
+    const res = await fetch('/api/backends/chat-completions/generate', { method: 'POST', headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' }, body: JSON.stringify(requestBody) });
+    // 根据streamingEnabled设置选择响应处理方式
+    const content = await handleApiResponse_ACU(res);
+    return content;
 }
 /**
  * 通用 AI 调用（支持指定 API 预设名称）
@@ -64225,34 +63998,9 @@ async function callAIWithPreset_ACU(messages, presetName = '', maxTokensOverride
     const apiPresetConfig = getApiConfigByPreset_ACU(presetName);
     const effectiveApiMode = apiPresetConfig.apiMode;
     const effectiveApiConfig = apiPresetConfig.apiConfig || {};
-    const effectiveTavernProfile = apiPresetConfig.tavernProfile;
     const maxTokens = maxTokensOverride ?? effectiveApiConfig.max_tokens ?? effectiveApiConfig.maxTokens ?? 4096;
     logDebug_ACU(`[callAIWithPreset] 调用 AI，消息数=${messages.length}，预设=${presetName || '当前配置'}，模式=${effectiveApiMode}`);
-    if (effectiveApiMode === 'tavern') {
-        const profileId = effectiveTavernProfile || settings_ACU.tavernProfile;
-        const response = await sendConnectionManagerRequest_ACU(profileId, messages, maxTokens);
-        assertNotAborted_ACU(signal);
-        if (response?.result?.choices?.[0]?.message?.content) {
-            return response.result.choices[0].message.content;
-        }
-        if (response && typeof response.content === 'string') {
-            return response.content;
-        }
-        logWarn_ACU('[callAIWithPreset] 酒馆 API 返回无效响应');
-        return null;
-    }
-    if (effectiveApiConfig.useMainApi) {
-        if (!isGenerateRawAvailable_ACU()) {
-            throw new Error('TavernHelper.generateRaw 函数不存在。请检查酒馆版本。');
-        }
-        const response = await generateRaw_ACU({
-            ordered_prompts: messages,
-            should_stream: settings_ACU.streamingEnabled || false,
-            max_tokens: maxTokens,
-        });
-        assertNotAborted_ACU(signal);
-        return typeof response === 'string' ? response.trim() : null;
-    }
+    // 酒馆主 API（tavern / useMainApi）已剥离，恒走自定义 API
     if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
         throw new Error('自定义API的URL或模型未配置。');
     }
@@ -64590,31 +64338,22 @@ async function performContentOptimization_ACU(content, options = {}) {
     return { success: false, error: parseLastError?.message || '解析失败' };
 }
 /**
- * 获取正文优化使用的API配置
+ * 获取正文优化使用的API配置（酒馆主 API 已剥离，恒为自定义模式）
  */
 async function getOptimizationApiConfig_ACU(presetName) {
     if (presetName && settings_ACU.apiPresets) {
         const preset = settings_ACU.apiPresets.find((p) => p.name === presetName);
         if (preset) {
-            if (preset.apiMode === 'tavern') {
-                return {
-                    apiMode: 'tavern',
-                    tavernProfile: preset.tavernProfile
-                };
-            }
-            else {
-                return {
-                    apiMode: 'custom',
-                    apiConfig: preset.apiConfig
-                };
-            }
+            return {
+                apiMode: 'custom',
+                apiConfig: preset.apiConfig
+            };
         }
     }
     // 使用当前默认配置
     return {
-        apiMode: settings_ACU.apiMode,
+        apiMode: 'custom',
         apiConfig: settings_ACU.apiConfig,
-        tavernProfile: settings_ACU.tavernProfile
     };
 }
 /**
@@ -67763,18 +67502,6 @@ function resolvePlotTaskApiPreset_ACU(task) {
         return legacyTaskPreset;
     return String(settings_ACU.plotApiPreset || '').trim();
 }
-function willPlotUseMainApiGenerateRaw_ACU(taskApiPreset = '') {
-    try {
-        const effectivePreset = String(taskApiPreset || '').trim() || String(settings_ACU.plotApiPreset || '').trim();
-        const apiPresetConfig = getApiConfigByPreset_ACU(effectivePreset) || {};
-        const effectiveApiMode = apiPresetConfig.apiMode ?? settings_ACU.apiMode;
-        const effectiveApiConfig = apiPresetConfig.apiConfig || settings_ACU.apiConfig || {};
-        return effectiveApiMode !== 'tavern' && !!effectiveApiConfig.useMainApi;
-    }
-    catch (e) {
-        return settings_ACU.apiMode !== 'tavern' && !!settings_ACU.useMainApi;
-    }
-}
 function sortPlotTasksForRuntime_ACU(tasks) {
     return (Array.isArray(tasks) ? [...tasks] : [])
         .filter(Boolean)
@@ -68241,9 +67968,6 @@ async function executeSinglePlotTask_ACU(task, sharedContext, runtimeOptions = {
         for (let attemptIndex = 0; attemptIndex < maxRetries; attemptIndex++) {
             checkPlotAbortRequested_ACU();
             const effectivePlotApiPreset = resolvePlotTaskApiPreset_ACU(normalizedTask);
-            if (willPlotUseMainApiGenerateRaw_ACU(effectivePlotApiPreset)) {
-                planningGuard_ACU.ignoreNextGenerationEndedCount++;
-            }
             let tempMessage = null;
             let apiError = null;
             try {
@@ -83353,7 +83077,7 @@ let currentChatFileIdentifier_ACU = 'unknown_chat_init';
 let currentJsonTableData_ACU = null;
 let independentTableStates_ACU = {};
 let settings_ACU = {
-    apiConfig: { url: '', apiKey: '', model: '', useMainApi: true, max_tokens: 60000, temperature: 1.0 },
+    apiConfig: { url: '', apiKey: '', model: '', max_tokens: 60000, temperature: 1.0 },
     apiMode: 'custom',
     streamingEnabled: false,
     tavernProfile: '',
@@ -84602,7 +84326,7 @@ function forceDefaultTemplateAssistantPromptOnce_ACU() {
 }
 function buildDefaultSettings_ACU() {
     return {
-        apiConfig: { url: '', apiKey: '', model: '', useMainApi: true, max_tokens: 60000, temperature: 1.0 },
+        apiConfig: { url: '', apiKey: '', model: '', max_tokens: 60000, temperature: 1.0 },
         apiMode: 'custom',
         tavernProfile: '',
         streamingEnabled: false, // [新增] 流式传输开关（默认关闭）
@@ -85070,32 +84794,17 @@ async function executeAutoMergeBatch_ACU(prepared, batch, accumulatedSummary) {
                 messagesToUse.push({ role: 'USER', content: currentPrompt });
             }
             const finalMessages = messagesToUse.map((m) => ({ role: m.role.toLowerCase(), content: m.content }));
-            if (settings_ACU.apiMode === 'tavern') {
-                const result = await sendConnectionManagerRequest_ACU(settings_ACU.tavernProfile, finalMessages, settings_ACU.apiConfig.max_tokens ?? settings_ACU.apiConfig.maxTokens ?? 4096);
-                if (result && result.ok)
-                    aiResponseText = result.result.choices[0].message.content;
-                else
-                    throw new Error('API请求返回不成功状态');
-            }
-            else {
-                if (settings_ACU.apiConfig.useMainApi) {
-                    aiResponseText = isGenerateRawAvailable_ACU()
-                        ? await generateRaw_ACU({ ordered_prompts: finalMessages, should_stream: settings_ACU.streamingEnabled || false })
-                        : '';
-                }
-                else {
-                    const res = await fetch(`/api/backends/chat-completions/generate`, {
-                        method: 'POST',
-                        headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-                        body: JSON.stringify(buildCustomApiRequestBody_ACU(finalMessages, settings_ACU.apiConfig, { stripModelPrefix: false }))
-                    });
-                    if (!res.ok)
-                        throw new Error(`API请求失败: ${res.status} ${await res.text()}`);
-                    aiResponseText = await handleApiResponse_ACU(res);
-                    if (!aiResponseText)
-                        throw new Error('API返回的数据格式不正确');
-                }
-            }
+            // 酒馆主 API（tavern / useMainApi）已剥离，恒走自定义 API
+            const res = await fetch(`/api/backends/chat-completions/generate`, {
+                method: 'POST',
+                headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
+                body: JSON.stringify(buildCustomApiRequestBody_ACU(finalMessages, settings_ACU.apiConfig, { stripModelPrefix: false }))
+            });
+            if (!res.ok)
+                throw new Error(`API请求失败: ${res.status} ${await res.text()}`);
+            aiResponseText = await handleApiResponse_ACU(res);
+            if (!aiResponseText)
+                throw new Error('API返回的数据格式不正确');
             const extractResult = extractTableEditInner_ACU(aiResponseText, { allowNoTableEditTags: true });
             if (!extractResult || !extractResult.inner) {
                 throw new Error('AI未返回有效的 <tableEdit> 块');
@@ -85682,7 +85391,7 @@ function escapeHtml_ACU(text) {
  * 仅 presentation 层内部使用。
  */
 let $popupInstance_ACU = null;
-let $apiConfigSectionToggle_ACU, $apiConfigAreaDiv_ACU, $customApiUrlInput_ACU, $customApiKeyInput_ACU, $customApiModelInput_ACU, $customApiModelSelect_ACU, $maxTokensInput_ACU, $temperatureInput_ACU, $loadModelsButton_ACU, $saveApiConfigButton_ACU, $clearApiConfigButton_ACU, $apiStatusDisplay_ACU, $charCardPromptToggle_ACU, $charCardPromptAreaDiv_ACU, $charCardPromptSegmentsContainer_ACU, $saveCharCardPromptButton_ACU, $resetCharCardPromptButton_ACU, $plotPromptSegmentsContainer_ACU, $plotTaskListContainer_ACU, $autoUpdateThresholdInput_ACU, $saveAutoUpdateThresholdButton_ACU, $autoUpdateTokenThresholdInput_ACU, $saveAutoUpdateTokenThresholdButton_ACU, $autoUpdateFrequencyInput_ACU, $saveAutoUpdateFrequencyButton_ACU, $updateBatchSizeInput_ACU, $saveUpdateBatchSizeButton_ACU, $maxConcurrentGroupsInput_ACU, $autoUpdateEnabledCheckbox_ACU, $standardizedTableFillEnabledCheckbox_ACU, $toastMuteEnabledCheckbox_ACU, $promptTemplateEnabledCheckbox_ACU, $tableEditLastPairOnlyCheckbox_ACU, $tableMaxRetriesInput_ACU, $manualUpdateCardButton_ACU, $statusMessageSpan_ACU, $cardUpdateStatusDisplay_ACU, $useMainApiCheckbox_ACU, $streamingEnabledCheckbox_ACU, $manualExtraHintCheckbox_ACU, $skipUpdateFloorsInput_ACU, $saveSkipUpdateFloorsButton_ACU, $retainRecentLayersInput_ACU, $saveRetainRecentLayersButton_ACU, $manualTableSelector_ACU, $manualTableSelectAll_ACU, $manualTableSelectNone_ACU, $importTableSelector_ACU, $importTableSelectAll_ACU, $importTableSelectNone_ACU;
+let $apiConfigSectionToggle_ACU, $apiConfigAreaDiv_ACU, $customApiUrlInput_ACU, $customApiKeyInput_ACU, $customApiModelInput_ACU, $customApiModelSelect_ACU, $maxTokensInput_ACU, $temperatureInput_ACU, $loadModelsButton_ACU, $saveApiConfigButton_ACU, $clearApiConfigButton_ACU, $apiStatusDisplay_ACU, $charCardPromptToggle_ACU, $charCardPromptAreaDiv_ACU, $charCardPromptSegmentsContainer_ACU, $saveCharCardPromptButton_ACU, $resetCharCardPromptButton_ACU, $plotPromptSegmentsContainer_ACU, $plotTaskListContainer_ACU, $autoUpdateThresholdInput_ACU, $saveAutoUpdateThresholdButton_ACU, $autoUpdateTokenThresholdInput_ACU, $saveAutoUpdateTokenThresholdButton_ACU, $autoUpdateFrequencyInput_ACU, $saveAutoUpdateFrequencyButton_ACU, $updateBatchSizeInput_ACU, $saveUpdateBatchSizeButton_ACU, $maxConcurrentGroupsInput_ACU, $autoUpdateEnabledCheckbox_ACU, $standardizedTableFillEnabledCheckbox_ACU, $toastMuteEnabledCheckbox_ACU, $promptTemplateEnabledCheckbox_ACU, $tableEditLastPairOnlyCheckbox_ACU, $tableMaxRetriesInput_ACU, $manualUpdateCardButton_ACU, $statusMessageSpan_ACU, $cardUpdateStatusDisplay_ACU, $streamingEnabledCheckbox_ACU, $manualExtraHintCheckbox_ACU, $skipUpdateFloorsInput_ACU, $saveSkipUpdateFloorsButton_ACU, $retainRecentLayersInput_ACU, $saveRetainRecentLayersButton_ACU, $manualTableSelector_ACU, $manualTableSelectAll_ACU, $manualTableSelectNone_ACU, $importTableSelector_ACU, $importTableSelectAll_ACU, $importTableSelectNone_ACU;
 function _set_$popupInstance_ACU(v) { $popupInstance_ACU = v; }
 // 批量赋值 UI placeholder 变量（popup-bindings 初始化时一次性调用）
 function _assignUIPlaceholders_ACU(map) {
@@ -85760,8 +85469,6 @@ function _assignUIPlaceholders_ACU(map) {
         $statusMessageSpan_ACU = map.$statusMessageSpan_ACU;
     if (map.$cardUpdateStatusDisplay_ACU !== undefined)
         $cardUpdateStatusDisplay_ACU = map.$cardUpdateStatusDisplay_ACU;
-    if (map.$useMainApiCheckbox_ACU !== undefined)
-        $useMainApiCheckbox_ACU = map.$useMainApiCheckbox_ACU;
     if (map.$streamingEnabledCheckbox_ACU !== undefined)
         $streamingEnabledCheckbox_ACU = map.$streamingEnabledCheckbox_ACU;
     if (map.$manualExtraHintCheckbox_ACU !== undefined)
@@ -87560,68 +87267,6 @@ async function bindWorldbookEvents_ACU() {
 }
 
 /**
- * service/ai/ai-service.ts — AI 调用服务
- *
- * 中转 data/gateways/ai-gateway 的所有方法。
- * presentation 层通过本模块发起 AI 请求，不再直接调用 gateway。
- * 后续可在此层统一添加日志、埋点、请求限流等增值逻辑。
- */
-/**
- * 从自定义 API 端点获取可用模型列表
- * 纯业务逻辑：发送 HTTP 请求、解析响应、返回模型列表
- * 不涉及 UI（toast、状态显示由 presentation 层负责）
- */
-async function fetchAvailableModels_ACU(apiUrl, apiKey) {
-    if (!apiUrl) {
-        return { success: false, error: '请输入API基础URL。' };
-    }
-    const statusUrl = `/api/backends/chat-completions/status`;
-    const body = {
-        "reverse_proxy": apiUrl,
-        "proxy_password": "",
-        "chat_completion_source": "custom",
-        "custom_url": apiUrl,
-        "custom_include_headers": apiKey ? `Authorization: Bearer ${apiKey}` : ""
-    };
-    const response = await fetch(statusUrl, {
-        method: 'POST',
-        headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-    });
-    if (!response.ok) {
-        const errorText = await response.text();
-        let errorMessage = `API端点状态检查失败: ${response.status} ${response.statusText}.`;
-        try {
-            const errorJson = JSON.parse(errorText);
-            errorMessage += ` 详情: ${errorJson.error || errorJson.message || errorText}`;
-        }
-        catch (e) {
-            errorMessage += ` 详情: ${errorText}`;
-        }
-        return { success: false, error: errorMessage };
-    }
-    const data = await response.json();
-    logDebug_ACU('获取到的模型数据:', data);
-    let modelsList = [];
-    if (data && data.models && Array.isArray(data.models)) {
-        modelsList = data.models;
-    }
-    else if (data && data.data && Array.isArray(data.data)) {
-        modelsList = data.data;
-    }
-    else if (Array.isArray(data)) {
-        modelsList = data;
-    }
-    const modelNames = modelsList
-        .map((model) => typeof model === 'string' ? model : model.id)
-        .filter(Boolean);
-    if (modelNames.length === 0) {
-        return { success: false, error: '未能解析模型数据或列表为空。' };
-    }
-    return { success: true, models: modelNames };
-}
-
-/**
  * presentation/triggers/settings-ui-sync/settings-ui-api.ts
  */
 /**
@@ -87629,69 +87274,22 @@ async function fetchAvailableModels_ACU(apiUrl, apiKey) {
  * 从 service/runtime/helpers-remaining.ts 提取的纯 UI 函数
  */
 // --- API / 设置 UI ---
-function updateApiModeView_ACU(apiMode) {
+function updateApiModeView_ACU(_apiMode) {
     if (!$popupInstance_ACU)
         return;
     const $customApiBlock = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-custom-api-settings-block`);
     const $tavernApiBlock = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-tavern-api-profile-block`);
-    if (apiMode === 'tavern') {
-        $customApiBlock.hide();
-        $tavernApiBlock.show();
-        loadTavernApiProfiles_ACU();
-    }
-    else { // custom
-        $customApiBlock.show();
-        $tavernApiBlock.hide();
-    }
+    // 酒馆主 API（tavern）已剥离，恒显示自定义 API 配置块
+    $customApiBlock.show();
+    $tavernApiBlock.hide();
 }
 function updateCustomApiInputsState_ACU() {
     if (!$popupInstance_ACU)
         return;
-    const useMainApi = settings_ACU.apiConfig.useMainApi;
+    // 酒馆主 API 已剥离，自定义 API 字段恒可编辑
     const $customApiFields = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-custom-api-fields`);
-    if (useMainApi) {
-        $customApiFields.css('opacity', '0.5');
-        $customApiFields.find('input, select, button').prop('disabled', true);
-    }
-    else {
-        $customApiFields.css('opacity', '1.0');
-        $customApiFields.find('input, select, button').prop('disabled', false);
-    }
-}
-async function loadTavernApiProfiles_ACU() {
-    if (!$popupInstance_ACU)
-        return;
-    const $select = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-tavern-api-profile-select`);
-    const currentProfileId = settings_ACU.tavernProfile;
-    $select.empty().append('<option value="">-- 请选择一个酒馆预设 --</option>');
-    try {
-        const tavernProfiles = getConnectionManagerProfiles_ACU();
-        if (!tavernProfiles || tavernProfiles.length === 0) {
-            $select.append(jQuery_API_ACU('<option>', { value: '', text: '未找到酒馆预设', disabled: true }));
-            return;
-        }
-        let foundCurrentProfile = false;
-        tavernProfiles.forEach(profile => {
-            if (profile.api && profile.preset) { // Ensure it's a valid API profile
-                const option = jQuery_API_ACU('<option>', {
-                    value: profile.id,
-                    text: profile.name || profile.id,
-                    selected: profile.id === currentProfileId
-                });
-                $select.append(option);
-                if (profile.id === currentProfileId) {
-                    foundCurrentProfile = true;
-                }
-            }
-        });
-        if (currentProfileId && foundCurrentProfile) {
-            $select.val(currentProfileId);
-        }
-    }
-    catch (error) {
-        logError_ACU('加载酒馆API预设失败:', error);
-        showToastr_ACU('error', '无法加载酒馆API预设列表。');
-    }
+    $customApiFields.css('opacity', '1.0');
+    $customApiFields.find('input, select, button').prop('disabled', false);
 }
 // [V1 收敛] API 配置写权限已迁移至 V2（service 层单一权威）。
 // 旧 popup 不再直接读写 settings_ACU.apiConfig；调用方应跳转 V2 配置面板。
@@ -88397,6 +87995,68 @@ function saveImportSplitSize_ACU() {
         showToastr_ACU('warning', `导入分割大小 "${valStr}" 无效。请输入一个大于等于100的整数。恢复为: ${settings_ACU.importSplitSize}`);
         $input.val(settings_ACU.importSplitSize);
     }
+}
+
+/**
+ * service/ai/ai-service.ts — AI 调用服务
+ *
+ * 中转 data/gateways/ai-gateway 的所有方法。
+ * presentation 层通过本模块发起 AI 请求，不再直接调用 gateway。
+ * 后续可在此层统一添加日志、埋点、请求限流等增值逻辑。
+ */
+/**
+ * 从自定义 API 端点获取可用模型列表
+ * 纯业务逻辑：发送 HTTP 请求、解析响应、返回模型列表
+ * 不涉及 UI（toast、状态显示由 presentation 层负责）
+ */
+async function fetchAvailableModels_ACU(apiUrl, apiKey) {
+    if (!apiUrl) {
+        return { success: false, error: '请输入API基础URL。' };
+    }
+    const statusUrl = `/api/backends/chat-completions/status`;
+    const body = {
+        "reverse_proxy": apiUrl,
+        "proxy_password": "",
+        "chat_completion_source": "custom",
+        "custom_url": apiUrl,
+        "custom_include_headers": apiKey ? `Authorization: Bearer ${apiKey}` : ""
+    };
+    const response = await fetch(statusUrl, {
+        method: 'POST',
+        headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+    });
+    if (!response.ok) {
+        const errorText = await response.text();
+        let errorMessage = `API端点状态检查失败: ${response.status} ${response.statusText}.`;
+        try {
+            const errorJson = JSON.parse(errorText);
+            errorMessage += ` 详情: ${errorJson.error || errorJson.message || errorText}`;
+        }
+        catch (e) {
+            errorMessage += ` 详情: ${errorText}`;
+        }
+        return { success: false, error: errorMessage };
+    }
+    const data = await response.json();
+    logDebug_ACU('获取到的模型数据:', data);
+    let modelsList = [];
+    if (data && data.models && Array.isArray(data.models)) {
+        modelsList = data.models;
+    }
+    else if (data && data.data && Array.isArray(data.data)) {
+        modelsList = data.data;
+    }
+    else if (Array.isArray(data)) {
+        modelsList = data;
+    }
+    const modelNames = modelsList
+        .map((model) => typeof model === 'string' ? model : model.id)
+        .filter(Boolean);
+    if (modelNames.length === 0) {
+        return { success: false, error: '未能解析模型数据或列表为空。' };
+    }
+    return { success: true, models: modelNames };
 }
 
 // --- [正文优化] 构建默认提示词组 ---
@@ -89662,7 +89322,7 @@ function checkAutoUpdatePreConditions_ACU(settings, coreApisAreReady, isAutoUpda
     if (!settings.autoUpdateEnabled) {
         return { canProceed: false, reason: 'Auto update is disabled via settings.', code: 'auto_update_disabled' };
     }
-    const apiIsConfigured = (settings.apiMode === 'custom' && (settings.apiConfig.useMainApi || (settings.apiConfig.url && settings.apiConfig.model))) || (settings.apiMode === 'tavern' && settings.tavernProfile);
+    const apiIsConfigured = !!(settings.apiConfig.url && settings.apiConfig.model);
     if (!coreApisAreReady) {
         return { canProceed: false, reason: 'Pre-flight checks failed.', code: 'core_apis_not_ready' };
     }
@@ -95842,7 +95502,7 @@ async function orchestrateManualUpdate_ACU(targetKeys, processBatch, refreshData
         if (!coreApisAreReady_ACU) {
             return { success: false, error: 'API未就绪。' };
         }
-        const apiIsConfigured = (settings_ACU.apiMode === 'custom' && (settings_ACU.apiConfig.useMainApi || (settings_ACU.apiConfig.url && settings_ACU.apiConfig.model))) || (settings_ACU.apiMode === 'tavern' && settings_ACU.tavernProfile);
+        const apiIsConfigured = !!(settings_ACU.apiConfig.url && settings_ACU.apiConfig.model);
         if (!apiIsConfigured) {
             return { success: false, error: 'API未配置，无法更新数据库。' };
         }
@@ -97611,18 +97271,12 @@ function syncAllSettingsToUI_ACU(s) {
                 : `交火模式纪要索引已启用，但当前聊天尚无外置纪要向量索引；完成一次纪要表填写后会自动归档，也可点击“立即构建交火纪要索引”手动构建。`
             : '使用前请先配置好 Embedding 模型以及可选 Rerank 模型；开启后会在纪要表填写完成时立即归档外置概要列向量索引，达到门槛后发送前覆盖原概要索引条目。');
     }
-    if ($useMainApiCheckbox_ACU) {
-        $useMainApiCheckbox_ACU.prop('checked', s.apiConfig.useMainApi);
-        if (typeof updateCustomApiInputsState_ACU === 'function')
-            updateCustomApiInputsState_ACU();
-    }
     if ($streamingEnabledCheckbox_ACU)
         $streamingEnabledCheckbox_ACU.prop('checked', s.streamingEnabled || false);
     if ($manualTableSelector_ACU && typeof renderManualTableSelector_ACU === 'function')
         renderManualTableSelector_ACU();
     if ($importTableSelector_ACU && typeof renderImportTableSelector_ACU === 'function')
         renderImportTableSelector_ACU();
-    $popupInstance_ACU.find(`input[name="${SCRIPT_ID_PREFIX_ACU}-api-mode"][value="${s.apiMode}"]`).prop('checked', true);
     if (typeof updateApiModeView_ACU === 'function')
         updateApiModeView_ACU(s.apiMode);
 }
@@ -126041,36 +125695,21 @@ function _sfc_render$Y(_ctx, _cache, $props, $setup, $data, $options) {
 }
 var AcuPanelGrid = /* @__PURE__ */ _export_sfc(_sfc_main$Y, [["render", _sfc_render$Y], ["__scopeId", "data-v-b00ea74c"]]);
 
-function connectionModeFromDraft(draft) {
-    if (draft.apiMode === 'tavern')
-        return 'tavern';
-    return draft.useMainApi ? 'main' : 'custom';
+function connectionModeFromDraft(_draft) {
+    return 'custom';
 }
-function applyConnectionMode(draft, mode) {
-    if (mode === 'tavern') {
-        draft.apiMode = 'tavern';
-        draft.useMainApi = false;
-    }
-    else if (mode === 'main') {
-        draft.apiMode = 'custom';
-        draft.useMainApi = true;
-    }
-    else {
-        draft.apiMode = 'custom';
-        draft.useMainApi = false;
-    }
+function applyConnectionMode(draft, _mode) {
+    draft.apiMode = 'custom';
 }
 function createEmptyApiPresetDraft() {
     return {
         name: '',
         apiMode: 'custom',
-        useMainApi: true,
         url: '',
         apiKey: '',
         model: '',
         max_tokens: 60000,
         temperature: 1,
-        tavernProfile: '',
         bodyParams: '',
         excludeBodyParams: '',
         requestHeaders: '',
@@ -126080,13 +125719,11 @@ function apiPresetDraftFromPreset(preset) {
     return {
         name: preset.name,
         apiMode: preset.apiMode,
-        useMainApi: preset.apiConfig.useMainApi !== false,
         url: preset.apiConfig.url || '',
         apiKey: preset.apiConfig.apiKey || '',
         model: preset.apiConfig.model || '',
         max_tokens: Number(preset.apiConfig.max_tokens || 60000),
         temperature: Number(preset.apiConfig.temperature ?? 1),
-        tavernProfile: preset.tavernProfile || '',
         bodyParams: preset.apiConfig.bodyParams || '',
         excludeBodyParams: preset.apiConfig.excludeBodyParams || '',
         requestHeaders: preset.apiConfig.requestHeaders || '',
@@ -126096,12 +125733,10 @@ function apiPresetFromDraft(draft) {
     return {
         name: draft.name.trim(),
         apiMode: draft.apiMode,
-        tavernProfile: draft.tavernProfile.trim(),
         apiConfig: {
             url: draft.url.trim(),
             apiKey: draft.apiKey,
             model: draft.model.trim(),
-            useMainApi: draft.useMainApi,
             max_tokens: Math.max(1, Math.floor(Number(draft.max_tokens) || 60000)),
             temperature: Number.isFinite(Number(draft.temperature)) ? Number(draft.temperature) : 1,
             bodyParams: draft.bodyParams || '',
@@ -126160,18 +125795,12 @@ function getCurrentConfigAsPreset(name) {
         name,
         apiMode: normalizeApiMode_ACU(settings_ACU.apiMode),
         apiConfig: normalizeApiConfig_ACU(settings_ACU.apiConfig),
-        tavernProfile: typeof settings_ACU.tavernProfile === 'string' ? settings_ACU.tavernProfile : '',
     };
 }
 function findPresetMatchingCurrentConfig(presets) {
     const current = getCurrentConfigAsPreset('');
     return presets.find(preset => {
-        if (preset.apiMode !== current.apiMode)
-            return false;
-        if (preset.tavernProfile !== current.tavernProfile)
-            return false;
-        return (preset.apiConfig.useMainApi === current.apiConfig.useMainApi &&
-            preset.apiConfig.url === current.apiConfig.url &&
+        return (preset.apiConfig.url === current.apiConfig.url &&
             preset.apiConfig.apiKey === current.apiConfig.apiKey &&
             preset.apiConfig.model === current.apiConfig.model &&
             preset.apiConfig.max_tokens === current.apiConfig.max_tokens &&
@@ -126183,19 +125812,7 @@ function findPresetMatchingCurrentConfig(presets) {
 }
 function resolveCurrentConfigStatus() {
     ensureApiSettingsShape_ACU();
-    const mode = normalizeApiMode_ACU(settings_ACU.apiMode);
     const config = normalizeApiConfig_ACU(settings_ACU.apiConfig);
-    const tavernProfile = typeof settings_ACU.tavernProfile === 'string'
-        ? settings_ACU.tavernProfile.trim()
-        : '';
-    if (mode === 'tavern') {
-        return tavernProfile
-            ? { ready: true, label: `酒馆连接预设 ${tavernProfile}` }
-            : { ready: false, label: '未选择酒馆连接预设' };
-    }
-    if (config.useMainApi) {
-        return { ready: true, label: '酒馆主 API' };
-    }
     if (config.url.trim() && config.model.trim()) {
         return { ready: true, label: config.model.trim() };
     }
@@ -126210,7 +125827,6 @@ const useApiPresetStore = defineStore('acu-v2-api-presets', {
         currentConfigLabel: '当前 API 配置不完整',
         currentChatKey: getCurrentChatKey_ACU(),
         streamingEnabled: false,
-        tavernProfiles: [],
         modelOptions: [],
         modelLoadStatus: 'idle',
         modelLoadError: '',
@@ -126269,17 +125885,6 @@ const useApiPresetStore = defineStore('acu-v2-api-presets', {
         },
         deletePreset(name) {
             return this.applyWriteResult(deleteApiPreset_ACU$1(name));
-        },
-        refreshTavernProfiles() {
-            try {
-                const profiles = getConnectionManagerProfiles_ACU() || [];
-                this.tavernProfiles = profiles
-                    .filter((profile) => profile?.id)
-                    .map((profile) => ({ id: String(profile.id), name: String(profile.name || profile.id) }));
-            }
-            catch {
-                this.tavernProfiles = [];
-            }
         },
         async loadModelsForConfig(apiConfig) {
             this.modelLoadStatus = 'loading';
@@ -126933,7 +126538,7 @@ const _hoisted_8$j = {
 	key: 2,
 	class: "fa-solid fa-check acu-preset-dd__check"
 };
-const _hoisted_9$f = {
+const _hoisted_9$e = {
 	key: 0,
 	class: "acu-preset-dd__empty"
 };
@@ -127004,7 +126609,7 @@ function _sfc_render$S(_ctx, _cache, $props, $setup, $data, $options) {
 			/* KEYED_FRAGMENT */
 		)), !$props.items.length ? (openBlock(), createElementBlock(
 			"li",
-			_hoisted_9$f,
+			_hoisted_9$e,
 			toDisplayString($props.emptyText),
 			1
 			/* TEXT */
@@ -127132,27 +126737,19 @@ var _sfc_main$Q = /*@__PURE__*/ defineComponent({
         const activeDraftSnapshot = ref("");
         const activeDraftError = ref("");
         const activeDraftSavedAt = ref(null);
-        const activeConnectionMode = computed(() => connectionModeFromDraft(activeDraft));
         const activeDraftDirty = computed(() => {
             if (formMode.value === "create")
                 return JSON.stringify(activeDraft) !== activeDraftSnapshot.value;
             return (!!store.activePreset &&
                 JSON.stringify(activeDraft) !== activeDraftSnapshot.value);
         });
-        const connectionModeOptions = [
-            { value: "main", label: "酒馆主 API" },
-            { value: "custom", label: "自定义" },
-            { value: "tavern", label: "酒馆预设" },
-        ];
         const modelSelectOptions = computed(() => store.modelOptions.map((m) => ({ value: m, label: m })));
-        const tavernProfileOptions = computed(() => store.tavernProfiles.map((p) => ({ value: p.id, label: p.name })));
         const presetDropdownItems = computed(() => store.presets.map((p) => ({
             name: p.name,
             meta: presetMeta(p),
         })));
         function refreshAll() {
             store.refreshFromSettings();
-            store.refreshTavernProfiles();
             syncActiveDraft();
         }
         onMounted(() => {
@@ -127207,30 +126804,20 @@ var _sfc_main$Q = /*@__PURE__*/ defineComponent({
             store.deletePreset(name);
         }
         function presetMeta(preset) {
-            if (preset.apiMode === "tavern")
-                return "酒馆预设";
-            return preset.apiConfig.useMainApi
-                ? "酒馆主 API"
-                : preset.apiConfig.model || "自定义";
+            return preset.apiConfig.model || "自定义";
         }
         function validateActiveDraft() {
             if (!activeDraft.name.trim()) {
                 activeDraftError.value = "预设名称不能为空。";
                 return false;
             }
-            if (activeDraft.apiMode === "tavern" && !activeDraft.tavernProfile.trim()) {
-                activeDraftError.value = "请选择酒馆连接预设。";
+            if (!activeDraft.url.trim()) {
+                activeDraftError.value = "自定义 API 需要填写端点(基础URL)。";
                 return false;
             }
-            if (activeDraft.apiMode === "custom" && !activeDraft.useMainApi) {
-                if (!activeDraft.url.trim()) {
-                    activeDraftError.value = "自定义 API 需要填写端点(基础URL)。";
-                    return false;
-                }
-                if (!activeDraft.model.trim()) {
-                    activeDraftError.value = "自定义 API 需要填写模型。";
-                    return false;
-                }
+            if (!activeDraft.model.trim()) {
+                activeDraftError.value = "自定义 API 需要填写模型。";
+                return false;
             }
             activeDraftError.value = "";
             return true;
@@ -127256,10 +126843,6 @@ var _sfc_main$Q = /*@__PURE__*/ defineComponent({
             activeDraftSavedAt.value = Date.now();
             toast.success("已保存当前 API 预设。");
         }
-        function setActiveConnectionMode(value) {
-            applyConnectionMode(activeDraft, value);
-            activeDraftSavedAt.value = null;
-        }
         async function loadModelsForActive() {
             await store.loadModelsForConfig({
                 url: activeDraft.url,
@@ -127267,14 +126850,14 @@ var _sfc_main$Q = /*@__PURE__*/ defineComponent({
             });
         }
         watch(() => store.activePresetName, () => syncActiveDraft(), { flush: "sync" });
-        const __returned__ = { store, dialogStore, toast, formMode, activeDraft, activeDraftOriginalName, activeDraftSnapshot, activeDraftError, activeDraftSavedAt, activeConnectionMode, activeDraftDirty, connectionModeOptions, modelSelectOptions, tavernProfileOptions, presetDropdownItems, refreshAll, syncActiveDraft, startCreateDraft, selectPreset, deletePreset, presetMeta, validateActiveDraft, saveActiveDraft, setActiveConnectionMode, loadModelsForActive, get apiCopy() { return apiCopy; }, AcuButton, AcuFormRow, AcuIconButton, AcuInput, AcuMessage, AcuPanel, AcuTextarea, AcuPresetDropdown, AcuSegmentedControl, AcuSelect };
+        const __returned__ = { store, dialogStore, toast, formMode, activeDraft, activeDraftOriginalName, activeDraftSnapshot, activeDraftError, activeDraftSavedAt, activeDraftDirty, modelSelectOptions, presetDropdownItems, refreshAll, syncActiveDraft, startCreateDraft, selectPreset, deletePreset, presetMeta, validateActiveDraft, saveActiveDraft, loadModelsForActive, get apiCopy() { return apiCopy; }, AcuButton, AcuFormRow, AcuIconButton, AcuInput, AcuMessage, AcuPanel, AcuTextarea, AcuPresetDropdown, AcuSelect };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.acu-api-config-panel__select-row[data-v-47287939] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__editor[data-v-47287939] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-47287939] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-47287939] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-47287939] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-47287939] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-47287939] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-47287939] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-47287939");
-var ApiConfigPanel_vue_vue_type_style_index_0_scoped_47287939_lang = null;
+injectSfcStyle("\n.acu-api-config-panel__select-row[data-v-5cbb9f20] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__editor[data-v-5cbb9f20] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-5cbb9f20] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-5cbb9f20] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-5cbb9f20] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-5cbb9f20] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-5cbb9f20] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-5cbb9f20] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-5cbb9f20");
+var ApiConfigPanel_vue_vue_type_style_index_0_scoped_5cbb9f20_lang = null;
 
 const _hoisted_1$O = { class: "acu-api-config-panel__select-row" };
 const _hoisted_2$H = { class: "acu-api-config-panel__editor-section" };
@@ -127287,16 +126870,9 @@ const _hoisted_5$n = {
 	key: 1,
 	class: "acu-api-config-panel__danger"
 };
-const _hoisted_6$m = { class: "acu-api-config-panel__inline-action" };
-const _hoisted_7$j = {
-	key: 0,
-	class: "acu-api-config-panel__two-col"
-};
-const _hoisted_8$i = {
-	key: 1,
-	class: "acu-api-config-panel__editor-section"
-};
-const _hoisted_9$e = { class: "acu-api-config-panel__actions" };
+const _hoisted_6$m = { class: "acu-api-config-panel__two-col" };
+const _hoisted_7$j = { class: "acu-api-config-panel__editor-section" };
+const _hoisted_8$i = { class: "acu-api-config-panel__actions" };
 function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["AcuPanel"], {
 		title: $setup.apiCopy.panels.preset.title,
@@ -127307,7 +126883,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 				key: 0,
 				kind: "warning"
 			}, {
-				default: withCtx(() => [..._cache[14] || (_cache[14] = [createTextVNode(
+				default: withCtx(() => [..._cache[12] || (_cache[12] = [createTextVNode(
 					" 暂无可用 API 预设，请新建并设为当前或全局默认。 ",
 					-1
 					/* CACHED */
@@ -127366,102 +126942,63 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 						_: 1
 					}),
 					createBaseVNode("div", _hoisted_2$H, [
-						createVNode($setup["AcuFormRow"], { label: "连接方式" }, {
-							default: withCtx(() => [createVNode($setup["AcuSegmentedControl"], {
-								options: $setup.connectionModeOptions,
-								"model-value": $setup.activeConnectionMode,
-								"aria-label": "连接方式",
-								"onUpdate:modelValue": _cache[3] || (_cache[3] = ($event) => $setup.setActiveConnectionMode($event))
-							}, null, 8, ["model-value"])]),
+						createVNode($setup["AcuFormRow"], { label: "端点(基础URL)" }, {
+							default: withCtx(() => [createVNode($setup["AcuInput"], {
+								modelValue: $setup.activeDraft.url,
+								"onUpdate:modelValue": _cache[3] || (_cache[3] = ($event) => $setup.activeDraft.url = $event),
+								type: "text",
+								placeholder: "https://example.com/v1"
+							}, null, 8, ["modelValue"])]),
 							_: 1
 						}),
-						$setup.activeConnectionMode === "custom" ? (openBlock(), createElementBlock(
-							Fragment,
-							{ key: 0 },
-							[
-								createVNode($setup["AcuFormRow"], { label: "端点(基础URL)" }, {
-									default: withCtx(() => [createVNode($setup["AcuInput"], {
-										modelValue: $setup.activeDraft.url,
-										"onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => $setup.activeDraft.url = $event),
-										type: "text",
-										placeholder: "https://example.com/v1"
-									}, null, 8, ["modelValue"])]),
-									_: 1
-								}),
-								createVNode($setup["AcuFormRow"], { label: "API 密钥" }, {
-									default: withCtx(() => [createVNode($setup["AcuInput"], {
-										modelValue: $setup.activeDraft.apiKey,
-										"onUpdate:modelValue": _cache[5] || (_cache[5] = ($event) => $setup.activeDraft.apiKey = $event),
-										type: "password",
-										autocomplete: "off"
-									}, null, 8, ["modelValue"])]),
-									_: 1
-								}),
-								createVNode($setup["AcuFormRow"], { label: "模型名" }, {
-									default: withCtx(() => [createVNode($setup["AcuInput"], {
-										modelValue: $setup.activeDraft.model,
-										"onUpdate:modelValue": _cache[6] || (_cache[6] = ($event) => $setup.activeDraft.model = $event),
-										type: "text"
-									}, null, 8, ["modelValue"])]),
-									_: 1
-								}),
-								createBaseVNode("div", _hoisted_3$y, [createVNode($setup["AcuButton"], { onClick: $setup.loadModelsForActive }, {
-									default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
-										"加载模型",
-										-1
-										/* CACHED */
-									)])]),
-									_: 1
-								}), $setup.store.modelLoadStatus === "loading" ? (openBlock(), createElementBlock("span", _hoisted_4$t, "加载中...")) : $setup.store.modelLoadStatus === "error" ? (openBlock(), createElementBlock(
-									"span",
-									_hoisted_5$n,
-									toDisplayString($setup.store.modelLoadError),
-									1
-									/* TEXT */
-								)) : createCommentVNode("v-if", true)]),
-								$setup.store.modelOptions.length ? (openBlock(), createBlock($setup["AcuFormRow"], {
-									key: 0,
-									label: "模型列表"
-								}, {
-									default: withCtx(() => [createVNode($setup["AcuSelect"], {
-										options: $setup.modelSelectOptions,
-										"model-value": $setup.activeDraft.model,
-										placeholder: "请选择",
-										"onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => $setup.activeDraft.model = $event)
-									}, null, 8, ["options", "model-value"])]),
-									_: 1
-								})) : createCommentVNode("v-if", true)
-							],
-							64
-							/* STABLE_FRAGMENT */
-						)) : createCommentVNode("v-if", true),
-						$setup.activeConnectionMode === "tavern" ? (openBlock(), createElementBlock(
-							Fragment,
-							{ key: 1 },
-							[createVNode($setup["AcuFormRow"], { label: "酒馆连接预设" }, {
-								default: withCtx(() => [createVNode($setup["AcuSelect"], {
-									options: $setup.tavernProfileOptions,
-									"model-value": $setup.activeDraft.tavernProfile,
-									placeholder: "请选择",
-									"onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => $setup.activeDraft.tavernProfile = $event)
-								}, null, 8, ["options", "model-value"])]),
-								_: 1
-							}), createBaseVNode("div", _hoisted_6$m, [createVNode($setup["AcuButton"], { onClick: $setup.store.refreshTavernProfiles }, {
-								default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
-									"刷新列表",
-									-1
-									/* CACHED */
-								)])]),
-								_: 1
-							}, 8, ["onClick"])])],
-							64
-							/* STABLE_FRAGMENT */
-						)) : createCommentVNode("v-if", true)
+						createVNode($setup["AcuFormRow"], { label: "API 密钥" }, {
+							default: withCtx(() => [createVNode($setup["AcuInput"], {
+								modelValue: $setup.activeDraft.apiKey,
+								"onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => $setup.activeDraft.apiKey = $event),
+								type: "password",
+								autocomplete: "off"
+							}, null, 8, ["modelValue"])]),
+							_: 1
+						}),
+						createVNode($setup["AcuFormRow"], { label: "模型名" }, {
+							default: withCtx(() => [createVNode($setup["AcuInput"], {
+								modelValue: $setup.activeDraft.model,
+								"onUpdate:modelValue": _cache[5] || (_cache[5] = ($event) => $setup.activeDraft.model = $event),
+								type: "text"
+							}, null, 8, ["modelValue"])]),
+							_: 1
+						}),
+						createBaseVNode("div", _hoisted_3$y, [createVNode($setup["AcuButton"], { onClick: $setup.loadModelsForActive }, {
+							default: withCtx(() => [..._cache[13] || (_cache[13] = [createTextVNode(
+								"加载模型",
+								-1
+								/* CACHED */
+							)])]),
+							_: 1
+						}), $setup.store.modelLoadStatus === "loading" ? (openBlock(), createElementBlock("span", _hoisted_4$t, "加载中...")) : $setup.store.modelLoadStatus === "error" ? (openBlock(), createElementBlock(
+							"span",
+							_hoisted_5$n,
+							toDisplayString($setup.store.modelLoadError),
+							1
+							/* TEXT */
+						)) : createCommentVNode("v-if", true)]),
+						$setup.store.modelOptions.length ? (openBlock(), createBlock($setup["AcuFormRow"], {
+							key: 0,
+							label: "模型列表"
+						}, {
+							default: withCtx(() => [createVNode($setup["AcuSelect"], {
+								options: $setup.modelSelectOptions,
+								"model-value": $setup.activeDraft.model,
+								placeholder: "请选择",
+								"onUpdate:modelValue": _cache[6] || (_cache[6] = ($event) => $setup.activeDraft.model = $event)
+							}, null, 8, ["options", "model-value"])]),
+							_: 1
+						})) : createCommentVNode("v-if", true)
 					]),
-					$setup.activeConnectionMode === "custom" ? (openBlock(), createElementBlock("div", _hoisted_7$j, [createVNode($setup["AcuFormRow"], { label: "最大回复长度" }, {
+					createBaseVNode("div", _hoisted_6$m, [createVNode($setup["AcuFormRow"], { label: "最大回复长度" }, {
 						default: withCtx(() => [createVNode($setup["AcuInput"], {
 							modelValue: $setup.activeDraft.max_tokens,
-							"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.activeDraft.max_tokens = $event),
+							"onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => $setup.activeDraft.max_tokens = $event),
 							type: "number",
 							min: 1,
 							step: 1
@@ -127470,22 +127007,22 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 					}), createVNode($setup["AcuFormRow"], { label: "温度" }, {
 						default: withCtx(() => [createVNode($setup["AcuInput"], {
 							modelValue: $setup.activeDraft.temperature,
-							"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.activeDraft.temperature = $event),
+							"onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => $setup.activeDraft.temperature = $event),
 							type: "number",
 							min: 0,
 							max: 2,
 							step: .05
 						}, null, 8, ["modelValue"])]),
 						_: 1
-					})])) : createCommentVNode("v-if", true),
-					$setup.activeConnectionMode === "custom" ? (openBlock(), createElementBlock("div", _hoisted_8$i, [
+					})]),
+					createBaseVNode("div", _hoisted_7$j, [
 						createVNode($setup["AcuFormRow"], {
 							label: "附加主体参数",
 							hint: "SillyTavern custom_include_body，填写 YAML object，会合并到最终模型请求体。"
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
 								modelValue: $setup.activeDraft.bodyParams,
-								"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.activeDraft.bodyParams = $event),
+								"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.activeDraft.bodyParams = $event),
 								rows: 3,
 								placeholder: "response_format:\n  type: json_object\ntop_k: 50"
 							}, null, 8, ["modelValue"])]),
@@ -127497,7 +127034,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
 								modelValue: $setup.activeDraft.excludeBodyParams,
-								"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.activeDraft.excludeBodyParams = $event),
+								"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.activeDraft.excludeBodyParams = $event),
 								rows: 2,
 								placeholder: "top_p, reasoning_effort"
 							}, null, 8, ["modelValue"])]),
@@ -127509,15 +127046,15 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
 								modelValue: $setup.activeDraft.requestHeaders,
-								"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.activeDraft.requestHeaders = $event),
+								"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.activeDraft.requestHeaders = $event),
 								rows: 2,
 								placeholder: "X-Custom-Header: value"
 							}, null, 8, ["modelValue"])]),
 							_: 1
 						})
-					])) : createCommentVNode("v-if", true),
+					]),
 					$setup.activeDraftError ? (openBlock(), createBlock($setup["AcuMessage"], {
-						key: 2,
+						key: 0,
 						kind: "error"
 					}, {
 						default: withCtx(() => [createTextVNode(
@@ -127527,11 +127064,11 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 						)]),
 						_: 1
 					})) : createCommentVNode("v-if", true),
-					createBaseVNode("div", _hoisted_9$e, [createVNode($setup["AcuButton"], {
+					createBaseVNode("div", _hoisted_8$i, [createVNode($setup["AcuButton"], {
 						disabled: !$setup.activeDraftDirty,
 						onClick: $setup.syncActiveDraft
 					}, {
-						default: withCtx(() => [..._cache[17] || (_cache[17] = [createTextVNode(
+						default: withCtx(() => [..._cache[14] || (_cache[14] = [createTextVNode(
 							"放弃修改",
 							-1
 							/* CACHED */
@@ -127556,7 +127093,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 				key: 2,
 				kind: "warning"
 			}, {
-				default: withCtx(() => [..._cache[18] || (_cache[18] = [createTextVNode(
+				default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
 					" 暂无可用 API 预设，请新建并设为当前或全局默认。 ",
 					-1
 					/* CACHED */
@@ -127567,7 +127104,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["title", "description"]);
 }
-var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$Q, [["render", _sfc_render$Q], ["__scopeId", "data-v-47287939"]]);
+var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$Q, [["render", _sfc_render$Q], ["__scopeId", "data-v-5cbb9f20"]]);
 
 // ═══════════════════════════════════════════════════════════
 // service/settings/feature-preset-reference-service.ts — 功能级 API 预设引用
@@ -128964,65 +128501,6 @@ function _sfc_render$N(_ctx, _cache, $props, $setup, $data, $options) {
 var FormFillUpdateSettingsPanel = /* @__PURE__ */ _export_sfc(_sfc_main$N, [["render", _sfc_render$N], ["__scopeId", "data-v-eaa556c7"]]);
 
 /**
- * legacy-ui-menu-entry — 旧 UI 菜单入口的显示状态。
- *
- * 旧入口点击行为仍由 presentation/bootstrap/startup.ts 负责；这里仅提供跨层共享的
- * 持久化读取和 DOM 显隐同步，避免 v2 直接 import 旧 presentation。
- */
-function getHostDocumentSafely() {
-    try {
-        return (window.parent || window).document || document;
-    }
-    catch {
-        return typeof document === 'undefined' ? null : document;
-    }
-}
-function readAllUiState() {
-    try {
-        if (typeof window === 'undefined' || !window.localStorage)
-            return {};
-        const raw = window.localStorage.getItem(ACU_V2_STORAGE_KEY);
-        if (!raw)
-            return {};
-        const parsed = JSON.parse(raw);
-        return parsed && typeof parsed === 'object' ? parsed : {};
-    }
-    catch {
-        return {};
-    }
-}
-function readLegacyUiMenuVisible() {
-    const all = readAllUiState();
-    const devOptions = all[ACU_V2_DEV_OPTIONS_SECTION_KEY];
-    if (!devOptions || typeof devOptions !== 'object')
-        return false;
-    return devOptions[LEGACY_UI_MENU_VISIBLE_KEY] === true;
-}
-function applyLegacyUiMenuVisibility(visible = readLegacyUiMenuVisible()) {
-    const doc = getHostDocumentSafely();
-    const container = doc?.getElementById(MENU_ITEM_CONTAINER_ID_ACU);
-    if (!container)
-        return;
-    if (visible) {
-        container.style.removeProperty('display');
-        container.removeAttribute('aria-hidden');
-        container.setAttribute('tabindex', '0');
-    }
-    else {
-        container.style.display = 'none';
-        container.setAttribute('aria-hidden', 'true');
-        container.setAttribute('tabindex', '-1');
-    }
-    const item = doc?.getElementById(MENU_ITEM_ID_ACU);
-    if (item) {
-        if (visible)
-            item.removeAttribute('aria-hidden');
-        else
-            item.setAttribute('aria-hidden', 'true');
-    }
-}
-
-/**
  * persistence — 新 UI 自己的 localStorage 持久化层（D14 / P0-4）
  *
  * - 不复用旧 settings_ACU + saveSettingsAndNotify_ACU；新 UI 状态走独立 key
@@ -129116,7 +128594,6 @@ function __resetPersistenceForTests() {
  * - plotAdvanced：编辑剧情推进预设抽屉中的"匹配替换"字段（sulv1-4 / zhaohui）
  *   是否显示。开关 UI 在开发者一级页内；与总开关相互独立。
  * - vectorIndexAdvanced：交火模式页中的"召回参数"与"归档与分块"面板是否显示。
- * - legacyUiMenuVisible：SillyTavern 扩展菜单中的旧 UI 入口是否显示，默认隐藏。
  * - warnLogEnabled：WARN 日志是否输出并写入运行日志，默认关闭。
  *
  * 新 UI 自有持久化，物理隔离于 settings_ACU。
@@ -129128,7 +128605,6 @@ function loadFromStorage$1() {
         developerOptionsEnabled: raw.developerOptionsEnabled === true,
         plotAdvanced: raw.plotAdvanced === true,
         vectorIndexAdvanced: raw.vectorIndexAdvanced === true,
-        legacyUiMenuVisible: raw.legacyUiMenuVisible === true,
         warnLogEnabled: raw.warnLogEnabled === true,
     };
 }
@@ -129137,7 +128613,6 @@ function persist$2(state) {
         developerOptionsEnabled: state.developerOptionsEnabled,
         plotAdvanced: state.plotAdvanced,
         vectorIndexAdvanced: state.vectorIndexAdvanced,
-        legacyUiMenuVisible: state.legacyUiMenuVisible,
         warnLogEnabled: state.warnLogEnabled,
     });
 }
@@ -129160,11 +128635,6 @@ const useDevOptionsStore = defineStore('acu-v2-dev-options', {
             this.vectorIndexAdvanced = !!enabled;
             persist$2(this.$state);
         },
-        setLegacyUiMenuVisible(enabled) {
-            this.legacyUiMenuVisible = !!enabled;
-            persist$2(this.$state);
-            applyLegacyUiMenuVisibility(this.legacyUiMenuVisible);
-        },
         setWarnLogEnabled(enabled) {
             this.warnLogEnabled = !!enabled;
             setWarnLogEnabled(this.warnLogEnabled);
@@ -129175,9 +128645,7 @@ const useDevOptionsStore = defineStore('acu-v2-dev-options', {
             this.developerOptionsEnabled = next.developerOptionsEnabled;
             this.plotAdvanced = next.plotAdvanced;
             this.vectorIndexAdvanced = next.vectorIndexAdvanced;
-            this.legacyUiMenuVisible = next.legacyUiMenuVisible;
             this.warnLogEnabled = next.warnLogEnabled;
-            applyLegacyUiMenuVisibility(this.legacyUiMenuVisible);
             setWarnLogEnabled(this.warnLogEnabled);
         },
     },
@@ -129190,7 +128658,7 @@ const useDevOptionsStore = defineStore('acu-v2-dev-options', {
  */
 function useDevOptions() {
     const store = useDevOptionsStore();
-    const { developerOptionsEnabled, plotAdvanced, vectorIndexAdvanced, legacyUiMenuVisible, warnLogEnabled, } = storeToRefs(store);
+    const { developerOptionsEnabled, plotAdvanced, vectorIndexAdvanced, warnLogEnabled, } = storeToRefs(store);
     return {
         developerOptionsEnabled,
         setDeveloperOptionsEnabled: (enabled) => store.setDeveloperOptionsEnabled(enabled),
@@ -129198,8 +128666,6 @@ function useDevOptions() {
         setPlotAdvanced: (enabled) => store.setPlotAdvanced(enabled),
         vectorIndexAdvanced,
         setVectorIndexAdvanced: (enabled) => store.setVectorIndexAdvanced(enabled),
-        legacyUiMenuVisible,
-        setLegacyUiMenuVisible: (enabled) => store.setLegacyUiMenuVisible(enabled),
         warnLogEnabled,
         setWarnLogEnabled: (enabled) => store.setWarnLogEnabled(enabled),
         refresh: () => store.refresh(),
@@ -134631,12 +134097,6 @@ const dashboardCopy = {
         unavailableSummary: "插件还没有拿到酒馆侧运行接口，当前 API 状态无法确认。",
         unconfiguredBadge: "未配置",
         configuredBadge: "已配置",
-        tavernPresetLabel(name) {
-            return `酒馆连接预设 ${name}`;
-        },
-        tavernPresetMissingLabel: "酒馆连接预设",
-        tavernPresetMissingIssue: "未选择酒馆连接预设",
-        mainApiLabel: "酒馆主 API",
         customApiLabel: "自定义 API",
         endpointField: "端点",
         modelField: "模型",
@@ -134904,7 +134364,6 @@ function normalizeDashboardApiConfig(value) {
         url: typeof source.url === "string" ? source.url : "",
         apiKey: typeof source.apiKey === "string" ? source.apiKey : "",
         model: typeof source.model === "string" ? source.model : "",
-        useMainApi: source.useMainApi !== false,
         max_tokens: Number.isFinite(maxTokens) && maxTokens > 0
             ? Math.floor(maxTokens)
             : 60000,
@@ -134912,24 +134371,7 @@ function normalizeDashboardApiConfig(value) {
     };
 }
 function resolveApiConnectionStatus(input) {
-    const apiMode = input.apiMode === "tavern" ? "tavern" : "custom";
     const apiConfig = normalizeDashboardApiConfig(input.apiConfig);
-    const tavernProfile = String(input.tavernProfile || "").trim();
-    if (apiMode === "tavern") {
-        return tavernProfile
-            ? {
-                ready: true,
-                label: dashboardCopy.api.tavernPresetLabel(tavernProfile),
-                issue: "",
-            }
-            : {
-                ready: false,
-                label: dashboardCopy.api.tavernPresetMissingLabel,
-                issue: dashboardCopy.api.tavernPresetMissingIssue,
-            };
-    }
-    if (apiConfig.useMainApi)
-        return { ready: true, label: dashboardCopy.api.mainApiLabel, issue: "" };
     if (apiConfig.url.trim() && apiConfig.model.trim())
         return { ready: true, label: apiConfig.model.trim(), issue: "" };
     const missing = [
@@ -134947,12 +134389,7 @@ function resolveApiConnectionStatus(input) {
 function apiPresetMatchesCurrentConfig(preset) {
     const presetConfig = normalizeDashboardApiConfig(preset?.apiConfig);
     const currentConfig = normalizeDashboardApiConfig(settings_ACU.apiConfig);
-    return (String(preset?.apiMode || "custom") ===
-        String(settings_ACU.apiMode || "custom") &&
-        String(preset?.tavernProfile || "") ===
-            String(settings_ACU.tavernProfile || "") &&
-        presetConfig.useMainApi === currentConfig.useMainApi &&
-        presetConfig.url === currentConfig.url &&
+    return (presetConfig.url === currentConfig.url &&
         presetConfig.apiKey === currentConfig.apiKey &&
         presetConfig.model === currentConfig.model &&
         presetConfig.max_tokens === currentConfig.max_tokens &&
@@ -134972,16 +134409,12 @@ function resolveCurrentApiPreset() {
     if (preset) {
         return {
             name: String(preset.name || "").trim(),
-            apiMode: String(preset.apiMode || "custom"),
             apiConfig: preset.apiConfig || {},
-            tavernProfile: String(preset.tavernProfile || ""),
         };
     }
     return {
         name: "",
-        apiMode: String(settings_ACU.apiMode || "custom"),
         apiConfig: settings_ACU.apiConfig || {},
-        tavernProfile: String(settings_ACU.tavernProfile || ""),
     };
 }
 function buildApiHealthItem(coreReady) {
@@ -146661,12 +146094,6 @@ var _sfc_main$b = /*@__PURE__*/ defineComponent({
                 description: "显示召回参数与归档分块面板。需要调整向量相关参数时开启。",
                 value: devOptions.vectorIndexAdvanced.value,
             },
-            {
-                key: "legacyUiMenuVisible",
-                label: "旧 UI 入口",
-                description: "在 SillyTavern 扩展菜单中显示旧 UI 入口。默认隐藏；新 UI 出问题时可临时开启。",
-                value: devOptions.legacyUiMenuVisible.value,
-            },
         ]);
         const maxConcurrentGroups = computed(() => settings.numberFields.value.find((field) => field.key === "maxConcurrentGroups")?.value ?? 1);
         function handleToggleChange(key, value) {
@@ -146676,9 +146103,6 @@ var _sfc_main$b = /*@__PURE__*/ defineComponent({
             if (key === "vectorIndexAdvanced") {
                 devOptions.setVectorIndexAdvanced(value);
             }
-            if (key === "legacyUiMenuVisible") {
-                devOptions.setLegacyUiMenuVisible(value);
-            }
         }
         const __returned__ = { devOptions, settings, toggles, maxConcurrentGroups, handleToggleChange, AcuFormRow, AcuInput, AcuPanel, AcuPanelGrid, ToggleRow, get developerCopy() { return developerCopy; } };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
@@ -146686,8 +146110,8 @@ var _sfc_main$b = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-v2-developer-page[data-v-d859c428] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-developer-page__toggle-list[data-v-d859c428] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n@media (max-width: 860px) {\n.acu-v2-developer-page[data-v-d859c428] {\r\n    padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/DeveloperPage.vue#style-0-d859c428");
-var DeveloperPage_vue_vue_type_style_index_0_scoped_d859c428_lang = null;
+injectSfcStyle("\n.acu-v2-developer-page[data-v-13190b1d] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-developer-page__toggle-list[data-v-13190b1d] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n@media (max-width: 860px) {\n.acu-v2-developer-page[data-v-13190b1d] {\r\n    padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/DeveloperPage.vue#style-0-13190b1d");
+var DeveloperPage_vue_vue_type_style_index_0_scoped_13190b1d_lang = null;
 
 const _hoisted_1$b = { class: "acu-v2-developer-page" };
 const _hoisted_2$a = { class: "acu-v2-developer-page__toggle-list" };
@@ -146733,7 +146157,7 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	})]);
 }
-var DeveloperPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$b], ["__scopeId", "data-v-d859c428"]]);
+var DeveloperPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$b], ["__scopeId", "data-v-13190b1d"]]);
 
 /**
  * page-registry — 一级页静态注册表（plan §4.1 + §D24）
