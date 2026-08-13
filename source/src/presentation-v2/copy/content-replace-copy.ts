@@ -1,3 +1,5 @@
+import { labelFilterPanelCopy } from './shared-copy';
+
 export const contentReplaceCopy = {
   nav: {
     basic: "基础设置",
@@ -21,11 +23,7 @@ export const contentReplaceCopy = {
       description:
         "下拉框切换当前通用API，星标设为全局默认。点击按钮，可导入新预设、管理全部预设。内置默认预设无法修改，请使用「从默认新建」。",
     },
-    filter: {
-      title: "标签筛选",
-      description:
-        "按标签提取内容，提升填表准确性。提取仅保留指定范围，排除移除指定范围。",
-    },
+    filter: labelFilterPanelCopy,
     test: {
       title: "手动测试",
       description:

@@ -1,3 +1,5 @@
+import { worldbookEntriesCopy } from './shared-copy';
+
 export const plotCopy = {
   panels: {
     preset: {
@@ -11,12 +13,7 @@ export const plotCopy = {
         "剧情推进参考的世界书条目。默认跟随角色卡主世界书，也可手动指定。Agent 模式会在运行时过滤提示词模板中的世界书条目，由 Agent 决策剧情、填表与正文通道的放行条目。",
     },
   },
-  worldbook: {
-    emptyDefault: "所选世界书中无可显示的条目。",
-    emptyCharacter:
-      "未解析到角色卡世界书。打开聊天后会显示条目；也可手动选择一本。",
-    emptyManual: "请先选择一本世界书。",
-  },
+  worldbook: worldbookEntriesCopy,
   agentControl: {
     title: "Agent 世界书总控",
     description: "切换 Agent 世界书模式；Agent 模式会在剧情推进时接管世界书条目的放行与过滤，清理并初始化会恢复快照并关闭 Agent 模式。",

@@ -1,3 +1,5 @@
+import { labelFilterPanelCopy } from './shared-copy';
+
 export const formFillCopy = {
   nav: {
     status: "表格状态",
@@ -16,11 +18,7 @@ export const formFillCopy = {
       title: "自动更新设置",
       description: "控制自动填表的各项参数。正常情况下不必手动修改高级参数。",
     },
-    filter: {
-      title: "标签筛选",
-      description:
-        "按标签提取内容，提升填表准确性。提取仅保留指定范围，排除移除指定范围。",
-    },
+    filter: labelFilterPanelCopy,
     prompt: {
       title: "填表提示词",
       description:

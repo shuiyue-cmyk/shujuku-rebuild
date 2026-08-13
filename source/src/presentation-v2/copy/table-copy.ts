@@ -1,3 +1,5 @@
+import { worldbookEntriesCopy } from './shared-copy';
+
 export const tableCopy = {
   panels: {
     templatePreset: {
@@ -16,10 +18,5 @@ export const tableCopy = {
         "填表时附加给AI参考的世界书条目。默认跟随角色卡，也可手动指定并按条目开关。与写入目标世界书互不影响。",
     },
   },
-  worldbook: {
-    emptyDefault: "所选世界书中无可显示的条目。",
-    emptyCharacter:
-      "未解析到角色卡世界书。打开聊天后会显示条目；也可手动选择一本。",
-    emptyManual: "请先选择一本世界书。",
-  },
+  worldbook: worldbookEntriesCopy,
 };

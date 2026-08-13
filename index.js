@@ -2522,18 +2522,23 @@ function renderOption_ACU(value, text, selected = false) {
     return `<option value="${escapeHtml_ACU$1(value)}"${selected ? ' selected' : ''}>${escapeHtml_ACU$1(text)}</option>`;
 }
 /**
+ * 生成 toast 中的操作按钮 HTML（终止/取消/重新优化等）
+ * @param id - 按钮的 DOM id
+ * @param label - 按钮文本
+ * @param accent - 按钮强调色（border/文字/hover 背景）
+ * @param radius - 圆角
+ * @param fontSize - 字号
+ */
+function renderToastActionButton_ACU(id, label, accent = '#ffc107', radius = '4px', fontSize = '0.9em') {
+    return `<button id="${escapeHtml_ACU$1(id)}" style="border: 1px solid ${accent}; color: ${accent}; background: transparent; padding: 5px 10px; border-radius: ${radius}; cursor: pointer; float: right; margin-left: 15px; font-size: ${fontSize}; font-family: inherit;" onmouseover="this.style.backgroundColor='${accent}'; this.style.color='#1a1d24';" onmouseout="this.style.backgroundColor='transparent'; this.style.color='${accent}';">${escapeHtml_ACU$1(label)}</button>`;
+}
+/**
  * 生成 toast 中的终止/取消按钮 HTML
  * @param id - 按钮的 DOM id
  * @param label - 按钮文本
  */
 function renderStopButton_ACU(id, label) {
-    return `<button id="${escapeHtml_ACU$1(id)}" style="border: 1px solid #ffc107; color: #ffc107; background: transparent; padding: 5px 10px; border-radius: 4px; cursor: pointer; float: right; margin-left: 15px; font-size: 0.9em; transition: all 0.2s ease;" onmouseover="this.style.backgroundColor='#ffc107'; this.style.color='#1a1d24';" onmouseout="this.style.backgroundColor='transparent'; this.style.color='#ffc107';">${escapeHtml_ACU$1(label)}</button>`;
-}
-/**
- * 生成正文替换 toast 中的"重新优化"按钮 HTML
- */
-function renderReoptButton_ACU() {
-    return `<button id="acu-opt-toast-reoptimize" style="border: 1px solid var(--acu-accent, #7d4940); color: var(--acu-accent, #7d4940); background: transparent; padding: 5px 10px; border-radius: 1px; cursor: pointer; float: right; margin-left: 15px; font-size: 0.85em; font-family: inherit;" onmouseover="this.style.backgroundColor='var(--acu-accent, #7d4940)'; this.style.color='var(--acu-bg-0, #24221f)';" onmouseout="this.style.backgroundColor='transparent'; this.style.color='var(--acu-accent, #7d4940)';">🔄 重新优化</button>`;
+    return renderToastActionButton_ACU(id, label);
 }
 
 /**
@@ -87414,182 +87419,51 @@ function exportCharCardPromptToJson_ACU() {
         showToastr_ACU('error', '导出提示词模板失败，请检查控制台获取详情。', { acuToastCategory: ACU_TOAST_CATEGORY_ACU.ERROR });
     }
 }
-function saveAutoUpdateThreshold_ACU({ silent = false, skipReload = false } = {}) {
-    if (!$popupInstance_ACU || !$autoUpdateThresholdInput_ACU) {
-        logError_ACU('保存阈值失败：UI元素未初始化。');
+const NUMBER_FIELD_SAVERS_ACU = [
+    { key: 'autoUpdateThreshold', input: () => $autoUpdateThresholdInput_ACU, min: 0, errPrefix: '自动更新阈值', successText: (v) => v === 0 ? '自动更新阈值已保存！标准表自动更新已禁用。' : '自动更新阈值已保存！', warnTemplate: (v) => `阈值 "${v}" 无效。请输入一个大于等于0的整数。恢复为: ${settings_ACU.autoUpdateThreshold}`, restore: () => settings_ACU.autoUpdateThreshold },
+    { key: 'autoUpdateTokenThreshold', input: () => $autoUpdateTokenThresholdInput_ACU, min: 0, errPrefix: '自动更新Token阈值', successText: () => '自动更新Token阈值已保存！', warnTemplate: (v) => `Token阈值 "${v}" 无效。请输入一个大于等于0的整数。恢复为: ${settings_ACU.autoUpdateTokenThreshold}`, restore: () => settings_ACU.autoUpdateTokenThreshold },
+    { key: 'tableMaxRetries', input: () => $tableMaxRetriesInput_ACU, min: 1, max: 10, errPrefix: '填表自动重试次数', successText: () => '填表自动重试次数已保存！', warnTemplate: (v) => `重试次数 "${v}" 无效。请输入1-10之间的整数。恢复为: ${settings_ACU.tableMaxRetries || 3}`, restore: () => settings_ACU.tableMaxRetries || 3 },
+    { key: 'autoUpdateFrequency', input: () => $autoUpdateFrequencyInput_ACU, min: 1, errPrefix: '自动更新频率', successText: () => '自动更新频率已保存！', warnTemplate: (v) => `更新频率 "${v}" 无效。请输入一个大于0的整数。恢复为: ${settings_ACU.autoUpdateFrequency}`, restore: () => settings_ACU.autoUpdateFrequency },
+    { key: 'updateBatchSize', input: () => $updateBatchSizeInput_ACU, min: 1, errPrefix: '批处理大小', successText: () => '批处理大小已保存！', warnTemplate: (v) => `批处理大小 "${v}" 无效。请输入一个大于0的整数。恢复为: ${settings_ACU.updateBatchSize}`, restore: () => settings_ACU.updateBatchSize },
+    { key: 'maxConcurrentGroups', input: () => $maxConcurrentGroupsInput_ACU, min: 1, errPrefix: '最大并发数', successText: () => '最大并发数已保存！', warnTemplate: (v) => `最大并发数 "${v}" 无效。请输入一个大于0的整数。恢复为: ${settings_ACU.maxConcurrentGroups || 1}`, restore: () => settings_ACU.maxConcurrentGroups || 1 },
+    { key: 'skipUpdateFloors', input: () => $skipUpdateFloorsInput_ACU, min: 0, errPrefix: '跳过更新楼层', successText: () => '跳过更新楼层已保存！', warnTemplate: (v) => `跳过更新楼层 "${v}" 无效。请输入一个大于等于0的整数。恢复为: ${settings_ACU.skipUpdateFloors || 0}`, restore: () => settings_ACU.skipUpdateFloors || 0 },
+    { key: 'importSplitSize', input: () => $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-import-split-size`), min: 100, errPrefix: '导入分割大小', successText: () => '导入分割大小已保存！', warnTemplate: (v) => `导入分割大小 "${v}" 无效。请输入一个大于等于100的整数。恢复为: ${settings_ACU.importSplitSize}`, restore: () => settings_ACU.importSplitSize },
+];
+function saveNumberField_ACU(key, { silent = false } = {}) {
+    const cfg = NUMBER_FIELD_SAVERS_ACU.find(c => c.key === key);
+    if (!cfg)
+        return;
+    if (!$popupInstance_ACU || !cfg.input()) {
+        logError_ACU(`保存${cfg.errPrefix}失败：UI元素未初始化。`);
         return;
     }
-    const valStr = $autoUpdateThresholdInput_ACU.val();
-    const newT = parseInt(valStr, 10);
-    if (!isNaN(newT) && newT >= 0) {
+    const valStr = cfg.input().val();
+    const val = parseInt(valStr, 10);
+    if (!isNaN(val) && val >= cfg.min && (cfg.max === undefined || val <= cfg.max)) {
         // [V1 收敛] 委托 service 事务式写入（含归一化与保存失败回滚）
-        const result = setUpdateNumberFields_ACU({ autoUpdateThreshold: newT });
+        const result = setUpdateNumberFields_ACU({ [cfg.key]: val });
         if (!result.ok) {
             if (!silent)
-                showToastr_ACU('error', result.message || '自动更新阈值保存失败，已回滚。');
-            return;
-        }
-        if (!silent) {
-            if (newT === 0)
-                showToastr_ACU('success', '自动更新阈值已保存！标准表自动更新已禁用。');
-            else
-                showToastr_ACU('success', '自动更新阈值已保存！');
-        }
-    }
-    else {
-        if (!silent)
-            showToastr_ACU('warning', `阈值 "${valStr}" 无效。请输入一个大于等于0的整数。恢复为: ${settings_ACU.autoUpdateThreshold}`);
-        $autoUpdateThresholdInput_ACU.val(settings_ACU.autoUpdateThreshold);
-    }
-}
-function saveAutoUpdateTokenThreshold_ACU({ silent = false, skipReload = false } = {}) {
-    if (!$popupInstance_ACU || !$autoUpdateTokenThresholdInput_ACU) {
-        logError_ACU('保存Token阈值失败：UI元素未初始化。');
-        return;
-    }
-    const valStr = $autoUpdateTokenThresholdInput_ACU.val();
-    const newT = parseInt(valStr, 10);
-    if (!isNaN(newT) && newT >= 0) {
-        // [V1 收敛] 委托 service 事务式写入
-        const result = setUpdateNumberFields_ACU({ autoUpdateTokenThreshold: newT });
-        if (!result.ok) {
-            if (!silent)
-                showToastr_ACU('error', result.message || '自动更新Token阈值保存失败，已回滚。');
+                showToastr_ACU('error', result.message || `${cfg.errPrefix}保存失败，已回滚。`);
             return;
         }
         if (!silent)
-            showToastr_ACU('success', '自动更新Token阈值已保存！');
+            showToastr_ACU('success', cfg.successText(val));
     }
     else {
         if (!silent)
-            showToastr_ACU('warning', `Token阈值 "${valStr}" 无效。请输入一个大于等于0的整数。恢复为: ${settings_ACU.autoUpdateTokenThreshold}`);
-        $autoUpdateTokenThresholdInput_ACU.val(settings_ACU.autoUpdateTokenThreshold);
+            showToastr_ACU('warning', cfg.warnTemplate(valStr));
+        cfg.input().val(cfg.restore());
     }
 }
-// [新增] 保存填表自动重试次数的函数
-function saveTableMaxRetries_ACU({ silent = false, skipReload = false } = {}) {
-    if (!$popupInstance_ACU || !$tableMaxRetriesInput_ACU) {
-        logError_ACU('保存填表重试次数失败：UI元素未初始化。');
-        return;
-    }
-    const valStr = $tableMaxRetriesInput_ACU.val();
-    const newR = parseInt(valStr, 10);
-    if (!isNaN(newR) && newR >= 1 && newR <= 10) {
-        // [V1 收敛] 委托 service 事务式写入
-        const result = setUpdateNumberFields_ACU({ tableMaxRetries: newR });
-        if (!result.ok) {
-            if (!silent)
-                showToastr_ACU('error', result.message || '填表自动重试次数保存失败，已回滚。');
-            return;
-        }
-        if (!silent)
-            showToastr_ACU('success', '填表自动重试次数已保存！');
-    }
-    else {
-        if (!silent)
-            showToastr_ACU('warning', `重试次数 "${valStr}" 无效。请输入1-10之间的整数。恢复为: ${settings_ACU.tableMaxRetries || 3}`);
-        $tableMaxRetriesInput_ACU.val(settings_ACU.tableMaxRetries || 3);
-    }
-}
-function saveAutoUpdateFrequency_ACU({ silent = false, skipReload = false } = {}) {
-    if (!$popupInstance_ACU || !$autoUpdateFrequencyInput_ACU) {
-        logError_ACU('保存更新频率失败：UI元素未初始化。');
-        return;
-    }
-    const valStr = $autoUpdateFrequencyInput_ACU.val();
-    const newF = parseInt(valStr, 10);
-    if (!isNaN(newF) && newF >= 1) {
-        // [V1 收敛] 委托 service 事务式写入
-        const result = setUpdateNumberFields_ACU({ autoUpdateFrequency: newF });
-        if (!result.ok) {
-            if (!silent)
-                showToastr_ACU('error', result.message || '自动更新频率保存失败，已回滚。');
-            return;
-        }
-        if (!silent)
-            showToastr_ACU('success', '自动更新频率已保存！');
-    }
-    else {
-        if (!silent)
-            showToastr_ACU('warning', `更新频率 "${valStr}" 无效。请输入一个大于0的整数。恢复为: ${settings_ACU.autoUpdateFrequency}`);
-        $autoUpdateFrequencyInput_ACU.val(settings_ACU.autoUpdateFrequency);
-    }
-}
-// [新增] 保存批处理大小的函数
-function saveUpdateBatchSize_ACU({ silent = false, skipReload = false } = {}) {
-    if (!$popupInstance_ACU || !$updateBatchSizeInput_ACU) {
-        logError_ACU('保存批处理大小失败：UI元素未初始化。');
-        return;
-    }
-    const valStr = $updateBatchSizeInput_ACU.val();
-    const newBatchSize = parseInt(valStr, 10);
-    if (!isNaN(newBatchSize) && newBatchSize >= 1) {
-        // [V1 收敛] 委托 service 事务式写入
-        const result = setUpdateNumberFields_ACU({ updateBatchSize: newBatchSize });
-        if (!result.ok) {
-            if (!silent)
-                showToastr_ACU('error', result.message || '批处理大小保存失败，已回滚。');
-            return;
-        }
-        if (!silent)
-            showToastr_ACU('success', '批处理大小已保存！');
-    }
-    else {
-        if (!silent)
-            showToastr_ACU('warning', `批处理大小 "${valStr}" 无效。请输入一个大于0的整数。恢复为: ${settings_ACU.updateBatchSize}`);
-        $updateBatchSizeInput_ACU.val(settings_ACU.updateBatchSize);
-    }
-}
-// [新增] 保存最大并发组数
-function saveMaxConcurrentGroups_ACU({ silent = false, skipReload = false } = {}) {
-    if (!$popupInstance_ACU || !$maxConcurrentGroupsInput_ACU) {
-        logError_ACU('保存最大并发数失败：UI元素未初始化。');
-        return;
-    }
-    const valStr = $maxConcurrentGroupsInput_ACU.val();
-    const newLimit = parseInt(valStr, 10);
-    if (!isNaN(newLimit) && newLimit >= 1) {
-        // [V1 收敛] 委托 service 事务式写入
-        const result = setUpdateNumberFields_ACU({ maxConcurrentGroups: newLimit });
-        if (!result.ok) {
-            if (!silent)
-                showToastr_ACU('error', result.message || '最大并发数保存失败，已回滚。');
-            return;
-        }
-        if (!silent)
-            showToastr_ACU('success', '最大并发数已保存！');
-    }
-    else {
-        if (!silent)
-            showToastr_ACU('warning', `最大并发数 "${valStr}" 无效。请输入一个大于0的整数。恢复为: ${settings_ACU.maxConcurrentGroups || 1}`);
-        $maxConcurrentGroupsInput_ACU.val(settings_ACU.maxConcurrentGroups || 1);
-    }
-}
-// [新增] 保存跳过更新楼层（全局）
-function saveSkipUpdateFloors_ACU({ silent = false, skipReload = false } = {}) {
-    if (!$popupInstance_ACU || !$skipUpdateFloorsInput_ACU) {
-        logError_ACU('保存跳过更新楼层失败：UI元素未初始化。');
-        return;
-    }
-    const valStr = $skipUpdateFloorsInput_ACU.val();
-    const newSkip = parseInt(valStr, 10);
-    if (!isNaN(newSkip) && newSkip >= 0) {
-        // [V1 收敛] 委托 service 事务式写入
-        const result = setUpdateNumberFields_ACU({ skipUpdateFloors: newSkip });
-        if (!result.ok) {
-            if (!silent)
-                showToastr_ACU('error', result.message || '跳过更新楼层保存失败，已回滚。');
-            return;
-        }
-        if (!silent)
-            showToastr_ACU('success', '跳过更新楼层已保存！');
-    }
-    else {
-        if (!silent)
-            showToastr_ACU('warning', `跳过更新楼层 "${valStr}" 无效。请输入一个大于等于0的整数。恢复为: ${settings_ACU.skipUpdateFloors || 0}`);
-        $skipUpdateFloorsInput_ACU.val(settings_ACU.skipUpdateFloors || 0);
-    }
-}
+const saveAutoUpdateThreshold_ACU = (opts = {}) => saveNumberField_ACU('autoUpdateThreshold', opts);
+const saveAutoUpdateTokenThreshold_ACU = (opts = {}) => saveNumberField_ACU('autoUpdateTokenThreshold', opts);
+const saveTableMaxRetries_ACU = (opts = {}) => saveNumberField_ACU('tableMaxRetries', opts);
+const saveAutoUpdateFrequency_ACU = (opts = {}) => saveNumberField_ACU('autoUpdateFrequency', opts);
+const saveUpdateBatchSize_ACU = (opts = {}) => saveNumberField_ACU('updateBatchSize', opts);
+const saveMaxConcurrentGroups_ACU = (opts = {}) => saveNumberField_ACU('maxConcurrentGroups', opts);
+const saveSkipUpdateFloors_ACU = (opts = {}) => saveNumberField_ACU('skipUpdateFloors', opts);
+const saveImportSplitSize_ACU = (opts = {}) => saveNumberField_ACU('importSplitSize', opts);
 // [新增] 保存"保留最近N个AI回复楼层数据"（全局）
 function saveRetainRecentLayers_ACU({ silent = false, skipReload = false } = {}) {
     if (!$popupInstance_ACU || !$retainRecentLayersInput_ACU) {
@@ -87614,30 +87488,6 @@ function saveRetainRecentLayers_ACU({ silent = false, skipReload = false } = {})
         else {
             showToastr_ACU('success', `AI 回复楼层保留数已保存：最近 ${newRetain} 个 AI 回复楼层！`);
         }
-    }
-}
-function saveImportSplitSize_ACU() {
-    if (!$popupInstance_ACU)
-        return;
-    const $input = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-import-split-size`);
-    if (!$input.length) {
-        logError_ACU('保存导入分割大小失败：UI元素未初始化。');
-        return;
-    }
-    const valStr = $input.val();
-    const newSize = parseInt(valStr, 10);
-    if (!isNaN(newSize) && newSize >= 100) {
-        // [V1 收敛] 委托 service 事务式写入
-        const result = setUpdateNumberFields_ACU({ importSplitSize: newSize });
-        if (!result.ok) {
-            showToastr_ACU('error', result.message || '导入分割大小保存失败，已回滚。');
-            return;
-        }
-        showToastr_ACU('success', '导入分割大小已保存！');
-    }
-    else {
-        showToastr_ACU('warning', `导入分割大小 "${valStr}" 无效。请输入一个大于等于100的整数。恢复为: ${settings_ACU.importSplitSize}`);
-        $input.val(settings_ACU.importSplitSize);
     }
 }
 
@@ -87967,7 +87817,7 @@ function showOptimizationDiffDialogForLoop_ACU(messageIndex, result, callback) {
  */
 function showOptimizationDiff_ACU(messageIndex, result) {
     const message = `正文替换完成，共 ${result.optimizations.length} 处改进`;
-    const reoptButtonHtml = renderReoptButton_ACU();
+    const reoptButtonHtml = renderToastActionButton_ACU('acu-opt-toast-reoptimize', '🔄 重新优化', 'var(--acu-accent, #7d4940)', '1px', '0.85em');
     const html = result.summary
         ? `<div>${message}${reoptButtonHtml}<br><small style="opacity:0.7">${result.summary}</small></div>`
         : `<div>${message}${reoptButtonHtml}</div>`;
@@ -127536,6 +127386,17 @@ function useFormFillSettings() {
     };
 }
 
+// 跨页面共享的文案片段（多页使用的相同文案在此定义一份，页面 copy 引用之）
+const worldbookEntriesCopy = {
+    emptyDefault: "所选世界书中无可显示的条目。",
+    emptyCharacter: "未解析到角色卡世界书。打开聊天后会显示条目；也可手动选择一本。",
+    emptyManual: "请先选择一本世界书。",
+};
+const labelFilterPanelCopy = {
+    title: "标签筛选",
+    description: "按标签提取内容，提升填表准确性。提取仅保留指定范围，排除移除指定范围。",
+};
+
 const formFillCopy = {
     nav: {
         status: "表格状态",
@@ -127553,10 +127414,7 @@ const formFillCopy = {
             title: "自动更新设置",
             description: "控制自动填表的各项参数。正常情况下不必手动修改高级参数。",
         },
-        filter: {
-            title: "标签筛选",
-            description: "按标签提取内容，提升填表准确性。提取仅保留指定范围，排除移除指定范围。",
-        },
+        filter: labelFilterPanelCopy,
         prompt: {
             title: "填表提示词",
             description: "控制AI如何理解与写入表格。建议保持默认或导入他人的填表提示词，不建议手动修改。",
@@ -128703,11 +128561,7 @@ const plotCopy = {
             description: "剧情推进参考的世界书条目。默认跟随角色卡主世界书，也可手动指定。Agent 模式会在运行时过滤提示词模板中的世界书条目，由 Agent 决策剧情、填表与正文通道的放行条目。",
         },
     },
-    worldbook: {
-        emptyDefault: "所选世界书中无可显示的条目。",
-        emptyCharacter: "未解析到角色卡世界书。打开聊天后会显示条目；也可手动选择一本。",
-        emptyManual: "请先选择一本世界书。",
-    },
+    worldbook: worldbookEntriesCopy,
     agentControl: {
         title: "Agent 世界书总控",
         description: "切换 Agent 世界书模式；Agent 模式会在剧情推进时接管世界书条目的放行与过滤，清理并初始化会恢复快照并关闭 Agent 模式。",
@@ -132905,11 +132759,7 @@ const tableCopy = {
             description: "填表时附加给AI参考的世界书条目。默认跟随角色卡，也可手动指定并按条目开关。与写入目标世界书互不影响。",
         },
     },
-    worldbook: {
-        emptyDefault: "所选世界书中无可显示的条目。",
-        emptyCharacter: "未解析到角色卡世界书。打开聊天后会显示条目；也可手动选择一本。",
-        emptyManual: "请先选择一本世界书。",
-    },
+    worldbook: worldbookEntriesCopy,
 };
 
 var _sfc_main$B = /*@__PURE__*/ defineComponent({
@@ -143407,10 +143257,7 @@ const contentReplaceCopy = {
             title: "正文替换预设",
             description: "下拉框切换当前通用API，星标设为全局默认。点击按钮，可导入新预设、管理全部预设。内置默认预设无法修改，请使用「从默认新建」。",
         },
-        filter: {
-            title: "标签筛选",
-            description: "按标签提取内容，提升填表准确性。提取仅保留指定范围，排除移除指定范围。",
-        },
+        filter: labelFilterPanelCopy,
         test: {
             title: "手动测试",
             description: "使用当前配置测试文本，不写回聊天。失败通常为 API、提示词格式或筛选问题，请检查错误并调整配置。",

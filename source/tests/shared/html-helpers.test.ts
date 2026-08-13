@@ -7,7 +7,6 @@ import {
   escapeHtml_ACU,
   renderOption_ACU,
   renderStopButton_ACU,
-  renderReoptButton_ACU,
 } from '../../src/shared/html-helpers';
 
 describe('escapeHtml_ACU', () => {
@@ -89,20 +88,6 @@ describe('renderStopButton_ACU', () => {
 
   it('返回 button 标签', () => {
     const result = renderStopButton_ACU('id', 'label');
-    expect(result).toMatch(/^<button/);
-    expect(result).toMatch(/<\/button>$/);
-  });
-});
-
-describe('renderReoptButton_ACU', () => {
-  it('生成固定 id 的重新优化按钮', () => {
-    const result = renderReoptButton_ACU();
-    expect(result).toContain('acu-opt-toast-reoptimize');
-    expect(result).toContain('重新优化');
-  });
-
-  it('返回 button 标签', () => {
-    const result = renderReoptButton_ACU();
     expect(result).toMatch(/^<button/);
     expect(result).toMatch(/<\/button>$/);
   });

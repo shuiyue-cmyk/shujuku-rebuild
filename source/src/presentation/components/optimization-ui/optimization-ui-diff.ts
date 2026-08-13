@@ -13,7 +13,7 @@ import { $popupInstance_ACU } from '../../state/ui-refs';
 import { saveSettingsAndNotify_ACU } from '../settings-ui-helpers';
 import { buildChatPlotScopeStateFromSettings_ACU, clearCurrentChatPlotScopeState_ACU, getCurrentChatPlotScopeState_ACU, sanitizePlotSettingsSnapshotForChat_ACU, setCurrentChatPlotScopeState_ACU } from '../../../service/template/chat-scope';
 import { SCRIPT_ID_PREFIX_ACU } from '../../../shared/constants';
-import { escapeHtml_ACU, renderReoptButton_ACU } from '../../../shared/html-helpers';
+import { escapeHtml_ACU, renderToastActionButton_ACU } from '../../../shared/html-helpers';
 import { cleanChatName_ACU, logDebug_ACU, logError_ACU, logWarn_ACU, normalizeExcludeRules_ACU, normalizeExtractRules_ACU, normalizeNonNegativeInteger_ACU, normalizePositiveInteger_ACU } from '../../../shared/utils';
 import { triggerAutomaticUpdateIfNeeded_ACU } from '../../triggers/settings-ui-sync';
 import { cancelContentOptimization_ACU, contentOptimizationAbortRequested_ACU, ensureOptimizationNotCancelled_ACU, getLastOptimizationBase_ACU, optimizationProgressToast_ACU, performContentOptimization_ACU, setLastOptimizationBase_ACU, _set_optimizationProgressToast_ACU, _set_contentOptimizationAbortRequested_ACU } from '../../../service/optimization/content-optimization';
@@ -194,7 +194,7 @@ import { getOriginalContent_ACU, reoptimizeMessage_ACU, replaceChatMessage_ACU }
    */
   export function showOptimizationDiff_ACU(messageIndex: number, result: any) {
     const message = `正文替换完成，共 ${result.optimizations.length} 处改进`;
-    const reoptButtonHtml = renderReoptButton_ACU();
+    const reoptButtonHtml = renderToastActionButton_ACU('acu-opt-toast-reoptimize', '🔄 重新优化', 'var(--acu-accent, #7d4940)', '1px', '0.85em');
     const html = result.summary
       ? `<div>${message}${reoptButtonHtml}<br><small style="opacity:0.7">${result.summary}</small></div>`
       : `<div>${message}${reoptButtonHtml}</div>`;

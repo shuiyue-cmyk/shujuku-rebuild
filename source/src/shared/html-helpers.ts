@@ -31,17 +31,22 @@ export function renderOption_ACU(value: string, text: string, selected = false):
 }
 
 /**
+ * 生成 toast 中的操作按钮 HTML（终止/取消/重新优化等）
+ * @param id - 按钮的 DOM id
+ * @param label - 按钮文本
+ * @param accent - 按钮强调色（border/文字/hover 背景）
+ * @param radius - 圆角
+ * @param fontSize - 字号
+ */
+export function renderToastActionButton_ACU(id: string, label: string, accent = '#ffc107', radius = '4px', fontSize = '0.9em'): string {
+  return `<button id="${escapeHtml_ACU(id)}" style="border: 1px solid ${accent}; color: ${accent}; background: transparent; padding: 5px 10px; border-radius: ${radius}; cursor: pointer; float: right; margin-left: 15px; font-size: ${fontSize}; font-family: inherit;" onmouseover="this.style.backgroundColor='${accent}'; this.style.color='#1a1d24';" onmouseout="this.style.backgroundColor='transparent'; this.style.color='${accent}';">${escapeHtml_ACU(label)}</button>`;
+}
+
+/**
  * 生成 toast 中的终止/取消按钮 HTML
  * @param id - 按钮的 DOM id
  * @param label - 按钮文本
  */
 export function renderStopButton_ACU(id: string, label: string): string {
-  return `<button id="${escapeHtml_ACU(id)}" style="border: 1px solid #ffc107; color: #ffc107; background: transparent; padding: 5px 10px; border-radius: 4px; cursor: pointer; float: right; margin-left: 15px; font-size: 0.9em; transition: all 0.2s ease;" onmouseover="this.style.backgroundColor='#ffc107'; this.style.color='#1a1d24';" onmouseout="this.style.backgroundColor='transparent'; this.style.color='#ffc107';">${escapeHtml_ACU(label)}</button>`;
-}
-
-/**
- * 生成正文替换 toast 中的"重新优化"按钮 HTML
- */
-export function renderReoptButton_ACU(): string {
-  return `<button id="acu-opt-toast-reoptimize" style="border: 1px solid var(--acu-accent, #7d4940); color: var(--acu-accent, #7d4940); background: transparent; padding: 5px 10px; border-radius: 1px; cursor: pointer; float: right; margin-left: 15px; font-size: 0.85em; font-family: inherit;" onmouseover="this.style.backgroundColor='var(--acu-accent, #7d4940)'; this.style.color='var(--acu-bg-0, #24221f)';" onmouseout="this.style.backgroundColor='transparent'; this.style.color='var(--acu-accent, #7d4940)';">🔄 重新优化</button>`;
+  return renderToastActionButton_ACU(id, label);
 }
