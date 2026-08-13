@@ -9,9 +9,6 @@ const { mockSaveSettings, mockSettings } = vi.hoisted(() => {
     storageMode: 'native',
     charCardPrompt: [{ role: 'USER', content: 'custom-prompt', mainSlot: 'A' }],
     mergeSummaryPrompt: 'custom-merge-prompt',
-    strictJsonTableFillEnabled: false,
-    strictJsonCharCardPrompt: [],
-    strictJsonSqlCharCardPrompt: [],
     importSplitSize: 10000,
   };
   return {
@@ -50,7 +47,6 @@ beforeEach(() => {
   mockSettings.storageMode = 'native';
   mockSettings.charCardPrompt = [{ role: 'USER', content: 'custom-prompt', mainSlot: 'A' }];
   mockSettings.mergeSummaryPrompt = 'custom-merge-prompt';
-  mockSettings.strictJsonTableFillEnabled = false;
   mockSettings.importSplitSize = 10000;
   mockSaveSettings.mockReset();
   mockSaveSettings.mockReturnValue({ saved: true, storageType: 'tavern' });

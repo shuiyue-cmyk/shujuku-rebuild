@@ -11,9 +11,7 @@ import { isGenerateRawAvailable_ACU, generateRaw_ACU, sendConnectionManagerReque
 import { logDebug_ACU, logError_ACU, logWarn_ACU, normalizeExcludeRules_ACU } from '../../../shared/utils';
 import { applyExcludeRulesToText_ACU, getLatestAIMessageContent_ACU, getPlotFromHistory_ACU, parseIfBlocksInContent_ACU, parseRandomTags_ACU, replaceRandomVariables_ACU } from '../../runtime/helpers-remaining';
 import { replaceDbSqlVariables } from '../../runtime/template-vars/sql-query-var';
-import { DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU, DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU } from '../../../shared/defaults-json.js';
 import { isSqliteMode } from '../../table/storage-mode';
-import { cloneStrictPromptSegments_ACU } from './strict-json-table-fill';
 
 /**
  * The request reached a provider successfully, but its body contained no
@@ -38,27 +36,6 @@ export class RetryableAiResponseError_ACU extends Error {
     return 'user';
   }
 
-  const STRICT_JSON_PROMPT_LEGACY_TOKEN_DENYLIST_ACU = [
-    'insertRow',
-    'updateRow',
-    'deleteRow',
-    'tableId',
-    'rowIndex',
-  ];
-
-  function warnIfStrictJsonPromptPolluted_ACU(messages: Array<{ role: string; content: string }>) {
-    const hits = new Set<string>();
-    messages.forEach((message) => {
-      const content = String(message?.content || '');
-      STRICT_JSON_PROMPT_LEGACY_TOKEN_DENYLIST_ACU.forEach((token) => {
-        if (content.includes(token)) hits.add(token);
-      });
-    });
-    if (hits.size > 0) {
-      logWarn_ACU(`[严格JSON填表] strict prompt 中检测到 legacy 协议关键词污染：${Array.from(hits).join(', ')}`);
-    }
-  }
-
   export async function callCustomOpenAI_ACU(dynamicContent: any, abortController: AbortController | null = null, options: any = null) {
     const localAbortController = abortController || new AbortController();
     _set_currentAbortController_ACU(localAbortController);
@@ -76,13 +53,8 @@ export class RetryableAiResponseError_ACU extends Error {
     const effectiveTavernProfile = apiPresetConfig.tavernProfile;
 
     const messages: Array<{ role: string; content: string }> = [];
-    const strictJsonFillEnabled = settings_ACU.strictJsonTableFillEnabled === true;
     const sqliteMode = isSqliteMode();
-    const charCardPromptSetting = strictJsonFillEnabled
-        ? (sqliteMode
-            ? cloneStrictPromptSegments_ACU(settings_ACU.strictJsonSqlCharCardPrompt, DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU)
-            : cloneStrictPromptSegments_ACU(settings_ACU.strictJsonCharCardPrompt, DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU))
-        : settings_ACU.charCardPrompt;
+    const charCardPromptSetting = settings_ACU.charCardPrompt;
 
     let promptSegments = [];
     if (Array.isArray(charCardPromptSetting)) {
@@ -181,10 +153,6 @@ export class RetryableAiResponseError_ACU extends Error {
         }
         
         messages.push({ role: normalizeRoleForApi_ACU(segment.role), content: finalContent });
-    }
-
-    if (strictJsonFillEnabled) {
-        warnIfStrictJsonPromptPolluted_ACU(messages);
     }
 
     logDebug_ACU('Final messages array being sent to API:', messages);

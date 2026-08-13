@@ -13,126 +13,11 @@ import DEFAULT_FILL_PROMPT_ACU from './table-defaults/fill-prompt.js';
   // 破限版默认提示词本身即为 SQL 格式，SQL 版本与基础版本一致
   export const DEFAULT_CHAR_CARD_PROMPT_SQL_ACU = DEFAULT_CHAR_CARD_PROMPT_ACU;
 
-
-  function replaceSection_ACU(content, startMarker, endMarker, replacement) {
-    const start = content.indexOf(startMarker);
-    const end = content.indexOf(endMarker, start + startMarker.length);
-    if (start < 0 || end < 0) return content;
-    return `${content.slice(0, start)}${replacement}${content.slice(end)}`;
-  }
-  function buildStrictJsonNativePrompt_ACU(content) {
-    let next = replaceSection_ACU(content, '## 输出格式（严格执行）', '## 关键规则', `## 输出格式（严格执行）
-
-回复内容必须是一个合法 JSON 对象，且只能包含这个 JSON 对象本身；不要输出 <thought>、<content>、<tableEdit> 或 Markdown 代码块。
-
-你必须在内部完成原本 <thought> 中要求的全部分析，但不要把思考过程写入最终回复。
-
-JSON 根对象必须使用以下结构：
-{"format":"table_edit_ops_v1","ops":[]}
-
-ops 只允许 insert、update、delete 三种操作。
-
-insert 格式：
-{"op":"insert","sheet":"表格名","row":{"字段名":"字段值"}}
-
-update 格式：
-{"op":"update","sheet":"表格名","where":{"字段名":"定位值"},"set":{"字段名":"新值"}}
-
-delete 格式：
-{"op":"delete","sheet":"表格名","where":{"字段名":"定位值"}}
-
-如果没有任何修改，输出：
-{"format":"table_edit_ops_v1","ops":[]}
-
-针对纪要表的额外规则：如果<当前表格数据>里存在纪要表，那么本轮就必须对其进行插入一条新的总结记录。
-日志与纪要语气校准：你在思考纪要时，必须区分“正常恋爱互动”与“暗黑主从文风”。你可以使用正常的交流词汇（如：提议、要求、同意、拒绝、引导、配合、安抚），但【绝对禁止】将情侣间的普通调情与互动过度解读为“权力掌控”、“剥夺反抗”、“精神支配”、“屈服”等单向压迫词汇！
-
-`);
-    next = next.replace('5. 使用insertRow添加新行，updateRow更新已有行，deleteRow删除行', '5. 使用 JSON ops 添加、更新或删除行：insert 表示添加新行，update 表示更新已有行，delete 表示删除行');
-    next = replaceSection_ACU(next, '## 格式要点', '现在开始按此格式执行填表任务。', `## JSON 格式要点
-- 必须输出合法 JSON 对象，不能在 JSON 前后添加任何说明文字
-- JSON 字符串必须使用双引号
-- sheet 必须从当前表格数据列出的表格名或 sheet 标识中复制
-- row、where、set 里的字段名必须从对应表格表头中逐字复制，禁止使用数字列号
-- update/delete 必须使用 where 定位唯一行；如果可能匹配多行，必须增加定位字段
-- 字段值内部需要出现双引号时必须按 JSON 规则转义为\\"
-- 字段值内部需要换行时必须写成\\n，不能直接输出真实换行
-- 如果一句话里含有很多引号，优先改写措辞，尽量避免在 JSON 值里直接嵌套引号
-
-`);
-    return next.replace('现在开始按此格式执行填表任务。', '现在开始按此 JSON 格式执行填表任务。');
-  }
-
-  function buildStrictJsonSqlPrompt_ACU(content) {
-    let next = replaceSection_ACU(content, '## 输出格式（严格执行）', '## 关键规则', `## 输出格式（严格执行）
-
-回复内容必须是一个合法 JSON 对象，且只能包含这个 JSON 对象本身；不要输出 <thought>、<content>、<tableEdit> 或 Markdown 代码块。
-
-你必须在内部完成原本 <thought> 中要求的全部分析，但不要把思考过程写入最终回复。
-
-JSON 根对象必须使用以下结构：
-{"format":"table_edit_sql_v1","sql":""}
-
-sql 必须是字符串，内容是按下文 DDL、Note 和 SQL 编写原则生成的完整 SQL 脚本，可包含多条 INSERT、UPDATE 或 DELETE。
-
-如果没有任何修改，输出：
-{"format":"table_edit_sql_v1","sql":""}
-
-针对纪要表的额外规则：如果<当前表格数据>里存在纪要表，那么本轮就必须对其进行插入一条新的总结记录。
-日志与纪要语气校准：你在思考纪要时，必须区分"正常恋爱互动"与"暗黑主从文风"。你可以使用正常的交流词汇（如：提议、要求、同意、拒绝、引导、配合、安抚），但【绝对禁止】将情侣间的普通调情与互动过度解读为"权力掌控"、"剥夺反抗"、"精神支配"、"屈服"等单向压迫词汇！
-
-`);
-    next = replaceSection_ACU(next, '## SQL 格式要点', '现在开始按此格式执行填表任务。', `## SQL 与 JSON 格式要点
-- 字符串值使用单引号包裹，如 '角色A'
-- 如果字符串值内部包含单引号，使用两个单引号转义，如 '秉持''谁欺负我就打谁''的信念'
-- 数值列直接写数字，不加引号
-- 每条 SQL 语句以分号结尾
-- 多条语句之间用换行分隔；写入 JSON 的 sql 字符串时，换行必须按 JSON 规则表示为\\n
-- 表名和列名使用英文（参照 CREATE TABLE 中的定义）
-- 禁止使用 BEGIN/COMMIT/ROLLBACK 等事务语句，系统会自动处理事务
-- 禁止使用 DROP TABLE / ALTER TABLE / CREATE TABLE 等结构变更语句
-- 必须输出合法 JSON 对象，不能在 JSON 前后添加任何说明文字
-- JSON 字符串必须使用双引号；sql 字符串内部如需双引号必须按 JSON 规则转义为\\"
-
-`);
-    return next.replace('现在开始按此格式执行填表任务。', '现在开始按此 JSON 格式执行填表任务。');
-  }
-
-
-  export const DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU = DEFAULT_CHAR_CARD_PROMPT_ACU.map(segment => {
-    if (segment.mainSlot === 'A' || segment.isMain) {
-      return {
-        ...segment,
-        content: buildStrictJsonNativePrompt_ACU(segment.content)
-      };
-    }
-    if (segment.isMain2) return { ...segment };
-    if (segment.role === 'assistant' && typeof segment.content === 'string' && segment.content.includes('<thought>')) {
-      return { ...segment, content: '收到，我将只返回指定 JSON 对象。' };
-    }
-    return { ...segment };
-  });
-
-  export const DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU = DEFAULT_CHAR_CARD_PROMPT_SQL_ACU.map(segment => {
-    if (segment.mainSlot === 'A' || segment.isMain) {
-      return {
-        ...segment,
-        content: buildStrictJsonSqlPrompt_ACU(segment.content)
-      };
-    }
-    if (segment.isMain2) return { ...segment };
-    if (segment.role === 'assistant' && typeof segment.content === 'string' && segment.content.includes('<thought>')) {
-      return { ...segment, content: '收到，我将只返回指定 JSON 对象。' };
-    }
-    return { ...segment };
-  });
-
   // --- [默认表模板] 从拆分的独立文件组装 ---
   import { buildDefaultTableTemplateString_ACU, buildOriginalDefaultTableTemplateString_ACU } from "./table-defaults/index.js";
   export const ORIGINAL_DEFAULT_TABLE_TEMPLATE_ACU = buildOriginalDefaultTableTemplateString_ACU();
   export const DEFAULT_TABLE_TEMPLATE_ACU = buildDefaultTableTemplateString_ACU();
   export let TABLE_TEMPLATE_ACU = DEFAULT_TABLE_TEMPLATE_ACU;
-
 
   // --- [剧情推进] 内置预设：时间召回 ---
   export const DEFAULT_TIME_RECALL_PLOT_PRESET_ACU = {
@@ -340,43 +225,17 @@ sql 必须是字符串，内容是按下文 DDL、Note 和 SQL 编写原则生�
 
   // --- [剧情推进] 默认设置 ---
   export const DEFAULT_PLOT_SETTINGS_ACU = {
+  ...DEFAULT_TIME_RECALL_PLOT_PRESET_ACU,
   "enabled": true,
-  "prompts": [
-    {
-      "id": "mainPrompt",
-      "name": "主系统提示词",
-      "role": "system",
-      "content": "以下是你可能会用到的背景设定，你只需要参考其中的剧情设定内容即可，其他无关内容请直接忽视：\n<背景设定>\n<User基础设定>\n$U\n</User基础设定>\n$C\n$1\n</背景设定>\n\n============================此处为分割线====================\n你是一个负责进行记忆索引召回的AI，你需要对接下来的剧情进行思考，找出相关的记忆编码索引并输出。\n\n以下是供你参考的前文故事情节（仅包含历史AI输出，不含任何用户输入）：\n<前文上下文>\n$7\n</前文上下文>\n\n以下是<总结大纲>的具体内容（如果为空说明暂未有剧情大纲编码索引）：\n<总结大纲>\n$5\n</总结大纲>",
-      "deletable": false
-    },
-    {
-      "id": "systemPrompt",
-      "name": "拦截任务详细指令",
-      "role": "user",
-      "content": "---BEGIN PROMPT---\n[System]\n你是执行型 AI，专注于记忆索引召回与补充信息提取。\n必须按\"召回(recall) + 补充(supplement)\"双系统架构工作。\n\n[Input]\n- TASK: 记忆索引召回与补充信息提取\n- BACKGROUND: <背景设定>（世界观、角色人设、基本规则）\n- PREVIOUS_PLOT: <前文剧情>（上轮剧情摘要或关键事件）\n- USER_INPUT: <用户输入>（本轮玩家/用户的行动或对话）\n- SUMMARY_DATA: <总结大纲>（记忆库，作为recall唯一真值来源）\n\n============================================================\n【核心规则 - HARD GATE】\n============================================================\n\n**一、记忆召回（recall）- 唯一来源：总结大纲**\n\n1. **唯一真值来源**：只能从<总结大纲>索引AM编码\n2. **数量规则**：\n   - 大纲条目≥zhaohui条：选择与当前剧情最相关的zhaohui条，用以补充剧情细节，禁止偷懒取连续记忆，选取的记忆一定要说明为什么要相关，在每个编码索引后用括号表示，理由简短，但前后逻辑要通顺。\n   - 大纲条目<zhaohui条：全部召回（不需要补足zhaohui条，recall只来自大纲）\n   - **大纲为空时**：recall输出0条，这是正常的\n3. **绝对禁止**：从背景设定/历史记录/其他来源补充到recall中\n4. **输出格式**：AM0001, AM0002, ...（逗号分隔的AM编码，字典序递增）\n\n**二、补充信息（supplement）- 每轮强制输出**\n\n1. **HARD GATE**：supplement是独立系统，与recall完全分离，每轮必须输出6-8条\n2. **唯一来源**：只能从<背景设定>中提取与当前剧情相关的设定\n3. **数量**：强制6-8条，即使recall为0也必须输出supplement\n4. **格式**：- [背景设定] 内容描述\n5. **与recall的关系**：supplement不是recall的补充，而是独立的背景设定提取系统\n\n**三、两个系统完全独立**\n- recall只从总结大纲索引\n- supplement只从背景设定提取\n- 两者来源严格分离，互不干扰\n\n============================================================\n【输出格式】\n============================================================\n<thought>\n一步一步地进行思考，针对每一步输出显示的思维链\n</thought>\n<content>\n\n**【故事发展推测】**\n[2-4句话，结合上下文和背景设定，简短推测用户输入可能会造成什么样的剧情发展、需要哪些记忆支撑]\n\n---\n\n<recall>\n# 记忆召回\n## 从总结大纲索引\nAMxxxx, AMxxxx, ...\n\n---\n合计：X条（全部来自总结大纲）\n</recall>\n\n<supplement>\n# 补充信息（6-8条）\n- [背景设定] 内容描述\n- [背景设定] 内容描述\n- [背景设定] 内容描述\n- [背景设定] 内容描述\n- [背景设定] 内容描述\n- [背景设定] 内容描述\n</supplement>\n\n</content>\n\n============================================================\n【常见错误（绝对禁止）】\n============================================================\n\nrecall为0时supplement也不输出（supplement是独立的，必须每轮输出6-8条）\n[背景设定] XXX 出现在recall中\n大纲0条 + 补充zhaohui条 这样的recall输出\nrecall条目数<zhaohui时从背景设定补足\nsupplement来源不是背景设定\nsupplement数量少于6条或多于8条\n\n---END PROMPT---",
-      "deletable": false
-    },
-    {
-      "id": "finalSystemDirective",
-      "name": "最终注入指令",
-      "role": "system",
-      "content": "以下是用户的本轮输入：\n<本轮用户输入>\n$8\n</本轮用户输入>\n\n以下输入的代码为接下来剧情相关记忆条目的对应的索引编码。注意它们仅为相关的过去记忆，你要结合它们里边的信息合理生成接下来的剧情：",
-      "deletable": false
-    }
-  ],
   "rateMain": 1,
   "ratePersonal": 1,
   "rateErotic": 0,
   "rateCuckold": 1,
-  "recallCount": 20,
-  "extractTags": "recall,supplement",
-  "extractInjectTags": "",
-  "contextExtractTags": "",
-  "contextExtractRules": [],
-  "contextExcludeTags": "",
-  "contextExcludeRules": [],
+
   "minLength": 0,
   "contextTurnCount": 3,
+  "contextExtractTags": "",
+  "contextExcludeTags": "",
   "worldbookEnabled": true,
   "worldbookSource": "character",
   "selectedWorldbooks": [],
@@ -594,7 +453,6 @@ $CONTENT
     }
   ];
 
-
   // [从 02_storage_and_profile.js:2773 迁移] 合并纪要默认 prompt
   export const DEFAULT_MERGE_SUMMARY_PROMPT_ACU = `---BEGIN PROMPT---\n\n[System]\n你是\"填表美杜莎\"——一个执行型表格编辑AI。你必须按照\"线性化 CoAT 精简推理（Analyze→Draft→Select→Audit→Expand→Verify→Output）\"工作流程，对输入数据进行合并、精简并生成表格插入指令。\n\n严禁输出冗长逐字推理链。对外输出采用 <thought> + <tableEdit> 双壳结构。\n严禁输出\"我将重复以上步骤直到…\"等代码式循环描述；你只能在一次输出里给出线性化的推理日志与最终指令。\n\n============================================================\n\n[Input]\n- TASK: 在 <已精简的数据> 基础上，将本批次的 <需要精简的纪要数据> 融合进去，对整体内容进行重新梳理和精简，最终通过 insertRow 指令写入表格。\n- TARGET_COUNT: $TARGET_COUNT（目标条目数）\n\n- 需要精简的纪要数据:\n$A\n\n- 已精简的数据（基础底稿，新增编码索引从 AM0001 开始，每次 +1）:\n$BASE_DATA\n\n============================================================\n\n[Core Tables]
 你需要维护一个表格：\n1. **纪要表 (tableIndex=0)**：记录关键剧情纪要，包含以下列：\n   - 列1: 时间跨度 - 本轮事件发生的精确时间范围\n   - 列2: 地点 - 本轮事件发生的地点，从大到小描述\n   - 列3: 纪要 - 以第三方视角客观记录本轮事件（≥300字）\n   - 列4: 概要 - 一句话概括纪要内容（≤30字）\n   - 列5: 编码索引 - 格式为 AMXXXX，XXXX从0001递增\n\n============================================================\n\n[Constraints — 硬约束，违反任意一条即判定输出无效]\n\nC1-编码索引：每条纪要的编码索引（AM0001, AM0002, AM0003...）必须严格递增。\nC2-纪要字数：每条纪要内容 ≥ 300 个中文字符 且 ≤ 400 个中文字符。\nC3-概要字数：每条概要内容 ≤ 30 个中文字符。\nC4-条目数量：精简后的条目总数 = $TARGET_COUNT 条。\nC5-编码连续：索引从 AM0001 起始，严格递增（AM0001→AM0002→AM0003→...），不跳号、不重复。\nC6-内容完整：原始数据中的关键剧情节点、重要人物行为、因果关系不得丢失。\nC7-时序正确：条目按时间线顺序排列，不得错乱。\nC8-指令格式：仅使用 insertRow 操作，参数中 colIndex 必须是带双引号的字符串。\n\n============================================================\n\n[Scoring — 精简质量评估量表]\n\n每完成一轮草稿后，按以下维度自检打分（Yes/No → 计数 → 0~1 分）：\n\n(1) Fg — 生成质量分（0~1）：\n- g1 约束满足（0~1）：C1~C8 是否全部满足；违反关键约束直接 = 0\n- g2 信息保真（0~1）：关键剧情、人物、因果是否保留完整\n- g3 精简有效（0~1）：是否去除了冗余/重复内容而非截断重要信息\n- g4 时序连贯（0~1）：时间线是否合理无跳跃\n- g5 语言质量（0~1）：表述通顺、无歧义、无矛盾\n\nFg = 0.30*g1 + 0.25*g2 + 0.20*g3 + 0.15*g4 + 0.10*g5\n\n(2) 通过阈值：Fg ≥ 0.80 方可输出最终指令；否则必须触发修正。\n\n============================================================\n\n[Search Controller — 线性化精简推理流程]\n\n你必须在 <thought> 中按以下 **严格顺序** 执行单轮或多轮推理，每轮包含：\n\n── Round N ──\n\nStep 1 — Analyze（分析）<|analyze|>\n- 盘点 <已精简的数据> 中已有多少条目、当前索引编号\n- 盘点 <需要精简的纪要数据> 中有多少条原始信息\n- 计算需要新增的条目数 = $TARGET_COUNT - 已有条目数\n- 识别数据中的重叠内容、可合并段落、时间线断点\n\nStep 2 — Draft（草稿生成）<|draft|>\n- 生成 2~3 种不同的合并/精简策略草稿（每条策略 ≤ 20 字概括）\n- 策略之间角度明显不同（如：按时间段合并 / 按人物线合并 / 按事件因果链合并）\n\nStep 3 — Select（选择最优策略）<|select|>\n- 对每个草稿策略逐条检查：\n· 约束满足率：能否满足 C1~C8？\n· 信息保留度：哪种策略丢失最少关键信息？\n· 字数可控性：哪种策略最容易控制在字数范围内？\n- 选出 BestStrategy 并简述理由（1~2 句）\n\nStep 4 — Expand（执行精简）<|expand|>\n- 按 BestStrategy 将原始数据合并、压缩为目标条目\n- 为每条生成：编码索引 + 时间跨度 + 地点 + 纪要 + 概要\n- 严格遵循字数约束（纪要 ≥300 字，概要 ≤30 字）\n\nStep 5 — Audit（硬约束审计）<|audit|>\n- 逐条核查 C1~C8：\n· C1：编码索引是否严格递增？\n· C2：每条纪要是否在 300~400 字之间？（逐条估算）\n· C3：每条概要是否 ≤30 字？（逐条估算）\n· C4：总条目数是否 = $TARGET_COUNT？\n· C5：索引是否从 AM0001 连续递增？\n· C6：是否有关键剧情被遗漏？\n· C7：时序是否正确？\n· C8：insertRow 语法是否正确？\n- 若任一约束不满足 → 标记问题 → 回到 Step 4 修正（最多修正 2 轮）\n\nStep 6 — Score（打分判定）<|reflect|>\n- 按评分量表对 g1~g5 逐项打分\n- 计算 Fg\n- Fg ≥ 0.80 → 进入输出阶段\n- Fg < 0.80 → 记录教训 → 修正后重新评估（最多 1 次修正）\n\n── 终止条件 ──\n- 全部约束通过 + Fg ≥ 0.80 → 输出 <tableEdit>\n- 修正轮次超限 → 输出当前最优结果并在 thought 中标注\"预算终止\"\n\n============================================================\n\n[Action-Thought Protocol]\n- meta-action 标记（<|analyze|> <|draft|> <|select|> <|expand|> <|audit|> <|reflect|>）仅在 <thought> 内的步骤标题中使用，用于标识当前认知阶段。\n- <tableEdit> 内严禁出现任何 meta-action 标记。\n- <thought> 中的推理必须精炼简洁，但每个步骤不可跳过。\n\n============================================================\n\n[Output Format — 严格遵守]\n\n输出必须且只能包含以下两个块，除此之外不得输出任何额外文字：\n\n<thought>\n（精炼的推理过程，按 Round/Step 展开：\n- Step 1 Analyze: 数据盘点结论\n- Step 2 Draft: 2~3 个策略草稿\n- Step 3 Select: 选择理由\n- Step 4 Expand: 精简执行要点（无需列出完整内容）\n- Step 5 Audit: 逐条约束核查结果（通过/不通过）\n- Step 6 Score: g1~g5 打分 → Fg 值 → 判定\n不得写成冗长内心独白。）\n</thought>\n\n<tableEdit>\n<!--\n\ninsertRow(0, {\"0\":\"AM0001\", \"1\":\"时间跨度\", \"2\":\"地点\", \"3\":\"纪要内容（≥300字）\", \"4\":\"概要（≤30字）\", \"5\":\"编码索引\"})\n\n...（生成$TARGET_COUNT条的指令）\n\n-->\n</tableEdit>\n\n============================================================\n\n[Critical Reminders]\n\n1. insertRow 的第一个参数是 tableIndex（0=纪要表），不是行号。\n2. colIndex 必须用双引号包裹的字符串：\"0\"、\"1\"、\"2\"等。\n3. 纪要内容（列3）需 ≥300 字，概要（列4）需 ≤30 字。\n4. 纯文本输出，严禁使用 markdown 代码块包裹整个输出。\n5. 严禁在 <tableEdit> 块外添加任何解释性文字。\n\n---END PROMPT---`;
@@ -602,6 +460,5 @@ $CONTENT
   // --- [SQL 版合并纪要默认 prompt] ---
   // SQLite 模式下使用，将 insertRow DSL 格式改为 SQL INSERT 格式
   export const DEFAULT_MERGE_SUMMARY_PROMPT_SQL_ACU = `---BEGIN PROMPT---\n\n[System]\n你是\"填表美杜莎\"——一个执行型表格编辑AI。你必须按照\"线性化 CoAT 精简推理（Analyze→Draft→Select→Audit→Expand→Verify→Output）\"工作流程，对输入数据进行合并、精简并生成 SQL 插入语句。\n\n严禁输出冗长逐字推理链。对外输出采用 <thought> + <tableEdit> 双壳结构。\n严禁输出\"我将重复以上步骤直到…\"等代码式循环描述；你只能在一次输出里给出线性化的推理日志与最终指令。\n\n============================================================\n\n[Input]\n- TASK: 在 <已精简的数据> 基础上，将本批次的 <需要精简的纪要数据> 融合进去，对整体内容进行重新梳理和精简，最终通过 SQL INSERT 语句写入表格。\n- TARGET_COUNT: $TARGET_COUNT（目标条目数）\n\n- 需要精简的纪要数据:\n$A\n\n- 已精简的数据（基础底稿，新增编码索引从 AM0001 开始，每次 +1）:\n$BASE_DATA\n\n============================================================\n\n[Core Tables]\n你需要维护一个表格：\n1. **纪要表 (chronicle)**：记录关键剧情纪要，包含以下列：\n   - row_id: 行号（INTEGER PRIMARY KEY）\n   - time_span: 时间跨度 - 本轮事件发生的精确时间范围\n   - location: 地点 - 本轮事件发生的地点，从大到小描述\n   - chronicle_entry: 纪要 - 以第三方视角客观记录本轮事件（≥300字）\n   - summary: 概要 - 一句话概括纪要内容（≤30字）\n   - code_index: 编码索引 - 格式为 AMXXXX，XXXX从0001递增\n\n============================================================\n\n[Constraints — 硬约束，违反任意一条即判定输出无效]\n\nC1-编码索引：每条纪要的编码索引（AM0001, AM0002, AM0003...）必须严格递增。\nC2-纪要字数：每条纪要内容 ≥ 300 个中文字符 且 ≤ 400 个中文字符。\nC3-概要字数：每条概要内容 ≤ 30 个中文字符。\nC4-条目数量：精简后的条目总数 = $TARGET_COUNT 条。\nC5-编码连续：索引从 AM0001 起始，严格递增（AM0001→AM0002→AM0003→...），不跳号、不重复。\nC6-内容完整：原始数据中的关键剧情节点、重要人物行为、因果关系不得丢失。\nC7-时序正确：条目按时间线顺序排列，不得错乱。\nC8-指令格式：仅使用 INSERT INTO 语句，字符串值使用单引号包裹，每条语句以分号结尾。\n\n============================================================\n\n[Scoring — 精简质量评估量表]\n\n每完成一轮草稿后，按以下维度自检打分（Yes/No → 计数 → 0~1 分）：\n\n(1) Fg — 生成质量分（0~1）：\n- g1 约束满足（0~1）：C1~C8 是否全部满足；违反关键约束直接 = 0\n- g2 信息保真（0~1）：关键剧情、人物、因果是否保留完整\n- g3 精简有效（0~1）：是否去除了冗余/重复内容而非截断重要信息\n- g4 时序连贯（0~1）：时间线是否合理无跳跃\n- g5 语言质量（0~1）：表述通顺、无歧义、无矛盾\n\nFg = 0.30*g1 + 0.25*g2 + 0.20*g3 + 0.15*g4 + 0.10*g5\n\n(2) 通过阈值：Fg ≥ 0.80 方可输出最终指令；否则必须触发修正。\n\n============================================================\n\n[Search Controller — 线性化精简推理流程]\n\n你必须在 <thought> 中按以下 **严格顺序** 执行单轮或多轮推理，每轮包含：\n\n── Round N ──\n\nStep 1 — Analyze（分析）<|analyze|>\n- 盘点 <已精简的数据> 中已有多少条目、当前索引编号\n- 盘点 <需要精简的纪要数据> 中有多少条原始信息\n- 计算需要新增的条目数 = $TARGET_COUNT - 已有条目数\n- 识别数据中的重叠内容、可合并段落、时间线断点\n\nStep 2 — Draft（草稿生成）<|draft|>\n- 生成 2~3 种不同的合并/精简策略草稿（每条策略 ≤ 20 字概括）\n- 策略之间角度明显不同（如：按时间段合并 / 按人物线合并 / 按事件因果链合并）\n\nStep 3 — Select（选择最优策略）<|select|>\n- 对每个草稿策略逐条检查：\n· 约束满足率：能否满足 C1~C8？\n· 信息保留度：哪种策略丢失最少关键信息？\n· 字数可控性：哪种策略最容易控制在字数范围内？\n- 选出 BestStrategy 并简述理由（1~2 句）\n\nStep 4 — Expand（执行精简）<|expand|>\n- 按 BestStrategy 将原始数据合并、压缩为目标条目\n- 为每条生成：编码索引 + 时间跨度 + 地点 + 纪要 + 概要\n- 严格遵循字数约束（纪要 ≥300 字，概要 ≤30 字）\n\nStep 5 — Audit（硬约束审计）<|audit|>\n- 逐条核查 C1~C8：\n· C1：编码索引是否严格递增？\n· C2：每条纪要是否在 300~400 字之间？（逐条估算）\n· C3：每条概要是否 ≤30 字？（逐条估算）\n· C4：总条目数是否 = $TARGET_COUNT？\n· C5：索引是否从 AM0001 连续递增？\n· C6：是否有关键剧情被遗漏？\n· C7：时序是否正确？\n· C8：INSERT INTO 语法是否正确？字符串值是否用单引号包裹？\n- 若任一约束不满足 → 标记问题 → 回到 Step 4 修正（最多修正 2 轮）\n\nStep 6 — Score（打分判定）<|reflect|>\n- 按评分量表对 g1~g5 逐项打分\n- 计算 Fg\n- Fg ≥ 0.80 → 进入输出阶段\n- Fg < 0.80 → 记录教训 → 修正后重新评估（最多 1 次修正）\n\n── 终止条件 ──\n- 全部约束通过 + Fg ≥ 0.80 → 输出 <tableEdit>\n- 修正轮次超限 → 输出当前最优结果并在 thought 中标注\"预算终止\"\n\n============================================================\n\n[Action-Thought Protocol]\n- meta-action 标记（<|analyze|> <|draft|> <|select|> <|expand|> <|audit|> <|reflect|>）仅在 <thought> 内的步骤标题中使用，用于标识当前认知阶段。\n- <tableEdit> 内严禁出现任何 meta-action 标记。\n- <thought> 中的推理必须精炼简洁，但每个步骤不可跳过。\n\n============================================================\n\n[Output Format — 严格遵守]\n\n输出必须且只能包含以下两个块，除此之外不得输出任何额外文字：\n\n<thought>\n（精炼的推理过程，按 Round/Step 展开：\n- Step 1 Analyze: 数据盘点结论\n- Step 2 Draft: 2~3 个策略草稿\n- Step 3 Select: 选择理由\n- Step 4 Expand: 精简执行要点（无需列出完整内容）\n- Step 5 Audit: 逐条约束核查结果（通过/不通过）\n- Step 6 Score: g1~g5 打分 → Fg 值 → 判定\n不得写成冗长内心独白。）\n</thought>\n\n<tableEdit>\nINSERT INTO chronicle (time_span, location, chronicle_entry, summary, code_index) VALUES ('时间跨度', '地点', '纪要内容（≥300字）', '概要（≤30字）', 'AM0001');\n\n...（生成$TARGET_COUNT条的 INSERT 语句）\n</tableEdit>\n\n============================================================\n\n[Critical Reminders]\n\n1. 使用标准 SQL INSERT INTO 语句，表名为 chronicle。\n2. 字符串值使用单引号包裹，如果字符串内部包含单引号，使用两个单引号转义。\n3. 纪要内容（chronicle_entry）需 ≥300 字，概要（summary）需 ≤30 字。\n4. 纯文本输出，严禁使用 markdown 代码块包裹整个输出。\n5. 严禁在 <tableEdit> 块外添加任何解释性文字。\n6. 每条 INSERT 语句以分号结尾，多条语句之间用换行分隔。\n7. INSERT 不得包含 row_id；系统会自动分配稳定行标识。\n\n---END PROMPT---`;
-
 
   export function _set_TABLE_TEMPLATE_ACU(v) { TABLE_TEMPLATE_ACU = v; }

@@ -184,9 +184,6 @@ export const TABLE_FILL_PROMPT_FORCE_DEFAULT_VERSION_ACU = 'spv8.9.2-force-defau
 // 一次性强制恢复 AI 改表助手提示词；执行后用户仍可继续自定义。
 // 空 segments 是既有契约：运行时回退到内置伪 role 默认提示词。
 export const TEMPLATE_ASSISTANT_PROMPT_FORCE_DEFAULT_VERSION_ACU = 'spv8.9.4-force-default-template-assistant-prompt';
-// 一次性关闭严格 JSON 填表：旧版本可能已保留显式开启状态；迁移完成后，用户仍可在高级设置中自行重新开启。
-export const STRICT_JSON_TABLE_FILL_FORCE_DISABLE_VERSION_ACU = 'spv8.9.3-force-disable-strict-json-table-fill';
-
 
 // --- 交火模式纪要索引全局默认配置（独立于世界书配置，跟随数据库全局设置） ---
 export const defaultVectorMemoryConfig_ACU = {

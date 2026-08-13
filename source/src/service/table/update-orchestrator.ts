@@ -60,7 +60,6 @@ function resolveTableApiPresetOverride_ACU(tableName: any): string {
 import { checkIfFirstTimeInit_ACU, ensureLegacyStorageMigratedBeforeWrite_ACU } from './table-service';
 import { assertSingleActiveFullCheckpointV2_ACU, assertWriteTargetNotBeforeReplayRoot_ACU, hasAnyV2Checkpoint_ACU } from './storage-frame-v2-persist';
 import { parseAndApplyTableEditsToData_ACU, prepareAIInput_ACU } from '../ai/prompt-builder';
-import { extractStrictJsonTableFillResponse_ACU } from '../ai/prompt-builder/strict-json-table-fill';
 import { isSqlContent } from '../ai/prompt-builder/table-edit-parser';
 import { buildGuidedBaseDataFromSheetGuide_ACU, getSortedSheetKeys_ACU } from '../template/chat-scope';
 import { isSqliteMode } from './storage-mode';
@@ -1015,25 +1014,11 @@ export async function collectGroupFillResponse_ACU(
             if (aiResponse && minReplyLength > 0 && aiResponse.length < minReplyLength) {
                 throw new ModelOutputRetryError_ACU(`AI回复过短 (${aiResponse.length} 字符)，低于阈值 (${minReplyLength} 字符)`);
             }
-            let normalizedAiResponse = aiResponse;
             let tableEditText = '';
-            if (settings_ACU.strictJsonTableFillEnabled === true) {
-                const extracted = extractStrictJsonTableFillResponse_ACU(aiResponse, {
-                    sqlite: isSqliteMode(),
-                    tableData: job.baseSnapshot,
-                    targetSheetKeys: job.targetSheetKeys,
-                });
-                if (!extracted.ok) {
-                    throw new ModelOutputRetryError_ACU(extracted.retryHint || extracted.error || '严格 JSON 填表响应格式无效');
-                }
-                normalizedAiResponse = extracted.normalizedResponse || aiResponse;
-                tableEditText = (extracted.tableEditText || '').trim();
-            } else {
-                if (!aiResponse || !aiResponse.includes('<tableEdit>') || !aiResponse.includes('</tableEdit>')) {
-                    throw new ModelOutputRetryError_ACU('AI响应中未找到完整有效的 <tableEdit> 标签');
-                }
-                tableEditText = (aiResponse.match(/<tableEdit>([\s\S]*?)<\/tableEdit>/i)?.[1] || '').trim();
+            if (!aiResponse || !aiResponse.includes('<tableEdit>') || !aiResponse.includes('</tableEdit>')) {
+                throw new ModelOutputRetryError_ACU('AI响应中未找到完整有效的 <tableEdit> 标签');
             }
+            tableEditText = (aiResponse.match(/<tableEdit>([\s\S]*?)<\/tableEdit>/i)?.[1] || '').trim();
             if (isSqliteMode() && tableEditText && isSqlContent(tableEditText)) {
                 try {
                     // 隐藏列保护使用请求前冻结的 live runtime schema 证据，而不是 baseSnapshot：
@@ -1047,7 +1032,7 @@ export async function collectGroupFillResponse_ACU(
                 }
             }
 
-            return { job, success: true, attempt, aiResponse: normalizedAiResponse, tableEditText };
+            return { job, success: true, attempt, aiResponse, tableEditText };
         } catch (error: any) {
             lastErrorMessage = error?.message || '未知错误';
             lastErrorCategory = error instanceof ModelOutputRetryError_ACU

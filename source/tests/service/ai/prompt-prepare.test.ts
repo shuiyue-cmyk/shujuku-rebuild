@@ -575,7 +575,6 @@ describe('prepareAIInput_ACU — 显式 tableData 模式', () => {
 
   it('SQLite prompt 明确标注 DDL 仅用于结构参考并禁止复制 CREATE', async () => {
     mockIsSqliteMode = true;
-    mockSettings.strictJsonTableFillEnabled = true;
     mockCurrentJsonTableData = {
       sheet_0: {
         uid: 'inventory',

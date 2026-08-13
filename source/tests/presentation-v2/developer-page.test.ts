@@ -18,7 +18,6 @@ function createSettings() {
     autoUpdateTokenThreshold: 500,
     tableMaxRetries: 3,
     tableEditLastPairOnly: true,
-    strictJsonTableFillEnabled: false,
     tableContextExtractTags: '',
     tableContextExtractRules: [],
     tableContextExcludeTags: '',
@@ -106,9 +105,7 @@ describe('DeveloperPage', () => {
     const text = page!.textContent || '';
     expect(text).toContain('开发者 gated 字段');
     expect(text).toContain('填表执行参数');
-    expect(text).toContain('填表高级选项');
     expect(text).toContain('旧 UI 入口');
-    expect(text).toContain('严格 JSON 填表响应');
     expect(text).toContain('最大并发更新组数');
 
     mount.__resetAcuV2MountForTests();
@@ -145,24 +142,6 @@ describe('DeveloperPage', () => {
     expect(nextPersisted?.devOptions?.legacyUiMenuVisible).toBe(false);
     expect(legacyContainer.style.display).toBe('none');
     expect(legacyContainer.getAttribute('tabindex')).toBe('-1');
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('严格 JSON 填表响应仅在高级选项中显示，切换后保存设置', async () => {
-    const { mount, settings, saveSettings } = await mountDeveloperPage();
-
-    const toggle = document.querySelector<HTMLButtonElement>(
-      'button[data-acu-toggle-key="strictJsonTableFillEnabled"]',
-    );
-    expect(toggle).not.toBeNull();
-    expect(toggle!.getAttribute('aria-checked')).toBe('false');
-
-    toggle!.click();
-    await Promise.resolve();
-
-    expect(settings.strictJsonTableFillEnabled).toBe(true);
-    expect(saveSettings).toHaveBeenCalledTimes(1);
 
     mount.__resetAcuV2MountForTests();
   });

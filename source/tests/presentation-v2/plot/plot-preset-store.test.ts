@@ -365,7 +365,7 @@ describe('usePlotPresetStore', () => {
       ratePersonal: 1,
       rateErotic: 0,
       rateCuckold: 1,
-      recallCount: 20,
+      recallCount: 25,
     });
     const { store } = await importStore(settings);
     store.refreshFromSettings();

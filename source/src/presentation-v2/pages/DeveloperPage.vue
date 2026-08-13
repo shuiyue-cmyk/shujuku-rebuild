@@ -16,18 +16,6 @@
       </AcuPanel>
 
       <AcuPanel
-        title="填表高级选项"
-        description="仅在需要严格约束模型填表响应时开启。开启后将切换到隔离提示词和严格 JSON 解析链路。"
-      >
-        <div class="acu-v2-developer-page__toggle-list">
-          <ToggleRow
-            :item="strictJsonTableFillToggle"
-            @change="settings.setStrictJsonTableFillEnabled($event)"
-          />
-        </div>
-      </AcuPanel>
-
-      <AcuPanel
         :title="developerCopy.panels.formFillRuntime.title"
         :description="developerCopy.panels.formFillRuntime.description"
       >
@@ -89,12 +77,6 @@ const toggles = computed<DeveloperFieldItem[]>(() => [
     value: devOptions.legacyUiMenuVisible.value,
   },
 ]);
-const strictJsonTableFillToggle = computed<DeveloperFieldItem>(() => ({
-  key: "strictJsonTableFillEnabled",
-  label: "严格 JSON 填表响应",
-  description: "默认关闭。开启后原生表格输出结构化操作，SQLite 输出 JSON 包裹的 SQL 脚本。",
-  value: settings.strictJsonTableFillEnabled.value,
-}));
 const maxConcurrentGroups = computed(
   () =>
     settings.numberFields.value.find(

@@ -474,45 +474,6 @@ describe('callCustomOpenAI_ACU — custom fetch 模式', () => {
     expect(overrides.stripModelPrefix).toBe(false);
   });
 
-  it('strict JSON 不自动注入 response_format，避免不兼容后端浪费重试', async () => {
-    mockSettings.strictJsonTableFillEnabled = true;
-    mockSettings.strictJsonCharCardPrompt = [
-      { role: 'USER', content: '严格 $0' },
-    ];
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: async () => ({ choices: [{ message: { content: '{"format":"table_edit_ops_v1","ops":[]}' } }] }),
-    });
-    const result = await callCustomOpenAI_ACU({ tableDataText: '表格' }, null, {
-      tableData: { sheet_0: { uid: 'sheet_0', name: '表', content: [['row_id', 'name']] } },
-      targetSheetKeys: ['sheet_0'],
-    });
-    expect(result).toBe('{"format":"table_edit_ops_v1","ops":[]}');
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-    const firstBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-    expect(firstBody.response_format).toBeUndefined();
-  });
-
-  it('strict JSON 使用隔离 prompt 且不把旧协议词注入消息', async () => {
-    mockSettings.strictJsonTableFillEnabled = true;
-    mockSettings.charCardPrompt = [{ role: 'USER', content: '<tableEdit> legacy insertRow' }];
-    // SQLite 为唯一存储模式，strict JSON 提示词恒取 SQL 变体。
-    mockSettings.strictJsonSqlCharCardPrompt = [{ role: 'USER', content: 'strict json only $0' }];
-    mockFetch.mockResolvedValue({
-      ok: true,
-      json: async () => ({ choices: [{ message: { content: '{"format":"table_edit_ops_v1","ops":[]}' } }] }),
-    });
-    await callCustomOpenAI_ACU({ tableDataText: '表格' }, null, {
-      tableData: { sheet_0: { uid: 'sheet_0', name: '表', content: [['row_id', 'name']] } },
-      targetSheetKeys: ['sheet_0'],
-    });
-    const firstBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-    const content = firstBody.messages.map((m: any) => m.content).join('\n');
-    expect(content).toContain('strict json only 表格');
-    expect(content).not.toContain('<tableEdit>');
-    expect(content).not.toContain('insertRow');
-  });
-
 });
 
 // ═══ callCustomOpenAI_ACU — tavern 模式 ═══

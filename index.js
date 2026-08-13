@@ -1334,117 +1334,6 @@ const DEFAULT_CHAR_CARD_PROMPT_ACU = DEFAULT_FILL_PROMPT_ACU;
 // --- [SQL 版默认填表提示词] ---
 // 破限版默认提示词本身即为 SQL 格式，SQL 版本与基础版本一致
 const DEFAULT_CHAR_CARD_PROMPT_SQL_ACU = DEFAULT_CHAR_CARD_PROMPT_ACU;
-function replaceSection_ACU(content, startMarker, endMarker, replacement) {
-    const start = content.indexOf(startMarker);
-    const end = content.indexOf(endMarker, start + startMarker.length);
-    if (start < 0 || end < 0)
-        return content;
-    return `${content.slice(0, start)}${replacement}${content.slice(end)}`;
-}
-function buildStrictJsonNativePrompt_ACU(content) {
-    let next = replaceSection_ACU(content, '## 输出格式（严格执行）', '## 关键规则', `## 输出格式（严格执行）
-
-回复内容必须是一个合法 JSON 对象，且只能包含这个 JSON 对象本身；不要输出 <thought>、<content>、<tableEdit> 或 Markdown 代码块。
-
-你必须在内部完成原本 <thought> 中要求的全部分析，但不要把思考过程写入最终回复。
-
-JSON 根对象必须使用以下结构：
-{"format":"table_edit_ops_v1","ops":[]}
-
-ops 只允许 insert、update、delete 三种操作。
-
-insert 格式：
-{"op":"insert","sheet":"表格名","row":{"字段名":"字段值"}}
-
-update 格式：
-{"op":"update","sheet":"表格名","where":{"字段名":"定位值"},"set":{"字段名":"新值"}}
-
-delete 格式：
-{"op":"delete","sheet":"表格名","where":{"字段名":"定位值"}}
-
-如果没有任何修改，输出：
-{"format":"table_edit_ops_v1","ops":[]}
-
-针对纪要表的额外规则：如果<当前表格数据>里存在纪要表，那么本轮就必须对其进行插入一条新的总结记录。
-日志与纪要语气校准：你在思考纪要时，必须区分“正常恋爱互动”与“暗黑主从文风”。你可以使用正常的交流词汇（如：提议、要求、同意、拒绝、引导、配合、安抚），但【绝对禁止】将情侣间的普通调情与互动过度解读为“权力掌控”、“剥夺反抗”、“精神支配”、“屈服”等单向压迫词汇！
-
-`);
-    next = next.replace('5. 使用insertRow添加新行，updateRow更新已有行，deleteRow删除行', '5. 使用 JSON ops 添加、更新或删除行：insert 表示添加新行，update 表示更新已有行，delete 表示删除行');
-    next = replaceSection_ACU(next, '## 格式要点', '现在开始按此格式执行填表任务。', `## JSON 格式要点
-- 必须输出合法 JSON 对象，不能在 JSON 前后添加任何说明文字
-- JSON 字符串必须使用双引号
-- sheet 必须从当前表格数据列出的表格名或 sheet 标识中复制
-- row、where、set 里的字段名必须从对应表格表头中逐字复制，禁止使用数字列号
-- update/delete 必须使用 where 定位唯一行；如果可能匹配多行，必须增加定位字段
-- 字段值内部需要出现双引号时必须按 JSON 规则转义为\\"
-- 字段值内部需要换行时必须写成\\n，不能直接输出真实换行
-- 如果一句话里含有很多引号，优先改写措辞，尽量避免在 JSON 值里直接嵌套引号
-
-`);
-    return next.replace('现在开始按此格式执行填表任务。', '现在开始按此 JSON 格式执行填表任务。');
-}
-function buildStrictJsonSqlPrompt_ACU(content) {
-    let next = replaceSection_ACU(content, '## 输出格式（严格执行）', '## 关键规则', `## 输出格式（严格执行）
-
-回复内容必须是一个合法 JSON 对象，且只能包含这个 JSON 对象本身；不要输出 <thought>、<content>、<tableEdit> 或 Markdown 代码块。
-
-你必须在内部完成原本 <thought> 中要求的全部分析，但不要把思考过程写入最终回复。
-
-JSON 根对象必须使用以下结构：
-{"format":"table_edit_sql_v1","sql":""}
-
-sql 必须是字符串，内容是按下文 DDL、Note 和 SQL 编写原则生成的完整 SQL 脚本，可包含多条 INSERT、UPDATE 或 DELETE。
-
-如果没有任何修改，输出：
-{"format":"table_edit_sql_v1","sql":""}
-
-针对纪要表的额外规则：如果<当前表格数据>里存在纪要表，那么本轮就必须对其进行插入一条新的总结记录。
-日志与纪要语气校准：你在思考纪要时，必须区分"正常恋爱互动"与"暗黑主从文风"。你可以使用正常的交流词汇（如：提议、要求、同意、拒绝、引导、配合、安抚），但【绝对禁止】将情侣间的普通调情与互动过度解读为"权力掌控"、"剥夺反抗"、"精神支配"、"屈服"等单向压迫词汇！
-
-`);
-    next = replaceSection_ACU(next, '## SQL 格式要点', '现在开始按此格式执行填表任务。', `## SQL 与 JSON 格式要点
-- 字符串值使用单引号包裹，如 '角色A'
-- 如果字符串值内部包含单引号，使用两个单引号转义，如 '秉持''谁欺负我就打谁''的信念'
-- 数值列直接写数字，不加引号
-- 每条 SQL 语句以分号结尾
-- 多条语句之间用换行分隔；写入 JSON 的 sql 字符串时，换行必须按 JSON 规则表示为\\n
-- 表名和列名使用英文（参照 CREATE TABLE 中的定义）
-- 禁止使用 BEGIN/COMMIT/ROLLBACK 等事务语句，系统会自动处理事务
-- 禁止使用 DROP TABLE / ALTER TABLE / CREATE TABLE 等结构变更语句
-- 必须输出合法 JSON 对象，不能在 JSON 前后添加任何说明文字
-- JSON 字符串必须使用双引号；sql 字符串内部如需双引号必须按 JSON 规则转义为\\"
-
-`);
-    return next.replace('现在开始按此格式执行填表任务。', '现在开始按此 JSON 格式执行填表任务。');
-}
-const DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU = DEFAULT_CHAR_CARD_PROMPT_ACU.map(segment => {
-    if (segment.mainSlot === 'A' || segment.isMain) {
-        return {
-            ...segment,
-            content: buildStrictJsonNativePrompt_ACU(segment.content)
-        };
-    }
-    if (segment.isMain2)
-        return { ...segment };
-    if (segment.role === 'assistant' && typeof segment.content === 'string' && segment.content.includes('<thought>')) {
-        return { ...segment, content: '收到，我将只返回指定 JSON 对象。' };
-    }
-    return { ...segment };
-});
-const DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU = DEFAULT_CHAR_CARD_PROMPT_SQL_ACU.map(segment => {
-    if (segment.mainSlot === 'A' || segment.isMain) {
-        return {
-            ...segment,
-            content: buildStrictJsonSqlPrompt_ACU(segment.content)
-        };
-    }
-    if (segment.isMain2)
-        return { ...segment };
-    if (segment.role === 'assistant' && typeof segment.content === 'string' && segment.content.includes('<thought>')) {
-        return { ...segment, content: '收到，我将只返回指定 JSON 对象。' };
-    }
-    return { ...segment };
-});
 const ORIGINAL_DEFAULT_TABLE_TEMPLATE_ACU = buildOriginalDefaultTableTemplateString_ACU();
 const DEFAULT_TABLE_TEMPLATE_ACU = buildDefaultTableTemplateString_ACU();
 let TABLE_TEMPLATE_ACU = DEFAULT_TABLE_TEMPLATE_ACU;
@@ -1652,43 +1541,16 @@ const DEFAULT_TIME_RECALL_PLOT_PRESET_ACU = {
 const DEFAULT_BUILTIN_PLOT_PRESETS_ACU = [DEFAULT_TIME_RECALL_PLOT_PRESET_ACU];
 // --- [剧情推进] 默认设置 ---
 const DEFAULT_PLOT_SETTINGS_ACU = {
+    ...DEFAULT_TIME_RECALL_PLOT_PRESET_ACU,
     "enabled": true,
-    "prompts": [
-        {
-            "id": "mainPrompt",
-            "name": "主系统提示词",
-            "role": "system",
-            "content": "以下是你可能会用到的背景设定，你只需要参考其中的剧情设定内容即可，其他无关内容请直接忽视：\n<背景设定>\n<User基础设定>\n$U\n</User基础设定>\n$C\n$1\n</背景设定>\n\n============================此处为分割线====================\n你是一个负责进行记忆索引召回的AI，你需要对接下来的剧情进行思考，找出相关的记忆编码索引并输出。\n\n以下是供你参考的前文故事情节（仅包含历史AI输出，不含任何用户输入）：\n<前文上下文>\n$7\n</前文上下文>\n\n以下是<总结大纲>的具体内容（如果为空说明暂未有剧情大纲编码索引）：\n<总结大纲>\n$5\n</总结大纲>",
-            "deletable": false
-        },
-        {
-            "id": "systemPrompt",
-            "name": "拦截任务详细指令",
-            "role": "user",
-            "content": "---BEGIN PROMPT---\n[System]\n你是执行型 AI，专注于记忆索引召回与补充信息提取。\n必须按\"召回(recall) + 补充(supplement)\"双系统架构工作。\n\n[Input]\n- TASK: 记忆索引召回与补充信息提取\n- BACKGROUND: <背景设定>（世界观、角色人设、基本规则）\n- PREVIOUS_PLOT: <前文剧情>（上轮剧情摘要或关键事件）\n- USER_INPUT: <用户输入>（本轮玩家/用户的行动或对话）\n- SUMMARY_DATA: <总结大纲>（记忆库，作为recall唯一真值来源）\n\n============================================================\n【核心规则 - HARD GATE】\n============================================================\n\n**一、记忆召回（recall）- 唯一来源：总结大纲**\n\n1. **唯一真值来源**：只能从<总结大纲>索引AM编码\n2. **数量规则**：\n   - 大纲条目≥zhaohui条：选择与当前剧情最相关的zhaohui条，用以补充剧情细节，禁止偷懒取连续记忆，选取的记忆一定要说明为什么要相关，在每个编码索引后用括号表示，理由简短，但前后逻辑要通顺。\n   - 大纲条目<zhaohui条：全部召回（不需要补足zhaohui条，recall只来自大纲）\n   - **大纲为空时**：recall输出0条，这是正常的\n3. **绝对禁止**：从背景设定/历史记录/其他来源补充到recall中\n4. **输出格式**：AM0001, AM0002, ...（逗号分隔的AM编码，字典序递增）\n\n**二、补充信息（supplement）- 每轮强制输出**\n\n1. **HARD GATE**：supplement是独立系统，与recall完全分离，每轮必须输出6-8条\n2. **唯一来源**：只能从<背景设定>中提取与当前剧情相关的设定\n3. **数量**：强制6-8条，即使recall为0也必须输出supplement\n4. **格式**：- [背景设定] 内容描述\n5. **与recall的关系**：supplement不是recall的补充，而是独立的背景设定提取系统\n\n**三、两个系统完全独立**\n- recall只从总结大纲索引\n- supplement只从背景设定提取\n- 两者来源严格分离，互不干扰\n\n============================================================\n【输出格式】\n============================================================\n<thought>\n一步一步地进行思考，针对每一步输出显示的思维链\n</thought>\n<content>\n\n**【故事发展推测】**\n[2-4句话，结合上下文和背景设定，简短推测用户输入可能会造成什么样的剧情发展、需要哪些记忆支撑]\n\n---\n\n<recall>\n# 记忆召回\n## 从总结大纲索引\nAMxxxx, AMxxxx, ...\n\n---\n合计：X条（全部来自总结大纲）\n</recall>\n\n<supplement>\n# 补充信息（6-8条）\n- [背景设定] 内容描述\n- [背景设定] 内容描述\n- [背景设定] 内容描述\n- [背景设定] 内容描述\n- [背景设定] 内容描述\n- [背景设定] 内容描述\n</supplement>\n\n</content>\n\n============================================================\n【常见错误（绝对禁止）】\n============================================================\n\nrecall为0时supplement也不输出（supplement是独立的，必须每轮输出6-8条）\n[背景设定] XXX 出现在recall中\n大纲0条 + 补充zhaohui条 这样的recall输出\nrecall条目数<zhaohui时从背景设定补足\nsupplement来源不是背景设定\nsupplement数量少于6条或多于8条\n\n---END PROMPT---",
-            "deletable": false
-        },
-        {
-            "id": "finalSystemDirective",
-            "name": "最终注入指令",
-            "role": "system",
-            "content": "以下是用户的本轮输入：\n<本轮用户输入>\n$8\n</本轮用户输入>\n\n以下输入的代码为接下来剧情相关记忆条目的对应的索引编码。注意它们仅为相关的过去记忆，你要结合它们里边的信息合理生成接下来的剧情：",
-            "deletable": false
-        }
-    ],
     "rateMain": 1,
     "ratePersonal": 1,
     "rateErotic": 0,
     "rateCuckold": 1,
-    "recallCount": 20,
-    "extractTags": "recall,supplement",
-    "extractInjectTags": "",
-    "contextExtractTags": "",
-    "contextExtractRules": [],
-    "contextExcludeTags": "",
-    "contextExcludeRules": [],
     "minLength": 0,
     "contextTurnCount": 3,
+    "contextExtractTags": "",
+    "contextExcludeTags": "",
     "worldbookEnabled": true,
     "worldbookSource": "character",
     "selectedWorldbooks": [],
@@ -3983,8 +3845,6 @@ const TABLE_FILL_PROMPT_FORCE_DEFAULT_VERSION_ACU = 'spv8.9.2-force-default-tabl
 // 一次性强制恢复 AI 改表助手提示词；执行后用户仍可继续自定义。
 // 空 segments 是既有契约：运行时回退到内置伪 role 默认提示词。
 const TEMPLATE_ASSISTANT_PROMPT_FORCE_DEFAULT_VERSION_ACU = 'spv8.9.4-force-default-template-assistant-prompt';
-// 一次性关闭严格 JSON 填表：旧版本可能已保留显式开启状态；迁移完成后，用户仍可在高级设置中自行重新开启。
-const STRICT_JSON_TABLE_FILL_FORCE_DISABLE_VERSION_ACU = 'spv8.9.3-force-disable-strict-json-table-fill';
 // --- 交火模式纪要索引全局默认配置（独立于世界书配置，跟随数据库全局设置） ---
 const defaultVectorMemoryConfig_ACU = {
     enabled: false,
@@ -61966,12 +61826,7 @@ async function prepareAIInput_ACU(messages, updateMode = 'standard', targetSheet
     // SQLite 模式下追加 SQL 编辑格式兜底说明（Q17 确认：$0 自带格式说明）
     if (isSqliteMode() && tableDataText) {
         const identifierContract = 'SQL 表名和列名必须严格照抄上方对应 CREATE TABLE 中提供的标识符，不得翻译、缩写、猜测或改写。';
-        if (settings_ACU.strictJsonTableFillEnabled === true) {
-            tableDataText += `\n-- [SQL 编辑格式说明]\n-- 请在响应 JSON 的 sql 字符串中仅使用 INSERT INTO / INSERT OR REPLACE INTO / REPLACE INTO / UPDATE / DELETE FROM 数据变更语句\n-- ${identifierContract}\n-- 上方 CREATE TABLE 仅用于说明表结构，严禁复制或输出 CREATE、ALTER、DROP、SELECT、PRAGMA、VACUUM、BEGIN、COMMIT、ROLLBACK 等语句\n-- 所有 UPDATE 和 DELETE 必须带 WHERE 条件，优先参考各表 Note 中的 SQL 示例和 DDL 中的 UNIQUE 约束选择定位方式\n-- 普通 INSERT 必须显式列出业务列，不得包含 row_id；row_id 由系统在执行前分配稳定身份\n-- INSERT OR REPLACE / REPLACE INTO 按 SQLite 原生整行替换语义执行，应显式提供目标列及用于冲突定位的 row_id 或 UNIQUE 列\n-- 支持表达式更新（如 SET quantity = quantity + 1）、条件批量更新、CASE 条件更新标准 SQL 写法\n-- 每条语句以分号结尾，多条语句用换行分隔\n`;
-        }
-        else {
-            tableDataText += `\n-- [SQL 编辑格式说明]\n-- 请在 <tableEdit> 标签内仅使用 INSERT INTO / INSERT OR REPLACE INTO / REPLACE INTO / UPDATE / DELETE FROM 数据变更语句\n-- ${identifierContract}\n-- 上方 CREATE TABLE 仅用于说明表结构，严禁复制或输出 CREATE、ALTER、DROP、SELECT、PRAGMA、VACUUM、BEGIN、COMMIT、ROLLBACK 等语句\n-- 所有 UPDATE 和 DELETE 必须带 WHERE 条件，优先参考各表 Note 中的 SQL 示例和 DDL 中的 UNIQUE 约束选择定位方式\n-- 普通 INSERT 必须显式列出业务列，不得包含 row_id；row_id 由系统在执行前分配稳定身份\n-- INSERT OR REPLACE / REPLACE INTO 按 SQLite 原生整行替换语义执行，应显式提供目标列及用于冲突定位的 row_id 或 UNIQUE 列\n-- 支持表达式更新（如 SET quantity = quantity + 1）、条件批量更新、CASE 条件更新等标准 SQL 写法\n-- 每条语句以分号结尾，多条语句用换行分隔\n`;
-        }
+        tableDataText += `\n-- [SQL 编辑格式说明]\n-- 请在 <tableEdit> 标签内仅使用 INSERT INTO / INSERT OR REPLACE INTO / REPLACE INTO / UPDATE / DELETE FROM 数据变更语句\n-- ${identifierContract}\n-- 上方 CREATE TABLE 仅用于说明表结构，严禁复制或输出 CREATE、ALTER、DROP、SELECT、PRAGMA、VACUUM、BEGIN、COMMIT、ROLLBACK 等语句\n-- 所有 UPDATE 和 DELETE 必须带 WHERE 条件，优先参考各表 Note 中的 SQL 示例和 DDL 中的 UNIQUE 约束选择定位方式\n-- 普通 INSERT 必须显式列出业务列，不得包含 row_id；row_id 由系统在执行前分配稳定身份\n-- INSERT OR REPLACE / REPLACE INTO 按 SQLite 原生整行替换语义执行，应显式提供目标列及用于冲突定位的 row_id 或 UNIQUE 列\n-- 支持表达式更新（如 SET quantity = quantity + 1）、条件批量更新、CASE 条件更新等标准 SQL 写法\n-- 每条语句以分号结尾，多条语句用换行分隔\n`;
     }
     return {
         tableDataText,
@@ -62362,323 +62217,6 @@ function getHostRequestHeaders_ACU() {
     }
 }
 
-function jsonClone(value) {
-    return JSON.parse(JSON.stringify(value));
-}
-function stripCodeFence(text) {
-    const trimmed = String(text || '').trim();
-    const fence = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-    return fence ? fence[1].trim() : trimmed;
-}
-function tryParseJsonObject(text) {
-    const cleaned = stripCodeFence(text);
-    try {
-        return JSON.parse(cleaned);
-    }
-    catch { }
-    const start = cleaned.indexOf('{');
-    const end = cleaned.lastIndexOf('}');
-    if (start >= 0 && end > start) {
-        return JSON.parse(cleaned.slice(start, end + 1));
-    }
-    throw new Error('回复不是合法 JSON 对象。');
-}
-function isPlainObject$2(value) {
-    return !!value && typeof value === 'object' && !Array.isArray(value);
-}
-function buildSheetLookup(tableData, targetSheetKeys) {
-    const sortedKeys = getSortedSheetKeys_ACU(tableData || {});
-    const allowed = Array.isArray(targetSheetKeys) && targetSheetKeys.length > 0 ? new Set(targetSheetKeys) : null;
-    const entries = sortedKeys
-        .filter((sheetKey) => !allowed || allowed.has(sheetKey))
-        .map((sheetKey, index) => ({ sheetKey, index: sortedKeys.indexOf(sheetKey), table: tableData[sheetKey] }))
-        .filter((entry) => entry.table && Array.isArray(entry.table.content));
-    return { sortedKeys, entries };
-}
-function resolveSheet(sheet, tableData, targetSheetKeys) {
-    const name = String(sheet ?? '').trim();
-    if (!name)
-        throw new Error('sheet 不能为空。');
-    const { sortedKeys, entries } = buildSheetLookup(tableData);
-    let sheetKey;
-    try {
-        [sheetKey] = rebindSheetKeysThroughTableAliases_ACU([name], null, tableData);
-    }
-    catch (error) {
-        if (error instanceof SheetTableAliasResolutionError_ACU) {
-            throw new Error(`sheet 名称无效：${error.message}`);
-        }
-        throw error;
-    }
-    if (!sheetKey)
-        throw new Error(`sheet 未匹配到可编辑表格：${name}`);
-    const entry = entries.find(candidate => candidate.sheetKey === sheetKey);
-    if (!entry)
-        throw new Error(`sheet 未匹配到可编辑表格：${name}`);
-    if (Array.isArray(targetSheetKeys) && targetSheetKeys.length > 0 && !targetSheetKeys.includes(sheetKey)) {
-        throw new Error(`sheet 越权：${name} 解析为非目标表 ${sheetKey}。`);
-    }
-    return { ...entry, index: sortedKeys.indexOf(sheetKey) };
-}
-function getHeaderMap(table) {
-    const map = new Map();
-    getSheetColumnProjection_ACU(table).visibleColumns.forEach((column) => {
-        if (column.sourceIndex === 0)
-            return;
-        const key = String(column.header ?? '').trim();
-        if (key)
-            map.set(key, column.sourceIndex - 1);
-    });
-    return map;
-}
-function normalizeValueObject(value, headerMap, label) {
-    if (!isPlainObject$2(value))
-        throw new Error(`${label} 必须是对象。`);
-    const result = {};
-    for (const [field, raw] of Object.entries(value)) {
-        if (!headerMap.has(field))
-            throw new Error(`字段名不存在：${field}`);
-        if (raw === undefined || raw === null)
-            result[field] = '';
-        else
-            result[field] = String(raw);
-    }
-    return result;
-}
-function findUniqueRowIndex(table, where, headerMap) {
-    const whereKeys = Object.keys(where);
-    if (whereKeys.length === 0)
-        throw new Error('where 必须至少包含一个字段。');
-    const rows = Array.isArray(table.content) ? table.content.slice(1) : [];
-    const matches = [];
-    rows.forEach((row, rowIndex) => {
-        const ok = whereKeys.every((field) => {
-            const col = headerMap.get(field);
-            return col !== undefined && String(row[col + 1] ?? '') === where[field];
-        });
-        if (ok)
-            matches.push(rowIndex);
-    });
-    if (matches.length === 0)
-        throw new Error('where 未匹配到任何行。');
-    if (matches.length > 1)
-        throw new Error('where 匹配到多行，请增加定位条件。');
-    return matches[0];
-}
-function valuesToColumnObject(values, headerMap) {
-    const out = {};
-    for (const [field, value] of Object.entries(values)) {
-        const idx = headerMap.get(field);
-        if (idx === undefined)
-            throw new Error(`字段名不存在：${field}`);
-        out[String(idx)] = value;
-    }
-    return out;
-}
-function assertOnlyKeys(value, allowed, label) {
-    const allowedSet = new Set(allowed);
-    for (const key of Object.keys(value)) {
-        if (!allowedSet.has(key))
-            throw new Error(`${label} 包含不允许的字段：${key}`);
-    }
-}
-function convertStrictOpsToTableEdit_ACU(ops, tableData, targetSheetKeys) {
-    if (!Array.isArray(ops))
-        throw new Error('ops 必须是数组。');
-    const lines = [];
-    const modifiedKeys = new Set();
-    for (const op of ops) {
-        if (!isPlainObject$2(op))
-            throw new Error('ops 中的每一项都必须是对象。');
-        const kind = String(op.op || '').trim();
-        const entry = resolveSheet(op.sheet, tableData, targetSheetKeys);
-        const headerMap = getHeaderMap(entry.table);
-        if (kind === 'insert') {
-            assertOnlyKeys(op, ['op', 'sheet', 'row'], 'insert');
-            const row = normalizeValueObject(op.row, headerMap, 'row');
-            lines.push(`insertRow(${entry.index}, ${JSON.stringify(valuesToColumnObject(row, headerMap))})`);
-            modifiedKeys.add(entry.sheetKey);
-        }
-        else if (kind === 'update') {
-            assertOnlyKeys(op, ['op', 'sheet', 'where', 'set'], 'update');
-            const where = normalizeValueObject(op.where, headerMap, 'where');
-            const set = normalizeValueObject(op.set, headerMap, 'set');
-            if (Object.keys(set).length === 0)
-                throw new Error('set 必须至少包含一个字段。');
-            const rowIndex = findUniqueRowIndex(entry.table, where, headerMap);
-            lines.push(`updateRow(${entry.index}, ${rowIndex}, ${JSON.stringify(valuesToColumnObject(set, headerMap))})`);
-            modifiedKeys.add(entry.sheetKey);
-        }
-        else if (kind === 'delete') {
-            assertOnlyKeys(op, ['op', 'sheet', 'where'], 'delete');
-            const where = normalizeValueObject(op.where, headerMap, 'where');
-            const rowIndex = findUniqueRowIndex(entry.table, where, headerMap);
-            lines.push(`deleteRow(${entry.index}, ${rowIndex})`);
-            modifiedKeys.add(entry.sheetKey);
-        }
-        else {
-            throw new Error(`不支持的 op：${kind}`);
-        }
-    }
-    const tableEditText = lines.join('\n');
-    return {
-        tableEditText,
-        normalizedResponse: `<tableEdit>\n${tableEditText}\n</tableEdit>`,
-        modifiedKeys: Array.from(modifiedKeys),
-    };
-}
-function extractStrictJsonTableFillResponse_ACU(text, options = {}) {
-    try {
-        const parsed = tryParseJsonObject(text);
-        if (!isPlainObject$2(parsed))
-            throw new Error('回复 JSON 根节点必须是对象。');
-        const expected = options.sqlite ? 'table_edit_sql_v1' : 'table_edit_ops_v1';
-        if (parsed.format !== expected)
-            throw new Error(`format 必须是 ${expected}。`);
-        if (expected === 'table_edit_sql_v1') {
-            if (typeof parsed.sql !== 'string')
-                throw new Error('sql 必须是字符串。');
-            const tableEditText = parsed.sql.trim();
-            return { ok: true, format: expected, rawJson: parsed, tableEditText, normalizedResponse: `<tableEdit>\n${tableEditText}\n</tableEdit>` };
-        }
-        const converted = convertStrictOpsToTableEdit_ACU(parsed.ops, options.tableData, options.targetSheetKeys);
-        return { ok: true, format: expected, rawJson: parsed, ...converted };
-    }
-    catch (error) {
-        const message = error?.message || '严格 JSON 填表响应解析失败。';
-        return { ok: false, error: message, retryHint: message };
-    }
-}
-function buildStrictJsonTableFillResponseFormat_ACU(sqlite) {
-    if (sqlite) {
-        return {
-            type: 'json_schema',
-            json_schema: {
-                name: 'table_edit_sql_response',
-                strict: true,
-                schema: {
-                    type: 'object',
-                    additionalProperties: false,
-                    required: ['format', 'sql'],
-                    properties: {
-                        format: { type: 'string', enum: ['table_edit_sql_v1'] },
-                        sql: { type: 'string' },
-                    },
-                },
-            },
-        };
-    }
-    return buildWideNativeResponseFormat();
-}
-function buildWideNativeResponseFormat() {
-    return {
-        type: 'json_schema',
-        json_schema: {
-            name: 'table_edit_ops_response',
-            strict: true,
-            schema: {
-                type: 'object',
-                additionalProperties: false,
-                required: ['format', 'ops'],
-                properties: {
-                    format: { type: 'string', enum: ['table_edit_ops_v1'] },
-                    ops: {
-                        type: 'array',
-                        items: {
-                            type: 'object',
-                            additionalProperties: true,
-                            required: ['op', 'sheet'],
-                            properties: {
-                                op: { type: 'string', enum: ['insert', 'update', 'delete'] },
-                                sheet: { type: 'string' },
-                                row: { type: 'object', additionalProperties: { type: 'string' } },
-                                where: { type: 'object', additionalProperties: { type: 'string' } },
-                                set: { type: 'object', additionalProperties: { type: 'string' } },
-                            },
-                        },
-                    },
-                },
-            },
-        },
-    };
-}
-function fieldObjectSchema(fields, minProperties = 0) {
-    const properties = {};
-    fields.forEach((field) => { properties[field] = { type: 'string' }; });
-    return { type: 'object', additionalProperties: false, minProperties, properties };
-}
-function shouldUseWideStrictJsonSchema_ACU(stats) {
-    return stats.sheetCount > 8
-        || stats.maxFieldCount > 32
-        || stats.totalFieldCount > 120
-        || stats.oneOfBranchCount > 48
-        || stats.responseFormatBytes > 24 * 1024;
-}
-function buildStrictJsonTableFillResponseFormatForData_ACU(sqlite, tableData, targetSheetKeys) {
-    if (sqlite)
-        return { responseFormat: buildStrictJsonTableFillResponseFormat_ACU(true), stats: null, wide: false };
-    const { entries } = buildSheetLookup(tableData || {}, targetSheetKeys);
-    const branches = [];
-    let totalFieldCount = 0;
-    let maxFieldCount = 0;
-    entries.forEach((entry) => {
-        const fields = Array.from(getHeaderMap(entry.table).keys());
-        totalFieldCount += fields.length;
-        maxFieldCount = Math.max(maxFieldCount, fields.length);
-        const sheetConst = String(entry.table?.name || entry.sheetKey);
-        branches.push({
-            type: 'object',
-            additionalProperties: false,
-            required: ['op', 'sheet', 'row'],
-            properties: { op: { type: 'string', enum: ['insert'] }, sheet: { type: 'string', enum: [sheetConst] }, row: fieldObjectSchema(fields, 1) },
-        });
-        branches.push({
-            type: 'object',
-            additionalProperties: false,
-            required: ['op', 'sheet', 'where', 'set'],
-            properties: { op: { type: 'string', enum: ['update'] }, sheet: { type: 'string', enum: [sheetConst] }, where: fieldObjectSchema(fields, 1), set: fieldObjectSchema(fields, 1) },
-        });
-        branches.push({
-            type: 'object',
-            additionalProperties: false,
-            required: ['op', 'sheet', 'where'],
-            properties: { op: { type: 'string', enum: ['delete'] }, sheet: { type: 'string', enum: [sheetConst] }, where: fieldObjectSchema(fields, 1) },
-        });
-    });
-    if (branches.length === 0)
-        return { responseFormat: buildWideNativeResponseFormat(), stats: { sheetCount: 0, maxFieldCount: 0, totalFieldCount: 0, oneOfBranchCount: 0, responseFormatBytes: 0 }, wide: true };
-    const strong = {
-        type: 'json_schema',
-        json_schema: {
-            name: 'table_edit_ops_response',
-            strict: true,
-            schema: {
-                type: 'object',
-                additionalProperties: false,
-                required: ['format', 'ops'],
-                properties: {
-                    format: { type: 'string', enum: ['table_edit_ops_v1'] },
-                    ops: { type: 'array', items: { oneOf: branches } },
-                },
-            },
-        },
-    };
-    const stats = {
-        sheetCount: entries.length,
-        maxFieldCount,
-        totalFieldCount,
-        oneOfBranchCount: branches.length,
-        responseFormatBytes: JSON.stringify(strong).length,
-    };
-    if (shouldUseWideStrictJsonSchema_ACU(stats))
-        return { responseFormat: buildWideNativeResponseFormat(), stats, wide: true };
-    return { responseFormat: strong, stats, wide: false };
-}
-function cloneStrictPromptSegments_ACU(value, fallback) {
-    const source = Array.isArray(value) && value.length > 0 ? value : fallback;
-    return jsonClone(source || []);
-}
-
 /**
  * service/ai/prompt-builder/prompt-api-call.ts
  * AI API 调用 — prompt 组装 + API 调用 + 流式/非流式响应处理
@@ -62707,26 +62245,6 @@ function normalizeRoleForApi_ACU(role) {
         return 'user';
     return 'user';
 }
-const STRICT_JSON_PROMPT_LEGACY_TOKEN_DENYLIST_ACU = [
-    'insertRow',
-    'updateRow',
-    'deleteRow',
-    'tableId',
-    'rowIndex',
-];
-function warnIfStrictJsonPromptPolluted_ACU(messages) {
-    const hits = new Set();
-    messages.forEach((message) => {
-        const content = String(message?.content || '');
-        STRICT_JSON_PROMPT_LEGACY_TOKEN_DENYLIST_ACU.forEach((token) => {
-            if (content.includes(token))
-                hits.add(token);
-        });
-    });
-    if (hits.size > 0) {
-        logWarn_ACU(`[严格JSON填表] strict prompt 中检测到 legacy 协议关键词污染：${Array.from(hits).join(', ')}`);
-    }
-}
 async function callCustomOpenAI_ACU(dynamicContent, abortController = null, options = null) {
     const localAbortController = abortController || new AbortController();
     _set_currentAbortController_ACU(localAbortController);
@@ -62742,13 +62260,8 @@ async function callCustomOpenAI_ACU(dynamicContent, abortController = null, opti
     const effectiveApiConfig = apiPresetConfig.apiConfig;
     const effectiveTavernProfile = apiPresetConfig.tavernProfile;
     const messages = [];
-    const strictJsonFillEnabled = settings_ACU.strictJsonTableFillEnabled === true;
     const sqliteMode = isSqliteMode();
-    const charCardPromptSetting = strictJsonFillEnabled
-        ? (sqliteMode
-            ? cloneStrictPromptSegments_ACU(settings_ACU.strictJsonSqlCharCardPrompt, DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU)
-            : cloneStrictPromptSegments_ACU(settings_ACU.strictJsonCharCardPrompt, DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU))
-        : settings_ACU.charCardPrompt;
+    const charCardPromptSetting = settings_ACU.charCardPrompt;
     let promptSegments = [];
     if (Array.isArray(charCardPromptSetting)) {
         promptSegments = charCardPromptSetting;
@@ -62842,9 +62355,6 @@ async function callCustomOpenAI_ACU(dynamicContent, abortController = null, opti
             finalContent = parseIfBlocksInContent_ACU(finalContent, templateContext, 0);
         }
         messages.push({ role: normalizeRoleForApi_ACU(segment.role), content: finalContent });
-    }
-    if (strictJsonFillEnabled) {
-        warnIfStrictJsonPromptPolluted_ACU(messages);
     }
     logDebug_ACU('Final messages array being sent to API:', messages);
     logDebug_ACU(`使用API预设: ${effectiveTableApiPreset || '当前配置'}, 模式: ${effectiveApiMode}`);
@@ -63625,18 +63135,6 @@ function parseAndApplyTableEditsToData_ACU(aiResponse, tableData, updateMode = '
         return false;
     }
     let responseForParsing = aiResponse;
-    if (settings_ACU?.strictJsonTableFillEnabled === true) {
-        const strictExtraction = extractStrictJsonTableFillResponse_ACU(aiResponse, {
-            sqlite: isSqliteMode(),
-            tableData,
-        });
-        if (!strictExtraction.ok) {
-            const error = strictExtraction.retryHint || strictExtraction.error || '严格 JSON 填表响应格式无效';
-            logWarn_ACU(error);
-            return { success: false, modifiedKeys: [], appliedEdits: 0, error };
-        }
-        responseForParsing = strictExtraction.normalizedResponse || aiResponse;
-    }
     const extracted = extractTableEditInner_ACU(responseForParsing, { allowNoTableEditTags: true });
     if (!extracted || !extracted.inner) {
         logWarn_ACU('No recognizable table edit block found (missing <tableEdit> boundary and/or incomplete <!-- --> wrapper).');
@@ -83864,7 +83362,6 @@ let settings_ACU = {
     apiPresetBindingsByChat: {},
     tableApiPreset: '',
     plotApiPreset: '',
-    strictJsonTableFillEnabled: false,
     discardUnauthorizedTableEditsEnabled: true,
     // [剧情推进] 按剧情任务ID保存的任务级 API 预设覆盖（key=taskId, value=presetName）
     // 不保存入聊天记录或剧情推进预设，只写进插件全局设置。
@@ -83872,8 +83369,6 @@ let settings_ACU = {
     // [新增] 按表格名称保存的表级 API 预设覆盖（key=标准化表名, value=presetName）
     tableApiPresetOverridesByName: {},
     charCardPrompt: DEFAULT_CHAR_CARD_PROMPT_ACU,
-    strictJsonCharCardPrompt: DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU,
-    strictJsonSqlCharCardPrompt: DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU,
     // [AI 改表助手] 可编辑提示词卡片段（空数组 = 使用默认硬编码提示词）
     templateAssistantPromptSegments: [],
     autoUpdateThreshold: DEFAULT_AUTO_UPDATE_THRESHOLD_ACU,
@@ -83890,7 +83385,6 @@ let settings_ACU = {
     tableTemplateDefaultsRefreshVersion: '',
     tableFillPromptForceDefaultVersion: '',
     templateAssistantPromptForceDefaultVersion: '',
-    strictJsonTableFillForceDisableVersion: '',
     tableContextExtractTags: '',
     tableContextExtractRules: [],
     tableContextExcludeTags: '',
@@ -84903,7 +84397,6 @@ function loadSettings_ACU() {
     settings_ACU.vectorMemoryConfig = globalMeta_ACU.vectorMemoryConfigGlobal;
     settingsStorageReadyForSave_ACU = true;
     refreshDefaultTableTemplateOnce_ACU(activeCode);
-    forceDisableStrictJsonTableFillOnce_ACU();
     forceDefaultTableFillPromptsOnce_ACU();
     forceDefaultTemplateAssistantPromptOnce_ACU();
     if (shouldPersistSettingsAfterLoad_ACU) {
@@ -85069,25 +84562,6 @@ function refreshDefaultTableTemplateOnce_ACU(activeCode) {
     }
 }
 /**
- * 一次性将历史用户保留的严格 JSON 填表开关关闭。
- * marker 写入后不再执行，用户仍可在高级设置中重新开启。
- */
-function forceDisableStrictJsonTableFillOnce_ACU() {
-    try {
-        if (!settings_ACU || typeof settings_ACU !== 'object')
-            return;
-        if (settings_ACU.strictJsonTableFillForceDisableVersion === STRICT_JSON_TABLE_FILL_FORCE_DISABLE_VERSION_ACU)
-            return;
-        settings_ACU.strictJsonTableFillEnabled = false;
-        settings_ACU.strictJsonTableFillForceDisableVersion = STRICT_JSON_TABLE_FILL_FORCE_DISABLE_VERSION_ACU;
-        saveSettings_ACU();
-        logDebug_ACU(`[严格 JSON 填表] 已一次性关闭并记录版本: ${STRICT_JSON_TABLE_FILL_FORCE_DISABLE_VERSION_ACU}`);
-    }
-    catch (error) {
-        logWarn_ACU('[严格 JSON 填表] 一次性关闭失败:', error);
-    }
-}
-/**
  * [spv8.9.2] 一次性强制恢复全部填表提示词为当前版本默认值。
  * marker 写入后不再执行，用户后续仍可正常自定义。
  */
@@ -85098,8 +84572,6 @@ function forceDefaultTableFillPromptsOnce_ACU() {
         if (settings_ACU.tableFillPromptForceDefaultVersion === TABLE_FILL_PROMPT_FORCE_DEFAULT_VERSION_ACU)
             return;
         settings_ACU.charCardPrompt = cloneDefaultValue_ACU(DEFAULT_CHAR_CARD_PROMPT_SQL_ACU);
-        settings_ACU.strictJsonCharCardPrompt = cloneDefaultValue_ACU(DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU);
-        settings_ACU.strictJsonSqlCharCardPrompt = cloneDefaultValue_ACU(DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU);
         settings_ACU.tableFillPromptForceDefaultVersion = TABLE_FILL_PROMPT_FORCE_DEFAULT_VERSION_ACU;
         saveSettings_ACU();
         logDebug_ACU(`[填表提示词] 已一次性强制恢复默认提示词并记录版本: ${TABLE_FILL_PROMPT_FORCE_DEFAULT_VERSION_ACU}`);
@@ -85139,7 +84611,6 @@ function buildDefaultSettings_ACU() {
         apiPresetBindingsByChat: {},
         tableApiPreset: '',
         plotApiPreset: '',
-        strictJsonTableFillEnabled: false,
         discardUnauthorizedTableEditsEnabled: true,
         // [剧情推进] 按剧情任务ID保存的任务级 API 预设覆盖（key=taskId, value=presetName）
         // 不保存入聊天记录或剧情推进预设，只写进插件全局设置。
@@ -85148,8 +84619,6 @@ function buildDefaultSettings_ACU() {
         // 不保存入模板，只写进数据库插件设置；同名表跨模板复用
         tableApiPresetOverridesByName: {},
         charCardPrompt: DEFAULT_CHAR_CARD_PROMPT_SQL_ACU, // SQLite 为唯一存储模式，默认填表提示词恒取 SQL 版
-        strictJsonCharCardPrompt: DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU,
-        strictJsonSqlCharCardPrompt: DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU,
         // [AI 改表助手] 可编辑提示词卡片段（空数组 = 使用默认硬编码提示词）
         templateAssistantPromptSegments: [],
         autoUpdateThreshold: DEFAULT_AUTO_UPDATE_THRESHOLD_ACU,
@@ -85167,7 +84636,6 @@ function buildDefaultSettings_ACU() {
         tableTemplateDefaultsRefreshVersion: '', // [模板预设] 默认表格模板一次性刷新版本
         tableFillPromptForceDefaultVersion: '', // [填表提示词] 一次性强制恢复默认提示词版本
         templateAssistantPromptForceDefaultVersion: '', // [AI 改表助手] 一次性强制恢复默认提示词版本
-        strictJsonTableFillForceDisableVersion: '', // [填表功能] 一次性关闭严格 JSON 填表版本
         // [填表功能] 正文标签提取，从上下文中提取指定标签的内容发送给AI，User回复不受影响
         tableContextExtractTags: '',
         tableContextExtractRules: [],
@@ -88471,14 +87939,11 @@ function setCharCardPrompt_ACU(prompt) {
             : prompt;
     });
 }
-/** 解析当前填表提示词应写入的字段名（与 V1 getCurrentPromptSettingKey_ACU 语义一致） */
-function resolveCurrentPromptKey_ACU(mode = getCurrentStorageMode()) {
-    if (settings_ACU.strictJsonTableFillEnabled === true) {
-        return mode === 'sqlite' ? 'strictJsonSqlCharCardPrompt' : 'strictJsonCharCardPrompt';
-    }
+/** 解析当前填表提示词应写入的字段名（严格 JSON 填表已剥离，恒为 charCardPrompt） */
+function resolveCurrentPromptKey_ACU(_mode = getCurrentStorageMode()) {
     return 'charCardPrompt';
 }
-/** 按当前填表模式 + strictJson 分支保存提示词（V1 语义收敛到 service） */
+/** 按当前填表模式保存提示词（V1 语义收敛到 service） */
 function setCurrentPromptSegments_ACU(prompt) {
     const key = resolveCurrentPromptKey_ACU();
     return withSettingsWrite_ACU([key], () => {
@@ -88487,13 +87952,11 @@ function setCurrentPromptSegments_ACU(prompt) {
             : prompt;
     });
 }
-/** 按当前填表模式 + strictJson 分支恢复默认提示词（V1 语义收敛到 service） */
+/** 按当前填表模式恢复默认提示词（V1 语义收敛到 service） */
 function resetCurrentPromptToDefault_ACU() {
     const mode = getCurrentStorageMode();
     const key = resolveCurrentPromptKey_ACU(mode);
-    const defaultValue = settings_ACU.strictJsonTableFillEnabled === true
-        ? (mode === 'sqlite' ? DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU : DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU)
-        : (mode === 'sqlite' ? DEFAULT_CHAR_CARD_PROMPT_SQL_ACU : DEFAULT_CHAR_CARD_PROMPT_ACU);
+    const defaultValue = mode === 'sqlite' ? DEFAULT_CHAR_CARD_PROMPT_SQL_ACU : DEFAULT_CHAR_CARD_PROMPT_ACU;
     return withSettingsWrite_ACU([key], () => {
         settings_ACU[key] = JSON.parse(JSON.stringify(defaultValue));
     });
@@ -88501,20 +87964,16 @@ function resetCurrentPromptToDefault_ACU() {
 /** 按指定模式恢复默认填表提示词（applyModeDefaultCharCardPrompt_ACU 语义收敛） */
 function applyDefaultCharCardPrompt_ACU(mode) {
     const key = resolveCurrentPromptKey_ACU(mode);
-    const defaultValue = settings_ACU.strictJsonTableFillEnabled === true
-        ? (mode === 'sqlite' ? DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU : DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU)
-        : (mode === 'sqlite' ? DEFAULT_CHAR_CARD_PROMPT_SQL_ACU : DEFAULT_CHAR_CARD_PROMPT_ACU);
+    const defaultValue = mode === 'sqlite' ? DEFAULT_CHAR_CARD_PROMPT_SQL_ACU : DEFAULT_CHAR_CARD_PROMPT_ACU;
     return withSettingsWrite_ACU([key], () => {
         settings_ACU[key] = JSON.parse(JSON.stringify(defaultValue));
     });
 }
 /** 恢复默认填表提示词（按当前存储模式） */
 function resetFormFillPromptsToDefault_ACU() {
-    return withSettingsWrite_ACU(['charCardPrompt', 'strictJsonCharCardPrompt', 'strictJsonSqlCharCardPrompt'], () => {
+    return withSettingsWrite_ACU(['charCardPrompt'], () => {
         const mode = getCurrentStorageMode();
         settings_ACU.charCardPrompt = JSON.parse(JSON.stringify(mode === 'sqlite' ? DEFAULT_CHAR_CARD_PROMPT_SQL_ACU : DEFAULT_CHAR_CARD_PROMPT_ACU));
-        settings_ACU.strictJsonCharCardPrompt = JSON.parse(JSON.stringify(DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU));
-        settings_ACU.strictJsonSqlCharCardPrompt = JSON.parse(JSON.stringify(DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU));
     });
 }
 /**
@@ -93612,26 +93071,11 @@ async function collectGroupFillResponse_ACU(job, feedback, abortController = new
             if (aiResponse && minReplyLength > 0 && aiResponse.length < minReplyLength) {
                 throw new ModelOutputRetryError_ACU(`AI回复过短 (${aiResponse.length} 字符)，低于阈值 (${minReplyLength} 字符)`);
             }
-            let normalizedAiResponse = aiResponse;
             let tableEditText = '';
-            if (settings_ACU.strictJsonTableFillEnabled === true) {
-                const extracted = extractStrictJsonTableFillResponse_ACU(aiResponse, {
-                    sqlite: isSqliteMode(),
-                    tableData: job.baseSnapshot,
-                    targetSheetKeys: job.targetSheetKeys,
-                });
-                if (!extracted.ok) {
-                    throw new ModelOutputRetryError_ACU(extracted.retryHint || extracted.error || '严格 JSON 填表响应格式无效');
-                }
-                normalizedAiResponse = extracted.normalizedResponse || aiResponse;
-                tableEditText = (extracted.tableEditText || '').trim();
+            if (!aiResponse || !aiResponse.includes('<tableEdit>') || !aiResponse.includes('</tableEdit>')) {
+                throw new ModelOutputRetryError_ACU('AI响应中未找到完整有效的 <tableEdit> 标签');
             }
-            else {
-                if (!aiResponse || !aiResponse.includes('<tableEdit>') || !aiResponse.includes('</tableEdit>')) {
-                    throw new ModelOutputRetryError_ACU('AI响应中未找到完整有效的 <tableEdit> 标签');
-                }
-                tableEditText = (aiResponse.match(/<tableEdit>([\s\S]*?)<\/tableEdit>/i)?.[1] || '').trim();
-            }
+            tableEditText = (aiResponse.match(/<tableEdit>([\s\S]*?)<\/tableEdit>/i)?.[1] || '').trim();
             if (isSqliteMode() && tableEditText && isSqlContent(tableEditText)) {
                 try {
                     // 隐藏列保护使用请求前冻结的 live runtime schema 证据，而不是 baseSnapshot：
@@ -93642,7 +93086,7 @@ async function collectGroupFillResponse_ACU(job, feedback, abortController = new
                     throw new ModelOutputRetryError_ACU(error?.message || 'SQLite 填表 SQL 无效。');
                 }
             }
-            return { job, success: true, attempt, aiResponse: normalizedAiResponse, tableEditText };
+            return { job, success: true, attempt, aiResponse, tableEditText };
         }
         catch (error) {
             lastErrorMessage = error?.message || '未知错误';
@@ -98060,9 +97504,7 @@ function syncAllSettingsToUI_ACU(s) {
     if (typeof updateApiStatusDisplay_ACU === 'function')
         updateApiStatusDisplay_ACU();
     if ($charCardPromptSegmentsContainer_ACU) {
-        const promptForCurrentMode = s.strictJsonTableFillEnabled === true
-            ? (s.storageMode === 'sqlite' ? s.strictJsonSqlCharCardPrompt : s.strictJsonCharCardPrompt)
-            : s.charCardPrompt;
+        const promptForCurrentMode = s.charCardPrompt;
         renderPromptSegments_ACU(promptForCurrentMode || s.charCardPrompt);
     }
     if ($autoUpdateThresholdInput_ACU)
@@ -125633,7 +125075,7 @@ var AcuDialogHost_vue_vue_type_style_index_0_scoped_2a6a0bee_lang = null;
 
 const _hoisted_1$_ = { class: "acu-dialog__header" };
 const _hoisted_2$P = { class: "acu-dialog__message" };
-const _hoisted_3$H = {
+const _hoisted_3$G = {
 	key: 0,
 	class: "acu-dialog__danger-message"
 };
@@ -125696,7 +125138,7 @@ function _sfc_render$12(_ctx, _cache, $props, $setup, $data, $options) {
 			),
 			$setup.renderedDialog.dangerMessage ? (openBlock(), createElementBlock(
 				"p",
-				_hoisted_3$H,
+				_hoisted_3$G,
 				toDisplayString($setup.renderedDialog.dangerMessage),
 				1
 				/* TEXT */
@@ -125988,7 +125430,7 @@ const _hoisted_2$O = [
 	"disabled",
 	"onClick"
 ];
-const _hoisted_3$G = { class: "acu-segmented__label" };
+const _hoisted_3$F = { class: "acu-segmented__label" };
 function _sfc_render$$(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", {
 		class: normalizeClass(["acu-segmented", [`acu-segmented--${$props.size}`, { "acu-segmented--disabled": $props.disabled }]]),
@@ -126024,7 +125466,7 @@ function _sfc_render$$(_ctx, _cache, $props, $setup, $data, $options) {
 				]
 			}, [createBaseVNode(
 				"span",
-				_hoisted_3$G,
+				_hoisted_3$F,
 				toDisplayString(opt.label),
 				1
 				/* TEXT */
@@ -126274,7 +125716,7 @@ const _hoisted_1$W = {
 	style: { zIndex: 9410 }
 };
 const _hoisted_2$N = { class: "acu-toast-viewport__list" };
-const _hoisted_3$F = ["role"];
+const _hoisted_3$E = ["role"];
 const _hoisted_4$x = {
 	class: "acu-v2-toast__icon",
 	"aria-hidden": "true"
@@ -126333,7 +125775,7 @@ function _sfc_render$_(_ctx, _cache, $props, $setup, $data, $options) {
 					title: "关闭通知",
 					onClick: ($event) => $setup.toast.dismiss(entry.item.id)
 				}, null, 8, ["onClick"])) : createCommentVNode("v-if", true)
-			], 10, _hoisted_3$F);
+			], 10, _hoisted_3$E);
 		}),
 		128
 		/* KEYED_FRAGMENT */
@@ -126532,7 +125974,7 @@ const _hoisted_2$M = {
 	class: "acu-mobile-panel-nav__track",
 	role: "list"
 };
-const _hoisted_3$E = ["aria-current", "onClick"];
+const _hoisted_3$D = ["aria-current", "onClick"];
 function _sfc_render$Z(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock(
 		"nav",
@@ -126550,7 +125992,7 @@ function _sfc_render$Z(_ctx, _cache, $props, $setup, $data, $options) {
 						class: normalizeClass(["acu-mobile-panel-nav__item", { "is-active": item.id === $setup.activeId }]),
 						"aria-current": item.id === $setup.activeId ? "location" : undefined,
 						onClick: ($event) => $setup.scrollToPanel(item.id)
-					}, toDisplayString(item.label), 11, _hoisted_3$E);
+					}, toDisplayString(item.label), 11, _hoisted_3$D);
 				}),
 				128
 				/* KEYED_FRAGMENT */
@@ -126878,7 +126320,7 @@ const _hoisted_2$L = {
 	key: 0,
 	class: "acu-form-row__label"
 };
-const _hoisted_3$D = {
+const _hoisted_3$C = {
 	key: 1,
 	class: "acu-form-row__hint"
 };
@@ -126894,7 +126336,7 @@ function _sfc_render$X(_ctx, _cache, $props, $setup, $data, $options) {
 		renderSlot(_ctx.$slots, "default", {}, undefined, true),
 		$props.hint ? (openBlock(), createElementBlock(
 			"span",
-			_hoisted_3$D,
+			_hoisted_3$C,
 			toDisplayString($props.hint),
 			1
 			/* TEXT */
@@ -127177,7 +126619,7 @@ const _hoisted_2$K = {
 	key: 0,
 	class: "acu-panel__title"
 };
-const _hoisted_3$C = {
+const _hoisted_3$B = {
 	key: 1,
 	class: "acu-panel__header-right"
 };
@@ -127200,7 +126642,7 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 				toDisplayString($props.title),
 				1
 				/* TEXT */
-			)], true)])) : createCommentVNode("v-if", true), _ctx.$slots.actions || $setup.hasDescription ? (openBlock(), createElementBlock("div", _hoisted_3$C, [_ctx.$slots.actions ? (openBlock(), createElementBlock("div", _hoisted_4$w, [renderSlot(_ctx.$slots, "actions", {}, undefined, true)])) : createCommentVNode("v-if", true), $setup.hasDescription ? (openBlock(), createBlock($setup["AcuIconButton"], {
+			)], true)])) : createCommentVNode("v-if", true), _ctx.$slots.actions || $setup.hasDescription ? (openBlock(), createElementBlock("div", _hoisted_3$B, [_ctx.$slots.actions ? (openBlock(), createElementBlock("div", _hoisted_4$w, [renderSlot(_ctx.$slots, "actions", {}, undefined, true)])) : createCommentVNode("v-if", true), $setup.hasDescription ? (openBlock(), createBlock($setup["AcuIconButton"], {
 				key: 1,
 				class: normalizeClass(["acu-panel__description-button", { "acu-panel__description-button--open": $setup.descriptionOpen }]),
 				icon: "fa-solid fa-circle-info",
@@ -127476,7 +126918,7 @@ var AcuPresetDropdown_vue_vue_type_style_index_0_scoped_da92b393_lang = null;
 
 const _hoisted_1$Q = ["disabled"];
 const _hoisted_2$J = { class: "acu-preset-dd__label" };
-const _hoisted_3$B = {
+const _hoisted_3$A = {
 	key: 0,
 	class: "acu-preset-dd__menu"
 };
@@ -127519,7 +126961,7 @@ function _sfc_render$S(_ctx, _cache, $props, $setup, $data, $options) {
 			null,
 			2
 			/* CLASS */
-		)], 8, _hoisted_1$Q), $setup.open ? (openBlock(), createElementBlock("ul", _hoisted_3$B, [(openBlock(true), createElementBlock(
+		)], 8, _hoisted_1$Q), $setup.open ? (openBlock(), createElementBlock("ul", _hoisted_3$A, [(openBlock(true), createElementBlock(
 			Fragment,
 			null,
 			renderList($props.items, (item) => {
@@ -127629,7 +127071,7 @@ const _hoisted_2$I = {
 	key: 0,
 	class: "acu-select__menu"
 };
-const _hoisted_3$A = ["onClick"];
+const _hoisted_3$z = ["onClick"];
 const _hoisted_4$u = {
 	key: 0,
 	class: "acu-select__empty"
@@ -127666,7 +127108,7 @@ function _sfc_render$R(_ctx, _cache, $props, $setup, $data, $options) {
 					key: opt.value,
 					class: normalizeClass(["acu-select__item", { "acu-select__item--active": opt.value === $props.modelValue }]),
 					onClick: ($event) => $setup.select(opt.value)
-				}, toDisplayString(opt.label), 11, _hoisted_3$A);
+				}, toDisplayString(opt.label), 11, _hoisted_3$z);
 			}),
 			128
 			/* KEYED_FRAGMENT */
@@ -127836,7 +127278,7 @@ var ApiConfigPanel_vue_vue_type_style_index_0_scoped_47287939_lang = null;
 
 const _hoisted_1$O = { class: "acu-api-config-panel__select-row" };
 const _hoisted_2$H = { class: "acu-api-config-panel__editor-section" };
-const _hoisted_3$z = { class: "acu-api-config-panel__inline-action" };
+const _hoisted_3$y = { class: "acu-api-config-panel__inline-action" };
 const _hoisted_4$t = {
 	key: 0,
 	class: "acu-api-config-panel__muted"
@@ -127963,7 +127405,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 									}, null, 8, ["modelValue"])]),
 									_: 1
 								}),
-								createBaseVNode("div", _hoisted_3$z, [createVNode($setup["AcuButton"], { onClick: $setup.loadModelsForActive }, {
+								createBaseVNode("div", _hoisted_3$y, [createVNode($setup["AcuButton"], { onClick: $setup.loadModelsForActive }, {
 									default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
 										"加载模型",
 										-1
@@ -128835,28 +128277,13 @@ function preparePromptForSave(segments) {
     }));
 }
 function currentDefaultPromptSegments() {
-    if (settings_ACU.strictJsonTableFillEnabled === true) {
-        const defaults = getCurrentStorageMode() === "sqlite"
-            ? DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU
-            : DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU;
-        return normalizePromptSegments(defaults);
-    }
     const defaults = getCurrentStorageMode() === "sqlite"
         ? DEFAULT_CHAR_CARD_PROMPT_SQL_ACU
         : DEFAULT_CHAR_CARD_PROMPT_ACU;
     return normalizePromptSegments(defaults);
 }
-function currentPromptSettingKey() {
-    if (settings_ACU.strictJsonTableFillEnabled === true) {
-        return getCurrentStorageMode() === "sqlite"
-            ? "strictJsonSqlCharCardPrompt"
-            : "strictJsonCharCardPrompt";
-    }
-    return "charCardPrompt";
-}
 function currentPromptSource() {
-    const key = currentPromptSettingKey();
-    const value = settings_ACU[key];
+    const value = settings_ACU.charCardPrompt;
     return Array.isArray(value) && value.length > 0 ? value : currentDefaultPromptSegments();
 }
 function promptFingerprint$2(segments) {
@@ -128867,7 +128294,6 @@ function useFormFillSettings() {
     const values = ref({ ...FALLBACKS });
     const tableApiPreset = ref(String(settings_ACU.tableApiPreset || ""));
     const tableEditLastPairOnly = ref(settings_ACU.tableEditLastPairOnly !== false);
-    const strictJsonTableFillEnabled = ref(settings_ACU.strictJsonTableFillEnabled === true);
     const discardUnauthorizedTableEditsEnabled = ref(settings_ACU.discardUnauthorizedTableEditsEnabled !== false);
     const extractRules = ref([]);
     const excludeRules = ref([]);
@@ -128892,7 +128318,6 @@ function useFormFillSettings() {
         values.value = nextValues;
         tableApiPreset.value = String(settings_ACU.tableApiPreset || "");
         tableEditLastPairOnly.value = settings_ACU.tableEditLastPairOnly !== false;
-        strictJsonTableFillEnabled.value = settings_ACU.strictJsonTableFillEnabled === true;
         discardUnauthorizedTableEditsEnabled.value = settings_ACU.discardUnauthorizedTableEditsEnabled !== false;
         extractRules.value = normalizeRules(settings_ACU.tableContextExtractRules, settings_ACU.tableContextExtractTags || "", "extract");
         excludeRules.value = normalizeRules(settings_ACU.tableContextExcludeRules, settings_ACU.tableContextExcludeTags || "", "exclude");
@@ -128937,14 +128362,6 @@ function useFormFillSettings() {
     function setTableEditLastPairOnly(value) {
         tableEditLastPairOnly.value = !!value;
         settings_ACU.tableEditLastPairOnly = tableEditLastPairOnly.value;
-        saveSettings_ACU();
-        message.value = null;
-    }
-    function setStrictJsonTableFillEnabled(value) {
-        strictJsonTableFillEnabled.value = !!value;
-        settings_ACU.strictJsonTableFillEnabled = strictJsonTableFillEnabled.value;
-        promptSegments.value = normalizePromptSegments(currentPromptSource());
-        promptDirty.value = false;
         saveSettings_ACU();
         message.value = null;
     }
@@ -129032,24 +128449,7 @@ function useFormFillSettings() {
     }
     function savePrompt() {
         const prepared = preparePromptForSave(promptSegments.value);
-        const key = currentPromptSettingKey();
-        let result;
-        if (key === "charCardPrompt") {
-            result = setCharCardPrompt_ACU(clone$2(prepared));
-        }
-        else {
-            // strictJson 提示词：写入对应字段，保存失败回滚。
-            const field = key;
-            const snapshot = settings_ACU[field];
-            settings_ACU[field] = clone$2(prepared);
-            const saveResult = saveSettings_ACU();
-            if (!saveResult.saved) {
-                settings_ACU[field] = snapshot;
-                message.value = { kind: "error", text: saveResult.warning || saveResult.error || "提示词保存失败。", scope: "prompt" };
-                return;
-            }
-            result = { ok: true, code: "ok", changed: true, saveResult };
-        }
+        const result = setCharCardPrompt_ACU(clone$2(prepared));
         if (!result.ok) {
             message.value = { kind: "error", text: result.message || "提示词保存失败。", scope: "prompt" };
             return;
@@ -129114,7 +128514,6 @@ function useFormFillSettings() {
         numberFields,
         tableApiPreset,
         tableEditLastPairOnly,
-        strictJsonTableFillEnabled,
         discardUnauthorizedTableEditsEnabled,
         extractRules,
         excludeRules,
@@ -129127,7 +128526,6 @@ function useFormFillSettings() {
         setNumber,
         setNumbers,
         setTableEditLastPairOnly,
-        setStrictJsonTableFillEnabled,
         setDiscardUnauthorizedTableEditsEnabled,
         setExtractRules,
         setExcludeRules,
@@ -129476,7 +128874,7 @@ var FormFillUpdateSettingsPanel_vue_vue_type_style_index_0_scoped_eaa556c7_lang 
 
 const _hoisted_1$L = { class: "acu-form-fill-update-settings-panel__settings-groups" };
 const _hoisted_2$E = { class: "acu-form-fill-update-settings-panel__setting-group" };
-const _hoisted_3$y = { class: "acu-form-fill-update-settings-panel__number-grid" };
+const _hoisted_3$x = { class: "acu-form-fill-update-settings-panel__number-grid" };
 function _sfc_render$N(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["AcuPanel"], {
 		title: $setup.formFillCopy.panels.update.title,
@@ -129531,7 +128929,7 @@ function _sfc_render$N(_ctx, _cache, $props, $setup, $data, $options) {
 			"body-mode": "if",
 			onToggle: _cache[1] || (_cache[1] = ($event) => $setup.advancedExpanded = !$setup.advancedExpanded)
 		}, {
-			default: withCtx(() => [createBaseVNode("div", _hoisted_3$y, [(openBlock(true), createElementBlock(
+			default: withCtx(() => [createBaseVNode("div", _hoisted_3$x, [(openBlock(true), createElementBlock(
 				Fragment,
 				null,
 				renderList($setup.advancedFields, (field) => {
@@ -130679,7 +130077,7 @@ var AcuDrawer_vue_vue_type_style_index_0_scoped_882382df_lang = null;
 
 const _hoisted_1$K = { class: "acu-v2-drawer__header" };
 const _hoisted_2$D = { class: "acu-v2-drawer__header-left" };
-const _hoisted_3$x = { class: "acu-v2-drawer__body" };
+const _hoisted_3$w = { class: "acu-v2-drawer__body" };
 function _sfc_render$L(_ctx, _cache, $props, $setup, $data, $options) {
 	return $setup.isRendered ? (openBlock(), createElementBlock(
 		"div",
@@ -130715,7 +130113,7 @@ function _sfc_render$L(_ctx, _cache, $props, $setup, $data, $options) {
 				"aria-label": "关闭",
 				title: "关闭",
 				onClick: $setup.requestClose
-			})]), createBaseVNode("div", _hoisted_3$x, [renderSlot(_ctx.$slots, "default", {}, undefined, true)])],
+			})]), createBaseVNode("div", _hoisted_3$w, [renderSlot(_ctx.$slots, "default", {}, undefined, true)])],
 			4
 			/* STYLE */
 		)],
@@ -130784,7 +130182,7 @@ const _hoisted_2$C = {
 	key: 1,
 	class: "acu-rule-pair-list acu-rule-pair-list--standalone"
 };
-const _hoisted_3$w = { class: "acu-rule-pair-list__body" };
+const _hoisted_3$v = { class: "acu-rule-pair-list__body" };
 const _hoisted_4$s = {
 	key: 0,
 	class: "acu-rule-pair-list__empty"
@@ -130880,7 +130278,7 @@ function _sfc_render$K(_ctx, _cache, $props, $setup, $data, $options) {
 		"label",
 		"meta",
 		"expanded"
-	])) : (openBlock(), createElementBlock("div", _hoisted_2$C, [createBaseVNode("div", _hoisted_3$w, [
+	])) : (openBlock(), createElementBlock("div", _hoisted_2$C, [createBaseVNode("div", _hoisted_3$v, [
 		(openBlock(true), createElementBlock(
 			Fragment,
 			null,
@@ -131092,7 +130490,7 @@ var AcuPromptSegments_vue_vue_type_style_index_0_scoped_573cb4fb_lang = null;
 
 const _hoisted_1$H = { class: "acu-prompt-segs" };
 const _hoisted_2$A = { class: "acu-prompt-segs__add" };
-const _hoisted_3$v = { class: "acu-prompt-segs__list" };
+const _hoisted_3$u = { class: "acu-prompt-segs__list" };
 const _hoisted_4$r = { class: "acu-prompt-segs__item-head" };
 const _hoisted_5$m = { class: "acu-prompt-segs__index" };
 const _hoisted_6$l = { class: "acu-prompt-segs__actions" };
@@ -131121,7 +130519,7 @@ function _sfc_render$I(_ctx, _cache, $props, $setup, $data, $options) {
 			)])]),
 			_: 1
 		})]),
-		createBaseVNode("ol", _hoisted_3$v, [(openBlock(true), createElementBlock(
+		createBaseVNode("ol", _hoisted_3$u, [(openBlock(true), createElementBlock(
 			Fragment,
 			null,
 			renderList($props.segments, (seg, index) => {
@@ -131339,7 +130737,7 @@ const _hoisted_1$G = {
 	class: "acu-v2-plot-task-editor"
 };
 const _hoisted_2$z = { class: "acu-v2-plot-task-editor__section" };
-const _hoisted_3$u = { class: "acu-v2-plot-task-editor__grid" };
+const _hoisted_3$t = { class: "acu-v2-plot-task-editor__grid" };
 const _hoisted_4$q = { class: "acu-v2-plot-task-editor__grid" };
 const _hoisted_5$l = { class: "acu-v2-plot-task-editor__section" };
 const _hoisted_6$k = { class: "acu-v2-plot-task-editor__grid acu-v2-plot-task-editor__grid--wide" };
@@ -131362,7 +130760,7 @@ function _sfc_render$G(_ctx, _cache, $props, $setup, $data, $options) {
 				-1
 				/* CACHED */
 			)),
-			createBaseVNode("div", _hoisted_3$u, [
+			createBaseVNode("div", _hoisted_3$t, [
 				createVNode($setup["AcuFormRow"], { label: "任务名称" }, {
 					default: withCtx(() => [createVNode($setup["AcuInput"], {
 						type: "text",
@@ -131623,7 +131021,7 @@ var PlotTaskList_vue_vue_type_style_index_0_scoped_ee3c6f4c_lang = null;
 
 const _hoisted_1$F = { class: "acu-v2-plot-tasks" };
 const _hoisted_2$y = { class: "acu-v2-plot-tasks__toolbar" };
-const _hoisted_3$t = { class: "acu-v2-plot-tasks__cards" };
+const _hoisted_3$s = { class: "acu-v2-plot-tasks__cards" };
 const _hoisted_4$p = ["onClick"];
 const _hoisted_5$k = { class: "acu-v2-plot-tasks__name" };
 const _hoisted_6$j = {
@@ -131676,7 +131074,7 @@ function _sfc_render$F(_ctx, _cache, $props, $setup, $data, $options) {
 			title: "新增任务",
 			onClick: _cache[3] || (_cache[3] = ($event) => _ctx.$emit("add"))
 		})
-	])]), createBaseVNode("div", _hoisted_3$t, [(openBlock(true), createElementBlock(
+	])]), createBaseVNode("div", _hoisted_3$s, [(openBlock(true), createElementBlock(
 		Fragment,
 		null,
 		renderList($props.tasks, (task) => {
@@ -131759,7 +131157,7 @@ const _hoisted_1$E = {
 	class: "acu-v2-manage-list"
 };
 const _hoisted_2$x = { class: "acu-v2-manage-item__info" };
-const _hoisted_3$s = { class: "acu-v2-manage-item__actions" };
+const _hoisted_3$r = { class: "acu-v2-manage-item__actions" };
 const _hoisted_4$o = { class: "acu-v2-form__section" };
 const _hoisted_5$j = { class: "acu-v2-form__section" };
 const _hoisted_6$i = { class: "acu-v2-plot-drawer__rules" };
@@ -131842,7 +131240,7 @@ function _sfc_render$E(_ctx, _cache, $props, $setup, $data, $options) {
 						},
 						1024
 						/* DYNAMIC_SLOTS */
-					)]), createBaseVNode("div", _hoisted_3$s, [
+					)]), createBaseVNode("div", _hoisted_3$r, [
 						createVNode($setup["AcuIconButton"], {
 							icon: meta.name === $props.defaultPresetName ? "fa-solid fa-star" : "fa-regular fa-star",
 							title: "设为全局默认",
@@ -132151,7 +131549,7 @@ var PlotPresetPanel_vue_vue_type_style_index_0_scoped_021e572f_lang = null;
 
 const _hoisted_1$D = { class: "acu-text__value" };
 const _hoisted_2$w = { class: "acu-text__value" };
-const _hoisted_3$r = { class: "acu-plot-preset-panel__select-row" };
+const _hoisted_3$q = { class: "acu-plot-preset-panel__select-row" };
 function _sfc_render$D(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["AcuPanel"], {
 		title: $setup.plotCopy.panels.preset.title,
@@ -132230,7 +131628,7 @@ function _sfc_render$D(_ctx, _cache, $props, $setup, $data, $options) {
 				]),
 				_: 1
 			}),
-			createBaseVNode("div", _hoisted_3$r, [
+			createBaseVNode("div", _hoisted_3$q, [
 				createVNode($setup["AcuPresetDropdown"], {
 					items: $setup.presetDropdownItems,
 					"model-value": $setup.store.activePresetName,
@@ -132370,7 +131768,7 @@ const _hoisted_2$v = {
 	key: 1,
 	class: "acu-v2-manage-list"
 };
-const _hoisted_3$q = { class: "acu-v2-manage-item__info" };
+const _hoisted_3$p = { class: "acu-v2-manage-item__info" };
 const _hoisted_4$n = { class: "acu-v2-manage-item__actions" };
 function _sfc_render$C(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["AcuDrawer"], {
@@ -132416,7 +131814,7 @@ function _sfc_render$C(_ctx, _cache, $props, $setup, $data, $options) {
 					return openBlock(), createElementBlock("li", {
 						key: meta.name,
 						class: "acu-v2-manage-item"
-					}, [createBaseVNode("div", _hoisted_3$q, [createVNode(
+					}, [createBaseVNode("div", _hoisted_3$p, [createVNode(
 						$setup["AcuText"],
 						{
 							as: "span",
@@ -134617,7 +134015,7 @@ var TableTemplatePresetPanel_vue_vue_type_style_index_0_scoped_c1d089c4_lang = n
 
 const _hoisted_1$B = { class: "acu-text__value" };
 const _hoisted_2$u = { class: "acu-text__value" };
-const _hoisted_3$p = { class: "acu-table-template-panel__preset-row" };
+const _hoisted_3$o = { class: "acu-table-template-panel__preset-row" };
 const _hoisted_4$m = { class: "acu-table-template-panel__action-area" };
 function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["AcuPanel"], {
@@ -134719,7 +134117,7 @@ function _sfc_render$B(_ctx, _cache, $props, $setup, $data, $options) {
 				]),
 				_: 1
 			}),
-			createBaseVNode("div", _hoisted_3$p, [
+			createBaseVNode("div", _hoisted_3$o, [
 				createVNode($setup["AcuPresetDropdown"], {
 					items: $setup.templates.chatPresetItems.value,
 					"model-value": $setup.templates.selectedChatPreset.value,
@@ -134900,7 +134298,7 @@ var DashboardToggleRow_vue_vue_type_style_index_0_scoped_b8c9bc26_lang = null;
 
 const _hoisted_1$z = { class: "acu-dashboard-toggle-row" };
 const _hoisted_2$t = { class: "acu-dashboard-toggle-row__head" };
-const _hoisted_3$o = { class: "acu-dashboard-toggle-row__label" };
+const _hoisted_3$n = { class: "acu-dashboard-toggle-row__label" };
 const _hoisted_4$l = {
 	key: 0,
 	class: "acu-dashboard-toggle-row__desc"
@@ -134908,7 +134306,7 @@ const _hoisted_4$l = {
 function _sfc_render$z(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", _hoisted_1$z, [createBaseVNode("div", _hoisted_2$t, [createBaseVNode(
 		"span",
-		_hoisted_3$o,
+		_hoisted_3$n,
 		toDisplayString($props.item.label),
 		1
 		/* TEXT */
@@ -136289,7 +135687,7 @@ var DashboardPage_vue_vue_type_style_index_0_scoped_46857a4a_lang = null;
 
 const _hoisted_1$y = { class: "acu-v2-dashboard-page" };
 const _hoisted_2$s = { class: "acu-v2-dashboard-page__health-list" };
-const _hoisted_3$n = {
+const _hoisted_3$m = {
 	class: "acu-v2-dashboard-page__health-icon",
 	"aria-hidden": "true"
 };
@@ -136314,7 +135712,7 @@ function _sfc_render$y(_ctx, _cache, $props, $setup, $data, $options) {
 							class: normalizeClass(["acu-v2-dashboard-page__health-item", `acu-v2-dashboard-page__health-item--${item.kind}`])
 						},
 						[
-							createBaseVNode("div", _hoisted_3$n, [createBaseVNode(
+							createBaseVNode("div", _hoisted_3$m, [createBaseVNode(
 								"i",
 								{ class: normalizeClass(item.iconClass) },
 								null,
@@ -136457,7 +135855,7 @@ const _hoisted_2$r = {
 	key: 0,
 	class: "acu-v2-table-selector__empty"
 };
-const _hoisted_3$m = { class: "acu-v2-table-selector__actions" };
+const _hoisted_3$l = { class: "acu-v2-table-selector__actions" };
 const _hoisted_4$j = { class: "acu-v2-table-selector__count" };
 const _hoisted_5$h = {
 	key: 0,
@@ -136474,7 +135872,7 @@ function _sfc_render$x(_ctx, _cache, $props, $setup, $data, $options) {
 	)) : (openBlock(), createElementBlock(
 		Fragment,
 		{ key: 1 },
-		[createBaseVNode("div", _hoisted_3$m, [
+		[createBaseVNode("div", _hoisted_3$l, [
 			createVNode($setup["AcuButton"], {
 				size: "sm",
 				disabled: $props.disabled,
@@ -137179,7 +136577,7 @@ var FormFillPage_vue_vue_type_style_index_0_scoped_10dc4831_lang = null;
 
 const _hoisted_1$w = { class: "acu-v2-form-fill-page" };
 const _hoisted_2$q = ["title"];
-const _hoisted_3$l = { class: "acu-text__value" };
+const _hoisted_3$k = { class: "acu-text__value" };
 const _hoisted_4$i = { class: "acu-text__value acu-v2-form-fill-page__checkpoint-label" };
 const _hoisted_5$g = { class: "acu-v2-form-fill-page__table-wrap" };
 const _hoisted_6$f = { class: "acu-v2-form-fill-page__status-table" };
@@ -137220,7 +136618,7 @@ function _sfc_render$w(_ctx, _cache, $props, $setup, $data, $options) {
 							)),
 							createBaseVNode(
 								"strong",
-								_hoisted_3$l,
+								_hoisted_3$k,
 								toDisplayString($setup.dashboard.aiMessageCount.value),
 								1
 								/* TEXT */
@@ -137750,7 +137148,7 @@ const _hoisted_2$o = [
 	"disabled",
 	"onClick"
 ];
-const _hoisted_3$k = { class: "acu-v2-wb-source-picker__item-label" };
+const _hoisted_3$j = { class: "acu-v2-wb-source-picker__item-label" };
 const _hoisted_4$h = {
 	key: 0,
 	class: "acu-v2-wb-source-picker__empty"
@@ -137797,7 +137195,7 @@ function _sfc_render$t(_ctx, _cache, $props, $setup, $data, $options) {
 							onClick: ($event) => _ctx.$emit("toggle-book", name, !$setup.selectedSet.has(name))
 						}, [createBaseVNode(
 							"span",
-							_hoisted_3$k,
+							_hoisted_3$j,
 							toDisplayString(name),
 							1
 							/* TEXT */
@@ -137954,7 +137352,7 @@ const _hoisted_2$n = {
 	key: 0,
 	class: "acu-v2-wb-entries__status"
 };
-const _hoisted_3$j = {
+const _hoisted_3$i = {
 	key: 1,
 	class: "acu-v2-wb-entries__status acu-v2-wb-entries__status--error",
 	role: "alert"
@@ -137988,7 +137386,7 @@ const _hoisted_11$9 = { class: "acu-v2-wb-entry-skill__actions" };
 function _sfc_render$s(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", _hoisted_1$s, [$props.loading ? (openBlock(), createElementBlock("div", _hoisted_2$n, "正在加载条目...")) : $props.status === "error" ? (openBlock(), createElementBlock(
 		"div",
-		_hoisted_3$j,
+		_hoisted_3$i,
 		toDisplayString($props.error || "加载条目失败"),
 		1
 		/* TEXT */
@@ -138887,7 +138285,7 @@ var TablePage_vue_vue_type_style_index_0_scoped_7cb55cc9_lang = null;
 
 const _hoisted_1$p = { class: "acu-v2-table-page" };
 const _hoisted_2$l = { class: "acu-v2-table-page__col" };
-const _hoisted_3$i = { class: "acu-v2-table-page__actions" };
+const _hoisted_3$h = { class: "acu-v2-table-page__actions" };
 const _hoisted_4$f = { class: "acu-v2-table-page__col" };
 const _hoisted_5$e = { class: "acu-v2-table-page__filter" };
 const _hoisted_6$d = { class: "acu-v2-table-page__toggle-row" };
@@ -138958,7 +138356,7 @@ function _sfc_render$p(_ctx, _cache, $props, $setup, $data, $options) {
 						/* CACHED */
 					)])]),
 					_: 1
-				})) : createCommentVNode("v-if", true), createBaseVNode("div", _hoisted_3$i, [createVNode($setup["AcuButton"], {
+				})) : createCommentVNode("v-if", true), createBaseVNode("div", _hoisted_3$h, [createVNode($setup["AcuButton"], {
 					variant: "primary",
 					onClick: _cache[6] || (_cache[6] = ($event) => $setup.promptDrawerOpen = true)
 				}, {
@@ -139692,7 +139090,7 @@ var WorldbookAgentAdvancedPanel_vue_vue_type_style_index_0_scoped_3b704071_lang 
 
 const _hoisted_1$m = { class: "acu-agent-advanced" };
 const _hoisted_2$k = { class: "acu-agent-advanced__section" };
-const _hoisted_3$h = { class: "acu-agent-advanced__section-head" };
+const _hoisted_3$g = { class: "acu-agent-advanced__section-head" };
 const _hoisted_4$e = { class: "acu-agent-advanced__section" };
 const _hoisted_5$d = { class: "acu-agent-advanced__section-head" };
 const _hoisted_6$c = { class: "acu-agent-advanced__grid" };
@@ -139725,7 +139123,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 				)]),
 				_: 1
 			}),
-			createBaseVNode("section", _hoisted_2$k, [createBaseVNode("header", _hoisted_3$h, [createBaseVNode("div", null, [createBaseVNode(
+			createBaseVNode("section", _hoisted_2$k, [createBaseVNode("header", _hoisted_3$g, [createBaseVNode("div", null, [createBaseVNode(
 				"h4",
 				null,
 				toDisplayString($setup.plotCopy.agentControl.executionMode.label),
@@ -140065,7 +139463,7 @@ var WorldbookAgentControlBar_vue_vue_type_style_index_0_scoped_d7a31c7e_lang = n
 
 const _hoisted_1$l = { class: "acu-v2-agent-wb-control" };
 const _hoisted_2$j = { class: "acu-v2-agent-wb-control__head" };
-const _hoisted_3$g = { class: "acu-v2-agent-wb-control__title" };
+const _hoisted_3$f = { class: "acu-v2-agent-wb-control__title" };
 const _hoisted_4$d = { class: "acu-v2-agent-wb-control__desc" };
 const _hoisted_5$c = { class: "acu-v2-agent-wb-control__body" };
 const _hoisted_6$b = { class: "acu-v2-agent-wb-control__config-source" };
@@ -140075,7 +139473,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("section", _hoisted_1$l, [
 		createBaseVNode("div", _hoisted_2$j, [createBaseVNode("div", null, [createBaseVNode(
 			"div",
-			_hoisted_3$g,
+			_hoisted_3$f,
 			toDisplayString($setup.plotCopy.agentControl.title),
 			1
 			/* TEXT */
@@ -142014,7 +141412,7 @@ var VectorIndexPage_vue_vue_type_style_index_0_scoped_51c29a6c_lang = null;
 
 const _hoisted_1$h = { class: "acu-v2-vector-index-page" };
 const _hoisted_2$g = { class: "acu-v2-vector-index-page__panel-stack" };
-const _hoisted_3$f = { class: "acu-v2-vector-index-page__actions" };
+const _hoisted_3$e = { class: "acu-v2-vector-index-page__actions" };
 const _hoisted_4$c = { class: "acu-v2-vector-index-page__number-grid" };
 const _hoisted_5$b = { class: "acu-v2-vector-index-page__panel-stack" };
 const _hoisted_6$a = { class: "acu-v2-vector-api-form__section" };
@@ -142060,7 +141458,7 @@ function _sfc_render$h(_ctx, _cache, $props, $setup, $data, $options) {
 						-1
 						/* CACHED */
 					)),
-					createBaseVNode("div", _hoisted_3$f, [
+					createBaseVNode("div", _hoisted_3$e, [
 						createVNode($setup["AcuButton"], {
 							variant: "primary",
 							disabled: $setup.vector.buildBusy.value || $setup.vector.maintenanceBusy.value,
@@ -144047,7 +143445,7 @@ var DataMgmtPage_vue_vue_type_style_index_0_scoped_3b9b86f0_lang = null;
 
 const _hoisted_1$g = { class: "acu-v2-data-mgmt-page" };
 const _hoisted_2$f = { class: "acu-v2-data-mgmt-page__panel-stack" };
-const _hoisted_3$e = { class: "acu-v2-data-mgmt-page__form-stack" };
+const _hoisted_3$d = { class: "acu-v2-data-mgmt-page__form-stack" };
 const _hoisted_4$b = {
 	key: 0,
 	class: "acu-v2-data-mgmt-page__history-list"
@@ -144145,7 +143543,7 @@ function _sfc_render$g(_ctx, _cache, $props, $setup, $data, $options) {
 			title: $setup.dataMgmtCopy.panels.isolation.title,
 			description: $setup.dataMgmtCopy.panels.isolation.description
 		}, {
-			default: withCtx(() => [createBaseVNode("div", _hoisted_3$e, [createVNode($setup["AcuFormRow"], {
+			default: withCtx(() => [createBaseVNode("div", _hoisted_3$d, [createVNode($setup["AcuFormRow"], {
 				label: "标识代码",
 				hint: $setup.isolationCodeHint
 			}, {
@@ -144846,7 +144244,7 @@ const _hoisted_2$e = {
 	key: 1,
 	class: "acu-v2-manage-list"
 };
-const _hoisted_3$d = { class: "acu-v2-manage-item__info" };
+const _hoisted_3$c = { class: "acu-v2-manage-item__info" };
 const _hoisted_4$a = { class: "acu-v2-manage-item__actions" };
 function _sfc_render$f(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["AcuDrawer"], {
@@ -144892,7 +144290,7 @@ function _sfc_render$f(_ctx, _cache, $props, $setup, $data, $options) {
 					return openBlock(), createElementBlock("li", {
 						key: preset.name,
 						class: "acu-v2-manage-item"
-					}, [createBaseVNode("div", _hoisted_3$d, [createVNode(
+					}, [createBaseVNode("div", _hoisted_3$c, [createVNode(
 						$setup["AcuText"],
 						{
 							as: "span",
@@ -145020,7 +144418,7 @@ var ContentReplacePromptDrawer_vue_vue_type_style_index_0_scoped_c737de28_lang =
 
 const _hoisted_1$e = { class: "acu-content-replace-prompt-drawer__meta" };
 const _hoisted_2$d = { class: "acu-content-replace-prompt-drawer__toolbar" };
-const _hoisted_3$c = { class: "acu-content-replace-prompt-drawer__actions" };
+const _hoisted_3$b = { class: "acu-content-replace-prompt-drawer__actions" };
 function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["AcuDrawer"], {
 		"is-open": $props.isOpen,
@@ -145126,7 +144524,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 				onDelete: _cache[2] || (_cache[2] = ($event) => _ctx.$emit("delete", $event)),
 				onUpdate: _cache[3] || (_cache[3] = (index, patch) => _ctx.$emit("update", index, patch))
 			}, null, 8, ["segments"]),
-			createBaseVNode("footer", _hoisted_3$c, [createVNode($setup["AcuButton"], { onClick: $setup.requestClose }, {
+			createBaseVNode("footer", _hoisted_3$b, [createVNode($setup["AcuButton"], { onClick: $setup.requestClose }, {
 				default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
 					"关闭",
 					-1
@@ -145924,7 +145322,7 @@ var ContentReplacePage_vue_vue_type_style_index_0_scoped_db464554_lang = null;
 
 const _hoisted_1$d = { class: "acu-v2-content-replace-page" };
 const _hoisted_2$c = { class: "acu-v2-content-replace-page__number-grid" };
-const _hoisted_3$b = { class: "acu-v2-content-replace-page__choice-list" };
+const _hoisted_3$a = { class: "acu-v2-content-replace-page__choice-list" };
 const _hoisted_4$9 = { class: "acu-v2-content-replace-page__mini-status" };
 const _hoisted_5$9 = { class: "acu-v2-content-replace-page__actions" };
 const _hoisted_6$8 = { class: "acu-v2-content-replace-page__status-line" };
@@ -146038,7 +145436,7 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 					description: $setup.contentReplaceCopy.panels.mode.description
 				}, {
 					default: withCtx(() => [
-						createBaseVNode("div", _hoisted_3$b, [
+						createBaseVNode("div", _hoisted_3$a, [
 							createVNode($setup["AcuCheckbox"], {
 								"model-value": $setup.store.seamlessMode,
 								label: "无感替换模式",
@@ -146741,7 +146139,7 @@ const _hoisted_2$b = {
 	class: "acu-v2-advanced-tools-page__quick-actions",
 	"aria-label": "SQL 快捷操作"
 };
-const _hoisted_3$a = { class: "acu-v2-advanced-tools-page__sql-actions" };
+const _hoisted_3$9 = { class: "acu-v2-advanced-tools-page__sql-actions" };
 const _hoisted_4$8 = {
 	class: "acu-v2-advanced-tools-page__sql-result-section",
 	"aria-label": "SQL 执行结果"
@@ -146864,7 +146262,7 @@ function _sfc_render$c(_ctx, _cache, $props, $setup, $data, $options) {
 					}, null, 8, ["model-value"])]),
 					_: 1
 				}),
-				createBaseVNode("div", _hoisted_3$a, [
+				createBaseVNode("div", _hoisted_3$9, [
 					createVNode($setup["AcuButton"], {
 						variant: "primary",
 						loading: $setup.sqlFlow.busyAction.value === "execute",
@@ -147270,12 +146668,6 @@ var _sfc_main$b = /*@__PURE__*/ defineComponent({
                 value: devOptions.legacyUiMenuVisible.value,
             },
         ]);
-        const strictJsonTableFillToggle = computed(() => ({
-            key: "strictJsonTableFillEnabled",
-            label: "严格 JSON 填表响应",
-            description: "默认关闭。开启后原生表格输出结构化操作，SQLite 输出 JSON 包裹的 SQL 脚本。",
-            value: settings.strictJsonTableFillEnabled.value,
-        }));
         const maxConcurrentGroups = computed(() => settings.numberFields.value.find((field) => field.key === "maxConcurrentGroups")?.value ?? 1);
         function handleToggleChange(key, value) {
             if (key === "plotAdvanced") {
@@ -147288,74 +146680,60 @@ var _sfc_main$b = /*@__PURE__*/ defineComponent({
                 devOptions.setLegacyUiMenuVisible(value);
             }
         }
-        const __returned__ = { devOptions, settings, toggles, strictJsonTableFillToggle, maxConcurrentGroups, handleToggleChange, AcuFormRow, AcuInput, AcuPanel, AcuPanelGrid, ToggleRow, get developerCopy() { return developerCopy; } };
+        const __returned__ = { devOptions, settings, toggles, maxConcurrentGroups, handleToggleChange, AcuFormRow, AcuInput, AcuPanel, AcuPanelGrid, ToggleRow, get developerCopy() { return developerCopy; } };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.acu-v2-developer-page[data-v-4086a655] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-developer-page__toggle-list[data-v-4086a655] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n@media (max-width: 860px) {\n.acu-v2-developer-page[data-v-4086a655] {\r\n    padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/DeveloperPage.vue#style-0-4086a655");
-var DeveloperPage_vue_vue_type_style_index_0_scoped_4086a655_lang = null;
+injectSfcStyle("\n.acu-v2-developer-page[data-v-d859c428] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-developer-page__toggle-list[data-v-d859c428] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n@media (max-width: 860px) {\n.acu-v2-developer-page[data-v-d859c428] {\r\n    padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/DeveloperPage.vue#style-0-d859c428");
+var DeveloperPage_vue_vue_type_style_index_0_scoped_d859c428_lang = null;
 
 const _hoisted_1$b = { class: "acu-v2-developer-page" };
 const _hoisted_2$a = { class: "acu-v2-developer-page__toggle-list" };
-const _hoisted_3$9 = { class: "acu-v2-developer-page__toggle-list" };
 function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("section", _hoisted_1$b, [createVNode($setup["AcuPanelGrid"], { class: "acu-v2-developer-page__grid" }, {
-		default: withCtx(() => [
-			createVNode($setup["AcuPanel"], {
-				title: $setup.developerCopy.panels.gatedFields.title,
-				description: $setup.developerCopy.panels.gatedFields.description
+		default: withCtx(() => [createVNode($setup["AcuPanel"], {
+			title: $setup.developerCopy.panels.gatedFields.title,
+			description: $setup.developerCopy.panels.gatedFields.description
+		}, {
+			default: withCtx(() => [createBaseVNode("div", _hoisted_2$a, [(openBlock(true), createElementBlock(
+				Fragment,
+				null,
+				renderList($setup.toggles, (item) => {
+					return openBlock(), createBlock($setup["ToggleRow"], {
+						key: item.key,
+						item,
+						onChange: ($event) => $setup.handleToggleChange(item.key, $event)
+					}, null, 8, ["item", "onChange"]);
+				}),
+				128
+				/* KEYED_FRAGMENT */
+			))])]),
+			_: 1
+		}, 8, ["title", "description"]), createVNode($setup["AcuPanel"], {
+			title: $setup.developerCopy.panels.formFillRuntime.title,
+			description: $setup.developerCopy.panels.formFillRuntime.description
+		}, {
+			default: withCtx(() => [createVNode($setup["AcuFormRow"], {
+				label: "最大并发更新组数",
+				hint: "大于 1 时，多个表格分组可能同时调用填表 API。数值越大越快，但 API 压力和失败后排查难度也越高。"
 			}, {
-				default: withCtx(() => [createBaseVNode("div", _hoisted_2$a, [(openBlock(true), createElementBlock(
-					Fragment,
-					null,
-					renderList($setup.toggles, (item) => {
-						return openBlock(), createBlock($setup["ToggleRow"], {
-							key: item.key,
-							item,
-							onChange: ($event) => $setup.handleToggleChange(item.key, $event)
-						}, null, 8, ["item", "onChange"]);
-					}),
-					128
-					/* KEYED_FRAGMENT */
-				))])]),
+				default: withCtx(() => [createVNode($setup["AcuInput"], {
+					type: "number",
+					min: 1,
+					step: 1,
+					"model-value": $setup.maxConcurrentGroups,
+					onChange: _cache[0] || (_cache[0] = ($event) => $setup.settings.setNumber("maxConcurrentGroups", $event))
+				}, null, 8, ["model-value"])]),
 				_: 1
-			}, 8, ["title", "description"]),
-			createVNode($setup["AcuPanel"], {
-				title: "填表高级选项",
-				description: "仅在需要严格约束模型填表响应时开启。开启后将切换到隔离提示词和严格 JSON 解析链路。"
-			}, {
-				default: withCtx(() => [createBaseVNode("div", _hoisted_3$9, [createVNode($setup["ToggleRow"], {
-					item: $setup.strictJsonTableFillToggle,
-					onChange: _cache[0] || (_cache[0] = ($event) => $setup.settings.setStrictJsonTableFillEnabled($event))
-				}, null, 8, ["item"])])]),
-				_: 1
-			}),
-			createVNode($setup["AcuPanel"], {
-				title: $setup.developerCopy.panels.formFillRuntime.title,
-				description: $setup.developerCopy.panels.formFillRuntime.description
-			}, {
-				default: withCtx(() => [createVNode($setup["AcuFormRow"], {
-					label: "最大并发更新组数",
-					hint: "大于 1 时，多个表格分组可能同时调用填表 API。数值越大越快，但 API 压力和失败后排查难度也越高。"
-				}, {
-					default: withCtx(() => [createVNode($setup["AcuInput"], {
-						type: "number",
-						min: 1,
-						step: 1,
-						"model-value": $setup.maxConcurrentGroups,
-						onChange: _cache[1] || (_cache[1] = ($event) => $setup.settings.setNumber("maxConcurrentGroups", $event))
-					}, null, 8, ["model-value"])]),
-					_: 1
-				})]),
-				_: 1
-			}, 8, ["title", "description"])
-		]),
+			})]),
+			_: 1
+		}, 8, ["title", "description"])]),
 		_: 1
 	})]);
 }
-var DeveloperPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$b], ["__scopeId", "data-v-4086a655"]]);
+var DeveloperPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$b], ["__scopeId", "data-v-d859c428"]]);
 
 /**
  * page-registry — 一级页静态注册表（plan §4.1 + §D24）

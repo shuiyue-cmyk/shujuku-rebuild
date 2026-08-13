@@ -38,8 +38,6 @@ import { validateDDLTextAgainstHeaders_ACU } from "../../shared/ddl-utils";
 import {
   DEFAULT_CHAR_CARD_PROMPT_ACU,
   DEFAULT_CHAR_CARD_PROMPT_SQL_ACU,
-  DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU,
-  DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU,
 } from "../../shared/defaults-json.js";
 import { getAllLogs, subscribe, type LogEntry } from "../../shared/log-buffer";
 import {

@@ -19,7 +19,6 @@ function createSettings() {
     autoUpdateTokenThreshold: 500,
     tableMaxRetries: 3,
     tableEditLastPairOnly: true,
-    strictJsonTableFillEnabled: false,
     discardUnauthorizedTableEditsEnabled: true,
     tableContextExtractTags: '',
     tableContextExtractRules: [{ start: '<正文>', end: '</正文>' }],
@@ -257,7 +256,6 @@ describe('TablePage', () => {
     expect(text).not.toContain('立即构建交火纪要索引');
     expect(text).not.toContain('Embedding / Rerank');
     expect(Array.from(page!.querySelectorAll('button')).some(b => b.textContent?.trim() === '刷新')).toBe(false);
-    expect(page!.querySelector('[data-acu-toggle-key="strictJsonTableFillEnabled"]')).toBeNull();
 
     const cols = page!.querySelectorAll('.acu-v2-table-page__col');
     expect(cols.length).toBe(2);

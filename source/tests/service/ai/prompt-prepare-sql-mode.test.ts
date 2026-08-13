@@ -827,25 +827,6 @@ describe('prepareAIInput_ACU — SQL 模式', () => {
     expect(result!.tableDataText).toContain('按 SQLite 原生整行替换语义执行');
   });
 
-  it('strict JSON 模式沿用同一英文标识符契约', async () => {
-    mockSettings.strictJsonTableFillEnabled = true;
-    mockCurrentJsonTableData = {
-      sheet_0: {
-        name: '背包物品表',
-        sourceData: { ddl: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, item_name TEXT);' },
-        content: [['row_id', 'item_name'], ['1', '铁剑']],
-        updateConfig: {},
-      },
-    };
-
-    const result = await prepareAIInput_ACU([], 'standard');
-    expect(result).not.toBeNull();
-    expect(result!.tableDataText).toContain('CREATE TABLE inventory');
-    expect(result!.tableDataText).not.toContain('CREATE TABLE beibaowupinbiao');
-    expect(result!.tableDataText).toContain('响应 JSON 的 sql 字符串中');
-    expect(result!.tableDataText).toContain('SQL 表名和列名必须严格照抄上方对应 CREATE TABLE 中提供的标识符，不得翻译、缩写、猜测或改写。');
-  });
-
   it('固定 row_id 约束不再生成专用 REPLACE 许可注释', async () => {
     mockCurrentJsonTableData = {
       sheet_0: {

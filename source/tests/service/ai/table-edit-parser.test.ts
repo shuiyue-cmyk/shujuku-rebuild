@@ -234,42 +234,6 @@ describe('extractTableEditInner_ACU', () => {
   });
 });
 
-describe('strict JSON parseAndApplyTableEditsToData_ACU', () => {
-  beforeEach(() => {
-    mockSettings = { tableEditLastPairOnly: false, strictJsonTableFillEnabled: true };
-    mockIsSqliteMode = false;
-  });
-
-  it('直接解析并应用 table_edit_ops_v1', () => {
-    const data = {
-      sheet_0: {
-        uid: 'sheet_0',
-        name: '角色状态',
-        content: [
-          ['row_id', '姓名', '状态'],
-          ['1', '小玉', '正常'],
-        ],
-      },
-    };
-    const response = JSON.stringify({
-      format: 'table_edit_ops_v1',
-      ops: [{ op: 'update', sheet: '角色状态', where: { 姓名: '小玉' }, set: { 状态: '疲惫' } }],
-    });
-    const result: any = parseAndApplyTableEditsToData_ACU(response, data);
-    expect(result.success).toBe(true);
-    expect(data.sheet_0.content[1][2]).toBe('疲惫');
-  });
-
-  it('strict 开启时 legacy 裸响应解析失败', () => {
-    const data = { sheet_0: { uid: 'sheet_0', name: '表', content: [['row_id', '字段']] } };
-    const result: any = parseAndApplyTableEditsToData_ACU('<tableEdit>insertRow(0,{"0":"x"})</tableEdit>', data);
-    expect(result.success).toBe(false);
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════
-// parseAndApplyTableEdits_ACU — SQL 分支
-// ═══════════════════════════════════════════════════════════════
 describe('parseAndApplyTableEdits_ACU — SQL 分支', () => {
   beforeEach(() => {
     vi.clearAllMocks();

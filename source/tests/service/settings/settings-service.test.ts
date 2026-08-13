@@ -129,9 +129,7 @@ vi.mock('../../../src/shared/data-constants', () => ({
 vi.mock('../../../src/shared/defaults-json.js', () => ({
   DEFAULT_BUILTIN_PLOT_PRESETS_ACU: [{ name: '时间召回', _acuBuiltinPresetId: 'time-recall', _acuBuiltinPresetVersion: 'test' }],
   DEFAULT_CHAR_CARD_PROMPT_ACU: [{ role: 'USER', content: '默认提示词' }],
-  DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU: [{ role: 'USER', content: '默认 strict json 提示词' }],
   DEFAULT_CHAR_CARD_PROMPT_SQL_ACU: [{ role: 'USER', content: '默认 sql 提示词' }],
-  DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU: [{ role: 'USER', content: '默认 sql strict json 提示词' }],
   DEFAULT_MERGE_SUMMARY_PROMPT_ACU: '默认合并提示词',
   DEFAULT_PLOT_SETTINGS_ACU: { enabled: false },
   DEFAULT_TABLE_TEMPLATE_ACU: DEFAULT_TEMPLATE_STR_ACU,
@@ -147,7 +145,6 @@ vi.mock('../../../src/shared/defaults', () => ({
   TABLE_TEMPLATE_DEFAULTS_REFRESH_VERSION_ACU: 'test-table-defaults-refresh',
   TABLE_FILL_PROMPT_FORCE_DEFAULT_VERSION_ACU: 'test-prompt-force-default',
   TEMPLATE_ASSISTANT_PROMPT_FORCE_DEFAULT_VERSION_ACU: 'test-template-assistant-prompt-force-default',
-  STRICT_JSON_TABLE_FILL_FORCE_DISABLE_VERSION_ACU: 'test-strict-json-force-disable',
   VECTOR_MEMORY_DEFAULTS_REFRESH_VERSION_ACU: 'spv3.6.3-keyword-prompt-content-based-refresh',
   SUMMARY_INDEX_V2_WRITER_FORCE_ENABLE_VERSION_ACU: 'spv3.6.10-v2-writer-force-enable',
   defaultWorldbookConfig_ACU: {
@@ -305,16 +302,12 @@ beforeEach(() => {
   mockSettings.dataIsolationEnabled = false;
   mockSettings.storageMode = 'native';
   mockSettings.charCardPrompt = [];
-  mockSettings.strictJsonCharCardPrompt = [];
-  mockSettings.strictJsonSqlCharCardPrompt = [];
   mockSettings.mergeSummaryPrompt = '';
   mockSettings.plotSettings = { plotWorldbookConfig: null };
   mockSettings.plotPresetBindings = {};
   mockSettings.currentTemplatePresetName = '';
   mockSettings.tableTemplateDefaultsRefreshVersion = '';
   mockSettings.tableFillPromptForceDefaultVersion = '';
-  mockSettings.strictJsonTableFillEnabled = false;
-  mockSettings.strictJsonTableFillForceDisableVersion = '';
   mockSettings.maxConcurrentGroups = 1;
   mockSettings.zeroTkOccupyModeDefault = false;
   mockSettings.characterSettings = {};
@@ -729,43 +722,15 @@ describe('loadSettings_ACU', () => {
     expect(mockSettings.tableTemplateDefaultsRefreshVersion).toBe('test-table-defaults-refresh');
   });
 
-  it('一次性强制关闭历史严格 JSON 填表开关并写入 marker', () => {
-    mockReadProfileSettings.mockReturnValue({
-      strictJsonTableFillEnabled: true,
-    });
-
-    loadSettings_ACU();
-
-    expect(mockSettings.strictJsonTableFillEnabled).toBe(false);
-    expect(mockSettings.strictJsonTableFillForceDisableVersion)
-      .toBe('test-strict-json-force-disable');
-  });
-
-  it('已记录严格 JSON 关闭 marker 后保留用户后续重新开启的设置', () => {
-    mockReadProfileSettings.mockReturnValue({
-      strictJsonTableFillEnabled: true,
-      strictJsonTableFillForceDisableVersion: 'test-strict-json-force-disable',
-      tableFillPromptForceDefaultVersion: 'test-prompt-force-default',
-    });
-
-    loadSettings_ACU();
-
-    expect(mockSettings.strictJsonTableFillEnabled).toBe(true);
-  });
-
   it('一次性强制恢复恒覆盖为 SQL 默认填表提示词（原生模式已移除，storageMode 字段被忽略）', () => {
     mockReadProfileSettings.mockReturnValue({
       storageMode: 'native',
       charCardPrompt: [{ role: 'USER', content: '用户自定义提示词', enabled: false }],
-      strictJsonCharCardPrompt: [{ role: 'USER', content: '用户自定义 strict json 提示词' }],
-      strictJsonSqlCharCardPrompt: [{ role: 'USER', content: '用户自定义 sql strict json 提示词' }],
     });
 
     loadSettings_ACU();
 
     expect(mockSettings.charCardPrompt).toEqual([{ role: 'USER', content: '默认 sql 提示词' }]);
-    expect(mockSettings.strictJsonCharCardPrompt).toEqual([{ role: 'USER', content: '默认 strict json 提示词' }]);
-    expect(mockSettings.strictJsonSqlCharCardPrompt).toEqual([{ role: 'USER', content: '默认 sql strict json 提示词' }]);
     expect(mockSettings.tableFillPromptForceDefaultVersion).toBe('test-prompt-force-default');
   });
 

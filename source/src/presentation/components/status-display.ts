@@ -118,9 +118,7 @@ import { $popupInstance_ACU, $statusMessageSpan_ACU, $manualUpdateCardButton_ACU
       }
       if (typeof updateApiStatusDisplay_ACU === 'function') updateApiStatusDisplay_ACU();
       if ($charCardPromptSegmentsContainer_ACU) {
-          const promptForCurrentMode = s.strictJsonTableFillEnabled === true
-              ? (s.storageMode === 'sqlite' ? s.strictJsonSqlCharCardPrompt : s.strictJsonCharCardPrompt)
-              : s.charCardPrompt;
+          const promptForCurrentMode = s.charCardPrompt;
           renderPromptSegments_ACU(promptForCurrentMode || s.charCardPrompt);
       }
       if ($autoUpdateThresholdInput_ACU) $autoUpdateThresholdInput_ACU.val(s.autoUpdateThreshold);

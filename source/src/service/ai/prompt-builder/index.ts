@@ -12,6 +12,3 @@ export { callCustomOpenAI_ACU, handleApiResponse_ACU, RetryableAiResponseError_A
 
 // 表格编辑解析
 export { extractTableEditInner_ACU, parseAndApplyTableEdits_ACU, parseAndApplyTableEditsToData_ACU } from './table-edit-parser';
-
-// 严格 JSON 填表响应
-export { buildStrictJsonTableFillResponseFormat_ACU, cloneStrictPromptSegments_ACU, convertStrictOpsToTableEdit_ACU, extractStrictJsonTableFillResponse_ACU } from './strict-json-table-fill';

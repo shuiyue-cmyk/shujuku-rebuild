@@ -3756,27 +3756,6 @@ describe('collectGroupFillResponse_ACU', () => {
     vi.mocked(isSqliteMode).mockReturnValue(false);
   });
 
-  it('strict JSON 路径同样保留 AI 使用的作者英文 SQL 表名', async () => {
-    const job = createJob();
-    const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
-    vi.mocked(isSqliteMode).mockReturnValue(true);
-    mockSettings.strictJsonTableFillEnabled = true;
-    try {
-      mockPrepareAIInput.mockResolvedValue({ tableDataText: 'CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, item_name TEXT);' });
-      mockCallCustomOpenAI.mockImplementation(async (dynamicContent: any) => {
-        expect(dynamicContent.tableDataText).toContain('CREATE TABLE inventory');
-        expect(dynamicContent.tableDataText).not.toContain('beibaowupinbiao');
-        return JSON.stringify({ format: 'table_edit_sql_v1', sql: "INSERT INTO inventory (item_name) VALUES ('药水');" });
-      });
-
-      const result = await collectGroupFillResponse_ACU(job);
-      expect(result).toMatchObject({ success: true, tableEditText: "INSERT INTO inventory (item_name) VALUES ('药水');" });
-    } finally {
-      mockSettings.strictJsonTableFillEnabled = false;
-      vi.mocked(isSqliteMode).mockReturnValue(false);
-    }
-  });
-
   it('AI 响应缺少完整 tableEdit 标签时按重试次数失败', async () => {
     const job = createJob();
     mockSettings.tableMaxRetries = 1;
