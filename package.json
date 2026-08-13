@@ -1,0 +1,32 @@
+{
+  "name": "shujuku-rebuild",
+  "version": "9.0.0",
+  "private": true,
+  "type": "module",
+  "description": "SP·数据库（酒馆数据库）重构版 — 标准 SillyTavern/TauriTavern 扩展：SQL 表格 / 剧情推进 / skill 化 / 可视化前端兼容。零依赖酒馆助手。",
+  "scripts": {
+    "build": "rollup -c",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:parallel": "vitest run --fileParallelism --maxWorkers=4"
+  },
+  "devDependencies": {
+    "@rollup/plugin-commonjs": "^29.0.2",
+    "@rollup/plugin-node-resolve": "^16.0.3",
+    "@rollup/plugin-replace": "^6.0.3",
+    "@rollup/plugin-typescript": "^12.1.0",
+    "@types/jquery": "^4.0.0",
+    "jsdom": "^29.0.2",
+    "pinia": "^2.3.1",
+    "rollup": "^4.28.0",
+    "sql.js": "^1.14.1",
+    "tslib": "^2.8.0",
+    "typescript": "^5.7.0",
+    "unplugin-vue": "^7.2.0",
+    "vitest": "^3.2.4",
+    "vue": "^3.5.33"
+  },
+  "dependencies": {
+    "pinyin-pro": "3.28.2"
+  }
+}

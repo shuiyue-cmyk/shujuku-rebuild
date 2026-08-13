@@ -1,0 +1,7 @@
+{
+  "name": "背包物品表",
+  "content": [["row_id", "物品名", "数量"], ["1", "铁剑", "3"]],
+  "sourceData": {
+    "ddl": "CREATE TABLE inventory (\n  row_id INTEGER PRIMARY KEY, -- 行号\n  item_name TEXT, -- 物品名\n  quantity INTEGER -- 数量\n)"
+  }
+}

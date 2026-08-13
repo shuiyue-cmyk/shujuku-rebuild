@@ -1,0 +1,36 @@
+{
+  "legacy": {
+    "mate": { "type": "acu", "version": 1 },
+    "sheet_0": {
+      "uid": "inventory",
+      "name": "背包",
+      "content": [["row_id", "名称"], ["1", "legacy 铁剑"]],
+      "sourceData": {},
+      "updateConfig": {},
+      "exportConfig": {},
+      "orderNo": 0
+    }
+  },
+  "v2Frame": {
+    "version": 2,
+    "headRevision": "checkpoint:fixture-mixed-v2",
+    "checkpoint": {
+      "kind": "full",
+      "createdAt": 1,
+      "reason": "init",
+      "data": {
+        "mate": { "type": "acu", "version": 1 },
+        "sheet_0": {
+          "uid": "inventory",
+          "name": "背包",
+          "content": [["row_id", "名称"], ["1", "v2 铁剑"]],
+          "sourceData": {},
+          "updateConfig": {},
+          "exportConfig": {},
+          "orderNo": 0
+        }
+      }
+    },
+    "logEntries": []
+  }
+}

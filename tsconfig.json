@@ -1,0 +1,42 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+    "strict": false,
+    "strictBindCallApply": true,
+    "strictFunctionTypes": true,
+    "noImplicitThis": true,
+    "noImplicitAny": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "ignoreDeprecations": "5.0",
+    "paths": {
+      "@shared/*": ["./src/shared/*"],
+      "@data/*": ["./src/data/*"],
+      "@service/*": ["./src/service/*"],
+      "@presentation/*": ["./src/presentation/*"],
+      "@presentation-v2/*": ["./src/presentation-v2/*"]
+    },
+    "types": ["function", "iframe", "jquery", "sql-js", "vue-shim"],
+    "typeRoots": ["./@types", "./node_modules/@types"]
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.js",
+    "src/**/*.vue",
+    "@types/**/*.d.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "scripts",
+    "backups",
+    "src/data/models/defaults.ts"
+  ]
+}

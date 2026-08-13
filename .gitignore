@@ -1,0 +1,22 @@
+# 依赖
+node_modules/
+dist/
+
+# 本地工具链
+.codebuddy/
+.specify/
+.limcode/
+
+# 本地分析缓存/归档
+.analysis-cache.md
+.analysis-archive/
+.analysis-*.md
+
+# 日志与临时文件
+*.log
+.acu-*.txt
+tsc.log
+
+# 系统
+.DS_Store
+Thumbs.db

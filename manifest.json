@@ -1,0 +1,12 @@
+{
+    "display_name": "SP·数据库（重构版）",
+    "loading_order": 200,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "",
+    "author": "shuiyue-cmyk",
+    "version": "9.0.0",
+    "homePage": "https://github.com/shuiyue-cmyk/shujuku-rebuild",
+    "auto_update": true
+}

@@ -1,0 +1,31 @@
+{
+  "version": 2,
+  "headRevision": "orphan:fixture-data-replace",
+  "logEntries": [{
+    "seq": 1,
+    "entryId": "fixture-orphan-data-replace",
+    "createdAt": 1,
+    "source": "import",
+    "targetMessageIndex": 0,
+    "aiFloor": 1,
+    "filledSheetKeys": ["sheet_0"],
+    "changedSheetKeys": ["sheet_0"],
+    "groupKeys": [],
+    "operations": [{
+      "kind": "data_replace",
+      "reason": "import",
+      "data": {
+        "mate": { "type": "acu", "version": 1 },
+        "sheet_0": {
+          "uid": "inventory",
+          "name": "孤立背包",
+          "content": [["row_id", "名称"], ["1", "铁剑"]],
+          "sourceData": {},
+          "updateConfig": {},
+          "exportConfig": {},
+          "orderNo": 0
+        }
+      }
+    }]
+  }]
+}
