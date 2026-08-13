@@ -16,6 +16,7 @@ dist/
 *.log
 .acu-*.txt
 tsc.log
+.smoke-trace.log
 
 # 系统
 .DS_Store
