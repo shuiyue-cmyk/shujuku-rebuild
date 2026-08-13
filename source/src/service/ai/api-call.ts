@@ -32,11 +32,12 @@ export function buildCustomApiRequestBody_ACU(
   const temperature = opts.temperature ?? effectiveApiConfig.temperature ?? 1.0;
   const topP = opts.topP ?? effectiveApiConfig.top_p ?? effectiveApiConfig.topP ?? 0.95;
 
-  // 基础 Authorization 头
-  let headers = effectiveApiConfig.apiKey ? `Authorization: Bearer ${effectiveApiConfig.apiKey}` : '';
-  // 追加 requestHeaders
+  // 基础 Authorization 头（apiKey 剥离换行，防请求头注入）
+  const apiKey = String(effectiveApiConfig.apiKey || '').replace(/[\r\n]+/g, '');
+  let headers = apiKey ? `Authorization: Bearer ${apiKey}` : '';
+  // 追加 requestHeaders（逐行清洗换行）
   if (effectiveApiConfig.requestHeaders) {
-    const extra = effectiveApiConfig.requestHeaders.trim();
+    const extra = String(effectiveApiConfig.requestHeaders).trim().replace(/[\r\n]+/g, '\n');
     if (extra) {
       headers = headers ? `${headers}\n${extra}` : extra;
     }

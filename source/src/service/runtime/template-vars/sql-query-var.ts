@@ -18,6 +18,37 @@ import { isSqliteMode } from '../../table/storage-mode';
 import { logDebug_ACU, logWarn_ACU, logError_ACU } from '../../../shared/utils';
 import { resolveReadQuerySql_ACU } from '../../../shared/sql-read-resolver';
 import { resolveCurrentRuntimeReadSql_ACU } from '../read-query-resolver';
+import { validateReadOnlySql_ACU } from './read-only-sql-validation';
+
+// ═══════════════════════════════════════════════════════════════
+// 模板变量 SQL/ORM 表达式安全校验（H1/H2 加固）
+// ═══════════════════════════════════════════════════════════════
+
+/** 原始 SQL 的只读前置校验（翻译前）。 */
+function isTemplateSqlReadOnly_ACU(sql: string): boolean {
+  const result = validateReadOnlySql_ACU(sql);
+  if (!result.valid) {
+    logWarn_ACU(`[模板变量] 拒绝执行非只读 SQL: ${String(sql).slice(0, 120)} (${result.reason})`);
+  }
+  return result.valid;
+}
+
+// 安全 ORM/条件表达式结构白名单：仅允许方法链调用（db.标识符(.标识符(参数))*) 与
+// 末尾比较（> 3 / == "x" 等）。字符串字面量先替换为占位，黑名单模式再兜底。
+const DB_EXPR_BLACKLIST_RE_ACU =
+  /constructor|__proto__|prototype|\beval\b|\bfetch\b|\bFunction\b|\brequire\b|\bimport\b|\bnew\s+\w|=>|;|globalThis|window\.|document\.|\bprocess\b|alert|confirm|prompt|\.open\(/gi;
+const DB_EXPR_CHAIN_RE_ACU = /^db(\.[A-Za-z\u4e00-\u9fa5_$][\w\u4e00-\u9fa5$]*(?:\([^()]*\)|\[[^\[\]]*\])?)+$/;
+const DB_EXPR_WITH_COMPARE_RE_ACU =
+  /^db(\.[A-Za-z\u4e00-\u9fa5_$][\w\u4e00-\u9fa5$]*(?:\([^()]*\)|\[[^\[\]]*\])?)*\s*(?:===|==|!==|!=|>=|<=|>|<|&&|\|\||!)\s*[^()\[\]]+$/;
+
+function isSafeDbExpression_ACU(expr: string): boolean {
+  if (!expr || typeof expr !== 'string') return false;
+  const trimmed = expr.trim();
+  if (!trimmed.startsWith('db.')) return false;
+  const sanitized = trimmed.replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"/g, '""');
+  if (DB_EXPR_BLACKLIST_RE_ACU.test(sanitized)) return false;
+  return DB_EXPR_CHAIN_RE_ACU.test(sanitized) || DB_EXPR_WITH_COMPARE_RE_ACU.test(sanitized);
+}
 
 // ═══════════════════════════════════════════════════════════════
 // 变量系统 — 存储 {[db...as X]} / {[sql...as X]} 的结果
@@ -563,8 +594,11 @@ function execExpr(expression: string): string | number | null {
       logWarn_ACU('[db.expr] 空表达式');
       return null;
     }
+    // H1 加固：db.expr 以 SELECT 包裹校验只读（拒绝写语句/多语句）
+    if (!isTemplateSqlReadOnly_ACU(`SELECT ${expression.trim()}`)) return null;
     if (!isTemplateQueryRuntimeReady_ACU('db.expr')) return null;
     const translatedExpr = resolveTemplateReadSql_ACU(expression.trim());
+    if (!isTemplateSqlReadOnly_ACU(`SELECT ${translatedExpr}`)) return null;
     const sql = `SELECT ${translatedExpr}`;
     const provider = getStorageProvider();
     const result = provider.executeQuery(sql);
@@ -631,6 +665,8 @@ function execCalc(expression: string): number | null {
       logWarn_ACU(`[db.calc] 表达式包含未定义变量: ${expression}`);
       return null;
     }
+    // H1 加固：算术表达式以 SELECT 包裹校验只读
+    if (!isTemplateSqlReadOnly_ACU(`SELECT ${processed}`)) return null;
     if (!isTemplateQueryRuntimeReady_ACU('db.calc')) return null;
     const provider = getStorageProvider();
     const result = provider.executeQuery(`SELECT ${processed}`);
@@ -724,6 +760,12 @@ export function evaluateOrmExpression(expr: string): string {
     // 确保表达式以 db. 开头
     const fullExpr = trimmed.startsWith('db.') ? trimmed : 'db.' + trimmed;
 
+    // H2 加固：仅允许白名单方法链结构，拒绝任意 JS 表达式执行
+    if (!isSafeDbExpression_ACU(fullExpr)) {
+      logWarn_ACU(`[ORM] 拒绝执行非白名单表达式: ${fullExpr.slice(0, 120)}`);
+      return '';
+    }
+
     const db = createDbProxy();
     const fn = new Function('db', `return ${fullExpr}`);
     const result = fn(db);
@@ -768,8 +810,20 @@ export function evaluateRawSqlExpression(expr: string, options: RawSqlEvaluation
       return '';
     }
 
+    // H1 加固：翻译前只读校验（翻译后二次校验在下方执行前）
+    if (!isTemplateSqlReadOnly_ACU(trimmed)) {
+      if (options.throwOnError === true) throw new Error('sql_not_read_only');
+      return '';
+    }
+
     // 通过 NameMapper 翻译中文名
     const translatedSql = resolveTemplateReadSql_ACU(trimmed);
+
+    // H1 加固：翻译后二次校验（防中文表/列名翻译引入写语句）
+    if (!isTemplateSqlReadOnly_ACU(translatedSql)) {
+      if (options.throwOnError === true) throw new Error('sql_not_read_only');
+      return '';
+    }
 
     // 执行查询
     const provider = getStorageProvider();
@@ -854,6 +908,12 @@ export function evaluateDbCondition(expression: string): boolean {
 
     const fullExpr = trimmed.startsWith('db.') ? trimmed : 'db.' + trimmed;
 
+    // H2 加固：仅允许白名单方法链/比较结构
+    if (!isSafeDbExpression_ACU(fullExpr)) {
+      logWarn_ACU(`[<if db>] 拒绝执行非白名单表达式: ${fullExpr.slice(0, 120)}`);
+      return false;
+    }
+
     const db = createDbProxy();
     const fn = new Function('db', `return ${fullExpr}`);
     const result = fn(db);
@@ -880,7 +940,12 @@ export function evaluateSqlCondition(expression: string): boolean {
     // 直接传入 SQL 表达式，不需要包引号
     // evaluateRawSqlExpression 内部会处理 "sql " 前缀和引号剥离
     // 但这里的 expression 来自 <if sql="...">，本身就是纯 SQL，直接执行即可
-    const translatedSql = resolveTemplateReadSql_ACU(expression.trim());
+    const rawSql = expression.trim();
+    // H1 加固：翻译前只读校验
+    if (!isTemplateSqlReadOnly_ACU(rawSql)) return false;
+    const translatedSql = resolveTemplateReadSql_ACU(rawSql);
+    // H1 加固：翻译后二次校验
+    if (!isTemplateSqlReadOnly_ACU(translatedSql)) return false;
     const provider = getStorageProvider();
     const result = provider.executeQuery(translatedSql);
     if (result.values.length === 0) return false;

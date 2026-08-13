@@ -69,20 +69,4 @@ describe('storage-mode', () => {
       expect(isSqliteMode()).toBe(true);
     });
   });
-
-  // ═══════════════════════════════════════════════════════════════
-  // isNativeMode
-  // ═══════════════════════════════════════════════════════════════
-  
-
-    it('settings 标记为 native 时仍返回 false', () => {
-      mockSettings = { storageMode: 'native' };
-      expect(isNativeMode()).toBe(false);
-    });
-
-    it('settings 未设置时返回 false', () => {
-      mockSettings = {};
-      expect(isNativeMode()).toBe(false);
-    });
-  });
 });

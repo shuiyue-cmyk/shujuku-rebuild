@@ -25,12 +25,15 @@ export function cleanChatName_ACU(fileName: string): string {
 
 /**
  * 深度合并两个对象（source 覆盖 target）
+ * 跳过 __proto__/constructor/prototype 键，防止 JSON 导入原型污染。
  */
 export function deepMerge_ACU(target: any, source: any): any {
   const isObject = (obj: any) => obj && typeof obj === 'object' && !Array.isArray(obj);
+  const isSafeKey = (key: string) => key !== '__proto__' && key !== 'constructor' && key !== 'prototype';
   let output = { ...target };
   if (isObject(target) && isObject(source)) {
     Object.keys(source).forEach(key => {
+      if (!isSafeKey(key)) return;
       if (isObject(source[key])) {
         if (!(key in target))
           Object.assign(output, { [key]: source[key] });
