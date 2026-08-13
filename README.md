@@ -25,7 +25,8 @@ https://github.com/shuiyue-cmyk/shujuku-rebuild
 
 | 项目 | 说明 |
 | --- | --- |
-| 原生存储模式 | 移除。表格数据只通过 SQLite（sql.js + WASM，base64 内联）持久化 |
+| 原生存储模式 | 移除。表格数据只通过 SQLite（sql.js + WASM，base64 内联）持久化，不再展示存储模式 |
+| 外部导入 | 移除（TXT 拆分导入页面与注入链路；世界书侧对历史「外部导入-」前缀条目的保护保留，防止误删旧数据） |
 | 智能续写 | 移除（含 v2 页面、旧弹窗区块与循环引擎） |
 | 酒馆助手硬依赖 | 移除启动门控与 `TavernHelper.generate` 钩子 |
 | 正文替换解锁 | 由隐藏的 `maxRetries==49` 解锁改为高级设置中的直接开关 |

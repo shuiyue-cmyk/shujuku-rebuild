@@ -40,7 +40,7 @@ function tableData() {
 describe('strict-json-table-fill', () => {
   it('keeps native default prompt details and only replaces output protocol', () => {
     const mainPrompt = DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU.find((segment: any) => segment.mainSlot === 'A')?.content || '';
-    expect(mainPrompt).toContain('必须逐表阅读每个表格的note部分');
+    expect(mainPrompt).toContain('必须逐表阅读每个表格的 DDL 注释和 Note 部分');
     expect(mainPrompt).toContain('可能还存在某些存放特殊填表规则的表格');
     expect(mainPrompt).toContain('日志与纪要语气校准');
     expect(mainPrompt).toContain('正常恋爱互动');

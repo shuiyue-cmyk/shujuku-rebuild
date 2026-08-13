@@ -70,11 +70,6 @@
               :item="item"
               @change="handleToggleChange(item.key, $event)"
             />
-
-            <DashboardStorageModeSection
-              :model-value="dashboard.storageMode.value"
-              :options="dashboard.storageOptions"
-            />
           </template>
         </div>
       </AcuPanel>
@@ -90,14 +85,12 @@ import AcuMessage from "../components/_lib/AcuMessage.vue";
 import AcuPanel from "../components/_lib/AcuPanel.vue";
 import AcuPanelGrid from "../components/_lib/AcuPanelGrid.vue";
 import AcuSegmentedControl from "../components/_lib/AcuSegmentedControl.vue";
-import DashboardStorageModeSection from "../components/DashboardStorageModeSection.vue";
 import ToggleRow from "../components/DashboardToggleRow.vue";
 import { useChatChangedTick } from "../composables/useChatChangedListener";
 import { useTemplateRuntimeChangeTick } from "../composables/useTemplateRuntimeChangeListener";
 import { useDashboardPage } from "../composables/useDashboardPage";
 import {
   FEATURE_GATE_CONTENT_REPLACE,
-  FEATURE_GATE_IMPORT,
   FEATURE_GATE_PLOT,
   FEATURE_GATE_VECTOR_INDEX,
 } from "../router/page-registry";
@@ -122,7 +115,6 @@ const groupOptions = [
 async function refreshAll(): Promise<void> {
   plotStore.refreshFromSettings();
   await dashboard.refresh();
-  routerStore.setSqliteMode(dashboard.storageMode.value === "sqlite");
   syncFeaturePageGates();
 }
 
@@ -132,12 +124,6 @@ function syncFeaturePageGates(): void {
     dashboard.contentReplaceGateEnabled.value,
   );
   routerStore.syncFeatureGate(FEATURE_GATE_PLOT, plotStore.enabled === true);
-  routerStore.syncFeatureGate(
-    FEATURE_GATE_IMPORT,
-    dashboard.advancedToggles.value.some(
-      (item) => item.key === "externalImportPageEnabled" && item.value,
-    ),
-  );
   routerStore.syncFeatureGate(
     FEATURE_GATE_VECTOR_INDEX,
     dashboard.advancedToggles.value.some(

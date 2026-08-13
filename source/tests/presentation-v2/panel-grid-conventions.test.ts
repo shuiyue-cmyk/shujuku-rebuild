@@ -11,7 +11,6 @@ const panelGridPages = [
   'DashboardPage.vue',
   'DeveloperPage.vue',
   'FormFillPage.vue',
-  'ImportPage.vue',
   'PlotPage.vue',
   'TablePage.vue',
   'VectorIndexPage.vue',

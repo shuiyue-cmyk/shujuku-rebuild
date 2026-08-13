@@ -92,16 +92,6 @@ export function generateDashboardTabHTML(): string {
                                 <label for="${SCRIPT_ID_PREFIX_ACU}-worldbook-outline-entry-enabled">0TK占用模式</label>
                             </div>
                             <small class="notes">0TK占用模式仍然作用于世界书注入链路，仅迁移到此处以提高可见性。</small>
-
-                            <div class="acu-divider-dashed" style="margin: 4px 0;"></div>
-                            <label class="acu-label">表格存储模式:</label>
-                            <div class="acu-row" style="gap: 16px;">
-                                <label class="acu-row" style="cursor: pointer; gap: 6px;">
-                                    <input type="radio" name="${SCRIPT_ID_PREFIX_ACU}-storage-mode" value="sqlite" checked>
-                                    <span>SQLite 模式 (SQL)</span>
-                                </label>
-                            </div>
-                            <small class="notes">表格数据固定通过内存数据库 + 标准 SQL 语句保存（原生 JSON 存储模式已移除）。</small>
                         </div>
                     </div>
                 </div>`;

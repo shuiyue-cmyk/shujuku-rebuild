@@ -13,8 +13,6 @@ import { isSqliteMode } from '../../service/table/storage-mode';
 import { settings_ACU, currentChatFileIdentifier_ACU, currentJsonTableData_ACU } from '../../service/runtime/state-manager';
 import { $popupInstance_ACU, $charCardPromptToggle_ACU, $charCardPromptAreaDiv_ACU, $saveCharCardPromptButton_ACU, $resetCharCardPromptButton_ACU, $loadModelsButton_ACU, $saveApiConfigButton_ACU, $clearApiConfigButton_ACU, $useMainApiCheckbox_ACU, $streamingEnabledCheckbox_ACU, $customApiModelInput_ACU, $customApiModelSelect_ACU, $importTableSelectAll_ACU, $importTableSelectNone_ACU } from '../state/ui-refs';
 import { saveSettingsAndNotify_ACU } from '../components/settings-ui-helpers';
-import { updateImportStatusUI_ACU, handleTxtImportAndSplit_ACU } from '../components/import-status-ui';
-import { clearImportLocalStorage_ACU, clearImportedEntries_ACU, deleteImportedEntries_ACU, handleInjectImportedTxtSelected_ACU } from '../triggers/import-process';
 import { importCombinedSettings_ACU } from '../triggers/data-admin-ui';
 import { applyTemplateScopeForCurrentChat_ACU, getDataIsolationHistory_ACU, removeDataIsolationHistory_ACU, switchIsolationProfile_ACU, persistCurrentTemplatePresetName_ACU, setSummaryVectorIndexMode_ACU } from '../../service/settings/settings-service';
 // [V1 收敛] 以下写操作统一委托 service 层事务式函数，禁止 V1 直接写 settings_ACU。
@@ -32,8 +30,7 @@ import { exportCombinedSettings_ACU, handleManualMergeSummary_ACU } from '../tri
 import { formatJsonToReadable_ACU } from '../../service/runtime/helpers-remaining';
 import { appendExcludeRuleRow_ACU, readExcludeRulesFromRows_ACU } from '../components/optimization-ui';
 import { updateCardUpdateStatusDisplay_ACU } from '../components/update-status-display';
-import { populateImportWorldbookTargetSelector_ACU } from '../components/worldbook-selector';
-import { saveApiConfig_ACU, clearApiConfig_ACU, fetchModelsAndConnect_ACU, loadApiPreset_ACU, saveApiPreset_ACU, deleteApiPreset_ACU, saveCustomCharCardPrompt_ACU, saveImportSplitSize_ACU, resetDefaultCharCardPrompt_ACU, updateCustomApiInputsState_ACU, refreshApiPresetSelectors_ACU } from '../triggers/settings-ui-sync';
+import { saveApiConfig_ACU, clearApiConfig_ACU, fetchModelsAndConnect_ACU, loadApiPreset_ACU, saveApiPreset_ACU, deleteApiPreset_ACU, saveCustomCharCardPrompt_ACU, resetDefaultCharCardPrompt_ACU, updateCustomApiInputsState_ACU, refreshApiPresetSelectors_ACU } from '../triggers/settings-ui-sync';
 import { handleImportSelectAll_ACU, handleImportSelectNone_ACU } from '../components/table-selector';
 import { getLatestSummaryVectorIndexSnapshotState_ACU } from '../../service/vector/summary-vector-index-state-service';
 import { rebuildCurrentSummaryVectorIndexNow_ACU } from '../../service/vector/summary-vector-index-rebuild-service';
@@ -117,11 +114,6 @@ export async function bindDataEvents_ACU(): Promise<void> {
       const $dataIsolationCombo = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-data-isolation-combo`);
       const $dataIsolationHistoryToggle = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-data-isolation-history-toggle`);
       const $dataIsolationHistoryList = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-data-isolation-history-list`);
-      const $importTxtButton = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-import-txt-button`);
-      const $injectImportedTxtButton = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-inject-imported-txt-button`);
-      const $clearImportedAllButton = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-clear-imported-all-button`);
-      const $clearImportedCacheButton = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-clear-imported-cache-button`);
-      const $saveImportSplitSizeButton_ACU = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-save-import-split-size`);
       const $importTemplateButton_ACU = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-import-template`);
       const $exportTemplateButton_ACU = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-export-template`);
       const $resetTemplateButton_ACU = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-reset-template`);
@@ -399,16 +391,6 @@ export async function bindDataEvents_ACU(): Promise<void> {
             });
         }
 
-      // [新增] 外部导入事件绑定
-      if ($importTxtButton.length) {
-          $importTxtButton.on('click', handleTxtImportAndSplit_ACU);
-      }
-      // [新增] 外部导入注入按钮（自选表格）在下方统一绑定（使用 $injectImportedTxtButton）
-      
-      if ($injectImportedTxtButton && $injectImportedTxtButton.length) {
-          $injectImportedTxtButton.on('click', handleInjectImportedTxtSelected_ACU);
-      }
-
       // 导入表选择：全选 / 全不选
       if ($importTableSelectAll_ACU && $importTableSelectAll_ACU.length) {
           $importTableSelectAll_ACU.on('click', handleImportSelectAll_ACU);
@@ -416,25 +398,6 @@ export async function bindDataEvents_ACU(): Promise<void> {
       if ($importTableSelectNone_ACU && $importTableSelectNone_ACU.length) {
           $importTableSelectNone_ACU.on('click', handleImportSelectNone_ACU);
       }
-      
-      // [新增] 删除注入条目按钮的事件绑定
-      const $deleteImportedEntriesButton = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-delete-imported-entries`);
-      if ($deleteImportedEntriesButton.length) {
-          $deleteImportedEntriesButton.on('click', deleteImportedEntries_ACU);
-      }
-      
-      if ($clearImportedAllButton.length) {
-          $clearImportedAllButton.on('click', () => clearImportedEntries_ACU(true));
-      }
-      // [新增] 绑定新按钮的点击事件
-      if ($clearImportedCacheButton.length) {
-          $clearImportedCacheButton.on('click', () => clearImportLocalStorage_ACU(true));
-      }
-      if ($saveImportSplitSizeButton_ACU.length) {
-          $saveImportSplitSizeButton_ACU.on('click', saveImportSplitSize_ACU);
-      }
-      // Initial UI state update for the import tab
-      void updateImportStatusUI_ACU();
 
       if ($useMainApiCheckbox_ACU.length) {
         $useMainApiCheckbox_ACU.on('change', function () {

@@ -44,7 +44,6 @@ watch(() => shell.scrollResetTick, resetScroll);
 .acu-v2-main :deep(.acu-v2-basic-config-page),
 .acu-v2-main :deep(.acu-v2-form-fill-page),
 .acu-v2-main :deep(.acu-v2-api-page),
-.acu-v2-main :deep(.acu-v2-import-page),
 .acu-v2-main :deep(.acu-v2-content-replace-page),
 .acu-v2-main :deep(.acu-v2-data-mgmt-page),
 .acu-v2-main :deep(.acu-v2-developer-page),

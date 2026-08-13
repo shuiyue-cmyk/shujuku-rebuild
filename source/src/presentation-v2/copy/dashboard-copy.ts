@@ -1,5 +1,3 @@
-import type { StorageMode } from "../../shared/table-storage-provider";
-
 export const dashboardCopy = {
   pageTitle: "仪表盘",
   panels: {
@@ -18,28 +16,6 @@ export const dashboardCopy = {
   developerToggle: {
     label: "启用开发者选项",
     description: "默认关闭。显示开发者页面，不推荐无经验用户启用。",
-  },
-  storage: {
-    sectionLabel: "存储模式",
-    fixedSqliteDescription:
-      "表格数据固定通过 SQLite（sql.js）保存，原生 JSON 存储模式已移除。",
-    modeLabel(mode: StorageMode): string {
-      return mode === "sqlite" ? "SQLite" : "原生 JSON";
-    },
-    optionDescription: {
-      native: "兼容性高，适合基础表格。",
-      sqlite: "准确率高，适合复杂表格与多表关联。",
-    },
-    switchLabel(mode: StorageMode): string {
-      return mode === "sqlite" ? "SQL" : "原生";
-    },
-    badge(mode: StorageMode): string {
-      return mode === "native" ? "兼容性最佳" : "适合复杂表";
-    },
-    switched(mode: StorageMode): string {
-      return `已切换到 ${dashboardCopy.storage.modeLabel(mode)} 模式。`;
-    },
-    switchFailed: "存储模式切换失败。",
   },
   api: {
     title: "API",
@@ -119,41 +95,24 @@ export const dashboardCopy = {
         : visibleNames;
     },
     noChatBadge: "未加载聊天",
-    noChatSummary(sqlEnabled: boolean): string {
-      return sqlEnabled
-        ? "当前没有加载 SillyTavern 聊天，暂时无法检查当前聊天的表格模板是否适配。"
-        : "当前没有加载 SillyTavern 聊天，暂时无法检查当前聊天的表格模板是否适配。";
+    noChatSummary(): string {
+      return "当前没有加载 SillyTavern 聊天，暂时无法检查当前聊天的表格模板是否适配。";
     },
     pendingBadge: "待检查",
-    disabledBadge: "未启用",
-    noTemplatesSummary(sqlEnabled: boolean): string {
-      return sqlEnabled
-        ? "当前存储模式是 SQLite，还没有加载表格模板。第一次填表前，请确认模板已经补好 SQL 表结构信息。"
-        : "当前存储模式是原生 JSON，还没有加载表格模板。继续使用原生 JSON 时无需处理 SQL 模板信息。";
-    },
-    looksSqlBadge: "开发者提示",
-    looksSqlSummary(ddlCount: number, total: number): string {
-      return `当前存储模式是原生 JSON，开发者检查发现 ${ddlCount}/${total} 张表包含 SQL 结构信息。若要使用 SQLite，请在高级设置里选择“SQLite”；继续使用原生 JSON 时通常无需处理。`;
-    },
-    nativeModeBadge: "原生 JSON",
-    nativeModeSummary(total: number): string {
-      return `当前存储模式是原生 JSON，已加载 ${total} 张表。模板中的 SQL 信息不会影响原生 JSON 模式运行；需要切换 SQLite 时再检查模板。`;
-    },
-    nativeMatchBadge: "模板适配",
-    nativeMatchSummary(total: number): string {
-      return `当前存储模式是原生 JSON，当前 ${total} 张表也都是普通表格模板，模式与模板适配。`;
+    noTemplatesSummary(): string {
+      return "还没有加载表格模板。第一次填表前，请确认模板已经补好 SQL 表结构信息。";
     },
     missingDdlBadge: "模板未适配",
     missingDdlSummary(count: number, total: number, names: string): string {
-      return `当前存储模式是 SQLite，但 ${count}/${total} 张表还不是完整的 SQL 模板：${names}。这些表可能无法正确保存到 SQLite，请到“表格模板”补齐 SQL 表结构信息，或切回原生 JSON。`;
+      return `${count}/${total} 张表还不是完整的 SQL 模板：${names}。这些表可能无法正确保存到 SQLite，请到“表格模板”补齐 SQL 表结构信息。`;
     },
     invalidDdlBadge: "模板不适配",
     invalidDdlSummary(count: number, total: number, names: string): string {
-      return `当前存储模式是 SQLite，但 ${count}/${total} 张表的 SQL 表结构信息与表头不一致：${names}。这可能导致数据写入失败，请先校准模板。`;
+      return `${count}/${total} 张表的 SQL 表结构信息与表头不一致：${names}。这可能导致数据写入失败，请先校准模板。`;
     },
     templateMatchBadge: "模板适配",
     templateMatchSummary(total: number): string {
-      return `当前存储模式是 SQLite，当前 ${total} 张表都是适配 SQL 的表格模板，表结构也与表头一致。`;
+      return `当前 ${total} 张表都是适配 SQL 的表格模板，表结构也与表头一致。`;
     },
   },
   vectorHealth: {
@@ -255,11 +214,6 @@ export const dashboardCopy = {
       label: "剧情推进",
       description:
         "默认开启。详情前往对应页面；默认仅召回记忆，进阶版含剧情规划。仅推荐在测试或自由发挥时关闭。",
-    },
-    externalImport: {
-      label: "外部导入",
-      description:
-        "手动功能。将 TXT 小说快速转为未精修的世界书条目，方便制作角色卡。",
     },
     contentReplace: {
       label: "正文替换",

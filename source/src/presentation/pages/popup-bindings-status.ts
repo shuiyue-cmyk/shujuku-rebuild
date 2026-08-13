@@ -170,8 +170,6 @@ export async function bindStatusEvents_ACU(): Promise<void> {
           $manualTableSelectNone_ACU.on('click', handleManualSelectNone_ACU);
       }
 
-      // [存储模式] 原生模式已移除，仅展示 SQLite 状态，无切换事件。
-
       // 中止按钮绑定将在剧情规划开始时动态绑定
       // Removed $advHideToggle event listener
 }

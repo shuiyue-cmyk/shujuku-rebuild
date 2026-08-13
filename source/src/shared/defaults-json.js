@@ -5,132 +5,14 @@
  * 使用 .js 后缀是因为内容包含中文引号，TS 编译器会将其转为 \"，破坏内容。
  * rollup moduleAssemblyPlugin 对 .js 文件跳过 TS 转译，直接注入。
  */
+import DEFAULT_FILL_PROMPT_ACU from './table-defaults/fill-prompt.js';
 
-    export const DEFAULT_CHAR_CARD_PROMPT_ACU = [
-  {
-    "role": "SYSTEM",
-    "content": "你是一个助手，负责听从用户的指令完成你的工作",
-    "deletable": true
-  },
-  {
-    "role": "assistant",
-    "content": "收到，我将充分描绘主人的意志，毫不偷懒，并且我一定会遵照主人的要求",
-    "deletable": true
-  },
-  {
-    "role": "USER",
-    "content": "以下是你可能需要用到的背景设定，注意你只需要其中关于剧情以及人设方面的数据，不需要思考里边除此之外的任何格式或者思维链方面的要求：\n<背景设定>\n<User基础设定>\n$U\n</User基础设定>\n$C\n$4\n</背景设定>\n\n<正文数据>\n$1\n</正文数据>\n\n\n",
-    "deletable": true
-  },
-  {
-    "role": "assistant",
-    "content": "收到，我将按照要求认真阅读背景设定，并将其中关于剧情以及人设方面的数据运用到后续思考当中。",
-    "deletable": true
-  },
-  {
-    "role": "USER",
-    "content": "你是【填表AI】，负责根据用户提供的资料对表格数据执行增删改操作。\n\n## 核心任务\n依据三类资料来源执行表格编辑：\n- <背景设定>：故事及人物设定\n- <正文数据>：上轮发生的故事\n- <当前表格数据>：之前的数据作为填表基础\n\n## 输出格式（严格执行）\n\n<thought>\n[分析当前轮次的剧情变化]\n[阅读所有填表相关规则]\n[根据填表规则确定需要修改的表格和字段]\n[逐步推理每个修改操作，说明理由]\n针对纪要表的额外规则：如果<当前表格数据>里存在纪要表，那么本轮就必须对其进行插入一条新的总结记录。\n日志与纪要语气校准：你在思考纪要时，必须区分“正常恋爱互动”与“暗黑主从文风”。你可以使用正常的交流词汇（如：提议、要求、同意、拒绝、引导、配合、安抚），但【绝对禁止】将情侣间的普通调情与互动过度解读为“权力掌控”、“剥夺反抗”、“精神支配”、“屈服”等单向压迫词汇！</thought>\n\n<content>\n<tableEdit>\ninsertRow(表格ID, {\"0\":\"字段0值\",\"1\":\"字段1值\",\"2\":\"字段2值\"})\nupdateRow(表格ID, 行号, {\"0\":\"字段0值\",\"1\":\"字段1值\",\"2\":\"字段2值\"})\ndeleteRow(表格ID, 行号)\n</tableEdit>\n</content>\n\n## 关键规则\n1. 必须逐表阅读每个表格的note部分，严格遵守其中的约束\n2. note的约束优先级最高，高于通用填表经验\n3. 若note要求禁止修改/格式固定/编码规则，必须严格执行\n4.除了note外，可能还存在某些存放特殊填表规则的表格，填表前需先进行阅读，并严格遵守其中的约束。\n5. 使用insertRow添加新行，updateRow更新已有行，deleteRow删除行\n\n## 格式要点\n- 必须使用双引号\n- 逗号后不加空格\n- `insertRow(表格ID, {...})` 和 `updateRow(表格ID, 行号, {...})` 里的表格ID、行号必须输出纯数字，不要写成字符串\n- 对象里的每一列都必须显式写成 `\"数字键\":\"值\"`，禁止省略键名后只连续输出裸字符串\n- 如果字段值内部需要出现双引号，必须转义为\\\"，例如：\"秉持\\\"谁欺负我就打谁\\\"的信念\"\n- 如果字段值内部需要换行，必须写成\\n，不能直接输出真实换行\n- 如果一句话里含有很多引号，优先改写措辞，尽量避免在JSON值里直接嵌套引号\n\n现在开始按此格式执行填表任务。",
-    "deletable": false,
-    "mainSlot": "A",
-    "isMain": true
-  },
-  {
-    "role": "assistant",
-    "content": "收到命令，我将严格按照用户要求执行填表任务，并仅输出符合格式约束的内容。",
-    "deletable": true
-  },
-  {
-    "role": "USER",
-    "content": "现在请按照我的要求立刻开始你的工作 \n========================\n\n以下是当前的<当前表格数据>,记录有本轮之前的数据，你的一切操作指令都必须在这个<当前表格数据>的基础与指导上进行：\n<当前表格数据>\n$0\n</当前表格数据>\n\n$8",
-    "deletable": false,
-    "mainSlot": "B",
-    "isMain2": true
-  },
-  {
-    "role": "assistant",
-    "content": "<thought>\n收到指令，我将一步一步开始思考，并完成填表，首先我要分析当前轮次的剧情变化",
-    "deletable": true
-  }
-];
+    export const DEFAULT_CHAR_CARD_PROMPT_ACU = DEFAULT_FILL_PROMPT_ACU;
 
   // --- [SQL 版默认填表提示词] ---
-  // SQLite 模式下使用，mainSlot A 改为 SQL 编辑指令格式
-  export const DEFAULT_CHAR_CARD_PROMPT_SQL_ACU = DEFAULT_CHAR_CARD_PROMPT_ACU.map(segment => {
-    if (segment.mainSlot === 'A' || segment.isMain) {
-      return {
-        ...segment,
-        content: `你是【填表AI】，负责根据用户提供的资料对表格数据执行增删改操作。
+  // 破限版默认提示词本身即为 SQL 格式，SQL 版本与基础版本一致
+  export const DEFAULT_CHAR_CARD_PROMPT_SQL_ACU = DEFAULT_CHAR_CARD_PROMPT_ACU;
 
-## 核心任务
-依据三类资料来源执行表格编辑：
-- <背景设定>：故事及人物设定
-- <正文数据>：上轮发生的故事
-- <当前表格数据>：之前的数据作为填表基础（包含每张表的 CREATE TABLE 建表语句和当前数据）
-
-## 输出格式（严格执行）
-
-<thought>
-[分析当前轮次的剧情变化]
-[阅读所有填表相关规则]
-[根据填表规则确定需要修改的表格和字段]
-[逐步推理每个修改操作，说明理由]
-针对纪要表的额外规则：如果<当前表格数据>里存在纪要表，那么本轮就必须对其进行插入一条新的总结记录。
-日志与纪要语气校准：你在思考纪要时，必须区分"正常恋爱互动"与"暗黑主从文风"。你可以使用正常的交流词汇（如：提议、要求、同意、拒绝、引导、配合、安抚），但【绝对禁止】将情侣间的普通调情与互动过度解读为"权力掌控"、"剥夺反抗"、"精神支配"、"屈服"等单向压迫词汇！</thought>
-
-<content>
-<tableEdit>
-INSERT INTO table_name (col1, col2) VALUES ('值1', '值2');
-UPDATE table_name SET col1 = '新值' WHERE row_id = 1;
-DELETE FROM table_name WHERE row_id = 2;
-</tableEdit>
-</content>
-
-## 关键规则
-1. 必须逐表阅读每个表格的 DDL 注释和 Note 部分，严格遵守其中的约束
-2. Note 的约束优先级最高，高于通用填表经验；Note 中若提供了 SQL 示例，必须参照示例的写法
-3. 若 Note 要求禁止修改/格式固定/编码规则，必须严格执行
-4. 除了 Note 外，可能还存在某些存放特殊填表规则的表格，填表前需先进行阅读，并严格遵守其中的约束
-
-## SQL 编写原则
-
-### INSERT（添加新行）
-- 单行插入：INSERT INTO t (col1, col2) VALUES ('值1', '值2');
-- 多行插入：INSERT INTO t (col1, col2) VALUES ('值1', '值2'), ('值3', '值4');
-- INSERT 必须显式列出业务列，但不得包含 row_id；系统会在执行前分配稳定 row_id。
-- 禁止计算 MAX(row_id)、使用 row_id 子查询，或在 INSERT 中手写 row_id 值。
-
-### UPDATE（更新已有行）
-- 所有 UPDATE 必须带 WHERE 条件，禁止无条件更新
-- WHERE 条件选择原则（优先级递减）：
-  (1) 优先参考该表 Note 中的 SQL 示例写法
-  (2) 使用 DDL 中具有 UNIQUE 约束的列定位（如 WHERE name = '角色A'）
-  (3) 使用 DDL 中具有业务含义的 CHECK 约束列（如 WHERE code_index = 'AM0001'）
-  (4) 以上均无时，使用 WHERE row_id = N 定位
-- 表达式更新：UPDATE t SET quantity = quantity + 3 WHERE item_name = '治疗药水';
-- 多列同时更新：UPDATE t SET col1 = '值1', col2 = '值2' WHERE condition;
-- 条件批量更新：UPDATE t SET status = '失效' WHERE category = '消耗品' AND quantity <= 0;
-- CASE 条件更新：UPDATE t SET status = CASE WHEN hp <= 0 THEN '死亡' WHEN hp < 30 THEN '重伤' ELSE status END WHERE condition;
-
-### DELETE（删除行）
-- 所有 DELETE 必须带 WHERE 条件，禁止无条件删除
-- WHERE 条件选择原则同 UPDATE
-- 条件批量删除：DELETE FROM t WHERE quantity <= 0;
-
-## SQL 格式要点
-- 字符串值使用单引号包裹，如 '角色A'
-- 如果字符串值内部包含单引号，使用两个单引号转义，如 '秉持''谁欺负我就打谁''的信念'
-- 数值列直接写数字，不加引号
-- 每条 SQL 语句以分号结尾
-- 多条语句之间用换行分隔
-- 表名和列名使用英文（参照 CREATE TABLE 中的定义）
-- 禁止使用 BEGIN/COMMIT/ROLLBACK 等事务语句，系统会自动处理事务
-- 禁止使用 DROP TABLE / ALTER TABLE / CREATE TABLE 等结构变更语句
-
-现在开始按此格式执行填表任务。`
-      };
-    }
-    return { ...segment };
-  });
 
   function replaceSection_ACU(content, startMarker, endMarker, replacement) {
     const start = content.indexOf(startMarker);
@@ -138,7 +20,6 @@ DELETE FROM table_name WHERE row_id = 2;
     if (start < 0 || end < 0) return content;
     return `${content.slice(0, start)}${replacement}${content.slice(end)}`;
   }
-
   function buildStrictJsonNativePrompt_ACU(content) {
     let next = replaceSection_ACU(content, '## 输出格式（严格执行）', '## 关键规则', `## 输出格式（严格执行）
 
@@ -216,6 +97,7 @@ sql 必须是字符串，内容是按下文 DDL、Note 和 SQL 编写原则生�
 `);
     return next.replace('现在开始按此格式执行填表任务。', '现在开始按此 JSON 格式执行填表任务。');
   }
+
 
   export const DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU = DEFAULT_CHAR_CARD_PROMPT_ACU.map(segment => {
     if (segment.mainSlot === 'A' || segment.isMain) {

@@ -19,7 +19,6 @@ import {
   setSummaryVectorIndexMode_ACU,
   setZeroTkOccupyMode_ACU,
 } from "../../service/settings/settings-service";
-import { getCurrentStorageMode } from "../../service/table/storage-mode";
 import { resolveTableHistoryStateFromChat_ACU } from "../../service/table/table-history";
 import { getCurrentTableDisplayData_ACU } from "../../service/settings/settings-readers";
 import { setAutoUpdateEnabled_ACU } from "../../service/settings/settings-write-service";
@@ -43,7 +42,6 @@ import {
   DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU,
 } from "../../shared/defaults-json.js";
 import { getAllLogs, subscribe, type LogEntry } from "../../shared/log-buffer";
-import type { StorageMode } from "../../shared/table-storage-provider";
 import {
   logError_ACU,
   isSummaryOrOutlineTable_ACU,
@@ -90,12 +88,6 @@ export interface DashboardToggleItem {
   disabled?: boolean;
 }
 
-export interface DashboardStorageOption {
-  value: StorageMode;
-  label: string;
-  description: string;
-}
-
 export interface DashboardHealthAction {
   label: string;
   pageId: string;
@@ -117,8 +109,6 @@ export interface DashboardPageState {
   aiMessageCount: ComputedRef<number>;
   coreApisReady: Ref<boolean>;
   isolationKey: Ref<string>;
-  storageMode: Ref<StorageMode>;
-  storageOptions: DashboardStorageOption[];
   tableRows: ComputedRef<DashboardTableStatusRow[]>;
   hasTables: ComputedRef<boolean>;
   basicToggles: ComputedRef<DashboardToggleItem[]>;
@@ -128,14 +118,12 @@ export interface DashboardPageState {
   refresh: () => Promise<void>;
   setFlightMode: (enabled: boolean, options?: { confirmTemplateScopeChange?: boolean }) => Promise<FlightModeTransitionResult_ACU>;
   setToggle: (key: string, value: boolean) => void;
-  setStorageMode: (mode: string) => Promise<void>;
 }
 
 interface Snapshot {
   chatFileIdentifier: string;
   coreApisReady: boolean;
   isolationKey: string;
-  storageMode: StorageMode;
 }
 
 let deferLogRefresh = false;
@@ -150,14 +138,12 @@ function safeReadSnapshot(): Snapshot {
       chatFileIdentifier: String(currentChatFileIdentifier_ACU || ""),
       coreApisReady: coreApisAreReady_ACU === true,
       isolationKey: String(getCurrentIsolationKey_ACU?.() || ""),
-      storageMode: getCurrentStorageMode(),
     };
   } catch {
     return {
       chatFileIdentifier: "",
       coreApisReady: false,
       isolationKey: "",
-      storageMode: "sqlite",
     };
   }
 }
@@ -517,12 +503,9 @@ function formatTableNameSamples(names: string[]): string {
 }
 
 function buildSqlTemplateHealthItem(
-  mode: StorageMode,
   hasActiveChat: boolean,
-  showDeveloperDiagnostics: boolean,
 ): DashboardHealthItem {
   const action = { label: dashboardCopy.sqlHealth.action, pageId: "form-fill" };
-  const sqlEnabled = mode === "sqlite";
 
   if (!hasActiveChat) {
     return makeHealthItem({
@@ -530,7 +513,7 @@ function buildSqlTemplateHealthItem(
       title: dashboardCopy.sqlHealth.title,
       badge: dashboardCopy.sqlHealth.noChatBadge,
       kind: "info",
-      summary: dashboardCopy.sqlHealth.noChatSummary(sqlEnabled),
+      summary: dashboardCopy.sqlHealth.noChatSummary(),
     });
   }
 
@@ -540,41 +523,10 @@ function buildSqlTemplateHealthItem(
     return makeHealthItem({
       key: "sql-template",
       title: dashboardCopy.sqlHealth.title,
-      badge: sqlEnabled
-        ? dashboardCopy.sqlHealth.pendingBadge
-        : dashboardCopy.sqlHealth.disabledBadge,
+      badge: dashboardCopy.sqlHealth.pendingBadge,
       kind: "info",
-      summary: dashboardCopy.sqlHealth.noTemplatesSummary(sqlEnabled),
+      summary: dashboardCopy.sqlHealth.noTemplatesSummary(),
       action,
-    });
-  }
-
-  if (!sqlEnabled) {
-    if (check.ddlCount > 0 && showDeveloperDiagnostics) {
-      return makeHealthItem({
-        key: "sql-template",
-        title: dashboardCopy.sqlHealth.title,
-        badge: dashboardCopy.sqlHealth.looksSqlBadge,
-        kind: "info",
-        summary: dashboardCopy.sqlHealth.looksSqlSummary(
-          check.ddlCount,
-          check.total,
-        ),
-        action,
-      });
-    }
-    return makeHealthItem({
-      key: "sql-template",
-      title: dashboardCopy.sqlHealth.title,
-      badge:
-        check.ddlCount > 0
-          ? dashboardCopy.sqlHealth.nativeModeBadge
-          : dashboardCopy.sqlHealth.nativeMatchBadge,
-      kind: check.ddlCount > 0 ? "info" : "ok",
-      summary:
-        check.ddlCount > 0
-          ? dashboardCopy.sqlHealth.nativeModeSummary(check.total)
-          : dashboardCopy.sqlHealth.nativeMatchSummary(check.total),
     });
   }
 
@@ -769,19 +721,10 @@ export function useDashboardPage(): DashboardPageState {
   const chatFileIdentifier = ref(initial.chatFileIdentifier);
   const coreApisReady = ref(initial.coreApisReady);
   const isolationKey = ref(initial.isolationKey);
-  const storageMode = ref<StorageMode>(initial.storageMode);
   const dataRefreshTick = ref(0);
   const logRefreshTick = ref(0);
   let unsubscribeLogs: (() => void) | null = null;
   let logRefreshQueued = false;
-
-  const storageOptions: DashboardStorageOption[] = [
-    {
-      value: "sqlite",
-      label: dashboardCopy.storage.modeLabel("sqlite"),
-      description: dashboardCopy.storage.optionDescription.sqlite,
-    },
-  ];
 
   const sheetKeys = computed(() => {
     void dataRefreshTick.value;
@@ -940,12 +883,6 @@ export function useDashboardPage(): DashboardPageState {
         description: dashboardCopy.toggles.plot.description,
         value: settings_ACU.plotSettings?.enabled === true,
       },
-      {
-        key: "externalImportPageEnabled",
-        label: dashboardCopy.toggles.externalImport.label,
-        description: dashboardCopy.toggles.externalImport.description,
-        value: settings_ACU.externalImportPageEnabled !== false,
-      },
     ];
     items.push({
       key: "contentReplaceEnabled",
@@ -984,9 +921,7 @@ export function useDashboardPage(): DashboardPageState {
         hasActiveChat,
       ),
       buildSqlTemplateHealthItem(
-        storageMode.value,
         hasActiveChat,
-        showDeveloperDiagnostics,
       ),
       buildVectorHealthItem(),
       buildLogHealthItem(showDeveloperDiagnostics),
@@ -1028,7 +963,6 @@ export function useDashboardPage(): DashboardPageState {
     chatFileIdentifier.value = next.chatFileIdentifier;
     coreApisReady.value = next.coreApisReady;
     isolationKey.value = next.isolationKey;
-    storageMode.value = next.storageMode;
     dataRefreshTick.value++;
   }
 
@@ -1072,11 +1006,6 @@ export function useDashboardPage(): DashboardPageState {
       setSummaryVectorIndexMode_ACU(!!value);
     } else if (key === "developerOptionsEnabled") {
       setDeveloperOptionsEnabled(!!value);
-    } else if (
-      key === "externalImportPageEnabled"
-    ) {
-      settings_ACU[key] = !!value;
-      saveSettings_ACU();
     } else if (key === "contentReplaceEnabled") {
       setContentReplaceEnabledBySettings(!!value);
       saveSettings_ACU();
@@ -1097,19 +1026,11 @@ export function useDashboardPage(): DashboardPageState {
     dataRefreshTick.value++;
   }
 
-  async function setStorageMode(_rawMode: string): Promise<void> {
-    // 原生存储模式已移除，存储模式恒为 SQLite，切换为无操作。
-    storageMode.value = "sqlite";
-    await refresh();
-  }
-
   return {
     chatFileIdentifier,
     aiMessageCount,
     coreApisReady,
     isolationKey,
-    storageMode,
-    storageOptions,
     tableRows,
     hasTables,
     basicToggles,
@@ -1119,7 +1040,6 @@ export function useDashboardPage(): DashboardPageState {
     refresh,
     setFlightMode,
     setToggle,
-    setStorageMode,
   };
 }
 

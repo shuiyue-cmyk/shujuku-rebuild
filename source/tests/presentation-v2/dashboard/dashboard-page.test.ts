@@ -46,7 +46,6 @@ function createSettings() {
     tableApiPresetOverridesByName: {},
     autoUpdateEnabled: true,
     continuationPageEnabled: true,
-    externalImportPageEnabled: true,
     toastMuteEnabled: false,
     promptTemplateSettings: { enabled: true },
     zeroTkOccupyModeDefault: false,
@@ -343,7 +342,7 @@ describe("DashboardPage", () => {
       page!.querySelector(".acu-v2-dashboard-page__status-table"),
     ).toBeNull();
     expect(text).not.toContain("下一次");
-    expect(text).not.toContain("事件记录");
+    expect(text).not.toContain("[ERROR]");
     expect(text).toContain("运行概览");
     expect(text).toContain("API");
     expect(text).toContain("表格更新");
@@ -400,7 +399,8 @@ describe("DashboardPage", () => {
     expect(
       document.querySelector('div[role="radiogroup"][aria-label="存储模式"]'),
     ).toBeNull();
-    expect(text).not.toContain("SQLite");
+    expect(text).not.toContain("原生 JSON");
+    expect(text).not.toContain("SQLite 模式 (SQL)");
 
     // 旧设计已删除：subtitle / 刷新按钮 / API 三件套面板 / 规范填表 toggle
     expect(text).not.toContain("数据库运行态");
@@ -468,7 +468,6 @@ describe("DashboardPage", () => {
 
     expect(sqlHealth).toBeDefined();
     expect(sqlHealth!.textContent || "").toContain("模板适配");
-    expect(sqlHealth!.textContent || "").toContain("当前存储模式是 SQLite");
     expect(sqlHealth!.textContent || "").toContain(
       "当前 2 张表都是适配 SQL 的表格模板",
     );
@@ -492,7 +491,6 @@ describe("DashboardPage", () => {
 
     expect(sqlHealth).toBeDefined();
     expect(sqlHealth!.textContent || "").toContain("模板未适配");
-    expect(sqlHealth!.textContent || "").toContain("当前存储模式是 SQLite");
     expect(sqlHealth!.textContent || "").toContain("事件记录");
     expect(sqlHealth!.textContent || "").toContain("补齐 SQL 表结构信息");
     expect(sqlHealth!.textContent || "").toContain("查看表格模板");
@@ -501,56 +499,6 @@ describe("DashboardPage", () => {
       sqlHealth!.querySelectorAll<HTMLButtonElement>("button"),
     ).find((button) => (button.textContent || "").includes("查看表格模板"));
     expect(action).toBeDefined();
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it("原生 JSON 存储但表格模板包含 SQL 信息时默认显示中性说明", async () => {
-    const settings = createSettings();
-    const { mount } = await mountDashboardPage(settings, createSqlTableData());
-
-    const sqlHealth = Array.from(
-      document.querySelectorAll<HTMLElement>(
-        ".acu-v2-dashboard-page__health-item",
-      ),
-    ).find((item) => (item.textContent || "").includes("SQL 模式"));
-
-    expect(sqlHealth).toBeDefined();
-    expect(sqlHealth!.textContent || "").toContain("原生 JSON");
-    expect(sqlHealth!.textContent || "").toContain("当前存储模式是原生 JSON");
-    expect(sqlHealth!.textContent || "").toContain("不会影响原生 JSON 模式运行");
-    expect(sqlHealth!.textContent || "").not.toContain("开发者检查");
-    expect(
-      sqlHealth!.classList.contains("acu-v2-dashboard-page__health-item--info"),
-    ).toBe(true);
-    expect(
-      sqlHealth!.classList.contains(
-        "acu-v2-dashboard-page__health-item--warning",
-      ),
-    ).toBe(false);
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it("开发者模式显示原生 JSON 下的 SQL 模板诊断", async () => {
-    const settings = createSettings();
-    const { mount } = await mountDashboardPage(settings, createSqlTableData(), {
-      developerOptionsEnabled: true,
-    });
-
-    const sqlHealth = Array.from(
-      document.querySelectorAll<HTMLElement>(
-        ".acu-v2-dashboard-page__health-item",
-      ),
-    ).find((item) => (item.textContent || "").includes("SQL 模式"));
-
-    expect(sqlHealth).toBeDefined();
-    expect(sqlHealth!.textContent || "").toContain("开发者提示");
-    expect(sqlHealth!.textContent || "").toContain("开发者检查发现");
-    expect(sqlHealth!.textContent || "").toContain("选择“SQLite”");
-    expect(
-      sqlHealth!.classList.contains("acu-v2-dashboard-page__health-item--info"),
-    ).toBe(true);
 
     mount.__resetAcuV2MountForTests();
   });
@@ -740,15 +688,11 @@ describe("DashboardPage", () => {
     const text =
       document.querySelector(".acu-v2-dashboard-page")?.textContent || "";
     expect(text).toContain("剧情推进");
-    expect(text).toContain("外部导入");
     expect(text).toContain("交火模式");
-    expect(text).toContain("存储模式");
-    expect(text).toContain("SQLite");
     expect(text).toContain("启用开发者选项");
     expect(text).not.toContain("启用SQL存储");
     expect(text).not.toContain("启用条件模板功能");
     expect(text).not.toContain("0TK 占用模式");
-    expect(text).toContain("表格数据固定通过 SQLite");
 
     const visibleToggleKeys = Array.from(
       document.querySelectorAll<HTMLButtonElement>(
@@ -757,25 +701,10 @@ describe("DashboardPage", () => {
     ).map((button) => button.dataset.acuToggleKey);
     expect(visibleToggleKeys).toEqual([
       "plotEnabled",
-      "externalImportPageEnabled",
       "contentReplaceEnabled",
       "summaryVectorIndexModeEnabled",
       "developerOptionsEnabled",
     ]);
-
-    // 存储模式为静态展示（原生模式已移除）：仅一张 SQLite 卡片且高亮。
-    const cards = Array.from(
-      document.querySelectorAll<HTMLElement>(
-        ".acu-dashboard-storage-mode__card",
-      ),
-    );
-    expect(cards).toHaveLength(1);
-    expect(
-      cards[0].classList.contains("acu-dashboard-storage-mode__card--active"),
-    ).toBe(true);
-    expect(
-      document.querySelector('div[role="radiogroup"][aria-label="存储模式"]'),
-    ).toBeNull();
 
     mount.__resetAcuV2MountForTests();
   });
@@ -814,7 +743,6 @@ describe("DashboardPage", () => {
     let text =
       document.querySelector(".acu-v2-dashboard-page")?.textContent || "";
     expect(text).toContain("剧情推进");
-    expect(text).toContain("外部导入");
     expect(text).toContain("交火模式");
     expect(text).not.toContain("启用正文替换");
 
@@ -823,31 +751,16 @@ describe("DashboardPage", () => {
     ).not.toContain("剧情推进");
     expect(
       document.querySelector(".acu-v2-sidebar")?.textContent || "",
-    ).toContain("外部导入");
-    expect(
-      document.querySelector(".acu-v2-sidebar")?.textContent || "",
     ).not.toContain("交火模式");
 
     const plotToggle = document.querySelector(
       'button[data-acu-toggle-key="plotEnabled"]',
     ) as HTMLButtonElement;
-    const importToggle = document.querySelector(
-      'button[data-acu-toggle-key="externalImportPageEnabled"]',
-    ) as HTMLButtonElement;
     const vectorToggle = document.querySelector(
       'button[data-acu-toggle-key="summaryVectorIndexModeEnabled"]',
     ) as HTMLButtonElement;
     expect(plotToggle).not.toBeNull();
-    expect(importToggle).not.toBeNull();
     expect(vectorToggle).not.toBeNull();
-
-    importToggle.click();
-    await Promise.resolve();
-
-    expect(settings.externalImportPageEnabled).toBe(false);
-    text = document.querySelector(".acu-v2-sidebar")?.textContent || "";
-    expect(text).not.toContain("功能");
-    expect(text).not.toContain("外部导入");
 
     plotToggle.click();
     vectorToggle.click();
@@ -893,7 +806,6 @@ describe("DashboardPage", () => {
     ).map((button) => button.dataset.acuToggleKey);
     expect(visibleToggleKeys).toEqual([
       "plotEnabled",
-      "externalImportPageEnabled",
       "contentReplaceEnabled",
       "summaryVectorIndexModeEnabled",
       "developerOptionsEnabled",

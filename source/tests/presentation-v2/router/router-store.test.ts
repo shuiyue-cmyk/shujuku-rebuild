@@ -42,11 +42,11 @@ afterEach(() => {
 });
 
 describe('router-store · pageRegistry 基线', () => {
-  it('注册表恰好 13 项，分布于 5 分组', async () => {
+  it('注册表恰好 12 项，分布于 5 分组', async () => {
     const m = await freshImport();
     m.pinia.setActivePinia(m.pinia.createPinia());
     const r = m.router.useRouterStore();
-    expect(r.pageRegistry.length).toBe(13);
+    expect(r.pageRegistry.length).toBe(12);
     const byGroup = r.pageRegistry.reduce<Record<string, number>>((acc, p) => {
       acc[p.group] = (acc[p.group] || 0) + 1;
       return acc;
@@ -54,7 +54,7 @@ describe('router-store · pageRegistry 基线', () => {
     expect(byGroup).toEqual({
       overview: 2,
       config: 5,
-      feature: 3,
+      feature: 2,
       tool: 2,
       developer: 1,
     });
@@ -73,7 +73,6 @@ describe('router-store · pageRegistry 基线', () => {
       ['plot', '剧情推进', 'config'],
       ['agent', 'Agent', 'config'],
       ['api', 'API', 'config'],
-      ['import', '外部导入', 'feature'],
       ['vector-index', '交火模式', 'feature'],
       ['content-replace', '正文替换', 'feature'],
       ['data-mgmt', '数据管理', 'tool'],
@@ -210,25 +209,24 @@ describe('router-store · 高手模式可见性', () => {
     expect(state.settings_ACU.contentOptimizationSettings?.enabled).toBe(true);
   });
 
-  it('visiblePagesByGroup 在高手模式默认状态下：overview=1 / config=5 / feature=1 / tool=2 / developer=0', async () => {
+  it('visiblePagesByGroup 在高手模式默认状态下：overview=1 / config=5 / feature=0 / tool=2 / developer=0', async () => {
     persistAdvancedMode();
     const m = await freshImport();
     m.pinia.setActivePinia(m.pinia.createPinia());
     const r = m.router.useRouterStore();
     expect(r.visiblePagesByGroup.overview.length).toBe(1);
     expect(r.visiblePagesByGroup.config.length).toBe(5);
-    expect(r.visiblePagesByGroup.feature.length).toBe(1);
+    expect(r.visiblePagesByGroup.feature.length).toBe(0); // 交火/正文替换默认均关闭
     expect(r.visiblePagesByGroup.tool.length).toBe(2); // 数据管理 + 高级工具
     expect(r.visiblePagesByGroup.developer.length).toBe(0); // 默认 developerOptionsEnabled=false
   });
 
-  it('外部导入、交火模式都关闭时功能分组为空', async () => {
+  it('交火模式、正文替换都关闭时功能分组为空', async () => {
     persistAdvancedMode();
     const m = await freshImport();
     const state = await import('../../../src/service/runtime/state-manager');
     state._set_settings_ACU({
       ...state.settings_ACU,
-      externalImportPageEnabled: false,
       summaryVectorIndexModeDefault: false,
       contentOptimizationSettings: {
         ...(state.settings_ACU.contentOptimizationSettings || {}),
@@ -239,8 +237,8 @@ describe('router-store · 高手模式可见性', () => {
     const r = m.router.useRouterStore();
 
     expect(r.visiblePagesByGroup.feature).toEqual([]);
-    expect(r.visiblePages.map(p => p.id)).not.toContain('import');
     expect(r.visiblePages.map(p => p.id)).not.toContain('vector-index');
+    expect(r.visiblePages.map(p => p.id)).not.toContain('content-replace');
   });
 
   it('developer 一级页随 developerOptionsEnabled 切换可见性（plan §D24）', async () => {
@@ -315,29 +313,25 @@ describe('router-store · 切页 + 持久化', () => {
     const m = await freshImport();
     m.pinia.setActivePinia(m.pinia.createPinia());
     const r = m.router.useRouterStore();
-    r.setActivePage('import');
-    expect(r.activePageId).toBe('import');
+    r.setActivePage('data-mgmt');
+    expect(r.activePageId).toBe('data-mgmt');
     const persisted = JSON.parse(localStorage.getItem(STORAGE_KEY)!);
-    expect(persisted.router.activePageId).toBe('import');
+    expect(persisted.router.activePageId).toBe('data-mgmt');
   });
 
-  it('剧情推进、外部导入与交火模式按功能开关控制一级页可见性', async () => {
+  it('剧情推进与交火模式按功能开关控制一级页可见性', async () => {
     persistAdvancedMode();
     const m = await freshImport();
     m.pinia.setActivePinia(m.pinia.createPinia());
     const r = m.router.useRouterStore();
 
     expect(r.visiblePagesByGroup.config.map(p => p.id)).toContain('plot');
-    expect(r.visiblePagesByGroup.feature.map(p => p.id)).toContain('import');
     expect(r.visiblePages.map(p => p.id)).not.toContain('vector-index');
 
     r.setFeatureGate(m.registry.FEATURE_GATE_PLOT, false);
     expect(r.visiblePages.map(p => p.id)).not.toContain('plot');
     r.setActivePage('plot');
     expect(r.activePageId).toBe('dashboard');
-
-    r.setFeatureGate(m.registry.FEATURE_GATE_IMPORT, false);
-    expect(r.visiblePages.map(p => p.id)).not.toContain('import');
 
     r.setFeatureGate(m.registry.FEATURE_GATE_VECTOR_INDEX, true);
     expect(r.visiblePages.map(p => p.id)).toContain('vector-index');

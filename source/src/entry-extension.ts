@@ -57,7 +57,6 @@ import './service/optimization/content-optimization';
 // presentation 层
 // ═══════════════════════════════════════════════════════════════
 import './presentation/triggers/update-process';
-import './presentation/triggers/import-process';
 import './presentation/bootstrap/init';
 import './presentation/bootstrap/api-registry';
 import './presentation/window/window-system';
@@ -70,7 +69,6 @@ import './presentation/components/template-preset-ui';
 import './presentation/components/optimization-ui';
 import './presentation/components/worldbook-selector';
 import './presentation/components/update-status-display';
-import './presentation/components/import-status-ui';
 import './presentation/triggers/update-trigger';
 import './presentation/triggers/data-admin-ui';
 import './presentation/triggers/settings-ui-sync';

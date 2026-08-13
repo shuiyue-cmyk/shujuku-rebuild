@@ -1,14 +1,13 @@
 // main-popup-plot.ts
 // 核心功能标签页 HTML生成
-// 包含：剧情推进、外部导入
+// 包含：剧情推进
 
 import { SCRIPT_ID_PREFIX_ACU } from '../../shared/constants';
 import { DEFAULT_PRESET_OPTION_VALUE_ACU } from '../components/optimization-ui';
-import { generateImportTabHTML } from './main-popup-import';
 
 /**
  * 生成核心功能标签页的 HTML 片段
- * 包含：剧情推进设置、预设管理、提示词设置、匹配替换、世界书选择、外部导入
+ * 包含：剧情推进设置、预设管理、提示词设置、匹配替换、世界书选择
  */
 export function generateCoreFuncTabHTML(): string {
     return `
@@ -293,10 +292,6 @@ export function generateCoreFuncTabHTML(): string {
 
                         </div>
 
-                        <!-- 外部导入区块（原独立tab，现作为核心功能区子模块） -->
-                        <div class="settings-section" style="padding: 20px; background: var(--acu-bg-2); border-radius: 8px; border: 1px solid var(--acu-border);">
-                            ${generateImportTabHTML().replace(/id="acu-tab-import" class="acu-tab-content"/, 'id="acu-tab-import-embedded" class="acu-import-embedded"').replace(/<div class="acu-card">/, '<div class="acu-card" style="border: none; box-shadow: none; padding: 0; margin: 0;">').replace('<h3>从TXT文件导入</h3>', '<h3 style="margin: 0 0 15px 0; padding: 0 0 10px 0; border-bottom: 1px solid var(--acu-border);">外部导入</h3>').replace('<p class="notes">从外部TXT文件导入内容', '<p class="notes" style="margin-bottom: 12px;">从外部TXT文件导入内容')}
-                        </div>
                     </div>
                 </div>`;
 }
