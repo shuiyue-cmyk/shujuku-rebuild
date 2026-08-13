@@ -34,7 +34,7 @@ https://github.com/shuiyue-cmyk/shujuku-rebuild
 
 ## 兼容契约
 
-保持不变的对外表面（详见 [`docs/COMPATIBILITY.md`](docs/COMPATIBILITY.md)）：
+保持不变的对外表面（详见 [`source/docs/COMPATIBILITY.md`](source/docs/COMPATIBILITY.md)）：
 
 - 全局 API：`window.AutoCardUpdaterAPI`（exportTableAsJson / importTableAsJson / updateCell / updateRow / deleteRow / insertRow / openSettings / openVisualizer / manualUpdate / registerTableUpdateCallback / _notifyTableUpdate 等）、`window.AutoCardUpdaterV2API`（open / openVisualizer）
 - DOM：`#acu-app-v2`、`button[data-page-id="form-fill"]`、按钮文案「全选」「一键追平所选表未填楼层」「切换到高手模式」
@@ -46,26 +46,33 @@ https://github.com/shuiyue-cmyk/shujuku-rebuild
 ## 本地开发
 
 ```bash
+cd source
 npm install
 npm run typecheck     # tsc --noEmit
 npm run test:parallel # vitest（并行）
-npm run build         # rollup → dist/extension + 根目录直装产物
+npm run build         # rollup → source/dist/extension + 仓库根目录直装产物
 ```
 
 ## 目录结构
+
+仓库根目录即直装产物（SillyTavern/TauriTavern 扩展面板粘贴本仓库地址即可安装）：
 
 ```
 ├── manifest.json        # 扩展清单（根目录，直装入口）
 ├── index.js             # 构建产物（根目录，直装入口）
 ├── sql-wasm.wasm        # sql.js WASM（根目录，直装入口）
-├── src/
-│   ├── entry-extension.ts   # 扩展入口（零 JSR 依赖）
-│   ├── data/                # 数据层：sqlite 引擎 / 网关 / 仓储 / 存储
-│   ├── service/             # 服务层：表格 / 剧情推进 / skill / 世界书 / 设置
-│   ├── presentation/        # 旧弹窗 UI（DOM/jQuery）
-│   └── presentation-v2/     # v2 UI（Vue 3 + Pinia）
-├── tests/               # vitest 单元/集成测试（~290 文件）
-└── docs/COMPATIBILITY.md # 兼容契约清单
+├── README.md
+└── source/              # 源码工程（开发/构建/测试）
+    ├── package.json
+    ├── rollup.config.js # 单扩展构建，产物同步到仓库根目录
+    ├── src/
+    │   ├── entry-extension.ts   # 扩展入口（零 JSR 依赖）
+    │   ├── data/                # 数据层：sqlite 引擎 / 网关 / 仓储 / 存储
+    │   ├── service/             # 服务层：表格 / 剧情推进 / skill / 世界书 / 设置
+    │   ├── presentation/        # 旧弹窗 UI（DOM/jQuery）
+    │   └── presentation-v2/     # v2 UI（Vue 3 + Pinia）
+    ├── tests/           # vitest 单元/集成测试（~290 文件）
+    └── docs/            # COMPATIBILITY.md / TESTING.md
 ```
 
 ## 从旧版迁移

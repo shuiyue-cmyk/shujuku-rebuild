@@ -108,6 +108,9 @@ const onwarn = (warning, warn) => {
   warn(warning);
 };
 
+/** 仓库根目录（本文件位于 source/ 下） */
+const repoRoot = join(__dirname, '..');
+
 const extensionConfig = {
   input: 'src/entry-extension.ts',
   output: {
@@ -125,8 +128,8 @@ const extensionConfig = {
       writeBundle() {
         const distExtensionDir = join(__dirname, 'dist', 'extension');
         const distIndex = join(distExtensionDir, 'index.js');
-        const rootIndex = join(__dirname, 'index.js');
-        const rootManifest = join(__dirname, 'manifest.json');
+        const rootIndex = join(repoRoot, 'index.js');
+        const rootManifest = join(repoRoot, 'manifest.json');
 
         mkdirSync(distExtensionDir, { recursive: true });
         if (!existsSync(distIndex)) {
@@ -141,7 +144,7 @@ const extensionConfig = {
         copyFileSync(distIndex, rootIndex);
         // 复制 sql.js wasm 到 dist/extension/ 与仓库根目录
         copySqlWasmTo(distExtensionDir);
-        copySqlWasmTo(__dirname);
+        copySqlWasmTo(repoRoot);
       },
     },
   ],
