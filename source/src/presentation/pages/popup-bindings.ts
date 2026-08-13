@@ -77,7 +77,6 @@ import { isSqliteMode } from '../../service/table/storage-mode';
         $importTableSelector_ACU: $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-import-table-selector`),
         $statusMessageSpan_ACU: $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-status-message`),
         $cardUpdateStatusDisplay_ACU: $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-card-update-status-display`),
-        $streamingEnabledCheckbox_ACU: $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-streaming-enabled-checkbox`),
       });
       const $loadCharCardPromptFromJsonButton_ACU = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-load-char-card-prompt-from-json`);
       const $exportCharCardPromptToJsonButton_ACU = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-export-char-card-prompt-to-json`);

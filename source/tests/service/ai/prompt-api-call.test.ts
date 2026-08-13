@@ -160,10 +160,9 @@ beforeEach(() => {
   mockIsGenerateRawAvailable.mockReturnValue(true);
 });
 
-// ═══ handleApiResponse_ACU ═══
+// ═══ handleApiResponse_ACU（流式输出开关已剥离，恒非流式） ═══
 describe('handleApiResponse_ACU', () => {
   it('非流式模式：解析 JSON 响应中的 choices[0].message.content', async () => {
-    mockSettings.streamingEnabled = false;
     const mockResponse = {
       json: vi.fn().mockResolvedValue({
         choices: [{ message: { content: 'AI回复内容' } }],
@@ -174,7 +173,6 @@ describe('handleApiResponse_ACU', () => {
   });
 
   it('非流式模式：解析 content 字段', async () => {
-    mockSettings.streamingEnabled = false;
     const mockResponse = {
       json: vi.fn().mockResolvedValue({ content: '直接内容' }),
     };
@@ -183,7 +181,6 @@ describe('handleApiResponse_ACU', () => {
   });
 
   it('非流式模式：解析失败返回 null', async () => {
-    mockSettings.streamingEnabled = false;
     const mockResponse = {
       json: vi.fn().mockRejectedValue(new Error('JSON 解析失败')),
     };
@@ -192,38 +189,11 @@ describe('handleApiResponse_ACU', () => {
   });
 
   it('非流式模式：未知格式返回 null', async () => {
-    mockSettings.streamingEnabled = false;
     const mockResponse = {
       json: vi.fn().mockResolvedValue({ unknownField: true }),
     };
     const result = await handleApiResponse_ACU(mockResponse);
     expect(result).toBeNull();
-  });
-
-  it('流式模式：从 SSE 流中拼接 delta.content', async () => {
-    mockSettings.streamingEnabled = true;
-    const encoder = new TextEncoder();
-    const chunks = [
-      encoder.encode('data: {"choices":[{"delta":{"content":"你"}}]}\n\n'),
-      encoder.encode('data: {"choices":[{"delta":{"content":"好"}}]}\n\n'),
-      encoder.encode('data: [DONE]\n\n'),
-    ];
-    let chunkIndex = 0;
-    const mockReader = {
-      read: vi.fn(async () => {
-        if (chunkIndex < chunks.length) {
-          return { done: false, value: chunks[chunkIndex++] };
-        }
-        return { done: true, value: undefined };
-      }),
-      releaseLock: vi.fn(),
-    };
-    const mockResponse = {
-      body: { getReader: () => mockReader },
-    };
-    const result = await handleApiResponse_ACU(mockResponse);
-    expect(result).toBe('你好');
-    expect(mockReader.releaseLock).toHaveBeenCalled();
   });
 });
 

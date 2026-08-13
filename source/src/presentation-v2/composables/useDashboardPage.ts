@@ -21,7 +21,6 @@ import {
 } from "../../service/settings/settings-service";
 import { resolveTableHistoryStateFromChat_ACU } from "../../service/table/table-history";
 import { getCurrentTableDisplayData_ACU } from "../../service/settings/settings-readers";
-import { setAutoUpdateEnabled_ACU } from "../../service/settings/settings-write-service";
 import { getSortedSheetKeys_ACU } from "../../service/template/chat-scope";
 import { getActiveTemplatePresetMeta_ACU } from "../../service/template/template-preset-service";
 import {
@@ -52,7 +51,6 @@ import {
   syncContentReplaceAvailability,
 } from "../stores/content-replace-gate";
 import { dashboardCopy } from "../copy/dashboard-copy";
-import { useApiPresetStore } from "../stores/api-preset-store";
 import { useDevOptions } from "./useDevOptions";
 
 type MessageKind = "info" | "success" | "warning" | "error";
@@ -830,12 +828,6 @@ export function useDashboardPage(): DashboardPageState {
         description: dashboardCopy.toggles.zeroTk.description,
         value: settings_ACU.zeroTkOccupyModeDefault === true,
       },
-      {
-        key: "streamingEnabled",
-        label: dashboardCopy.toggles.streaming.label,
-        description: dashboardCopy.toggles.streaming.description,
-        value: settings_ACU.streamingEnabled === true,
-      },
     ];
   });
 
@@ -975,19 +967,9 @@ export function useDashboardPage(): DashboardPageState {
     } else if (key === "contentReplaceEnabled") {
       setContentReplaceEnabledBySettings(!!value);
       saveSettings_ACU();
-    } else if (
-      key === "autoUpdateEnabled" ||
-      key === "toastMuteEnabled" ||
-      key === "streamingEnabled"
-    ) {
-      if (key === "autoUpdateEnabled") {
-        setAutoUpdateEnabled_ACU(!!value);
-      } else if (key === "streamingEnabled") {
-        useApiPresetStore().setStreamingEnabled(!!value);
-      } else {
-        settings_ACU[key] = !!value;
-        saveSettings_ACU();
-      }
+    } else if (key === "autoUpdateEnabled" || key === "toastMuteEnabled") {
+      settings_ACU[key] = !!value;
+      saveSettings_ACU();
     }
     dataRefreshTick.value++;
   }

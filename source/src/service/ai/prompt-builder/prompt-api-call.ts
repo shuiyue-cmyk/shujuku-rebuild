@@ -189,50 +189,7 @@ export class RetryableAiResponseError_ACU extends Error {
     }
   }
 
-  // ═══ 流式/非流式响应处理 ═══
-
-  async function streamToText_ACU(response: any, signal: AbortSignal | null = null) {
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let fullContent = '';
-    let buffer = '';
-
-    try {
-        while (true) {
-            if (signal?.aborted) {
-                throw new Error('Request aborted');
-            }
-            
-            const { done, value } = await reader.read();
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop() || '';
-
-            for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                    const data = line.slice(6);
-                    if (data === '[DONE]') continue;
-                    
-                    try {
-                        const json = JSON.parse(data);
-                        const content = json?.choices?.[0]?.delta?.content;
-                        if (content) {
-                            fullContent += content;
-                        }
-                    } catch (e) {
-                        // 忽略解析错误
-                    }
-                }
-            }
-        }
-    } finally {
-        reader.releaseLock();
-    }
-
-    return fullContent;
-  }
+  // ═══ 非流式响应处理（流式输出开关已剥离，恒非流式） ═══
 
   async function parseNonStreamResponse_ACU(response: any) {
     try {
@@ -254,10 +211,6 @@ export class RetryableAiResponseError_ACU extends Error {
     }
   }
 
-  export async function handleApiResponse_ACU(response: any, signal: AbortSignal | null = null) {
-    if (settings_ACU.streamingEnabled) {
-        return await streamToText_ACU(response, signal);
-    } else {
-        return await parseNonStreamResponse_ACU(response);
-    }
+  export async function handleApiResponse_ACU(response: any, _signal: AbortSignal | null = null) {
+    return await parseNonStreamResponse_ACU(response);
   }

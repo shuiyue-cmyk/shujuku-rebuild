@@ -120,7 +120,6 @@ export function ensureApiSettingsShape_ACU(): void {
     settings_ACU.apiConfig = normalizeApiConfig_ACU(settings_ACU.apiConfig);
   }
   if (typeof settings_ACU.tavernProfile !== 'string') settings_ACU.tavernProfile = '';
-  settings_ACU.streamingEnabled = settings_ACU.streamingEnabled === true;
   if (typeof settings_ACU.tableApiPreset !== 'string') settings_ACU.tableApiPreset = '';
   if (typeof settings_ACU.plotApiPreset !== 'string') settings_ACU.plotApiPreset = '';
   if (
@@ -235,7 +234,6 @@ function snapshotApiFields_ACU(): Record<string, unknown> {
     tableApiPresetOverridesByName: clone(settings_ACU.tableApiPresetOverridesByName),
     plotTaskApiPresetOverridesById: clone(settings_ACU.plotTaskApiPresetOverridesById),
     contentOptimizationApiPreset: settings_ACU.contentOptimizationSettings?.apiPreset,
-    streamingEnabled: settings_ACU.streamingEnabled,
   };
 }
 
@@ -253,7 +251,6 @@ function restoreApiFields_ACU(snapshot: Record<string, unknown>): void {
   if (settings_ACU.contentOptimizationSettings && typeof settings_ACU.contentOptimizationSettings === 'object') {
     settings_ACU.contentOptimizationSettings.apiPreset = snapshot.contentOptimizationApiPreset;
   }
-  settings_ACU.streamingEnabled = snapshot.streamingEnabled;
 }
 
 function finalizeSave_ACU(snapshot: Record<string, unknown>): ApiPresetWriteResult_ACU {
@@ -442,14 +439,6 @@ export function setDefaultApiPreset_ACU(name: string): ApiPresetWriteResult_ACU 
   }
   const snapshot = snapshotApiFields_ACU();
   settings_ACU.defaultApiPresetName = preset.name;
-  return finalizeSave_ACU(snapshot);
-}
-
-/** 设置流式开关 */
-export function setStreamingEnabled_ACU(enabled: boolean): ApiPresetWriteResult_ACU {
-  ensureApiSettingsShape_ACU();
-  const snapshot = snapshotApiFields_ACU();
-  settings_ACU.streamingEnabled = !!enabled;
   return finalizeSave_ACU(snapshot);
 }
 

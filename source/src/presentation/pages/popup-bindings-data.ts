@@ -11,13 +11,12 @@ import { isSummaryOrOutlineTable_ACU, logDebug_ACU, logError_ACU, logWarn_ACU } 
 import { jQuery_API_ACU } from '../dom-utils';
 import { isSqliteMode } from '../../service/table/storage-mode';
 import { settings_ACU, currentChatFileIdentifier_ACU, currentJsonTableData_ACU } from '../../service/runtime/state-manager';
-import { $popupInstance_ACU, $charCardPromptToggle_ACU, $charCardPromptAreaDiv_ACU, $saveCharCardPromptButton_ACU, $resetCharCardPromptButton_ACU, $loadModelsButton_ACU, $saveApiConfigButton_ACU, $clearApiConfigButton_ACU, $streamingEnabledCheckbox_ACU, $customApiModelInput_ACU, $customApiModelSelect_ACU, $importTableSelectAll_ACU, $importTableSelectNone_ACU } from '../state/ui-refs';
+import { $popupInstance_ACU, $charCardPromptToggle_ACU, $charCardPromptAreaDiv_ACU, $saveCharCardPromptButton_ACU, $resetCharCardPromptButton_ACU, $loadModelsButton_ACU, $saveApiConfigButton_ACU, $clearApiConfigButton_ACU, $customApiModelInput_ACU, $customApiModelSelect_ACU, $importTableSelectAll_ACU, $importTableSelectNone_ACU } from '../state/ui-refs';
 import { saveSettingsAndNotify_ACU } from '../components/settings-ui-helpers';
 import { importCombinedSettings_ACU } from '../triggers/data-admin-ui';
 import { applyTemplateScopeForCurrentChat_ACU, getDataIsolationHistory_ACU, removeDataIsolationHistory_ACU, switchIsolationProfile_ACU, persistCurrentTemplatePresetName_ACU, setSummaryVectorIndexMode_ACU } from '../../service/settings/settings-service';
 // [V1 收敛] 以下写操作统一委托 service 层事务式函数，禁止 V1 直接写 settings_ACU。
 import { setFeatureApiPreset_ACU } from '../../service/settings/feature-preset-reference-service';
-import { setStreamingEnabled_ACU } from '../../service/settings/api-preset-service';
 import { setTableContextRules_ACU } from '../../service/settings/settings-write-service';
 import { deleteAllGeneratedEntries_ACU } from '../../service/worldbook/pipeline';
 import { refreshMergedDataAndNotifyWithUI_ACU, refreshPresetUIAfterSwitch_ACU } from '../components/pipeline-ui-helpers';
@@ -399,19 +398,6 @@ export async function bindDataEvents_ACU(): Promise<void> {
           $importTableSelectNone_ACU.on('click', handleImportSelectNone_ACU);
       }
 
-      // [新增] 流式传输开关事件监听
-      if ($streamingEnabledCheckbox_ACU.length) {
-        $streamingEnabledCheckbox_ACU.on('change', function () {
-            const enabled = jQuery_API_ACU(this).is(':checked');
-            const result = setStreamingEnabled_ACU(enabled);
-            if (!result.ok) {
-              showToastr_ACU('error', result.message || '保存流式传输开关失败，已回滚。');
-              jQuery_API_ACU(this).prop('checked', !enabled);
-              return;
-            }
-            showToastr_ACU('info', `流式传输已${enabled ? '启用' : '关闭'}`);
-        });
-      }
       if ($loadModelsButton_ACU.length) $loadModelsButton_ACU.on('click', fetchModelsAndConnect_ACU);
       if ($saveApiConfigButton_ACU.length) $saveApiConfigButton_ACU.on('click', saveApiConfig_ACU);
       if ($clearApiConfigButton_ACU.length) $clearApiConfigButton_ACU.on('click', clearApiConfig_ACU);

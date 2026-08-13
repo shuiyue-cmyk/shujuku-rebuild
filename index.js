@@ -62345,47 +62345,7 @@ async function callCustomOpenAI_ACU(dynamicContent, abortController = null, opti
         }
     }
 }
-// ═══ 流式/非流式响应处理 ═══
-async function streamToText_ACU(response, signal = null) {
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let fullContent = '';
-    let buffer = '';
-    try {
-        while (true) {
-            if (signal?.aborted) {
-                throw new Error('Request aborted');
-            }
-            const { done, value } = await reader.read();
-            if (done)
-                break;
-            buffer += decoder.decode(value, { stream: true });
-            const lines = buffer.split('\n');
-            buffer = lines.pop() || '';
-            for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                    const data = line.slice(6);
-                    if (data === '[DONE]')
-                        continue;
-                    try {
-                        const json = JSON.parse(data);
-                        const content = json?.choices?.[0]?.delta?.content;
-                        if (content) {
-                            fullContent += content;
-                        }
-                    }
-                    catch (e) {
-                        // 忽略解析错误
-                    }
-                }
-            }
-        }
-    }
-    finally {
-        reader.releaseLock();
-    }
-    return fullContent;
-}
+// ═══ 非流式响应处理（流式输出开关已剥离，恒非流式） ═══
 async function parseNonStreamResponse_ACU(response) {
     try {
         const data = await response.json();
@@ -62406,13 +62366,8 @@ async function parseNonStreamResponse_ACU(response) {
         return null;
     }
 }
-async function handleApiResponse_ACU(response, signal = null) {
-    if (settings_ACU.streamingEnabled) {
-        return await streamToText_ACU(response, signal);
-    }
-    else {
-        return await parseNonStreamResponse_ACU(response);
-    }
+async function handleApiResponse_ACU(response, _signal = null) {
+    return await parseNonStreamResponse_ACU(response);
 }
 
 /**
@@ -63492,7 +63447,6 @@ function ensureApiSettingsShape_ACU() {
     }
     if (typeof settings_ACU.tavernProfile !== 'string')
         settings_ACU.tavernProfile = '';
-    settings_ACU.streamingEnabled = settings_ACU.streamingEnabled === true;
     if (typeof settings_ACU.tableApiPreset !== 'string')
         settings_ACU.tableApiPreset = '';
     if (typeof settings_ACU.plotApiPreset !== 'string')
@@ -63594,7 +63548,6 @@ function snapshotApiFields_ACU() {
         tableApiPresetOverridesByName: clone$8(settings_ACU.tableApiPresetOverridesByName),
         plotTaskApiPresetOverridesById: clone$8(settings_ACU.plotTaskApiPresetOverridesById),
         contentOptimizationApiPreset: settings_ACU.contentOptimizationSettings?.apiPreset,
-        streamingEnabled: settings_ACU.streamingEnabled,
     };
 }
 function restoreApiFields_ACU(snapshot) {
@@ -63611,7 +63564,6 @@ function restoreApiFields_ACU(snapshot) {
     if (settings_ACU.contentOptimizationSettings && typeof settings_ACU.contentOptimizationSettings === 'object') {
         settings_ACU.contentOptimizationSettings.apiPreset = snapshot.contentOptimizationApiPreset;
     }
-    settings_ACU.streamingEnabled = snapshot.streamingEnabled;
 }
 function finalizeSave_ACU(snapshot) {
     const saveResult = saveSettings_ACU();
@@ -63807,13 +63759,6 @@ function setDefaultApiPreset_ACU(name) {
     settings_ACU.defaultApiPresetName = preset.name;
     return finalizeSave_ACU(snapshot);
 }
-/** 设置流式开关 */
-function setStreamingEnabled_ACU(enabled) {
-    ensureApiSettingsShape_ACU();
-    const snapshot = snapshotApiFields_ACU();
-    settings_ACU.streamingEnabled = !!enabled;
-    return finalizeSave_ACU(snapshot);
-}
 /** 将当前配置保存为新预设 */
 function saveCurrentConfigAsPreset_ACU(name) {
     const preset = {
@@ -63882,7 +63827,7 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
         max_tokens: maxTokens,
         temperature,
         top_p: topP,
-        stream: settings_ACU.streamingEnabled || false,
+        stream: false, // 流式输出开关已剥离，恒非流式
         chat_completion_source: 'custom',
         group_names: [],
         include_reasoning: false,
@@ -83079,7 +83024,6 @@ let independentTableStates_ACU = {};
 let settings_ACU = {
     apiConfig: { url: '', apiKey: '', model: '', max_tokens: 60000, temperature: 1.0 },
     apiMode: 'custom',
-    streamingEnabled: false,
     tavernProfile: '',
     apiPresets: [],
     defaultApiPresetName: '',
@@ -84329,7 +84273,6 @@ function buildDefaultSettings_ACU() {
         apiConfig: { url: '', apiKey: '', model: '', max_tokens: 60000, temperature: 1.0 },
         apiMode: 'custom',
         tavernProfile: '',
-        streamingEnabled: false, // [新增] 流式传输开关（默认关闭）
         apiPresets: [],
         defaultApiPresetName: '',
         apiPresetBindingsByChat: {},
@@ -85391,7 +85334,7 @@ function escapeHtml_ACU(text) {
  * 仅 presentation 层内部使用。
  */
 let $popupInstance_ACU = null;
-let $apiConfigSectionToggle_ACU, $apiConfigAreaDiv_ACU, $customApiUrlInput_ACU, $customApiKeyInput_ACU, $customApiModelInput_ACU, $customApiModelSelect_ACU, $maxTokensInput_ACU, $temperatureInput_ACU, $loadModelsButton_ACU, $saveApiConfigButton_ACU, $clearApiConfigButton_ACU, $apiStatusDisplay_ACU, $charCardPromptToggle_ACU, $charCardPromptAreaDiv_ACU, $charCardPromptSegmentsContainer_ACU, $saveCharCardPromptButton_ACU, $resetCharCardPromptButton_ACU, $plotPromptSegmentsContainer_ACU, $plotTaskListContainer_ACU, $autoUpdateThresholdInput_ACU, $saveAutoUpdateThresholdButton_ACU, $autoUpdateTokenThresholdInput_ACU, $saveAutoUpdateTokenThresholdButton_ACU, $autoUpdateFrequencyInput_ACU, $saveAutoUpdateFrequencyButton_ACU, $updateBatchSizeInput_ACU, $saveUpdateBatchSizeButton_ACU, $maxConcurrentGroupsInput_ACU, $autoUpdateEnabledCheckbox_ACU, $standardizedTableFillEnabledCheckbox_ACU, $toastMuteEnabledCheckbox_ACU, $promptTemplateEnabledCheckbox_ACU, $tableEditLastPairOnlyCheckbox_ACU, $tableMaxRetriesInput_ACU, $manualUpdateCardButton_ACU, $statusMessageSpan_ACU, $cardUpdateStatusDisplay_ACU, $streamingEnabledCheckbox_ACU, $manualExtraHintCheckbox_ACU, $skipUpdateFloorsInput_ACU, $saveSkipUpdateFloorsButton_ACU, $retainRecentLayersInput_ACU, $saveRetainRecentLayersButton_ACU, $manualTableSelector_ACU, $manualTableSelectAll_ACU, $manualTableSelectNone_ACU, $importTableSelector_ACU, $importTableSelectAll_ACU, $importTableSelectNone_ACU;
+let $apiConfigSectionToggle_ACU, $apiConfigAreaDiv_ACU, $customApiUrlInput_ACU, $customApiKeyInput_ACU, $customApiModelInput_ACU, $customApiModelSelect_ACU, $maxTokensInput_ACU, $temperatureInput_ACU, $loadModelsButton_ACU, $saveApiConfigButton_ACU, $clearApiConfigButton_ACU, $apiStatusDisplay_ACU, $charCardPromptToggle_ACU, $charCardPromptAreaDiv_ACU, $charCardPromptSegmentsContainer_ACU, $saveCharCardPromptButton_ACU, $resetCharCardPromptButton_ACU, $plotPromptSegmentsContainer_ACU, $plotTaskListContainer_ACU, $autoUpdateThresholdInput_ACU, $saveAutoUpdateThresholdButton_ACU, $autoUpdateTokenThresholdInput_ACU, $saveAutoUpdateTokenThresholdButton_ACU, $autoUpdateFrequencyInput_ACU, $saveAutoUpdateFrequencyButton_ACU, $updateBatchSizeInput_ACU, $saveUpdateBatchSizeButton_ACU, $maxConcurrentGroupsInput_ACU, $autoUpdateEnabledCheckbox_ACU, $standardizedTableFillEnabledCheckbox_ACU, $toastMuteEnabledCheckbox_ACU, $promptTemplateEnabledCheckbox_ACU, $tableEditLastPairOnlyCheckbox_ACU, $tableMaxRetriesInput_ACU, $manualUpdateCardButton_ACU, $statusMessageSpan_ACU, $cardUpdateStatusDisplay_ACU, $manualExtraHintCheckbox_ACU, $skipUpdateFloorsInput_ACU, $saveSkipUpdateFloorsButton_ACU, $retainRecentLayersInput_ACU, $saveRetainRecentLayersButton_ACU, $manualTableSelector_ACU, $manualTableSelectAll_ACU, $manualTableSelectNone_ACU, $importTableSelector_ACU, $importTableSelectAll_ACU, $importTableSelectNone_ACU;
 function _set_$popupInstance_ACU(v) { $popupInstance_ACU = v; }
 // 批量赋值 UI placeholder 变量（popup-bindings 初始化时一次性调用）
 function _assignUIPlaceholders_ACU(map) {
@@ -85469,8 +85412,6 @@ function _assignUIPlaceholders_ACU(map) {
         $statusMessageSpan_ACU = map.$statusMessageSpan_ACU;
     if (map.$cardUpdateStatusDisplay_ACU !== undefined)
         $cardUpdateStatusDisplay_ACU = map.$cardUpdateStatusDisplay_ACU;
-    if (map.$streamingEnabledCheckbox_ACU !== undefined)
-        $streamingEnabledCheckbox_ACU = map.$streamingEnabledCheckbox_ACU;
     if (map.$manualExtraHintCheckbox_ACU !== undefined)
         $manualExtraHintCheckbox_ACU = map.$manualExtraHintCheckbox_ACU;
     if (map.$skipUpdateFloorsInput_ACU !== undefined)
@@ -97271,8 +97212,6 @@ function syncAllSettingsToUI_ACU(s) {
                 : `交火模式纪要索引已启用，但当前聊天尚无外置纪要向量索引；完成一次纪要表填写后会自动归档，也可点击“立即构建交火纪要索引”手动构建。`
             : '使用前请先配置好 Embedding 模型以及可选 Rerank 模型；开启后会在纪要表填写完成时立即归档外置概要列向量索引，达到门槛后发送前覆盖原概要索引条目。');
     }
-    if ($streamingEnabledCheckbox_ACU)
-        $streamingEnabledCheckbox_ACU.prop('checked', s.streamingEnabled || false);
     if ($manualTableSelector_ACU && typeof renderManualTableSelector_ACU === 'function')
         renderManualTableSelector_ACU();
     if ($importTableSelector_ACU && typeof renderImportTableSelector_ACU === 'function')
@@ -125826,7 +125765,6 @@ const useApiPresetStore = defineStore('acu-v2-api-presets', {
         currentConfigReady: false,
         currentConfigLabel: '当前 API 配置不完整',
         currentChatKey: getCurrentChatKey_ACU(),
-        streamingEnabled: false,
         modelOptions: [],
         modelLoadStatus: 'idle',
         modelLoadError: '',
@@ -125861,15 +125799,11 @@ const useApiPresetStore = defineStore('acu-v2-api-presets', {
             const currentConfig = resolveCurrentConfigStatus();
             this.currentConfigReady = currentConfig.ready;
             this.currentConfigLabel = currentConfig.label;
-            this.streamingEnabled = settings_ACU.streamingEnabled === true;
         },
         /** 应用写操作结果：成功与失败都同步展示态（失败时 service 已回滚内存）；返回 boolean 保持旧契约。 */
         applyWriteResult(result) {
             this.refreshFromSettings();
             return result.ok === true;
-        },
-        setStreamingEnabled(enabled) {
-            return this.applyWriteResult(setStreamingEnabled_ACU(enabled));
         },
         setDefaultPreset(name) {
             return this.applyWriteResult(setDefaultApiPreset_ACU(name));
@@ -134253,10 +134187,6 @@ const dashboardCopy = {
             label: "静默提示框",
             description: "默认关闭。开启后仅保留填表、规划等核心提示，其他浮窗通知不再弹出。",
         },
-        streaming: {
-            label: "开启流式输出",
-            description: "开启后，支持流式的文本生成会边生成边返回；关闭后会等完整结果返回。",
-        },
         zeroTk: {
             label: "0TK 占用模式",
             description: "默认开启。开启后纪要概览不占用上下文。",
@@ -134844,12 +134774,6 @@ function useDashboardPage() {
                 description: dashboardCopy.toggles.zeroTk.description,
                 value: settings_ACU.zeroTkOccupyModeDefault === true,
             },
-            {
-                key: "streamingEnabled",
-                label: dashboardCopy.toggles.streaming.label,
-                description: dashboardCopy.toggles.streaming.description,
-                value: settings_ACU.streamingEnabled === true,
-            },
         ];
     });
     /** 高级设置 — 配置后基本不动；动了出问题是正常的。 */
@@ -134975,19 +134899,9 @@ function useDashboardPage() {
             setContentReplaceEnabledBySettings(!!value);
             saveSettings_ACU();
         }
-        else if (key === "autoUpdateEnabled" ||
-            key === "toastMuteEnabled" ||
-            key === "streamingEnabled") {
-            if (key === "autoUpdateEnabled") {
-                setAutoUpdateEnabled_ACU(!!value);
-            }
-            else if (key === "streamingEnabled") {
-                useApiPresetStore().setStreamingEnabled(!!value);
-            }
-            else {
-                settings_ACU[key] = !!value;
-                saveSettings_ACU();
-            }
+        else if (key === "autoUpdateEnabled" || key === "toastMuteEnabled") {
+            settings_ACU[key] = !!value;
+            saveSettings_ACU();
         }
         dataRefreshTick.value++;
     }
@@ -137462,9 +137376,8 @@ function useFormFillWorldbookEntries() {
                 const visibleBookEntries = bookEntries.filter((entry) => isWorldbookEntryVisibleForPageUI_ACU(bookName, entry, snapshotEntryIndexByBook));
                 const visibleUidSet = new Set(visibleBookEntries.map((entry) => String(entry?.uid)));
                 if (typeof enabledEntries[bookName] === 'undefined') {
-                    enabledEntries[bookName] = visibleBookEntries
-                        .filter((entry) => buildWorldbookEntryDisplayView_ACU(entry, getWorldbookSnapshotEntryForDisplay_ACU(snapshotEntryIndexByBook, bookName, entry)).enabled)
-                        .map((entry) => entry.uid);
+                    // 默认全不选：首次加载不勾选任何条目
+                    enabledEntries[bookName] = [];
                     settingsChanged = true;
                 }
                 else if (Array.isArray(enabledEntries[bookName])) {

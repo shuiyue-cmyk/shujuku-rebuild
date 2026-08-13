@@ -196,7 +196,6 @@ export let independentTableStates_ACU: any = {};
 export let settings_ACU: any = {
     apiConfig: { url: '', apiKey: '', model: '', max_tokens: 60000, temperature: 1.0 },
     apiMode: 'custom',
-    streamingEnabled: false,
     tavernProfile: '',
     apiPresets: [],
     defaultApiPresetName: '',

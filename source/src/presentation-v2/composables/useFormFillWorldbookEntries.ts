@@ -73,12 +73,8 @@ export function useFormFillWorldbookEntries() {
         const visibleUidSet = new Set(visibleBookEntries.map((entry: any) => String(entry?.uid)));
 
         if (typeof enabledEntries[bookName] === 'undefined') {
-          enabledEntries[bookName] = visibleBookEntries
-            .filter((entry: any) => buildWorldbookEntryDisplayView_ACU(
-              entry,
-              getWorldbookSnapshotEntryForDisplay_ACU(snapshotEntryIndexByBook, bookName, entry),
-            ).enabled)
-            .map((entry: any) => entry.uid);
+          // 默认全不选：首次加载不勾选任何条目
+          enabledEntries[bookName] = [];
           settingsChanged = true;
         } else if (Array.isArray(enabledEntries[bookName])) {
           const cleanedEnabledEntries = enabledEntries[bookName]

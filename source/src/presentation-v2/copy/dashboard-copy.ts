@@ -195,11 +195,6 @@ export const dashboardCopy = {
       description:
         "默认关闭。开启后仅保留填表、规划等核心提示，其他浮窗通知不再弹出。",
     },
-    streaming: {
-      label: "开启流式输出",
-      description:
-        "开启后，支持流式的文本生成会边生成边返回；关闭后会等完整结果返回。",
-    },
     zeroTk: {
       label: "0TK 占用模式",
       description: "默认开启。开启后纪要概览不占用上下文。",

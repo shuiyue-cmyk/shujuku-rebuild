@@ -69,7 +69,7 @@ export function buildCustomApiRequestBody_ACU(
     max_tokens: maxTokens,
     temperature,
     top_p: topP,
-    stream: settings_ACU.streamingEnabled || false,
+    stream: false, // 流式输出开关已剥离，恒非流式
     chat_completion_source: 'custom',
     group_names: [],
     include_reasoning: false,

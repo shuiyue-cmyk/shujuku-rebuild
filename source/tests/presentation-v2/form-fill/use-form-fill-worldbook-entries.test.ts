@@ -61,7 +61,7 @@ beforeEach(() => {
 });
 
 describe('useFormFillWorldbookEntries', () => {
-  it('首次加载默认启用可见条目但分组保持折叠', async () => {
+  it('首次加载默认全不选但分组保持折叠', async () => {
     mockGetEntries.mockResolvedValue({
       'CharBook': [makeEntry(1, '人物'), makeEntry(2, '地点')],
     });
@@ -71,12 +71,12 @@ describe('useFormFillWorldbookEntries', () => {
 
     expect(c.groups.value).toHaveLength(1);
     expect(c.groups.value[0].expanded).toBe(false);
-    expect(c.groups.value[0].entries.every(entry => entry.checked)).toBe(true);
-    expect(worldbookConfig.enabledEntries['CharBook']).toEqual([1, 2]);
+    expect(c.groups.value[0].entries.every(entry => entry.checked)).toBe(false);
+    expect(worldbookConfig.enabledEntries['CharBook']).toEqual([]);
     expect(mockSaveSettings).toHaveBeenCalled();
   });
 
-  it('显示并标记 constant 条目，首次加载不默认启用 disabled 条目', async () => {
+  it('显示并标记 constant 条目，首次加载默认全不选', async () => {
     mockGetEntries.mockResolvedValue({
       'CharBook': [
         makeEntry(1, '人物'),
@@ -94,11 +94,11 @@ describe('useFormFillWorldbookEntries', () => {
       disabled: entry.disabled,
       isConstant: entry.isConstant,
     }))).toEqual([
-      { uid: 1, checked: true, disabled: false, isConstant: false },
-      { uid: 2, checked: true, disabled: false, isConstant: true },
+      { uid: 1, checked: false, disabled: false, isConstant: false },
+      { uid: 2, checked: false, disabled: false, isConstant: true },
       { uid: 3, checked: false, disabled: true, isConstant: true },
     ]);
-    expect(worldbookConfig.enabledEntries.CharBook).toEqual([1, 2]);
+    expect(worldbookConfig.enabledEntries.CharBook).toEqual([]);
   });
 
   it('已有空选择时按接管前状态展示受控条目，但不重新勾选用户取消的条目', async () => {
@@ -193,7 +193,7 @@ describe('useFormFillWorldbookEntries', () => {
       agentTakeoverState: 'taken_over',
       disabled: false,
       isConstant: false,
-      checked: true,
+      checked: false,
     });
   });
 

@@ -19,7 +19,6 @@ import {
   deleteApiPreset_ACU,
   setActivePresetForCurrentChat_ACU,
   setDefaultApiPreset_ACU,
-  setStreamingEnabled_ACU,
   type ApiPreset_ACU,
   type ApiPresetApiConfig_ACU,
   type ApiPresetApiMode_ACU,
@@ -43,7 +42,6 @@ interface ApiPresetState {
   currentConfigReady: boolean;
   currentConfigLabel: string;
   currentChatKey: string;
-  streamingEnabled: boolean;
   modelOptions: string[];
   modelLoadStatus: 'idle' | 'loading' | 'success' | 'error';
   modelLoadError: string;
@@ -97,7 +95,6 @@ export const useApiPresetStore = defineStore('acu-v2-api-presets', {
     currentConfigReady: false,
     currentConfigLabel: '当前 API 配置不完整',
     currentChatKey: getCurrentChatKey_ACU(),
-    streamingEnabled: false,
     modelOptions: [],
     modelLoadStatus: 'idle',
     modelLoadError: '',
@@ -133,15 +130,11 @@ export const useApiPresetStore = defineStore('acu-v2-api-presets', {
       const currentConfig = resolveCurrentConfigStatus();
       this.currentConfigReady = currentConfig.ready;
       this.currentConfigLabel = currentConfig.label;
-      this.streamingEnabled = settings_ACU.streamingEnabled === true;
     },
     /** 应用写操作结果：成功与失败都同步展示态（失败时 service 已回滚内存）；返回 boolean 保持旧契约。 */
     applyWriteResult(result: ApiPresetWriteResult_ACU): boolean {
       this.refreshFromSettings();
       return result.ok === true;
-    },
-    setStreamingEnabled(enabled: boolean): boolean {
-      return this.applyWriteResult(setStreamingEnabled_ACU(enabled));
     },
     setDefaultPreset(name: string): boolean {
       return this.applyWriteResult(setDefaultApiPreset_ACU(name));
