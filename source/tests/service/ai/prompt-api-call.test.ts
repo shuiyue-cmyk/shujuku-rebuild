@@ -83,11 +83,6 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({
   settings_ACU: mockSettings,
 }));
 
-vi.mock('../../../src/service/ai/api-call', () => ({
-  getApiConfigByPreset_ACU: mockGetApiConfigByPreset,
-  buildCustomApiRequestBody_ACU: mockBuildCustomBody,
-}));
-
 vi.mock('../../../src/data/gateways/host-state-gateway', () => ({
   getPersonaDescription_ACU: mockGetPersonaDescription,
   getCharDescription_ACU: mockGetCharDescription,
@@ -128,6 +123,20 @@ vi.mock('../../../src/service/template/chat-scope', () => ({
 
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
+
+vi.mock('../../../src/service/ai/api-call', () => ({
+  getApiConfigByPreset_ACU: mockGetApiConfigByPreset,
+  buildCustomApiRequestBody_ACU: mockBuildCustomBody,
+  // 代理到 stubGlobal fetch，保持既有 mockFetch 断言语义
+  postChatCompletion_ACU: vi.fn(async (body: any, signal?: any) => {
+    const res = await mockFetch('/api/backends/chat-completions/generate', {
+      method: 'POST', headers: {}, body: JSON.stringify(body), signal,
+    });
+    if (!res.ok) { const errTxt = await res.text(); throw new Error(`API请求失败: ${res.status} ${errTxt}`); }
+    const data = await res.json();
+    return data?.choices?.[0]?.message?.content ?? data?.content ?? null;
+  }),
+}));
 
 import {
   callCustomOpenAI_ACU,

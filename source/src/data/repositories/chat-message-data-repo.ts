@@ -12,6 +12,7 @@
  */
 
 import { safeJsonParse_ACU } from '../../shared/json-helpers';
+import { cloneScopedConfigData_ACU } from '../../shared/utils';
 import type { Sheet_ACU } from '../../shared/models/table-data';
 import type {
     IsolationTagData_ACU,
@@ -78,17 +79,6 @@ function parseIsolatedDataField(msg: any): IsolatedDataContainer_ACU | null {
  */
 function hasAnySheetKey(obj: any): boolean {
     return obj && typeof obj === 'object' && Object.keys(obj).some(k => k.startsWith('sheet_'));
-}
-
-/**
- * 安全深拷贝。
- */
-function safeClone<T>(obj: T): T {
-    try {
-        return JSON.parse(JSON.stringify(obj));
-    } catch {
-        return obj;
-    }
 }
 
 /**
@@ -802,7 +792,7 @@ export function purgeManualRefillIncrementalSheetKeysFromMessage_ACU(msg: any, i
     const isolated = parseIsolatedDataField(msg);
     if (!isolated) return false;
 
-    const nextIsolated = safeClone(isolated);
+    const nextIsolated = cloneScopedConfigData_ACU(isolated);
     const tagData = nextIsolated[isolationKey || ''];
     if (!tagData || typeof tagData !== 'object') return false;
     if (purgeManualRefillIncrementalSheetKeysFromStorageFrameV2_ACU((tagData as any).storageFrame, sheetKeySet, knownSqlTableNames)) {
@@ -827,7 +817,7 @@ export function purgeSheetKeysFromMessageForIsolation_ACU(
     const isolated = parseIsolatedDataField(msg);
     if (!isolated) return false;
 
-    const nextIsolated = safeClone(isolated);
+    const nextIsolated = cloneScopedConfigData_ACU(isolated);
     const tagKey = isolationKey || '';
     const tagData = nextIsolated[tagKey];
     if (!tagData || typeof tagData !== 'object') return false;
@@ -1099,7 +1089,7 @@ export function purgeSheetKeysFromMessage_ACU(msg: any, sheetKeys: string[]): bo
     // ── 新版：按标签分组（对该消息内所有标签槽执行删除） ──
     const isolated = parseIsolatedDataField(msg);
     if (isolated) {
-        const nextIsolated = safeClone(isolated);
+        const nextIsolated = cloneScopedConfigData_ACU(isolated);
         Object.keys(nextIsolated).forEach(tagKey => {
             const tagData = nextIsolated[tagKey];
             if (!tagData || typeof tagData !== 'object') return;
@@ -1148,7 +1138,7 @@ export function purgeSheetKeysFromMessage_ACU(msg: any, sheetKeys: string[]): bo
 
     // ── 旧版：独立数据 ──
     if (msg.TavernDB_ACU_IndependentData && typeof msg.TavernDB_ACU_IndependentData === 'object') {
-        const next = safeClone(msg.TavernDB_ACU_IndependentData);
+        const next = cloneScopedConfigData_ACU(msg.TavernDB_ACU_IndependentData);
         let indepChanged = false;
         sheetKeys.forEach(k => {
             if (next[k]) {
@@ -1193,7 +1183,7 @@ export function purgeSheetKeysFromMessage_ACU(msg: any, sheetKeys: string[]): bo
 
     // ── 旧版：标准表 ──
     if (msg.TavernDB_ACU_Data && typeof msg.TavernDB_ACU_Data === 'object') {
-        const next = safeClone(msg.TavernDB_ACU_Data);
+        const next = cloneScopedConfigData_ACU(msg.TavernDB_ACU_Data);
         let dataChanged = false;
         sheetKeys.forEach(k => {
             if (next[k]) { delete next[k]; dataChanged = true; }
@@ -1215,7 +1205,7 @@ export function purgeSheetKeysFromMessage_ACU(msg: any, sheetKeys: string[]): bo
 
     // ── 旧版：摘要表 ──
     if (msg.TavernDB_ACU_SummaryData && typeof msg.TavernDB_ACU_SummaryData === 'object') {
-        const next = safeClone(msg.TavernDB_ACU_SummaryData);
+        const next = cloneScopedConfigData_ACU(msg.TavernDB_ACU_SummaryData);
         let summaryChanged = false;
         sheetKeys.forEach(k => {
             if (next[k]) { delete next[k]; summaryChanged = true; }
@@ -1424,7 +1414,7 @@ export function hasAnyTableData_ACU(
 export function cloneIsolatedData_ACU(msg: any): IsolatedDataContainer_ACU {
     const container = parseIsolatedDataField(msg);
     if (!container) return {};
-    return safeClone(container);
+    return cloneScopedConfigData_ACU(container);
 }
 
 
@@ -1563,7 +1553,7 @@ export function patchIsolatedTagMetadata_ACU(
     }
 
     // 4. 构造候选：从当前槽 clone 后仅 patch 白名单字段；无槽时构造最小槽。
-    const baseTagData: Record<string, any> = currentTagData ? safeClone(currentTagData) : {};
+    const baseTagData: Record<string, any> = currentTagData ? cloneScopedConfigData_ACU(currentTagData) : {};
     const candidateTagData: Record<string, any> = { ...baseTagData };
     for (const key of effectivePatchKeys) {
         const value = (patch as Record<string, any>)[key];

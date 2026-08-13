@@ -3,7 +3,7 @@
 import { DEFAULT_CHAR_CARD_PROMPT_ACU, DEFAULT_CHAR_CARD_PROMPT_SQL_ACU, DEFAULT_MERGE_SUMMARY_PROMPT_ACU } from '../../shared/defaults-json.js';
 import { isSqliteMode } from '../table/storage-mode';
 import { handleApiResponse_ACU } from '../ai/prompt-builder';
-import { buildCustomApiRequestBody_ACU } from '../ai/api-call';
+import { buildCustomApiRequestBody_ACU, postChatCompletion_ACU } from '../ai/api-call';
 import { currentJsonTableData_ACU, settings_ACU } from '../runtime/state-manager';
 import { getHostRequestHeaders_ACU } from '../../data/gateways/ai-gateway';
 import { getLastMessageIndex_ACU } from '../../data/gateways/chat-gateway';
@@ -197,13 +197,7 @@ export async function executeAutoMergeBatch_ACU(
             const finalMessages = messagesToUse.map((m: any) => ({ role: m.role.toLowerCase(), content: m.content }));
 
             // 酒馆主 API（tavern / useMainApi）已剥离，恒走自定义 API
-            const res = await fetch(`/api/backends/chat-completions/generate`, {
-                method: 'POST',
-                headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-                body: JSON.stringify(buildCustomApiRequestBody_ACU(finalMessages, settings_ACU.apiConfig, { stripModelPrefix: false }))
-            });
-            if (!res.ok) throw new Error(`API请求失败: ${res.status} ${await res.text()}`);
-            aiResponseText = await handleApiResponse_ACU(res);
+            aiResponseText = await postChatCompletion_ACU(buildCustomApiRequestBody_ACU(finalMessages, settings_ACU.apiConfig, { stripModelPrefix: false }));
             if (!aiResponseText) throw new Error('API返回的数据格式不正确');
 
             const extractResult = extractTableEditInner_ACU(aiResponseText, { allowNoTableEditTags: true });

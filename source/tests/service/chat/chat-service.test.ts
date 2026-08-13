@@ -59,6 +59,7 @@ vi.mock('../../../src/shared/utils', () => ({
   logError_ACU: vi.fn(),
   logWarn_ACU: vi.fn(),
   isSummaryOrOutlineTable_ACU: vi.fn((name: string) => name.includes('纪要') || name.includes('总结')),
+  cloneScopedConfigData_ACU: (v: any, f: any = null) => (v === undefined ? f : JSON.parse(JSON.stringify(v))),
 }));
 
 vi.mock('../../../src/service/optimization/content-optimization', () => ({

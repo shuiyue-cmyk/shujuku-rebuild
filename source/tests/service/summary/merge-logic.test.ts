@@ -84,12 +84,14 @@ vi.mock('../../../src/service/table/table-service', () => ({
 
 vi.mock('../../../src/service/ai/prompt-builder', () => ({
   handleApiResponse_ACU: vi.fn(),
+  postChatCompletion_ACU: vi.fn(),
   extractTableEditInner_ACU: mockExtractTableEditInner,
 }));
 
 vi.mock('../../../src/service/ai/api-call', () => ({
   buildCustomApiRequestBody_ACU: mockBuildCustomBody,
   getApiConfigByPreset_ACU: vi.fn(),
+  postChatCompletion_ACU: vi.fn(),
 }));
 
 import {
@@ -251,8 +253,8 @@ describe('executeAutoMergeBatch_ACU', () => {
   it('AI 返回有效 tableEdit 时累积合并行', async () => {
     mockExtractTableEditInner.mockReturnValue({ inner: 'insertRow(0, {"0": "合并纪要"})' });
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
-    const { handleApiResponse_ACU } = await import('../../../src/service/ai/prompt-builder');
-    vi.mocked(handleApiResponse_ACU).mockResolvedValue('<tableEdit>insertRow(0, {"0": "合并纪要"})</tableEdit>');
+    const { postChatCompletion_ACU } = await import('../../../src/service/ai/api-call');
+    vi.mocked(postChatCompletion_ACU).mockResolvedValue('<tableEdit>insertRow(0, {"0": "合并纪要"})</tableEdit>');
 
     const prepared = prepareAutoMergeBatches_ACU({
       startIndex: 0, endIndex: 3, targetCount: 3, batchSize: 3,
@@ -269,8 +271,8 @@ describe('executeAutoMergeBatch_ACU', () => {
   it('AI 返回无效内容时抛出错误', async () => {
     mockExtractTableEditInner.mockReturnValue(null);
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({}) }));
-    const { handleApiResponse_ACU } = await import('../../../src/service/ai/prompt-builder');
-    vi.mocked(handleApiResponse_ACU).mockResolvedValue('无效内容');
+    const { postChatCompletion_ACU } = await import('../../../src/service/ai/api-call');
+    vi.mocked(postChatCompletion_ACU).mockResolvedValue('无效内容');
 
     const prepared = prepareAutoMergeBatches_ACU({
       startIndex: 0, endIndex: 3, targetCount: 3, batchSize: 3,
@@ -349,8 +351,9 @@ describe('executeAutoMergeBatch_ACU max_tokens 回退', () => {
     mockSettings.streamingEnabled = false;
     mockBuildCustomBody.mockReturnValue({ messages: [], model: 'gpt-4', max_tokens: 0, temperature: 1.0, top_p: 0.95, stream: false });
 
-    const { handleApiResponse_ACU, extractTableEditInner_ACU } = await import('../../../src/service/ai/prompt-builder');
-    vi.mocked(handleApiResponse_ACU).mockResolvedValue('<tableEdit>insertRow(0, {"0": "test"})</tableEdit>');
+    const { postChatCompletion_ACU } = await import('../../../src/service/ai/api-call');
+    const { extractTableEditInner_ACU } = await import('../../../src/service/ai/prompt-builder');
+    vi.mocked(postChatCompletion_ACU).mockResolvedValue('<tableEdit>insertRow(0, {"0": "test"})</tableEdit>');
     vi.mocked(extractTableEditInner_ACU).mockReturnValue({ inner: 'insertRow(0, {"0": "test"})' });
 
     const mockFetchLocal = vi.fn().mockResolvedValue({ ok: true });

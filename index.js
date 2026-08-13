@@ -36531,17 +36531,6 @@ function hasAnySheetKey(obj) {
     return obj && typeof obj === 'object' && Object.keys(obj).some(k => k.startsWith('sheet_'));
 }
 /**
- * 安全深拷贝。
- */
-function safeClone(obj) {
-    try {
-        return JSON.parse(JSON.stringify(obj));
-    }
-    catch {
-        return obj;
-    }
-}
-/**
  * 从数组中移除指定元素，返回新数组和是否发生变化。
  */
 function removeFromArray(arr, key) {
@@ -37263,7 +37252,7 @@ function purgeManualRefillIncrementalSheetKeysFromMessage_ACU(msg, isolationKey,
     const isolated = parseIsolatedDataField(msg);
     if (!isolated)
         return false;
-    const nextIsolated = safeClone(isolated);
+    const nextIsolated = cloneScopedConfigData_ACU(isolated);
     const tagData = nextIsolated[isolationKey || ''];
     if (!tagData || typeof tagData !== 'object')
         return false;
@@ -37283,7 +37272,7 @@ function purgeSheetKeysFromMessageForIsolation_ACU(msg, isolationKey, sheetKeys)
     const isolated = parseIsolatedDataField(msg);
     if (!isolated)
         return false;
-    const nextIsolated = safeClone(isolated);
+    const nextIsolated = cloneScopedConfigData_ACU(isolated);
     const tagKey = isolationKey || '';
     const tagData = nextIsolated[tagKey];
     if (!tagData || typeof tagData !== 'object')
@@ -37542,7 +37531,7 @@ function purgeSheetKeysFromMessage_ACU(msg, sheetKeys) {
     // ── 新版：按标签分组（对该消息内所有标签槽执行删除） ──
     const isolated = parseIsolatedDataField(msg);
     if (isolated) {
-        const nextIsolated = safeClone(isolated);
+        const nextIsolated = cloneScopedConfigData_ACU(isolated);
         Object.keys(nextIsolated).forEach(tagKey => {
             const tagData = nextIsolated[tagKey];
             if (!tagData || typeof tagData !== 'object')
@@ -37588,7 +37577,7 @@ function purgeSheetKeysFromMessage_ACU(msg, sheetKeys) {
     }
     // ── 旧版：独立数据 ──
     if (msg.TavernDB_ACU_IndependentData && typeof msg.TavernDB_ACU_IndependentData === 'object') {
-        const next = safeClone(msg.TavernDB_ACU_IndependentData);
+        const next = cloneScopedConfigData_ACU(msg.TavernDB_ACU_IndependentData);
         let indepChanged = false;
         sheetKeys.forEach(k => {
             if (next[k]) {
@@ -37645,7 +37634,7 @@ function purgeSheetKeysFromMessage_ACU(msg, sheetKeys) {
     }
     // ── 旧版：标准表 ──
     if (msg.TavernDB_ACU_Data && typeof msg.TavernDB_ACU_Data === 'object') {
-        const next = safeClone(msg.TavernDB_ACU_Data);
+        const next = cloneScopedConfigData_ACU(msg.TavernDB_ACU_Data);
         let dataChanged = false;
         sheetKeys.forEach(k => {
             if (next[k]) {
@@ -37671,7 +37660,7 @@ function purgeSheetKeysFromMessage_ACU(msg, sheetKeys) {
     }
     // ── 旧版：摘要表 ──
     if (msg.TavernDB_ACU_SummaryData && typeof msg.TavernDB_ACU_SummaryData === 'object') {
-        const next = safeClone(msg.TavernDB_ACU_SummaryData);
+        const next = cloneScopedConfigData_ACU(msg.TavernDB_ACU_SummaryData);
         let summaryChanged = false;
         sheetKeys.forEach(k => {
             if (next[k]) {
@@ -37872,7 +37861,7 @@ function cloneIsolatedData_ACU(msg) {
     const container = parseIsolatedDataField(msg);
     if (!container)
         return {};
-    return safeClone(container);
+    return cloneScopedConfigData_ACU(container);
 }
 // ════════════════════════════════════════════════════════════════
 // 向量 metadata patch 边界（V1/V2 表存储投影保留专用）
@@ -37988,7 +37977,7 @@ function patchIsolatedTagMetadata_ACU(msg, isolationKey, patch, options) {
         }
     }
     // 4. 构造候选：从当前槽 clone 后仅 patch 白名单字段；无槽时构造最小槽。
-    const baseTagData = currentTagData ? safeClone(currentTagData) : {};
+    const baseTagData = currentTagData ? cloneScopedConfigData_ACU(currentTagData) : {};
     const candidateTagData = { ...baseTagData };
     for (const key of effectivePatchKeys) {
         const value = patch[key];
@@ -62052,54 +62041,6 @@ async function resolveCandidateScopeEntriesForTable_ACU(readContext, scopeNames,
 }
 
 /**
- * data/gateways/ai-gateway.ts — AI 调用网关
- *
- * 封装 SillyTavern_API_ACU 的宿主调用方法。
- * service 层通过本模块发起 AI 请求，不再直接调用宿主 API。
- *
- * 酒馆主 API（TavernHelper.generateRaw / tavern 连接预设 / ConnectionManager 请求）已剥离。
- */
-// ═══ 配置读取 ═══
-/**
- * 获取 ConnectionManager 的配置文件列表
- * @returns 配置文件数组，不可用时返回 []
- */
-function getConnectionManagerProfiles_ACU() {
-    return SillyTavern_API_ACU?.extensionSettings?.connectionManager?.profiles || [];
-}
-// ═══ 请求认证 ═══
-/**
- * 获取宿主平台的 HTTP 请求头（包含 CSRF token 等认证信息）
- * 封装 SillyTavern.getRequestHeaders()，不可用时返回空对象。
- *
- * 注意：主窗口的 window.SillyTavern 只有 {libs, getContext}，
- * getRequestHeaders 在 getContext() 返回的对象里。
- * 所以必须通过 SillyTavern_API_ACU（已被 Proxy 包装）或 getContext() 获取。
- */
-function getHostRequestHeaders_ACU() {
-    try {
-        // 优先通过 SillyTavern_API_ACU（插件模式下已被 Proxy 包装，每次读取走 getContext()）
-        if (SillyTavern_API_ACU && typeof SillyTavern_API_ACU.getRequestHeaders === 'function') {
-            const headers = SillyTavern_API_ACU.getRequestHeaders();
-            if (headers && typeof headers === 'object')
-                return headers;
-        }
-        // fallback：直接调用 getContext()（覆盖 SillyTavern_API_ACU 尚未初始化的场景）
-        const ctx = globalThis.SillyTavern?.getContext?.();
-        if (ctx && typeof ctx.getRequestHeaders === 'function') {
-            const headers = ctx.getRequestHeaders();
-            if (headers && typeof headers === 'object')
-                return headers;
-        }
-        return {};
-    }
-    catch {
-        logWarn_ACU('[AIGateway] getRequestHeaders 不可用，返回空对象');
-        return {};
-    }
-}
-
-/**
  * service/ai/prompt-builder/prompt-api-call.ts
  * AI API 调用 — prompt 组装 + API 调用 + 流式/非流式响应处理
  * 从 prompt-builder.ts 拆出（L195-L501 + L1519-L1604）
@@ -62245,15 +62186,8 @@ async function callCustomOpenAI_ACU(dynamicContent, abortController = null, opti
             throw new Error('自定义API的URL或模型未配置。');
         }
         const generateUrl = `/api/backends/chat-completions/generate`;
-        const headers = { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' };
-        const body = JSON.stringify(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { stripModelPrefix: false }));
         logDebug_ACU('ACU: 调用新的后端生成API:', generateUrl, 'Model:', effectiveApiConfig.model);
-        const response = await fetch(generateUrl, { method: 'POST', headers, body, signal: abortSignal });
-        if (!response.ok) {
-            const errTxt = await response.text();
-            throw new Error(`API请求失败: ${response.status} ${errTxt}`);
-        }
-        const content = await handleApiResponse_ACU(response, abortSignal);
+        const content = await postChatCompletion_ACU(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { stripModelPrefix: false }), abortSignal);
         if (content) {
             return content.trim();
         }
@@ -63292,6 +63226,54 @@ function isSqlContent(content) {
  */
 // AI 输入准备
 
+/**
+ * data/gateways/ai-gateway.ts — AI 调用网关
+ *
+ * 封装 SillyTavern_API_ACU 的宿主调用方法。
+ * service 层通过本模块发起 AI 请求，不再直接调用宿主 API。
+ *
+ * 酒馆主 API（TavernHelper.generateRaw / tavern 连接预设 / ConnectionManager 请求）已剥离。
+ */
+// ═══ 配置读取 ═══
+/**
+ * 获取 ConnectionManager 的配置文件列表
+ * @returns 配置文件数组，不可用时返回 []
+ */
+function getConnectionManagerProfiles_ACU() {
+    return SillyTavern_API_ACU?.extensionSettings?.connectionManager?.profiles || [];
+}
+// ═══ 请求认证 ═══
+/**
+ * 获取宿主平台的 HTTP 请求头（包含 CSRF token 等认证信息）
+ * 封装 SillyTavern.getRequestHeaders()，不可用时返回空对象。
+ *
+ * 注意：主窗口的 window.SillyTavern 只有 {libs, getContext}，
+ * getRequestHeaders 在 getContext() 返回的对象里。
+ * 所以必须通过 SillyTavern_API_ACU（已被 Proxy 包装）或 getContext() 获取。
+ */
+function getHostRequestHeaders_ACU() {
+    try {
+        // 优先通过 SillyTavern_API_ACU（插件模式下已被 Proxy 包装，每次读取走 getContext()）
+        if (SillyTavern_API_ACU && typeof SillyTavern_API_ACU.getRequestHeaders === 'function') {
+            const headers = SillyTavern_API_ACU.getRequestHeaders();
+            if (headers && typeof headers === 'object')
+                return headers;
+        }
+        // fallback：直接调用 getContext()（覆盖 SillyTavern_API_ACU 尚未初始化的场景）
+        const ctx = globalThis.SillyTavern?.getContext?.();
+        if (ctx && typeof ctx.getRequestHeaders === 'function') {
+            const headers = ctx.getRequestHeaders();
+            if (headers && typeof headers === 'object')
+                return headers;
+        }
+        return {};
+    }
+    catch {
+        logWarn_ACU('[AIGateway] getRequestHeaders 不可用，返回空对象');
+        return {};
+    }
+}
+
 // ═══════════════════════════════════════════════════════════
 // service/settings/api-preset-service.ts — API 预设单一权威
 //
@@ -63767,6 +63749,23 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
     return body;
 }
 /**
+ * 自定义 API 统一出口：调用宿主 /api/backends/chat-completions/generate。
+ * 恒非流式（流式开关已剥离）；返回 AI 响应文本（原始，未 trim），失败抛错。
+ */
+async function postChatCompletion_ACU(body, signal) {
+    const res = await fetch('/api/backends/chat-completions/generate', {
+        method: 'POST',
+        headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: signal || undefined,
+    });
+    if (!res.ok) {
+        const errTxt = await res.text();
+        throw new Error(`API请求失败: ${res.status} ${errTxt}`);
+    }
+    return handleApiResponse_ACU(res, signal);
+}
+/**
  * 剧情推进任务级 API 调用 — 接受显式预设名称
  * 调用优先级：presetName 参数 > 全局 plotApiPreset > 当前 API 配置
  */
@@ -63781,17 +63780,7 @@ async function callApiWithPlotPreset_ACU(messages, presetName, abortSignal = nul
         throw new Error('自定义API的URL或模型未配置。');
     }
     const requestBody = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig);
-    const response = await fetch('/api/backends/chat-completions/generate', {
-        method: 'POST',
-        headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-        signal: abortSignal,
-    });
-    if (!response.ok) {
-        const errTxt = await response.text();
-        throw new Error(`API请求失败: ${response.status} ${errTxt}`);
-    }
-    const content = await handleApiResponse_ACU(response, abortSignal);
+    const content = await postChatCompletion_ACU(requestBody, abortSignal);
     if (content) {
         return content.trim();
     }
@@ -63828,18 +63817,8 @@ async function callAIWithPreset_ACU(messages, presetName = '', maxTokensOverride
     if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
         throw new Error('自定义API的URL或模型未配置。');
     }
-    const body = JSON.stringify(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens, stripModelPrefix: false }));
-    const res = await fetch('/api/backends/chat-completions/generate', {
-        method: 'POST',
-        headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-        body,
-        signal: signal || undefined,
-    });
-    if (!res.ok) {
-        const errTxt = await res.text();
-        throw new Error(`API请求失败: ${res.status} ${errTxt}`);
-    }
-    const content = await handleApiResponse_ACU(res, signal);
+    const body = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens, stripModelPrefix: false });
+    const content = await postChatCompletion_ACU(body, signal);
     return content ? content.trim() : null;
 }
 
@@ -84510,14 +84489,7 @@ async function executeAutoMergeBatch_ACU(prepared, batch, accumulatedSummary) {
             }
             const finalMessages = messagesToUse.map((m) => ({ role: m.role.toLowerCase(), content: m.content }));
             // 酒馆主 API（tavern / useMainApi）已剥离，恒走自定义 API
-            const res = await fetch(`/api/backends/chat-completions/generate`, {
-                method: 'POST',
-                headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-                body: JSON.stringify(buildCustomApiRequestBody_ACU(finalMessages, settings_ACU.apiConfig, { stripModelPrefix: false }))
-            });
-            if (!res.ok)
-                throw new Error(`API请求失败: ${res.status} ${await res.text()}`);
-            aiResponseText = await handleApiResponse_ACU(res);
+            aiResponseText = await postChatCompletion_ACU(buildCustomApiRequestBody_ACU(finalMessages, settings_ACU.apiConfig, { stripModelPrefix: false }));
             if (!aiResponseText)
                 throw new Error('API返回的数据格式不正确');
             const extractResult = extractTableEditInner_ACU(aiResponseText, { allowNoTableEditTags: true });

@@ -16,6 +16,7 @@ vi.mock('../../src/data/gateways/chat-gateway', () => ({
   saveChatToHost_ACU: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('../../src/shared/utils', () => ({
+  cloneScopedConfigData_ACU: (v, f = null) => v === undefined ? f : JSON.parse(JSON.stringify(v)),
   isSummaryOrOutlineTable_ACU: vi.fn((n: string) => n.includes('\u7eaa\u8981')),
   logDebug_ACU: vi.fn(), logError_ACU: vi.fn(), logWarn_ACU: vi.fn(),
   parseTableTemplateJson_ACU: vi.fn(() => ({

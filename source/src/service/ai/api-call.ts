@@ -90,6 +90,24 @@ export function buildCustomApiRequestBody_ACU(
 }
 
 /**
+ * 自定义 API 统一出口：调用宿主 /api/backends/chat-completions/generate。
+ * 恒非流式（流式开关已剥离）；返回 AI 响应文本（原始，未 trim），失败抛错。
+ */
+export async function postChatCompletion_ACU(body: unknown, signal?: AbortSignal | null): Promise<string | null> {
+    const res = await fetch('/api/backends/chat-completions/generate', {
+        method: 'POST',
+        headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: signal || undefined,
+    });
+    if (!res.ok) {
+        const errTxt = await res.text();
+        throw new Error(`API请求失败: ${res.status} ${errTxt}`);
+    }
+    return handleApiResponse_ACU(res, signal);
+}
+
+/**
  * 剧情推进任务级 API 调用 — 接受显式预设名称
  * 调用优先级：presetName 参数 > 全局 plotApiPreset > 当前 API 配置
  */
@@ -109,20 +127,7 @@ export async function callApiWithPlotPreset_ACU(messages: any[], presetName: str
 
     const requestBody = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig);
 
-
-    const response = await fetch('/api/backends/chat-completions/generate', {
-        method: 'POST',
-        headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-        signal: abortSignal,
-    });
-
-    if (!response.ok) {
-        const errTxt = await response.text();
-        throw new Error(`API请求失败: ${response.status} ${errTxt}`);
-    }
-
-    const content = await handleApiResponse_ACU(response, abortSignal);
+    const content = await postChatCompletion_ACU(requestBody, abortSignal);
     if (content) {
         return content.trim();
     }
@@ -167,21 +172,9 @@ export async function callAIWithPreset_ACU(messages: any[], presetName: string =
         throw new Error('自定义API的URL或模型未配置。');
     }
 
-    const body = JSON.stringify(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens, stripModelPrefix: false }));
+    const body = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens, stripModelPrefix: false });
 
-    const res = await fetch('/api/backends/chat-completions/generate', {
-        method: 'POST',
-        headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-        body,
-        signal: signal || undefined,
-    });
-
-    if (!res.ok) {
-        const errTxt = await res.text();
-        throw new Error(`API请求失败: ${res.status} ${errTxt}`);
-    }
-
-    const content = await handleApiResponse_ACU(res, signal);
+    const content = await postChatCompletion_ACU(body, signal);
     return content ? content.trim() : null;
 }
 

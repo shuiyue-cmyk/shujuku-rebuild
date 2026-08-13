@@ -60,7 +60,7 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({
   get currentJsonTableData_ACU() { return h.tables; },
   settings_ACU: { dataIsolationEnabled: false, dataIsolationCode: '' },
 }));
-vi.mock('../../../src/shared/utils', () => ({ isSummaryOrOutlineTable_ACU: () => true, logDebug_ACU: vi.fn(), logError_ACU: vi.fn(), logWarn_ACU: vi.fn(), hashUserInput_ACU: vi.fn() }));
+vi.mock('../../../src/shared/utils', () => ({ isSummaryOrOutlineTable_ACU: () => true, logDebug_ACU: vi.fn(), logError_ACU: vi.fn(), logWarn_ACU: vi.fn(), hashUserInput_ACU: vi.fn(), cloneScopedConfigData_ACU: (v: any, f: any = null) => (v === undefined ? f : JSON.parse(JSON.stringify(v))) }));
 vi.mock('../../../src/shared/template-preset-utils', () => ({ getCurrentCharacterCardName_ACU: () => 'char' }));
 
 // chat-service：真实导出 getChatArray_ACU（供 chat-service / archive / runtime 使用）

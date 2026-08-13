@@ -4,7 +4,7 @@
  * 从 prompt-builder.ts 拆出（L195-L501 + L1519-L1604）
  */
 import { currentAbortController_ACU, trackAbortController_ACU, untrackAbortController_ACU, _set_currentAbortController_ACU } from '../../runtime/state-manager';
-import { getApiConfigByPreset_ACU, buildCustomApiRequestBody_ACU } from '../api-call';
+import { getApiConfigByPreset_ACU, buildCustomApiRequestBody_ACU, postChatCompletion_ACU } from '../api-call';
 import { currentJsonTableData_ACU, settings_ACU } from '../../runtime/state-manager';
 import { getPersonaDescription_ACU, getCharDescription_ACU } from '../../../data/gateways/host-state-gateway';
 import { getHostRequestHeaders_ACU } from '../../../data/gateways/ai-gateway';
@@ -164,19 +164,8 @@ export class RetryableAiResponseError_ACU extends Error {
         }
         const generateUrl = `/api/backends/chat-completions/generate`;
 
-        const headers = { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' };
-
-        const body = JSON.stringify(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { stripModelPrefix: false }));
-
         logDebug_ACU('ACU: 调用新的后端生成API:', generateUrl, 'Model:', effectiveApiConfig.model);
-        const response = await fetch(generateUrl, { method: 'POST', headers, body, signal: abortSignal });
-
-        if (!response.ok) {
-          const errTxt = await response.text();
-          throw new Error(`API请求失败: ${response.status} ${errTxt}`);
-        }
-
-        const content = await handleApiResponse_ACU(response, abortSignal);
+        const content = await postChatCompletion_ACU(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { stripModelPrefix: false }), abortSignal);
         if (content) {
             return content.trim();
         }
