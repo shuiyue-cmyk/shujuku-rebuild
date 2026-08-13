@@ -113,10 +113,6 @@ const MENU_ITEM_ID_ACU = `${SCRIPT_ID_PREFIX_ACU}-menu-item`;
 const IMPORTED_ENTRY_PREFIX_ACU = 'TavernDB-ACU-ImportedTxt-';
 function getImportStablePrefix_ACU() { return '外部导入-'; }
 function getImportBatchPrefix_ACU() { return getImportStablePrefix_ACU(); }
-function getImportJsonStorageComment_ACU(modeSuffix = '-Selected') {
-    const IMPORT_PREFIX = '外部导入-';
-    return `${IMPORT_PREFIX}TavernDB-ACU-ImportedJsonData${modeSuffix}`;
-}
 // ═══ 从 toast.ts 迁移的纯常量 ═══
 const ACU_TOAST_CATEGORY_ACU = {
     ERROR: 'error',
@@ -2169,12 +2165,16 @@ function cleanChatName_ACU(fileName) {
 }
 /**
  * 深度合并两个对象（source 覆盖 target）
+ * 跳过 __proto__/constructor/prototype 键，防止 JSON 导入原型污染。
  */
 function deepMerge_ACU(target, source) {
     const isObject = (obj) => obj && typeof obj === 'object' && !Array.isArray(obj);
+    const isSafeKey = (key) => key !== '__proto__' && key !== 'constructor' && key !== 'prototype';
     let output = { ...target };
     if (isObject(target) && isObject(source)) {
         Object.keys(source).forEach(key => {
+            if (!isSafeKey(key))
+                return;
             if (isObject(source[key])) {
                 if (!(key in target))
                     Object.assign(output, { [key]: source[key] });
@@ -2187,45 +2187,6 @@ function deepMerge_ACU(target, source) {
         });
     }
     return output;
-}
-/**
- * 颜色加深/减淡
- */
-function lightenDarkenColor_ACU(col, amt) {
-    let usePound = false;
-    if (col.startsWith('#')) {
-        col = col.slice(1);
-        usePound = true;
-    }
-    let num = parseInt(col, 16);
-    let r = (num >> 16) + amt;
-    if (r > 255)
-        r = 255;
-    else if (r < 0)
-        r = 0;
-    let b = ((num >> 8) & 0x00ff) + amt;
-    if (b > 255)
-        b = 255;
-    else if (b < 0)
-        b = 0;
-    let g = (num & 0x0000ff) + amt;
-    if (g > 255)
-        g = 255;
-    else if (g < 0)
-        g = 0;
-    return (usePound ? '#' : '') + ('000000' + ((r << 16) | (b << 8) | g).toString(16)).slice(-6);
-}
-/**
- * 根据背景色计算前景色（黑或白）
- */
-function getContrastYIQ_ACU(hexcolor) {
-    if (hexcolor.startsWith('#'))
-        hexcolor = hexcolor.slice(1);
-    var r = parseInt(hexcolor.substr(0, 2), 16);
-    var g = parseInt(hexcolor.substr(2, 2), 16);
-    var b = parseInt(hexcolor.substr(4, 2), 16);
-    var yiq = (r * 299 + g * 587 + b * 114) / 1000;
-    return yiq >= 128 ? '#000000' : '#FFFFFF';
 }
 /**
  * 转义正则表达式特殊字符
@@ -2275,12 +2236,6 @@ function isSummaryOrOutlineTable_ACU(tableName) {
         return false;
     const trimmedName = tableName.trim();
     return trimmedName === '总结表' || trimmedName === '总体大纲' || trimmedName === '纪要表';
-}
-/**
- * 判断表格是否是标准表（非总结表和总体大纲表）
- */
-function isStandardTable_ACU(tableName) {
-    return !isSummaryOrOutlineTable_ACU(tableName);
 }
 // 标签列表解析：支持英文逗号/中文逗号/空格分隔
 function parseTagList_ACU(input) {
@@ -2529,7 +2484,7 @@ function formatPlotScopeUpdatedAt_ACU(updatedAt) {
         return '';
     }
 }
-function isEntryBlocked_ACU$1(entry) {
+function isEntryBlocked_ACU(entry) {
     if (!entry)
         return false;
     const blockedKeywords = ["规则", "思维链", "cot", "MVU", "mvu", "变量", "状态", "Status", "Rule", "rule", "检定", "判断", "叙事", "文风", "InitVar", "格式"];
@@ -2815,11 +2770,6 @@ const STORAGE_KEY_ALL_SETTINGS_ACU = `${SCRIPT_ID_PREFIX_ACU}_allSettings_v2`;
 const STORAGE_KEY_GLOBAL_META_ACU = `${SCRIPT_ID_PREFIX_ACU}_globalMeta_v1`;
 const STORAGE_KEY_PROFILE_PREFIX_ACU = `${SCRIPT_ID_PREFIX_ACU}_profile_v1`;
 const STORAGE_KEY_TEMPLATE_PRESETS_ACU = `${SCRIPT_ID_PREFIX_ACU}_templatePresets_v1`;
-const STORAGE_KEY_IMPORTED_ENTRIES_ACU = `${SCRIPT_ID_PREFIX_ACU}_importedTxtEntries`;
-const STORAGE_KEY_IMPORTED_STATUS_ACU = `${SCRIPT_ID_PREFIX_ACU}_importedTxtStatus`;
-const STORAGE_KEY_IMPORTED_STATUS_STANDARD_ACU = `${SCRIPT_ID_PREFIX_ACU}_importedTxtStatus_standard`;
-const STORAGE_KEY_IMPORTED_STATUS_SUMMARY_ACU = `${SCRIPT_ID_PREFIX_ACU}_importedTxtStatus_summary`;
-const STORAGE_KEY_IMPORTED_STATUS_FULL_ACU = `${SCRIPT_ID_PREFIX_ACU}_importedTxtStatus_full`;
 const STORAGE_KEY_PLOT_SETTINGS_ACU = `${SCRIPT_ID_PREFIX_ACU}_plotSettings`;
 // ═══════════════════════════════════════════════════════════════
 // Profile 工具函数
@@ -3974,23 +3924,13 @@ function buildDefaultContentOptimizationPromptGroup_ACU({ mainContent = '' } = {
  *
  * 全局元信息（跨标识共享）+ Profile 化存储（按标识代码分组的设置/模板）
  */
-let globalMeta_ACU = {
-    version: 1,
-    activeIsolationCode: '',
-    isolationCodeList: [],
-    migratedLegacySingleStore: false,
-    zeroTkOccupyModeGlobal: false,
-    summaryVectorIndexModeGlobal: false,
-    plotEnabledGlobal: true,
-    vectorMemoryConfigGlobal: null,
-};
+let globalMeta_ACU = buildDefaultGlobalMeta_ACU();
 function buildDefaultGlobalMeta_ACU() {
     return {
         version: 1,
         activeIsolationCode: '',
         isolationCodeList: [],
         migratedLegacySingleStore: false,
-        zeroTkOccupyModeGlobal: false,
         summaryVectorIndexModeGlobal: false,
         plotEnabledGlobal: true,
         vectorMemoryConfigGlobal: null,
@@ -4017,7 +3957,7 @@ function loadGlobalMeta_ACU() {
 function saveGlobalMeta_ACU() {
     try {
         const store = getConfigStorage_ACU();
-        const payload = safeJsonStringify_ACU(globalMeta_ACU, '{}');
+        const payload = safeJsonStringify_ACU(globalMeta_ACU);
         store.setItem(STORAGE_KEY_GLOBAL_META_ACU, payload);
         return true;
     }
@@ -4036,7 +3976,7 @@ function readProfileSettingsFromStorage_ACU(code) {
 }
 function writeProfileSettingsToStorage_ACU(code, settingsObj) {
     const store = getConfigStorage_ACU();
-    store.setItem(getProfileSettingsKey_ACU(code), safeJsonStringify_ACU(settingsObj, '{}'));
+    store.setItem(getProfileSettingsKey_ACU(code), safeJsonStringify_ACU(settingsObj));
 }
 function readProfileTemplateFromStorage_ACU(code) {
     const store = getConfigStorage_ACU();
@@ -4053,7 +3993,7 @@ function saveCurrentProfileTemplate_ACU(templateStr, settings) {
     writeProfileTemplateToStorage_ACU(code, String(tpl || ''));
 }
 function sanitizeSettingsForProfileSave_ACU(settingsObj) {
-    const cloned = safeJsonParse_ACU(safeJsonStringify_ACU(settingsObj, '{}'), {});
+    const cloned = safeJsonParse_ACU(safeJsonStringify_ACU(settingsObj), {});
     delete cloned.dataIsolationHistory;
     delete cloned.dataIsolationEnabled;
     // 交火/向量模型 API 配置是全局配置，权威副本存放在 globalMeta.vectorMemoryConfigGlobal。
@@ -4906,12 +4846,6 @@ function summarizeStrictLorebookReadError_ACU$1(error) {
  */
 function isWorldbookApiAvailable_ACU() {
     return !!(TavernHelper_API_ACU && typeof TavernHelper_API_ACU.getLorebookEntries === 'function');
-}
-/**
- * 检查 TavernHelper 世界书条目读取与更新 API 是否同时可用。
- */
-function isWorldbookEntryUpdateApiAvailable_ACU() {
-    return !!(TavernHelper_API_ACU && typeof TavernHelper_API_ACU.getLorebookEntries === 'function' && typeof TavernHelper_API_ACU.setLorebookEntries === 'function');
 }
 // ═══ 条目 CRUD ═══
 // 不可见格式字符：零宽/方向控制/连接符/BOM + 变体选择器（U+FE00–U+FE0F）
@@ -5879,10 +5813,6 @@ function getCurrentStorageMode() {
 /** 判断当前是否为 SQLite 模式：恒为 true。 */
 function isSqliteMode() {
     return true;
-}
-/** 判断当前是否为原生模式：恒为 false（原生模式已移除）。 */
-function isNativeMode() {
-    return false;
 }
 
 var commonjsGlobal = typeof globalThis !== 'undefined' ? globalThis : typeof window !== 'undefined' ? window : typeof global !== 'undefined' ? global : typeof self !== 'undefined' ? self : {};
@@ -32619,7 +32549,7 @@ function tryNormalizeUpdateValues(sql, normalizedCols) {
     const setClauses = updateMatch[2];
     const whereClause = updateMatch[3] || '';
     // 按 SET 子句中的逗号拆分（需要跳过字符串内的逗号）
-    const assignments = splitSetClauses(setClauses);
+    const assignments = splitValueList(setClauses);
     let hasChange = false;
     const normalizedAssignments = [];
     for (const assignment of assignments) {
@@ -32661,7 +32591,7 @@ function splitColumnList(str) {
     return str.split(',').map(s => s.trim()).filter(s => s.length > 0);
 }
 /**
- * 拆分值列表（逗号分隔，但跳过字符串内的逗号）
+ * 拆分逗号分隔列表（跳过字符串字面量内的逗号）
  * "'val1', 'val,2', 3" → ["'val1'", "'val,2'", "3"]
  */
 function splitValueList(str) {
@@ -32698,44 +32628,6 @@ function splitValueList(str) {
         values.push(current);
     }
     return values;
-}
-/**
- * 拆分 SET 子句（逗号分隔，跳过字符串内的逗号）
- */
-function splitSetClauses(str) {
-    const clauses = [];
-    let current = '';
-    let inStr = false;
-    for (let i = 0; i < str.length; i++) {
-        const ch = str[i];
-        if (inStr) {
-            current += ch;
-            if (ch === "'") {
-                if (i + 1 < str.length && str[i + 1] === "'") {
-                    current += str[i + 1];
-                    i++;
-                }
-                else {
-                    inStr = false;
-                }
-            }
-        }
-        else if (ch === "'") {
-            inStr = true;
-            current += ch;
-        }
-        else if (ch === ',') {
-            clauses.push(current);
-            current = '';
-        }
-        else {
-            current += ch;
-        }
-    }
-    if (current.trim()) {
-        clauses.push(current);
-    }
-    return clauses;
 }
 /**
  * 判断值是否是引号包裹的字符串
@@ -34941,9 +34833,9 @@ class SyncBridge {
                     uid: String(at(row, 'uid')),
                     name: String(at(row, 'name')),
                     orderNo: Number(at(row, 'order_no')) || 0,
-                    sourceData: safeJsonParse(at(row, 'source_data_json')),
-                    updateConfig: safeJsonParse(at(row, 'update_config_json')),
-                    exportConfig: safeJsonParse(at(row, 'export_config_json')),
+                    sourceData: safeJsonParse_ACU(String(at(row, 'source_data_json')), {}),
+                    updateConfig: safeJsonParse_ACU(String(at(row, 'update_config_json')), {}),
+                    exportConfig: safeJsonParse_ACU(String(at(row, 'export_config_json')), {}),
                     physicalTableName: storedPhysical != null && String(storedPhysical).trim()
                         ? String(storedPhysical)
                         : undefined,
@@ -35023,17 +34915,6 @@ function formatSqliteLoadFailure_ACU(errorMessage) {
         ? `${operation[1].replace(/\s+/g, ' ').toUpperCase()} ${operation[2]}`
         : 'SQLite 语句';
     return `SQLite 写入失败：第 ${statementIndex} 条语句失败（${statementSummary}）：${sqliteError.trim()}`;
-}
-/** 安全的 JSON 解析 */
-function safeJsonParse(val) {
-    if (val === null || val === undefined)
-        return {};
-    try {
-        return JSON.parse(String(val));
-    }
-    catch (_) {
-        return {};
-    }
 }
 
 class TemplateImportValidationError_ACU extends Error {
@@ -55708,6 +55589,94 @@ function resolveCurrentRuntimeReadSql_ACU(sql) {
     return resolveReadQuerySql_ACU(sql, currentJsonTableData_ACU, mapper.translateSql.bind(mapper));
 }
 
+const FORBIDDEN_SQL_KEYWORDS_ACU = new Set([
+    'ALTER', 'ANALYZE', 'ATTACH', 'BEGIN', 'COMMIT', 'CREATE', 'DELETE', 'DETACH',
+    'DROP', 'END', 'INSERT', 'REINDEX', 'RELEASE', 'REPLACE', 'ROLLBACK', 'SAVEPOINT',
+    'TRUNCATE', 'UPDATE', 'VACUUM',
+]);
+const ALLOWED_PRAGMAS_ACU = new Set([
+    'table_info', 'table_xinfo', 'index_list', 'index_info', 'index_xinfo', 'foreign_key_list',
+]);
+function stripSqlCommentsAndStrings_ACU$1(sql) {
+    let result = '';
+    let index = 0;
+    while (index < sql.length) {
+        const char = sql[index];
+        const next = sql[index + 1];
+        if (char === '-' && next === '-') {
+            index += 2;
+            while (index < sql.length && sql[index] !== '\n')
+                index++;
+            result += ' ';
+            continue;
+        }
+        if (char === '/' && next === '*') {
+            index += 2;
+            while (index < sql.length && !(sql[index] === '*' && sql[index + 1] === '/'))
+                index++;
+            index = Math.min(sql.length, index + 2);
+            result += ' ';
+            continue;
+        }
+        if (char === "'" || char === '"' || char === '`') {
+            const quote = char;
+            index++;
+            while (index < sql.length) {
+                if (sql[index] === quote) {
+                    if (sql[index + 1] === quote) {
+                        index += 2;
+                        continue;
+                    }
+                    index++;
+                    break;
+                }
+                index++;
+            }
+            result += ' ';
+            continue;
+        }
+        result += char;
+        index++;
+    }
+    return result;
+}
+function hasMultipleStatements_ACU(sql) {
+    const stripped = stripSqlCommentsAndStrings_ACU$1(sql).trim();
+    const withoutTrailingTerminator = stripped.replace(/;\s*$/, '');
+    return withoutTrailingTerminator.includes(';');
+}
+function validateReadOnlySql_ACU(sql) {
+    const source = String(sql || '').trim();
+    if (!source)
+        return { valid: false, reason: 'empty_sql' };
+    if (hasMultipleStatements_ACU(source))
+        return { valid: false, reason: 'multiple_statements' };
+    const normalized = stripSqlCommentsAndStrings_ACU$1(source).replace(/;\s*$/, '').trim();
+    const tokens = normalized.toUpperCase().match(/[A-Z_]+/g) || [];
+    if (tokens.some(token => FORBIDDEN_SQL_KEYWORDS_ACU.has(token))) {
+        return { valid: false, reason: 'write_or_maintenance_statement' };
+    }
+    const pragmaMatch = normalized.match(/^PRAGMA\s+([A-Za-z_][\w]*)\s*(?:\(([^)]*)\))?\s*$/i);
+    if (pragmaMatch) {
+        if (!ALLOWED_PRAGMAS_ACU.has(pragmaMatch[1].toLowerCase()))
+            return { valid: false, reason: 'pragma_not_allowed' };
+        if (!String(pragmaMatch[2] || '').trim())
+            return { valid: false, reason: 'pragma_argument_required' };
+        if (/=/.test(normalized))
+            return { valid: false, reason: 'pragma_assignment_not_allowed' };
+        return { valid: true };
+    }
+    if (/^EXPLAIN\s+(?:QUERY\s+PLAN\s+)?(?:SELECT\b|WITH\b)/i.test(normalized))
+        return { valid: true };
+    if (/^(?:SELECT\b|WITH\b)/i.test(normalized))
+        return { valid: true };
+    return { valid: false, reason: 'statement_not_read_only' };
+}
+/** Shared read-path classifier. Callers that need a diagnostic should use validateReadOnlySql_ACU directly. */
+function isReadOnlySqlStatement_ACU(sql) {
+    return validateReadOnlySql_ACU(sql).valid;
+}
+
 /**
  * service/runtime/template-vars/sql-query-var.ts
  * SQL 查询模板变量 — ORM 风格查询构建器 + 原生 SQL 兜底 + 值替换
@@ -55720,6 +55689,33 @@ function resolveCurrentRuntimeReadSql_ACU(sql) {
  * 原生 SQL 兜底：
  *   {[sql "SELECT 列名 FROM 表名 WHERE 条件"]}
  */
+// ═══════════════════════════════════════════════════════════════
+// 模板变量 SQL/ORM 表达式安全校验（H1/H2 加固）
+// ═══════════════════════════════════════════════════════════════
+/** 原始 SQL 的只读前置校验（翻译前）。 */
+function isTemplateSqlReadOnly_ACU(sql) {
+    const result = validateReadOnlySql_ACU(sql);
+    if (!result.valid) {
+        logWarn_ACU(`[模板变量] 拒绝执行非只读 SQL: ${String(sql).slice(0, 120)} (${result.reason})`);
+    }
+    return result.valid;
+}
+// 安全 ORM/条件表达式结构白名单：仅允许方法链调用（db.标识符(.标识符(参数))*) 与
+// 末尾比较（> 3 / == "x" 等）。字符串字面量先替换为占位，黑名单模式再兜底。
+const DB_EXPR_BLACKLIST_RE_ACU = /constructor|__proto__|prototype|\beval\b|\bfetch\b|\bFunction\b|\brequire\b|\bimport\b|\bnew\s+\w|=>|;|globalThis|window\.|document\.|\bprocess\b|alert|confirm|prompt|\.open\(/gi;
+const DB_EXPR_CHAIN_RE_ACU = /^db(\.[A-Za-z\u4e00-\u9fa5_$][\w\u4e00-\u9fa5$]*(?:\([^()]*\)|\[[^\[\]]*\])?)+$/;
+const DB_EXPR_WITH_COMPARE_RE_ACU = /^db(\.[A-Za-z\u4e00-\u9fa5_$][\w\u4e00-\u9fa5$]*(?:\([^()]*\)|\[[^\[\]]*\])?)*\s*(?:===|==|!==|!=|>=|<=|>|<|&&|\|\||!)\s*[^()\[\]]+$/;
+function isSafeDbExpression_ACU(expr) {
+    if (!expr || typeof expr !== 'string')
+        return false;
+    const trimmed = expr.trim();
+    if (!trimmed.startsWith('db.'))
+        return false;
+    const sanitized = trimmed.replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"/g, '""');
+    if (DB_EXPR_BLACKLIST_RE_ACU.test(sanitized))
+        return false;
+    return DB_EXPR_CHAIN_RE_ACU.test(sanitized) || DB_EXPR_WITH_COMPARE_RE_ACU.test(sanitized);
+}
 // ═══════════════════════════════════════════════════════════════
 // 变量系统 — 存储 {[db...as X]} / {[sql...as X]} 的结果
 // ═══════════════════════════════════════════════════════════════
@@ -56218,9 +56214,14 @@ function execExpr(expression) {
             logWarn_ACU('[db.expr] 空表达式');
             return null;
         }
+        // H1 加固：db.expr 以 SELECT 包裹校验只读（拒绝写语句/多语句）
+        if (!isTemplateSqlReadOnly_ACU(`SELECT ${expression.trim()}`))
+            return null;
         if (!isTemplateQueryRuntimeReady_ACU('db.expr'))
             return null;
         const translatedExpr = resolveTemplateReadSql_ACU(expression.trim());
+        if (!isTemplateSqlReadOnly_ACU(`SELECT ${translatedExpr}`))
+            return null;
         const sql = `SELECT ${translatedExpr}`;
         const provider = getStorageProvider();
         const result = provider.executeQuery(sql);
@@ -56296,6 +56297,9 @@ function execCalc(expression) {
             logWarn_ACU(`[db.calc] 表达式包含未定义变量: ${expression}`);
             return null;
         }
+        // H1 加固：算术表达式以 SELECT 包裹校验只读
+        if (!isTemplateSqlReadOnly_ACU(`SELECT ${processed}`))
+            return null;
         if (!isTemplateQueryRuntimeReady_ACU('db.calc'))
             return null;
         const provider = getStorageProvider();
@@ -56393,6 +56397,11 @@ function evaluateOrmExpression(expr) {
             return '';
         // 确保表达式以 db. 开头
         const fullExpr = trimmed.startsWith('db.') ? trimmed : 'db.' + trimmed;
+        // H2 加固：仅允许白名单方法链结构，拒绝任意 JS 表达式执行
+        if (!isSafeDbExpression_ACU(fullExpr)) {
+            logWarn_ACU(`[ORM] 拒绝执行非白名单表达式: ${fullExpr.slice(0, 120)}`);
+            return '';
+        }
         const db = createDbProxy();
         const fn = new Function('db', `return ${fullExpr}`);
         const result = fn(db);
@@ -56424,8 +56433,20 @@ function evaluateRawSqlExpression(expr, options = {}) {
                 throw new Error('sql_runtime_not_ready');
             return '';
         }
+        // H1 加固：翻译前只读校验（翻译后二次校验在下方执行前）
+        if (!isTemplateSqlReadOnly_ACU(trimmed)) {
+            if (options.throwOnError === true)
+                throw new Error('sql_not_read_only');
+            return '';
+        }
         // 通过 NameMapper 翻译中文名
         const translatedSql = resolveTemplateReadSql_ACU(trimmed);
+        // H1 加固：翻译后二次校验（防中文表/列名翻译引入写语句）
+        if (!isTemplateSqlReadOnly_ACU(translatedSql)) {
+            if (options.throwOnError === true)
+                throw new Error('sql_not_read_only');
+            return '';
+        }
         // 执行查询
         const provider = getStorageProvider();
         const result = provider.executeQuery(translatedSql, undefined, {
@@ -56504,6 +56525,11 @@ function evaluateDbCondition(expression) {
         if (!trimmed)
             return false;
         const fullExpr = trimmed.startsWith('db.') ? trimmed : 'db.' + trimmed;
+        // H2 加固：仅允许白名单方法链/比较结构
+        if (!isSafeDbExpression_ACU(fullExpr)) {
+            logWarn_ACU(`[<if db>] 拒绝执行非白名单表达式: ${fullExpr.slice(0, 120)}`);
+            return false;
+        }
         const db = createDbProxy();
         const fn = new Function('db', `return ${fullExpr}`);
         const result = fn(db);
@@ -56531,7 +56557,14 @@ function evaluateSqlCondition(expression) {
         // 直接传入 SQL 表达式，不需要包引号
         // evaluateRawSqlExpression 内部会处理 "sql " 前缀和引号剥离
         // 但这里的 expression 来自 <if sql="...">，本身就是纯 SQL，直接执行即可
-        const translatedSql = resolveTemplateReadSql_ACU(expression.trim());
+        const rawSql = expression.trim();
+        // H1 加固：翻译前只读校验
+        if (!isTemplateSqlReadOnly_ACU(rawSql))
+            return false;
+        const translatedSql = resolveTemplateReadSql_ACU(rawSql);
+        // H1 加固：翻译后二次校验
+        if (!isTemplateSqlReadOnly_ACU(translatedSql))
+            return false;
         const provider = getStorageProvider();
         const result = provider.executeQuery(translatedSql);
         if (result.values.length === 0)
@@ -57935,7 +57968,7 @@ function getCurrentCharacterFallback_ACU(win) {
         // 优先使用 TavernHelper.getCharData('current')
         const charData = getCurrentCharData_ACU();
         if (charData) {
-            return getCurrentCharData_ACU('current') || charData;
+            return charData;
         }
         const w = win || topLevelWindow_ACU || window;
         const stContext = w?.SillyTavern?.getContext?.();
@@ -58610,94 +58643,6 @@ async function restoreAgentWorldbookSnapshotEntries_ACU(snapshot, expectedBookNa
         }
     }
     return { restored, skipped, failed, signatureMatched: true, rollbackPatchesByBook, restoredPatchesByBook };
-}
-
-const FORBIDDEN_SQL_KEYWORDS_ACU = new Set([
-    'ALTER', 'ANALYZE', 'ATTACH', 'BEGIN', 'COMMIT', 'CREATE', 'DELETE', 'DETACH',
-    'DROP', 'END', 'INSERT', 'REINDEX', 'RELEASE', 'REPLACE', 'ROLLBACK', 'SAVEPOINT',
-    'TRUNCATE', 'UPDATE', 'VACUUM',
-]);
-const ALLOWED_PRAGMAS_ACU = new Set([
-    'table_info', 'table_xinfo', 'index_list', 'index_info', 'index_xinfo', 'foreign_key_list',
-]);
-function stripSqlCommentsAndStrings_ACU$1(sql) {
-    let result = '';
-    let index = 0;
-    while (index < sql.length) {
-        const char = sql[index];
-        const next = sql[index + 1];
-        if (char === '-' && next === '-') {
-            index += 2;
-            while (index < sql.length && sql[index] !== '\n')
-                index++;
-            result += ' ';
-            continue;
-        }
-        if (char === '/' && next === '*') {
-            index += 2;
-            while (index < sql.length && !(sql[index] === '*' && sql[index + 1] === '/'))
-                index++;
-            index = Math.min(sql.length, index + 2);
-            result += ' ';
-            continue;
-        }
-        if (char === "'" || char === '"' || char === '`') {
-            const quote = char;
-            index++;
-            while (index < sql.length) {
-                if (sql[index] === quote) {
-                    if (sql[index + 1] === quote) {
-                        index += 2;
-                        continue;
-                    }
-                    index++;
-                    break;
-                }
-                index++;
-            }
-            result += ' ';
-            continue;
-        }
-        result += char;
-        index++;
-    }
-    return result;
-}
-function hasMultipleStatements_ACU(sql) {
-    const stripped = stripSqlCommentsAndStrings_ACU$1(sql).trim();
-    const withoutTrailingTerminator = stripped.replace(/;\s*$/, '');
-    return withoutTrailingTerminator.includes(';');
-}
-function validateReadOnlySql_ACU(sql) {
-    const source = String(sql || '').trim();
-    if (!source)
-        return { valid: false, reason: 'empty_sql' };
-    if (hasMultipleStatements_ACU(source))
-        return { valid: false, reason: 'multiple_statements' };
-    const normalized = stripSqlCommentsAndStrings_ACU$1(source).replace(/;\s*$/, '').trim();
-    const tokens = normalized.toUpperCase().match(/[A-Z_]+/g) || [];
-    if (tokens.some(token => FORBIDDEN_SQL_KEYWORDS_ACU.has(token))) {
-        return { valid: false, reason: 'write_or_maintenance_statement' };
-    }
-    const pragmaMatch = normalized.match(/^PRAGMA\s+([A-Za-z_][\w]*)\s*(?:\(([^)]*)\))?\s*$/i);
-    if (pragmaMatch) {
-        if (!ALLOWED_PRAGMAS_ACU.has(pragmaMatch[1].toLowerCase()))
-            return { valid: false, reason: 'pragma_not_allowed' };
-        if (!String(pragmaMatch[2] || '').trim())
-            return { valid: false, reason: 'pragma_argument_required' };
-        if (/=/.test(normalized))
-            return { valid: false, reason: 'pragma_assignment_not_allowed' };
-        return { valid: true };
-    }
-    if (/^EXPLAIN\s+(?:QUERY\s+PLAN\s+)?(?:SELECT\b|WITH\b)/i.test(normalized))
-        return { valid: true };
-    if (/^(?:SELECT\b|WITH\b)/i.test(normalized))
-        return { valid: true };
-    return { valid: false, reason: 'statement_not_read_only' };
-}
-/** Shared read-path classifier. Callers that need a diagnostic should use validateReadOnlySql_ACU directly. */
-function isReadOnlySqlStatement_ACU(sql) {
-    return validateReadOnlySql_ACU(sql).valid;
 }
 
 const ORM_CHAIN_METHODS_ACU = new Set([
@@ -62109,35 +62054,11 @@ async function resolveCandidateScopeEntriesForTable_ACU(readContext, scopeNames,
 /**
  * data/gateways/ai-gateway.ts — AI 调用网关
  *
- * 封装 SillyTavern_API_ACU.ConnectionManagerRequestService 等宿主调用方法。
+ * 封装 SillyTavern_API_ACU 的宿主调用方法。
  * service 层通过本模块发起 AI 请求，不再直接调用宿主 API。
  *
- * 酒馆主 API（TavernHelper.generateRaw / tavern 连接预设）已剥离。
- * 所有方法内置存在性检查，宿主 API 不可用时抛出明确错误。
+ * 酒馆主 API（TavernHelper.generateRaw / tavern 连接预设 / ConnectionManager 请求）已剥离。
  */
-// ═══ 可用性检查 ═══
-/**
- * 检查 ConnectionManagerRequestService 是否可用
- */
-function isConnectionManagerAvailable_ACU() {
-    return !!(SillyTavern_API_ACU?.ConnectionManagerRequestService &&
-        typeof SillyTavern_API_ACU.ConnectionManagerRequestService.sendRequest === 'function');
-}
-// ═══ AI 生成 ═══
-/**
- * 通过 ConnectionManager 发送请求
- * @param profileId 配置文件 ID
- * @param messages 消息数组
- * @param maxTokens 最大 token 数
- * @returns API 响应结果
- * @throws 如果 ConnectionManagerRequestService 不可用
- */
-async function sendConnectionManagerRequest_ACU(profileId, messages, maxTokens) {
-    if (!isConnectionManagerAvailable_ACU()) {
-        throw new Error('ConnectionManagerRequestService 不可用。请检查酒馆版本或连接管理器配置。');
-    }
-    return await SillyTavern_API_ACU.ConnectionManagerRequestService.sendRequest(profileId, messages, maxTokens);
-}
 // ═══ 配置读取 ═══
 /**
  * 获取 ConnectionManager 的配置文件列表
@@ -63793,11 +63714,12 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
     const maxTokens = opts.maxTokens ?? effectiveApiConfig.max_tokens ?? effectiveApiConfig.maxTokens ?? 20000;
     const temperature = opts.temperature ?? effectiveApiConfig.temperature ?? 1.0;
     const topP = opts.topP ?? effectiveApiConfig.top_p ?? effectiveApiConfig.topP ?? 0.95;
-    // 基础 Authorization 头
-    let headers = effectiveApiConfig.apiKey ? `Authorization: Bearer ${effectiveApiConfig.apiKey}` : '';
-    // 追加 requestHeaders
+    // 基础 Authorization 头（apiKey 剥离换行，防请求头注入）
+    const apiKey = String(effectiveApiConfig.apiKey || '').replace(/[\r\n]+/g, '');
+    let headers = apiKey ? `Authorization: Bearer ${apiKey}` : '';
+    // 追加 requestHeaders（逐行清洗换行）
     if (effectiveApiConfig.requestHeaders) {
-        const extra = effectiveApiConfig.requestHeaders.trim();
+        const extra = String(effectiveApiConfig.requestHeaders).trim().replace(/[\r\n]+/g, '\n');
         if (extra) {
             headers = headers ? `${headers}\n${extra}` : extra;
         }
@@ -63875,34 +63797,6 @@ async function callApiWithPlotPreset_ACU(messages, presetName, abortSignal = nul
     }
     throw new Error(`API调用返回无效响应`);
 }
-async function callApi_ACU(messages, apiSettings, abortSignal = null) {
-    // [新增] 获取剧情推进使用的API配置（支持API预设）
-    const apiPresetConfig = getApiConfigByPreset_ACU(settings_ACU.plotApiPreset);
-    const effectiveApiMode = apiPresetConfig.apiMode;
-    const effectiveApiConfig = apiPresetConfig.apiConfig;
-    logDebug_ACU(`[剧情推进] 使用API预设: ${settings_ACU.plotApiPreset || '当前配置'}, 模式: ${effectiveApiMode}`);
-    // 酒馆主 API（tavern / useMainApi）已剥离，恒走自定义 API（流式传输）
-    if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
-        throw new Error('自定义API的URL或模型未配置。');
-    }
-    const requestBody = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig);
-    const response = await fetch('/api/backends/chat-completions/generate', {
-        method: 'POST',
-        headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-        signal: abortSignal,
-    });
-    if (!response.ok) {
-        const errTxt = await response.text();
-        throw new Error(`API请求失败: ${response.status} ${errTxt}`);
-    }
-    // 根据streamingEnabled设置选择响应处理方式
-    const content = await handleApiResponse_ACU(response, abortSignal);
-    if (content) {
-        return content.trim();
-    }
-    throw new Error(`API调用返回无效响应`);
-}
 function getApiConfigByPreset_ACU(presetName) {
     // 委托 service 单一权威解析：空名返回当前配置；悬挂引用返回 resolved=false 并告警。
     const resolved = resolveApiConfigByPreset_ACU(presetName);
@@ -63911,21 +63805,6 @@ function getApiConfigByPreset_ACU(presetName) {
         apiConfig: resolved.apiConfig,
         tavernProfile: resolved.tavernProfile,
     };
-}
-async function callCustomOpenAI_ACU_Direct(messages) {
-    // Reuse the logic from callCustomOpenAI_ACU but bypass the prompt replacement part
-    // ... For brevity, I will just call callCustomOpenAI_ACU with a hacked dynamicContent?
-    // No, callCustomOpenAI_ACU relies on settings_ACU.charCardPrompt.
-    // I should refactor callCustomOpenAI_ACU to accept direct messages, or duplicate the API calling part.
-    // Duplicating API calling logic for safety and isolation（酒馆主 API 已剥离，恒走自定义 API）
-    if (!settings_ACU.apiConfig.url || !settings_ACU.apiConfig.model) {
-        throw new Error('自定义API的URL或模型未配置。');
-    }
-    const requestBody = buildCustomApiRequestBody_ACU(messages, settings_ACU.apiConfig, { stripModelPrefix: false });
-    const res = await fetch('/api/backends/chat-completions/generate', { method: 'POST', headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' }, body: JSON.stringify(requestBody) });
-    // 根据streamingEnabled设置选择响应处理方式
-    const content = await handleApiResponse_ACU(res);
-    return content;
 }
 /**
  * 通用 AI 调用（支持指定 API 预设名称）
@@ -63962,16 +63841,6 @@ async function callAIWithPreset_ACU(messages, presetName = '', maxTokensOverride
     }
     const content = await handleApiResponse_ACU(res, signal);
     return content ? content.trim() : null;
-}
-/**
- * 若 signal 已 abort 则抛出 AbortError，用于宿主 gateway 调用（无法强制中断）返回后立即检查。
- */
-function assertNotAborted_ACU(signal) {
-    if (signal?.aborted) {
-        const err = new Error('请求已取消');
-        err.name = 'AbortError';
-        throw err;
-    }
 }
 
 /**
@@ -68465,7 +68334,7 @@ async function getWorldbookContentForPlot_ACU(apiSettings, userMessage, extraBas
                     normalizedComment.startsWith('总结条目') ||
                     normalizedComment.startsWith('小总结条目') ||
                     normalizedComment.startsWith('重要人物条目');
-                if (!isDbGenerated && isEntryBlocked_ACU$1(entry)) {
+                if (!isDbGenerated && isEntryBlocked_ACU(entry)) {
                     logDebug_ACU(`[剧情推进] 条目被屏蔽: "${entry.rawComment || entry.comment || entry.name || ''}"`);
                     return false;
                 }
@@ -70691,7 +70560,7 @@ async function getCombinedWorldbookContent_ACU(initialScanTextOverride = '', opt
                     return false;
                 if (excludeImportTaggedEntries && isImportTaggedLorebookEntry_ACU(entry))
                     return false;
-                if (isEntryBlocked_ACU$1(entry))
+                if (isEntryBlocked_ACU(entry))
                     return false;
                 return true;
             },
@@ -75832,73 +75701,6 @@ async function getSummaryVectorIndexStats_ACU(manifest) {
  * presentation 层通过本模块访问世界书，不再直接调用 gateway。
  * 后续可在此层统一添加日志、埋点、操作审计等增值逻辑。
  */
-// ─── 业务逻辑函数（从 presentation 层搬迁） ───
-/**
- * 从世界书条目中加载导入的 JSON 数据
- * 从 presentation/triggers/import-process.ts 搬迁
- */
-async function loadImportedJsonDataFromLorebook_ACU(targetLorebook, modeSuffix = '-Selected') {
-    if (!isWorldbookApiAvailable_ACU() || !targetLorebook)
-        return null;
-    const jsonStorageComment = getImportJsonStorageComment_ACU(modeSuffix);
-    const allEntries = await getLorebookEntries_ACU(targetLorebook);
-    const existingEntry = allEntries.find(entry => entry.comment === jsonStorageComment);
-    if (!existingEntry || !existingEntry.content)
-        return null;
-    try {
-        return JSON.parse(existingEntry.content);
-    }
-    catch (error) {
-        logError_ACU('[外部导入] Failed to parse ImportedJsonData source entry:', error);
-        return null;
-    }
-}
-/**
- * 将导入的 JSON 数据保存到世界书条目
- * 从 presentation/triggers/import-process.ts 搬迁
- */
-async function saveImportedJsonDataToLorebook_ACU(targetLorebook, jsonData, modeSuffix = '-Selected') {
-    if (!isWorldbookApiAvailable_ACU() || !targetLorebook || !jsonData)
-        return false;
-    const jsonStorageComment = getImportJsonStorageComment_ACU(modeSuffix);
-    const allEntries = await getLorebookEntries_ACU(targetLorebook);
-    const usedOrders = buildUsedOrderSet_ACU(allEntries);
-    const existingEntry = allEntries.find(entry => entry.comment === jsonStorageComment);
-    const finalJsonString = JSON.stringify(jsonData, null, 2);
-    const newEntryData = {
-        comment: jsonStorageComment,
-        content: finalJsonString,
-        keys: [`TavernDB-ACU-ImportedJson-Key${modeSuffix}`],
-        enabled: false,
-        type: 'keyword',
-        order: existingEntry?.order ?? allocOrder_ACU(usedOrders, 10000, 1, 99999),
-        prevent_recursion: true,
-    };
-    if (existingEntry) {
-        await setLorebookEntries_ACU(targetLorebook, [{ ...newEntryData, uid: existingEntry.uid }]);
-        logDebug_ACU('[外部导入] Updated ImportedJsonData source entry in target lorebook.');
-    }
-    else {
-        await createLorebookEntries_ACU(targetLorebook, [newEntryData]);
-        logDebug_ACU('[外部导入] Created ImportedJsonData source entry in target lorebook.');
-    }
-    return true;
-}
-/**
- * 从世界书中删除导入的 JSON 数据条目
- * 从 presentation/triggers/import-process.ts 搬迁
- */
-async function deleteImportedJsonDataFromLorebook_ACU(targetLorebook, modeSuffix = '-Selected') {
-    if (!isWorldbookApiAvailable_ACU() || !targetLorebook)
-        return false;
-    const jsonStorageComment = getImportJsonStorageComment_ACU(modeSuffix);
-    const entriesNow = await getLorebookEntries_ACU(targetLorebook);
-    const jsonEntry = entriesNow.find(e => e.comment === jsonStorageComment);
-    if (!jsonEntry)
-        return false;
-    await deleteLorebookEntries_ACU(targetLorebook, [jsonEntry.uid]);
-    return true;
-}
 
 /**
  * service/chat/chat-database-purge.ts — 当前聊天级原子硬清空
@@ -82230,7 +82032,7 @@ function getChatTemplateArchiveOptionLabel_ACU(entry) {
     if (!normalizedEntry)
         return '聊天历史模板快照';
     const baseLabel = getChatTemplateArchiveBaseLabel_ACU(normalizedEntry);
-    const archivedAtText = (typeof formatPlotScopeUpdatedAt_ACU === 'function') ? formatPlotScopeUpdatedAt_ACU(normalizedEntry.archivedAt || normalizedEntry.updatedAt) : '';
+    const archivedAtText = formatPlotScopeUpdatedAt_ACU(normalizedEntry.archivedAt || normalizedEntry.updatedAt);
     return archivedAtText
         ? `${baseLabel}（聊天历史快照，${archivedAtText}）`
         : `${baseLabel}（聊天历史快照）`;
@@ -84841,7 +84643,6 @@ var mergeLogic = /*#__PURE__*/Object.freeze({
 const ACU_TOAST_TITLE_ACU = 'SP·数据库';
 const _acuToastDedup_ACU = new Map(); // key -> ts
 let _acuToastStyleInjected_ACU = false;
-function _set__acuToastStyleInjected_ACU(v) { _acuToastStyleInjected_ACU = v; }
 function ensureAcuToastStylesInjected_ACU() {
     if (_acuToastStyleInjected_ACU)
         return;
@@ -86207,14 +86008,6 @@ async function populateInjectionTargetSelector_ACU() {
         logError_ACU('Failed to populate injection target selector:', error);
         $select.append('<option value="character">加载列表失败</option>');
     }
-}
-// [新增] 辅助函数：检查条目是否包含屏蔽词
-function isEntryBlocked_ACU(entry) {
-    if (!entry)
-        return false;
-    const blockedKeywords = ["规则", "思维链", "cot", "MVU", "mvu", "变量", "状态", "Status", "Rule", "rule", "检定", "判断", "叙事", "文风", "InitVar", "格式"];
-    const name = String(entry.comment || entry.name || ''); // In ST, 'comment' is often the display name
-    return blockedKeywords.some(keyword => name.includes(keyword));
 }
 const WORLDBOOK_ENTRY_LAZY_PAGE_SIZE_ACU = 80;
 function buildWorldbookEntryCheckboxId_ACU(prefix, bookName, uid) {
@@ -88195,134 +87988,6 @@ function showOptimizationDiffDialogForLoop_ACU(messageIndex, result, callback) {
         }
         jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
         callback('apply');
-    });
-}
-/**
- * 显示优化对比对话框
- */
-function showOptimizationDiffDialog_ACU(messageIndex, result) {
-    const originalContent = getOriginalContent_ACU(messageIndex) || result.optimizedContent;
-    const dialogHtml = `
-      <div class="acu-optimization-dialog acu-dialog-classic" style="
-        position: fixed;
-        top: 10px;
-        left: 50%;
-        transform: translateX(-50%);
-        background: var(--acu-bg-0, #24221f);
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='200' height='200' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
-        border: 1px solid var(--acu-border, #36332e);
-        border-radius: 2px;
-        padding: 20px;
-        max-width: 800px;
-        width: calc(100% - 20px);
-        max-height: calc(90vh - 20px);
-        overflow-y: auto;
-        z-index: 100000;
-        color: var(--acu-text, #c1b9ad);
-        font-family: "Noto Serif SC", "Source Han Serif CN", "Songti SC", "STSong", "SimSun", serif;
-        box-sizing: border-box;
-      ">
-        <h3 style="margin: 0 0 16px 0; color: var(--acu-accent, #7d4940); font-size: 1.1em; letter-spacing: 1px;">正文替换建议</h3>
-        <p style="margin: 0 0 12px 0; color: var(--acu-text-dim, #8a8075);">${result.summary || `共 ${result.optimizations.length} 处替换建议`}</p>
-        <div class="optimization-list" style="margin-bottom: 16px;">
-          ${result.optimizations.map((opt, i) => `
-            <div class="optimization-item" style="
-              background: rgba(0, 0, 0, 0.2);
-              border-radius: 1px;
-              padding: 12px;
-              margin-bottom: 8px;
-              border-left: 2px solid var(--acu-border, #36332e);
-            ">
-              <div style="color: var(--acu-text-dim, #8a8075); margin-bottom: 8px; text-decoration: line-through; opacity: 0.7;">
-                <strong>原文：</strong>${escapeHtml_ACU$1(opt.original.substring(0, 200))}${opt.original.length > 200 ? '...' : ''}
-              </div>
-              <div style="color: var(--acu-text, #c1b9ad); font-size: 12px; margin-bottom: 8px; padding: 8px; background: rgba(125, 73, 64, 0.1); border-radius: 1px; border-left: 2px solid var(--acu-accent, #7d4940);">
-                <strong>修改方案：</strong>${escapeHtml_ACU$1(opt.plan || opt.reason || '未说明')}
-              </div>
-              <div style="color: #6a8a6a;">
-                <strong>优化：</strong>${escapeHtml_ACU$1(opt.optimized.substring(0, 200))}${opt.optimized.length > 200 ? '...' : ''}
-              </div>
-            </div>
-          `).join('')}
-        </div>
-        <div style="display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; padding-bottom: 10px;">
-          <button id="acu-opt-cancel" style="
-            padding: 8px 16px;
-            border: 1px solid var(--acu-border, #36332e);
-            background: transparent;
-            color: var(--acu-text-dim, #8a8075);
-            border-radius: 1px;
-            cursor: pointer;
-            min-width: 80px;
-            flex-shrink: 0;
-            font-family: inherit;
-          ">取消</button>
-          <button id="acu-opt-reoptimize" style="
-            padding: 8px 16px;
-            border: 1px solid var(--acu-accent, #7d4940);
-            background: transparent;
-            color: var(--acu-accent, #7d4940);
-            border-radius: 1px;
-            cursor: pointer;
-            min-width: 100px;
-            flex-shrink: 0;
-            font-family: inherit;
-          ">🔄 重新优化</button>
-          <button id="acu-opt-apply" style="
-            padding: 8px 16px;
-            border: none;
-            background: var(--acu-accent, #7d4940);
-            color: var(--acu-bg-0, #24221f);
-            border-radius: 1px;
-            cursor: pointer;
-            font-weight: 600;
-            min-width: 100px;
-            flex-shrink: 0;
-            font-family: inherit;
-          ">应用优化</button>
-        </div>
-      </div>
-      <div id="acu-opt-backdrop" style="
-        position: fixed;
-        top: 0; left: 0; right: 0; bottom: 0;
-        background: rgba(0, 0, 0, 0.6);
-        z-index: 99999;
-      "></div>
-    `;
-    jQuery_API_ACU('body').append(dialogHtml);
-    // 绑定事件
-    jQuery_API_ACU('#acu-opt-cancel, #acu-opt-backdrop').on('click', function () {
-        jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
-    });
-    // 绑定重新优化事件
-    jQuery_API_ACU('#acu-opt-reoptimize').on('click', async function () {
-        jQuery_API_ACU(this).prop('disabled', true).text('优化中...');
-        // 关闭当前对话框
-        jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
-        logDebug_ACU(`[正文优化] 用户点击重新优化，messageIndex=${messageIndex}`);
-        // 重新优化
-        await reoptimizeMessage_ACU(messageIndex);
-    });
-    jQuery_API_ACU('#acu-opt-apply').on('click', async function () {
-        jQuery_API_ACU(this).prop('disabled', true).text('应用中...');
-        const success = await replaceChatMessage_ACU(messageIndex, result.optimizedContent, { originalContent: getOriginalContent_ACU(messageIndex) || originalContent });
-        if (success) {
-            jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
-            showToastr_ACU('success', '优化已应用');
-            // [新增] 手动确认模式下，应用优化后触发填表
-            logDebug_ACU('[正文优化] 手动确认模式：应用优化后触发填表...');
-            await triggerAutomaticUpdateIfNeeded_ACU();
-        }
-        else {
-            jQuery_API_ACU(this).prop('disabled', false).text('应用优化');
-            showToastr_ACU('error', '应用失败');
-        }
-    });
-    // [新增] 取消时也触发填表（使用原文）
-    jQuery_API_ACU('#acu-opt-cancel').on('click', async function () {
-        jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
-        logDebug_ACU('[正文优化] 手动确认模式：用户取消优化，触发填表...');
-        await triggerAutomaticUpdateIfNeeded_ACU();
     });
 }
 /**
@@ -96874,16 +96539,6 @@ function renderManualTableSelector_ACU() {
         return;
     manualSelector.mount($container);
 }
-function getManualSelectionFromUI_ACU() {
-    const keys = manualSelector.getSelectionFromUI();
-    if (keys.length > 0 || settings_ACU.hasManualSelection) {
-        settings_ACU.manualSelectedTables = keys;
-        settings_ACU.hasManualSelection = true;
-        saveSettingsAndNotify_ACU();
-        return keys;
-    }
-    return getSelectedManualSheetKeys_ACU();
-}
 // ─── 外部导入表格选择器 ────────────────────────────────
 function getImportBaseTableData_ACU() {
     try {
@@ -96912,16 +96567,6 @@ function renderImportTableSelector_ACU() {
     if (!$container || !$container.length)
         return;
     importSelector.mount($container);
-}
-function getImportSelectionFromUI_ACU() {
-    const keys = importSelector.getSelectionFromUI();
-    if (keys.length > 0 || settings_ACU.hasImportTableSelection) {
-        settings_ACU.importSelectedTables = keys;
-        settings_ACU.hasImportTableSelection = true;
-        saveSettingsAndNotify_ACU();
-        return keys;
-    }
-    return getSelectedImportSheetKeys_ACU();
 }
 function handleImportSelectAll_ACU() {
     importSelector.selectAll();
@@ -124070,14 +123715,6 @@ function acuClearTimeout(handle) {
         return;
     getAcuHostWindow().clearTimeout(handle);
 }
-function acuSetInterval(callback, delayMs) {
-    return getAcuHostWindow().setInterval(callback, delayMs);
-}
-function acuClearInterval(handle) {
-    if (handle === null || handle === undefined)
-        return;
-    getAcuHostWindow().clearInterval(handle);
-}
 function acuRequestAnimationFrame(callback) {
     const win = getAcuHostWindow();
     if (typeof win.requestAnimationFrame === 'function') {
@@ -125557,12 +125194,6 @@ function _sfc_render$Y(_ctx, _cache, $props, $setup, $data, $options) {
 }
 var AcuPanelGrid = /* @__PURE__ */ _export_sfc(_sfc_main$Y, [["render", _sfc_render$Y], ["__scopeId", "data-v-b00ea74c"]]);
 
-function connectionModeFromDraft(_draft) {
-    return 'custom';
-}
-function applyConnectionMode(draft, _mode) {
-    draft.apiMode = 'custom';
-}
 function createEmptyApiPresetDraft() {
     return {
         name: '',
@@ -128421,11 +128052,6 @@ function readSection(sectionKey) {
 function writeSection(sectionKey, value) {
     const all = readAll();
     all[sectionKey] = value;
-    writeAll(all);
-}
-function removeSection(sectionKey) {
-    const all = readAll();
-    delete all[sectionKey];
     writeAll(all);
 }
 function __resetPersistenceForTests() {
@@ -134831,18 +134457,6 @@ function useDashboardPage() {
         setToggle,
     };
 }
-function readActiveTemplatePresetSnapshot() {
-    try {
-        const meta = getActiveTemplatePresetMeta_ACU();
-        return {
-            displayName: String(meta.displayName || dashboardCopy.templatePreset.defaultName),
-            scopeLabel: String(meta.scopeLabel || dashboardCopy.templatePreset.globalScope),
-        };
-    }
-    catch {
-        return { displayName: dashboardCopy.templatePreset.readFailed, scopeLabel: "" };
-    }
-}
 
 var _sfc_main$y = /*@__PURE__*/ defineComponent({
     __name: 'DashboardPage',
@@ -137178,11 +136792,6 @@ function useFormFillWorldbookConfig() {
     };
 }
 
-const PAGE_BLOCKED_KEYWORDS_ACU = [
-    '规则', '思维链', 'cot', 'MVU', 'mvu', '变量', '状态',
-    'Status', 'Rule', 'rule', '检定', '判断', '叙事', '文风',
-    'InitVar', '格式',
-];
 function buildWorldbookSnapshotEntryIndexByBook_ACU(snapshot) {
     const result = new Map();
     if (snapshot.active !== true)
@@ -137231,7 +136840,7 @@ function isWorldbookEntryVisibleForPageUI_ACU(bookName, entry, snapshotEntryInde
             || normalized.startsWith('小总结条目'))
             return false;
     }
-    return !PAGE_BLOCKED_KEYWORDS_ACU.some(keyword => comment.includes(keyword));
+    return !isEntryBlocked_ACU({ comment });
 }
 function resolveWorldbookEntryTakeoverState_ACU(entry, hasSkill, snapshotEntry) {
     if (snapshotEntry) {

@@ -184,17 +184,6 @@ export function renderManualTableSelector_ACU() {
   manualSelector.mount($container);
 }
 
-export function getManualSelectionFromUI_ACU() {
-  const keys = manualSelector.getSelectionFromUI();
-  if (keys.length > 0 || settings_ACU.hasManualSelection) {
-    settings_ACU.manualSelectedTables = keys;
-    settings_ACU.hasManualSelection = true;
-    saveSettingsAndNotify_ACU();
-    return keys;
-  }
-  return getSelectedManualSheetKeys_ACU();
-}
-
 // ─── 外部导入表格选择器 ────────────────────────────────
 
 export function getImportBaseTableData_ACU() {
@@ -221,17 +210,6 @@ export function renderImportTableSelector_ACU() {
   const $container = $importTableSelector_ACU;
   if (!$container || !$container.length) return;
   importSelector.mount($container);
-}
-
-export function getImportSelectionFromUI_ACU() {
-  const keys = importSelector.getSelectionFromUI();
-  if (keys.length > 0 || settings_ACU.hasImportTableSelection) {
-    settings_ACU.importSelectedTables = keys;
-    settings_ACU.hasImportTableSelection = true;
-    saveSettingsAndNotify_ACU();
-    return keys;
-  }
-  return getSelectedImportSheetKeys_ACU();
 }
 
 export function handleImportSelectAll_ACU() {

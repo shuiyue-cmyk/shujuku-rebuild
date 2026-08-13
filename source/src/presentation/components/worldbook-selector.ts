@@ -1,5 +1,6 @@
 import { DEFAULT_PLOT_SETTINGS_ACU } from '../../shared/defaults-json.js';
 import { buildDefaultPlotWorldbookConfig_ACU } from '../../shared/defaults';
+import { isEntryBlocked_ACU } from '../../shared/utils';
 import { getCurrentWorldbookConfig_ACU } from '../../service/settings/settings-readers';
 import { jQuery_API_ACU } from '../dom-utils';
 import { getCharLorebooks_ACU, getCurrentCharacterWorldbookBinding_ACU } from '../../service/worldbook/worldbook-service';
@@ -228,13 +229,8 @@ import { $popupInstance_ACU } from '../state/ui-refs';
       }
   }
 
-  // [新增] 辅助函数：检查条目是否包含屏蔽词
-  export function isEntryBlocked_ACU(entry: Record<string, any> | null) {
-      if (!entry) return false;
-      const blockedKeywords = ["规则", "思维链", "cot", "MVU", "mvu", "变量", "状态", "Status", "Rule", "rule", "检定", "判断", "叙事", "文风", "InitVar", "格式"];
-      const name = String(entry.comment || entry.name || ''); // In ST, 'comment' is often the display name
-      return blockedKeywords.some(keyword => name.includes(keyword));
-  }
+  // 屏蔽词判定复用 shared/utils 唯一实现（原本地 isEntryBlocked_ACU 已删除）
+  export { isEntryBlocked_ACU } from '../../shared/utils';
 
   const WORLDBOOK_ENTRY_LAZY_PAGE_SIZE_ACU = 80;
 

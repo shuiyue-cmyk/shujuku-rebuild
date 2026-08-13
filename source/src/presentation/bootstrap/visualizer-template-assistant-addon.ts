@@ -128,20 +128,6 @@ function startLifecyclePoll_ACU() {
     }, LIFECYCLE_POLL_MS_ACU);
 }
 
-export function stopVisualizerTemplateAssistantAddon_ACU() {
-    if (visualizerObserver_ACU) {
-        visualizerObserver_ACU.disconnect();
-        visualizerObserver_ACU = null;
-    }
-    if (lifecycleTimer_ACU !== null) {
-        globalThis.clearInterval(lifecycleTimer_ACU);
-        lifecycleTimer_ACU = null;
-    }
-    addonInitialized_ACU = false;
-    lastVisualizerOpen_ACU = false;
-    lastSheetKey_ACU = null;
-}
-
 export function initVisualizerTemplateAssistantAddon_ACU() {
     if (addonInitialized_ACU) return;
     addonInitialized_ACU = true;

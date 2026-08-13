@@ -18,7 +18,7 @@ vi.mock('../../src/presentation/components/settings-ui-helpers', () => ({ saveSe
 vi.mock('../../src/service/worldbook/pipeline', () => ({
   getLorebookEntriesByNames_ACU: mocks.getEntries, getWorldbookNames_ACU: vi.fn(),
 }));
-vi.mock('../../src/shared/utils', () => ({ logError_ACU: mocks.logError }));
+vi.mock('../../src/shared/utils', () => ({ logError_ACU: mocks.logError, isEntryBlocked_ACU: () => false }));
 
 import { _set_jQuery_API_ACU } from '../../src/shared/host-api';
 import { _set_$popupInstance_ACU } from '../../src/presentation/state/ui-refs';

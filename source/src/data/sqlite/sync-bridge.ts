@@ -17,6 +17,7 @@ import { validateCanonicalCheckpointSheet_ACU } from '../../shared/canonical-che
 import { resolvePhysicalTableNames_ACU } from '../../shared/sheet-identity';
 import { downgradeRowIdPrimaryKeyForLegacyReplay_ACU } from '../../shared/ddl-utils';
 import { isSqlActiveTemplateSheet_ACU } from '../../shared/sql-active-template';
+import { safeJsonParse_ACU } from '../../shared/json-helpers';
 
 /** 同步桥的元数据表名（内部使用，对用户和 AI 不可见） */
 const META_TABLE_NAME = '_acu_sheet_meta';
@@ -406,9 +407,9 @@ export class SyncBridge {
           uid: String(at(row, 'uid')),
           name: String(at(row, 'name')),
           orderNo: Number(at(row, 'order_no')) || 0,
-          sourceData: safeJsonParse(at(row, 'source_data_json')),
-          updateConfig: safeJsonParse(at(row, 'update_config_json')),
-          exportConfig: safeJsonParse(at(row, 'export_config_json')),
+          sourceData: safeJsonParse_ACU(String(at(row, 'source_data_json')), {}),
+          updateConfig: safeJsonParse_ACU(String(at(row, 'update_config_json')), {}),
+          exportConfig: safeJsonParse_ACU(String(at(row, 'export_config_json')), {}),
           physicalTableName: storedPhysical != null && String(storedPhysical).trim()
             ? String(storedPhysical)
             : undefined,
@@ -500,14 +501,4 @@ function formatSqliteLoadFailure_ACU(errorMessage: string): string {
     ? `${operation[1].replace(/\s+/g, ' ').toUpperCase()} ${operation[2]}`
     : 'SQLite 语句';
   return `SQLite 写入失败：第 ${statementIndex} 条语句失败（${statementSummary}）：${sqliteError.trim()}`;
-}
-
-/** 安全的 JSON 解析 */
-function safeJsonParse(val: SqlJsValueType): any {
-  if (val === null || val === undefined) return {};
-  try {
-    return JSON.parse(String(val));
-  } catch (_) {
-    return {};
-  }
 }

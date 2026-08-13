@@ -1,4 +1,5 @@
 import type { WorldbookSkillMeta_ACU } from '../../service/agent/agent-worldbook-skill-meta';
+import { isEntryBlocked_ACU } from '../../shared/utils';
 import type { AgentWorldbookControlSnapshot_ACU, AgentWorldbookControlSnapshotEntry_ACU } from '../../shared/models/agent-worldbook-model';
 
 export type WorldbookEntryTakeoverState_ACU =
@@ -41,12 +42,6 @@ export interface WorldbookEntryDisplayView_ACU {
   isConstant: boolean;
   disabled: boolean;
 }
-
-const PAGE_BLOCKED_KEYWORDS_ACU = [
-  '规则', '思维链', 'cot', 'MVU', 'mvu', '变量', '状态',
-  'Status', 'Rule', 'rule', '检定', '判断', '叙事', '文风',
-  'InitVar', '格式',
-];
 
 export function buildWorldbookSnapshotEntryIndexByBook_ACU(
   snapshot: AgentWorldbookControlSnapshot_ACU,
@@ -109,7 +104,7 @@ export function isWorldbookEntryVisibleForPageUI_ACU(
       || normalized.startsWith('总结条目')
       || normalized.startsWith('小总结条目')) return false;
   }
-  return !PAGE_BLOCKED_KEYWORDS_ACU.some(keyword => comment.includes(keyword));
+  return !isEntryBlocked_ACU({ comment });
 }
 
 export function resolveWorldbookEntryTakeoverState_ACU(

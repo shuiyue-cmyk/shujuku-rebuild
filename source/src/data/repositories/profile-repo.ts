@@ -10,16 +10,7 @@ import { STORAGE_KEY_GLOBAL_META_ACU, normalizeIsolationCode_ACU, getProfileSett
 import { getConfigStorage_ACU } from '../storage/tavern-storage';
 import { TABLE_TEMPLATE_ACU } from '../../shared/defaults-json.js';
 
-export let globalMeta_ACU: any = {
-    version: 1,
-    activeIsolationCode: '',
-    isolationCodeList: [] as string[],
-    migratedLegacySingleStore: false,
-    zeroTkOccupyModeGlobal: false,
-    summaryVectorIndexModeGlobal: false,
-    plotEnabledGlobal: true,
-    vectorMemoryConfigGlobal: null,
-};
+export let globalMeta_ACU: any = buildDefaultGlobalMeta_ACU();
 
 export function buildDefaultGlobalMeta_ACU(): any {
     return {
@@ -27,7 +18,6 @@ export function buildDefaultGlobalMeta_ACU(): any {
         activeIsolationCode: '',
         isolationCodeList: [],
         migratedLegacySingleStore: false,
-        zeroTkOccupyModeGlobal: false,
         summaryVectorIndexModeGlobal: false,
         plotEnabledGlobal: true,
         vectorMemoryConfigGlobal: null,
@@ -55,7 +45,7 @@ export function loadGlobalMeta_ACU(): any {
 export function saveGlobalMeta_ACU(): boolean {
     try {
         const store = getConfigStorage_ACU();
-        const payload = safeJsonStringify_ACU(globalMeta_ACU, '{}');
+        const payload = safeJsonStringify_ACU(globalMeta_ACU);
         store.setItem(STORAGE_KEY_GLOBAL_META_ACU, payload);
         return true;
     } catch (e) {
@@ -74,7 +64,7 @@ export function readProfileSettingsFromStorage_ACU(code: string): any {
 
 export function writeProfileSettingsToStorage_ACU(code: string, settingsObj: any): void {
     const store = getConfigStorage_ACU();
-    store.setItem(getProfileSettingsKey_ACU(code), safeJsonStringify_ACU(settingsObj, '{}'));
+    store.setItem(getProfileSettingsKey_ACU(code), safeJsonStringify_ACU(settingsObj));
 }
 
 export function readProfileTemplateFromStorage_ACU(code: string): string | null {
@@ -95,7 +85,7 @@ export function saveCurrentProfileTemplate_ACU(templateStr?: string, settings?: 
 }
 
 export function sanitizeSettingsForProfileSave_ACU(settingsObj: any): any {
-    const cloned = safeJsonParse_ACU(safeJsonStringify_ACU(settingsObj, '{}'), {});
+    const cloned = safeJsonParse_ACU(safeJsonStringify_ACU(settingsObj), {});
     delete cloned.dataIsolationHistory;
     delete cloned.dataIsolationEnabled;
     // 交火/向量模型 API 配置是全局配置，权威副本存放在 globalMeta.vectorMemoryConfigGlobal。

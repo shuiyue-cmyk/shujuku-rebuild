@@ -90,7 +90,7 @@ export function getCurrentCharacterFallback_ACU(win?: any): any | null {
         // 优先使用 TavernHelper.getCharData('current')
         const charData = getCurrentCharData_ACU();
         if (charData) {
-            return getCurrentCharData_ACU('current') || charData;
+            return charData;
         }
 
         const w = win || topLevelWindow_ACU || window;

@@ -354,7 +354,7 @@ function tryNormalizeUpdateValues(sql: string, normalizedCols: string[]): string
   const whereClause = updateMatch[3] || '';
 
   // 按 SET 子句中的逗号拆分（需要跳过字符串内的逗号）
-  const assignments = splitSetClauses(setClauses);
+  const assignments = splitValueList(setClauses);
   let hasChange = false;
   const normalizedAssignments: string[] = [];
 
@@ -401,7 +401,7 @@ function splitColumnList(str: string): string[] {
 }
 
 /**
- * 拆分值列表（逗号分隔，但跳过字符串内的逗号）
+ * 拆分逗号分隔列表（跳过字符串字面量内的逗号）
  * "'val1', 'val,2', 3" → ["'val1'", "'val,2'", "3"]
  */
 function splitValueList(str: string): string[] {
@@ -438,45 +438,6 @@ function splitValueList(str: string): string[] {
   }
 
   return values;
-}
-
-/**
- * 拆分 SET 子句（逗号分隔，跳过字符串内的逗号）
- */
-function splitSetClauses(str: string): string[] {
-  const clauses: string[] = [];
-  let current = '';
-  let inStr = false;
-
-  for (let i = 0; i < str.length; i++) {
-    const ch = str[i];
-
-    if (inStr) {
-      current += ch;
-      if (ch === "'") {
-        if (i + 1 < str.length && str[i + 1] === "'") {
-          current += str[i + 1];
-          i++;
-        } else {
-          inStr = false;
-        }
-      }
-    } else if (ch === "'") {
-      inStr = true;
-      current += ch;
-    } else if (ch === ',') {
-      clauses.push(current);
-      current = '';
-    } else {
-      current += ch;
-    }
-  }
-
-  if (current.trim()) {
-    clauses.push(current);
-  }
-
-  return clauses;
 }
 
 /**

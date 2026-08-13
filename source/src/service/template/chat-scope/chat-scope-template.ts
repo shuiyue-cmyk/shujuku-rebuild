@@ -391,7 +391,7 @@ import { normalizeIsolationCode_ACU } from '../../../shared/data-constants';
       const normalizedEntry = normalizeChatTemplateArchiveEntry_ACU(entry);
       if (!normalizedEntry) return '聊天历史模板快照';
       const baseLabel = getChatTemplateArchiveBaseLabel_ACU(normalizedEntry);
-      const archivedAtText = (typeof formatPlotScopeUpdatedAt_ACU === 'function') ? formatPlotScopeUpdatedAt_ACU(normalizedEntry.archivedAt || normalizedEntry.updatedAt) : '';
+      const archivedAtText = formatPlotScopeUpdatedAt_ACU(normalizedEntry.archivedAt || normalizedEntry.updatedAt);
       return archivedAtText
           ? `${baseLabel}（聊天历史快照，${archivedAtText}）`
           : `${baseLabel}（聊天历史快照）`;

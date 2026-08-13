@@ -70,7 +70,7 @@ describe('buildDefaultGlobalMeta_ACU', () => {
     expect(meta.activeIsolationCode).toBe('');
     expect(meta.isolationCodeList).toEqual([]);
     expect(meta.migratedLegacySingleStore).toBe(false);
-    expect(meta.zeroTkOccupyModeGlobal).toBe(false);
+    expect(meta.summaryVectorIndexModeGlobal).toBe(false);
   });
 
   it('每次调用返回新对象', () => {
