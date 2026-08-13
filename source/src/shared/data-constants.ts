@@ -15,11 +15,6 @@ export const STORAGE_KEY_ALL_SETTINGS_ACU = `${SCRIPT_ID_PREFIX_ACU}_allSettings
 export const STORAGE_KEY_GLOBAL_META_ACU = `${SCRIPT_ID_PREFIX_ACU}_globalMeta_v1`;
 export const STORAGE_KEY_PROFILE_PREFIX_ACU = `${SCRIPT_ID_PREFIX_ACU}_profile_v1`;
 export const STORAGE_KEY_TEMPLATE_PRESETS_ACU = `${SCRIPT_ID_PREFIX_ACU}_templatePresets_v1`;
-export const STORAGE_KEY_IMPORTED_ENTRIES_ACU = `${SCRIPT_ID_PREFIX_ACU}_importedTxtEntries`;
-export const STORAGE_KEY_IMPORTED_STATUS_ACU = `${SCRIPT_ID_PREFIX_ACU}_importedTxtStatus`;
-export const STORAGE_KEY_IMPORTED_STATUS_STANDARD_ACU = `${SCRIPT_ID_PREFIX_ACU}_importedTxtStatus_standard`;
-export const STORAGE_KEY_IMPORTED_STATUS_SUMMARY_ACU = `${SCRIPT_ID_PREFIX_ACU}_importedTxtStatus_summary`;
-export const STORAGE_KEY_IMPORTED_STATUS_FULL_ACU = `${SCRIPT_ID_PREFIX_ACU}_importedTxtStatus_full`;
 export const STORAGE_KEY_PLOT_SETTINGS_ACU = `${SCRIPT_ID_PREFIX_ACU}_plotSettings`;
 
 // ═══════════════════════════════════════════════════════════════

@@ -15,7 +15,6 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({
 import {
   getCurrentStorageMode,
   isSqliteMode,
-  isNativeMode,
 } from '../../../src/service/table/storage-mode';
 
 describe('storage-mode', () => {
@@ -74,10 +73,7 @@ describe('storage-mode', () => {
   // ═══════════════════════════════════════════════════════════════
   // isNativeMode
   // ═══════════════════════════════════════════════════════════════
-  describe('isNativeMode', () => {
-    it('恒返回 false', () => {
-      expect(isNativeMode()).toBe(false);
-    });
+  
 
     it('settings 标记为 native 时仍返回 false', () => {
       mockSettings = { storageMode: 'native' };

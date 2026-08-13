@@ -17,8 +17,3 @@ export function getCurrentStorageMode(): StorageMode {
 export function isSqliteMode(): boolean {
   return true;
 }
-
-/** 判断当前是否为原生模式：恒为 false（原生模式已移除）。 */
-export function isNativeMode(): boolean {
-  return false;
-}

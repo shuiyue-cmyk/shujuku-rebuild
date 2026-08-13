@@ -45,7 +45,6 @@ const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
 
 import {
-  callApi_ACU,
   callApiWithPlotPreset_ACU,
   getApiConfigByPreset_ACU,
   callAIWithPreset_ACU,
@@ -88,35 +87,6 @@ describe('getApiConfigByPreset_ACU', () => {
 });
 
 // ═══ callApi_ACU ═══
-describe('callApi_ACU', () => {
-  it('自定义 API 模式使用 fetch', async () => {
-    mockSettings.apiConfig = { url: 'https://api.example.com', model: 'gpt-4', apiKey: 'sk-test' };
-    mockFetch.mockResolvedValue({ ok: true, text: () => Promise.resolve('response') });
-    mockHandleApiResponse.mockResolvedValue('AI 回复');
-    const result = await callApi_ACU([{ role: 'user', content: '你好' }], {});
-    expect(result).toBe('AI 回复');
-    expect(mockFetch).toHaveBeenCalled();
-  });
-
-  it('自定义 API 未配置 URL 时抛错', async () => {
-    mockSettings.apiConfig = { url: '', model: 'gpt-4' };
-    await expect(callApi_ACU([{ role: 'user', content: '你好' }], {})).rejects.toThrow('URL或模型未配置');
-  });
-
-  it('fetch 返回非 ok 时抛错', async () => {
-    mockSettings.apiConfig = { url: 'https://api.example.com', model: 'gpt-4' };
-    mockFetch.mockResolvedValue({ ok: false, status: 500, text: () => Promise.resolve('Internal Error') });
-    await expect(callApi_ACU([{ role: 'user', content: '你好' }], {})).rejects.toThrow('500');
-  });
-
-  it('handleApiResponse 返回 null 时抛错', async () => {
-    mockSettings.apiConfig = { url: 'https://api.example.com', model: 'gpt-4' };
-    mockFetch.mockResolvedValue({ ok: true });
-    mockHandleApiResponse.mockResolvedValue(null);
-    await expect(callApi_ACU([{ role: 'user', content: '你好' }], {})).rejects.toThrow('无效响应');
-  });
-});
-
 // ═══ callAIWithPreset_ACU ═══
 describe('callAIWithPreset_ACU', () => {
   it('空消息数组返回 null', async () => {
@@ -170,17 +140,6 @@ describe('callAIWithPreset_ACU', () => {
 });
 
 // ═══ callCustomOpenAI_ACU_Direct ═══
-describe('callCustomOpenAI_ACU_Direct', () => {
-  it('custom 模式使用 fetch', async () => {
-    mockSettings.apiMode = 'custom';
-    mockSettings.apiConfig = { url: 'https://api.example.com', model: 'gpt-4', apiKey: 'sk-test' };
-    mockHandleApiResponse.mockResolvedValue('fetch回复');
-    mockFetch.mockResolvedValue({ ok: true, json: async () => ({}) });
-    const result = await callCustomOpenAI_ACU_Direct([{ role: 'user', content: '测试' }]);
-    expect(result).toBe('fetch回复');
-  });
-});
-
 // ═══ buildCustomApiRequestBody_ACU ═══
 describe('buildCustomApiRequestBody_ACU', () => {
   it('max_tokens=0 不被回退为 20000', () => {
@@ -388,28 +347,6 @@ describe('callAIWithPreset_ACU 自定义模式 role 归一化', () => {
 });
 
 // ═══ callApi_ACU 温度透传 ═══
-describe('callApi_ACU 温度透传', () => {
-  it('custom 模式 fetch body 使用配置温度，不是 0.7', async () => {
-    mockSettings.apiConfig = { url: 'https://api.example.com', model: 'gpt-4', apiKey: 'sk-test', temperature: 0.3, top_p: 0.8, max_tokens: 2048 };
-    mockFetch.mockResolvedValue({ ok: true });
-    mockHandleApiResponse.mockResolvedValue('AI 回复');
-    await callApi_ACU([{ role: 'user', content: '你好' }], {});
-    const fetchBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-    expect(fetchBody.temperature).toBe(0.3);
-    expect(fetchBody.top_p).toBe(0.8);
-    expect(fetchBody.max_tokens).toBe(2048);
-  });
-
-  it('custom 模式 temperature=0 进入 fetch body', async () => {
-    mockSettings.apiConfig = { url: 'https://api.example.com', model: 'gpt-4', apiKey: 'sk-test', temperature: 0 };
-    mockFetch.mockResolvedValue({ ok: true });
-    mockHandleApiResponse.mockResolvedValue('AI 回复');
-    await callApi_ACU([{ role: 'user', content: '你好' }], {});
-    const fetchBody = JSON.parse(mockFetch.mock.calls[0][1].body);
-    expect(fetchBody.temperature).toBe(0);
-  });
-});
-
 // ═══ callApiWithPlotPreset_ACU 温度透传 ═══
 describe('callApiWithPlotPreset_ACU 温度透传', () => {
   it('custom 模式 fetch body 使用配置温度', async () => {

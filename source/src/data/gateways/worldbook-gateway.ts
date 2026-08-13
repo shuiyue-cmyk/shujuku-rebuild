@@ -21,13 +21,6 @@ export function isWorldbookApiAvailable_ACU(): boolean {
     return !!(TavernHelper_API_ACU && typeof TavernHelper_API_ACU.getLorebookEntries === 'function');
 }
 
-/**
- * 检查 TavernHelper 世界书条目读取与更新 API 是否同时可用。
- */
-export function isWorldbookEntryUpdateApiAvailable_ACU(): boolean {
-    return !!(TavernHelper_API_ACU && typeof TavernHelper_API_ACU.getLorebookEntries === 'function' && typeof TavernHelper_API_ACU.setLorebookEntries === 'function');
-}
-
 // ═══ 条目 CRUD ═══
 
 // 不可见格式字符：零宽/方向控制/连接符/BOM + 变体选择器（U+FE00–U+FE0F）

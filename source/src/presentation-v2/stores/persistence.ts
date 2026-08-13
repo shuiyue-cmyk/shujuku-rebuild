@@ -69,12 +69,6 @@ export function writeSection(sectionKey: string, value: unknown): void {
   writeAll(all);
 }
 
-export function removeSection(sectionKey: string): void {
-  const all = readAll();
-  delete all[sectionKey];
-  writeAll(all);
-}
-
 export function __resetPersistenceForTests(): void {
   memoryFallback = {};
   warned = false;

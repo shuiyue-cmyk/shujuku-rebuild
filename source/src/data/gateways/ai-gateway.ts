@@ -1,46 +1,14 @@
 /**
  * data/gateways/ai-gateway.ts — AI 调用网关
  *
- * 封装 SillyTavern_API_ACU.ConnectionManagerRequestService 等宿主调用方法。
+ * 封装 SillyTavern_API_ACU 的宿主调用方法。
  * service 层通过本模块发起 AI 请求，不再直接调用宿主 API。
  *
- * 酒馆主 API（TavernHelper.generateRaw / tavern 连接预设）已剥离。
- * 所有方法内置存在性检查，宿主 API 不可用时抛出明确错误。
+ * 酒馆主 API（TavernHelper.generateRaw / tavern 连接预设 / ConnectionManager 请求）已剥离。
  */
 
 import { SillyTavern_API_ACU } from '../../shared/host-api';
 import { logWarn_ACU } from '../../shared/utils';
-
-// ═══ 可用性检查 ═══
-
-/**
- * 检查 ConnectionManagerRequestService 是否可用
- */
-export function isConnectionManagerAvailable_ACU(): boolean {
-    return !!(SillyTavern_API_ACU?.ConnectionManagerRequestService &&
-        typeof SillyTavern_API_ACU.ConnectionManagerRequestService.sendRequest === 'function');
-}
-
-// ═══ AI 生成 ═══
-
-/**
- * 通过 ConnectionManager 发送请求
- * @param profileId 配置文件 ID
- * @param messages 消息数组
- * @param maxTokens 最大 token 数
- * @returns API 响应结果
- * @throws 如果 ConnectionManagerRequestService 不可用
- */
-export async function sendConnectionManagerRequest_ACU(
-    profileId: string,
-    messages: any[],
-    maxTokens: number,
-): Promise<any> {
-    if (!isConnectionManagerAvailable_ACU()) {
-        throw new Error('ConnectionManagerRequestService 不可用。请检查酒馆版本或连接管理器配置。');
-    }
-    return await SillyTavern_API_ACU.ConnectionManagerRequestService.sendRequest(profileId, messages, maxTokens);
-}
 
 // ═══ 配置读取 ═══
 

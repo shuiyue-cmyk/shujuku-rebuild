@@ -981,21 +981,3 @@ export function useDashboardPage(): DashboardPageState {
     setToggle,
   };
 }
-
-/** 模板预设状态条数据来源（与"当前活动 API / 当前剧情推进预设"并列展示）。 */
-export interface TemplatePresetSnapshot {
-  displayName: string;
-  scopeLabel: string;
-}
-
-export function readActiveTemplatePresetSnapshot(): TemplatePresetSnapshot {
-  try {
-    const meta = getActiveTemplatePresetMeta_ACU();
-    return {
-      displayName: String(meta.displayName || dashboardCopy.templatePreset.defaultName),
-      scopeLabel: String(meta.scopeLabel || dashboardCopy.templatePreset.globalScope),
-    };
-  } catch {
-    return { displayName: dashboardCopy.templatePreset.readFailed, scopeLabel: "" };
-  }
-}

@@ -45,40 +45,6 @@ export function deepMerge_ACU(target: any, source: any): any {
 }
 
 /**
- * 颜色加深/减淡
- */
-export function lightenDarkenColor_ACU(col: string, amt: number): string {
-  let usePound = false;
-  if (col.startsWith('#')) {
-    col = col.slice(1);
-    usePound = true;
-  }
-  let num = parseInt(col, 16);
-  let r = (num >> 16) + amt;
-  if (r > 255) r = 255;
-  else if (r < 0) r = 0;
-  let b = ((num >> 8) & 0x00ff) + amt;
-  if (b > 255) b = 255;
-  else if (b < 0) b = 0;
-  let g = (num & 0x0000ff) + amt;
-  if (g > 255) g = 255;
-  else if (g < 0) g = 0;
-  return (usePound ? '#' : '') + ('000000' + ((r << 16) | (b << 8) | g).toString(16)).slice(-6);
-}
-
-/**
- * 根据背景色计算前景色（黑或白）
- */
-export function getContrastYIQ_ACU(hexcolor: string): string {
-  if (hexcolor.startsWith('#')) hexcolor = hexcolor.slice(1);
-  var r = parseInt(hexcolor.substr(0, 2), 16);
-  var g = parseInt(hexcolor.substr(2, 2), 16);
-  var b = parseInt(hexcolor.substr(4, 2), 16);
-  var yiq = (r * 299 + g * 587 + b * 114) / 1000;
-  return yiq >= 128 ? '#000000' : '#FFFFFF';
-}
-
-/**
  * 转义正则表达式特殊字符
  */
 export function escapeRegExp_ACU(string: string): string {
@@ -127,14 +93,6 @@ export function isSummaryOrOutlineTable_ACU(tableName: string): boolean {
   const trimmedName = tableName.trim();
   return trimmedName === '总结表' || trimmedName === '总体大纲' || trimmedName === '纪要表';
 }
-
-/**
- * 判断表格是否是标准表（非总结表和总体大纲表）
- */
-export function isStandardTable_ACU(tableName: string): boolean {
-  return !isSummaryOrOutlineTable_ACU(tableName);
-}
-
 
 // 标签列表解析：支持英文逗号/中文逗号/空格分隔
 function parseTagList_ACU(input: string) {

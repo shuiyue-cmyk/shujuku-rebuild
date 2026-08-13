@@ -16,14 +16,6 @@ export interface ApiPresetDraft {
 /** 连接模式（酒馆主 API / 酒馆预设已剥离，恒为自定义 API） */
 export type ConnectionMode = 'custom';
 
-export function connectionModeFromDraft(_draft: ApiPresetDraft): ConnectionMode {
-  return 'custom';
-}
-
-export function applyConnectionMode(draft: ApiPresetDraft, _mode: ConnectionMode): void {
-  draft.apiMode = 'custom';
-}
-
 export function createEmptyApiPresetDraft(): ApiPresetDraft {
   return {
     name: '',

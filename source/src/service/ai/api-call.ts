@@ -129,46 +129,6 @@ export async function callApiWithPlotPreset_ACU(messages: any[], presetName: str
     throw new Error(`API调用返回无效响应`);
 }
 
-export async function callApi_ACU(messages: any[], apiSettings: any, abortSignal: AbortSignal | null = null) {
-    // [新增] 获取剧情推进使用的API配置（支持API预设）
-    const apiPresetConfig = getApiConfigByPreset_ACU(settings_ACU.plotApiPreset);
-    const effectiveApiMode = apiPresetConfig.apiMode;
-    const effectiveApiConfig = apiPresetConfig.apiConfig;
-
-
-    logDebug_ACU(`[剧情推进] 使用API预设: ${settings_ACU.plotApiPreset || '当前配置'}, 模式: ${effectiveApiMode}`);
-
-    // 酒馆主 API（tavern / useMainApi）已剥离，恒走自定义 API（流式传输）
-    if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
-        throw new Error('自定义API的URL或模型未配置。');
-    }
-
-    const requestBody = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig);
-
-    const response = await fetch('/api/backends/chat-completions/generate', {
-        method: 'POST',
-        headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-        signal: abortSignal,
-    });
-
-
-    if (!response.ok) {
-        const errTxt = await response.text();
-        throw new Error(`API请求失败: ${response.status} ${errTxt}`);
-    }
-
-    // 根据streamingEnabled设置选择响应处理方式
-    const content = await handleApiResponse_ACU(response, abortSignal);
-    if (content) {
-        return content.trim();
-    }
-
-
-    throw new Error(`API调用返回无效响应`);
-}
-
-
 export function getApiConfigByPreset_ACU(presetName: string) {
     // 委托 service 单一权威解析：空名返回当前配置；悬挂引用返回 resolved=false 并告警。
     const resolved = resolveApiConfigByPreset_ACU(presetName);
@@ -178,25 +138,6 @@ export function getApiConfigByPreset_ACU(presetName: string) {
       tavernProfile: resolved.tavernProfile,
     };
 }
-
-
-export async function callCustomOpenAI_ACU_Direct(messages: any[]) {
-      // Reuse the logic from callCustomOpenAI_ACU but bypass the prompt replacement part
-      // ... For brevity, I will just call callCustomOpenAI_ACU with a hacked dynamicContent?
-      // No, callCustomOpenAI_ACU relies on settings_ACU.charCardPrompt.
-      // I should refactor callCustomOpenAI_ACU to accept direct messages, or duplicate the API calling part.
-
-      // Duplicating API calling logic for safety and isolation（酒馆主 API 已剥离，恒走自定义 API）
-      if (!settings_ACU.apiConfig.url || !settings_ACU.apiConfig.model) {
-          throw new Error('自定义API的URL或模型未配置。');
-      }
-      const requestBody = buildCustomApiRequestBody_ACU(messages, settings_ACU.apiConfig, { stripModelPrefix: false });
-      const res = await fetch('/api/backends/chat-completions/generate', { method: 'POST', headers: {...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json'}, body: JSON.stringify(requestBody) });
-      // 根据streamingEnabled设置选择响应处理方式
-      const content = await handleApiResponse_ACU(res);
-      return content;
-  }
-
 
 /**
  * 通用 AI 调用（支持指定 API 预设名称）
@@ -241,16 +182,5 @@ export async function callAIWithPreset_ACU(messages: any[], presetName: string =
 
     const content = await handleApiResponse_ACU(res, signal);
     return content ? content.trim() : null;
-}
-
-/**
- * 若 signal 已 abort 则抛出 AbortError，用于宿主 gateway 调用（无法强制中断）返回后立即检查。
- */
-function assertNotAborted_ACU(signal?: AbortSignal | null): void {
-  if (signal?.aborted) {
-    const err = new Error('请求已取消');
-    (err as any).name = 'AbortError';
-    throw err;
-  }
 }
 

@@ -19,8 +19,6 @@ vi.mock('../../../src/shared/utils', () => ({
 }));
 
 import {
-  isConnectionManagerAvailable_ACU,
-  sendConnectionManagerRequest_ACU,
   getConnectionManagerProfiles_ACU,
   getHostRequestHeaders_ACU,
 } from '../../../src/data/gateways/ai-gateway';
@@ -28,32 +26,6 @@ import {
 beforeEach(() => {
   vi.clearAllMocks();
   Object.keys(mockSillyTavern).forEach(k => delete mockSillyTavern[k]);
-});
-
-describe('isConnectionManagerAvailable_ACU', () => {
-  it('不可用返回 false', () => {
-    expect(isConnectionManagerAvailable_ACU()).toBe(false);
-  });
-
-  it('可用返回 true', () => {
-    mockSillyTavern.ConnectionManagerRequestService = { sendRequest: vi.fn() };
-    expect(isConnectionManagerAvailable_ACU()).toBe(true);
-  });
-});
-
-describe('sendConnectionManagerRequest_ACU', () => {
-  it('不可用时抛错', async () => {
-    await expect(sendConnectionManagerRequest_ACU('profile1', [], 100)).rejects.toThrow('ConnectionManagerRequestService');
-  });
-
-  it('可用时调用并返回结果', async () => {
-    const response = { choices: [{ message: { content: '回复' } }] };
-    mockSillyTavern.ConnectionManagerRequestService = {
-      sendRequest: vi.fn().mockResolvedValue(response),
-    };
-    const result = await sendConnectionManagerRequest_ACU('profile1', [{ role: 'user', content: '你好' }], 100);
-    expect(result).toEqual(response);
-  });
 });
 
 describe('getConnectionManagerProfiles_ACU', () => {

@@ -10,8 +10,7 @@ import { settings_ACU } from '../../service/runtime/state-manager';
 // toast 相关状态
 export const ACU_TOAST_TITLE_ACU = 'SP·数据库';
 export const _acuToastDedup_ACU = new Map<string, number>(); // key -> ts
-export let _acuToastStyleInjected_ACU = false;
-export function _set__acuToastStyleInjected_ACU(v: any) { _acuToastStyleInjected_ACU = v; }
+let _acuToastStyleInjected_ACU = false;
 
 function ensureAcuToastStylesInjected_ACU() {
   if (_acuToastStyleInjected_ACU) return;

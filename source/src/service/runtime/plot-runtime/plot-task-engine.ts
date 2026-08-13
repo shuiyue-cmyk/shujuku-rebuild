@@ -4,7 +4,7 @@
  * 从 helpers-plot-runtime.ts 拆出（L532-L1023 + L1513-L1618）
  */
 import { DEFAULT_PLOT_SETTINGS_ACU } from '../../../shared/defaults-json.js';
-import { callApi_ACU, callApiWithPlotPreset_ACU, getApiConfigByPreset_ACU } from '../../ai/api-call';
+import { callApiWithPlotPreset_ACU, getApiConfigByPreset_ACU } from '../../ai/api-call';
 import { abortController_ACU, currentChatFileIdentifier_ACU, currentJsonTableData_ACU, planningGuard_ACU, settings_ACU, tempPlotToSave_ACU, _set_tempPlotToSave_ACU, _set_currentJsonTableData_ACU, _set_pendingFinalGenerationGreenlights_ACU } from '../state-manager';
 import { getCurrentCharacterWorldbookBinding_ACU } from '../../../data/gateways/character-gateway';
 import { getChatArray_ACU } from '../../../data/gateways/chat-gateway';

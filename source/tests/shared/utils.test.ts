@@ -34,14 +34,11 @@ vi.mock('../../src/shared/json-helpers', () => ({
 import {
   cleanChatName_ACU,
   deepMerge_ACU,
-  lightenDarkenColor_ACU,
-  getContrastYIQ_ACU,
   escapeRegExp_ACU,
   hashUserInput_ACU,
   normalizeNonNegativeInteger_ACU,
   normalizePositiveInteger_ACU,
   isSummaryOrOutlineTable_ACU,
-  isStandardTable_ACU,
   buildBoundaryRulesFromLegacyTags_ACU,
   normalizeExcludeRules_ACU,
   stripSeedRowsFromTemplate_ACU,
@@ -132,55 +129,6 @@ describe('deepMerge_ACU', () => {
     const source = { b: 2 };
     deepMerge_ACU(target, source);
     expect(target).toEqual({ a: 1 });
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════
-// lightenDarkenColor_ACU
-// ═══════════════════════════════════════════════════════════════
-describe('lightenDarkenColor_ACU', () => {
-  it('加亮颜色', () => {
-    const result = lightenDarkenColor_ACU('#000000', 50);
-    expect(result).toMatch(/^#[0-9a-f]{6}$/);
-    expect(result).not.toBe('#000000');
-  });
-
-  it('减暗颜色', () => {
-    const result = lightenDarkenColor_ACU('#ffffff', -50);
-    expect(result).toMatch(/^#[0-9a-f]{6}$/);
-    expect(result).not.toBe('#ffffff');
-  });
-
-  it('不超过 255 上限', () => {
-    const result = lightenDarkenColor_ACU('#ffffff', 100);
-    expect(result).toBe('#ffffff');
-  });
-
-  it('不低于 0 下限', () => {
-    const result = lightenDarkenColor_ACU('#000000', -100);
-    expect(result).toBe('#000000');
-  });
-
-  it('无 # 前缀也能处理', () => {
-    const result = lightenDarkenColor_ACU('ff0000', 10);
-    expect(result).not.toContain('#');
-  });
-});
-
-// ═══════════════════════════════════════════════════════════════
-// getContrastYIQ_ACU
-// ═══════════════════════════════════════════════════════════════
-describe('getContrastYIQ_ACU', () => {
-  it('深色背景返回白色前景', () => {
-    expect(getContrastYIQ_ACU('#000000')).toBe('#FFFFFF');
-  });
-
-  it('浅色背景返回黑色前景', () => {
-    expect(getContrastYIQ_ACU('#ffffff')).toBe('#000000');
-  });
-
-  it('无 # 前缀也能处理', () => {
-    expect(getContrastYIQ_ACU('000000')).toBe('#FFFFFF');
   });
 });
 
@@ -349,16 +297,6 @@ describe('isSummaryOrOutlineTable_ACU', () => {
 
   it('前后空格被 trim', () => {
     expect(isSummaryOrOutlineTable_ACU('  总结表  ')).toBe(true);
-  });
-});
-
-describe('isStandardTable_ACU', () => {
-  it('普通表名返回 true', () => {
-    expect(isStandardTable_ACU('背包物品表')).toBe(true);
-  });
-
-  it('总结表返回 false', () => {
-    expect(isStandardTable_ACU('总结表')).toBe(false);
   });
 });
 
