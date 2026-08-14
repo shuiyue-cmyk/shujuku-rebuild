@@ -36,7 +36,7 @@
     <div class="acu-api-config-panel__behavior">
       <AcuToggle
         :model-value="streamingEnabled"
-        label="开启流式输出"
+        label="流式输出"
         description="开启后 AI 响应以流式方式输出（用于对话类调用）。"
         @update:model-value="setStreamingEnabled"
       />
