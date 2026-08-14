@@ -1081,7 +1081,11 @@ export async function callOpenAICompatible(settings, payload, systemPrompt = DEF
   }
   const body = {
     model,
-    temperature: 0.2,
+    // 采样参数：优先数据库主配置（适配层同步进 settings.temperature/maxTokens），无则回退默认 0.2
+    temperature: pickFiniteNumber(settings.temperature, 0.2),
+    ...(Number.isFinite(Number(settings.maxTokens)) && Number(settings.maxTokens) > 0
+      ? { max_tokens: Math.max(1, Math.floor(Number(settings.maxTokens))) }
+      : {}),
     ...stPresetSampling,
     messages: effectiveMessages,
     ...(useResponseFormat ? { response_format: { type: 'json_object' } } : {}),

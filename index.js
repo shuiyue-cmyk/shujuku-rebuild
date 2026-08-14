@@ -100363,7 +100363,11 @@ async function callOpenAICompatible(settings, payload, systemPrompt = DEFAULT_SY
     }
     const body = {
         model,
-        temperature: 0.2,
+        // 采样参数：优先数据库主配置（适配层同步进 settings.temperature/maxTokens），无则回退默认 0.2
+        temperature: pickFiniteNumber(settings.temperature, 0.2),
+        ...(Number.isFinite(Number(settings.maxTokens)) && Number(settings.maxTokens) > 0
+            ? { max_tokens: Math.max(1, Math.floor(Number(settings.maxTokens))) }
+            : {}),
         ...stPresetSampling,
         messages: effectiveMessages,
         ...(useResponseFormat ? { response_format: { type: 'json_object' } } : {}),
@@ -110476,10 +110480,15 @@ function getBiotrackerSettings(ctx) {
     const settings = getSettings(ctx);
     const presetName = String(settings.apiPreset || '').trim();
     const resolved = presetName ? resolveApiConfigByPreset_ACU(presetName) : null;
-    const cfg = resolved?.apiConfig || settings_ACU.apiConfig || {};
-    settings.apiUrl = cfg.url || settings.apiUrl || '';
-    settings.apiKey = cfg.apiKey || settings.apiKey || '';
-    settings.model = cfg.model || settings.model || '';
+    const presetCfg = resolved?.apiConfig || {};
+    const mainCfg = settings_ACU.apiConfig || {};
+    const cfg = presetName ? presetCfg : mainCfg;
+    settings.apiUrl = cfg.url || mainCfg.url || settings.apiUrl || '';
+    settings.apiKey = cfg.apiKey || mainCfg.apiKey || settings.apiKey || '';
+    settings.model = cfg.model || mainCfg.model || settings.model || '';
+    // 温度/max token 采用数据库保存的（选中预设时预设值优先，缺字段回退主配置）
+    settings.temperature = Number.isFinite(Number(cfg.temperature)) ? Number(cfg.temperature) : Number(mainCfg.temperature);
+    settings.maxTokens = Number.isFinite(Number(cfg.max_tokens)) ? Number(cfg.max_tokens) : Number(mainCfg.max_tokens);
     return settings;
 }
 // ═══════════════════════════════════════════════════════════════

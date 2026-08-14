@@ -45,10 +45,15 @@ function getBiotrackerSettings(ctx: BiotrackerCtx_ACU): any {
   const settings = getSettings(ctx);
   const presetName = String(settings.apiPreset || '').trim();
   const resolved = presetName ? resolveApiConfigByPreset_ACU(presetName) : null;
-  const cfg = resolved?.apiConfig || settings_ACU.apiConfig || {};
-  settings.apiUrl = cfg.url || settings.apiUrl || '';
-  settings.apiKey = cfg.apiKey || settings.apiKey || '';
-  settings.model = cfg.model || settings.model || '';
+  const presetCfg = resolved?.apiConfig || {};
+  const mainCfg = settings_ACU.apiConfig || {};
+  const cfg = presetName ? presetCfg : mainCfg;
+  settings.apiUrl = cfg.url || mainCfg.url || settings.apiUrl || '';
+  settings.apiKey = cfg.apiKey || mainCfg.apiKey || settings.apiKey || '';
+  settings.model = cfg.model || mainCfg.model || settings.model || '';
+  // 温度/max token 采用数据库保存的（选中预设时预设值优先，缺字段回退主配置）
+  settings.temperature = Number.isFinite(Number(cfg.temperature)) ? Number(cfg.temperature) : Number(mainCfg.temperature);
+  settings.maxTokens = Number.isFinite(Number(cfg.max_tokens)) ? Number(cfg.max_tokens) : Number(mainCfg.max_tokens);
   return settings;
 }
 
