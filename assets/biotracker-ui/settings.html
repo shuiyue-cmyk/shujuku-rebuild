@@ -35,6 +35,10 @@
                 <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--json" aria-hidden="true"></span>
                 <span class="bs-bt-home-tile__label">表格</span>
               </button>
+              <button class="bs-bt-home-tile" type="button" data-nav-view="theme">
+                <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--theme" aria-hidden="true"></span>
+                <span class="bs-bt-home-tile__label">主题</span>
+              </button>
             </div>
           </div>
         </section>
@@ -104,6 +108,43 @@
             </div>
           </div>
         </section>
+
+        <section id="bs-bt-view-theme" class="bs-bt-view" data-view="theme">
+          <div class="bs-bt-panel">
+            <div class="bs-bt-section-title">显示尺寸</div>
+            <div class="bs-bt-size-options" id="bs-bt-size-options">
+              <button type="button" class="bs-bt-size-option" data-device-size-option="phone">手机</button>
+              <button type="button" class="bs-bt-size-option" data-device-size-option="tablet">平板</button>
+            </div>
+
+            <hr class="sysHR" />
+
+            <div class="bs-bt-section-title">字体大小</div>
+            <div class="bs-bt-size-options" id="bs-bt-font-size-options">
+              <button type="button" class="bs-bt-size-option" data-font-size-option="compact">小</button>
+              <button type="button" class="bs-bt-size-option" data-font-size-option="standard">标准</button>
+              <button type="button" class="bs-bt-size-option" data-font-size-option="large">大</button>
+            </div>
+
+            <hr class="sysHR" />
+
+            <div class="bs-bt-section-title">主题风格</div>
+            <div class="bs-bt-theme-list" id="bs-bt-theme-list">
+              <button type="button" class="bs-bt-theme-option" data-theme-option="retro">1. 仿真 (Retro)</button>
+              <button type="button" class="bs-bt-theme-option" data-theme-option="cultivation">2. 修仙 (Jade)</button>
+              <button type="button" class="bs-bt-theme-option" data-theme-option="fantasy">3. 奇幻 (Fantasy)</button>
+              <button type="button" class="bs-bt-theme-option" data-theme-option="cyber-egypt">4. 埃及 (Cyber)</button>
+              <button type="button" class="bs-bt-theme-option" data-theme-option="wasteland">5. 废土 (Pip-Boy)</button>
+              <button type="button" class="bs-bt-theme-option" data-theme-option="sakura">6. 樱花 (Modern)</button>
+              <button type="button" class="bs-bt-theme-option" data-theme-option="holo">7. 全息 (Holo)</button>
+              <button type="button" class="bs-bt-theme-option" data-theme-option="gothic">8. 哥特 (Gothic)</button>
+              <button type="button" class="bs-bt-theme-option" data-theme-option="steampunk">9. 蒸汽 (Steam)</button>
+              <button type="button" class="bs-bt-theme-option" data-theme-option="eldritch">10. 克系 (Eldritch)</button>
+              <button type="button" class="bs-bt-theme-option" data-theme-option="ink">11. 水墨 (Ink)</button>
+              <button type="button" class="bs-bt-theme-option" data-theme-option="constructivism">12. 建构 (Construct)</button>
+            </div>
+          </div>
+        </section>
       </div>
 
       <div id="bs-bt-power-off-screen" class="bs-bt-power-off-overlay">
@@ -118,6 +159,14 @@
         aria-hidden="true">
         <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
         <polyline points="9 22 9 12 15 12 15 22"></polyline>
+      </svg>
+    </button>
+    <button id="bs-bt-close" class="bs-bt-physical-button bs-bt-physical-button-off" type="button" title="CLOSE"
+      aria-label="CLOSE">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"
+        aria-hidden="true">
+        <path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path>
+        <line x1="12" y1="2" x2="12" y2="12"></line>
       </svg>
     </button>
   </div>

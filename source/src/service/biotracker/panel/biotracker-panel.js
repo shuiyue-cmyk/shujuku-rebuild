@@ -5267,6 +5267,9 @@ function applyTheme(settings) {
   document.querySelectorAll('#bs-biotracker-settings [data-font-size-option]').forEach((node) => {
     node.classList.toggle('is-active', String(node.dataset.fontSizeOption || 'standard') === fontSize);
   });
+  document.querySelectorAll('#bs-biotracker-settings [data-theme-option]').forEach((node) => {
+    node.classList.toggle('is-active', String(node.dataset.themeOption || '') === String(settings.theme || ''));
+  });
   const brand = document.getElementById('bs-bt-brand');
   if (brand) brand.textContent = 'Bastneth Pager';
   updateBatteryIndicator(settings);
@@ -7443,7 +7446,7 @@ async function bootstrap() {
     installSafeToastr();
     ensurePanelStyles();
     await ensureModal(ctx);
-    // 生理追踪恒开启 → 弹窗默认打开（顶层 DOM 渲染，无 iframe）
+    // 生理追踪恒开启 → 手机前端默认打开（close 物理按钮可收起成小悬浮球，点球再展开）
     openModal(ctx);
     renderStatusPanel(ctx);
     // 纯渲染轮询：追踪核心由数据库适配层单实例驱动，面板只定时刷新视图
