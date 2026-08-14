@@ -2326,69 +2326,65 @@ function stripSeedRowsFromTemplate_ACU(templateObj) {
     });
     return templateObj;
 }
+// [修复2026-03-06] 处理 DEFAULT_TABLE_TEMPLATE_ACU 的双重 JSON 编码问题
+function escapeStringForJson_ACU(str) {
+    return str
+        .replace(/\\/g, '\\\\')
+        .replace(/"/g, '\\"')
+        .replace(/\n/g, '\\n')
+        .replace(/\r/g, '\\r')
+        .replace(/\t/g, '\\t');
+}
+// 双引号包围的模板解析（方案1：直接解析；方案2：转义控制字符后重解析）
+function tryParseQuotedTemplate_ACU(cleanTemplate, parseFn) {
+    if (!(cleanTemplate.startsWith('"') && cleanTemplate.endsWith('"')))
+        return null;
+    try {
+        // 方案1：尝试直接解析
+        try {
+            const unquoted = JSON.parse(cleanTemplate);
+            if (typeof unquoted === 'string') {
+                const obj = parseFn(unquoted);
+                if (obj)
+                    return obj;
+            }
+            else if (typeof unquoted === 'object' && unquoted !== null) {
+                return unquoted;
+            }
+        }
+        catch (e1) {
+            // 方案1失败，继续方案2
+        }
+        // 方案2：转义控制字符后再解析
+        const innerContent = cleanTemplate.slice(1, -1);
+        const escapedContent = escapeStringForJson_ACU(innerContent);
+        const rewrapped = '"' + escapedContent + '"';
+        try {
+            const unquoted = JSON.parse(rewrapped);
+            if (typeof unquoted === 'string') {
+                const obj = parseFn(unquoted);
+                if (obj)
+                    return obj;
+            }
+            else if (typeof unquoted === 'object' && unquoted !== null) {
+                return unquoted;
+            }
+        }
+        catch (e2) {
+            // 方案2失败
+        }
+    }
+    catch (e) {
+        // 双引号格式处理失败
+    }
+    return null;
+}
 function parseTableTemplateJson_ACU({ stripSeedRows = false } = {}) {
     try {
         let cleanTemplate = TABLE_TEMPLATE_ACU.trim();
         const parseTemplateJson = (str) => safeJsonParseWithJsoncComments_ACU(str, null);
-        // [修复2026-03-06] 处理DEFAULT_TABLE_TEMPLATE_ACU的双重JSON编码问题
-        function escapeStringForJson_ACU(str) {
-            return str
-                .replace(/\\/g, '\\\\')
-                .replace(/"/g, '\\"')
-                .replace(/\n/g, '\\n')
-                .replace(/\r/g, '\\r')
-                .replace(/\t/g, '\\t');
-        }
-        let obj = null;
-        // 如果模板字符串以双引号开头和结尾，说明是被引号包围的JSON字符串
-        if (cleanTemplate.startsWith('"') && cleanTemplate.endsWith('"')) {
-            try {
-                // 方案1：尝试直接解析
-                try {
-                    const unquoted = JSON.parse(cleanTemplate);
-                    if (typeof unquoted === 'string') {
-                        obj = parseTemplateJson(unquoted);
-                        if (obj)
-                            return stripSeedRows ? stripSeedRowsFromTemplate_ACU(obj) : obj;
-                    }
-                    else if (typeof unquoted === 'object' && unquoted !== null) {
-                        return stripSeedRows ? stripSeedRowsFromTemplate_ACU(unquoted) : unquoted;
-                    }
-                }
-                catch (e1) {
-                    // 方案1失败，继续方案2
-                }
-                // 方案2：转义控制字符后再解析
-                const innerContent = cleanTemplate.slice(1, -1);
-                const escapedContent = escapeStringForJson_ACU(innerContent);
-                const rewrapped = '"' + escapedContent + '"';
-                try {
-                    const unquoted = JSON.parse(rewrapped);
-                    if (typeof unquoted === 'string') {
-                        obj = parseTemplateJson(unquoted);
-                        if (obj)
-                            return stripSeedRows ? stripSeedRowsFromTemplate_ACU(obj) : obj;
-                        try {
-                            obj = parseTemplateJson(unquoted);
-                            if (obj)
-                                return stripSeedRows ? stripSeedRowsFromTemplate_ACU(obj) : obj;
-                        }
-                        catch (e3) {
-                            // fallback 也失败
-                        }
-                    }
-                    else if (typeof unquoted === 'object' && unquoted !== null) {
-                        return stripSeedRows ? stripSeedRowsFromTemplate_ACU(unquoted) : unquoted;
-                    }
-                }
-                catch (e2) {
-                    // 方案2失败
-                }
-            }
-            catch (e) {
-                // 双引号格式处理失败
-            }
-        }
+        // 双引号包围分支（方案1/方案2）
+        let obj = tryParseQuotedTemplate_ACU(cleanTemplate, parseTemplateJson);
         // 常规解析
         if (!obj) {
             obj = parseTemplateJson(cleanTemplate);
@@ -85803,1160 +85799,6 @@ function moveCurrentPlotTask_ACU(direction) {
 }
 
 /**
- * presentation/components/worldbook-selector.ts — 世界书选择 UI
- * 从 features/worldbook/01~03 + 04 迁移而来
- */
-async function updateWorldbookSourceView_ACU() {
-    if (!$popupInstance_ACU)
-        return;
-    const worldbookConfig = getCurrentWorldbookConfig_ACU();
-    const source = worldbookConfig.source;
-    const $manualBlock = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-manual-select-block`);
-    if (source === 'manual') {
-        $manualBlock.slideDown();
-        await populateWorldbookList_ACU();
-    }
-    else {
-        $manualBlock.slideUp();
-    }
-    await populateWorldbookEntryList_ACU();
-}
-// =========================
-// [剧情推进] 世界书选择 UI（独立于填表 worldbookConfig）
-// 复用现有加载逻辑，但使用不同的 DOM id 与不同的配置对象
-// =========================
-function getPlotWorldbookConfig_ACU() {
-    if (!settings_ACU.plotSettings)
-        settings_ACU.plotSettings = JSON.parse(JSON.stringify(DEFAULT_PLOT_SETTINGS_ACU));
-    if (!settings_ACU.plotSettings.plotWorldbookConfig) {
-        settings_ACU.plotSettings.plotWorldbookConfig = buildDefaultPlotWorldbookConfig_ACU();
-    }
-    return settings_ACU.plotSettings.plotWorldbookConfig;
-}
-async function updatePlotWorldbookSourceView_ACU() {
-    if (!$popupInstance_ACU)
-        return;
-    const cfg = getPlotWorldbookConfig_ACU();
-    const source = cfg.source;
-    const $manualBlock = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-worldbook-manual-select-block`);
-    if (source === 'manual') {
-        $manualBlock.slideDown();
-        await populatePlotWorldbookList_ACU();
-    }
-    else {
-        $manualBlock.slideUp();
-    }
-    await populatePlotWorldbookEntryList_ACU();
-}
-async function populatePlotWorldbookList_ACU() {
-    if (!$popupInstance_ACU)
-        return;
-    const $listContainer = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-worldbook-select`);
-    if (!$listContainer.length)
-        return;
-    $listContainer.empty().html('<em>正在加载...</em>');
-    try {
-        const bookNames = await getWorldbookNames_ACU();
-        $listContainer.empty();
-        if (bookNames.length === 0) {
-            $listContainer.html('<em>未找到世界书</em>');
-            return;
-        }
-        const cfg = getPlotWorldbookConfig_ACU();
-        bookNames.forEach((bookName) => {
-            const isSelected = (cfg.manualSelection || []).includes(bookName);
-            const itemHtml = `
-                  <div class="qrf_worldbook_list_item ${isSelected ? 'selected' : ''}" data-book-name="${escapeHtml_ACU$1(bookName)}">
-                      ${escapeHtml_ACU$1(bookName)}
-                  </div>`;
-            $listContainer.append(itemHtml);
-        });
-        // 应用筛选（若存在）
-        try {
-            const $filter = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-worldbook-select-filter`);
-            if ($filter.length)
-                applyWorldbookListFilter_ACU($listContainer, $filter.val());
-        }
-        catch (e) { }
-    }
-    catch (error) {
-        logError_ACU('[剧情推进] 加载手动世界书列表失败:', { phase: 'plot_worldbook_list', error: { category: 'unknown' } });
-        $listContainer.html('<em>加载失败</em>');
-    }
-}
-async function populatePlotWorldbookEntryList_ACU() {
-    if (!$popupInstance_ACU)
-        return;
-    const $list = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-worldbook-entry-list`);
-    if (!$list.length)
-        return;
-    $list.empty().html('<em>正在加载条目...</em>');
-    const cfg = getPlotWorldbookConfig_ACU();
-    const source = cfg.source;
-    let bookNames = [];
-    try {
-        if (source === 'character') {
-            bookNames = (await getCurrentCharacterWorldbookBinding_ACU()).orderedNames;
-        }
-        else if (source === 'manual') {
-            bookNames = cfg.manualSelection || [];
-        }
-    }
-    catch (error) {
-        logError_ACU('[剧情推进] 读取角色绑定世界书失败:', { phase: 'plot_character_binding', error: { category: 'unknown' } });
-        $list.html('<em>加载条目失败。</em>');
-        return;
-    }
-    bookNames = [...new Set((Array.isArray(bookNames) ? bookNames : []).filter(Boolean))];
-    if (bookNames.length === 0) {
-        $list.html('<em>请先选择世界书或为角色绑定世界书。</em>');
-        return;
-    }
-    try {
-        if (!cfg.enabledEntries)
-            cfg.enabledEntries = {};
-        const entriesMap = await getLorebookEntriesByNames_ACU(bookNames);
-        const groups = [];
-        const expandByDefault = bookNames.length === 1;
-        let settingsChanged = false;
-        for (const bookName of bookNames) {
-            const bookEntries = Array.isArray(entriesMap[bookName]) ? entriesMap[bookName] : [];
-            if (typeof cfg.enabledEntries[bookName] === 'undefined') {
-                // 默认启用时：仅对"非数据库生成条目"做默认勾选（数据库生成条目不在UI显示，也不需要用户勾选）
-                cfg.enabledEntries[bookName] = bookEntries.filter((entry) => {
-                    const comment = entry?.comment || entry?.name || '';
-                    let normalizedComment = String(comment).replace(/^ACU-\[[^\]]+\]-/, '');
-                    normalizedComment = normalizedComment.replace(/^外部导入-(?:[^-]+-)?/, '');
-                    // UI 不显示：数据库生成条目（含隔离/外部导入前缀），以及 OutlineTable
-                    if (normalizedComment.startsWith('TavernDB-ACU-OutlineTable'))
-                        return false;
-                    const isDbGenerated = normalizedComment.startsWith('TavernDB-ACU-') ||
-                        normalizedComment.startsWith('重要人物条目') ||
-                        normalizedComment.startsWith('总结条目') ||
-                        normalizedComment.startsWith('小总结条目');
-                    if (isDbGenerated)
-                        return false;
-                    if (isEntryBlocked_ACU(entry))
-                        return false;
-                    return true;
-                })
-                    .map((entry) => entry.uid);
-                settingsChanged = true;
-            }
-            const enabledEntries = Array.isArray(cfg.enabledEntries[bookName]) ? cfg.enabledEntries[bookName] : [];
-            const visibleEntries = [];
-            bookEntries.forEach((entry) => {
-                const comment = entry?.comment || entry?.name || '';
-                let normalizedComment = String(comment).replace(/^ACU-\[[^\]]+\]-/, '');
-                normalizedComment = normalizedComment.replace(/^外部导入-(?:[^-]+-)?/, '');
-                // UI 不显示：数据库生成条目（含隔离/外部导入前缀），以及 OutlineTable
-                if (normalizedComment.startsWith('TavernDB-ACU-OutlineTable'))
-                    return;
-                const isDbGenerated = normalizedComment.startsWith('TavernDB-ACU-') ||
-                    normalizedComment.startsWith('重要人物条目') ||
-                    normalizedComment.startsWith('总结条目') ||
-                    normalizedComment.startsWith('小总结条目');
-                if (isDbGenerated)
-                    return;
-                if (isEntryBlocked_ACU(entry))
-                    return;
-                visibleEntries.push({
-                    uid: entry.uid,
-                    bookName,
-                    label: entry.comment || `条目 ${entry.uid}`,
-                    searchText: `${bookName} ${entry.comment || entry.name || `条目 ${entry.uid}`}`,
-                    checked: enabledEntries.includes(entry.uid),
-                    disabled: !entry.enabled,
-                    checkboxId: buildWorldbookEntryCheckboxId_ACU('plot-wb-entry', bookName, entry.uid),
-                });
-            });
-            if (visibleEntries.length > 0) {
-                groups.push({
-                    bookName,
-                    entries: visibleEntries,
-                    expanded: expandByDefault,
-                });
-            }
-        }
-        if (settingsChanged) {
-            saveSettingsAndNotify_ACU();
-        }
-        renderLazyWorldbookEntryList_ACU($list, groups, {
-            checkboxIdPrefix: 'plot-wb-entry',
-            emptyText: '<em>所选世界书中无条目。</em>',
-        });
-        // 应用筛选（若存在）
-        try {
-            const $filter = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-worldbook-entry-filter`);
-            if ($filter.length)
-                applyWorldbookEntryFilter_ACU($list, $filter.val());
-        }
-        catch (e) { }
-    }
-    catch (error) {
-        logError_ACU('[剧情推进] 加载剧情世界书条目失败:', { phase: 'plot_worldbook_entries', error: { category: 'unknown' } });
-        $list.html('<em>加载条目失败。</em>');
-    }
-}
-// [新增] 填充注入目标选择器
-async function populateInjectionTargetSelector_ACU() {
-    if (!$popupInstance_ACU)
-        return;
-    const $select = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-injection-target`);
-    $select.empty();
-    try {
-        const bookNames = await getWorldbookNames_ACU();
-        // 添加默认选项
-        $select.append(`<option value="character">角色卡绑定世界书</option>`);
-        bookNames.forEach((bookName) => {
-            $select.append(`<option value="${escapeHtml_ACU$1(bookName)}">${escapeHtml_ACU$1(bookName)}</option>`);
-        });
-        // 设置当前选中的值
-        const worldbookConfig = getCurrentWorldbookConfig_ACU();
-        $select.val(worldbookConfig.injectionTarget || 'character');
-        // 应用筛选（若存在）
-        try {
-            const $filter = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-injection-target-filter`);
-            if ($filter.length)
-                applyWorldbookSelectFilter_ACU($select, $filter.val());
-        }
-        catch (e) { }
-    }
-    catch (error) {
-        logError_ACU('Failed to populate injection target selector:', error);
-        $select.append('<option value="character">加载列表失败</option>');
-    }
-}
-const WORLDBOOK_ENTRY_LAZY_PAGE_SIZE_ACU = 80;
-function buildWorldbookEntryCheckboxId_ACU(prefix, bookName, uid) {
-    const safePrefix = String(prefix || 'wb-entry').replace(/[^a-zA-Z0-9_-]+/g, '-');
-    const safeBook = String(bookName || 'book')
-        .replace(/[^a-zA-Z0-9_-]+/g, '-')
-        .replace(/^-+|-+$/g, '')
-        .slice(0, 48) || 'book';
-    return `${safePrefix}-${safeBook}-${uid}`;
-}
-function createLazyWorldbookEntryViewState_ACU(groups = [], options = {}) {
-    const normalizedGroups = (Array.isArray(groups) ? groups : []).map(group => ({
-        bookName: String(group?.bookName || ''),
-        entries: Array.isArray(group?.entries) ? group.entries.map((entry) => ({ ...entry })) : [],
-        filteredEntries: null,
-        loadedCount: 0,
-        expanded: group?.expanded === true,
-        expandedBeforeFilter: undefined,
-    })).filter((group) => group.bookName);
-    return {
-        groups: normalizedGroups,
-        pageSize: Number(options?.pageSize) > 0 ? Number(options.pageSize) : WORLDBOOK_ENTRY_LAZY_PAGE_SIZE_ACU,
-        checkboxIdPrefix: String(options?.checkboxIdPrefix || 'wb-entry'),
-        emptyText: options?.emptyText || '<em>所选世界书中无条目。</em>',
-        emptyGroupText: options?.emptyGroupText || '<em>当前分组没有可显示的条目。</em>',
-        isFiltering: false,
-    };
-}
-function getLazyWorldbookEntrySource_ACU(group) {
-    if (!group)
-        return [];
-    if (Array.isArray(group.filteredEntries))
-        return group.filteredEntries;
-    return Array.isArray(group.entries) ? group.entries : [];
-}
-function findLazyWorldbookEntryGroupState_ACU($list, bookName) {
-    if (!$list || !$list.length)
-        return null;
-    const state = $list.data('acuLazyWorldbookState');
-    if (!state || !Array.isArray(state.groups))
-        return null;
-    return state.groups.find((group) => String(group.bookName) === String(bookName)) || null;
-}
-function findLazyWorldbookEntryGroupElement_ACU($list, bookName) {
-    if (!$list || !$list.length)
-        return jQuery_API_ACU();
-    return $list.find('.qrf_worldbook_entry_group').filter(function () {
-        return String(jQuery_API_ACU(this).data('book-name') || '') === String(bookName);
-    }).first();
-}
-function updateLazyWorldbookEntryGroupMeta_ACU($list, bookName) {
-    if (!$list || !$list.length)
-        return;
-    const state = $list.data('acuLazyWorldbookState');
-    const group = findLazyWorldbookEntryGroupState_ACU($list, bookName);
-    const $group = findLazyWorldbookEntryGroupElement_ACU($list, bookName);
-    if (!state || !group || !$group.length)
-        return;
-    const sourceEntries = getLazyWorldbookEntrySource_ACU(group);
-    const loadedCount = Math.min(group.loadedCount || 0, sourceEntries.length);
-    const metaText = sourceEntries.length === 0
-        ? '0 条'
-        : (loadedCount < sourceEntries.length ? `已加载 ${loadedCount} / ${sourceEntries.length} 条` : `共 ${sourceEntries.length} 条`);
-    $group.find('.qrf_worldbook_entry_group_meta').text(metaText);
-    $group.find('.qrf_worldbook_entry_toggle').text(group.expanded ? '收起' : '展开');
-    $group.find('.qrf_worldbook_entry_group_body').toggle(group.expanded);
-    $group.find('.qrf_worldbook_entry_group_footer').toggle(group.expanded && sourceEntries.length > 0);
-    $group.find('.qrf_worldbook_entry_load_more').toggle(group.expanded && loadedCount < sourceEntries.length);
-}
-function renderLazyWorldbookEntryItems_ACU($list, bookName, options = {}) {
-    if (!$list || !$list.length)
-        return;
-    const state = $list.data('acuLazyWorldbookState');
-    const group = findLazyWorldbookEntryGroupState_ACU($list, bookName);
-    const $group = findLazyWorldbookEntryGroupElement_ACU($list, bookName);
-    if (!state || !group || !$group.length)
-        return;
-    const sourceEntries = getLazyWorldbookEntrySource_ACU(group);
-    if (options.reset === true) {
-        group.loadedCount = 0;
-    }
-    const nextCount = options.renderAll === true
-        ? sourceEntries.length
-        : Math.min(sourceEntries.length, (group.loadedCount || 0) + state.pageSize);
-    group.loadedCount = nextCount;
-    const visibleEntries = sourceEntries.slice(0, nextCount);
-    const html = visibleEntries.length > 0
-        ? visibleEntries.map((entry) => {
-            const checkboxId = entry.checkboxId || buildWorldbookEntryCheckboxId_ACU(state.checkboxIdPrefix, entry.bookName || bookName, entry.uid);
-            const labelText = entry.label || `条目 ${entry.uid}`;
-            const disabledStyle = entry.disabled ? 'style="opacity:0.6; text-decoration: line-through;"' : '';
-            return `
-                  <div class="qrf_worldbook_entry_item" data-book-name="${escapeHtml_ACU$1(String(entry.bookName || bookName))}" data-entry-uid="${escapeHtml_ACU$1(String(entry.uid ?? ''))}">
-                      <input type="checkbox" id="${escapeHtml_ACU$1(String(checkboxId))}" data-book="${escapeHtml_ACU$1(String(entry.bookName || bookName))}" data-uid="${escapeHtml_ACU$1(String(entry.uid ?? ''))}" ${entry.checked ? 'checked' : ''} ${entry.disabled ? 'disabled' : ''}>
-                      <label for="${escapeHtml_ACU$1(String(checkboxId))}" ${disabledStyle}>${escapeHtml_ACU$1(String(labelText))}</label>
-                  </div>`;
-        }).join('')
-        : state.emptyGroupText;
-    $group.find('.qrf_worldbook_entry_group_body').html(html);
-    updateLazyWorldbookEntryGroupMeta_ACU($list, bookName);
-}
-function renderLazyWorldbookEntryList_ACU($list, groups, options = {}) {
-    if (!$list || !$list.length)
-        return;
-    const state = createLazyWorldbookEntryViewState_ACU(groups, options);
-    $list.data('acuLazyWorldbookState', state);
-    if (!state.groups.length) {
-        $list.html(state.emptyText);
-        return;
-    }
-    const html = state.groups.map((group) => `
-          <div class="qrf_worldbook_entry_group" data-book-name="${escapeHtml_ACU$1(group.bookName)}" style="margin-bottom: 8px;">
-              <div class="qrf_worldbook_entry_header" data-book-name="${escapeHtml_ACU$1(group.bookName)}" style="display: flex; align-items: center; gap: 8px; margin-bottom: 5px; font-weight: bold; border-bottom: 1px solid; padding-bottom: 4px;">
-                  <button type="button" class="qrf_worldbook_entry_toggle button" style="padding: 2px 8px; font-size: 0.8em;">${group.expanded ? '收起' : '展开'}</button>
-                  <span class="qrf_worldbook_entry_header_text" style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml_ACU$1(group.bookName)}</span>
-                  <span class="qrf_worldbook_entry_group_meta" style="font-weight: normal; font-size: 0.85em; color: var(--text_secondary);"></span>
-              </div>
-              <div class="qrf_worldbook_entry_group_body" style="display: ${group.expanded ? 'block' : 'none'};"></div>
-              <div class="qrf_worldbook_entry_group_footer" style="display: ${group.expanded ? 'block' : 'none'}; margin-top: 6px;">
-                  <button type="button" class="qrf_worldbook_entry_load_more button" style="padding: 2px 8px; font-size: 0.8em; display: none;">继续加载</button>
-              </div>
-          </div>`).join('');
-    $list.html(html);
-    state.groups.forEach((group) => {
-        if (group.expanded) {
-            renderLazyWorldbookEntryItems_ACU($list, group.bookName, { reset: true });
-        }
-        else {
-            updateLazyWorldbookEntryGroupMeta_ACU($list, group.bookName);
-        }
-    });
-}
-function toggleLazyWorldbookEntryGroup_ACU($list, bookName, expanded = null) {
-    if (!$list || !$list.length)
-        return;
-    const group = findLazyWorldbookEntryGroupState_ACU($list, bookName);
-    if (!group)
-        return;
-    const nextExpanded = (typeof expanded === 'boolean') ? expanded : !group.expanded;
-    group.expanded = nextExpanded;
-    if (group.expanded && (group.loadedCount || 0) === 0) {
-        renderLazyWorldbookEntryItems_ACU($list, bookName, { reset: true });
-    }
-    else {
-        updateLazyWorldbookEntryGroupMeta_ACU($list, bookName);
-    }
-}
-function updateLazyWorldbookEntryCheckedState_ACU($list, bookName, uid, checked) {
-    const group = findLazyWorldbookEntryGroupState_ACU($list, bookName);
-    if (!group)
-        return;
-    const syncCheckedState = (entries) => {
-        if (!Array.isArray(entries))
-            return;
-        entries.forEach(entry => {
-            if (String(entry?.uid) === String(uid)) {
-                entry.checked = checked;
-            }
-        });
-    };
-    syncCheckedState(group.entries);
-    syncCheckedState(group.filteredEntries);
-}
-function applyLazyWorldbookEntryFilter_ACU($list, rawQuery) {
-    if (!$list || !$list.length)
-        return false;
-    const state = $list.data('acuLazyWorldbookState');
-    if (!state || !Array.isArray(state.groups))
-        return false;
-    const q = normalizeFilterText_ACU(rawQuery);
-    const wasFiltering = state.isFiltering === true;
-    if (q && !wasFiltering) {
-        state.groups.forEach((group) => {
-            group.expandedBeforeFilter = group.expanded;
-        });
-    }
-    if (!q) {
-        state.isFiltering = false;
-        state.groups.forEach((group) => {
-            group.filteredEntries = null;
-            group.loadedCount = 0;
-            if (typeof group.expandedBeforeFilter === 'boolean') {
-                group.expanded = group.expandedBeforeFilter;
-            }
-            group.expandedBeforeFilter = undefined;
-            const $group = findLazyWorldbookEntryGroupElement_ACU($list, group.bookName);
-            if ($group.length)
-                $group.show();
-            if (group.expanded) {
-                renderLazyWorldbookEntryItems_ACU($list, group.bookName, { reset: true });
-            }
-            else {
-                updateLazyWorldbookEntryGroupMeta_ACU($list, group.bookName);
-            }
-        });
-        return true;
-    }
-    state.isFiltering = true;
-    state.groups.forEach((group) => {
-        const bookText = String(group.bookName || '').toLowerCase();
-        if (bookText.includes(q)) {
-            group.filteredEntries = Array.isArray(group.entries) ? group.entries.slice() : [];
-        }
-        else {
-            group.filteredEntries = (Array.isArray(group.entries) ? group.entries : []).filter((entry) => {
-                const hay = String(entry.searchText || entry.label || `条目 ${entry.uid}`).toLowerCase();
-                return hay.includes(q);
-            });
-        }
-        const sourceEntries = getLazyWorldbookEntrySource_ACU(group);
-        const $group = findLazyWorldbookEntryGroupElement_ACU($list, group.bookName);
-        group.loadedCount = 0;
-        group.expanded = sourceEntries.length > 0;
-        if ($group.length)
-            $group.toggle(sourceEntries.length > 0);
-        if (sourceEntries.length > 0) {
-            renderLazyWorldbookEntryItems_ACU($list, group.bookName, { reset: true });
-        }
-        else {
-            updateLazyWorldbookEntryGroupMeta_ACU($list, group.bookName);
-        }
-    });
-    return true;
-}
-// =========================
-// [UI] 世界书筛选工具：注入目标(select) / 手动选择(list) / 条目列表(entry list)
-// =========================
-function normalizeFilterText_ACU(v) {
-    return String(v ?? '').trim().toLowerCase();
-}
-function applyWorldbookSelectFilter_ACU($select, rawQuery) {
-    if (!$select || !$select.length)
-        return;
-    const q = normalizeFilterText_ACU(rawQuery);
-    const currentVal = String($select.val() ?? '');
-    $select.find('option').each(function () {
-        const val = String(jQuery_API_ACU(this).attr('value') ?? '');
-        const text = String(jQuery_API_ACU(this).text() ?? '');
-        const hay = (val + ' ' + text).toLowerCase();
-        const match = (!q) || hay.includes(q);
-        const keepSelected = (val === currentVal);
-        this.hidden = !(match || keepSelected);
-    });
-}
-function applyWorldbookListFilter_ACU($listContainer, rawQuery) {
-    if (!$listContainer || !$listContainer.length)
-        return;
-    const q = normalizeFilterText_ACU(rawQuery);
-    $listContainer.find('.qrf_worldbook_list_item').each(function () {
-        const $it = jQuery_API_ACU(this);
-        const name = String($it.data('book-name') || $it.text() || '').toLowerCase();
-        $it.toggle(!q || name.includes(q));
-    });
-}
-function applyWorldbookEntryFilter_ACU($entryList, rawQuery) {
-    if (!$entryList || !$entryList.length)
-        return;
-    if (applyLazyWorldbookEntryFilter_ACU($entryList, rawQuery))
-        return;
-    const q = normalizeFilterText_ACU(rawQuery);
-    const $items = $entryList.find('.qrf_worldbook_entry_item');
-    const $headers = $entryList.find('.qrf_worldbook_entry_header');
-    if (!q) {
-        $items.show();
-        $headers.show();
-        return;
-    }
-    const matchedBooks = new Set();
-    $items.each(function () {
-        const $row = jQuery_API_ACU(this);
-        const $cb = $row.find('input[type="checkbox"]');
-        const book = String($cb.data('book') || '');
-        const labelText = String($row.find('label').text() || '').toLowerCase();
-        const bookText = book.toLowerCase();
-        const match = labelText.includes(q) || bookText.includes(q);
-        $row.toggle(match);
-        if (match)
-            matchedBooks.add(book);
-    });
-    $headers.each(function () {
-        const $h = jQuery_API_ACU(this);
-        const book = String($h.data('book-name') || $h.text() || '');
-        const bookText = book.toLowerCase();
-        const match = bookText.includes(q) || matchedBooks.has(book);
-        $h.toggle(match);
-    });
-}
-// [新增] 填充外部导入专用的世界书选择器
-async function populateImportWorldbookTargetSelector_ACU() {
-    if (!$popupInstance_ACU)
-        return;
-    const $select = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-import-worldbook-injection-target`);
-    if (!$select.length)
-        return;
-    $select.empty();
-    try {
-        const bookNames = await getWorldbookNames_ACU();
-        // 只添加世界书选项，不添加角色卡绑定和常规更新目标选项
-        bookNames.forEach((bookName) => {
-            $select.append(`<option value="${escapeHtml_ACU$1(bookName)}">${escapeHtml_ACU$1(bookName)}</option>`);
-        });
-        // 设置当前选中的值
-        $select.val(settings_ACU.importWorldbookTarget || '');
-        // 应用筛选（若存在）
-        try {
-            const $filter = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-import-worldbook-injection-target-filter`);
-            if ($filter.length)
-                applyWorldbookSelectFilter_ACU($select, $filter.val());
-        }
-        catch (e) { }
-    }
-    catch (error) {
-        logError_ACU('Failed to populate import worldbook target selector:', error);
-    }
-}
-async function populateWorldbookList_ACU() {
-    if (!$popupInstance_ACU)
-        return;
-    const $listContainer = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-select`);
-    $listContainer.empty().html('<em>正在加载...</em>');
-    try {
-        const bookNames = await getWorldbookNames_ACU();
-        $listContainer.empty();
-        if (bookNames.length === 0) {
-            $listContainer.html('<em>未找到世界书</em>');
-            return;
-        }
-        const worldbookConfig = getCurrentWorldbookConfig_ACU();
-        bookNames.forEach((bookName) => {
-            const isSelected = worldbookConfig.manualSelection.includes(bookName);
-            const itemHtml = `
-                  <div class="qrf_worldbook_list_item ${isSelected ? 'selected' : ''}" data-book-name="${escapeHtml_ACU$1(bookName)}">
-                      ${escapeHtml_ACU$1(bookName)}
-                  </div>`;
-            $listContainer.append(itemHtml);
-        });
-        // 应用筛选（若存在）
-        try {
-            const $filter = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-select-filter`);
-            if ($filter.length)
-                applyWorldbookListFilter_ACU($listContainer, $filter.val());
-        }
-        catch (e) { }
-    }
-    catch (error) {
-        logError_ACU('Failed to populate worldbook list:', error);
-        $listContainer.html('<em>加载失败</em>');
-    }
-}
-async function populateWorldbookEntryList_ACU() {
-    if (!$popupInstance_ACU)
-        return;
-    const $list = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-entry-list`);
-    $list.empty().html('<em>正在加载条目...</em>');
-    const worldbookConfig = getCurrentWorldbookConfig_ACU();
-    const source = worldbookConfig.source;
-    let bookNames = [];
-    if (source === 'character') {
-        const charLorebooks = await getCharLorebooks_ACU({ type: 'all' });
-        if (charLorebooks.primary)
-            bookNames.push(charLorebooks.primary);
-        if (charLorebooks.additional?.length)
-            bookNames.push(...charLorebooks.additional);
-    }
-    else if (source === 'manual') {
-        bookNames = worldbookConfig.manualSelection || [];
-    }
-    bookNames = [...new Set((Array.isArray(bookNames) ? bookNames : []).filter(Boolean))];
-    if (bookNames.length === 0) {
-        $list.html('<em>请先选择世界书或为角色绑定世界书。</em>');
-        return;
-    }
-    try {
-        if (!worldbookConfig.enabledEntries)
-            worldbookConfig.enabledEntries = {};
-        const entriesMap = await getLorebookEntriesByNames_ACU(bookNames);
-        const groups = [];
-        const expandByDefault = bookNames.length === 1;
-        let settingsChanged = false; // Flag to check if we need to save settings
-        for (const bookName of bookNames) {
-            const bookEntries = Array.isArray(entriesMap[bookName]) ? entriesMap[bookName] : [];
-            // If no setting exists for this book, default to all entries enabled.
-            if (typeof worldbookConfig.enabledEntries[bookName] === 'undefined') {
-                // [修改] 默认启用时，过滤掉自动生成的条目
-                worldbookConfig.enabledEntries[bookName] = bookEntries
-                    .filter((entry) => {
-                    const comment = entry.comment || '';
-                    // 过滤自动生成的条目
-                    if (comment.startsWith('TavernDB-ACU-') || comment.startsWith('重要人物条目') || comment.startsWith('总结条目')) {
-                        return false;
-                    }
-                    // [新增] 过滤屏蔽词条目
-                    if (isEntryBlocked_ACU(entry)) {
-                        return false;
-                    }
-                    return true;
-                })
-                    .map((entry) => entry.uid);
-                settingsChanged = true;
-            }
-            const enabledEntries = Array.isArray(worldbookConfig.enabledEntries[bookName]) ? worldbookConfig.enabledEntries[bookName] : [];
-            const visibleEntries = [];
-            bookEntries.forEach((entry) => {
-                // [新增] 在UI列表显示时，也过滤掉自动生成的条目，不显示给用户
-                const comment = entry.comment || '';
-                if (comment.startsWith('TavernDB-ACU-') || comment.startsWith('重要人物条目') || comment.startsWith('总结条目')) {
-                    return;
-                }
-                // [新增] 过滤屏蔽词条目，不显示在列表中
-                if (isEntryBlocked_ACU(entry)) {
-                    return;
-                }
-                visibleEntries.push({
-                    uid: entry.uid,
-                    bookName,
-                    label: entry.comment || `条目 ${entry.uid}`,
-                    searchText: `${bookName} ${entry.comment || `条目 ${entry.uid}`}`,
-                    checked: enabledEntries.includes(entry.uid),
-                    disabled: !entry.enabled,
-                    checkboxId: buildWorldbookEntryCheckboxId_ACU('wb-entry', bookName, entry.uid),
-                });
-            });
-            if (visibleEntries.length > 0) {
-                groups.push({
-                    bookName,
-                    entries: visibleEntries,
-                    expanded: expandByDefault,
-                });
-            }
-        }
-        if (settingsChanged) {
-            saveSettingsAndNotify_ACU();
-        }
-        renderLazyWorldbookEntryList_ACU($list, groups, {
-            checkboxIdPrefix: 'wb-entry',
-            emptyText: '<em>所选世界书中无条目。</em>',
-        });
-        // 应用筛选（若存在）
-        try {
-            const $filter = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-entry-filter`);
-            if ($filter.length)
-                applyWorldbookEntryFilter_ACU($list, $filter.val());
-        }
-        catch (e) { }
-    }
-    catch (error) {
-        logError_ACU('Failed to populate worldbook entry list:', error);
-        $list.html('<em>加载条目失败。</em>');
-    }
-}
-// --- [新增] 世界书相关功能 ---
-// --- [新增] 世界书相关功能结束 ---
-
-// popup-bindings-worldbook.ts
-// 世界书标签页事件绑定
-const KEYWORD_PROMPT_SEGMENT_CLASS = 'acu-keyword-prompt-segment';
-function renderPromptGroupToContainer_ACU(containerId, segments) {
-    const $container = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-${containerId}`);
-    if (!$container.length)
-        return;
-    $container.empty();
-    if (!Array.isArray(segments) || segments.length === 0)
-        return;
-    for (const segment of segments) {
-        const $block = jQuery_API_ACU('<div>')
-            .addClass(KEYWORD_PROMPT_SEGMENT_CLASS)
-            .css({ border: '1px solid var(--acu-border-2)', borderRadius: '6px', padding: '8px', background: 'var(--acu-bg-1)' });
-        const $header = jQuery_API_ACU('<div>').css({ display: 'flex', gap: '6px', alignItems: 'center', marginBottom: '6px' });
-        const $roleSelect = jQuery_API_ACU('<select>').css({ width: '120px' });
-        $roleSelect.append(jQuery_API_ACU('<option>').val('system').text('System'), jQuery_API_ACU('<option>').val('assistant').text('Assistant'), jQuery_API_ACU('<option>').val('user').text('User'));
-        $roleSelect.val(segment.role || 'system');
-        const $deleteBtn = jQuery_API_ACU('<button>')
-            .addClass('acu-btn-small')
-            .text('✕')
-            .attr('title', '删除此段落')
-            .css({ fontSize: '11px', marginLeft: 'auto' });
-        if (segment.deletable === false) {
-            $deleteBtn.prop('disabled', true).css({ opacity: 0.4, cursor: 'not-allowed' });
-        }
-        $header.append($roleSelect, $deleteBtn);
-        const $textarea = jQuery_API_ACU('<textarea>')
-            .addClass('text_pole')
-            .val(segment.content || '')
-            .css({ width: '100%', minHeight: '60px', resize: 'vertical' });
-        $block.append($header, $textarea);
-        $container.append($block);
-    }
-}
-function readPromptGroupFromContainer_ACU(containerId) {
-    const $container = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-${containerId}`);
-    if (!$container.length)
-        return [];
-    const segments = [];
-    $container.find(`.${KEYWORD_PROMPT_SEGMENT_CLASS}`).each(function () {
-        const $block = jQuery_API_ACU(this);
-        const role = String($block.find('select').val() || 'system').toLowerCase().trim();
-        const content = String($block.find('textarea').val() || '').trim();
-        const $deleteBtn = $block.find('button');
-        const deletable = !$deleteBtn.prop('disabled');
-        if (content) {
-            segments.push({ role, content, deletable });
-        }
-    });
-    return segments;
-}
-function renderKeywordPromptGroupToUI_ACU(segments) {
-    renderPromptGroupToContainer_ACU('worldbook-vector-memory-keyword-prompt-group', segments);
-}
-function renderSummaryPromptGroupToUI_ACU(segments) {
-    renderPromptGroupToContainer_ACU('worldbook-vector-memory-summary-prompt-group', segments);
-}
-function readKeywordPromptGroupFromUI_ACU() {
-    return readPromptGroupFromContainer_ACU('worldbook-vector-memory-keyword-prompt-group');
-}
-function readSummaryPromptGroupFromUI_ACU() {
-    return readPromptGroupFromContainer_ACU('worldbook-vector-memory-summary-prompt-group');
-}
-/**
- * 绑定世界书标签页的所有事件
- */
-async function bindWorldbookEvents_ACU() {
-    // [向量记忆] 配置已迁移到全局 settings_ACU.vectorMemoryConfig，
-    // 不再跟随世界书配置（角色级），而是跟随数据库全局设置。
-    const toggleVectorMemoryConfigBlock_ACU = () => {
-        const worldbookConfig = getCurrentWorldbookConfig_ACU();
-        const summaryVectorIndexEnabled = worldbookConfig.summaryVectorIndexModeEnabled === true;
-        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-enabled`).prop('checked', summaryVectorIndexEnabled);
-        $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-config-block`).toggle(summaryVectorIndexEnabled);
-    };
-    const logVectorMemorySaveResult_ACU = (fieldNames, result) => {
-        const safeFieldNames = fieldNames.map(field => /key/i.test(field) ? `${field}(redacted)` : field).join(',');
-        logDebug_ACU(`[交火模式配置] 已保存字段: ${safeFieldNames}; ok=${result.ok}${result.message ? `; message=${result.message}` : ''}`);
-    };
-    const updateVectorMemoryFields_ACU = (patch) => {
-        // [V1 收敛] 委托 service 事务式更新（快照 → 修改 → 保存 → 失败回滚）。
-        const result = updateGlobalVectorMemoryConfigFields_ACU(patch);
-        if (!result.ok) {
-            showToastr_ACU('error', result.message || '保存向量记忆配置失败，已回滚。');
-            return;
-        }
-        logVectorMemorySaveResult_ACU(Object.keys(patch), result);
-    };
-    const updateVectorMemoryField_ACU = (field, value) => {
-        updateVectorMemoryFields_ACU({ [field]: value });
-    };
-    const parseIntegerField_ACU = (rawValue, fallbackValue) => {
-        const parsed = Number.parseInt(String(rawValue ?? '').trim(), 10);
-        return Number.isFinite(parsed) && parsed > 0 ? parsed : fallbackValue;
-    };
-    const parseFloatField_ACU = (rawValue, fallbackValue) => {
-        const parsed = Number.parseFloat(String(rawValue ?? '').trim());
-        return Number.isFinite(parsed) ? parsed : fallbackValue;
-    };
-    const bindVectorMemoryInput_ACU = (selector, eventName, updater) => {
-        const $input = $popupInstance_ACU.find(selector);
-        if (!$input.length)
-            return;
-        const events = String(eventName || 'change')
-            .split(/\s+/)
-            .map(event => event.trim())
-            .filter(Boolean);
-        const namespacedEvents = events.map(event => `${event}.acu_vector_memory`).join(' ');
-        for (const event of events) {
-            $input.off(`${event}.acu_vector_memory`);
-        }
-        $input.on(namespacedEvents, function () {
-            updater(jQuery_API_ACU(this));
-        });
-    };
-    const $worldbookSourceRadios = $popupInstance_ACU.find(`input[name="${SCRIPT_ID_PREFIX_ACU}-worldbook-source"]`);
-    const $refreshWorldbooksButton = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-refresh-worldbooks`);
-    const $worldbookSelect = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-select`);
-    const $worldbookEntryList = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-entry-list`);
-    const $selectAllButton = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-select-all`);
-    const $deselectAllButton = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-deselect-all`);
-    // [新增] 世界书UI事件绑定
-    if ($worldbookSourceRadios.length) {
-        $worldbookSourceRadios.on('change', async function () {
-            const worldbookConfig = getCurrentWorldbookConfig_ACU();
-            worldbookConfig.source = jQuery_API_ACU(this).val();
-            saveSettingsAndNotify_ACU();
-            await updateWorldbookSourceView_ACU();
-        });
-    }
-    // [新增] 世界书筛选：注入目标 / 手动选择列表 / 条目列表
-    const $wbTargetFilter = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-injection-target-filter`);
-    const $wbListFilter = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-select-filter`);
-    const $wbEntryFilter = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-entry-filter`);
-    if ($wbTargetFilter.length) {
-        $wbTargetFilter.on('input', function () {
-            const $sel = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-injection-target`);
-            applyWorldbookSelectFilter_ACU($sel, jQuery_API_ACU(this).val());
-        });
-    }
-    if ($wbListFilter.length) {
-        $wbListFilter.on('input', function () {
-            applyWorldbookListFilter_ACU($worldbookSelect, jQuery_API_ACU(this).val());
-        });
-    }
-    if ($wbEntryFilter.length) {
-        $wbEntryFilter.on('input', function () {
-            applyWorldbookEntryFilter_ACU($worldbookEntryList, jQuery_API_ACU(this).val());
-        });
-    }
-    if ($refreshWorldbooksButton.length) {
-        $refreshWorldbooksButton.on('click', populateWorldbookList_ACU);
-    }
-    bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-enabled`, 'change', ($input) => {
-        const worldbookConfig = getCurrentWorldbookConfig_ACU();
-        $input.prop('checked', worldbookConfig.summaryVectorIndexModeEnabled === true);
-        toggleVectorMemoryConfigBlock_ACU();
-        syncManualUpdateButtonAvailability_ACU();
-    });
-    bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-threshold`, 'input change', ($input) => {
-        const defaults = getDefaultVectorMemoryConfig_ACU();
-        updateVectorMemoryField_ACU('threshold', parseIntegerField_ACU($input.val(), defaults.threshold));
-    });
-    bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-archive-trigger-count`, 'input change', ($input) => {
-        const defaults = getDefaultVectorMemoryConfig_ACU();
-        updateVectorMemoryField_ACU('archiveTriggerCount', parseIntegerField_ACU($input.val(), defaults.archiveTriggerCount || defaults.archiveBatchSize));
-    });
-    bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-archive-batch-size`, 'input change', ($input) => {
-        const defaults = getDefaultVectorMemoryConfig_ACU();
-        updateVectorMemoryField_ACU('archiveBatchSize', parseIntegerField_ACU($input.val(), defaults.archiveBatchSize));
-    });
-    bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-archive-max-concurrency`, 'input change', ($input) => {
-        const defaults = getDefaultVectorMemoryConfig_ACU();
-        const value = parseIntegerField_ACU($input.val(), defaults.summaryIndexArchiveMaxConcurrency || defaults.archiveMaxConcurrency || 30);
-        updateVectorMemoryFields_ACU({
-            summaryIndexArchiveMaxConcurrency: value,
-            archiveMaxConcurrency: value,
-        });
-    });
-    bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-summary-index-keyword-min-rows`, 'input change', ($input) => {
-        const defaults = getDefaultVectorMemoryConfig_ACU();
-        updateVectorMemoryField_ACU('summaryIndexKeywordMinRows', parseIntegerField_ACU($input.val(), defaults.summaryIndexKeywordMinRows || 100));
-    });
-    bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-topk`, 'input change', ($input) => {
-        const defaults = getDefaultVectorMemoryConfig_ACU();
-        updateVectorMemoryField_ACU('topK', parseIntegerField_ACU($input.val(), defaults.topK));
-    });
-    bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-min-score`, 'input change', ($input) => {
-        const defaults = getDefaultVectorMemoryConfig_ACU();
-        updateVectorMemoryField_ACU('minScore', parseFloatField_ACU($input.val(), defaults.minScore));
-    });
-    bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-namespace`, 'input change', ($input) => {
-        updateVectorMemoryField_ACU('vectorNamespace', String($input.val() ?? '').trim());
-    });
-    bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-embedding-endpoint`, 'input change', ($input) => {
-        updateVectorMemoryField_ACU('embeddingEndpoint', String($input.val() ?? '').trim());
-    });
-    bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-embedding-model`, 'input change', ($input) => {
-        updateVectorMemoryField_ACU('embeddingModel', String($input.val() ?? '').trim());
-    });
-    bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-embedding-api-key`, 'input change', ($input) => {
-        updateVectorMemoryField_ACU('embeddingApiKey', String($input.val() ?? '').trim());
-    });
-    bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-rerank-endpoint`, 'input change', ($input) => {
-        updateVectorMemoryField_ACU('rerankEndpoint', String($input.val() ?? '').trim());
-    });
-    bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-rerank-model`, 'input change', ($input) => {
-        updateVectorMemoryField_ACU('rerankModel', String($input.val() ?? '').trim());
-    });
-    bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-rerank-api-key`, 'input change', ($input) => {
-        updateVectorMemoryField_ACU('rerankApiKey', String($input.val() ?? '').trim());
-    });
-    bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-rerank-instruction`, 'input change', ($input) => {
-        updateVectorMemoryField_ACU('rerankInstruction', String($input.val() ?? ''));
-    });
-    bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-overview-sentence-limit`, 'input change', ($input) => {
-        const defaults = getDefaultVectorMemoryConfig_ACU();
-        updateVectorMemoryField_ACU('summaryChunkSentenceCount', parseIntegerField_ACU($input.val(), defaults.summaryChunkSentenceCount));
-    });
-    bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-archive-without-summary`, 'change', ($input) => {
-        updateVectorMemoryField_ACU('archiveWithoutSummary', $input.is(':checked'));
-    });
-    bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-recall-candidate-limit`, 'input change', ($input) => {
-        const defaults = getDefaultVectorMemoryConfig_ACU();
-        updateVectorMemoryField_ACU('recallCandidateLimit', parseIntegerField_ACU($input.val(), defaults.recallCandidateLimit));
-    });
-    bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-recent-fixed-inject-count`, 'input change', ($input) => {
-        const defaults = getDefaultVectorMemoryConfig_ACU();
-        updateVectorMemoryField_ACU('recentFixedInjectCount', parseIntegerField_ACU($input.val(), defaults.recentFixedInjectCount || 50));
-    });
-    bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-rolling-delta-enabled`, 'change', ($input) => {
-        updateVectorMemoryField_ACU('summaryIndexRollingDeltaEnabled', $input.is(':checked'));
-    });
-    bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-rolling-delta-fold-threshold`, 'input change', ($input) => {
-        const defaults = getDefaultVectorMemoryConfig_ACU();
-        updateVectorMemoryField_ACU('summaryIndexRollingDeltaFoldThreshold', parseIntegerField_ACU($input.val(), defaults.summaryIndexRollingDeltaFoldThreshold || 15));
-    });
-    bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-entry-comment`, 'input change', ($input) => {
-        updateVectorMemoryField_ACU('entryComment', String($input.val() ?? '').trim());
-    });
-    bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-entry-key`, 'input change', ($input) => {
-        updateVectorMemoryField_ACU('entryKey', String($input.val() ?? '').trim());
-    });
-    bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-keyword-api-preset`, 'change', ($input) => {
-        updateVectorMemoryField_ACU('keywordApiPreset', String($input.val() ?? '').trim());
-    });
-    bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-keyword-context-pair-count`, 'input change', ($input) => {
-        const defaults = getDefaultVectorMemoryConfig_ACU();
-        updateVectorMemoryField_ACU('keywordContextPairCount', parseIntegerField_ACU($input.val(), defaults.keywordContextPairCount));
-    });
-    bindVectorMemoryInput_ACU(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-keyword-generation-max-attempts`, 'input change', ($input) => {
-        const defaults = getDefaultVectorMemoryConfig_ACU();
-        updateVectorMemoryField_ACU('keywordGenerationMaxAttempts', parseIntegerField_ACU($input.val(), defaults.keywordGenerationMaxAttempts || 3));
-    });
-    const bindPromptGroupEditor_ACU = (containerId, addButtonId, resetButtonId, fieldName, renderFn, readFn, getDefaultSegments) => {
-        const $container = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-${containerId}`);
-        if ($container.length) {
-            $container.on('click', 'button:not(:disabled)', function () {
-                jQuery_API_ACU(this).closest(`.${KEYWORD_PROMPT_SEGMENT_CLASS}`).remove();
-                const segments = readFn();
-                updateVectorMemoryField_ACU(fieldName, segments);
-            });
-            $container.on('input change', 'select, textarea', function () {
-                const segments = readFn();
-                updateVectorMemoryField_ACU(fieldName, segments);
-            });
-        }
-        const $addBtn = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-${addButtonId}`);
-        if ($addBtn.length) {
-            $addBtn.on('click', function () {
-                const currentSegments = readFn();
-                currentSegments.push({ role: 'user', content: '', deletable: true });
-                renderFn(currentSegments);
-                updateVectorMemoryField_ACU(fieldName, currentSegments);
-            });
-        }
-        const $resetBtn = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-${resetButtonId}`);
-        if ($resetBtn.length) {
-            $resetBtn.on('click', function () {
-                const defaultSegments = getDefaultSegments();
-                renderFn(defaultSegments);
-                updateVectorMemoryField_ACU(fieldName, defaultSegments);
-            });
-        }
-    };
-    bindPromptGroupEditor_ACU('worldbook-vector-memory-keyword-prompt-group', 'worldbook-vector-memory-keyword-prompt-add', 'worldbook-vector-memory-keyword-prompt-reset', 'keywordPromptGroup', renderKeywordPromptGroupToUI_ACU, readKeywordPromptGroupFromUI_ACU, () => JSON.parse(JSON.stringify(getDefaultVectorMemoryConfig_ACU().keywordPromptGroup || [])));
-    bindPromptGroupEditor_ACU('worldbook-vector-memory-summary-prompt-group', 'worldbook-vector-memory-summary-prompt-add', 'worldbook-vector-memory-summary-prompt-reset', 'summaryPromptGroup', renderSummaryPromptGroupToUI_ACU, readSummaryPromptGroupFromUI_ACU, () => JSON.parse(JSON.stringify(getDefaultVectorMemoryConfig_ACU().summaryPromptGroup || [])));
-    toggleVectorMemoryConfigBlock_ACU();
-    // [新增] 外部导入世界书选择器的事件绑定
-    const $refreshImportWorldbooksButton = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-refresh-import-worldbooks`);
-    if ($refreshImportWorldbooksButton.length) {
-        $refreshImportWorldbooksButton.on('click', populateImportWorldbookTargetSelector_ACU);
-    }
-    const $importWorldbookTargetSelect = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-import-worldbook-injection-target`);
-    const $importWorldbookTargetFilter = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-import-worldbook-injection-target-filter`);
-    const $importPromptExcludeImportedEntriesToggle = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-import-prompt-exclude-imported-worldbook-entries`);
-    if ($importWorldbookTargetFilter.length) {
-        $importWorldbookTargetFilter.on('input', function () {
-            applyWorldbookSelectFilter_ACU($importWorldbookTargetSelect, jQuery_API_ACU(this).val());
-        });
-    }
-    if ($importWorldbookTargetSelect.length) {
-        $importWorldbookTargetSelect.on('change', function () {
-            settings_ACU.importWorldbookTarget = jQuery_API_ACU(this).val();
-            saveSettingsAndNotify_ACU();
-            logDebug_ACU(`Import worldbook target changed to: ${settings_ACU.importWorldbookTarget}`);
-        });
-    }
-    if ($importPromptExcludeImportedEntriesToggle.length) {
-        $importPromptExcludeImportedEntriesToggle.off('change.acu_import_prompt_filter').on('change.acu_import_prompt_filter', function () {
-            settings_ACU.importPromptExcludeImportedWorldbookEntries = jQuery_API_ACU(this).is(':checked');
-            saveSettingsAndNotify_ACU();
-            logDebug_ACU(`[外部导入] importPromptExcludeImportedWorldbookEntries=${settings_ACU.importPromptExcludeImportedWorldbookEntries}`);
-        });
-    }
-    const resolveWorldbookBookNames_ACU = async () => {
-        const worldbookConfig = getCurrentWorldbookConfig_ACU();
-        if ((worldbookConfig.source || 'character') === 'manual') {
-            return [...new Set((Array.isArray(worldbookConfig.manualSelection) ? worldbookConfig.manualSelection : []).filter(Boolean))];
-        }
-        const names = [];
-        try {
-            const charLorebooks = await getCharLorebooks_ACU({ type: 'all' });
-            if (charLorebooks.primary)
-                names.push(charLorebooks.primary);
-            if (charLorebooks.additional?.length)
-                names.push(...charLorebooks.additional);
-        }
-        catch (e) { }
-        return [...new Set(names.filter(Boolean))];
-    };
-    const isWorldbookEntryAllowedForUI_ACU = (entry) => {
-        if (!entry)
-            return false;
-        const comment = entry.comment || '';
-        if (comment.startsWith('TavernDB-ACU-') || comment.startsWith('重要人物条目') || comment.startsWith('总结条目')) {
-            return false;
-        }
-        if (isEntryBlocked_ACU(entry))
-            return false;
-        if (!entry.enabled)
-            return false;
-        return true;
-    };
-    const setWorldbookEntriesSelection_ACU = async (mode) => {
-        const worldbookConfig = getCurrentWorldbookConfig_ACU();
-        const bookNames = await resolveWorldbookBookNames_ACU();
-        if (!worldbookConfig.enabledEntries)
-            worldbookConfig.enabledEntries = {};
-        const entriesMap = await getLorebookEntriesByNames_ACU(bookNames);
-        for (const bookName of bookNames) {
-            const entries = Array.isArray(entriesMap[bookName]) ? entriesMap[bookName] : [];
-            if (mode === 'none') {
-                worldbookConfig.enabledEntries[bookName] = [];
-            }
-            else {
-                worldbookConfig.enabledEntries[bookName] = entries.filter(isWorldbookEntryAllowedForUI_ACU).map(entry => entry.uid);
-            }
-        }
-        saveSettingsAndNotify_ACU();
-        await populateWorldbookEntryList_ACU();
-    };
-    if ($worldbookSelect.length) {
-        // New click handler for the custom list
-        $worldbookSelect.on('click', '.qrf_worldbook_list_item', async function () {
-            const $item = jQuery_API_ACU(this);
-            const bookName = $item.data('book-name');
-            const worldbookConfig = getCurrentWorldbookConfig_ACU();
-            let selection = worldbookConfig.manualSelection || [];
-            if ($item.hasClass('selected')) {
-                // Deselect
-                selection = selection.filter((name) => name !== bookName);
-            }
-            else {
-                // Select
-                selection.push(bookName);
-            }
-            worldbookConfig.manualSelection = selection;
-            $item.toggleClass('selected'); // Toggle visual state
-            saveSettingsAndNotify_ACU();
-            await populateWorldbookEntryList_ACU();
-        });
-    }
-    if ($worldbookEntryList.length) {
-        $worldbookEntryList.off('change.acu_wb_list').on('change.acu_wb_list', 'input[type="checkbox"]', function () {
-            const $checkbox = jQuery_API_ACU(this);
-            const bookName = $checkbox.data('book');
-            const entryUid = $checkbox.data('uid');
-            const worldbookConfig = getCurrentWorldbookConfig_ACU();
-            if (!worldbookConfig.enabledEntries[bookName]) {
-                worldbookConfig.enabledEntries[bookName] = [];
-            }
-            const enabledList = worldbookConfig.enabledEntries[bookName];
-            const index = enabledList.indexOf(entryUid);
-            const checked = $checkbox.is(':checked');
-            if (checked) {
-                if (index === -1)
-                    enabledList.push(entryUid);
-            }
-            else if (index > -1) {
-                enabledList.splice(index, 1);
-            }
-            updateLazyWorldbookEntryCheckedState_ACU($worldbookEntryList, bookName, entryUid, checked);
-            saveSettingsAndNotify_ACU();
-        });
-        $worldbookEntryList.off('click.acu_wb_toggle').on('click.acu_wb_toggle', '.qrf_worldbook_entry_toggle', function () {
-            const bookName = jQuery_API_ACU(this).closest('.qrf_worldbook_entry_group').data('book-name');
-            if (!bookName)
-                return;
-            toggleLazyWorldbookEntryGroup_ACU($worldbookEntryList, bookName);
-        });
-        $worldbookEntryList.off('click.acu_wb_more').on('click.acu_wb_more', '.qrf_worldbook_entry_load_more', function () {
-            const bookName = jQuery_API_ACU(this).closest('.qrf_worldbook_entry_group').data('book-name');
-            if (!bookName)
-                return;
-            renderLazyWorldbookEntryItems_ACU($worldbookEntryList, bookName);
-        });
-    }
-    // [新增] "总结大纲(总体大纲)"条目启用开关
-    // 0TK 占用模式开关已剥离（恒开启），无绑定
-    const $summaryVectorIndexModeToggle = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-summary-vector-index-mode-enabled`);
-    if ($summaryVectorIndexModeToggle.length) {
-        $summaryVectorIndexModeToggle.off('change.acu_summary_vector_index_mode').on('change.acu_summary_vector_index_mode', async function () {
-            const modeEnabled = jQuery_API_ACU(this).is(':checked');
-            setSummaryVectorIndexMode_ACU(modeEnabled);
-            $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-enabled`).prop('checked', modeEnabled);
-            $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-vector-memory-config-block`).toggle(modeEnabled);
-            syncManualUpdateButtonAvailability_ACU();
-            try {
-                const primaryLorebookName = await getInjectionTargetLorebook_ACU();
-                if (primaryLorebookName && isWorldbookApiAvailable_ACU()) {
-                    const allEntries = await getLorebookEntries_ACU(primaryLorebookName);
-                    const existingIndexEntry = allEntries.find(e => e.comment && e.comment.endsWith('TavernDB-ACU-CustomExport-纪要索引'));
-                    if (existingIndexEntry) {
-                        const nextEnabled = getCurrentWorldbookConfig_ACU()?.zeroTkOccupyMode !== true;
-                        if (existingIndexEntry.enabled !== nextEnabled) {
-                            await setLorebookEntries_ACU(primaryLorebookName, [{
-                                    uid: existingIndexEntry.uid,
-                                    enabled: nextEnabled,
-                                }]);
-                            logDebug_ACU(`summary vector mode toggle: updated 纪要索引 entry. enabled=${nextEnabled}`);
-                        }
-                    }
-                }
-            }
-            catch (e) {
-                logWarn_ACU('Failed to sync summary index entry enabled state immediately:', e);
-            }
-            const activeSnapshot = getAggregatedSummaryVectorIndexSnapshot_ACU();
-            const activeState = activeSnapshot?.summaryVectorIndexState || null;
-            const archivedRowCount = activeState?.rowCount || (Array.isArray(activeState?.rows) ? activeState.rows.length : 0);
-            const hasArchive = !!activeState;
-            const vectorConfig = getCurrentVectorMemoryConfig_ACU();
-            const summaryIndexKeywordMinRows = Math.max(1, Math.floor(Number(vectorConfig.summaryIndexKeywordMinRows || 100)));
-            showToastr_ACU(!modeEnabled || archivedRowCount >= summaryIndexKeywordMinRows ? 'info' : 'warning', modeEnabled
-                ? hasArchive
-                    ? archivedRowCount >= summaryIndexKeywordMinRows
-                        ? `交火模式纪要索引已启用。当前纪要向量索引 ${archivedRowCount} 条，已达到 ${summaryIndexKeywordMinRows} 条门槛；发送前会召回概要列 chunk、执行可选 Rerank，并按纪要表原顺序覆盖原概要索引条目。`
-                        : `交火模式纪要索引已启用。当前纪要向量索引 ${archivedRowCount}/${summaryIndexKeywordMinRows} 条；未达到门槛前，用户发送不会触发交火召回，填表保存后仍会立即归档并继续累积。`
-                    : '交火模式纪要索引已启用。当前聊天尚无纪要向量索引归档；完成一次纪要表填写后会自动归档，也可手动构建。'
-                : '交火模式纪要索引已禁用，概要索引将回到原本的全量纪要表流程。');
-        });
-    }
-    // [新增] 全选/全不选事件
-    if ($selectAllButton.length) {
-        $selectAllButton.off('click.acu_wb_bulk').on('click.acu_wb_bulk', async function () {
-            await setWorldbookEntriesSelection_ACU('all');
-        });
-    }
-    if ($deselectAllButton.length) {
-        $deselectAllButton.off('click.acu_wb_bulk').on('click.acu_wb_bulk', async function () {
-            await setWorldbookEntriesSelection_ACU('none');
-        });
-    }
-}
-
-/**
  * presentation/triggers/settings-ui-sync/settings-ui-api.ts
  */
 /**
@@ -96444,6 +95286,683 @@ function handleManualSelectNone_ACU() {
     manualSelector.selectNone();
 }
 
+/**
+ * presentation/components/worldbook-selector.ts — 世界书选择 UI
+ * 从 features/worldbook/01~03 + 04 迁移而来
+ */
+async function updateWorldbookSourceView_ACU() {
+    if (!$popupInstance_ACU)
+        return;
+    const worldbookConfig = getCurrentWorldbookConfig_ACU();
+    const source = worldbookConfig.source;
+    const $manualBlock = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-manual-select-block`);
+    if (source === 'manual') {
+        $manualBlock.slideDown();
+        await populateWorldbookList_ACU();
+    }
+    else {
+        $manualBlock.slideUp();
+    }
+    await populateWorldbookEntryList_ACU();
+}
+// =========================
+// [剧情推进] 世界书选择 UI（独立于填表 worldbookConfig）
+// 复用现有加载逻辑，但使用不同的 DOM id 与不同的配置对象
+// =========================
+function getPlotWorldbookConfig_ACU() {
+    if (!settings_ACU.plotSettings)
+        settings_ACU.plotSettings = JSON.parse(JSON.stringify(DEFAULT_PLOT_SETTINGS_ACU));
+    if (!settings_ACU.plotSettings.plotWorldbookConfig) {
+        settings_ACU.plotSettings.plotWorldbookConfig = buildDefaultPlotWorldbookConfig_ACU();
+    }
+    return settings_ACU.plotSettings.plotWorldbookConfig;
+}
+async function updatePlotWorldbookSourceView_ACU() {
+    if (!$popupInstance_ACU)
+        return;
+    const cfg = getPlotWorldbookConfig_ACU();
+    const source = cfg.source;
+    const $manualBlock = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-worldbook-manual-select-block`);
+    if (source === 'manual') {
+        $manualBlock.slideDown();
+        await populatePlotWorldbookList_ACU();
+    }
+    else {
+        $manualBlock.slideUp();
+    }
+    await populatePlotWorldbookEntryList_ACU();
+}
+async function populatePlotWorldbookList_ACU() {
+    if (!$popupInstance_ACU)
+        return;
+    const $listContainer = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-worldbook-select`);
+    if (!$listContainer.length)
+        return;
+    $listContainer.empty().html('<em>正在加载...</em>');
+    try {
+        const bookNames = await getWorldbookNames_ACU();
+        $listContainer.empty();
+        if (bookNames.length === 0) {
+            $listContainer.html('<em>未找到世界书</em>');
+            return;
+        }
+        const cfg = getPlotWorldbookConfig_ACU();
+        bookNames.forEach((bookName) => {
+            const isSelected = (cfg.manualSelection || []).includes(bookName);
+            const itemHtml = `
+                  <div class="qrf_worldbook_list_item ${isSelected ? 'selected' : ''}" data-book-name="${escapeHtml_ACU$1(bookName)}">
+                      ${escapeHtml_ACU$1(bookName)}
+                  </div>`;
+            $listContainer.append(itemHtml);
+        });
+        // 应用筛选（若存在）
+        try {
+            const $filter = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-worldbook-select-filter`);
+            if ($filter.length)
+                applyWorldbookListFilter_ACU($listContainer, $filter.val());
+        }
+        catch (e) { }
+    }
+    catch (error) {
+        logError_ACU('[剧情推进] 加载手动世界书列表失败:', { phase: 'plot_worldbook_list', error: { category: 'unknown' } });
+        $listContainer.html('<em>加载失败</em>');
+    }
+}
+async function populatePlotWorldbookEntryList_ACU() {
+    if (!$popupInstance_ACU)
+        return;
+    const $list = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-worldbook-entry-list`);
+    if (!$list.length)
+        return;
+    $list.empty().html('<em>正在加载条目...</em>');
+    const cfg = getPlotWorldbookConfig_ACU();
+    const source = cfg.source;
+    let bookNames = [];
+    try {
+        if (source === 'character') {
+            bookNames = (await getCurrentCharacterWorldbookBinding_ACU()).orderedNames;
+        }
+        else if (source === 'manual') {
+            bookNames = cfg.manualSelection || [];
+        }
+    }
+    catch (error) {
+        logError_ACU('[剧情推进] 读取角色绑定世界书失败:', { phase: 'plot_character_binding', error: { category: 'unknown' } });
+        $list.html('<em>加载条目失败。</em>');
+        return;
+    }
+    bookNames = [...new Set((Array.isArray(bookNames) ? bookNames : []).filter(Boolean))];
+    if (bookNames.length === 0) {
+        $list.html('<em>请先选择世界书或为角色绑定世界书。</em>');
+        return;
+    }
+    try {
+        if (!cfg.enabledEntries)
+            cfg.enabledEntries = {};
+        const entriesMap = await getLorebookEntriesByNames_ACU(bookNames);
+        const groups = [];
+        const expandByDefault = bookNames.length === 1;
+        let settingsChanged = false;
+        for (const bookName of bookNames) {
+            const bookEntries = Array.isArray(entriesMap[bookName]) ? entriesMap[bookName] : [];
+            if (typeof cfg.enabledEntries[bookName] === 'undefined') {
+                // 默认启用时：仅对"非数据库生成条目"做默认勾选（数据库生成条目不在UI显示，也不需要用户勾选）
+                cfg.enabledEntries[bookName] = bookEntries.filter((entry) => {
+                    const comment = entry?.comment || entry?.name || '';
+                    let normalizedComment = String(comment).replace(/^ACU-\[[^\]]+\]-/, '');
+                    normalizedComment = normalizedComment.replace(/^外部导入-(?:[^-]+-)?/, '');
+                    // UI 不显示：数据库生成条目（含隔离/外部导入前缀），以及 OutlineTable
+                    if (normalizedComment.startsWith('TavernDB-ACU-OutlineTable'))
+                        return false;
+                    const isDbGenerated = normalizedComment.startsWith('TavernDB-ACU-') ||
+                        normalizedComment.startsWith('重要人物条目') ||
+                        normalizedComment.startsWith('总结条目') ||
+                        normalizedComment.startsWith('小总结条目');
+                    if (isDbGenerated)
+                        return false;
+                    if (isEntryBlocked_ACU(entry))
+                        return false;
+                    return true;
+                })
+                    .map((entry) => entry.uid);
+                settingsChanged = true;
+            }
+            const enabledEntries = Array.isArray(cfg.enabledEntries[bookName]) ? cfg.enabledEntries[bookName] : [];
+            const visibleEntries = [];
+            bookEntries.forEach((entry) => {
+                const comment = entry?.comment || entry?.name || '';
+                let normalizedComment = String(comment).replace(/^ACU-\[[^\]]+\]-/, '');
+                normalizedComment = normalizedComment.replace(/^外部导入-(?:[^-]+-)?/, '');
+                // UI 不显示：数据库生成条目（含隔离/外部导入前缀），以及 OutlineTable
+                if (normalizedComment.startsWith('TavernDB-ACU-OutlineTable'))
+                    return;
+                const isDbGenerated = normalizedComment.startsWith('TavernDB-ACU-') ||
+                    normalizedComment.startsWith('重要人物条目') ||
+                    normalizedComment.startsWith('总结条目') ||
+                    normalizedComment.startsWith('小总结条目');
+                if (isDbGenerated)
+                    return;
+                if (isEntryBlocked_ACU(entry))
+                    return;
+                visibleEntries.push({
+                    uid: entry.uid,
+                    bookName,
+                    label: entry.comment || `条目 ${entry.uid}`,
+                    searchText: `${bookName} ${entry.comment || entry.name || `条目 ${entry.uid}`}`,
+                    checked: enabledEntries.includes(entry.uid),
+                    disabled: !entry.enabled,
+                    checkboxId: buildWorldbookEntryCheckboxId_ACU('plot-wb-entry', bookName, entry.uid),
+                });
+            });
+            if (visibleEntries.length > 0) {
+                groups.push({
+                    bookName,
+                    entries: visibleEntries,
+                    expanded: expandByDefault,
+                });
+            }
+        }
+        if (settingsChanged) {
+            saveSettingsAndNotify_ACU();
+        }
+        renderLazyWorldbookEntryList_ACU($list, groups, {
+            checkboxIdPrefix: 'plot-wb-entry',
+            emptyText: '<em>所选世界书中无条目。</em>',
+        });
+        // 应用筛选（若存在）
+        try {
+            const $filter = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-worldbook-entry-filter`);
+            if ($filter.length)
+                applyWorldbookEntryFilter_ACU($list, $filter.val());
+        }
+        catch (e) { }
+    }
+    catch (error) {
+        logError_ACU('[剧情推进] 加载剧情世界书条目失败:', { phase: 'plot_worldbook_entries', error: { category: 'unknown' } });
+        $list.html('<em>加载条目失败。</em>');
+    }
+}
+// [新增] 填充注入目标选择器
+async function populateInjectionTargetSelector_ACU() {
+    if (!$popupInstance_ACU)
+        return;
+    const $select = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-injection-target`);
+    $select.empty();
+    try {
+        const bookNames = await getWorldbookNames_ACU();
+        // 添加默认选项
+        $select.append(`<option value="character">角色卡绑定世界书</option>`);
+        bookNames.forEach((bookName) => {
+            $select.append(`<option value="${escapeHtml_ACU$1(bookName)}">${escapeHtml_ACU$1(bookName)}</option>`);
+        });
+        // 设置当前选中的值
+        const worldbookConfig = getCurrentWorldbookConfig_ACU();
+        $select.val(worldbookConfig.injectionTarget || 'character');
+        // 应用筛选（若存在）
+        try {
+            const $filter = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-injection-target-filter`);
+            if ($filter.length)
+                applyWorldbookSelectFilter_ACU($select, $filter.val());
+        }
+        catch (e) { }
+    }
+    catch (error) {
+        logError_ACU('Failed to populate injection target selector:', error);
+        $select.append('<option value="character">加载列表失败</option>');
+    }
+}
+const WORLDBOOK_ENTRY_LAZY_PAGE_SIZE_ACU = 80;
+function buildWorldbookEntryCheckboxId_ACU(prefix, bookName, uid) {
+    const safePrefix = String(prefix || 'wb-entry').replace(/[^a-zA-Z0-9_-]+/g, '-');
+    const safeBook = String(bookName || 'book')
+        .replace(/[^a-zA-Z0-9_-]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 48) || 'book';
+    return `${safePrefix}-${safeBook}-${uid}`;
+}
+function createLazyWorldbookEntryViewState_ACU(groups = [], options = {}) {
+    const normalizedGroups = (Array.isArray(groups) ? groups : []).map(group => ({
+        bookName: String(group?.bookName || ''),
+        entries: Array.isArray(group?.entries) ? group.entries.map((entry) => ({ ...entry })) : [],
+        filteredEntries: null,
+        loadedCount: 0,
+        expanded: group?.expanded === true,
+        expandedBeforeFilter: undefined,
+    })).filter((group) => group.bookName);
+    return {
+        groups: normalizedGroups,
+        pageSize: Number(options?.pageSize) > 0 ? Number(options.pageSize) : WORLDBOOK_ENTRY_LAZY_PAGE_SIZE_ACU,
+        checkboxIdPrefix: String(options?.checkboxIdPrefix || 'wb-entry'),
+        emptyText: options?.emptyText || '<em>所选世界书中无条目。</em>',
+        emptyGroupText: options?.emptyGroupText || '<em>当前分组没有可显示的条目。</em>',
+        isFiltering: false,
+    };
+}
+function getLazyWorldbookEntrySource_ACU(group) {
+    if (!group)
+        return [];
+    if (Array.isArray(group.filteredEntries))
+        return group.filteredEntries;
+    return Array.isArray(group.entries) ? group.entries : [];
+}
+function findLazyWorldbookEntryGroupState_ACU($list, bookName) {
+    if (!$list || !$list.length)
+        return null;
+    const state = $list.data('acuLazyWorldbookState');
+    if (!state || !Array.isArray(state.groups))
+        return null;
+    return state.groups.find((group) => String(group.bookName) === String(bookName)) || null;
+}
+function findLazyWorldbookEntryGroupElement_ACU($list, bookName) {
+    if (!$list || !$list.length)
+        return jQuery_API_ACU();
+    return $list.find('.qrf_worldbook_entry_group').filter(function () {
+        return String(jQuery_API_ACU(this).data('book-name') || '') === String(bookName);
+    }).first();
+}
+function updateLazyWorldbookEntryGroupMeta_ACU($list, bookName) {
+    if (!$list || !$list.length)
+        return;
+    const state = $list.data('acuLazyWorldbookState');
+    const group = findLazyWorldbookEntryGroupState_ACU($list, bookName);
+    const $group = findLazyWorldbookEntryGroupElement_ACU($list, bookName);
+    if (!state || !group || !$group.length)
+        return;
+    const sourceEntries = getLazyWorldbookEntrySource_ACU(group);
+    const loadedCount = Math.min(group.loadedCount || 0, sourceEntries.length);
+    const metaText = sourceEntries.length === 0
+        ? '0 条'
+        : (loadedCount < sourceEntries.length ? `已加载 ${loadedCount} / ${sourceEntries.length} 条` : `共 ${sourceEntries.length} 条`);
+    $group.find('.qrf_worldbook_entry_group_meta').text(metaText);
+    $group.find('.qrf_worldbook_entry_toggle').text(group.expanded ? '收起' : '展开');
+    $group.find('.qrf_worldbook_entry_group_body').toggle(group.expanded);
+    $group.find('.qrf_worldbook_entry_group_footer').toggle(group.expanded && sourceEntries.length > 0);
+    $group.find('.qrf_worldbook_entry_load_more').toggle(group.expanded && loadedCount < sourceEntries.length);
+}
+function renderLazyWorldbookEntryItems_ACU($list, bookName, options = {}) {
+    if (!$list || !$list.length)
+        return;
+    const state = $list.data('acuLazyWorldbookState');
+    const group = findLazyWorldbookEntryGroupState_ACU($list, bookName);
+    const $group = findLazyWorldbookEntryGroupElement_ACU($list, bookName);
+    if (!state || !group || !$group.length)
+        return;
+    const sourceEntries = getLazyWorldbookEntrySource_ACU(group);
+    if (options.reset === true) {
+        group.loadedCount = 0;
+    }
+    const nextCount = options.renderAll === true
+        ? sourceEntries.length
+        : Math.min(sourceEntries.length, (group.loadedCount || 0) + state.pageSize);
+    group.loadedCount = nextCount;
+    const visibleEntries = sourceEntries.slice(0, nextCount);
+    const html = visibleEntries.length > 0
+        ? visibleEntries.map((entry) => {
+            const checkboxId = entry.checkboxId || buildWorldbookEntryCheckboxId_ACU(state.checkboxIdPrefix, entry.bookName || bookName, entry.uid);
+            const labelText = entry.label || `条目 ${entry.uid}`;
+            const disabledStyle = entry.disabled ? 'style="opacity:0.6; text-decoration: line-through;"' : '';
+            return `
+                  <div class="qrf_worldbook_entry_item" data-book-name="${escapeHtml_ACU$1(String(entry.bookName || bookName))}" data-entry-uid="${escapeHtml_ACU$1(String(entry.uid ?? ''))}">
+                      <input type="checkbox" id="${escapeHtml_ACU$1(String(checkboxId))}" data-book="${escapeHtml_ACU$1(String(entry.bookName || bookName))}" data-uid="${escapeHtml_ACU$1(String(entry.uid ?? ''))}" ${entry.checked ? 'checked' : ''} ${entry.disabled ? 'disabled' : ''}>
+                      <label for="${escapeHtml_ACU$1(String(checkboxId))}" ${disabledStyle}>${escapeHtml_ACU$1(String(labelText))}</label>
+                  </div>`;
+        }).join('')
+        : state.emptyGroupText;
+    $group.find('.qrf_worldbook_entry_group_body').html(html);
+    updateLazyWorldbookEntryGroupMeta_ACU($list, bookName);
+}
+function renderLazyWorldbookEntryList_ACU($list, groups, options = {}) {
+    if (!$list || !$list.length)
+        return;
+    const state = createLazyWorldbookEntryViewState_ACU(groups, options);
+    $list.data('acuLazyWorldbookState', state);
+    if (!state.groups.length) {
+        $list.html(state.emptyText);
+        return;
+    }
+    const html = state.groups.map((group) => `
+          <div class="qrf_worldbook_entry_group" data-book-name="${escapeHtml_ACU$1(group.bookName)}" style="margin-bottom: 8px;">
+              <div class="qrf_worldbook_entry_header" data-book-name="${escapeHtml_ACU$1(group.bookName)}" style="display: flex; align-items: center; gap: 8px; margin-bottom: 5px; font-weight: bold; border-bottom: 1px solid; padding-bottom: 4px;">
+                  <button type="button" class="qrf_worldbook_entry_toggle button" style="padding: 2px 8px; font-size: 0.8em;">${group.expanded ? '收起' : '展开'}</button>
+                  <span class="qrf_worldbook_entry_header_text" style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml_ACU$1(group.bookName)}</span>
+                  <span class="qrf_worldbook_entry_group_meta" style="font-weight: normal; font-size: 0.85em; color: var(--text_secondary);"></span>
+              </div>
+              <div class="qrf_worldbook_entry_group_body" style="display: ${group.expanded ? 'block' : 'none'};"></div>
+              <div class="qrf_worldbook_entry_group_footer" style="display: ${group.expanded ? 'block' : 'none'}; margin-top: 6px;">
+                  <button type="button" class="qrf_worldbook_entry_load_more button" style="padding: 2px 8px; font-size: 0.8em; display: none;">继续加载</button>
+              </div>
+          </div>`).join('');
+    $list.html(html);
+    state.groups.forEach((group) => {
+        if (group.expanded) {
+            renderLazyWorldbookEntryItems_ACU($list, group.bookName, { reset: true });
+        }
+        else {
+            updateLazyWorldbookEntryGroupMeta_ACU($list, group.bookName);
+        }
+    });
+}
+function toggleLazyWorldbookEntryGroup_ACU($list, bookName, expanded = null) {
+    if (!$list || !$list.length)
+        return;
+    const group = findLazyWorldbookEntryGroupState_ACU($list, bookName);
+    if (!group)
+        return;
+    const nextExpanded = (typeof expanded === 'boolean') ? expanded : !group.expanded;
+    group.expanded = nextExpanded;
+    if (group.expanded && (group.loadedCount || 0) === 0) {
+        renderLazyWorldbookEntryItems_ACU($list, bookName, { reset: true });
+    }
+    else {
+        updateLazyWorldbookEntryGroupMeta_ACU($list, bookName);
+    }
+}
+function updateLazyWorldbookEntryCheckedState_ACU($list, bookName, uid, checked) {
+    const group = findLazyWorldbookEntryGroupState_ACU($list, bookName);
+    if (!group)
+        return;
+    const syncCheckedState = (entries) => {
+        if (!Array.isArray(entries))
+            return;
+        entries.forEach(entry => {
+            if (String(entry?.uid) === String(uid)) {
+                entry.checked = checked;
+            }
+        });
+    };
+    syncCheckedState(group.entries);
+    syncCheckedState(group.filteredEntries);
+}
+function applyLazyWorldbookEntryFilter_ACU($list, rawQuery) {
+    if (!$list || !$list.length)
+        return false;
+    const state = $list.data('acuLazyWorldbookState');
+    if (!state || !Array.isArray(state.groups))
+        return false;
+    const q = normalizeFilterText_ACU(rawQuery);
+    const wasFiltering = state.isFiltering === true;
+    if (q && !wasFiltering) {
+        state.groups.forEach((group) => {
+            group.expandedBeforeFilter = group.expanded;
+        });
+    }
+    if (!q) {
+        state.isFiltering = false;
+        state.groups.forEach((group) => {
+            group.filteredEntries = null;
+            group.loadedCount = 0;
+            if (typeof group.expandedBeforeFilter === 'boolean') {
+                group.expanded = group.expandedBeforeFilter;
+            }
+            group.expandedBeforeFilter = undefined;
+            const $group = findLazyWorldbookEntryGroupElement_ACU($list, group.bookName);
+            if ($group.length)
+                $group.show();
+            if (group.expanded) {
+                renderLazyWorldbookEntryItems_ACU($list, group.bookName, { reset: true });
+            }
+            else {
+                updateLazyWorldbookEntryGroupMeta_ACU($list, group.bookName);
+            }
+        });
+        return true;
+    }
+    state.isFiltering = true;
+    state.groups.forEach((group) => {
+        const bookText = String(group.bookName || '').toLowerCase();
+        if (bookText.includes(q)) {
+            group.filteredEntries = Array.isArray(group.entries) ? group.entries.slice() : [];
+        }
+        else {
+            group.filteredEntries = (Array.isArray(group.entries) ? group.entries : []).filter((entry) => {
+                const hay = String(entry.searchText || entry.label || `条目 ${entry.uid}`).toLowerCase();
+                return hay.includes(q);
+            });
+        }
+        const sourceEntries = getLazyWorldbookEntrySource_ACU(group);
+        const $group = findLazyWorldbookEntryGroupElement_ACU($list, group.bookName);
+        group.loadedCount = 0;
+        group.expanded = sourceEntries.length > 0;
+        if ($group.length)
+            $group.toggle(sourceEntries.length > 0);
+        if (sourceEntries.length > 0) {
+            renderLazyWorldbookEntryItems_ACU($list, group.bookName, { reset: true });
+        }
+        else {
+            updateLazyWorldbookEntryGroupMeta_ACU($list, group.bookName);
+        }
+    });
+    return true;
+}
+// =========================
+// [UI] 世界书筛选工具：注入目标(select) / 手动选择(list) / 条目列表(entry list)
+// =========================
+function normalizeFilterText_ACU(v) {
+    return String(v ?? '').trim().toLowerCase();
+}
+function applyWorldbookSelectFilter_ACU($select, rawQuery) {
+    if (!$select || !$select.length)
+        return;
+    const q = normalizeFilterText_ACU(rawQuery);
+    const currentVal = String($select.val() ?? '');
+    $select.find('option').each(function () {
+        const val = String(jQuery_API_ACU(this).attr('value') ?? '');
+        const text = String(jQuery_API_ACU(this).text() ?? '');
+        const hay = (val + ' ' + text).toLowerCase();
+        const match = (!q) || hay.includes(q);
+        const keepSelected = (val === currentVal);
+        this.hidden = !(match || keepSelected);
+    });
+}
+function applyWorldbookListFilter_ACU($listContainer, rawQuery) {
+    if (!$listContainer || !$listContainer.length)
+        return;
+    const q = normalizeFilterText_ACU(rawQuery);
+    $listContainer.find('.qrf_worldbook_list_item').each(function () {
+        const $it = jQuery_API_ACU(this);
+        const name = String($it.data('book-name') || $it.text() || '').toLowerCase();
+        $it.toggle(!q || name.includes(q));
+    });
+}
+function applyWorldbookEntryFilter_ACU($entryList, rawQuery) {
+    if (!$entryList || !$entryList.length)
+        return;
+    if (applyLazyWorldbookEntryFilter_ACU($entryList, rawQuery))
+        return;
+    const q = normalizeFilterText_ACU(rawQuery);
+    const $items = $entryList.find('.qrf_worldbook_entry_item');
+    const $headers = $entryList.find('.qrf_worldbook_entry_header');
+    if (!q) {
+        $items.show();
+        $headers.show();
+        return;
+    }
+    const matchedBooks = new Set();
+    $items.each(function () {
+        const $row = jQuery_API_ACU(this);
+        const $cb = $row.find('input[type="checkbox"]');
+        const book = String($cb.data('book') || '');
+        const labelText = String($row.find('label').text() || '').toLowerCase();
+        const bookText = book.toLowerCase();
+        const match = labelText.includes(q) || bookText.includes(q);
+        $row.toggle(match);
+        if (match)
+            matchedBooks.add(book);
+    });
+    $headers.each(function () {
+        const $h = jQuery_API_ACU(this);
+        const book = String($h.data('book-name') || $h.text() || '');
+        const bookText = book.toLowerCase();
+        const match = bookText.includes(q) || matchedBooks.has(book);
+        $h.toggle(match);
+    });
+}
+// [新增] 填充外部导入专用的世界书选择器
+async function populateImportWorldbookTargetSelector_ACU() {
+    if (!$popupInstance_ACU)
+        return;
+    const $select = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-import-worldbook-injection-target`);
+    if (!$select.length)
+        return;
+    $select.empty();
+    try {
+        const bookNames = await getWorldbookNames_ACU();
+        // 只添加世界书选项，不添加角色卡绑定和常规更新目标选项
+        bookNames.forEach((bookName) => {
+            $select.append(`<option value="${escapeHtml_ACU$1(bookName)}">${escapeHtml_ACU$1(bookName)}</option>`);
+        });
+        // 设置当前选中的值
+        $select.val(settings_ACU.importWorldbookTarget || '');
+        // 应用筛选（若存在）
+        try {
+            const $filter = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-import-worldbook-injection-target-filter`);
+            if ($filter.length)
+                applyWorldbookSelectFilter_ACU($select, $filter.val());
+        }
+        catch (e) { }
+    }
+    catch (error) {
+        logError_ACU('Failed to populate import worldbook target selector:', error);
+    }
+}
+async function populateWorldbookList_ACU() {
+    if (!$popupInstance_ACU)
+        return;
+    const $listContainer = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-select`);
+    $listContainer.empty().html('<em>正在加载...</em>');
+    try {
+        const bookNames = await getWorldbookNames_ACU();
+        $listContainer.empty();
+        if (bookNames.length === 0) {
+            $listContainer.html('<em>未找到世界书</em>');
+            return;
+        }
+        const worldbookConfig = getCurrentWorldbookConfig_ACU();
+        bookNames.forEach((bookName) => {
+            const isSelected = worldbookConfig.manualSelection.includes(bookName);
+            const itemHtml = `
+                  <div class="qrf_worldbook_list_item ${isSelected ? 'selected' : ''}" data-book-name="${escapeHtml_ACU$1(bookName)}">
+                      ${escapeHtml_ACU$1(bookName)}
+                  </div>`;
+            $listContainer.append(itemHtml);
+        });
+        // 应用筛选（若存在）
+        try {
+            const $filter = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-select-filter`);
+            if ($filter.length)
+                applyWorldbookListFilter_ACU($listContainer, $filter.val());
+        }
+        catch (e) { }
+    }
+    catch (error) {
+        logError_ACU('Failed to populate worldbook list:', error);
+        $listContainer.html('<em>加载失败</em>');
+    }
+}
+async function populateWorldbookEntryList_ACU() {
+    if (!$popupInstance_ACU)
+        return;
+    const $list = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-entry-list`);
+    $list.empty().html('<em>正在加载条目...</em>');
+    const worldbookConfig = getCurrentWorldbookConfig_ACU();
+    const source = worldbookConfig.source;
+    let bookNames = [];
+    if (source === 'character') {
+        const charLorebooks = await getCharLorebooks_ACU({ type: 'all' });
+        if (charLorebooks.primary)
+            bookNames.push(charLorebooks.primary);
+        if (charLorebooks.additional?.length)
+            bookNames.push(...charLorebooks.additional);
+    }
+    else if (source === 'manual') {
+        bookNames = worldbookConfig.manualSelection || [];
+    }
+    bookNames = [...new Set((Array.isArray(bookNames) ? bookNames : []).filter(Boolean))];
+    if (bookNames.length === 0) {
+        $list.html('<em>请先选择世界书或为角色绑定世界书。</em>');
+        return;
+    }
+    try {
+        if (!worldbookConfig.enabledEntries)
+            worldbookConfig.enabledEntries = {};
+        const entriesMap = await getLorebookEntriesByNames_ACU(bookNames);
+        const groups = [];
+        const expandByDefault = bookNames.length === 1;
+        let settingsChanged = false; // Flag to check if we need to save settings
+        for (const bookName of bookNames) {
+            const bookEntries = Array.isArray(entriesMap[bookName]) ? entriesMap[bookName] : [];
+            // If no setting exists for this book, default to all entries enabled.
+            if (typeof worldbookConfig.enabledEntries[bookName] === 'undefined') {
+                // [修改] 默认启用时，过滤掉自动生成的条目
+                worldbookConfig.enabledEntries[bookName] = bookEntries
+                    .filter((entry) => {
+                    const comment = entry.comment || '';
+                    // 过滤自动生成的条目
+                    if (comment.startsWith('TavernDB-ACU-') || comment.startsWith('重要人物条目') || comment.startsWith('总结条目')) {
+                        return false;
+                    }
+                    // [新增] 过滤屏蔽词条目
+                    if (isEntryBlocked_ACU(entry)) {
+                        return false;
+                    }
+                    return true;
+                })
+                    .map((entry) => entry.uid);
+                settingsChanged = true;
+            }
+            const enabledEntries = Array.isArray(worldbookConfig.enabledEntries[bookName]) ? worldbookConfig.enabledEntries[bookName] : [];
+            const visibleEntries = [];
+            bookEntries.forEach((entry) => {
+                // [新增] 在UI列表显示时，也过滤掉自动生成的条目，不显示给用户
+                const comment = entry.comment || '';
+                if (comment.startsWith('TavernDB-ACU-') || comment.startsWith('重要人物条目') || comment.startsWith('总结条目')) {
+                    return;
+                }
+                // [新增] 过滤屏蔽词条目，不显示在列表中
+                if (isEntryBlocked_ACU(entry)) {
+                    return;
+                }
+                visibleEntries.push({
+                    uid: entry.uid,
+                    bookName,
+                    label: entry.comment || `条目 ${entry.uid}`,
+                    searchText: `${bookName} ${entry.comment || `条目 ${entry.uid}`}`,
+                    checked: enabledEntries.includes(entry.uid),
+                    disabled: !entry.enabled,
+                    checkboxId: buildWorldbookEntryCheckboxId_ACU('wb-entry', bookName, entry.uid),
+                });
+            });
+            if (visibleEntries.length > 0) {
+                groups.push({
+                    bookName,
+                    entries: visibleEntries,
+                    expanded: expandByDefault,
+                });
+            }
+        }
+        if (settingsChanged) {
+            saveSettingsAndNotify_ACU();
+        }
+        renderLazyWorldbookEntryList_ACU($list, groups, {
+            checkboxIdPrefix: 'wb-entry',
+            emptyText: '<em>所选世界书中无条目。</em>',
+        });
+        // 应用筛选（若存在）
+        try {
+            const $filter = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-entry-filter`);
+            if ($filter.length)
+                applyWorldbookEntryFilter_ACU($list, $filter.val());
+        }
+        catch (e) { }
+    }
+    catch (error) {
+        logError_ACU('Failed to populate worldbook entry list:', error);
+        $list.html('<em>加载条目失败。</em>');
+    }
+}
+// --- [新增] 世界书相关功能 ---
+// --- [新增] 世界书相关功能结束 ---
+
 // status-display.ts — 对应源文件有跨文件依赖，保留在原位
 // [T172] 可视化编辑器刷新通知（从 service/worldbook/pipeline.ts 提取）
 function notifyVisualizerRefresh_ACU() {
@@ -96627,8 +96146,6 @@ function syncAllSettingsToUI_ACU(s) {
     setVal('worldbook-vector-memory-keyword-api-preset', vectorMemoryConfig.keywordApiPreset);
     setVal('worldbook-vector-memory-keyword-context-pair-count', vectorMemoryConfig.keywordContextPairCount || 1);
     setVal('worldbook-vector-memory-keyword-generation-max-attempts', vectorMemoryConfig.keywordGenerationMaxAttempts || 3);
-    renderKeywordPromptGroupToUI_ACU(vectorMemoryConfig.keywordPromptGroup || []);
-    renderSummaryPromptGroupToUI_ACU(vectorMemoryConfig.summaryPromptGroup || []);
     const $vectorMemoryBlock = find('worldbook-vector-memory-config-block');
     if ($vectorMemoryBlock.length)
         $vectorMemoryBlock.toggle(summaryVectorIndexEnabled);
@@ -96925,440 +96442,6 @@ function renderTemplatePresetSelect_ACU($select, { keepValue = true } = {}) {
 }
 
 /**
- * presentation/pages/popup-helpers.ts — 主弹窗辅助函数
- * 从 main-popup.ts 拆出（原 openAutoCardPopup_ACU 内嵌函数）
- */
-// --- [剧情推进] 辅助函数 ---
-/**
- * 加载剧情推进设置到UI
- */
-function loadPlotSettingsToUI_ACU(plotSettingsOverride = null) {
-    if (!$popupInstance_ACU)
-        return;
-    _assignUIPlaceholders_ACU({
-        $plotPromptSegmentsContainer_ACU: $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-prompt-segments-container`),
-        $plotTaskListContainer_ACU: $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-task-list`),
-    });
-    const plotSettings = setActivePlotEditorSettings_ACU(plotSettingsOverride || settings_ACU.plotSettings);
-    if (!plotSettings)
-        return;
-    // 功能开关是全局状态，不属于剧情预设/聊天快照。UI 回填必须以 settings_ACU.plotSettings 为权威，
-    // 否则切换预设或新开对话时会被局部 snapshot.enabled 覆盖成“每次自动打开”。
-    const globalPlotEnabled = settings_ACU.plotSettings?.enabled === true;
-    plotSettings.enabled = globalPlotEnabled;
-    $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-enabled`).prop('checked', globalPlotEnabled);
-    renderPlotTaskList_ACU(plotSettings);
-    loadCurrentPlotTaskToUI_ACU(plotSettings);
-    // 最终注入指令
-    $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-final-directive`).val(getPlotPromptContentByIdFromSettings_ACU(plotSettings, 'finalSystemDirective'));
-    // 匹配替换速率
-    $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-rate-main`).val(plotSettings.rateMain);
-    $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-rate-personal`).val(plotSettings.ratePersonal);
-    $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-rate-erotic`).val(plotSettings.rateErotic);
-    $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-rate-cuckold`).val(plotSettings.rateCuckold);
-    $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-recall-count`).val(plotSettings.recallCount ?? 20);
-    // 剧情上下文
-    $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-context-turn-count`).val(plotSettings.contextTurnCount);
-    renderExcludeRuleRows_ACU(`#${SCRIPT_ID_PREFIX_ACU}-plot-context-extract-rules`, normalizeExtractRules_ACU(plotSettings.contextExtractRules, plotSettings.contextExtractTags || ''), {
-        startPlaceholder: '开始词（例如：<think）',
-        endPlaceholder: '结束词（例如：</think>）',
-        fallbackRules: getDefaultPlotContextExtractRules_ACU(),
-    });
-    renderExcludeRuleRows_ACU(`#${SCRIPT_ID_PREFIX_ACU}-plot-context-exclude-rules`, normalizeExcludeRules_ACU(plotSettings.contextExcludeRules, plotSettings.contextExcludeTags || ''), {
-        startPlaceholder: '开始词（例如：<thinking）',
-        endPlaceholder: '结束词（例如：</thinking>）',
-        fallbackRules: getDefaultPlotContextExcludeRules_ACU(),
-    });
-    // 预设选择器
-    loadPlotPresetSelect_ACU();
-}
-/**
- * 加载正文替换预设选择器
- */
-function loadOptimizationPresetSelect_ACU() {
-    if (!$popupInstance_ACU)
-        return;
-    const $select = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-preset-select`);
-    const $deleteBtn = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-delete-preset`);
-    if (!$select.length)
-        return;
-    const presets = settings_ACU.contentOptimizationSettings?.promptPresets || [];
-    const currentValue = $select.val();
-    $select.find('option:not(:first)').remove();
-    presets.forEach((preset) => {
-        if (preset && preset.name) {
-            $select.append(renderOption_ACU(preset.name, preset.name));
-        }
-    });
-    // 恢复之前选中的值（如果还存在）
-    if (currentValue && presets.find((p) => p.name === currentValue)) {
-        $select.val(currentValue);
-        if ($deleteBtn.length)
-            $deleteBtn.show();
-    }
-    else {
-        $select.val('');
-        if ($deleteBtn.length)
-            $deleteBtn.hide();
-    }
-}
-/**
- * 另存为新的正文替换预设
- */
-function saveOptimizationPresetAsNew_ACU() {
-    const presetName = prompt('请输入新预设的名称：');
-    if (!presetName || !presetName.trim()) {
-        showToastr_ACU('warning', '预设名称不能为空。');
-        return;
-    }
-    const name = presetName.trim();
-    const presets = settings_ACU.contentOptimizationSettings.promptPresets || [];
-    const existingIndex = presets.findIndex((p) => p.name === name);
-    if (existingIndex !== -1) {
-        if (!confirm(`预设 "${name}" 已存在。是否覆盖？`)) {
-            return;
-        }
-        presets[existingIndex] = {
-            name: name,
-            promptGroup: getOptimizationPromptGroupFromUI_ACU()
-        };
-        showToastr_ACU('success', `预设 "${name}" 已被覆盖。`);
-    }
-    else {
-        presets.push({
-            name: name,
-            promptGroup: getOptimizationPromptGroupFromUI_ACU()
-        });
-        showToastr_ACU('success', `预设 "${name}" 已成功创建。`);
-    }
-    settings_ACU.contentOptimizationSettings.promptPresets = presets;
-    saveSettingsAndNotify_ACU();
-    loadOptimizationPresetSelect_ACU();
-    // 选中新创建的预设
-    $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-preset-select`).val(name);
-    $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-delete-preset`).show();
-}
-/**
- * 加载正文替换设置到UI
- */
-function loadOptimizationSettingsToUI_ACU() {
-    if (!$popupInstance_ACU)
-        return;
-    const config = settings_ACU.contentOptimizationSettings || {};
-    // 正文替换子标签：直接显示（旧 maxRetries==49 隐藏解锁已随智能续写移除）
-    const $optimizationSubtab = $popupInstance_ACU.find('.acu-subtab-button[data-subtab="advanced-optimization"]');
-    if ($optimizationSubtab.length) {
-        $optimizationSubtab.show();
-        $popupInstance_ACU.find('#acu-subtab-advanced-optimization').show();
-    }
-    // 功能开关
-    $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-enabled`).prop('checked', !!config.enabled);
-    // API预设
-    const $apiPreset = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-api-preset`);
-    if ($apiPreset.length) {
-        $apiPreset.val(config.apiPreset || '');
-    }
-    // 基础设置
-    $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-min-length`).val(config.minLength || 100);
-    $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-max-items`).val(config.maxOptimizations || 10);
-    $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-loop-count`).val(config.loopCount || 1);
-    $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-retry-count`).val(config.retryCount || 3);
-    // 优化模式
-    $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-seamless-mode`).prop('checked', config.seamlessMode !== false);
-    $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-auto-apply`).prop('checked', config.autoApply !== false);
-    $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-show-diff`).prop('checked', config.showDiff !== false);
-    $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-parallel-mode`).prop('checked', config.parallelMode === true);
-    // 标签筛选设置
-    $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-extract-tags`).val(config.extractTags || '');
-    // 加载标签提取规则
-    renderExcludeRuleRows_ACU(`#${SCRIPT_ID_PREFIX_ACU}-optimization-extract-rules`, config.extractRules || [], {
-        startPlaceholder: '开始词（例如：<think）',
-        endPlaceholder: '结束词（例如：</think）',
-    });
-    // 加载标签排除规则
-    renderExcludeRuleRows_ACU(`#${SCRIPT_ID_PREFIX_ACU}-optimization-exclude-rules`, config.excludeRules || [], {
-        startPlaceholder: '开始词（例如：<think）',
-        endPlaceholder: '结束词（例如：</think）',
-    });
-    // 加载预设选择器
-    loadOptimizationPresetSelect_ACU();
-    // 提示词组
-    const promptGroup = config.promptGroup && config.promptGroup.length > 0
-        ? config.promptGroup
-        : DEFAULT_CONTENT_OPTIMIZATION_PROMPT_GROUP_ACU;
-    renderOptimizationPromptSegments_ACU(promptGroup);
-}
-/**
- * 渲染正文优化提示词段落
- */
-function renderOptimizationPromptSegments_ACU(segments) {
-    if (!$popupInstance_ACU)
-        return;
-    const $container = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-optimization-prompt-segments-container`);
-    if (!$container.length)
-        return;
-    $container.empty();
-    if (!Array.isArray(segments))
-        return;
-    segments.forEach((segment, index) => {
-        const isMain = segment.isMain || segment.mainSlot === 'A';
-        const isMain2 = segment.isMain2 || segment.mainSlot === 'B';
-        const deletable = segment.deletable !== false;
-        const segmentHtml = `
-          <div class="optimization-prompt-segment" data-index="${index}" style="
-            margin-bottom: 15px;
-            padding: 15px;
-            background: var(--background_default);
-            border-radius: 8px;
-            border: 1px solid var(--border_color_light);
-            ${isMain ? 'border-left: 3px solid var(--blue);' : ''}
-            ${isMain2 ? 'border-left: 3px solid var(--purple);' : ''}
-          ">
-            <div style="display: flex; gap: 10px; margin-bottom: 10px; align-items: center;">
-              <select class="optimization-prompt-segment-role text_pole" data-index="${index}" style="width: 120px;">
-                <option value="SYSTEM" ${segment.role === 'SYSTEM' ? 'selected' : ''}>SYSTEM</option>
-                <option value="USER" ${segment.role === 'USER' ? 'selected' : ''}>USER</option>
-                <option value="assistant" ${segment.role === 'assistant' ? 'selected' : ''}>assistant</option>
-              </select>
-              ${deletable ? `
-                <button type="button" class="optimization-prompt-segment-delete-btn button" data-index="${index}" style="margin-left: auto; padding: 4px 8px; font-size: 0.85em;">
-                  <i class="fa-solid fa-trash"></i>
-                </button>
-              ` : ''}
-            </div>
-            <textarea class="optimization-prompt-segment-content text_pole" data-index="${index}" rows="6" placeholder="输入提示词内容..." style="resize: vertical; width: 100%;">${escapeHtml_ACU$1(segment.content || '')}</textarea>
-          </div>
-        `;
-        $container.append(segmentHtml);
-    });
-    // 绑定输入事件
-    $container.find('.optimization-prompt-segment-role').on('change', function () {
-        const idx = parseInt(jQuery_API_ACU(this).data('index'), 10);
-        const segments = getOptimizationPromptGroupFromUI_ACU();
-        if (segments[idx]) {
-            segments[idx].role = jQuery_API_ACU(this).val();
-            settings_ACU.contentOptimizationSettings.promptGroup = segments;
-            saveSettingsAndNotify_ACU();
-        }
-    });
-    $container.find('.optimization-prompt-segment-content').on('input change', function () {
-        const idx = parseInt(jQuery_API_ACU(this).data('index'), 10);
-        const segments = getOptimizationPromptGroupFromUI_ACU();
-        if (segments[idx]) {
-            segments[idx].content = jQuery_API_ACU(this).val();
-            settings_ACU.contentOptimizationSettings.promptGroup = segments;
-            saveSettingsAndNotify_ACU();
-        }
-    });
-}
-/**
- * 从UI获取正文优化提示词组
- */
-function getOptimizationPromptGroupFromUI_ACU() {
-    if (!$popupInstance_ACU)
-        return [];
-    const segments = [];
-    const $segments = $popupInstance_ACU.find('.optimization-prompt-segment');
-    $segments.each(function () {
-        const $seg = jQuery_API_ACU(this);
-        const index = parseInt($seg.data('index'), 10);
-        const role = $seg.find('.optimization-prompt-segment-role').val();
-        const content = $seg.find('.optimization-prompt-segment-content').val();
-        segments.push({
-            role: role || 'USER',
-            content: content || '',
-            deletable: true
-        });
-    });
-    return segments;
-}
-/**
- * 加载剧情预设选择器
- */
-function getPlotPresetDisplayName_ACU(presetName) {
-    const normalizedPresetName = normalizePlotPresetSelectionValue_ACU(presetName);
-    return normalizedPresetName || '默认预设';
-}
-function populatePlotPresetSelectOptions_ACU($select, presets, { extraPresetName = '' } = {}) {
-    if (!$select || !$select.length)
-        return;
-    const normalizedExtraPresetName = normalizePlotPresetSelectionValue_ACU(extraPresetName);
-    const normalizedPresetNames = new Set();
-    $select.empty().append(`<option value="${DEFAULT_PRESET_OPTION_VALUE_ACU}">默认预设</option>`);
-    presets.forEach((preset) => {
-        const presetName = normalizePlotPresetSelectionValue_ACU(preset?.name);
-        if (!presetName || normalizedPresetNames.has(presetName))
-            return;
-        normalizedPresetNames.add(presetName);
-        $select.append(renderOption_ACU(presetName, presetName));
-    });
-    if (normalizedExtraPresetName && !normalizedPresetNames.has(normalizedExtraPresetName)) {
-        $select.append(renderOption_ACU(normalizedExtraPresetName, `${normalizedExtraPresetName}（仅当前聊天快照）`));
-    }
-}
-function loadPlotPresetSelect_ACU() {
-    if (!$popupInstance_ACU || !settings_ACU?.plotSettings)
-        return;
-    const presets = settings_ACU.plotSettings.promptPresets || [];
-    const globalPresetName = normalizePlotPresetSelectionValue_ACU(settings_ACU.plotSettings.lastUsedPresetName || '');
-    const chatScopeState = getCurrentChatPlotScopeState_ACU();
-    const currentBinding = getPlotPresetBindingForChat_ACU();
-    const effectiveChatPresetName = resolveActivePlotPresetName_ACU({ fallbackToGlobal: true });
-    const explicitChatPresetName = normalizePlotPresetSelectionValue_ACU(currentBinding?.presetName || '');
-    const chatSelectedPresetName = normalizePlotPresetSelectionValue_ACU(explicitChatPresetName || chatScopeState?.presetName || '');
-    const $globalSelect = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-global-preset-select`);
-    const $chatSelect = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-chat-preset-select`);
-    const $globalDeleteBtn = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-global-delete-preset`);
-    const $globalStatus = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-global-scope-status`);
-    const $chatStatus = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-chat-scope-status`);
-    const $chatOriginStatus = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-chat-origin-status`);
-    populatePlotPresetSelectOptions_ACU($globalSelect, presets);
-    populatePlotPresetSelectOptions_ACU($chatSelect, presets, { extraPresetName: chatSelectedPresetName });
-    if ($chatSelect.length) {
-        $chatSelect.find(`option[value="${DEFAULT_PRESET_OPTION_VALUE_ACU}"]`).text('跟随全局');
-    }
-    const hasGlobalPreset = !!globalPresetName && presets.some((p) => normalizePlotPresetSelectionValue_ACU(p?.name) === globalPresetName);
-    const hasChatPreset = !!chatSelectedPresetName && $chatSelect.find(`option[value="${chatSelectedPresetName.replace(/"/g, '\\"')}"]`).length > 0;
-    const hasValidExplicitChatPreset = !!explicitChatPresetName && !!findPlotPresetByName_ACU(explicitChatPresetName);
-    if ($globalSelect.length) {
-        $globalSelect.val(hasGlobalPreset ? globalPresetName : DEFAULT_PRESET_OPTION_VALUE_ACU);
-    }
-    if ($globalDeleteBtn.length) {
-        $globalDeleteBtn.toggle(hasGlobalPreset);
-    }
-    if ($chatSelect.length) {
-        $chatSelect.val(hasChatPreset ? chatSelectedPresetName : DEFAULT_PRESET_OPTION_VALUE_ACU);
-    }
-    if ($globalStatus.length) {
-        $globalStatus.text(`当前全局预设：${getPlotPresetDisplayName_ACU(globalPresetName)}；新聊天会默认继承这里的剧情推进配置。`);
-    }
-    if ($chatStatus.length) {
-        if (chatScopeState?.snapshot) {
-            $chatStatus.text(`当前聊天：历史聊天快照；当前实际预设为 ${getPlotPresetDisplayName_ACU(effectiveChatPresetName)}。`);
-        }
-        else if (hasValidExplicitChatPreset) {
-            $chatStatus.text(`当前聊天：独立预设；当前实际预设为 ${getPlotPresetDisplayName_ACU(explicitChatPresetName)}。`);
-        }
-        else if (chatSelectedPresetName) {
-            $chatStatus.text(`当前聊天：原绑定预设不存在；当前已回退为 ${getPlotPresetDisplayName_ACU(effectiveChatPresetName)}。`);
-        }
-        else {
-            $chatStatus.text(`当前聊天：跟随全局；当前实际预设为 ${getPlotPresetDisplayName_ACU(effectiveChatPresetName)}。`);
-        }
-    }
-    if ($chatOriginStatus.length) {
-        if (chatScopeState?.snapshot) {
-            $chatOriginStatus.text('当前聊天仍在使用旧版聊天快照；重新切换一次当前聊天预设后，将迁移为新的按预设切换模式。');
-        }
-        else if (hasValidExplicitChatPreset) {
-            $chatOriginStatus.text('当前聊天已单独指定剧情推进预设；如需修改预设内容，请在左侧全局预设区操作。');
-        }
-        else if (chatSelectedPresetName) {
-            $chatOriginStatus.text('当前聊天原绑定的剧情推进预设已不存在；当前运行已回退到全局预设，请重新选择一次当前聊天预设。');
-        }
-        else {
-            $chatOriginStatus.text('当前聊天当前未单独指定剧情推进预设，实际会直接跟随全局。');
-        }
-    }
-}
-/**
- * 加载预设到UI
- */
-function loadPlotPresetToUI_ACU(preset) {
-    if (!$popupInstance_ACU || !preset)
-        return;
-    const presetName = preset.name || '默认预设';
-    const result = applyGlobalPlotPresetSelectionForEditor_ACU(preset.name || '', {
-        source: 'ui_global_load',
-        save: true,
-    });
-    if (!result)
-        return;
-    showToastr_ACU('success', `已加载全局预设 "${presetName}"。`);
-}
-/**
- * 从UI获取当前剧情设置
- */
-function getCurrentPlotSettingsFromUI_ACU() {
-    if (!$popupInstance_ACU)
-        return {};
-    flushCurrentPlotTaskEditorState_ACU({ renderTaskList: true, persist: false });
-    const activeSettings = getActivePlotEditorSettings_ACU();
-    const currentSettings = JSON.parse(JSON.stringify(activeSettings || settings_ACU.plotSettings || {}));
-    ensurePlotTasksCompat_ACU(currentSettings, { syncLegacy: true });
-    delete currentSettings.promptPresets;
-    delete currentSettings.lastUsedPresetName;
-    delete currentSettings.enabled;
-    const promptGroup = getPlotPromptGroupFromSource_ACU(currentSettings);
-    const legacyPromptTexts = getLegacyPromptTextsFromPromptGroup_ACU(promptGroup);
-    currentSettings.promptGroup = promptGroup;
-    currentSettings.finalSystemDirective = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-final-directive`).val() || '';
-    currentSettings.mainPrompt = legacyPromptTexts.mainPrompt || '';
-    currentSettings.systemPrompt = legacyPromptTexts.systemPrompt || '';
-    currentSettings.rateMain = parseFloat($popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-rate-main`).val()) || 1.0;
-    currentSettings.ratePersonal = parseFloat($popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-rate-personal`).val()) || 1.0;
-    currentSettings.rateErotic = parseFloat($popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-rate-erotic`).val()) || 0;
-    currentSettings.rateCuckold = parseFloat($popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-rate-cuckold`).val()) || 1.0;
-    currentSettings.recallCount = parseInt($popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-recall-count`).val(), 10) || 20;
-    currentSettings.contextExtractRules = readExcludeRulesFromRows_ACU(`#${SCRIPT_ID_PREFIX_ACU}-plot-context-extract-rules`);
-    currentSettings.contextExcludeRules = readExcludeRulesFromRows_ACU(`#${SCRIPT_ID_PREFIX_ACU}-plot-context-exclude-rules`);
-    currentSettings.contextTurnCount = parseInt($popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-context-turn-count`).val(), 10) || 3;
-    currentSettings.plotTasks = normalizePlotTasks_ACU(currentSettings);
-    ensurePlotPromptsArray_ACU(currentSettings);
-    setPlotPromptContentByIdForSettings_ACU(currentSettings, 'mainPrompt', currentSettings.mainPrompt || '');
-    setPlotPromptContentByIdForSettings_ACU(currentSettings, 'systemPrompt', currentSettings.systemPrompt || '');
-    setPlotPromptContentByIdForSettings_ACU(currentSettings, 'finalSystemDirective', currentSettings.finalSystemDirective || '');
-    ensurePlotTasksCompat_ACU(currentSettings, { syncLegacy: true });
-    currentSettings.finalSystemDirective = getPlotPromptContentByIdFromSettings_ACU(currentSettings, 'finalSystemDirective') || currentSettings.finalSystemDirective || '';
-    return currentSettings;
-}
-/**
- * 另存为新的全局预设
- */
-function savePlotPresetAsNew_ACU() {
-    const presetName = prompt('请输入新的全局预设名称：');
-    const name = String(presetName || '').trim();
-    if (!name)
-        return;
-    const presets = settings_ACU.plotSettings.promptPresets || [];
-    const existingIndex = presets.findIndex((p) => p.name === name);
-    const currentSettings = getCurrentPlotSettingsFromUI_ACU();
-    if (!currentSettings || typeof currentSettings !== 'object') {
-        showToastr_ACU('error', '读取当前剧情推进设置失败。');
-        return;
-    }
-    const savedPreset = normalizePlotPresetExcludeRules_ACU({ name, ...currentSettings });
-    if (existingIndex !== -1) {
-        if (!confirm(`名为 "${name}" 的全局预设已存在。是否要覆盖它？`)) {
-            return;
-        }
-        presets[existingIndex] = savedPreset;
-    }
-    else {
-        presets.push(savedPreset);
-    }
-    settings_ACU.plotSettings.promptPresets = presets;
-    const currentRuntimePresetName = getCurrentRuntimePlotPresetName_ACU({ fallbackToGlobal: true });
-    const currentChatBinding = getPlotPresetBindingForChat_ACU();
-    const hasLegacyChatScope = !!getCurrentChatPlotScopeState_ACU();
-    const shouldRefreshCurrentChatRuntime = normalizePlotPresetSelectionValue_ACU(currentRuntimePresetName) === name ||
-        (!currentChatBinding && !hasLegacyChatScope);
-    if (shouldRefreshCurrentChatRuntime) {
-        applyPlotPresetToSettings_ACU(settings_ACU.plotSettings, savedPreset);
-    }
-    setCurrentEditablePlotPresetState_ACU(name, {
-        scope: 'global',
-        source: 'ui_global_save_as_new',
-    });
-    persistPlotPresetSelectionState_ACU(name, { source: 'ui_global_save_as_new', updateGlobal: true, save: false });
-    saveSettingsAndNotify_ACU();
-    loadPlotPresetSelect_ACU();
-    $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-global-preset-select`).val(name);
-    $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-global-delete-preset`).show();
-    showToastr_ACU('success', `新全局预设 "${name}" 已保存。`);
-}
-
-/**
  * presentation/components/pipeline-ui-helpers.ts
  * 包装 service 层的 pipeline 函数，在调用后自动刷新 UI
  *
@@ -97459,15 +96542,7 @@ function refreshPresetUIAfterSwitch_ACU({ templateGlobalSelectName = null, keepT
     catch (e) {
         logDebug_ACU('[refreshPresetUI] 模板预设 UI 刷新失败:', e);
     }
-    // 2. 剧情推进编辑区全量重载（任务列表 + 参数 + 提示词 + 速率 + 循环 + 排除规则 + 预设选择器）
-    //    loadPlotSettingsToUI_ACU 内部会调用 loadPlotPresetSelect_ACU，无需再单独调
-    try {
-        loadPlotSettingsToUI_ACU();
-    }
-    catch (e) {
-        logDebug_ACU('[refreshPresetUI] 剧情推进编辑区刷新失败:', e);
-    }
-    // 3. 数据库状态卡片（含"当前生效模板预设"显示）
+    // 2. 数据库状态卡片（含"当前生效模板预设"显示）
     try {
         updateCardUpdateStatusDisplay_ACU();
     }
@@ -105799,1961 +104874,6 @@ installRuntimeGatedSqlReadApi_ACU(api, sqlApi);
 apiRef = api;
 // --- 挂载到全局 ---
 topLevelWindow_ACU.AutoCardUpdaterAPI = api;
-
-/**
- * presentation/window/window-styles.ts — 窗口样式注入 + 主题切换
- * 从 window-system.ts 拆出
- *
- * 注意：旧版 ink/silk 主题切换已迁移到 theme/theme-registry.ts
- * 此文件保留窗口chrome样式和旧接口兼容
- */
-const ACU_WINDOW_STYLES_INJECTED_FLAG = `${SCRIPT_ID_PREFIX_ACU}_window_styles_injected`;
-const ACU_UI_THEME_STORAGE_KEY = `${SCRIPT_ID_PREFIX_ACU}_ui_theme_v1`;
-/**
- * 获取当前主题（兼容旧接口）
- * 现在读取新主题系统的设置
- */
-function getACUTheme_ACU() {
-    try {
-        const store = getConfigStorage_ACU();
-        const savedTheme = String(store?.getItem?.(ACU_UI_THEME_STORAGE_KEY) || '').trim();
-        // 支持旧版 ink/silk 值，也支持新主题 ID
-        if (savedTheme === 'silk' || savedTheme === 'classical-silk')
-            return 'silk';
-        if (savedTheme === 'ink' || savedTheme === 'classical-ink')
-            return 'ink';
-        if (savedTheme === 'default-dark')
-            return 'ink';
-        // 默认浅色
-        return 'silk';
-    }
-    catch (e) {
-        return 'silk';
-    }
-}
-function setACUTheme_ACU(theme) {
-    const normalizedTheme = theme === 'silk' ? 'silk' : 'ink';
-    try {
-        const store = getConfigStorage_ACU();
-        store?.setItem?.(ACU_UI_THEME_STORAGE_KEY, normalizedTheme);
-    }
-    catch (e) {
-        console.warn('[ACU] Failed to persist UI theme:', e);
-    }
-    return normalizedTheme;
-}
-function applyACUThemeToDocument_ACU(targetDoc, theme = null) {
-    const doc = targetDoc || (topLevelWindow_ACU?.document || document);
-    // 不再通过 body class 切换主题，主题变量已通过 theme-registry 注入到 #popup
-    const body = doc?.body;
-    if (!body || !body.classList)
-        return getACUTheme_ACU();
-    return getACUTheme_ACU();
-}
-function syncACUThemeButtons_ACU(targetDoc) {
-    // 窗口chrome的主题切换按钮已被新的 theme-selector 替代
-    // 此函数保留空实现以兼容旧调用点
-    return getACUTheme_ACU();
-}
-function toggleACUTheme_ACU(targetDoc) {
-    // 旧版切换逻辑保留但不再影响弹窗内容
-    const nextTheme = getACUTheme_ACU() === 'silk' ? 'ink' : 'silk';
-    setACUTheme_ACU(nextTheme);
-    return nextTheme;
-}
-function injectACUWindowStyles() {
-    // 始终往酒馆主窗口注入样式
-    const targetWin = topLevelWindow_ACU || window;
-    const targetDoc = targetWin.document;
-    if (targetWin[ACU_WINDOW_STYLES_INJECTED_FLAG])
-        return;
-    targetWin[ACU_WINDOW_STYLES_INJECTED_FLAG] = true;
-    const css = `
-      /* ═══════════════════════════════════════════════════════════════
-         星·数据库 独立窗口系统
-         古卷双主题：墨色 / 素纱
-         ═══════════════════════════════════════════════════════════════ */
-      
-      .acu-window-overlay {
-        position: fixed;
-        top: 0; left: 0; right: 0; bottom: 0;
-        background: var(--acu-overlay-bg, rgba(0, 0, 0, 0.16));
-        backdrop-filter: blur(var(--acu-overlay-backdrop-blur, 3px));
-        -webkit-backdrop-filter: blur(var(--acu-overlay-backdrop-blur, 3px));
-        z-index: 9999;
-        animation: acuOverlayFadeIn 0.24s ease-out;
-      }
-      @keyframes acuOverlayFadeIn {
-        from { opacity: 0; }
-        to { opacity: 1; }
-      }
-      
-      .acu-window {
-        --acu-panel-bg: var(--acu-bg-0, #f5f7fa);
-        --acu-panel-border: var(--acu-border, #e0e4ea);
-        --acu-panel-text: var(--acu-text-1, #1a2332);
-        --acu-panel-text-dim: var(--acu-text-2, #4a5568);
-        --acu-panel-text-mute: var(--acu-text-3, #8896a8);
-        --acu-panel-accent: var(--acu-accent, #2563eb);
-        --acu-panel-hover: var(--acu-bg-2, rgba(0, 0, 0, 0.03));
-        --acu-panel-shadow: var(--acu-shadow, 0 1px 3px rgba(0, 0, 0, 0.06));
-        --acu-panel-close-hover-bg: var(--acu-danger-soft-bg, rgba(239, 68, 68, 0.08));
-        --acu-panel-close-hover-border: var(--acu-danger-soft-border, rgba(239, 68, 68, 0.25));
-        --acu-panel-close-hover-text: var(--acu-danger, #ef4444);
-        position: fixed;
-        display: flex;
-        flex-direction: column;
-        background-color: var(--acu-panel-bg);
-        border: 1px solid var(--acu-panel-border);
-        border-radius: 10px;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-        overflow: hidden;
-        min-width: 400px;
-        min-height: 300px;
-        animation: acuWindowSlideIn 0.22s ease-out;
-        color-scheme: light;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-        font-weight: 500;
-        color: var(--acu-panel-text);
-        text-rendering: optimizeLegibility;
-        -webkit-font-smoothing: antialiased;
-      }
-      @keyframes acuWindowSlideIn {
-        from { opacity: 0; transform: scale(0.97) translateY(-14px); }
-        to { opacity: 1; transform: scale(1) translateY(0); }
-      }
-      
-      .acu-window.maximized {
-        top: 10px !important;
-        left: 10px !important;
-        width: calc(100vw - 20px) !important;
-        height: calc(100vh - 20px) !important;
-        border-radius: 12px;
-      }
-      
-      /* 窄屏模式下全屏时减小边距，确保头部完全可见 */
-      @media screen and (max-width: 1100px) {
-        .acu-window.maximized {
-          top: 5px !important;
-          left: 5px !important;
-          width: calc(100vw - 10px) !important;
-          height: calc(100vh - 10px) !important;
-          border-radius: 8px;
-        }
-        .acu-window-header {
-          padding: 10px 12px;
-        }
-        .acu-window-controls {
-          gap: 6px;
-          margin-right: 0; /* 窄屏模式下关闭按钮靠右 */
-        }
-        .acu-window-btn {
-          width: 32px;
-          height: 32px;
-        }
-        .acu-window {
-          min-width: 320px; /* 窄屏下允许更小的最小宽度 */
-        }
-      }
-      
-      /* 超窄屏模式下全屏时进一步优化 */
-      @media screen and (max-width: 768px) {
-        .acu-window.acu-window-phone-fullscreen,
-        .acu-window.acu-window-phone-fullscreen.maximized {
-          top: 0 !important;
-          left: 0 !important;
-          right: 0 !important;
-          bottom: 0 !important;
-          width: 100vw !important;
-          width: 100dvw !important;
-          height: 100vh !important;
-          height: 100dvh !important;
-          min-width: 100vw !important;
-          min-width: 100dvw !important;
-          min-height: 100vh !important;
-          min-height: 100dvh !important;
-          max-width: 100vw !important;
-          max-width: 100dvw !important;
-          max-height: 100vh !important;
-          max-height: 100dvh !important;
-          border-radius: 0 !important;
-          border: none !important;
-          box-shadow: none !important;
-        }
-        .acu-window {
-          min-width: min(320px, calc(100vw - 12px)) !important; /* 手机端保留边距，避免遮挡底层界面 */
-          min-height: min(360px, calc(100dvh - 12px)) !important;
-          max-width: calc(100vw - 12px) !important;
-          max-height: calc(100vh - 12px) !important;
-          max-height: calc(100dvh - 12px) !important; /* 使用动态视口高度，避免移动浏览器地址栏问题 */
-        }
-        .acu-window.maximized {
-          top: 6px !important;
-          left: 6px !important;
-          width: calc(100vw - 12px) !important;
-          height: calc(100vh - 12px) !important;
-          height: calc(100dvh - 12px) !important; /* 优先使用动态视口高度 */
-          max-width: calc(100vw - 12px) !important;
-          max-height: calc(100vh - 12px) !important;
-          max-height: calc(100dvh - 12px) !important;
-          border-radius: 10px;
-          border: 1px solid var(--acu-panel-border);
-        }
-        .acu-window-header {
-          padding: 8px 10px;
-          min-height: 44px; /* 确保头部高度足够 */
-          flex-shrink: 0;
-        }
-        .acu-window-controls {
-          margin-right: 0; /* 超窄屏模式下关闭按钮靠右 */
-        }
-        .acu-window-title {
-          font-size: 13px;
-        }
-        .acu-window-btn {
-          width: 36px;
-          height: 36px;
-          font-size: 16px;
-        }
-        .acu-window-body {
-          max-width: 100vw;
-          overflow-x: hidden;
-          overflow-y: auto;
-          /* 确保body能正确滚动，使用flex布局撑满剩余空间 */
-          flex: 1 1 0;
-          min-height: 0; /* 关键：允许flex子元素收缩 */
-        }
-        .acu-window.acu-window-phone-fullscreen .acu-window-body {
-          flex: 1 1 auto;
-          min-height: 0;
-          height: auto;
-          max-height: none;
-          overflow-x: hidden;
-          overflow-y: auto;
-        }
-      }
-      
-      /* 极窄屏模式（≤480px）进一步压缩 */
-      @media screen and (max-width: 480px) {
-        .acu-window-header {
-          padding: 6px 8px;
-          min-height: 40px;
-        }
-        .acu-window-title {
-          font-size: 12px;
-          gap: 6px;
-        }
-        .acu-window-title i {
-          font-size: 14px;
-        }
-        .acu-window-btn {
-          width: 32px;
-          height: 32px;
-          font-size: 14px;
-        }
-        .acu-window-controls {
-          gap: 4px;
-          margin-right: 0; /* 极窄屏模式下关闭按钮靠右 */
-        }
-      }
-      
-      /* 超小屏模式（≤360px）最小化头部占用 */
-      @media screen and (max-width: 360px) {
-        .acu-window-header {
-          padding: 4px 6px;
-          min-height: 36px;
-        }
-        .acu-window-title {
-          font-size: 11px;
-          gap: 4px;
-        }
-        .acu-window-title i {
-          font-size: 12px;
-        }
-        .acu-window-btn {
-          width: 28px;
-          height: 28px;
-          font-size: 12px;
-          border-radius: 6px;
-        }
-        .acu-window-controls {
-          margin-right: 0; /* 超小屏模式下关闭按钮靠右 */
-        }
-      }
-      
-      .acu-window-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 10px 14px;
-        background: transparent;
-        border-bottom: 1px solid var(--acu-panel-border);
-        cursor: move;
-        user-select: none;
-        flex-shrink: 0;
-      }
-      
-      .acu-window-title {
-        font-size: 13px;
-        font-weight: 600;
-        letter-spacing: 0.5px;
-        color: var(--acu-panel-text);
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        flex: 1;
-        min-width: 0;
-        overflow: hidden;
-      }
-      .acu-window-title i {
-        color: var(--acu-panel-accent);
-        flex-shrink: 0;
-      }
-      .acu-window-title span {
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-      
-      .acu-window-controls {
-        display: flex;
-        gap: 6px;
-        flex-shrink: 0;
-        margin-left: 8px;
-      }
-      
-      .acu-window-btn {
-        width: 28px;
-        height: 28px;
-        border: 1px solid transparent !important;
-        border-radius: 6px;
-        background: transparent !important;
-        color: var(--acu-panel-text-mute);
-        cursor: pointer;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        transition: all 0.15s ease;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-        box-shadow: none !important;
-      }
-      .acu-window-btn:hover {
-        background: var(--acu-panel-hover) !important;
-        border-color: var(--acu-panel-border) !important;
-        color: var(--acu-panel-text);
-        box-shadow: none !important;
-      }
-      .acu-window-btn.maximize:hover {
-        color: var(--acu-panel-accent);
-      }
-      .acu-window-btn.close:hover {
-        background: var(--acu-panel-close-hover-bg) !important;
-        border-color: var(--acu-panel-close-hover-border) !important;
-        color: var(--acu-panel-close-hover-text);
-        box-shadow: none !important;
-      }
-      .acu-window-btn.theme-toggle {
-        width: auto;
-        min-width: 58px;
-        padding: 0 10px;
-        font-size: 11px;
-        letter-spacing: 1px;
-      }
-      .acu-theme-toggle-text {
-        display: inline-block;
-        line-height: 1;
-        transform: translateY(-0.5px);
-      }
-      
-      .acu-window-body {
-        flex: 1 1 0;
-        min-height: 0; /* 关键：允许flex子元素收缩到小于内容高度 */
-        overflow: auto;
-        overflow-x: hidden;
-        padding: 0;
-        /* 确保内容不会撑破容器 */
-        display: flex;
-        flex-direction: column;
-      }
-      
-      /* 窗口body内的内容容器 */
-      .acu-window-body > * {
-        flex: 1 1 0;
-        min-height: 0;
-        overflow-y: auto;
-        box-sizing: border-box;
-      }
-      
-      /* 窗口大小调整手柄 */
-      .acu-window-resize-handle {
-        position: absolute;
-        background: transparent;
-      }
-      .acu-window-resize-handle.se {
-        right: 0; bottom: 0;
-        width: 20px; height: 20px;
-        cursor: se-resize;
-      }
-      .acu-window-resize-handle.se::after {
-        content: '';
-        position: absolute;
-        right: 4px; bottom: 4px;
-        width: 10px; height: 10px;
-        border-right: 2px solid var(--acu-panel-border);
-        border-bottom: 2px solid var(--acu-panel-border);
-        opacity: 0.72;
-      }
-      .acu-window-resize-handle.e {
-        right: 0; top: 40px; bottom: 20px;
-        width: 6px;
-        cursor: e-resize;
-      }
-      .acu-window-resize-handle.s {
-        left: 20px; right: 20px; bottom: 0;
-        height: 6px;
-        cursor: s-resize;
-      }
-      .acu-window-resize-handle.w {
-        left: 0; top: 40px; bottom: 20px;
-        width: 6px;
-        cursor: w-resize;
-      }
-      .acu-window-resize-handle.n {
-        left: 20px; right: 20px; top: 0;
-        height: 6px;
-        cursor: n-resize;
-      }
-      .acu-window-resize-handle.nw {
-        left: 0; top: 0;
-        width: 20px; height: 20px;
-        cursor: nw-resize;
-      }
-      .acu-window-resize-handle.ne {
-        right: 0; top: 0;
-        width: 20px; height: 20px;
-        cursor: ne-resize;
-      }
-      .acu-window-resize-handle.sw {
-        left: 0; bottom: 0;
-        width: 20px; height: 20px;
-        cursor: sw-resize;
-      }
-    `;
-    const style = targetDoc.createElement('style');
-    style.id = `${SCRIPT_ID_PREFIX_ACU}-window-styles`;
-    style.textContent = css;
-    (targetDoc.head || targetDoc.documentElement).appendChild(style);
-}
-
-// theme/builtins/default-light.ts
-// 默认浅色管理台主题
-const THEME_DEFAULT_LIGHT$1 = {
-    id: 'default-light',
-    name: '浅色管理台',
-    description: '默认浅色风格，细边框、弱阴影、蓝色主强调，适合日常使用',
-    author: '星·数据库',
-    version: '1.0.0',
-    colorScheme: 'light',
-    variables: {
-        '--acu-bg-0': '#f5f7fa',
-        '--acu-bg-1': '#ffffff',
-        '--acu-bg-2': 'rgba(0, 0, 0, 0.03)',
-        '--acu-bg-3': 'rgba(0, 0, 0, 0.05)',
-        '--acu-border': '#e0e4ea',
-        '--acu-border-2': '#c8cdd5',
-        '--acu-text-1': '#1a2332',
-        '--acu-text-2': '#4a5568',
-        '--acu-text-3': '#8896a8',
-        '--acu-accent': '#2563eb',
-        '--acu-accent-2': '#3b82f6',
-        '--acu-accent-glow': 'rgba(37, 99, 235, 0.12)',
-        '--acu-accent-glow-2': 'rgba(59, 130, 246, 0.10)',
-        '--acu-success': '#10b981',
-        '--acu-warning': '#f59e0b',
-        '--acu-danger': '#ef4444',
-        '--acu-radius-lg': '10px',
-        '--acu-radius-md': '8px',
-        '--acu-radius-sm': '6px',
-        '--acu-shadow': '0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04)',
-        // 兼容旧变量
-        '--bg-primary': 'var(--acu-bg-0)',
-        '--bg-secondary': 'var(--acu-bg-1)',
-        '--background_light': 'rgba(0, 0, 0, 0.02)',
-        '--background_default': '#ffffff',
-        '--background-color-light': 'rgba(0, 0, 0, 0.02)',
-        '--input-background': '#ffffff',
-        '--input-text-color': 'var(--acu-text-1)',
-        '--text-main': 'var(--acu-text-1)',
-        '--text_primary': 'var(--acu-text-1)',
-        '--text_secondary': 'var(--acu-text-2)',
-        '--text_tertiary': 'var(--acu-text-3)',
-        '--text-color': 'var(--acu-text-1)',
-        '--text-color-dimmed': 'var(--acu-text-3)',
-        '--border_color': 'var(--acu-border)',
-        '--border_color_light': 'var(--acu-border)',
-        '--border-normal': 'var(--acu-border-2)',
-        '--warning-color': 'var(--acu-warning)',
-        '--error-color': 'var(--acu-danger)',
-        '--button-background': '#ffffff',
-        '--button-secondary-background': '#f8f9fb',
-        '--green': 'var(--acu-success)',
-        '--orange': 'var(--acu-warning)',
-        '--red': 'var(--acu-danger)',
-        '--accent-primary': 'var(--acu-accent)',
-        // 控件与扩展模块变量
-        '--acu-control-bg': '#ffffff',
-        '--acu-control-text': 'var(--acu-text-1)',
-        '--acu-select-arrow': 'var(--acu-text-2)',
-        '--acu-radio-accent': 'var(--acu-accent)',
-        '--acu-radio-bg': 'var(--acu-control-bg)',
-        '--acu-checkbox-bg': 'var(--acu-control-bg)',
-        '--acu-checkbox-checked-bg': 'var(--acu-accent)',
-        '--acu-checkbox-checked-border': 'var(--acu-accent)',
-        '--acu-checkbox-checked-icon': '#ffffff',
-        '--acu-danger-soft-bg': 'rgba(239, 68, 68, 0.08)',
-        '--acu-danger-soft-border': 'rgba(239, 68, 68, 0.25)',
-        '--acu-overlay-bg': 'rgba(0, 0, 0, 0.16)',
-        '--acu-overlay-backdrop-blur': '3px',
-        '--acu-confirm-bg': 'var(--acu-bg-1)',
-        '--acu-confirm-border': 'var(--acu-border)',
-        '--acu-confirm-title': 'var(--acu-text-1)',
-        '--acu-confirm-text': 'var(--acu-text-2)',
-        '--acu-confirm-cancel-bg': 'transparent',
-        '--acu-confirm-cancel-border': 'var(--acu-border-2)',
-        '--acu-confirm-cancel-text': 'var(--acu-text-2)',
-        '--acu-confirm-cancel-hover-bg': 'var(--acu-bg-2)',
-        '--acu-confirm-cancel-hover-border': 'var(--acu-border)',
-        '--acu-confirm-cancel-hover-text': 'var(--acu-text-1)',
-        '--acu-confirm-ok-bg': 'rgba(37, 99, 235, 0.08)',
-        '--acu-confirm-ok-border': 'rgba(37, 99, 235, 0.30)',
-        '--acu-confirm-ok-text': 'var(--acu-accent)',
-        '--acu-confirm-ok-hover-bg': 'rgba(37, 99, 235, 0.14)',
-        '--acu-confirm-ok-hover-border': 'rgba(37, 99, 235, 0.45)',
-    },
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "HarmonyOS Sans SC", "MiSans", Roboto, Helvetica, Arial, sans-serif',
-    previewColors: {
-        bg: '#f5f7fa',
-        card: '#ffffff',
-        accent: '#2563eb',
-        text: '#1a2332',
-    },
-};
-
-// theme/builtins/default-dark.ts
-// 深色科技主题（原默认主题）
-const THEME_DEFAULT_DARK$1 = {
-    id: 'default-dark',
-    name: '深色科技',
-    description: '深色中性背景 + 蓝紫高光，适合暗光环境',
-    author: '星·数据库',
-    version: '1.0.0',
-    colorScheme: 'dark',
-    variables: {
-        '--acu-bg-0': '#0b0f15',
-        '--acu-bg-1': '#101826',
-        '--acu-bg-2': 'rgba(255, 255, 255, 0.06)',
-        '--acu-bg-3': 'rgba(255, 255, 255, 0.09)',
-        '--acu-border': 'rgba(255, 255, 255, 0.12)',
-        '--acu-border-2': 'rgba(255, 255, 255, 0.18)',
-        '--acu-text-1': 'rgba(255, 255, 255, 0.92)',
-        '--acu-text-2': 'rgba(255, 255, 255, 0.74)',
-        '--acu-text-3': 'rgba(255, 255, 255, 0.52)',
-        '--acu-accent': '#7bb7ff',
-        '--acu-accent-2': '#9b7bff',
-        '--acu-accent-glow': 'rgba(123, 183, 255, 0.22)',
-        '--acu-accent-glow-2': 'rgba(155, 123, 255, 0.18)',
-        '--acu-success': '#4ad19f',
-        '--acu-warning': '#ffb85c',
-        '--acu-danger': '#ff6b6b',
-        '--acu-radius-lg': '16px',
-        '--acu-radius-md': '12px',
-        '--acu-radius-sm': '10px',
-        '--acu-shadow': '0 18px 60px rgba(0, 0, 0, 0.55)',
-        // 兼容旧变量
-        '--bg-primary': 'var(--acu-bg-0)',
-        '--bg-secondary': 'var(--acu-bg-1)',
-        '--background_light': 'rgba(255, 255, 255, 0.04)',
-        '--background_default': 'rgba(255, 255, 255, 0.03)',
-        '--background-color-light': 'rgba(255, 255, 255, 0.04)',
-        '--input-background': 'rgba(0, 0, 0, 0.26)',
-        '--input-text-color': 'var(--acu-text-1)',
-        '--text-main': 'var(--acu-text-1)',
-        '--text_primary': 'var(--acu-text-1)',
-        '--text_secondary': 'var(--acu-text-2)',
-        '--text_tertiary': 'var(--acu-text-3)',
-        '--text-color': 'var(--acu-text-1)',
-        '--text-color-dimmed': 'var(--acu-text-3)',
-        '--border_color': 'var(--acu-border)',
-        '--border_color_light': 'var(--acu-border)',
-        '--border-normal': 'var(--acu-border-2)',
-        '--warning-color': 'var(--acu-warning)',
-        '--error-color': 'var(--acu-danger)',
-        '--button-background': 'rgba(255, 255, 255, 0.06)',
-        '--button-secondary-background': 'rgba(255, 255, 255, 0.04)',
-        '--green': 'var(--acu-success)',
-        '--orange': 'var(--acu-warning)',
-        '--red': 'var(--acu-danger)',
-        '--accent-primary': 'var(--acu-accent)',
-        // 控件与扩展模块变量
-        '--acu-control-bg': 'rgba(0, 0, 0, 0.26)',
-        '--acu-control-text': 'var(--acu-text-1)',
-        '--acu-select-arrow': 'var(--acu-text-2)',
-        '--acu-radio-accent': 'var(--acu-accent)',
-        '--acu-radio-bg': 'var(--acu-control-bg)',
-        '--acu-checkbox-bg': 'rgba(255, 255, 255, 0.06)',
-        '--acu-checkbox-checked-bg': 'var(--acu-accent)',
-        '--acu-checkbox-checked-border': 'var(--acu-accent)',
-        '--acu-checkbox-checked-icon': '#08111f',
-        '--acu-danger-soft-bg': 'rgba(255, 107, 107, 0.10)',
-        '--acu-danger-soft-border': 'rgba(255, 107, 107, 0.32)',
-        '--acu-overlay-bg': 'rgba(0, 0, 0, 0.28)',
-        '--acu-overlay-backdrop-blur': '3px',
-        '--acu-confirm-bg': 'var(--acu-bg-1)',
-        '--acu-confirm-border': 'var(--acu-border)',
-        '--acu-confirm-title': 'var(--acu-text-1)',
-        '--acu-confirm-text': 'var(--acu-text-2)',
-        '--acu-confirm-cancel-bg': 'transparent',
-        '--acu-confirm-cancel-border': 'var(--acu-border-2)',
-        '--acu-confirm-cancel-text': 'var(--acu-text-2)',
-        '--acu-confirm-cancel-hover-bg': 'var(--acu-bg-2)',
-        '--acu-confirm-cancel-hover-border': 'var(--acu-border)',
-        '--acu-confirm-cancel-hover-text': 'var(--acu-text-1)',
-        '--acu-confirm-ok-bg': 'rgba(123, 183, 255, 0.16)',
-        '--acu-confirm-ok-border': 'rgba(123, 183, 255, 0.38)',
-        '--acu-confirm-ok-text': 'var(--acu-accent)',
-        '--acu-confirm-ok-hover-bg': 'rgba(123, 183, 255, 0.24)',
-        '--acu-confirm-ok-hover-border': 'rgba(123, 183, 255, 0.52)',
-    },
-    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "HarmonyOS Sans SC", "MiSans", Roboto, Helvetica, Arial, sans-serif',
-    previewColors: {
-        bg: '#0b0f15',
-        card: '#101826',
-        accent: '#7bb7ff',
-        text: 'rgba(255, 255, 255, 0.92)',
-    },
-};
-
-// theme/builtins/classical-ink.ts
-// 古典墨纸主题（深色）
-const THEME_CLASSICAL_INK = {
-    id: 'classical-ink',
-    name: '古典·墨纸',
-    description: '古雅深色纸墨质感，赤褐为饰，宋体排版',
-    author: '星·数据库',
-    version: '1.0.0',
-    colorScheme: 'dark',
-    variables: {
-        '--acu-bg-0': '#24221f',
-        '--acu-bg-1': '#211f1c',
-        '--acu-bg-2': '#2a2824',
-        '--acu-bg-3': 'rgba(193, 185, 173, 0.06)',
-        '--acu-border': '#36332e',
-        '--acu-border-2': 'rgba(193, 185, 173, 0.16)',
-        '--acu-text-1': '#c1b9ad',
-        '--acu-text-2': '#9e978e',
-        '--acu-text-3': '#645e55',
-        '--acu-accent': '#7d4940',
-        '--acu-accent-2': '#8f5a4e',
-        '--acu-accent-glow': 'rgba(125, 73, 64, 0.16)',
-        '--acu-accent-glow-2': 'rgba(138, 107, 94, 0.12)',
-        '--acu-success': '#85725f',
-        '--acu-warning': '#9c7e56',
-        '--acu-danger': '#8b5a55',
-        '--acu-radius-lg': '2px',
-        '--acu-radius-md': '2px',
-        '--acu-radius-sm': '1px',
-        '--acu-shadow': '0 14px 32px rgba(0, 0, 0, 0.20)',
-        // 兼容旧变量
-        '--bg-primary': 'var(--acu-bg-0)',
-        '--bg-secondary': 'var(--acu-bg-1)',
-        '--background_light': 'rgba(193, 185, 173, 0.04)',
-        '--background_default': 'rgba(193, 185, 173, 0.03)',
-        '--background-color-light': 'rgba(193, 185, 173, 0.04)',
-        '--input-background': 'rgba(26, 24, 22, 0.36)',
-        '--input-text-color': 'var(--acu-text-1)',
-        '--text-main': 'var(--acu-text-1)',
-        '--text_primary': 'var(--acu-text-1)',
-        '--text_secondary': 'var(--acu-text-2)',
-        '--text_tertiary': 'var(--acu-text-3)',
-        '--text-color': 'var(--acu-text-1)',
-        '--text-color-dimmed': 'var(--acu-text-3)',
-        '--border_color': 'var(--acu-border)',
-        '--border_color_light': 'var(--acu-border)',
-        '--border-normal': 'var(--acu-border-2)',
-        '--warning-color': 'var(--acu-warning)',
-        '--error-color': 'var(--acu-danger)',
-        '--button-background': 'rgba(193, 185, 173, 0.03)',
-        '--button-secondary-background': 'rgba(193, 185, 173, 0.02)',
-        '--green': 'var(--acu-success)',
-        '--orange': 'var(--acu-warning)',
-        '--red': 'var(--acu-danger)',
-        '--accent-primary': 'var(--acu-accent)',
-        '--acu-control-bg': 'rgba(26, 24, 22, 0.36)',
-        '--acu-control-text': 'var(--acu-text-1)',
-        '--acu-select-arrow': 'var(--acu-text-2)',
-        '--acu-radio-accent': 'var(--acu-accent)',
-        '--acu-radio-bg': 'var(--acu-control-bg)',
-        '--acu-checkbox-bg': 'rgba(26, 24, 22, 0.48)',
-        '--acu-checkbox-checked-bg': 'var(--acu-accent)',
-        '--acu-checkbox-checked-border': 'var(--acu-accent)',
-        '--acu-checkbox-checked-icon': '#f2ebe1',
-        '--acu-danger-soft-bg': 'rgba(139, 90, 85, 0.14)',
-        '--acu-danger-soft-border': 'rgba(139, 90, 85, 0.32)',
-        '--acu-overlay-bg': 'rgba(18, 16, 14, 0.30)',
-        '--acu-overlay-backdrop-blur': '3px',
-        '--acu-confirm-bg': 'var(--acu-bg-1)',
-        '--acu-confirm-border': 'var(--acu-border)',
-        '--acu-confirm-title': 'var(--acu-text-1)',
-        '--acu-confirm-text': 'var(--acu-text-2)',
-        '--acu-confirm-cancel-bg': 'transparent',
-        '--acu-confirm-cancel-border': 'var(--acu-border-2)',
-        '--acu-confirm-cancel-text': 'var(--acu-text-2)',
-        '--acu-confirm-cancel-hover-bg': 'var(--acu-bg-2)',
-        '--acu-confirm-cancel-hover-border': 'var(--acu-border)',
-        '--acu-confirm-cancel-hover-text': 'var(--acu-text-1)',
-        '--acu-confirm-ok-bg': 'rgba(125, 73, 64, 0.14)',
-        '--acu-confirm-ok-border': 'rgba(125, 73, 64, 0.34)',
-        '--acu-confirm-ok-text': 'var(--acu-accent)',
-        '--acu-confirm-ok-hover-bg': 'rgba(125, 73, 64, 0.22)',
-        '--acu-confirm-ok-hover-border': 'rgba(125, 73, 64, 0.46)',
-    },
-    fontFamily: '"Noto Serif SC", "Source Han Serif CN", "Songti SC", "STSong", "SimSun", serif',
-    customCSS: `
-        /* 墨纸主题特有：header 前缀字 */
-        #popup .acu-header::before {
-            content: '录';
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 22px;
-            height: 22px;
-            border: 1px solid var(--acu-accent);
-            color: var(--acu-accent);
-            font-size: 12px;
-            border-radius: 1px;
-            opacity: 0.85;
-            letter-spacing: 1px;
-            flex-shrink: 0;
-        }
-        #popup .acu-header {
-            background: transparent;
-            box-shadow: none;
-        }
-    `,
-    previewColors: {
-        bg: '#24221f',
-        card: '#2a2824',
-        accent: '#7d4940',
-        text: '#c1b9ad',
-    },
-};
-
-// theme/builtins/classical-silk.ts
-// 古典素纱主题（浅色）
-const THEME_CLASSICAL_SILK = {
-    id: 'classical-silk',
-    name: '古典·素纱',
-    description: '淡雅浅色纱质感，暖褐色调，宋体排版',
-    author: '星·数据库',
-    version: '1.0.0',
-    colorScheme: 'light',
-    variables: {
-        '--acu-bg-0': '#f4f1eb',
-        '--acu-bg-1': '#f9f8f5',
-        '--acu-bg-2': '#ebe7de',
-        '--acu-bg-3': 'rgba(74, 69, 63, 0.05)',
-        '--acu-border': '#e0dacb',
-        '--acu-border-2': 'rgba(110, 103, 94, 0.18)',
-        '--acu-text-1': '#4a453f',
-        '--acu-text-2': '#6e675e',
-        '--acu-text-3': '#9e978e',
-        '--acu-accent': '#8a6b5e',
-        '--acu-accent-2': '#9d7c6f',
-        '--acu-accent-glow': 'rgba(138, 107, 94, 0.14)',
-        '--acu-accent-glow-2': 'rgba(138, 107, 94, 0.10)',
-        '--acu-success': '#6f7b62',
-        '--acu-warning': '#a2835b',
-        '--acu-danger': '#a06a65',
-        '--acu-radius-lg': '2px',
-        '--acu-radius-md': '2px',
-        '--acu-radius-sm': '1px',
-        '--acu-shadow': '0 2px 8px rgba(74, 69, 63, 0.08)',
-        // 兼容旧变量
-        '--bg-primary': 'var(--acu-bg-0)',
-        '--bg-secondary': 'var(--acu-bg-1)',
-        '--background_light': 'rgba(255, 255, 255, 0.58)',
-        '--background_default': 'rgba(255, 255, 255, 0.42)',
-        '--background-color-light': 'rgba(255, 255, 255, 0.48)',
-        '--input-background': 'rgba(255, 255, 255, 0.70)',
-        '--input-text-color': 'var(--acu-text-1)',
-        '--text-main': 'var(--acu-text-1)',
-        '--text_primary': 'var(--acu-text-1)',
-        '--text_secondary': 'var(--acu-text-2)',
-        '--text_tertiary': 'var(--acu-text-3)',
-        '--text-color': 'var(--acu-text-1)',
-        '--text-color-dimmed': 'var(--acu-text-3)',
-        '--border_color': 'var(--acu-border)',
-        '--border_color_light': 'var(--acu-border)',
-        '--border-normal': 'var(--acu-border-2)',
-        '--warning-color': 'var(--acu-warning)',
-        '--error-color': 'var(--acu-danger)',
-        '--button-background': 'rgba(255, 255, 255, 0.50)',
-        '--button-secondary-background': 'rgba(255, 255, 255, 0.36)',
-        '--green': 'var(--acu-success)',
-        '--orange': 'var(--acu-warning)',
-        '--red': 'var(--acu-danger)',
-        '--accent-primary': 'var(--acu-accent)',
-        '--acu-control-bg': 'rgba(255, 255, 255, 0.70)',
-        '--acu-control-text': 'var(--acu-text-1)',
-        '--acu-select-arrow': 'var(--acu-text-2)',
-        '--acu-radio-accent': 'var(--acu-accent)',
-        '--acu-radio-bg': 'var(--acu-control-bg)',
-        '--acu-checkbox-bg': 'rgba(255, 255, 255, 0.82)',
-        '--acu-checkbox-checked-bg': 'var(--acu-accent)',
-        '--acu-checkbox-checked-border': 'var(--acu-accent)',
-        '--acu-checkbox-checked-icon': '#fffaf4',
-        '--acu-danger-soft-bg': 'rgba(160, 106, 101, 0.12)',
-        '--acu-danger-soft-border': 'rgba(160, 106, 101, 0.28)',
-        '--acu-overlay-bg': 'rgba(74, 69, 63, 0.18)',
-        '--acu-overlay-backdrop-blur': '3px',
-        '--acu-confirm-bg': 'var(--acu-bg-1)',
-        '--acu-confirm-border': 'var(--acu-border)',
-        '--acu-confirm-title': 'var(--acu-text-1)',
-        '--acu-confirm-text': 'var(--acu-text-2)',
-        '--acu-confirm-cancel-bg': 'transparent',
-        '--acu-confirm-cancel-border': 'var(--acu-border-2)',
-        '--acu-confirm-cancel-text': 'var(--acu-text-2)',
-        '--acu-confirm-cancel-hover-bg': 'var(--acu-bg-2)',
-        '--acu-confirm-cancel-hover-border': 'var(--acu-border)',
-        '--acu-confirm-cancel-hover-text': 'var(--acu-text-1)',
-        '--acu-confirm-ok-bg': 'rgba(138, 107, 94, 0.14)',
-        '--acu-confirm-ok-border': 'rgba(138, 107, 94, 0.32)',
-        '--acu-confirm-ok-text': 'var(--acu-accent)',
-        '--acu-confirm-ok-hover-bg': 'rgba(138, 107, 94, 0.22)',
-        '--acu-confirm-ok-hover-border': 'rgba(138, 107, 94, 0.42)',
-    },
-    fontFamily: '"Noto Serif SC", "Source Han Serif CN", "Songti SC", "STSong", "SimSun", serif',
-    customCSS: `
-        /* 素纱主题特有：header 前缀字 */
-        #popup .acu-header::before {
-            content: '录';
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 22px;
-            height: 22px;
-            border: 1px solid var(--acu-accent);
-            color: var(--acu-accent);
-            font-size: 12px;
-            border-radius: 1px;
-            opacity: 0.85;
-            letter-spacing: 1px;
-            flex-shrink: 0;
-        }
-        #popup .acu-header {
-            background: transparent;
-            box-shadow: none;
-        }
-    `,
-    previewColors: {
-        bg: '#f4f1eb',
-        card: '#f9f8f5',
-        accent: '#8a6b5e',
-        text: '#4a453f',
-    },
-};
-
-// theme/theme-registry.ts
-// 主题注册表：管理内置主题、自定义主题、主题切换、导入导出
-// ═══════════════════════════════════════════════════════════════
-// 常量
-// ═══════════════════════════════════════════════════════════════
-const THEME_STYLE_ID = 'acu-theme-override';
-const SETTINGS_KEY = 'uiTheme';
-const CUSTOM_THEMES_KEY = 'customThemes';
-const EXPORT_TEMPLATE_FILENAME = 'acu-theme-editable-template.json';
-const EXPORT_TEMPLATE_SEED = {
-    customCSS: [
-        '/* 在这里编写组件级覆盖。#popup 会被自动替换为弹窗根选择器。 */',
-        '/* .acu-window-header { backdrop-filter: blur(10px); } */',
-    ].join('\n'),
-    windowChromeVariables: {},
-    toastVariables: {},
-    visualizerVariables: {},
-    previewColors: {
-        bg: '#f5f7fa',
-        card: '#ffffff',
-        accent: '#2563eb',
-        text: '#1a2332',
-    },
-};
-// ═══════════════════════════════════════════════════════════════
-// 注册表
-// ═══════════════════════════════════════════════════════════════
-/** 内置主题列表 */
-const BUILTIN_THEMES = [
-    THEME_DEFAULT_LIGHT$1,
-    THEME_DEFAULT_DARK$1,
-    THEME_CLASSICAL_INK,
-    THEME_CLASSICAL_SILK,
-];
-/** 内置主题 ID 集合（用于区分内置/自定义） */
-const BUILTIN_THEME_IDS = new Set(BUILTIN_THEMES.map(t => t.id));
-/** 自定义主题（从设置加载） */
-let _customThemes = [];
-/**
- * 获取所有可用主题（内置 + 自定义）
- */
-function getAllThemes() {
-    return [...BUILTIN_THEMES, ..._customThemes];
-}
-/**
- * 按 ID 查找主题
- */
-function getThemeById(id) {
-    return getAllThemes().find(t => t.id === id);
-}
-/**
- * 获取当前激活的主题 ID
- */
-function getActiveThemeId() {
-    return settings_ACU?.[SETTINGS_KEY] || THEME_DEFAULT_LIGHT$1.id;
-}
-/**
- * 设置当前激活的主题 ID 并持久化
- */
-function setActiveThemeId(id) {
-    if (!settings_ACU)
-        return;
-    settings_ACU[SETTINGS_KEY] = id;
-    saveSettingsAndNotify_ACU();
-}
-// ═══════════════════════════════════════════════════════════════
-// 主题应用
-// ═══════════════════════════════════════════════════════════════
-/**
- * 将主题应用到 DOM。
- * 通过注入/更新 <style> 块覆盖 CSS 变量。
- */
-function applyTheme$1(themeId) {
-    const id = themeId || getActiveThemeId();
-    const theme = getThemeById(id);
-    if (!theme) {
-        logWarn_ACU(`[ThemeRegistry] Theme "${id}" not found, falling back to default`);
-        applyThemeToDOM(THEME_DEFAULT_LIGHT$1);
-        return;
-    }
-    applyThemeToDOM(theme);
-    logDebug_ACU(`[ThemeRegistry] Applied theme: ${theme.name} (${theme.id})`);
-}
-/**
- * 根据主题对象生成完整的 CSS 字符串。
- * 包含 popup 变量、window chrome 变量、toast、confirm、visualizer、customCSS。
- * 此函数不操作 DOM，仅返回 CSS 文本。
- * 用于：① 预注入到 popupHtml 消除 FOUC  ② applyThemeToDOM 中复用
- */
-function buildThemeCSS_ACU(theme) {
-    const varDeclarations = Object.entries(theme.variables)
-        .map(([key, value]) => `    ${key}: ${value};`)
-        .join('\n');
-    let css = `#${POPUP_ID_ACU} {\n${varDeclarations}\n}`;
-    // 窗口 chrome 核心主题变量
-    css += `\n.acu-window {\n${varDeclarations}\n}`;
-    // color-scheme 和 font-family
-    css += `\n#${POPUP_ID_ACU} { color-scheme: ${theme.colorScheme};`;
-    if (theme.fontFamily) {
-        css += ` font-family: ${theme.fontFamily};`;
-    }
-    css += ` }`;
-    css += `\n.acu-window { color-scheme: ${theme.colorScheme};`;
-    if (theme.fontFamily) {
-        css += ` font-family: ${theme.fontFamily};`;
-    }
-    css += ` }`;
-    // 追加自定义 CSS
-    if (theme.customCSS) {
-        const customCSS = theme.customCSS.replace(/#popup\b/g, `#${POPUP_ID_ACU}`);
-        css += '\n' + customCSS;
-    }
-    // 窗口chrome变量覆盖
-    if (theme.windowChromeVariables) {
-        const chromeVars = Object.entries(theme.windowChromeVariables)
-            .map(([key, value]) => `    ${key}: ${value};`)
-            .join('\n');
-        css += `\n.acu-window {\n${chromeVars}\n}`;
-    }
-    // Toast 变量覆盖
-    {
-        const toastVarNames = [
-            '--acu-accent', '--acu-bg-1', '--acu-text-1', '--acu-border',
-            '--acu-accent-2', '--acu-bg-0', '--acu-text-2', '--acu-text-3',
-            '--acu-border-2',
-        ];
-        const toastBaseVars = toastVarNames
-            .filter(key => theme.variables[key])
-            .map(key => `    ${key}: ${theme.variables[key]};`)
-            .join('\n');
-        const customToastVars = theme.toastVariables
-            ? Object.entries(theme.toastVariables)
-                .map(([key, value]) => `    ${key}: ${value};`)
-                .join('\n')
-            : '';
-        if (toastBaseVars || customToastVars) {
-            css += `\n#toast-container .acu-toast.toast {\n${toastBaseVars}${customToastVars ? '\n' + customToastVars : ''}\n}`;
-        }
-    }
-    // 确认弹窗变量注入
-    {
-        const confirmVarNames = [
-            '--acu-accent', '--acu-bg-1', '--acu-bg-0', '--acu-text-1',
-            '--acu-text-2', '--acu-text-3', '--acu-border', '--acu-border-2',
-            '--acu-radius-lg', '--acu-radius-md', '--acu-shadow',
-            '--acu-confirm-bg', '--acu-confirm-border', '--acu-confirm-title', '--acu-confirm-text',
-            '--acu-confirm-cancel-bg', '--acu-confirm-cancel-border', '--acu-confirm-cancel-text',
-            '--acu-confirm-cancel-hover-bg', '--acu-confirm-cancel-hover-border', '--acu-confirm-cancel-hover-text',
-            '--acu-confirm-ok-bg', '--acu-confirm-ok-border', '--acu-confirm-ok-text',
-            '--acu-confirm-ok-hover-bg', '--acu-confirm-ok-hover-border',
-            '--acu-overlay-bg', '--acu-overlay-backdrop-blur',
-        ];
-        const confirmVars = confirmVarNames
-            .filter(key => theme.variables[key])
-            .map(key => `    ${key}: ${theme.variables[key]};`)
-            .join('\n');
-        if (confirmVars) {
-            css += `\n#${SCRIPT_ID_PREFIX_ACU}-custom-confirm-overlay,\n#${SCRIPT_ID_PREFIX_ACU}-custom-confirm {\n${confirmVars}\n}`;
-        }
-    }
-    // Visualizer 变量覆盖
-    {
-        const visualizerBaseVarNames = [
-            '--acu-bg-0', '--acu-bg-1', '--acu-bg-2', '--acu-bg-3',
-            '--acu-border', '--acu-border-2',
-            '--acu-text-1', '--acu-text-2', '--acu-text-3',
-            '--acu-accent', '--acu-accent-2', '--acu-accent-glow', '--acu-accent-glow-2',
-            '--acu-success', '--acu-warning', '--acu-danger',
-            '--acu-radius-lg', '--acu-radius-md', '--acu-radius-sm', '--acu-shadow',
-        ];
-        const visualizerBaseVars = visualizerBaseVarNames
-            .filter(key => theme.variables[key])
-            .map(key => `    ${key}: ${theme.variables[key]};`)
-            .join('\n');
-        const vizVars = theme.visualizerVariables
-            ? Object.entries(theme.visualizerVariables)
-                .map(([key, value]) => `    ${key}: ${value};`)
-                .join('\n')
-            : '';
-        if (visualizerBaseVars || vizVars) {
-            css += `\n#acu-visualizer-content {\n${visualizerBaseVars}${vizVars ? '\n' + vizVars : ''}\n}`;
-        }
-    }
-    return css;
-}
-/**
- * 获取当前主题的完整 CSS 字符串（用于预注入消除 FOUC）。
- * 在 popup 创建之前调用，确保首帧即包含正确的主题样式。
- */
-function getThemeCSS_ACU(themeId) {
-    const id = themeId || getActiveThemeId();
-    const theme = getThemeById(id);
-    if (!theme) {
-        return buildThemeCSS_ACU(THEME_DEFAULT_LIGHT$1);
-    }
-    return buildThemeCSS_ACU(theme);
-}
-/**
- * 实际将主题变量写入 DOM
- * 复用 buildThemeCSS_ACU 生成 CSS，注入到正确位置
- */
-function applyThemeToDOM(theme) {
-    const targetDoc = (topLevelWindow_ACU || window).document;
-    let existingStyle = targetDoc.getElementById(THEME_STYLE_ID);
-    if (!existingStyle) {
-        existingStyle = targetDoc.createElement('style');
-        existingStyle.id = THEME_STYLE_ID;
-    }
-    // 主题覆盖样式必须常驻主文档，而不是挂在 [`#popup`](src/presentation/pages/main-popup.ts:75)
-    // 内部。否则主界面一关闭，整个 style 节点会跟着被移除，随后出现的 toast / confirm /
-    // visualizer 首帧就会退回基础 UI。这个问题不是视觉细节，而是主题注入作用域设计错了。
-    if (existingStyle.parentNode !== targetDoc.head) {
-        targetDoc.head.appendChild(existingStyle);
-    }
-    existingStyle.textContent = buildThemeCSS_ACU(theme);
-}
-// ═══════════════════════════════════════════════════════════════
-// 自定义主题管理
-// ═══════════════════════════════════════════════════════════════
-/**
- * 加载自定义主题（从设置中恢复）
- */
-function loadCustomThemes() {
-    if (!settings_ACU)
-        return;
-    const stored = settings_ACU[CUSTOM_THEMES_KEY];
-    if (Array.isArray(stored)) {
-        _customThemes = stored;
-        logDebug_ACU(`[ThemeRegistry] Loaded ${_customThemes.length} custom themes`);
-    }
-}
-/**
- * 添加自定义主题并持久化
- */
-function addCustomTheme(theme) {
-    // 校验
-    if (!theme.id || !theme.name || !theme.variables) {
-        showToastr_ACU('error', '主题格式不合法：缺少 id、name 或 variables');
-        return false;
-    }
-    // 检查 ID 冲突
-    if (getThemeById(theme.id)) {
-        showToastr_ACU('error', `主题 ID "${theme.id}" 已存在，请使用不同的 ID`);
-        return false;
-    }
-    _customThemes.push(theme);
-    persistCustomThemes();
-    showToastr_ACU('success', `主题 "${theme.name}" 已导入`);
-    return true;
-}
-/**
- * 删除自定义主题
- */
-function removeCustomTheme(id) {
-    const idx = _customThemes.findIndex(t => t.id === id);
-    if (idx === -1) {
-        showToastr_ACU('error', `未找到主题 "${id}"`);
-        return false;
-    }
-    // 如果正在使用该主题，切回默认
-    if (getActiveThemeId() === id) {
-        setActiveThemeId(THEME_DEFAULT_LIGHT$1.id);
-        applyTheme$1(THEME_DEFAULT_LIGHT$1.id);
-    }
-    const name = _customThemes[idx].name;
-    _customThemes.splice(idx, 1);
-    persistCustomThemes();
-    showToastr_ACU('success', `主题 "${name}" 已删除`);
-    return true;
-}
-/**
- * 持久化自定义主题到设置
- */
-function persistCustomThemes() {
-    if (!settings_ACU)
-        return;
-    settings_ACU[CUSTOM_THEMES_KEY] = _customThemes;
-    saveSettingsAndNotify_ACU();
-}
-// ═══════════════════════════════════════════════════════════════
-// 导入导出
-// ═══════════════════════════════════════════════════════════════
-/**
- * 从 JSON 文件导入主题
- */
-function importThemeFromFile() {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.json';
-    input.onchange = () => {
-        const file = input.files?.[0];
-        if (!file)
-            return;
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            try {
-                const raw = JSON.parse(e.target?.result);
-                if (raw.formatVersion !== 1) {
-                    showToastr_ACU('error', '不支持的主题文件格式版本');
-                    return;
-                }
-                if (!raw.theme?.id || !raw.theme?.name || !raw.theme?.variables) {
-                    showToastr_ACU('error', '主题文件缺少必要字段');
-                    return;
-                }
-                // 如果 ID 冲突，自动重命名
-                const existing = getThemeById(raw.theme.id);
-                if (existing) {
-                    raw.theme.id = `${raw.theme.id}-imported-${Date.now()}`;
-                    raw.theme.name = `${raw.theme.name} (导入)`;
-                }
-                if (addCustomTheme(raw.theme)) {
-                    // 导入后自动切换到新主题
-                    setActiveThemeId(raw.theme.id);
-                    applyTheme$1(raw.theme.id);
-                    // 刷新选择器（通过事件通知）
-                    document.dispatchEvent(new CustomEvent('acu-theme-changed'));
-                }
-            }
-            catch (err) {
-                logError_ACU('[ThemeRegistry] Failed to parse theme file:', err);
-                showToastr_ACU('error', '主题文件解析失败');
-            }
-        };
-        reader.readAsText(file);
-    };
-    input.click();
-}
-function createThemeTemplateBase() {
-    return createExportableTheme({
-        // ═══ 元信息（必填）═══
-        id: 'my-custom-theme', // 唯一ID，建议格式: "@author/theme-name"
-        name: '我的自定义主题', // 显示名称
-        description: '在此描述你的主题风格', // 简短描述
-        author: '你的名字',
-        version: '1.0.0',
-        colorScheme: 'light', // 'light' 或 'dark'，影响浏览器原生控件渲染
-        // ═══ 核心颜色变量（必填）═══
-        // 这些变量控制弹窗内所有组件的颜色
-        variables: {
-            // --- 背景色 ---
-            '--acu-bg-0': '#f5f7fa', // 页面底色（最深层背景）
-            '--acu-bg-1': '#ffffff', // 卡片/面板背景
-            '--acu-bg-2': 'rgba(0, 0, 0, 0.03)', // 次级背景（hover、分组底色）
-            '--acu-bg-3': 'rgba(0, 0, 0, 0.05)', // 三级背景（强调区块）
-            // --- 边框 ---
-            '--acu-border': '#e0e4ea', // 主边框色
-            '--acu-border-2': '#c8cdd5', // 强边框色（输入框聚焦、按钮边框）
-            // --- 文字 ---
-            '--acu-text-1': '#1a2332', // 主文字（标题、重要信息）
-            '--acu-text-2': '#4a5568', // 次级文字（描述、标签）
-            '--acu-text-3': '#8896a8', // 辅助文字（备注、placeholder）
-            // --- 强调色 ---
-            '--acu-accent': '#2563eb', // 主强调色（按钮、选中态、链接）
-            '--acu-accent-2': '#3b82f6', // 次强调色（渐变、hover态）
-            '--acu-accent-glow': 'rgba(37, 99, 235, 0.12)', // 强调色光晕（按钮背景、标记）
-            '--acu-accent-glow-2': 'rgba(59, 130, 246, 0.10)', // 次光晕
-            // --- 语义色 ---
-            '--acu-success': '#10b981', // 成功/确认
-            '--acu-warning': '#f59e0b', // 警告/注意
-            '--acu-danger': '#ef4444', // 危险/删除/错误
-            // --- 圆角 ---
-            '--acu-radius-lg': '10px', // 大圆角（卡片、弹窗header）
-            '--acu-radius-md': '8px', // 中圆角（输入框、select）
-            '--acu-radius-sm': '6px', // 小圆角（按钮、tag）
-            // --- 阴影 ---
-            '--acu-shadow': '0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04)',
-            // ═══ 兼容变量（强烈建议完整提供）═══
-            // 部分旧组件的 inline style 仍使用这些变量名
-            '--bg-primary': 'var(--acu-bg-0)',
-            '--bg-secondary': 'var(--acu-bg-1)',
-            '--background_light': 'rgba(0,0,0,0.02)',
-            '--background_default': '#ffffff',
-            '--background-color-light': 'rgba(0,0,0,0.02)',
-            '--input-background': '#ffffff',
-            '--input-text-color': 'var(--acu-text-1)',
-            '--button-background': '#ffffff',
-            '--button-secondary-background': '#f8f9fb',
-            '--text-main': 'var(--acu-text-1)',
-            '--text_primary': 'var(--acu-text-1)',
-            '--text_secondary': 'var(--acu-text-2)',
-            '--text_tertiary': 'var(--acu-text-3)',
-            '--text-color': 'var(--acu-text-1)',
-            '--text-color-dimmed': 'var(--acu-text-3)',
-            '--border_color': 'var(--acu-border)',
-            '--border_color_light': 'var(--acu-border)',
-            '--border-normal': 'var(--acu-border-2)',
-            '--warning-color': 'var(--acu-warning)',
-            '--error-color': 'var(--acu-danger)',
-            '--green': 'var(--acu-success)',
-            '--orange': 'var(--acu-warning)',
-            '--red': 'var(--acu-danger)',
-            '--accent-primary': 'var(--acu-accent)',
-            // ═══ 控件与交互扩展变量（建议完整提供）═══
-            '--acu-control-bg': '#ffffff',
-            '--acu-control-text': 'var(--acu-text-1)',
-            '--acu-select-arrow': 'var(--acu-text-2)',
-            '--acu-radio-accent': 'var(--acu-accent)',
-            '--acu-radio-bg': 'var(--acu-control-bg)',
-            '--acu-checkbox-bg': 'var(--acu-control-bg)',
-            '--acu-checkbox-checked-bg': 'var(--acu-accent)',
-            '--acu-checkbox-checked-border': 'var(--acu-accent)',
-            '--acu-checkbox-checked-icon': '#ffffff',
-            '--acu-danger-soft-bg': 'rgba(239, 68, 68, 0.08)',
-            '--acu-danger-soft-border': 'rgba(239, 68, 68, 0.25)',
-            '--acu-overlay-bg': 'rgba(0, 0, 0, 0.16)',
-            '--acu-overlay-backdrop-blur': '3px',
-            '--acu-confirm-bg': 'var(--acu-bg-1)',
-            '--acu-confirm-border': 'var(--acu-border)',
-            '--acu-confirm-title': 'var(--acu-text-1)',
-            '--acu-confirm-text': 'var(--acu-text-2)',
-            '--acu-confirm-cancel-bg': 'transparent',
-            '--acu-confirm-cancel-border': 'var(--acu-border-2)',
-            '--acu-confirm-cancel-text': 'var(--acu-text-2)',
-            '--acu-confirm-cancel-hover-bg': 'var(--acu-bg-2)',
-            '--acu-confirm-cancel-hover-border': 'var(--acu-border)',
-            '--acu-confirm-cancel-hover-text': 'var(--acu-text-1)',
-            '--acu-confirm-ok-bg': 'rgba(37, 99, 235, 0.08)',
-            '--acu-confirm-ok-border': 'rgba(37, 99, 235, 0.30)',
-            '--acu-confirm-ok-text': 'var(--acu-accent)',
-            '--acu-confirm-ok-hover-bg': 'rgba(37, 99, 235, 0.14)',
-            '--acu-confirm-ok-hover-border': 'rgba(37, 99, 235, 0.45)',
-        },
-        // ═══ 字体（可选）═══
-        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
-        // ═══ 自定义CSS（可选，高级）═══
-        // 可以覆盖任何组件级样式。#popup 会被自动替换为弹窗根选择器。
-        customCSS: [
-            '/* ═══ 组件级样式覆盖示例 ═══ */',
-            '',
-            '/* 自定义窗口顶部 chrome */',
-            '/* .acu-window-header { backdrop-filter: blur(10px); } */',
-            '/* .acu-window-title { letter-spacing: 0.08em; } */',
-            '',
-            '/* 调整导航栏宽度 */',
-            '/* #popup .acu-tabs-nav { min-width: 160px; } */',
-            '',
-            '/* 修改卡片内边距 */',
-            '/* #popup .acu-card { padding: 16px; } */',
-            '',
-            '/* 自定义按钮悬停效果 */',
-            '/* #popup button.primary:hover { filter: brightness(1.1); } */',
-            '',
-            '/* 修改表格样式 */',
-            '/* #popup table th { background: var(--acu-bg-2); } */',
-            '',
-            '/* 修改输入框聚焦效果 */',
-            '/* #popup input:focus, #popup textarea:focus, #popup select:focus {',
-            '  outline: 2px solid var(--acu-accent);',
-            '  outline-offset: -1px;',
-            '} */',
-            '',
-            '/* 自定义确认框 */',
-            '/* #your-prefix-custom-confirm { border-radius: 18px; } */',
-            '/* #your-prefix-custom-confirm-overlay { backdrop-filter: blur(8px); } */',
-            '',
-            '/* 自定义 checkbox / radio / select */',
-            '/* #popup input[type="checkbox"] { border-radius: 5px !important; } */',
-            '/* #popup .qrf_radio_group input[type="radio"] { transform: scale(1.05); } */',
-            '/* #popup select { background-size: 7px 7px, 7px 7px; } */',
-        ].join('\n'),
-        // ═══ 窗口标题栏样式（可选）═══
-        // 窗口标题栏使用 --acu-panel-* 变量，默认从主题变量引用。
-        // 如果需要标题栏与内容区使用不同色调，在此覆盖。
-        windowChromeVariables: {
-        // '--acu-panel-bg': 'var(--acu-bg-0)',
-        // '--acu-panel-border': 'var(--acu-border)',
-        // '--acu-panel-text': 'var(--acu-text-1)',
-        // '--acu-panel-text-dim': 'var(--acu-text-2)',
-        // '--acu-panel-text-mute': 'var(--acu-text-3)',
-        // '--acu-panel-accent': 'var(--acu-accent)',
-        // '--acu-panel-hover': 'var(--acu-bg-2)',
-        // '--acu-panel-shadow': 'var(--acu-shadow)',
-        // '--acu-panel-close-hover-bg': 'var(--acu-danger-soft-bg)',
-        // '--acu-panel-close-hover-border': 'var(--acu-danger-soft-border)',
-        // '--acu-panel-close-hover-text': 'var(--acu-danger)',
-        },
-        // ═══ Toast 提示框样式（可选）═══
-        // 提示框默认使用主题核心色。如果需要独立定制，在此覆盖。
-        toastVariables: {
-        // '--toast-accent': 'var(--acu-accent)',
-        // '--toast-bg': 'var(--acu-bg-1)',
-        // '--toast-text': 'var(--acu-text-1)',
-        // '--toast-border': 'var(--acu-border)',
-        },
-        // ═══ 可视化编辑器样式（可选）═══
-        // 表格可视化编辑器的独立样式变量
-        visualizerVariables: {
-        // '--acu-viz-bg': 'var(--acu-bg-0)',
-        // '--acu-viz-sidebar-bg': 'var(--acu-bg-1)',
-        // '--acu-viz-card-bg': 'var(--acu-bg-1)',
-        // '--acu-viz-border': 'var(--acu-border)',
-        // '--acu-viz-text': 'var(--acu-text-1)',
-        // '--acu-viz-text-dim': 'var(--acu-text-3)',
-        // '--acu-viz-accent': 'var(--acu-accent)',
-        },
-        // ═══ 预览色块（可选）═══
-        // 在主题选择下拉框中显示的颜色预览
-        previewColors: {
-            bg: '#f5f7fa',
-            card: '#ffffff',
-            accent: '#2563eb',
-            text: '#1a2332',
-        },
-    });
-}
-function createEditableThemeTemplate(theme) {
-    const templateBase = createThemeTemplateBase();
-    return createExportableTheme({
-        ...templateBase,
-        ...theme,
-        variables: {
-            ...templateBase.variables,
-            ...theme.variables,
-        },
-        windowChromeVariables: {
-            ...(templateBase.windowChromeVariables ?? {}),
-            ...(theme.windowChromeVariables ?? {}),
-        },
-        toastVariables: {
-            ...(templateBase.toastVariables ?? {}),
-            ...(theme.toastVariables ?? {}),
-        },
-        visualizerVariables: {
-            ...(templateBase.visualizerVariables ?? {}),
-            ...(theme.visualizerVariables ?? {}),
-        },
-        customCSS: theme.customCSS ?? templateBase.customCSS,
-        previewColors: theme.previewColors ?? templateBase.previewColors,
-    });
-}
-function buildEditableModules(theme) {
-    return [
-        {
-            id: 'core-variables',
-            label: '核心颜色变量',
-            description: '页面背景、文字、边框、强调色、语义色与圆角阴影。主题的主体风格由这里决定。',
-            paths: ['theme.variables'],
-            status: Object.keys(theme.variables || {}).length > 0 ? 'configured' : 'fallback',
-        },
-        {
-            id: 'window-chrome',
-            label: '窗口顶部 chrome',
-            description: '独立窗口标题栏、按钮 hover、阴影与边框的专用覆盖。',
-            paths: ['theme.windowChromeVariables'],
-            status: Object.keys(theme.windowChromeVariables || {}).length > 0 ? 'configured' : 'empty',
-        },
-        {
-            id: 'toast',
-            label: 'Toast 提示框',
-            description: '提示框的独立颜色入口；为空时回退到核心主题变量。',
-            paths: ['theme.toastVariables'],
-            status: Object.keys(theme.toastVariables || {}).length > 0 ? 'configured' : 'empty',
-        },
-        {
-            id: 'visualizer',
-            label: '可视化编辑器',
-            description: '表格可视化编辑器的独立颜色入口；为空时回退到核心主题变量。',
-            paths: ['theme.visualizerVariables'],
-            status: Object.keys(theme.visualizerVariables || {}).length > 0 ? 'configured' : 'empty',
-        },
-        {
-            id: 'controls-confirm-overlay',
-            label: '控件 / 确认框 / 遮罩层',
-            description: 'select、checkbox、radio、confirm、overlay 目前通过 theme.variables 中的 --acu-control-* / --acu-confirm-* / --acu-overlay-* 变量控制。',
-            paths: [
-                'theme.variables.--acu-control-*',
-                'theme.variables.--acu-confirm-*',
-                'theme.variables.--acu-overlay-*',
-            ],
-            status: 'configured',
-        },
-        {
-            id: 'custom-css',
-            label: '组件级细节覆盖',
-            description: '当变量不够时，在 customCSS 中覆盖具体组件样式。',
-            paths: ['theme.customCSS'],
-            status: theme.customCSS && theme.customCSS.trim() ? 'configured' : 'empty',
-        },
-        {
-            id: 'preview',
-            label: '主题预览色块',
-            description: '主题选择器中显示的预览色，不影响实际运行样式。',
-            paths: ['theme.previewColors'],
-            status: theme.previewColors ? 'configured' : 'empty',
-        },
-    ];
-}
-function buildEditableGuide(theme) {
-    return {
-        summary: `这是一份基于当前主题「${theme.name}」生成的完整可编辑模板。你可以直接修改 theme 下的字段，然后重新导入。`,
-        recommendedOrder: [
-            '先修改 theme.variables 中的核心颜色变量，建立整体色板',
-            '再按需修改 theme.windowChromeVariables / theme.toastVariables / theme.visualizerVariables',
-            '最后在 theme.customCSS 中处理局部特效、版式和组件级细节',
-        ],
-        tips: [
-            'theme.variables 是运行时主题的主入口；里面的 --acu-control-* / --acu-confirm-* / --acu-overlay-* 控制表单控件、确认框和遮罩层。',
-            'windowChromeVariables / toastVariables / visualizerVariables 即使当前为空，也可以直接补充自定义值。',
-            '导入时系统只读取根级 theme 对象；templateMeta / editableModules / guide 只是给你看的编辑导航，不会影响运行。',
-        ],
-    };
-}
-/**
- * 导出当前主题为完整可编辑主题模板
- * 结果 = 空白模板骨架 + 当前主题内容覆盖
- */
-function exportThemeToFile(themeId) {
-    const theme = getThemeById(themeId);
-    if (!theme) {
-        showToastr_ACU('error', `未找到主题 "${themeId}"`);
-        return;
-    }
-    const file = {
-        formatVersion: 1,
-        exportedAt: new Date().toISOString(),
-        templateMeta: {
-            kind: 'editable-theme-template',
-            sourceThemeId: theme.id,
-            sourceThemeName: theme.name,
-            description: '基于当前主题生成的完整可编辑模板，适合二次修改后重新导入。',
-        },
-        editableModules: buildEditableModules(theme),
-        guide: buildEditableGuide(theme),
-        theme: createEditableThemeTemplate(theme),
-    };
-    const blob = new Blob([JSON.stringify(file, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `acu-theme-template-${theme.id}-${Date.now()}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    showToastr_ACU('success', `主题「${theme.name}」的完整可编辑模板已导出`);
-}
-function createExportableTheme(theme) {
-    return {
-        ...theme,
-        customCSS: theme.customCSS ?? EXPORT_TEMPLATE_SEED.customCSS,
-        windowChromeVariables: theme.windowChromeVariables ?? {},
-        toastVariables: theme.toastVariables ?? {},
-        visualizerVariables: theme.visualizerVariables ?? {},
-        previewColors: theme.previewColors ?? EXPORT_TEMPLATE_SEED.previewColors,
-    };
-}
-
-// window-system.ts
-// 从 01_window_system.js 整体迁入
-const ACU_WindowManager = {
-    windows: new Map(), // id -> { $el, zIndex, ... }
-    baseZIndex: 10000,
-    topZIndex: 10000,
-    register(id, $el) {
-        this.topZIndex++;
-        this.windows.set(id, { $el, zIndex: this.topZIndex });
-        $el.css('z-index', this.topZIndex);
-    },
-    unregister(id) {
-        this.windows.delete(id);
-    },
-    bringToFront(id) {
-        const win = this.windows.get(id);
-        if (!win)
-            return;
-        this.topZIndex++;
-        win.zIndex = this.topZIndex;
-        win.$el.css('z-index', this.topZIndex);
-    },
-    getWindow(id) {
-        return this.windows.get(id)?.$el || null;
-    },
-    isOpen(id) {
-        return this.windows.has(id);
-    },
-    closeAll() {
-        this.windows.forEach((_, id) => {
-            const $el = this.windows.get(id)?.$el;
-            if ($el)
-                $el.remove();
-        });
-        this.windows.clear();
-    }
-};
-// ═══ 窗口状态存储键 ═══
-const ACU_WINDOW_STATE_STORAGE_KEY = `${SCRIPT_ID_PREFIX_ACU}_windowStates`;
-/**
- * 获取窗口状态存储对象
- */
-function getWindowStates_ACU() {
-    try {
-        const store = getConfigStorage_ACU();
-        const raw = store?.getItem?.(ACU_WINDOW_STATE_STORAGE_KEY);
-        if (raw) {
-            const parsed = safeJsonParse_ACU(raw, {});
-            return (typeof parsed === 'object' && parsed !== null) ? parsed : {};
-        }
-    }
-    catch (e) {
-        console.warn('[ACU] Failed to read window states:', e);
-    }
-    return {};
-}
-/**
- * 保存窗口状态
- * @param {string} windowId - 窗口ID
- * @param {object} state - 窗口状态 { width, height, isMaximized }
- */
-function saveWindowState_ACU(windowId, state) {
-    try {
-        const states = getWindowStates_ACU();
-        states[windowId] = state;
-        const store = getConfigStorage_ACU();
-        store?.setItem?.(ACU_WINDOW_STATE_STORAGE_KEY, safeJsonStringify_ACU(states, '{}'));
-        // 触发酒馆设置持久化
-        persistTavernSettings_ACU();
-    }
-    catch (e) {
-        console.warn('[ACU] Failed to save window state:', e);
-    }
-}
-/**
- * 获取指定窗口的状态
- * @param {string} windowId - 窗口ID
- * @returns {object|null} 窗口状态或null
- */
-function getWindowState_ACU(windowId) {
-    const states = getWindowStates_ACU();
-    return states[windowId] || null;
-}
-/**
- * 创建独立浮动窗口
- * @param {object} options
- * @param {string} options.id - 窗口唯一ID
- * @param {string} options.title - 窗口标题
- * @param {string} options.content - 窗口内容HTML
- * @param {number} [options.width=900] - 初始宽度
- * @param {number} [options.height=700] - 初始高度
- * @param {boolean} [options.modal=false] - 是否为模态窗口（带遮罩）
- * @param {boolean} [options.resizable=true] - 是否可调整大小
- * @param {boolean} [options.maximizable=true] - 是否可最大化
- * @param {boolean} [options.startMaximized=false] - 是否启动时全屏
- * @param {boolean} [options.rememberState=true] - 是否记住窗口状态
- * @param {function} [options.onClose] - 关闭回调
- * @param {function} [options.onReady] - 窗口就绪回调（DOM已插入）
- * @returns {jQuery} 窗口jQuery对象
- */
-function createACUWindow(options) {
-    const { id, title = '窗口', content = '', width = 900, height = 700, modal = false, resizable = true, maximizable = true, startMaximized = false, forcePhoneFullscreen = false, rememberState = true, // 默认记住窗口状态
-    onClose, onReady } = options;
-    // 确保窗口基础样式和当前主题变量都已提前注入到主文档。
-    // 不能等窗口 DOM 插入后再补主题，否则在 [`createACUWindow()`](src/presentation/window/window-system.ts:116)
-    // 生命周期早期出现的遮罩、确认框、首帧窗口 chrome 会回退到默认基础 UI。
-    injectACUWindowStyles();
-    loadCustomThemes();
-    applyTheme$1();
-    // 如果窗口已存在，直接显示并置顶
-    if (ACU_WindowManager.isOpen(id)) {
-        ACU_WindowManager.bringToFront(id);
-        return ACU_WindowManager.getWindow(id);
-    }
-    // ═══ 关键：始终挂载到酒馆主窗口（topLevelWindow_ACU）═══
-    const targetWin = topLevelWindow_ACU || window;
-    const targetDoc = targetWin.document;
-    const $ = targetWin.jQuery || jQuery_API_ACU || null;
-    if (!$) {
-        console.error('[ACU] jQuery not available for window creation');
-        return null;
-    }
-    // 计算初始位置（居中）—— 使用主窗口的尺寸
-    const viewW = targetWin.innerWidth || 1200;
-    const viewH = targetWin.innerHeight || 800;
-    // ═══ 窄屏检测：≤1100px 视为窄屏，≤768px 视为手机屏 ═══
-    const isNarrowScreen = viewW <= 1100;
-    const isPhoneScreen = viewW <= 768;
-    // ═══ 恢复上次保存的窗口状态 ═══
-    let savedState = null;
-    let useSavedState = false;
-    if (rememberState) {
-        savedState = getWindowState_ACU(id);
-        // 只有在非窄屏模式下才使用保存的状态，窄屏始终使用响应式尺寸
-        if (savedState && !isNarrowScreen) {
-            useSavedState = true;
-        }
-    }
-    // 确保宽高不超过视口；手机端使用更紧凑的浮层尺寸，避免遮挡过多聊天内容
-    let initialW, initialH;
-    if (useSavedState && savedState.width && savedState.height) {
-        // 使用保存的窗口尺寸（确保不超过当前视口）
-        initialW = Math.max(400, Math.min(savedState.width, viewW - 40));
-        initialH = Math.max(300, Math.min(savedState.height, viewH - 40));
-    }
-    else if (isPhoneScreen && !forcePhoneFullscreen) {
-        const phoneHorizontalMargin = 12;
-        const phoneVerticalMargin = 12;
-        const phoneMinWidth = Math.min(320, Math.max(280, viewW - phoneHorizontalMargin));
-        const phoneMinHeight = Math.min(360, Math.max(280, viewH - phoneVerticalMargin));
-        initialW = Math.max(phoneMinWidth, Math.min(460, viewW - phoneHorizontalMargin));
-        initialH = Math.max(phoneMinHeight, Math.min(Math.round(viewH * 0.82), viewH - phoneVerticalMargin));
-    }
-    else if (isPhoneScreen && forcePhoneFullscreen) {
-        initialW = viewW;
-        initialH = viewH;
-    }
-    else {
-        initialW = Math.max(400, Math.min(width, viewW - 40));
-        initialH = Math.max(300, Math.min(height, viewH - 40));
-    }
-    // 居中并确保不跑出屏幕
-    const screenEdgePadding = isPhoneScreen && !forcePhoneFullscreen ? 6 : 20;
-    const initialX = Math.max(screenEdgePadding, Math.min((viewW - initialW) / 2, viewW - initialW - screenEdgePadding));
-    const initialY = Math.max(screenEdgePadding, Math.min((viewH - initialH) / 2, viewH - initialH - screenEdgePadding));
-    // 构建窗口HTML
-    // ═══ 窄屏模式下不显示全屏按钮，只显示关闭按钮 ═══
-    const showMaximizeBtn = maximizable && !isNarrowScreen;
-    const windowHtml = `
-      <div class="acu-window${forcePhoneFullscreen ? ' acu-window-phone-fullscreen' : ''}" id="${id}" data-phone-fullscreen="${forcePhoneFullscreen ? 'true' : 'false'}" style="left:${forcePhoneFullscreen && isPhoneScreen ? 0 : initialX}px; top:${forcePhoneFullscreen && isPhoneScreen ? 0 : initialY}px; width:${initialW}px; height:${initialH}px;">
-        <div class="acu-window-header">
-          <div class="acu-window-title">
-            <i class="fa-solid fa-database"></i>
-            <span>${title}</span>
-          </div>
-          <div class="acu-window-controls">
-            <button class="acu-window-btn theme-toggle" title="切换主题"><span class="acu-theme-toggle-text">素纱</span></button>
-            ${showMaximizeBtn ? '<button class="acu-window-btn maximize" title="最大化/还原"><i class="fa-solid fa-expand"></i></button>' : ''}
-            <button class="acu-window-btn close" title="关闭"><i class="fa-solid fa-times"></i></button>
-          </div>
-        </div>
-        <div class="acu-window-body">${content}</div>
-        ${resizable && !(isPhoneScreen && forcePhoneFullscreen) ? `
-          <div class="acu-window-resize-handle se"></div>
-          <div class="acu-window-resize-handle e"></div>
-          <div class="acu-window-resize-handle s"></div>
-          <div class="acu-window-resize-handle w"></div>
-          <div class="acu-window-resize-handle n"></div>
-          <div class="acu-window-resize-handle nw"></div>
-          <div class="acu-window-resize-handle ne"></div>
-          <div class="acu-window-resize-handle sw"></div>
-        ` : ''}
-      </div>
-    `;
-    // 创建遮罩层（模态窗口）—— 挂载到主窗口 body
-    let $overlay = null;
-    if (modal) {
-        $overlay = $(`<div class="acu-window-overlay" data-for="${id}"></div>`);
-        $(targetDoc.body).append($overlay);
-    }
-    // 插入窗口 —— 挂载到主窗口 body
-    const $window = $(windowHtml);
-    $(targetDoc.body).append($window);
-    applyACUThemeToDocument_ACU(targetDoc);
-    syncACUThemeButtons_ACU(targetDoc);
-    // ═══ 动画完成后移除 animation 属性 ═══
-    // .acu-window 的 slide-in 动画引用了 transform，在 Chromium 内核中会为
-    // position:fixed 后代创建 containing block，导致子元素无法相对于视口定位。
-    // 动画结束后（0.22s）移除 animation 属性，消除 containing block。
-    // 使用 { once: true } 避免内存泄漏，同时用 setTimeout 作为兜底。
-    const winEl = $window[0];
-    if (winEl) {
-        const removeAnimation = () => { winEl.style.animation = 'none'; };
-        winEl.addEventListener('animationend', removeAnimation, { once: true });
-        setTimeout(removeAnimation, 400); // 兜底：略长于动画时长 0.22s
-    }
-    // 注册到窗口管理器
-    ACU_WindowManager.register(id, $window);
-    // 点击窗口置顶
-    $window.on('mousedown', () => ACU_WindowManager.bringToFront(id));
-    // 主题切换
-    $window.find('.acu-window-btn.theme-toggle').on('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        toggleACUTheme_ACU(targetDoc);
-    });
-    // 关闭按钮
-    $window.find('.acu-window-btn.close').on('click', () => {
-        // ═══ 关闭时保存窗口状态 ═══
-        if (rememberState && maximizable) {
-            const currentState = {
-                width: isMaximized ? restoreState.width : $window.width(),
-                height: isMaximized ? restoreState.height : $window.height(),
-                isMaximized: isMaximized
-            };
-            saveWindowState_ACU(id, currentState);
-        }
-        if (onClose)
-            onClose();
-        if ($overlay)
-            $overlay.remove();
-        $window.remove();
-        ACU_WindowManager.unregister(id);
-        // 清理事件
-        $(targetDoc).off('.acuWindowDrag' + id);
-        $(targetDoc).off('.acuWindowResize' + id);
-    });
-    // 遮罩层点击关闭（可选）
-    if ($overlay) {
-        $overlay.on('click', (e) => {
-            if (e.target === $overlay[0]) {
-                // 可以选择不关闭，或者关闭
-                // 这里选择不关闭，用户必须点击关闭按钮
-            }
-        });
-    }
-    // 最大化/还原
-    let isMaximized = false;
-    let restoreState = { left: initialX, top: initialY, width: initialW, height: initialH };
-    const doMaximize = () => {
-        restoreState = {
-            left: parseInt($window.css('left')),
-            top: parseInt($window.css('top')),
-            width: $window.width(),
-            height: $window.height()
-        };
-        $window.addClass('maximized');
-        $window.find('.acu-window-btn.maximize i').removeClass('fa-expand').addClass('fa-compress');
-        isMaximized = true;
-    };
-    const doRestore = () => {
-        $window.removeClass('maximized');
-        $window.css({
-            left: restoreState.left + 'px',
-            top: restoreState.top + 'px',
-            width: restoreState.width + 'px',
-            height: restoreState.height + 'px'
-        });
-        $window.find('.acu-window-btn.maximize i').removeClass('fa-compress').addClass('fa-expand');
-        isMaximized = false;
-    };
-    $window.find('.acu-window-btn.maximize').on('click', () => {
-        if (isMaximized) {
-            doRestore();
-        }
-        else {
-            doMaximize();
-        }
-    });
-    // ═══ 启动时全屏逻辑（优先级：手机强制真全屏 > 平板窄屏最大化 > 保存的状态 > startMaximized参数）═══
-    // 手机 forcePhoneFullscreen 直接依赖专用 fullscreen CSS，不再叠加 maximized 语义；
-    // 否则会重新引入边距、圆角、resize 手柄与高度错位。
-    if (isPhoneScreen && forcePhoneFullscreen) {
-        isMaximized = false;
-    }
-    else if (isNarrowScreen && !isPhoneScreen && maximizable) {
-        doMaximize();
-    }
-    else if (useSavedState && savedState.isMaximized && maximizable) {
-        // 恢复上次的全屏状态
-        doMaximize();
-    }
-    else if (startMaximized && maximizable) {
-        // 使用传入的 startMaximized 参数
-        doMaximize();
-    }
-    // 拖拽移动 —— 事件绑定到主窗口 document
-    let isDragging = false;
-    let dragStartX = 0, dragStartY = 0, windowStartX = 0, windowStartY = 0;
-    $window.find('.acu-window-header').on('mousedown', (e) => {
-        if ($(e.target).closest('.acu-window-controls').length)
-            return;
-        if (isMaximized)
-            return;
-        isDragging = true;
-        dragStartX = e.clientX;
-        dragStartY = e.clientY;
-        windowStartX = parseInt($window.css('left'));
-        windowStartY = parseInt($window.css('top'));
-        $(targetDoc.body).css('user-select', 'none');
-    });
-    $(targetDoc).on('mousemove.acuWindowDrag' + id, (e) => {
-        if (!isDragging)
-            return;
-        const dx = e.clientX - dragStartX;
-        const dy = e.clientY - dragStartY;
-        $window.css({
-            left: Math.max(0, windowStartX + dx) + 'px',
-            top: Math.max(0, windowStartY + dy) + 'px'
-        });
-    });
-    $(targetDoc).on('mouseup.acuWindowDrag' + id, () => {
-        if (isDragging) {
-            isDragging = false;
-            $(targetDoc.body).css('user-select', '');
-        }
-    });
-    // 调整大小 —— 事件绑定到主窗口 document
-    if (resizable) {
-        let isResizing = false;
-        let resizeType = '';
-        let resizeStartX, resizeStartY, startWidth, startHeight, startLeft, startTop;
-        $window.find('.acu-window-resize-handle').on('mousedown', function (e) {
-            if (isMaximized)
-                return;
-            isResizing = true;
-            resizeType = '';
-            if (jQuery_API_ACU(this).hasClass('se'))
-                resizeType = 'se';
-            else if (jQuery_API_ACU(this).hasClass('e'))
-                resizeType = 'e';
-            else if (jQuery_API_ACU(this).hasClass('s'))
-                resizeType = 's';
-            else if (jQuery_API_ACU(this).hasClass('w'))
-                resizeType = 'w';
-            else if (jQuery_API_ACU(this).hasClass('n'))
-                resizeType = 'n';
-            else if (jQuery_API_ACU(this).hasClass('nw'))
-                resizeType = 'nw';
-            else if (jQuery_API_ACU(this).hasClass('ne'))
-                resizeType = 'ne';
-            else if (jQuery_API_ACU(this).hasClass('sw'))
-                resizeType = 'sw';
-            resizeStartX = e.clientX;
-            resizeStartY = e.clientY;
-            startWidth = $window.width();
-            startHeight = $window.height();
-            startLeft = parseInt($window.css('left'));
-            startTop = parseInt($window.css('top'));
-            $(targetDoc.body).css('user-select', 'none');
-            e.stopPropagation();
-        });
-        $(targetDoc).on('mousemove.acuWindowResize' + id, (e) => {
-            if (!isResizing)
-                return;
-            const dx = e.clientX - resizeStartX;
-            const dy = e.clientY - resizeStartY;
-            const minW = 400, minH = 300;
-            let newW = startWidth, newH = startHeight, newL = startLeft, newT = startTop;
-            if (resizeType.includes('e'))
-                newW = Math.max(minW, startWidth + dx);
-            if (resizeType.includes('s'))
-                newH = Math.max(minH, startHeight + dy);
-            if (resizeType.includes('w')) {
-                const proposedW = startWidth - dx;
-                if (proposedW >= minW) {
-                    newW = proposedW;
-                    newL = startLeft + dx;
-                }
-            }
-            if (resizeType.includes('n')) {
-                const proposedH = startHeight - dy;
-                if (proposedH >= minH) {
-                    newH = proposedH;
-                    newT = startTop + dy;
-                }
-            }
-            $window.css({
-                width: newW + 'px',
-                height: newH + 'px',
-                left: newL + 'px',
-                top: newT + 'px'
-            });
-        });
-        $(targetDoc).on('mouseup.acuWindowResize' + id, () => {
-            if (isResizing) {
-                isResizing = false;
-                $(targetDoc.body).css('user-select', '');
-            }
-        });
-    }
-    // 清理事件（窗口关闭时）
-    $window.on('remove', () => {
-        $(targetDoc).off('.acuWindowDrag' + id);
-        $(targetDoc).off('.acuWindowResize' + id);
-    });
-    // 回调
-    if (onReady) {
-        setTimeout(() => onReady($window), 50);
-    }
-    return $window;
-}
-/**
- * 关闭指定窗口
- */
-function closeACUWindow(id) {
-    const $window = ACU_WindowManager.getWindow(id);
-    if ($window) {
-        // 获取主窗口 jQuery
-        const targetWin = topLevelWindow_ACU || window;
-        const $ = targetWin.jQuery || (typeof jQuery_API_ACU !== 'undefined' ? jQuery_API_ACU : null);
-        if ($) {
-            $(`.acu-window-overlay[data-for="${id}"]`).remove();
-            // 清理事件
-            $(targetWin.document).off('.acuWindowDrag' + id);
-            $(targetWin.document).off('.acuWindowResize' + id);
-        }
-        $window.remove();
-        ACU_WindowManager.unregister(id);
-    }
-}
-// ═══════════════════════════════════════════════════════════════════════════════
-// ███ 独立窗口系统结束 ███
-// ═══════════════════════════════════════════════════════════════════════════════
-// --- [Legacy] 旧版"单份设置/单份模板"存储键（仅用于迁移；新版本不再直接读写它们） ---
 
 /**
  * host-document — 解析"宿主"窗口与文档（D15.1）

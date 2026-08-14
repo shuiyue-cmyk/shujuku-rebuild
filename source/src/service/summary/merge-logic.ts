@@ -2,10 +2,8 @@
 
 import { DEFAULT_CHAR_CARD_PROMPT_ACU, DEFAULT_CHAR_CARD_PROMPT_SQL_ACU, DEFAULT_MERGE_SUMMARY_PROMPT_ACU } from '../../shared/defaults-json.js';
 import { isSqliteMode } from '../table/storage-mode';
-import { handleApiResponse_ACU } from '../ai/prompt-builder';
 import { buildCustomApiRequestBody_ACU, postChatCompletion_ACU } from '../ai/api-call';
 import { currentJsonTableData_ACU, settings_ACU } from '../runtime/state-manager';
-import { getHostRequestHeaders_ACU } from '../../data/gateways/ai-gateway';
 import { getLastMessageIndex_ACU } from '../../data/gateways/chat-gateway';
 import { updateReadableLorebookEntry_ACU } from '../worldbook/pipeline';
 import { logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';

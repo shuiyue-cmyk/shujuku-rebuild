@@ -51,7 +51,7 @@ export function buildCustomApiRequestBody_ACU(
     // 只接受小写 role。此前 messages 被原样透传，导致后端报
     // `unknown variant SYSTEM`，改表助手 AI 调用失败。
     //
-    // 本项目既有约定（merge-logic.ts:198 / merge-executor.ts:126 / content-optimization.ts:183）
+    // 本项目既有约定（merge-logic.ts / content-optimization.ts）
     // 均在发送前对 role 做 toLowerCase；此处是自定义 chat-completions 的统一出口，
     // 对已是小写的输入（merge / plot / 存量路径）为无操作，不破坏既有行为。
     // tavern / 主 API（generateRaw）路径不经过本函数，不受影响。
@@ -91,7 +91,8 @@ export function buildCustomApiRequestBody_ACU(
 
 /**
  * 自定义 API 统一出口：调用宿主 /api/backends/chat-completions/generate。
- * 恒非流式（流式开关已剥离）；返回 AI 响应文本（原始，未 trim），失败抛错。
+ * stream 参数由 streamingEnabled 开关决定（见 buildCustomApiRequestBody_ACU）；
+ * 返回 AI 响应文本（原始，未 trim），失败抛错。
  */
 export async function postChatCompletion_ACU(body: unknown, signal?: AbortSignal | null): Promise<string | null> {
     const res = await fetch('/api/backends/chat-completions/generate', {
@@ -104,7 +105,7 @@ export async function postChatCompletion_ACU(body: unknown, signal?: AbortSignal
         const errTxt = await res.text();
         throw new Error(`API请求失败: ${res.status} ${errTxt}`);
     }
-    return handleApiResponse_ACU(res, signal);
+    return handleApiResponse_ACU(res);
 }
 
 /**

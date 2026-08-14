@@ -39,7 +39,7 @@ export function renderOption_ACU(value: string, text: string, selected = false):
  * @param fontSize - 字号
  */
 export function renderToastActionButton_ACU(id: string, label: string, accent = '#ffc107', radius = '4px', fontSize = '0.9em'): string {
-  return `<button id="${escapeHtml_ACU(id)}" style="border: 1px solid ${accent}; color: ${accent}; background: transparent; padding: 5px 10px; border-radius: ${radius}; cursor: pointer; float: right; margin-left: 15px; font-size: ${fontSize}; font-family: inherit;" onmouseover="this.style.backgroundColor='${accent}'; this.style.color='#1a1d24';" onmouseout="this.style.backgroundColor='transparent'; this.style.color='${accent}';">${escapeHtml_ACU(label)}</button>`;
+  return `<button id="${escapeHtml_ACU(id)}" style="border: 1px solid ${escapeHtml_ACU(accent)}; color: ${escapeHtml_ACU(accent)}; background: transparent; padding: 5px 10px; border-radius: ${escapeHtml_ACU(radius)}; cursor: pointer; float: right; margin-left: 15px; font-size: ${escapeHtml_ACU(fontSize)}; font-family: inherit;" onmouseover="this.style.backgroundColor='${escapeHtml_ACU(accent)}'; this.style.color='#1a1d24';" onmouseout="this.style.backgroundColor='transparent'; this.style.color='${escapeHtml_ACU(accent)}';">${escapeHtml_ACU(label)}</button>`;
 }
 
 /**

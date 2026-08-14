@@ -7,7 +7,6 @@ import { currentAbortController_ACU, trackAbortController_ACU, untrackAbortContr
 import { getApiConfigByPreset_ACU, buildCustomApiRequestBody_ACU, postChatCompletion_ACU } from '../api-call';
 import { currentJsonTableData_ACU, settings_ACU } from '../../runtime/state-manager';
 import { getPersonaDescription_ACU, getCharDescription_ACU } from '../../../data/gateways/host-state-gateway';
-import { getHostRequestHeaders_ACU } from '../../../data/gateways/ai-gateway';
 import { logDebug_ACU, logError_ACU, logWarn_ACU, normalizeExcludeRules_ACU } from '../../../shared/utils';
 import { applyExcludeRulesToText_ACU, getLatestAIMessageContent_ACU, getPlotFromHistory_ACU, parseIfBlocksInContent_ACU, parseRandomTags_ACU, replaceRandomVariables_ACU } from '../../runtime/helpers-remaining';
 import { replaceDbSqlVariables } from '../../runtime/template-vars/sql-query-var';
@@ -162,9 +161,7 @@ export class RetryableAiResponseError_ACU extends Error {
         if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
             throw new Error('自定义API的URL或模型未配置。');
         }
-        const generateUrl = `/api/backends/chat-completions/generate`;
-
-        logDebug_ACU('ACU: 调用新的后端生成API:', generateUrl, 'Model:', effectiveApiConfig.model);
+        logDebug_ACU('ACU: 调用后端生成 API, Model:', effectiveApiConfig.model);
         const content = await postChatCompletion_ACU(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { stripModelPrefix: false }), abortSignal);
         if (content) {
             return content.trim();
@@ -225,7 +222,7 @@ export class RetryableAiResponseError_ACU extends Error {
     }
   }
 
-  export async function handleApiResponse_ACU(response: any, _signal: AbortSignal | null = null) {
+  export async function handleApiResponse_ACU(response: any) {
     if (settings_ACU.streamingEnabled === true) {
       return await parseStreamResponse_ACU(response);
     }

@@ -15,6 +15,7 @@ import { ensureSheetOrderNumbers_ACU, logError_ACU, parseTableTemplateJson_ACU }
   // 手动合并纪要功能已从主界面隐藏并停用；保留导出函数形状，防止旧调用方直接报错。
   export async function handleManualMergeSummary_ACU() {
       showToastr_ACU('info', '合并总结功能已停用。');
+      return false;
   }
 
   export function exportCombinedSettings_ACU() {    const promptSegments = getCharCardPromptFromUI_ACU();

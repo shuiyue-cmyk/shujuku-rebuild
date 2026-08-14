@@ -10,7 +10,7 @@ import { getChatArray_ACU, saveChatToHost_ACU } from '../../data/gateways/chat-g
 import { applyTemplateScopeForCurrentChat_ACU, loadSettings_ACU, saveSettings_ACU } from '../settings/settings-service';
 import { getSortedSheetKeys_ACU } from '../template/chat-scope';
 import { loadAllChatMessages_ACU } from './pipeline';
-import { cleanChatName_ACU, getChatFirstLayerMessage_ACU, logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
+import { cleanChatName_ACU, cloneScopedConfigData_ACU, getChatFirstLayerMessage_ACU, logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
 import { getImportStablePrefix_ACU } from '../../shared/constants';
 
 import { purgeSheetKeysFromMessage_ACU } from '../../data/repositories/chat-message-data-repo';
@@ -281,9 +281,6 @@ import { resetPlotAgentWorldbookSessionSnapshot_ACU } from '../agent/agent-world
       const chat = getChatArray_ACU();
       if (!Array.isArray(chat) || chat.length === 0) return { changed: false, changedCount: 0 };
 
-      const safeClone = (obj: any) => {
-          try { return JSON.parse(JSON.stringify(obj)); } catch (e) { return obj; }
-      };
       const parseMaybeJson = (v: any) => {
           if (!v) return null;
           if (typeof v === 'string') {
@@ -302,13 +299,13 @@ import { resetPlotAgentWorldbookSessionSnapshot_ACU } from '../agent/agent-world
           if (first && first[CHAT_SHEET_GUIDE_FIELD_ACU]) {
               const container = parseMaybeJson(first[CHAT_SHEET_GUIDE_FIELD_ACU]);
               if (container && typeof container === 'object' && container.tags && typeof container.tags === 'object') {
-                  const nextContainer = safeClone(container) || {};
+                  const nextContainer = cloneScopedConfigData_ACU(container, {}) || {};
                   Object.keys(nextContainer.tags).forEach(tagKey => {
                       const slot = nextContainer.tags[tagKey];
                       if (!slot || typeof slot !== 'object') return;
                       const slotData = parseMaybeJson(slot.data);
                       if (!slotData || typeof slotData !== 'object') return;
-                      const nextData = safeClone(slotData) || {};
+                      const nextData = cloneScopedConfigData_ACU(slotData, {}) || {};
                       keys.forEach(k => { if (nextData[k]) delete nextData[k]; });
                       slot.data = nextData;
                   });

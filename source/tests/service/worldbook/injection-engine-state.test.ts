@@ -145,6 +145,7 @@ vi.mock('../../../src/shared/utils', () => ({
   logDebug_ACU: mockLogDebug,
   logError_ACU: mockLogError,
   logWarn_ACU: mockLogWarn,
+  cloneScopedConfigData_ACU: (v: any, f: any = null) => (v === undefined ? f : JSON.parse(JSON.stringify(v))),
 }));
 
 vi.mock('../../../src/service/table/table-service', () => ({
