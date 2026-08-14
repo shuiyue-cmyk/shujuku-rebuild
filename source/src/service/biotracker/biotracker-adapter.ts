@@ -8,9 +8,10 @@
  * - 恒字系列：异步追踪恒开启（enabled）、恒 after_ai、恒完整更新（requireFullDescriptionUpdates）、恒格式化输出（formattedOutputV4）、默认 json 响应
  * - 高级设置开关（生理追踪总开关）映射 settings_ACU.bsBiotracker.enabled
  */
-import { MODULE_NAME, DEFAULT_SETTINGS, getSettings, saveSettings, getChatState, getChatKey, cloneValue } from './vendor/state.js';
+import { MODULE_NAME, DEFAULT_SETTINGS, getSettings, saveSettings, getChatState, getChatKey, cloneValue, buildRecentMessages } from './vendor/state.js';
 import { runRegistry } from './vendor/registry.js';
 import { resetPoller, runTracker } from './vendor/tracker.js';
+import { callOpenAICompatible, extractJson } from './vendor/api.js';
 import { getHostContext } from './vendor/host.js';
 import { settings_ACU, currentChatFileIdentifier_ACU, allChatMessages_ACU } from '../runtime/state-manager';
 import { saveSettings_ACU } from '../settings/settings-service';
@@ -159,6 +160,17 @@ export function initBiotracker_ACU(): void {
         }
       });
     }
+    // 订阅新消息：自动注册开关开启时，新楼层后尝试发现角色
+    const messageSentType = ctx.event_types?.MESSAGE_SENT;
+    if (eventSource && messageSentType && typeof eventSource.on === 'function') {
+      eventSource.on(messageSentType, () => {
+        try {
+          scheduleAutoRegisterCheck_ACU();
+        } catch (e) {
+          logWarn_ACU('[生理追踪] 自动注册调度失败:', e);
+        }
+      });
+    }
     logDebug_ACU('[生理追踪] 初始化完成，已注册角色数:', Object.keys(getChatState(ctx, settings).characters || {}).length);
   } catch (e) {
     logWarn_ACU('[生理追踪] 初始化失败（宿主未就绪，等待重试）:', e);
@@ -199,4 +211,94 @@ export async function registerCharacter_ACU(options: RegisterCharacterOptions_AC
 export async function runBiotrackerNow_ACU(): Promise<void> {
   const ctx = createBiotrackerCtx_ACU();
   await runTracker(ctx, trackerDeps, 'manual');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// 自动注册（全新功能：读最新楼层 → AI 发现有价值角色 → 注册，种族由 AI 判断）
+// ═══════════════════════════════════════════════════════════════
+
+const AUTO_REGISTER_SYSTEM_PROMPT = [
+  '你是角色生理状态追踪系统的「角色发现」组件。',
+  '阅读下面最近的对话楼层，找出「值得被记录生理状态」的角色（角色卡角色、被反复提及/在场的有名有姓角色，排除纯路人）。',
+  '输出 JSON：{"candidates":[{"name":"角色名","reason":"一句话理由"}]}。',
+  '只输出 JSON，不要多余文字。',
+].join('\n');
+
+/** 自动注册开关（settings_ACU.bsBiotracker.autoRegister） */
+export function isAutoRegisterEnabled_ACU(): boolean {
+  return getBiotrackerRoot().autoRegister === true;
+}
+
+export function setAutoRegisterEnabled_ACU(enabled: boolean): void {
+  getBiotrackerRoot().autoRegister = !!enabled;
+  scheduleSettingsSave();
+}
+
+/** 扫描最新楼层并自动注册 AI 发现的角色（种族由 AI 推断，declaredRace 留空） */
+export async function autoRegisterCharacters_ACU(): Promise<{ ok: boolean; registered: string[]; message: string }> {
+  const ctx = createBiotrackerCtx_ACU();
+  try {
+    const settings = getSettings(ctx);
+    if (!settings.apiUrl || !settings.model) {
+      return { ok: false, registered: [], message: '生理追踪 API 尚未配置（API URL/模型）。' };
+    }
+    const chatState = getChatState(ctx, settings);
+    const recent = buildRecentMessages(ctx, settings);
+    if (recent.length === 0) return { ok: false, registered: [], message: '暂无楼层可扫描。' };
+
+    // AI 发现候选角色（恒 json 响应）
+    const result = await callOpenAICompatible(
+      settings,
+      { task: 'discover_characters_for_registration', recent_messages: recent },
+      AUTO_REGISTER_SYSTEM_PROMPT,
+    );
+    const parsed = extractJson(result);
+    const candidates = Array.isArray(parsed?.candidates) ? parsed.candidates : [];
+
+    const registered: string[] = [];
+    for (const candidate of candidates) {
+      const name = String(candidate?.name || '').trim();
+      if (!name) continue;
+      if (chatState.characters?.[name]) continue; // 已注册跳过
+      const reason = String(candidate?.reason || '').trim();
+      try {
+        await runRegistry(ctx, {
+          targetName: name,
+          customNotes: reason || '由自动注册发现',
+          declaredRace: '', // 种族交由 AI 判断
+          breedingInference: false,
+        });
+        registered.push(name);
+      } catch (e) {
+        logWarn_ACU('[生理追踪] 自动注册角色失败:', name, e);
+      }
+    }
+    if (registered.length > 0) saveSettings(ctx);
+    return {
+      ok: true,
+      registered,
+      message: registered.length > 0 ? `自动注册完成：${registered.join('、')}` : '本轮未发现需要注册的新角色。',
+    };
+  } catch (e: any) {
+    logWarn_ACU('[生理追踪] 自动注册失败:', e);
+    return { ok: false, registered: [], message: `自动注册失败：${e?.message || e}` };
+  }
+}
+
+// 自动注册的周期触发：消息后延迟执行（防重入 + 冷却）
+let autoRegisterInFlight = false;
+let lastAutoRegisterAt = 0;
+
+export function scheduleAutoRegisterCheck_ACU(): void {
+  if (!isAutoRegisterEnabled_ACU() || autoRegisterInFlight) return;
+  const now = Date.now();
+  if (now - lastAutoRegisterAt < 30000) return; // 30s 冷却
+  autoRegisterInFlight = true;
+  lastAutoRegisterAt = now;
+  setTimeout(() => {
+    autoRegisterCharacters_ACU()
+      .then((r) => { if (r.registered.length > 0) logDebug_ACU('[生理追踪]', r.message); })
+      .catch((e) => logWarn_ACU('[生理追踪] 自动注册异常:', e))
+      .finally(() => { autoRegisterInFlight = false; });
+  }, 3000);
 }
