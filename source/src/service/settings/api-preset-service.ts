@@ -451,3 +451,11 @@ export function saveCurrentConfigAsPreset_ACU(name: string): ApiPresetWriteResul
   };
   return saveApiPreset_ACU(preset);
 }
+
+/** 设置是否开启流式输出（stream 参数） */
+export function setStreamingEnabled_ACU(enabled: boolean): ApiPresetWriteResult_ACU {
+  ensureApiSettingsShape_ACU();
+  const snapshot = snapshotApiFields_ACU();
+  settings_ACU.streamingEnabled = !!enabled;
+  return finalizeSave_ACU(snapshot);
+}

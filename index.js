@@ -62205,7 +62205,7 @@ async function callCustomOpenAI_ACU(dynamicContent, abortController = null, opti
         }
     }
 }
-// ═══ 非流式响应处理（流式输出开关已剥离，恒非流式） ═══
+// ═══ 响应处理（streamingEnabled 开启时走 SSE 流解析，否则 JSON 解析） ═══
 async function parseNonStreamResponse_ACU(response) {
     try {
         const data = await response.json();
@@ -62226,7 +62226,39 @@ async function parseNonStreamResponse_ACU(response) {
         return null;
     }
 }
+// SSE 流式响应解析：逐行提取 data: 前缀的 JSON，拼接 choices[0].delta.content
+async function parseStreamResponse_ACU(response) {
+    try {
+        const text = await response.text();
+        let result = '';
+        for (const line of text.split('\n')) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data:'))
+                continue;
+            const payload = trimmed.slice(5).trim();
+            if (!payload || payload === '[DONE]')
+                continue;
+            try {
+                const data = JSON.parse(payload);
+                const delta = data?.choices?.[0]?.delta?.content;
+                if (typeof delta === 'string')
+                    result += delta;
+            }
+            catch {
+                // 忽略无法解析的 data 行（注释/空行）
+            }
+        }
+        return result || null;
+    }
+    catch (e) {
+        logError_ACU('[parseStreamResponse] Failed to parse stream:', e);
+        return null;
+    }
+}
 async function handleApiResponse_ACU(response, _signal = null) {
+    if (settings_ACU.streamingEnabled === true) {
+        return await parseStreamResponse_ACU(response);
+    }
     return await parseNonStreamResponse_ACU(response);
 }
 
@@ -63676,6 +63708,13 @@ function saveCurrentConfigAsPreset_ACU(name) {
     };
     return saveApiPreset_ACU$1(preset);
 }
+/** 设置是否开启流式输出（stream 参数） */
+function setStreamingEnabled_ACU(enabled) {
+    ensureApiSettingsShape_ACU();
+    const snapshot = snapshotApiFields_ACU();
+    settings_ACU.streamingEnabled = !!enabled;
+    return finalizeSave_ACU(snapshot);
+}
 
 // service/ai/api-call.ts — AI 调用编排（剧情推进用）
 // 从 04_shared_helpers.js 迁入
@@ -63736,7 +63775,7 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
         max_tokens: maxTokens,
         temperature,
         top_p: topP,
-        stream: false, // 流式输出开关已剥离，恒非流式
+        stream: settings_ACU.streamingEnabled === true,
         chat_completion_source: 'custom',
         group_names: [],
         include_reasoning: false,
@@ -82810,6 +82849,7 @@ let settings_ACU = {
     apiConfig: { url: '', apiKey: '', model: '', max_tokens: 60000, temperature: 1.0 },
     apiMode: 'custom',
     tavernProfile: '',
+    streamingEnabled: false,
     apiPresets: [],
     defaultApiPresetName: '',
     apiPresetBindingsByChat: {},
@@ -84043,6 +84083,7 @@ function buildDefaultSettings_ACU() {
         apiConfig: { url: '', apiKey: '', model: '', max_tokens: 60000, temperature: 1.0 },
         apiMode: 'custom',
         tavernProfile: '',
+        streamingEnabled: false,
         apiPresets: [],
         defaultApiPresetName: '',
         apiPresetBindingsByChat: {},
@@ -133558,6 +133599,10 @@ const dashboardCopy = {
             label: "静默提示框",
             description: "默认关闭。开启后仅保留填表、规划等核心提示，其他浮窗通知不再弹出。",
         },
+        streaming: {
+            label: "开启流式输出",
+            description: "默认关闭。开启后 API 以流式方式输出，部分后端在流式模式下响应更快。",
+        },
         plot: {
             label: "剧情推进",
             description: "默认开启。详情前往对应页面；默认仅召回记忆，进阶版含剧情规划。仅推荐在测试或自由发挥时关闭。",
@@ -134135,6 +134180,12 @@ function useDashboardPage() {
                 description: dashboardCopy.toggles.toastMute.description,
                 value: settings_ACU.toastMuteEnabled === true,
             },
+            {
+                key: "streamingEnabled",
+                label: dashboardCopy.toggles.streaming.label,
+                description: dashboardCopy.toggles.streaming.description,
+                value: settings_ACU.streamingEnabled === true,
+            },
         ];
     });
     /** 高级设置 — 配置后基本不动；动了出问题是正常的。 */
@@ -134257,7 +134308,7 @@ function useDashboardPage() {
             setContentReplaceEnabledBySettings(!!value);
             saveSettings_ACU();
         }
-        else if (key === "autoUpdateEnabled" || key === "toastMuteEnabled") {
+        else if (key === "autoUpdateEnabled" || key === "toastMuteEnabled" || key === "streamingEnabled") {
             settings_ACU[key] = !!value;
             saveSettings_ACU();
         }

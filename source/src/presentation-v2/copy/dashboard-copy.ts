@@ -195,6 +195,11 @@ export const dashboardCopy = {
       description:
         "默认关闭。开启后仅保留填表、规划等核心提示，其他浮窗通知不再弹出。",
     },
+    streaming: {
+      label: "开启流式输出",
+      description:
+        "默认关闭。开启后 API 以流式方式输出，部分后端在流式模式下响应更快。",
+    },
     plot: {
       label: "剧情推进",
       description:

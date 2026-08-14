@@ -790,6 +790,7 @@ export   function buildDefaultSettings_ACU() {
           apiConfig: { url: '', apiKey: '', model: '', max_tokens: 60000, temperature: 1.0 },
           apiMode: 'custom',
           tavernProfile: '',
+          streamingEnabled: false,
           apiPresets: [] as any[],
           defaultApiPresetName: '',
           apiPresetBindingsByChat: {},

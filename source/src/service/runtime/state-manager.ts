@@ -197,6 +197,7 @@ export let settings_ACU: any = {
     apiConfig: { url: '', apiKey: '', model: '', max_tokens: 60000, temperature: 1.0 },
     apiMode: 'custom',
     tavernProfile: '',
+    streamingEnabled: false,
     apiPresets: [],
     defaultApiPresetName: '',
     apiPresetBindingsByChat: {},

@@ -178,7 +178,7 @@ export class RetryableAiResponseError_ACU extends Error {
     }
   }
 
-  // ═══ 非流式响应处理（流式输出开关已剥离，恒非流式） ═══
+  // ═══ 响应处理（streamingEnabled 开启时走 SSE 流解析，否则 JSON 解析） ═══
 
   async function parseNonStreamResponse_ACU(response: any) {
     try {
@@ -200,6 +200,34 @@ export class RetryableAiResponseError_ACU extends Error {
     }
   }
 
+  // SSE 流式响应解析：逐行提取 data: 前缀的 JSON，拼接 choices[0].delta.content
+  async function parseStreamResponse_ACU(response: any) {
+    try {
+      const text = await response.text();
+      let result = '';
+      for (const line of text.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed.startsWith('data:')) continue;
+        const payload = trimmed.slice(5).trim();
+        if (!payload || payload === '[DONE]') continue;
+        try {
+          const data = JSON.parse(payload);
+          const delta = data?.choices?.[0]?.delta?.content;
+          if (typeof delta === 'string') result += delta;
+        } catch {
+          // 忽略无法解析的 data 行（注释/空行）
+        }
+      }
+      return result || null;
+    } catch (e) {
+      logError_ACU('[parseStreamResponse] Failed to parse stream:', e);
+      return null;
+    }
+  }
+
   export async function handleApiResponse_ACU(response: any, _signal: AbortSignal | null = null) {
+    if (settings_ACU.streamingEnabled === true) {
+      return await parseStreamResponse_ACU(response);
+    }
     return await parseNonStreamResponse_ACU(response);
   }

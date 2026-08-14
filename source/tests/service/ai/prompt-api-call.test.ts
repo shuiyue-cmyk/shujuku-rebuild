@@ -539,3 +539,43 @@ describe('callCustomOpenAI_ACU — AbortController 管理', () => {
     expect(mockGetApiConfigByPreset).toHaveBeenCalledWith('global-preset');
   });
 });
+
+// ═══ handleApiResponse_ACU — 流式/非流式响应解析 ═══
+describe('handleApiResponse_ACU 响应解析', () => {
+  beforeEach(() => {
+    mockGetApiConfigByPreset.mockReturnValue({
+      apiMode: 'custom',
+      apiConfig: { url: 'https://api.example.com', model: 'gpt-4' },
+    });
+  });
+
+  it('streamingEnabled 开启时解析 SSE 流式响应并拼接 delta 内容', async () => {
+    mockSettings.streamingEnabled = true;
+    const result = await handleApiResponse_ACU({
+      text: async () =>
+        [
+          'data: {"choices":[{"delta":{"content":"你好"}}]}',
+          'data: {"choices":[{"delta":{"content":"，世界"}}]}',
+          'data: [DONE]',
+          '',
+        ].join('\n'),
+    });
+    expect(result).toBe('你好，世界');
+  });
+
+  it('streamingEnabled 开启且流中无内容时返回 null', async () => {
+    mockSettings.streamingEnabled = true;
+    const result = await handleApiResponse_ACU({
+      text: async () => 'data: {"choices":[{"delta":{}}]}\ndata: [DONE]\n',
+    });
+    expect(result).toBeNull();
+  });
+
+  it('streamingEnabled 关闭时走 JSON 解析', async () => {
+    mockSettings.streamingEnabled = false;
+    const result = await handleApiResponse_ACU({
+      json: async () => ({ choices: [{ message: { content: '普通响应' } }] }),
+    });
+    expect(result).toBe('普通响应');
+  });
+});

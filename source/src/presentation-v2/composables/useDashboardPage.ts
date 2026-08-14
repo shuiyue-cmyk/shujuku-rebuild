@@ -821,6 +821,12 @@ export function useDashboardPage(): DashboardPageState {
         description: dashboardCopy.toggles.toastMute.description,
         value: settings_ACU.toastMuteEnabled === true,
       },
+      {
+        key: "streamingEnabled",
+        label: dashboardCopy.toggles.streaming.label,
+        description: dashboardCopy.toggles.streaming.description,
+        value: settings_ACU.streamingEnabled === true,
+      },
     ];
   });
 
@@ -958,7 +964,7 @@ export function useDashboardPage(): DashboardPageState {
     } else if (key === "contentReplaceEnabled") {
       setContentReplaceEnabledBySettings(!!value);
       saveSettings_ACU();
-    } else if (key === "autoUpdateEnabled" || key === "toastMuteEnabled") {
+    } else if (key === "autoUpdateEnabled" || key === "toastMuteEnabled" || key === "streamingEnabled") {
       settings_ACU[key] = !!value;
       saveSettings_ACU();
     }
