@@ -25,6 +25,9 @@ vi.mock('../../../src/service/biotracker/vendor/race_config.js', () => ({
 vi.mock('../../../src/service/runtime/state-manager', () => ({
   settings_ACU: { bs_biotracker: { chatStates: {} }, apiConfig: { url: '', apiKey: '', model: '' } },
   currentChatFileIdentifier_ACU: 'test-chat',
+  currentJsonTableData_ACU: {
+    sheet_test: { name: '测试表', content: [['列A', '列B'], ['值1', '值2']] },
+  },
 }));
 
 vi.mock('../../../src/service/settings/settings-service', () => ({
