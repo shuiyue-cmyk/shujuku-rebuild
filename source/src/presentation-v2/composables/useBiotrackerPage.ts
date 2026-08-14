@@ -10,6 +10,9 @@ import {
   setAutoRegisterEnabled_ACU,
   getAutoRegisterFrequency_ACU,
   setAutoRegisterFrequency_ACU,
+  isRegisterInFlight_ACU,
+  isAutoRegisterInFlight_ACU,
+  isTrackerInFlight_ACU,
   registerCharacter_ACU,
   autoRegisterCharacters_ACU,
   runBiotrackerNow_ACU,
@@ -58,7 +61,8 @@ export function useBiotrackerPage() {
   const registerNotes = ref(String(getRegDraft().notes || ''));
   // 手动注册/追踪发送给 AI 的最近 AI 回复条数（默认 12）
   const registerRecentCount = ref(Number(settings_ACU.bs_biotracker?.registerRecentCount) > 0 ? settings_ACU.bs_biotracker.registerRecentCount : 12);
-  const registering = ref(false);
+  // 进行中状态从适配层共享标志恢复：页面关闭再打开时按钮保持「注册中/分析中」直至操作完成
+  const registering = ref(isRegisterInFlight_ACU());
   const status = ref('');
   const statusIsError = ref(false);
 
@@ -135,7 +139,8 @@ export function useBiotrackerPage() {
   const autoFrequency = ref(getAutoRegisterFrequency_ACU());
   // 立即分析并注册发送的最近 AI 回复条数（默认 12）
   const autoRecentCount = ref(Number(settings_ACU.bs_biotracker?.autoRecentCount) > 0 ? settings_ACU.bs_biotracker.autoRecentCount : 12);
-  const autoRunning = ref(false);
+  const autoRunning = ref(isAutoRegisterInFlight_ACU());
+  const tracking = ref(isTrackerInFlight_ACU());
   const autoFrequencyOptions = [1, 3, 5, 10, 20, 30, 50];
 
   function setAutoRecentCount(value: number): void {
@@ -176,6 +181,8 @@ export function useBiotrackerPage() {
   }
 
   async function runTrackerNow(): Promise<void> {
+    if (tracking.value) return;
+    tracking.value = true;
     statusIsError.value = false;
     showPendingToast('正在执行生理追踪分析…');
     try {
@@ -189,6 +196,8 @@ export function useBiotrackerPage() {
       statusIsError.value = true;
       finishPendingToast();
       showToastr_ACU('error', `追踪失败：${e?.message || e}`, { title: '生理追踪', acuToastCategory: 'biotracker' });
+    } finally {
+      tracking.value = false;
     }
   }
 
@@ -249,6 +258,7 @@ export function useBiotrackerPage() {
     autoRecentCount,
     setAutoRecentCount,
     autoRunning,
+    tracking,
     runAutoRegister,
     runTrackerNow,
     characters,

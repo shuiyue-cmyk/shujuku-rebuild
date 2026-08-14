@@ -110699,11 +110699,18 @@ function initBiotracker_ACU() {
         logWarn_ACU('[生理追踪] 初始化失败（宿主未就绪，等待重试）:', e);
     }
 }
+// 手动操作进行中标志（模块级共享）：页面关闭再打开时按钮保持「注册中/分析中」直至操作完成
+let registerInFlight = false;
+let trackerInFlight = false;
+function isRegisterInFlight_ACU() { return registerInFlight; }
+function isTrackerInFlight_ACU() { return trackerInFlight; }
+function isAutoRegisterInFlight_ACU() { return autoRegisterInFlight; }
 /**
  * 手动注册角色：一次点击串联两次 API（先繁育推演，再注册并套用推演结果）。
  * 流程与 biotracker 插件手动注册一致，简化为单按钮触发。
  */
 async function registerCharacter_ACU(options) {
+    registerInFlight = true;
     try {
         const ctx = createBiotrackerCtx_ACU();
         const name = String(options.name || '').trim();
@@ -110731,11 +110738,20 @@ async function registerCharacter_ACU(options) {
         logWarn_ACU('[生理追踪] 注册角色失败:', e);
         return { ok: false, message: `注册失败：${e?.message || e}` };
     }
+    finally {
+        registerInFlight = false;
+    }
 }
 /** 手动触发一次追踪分析（调试/入口用） */
 async function runBiotrackerNow_ACU() {
+    trackerInFlight = true;
     const ctx = createBiotrackerCtx_ACU();
-    await runTracker(ctx, trackerDeps, 'manual');
+    try {
+        await runTracker(ctx, trackerDeps, 'manual');
+    }
+    finally {
+        trackerInFlight = false;
+    }
 }
 // ═══════════════════════════════════════════════════════════════
 // 自动注册（全新功能：读最新楼层 → AI 发现有价值角色 → 注册，种族由 AI 判断）
@@ -110760,6 +110776,7 @@ function setAutoRegisterEnabled_ACU(enabled) {
  * - 自动触发（频率驱动）：fromIndex 指定发送自该楼层索引以来的新增楼层（增量）
  */
 async function autoRegisterCharacters_ACU(options = {}) {
+    autoRegisterInFlight = true;
     const ctx = createBiotrackerCtx_ACU();
     try {
         const settings = getBiotrackerSettings(ctx);
@@ -110826,6 +110843,9 @@ async function autoRegisterCharacters_ACU(options = {}) {
     catch (e) {
         logWarn_ACU('[生理追踪] 自动注册失败:', e);
         return { ok: false, registered: [], message: `自动注册失败：${e?.message || e}` };
+    }
+    finally {
+        autoRegisterInFlight = false;
     }
 }
 /** 自动注册的更新频率（每 N 层新楼层送入分析一次，默认 5） */
@@ -156734,7 +156754,8 @@ function useBiotrackerPage() {
     const registerNotes = ref(String(getRegDraft().notes || ''));
     // 手动注册/追踪发送给 AI 的最近 AI 回复条数（默认 12）
     const registerRecentCount = ref(Number(settings_ACU.bs_biotracker?.registerRecentCount) > 0 ? settings_ACU.bs_biotracker.registerRecentCount : 12);
-    const registering = ref(false);
+    // 进行中状态从适配层共享标志恢复：页面关闭再打开时按钮保持「注册中/分析中」直至操作完成
+    const registering = ref(isRegisterInFlight_ACU());
     const status = ref('');
     const statusIsError = ref(false);
     // 过程提示 toast：不自动消失，持续到操作完成（timeOut: 0），完成后移除并显示结果
@@ -156813,7 +156834,8 @@ function useBiotrackerPage() {
     const autoFrequency = ref(getAutoRegisterFrequency_ACU());
     // 立即分析并注册发送的最近 AI 回复条数（默认 12）
     const autoRecentCount = ref(Number(settings_ACU.bs_biotracker?.autoRecentCount) > 0 ? settings_ACU.bs_biotracker.autoRecentCount : 12);
-    const autoRunning = ref(false);
+    const autoRunning = ref(isAutoRegisterInFlight_ACU());
+    const tracking = ref(isTrackerInFlight_ACU());
     const autoFrequencyOptions = [1, 3, 5, 10, 20, 30, 50];
     function setAutoRecentCount(value) {
         autoRecentCount.value = Math.max(1, Math.min(100, Math.floor(Number(value) || 12)));
@@ -156851,6 +156873,9 @@ function useBiotrackerPage() {
         }
     }
     async function runTrackerNow() {
+        if (tracking.value)
+            return;
+        tracking.value = true;
         statusIsError.value = false;
         showPendingToast('正在执行生理追踪分析…');
         try {
@@ -156865,6 +156890,9 @@ function useBiotrackerPage() {
             statusIsError.value = true;
             finishPendingToast();
             showToastr_ACU('error', `追踪失败：${e?.message || e}`, { title: '生理追踪', acuToastCategory: 'biotracker' });
+        }
+        finally {
+            tracking.value = false;
         }
     }
     // ─── 已注册角色只读（chatState.characters） ───
@@ -156922,6 +156950,7 @@ function useBiotrackerPage() {
         autoRecentCount,
         setAutoRecentCount,
         autoRunning,
+        tracking,
         runAutoRegister,
         runTrackerNow,
         characters,
@@ -156944,21 +156973,21 @@ var _sfc_main$b = /*@__PURE__*/ defineComponent({
             dataTitle: '已注册角色',
             dataDescription: '当前聊天的生理追踪数据（只读）。完整数据由异步追踪持续更新。',
         };
-        const { apiPreset, setApiPreset, apiPresetSelectOptions, followActiveApiLabel, apiUrl, apiKey, apiModel, registerName, registerRace, registerNotes, registerRecentCount, setRegisterRecentCount, registerRaceOptions, registering, doRegister, autoRegister, toggleAutoRegister, autoFrequency, setAutoFrequency, autoFrequencyOptions, autoRecentCount, setAutoRecentCount, autoRunning, runAutoRegister, runTrackerNow, characters, status, statusIsError, } = useBiotrackerPage();
+        const { apiPreset, setApiPreset, apiPresetSelectOptions, followActiveApiLabel, apiUrl, apiKey, apiModel, registerName, registerRace, registerNotes, registerRecentCount, setRegisterRecentCount, registerRaceOptions, registering, doRegister, autoRegister, toggleAutoRegister, autoFrequency, setAutoFrequency, autoFrequencyOptions, autoRecentCount, setAutoRecentCount, autoRunning, tracking, runAutoRegister, runTrackerNow, characters, status, statusIsError, } = useBiotrackerPage();
         const panelNavItems = computed(() => [
             { id: 'biotracker-api-panel', label: copy.apiTitle },
             { id: 'biotracker-register-panel', label: copy.registerTitle },
             { id: 'biotracker-auto-panel', label: copy.autoTitle },
             { id: 'biotracker-data-panel', label: copy.dataTitle },
         ]);
-        const __returned__ = { copy, apiPreset, setApiPreset, apiPresetSelectOptions, followActiveApiLabel, apiUrl, apiKey, apiModel, registerName, registerRace, registerNotes, registerRecentCount, setRegisterRecentCount, registerRaceOptions, registering, doRegister, autoRegister, toggleAutoRegister, autoFrequency, setAutoFrequency, autoFrequencyOptions, autoRecentCount, setAutoRecentCount, autoRunning, runAutoRegister, runTrackerNow, characters, status, statusIsError, panelNavItems, AcuMobilePanelNav, AcuPanel, AcuFormRow, AcuSelect, AcuButton, AcuToggle };
+        const __returned__ = { copy, apiPreset, setApiPreset, apiPresetSelectOptions, followActiveApiLabel, apiUrl, apiKey, apiModel, registerName, registerRace, registerNotes, registerRecentCount, setRegisterRecentCount, registerRaceOptions, registering, doRegister, autoRegister, toggleAutoRegister, autoFrequency, setAutoFrequency, autoFrequencyOptions, autoRecentCount, setAutoRecentCount, autoRunning, tracking, runAutoRegister, runTrackerNow, characters, status, statusIsError, panelNavItems, AcuMobilePanelNav, AcuPanel, AcuFormRow, AcuSelect, AcuButton, AcuToggle };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.acu-v2-biotracker-page[data-v-0785373e] {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-biotracker-page__panel-stack[data-v-0785373e] {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n}\n.acu-v2-biotracker-page__api-readonly[data-v-0785373e] {\n  color: var(--acu-text-2, inherit);\n  margin: 0;\n  line-height: 1.55;\n}\n.acu-v2-biotracker-page__actions[data-v-0785373e] {\n  display: flex;\n  gap: 0.5rem;\n  flex-wrap: wrap;\n  margin-top: 0.5rem;\n}\n.acu-v2-biotracker-page__toggle[data-v-0785373e] {\n  display: flex;\n  align-items: center;\n  gap: 0.5rem;\n  cursor: pointer;\n}\n.acu-v2-biotracker-page__status[data-v-0785373e] {\n  margin-top: 0.75rem;\n  padding: 0.4rem 0.6rem;\n  border-radius: 4px;\n  background: rgba(125, 73, 64, 0.12);\n  color: var(--acu-text, inherit);\n}\n.acu-v2-biotracker-page__status[data-error='true'][data-v-0785373e] {\n  background: rgba(220, 60, 60, 0.15);\n  color: #e06060;\n}\n.acu-v2-biotracker-page__empty[data-v-0785373e] {\n  color: var(--acu-text-dim, #8a8075);\n  padding: 0.5rem 0;\n}\n.acu-v2-biotracker-page__table[data-v-0785373e] {\n  width: 100%;\n  border-collapse: collapse;\n  font-size: 0.9em;\n}\n.acu-v2-biotracker-page__table th[data-v-0785373e],\n.acu-v2-biotracker-page__table td[data-v-0785373e] {\n  text-align: left;\n  padding: 0.4rem 0.5rem;\n  border-bottom: 1px solid rgba(128, 128, 128, 0.2);\n}\n", "src/presentation-v2/pages/BiotrackerPage.vue#style-0-0785373e");
-var BiotrackerPage_vue_vue_type_style_index_0_scoped_0785373e_lang = null;
+injectSfcStyle("\n.acu-v2-biotracker-page[data-v-1917c552] {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-biotracker-page__panel-stack[data-v-1917c552] {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n}\n.acu-v2-biotracker-page__api-readonly[data-v-1917c552] {\n  color: var(--acu-text-2, inherit);\n  margin: 0;\n  line-height: 1.55;\n}\n.acu-v2-biotracker-page__actions[data-v-1917c552] {\n  display: flex;\n  gap: 0.5rem;\n  flex-wrap: wrap;\n  margin-top: 0.5rem;\n}\n.acu-v2-biotracker-page__toggle[data-v-1917c552] {\n  display: flex;\n  align-items: center;\n  gap: 0.5rem;\n  cursor: pointer;\n}\n.acu-v2-biotracker-page__status[data-v-1917c552] {\n  margin-top: 0.75rem;\n  padding: 0.4rem 0.6rem;\n  border-radius: 4px;\n  background: rgba(125, 73, 64, 0.12);\n  color: var(--acu-text, inherit);\n}\n.acu-v2-biotracker-page__status[data-error='true'][data-v-1917c552] {\n  background: rgba(220, 60, 60, 0.15);\n  color: #e06060;\n}\n.acu-v2-biotracker-page__empty[data-v-1917c552] {\n  color: var(--acu-text-dim, #8a8075);\n  padding: 0.5rem 0;\n}\n.acu-v2-biotracker-page__table[data-v-1917c552] {\n  width: 100%;\n  border-collapse: collapse;\n  font-size: 0.9em;\n}\n.acu-v2-biotracker-page__table th[data-v-1917c552],\n.acu-v2-biotracker-page__table td[data-v-1917c552] {\n  text-align: left;\n  padding: 0.4rem 0.5rem;\n  border-bottom: 1px solid rgba(128, 128, 128, 0.2);\n}\n", "src/presentation-v2/pages/BiotrackerPage.vue#style-0-1917c552");
+var BiotrackerPage_vue_vue_type_style_index_0_scoped_1917c552_lang = null;
 
 const _hoisted_1$b = { class: "acu-v2-biotracker-page" };
 const _hoisted_2$a = { class: "acu-v2-biotracker-page__panel-stack" };
@@ -157116,15 +157145,16 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 				}, 8, ["disabled", "onClick"]), createVNode($setup["AcuButton"], {
 					size: "sm",
 					variant: "secondary",
+					disabled: $setup.tracking,
 					onClick: $setup.runTrackerNow
 				}, {
-					default: withCtx(() => [..._cache[10] || (_cache[10] = [createTextVNode(
-						"立即追踪分析",
-						-1
-						/* CACHED */
-					)])]),
+					default: withCtx(() => [createTextVNode(
+						toDisplayString($setup.tracking ? "分析中..." : "立即追踪分析"),
+						1
+						/* TEXT */
+					)]),
 					_: 1
-				}, 8, ["onClick"])]),
+				}, 8, ["disabled", "onClick"])]),
 				$setup.status ? (openBlock(), createElementBlock("p", {
 					key: 0,
 					class: "acu-v2-biotracker-page__status",
@@ -157226,7 +157256,7 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 			title: $setup.copy.dataTitle,
 			description: $setup.copy.dataDescription
 		}, {
-			default: withCtx(() => [$setup.characters.length === 0 ? (openBlock(), createElementBlock("div", _hoisted_10$4, " 当前聊天尚未注册角色。请先注册，或开启自动注册后发送消息等待发现。 ")) : (openBlock(), createElementBlock("table", _hoisted_11$4, [_cache[11] || (_cache[11] = createBaseVNode(
+			default: withCtx(() => [$setup.characters.length === 0 ? (openBlock(), createElementBlock("div", _hoisted_10$4, " 当前聊天尚未注册角色。请先注册，或开启自动注册后发送消息等待发现。 ")) : (openBlock(), createElementBlock("table", _hoisted_11$4, [_cache[10] || (_cache[10] = createBaseVNode(
 				"thead",
 				null,
 				[createBaseVNode("tr", null, [
@@ -157271,7 +157301,7 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 		}, 8, ["title", "description"])
 	])]);
 }
-var BiotrackerPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$b], ["__scopeId", "data-v-0785373e"]]);
+var BiotrackerPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$b], ["__scopeId", "data-v-1917c552"]]);
 
 /**
  * page-registry — 一级页静态注册表（plan §4.1 + §D24）

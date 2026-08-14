@@ -47,7 +47,9 @@
           <AcuButton size="sm" :disabled="registering" @click="doRegister">
             {{ registering ? '注册中...' : '注册角色' }}
           </AcuButton>
-          <AcuButton size="sm" variant="secondary" @click="runTrackerNow">立即追踪分析</AcuButton>
+          <AcuButton size="sm" variant="secondary" :disabled="tracking" @click="runTrackerNow">
+            {{ tracking ? '分析中...' : '立即追踪分析' }}
+          </AcuButton>
         </div>
         <p v-if="status" class="acu-v2-biotracker-page__status" :data-error="statusIsError">
           {{ status }}
@@ -154,6 +156,7 @@ const {
   autoRecentCount,
   setAutoRecentCount,
   autoRunning,
+  tracking,
   runAutoRegister,
   runTrackerNow,
   characters,

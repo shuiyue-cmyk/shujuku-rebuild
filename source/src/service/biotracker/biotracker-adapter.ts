@@ -262,11 +262,19 @@ export interface RegisterCharacterOptions_ACU {
   recentCount?: number;
 }
 
+// 手动操作进行中标志（模块级共享）：页面关闭再打开时按钮保持「注册中/分析中」直至操作完成
+let registerInFlight = false;
+let trackerInFlight = false;
+export function isRegisterInFlight_ACU(): boolean { return registerInFlight; }
+export function isTrackerInFlight_ACU(): boolean { return trackerInFlight; }
+export function isAutoRegisterInFlight_ACU(): boolean { return autoRegisterInFlight; }
+
 /**
  * 手动注册角色：一次点击串联两次 API（先繁育推演，再注册并套用推演结果）。
  * 流程与 biotracker 插件手动注册一致，简化为单按钮触发。
  */
 export async function registerCharacter_ACU(options: RegisterCharacterOptions_ACU): Promise<{ ok: boolean; message: string }> {
+  registerInFlight = true;
   try {
     const ctx = createBiotrackerCtx_ACU();
     const name = String(options.name || '').trim();
@@ -291,13 +299,20 @@ export async function registerCharacter_ACU(options: RegisterCharacterOptions_AC
   } catch (e: any) {
     logWarn_ACU('[生理追踪] 注册角色失败:', e);
     return { ok: false, message: `注册失败：${e?.message || e}` };
+  } finally {
+    registerInFlight = false;
   }
 }
 
 /** 手动触发一次追踪分析（调试/入口用） */
 export async function runBiotrackerNow_ACU(): Promise<void> {
+  trackerInFlight = true;
   const ctx = createBiotrackerCtx_ACU();
-  await runTracker(ctx, trackerDeps, 'manual');
+  try {
+    await runTracker(ctx, trackerDeps, 'manual');
+  } finally {
+    trackerInFlight = false;
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -327,6 +342,7 @@ export function setAutoRegisterEnabled_ACU(enabled: boolean): void {
  * - 自动触发（频率驱动）：fromIndex 指定发送自该楼层索引以来的新增楼层（增量）
  */
 export async function autoRegisterCharacters_ACU(options: { recentCount?: number; fromIndex?: number } = {}): Promise<{ ok: boolean; registered: string[]; message: string }> {
+  autoRegisterInFlight = true;
   const ctx = createBiotrackerCtx_ACU();
   try {
     const settings = getBiotrackerSettings(ctx);
@@ -393,6 +409,8 @@ export async function autoRegisterCharacters_ACU(options: { recentCount?: number
   } catch (e: any) {
     logWarn_ACU('[生理追踪] 自动注册失败:', e);
     return { ok: false, registered: [], message: `自动注册失败：${e?.message || e}` };
+  } finally {
+    autoRegisterInFlight = false;
   }
 }
 
