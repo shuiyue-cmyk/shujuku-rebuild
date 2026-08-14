@@ -195,71 +195,67 @@ export   function stripSeedRowsFromTemplate_ACU(templateObj: any) {
   }
 
 
+// [修复2026-03-06] 处理 DEFAULT_TABLE_TEMPLATE_ACU 的双重 JSON 编码问题
+function escapeStringForJson_ACU(str: string) {
+    return str
+        .replace(/\\/g, '\\\\')
+        .replace(/"/g, '\\"')
+        .replace(/\n/g, '\\n')
+        .replace(/\r/g, '\\r')
+        .replace(/\t/g, '\\t');
+}
+
+// 双引号包围的模板解析（方案1：直接解析；方案2：转义控制字符后重解析）
+function tryParseQuotedTemplate_ACU(cleanTemplate: string, parseFn: (s: string) => any): any {
+    if (!(cleanTemplate.startsWith('"') && cleanTemplate.endsWith('"'))) return null;
+    try {
+        // 方案1：尝试直接解析
+        try {
+            const unquoted = JSON.parse(cleanTemplate);
+            if (typeof unquoted === 'string') {
+                const obj = parseFn(unquoted);
+                if (obj) return obj;
+            } else if (typeof unquoted === 'object' && unquoted !== null) {
+                return unquoted;
+            }
+        } catch (e1) {
+            // 方案1失败，继续方案2
+        }
+
+        // 方案2：转义控制字符后再解析
+        const innerContent = cleanTemplate.slice(1, -1);
+        const escapedContent = escapeStringForJson_ACU(innerContent);
+        const rewrapped = '"' + escapedContent + '"';
+        try {
+            const unquoted = JSON.parse(rewrapped);
+            if (typeof unquoted === 'string') {
+                const obj = parseFn(unquoted);
+                if (obj) return obj;
+            } else if (typeof unquoted === 'object' && unquoted !== null) {
+                return unquoted;
+            }
+        } catch (e2) {
+            // 方案2失败
+        }
+    } catch (e) {
+        // 双引号格式处理失败
+    }
+    return null;
+}
+
 export   function parseTableTemplateJson_ACU({ stripSeedRows = false } = {}) {
       try {
           let cleanTemplate = TABLE_TEMPLATE_ACU.trim();
           const parseTemplateJson = (str: string) => safeJsonParseWithJsoncComments_ACU(str, null);
 
-          // [修复2026-03-06] 处理DEFAULT_TABLE_TEMPLATE_ACU的双重JSON编码问题
-          function escapeStringForJson_ACU(str: string) {
-              return str
-                  .replace(/\\/g, '\\\\')
-                  .replace(/"/g, '\\"')
-                  .replace(/\n/g, '\\n')
-                  .replace(/\r/g, '\\r')
-                  .replace(/\t/g, '\\t');
-          }
-          
-          let obj = null;
-          
-          // 如果模板字符串以双引号开头和结尾，说明是被引号包围的JSON字符串
-          if (cleanTemplate.startsWith('"') && cleanTemplate.endsWith('"')) {
-              try {
-                  // 方案1：尝试直接解析
-                  try {
-                      const unquoted = JSON.parse(cleanTemplate);
-                      if (typeof unquoted === 'string') {
-                          obj = parseTemplateJson(unquoted);
-                          if (obj) return stripSeedRows ? stripSeedRowsFromTemplate_ACU(obj) : obj;
-                      } else if (typeof unquoted === 'object' && unquoted !== null) {
-                          return stripSeedRows ? stripSeedRowsFromTemplate_ACU(unquoted) : unquoted;
-                      }
-                  } catch (e1) {
-                      // 方案1失败，继续方案2
-                  }
-                  
-                  // 方案2：转义控制字符后再解析
-                  const innerContent = cleanTemplate.slice(1, -1);
-                  const escapedContent = escapeStringForJson_ACU(innerContent);
-                  const rewrapped = '"' + escapedContent + '"';
-                  
-                  try {
-                      const unquoted = JSON.parse(rewrapped);
-                      if (typeof unquoted === 'string') {
-                          obj = parseTemplateJson(unquoted);
-                          if (obj) return stripSeedRows ? stripSeedRowsFromTemplate_ACU(obj) : obj;
-                          try {
-                              obj = parseTemplateJson(unquoted);
-                              if (obj) return stripSeedRows ? stripSeedRowsFromTemplate_ACU(obj) : obj;
-                          } catch (e3) {
-                              // fallback 也失败
-                          }
-                      } else if (typeof unquoted === 'object' && unquoted !== null) {
-                          return stripSeedRows ? stripSeedRowsFromTemplate_ACU(unquoted) : unquoted;
-                      }
-                  } catch (e2) {
-                      // 方案2失败
-                  }
-              } catch (e) {
-                  // 双引号格式处理失败
-              }
-          }
-          
+          // 双引号包围分支（方案1/方案2）
+          let obj = tryParseQuotedTemplate_ACU(cleanTemplate, parseTemplateJson);
+
           // 常规解析
           if (!obj) {
               obj = parseTemplateJson(cleanTemplate);
           }
-          
+
           // 转义后解析
           if (!obj && typeof cleanTemplate === 'string') {
               try {
@@ -269,7 +265,7 @@ export   function parseTableTemplateJson_ACU({ stripSeedRows = false } = {}) {
                   // 转义后解析异常
               }
           }
-          
+
           if (!obj) {
               logError_ACU('[模板解析] 所有解析方案均失败，模板长度:', cleanTemplate.length, '首字符:', JSON.stringify(cleanTemplate[0]));
               return null;
