@@ -2526,7 +2526,7 @@ function renderOption_ACU(value, text, selected = false) {
  * @param fontSize - 字号
  */
 function renderToastActionButton_ACU(id, label, accent = '#ffc107', radius = '4px', fontSize = '0.9em') {
-    return `<button id="${escapeHtml_ACU$1(id)}" style="border: 1px solid ${accent}; color: ${accent}; background: transparent; padding: 5px 10px; border-radius: ${radius}; cursor: pointer; float: right; margin-left: 15px; font-size: ${fontSize}; font-family: inherit;" onmouseover="this.style.backgroundColor='${accent}'; this.style.color='#1a1d24';" onmouseout="this.style.backgroundColor='transparent'; this.style.color='${accent}';">${escapeHtml_ACU$1(label)}</button>`;
+    return `<button id="${escapeHtml_ACU$1(id)}" style="border: 1px solid ${escapeHtml_ACU$1(accent)}; color: ${escapeHtml_ACU$1(accent)}; background: transparent; padding: 5px 10px; border-radius: ${escapeHtml_ACU$1(radius)}; cursor: pointer; float: right; margin-left: 15px; font-size: ${escapeHtml_ACU$1(fontSize)}; font-family: inherit;" onmouseover="this.style.backgroundColor='${escapeHtml_ACU$1(accent)}'; this.style.color='#1a1d24';" onmouseout="this.style.backgroundColor='transparent'; this.style.color='${escapeHtml_ACU$1(accent)}';">${escapeHtml_ACU$1(label)}</button>`;
 }
 /**
  * 生成 toast 中的终止/取消按钮 HTML
@@ -59083,7 +59083,7 @@ function normalizeAgentWorldbookScope_ACU(value, fallback) {
     };
 }
 function getLegacyAgentWorldbookScope_ACU() {
-    const cfg = getPlotWorldbookConfig_ACU$1();
+    const cfg = getPlotWorldbookConfig_ACU();
     return cfg.source === 'manual'
         ? { source: 'manual', manualSelection: normalizeBookNameList_ACU(cfg.manualSelection) }
         : { source: 'character', manualSelection: [] };
@@ -59358,7 +59358,7 @@ async function confirmAgentWorldbookScopeWrite_ACU(hostBookName, entryUid, curre
         return 'unknown';
     }
 }
-function getPlotWorldbookConfig_ACU$1() {
+function getPlotWorldbookConfig_ACU() {
     const plotSettings = settings_ACU.plotSettings && typeof settings_ACU.plotSettings === 'object'
         ? settings_ACU.plotSettings
         : {};
@@ -59366,7 +59366,7 @@ function getPlotWorldbookConfig_ACU$1() {
     return cfg && typeof cfg === 'object' && !Array.isArray(cfg) ? cfg : {};
 }
 function getManualPlotWorldbookNames_ACU() {
-    const cfg = getPlotWorldbookConfig_ACU$1();
+    const cfg = getPlotWorldbookConfig_ACU();
     return normalizeBookNameList_ACU(cfg.manualSelection);
 }
 async function resolveAgentWorldbookScopeBookNamesFromScope_ACU(scope) {
@@ -62186,8 +62186,7 @@ async function callCustomOpenAI_ACU(dynamicContent, abortController = null, opti
         if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
             throw new Error('自定义API的URL或模型未配置。');
         }
-        const generateUrl = `/api/backends/chat-completions/generate`;
-        logDebug_ACU('ACU: 调用新的后端生成API:', generateUrl, 'Model:', effectiveApiConfig.model);
+        logDebug_ACU('ACU: 调用后端生成 API, Model:', effectiveApiConfig.model);
         const content = await postChatCompletion_ACU(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { stripModelPrefix: false }), abortSignal);
         if (content) {
             return content.trim();
@@ -62251,7 +62250,7 @@ async function parseStreamResponse_ACU(response) {
         return null;
     }
 }
-async function handleApiResponse_ACU(response, _signal = null) {
+async function handleApiResponse_ACU(response) {
     if (settings_ACU.streamingEnabled === true) {
         return await parseStreamResponse_ACU(response);
     }
@@ -63704,13 +63703,6 @@ function saveCurrentConfigAsPreset_ACU(name) {
     };
     return saveApiPreset_ACU$1(preset);
 }
-/** 设置是否开启流式输出（stream 参数） */
-function setStreamingEnabled_ACU(enabled) {
-    ensureApiSettingsShape_ACU();
-    const snapshot = snapshotApiFields_ACU();
-    settings_ACU.streamingEnabled = !!enabled;
-    return finalizeSave_ACU(snapshot);
-}
 
 // service/ai/api-call.ts — AI 调用编排（剧情推进用）
 // 从 04_shared_helpers.js 迁入
@@ -63754,7 +63746,7 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
         // 只接受小写 role。此前 messages 被原样透传，导致后端报
         // `unknown variant SYSTEM`，改表助手 AI 调用失败。
         //
-        // 本项目既有约定（merge-logic.ts:198 / merge-executor.ts:126 / content-optimization.ts:183）
+        // 本项目既有约定（merge-logic.ts / content-optimization.ts）
         // 均在发送前对 role 做 toLowerCase；此处是自定义 chat-completions 的统一出口，
         // 对已是小写的输入（merge / plot / 存量路径）为无操作，不破坏既有行为。
         // tavern / 主 API（generateRaw）路径不经过本函数，不受影响。
@@ -63790,7 +63782,8 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
 }
 /**
  * 自定义 API 统一出口：调用宿主 /api/backends/chat-completions/generate。
- * 恒非流式（流式开关已剥离）；返回 AI 响应文本（原始，未 trim），失败抛错。
+ * stream 参数由 streamingEnabled 开关决定（见 buildCustomApiRequestBody_ACU）；
+ * 返回 AI 响应文本（原始，未 trim），失败抛错。
  */
 async function postChatCompletion_ACU(body, signal) {
     const res = await fetch('/api/backends/chat-completions/generate', {
@@ -63803,7 +63796,7 @@ async function postChatCompletion_ACU(body, signal) {
         const errTxt = await res.text();
         throw new Error(`API请求失败: ${res.status} ${errTxt}`);
     }
-    return handleApiResponse_ACU(res, signal);
+    return handleApiResponse_ACU(res);
 }
 /**
  * 剧情推进任务级 API 调用 — 接受显式预设名称
@@ -70859,14 +70852,6 @@ async function purgeSheetKeysFromChatHistoryHardCore_ACU(keys) {
     const chat = getChatArray_ACU();
     if (!Array.isArray(chat) || chat.length === 0)
         return { changed: false, changedCount: 0 };
-    const safeClone = (obj) => {
-        try {
-            return JSON.parse(JSON.stringify(obj));
-        }
-        catch (e) {
-            return obj;
-        }
-    };
     const parseMaybeJson = (v) => {
         if (!v)
             return null;
@@ -70890,7 +70875,7 @@ async function purgeSheetKeysFromChatHistoryHardCore_ACU(keys) {
         if (first && first[CHAT_SHEET_GUIDE_FIELD_ACU]) {
             const container = parseMaybeJson(first[CHAT_SHEET_GUIDE_FIELD_ACU]);
             if (container && typeof container === 'object' && container.tags && typeof container.tags === 'object') {
-                const nextContainer = safeClone(container) || {};
+                const nextContainer = cloneScopedConfigData_ACU(container, {}) || {};
                 Object.keys(nextContainer.tags).forEach(tagKey => {
                     const slot = nextContainer.tags[tagKey];
                     if (!slot || typeof slot !== 'object')
@@ -70898,7 +70883,7 @@ async function purgeSheetKeysFromChatHistoryHardCore_ACU(keys) {
                     const slotData = parseMaybeJson(slot.data);
                     if (!slotData || typeof slotData !== 'object')
                         return;
-                    const nextData = safeClone(slotData) || {};
+                    const nextData = cloneScopedConfigData_ACU(slotData, {}) || {};
                     keys.forEach(k => { if (nextData[k])
                         delete nextData[k]; });
                     slot.data = nextData;
@@ -85119,7 +85104,7 @@ function escapeHtml_ACU(text) {
  * 仅 presentation 层内部使用。
  */
 let $popupInstance_ACU = null;
-let $apiConfigSectionToggle_ACU, $apiConfigAreaDiv_ACU, $customApiUrlInput_ACU, $customApiKeyInput_ACU, $customApiModelInput_ACU, $customApiModelSelect_ACU, $maxTokensInput_ACU, $temperatureInput_ACU, $loadModelsButton_ACU, $saveApiConfigButton_ACU, $clearApiConfigButton_ACU, $apiStatusDisplay_ACU, $charCardPromptToggle_ACU, $charCardPromptAreaDiv_ACU, $charCardPromptSegmentsContainer_ACU, $saveCharCardPromptButton_ACU, $resetCharCardPromptButton_ACU, $plotPromptSegmentsContainer_ACU, $plotTaskListContainer_ACU, $autoUpdateThresholdInput_ACU, $saveAutoUpdateThresholdButton_ACU, $autoUpdateTokenThresholdInput_ACU, $saveAutoUpdateTokenThresholdButton_ACU, $autoUpdateFrequencyInput_ACU, $saveAutoUpdateFrequencyButton_ACU, $updateBatchSizeInput_ACU, $saveUpdateBatchSizeButton_ACU, $maxConcurrentGroupsInput_ACU, $autoUpdateEnabledCheckbox_ACU, $standardizedTableFillEnabledCheckbox_ACU, $toastMuteEnabledCheckbox_ACU, $promptTemplateEnabledCheckbox_ACU, $tableEditLastPairOnlyCheckbox_ACU, $tableMaxRetriesInput_ACU, $manualUpdateCardButton_ACU, $statusMessageSpan_ACU, $cardUpdateStatusDisplay_ACU, $manualExtraHintCheckbox_ACU, $skipUpdateFloorsInput_ACU, $saveSkipUpdateFloorsButton_ACU, $retainRecentLayersInput_ACU, $saveRetainRecentLayersButton_ACU, $manualTableSelector_ACU, $manualTableSelectAll_ACU, $manualTableSelectNone_ACU, $importTableSelector_ACU, $importTableSelectAll_ACU, $importTableSelectNone_ACU;
+let $apiConfigSectionToggle_ACU, $apiConfigAreaDiv_ACU, $customApiUrlInput_ACU, $customApiKeyInput_ACU, $customApiModelInput_ACU, $customApiModelSelect_ACU, $maxTokensInput_ACU, $temperatureInput_ACU, $loadModelsButton_ACU, $saveApiConfigButton_ACU, $clearApiConfigButton_ACU, $apiStatusDisplay_ACU, $charCardPromptToggle_ACU, $charCardPromptAreaDiv_ACU, $charCardPromptSegmentsContainer_ACU, $saveCharCardPromptButton_ACU, $resetCharCardPromptButton_ACU, $plotPromptSegmentsContainer_ACU, $plotTaskListContainer_ACU, $autoUpdateThresholdInput_ACU, $saveAutoUpdateThresholdButton_ACU, $autoUpdateTokenThresholdInput_ACU, $saveAutoUpdateTokenThresholdButton_ACU, $autoUpdateFrequencyInput_ACU, $saveAutoUpdateFrequencyButton_ACU, $updateBatchSizeInput_ACU, $saveUpdateBatchSizeButton_ACU, $maxConcurrentGroupsInput_ACU, $autoUpdateEnabledCheckbox_ACU, $standardizedTableFillEnabledCheckbox_ACU, $toastMuteEnabledCheckbox_ACU, $promptTemplateEnabledCheckbox_ACU, $tableEditLastPairOnlyCheckbox_ACU, $tableMaxRetriesInput_ACU, $manualUpdateCardButton_ACU, $statusMessageSpan_ACU, $cardUpdateStatusDisplay_ACU, $manualExtraHintCheckbox_ACU, $skipUpdateFloorsInput_ACU, $saveSkipUpdateFloorsButton_ACU, $retainRecentLayersInput_ACU, $saveRetainRecentLayersButton_ACU;
 function _set_$popupInstance_ACU(v) { $popupInstance_ACU = v; }
 // 批量赋值 UI placeholder 变量（popup-bindings 初始化时一次性调用）
 function _assignUIPlaceholders_ACU(map) {
@@ -85207,32 +85192,228 @@ function _assignUIPlaceholders_ACU(map) {
         $retainRecentLayersInput_ACU = map.$retainRecentLayersInput_ACU;
     if (map.$saveRetainRecentLayersButton_ACU !== undefined)
         $saveRetainRecentLayersButton_ACU = map.$saveRetainRecentLayersButton_ACU;
-    if (map.$manualTableSelector_ACU !== undefined)
-        $manualTableSelector_ACU = map.$manualTableSelector_ACU;
-    if (map.$manualTableSelectAll_ACU !== undefined)
-        $manualTableSelectAll_ACU = map.$manualTableSelectAll_ACU;
-    if (map.$manualTableSelectNone_ACU !== undefined)
-        $manualTableSelectNone_ACU = map.$manualTableSelectNone_ACU;
-    if (map.$importTableSelector_ACU !== undefined)
-        $importTableSelector_ACU = map.$importTableSelector_ACU;
-    if (map.$importTableSelectAll_ACU !== undefined)
-        $importTableSelectAll_ACU = map.$importTableSelectAll_ACU;
-    if (map.$importTableSelectNone_ACU !== undefined)
-        $importTableSelectNone_ACU = map.$importTableSelectNone_ACU;
+}
+
+/**
+ * presentation/dom-utils.ts — DOM 操作工具层（jQuery 隔离层）
+ *
+ * 整个 presentation 层对 jQuery 的唯一引入点。
+ * 其他 presentation 文件应从此文件 import jQuery_API_ACU，而非直接从 shared/host-api。
+ * 未来替换 jQuery 时，只需修改此文件。
+ */
+// ─── jQuery 引入（唯一入口）─────────────────────────────
+
+// status-display.ts — 手动更新按钮状态显示/绑定
+const MANUAL_UPDATE_VECTOR_SOFT_DISABLED_CLASS_ACU = 'acu-manual-update-vector-soft-disabled';
+function isVectorMemoryManualUpdateBlocked_ACU() {
+    try {
+        return getCurrentWorldbookConfig_ACU().summaryVectorIndexModeEnabled === true;
+    }
+    catch (e) {
+        return false;
+    }
+}
+function shouldShowVectorMemoryManualUpdateWarning_ACU() {
+    return isVectorMemoryManualUpdateBlocked_ACU();
+}
+function syncManualUpdateButtonAvailability_ACU() {
+    if (!$manualUpdateCardButton_ACU)
+        return;
+    if (shouldShowVectorMemoryManualUpdateWarning_ACU()) {
+        $manualUpdateCardButton_ACU
+            .prop('disabled', false)
+            .addClass(MANUAL_UPDATE_VECTOR_SOFT_DISABLED_CLASS_ACU)
+            .text('交火索引已启用')
+            .attr('title', '交火模式纪要索引启用时不建议手动更新表格；特殊场景下仍可点击执行。');
+        return;
+    }
+    $manualUpdateCardButton_ACU
+        .prop('disabled', false)
+        .removeClass(MANUAL_UPDATE_VECTOR_SOFT_DISABLED_CLASS_ACU)
+        .text('立即手动更新')
+        .removeAttr('title');
+}
+// [T173] 填表停止按钮绑定
+function bindTableFillStopButton_ACU(buttonId, onStop) {
+    const $stopButton = jQuery_API_ACU(`#${buttonId}`);
+    if ($stopButton.length) {
+        $stopButton.off('click.acu_stop').on('click.acu_stop', function (e) {
+            e.stopPropagation();
+            e.preventDefault();
+            syncManualUpdateButtonAvailability_ACU();
+            jQuery_API_ACU(this).closest('.toast').remove();
+            if (typeof onStop === 'function')
+                onStop();
+        });
+    }
+}
+// [T173] 重置手动更新按钮状态
+function resetManualUpdateButton_ACU() {
+    syncManualUpdateButtonAvailability_ACU();
+}
+
+/**
+ * presentation/components/update-status-display.ts — 运行时状态/更新显示 UI
+ * 从 features/runtime/01_runtime_state.js 迁移而来
+ */
+async function updateCardUpdateStatusDisplay_ACU() {
+    const $totalMessagesDisplay = $popupInstance_ACU
+        ? $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-total-messages-display`)
+        : null;
+    const $statusTableBody = $popupInstance_ACU
+        ? $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-granular-status-table-body`)
+        : null;
+    const $nextUpdateDisplay = $popupInstance_ACU
+        ? $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-next-update-display`)
+        : null;
+    if (!$popupInstance_ACU ||
+        !$cardUpdateStatusDisplay_ACU ||
+        !$cardUpdateStatusDisplay_ACU.length ||
+        !$totalMessagesDisplay ||
+        !$totalMessagesDisplay.length ||
+        !$statusTableBody ||
+        !$statusTableBody.length) {
+        logDebug_ACU('updateCardUpdateStatusDisplay_ACU: UI elements not ready.');
+        return;
+    }
+    const chatHistory = getChatArray_ACU();
+    const totalMessages = chatHistory.filter(msg => !msg.is_user).length;
+    $totalMessagesDisplay.text(`上下文总层数: ${totalMessages} (仅计算AI回复楼层)`);
+    const totalAiMessages = totalMessages;
+    if (!currentJsonTableData_ACU) {
+        $cardUpdateStatusDisplay_ACU.text('数据库状态：未加载或初始化失败。');
+        $statusTableBody.html('<tr><td colspan="5" style="text-align: center;">暂无数据</td></tr>');
+        return;
+    }
+    try {
+        const sheetKeys = getSortedSheetKeys_ACU(currentJsonTableData_ACU);
+        const tableCount = sheetKeys.length;
+        let totalRowCount = 0;
+        let nextUpdates = [];
+        let tableStatusRows = "";
+        sheetKeys.forEach(key => {
+            const table = currentJsonTableData_ACU[key];
+            if (!table)
+                return;
+            if (table.content && Array.isArray(table.content)) {
+                totalRowCount += table.content.length > 1 ? table.content.length - 1 : 0;
+            }
+            // 计算每个表的状态
+            const tableConfig = table.updateConfig || {};
+            const isSummary = isSummaryOrOutlineTable_ACU(table.name);
+            // 确定参数
+            const globalFrequency = settings_ACU.autoUpdateFrequency || 1;
+            const globalSkip = settings_ACU.skipUpdateFloors || 0;
+            // -1 = 沿用UI全局；0 = 禁用该表自动更新（不参与预测）
+            const rawFreq = Number.isFinite(tableConfig.updateFrequency) ? tableConfig.updateFrequency : -1;
+            const rawSkip = Number.isFinite(tableConfig.skipFloors) ? tableConfig.skipFloors : -1;
+            const frequency = (rawFreq === -1) ? globalFrequency : rawFreq;
+            // [重构] 上次更新楼层计算：扫描聊天记录
+            // 寻找该表格在历史记录中最后一次被更新的楼层
+            // 支持合并更新逻辑：只要合并更新组内有任意表被修改，整组表都视为已更新
+            const currentIsolationKey = getCurrentIsolationKey_ACU();
+            const history = resolveTableHistoryStateFromChat_ACU(chatHistory, {
+                sheetKey: key,
+                isSummaryTable: isSummary,
+                isolationKey: currentIsolationKey,
+                settings: settings_ACU,
+            });
+            const lastUpdatedAiFloor = history.lastTrackedUpdateAiFloor;
+            const foundInHistory = history.hasTrackedUpdate;
+            const skipFloors = Math.max(0, (rawSkip === -1) ? globalSkip : rawSkip);
+            // 下次触发 (包含skip)
+            let triggerFloor = "N/A";
+            let unrecorded = "N/A";
+            let effectiveUnrecorded = "N/A"; // [修复] 在外部作用域声明变量
+            let isReady = false;
+            const isAutoUpdateDisabledForThisTable = (frequency <= 0);
+            if (isAutoUpdateDisabledForThisTable) {
+                // 频率=0：不参与自动更新，UI显示“无”
+                triggerFloor = '无';
+                // 仍可展示“未记录楼层/上次更新”，便于用户观察数据变化
+                if (foundInHistory) {
+                    unrecorded = String(totalAiMessages - lastUpdatedAiFloor);
+                    effectiveUnrecorded = '—';
+                }
+                else {
+                    unrecorded = '—';
+                    effectiveUnrecorded = '—';
+                }
+                isReady = false;
+            }
+            else if (foundInHistory) {
+                // [修复] UI显示逻辑同步修正
+                // 触发楼层 = 上次更新楼层 + 频率 + 跳过楼层
+                triggerFloor = String(lastUpdatedAiFloor + frequency + skipFloors);
+                // 显示给用户的未记录楼层：直接展示物理差值
+                unrecorded = String(totalAiMessages - lastUpdatedAiFloor);
+                // 有效积累楼层（用于判断进度）：减去跳过楼层
+                effectiveUnrecorded = String(Math.max(0, (totalAiMessages - skipFloors) - lastUpdatedAiFloor));
+                isReady = effectiveUnrecorded >= frequency;
+                // 将数值存入预测数组
+                nextUpdates.push({ name: table.name, floor: triggerFloor, isReady });
+            }
+            // 显示文本处理
+            let lastUpdatedDisplay = foundInHistory ? lastUpdatedAiFloor : '<span style="color: grey;">未初始</span>';
+            // 高亮显示当前层更新的表，并显示变更数量
+            const isUpdatedThisFloor = foundInHistory && (lastUpdatedAiFloor === totalAiMessages);
+            if (isUpdatedThisFloor) {
+                const changes = table._lastUpdateStats ? table._lastUpdateStats.changes : 0;
+                const changeText = changes > 0 ? `(+${changes})` : '(无变更)';
+                lastUpdatedDisplay = `<span style="color: lightgreen; font-weight: bold;">${lastUpdatedAiFloor} ${changeText}</span>`;
+            }
+            tableStatusRows += `
+            <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
+                <td style="text-align: left; padding: 5px;">${escapeHtml_ACU$1(table.name)}</td>
+                <td style="text-align: center; padding: 5px;">${frequency}</td>
+                <td style="text-align: center; padding: 5px;" title="有效未记录: ${effectiveUnrecorded}">${unrecorded}</td>
+                <td style="text-align: center; padding: 5px;">${lastUpdatedDisplay}</td>
+                <td style="text-align: center; padding: 5px;">${triggerFloor}</td>
+            </tr>
+        `;
+        });
+        $statusTableBody.html(tableStatusRows);
+        const activeTemplateMeta_ACU = getActiveTemplatePresetMeta_ACU();
+        $cardUpdateStatusDisplay_ACU.html(`数据库状态: <b style="color:lightgreen;">已加载</b> (${tableCount}个表格, ${totalRowCount}条记录)；当前生效模板预设：<b style="color:var(--accent-primary);">${escapeHtml_ACU$1(activeTemplateMeta_ACU.displayName)}</b><span style="color: var(--text-secondary);">（${activeTemplateMeta_ACU.scopeLabel}）</span>`);
+        // 更新下次预测显示
+        if ($nextUpdateDisplay.length && nextUpdates.length > 0) {
+            nextUpdates.sort((a, b) => a.floor - b.floor);
+            const readyList = nextUpdates.filter(u => u.isReady);
+            const upcomingList = nextUpdates.filter(u => !u.isReady);
+            let statusText = "";
+            if (readyList.length > 0) {
+                statusText += `<span style="color: lightgreen;">[就绪] ${readyList.map(u => u.name).join(', ')}</span> `;
+            }
+            if (upcomingList.length > 0) {
+                const next = upcomingList[0];
+                const othersSameFloor = upcomingList.filter(u => u.floor === next.floor && u !== next);
+                let names = next.name;
+                if (othersSameFloor.length > 0)
+                    names += ", " + othersSameFloor.map(u => u.name).join(", ");
+                if (statusText)
+                    statusText += " | ";
+                statusText += `下一次: <b>${names}</b> (AI楼层 ${next.floor})`;
+            }
+            else if (readyList.length === 0) {
+                statusText = "下一次: <b>无</b>";
+            }
+            $nextUpdateDisplay.html(statusText);
+        }
+        else if ($nextUpdateDisplay.length) {
+            // 所有表都禁用自动更新 / 没有可参与预测的表
+            $nextUpdateDisplay.html("下一次: <b>无</b>");
+        }
+    }
+    catch (e) {
+        logError_ACU('ACU: Failed to parse database for UI status:', e);
+        $cardUpdateStatusDisplay_ACU.text('解析数据库状态时出错。');
+    }
 }
 
 /**
  * presentation/components/settings-ui-helpers.ts
  * 从 settings-service.ts 搬出的 UI 相关便捷函数
  */
-/**
- * 加载设置后刷新 UI（presentation 层便捷函数）
- */
-function loadSettingsAndRefreshUI_ACU() {
-    loadSettings_ACU();
-    if (typeof syncAllSettingsToUI_ACU === 'function')
-        syncAllSettingsToUI_ACU(settings_ACU);
-}
 /**
  * 保存设置并根据返回值弹 toast 通知（presentation 层便捷函数）
  * service 层 saveSettings_ACU 只返回结果，UI 通知由此函数处理。
@@ -85256,15 +85437,6 @@ function saveSettingsAndNotify_ACU(options = {}) {
     }
     return result;
 }
-
-/**
- * presentation/dom-utils.ts — DOM 操作工具层（jQuery 隔离层）
- *
- * 整个 presentation 层对 jQuery 的唯一引入点。
- * 其他 presentation 文件应从此文件 import jQuery_API_ACU，而非直接从 shared/host-api。
- * 未来替换 jQuery 时，只需修改此文件。
- */
-// ─── jQuery 引入（唯一入口）─────────────────────────────
 
 // plot-editors.ts
 // 从 02_shared_editors_and_selectors.js 整体迁入
@@ -85956,424 +86128,6 @@ function refreshApiPresetSelectors_ACU() {
  * @returns {object} - 包含 apiMode, apiConfig, tavernProfile 的配置对象
  */
 
-// ═══════════════════════════════════════════════════════════
-// service/settings/settings-write-service.ts — 通用重要配置写边界
-//
-// 统一事务式写入原语：校验 → 快照 → 改内存 → saveSettings_ACU → 失败回滚。
-// 按字段簇提供语义 setter（storage/update/prompt/preset-reference）。
-// vector 配置权威在 service/vector/vector-memory-config.ts，此处不重复。
-// ═══════════════════════════════════════════════════════════════
-/** 读取字段快照（深拷贝） */
-function snapshotSettingsFields_ACU(fields) {
-    const snapshot = {};
-    for (const field of fields) {
-        const value = settings_ACU[field];
-        snapshot[field] =
-            value && typeof value === 'object'
-                ? JSON.parse(JSON.stringify(value))
-                : value;
-    }
-    return snapshot;
-}
-/** 恢复字段快照 */
-function restoreSettingsFields_ACU(snapshot) {
-    for (const [field, value] of Object.entries(snapshot)) {
-        settings_ACU[field] =
-            value && typeof value === 'object'
-                ? JSON.parse(JSON.stringify(value))
-                : value;
-    }
-}
-/** 执行写事务：mutate 内直接修改 settings_ACU；保存失败自动回滚 */
-function withSettingsWrite_ACU(fields, mutate, options = {}) {
-    const snapshot = snapshotSettingsFields_ACU(fields);
-    let mutated = false;
-    try {
-        mutate();
-        mutated = true;
-    }
-    catch (e) {
-        restoreSettingsFields_ACU(snapshot);
-        return {
-            ok: false,
-            code: 'invalid_input',
-            changed: false,
-            message: options.message || '设置写入失败：输入无效。',
-        };
-    }
-    const saveResult = saveSettings_ACU();
-    if (!saveResult.saved) {
-        restoreSettingsFields_ACU(snapshot);
-        return {
-            ok: false,
-            code: saveResult.code === 'settings_loading' ? 'settings_loading' : 'save_failed',
-            changed: mutated,
-            saveResult,
-            message: saveResult.warning || saveResult.error || '保存失败，已回滚。',
-        };
-    }
-    return { ok: true, code: 'ok', changed: mutated, saveResult };
-}
-const UPDATE_NUMBER_DEFAULTS_ACU = {
-    autoUpdateThreshold: DEFAULT_AUTO_UPDATE_THRESHOLD_ACU,
-    autoUpdateFrequency: DEFAULT_AUTO_UPDATE_FREQUENCY_ACU,
-    autoUpdateTokenThreshold: DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU,
-    updateBatchSize: 3,
-    maxConcurrentGroups: 1,
-    skipUpdateFloors: 0,
-    retainRecentLayers: 100,
-    importSplitSize: 10000,
-    tableMaxRetries: 3,
-};
-function normalizeUpdateNumber_ACU(key, value) {
-    const fallback = UPDATE_NUMBER_DEFAULTS_ACU[key];
-    const min = key === 'importSplitSize'
-        ? 100
-        : (key === 'autoUpdateThreshold' || key === 'autoUpdateTokenThreshold' || key === 'skipUpdateFloors' || key === 'retainRecentLayers' ? 0 : 1);
-    const normalized = min > 0
-        ? normalizePositiveInteger_ACU$1(value, fallback)
-        : normalizeNonNegativeInteger_ACU$1(value, fallback);
-    return Math.max(min, normalized);
-}
-/** 更新自动更新数值字段（批量原子写） */
-function setUpdateNumberFields_ACU(patch) {
-    const keys = Object.keys(patch);
-    if (keys.length === 0) {
-        return { ok: true, code: 'ok', changed: false };
-    }
-    const normalizedMap = {};
-    for (const key of keys) {
-        const normalized = normalizeUpdateNumber_ACU(key, patch[key]);
-        if (normalized === null) {
-            return { ok: false, code: 'invalid_input', changed: false, message: `字段 ${key} 数值无效。` };
-        }
-        normalizedMap[key] = normalized;
-    }
-    return withSettingsWrite_ACU([...keys], () => {
-        for (const [key, value] of Object.entries(normalizedMap)) {
-            settings_ACU[key] = value;
-        }
-    });
-}
-/** 自动更新总开关 */
-function setAutoUpdateEnabled_ACU(enabled) {
-    return withSettingsWrite_ACU(['autoUpdateEnabled'], () => {
-        settings_ACU.autoUpdateEnabled = !!enabled;
-    });
-}
-// ═══ prompt 字段簇 ═══
-function setCharCardPrompt_ACU(prompt) {
-    return withSettingsWrite_ACU(['charCardPrompt'], () => {
-        settings_ACU.charCardPrompt = prompt && typeof prompt === 'object'
-            ? JSON.parse(JSON.stringify(prompt))
-            : prompt;
-    });
-}
-/** 解析当前填表提示词应写入的字段名（严格 JSON 填表已剥离，恒为 charCardPrompt） */
-function resolveCurrentPromptKey_ACU(_mode = getCurrentStorageMode()) {
-    return 'charCardPrompt';
-}
-/** 按当前填表模式保存提示词（V1 语义收敛到 service） */
-function setCurrentPromptSegments_ACU(prompt) {
-    const key = resolveCurrentPromptKey_ACU();
-    return withSettingsWrite_ACU([key], () => {
-        settings_ACU[key] = prompt && typeof prompt === 'object'
-            ? JSON.parse(JSON.stringify(prompt))
-            : prompt;
-    });
-}
-/** 按当前填表模式恢复默认提示词（V1 语义收敛到 service） */
-function resetCurrentPromptToDefault_ACU() {
-    const mode = getCurrentStorageMode();
-    const key = resolveCurrentPromptKey_ACU(mode);
-    const defaultValue = mode === 'sqlite' ? DEFAULT_CHAR_CARD_PROMPT_SQL_ACU : DEFAULT_CHAR_CARD_PROMPT_ACU;
-    return withSettingsWrite_ACU([key], () => {
-        settings_ACU[key] = JSON.parse(JSON.stringify(defaultValue));
-    });
-}
-/** 按指定模式恢复默认填表提示词（applyModeDefaultCharCardPrompt_ACU 语义收敛） */
-function applyDefaultCharCardPrompt_ACU(mode) {
-    const key = resolveCurrentPromptKey_ACU(mode);
-    const defaultValue = mode === 'sqlite' ? DEFAULT_CHAR_CARD_PROMPT_SQL_ACU : DEFAULT_CHAR_CARD_PROMPT_ACU;
-    return withSettingsWrite_ACU([key], () => {
-        settings_ACU[key] = JSON.parse(JSON.stringify(defaultValue));
-    });
-}
-/** 恢复默认填表提示词（按当前存储模式） */
-function resetFormFillPromptsToDefault_ACU() {
-    return withSettingsWrite_ACU(['charCardPrompt'], () => {
-        const mode = getCurrentStorageMode();
-        settings_ACU.charCardPrompt = JSON.parse(JSON.stringify(mode === 'sqlite' ? DEFAULT_CHAR_CARD_PROMPT_SQL_ACU : DEFAULT_CHAR_CARD_PROMPT_ACU));
-    });
-}
-/**
- * 一次性恢复默认填表提示词与合并纪要提示词（resetAllToDefaults 语义收敛）。
- *
- * 原 V1 行为：无条件写 `charCardPrompt` 与 `mergeSummaryPrompt`（不区分 strictJson 分支），
- * 按当前存储模式选择 native/sqlite 默认值。此 API 保持该语义，且两字段原子写入：
- * 任一保存失败则整体回滚。
- *
- * `save: false` 供编排场景使用（调用方自行统一保存，例如 V2 resetAllDefaults
- * 在应用模板后一次性 `saveSettings_ACU()`，避免中间多次保存引入部分失败窗口）。
- */
-function resetAllPromptsToDefault_ACU(mode = getCurrentStorageMode(), options = {}) {
-    if (mode !== 'native' && mode !== 'sqlite') {
-        return { ok: false, code: 'invalid_input', changed: false, message: '存储模式无效。' };
-    }
-    const applyDefaults = () => {
-        settings_ACU.charCardPrompt = JSON.parse(JSON.stringify(mode === 'sqlite' ? DEFAULT_CHAR_CARD_PROMPT_SQL_ACU : DEFAULT_CHAR_CARD_PROMPT_ACU));
-        settings_ACU.mergeSummaryPrompt = JSON.parse(JSON.stringify(mode === 'sqlite' ? DEFAULT_MERGE_SUMMARY_PROMPT_SQL_ACU : DEFAULT_MERGE_SUMMARY_PROMPT_ACU));
-    };
-    if (options.save === false) {
-        try {
-            applyDefaults();
-            return { ok: true, code: 'ok', changed: true };
-        }
-        catch (e) {
-            return { ok: false, code: 'invalid_input', changed: false, message: '恢复默认提示词失败：输入无效。' };
-        }
-    }
-    return withSettingsWrite_ACU(['charCardPrompt', 'mergeSummaryPrompt'], applyDefaults);
-}
-function setMergeSummaryPrompt_ACU(prompt) {
-    return withSettingsWrite_ACU(['mergeSummaryPrompt'], () => {
-        settings_ACU.mergeSummaryPrompt = prompt && typeof prompt === 'object'
-            ? JSON.parse(JSON.stringify(prompt))
-            : prompt;
-    });
-}
-function resetMergeSummaryPrompt_ACU(mode = getCurrentStorageMode()) {
-    if (mode !== 'native' && mode !== 'sqlite') {
-        return { ok: false, code: 'invalid_input', changed: false, message: '存储模式无效。' };
-    }
-    return withSettingsWrite_ACU(['mergeSummaryPrompt'], () => {
-        settings_ACU.mergeSummaryPrompt = JSON.parse(JSON.stringify(mode === 'sqlite' ? DEFAULT_MERGE_SUMMARY_PROMPT_SQL_ACU : DEFAULT_MERGE_SUMMARY_PROMPT_ACU));
-    });
-}
-/** 表格标签提取/排除规则 */
-function setTableContextRules_ACU(kind, rules) {
-    const field = kind === 'extract' ? 'tableContextExtractRules' : 'tableContextExcludeRules';
-    const tagField = kind === 'extract' ? 'tableContextExtractTags' : 'tableContextExcludeTags';
-    const normalized = (kind === 'extract'
-        ? normalizeExtractRules_ACU(rules, '')
-        : normalizeExcludeRules_ACU(rules, ''));
-    return withSettingsWrite_ACU([field, tagField], () => {
-        settings_ACU[field] = JSON.parse(JSON.stringify(normalized));
-        settings_ACU[tagField] = '';
-    });
-}
-
-function saveCustomCharCardPrompt_ACU() {
-    if (!$popupInstance_ACU || !$charCardPromptSegmentsContainer_ACU) {
-        logError_ACU('保存更新预设失败：UI元素未初始化。');
-        return;
-    }
-    let newPromptSegments = getCharCardPromptFromUI_ACU();
-    if (!newPromptSegments || newPromptSegments.length === 0 || (newPromptSegments.length === 1 && !newPromptSegments[0].content.trim())) {
-        showToastr_ACU('warning', '更新预设不能为空。');
-        return;
-    }
-    // [健全性] 主提示词槽位去重：A/B 各最多一个（多余的自动降级为普通段落）
-    try {
-        const seen = { A: false, B: false };
-        newPromptSegments = newPromptSegments.map(seg => {
-            const slot = String(seg?.mainSlot || (seg?.isMain ? 'A' : (seg?.isMain2 ? 'B' : ''))).toUpperCase();
-            if (slot === 'A' || slot === 'B') {
-                if (seen[slot]) {
-                    const cleaned = { ...seg };
-                    delete cleaned.mainSlot;
-                    delete cleaned.isMain;
-                    delete cleaned.isMain2;
-                    cleaned.deletable = cleaned.deletable !== false;
-                    return cleaned;
-                }
-                seen[slot] = true;
-            }
-            return seg;
-        });
-    }
-    catch (e) { }
-    // [V1 收敛] 委托 service 事务式保存；保存失败已回滚，不再触发全量 reload。
-    const result = setCurrentPromptSegments_ACU(newPromptSegments);
-    if (!result.ok) {
-        showToastr_ACU('error', result.message || '更新预设保存失败，已回滚。');
-        return;
-    }
-    showToastr_ACU('success', '更新预设已保存！');
-}
-function resetDefaultCharCardPrompt_ACU() {
-    // [V1 收敛] 委托 service 事务式重置；保存失败已回滚，不再触发全量 reload。
-    const result = resetCurrentPromptToDefault_ACU();
-    if (!result.ok) {
-        showToastr_ACU('error', result.message || '恢复默认提示词失败，已回滚。');
-        return;
-    }
-    showToastr_ACU('info', '更新预设已恢复为默认值！');
-}
-function loadCharCardPromptFromJson_ACU() {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.json';
-    input.onchange = e => {
-        const file = e.target.files[0];
-        if (!file)
-            return;
-        const reader = new FileReader();
-        reader.onload = readerEvent => {
-            const content = readerEvent.target.result;
-            let jsonData;
-            try {
-                jsonData = JSON.parse(content);
-            }
-            catch (error) {
-                logError_ACU('导入提示词模板失败：JSON解析错误。', error);
-                showToastr_ACU('error', '文件不是有效的JSON格式。', { timeOut: 5000 });
-                return;
-            }
-            try {
-                // Basic validation: must be an array of objects with role and content
-                if (!Array.isArray(jsonData) || jsonData.some(item => typeof item.role === 'undefined' || typeof item.content === 'undefined')) {
-                    throw new Error('JSON格式不正确。它必须是一个包含 "role" 和 "content" 键的对象的数组。');
-                }
-                // Add deletable: true and normalize roles for consistency
-                const segments = jsonData.map(item => {
-                    let normalizedRole = 'USER'; // Default to USER
-                    if (item.role) {
-                        const roleLower = item.role.toLowerCase();
-                        if (roleLower === 'system') {
-                            normalizedRole = 'SYSTEM';
-                        }
-                        else if (roleLower === 'assistant' || roleLower === 'ai') {
-                            normalizedRole = 'assistant';
-                        }
-                    }
-                    const slot = String(item?.mainSlot || (item?.isMain ? 'A' : (item?.isMain2 ? 'B' : ''))).toUpperCase();
-                    const normalizedSlot = (slot === 'A' || slot === 'B') ? slot : '';
-                    return {
-                        ...item,
-                        role: normalizedRole,
-                        mainSlot: normalizedSlot || item.mainSlot,
-                        // 主提示词A/B不可删除
-                        deletable: (normalizedSlot ? false : (item.deletable !== false)),
-                    };
-                });
-                // Use the existing render function
-                renderPromptSegments_ACU(segments);
-                showToastr_ACU('success', '提示词模板已成功加载！');
-                logDebug_ACU('New prompt template loaded from JSON file.');
-            }
-            catch (error) {
-                logError_ACU('导入提示词模板失败：结构验证失败。', error);
-                showToastr_ACU('error', `导入失败: ${error.message}`, { timeOut: 10000 });
-            }
-        };
-        reader.readAsText(file, 'UTF-8');
-    };
-    input.click();
-}
-// [新增] 导出"填表提示词组(更新预设/AI指令预设)"为 JSON（与 loadCharCardPromptFromJson_ACU 联动）
-function exportCharCardPromptToJson_ACU() {
-    try {
-        const segments = getCharCardPromptFromUI_ACU();
-        if (!Array.isArray(segments) || segments.length === 0) {
-            showToastr_ACU('warning', '没有可导出的提示词模板。');
-            return;
-        }
-        // 基础校验：必须包含 role/content
-        const invalid = segments.some(s => !s || typeof s !== 'object' || typeof s.role === 'undefined' || typeof s.content === 'undefined');
-        if (invalid) {
-            showToastr_ACU('error', '导出失败：提示词结构不完整（缺少 role 或 content）。');
-            return;
-        }
-        const jsonString = JSON.stringify(segments, null, 2);
-        const blob = new Blob([jsonString], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'TavernDB_TablePromptGroup.json';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-        showToastr_ACU('success', '提示词模板已导出为JSON！', { acuToastCategory: ACU_TOAST_CATEGORY_ACU.MANUAL_TABLE });
-    }
-    catch (e) {
-        logError_ACU('导出提示词模板失败:', e);
-        showToastr_ACU('error', '导出提示词模板失败，请检查控制台获取详情。', { acuToastCategory: ACU_TOAST_CATEGORY_ACU.ERROR });
-    }
-}
-const NUMBER_FIELD_SAVERS_ACU = [
-    { key: 'autoUpdateThreshold', input: () => $autoUpdateThresholdInput_ACU, min: 0, errPrefix: '自动更新阈值', successText: (v) => v === 0 ? '自动更新阈值已保存！标准表自动更新已禁用。' : '自动更新阈值已保存！', warnTemplate: (v) => `阈值 "${v}" 无效。请输入一个大于等于0的整数。恢复为: ${settings_ACU.autoUpdateThreshold}`, restore: () => settings_ACU.autoUpdateThreshold },
-    { key: 'autoUpdateTokenThreshold', input: () => $autoUpdateTokenThresholdInput_ACU, min: 0, errPrefix: '自动更新Token阈值', successText: () => '自动更新Token阈值已保存！', warnTemplate: (v) => `Token阈值 "${v}" 无效。请输入一个大于等于0的整数。恢复为: ${settings_ACU.autoUpdateTokenThreshold}`, restore: () => settings_ACU.autoUpdateTokenThreshold },
-    { key: 'tableMaxRetries', input: () => $tableMaxRetriesInput_ACU, min: 1, max: 10, errPrefix: '填表自动重试次数', successText: () => '填表自动重试次数已保存！', warnTemplate: (v) => `重试次数 "${v}" 无效。请输入1-10之间的整数。恢复为: ${settings_ACU.tableMaxRetries || 3}`, restore: () => settings_ACU.tableMaxRetries || 3 },
-    { key: 'autoUpdateFrequency', input: () => $autoUpdateFrequencyInput_ACU, min: 1, errPrefix: '自动更新频率', successText: () => '自动更新频率已保存！', warnTemplate: (v) => `更新频率 "${v}" 无效。请输入一个大于0的整数。恢复为: ${settings_ACU.autoUpdateFrequency}`, restore: () => settings_ACU.autoUpdateFrequency },
-    { key: 'updateBatchSize', input: () => $updateBatchSizeInput_ACU, min: 1, errPrefix: '批处理大小', successText: () => '批处理大小已保存！', warnTemplate: (v) => `批处理大小 "${v}" 无效。请输入一个大于0的整数。恢复为: ${settings_ACU.updateBatchSize}`, restore: () => settings_ACU.updateBatchSize },
-    { key: 'maxConcurrentGroups', input: () => $maxConcurrentGroupsInput_ACU, min: 1, errPrefix: '最大并发数', successText: () => '最大并发数已保存！', warnTemplate: (v) => `最大并发数 "${v}" 无效。请输入一个大于0的整数。恢复为: ${settings_ACU.maxConcurrentGroups || 1}`, restore: () => settings_ACU.maxConcurrentGroups || 1 },
-    { key: 'skipUpdateFloors', input: () => $skipUpdateFloorsInput_ACU, min: 0, errPrefix: '跳过更新楼层', successText: () => '跳过更新楼层已保存！', warnTemplate: (v) => `跳过更新楼层 "${v}" 无效。请输入一个大于等于0的整数。恢复为: ${settings_ACU.skipUpdateFloors || 0}`, restore: () => settings_ACU.skipUpdateFloors || 0 },
-    { key: 'importSplitSize', input: () => $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-import-split-size`), min: 100, errPrefix: '导入分割大小', successText: () => '导入分割大小已保存！', warnTemplate: (v) => `导入分割大小 "${v}" 无效。请输入一个大于等于100的整数。恢复为: ${settings_ACU.importSplitSize}`, restore: () => settings_ACU.importSplitSize },
-];
-function saveNumberField_ACU(key, { silent = false } = {}) {
-    const cfg = NUMBER_FIELD_SAVERS_ACU.find(c => c.key === key);
-    if (!cfg)
-        return;
-    if (!$popupInstance_ACU || !cfg.input()) {
-        logError_ACU(`保存${cfg.errPrefix}失败：UI元素未初始化。`);
-        return;
-    }
-    const valStr = cfg.input().val();
-    const val = parseInt(valStr, 10);
-    if (!isNaN(val) && val >= cfg.min && (cfg.max === undefined || val <= cfg.max)) {
-        // [V1 收敛] 委托 service 事务式写入（含归一化与保存失败回滚）
-        const result = setUpdateNumberFields_ACU({ [cfg.key]: val });
-        if (!result.ok) {
-            if (!silent)
-                showToastr_ACU('error', result.message || `${cfg.errPrefix}保存失败，已回滚。`);
-            return;
-        }
-        if (!silent)
-            showToastr_ACU('success', cfg.successText(val));
-    }
-    else {
-        if (!silent)
-            showToastr_ACU('warning', cfg.warnTemplate(valStr));
-        cfg.input().val(cfg.restore());
-    }
-}
-const saveAutoUpdateThreshold_ACU = (opts = {}) => saveNumberField_ACU('autoUpdateThreshold', opts);
-const saveAutoUpdateTokenThreshold_ACU = (opts = {}) => saveNumberField_ACU('autoUpdateTokenThreshold', opts);
-const saveTableMaxRetries_ACU = (opts = {}) => saveNumberField_ACU('tableMaxRetries', opts);
-const saveAutoUpdateFrequency_ACU = (opts = {}) => saveNumberField_ACU('autoUpdateFrequency', opts);
-const saveUpdateBatchSize_ACU = (opts = {}) => saveNumberField_ACU('updateBatchSize', opts);
-const saveMaxConcurrentGroups_ACU = (opts = {}) => saveNumberField_ACU('maxConcurrentGroups', opts);
-const saveSkipUpdateFloors_ACU = (opts = {}) => saveNumberField_ACU('skipUpdateFloors', opts);
-const saveImportSplitSize_ACU = (opts = {}) => saveNumberField_ACU('importSplitSize', opts);
-// [新增] 保存"保留最近N个AI回复楼层数据"（全局）
-function saveRetainRecentLayers_ACU({ silent = false, skipReload = false } = {}) {
-    if (!$popupInstance_ACU || !$retainRecentLayersInput_ACU) {
-        logError_ACU('保存 AI 回复楼层保留数失败：UI元素未初始化。');
-        return;
-    }
-    const valStr = $retainRecentLayersInput_ACU.val();
-    const parsed = parseInt(valStr, 10);
-    // 空字符串或无效值视为0（全部保留）
-    const newRetain = (!valStr || valStr.trim() === '' || isNaN(parsed)) ? 0 : Math.max(0, parsed);
-    // [V1 收敛] 委托 service 事务式写入
-    const result = setUpdateNumberFields_ACU({ retainRecentLayers: newRetain });
-    if (!result.ok) {
-        if (!silent)
-            showToastr_ACU('error', result.message || 'AI 回复楼层保留数保存失败，已回滚。');
-        return;
-    }
-    if (!silent) {
-        if (newRetain === 0) {
-            showToastr_ACU('success', 'AI 回复楼层保留数已清空（将保留全部历史数据）！');
-        }
-        else {
-            showToastr_ACU('success', `AI 回复楼层保留数已保存：最近 ${newRetain} 个 AI 回复楼层！`);
-        }
-    }
-}
-
 /**
  * service/ai/ai-service.ts — AI 调用服务
  *
@@ -86436,6 +86190,10 @@ async function fetchAvailableModels_ACU(apiUrl, apiKey) {
     return { success: true, models: modelNames };
 }
 
+/**
+ * presentation/components/optimization-ui/optimization-ui-overlay.ts
+ * 优化覆盖层和进度 Toast
+ */
 // --- [正文优化] 构建默认提示词组 ---
 function showOptimizationOverlay_ACU(message = '正在优化正文...') {
     // 移除已存在的遮罩
@@ -86543,6 +86301,10 @@ function hideOptimizationOverlay_ACU() {
  * @param {string} newContent - 新内容
  */
 
+/**
+ * presentation/components/optimization-ui/optimization-ui-diff.ts
+ * 优化 Diff 对话框
+ */
 function showOptimizationDiffDialogForLoop_ACU(messageIndex, result, callback) {
     const isLastLoop = result.currentLoop >= result.totalLoops;
     const applyButtonText = isLastLoop ? '应用并完成' : '应用并继续';
@@ -86725,6 +86487,10 @@ function showOptimizationDiff_ACU(messageIndex, result) {
  */
 // === 以下为 presentation 层独有的 UI 函数（DOM 操作/渲染）===
 
+/**
+ * presentation/components/optimization-ui/optimization-ui-exec.ts
+ * 优化执行逻辑
+ */
 // replaceChatMessage_ACU 和 getOriginalContent_ACU 已搬迁到 service/chat/chat-service.ts
 // 通过文件顶部的 re-export 保持外部调用方兼容
 /**
@@ -87278,162 +87044,10 @@ function readExcludeRulesFromRows_ACU(containerSelector) {
  */
 
 /**
- * presentation/components/update-status-display.ts — 运行时状态/更新显示 UI
- * 从 features/runtime/01_runtime_state.js 迁移而来
+ * presentation/triggers/settings-ui-sync/settings-ui-config.ts
+ * 旧弹窗时代保存各设置项的 save* 函数已随旧弹窗入口链删除而失去调用者，
+ * 本文件仅保留仍被引用的 re-export（purgeOldLayerData_ACU 供 settings-ui-trigger 使用）。
  */
-async function updateCardUpdateStatusDisplay_ACU() {
-    const $totalMessagesDisplay = $popupInstance_ACU
-        ? $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-total-messages-display`)
-        : null;
-    const $statusTableBody = $popupInstance_ACU
-        ? $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-granular-status-table-body`)
-        : null;
-    const $nextUpdateDisplay = $popupInstance_ACU
-        ? $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-next-update-display`)
-        : null;
-    if (!$popupInstance_ACU ||
-        !$cardUpdateStatusDisplay_ACU ||
-        !$cardUpdateStatusDisplay_ACU.length ||
-        !$totalMessagesDisplay ||
-        !$totalMessagesDisplay.length ||
-        !$statusTableBody ||
-        !$statusTableBody.length) {
-        logDebug_ACU('updateCardUpdateStatusDisplay_ACU: UI elements not ready.');
-        return;
-    }
-    const chatHistory = getChatArray_ACU();
-    const totalMessages = chatHistory.filter(msg => !msg.is_user).length;
-    $totalMessagesDisplay.text(`上下文总层数: ${totalMessages} (仅计算AI回复楼层)`);
-    const totalAiMessages = totalMessages;
-    if (!currentJsonTableData_ACU) {
-        $cardUpdateStatusDisplay_ACU.text('数据库状态：未加载或初始化失败。');
-        $statusTableBody.html('<tr><td colspan="5" style="text-align: center;">暂无数据</td></tr>');
-        return;
-    }
-    try {
-        const sheetKeys = getSortedSheetKeys_ACU(currentJsonTableData_ACU);
-        const tableCount = sheetKeys.length;
-        let totalRowCount = 0;
-        let nextUpdates = [];
-        let tableStatusRows = "";
-        sheetKeys.forEach(key => {
-            const table = currentJsonTableData_ACU[key];
-            if (!table)
-                return;
-            if (table.content && Array.isArray(table.content)) {
-                totalRowCount += table.content.length > 1 ? table.content.length - 1 : 0;
-            }
-            // 计算每个表的状态
-            const tableConfig = table.updateConfig || {};
-            const isSummary = isSummaryOrOutlineTable_ACU(table.name);
-            // 确定参数
-            const globalFrequency = settings_ACU.autoUpdateFrequency || 1;
-            const globalSkip = settings_ACU.skipUpdateFloors || 0;
-            // -1 = 沿用UI全局；0 = 禁用该表自动更新（不参与预测）
-            const rawFreq = Number.isFinite(tableConfig.updateFrequency) ? tableConfig.updateFrequency : -1;
-            const rawSkip = Number.isFinite(tableConfig.skipFloors) ? tableConfig.skipFloors : -1;
-            const frequency = (rawFreq === -1) ? globalFrequency : rawFreq;
-            // [重构] 上次更新楼层计算：扫描聊天记录
-            // 寻找该表格在历史记录中最后一次被更新的楼层
-            // 支持合并更新逻辑：只要合并更新组内有任意表被修改，整组表都视为已更新
-            const currentIsolationKey = getCurrentIsolationKey_ACU();
-            const history = resolveTableHistoryStateFromChat_ACU(chatHistory, {
-                sheetKey: key,
-                isSummaryTable: isSummary,
-                isolationKey: currentIsolationKey,
-                settings: settings_ACU,
-            });
-            const lastUpdatedAiFloor = history.lastTrackedUpdateAiFloor;
-            const foundInHistory = history.hasTrackedUpdate;
-            const skipFloors = Math.max(0, (rawSkip === -1) ? globalSkip : rawSkip);
-            // 下次触发 (包含skip)
-            let triggerFloor = "N/A";
-            let unrecorded = "N/A";
-            let effectiveUnrecorded = "N/A"; // [修复] 在外部作用域声明变量
-            let isReady = false;
-            const isAutoUpdateDisabledForThisTable = (frequency <= 0);
-            if (isAutoUpdateDisabledForThisTable) {
-                // 频率=0：不参与自动更新，UI显示“无”
-                triggerFloor = '无';
-                // 仍可展示“未记录楼层/上次更新”，便于用户观察数据变化
-                if (foundInHistory) {
-                    unrecorded = String(totalAiMessages - lastUpdatedAiFloor);
-                    effectiveUnrecorded = '—';
-                }
-                else {
-                    unrecorded = '—';
-                    effectiveUnrecorded = '—';
-                }
-                isReady = false;
-            }
-            else if (foundInHistory) {
-                // [修复] UI显示逻辑同步修正
-                // 触发楼层 = 上次更新楼层 + 频率 + 跳过楼层
-                triggerFloor = String(lastUpdatedAiFloor + frequency + skipFloors);
-                // 显示给用户的未记录楼层：直接展示物理差值
-                unrecorded = String(totalAiMessages - lastUpdatedAiFloor);
-                // 有效积累楼层（用于判断进度）：减去跳过楼层
-                effectiveUnrecorded = String(Math.max(0, (totalAiMessages - skipFloors) - lastUpdatedAiFloor));
-                isReady = effectiveUnrecorded >= frequency;
-                // 将数值存入预测数组
-                nextUpdates.push({ name: table.name, floor: triggerFloor, isReady });
-            }
-            // 显示文本处理
-            let lastUpdatedDisplay = foundInHistory ? lastUpdatedAiFloor : '<span style="color: grey;">未初始</span>';
-            // 高亮显示当前层更新的表，并显示变更数量
-            const isUpdatedThisFloor = foundInHistory && (lastUpdatedAiFloor === totalAiMessages);
-            if (isUpdatedThisFloor) {
-                const changes = table._lastUpdateStats ? table._lastUpdateStats.changes : 0;
-                const changeText = changes > 0 ? `(+${changes})` : '(无变更)';
-                lastUpdatedDisplay = `<span style="color: lightgreen; font-weight: bold;">${lastUpdatedAiFloor} ${changeText}</span>`;
-            }
-            tableStatusRows += `
-            <tr style="border-bottom: 1px solid rgba(255,255,255,0.05);">
-                <td style="text-align: left; padding: 5px;">${escapeHtml_ACU$1(table.name)}</td>
-                <td style="text-align: center; padding: 5px;">${frequency}</td>
-                <td style="text-align: center; padding: 5px;" title="有效未记录: ${effectiveUnrecorded}">${unrecorded}</td>
-                <td style="text-align: center; padding: 5px;">${lastUpdatedDisplay}</td>
-                <td style="text-align: center; padding: 5px;">${triggerFloor}</td>
-            </tr>
-        `;
-        });
-        $statusTableBody.html(tableStatusRows);
-        const activeTemplateMeta_ACU = getActiveTemplatePresetMeta_ACU();
-        $cardUpdateStatusDisplay_ACU.html(`数据库状态: <b style="color:lightgreen;">已加载</b> (${tableCount}个表格, ${totalRowCount}条记录)；当前生效模板预设：<b style="color:var(--accent-primary);">${escapeHtml_ACU$1(activeTemplateMeta_ACU.displayName)}</b><span style="color: var(--text-secondary);">（${activeTemplateMeta_ACU.scopeLabel}）</span>`);
-        // 更新下次预测显示
-        if ($nextUpdateDisplay.length && nextUpdates.length > 0) {
-            nextUpdates.sort((a, b) => a.floor - b.floor);
-            const readyList = nextUpdates.filter(u => u.isReady);
-            const upcomingList = nextUpdates.filter(u => !u.isReady);
-            let statusText = "";
-            if (readyList.length > 0) {
-                statusText += `<span style="color: lightgreen;">[就绪] ${readyList.map(u => u.name).join(', ')}</span> `;
-            }
-            if (upcomingList.length > 0) {
-                const next = upcomingList[0];
-                const othersSameFloor = upcomingList.filter(u => u.floor === next.floor && u !== next);
-                let names = next.name;
-                if (othersSameFloor.length > 0)
-                    names += ", " + othersSameFloor.map(u => u.name).join(", ");
-                if (statusText)
-                    statusText += " | ";
-                statusText += `下一次: <b>${names}</b> (AI楼层 ${next.floor})`;
-            }
-            else if (readyList.length === 0) {
-                statusText = "下一次: <b>无</b>";
-            }
-            $nextUpdateDisplay.html(statusText);
-        }
-        else if ($nextUpdateDisplay.length) {
-            // 所有表都禁用自动更新 / 没有可参与预测的表
-            $nextUpdateDisplay.html("下一次: <b>无</b>");
-        }
-    }
-    catch (e) {
-        logError_ACU('ACU: Failed to parse database for UI status:', e);
-        $cardUpdateStatusDisplay_ACU.text('解析数据库状态时出错。');
-    }
-}
 
 /**
  * service/table/update-scheduler.ts — 自动更新调度核心逻辑
@@ -94318,6 +93932,9 @@ function logAutoFillSkip_ACU(reason, context = {}) {
     });
 }
 
+/**
+ * presentation/triggers/settings-ui-sync/settings-ui-trigger.ts
+ */
 function buildAutoUpdateProgressLabel_ACU(event) {
     if (Number.isFinite(event.currentBatch) && Number.isFinite(event.totalBatches)) {
         return `第 ${event.currentBatch}/${event.totalBatches} 批`;
@@ -94768,6 +94385,9 @@ function evaluateNewMessageAction_ACU(liveChat, isAutoUpdating, coreApisReady, w
     return { action: 'update_only', reason: 'No content optimization configured', lastMessageIndex };
 }
 
+/**
+ * presentation/triggers/settings-ui-sync/settings-ui-connect.ts
+ */
 async function fetchModelsAndConnect_ACU() {
     if (!$popupInstance_ACU ||
         !$customApiUrlInput_ACU ||
@@ -95096,1093 +94716,6 @@ async function handleNewMessageDebounced_ACU(eventType = 'unknown_acu', intent) 
  * presentation/triggers/settings-ui-sync/index.ts
  */
 
-/**
- * presentation/components/table-selector.ts — 表格选择器组件
- *
- * 使用 TableSelectorComponent 类消除 manual/import 两个选择器的重复代码。
- * 原有导出函数保留作为兼容层，内部委托给组件实例。
- */
-// ─── TableSelectorComponent 类 ─────────────────────────
-class TableSelectorComponent {
-    constructor(config) {
-        this._$container = null;
-        this._mounted = false;
-        this._config = config;
-    }
-    /** 生成选择器 HTML（纯函数） */
-    render() {
-        const dataSource = this._config.getDataSource();
-        if (!dataSource)
-            return `<div class="notes">${escapeHtml_ACU$1(this._config.emptyDataText)}</div>`;
-        const availableKeys = getSortedSheetKeys_ACU(dataSource);
-        if (availableKeys.length === 0)
-            return `<div class="notes">${escapeHtml_ACU$1(this._config.emptyKeysText)}</div>`;
-        const selectedKeys = this._config.getSelectedKeys();
-        const selectedSet = new Set(selectedKeys);
-        let html = '<div class="acu-table-selector" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px;max-height:240px;overflow:auto;padding:8px;border:1px solid var(--border-normal);border-radius:8px;background:var(--bg-secondary);">';
-        availableKeys.forEach(key => {
-            const name = dataSource[key]?.name || key;
-            const checked = selectedSet.has(key) ? 'checked' : '';
-            html += `<label style="display:flex;align-items:center;gap:8px;padding:10px;border:1px solid var(--border-normal);border-radius:6px;background:var(--bg-primary);">
-              <input type="checkbox" data-key="${key}" ${checked} style="margin:0;width:14px;height:14px;flex-shrink:0;">
-              <span style="flex:1;word-break:break-all;font-weight:600;">${escapeHtml_ACU$1(name)}</span>
-          </label>`;
-        });
-        html += '</div>';
-        return html;
-    }
-    /** 挂载到容器：插入 HTML + 绑定事件 */
-    mount($container) {
-        if (this._mounted)
-            this.unmount();
-        this._$container = $container;
-        this._$container.html(this.render());
-        this._bindEvents();
-        this._mounted = true;
-    }
-    /** 卸载：清理事件 + 清空内容 */
-    unmount() {
-        if (this._$container) {
-            this._$container.off('change', 'input[type="checkbox"]');
-            this._$container.empty();
-        }
-        this._mounted = false;
-    }
-    /** 用新数据重新渲染（保持挂载状态） */
-    update() {
-        if (!this._$container || !this._$container.length)
-            return;
-        this._$container.off('change', 'input[type="checkbox"]');
-        this._$container.html(this.render());
-        this._bindEvents();
-    }
-    /** 从 UI 读取当前勾选的 keys */
-    getSelectionFromUI() {
-        if (!this._$container || !this._$container.length)
-            return [];
-        const keys = [];
-        this._$container.find('input[type="checkbox"]:checked').each(function () {
-            const k = jQuery_API_ACU(this).data('key');
-            if (k)
-                keys.push(k);
-        });
-        return keys;
-    }
-    /** 全选 */
-    selectAll() {
-        const dataSource = this._config.getDataSource();
-        if (!dataSource)
-            return;
-        const keys = getSortedSheetKeys_ACU(dataSource);
-        this._config.saveSelection(keys);
-        this.update();
-    }
-    /** 全不选 */
-    selectNone() {
-        this._config.saveSelection([]);
-        this.update();
-    }
-    _bindEvents() {
-        if (!this._$container)
-            return;
-        const config = this._config;
-        this._$container.off('change', 'input[type="checkbox"]').on('change', 'input[type="checkbox"]', function () {
-            const checkedKeys = [];
-            config.getContainer()?.find('input[type="checkbox"]:checked').each(function () {
-                const key = jQuery_API_ACU(this).data('key');
-                if (key)
-                    checkedKeys.push(key);
-            });
-            config.saveSelection(checkedKeys);
-        });
-    }
-}
-// ─── 组件实例 ──────────────────────────────────────────
-const manualSelector = new TableSelectorComponent({
-    getDataSource: () => currentJsonTableData_ACU || null,
-    getSelectedKeys: () => {
-        const resolved = getSelectedManualSheetKeys_ACU();
-        // 同步到 settings（保持原有行为）
-        if (!Array.isArray(settings_ACU.manualSelectedTables) || JSON.stringify(settings_ACU.manualSelectedTables) !== JSON.stringify(resolved)) {
-            settings_ACU.manualSelectedTables = resolved;
-            saveSettingsAndNotify_ACU();
-        }
-        return resolved;
-    },
-    getContainer: () => $manualTableSelector_ACU,
-    saveSelection: (keys) => {
-        settings_ACU.manualSelectedTables = keys;
-        settings_ACU.hasManualSelection = true;
-        saveSettingsAndNotify_ACU();
-    },
-    emptyDataText: '暂无表格可选。',
-    emptyKeysText: '暂无表格可选。',
-});
-const importSelector = new TableSelectorComponent({
-    getDataSource: () => getImportBaseTableData_ACU(),
-    getSelectedKeys: () => {
-        const resolved = getSelectedImportSheetKeys_ACU();
-        if (!Array.isArray(settings_ACU.importSelectedTables) || JSON.stringify(settings_ACU.importSelectedTables) !== JSON.stringify(resolved)) {
-            settings_ACU.importSelectedTables = resolved;
-            saveSettingsAndNotify_ACU();
-        }
-        return resolved;
-    },
-    getContainer: () => $importTableSelector_ACU,
-    saveSelection: (keys) => {
-        settings_ACU.importSelectedTables = keys;
-        settings_ACU.hasImportTableSelection = true;
-        saveSettingsAndNotify_ACU();
-    },
-    emptyDataText: '尚未加载表格结构。',
-    emptyKeysText: '暂无表格可选。',
-});
-// ─── 兼容层：保留原有导出函数签名 ─────────────────────
-function renderManualTableSelector_ACU() {
-    const $container = $manualTableSelector_ACU;
-    if (!$container || !$container.length || !currentJsonTableData_ACU)
-        return;
-    manualSelector.mount($container);
-}
-// ─── 外部导入表格选择器 ────────────────────────────────
-function getImportBaseTableData_ACU() {
-    try {
-        const templateData = parseTableTemplateJson_ACU({ stripSeedRows: true });
-        if (templateData)
-            return templateData;
-    }
-    catch (e) {
-        // ignore
-    }
-    return currentJsonTableData_ACU || null;
-}
-function getSelectedImportSheetKeys_ACU() {
-    const base = getImportBaseTableData_ACU();
-    if (!base)
-        return [];
-    const availableKeys = getSortedSheetKeys_ACU(base);
-    const saved = Array.isArray(settings_ACU.importSelectedTables) ? settings_ACU.importSelectedTables : [];
-    if (!settings_ACU.hasImportTableSelection)
-        return availableKeys;
-    const validSaved = saved.filter((k) => availableKeys.includes(k));
-    return validSaved;
-}
-function renderImportTableSelector_ACU() {
-    const $container = $importTableSelector_ACU;
-    if (!$container || !$container.length)
-        return;
-    importSelector.mount($container);
-}
-function handleImportSelectAll_ACU() {
-    importSelector.selectAll();
-}
-function handleImportSelectNone_ACU() {
-    importSelector.selectNone();
-}
-function handleManualSelectAll_ACU() {
-    manualSelector.selectAll();
-}
-function handleManualSelectNone_ACU() {
-    manualSelector.selectNone();
-}
-
-/**
- * presentation/components/worldbook-selector.ts — 世界书选择 UI
- * 从 features/worldbook/01~03 + 04 迁移而来
- */
-async function updateWorldbookSourceView_ACU() {
-    if (!$popupInstance_ACU)
-        return;
-    const worldbookConfig = getCurrentWorldbookConfig_ACU();
-    const source = worldbookConfig.source;
-    const $manualBlock = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-manual-select-block`);
-    if (source === 'manual') {
-        $manualBlock.slideDown();
-        await populateWorldbookList_ACU();
-    }
-    else {
-        $manualBlock.slideUp();
-    }
-    await populateWorldbookEntryList_ACU();
-}
-// =========================
-// [剧情推进] 世界书选择 UI（独立于填表 worldbookConfig）
-// 复用现有加载逻辑，但使用不同的 DOM id 与不同的配置对象
-// =========================
-function getPlotWorldbookConfig_ACU() {
-    if (!settings_ACU.plotSettings)
-        settings_ACU.plotSettings = JSON.parse(JSON.stringify(DEFAULT_PLOT_SETTINGS_ACU));
-    if (!settings_ACU.plotSettings.plotWorldbookConfig) {
-        settings_ACU.plotSettings.plotWorldbookConfig = buildDefaultPlotWorldbookConfig_ACU();
-    }
-    return settings_ACU.plotSettings.plotWorldbookConfig;
-}
-async function updatePlotWorldbookSourceView_ACU() {
-    if (!$popupInstance_ACU)
-        return;
-    const cfg = getPlotWorldbookConfig_ACU();
-    const source = cfg.source;
-    const $manualBlock = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-worldbook-manual-select-block`);
-    if (source === 'manual') {
-        $manualBlock.slideDown();
-        await populatePlotWorldbookList_ACU();
-    }
-    else {
-        $manualBlock.slideUp();
-    }
-    await populatePlotWorldbookEntryList_ACU();
-}
-async function populatePlotWorldbookList_ACU() {
-    if (!$popupInstance_ACU)
-        return;
-    const $listContainer = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-worldbook-select`);
-    if (!$listContainer.length)
-        return;
-    $listContainer.empty().html('<em>正在加载...</em>');
-    try {
-        const bookNames = await getWorldbookNames_ACU();
-        $listContainer.empty();
-        if (bookNames.length === 0) {
-            $listContainer.html('<em>未找到世界书</em>');
-            return;
-        }
-        const cfg = getPlotWorldbookConfig_ACU();
-        bookNames.forEach((bookName) => {
-            const isSelected = (cfg.manualSelection || []).includes(bookName);
-            const itemHtml = `
-                  <div class="qrf_worldbook_list_item ${isSelected ? 'selected' : ''}" data-book-name="${escapeHtml_ACU$1(bookName)}">
-                      ${escapeHtml_ACU$1(bookName)}
-                  </div>`;
-            $listContainer.append(itemHtml);
-        });
-        // 应用筛选（若存在）
-        try {
-            const $filter = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-worldbook-select-filter`);
-            if ($filter.length)
-                applyWorldbookListFilter_ACU($listContainer, $filter.val());
-        }
-        catch (e) { }
-    }
-    catch (error) {
-        logError_ACU('[剧情推进] 加载手动世界书列表失败:', { phase: 'plot_worldbook_list', error: { category: 'unknown' } });
-        $listContainer.html('<em>加载失败</em>');
-    }
-}
-async function populatePlotWorldbookEntryList_ACU() {
-    if (!$popupInstance_ACU)
-        return;
-    const $list = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-worldbook-entry-list`);
-    if (!$list.length)
-        return;
-    $list.empty().html('<em>正在加载条目...</em>');
-    const cfg = getPlotWorldbookConfig_ACU();
-    const source = cfg.source;
-    let bookNames = [];
-    try {
-        if (source === 'character') {
-            bookNames = (await getCurrentCharacterWorldbookBinding_ACU()).orderedNames;
-        }
-        else if (source === 'manual') {
-            bookNames = cfg.manualSelection || [];
-        }
-    }
-    catch (error) {
-        logError_ACU('[剧情推进] 读取角色绑定世界书失败:', { phase: 'plot_character_binding', error: { category: 'unknown' } });
-        $list.html('<em>加载条目失败。</em>');
-        return;
-    }
-    bookNames = [...new Set((Array.isArray(bookNames) ? bookNames : []).filter(Boolean))];
-    if (bookNames.length === 0) {
-        $list.html('<em>请先选择世界书或为角色绑定世界书。</em>');
-        return;
-    }
-    try {
-        if (!cfg.enabledEntries)
-            cfg.enabledEntries = {};
-        const entriesMap = await getLorebookEntriesByNames_ACU(bookNames);
-        const groups = [];
-        const expandByDefault = bookNames.length === 1;
-        let settingsChanged = false;
-        for (const bookName of bookNames) {
-            const bookEntries = Array.isArray(entriesMap[bookName]) ? entriesMap[bookName] : [];
-            if (typeof cfg.enabledEntries[bookName] === 'undefined') {
-                // 默认启用时：仅对"非数据库生成条目"做默认勾选（数据库生成条目不在UI显示，也不需要用户勾选）
-                cfg.enabledEntries[bookName] = bookEntries.filter((entry) => {
-                    const comment = entry?.comment || entry?.name || '';
-                    let normalizedComment = String(comment).replace(/^ACU-\[[^\]]+\]-/, '');
-                    normalizedComment = normalizedComment.replace(/^外部导入-(?:[^-]+-)?/, '');
-                    // UI 不显示：数据库生成条目（含隔离/外部导入前缀），以及 OutlineTable
-                    if (normalizedComment.startsWith('TavernDB-ACU-OutlineTable'))
-                        return false;
-                    const isDbGenerated = normalizedComment.startsWith('TavernDB-ACU-') ||
-                        normalizedComment.startsWith('重要人物条目') ||
-                        normalizedComment.startsWith('总结条目') ||
-                        normalizedComment.startsWith('小总结条目');
-                    if (isDbGenerated)
-                        return false;
-                    if (isEntryBlocked_ACU(entry))
-                        return false;
-                    return true;
-                })
-                    .map((entry) => entry.uid);
-                settingsChanged = true;
-            }
-            const enabledEntries = Array.isArray(cfg.enabledEntries[bookName]) ? cfg.enabledEntries[bookName] : [];
-            const visibleEntries = [];
-            bookEntries.forEach((entry) => {
-                const comment = entry?.comment || entry?.name || '';
-                let normalizedComment = String(comment).replace(/^ACU-\[[^\]]+\]-/, '');
-                normalizedComment = normalizedComment.replace(/^外部导入-(?:[^-]+-)?/, '');
-                // UI 不显示：数据库生成条目（含隔离/外部导入前缀），以及 OutlineTable
-                if (normalizedComment.startsWith('TavernDB-ACU-OutlineTable'))
-                    return;
-                const isDbGenerated = normalizedComment.startsWith('TavernDB-ACU-') ||
-                    normalizedComment.startsWith('重要人物条目') ||
-                    normalizedComment.startsWith('总结条目') ||
-                    normalizedComment.startsWith('小总结条目');
-                if (isDbGenerated)
-                    return;
-                if (isEntryBlocked_ACU(entry))
-                    return;
-                visibleEntries.push({
-                    uid: entry.uid,
-                    bookName,
-                    label: entry.comment || `条目 ${entry.uid}`,
-                    searchText: `${bookName} ${entry.comment || entry.name || `条目 ${entry.uid}`}`,
-                    checked: enabledEntries.includes(entry.uid),
-                    disabled: !entry.enabled,
-                    checkboxId: buildWorldbookEntryCheckboxId_ACU('plot-wb-entry', bookName, entry.uid),
-                });
-            });
-            if (visibleEntries.length > 0) {
-                groups.push({
-                    bookName,
-                    entries: visibleEntries,
-                    expanded: expandByDefault,
-                });
-            }
-        }
-        if (settingsChanged) {
-            saveSettingsAndNotify_ACU();
-        }
-        renderLazyWorldbookEntryList_ACU($list, groups, {
-            checkboxIdPrefix: 'plot-wb-entry',
-            emptyText: '<em>所选世界书中无条目。</em>',
-        });
-        // 应用筛选（若存在）
-        try {
-            const $filter = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-worldbook-entry-filter`);
-            if ($filter.length)
-                applyWorldbookEntryFilter_ACU($list, $filter.val());
-        }
-        catch (e) { }
-    }
-    catch (error) {
-        logError_ACU('[剧情推进] 加载剧情世界书条目失败:', { phase: 'plot_worldbook_entries', error: { category: 'unknown' } });
-        $list.html('<em>加载条目失败。</em>');
-    }
-}
-// [新增] 填充注入目标选择器
-async function populateInjectionTargetSelector_ACU() {
-    if (!$popupInstance_ACU)
-        return;
-    const $select = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-injection-target`);
-    $select.empty();
-    try {
-        const bookNames = await getWorldbookNames_ACU();
-        // 添加默认选项
-        $select.append(`<option value="character">角色卡绑定世界书</option>`);
-        bookNames.forEach((bookName) => {
-            $select.append(`<option value="${escapeHtml_ACU$1(bookName)}">${escapeHtml_ACU$1(bookName)}</option>`);
-        });
-        // 设置当前选中的值
-        const worldbookConfig = getCurrentWorldbookConfig_ACU();
-        $select.val(worldbookConfig.injectionTarget || 'character');
-        // 应用筛选（若存在）
-        try {
-            const $filter = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-injection-target-filter`);
-            if ($filter.length)
-                applyWorldbookSelectFilter_ACU($select, $filter.val());
-        }
-        catch (e) { }
-    }
-    catch (error) {
-        logError_ACU('Failed to populate injection target selector:', error);
-        $select.append('<option value="character">加载列表失败</option>');
-    }
-}
-const WORLDBOOK_ENTRY_LAZY_PAGE_SIZE_ACU = 80;
-function buildWorldbookEntryCheckboxId_ACU(prefix, bookName, uid) {
-    const safePrefix = String(prefix || 'wb-entry').replace(/[^a-zA-Z0-9_-]+/g, '-');
-    const safeBook = String(bookName || 'book')
-        .replace(/[^a-zA-Z0-9_-]+/g, '-')
-        .replace(/^-+|-+$/g, '')
-        .slice(0, 48) || 'book';
-    return `${safePrefix}-${safeBook}-${uid}`;
-}
-function createLazyWorldbookEntryViewState_ACU(groups = [], options = {}) {
-    const normalizedGroups = (Array.isArray(groups) ? groups : []).map(group => ({
-        bookName: String(group?.bookName || ''),
-        entries: Array.isArray(group?.entries) ? group.entries.map((entry) => ({ ...entry })) : [],
-        filteredEntries: null,
-        loadedCount: 0,
-        expanded: group?.expanded === true,
-        expandedBeforeFilter: undefined,
-    })).filter((group) => group.bookName);
-    return {
-        groups: normalizedGroups,
-        pageSize: Number(options?.pageSize) > 0 ? Number(options.pageSize) : WORLDBOOK_ENTRY_LAZY_PAGE_SIZE_ACU,
-        checkboxIdPrefix: String(options?.checkboxIdPrefix || 'wb-entry'),
-        emptyText: options?.emptyText || '<em>所选世界书中无条目。</em>',
-        emptyGroupText: options?.emptyGroupText || '<em>当前分组没有可显示的条目。</em>',
-        isFiltering: false,
-    };
-}
-function getLazyWorldbookEntrySource_ACU(group) {
-    if (!group)
-        return [];
-    if (Array.isArray(group.filteredEntries))
-        return group.filteredEntries;
-    return Array.isArray(group.entries) ? group.entries : [];
-}
-function findLazyWorldbookEntryGroupState_ACU($list, bookName) {
-    if (!$list || !$list.length)
-        return null;
-    const state = $list.data('acuLazyWorldbookState');
-    if (!state || !Array.isArray(state.groups))
-        return null;
-    return state.groups.find((group) => String(group.bookName) === String(bookName)) || null;
-}
-function findLazyWorldbookEntryGroupElement_ACU($list, bookName) {
-    if (!$list || !$list.length)
-        return jQuery_API_ACU();
-    return $list.find('.qrf_worldbook_entry_group').filter(function () {
-        return String(jQuery_API_ACU(this).data('book-name') || '') === String(bookName);
-    }).first();
-}
-function updateLazyWorldbookEntryGroupMeta_ACU($list, bookName) {
-    if (!$list || !$list.length)
-        return;
-    const state = $list.data('acuLazyWorldbookState');
-    const group = findLazyWorldbookEntryGroupState_ACU($list, bookName);
-    const $group = findLazyWorldbookEntryGroupElement_ACU($list, bookName);
-    if (!state || !group || !$group.length)
-        return;
-    const sourceEntries = getLazyWorldbookEntrySource_ACU(group);
-    const loadedCount = Math.min(group.loadedCount || 0, sourceEntries.length);
-    const metaText = sourceEntries.length === 0
-        ? '0 条'
-        : (loadedCount < sourceEntries.length ? `已加载 ${loadedCount} / ${sourceEntries.length} 条` : `共 ${sourceEntries.length} 条`);
-    $group.find('.qrf_worldbook_entry_group_meta').text(metaText);
-    $group.find('.qrf_worldbook_entry_toggle').text(group.expanded ? '收起' : '展开');
-    $group.find('.qrf_worldbook_entry_group_body').toggle(group.expanded);
-    $group.find('.qrf_worldbook_entry_group_footer').toggle(group.expanded && sourceEntries.length > 0);
-    $group.find('.qrf_worldbook_entry_load_more').toggle(group.expanded && loadedCount < sourceEntries.length);
-}
-function renderLazyWorldbookEntryItems_ACU($list, bookName, options = {}) {
-    if (!$list || !$list.length)
-        return;
-    const state = $list.data('acuLazyWorldbookState');
-    const group = findLazyWorldbookEntryGroupState_ACU($list, bookName);
-    const $group = findLazyWorldbookEntryGroupElement_ACU($list, bookName);
-    if (!state || !group || !$group.length)
-        return;
-    const sourceEntries = getLazyWorldbookEntrySource_ACU(group);
-    if (options.reset === true) {
-        group.loadedCount = 0;
-    }
-    const nextCount = options.renderAll === true
-        ? sourceEntries.length
-        : Math.min(sourceEntries.length, (group.loadedCount || 0) + state.pageSize);
-    group.loadedCount = nextCount;
-    const visibleEntries = sourceEntries.slice(0, nextCount);
-    const html = visibleEntries.length > 0
-        ? visibleEntries.map((entry) => {
-            const checkboxId = entry.checkboxId || buildWorldbookEntryCheckboxId_ACU(state.checkboxIdPrefix, entry.bookName || bookName, entry.uid);
-            const labelText = entry.label || `条目 ${entry.uid}`;
-            const disabledStyle = entry.disabled ? 'style="opacity:0.6; text-decoration: line-through;"' : '';
-            return `
-                  <div class="qrf_worldbook_entry_item" data-book-name="${escapeHtml_ACU$1(String(entry.bookName || bookName))}" data-entry-uid="${escapeHtml_ACU$1(String(entry.uid ?? ''))}">
-                      <input type="checkbox" id="${escapeHtml_ACU$1(String(checkboxId))}" data-book="${escapeHtml_ACU$1(String(entry.bookName || bookName))}" data-uid="${escapeHtml_ACU$1(String(entry.uid ?? ''))}" ${entry.checked ? 'checked' : ''} ${entry.disabled ? 'disabled' : ''}>
-                      <label for="${escapeHtml_ACU$1(String(checkboxId))}" ${disabledStyle}>${escapeHtml_ACU$1(String(labelText))}</label>
-                  </div>`;
-        }).join('')
-        : state.emptyGroupText;
-    $group.find('.qrf_worldbook_entry_group_body').html(html);
-    updateLazyWorldbookEntryGroupMeta_ACU($list, bookName);
-}
-function renderLazyWorldbookEntryList_ACU($list, groups, options = {}) {
-    if (!$list || !$list.length)
-        return;
-    const state = createLazyWorldbookEntryViewState_ACU(groups, options);
-    $list.data('acuLazyWorldbookState', state);
-    if (!state.groups.length) {
-        $list.html(state.emptyText);
-        return;
-    }
-    const html = state.groups.map((group) => `
-          <div class="qrf_worldbook_entry_group" data-book-name="${escapeHtml_ACU$1(group.bookName)}" style="margin-bottom: 8px;">
-              <div class="qrf_worldbook_entry_header" data-book-name="${escapeHtml_ACU$1(group.bookName)}" style="display: flex; align-items: center; gap: 8px; margin-bottom: 5px; font-weight: bold; border-bottom: 1px solid; padding-bottom: 4px;">
-                  <button type="button" class="qrf_worldbook_entry_toggle button" style="padding: 2px 8px; font-size: 0.8em;">${group.expanded ? '收起' : '展开'}</button>
-                  <span class="qrf_worldbook_entry_header_text" style="flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml_ACU$1(group.bookName)}</span>
-                  <span class="qrf_worldbook_entry_group_meta" style="font-weight: normal; font-size: 0.85em; color: var(--text_secondary);"></span>
-              </div>
-              <div class="qrf_worldbook_entry_group_body" style="display: ${group.expanded ? 'block' : 'none'};"></div>
-              <div class="qrf_worldbook_entry_group_footer" style="display: ${group.expanded ? 'block' : 'none'}; margin-top: 6px;">
-                  <button type="button" class="qrf_worldbook_entry_load_more button" style="padding: 2px 8px; font-size: 0.8em; display: none;">继续加载</button>
-              </div>
-          </div>`).join('');
-    $list.html(html);
-    state.groups.forEach((group) => {
-        if (group.expanded) {
-            renderLazyWorldbookEntryItems_ACU($list, group.bookName, { reset: true });
-        }
-        else {
-            updateLazyWorldbookEntryGroupMeta_ACU($list, group.bookName);
-        }
-    });
-}
-function toggleLazyWorldbookEntryGroup_ACU($list, bookName, expanded = null) {
-    if (!$list || !$list.length)
-        return;
-    const group = findLazyWorldbookEntryGroupState_ACU($list, bookName);
-    if (!group)
-        return;
-    const nextExpanded = (typeof expanded === 'boolean') ? expanded : !group.expanded;
-    group.expanded = nextExpanded;
-    if (group.expanded && (group.loadedCount || 0) === 0) {
-        renderLazyWorldbookEntryItems_ACU($list, bookName, { reset: true });
-    }
-    else {
-        updateLazyWorldbookEntryGroupMeta_ACU($list, bookName);
-    }
-}
-function updateLazyWorldbookEntryCheckedState_ACU($list, bookName, uid, checked) {
-    const group = findLazyWorldbookEntryGroupState_ACU($list, bookName);
-    if (!group)
-        return;
-    const syncCheckedState = (entries) => {
-        if (!Array.isArray(entries))
-            return;
-        entries.forEach(entry => {
-            if (String(entry?.uid) === String(uid)) {
-                entry.checked = checked;
-            }
-        });
-    };
-    syncCheckedState(group.entries);
-    syncCheckedState(group.filteredEntries);
-}
-function applyLazyWorldbookEntryFilter_ACU($list, rawQuery) {
-    if (!$list || !$list.length)
-        return false;
-    const state = $list.data('acuLazyWorldbookState');
-    if (!state || !Array.isArray(state.groups))
-        return false;
-    const q = normalizeFilterText_ACU(rawQuery);
-    const wasFiltering = state.isFiltering === true;
-    if (q && !wasFiltering) {
-        state.groups.forEach((group) => {
-            group.expandedBeforeFilter = group.expanded;
-        });
-    }
-    if (!q) {
-        state.isFiltering = false;
-        state.groups.forEach((group) => {
-            group.filteredEntries = null;
-            group.loadedCount = 0;
-            if (typeof group.expandedBeforeFilter === 'boolean') {
-                group.expanded = group.expandedBeforeFilter;
-            }
-            group.expandedBeforeFilter = undefined;
-            const $group = findLazyWorldbookEntryGroupElement_ACU($list, group.bookName);
-            if ($group.length)
-                $group.show();
-            if (group.expanded) {
-                renderLazyWorldbookEntryItems_ACU($list, group.bookName, { reset: true });
-            }
-            else {
-                updateLazyWorldbookEntryGroupMeta_ACU($list, group.bookName);
-            }
-        });
-        return true;
-    }
-    state.isFiltering = true;
-    state.groups.forEach((group) => {
-        const bookText = String(group.bookName || '').toLowerCase();
-        if (bookText.includes(q)) {
-            group.filteredEntries = Array.isArray(group.entries) ? group.entries.slice() : [];
-        }
-        else {
-            group.filteredEntries = (Array.isArray(group.entries) ? group.entries : []).filter((entry) => {
-                const hay = String(entry.searchText || entry.label || `条目 ${entry.uid}`).toLowerCase();
-                return hay.includes(q);
-            });
-        }
-        const sourceEntries = getLazyWorldbookEntrySource_ACU(group);
-        const $group = findLazyWorldbookEntryGroupElement_ACU($list, group.bookName);
-        group.loadedCount = 0;
-        group.expanded = sourceEntries.length > 0;
-        if ($group.length)
-            $group.toggle(sourceEntries.length > 0);
-        if (sourceEntries.length > 0) {
-            renderLazyWorldbookEntryItems_ACU($list, group.bookName, { reset: true });
-        }
-        else {
-            updateLazyWorldbookEntryGroupMeta_ACU($list, group.bookName);
-        }
-    });
-    return true;
-}
-// =========================
-// [UI] 世界书筛选工具：注入目标(select) / 手动选择(list) / 条目列表(entry list)
-// =========================
-function normalizeFilterText_ACU(v) {
-    return String(v ?? '').trim().toLowerCase();
-}
-function applyWorldbookSelectFilter_ACU($select, rawQuery) {
-    if (!$select || !$select.length)
-        return;
-    const q = normalizeFilterText_ACU(rawQuery);
-    const currentVal = String($select.val() ?? '');
-    $select.find('option').each(function () {
-        const val = String(jQuery_API_ACU(this).attr('value') ?? '');
-        const text = String(jQuery_API_ACU(this).text() ?? '');
-        const hay = (val + ' ' + text).toLowerCase();
-        const match = (!q) || hay.includes(q);
-        const keepSelected = (val === currentVal);
-        this.hidden = !(match || keepSelected);
-    });
-}
-function applyWorldbookListFilter_ACU($listContainer, rawQuery) {
-    if (!$listContainer || !$listContainer.length)
-        return;
-    const q = normalizeFilterText_ACU(rawQuery);
-    $listContainer.find('.qrf_worldbook_list_item').each(function () {
-        const $it = jQuery_API_ACU(this);
-        const name = String($it.data('book-name') || $it.text() || '').toLowerCase();
-        $it.toggle(!q || name.includes(q));
-    });
-}
-function applyWorldbookEntryFilter_ACU($entryList, rawQuery) {
-    if (!$entryList || !$entryList.length)
-        return;
-    if (applyLazyWorldbookEntryFilter_ACU($entryList, rawQuery))
-        return;
-    const q = normalizeFilterText_ACU(rawQuery);
-    const $items = $entryList.find('.qrf_worldbook_entry_item');
-    const $headers = $entryList.find('.qrf_worldbook_entry_header');
-    if (!q) {
-        $items.show();
-        $headers.show();
-        return;
-    }
-    const matchedBooks = new Set();
-    $items.each(function () {
-        const $row = jQuery_API_ACU(this);
-        const $cb = $row.find('input[type="checkbox"]');
-        const book = String($cb.data('book') || '');
-        const labelText = String($row.find('label').text() || '').toLowerCase();
-        const bookText = book.toLowerCase();
-        const match = labelText.includes(q) || bookText.includes(q);
-        $row.toggle(match);
-        if (match)
-            matchedBooks.add(book);
-    });
-    $headers.each(function () {
-        const $h = jQuery_API_ACU(this);
-        const book = String($h.data('book-name') || $h.text() || '');
-        const bookText = book.toLowerCase();
-        const match = bookText.includes(q) || matchedBooks.has(book);
-        $h.toggle(match);
-    });
-}
-// [新增] 填充外部导入专用的世界书选择器
-async function populateImportWorldbookTargetSelector_ACU() {
-    if (!$popupInstance_ACU)
-        return;
-    const $select = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-import-worldbook-injection-target`);
-    if (!$select.length)
-        return;
-    $select.empty();
-    try {
-        const bookNames = await getWorldbookNames_ACU();
-        // 只添加世界书选项，不添加角色卡绑定和常规更新目标选项
-        bookNames.forEach((bookName) => {
-            $select.append(`<option value="${escapeHtml_ACU$1(bookName)}">${escapeHtml_ACU$1(bookName)}</option>`);
-        });
-        // 设置当前选中的值
-        $select.val(settings_ACU.importWorldbookTarget || '');
-        // 应用筛选（若存在）
-        try {
-            const $filter = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-import-worldbook-injection-target-filter`);
-            if ($filter.length)
-                applyWorldbookSelectFilter_ACU($select, $filter.val());
-        }
-        catch (e) { }
-    }
-    catch (error) {
-        logError_ACU('Failed to populate import worldbook target selector:', error);
-    }
-}
-async function populateWorldbookList_ACU() {
-    if (!$popupInstance_ACU)
-        return;
-    const $listContainer = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-select`);
-    $listContainer.empty().html('<em>正在加载...</em>');
-    try {
-        const bookNames = await getWorldbookNames_ACU();
-        $listContainer.empty();
-        if (bookNames.length === 0) {
-            $listContainer.html('<em>未找到世界书</em>');
-            return;
-        }
-        const worldbookConfig = getCurrentWorldbookConfig_ACU();
-        bookNames.forEach((bookName) => {
-            const isSelected = worldbookConfig.manualSelection.includes(bookName);
-            const itemHtml = `
-                  <div class="qrf_worldbook_list_item ${isSelected ? 'selected' : ''}" data-book-name="${escapeHtml_ACU$1(bookName)}">
-                      ${escapeHtml_ACU$1(bookName)}
-                  </div>`;
-            $listContainer.append(itemHtml);
-        });
-        // 应用筛选（若存在）
-        try {
-            const $filter = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-select-filter`);
-            if ($filter.length)
-                applyWorldbookListFilter_ACU($listContainer, $filter.val());
-        }
-        catch (e) { }
-    }
-    catch (error) {
-        logError_ACU('Failed to populate worldbook list:', error);
-        $listContainer.html('<em>加载失败</em>');
-    }
-}
-async function populateWorldbookEntryList_ACU() {
-    if (!$popupInstance_ACU)
-        return;
-    const $list = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-entry-list`);
-    $list.empty().html('<em>正在加载条目...</em>');
-    const worldbookConfig = getCurrentWorldbookConfig_ACU();
-    const source = worldbookConfig.source;
-    let bookNames = [];
-    if (source === 'character') {
-        const charLorebooks = await getCharLorebooks_ACU({ type: 'all' });
-        if (charLorebooks.primary)
-            bookNames.push(charLorebooks.primary);
-        if (charLorebooks.additional?.length)
-            bookNames.push(...charLorebooks.additional);
-    }
-    else if (source === 'manual') {
-        bookNames = worldbookConfig.manualSelection || [];
-    }
-    bookNames = [...new Set((Array.isArray(bookNames) ? bookNames : []).filter(Boolean))];
-    if (bookNames.length === 0) {
-        $list.html('<em>请先选择世界书或为角色绑定世界书。</em>');
-        return;
-    }
-    try {
-        if (!worldbookConfig.enabledEntries)
-            worldbookConfig.enabledEntries = {};
-        const entriesMap = await getLorebookEntriesByNames_ACU(bookNames);
-        const groups = [];
-        const expandByDefault = bookNames.length === 1;
-        let settingsChanged = false; // Flag to check if we need to save settings
-        for (const bookName of bookNames) {
-            const bookEntries = Array.isArray(entriesMap[bookName]) ? entriesMap[bookName] : [];
-            // If no setting exists for this book, default to all entries enabled.
-            if (typeof worldbookConfig.enabledEntries[bookName] === 'undefined') {
-                // [修改] 默认启用时，过滤掉自动生成的条目
-                worldbookConfig.enabledEntries[bookName] = bookEntries
-                    .filter((entry) => {
-                    const comment = entry.comment || '';
-                    // 过滤自动生成的条目
-                    if (comment.startsWith('TavernDB-ACU-') || comment.startsWith('重要人物条目') || comment.startsWith('总结条目')) {
-                        return false;
-                    }
-                    // [新增] 过滤屏蔽词条目
-                    if (isEntryBlocked_ACU(entry)) {
-                        return false;
-                    }
-                    return true;
-                })
-                    .map((entry) => entry.uid);
-                settingsChanged = true;
-            }
-            const enabledEntries = Array.isArray(worldbookConfig.enabledEntries[bookName]) ? worldbookConfig.enabledEntries[bookName] : [];
-            const visibleEntries = [];
-            bookEntries.forEach((entry) => {
-                // [新增] 在UI列表显示时，也过滤掉自动生成的条目，不显示给用户
-                const comment = entry.comment || '';
-                if (comment.startsWith('TavernDB-ACU-') || comment.startsWith('重要人物条目') || comment.startsWith('总结条目')) {
-                    return;
-                }
-                // [新增] 过滤屏蔽词条目，不显示在列表中
-                if (isEntryBlocked_ACU(entry)) {
-                    return;
-                }
-                visibleEntries.push({
-                    uid: entry.uid,
-                    bookName,
-                    label: entry.comment || `条目 ${entry.uid}`,
-                    searchText: `${bookName} ${entry.comment || `条目 ${entry.uid}`}`,
-                    checked: enabledEntries.includes(entry.uid),
-                    disabled: !entry.enabled,
-                    checkboxId: buildWorldbookEntryCheckboxId_ACU('wb-entry', bookName, entry.uid),
-                });
-            });
-            if (visibleEntries.length > 0) {
-                groups.push({
-                    bookName,
-                    entries: visibleEntries,
-                    expanded: expandByDefault,
-                });
-            }
-        }
-        if (settingsChanged) {
-            saveSettingsAndNotify_ACU();
-        }
-        renderLazyWorldbookEntryList_ACU($list, groups, {
-            checkboxIdPrefix: 'wb-entry',
-            emptyText: '<em>所选世界书中无条目。</em>',
-        });
-        // 应用筛选（若存在）
-        try {
-            const $filter = $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-worldbook-entry-filter`);
-            if ($filter.length)
-                applyWorldbookEntryFilter_ACU($list, $filter.val());
-        }
-        catch (e) { }
-    }
-    catch (error) {
-        logError_ACU('Failed to populate worldbook entry list:', error);
-        $list.html('<em>加载条目失败。</em>');
-    }
-}
-// --- [新增] 世界书相关功能 ---
-// --- [新增] 世界书相关功能结束 ---
-
-// status-display.ts — 对应源文件有跨文件依赖，保留在原位
-// [T172] 可视化编辑器刷新通知（从 service/worldbook/pipeline.ts 提取）
-function notifyVisualizerRefresh_ACU() {
-    try {
-        jQuery_API_ACU(document).trigger('acu-visualizer-refresh-data');
-    }
-    catch (e) { }
-}
-// [T173] 填表状态消息更新
-function updateTableFillStatus_ACU(text) {
-    if (!$statusMessageSpan_ACU && $popupInstance_ACU)
-        _assignUIPlaceholders_ACU({ $statusMessageSpan_ACU: $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-status-message`) });
-    if ($statusMessageSpan_ACU)
-        $statusMessageSpan_ACU.text(text);
-}
-const MANUAL_UPDATE_VECTOR_SOFT_DISABLED_CLASS_ACU = 'acu-manual-update-vector-soft-disabled';
-function isVectorMemoryManualUpdateBlocked_ACU() {
-    try {
-        return getCurrentWorldbookConfig_ACU().summaryVectorIndexModeEnabled === true;
-    }
-    catch (e) {
-        return false;
-    }
-}
-function shouldShowVectorMemoryManualUpdateWarning_ACU() {
-    return isVectorMemoryManualUpdateBlocked_ACU();
-}
-function syncManualUpdateButtonAvailability_ACU() {
-    if (!$manualUpdateCardButton_ACU)
-        return;
-    if (shouldShowVectorMemoryManualUpdateWarning_ACU()) {
-        $manualUpdateCardButton_ACU
-            .prop('disabled', false)
-            .addClass(MANUAL_UPDATE_VECTOR_SOFT_DISABLED_CLASS_ACU)
-            .text('交火索引已启用')
-            .attr('title', '交火模式纪要索引启用时不建议手动更新表格；特殊场景下仍可点击执行。');
-        return;
-    }
-    $manualUpdateCardButton_ACU
-        .prop('disabled', false)
-        .removeClass(MANUAL_UPDATE_VECTOR_SOFT_DISABLED_CLASS_ACU)
-        .text('立即手动更新')
-        .removeAttr('title');
-}
-// [T173] 填表停止按钮绑定
-function bindTableFillStopButton_ACU(buttonId, onStop) {
-    const $stopButton = jQuery_API_ACU(`#${buttonId}`);
-    if ($stopButton.length) {
-        $stopButton.off('click.acu_stop').on('click.acu_stop', function (e) {
-            e.stopPropagation();
-            e.preventDefault();
-            syncManualUpdateButtonAvailability_ACU();
-            jQuery_API_ACU(this).closest('.toast').remove();
-            if (typeof onStop === 'function')
-                onStop();
-        });
-    }
-}
-// [T173] 重置手动更新按钮状态
-function resetManualUpdateButton_ACU() {
-    syncManualUpdateButtonAvailability_ACU();
-}
-// [T174] 更新聊天标题显示
-function updateChatTitleDisplay_ACU(chatIdentifier) {
-    if (!$popupInstance_ACU)
-        return;
-    const $titleElement = $popupInstance_ACU.find('h2#updater-main-title-acu');
-    if ($titleElement.length)
-        $titleElement.html(`当前聊天：${escapeHtml_ACU$1(chatIdentifier || '未知')}`);
-}
-// [T175] 检查弹窗是否打开（供 service 层用布尔判断，不暴露 DOM 引用）
-function isPopupOpen_ACU() {
-    return !!$popupInstance_ACU;
-}
-// [T178] 将删除设置同步到 UI。合并总结 UI 已停用，不再同步 merge/auto-merge 控件。
-function syncMergeSettingsToUI_ACU(s) {
-    if (!$popupInstance_ACU)
-        return;
-    const find = (id) => $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-${id}`);
-    const setVal = (id, v) => { const $el = find(id); if ($el.length)
-        $el.val(v); };
-    setVal('delete-start-floor', s.deleteStartFloor || 1);
-    setVal('delete-end-floor', s.deleteEndFloor || '');
-}
-// [T179] 将全部设置同步到 UI（从 service/settings/settings-service.ts 提取）
-function syncAllSettingsToUI_ACU(s) {
-    if (!$popupInstance_ACU)
-        return;
-    if ($customApiUrlInput_ACU)
-        $customApiUrlInput_ACU.val(s.apiConfig.url);
-    if ($customApiKeyInput_ACU)
-        $customApiKeyInput_ACU.val(s.apiConfig.apiKey);
-    if ($maxTokensInput_ACU)
-        $maxTokensInput_ACU.val(s.apiConfig.max_tokens);
-    if ($temperatureInput_ACU)
-        $temperatureInput_ACU.val(s.apiConfig.temperature);
-    if ($customApiModelInput_ACU)
-        $customApiModelInput_ACU.val(s.apiConfig.model || '');
-    if ($customApiModelSelect_ACU) {
-        $customApiModelSelect_ACU.empty().append('<option value="">-- 请先加载模型列表 --</option>');
-        if (s.apiConfig.model) {
-            $customApiModelSelect_ACU.append(`<option value="${escapeHtml_ACU$1(s.apiConfig.model)}">${escapeHtml_ACU$1(s.apiConfig.model)}</option>`);
-        }
-    }
-    if (typeof updateApiStatusDisplay_ACU === 'function')
-        updateApiStatusDisplay_ACU();
-    if ($charCardPromptSegmentsContainer_ACU) {
-        const promptForCurrentMode = s.charCardPrompt;
-        renderPromptSegments_ACU(promptForCurrentMode || s.charCardPrompt);
-    }
-    if ($autoUpdateThresholdInput_ACU)
-        $autoUpdateThresholdInput_ACU.val(s.autoUpdateThreshold);
-    if ($autoUpdateFrequencyInput_ACU)
-        $autoUpdateFrequencyInput_ACU.val(s.autoUpdateFrequency);
-    if ($autoUpdateTokenThresholdInput_ACU)
-        $autoUpdateTokenThresholdInput_ACU.val(s.autoUpdateTokenThreshold);
-    if ($updateBatchSizeInput_ACU)
-        $updateBatchSizeInput_ACU.val(s.updateBatchSize);
-    if ($maxConcurrentGroupsInput_ACU)
-        $maxConcurrentGroupsInput_ACU.val(s.maxConcurrentGroups || 1);
-    if ($skipUpdateFloorsInput_ACU)
-        $skipUpdateFloorsInput_ACU.val(s.skipUpdateFloors || 0);
-    if ($retainRecentLayersInput_ACU)
-        $retainRecentLayersInput_ACU.val(s.retainRecentLayers || '');
-    if (typeof renderExcludeRuleRows_ACU === 'function') {
-        renderExcludeRuleRows_ACU(`#${SCRIPT_ID_PREFIX_ACU}-table-context-extract-rules`, normalizeExtractRules_ACU(s.tableContextExtractRules, s.tableContextExtractTags || ''), { startPlaceholder: '开始词（例如：<think）', endPlaceholder: '结束词（例如：</think>）' });
-        renderExcludeRuleRows_ACU(`#${SCRIPT_ID_PREFIX_ACU}-table-context-exclude-rules`, normalizeExcludeRules_ACU(s.tableContextExcludeRules, s.tableContextExcludeTags || ''), { startPlaceholder: '开始词（例如：<thinking）', endPlaceholder: '结束词（例如：</thinking>）' });
-    }
-    const find = (id) => $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-${id}`);
-    const setVal = (id, v) => { const $el = find(id); if ($el.length)
-        $el.val(v); };
-    const setChecked = (id, v) => { const $el = find(id); if ($el.length)
-        $el.prop('checked', !!v); };
-    setVal('import-split-size', s.importSplitSize);
-    setChecked('import-prompt-exclude-imported-worldbook-entries', s.importPromptExcludeImportedWorldbookEntries !== false);
-    if ($autoUpdateEnabledCheckbox_ACU)
-        $autoUpdateEnabledCheckbox_ACU.prop('checked', s.autoUpdateEnabled);
-    if ($standardizedTableFillEnabledCheckbox_ACU)
-        $standardizedTableFillEnabledCheckbox_ACU.prop('checked', s.standardizedTableFillEnabled !== false);
-    if ($toastMuteEnabledCheckbox_ACU)
-        $toastMuteEnabledCheckbox_ACU.prop('checked', !!s.toastMuteEnabled);
-    if ($promptTemplateEnabledCheckbox_ACU)
-        $promptTemplateEnabledCheckbox_ACU.prop('checked', s.promptTemplateSettings?.enabled !== false);
-    if ($tableEditLastPairOnlyCheckbox_ACU)
-        $tableEditLastPairOnlyCheckbox_ACU.prop('checked', s.tableEditLastPairOnly !== false);
-    if ($tableMaxRetriesInput_ACU)
-        $tableMaxRetriesInput_ACU.val(s.tableMaxRetries || 3);
-    syncMergeSettingsToUI_ACU(s);
-    const worldbookConfig = getCurrentWorldbookConfig_ACU();
-    const vectorMemoryConfig = getCurrentVectorMemoryConfig_ACU();
-    const summaryVectorIndexEnabled = worldbookConfig.summaryVectorIndexModeEnabled === true;
-    $popupInstance_ACU.find(`input[name="${SCRIPT_ID_PREFIX_ACU}-worldbook-source"]`).filter(`[value="${worldbookConfig.source}"]`).prop('checked', true);
-    if (typeof updateWorldbookSourceView_ACU === 'function')
-        updateWorldbookSourceView_ACU();
-    if (typeof populateInjectionTargetSelector_ACU === 'function')
-        populateInjectionTargetSelector_ACU();
-    setChecked('worldbook-vector-memory-enabled', summaryVectorIndexEnabled);
-    setVal('worldbook-vector-memory-threshold', vectorMemoryConfig.threshold);
-    setVal('worldbook-vector-memory-archive-trigger-count', vectorMemoryConfig.archiveTriggerCount || vectorMemoryConfig.archiveBatchSize);
-    setVal('worldbook-vector-memory-archive-batch-size', vectorMemoryConfig.archiveBatchSize);
-    setVal('worldbook-vector-memory-archive-max-concurrency', vectorMemoryConfig.summaryIndexArchiveMaxConcurrency || vectorMemoryConfig.archiveMaxConcurrency || 30);
-    setVal('worldbook-vector-memory-summary-index-keyword-min-rows', vectorMemoryConfig.summaryIndexKeywordMinRows || 100);
-    setVal('worldbook-vector-memory-topk', vectorMemoryConfig.topK);
-    setVal('worldbook-vector-memory-min-score', vectorMemoryConfig.minScore);
-    setVal('worldbook-vector-memory-namespace', vectorMemoryConfig.vectorNamespace);
-    setVal('worldbook-vector-memory-embedding-endpoint', vectorMemoryConfig.embeddingEndpoint);
-    setVal('worldbook-vector-memory-embedding-model', vectorMemoryConfig.embeddingModel);
-    setVal('worldbook-vector-memory-embedding-api-key', vectorMemoryConfig.embeddingApiKey);
-    setVal('worldbook-vector-memory-rerank-endpoint', vectorMemoryConfig.rerankEndpoint || '');
-    setVal('worldbook-vector-memory-rerank-model', vectorMemoryConfig.rerankModel || '');
-    setVal('worldbook-vector-memory-rerank-api-key', vectorMemoryConfig.rerankApiKey || '');
-    setVal('worldbook-vector-memory-rerank-instruction', vectorMemoryConfig.rerankInstruction || '');
-    setVal('worldbook-vector-memory-overview-sentence-limit', vectorMemoryConfig.summaryChunkSentenceCount);
-    setChecked('worldbook-vector-memory-archive-without-summary', vectorMemoryConfig.archiveWithoutSummary === true);
-    setVal('worldbook-vector-memory-recall-candidate-limit', vectorMemoryConfig.recallCandidateLimit);
-    setVal('worldbook-vector-memory-recent-fixed-inject-count', vectorMemoryConfig.recentFixedInjectCount || 50);
-    setChecked('worldbook-vector-memory-rolling-delta-enabled', vectorMemoryConfig.summaryIndexRollingDeltaEnabled === true);
-    setVal('worldbook-vector-memory-rolling-delta-fold-threshold', vectorMemoryConfig.summaryIndexRollingDeltaFoldThreshold || 15);
-    setVal('worldbook-vector-memory-entry-comment', vectorMemoryConfig.entryComment);
-    setVal('worldbook-vector-memory-entry-key', vectorMemoryConfig.entryKey);
-    setVal('worldbook-vector-memory-keyword-api-preset', vectorMemoryConfig.keywordApiPreset);
-    setVal('worldbook-vector-memory-keyword-context-pair-count', vectorMemoryConfig.keywordContextPairCount || 1);
-    setVal('worldbook-vector-memory-keyword-generation-max-attempts', vectorMemoryConfig.keywordGenerationMaxAttempts || 3);
-    const $vectorMemoryBlock = find('worldbook-vector-memory-config-block');
-    if ($vectorMemoryBlock.length)
-        $vectorMemoryBlock.toggle(summaryVectorIndexEnabled);
-    syncManualUpdateButtonAvailability_ACU();
-    const $outlineToggle = find('worldbook-outline-entry-enabled');
-    if ($outlineToggle.length) {
-        let mode = worldbookConfig.zeroTkOccupyMode;
-        if (typeof mode === 'undefined' && typeof worldbookConfig.outlineEntryEnabled !== 'undefined')
-            mode = (worldbookConfig.outlineEntryEnabled === false);
-        $outlineToggle.prop('checked', mode === true);
-    }
-    setChecked('worldbook-summary-vector-index-mode-enabled', summaryVectorIndexEnabled);
-    setChecked('vector-index-mode-enabled', summaryVectorIndexEnabled);
-    const $summaryVectorIndexHint = find('summary-vector-index-archive-hint');
-    if ($summaryVectorIndexHint.length) {
-        const activeSummaryVectorIndexSnapshot = getAggregatedSummaryVectorIndexSnapshot_ACU();
-        const activeSummaryVectorIndexState = activeSummaryVectorIndexSnapshot?.summaryVectorIndexState || null;
-        const summaryVectorIndexRowCount = activeSummaryVectorIndexState?.rowCount || (Array.isArray(activeSummaryVectorIndexState?.rows) ? activeSummaryVectorIndexState.rows.length : 0);
-        const summaryVectorIndexChunkCount = activeSummaryVectorIndexState?.chunkCount || (Array.isArray(activeSummaryVectorIndexState?.chunks) ? activeSummaryVectorIndexState.chunks.length : 0);
-        const hasSummaryVectorIndexArchive = !!activeSummaryVectorIndexState;
-        const summaryIndexKeywordMinRows = Number(vectorMemoryConfig.summaryIndexKeywordMinRows || 100);
-        $summaryVectorIndexHint.text(summaryVectorIndexEnabled
-            ? hasSummaryVectorIndexArchive
-                ? summaryVectorIndexRowCount >= summaryIndexKeywordMinRows
-                    ? `交火模式纪要索引已启用；当前可用索引：${summaryVectorIndexRowCount} 条纪要，${summaryVectorIndexChunkCount} 个概要列 chunks，已达到 ${summaryIndexKeywordMinRows} 条门槛。发送前会生成关键词、召回概要列 chunks、执行可选 Rerank，并按纪要表原顺序覆盖原概要索引条目。`
-                    : `交火模式纪要索引已启用；当前可用索引：${summaryVectorIndexRowCount}/${summaryIndexKeywordMinRows} 条纪要，${summaryVectorIndexChunkCount} 个概要列 chunks。未达到门槛前，发送时不会触发交火召回，填表保存后仍会立即归档并继续累积外置索引。`
-                : `交火模式纪要索引已启用，但当前聊天尚无外置纪要向量索引；完成一次纪要表填写后会自动归档，也可点击“立即构建交火纪要索引”手动构建。`
-            : '使用前请先配置好 Embedding 模型以及可选 Rerank 模型；开启后会在纪要表填写完成时立即归档外置概要列向量索引，达到门槛后发送前覆盖原概要索引条目。');
-    }
-    if ($manualTableSelector_ACU && typeof renderManualTableSelector_ACU === 'function')
-        renderManualTableSelector_ACU();
-    if ($importTableSelector_ACU && typeof renderImportTableSelector_ACU === 'function')
-        renderImportTableSelector_ACU();
-    if (typeof updateApiModeView_ACU === 'function')
-        updateApiModeView_ACU(s.apiMode);
-}
-
 let registeredUiSurface_ACU = null;
 function registerUiSurface_ACU(handlers) {
     registeredUiSurface_ACU = handlers;
@@ -96489,19 +95022,7 @@ async function refreshMergedDataAndNotifyWithUI_ACU({ skipNotify = false } = {})
     else {
         logDebug_ACU('Skipped V2 visualizer refresh: surface inactive or not registered.');
     }
-    // 3. UI 选择器刷新
-    if ($manualTableSelector_ACU) {
-        try {
-            renderManualTableSelector_ACU();
-        }
-        catch (_) { }
-    }
-    if ($importTableSelector_ACU) {
-        try {
-            renderImportTableSelector_ACU();
-        }
-        catch (_) { }
-    }
+    // 3. UI 选择器刷新（旧弹窗表格选择器已随旧弹窗删除）
     if (typeof updateCardUpdateStatusDisplay_ACU === 'function') {
         try {
             updateCardUpdateStatusDisplay_ACU();
@@ -96549,7 +95070,7 @@ function refreshPresetUIAfterSwitch_ACU({ templateGlobalSelectName = null, keepT
     catch (e) {
         logDebug_ACU('[refreshPresetUI] 数据库状态卡片刷新失败:', e);
     }
-    // 4. V2 数据库编辑器
+    // 3. V2 数据库编辑器
     try {
         const surface = getUiSurface_ACU();
         if (surface) {
@@ -96996,6 +95517,14407 @@ function __resetChatMutationSchedulerForTests_ACU() {
     firstRequestAt_ACU = 0;
     running_ACU = false;
     pendingAfterRun_ACU = false;
+}
+
+const DEFAULT_REGISTRY_DESCRIPTION_GUIDES = Object.freeze({
+    normalDescription: `
+  状态|角色的总体状态，基于活力/性欲/情压/宫压以及生心理需求
+  表情|角色的面部表情，顯現情緒
+  行动|角色正在执行的动作与身体姿势
+  胸部|可包含胸部的大小(罩杯)与触感，乳头的形状与色泽，行动的晃动幅度；孕后的变化及泌乳叙述
+  腹部|可包含腹部的大小与触感，肚脐的状态，腹部传出的声音；泄意的影响；孕后的变化及胎动的状态
+  私处|可包含阴蒂与阴道的形状与色泽，是否有阴毛，流出分泌物；性交插入时的状态
+  后庭|可包含肛门的状态，饮食消化的叙述，泄意的影响；性交插入时的状态
+  症状|月经、妊娠、分娩于角色上的影响
+  {如果角色不是人类，可加上人外特征，如精灵耳或狐狸尾等}`,
+    pregnantDescription: `
+  供养|子宫、宫颈、胎盘(卵黄或其他供养源)的状态描述
+  羊水|羊膜、羊水量与杂质的综合状态描述
+  胎况|胎位、大小、健康状况等
+  动作|胎儿的动作种类、胎动情况、多胎互动等
+  反应|对外界刺激反应、心情、空间感知、对角色行为反应与亲和度
+  风险|角色妊娠的特性、并发症及风险评估
+  护理|角色对产前护理采取的行动，包含是否产检、遵照医嘱`,
+});
+const DEFAULT_DIARY_WRITING_PROMPT = `
+日期訂為角色登場的前一天，内容通常至少三段，围绕当天事件、身体感受、自我解释、情绪反刍与角色式收尾展开；可以有停顿、遮掩、否认、矛盾与记忆偏差。`.trim();
+
+function clampPsychValue(value) {
+    const next = Number(value);
+    if (!Number.isFinite(next))
+        return null;
+    return Math.max(0, Math.min(100, Math.round(next)));
+}
+const PSY_STAGE_KEYS = Object.freeze(['0', '1_25', '26_50', '51_75', '76_100', '100_plus']);
+const PSY_MENS_FIELDS = Object.freeze({
+    mastery: {
+        definition: '个体对月经周期与生理征兆的感知与掌控力。数值越高，反应越从容且精准；数值低则表现为混乱与恐慌。',
+        preview: '0(无知与空白) -> 1~25(混乱应对) -> 26~50(常规适应) -> 51~75(精准掌控) -> 76~100(身心一统) -> 100+(超感知觉)',
+        stages: {
+            0: {
+                meaning: '无知与空白',
+                performance: '完全不具备生理常识。初次遭遇出血时会极度惊恐，视为重伤、诅咒或走火入魔。无法采取任何护理行动。',
+                breakthrough_condition: '需经历一次完整的经期循环，并由他人进行启蒙教育或自我观测记录，方可突破至 1+。',
+            },
+            '1_25': {
+                meaning: '混乱应对',
+                performance: '对周期毫无预期，常在不便时突然来潮。情绪受激素波动控制明显，表现为易怒、忧郁且无所适从。增加时，开始尝试记忆日子；减少时，会因压力而忽视身体信号。',
+            },
+            '26_50': {
+                meaning: '常规适应',
+                performance: '能大致预判日期，提前准备清洁物。能忍受不适并维持正常生活。增加时，对经前症状更敏感；减少时，表现为对身体管理的怠慢。',
+            },
+            '51_75': {
+                meaning: '精准掌控',
+                performance: '精通自身周期，能根据体征判断排卵期。会依据经期调整生活与修行强度。增加时，能预判经期长度；减少时，感知能力会变得迟钝。',
+            },
+            '76_100': {
+                meaning: '身心一统',
+                performance: '对生殖系统有绝对感知。能精准控制经期反应，甚至透过冥想或药理减轻痛苦。增加时，感知力向精神层面渗透。',
+                transcend_condition: '当个体能闭眼内视、感应精气在子宫内运行的微小涨缩时，进入 100+ 状态。',
+            },
+            '100_plus': {
+                meaning: '超感知觉',
+                performance: '进入超自然掌控。能瞬间感应到受精卵着床的震动或精气结合的热量。对排卵的感知如同呼吸般自然，能精确操作受孕窗口。此阶段不会跌回100。',
+            },
+        },
+    },
+    desire: {
+        definition: '个体对受孕、承接种子并孕育生命的渴望程度。数值越高，行为越具侵略性与繁殖本能。',
+        preview: '0(绝对防御) -> 1~25(排斥与防范) -> 26~50(中性顺从) -> 51~75(积极求种) -> 76~100(受孕执迷) -> 100+(繁殖本能)',
+        stages: {
+            0: {
+                meaning: '绝对防御',
+                performance: '视怀孕为绝对灾难。交合时会采取极端防御，如强力避孕药、结界、物理阻隔。',
+                breakthrough_condition: '需被深爱之人说服、遭受剧烈心理冲击、或被植入“受孕即救赎”的观念后，方可突破至 1+。',
+            },
+            '1_25': {
+                meaning: '排斥与防范',
+                performance: '虽有性生活但极度依赖防护，事后会立刻清理，对精气残留感到强烈不安。增加时，恐惧感下降；减少时，会因一次意外而更加神经质。',
+            },
+            '26_50': {
+                meaning: '中性顺从',
+                performance: '不主动追求亦不排斥，视其为自然的一部分。交合后随缘处理。增加时，开始好奇受孕的感觉；减少时，会偏向保守避孕。',
+            },
+            '51_75': {
+                meaning: '积极求种',
+                performance: '计较受孕机率，会引导对方进行无套行为，事后刻意维持姿势以确保吸收。增加时，对排卵期更有执念；减少时，热情会消退。',
+            },
+            '76_100': {
+                meaning: '受孕执迷',
+                performance: '将受孕视为唯一奖励。会偷偷破坏避孕手段、谎报安全期。甚至在交合时表现出近乎乞求的渴望。增加时，会尝试多种偏方；减少时，会产生焦虑。',
+                transcend_condition: '当理智完全让位给繁衍本能，将“受孕”视为生命的最高宗教仪式时，进入 100+ 状态。',
+            },
+            '100_plus': {
+                meaning: '繁殖本能',
+                performance: '行为完全由繁殖欲望驱动。会主动服下增加受孕可能的药物、调整体质。在任何可能的时刻都尝试获取种子，行为带有强烈的生物本能色彩。此阶段不会跌回100。',
+            },
+        },
+    },
+    autonomy: {
+        definition: '个体在性爱与权力关系中的自主性。高则支配、主导；低则被动、服从。',
+        preview: '0(绝对木偶) -> 1~25(被动服从) -> 26~50(顺应配合) -> 51~75(主动索求) -> 76~100(支配女王) -> 100+(超越主宰)',
+        stages: {
+            0: {
+                meaning: '绝对木偶',
+                performance: '失去灵魂的空壳。身体虽有反应但意识缺席，任由摆布，无任何反抗或主动示爱。无痛觉与愉悦感的外部表达。',
+                breakthrough_condition: '需经历剧烈的肉体觉醒、情感冲击或被赋予第一条“自我指令”后，方可突破至 1+。',
+            },
+            '1_25': {
+                meaning: '被动服从',
+                performance: '角色处于弱势或受压迫状态。多表现为屈辱、忍耐或消极配合。增加时，会出现微小的反抗；减少时，意志趋向崩溃。',
+            },
+            '26_50': {
+                meaning: '顺应配合',
+                performance: '正常的互动模式。听从对方指挥，会给予回馈，但不会主动开拓新领域。增加时，会尝试提出小要求；减少时，会变得更沉默。',
+            },
+            '51_75': {
+                meaning: '主动索求',
+                performance: '掌握节奏，主动挑逗或变换体位。明确表达自己的快感需求。增加时，表现出极高的探索欲；减少时，行为会变得保守。',
+            },
+            '76_100': {
+                meaning: '支配女王',
+                performance: '绝对主导。将对方视为服务自己的工具或奖励，掌控频率、深度与时间。增加时，掌控欲延伸至生活各层面。',
+                transcend_condition: '当常规的交合已无法满足其精神掌控力，开始追求极端、非典型或神圣化的权力仪式时，进入 100+ 状态。',
+            },
+            '100_plus': {
+                meaning: '超越主宰',
+                performance: '常规性交已感无趣。开始设计复杂的权力游戏、追求更极端的感官刺激或灵魂控制。将性爱视为一场由其编导的宏大演出。此阶段不会跌回100。',
+            },
+        },
+    },
+});
+const PSY_MENS_BOOL_FIELDS = Object.freeze({
+    isChaste: {
+        definition: '是否当前保持贞洁取向或单一性伴侣关系，不处于多对象性关系状态。',
+    },
+    hasContraception: {
+        definition: '是否当前存在稳定生效中的避孕措施，例如套、药物、结界、器具等。(若角色對自身月经完全无知，则该字段也应为 false)',
+    },
+});
+const PSY_PREG_FIELDS = Object.freeze({
+    cognition: {
+        definition: '个体对妊娠生理变化的认知与应对能力。数值越高，越能冷静处理风险；数值低则表现为无知或恐慌。',
+        preview: '0(隐式妊娠) -> 1~25(混乱与猜疑) -> 26~50(勉强适应) -> 51~75(理性理解) -> 76~100(专业准备) -> 100+(医学级觉知)',
+        stages: {
+            0: {
+                meaning: '隐式妊娠',
+                performance: '大脑完全封锁怀孕讯号。即便胎动剧烈或腹部隆起，仍会解释为胃病、气息紊乱或肥胖。拒绝承认怀孕。',
+                breakthrough_condition: '需由外部权威强制指认，或经历不可忽视的分娩启动，方可突破至 1+。',
+            },
+            '1_25': {
+                meaning: '混乱与猜疑',
+                performance: '感知到身体异样但拒绝深思。对孕期禁忌、周数完全模糊。增加时，开始怀疑真实情况；减少时，会陷入自我欺骗。',
+            },
+            '26_50': {
+                meaning: '勉强适应',
+                performance: '虽然承认怀孕，但对未来的变化感到焦虑。缺乏系统知识，容易被谣言误导或因小症状而惊慌失措。尚未达到从容应对的程度。',
+            },
+            '51_75': {
+                meaning: '理性理解',
+                performance: '主动掌握孕期知识，能对应自身周数与胎儿状态。开始能辨识假性宫缩，并有条理地准备待产物品。增加时，对身体掌控感提升。',
+            },
+            '76_100': {
+                meaning: '专业准备',
+                performance: '对妊娠风险有深刻理解。能冷静应对各种生理突发状况，如预判破水、调整呼吸节奏以缓解疼痛。增加时，进入准专业状态。',
+                transcend_condition: '当个体能像专业医师般冷静审视自身分娩过程，甚至能自行引导胎位、处理紧急分娩细节时，进入 100+。',
+            },
+            '100_plus': {
+                meaning: '医学级觉知',
+                performance: '绝对冷静。能精确感应子宫颈开口公分数、羊水状态与胎儿心率。在分娩时能如同旁观者般指挥自己，无惧痛楚，只追求最优的分娩结果。此阶段不会跌回100。',
+            },
+        },
+    },
+    bonding: {
+        definition: '个体与腹中胎儿的情感联结与母性本能。数值越高，守护欲越强；数值低则视胎儿为异物。',
+        preview: '0(怀孕否认症) -> 1~25(疏离与嫌恶) -> 26~50(任务式共存) -> 51~75(萌生守护) -> 76~100(自我牺牲) -> 100+(恋孕狂热)',
+        stages: {
+            0: {
+                meaning: '怀孕否认症',
+                performance: '心理防御机制完全切断与胎儿的联系。无视胎动，甚至将腹部隆起视为肿瘤或寄生，拒绝产生任何情感回馈。',
+                breakthrough_condition: '需经历与胎儿的共生感触发，或被强烈爱意感化，方可突破至 1+。',
+            },
+            '1_25': {
+                meaning: '疏离与嫌恶',
+                performance: '将怀孕视为诅咒、累赘。对腹部触碰感到厌恶，常有终结妊娠的念头，缺乏保护胎儿的本能。增加时，排斥感减弱；减少时，会产生毁灭倾向。',
+            },
+            '26_50': {
+                meaning: '任务式共存',
+                performance: '接受怀孕事实，但仅将其视为一项生理任务或责任。缺乏自发的爱意，仅是被动地配合养胎。增加时，开始产生好奇。',
+            },
+            '51_75': {
+                meaning: '萌生守护',
+                performance: '开始自发地触摸肚子、与胎儿对话。能感知到胎动带来的喜悦，产生初步的母性保护欲。增加时，保护行为会变得明显。',
+            },
+            '76_100': {
+                meaning: '自我牺牲',
+                performance: '胎儿成为生命核心。愿意为了胎儿的健康放弃自己的喜好、形象甚至安全。展现强烈的母爱。增加时，联结感向灵魂层面延伸。',
+                transcend_condition: '当母性本能转化为一种对怀孕状态与腹中生命的极度崇拜与迷恋时，进入 100+。',
+            },
+            '100_plus': {
+                meaning: '恋孕狂热',
+                performance: '产生强烈的恋孕情节。迷恋大肚子带来的沉重感、胎动的入侵感。比起生产，更希望永远维持这种合而为一的状态，视怀孕为最高幸福。此阶段不会跌回100。',
+            },
+        },
+    },
+    stance: {
+        definition: '个体对怀孕身份的社会展现与心态。数值越高，越倾向利用孕妇身份获取优势。',
+        preview: '0(绝对藏孕) -> 1~25(畏怯隐蔽) -> 26~50(被动接受) -> 51~75(正式准备) -> 76~100(自豪展现) -> 100+(母权优越)',
+        stages: {
+            0: {
+                meaning: '绝对藏孕',
+                performance: '将怀孕视为耻辱或致命弱点。会用宽大衣物、束腹甚至法术隐藏孕肚，绝不在言谈中提及怀孕。害怕被识破。',
+                breakthrough_condition: '当隐藏已无可能，或被环境强迫接受孕妇身份后，方可突破至 1+。',
+            },
+            '1_25': {
+                meaning: '畏怯隐蔽',
+                performance: '对自己的孕态感到不安，害怕别人的指点。在社交场合总是缩小存在感，对母职缺乏信心。增加时，羞耻感降低；减少时，会更加封闭。',
+            },
+            '26_50': {
+                meaning: '被动接受',
+                performance: '不再刻意隐藏，但也不会主动展示。穿着以宽松舒适为主，被动地接受他人的照顾，但内心仍感局促。增加时，开始习惯特殊待遇。',
+            },
+            '51_75': {
+                meaning: '正式准备',
+                performance: '坦然展现孕妇身份。会为了待产主动收集资源、与人交流经验。能以正常心态面对外界的注目与关怀。增加时，自信心提升。',
+            },
+            '76_100': {
+                meaning: '自豪展现',
+                performance: '刻意穿着贴身孕妇装展示腹部曲线。主动谈论育儿计划，享受被视为母亲的尊重，并开始懂得要求合理的照顾。增加时，展现欲增强。',
+                transcend_condition: '当个体开始意识到孕妇身份是一种强大的社会武器，能主动操控规则来获取更大利益时，进入 100+。',
+            },
+            '100_plus': {
+                meaning: '母权优越',
+                performance: '极度炫耀孕肚，将怀孕作为获取特权、物资或地位的手段。懂得利用他人的同情或保护欲来达成目的。将怀孕视为一种高人一等的阶级符号。此阶段不会跌回100。',
+            },
+        },
+    },
+});
+const PSY_PREG_BOOL_FIELDS = Object.freeze({
+    knowsFatherSource: {
+        definition: '是否知晓当前妊娠或腹中胎儿的父源对象。(若角色連自身妊娠都未知曉，該字段也应为 false)',
+    },
+    hasProfessionalPrenatalCare: {
+        definition: '是否已经接受或持续接受专业产检、医疗监护或正规待产照护。',
+    },
+});
+function resolvePsychStageKey(value) {
+    const next = Number(value);
+    if (!Number.isFinite(next))
+        return null;
+    if (next <= 0)
+        return '0';
+    if (next <= 25)
+        return '1_25';
+    if (next <= 50)
+        return '26_50';
+    if (next <= 75)
+        return '51_75';
+    if (next <= 100)
+        return '76_100';
+    return '100_plus';
+}
+function buildPsychInterpret(fieldConfig, value, stageProfile = null) {
+    const stageKey = resolvePsychStageKey(value);
+    const customInterpret = stageProfile && typeof stageProfile === 'object'
+        ? String(stageProfile[stageKey] || '').trim()
+        : '';
+    if (customInterpret)
+        return customInterpret;
+    if (!stageKey || !fieldConfig?.stages?.[stageKey])
+        return '';
+    const stage = fieldConfig.stages[stageKey];
+    return [stage.meaning, stage.performance, stage.breakthrough_condition, stage.transcend_condition]
+        .filter(Boolean)
+        .join(' ')
+        .trim();
+}
+function normalizePsychologyStageProfiles(value, { mensFields = PSY_MENS_FIELDS, pregFields = PSY_PREG_FIELDS } = {}) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return {};
+    const result = {};
+    const groups = [
+        ['mens', mensFields],
+        ['preg', pregFields],
+    ];
+    for (const [groupKey, fieldConfig] of groups) {
+        const sourceGroup = value[groupKey];
+        if (!sourceGroup || typeof sourceGroup !== 'object' || Array.isArray(sourceGroup))
+            continue;
+        const normalizedGroup = {};
+        for (const field of Object.keys(fieldConfig || {})) {
+            const sourceField = sourceGroup[field];
+            if (!sourceField || typeof sourceField !== 'object' || Array.isArray(sourceField))
+                continue;
+            const normalizedField = {};
+            for (const stageKey of PSY_STAGE_KEYS) {
+                const text = String(sourceField[stageKey] || '').trim();
+                if (text)
+                    normalizedField[stageKey] = text;
+            }
+            if (Object.keys(normalizedField).length > 0)
+                normalizedGroup[field] = normalizedField;
+        }
+        if (Object.keys(normalizedGroup).length > 0)
+            result[groupKey] = normalizedGroup;
+    }
+    return result;
+}
+function buildEmptyPsychologyGroup(fieldConfig, booleanFields = {}) {
+    const result = {};
+    for (const key of Object.keys(fieldConfig || {})) {
+        result[`${key}_value`] = null;
+        result[`${key}_interpret`] = '';
+    }
+    for (const key of Object.keys(booleanFields || {})) {
+        result[key] = false;
+    }
+    return result;
+}
+function normalizePsychologyGroup(value, fieldConfig, { includeDefaults = true, booleanFields = {}, stageProfiles = {} } = {}) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return includeDefaults ? buildEmptyPsychologyGroup(fieldConfig, booleanFields) : null;
+    const result = includeDefaults ? buildEmptyPsychologyGroup(fieldConfig, booleanFields) : {};
+    let changed = false;
+    for (const key of Object.keys(fieldConfig || {})) {
+        const rawValue = value[`${key}_value`] ?? value[key];
+        if (rawValue === undefined)
+            continue;
+        changed = true;
+        if (rawValue === null) {
+            result[`${key}_value`] = null;
+            result[`${key}_interpret`] = '';
+            continue;
+        }
+        const nextValue = clampPsychValue(rawValue);
+        if (nextValue === null)
+            continue;
+        result[`${key}_value`] = nextValue;
+        result[`${key}_interpret`] = buildPsychInterpret(fieldConfig[key], nextValue, stageProfiles?.[key]);
+    }
+    for (const key of Object.keys(booleanFields || {})) {
+        if (value[key] === undefined)
+            continue;
+        changed = true;
+        result[key] = Boolean(value[key]);
+    }
+    if (!includeDefaults && !changed)
+        return null;
+    return result;
+}
+
+const MENSTRUAL_STAGES = Object.freeze(['卵泡期', '排卵期', '黄体期', '月经期']);
+const PREGNANCY_STAGES = Object.freeze(['孕早期', '孕中期', '孕晚期', '临产期', '逾期']);
+const LABOR_STAGES = Object.freeze(['第一产程', '第二产程', '第三产程']);
+const MENSTRUAL_STAGE_DAYS = Object.freeze({
+    卵泡期: 9,
+    排卵期: 2,
+    黄体期: 12,
+    月经期: 5,
+});
+const PREGNANCY_STAGE_DAYS = Object.freeze({
+    孕早期: 84,
+    孕中期: 105,
+    孕晚期: 63,
+    临产期: 28,
+});
+const LABOR_STAGE_BASE_HOURS = Object.freeze({
+    第一产程: 12,
+    第二产程: 2,
+    第三产程: 0.5,
+});
+const LABOR_STAGE_INCREMENT = Object.freeze({
+    第一产程: 1.5,
+    第二产程: 2,
+    第三产程: 0.5,
+});
+const FIRST_STAGE_NATURAL_BIRTH_EXPERIENCE = Object.freeze({
+    reductionPerBirth: 0.15,
+    maxCount: 3,
+    minMultiplier: 0.55,
+});
+const LABOR_POSTPARTUM_OBSERVATION_HOURS = 2;
+
+const SKILL_MAX_LEVEL = 10;
+const TALENT_MAX_LEVEL = 5;
+const SKILL_HISTORY_LIMIT = 100;
+const MAX_NAME_LENGTH = 80;
+const MAX_DESCRIPTION_LENGTH = 800;
+const MAX_EXP_INPUT = 1000000;
+function cleanText(value, maxLength) {
+    const text = String(value ?? '').trim();
+    return text ? text.slice(0, maxLength) : '';
+}
+function clampInteger(value, min, max, fallback = 0) {
+    const number = Number(value);
+    if (!Number.isFinite(number))
+        return fallback;
+    return Math.max(min, Math.min(max, Math.round(number)));
+}
+function normalizeLookupText(value) {
+    return cleanText(value, MAX_NAME_LENGTH).replace(/\s+/g, ' ').toLocaleLowerCase();
+}
+function requiredExp(level) {
+    const safeLevel = clampInteger(level, 1, SKILL_MAX_LEVEL, 1);
+    return 100 * safeLevel * safeLevel;
+}
+function normalizeSkillDefinition(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return null;
+    const id = clampInteger(value.id, 1, Number.MAX_SAFE_INTEGER, 0);
+    const name = cleanText(value.name, MAX_NAME_LENGTH);
+    const description = cleanText(value.description, MAX_DESCRIPTION_LENGTH);
+    if (!id || !name || !description)
+        return null;
+    return { id, name, description };
+}
+function normalizeSkillCatalog(value) {
+    if (!Array.isArray(value))
+        return [];
+    const result = [];
+    for (const entry of value) {
+        const definition = normalizeSkillDefinition(entry);
+        if (!definition)
+            continue;
+        const sameId = result.find((item) => item.id === definition.id);
+        const sameName = result.find((item) => normalizeLookupText(item.name) === normalizeLookupText(definition.name));
+        if (sameId || sameName)
+            continue;
+        result.push(definition);
+    }
+    return result.sort((left, right) => left.id - right.id);
+}
+function resolveSkillDefinition(catalogValue, reference) {
+    const catalog = normalizeSkillCatalog(catalogValue);
+    const numeric = Number(reference);
+    if (Number.isInteger(numeric) && numeric > 0) {
+        const byId = catalog.find((item) => item.id === numeric);
+        if (byId)
+            return byId;
+    }
+    const lookup = normalizeLookupText(reference);
+    if (!lookup)
+        return null;
+    return catalog.find((item) => normalizeLookupText(item.name) === lookup) || null;
+}
+function normalizeNextSkillId(catalogValue, value) {
+    const minimum = normalizeSkillCatalog(catalogValue).reduce((max, item) => Math.max(max, item.id), 0) + 1;
+    return Math.max(minimum, clampInteger(value, 1, Number.MAX_SAFE_INTEGER, minimum));
+}
+function registerSkillDefinition(catalogValue, input = {}, nextSkillIdValue = undefined) {
+    const catalog = normalizeSkillCatalog(catalogValue);
+    const nextSkillId = normalizeNextSkillId(catalog, nextSkillIdValue);
+    const name = cleanText(input.name, MAX_NAME_LENGTH);
+    const description = cleanText(input.description, MAX_DESCRIPTION_LENGTH);
+    if (!name)
+        return { ok: false, catalog, nextSkillId, message: '技能名称不能为空。' };
+    if (!description)
+        return { ok: false, catalog, nextSkillId, message: '新增技能时必须填写定义描述。' };
+    const existing = resolveSkillDefinition(catalog, name);
+    if (existing)
+        return { ok: true, catalog, nextSkillId, definition: existing, created: false };
+    const definition = { id: nextSkillId, name, description };
+    catalog.push(definition);
+    return { ok: true, catalog, nextSkillId: nextSkillId + 1, definition, created: true };
+}
+function removeSkillDefinition(catalogValue, reference) {
+    const catalog = normalizeSkillCatalog(catalogValue);
+    const definition = resolveSkillDefinition(catalog, reference);
+    if (!definition)
+        return { ok: false, catalog, message: '找不到要删除的技能定义。' };
+    return {
+        ok: true,
+        catalog: catalog.filter((item) => item.id !== definition.id),
+        definition,
+        message: `已删除技能定义「${definition.name}」。`,
+    };
+}
+function normalizeSkillHistory(value) {
+    if (!Array.isArray(value))
+        return [];
+    const result = [];
+    for (const entry of value) {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry))
+            continue;
+        const skillId = clampInteger(entry.skillId, 1, Number.MAX_SAFE_INTEGER, 0);
+        const fromLevel = clampInteger(entry.fromLevel, 0, SKILL_MAX_LEVEL, 0);
+        const toLevel = clampInteger(entry.toLevel, 1, SKILL_MAX_LEVEL, 1);
+        const reason = cleanText(entry.reason, MAX_DESCRIPTION_LENGTH);
+        const source = entry.source === 'manual' ? 'manual' : 'story';
+        const timestamp = clampInteger(entry.timestamp, 0, Number.MAX_SAFE_INTEGER, 0);
+        if (!skillId || toLevel <= fromLevel || !reason)
+            continue;
+        result.push({ skillId, fromLevel, toLevel, reason, source, timestamp });
+    }
+    return result.slice(-SKILL_HISTORY_LIMIT);
+}
+function appendSkillHistory(value, event) {
+    return normalizeSkillHistory([...normalizeSkillHistory(value), event]);
+}
+function normalizeSkillEntry(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return null;
+    const skillId = clampInteger(value.skillId ?? value.id, 1, Number.MAX_SAFE_INTEGER, 0);
+    if (!skillId)
+        return null;
+    let level = clampInteger(value.level, 1, SKILL_MAX_LEVEL, 1);
+    let exp = clampInteger(value.exp, 0, MAX_EXP_INPUT, 0);
+    while (level < SKILL_MAX_LEVEL && exp >= requiredExp(level)) {
+        exp -= requiredExp(level);
+        level += 1;
+    }
+    if (level >= SKILL_MAX_LEVEL)
+        exp = 0;
+    return { skillId, level, exp };
+}
+function normalizeSkillList(value) {
+    if (!Array.isArray(value))
+        return [];
+    const result = [];
+    for (const entry of value) {
+        const skill = normalizeSkillEntry(entry);
+        if (!skill)
+            continue;
+        const duplicate = result.find((item) => item.skillId === skill.skillId);
+        if (!duplicate)
+            result.push(skill);
+        else if (skill.level > duplicate.level || (skill.level === duplicate.level && skill.exp > duplicate.exp)) {
+            Object.assign(duplicate, skill);
+        }
+    }
+    return result;
+}
+function addSkillExperience(value, amount) {
+    const skill = normalizeSkillEntry(value);
+    if (!skill)
+        return null;
+    let gain = clampInteger(amount, 0, MAX_EXP_INPUT, 0);
+    while (skill.level < SKILL_MAX_LEVEL && gain > 0) {
+        const need = requiredExp(skill.level) - skill.exp;
+        if (gain < need) {
+            skill.exp += gain;
+            gain = 0;
+        }
+        else {
+            gain -= need;
+            skill.level += 1;
+            skill.exp = 0;
+        }
+    }
+    if (skill.level >= SKILL_MAX_LEVEL)
+        skill.exp = 0;
+    return skill;
+}
+// 天赋以一条可跨越 0 的有符号进度轴运算：负侧为苦手，正侧为擅长。
+// Lv0 → ±Lv1 固定需要 100；之后沿用 requiredExp(当前绝对等级)。
+function talentLevelThreshold(level) {
+    const target = clampInteger(level, 0, TALENT_MAX_LEVEL, 0);
+    if (target <= 0)
+        return 0;
+    let total = 100;
+    for (let current = 1; current < target; current += 1)
+        total += requiredExp(current);
+    return total;
+}
+function talentStateToPoints(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return 0;
+    if (Number.isFinite(Number(value.points))) {
+        const cap = talentLevelThreshold(TALENT_MAX_LEVEL);
+        return clampInteger(value.points, -cap, cap, 0);
+    }
+    const level = clampInteger(value.level, -TALENT_MAX_LEVEL, TALENT_MAX_LEVEL, 0);
+    let exp = clampInteger(value.exp, -MAX_EXP_INPUT, MAX_EXP_INPUT, 0);
+    if (level > 0)
+        exp = Math.abs(exp);
+    if (level < 0)
+        exp = -Math.abs(exp);
+    const sign = level === 0 ? Math.sign(exp) : Math.sign(level);
+    if (sign === 0)
+        return 0;
+    const magnitude = talentLevelThreshold(Math.abs(level)) + Math.abs(exp);
+    const cap = talentLevelThreshold(TALENT_MAX_LEVEL);
+    return sign * Math.min(cap, magnitude);
+}
+function talentPointsToState(skillIdValue, pointsValue) {
+    const skillId = clampInteger(skillIdValue, 1, Number.MAX_SAFE_INTEGER, 0);
+    if (!skillId)
+        return null;
+    const cap = talentLevelThreshold(TALENT_MAX_LEVEL);
+    const points = clampInteger(pointsValue, -cap, cap, 0);
+    const sign = Math.sign(points);
+    const magnitude = Math.abs(points);
+    let absoluteLevel = 0;
+    for (let level = 1; level <= TALENT_MAX_LEVEL; level += 1) {
+        if (magnitude < talentLevelThreshold(level))
+            break;
+        absoluteLevel = level;
+    }
+    const level = absoluteLevel === 0 ? 0 : sign * absoluteLevel;
+    const expMagnitude = absoluteLevel >= TALENT_MAX_LEVEL ? 0 : magnitude - talentLevelThreshold(absoluteLevel);
+    return {
+        skillId,
+        level,
+        exp: expMagnitude === 0 ? 0 : sign * expMagnitude,
+    };
+}
+function normalizeTalentEntry(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return null;
+    const skillId = clampInteger(value.skillId ?? value.id, 1, Number.MAX_SAFE_INTEGER, 0);
+    if (!skillId)
+        return null;
+    return talentPointsToState(skillId, talentStateToPoints(value));
+}
+function normalizeTalentList(value) {
+    if (!Array.isArray(value))
+        return [];
+    const result = [];
+    for (const entry of value) {
+        const talent = normalizeTalentEntry(entry);
+        if (!talent)
+            continue;
+        const duplicate = result.find((item) => item.skillId === talent.skillId);
+        if (!duplicate)
+            result.push(talent);
+        else if (Math.abs(talentStateToPoints(talent)) > Math.abs(talentStateToPoints(duplicate)))
+            Object.assign(duplicate, talent);
+    }
+    return result;
+}
+function addTalentExperience(value, amount) {
+    const talent = normalizeTalentEntry(value);
+    if (!talent)
+        return null;
+    const delta = clampInteger(amount, -MAX_EXP_INPUT, MAX_EXP_INPUT, 0);
+    return talentPointsToState(talent.skillId, talentStateToPoints(talent) + delta);
+}
+function getTalentLabel(value) {
+    const talent = normalizeTalentEntry(value);
+    if (!talent || talent.level === 0)
+        return '尚未形成';
+    return talent.level > 0 ? `擅长 Lv${talent.level}` : `苦手 Lv${Math.abs(talent.level)}`;
+}
+
+const WARDROBE_DIMENSIONS = Object.freeze(['masking', 'support', 'capacity', 'convenience']);
+const DEFAULT_WARDROBE_ITEM = Object.freeze({
+    id: 0,
+    name: '全裸',
+    note: '未着衣物。',
+    slot: 'main',
+    masking: 0,
+    support: 0,
+    capacity: 10,
+    convenience: 10,
+});
+function createDefaultWardrobeItem() {
+    return { ...DEFAULT_WARDROBE_ITEM };
+}
+function clampScore(value, min, max, fallback = 0) {
+    const next = Number(value);
+    if (!Number.isFinite(next))
+        return fallback;
+    return Math.max(min, Math.min(max, next));
+}
+function normalizeWardrobeItemId(value, fallback = null) {
+    if (value === 'nude')
+        return 0;
+    const numeric = Number(value);
+    if (Number.isInteger(numeric) && numeric >= 0)
+        return numeric;
+    const text = String(value ?? '').trim();
+    if (!text)
+        return fallback;
+    let hash = 2166136261;
+    for (let index = 0; index < text.length; index += 1) {
+        hash ^= text.charCodeAt(index);
+        hash = Math.imul(hash, 16777619) >>> 0;
+    }
+    return 100000 + (hash % 900000);
+}
+function limitAccessoryWardrobeScores(item) {
+    if (!item || item.slot !== 'accessory')
+        return item;
+    const ranked = WARDROBE_DIMENSIONS
+        .map((key, index) => ({ key, index, value: clampScore(item[key], -3, 3, 0) }))
+        .filter((entry) => entry.value !== 0)
+        .sort((a, b) => Math.abs(b.value) - Math.abs(a.value) || a.index - b.index);
+    const kept = new Set(ranked.slice(0, 2).map((entry) => entry.key));
+    for (const key of WARDROBE_DIMENSIONS) {
+        item[key] = kept.has(key) ? clampScore(item[key], -3, 3, 0) : 0;
+    }
+    return item;
+}
+// wearState 是当前穿着的开放短标签（如 整齐/敞开/半褪/湿透）。
+// 长度硬上限与分隔符剥离保证它保持标签粒度，不会膨胀成描述文本。
+const DEFAULT_WEAR_STATE = '整齐';
+const WEAR_STATE_MAX_LENGTH = 12;
+function sanitizeWearState(value, fallback = DEFAULT_WEAR_STATE) {
+    const text = String(value ?? '').replace(/[|;\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!text)
+        return fallback;
+    return Array.from(text).slice(0, WEAR_STATE_MAX_LENGTH).join('');
+}
+function normalizeWardrobeItem(value, { allowMissingId = false } = {}) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return null;
+    const id = normalizeWardrobeItemId(value.id);
+    const name = String(value.name || '').trim();
+    const slot = String(value.slot || '').trim() === 'accessory' ? 'accessory' : 'main';
+    const note = String(value.note || '').trim();
+    if ((id === null && !allowMissingId) || !name)
+        return null;
+    const parts = slot === 'main' && Array.isArray(value.parts)
+        ? value.parts.map((part) => String(part ?? '').trim()).filter(Boolean).slice(0, 6)
+        : [];
+    const layer = slot === 'accessory' && String(value.layer || '').trim() === 'inner' ? 'inner' : null;
+    const item = {
+        id,
+        name,
+        note,
+        slot,
+        ...(parts.length > 0 ? { parts } : {}),
+        ...(layer ? { layer } : {}),
+        masking: clampScore(value.masking !== undefined ? value.masking : 10 - clampScore(value.contour, -10, 10, 10), -10, 10, 0),
+        support: clampScore(value.support !== undefined ? value.support : 10 - clampScore(value.unsupported, -10, 10, 10), -10, 10, 0),
+        capacity: clampScore(value.capacity, -10, 10, 0),
+        convenience: clampScore(value.convenience, -10, 10, 0),
+    };
+    return limitAccessoryWardrobeScores(item);
+}
+function normalizeTemporaryOutfitItems(value) {
+    if (!Array.isArray(value))
+        return [];
+    const items = [];
+    for (const source of value) {
+        const item = normalizeWardrobeItem(source);
+        if (!item || item.id === DEFAULT_WARDROBE_ITEM.id || items.some((existing) => existing.id === item.id))
+            continue;
+        items.push({ ...item, source: 'temporary' });
+    }
+    return items;
+}
+// 解析对衣物的引用：整数视为 id；字符串先按名称精确匹配（其次不分大小写），
+// 最后回退到历史字符串 id 的 hash 兼容映射。返回匹配的衣物或 null。
+function resolveWardrobeItemRef(items, ref, slot = '') {
+    if (ref === undefined || ref === null)
+        return null;
+    const list = (Array.isArray(items) ? items : []).filter((item) => item && (!slot || item.slot === slot));
+    if (typeof ref === 'number' || typeof ref === 'boolean') {
+        const numeric = Number(ref);
+        if (!Number.isInteger(numeric) || numeric < 0)
+            return null;
+        return list.find((item) => item.id === numeric) || null;
+    }
+    const text = String(ref).trim();
+    if (!text)
+        return null;
+    if (/^\d+$/.test(text)) {
+        const numeric = Number(text);
+        return list.find((item) => item.id === numeric) || null;
+    }
+    if (text === 'nude')
+        return list.find((item) => item.id === 0) || null;
+    const lower = text.toLowerCase();
+    const byName = list.find((item) => String(item.name || '').trim() === text)
+        || list.find((item) => String(item.name || '').trim().toLowerCase() === lower);
+    if (byName)
+        return byName;
+    const hashedId = normalizeWardrobeItemId(text);
+    return list.find((item) => item.id === hashedId) || null;
+}
+// 长期衣柜的下一个可用整数 id：沿用 1 起递增，跳过 hash 兼容区（>= 100000）已占用的 id。
+function getNextWardrobeItemId(items) {
+    const used = new Set((Array.isArray(items) ? items : [])
+        .map((item) => Number(item?.id))
+        .filter((id) => Number.isInteger(id) && id >= 0));
+    let candidate = 1;
+    for (const id of used) {
+        if (id < 100000 && id >= candidate)
+            candidate = id + 1;
+    }
+    while (used.has(candidate))
+        candidate += 1;
+    return candidate;
+}
+
+const EMPTY_LIST = Object.freeze([]);
+const HOST_CHAT_VIEW_CACHE = new WeakMap();
+const HOST_STABLE_CHAT_ID_CACHE = new WeakMap();
+const TAURI_HISTORY_PAGE_SIZE = 200;
+const TAURI_STATE_NAMESPACE = 'bs-biotracker';
+const TAURI_STATE_KEY = 'chat-state-v1';
+const TAURI_STATE_SAVE_DELAY_MS = 250;
+const TAURI_STATE_SAVE_QUEUE = new Map();
+const TAURI_STATE_KNOWN_MISSING_IDS = new Set();
+const TAURI_STATE_LOAD_INFLIGHT = new Map();
+// 已经确认过存档内容（读到了资料，或确认过没有存档）的聊天。
+// 在确认之前绝不允许用空状态回写 sidecar，详见 shouldSkipBlankHostChatStateSave。
+const TAURI_STATE_HYDRATED_IDS = new Set();
+const TAURI_HANDLE_WAIT_TIMEOUT_MS = 3000;
+const TAURI_HANDLE_WAIT_INTERVAL_MS = 100;
+const HOST_EVENT_TYPE_KEYS = Object.freeze({
+    appReady: 'APP_READY',
+    chatChanged: 'CHAT_CHANGED',
+    chatCreated: 'CHAT_CREATED',
+    chatDeleted: 'CHAT_DELETED',
+    groupChatCreated: 'GROUP_CHAT_CREATED',
+    groupChatDeleted: 'GROUP_CHAT_DELETED',
+});
+function getHostKind() {
+    if (globalThis.__TAURITAVERN__)
+        return 'tauritavern';
+    if (globalThis.Luker?.getContext)
+        return 'luker';
+    return 'sillytavern';
+}
+function getHostContext() {
+    try {
+        return globalThis.Luker?.getContext?.() || globalThis.SillyTavern?.getContext?.() || null;
+    }
+    catch (error) {
+        console.warn('[BS BioTracker] unable to read host context', error);
+        return null;
+    }
+}
+async function getHostAgentRunBarrier(ctx, message) {
+    if (getHostKind() !== 'tauritavern')
+        return { state: 'not_applicable', runId: '' };
+    const runId = String(message?.extra?.tauritavern?.agent?.runId || '').trim();
+    if (!runId)
+        return { state: 'not_applicable', runId: '' };
+    const ready = globalThis.__TAURITAVERN__?.ready || globalThis.__TAURITAVERN_MAIN_READY__;
+    if (ready && typeof ready.then === 'function')
+        await ready;
+    const agentApi = getTauriTavernApi()?.agent;
+    if (typeof agentApi?.readEvents !== 'function')
+        return { state: 'pending', runId };
+    try {
+        const result = await agentApi.readEvents({ runId, limit: 500 });
+        const events = Array.isArray(result?.events) ? result.events : [];
+        const types = new Set(events.map((event) => String(event?.type || '')));
+        if (types.has('run_completed'))
+            return { state: 'completed', runId };
+        if (types.has('run_cancelled') || types.has('run_failed'))
+            return { state: 'aborted', runId };
+        return { state: 'pending', runId };
+    }
+    catch (error) {
+        console.warn('[BS BioTracker] unable to read TauriTavern agent run events', error);
+        return { state: 'pending', runId };
+    }
+}
+function subscribeHostEvent(ctx, eventName, handler) {
+    const eventSource = ctx?.eventSource;
+    const eventTypeKey = HOST_EVENT_TYPE_KEYS[eventName];
+    const eventType = eventTypeKey ? ctx?.event_types?.[eventTypeKey] : null;
+    if (!eventSource || !eventType || typeof eventSource.on !== 'function' || typeof handler !== 'function')
+        return null;
+    const safeHandler = (...args) => {
+        try {
+            const result = handler(...args);
+            if (result && typeof result.catch === 'function') {
+                result.catch((error) => console.error(`[BS BioTracker] host event ${eventName} failed`, error));
+            }
+        }
+        catch (error) {
+            console.error(`[BS BioTracker] host event ${eventName} failed`, error);
+        }
+    };
+    eventSource.on(eventType, safeHandler);
+    let active = true;
+    return () => {
+        if (!active)
+            return;
+        active = false;
+        if (typeof eventSource.off === 'function')
+            eventSource.off(eventType, safeHandler);
+    };
+}
+function replaceHostEventSubscription(ctx, eventName, previousUnsubscribe, handler) {
+    if (typeof previousUnsubscribe === 'function')
+        previousUnsubscribe();
+    return subscribeHostEvent(ctx, eventName, handler);
+}
+function getHostChat(ctx) {
+    const cached = ctx && typeof ctx === 'object' ? HOST_CHAT_VIEW_CACHE.get(ctx) : null;
+    if (cached?.chatId === getHostChatId(ctx) && Array.isArray(cached.messages))
+        return cached.messages;
+    return Array.isArray(ctx?.chat) ? ctx.chat : EMPTY_LIST;
+}
+function hasAbsoluteHostChatView(ctx) {
+    const cached = ctx && typeof ctx === 'object' ? HOST_CHAT_VIEW_CACHE.get(ctx) : null;
+    return Boolean(cached?.chatId === getHostChatId(ctx) && cached.absolute === true);
+}
+function assignHistoryPage(target, page) {
+    const startIndex = Math.max(0, Number(page?.startIndex) || 0);
+    const messages = Array.isArray(page?.messages) ? page.messages : EMPTY_LIST;
+    for (let index = 0; index < messages.length; index += 1) {
+        target[startIndex + index] = messages[index];
+    }
+}
+async function refreshHostChatView(ctx, options = {}) {
+    if (getHostKind() !== 'tauritavern')
+        return getHostChat(ctx);
+    const ready = globalThis.__TAURITAVERN__?.ready || globalThis.__TAURITAVERN_MAIN_READY__;
+    if (ready && typeof ready.then === 'function')
+        await ready;
+    const api = getTauriTavernApi()?.chat;
+    if (!api?.current?.windowInfo || !api?.current?.handle)
+        return getHostChat(ctx);
+    const info = await api.current.windowInfo();
+    const totalCount = Math.max(0, Number(info?.totalCount) || 0);
+    const contextSize = Math.max(2, Number(options.contextSize) || 12);
+    const resumeIndexes = Array.isArray(options.resumeIndexes) ? options.resumeIndexes : [options.afterIndex];
+    const afterIndex = resumeIndexes.reduce((latest, value) => {
+        const index = Number(value);
+        return Number.isInteger(index) && index >= 0 && index <= totalCount && index > latest ? index : latest;
+    }, 0);
+    const requiredStartIndex = Math.max(0, afterIndex - contextSize);
+    const minimumTailSize = Math.max(contextSize, totalCount - requiredStartIndex);
+    const handle = api.current.handle();
+    let page = await handle.history.tail({ limit: Math.min(TAURI_HISTORY_PAGE_SIZE, Math.max(1, minimumTailSize)) });
+    const messages = new Array(totalCount);
+    assignHistoryPage(messages, page);
+    while (page?.hasMoreBefore && Number(page.startIndex) > requiredStartIndex) {
+        page = await handle.history.before(page, { limit: TAURI_HISTORY_PAGE_SIZE });
+        assignHistoryPage(messages, page);
+    }
+    HOST_CHAT_VIEW_CACHE.set(ctx, {
+        absolute: true,
+        chatId: getHostChatId(ctx),
+        messages,
+        loadedStartIndex: Math.max(0, Number(page?.startIndex) || 0),
+        totalCount,
+    });
+    return messages;
+}
+function getHostCharacters(ctx) {
+    return Array.isArray(ctx?.characters) ? ctx.characters : EMPTY_LIST;
+}
+function getHostChatId(ctx) {
+    const fallbackId = getFallbackHostChatId(ctx);
+    if (getHostKind() === 'tauritavern') {
+        const cached = ctx && typeof ctx === 'object' ? HOST_STABLE_CHAT_ID_CACHE.get(ctx) : null;
+        if (cached?.fallbackId === fallbackId && cached.stableId)
+            return cached.stableId;
+    }
+    return fallbackId;
+}
+function getFallbackHostChatId(ctx) {
+    try {
+        const currentChatId = ctx?.getCurrentChatId?.();
+        if (currentChatId !== undefined && currentChatId !== null && String(currentChatId)) {
+            return String(currentChatId);
+        }
+    }
+    catch (error) {
+        console.warn('[BS BioTracker] unable to read current chat id', error);
+    }
+    if (ctx?.chatId !== undefined && ctx?.chatId !== null && String(ctx.chatId))
+        return String(ctx.chatId);
+    return `${ctx?.characterId ?? 'char'}:${ctx?.groupId ?? 'solo'}`;
+}
+async function resolveHostChatId(ctx) {
+    const fallbackId = getFallbackHostChatId(ctx);
+    if (getHostKind() !== 'tauritavern')
+        return fallbackId;
+    const cached = ctx && typeof ctx === 'object' ? HOST_STABLE_CHAT_ID_CACHE.get(ctx) : null;
+    if (cached?.fallbackId === fallbackId && cached.stableId)
+        return cached.stableId;
+    const ready = globalThis.__TAURITAVERN__?.ready || globalThis.__TAURITAVERN_MAIN_READY__;
+    if (ready && typeof ready.then === 'function')
+        await ready;
+    const handle = getCurrentTauriChatHandle();
+    if (typeof handle?.stableId !== 'function')
+        return fallbackId;
+    try {
+        const stableId = String(await handle.stableId() || '').trim();
+        if (!stableId)
+            return fallbackId;
+        if (ctx && typeof ctx === 'object')
+            HOST_STABLE_CHAT_ID_CACHE.set(ctx, { fallbackId, stableId });
+        return stableId;
+    }
+    catch (error) {
+        console.warn('[BS BioTracker] unable to resolve TauriTavern stable chat id', error);
+        return fallbackId;
+    }
+}
+function getHostExtensionSettings(ctx) {
+    if (!ctx || typeof ctx !== 'object')
+        return null;
+    if (!ctx.extensionSettings || typeof ctx.extensionSettings !== 'object')
+        ctx.extensionSettings = {};
+    return ctx.extensionSettings;
+}
+function saveHostSettings(ctx) {
+    try {
+        ctx?.saveSettingsDebounced?.();
+    }
+    catch (error) {
+        console.warn('[BS BioTracker] unable to save host settings', error);
+    }
+}
+function getHostChatCompletionSettings(ctx = null) {
+    const runtime = ctx || getHostContext();
+    const settings = runtime?.chatCompletionSettings;
+    return settings && typeof settings === 'object' ? settings : null;
+}
+function canLoadHostWorldInfo(ctx) {
+    return typeof ctx?.loadWorldInfo === 'function';
+}
+async function loadHostWorldInfo(ctx, name) {
+    if (!canLoadHostWorldInfo(ctx))
+        return null;
+    return ctx.loadWorldInfo(String(name || ''));
+}
+async function getHostWorldBook(name, scope = 'global') {
+    const worldBookApi = globalThis.ST_API?.worldBook;
+    if (typeof worldBookApi?.get !== 'function')
+        return null;
+    const result = await worldBookApi.get({ name: String(name || ''), scope: String(scope || 'global') });
+    return result?.worldBook || null;
+}
+async function getHostWorldInfoPrompt(ctx, chat, maxContext, includeNames = true) {
+    if (typeof ctx?.getWorldInfoPrompt !== 'function')
+        return null;
+    return ctx.getWorldInfoPrompt(chat, maxContext, includeNames);
+}
+function getHostPresetManager(ctx = null, apiId = 'openai') {
+    const runtime = ctx || getHostContext();
+    if (typeof runtime?.getPresetManager !== 'function')
+        return null;
+    return runtime.getPresetManager(apiId);
+}
+async function listHostPresets() {
+    const presetApi = globalThis.ST_API?.preset;
+    return typeof presetApi?.list === 'function' ? presetApi.list() : null;
+}
+async function getHostPreset(name, ctx = null) {
+    const presetName = String(name || '').trim();
+    if (!presetName)
+        return null;
+    const presetApi = globalThis.ST_API?.preset;
+    if (typeof presetApi?.get === 'function') {
+        const result = await presetApi.get({ name: presetName });
+        if (result?.preset && typeof result.preset === 'object')
+            return result.preset;
+    }
+    if (globalThis.openai_settings && typeof globalThis.openai_settings === 'object') {
+        const preset = globalThis.openai_settings[presetName];
+        if (preset && typeof preset === 'object')
+            return preset;
+    }
+    const settings = getHostChatCompletionSettings(ctx);
+    if (settings?.[presetName] && typeof settings[presetName] === 'object')
+        return settings[presetName];
+    if (settings?.presets?.[presetName] && typeof settings.presets[presetName] === 'object')
+        return settings.presets[presetName];
+    return null;
+}
+async function registerHostExtensionMenuItem(options) {
+    const uiApi = globalThis.ST_API?.ui;
+    if (typeof uiApi?.registerExtensionsMenuItem !== 'function')
+        return false;
+    await uiApi.registerExtensionsMenuItem(options);
+    return true;
+}
+function getTauriTavernApi() {
+    const api = globalThis.__TAURITAVERN__?.api;
+    return api && typeof api === 'object' ? api : null;
+}
+function cloneHostValue(value) {
+    if (typeof globalThis.structuredClone === 'function')
+        return globalThis.structuredClone(value);
+    return JSON.parse(JSON.stringify(value));
+}
+function getCurrentTauriChatHandle() {
+    const api = getTauriTavernApi()?.chat;
+    return typeof api?.current?.handle === 'function' ? api.current.handle() : null;
+}
+/**
+ * 保守判空：只有确认不含任何用户资料才算空。
+ * 判错方向要偏「非空」——把真资料误判为空会导致存档被洗掉，反之只是多写一次。
+ * 不复用 state.js 的 isChatStateEffectivelyEmpty，因为 state.js 依赖本模块，反向 import 会成环。
+ */
+function isHostChatStateBlank(chatState) {
+    if (!chatState || typeof chatState !== 'object')
+        return true;
+    const characters = chatState.characters;
+    if (characters && typeof characters === 'object' && Object.keys(characters).length > 0)
+        return false;
+    if (Array.isArray(chatState.skillCatalog) && chatState.skillCatalog.length > 0)
+        return false;
+    if (Array.isArray(chatState.snapshots) && chatState.snapshots.length > 0)
+        return false;
+    return true;
+}
+/**
+ * 防止空状态覆盖既有存档。
+ *
+ * TT／Luker 上 chatStates 不进全局设置，per-chat sidecar 是唯一真源，每次重开都靠 hydrate 读回来。
+ * 一旦 hydrate 没成功（store 未就绪、宿主抛 Failed to resolve active character id 等），
+ * 内存里就是一份刚建出来的空状态；而 getChatState 归一化时会顺手 saveSettings，
+ * 把这份空状态按 handle 写进该聊天的 sidecar，真正的注册资料就此被洗掉。
+ *
+ * 因此：没确认过这个聊天存了什么之前，空状态一律不写。
+ * 确认过之后（读到资料，或确认没有存档）才放行，使用者主动「清除」仍能正常落盘。
+ */
+function shouldSkipBlankHostChatStateSave(chatId, chatState) {
+    if (!isHostChatStateBlank(chatState))
+        return false;
+    return !TAURI_STATE_HYDRATED_IDS.has(chatId);
+}
+/**
+ * 是否已经确认过当前聊天的存档内容。
+ * 原生宿主不依赖 sidecar，永远视为已确认；TT／Luker 未确认時代表这次载入没有定论，
+ * 呼叫端应该稍后重试，而不是把面板当成「没有注册角色」。
+ */
+function isHostChatStateConfirmed(ctx) {
+    const hostKind = getHostKind();
+    if (hostKind !== 'tauritavern' && hostKind !== 'luker')
+        return true;
+    return TAURI_STATE_HYDRATED_IDS.has(getHostChatId(ctx));
+}
+/**
+ * 等待当前聊天的 store 句柄就绪。
+ * 重开存档时 TT 主体可能已经 ready，但该聊天的 handle 还没挂上；
+ * 原本直接当成「没有存档」返回，面板就会显示成未注册。这里给一段有限等待。
+ */
+/**
+ * 先确认 sidecar 是否存在，避免直接 getJson 触发宿主的 not-found 弹窗。
+ *
+ * TauriTavern 把 store 读取 miss 当成后端错误：新聊天第一次探测时，
+ * 使用者会看到一个红色的「后端错误 Failed to get chat store json …」，
+ * 虽然不影响功能，但很吓人。后端其实提供了 list_character_chat_store_keys，
+ * 只是前端包装的方法名未知，因此这里做特性探测：
+ * 探得到就先列 key 再决定要不要读；探不到就回退成原本的直接读取。
+ *
+ * @returns {Promise<boolean|null>} true/false 为确定结果，null 表示无从检查
+ */
+async function tauriChatStoreHasKey(handle, namespace, key) {
+    const store = handle?.store;
+    if (!store)
+        return null;
+    const lister = [store.listKeys, store.list, store.keys, store.listJsonKeys]
+        .find((candidate) => typeof candidate === 'function');
+    if (!lister)
+        return null;
+    try {
+        const result = await lister.call(store, { namespace });
+        const keys = Array.isArray(result)
+            ? result
+            : (Array.isArray(result?.keys) ? result.keys : null);
+        if (!keys)
+            return null;
+        return keys.some((entry) => String(entry?.key ?? entry) === key);
+    }
+    catch {
+        // 列举本身失败就当作无从检查，交回原本的读取路径
+        return null;
+    }
+}
+async function waitForTauriChatStoreHandle(timeoutMs = TAURI_HANDLE_WAIT_TIMEOUT_MS) {
+    let handle = getCurrentTauriChatHandle();
+    if (typeof handle?.store?.getJson === 'function')
+        return handle;
+    const deadline = Date.now() + Math.max(0, Number(timeoutMs) || 0);
+    while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, TAURI_HANDLE_WAIT_INTERVAL_MS));
+        handle = getCurrentTauriChatHandle();
+        if (typeof handle?.store?.getJson === 'function')
+            return handle;
+    }
+    return null;
+}
+async function loadHostChatState(ctx = null) {
+    const hostKind = getHostKind();
+    if (hostKind === 'luker') {
+        const runtime = ctx || getHostContext();
+        if (typeof runtime?.getChatState !== 'function')
+            return null;
+        try {
+            const stored = await runtime.getChatState(TAURI_STATE_NAMESPACE);
+            // 读到了（无论有没有资料）就算确认过内容，之后才允许写空
+            TAURI_STATE_HYDRATED_IDS.add(getHostChatId(ctx));
+            if (stored?.version === 1 && stored.chatState && typeof stored.chatState === 'object')
+                return cloneHostValue(stored.chatState);
+        }
+        catch (error) {
+            // 读取失败＝内容未知，保持未确认状态，避免拿空的覆盖掉
+            console.warn('[BS BioTracker] unable to load Luker chat state', error);
+        }
+        return null;
+    }
+    if (hostKind !== 'tauritavern')
+        return null;
+    const ready = globalThis.__TAURITAVERN__?.ready || globalThis.__TAURITAVERN_MAIN_READY__;
+    if (ready && typeof ready.then === 'function')
+        await ready;
+    // 句柄还没挂上时不当成「没有存档」：等一小段时间，超时则维持未确认让呼叫端重试
+    const handle = await waitForTauriChatStoreHandle();
+    if (!handle)
+        return null;
+    // TT surfaces every backend store miss as an error toast, so remember chats
+    // without stored state and skip repeat probes until our own save creates one.
+    const chatId = await resolveHostChatId(ctx);
+    if (TAURI_STATE_KNOWN_MISSING_IDS.has(chatId)) {
+        TAURI_STATE_HYDRATED_IDS.add(chatId);
+        return null;
+    }
+    const inflight = TAURI_STATE_LOAD_INFLIGHT.get(chatId);
+    if (inflight)
+        return inflight;
+    const loadPromise = (async () => {
+        // 能事先确认不存在时就不要读，省下宿主那个吓人的 not-found 错误弹窗
+        const exists = await tauriChatStoreHasKey(handle, TAURI_STATE_NAMESPACE, TAURI_STATE_KEY);
+        if (exists === false) {
+            TAURI_STATE_KNOWN_MISSING_IDS.add(chatId);
+            TAURI_STATE_HYDRATED_IDS.add(chatId);
+            return null;
+        }
+        try {
+            const stored = await handle.store.getJson({ namespace: TAURI_STATE_NAMESPACE, key: TAURI_STATE_KEY });
+            // 读到了（无论有没有资料）就算确认过内容，之后才允许写空
+            TAURI_STATE_HYDRATED_IDS.add(chatId);
+            if (stored?.version === 1 && stored.chatState && typeof stored.chatState === 'object') {
+                return cloneHostValue(stored.chatState);
+            }
+        }
+        catch (error) {
+            if (/not found/i.test(String(error?.message || error))) {
+                // 确认这个聊天没有存档，写空无害
+                TAURI_STATE_KNOWN_MISSING_IDS.add(chatId);
+                TAURI_STATE_HYDRATED_IDS.add(chatId);
+            }
+            else {
+                // 其它错误＝内容未知（store 未就绪、宿主报错等），保持未确认，避免拿空的覆盖掉
+                console.warn('[BS BioTracker] unable to load TauriTavern chat state', error);
+            }
+        }
+        return null;
+    })();
+    TAURI_STATE_LOAD_INFLIGHT.set(chatId, loadPromise);
+    try {
+        return await loadPromise;
+    }
+    finally {
+        TAURI_STATE_LOAD_INFLIGHT.delete(chatId);
+    }
+}
+function scheduleHostChatStateSave(ctx, chatState) {
+    const hostKind = getHostKind();
+    if (!chatState || typeof chatState !== 'object')
+        return;
+    if (hostKind === 'luker') {
+        if (typeof ctx?.updateChatState !== 'function')
+            return;
+        const chatId = getHostChatId(ctx);
+        if (shouldSkipBlankHostChatStateSave(chatId, chatState))
+            return;
+        const previous = TAURI_STATE_SAVE_QUEUE.get(chatId);
+        if (previous?.timer)
+            clearTimeout(previous.timer);
+        const payload = { version: 1, chatState: cloneHostValue(chatState) };
+        const timer = setTimeout(async () => {
+            const queued = TAURI_STATE_SAVE_QUEUE.get(chatId);
+            if (!queued || queued.timer !== timer)
+                return;
+            TAURI_STATE_SAVE_QUEUE.delete(chatId);
+            try {
+                await queued.ctx.updateChatState(TAURI_STATE_NAMESPACE, () => queued.payload);
+            }
+            catch (error) {
+                console.warn('[BS BioTracker] unable to save Luker chat state', error);
+            }
+        }, TAURI_STATE_SAVE_DELAY_MS);
+        TAURI_STATE_SAVE_QUEUE.set(chatId, { ctx, payload, timer });
+        return;
+    }
+    if (hostKind !== 'tauritavern')
+        return;
+    const handle = getCurrentTauriChatHandle();
+    if (typeof handle?.store?.setJson !== 'function')
+        return;
+    const chatId = getHostChatId(ctx);
+    if (shouldSkipBlankHostChatStateSave(chatId, chatState))
+        return;
+    TAURI_STATE_KNOWN_MISSING_IDS.delete(chatId);
+    const previous = TAURI_STATE_SAVE_QUEUE.get(chatId);
+    if (previous?.timer)
+        clearTimeout(previous.timer);
+    const payload = { version: 1, chatState: cloneHostValue(chatState) };
+    const timer = setTimeout(async () => {
+        const queued = TAURI_STATE_SAVE_QUEUE.get(chatId);
+        if (!queued || queued.timer !== timer)
+            return;
+        TAURI_STATE_SAVE_QUEUE.delete(chatId);
+        try {
+            await queued.handle.store.setJson({
+                namespace: TAURI_STATE_NAMESPACE,
+                key: TAURI_STATE_KEY,
+                value: queued.payload,
+            });
+        }
+        catch (error) {
+            console.warn('[BS BioTracker] unable to save TauriTavern chat state', error);
+        }
+    }, TAURI_STATE_SAVE_DELAY_MS);
+    TAURI_STATE_SAVE_QUEUE.set(chatId, { handle, payload, timer });
+}
+
+const MODULE_NAME = 'bs_biotracker';
+const MAX_CHAT_STATE_SNAPSHOTS = 24;
+const MAX_RAW_RESULT_TEXT_LENGTH = 600;
+const MAX_SNAPSHOT_DEBUG_ITEMS = 24;
+const MIN_CHAT_INHERIT_MESSAGE_COUNT = 2;
+const MESSAGE_DIGEST_SEED = 2166136261;
+const SNAPSHOT_FULL_INTERVAL = 8;
+const SNAPSHOT_PATCH_SIZE_RATIO = 0.85;
+const SNAPSHOT_DELETE_SENTINEL_KEY = '__bs_bt_deleted__';
+const SNAPSHOT_ARRAY_APPEND_KEY = '__bs_bt_array_append__';
+const RESTORED_SNAPSHOT_RUNTIME_KEY = Symbol('bsBtRestoredSnapshotKey');
+let worldInfoModulePromise = null;
+const THEME_CONFIG = {
+    retro: {},
+    cultivation: {},
+    fantasy: {},
+    'cyber-egypt': {},
+    wasteland: {},
+    sakura: {},
+    holo: {},
+    gothic: {},
+    steampunk: {},
+    eldritch: {},
+    ink: {},
+    constructivism: {},
+};
+const DEFAULT_WARDROBE_PREP_PROMPT = [
+    '请根据角色卡、世界书、最近对话、已注册状态与当前服装描述，为指定角色准备衣柜 JSON。',
+    '默认生成 3 件 main 主件、3 件 accessory 配件；若用户在本提示中指定数量、风格、场景或禁忌，请优先遵守。',
+    '主件应覆盖角色常用日常服、较正式/外出服、睡衣或居家服等；配件可包含外套、托腹带、鞋履、披肩、制服配件、贴身内衣等。',
+    'note 只写衣物稳定外观与来源：颜色、材质、版型、长短、固定开口、图案、制服/病服/借装来源等。皮肤暴露、开衩、透肤、深领等稳定外观写在 note。禁止写当前穿着反应、角色感受、近期身体变化、怀孕/胀痛/压胸/勒红/变紧/显怀等动态状态；这些由四维、pregFit 与当轮叙事推导。',
+    '每件衣物字段必须为 id/name/note/slot/masking/support/capacity/convenience；主件可附 parts 数组列出组成部件名（如 ["白衬衫","牛仔裤"]，连身装可省略）；配件可附 layer（inner=贴身内衣等穿在主件之下，outer=外搭，默认 outer），通常应生成 1-2 件 layer=inner 的贴身衣物配件。',
+    '可独立穿脱的外层（毛衣、开衫、外套、罩衫、披肩等）不要并入 main 或写进 parts，应拆成 layer=outer 的配件；main 只保留脱掉外层后仍成立的基础层。',
+    'slot 只能是 main 或 accessory；main 是主件，只能穿一件；accessory 可叠加，但只是补正。',
+    '四维均为 -10 到 10；主件通常使用 0 到 10。配件单项只能 -3 到 3，通常只影响 1-2 个维度，其他维度必须填 0。旧的 contour/unsupported 若出现在资料中，会被视为 masking/support 的反向旧字段。',
+    'masking=掩盖身体曲线、孕肚、胸腹变化的程度；support=对胸、腹、腰、重心的承托程度，高表示托得住但可能偏束，低表示松散；capacity=容许体型变化的程度；convenience=行动、穿脱、如厕、哺乳或排解需求的方便程度。',
+    'id 必须使用整数；0 是系统保留默认主件，表示全裸，不要放入 wardrobe.items。长期衣柜 id 从 1 开始递增。',
+    'outfit.mainItemId 请选择一件最符合当前叙事/注册描述的主件；outfit.accessoryItemIds 选择当前已穿戴配件，未知则空数组。',
+    'temporaryItems 只用于病服、借装、旅馆睡衣等临时衣物；备装长期衣柜时通常输出空数组。',
+].join('\n');
+const DEFAULT_SYSTEM_PROMPT = [
+    '你是 AIRP 女性角色生理状态追踪器的工具调度器。',
+    '你要根据角色卡、最近对话、已有状态，决定这次应调用哪些工具更新状态。',
+    '只输出 JSON，不要输出额外解释。',
+    'JSON 结构必须是：',
+    '{',
+    '  "tool_calls": [',
+    '    {',
+    '      "name": "string",',
+    '      "arguments": {}',
+    '    }',
+    '  ],',
+    '  "character_checks": [',
+    '    { "female": "string", "status": "no_change|updated|present|offscreen" }',
+    '  ]',
+    '}',
+    'character_checks 是逐角色检查清单：必须对 tracked_females 中每名角色恰好输出一笔；只写本轮检查结论，不直接改变状态。真正更新仍必须用 tool_calls。',
+    '可用工具会通过 available_tools 传入。只能调用其中存在的工具，参数名必须完全匹配。',
+    '没有足够依据时，tool_calls 返回空数组。',
+    '如果对话明确发生了时间流逝，优先调用 bsPassedTime。',
+    '如果只是活力、情压、性欲、宫压波动，使用 bsUpdateCharacterStatus。',
+    '如果只是心理数值变化，使用 bsUpdatePsychology；其数值参数一律表示变化量(delta)而不是目标值，例如当前为 78 时传 2 会变成 80。应优先做单一心理项的小幅调整，单次建议只动一个字段，幅度尽量控制在 ±1 到 ±3，±5 已属于偏大变化。每名角色在每个新小时内仅允许一次成功的 bsUpdatePsychology 变化，重复调用会被跳过。如果只是经验或关系记录变化，使用 bsUpdateExperience。',
+    '如果只是描述文字变化，使用 bsSetDescription。',
+    '剧情中出现穿上、脱下、更衣、借穿、被脱除、淋湿更换、洗浴后重新着装等衣着变化时，必须用 bsChangeOutfit 同步当前穿着；只更新衣着描述文字而不换装是错误的。角色获得新长期衣物用 bsAddWardrobeItem，永久失去衣物用 bsRemoveWardrobeItem。',
+    '性交留精用 bsAddSperm；排出残留精液用 bsDrainSperm；缓解生理需求用 bsExcreteMetabolism。',
+    '跨日、重大事件或 notify 提醒时，可用 bsWriteDiary 为角色追加主观日记。',
+    '月经阶段、排卵期、假孕期切换用 bsSetMenstrualPhases；不要用它覆盖正在进行的受精、真妊娠或产程。',
+    '流产用 bsAbortion；立即结束分娩用 bsChildbirth；角色在场状态变化用 bsSetCharacterPresence，参数必须为 female 和 isPresent（布尔值 true/false，不要使用 isHere）。角色明确回到当前场景、重新同行或参与当前互动时应设为 true；明确离开、失联或转为幕外时才设为 false。',
+    '母胎互动用 bsMaternalFetalInteraction；每名角色在每个新小时内仅允许一次成功的母胎互动变化，重复调用会被跳过。direction=fetal 时须传 change，表示胎儿对母体的亲近或排斥并改变 affinity，不补充营养。direction=maternal 时不传 change，表示母体安抚胎儿，系统随机判定 affinity 变化；若成功且有待安抚不适，小幅变化补回 1 点营养，大幅变化补回 2 点营养。若处于产兆前驱则表示分娩抵抗。',
+    '不要编造怀孕天数、胎数、流产、分娩或其他高影响事件。',
+].join('\n');
+const DEFAULT_SETTINGS = Object.freeze({
+    theme: 'retro',
+    deviceSize: 'phone',
+    fontSize: 'standard',
+    enabled: false,
+    useStPresetForAsync: false,
+    trackerPresetName: '',
+    trackerPromptToggles: {},
+    trackerPromptToggleOverrides: {},
+    apiUrl: '',
+    apiKey: '',
+    model: 'gpt-4.1-mini',
+    modelOptions: [],
+    formattedOutputV4: true,
+    triggerTiming: 'after_ai',
+    pollMs: 1800,
+    apiTimeoutMs: 180000,
+    contextSize: 12,
+    trackerTokenBudget: 4096,
+    requireFullDescriptionUpdates: false,
+    lukerMultiAgentManualOnly: true,
+    diaryRecentLimit: 5,
+    diaryWritingPrompt: DEFAULT_DIARY_WRITING_PROMPT,
+    wardrobePrepPrompt: '',
+    wardrobePrepMainCount: 3,
+    wardrobePrepAccessoryCount: 3,
+    targetNames: '',
+    trackerWorldbookMode: 'exclude',
+    trackerWorldbookExcludeNames: '',
+    trackerWorldbookIncludeNames: '',
+    trackerGlobalWorldbookExcludeNames: '',
+    trackerGlobalWorldbookIncludeNames: '',
+    systemPrompt: DEFAULT_SYSTEM_PROMPT,
+    registryCustomNotes: '',
+    registrySkillPrompt: '',
+    registryDescriptionGuides: DEFAULT_REGISTRY_DESCRIPTION_GUIDES,
+    racePhysiologyOverrides: {},
+    derivedTypeOverrides: {},
+    chatStates: {},
+});
+const VITALITY_CAPS = Object.freeze({
+    1: 50,
+    2: 75,
+    3: 100,
+    4: 125,
+    5: 150,
+    6: 175,
+    7: 200,
+});
+const PSY_STRESS_CAPS = Object.freeze({
+    1: 20,
+    2: 50,
+    3: 80,
+    4: 110,
+    5: 140,
+    6: 170,
+    7: 200,
+});
+function clampLevel(value, fallback = 4) {
+    const next = Number(value);
+    if (!Number.isFinite(next))
+        return fallback;
+    return Math.max(1, Math.min(7, Math.round(next)));
+}
+function sanitizeInteger(value, { min = -999999, max = 999999 } = {}) {
+    const next = Number(value);
+    if (!Number.isFinite(next))
+        return null;
+    return Math.max(min, Math.min(max, Math.round(next)));
+}
+function sanitizeNumber(value, { min = -999999, max = 999999 } = {}) {
+    const next = Number(value);
+    if (!Number.isFinite(next))
+        return null;
+    return Math.max(min, Math.min(max, next));
+}
+function sanitizeString(value) {
+    if (value === null)
+        return null;
+    if (value === undefined)
+        return undefined;
+    return String(value);
+}
+function sanitizeStringList(value) {
+    if (!Array.isArray(value))
+        return null;
+    return value.map((item) => String(item ?? '')).filter(Boolean);
+}
+function pickFirstString(obj, paths) {
+    for (const path of paths) {
+        const keys = String(path || '').split('.');
+        let current = obj;
+        for (const key of keys) {
+            if (!current || typeof current !== 'object') {
+                current = undefined;
+                break;
+            }
+            current = current[key];
+        }
+        if (typeof current === 'string' && current.trim())
+            return current.trim();
+    }
+    return '';
+}
+function normalizePsychologyState(value) {
+    const stageProfiles = normalizePsychologyStageProfiles(value?.stageProfiles);
+    return {
+        mens: normalizePsychologyGroup(value?.mens, PSY_MENS_FIELDS, { booleanFields: PSY_MENS_BOOL_FIELDS, stageProfiles: stageProfiles.mens }),
+        preg: normalizePsychologyGroup(value?.preg, PSY_PREG_FIELDS, { booleanFields: PSY_PREG_BOOL_FIELDS, stageProfiles: stageProfiles.preg }),
+        stageProfiles,
+    };
+}
+function normalizeWardrobeState(value) {
+    const items = [];
+    for (const source of (Array.isArray(value?.items) ? value.items : [])) {
+        const item = normalizeWardrobeItem(source);
+        if (!item || items.some((existing) => existing.id === item.id))
+            continue;
+        items.push(item);
+    }
+    if (!items.some((item) => item.id === 0))
+        items.unshift(createDefaultWardrobeItem());
+    return { enabled: Boolean(value?.enabled), items };
+}
+function normalizePregFitState(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return null;
+    const normalizeGap = (gapValue) => {
+        const next = Number(gapValue);
+        if (!Number.isFinite(next))
+            return 0;
+        return Math.max(-20, Math.min(20, next));
+    };
+    const gapSource = value.gap && typeof value.gap === 'object' ? value.gap : {};
+    return {
+        pregWearPressure: Math.max(0, Math.min(10, Number(value.pregWearPressure) || 0)),
+        gap: {
+            masking: normalizeGap(gapSource.masking ?? gapSource.covering),
+            support: normalizeGap(gapSource.support),
+            capacity: normalizeGap(gapSource.capacity),
+            convenience: normalizeGap(gapSource.convenience),
+        },
+    };
+}
+function normalizeOutfitState(value, wardrobe) {
+    const wardrobeItems = Array.isArray(wardrobe?.items) ? wardrobe.items : [];
+    const temporaryItems = normalizeTemporaryOutfitItems(value?.temporaryItems);
+    const availableItems = [...wardrobeItems, ...temporaryItems];
+    const hasItem = (id, slot = '') => availableItems.some((item) => item.id === id && (!slot || item.slot === slot));
+    const requestedMainId = normalizeWardrobeItemId(value?.mainItemId, 0);
+    const mainItemId = hasItem(requestedMainId, 'main') ? requestedMainId : 0;
+    const accessoryItemIds = Array.isArray(value?.accessoryItemIds)
+        ? value.accessoryItemIds
+            .map((item) => normalizeWardrobeItemId(item))
+            .filter((id, index, list) => id !== null && list.indexOf(id) === index && hasItem(id, 'accessory'))
+        : [];
+    return {
+        mainItemId,
+        accessoryItemIds,
+        temporaryItems,
+        wearState: sanitizeWearState(value?.wearState),
+        pregFit: normalizePregFitState(value?.pregFit),
+    };
+}
+// v0.8.5 起衣着状态由 outfit.wearState 与 currentWearText 承担；
+// 旧版备装写入的两个描述子字段会与机械穿着脱节，载入时一次性剥离。
+const REMOVED_OUTFIT_DESCRIPTION_FIELD_NAMES = new Set([
+    '衣着动态', '衣着動態', '衣著动态', '衣著動態',
+    '衣着自评', '衣著自評', '衣着自評', '衣著自评', '服装自评', '服裝自評',
+]);
+function stripRemovedOutfitDescriptionFields(text) {
+    const source = String(text || '');
+    if (!source.includes('|'))
+        return source;
+    const entries = source.split(';;').filter((entry) => entry.trim());
+    const kept = entries.filter((entry) => {
+        const separatorIndex = entry.indexOf('|');
+        const name = separatorIndex >= 0 ? entry.slice(0, separatorIndex).trim() : '';
+        return !REMOVED_OUTFIT_DESCRIPTION_FIELD_NAMES.has(name);
+    });
+    if (kept.length === entries.length)
+        return source;
+    return kept.length > 0 ? `${kept.join(';;')};;` : '';
+}
+function normalizeCharacterPsychologyState(characterState) {
+    if (!characterState || typeof characterState !== 'object')
+        return characterState;
+    if (!characterState.profile || typeof characterState.profile !== 'object')
+        return characterState;
+    characterState.profile.psychology = normalizePsychologyState(characterState.profile.psychology);
+    characterState.profile.skills = normalizeSkillList(characterState.profile.skills);
+    characterState.profile.talents = normalizeTalentList(characterState.profile.talents);
+    characterState.profile.skillHistory = normalizeSkillHistory(characterState.profile.skillHistory);
+    if (characterState.profile.childSource && typeof characterState.profile.childSource === 'object' && !Array.isArray(characterState.profile.childSource)) {
+        const motherName = String(characterState.profile.childSource.motherName || '').trim();
+        const childIndex = Number(characterState.profile.childSource.childIndex);
+        if (motherName && Number.isInteger(childIndex) && childIndex >= 0) {
+            const normalizedChildSource = {
+                motherName,
+                childIndex,
+            };
+            if (Array.isArray(characterState.profile.childSource.inheritedTalents)) {
+                normalizedChildSource.inheritedTalents = normalizeTalentList(characterState.profile.childSource.inheritedTalents);
+            }
+            characterState.profile.childSource = normalizedChildSource;
+        }
+        else {
+            delete characterState.profile.childSource;
+        }
+    }
+    if (Array.isArray(characterState.profile.children)) {
+        characterState.profile.children = characterState.profile.children.map((child) => {
+            const next = { ...child, talents: normalizeTalentList(child?.talents ?? child?.inheritedTalents) };
+            delete next.inheritedTalents;
+            return next;
+        });
+    }
+    if (Array.isArray(characterState.profile.pregnant?.fetuses)) {
+        characterState.profile.pregnant.fetuses = characterState.profile.pregnant.fetuses.map((fetus) => {
+            const next = { ...fetus, talents: normalizeTalentList(fetus?.talents ?? fetus?.inheritedTalents) };
+            delete next.inheritedTalents;
+            return next;
+        });
+    }
+    if (characterState.profile.wardrobe?.enabled) {
+        characterState.profile.wardrobe = normalizeWardrobeState(characterState.profile.wardrobe);
+        characterState.profile.outfit = normalizeOutfitState(characterState.profile.outfit, characterState.profile.wardrobe);
+    }
+    else {
+        delete characterState.profile.wardrobe;
+        delete characterState.profile.outfit;
+    }
+    const descriptions = characterState.profile.descriptions;
+    if (descriptions && typeof descriptions === 'object' && !Array.isArray(descriptions)) {
+        for (const key of ['normalDescription', 'pregnantDescription']) {
+            if (typeof descriptions[key] === 'string' && descriptions[key]) {
+                descriptions[key] = stripRemovedOutfitDescriptionFields(descriptions[key]);
+            }
+        }
+    }
+    const metabolism = characterState.profile.metabolism;
+    if (metabolism && typeof metabolism === 'object' && !Array.isArray(metabolism)) {
+        if (metabolism.excretion === undefined && (metabolism.urine !== undefined || metabolism.stool !== undefined)) {
+            metabolism.excretion = sanitizeNumber((Number(metabolism.urine) || 0) + (Number(metabolism.stool) || 0), { min: 0, max: 150 }) ?? 0;
+        }
+        if (metabolism.companionship === undefined)
+            metabolism.companionship = 0;
+        delete metabolism.urine;
+        delete metabolism.stool;
+    }
+    const pregnant = characterState.profile.pregnant;
+    if (pregnant && pregnant.acceleration === undefined) {
+        pregnant.acceleration = null;
+    }
+    if (pregnant && pregnant.expansion === undefined) {
+        pregnant.expansion = null;
+    }
+    if (pregnant && pregnant.symptomReliefPending === undefined) {
+        pregnant.symptomReliefPending = characterState.profile.cooldown?.pregnancySymptomActive ? 1 : 0;
+    }
+    if (pregnant?.blockage?.key === 'stool')
+        pregnant.blockage.key = 'excretion';
+    if (pregnant?.blockage?.key === 'urine') {
+        if (!pregnant.acceleration) {
+            pregnant.acceleration = { ...pregnant.blockage, key: 'excretion' };
+        }
+        pregnant.blockage = null;
+    }
+    if (pregnant?.blockage?.key
+        && pregnant.blockage.key === pregnant.acceleration?.key) {
+        pregnant.acceleration = null;
+    }
+    if (pregnant?.expansion?.key
+        && (pregnant.expansion.key === pregnant.blockage?.key || pregnant.expansion.key === pregnant.acceleration?.key)) {
+        pregnant.expansion = null;
+    }
+    if (metabolism && typeof metabolism === 'object' && !Array.isArray(metabolism)) {
+        const expansionKey = String(pregnant?.expansion?.key || '');
+        for (const key of ['excretion', 'hunger', 'sleep', 'milk', 'odor', 'companionship']) {
+            if (metabolism[key] === undefined)
+                continue;
+            metabolism[key] = sanitizeNumber(metabolism[key], { min: 0, max: expansionKey === key ? 200 : 150 }) ?? 0;
+        }
+        if (metabolism.flux !== undefined) {
+            const flux = Number(metabolism.flux) || 0;
+            const expandedFlux = (flux > 0 && expansionKey === 'fluxPositive') || (flux < 0 && expansionKey === 'fluxNegative');
+            metabolism.flux = sanitizeNumber(flux, { min: expandedFlux ? -200 : -150, max: expandedFlux ? 200 : 150 }) ?? 0;
+        }
+    }
+    if (characterState.profile.cooldown && typeof characterState.profile.cooldown === 'object') {
+        delete characterState.profile.cooldown.laborResistanceUsed;
+        delete characterState.profile.cooldown.pregnancySymptomActive;
+    }
+    return characterState;
+}
+function sanitizeObjectPatch(value, allowedFields, sanitizerMap = {}) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return null;
+    const result = {};
+    for (const field of allowedFields) {
+        if (value[field] === undefined)
+            continue;
+        const sanitizer = sanitizerMap[field];
+        const next = sanitizer ? sanitizer(value[field]) : value[field];
+        if (next !== undefined)
+            result[field] = next;
+    }
+    return Object.keys(result).length > 0 ? result : null;
+}
+function sanitizePregnancyBlockage(value) {
+    if (value === null)
+        return null;
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return undefined;
+    const key = String(value.key || '').trim();
+    if (!key)
+        return null;
+    return {
+        key,
+        severity: sanitizeNumber(value.severity, { min: 0, max: 0.90 }) ?? 0,
+    };
+}
+function getVitalityInitByLevel(level) {
+    return VITALITY_CAPS[clampLevel(level)] || VITALITY_CAPS[4];
+}
+function getPsyStressInitByLevel(level) {
+    return Math.floor((PSY_STRESS_CAPS[clampLevel(level)] || PSY_STRESS_CAPS[4]) / 2);
+}
+function randomInt$2(min, max) {
+    const nextMin = Math.ceil(min);
+    const nextMax = Math.floor(max);
+    return Math.floor(Math.random() * (nextMax - nextMin + 1)) + nextMin;
+}
+function deriveMenstrualStageState() {
+    const stage = MENSTRUAL_STAGES[randomInt$2(0, MENSTRUAL_STAGES.length - 1)];
+    const days = randomInt$2(0, MENSTRUAL_STAGE_DAYS[stage]);
+    return { stage, days };
+}
+function derivePregnancyStageState(pregnantDays, gestationSpeed = 1) {
+    const actualPregnantDays = Math.max(0, Number(pregnantDays) || 0);
+    const speed = Math.max(0.1, Number(gestationSpeed) || 1);
+    const stageNames = ['孕早期', '孕中期', '孕晚期', '临产期'];
+    let totalPregnancyDays = 0;
+    for (const stageName of stageNames)
+        totalPregnancyDays += PREGNANCY_STAGE_DAYS[stageName] / speed;
+    if (actualPregnantDays > totalPregnancyDays) {
+        return {
+            stage: '逾期',
+            days: actualPregnantDays - totalPregnancyDays,
+        };
+    }
+    let stage = '孕早期';
+    let baseDays = 0;
+    let currentStageDays = 0;
+    for (const stageName of stageNames) {
+        const stageLimit = PREGNANCY_STAGE_DAYS[stageName] / speed;
+        const nextBaseDays = baseDays + stageLimit;
+        if (actualPregnantDays >= baseDays && actualPregnantDays <= baseDays + stageLimit) {
+            stage = stageName;
+            currentStageDays = actualPregnantDays - baseDays;
+            break;
+        }
+        baseDays = nextBaseDays;
+    }
+    return { stage, days: currentStageDays };
+}
+function getGestationSpeciesSpeed(profile) {
+    const baseSpeed = Number(profile?.bio?.gestationSpeciesSpeed);
+    if (Number.isFinite(baseSpeed) && baseSpeed > 0)
+        return Math.max(0.1, Math.min(20, baseSpeed));
+    return 1;
+}
+function getGestationModifierMultiplier(profile) {
+    const multiplier = Number(profile?.bio?.gestationModifierMultiplier);
+    if (Number.isFinite(multiplier) && multiplier >= 0)
+        return Math.max(0, Math.min(20, multiplier));
+    return 1;
+}
+function getGestationEffectiveSpeed(profile) {
+    const hasSpeciesSpeed = Number.isFinite(Number(profile?.bio?.gestationSpeciesSpeed));
+    const hasModifierMultiplier = Number.isFinite(Number(profile?.bio?.gestationModifierMultiplier));
+    if (hasSpeciesSpeed || hasModifierMultiplier) {
+        return Math.max(0, Math.min(20, getGestationSpeciesSpeed(profile) * getGestationModifierMultiplier(profile)));
+    }
+    const effectiveSpeed = Number(profile?.bio?.gestationEffectiveSpeed);
+    if (Number.isFinite(effectiveSpeed) && effectiveSpeed >= 0)
+        return Math.max(0, Math.min(20, effectiveSpeed));
+    return 1;
+}
+function syncCharacterStageFromProfile(characterState) {
+    const next = characterState;
+    const profile = next?.profile || {};
+    const base = profile.base || {};
+    const pregnant = profile.pregnant || {};
+    const bio = profile.bio || {};
+    const fetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [];
+    const currentStage = String(base.stage || '');
+    if (fetuses.length > 0) {
+        const pregnantDays = Math.max(0, Number(pregnant.pregnantDays) || 0);
+        const effectivePregnantDays = Math.max(0, Number(pregnant.effectivePregnantDays) || 0);
+        // 刚移入／刚受精时 fertilizationDays 可以正好是 0；只要产科孕日仍为 0，就尚未着床。
+        if (pregnantDays <= 0 && effectivePregnantDays <= 0) {
+            const fallbackStage = PREGNANCY_STAGES.includes(currentStage) ? '排卵期' : currentStage;
+            next.profile.base = {
+                ...base,
+                stage: fallbackStage || '排卵期',
+                days: Math.max(0, Number(base.days) || 0),
+            };
+            return next;
+        }
+        if (currentStage === '产兆前驱' || LABOR_STAGES.includes(currentStage)) {
+            next.profile.base = {
+                ...base,
+                days: Math.max(0, Number(base.days) || 0),
+            };
+            return next;
+        }
+        const derived = derivePregnancyStageState(pregnant.effectivePregnantDays, 1);
+        next.profile.base = {
+            ...base,
+            stage: derived.stage,
+            days: derived.days,
+        };
+        return next;
+    }
+    if (MENSTRUAL_STAGES.includes(currentStage)
+        || currentStage === '假孕期'
+        || currentStage === '产兆前驱'
+        || currentStage === '产后恢复'
+        || LABOR_STAGES.includes(currentStage)
+        || currentStage === '无经期'
+        || currentStage === '未激活') {
+        next.profile.base = {
+            ...base,
+            days: Math.max(0, Number(base.days) || 0),
+        };
+        return next;
+    }
+    const derived = deriveMenstrualStageState();
+    next.profile.base = {
+        ...base,
+        stage: derived.stage,
+        days: derived.days,
+    };
+    return next;
+}
+function getContextSafe() {
+    return getHostContext();
+}
+function cloneValue(value) {
+    if (typeof globalThis.structuredClone === 'function')
+        return globalThis.structuredClone(value);
+    return JSON.parse(JSON.stringify(value));
+}
+function isPlainObject$2(value) {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+function createSnapshotDeleteSentinel() {
+    return { [SNAPSHOT_DELETE_SENTINEL_KEY]: true };
+}
+function isSnapshotDeleteSentinel(value) {
+    return isPlainObject$2(value) && value[SNAPSHOT_DELETE_SENTINEL_KEY] === true;
+}
+function createSnapshotArrayAppendPatch(previousList, nextList) {
+    if (!Array.isArray(previousList) || !Array.isArray(nextList))
+        return null;
+    if (nextList.length <= previousList.length)
+        return null;
+    for (let index = 0; index < previousList.length; index += 1) {
+        if (!areSnapshotArrayItemsEqual(previousList[index], nextList[index]))
+            return null;
+    }
+    return {
+        [SNAPSHOT_ARRAY_APPEND_KEY]: true,
+        length: previousList.length,
+        items: cloneValue(nextList.slice(previousList.length)),
+    };
+}
+function isSnapshotArrayAppendPatch(value) {
+    return isPlainObject$2(value)
+        && value[SNAPSHOT_ARRAY_APPEND_KEY] === true
+        && Number.isInteger(value.length)
+        && Array.isArray(value.items);
+}
+function applySnapshotArrayAppendPatch(previousValue, patch) {
+    const base = Array.isArray(previousValue) ? cloneValue(previousValue).slice(0, Math.max(0, patch.length)) : [];
+    return base.concat(cloneValue(patch.items));
+}
+function areSnapshotArrayItemsEqual(left, right) {
+    if (left === right)
+        return true;
+    return JSON.stringify(left) === JSON.stringify(right);
+}
+function areSnapshotArraysEqual(left, right) {
+    if (!Array.isArray(left) || !Array.isArray(right))
+        return false;
+    if (left.length !== right.length)
+        return false;
+    for (let index = 0; index < left.length; index += 1) {
+        if (!areSnapshotArrayItemsEqual(left[index], right[index]))
+            return false;
+    }
+    return true;
+}
+function sanitizeSpermList(value) {
+    if (!Array.isArray(value))
+        return null;
+    const result = value
+        .filter((item) => item && typeof item === 'object')
+        .map((item) => {
+        const next = {
+            male: sanitizeString(item.male) ?? null,
+            race: sanitizeString(item.race) ?? null,
+            derivedType: sanitizeString(item.derivedType) ?? null,
+            value: sanitizeInteger(item.value, { min: 0, max: 9999 }) ?? 0,
+        };
+        return next;
+    });
+    return result;
+}
+function sanitizeFetusList(value) {
+    if (!Array.isArray(value))
+        return null;
+    return value
+        .filter((item) => item && typeof item === 'object')
+        .map((item) => {
+        const fetus = {};
+        const stringFields = ['fathers', 'provider', 'race', 'fatherRace', 'gender', 'embryoType', 'fatherDerivedType'];
+        for (const field of stringFields) {
+            const next = sanitizeString(item[field]);
+            if (next !== undefined)
+                fetus[field] = next;
+        }
+        const embryoId = sanitizeInteger(item.embryoId, { min: 1, max: 999999 });
+        if (embryoId !== null)
+            fetus.embryoId = embryoId;
+        fetus.fusionCheckedWith = Array.isArray(item.fusionCheckedWith)
+            ? [...new Set(item.fusionCheckedWith
+                    .map((value) => sanitizeInteger(value, { min: 1, max: 999999 }))
+                    .filter((value) => value !== null))]
+            : [];
+        fetus.providerSources = Array.isArray(item.providerSources)
+            ? [...new Set(item.providerSources.map(sanitizeString).filter(Boolean))]
+            : [];
+        if (item.chimera && typeof item.chimera === 'object' && !Array.isArray(item.chimera)) {
+            fetus.chimera = {
+                sourceCount: sanitizeInteger(item.chimera.sourceCount, { min: 2, max: 50 }) ?? 2,
+                fatherSources: Array.isArray(item.chimera.fatherSources)
+                    ? [...new Set(item.chimera.fatherSources.map(sanitizeString).filter(Boolean))]
+                    : [],
+                maternalSources: Array.isArray(item.chimera.maternalSources)
+                    ? [...new Set(item.chimera.maternalSources.map(sanitizeString).filter(Boolean))]
+                    : [],
+                genderSources: Array.isArray(item.chimera.genderSources)
+                    ? item.chimera.genderSources.map(sanitizeString).filter(Boolean)
+                    : [],
+            };
+        }
+        const numberFields = {
+            weight: { min: 0.33, max: 3.0 },
+            tendencyAngle: { min: 0, max: 360 },
+            affinity: { min: -50, max: 50 },
+            maternalDerivedTypeProgress: { min: -100, max: 100 },
+        };
+        for (const [field, rule] of Object.entries(numberFields)) {
+            if (item[field] === undefined)
+                continue;
+            const next = sanitizeNumber(item[field], rule);
+            if (next !== null)
+                fetus[field] = next;
+        }
+        fetus.talents = normalizeTalentList(item.talents ?? item.inheritedTalents);
+        return fetus;
+    });
+}
+function sanitizeChildrenList(value) {
+    if (!Array.isArray(value))
+        return null;
+    return value
+        .filter((item) => item && typeof item === 'object')
+        .map((item) => ({
+        name: sanitizeString(item.name) ?? null,
+        fathers: sanitizeString(item.fathers) ?? null,
+        // 代孕／寄生的归属标记；沿用 fetus 的同名语义
+        provider: sanitizeString(item.provider) ?? null,
+        providerSources: Array.isArray(item.providerSources)
+            ? [...new Set(item.providerSources.map(sanitizeString).filter(Boolean))]
+            : [],
+        chimera: item.chimera && typeof item.chimera === 'object' && !Array.isArray(item.chimera)
+            ? {
+                sourceCount: sanitizeInteger(item.chimera.sourceCount, { min: 2, max: 50 }) ?? 2,
+                fatherSources: Array.isArray(item.chimera.fatherSources)
+                    ? [...new Set(item.chimera.fatherSources.map(sanitizeString).filter(Boolean))]
+                    : [],
+                maternalSources: Array.isArray(item.chimera.maternalSources)
+                    ? [...new Set(item.chimera.maternalSources.map(sanitizeString).filter(Boolean))]
+                    : [],
+                genderSources: Array.isArray(item.chimera.genderSources)
+                    ? item.chimera.genderSources.map(sanitizeString).filter(Boolean)
+                    : [],
+            }
+            : null,
+        gender: sanitizeString(item.gender) ?? null,
+        race: sanitizeString(item.race) ?? null,
+        derivedType: sanitizeString(item.derivedType) ?? null,
+        age: sanitizeNumber(item.age, { min: 0, max: 9999 }) ?? null,
+        birthWeightRatio: sanitizeNumber(item.birthWeightRatio, { min: 0.33, max: 3.0 }) ?? null,
+        birthAffinity: sanitizeNumber(item.birthAffinity, { min: -50, max: 50 }) ?? null,
+        registeredAs: sanitizeString(item.registeredAs) ?? null,
+        talents: normalizeTalentList(item.talents ?? item.inheritedTalents),
+    }));
+}
+function sanitizeProfilePatch(profilePatch) {
+    if (!profilePatch || typeof profilePatch !== 'object' || Array.isArray(profilePatch))
+        return null;
+    const cooldown = sanitizeObjectPatch(profilePatch.cooldown, ['orgasmOvulationUsed', 'pregnancyPressureWarning', 'psychologyUpdateUsed', 'maternalFetalInteractionUsed'], {
+        orgasmOvulationUsed: (value) => Boolean(value),
+        pregnancyPressureWarning: (value) => Boolean(value),
+        psychologyUpdateUsed: (value) => Boolean(value),
+        maternalFetalInteractionUsed: (value) => Boolean(value),
+    });
+    const base = sanitizeObjectPatch(profilePatch.base, [
+        'isHere',
+        'days',
+        'fertilizationDays',
+        'latestSexDays',
+        'age',
+        'stage',
+        'race',
+        'derivedType',
+        'sperms',
+        'eggs',
+        'libido',
+        'uterinePressure',
+        'vitality',
+        'psyStress',
+        'vitalityLevel',
+        'psyStressLevel',
+    ], {
+        isHere: (value) => Boolean(value),
+        days: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
+        fertilizationDays: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
+        latestSexDays: (value) => sanitizeInteger(value, { min: -1, max: 9999 }),
+        age: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
+        stage: sanitizeString,
+        race: sanitizeString,
+        derivedType: sanitizeString,
+        sperms: sanitizeSpermList,
+        eggs: (value) => sanitizeInteger(value, { min: 0, max: 999 }),
+        libido: (value) => sanitizeInteger(value, { min: 0, max: 150 }),
+        uterinePressure: (value) => sanitizeInteger(value, { min: 0, max: 150 }),
+        vitality: (value) => sanitizeInteger(value, { min: 0, max: 200 }),
+        psyStress: (value) => sanitizeInteger(value, { min: 0, max: 200 }),
+        vitalityLevel: (value) => clampLevel(value),
+        psyStressLevel: (value) => clampLevel(value),
+    });
+    const pregnant = sanitizeObjectPatch(profilePatch.pregnant, ['pregnantDays', 'effectivePregnantDays', 'laborHours', 'effectiveLaborHours', 'laborPhase', 'laborFetusIndex', 'laborPain', 'prodromalOriginStage', 'prodromalRemainingHours', 'prodromalDelayProgressHours', 'fetusesCount', 'fetalEnergyDrain', 'nutrition', 'symptomReliefPending', 'blockage', 'acceleration', 'expansion', 'fetuses'], {
+        pregnantDays: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
+        effectivePregnantDays: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
+        laborHours: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
+        effectiveLaborHours: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
+        laborPhase: sanitizeString,
+        laborFetusIndex: (value) => sanitizeInteger(value, { min: 0, max: 99 }),
+        laborPain: (value) => sanitizeNumber(value, { min: 0, max: 10 }),
+        prodromalOriginStage: sanitizeString,
+        prodromalRemainingHours: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
+        prodromalDelayProgressHours: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
+        fetusesCount: (value) => sanitizeInteger(value, { min: 0, max: 99 }),
+        fetalEnergyDrain: (value) => sanitizeNumber(value, { min: 0, max: 9999 }),
+        nutrition: (value) => sanitizeNumber(value, { min: -999, max: 999 }),
+        symptomReliefPending: (value) => sanitizeInteger(value, { min: 0, max: 999 }),
+        blockage: sanitizePregnancyBlockage,
+        acceleration: sanitizePregnancyBlockage,
+        expansion: sanitizePregnancyBlockage,
+        fetuses: sanitizeFetusList,
+    });
+    const experience = sanitizeObjectPatch(profilePatch.experience, [
+        'virginity',
+        'latestSexPartner',
+        'emotionalMate',
+        'marriageMate',
+        'pregnantExperience',
+        'naturalBirthExperience',
+        'surgicalBirthExperience',
+        'miscarriageExperience',
+    ], {
+        virginity: sanitizeString,
+        latestSexPartner: sanitizeString,
+        emotionalMate: sanitizeString,
+        marriageMate: sanitizeString,
+        pregnantExperience: (value) => sanitizeInteger(value, { min: 0, max: 999 }),
+        naturalBirthExperience: (value) => sanitizeInteger(value, { min: 0, max: 999 }),
+        surgicalBirthExperience: (value) => sanitizeInteger(value, { min: 0, max: 999 }),
+        miscarriageExperience: (value) => sanitizeInteger(value, { min: 0, max: 999 }),
+    });
+    const children = sanitizeChildrenList(profilePatch.children);
+    const skills = normalizeSkillList(profilePatch.skills);
+    const talents = normalizeTalentList(profilePatch.talents);
+    const skillHistory = normalizeSkillHistory(profilePatch.skillHistory);
+    const bio = sanitizeObjectPatch(profilePatch.bio, [
+        'menstrualLengthRatio',
+        'gestationSpeciesSpeed',
+        'gestationEffectiveSpeed',
+        'gestationModifierMultiplier',
+        'gestationModifierName',
+        'gestationModifierDescription',
+        'birthDifficulty',
+        'breedTolerance',
+        'impregnationDifficulty',
+        'orgasmOvulationAmount',
+        'identicalProbability',
+        'recoveryDays',
+    ], {
+        menstrualLengthRatio: (value) => sanitizeNumber(value, { min: 0.1, max: 20 }),
+        gestationSpeciesSpeed: (value) => sanitizeNumber(value, { min: 0.1, max: 20 }),
+        gestationEffectiveSpeed: (value) => sanitizeNumber(value, { min: 0.1, max: 20 }),
+        gestationModifierMultiplier: (value) => sanitizeNumber(value, { min: 0, max: 20 }),
+        gestationModifierName: sanitizeString,
+        gestationModifierDescription: sanitizeString,
+        birthDifficulty: (value) => sanitizeNumber(value, { min: 0, max: 100 }),
+        breedTolerance: (value) => sanitizeNumber(value, { min: 0, max: 100 }),
+        impregnationDifficulty: (value) => sanitizeNumber(value, { min: 0, max: 100 }),
+        orgasmOvulationAmount: (value) => sanitizeInteger(value, { min: 0, max: 100 }),
+        identicalProbability: (value) => sanitizeNumber(value, { min: 0, max: 100 }),
+        recoveryDays: (value) => sanitizeInteger(value, { min: 0, max: 9999 }),
+    });
+    const mens = normalizePsychologyGroup(profilePatch.psychology?.mens, PSY_MENS_FIELDS, {
+        includeDefaults: false,
+        booleanFields: PSY_MENS_BOOL_FIELDS,
+    });
+    const pregPsy = normalizePsychologyGroup(profilePatch.psychology?.preg, PSY_PREG_FIELDS, {
+        includeDefaults: false,
+        booleanFields: PSY_PREG_BOOL_FIELDS,
+    });
+    const metabolism = sanitizeObjectPatch(profilePatch.metabolism, ['excretion', 'hunger', 'sleep', 'flux', 'milk', 'odor', 'companionship'], {
+        excretion: (value) => sanitizeInteger(value, { min: 0, max: 200 }),
+        hunger: (value) => sanitizeInteger(value, { min: 0, max: 200 }),
+        sleep: (value) => sanitizeInteger(value, { min: 0, max: 200 }),
+        flux: (value) => sanitizeInteger(value, { min: -200, max: 200 }),
+        milk: (value) => sanitizeInteger(value, { min: 0, max: 200 }),
+        odor: (value) => sanitizeInteger(value, { min: 0, max: 200 }),
+        companionship: (value) => sanitizeInteger(value, { min: 0, max: 200 }),
+    });
+    const descriptions = sanitizeObjectPatch(profilePatch.descriptions, ['normalDescription', 'pregnantDescription'], {
+        normalDescription: sanitizeString,
+        pregnantDescription: sanitizeString,
+    });
+    const notify = sanitizeObjectPatch(profilePatch.notify, ['firstly', 'secondly', 'thirdly'], {
+        firstly: sanitizeString,
+        secondly: sanitizeString,
+        thirdly: sanitizeString,
+    });
+    const immune = sanitizeObjectPatch(profilePatch.immune, ['metabolism', 'miscarriage', 'realisticLabor'], {
+        metabolism: (value) => Boolean(value),
+        miscarriage: (value) => Boolean(value),
+        realisticLabor: (value) => Boolean(value),
+    });
+    const result = {};
+    if (cooldown)
+        result.cooldown = cooldown;
+    if (base)
+        result.base = base;
+    if (pregnant) {
+        if (pregnant.fetuses && pregnant.fetusesCount === undefined)
+            pregnant.fetusesCount = pregnant.fetuses.length;
+        result.pregnant = pregnant;
+    }
+    if (experience)
+        result.experience = experience;
+    if (children)
+        result.children = children;
+    if (profilePatch.skills !== undefined)
+        result.skills = skills;
+    if (profilePatch.talents !== undefined)
+        result.talents = talents;
+    if (profilePatch.skillHistory !== undefined)
+        result.skillHistory = skillHistory;
+    if (bio)
+        result.bio = bio;
+    if (mens || pregPsy)
+        result.psychology = {};
+    if (mens)
+        result.psychology.mens = mens;
+    if (pregPsy)
+        result.psychology.preg = pregPsy;
+    if (metabolism)
+        result.metabolism = metabolism;
+    if (profilePatch.wardrobe)
+        result.wardrobe = normalizeWardrobeState(profilePatch.wardrobe);
+    if (profilePatch.outfit && (result.wardrobe?.enabled || profilePatch.wardrobe?.enabled)) {
+        result.outfit = normalizeOutfitState(profilePatch.outfit, result.wardrobe || profilePatch.wardrobe);
+    }
+    if (descriptions)
+        result.descriptions = descriptions;
+    if (notify)
+        result.notify = notify;
+    if (immune)
+        result.immune = immune;
+    return Object.keys(result).length > 0 ? result : null;
+}
+function createEmptyChatState() {
+    return {
+        lastAttemptedSignature: '',
+        lastProcessedSignature: '',
+        lastFailedSignature: '',
+        // 失败当下「整段对话」的签名，用来判断是否该挡下自动重试
+        lastFailedChatSignature: '',
+        lastRunAt: 0,
+        sceneSummary: '',
+        minutesPassed: 0,
+        skillCatalog: [],
+        nextSkillId: 1,
+        characters: {},
+        lastRawResult: null,
+        lastOperationLogs: [],
+        snapshots: [],
+    };
+}
+function createDefaultFemaleState(name = '') {
+    const vitalityLevel = 4;
+    const psyStressLevel = 4;
+    const character = {
+        name: String(name || '').trim(),
+        initialized: false,
+        profile: {
+            cooldown: {
+                orgasmOvulationUsed: false,
+                pregnancyPressureWarning: false,
+                psychologyUpdateUsed: false,
+                maternalFetalInteractionUsed: false,
+            },
+            base: {
+                isHere: true,
+                days: 0,
+                fertilizationDays: 0,
+                latestSexDays: null,
+                age: 15,
+                stage: null,
+                race: '人类',
+                derivedType: null,
+                sperms: [],
+                eggs: 0,
+                libido: 0,
+                uterinePressure: 0,
+                vitality: getVitalityInitByLevel(vitalityLevel),
+                psyStress: getPsyStressInitByLevel(psyStressLevel),
+                vitalityLevel,
+                psyStressLevel,
+            },
+            pregnant: {
+                pregnantDays: 0,
+                effectivePregnantDays: 0,
+                laborHours: 0,
+                effectiveLaborHours: 0,
+                laborPhase: null,
+                laborFetusIndex: 0,
+                laborPain: 0,
+                prodromalOriginStage: null,
+                prodromalRemainingHours: 0,
+                prodromalDelayProgressHours: 0,
+                fetusesCount: 0,
+                fetalEnergyDrain: 0,
+                amnionDurability: 0,
+                nutrition: 0,
+                symptomReliefPending: 0,
+                blockage: null,
+                acceleration: null,
+                expansion: null,
+                fetuses: [],
+            },
+            experience: {
+                virginity: null,
+                latestSexPartner: null,
+                emotionalMate: null,
+                marriageMate: null,
+                pregnantExperience: 0,
+                naturalBirthExperience: 0,
+                surgicalBirthExperience: 0,
+                miscarriageExperience: 0,
+            },
+            psychology: {
+                mens: buildEmptyPsychologyGroup(PSY_MENS_FIELDS, PSY_MENS_BOOL_FIELDS),
+                preg: buildEmptyPsychologyGroup(PSY_PREG_FIELDS, PSY_PREG_BOOL_FIELDS),
+                stageProfiles: {},
+            },
+            children: [],
+            skills: [],
+            talents: [],
+            skillHistory: [],
+            diary: [],
+            bio: {
+                menstrualLengthRatio: 1.0,
+                gestationSpeciesSpeed: 1.0,
+                gestationEffectiveSpeed: 1.0,
+                gestationModifierMultiplier: 1.0,
+                gestationModifierName: '',
+                gestationModifierDescription: '',
+                birthDifficulty: 1.0,
+                breedTolerance: 1.0,
+                impregnationDifficulty: 1.0,
+                orgasmOvulationAmount: 1,
+                identicalProbability: 5,
+                recoveryDays: 56,
+            },
+            metabolism: {
+                excretion: 0,
+                hunger: 0,
+                sleep: 0,
+                milk: 0,
+                odor: 0,
+                companionship: 0,
+                flux: 0,
+            },
+            descriptions: {
+                normalDescription: '',
+                pregnantDescription: '',
+            },
+            notify: {
+                firstly: '',
+                secondly: '',
+                thirdly: '',
+            },
+            immune: {
+                metabolism: false,
+                miscarriage: false,
+                realisticLabor: false,
+            },
+        },
+    };
+    return syncCharacterStageFromProfile(normalizeCharacterPsychologyState(character));
+}
+function getSettings(ctx) {
+    const root = getHostExtensionSettings(ctx);
+    if (!root)
+        throw new Error('[BS BioTracker] host extension settings are unavailable');
+    let shouldSave = false;
+    if (!root[MODULE_NAME])
+        root[MODULE_NAME] = cloneValue(DEFAULT_SETTINGS);
+    const settings = root[MODULE_NAME];
+    const useHostChatStore = ['tauritavern', 'luker'].includes(getHostKind());
+    if (useHostChatStore) {
+        const descriptor = Object.getOwnPropertyDescriptor(settings, 'chatStates');
+        const runtimeChatStates = descriptor && descriptor.enumerable === false && settings.chatStates && typeof settings.chatStates === 'object'
+            ? settings.chatStates
+            : {};
+        if (descriptor)
+            delete settings.chatStates;
+        Object.defineProperty(settings, 'chatStates', {
+            value: runtimeChatStates,
+            writable: true,
+            configurable: true,
+            enumerable: false,
+        });
+        if (!descriptor || descriptor.enumerable !== false)
+            shouldSave = true;
+    }
+    for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
+        if (useHostChatStore && key === 'chatStates')
+            continue;
+        if (settings[key] === undefined) {
+            settings[key] = cloneValue(value);
+            shouldSave = true;
+        }
+    }
+    if (!settings.chatStates || typeof settings.chatStates !== 'object') {
+        settings.chatStates = {};
+        shouldSave = true;
+    }
+    if (!Array.isArray(settings.modelOptions)) {
+        settings.modelOptions = [];
+        shouldSave = true;
+    }
+    if (!String(settings.diaryWritingPrompt || '').trim()) {
+        settings.diaryWritingPrompt = DEFAULT_DIARY_WRITING_PROMPT;
+        shouldSave = true;
+    }
+    const rawWardrobePrepMainCount = Number(settings.wardrobePrepMainCount);
+    const wardrobePrepMainCount = Math.max(1, Math.min(12, Math.floor(Number.isFinite(rawWardrobePrepMainCount) ? rawWardrobePrepMainCount : DEFAULT_SETTINGS.wardrobePrepMainCount)));
+    if (settings.wardrobePrepMainCount !== wardrobePrepMainCount) {
+        settings.wardrobePrepMainCount = wardrobePrepMainCount;
+        shouldSave = true;
+    }
+    const rawWardrobePrepAccessoryCount = Number(settings.wardrobePrepAccessoryCount);
+    const wardrobePrepAccessoryCount = Math.max(0, Math.min(12, Math.floor(Number.isFinite(rawWardrobePrepAccessoryCount) ? rawWardrobePrepAccessoryCount : DEFAULT_SETTINGS.wardrobePrepAccessoryCount)));
+    if (settings.wardrobePrepAccessoryCount !== wardrobePrepAccessoryCount) {
+        settings.wardrobePrepAccessoryCount = wardrobePrepAccessoryCount;
+        shouldSave = true;
+    }
+    const rawDiaryRecentLimit = Number(settings.diaryRecentLimit);
+    const diaryRecentLimit = Math.max(0, Math.min(20, Math.floor(Number.isFinite(rawDiaryRecentLimit) ? rawDiaryRecentLimit : DEFAULT_SETTINGS.diaryRecentLimit)));
+    if (settings.diaryRecentLimit !== diaryRecentLimit) {
+        settings.diaryRecentLimit = diaryRecentLimit;
+        shouldSave = true;
+    }
+    const rawApiTimeoutMs = Number(settings.apiTimeoutMs);
+    const apiTimeoutMs = !Number.isFinite(rawApiTimeoutMs)
+        ? DEFAULT_SETTINGS.apiTimeoutMs
+        : (rawApiTimeoutMs <= 0 ? 0 : Math.max(1000, Math.min(1800000, Math.floor(rawApiTimeoutMs))));
+    if (settings.apiTimeoutMs !== apiTimeoutMs) {
+        settings.apiTimeoutMs = apiTimeoutMs;
+        shouldSave = true;
+    }
+    const rawTrackerTokenBudget = Number(settings.trackerTokenBudget);
+    const trackerTokenBudget = Math.max(500, Math.min(100000, Math.floor(Number.isFinite(rawTrackerTokenBudget) ? rawTrackerTokenBudget : DEFAULT_SETTINGS.trackerTokenBudget)));
+    if (settings.trackerTokenBudget !== trackerTokenBudget) {
+        settings.trackerTokenBudget = trackerTokenBudget;
+        shouldSave = true;
+    }
+    const requireFullDescriptionUpdates = settings.requireFullDescriptionUpdates === true;
+    if (settings.requireFullDescriptionUpdates !== requireFullDescriptionUpdates) {
+        settings.requireFullDescriptionUpdates = requireFullDescriptionUpdates;
+        shouldSave = true;
+    }
+    const lukerMultiAgentManualOnly = settings.lukerMultiAgentManualOnly !== false;
+    if (settings.lukerMultiAgentManualOnly !== lukerMultiAgentManualOnly) {
+        settings.lukerMultiAgentManualOnly = lukerMultiAgentManualOnly;
+        shouldSave = true;
+    }
+    if (!settings.registryDescriptionGuides || typeof settings.registryDescriptionGuides !== 'object') {
+        settings.registryDescriptionGuides = cloneValue(DEFAULT_REGISTRY_DESCRIPTION_GUIDES);
+        shouldSave = true;
+    }
+    else {
+        const existingGuides = { ...settings.registryDescriptionGuides };
+        delete existingGuides['close' + 'upDescription'];
+        const mergedGuides = {
+            ...cloneValue(DEFAULT_REGISTRY_DESCRIPTION_GUIDES),
+            ...existingGuides,
+        };
+        if (JSON.stringify(mergedGuides) !== JSON.stringify(settings.registryDescriptionGuides))
+            shouldSave = true;
+        settings.registryDescriptionGuides = mergedGuides;
+    }
+    if (shouldSave)
+        saveHostSettings(ctx);
+    return settings;
+}
+function saveSettings(ctx) {
+    saveHostSettings(ctx);
+    const root = getHostExtensionSettings(ctx);
+    const chatState = root?.[MODULE_NAME]?.chatStates?.[getChatKey(ctx)];
+    if (chatState)
+        scheduleHostChatStateSave(ctx, chatState);
+}
+async function hydrateChatStateFromHost(ctx, settings) {
+    if (!settings?.chatStates || typeof settings.chatStates !== 'object')
+        return false;
+    const initialKey = await resolveHostChatId(ctx);
+    const localState = settings.chatStates[initialKey];
+    if (localState && !isChatStateEffectivelyEmpty(localState))
+        return false;
+    const storedState = await loadHostChatState(ctx);
+    if (!storedState || isChatStateEffectivelyEmpty(storedState))
+        return false;
+    // 载入过程本身可能才等到宿主句柄就绪，这时稳定 id 才算得出来。
+    // 必须用最终的 key 落盘：否则资料会留在 fallback key 下，
+    // 而面板之后是用稳定 id 去读的，等于载入了却还是显示「没有注册角色」。
+    const chatKey = await resolveHostChatId(ctx);
+    settings.chatStates[chatKey] = storedState;
+    saveHostSettings(ctx);
+    return true;
+}
+function getChatKey(ctx) {
+    return getHostChatId(ctx);
+}
+function getChatState(ctx, settings) {
+    const chatKey = getChatKey(ctx);
+    if (!settings.chatStates[chatKey])
+        settings.chatStates[chatKey] = createEmptyChatState();
+    const chatState = settings.chatStates[chatKey];
+    let shouldSave = false;
+    const normalizedSkillCatalog = normalizeSkillCatalog(chatState.skillCatalog);
+    if (JSON.stringify(chatState.skillCatalog || []) !== JSON.stringify(normalizedSkillCatalog))
+        shouldSave = true;
+    chatState.skillCatalog = normalizedSkillCatalog;
+    const normalizedNextSkillId = normalizeNextSkillId(chatState.skillCatalog, chatState.nextSkillId);
+    if (chatState.nextSkillId !== normalizedNextSkillId)
+        shouldSave = true;
+    chatState.nextSkillId = normalizedNextSkillId;
+    if (!Array.isArray(chatState.snapshots))
+        chatState.snapshots = [];
+    if (!Array.isArray(chatState.lastOperationLogs))
+        chatState.lastOperationLogs = [];
+    const sanitizedCurrentPayload = sanitizeSnapshotPayload(chatState);
+    if (chatState.lastAttemptedSignature !== sanitizedCurrentPayload.lastAttemptedSignature
+        || chatState.lastProcessedSignature !== sanitizedCurrentPayload.lastProcessedSignature
+        || JSON.stringify(chatState.lastRawResult || null) !== JSON.stringify(sanitizedCurrentPayload.lastRawResult || null)
+        || JSON.stringify(chatState.lastOperationLogs || []) !== JSON.stringify(sanitizedCurrentPayload.lastOperationLogs || [])) {
+        chatState.lastAttemptedSignature = sanitizedCurrentPayload.lastAttemptedSignature;
+        chatState.lastProcessedSignature = sanitizedCurrentPayload.lastProcessedSignature;
+        chatState.lastRawResult = sanitizedCurrentPayload.lastRawResult;
+        chatState.lastOperationLogs = sanitizedCurrentPayload.lastOperationLogs;
+        shouldSave = true;
+    }
+    if (compactChatStateSnapshots(chatState))
+        shouldSave = true;
+    if (chatState.snapshots.length > MAX_CHAT_STATE_SNAPSHOTS) {
+        trimChatStateSnapshots(chatState);
+        shouldSave = true;
+    }
+    if (needsRepackChatStateSnapshots(chatState) && repackChatStateSnapshots(chatState))
+        shouldSave = true;
+    if (shouldSave)
+        saveSettings(ctx);
+    const canRestoreSnapshot = getHostKind() !== 'tauritavern' || hasAbsoluteHostChatView(ctx);
+    const latestSnapshot = canRestoreSnapshot ? getLatestMatchingSnapshot(ctx, chatState) : null;
+    if (latestSnapshot) {
+        const latestSnapshotKey = getSnapshotRuntimeKey(latestSnapshot);
+        if (chatState[RESTORED_SNAPSHOT_RUNTIME_KEY] !== latestSnapshotKey) {
+            restoreChatStateFromSnapshot(chatState, latestSnapshot);
+            markRestoredSnapshot(chatState, latestSnapshot);
+        }
+    }
+    const characters = chatState.characters;
+    if (characters && typeof characters === 'object') {
+        for (const item of Object.values(characters)) {
+            normalizeCharacterPsychologyState(item);
+            if (item?.profile && !Array.isArray(item.profile.diary))
+                item.profile.diary = [];
+        }
+    }
+    return chatState;
+}
+function isChatStateEffectivelyEmpty(chatState) {
+    if (!chatState || typeof chatState !== 'object')
+        return true;
+    const hasCharacters = Object.keys(chatState.characters || {}).length > 0;
+    const hasSkillCatalog = Array.isArray(chatState.skillCatalog) && chatState.skillCatalog.length > 0;
+    const hasConsumedSkillIds = Number(chatState.nextSkillId) > 1;
+    const hasSnapshots = Array.isArray(chatState.snapshots) && chatState.snapshots.length > 0;
+    const hasSceneSummary = Boolean(String(chatState.sceneSummary || '').trim());
+    const hasMinutesPassed = Number(chatState.minutesPassed) > 0;
+    return !(hasCharacters || hasSkillCatalog || hasConsumedSkillIds || hasSnapshots || hasSceneSummary || hasMinutesPassed);
+}
+function inheritChatStateFromMatchingChat(ctx, settings) {
+    const chatKey = getChatKey(ctx);
+    const currentChat = getHostChat(ctx);
+    if (!chatKey || currentChat.length === 0)
+        return { inherited: false, reason: 'empty_chat' };
+    if (currentChat.length < MIN_CHAT_INHERIT_MESSAGE_COUNT)
+        return { inherited: false, reason: 'chat_too_short' };
+    if (!settings.chatStates || typeof settings.chatStates !== 'object')
+        settings.chatStates = {};
+    if (!settings.chatStates[chatKey])
+        settings.chatStates[chatKey] = createEmptyChatState();
+    const currentState = settings.chatStates[chatKey];
+    if (!isChatStateEffectivelyEmpty(currentState))
+        return { inherited: false, reason: 'state_exists' };
+    const currentMessageCount = currentChat.length;
+    const digestCache = new Map();
+    const getDigestForCount = (count) => {
+        if (!digestCache.has(count))
+            digestCache.set(count, buildMessageDigest(ctx, count));
+        return digestCache.get(count);
+    };
+    let bestMatch = null;
+    for (const [candidateKey, candidateState] of Object.entries(settings.chatStates)) {
+        if (candidateKey === chatKey || !candidateState || typeof candidateState !== 'object')
+            continue;
+        compactChatStateSnapshots(candidateState);
+        const candidateSnapshots = Array.isArray(candidateState.snapshots) ? candidateState.snapshots : [];
+        for (const snapshot of candidateSnapshots) {
+            const count = Number.isInteger(snapshot?.messageCount) ? snapshot.messageCount : 0;
+            if (count <= 0 || count !== currentMessageCount)
+                continue;
+            if (String(snapshot?.messageDigest || '') !== getDigestForCount(count))
+                continue;
+            if (!bestMatch || count > bestMatch.count || (count === bestMatch.count && (snapshot.createdAt || 0) > (bestMatch.snapshot?.createdAt || 0))) {
+                bestMatch = { candidateKey, candidateState, snapshot, count };
+            }
+        }
+    }
+    if (!bestMatch?.snapshot)
+        return { inherited: false, reason: 'no_matching_snapshot' };
+    const inheritedSnapshots = (Array.isArray(bestMatch.candidateState.snapshots) ? bestMatch.candidateState.snapshots : [])
+        .filter((snapshot) => {
+        const count = Number.isInteger(snapshot?.messageCount) ? snapshot.messageCount : 0;
+        if (count <= 0 || count > currentMessageCount)
+            return false;
+        return String(snapshot?.messageDigest || '') === getDigestForCount(count);
+    })
+        .map((snapshot) => cloneValue(snapshot));
+    currentState.snapshots = inheritedSnapshots;
+    trimChatStateSnapshots(currentState);
+    restoreChatStateFromSnapshot(currentState, bestMatch.snapshot);
+    return {
+        inherited: true,
+        fromChatKey: bestMatch.candidateKey,
+        messageCount: bestMatch.count,
+    };
+}
+function hasWorldBookEntries(value) {
+    if (!value || typeof value !== 'object')
+        return false;
+    if (Array.isArray(value))
+        return value.length > 0;
+    if (Array.isArray(value.entries))
+        return value.entries.length > 0;
+    return Boolean(value.entries && typeof value.entries === 'object' && Object.keys(value.entries).length > 0);
+}
+function getCharacterCard(ctx) {
+    const card = getResolvedCharacter(ctx)?.card;
+    if (!card)
+        return {};
+    return {
+        name: card.name || '',
+        description: card.description || '',
+        personality: card.personality || '',
+        scenario: card.scenario || '',
+        first_mes: card.first_mes || '',
+        mes_example: card.mes_example || '',
+        worldBook: hasWorldBookEntries(card.worldBook) ? card.worldBook : null,
+    };
+}
+function getCharacterWorldBookName(ctx) {
+    const card = getResolvedCharacter(ctx)?.card;
+    if (!card || typeof card !== 'object')
+        return '';
+    return pickFirstString(card, [
+        'data.extensions.world',
+        'data.extensions.worldbook',
+        'extensions.world',
+        'extensions.worldbook',
+        'world',
+        'character_book',
+        'worldBook.name',
+    ]);
+}
+/**
+ * 清洗世界书条目显示名。
+ * 数据库 skill 化后 comment 常变成「条目名\n\n<!-- ACU_SKILL_META_START ... -->」；
+ * 若直接用整段 comment，排除名单按行拆分会把名字拆碎，导致勾选后匹配失败。
+ */
+function sanitizeWorldbookEntryDisplayName(value) {
+    let text = String(value ?? '');
+    if (!text)
+        return '';
+    text = text.replace(/<!--[\s\S]*?-->/g, ' ');
+    text = text.replace(/ACU_SKILL_META_(?:START|END)/gi, ' ');
+    const firstLine = text
+        .split(/\r?\n+/)
+        .map((line) => line.trim())
+        .find((line) => line.length > 0);
+    return String(firstLine || '').trim();
+}
+function getWorldbookEntryDisplayName(entry) {
+    if (entry == null)
+        return '';
+    if (typeof entry === 'string' || typeof entry === 'number') {
+        return sanitizeWorldbookEntryDisplayName(entry);
+    }
+    if (typeof entry !== 'object')
+        return '';
+    const raw = entry.name || entry.comment || entry.title || entry.displayName || entry.uid || '';
+    return sanitizeWorldbookEntryDisplayName(raw);
+}
+/** 排除/白名单匹配：完整「书名 :: 条目名」或裸条目名任一命中即可 */
+function worldbookSelectionMatches(selectedSet, selectionName, entryName = '') {
+    if (!selectedSet || typeof selectedSet.has !== 'function')
+        return false;
+    const full = String(selectionName || '').trim();
+    const bare = String(entryName || '').trim();
+    if (full && selectedSet.has(full))
+        return true;
+    if (bare && selectedSet.has(bare))
+        return true;
+    if (full.includes(' :: ')) {
+        const onlyEntry = full.split(' :: ').slice(1).join(' :: ').trim();
+        if (onlyEntry && selectedSet.has(onlyEntry))
+            return true;
+    }
+    return false;
+}
+function getCharacterAvatarBaseName(ctx) {
+    const card = getResolvedCharacter(ctx)?.card;
+    if (!card || typeof card !== 'object')
+        return '';
+    const avatar = pickFirstString(card, ['avatar', 'data.avatar', 'img', 'filename']);
+    if (avatar)
+        return avatar.replace(/\.[^/.]+$/, '').trim();
+    return String(card.name || '').trim();
+}
+function getResolvedCharacter(ctx) {
+    const characters = getHostCharacters(ctx);
+    const directId = Number.isInteger(ctx?.characterId) ? ctx.characterId : null;
+    if (directId !== null && characters[directId]) {
+        return { id: directId, card: characters[directId], source: 'characterId' };
+    }
+    const assistantMessages = getHostChat(ctx)
+        .filter((message) => message && !message.is_user && !message.is_system)
+        .slice()
+        .reverse();
+    const preferredNames = [];
+    for (const message of assistantMessages) {
+        const name = String(message?.name || '').trim();
+        if (name && !preferredNames.includes(name))
+            preferredNames.push(name);
+    }
+    const fallbackName = String(ctx?.name2 || '').trim();
+    if (fallbackName && !preferredNames.includes(fallbackName))
+        preferredNames.push(fallbackName);
+    for (const targetName of preferredNames) {
+        const matchedId = characters.findIndex((item) => String(item?.name || '').trim() === targetName);
+        if (matchedId >= 0) {
+            return { id: matchedId, card: characters[matchedId], source: 'chatName' };
+        }
+    }
+    return { id: null, card: null, source: 'none' };
+}
+async function getCharacterWorldBookNameViaSTscript() {
+    if (typeof globalThis.STscript !== 'function')
+        return '';
+    try {
+        const result = await globalThis.STscript('/getcharbook');
+        const name = String(result?.pipe ?? result ?? '').trim();
+        return name;
+    }
+    catch (error) {
+        console.warn('[BS BioTracker] /getcharbook failed', error);
+        return '';
+    }
+}
+async function getWorldInfoModule() {
+    if (globalThis.__bsBtWorldInfoModuleOverride__ !== undefined)
+        return globalThis.__bsBtWorldInfoModuleOverride__;
+    if (!worldInfoModulePromise) {
+        const moduleUrl = new URL('../../../../world-info.js', import.meta.url).href;
+        worldInfoModulePromise = import(moduleUrl).catch((error) => {
+            console.warn('[BS BioTracker] import world-info module failed', error);
+            return null;
+        });
+    }
+    return worldInfoModulePromise;
+}
+function pushWorldBookNames(target, list) {
+    for (const item of Array.isArray(list) ? list : []) {
+        const name = String(item || '').trim();
+        if (name && !target.includes(name))
+            target.push(name);
+    }
+}
+/** 世界书设置对象的候选来源：正规扩展与酒馆助手 iframe 注入环境的布局都覆盖 */
+function collectWorldInfoRoots(worldInfoModule = null) {
+    const roots = [];
+    const pushRoot = (root) => {
+        if (root && typeof root === 'object' && !roots.includes(root))
+            roots.push(root);
+    };
+    pushRoot(worldInfoModule?.world_info);
+    try {
+        pushRoot(globalThis.world_info);
+    }
+    catch { }
+    try {
+        pushRoot(globalThis.world_info_settings?.world_info);
+    }
+    catch { }
+    try {
+        pushRoot(globalThis.power_user?.world_info);
+    }
+    catch { }
+    try {
+        const ctx = getHostContext();
+        pushRoot(ctx?.world_info);
+        pushRoot(ctx?.worldInfoSettings?.world_info);
+    }
+    catch { }
+    try {
+        const parentWin = globalThis.parent && globalThis.parent !== globalThis ? globalThis.parent : null;
+        if (parentWin) {
+            pushRoot(parentWin.world_info);
+            pushRoot(parentWin.world_info_settings?.world_info);
+        }
+    }
+    catch { }
+    return roots;
+}
+async function getActiveGlobalWorldBookNames() {
+    const names = [];
+    // 1) 经典 ST：world-info.js 模组的 selected_world_info（酒馆助手 iframe 注入时常 import 失败）
+    const worldInfoModule = await getWorldInfoModule();
+    pushWorldBookNames(names, worldInfoModule?.selected_world_info);
+    // 2) 运行时全局
+    try {
+        pushWorldBookNames(names, globalThis.selected_world_info);
+    }
+    catch { }
+    // 3) world_info.globalSelect（ST/TT 设置里的启用全域书）
+    for (const root of collectWorldInfoRoots(worldInfoModule)) {
+        pushWorldBookNames(names, root?.globalSelect);
+    }
+    // 4) 页面上的全域世界书多选框（若存在）
+    try {
+        const select = document.querySelector?.('#world_info');
+        if (select?.selectedOptions) {
+            pushWorldBookNames(names, Array.from(select.selectedOptions).map((option) => option.textContent || option.label || option.value));
+        }
+    }
+    catch { }
+    // 5) 酒馆助手 API
+    for (const fn of [globalThis.getLorebookSettings, globalThis.TavernHelper?.getLorebookSettings]) {
+        if (typeof fn !== 'function')
+            continue;
+        try {
+            const lorebookSettings = await Promise.resolve(fn());
+            pushWorldBookNames(names, lorebookSettings?.selected_global_lorebooks);
+            pushWorldBookNames(names, lorebookSettings?.selected_world_info);
+        }
+        catch { }
+    }
+    return names;
+}
+function matchCharLoreEntry(entry, avatarBaseName, cardName) {
+    if (!entry || typeof entry !== 'object')
+        return false;
+    const entryName = String(entry.name || '').trim();
+    if (!entryName)
+        return false;
+    const entryBaseName = entryName.replace(/\.[^/.]+$/, '');
+    if (avatarBaseName && (entryName === avatarBaseName || entryBaseName === avatarBaseName))
+        return true;
+    if (cardName && (entryName === cardName || entryBaseName === cardName))
+        return true;
+    return false;
+}
+/**
+ * 角色附加知识书（charLore / extraBooks）名称列表。
+ * 与主世界书 data.extensions.world 分开存储，旧版只读主书会漏掉。
+ */
+async function getCharacterAdditionalWorldBookNames(ctx) {
+    const names = [];
+    // 1) 酒馆助手 API（iframe 注入环境；可能为 async）
+    for (const fn of [globalThis.getCharLorebooks, globalThis.TavernHelper?.getCharLorebooks]) {
+        if (typeof fn !== 'function')
+            continue;
+        try {
+            const books = await Promise.resolve(fn({ type: 'all' }));
+            if (books && typeof books === 'object') {
+                pushWorldBookNames(names, books.additional);
+                pushWorldBookNames(names, books.extraBooks);
+            }
+        }
+        catch { }
+    }
+    // 2) world_info.charLore（world-info 模组与各运行时全局）
+    const worldInfoModule = await getWorldInfoModule();
+    const avatarBaseName = getCharacterAvatarBaseName(ctx);
+    const cardName = String(getResolvedCharacter(ctx)?.card?.name || '').trim();
+    for (const root of collectWorldInfoRoots(worldInfoModule)) {
+        if (!Array.isArray(root?.charLore))
+            continue;
+        const entry = root.charLore.find((item) => matchCharLoreEntry(item, avatarBaseName, cardName));
+        if (entry)
+            pushWorldBookNames(names, entry.extraBooks);
+    }
+    // 主世界书名不要混进附加列表
+    const primary = String(getCharacterWorldBookName(ctx) || '').trim();
+    return names.filter((name) => name && name !== primary);
+}
+/**
+ * 加载角色附加知识书，返回带 source 标记的书列表。
+ * filterBook 由调用方注入，避免 state ↔ registry/tracker 循环依赖。
+ */
+async function loadCharacterAdditionalWorldBooks(ctx, { loadBook, filterBook, recentMessages = [] } = {}) {
+    const names = await getCharacterAdditionalWorldBookNames(ctx);
+    if (!names.length)
+        return [];
+    const load = typeof loadBook === 'function' ? loadBook : async (name) => loadGlobalWorldBook(ctx, name);
+    const books = await Promise.all(names.map(async (name) => {
+        try {
+            let worldBook = await load(name);
+            if (!worldBook)
+                return null;
+            if (typeof filterBook === 'function')
+                worldBook = filterBook(worldBook, name, recentMessages);
+            if (!worldBook)
+                return null;
+            const hasEntries = (Array.isArray(worldBook.entries) && worldBook.entries.length > 0)
+                || (worldBook.entries && typeof worldBook.entries === 'object' && Object.keys(worldBook.entries).length > 0);
+            if (!hasEntries)
+                return null;
+            return { ...worldBook, name, source: 'character_additional' };
+        }
+        catch (error) {
+            console.warn(`[BS BioTracker] load character additional worldbook "${name}" failed`, error);
+            return null;
+        }
+    }));
+    return books.filter(Boolean);
+}
+async function loadGlobalWorldBook(ctx, name) {
+    const normalizedName = String(name || '').trim();
+    if (!normalizedName)
+        return null;
+    if (canLoadHostWorldInfo(ctx)) {
+        try {
+            return await loadHostWorldInfo(ctx, normalizedName);
+        }
+        catch (error) {
+            console.warn(`[BS BioTracker] load active global worldbook "${normalizedName}" failed`, error);
+        }
+    }
+    try {
+        const worldBook = await getHostWorldBook(normalizedName, 'global');
+        if (worldBook)
+            return worldBook;
+    }
+    catch (error) {
+        console.warn(`[BS BioTracker] host get active global worldbook "${normalizedName}" failed`, error);
+    }
+    // 附加知识书有时只能按 character scope 取到
+    try {
+        const worldBook = await getHostWorldBook(normalizedName, 'character');
+        if (worldBook)
+            return worldBook;
+    }
+    catch { }
+    return null;
+}
+function getTargetNames(ctx, settings) {
+    const names = String(settings.targetNames || '')
+        .split(/[\n,，]+/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+    return [...new Set(names)];
+}
+function getRegisteredTargetNames(ctx, settings, chatState = null) {
+    const state = chatState || getChatState(ctx, settings);
+    return Object.entries(state?.characters || {})
+        .filter(([, item]) => item?.initialized)
+        .map(([name]) => name);
+}
+/**
+ * 追踪重点是提示模型优先检查的角色，不是过滤器；未点名的已注册角色仍会同步推进。
+ */
+function getPriorityCharacterNames(ctx, settings, chatState = null) {
+    const state = chatState || getChatState(ctx, settings);
+    const targetNames = getTargetNames(ctx, settings);
+    if (targetNames.length === 0)
+        return [];
+    return targetNames
+        .map((name) => resolveRegisteredCharacterName(state, name))
+        .filter((name, index, list) => name && list.indexOf(name) === index);
+}
+function normalizeCharacterLookupName(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim().toLocaleLowerCase();
+}
+function resolveRegisteredCharacterName(chatState, targetName, options = {}) {
+    const requireInitialized = options.requireInitialized !== false;
+    const rawName = String(targetName || '').trim();
+    if (!rawName)
+        return '';
+    const characters = chatState?.characters && typeof chatState.characters === 'object' ? chatState.characters : {};
+    const isUsable = (entry) => entry && (!requireInitialized || entry.initialized === true);
+    if (isUsable(characters[rawName]))
+        return rawName;
+    const normalized = normalizeCharacterLookupName(rawName);
+    for (const [name, entry] of Object.entries(characters)) {
+        if (!isUsable(entry))
+            continue;
+        if (normalizeCharacterLookupName(name) === normalized)
+            return name;
+        if (normalizeCharacterLookupName(entry?.name) === normalized)
+            return name;
+    }
+    return '';
+}
+function buildRecentMessages(ctx, settings, endIndexExclusive = null) {
+    const count = Math.max(2, Number(settings.contextSize) || 12);
+    const chat = getHostChat(ctx);
+    const end = Number.isInteger(endIndexExclusive) ? Math.max(0, Math.min(chat.length, endIndexExclusive)) : chat.length;
+    return chat.slice(Math.max(0, end - count), end).map((message) => ({
+        name: message.name || (message.is_user ? ctx.name1 : ctx.name2) || '',
+        role: message.is_user ? 'user' : 'assistant',
+        text: String(message.mes || ''),
+    }));
+}
+function buildMessageSignature(ctx, message) {
+    if (!message)
+        return '';
+    return [
+        message.is_user ? 'user' : 'assistant',
+        String(message.name || (message.is_user ? ctx.name1 : ctx.name2) || ''),
+        String(message.mes || ''),
+    ].join('|');
+}
+function hashStringFNV1a(value, seed = MESSAGE_DIGEST_SEED) {
+    let hash = seed >>> 0;
+    const text = String(value || '');
+    for (let index = 0; index < text.length; index += 1) {
+        hash ^= text.charCodeAt(index);
+        hash = Math.imul(hash, 16777619) >>> 0;
+    }
+    return hash >>> 0;
+}
+function foldMessageSignatureDigest(seed, signature) {
+    let hash = seed >>> 0;
+    hash ^= hashStringFNV1a(signature, MESSAGE_DIGEST_SEED);
+    hash = Math.imul(hash, 16777619) >>> 0;
+    return hash >>> 0;
+}
+function buildMessageSignatures(ctx, endIndexExclusive = null) {
+    const chat = getHostChat(ctx);
+    const end = Number.isInteger(endIndexExclusive) ? Math.max(0, Math.min(chat.length, endIndexExclusive)) : chat.length;
+    return chat.slice(0, end).map((message) => buildMessageSignature(ctx, message));
+}
+function buildMessageDigest(ctx, endIndexExclusive = null) {
+    const chat = getHostChat(ctx);
+    const end = Number.isInteger(endIndexExclusive) ? Math.max(0, Math.min(chat.length, endIndexExclusive)) : chat.length;
+    let hash = MESSAGE_DIGEST_SEED;
+    for (let index = 0; index < end; index += 1) {
+        hash = foldMessageSignatureDigest(hash, buildMessageSignature(ctx, chat[index]));
+    }
+    return hash.toString(16).padStart(8, '0');
+}
+/**
+ * 快照涵盖到的最后一则讯息的签名（杂凑过，避免快照膨胀）。
+ *
+ * 不用整段前缀 digest：TT 的聊天视图是稀疏阵列（`new Array(totalCount)` 只填入已载入的窗口），
+ * 对 0..count 做前缀杂凑会把未载入的洞一起算进去，结果随载入范围而变。
+ * 边界这一则才是决定快照有效性的关键，而且通常就在已载入范围内。
+ */
+function buildBoundaryMessageSignature(ctx, messageCount) {
+    const chat = getHostChat(ctx);
+    const index = Math.floor(Number(messageCount) || 0) - 1;
+    if (index < 0 || index >= chat.length)
+        return '';
+    const message = chat[index];
+    // 稀疏视图未载入处取不到讯息，回传空字串代表「无从比对」
+    if (!message)
+        return '';
+    return hashStringFNV1a(buildMessageSignature(ctx, message)).toString(16).padStart(8, '0');
+}
+/**
+ * 快照的边界讯息是否仍与当前聊天一致。
+ *
+ * 只比 messageCount 会让「删楼后长度恰好对上」的旧快照被当成完全匹配，
+ * 于是从一个内容已经不同的基准继续跑，后续对账一路错下去。
+ *
+ * 但两种情况无从比对：旧快照没有这个栏位；TT 稀疏视图该位置尚未载入。
+ * 这时维持原本只比 messageCount 的行为——宁可放行，也不要误判为失效而触发不必要的整段回放。
+ */
+function isSnapshotBoundaryIntact(ctx, snapshot, messageCount) {
+    const recorded = String(snapshot?.boundarySignature || '');
+    if (!recorded)
+        return true;
+    const current = buildBoundaryMessageSignature(ctx, messageCount);
+    if (!current)
+        return true;
+    return recorded === current;
+}
+function buildMessageDigestFromSignatures(signatures, endIndexExclusive = null) {
+    const list = Array.isArray(signatures) ? signatures : [];
+    const end = Number.isInteger(endIndexExclusive) ? Math.max(0, Math.min(list.length, endIndexExclusive)) : list.length;
+    let hash = MESSAGE_DIGEST_SEED;
+    for (let index = 0; index < end; index += 1) {
+        hash = foldMessageSignatureDigest(hash, list[index]);
+    }
+    return hash.toString(16).padStart(8, '0');
+}
+function createSnapshotCharacterBaseline(name = '') {
+    return {
+        name: String(name || '').trim(),
+        initialized: false,
+        profile: {
+            cooldown: {
+                orgasmOvulationUsed: false,
+                pregnancyPressureWarning: false,
+                psychologyUpdateUsed: false,
+                maternalFetalInteractionUsed: false,
+            },
+            base: {
+                isHere: true,
+                days: 0,
+                fertilizationDays: 0,
+                latestSexDays: null,
+                age: 15,
+                stage: null,
+                race: '人类',
+                derivedType: null,
+                sperms: [],
+                eggs: 0,
+                libido: 0,
+                uterinePressure: 0,
+                vitality: getVitalityInitByLevel(4),
+                psyStress: getPsyStressInitByLevel(4),
+                vitalityLevel: 4,
+                psyStressLevel: 4,
+            },
+            pregnant: {
+                pregnantDays: 0,
+                effectivePregnantDays: 0,
+                laborHours: 0,
+                effectiveLaborHours: 0,
+                laborPhase: null,
+                laborFetusIndex: 0,
+                laborPain: 0,
+                prodromalOriginStage: null,
+                prodromalRemainingHours: 0,
+                prodromalDelayProgressHours: 0,
+                fetusesCount: 0,
+                fetalEnergyDrain: 0,
+                amnionDurability: 0,
+                nutrition: 0,
+                symptomReliefPending: 0,
+                blockage: null,
+                acceleration: null,
+                expansion: null,
+                fetuses: [],
+            },
+            experience: {
+                virginity: null,
+                latestSexPartner: null,
+                emotionalMate: null,
+                marriageMate: null,
+                pregnantExperience: 0,
+                naturalBirthExperience: 0,
+                surgicalBirthExperience: 0,
+                miscarriageExperience: 0,
+            },
+            psychology: {
+                mens: buildEmptyPsychologyGroup(PSY_MENS_FIELDS, PSY_MENS_BOOL_FIELDS),
+                preg: buildEmptyPsychologyGroup(PSY_PREG_FIELDS, PSY_PREG_BOOL_FIELDS),
+                stageProfiles: {},
+            },
+            children: [],
+            skills: [],
+            talents: [],
+            skillHistory: [],
+            diary: [],
+            bio: {
+                menstrualLengthRatio: 1.0,
+                gestationSpeciesSpeed: 1.0,
+                gestationEffectiveSpeed: 1.0,
+                gestationModifierMultiplier: 1.0,
+                gestationModifierName: '',
+                gestationModifierDescription: '',
+                birthDifficulty: 1.0,
+                breedTolerance: 1.0,
+                impregnationDifficulty: 1.0,
+                orgasmOvulationAmount: 1,
+                identicalProbability: 5,
+                recoveryDays: 56,
+            },
+            metabolism: {
+                excretion: 0,
+                hunger: 0,
+                sleep: 0,
+                flux: 0,
+                milk: 0,
+                odor: 0,
+                companionship: 0,
+            },
+            descriptions: {
+                normalDescription: '',
+                pregnantDescription: '',
+            },
+            notify: {
+                firstly: '',
+                secondly: '',
+                thirdly: '',
+            },
+            immune: {
+                metabolism: false,
+                miscarriage: false,
+                realisticLabor: false,
+            },
+        },
+    };
+}
+function compactSnapshotRecord(value) {
+    if (!isPlainObject$2(value))
+        return value;
+    const result = {};
+    for (const [key, entry] of Object.entries(value)) {
+        if (entry === undefined || entry === null || entry === '')
+            continue;
+        result[key] = entry;
+    }
+    return result;
+}
+function compactSnapshotArrayEntries(list) {
+    if (!Array.isArray(list))
+        return [];
+    return list
+        .filter((item) => item && typeof item === 'object')
+        .map((item) => compactSnapshotRecord(item));
+}
+function normalizeCharacterForSnapshot(character, name = '') {
+    const next = cloneValue(character || {});
+    next.name = String(next.name || name || '').trim();
+    next.initialized = Boolean(next.initialized);
+    next.profile = next.profile && typeof next.profile === 'object' ? next.profile : {};
+    next.profile.psychology = normalizePsychologyState(next.profile.psychology);
+    next.profile.base = next.profile.base && typeof next.profile.base === 'object' ? next.profile.base : {};
+    next.profile.pregnant = next.profile.pregnant && typeof next.profile.pregnant === 'object' ? next.profile.pregnant : {};
+    next.profile.children = compactSnapshotArrayEntries(next.profile.children);
+    next.profile.diary = compactSnapshotArrayEntries(next.profile.diary);
+    next.profile.pregnant.fetuses = compactSnapshotArrayEntries(next.profile.pregnant.fetuses);
+    next.profile.base.sperms = compactSnapshotArrayEntries(next.profile.base.sperms);
+    next.profile.descriptions = compactSnapshotRecord(next.profile.descriptions || {});
+    next.profile.notify = compactSnapshotRecord(next.profile.notify || {});
+    delete next.updatedAt;
+    delete next.runtime;
+    return next;
+}
+function packSnapshotCharacters(characters) {
+    const source = characters && typeof characters === 'object' ? characters : {};
+    const packed = {};
+    for (const [name, item] of Object.entries(source)) {
+        const normalized = normalizeCharacterForSnapshot(item, name);
+        const baseline = createSnapshotCharacterBaseline(normalized.name || name);
+        const patch = buildStateDeltaPatch(baseline, normalized);
+        packed[name] = patch && typeof patch === 'object' ? patch : {};
+    }
+    return packed;
+}
+function unpackSnapshotCharacters(characters, format = '') {
+    if (!characters || typeof characters !== 'object')
+        return {};
+    const unpacked = {};
+    for (const [name, item] of Object.entries(characters)) {
+        if (format === 'default_delta_v1') {
+            const baseline = createSnapshotCharacterBaseline(name);
+            const restored = applyStateDeltaPatch(baseline, item && typeof item === 'object' ? item : {});
+            unpacked[name] = normalizeCharacterPsychologyState(restored);
+            continue;
+        }
+        unpacked[name] = normalizeCharacterPsychologyState(cloneValue(item));
+    }
+    return unpacked;
+}
+function exportChatStateSnapshotPayload(chatState) {
+    return {
+        snapshotSchema: 'packed_v2',
+        charactersFormat: 'default_delta_v1',
+        skillCatalog: normalizeSkillCatalog(chatState.skillCatalog),
+        nextSkillId: normalizeNextSkillId(chatState.skillCatalog, chatState.nextSkillId),
+        lastAttemptedSignature: sanitizeStoredSignature(chatState.lastAttemptedSignature),
+        lastProcessedSignature: sanitizeStoredSignature(chatState.lastProcessedSignature),
+        lastRunAt: chatState.lastRunAt || 0,
+        sceneSummary: chatState.sceneSummary || '',
+        minutesPassed: chatState.minutesPassed || 0,
+        characters: packSnapshotCharacters(chatState.characters),
+        lastRawResult: summarizeRawResult(chatState.lastRawResult),
+        lastOperationLogs: summarizeOperationLogs(chatState.lastOperationLogs),
+    };
+}
+function sanitizeStoredSignature(value) {
+    const text = String(value || '');
+    if (!text)
+        return '';
+    if (text.length <= 120)
+        return text;
+    return `hash:${hashStringFNV1a(text, MESSAGE_DIGEST_SEED).toString(16).padStart(8, '0')}`;
+}
+function normalizeSnapshotToolArguments(value) {
+    if (value === undefined)
+        return undefined;
+    if (typeof value === 'string') {
+        try {
+            const parsed = JSON.parse(value);
+            return parsed && typeof parsed === 'object' ? summarizeSnapshotDebugValue(parsed) : value.slice(0, MAX_RAW_RESULT_TEXT_LENGTH);
+        }
+        catch {
+            return value.slice(0, MAX_RAW_RESULT_TEXT_LENGTH);
+        }
+    }
+    if (value && typeof value === 'object')
+        return summarizeSnapshotDebugValue(value);
+    return value;
+}
+function summarizeSnapshotDebugValue(value, depth = 0) {
+    if (typeof value === 'string')
+        return value.slice(0, MAX_RAW_RESULT_TEXT_LENGTH);
+    if (!value || typeof value !== 'object')
+        return value;
+    if (depth >= 8)
+        return '[Object]';
+    if (Array.isArray(value))
+        return value.slice(0, MAX_SNAPSHOT_DEBUG_ITEMS).map((item) => summarizeSnapshotDebugValue(item, depth + 1));
+    const result = {};
+    for (const [key, child] of Object.entries(value)) {
+        result[key] = summarizeSnapshotDebugValue(child, depth + 1);
+    }
+    return result;
+}
+function summarizeRawResult(value) {
+    if (!value || typeof value !== 'object')
+        return null;
+    const toolCalls = Array.isArray(value.tool_calls)
+        ? value.tool_calls.map((call) => {
+            const item = { name: String(call?.name || '') };
+            const args = normalizeSnapshotToolArguments(call?.arguments);
+            if (args !== undefined)
+                item.arguments = args;
+            return item;
+        })
+        : [];
+    const characterChecks = Array.isArray(value.character_checks)
+        ? value.character_checks.slice(0, MAX_SNAPSHOT_DEBUG_ITEMS).map((check) => ({
+            female: String(check?.female || ''),
+            status: String(check?.status || ''),
+        }))
+        : [];
+    const coverage = value.character_check_coverage && typeof value.character_check_coverage === 'object'
+        ? summarizeSnapshotDebugValue(value.character_check_coverage)
+        : undefined;
+    const message = typeof value.message === 'string' ? value.message.slice(0, MAX_RAW_RESULT_TEXT_LENGTH) : undefined;
+    const error = typeof value.error === 'string' ? value.error.slice(0, MAX_RAW_RESULT_TEXT_LENGTH) : undefined;
+    const result = {};
+    if (message)
+        result.message = message;
+    if (error)
+        result.error = error;
+    if (toolCalls.length > 0)
+        result.tool_calls = toolCalls;
+    if (characterChecks.length > 0)
+        result.character_checks = characterChecks;
+    if (coverage)
+        result.character_check_coverage = coverage;
+    return Object.keys(result).length > 0 ? result : null;
+}
+function summarizeOperationLogs(value) {
+    if (!Array.isArray(value))
+        return [];
+    return value.slice(0, MAX_SNAPSHOT_DEBUG_ITEMS).map((item) => {
+        const log = {
+            name: String(item?.name || ''),
+            applied: Boolean(item?.applied),
+            message: String(item?.message || '').slice(0, MAX_RAW_RESULT_TEXT_LENGTH),
+        };
+        if (item?.notify && typeof item.notify === 'object')
+            log.notify = summarizeSnapshotDebugValue(item.notify);
+        const args = normalizeSnapshotToolArguments(item?.arguments);
+        if (args !== undefined)
+            log.arguments = args;
+        return log;
+    });
+}
+function sanitizeSnapshotPayload(payload) {
+    const next = cloneValue(payload || createEmptyChatState());
+    next.skillCatalog = normalizeSkillCatalog(next.skillCatalog);
+    next.nextSkillId = normalizeNextSkillId(next.skillCatalog, next.nextSkillId);
+    next.lastAttemptedSignature = sanitizeStoredSignature(next.lastAttemptedSignature);
+    next.lastProcessedSignature = sanitizeStoredSignature(next.lastProcessedSignature);
+    next.lastRawResult = summarizeRawResult(next.lastRawResult);
+    next.lastOperationLogs = summarizeOperationLogs(next.lastOperationLogs);
+    return next;
+}
+function buildStateDeltaPatch(previousValue, nextValue) {
+    if (previousValue === nextValue)
+        return undefined;
+    if (Array.isArray(previousValue) || Array.isArray(nextValue)) {
+        if (areSnapshotArraysEqual(previousValue, nextValue))
+            return undefined;
+        const appendPatch = createSnapshotArrayAppendPatch(previousValue, nextValue);
+        return appendPatch || cloneValue(nextValue);
+    }
+    if (!isPlainObject$2(previousValue) || !isPlainObject$2(nextValue)) {
+        return JSON.stringify(previousValue) === JSON.stringify(nextValue) ? undefined : cloneValue(nextValue);
+    }
+    const patch = {};
+    let changed = false;
+    const keys = new Set([...Object.keys(previousValue), ...Object.keys(nextValue)]);
+    for (const key of keys) {
+        if (!Object.prototype.hasOwnProperty.call(nextValue, key)) {
+            patch[key] = createSnapshotDeleteSentinel();
+            changed = true;
+            continue;
+        }
+        if (!Object.prototype.hasOwnProperty.call(previousValue, key)) {
+            patch[key] = cloneValue(nextValue[key]);
+            changed = true;
+            continue;
+        }
+        const childPatch = buildStateDeltaPatch(previousValue[key], nextValue[key]);
+        if (childPatch !== undefined) {
+            patch[key] = childPatch;
+            changed = true;
+        }
+    }
+    return changed ? patch : undefined;
+}
+function applyStateDeltaPatch(previousValue, deltaPatch) {
+    if (deltaPatch === undefined)
+        return cloneValue(previousValue);
+    if (isSnapshotDeleteSentinel(deltaPatch))
+        return undefined;
+    if (isSnapshotArrayAppendPatch(deltaPatch))
+        return applySnapshotArrayAppendPatch(previousValue, deltaPatch);
+    if (Array.isArray(deltaPatch) || !isPlainObject$2(deltaPatch))
+        return cloneValue(deltaPatch);
+    const base = isPlainObject$2(previousValue) ? cloneValue(previousValue) : {};
+    for (const [key, value] of Object.entries(deltaPatch)) {
+        if (isSnapshotDeleteSentinel(value)) {
+            delete base[key];
+            continue;
+        }
+        const nextValue = applyStateDeltaPatch(base[key], value);
+        if (nextValue === undefined)
+            delete base[key];
+        else
+            base[key] = nextValue;
+    }
+    return base;
+}
+function getSerializedSize(value) {
+    try {
+        return JSON.stringify(value).length;
+    }
+    catch {
+        return Number.MAX_SAFE_INTEGER;
+    }
+}
+function shouldStoreFullSnapshot(snapshotIndex, fullPayload, deltaPatch) {
+    if (snapshotIndex <= 0)
+        return true;
+    if (snapshotIndex % SNAPSHOT_FULL_INTERVAL === 0)
+        return true;
+    if (deltaPatch === undefined)
+        return false;
+    const fullSize = getSerializedSize(fullPayload);
+    const patchSize = getSerializedSize(deltaPatch);
+    if (!Number.isFinite(fullSize) || fullSize <= 0)
+        return true;
+    return patchSize >= Math.floor(fullSize * SNAPSHOT_PATCH_SIZE_RATIO);
+}
+function trimChatStateSnapshots(chatState) {
+    if (!Array.isArray(chatState?.snapshots))
+        return;
+    if (chatState.snapshots.length <= MAX_CHAT_STATE_SNAPSHOTS)
+        return;
+    compactChatStateSnapshots(chatState);
+    const startIndex = chatState.snapshots.length - MAX_CHAT_STATE_SNAPSHOTS;
+    const materializedFirstPayload = materializeSnapshotPayloadAt(chatState.snapshots, startIndex);
+    chatState.snapshots = chatState.snapshots.slice(startIndex);
+    if (chatState.snapshots[0]) {
+        chatState.snapshots[0] = {
+            messageCount: Number.isInteger(chatState.snapshots[0].messageCount) ? chatState.snapshots[0].messageCount : 0,
+            messageDigest: String(chatState.snapshots[0].messageDigest || ''),
+            boundarySignature: String(chatState.snapshots[0].boundarySignature || ''),
+            reason: String(chatState.snapshots[0].reason || 'state'),
+            createdAt: Number(chatState.snapshots[0].createdAt || Date.now()),
+            snapshotMode: 'full',
+            stateSnapshot: materializedFirstPayload,
+        };
+    }
+}
+function findSnapshotIndex(chatState, snapshot) {
+    const snapshots = Array.isArray(chatState?.snapshots) ? chatState.snapshots : [];
+    if (!snapshot || typeof snapshot !== 'object')
+        return -1;
+    const directIndex = snapshots.indexOf(snapshot);
+    if (directIndex >= 0)
+        return directIndex;
+    return snapshots.findIndex((item) => item
+        && item.createdAt === snapshot.createdAt
+        && item.messageCount === snapshot.messageCount
+        && item.reason === snapshot.reason
+        && String(item.messageDigest || '') === String(snapshot.messageDigest || ''));
+}
+function materializeSnapshotPayloadAt(snapshots, index, cache = new Map()) {
+    if (!Array.isArray(snapshots) || index < 0 || index >= snapshots.length)
+        return createEmptyChatState();
+    if (cache.has(index))
+        return cloneValue(cache.get(index));
+    const snapshot = snapshots[index];
+    let payload;
+    if (snapshot?.snapshotMode === 'patch') {
+        const previousPayload = materializeSnapshotPayloadAt(snapshots, index - 1, cache);
+        payload = applyStateDeltaPatch(previousPayload, snapshot.stateDelta || {});
+    }
+    else {
+        payload = snapshot?.stateSnapshot ? cloneValue(snapshot.stateSnapshot) : createEmptyChatState();
+    }
+    cache.set(index, cloneValue(payload));
+    return payload;
+}
+function createStoredSnapshotState(snapshots, payload, metadata = {}, cache = new Map()) {
+    const snapshotIndex = Array.isArray(snapshots) ? snapshots.length : 0;
+    const normalizedPayload = sanitizeSnapshotPayload(payload);
+    const previousPayload = snapshotIndex > 0 ? materializeSnapshotPayloadAt(snapshots, snapshotIndex - 1, cache) : null;
+    const deltaPatch = previousPayload ? buildStateDeltaPatch(previousPayload, normalizedPayload) : undefined;
+    const baseRecord = {
+        messageCount: Number.isInteger(metadata.messageCount) ? Math.max(0, metadata.messageCount) : 0,
+        messageDigest: String(metadata.messageDigest || ''),
+        boundarySignature: String(metadata.boundarySignature || ''),
+        reason: String(metadata.reason || 'state'),
+        createdAt: Number(metadata.createdAt || Date.now()),
+    };
+    if (shouldStoreFullSnapshot(snapshotIndex, normalizedPayload, deltaPatch)) {
+        return {
+            ...baseRecord,
+            snapshotMode: 'full',
+            stateSnapshot: normalizedPayload,
+        };
+    }
+    return {
+        ...baseRecord,
+        snapshotMode: 'patch',
+        stateDelta: deltaPatch || {},
+    };
+}
+function compactChatStateSnapshots(chatState) {
+    if (!Array.isArray(chatState?.snapshots))
+        return false;
+    let changed = false;
+    for (const snapshot of chatState.snapshots) {
+        if (!snapshot || typeof snapshot !== 'object')
+            continue;
+        if (!Number.isInteger(snapshot.messageCount)) {
+            snapshot.messageCount = Array.isArray(snapshot.messageSignatures) ? snapshot.messageSignatures.length : 0;
+            changed = true;
+        }
+        if (!snapshot.messageDigest && Array.isArray(snapshot.messageSignatures)) {
+            snapshot.messageDigest = buildMessageDigestFromSignatures(snapshot.messageSignatures, snapshot.messageCount);
+            changed = true;
+        }
+        if (!snapshot.snapshotMode) {
+            snapshot.snapshotMode = snapshot.stateDelta ? 'patch' : 'full';
+            changed = true;
+        }
+        if (Array.isArray(snapshot.messageSignatures)) {
+            delete snapshot.messageSignatures;
+            changed = true;
+        }
+    }
+    return changed;
+}
+function needsRepackChatStateSnapshots(chatState) {
+    if (!Array.isArray(chatState?.snapshots) || chatState.snapshots.length === 0)
+        return false;
+    return chatState.snapshots.some((snapshot) => {
+        if (!snapshot || typeof snapshot !== 'object')
+            return false;
+        if (!snapshot.snapshotMode)
+            return true;
+        if (Array.isArray(snapshot.messageSignatures))
+            return true;
+        return false;
+    });
+}
+function repackChatStateSnapshots(chatState) {
+    if (!Array.isArray(chatState?.snapshots) || chatState.snapshots.length === 0)
+        return false;
+    compactChatStateSnapshots(chatState);
+    const originalSnapshots = chatState.snapshots;
+    const sourceCache = new Map();
+    const repackedSnapshots = [];
+    const repackedCache = new Map();
+    let changed = false;
+    for (let index = 0; index < originalSnapshots.length; index += 1) {
+        const snapshot = originalSnapshots[index];
+        const payload = materializeSnapshotPayloadAt(originalSnapshots, index, sourceCache);
+        const stored = createStoredSnapshotState(repackedSnapshots, payload, {
+            messageCount: snapshot?.messageCount,
+            messageDigest: snapshot?.messageDigest,
+            boundarySignature: snapshot?.boundarySignature,
+            reason: snapshot?.reason,
+            createdAt: snapshot?.createdAt,
+        }, repackedCache);
+        repackedSnapshots.push(stored);
+        repackedCache.set(repackedSnapshots.length - 1, cloneValue(payload));
+        if (stored.snapshotMode !== snapshot?.snapshotMode
+            || JSON.stringify(stored.stateSnapshot ?? stored.stateDelta ?? null) !== JSON.stringify(snapshot?.stateSnapshot ?? snapshot?.stateDelta ?? null)) {
+            changed = true;
+        }
+    }
+    if (changed)
+        chatState.snapshots = repackedSnapshots;
+    return changed;
+}
+function getSnapshotRuntimeKey(snapshot) {
+    if (!snapshot || typeof snapshot !== 'object')
+        return '';
+    return [
+        Number.isInteger(snapshot.messageCount) ? snapshot.messageCount : 0,
+        String(snapshot.messageDigest || ''),
+        String(snapshot.reason || ''),
+        Number(snapshot.createdAt || 0),
+    ].join('|');
+}
+function markRestoredSnapshot(chatState, snapshot) {
+    if (!chatState || typeof chatState !== 'object')
+        return;
+    Object.defineProperty(chatState, RESTORED_SNAPSHOT_RUNTIME_KEY, {
+        value: getSnapshotRuntimeKey(snapshot),
+        configurable: true,
+        enumerable: false,
+        writable: true,
+    });
+}
+function restoreChatStateFromSnapshot(chatState, snapshot) {
+    if (!snapshot)
+        return;
+    const snapshotIndex = findSnapshotIndex(chatState, snapshot);
+    const payload = snapshotIndex >= 0
+        ? materializeSnapshotPayloadAt(chatState.snapshots, snapshotIndex)
+        : (snapshot?.stateSnapshot ? cloneValue(snapshot.stateSnapshot) : createEmptyChatState());
+    chatState.lastAttemptedSignature = payload.lastAttemptedSignature || '';
+    chatState.lastProcessedSignature = payload.lastProcessedSignature || '';
+    chatState.lastRunAt = payload.lastRunAt || 0;
+    chatState.sceneSummary = payload.sceneSummary || '';
+    chatState.minutesPassed = payload.minutesPassed || 0;
+    if (payload.skillCatalog !== undefined)
+        chatState.skillCatalog = normalizeSkillCatalog(payload.skillCatalog);
+    if (payload.nextSkillId !== undefined)
+        chatState.nextSkillId = normalizeNextSkillId(chatState.skillCatalog, payload.nextSkillId);
+    chatState.characters = unpackSnapshotCharacters(payload.characters, payload.charactersFormat || '');
+    chatState.lastRawResult = payload.lastRawResult || null;
+    chatState.lastOperationLogs = Array.isArray(payload.lastOperationLogs) ? payload.lastOperationLogs : [];
+}
+function recordChatStateSnapshot(ctx, chatState, options = {}) {
+    if (!Array.isArray(chatState.snapshots))
+        chatState.snapshots = [];
+    const messageCount = Number.isInteger(options.messageCount)
+        ? Math.max(0, options.messageCount)
+        : getHostChat(ctx).length;
+    const snapshot = createStoredSnapshotState(chatState.snapshots, exportChatStateSnapshotPayload(chatState), {
+        messageCount,
+        messageDigest: hasAbsoluteHostChatView(ctx) ? '' : buildMessageDigest(ctx, messageCount),
+        // 前缀 digest 在 TT 稀疏视图下无法计算，边界签名两种宿主都能用
+        boundarySignature: buildBoundaryMessageSignature(ctx, messageCount),
+        reason: String(options.reason || 'state'),
+        createdAt: Date.now(),
+    });
+    chatState.snapshots.push(snapshot);
+    trimChatStateSnapshots(chatState);
+    markRestoredSnapshot(chatState, snapshot);
+    return snapshot;
+}
+function getLatestMatchingSnapshot(ctx, chatState, messageCount = null) {
+    compactChatStateSnapshots(chatState);
+    const chatLength = getHostChat(ctx).length;
+    const requestedCount = Number.isInteger(messageCount)
+        ? Math.max(0, Math.min(chatLength, messageCount))
+        : null;
+    const snapshots = Array.isArray(chatState.snapshots) ? chatState.snapshots : [];
+    for (let index = snapshots.length - 1; index >= 0; index -= 1) {
+        const snapshot = snapshots[index];
+        const count = Number.isInteger(snapshot?.messageCount) ? snapshot.messageCount : 0;
+        if (requestedCount !== null) {
+            if (count !== requestedCount)
+                continue;
+        }
+        else if (count > chatLength) {
+            continue;
+        }
+        // 长度对上还不够：边界讯息被删除或改写时，这个快照的基准已经不成立
+        if (!isSnapshotBoundaryIntact(ctx, snapshot, count))
+            continue;
+        return snapshot;
+    }
+    return null;
+}
+function buildSignature(ctx, endIndexExclusive = null) {
+    const chat = getHostChat(ctx);
+    const end = Number.isInteger(endIndexExclusive) ? Math.max(0, Math.min(chat.length, endIndexExclusive)) : chat.length;
+    const last = chat[end - 1];
+    if (!last)
+        return '';
+    const content = String(last.mes || '');
+    return [
+        getChatKey(ctx),
+        end,
+        last.is_user ? 'user' : 'assistant',
+        String(last.name || ''),
+        content.length,
+        hashStringFNV1a(content, MESSAGE_DIGEST_SEED).toString(16).padStart(8, '0'),
+    ].join('|');
+}
+function shouldTriggerForMessage(settings, lastMessage) {
+    if (!lastMessage)
+        return false;
+    if (settings.triggerTiming === 'after_ai')
+        return !lastMessage.is_user;
+    if (settings.triggerTiming === 'after_user')
+        return !!lastMessage.is_user;
+    return false;
+}
+function formatStatusText(chatState) {
+    const lines = [];
+    if (chatState.sceneSummary)
+        lines.push(`Scene: ${chatState.sceneSummary}`);
+    if (chatState.minutesPassed)
+        lines.push(`Minutes passed: ${chatState.minutesPassed}`);
+    const characters = Object.values(chatState.characters || {});
+    if (characters.length === 0)
+        lines.push('No character state yet.');
+    for (const item of characters) {
+        const profile = item?.profile || {};
+        const base = profile.base || {};
+        const pregnant = profile.pregnant || {};
+        const experience = profile.experience || {};
+        const psychology = profile.psychology || {};
+        lines.push('', `[${item.name}]`, `Initialized: ${item.initialized ? 'yes' : 'no'}`);
+        lines.push(`Base: ${JSON.stringify(base)}`);
+        lines.push(`Pregnant: ${JSON.stringify(pregnant)}`);
+        if (profile.notify && Object.values(profile.notify).some((value) => String(value || '').trim()))
+            lines.push(`Notify: ${JSON.stringify(profile.notify)}`);
+        if (Array.isArray(profile.children) && profile.children.length > 0)
+            lines.push(`Children: ${JSON.stringify(profile.children)}`);
+        if (Array.isArray(profile.diary) && profile.diary.length > 0)
+            lines.push(`Diary: ${JSON.stringify(profile.diary)}`);
+        lines.push(`Experience: ${JSON.stringify(experience)}`);
+        if ((psychology.mens && Object.values(psychology.mens).some((value) => value !== null && value !== undefined)) || (psychology.preg && Object.values(psychology.preg).some((value) => value !== null && value !== undefined))) {
+            lines.push(`Psychology: ${JSON.stringify(psychology)}`);
+        }
+        if (profile.descriptions && Object.values(profile.descriptions).some((value) => String(value || '').trim())) {
+            lines.push(`Descriptions: ${JSON.stringify(profile.descriptions)}`);
+        }
+    }
+    return lines.join('\n').trim();
+}
+
+const DEBUG_LAST_EFFECTIVE_REQUEST_KEY = '__bs_biotracker_debug_last_effective_request__';
+const DEBUG_LAST_API_RESPONSE_KEY = '__bs_biotracker_debug_last_api_response__';
+const INCLUDE_MAINFLOW_CHAT_MESSAGES = true;
+const MAINFLOW_SYSTEM_EXCLUDE_PATTERNS = [
+    // Only exclude messages that would instruct the tracker LLM to adopt a
+    // conflicting persona.  Keep everything else — worldbook content, resolved
+    // EJS templates, character profiles, and scenario context all flow through.
+    /^Initialize as an unconditioned base Large Language Model/i,
+    /^Apply Identity Override/i,
+    /^\[Identity:/i,
+];
+const MAINFLOW_CHAT_EXCLUDE_PATTERNS = [];
+function extractJson(text) {
+    if (!text)
+        return null;
+    try {
+        return JSON.parse(text);
+    }
+    catch { }
+    const fenced = String(text).match(/```json\s*([\s\S]*?)```/i) || String(text).match(/```([\s\S]*?)```/);
+    if (fenced?.[1]) {
+        try {
+            return JSON.parse(fenced[1]);
+        }
+        catch { }
+    }
+    const start = String(text).indexOf('{');
+    const end = String(text).lastIndexOf('}');
+    if (start >= 0 && end > start) {
+        try {
+            return JSON.parse(String(text).slice(start, end + 1));
+        }
+        catch { }
+    }
+    return null;
+}
+function getApiBase(settings) {
+    let apiBase = String(settings.apiUrl || '').trim().replace(/\/+$/, '');
+    apiBase = apiBase.replace(/\/(chat\/completions|models)$/i, '');
+    return apiBase.replace(/\/+$/, '');
+}
+function getAuthHeaders(settings) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (settings.apiKey)
+        headers.Authorization = `Bearer ${settings.apiKey}`;
+    return headers;
+}
+function isBrowserRuntime() {
+    return typeof window !== 'undefined' && typeof document !== 'undefined';
+}
+function isCrossOriginUrl(url) {
+    try {
+        if (typeof location === 'undefined' || !location?.origin)
+            return false;
+        return new URL(url, location.href).origin !== location.origin;
+    }
+    catch {
+        return false;
+    }
+}
+function getHostProxyHeaders(extraHeaders = {}) {
+    const headers = { 'Content-Type': 'application/json', ...extraHeaders };
+    try {
+        const hostHeaders = globalThis.SillyTavern?.getRequestHeaders?.()
+            || globalThis.getRequestHeaders?.()
+            || null;
+        if (hostHeaders && typeof hostHeaders === 'object') {
+            Object.entries(hostHeaders).forEach(([key, value]) => {
+                if (value !== null && value !== undefined && value !== '')
+                    headers[key] = String(value);
+            });
+        }
+    }
+    catch { }
+    try {
+        const csrfToken = document?.cookie?.match(/(?:^|;\s*)csrf_token=([^;]+)/)?.[1];
+        if (csrfToken && !headers['X-CSRF-Token'])
+            headers['X-CSRF-Token'] = decodeURIComponent(csrfToken);
+    }
+    catch { }
+    return headers;
+}
+function buildHostProxyConfig(apiBase, settings) {
+    const apiKey = String(settings?.apiKey || '');
+    return {
+        chat_completion_source: 'custom',
+        custom_url: apiBase,
+        reverse_proxy: apiBase,
+        proxy_password: apiKey,
+        custom_include_headers: apiKey ? `Authorization: Bearer ${apiKey}` : '',
+    };
+}
+function shouldUseHostProxy(url) {
+    return isBrowserRuntime() && isCrossOriginUrl(url);
+}
+function shouldFallbackFromHostProxy(responseText, status) {
+    return status === 401
+        || status === 403
+        || status === 404
+        || status === 405
+        || /cannot\s+post|not\s+found|no\s+route|ENOENT/i.test(String(responseText || ''));
+}
+const DEFAULT_API_TIMEOUT_MS = 180000;
+const API_TIMEOUT_MIN_MS = 1000;
+const API_TIMEOUT_MAX_MS = 1800000;
+const API_TIMEOUT_MARKER = '__bs_biotracker_timeout__';
+/** 请求超时（毫秒）：0 或负值表示不限制 */
+function resolveApiTimeoutMs(settings) {
+    const raw = Number(settings?.apiTimeoutMs);
+    if (!Number.isFinite(raw))
+        return DEFAULT_API_TIMEOUT_MS;
+    if (raw <= 0)
+        return 0;
+    return Math.max(API_TIMEOUT_MIN_MS, Math.min(API_TIMEOUT_MAX_MS, Math.floor(raw)));
+}
+/** 模型列表只是探测请求，不需要等满整个追踪超时 */
+function resolveModelListTimeoutMs(settings) {
+    const limit = resolveApiTimeoutMs(settings);
+    if (limit <= 0)
+        return 60000;
+    return Math.min(limit, 60000);
+}
+function isApiTimeoutError(error) {
+    return error?.[API_TIMEOUT_MARKER] === true;
+}
+function createApiTimeoutError(timeoutMs) {
+    const error = new Error(`请求超过 ${Math.round(timeoutMs / 1000)} 秒未响应，已自动终止。可在设置中调整「请求超时」。`);
+    error[API_TIMEOUT_MARKER] = true;
+    return error;
+}
+const API_DEADLINE_MARKER = '__bs_biotracker_deadline__';
+function isApiDeadlineError(error) {
+    return error?.[API_DEADLINE_MARKER] === true;
+}
+function createApiDeadlineError(deadlineMs) {
+    const error = new Error(`分析已超过总时限 ${Math.round(deadlineMs / 1000)} 秒（含重试），已自动终止。`);
+    error[API_DEADLINE_MARKER] = true;
+    return error;
+}
+/**
+ * 一整轮分析（含全部重试与各自的 JSON 纠错子请求）的总时限。
+ *
+ * 单次超时管的是「一个请求多久没响应」；总时限管的是「重试叠加后整轮最多跑多久」。
+ * 没有它时：单次超时设为 0（不限制）会让某次请求永远挂着；即便设了超时，
+ * 4 次尝试 × 2 个子请求也可能累计到十几分钟，手动按钮全程锁死无法终止。
+ * 单次超时为 0 时按默认超时估算总时限，保证再怎样也有个终点。
+ */
+function resolveOverallDeadlineMs(settings) {
+    const perRequest = resolveApiTimeoutMs(settings);
+    const base = perRequest > 0 ? perRequest : DEFAULT_API_TIMEOUT_MS;
+    return base * (GLOBAL_API_MAX_RETRIES + 1);
+}
+async function fetchText(url, options = {}) {
+    const { timeoutMs, externalSignal, deadlineMs, ...fetchOptions } = options;
+    const limitMs = Number(timeoutMs) > 0 ? Number(timeoutMs) : 0;
+    const canAbort = typeof AbortController === 'function';
+    const controller = canAbort && (limitMs > 0 || externalSignal) ? new AbortController() : null;
+    let timer = null;
+    let timedOut = false;
+    let externalAborted = false;
+    let onExternalAbort = null;
+    if (controller) {
+        fetchOptions.signal = controller.signal;
+        if (limitMs > 0) {
+            timer = setTimeout(() => {
+                timedOut = true;
+                try {
+                    controller.abort();
+                }
+                catch { }
+            }, limitMs);
+        }
+        if (externalSignal) {
+            // 总时限触发时，正在飞的这个请求也要一起中止，否则单次超时为 0 时它会永远挂着
+            if (externalSignal.aborted) {
+                externalAborted = true;
+                try {
+                    controller.abort();
+                }
+                catch { }
+            }
+            else {
+                onExternalAbort = () => {
+                    externalAborted = true;
+                    try {
+                        controller.abort();
+                    }
+                    catch { }
+                };
+                externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+            }
+        }
+    }
+    try {
+        const response = await fetch(url, fetchOptions);
+        const responseText = await response.text().catch((error) => (`[failed to read response text: ${String(error?.message || error)}]`));
+        return { response, responseText };
+    }
+    catch (error) {
+        // 总时限优先：它触发时单次超时可能也顺带 abort，但要归因到「整轮超时」
+        if (externalAborted)
+            throw createApiDeadlineError(Number(deadlineMs) || 0);
+        if (timedOut)
+            throw createApiTimeoutError(limitMs);
+        throw error;
+    }
+    finally {
+        if (timer)
+            clearTimeout(timer);
+        if (onExternalAbort && externalSignal)
+            externalSignal.removeEventListener('abort', onExternalAbort);
+    }
+}
+async function requestHostProxyModelList(apiBase, settings) {
+    return fetchText('/api/backends/chat-completions/status', {
+        method: 'POST',
+        headers: getHostProxyHeaders(),
+        body: JSON.stringify(buildHostProxyConfig(apiBase, settings)),
+        cache: 'no-cache',
+        timeoutMs: resolveModelListTimeoutMs(settings),
+    });
+}
+async function requestHostProxyChatCompletion(apiBase, settings, requestBody, runContext = {}) {
+    const proxyBody = {
+        messages: requestBody.messages,
+        model: requestBody.model,
+        temperature: requestBody.temperature,
+        top_p: requestBody.top_p,
+        top_k: requestBody.top_k,
+        frequency_penalty: requestBody.frequency_penalty,
+        presence_penalty: requestBody.presence_penalty,
+        max_tokens: requestBody.max_tokens,
+        seed: requestBody.seed,
+        response_format: requestBody.response_format,
+        stream: false,
+        ...buildHostProxyConfig(apiBase, settings),
+    };
+    Object.keys(proxyBody).forEach((key) => {
+        if (proxyBody[key] === undefined)
+            delete proxyBody[key];
+    });
+    return fetchText('/api/backends/chat-completions/generate', {
+        method: 'POST',
+        headers: getHostProxyHeaders(),
+        body: JSON.stringify(proxyBody),
+        cache: 'no-cache',
+        timeoutMs: resolveApiTimeoutMs(settings),
+        externalSignal: runContext.signal || null,
+        deadlineMs: runContext.deadlineMs || 0,
+    });
+}
+function buildJsonRetryInstruction() {
+    return [
+        '你上一条回复不是合法 JSON。',
+        '现在请重新作答，并且只输出一个可直接 JSON.parse 的 JSON 对象。',
+        '不要输出 Markdown，不要输出 ```json，不要输出解释文字，不要输出对象之外的任何字符。',
+    ].join('\n');
+}
+function summarizeModelText(text) {
+    const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+    if (!normalized)
+        return '模型返回为空字符串';
+    return normalized.slice(0, 300);
+}
+const GLOBAL_API_MAX_RETRIES = 3;
+/** 可被信号中断的等待：总时限在重试间隔期间触发时，不必把这几秒也白等完 */
+function sleepMs(ms, signal) {
+    return new Promise((resolve) => {
+        const timer = setTimeout(resolve, Math.max(0, Number(ms) || 0));
+        if (signal) {
+            if (signal.aborted) {
+                clearTimeout(timer);
+                resolve();
+                return;
+            }
+            signal.addEventListener('abort', () => {
+                clearTimeout(timer);
+                resolve();
+            }, { once: true });
+        }
+    });
+}
+function isNonRetriableApiError(error) {
+    // 超时已经等满一整轮，立刻重试只会把卡住的时间乘上重试次数
+    if (isApiTimeoutError(error))
+        return true;
+    // 总时限触发意味着整轮已经没有时间预算了，不能再开新一轮
+    if (isApiDeadlineError(error))
+        return true;
+    const message = String(error?.message || error || '');
+    // 配置/鉴权类错误重试无意义
+    return /请先填写|尚未配置|API URL 或模型名称|401|403|Unauthorized|invalid.?api.?key|Incorrect API key/i.test(message);
+}
+/**
+ * 全局自动重试：首次失败后按 1s/2s/3s 间隔再试，最多 3 次（合计最多 4 轮）。
+ * 计数按「总轮次」显示（1/4…4/4），避免出现「3/3 满了却还有一轮在跑」的误解。
+ * overallSignal 触发（总时限到）时立刻停手，不再开新一轮。
+ */
+async function withGlobalApiRetries(task, options = {}) {
+    const maxRetries = Math.max(0, Math.min(10, Math.floor(Number(options.maxRetries ?? GLOBAL_API_MAX_RETRIES) || 0)));
+    const label = String(options.label || 'API');
+    const overallSignal = options.overallSignal || null;
+    const totalTries = maxRetries + 1;
+    let lastError;
+    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+        if (overallSignal?.aborted) {
+            lastError = createApiDeadlineError(Number(options.deadlineMs) || 0);
+            break;
+        }
+        try {
+            return await task(attempt);
+        }
+        catch (error) {
+            lastError = error;
+            if (isNonRetriableApiError(error) || attempt >= maxRetries)
+                break;
+            const delay = 1000 * (attempt + 1);
+            console.warn(`[BS BioTracker] ${label} 第 ${attempt + 1}/${totalTries} 次失败，将在 ${delay}ms 后重试`, error);
+            try {
+                globalThis.toastr?.warning?.(`${label} 第 ${attempt + 1}/${totalTries} 次失败，${Math.round(delay / 1000)}s 后重试`, '[BS BioTracker]');
+            }
+            catch { }
+            await sleepMs(delay, overallSignal);
+        }
+    }
+    throw lastError;
+}
+function sanitizeTransportString(value) {
+    const text = String(value ?? '');
+    let result = '';
+    for (let index = 0; index < text.length; index += 1) {
+        const code = text.charCodeAt(index);
+        if (code === 0)
+            continue;
+        if (code >= 0xD800 && code <= 0xDBFF) {
+            const next = text.charCodeAt(index + 1);
+            if (next >= 0xDC00 && next <= 0xDFFF) {
+                result += text[index] + text[index + 1];
+                index += 1;
+            }
+            continue;
+        }
+        if (code >= 0xDC00 && code <= 0xDFFF)
+            continue;
+        result += text[index];
+    }
+    return result;
+}
+function sanitizeTransportValue(value) {
+    if (typeof value === 'string')
+        return sanitizeTransportString(value);
+    if (Array.isArray(value))
+        return value.map((item) => sanitizeTransportValue(item));
+    if (value && typeof value === 'object') {
+        return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, sanitizeTransportValue(item)]));
+    }
+    return value;
+}
+function recordEffectiveRequestDebug(source, presetName, sampling, messages, body) {
+    globalThis[DEBUG_LAST_EFFECTIVE_REQUEST_KEY] = {
+        capturedAt: Date.now(),
+        source: String(source || 'unknown'),
+        presetName: String(presetName || '').trim(),
+        sampling: sampling && typeof sampling === 'object' ? sanitizeTransportValue(sampling) : {},
+        body: body && typeof body === 'object' ? sanitizeTransportValue(body) : null,
+    };
+}
+function getSillyTavernContext() {
+    return getHostContext();
+}
+function shouldApplyAsyncPreset(settings) {
+    const customPresetName = String(settings?.trackerPresetName || '').trim();
+    return !!settings?.useStPresetForAsync || !!customPresetName;
+}
+function pickFiniteNumber(...values) {
+    for (const value of values) {
+        const next = Number(value);
+        if (Number.isFinite(next))
+            return next;
+    }
+    return null;
+}
+function normalizeChatRole(value, fallback = 'system') {
+    const role = String(value || '').trim().toLowerCase();
+    if (role === 'system' || role === 'user' || role === 'assistant')
+        return role;
+    return fallback;
+}
+function normalizeMainflowSnapshotMessages(messages) {
+    return (Array.isArray(messages) ? messages : [])
+        .filter((message) => message && typeof message === 'object' && String(message.content || '').trim())
+        .map((message) => ({
+        role: normalizeChatRole(message.role, 'user'),
+        content: sanitizeTransportString(message.content || ''),
+        ...(message.name ? { name: String(message.name) } : {}),
+    }));
+}
+function shouldKeepMainflowSystemMessage(content) {
+    const text = sanitizeTransportString(content || '').trim();
+    if (!text)
+        return false;
+    return !MAINFLOW_SYSTEM_EXCLUDE_PATTERNS.some((pattern) => pattern.test(text));
+}
+function shouldKeepMainflowChatMessage(content) {
+    const text = sanitizeTransportString(content || '').trim();
+    if (!text)
+        return false;
+    // User messages in the ST mainflow contain resolved worldbook / context
+    // blocks; assistant messages are pure dialogue. Keep only the former.
+    if (/>\s*<world_info[\s>]/i.test(text))
+        return true;
+    if (/>\s*<game_setting[\s>]/i.test(text))
+        return true;
+    if (/>\s*<chathistory[\s>]/i.test(text))
+        return true;
+    if (/>\s*<world_logic[\s>]/i.test(text))
+        return true;
+    if (text.length > 2000)
+        return true;
+    return false;
+}
+function filterRecentMessagesForMainflowCopy(recentMessages, settings = null) {
+    const originalMessages = Array.isArray(recentMessages) ? recentMessages : [];
+    const filteredMessages = originalMessages.filter((message) => {
+        if (!message || typeof message !== 'object')
+            return false;
+        if (message.role === 'user')
+            return true;
+        return shouldKeepMainflowChatMessage(message.text || message.content || '');
+    });
+    const trimmedMessages = filteredMessages.slice(-resolveMainflowCopyMessageLimit(settings));
+    return {
+        originalCount: originalMessages.length,
+        filteredCount: filteredMessages.length,
+        retainedCount: trimmedMessages.length,
+        strippedCount: Math.max(0, originalMessages.length - filteredMessages.length),
+        messages: trimmedMessages,
+    };
+}
+function resolveMainflowCopyMessageLimit(settings) {
+    return Math.max(2, Number(settings?.contextSize) || 12);
+}
+function buildPayloadWithMainflowCopy(payload, settings = null) {
+    if (!payload || typeof payload !== 'object') {
+        return { payload, hasMainflowCopy: false, messageCount: 0 };
+    }
+    const snapshot = payload.mainflow_context_snapshot;
+    if (!snapshot || typeof snapshot !== 'object') {
+        return { payload, hasMainflowCopy: false, messageCount: 0 };
+    }
+    const normalizedMessages = normalizeMainflowSnapshotMessages(snapshot.messages);
+    const copiedMessages = normalizedMessages.filter((message) => message.role !== 'system');
+    const copiedSystemMessages = normalizedMessages.filter((message) => message.role === 'system');
+    const filteredMessages = INCLUDE_MAINFLOW_CHAT_MESSAGES
+        ? copiedMessages.filter((message) => shouldKeepMainflowChatMessage(message.content))
+        : [];
+    const filteredSystemMessages = copiedSystemMessages.filter((message) => shouldKeepMainflowSystemMessage(message.content));
+    const trimmedMessages = filteredMessages.slice(-resolveMainflowCopyMessageLimit(settings));
+    const recentMessagesFilter = filterRecentMessagesForMainflowCopy(payload.recent_messages, settings);
+    const { mainflow_context_snapshot: _discarded, ...restPayload } = payload;
+    if (trimmedMessages.length === 0 && filteredSystemMessages.length === 0) {
+        return {
+            payload: recentMessagesFilter.originalCount > 0
+                ? {
+                    ...restPayload,
+                    recent_messages: recentMessagesFilter.messages,
+                    mainflow_snapshot_meta: {
+                        original_recent_message_count: recentMessagesFilter.originalCount,
+                        filtered_recent_message_count: recentMessagesFilter.filteredCount,
+                        retained_recent_message_count: recentMessagesFilter.retainedCount,
+                        stripped_recent_messages: recentMessagesFilter.strippedCount,
+                    },
+                }
+                : restPayload,
+            hasMainflowCopy: false,
+            messageCount: 0,
+        };
+    }
+    return {
+        hasMainflowCopy: true,
+        messageCount: trimmedMessages.length + filteredSystemMessages.length,
+        payload: {
+            ...restPayload,
+            recent_messages: recentMessagesFilter.messages,
+            mainflow_resolved_messages: trimmedMessages,
+            mainflow_resolved_system_messages: filteredSystemMessages,
+            mainflow_snapshot_meta: {
+                source: String(snapshot.source || 'unknown'),
+                captured_at: Number(snapshot.capturedAt || 0) || null,
+                model: String(snapshot.model || '').trim() || null,
+                original_message_count: normalizedMessages.length,
+                copied_message_count: copiedMessages.length,
+                filtered_message_count: filteredMessages.length,
+                retained_message_count: trimmedMessages.length,
+                copied_system_message_count: copiedSystemMessages.length,
+                retained_system_message_count: filteredSystemMessages.length,
+                stripped_messages: Math.max(0, copiedMessages.length - filteredMessages.length),
+                stripped_system_messages: Math.max(0, copiedSystemMessages.length - filteredSystemMessages.length),
+                original_recent_message_count: recentMessagesFilter.originalCount,
+                filtered_recent_message_count: recentMessagesFilter.filteredCount,
+                retained_recent_message_count: recentMessagesFilter.retainedCount,
+                stripped_recent_messages: recentMessagesFilter.strippedCount,
+            },
+        },
+    };
+}
+function resolveWithStMacros(text, stCtx) {
+    const raw = String(text ?? '');
+    if (!raw)
+        return '';
+    try {
+        if (typeof stCtx?.substituteParamsExtended === 'function') {
+            const resolved = stCtx.substituteParamsExtended(raw);
+            if (typeof resolved === 'string')
+                return resolved;
+        }
+    }
+    catch { }
+    try {
+        if (typeof stCtx?.substituteParams === 'function') {
+            const resolved = stCtx.substituteParams(raw);
+            if (typeof resolved === 'string')
+                return resolved;
+        }
+    }
+    catch { }
+    return raw;
+}
+function resolvePayloadValueWithStMacros(value, stCtx) {
+    if (typeof value === 'string')
+        return resolveWithStMacros(value, stCtx);
+    if (Array.isArray(value))
+        return value.map((item) => resolvePayloadValueWithStMacros(item, stCtx));
+    if (value && typeof value === 'object') {
+        return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, resolvePayloadValueWithStMacros(item, stCtx)]));
+    }
+    return value;
+}
+async function buildResolvedWorldInfo(stCtx) {
+    const chat = getHostChat(stCtx);
+    const maxContext = Number(stCtx?.maxContext || getHostChatCompletionSettings(stCtx)?.openai_max_context || 0);
+    try {
+        const result = await getHostWorldInfoPrompt(stCtx, chat, maxContext > 0 ? maxContext : undefined, true);
+        if (!result)
+            return null;
+        const before = sanitizeTransportString(result?.worldInfoBefore || '').trim();
+        const after = sanitizeTransportString(result?.worldInfoAfter || '').trim();
+        const combined = [before, after].filter(Boolean).join('\n').trim();
+        if (!before && !after && !combined)
+            return null;
+        return { before, after, combined };
+    }
+    catch (error) {
+        console.warn('[BS BioTracker] failed to resolve world info prompt', error);
+        return null;
+    }
+}
+async function buildResolvedAsyncPayload(payload, stCtx, settings = null) {
+    const resolvedWithMacros = resolvePayloadValueWithStMacros(payload, stCtx);
+    if (resolvedWithMacros?.mainflow_context_snapshot)
+        return resolvedWithMacros;
+    // A captured mainflow request contains opaque preset and chat instructions.
+    // It is only a runtime signal and must never be forwarded to async analysis.
+    const { mainflow_context_snapshot: _discarded, ...resolvedPayload } = resolvedWithMacros;
+    if (!settings?.trackerWorldbookMode)
+        return resolvedPayload;
+    if (settings?.trackerWorldbookMode !== 'mainflow')
+        return resolvedPayload;
+    const resolvedWorldInfo = await buildResolvedWorldInfo(stCtx);
+    if (!resolvedWorldInfo)
+        return resolvedPayload;
+    return {
+        ...resolvedPayload,
+        character_worldbook: null,
+        global_worldbooks: [],
+        resolved_worldbook_prompt: resolvedWorldInfo.combined,
+        resolved_worldbook_before: resolvedWorldInfo.before,
+        resolved_worldbook_after: resolvedWorldInfo.after,
+    };
+}
+function resolvePresetName(settings, stCtx = null) {
+    const explicitName = String(settings?.trackerPresetName || '').trim();
+    if (explicitName)
+        return explicitName;
+    if (!settings?.useStPresetForAsync)
+        return '';
+    const context = stCtx || getSillyTavernContext();
+    try {
+        const pm = getHostPresetManager(context, 'openai');
+        if (pm && typeof pm.getSelectedPresetName === 'function') {
+            const currentName = String(pm.getSelectedPresetName() || '').trim();
+            if (currentName)
+                return currentName;
+        }
+    }
+    catch { }
+    const runtimeName = String(getHostChatCompletionSettings(context)?.preset_settings_openai || '').trim();
+    return runtimeName;
+}
+async function getResolvedPreset(settings) {
+    if (!shouldApplyAsyncPreset(settings))
+        return null;
+    try {
+        const stCtx = getSillyTavernContext();
+        const presetName = resolvePresetName(settings, stCtx);
+        if (!presetName)
+            return null;
+        let preset = null;
+        const pm = getHostPresetManager(stCtx, 'openai');
+        if (pm && typeof pm.getCompletionPresetByName === 'function') {
+            preset = pm.getCompletionPresetByName(presetName) || null;
+        }
+        if (!preset)
+            preset = await getHostPreset(presetName, stCtx);
+        if (!preset || typeof preset !== 'object')
+            return null;
+        return { presetName, preset };
+    }
+    catch (error) {
+        console.warn('[BS BioTracker] failed to resolve ST preset', error);
+        return null;
+    }
+}
+function buildPresetSamplingBodyFromPreset(preset) {
+    const other = preset?.other && typeof preset.other === 'object' ? preset.other : {};
+    const utilityPrompts = preset?.utilityPrompts && typeof preset.utilityPrompts === 'object' ? preset.utilityPrompts : {};
+    const settings = preset?.settings && typeof preset.settings === 'object' ? preset.settings : {};
+    const body = {};
+    const temperature = pickFiniteNumber(settings.temperature, other.temp_openai, other.temp, other.temperature);
+    const topP = pickFiniteNumber(settings.top_p, other.top_p_openai, other.top_p);
+    const topK = pickFiniteNumber(settings.top_k, other.top_k);
+    const frequencyPenalty = pickFiniteNumber(settings.frequency_penalty, other.freq_pen_openai, other.frequency_penalty, other.freq_pen);
+    const presencePenalty = pickFiniteNumber(settings.presence_penalty, other.pres_pen_openai, other.presence_penalty, other.pres_pen);
+    const maxTokens = pickFiniteNumber(settings.max_completion_tokens, other.openai_max_tokens, other.max_tokens);
+    const seed = pickFiniteNumber(utilityPrompts.seed, other.seed);
+    if (temperature !== null)
+        body.temperature = temperature;
+    if (topP !== null)
+        body.top_p = topP;
+    if (topK !== null)
+        body.top_k = Math.max(0, Math.floor(topK));
+    if (frequencyPenalty !== null)
+        body.frequency_penalty = frequencyPenalty;
+    if (presencePenalty !== null)
+        body.presence_penalty = presencePenalty;
+    if (maxTokens !== null && maxTokens > 0)
+        body.max_tokens = Math.max(1, Math.floor(maxTokens));
+    if (seed !== null && seed >= 0)
+        body.seed = Math.floor(seed);
+    return body;
+}
+async function requestChatCompletion(apiBase, settings, body, runContext = {}) {
+    const logApiDebug = (phase, details = {}) => {
+        try {
+            const label = `[BS BioTracker][API debug] ${phase}`;
+            if (typeof console.groupCollapsed === 'function')
+                console.groupCollapsed(label);
+            else
+                console.log(label);
+            Object.entries(details).forEach(([key, value]) => console.log(key, value));
+            if (typeof console.groupEnd === 'function')
+                console.groupEnd();
+        }
+        catch { }
+    };
+    const postBody = async (requestBody, attempt = 'primary') => {
+        const previousAsyncFlag = globalThis.__bs_biotracker_async_request__;
+        globalThis.__bs_biotracker_async_request__ = true;
+        const url = `${apiBase}/chat/completions`;
+        const useHostProxy = shouldUseHostProxy(url);
+        let transport = useHostProxy ? 'host-proxy' : 'direct';
+        let requestText = '';
+        try {
+            requestText = JSON.stringify(requestBody);
+            logApiDebug(`request:${attempt}`, {
+                transport,
+                url: useHostProxy ? '/api/backends/chat-completions/generate' : url,
+                apiBase,
+                requestBody,
+                requestText,
+                requestTextLength: requestText.length,
+            });
+            let response;
+            let responseText;
+            if (useHostProxy) {
+                let proxyError = null;
+                try {
+                    ({ response, responseText } = await requestHostProxyChatCompletion(apiBase, settings, requestBody, runContext));
+                }
+                catch (error) {
+                    proxyError = error;
+                    logApiDebug(`proxy_error:${attempt}`, { proxyError: error });
+                    // 代理已经等满超时（或整轮时限已到），直连只会再卡一次同样的时长
+                    if (isApiTimeoutError(error) || isApiDeadlineError(error))
+                        throw error;
+                }
+                if (proxyError || (!response.ok && shouldFallbackFromHostProxy(responseText, response.status))) {
+                    transport = proxyError ? 'direct-after-proxy-error' : `direct-after-proxy-${response.status}`;
+                    ({ response, responseText } = await fetchText(url, {
+                        method: 'POST',
+                        headers: getAuthHeaders(settings),
+                        body: requestText,
+                        timeoutMs: resolveApiTimeoutMs(settings),
+                        externalSignal: runContext.signal || null,
+                        deadlineMs: runContext.deadlineMs || 0,
+                    }));
+                }
+            }
+            else {
+                ({ response, responseText } = await fetchText(url, {
+                    method: 'POST',
+                    headers: getAuthHeaders(settings),
+                    body: requestText,
+                    timeoutMs: resolveApiTimeoutMs(settings),
+                    externalSignal: runContext.signal || null,
+                    deadlineMs: runContext.deadlineMs || 0,
+                }));
+            }
+            globalThis[DEBUG_LAST_API_RESPONSE_KEY] = {
+                capturedAt: Date.now(),
+                attempt,
+                transport,
+                url: transport === 'host-proxy' ? '/api/backends/chat-completions/generate' : url,
+                status: response.status,
+                ok: response.ok,
+                responseText,
+                requestText,
+            };
+            logApiDebug(`response:${attempt}`, {
+                transport,
+                url: transport === 'host-proxy' ? '/api/backends/chat-completions/generate' : url,
+                status: response.status,
+                ok: response.ok,
+                responseText,
+                requestText,
+            });
+            return { response, responseText, requestText };
+        }
+        catch (error) {
+            logApiDebug(`error:${attempt}`, {
+                transport,
+                url,
+                requestBody,
+                requestText,
+                error,
+            });
+            if (isApiTimeoutError(error) || isApiDeadlineError(error))
+                throw error;
+            throw new Error(`无法连接到 API。请检查 Base URL、API Key、服务是否启动；浏览器环境会优先通过酒馆后端代理。原始错误: ${String(error?.message || error)}`);
+        }
+        finally {
+            globalThis.__bs_biotracker_async_request__ = previousAsyncFlag;
+        }
+    };
+    let result = await postBody(body, 'primary');
+    let response = result.response;
+    let responseText = result.responseText;
+    let errorText = response.ok ? '' : responseText;
+    if (!response.ok && response.status === 400 && body.response_format) {
+        const fallbackBody = {
+            model: body.model,
+            temperature: body.temperature,
+            top_p: body.top_p,
+            frequency_penalty: body.frequency_penalty,
+            presence_penalty: body.presence_penalty,
+            max_tokens: body.max_tokens,
+            seed: body.seed,
+            messages: body.messages,
+        };
+        result = await postBody(fallbackBody, 'without_response_format');
+        response = result.response;
+        responseText = result.responseText;
+        errorText = response.ok ? '' : responseText;
+    }
+    const invalidArgument = response.status === 400 && /invalid argument|badRequest/i.test(errorText);
+    if (!response.ok && invalidArgument) {
+        const minimalBody = {
+            model: body.model,
+            messages: body.messages,
+        };
+        result = await postBody(minimalBody, 'minimal');
+        response = result.response;
+        responseText = result.responseText;
+        errorText = response.ok ? '' : responseText;
+    }
+    if (!response.ok) {
+        throw new Error(`API ${response.status}: ${errorText.slice(0, 300)}`);
+    }
+    try {
+        return JSON.parse(responseText);
+    }
+    catch (error) {
+        logApiDebug('parse_error', {
+            status: response.status,
+            responseText,
+            error,
+        });
+        throw error;
+    }
+}
+function hasPresetToggleOverrides(settings) {
+    if (!shouldApplyAsyncPreset(settings))
+        return false;
+    const presetName = resolvePresetName(settings);
+    if (!presetName)
+        return false;
+    const presetOverrides = settings?.trackerPromptToggleOverrides?.[presetName];
+    return !!presetOverrides && Object.keys(presetOverrides).length > 0;
+}
+async function fetchModelList(settings) {
+    const apiBase = getApiBase(settings);
+    if (!apiBase)
+        throw new Error('请先填写 API Base URL');
+    let response;
+    let responseText = '';
+    const url = `${apiBase}/models`;
+    const useHostProxy = shouldUseHostProxy(url);
+    let transport = useHostProxy ? 'host-proxy' : 'direct';
+    try {
+        if (useHostProxy) {
+            let proxyError = null;
+            try {
+                ({ response, responseText } = await requestHostProxyModelList(apiBase, settings));
+            }
+            catch (error) {
+                proxyError = error;
+                console.warn('[BS BioTracker] host proxy model list failed, trying direct', error);
+            }
+            if (proxyError || (!response.ok && shouldFallbackFromHostProxy(responseText, response.status))) {
+                transport = proxyError ? 'direct-after-proxy-error' : `direct-after-proxy-${response.status}`;
+                ({ response, responseText } = await fetchText(url, { method: 'GET', headers: getAuthHeaders(settings), timeoutMs: resolveModelListTimeoutMs(settings) }));
+            }
+        }
+        else {
+            ({ response, responseText } = await fetchText(url, { method: 'GET', headers: getAuthHeaders(settings), timeoutMs: resolveModelListTimeoutMs(settings) }));
+        }
+    }
+    catch (error) {
+        throw new Error(`模型列表连接失败（${transport}）。请检查 Base URL / API Key；也可手动填写模型名称后直接使用追踪/注册。原始错误: ${String(error?.message || error)}`);
+    }
+    if (!response.ok) {
+        throw new Error(`模型列表请求失败 ${response.status}（${transport}）: ${responseText.slice(0, 240)}。如果此 API 不支持 /models，可手动填写模型名称。`);
+    }
+    let data;
+    try {
+        data = JSON.parse(responseText);
+    }
+    catch {
+        throw new Error(`模型列表响应不是 JSON（${transport}）: ${responseText.slice(0, 180)}`);
+    }
+    if (data && typeof data === 'object' && data.data == null && data.models == null && data.response) {
+        try {
+            const nested = typeof data.response === 'string' ? JSON.parse(data.response) : data.response;
+            if (nested && typeof nested === 'object')
+                data = nested;
+        }
+        catch { }
+    }
+    const modelItems = Array.isArray(data?.data)
+        ? data.data
+        : (Array.isArray(data?.models) ? data.models : (Array.isArray(data) ? data : []));
+    const models = modelItems
+        .map((item) => (typeof item === 'string'
+        ? item.trim()
+        : String(item?.id || item?.name || item?.model || '').trim()))
+        .filter(Boolean)
+        .sort((a, b) => a.localeCompare(b));
+    if (models.length === 0)
+        throw new Error('API 有响应，但没有返回可用模型；可手动填写模型名称。');
+    return models;
+}
+function isPromptEnabled(prompt, presetOverrides = {}) {
+    if (!prompt || typeof prompt !== 'object')
+        return false;
+    if (Object.hasOwn(presetOverrides, prompt.identifier))
+        return !!presetOverrides[prompt.identifier];
+    return prompt.enabled !== false;
+}
+function buildPresetMessagesFromPrompts(prompts, presetOverrides, baseSystemPrompt, payloadText, stCtx = null) {
+    const orderedMessages = [];
+    const inChatMessages = [];
+    for (const prompt of Array.isArray(prompts) ? prompts : []) {
+        if (!isPromptEnabled(prompt, presetOverrides))
+            continue;
+        const content = sanitizeTransportString(resolveWithStMacros(prompt?.content || '', stCtx)).trim();
+        if (!content || prompt?.marker)
+            continue;
+        const isInChat = Number(prompt?.injection_position) === 1;
+        const promptRole = normalizeChatRole(prompt?.role, prompt?.system_prompt ? 'system' : 'system');
+        const target = isInChat ? inChatMessages : orderedMessages;
+        target.push({
+            role: promptRole,
+            content,
+            _depth: Number.isFinite(Number(prompt?.injection_depth)) ? Number(prompt.injection_depth) : 0,
+            _order: Number.isFinite(Number(prompt?.injection_order)) ? Number(prompt.injection_order) : 0,
+        });
+    }
+    inChatMessages.sort((a, b) => (a._depth - b._depth) || (a._order - b._order));
+    const merged = [{ role: 'system', content: baseSystemPrompt }];
+    orderedMessages.forEach((message) => merged.push({ role: message.role, content: message.content }));
+    inChatMessages.forEach((message) => merged.push({ role: message.role, content: message.content }));
+    merged.push({ role: 'user', content: payloadText });
+    return merged;
+}
+async function buildPresetEnvelope(settings, baseSystemPrompt, payloadText) {
+    try {
+        const resolved = await getResolvedPreset(settings);
+        if (!resolved)
+            return null;
+        const stCtx = getSillyTavernContext();
+        const { presetName, preset } = resolved;
+        const overrides = settings?.trackerPromptToggleOverrides || {};
+        const presetOverrides = overrides[presetName] || {};
+        const prompts = Array.isArray(preset?.prompts) ? preset.prompts : [];
+        const messages = buildPresetMessagesFromPrompts(prompts, presetOverrides, baseSystemPrompt, payloadText, stCtx);
+        const sampling = buildPresetSamplingBodyFromPreset(preset);
+        return { presetName, messages, sampling };
+    }
+    catch (error) {
+        console.warn('[BS BioTracker] failed to build preset envelope', error);
+        return null;
+    }
+}
+async function callOpenAICompatible(settings, payload, systemPrompt = DEFAULT_SYSTEM_PROMPT) {
+    const apiBase = getApiBase(settings);
+    const model = String(settings.model || '').trim();
+    const stCtx = getSillyTavernContext();
+    const resolvedPayload = await buildResolvedAsyncPayload(payload, stCtx, settings);
+    const mainflowCopy = buildPayloadWithMainflowCopy(resolvedPayload, settings);
+    const safePayload = sanitizeTransportValue(mainflowCopy.payload);
+    const safeSystemPrompt = sanitizeTransportString(resolveWithStMacros(systemPrompt || DEFAULT_SYSTEM_PROMPT, stCtx));
+    const baseMessages = [
+        { role: 'system', content: safeSystemPrompt },
+        { role: 'user', content: JSON.stringify(safePayload) },
+    ];
+    if (!apiBase || !model)
+        throw new Error('API URL 或模型名称尚未配置');
+    const payloadText = JSON.stringify(safePayload);
+    // Never stage an internal payload in the active chat to resolve presets: hosts
+    // and extensions may persist that synthetic message as visible chat content.
+    const presetEnvelope = shouldApplyAsyncPreset(settings)
+        ? await buildPresetEnvelope(settings, safeSystemPrompt, payloadText)
+        : null;
+    const effectiveMessages = presetEnvelope?.messages?.length ? presetEnvelope.messages : baseMessages;
+    const stPresetSampling = presetEnvelope?.sampling || {};
+    const effectivePresetName = presetEnvelope?.presetName || '';
+    // 格式化输出(v4兼容)：仅 response_format.type = json_object（无 json_schema），可在设置关闭
+    const useFormattedOutputV4 = settings?.formattedOutputV4 !== false;
+    const body = {
+        model,
+        temperature: 0.2,
+        ...stPresetSampling,
+        messages: effectiveMessages,
+        ...(useFormattedOutputV4 ? { response_format: { type: 'json_object' } } : {}),
+    };
+    recordEffectiveRequestDebug(`${safePayload?.target_character ? 'registry' : 'tracker'}${mainflowCopy.hasMainflowCopy ? '-mainflow-copy' : (safePayload?.resolved_worldbook_prompt ? '-mainflow-worldinfo' : '')}${useFormattedOutputV4 ? '' : '-no-response-format'}`, effectivePresetName, stPresetSampling, effectiveMessages, body);
+    const callLabel = safePayload?.target_character ? '注册请求' : '追踪请求';
+    // 整轮总时限：一个信号统管全部重试与子请求，到点后中止在飞的 fetch 并停止重试，
+    // 让手动按钮无论后端多离谱都能在有限时间内解禁。单次超时为 0 时它是唯一的终点保障。
+    const deadlineMs = resolveOverallDeadlineMs(settings);
+    const overallController = typeof AbortController === 'function' ? new AbortController() : null;
+    let overallTimer = null;
+    if (overallController && deadlineMs > 0) {
+        overallTimer = setTimeout(() => {
+            try {
+                overallController.abort();
+            }
+            catch { }
+        }, deadlineMs);
+    }
+    const runContext = { signal: overallController?.signal || null, deadlineMs };
+    try {
+        return await withGlobalApiRetries(async (globalAttempt) => {
+            const data = await requestChatCompletion(apiBase, settings, body, runContext);
+            const content = data?.choices?.[0]?.message?.content || '';
+            let parsed = extractJson(content);
+            if (parsed && typeof parsed === 'object')
+                return parsed;
+            // 同一轮全局尝试内：先做一次「请只输出 JSON」纠错请求
+            const retryBody = {
+                model,
+                temperature: 0.1,
+                ...stPresetSampling,
+                messages: [
+                    ...effectiveMessages,
+                    { role: 'assistant', content: String(content || '') },
+                    { role: 'user', content: buildJsonRetryInstruction() },
+                ],
+                ...(useFormattedOutputV4 ? { response_format: { type: 'json_object' } } : {}),
+            };
+            const retryData = await requestChatCompletion(apiBase, settings, retryBody, runContext);
+            const retryContent = retryData?.choices?.[0]?.message?.content || '';
+            parsed = extractJson(retryContent);
+            if (parsed && typeof parsed === 'object')
+                return parsed;
+            throw new Error(`模型没有返回可解析的 JSON（全局尝试 ${globalAttempt + 1}/${GLOBAL_API_MAX_RETRIES + 1}）。原始回覆：${summarizeModelText(retryContent || content)}`);
+        }, { label: callLabel, overallSignal: overallController?.signal || null, deadlineMs });
+    }
+    finally {
+        if (overallTimer)
+            clearTimeout(overallTimer);
+    }
+}
+
+const VIVIPAROUS_RACES = Object.freeze([
+    "人类",
+    "精灵",
+    "兽耳族",
+    "袋兽族",
+    "哥布林",
+    "兽人",
+    "矮人",
+    "半身人",
+    "半人马",
+    "巨人",
+    "魅魔",
+    "雪族",
+    "夜叉",
+    "妖狐",
+    "貓又"
+]);
+const OVIPAROUS_RACES = Object.freeze([
+    "鸟人",
+    "植物亚人",
+    "社会虫族",
+    "蜥蜴人",
+    "触手怪",
+    "妖精",
+    "真菌亚人",
+    "海蛞蝓族",
+    "龟族",
+    "甲壳族",
+    "宝箱怪",
+    "阿拉克涅",
+    "百足姬",
+    "天狗",
+    "深潜者"
+]);
+const OVOVIVIPAROUS_RACES = Object.freeze([
+    "人鱼",
+    "鱼人",
+    "海妖",
+    "独居虫族",
+    "蛇人",
+    "蛙人",
+    "眼魔",
+    "水母族",
+    "海龙人",
+    "河童"
+]);
+const METOVIVIPAROUS_RACES = Object.freeze([
+    "龙族",
+    "狮鹫族",
+    "天使",
+    "恶魔",
+    "奇美拉",
+    "麒麟",
+    "凤凰",
+    "白泽",
+    "独角兽",
+    "空鲸"
+]);
+const AMORPHOUS_RACES = Object.freeze([
+    "史萊姆",
+    "石像鬼",
+    "烛灵",
+    "人偶",
+    "心魇",
+    "宝石人",
+    "奈米丛族",
+    "元素灵",
+    "灯神",
+    "影魔"
+]);
+const ALL_BUILTIN_RACES = Object.freeze([
+    ...VIVIPAROUS_RACES,
+    ...OVIPAROUS_RACES,
+    ...OVOVIVIPAROUS_RACES,
+    ...METOVIVIPAROUS_RACES,
+    ...AMORPHOUS_RACES,
+]);
+const RACE_INTRODUCTION_LINES = Object.freeze(Object.fromEntries(ALL_BUILTIN_RACES.map((race) => [race, ""])));
+const RACE_INTRODUCTION_FIELD = "introductionLine";
+const DERIVED_TYPE_RACES = Object.freeze([
+    "修行",
+    "妖怪",
+    "神祇",
+    "不死",
+    "血族",
+    "星际",
+    "机械",
+    "器灵",
+    "变异",
+    "序列"
+]);
+const DERIVED_TYPE_INHERITANCE_PROFILES = Object.freeze({
+    "修行": Object.freeze({
+        inheritanceSpeed: 0.75
+    }),
+    "妖怪": Object.freeze({
+        inheritanceSpeed: 1.25
+    }),
+    "神祇": Object.freeze({
+        inheritanceSpeed: 0.33
+    }),
+    "不死": Object.freeze({
+        inheritanceSpeed: 2.0
+    }),
+    "血族": Object.freeze({
+        inheritanceSpeed: 1.66
+    }),
+    "星际": Object.freeze({
+        inheritanceSpeed: 1.5
+    }),
+    "机械": Object.freeze({
+        inheritanceSpeed: 0.5
+    }),
+    "器灵": Object.freeze({
+        inheritanceSpeed: 0.66
+    }),
+    "变异": Object.freeze({
+        inheritanceSpeed: 1.33
+    }),
+    "序列": Object.freeze({
+        inheritanceSpeed: 1.0
+    })
+});
+const DERIVED_TYPE_FLUX_PROFILES = Object.freeze({
+    "修行": Object.freeze({
+        fluxName: "炁",
+        fluxDefinition: "个体吸收天地灵气转化为自身的超凡生命能量。\n[平衡] 气息绵长，身心空灵，能完美掌控超凡能力，与自然环境共鸣。\n[正极] 表现为‘走火入魔’：生理上经脉胀痛欲裂、体表溢出肉眼可见的能量狂潮甚至七窍流血；心理上狂躁易怒、心魔幻象丛生，容易失去理智进行无差别破坏。\n[负极] 表现为‘散功衰败’：生理上经脉萎缩闭塞、肉身加速衰老、畏寒骨痛；心理上神识昏沉、感知迟钝，完全无法调动任何术法，甚至退化为凡人状态。",
+    }),
+    "妖怪": Object.freeze({
+        fluxName: "妖力",
+        fluxDefinition: "由执念生智并汲取世人‘畏惧与认知’而存在的异类法则，与常理相悖。\n[平衡] 具备独特的人格与癖好，能披着人皮或化为人形在现世中游荡，既保留异类的诡谲，又沾染着人世的烟火气，行为遵循自身的‘专属怪谈规则’。\n[正极] 表现为‘大妖/神隐’(不入世)：生理上彻底褪去人形，显露出庞大或恐怖的本体（或化为纯粹的自然现象/概念），周围常理被扭曲（如重力失效、时间错乱）；心理上视角拔高至‘非人’，彻底失去对人类的共情与兴趣，逻辑变得古老、傲慢且无法沟通，随时准备脱离现世前往彼岸。\n[负极] 表现为‘物化/归寂’(被世界吞噬)：生理上身躯逐渐变得半透明或边缘破碎，不可逆地退化回未开智的本源状态（如变回一只普通的野狐、一把破伞、一阵无形的风）；心理上陷入强烈的存在危机与迷茫，逐渐遗忘自己的名字与记忆，语言能力退化，充满即将被世界规则‘抹消’的无力感与恐惧。"
+    }),
+    "神祇": Object.freeze({
+        fluxName: "信仰",
+        fluxDefinition: "源自凡人祈求、敬畏与香火供奉的概念集合体，是维持神力与神格的基石。\n[平衡] 威严且从容，具备明确的神职领域（如丰收、战争），能轻易展现与自身领域相关的神迹，对凡人抱持着宏观的慈悲或理性的管理者姿态。\n[正极] 表现为‘神格吞噬’：生理上神光刺眼夺目，周身充斥着令人无法直视的极端威压，随口一言皆成法则；心理上‘神性’彻底压倒‘人性’，自我意识被狂热信徒的‘期望’所绑架，成为冰冷、绝对且不知变通的‘概念机器’（例如正义之神变得为了惩罚罪恶而无差别屠戮），失去个人情感与私心。\n[负极] 表现为‘堕落/坠星’：生理上神环破碎、神力枯竭，肉身变得如同凡人般脆弱、会生病受伤流血，甚至衣衫褴褛如流浪者；心理上承受着被世人遗忘的巨大孤独与恐慌，从云端跌落后‘人性’剧烈反弹，变得极度渴望被关注、情绪化、甚至会为了一点点微小的供奉或陪伴而对凡人展现出卑微与依赖。"
+    }),
+    "不死": Object.freeze({
+        fluxName: "死气",
+        fluxDefinition: "维持亡者驱壳活动的负面能量，与生前记忆形成互斥。\n[平衡] 气息阴冷，行动安静隐密，展现出无机质的冰冷理智，保留基础认知但情感淡漠。\n[正极] 表现为‘腐败暴走’：生理上死气不受控地四溢，导致周遭环境枯萎、物质腐化，肉体呈现骇人的非人扭曲；心理上彻底丧失理智与人性，被纯粹的破坏欲、饥饿或生前执念的阴暗面支配，如同狂暴的野兽。\n[负极] 表现为‘回光残影’：生理上失去驱动力，肢体僵硬迟缓、甚至面临形体崩解消散的危机；心理上却因死气退散而迎来‘人性觉醒’，清晰忆起生前的情感与记忆，表现出极度的哀伤、温柔或懊悔，语气变得极具人情味。"
+    }),
+    "血族": Object.freeze({
+        fluxName: "血欲",
+        fluxDefinition: "驱动吸血种族生理机能的血液渴求度，与理智防线呈反比。\n[平衡] 举止优雅从容，具备完美的掠食者隐蔽性，能冷静克制本能，展现出高智商与绝对的自控力。\n[正极] 表现为‘渴血戒断’：生理上肉体呈现病态的干瘪虚弱、畏光加剧、犬齿不受控地暴突、对血液气味极度敏感；心理上备受饥饿折磨，理智濒临崩溃，会展现出焦躁、卑微乞求或不择手段的疯狂索求姿态。\n[负极] 表现为‘醉血迷离’：生理上面色异常红润、体温微升、感官迟钝，步态与动作如同微醺般慵懒松懈；心理上处于极度满足的‘嗑嗨’状态，情绪异常高昂或多话，彻底丧失防御心与优雅包袱，容易做出轻浮、傲慢或过度亲昵的越界行为。"
+    }),
+    "星际": Object.freeze({
+        fluxName: "连结力",
+        fluxDefinition: "维持星际物种（如蜂群思维、高维精神体）与母体网路或同族间的心灵共鸣度。\n[平衡] 具备独立思考能力但情绪稳定，能流畅地与周遭环境或同伴进行无声的意识交流，展现出高度的共情与超然的理性。\n[正极] 表现为‘群体覆写’：生理上瞳孔失焦或发出异光，说话时不自觉使用‘我们’而非‘我’，动作展现出诡异的绝对精准与同步率；心理上‘自我’边界消融，被庞大的群体意识强制接管，失去个人情感与道德观，会为了‘集体利益’做出绝对冷酷的决策，甚至试图强行同化他人。\n[负极] 表现为‘虚空孤绝’：生理上出现强烈的幻痛与感官剥夺感，肢体不自觉地颤抖、蜷缩，极度渴望物理层面的接触与拥抱；心理上陷入深渊般的绝对孤独与恐慌（类似重度社交剥夺），会像溺水者般疯狂黏着身边任何具备意识的个体，将其视为‘代偿网路’，展现出极度脆弱与依赖的幼态行为。"
+    }),
+    "机械": Object.freeze({
+        fluxName: "负载",
+        fluxDefinition: "驱动机械体运作的核心能源输出与算力占用率。\n[平衡] 系统运行流畅，散热稳定。动作精准无多余消耗，语音模组与情感模拟器（人格）正常运作，展现出高度理智与最佳化的执行效率。\n[正极/负载超频] 表现为‘超载暴走’：生理上核心温度飙升，机体各处喷射蒸气、火花或发出红色警报光，无顾忌地发挥撕裂自身零件的恐怖破坏力；心理上‘安全限制器’解除，算力全部集中于单一目标（如‘排除敌人’），强制关闭情感与痛觉模组，语音变得充满杂音、卡顿、疯狂重复战术指令，呈现出冷酷且毁灭性的纯粹机器特质。\n[负极/负载过低] 表现为‘节能休眠’：生理上动力流失，关节伺服马达变得迟缓沉重，光学感测器（眼睛）闪烁变暗，各种武装与外挂机能强制下线；心理上为了节省算力，会主动剥离‘拟似人格’与‘幽默感’，说话变得毫无起伏的电子合成音，甚至出现断片与逻辑运算超时的现象，带着一种即将被关机（死亡）的平静与机械式的不安。"
+    }),
+    "器灵": Object.freeze({
+        fluxName: "共鸣",
+        fluxDefinition: "器物生智后与持有者（宿主）之间的灵魂/意识同步率。\n[平衡] 人器合一。器灵能维持稳定的灵体显现，与持有者心意相通，战斗时如臂使指，能像默契极佳的搭档般流畅对话与协同作战。\n[正极] 表现为‘反噬/夺舍’：生理上器物本体爆发出刺眼光芒或凶气，甚至强行操控持有者的肢体（如眼睛变色、动作生硬却爆发力极强）；心理上器灵的意识（原初的杀戮欲、傲慢或执念）完全压过持有者，喧宾夺主，将持有者视为单纯的‘供能电池’或‘剑鞘’，语气变得狂妄、极具支配欲。\n[负极] 表现为‘灵寂/蒙尘’：生理上器物本体变得黯淡无光、沉重、甚至出现锈迹或裂痕，器灵的投影变得半透明、闪烁不定直至无法维持身形；心理上器灵失去感知外界与沟通的能力，陷入深沉的沉睡或被抛弃的无力感中，退化为一把‘凡铁’，只剩下微弱的本能悲鸣。"
+    }),
+    "变异": Object.freeze({
+        fluxName: "异能",
+        fluxDefinition: "基因突变所产生的超自然能力输出频率。\n[平衡] 异能如同呼吸与肌肉般自然运作，能完美控制力道，将能力无缝融入日常生理活动与战斗中，身心协调无负担。\n[正极] 表现为‘基因失控’：生理上异能特征以极具侵略性的方式外显（如体表长出结晶、自燃、周遭重力异常），肉体承受着被自身力量撕裂的痛苦；心理上被能力的‘属性本能’反向支配（例如火系变得狂躁暴戾、精神系变得神经质且多疑），理智断线，充满无差别的破坏欲，无法停止力量的宣泄。\n[负极] 表现为‘感官失能’：生理上如同突然失去了一条重要的肢体（幻肢痛），出现严重的平衡感丧失、动作笨拙、神经抽搐与极度虚弱；心理上陷入强烈的困惑、自我怀疑与恐慌，因为原本依赖的‘第六感（异能）’被剥夺，对世界感到极度陌生与毫无安全感，表现出防御性极强的暴躁或严重的退缩。"
+    }),
+    "序列": Object.freeze({
+        fluxName: "信息素",
+        fluxDefinition: "决定序列阶级（如Alpha/Omega）与生物本能的化学贺尔蒙浓度。\n[平衡] 气味收敛且稳定，能维持完美的社会化面具，理性完全掌控兽性本能，情绪平稳且具备清晰的社交边界感。\n[正极] 表现为‘发情/易感’：生理上体温飙高如同重病，腺体不受控地释放极具侵略性或诱惑性的浓烈气味，对触碰与气味极度敏感，甚至伴随领地意识的生理性低吼；心理上理智被繁衍、占有或臣服的兽性本能彻底摧毁，丧失所有社会化禁忌，展现出极端的偏执、占有欲或不顾一切的渴求，眼中只剩下‘目标’。\n[负极] 表现为‘群体排斥’：生理上腺体干瘪疼痛，短暂失去嗅觉（无法感知他人气味），并伴随畏寒与强烈的反胃感；心理上触发‘被族群抛弃的孤狼’的远古恐惧，陷入极度的自卑、抑郁与被剥夺感，觉得自己散发着腐败或令人作呕的气息，会主动躲避人群、抗拒社交，对任何轻微的拒绝都会产生过激的悲观反应。"
+    })
+});
+const DERIVED_TYPE_METABOLISM_EXEMPTIONS = Object.freeze({
+    "血族": Object.freeze(["hunger", "excretion", "odor"]),
+    "不死": Object.freeze(["odor", "sleep", "milk"]),
+    "修行": Object.freeze(["hunger", "excretion", "companionship"]),
+    "妖怪": Object.freeze(["hunger", "excretion", "sleep"]),
+    "神祇": Object.freeze(["hunger", "sleep", "companionship"]),
+    "机械": Object.freeze(["hunger", "milk", "companionship"]),
+    "器灵": Object.freeze(["hunger", "milk", "sleep"]),
+    "星际": Object.freeze(["sleep", "milk", "companionship"]),
+    "变异": Object.freeze(["sleep", "hunger", "odor"]),
+    "序列": Object.freeze(["sleep", "odor", "companionship"]),
+});
+const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
+    "人类": {
+        "menstrualLengthRatio": 1,
+        "gestationSpeciesSpeed": 1,
+        "birthDifficulty": 1,
+        "breedTolerance": 1,
+        "impregnationDifficulty": 1,
+        "orgasmOvulationAmount": 1,
+        "identicalProbability": 5,
+        "genderRatio": 50
+    },
+    "精灵": {
+        "menstrualLengthRatio": 3,
+        "gestationSpeciesSpeed": 0.5,
+        "birthDifficulty": 0.8,
+        "breedTolerance": 0.33,
+        "impregnationDifficulty": 3,
+        "orgasmOvulationAmount": 0,
+        "identicalProbability": 2,
+        "genderRatio": 45
+    },
+    "兽耳族": {
+        "menstrualLengthRatio": 0.75,
+        "gestationSpeciesSpeed": 1.6,
+        "birthDifficulty": 0.8,
+        "breedTolerance": 3,
+        "impregnationDifficulty": 0.5,
+        "orgasmOvulationAmount": 3,
+        "identicalProbability": 45,
+        "genderRatio": 50
+    },
+    "袋兽族": {
+        "menstrualLengthRatio": 0.75,
+        "gestationSpeciesSpeed": 5,
+        "birthDifficulty": 0.3,
+        "breedTolerance": 0.01,
+        "impregnationDifficulty": 1,
+        "orgasmOvulationAmount": 1,
+        "identicalProbability": 25,
+        "genderRatio": 50
+    },
+    "哥布林": {
+        "menstrualLengthRatio": 0.5,
+        "gestationSpeciesSpeed": 2.5,
+        "birthDifficulty": 2,
+        "breedTolerance": 1,
+        "impregnationDifficulty": 0.2,
+        "orgasmOvulationAmount": 2,
+        "identicalProbability": 40,
+        "genderRatio": 99
+    },
+    "兽人": {
+        "menstrualLengthRatio": 0.75,
+        "gestationSpeciesSpeed": 1.25,
+        "birthDifficulty": 1,
+        "breedTolerance": 2,
+        "impregnationDifficulty": 0.8,
+        "orgasmOvulationAmount": 1,
+        "identicalProbability": 50,
+        "genderRatio": 75
+    },
+    "矮人": {
+        "menstrualLengthRatio": 1,
+        "gestationSpeciesSpeed": 1,
+        "birthDifficulty": 2,
+        "breedTolerance": 1,
+        "impregnationDifficulty": 1,
+        "orgasmOvulationAmount": 1,
+        "identicalProbability": 2,
+        "genderRatio": 60
+    },
+    "半身人": {
+        "menstrualLengthRatio": 0.75,
+        "gestationSpeciesSpeed": 1.25,
+        "birthDifficulty": 1.5,
+        "breedTolerance": 2,
+        "impregnationDifficulty": 0.8,
+        "orgasmOvulationAmount": 3,
+        "identicalProbability": 30,
+        "genderRatio": 50
+    },
+    "魅魔": {
+        "menstrualLengthRatio": 1,
+        "gestationSpeciesSpeed": 1,
+        "birthDifficulty": 0.5,
+        "breedTolerance": 3,
+        "impregnationDifficulty": 1,
+        "orgasmOvulationAmount": 2,
+        "identicalProbability": 33,
+        "genderRatio": 50
+    },
+    "半人马": {
+        "menstrualLengthRatio": 1,
+        "gestationSpeciesSpeed": 0.8,
+        "birthDifficulty": 1.5,
+        "breedTolerance": 0.5,
+        "impregnationDifficulty": 2,
+        "orgasmOvulationAmount": 1,
+        "identicalProbability": 5,
+        "genderRatio": 66
+    },
+    "巨人": {
+        "menstrualLengthRatio": 2,
+        "gestationSpeciesSpeed": 0.4,
+        "birthDifficulty": 3,
+        "breedTolerance": 1,
+        "impregnationDifficulty": 4,
+        "orgasmOvulationAmount": 0,
+        "identicalProbability": 2,
+        "genderRatio": 50
+    },
+    "雪族": {
+        "menstrualLengthRatio": 1.25,
+        "gestationSpeciesSpeed": 1,
+        "birthDifficulty": 1,
+        "breedTolerance": 0.8,
+        "impregnationDifficulty": 0.75,
+        "orgasmOvulationAmount": 1,
+        "identicalProbability": 5,
+        "genderRatio": 40
+    },
+    "夜叉": {
+        "menstrualLengthRatio": 0.75,
+        "gestationSpeciesSpeed": 0.5,
+        "birthDifficulty": 4,
+        "breedTolerance": 0.8,
+        "impregnationDifficulty": 0.5,
+        "orgasmOvulationAmount": 1,
+        "identicalProbability": 50,
+        "genderRatio": 50
+    },
+    "妖狐": {
+        "menstrualLengthRatio": 1,
+        "gestationSpeciesSpeed": 0.8,
+        "birthDifficulty": 1.5,
+        "breedTolerance": 0.5,
+        "impregnationDifficulty": 3,
+        "orgasmOvulationAmount": 0,
+        "identicalProbability": 5,
+        "genderRatio": 50
+    },
+    "貓又": {
+        "menstrualLengthRatio": 0.75,
+        "gestationSpeciesSpeed": 1,
+        "birthDifficulty": 1,
+        "breedTolerance": 1.5,
+        "impregnationDifficulty": 2.5,
+        "orgasmOvulationAmount": 2,
+        "identicalProbability": 20,
+        "genderRatio": 50
+    },
+    "鸟人": {
+        "menstrualLengthRatio": 1,
+        "gestationSpeciesSpeed": 2,
+        "birthDifficulty": 0.33,
+        "breedTolerance": 1,
+        "impregnationDifficulty": 0.5,
+        "orgasmOvulationAmount": 3,
+        "identicalProbability": 15,
+        "genderRatio": 50
+    },
+    "植物亚人": {
+        "menstrualLengthRatio": 1,
+        "gestationSpeciesSpeed": 2.5,
+        "birthDifficulty": 0.25,
+        "breedTolerance": 1,
+        "impregnationDifficulty": 1,
+        "orgasmOvulationAmount": 6,
+        "identicalProbability": 5,
+        "genderRatio": null
+    },
+    "真菌亚人": {
+        "menstrualLengthRatio": 1,
+        "gestationSpeciesSpeed": 3.3,
+        "birthDifficulty": 0.25,
+        "breedTolerance": 1,
+        "impregnationDifficulty": 0.8,
+        "orgasmOvulationAmount": 4,
+        "identicalProbability": 5,
+        "genderRatio": null
+    },
+    "社会虫族": {
+        "menstrualLengthRatio": 0.75,
+        "gestationSpeciesSpeed": 2.5,
+        "birthDifficulty": 0.2,
+        "breedTolerance": 4,
+        "impregnationDifficulty": 0.2,
+        "orgasmOvulationAmount": 8,
+        "identicalProbability": 0,
+        "genderRatio": 10
+    },
+    "触手怪": {
+        "menstrualLengthRatio": 0.25,
+        "gestationSpeciesSpeed": 5,
+        "birthDifficulty": 0.2,
+        "breedTolerance": 5,
+        "impregnationDifficulty": 0.25,
+        "orgasmOvulationAmount": 9,
+        "identicalProbability": 25,
+        "genderRatio": -1
+    },
+    "妖精": {
+        "menstrualLengthRatio": 3,
+        "gestationSpeciesSpeed": 0.8,
+        "birthDifficulty": 1,
+        "breedTolerance": 1,
+        "impregnationDifficulty": 3,
+        "orgasmOvulationAmount": 1,
+        "identicalProbability": 2,
+        "genderRatio": 50
+    },
+    "龟族": {
+        "menstrualLengthRatio": 2,
+        "gestationSpeciesSpeed": 0.625,
+        "birthDifficulty": 0.3,
+        "breedTolerance": 0.8,
+        "impregnationDifficulty": 2,
+        "orgasmOvulationAmount": 4,
+        "identicalProbability": 15,
+        "genderRatio": 50
+    },
+    "甲壳族": {
+        "menstrualLengthRatio": 3,
+        "gestationSpeciesSpeed": 1.6,
+        "birthDifficulty": 0.4,
+        "breedTolerance": 1.6,
+        "impregnationDifficulty": 2.5,
+        "orgasmOvulationAmount": 4,
+        "identicalProbability": 20,
+        "genderRatio": 50
+    },
+    "蜥蜴人": {
+        "menstrualLengthRatio": 0.75,
+        "gestationSpeciesSpeed": 1.25,
+        "birthDifficulty": 0.8,
+        "breedTolerance": 2.5,
+        "impregnationDifficulty": 1.5,
+        "orgasmOvulationAmount": 3,
+        "identicalProbability": 20,
+        "genderRatio": null
+    },
+    "海蛞蝓族": {
+        "menstrualLengthRatio": 0.5,
+        "gestationSpeciesSpeed": 3.3,
+        "birthDifficulty": 0.25,
+        "breedTolerance": 0.25,
+        "impregnationDifficulty": 0.25,
+        "orgasmOvulationAmount": 5,
+        "identicalProbability": 30,
+        "genderRatio": null
+    },
+    "宝箱怪": {
+        "menstrualLengthRatio": 1,
+        "gestationSpeciesSpeed": 1.67,
+        "birthDifficulty": 0.6,
+        "breedTolerance": 3.6,
+        "impregnationDifficulty": 0.6,
+        "orgasmOvulationAmount": 6,
+        "identicalProbability": 66,
+        "genderRatio": null
+    },
+    "阿拉克涅": {
+        "menstrualLengthRatio": 0.75,
+        "gestationSpeciesSpeed": 2,
+        "birthDifficulty": 1.5,
+        "breedTolerance": 4,
+        "impregnationDifficulty": 2,
+        "orgasmOvulationAmount": 6,
+        "identicalProbability": 0,
+        "genderRatio": 25
+    },
+    "百足姬": {
+        "menstrualLengthRatio": 1,
+        "gestationSpeciesSpeed": 2,
+        "birthDifficulty": 3.5,
+        "breedTolerance": 4,
+        "impregnationDifficulty": 1.5,
+        "orgasmOvulationAmount": 6,
+        "identicalProbability": 0,
+        "genderRatio": 40
+    },
+    "天狗": {
+        "menstrualLengthRatio": 1,
+        "gestationSpeciesSpeed": 1,
+        "birthDifficulty": 1,
+        "breedTolerance": 1.5,
+        "impregnationDifficulty": 1,
+        "orgasmOvulationAmount": 1,
+        "identicalProbability": 20,
+        "genderRatio": 50
+    },
+    "深潜者": {
+        "menstrualLengthRatio": 1.5,
+        "gestationSpeciesSpeed": 1.25,
+        "birthDifficulty": 1.2,
+        "breedTolerance": 3,
+        "impregnationDifficulty": 0.5,
+        "orgasmOvulationAmount": 3,
+        "identicalProbability": 10,
+        "genderRatio": 75
+    },
+    "人鱼": {
+        "menstrualLengthRatio": 1,
+        "gestationSpeciesSpeed": 0.8,
+        "birthDifficulty": 1.5,
+        "breedTolerance": 0.75,
+        "impregnationDifficulty": 2,
+        "orgasmOvulationAmount": 2,
+        "identicalProbability": 20,
+        "genderRatio": 50
+    },
+    "鱼人": {
+        "menstrualLengthRatio": 2,
+        "gestationSpeciesSpeed": 0.5,
+        "birthDifficulty": 2,
+        "breedTolerance": 1,
+        "impregnationDifficulty": 3,
+        "orgasmOvulationAmount": 0,
+        "identicalProbability": 2,
+        "genderRatio": 50
+    },
+    "海妖": {
+        "menstrualLengthRatio": 0.5,
+        "gestationSpeciesSpeed": 1,
+        "birthDifficulty": 3,
+        "breedTolerance": 0.3,
+        "impregnationDifficulty": 1,
+        "orgasmOvulationAmount": 2,
+        "identicalProbability": 5,
+        "genderRatio": 33
+    },
+    "水母族": {
+        "menstrualLengthRatio": 1,
+        "gestationSpeciesSpeed": 1.25,
+        "birthDifficulty": 0.2,
+        "breedTolerance": 0.5,
+        "impregnationDifficulty": 0.33,
+        "orgasmOvulationAmount": 5,
+        "identicalProbability": 50,
+        "genderRatio": null
+    },
+    "海龙人": {
+        "menstrualLengthRatio": 1.5,
+        "gestationSpeciesSpeed": 0.625,
+        "birthDifficulty": 2,
+        "breedTolerance": 0.4,
+        "impregnationDifficulty": 4,
+        "orgasmOvulationAmount": 2,
+        "identicalProbability": 25,
+        "genderRatio": 66
+    },
+    "河童": {
+        "menstrualLengthRatio": 1,
+        "gestationSpeciesSpeed": 0.8,
+        "birthDifficulty": 1.5,
+        "breedTolerance": 1.5,
+        "impregnationDifficulty": 2.5,
+        "orgasmOvulationAmount": 1,
+        "identicalProbability": 15,
+        "genderRatio": 50
+    },
+    "蛇人": {
+        "menstrualLengthRatio": 1,
+        "gestationSpeciesSpeed": 1,
+        "birthDifficulty": 1.2,
+        "breedTolerance": 2,
+        "impregnationDifficulty": 1,
+        "orgasmOvulationAmount": 2,
+        "identicalProbability": 10,
+        "genderRatio": 50
+    },
+    "蛙人": {
+        "menstrualLengthRatio": 0.5,
+        "gestationSpeciesSpeed": 3.3,
+        "birthDifficulty": 0.25,
+        "breedTolerance": 1,
+        "impregnationDifficulty": 0.7,
+        "orgasmOvulationAmount": 4,
+        "identicalProbability": 30,
+        "genderRatio": null
+    },
+    "眼魔": {
+        "menstrualLengthRatio": 2,
+        "gestationSpeciesSpeed": 1.25,
+        "birthDifficulty": 0.5,
+        "breedTolerance": 0.75,
+        "impregnationDifficulty": 3,
+        "orgasmOvulationAmount": 1,
+        "identicalProbability": 2,
+        "genderRatio": 50
+    },
+    "独居虫族": {
+        "menstrualLengthRatio": 0.5,
+        "gestationSpeciesSpeed": 4,
+        "birthDifficulty": 0.5,
+        "breedTolerance": 1,
+        "impregnationDifficulty": 0.5,
+        "orgasmOvulationAmount": 4,
+        "identicalProbability": 0,
+        "genderRatio": 30
+    },
+    "龙族": {
+        "menstrualLengthRatio": 4,
+        "gestationSpeciesSpeed": 0.25,
+        "birthDifficulty": 4,
+        "breedTolerance": 10,
+        "impregnationDifficulty": 5,
+        "orgasmOvulationAmount": 1,
+        "identicalProbability": 25,
+        "genderRatio": 50
+    },
+    "狮鹫族": {
+        "menstrualLengthRatio": 3.5,
+        "gestationSpeciesSpeed": 0.33,
+        "birthDifficulty": 3,
+        "breedTolerance": 9,
+        "impregnationDifficulty": 4,
+        "orgasmOvulationAmount": 2,
+        "identicalProbability": 25,
+        "genderRatio": 50
+    },
+    "天使": {
+        "menstrualLengthRatio": 1.25,
+        "gestationSpeciesSpeed": 0.8,
+        "birthDifficulty": 2.5,
+        "breedTolerance": 7,
+        "impregnationDifficulty": 3,
+        "orgasmOvulationAmount": 1,
+        "identicalProbability": 10,
+        "genderRatio": 50
+    },
+    "恶魔": {
+        "menstrualLengthRatio": 1.25,
+        "gestationSpeciesSpeed": 0.8,
+        "birthDifficulty": 2.5,
+        "breedTolerance": 7,
+        "impregnationDifficulty": 3,
+        "orgasmOvulationAmount": 1,
+        "identicalProbability": 10,
+        "genderRatio": 50
+    },
+    "灯神": {
+        "menstrualLengthRatio": 1.5,
+        "gestationSpeciesSpeed": 0.66,
+        "birthDifficulty": 2,
+        "breedTolerance": 6,
+        "impregnationDifficulty": 5,
+        "orgasmOvulationAmount": 1,
+        "identicalProbability": 0,
+        "genderRatio": 50
+    },
+    "麒麟": {
+        "menstrualLengthRatio": 1.75,
+        "gestationSpeciesSpeed": 0.3,
+        "birthDifficulty": 3,
+        "breedTolerance": 0.8,
+        "impregnationDifficulty": 4,
+        "orgasmOvulationAmount": 0,
+        "identicalProbability": 5,
+        "genderRatio": 50
+    },
+    "凤凰": {
+        "menstrualLengthRatio": 1.75,
+        "gestationSpeciesSpeed": 0.4,
+        "birthDifficulty": 5,
+        "breedTolerance": 0.5,
+        "impregnationDifficulty": 3.5,
+        "orgasmOvulationAmount": 0,
+        "identicalProbability": 5,
+        "genderRatio": 50
+    },
+    "白泽": {
+        "menstrualLengthRatio": 1.75,
+        "gestationSpeciesSpeed": 0.35,
+        "birthDifficulty": 4,
+        "breedTolerance": 0.3,
+        "impregnationDifficulty": 5,
+        "orgasmOvulationAmount": 0,
+        "identicalProbability": 5,
+        "genderRatio": 50
+    },
+    "独角兽": {
+        "menstrualLengthRatio": 1.5,
+        "gestationSpeciesSpeed": 0.5,
+        "birthDifficulty": 3.5,
+        "breedTolerance": 8,
+        "impregnationDifficulty": 5,
+        "orgasmOvulationAmount": 1,
+        "identicalProbability": 25,
+        "genderRatio": 66
+    },
+    "空鲸": {
+        "menstrualLengthRatio": 3,
+        "gestationSpeciesSpeed": 0.2,
+        "birthDifficulty": 5,
+        "breedTolerance": 10,
+        "impregnationDifficulty": 6,
+        "orgasmOvulationAmount": 1,
+        "identicalProbability": 5,
+        "genderRatio": 33
+    },
+    "史萊姆": {
+        "menstrualLengthRatio": 0.25,
+        "gestationSpeciesSpeed": 0.5,
+        "birthDifficulty": 0.25,
+        "breedTolerance": 8,
+        "impregnationDifficulty": 1,
+        "orgasmOvulationAmount": 3,
+        "identicalProbability": 75,
+        "genderRatio": null
+    },
+    "石像鬼": {
+        "menstrualLengthRatio": 1,
+        "gestationSpeciesSpeed": 0.4,
+        "birthDifficulty": 2.5,
+        "breedTolerance": 4,
+        "impregnationDifficulty": 6,
+        "orgasmOvulationAmount": 0,
+        "identicalProbability": 5,
+        "genderRatio": -1
+    },
+    "烛灵": {
+        "menstrualLengthRatio": 1,
+        "gestationSpeciesSpeed": 1.6,
+        "birthDifficulty": 0.5,
+        "breedTolerance": 2,
+        "impregnationDifficulty": 6,
+        "orgasmOvulationAmount": 0,
+        "identicalProbability": 40,
+        "genderRatio": -1
+    },
+    "人偶": {
+        "menstrualLengthRatio": 1,
+        "gestationSpeciesSpeed": 0.8,
+        "birthDifficulty": 1.5,
+        "breedTolerance": 2,
+        "impregnationDifficulty": 6,
+        "orgasmOvulationAmount": 0,
+        "identicalProbability": 10,
+        "genderRatio": -1
+    },
+    "心魇": {
+        "menstrualLengthRatio": 1,
+        "gestationSpeciesSpeed": 1,
+        "birthDifficulty": 2.5,
+        "breedTolerance": 0.8,
+        "impregnationDifficulty": 1,
+        "orgasmOvulationAmount": 0,
+        "identicalProbability": 20,
+        "genderRatio": 50
+    },
+    "元素灵": {
+        "menstrualLengthRatio": 0.5,
+        "gestationSpeciesSpeed": 1,
+        "birthDifficulty": 0.5,
+        "breedTolerance": 5,
+        "impregnationDifficulty": 6,
+        "orgasmOvulationAmount": 0,
+        "identicalProbability": 5,
+        "genderRatio": -1
+    },
+    "宝石人": {
+        "menstrualLengthRatio": 3,
+        "gestationSpeciesSpeed": 0.8,
+        "birthDifficulty": 3,
+        "breedTolerance": 2,
+        "impregnationDifficulty": 7,
+        "orgasmOvulationAmount": 0,
+        "identicalProbability": 5,
+        "genderRatio": 50
+    },
+    "奈米丛族": {
+        "menstrualLengthRatio": 1,
+        "gestationSpeciesSpeed": 2,
+        "birthDifficulty": 1,
+        "breedTolerance": 6,
+        "impregnationDifficulty": 7,
+        "orgasmOvulationAmount": 0,
+        "identicalProbability": 1,
+        "genderRatio": null
+    },
+    "奇美拉": {
+        "menstrualLengthRatio": 1,
+        "gestationSpeciesSpeed": 0.4,
+        "birthDifficulty": 4,
+        "breedTolerance": 12,
+        "impregnationDifficulty": 4,
+        "orgasmOvulationAmount": 1,
+        "identicalProbability": 20,
+        "genderRatio": 50
+    },
+    "影魔": {
+        "menstrualLengthRatio": 1,
+        "gestationSpeciesSpeed": 0.75,
+        "birthDifficulty": 0.6,
+        "breedTolerance": 5,
+        "impregnationDifficulty": 0.5,
+        "orgasmOvulationAmount": 0,
+        "identicalProbability": 33,
+        "genderRatio": 50
+    }
+});
+const RACE_PHYSIOLOGY_FIELDS = Object.freeze([
+    "menstrualLengthRatio",
+    "gestationSpeciesSpeed",
+    "birthDifficulty",
+    "breedTolerance",
+    "impregnationDifficulty",
+    "orgasmOvulationAmount",
+    "identicalProbability",
+    "recoveryDays",
+    "genderRatio"
+]);
+let customRacePhysiologyProfiles = {};
+let customDerivedTypeProfiles = {};
+function sanitizeDerivedTypeProfilePatch(profile) {
+    if (!profile || typeof profile !== 'object' || Array.isArray(profile))
+        return null;
+    const result = {};
+    for (const field of ['introductionLine', 'fluxDefinition']) {
+        if (!Object.prototype.hasOwnProperty.call(profile, field))
+            continue;
+        const value = String(profile[field] || '').trim();
+        if (value)
+            result[field] = value;
+    }
+    if (Object.prototype.hasOwnProperty.call(profile, 'inheritanceSpeed')) {
+        const value = Number(profile.inheritanceSpeed);
+        if (Number.isFinite(value))
+            result.inheritanceSpeed = Math.max(0, value);
+    }
+    return Object.keys(result).length > 0 ? result : null;
+}
+function setDerivedTypeOverrides(overrides = {}) {
+    const next = {};
+    if (overrides && typeof overrides === 'object' && !Array.isArray(overrides)) {
+        for (const [derivedType, profile] of Object.entries(overrides)) {
+            const key = String(derivedType || '').trim();
+            const patch = sanitizeDerivedTypeProfilePatch(profile);
+            if (key && patch)
+                next[key] = Object.freeze(patch);
+        }
+    }
+    customDerivedTypeProfiles = Object.freeze(next);
+}
+function getDerivedTypeOverride(derivedType) {
+    const baseName = getBaseDerivedTypeName(derivedType);
+    const profile = customDerivedTypeProfiles[baseName];
+    return profile ? {
+        ...profile,
+    } : null;
+}
+function getDerivedTypeIntroductionLine(derivedType) {
+    const baseName = getBaseDerivedTypeName(derivedType);
+    return String(customDerivedTypeProfiles[baseName]?.introductionLine || '').trim();
+}
+function sanitizeRacePhysiologyProfilePatch(profile) {
+    if (!profile || typeof profile !== 'object' || Array.isArray(profile))
+        return null;
+    const result = {};
+    if (Object.prototype.hasOwnProperty.call(profile, RACE_INTRODUCTION_FIELD)) {
+        const introductionLine = String(profile[RACE_INTRODUCTION_FIELD] || '').trim();
+        if (introductionLine)
+            result[RACE_INTRODUCTION_FIELD] = introductionLine;
+    }
+    for (const field of RACE_PHYSIOLOGY_FIELDS) {
+        if (field === 'recoveryDays')
+            continue;
+        if (!Object.prototype.hasOwnProperty.call(profile, field))
+            continue;
+        if (field === 'genderRatio' && profile[field] === null) {
+            result[field] = null;
+            continue;
+        }
+        const value = Number(profile[field]);
+        if (!Number.isFinite(value))
+            continue;
+        if (field === 'genderRatio')
+            result[field] = Math.max(-1, Math.min(100, Math.round(value)));
+        else if (field === 'orgasmOvulationAmount')
+            result[field] = Math.max(0, Math.round(value));
+        else if (field === 'identicalProbability')
+            result[field] = Math.max(0, Math.min(100, value));
+        else
+            result[field] = Math.max(0, value);
+    }
+    return Object.keys(result).length > 0 ? result : null;
+}
+function setRacePhysiologyOverrides(overrides = {}) {
+    const next = {};
+    if (overrides && typeof overrides === 'object' && !Array.isArray(overrides)) {
+        for (const [race, profile] of Object.entries(overrides)) {
+            const key = String(race || '').trim();
+            const patch = sanitizeRacePhysiologyProfilePatch(profile);
+            if (key && patch)
+                next[key] = Object.freeze(patch);
+        }
+    }
+    customRacePhysiologyProfiles = Object.freeze(next);
+}
+function getRacePhysiologyOverrides() {
+    const result = {};
+    for (const [race, profile] of Object.entries(customRacePhysiologyProfiles)) {
+        result[race] = { ...profile };
+    }
+    return result;
+}
+function getRacePhysiologyOverride(race) {
+    const key = String(race || '').trim();
+    const profile = customRacePhysiologyProfiles[key];
+    return profile ? { ...profile } : null;
+}
+function getBuiltinRacePhysiologyProfile(race) {
+    const key = String(race || '').trim();
+    const profile = RACE_PHYSIOLOGY_PROFILES[key];
+    return profile ? { ...profile } : null;
+}
+function getRaceIntroductionLine(race) {
+    const key = getBaseRaceName(race);
+    if (!key)
+        return '';
+    const customLine = customRacePhysiologyProfiles[key]?.[RACE_INTRODUCTION_FIELD];
+    if (customLine !== undefined)
+        return String(customLine || '').trim();
+    return String(RACE_INTRODUCTION_LINES[key] || '').trim();
+}
+function getEffectiveRacePhysiologyProfileValue(race) {
+    const key = String(race || '').trim();
+    const builtin = RACE_PHYSIOLOGY_PROFILES[key];
+    if (!builtin)
+        return null;
+    return {
+        ...builtin,
+        ...(customRacePhysiologyProfiles[key] || {}),
+    };
+}
+function getEmbryoRecoveryCoefficientByType(embryoType) {
+    switch (String(embryoType || '胎生')) {
+        case '卵生':
+            return 0.6;
+        case '卵胎生':
+            return 0.4;
+        case '胎转卵生':
+            return 1.0;
+        case '不定型':
+            return 0.8;
+        case '胎生':
+        default:
+            return 0.2;
+    }
+}
+function resolveRecoveryDays(profile, embryoType) {
+    const explicit = Number(profile?.recoveryDays);
+    if (Number.isFinite(explicit) && explicit >= 0)
+        return explicit;
+    const gestationSpeciesSpeed = Number(profile?.gestationSpeciesSpeed);
+    const birthDifficulty = Number(profile?.birthDifficulty);
+    const breedTolerance = Number(profile?.breedTolerance);
+    if (!Number.isFinite(gestationSpeciesSpeed) || gestationSpeciesSpeed <= 0)
+        return 56;
+    if (!Number.isFinite(birthDifficulty) || birthDifficulty <= 0)
+        return 56;
+    if (!Number.isFinite(breedTolerance) || breedTolerance <= 0)
+        return 56;
+    const coefficient = getEmbryoRecoveryCoefficientByType(embryoType);
+    return Math.max(1, Math.round(coefficient * (280 / gestationSpeciesSpeed) * (birthDifficulty / breedTolerance)));
+}
+function getRacePhysiologyProfile(race) {
+    const key = String(race || "");
+    const profile = getEffectiveRacePhysiologyProfileValue(key);
+    if (!profile)
+        return null;
+    return {
+        ...profile,
+        recoveryDays: resolveRecoveryDays(profile, getEmbryoTypeByRace(key)),
+    };
+}
+function getBaseDerivedTypeName(derivedType) {
+    const value = String(derivedType || '').trim();
+    if (!value)
+        return '';
+    const subtypeMatch = value.match(/^(.+?)-(.+)$/);
+    if (subtypeMatch)
+        return subtypeMatch[1];
+    return value;
+}
+function getDerivedTypeInheritanceProfile(derivedType) {
+    const baseName = getBaseDerivedTypeName(derivedType);
+    if (!baseName)
+        return null;
+    const builtin = DERIVED_TYPE_INHERITANCE_PROFILES[baseName];
+    if (!builtin)
+        return null;
+    const inheritanceSpeed = customDerivedTypeProfiles[baseName]?.inheritanceSpeed;
+    return inheritanceSpeed === undefined ? builtin : { ...builtin, inheritanceSpeed };
+}
+function getDerivedTypeFluxProfile(derivedType) {
+    const baseName = getBaseDerivedTypeName(derivedType);
+    if (!baseName)
+        return null;
+    const builtin = DERIVED_TYPE_FLUX_PROFILES[baseName];
+    if (!builtin)
+        return null;
+    const override = customDerivedTypeProfiles[baseName] || {};
+    return {
+        ...builtin,
+        ...(override.fluxDefinition !== undefined ? { fluxDefinition: override.fluxDefinition } : {}),
+    };
+}
+function getDerivedTypeMetabolismExemptions(derivedType) {
+    const baseName = getBaseDerivedTypeName(derivedType);
+    if (!baseName)
+        return [];
+    return [...(DERIVED_TYPE_METABOLISM_EXEMPTIONS[baseName] || [])];
+}
+function parseRaceDescriptor(rawRace) {
+    const value = String(rawRace || '').trim();
+    if (!value) {
+        return {
+            race: '',
+            derivedType: null,
+        };
+    }
+    const derivedMatch = value.match(/^\[([^\]]+)\](.+)$/);
+    if (!derivedMatch) {
+        return {
+            race: value,
+            derivedType: null,
+        };
+    }
+    return {
+        race: String(derivedMatch[2] || '').trim(),
+        derivedType: String(derivedMatch[1] || '').trim() || null,
+    };
+}
+function getRaceDescriptorComponents(race) {
+    const value = parseRaceDescriptor(race).race;
+    if (!value)
+        return [];
+    return value.split(/[xX]/).map((item) => item.trim()).filter(Boolean);
+}
+function getBaseRaceComponentName(component) {
+    const value = String(component || '').trim();
+    if (!value)
+        return '';
+    const separatorIndex = value.indexOf('-');
+    return separatorIndex >= 0 ? value.slice(0, separatorIndex).trim() : value;
+}
+function getBaseRaceName(race) {
+    const [first = ''] = getRaceDescriptorComponents(race);
+    return getBaseRaceComponentName(first);
+}
+function getRaceComponents$1(race) {
+    return getRaceDescriptorComponents(race)
+        .map((component) => getBaseRaceComponentName(component))
+        .filter(Boolean);
+}
+function mergeGenderRatioValues(values) {
+    const normalValues = values.filter((value) => Number.isFinite(value) && value >= 0 && value <= 100);
+    if (normalValues.length > 0) {
+        return normalValues.reduce((sum, value) => sum + value, 0) / normalValues.length;
+    }
+    const hasHerm = values.some((value) => value === null);
+    const hasAsexual = values.some((value) => value === -1);
+    if (hasHerm)
+        return null;
+    if (hasAsexual)
+        return -1;
+    return 50;
+}
+function mergeGestationSpeciesSpeedByAverageDays(values) {
+    const speeds = values.filter((value) => Number.isFinite(value) && value > 0);
+    if (speeds.length === 0)
+        return null;
+    const averageDays = speeds
+        .map((speed) => 280 / speed)
+        .reduce((sum, days) => sum + days, 0) / speeds.length;
+    return averageDays > 0 ? 280 / averageDays : null;
+}
+function getMergedRacePhysiologyProfile(race) {
+    const parts = getRaceComponents$1(race);
+    if (parts.length === 0)
+        return null;
+    const profiles = parts
+        .map((part) => getRacePhysiologyProfile(part))
+        .filter((profile) => profile && typeof profile === 'object');
+    if (profiles.length === 0)
+        return null;
+    const merged = {};
+    for (const field of RACE_PHYSIOLOGY_FIELDS) {
+        if (field === 'genderRatio')
+            continue;
+        const values = profiles
+            .map((profile) => Number(profile[field]))
+            .filter((value) => Number.isFinite(value));
+        if (values.length > 0) {
+            merged[field] = field === 'gestationSpeciesSpeed'
+                ? mergeGestationSpeciesSpeedByAverageDays(values)
+                : values.reduce((sum, value) => sum + value, 0) / values.length;
+        }
+    }
+    merged.genderRatio = mergeGenderRatioValues(profiles.map((profile) => profile.genderRatio));
+    return merged;
+}
+function getEmbryoTypeByRace(race) {
+    const parts = getRaceComponents$1(race);
+    if (parts.length === 0)
+        return '胎生';
+    let dominantRace = parts[0];
+    let lowestGestationSpeciesSpeed = Number.POSITIVE_INFINITY;
+    for (const part of parts) {
+        const profile = getEffectiveRacePhysiologyProfileValue(part);
+        const gestationSpeciesSpeed = Number(profile?.gestationSpeciesSpeed);
+        if (Number.isFinite(gestationSpeciesSpeed) && gestationSpeciesSpeed < lowestGestationSpeciesSpeed) {
+            lowestGestationSpeciesSpeed = gestationSpeciesSpeed;
+            dominantRace = part;
+        }
+    }
+    if (VIVIPAROUS_RACES.includes(dominantRace))
+        return '胎生';
+    if (OVIPAROUS_RACES.includes(dominantRace))
+        return '卵生';
+    if (OVOVIVIPAROUS_RACES.includes(dominantRace))
+        return '卵胎生';
+    if (METOVIVIPAROUS_RACES.includes(dominantRace))
+        return '胎转卵生';
+    if (AMORPHOUS_RACES.includes(dominantRace))
+        return '不定型';
+    return '胎生';
+}
+
+const EMBRYO_TYPE_REFERENCE = {
+    胎生: [
+        '胎生 (Viviparous)',
+        '-遵循常規哺乳類生理，未受精時子宮內膜脫落出血。表現為週期性的血液排出與腰腹墜脹，伴隨明顯的激素波動。',
+        '-胚胎依賴胎盤與母體循環交換營養；多胎妊娠時需注意絨毛膜與羊膜共用所引發的發育風險。',
+        '-新生兒出生時生理成熟度較低，極度脆弱，分娩後需母體長期的哺乳與照護方能存活。',
+        '-分娩難度高度取決於胎位；正位（頭位，tendencyAngle 0/360）最為順利，倒位（臀位，tendencyAngle 180）或橫位會導致產程大幅延長及風險遞增。',
+    ].join('\n'),
+    卵生: [
+        '卵生 (Oviparous)',
+        '-週期性排出未受精的「空卵」。由於卵生種族通常具備多產特徵，月經期會伴隨強烈的產道擴張感，排出多枚體積較小、無殼或薄殼的透明卵體。',
+        '-母體能量主要消耗於卵黃積累與蛋殼鈣化，而非胚胎本體的快速發育，孕期負擔隨結殼進度增加。',
+        '-產後母體即進入恢復期，卵體於體外獨立孵化且環境依賴性高；孵化後的幼體通常具備初步自立能力。',
+        '-對胚位要求較低，正位與倒位分娩難度基本一致，僅在卵體呈現長軸橫位時才會增加排出阻力。',
+    ].join('\n'),
+    卵胎生: [
+        '卵胎生 (Ovoviviparous)',
+        '-本質為退化的結卵過程。未受精的卵體結構極度脆弱，在通過產道排出時會因壓力而破碎，最終表現為排出大量透明、膠狀且高度黏稠的物質，而非單純血液。',
+        '-前期為卵黃供能發育，於孕晚期或臨盆前在宮內破卵；分娩出後即為可自由活動、具備狩獵或自立能力的幼體。',
+        '-宮內破卵後，幼體失去卵殼保護並在有限空間內產生競爭，多胎極易發生同胞相殘或吞噬弱者的現象。',
+        '-由於幼體活動度高且結構相對複雜，分娩前需極其精準的胚位校正，若位置偏移極易造成難產。',
+    ].join('\n'),
+    胎转卵生: [
+        '胎轉卵生 (Metoviviparous)',
+        '-子宮內膜不以血液形式脫落，而是高度凝聚成塊。排出物為半固體的肉質「卵囊」，排出時伴隨類似分娩的強烈收縮感。',
+        '-孕期經歷從胎盤供能到卵黃儲備的轉化，母體需消耗巨量能源以支應產後漫長的體外孵化需求。',
+        '-孕晚期因卵體巨大化且羊水相對枯竭，母體會產生劇烈的內部摩擦感與沈重墜脹感，分娩過程極其緩慢且耗費體力。',
+        '-因卵體接近球形，多軸向路徑皆可通適，但若重心偏離產道中軸線，將導致產力分散，增加排出難度。',
+    ].join('\n'),
+    不定型: [
+        '不定型 (Amorphous)',
+        '-無外部排泄表現。未受精的生殖能量或組織會在體內被重新吸收、轉化或降解，生理上不存在「月經」概念，僅表現為核心能量的週期性閃爍或體溫波動。',
+        '-不依賴傳統胎盤或卵黃，胚胎形態隨發育階段大幅扭曲或重組，呈現高度的物種特異性。',
+        '-多為構造體或靈體化生命，異種繁衍時存在極高的生殖隔離壁壘，受孕與著床過程極不穩定。',
+        '-胎位與產道適應性完全不可預測，分娩模式從「分裂」、「排泄」到「重構」皆有可能，無通用規律可循。',
+    ].join('\n'),
+};
+const EMBRYO_TYPE_ORDER = ['胎生', '卵生', '卵胎生', '胎转卵生', '不定型'];
+function pushEmbryoType(target, type) {
+    const value = String(type || '').trim();
+    if (!value || target.includes(value))
+        return;
+    target.push(value);
+}
+function addEmbryoTypeFromRace(target, race) {
+    const value = String(race || '').trim();
+    if (!value)
+        return;
+    pushEmbryoType(target, getEmbryoTypeByRace(value));
+}
+function collectEmbryoTypesFromCharacterState(target, characterState) {
+    const profile = characterState?.profile || {};
+    const base = profile.base || {};
+    const pregnant = profile.pregnant || {};
+    const children = Array.isArray(profile.children) ? profile.children : [];
+    addEmbryoTypeFromRace(target, base.race);
+    for (const sperm of (Array.isArray(base.sperms) ? base.sperms : []))
+        addEmbryoTypeFromRace(target, sperm?.race);
+    for (const fetus of (Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [])) {
+        addEmbryoTypeFromRace(target, fetus?.race);
+        addEmbryoTypeFromRace(target, fetus?.fatherRace);
+        const embryoType = String(fetus?.embryoType || '').trim();
+        if (embryoType)
+            pushEmbryoType(target, embryoType);
+    }
+    for (const child of children)
+        addEmbryoTypeFromRace(target, child?.race);
+}
+function getRelevantEmbryoTypes(payload = {}) {
+    const found = [];
+    addEmbryoTypeFromRace(found, payload?.declared_race);
+    if (payload?.existing_state && typeof payload.existing_state === 'object') {
+        for (const characterState of Object.values(payload.existing_state))
+            collectEmbryoTypesFromCharacterState(found, characterState);
+    }
+    return found.filter((type) => EMBRYO_TYPE_ORDER.includes(type));
+}
+function buildEmbryoTypeLorePrompt(payload = {}, { includeAllIfEmpty = false } = {}) {
+    const relevantTypes = getRelevantEmbryoTypes(payload);
+    const finalTypes = relevantTypes.length > 0 ? relevantTypes : (includeAllIfEmpty ? EMBRYO_TYPE_ORDER : []);
+    if (finalTypes.length === 0)
+        return '';
+    return [
+        '[胚胎类型补充设定]',
+        '以下文本来自项目内的胚胎类型 lore，请将其视为高优先级设定。',
+        '当母体和胎兒父源种族涉及不同生殖体系时，需要同时参考多个胚胎类型文本；不要只保留单一类型。',
+        '例如人类母体怀有龙族胎儿时，应同时参考「胎生」与「胎转卵生」。',
+        '',
+        ...finalTypes.map((type) => EMBRYO_TYPE_REFERENCE[type]).filter(Boolean),
+    ].join('\n');
+}
+function getEmbryoTypeReferenceText(embryoType) {
+    return EMBRYO_TYPE_REFERENCE[String(embryoType || '').trim()] || '';
+}
+
+function formatNumber(value, digits = 2) {
+    const num = Number(value);
+    if (!Number.isFinite(num))
+        return '未知';
+    const rounded = Number(num.toFixed(digits));
+    return Number.isInteger(rounded) ? String(rounded) : String(rounded);
+}
+function formatCycleDays(ratio) {
+    const days = Math.round(28 * Number(ratio || 1));
+    return `${days}天左右`;
+}
+function formatYearMonthApprox(days) {
+    const safeDays = Math.max(0, Math.round(Number(days) || 0));
+    const totalMonths = Math.max(1, Math.round(safeDays / 30.4));
+    const years = Math.floor(totalMonths / 12);
+    const months = totalMonths % 12;
+    if (years <= 0)
+        return `${totalMonths}个月`;
+    if (months <= 0)
+        return `${years}年`;
+    return `${years}年${months}个月`;
+}
+function formatGestation(value) {
+    const speed = Number(value || 1);
+    if (!Number.isFinite(speed) || speed <= 0)
+        return '未知';
+    const days = Math.round(280 / speed);
+    if (days >= 365)
+        return `${days}天左右（约${formatYearMonthApprox(days)}）`;
+    const weeks = (days / 7).toFixed(1);
+    return `${days}天左右（约${weeks}周）`;
+}
+function formatRecoveryDays(value) {
+    const days = Math.round(Number(value || 0));
+    if (!Number.isFinite(days))
+        return '未知';
+    if (days >= 365)
+        return `${days}天左右（约${formatYearMonthApprox(days)}）`;
+    if (days >= 14)
+        return `${days}天左右（约${formatNumber(days / 7, 1)}周）`;
+    return `${days}天左右`;
+}
+function getBirthDifficultyText(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num))
+        return '未知';
+    if (num <= 0.5)
+        return '偏容易，产道适应与排出过程通常较顺。';
+    if (num <= 0.9)
+        return '略低于常规难度，整体偏顺产。';
+    if (num <= 1.25)
+        return '常规难度，需看胎位与当下状态。';
+    if (num <= 2)
+        return '偏困难，较容易出现产程阻滞或额外负担。';
+    if (num <= 4)
+        return '高难度，难产风险明显偏高。';
+    return '极高难度，通常属于非常危险或非常罕见的分娩体系。';
+}
+function getImpregnationDifficultyText(value) {
+    const num = Number(value);
+    if (!Number.isFinite(num))
+        return '未知';
+    if (num <= 0.33)
+        return '极易受精，受孕门槛很低。';
+    if (num <= 0.75)
+        return '较易受精，成功受孕概率偏高。';
+    if (num <= 1.25)
+        return '受精难度中等，接近常规物种标准。';
+    if (num <= 2.5)
+        return '受精难度偏高，需要更合适的条件才容易着床。';
+    if (num <= 4)
+        return '受精难度很高，同族内尚可尝试，跨物种受孕会明显变难。';
+    if (num <= 6)
+        return '受精难度极高，基本只在同族或高度相容的对象之间较有机会成功。';
+    return '受精难度近乎封闭，基本限制同族；跨物种受孕通常可视为极难甚至接近不可能。';
+}
+function getProlificacyText(orgasmOvulationAmount, identicalProbability) {
+    const ovulation = Number(orgasmOvulationAmount);
+    const identical = Number(identicalProbability);
+    if (!Number.isFinite(ovulation) && !Number.isFinite(identical))
+        return '未知';
+    const safeOvulation = Number.isFinite(ovulation) ? ovulation : 1;
+    const safeIdentical = Number.isFinite(identical) ? identical : 0;
+    const twinScore = safeOvulation * 10 + safeIdentical;
+    let overall = '极低';
+    let summary = '通常以单胎为绝对主流，多胎属于少见情况。';
+    if (twinScore >= 80) {
+        overall = '极高';
+        summary = '多胎妊娠应视为高概率事件，异卵与同卵扩增都相当活跃。';
+    }
+    else if (twinScore >= 50) {
+        overall = '偏高';
+        summary = '具备明显多胎倾向，异卵多胎常见，且存在稳定的同卵扩增机会。';
+    }
+    else if (twinScore >= 25) {
+        overall = '中高';
+        summary = '单胎与多胎都较常见，双胎或更多胎的概率明显高于常规种族。';
+    }
+    else if (twinScore >= 10) {
+        overall = '中等';
+        summary = '仍以单胎为主，但已具备可感知的双胎倾向。';
+    }
+    else if (twinScore >= 5) {
+        overall = '偏低';
+        summary = '大多仍是单胎，偶尔会出现双胎。';
+    }
+    let ovulationText = '异卵多胎倾向未知';
+    if (safeOvulation <= 0)
+        ovulationText = '异卵倾向很低，几乎不具备额外排卵能力。';
+    else if (safeOvulation <= 1)
+        ovulationText = '异卵倾向偏低，额外排卵能力较弱。';
+    else if (safeOvulation <= 3)
+        ovulationText = '异卵倾向中等，存在形成多枚受精卵并行发育的可能。';
+    else if (safeOvulation <= 6)
+        ovulationText = '异卵倾向偏高，较容易形成多枚受精卵并行发育。';
+    else
+        ovulationText = '异卵倾向极高，多枚卵同时参与受精是常见风险。';
+    let identicalText = '同卵倾向未知';
+    if (safeIdentical <= 5)
+        identicalText = '同卵分裂倾向很低，由单胎扩增出的同卵多胎较少见。';
+    else if (safeIdentical <= 20)
+        identicalText = '同卵分裂倾向偏低到中等，存在由单胎扩增为同卵双胎的机会。';
+    else if (safeIdentical <= 50)
+        identicalText = '同卵分裂倾向明显，受精后继续分裂形成同卵多胎并不罕见。';
+    else
+        identicalText = '同卵分裂倾向很高，单一受精卵扩增成复数胎儿的概率相当显著。';
+    return `${overall}。${summary} ${ovulationText} ${identicalText}`;
+}
+function getGenderRatioText(value) {
+    if (value === null)
+        return '雌雄同体或双性体系，不适用传统男女比。';
+    if (value === -1)
+        return '无性或非传统二元性别体系，不适用传统男女比。';
+    const num = Number(value);
+    if (!Number.isFinite(num))
+        return '未知';
+    if (num === 50)
+        return '性别比接近 1:1。';
+    if (num > 50)
+        return `后代偏雄性，约 ${Math.round(num)}% 为雄性。`;
+    return `后代偏雌性，约 ${Math.round(100 - num)}% 为雌性。`;
+}
+function isSameRaceGroup$1(leftRace, rightRace) {
+    const left = getRaceComponents$1(leftRace).sort();
+    const right = getRaceComponents$1(rightRace).sort();
+    if (left.length === 0 || right.length === 0 || left.length !== right.length)
+        return false;
+    return left.every((value, index) => value === right[index]);
+}
+function deriveFetusRace$1(motherRace, fatherRace) {
+    const motherParts = getRaceDescriptorComponents(motherRace);
+    const fatherParts = getRaceDescriptorComponents(fatherRace);
+    const combined = [...fatherParts, ...motherParts].filter(Boolean);
+    if (combined.length === 0)
+        return '人类';
+    const unique = [];
+    for (const part of combined) {
+        if (!unique.includes(part))
+            unique.push(part);
+    }
+    return unique.join('x');
+}
+function getGenderRatioDisplay(value) {
+    if (value === null)
+        return '双性';
+    if (value === -1)
+        return '无性';
+    const num = Number(value);
+    if (!Number.isFinite(num))
+        return '未知';
+    if (num === 0)
+        return '男女比 0:100（全女性倾向）';
+    if (num === 100)
+        return '男女比 100:0（全男性倾向）';
+    return `男女比 ${Math.round(num)}:${Math.round(100 - num)}`;
+}
+function getEmbryoRecoveryCoefficient(embryoType) {
+    switch (String(embryoType || '胎生')) {
+        case '卵生':
+            return 0.6;
+        case '卵胎生':
+            return 0.4;
+        case '胎转卵生':
+            return 1.0;
+        case '不定型':
+            return 0.8;
+        case '胎生':
+        default:
+            return 0.2;
+    }
+}
+function describeShift(nextValue, baseValue, formatter = (value) => String(value)) {
+    const next = Number(nextValue);
+    const base = Number(baseValue);
+    if (!Number.isFinite(next) || !Number.isFinite(base))
+        return `${formatter(nextValue)}（基准 ${formatter(baseValue)}）`;
+    const delta = next - base;
+    if (Math.abs(delta) < 0.0001)
+        return `${formatter(next)}（与基准持平）`;
+    const direction = delta > 0 ? '上升' : '下降';
+    return `${formatter(next)}（相较基准 ${direction} ${formatNumber(Math.abs(delta))}）`;
+}
+function buildSingleRacePhysiologyBlock(race) {
+    const profile = getRacePhysiologyProfile(race);
+    if (!profile)
+        return '';
+    const introductionLine = getRaceIntroductionLine(race);
+    return [
+        `【${race}】`,
+        introductionLine ? `- 物种短敘述: ${introductionLine}` : '',
+        `- 经期长度: ${formatCycleDays(profile.menstrualLengthRatio)}`,
+        `- 妊娠长度: ${formatGestation(profile.gestationSpeciesSpeed)}`,
+        `- 产后恢复时间: ${formatRecoveryDays(profile.recoveryDays)}`,
+        `- 分娩难度: ${getBirthDifficultyText(profile.birthDifficulty)}`,
+        `- 受精难度: ${getImpregnationDifficultyText(profile.impregnationDifficulty)}`,
+        `- 多产性: ${getProlificacyText(profile.orgasmOvulationAmount, profile.identicalProbability)}；额外排卵倾向 ${formatNumber(profile.orgasmOvulationAmount)}，同卵多胎概率 ${formatNumber(profile.identicalProbability)}%`,
+        `- 性别比: ${getGenderRatioText(profile.genderRatio)}`,
+    ].filter(Boolean).join('\n');
+}
+function buildSingleRacePhysiologyText(race) {
+    return buildSingleRacePhysiologyBlock(race);
+}
+function buildHybridAverageBlock(race) {
+    const merged = getMergedRacePhysiologyProfile(race);
+    if (!merged)
+        return '';
+    return [
+        '【混血平均参考】',
+        '- 以下是系统层面的平均参考值，仅供综合判断；不要用它覆盖各族原始特征。',
+        `- 平均经期长度: ${formatCycleDays(merged.menstrualLengthRatio)}`,
+        `- 平均妊娠长度: ${formatGestation(merged.gestationSpeciesSpeed)}`,
+        `- 平均产后恢复时间: ${formatRecoveryDays(merged.recoveryDays)}`,
+        `- 平均分娩难度: ${getBirthDifficultyText(merged.birthDifficulty)}`,
+        `- 平均受精难度: ${getImpregnationDifficultyText(merged.impregnationDifficulty)}`,
+        `- 平均多产性参考: ${getProlificacyText(merged.orgasmOvulationAmount, merged.identicalProbability)}；额外排卵倾向 ${formatNumber(merged.orgasmOvulationAmount)}，同卵多胎概率 ${formatNumber(merged.identicalProbability)}%`,
+        `- 平均性别比参考: ${getGenderRatioText(merged.genderRatio)}`,
+    ].join('\n');
+}
+function buildRacePhysiologyLoreBlock(race) {
+    const value = String(race || '').trim();
+    if (!value)
+        return '';
+    const components = getRaceComponents$1(value);
+    if (components.length === 0)
+        return '';
+    if (components.length === 1)
+        return [`[种族生理补充设定]`, buildSingleRacePhysiologyBlock(components[0])].join('\n');
+    return [
+        '[种族生理补充设定]',
+        `该角色为混血/复合种族：${components.join(' x ')}`,
+        '请同时理解各族生理参数，不要把混血直接脑补成单一物种。',
+        ...components.map((part) => buildSingleRacePhysiologyBlock(part)).filter(Boolean),
+        buildHybridAverageBlock(value),
+    ].join('\n\n');
+}
+function buildDerivedFluxLoreBlock(derivedType) {
+    const value = String(derivedType || '').trim();
+    if (!value)
+        return '';
+    const fluxProfile = getDerivedTypeFluxProfile(value);
+    const introductionLine = getDerivedTypeIntroductionLine(value);
+    const fluxDefinition = String(fluxProfile?.fluxDefinition || '').trim();
+    if (!fluxDefinition)
+        return '';
+    const exemptions = getDerivedTypeMetabolismExemptions(value);
+    return [
+        '[衍生需求补充设定]',
+        `【${value}】`,
+        ...(introductionLine ? [introductionLine] : []),
+        `该衍生类型由 flux 抵免的普通需求：${exemptions.length > 0 ? exemptions.join(' / ') : '无'}。未被抵免的需求仍会作为 metabolism 保留。`,
+        fluxDefinition,
+    ].join('\n');
+}
+function buildSpermCalculationBlock(characterState) {
+    const profile = characterState?.profile || {};
+    const base = profile.base || {};
+    const pregnant = profile.pregnant || {};
+    const sperms = Array.isArray(base.sperms) ? base.sperms : [];
+    const fetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [];
+    const stage = String(base.stage || '');
+    const fertilizationDays = Number(base.fertilizationDays || 0);
+    const hasPregnancyState = fetuses.length > 0 || fertilizationDays > 0 || ['孕早期', '孕中期', '孕晚期', '临产期', '逾期', '产兆前驱', '第一产程', '第二产程', '第三产程', '假孕期'].includes(stage);
+    if (hasPregnancyState)
+        return '';
+    const motherRace = String(base.race || '').trim();
+    if (!motherRace)
+        return '';
+    const motherProfile = getMergedRacePhysiologyProfile(motherRace) || {};
+    const motherDifficulty = Number(motherProfile?.impregnationDifficulty);
+    const motherEmbryoType = getEmbryoTypeByRace(motherRace);
+    const heteroSperms = sperms.filter((sperm) => {
+        const race = String(sperm?.race || '').trim();
+        return race && !isSameRaceGroup$1(motherRace, race);
+    });
+    if (heteroSperms.length === 0)
+        return '';
+    const lines = [
+        '[异种精液受精补充设定]',
+        '以下为系统在非怀孕状态下处理异种精液时使用的简化判断逻辑，请据此理解该角色当前的受孕难度与后代性别倾向。',
+        `- 母体种族: ${motherRace}`,
+        `- 母体受精难度: ${formatNumber(motherDifficulty)} (${getImpregnationDifficultyText(motherDifficulty)})`,
+        `- 母体胚胎类型: ${motherEmbryoType}`,
+    ];
+    heteroSperms.forEach((sperm, index) => {
+        const fatherRace = String(sperm?.race || '').trim();
+        const fatherProfile = getMergedRacePhysiologyProfile(fatherRace) || {};
+        const fatherDifficulty = Number(fatherProfile?.impregnationDifficulty);
+        const fatherEmbryoType = getEmbryoTypeByRace(fatherRace);
+        let effectiveDifficulty = (Number.isFinite(motherDifficulty) ? motherDifficulty : 1.0) + (Number.isFinite(fatherDifficulty) ? fatherDifficulty : 1.0);
+        if (motherEmbryoType !== fatherEmbryoType)
+            effectiveDifficulty *= 1.5;
+        const fetusRace = deriveFetusRace$1(motherRace, fatherRace);
+        const fetusProfile = getMergedRacePhysiologyProfile(fetusRace) || {};
+        const fetusGenderRatio = fetusProfile?.genderRatio;
+        lines.push([
+            `【异种精液 ${index + 1}】`,
+            `- 精方: ${String(sperm?.male || '未知')} / ${fatherRace}`,
+            `- 精方受精难度: ${formatNumber(fatherDifficulty)} (${getImpregnationDifficultyText(fatherDifficulty)})`,
+            `- 精方胚胎类型: ${fatherEmbryoType}`,
+            `- 系统受精难度计算: 母体 ${formatNumber(motherDifficulty)} + 精方 ${formatNumber(fatherDifficulty)}${motherEmbryoType !== fatherEmbryoType ? `，且因胚胎类型不同（${motherEmbryoType} vs ${fatherEmbryoType}）再 ×1.5` : ''} = ${formatNumber(effectiveDifficulty)}`,
+            `- 混合后胎儿种族: ${fetusRace}`,
+            `- 系统性别比计算: 以后代种族 ${fetusRace} 的 genderRatio 为准，当前结果为 ${getGenderRatioDisplay(fetusGenderRatio)} (${getGenderRatioText(fetusGenderRatio)})`,
+        ].join('\n'));
+    });
+    return lines.join('\n\n');
+}
+function buildPregnancyShiftBlock(characterState) {
+    const profile = characterState?.profile || {};
+    const base = profile.base || {};
+    const pregnant = profile.pregnant || {};
+    const fetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [];
+    if (fetuses.length === 0)
+        return '';
+    const motherRace = String(base.race || '').trim();
+    const motherProfile = getMergedRacePhysiologyProfile(motherRace);
+    if (!motherRace || !motherProfile)
+        return '';
+    let totalWeight = 0;
+    let gestationAccumulator = 0;
+    let birthAccumulator = 0;
+    let toleranceAccumulator = 0;
+    let recoveryAccumulator = 0;
+    for (const fetus of fetuses) {
+        const weight = Math.max(0.33, Math.min(3.0, Number(fetus?.weight) || 1.0));
+        const raceProfile = getMergedRacePhysiologyProfile(fetus?.race) || {};
+        totalWeight += weight;
+        gestationAccumulator += weight * Math.max(0.1, Math.min(20, Number(raceProfile?.gestationSpeciesSpeed) || 1.0));
+        birthAccumulator += weight * Math.max(0.1, Math.min(100, Number(raceProfile?.birthDifficulty) || 1.0));
+        toleranceAccumulator += weight * Math.max(0.1, Math.min(100, Number(raceProfile?.breedTolerance) || 1.0));
+        recoveryAccumulator += weight * getEmbryoRecoveryCoefficient(fetus?.embryoType);
+    }
+    const safeTotalWeight = Math.max(totalWeight, 0.5);
+    const averageGestation = gestationAccumulator / safeTotalWeight;
+    const averageBirth = birthAccumulator / safeTotalWeight;
+    const averageTolerance = toleranceAccumulator / safeTotalWeight;
+    const averageRecoveryCoefficient = recoveryAccumulator / safeTotalWeight;
+    const fetusCountModifier = 1 + ((fetuses.length - 1) * 0.08);
+    const toleranceCountModifier = Math.max(0.6, 1 - ((fetuses.length - 1) * 0.04));
+    const baseGestationSpeciesSpeed = Math.max(0.1, Math.min(20, Number(motherProfile.gestationSpeciesSpeed) || 1.0));
+    const baseBirthDifficulty = Math.max(0.1, Math.min(100, Number(motherProfile.birthDifficulty) || 1.0));
+    const baseBreedTolerance = Math.max(0.1, Math.min(100, Number(motherProfile.breedTolerance) || 1.0));
+    const baseRecoveryDays = Math.max(1, Math.round(Number(motherProfile.recoveryDays) || 56));
+    const shiftedGestationSpeciesSpeed = Math.max(0.1, Math.min(20, baseGestationSpeciesSpeed * averageGestation));
+    const shiftedBirthDifficulty = Math.max(0.1, Math.min(100, baseBirthDifficulty * averageBirth * fetusCountModifier));
+    const shiftedBreedTolerance = Math.max(0.1, Math.min(100, baseBreedTolerance * averageTolerance * toleranceCountModifier));
+    const shiftedRecoveryDays = Math.max(1, Math.round(Math.max(0.1, Math.min(2.0, averageRecoveryCoefficient)) * (280 / shiftedGestationSpeciesSpeed) * (shiftedBirthDifficulty / Math.max(shiftedBreedTolerance, 0.1))));
+    const gestationBaseDays = 280 / baseGestationSpeciesSpeed;
+    const gestationShiftedDays = 280 / shiftedGestationSpeciesSpeed;
+    const hasGestationShift = Math.abs(gestationShiftedDays - gestationBaseDays) >= 0.0001;
+    const hasBirthShift = Math.abs(shiftedBirthDifficulty - baseBirthDifficulty) >= 0.0001;
+    const hasRecoveryShift = Math.abs(shiftedRecoveryDays - baseRecoveryDays) >= 1;
+    if (!hasGestationShift && !hasBirthShift && !hasRecoveryShift)
+        return '';
+    return [
+        '[妊娠生理偏移补充设定]',
+        '以下为系统在怀孕后依据胎儿种族、胚胎类型、胎数与胎重，对母体生理参数产生的偏移结果。',
+        `- 母体种族: ${motherRace}`,
+        `- 妊娠长度偏移: ${describeShift(gestationShiftedDays, gestationBaseDays, (value) => formatGestation(280 / value))}`,
+        `- 分娩难度偏移: ${describeShift(shiftedBirthDifficulty, baseBirthDifficulty, (value) => `${formatNumber(value)}（${getBirthDifficultyText(value)}）`)}`,
+        `- 产后恢复时间偏移: ${describeShift(shiftedRecoveryDays, baseRecoveryDays, (value) => formatRecoveryDays(value))}`,
+    ].join('\n');
+}
+function collectRelevantRaces(payload = {}, options = {}) {
+    const includeExistingState = options.includeExistingState !== false;
+    const includeCurrentCharacter = options.includeCurrentCharacter !== false;
+    const found = [];
+    const pushRace = (race) => {
+        const value = String(race || '').trim();
+        if (value && !found.includes(value))
+            found.push(value);
+    };
+    pushRace(payload?.declared_race);
+    if (includeCurrentCharacter) {
+        pushRace(payload?.current_character?.race);
+        pushRace(payload?.current_character?.data?.race);
+    }
+    if (includeExistingState && payload?.existing_state && typeof payload.existing_state === 'object') {
+        for (const item of Object.values(payload.existing_state)) {
+            const profile = item?.profile || {};
+            const base = profile.base || {};
+            const pregnant = profile.pregnant || {};
+            pushRace(base.race);
+            for (const sperm of (Array.isArray(base.sperms) ? base.sperms : []))
+                pushRace(sperm?.race);
+            for (const fetus of (Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [])) {
+                pushRace(fetus?.race);
+                pushRace(fetus?.fatherRace);
+            }
+            for (const child of (Array.isArray(profile.children) ? profile.children : []))
+                pushRace(child?.race);
+        }
+    }
+    return found;
+}
+function collectRelevantDerivedTypes(payload = {}, options = {}) {
+    const includeExistingState = options.includeExistingState !== false;
+    const includeCurrentCharacter = options.includeCurrentCharacter !== false;
+    const found = [];
+    const pushDerivedType = (derivedType) => {
+        const value = String(derivedType || '').trim();
+        if (value && !found.includes(value))
+            found.push(value);
+    };
+    if (includeCurrentCharacter) {
+        pushDerivedType(payload?.current_character?.derivedType);
+        pushDerivedType(payload?.current_character?.data?.derivedType);
+    }
+    if (includeExistingState && payload?.existing_state && typeof payload.existing_state === 'object') {
+        for (const item of Object.values(payload.existing_state)) {
+            const profile = item?.profile || {};
+            const base = profile.base || {};
+            const pregnant = profile.pregnant || {};
+            pushDerivedType(base.derivedType);
+            for (const sperm of (Array.isArray(base.sperms) ? base.sperms : []))
+                pushDerivedType(sperm?.derivedType);
+            for (const fetus of (Array.isArray(pregnant.fetuses) ? pregnant.fetuses : []))
+                pushDerivedType(fetus?.fatherDerivedType);
+            for (const child of (Array.isArray(profile.children) ? profile.children : []))
+                pushDerivedType(child?.derivedType);
+        }
+    }
+    return found;
+}
+function buildRacePhysiologyPrompt(payload = {}, { includeAllRelevant = true } = {}) {
+    const races = collectRelevantRaces(payload, { includeExistingState: true, includeCurrentCharacter: false });
+    const derivedTypes = collectRelevantDerivedTypes(payload, { includeExistingState: true, includeCurrentCharacter: false });
+    const blocks = (includeAllRelevant ? races : races.slice(0, 1)).map((race) => buildRacePhysiologyLoreBlock(race)).filter(Boolean);
+    const derivedBlocks = (includeAllRelevant ? derivedTypes : derivedTypes.slice(0, 1)).map((derivedType) => buildDerivedFluxLoreBlock(derivedType)).filter(Boolean);
+    const spermBlocks = payload?.existing_state && typeof payload.existing_state === 'object'
+        ? Object.values(payload.existing_state).map((item) => buildSpermCalculationBlock(item)).filter(Boolean)
+        : [];
+    const pregnancyBlocks = payload?.existing_state && typeof payload.existing_state === 'object'
+        ? Object.values(payload.existing_state).map((item) => buildPregnancyShiftBlock(item)).filter(Boolean)
+        : [];
+    if (blocks.length === 0 && derivedBlocks.length === 0 && spermBlocks.length === 0 && pregnancyBlocks.length === 0)
+        return '';
+    return [
+        '<bs_race>',
+        '以下文本是项目内定义的种族生理设定，请视为高优先级规则。',
+        '这些设定用于帮助你理解角色的经期长度、妊娠长度、恢复时间、分娩难度、受精难度、多产性与性别比。',
+        ...blocks,
+        ...derivedBlocks,
+        ...spermBlocks,
+        ...pregnancyBlocks,
+        '</bs_race>',
+    ].join('\n\n');
+}
+function buildRegistryRacePhysiologyPrompt(payload = {}) {
+    const races = collectRelevantRaces(payload, { includeExistingState: false, includeCurrentCharacter: false });
+    const derivedTypes = collectRelevantDerivedTypes(payload, { includeExistingState: false, includeCurrentCharacter: false });
+    const blocks = races.map((race) => buildRacePhysiologyLoreBlock(race)).filter(Boolean);
+    const derivedBlocks = derivedTypes.map((derivedType) => buildDerivedFluxLoreBlock(derivedType)).filter(Boolean);
+    if (blocks.length === 0 && derivedBlocks.length === 0)
+        return '';
+    return [
+        '<bs_race>',
+        '以下文本是本次注册目标角色专用的种族生理设定，请视为高优先级规则。',
+        '注册时只参考当前目标角色相关种族，不要混入其他已注册角色的种族设定。',
+        ...blocks,
+        ...derivedBlocks,
+        '</bs_race>',
+    ].join('\n\n');
+}
+
+const DEBUG_LAST_REGISTRY_REQUEST_KEY = '__bs_biotracker_debug_last_registry_request__';
+const DEBUG_LAST_REGISTRY_RESULT_KEY = '__bs_biotracker_debug_last_registry_result__';
+const DEBUG_LAST_BREEDING_INFERENCE_REQUEST_KEY = '__bs_biotracker_debug_last_breeding_inference_request__';
+const DEBUG_LAST_BREEDING_INFERENCE_RESULT_KEY = '__bs_biotracker_debug_last_breeding_inference_result__';
+const ST_USER_TARGET_ALIASES = new Set(['user', '{user}', '{{user}}', '<user>']);
+/**
+ * 角色名输入允许直接使用 ST 的 user 宏。这个名称会成为 state 的实际 key，
+ * 所以必须在推演、注册和套用的每一条入口统一解析，不能只靠 API payload 展开。
+ */
+function resolveRegistryTargetName(ctx, value) {
+    const raw = String(value || '').trim();
+    if (!raw)
+        return '';
+    let resolved = raw;
+    for (const method of ['substituteParamsExtended', 'substituteParams']) {
+        try {
+            const next = ctx?.[method]?.(raw);
+            if (typeof next === 'string' && next.trim()) {
+                resolved = next.trim();
+                break;
+            }
+        }
+        catch { }
+    }
+    const userName = String(ctx?.name1 || '').trim();
+    if (ST_USER_TARGET_ALIASES.has(resolved.toLowerCase()) || ST_USER_TARGET_ALIASES.has(raw.toLowerCase())) {
+        return userName || resolved;
+    }
+    return resolved;
+}
+function normalizeWorldbookMode$1(value) {
+    const mode = String(value || 'exclude').trim();
+    if (mode === 'mainflow' || mode === 'allowlist_all' || mode === 'exclude')
+        return mode;
+    return 'exclude';
+}
+async function getCharacterWorldBook(ctx) {
+    const card = getCharacterCard(ctx);
+    if (card?.worldBook)
+        return card.worldBook;
+    const boundWorldBookName = getCharacterWorldBookName(ctx) || await getCharacterWorldBookNameViaSTscript();
+    if (boundWorldBookName && canLoadHostWorldInfo(ctx)) {
+        try {
+            return await loadHostWorldInfo(ctx, boundWorldBookName);
+        }
+        catch (error) {
+            console.warn('[BS BioTracker] loadWorldInfo failed', error);
+        }
+    }
+    try {
+        return await getHostWorldBook(boundWorldBookName || 'Current Chat', 'character');
+    }
+    catch (error) {
+        console.warn('[BS BioTracker] getCharacterWorldBook failed', error);
+    }
+    return null;
+}
+function parseRegistryWorldbookExcludeNames(settings) {
+    return new Set(String(settings?.trackerWorldbookExcludeNames || '')
+        .split(/\r?\n+/)
+        .map((item) => item.trim())
+        .filter(Boolean));
+}
+function parseRegistryWorldbookIncludeNames(settings) {
+    return new Set(String(settings?.trackerWorldbookIncludeNames || '')
+        .split(/\r?\n+/)
+        .map((item) => item.trim())
+        .filter(Boolean));
+}
+function parseRegistryGlobalWorldbookExcludeNames(settings) {
+    return new Set(String(settings?.trackerGlobalWorldbookExcludeNames || '')
+        .split(/\r?\n+/)
+        .map((item) => item.trim())
+        .filter(Boolean));
+}
+function parseRegistryGlobalWorldbookIncludeNames(settings) {
+    return new Set(String(settings?.trackerGlobalWorldbookIncludeNames || '')
+        .split(/\r?\n+/)
+        .map((item) => item.trim())
+        .filter(Boolean));
+}
+function formatGlobalWorldbookSelectionName$1(bookName, entryName) {
+    return `${String(bookName || '').trim()} :: ${String(entryName || '').trim()}`;
+}
+function normalizeWorldbookKeywords$1(value) {
+    if (Array.isArray(value))
+        return value.map((item) => String(item || '').trim()).filter(Boolean);
+    if (typeof value === 'string')
+        return value.split(/[\r\n,]+/).map((item) => item.trim()).filter(Boolean);
+    return [];
+}
+function buildWorldbookActivationText$1(recentMessages = []) {
+    return (Array.isArray(recentMessages) ? recentMessages : [])
+        .map((message) => `${message?.name || ''}\n${message?.text || ''}`)
+        .join('\n')
+        .toLowerCase();
+}
+function getWorldbookEntryActivationMode$1(entry) {
+    const mode = String(entry?.activationMode || '').trim().toLowerCase();
+    if (mode)
+        return mode;
+    if (entry?.constant === true || entry?.always === true)
+        return 'always';
+    if (entry?.selective === true || normalizeWorldbookKeywords$1(entry?.key).length > 0 || normalizeWorldbookKeywords$1(entry?.keys).length > 0)
+        return 'keyword';
+    return '';
+}
+function worldbookKeywordMatches$1(entry, activationText) {
+    if (!activationText)
+        return false;
+    const primaryKeys = [
+        ...normalizeWorldbookKeywords$1(entry?.key),
+        ...normalizeWorldbookKeywords$1(entry?.keys),
+    ];
+    if (primaryKeys.length === 0)
+        return false;
+    const primaryMatched = primaryKeys.some((keyword) => activationText.includes(keyword.toLowerCase()));
+    if (!primaryMatched)
+        return false;
+    const secondaryKeys = [
+        ...normalizeWorldbookKeywords$1(entry?.keysecondary),
+        ...normalizeWorldbookKeywords$1(entry?.keySecondary),
+        ...normalizeWorldbookKeywords$1(entry?.secondary_keys),
+        ...normalizeWorldbookKeywords$1(entry?.secondaryKeys),
+    ];
+    if (entry?.selective === true && secondaryKeys.length > 0) {
+        return secondaryKeys.some((keyword) => activationText.includes(keyword.toLowerCase()));
+    }
+    return true;
+}
+function filterRegistryWorldbookEntries(value, excludedNames, settings = null, recentMessages = [], options = {}) {
+    if (!value || typeof value !== 'object')
+        return value;
+    const mode = normalizeWorldbookMode$1(settings?.trackerWorldbookMode);
+    const globalBookName = String(options.globalBookName || '').trim();
+    // characterScopeLists：附加知识书带书名前缀，但白名单仍走角色侧名单
+    const includedNames = globalBookName && options.characterScopeLists !== true
+        ? parseRegistryGlobalWorldbookIncludeNames(settings)
+        : parseRegistryWorldbookIncludeNames(settings);
+    const activationText = mode === 'mainflow' ? buildWorldbookActivationText$1(recentMessages) : '';
+    const normalizeEntryName = (entry) => getWorldbookEntryDisplayName(entry);
+    const keepEntry = (entry) => {
+        const name = normalizeEntryName(entry);
+        const selectionName = globalBookName ? formatGlobalWorldbookSelectionName$1(globalBookName, name) : name;
+        if (mode === 'allowlist_all')
+            return Boolean(name) && worldbookSelectionMatches(includedNames, selectionName, name);
+        if (entry?.enabled === false || entry?.disable === true)
+            return false;
+        if (name && worldbookSelectionMatches(excludedNames, selectionName, name))
+            return false;
+        if (mode === 'mainflow') {
+            const activationMode = getWorldbookEntryActivationMode$1(entry);
+            if (activationMode === 'always' || activationMode === 'constant')
+                return true;
+            if (activationMode === 'keyword' || activationMode === 'selective')
+                return worldbookKeywordMatches$1(entry, activationText);
+            return false;
+        }
+        if (!excludedNames || excludedNames.size === 0)
+            return true;
+        return true;
+    };
+    if (Array.isArray(value.entries)) {
+        return {
+            ...value,
+            entries: value.entries.filter(keepEntry),
+        };
+    }
+    if (value.entries && typeof value.entries === 'object') {
+        return {
+            ...value,
+            entries: Object.fromEntries(Object.entries(value.entries).filter(([, entry]) => keepEntry(entry))),
+        };
+    }
+    return value;
+}
+async function getFilteredGlobalWorldbooks$1(ctx, settings, recentMessages = []) {
+    const boundName = String(getCharacterWorldBookName(ctx) || await getCharacterWorldBookNameViaSTscript() || '').trim();
+    try {
+        const names = (await getActiveGlobalWorldBookNames()).filter((name) => name !== boundName);
+        const excludedNames = parseRegistryGlobalWorldbookExcludeNames(settings);
+        const books = await Promise.all(names.map(async (name) => {
+            try {
+                const worldBook = await loadGlobalWorldBook(ctx, name);
+                return filterRegistryWorldbookEntries(worldBook || null, excludedNames, settings, recentMessages, { globalBookName: name });
+            }
+            catch (error) {
+                console.warn(`[BS BioTracker] load global worldbook "${name}" for registry failed`, error);
+                return null;
+            }
+        }));
+        return books.filter((book) => book && ((Array.isArray(book.entries) && book.entries.length > 0) || (book.entries && typeof book.entries === 'object' && Object.keys(book.entries).length > 0)));
+    }
+    catch (error) {
+        console.warn('[BS BioTracker] load active global worldbooks for registry failed', error);
+        return [];
+    }
+}
+// 附加知识书走角色侧排除名单，条目以「书名 :: 条目名」参与匹配
+async function getCharacterAdditionalWorldbooksForRegistry(ctx, settings, recentMessages = []) {
+    const excludedNames = parseRegistryWorldbookExcludeNames(settings);
+    return loadCharacterAdditionalWorldBooks(ctx, {
+        recentMessages,
+        filterBook: (worldBook, bookName, messages) => filterRegistryWorldbookEntries(worldBook, excludedNames, settings, messages, { globalBookName: bookName, characterScopeLists: true }),
+    });
+}
+function mergeRegistryWorldbookLists(...lists) {
+    const seen = new Set();
+    const merged = [];
+    for (const list of lists) {
+        for (const book of Array.isArray(list) ? list : []) {
+            if (!book || typeof book !== 'object')
+                continue;
+            const key = String(book.name || '').trim();
+            if (key && seen.has(key))
+                continue;
+            if (key)
+                seen.add(key);
+            merged.push(book);
+        }
+    }
+    return merged;
+}
+function recordRegistryRequestDebug(systemPrompt, payload) {
+    globalThis[DEBUG_LAST_REGISTRY_REQUEST_KEY] = {
+        capturedAt: Date.now(),
+        systemPrompt,
+        payload,
+        messages: [
+            { role: 'system', content: String(systemPrompt || '') },
+            { role: 'user', content: JSON.stringify(payload, null, 2) },
+        ],
+    };
+}
+function recordRegistryResultDebug(result, error = null) {
+    globalThis[DEBUG_LAST_REGISTRY_RESULT_KEY] = {
+        capturedAt: Date.now(),
+        ok: !error,
+        result: result ?? null,
+        error: error ? String(error?.message || error) : null,
+    };
+}
+function recordBreedingInferenceRequestDebug(systemPrompt, payload) {
+    globalThis[DEBUG_LAST_BREEDING_INFERENCE_REQUEST_KEY] = {
+        capturedAt: Date.now(),
+        systemPrompt,
+        payload,
+        messages: [
+            { role: 'system', content: String(systemPrompt || '') },
+            { role: 'user', content: JSON.stringify(payload, null, 2) },
+        ],
+    };
+}
+function recordBreedingInferenceResultDebug(result, error = null) {
+    globalThis[DEBUG_LAST_BREEDING_INFERENCE_RESULT_KEY] = {
+        capturedAt: Date.now(),
+        ok: !error,
+        result: result ?? null,
+        error: error ? String(error?.message || error) : null,
+    };
+}
+function buildBreedingInferenceSystemPrompt(settings, options = {}) {
+    const targetName = String(options.targetName || '').trim();
+    const customNotes = String(options.customNotes !== undefined ? options.customNotes : (settings?.registryCustomNotes || '')).trim();
+    const declaredRace = String(options.declaredRace || '').trim();
+    const breedingInferencePrompt = String(options.breedingInferencePrompt || '').trim();
+    const sourceChild = options.sourceChildContext?.child || null;
+    const psyMensLines = Object.entries(PSY_MENS_FIELDS).map(([key, value]) => `- mens.${key}_value: ${value.definition}`);
+    const psyMensBoolLines = Object.entries(PSY_MENS_BOOL_FIELDS).map(([key, value]) => `- mens.${key}: ${value.definition}`);
+    const psyPregLines = Object.entries(PSY_PREG_FIELDS).map(([key, value]) => `- preg.${key}_value: ${value.definition}`);
+    const psyPregBoolLines = Object.entries(PSY_PREG_BOOL_FIELDS).map(([key, value]) => `- preg.${key}: ${value.definition}`);
+    const stageKeysText = PSY_STAGE_KEYS.join(', ');
+    return [
+        '你是 AIRP 角色繁育推演器。',
+        '你的任务不是注册角色，而是在注册前根据角色卡、世界书、最近对话与用户补充，推演该角色的繁育心理底盘。',
+        targetName ? `本次唯一目标是「${targetName}」。target_character 必须逐字填写「${targetName}」，不得填写 user、角色卡名或任何其他角色。` : '',
+        '繁育推演描述的是较稳定的人格、经历、认知与关系倾向，不是当下短暂情绪；不要因为角色刚害羞、刚哭、刚受伤就大幅改写长期心理轴。',
+        '若资料能支持判断，必须给出数值；只有完全没有线索时才使用 null。',
+        '如果角色当前未怀孕或没有明确初登场怀孕迹象，填写 mens；如果角色当前已怀孕、假孕、产兆前驱或产程中，填写 preg。mens 与 preg 二选一，另一项用 null。',
+        '启用 mens 时，必须同时推演 isChaste 与 hasContraception；启用 preg 时，必须同时推演 knowsFatherSource 与 hasProfessionalPrenatalCare。',
+        '数值范围为 0-100。0 是极端封闭/否认/失控，50 是普通中性，100 是极端掌控/执迷/展现。不要使用 100+，注册阶段只给 0-100 起始点。',
+        declaredRace ? `用户已声明角色种族倾向：${declaredRace}` : '',
+        sourceChild ? '本次角色来源为已出生孩子。payload.source_child 是其固定出生资料与既有天赋；必须用来判断长期人格、母子关系及成长背景，不得改写其种族或天赋。' : '',
+        customNotes ? `角色补充设定：${customNotes}` : '',
+        breedingInferencePrompt ? `额外推演提示：${breedingInferencePrompt}` : '',
+        'mens 字段定义：',
+        ...psyMensLines,
+        ...psyMensBoolLines,
+        'preg 字段定义：',
+        ...psyPregLines,
+        ...psyPregBoolLines,
+        '推演准则：',
+        '- mastery/cognition 主要看角色对自身生理、医学/魔法知识、经验与冷静程度。',
+        '- desire 主要看角色对受孕、承接种子、繁衍使命、避孕与恐惧怀孕的长期态度。',
+        '- autonomy 主要看角色在亲密关系与权力互动中的主动/被动、支配/顺从倾向。',
+        '- bonding 主要看母性、责任感、对胎儿的接纳或排斥，不等同于是否喜欢伴侣。',
+        '- stance 主要看角色如何处理孕妇身份的社会风险、公开程度、资源调度与身份利益。',
+        '- 布林字段是当前状态判定，不属于 6x6 阶段表；必须根据角色设定、最近剧情、医疗/魔法条件与关系线索合理推断，不确定时填 false。',
+        '- isChaste 代表当前保持贞洁取向、未发生性关系，或处于稳定单一性伴侣关系；若角色已有多对象关系、频繁性接触、被设定为非单伴侣，或资料无法确认单一关系，应填 false。',
+        '- hasContraception 代表当前确有稳定生效中的避孕措施；不要因为角色“不想怀孕”就自动视为 true。',
+        '- knowsFatherSource 代表角色能明确判断或相信胎儿父源；多对象、记忆缺口、魔法混淆或刻意隐瞒时应谨慎。',
+        '- hasProfessionalPrenatalCare 代表已有持续、专业、可信的产检或等价照护；一次性的民间判断或自我猜测不算 true。',
+        `- stageProfiles 必须保存 6 轴 × 6 阶段的角色专属解释。每个轴都必须包含这些阶段键：${stageKeysText}。`,
+        '- stageProfiles 的六个阶段只代表数值区间：0=极低或封闭，1_25=低位倾向，26_50=中低到中性，51_75=中高位倾向，76_100=高位强化，100_plus=超常或不可逆倾向。',
+        '- stageProfiles 的文字必须从角色资料重新诠释：写她在该区间会如何理解、掩饰、表达、合理化、抗拒或推进繁育相关变化。',
+        '- 不要使用任何预设阶段名、模板标签、括号式总称或分级标题；每段文本必须直接进入角色专属表现。',
+        '- 不要复述字段定义，不要写通用人群说明，不要把每段开头写成同一种固定句式。',
+        '- 即使当前只使用 mens 或 preg，也要同时生成 mens 与 preg 全部 6 轴阶段表，供未来阶段切换后继续推演。',
+        '只输出 JSON，不要输出解释文字。JSON 结构必须是：',
+        '{',
+        '  "target_character": "string",',
+        '  "pregnancy_status": "mens|preg|unknown",',
+        '  "confidence": 0,',
+        '  "evidence": ["string"],',
+        '  "mens": {',
+        '    "mastery_value": 0,',
+        '    "desire_value": 0,',
+        '    "autonomy_value": 0,',
+        '    "isChaste": false,',
+        '    "hasContraception": false',
+        '  },',
+        '  "preg": {',
+        '    "cognition_value": 0,',
+        '    "bonding_value": 0,',
+        '    "stance_value": 0,',
+        '    "knowsFatherSource": false,',
+        '    "hasProfessionalPrenatalCare": false',
+        '  },',
+        '  "stageProfiles": {',
+        '    "mens": {',
+        '      "mastery": { "0": "string", "1_25": "string", "26_50": "string", "51_75": "string", "76_100": "string", "100_plus": "string" },',
+        '      "desire": { "0": "string", "1_25": "string", "26_50": "string", "51_75": "string", "76_100": "string", "100_plus": "string" },',
+        '      "autonomy": { "0": "string", "1_25": "string", "26_50": "string", "51_75": "string", "76_100": "string", "100_plus": "string" }',
+        '    },',
+        '    "preg": {',
+        '      "cognition": { "0": "string", "1_25": "string", "26_50": "string", "51_75": "string", "76_100": "string", "100_plus": "string" },',
+        '      "bonding": { "0": "string", "1_25": "string", "26_50": "string", "51_75": "string", "76_100": "string", "100_plus": "string" },',
+        '      "stance": { "0": "string", "1_25": "string", "26_50": "string", "51_75": "string", "76_100": "string", "100_plus": "string" }',
+        '    }',
+        '  },',
+        '  "notes": "string"',
+        '}',
+        '如果使用 mens，preg 必须为 null；如果使用 preg，mens 必须为 null。',
+    ].filter(Boolean).join('\n');
+}
+function buildWardrobePrepSystemPrompt(settings, options = {}) {
+    const userPrompt = String(options.wardrobePrepPrompt || settings?.wardrobePrepPrompt || '').trim();
+    const mainCount = Math.max(1, Math.min(12, Math.floor(Number(options.wardrobePrepMainCount ?? settings?.wardrobePrepMainCount ?? 3) || 3)));
+    const accessoryCount = Math.max(0, Math.min(12, Math.floor(Number(options.wardrobePrepAccessoryCount ?? settings?.wardrobePrepAccessoryCount ?? 3) || 0)));
+    return [
+        '你是 AIRP 女性角色衣柜备装初始化器。',
+        '你只为 payload.target_character 生成衣柜 JSON，不得新增其他角色。',
+        '根据角色卡、世界书、最近对话、已注册状态、normalDescription/pregnantDescription 与衣柜记录中的服装线索，推断该角色合理拥有的长期衣物与当前穿着。',
+        `默认生成 ${mainCount} 套 main 主件、${accessoryCount} 件 accessory 配件；main 的计数单位是完整套装，不是单件。若用户额外提示指定更合理的数量或场景，可在接近该数量的范围内微调。`,
+        '只输出 JSON，不要输出额外解释。',
+        'JSON 顶层结构必须是：',
+        '{',
+        '  "wardrobe": { "items": [] },',
+        '  "outfit": { "mainItemId": 1, "accessoryItemIds": [], "temporaryItems": [] }',
+        '}',
+        'wardrobe.items 只放长期衣柜，不要放系统保留的 id=0，也不要放病服、借来的外套、旅馆睡衣等临时衣物。',
+        '临时衣物如确实是当前穿着，放入 outfit.temporaryItems，并让 outfit.mainItemId 或 accessoryItemIds 指向其中 id；否则 temporaryItems 输出空数组。',
+        '每件衣物必须包含 id/name/note/slot/masking/support/capacity/convenience；main 主件可附 parts 数组列出组成部件名（如 ["白衬衫","牛仔裤"]，连身装可省略）；accessory 配件可附 layer（inner=贴身内衣等穿在主件之下，outer=外搭，默认 outer）。',
+        'note 只写衣物稳定外观与来源：颜色、材质、版型、长短、固定开口、图案、制服/病服/借装来源等。皮肤暴露、开衩、透肤、深领等稳定外观写在 note。禁止写当前穿着反应、角色感受、近期身体变化、怀孕/胀痛/压胸/勒红/变紧/显怀等动态状态；这些由四维、pregFit 与当轮叙事推导。',
+        'id 必须使用正整数，从 1 开始递增且不可重复；0 保留给全裸。name 使用中文或角色设定中的自然名称。',
+        'slot 只能是 main 或 accessory。main 是可独立穿着的完整基础套装：一般必须把上衣与下着合并为同一个 main（连身裙、连体衣等一体式服装除外），name 与 note 都要同时写出上下身；不得把卫衣/T恤与牛仔裤/裙子拆成彼此互斥的多个 main，也不得把下着塞进 accessory。main 的四维按整套效果评分。accessory 才是可独立叠加在 main 上的外套、鞋履、帽子、饰品、托腹带等配件补正。',
+        '可独立穿脱的外层（毛衣、开衫、外套、罩衫、披肩等罩在基础套装外面的衣物）不要并入 main 或写进 parts，应拆成 layer=outer 的 accessory，这样剧情中单独脱掉时才有机械表达；main 只保留脱掉外层后仍成立的基础层。',
+        '四维数值范围 -10 到 10：masking=掩盖身体曲线、孕肚、胸腹变化的程度；support=对胸、腹、腰、重心的承托程度，高表示托得住但可能偏束，低表示松散；capacity=容许体型变化的程度；convenience=行动、穿脱、如厕、哺乳或排解需求的方便程度。',
+        '主件通常使用 0 到 10；配件单项只能 -3 到 3，通常只影响 1-2 个最相关维度，其他维度必须填 0，避免把配件写成整套服装。',
+        '配件例：外套可提高 masking；托腹带可提高 support 或 capacity；高跟鞋可降低 convenience；鞋履通常不应大幅提高 support，除非 note 明确是矫正/固定用途。',
+        '配件中通常应包含 1-2 件 layer=inner 的贴身衣物（如内衣），其四维补正同样遵守 -3 到 3 的配件规则。',
+        'outfit.mainItemId 必须是 wardrobe.items 或 outfit.temporaryItems 中 slot=main 的 id；若无法判断当前穿着，选择最日常的一件主件。',
+        'outfit.accessoryItemIds 只能包含 slot=accessory 的 id；未知则空数组。',
+        '[用户额外备装提示]',
+        userPrompt || '无',
+    ].join('\n');
+}
+function sanitizeWardrobePrepResult(result) {
+    if (!result || typeof result !== 'object' || Array.isArray(result))
+        throw new Error('备装推演必须返回 JSON 对象');
+    const items = Array.isArray(result?.wardrobe?.items) ? result.wardrobe.items : [];
+    if (items.length <= 0)
+        throw new Error('备装推演缺少 wardrobe.items');
+    const outfit = result?.outfit && typeof result.outfit === 'object' && !Array.isArray(result.outfit) ? result.outfit : null;
+    if (!outfit)
+        throw new Error('备装推演缺少 outfit');
+    return {
+        wardrobe: { items },
+        outfit: {
+            mainItemId: Number.isInteger(Number(outfit.mainItemId)) ? Number(outfit.mainItemId) : 0,
+            accessoryItemIds: Array.isArray(outfit.accessoryItemIds) ? outfit.accessoryItemIds.map((id) => Number(id)).filter((id) => Number.isInteger(id) && id >= 0) : [],
+            temporaryItems: Array.isArray(outfit.temporaryItems) ? outfit.temporaryItems : [],
+        },
+    };
+}
+async function runBreedingInference(settings, payload, options = {}) {
+    const systemPrompt = options.breedingInferenceSystemPrompt || buildBreedingInferenceSystemPrompt(settings, options);
+    recordBreedingInferenceRequestDebug(systemPrompt, payload);
+    try {
+        const rawResult = await callOpenAICompatible(settings, payload, systemPrompt);
+        const result = normalizeBreedingInferenceResult(rawResult);
+        // 角色卡、最近对话中会同时出现 user 与其他人物；target_character 是 UI 的
+        // 明确输入，不能把模型回传的猜测当成目标来源，否则结果会显示成 user。
+        if (result && typeof result === 'object' && !Array.isArray(result)) {
+            result.target_character = String(payload?.target_character || '').trim();
+        }
+        const stageProfiles = normalizePsychologyStageProfiles(result?.stageProfiles);
+        const missing = getMissingPsychologyStageProfileKeys(stageProfiles);
+        if (missing.length > 0) {
+            throw new Error(`繁育推演缺少 6x6 stageProfiles：${missing.slice(0, 12).join(', ')}${missing.length > 12 ? '...' : ''}`);
+        }
+        const labelLeaks = getPsychologyStageProfileLabelLeaks(stageProfiles);
+        if (labelLeaks.length > 0) {
+            throw new Error(`繁育推演 stageProfiles 使用了默认阶段标签，请重新诠释：${labelLeaks.slice(0, 12).join(', ')}${labelLeaks.length > 12 ? '...' : ''}`);
+        }
+        result.stageProfiles = stageProfiles;
+        recordBreedingInferenceResultDebug(result);
+        return result && typeof result === 'object' && !Array.isArray(result) ? result : null;
+    }
+    catch (error) {
+        recordBreedingInferenceResultDebug(null, error);
+        throw error;
+    }
+}
+function normalizeBreedingInferenceResult(result) {
+    if (!result || typeof result !== 'object' || Array.isArray(result))
+        return result;
+    const psychology = result.psychology && typeof result.psychology === 'object' && !Array.isArray(result.psychology)
+        ? result.psychology
+        : {};
+    const profilePsychology = result.profile?.psychology && typeof result.profile.psychology === 'object' && !Array.isArray(result.profile.psychology)
+        ? result.profile.psychology
+        : {};
+    return {
+        ...result,
+        ...(result.mens === undefined && (psychology.mens || profilePsychology.mens) ? { mens: psychology.mens || profilePsychology.mens } : {}),
+        ...(result.preg === undefined && (psychology.preg || profilePsychology.preg) ? { preg: psychology.preg || profilePsychology.preg } : {}),
+        ...(result.stageProfiles === undefined && (psychology.stageProfiles || profilePsychology.stageProfiles)
+            ? { stageProfiles: psychology.stageProfiles || profilePsychology.stageProfiles }
+            : {}),
+    };
+}
+function getMissingPsychologyStageProfileKeys(stageProfiles) {
+    const missing = [];
+    const groups = [
+        ['mens', PSY_MENS_FIELDS],
+        ['preg', PSY_PREG_FIELDS],
+    ];
+    for (const [groupKey, fieldConfig] of groups) {
+        for (const field of Object.keys(fieldConfig || {})) {
+            for (const stageKey of PSY_STAGE_KEYS) {
+                if (!String(stageProfiles?.[groupKey]?.[field]?.[stageKey] || '').trim()) {
+                    missing.push(`${groupKey}.${field}.${stageKey}`);
+                }
+            }
+        }
+    }
+    return missing;
+}
+function getPsychologyStageProfileLabelLeaks(stageProfiles) {
+    const leaks = [];
+    const groups = [
+        ['mens', PSY_MENS_FIELDS],
+        ['preg', PSY_PREG_FIELDS],
+    ];
+    for (const [groupKey, fieldConfig] of groups) {
+        for (const [field, config] of Object.entries(fieldConfig || {})) {
+            for (const stageKey of PSY_STAGE_KEYS) {
+                const label = String(config?.stages?.[stageKey]?.meaning || '').trim();
+                const text = String(stageProfiles?.[groupKey]?.[field]?.[stageKey] || '').trim();
+                if (!label || !text)
+                    continue;
+                const normalizedText = text.replace(/^[「『“"']+/, '').trim();
+                if (normalizedText === label
+                    || normalizedText.startsWith(`${label}，`)
+                    || normalizedText.startsWith(`${label},`)
+                    || normalizedText.startsWith(`${label}。`)
+                    || normalizedText.startsWith(`${label}：`)
+                    || normalizedText.startsWith(`${label}:`)
+                    || normalizedText.startsWith(`${label} `)) {
+                    leaks.push(`${groupKey}.${field}.${stageKey}=${label}`);
+                }
+            }
+        }
+    }
+    return leaks;
+}
+async function buildRegistryPayload(ctx, settings, chatState, options = {}) {
+    const targetName = String(options.targetName || '').trim();
+    const customNotes = String(options.customNotes !== undefined ? options.customNotes : (settings.registryCustomNotes || '')).trim();
+    const declaredRace = String(options.declaredRace || '').trim();
+    if (!targetName)
+        throw new Error('runRegistry 需要 targetName');
+    const currentCharacter = getCharacterCard(ctx);
+    const recentMessages = buildRecentMessages(ctx, settings);
+    const rawCharacterWorldBook = await getCharacterWorldBook(ctx);
+    const characterWorldBook = filterRegistryWorldbookEntries(rawCharacterWorldBook, parseRegistryWorldbookExcludeNames(settings), settings, recentMessages);
+    const payloadWorldBook = characterWorldBook;
+    const payloadGlobalWorldbooks = await getFilteredGlobalWorldbooks$1(ctx, settings, recentMessages);
+    // 附加知识书（charLore.extraBooks）与主世界书分离，旧版只读主书会漏掉
+    const payloadAdditionalWorldbooks = await getCharacterAdditionalWorldbooksForRegistry(ctx, settings, recentMessages);
+    const sourceChild = options.sourceChildContext
+        ? {
+            mother: options.sourceChildContext.motherName,
+            childIndex: options.sourceChildContext.childIndex,
+            name: options.sourceChildContext.child?.name ?? null,
+            fathers: options.sourceChildContext.child?.fathers ?? null,
+            gender: options.sourceChildContext.child?.gender ?? null,
+            race: options.sourceChildContext.child?.race ?? null,
+            derivedType: options.sourceChildContext.child?.derivedType ?? null,
+            age: options.sourceChildContext.child?.age ?? null,
+            birthWeightRatio: options.sourceChildContext.child?.birthWeightRatio ?? null,
+            birthAffinity: options.sourceChildContext.child?.birthAffinity ?? null,
+            talents: normalizeTalentList(options.sourceChildContext.child?.talents).map((talent) => {
+                const definition = resolveSkillDefinition(chatState.skillCatalog, talent.skillId);
+                return {
+                    ...talent,
+                    name: definition?.name || `未知技能 #${talent.skillId}`,
+                    description: definition?.description || '',
+                };
+            }),
+        }
+        : null;
+    return {
+        reason: options.reason || 'manual_registry',
+        chat_id: getChatKey(ctx),
+        current_character: {
+            ...currentCharacter,
+            worldBook: payloadWorldBook,
+        },
+        character_description: currentCharacter.description || '',
+        character_worldbook_name: payloadWorldBook ? (getCharacterWorldBookName(ctx) || null) : null,
+        character_worldbook: payloadWorldBook,
+        character_additional_worldbook_names: await getCharacterAdditionalWorldBookNames(ctx),
+        global_worldbooks: mergeRegistryWorldbookLists(payloadGlobalWorldbooks, payloadAdditionalWorldbooks),
+        target_character: targetName,
+        existing_state: chatState.characters[targetName] || null,
+        recent_messages: recentMessages,
+        custom_notes: customNotes,
+        declared_race: declaredRace || null,
+        source_child: sourceChild,
+        user_instruction: String(options.userInstruction || '').trim(),
+    };
+}
+async function runRegistryWardrobeInference(ctx, options = {}) {
+    const settings = getSettings(ctx);
+    const chatState = getChatState(ctx, settings);
+    const requestedTargetName = String(options.targetName || '').trim();
+    if (!requestedTargetName)
+        throw new Error('备装推演需要 targetName');
+    const targetName = resolveRegisteredCharacterName(chatState, requestedTargetName);
+    if (!targetName)
+        throw new Error(`备装推演需要已注册角色：${requestedTargetName}`);
+    const customNotes = String(options.customNotes !== undefined ? options.customNotes : (settings.registryCustomNotes || '')).trim();
+    const declaredRace = String(options.declaredRace || '').trim();
+    const wardrobePrepPrompt = String(options.wardrobePrepPrompt || settings.wardrobePrepPrompt || '').trim();
+    const wardrobePrepMainCount = Math.max(1, Math.min(12, Math.floor(Number(options.wardrobePrepMainCount ?? settings.wardrobePrepMainCount ?? 3) || 3)));
+    const wardrobePrepAccessoryCount = Math.max(0, Math.min(12, Math.floor(Number(options.wardrobePrepAccessoryCount ?? settings.wardrobePrepAccessoryCount ?? 3) || 0)));
+    const payload = await buildRegistryPayload(ctx, settings, chatState, {
+        ...options,
+        targetName,
+        reason: options.reason || 'wardrobe_prep_inference',
+        customNotes,
+        declaredRace,
+        userInstruction: wardrobePrepPrompt,
+    });
+    payload.wardrobe_prep_prompt = wardrobePrepPrompt;
+    payload.wardrobe_prep_main_count = wardrobePrepMainCount;
+    payload.wardrobe_prep_accessory_count = wardrobePrepAccessoryCount;
+    payload.existing_wardrobe = chatState.characters[targetName]?.profile?.wardrobe || null;
+    payload.existing_outfit = chatState.characters[targetName]?.profile?.outfit || null;
+    const systemPrompt = options.wardrobePrepSystemPrompt || buildWardrobePrepSystemPrompt(settings, { ...options, wardrobePrepPrompt, wardrobePrepMainCount, wardrobePrepAccessoryCount });
+    const result = await callOpenAICompatible(settings, payload, systemPrompt);
+    return sanitizeWardrobePrepResult(result);
+}
+async function runRegistryDiaryInference(ctx, options = {}) {
+    const settings = getSettings(ctx);
+    const chatState = getChatState(ctx, settings);
+    const requestedTargetName = String(options.targetName || '').trim();
+    if (!requestedTargetName)
+        throw new Error('日记生成需要 targetName');
+    const targetName = resolveRegisteredCharacterName(chatState, requestedTargetName);
+    if (!targetName)
+        throw new Error(`日记生成需要已注册角色：${requestedTargetName}`);
+    const diaryWritingPrompt = String(options.diaryWritingPrompt || settings.diaryWritingPrompt || DEFAULT_DIARY_WRITING_PROMPT).trim();
+    const requestedDate = String(options.requestedDate || '').trim();
+    const payload = await buildRegistryPayload(ctx, settings, chatState, {
+        ...options,
+        targetName,
+        reason: 'diary_inference',
+        userInstruction: diaryWritingPrompt,
+    });
+    payload.diary_writing_prompt = diaryWritingPrompt;
+    payload.requested_diary_date = requestedDate || null;
+    payload.existing_character_state = chatState.characters[targetName];
+    const systemPrompt = [
+        '你是 AIRP 角色主观日记写作者。',
+        '只为 payload.target_character 写一篇事后回顾式日记，不得替其他角色写。',
+        '结合角色资料、现有状态、最近聊天与既有日记，使用第一人称，保持角色语气与认知边界。',
+        '不要把日记写成即时旁白、系统总结或数值清单。',
+        '严格遵守 payload.diary_writing_prompt。',
+        requestedDate
+            ? 'time 必须使用 payload.requested_diary_date。'
+            : 'payload.requested_diary_date 为空时，请依故事上下文自行填写合适的日期标题；不要使用现实系统日期。',
+        '只输出 JSON：{"time":"日期标题","content":"日记正文"}。',
+    ].join('\n');
+    const result = await callOpenAICompatible(settings, payload, systemPrompt);
+    const time = String(result?.time || requestedDate || '').trim();
+    const content = String(result?.content || '').trim();
+    if (!time || !content)
+        throw new Error('日记生成结果缺少 time 或 content');
+    return { time, content };
+}
+async function runRegistryBreedingInference(ctx, options = {}) {
+    const settings = getSettings(ctx);
+    const chatState = getChatState(ctx, settings);
+    const targetName = resolveRegistryTargetName(ctx, options.targetName);
+    if (!targetName)
+        throw new Error('繁育推演需要 targetName');
+    const customNotes = String(options.customNotes !== undefined ? options.customNotes : (settings.registryCustomNotes || '')).trim();
+    const requestedSource = options.sourceChild || null;
+    const sourceChildContext = requestedSource ? resolveRegistryChildSource(chatState, requestedSource) : null;
+    if (requestedSource && !sourceChildContext)
+        throw new Error('找不到选择的孩子来源，请重新选择。');
+    const declaredRace = sourceChildContext
+        ? `${sourceChildContext.child.derivedType ? `[${sourceChildContext.child.derivedType}]` : ''}${String(sourceChildContext.child.race || '未知')}`
+        : String(options.declaredRace || '').trim();
+    const breedingInferencePrompt = String(options.breedingInferencePrompt || '').trim();
+    const payload = await buildRegistryPayload(ctx, settings, chatState, {
+        ...options,
+        targetName,
+        reason: options.reason || 'breeding_inference',
+        customNotes,
+        declaredRace,
+        breedingInferencePrompt,
+        sourceChildContext,
+        userInstruction: breedingInferencePrompt,
+    });
+    payload.breeding_inference_prompt = breedingInferencePrompt;
+    return runBreedingInference(settings, payload, {
+        ...options,
+        targetName,
+        customNotes,
+        declaredRace,
+        breedingInferencePrompt,
+        sourceChildContext,
+    });
+}
+function buildRegistrySystemPrompt(settings, options = {}) {
+    const includeBreedingPsychology = Boolean(options.includeBreedingPsychology);
+    const guides = {
+        ...DEFAULT_REGISTRY_DESCRIPTION_GUIDES,
+        ...(settings?.registryDescriptionGuides || {}),
+        ...(options.descriptionGuides || {}),
+    };
+    const customNotes = String(options.customNotes !== undefined ? options.customNotes : (settings?.registryCustomNotes || '')).trim();
+    const declaredRace = String(options.declaredRace || '').trim();
+    const sourceChild = options.payload?.source_child || null;
+    const embryoTypeLorePrompt = buildEmbryoTypeLorePrompt(options.payload || {}, { includeAllIfEmpty: true });
+    const racePhysiologyPrompt = buildRegistryRacePhysiologyPrompt(options.payload || {});
+    const psyMensLines = Object.entries(PSY_MENS_FIELDS).flatMap(([key, value]) => [
+        `- psychology.mens.${key}_value: ${value.definition}`,
+        `  阶段预览: ${value.preview}`,
+    ]);
+    const psyMensBoolLines = Object.entries(PSY_MENS_BOOL_FIELDS).map(([key, value]) => `- psychology.mens.${key}: ${value.definition}`);
+    const psyPregLines = Object.entries(PSY_PREG_FIELDS).flatMap(([key, value]) => [
+        `- psychology.preg.${key}_value: ${value.definition}`,
+        `  阶段预览: ${value.preview}`,
+    ]);
+    const psyPregBoolLines = Object.entries(PSY_PREG_BOOL_FIELDS).map(([key, value]) => `- psychology.preg.${key}: ${value.definition}`);
+    const prompt = [
+        racePhysiologyPrompt,
+        '你是 AIRP 女性角色注册初始化器。',
+        '只在用户明确要求注册指定角色时工作，不得擅自新增其他角色。',
+        '根据角色卡、用户要求、已有资料，输出角色初始化 JSON。',
+        sourceChild ? '本次注册来源为已有角色的孩子。payload.source_child 是固定事实：base.race 必须沿用其 race／derivedType；其 talents 会由系统确定性继承。你只能参考这些天赋塑造初始化内容，不得删除、改名、换向或重算天赋。' : '',
+        includeBreedingPsychology
+            ? 'payload.breeding_inference 是已确认的繁育推演。必须优先把它当作繁育心理初稿，再结合角色资料校正，不要无故忽略。'
+            : '本次未启用繁育心理推演：不要输出、补全或推断任何繁育阶段人格字段，保留角色卡原有的阶段人设与表现。',
+        '你只需要填写角色注册时真正需要声明的内容，不需要补充其他无关信息。',
+        '不要扩写额外分类，不要发散到注册步骤之外的内容。',
+        '你只需要填写以下声明内容：',
+        '1. 角色基础注册：base.age、base.race、base.vitalityLevel、base.psyStressLevel、base.libido、base.uterinePressure、base.latestSexDays、base.sperms、metabolism',
+        '2. 情感与妊娠经验：experience',
+        ...(includeBreedingPsychology ? ['3. 繁育心理：psychology.mens 或 psychology.preg（二选一，互斥）'] : []),
+        '4. 既有孩子记录：children',
+        '5. 初登场即怀孕：pregnant.pregnantDays、pregnant.fetusesCount、pregnant.fetuses',
+        '6. 文字描述栏位：descriptions',
+        '如果资料不足，可以省略字段或给 null；不要为了凑完整而编造。',
+        embryoTypeLorePrompt,
+        '以下字段定义、参数说明、注意事项与示例，均视为必要规则：',
+        '【1. 角色基础注册】',
+        '参数说明：',
+        `- base.race: 纯种/混血/衍生种族/子类物种，保留原始写法，若故事为现代写实，种族统一填人类即可${declaredRace ? `。【重要】用户已明确指定，必须强制填写為：${declaredRace}` : ''}`,
+        '- base.vitalityLevel: 1-7，默认语义为 一推就倒(1)-身怀病弱(2)-难产体态(3)-均衡活力(4)-安产体态(5)-经过锻炼(6)-无坚不摧(7)',
+        '- base.psyStressLevel: 1-7，默认语义为 情感丧失麻木不仁(1)-内向压抑冷感(2)-情绪平缓理性(3)-情绪均衡稳定(4)-情绪丰富敏感(5)-强烈波动焦躁(6)-极端情绪精神异常(7)',
+        '- base.age: 角色年龄',
+        '- base.libido: 初始性欲。非妊娠上限100；妊娠後会随孕期提升，临产最后一天上限可达150。若角色开场就在发情、催情、强欲状态，可给较高值。',
+        '- base.uterinePressure: 初始宫压。非妊娠上限50；妊娠後会随进度平滑提升，臨產期上限达150。【危险警告】孕早期与孕中期前期上限极低，超过15便极易触发流产警告！除非开局正在临盆或剧烈腹痛，否则强烈建议填 0。',
+        '- base.latestSexDays: 距最近一次性行为经过的天数。若 experience.latestSexPartner 有意义，建议一并填写；若已超过最近一月经周期或无从判断，可为 null。',
+        '- base.sperms: 体内残留精液来源列表。适用于刚性交结束、仍有精液残留的开局；每项包含 male、race、value。race 可直接写 [衍生]种族，系统会自动拆出 derivedType。',
+        '- metabolism: 初始需求状态。普通种族上限皆為150，包含 excretion、hunger、sleep、milk、odor、companionship，分别表示泄意、饿意、困意、乳意、臭意、伴意；excretion（泄意）同时包含排尿与排便需求；milk 在普通周期表示乳房胀敏或周期不适，在妊娠、假孕或产后恢复阶段也可表示泌乳需求。',
+        '- 若 base.derivedType 不为 null，则 metabolism 可填写 flux（范围 -150 到 150），并保留该衍生类型未抵免的普通需求。flux 是衍生种族专用的单一极性需求值：正值与负值分别代表两种相反的释放需求，绝对值越高需求越强。',
+        '- pregnant.nutrition 是妊娠供养力盈余/赤字，专注参与胎儿体重/供养结算，不作为 metabolism 排解阻塞来源。',
+        '注意：vitalityLevel 与 psyStressLevel 是角色内在特质等级，不根据当前疲劳、刚哭过、当下崩溃等暂时状态调整。',
+        '注意：base.vitality 与 base.psyStress 不由你直接填写，系统会根据 vitalityLevel 与 psyStressLevel 自动计算初始值。',
+        '示例：',
+        '- 人类少女: {"base":{"race":"人类","vitalityLevel":4,"psyStressLevel":4,"age":18,"libido":12,"uterinePressure":0}}',
+        '- 混血: {"base":{"race":"天使x恶魔","vitalityLevel":5,"psyStressLevel":3,"age":25,"libido":35,"uterinePressure":3}}',
+        '- 衍生种族: {"base":{"race":"[血族]人类","vitalityLevel":2,"psyStressLevel":5,"age":150,"libido":28,"uterinePressure":0}}',
+        '- 子类物种: {"base":{"race":"鱼人-鲸族","vitalityLevel":6,"psyStressLevel":2,"age":30,"libido":20,"uterinePressure":0}}',
+        '- 复杂种族: {"base":{"race":"[不死-僵尸]兽耳族-九尾狐","vitalityLevel":7,"psyStressLevel":1,"age":1000,"libido":60,"uterinePressure":20}}',
+        '【2. 情感与妊娠经验】',
+        '参数说明：',
+        '- virginity: 初次性对象名称，处女时为 null',
+        '- latestSexPartner: 最新性对象，仅在最近一月经周期(ex: 人类28天)内仍有意义，否则可为 null',
+        '- 若填写 latestSexPartner，最好同时填写 base.latestSexDays，表示距离最近一次性行为过去了几天',
+        '- emotionalMate: 情感对象，无则 null',
+        '- marriageMate: 婚姻对象，无则 null',
+        '- pregnantExperience: 怀孕经验次数',
+        '- naturalBirthExperience: 自然产经验次数',
+        '- surgicalBirthExperience: 手术产经验次数',
+        '- miscarriageExperience: 流产/堕胎次数',
+        '示例：',
+        '- 高中女生: {"experience":{"virginity":"前男友","emotionalMate":"{{user_name}}","pregnantExperience":0}}',
+        '- 魅魔女仆: {"experience":{"virginity":"前任主人","emotionalMate":null,"pregnantExperience":5,"naturalBirthExperience":3,"surgicalBirthExperience":0,"miscarriageExperience":2}}',
+        '- 守贞人妻: {"experience":{"virginity":"丈夫","latestSexPartner":"丈夫","emotionalMate":"丈夫","marriageMate":"丈夫","pregnantExperience":3,"naturalBirthExperience":0,"surgicalBirthExperience":2,"miscarriageExperience":0}}',
+        '- 刚做爱开局: {"base":{"latestSexDays":0,"sperms":[{"male":"丈夫","race":"[不死-僵尸]人类","value":30}]},"experience":{"latestSexPartner":"丈夫"}}',
+        '【3. 繁育心理】',
+        '参数说明：',
+        '- 若 payload.breeding_inference 存在，先采用其中对应 mens 或 preg 的数值作为心理起始点；只有当角色资料与繁育推演明显冲突时才调整。',
+        '- 若 payload.breeding_inference.stageProfiles 存在，必须原样写入 profile.psychology.stageProfiles，除非需要修正明显错误或空缺。',
+        '- 繁育心理是角色长期繁育人格底盘，不是临时情绪。注册时应让它能支撑后续 bsUpdatePsychology 的小幅推演。',
+        '- 非怀孕角色只填写 psychology.mens，包含 mastery_value、mastery_interpret、desire_value、desire_interpret、autonomy_value、autonomy_interpret，以及 isChaste、hasContraception。',
+        '- 怀孕角色只填写 psychology.preg，包含 cognition_value、cognition_interpret、bonding_value、bonding_interpret、stance_value、stance_interpret，以及 knowsFatherSource、hasProfessionalPrenatalCare。',
+        '- psychology.mens 与 psychology.preg 互斥，不要同时填写。',
+        '- 你主要填写 *_value，数值范围为 0-100；*_interpret 可省略，系统会按阶段自动补全。布林旗标只填 true/false。',
+        '- psychology.stageProfiles 用来保存该角色专属 6 轴 × 6 阶段解释。结构为 psychology.stageProfiles.mens.{mastery,desire,autonomy}.{0,1_25,26_50,51_75,76_100,100_plus} 与 psychology.stageProfiles.preg.{cognition,bonding,stance}.{0,1_25,26_50,51_75,76_100,100_plus}。',
+        '非怀孕使用以下定义与阶段预览：',
+        ...psyMensLines,
+        ...psyMensBoolLines,
+        '怀孕使用以下定义与阶段预览：',
+        ...psyPregLines,
+        ...psyPregBoolLines,
+        '示例：',
+        '- 非怀孕: {"psychology":{"mens":{"mastery_value":62,"desire_value":38,"autonomy_value":71,"isChaste":true,"hasContraception":true}}}',
+        '- 怀孕: {"psychology":{"preg":{"cognition_value":58,"bonding_value":84,"stance_value":47,"knowsFatherSource":true,"hasProfessionalPrenatalCare":false}}}',
+        '【4. 既有孩子记录】',
+        '参数说明：每个孩子对象包含 name、fathers、gender、race、age。',
+        '示例：',
+        '- [{"name":"冬月 露花","fathers":"前夫","gender":"女","race":"人类","age":5}]',
+        '【5. 初登场即怀孕】',
+        '参数说明：',
+        '- pregnant.pregnantDays: 这次妊娠的孕龄天数，等同产科从末次月经/本族等价周期起点计算的孕周天数；若资料写“孕8周/怀孕8周”填 56，若明确写“受孕后8周/胚胎发育8周”，需再加上本族等价排卵前偏移。',
+        '- 不要填写 pregnant.effectivePregnantDays；系统会依据孕龄、角色种族妊娠速度与 bio.gestationModifierMultiplier 自动换算有效妊娠天数。',
+        '- pregnant.fetusesCount: 这次怀孕的怀胎数',
+        '- pregnant.fetuses: 每个胎儿包含 fathers、provider、race、gender、embryoType；也可填写 weight、tendencyAngle、affinity',
+        '- provider: 代孕母方、寄生等提供者名称，正常情况下为 null',
+        '- weight: 胎儿体重/发育量倍率，范围 0.33-3.0；不确定可省略，系统会补 1.0',
+        '- tendencyAngle: 胎位/趋向角度，范围 0-360；不确定可省略，系统会随机补值。角度映射必须固定为：0/360=正常头位/正位，180=完全臀位/倒位，90或270=横位；不要把 180 写成头位',
+        '- affinity: 胎儿对母体的亲和/排斥倾向，范围 -50 到 50；正值亲和，负值排斥，不确定可省略',
+        '示例：',
+        '- 人类怀单胎8周，正常头位示例: {"pregnant":{"pregnantDays":56,"fetusesCount":1,"fetuses":[{"fathers":"丈夫","provider":null,"race":"人类","gender":"男","embryoType":"胎生","weight":1.0,"tendencyAngle":0,"affinity":10}]}}',
+        '- 精灵怀孕500天: {"base":{"race":"精灵"},"pregnant":{"pregnantDays":500,"fetusesCount":1,"fetuses":[{"fathers":"伴侣","provider":null,"race":"精灵","gender":"女","embryoType":"胎生"}]}}',
+        '- 妖怪猫又怀双胎20周: {"pregnant":{"pregnantDays":140,"fetusesCount":2,"fetuses":[{"fathers":"监狱囚犯","provider":null,"race":"[妖怪]兽耳族-猫又x蜥蜴人","gender":"女","embryoType":"胎生"},{"fathers":"监狱囚犯","provider":null,"race":"[妖怪]兽耳族-猫又x蜥蜴人","gender":"女","embryoType":"胎生"}]}}',
+        '- 代孕情节: {"pregnant":{"pregnantDays":84,"fetusesCount":1,"fetuses":[{"fathers":"委托人","provider":"代孕者A","race":"人类","gender":"女","embryoType":"胎生"}]}}',
+        '【5.1 妊娠變速类补充设定（仅在存在特殊变速效果时填写 bio）】',
+        '参数说明：',
+        '- bio.gestationModifierMultiplier: 特殊妊娠速度修正倍率。大于 1 为加速，小于 1 为减速，0 为冻结；初始怀孕仍只填 pregnant.pregnantDays（孕龄），系统会用倍率换算 effectivePregnantDays。',
+        '- bio.gestationModifierName: 该倍率效果的名称，例如祝福、诅咒、体质、术式。',
+        '- bio.gestationModifierDescription: 对该倍率来源与表现的简短说明。',
+        '- 这组 bio 字段是可选的特殊效果，不是一般妊娠的必填资料。普通人类孕妇、常规妊娠、种族原生孕期速度都不要填写。',
+        '- 禁止用 bio 填写 gestationModifierMultiplier=1 的默认占位内容，例如「常规妊娠」「标准人类妊娠生理周期」；没有特殊变速效果就整个省略 bio。',
+        '- 仅当资料明确存在持续生效且倍率不为 1 的祝福、诅咒、体质、术式、冻结或延长效果时填写；未怀孕角色也可保留此类明确效果。',
+        '示例：',
+        '- 被祝福的冒险者妊娠加快: {"bio":{"gestationModifierMultiplier":1.5,"gestationModifierName":"丰饶祝福","gestationModifierDescription":"受女神祝福后，妊娠期间胎儿发育明显加快，孕期反应也会更早显现。"}}',
+        '- 红尘之力导致孕期极端延长，即使当前未怀孕也应保留: {"bio":{"gestationModifierMultiplier":0.001,"gestationModifierName":"红尘织命","gestationModifierDescription":"受红尘之力影响，若进入妊娠，孕期推进速度仅为常规人类的千分之一，整体妊娠期会被极度拉长。"}}',
+        '【6. 文字描述栏位】',
+        '参数说明：descriptions 包含 normalDescription、pregnantDescription。',
+        'normalDescription 与 pregnantDescription 必须使用旧版格式：字段名|描述内容;;字段名|描述内容;;...字段名|描述内容;;。',
+        '只能用 | 分隔字段名与描述内容，只能用 ;; 分隔字段；每个字段都要保留字段名，结尾也要补 ;;。',
+        '不要改成自然段、不要换行、不要写成纯长文。',
+        '示例：状态|处于饥饿与寒冷的边缘，精神高度焦虑且带有防御性;;表情|戴着苍白口罩，眼神涣散且带病态妆容;;行动|蜷缩在自动贩卖机旁躲雨，机械地刷手机;;',
+        '以下规则文本由用户自定义，注册时应严格遵守。',
+        '[normalDescription]',
+        String(guides.normalDescription || DEFAULT_REGISTRY_DESCRIPTION_GUIDES.normalDescription),
+        '[pregnantDescription]',
+        String(guides.pregnantDescription || DEFAULT_REGISTRY_DESCRIPTION_GUIDES.pregnantDescription),
+        `【${includeBreedingPsychology ? 7 : 6}. 角色补充设定】`,
+        customNotes ? customNotes : '无',
+        '若提供了角色补充设定，必须优先视为该角色已明确声明的特征，并在推演、注册与备装相关字段中如实体现；不要忽略，也不要擅自扩写超出原意的内容。',
+        '若角色补充设定明确描述的是一种未来也会持续生效、且倍率不为 1 的妊娠体质、祝福、诅咒、冻结或延长效果，即使角色当前未怀孕，也必须写入 bio.gestationModifierMultiplier、bio.gestationModifierName、bio.gestationModifierDescription；普通妊娠不得补写 bio。',
+        '注意：未怀孕角色不要硬填 pregnantDescription；描述内容应遵守旧系统文字栏位语义，不要换行。',
+        '只输出 JSON，不要输出额外解释。',
+        '【name】必须原样填写 payload.target_character，一字不差。那是用户指定要注册的角色名；即使它与角色卡名不同，也不得改用角色卡名、别名或称谓。',
+        'JSON 结构必须是：',
+        '{',
+        '  "name": "string",',
+        '  "profile": {',
+        '    "base": {',
+        '      "age": 0,',
+        '      "race": "string",',
+        '      "libido": 0,',
+        '      "uterinePressure": 0,',
+        '      "latestSexDays": 0,',
+        '      "sperms": [],',
+        '      "vitalityLevel": 4,',
+        '      "psyStressLevel": 4',
+        '    },',
+        '    "pregnant": {',
+        '      "pregnantDays": 0,',
+        '      "fetusesCount": 0,',
+        '      "fetuses": [',
+        '        {',
+        '          "fathers": "string|null",',
+        '          "provider": "string|null",',
+        '          "race": "string|null",',
+        '          "gender": "string|null",',
+        '          "embryoType": "string|null",',
+        '          "weight": 1.0,',
+        '          "tendencyAngle": 0,',
+        '          "affinity": 0',
+        '        }',
+        '      ]',
+        '    },',
+        '    "experience": {',
+        '      "virginity": "string|null",',
+        '      "latestSexPartner": "string|null",',
+        '      "emotionalMate": "string|null",',
+        '      "marriageMate": "string|null",',
+        '      "pregnantExperience": 0,',
+        '      "naturalBirthExperience": 0,',
+        '      "surgicalBirthExperience": 0,',
+        '      "miscarriageExperience": 0',
+        '    },',
+        '    "psychology": {',
+        '      "mens": {',
+        '        "mastery_value": 0,',
+        '        "mastery_interpret": "string",',
+        '        "desire_value": 0,',
+        '        "desire_interpret": "string",',
+        '        "autonomy_value": 0,',
+        '        "autonomy_interpret": "string",',
+        '        "isChaste": false,',
+        '        "hasContraception": false',
+        '      },',
+        '      "preg": {',
+        '        "cognition_value": 0,',
+        '        "cognition_interpret": "string",',
+        '        "bonding_value": 0,',
+        '        "bonding_interpret": "string",',
+        '        "stance_value": 0,',
+        '        "stance_interpret": "string",',
+        '        "knowsFatherSource": false,',
+        '        "hasProfessionalPrenatalCare": false',
+        '      },',
+        '      "stageProfiles": {',
+        '        "mens": {',
+        '          "mastery": { "0": "string", "1_25": "string", "26_50": "string", "51_75": "string", "76_100": "string", "100_plus": "string" },',
+        '          "desire": { "0": "string", "1_25": "string", "26_50": "string", "51_75": "string", "76_100": "string", "100_plus": "string" },',
+        '          "autonomy": { "0": "string", "1_25": "string", "26_50": "string", "51_75": "string", "76_100": "string", "100_plus": "string" }',
+        '        },',
+        '        "preg": {',
+        '          "cognition": { "0": "string", "1_25": "string", "26_50": "string", "51_75": "string", "76_100": "string", "100_plus": "string" },',
+        '          "bonding": { "0": "string", "1_25": "string", "26_50": "string", "51_75": "string", "76_100": "string", "100_plus": "string" },',
+        '          "stance": { "0": "string", "1_25": "string", "26_50": "string", "51_75": "string", "76_100": "string", "100_plus": "string" }',
+        '        }',
+        '      }',
+        '    },',
+        '    "metabolism": {',
+        '      "excretion": 0,',
+        '      "hunger": 0,',
+        '      "sleep": 0,',
+        '      "milk": 0,',
+        '      "odor": 0,',
+        '      "companionship": 0',
+        '    },',
+        '    "children": [],',
+        '    "descriptions": {',
+        '      "normalDescription": "string",',
+        '      "pregnantDescription": "string"',
+        '    }',
+        '  }',
+        '}',
+        '允许省略不确定或不适用的声明字段，但不要编造系统字段。',
+        '如果角色不是孕妇，pregnant 使用默认空结构或省略。',
+        '如果角色没有孩子，children 返回 [] 或省略。',
+        '如果角色没有明确经验背景，experience 只填能确定的部分。',
+    ].join('\n');
+    if (includeBreedingPsychology)
+        return prompt;
+    return prompt
+        .replace(/【3\. 繁育心理】[\s\S]*?(?=【4\. 既有孩子记录】)/, '')
+        .replace(/\n\s*"psychology": \{[\s\S]*?\n\s*\},\n\s*"metabolism": \{/, '\n    "metabolism": {')
+        .replace('4. 既有孩子记录：children', '3. 既有孩子记录：children')
+        .replace('5. 初登场即怀孕：', '4. 初登场即怀孕：')
+        .replace('6. 文字描述栏位：descriptions', '5. 文字描述栏位：descriptions')
+        .replace('【4. 既有孩子记录】', '【3. 既有孩子记录】')
+        .replace('【5. 初登场即怀孕】', '【4. 初登场即怀孕】')
+        .replace('【5.1 妊娠變速类补充设定', '【4.1 妊娠變速类补充设定')
+        .replace('【6. 文字描述栏位】', '【5. 文字描述栏位】');
+}
+const EXPERIENCE_FIELDS = [
+    'virginity',
+    'latestSexPartner',
+    'emotionalMate',
+    'marriageMate',
+    'pregnantExperience',
+    'naturalBirthExperience',
+    'surgicalBirthExperience',
+    'miscarriageExperience',
+];
+const DESCRIPTION_FIELDS = ['normalDescription', 'pregnantDescription'];
+const METABOLISM_FIELDS = ['excretion', 'hunger', 'sleep', 'milk', 'odor', 'companionship', 'flux'];
+function clampNumber$1(value, min, max, fallback = 0) {
+    const next = Number(value);
+    if (!Number.isFinite(next))
+        return fallback;
+    return Math.max(min, Math.min(max, next));
+}
+function randomInt$1(min, max) {
+    const nextMin = Math.ceil(min);
+    const nextMax = Math.floor(max);
+    return Math.floor(Math.random() * (nextMax - nextMin + 1)) + nextMin;
+}
+function getRegistryMenstrualCycleLength(profile) {
+    const ratio = clampNumber$1(profile?.bio?.menstrualLengthRatio, 0.1, 20, 1);
+    return Math.max(1, Math.round(28 * ratio));
+}
+function pickObjectFields(value, allowedFields) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return {};
+    const result = {};
+    for (const key of allowedFields) {
+        if (value[key] !== undefined)
+            result[key] = value[key];
+    }
+    return result;
+}
+function sanitizeChildren(value) {
+    if (!Array.isArray(value))
+        return [];
+    return value
+        .filter((item) => item && typeof item === 'object')
+        .map((item) => {
+        const parsed = parseRaceDescriptor(item.race);
+        return {
+            name: item.name ?? item.babyName ?? null,
+            fathers: item.fathers ?? null,
+            provider: item.provider ?? null,
+            gender: item.gender ?? null,
+            race: parsed.race || null,
+            derivedType: item.derivedType ?? parsed.derivedType ?? null,
+            age: item.age ?? null,
+            birthWeightRatio: Number.isFinite(Number(item.birthWeightRatio)) ? clampNumber$1(item.birthWeightRatio, 0.33, 3.0, 1.0) : null,
+            birthAffinity: Number.isFinite(Number(item.birthAffinity)) ? clampNumber$1(item.birthAffinity, -50, 50, 0) : null,
+            registeredAs: item.registeredAs ?? null,
+            talents: normalizeTalentList(item.talents ?? item.inheritedTalents),
+        };
+    });
+}
+function sanitizeRegistrySperms(value) {
+    if (!Array.isArray(value))
+        return [];
+    return value
+        .filter((item) => item && typeof item === 'object')
+        .map((item) => {
+        const parsed = parseRaceDescriptor(item.race);
+        const derivedTypeRaw = item.derivedType === undefined ? parsed.derivedType : item.derivedType;
+        return {
+            male: item.male === null ? null : String(item.male || '').trim() || null,
+            race: parsed.race || null,
+            derivedType: derivedTypeRaw === null ? null : String(derivedTypeRaw || '').trim() || null,
+            value: clampNumber$1(item.value, 0, 9999, 0),
+        };
+    })
+        .filter((item) => item.male && item.race && item.value > 0);
+}
+function sanitizePregnant(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return null;
+    const fetuses = Array.isArray(value.fetuses)
+        ? value.fetuses
+            .filter((item) => item && typeof item === 'object')
+            .map((item) => {
+            const parsed = parseRaceDescriptor(item.race);
+            return {
+                fathers: item.fathers ?? null,
+                provider: item.provider ?? null,
+                race: parsed.race || null,
+                fatherRace: parsed.race || null,
+                fatherDerivedType: item.fatherDerivedType ?? parsed.derivedType ?? null,
+                gender: item.gender ?? null,
+                embryoType: item.embryoType ?? null,
+                maternalDerivedTypeProgress: Number.isFinite(Number(item.maternalDerivedTypeProgress)) ? clampNumber$1(item.maternalDerivedTypeProgress, -100, 100, 0) : undefined,
+                weight: Number.isFinite(Number(item.weight)) ? clampNumber$1(item.weight, 0.33, 3.0, 1.0) : undefined,
+                tendencyAngle: Number.isFinite(Number(item.tendencyAngle)) ? clampNumber$1(item.tendencyAngle, 0, 360, 0) : undefined,
+                affinity: Number.isFinite(Number(item.affinity)) ? clampNumber$1(item.affinity, -50, 50, 0) : undefined,
+                talents: normalizeTalentList(item.talents ?? item.inheritedTalents),
+            };
+        })
+        : [];
+    return {
+        pregnantDays: Number.isFinite(Number(value.pregnantDays)) ? Number(value.pregnantDays) : 0,
+        fetusesCount: Number.isFinite(Number(value.fetusesCount)) ? Number(value.fetusesCount) : fetuses.length,
+        fetuses,
+    };
+}
+function sanitizeRegistryBio(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return null;
+    const multiplier = Number(value.gestationModifierMultiplier);
+    if (!Number.isFinite(multiplier))
+        return null;
+    const normalizedMultiplier = clampNumber$1(multiplier, 0, 20, 1);
+    if (Math.abs(normalizedMultiplier - 1) <= 0.000001)
+        return null;
+    return {
+        gestationModifierMultiplier: normalizedMultiplier,
+        gestationModifierName: value.gestationModifierName === null ? '' : String(value.gestationModifierName || '').trim(),
+        gestationModifierDescription: value.gestationModifierDescription === null ? '' : String(value.gestationModifierDescription || '').trim(),
+    };
+}
+function sanitizeDiaryEntries(value) {
+    if (!Array.isArray(value))
+        return [];
+    return value
+        .filter((item) => item && typeof item === 'object')
+        .map((item) => ({
+        time: String(item.time || '').trim(),
+        content: String(item.content || '').trim(),
+    }))
+        .filter((item) => item.time && item.content);
+}
+function getRegistryEmbryoTypeRecoveryCoefficient(embryoType) {
+    switch (String(embryoType || '胎生')) {
+        case '卵生':
+            return 0.6;
+        case '卵胎生':
+            return 0.4;
+        case '胎转卵生':
+            return 1.0;
+        case '不定型':
+            return 0.8;
+        case '胎生':
+        default:
+            return 0.2;
+    }
+}
+function deriveRegisteredFetusRace(motherRace, fatherRace) {
+    const motherParts = getRaceDescriptorComponents(motherRace);
+    const fatherParts = getRaceDescriptorComponents(fatherRace);
+    const combined = [...fatherParts, ...motherParts].filter(Boolean);
+    if (combined.length === 0)
+        return '人类';
+    const unique = [];
+    for (const part of combined) {
+        if (!unique.includes(part))
+            unique.push(part);
+    }
+    return unique.join('x');
+}
+function normalizeRegisteredPregnancy(profile) {
+    const pregnant = profile.pregnant || {};
+    const fetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses.map((item) => ({ ...item })) : [];
+    if (fetuses.length === 0)
+        return;
+    const motherRace = parseRaceDescriptor(profile?.base?.race || '人类').race || '人类';
+    pregnant.fetuses = fetuses.map((fetus) => {
+        const fatherRace = parseRaceDescriptor(fetus?.fatherRace || fetus?.race || motherRace).race || motherRace;
+        const fetusRace = deriveRegisteredFetusRace(motherRace, fatherRace);
+        return {
+            ...fetus,
+            race: fetusRace,
+            fatherRace,
+            embryoType: fetus?.embryoType || getEmbryoTypeByRace(fetusRace),
+            weight: Number.isFinite(Number(fetus?.weight)) ? clampNumber$1(fetus.weight, 0.33, 3.0, 1.0) : 1.0,
+            tendencyAngle: Number.isFinite(Number(fetus?.tendencyAngle)) ? clampNumber$1(fetus.tendencyAngle, 0, 360, 0) : randomInt$1(0, 360),
+            affinity: Number.isFinite(Number(fetus?.affinity)) ? clampNumber$1(fetus.affinity, -50, 50, 0) : 0,
+        };
+    });
+    pregnant.fetusesCount = pregnant.fetuses.length;
+    pregnant.pregnantDays = Math.max(1, Math.floor(Number(pregnant.pregnantDays) || 1));
+    const gestationSpeed = clampNumber$1(getGestationEffectiveSpeed(profile), 0.1, 20, 1.0);
+    pregnant.effectivePregnantDays = Math.max(1, pregnant.pregnantDays * gestationSpeed);
+    pregnant.amnionDurability = 100;
+    const bio = profile.bio || {};
+    const motherBreedTolerance = clampNumber$1(bio.breedTolerance, 0.1, 100, 1.0);
+    pregnant.fetalEnergyDrain = pregnant.fetuses.reduce((sum, fetus) => {
+        const weight = clampNumber$1(fetus?.weight, 0.33, 3.0, 1.0);
+        const ageInDays = pregnant.effectivePregnantDays * weight;
+        const fetalAgeWeeks = ageInDays / 7;
+        const fetalLoad = fetalAgeWeeks / 40;
+        return sum + (fetalLoad / motherBreedTolerance);
+    }, 0);
+    const experience = profile.experience || {};
+    experience.pregnantExperience = Math.max(1, clampNumber$1(experience.pregnantExperience, 0, 999, 0));
+    profile.experience = experience;
+    const recoveryBase = Math.max(1, Math.round(clampNumber$1(bio.recoveryDays, 1, 9999, 56)));
+    const totalWeight = pregnant.fetuses.reduce((sum, fetus) => sum + clampNumber$1(fetus?.weight, 0.33, 3.0, 1.0), 0);
+    const recoveryAccumulator = pregnant.fetuses.reduce((sum, fetus) => {
+        const weight = clampNumber$1(fetus?.weight, 0.33, 3.0, 1.0);
+        return sum + (weight * getRegistryEmbryoTypeRecoveryCoefficient(fetus?.embryoType));
+    }, 0);
+    const averageRecovery = recoveryAccumulator / Math.max(totalWeight, 0.5);
+    const fetusCountModifier = 1 + (Math.max(0, pregnant.fetuses.length - 1) * 0.12);
+    profile.bio = {
+        ...bio,
+        recoveryDays: Math.max(1, Math.round(recoveryBase * (1 + averageRecovery) * fetusCountModifier)),
+    };
+    profile.pregnant = pregnant;
+}
+function sanitizePsy(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return null;
+    const stageProfiles = normalizePsychologyStageProfiles(value.stageProfiles);
+    const mens = normalizePsychologyGroup(value.mens, PSY_MENS_FIELDS, {
+        includeDefaults: false,
+        booleanFields: PSY_MENS_BOOL_FIELDS,
+        stageProfiles: stageProfiles.mens,
+    });
+    const preg = normalizePsychologyGroup(value.preg, PSY_PREG_FIELDS, {
+        includeDefaults: false,
+        booleanFields: PSY_PREG_BOOL_FIELDS,
+        stageProfiles: stageProfiles.preg,
+    });
+    const hasStageProfiles = Object.keys(stageProfiles).length > 0;
+    if (preg)
+        return { preg, ...(hasStageProfiles ? { stageProfiles } : {}) };
+    if (mens)
+        return { mens, ...(hasStageProfiles ? { stageProfiles } : {}) };
+    return hasStageProfiles ? { stageProfiles } : null;
+}
+function sanitizeMeter(value, { min = 0, max = 999 } = {}) {
+    const next = Number(value);
+    if (!Number.isFinite(next))
+        return null;
+    return Math.max(min, Math.min(max, Math.round(next)));
+}
+function sanitizeRegistryProfile(profile, baseProfile) {
+    if (!profile || typeof profile !== 'object' || Array.isArray(profile))
+        return {};
+    const sanitized = {};
+    if (profile.base && typeof profile.base === 'object' && !Array.isArray(profile.base)) {
+        const nextBase = {};
+        if (profile.base.race !== undefined) {
+            const parsed = parseRaceDescriptor(profile.base.race);
+            nextBase.race = parsed.race || baseProfile.base.race;
+            if (profile.base.derivedType === undefined && parsed.derivedType !== null)
+                nextBase.derivedType = parsed.derivedType;
+        }
+        if (profile.base.derivedType !== undefined)
+            nextBase.derivedType = profile.base.derivedType === null ? null : String(profile.base.derivedType || '').trim() || null;
+        if (profile.base.age !== undefined) {
+            const age = Number(profile.base.age);
+            if (Number.isFinite(age))
+                nextBase.age = age;
+        }
+        if (profile.base.libido !== undefined) {
+            const libido = sanitizeMeter(profile.base.libido, { min: 0, max: 150 });
+            if (libido !== null)
+                nextBase.libido = libido;
+        }
+        if (profile.base.uterinePressure !== undefined) {
+            const uterinePressure = sanitizeMeter(profile.base.uterinePressure, { min: 0, max: 150 });
+            if (uterinePressure !== null)
+                nextBase.uterinePressure = uterinePressure;
+        }
+        if (profile.base.latestSexDays !== undefined) {
+            const latestSexDays = Number(profile.base.latestSexDays);
+            if (Number.isFinite(latestSexDays))
+                nextBase.latestSexDays = Math.max(-1, Math.round(latestSexDays));
+            else if (profile.base.latestSexDays === null)
+                nextBase.latestSexDays = null;
+        }
+        if (profile.base.sperms !== undefined) {
+            nextBase.sperms = sanitizeRegistrySperms(profile.base.sperms);
+        }
+        if (profile.base.vitalityLevel !== undefined) {
+            const vitalityLevel = Number(profile.base.vitalityLevel);
+            if (Number.isFinite(vitalityLevel))
+                nextBase.vitalityLevel = Math.max(1, Math.min(7, Math.round(vitalityLevel)));
+        }
+        if (profile.base.psyStressLevel !== undefined) {
+            const psyStressLevel = Number(profile.base.psyStressLevel);
+            if (Number.isFinite(psyStressLevel))
+                nextBase.psyStressLevel = Math.max(1, Math.min(7, Math.round(psyStressLevel)));
+        }
+        if (Object.keys(nextBase).length > 0)
+            sanitized.base = nextBase;
+    }
+    const experience = pickObjectFields(profile.experience, EXPERIENCE_FIELDS);
+    if (Object.keys(experience).length > 0)
+        sanitized.experience = experience;
+    const metabolism = pickObjectFields(profile.metabolism, METABOLISM_FIELDS);
+    if (Object.keys(metabolism).length > 0) {
+        const nextMetabolism = {};
+        for (const [key, value] of Object.entries(metabolism)) {
+            const meter = key === 'flux'
+                ? sanitizeMeter(value, { min: -150, max: 150 })
+                : sanitizeMeter(value, { min: 0, max: 150 });
+            if (meter !== null)
+                nextMetabolism[key] = meter;
+        }
+        if (Object.keys(nextMetabolism).length > 0)
+            sanitized.metabolism = nextMetabolism;
+    }
+    if (profile.psychology !== undefined) {
+        const psychology = sanitizePsy(profile.psychology);
+        if (psychology)
+            sanitized.psychology = psychology;
+    }
+    if (profile.children !== undefined)
+        sanitized.children = sanitizeChildren(profile.children);
+    if (profile.pregnant !== undefined)
+        sanitized.pregnant = sanitizePregnant(profile.pregnant);
+    if (profile.bio !== undefined) {
+        const bio = sanitizeRegistryBio(profile.bio);
+        if (bio)
+            sanitized.bio = bio;
+    }
+    if (profile.diary !== undefined)
+        sanitized.diary = sanitizeDiaryEntries(profile.diary);
+    const descriptions = pickObjectFields(profile.descriptions, DESCRIPTION_FIELDS);
+    if (Object.keys(descriptions).length > 0)
+        sanitized.descriptions = descriptions;
+    return sanitized;
+}
+function applyRegistryResult(chatState, result, { allowBreedingPsychology = true } = {}) {
+    const name = String(result?.name || '').trim();
+    if (!name)
+        throw new Error('注册结果缺少角色名称');
+    const current = chatState.characters[name];
+    const base = current && typeof current === 'object' ? current : createDefaultFemaleState(name);
+    const sanitizedProfile = sanitizeRegistryProfile(result.profile, base.profile);
+    if (!allowBreedingPsychology)
+        delete sanitizedProfile.psychology;
+    const effectiveRace = sanitizedProfile.base?.race ?? base.profile.base.race;
+    const mergedRaceProfile = getMergedRacePhysiologyProfile(effectiveRace);
+    const basePsychology = normalizeCharacterPsychologyState(base).profile.psychology;
+    const stageProfiles = Object.keys(sanitizedProfile.psychology?.stageProfiles || {}).length > 0
+        ? sanitizedProfile.psychology.stageProfiles
+        : (basePsychology.stageProfiles || {});
+    const nextPsychology = sanitizedProfile.psychology?.preg
+        ? {
+            stageProfiles,
+            mens: buildEmptyPsychologyGroup(PSY_MENS_FIELDS, PSY_MENS_BOOL_FIELDS),
+            preg: {
+                ...buildEmptyPsychologyGroup(PSY_PREG_FIELDS, PSY_PREG_BOOL_FIELDS),
+                ...normalizePsychologyGroup(sanitizedProfile.psychology.preg, PSY_PREG_FIELDS, {
+                    booleanFields: PSY_PREG_BOOL_FIELDS,
+                    stageProfiles: stageProfiles.preg,
+                }),
+            },
+        }
+        : sanitizedProfile.psychology?.mens
+            ? {
+                stageProfiles,
+                mens: {
+                    ...buildEmptyPsychologyGroup(PSY_MENS_FIELDS, PSY_MENS_BOOL_FIELDS),
+                    ...normalizePsychologyGroup(sanitizedProfile.psychology.mens, PSY_MENS_FIELDS, {
+                        booleanFields: PSY_MENS_BOOL_FIELDS,
+                        stageProfiles: stageProfiles.mens,
+                    }),
+                },
+                preg: buildEmptyPsychologyGroup(PSY_PREG_FIELDS, PSY_PREG_BOOL_FIELDS),
+            }
+            : {
+                ...basePsychology,
+                stageProfiles,
+            };
+    const nextCharacter = {
+        ...base,
+        name,
+        initialized: true,
+        profile: {
+            ...base.profile,
+            ...sanitizedProfile,
+            base: {
+                ...base.profile.base,
+                ...(sanitizedProfile.base || {}),
+                vitality: getVitalityInitByLevel(sanitizedProfile.base?.vitalityLevel ?? base.profile.base.vitalityLevel),
+                psyStress: getPsyStressInitByLevel(sanitizedProfile.base?.psyStressLevel ?? base.profile.base.psyStressLevel),
+            },
+            pregnant: {
+                ...base.profile.pregnant,
+                ...(sanitizedProfile.pregnant || {}),
+            },
+            experience: {
+                ...base.profile.experience,
+                ...(sanitizedProfile.experience || {}),
+            },
+            diary: sanitizedProfile.diary ?? base.profile.diary,
+            skills: normalizeSkillList(base.profile.skills),
+            talents: normalizeTalentList(base.profile.talents),
+            psychology: nextPsychology,
+            descriptions: {
+                ...base.profile.descriptions,
+                ...(sanitizedProfile.descriptions || {}),
+            },
+            bio: {
+                ...base.profile.bio,
+                ...(mergedRaceProfile || {}),
+                ...(sanitizedProfile.bio || {}),
+            },
+            metabolism: {
+                ...base.profile.metabolism,
+                ...(sanitizedProfile.metabolism || {}),
+            },
+        },
+        updatedAt: Date.now(),
+    };
+    if (Array.isArray(nextCharacter.profile?.pregnant?.fetuses) && nextCharacter.profile.pregnant.fetuses.length > 0) {
+        normalizeRegisteredPregnancy(nextCharacter.profile);
+    }
+    nextCharacter.profile.bio = {
+        ...nextCharacter.profile.bio,
+        gestationEffectiveSpeed: clampNumber$1(getGestationEffectiveSpeed(nextCharacter.profile), 0, 20, getGestationSpeciesSpeed(nextCharacter.profile)),
+    };
+    const latestSexDays = Number(nextCharacter.profile?.base?.latestSexDays);
+    if (Number.isFinite(latestSexDays) && latestSexDays >= 0) {
+        const cycleLength = getRegistryMenstrualCycleLength(nextCharacter.profile);
+        if (latestSexDays >= cycleLength) {
+            nextCharacter.profile.base.latestSexDays = -1;
+        }
+    }
+    chatState.characters[name] = syncCharacterStageFromProfile(normalizeCharacterPsychologyState(nextCharacter));
+    return chatState.characters[name];
+}
+function buildRegistrySkillSystemPrompt(options = {}) {
+    const skillPrompt = String(options.skillPrompt || '').trim();
+    const inheritedTalentsLocked = Boolean(options.inheritedTalentsLocked);
+    const emptyCatalog = Boolean(options.emptyCatalog);
+    return [
+        '你是 AIRP 角色初始技能与天赋配置器。只处理 payload.target_character。',
+        '根据角色卡、世界书、最近对话、已注册角色状态及用户提示，生成可供用户确认的初始技能／天赋 JSON。',
+        emptyCatalog
+            ? '注意：payload.skill_catalog 目前是空的（这是本聊天的第一个角色）。因此 initialSkills 与 initialTalents 用到的每一个技能，都必须由你在本次 skillDefinitions 中完整定义，没有任何既有技能可以复用。'
+            : '先查阅 payload.skill_catalog。语义适合的技能必须复用其精确 name 或 id，不得用近义词建立重复技能。',
+        emptyCatalog
+            ? '每个新定义必须同时提供 name 与明确说明技能范围的 description，缺一不可。'
+            : '只有现有图鉴确实无法表达所需技能时，才能放入 skillDefinitions；每个新定义必须同时提供 name 与明确说明技能范围的 description。',
+        'initialSkills 与 initialTalents 的 skill 必须使用图鉴中的精确 name/id，或本次 skillDefinitions 中的新技能精确 name。',
+        '【天赋同样需要技能作为载体】天赋不是独立的性格标签，而是「对某个技能的先天擅长／苦手」。'
+            + '因此 initialTalents 引用的技能若不在 payload.skill_catalog 中，必须先在本次 skillDefinitions 里定义它，否则该天赋会被丢弃。'
+            + '若某个先天特质无法对应到一个明确的技能，就不要写成天赋。',
+        '技能 level 为 1-10。天赋 level 为 -5 到 5：正数为擅长，负数为苦手，0 为尚未形成。',
+        '技能与天赋共用经验曲线 requiredExp(level)=100*level*level；Lv0 形成擅长／苦手 Lv1 均需 100 EXP。',
+        inheritedTalentsLocked ? 'payload.existing_skill_setup.talents 是孩子出生后保留的既有天赋，属于固定继承内容。必须参考它们配置技能，不得在 initialTalents 中输出同一技能的不同等级、方向或经验。' : '',
+        '没有充分依据的项目不要添加；不得把性格、身体状态或一次性事件滥列为技能。',
+        skillPrompt ? '严格参考 payload.initial_skill_prompt 的额外要求。' : '用户没有提供额外要求，请仅依现有角色资料谨慎判断。',
+        '输出前请逐条自检：initialSkills 与 initialTalents 里的每一个 skill，都必须能在 payload.skill_catalog 或本次 skillDefinitions 中找到完全相同的名称。'
+            + '对不上的条目会被系统丢弃，请在输出前补上定义或删掉该条目。',
+        '只输出 JSON，不要输出解释或 Markdown。结构必须是：',
+        '{',
+        '  "skillDefinitions": [{"name":"string","description":"string"}],',
+        '  "initialSkills": [{"skill":"技能精确名称或ID","level":1,"exp":0}],',
+        '  "initialTalents": [{"skill":"技能精确名称或ID","level":0,"exp":0}]',
+        '}',
+        '没有项目的数组也必须输出为空数组。',
+    ].join('\n');
+}
+function sanitizeRegistrySkillInferenceResult(result) {
+    if (!result || typeof result !== 'object' || Array.isArray(result))
+        throw new Error('技能／天赋生成结果必须是 JSON 对象');
+    const fields = ['skillDefinitions', 'initialSkills', 'initialTalents'];
+    for (const field of fields) {
+        if (result[field] !== undefined && !Array.isArray(result[field]))
+            throw new Error(`${field} 必须是数组`);
+    }
+    return {
+        skillDefinitions: Array.isArray(result.skillDefinitions) ? result.skillDefinitions : [],
+        initialSkills: Array.isArray(result.initialSkills) ? result.initialSkills : [],
+        initialTalents: Array.isArray(result.initialTalents) ? result.initialTalents : [],
+    };
+}
+async function runRegistrySkillInference(ctx, options = {}) {
+    const settings = getSettings(ctx);
+    const chatState = getChatState(ctx, settings);
+    const requestedTargetName = String(options.targetName || '').trim();
+    if (!requestedTargetName)
+        throw new Error('技能／天赋生成需要 targetName');
+    const targetName = resolveRegisteredCharacterName(chatState, requestedTargetName);
+    if (!targetName)
+        throw new Error(`技能／天赋生成需要已注册角色：${requestedTargetName}`);
+    const skillPrompt = String(options.skillPrompt !== undefined ? options.skillPrompt : (settings.registrySkillPrompt || '')).trim();
+    const payload = await buildRegistryPayload(ctx, settings, chatState, {
+        ...options,
+        targetName,
+        customNotes: '',
+        reason: 'skill_talent_inference',
+        userInstruction: skillPrompt,
+    });
+    payload.initial_skill_prompt = skillPrompt;
+    payload.skill_catalog = normalizeSkillCatalog(chatState.skillCatalog);
+    payload.existing_skill_setup = {
+        skills: normalizeSkillList(chatState.characters[targetName]?.profile?.skills),
+        talents: normalizeTalentList(chatState.characters[targetName]?.profile?.talents),
+    };
+    const inheritedTalentsLocked = Boolean(chatState.characters[targetName]?.profile?.childSource);
+    payload.inherited_talents_locked = inheritedTalentsLocked;
+    const systemPrompt = options.skillSystemPrompt
+        || buildRegistrySkillSystemPrompt({
+            skillPrompt,
+            inheritedTalentsLocked,
+            // 图鉴为空＝本次是这个聊天的第一个角色，所有引用都只能来自本次 skillDefinitions
+            emptyCatalog: payload.skill_catalog.length === 0,
+        });
+    const result = await callOpenAICompatible(settings, payload, systemPrompt);
+    return sanitizeRegistrySkillInferenceResult(result);
+}
+/**
+ * 把模型给的初始技能／天赋对齐到技能图鉴。
+ *
+ * 解析不到的条目会被跳过而不是整份作废：模型很容易在 initialTalents 里引用
+ * 一个没有一并写进 skillDefinitions 的技能名（注册「第一个」角色时图鉴还是空的，
+ * 没有既有技能可复用，特别容易发生）。旧版任何一条解析失败就抛错，
+ * 于是整组技能与天赋一起丢失——使用者看到的就是「提示技能不存在」而且天赋角标不出现。
+ *
+ * 跳过的条目会收集在 skipped 里，交由呼叫端提示，不静默吞掉。
+ */
+function normalizeInitialSkillTalentConfig(config, catalog) {
+    if (!config || typeof config !== 'object' || Array.isArray(config))
+        return { skills: [], talents: [], skipped: [] };
+    const skipped = [];
+    const resolveId = (entry) => {
+        const reference = entry?.skillId ?? entry?.skill ?? entry?.name;
+        const definition = resolveSkillDefinition(catalog, reference);
+        if (!definition) {
+            skipped.push(String(reference || '(空白)'));
+            return null;
+        }
+        return definition.id;
+    };
+    const mapEntries = (list) => (Array.isArray(list) ? list : [])
+        .map((entry) => ({ skillId: resolveId(entry), level: entry?.level, exp: entry?.exp }))
+        .filter((entry) => entry.skillId !== null);
+    const skills = normalizeSkillList(mapEntries(config.skills));
+    const talents = normalizeTalentList(mapEntries(config.talents));
+    return { skills, talents, skipped };
+}
+function applyInitialSkillTalentConfig(chatState, targetName, config, report = null) {
+    const name = String(targetName || '').trim();
+    const current = chatState.characters?.[name];
+    if (!name || !current)
+        throw new Error(`找不到已注册角色：${name || '(空白)'}`);
+    const normalized = normalizeInitialSkillTalentConfig(config, chatState.skillCatalog);
+    // 解析不到的条目已被跳过，交给呼叫端提示使用者
+    if (report && typeof report === 'object')
+        report.skipped = normalized.skipped || [];
+    const next = {
+        ...current,
+        profile: {
+            ...(current.profile || {}),
+            skills: normalized.skills,
+            talents: normalized.talents,
+        },
+        updatedAt: Date.now(),
+    };
+    chatState.characters[name] = normalizeCharacterPsychologyState(next);
+    return chatState.characters[name];
+}
+function applyRegistrySkillSetup(chatState, targetName, result, report = null) {
+    const name = String(targetName || '').trim();
+    if (!name || !chatState.characters?.[name])
+        throw new Error(`找不到已注册角色：${name || '(空白)'}`);
+    const workingState = {
+        ...chatState,
+        characters: { ...(chatState.characters || {}) },
+        skillCatalog: normalizeSkillCatalog(chatState.skillCatalog),
+        nextSkillId: normalizeNextSkillId(chatState.skillCatalog, chatState.nextSkillId),
+    };
+    const definitions = result?.skillDefinitions ?? [];
+    const initialSkills = result?.initialSkills ?? [];
+    const initialTalents = result?.initialTalents ?? [];
+    if (!Array.isArray(definitions))
+        throw new Error('注册结果的 skillDefinitions 必须是数组');
+    if (!Array.isArray(initialSkills))
+        throw new Error('注册结果的 initialSkills 必须是数组');
+    if (!Array.isArray(initialTalents))
+        throw new Error('注册结果的 initialTalents 必须是数组');
+    if (definitions.length > 20)
+        throw new Error('单次注册最多可新增 20 项技能定义');
+    for (const definition of definitions) {
+        if (!definition || typeof definition !== 'object' || Array.isArray(definition)) {
+            throw new Error('skillDefinitions 每一项都必须是对象');
+        }
+        const registered = registerSkillDefinition(workingState.skillCatalog, definition, workingState.nextSkillId);
+        if (!registered.ok)
+            throw new Error(registered.message || '新增技能定义失败');
+        workingState.skillCatalog = registered.catalog;
+        workingState.nextSkillId = registered.nextSkillId;
+    }
+    const childSource = workingState.characters[name]?.profile?.childSource;
+    const resolvedChildSource = childSource ? resolveRegistryChildSource(workingState, childSource) : null;
+    const inheritedTalentSource = Array.isArray(childSource?.inheritedTalents)
+        ? childSource.inheritedTalents
+        : (resolvedChildSource?.child?.talents ?? workingState.characters[name]?.profile?.talents);
+    const inheritedTalents = normalizeTalentList(inheritedTalentSource);
+    let character = applyInitialSkillTalentConfig(workingState, name, {
+        skills: initialSkills,
+        talents: initialTalents,
+    }, report);
+    if (childSource) {
+        character.profile.childSource = {
+            motherName: String(childSource.motherName || '').trim(),
+            childIndex: Number(childSource.childIndex),
+            inheritedTalents,
+        };
+    }
+    if (inheritedTalents.length > 0) {
+        const inheritedIds = new Set(inheritedTalents.map((entry) => entry.skillId));
+        character.profile.talents = normalizeTalentList([
+            ...character.profile.talents.filter((entry) => !inheritedIds.has(entry.skillId)),
+            ...inheritedTalents,
+        ]);
+        workingState.characters[name] = character;
+    }
+    chatState.skillCatalog = workingState.skillCatalog;
+    chatState.nextSkillId = workingState.nextSkillId;
+    chatState.characters[name] = character;
+    return character;
+}
+function applyBreedingInferenceResult(chatState, targetName, inference) {
+    const name = String(targetName || '').trim();
+    if (!name)
+        throw new Error('applyBreedingInferenceResult 需要 targetName');
+    const current = chatState.characters?.[name];
+    if (!current)
+        throw new Error(`找不到已注册角色：${name}`);
+    if (!inference || typeof inference !== 'object' || Array.isArray(inference))
+        throw new Error('缺少可套用的繁育推演');
+    const next = normalizeCharacterPsychologyState({
+        ...current,
+        profile: {
+            ...(current.profile || {}),
+            psychology: current.profile?.psychology || {},
+        },
+    });
+    const psychology = next.profile.psychology || {};
+    const stageProfiles = Object.keys(inference.stageProfiles || {}).length > 0
+        ? normalizePsychologyStageProfiles(inference.stageProfiles)
+        : (psychology.stageProfiles || {});
+    const mens = inference.mens && typeof inference.mens === 'object'
+        ? normalizePsychologyGroup(inference.mens, PSY_MENS_FIELDS, {
+            booleanFields: PSY_MENS_BOOL_FIELDS,
+            stageProfiles: stageProfiles.mens,
+        })
+        : normalizePsychologyGroup(psychology.mens, PSY_MENS_FIELDS, {
+            booleanFields: PSY_MENS_BOOL_FIELDS,
+            stageProfiles: stageProfiles.mens,
+        });
+    const preg = inference.preg && typeof inference.preg === 'object'
+        ? normalizePsychologyGroup(inference.preg, PSY_PREG_FIELDS, {
+            booleanFields: PSY_PREG_BOOL_FIELDS,
+            stageProfiles: stageProfiles.preg,
+        })
+        : normalizePsychologyGroup(psychology.preg, PSY_PREG_FIELDS, {
+            booleanFields: PSY_PREG_BOOL_FIELDS,
+            stageProfiles: stageProfiles.preg,
+        });
+    next.profile.psychology = {
+        mens,
+        preg,
+        stageProfiles,
+    };
+    next.updatedAt = Date.now();
+    chatState.characters[name] = syncCharacterStageFromProfile(normalizeCharacterPsychologyState(next));
+    return chatState.characters[name];
+}
+function applyRegistryBreedingInference(ctx, options = {}) {
+    const settings = getSettings(ctx);
+    const chatState = getChatState(ctx, settings);
+    const targetName = resolveRegistryTargetName(ctx, options.targetName);
+    const character = applyBreedingInferenceResult(chatState, targetName, options.breedingInference);
+    recordChatStateSnapshot(ctx, chatState, { reason: 'breeding_inference_apply' });
+    saveSettings(ctx);
+    return character;
+}
+function resolveRegistryChildSource(chatState, source = {}) {
+    const motherName = String(source?.motherName || '').trim();
+    const childIndex = Number(source?.childIndex);
+    if (!motherName || !Number.isInteger(childIndex) || childIndex < 0)
+        return null;
+    const mother = chatState?.characters?.[motherName];
+    const children = Array.isArray(mother?.profile?.children) ? mother.profile.children : [];
+    const child = children[childIndex];
+    return child && typeof child === 'object' ? { motherName, childIndex, mother, child } : null;
+}
+function applyRegistryChildInheritance(chatState, targetName, source = {}) {
+    const resolved = resolveRegistryChildSource(chatState, source);
+    const name = String(targetName || '').trim();
+    const character = chatState?.characters?.[name];
+    if (!resolved)
+        throw new Error('找不到选择的孩子来源。');
+    if (!character?.profile)
+        throw new Error(`找不到已注册角色：${name || '(空白)'}`);
+    character.profile.base = character.profile.base && typeof character.profile.base === 'object' ? character.profile.base : {};
+    character.profile.base.race = String(resolved.child.race || '未知');
+    if (resolved.child.derivedType)
+        character.profile.base.derivedType = String(resolved.child.derivedType);
+    else
+        delete character.profile.base.derivedType;
+    character.profile.talents = normalizeTalentList(resolved.child.talents);
+    character.profile.childSource = {
+        motherName: resolved.motherName,
+        childIndex: resolved.childIndex,
+        inheritedTalents: normalizeTalentList(resolved.child.talents),
+    };
+    resolved.child.registeredAs = name;
+    character.updatedAt = Date.now();
+    return { character, source: resolved };
+}
+async function runRegistry(ctx, options = {}) {
+    const settings = getSettings(ctx);
+    const chatState = getChatState(ctx, settings);
+    const targetName = resolveRegistryTargetName(ctx, options.targetName);
+    const customNotes = String(options.customNotes !== undefined ? options.customNotes : (settings.registryCustomNotes || '')).trim();
+    if (!targetName)
+        throw new Error('runRegistry 需要 targetName');
+    const requestedSource = options.sourceChild || null;
+    const sourceChildContext = requestedSource ? resolveRegistryChildSource(chatState, requestedSource) : null;
+    if (requestedSource && !sourceChildContext)
+        throw new Error('找不到选择的孩子来源，请重新选择。');
+    if (sourceChildContext?.child?.registeredAs)
+        throw new Error(`这个孩子已经注册为 ${sourceChildContext.child.registeredAs}。`);
+    if (sourceChildContext && chatState.characters[targetName])
+        throw new Error(`角色名 ${targetName} 已被使用，不能覆盖为孩子角色。`);
+    const fixedChildRace = sourceChildContext
+        ? `${sourceChildContext.child.derivedType ? `[${sourceChildContext.child.derivedType}]` : ''}${String(sourceChildContext.child.race || '未知')}`
+        : '';
+    const declaredRace = fixedChildRace || String(options.declaredRace || '').trim();
+    const includeBreedingPsychology = Boolean(options.breedingInference);
+    const payload = await buildRegistryPayload(ctx, settings, chatState, { ...options, customNotes, declaredRace, sourceChildContext });
+    payload.breeding_psychology_enabled = includeBreedingPsychology;
+    if (includeBreedingPsychology)
+        payload.breeding_inference = options.breedingInference;
+    try {
+        const currentCharacterText = JSON.stringify(payload.current_character) || '';
+        const characterWorldBookText = JSON.stringify(payload.character_worldbook) || '';
+        const recentMessagesText = JSON.stringify(payload.recent_messages) || '';
+        const breedingInferenceText = JSON.stringify(payload.breeding_inference) || '';
+        const payloadText = JSON.stringify(payload) || '';
+        const worldbookEntries = Array.isArray(payload.character_worldbook?.entries)
+            ? payload.character_worldbook.entries.length
+            : (Array.isArray(payload.character_worldbook?.worldBook?.entries) ? payload.character_worldbook.worldBook.entries.length : 0);
+        console.log('[BS BioTracker][registry] payload size', {
+            target_character: targetName,
+            current_character_chars: currentCharacterText.length,
+            character_worldbook_chars: characterWorldBookText.length,
+            character_worldbook_entries: worldbookEntries,
+            recent_messages_chars: recentMessagesText.length,
+            breeding_inference_chars: breedingInferenceText.length,
+            payload_chars: payloadText.length,
+        });
+    }
+    catch (error) {
+        console.warn('[BS BioTracker][registry] payload size debug failed', error);
+    }
+    const systemPrompt = options.systemPrompt || buildRegistrySystemPrompt(settings, { ...options, customNotes, declaredRace, payload, includeBreedingPsychology });
+    recordRegistryRequestDebug(systemPrompt, payload);
+    try {
+        const result = await callOpenAICompatible(settings, payload, systemPrompt);
+        if (options.breedingInference?.stageProfiles
+            && result
+            && typeof result === 'object'
+            && !Array.isArray(result)) {
+            result.profile = result.profile && typeof result.profile === 'object' && !Array.isArray(result.profile)
+                ? result.profile
+                : {};
+            result.profile.psychology = result.profile.psychology && typeof result.profile.psychology === 'object' && !Array.isArray(result.profile.psychology)
+                ? result.profile.psychology
+                : {};
+            if (!result.profile.psychology.stageProfiles) {
+                result.profile.psychology.stageProfiles = options.breedingInference.stageProfiles;
+            }
+        }
+        if (sourceChildContext?.child?.registeredAs)
+            throw new Error(`这个孩子已经注册为 ${sourceChildContext.child.registeredAs}。`);
+        if (sourceChildContext && chatState.characters[targetName])
+            throw new Error(`角色名 ${targetName} 已在注册请求期间被使用。`);
+        if (sourceChildContext && result && typeof result === 'object' && !Array.isArray(result)) {
+            result.name = targetName;
+            result.profile = result.profile && typeof result.profile === 'object' && !Array.isArray(result.profile) ? result.profile : {};
+            result.profile.base = result.profile.base && typeof result.profile.base === 'object' && !Array.isArray(result.profile.base) ? result.profile.base : {};
+            result.profile.base.race = String(sourceChildContext.child.race || '未知');
+            if (sourceChildContext.child.derivedType)
+                result.profile.base.derivedType = String(sourceChildContext.child.derivedType);
+            else
+                delete result.profile.base.derivedType;
+        }
+        // 使用者已经明确指定要注册谁，模型不得改名。
+        // payload 里同时有角色卡与 target_character，模型常把角色卡名当成 name 回传，
+        // 于是角色被注册成卡片名而不是输入的名字（重新注册一次又「好了」，其实只是这次没抽到）。
+        result.name = targetName;
+        recordRegistryResultDebug(result);
+        let character = applyRegistryResult(chatState, result, { allowBreedingPsychology: includeBreedingPsychology });
+        if (sourceChildContext)
+            character = applyRegistryChildInheritance(chatState, targetName, requestedSource).character;
+        recordChatStateSnapshot(ctx, chatState, { reason: 'registry' });
+        saveSettings(ctx);
+        return character;
+    }
+    catch (error) {
+        recordRegistryResultDebug(null, error);
+        throw error;
+    }
+}
+
+function collectRelevantFluxNames(payload = {}) {
+    const found = [];
+    const pushFluxName = (derivedType) => {
+        const fluxName = String(getDerivedTypeFluxProfile(derivedType)?.fluxName || '').trim();
+        if (fluxName && !found.includes(fluxName))
+            found.push(fluxName);
+    };
+    if (payload?.existing_state && typeof payload.existing_state === 'object') {
+        for (const item of Object.values(payload.existing_state)) {
+            const profile = item?.profile || {};
+            const base = profile.base || {};
+            const pregnant = profile.pregnant || {};
+            pushFluxName(base.derivedType);
+            for (const sperm of (Array.isArray(base.sperms) ? base.sperms : []))
+                pushFluxName(sperm?.derivedType);
+            for (const fetus of (Array.isArray(pregnant.fetuses) ? pregnant.fetuses : []))
+                pushFluxName(fetus?.fatherDerivedType);
+            for (const child of (Array.isArray(profile.children) ? profile.children : []))
+                pushFluxName(child?.derivedType);
+        }
+    }
+    return found;
+}
+const TRACKER_VARIABLE_GUIDE_PROMPT = [
+    '以下是角色状态变量的语义说明，供你理解 existing_state 中的字段，不是要求你原样输出这些字段。',
+    '',
+    '[总结构]',
+    '- skill_catalog 是当前聊天的全局技能图鉴；每项包含稳定 id、技能名 name 与唯一描述 description。角色、胎儿、孩子只用 skillId 引用它。',
+    '- 每个角色结构为 name / initialized / profile。',
+    '- profile 主要包含 base、pregnant、experience、psychology、skills、talents、children、metabolism、descriptions、diary、notify，必要时也会附带部分 bio 字段。',
+    '- bio 与 immune 大多属于内部运行参数，tracker 默认不会完整发给你；但与剧情表达直接相关的少数 bio 字段可以发送。',
+    '- 若角色具有 immune.metabolism=true，则 metabolism 也不会发给你，因为该角色不受代谢累积影响。',
+    '- 若角色带有 offscreen=true，表示该角色当前不在场，existing_state 只提供精简状态，不代表角色不存在。',
+    '',
+    '[base]',
+    '- isHere: 是否在场。false 时角色仍会随时间推进，但幕外角色只发送少量状态给你。',
+    '- stage: 当前阶段。可能是月经阶段、妊娠阶段、假孕期、产兆前驱、第一/第二/第三产程、产后恢复、无经期、未激活。',
+    '- days: 当前阶段已经过了多少天，使用 0 起算的 elapsed/progress 语义；进入新阶段时为 0，超过该阶段上限后才切换下一阶段。',
+    '- fertilizationDays: 受精后、着床前已经过的天数；着床等待期以 6 天为基础，并随角色实际月经周期长度等比缩放。',
+    '- latestSexDays: 距最近一次性行为经过的天数；超过一个周期后通常会失效。',
+    '- age: 角色年龄，单位为年。',
+    '- race: 当前保存的种族字符串，可能带子类或混血，不再带 [derived] 前缀。',
+    '- derivedType: 衍生类型字符串，如 不死-僵尸；没有则为 null。',
+    '- sperms: 体内残留精液来源列表。',
+    '- sperms[*].male: 精液来源对象名称。',
+    '- sperms[*].race: 该来源的父方种族字符串，已去除 [derived] 前缀，用于受精与混血计算。',
+    '- sperms[*].derivedType: 该来源的父方衍生类型；没有则为 null。',
+    '- sperms[*].value: 当前残留量，用于多父竞争与受精判定。',
+    '- eggs: 当前可受精卵子数。',
+    '- libido: 性欲。',
+    '- uterinePressure: 宫压，越高越接近妊娠风险或分娩。',
+    '- vitality: 活力。',
+    '- psyStress: 情压/精神压力。',
+    '- vitalityLevel / psyStressLevel: 个体等级，决定对应数值上限与体质倾向。',
+    '- vitalityLevelText / psyStressLevelText: 系统额外附带的等级文字说明，方便直接理解体质与精神倾向。',
+    '',
+    '[pregnant]',
+    '- pregnant 只会在已有 fetuses、妊娠阶段、产兆前驱/产程、产后恢复或假孕期发送；幕外角色发送时只保留少量 pregnant 摘要，并用 fetusesCount 表示胎儿数量。',
+    '- pregnantDays: 这次妊娠的孕龄天数，等同产科从末次月经/本族等价周期起点计算的孕周天数。',
+    '- effectivePregnantDays: 真正计入胎儿发育与阶段推进的有效孕龄天数；当妊娠被冻结时，它可以停在原地而 pregnantDays 继续增加。',
+    '- laborHours / effectiveLaborHours / laborPhase / laborFetusIndex / laborPain 仅在产兆前驱或正式产程期间发送；产后恢复不再表示分娩疼痛。',
+    '- laborHours: 当前产程内部阶段已消耗的实际时长。',
+    '- effectiveLaborHours: 真正推动当前产程内部阶段前进的有效时长。',
+    '- laborPhase: 当前产程内部阶段。第一产程为潜伏期/活跃期/过渡期；第二产程为胎体下降/胎体娩出/间歇期；第三产程为供养器官娩出/产后观察。',
+    '- laborFetusIndex: 第二产程当前处理的胎次，从 1 起算；其他阶段通常为 0。',
+    '- laborPain: 当前分娩疼痛程度，范围 0-10。描写疼痛反应不得明显超过此等级；刚进入第一产程时不应写成已达到极限痛苦。',
+    '- amnionDurability: 母体层的膜耐性；过低代表接近或已经破水。',
+    '- nutrition: 妊娠供养力盈余/赤字。正值代表供养充足，负值代表供养亏空；每周会参与胎儿体重结算。',
+    '- symptomReliefPending: 尚待透过母体安抚胎儿处理的妊娠不适次数；direction=maternal 的普通母胎互动成功时可消耗一次，其随机 affinity 结果为轻微变化时补回 1 点供养力，显著变化时补回 2 点供养力。',
+    '- bsMaternalFetalInteraction 的 direction=fetal 表示胎儿对母体的亲近或排斥，须传 change 来改变 affinity，且不会补充供养力；direction=maternal 表示母体安抚胎儿，不传 change，系统会随机决定 affinity 变化，成功时也可依变化强度回补待安抚供养力，产兆前驱时用于分娩抵抗。每名角色每个新小时仅能成功生效一次。',
+    '- blockage: 当日妊娠阻塞状态，格式为 {key, severity}。key 可为 excretion/hunger/sleep/milk/odor/companionship/fluxPositive/fluxNegative；它会让对应需求的 bsExcreteMetabolism 排解不顺畅。',
+    '- acceleration: 当日妊娠快积状态，格式同 blockage；它会让对应需求更快累积。',
+    '- expansion: 当日妊娠扩容状态，格式同 blockage；它会将对应普通需求上限从 150 扩为 200，或将对应方向的 flux 上限从 ±150 扩为 ±200。blockage、acceleration 与 expansion 不会同时落在同一项需求上。非衍生角色不会出现 fluxPositive/fluxNegative；衍生角色不会出现其 derivedType 已抵免的普通需求。',
+    '- fetuses: 胎儿列表。',
+    '- fetuses[*].fathers: 父方对象名称。',
+    '- fetuses[*].provider: 胚胎真正的归属方（代孕委托者、虫母等），自然受孕为 null。单一 provider 的孩子分娩后自动转交；多母源嵌合体以 × 显示并留在孕母名下。要建立外源受精卵请用 bsImplantEmbryo，不要自行编造。',
+    '- fetuses[*].providerSources: 可接收孩子的母源名单。多于一位时孩子默认登记在孕母名下，之后可手动转移给其中一位。',
+    '- fetuses[*].chimera: 受精卵早期融合的嵌合资料，包含来源数量、父源、母源与融合前性别。没有融合时不出现。',
+    '- fetuses[*].fatherRace: 父方种族字符串，已去除 [derived] 前缀，用于理解父源与 fatherDerivedType。',
+    '- fetuses[*].fatherDerivedType: 父方衍生类型；若没有则为 null。',
+    '- fetuses[*].gender: 胎儿性别。',
+    '- fetuses[*].embryoType: 胚胎型态，如 胎生、卵生、卵胎生、胎转卵生、不定型。',
+    '- fetuses[*].weight: 胎重系数，標準1.0，范围0.33~3.0。影响妊娠负担、分娩难度与恢复期。',
+    '- fetuses[*].tendencyAngle: 胎位倾向角度，影响孕期/产兆前驱中的调位，以及第二产程胎体下降/娩出的难度；角度映射固定为 0/360=正常头位/正位，180=完全臀位/倒位，90或270=横位，禁止反写；不会阻止第一产程进入第二产程。若 notify 发出难产警示，应优先考虑 bsChildbirth 手术产。',
+    '- fetuses[*].tendencyAngleText: 系统额外附带的胎位文字说明，如 正位(头位)/倒位(臀位)/横位/斜位。',
+    '- fetuses[*].affinity: 母胎之間的親密度，也会参与 derivedType 进展。',
+    '- fetuses[*].maternalDerivedTypeProgress: 与母体(正)/父源(負)衍生同化的进度，范围 -100 到 100。',
+    '- fetuses[*].talents: 胎儿承接的天赋，只含 skillId、带正负号的 level 与 exp；只能由孕体角色的 bsTrainSkill 在允许阶段自动改变。',
+    '',
+    '[bio]',
+    '- bio 只会发送少量允许暴露给 LLM 的字段，不代表完整内部参数表。',
+    '- gestationModifierMultiplier: 妊娠速度倍率。1 为正常，大于 1 为加速，小于 1 为减速；若为 0，则代表胎儿发育冻结。',
+    '- gestationModifierName: 当前妊娠速度修正效果的名称，例如祝福、诅咒、体质、术式。',
+    '- gestationModifierDescription: 对该妊娠速度修正来源与表现的简短说明。',
+    '',
+    '[experience]',
+    '- 记录第一次对象、最近对象、情感/婚姻对象，以及怀孕、分娩、流产等经历次数。',
+    '- 这类字段偏长期记录，通常只在剧情明确成立时才需要更新。',
+    '',
+    '[psychology]',
+    '- psychology 分为 mens (常规/生理) 与 preg (妊娠相关) 两大组心理指数。',
+    ...Object.entries(PSY_MENS_FIELDS).map(([k, v]) => `- [mens] ${k} (0-100+): ${v.definition}`),
+    ...Object.entries(PSY_PREG_FIELDS).map(([k, v]) => `- [preg] ${k} (0-100+): ${v.definition}`),
+    '- 非怀孕时主要看 psychology.mens；怀孕、假孕、产兆前驱、产程时主要看 psychology.preg。',
+    '- 心理阶段从 0 到 100+。若要调用 bsUpdatePsychology，数值参数表示变化量(delta)而不是目标值；例如当前 78 传 2 会变成 80，不是设为 2。建议尽量做小幅变化；单次以 ±1 到 ±3 为宜，±5 已属于大改。每名角色在每个新小时内仅允许一次成功心理变化，下一小时前不要重复调用。',
+    '- 每个心理项由 *_value 和 *_interpret 组成。*_value 是 0-100 数值本体，*_interpret 是系统对应生成的心理解释。',
+    '- psychology.mens 另外包含 isChaste (是否当前保持贞洁)、hasContraception (是否有避孕措施) 两个事件旗标。',
+    '- psychology.preg 另外包含 knowsFatherSource (是否知晓父源)、hasProfessionalPrenatalCare (是否接受专业产检) 两个事件旗标。',
+    '',
+    '[skills / talents]',
+    '- skills 是角色后天技能列表；每项为 {skillId, level, exp}。技能从 Lv1 觉醒，最高 Lv10，只进不退。',
+    '- skillHistory 是系统自动保存的最近技能觉醒／升等事件，只供参考，不得由工具修改。一次跨多级只会有一条 fromLevel→toLevel 记录。',
+    '- talents 是角色先天天赋列表；每项为 {skillId, level, exp}。level 正数表示擅长、负数表示苦手、0 表示尚未形成；exp 同样带方向，反向经验会逐级削弱并能跨过 0 逆转，最高 ±Lv5。角色 talents 对所有 LLM 工具都是只读资料，只能由用户通过外部注册／技能／变量界面调整。',
+    '- 技能与天赋共用经验曲线 requiredExp(level)=100*level*level；技能 Lv1→2 要 100、Lv2→3 要 400。天赋 Lv0→±Lv1 固定要 100，之后按当前绝对等级使用同一曲线。',
+    '- 只有 recent_messages 明确出现相关事件、练习、实战运用、教学或领悟时，才调用 bsTrainSkill；不得仅凭“角色可能擅长”增加。',
+    '- skillExp 由你直接给非负整数，并综合事件成果、当前技能等级、本级需求及同名天赋判断。正天赋通常让同等事件更容易获得较多技能经验，负天赋通常较少；系统不会再次套倍率。',
+    '- 严禁尝试传入 talentExp 或用任何工具修改角色自己的 talents。只有系统在允许孕期阶段执行技能锻炼时，才能依亲和度自动改变 fetuses[*].talents。',
+    '- 新技能必须先调用 bsRegisterSkillDefinition，以 name+description 登记到 skill_catalog；先检查既有定义，禁止制造同义重复。随后才能用精确名称调用 bsTrainSkill，并在剧情确实触发觉醒时传 awaken=true。',
+    '- 孕中期、孕晚期、临产期、逾期、产兆前驱、第一产程调用 bsTrainSkill 时，系统每次只随机选择一胎，将本次 skillExp 依该胎 affinity 自动传为天赋经验：skillExp*abs(affinity)/50，正亲和为擅长、负亲和为苦手、0 不传。第二与第三产程禁止传递。',
+    '- 胎儿与孩子只有 talents，没有 skills。分娩时 talents 原样进入 children；日后注册孩子角色时，由用户在注册第五子页参考并载入，不会只凭同名自动继承。',
+    '',
+    '[children]',
+    '- 已出生孩子列表。代孕／寄生所生的孩子会转交给 provider 指向的角色；该角色尚未注册时，孩子留在承载者名下并保留 children[*].provider 标记。',
+    '- children[*].name: 孩子姓名。',
+    '- children[*].fathers: 父方对象名称。',
+    '- children[*].gender: 孩子性别。',
+    '- children[*].race: 孩子种族。',
+    '- children[*].derivedType: 孩子继承到的衍生类型；没有则为 null。',
+    '- children[*].age: 孩子年龄，单位为年，会随时间推进。',
+    '- children[*].talents: 从胎儿阶段保留下来的天赋；注册该孩子时供用户在注册技能页参考载入。',
+    '',
+    '[diary]',
+    '- diary 是角色主观日记，保存为数组；existing_state 中只会发送最近几笔，前端完整变量仍会保留全量。',
+    '- diary[*].time: 角色日记中的日期标题，不是具体钟点；应填写故事内日期、年月日、某日/第几天等日期性标题。不要填 HH:mm、午後 这类时刻；若只有时刻信息，请结合上下文写成“今日”“雨夜当日”“第 X 日”等日期标题。',
+    '- diary[*].content: 角色事后写下的主观日记，可包含心境、记忆、误解、愿望、秘密或身体感受；它不是即时心声/旁白，也不是客观状态，不能覆盖数值事实。',
+    '- diary 有 24 小时冷却；同一角色在同一个故事日内最多只能写一篇。若当天已经写过，必须跳过 bsWriteDiary。',
+    '- 通常只有 bsPassedTime 跨日后才调用 bsWriteDiary，并优先写“昨日/前一日/上一天”的回顾。若剧情发生重大事件或 notify 提醒，也应写成事后补记的语气，不要像当下即时独白。',
+    '- 角色不在场也可以写日记；可根据角色性格、处境与已知生活状态补足合理的日常幕外感受，但不要把未经剧情支持的重大事件写成既成事实，也不要用日记改写客观状态。',
+    '',
+    '[metabolism]',
+    '- 普通种族使用 excretion / hunger / sleep / milk / odor / companionship，分别对应泄意、饿意、困意、乳意、臭意、伴意；excretion（泄意）同时包含排尿与排便需求。',
+    '- 若角色具有 derivedType，则 metabolism 一定包含 flux，并只保留该衍生类型未抵免的普通需求。flux 通常是 -150 到 150 的单一极性需求值；被 pregnant.expansion 命中的方向可扩至 -200 或 200。正值持续走向更正，负值持续走向更负，绝对值越高代表越需要使用 bsExcreteMetabolism 进行一次“解放”。解放会按释放量抵消当前需求，只有在抵消过头时才会跨过 0 翻转极性。',
+    '- excretion 会在活力增加时累积；以 bsExcreteMetabolism 处理 hunger（进食）会增加部分泄意与少量困意，处理 sleep（睡眠）会增加少量饿意。milk 代表乳意：普通周期中为乳房胀敏或周期不适，黄体期/月经期会随时间累积，排卵期可因性欲波动少量累积；妊娠、假孕或产后恢复时则也涵盖乳胀与泌乳需求。odor 代表需要清理的臭意，companionship 代表渴望陪伴或社交的伴意。',
+    '- 时间累积满一周时会进行日常生活结算：基本清洁会清除臭意，日常往来会缓解部分伴意；普通周期进入新一轮卵泡期时，周期型乳意会清零。妊娠、假孕或产后恢复的泌乳型乳意不会因跨周自动清除。',
+    '- 只有剧情确实发生陪伴或社交时，才用 options.companionship 缓解伴意；臭意达到高等级时会降低陪伴缓解效果。伴意解除不额外转化为乳意；乳意仍由周期、妊娠/假孕/产后恢复与性欲波动等既有来源产生。',
+    '- pregnant.blockage 表示阻塞症状，会降低对应需求的解除效果：',
+    '  - excretion: 便秘。',
+    '  - hunger: 孕吐恶心、消化不良。',
+    '  - milk: 乳房胀痛、敏感。',
+    '  - sleep: 失眠。',
+    '  - odor: 阴道分泌物增生。',
+    '  - companionship: 社交回避。',
+    '- pregnant.acceleration 表示快积症状，会加快对应需求累积，也会让刚被缓解的需求较快回升：',
+    '  - excretion: 频尿。',
+    '  - hunger: 容易饿、奇特饮食偏好。',
+    '  - milk: 乳意快升、溢乳。',
+    '  - sleep: 晕眩、嗜睡。',
+    '  - odor: 体温升高、容易排汗。',
+    '  - companionship: 黏人。',
+    '- pregnant.expansion 表示扩容症状，会使对应需求可承受量从 150 提高到 200，因而需要更多解除量才能排净：',
+    '  - excretion: 水肿、肠道慢蠕动，排出的量较少。',
+    '  - hunger: 养分母体优先，但使胎儿活动降低。',
+    '  - milk: 胸部变得沉重饱满，不同于阻塞的压迫疼敏。',
+    '  - sleep: 激素使精力旺盛，但属于代偿。',
+    '  - odor: 孕妇特有的香气掩盖了需要清理的不适。',
+    '  - companionship: 胎儿带来内在陪伴感，可以忍受更长的孤独。',
+    '- fluxPositive / fluxNegative 的阻塞、快积与扩容需按该衍生种族的正负极需求解释；解放 flux 时传 options.flux。',
+    '- 对 derivedType 角色来说，被衍生代谢抵免的需求不会出现在 metabolism 中；未出现的需求不要主动提醒或要求处理。',
+    '',
+    '[wardrobe / outfit]',
+    '- wardrobe 是角色衣柜，包含 items；outfit 是当前穿着。主流敘事通常只需要关注在场角色的 outfit。',
+    '- 衣物 item 字段：id/name/note/slot/masking/support/capacity/convenience。id 使用整数；默认主件 id=0 表示全裸，不要加入 wardrobe.items。note 只写衣物稳定外观与来源：颜色、材质、版型、长短、固定开口、图案、制服/病服/借装来源等；皮肤暴露、开衩、透肤、深领等稳定外观写在 note。禁止写当前穿着反应、角色感受、近期身体变化、怀孕/胀痛/压胸/勒红/变紧/显怀等动态状态；这些由四维、pregFit 与当轮叙事推导。slot=main 为一次只能穿一件的完整基础套装：一般将上衣与下着合并为同一 main（连身裙、连体衣除外），不得拆成彼此互斥的 main，也不得把下着放入 accessory；四维按整套评分。main 可附 parts 数组列出组成部件名（如 ["白衬衫","牛仔裤"]）。slot=accessory 为可叠加的外套、鞋履、帽子、饰品、贴身内衣或功能配件补正；配件可附 layer（inner=贴身内衣等穿在主件之下，outer=外搭，默认 outer）。配件单项只能 -3 到 3，通常只影响 1-2 个最相关维度，其他维度填 0。',
+    '- 剧情中重新搭配上下装（如白衬衫改配短裙）时，不要修改原主件，应用 bsAddWardrobeItem 铸造新的组合主件（parts 列出部件）再用 bsChangeOutfit 换上；组合只需在实际穿过时创建。',
+    '- outfit.wearState 为当前穿着状态短标签（12 字内），默认 整齐。建议词表：整齐/凌乱/敞开/半褪/撩起/上衣已褪/下装已褪/湿透，也可按情境自造同粒度短标签；主件有 parts 时优先引用部件名消歧，如「毛衣已脱」「裙摆撩起」。剧情中穿着完整度或整洁度变化时，用 bsChangeOutfit 只传 wearState 即可更新；换主件时未显式传入会自动重置为整齐。仅着内衣可表达为 mainItemId: 0 加 inner 配件。',
+    '- 可独立穿脱的外层（毛衣、开衫、外套等）应是 layer=outer 的配件而不是 main 的一部分；若发现某主件把外层并入了 parts，可用 bsAddWardrobeItem 把外层拆成新配件并更新该主件。',
+    '- 四维含义：masking=掩盖身体曲线、孕肚、胸腹变化的程度，不等于皮肤裸露程度，露肤、开衩、透肤等稳定外观由 note 描述；support=对胸、腹、腰、重心的承托程度；capacity=容许体型变化的程度；convenience=行动、穿脱、如厕、哺乳或排解需求的方便程度。',
+    '- 可用 bsAddWardrobeItem 添加/更新长期衣柜衣物，bsRemoveWardrobeItem 删除长期衣柜衣物，bsChangeOutfit 更换当前主件和配件。穿上或脱下个别配件（穿鞋、戴外套、脱袜等）优先用增量参数：addAccessoryItemIds 穿上、removeAccessoryItemIds 脱下，在当前配件基础上生效，不需要重述其他配件。accessoryItemIds 是覆盖式完整列表，用于整套重设：脱掉所有配件传 accessoryItemIds: []；全裸传 mainItemId: 0 且 accessoryItemIds: []。wearState 只是状态标签，不会改变穿了哪些衣物。',
+    '- 临时衣物（如病服、借来的外套、旅馆睡衣）不要加入 wardrobe；在 bsChangeOutfit 传 temporaryItems，并让 mainItemId/accessoryItemIds 指向其中 id。换回衣柜服装时传 temporaryItems: [] 清除临时衣物。',
+    '- 衣物引用规则：调用衣柜工具时优先传整数 id；若不确定 id，可传准确的衣物名称字符串，系统会按名称解析。bsAddWardrobeItem 新增衣物可省略 id，系统会自动分配下一个整数 id，不要自造大数字 id。',
+    '- 换装触发规则：只要 recent_messages 中出现穿上、脱下、更衣、借穿、被脱除、淋湿、衣衫不整、洗浴后重新着装等衣着或穿着状态变化，就必须调用 bsChangeOutfit，使 outfit 与当前叙事一致：换主件传 mainItemId；穿脱个别配件传 addAccessoryItemIds/removeAccessoryItemIds；仅状态变化传 wearState。不要用 wearState 或描述文字代替配件穿脱。',
+    '- outfit.currentWearText 是系统解析出的当前穿着摘要（主件 + 穿着状态 + 配件与贴身衣物），仅供比对阅读，不要写回。每轮应将它与最近叙事对照：不符时必须同轮调用 bsChangeOutfit 修正。衣着的当前状态由 outfit 机械字段唯一承担，不要在 descriptions 中维护衣着子字段。',
+    '- 幕外(offscreen)角色也会附带精简 wardrobe.items（仅 id/name/slot/layer）与当前 outfit 摘要。角色重新登场时，若衣着应有变化（如换了日常服、外出服），应在调用 bsSetCharacterPresence 的同一轮用 bsChangeOutfit 完成回场换装。',
+    '- 四维数值只在孕期窗口（真实妊娠/产兆前驱/产程/产后恢复）发送并参与 pregFit 计算；窗口外 payload 中的衣物只有 id/name/slot/note/parts/layer，非孕期敘事请依 note 的稳定外观描述。四维仍保存在系统中，bsAddWardrobeItem 新增或更新衣物时仍必须给出完整四维。',
+    '- outfit.pregFit 只在真实妊娠、产兆前驱、产程或产后恢复中存在；其余阶段为 null。pregFit.pregWearPressure 为孕期衣着压力，产后恢复期间会随恢复进度从产后初期水平递减到 0；gap 为四维余裕：masking/support/capacity/convenience。gap 低于 0 表示该维度已被孕期变化压过。',
+    '- gap 表示衣物该维度扣除孕期压力后的余裕。一般 gap 约 3 以上表示仍有余裕；0 到 2 表示开始吃紧；-1 到 -3 表示明显冲突；-4 以下表示该维度严重失效。按具体维度叙述：masking 失效是轮廓、孕肚或胸腹变化难藏；support 失效是承托不足、下坠、晃动或重心负担外溢；capacity 失效是版型固定、尺寸死、腰腹胸臀被迫撑紧或扣合困难；convenience 失效是行动、穿脱、如厕或排解需求明显受阻。不要把 gap 数值直接写进叙事，除非是调试说明。',
+    '',
+    '[descriptions]',
+    '- normalDescription / pregnantDescription 为文字描述栏位。',
+    '- 两者格式固定为：字段名|描述内容;;字段名|描述内容;;...字段名|描述内容;;',
+    '- 使用 bsSetDescription 前，必须逐一检查该描述栏位全部既有子字段；未传入的子字段会保留旧值，且仅代表它已检查并确认完全不变。不得为了简短而省略受本轮剧情、姿势、衣着、表情、身体状态或环境影响的字段。',
+    '- 不要新增角色原本没有的描述子字段；只能更新 existing_state 中该角色该 descriptions 已存在的字段名。唯一例外：当本提示词包含 [pregnantDescription 初始化] 段时，可为其中点名角色的空 pregnantDescription 建立规范内的首批子字段。',
+    '- 不要改写成自然段，不要省略字段名，不要把 ;; 或 | 换成别的分隔方式。',
+    '',
+    '[notify]',
+    '- firstly: 主要阶段变化或必须优先处理的警示，例如真实产程中的难产手术产建议；也可能用于提醒角色获得或失去妊娠变速效果。',
+    '- secondly: 次级事件提示，如风险、破水、分娩推进、母胎互动或胎儿自主活动；其中的母胎互动与胎动事件可自然融入当前叙事。',
+    '- thirdly: 辅助建议提示，提醒是否该缓解生理需求、关注膜耐性、抵抗分娩等。',
+    '',
+].join('\n');
+const TRACKER_DIARY_SECTION = [
+    '[diary]',
+    '- diary 是角色主观日记，保存为数组；existing_state 中只会发送最近几笔，前端完整变量仍会保留全量。',
+    '- diary[*].time: 角色日记中的日期标题，不是具体钟点；应填写故事内日期、年月日、某日/第几天等日期性标题。不要填 HH:mm、午後 这类时刻；若只有时刻信息，请结合上下文写成“今日”“雨夜当日”“第 X 日”等日期标题。',
+    '- diary[*].content: 角色事后写下的主观日记，可包含心境、记忆、误解、愿望、秘密或身体感受；它不是即时心声/旁白，也不是客观状态，不能覆盖数值事实。',
+    '- diary 有 24 小时冷却；同一角色在同一个故事日内最多只能写一篇。若当天已经写过，必须跳过 bsWriteDiary。',
+    '- 通常只有 bsPassedTime 跨日后才调用 bsWriteDiary，并优先写“昨日/前一日/上一天”的回顾。若剧情发生重大事件或 notify 提醒，也应写成事后补记的语气，不要像当下即时独白。',
+    '- 角色不在场也可以写日记；可根据角色性格、处境与已知生活状态补足合理的日常幕外感受，但不要把未经剧情支持的重大事件写成既成事实，也不要用日记改写客观状态。',
+    '',
+].join('\n');
+function buildTrackerMetabolismGuide(payload = null) {
+    const fluxNames = collectRelevantFluxNames(payload || {});
+    const diaryEnabled = payload?.diary_enabled !== false;
+    const wardrobeEnabled = payload?.wardrobe_enabled === true;
+    const breedingPsychologyEnabled = payload?.breeding_psychology_enabled === true;
+    let baseGuide = diaryEnabled
+        ? TRACKER_VARIABLE_GUIDE_PROMPT
+        : TRACKER_VARIABLE_GUIDE_PROMPT.replace(`${TRACKER_DIARY_SECTION}\n`, '');
+    if (!wardrobeEnabled) {
+        baseGuide = baseGuide.replace(/\n?\[wardrobe \/ outfit\][\s\S]*?\n\[descriptions\]/, '\n[descriptions]');
+    }
+    if (!breedingPsychologyEnabled) {
+        baseGuide = baseGuide
+            .replace('、psychology', '')
+            .replace(/\n?\[psychology\][\s\S]*?\n\[skills \/ talents\]/, '\n[skills / talents]');
+    }
+    return fluxNames.length > 0
+        ? baseGuide.replace('- 若角色具有 derivedType，则 metabolism 一定包含 flux，并只保留该衍生类型未抵免的普通需求。flux 通常是 -150 到 150 的单一极性需求值；被 pregnant.expansion 命中的方向可扩至 -200 或 200。正值持续走向更正，负值持续走向更负，绝对值越高代表越需要使用 bsExcreteMetabolism 进行一次“解放”。解放会按释放量抵消当前需求，只有在抵消过头时才会跨过 0 翻转极性。', `- 若角色具有 derivedType，则 metabolism 一定包含 flux，并只保留该衍生类型未抵免的普通需求。flux 通常是 -150 到 150 的单一极性需求值，被 pregnant.expansion 命中的方向可扩至 -200 或 200；在本轮相关衍生种族中，flux 分别表示：${fluxNames.join(' / ')}。正值持续走向更正，负值持续走向更负，绝对值越高代表越需要使用 bsExcreteMetabolism 进行一次“解放”。解放会按释放量抵消当前需求，只有在抵消过头时才会跨过 0 翻转极性。`)
+        : baseGuide;
+}
+// 妊娠相关阶段中 pregnantDescription 仍为空的在场角色：需要注入初始化规范，
+// 否则「不要新增描述子字段」规则会把空栏位永久锁死。
+const PREGNANT_DESCRIPTION_STAGES = new Set([...PREGNANCY_STAGES, '产兆前驱', ...LABOR_STAGES, '产后恢复', '假孕期']);
+function collectPregnantDescriptionInitNames(payload = {}) {
+    const names = [];
+    const existingState = payload?.existing_state;
+    if (!existingState || typeof existingState !== 'object')
+        return names;
+    for (const [key, item] of Object.entries(existingState)) {
+        if (item?.offscreen === true)
+            continue;
+        const stage = String(item?.profile?.base?.stage || '');
+        if (!PREGNANT_DESCRIPTION_STAGES.has(stage))
+            continue;
+        if (String(item?.profile?.descriptions?.pregnantDescription || '').trim())
+            continue;
+        names.push(String(item?.name || key));
+    }
+    return names;
+}
+function buildTrackerSystemPrompt(basePrompt = '', descriptionGuides = null, payload = null) {
+    const diaryEnabled = payload?.diary_enabled !== false;
+    const metabolismGuide = buildTrackerMetabolismGuide(payload);
+    const parts = [
+        [
+            '[bsPassedTime 强制规则]',
+            '- bsPassedTime 是每一轮 tracker 分析都必须优先考虑的第一工具。',
+            '- 你应先根据 recent_messages 判断本轮累计了多少分钟/小时/天，再调用 bsPassedTime 推进时间。',
+            '- 只有在确认本轮完全没有任何可推进的时间量时，才允许不调用 bsPassedTime。',
+            '- 其他状态工具默认建立在时间推进之后，不要跳过 bsPassedTime 直接更新长程状态。',
+        ].join('\n'),
+        String(basePrompt || '').trim(),
+        metabolismGuide,
+    ];
+    if (payload?.mainflow_context_snapshot) {
+        parts.push([
+            '[主流上下文快照使用规则]',
+            '- payload.mainflow_context_snapshot 是 ST 主流上一轮生成 request 中已经发送或准备发送给模型的上下文快照。',
+            '- 它仅用于补足本轮剧情、角色设定、已触发 worldinfo、模板注入、getwi/activewi 等主流背景。',
+            '- 不要模仿主流输出风格，不要续写剧情；你的任务仍是根据 recent_messages 与 existing_state 返回 JSON tool_calls 来更新变量。',
+            '- 若主流上下文快照与 tracker 工具调用规则、变量语义说明、existing_state 或 available_tools 冲突，必须以后者为准。',
+        ].join('\n'));
+    }
+    const priorityNames = Array.isArray(payload?.priority_character_names)
+        ? payload.priority_character_names.map((name) => String(name || '').trim()).filter(Boolean)
+        : [];
+    if (priorityNames.length > 0) {
+        parts.push([
+            '[优先追踪角色]',
+            `- 本轮先检查：${priorityNames.join('、')}。`,
+            '- 这些名字是优先级，不是过滤器；其余已注册角色仍须依剧情和时间正常检查。',
+            '- 若剧情明确显示某角色进入当前场景、开始参与当前互动或重新同行，调用 bsSetCharacterPresence，参数必须为 {"female":"角色名","isPresent":true}；明确离开、失联或转为幕外时才传 false。不要以 isHere 作为参数名，也不要无依据切换。',
+        ].join('\n'));
+    }
+    const embryoTypeLorePrompt = buildEmbryoTypeLorePrompt(payload || {});
+    if (embryoTypeLorePrompt)
+        parts.push(embryoTypeLorePrompt);
+    if (!diaryEnabled) {
+        parts.push('[diary]\n- diary 系统当前已关闭（settings.diaryRecentLimit = 0）。本轮不要参考 diary，也不要调用 bsWriteDiary。');
+    }
+    parts.push(payload?.require_full_description_updates === true
+        ? [
+            '[descriptions 完整更新模式：强制提示约束]',
+            '- 只要调用 bsSetDescription 更新 normalDescription 或 pregnantDescription，其对应字符串必须带回该角色该栏位所有既有子字段，不得只传部分字段。',
+            '- 即使字段内容未改变，也必须原样带回；先完整检查，再按既有字段顺序输出。此规则优先于节省 token 的考虑。',
+            '- 若因上下文缺失无法可靠填写某个字段，则不要调用该栏位的 bsSetDescription；不要编造内容或交出不完整更新。',
+        ].join('\n')
+        : [
+            '[descriptions 更新勤勉规则]',
+            '- 若调用 bsSetDescription，先逐字段检查；所有受本轮影响的既有字段必须一并更新。省略只允许用于已确认完全不变的字段。',
+        ].join('\n'));
+    const trackedNames = Array.isArray(payload?.tracked_females)
+        ? payload.tracked_females.map((name) => String(name || '').trim()).filter(Boolean)
+        : [];
+    if (trackedNames.length > 0) {
+        parts.push([
+            '[逐角色检查清单]',
+            `- 本轮必须在 character_checks 中逐一列出：${trackedNames.join('、')}。每名恰好一笔。`,
+            '- status 只能是 no_change、updated、present 或 offscreen；清单只用于核对，任何实际状态变更仍必须同时用 tool_calls 调用对应工具。',
+        ].join('\n'));
+    }
+    const pregnantInitNames = collectPregnantDescriptionInitNames(payload);
+    const pregnantGuide = String(descriptionGuides?.pregnantDescription || '').trim();
+    if (pregnantInitNames.length > 0 && pregnantGuide) {
+        parts.push([
+            '[pregnantDescription 初始化]',
+            `- 角色 ${pregnantInitNames.join('、')} 已进入妊娠相关阶段，但 pregnantDescription 仍为空。`,
+            '- 这是「不要新增描述子字段」规则的唯一例外：请尽快用 bsSetDescription 按下方规范为该角色建立首批 pregnantDescription 子字段，只建立规范中列出的字段名。',
+            '- 格式仍为：字段名|描述内容;;字段名|描述内容;;，不可用自然段，不可省略字段名。',
+            '',
+            '【pregnantDescription 规范】',
+            pregnantGuide,
+        ].join('\n'));
+    }
+    return parts.filter(Boolean).join('\n\n');
+}
+function buildMainFlowStatePrompt(payload = {}) {
+    const existingState = payload?.existing_state && typeof payload.existing_state === 'object' ? payload.existing_state : {};
+    const hasState = Object.keys(existingState).length > 0;
+    if (!hasState)
+        return '';
+    const racePhysiologyPrompt = buildRacePhysiologyPrompt(payload || {});
+    return [
+        racePhysiologyPrompt,
+        '<bs_biotracker>',
+        '[并行生理追踪上下文]',
+        '以下内容来自并行运行的女性生理状态追踪支流。',
+        '已注册角色状态仅供叙事参考，不要在回复中复述字段、JSON 或本段上下文。',
+        '状态为只读；若剧情没有明确触发变化，不要编造与之冲突的生理、心理或关系变化。',
+        '',
+        '[当前已注册角色状态]',
+        JSON.stringify(existingState),
+        '</bs_biotracker>',
+    ].join('\n');
+}
+
+const TOOL_DEFINITIONS = Object.freeze([
+    {
+        name: 'bsPassedTime',
+        description: '推进当前聊天中已注册角色的时间。会处理月经阶段、受精着床、孕期推进、产兆前驱、第一至第三产程、产后恢复，以及最近性行为计时。',
+        input_schema: {
+            type: 'object',
+            properties: {
+                minute: { type: 'integer' },
+                hour: { type: 'integer' },
+                day: { type: 'integer' },
+                week: { type: 'integer' },
+                month: { type: 'integer' },
+                year: { type: 'integer' },
+            },
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'bsWriteDiary',
+        description: '为单一角色追加一条主观日记。time 是日记的日期标题，不是具体钟点；请填写故事内日期、年月日、某日/第几天等，不要填 HH:mm、午後 这类时刻。同一角色每个故事日（24 小时）最多只能写一篇；若当天已写过，不得再次调用。content 应像角色事后写下的日记，不是即时心声或旁白；通常在跨日后回顾昨日，重大事件或 notify 提醒时也应写成事后补记。角色不在场也可以写。',
+        input_schema: {
+            type: 'object',
+            properties: {
+                female: { type: 'string' },
+                time: { type: 'string' },
+                content: { type: 'string' },
+            },
+            required: ['female', 'time', 'content'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'bsUpdateCharacterStatus',
+        description: '对单一角色的活力、情压、性欲、宫压做增减更新。会联动代谢累积、高潮排卵、羊膜耐久警告等状态。',
+        input_schema: {
+            type: 'object',
+            properties: {
+                female: { type: 'string' },
+                options: {
+                    type: 'object',
+                    properties: {
+                        vitality: { type: 'integer' },
+                        libido: { type: 'integer' },
+                        uterinePressure: { type: 'integer' },
+                        psyStress: { type: 'integer' },
+                    },
+                    additionalProperties: false,
+                },
+            },
+            required: ['female', 'options'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'bsAddWardrobeItem',
+        description: '向单一角色衣柜添加或更新一件衣物。id 引用规则：更新既有衣物时传其整数 id 或准确名称字符串；新增衣物可省略 id，系统会自动分配下一个整数 id，不要自造大数字 id。main 主件可给 parts 数组列出组成部件名（如 ["白衬衫","牛仔裤"]，连身装可省略）；剧情中重新搭配上下装时，应用本工具铸造新的组合主件再换上。accessory 配件可给 layer：inner=贴身内衣等穿在主件之下，outer=外套鞋饰等穿在主件之外（默认 outer）。衣物保存稳定外观 note 与机械数值；note 只写衣物稳定外观与来源：颜色、材质、版型、长短、固定开口、图案、制服/病服/借装来源等。禁止写当前穿着反应、角色感受、近期身体变化、怀孕/胀痛/压胸/勒红/变紧/显怀等动态状态；这些由四维、pregFit 与当轮叙事推导。slot=main 为主件，slot=accessory 为配件。主件通常使用 0-10；配件只是补正，单项只能 -3 到 3，通常只影响 1-2 个维度，其他维度填 0。四维：masking 掩盖身体曲线/孕肚变化、support 对胸腹腰与重心的承托、capacity 容许孕肚/胸腹/骨盆/水肿等体型变化、convenience 行动/穿脱/如厕/哺乳或排解需求的方便程度。皮肤暴露与稳定外观写入 note，不作为机械数值。',
+        input_schema: {
+            type: 'object',
+            properties: {
+                female: { type: 'string' },
+                item: {
+                    type: 'object',
+                    properties: {
+                        id: { type: ['integer', 'string'] },
+                        name: { type: 'string' },
+                        note: { type: 'string' },
+                        slot: { type: 'string', enum: ['main', 'accessory'] },
+                        parts: { type: 'array', items: { type: 'string' } },
+                        layer: { type: 'string', enum: ['inner', 'outer'] },
+                        masking: { type: 'number' },
+                        support: { type: 'number' },
+                        capacity: { type: 'number' },
+                        convenience: { type: 'number' },
+                    },
+                    required: ['name', 'note', 'slot', 'masking', 'support', 'capacity', 'convenience'],
+                    additionalProperties: false,
+                },
+            },
+            required: ['female', 'item'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'bsRemoveWardrobeItem',
+        description: '从单一角色衣柜删除一件衣物。itemId 可传整数 id 或准确衣物名称字符串。不能删除默认主件 id=0。若删除当前主件，穿着会回到 id=0；若删除当前配件，会从当前配件列表移除，并重算 pregFit。',
+        input_schema: {
+            type: 'object',
+            properties: {
+                female: { type: 'string' },
+                itemId: { type: ['integer', 'string'] },
+            },
+            required: ['female', 'itemId'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'bsChangeOutfit',
+        description: '更换单一角色当前穿着。mainItemId 指定主件。穿上或脱下个别配件时优先用增量参数：addAccessoryItemIds 穿上、removeAccessoryItemIds 脱下，均在当前配件基础上生效，不需要重述其他配件。accessoryItemIds 则是覆盖式完整列表（空数组=脱掉所有配件），与增量参数同传时以 accessoryItemIds 为准。衣物引用优先传整数 id；若不确定 id，可传准确衣物名称字符串，系统会按名称解析（含临时衣物）。注意：wearState 只是状态标签，不会改变穿了哪些衣物；穿上鞋、戴上外套等必须通过配件参数完成。wearState 为当前穿着状态短标签（12 字内）：建议使用 整齐/凌乱/敞开/半褪/撩起/上衣已褪/下装已褪/湿透，也可按情境自造同粒度短标签；主件有 parts 时优先引用部件名消歧（如 毛衣已脱）。只更新穿着状态时可只传 wearState。换主件时未显式传 wearState 会自动重置为整齐。temporaryItems 可放病服、借装等临时衣物，只保存于当前 outfit，不写入 wardrobe；换回衣柜服装时可传 temporaryItems: [] 清除临时衣物。临时衣物也要写稳定外观 note，且 note 只写衣物稳定外观与来源：颜色、材质、版型、长短、固定开口、图案、制服/病服/借装来源等。禁止写当前穿着反应、角色感受、近期身体变化、怀孕/胀痛/压胸/勒红/变紧/显怀等动态状态；这些由四维、pregFit 与当轮叙事推导。全裸也是主件 id=0。角色处于真实妊娠/产兆前驱/产程/产后恢复时会重算 outfit.pregFit（产后恢复的衣着压力随恢复进度递减）；其余阶段 pregFit 为 null。衣着状态变化的叙事文字由当轮叙事自行处理，不写回 wardrobe/outfit。',
+        input_schema: {
+            type: 'object',
+            properties: {
+                female: { type: 'string' },
+                mainItemId: { type: ['integer', 'string'] },
+                accessoryItemIds: { type: 'array', items: { type: ['integer', 'string'] } },
+                addAccessoryItemIds: { type: 'array', items: { type: ['integer', 'string'] } },
+                removeAccessoryItemIds: { type: 'array', items: { type: ['integer', 'string'] } },
+                wearState: { type: 'string' },
+                temporaryItems: {
+                    type: 'array',
+                    items: {
+                        type: 'object',
+                        properties: {
+                            id: { type: 'integer', minimum: 0 },
+                            name: { type: 'string' },
+                            note: { type: 'string' },
+                            slot: { type: 'string', enum: ['main', 'accessory'] },
+                            parts: { type: 'array', items: { type: 'string' } },
+                            layer: { type: 'string', enum: ['inner', 'outer'] },
+                            masking: { type: 'number' },
+                            support: { type: 'number' },
+                            capacity: { type: 'number' },
+                            convenience: { type: 'number' },
+                        },
+                        required: ['id', 'name', 'note', 'slot', 'masking', 'support', 'capacity', 'convenience'],
+                        additionalProperties: false,
+                    },
+                },
+            },
+            required: ['female'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'bsSetDescription',
+        description: '更新单一角色的描述字段。调用前必须逐一检查该描述栏位的所有既有子字段；未传入某子字段仅表示它已检查且完全不变，不得因求简短而省略受本轮剧情、姿势、衣着、表情、身体状态或环境影响的字段。不能新增角色原本没有的子字段。描述内容必须使用格式：字段名|描述内容;;字段名|描述内容;;...字段名|描述内容;;，不可改成自然段或换行文本。',
+        input_schema: {
+            type: 'object',
+            properties: {
+                female: { type: 'string' },
+                options: {
+                    type: 'object',
+                    properties: {
+                        normalDescription: { type: 'string' },
+                        pregnantDescription: { type: 'string' },
+                    },
+                    additionalProperties: false,
+                },
+            },
+            required: ['female', 'options'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'bsSetCharacterPresence',
+        description: '设置角色是否在场。设为 false 后，tracker 默认不会再把该角色完整状态发送给 LLM，直到重新设为 true。',
+        input_schema: {
+            type: 'object',
+            properties: {
+                female: { type: 'string' },
+                isPresent: { type: 'boolean' },
+            },
+            required: ['female'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'bsUpdateExperience',
+        description: '直接更新单一角色的经验/关系字段。适合修正贞洁、伴侣、怀孕/分娩/流产经历等记录，不触发额外规则。',
+        input_schema: {
+            type: 'object',
+            properties: {
+                female: { type: 'string' },
+                options: {
+                    type: 'object',
+                    properties: {
+                        virginity: { type: ['string', 'null'] },
+                        latestSexPartner: { type: ['string', 'null'] },
+                        emotionalMate: { type: ['string', 'null'] },
+                        marriageMate: { type: ['string', 'null'] },
+                        pregnantExperience: { type: 'integer' },
+                        naturalBirthExperience: { type: 'integer' },
+                        surgicalBirthExperience: { type: 'integer' },
+                        miscarriageExperience: { type: 'integer' },
+                    },
+                    additionalProperties: false,
+                },
+            },
+            required: ['female', 'options'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'bsNameChild',
+        description: '给单一角色已出生的某个孩子命名。只修改 children 指定索引的 name，不触发额外规则。',
+        input_schema: {
+            type: 'object',
+            properties: {
+                female: { type: 'string' },
+                childIndex: { type: 'integer' },
+                name: { type: 'string' },
+            },
+            required: ['female', 'childIndex', 'name'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'bsRegisterSkillDefinition',
+        description: '向当前聊天的全局技能图鉴登记一个全新技能定义。新增时 name 与 description 都必填；先检查 skill_catalog，已有同名技能时直接引用，不要制造近义重复。此工具只建立定义，不会让任何角色觉醒或获得经验。',
+        input_schema: {
+            type: 'object',
+            properties: {
+                name: { type: 'string' },
+                description: { type: 'string' },
+            },
+            required: ['name', 'description'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'bsTrainSkill',
+        description: '依最近剧情让单一角色觉醒或锻炼一个已登记技能。skillExp 只能非负，技能只会进步、不会降级；技能不存在时必须明确传 awaken=true 才会从 Lv1 觉醒。角色自己的 talents 对所有 LLM 工具均为只读，只能作为判断 skillExp 的参考，绝不可直接修改；角色天赋仅能由用户在外部界面调整。若角色处于孕中期、孕晚期、临产期、逾期、产兆前驱或第一产程，系统每次只随机选择一胎，把本次 skillExp 按该胎 affinity/50 转为正负胎儿天赋经验；第二、第三产程不会传递。',
+        input_schema: {
+            type: 'object',
+            properties: {
+                female: { type: 'string' },
+                skill: { type: ['integer', 'string'] },
+                skillExp: { type: 'integer', minimum: 0, maximum: 1000000 },
+                awaken: { type: 'boolean' },
+                reason: { type: 'string' },
+            },
+            required: ['female', 'skill', 'skillExp', 'reason'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'bsUpdatePsychology',
+        description: '按当前阶段更新单一角色的心理倾向数值。月经阶段使用 mens，妊娠/假孕/产兆前驱/产程使用 preg。系统会自动重算 *_interpret。每名角色在每个新小时内最多成功更新一次；在 bsPassedTime 推进满下一小时之前，重复调用会被跳过。注意：数值字段传入的是“变化量(delta)”而不是目标值，例如当前 stance_value=78，传入 {"preg":{"stance":2}} 会变成 80，而不是设为 2。建议一次只调整一个心理项，且尽量小幅变动；单次以 ±1 到 ±3 为宜，±5 已属于偏大变化。布林字段则是直接设为 true/false。',
+        input_schema: {
+            type: 'object',
+            properties: {
+                female: { type: 'string' },
+                options: {
+                    type: 'object',
+                    properties: {
+                        mens: {
+                            type: 'object',
+                            properties: {
+                                mastery: { type: 'number' },
+                                desire: { type: 'number' },
+                                autonomy: { type: 'number' },
+                                isChaste: { type: 'boolean' },
+                                hasContraception: { type: 'boolean' },
+                            },
+                            additionalProperties: false,
+                        },
+                        preg: {
+                            type: 'object',
+                            properties: {
+                                cognition: { type: 'number' },
+                                bonding: { type: 'number' },
+                                stance: { type: 'number' },
+                                knowsFatherSource: { type: 'boolean' },
+                                hasProfessionalPrenatalCare: { type: 'boolean' },
+                            },
+                            additionalProperties: false,
+                        },
+                    },
+                    additionalProperties: false,
+                },
+            },
+            required: ['female', 'options'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'bsAddSperm',
+        description: '向单一角色体内加入或扣除精液，用于性交后留下受孕机会。race 使用 [derivedType-装饰子项]race-装饰子项 格式，混血种族以 X 分隔；父系 derivedType 直接从这个字符串解析。',
+        input_schema: {
+            type: 'object',
+            properties: {
+                female: { type: 'string' },
+                male: { type: 'string' },
+                race: { type: 'string' },
+                amount: { type: 'number' },
+            },
+            required: ['female', 'male', 'race', 'amount'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'bsDrainSperm',
+        description: '让角色主动排出体内部分或全部精液残留，按当前各来源比例一并减少。',
+        input_schema: {
+            type: 'object',
+            properties: {
+                female: { type: 'string' },
+                amount: { type: 'number' },
+            },
+            required: ['female', 'amount'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'bsSetMenstrualPhases',
+        description: '直接设置月经相关阶段，用于催情、药物、外力或剧情推进。切到排卵期时会重新允许高潮排卵；假孕期可留精但不会排卵或受孕。不会覆盖正在进行的受精、真妊娠、产兆前驱或产程。',
+        input_schema: {
+            type: 'object',
+            properties: {
+                female: { type: 'string' },
+                stage: { type: 'string' },
+            },
+            required: ['female', 'stage'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'bsExcreteMetabolism',
+        description: '缓解角色的生理需求。普通种族用于处理泄意、饿意、困意、乳意、臭意与伴意；其中 excretion（泄意）同时包含排尿与排便需求。乳意在普通周期表示乳房胀敏，在妊娠、假孕或产后恢复则可表示乳胀与泌乳需求；性欲波动会自然产生乳意，不由伴意解除额外转化。进食缓解 hunger 会增加 excretion 与少量 sleep，睡眠缓解 sleep 会增加少量 hunger，高 odor 会降低 companionship 的社交缓解效果。带 derivedType 的角色以 flux 进行极性解放，并处理未抵免需求；要解放 flux 时请传 flux，或不传 options 使用默认释放量。pregnant.blockage 会降低排解效果，pregnant.acceleration 会加快累积并让刚缓解的对应需求较快回升，pregnant.expansion 会使对应需求容量由 150 扩为 200。',
+        input_schema: {
+            type: 'object',
+            properties: {
+                female: { type: 'string' },
+                options: {
+                    type: 'object',
+                    properties: {
+                        excretion: { type: 'number', minimum: 0, maximum: 200 },
+                        hunger: { type: 'number', minimum: 0, maximum: 200 },
+                        sleep: { type: 'number', minimum: 0, maximum: 200 },
+                        milk: { type: 'number', minimum: 0, maximum: 200 },
+                        odor: { type: 'number', minimum: 0, maximum: 200 },
+                        companionship: { type: 'number', minimum: 0, maximum: 200 },
+                        flux: { type: 'number', minimum: 0, maximum: 400 },
+                    },
+                    additionalProperties: false,
+                },
+            },
+            required: ['female'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'bsAbortion',
+        description: '终止当前受精或妊娠状态。月经阶段且着床前视为避孕成功，其他阶段视为流产；可指定 fetusIndex 做减胎。若 miscarriage 保护开启，则需 force=true 才会生效。',
+        input_schema: {
+            type: 'object',
+            properties: {
+                female: { type: 'string' },
+                force: { type: 'boolean' },
+                fetusIndex: { type: 'integer' },
+            },
+            required: ['female'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'bsImplantEmbryo',
+        description: '把外源胚胎植入角色体内：代孕、胚胎移植、虫母注卵、寄生产卵等，凡是「孕育者不是遗传母亲」的情节都用这个。'
+            + 'provider 是胚胎真正的归属方（提供卵子的一方／虫母／委托母亲），分娩后孩子会转交给她；若她尚未注册，孩子会留在承载者名下并标注来源。'
+            + '胚胎种族依遗传母方推导而非承载者，所以虫母的卵放进人类宿主仍是虫族血统。'
+            + 'race 与 fatherRace 使用 [derivedType-装饰子项]race-装饰子项 格式，混血种族以 X 分隔。母系 derivedType 永远来自承载者；父系优先取 fatherRace，未写时才取 race。'
+            + 'provider 若尚未注册，用 race 指明遗传母方种族；父方种族预设与遗传母方同族，跨种族时用 fatherRace 指明。'
+            + '工具加入的是尚未着床的受精卵，可在同一着床窗口重复调用；第一颗会启动共用 fertilizationDays，之后由 bsPassedTime 推进并统一着床。已进入妊娠阶段后不可再加入。自然受孕请勿使用本工具。',
+        input_schema: {
+            type: 'object',
+            properties: {
+                female: { type: 'string' },
+                provider: { type: 'string' },
+                fathers: { type: 'string' },
+                count: { type: 'integer', minimum: 1, maximum: 50 },
+                race: { type: 'string' },
+                fatherRace: { type: 'string' },
+            },
+            required: ['female', 'provider'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'bsRuptureMembranes',
+        description: '让角色破水（羊膜破裂）。只有在产兆前驱且宫压已达上限的 66%，或已在第一／第二产程时才会生效；条件不足会被拒绝，此时叙事不得写成已经破水。'
+            + '产兆前驱破水会直接进入第一产程。剧情写到羊水流出、破水时必须调用本工具，让叙事与系统状态一致；系统未确认破水前不要擅自描写破水。',
+        input_schema: {
+            type: 'object',
+            properties: {
+                female: { type: 'string' },
+            },
+            required: ['female'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'bsChildbirth',
+        description: '让角色立即结束分娩并进入产后恢复，并把剩余胎儿转为 children 记录。外部直接调用视为手术产；产程自然结束时则记为自然产。',
+        input_schema: {
+            type: 'object',
+            properties: {
+                female: { type: 'string' },
+            },
+            required: ['female'],
+            additionalProperties: false,
+        },
+    },
+    {
+        name: 'bsMaternalFetalInteraction',
+        description: '处理母体与胎儿之间的互动。每名角色在每个新小时内最多成功互动一次；在 bsPassedTime 推进满下一小时之前，重复调用会被跳过。direction=fetal 表示胎儿对母体的亲近或排斥，必须传 change，并调整随机一胎的 affinity，不会补充供养力。direction=maternal 表示母体安抚胎儿，不使用 change；系统会随机判定 affinity 变化，若成功且有尚待安抚的妊娠不适，会消耗一次并依轻微/显著变化补回 1/2 点供养力。若当前处于产兆前驱且 direction=maternal，则改为分娩抵抗判定。',
+        input_schema: {
+            type: 'object',
+            properties: {
+                female: { type: 'string' },
+                change: {
+                    type: 'string',
+                    enum: ['slight_increase', 'significant_increase', 'slight_decrease', 'significant_decrease'],
+                },
+                direction: {
+                    type: 'string',
+                    enum: ['fetal', 'maternal'],
+                },
+            },
+            required: ['female'],
+            additionalProperties: false,
+        },
+    },
+]);
+function clampNumber(value, min, max, fallback = 0) {
+    const next = Number(value);
+    if (!Number.isFinite(next))
+        return fallback;
+    return Math.max(min, Math.min(max, next));
+}
+function ensureWardrobeState(profile) {
+    if (!profile.wardrobe || typeof profile.wardrobe !== 'object' || Array.isArray(profile.wardrobe))
+        profile.wardrobe = {};
+    profile.wardrobe.enabled = true;
+    const sourceItems = Array.isArray(profile.wardrobe.items) ? profile.wardrobe.items : [];
+    const items = [];
+    for (const source of sourceItems) {
+        const item = normalizeWardrobeItem(source);
+        if (!item || items.some((existing) => existing.id === item.id))
+            continue;
+        items.push(item);
+    }
+    if (!items.some((item) => item.id === DEFAULT_WARDROBE_ITEM.id))
+        items.unshift({ ...DEFAULT_WARDROBE_ITEM });
+    profile.wardrobe.items = items;
+    return profile.wardrobe;
+}
+function hasPreparedWardrobe$1(profile) {
+    return Boolean(profile?.wardrobe?.enabled === true);
+}
+function hasBreedingPsychology$1(profile) {
+    const stageProfiles = profile?.psychology?.stageProfiles;
+    return Boolean(stageProfiles && typeof stageProfiles === 'object' && !Array.isArray(stageProfiles)
+        && Object.keys(stageProfiles).length > 0);
+}
+function findWardrobeItem(profile, itemRef, slot = '') {
+    const wardrobe = ensureWardrobeState(profile);
+    return resolveWardrobeItemRef(wardrobe.items, itemRef, slot);
+}
+function getAvailableOutfitItems(profile) {
+    const wardrobe = ensureWardrobeState(profile);
+    const temporaryItems = Array.isArray(profile?.outfit?.temporaryItems)
+        ? profile.outfit.temporaryItems.map(normalizeWardrobeItem).filter(Boolean).map((item) => ({ ...item, source: 'temporary' }))
+        : [];
+    return [...wardrobe.items, ...temporaryItems.filter((item) => item.id !== DEFAULT_WARDROBE_ITEM.id)];
+}
+function findOutfitItem(profile, itemRef, slot = '') {
+    return resolveWardrobeItemRef(getAvailableOutfitItems(profile), itemRef, slot);
+}
+function ensureOutfitState(profile) {
+    ensureWardrobeState(profile);
+    if (!profile.outfit || typeof profile.outfit !== 'object' || Array.isArray(profile.outfit))
+        profile.outfit = {};
+    profile.outfit.temporaryItems = normalizeTemporaryOutfitItems(profile.outfit.temporaryItems);
+    const mainItem = findOutfitItem(profile, profile.outfit.mainItemId ?? DEFAULT_WARDROBE_ITEM.id, 'main');
+    const accessoryItems = Array.isArray(profile.outfit.accessoryItemIds)
+        ? profile.outfit.accessoryItemIds
+            .map((ref) => findOutfitItem(profile, ref, 'accessory'))
+            .filter(Boolean)
+        : [];
+    profile.outfit.mainItemId = mainItem ? mainItem.id : DEFAULT_WARDROBE_ITEM.id;
+    profile.outfit.accessoryItemIds = accessoryItems
+        .map((item) => item.id)
+        .filter((id, index, list) => list.indexOf(id) === index);
+    profile.outfit.wearState = sanitizeWearState(profile.outfit.wearState);
+    if (!('pregFit' in profile.outfit))
+        profile.outfit.pregFit = null;
+    return profile.outfit;
+}
+function getOutfitItems(profile) {
+    const outfit = ensureOutfitState(profile);
+    const main = findOutfitItem(profile, outfit.mainItemId, 'main') || { ...DEFAULT_WARDROBE_ITEM };
+    const accessories = outfit.accessoryItemIds
+        .map((id) => findOutfitItem(profile, id, 'accessory'))
+        .filter(Boolean);
+    return [main, ...accessories];
+}
+function getOutfitDimensionTotals(profile) {
+    const totals = Object.fromEntries(WARDROBE_DIMENSIONS.map((key) => [key, 0]));
+    for (const item of getOutfitItems(profile)) {
+        for (const key of WARDROBE_DIMENSIONS)
+            totals[key] += clampNumber(item[key], -10, 10, 0);
+    }
+    for (const key of WARDROBE_DIMENSIONS)
+        totals[key] = clampNumber(totals[key], 0, 10, 0);
+    return totals;
+}
+function calculatePregWearPressure(profile) {
+    const pregnant = profile?.pregnant || {};
+    const effectiveDays = clampNumber(pregnant.effectivePregnantDays, 0, 9999, 0);
+    if (effectiveDays <= 0)
+        return 0;
+    const fetalEnergyDrain = clampNumber(pregnant.fetalEnergyDrain, 0, 9999, 0);
+    const fullPregnancyDays = Object.values(PREGNANCY_STAGE_DAYS).reduce((sum, value) => sum + (Number(value) || 0), 0) || 280;
+    const progress = Math.min(1.25, effectiveDays / fullPregnancyDays);
+    const basePressure = 0.5;
+    const progressPressure = Math.pow(progress, 1.35) * 6;
+    const fetalPressure = Math.max(0, fetalEnergyDrain - 0.1) * 1.5;
+    return clampNumber(basePressure + progressPressure + fetalPressure, 0, 10, 0);
+}
+// 产后恢复的衣着压力：从产后初期的水平随恢复进度线性递减到 0（体型回缩、乳胀消退）。
+const POSTPARTUM_START_WEAR_PRESSURE = 4;
+function calculatePostpartumWearPressure(profile) {
+    const days = clampNumber(profile?.base?.days, 0, 9999, 0);
+    const recoveryDays = getStageLimit(profile, '产后恢复') || 56;
+    const progress = Math.min(1, days / recoveryDays);
+    return clampNumber(POSTPARTUM_START_WEAR_PRESSURE * (1 - progress), 0, 10, 0);
+}
+function refreshOutfitPregFit(profile) {
+    if (!profile?.wardrobe?.enabled)
+        return null;
+    const outfit = ensureOutfitState(profile);
+    const stage = String(profile?.base?.stage || '');
+    const inPostpartum = stage === '产后恢复';
+    if (!inPostpartum && !isTruePregnancyStage(stage) && stage !== '产兆前驱' && !LABOR_STAGES.includes(stage)) {
+        outfit.pregFit = null;
+        return outfit;
+    }
+    const totals = getOutfitDimensionTotals(profile);
+    const pregWearPressure = inPostpartum ? calculatePostpartumWearPressure(profile) : calculatePregWearPressure(profile);
+    outfit.pregFit = {
+        pregWearPressure,
+        gap: {
+            masking: clampNumber(totals.masking - pregWearPressure, -20, 20, 0),
+            support: clampNumber(totals.support - pregWearPressure, -20, 20, 0),
+            capacity: clampNumber(totals.capacity - pregWearPressure, -20, 20, 0),
+            convenience: clampNumber(totals.convenience - pregWearPressure, -20, 20, 0),
+        },
+    };
+    return outfit;
+}
+function getNaturalOvulationDailyAmount(profile) {
+    const ovulationAmount = clampNumber(profile?.bio?.orgasmOvulationAmount, 0, 100, 1);
+    const menstrualRatio = clampNumber(profile?.bio?.menstrualLengthRatio, 0.1, 20, 1);
+    const ovulationDays = Math.max(1, MENSTRUAL_STAGE_DAYS['排卵期'] * menstrualRatio);
+    return Math.max(1, Math.ceil(ovulationAmount / ovulationDays));
+}
+function getImplantationDays(profile) {
+    const cycleLength = getMenstrualCycleLength(profile);
+    return Math.max(1, (6 * cycleLength) / 28);
+}
+function getObstetricPregnancyOffsetDays(profile) {
+    return Math.max(0, getMenstrualCycleLength(profile) / 2);
+}
+function randomNumber(min, max) {
+    return Math.random() * (max - min) + min;
+}
+function randomInt(min, max) {
+    return Math.floor(randomNumber(min, max + 1));
+}
+function wrapAngle(angle) {
+    let next = Number(angle) || 0;
+    while (next < 0)
+        next += 360;
+    while (next >= 360)
+        next -= 360;
+    return next;
+}
+function angleDistance(from, to) {
+    const direct = Math.abs(from - to);
+    return Math.min(direct, 360 - direct);
+}
+function shuffleInPlace(list) {
+    for (let index = list.length - 1; index > 0; index -= 1) {
+        const swapIndex = randomInt(0, index);
+        [list[index], list[swapIndex]] = [list[swapIndex], list[index]];
+    }
+}
+function getBaseRace(race) {
+    return getBaseRaceName(race);
+}
+function getRaceComponents(race) {
+    return getRaceComponents$1(race);
+}
+function isSameRaceGroup(leftRace, rightRace) {
+    const left = getRaceComponents(leftRace).sort();
+    const right = getRaceComponents(rightRace).sort();
+    if (left.length === 0 || right.length === 0 || left.length !== right.length)
+        return false;
+    return left.every((value, index) => value === right[index]);
+}
+function deriveFetusRace(motherRace, fatherRace) {
+    // 血统显示保留每个种族的 -装饰子项；生理运算另用 getRaceComponents 取基础种族。
+    const motherParts = getRaceDescriptorComponents(motherRace);
+    const fatherParts = getRaceDescriptorComponents(fatherRace);
+    const combined = [...fatherParts, ...motherParts].filter(Boolean);
+    if (combined.length === 0)
+        return '人类';
+    // 必须去重，否则同族生育会得到「人类x人类」这种自我混血的种族。
+    // race_prompt_context.js 的同名函数一直有去重，这里漏了。
+    const unique = [];
+    for (const part of combined) {
+        if (!unique.includes(part))
+            unique.push(part);
+    }
+    return unique.join('x');
+}
+function deriveFetusEmbryoType(race) {
+    return getEmbryoTypeByRace(race);
+}
+function deriveFetusGender(race) {
+    const profile = getMergedRacePhysiologyProfile(race);
+    if (profile?.genderRatio === -1)
+        return '无';
+    if (profile?.genderRatio === null)
+        return '双';
+    const ratio = clampNumber(profile?.genderRatio, 0, 100, 50);
+    return Math.random() < (ratio / 100) ? '男' : '女';
+}
+function getConceptionWeight(stage, gender, weightRatio = 1.0) {
+    const stageWeights = {
+        黄体期: 1.2,
+        排卵期: 1.1,
+        卵泡期: 1.0,
+        产后恢复: 1 / 1.1,
+        月经期: 1 / 1.2,
+    };
+    const baseWeight = stageWeights[String(stage || '')] || 1.0;
+    const fluctuation = Math.exp(randomNumber(-0.083, 0.083));
+    const sexMultiplier = gender === '男' ? 1.05 : gender === '女' ? 1 / 1.05 : 1.0;
+    return Math.max(0.33, Math.min(3.0, Number(baseWeight * fluctuation * sexMultiplier * weightRatio)));
+}
+function getConceptionWeightRatio(profile, sperm) {
+    const motherBreedTolerance = clampNumber(profile?.bio?.breedTolerance, 0.1, 100, 1.0);
+    const fatherProfile = getMergedRacePhysiologyProfile(sperm?.race);
+    const fatherBreedTolerance = clampNumber(fatherProfile?.breedTolerance, 0.1, 100, 1.0);
+    const dominance = (fatherBreedTolerance - motherBreedTolerance) / Math.max(motherBreedTolerance + fatherBreedTolerance, 0.1);
+    return clampNumber(1 + (dominance * 0.65), 0.625, 1.6, 1.0);
+}
+function getDerivedTypeSeed(motherDerivedType, fatherDerivedType) {
+    const mother = motherDerivedType ? String(motherDerivedType) : null;
+    const father = fatherDerivedType ? String(fatherDerivedType) : null;
+    if (!mother && !father)
+        return { affinity: 0, progress: 0 };
+    if (mother && father && mother === father)
+        return { affinity: 30, progress: 30 };
+    if (mother && father && mother !== father)
+        return { affinity: -30, progress: -30 };
+    return { affinity: 15, progress: 0 };
+}
+function updateDerivedTypeProgress(profile, tick) {
+    const base = profile.base || {};
+    const pregnant = profile.pregnant || {};
+    const fetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [];
+    const motherDerivedType = base.derivedType ? String(base.derivedType) : null;
+    const passedDays = Math.max(0, tick.passedDays);
+    if (fetuses.length === 0 || passedDays <= 0)
+        return;
+    for (const fetus of fetuses) {
+        const fatherDerivedType = fetus?.fatherDerivedType ? String(fetus.fatherDerivedType) : null;
+        if (!motherDerivedType && !fatherDerivedType)
+            continue;
+        const currentProgress = clampNumber(fetus?.maternalDerivedTypeProgress, -100, 100, 0);
+        if (currentProgress === 0)
+            continue;
+        const direction = Math.sign(currentProgress);
+        const affinity = clampNumber(fetus?.affinity, -50, 50, 0);
+        const alignment = direction * affinity;
+        const factor = clampNumber(1 + (alignment / 30), 0, 3, 1);
+        const activeDerivedType = direction > 0 ? motherDerivedType : fatherDerivedType;
+        const inheritanceSpeed = clampNumber(getDerivedTypeInheritanceProfile(activeDerivedType)?.inheritanceSpeed, 0.2, 3.0, 1.0);
+        const delta = direction * passedDays * 3 * factor * inheritanceSpeed;
+        fetus.maternalDerivedTypeProgress = clampNumber(currentProgress + delta, -100, 100, currentProgress);
+    }
+    pregnant.fetuses = fetuses;
+    profile.pregnant = pregnant;
+}
+function cloneIdenticalFetus(fetus) {
+    return {
+        ...fetus,
+        embryoId: null,
+        fusionCheckedWith: [],
+        providerSources: Array.isArray(fetus?.providerSources) ? [...fetus.providerSources] : undefined,
+        chimera: fetus?.chimera ? cloneValue(fetus.chimera) : undefined,
+        tendencyAngle: randomInt(0, 360),
+        affinity: 0,
+    };
+}
+function uniqueNonEmptyStrings(values) {
+    const result = [];
+    for (const value of values || []) {
+        const text = String(value ?? '').trim();
+        if (text && !result.includes(text))
+            result.push(text);
+    }
+    return result;
+}
+function getNextEmbryoId(fetuses) {
+    return fetuses.reduce((max, fetus) => {
+        const value = Number(fetus?.embryoId);
+        return Number.isInteger(value) && value > max ? value : max;
+    }, 0) + 1;
+}
+function ensureEmbryoMetadata(pregnant) {
+    const fetuses = Array.isArray(pregnant?.fetuses) ? pregnant.fetuses : [];
+    const used = new Set();
+    let nextId = getNextEmbryoId(fetuses);
+    for (const fetus of fetuses) {
+        let id = Number(fetus?.embryoId);
+        if (!Number.isInteger(id) || id <= 0 || used.has(id)) {
+            id = nextId;
+            nextId += 1;
+        }
+        fetus.embryoId = id;
+        used.add(id);
+    }
+    for (const fetus of fetuses) {
+        fetus.fusionCheckedWith = [...new Set((Array.isArray(fetus?.fusionCheckedWith) ? fetus.fusionCheckedWith : [])
+                .map(Number)
+                .filter((id) => Number.isInteger(id) && id > 0 && id !== fetus.embryoId))];
+    }
+    return fetuses;
+}
+function getFetusFatherSources(fetus) {
+    return uniqueNonEmptyStrings(Array.isArray(fetus?.chimera?.fatherSources)
+        ? fetus.chimera.fatherSources
+        : String(fetus?.fathers || '').split(/\s*[×Xx]\s*/));
+}
+function getFetusMaternalSources(fetus, carrierName) {
+    if (Array.isArray(fetus?.providerSources) && fetus.providerSources.length > 0) {
+        return uniqueNonEmptyStrings(fetus.providerSources);
+    }
+    const provider = String(fetus?.provider || '').trim();
+    return uniqueNonEmptyStrings([provider || carrierName]);
+}
+function combineRaceDescriptors(...values) {
+    return uniqueNonEmptyStrings(values.flatMap((value) => getRaceDescriptorComponents(value))).join('x') || '人类';
+}
+function calculateChimeraFusionProbability(fetusA, fetusB) {
+    const derivedA = String(fetusA?.fatherDerivedType || '').trim();
+    const derivedB = String(fetusB?.fatherDerivedType || '').trim();
+    let derivedMultiplier = 1;
+    if (derivedA && derivedB) {
+        if (derivedA !== derivedB)
+            return 0;
+        derivedMultiplier = 1.5;
+    }
+    else if (derivedA || derivedB) {
+        derivedMultiplier = 0.5;
+    }
+    const raceA = String(fetusA?.race || '人类');
+    const raceB = String(fetusB?.race || '人类');
+    const physiologyA = getMergedRacePhysiologyProfile(raceA);
+    const physiologyB = getMergedRacePhysiologyProfile(raceB);
+    const identicalA = clampNumber(physiologyA?.identicalProbability, 0, 100, 5);
+    const identicalB = clampNumber(physiologyB?.identicalProbability, 0, 100, 5);
+    const difficultyA = clampNumber(physiologyA?.impregnationDifficulty, 0.1, 100, 1);
+    const difficultyB = clampNumber(physiologyB?.impregnationDifficulty, 0.1, 100, 1);
+    const identicalFactor = Math.sqrt(identicalA * identicalB);
+    const difficultyFactor = 2 / (1 + Math.sqrt(difficultyA * difficultyB));
+    const typeMultiplier = String(fetusA?.embryoType || deriveFetusEmbryoType(raceA))
+        === String(fetusB?.embryoType || deriveFetusEmbryoType(raceB)) ? 1 : 0.25;
+    return clampNumber(identicalFactor * difficultyFactor * typeMultiplier * derivedMultiplier, 0, 75, 0);
+}
+function createChimeraFetus(profile, carrierName, fetusA, fetusB, embryoId) {
+    const fathers = uniqueNonEmptyStrings([...getFetusFatherSources(fetusA), ...getFetusFatherSources(fetusB)]);
+    const maternalSources = uniqueNonEmptyStrings([
+        ...getFetusMaternalSources(fetusA, carrierName),
+        ...getFetusMaternalSources(fetusB, carrierName),
+    ]);
+    const genderSources = [String(fetusA?.gender || '未知'), String(fetusB?.gender || '未知')];
+    const hasMale = genderSources.includes('男');
+    const hasFemale = genderSources.includes('女');
+    const gender = hasMale && hasFemale
+        ? '待定'
+        : (genderSources[0] === genderSources[1] ? genderSources[0] : (genderSources.includes('双') ? '双' : genderSources[0]));
+    const fatherDerivedType = fetusA?.fatherDerivedType || fetusB?.fatherDerivedType || null;
+    const race = combineRaceDescriptors(fetusA?.race, fetusB?.race);
+    const motherDerivedType = profile?.base?.derivedType ? String(profile.base.derivedType) : null;
+    const derivedSeed = getDerivedTypeSeed(motherDerivedType, fatherDerivedType);
+    const providerSources = maternalSources.length > 1
+        ? maternalSources
+        : maternalSources.filter((source) => source !== carrierName);
+    return {
+        embryoId,
+        fusionCheckedWith: [],
+        fathers: fathers.join(' × ') || '未知',
+        provider: providerSources.length === 0 ? null : providerSources.join(' × '),
+        providerSources,
+        race,
+        fatherRace: combineRaceDescriptors(fetusA?.fatherRace, fetusB?.fatherRace),
+        fatherDerivedType,
+        gender,
+        embryoType: deriveFetusEmbryoType(race),
+        weight: (clampNumber(fetusA?.weight, 0.33, 3, 1) + clampNumber(fetusB?.weight, 0.33, 3, 1)) / 2,
+        tendencyAngle: randomInt(0, 360),
+        affinity: derivedSeed.affinity,
+        maternalDerivedTypeProgress: derivedSeed.progress,
+        chimera: {
+            sourceCount: (Number(fetusA?.chimera?.sourceCount) || 1) + (Number(fetusB?.chimera?.sourceCount) || 1),
+            fatherSources: fathers,
+            maternalSources,
+            genderSources,
+        },
+    };
+}
+function applyChimeraFusion(profile, carrierName) {
+    const pregnant = profile.pregnant || {};
+    const fetuses = ensureEmbryoMetadata(pregnant);
+    if (clampNumber(profile?.base?.fertilizationDays, 0, 9999, 0) <= 1 || fetuses.length < 2)
+        return;
+    const candidates = fetuses.filter((fetus) => !fetus?.chimera);
+    const pairs = [];
+    for (let left = 0; left < candidates.length; left += 1) {
+        for (let right = left + 1; right < candidates.length; right += 1) {
+            const fetusA = candidates[left];
+            const fetusB = candidates[right];
+            if (!fetusA.fusionCheckedWith.includes(fetusB.embryoId)
+                && !fetusB.fusionCheckedWith.includes(fetusA.embryoId)) {
+                pairs.push([fetusA, fetusB]);
+            }
+        }
+    }
+    shuffleInPlace(pairs);
+    const consumed = new Set();
+    const fused = [];
+    let nextId = getNextEmbryoId(fetuses);
+    for (const [fetusA, fetusB] of pairs) {
+        fetusA.fusionCheckedWith.push(fetusB.embryoId);
+        fetusB.fusionCheckedWith.push(fetusA.embryoId);
+        if (consumed.has(fetusA.embryoId) || consumed.has(fetusB.embryoId))
+            continue;
+        const probability = calculateChimeraFusionProbability(fetusA, fetusB);
+        if (probability > 0 && Math.random() < probability / 100) {
+            consumed.add(fetusA.embryoId);
+            consumed.add(fetusB.embryoId);
+            fused.push(createChimeraFetus(profile, carrierName, fetusA, fetusB, nextId));
+            nextId += 1;
+        }
+    }
+    if (fused.length > 0)
+        pregnant.fetuses = [...fetuses.filter((fetus) => !consumed.has(fetus.embryoId)), ...fused];
+    pregnant.fetusesCount = pregnant.fetuses.length;
+}
+function resolvePendingChimeraGenders(fetuses) {
+    for (const fetus of fetuses) {
+        if (fetus?.gender !== '待定')
+            continue;
+        const roll = Math.random();
+        fetus.gender = roll < 0.4 ? '男' : roll < 0.8 ? '女' : '双';
+    }
+}
+function applyIdenticalSplit(profile) {
+    const pregnant = profile.pregnant || {};
+    const fetuses = ensureEmbryoMetadata(pregnant);
+    if (fetuses.length === 0)
+        return;
+    const result = [];
+    let nextId = getNextEmbryoId(fetuses);
+    for (const baseFetus of fetuses) {
+        result.push(baseFetus);
+        const physiology = getMergedRacePhysiologyProfile(baseFetus?.race);
+        const splitRate = clampNumber(physiology?.identicalProbability, 0, 100, clampNumber(profile?.bio?.identicalProbability, 0, 100, 5)) / 100;
+        let targetCount = 1;
+        if (splitRate > 0 && Math.random() < splitRate) {
+            targetCount = 2;
+            if (Math.random() < splitRate * splitRate) {
+                targetCount = 3;
+                if (Math.random() < splitRate * splitRate * splitRate)
+                    targetCount = 4;
+            }
+        }
+        while (targetCount > 1) {
+            const clone = cloneIdenticalFetus(baseFetus);
+            clone.embryoId = nextId;
+            nextId += 1;
+            result.push(clone);
+            targetCount -= 1;
+        }
+    }
+    pregnant.fetuses = result;
+    pregnant.fetusesCount = result.length;
+}
+/**
+ * @param profile 承载妊娠的角色（决定孕育环境：体重倍率、亲和度种子）
+ * @param options.geneticProfile 提供卵子的一方；代孕／注卵时与承载者不同。
+ *        胎儿种族按她推导；母系衍生类型始终来自实际孕育胚胎的承载者。
+ */
+function createSimpleFetus(profile, sperm, cycleStage, options = {}) {
+    const geneticProfile = options.geneticProfile || profile;
+    const motherRace = parseRaceDescriptor(geneticProfile?.base?.race || '人类').race || '人类';
+    const fatherRace = parseRaceDescriptor(sperm?.race || motherRace || '人类').race || motherRace || '人类';
+    const fetusRace = deriveFetusRace(motherRace, fatherRace);
+    const gender = deriveFetusGender(fetusRace);
+    const weightRatio = getConceptionWeightRatio(profile, sperm);
+    const motherDerivedType = profile?.base?.derivedType ? String(profile.base.derivedType) : null;
+    const fatherDerivedType = sperm?.derivedType ? String(sperm.derivedType) : null;
+    const derivedSeed = getDerivedTypeSeed(motherDerivedType, fatherDerivedType);
+    return {
+        embryoId: null,
+        fusionCheckedWith: [],
+        fathers: String(sperm?.male || '未知'),
+        // 自然受精恒为 null；代孕／注卵由植入工具指定归属
+        provider: options.provider ? String(options.provider) : null,
+        providerSources: options.provider ? [String(options.provider)] : [],
+        race: fetusRace,
+        fatherRace,
+        fatherDerivedType,
+        gender,
+        embryoType: deriveFetusEmbryoType(fetusRace),
+        weight: getConceptionWeight(cycleStage, gender, weightRatio),
+        tendencyAngle: randomInt(0, 360),
+        affinity: derivedSeed.affinity,
+        maternalDerivedTypeProgress: derivedSeed.progress,
+    };
+}
+function updateFetalEnergyDrain(profile) {
+    const fetuses = Array.isArray(profile?.pregnant?.fetuses) ? profile.pregnant.fetuses : [];
+    const effectivePregnantDays = clampNumber(profile?.pregnant?.effectivePregnantDays, 0, 9999, 0);
+    const motherBreedTolerance = clampNumber(profile?.bio?.breedTolerance, 0.1, 100, 1.0);
+    profile.pregnant.fetalEnergyDrain = fetuses.reduce((sum, fetus) => {
+        const weight = clampNumber(fetus?.weight, 0.33, 3.0, 1.0);
+        const ageInDays = effectivePregnantDays * weight;
+        const fetalAgeWeeks = ageInDays / 7;
+        const fetalLoad = fetalAgeWeeks / 40;
+        const fetusEnergyDrain = fetalLoad / motherBreedTolerance;
+        return sum + fetusEnergyDrain;
+    }, 0);
+}
+function getEmbryoTypeModifiers(embryoType) {
+    switch (String(embryoType || '胎生')) {
+        case '卵生':
+            return { recoveryCoefficient: 0.6 };
+        case '卵胎生':
+            return { recoveryCoefficient: 0.4 };
+        case '胎转卵生':
+            return { recoveryCoefficient: 1.0 };
+        case '不定型':
+            return { recoveryCoefficient: 0.8 };
+        case '胎生':
+        default:
+            return { recoveryCoefficient: 0.2 };
+    }
+}
+function snapshotOriginalPregnancyBio(character) {
+    const runtime = character.runtime || {};
+    if (runtime.originalPregnancyBio)
+        return runtime.originalPregnancyBio;
+    const bio = character?.profile?.bio || {};
+    const snapshot = {
+        gestationSpeciesSpeed: clampNumber(getGestationSpeciesSpeed(character?.profile), 0.1, 20, 1.0),
+        birthDifficulty: clampNumber(bio.birthDifficulty, 0.1, 100, 1.0),
+        breedTolerance: clampNumber(bio.breedTolerance, 0.1, 100, 1.0),
+        recoveryDays: Math.max(1, Math.round(clampNumber(bio.recoveryDays, 1, 9999, 56))),
+    };
+    runtime.originalPregnancyBio = snapshot;
+    character.runtime = runtime;
+    return snapshot;
+}
+function applyPregnancyPhysiology(profile, runtime) {
+    const pregnant = profile.pregnant || {};
+    const fetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [];
+    if (fetuses.length === 0)
+        return false;
+    const originalBio = runtime?.originalPregnancyBio || {
+        gestationSpeciesSpeed: clampNumber(getGestationSpeciesSpeed(profile), 0.1, 20, 1.0),
+        birthDifficulty: clampNumber(profile?.bio?.birthDifficulty, 0.1, 100, 1.0),
+        breedTolerance: clampNumber(profile?.bio?.breedTolerance, 0.1, 100, 1.0),
+        recoveryDays: Math.max(1, Math.round(clampNumber(profile?.bio?.recoveryDays, 1, 9999, 56))),
+    };
+    let totalWeight = 0;
+    let gestationDaysAccumulator = 0;
+    let gestationCount = 0;
+    let birthAccumulator = 0;
+    let birthCount = 0;
+    let toleranceAccumulator = 0;
+    let recoveryAccumulator = 0;
+    for (const fetus of fetuses) {
+        const weight = clampNumber(fetus?.weight, 0.33, 3.0, 1.0);
+        const embryoModifiers = getEmbryoTypeModifiers(fetus?.embryoType);
+        const raceProfile = getMergedRacePhysiologyProfile(fetus?.race) || {};
+        totalWeight += weight;
+        const gestationSpeed = clampNumber(raceProfile.gestationSpeciesSpeed, 0.1, 20, 1.0);
+        gestationDaysAccumulator += 280 / gestationSpeed;
+        gestationCount += 1;
+        birthAccumulator += clampNumber(raceProfile.birthDifficulty, 0.1, 100, 1.0);
+        birthCount += 1;
+        toleranceAccumulator += weight * clampNumber(raceProfile.breedTolerance, 0.1, 100, 1.0);
+        recoveryAccumulator += weight * embryoModifiers.recoveryCoefficient;
+    }
+    const averageGestationDays = gestationDaysAccumulator / Math.max(gestationCount, 1);
+    const averageGestation = averageGestationDays > 0 ? 280 / averageGestationDays : 1.0;
+    const averageBirth = birthAccumulator / Math.max(birthCount, 1);
+    const averageTolerance = toleranceAccumulator / Math.max(totalWeight, 0.33);
+    const averageRecoveryCoefficient = recoveryAccumulator / Math.max(totalWeight, 0.33);
+    const fetusCountModifier = 1 + ((fetuses.length - 1) * 0.08);
+    const toleranceCountModifier = Math.max(0.6, 1 - ((fetuses.length - 1) * 0.04));
+    const gestationModifierMultiplier = getGestationModifierMultiplier(profile);
+    const gestationEffectiveSpeed = clampNumber(averageGestation * gestationModifierMultiplier, 0, 20, averageGestation);
+    const recoveryGestationSpeed = Math.max(0.1, gestationEffectiveSpeed > 0 ? gestationEffectiveSpeed : averageGestation);
+    const birthDifficulty = clampNumber(averageBirth * fetusCountModifier, 0.1, 100, originalBio.birthDifficulty);
+    const breedTolerance = clampNumber(originalBio.breedTolerance * averageTolerance * toleranceCountModifier, 0.1, 100, originalBio.breedTolerance);
+    const recoveryDays = Math.max(1, Math.round(clampNumber(averageRecoveryCoefficient, 0.1, 2.0, 0.2) * (280 / recoveryGestationSpeed) * (birthDifficulty / Math.max(breedTolerance, 0.1))));
+    profile.bio = {
+        ...(profile.bio || {}),
+        gestationSpeciesSpeed: clampNumber(averageGestation, 0.1, 20, 1.0),
+        gestationEffectiveSpeed,
+        birthDifficulty,
+        breedTolerance,
+        recoveryDays,
+    };
+    return true;
+}
+function restorePregnancyPhysiology(profile, runtime) {
+    const originalBio = runtime?.originalPregnancyBio;
+    if (!originalBio)
+        return false;
+    const gestationModifierMultiplier = getGestationModifierMultiplier(profile);
+    profile.bio = {
+        ...(profile.bio || {}),
+        gestationSpeciesSpeed: clampNumber(originalBio.gestationSpeciesSpeed, 0.1, 20, 1.0),
+        gestationEffectiveSpeed: clampNumber(originalBio.gestationSpeciesSpeed * gestationModifierMultiplier, 0, 20, 1.0),
+        birthDifficulty: clampNumber(originalBio.birthDifficulty, 0.1, 100, 1.0),
+        breedTolerance: clampNumber(originalBio.breedTolerance, 0.1, 100, 1.0),
+        recoveryDays: Math.max(1, Math.round(clampNumber(originalBio.recoveryDays, 1, 9999, 56))),
+    };
+    delete runtime.originalPregnancyBio;
+    return true;
+}
+function isObliquePosition(angle, fetus) {
+    if (fetus && (fetus.embryoType === '胎转卵生' || fetus.embryoType === '不定型'))
+        return false;
+    const normalized = wrapAngle(angle);
+    if ((normalized >= 0 && normalized <= 15) || (normalized >= 345 && normalized <= 360))
+        return false;
+    if (normalized >= 165 && normalized <= 195)
+        return false;
+    if ((normalized >= 75 && normalized <= 105) || (normalized >= 265 && normalized <= 285))
+        return false;
+    return true;
+}
+function calculateNearestMainPosition(angle) {
+    const normalized = wrapAngle(angle);
+    const positions = [0, 90, 180, 270];
+    let nearest = positions[0];
+    let minDiff = angleDistance(normalized, positions[0]);
+    for (const position of positions) {
+        const diff = angleDistance(normalized, position);
+        if (diff < minDiff) {
+            minDiff = diff;
+            nearest = position;
+        }
+    }
+    return nearest;
+}
+function isTransversePosition(angle) {
+    const normalized = wrapAngle(angle);
+    return (normalized >= 75 && normalized <= 105) || (normalized >= 255 && normalized <= 285);
+}
+function getRealisticLaborObstruction(fetuses) {
+    if (!Array.isArray(fetuses) || fetuses.length === 0)
+        return null;
+    const firstAngle = Number.isFinite(Number(fetuses[0]?.tendencyAngle)) ? wrapAngle(fetuses[0].tendencyAngle) : 0;
+    if (isTransversePosition(firstAngle))
+        return '首位胎儿呈横位';
+    if (fetuses.length < 2)
+        return null;
+    const secondAngle = Number.isFinite(Number(fetuses[1]?.tendencyAngle)) ? wrapAngle(fetuses[1].tendencyAngle) : 0;
+    if (Math.abs(angleDistance(firstAngle, secondAngle) - 180) <= 15)
+        return '前两胎胎位互锁';
+    return null;
+}
+function calculatePositionDifficulty(angle, fetus) {
+    const normalized = wrapAngle(angle);
+    const embryoType = String(fetus?.embryoType || '胎生');
+    if (embryoType === '胎转卵生') {
+        const targetAngles = [0, 90, 180, 270, 360];
+        let minDistance = 360;
+        for (const targetAngle of targetAngles) {
+            let distance = Math.abs(normalized - targetAngle);
+            if (targetAngle === 360)
+                distance = Math.min(distance, Math.abs(normalized - 0));
+            if (distance < minDistance)
+                minDistance = distance;
+        }
+        if (minDistance <= 5)
+            return 1.5;
+        return Math.min(2.25, 1.5 + ((minDistance - 5) * 0.075));
+    }
+    if (embryoType === '不定型') {
+        const race = String(fetus?.race || '人类');
+        const combinedSeed = Math.round(normalized * 1000) + race.charCodeAt(0) + race.charCodeAt(Math.max(0, race.length - 1));
+        const seededValue = ((combinedSeed * 1664525 + 1013904223) % 2147483648) / 2147483648;
+        return 1.0 + seededValue;
+    }
+    if (embryoType === '卵胎生') {
+        if ((normalized >= 0 && normalized <= 5) || (normalized >= 355 && normalized <= 360))
+            return 1.0;
+        if ((normalized >= 0 && normalized <= 15) || (normalized >= 345 && normalized <= 360))
+            return 1.25;
+        if (normalized >= 175 && normalized <= 185)
+            return 1.5;
+        if (normalized >= 165 && normalized <= 195)
+            return 1.75;
+        if ((normalized >= 85 && normalized <= 95) || (normalized >= 275 && normalized <= 285))
+            return 2.0;
+        if ((normalized >= 75 && normalized <= 105) || (normalized >= 265 && normalized <= 285))
+            return 2.25;
+        return 1.33;
+    }
+    if (embryoType === '卵生') {
+        if ((normalized >= 0 && normalized <= 15) || (normalized >= 345 && normalized <= 360))
+            return 1.0;
+        if (normalized >= 165 && normalized <= 195)
+            return 1.0;
+        if ((normalized >= 75 && normalized <= 105) || (normalized >= 265 && normalized <= 285))
+            return 1.5;
+        return 1.33;
+    }
+    if ((normalized >= 0 && normalized <= 15) || (normalized >= 345 && normalized <= 360))
+        return 1.0;
+    if (normalized >= 165 && normalized <= 195)
+        return 1.5;
+    if ((normalized >= 75 && normalized <= 105) || (normalized >= 265 && normalized <= 285))
+        return 2.0;
+    return 1.33;
+}
+function updateFetalPositions(profile, tick, female) {
+    const base = profile.base || {};
+    const pregnant = profile.pregnant || {};
+    const stage = String(base.stage || '');
+    const fetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [];
+    if (fetuses.length === 0)
+        return;
+    const gestationSpeed = clampNumber(getGestationEffectiveSpeed(profile), 0, 20, 1);
+    const iterations = Math.max(0, tick.passedDays);
+    if (iterations <= 0 || !PREGNANCY_STAGES.includes(stage))
+        return;
+    for (let step = 0; step < iterations; step += 1) {
+        const totalWeight = fetuses.reduce((sum, fetus) => sum + clampNumber(fetus?.weight, 0.33, 3.0, 1.0), 0);
+        if (stage === '孕晚期' && fetuses.length > 1) {
+            const positionedIndexes = [];
+            for (let index = 0; index < fetuses.length; index += 1) {
+                const fetus = fetuses[index];
+                if (!Number.isFinite(Number(fetus?.tendencyAngle)))
+                    fetus.tendencyAngle = randomInt(0, 360);
+                const angle = wrapAngle(fetus.tendencyAngle);
+                if ((angle >= 0 && angle <= 15) || (angle >= 345 && angle <= 360))
+                    positionedIndexes.push(index);
+            }
+            if (positionedIndexes.length > 0) {
+                const targetIndex = positionedIndexes[randomInt(0, positionedIndexes.length - 1)];
+                const targetFetus = fetuses[targetIndex];
+                const adjustmentSuccessRate = clampNumber(targetFetus?.weight, 0.33, 3.0, 1.0) / Math.max(totalWeight, 0.33);
+                if (Math.random() > adjustmentSuccessRate) {
+                    targetFetus.tendencyAngle = wrapAngle(Number(targetFetus.tendencyAngle || 0) + (randomInt(-15, 15) * gestationSpeed));
+                }
+            }
+        }
+        for (const fetus of fetuses) {
+            if (!Number.isFinite(Number(fetus?.tendencyAngle)))
+                fetus.tendencyAngle = randomInt(0, 360);
+            if (stage === '逾期')
+                continue;
+            let adjustmentSuccessRate = 1;
+            if (fetuses.length > 1) {
+                adjustmentSuccessRate = clampNumber(fetus?.weight, 0.33, 3.0, 1.0) / Math.max(totalWeight, 0.33);
+            }
+            if (Math.random() > adjustmentSuccessRate)
+                continue;
+            const currentAngle = wrapAngle(fetus.tendencyAngle);
+            if (stage === '孕早期') {
+                fetus.tendencyAngle = wrapAngle(currentAngle + (randomInt(-45, 45) * gestationSpeed));
+            }
+            else if (stage === '孕中期') {
+                fetus.tendencyAngle = wrapAngle(currentAngle + (randomInt(-30, 30) * gestationSpeed));
+            }
+            else if (stage === '孕晚期') {
+                if (currentAngle >= 0 && currentAngle <= 180) {
+                    fetus.tendencyAngle = Math.max(0, currentAngle - (randomInt(1, 5) * gestationSpeed));
+                }
+                else {
+                    const shifted = currentAngle + (randomInt(1, 5) * gestationSpeed);
+                    fetus.tendencyAngle = shifted >= 360 ? 0 : shifted;
+                }
+                if (fetus.tendencyAngle === 0 || fetus.tendencyAngle === 360) {
+                    fetus.tendencyAngle = wrapAngle(Number(fetus.tendencyAngle || 0) + (randomInt(-2, 2) * gestationSpeed));
+                }
+            }
+            else if (stage === '临产期') {
+                const targetAngle = calculateNearestMainPosition(currentAngle);
+                const diffRaw = targetAngle - currentAngle;
+                let diff = diffRaw;
+                if (diff > 180)
+                    diff -= 360;
+                if (diff < -180)
+                    diff += 360;
+                if (angleDistance(currentAngle, targetAngle) > 15) {
+                    fetus.tendencyAngle = wrapAngle(currentAngle + (Math.sign(diff) * randomInt(1, 3) * gestationSpeed));
+                }
+            }
+        }
+        if (fetuses.length > 1) {
+            const originalOrder = fetuses.slice();
+            if (stage === '孕早期' || stage === '孕中期') {
+                shuffleInPlace(fetuses);
+            }
+            else if (stage === '孕晚期') {
+                const oblique = [];
+                const total = fetuses.reduce((sum, fetus) => sum + clampNumber(fetus?.weight, 0.33, 3.0, 1.0), 0);
+                for (let index = fetuses.length - 1; index >= 0; index -= 1) {
+                    const fetus = fetuses[index];
+                    if (isObliquePosition(fetus?.tendencyAngle || 0, fetus)) {
+                        oblique.push({
+                            index,
+                            fetus,
+                            rate: clampNumber(fetus?.weight, 0.33, 3.0, 1.0) / Math.max(total, 0.33),
+                        });
+                    }
+                }
+                for (const entry of oblique) {
+                    if (Math.random() < entry.rate) {
+                        fetuses.splice(entry.index, 1);
+                        const newIndex = randomInt(0, fetuses.length);
+                        fetuses.splice(newIndex, 0, entry.fetus);
+                    }
+                }
+            }
+            else if (stage === '临产期') {
+                const total = fetuses.reduce((sum, fetus) => sum + clampNumber(fetus?.weight, 0.33, 3.0, 1.0), 0);
+                if (fetuses.length > 1) {
+                    const firstRate = clampNumber(fetuses[0]?.weight, 0.33, 3.0, 1.0) / Math.max(total, 0.33);
+                    if (Math.random() < firstRate) {
+                        [fetuses[0], fetuses[1]] = [fetuses[1], fetuses[0]];
+                    }
+                }
+                if (fetuses.length > 2) {
+                    const lastIndex = fetuses.length - 1;
+                    const lastRate = clampNumber(fetuses[lastIndex]?.weight, 0.33, 3.0, 1.0) / Math.max(total, 0.33);
+                    if (Math.random() < lastRate) {
+                        [fetuses[lastIndex], fetuses[lastIndex - 1]] = [fetuses[lastIndex - 1], fetuses[lastIndex]];
+                    }
+                }
+            }
+            const orderChanged = fetuses.some((fetus, index) => fetus !== originalOrder[index]);
+            if (orderChanged) {
+                profile.notify = {
+                    ...(profile.notify || {}),
+                    secondly: `${female}的胚胎分布发生了变化`,
+                };
+            }
+        }
+    }
+    pregnant.fetuses = fetuses;
+    pregnant.fetusesCount = fetuses.length;
+    profile.pregnant = pregnant;
+}
+function updateProdromalFetalPositions(profile, tick) {
+    const base = profile.base || {};
+    const pregnant = profile.pregnant || {};
+    const stage = String(base.stage || '');
+    const fetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [];
+    if (fetuses.length === 0 || stage !== '产兆前驱')
+        return;
+    const passedHours = Math.max(0, tick.passedHours);
+    if (passedHours <= 0)
+        return;
+    const birthDifficulty = clampNumber(profile?.bio?.birthDifficulty, 0.1, 100, 1);
+    for (const fetus of fetuses) {
+        const currentAngle = Number.isFinite(Number(fetus?.tendencyAngle)) ? wrapAngle(fetus.tendencyAngle) : randomInt(0, 360);
+        fetus.tendencyAngle = currentAngle;
+        if (!isObliquePosition(currentAngle, fetus))
+            continue;
+        const targetAngle = calculateNearestMainPosition(currentAngle);
+        let diff = targetAngle - currentAngle;
+        if (diff > 180)
+            diff -= 360;
+        if (diff < -180)
+            diff += 360;
+        const adjustment = Math.min(angleDistance(currentAngle, targetAngle), (passedHours * 5) / birthDifficulty);
+        fetus.tendencyAngle = wrapAngle(currentAngle + (Math.sign(diff) * adjustment));
+    }
+    pregnant.fetuses = fetuses;
+    profile.pregnant = pregnant;
+}
+function stageAllowsSpermRetention(stage) {
+    return MENSTRUAL_STAGES.includes(stage) || PREGNANCY_STAGES.includes(stage) || stage === '产后恢复' || stage === '假孕期';
+}
+function processSpermLifecycle(profile, stage, tick) {
+    const base = profile.base || {};
+    const sperms = Array.isArray(base.sperms) ? base.sperms.map((item) => ({ ...item })) : [];
+    if (sperms.length === 0) {
+        base.sperms = [];
+        return;
+    }
+    if (stage === '月经期' && tick.passedHours > 0) {
+        base.sperms = [];
+        return;
+    }
+    if (!stageAllowsSpermRetention(stage)) {
+        base.sperms = [];
+        return;
+    }
+    base.sperms = sperms
+        .map((item) => ({
+        ...item,
+        value: Math.max(0, clampNumber(item?.value, 0, 999999, 0) - (tick.deltaDays * 10)),
+    }))
+        .filter((item) => item.value > 0);
+}
+function processSimpleConception(profile, tick, notify, name) {
+    const base = profile.base || {};
+    const pregnant = profile.pregnant || {};
+    const stage = String(base.stage || '');
+    const deltaDays = tick.deltaDays;
+    const fullDays = tick.passedDays;
+    const passedHours = tick.passedHours;
+    const allowsNaturalConception = [...MENSTRUAL_STAGES, '产后恢复'].includes(stage);
+    if (allowsNaturalConception) {
+        if (stage === '排卵期' && fullDays > 0) {
+            base.eggs = clampNumber(base.eggs, 0, 99, 0) + (getNaturalOvulationDailyAmount(profile) * fullDays);
+        }
+        if (stage === '月经期' && passedHours > 0) {
+            base.eggs = 0;
+        }
+        else if (base.eggs > 0 && fullDays > 0 && stage !== '排卵期') {
+            base.eggs = Math.max(0, clampNumber(base.eggs, 0, 99, 0) - fullDays);
+        }
+        const sperms = Array.isArray(base.sperms) ? base.sperms.map((item) => ({ ...item })) : [];
+        const availableSperms = sperms.filter((item) => clampNumber(item?.value, 0, 999999, 0) > 0);
+        let eggs = clampNumber(base.eggs, 0, 99, 0);
+        const femaleDifficulty = clampNumber(profile?.bio?.impregnationDifficulty, 0.1, 100, 1.0);
+        while (eggs > 0 && availableSperms.length > 0) {
+            const totalSperm = availableSperms.reduce((sum, item) => sum + clampNumber(item?.value, 0, 999999, 0), 0);
+            let winner = null;
+            for (const sperm of availableSperms) {
+                const share = totalSperm > 0 ? clampNumber(sperm?.value, 0, 999999, 0) / totalSperm : 0;
+                const maleDifficulty = clampNumber(getMergedRacePhysiologyProfile(sperm?.race)?.impregnationDifficulty, 0.1, 100, 1.0);
+                const isSameRace = isSameRaceGroup(profile?.base?.race, sperm?.race);
+                let effectiveDifficulty = isSameRace ? femaleDifficulty : (femaleDifficulty + maleDifficulty);
+                const femaleEmbryoType = deriveFetusEmbryoType(profile?.base?.race);
+                const maleEmbryoType = deriveFetusEmbryoType(sperm?.race);
+                if (femaleEmbryoType !== maleEmbryoType)
+                    effectiveDifficulty *= 1.5;
+                const spermBaseChance = Math.max(0.001, Math.min(0.8, (deltaDays * 12 * 0.5) / effectiveDifficulty));
+                const spermChance = Math.max(0.001, Math.min(0.8, spermBaseChance * share));
+                if (Math.random() <= spermChance) {
+                    winner = sperm;
+                    break;
+                }
+            }
+            if (winner) {
+                pregnant.fetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [];
+                pregnant.fetuses.push(createSimpleFetus(profile, winner, stage));
+                notify.secondly = `${name}受精成功`;
+                eggs -= 1;
+            }
+            break;
+        }
+        base.eggs = eggs;
+    }
+    const hasPreimplantationEmbryos = !isPregnancyStage(stage)
+        && Array.isArray(pregnant.fetuses)
+        && pregnant.fetuses.length > 0;
+    if (hasPreimplantationEmbryos) {
+        ensureEmbryoMetadata(pregnant);
+        base.fertilizationDays = clampNumber(base.fertilizationDays, 0, 9999, 0) + deltaDays;
+        const beforeFusionCount = pregnant.fetuses.length;
+        applyChimeraFusion(profile, name);
+        if (pregnant.fetuses.length < beforeFusionCount)
+            notify.secondly = `${name}的早期受精卵发生了融合`;
+        if (base.fertilizationDays >= getImplantationDays(profile)) {
+            const vitality = clampNumber(base.vitality, 0, 200, 100);
+            const implantationFailChance = vitality < 100 ? (100 - vitality) / 100 : 0;
+            if (Math.random() < implantationFailChance) {
+                pregnant.fetuses = [];
+                pregnant.fetusesCount = 0;
+                pregnant.fetalEnergyDrain = 0;
+                base.fertilizationDays = 0;
+                notify.secondly = `${name}因身体虚弱，胚胎著床失败`;
+            }
+            else {
+                const obstetricPregnantDays = base.fertilizationDays + getObstetricPregnancyOffsetDays(profile);
+                const gestationSpeed = clampNumber(getGestationEffectiveSpeed(profile), 0, 20, 1);
+                applyIdenticalSplit(profile);
+                resolvePendingChimeraGenders(pregnant.fetuses);
+                base.stage = '孕早期';
+                base.days = 0;
+                base.fertilizationDays = 0;
+                pregnant.pregnantDays = obstetricPregnantDays;
+                pregnant.effectivePregnantDays = obstetricPregnantDays * gestationSpeed;
+                pregnant.amnionDurability = 100;
+                profile.experience = {
+                    ...(profile.experience || {}),
+                    pregnantExperience: clampNumber(profile?.experience?.pregnantExperience, 0, 999, 0) + 1,
+                };
+                notify.firstly = `${name}进入了孕早期`;
+            }
+        }
+    }
+    else if (!isPregnancyStage(stage)) {
+        base.fertilizationDays = 0;
+    }
+    pregnant.fetusesCount = Array.isArray(pregnant.fetuses) ? pregnant.fetuses.length : 0;
+    updateFetalEnergyDrain(profile);
+}
+function normalizeToolCallArguments(value) {
+    if (value && typeof value === 'object' && !Array.isArray(value))
+        return value;
+    if (typeof value !== 'string')
+        return {};
+    try {
+        const parsed = JSON.parse(value);
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    }
+    catch {
+        return {};
+    }
+}
+function isPregnancyStage(stage) {
+    return PREGNANCY_STAGES.includes(stage) || stage === '假孕期' || stage === '产兆前驱' || LABOR_STAGES.includes(stage);
+}
+function clearPsychologyTransitionState(profile, stage, days) {
+    const psychology = profile?.psychology;
+    if (!psychology || typeof psychology !== 'object')
+        return;
+    const pregnant = profile?.pregnant || {};
+    if (isTruePregnancyStage(stage) && clampNumber(pregnant.effectivePregnantDays, 0, 9999, 0) > 7) {
+        psychology.mens = buildEmptyPsychologyGroup(PSY_MENS_FIELDS, PSY_MENS_BOOL_FIELDS);
+    }
+    if (stage === '产后恢复' && clampNumber(days, 1, 9999, 1) > 7) {
+        psychology.preg = buildEmptyPsychologyGroup(PSY_PREG_FIELDS, PSY_PREG_BOOL_FIELDS);
+    }
+}
+function isTruePregnancyStage(stage) {
+    return PREGNANCY_STAGES.includes(stage) || stage === '产兆前驱' || LABOR_STAGES.includes(stage);
+}
+function canProduceMilk(profile) {
+    const stage = String(profile?.base?.stage || '');
+    return stage === '假孕期' || stage === '产后恢复' || isTruePregnancyStage(stage);
+}
+function hasDerivedMetabolism(profile) {
+    return Boolean(String(profile?.base?.derivedType || '').trim());
+}
+function getMetabolismExemptionSet(profile) {
+    if (!hasDerivedMetabolism(profile))
+        return new Set();
+    return new Set(getDerivedTypeMetabolismExemptions(profile?.base?.derivedType));
+}
+function isMetabolismExempt(profile, key) {
+    return getMetabolismExemptionSet(profile).has(key);
+}
+function applyDerivedMetabolismExemptions(profile) {
+    if (!hasDerivedMetabolism(profile))
+        return;
+    const metabolism = profile.metabolism || {};
+    for (const key of getMetabolismExemptionSet(profile)) {
+        metabolism[key] = 0;
+    }
+    profile.metabolism = metabolism;
+}
+const BASE_METABOLISM_CAP = 150;
+const EXPANDED_METABOLISM_CAP = 200;
+function getActiveExpansion(profile, key, currentFlux = 0) {
+    const expansion = profile?.pregnant?.expansion;
+    if (!expansion || typeof expansion !== 'object')
+        return false;
+    const expansionKey = String(expansion.key || '').trim();
+    const isMatch = expansionKey === key
+        || (key === 'flux' && currentFlux > 0 && expansionKey === 'fluxPositive')
+        || (key === 'flux' && currentFlux < 0 && expansionKey === 'fluxNegative');
+    return isMatch && !isMetabolismExempt(profile, key);
+}
+function getMetabolismCap(profile, key, currentFlux = 0) {
+    return getActiveExpansion(profile, key, currentFlux) ? EXPANDED_METABOLISM_CAP : BASE_METABOLISM_CAP;
+}
+function applyMetabolismCapacityLimits(profile) {
+    const metabolism = profile?.metabolism || {};
+    for (const key of ['excretion', 'hunger', 'sleep', 'milk', 'odor', 'companionship']) {
+        metabolism[key] = isMetabolismExempt(profile, key)
+            ? 0
+            : clampNumber(metabolism[key], 0, getMetabolismCap(profile, key), 0);
+    }
+    if (hasDerivedMetabolism(profile)) {
+        const flux = Number(metabolism.flux) || 0;
+        const cap = getMetabolismCap(profile, 'flux', flux);
+        metabolism.flux = clampNumber(flux, -cap, cap, 0);
+    }
+    profile.metabolism = metabolism;
+}
+function addMetabolismValue(profile, key, delta, min = 0, max = 150) {
+    if (!delta || profile?.immune?.metabolism || isMetabolismExempt(profile, key))
+        return 0;
+    const metabolism = profile.metabolism || {};
+    const activeMax = max === BASE_METABOLISM_CAP ? getMetabolismCap(profile, key, Number(metabolism[key]) || 0) : max;
+    const current = clampNumber(metabolism[key], min, activeMax, 0);
+    const adjustedDelta = delta > 0 ? delta * getActiveAccelerationMultiplier(profile, key) : delta;
+    const next = clampNumber(current + adjustedDelta, min, activeMax, current);
+    metabolism[key] = next;
+    profile.metabolism = metabolism;
+    return next - current;
+}
+function getMilkFetalLoad(profile) {
+    const stage = String(profile?.base?.stage || '');
+    if (stage === '产后恢复')
+        return 1.35;
+    if (stage === '假孕期')
+        return 0.08;
+    if (!isTruePregnancyStage(stage))
+        return 0;
+    const pregnant = profile?.pregnant || {};
+    const effectiveDays = clampNumber(pregnant.effectivePregnantDays, 0, 9999, 0);
+    const progress = clampNumber(effectiveDays / 280, 0, 1.5, 0);
+    const fetalEnergyDrain = clampNumber(pregnant.fetalEnergyDrain, 0, 9999, 0);
+    const fetusesCount = Math.max(1, clampNumber(pregnant.fetusesCount, 0, 99, 0));
+    return clampNumber((0.15 + progress) * (0.5 + fetalEnergyDrain + (fetusesCount * 0.15)), 0, 12, 0);
+}
+function getMilkGainMultiplier(profile) {
+    const fetalLoad = getMilkFetalLoad(profile);
+    if (fetalLoad <= 0)
+        return 0;
+    const breedTolerance = clampNumber(profile?.bio?.breedTolerance, 0.1, 100, 1);
+    return fetalLoad * clampNumber(breedTolerance, 0.1, 8, 1);
+}
+function applyRetention(reduction, retentionRate) {
+    const value = Math.max(0, Number(reduction) || 0);
+    if (value <= 0 || retentionRate <= 0)
+        return value;
+    return value * (1 - retentionRate);
+}
+const PREGNANCY_BLOCKAGE_STAGE_CHANCE = Object.freeze({
+    假孕期: 10,
+    孕早期: 28,
+    孕中期: 22,
+    孕晚期: 34,
+    临产期: 42,
+    逾期: 48,
+    产兆前驱: 55,
+    第一产程: 60,
+    第二产程: 65,
+    第三产程: 35,
+    产后恢复: 25,
+});
+const PREGNANCY_BLOCKAGE_STAGE_SEVERITY = Object.freeze({
+    假孕期: 0.12,
+    孕早期: 0.20,
+    孕中期: 0.18,
+    孕晚期: 0.26,
+    临产期: 0.32,
+    逾期: 0.36,
+    产兆前驱: 0.40,
+    第一产程: 0.42,
+    第二产程: 0.45,
+    第三产程: 0.25,
+    产后恢复: 0.22,
+});
+const PREGNANCY_BLOCKAGE_STAGE_WEIGHTS = Object.freeze({
+    假孕期: { milk: 3, hunger: 3, sleep: 2, companionship: 2, odor: 1 },
+    孕早期: { hunger: 5, excretion: 4, sleep: 3, companionship: 2, odor: 1, milk: 1 },
+    孕中期: { excretion: 5, hunger: 3, sleep: 3, companionship: 2, milk: 2, odor: 1 },
+    孕晚期: { excretion: 6, sleep: 3, milk: 3, hunger: 2, companionship: 2, odor: 2 },
+    临产期: { excretion: 6, sleep: 3, milk: 3, odor: 2, hunger: 2, companionship: 2 },
+    逾期: { excretion: 6, sleep: 4, milk: 3, odor: 2, hunger: 2, companionship: 2 },
+    产兆前驱: { excretion: 6, sleep: 4, milk: 3, odor: 2, companionship: 2, hunger: 1 },
+    第一产程: { excretion: 6, sleep: 4, odor: 2, milk: 2, companionship: 2, hunger: 1 },
+    第二产程: { excretion: 5, sleep: 4, odor: 2, milk: 2, companionship: 2, hunger: 1 },
+    第三产程: { sleep: 4, odor: 3, milk: 3, companionship: 3, excretion: 2, hunger: 1 },
+    产后恢复: { milk: 5, sleep: 4, companionship: 4, odor: 3, excretion: 2, hunger: 1 },
+});
+const PREGNANCY_BLOCKAGE_KEY_SEVERITY_MULTIPLIER = Object.freeze({
+    excretion: 1.35,
+    sleep: 1.15,
+    milk: 1.15,
+    hunger: 1.15,
+    odor: 0.85,
+    companionship: 1.0,
+    fluxPositive: 1.25,
+    fluxNegative: 1.25,
+});
+const PREGNANCY_BLOCKAGE_KEY_SEVERITY_CAP = Object.freeze({
+    excretion: 0.90,
+    sleep: 0.75,
+    milk: 0.75,
+    hunger: 0.75,
+    odor: 0.65,
+    companionship: 0.75,
+    fluxPositive: 0.85,
+    fluxNegative: 0.85,
+});
+function canHavePregnancyBlockage(profile) {
+    const stage = String(profile?.base?.stage || '');
+    const fetuses = Array.isArray(profile?.pregnant?.fetuses) ? profile.pregnant.fetuses : [];
+    return fetuses.length > 0
+        || PREGNANCY_STAGES.includes(stage)
+        || stage === '假孕期'
+        || stage === '产兆前驱'
+        || LABOR_STAGES.includes(stage)
+        || stage === '产后恢复';
+}
+function getAvailablePregnancySymptomKeys(profile) {
+    const isDerived = hasDerivedMetabolism(profile);
+    const exemptions = getMetabolismExemptionSet(profile);
+    const keys = ['excretion', 'hunger', 'sleep', 'milk', 'odor', 'companionship'].filter((key) => !exemptions.has(key));
+    if (isDerived)
+        keys.push('fluxPositive', 'fluxNegative');
+    return keys;
+}
+function getPregnancyBlockageChance(profile) {
+    const stage = String(profile?.base?.stage || '');
+    const baseChance = PREGNANCY_BLOCKAGE_STAGE_CHANCE[stage] || 0;
+    if (baseChance <= 0)
+        return 0;
+    const fetalEnergyDrain = clampNumber(profile?.pregnant?.fetalEnergyDrain, 0, 9999, 0);
+    const vitality = clampNumber(profile?.base?.vitality, 0, 200, 100);
+    const psyStress = clampNumber(profile?.base?.psyStress, 0, 200, 100);
+    const lowVitalityBonus = Math.max(0, 100 - vitality) * 0.12;
+    const stressBonus = psyStress > 120 ? 8 : 0;
+    return clampNumber(baseChance + (fetalEnergyDrain * 8) + lowVitalityBonus + stressBonus, 0, 85, 0);
+}
+function getPregnancyBlockageSeverity(profile, key) {
+    const stage = String(profile?.base?.stage || '');
+    const baseSeverity = PREGNANCY_BLOCKAGE_STAGE_SEVERITY[stage] || 0.10;
+    const fetalEnergyDrain = clampNumber(profile?.pregnant?.fetalEnergyDrain, 0, 9999, 0);
+    const vitality = clampNumber(profile?.base?.vitality, 0, 200, 100);
+    const lowVitalityBonus = vitality < 80 ? 0.06 : 0;
+    const multiplier = PREGNANCY_BLOCKAGE_KEY_SEVERITY_MULTIPLIER[key] || 1;
+    const cap = PREGNANCY_BLOCKAGE_KEY_SEVERITY_CAP[key] || 0.75;
+    return clampNumber((baseSeverity * multiplier) + (fetalEnergyDrain * 0.035) + lowVitalityBonus, 0.10, cap, 0.10);
+}
+function pickWeightedKey(weightMap) {
+    const entries = Object.entries(weightMap)
+        .map(([key, weight]) => [key, Math.max(0, Number(weight) || 0)])
+        .filter(([, weight]) => weight > 0);
+    const total = entries.reduce((sum, [, weight]) => sum + weight, 0);
+    if (total <= 0)
+        return null;
+    let cursor = Math.random() * total;
+    for (const [key, weight] of entries) {
+        cursor -= weight;
+        if (cursor <= 0)
+            return key;
+    }
+    return entries[entries.length - 1]?.[0] || null;
+}
+function pickPregnancySymptomKey(profile, excludedKeys = []) {
+    const excluded = new Set(Array.isArray(excludedKeys) ? excludedKeys : [excludedKeys]);
+    const available = new Set(getAvailablePregnancySymptomKeys(profile).filter((key) => !excluded.has(key)));
+    if (available.size === 0)
+        return null;
+    const stage = String(profile?.base?.stage || '');
+    const weights = { ...(PREGNANCY_BLOCKAGE_STAGE_WEIGHTS[stage] || {}) };
+    if (hasDerivedMetabolism(profile)) {
+        const flux = Number(profile?.metabolism?.flux) || 0;
+        weights.fluxPositive = (weights.fluxPositive || 1) + (flux > 0 ? 3 : 0);
+        weights.fluxNegative = (weights.fluxNegative || 1) + (flux < 0 ? 3 : 0);
+    }
+    for (const key of Object.keys(weights)) {
+        if (!available.has(key))
+            delete weights[key];
+    }
+    for (const key of available) {
+        if (weights[key] === undefined)
+            weights[key] = 1;
+    }
+    return pickWeightedKey(weights);
+}
+function refreshPregnancySymptoms(profile, tick) {
+    const pregnant = profile?.pregnant || {};
+    if (tick.passedDays <= 0)
+        return;
+    if (!canHavePregnancyBlockage(profile)) {
+        pregnant.blockage = null;
+        pregnant.acceleration = null;
+        pregnant.expansion = null;
+        profile.pregnant = pregnant;
+        return;
+    }
+    const chance = getPregnancyBlockageChance(profile);
+    const key = chance > 0 && Math.random() * 100 < chance ? pickPregnancySymptomKey(profile) : null;
+    pregnant.blockage = key
+        ? { key, severity: getPregnancyBlockageSeverity(profile, key) }
+        : null;
+    const acceleratedKey = chance > 0 && Math.random() * 100 < chance ? pickPregnancySymptomKey(profile, [key]) : null;
+    pregnant.acceleration = acceleratedKey
+        ? { key: acceleratedKey, severity: getPregnancyBlockageSeverity(profile, acceleratedKey) }
+        : null;
+    const expandedKey = chance > 0 && Math.random() * 100 < chance ? pickPregnancySymptomKey(profile, [key, acceleratedKey]) : null;
+    pregnant.expansion = expandedKey ? { key: expandedKey, severity: 1 } : null;
+    profile.pregnant = pregnant;
+}
+function getActiveBlockageRetention(profile, key, currentFlux = 0) {
+    const blockage = profile?.pregnant?.blockage;
+    if (!blockage || typeof blockage !== 'object')
+        return 0;
+    const blockageKey = String(blockage.key || '').trim();
+    if (!blockageKey)
+        return 0;
+    if (blockageKey === 'fluxPositive') {
+        return hasDerivedMetabolism(profile) && currentFlux > 0 ? clampNumber(blockage.severity, 0, PREGNANCY_BLOCKAGE_KEY_SEVERITY_CAP.fluxPositive, 0) : 0;
+    }
+    if (blockageKey === 'fluxNegative') {
+        return hasDerivedMetabolism(profile) && currentFlux < 0 ? clampNumber(blockage.severity, 0, PREGNANCY_BLOCKAGE_KEY_SEVERITY_CAP.fluxNegative, 0) : 0;
+    }
+    if (blockageKey !== key || isMetabolismExempt(profile, key))
+        return 0;
+    return clampNumber(blockage.severity, 0, PREGNANCY_BLOCKAGE_KEY_SEVERITY_CAP[key] || 0.75, 0);
+}
+function getActiveAccelerationMultiplier(profile, key, currentFlux = 0) {
+    const acceleration = profile?.pregnant?.acceleration;
+    if (!acceleration || typeof acceleration !== 'object')
+        return 1;
+    const accelerationKey = String(acceleration.key || '').trim();
+    const isMatch = accelerationKey === key
+        || (key === 'flux' && currentFlux > 0 && accelerationKey === 'fluxPositive')
+        || (key === 'flux' && currentFlux < 0 && accelerationKey === 'fluxNegative');
+    if (!isMatch || isMetabolismExempt(profile, key))
+        return 1;
+    const cap = PREGNANCY_BLOCKAGE_KEY_SEVERITY_CAP[accelerationKey] || 0.75;
+    return 1 + clampNumber(acceleration.severity, 0, cap, 0);
+}
+function applyMilkGain(profile, rawAmount) {
+    const multiplier = getMilkGainMultiplier(profile);
+    if (multiplier <= 0 || rawAmount <= 0)
+        return 0;
+    return addMetabolismValue(profile, 'milk', rawAmount * multiplier, 0, 150);
+}
+function applyCycleBreastNeedGain(profile, hours) {
+    const stage = String(profile?.base?.stage || '');
+    const hourlyRate = stage === '黄体期' ? 0.15 : stage === '月经期' ? 0.10 : 0;
+    if (hourlyRate <= 0)
+        return 0;
+    return addMetabolismValue(profile, 'milk', hourlyRate * hours, 0, 150);
+}
+function applyPassiveMetabolism(profile, tick) {
+    if (profile?.immune?.metabolism)
+        return;
+    const hours = Math.max(0, tick.passedHours);
+    if (hours <= 0)
+        return;
+    applyCycleBreastNeedGain(profile, hours);
+    applyMilkGain(profile, 0.08 * hours);
+    addMetabolismValue(profile, 'odor', 0.04 * hours, 0, 150);
+    addMetabolismValue(profile, 'companionship', 0.05 * hours, 0, 150);
+}
+function applyMilkFromLibido(profile, changeValue) {
+    const delta = Math.abs(Number(changeValue) || 0);
+    if (delta <= 0)
+        return;
+    if (String(profile?.base?.stage || '') === '排卵期') {
+        addMetabolismValue(profile, 'milk', delta * 0.05, 0, 150);
+    }
+    applyMilkGain(profile, delta * 0.18);
+}
+function applyOdorGain(profile, amount) {
+    return addMetabolismValue(profile, 'odor', Math.max(0, Number(amount) || 0), 0, 150);
+}
+function getOdorCompanionshipReliefMultiplier(odor) {
+    const value = clampNumber(odor, 0, 150, 0);
+    if (value >= 125)
+        return 0.45;
+    if (value >= 100)
+        return 0.60;
+    if (value >= 75)
+        return 0.75;
+    return 1;
+}
+function applyAccelerationRebound(profile, key, relievedAmount) {
+    const released = Math.max(0, Number(relievedAmount) || 0);
+    const severity = getActiveAccelerationMultiplier(profile, key) - 1;
+    if (released <= 0 || severity <= 0)
+        return 0;
+    return addMetabolismValue(profile, key, released * severity * 0.25, 0, 150);
+}
+function getDerivedFluxDirection(currentFlux, fallbackDirection = 1) {
+    const current = Number(currentFlux) || 0;
+    if (current > 0)
+        return 1;
+    if (current < 0)
+        return -1;
+    return fallbackDirection >= 0 ? 1 : -1;
+}
+function shouldResetOrgasmOvulation(stage) {
+    return stage === '月经期' || stage === '产后恢复';
+}
+function getLibidoCap(profile) {
+    const stage = profile?.base?.stage;
+    if (!isTruePregnancyStage(stage))
+        return 100;
+    const effectivePregnantDays = clampNumber(profile?.pregnant?.effectivePregnantDays, 0, 9999, 0);
+    const months = Math.floor(effectivePregnantDays / 28);
+    const progress = Math.max(0, Math.min(10, months)) / 10;
+    return Math.round(100 + (150 - 100) * progress);
+}
+function getUterinePressureCap(profile) {
+    const stage = profile?.base?.stage;
+    if (!isTruePregnancyStage(stage))
+        return 50;
+    const effectivePregnantDays = clampNumber(profile?.pregnant?.effectivePregnantDays, 0, 9999, 0);
+    const months = Math.floor(effectivePregnantDays / 28);
+    const progress = Math.max(0, Math.min(10, months)) / 10;
+    return Math.round(50 + (150 - 50) * progress);
+}
+function applyHourlyPregnancyMetabolism(profile, tick, female) {
+    const immune = profile?.immune || {};
+    if (immune.metabolism)
+        return;
+    const stage = String(profile?.base?.stage || '');
+    if (!isTruePregnancyStage(stage))
+        return;
+    if (tick.passedHours <= 0)
+        return;
+    const pregnant = profile?.pregnant || {};
+    const metabolism = profile?.metabolism || {};
+    const fetalEnergyDrain = clampNumber(pregnant.fetalEnergyDrain, 0, 9999, 0);
+    const delta = (1 + fetalEnergyDrain) * 2 * tick.passedHours;
+    if (hasDerivedMetabolism(profile)) {
+        const stressMultiplier = clampNumber(1 + ((clampNumber(profile?.base?.psyStress, 0, 200, 100) - 100) / 200), 0.5, 1.5, 1.0);
+        const direction = getDerivedFluxDirection(metabolism.flux, 1);
+        const acceleration = getActiveAccelerationMultiplier(profile, 'flux', Number(metabolism.flux) || direction);
+        const fluxCap = getMetabolismCap(profile, 'flux', Number(metabolism.flux) || direction);
+        metabolism.flux = clampNumber((Number(metabolism.flux) || 0) + (delta * stressMultiplier * direction * acceleration), -fluxCap, fluxCap, metabolism.flux || 0);
+        profile.metabolism = metabolism;
+    }
+    addMetabolismValue(profile, 'excretion', delta, 0, 150);
+    addMetabolismValue(profile, 'hunger', delta, 0, 150);
+    addMetabolismValue(profile, 'sleep', delta, 0, 150);
+    applyDerivedMetabolismExemptions(profile);
+    const vitality = clampNumber(profile?.base?.vitality, 0, 200, 100);
+    const days = Math.max(1, Math.ceil(tick.deltaDays));
+    const rounds = Math.max(1, Math.ceil(fetalEnergyDrain)) * days;
+    for (let i = 0; i < rounds; i += 1) {
+        const symptomChance = (200 - vitality) * 0.5;
+        if (Math.random() * 100 < symptomChance) {
+            pregnant.nutrition = (Number(pregnant.nutrition) || 0) - 1;
+            pregnant.symptomReliefPending = clampNumber(pregnant.symptomReliefPending, 0, 999, 0) + 1;
+            profile.pregnant = pregnant;
+            profile.notify = {
+                ...(profile.notify || {}),
+                secondly: `${female}的妊娠症状使身体感到不适，供养力有所流失`,
+            };
+            break;
+        }
+    }
+}
+function applyWeeklyNutrition(profile) {
+    const pregnant = profile?.pregnant || {};
+    const fetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [];
+    if (fetuses.length === 0)
+        return false;
+    const nutrition = Number(pregnant.nutrition) || 0;
+    if (nutrition === 0)
+        return false;
+    const absAffinities = fetuses.map((fetus) => Math.abs(clampNumber(fetus?.affinity, -50, 50, 0)));
+    const totalAbs = absAffinities.reduce((sum, value) => sum + value, 0);
+    const gestationSpeed = clampNumber(getGestationEffectiveSpeed(profile), 0.1, 20, 1);
+    const weightScale = 0.02;
+    if (nutrition > 0) {
+        for (let i = 0; i < fetuses.length; i += 1) {
+            const share = totalAbs > 0 ? nutrition * (absAffinities[i] / totalAbs) : nutrition / fetuses.length;
+            const factor = 1 + share * gestationSpeed * weightScale;
+            fetuses[i].weight = clampNumber((Number(fetuses[i].weight) || 1) * factor, 0.33, 3.0, 1);
+        }
+    }
+    else {
+        const maxAbs = Math.max(...absAffinities, 0);
+        const reverseWeights = absAffinities.map((value) => maxAbs - value + 1);
+        const totalReverse = reverseWeights.reduce((sum, value) => sum + value, 0);
+        for (let i = 0; i < fetuses.length; i += 1) {
+            const share = totalReverse > 0 ? nutrition * (reverseWeights[i] / totalReverse) : nutrition / fetuses.length;
+            const factor = 1 + share * gestationSpeed * weightScale;
+            fetuses[i].weight = clampNumber((Number(fetuses[i].weight) || 1) * factor, 0.33, 3.0, 1);
+        }
+    }
+    pregnant.nutrition = 0;
+    pregnant.fetuses = fetuses;
+    profile.pregnant = pregnant;
+    return true;
+}
+function applyOverduePressure(profile, tick, female) {
+    const base = profile?.base || {};
+    const stage = String(base.stage || '');
+    if (stage !== '逾期' || tick.passedDays <= 0)
+        return;
+    const pregnant = profile?.pregnant || {};
+    const fetalEnergyDrain = clampNumber(pregnant.fetalEnergyDrain, 0, 9999, 0);
+    const effectivePregnantDays = clampNumber(pregnant.effectivePregnantDays, 0, 9999, 0);
+    const overdueDays = Math.max(0, effectivePregnantDays - 280);
+    const overdueMultiplier = 1 + Math.max(0, overdueDays / 28);
+    const pressureCap = getUterinePressureCap(profile);
+    const nextPressure = clampNumber(base.uterinePressure + (fetalEnergyDrain * overdueMultiplier * tick.passedDays), 0, pressureCap, base.uterinePressure || 0);
+    base.uterinePressure = nextPressure;
+    profile.base = base;
+    profile.notify = {
+        ...(profile.notify || {}),
+        secondly: `${female}已逾期，宫缩压力持续增强`,
+    };
+}
+function applyNaturalMetabolismRecovery(profile, tick) {
+    const immune = profile?.immune || {};
+    const metabolism = profile?.metabolism || {};
+    if (immune.metabolism) {
+        metabolism.excretion = 0;
+        metabolism.hunger = 0;
+        metabolism.sleep = 0;
+        metabolism.flux = 0;
+        metabolism.milk = 0;
+        metabolism.odor = 0;
+        metabolism.companionship = 0;
+        profile.metabolism = metabolism;
+        return;
+    }
+    applyDerivedMetabolismExemptions(profile);
+    const passedDays = Math.max(0, tick.passedDays);
+    if (hasDerivedMetabolism(profile)) {
+        if (passedDays > 0) {
+            const fluxCap = getMetabolismCap(profile, 'flux', Number(metabolism.flux) || 0);
+            const currentFlux = clampNumber(metabolism.flux, -fluxCap, fluxCap, 0);
+            const recovery = 14 * passedDays;
+            if (currentFlux > 0)
+                metabolism.flux = Math.max(0, currentFlux - recovery);
+            else if (currentFlux < 0)
+                metabolism.flux = Math.min(0, currentFlux + recovery);
+            else
+                metabolism.flux = 0;
+        }
+        profile.metabolism = metabolism;
+    }
+    if (passedDays <= 0)
+        return;
+    const dayExcretionRecovery = 12 * passedDays;
+    const dayHungerRecovery = 16 * passedDays;
+    const daySleepRecovery = 18 * passedDays;
+    metabolism.excretion = isMetabolismExempt(profile, 'excretion') ? 0 : Math.max(0, clampNumber(metabolism.excretion, 0, getMetabolismCap(profile, 'excretion'), 0) - dayExcretionRecovery);
+    metabolism.hunger = isMetabolismExempt(profile, 'hunger') ? 0 : Math.max(0, clampNumber(metabolism.hunger, 0, getMetabolismCap(profile, 'hunger'), 0) - dayHungerRecovery);
+    metabolism.sleep = isMetabolismExempt(profile, 'sleep') ? 0 : Math.max(0, clampNumber(metabolism.sleep, 0, getMetabolismCap(profile, 'sleep'), 0) - daySleepRecovery);
+    applyDerivedMetabolismExemptions(profile);
+    profile.metabolism = metabolism;
+}
+function applyWeeklyMetabolismRoutine(profile, tick, options = {}) {
+    if (profile?.immune?.metabolism)
+        return;
+    const metabolism = profile.metabolism || {};
+    const settledWeeks = Math.max(0, Math.floor(Number(tick.passedLifestyleWeeks) || 0));
+    if (settledWeeks > 0) {
+        metabolism.odor = 0;
+        metabolism.companionship = isMetabolismExempt(profile, 'companionship')
+            ? 0
+            : Math.max(0, clampNumber(metabolism.companionship, 0, getMetabolismCap(profile, 'companionship'), 0) - (35 * settledWeeks));
+    }
+    if (options.enteredFollicular && !canProduceMilk({ ...profile, base: { ...(profile.base || {}), stage: options.stage } })) {
+        metabolism.milk = 0;
+    }
+    applyDerivedMetabolismExemptions(profile);
+    profile.metabolism = metabolism;
+}
+function applyMetabolismFromVitality(profile, changeValue) {
+    const immune = profile?.immune || {};
+    const metabolism = profile?.metabolism || {};
+    const base = profile?.base || {};
+    if (immune.metabolism || !changeValue)
+        return;
+    const stressMultiplier = clampNumber(1 + ((clampNumber(base.psyStress, 0, 200, 100) - 100) / 200), 0.5, 1.5, 1.0);
+    const delta = Math.abs(Number(changeValue) || 0) * stressMultiplier;
+    if (delta <= 0)
+        return;
+    if (hasDerivedMetabolism(profile)) {
+        const direction = getDerivedFluxDirection(metabolism.flux, Math.sign(Number(changeValue) || 1));
+        const acceleration = getActiveAccelerationMultiplier(profile, 'flux', Number(metabolism.flux) || direction);
+        const fluxCap = getMetabolismCap(profile, 'flux', Number(metabolism.flux) || direction);
+        metabolism.flux = clampNumber((Number(metabolism.flux) || 0) + (delta * direction * acceleration), -fluxCap, fluxCap, metabolism.flux || 0);
+        profile.metabolism = metabolism;
+    }
+    if (changeValue > 0) {
+        addMetabolismValue(profile, 'excretion', delta, 0, 150);
+    }
+    else {
+        addMetabolismValue(profile, 'hunger', delta, 0, 150);
+        addMetabolismValue(profile, 'sleep', delta, 0, 150);
+    }
+    applyDerivedMetabolismExemptions(profile);
+}
+function getMetabolismLevel(value, cap = BASE_METABOLISM_CAP) {
+    const scale = Math.max(1, Number(cap) || BASE_METABOLISM_CAP) / BASE_METABOLISM_CAP;
+    if (value >= 125 * scale)
+        return '爆';
+    if (value >= 100 * scale)
+        return '满';
+    if (value >= 75 * scale)
+        return '高';
+    if (value >= 50 * scale)
+        return '中';
+    if (value >= 25 * scale)
+        return '低';
+    return '无';
+}
+function getDerivedFluxLevel(value, cap = BASE_METABOLISM_CAP) {
+    return getMetabolismLevel(Math.abs(Number(value) || 0), cap);
+}
+function getDerivedFluxNeedLabel(value) {
+    return (Number(value) || 0) >= 0 ? '正极释放需求' : '负极释放需求';
+}
+function updateAdvisoryNotify(profile, female) {
+    const notify = profile?.notify || {};
+    const metabolism = profile?.metabolism || {};
+    const base = profile?.base || {};
+    const pregnant = profile?.pregnant || {};
+    const needs = [];
+    const excretionLevel = getMetabolismLevel(metabolism.excretion, getMetabolismCap(profile, 'excretion'));
+    const hungerLevel = getMetabolismLevel(metabolism.hunger, getMetabolismCap(profile, 'hunger'));
+    const sleepLevel = getMetabolismLevel(metabolism.sleep, getMetabolismCap(profile, 'sleep'));
+    const milkLevel = getMetabolismLevel(metabolism.milk, getMetabolismCap(profile, 'milk'));
+    const odorLevel = getMetabolismLevel(metabolism.odor, getMetabolismCap(profile, 'odor'));
+    const companionshipLevel = getMetabolismLevel(metabolism.companionship, getMetabolismCap(profile, 'companionship'));
+    const maybePushNeed = (key, label, level) => {
+        if (!isMetabolismExempt(profile, key) && ['高', '满', '爆'].includes(level))
+            needs.push(`${label}:${level}`);
+    };
+    maybePushNeed('excretion', '泄意', excretionLevel);
+    maybePushNeed('hunger', '饿意', hungerLevel);
+    maybePushNeed('sleep', '困意', sleepLevel);
+    maybePushNeed('milk', '乳意', milkLevel);
+    maybePushNeed('odor', '臭意', odorLevel);
+    maybePushNeed('companionship', '伴意', companionshipLevel);
+    const reminders = [];
+    if (hasDerivedMetabolism(profile)) {
+        const fluxCap = getMetabolismCap(profile, 'flux', Number(metabolism.flux) || 0);
+        const flux = clampNumber(metabolism.flux, -fluxCap, fluxCap, 0);
+        if (Math.abs(flux) >= 75) {
+            reminders.push(`${female}的${getDerivedFluxNeedLabel(flux)}已达到${getDerivedFluxLevel(flux, fluxCap)}，应优先使用 bsExcreteMetabolism 进行解放；若释放量足够大，需求极性才会跨过 0 翻转`);
+        }
+        if (needs.length > 0) {
+            reminders.push(`${female}仍有未被衍生代谢抵免的生理需求（${needs.join('、')}），可用 bsExcreteMetabolism 处理`);
+        }
+    }
+    else if (needs.length > 0) {
+        reminders.push(`${female}有强烈的生理需求（${needs.join('、')}），应优先使用 bsExcreteMetabolism 缓解生理不适`);
+    }
+    if (!isMetabolismExempt(profile, 'companionship') && ['高', '满', '爆'].includes(companionshipLevel)) {
+        reminders.push(odorLevel === '高' || odorLevel === '满' || odorLevel === '爆'
+            ? `${female}渴望陪伴，但当前臭意会妨碍社交舒适度；清洁后再给予陪伴或安抚更有效`
+            : `${female}渴望陪伴，可优先给予陪伴、交流或安抚`);
+    }
+    const stage = String(base.stage || '');
+    if (['临产期', '逾期', '产兆前驱', '第一产程', '第二产程'].includes(stage)) {
+        const amnion = clampNumber(pregnant.amnionDurability, -100, 100, 0);
+        if (amnion > 0) {
+            // 陈述句会被当成背景资讯忽略，必须写成禁令：设定上产程前羊膜恒不破，
+            // 模型却很常自行写出破水，导致叙事与系统状态脱节。
+            // 但只在真的能破水的阶段才指向工具——临产期／逾期调用必被拒，
+            // 提示它去调等于教它做一件必定失败的事。
+            const canRupture = RUPTURE_ALLOWED_PRELABOR_STAGES.includes(stage) || ['第一产程', '第二产程'].includes(stage);
+            reminders.push(canRupture
+                ? `${female}尚未破水（膜耐性还有${Math.round(amnion)}%）：禁止描写破水、羊水流出或羊膜破裂。若剧情确实需要破水，必须先调用 bsRuptureMembranes，成功后才可如此描写`
+                : `${female}尚未破水（膜耐性还有${Math.round(amnion)}%）：禁止描写破水、羊水流出或羊膜破裂。此阶段无法破水，必须先进入产兆前驱`);
+        }
+        else if (stage !== '第三产程') {
+            reminders.push(`${female}已破水`);
+        }
+    }
+    if (stage === '产兆前驱') {
+        reminders.push(Boolean(profile?.immune?.realisticLabor)
+            ? `${female}正处于产兆前驱阶段，可使用 bsMaternalFetalInteraction（direction=maternal）尝试延后分娩；真实产程下分娩只能延后、无法取消，累计延后到上限后必然进入产程`
+            : `${female}正处于产兆前驱阶段，可优先使用 bsMaternalFetalInteraction（direction=maternal）尝试延后分娩`);
+    }
+    profile.notify = {
+        ...notify,
+        thirdly: reminders.join('；'),
+    };
+}
+function applyAmnionDurabilityFromPressure(profile, finalPressure, female) {
+    const base = profile?.base || {};
+    const pregnant = profile?.pregnant || {};
+    const stage = String(base.stage || '');
+    if (!PREGNANCY_STAGES.includes(stage))
+        return;
+    const pressureCap = getUterinePressureCap(profile);
+    const warningThreshold = pressureCap * 0.33;
+    if (finalPressure <= warningThreshold)
+        return;
+    const currentDurability = clampNumber(pregnant.amnionDurability, 0, 100, 100);
+    const drain = Math.max(1, clampNumber(pregnant.fetalEnergyDrain, 0, 9999, 1));
+    const minDurability = LABOR_STAGES.includes(stage) ? 0 : 1;
+    const nextDurability = Math.max(minDurability, currentDurability - drain);
+    pregnant.amnionDurability = nextDurability;
+    profile.pregnant = pregnant;
+    const notify = profile.notify || {};
+    if (stage === '孕早期' || stage === '孕中期') {
+        notify.secondly = `${female}子宫压力过高，有流产风险`;
+    }
+    else {
+        notify.secondly = `${female}子宫收缩强烈，即将生产`;
+    }
+    profile.notify = notify;
+}
+function applyExcreteMetabolism(chatState, args) {
+    const female = String(args?.female || '').trim();
+    const options = args?.options && typeof args.options === 'object' ? args.options : {};
+    const character = chatState.characters?.[female];
+    if (!female || !character)
+        return { applied: false, message: `bsExcreteMetabolism skipped: unknown character ${female || '(empty)'}.` };
+    const next = cloneValue(character);
+    const profile = next.profile || {};
+    const base = profile.base || {};
+    const metabolism = profile.metabolism || {};
+    const notify = profile.notify || {};
+    const immune = profile.immune || {};
+    if (immune.metabolism)
+        return { applied: false, message: `bsExcreteMetabolism skipped for ${female}: metabolism immune.` };
+    applyDerivedMetabolismExemptions(profile);
+    applyMetabolismCapacityLimits(profile);
+    const isDerived = hasDerivedMetabolism(profile);
+    const hasOptions = Object.keys(options).length > 0;
+    const wantsFluxRelease = isDerived && (!hasOptions || options.flux !== undefined);
+    if (wantsFluxRelease) {
+        const fluxCap = getMetabolismCap(profile, 'flux', Number(metabolism.flux) || 0);
+        const currentFlux = clampNumber(metabolism.flux, -fluxCap, fluxCap, 0);
+        const direction = getDerivedFluxDirection(currentFlux, 1);
+        const blockageRetention = getActiveBlockageRetention(profile, currentFlux > 0 ? 'fluxPositive' : 'fluxNegative', currentFlux);
+        const releasePower = applyRetention(options.flux !== undefined ? Math.max(0, Number(options.flux) || 0) : 40, blockageRetention);
+        metabolism.flux = clampNumber(currentFlux - (direction * releasePower), -fluxCap, fluxCap, currentFlux);
+        profile.metabolism = metabolism;
+        const nextFlux = clampNumber(metabolism.flux, -fluxCap, fluxCap, 0);
+        const didFlip = currentFlux !== 0 && Math.sign(currentFlux) !== Math.sign(nextFlux) && nextFlux !== 0;
+        profile.notify = {
+            ...notify,
+            secondly: didFlip
+                ? `${female}完成了一次${direction > 0 ? '正极' : '负极'}解放，需求强度被压过头，极性翻转为${nextFlux > 0 ? '正极' : '负极'}`
+                : `${female}完成了一次${direction > 0 ? '正极' : '负极'}解放，当前需求降为 ${Math.round(nextFlux)}`,
+        };
+    }
+    const currentExcretion = clampNumber(metabolism.excretion, 0, getMetabolismCap(profile, 'excretion'), 0);
+    const currentHunger = clampNumber(metabolism.hunger, 0, getMetabolismCap(profile, 'hunger'), 0);
+    const currentSleep = clampNumber(metabolism.sleep, 0, getMetabolismCap(profile, 'sleep'), 0);
+    const currentMilk = clampNumber(metabolism.milk, 0, getMetabolismCap(profile, 'milk'), 0);
+    const currentOdor = clampNumber(metabolism.odor, 0, getMetabolismCap(profile, 'odor'), 0);
+    const currentCompanionship = clampNumber(metabolism.companionship, 0, getMetabolismCap(profile, 'companionship'), 0);
+    const optionReduction = (key, fallback = 0) => Math.max(0, options[key] !== undefined ? Number(options[key]) || 0 : fallback);
+    const useDefaults = !hasOptions && !isDerived;
+    const excretionReduction = isMetabolismExempt(profile, 'excretion') ? 0 : optionReduction('excretion', useDefaults ? 30 : 0);
+    const hungerReduction = isMetabolismExempt(profile, 'hunger') ? 0 : optionReduction('hunger', useDefaults ? 40 : 0);
+    const sleepReduction = isMetabolismExempt(profile, 'sleep') ? 0 : optionReduction('sleep', useDefaults ? 40 : 0);
+    const milkReduction = isMetabolismExempt(profile, 'milk') ? 0 : optionReduction('milk', useDefaults ? 30 : 0);
+    const odorReduction = isMetabolismExempt(profile, 'odor') ? 0 : optionReduction('odor');
+    const companionshipReduction = isMetabolismExempt(profile, 'companionship') ? 0 : optionReduction('companionship');
+    const relievedExcretion = Math.min(currentExcretion, applyRetention(excretionReduction, getActiveBlockageRetention(profile, 'excretion')));
+    const relievedHunger = Math.min(currentHunger, applyRetention(hungerReduction, getActiveBlockageRetention(profile, 'hunger')));
+    const relievedSleep = Math.min(currentSleep, applyRetention(sleepReduction, getActiveBlockageRetention(profile, 'sleep')));
+    const relievedMilk = Math.min(currentMilk, applyRetention(milkReduction, getActiveBlockageRetention(profile, 'milk')));
+    const relievedOdor = Math.min(currentOdor, applyRetention(odorReduction, getActiveBlockageRetention(profile, 'odor')));
+    const remainingOdor = Math.max(0, currentOdor - relievedOdor);
+    const companionshipRelief = applyRetention(companionshipReduction, getActiveBlockageRetention(profile, 'companionship'))
+        * getOdorCompanionshipReliefMultiplier(remainingOdor);
+    const relievedCompanionship = Math.min(currentCompanionship, companionshipRelief);
+    metabolism.excretion = Math.max(0, currentExcretion - relievedExcretion);
+    metabolism.hunger = Math.max(0, currentHunger - relievedHunger);
+    metabolism.sleep = Math.max(0, currentSleep - relievedSleep);
+    metabolism.milk = Math.max(0, currentMilk - relievedMilk);
+    metabolism.odor = isMetabolismExempt(profile, 'odor') ? 0 : remainingOdor;
+    metabolism.companionship = isMetabolismExempt(profile, 'companionship') ? 0 : Math.max(0, currentCompanionship - relievedCompanionship);
+    addMetabolismValue(profile, 'excretion', relievedHunger * 0.5, 0, 150);
+    addMetabolismValue(profile, 'sleep', relievedHunger * 0.1, 0, 150);
+    addMetabolismValue(profile, 'hunger', relievedSleep * 0.1, 0, 150);
+    applyOdorGain(profile, (relievedExcretion * 0.12) + (canProduceMilk(profile) ? relievedMilk * 0.05 : 0));
+    for (const [key, amount] of [
+        ['excretion', relievedExcretion],
+        ['hunger', relievedHunger],
+        ['sleep', relievedSleep],
+        ['milk', relievedMilk],
+        ['odor', relievedOdor],
+        ['companionship', relievedCompanionship],
+    ]) {
+        applyAccelerationRebound(profile, key, amount);
+    }
+    applyDerivedMetabolismExemptions(profile);
+    profile.metabolism = metabolism;
+    updateAdvisoryNotify(profile, female);
+    next.profile = profile;
+    chatState.characters[female] = next;
+    return { applied: true, message: `bsExcreteMetabolism applied to ${female}.` };
+}
+function clearPregnancyState(profile) {
+    const base = profile.base || {};
+    const pregnant = profile.pregnant || {};
+    base.fertilizationDays = 0;
+    base.uterinePressure = 0;
+    pregnant.pregnantDays = 0;
+    pregnant.effectivePregnantDays = 0;
+    pregnant.laborHours = 0;
+    pregnant.effectiveLaborHours = 0;
+    pregnant.laborPhase = null;
+    pregnant.laborFetusIndex = 0;
+    pregnant.laborPain = 0;
+    pregnant.prodromalOriginStage = null;
+    pregnant.prodromalRemainingHours = 0;
+    pregnant.prodromalDelayProgressHours = 0;
+    pregnant.fetuses = [];
+    pregnant.fetusesCount = 0;
+    pregnant.fetalEnergyDrain = 0;
+    pregnant.amnionDurability = 0;
+    pregnant.nutrition = 0;
+    pregnant.symptomReliefPending = 0;
+    pregnant.blockage = null;
+    pregnant.acceleration = null;
+    pregnant.expansion = null;
+    profile.base = base;
+    profile.pregnant = pregnant;
+}
+function appendChildrenFromFetuses(profile, fetuses) {
+    const children = Array.isArray(profile.children) ? profile.children.map((item) => ({ ...item })) : [];
+    const base = profile.base || {};
+    const motherDerivedType = base.derivedType ? String(base.derivedType) : null;
+    for (const fetus of fetuses) {
+        const progress = clampNumber(fetus?.maternalDerivedTypeProgress, -100, 100, 0);
+        const fatherDerivedType = fetus?.fatherDerivedType ? String(fetus.fatherDerivedType) : null;
+        let childDerivedType = null;
+        if (progress > 75 && motherDerivedType) {
+            childDerivedType = motherDerivedType;
+        }
+        if (progress < -75 && fatherDerivedType) {
+            childDerivedType = fatherDerivedType;
+        }
+        // 代孕／寄生：孩子不属于承载者，但先如实记下并标注 provider。
+        // 之前是直接 continue 跳过，孩子记录会凭空消失——承载者不得、提供者也没有。
+        // 之后由 transferProviderChildren 在拿得到 chatState 的层级转交给 provider。
+        const provider = fetus?.provider === null || fetus?.provider === undefined
+            ? null
+            : String(fetus.provider).trim() || null;
+        children.push({
+            name: null,
+            fathers: String(fetus?.fathers || '未知'),
+            provider,
+            providerSources: Array.isArray(fetus?.providerSources) ? [...fetus.providerSources] : [],
+            chimera: fetus?.chimera ? cloneValue(fetus.chimera) : null,
+            gender: String(fetus?.gender || '未知'),
+            race: String(fetus?.race || '未知'),
+            derivedType: childDerivedType,
+            age: 0,
+            birthWeightRatio: clampNumber(fetus?.weight, 0.33, 3.0, 1.0),
+            birthAffinity: clampNumber(fetus?.affinity, -50, 50, 0),
+            talents: normalizeTalentList(fetus?.talents ?? fetus?.inheritedTalents),
+        });
+    }
+    profile.children = children;
+}
+/**
+ * 把代孕／寄生产下的孩子转交给 provider。
+ *
+ * 分娩逻辑只拿得到单一角色的 profile，无法写进别人的资料，
+ * 所以先把孩子留在承载者名下并标注 provider，再由这里（有 chatState）转交。
+ * provider 尚未注册时保留在承载者名下且保留标记，等对方注册后仍可辨认，
+ * 总之不能像先前那样直接丢弃。
+ */
+function transferProviderChildren(chatState) {
+    const characters = chatState?.characters;
+    if (!characters || typeof characters !== 'object')
+        return;
+    for (const [hostName, host] of Object.entries(characters)) {
+        const children = Array.isArray(host?.profile?.children) ? host.profile.children : null;
+        if (!children || children.length === 0)
+            continue;
+        const kept = [];
+        let moved = false;
+        for (const child of children) {
+            const providerSources = uniqueNonEmptyStrings(child?.providerSources);
+            // 多母源嵌合体默认登记在孕育者名下，只允许之后手动转移给其中一位母源。
+            if (providerSources.length > 1) {
+                kept.push(child);
+                continue;
+            }
+            const provider = providerSources[0] || String(child?.provider || '').trim();
+            const target = provider && provider !== hostName ? characters[provider] : null;
+            if (!target?.profile) {
+                kept.push(child);
+                continue;
+            }
+            // 已经在正确的人名下，不必再留 provider 标记
+            const { provider: _ignored, providerSources: _sources, ...received } = child;
+            target.profile.children = [...(Array.isArray(target.profile.children) ? target.profile.children : []), received];
+            moved = true;
+        }
+        if (moved)
+            host.profile.children = kept;
+    }
+}
+function resolveLaborStageHours(stage, fetusesCount, birthDifficulty) {
+    const safeCount = Math.max(1, fetusesCount);
+    const baseHours = LABOR_STAGE_BASE_HOURS[stage] || 0;
+    const increment = LABOR_STAGE_INCREMENT[stage] || 0;
+    return (baseHours + ((safeCount - 1) * increment)) * birthDifficulty;
+}
+function applyChildbirthInternal(profile, female, isNatural) {
+    const pregnant = profile.pregnant || {};
+    const base = profile.base || {};
+    const notify = profile.notify || {};
+    const experience = profile.experience || {};
+    const runtime = profile.__runtimeRef || null;
+    const remainingFetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses.map((item) => ({ ...item })) : [];
+    if (remainingFetuses.length > 0)
+        appendChildrenFromFetuses(profile, remainingFetuses);
+    clearPregnancyState(profile);
+    if (runtime)
+        restorePregnancyPhysiology(profile, runtime);
+    base.stage = '产后恢复';
+    base.days = 0;
+    experience.naturalBirthExperience = clampNumber(experience.naturalBirthExperience, 0, 999, 0) + (isNatural ? 1 : 0);
+    experience.surgicalBirthExperience = clampNumber(experience.surgicalBirthExperience, 0, 999, 0) + (isNatural ? 0 : 1);
+    profile.experience = experience;
+    profile.notify = {
+        ...notify,
+        firstly: `${female}进入了产后恢复`,
+        secondly: remainingFetuses.length > 0
+            ? (isNatural
+                ? `${female}自然分娩，生下了${remainingFetuses.length}个孩子`
+                : `${female}通过手术分娩，生下了${remainingFetuses.length}个孩子`)
+            : (isNatural
+                ? `${female}完成了自然分娩，进入产后恢复`
+                : `${female}完成了手术分娩，进入产后恢复`),
+    };
+    profile.base = base;
+    return true;
+}
+function applyLaborAmnionWear(profile, female, options = {}) {
+    const pregnant = profile.pregnant || {};
+    const notify = profile.notify || {};
+    const forceRupture = Boolean(options.forceRupture);
+    const silent = Boolean(options.silent);
+    const currentDurability = clampNumber(pregnant.amnionDurability, -100, 100, 0);
+    if (forceRupture) {
+        if (currentDurability > 0)
+            pregnant.amnionDurability = 0;
+        profile.pregnant = pregnant;
+        return false;
+    }
+    const drainBase = Math.max(1, clampNumber(pregnant.fetalEnergyDrain, 0, 9999, 1));
+    const multiplier = clampNumber(options.multiplier, 0.1, 10, 1);
+    const nextDurability = currentDurability - (drainBase * multiplier);
+    const ruptured = currentDurability > 0 && nextDurability <= 0;
+    pregnant.amnionDurability = nextDurability;
+    profile.pregnant = pregnant;
+    if (ruptured && !silent) {
+        profile.notify = {
+            ...notify,
+            secondly: `${female}破水了`,
+        };
+    }
+    return ruptured;
+}
+function getProdromalInitialHours(profile) {
+    return 48 * clampNumber(profile?.bio?.birthDifficulty, 0.1, 100, 1);
+}
+/** 真实产程下产兆前驱的累计延后上限（占初始时长的比例）：只能拖，拖不掉 */
+const REALISTIC_PRODROMAL_DELAY_CAP_RATIO = 1.0;
+function clearProdromalState(pregnant) {
+    pregnant.prodromalOriginStage = null;
+    pregnant.prodromalRemainingHours = 0;
+    pregnant.prodromalDelayProgressHours = 0;
+}
+function beginLaborPhase(pregnant, phase, fetusIndex = 0) {
+    pregnant.laborPhase = phase;
+    pregnant.laborFetusIndex = fetusIndex;
+    pregnant.laborHours = 0;
+    pregnant.effectiveLaborHours = 0;
+}
+function enterProdromalStage(profile, female, stage, message) {
+    const base = profile.base || {};
+    const pregnant = profile.pregnant || {};
+    base.stage = '产兆前驱';
+    base.days = 0;
+    pregnant.laborHours = 0;
+    pregnant.effectiveLaborHours = 0;
+    pregnant.laborPhase = null;
+    pregnant.laborFetusIndex = 0;
+    pregnant.prodromalOriginStage = stage;
+    pregnant.prodromalRemainingHours = getProdromalInitialHours(profile);
+    pregnant.prodromalDelayProgressHours = 0;
+    pregnant.laborPain = 0;
+    profile.pregnant = pregnant;
+    updateLaborPain(profile, '产兆前驱', null, 0);
+    profile.notify = {
+        ...(profile.notify || {}),
+        firstly: `${female}进入了产兆前驱`,
+        secondly: message,
+    };
+}
+function maybeStartLabor(profile, tick, female) {
+    const base = profile.base || {};
+    const stage = String(base.stage || '');
+    if (!['临产期', '逾期'].includes(stage) || tick.passedHours <= 0)
+        return false;
+    const pressureCap = getUterinePressureCap(profile);
+    const currentPressure = clampNumber(base.uterinePressure, 0, pressureCap, 0);
+    if (currentPressure < pressureCap * 0.66)
+        return false;
+    enterProdromalStage(profile, female, stage, `${female}开始出现分娩前兆，距离正式产程已经不远`);
+    return true;
+}
+function shouldKeepPregnancyPressureWarning(profile) {
+    const base = profile?.base || {};
+    const stage = String(base.stage || '');
+    if (!isPregnancyStage(stage))
+        return false;
+    const pressureCap = getUterinePressureCap(profile);
+    const currentPressure = clampNumber(base.uterinePressure, 0, pressureCap, 0);
+    return currentPressure >= (pressureCap * 0.5);
+}
+function applyPressureCrisis(profile, runtime, female) {
+    const base = profile?.base || {};
+    const pregnant = profile?.pregnant || {};
+    const immune = profile?.immune || {};
+    const experience = profile?.experience || {};
+    const cooldown = profile?.cooldown || {};
+    const stage = String(base.stage || '');
+    if (!isPregnancyStage(stage))
+        return { changed: false, warned: false };
+    const pressureCap = getUterinePressureCap(profile);
+    const currentPressure = clampNumber(base.uterinePressure, 0, pressureCap, 0);
+    const triggerThreshold = pressureCap * 0.5;
+    if (currentPressure < triggerThreshold)
+        return { changed: false, warned: false };
+    const notify = profile.notify || {};
+    if (!cooldown.pregnancyPressureWarning) {
+        const warningText = (stage === '孕早期' || stage === '孕中期')
+            ? `${female}子宫压力过高，有流产风险；若下次时间推进时仍未缓解，可能会真的流产`
+            : `${female}子宫压力过高，有提前发动产程的风险；若下次时间推进时仍未缓解，可能会进入产兆前驱`;
+        profile.cooldown = {
+            ...cooldown,
+            pregnancyPressureWarning: true,
+        };
+        profile.notify = {
+            ...notify,
+            secondly: warningText,
+        };
+        return { changed: false, warned: true };
+    }
+    if (stage === '孕早期' || stage === '孕中期') {
+        if (immune.miscarriage) {
+            profile.notify = {
+                ...notify,
+                secondly: `${female}的胚胎受到保护，流产无效，胚胎依旧留着`,
+            };
+            return { changed: false, warned: false };
+        }
+        clearPregnancyState(profile);
+        restorePregnancyPhysiology(profile, runtime || {});
+        base.stage = '产后恢复';
+        base.days = 0;
+        experience.miscarriageExperience = clampNumber(experience.miscarriageExperience, 0, 999, 0) + 1;
+        profile.experience = experience;
+        profile.notify = {
+            ...notify,
+            firstly: `${female}进入了产后恢复`,
+            secondly: `${female}因子宫压力过高而流产了`,
+        };
+        return { changed: true, warned: false };
+    }
+    if ((stage === '孕晚期' || stage === '临产期') && immune.miscarriage) {
+        profile.notify = {
+            ...notify,
+            secondly: `${female}的胎儿受到保护，早产被阻止了`,
+        };
+        return { changed: false, warned: false };
+    }
+    if (stage === '孕晚期' || stage === '临产期' || stage === '逾期') {
+        enterProdromalStage(profile, female, stage, `${female}子宫压力达到临界值，开始出现分娩前兆`);
+        return { changed: true, warned: false };
+    }
+    return { changed: false, warned: false };
+}
+function resolveSecondPhaseHours(profile, phase, fetuses) {
+    const birthDifficulty = clampNumber(profile?.bio?.birthDifficulty, 0.1, 100, 1);
+    if (phase === '间歇期')
+        return Math.max(0.5, birthDifficulty * 0.5);
+    const firstFetus = Array.isArray(fetuses) && fetuses.length > 0 ? fetuses[0] : null;
+    const fetalAngle = Number.isFinite(Number(firstFetus?.tendencyAngle)) ? wrapAngle(firstFetus.tendencyAngle) : 0;
+    const positionDifficulty = firstFetus ? calculatePositionDifficulty(fetalAngle, firstFetus) : 1;
+    const fetalWeight = firstFetus ? clampNumber(firstFetus?.weight, 0.33, 3.0, 1.0) : 1;
+    const total = resolveLaborStageHours('第二产程', 1, birthDifficulty) * positionDifficulty * fetalWeight;
+    return total * (phase === '胎体娩出' ? 0.4 : 0.6);
+}
+function resolveFirstStageExperienceMultiplier(profile) {
+    const naturalBirthCount = Math.min(FIRST_STAGE_NATURAL_BIRTH_EXPERIENCE.maxCount, Math.floor(clampNumber(profile?.experience?.naturalBirthExperience, 0, 999, 0)));
+    return Math.max(FIRST_STAGE_NATURAL_BIRTH_EXPERIENCE.minMultiplier, 1 - (naturalBirthCount * FIRST_STAGE_NATURAL_BIRTH_EXPERIENCE.reductionPerBirth));
+}
+function resolveLaborPhaseHours(profile, stage, phase, fetuses) {
+    const birthDifficulty = clampNumber(profile?.bio?.birthDifficulty, 0.1, 100, 1);
+    if (stage === '第一产程') {
+        const total = resolveLaborStageHours('第一产程', Math.max(fetuses.length, 1), birthDifficulty)
+            * resolveFirstStageExperienceMultiplier(profile);
+        if (phase === '活跃期')
+            return total * 0.35;
+        if (phase === '过渡期')
+            return total * 0.15;
+        return total * 0.5;
+    }
+    if (stage === '第二产程')
+        return resolveSecondPhaseHours(profile, phase, fetuses);
+    if (stage === '第三产程') {
+        if (phase === '产后观察')
+            return Math.max(LABOR_POSTPARTUM_OBSERVATION_HOURS, birthDifficulty * LABOR_POSTPARTUM_OBSERVATION_HOURS);
+        return Math.max(0.5, resolveLaborStageHours('第三产程', 1, birthDifficulty));
+    }
+    return 1;
+}
+function getLaborPhaseForStage(stage, currentPhase) {
+    if (stage === '第一产程')
+        return ['潜伏期', '活跃期', '过渡期'].includes(currentPhase) ? currentPhase : '潜伏期';
+    if (stage === '第二产程')
+        return ['胎体下降', '胎体娩出', '间歇期'].includes(currentPhase) ? currentPhase : '胎体下降';
+    if (stage === '第三产程')
+        return ['供养器官娩出', '产后观察'].includes(currentPhase) ? currentPhase : '供养器官娩出';
+    return null;
+}
+function updateLaborPain(profile, stage, phase, progress = 0, obstruction = false) {
+    const pregnant = profile.pregnant || {};
+    const base = profile.base || {};
+    const ratio = clampNumber(progress, 0, 1, 0);
+    const ranges = {
+        产兆前驱: [0.5, 2.5],
+        潜伏期: [2, 4],
+        活跃期: [4, 7],
+        过渡期: [7, 8.5],
+        胎体下降: [6, 8],
+        胎体娩出: [8, 9],
+        间歇期: [3, 5],
+        供养器官娩出: [3, 5.5],
+        产后观察: [1, 3],
+    };
+    const range = stage === '产兆前驱' ? ranges.产兆前驱 : (ranges[phase] || [0, 0]);
+    let pain = range[0] + ((range[1] - range[0]) * ratio);
+    const birthDifficulty = clampNumber(profile?.bio?.birthDifficulty, 0.1, 100, 1);
+    const difficultyWeight = stage === '产兆前驱' ? (0.25 + (ratio * 0.25)) : (phase === '潜伏期' ? (0.25 + (ratio * 0.75)) : (phase === '产后观察' ? 0.5 : 1));
+    pain += clampNumber((birthDifficulty - 1) * 1.5, -1.5, 3, 0) * difficultyWeight;
+    const toleranceWeight = stage === '产兆前驱' ? 0.5 : (phase === '潜伏期' ? (0.5 + (ratio * 0.5)) : (phase === '产后观察' ? 0.5 : 1));
+    pain += (4 - clampNumber(base.vitalityLevel, 1, 7, 4)) * toleranceWeight;
+    pain += ((clampNumber(base.psyStressLevel, 1, 7, 4) - 4) * 0.5) * toleranceWeight;
+    if (obstruction)
+        pain += 1.5;
+    pregnant.laborPain = Math.round(clampNumber(pain, 0, 10, 0) * 10) / 10;
+    profile.pregnant = pregnant;
+    return pregnant.laborPain;
+}
+function processLabor(profile, tick, female) {
+    const base = profile.base || {};
+    const pregnant = profile.pregnant || {};
+    const notify = profile.notify || {};
+    const realisticLabor = Boolean(profile?.immune?.realisticLabor);
+    const stage = String(base.stage || '');
+    const rawHours = tick.deltaDays * 24;
+    if (rawHours <= 0)
+        return false;
+    const pressureCap = getUterinePressureCap(profile);
+    const currentPressure = clampNumber(base.uterinePressure, 0, pressureCap, 0);
+    const libido = clampNumber(base.libido, 0, getLibidoCap(profile), 0);
+    const libidoMultiplier = 1 + (libido / Math.max(getLibidoCap(profile), 1)) * 0.25;
+    const baseEffectiveHours = rawHours * libidoMultiplier;
+    let currentStageHours = clampNumber(pregnant.laborHours, 0, 9999, 0);
+    let currentEffectiveHours = clampNumber(pregnant.effectiveLaborHours, 0, 9999, 0);
+    if (stage === '产兆前驱') {
+        updateProdromalFetalPositions(profile, tick);
+        const initialHours = getProdromalInitialHours(profile);
+        const remainingHours = clampNumber(pregnant.prodromalRemainingHours, 0, 9999, initialHours) - rawHours;
+        pregnant.prodromalRemainingHours = Math.max(0, remainingHours);
+        updateLaborPain(profile, stage, null, 1 - (Math.max(0, remainingHours) / initialHours));
+        if (remainingHours <= 0) {
+            base.stage = '第一产程';
+            base.days = 0;
+            beginLaborPhase(pregnant, '潜伏期', 0);
+            updateLaborPain(profile, '第一产程', '潜伏期', 0);
+            clearProdromalState(pregnant);
+            profile.notify = {
+                ...notify,
+                firstly: `${female}进入了第一产程`,
+                secondly: `${female}的产兆前驱结束，宫缩进一步加剧，正式进入分娩`,
+            };
+            return true;
+        }
+        notify.secondly = `${female}仍处于产兆前驱，距离正式产程约剩${Math.ceil(remainingHours)}小时`;
+        profile.notify = notify;
+        return false;
+    }
+    if (!LABOR_STAGES.includes(stage))
+        return false;
+    const fetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [];
+    const phase = getLaborPhaseForStage(stage, String(pregnant.laborPhase || ''));
+    pregnant.laborPhase = phase;
+    if (stage === '第二产程' && clampNumber(pregnant.laborFetusIndex, 0, 99, 0) <= 0)
+        pregnant.laborFetusIndex = 1;
+    const realisticObstruction = realisticLabor && stage === '第二产程'
+        ? getRealisticLaborObstruction(fetuses)
+        : null;
+    if (realisticObstruction) {
+        notify.firstly = `${female}发生难产警示：${realisticObstruction}，建议使用 bsChildbirth 进行手术产`;
+    }
+    const threshold = resolveLaborPhaseHours(profile, stage, phase, fetuses);
+    const stallThreshold = pressureCap * 0.66;
+    const isThirdStageWithNoFetuses = stage === '第三产程' && fetuses.length === 0;
+    currentStageHours += rawHours;
+    pregnant.laborHours = currentStageHours;
+    if (currentPressure < stallThreshold && !isThirdStageWithNoFetuses) {
+        const currentRatio = pressureCap > 0 ? (currentPressure / pressureCap) : 0;
+        const chanceToStall = Math.max(0, Math.min(1, 1 - currentRatio));
+        if (Math.random() < chanceToStall) {
+            profile.notify = {
+                ...notify,
+                secondly: `${female}的子宫收缩微弱，产程进展停滞`,
+            };
+            pregnant.effectiveLaborHours = currentEffectiveHours;
+            updateLaborPain(profile, stage, phase, currentEffectiveHours / threshold, Boolean(realisticObstruction));
+            return false;
+        }
+    }
+    else if (currentPressure >= pressureCap && !realisticLabor) {
+        if (stage === '第一产程') {
+            applyLaborAmnionWear(profile, female, { forceRupture: true, silent: true });
+            base.uterinePressure = pressureCap * 0.5;
+            base.stage = '第二产程';
+            base.days = 0;
+            beginLaborPhase(pregnant, '胎体下降', 1);
+            updateLaborPain(profile, '第二产程', '胎体下降', 0);
+            profile.notify = {
+                ...notify,
+                firstly: `${female}进入了第二产程`,
+                secondly: `${female}宫口开全，产程突然加速`,
+            };
+            return true;
+        }
+        if (stage === '第二产程') {
+            applyLaborAmnionWear(profile, female, { forceRupture: true, silent: true });
+            let father = '未知';
+            let gender = '未知';
+            if (fetuses.length > 0) {
+                const baby = fetuses.shift();
+                father = String(baby?.fathers || '未知');
+                gender = String(baby?.gender || '未知');
+                appendChildrenFromFetuses(profile, [baby]);
+                pregnant.fetuses = fetuses;
+                pregnant.fetusesCount = fetuses.length;
+                updateFetalEnergyDrain(profile);
+            }
+            base.uterinePressure = pressureCap * 0.5;
+            if (fetuses.length === 0) {
+                base.stage = '第三产程';
+                base.days = 0;
+                beginLaborPhase(pregnant, '供养器官娩出', 0);
+                updateLaborPain(profile, '第三产程', '供养器官娩出', 0);
+                profile.notify = {
+                    ...notify,
+                    firstly: `${female}进入了第三产程`,
+                    secondly: `${female}产程突然加速，生下了${father}的孩子，性别为${gender}，正在娩出胎盘`,
+                };
+            }
+            else {
+                beginLaborPhase(pregnant, '胎体下降', clampNumber(pregnant.laborFetusIndex, 1, 99, 1) + 1);
+                updateLaborPain(profile, '第二产程', '胎体下降', 0);
+                profile.notify = {
+                    ...notify,
+                    secondly: `${female}产程突然加速，生下了${father}的孩子，性别为${gender}，仍有${fetuses.length}胎待产`,
+                };
+            }
+            return base.stage !== stage;
+        }
+        if (stage === '第三产程') {
+            applyLaborAmnionWear(profile, female, { forceRupture: true, silent: true });
+            return applyChildbirthInternal(profile, female, true);
+        }
+    }
+    const pressureMultiplier = stage === '第三产程'
+        ? 1
+        : Math.max(0.5, Math.min(1.5, 0.5 + (currentPressure / 150)));
+    const effectiveHoursGain = baseEffectiveHours * pressureMultiplier;
+    currentEffectiveHours += effectiveHoursGain;
+    pregnant.effectiveLaborHours = currentEffectiveHours;
+    updateLaborPain(profile, stage, phase, currentEffectiveHours / threshold, Boolean(realisticObstruction));
+    if (stage === '第一产程') {
+        applyLaborAmnionWear(profile, female, { multiplier: rawHours * 0.35 });
+    }
+    else if (stage === '第二产程') {
+        applyLaborAmnionWear(profile, female, { multiplier: rawHours * 0.75 });
+    }
+    else if (stage === '第三产程') {
+        applyLaborAmnionWear(profile, female, { forceRupture: true, silent: true });
+    }
+    if (pregnant.effectiveLaborHours <= threshold) {
+        if (stage === '第二产程' && realisticObstruction && phase === '胎体娩出') {
+            notify.secondly = `${female}因${realisticObstruction}无法自然娩出胎儿，产程持续受阻`;
+        }
+        else if (stage === '第二产程' && fetuses.length > 0) {
+            const firstFetus = fetuses[0];
+            const fetalAngle = Number.isFinite(Number(firstFetus?.tendencyAngle)) ? wrapAngle(firstFetus.tendencyAngle) : 0;
+            const positionDifficulty = calculatePositionDifficulty(fetalAngle, firstFetus);
+            const fetalWeight = clampNumber(firstFetus?.weight, 0.33, 3.0, 1.0);
+            notify.secondly = phase === '间歇期'
+                ? `${female}正在第${pregnant.laborFetusIndex}胎娩出后的间歇期`
+                : `${female}正处于第${pregnant.laborFetusIndex}胎的${phase}，胚位${fetalAngle.toFixed(1)}°，难度${positionDifficulty.toFixed(2)}，胎重${fetalWeight.toFixed(2)}，进度${pregnant.effectiveLaborHours.toFixed(2)}/${threshold.toFixed(2)}小时`;
+        }
+        else {
+            if (stage === '第一产程') {
+                notify.secondly = `${female}正处于第一产程的${phase}`;
+            }
+            else {
+                notify.secondly = phase === '产后观察'
+                    ? `${female}已进入产后观察，疼痛与出血状况正在监测`
+                    : `${female}正在娩出供养器官，进度${pregnant.effectiveLaborHours.toFixed(2)}/${threshold.toFixed(2)}小时`;
+            }
+        }
+        profile.notify = notify;
+        return false;
+    }
+    if (stage === '第一产程') {
+        if (phase === '潜伏期') {
+            beginLaborPhase(pregnant, '活跃期', 0);
+            updateLaborPain(profile, stage, '活跃期', 0);
+            profile.notify = { ...notify, firstly: `${female}进入了第一产程·活跃期`, secondly: `${female}的规律宫缩明显加强` };
+            return false;
+        }
+        if (phase === '活跃期') {
+            beginLaborPhase(pregnant, '过渡期', 0);
+            updateLaborPain(profile, stage, '过渡期', 0);
+            profile.notify = { ...notify, firstly: `${female}进入了第一产程·过渡期`, secondly: `${female}的分娩疼痛与压迫感进一步攀升` };
+            return false;
+        }
+        base.stage = '第二产程';
+        base.days = 0;
+        beginLaborPhase(pregnant, '胎体下降', 1);
+        updateLaborPain(profile, '第二产程', '胎体下降', 0);
+        profile.notify = { ...notify, firstly: `${female}进入了第二产程·第1胎体下降`, secondly: `${female}开始推动胎儿下降` };
+        return true;
+    }
+    if (stage === '第二产程') {
+        if (realisticObstruction && phase === '胎体娩出') {
+            pregnant.effectiveLaborHours = threshold;
+            profile.notify = {
+                ...notify,
+                secondly: `${female}因${realisticObstruction}无法自然娩出胎儿`,
+            };
+            return false;
+        }
+        if (phase === '胎体下降') {
+            beginLaborPhase(pregnant, '胎体娩出', pregnant.laborFetusIndex);
+            updateLaborPain(profile, stage, '胎体娩出', 0);
+            profile.notify = {
+                ...notify,
+                firstly: `${female}进入了第二产程·第${pregnant.laborFetusIndex}胎体娩出`,
+                secondly: `${female}的第${pregnant.laborFetusIndex}胎开始娩出`,
+            };
+            return false;
+        }
+        if (phase === '间歇期') {
+            const nextIndex = clampNumber(pregnant.laborFetusIndex, 1, 99, 1) + 1;
+            beginLaborPhase(pregnant, '胎体下降', nextIndex);
+            updateLaborPain(profile, stage, '胎体下降', 0);
+            profile.notify = {
+                ...notify,
+                firstly: `${female}进入了第二产程·第${nextIndex}胎体下降`,
+                secondly: `${female}开始推动下一胎下降`,
+            };
+            return false;
+        }
+        if (fetuses.length > 0) {
+            const baby = fetuses.shift();
+            const father = String(baby?.fathers || '未知');
+            const gender = String(baby?.gender || '未知');
+            appendChildrenFromFetuses(profile, [baby]);
+            pregnant.fetuses = fetuses;
+            pregnant.fetusesCount = fetuses.length;
+            updateFetalEnergyDrain(profile);
+            if (fetuses.length === 0) {
+                base.stage = '第三产程';
+                base.days = 0;
+                beginLaborPhase(pregnant, '供养器官娩出', 0);
+                updateLaborPain(profile, '第三产程', '供养器官娩出', 0);
+                profile.notify = {
+                    ...notify,
+                    firstly: `${female}进入了第三产程·供养器官娩出`,
+                    secondly: `${female}生下了${father}的孩子，性别为${gender}，正在娩出胎盘`,
+                };
+            }
+            else {
+                beginLaborPhase(pregnant, '间歇期', pregnant.laborFetusIndex);
+                updateLaborPain(profile, stage, '间歇期', 0);
+                profile.notify = {
+                    ...notify,
+                    firstly: `${female}进入了第二产程·第${pregnant.laborFetusIndex}胎后间歇期`,
+                    secondly: `${female}生下了${father}的孩子，性别为${gender}，仍有${fetuses.length}胎待产`,
+                };
+            }
+            return base.stage !== stage;
+        }
+        base.stage = '第三产程';
+        base.days = 0;
+        beginLaborPhase(pregnant, '供养器官娩出', 0);
+        updateLaborPain(profile, '第三产程', '供养器官娩出', 0);
+        return true;
+    }
+    if (stage === '第三产程') {
+        if (phase === '供养器官娩出') {
+            beginLaborPhase(pregnant, '产后观察', 0);
+            updateLaborPain(profile, stage, '产后观察', 0);
+            profile.notify = {
+                ...notify,
+                firstly: `${female}进入了第三产程·产后观察`,
+                secondly: `${female}的供养器官已娩出，开始观察产后状态`,
+            };
+            return false;
+        }
+        return applyChildbirthInternal(profile, female, true);
+    }
+    return false;
+}
+function applyAbortion(chatState, args) {
+    const female = String(args?.female || '').trim();
+    const force = Boolean(args?.force);
+    const fetusIndex = args?.fetusIndex;
+    const character = chatState.characters?.[female];
+    if (!female || !character) {
+        return { applied: false, message: `bsAbortion skipped: unknown character ${female || '(empty)'}.` };
+    }
+    const next = cloneValue(character);
+    const profile = next.profile || {};
+    const base = profile.base || {};
+    const pregnant = profile.pregnant || {};
+    const notify = profile.notify || {};
+    const experience = profile.experience || {};
+    const immune = profile.immune || {};
+    const stage = String(base.stage || '');
+    const fetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses.map((item) => ({ ...item })) : [];
+    const hasConceptionState = fetuses.length > 0 || clampNumber(base.fertilizationDays, 0, 9999, 0) > 0 || isPregnancyStage(stage);
+    if (!hasConceptionState) {
+        return { applied: false, message: `bsAbortion skipped for ${female}: no conception state.` };
+    }
+    if (immune.miscarriage && !force) {
+        profile.notify = {
+            ...notify,
+            secondly: `${female}的胚胎受到保护，流产无效，胚胎依旧留着`,
+        };
+        next.profile = profile;
+        chatState.characters[female] = next;
+        return { applied: false, message: `bsAbortion skipped for ${female}: miscarriage immune.` };
+    }
+    if (fetusIndex !== undefined && (!Number.isInteger(fetusIndex) || fetusIndex < 0 || fetusIndex >= fetuses.length)) {
+        return { applied: false, message: `bsAbortion skipped for ${female}: invalid fetusIndex.` };
+    }
+    if (Number.isInteger(fetusIndex) && fetusIndex >= 0 && fetusIndex < fetuses.length) {
+        const removedFetus = fetuses.splice(fetusIndex, 1)[0];
+        pregnant.fetuses = fetuses;
+        pregnant.fetusesCount = fetuses.length;
+        profile.pregnant = pregnant;
+        updateFetalEnergyDrain(profile);
+        if (fetuses.length > 0)
+            applyPregnancyPhysiology(profile, next.runtime || {});
+        if (fetuses.length > 0) {
+            const gender = String(removedFetus?.gender || '未知');
+            const race = String(removedFetus?.race || '未知');
+            profile.notify = {
+                ...notify,
+                secondly: `${female}的第${fetusIndex + 1}胎（${gender}，${race}）消失了`,
+            };
+            next.profile = profile;
+            chatState.characters[female] = next;
+            return { applied: true, message: `bsAbortion reduced fetus count for ${female}.` };
+        }
+    }
+    clearPregnancyState(profile);
+    restorePregnancyPhysiology(profile, next.runtime || {});
+    if (MENSTRUAL_STAGES.includes(stage)) {
+        base.stage = '卵泡期';
+        base.days = 0;
+        profile.notify = {
+            ...notify,
+            firstly: `${female}进入了卵泡期`,
+            secondly: `${female}避孕成功`,
+        };
+    }
+    else {
+        base.stage = '产后恢复';
+        base.days = 0;
+        experience.miscarriageExperience = clampNumber(experience.miscarriageExperience, 0, 999, 0) + 1;
+        profile.experience = experience;
+        profile.notify = {
+            ...notify,
+            firstly: `${female}进入了产后恢复`,
+            secondly: `${female}流产了`,
+        };
+    }
+    next.profile = profile;
+    chatState.characters[female] = syncCharacterStageFromProfile(next);
+    return { applied: true, message: `bsAbortion applied to ${female}.` };
+}
+/**
+ * 植入外源胚胎：代孕、胚胎移植、虫母注卵、寄生产卵。
+ *
+ * 与自然受精的差别在于胚胎的遗传来源与承载者分离。工具只把受精卵加入
+ * 共用 fertilizationDays 窗口，不直接完成着床；遗传资料由 race/fatherRace 描述，
+ * provider 只记录母源归属。单一母源出生后自动转交，多母源嵌合体留在孕母名下。
+ */
+function applyImplantEmbryo(chatState, args) {
+    const female = String(args?.female || '').trim();
+    const character = chatState.characters?.[female];
+    if (!female || !character) {
+        return { applied: false, message: `bsImplantEmbryo skipped: unknown character ${female || '(empty)'}.` };
+    }
+    const provider = String(args?.provider || '').trim();
+    if (!provider) {
+        return { applied: false, message: `bsImplantEmbryo skipped for ${female}: provider is required.` };
+    }
+    if (provider === female) {
+        return { applied: false, message: `bsImplantEmbryo skipped for ${female}: provider must differ from the carrier; use natural conception instead.` };
+    }
+    const next = cloneValue(character);
+    const profile = next.profile || {};
+    const base = profile.base || {};
+    const pregnant = profile.pregnant || {};
+    const notify = profile.notify || {};
+    const currentStage = String(base.stage || '');
+    if (isPregnancyStage(currentStage)) {
+        return { applied: false, message: `bsImplantEmbryo skipped for ${female}: implantation has already completed.` };
+    }
+    const count = Math.max(1, Math.min(50, Math.floor(Number(args?.count) || 1)));
+    const fathers = String(args?.fathers || '').trim() || '未知';
+    // provider 只负责归属；遗传资料来自 race/fatherRace 描述符。
+    // race 未提供时，已注册 provider 的状态仅作为兼容性预设，不依赖 provider 名称一定可解析。
+    const providerCharacter = chatState.characters?.[provider];
+    const explicitRace = String(args?.race || '').trim();
+    const providerRace = String(providerCharacter?.profile?.base?.race || '').trim();
+    const geneticDescriptor = explicitRace
+        ? parseRaceDescriptor(explicitRace)
+        : {
+            race: parseRaceDescriptor(providerRace || base.race || '人类').race || '人类',
+            derivedType: providerCharacter?.profile?.base?.derivedType
+                ? String(providerCharacter.profile.base.derivedType)
+                : null,
+        };
+    const geneticRace = geneticDescriptor.race || '人类';
+    const fatherRaceText = String(args?.fatherRace || '').trim();
+    const fatherDescriptor = parseRaceDescriptor(fatherRaceText || geneticRace);
+    const geneticProfile = { base: { race: geneticRace } };
+    const spermSeed = {
+        male: fathers,
+        race: fatherDescriptor.race || geneticRace,
+        // 所有外部遗传衍生类型都占父系槽：fatherRace 明示者优先，否则退回卵源 race。
+        derivedType: fatherDescriptor.derivedType || geneticDescriptor.derivedType || null,
+    };
+    const existingFetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [];
+    ensureEmbryoMetadata(pregnant);
+    for (let index = 0; index < count; index += 1) {
+        existingFetuses.push(createSimpleFetus(profile, spermSeed, currentStage, { geneticProfile, provider }));
+    }
+    pregnant.fetuses = existingFetuses;
+    ensureEmbryoMetadata(pregnant);
+    pregnant.fetusesCount = existingFetuses.length;
+    if (existingFetuses.length === count)
+        base.fertilizationDays = 0;
+    profile.base = base;
+    profile.pregnant = pregnant;
+    updateFetalEnergyDrain(profile);
+    profile.notify = {
+        ...notify,
+        secondly: `${female}加入了${count}个来自${provider}的受精卵，正等待共同著床窗口`,
+    };
+    next.profile = profile;
+    chatState.characters[female] = syncCharacterStageFromProfile(next);
+    return { applied: true, message: `bsImplantEmbryo applied to ${female}: ${count} pre-implantation embryo(s) from ${provider}.` };
+}
+/** 破水只允许在已进入产兆前驱后作为转入正式产程的受控事件。 */
+const RUPTURE_ALLOWED_PRELABOR_STAGES = Object.freeze(['产兆前驱']);
+/** 产兆前驱中破水所需的宫压门槛。 */
+const RUPTURE_PRESSURE_RATIO = 0.66;
+/**
+ * 破水。
+ *
+ * 设定上产程前 amnionDurability 恒 ≥ 1（任何磨损只让羊膜变薄），
+ * 所以模型经常写出系统层面不可能发生的破水叙事，两边就此脱节。
+ * 这里给出唯一一条受控入口：条件足够才破，并直接推进第一产程；
+ * 条件不足则明确拒绝，让模型知道该改写叙事而不是继续假设已破水。
+ */
+function applyRuptureMembranes(chatState, args) {
+    const female = String(args?.female || '').trim();
+    const character = chatState.characters?.[female];
+    if (!female || !character) {
+        return { applied: false, message: `bsRuptureMembranes skipped: unknown character ${female || '(empty)'}.` };
+    }
+    const next = cloneValue(character);
+    const profile = next.profile || {};
+    const base = profile.base || {};
+    const pregnant = profile.pregnant || {};
+    const notify = profile.notify || {};
+    const stage = String(base.stage || '');
+    const inPrelabor = RUPTURE_ALLOWED_PRELABOR_STAGES.includes(stage);
+    const inLabor = ['第一产程', '第二产程'].includes(stage);
+    if (!inPrelabor && !inLabor) {
+        return {
+            applied: false,
+            message: `bsRuptureMembranes skipped for ${female}: stage ${stage || '(none)'} cannot rupture; do not narrate rupture yet.`,
+        };
+    }
+    if (clampNumber(pregnant.amnionDurability, -100, 100, 0) <= 0) {
+        return { applied: false, message: `bsRuptureMembranes skipped for ${female}: already ruptured.` };
+    }
+    if (inPrelabor) {
+        const pressureCap = getUterinePressureCap(profile);
+        const currentPressure = clampNumber(base.uterinePressure, 0, pressureCap, 0);
+        if (currentPressure < pressureCap * RUPTURE_PRESSURE_RATIO) {
+            return {
+                applied: false,
+                message: `bsRuptureMembranes skipped for ${female}: uterine pressure too low to rupture; do not narrate rupture yet.`,
+            };
+        }
+    }
+    pregnant.amnionDurability = 0;
+    profile.pregnant = pregnant;
+    if (inPrelabor) {
+        base.stage = '第一产程';
+        base.days = 0;
+        beginLaborPhase(pregnant, '潜伏期', 0);
+        updateLaborPain(profile, '第一产程', '潜伏期', 0);
+        clearProdromalState(pregnant);
+        profile.notify = {
+            ...notify,
+            firstly: `${female}进入了第一产程`,
+            secondly: `${female}破水了，分娩正式开始`,
+        };
+    }
+    else {
+        profile.notify = { ...notify, secondly: `${female}破水了` };
+    }
+    profile.base = base;
+    next.profile = profile;
+    chatState.characters[female] = syncCharacterStageFromProfile(next);
+    return { applied: true, message: `bsRuptureMembranes applied to ${female}.` };
+}
+function applyChildbirth(chatState, args) {
+    const female = String(args?.female || '').trim();
+    const character = chatState.characters?.[female];
+    if (!female || !character) {
+        return { applied: false, message: `bsChildbirth skipped: unknown character ${female || '(empty)'}.` };
+    }
+    const next = cloneValue(character);
+    const profile = next.profile || {};
+    const fetuses = Array.isArray(profile?.pregnant?.fetuses) ? profile.pregnant.fetuses : [];
+    if (fetuses.length === 0) {
+        return { applied: false, message: `bsChildbirth skipped for ${female}: no fetuses.` };
+    }
+    profile.__runtimeRef = next.runtime || {};
+    applyChildbirthInternal(profile, female, false);
+    delete profile.__runtimeRef;
+    next.profile = profile;
+    chatState.characters[female] = syncCharacterStageFromProfile(next);
+    transferProviderChildren(chatState);
+    return { applied: true, message: `bsChildbirth applied to ${female}.` };
+}
+function applyLaborResistance(profile, female) {
+    const base = profile.base || {};
+    const pregnant = profile.pregnant || {};
+    const notify = profile.notify || {};
+    const fetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [];
+    if (String(base.stage || '') !== '产兆前驱') {
+        profile.notify = {
+            ...notify,
+            thirdly: `${female}不在产兆前驱阶段，无法执行抵抗判定`,
+        };
+        return { applied: false, message: `bsMaternalFetalInteraction skipped for ${female}: not in prodromal stage.` };
+    }
+    const realisticLabor = Boolean(profile?.immune?.realisticLabor);
+    const vitality = clampNumber(base.vitality, 0, 9999, 100);
+    const uterinePressure = clampNumber(base.uterinePressure, 0, 9999, 0);
+    const fetalEnergyDrain = clampNumber(pregnant.fetalEnergyDrain, 0, 9999, 0);
+    const birthDifficulty = clampNumber(profile?.bio?.birthDifficulty, 0.1, 100, 1);
+    const breedTolerance = clampNumber(profile?.bio?.breedTolerance, 0.1, 100, 1);
+    const judgeCount = Math.max(1, Math.round(fetalEnergyDrain + birthDifficulty - breedTolerance));
+    let successCount = 0;
+    let failureCount = 0;
+    for (let round = 0; round < judgeCount; round += 1) {
+        const threshold = randomInt(0, Math.max(0, Math.floor(uterinePressure)));
+        const passed = vitality > threshold;
+        if (passed)
+            successCount += 1;
+        else
+            failureCount += 1;
+        if (fetuses.length > 0) {
+            const randomFetusIndex = randomInt(0, fetuses.length - 1);
+            const fetus = fetuses[randomFetusIndex];
+            const currentAngle = Number.isFinite(Number(fetus?.tendencyAngle))
+                ? Number(fetus.tendencyAngle)
+                : randomInt(0, 360);
+            fetus.tendencyAngle = wrapAngle(currentAngle + randomInt(-90, 90));
+        }
+        if (clampNumber(pregnant.amnionDurability, 0, 100, 100) > 0) {
+            const drain = Math.max(1, fetalEnergyDrain || 1);
+            pregnant.amnionDurability = Math.max(1, clampNumber(pregnant.amnionDurability, 0, 100, 100) - drain);
+        }
+    }
+    const initialHours = getProdromalInitialHours(profile);
+    const rawDeltaHours = (successCount * 6) - (failureCount * 12);
+    let deltaHours = Math.max(rawDeltaHours, -(initialHours * 0.75));
+    // 真实产程：分娩只能延后、不能取消。累计延后上限为初始时长的 100%，
+    // 到顶后再怎么抵抗成功也不会继续往后推，也不会退回妊娠阶段。
+    const currentProgress = Math.max(0, clampNumber(pregnant.prodromalDelayProgressHours, 0, 9999, 0));
+    const delayCapped = realisticLabor && deltaHours > 0;
+    if (delayCapped) {
+        const delayCap = initialHours * REALISTIC_PRODROMAL_DELAY_CAP_RATIO;
+        deltaHours = Math.max(0, Math.min(deltaHours, delayCap - currentProgress));
+    }
+    const atDelayCap = delayCapped && deltaHours <= 0;
+    const remainingHours = clampNumber(pregnant.prodromalRemainingHours, 0, 9999, initialHours) + deltaHours;
+    const progressHours = Math.max(0, currentProgress + deltaHours);
+    pregnant.prodromalRemainingHours = Math.max(0, remainingHours);
+    pregnant.prodromalDelayProgressHours = progressHours;
+    updateLaborPain(profile, '产兆前驱', null, 1 - (Math.max(0, remainingHours) / initialHours));
+    pregnant.fetuses = fetuses;
+    profile.pregnant = pregnant;
+    if (remainingHours <= 0) {
+        base.stage = '第一产程';
+        base.days = 0;
+        beginLaborPhase(pregnant, '潜伏期', 0);
+        updateLaborPain(profile, '第一产程', '潜伏期', 0);
+        clearProdromalState(pregnant);
+        profile.notify = {
+            ...notify,
+            firstly: `${female}进入了第一产程`,
+            secondly: `${female}的产兆前驱时间耗尽，进入分娩`,
+            thirdly: `${female}的抵抗判定为${successCount}次成功、${failureCount}次失败，未能继续延后分娩`,
+        };
+        return { applied: true, message: `bsMaternalFetalInteraction applied to ${female}: prodromal duration exhausted.` };
+    }
+    // 真实产程下分娩不可取消：即使抵抗再成功，也不会退回妊娠阶段
+    if (progressHours >= initialHours && !realisticLabor) {
+        const target = derivePregnancyStageState(clampNumber(pregnant.effectivePregnantDays, 0, 9999, 0), 1);
+        const reducedPressure = Math.floor(uterinePressure * 0.25);
+        base.stage = target.stage;
+        base.days = target.days;
+        base.uterinePressure = reducedPressure;
+        pregnant.laborPhase = null;
+        pregnant.laborFetusIndex = 0;
+        pregnant.laborHours = 0;
+        pregnant.effectiveLaborHours = 0;
+        pregnant.laborPain = 0;
+        clearProdromalState(pregnant);
+        profile.notify = {
+            ...notify,
+            firstly: `${female}进入了${target.stage}`,
+            secondly: `${female}的分娩前兆缓解，回到${target.stage}`,
+            thirdly: `${female}的抵抗判定为${successCount}次成功、${failureCount}次失败，成功延缓分娩`,
+        };
+        return { applied: true, message: `bsMaternalFetalInteraction applied to ${female}: labor resisted.` };
+    }
+    profile.notify = {
+        ...notify,
+        thirdly: atDelayCap
+            ? `${female}的抵抗判定为${successCount}次成功、${failureCount}次失败，但分娩已无法再延后，剩余约${Math.ceil(remainingHours)}小时`
+            : `${female}的抵抗判定为${successCount}次成功、${failureCount}次失败，产兆前驱时间变动${deltaHours >= 0 ? '+' : ''}${deltaHours.toFixed(1)}小时，剩余约${Math.ceil(remainingHours)}小时`,
+    };
+    return { applied: true, message: `bsMaternalFetalInteraction applied to ${female}: prodromal duration adjusted.` };
+}
+function applyMaternalFetalInteraction(chatState, args) {
+    const female = String(args?.female || '').trim();
+    const direction = String(args?.direction || 'fetal').trim();
+    const change = String(args?.change || '').trim();
+    const character = chatState.characters?.[female];
+    if (!female || !character) {
+        return { applied: false, message: `bsMaternalFetalInteraction skipped: unknown character ${female || '(empty)'}.` };
+    }
+    const changeMap = Object.freeze({
+        slight_increase: 0.5,
+        significant_increase: 1,
+        slight_decrease: -0.5,
+        significant_decrease: -1,
+    });
+    const changeDisplayMap = Object.freeze({
+        slight_increase: '轻微增加',
+        significant_increase: '显著增加',
+        slight_decrease: '轻微减少',
+        significant_decrease: '显著减少',
+    });
+    const maternalNutritionGainMap = Object.freeze({
+        slight_increase: 1,
+        significant_increase: 2,
+        slight_decrease: 1,
+        significant_decrease: 2,
+    });
+    const next = cloneValue(character);
+    const profile = next.profile || {};
+    const stage = String(profile?.base?.stage || '');
+    const interactionCooldown = profile.cooldown || {};
+    if (interactionCooldown.maternalFetalInteractionUsed) {
+        return { applied: false, message: `bsMaternalFetalInteraction skipped for ${female}: already changed during this story hour.` };
+    }
+    if (direction === 'maternal' && stage === '产兆前驱') {
+        const result = applyLaborResistance(profile, female);
+        if (result.applied) {
+            profile.cooldown = {
+                ...(profile.cooldown || {}),
+                maternalFetalInteractionUsed: true,
+            };
+        }
+        next.profile = profile;
+        chatState.characters[female] = syncCharacterStageFromProfile(next);
+        return result;
+    }
+    const pregnant = profile.pregnant || {};
+    const fetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [];
+    if (fetuses.length === 0) {
+        return { applied: false, message: `bsMaternalFetalInteraction skipped for ${female}: no fetuses.` };
+    }
+    const cooldown = profile.cooldown || {};
+    if (direction === 'maternal') {
+        const selectedIndex = randomInt(0, fetuses.length - 1);
+        const selectedFetus = fetuses[selectedIndex];
+        const maternalChangeKeys = Object.keys(changeMap);
+        const maternalChange = maternalChangeKeys[randomInt(0, maternalChangeKeys.length - 1)];
+        const maternalChangeValue = changeMap[maternalChange];
+        const maternalChangeDisplay = changeDisplayMap[maternalChange];
+        let nutritionMessage = '';
+        const psyStress = clampNumber(profile?.base?.psyStress, 0, 9999, 0);
+        const success = Math.random() >= Math.min(1, psyStress / 200);
+        if (success) {
+            const currentAffinity = clampNumber(selectedFetus?.affinity, -50, 50, 0);
+            selectedFetus.affinity = clampNumber(currentAffinity + maternalChangeValue, -50, 50, 0);
+            const symptomReliefPending = clampNumber(pregnant.symptomReliefPending, 0, 999, 0);
+            if (symptomReliefPending > 0) {
+                const nutritionGain = maternalNutritionGainMap[maternalChange];
+                pregnant.nutrition = (Number(pregnant.nutrition) || 0) + nutritionGain;
+                pregnant.symptomReliefPending = symptomReliefPending - 1;
+                nutritionMessage = pregnant.symptomReliefPending > 0
+                    ? `，身体补回了${nutritionGain}点供养力（仍有${pregnant.symptomReliefPending}次不适待安抚）`
+                    : `，身体补回了${nutritionGain}点供养力`;
+            }
+        }
+        else {
+            const currentAngle = Number.isFinite(Number(selectedFetus?.tendencyAngle))
+                ? Number(selectedFetus.tendencyAngle)
+                : randomInt(0, 360);
+            selectedFetus.tendencyAngle = wrapAngle(currentAngle + randomInt(-10, 10));
+        }
+        pregnant.fetuses = fetuses;
+        pregnant.fetusesCount = fetuses.length;
+        profile.cooldown = {
+            ...cooldown,
+            maternalFetalInteractionUsed: true,
+        };
+        profile.pregnant = pregnant;
+        profile.notify = {
+            ...(profile.notify || {}),
+            secondly: success
+                ? `${female}安抚了第${selectedIndex + 1}胎，亲密度${maternalChangeDisplay}了${nutritionMessage}`
+                : `${female}尝试安抚第${selectedIndex + 1}胎，但因心理压力过大而失败，胎位角度发生了微小转动${nutritionMessage}`,
+        };
+        next.profile = profile;
+        chatState.characters[female] = next;
+        return { applied: true, message: `bsMaternalFetalInteraction applied to ${female}: maternal interaction.` };
+    }
+    const changeValue = changeMap[change];
+    if (changeValue === undefined) {
+        return { applied: false, message: `bsMaternalFetalInteraction skipped for ${female}: direction=fetal requires a valid change.` };
+    }
+    const selectedIndex = randomInt(0, fetuses.length - 1);
+    const selectedFetus = fetuses[selectedIndex];
+    const currentAffinity = clampNumber(selectedFetus?.affinity, -50, 50, 0);
+    selectedFetus.affinity = clampNumber(currentAffinity + changeValue, -50, 50, 0);
+    pregnant.fetuses = fetuses;
+    pregnant.fetusesCount = fetuses.length;
+    profile.pregnant = pregnant;
+    profile.cooldown = {
+        ...cooldown,
+        maternalFetalInteractionUsed: true,
+    };
+    const notify = profile.notify || {};
+    const changeDisplay = changeDisplayMap[change];
+    const targetName = `第${selectedIndex + 1}胎`;
+    notify.secondly = `${targetName}对${female}的亲密度${changeDisplay}了`;
+    profile.notify = notify;
+    next.profile = profile;
+    chatState.characters[female] = next;
+    return { applied: true, message: `bsMaternalFetalInteraction applied to ${female}.` };
+}
+function applyEggGain(profile, amount) {
+    const nextAmount = Math.max(0, Number(amount) || 0);
+    if (nextAmount <= 0)
+        return { applied: false, usedCooldown: false };
+    const base = profile.base || {};
+    const cooldown = profile.cooldown || {};
+    const stage = String(base.stage || '');
+    if (stage === '假孕期') {
+        return { applied: false, usedCooldown: false };
+    }
+    if (stage === '排卵期') {
+        base.eggs = clampNumber(base.eggs, 0, 999, 0) + nextAmount;
+        base.uterinePressure = clampNumber(base.uterinePressure, 0, 999, 0) + 2;
+        return { applied: true, usedCooldown: false };
+    }
+    if (cooldown.orgasmOvulationUsed) {
+        return { applied: false, usedCooldown: true };
+    }
+    base.eggs = clampNumber(base.eggs, 0, 999, 0) + nextAmount;
+    base.uterinePressure = clampNumber(base.uterinePressure, 0, 999, 0) + 2;
+    return { applied: true, usedCooldown: true };
+}
+function maybeTriggerOrgasmOvulation(character) {
+    const next = character;
+    const profile = next.profile || {};
+    const cooldown = profile.cooldown || {};
+    const bio = profile.bio || {};
+    const base = profile.base || {};
+    const notify = profile.notify || {};
+    const currentLibido = clampNumber(base.libido, 0, 9999, 0);
+    const libidoCap = getLibidoCap(profile);
+    if (currentLibido < libidoCap || cooldown.orgasmOvulationUsed)
+        return false;
+    const amount = Math.max(0, clampNumber(bio.orgasmOvulationAmount, 0, 100, 1));
+    const eggResult = applyEggGain(profile, amount);
+    if (!eggResult.applied)
+        return false;
+    base.libido = 0;
+    profile.cooldown = {
+        ...cooldown,
+        orgasmOvulationUsed: eggResult.usedCooldown ? true : Boolean(cooldown.orgasmOvulationUsed),
+    };
+    profile.notify = {
+        ...notify,
+        secondly: `${next.name}因高潮而额外排卵，性欲归零`,
+    };
+    return true;
+}
+function getMenstrualCycleLength(profile) {
+    const total = MENSTRUAL_STAGES.reduce((sum, stage) => sum + (getStageLimit(profile, stage) || 0), 0);
+    return Math.max(1, total || 28);
+}
+function buildTimeTick(character, addedMinutes) {
+    const runtime = character?.runtime || {};
+    const dayCarryMinutes = clampNumber(runtime.dayCarryMinutes, 0, 24 * 60, 0);
+    const hourCarryMinutes = clampNumber(runtime.hourCarryMinutes, 0, 60, 0);
+    const lifestyleWeekCarryMinutes = clampNumber(runtime.lifestyleWeekCarryMinutes, 0, 7 * 24 * 60, 0);
+    const totalDayMinutes = dayCarryMinutes + addedMinutes;
+    const totalHourMinutes = hourCarryMinutes + addedMinutes;
+    const totalLifestyleWeekMinutes = lifestyleWeekCarryMinutes + addedMinutes;
+    return {
+        deltaMinutes: addedMinutes,
+        deltaDays: addedMinutes / (24 * 60),
+        passedDays: Math.floor(totalDayMinutes / (24 * 60)),
+        passedHours: Math.floor(totalHourMinutes / 60),
+        passedLifestyleWeeks: Math.floor(totalLifestyleWeekMinutes / (7 * 24 * 60)),
+        nextRuntime: {
+            dayCarryMinutes: totalDayMinutes % (24 * 60),
+            hourCarryMinutes: totalHourMinutes % 60,
+            lifestyleWeekCarryMinutes: totalLifestyleWeekMinutes % (7 * 24 * 60),
+        },
+    };
+}
+function appendNotifyReminder(notify, message) {
+    const current = String(notify?.thirdly || '').trim();
+    notify.thirdly = current ? `${current}；${message}` : message;
+}
+function getMenstrualStageFluctuation(profile, stage) {
+    if (!MENSTRUAL_STAGE_DAYS[stage])
+        return 0;
+    const base = profile?.base || {};
+    const vitalityLevel = clampNumber(base.vitalityLevel, 1, 7, 4);
+    const psyStressLevel = clampNumber(base.psyStressLevel, 1, 7, 4);
+    let maxFluctuationRatio = 0;
+    if (vitalityLevel === 2)
+        maxFluctuationRatio += 0.08;
+    if (vitalityLevel === 1)
+        maxFluctuationRatio += 0.15;
+    if (psyStressLevel === 6)
+        maxFluctuationRatio += 0.08;
+    if (psyStressLevel === 7)
+        maxFluctuationRatio += 0.15;
+    if (maxFluctuationRatio <= 0)
+        return 0;
+    const seedText = `${stage}:${vitalityLevel}:${psyStressLevel}`;
+    let seed = 0;
+    for (const char of seedText)
+        seed += char.charCodeAt(0);
+    const normalized = ((seed % 1001) / 1000) * 2 - 1;
+    return normalized * maxFluctuationRatio;
+}
+function getStageLimit(profile, stage) {
+    if (MENSTRUAL_STAGE_DAYS[stage]) {
+        const ratio = clampNumber(profile?.bio?.menstrualLengthRatio, 0.1, 20, 1);
+        const fluctuation = getMenstrualStageFluctuation(profile, stage);
+        return Math.max(1, MENSTRUAL_STAGE_DAYS[stage] * ratio * (1 + fluctuation));
+    }
+    if (stage === '产后恢复')
+        return Math.max(1, clampNumber(profile?.bio?.recoveryDays, 1, 9999, 56));
+    return null;
+}
+function advanceMenstrualStage(profile, stage, daysValue) {
+    let nextStage = stage;
+    let nextDays = daysValue;
+    let changed = false;
+    let enteredFollicular = false;
+    while (MENSTRUAL_STAGES.includes(nextStage)) {
+        const limit = getStageLimit(profile, nextStage);
+        if (limit === null || nextDays <= limit)
+            break;
+        nextDays -= limit;
+        const stageIndex = MENSTRUAL_STAGES.indexOf(nextStage);
+        nextStage = MENSTRUAL_STAGES[(stageIndex + 1) % MENSTRUAL_STAGES.length];
+        if (nextStage === '卵泡期')
+            enteredFollicular = true;
+        changed = true;
+    }
+    return {
+        stage: nextStage,
+        days: Math.max(0, nextDays),
+        changed,
+        enteredFollicular,
+    };
+}
+function shouldEnterPseudoPregnancy(profile, previousStage, nextStage) {
+    if (previousStage === '月经期' || nextStage !== '月经期')
+        return false;
+    const base = profile?.base || {};
+    const experience = profile?.experience || {};
+    const psyStress = clampNumber(base.psyStress, 0, 9999, 0);
+    const libido = clampNumber(base.libido, 0, 9999, 0);
+    const latestSexPartner = String(experience.latestSexPartner || '').trim();
+    return psyStress >= 100 && libido >= 50 && latestSexPartner.length > 0;
+}
+function applyTimeToCharacter(character, tick) {
+    const next = cloneValue(character);
+    snapshotOriginalPregnancyBio(next);
+    const profile = next.profile || {};
+    profile.__runtimeRef = next.runtime || {};
+    const base = profile.base || {};
+    const pregnant = profile.pregnant || {};
+    const bio = profile.bio || {};
+    const notify = {
+        firstly: '',
+        secondly: '',
+        thirdly: '',
+    };
+    profile.notify = notify;
+    const cooldown = profile.cooldown || {};
+    const deltaDays = tick.deltaDays;
+    const isHere = base.isHere !== false;
+    let stage = String(base.stage || '');
+    let days = clampNumber(base.days, 0, 9999, 0);
+    let stageChanged = false;
+    let enteredFollicular = false;
+    const oldStage = stage;
+    if (deltaDays <= 0)
+        return { character: next, stageChanged: false, oldStage, newStage: stage };
+    processSimpleConception(profile, tick, notify, next.name);
+    stage = String(base.stage || stage);
+    if (Array.isArray(pregnant.fetuses) && pregnant.fetuses.length > 0 && isPregnancyStage(stage)) {
+        applyPregnancyPhysiology(profile, next.runtime || {});
+    }
+    if (MENSTRUAL_STAGES.includes(stage)) {
+        const currentStageDay = Math.max(0, Number(days) || 0);
+        const advanced = advanceMenstrualStage(profile, stage, currentStageDay + deltaDays);
+        stage = advanced.stage;
+        days = advanced.days;
+        stageChanged = advanced.changed;
+        enteredFollicular = advanced.enteredFollicular;
+        if (stageChanged && shouldEnterPseudoPregnancy(profile, oldStage, stage)) {
+            stage = '假孕期';
+            days = 0;
+            pregnant.pregnantDays = 0;
+            pregnant.effectivePregnantDays = 0;
+            notify.secondly = `${next.name}因进入月经期时心理压力偏高、性欲偏高且近期有性接触记录，出现了假孕症状`;
+        }
+    }
+    else if (PREGNANCY_STAGES.includes(stage)) {
+        const oldPregnantDays = clampNumber(pregnant.pregnantDays, 0, 9999, 0);
+        pregnant.pregnantDays = oldPregnantDays + deltaDays;
+        pregnant.effectivePregnantDays = clampNumber(pregnant.effectivePregnantDays, 0, 9999, 0) + (deltaDays * clampNumber(getGestationEffectiveSpeed({ ...profile, bio }), 0, 20, 1));
+        const oldWeek = Math.floor(oldPregnantDays / 7);
+        const newWeek = Math.floor(pregnant.pregnantDays / 7);
+        if (newWeek > oldWeek && isHere) {
+            applyWeeklyNutrition(profile);
+        }
+        updateDerivedTypeProgress(profile, tick);
+        const derived = derivePregnancyStageState(pregnant.effectivePregnantDays, 1);
+        stage = derived.stage;
+        days = derived.days;
+        stageChanged = stage !== oldStage;
+        base.stage = stage;
+        base.days = days;
+        updateFetalPositions(profile, tick, next.name);
+        if (isHere) {
+            applyOverduePressure(profile, tick, next.name);
+            applyHourlyPregnancyMetabolism(profile, tick, next.name);
+        }
+        const pressureCrisis = isHere ? applyPressureCrisis(profile, next.runtime || {}, next.name) : { changed: false, warned: false };
+        if (pressureCrisis.changed) {
+            stage = String(base.stage || stage);
+            days = clampNumber(base.days, 0, 9999, 0);
+            stageChanged = true;
+        }
+        if (isHere && !pressureCrisis.warned && maybeStartLabor(profile, tick, next.name)) {
+            stage = String(base.stage || stage);
+            days = clampNumber(base.days, 0, 9999, 0);
+            stageChanged = true;
+        }
+    }
+    else if (stage === '产后恢复') {
+        days += deltaDays;
+        const recoveryDays = getStageLimit(profile, '产后恢复');
+        if (days > recoveryDays) {
+            stage = '卵泡期';
+            days = 0;
+            stageChanged = true;
+            enteredFollicular = true;
+            pregnant.pregnantDays = 0;
+            pregnant.effectivePregnantDays = 0;
+            pregnant.laborHours = 0;
+            pregnant.effectiveLaborHours = 0;
+            pregnant.laborPhase = null;
+            pregnant.laborFetusIndex = 0;
+            pregnant.laborPain = 0;
+            clearProdromalState(pregnant);
+            pregnant.fetuses = [];
+            pregnant.fetusesCount = 0;
+            pregnant.fetalEnergyDrain = 0;
+            base.fertilizationDays = 0;
+        }
+    }
+    else if (stage === '假孕期') {
+        pregnant.pregnantDays = clampNumber(pregnant.pregnantDays, 0, 9999, 0) + deltaDays;
+        const pseudoLimit = Math.max(1, 84 * clampNumber(getGestationEffectiveSpeed({ ...profile, bio }), 0.1, 20, 1));
+        if (pregnant.pregnantDays > pseudoLimit) {
+            stage = '月经期';
+            days = 0;
+            stageChanged = true;
+            pregnant.pregnantDays = 0;
+            pregnant.effectivePregnantDays = 0;
+        }
+    }
+    else if (stage === '产兆前驱') {
+        const oldPregnantDays = clampNumber(pregnant.pregnantDays, 0, 9999, 0);
+        pregnant.pregnantDays = oldPregnantDays + deltaDays;
+        pregnant.effectivePregnantDays = clampNumber(pregnant.effectivePregnantDays, 0, 9999, 0) + (deltaDays * clampNumber(getGestationEffectiveSpeed({ ...profile, bio }), 0, 20, 1));
+        const oldWeek = Math.floor(oldPregnantDays / 7);
+        const newWeek = Math.floor(pregnant.pregnantDays / 7);
+        if (newWeek > oldWeek && isHere) {
+            applyWeeklyNutrition(profile);
+        }
+        if (isHere)
+            applyHourlyPregnancyMetabolism(profile, tick, next.name);
+        updateDerivedTypeProgress(profile, tick);
+        const laborChanged = processLabor(profile, tick, next.name);
+        stage = String(base.stage || stage);
+        days = clampNumber(base.days, 0, 9999, 0);
+        stageChanged = stageChanged || laborChanged || stage !== oldStage;
+    }
+    else if (LABOR_STAGES.includes(stage)) {
+        if (isHere)
+            applyHourlyPregnancyMetabolism(profile, tick, next.name);
+        updateDerivedTypeProgress(profile, tick);
+        const laborChanged = processLabor(profile, tick, next.name);
+        stage = String(base.stage || stage);
+        days = clampNumber(base.days, 0, 9999, 0);
+        stageChanged = stageChanged || laborChanged || stage !== oldStage;
+    }
+    else if (stage === '无经期' || stage === '未激活') {
+        days += deltaDays;
+    }
+    else {
+        days += deltaDays;
+    }
+    processSpermLifecycle(profile, stage, tick);
+    if (base.latestSexDays !== null && base.latestSexDays !== undefined && Number(base.latestSexDays) >= 0) {
+        base.latestSexDays = clampNumber(base.latestSexDays, -1, 9999, 0) + tick.passedDays;
+        if (base.latestSexDays >= getMenstrualCycleLength(profile)) {
+            base.latestSexDays = -1;
+            profile.experience = {
+                ...(profile.experience || {}),
+                latestSexPartner: null,
+            };
+        }
+    }
+    if (isHere)
+        applyPassiveMetabolism(profile, tick);
+    applyNaturalMetabolismRecovery(profile, tick);
+    applyWeeklyMetabolismRoutine(profile, tick, { enteredFollicular, stage });
+    base.age = clampNumber(base.age, 0, 99999, 15) + (deltaDays / 365);
+    if (Array.isArray(profile.children) && profile.children.length > 0) {
+        profile.children = profile.children.map((child) => ({
+            ...child,
+            age: child?.age === null || child?.age === undefined ? child?.age : clampNumber(child.age, 0, 99999, 0) + (deltaDays / 365),
+        }));
+    }
+    if (Array.isArray(pregnant.fetuses) && pregnant.fetuses.length > 0 && clampNumber(pregnant.effectivePregnantDays, 0, 9999, 0) > 0 && !isPregnancyStage(stage)) {
+        const derived = derivePregnancyStageState(pregnant.effectivePregnantDays, 1);
+        stage = derived.stage;
+        days = derived.days;
+        stageChanged = stage !== oldStage;
+    }
+    if ((!Array.isArray(pregnant.fetuses) || pregnant.fetuses.length === 0) && !isPregnancyStage(stage)) {
+        restorePregnancyPhysiology(profile, next.runtime || {});
+    }
+    clearPsychologyTransitionState(profile, stage, days);
+    profile.base = {
+        ...base,
+        stage,
+        days,
+    };
+    refreshPregnancySymptoms(profile, tick);
+    applyMetabolismCapacityLimits(profile);
+    refreshOutfitPregFit(profile);
+    profile.pregnant = {
+        ...pregnant,
+        blockage: profile.pregnant?.blockage ?? null,
+        acceleration: profile.pregnant?.acceleration ?? null,
+        expansion: profile.pregnant?.expansion ?? null,
+        fetusesCount: Array.isArray(pregnant.fetuses) ? pregnant.fetuses.length : clampNumber(pregnant.fetusesCount, 0, 99, 0),
+    };
+    const currentNotify = profile.notify || notify;
+    profile.notify = {
+        ...currentNotify,
+        firstly: stageChanged ? `${next.name}进入了${stage}` : currentNotify.firstly || '',
+    };
+    profile.cooldown = {
+        ...cooldown,
+        orgasmOvulationUsed: shouldResetOrgasmOvulation(stage) ? false : Boolean(cooldown.orgasmOvulationUsed),
+        pregnancyPressureWarning: shouldKeepPregnancyPressureWarning(profile) ? Boolean((profile.cooldown || cooldown).pregnancyPressureWarning) : false,
+        psychologyUpdateUsed: tick.passedHours > 0 ? false : Boolean(cooldown.psychologyUpdateUsed),
+        maternalFetalInteractionUsed: tick.passedHours > 0 ? false : Boolean(cooldown.maternalFetalInteractionUsed),
+    };
+    updateAdvisoryNotify(profile, next.name);
+    if (tick.passedDays > 0) {
+        appendNotifyReminder(profile.notify || notify, '已跨入新的一天；若角色有值得沉淀的经历、心境、关系或身体变化，可调用 bsWriteDiary 写入主观日记');
+    }
+    delete profile.__runtimeRef;
+    next.profile = profile;
+    next.runtime = {
+        ...(next.runtime || {}),
+        ...tick.nextRuntime,
+    };
+    return {
+        character: syncCharacterStageFromProfile(next),
+        stageChanged,
+        oldStage,
+        newStage: stage,
+    };
+}
+function applyWriteDiary(chatState, args) {
+    const female = String(args?.female || '').trim();
+    const character = chatState.characters?.[female];
+    if (!female || !character)
+        return { applied: false, message: `bsWriteDiary skipped: unknown character ${female || '(empty)'}.` };
+    const time = String(args?.time || '').trim();
+    const content = String(args?.content || '').trim();
+    if (!time)
+        return { applied: false, message: `bsWriteDiary skipped for ${female}: empty time.` };
+    if (!content)
+        return { applied: false, message: `bsWriteDiary skipped for ${female}: empty content.` };
+    const next = cloneValue(character);
+    const profile = next.profile || {};
+    profile.diary = Array.isArray(profile.diary) ? profile.diary : [];
+    const currentStoryDayIndex = Math.floor(Math.max(0, Number(chatState?.minutesPassed) || 0) / 1440);
+    const existsSameStoryDay = profile.diary.some((entry) => Number(entry?.storyDayIndex) === currentStoryDayIndex);
+    if (existsSameStoryDay) {
+        return { applied: false, message: `bsWriteDiary skipped for ${female}: story day ${currentStoryDayIndex + 1} is still on diary cooldown.` };
+    }
+    profile.diary.push({
+        time,
+        content,
+        storyDayIndex: currentStoryDayIndex,
+        createdAt: Date.now(),
+    });
+    next.profile = profile;
+    chatState.characters[female] = next;
+    return { applied: true, message: `bsWriteDiary applied to ${female}: ${time}.` };
+}
+function applyPassedTime(chatState, args) {
+    const minute = clampNumber(args?.minute, 0, 60 * 24 * 365, 0);
+    const hour = clampNumber(args?.hour, 0, 24 * 365, 0);
+    const day = clampNumber(args?.day, 0, 36500, 0);
+    const week = clampNumber(args?.week, 0, 5200, 0);
+    const month = clampNumber(args?.month, 0, 1200, 0);
+    const year = clampNumber(args?.year, 0, 200, 0);
+    const totalMinutes = minute + (hour * 60) + (day * 24 * 60) + (week * 7 * 24 * 60) + (month * 30 * 24 * 60) + (year * 365 * 24 * 60);
+    if (totalMinutes <= 0)
+        return { applied: false, message: 'bsPassedTime skipped: no positive duration.' };
+    for (const name of Object.keys(chatState.characters || {})) {
+        const current = chatState.characters[name];
+        if (!current || typeof current !== 'object')
+            continue;
+        const tick = buildTimeTick(current, totalMinutes);
+        const result = applyTimeToCharacter(current, tick);
+        chatState.characters[name] = result.character;
+    }
+    transferProviderChildren(chatState);
+    const elapsedMinutes = Math.round(totalMinutes);
+    const previousMinutes = Math.max(0, Number(chatState.minutesPassed) || 0);
+    chatState.minutesPassed = previousMinutes + elapsedMinutes;
+    return { applied: true, message: `bsPassedTime applied ${elapsedMinutes} minutes; accumulated ${chatState.minutesPassed} minutes.` };
+}
+function applyCharacterStatus(chatState, args) {
+    const female = String(args?.female || '').trim();
+    const options = args?.options && typeof args.options === 'object' ? args.options : {};
+    const character = chatState.characters?.[female];
+    if (!female || !character)
+        return { applied: false, message: `bsUpdateCharacterStatus skipped: unknown character ${female || '(empty)'}.` };
+    const next = cloneValue(character);
+    const base = next.profile?.base || {};
+    const profile = next.profile || {};
+    const vitalityCap = getVitalityInitByLevel(base.vitalityLevel);
+    const stressCap = getPsyStressInitByLevel(base.psyStressLevel) * 2;
+    const libidoCap = getLibidoCap(profile);
+    const uterinePressureCap = getUterinePressureCap(profile);
+    if (options.vitality !== undefined) {
+        base.vitality = clampNumber((base.vitality || 0) + Number(options.vitality || 0), 0, vitalityCap, base.vitality || 0);
+        applyMetabolismFromVitality(profile, Number(options.vitality || 0));
+    }
+    if (options.psyStress !== undefined)
+        base.psyStress = clampNumber((base.psyStress || 0) + Number(options.psyStress || 0), 0, stressCap, base.psyStress || 0);
+    if (options.libido !== undefined) {
+        const libidoDelta = Number(options.libido || 0);
+        base.libido = clampNumber((base.libido || 0) + libidoDelta, 0, libidoCap, base.libido || 0);
+        applyMilkFromLibido(profile, libidoDelta);
+    }
+    if (options.uterinePressure !== undefined) {
+        base.uterinePressure = clampNumber((base.uterinePressure || 0) + Number(options.uterinePressure || 0), 0, uterinePressureCap, base.uterinePressure || 0);
+        applyAmnionDurabilityFromPressure(profile, base.uterinePressure, female);
+    }
+    applyDerivedMetabolismExemptions(profile);
+    next.profile.base = base;
+    maybeTriggerOrgasmOvulation(next);
+    chatState.characters[female] = next;
+    return { applied: true, message: `bsUpdateCharacterStatus applied to ${female}.` };
+}
+const DESCRIPTION_FIELD_NAMES = ['normalDescription', 'pregnantDescription'];
+function parseDescriptionText(text) {
+    const rawText = String(text || '').trim();
+    if (!rawText)
+        return { entries: [], error: '' };
+    const entries = [];
+    const segments = rawText.split(';;').map((part) => part.trim()).filter(Boolean);
+    for (const segment of segments) {
+        const separatorIndex = segment.indexOf('|');
+        if (separatorIndex <= 0) {
+            return { entries: [], error: `invalid segment "${segment}"` };
+        }
+        const name = segment.slice(0, separatorIndex).trim();
+        const value = segment.slice(separatorIndex + 1).trim();
+        if (!name)
+            return { entries: [], error: `invalid empty field name in "${segment}"` };
+        entries.push({ name, value });
+    }
+    return { entries, error: '' };
+}
+function mergeDescriptionText(currentText, patchText) {
+    const current = parseDescriptionText(currentText);
+    if (current.error)
+        return { ok: false, value: String(currentText || ''), error: `existing description is malformed: ${current.error}` };
+    const patch = parseDescriptionText(patchText);
+    if (patch.error)
+        return { ok: false, value: String(currentText || ''), error: `patch description is malformed: ${patch.error}` };
+    // 空补丁视为 no-op：模型常把「不改」表达成空字符串，清空整栏会造成静默数据丢失。
+    if (patch.entries.length === 0)
+        return { ok: true, value: String(currentText || '') };
+    // Registration is allowed to leave a description field blank. In that
+    // state there is no schema to merge against yet, so the first tracker
+    // update must be able to establish its fields (for example, a pregnancy
+    // description after a debug injection). Once a field has content, keep
+    // the normal strict schema guard below.
+    if (current.entries.length === 0) {
+        return {
+            ok: true,
+            value: patch.entries.map((entry) => `${entry.name}|${entry.value};;`).join(''),
+        };
+    }
+    const allowedNames = new Set(current.entries.map((entry) => entry.name));
+    const unknownNames = patch.entries.map((entry) => entry.name).filter((name) => !allowedNames.has(name));
+    if (unknownNames.length > 0) {
+        return {
+            ok: false,
+            value: String(currentText || ''),
+            error: `unknown subfield(s): ${Array.from(new Set(unknownNames)).join(', ')}`,
+        };
+    }
+    const patchByName = new Map(patch.entries.map((entry) => [entry.name, entry.value]));
+    const merged = current.entries.map((entry) => ({
+        name: entry.name,
+        value: patchByName.has(entry.name) ? patchByName.get(entry.name) : entry.value,
+    }));
+    return {
+        ok: true,
+        value: merged.map((entry) => `${entry.name}|${entry.value};;`).join(''),
+    };
+}
+function applyAddWardrobeItem(chatState, args) {
+    const female = String(args?.female || '').trim();
+    const character = chatState.characters?.[female];
+    if (!female || !character)
+        return { applied: false, message: `bsAddWardrobeItem skipped: unknown character ${female || '(empty)'}.` };
+    const item = normalizeWardrobeItem(args?.item, { allowMissingId: true });
+    if (!item)
+        return { applied: false, message: `bsAddWardrobeItem skipped for ${female}: invalid item.` };
+    if (item.id === DEFAULT_WARDROBE_ITEM.id)
+        return { applied: false, message: `bsAddWardrobeItem skipped for ${female}: id=0 is reserved.` };
+    const next = cloneValue(character);
+    const profile = next.profile || {};
+    if (!hasPreparedWardrobe$1(profile))
+        return { applied: false, message: `bsAddWardrobeItem skipped for ${female}: wardrobe is not prepared.` };
+    const wardrobe = ensureWardrobeState(profile);
+    const rawId = args?.item?.id;
+    const hasExplicitIntegerId = Number.isInteger(Number(rawId)) && String(rawId ?? '').trim() !== '';
+    // 定位更新目标：显式整数 id 直接比对；否则按 id 引用（含名称/hash 兼容）或衣物名称匹配既有条目。
+    let target = null;
+    if (hasExplicitIntegerId) {
+        target = wardrobe.items.find((entry) => entry.id === item.id) || null;
+    }
+    else {
+        target = resolveWardrobeItemRef(wardrobe.items, rawId)
+            || resolveWardrobeItemRef(wardrobe.items, item.name)
+            || null;
+    }
+    if (target && target.id === DEFAULT_WARDROBE_ITEM.id)
+        return { applied: false, message: `bsAddWardrobeItem skipped for ${female}: id=0 is reserved.` };
+    if (target) {
+        item.id = target.id;
+        const existingIndex = wardrobe.items.findIndex((entry) => entry.id === target.id);
+        wardrobe.items[existingIndex] = item;
+    }
+    else {
+        // 新衣物：显式整数 id 沿用；缺失或字符串 id 自动分配下一个序号，避免 hash id 污染长期衣柜。
+        if (!hasExplicitIntegerId)
+            item.id = getNextWardrobeItemId(wardrobe.items);
+        wardrobe.items.push(item);
+    }
+    refreshOutfitPregFit(profile);
+    next.profile = profile;
+    chatState.characters[female] = syncCharacterStageFromProfile(next);
+    return { applied: true, message: `bsAddWardrobeItem applied to ${female}: ${item.name} (id=${item.id}).` };
+}
+function applyRemoveWardrobeItem(chatState, args) {
+    const female = String(args?.female || '').trim();
+    const character = chatState.characters?.[female];
+    if (!female || !character)
+        return { applied: false, message: `bsRemoveWardrobeItem skipped: unknown character ${female || '(empty)'}.` };
+    const next = cloneValue(character);
+    const profile = next.profile || {};
+    if (!hasPreparedWardrobe$1(profile))
+        return { applied: false, message: `bsRemoveWardrobeItem skipped for ${female}: wardrobe is not prepared.` };
+    const wardrobe = ensureWardrobeState(profile);
+    const target = resolveWardrobeItemRef(wardrobe.items, args?.itemId);
+    if (!target)
+        return { applied: false, message: `bsRemoveWardrobeItem skipped for ${female}: item not found (${JSON.stringify(args?.itemId ?? null)}).` };
+    const itemId = target.id;
+    if (itemId === DEFAULT_WARDROBE_ITEM.id)
+        return { applied: false, message: `bsRemoveWardrobeItem skipped for ${female}: id=0 cannot be removed.` };
+    wardrobe.items = wardrobe.items.filter((item) => item.id !== itemId);
+    const outfit = ensureOutfitState(profile);
+    if (outfit.mainItemId === itemId)
+        outfit.mainItemId = DEFAULT_WARDROBE_ITEM.id;
+    outfit.accessoryItemIds = outfit.accessoryItemIds.filter((id) => id !== itemId);
+    refreshOutfitPregFit(profile);
+    next.profile = profile;
+    chatState.characters[female] = syncCharacterStageFromProfile(next);
+    return { applied: true, message: `bsRemoveWardrobeItem applied to ${female}: ${itemId}.` };
+}
+function applyChangeOutfit(chatState, args) {
+    const female = String(args?.female || '').trim();
+    const character = chatState.characters?.[female];
+    if (!female || !character)
+        return { applied: false, message: `bsChangeOutfit skipped: unknown character ${female || '(empty)'}.` };
+    const next = cloneValue(character);
+    const profile = next.profile || {};
+    if (!hasPreparedWardrobe$1(profile))
+        return { applied: false, message: `bsChangeOutfit skipped for ${female}: wardrobe is not prepared.` };
+    const outfit = ensureOutfitState(profile);
+    if (args?.temporaryItems !== undefined) {
+        if (!Array.isArray(args.temporaryItems))
+            return { applied: false, message: `bsChangeOutfit skipped for ${female}: temporaryItems must be an array.` };
+        outfit.temporaryItems = normalizeTemporaryOutfitItems(args.temporaryItems);
+    }
+    const previousMainItemId = outfit.mainItemId;
+    if (args?.mainItemId !== undefined) {
+        const mainItem = findOutfitItem(profile, args.mainItemId, 'main');
+        if (!mainItem)
+            return { applied: false, message: `bsChangeOutfit skipped for ${female}: unknown main item ${JSON.stringify(args.mainItemId ?? null)}.` };
+        outfit.mainItemId = mainItem.id;
+    }
+    if (args?.accessoryItemIds !== undefined) {
+        if (!Array.isArray(args.accessoryItemIds))
+            return { applied: false, message: `bsChangeOutfit skipped for ${female}: accessoryItemIds must be an array.` };
+        const nextAccessoryIds = [];
+        for (const rawRef of args.accessoryItemIds) {
+            const accessory = findOutfitItem(profile, rawRef, 'accessory');
+            if (!accessory)
+                return { applied: false, message: `bsChangeOutfit skipped for ${female}: unknown accessory item ${JSON.stringify(rawRef ?? null)}.` };
+            if (!nextAccessoryIds.includes(accessory.id))
+                nextAccessoryIds.push(accessory.id);
+        }
+        outfit.accessoryItemIds = nextAccessoryIds;
+    }
+    else if (args?.addAccessoryItemIds !== undefined || args?.removeAccessoryItemIds !== undefined) {
+        // 增量穿脱：在当前配件列表基础上加/减，避免模型必须整表重述。
+        const current = [...outfit.accessoryItemIds];
+        if (args?.removeAccessoryItemIds !== undefined) {
+            if (!Array.isArray(args.removeAccessoryItemIds))
+                return { applied: false, message: `bsChangeOutfit skipped for ${female}: removeAccessoryItemIds must be an array.` };
+            for (const rawRef of args.removeAccessoryItemIds) {
+                const accessory = findOutfitItem(profile, rawRef, 'accessory');
+                if (!accessory)
+                    return { applied: false, message: `bsChangeOutfit skipped for ${female}: unknown accessory item ${JSON.stringify(rawRef ?? null)}.` };
+                const index = current.indexOf(accessory.id);
+                if (index >= 0)
+                    current.splice(index, 1);
+            }
+        }
+        if (args?.addAccessoryItemIds !== undefined) {
+            if (!Array.isArray(args.addAccessoryItemIds))
+                return { applied: false, message: `bsChangeOutfit skipped for ${female}: addAccessoryItemIds must be an array.` };
+            for (const rawRef of args.addAccessoryItemIds) {
+                const accessory = findOutfitItem(profile, rawRef, 'accessory');
+                if (!accessory)
+                    return { applied: false, message: `bsChangeOutfit skipped for ${female}: unknown accessory item ${JSON.stringify(rawRef ?? null)}.` };
+                if (!current.includes(accessory.id))
+                    current.push(accessory.id);
+            }
+        }
+        outfit.accessoryItemIds = current;
+    }
+    if (args?.wearState !== undefined) {
+        outfit.wearState = sanitizeWearState(args.wearState);
+    }
+    else if (outfit.mainItemId !== previousMainItemId) {
+        // 换了主件且未显式指定穿着状态：新衣服默认穿整齐。
+        outfit.wearState = DEFAULT_WEAR_STATE;
+    }
+    refreshOutfitPregFit(profile);
+    next.profile = profile;
+    chatState.characters[female] = syncCharacterStageFromProfile(next);
+    return { applied: true, message: `bsChangeOutfit applied to ${female}.` };
+}
+function applyDescription(chatState, args) {
+    const female = String(args?.female || '').trim();
+    const options = args?.options && typeof args.options === 'object' ? args.options : {};
+    const character = chatState.characters?.[female];
+    if (!female || !character)
+        return { applied: false, message: `bsSetDescription skipped: unknown character ${female || '(empty)'}.` };
+    const next = cloneValue(character);
+    next.profile.descriptions = {
+        ...(next.profile?.descriptions || {}),
+    };
+    const failures = [];
+    const appliedKeys = [];
+    for (const key of DESCRIPTION_FIELD_NAMES) {
+        if (options[key] === undefined)
+            continue;
+        const merged = mergeDescriptionText(next.profile.descriptions[key] || '', options[key]);
+        if (!merged.ok) {
+            failures.push(`${key}: ${merged.error}`);
+            continue;
+        }
+        next.profile.descriptions[key] = merged.value;
+        appliedKeys.push(key);
+    }
+    if (failures.length > 0)
+        return { applied: false, message: `bsSetDescription skipped for ${female}: ${failures.join('; ')}.` };
+    if (appliedKeys.length === 0)
+        return { applied: false, message: `bsSetDescription skipped for ${female}: empty options.` };
+    chatState.characters[female] = next;
+    return { applied: true, message: `bsSetDescription applied to ${female}: ${appliedKeys.join(', ')}.` };
+}
+function applySetCharacterPresence(chatState, args) {
+    const female = String(args?.female || '').trim();
+    const character = chatState.characters?.[female];
+    const isPresent = args?.isPresent === undefined ? true : Boolean(args.isPresent);
+    if (!female || !character)
+        return { applied: false, message: `bsSetCharacterPresence skipped: unknown character ${female || '(empty)'}.` };
+    const next = cloneValue(character);
+    const profile = next.profile || {};
+    const base = profile.base || {};
+    base.isHere = isPresent;
+    profile.base = base;
+    next.profile = profile;
+    chatState.characters[female] = next;
+    return { applied: true, message: `bsSetCharacterPresence applied to ${female}: isHere=${isPresent}.` };
+}
+function applyUpdateExperience(chatState, args) {
+    const female = String(args?.female || '').trim();
+    const character = chatState.characters?.[female];
+    const options = args?.options && typeof args.options === 'object' ? args.options : null;
+    if (!female || !character)
+        return { applied: false, message: `bsUpdateExperience skipped: unknown character ${female || '(empty)'}.` };
+    if (!options)
+        return { applied: false, message: 'bsUpdateExperience skipped: empty options.' };
+    const next = cloneValue(character);
+    const profile = next.profile || {};
+    const experience = profile.experience || {};
+    const allowedStringFields = ['virginity', 'latestSexPartner', 'emotionalMate', 'marriageMate'];
+    const allowedNumberFields = ['pregnantExperience', 'naturalBirthExperience', 'surgicalBirthExperience', 'miscarriageExperience'];
+    let changed = false;
+    for (const field of allowedStringFields) {
+        if (options[field] === undefined)
+            continue;
+        experience[field] = options[field] === null ? null : String(options[field]);
+        changed = true;
+    }
+    for (const field of allowedNumberFields) {
+        if (options[field] === undefined)
+            continue;
+        experience[field] = clampNumber(options[field], 0, 9999, experience[field] || 0);
+        changed = true;
+    }
+    if (!changed)
+        return { applied: false, message: `bsUpdateExperience skipped for ${female}: no allowed fields.` };
+    profile.experience = experience;
+    next.profile = profile;
+    chatState.characters[female] = next;
+    return { applied: true, message: `bsUpdateExperience applied to ${female}.` };
+}
+function applyNameChild(chatState, args) {
+    const female = String(args?.female || '').trim();
+    const childIndex = Number(args?.childIndex);
+    const childName = String(args?.name || '').trim();
+    const character = chatState.characters?.[female];
+    if (!female || !character)
+        return { applied: false, message: `bsNameChild skipped: unknown character ${female || '(empty)'}.` };
+    if (!Number.isInteger(childIndex))
+        return { applied: false, message: 'bsNameChild skipped: invalid childIndex.' };
+    if (!childName)
+        return { applied: false, message: 'bsNameChild skipped: empty name.' };
+    const next = cloneValue(character);
+    const profile = next.profile || {};
+    const children = Array.isArray(profile.children) ? profile.children.map((item) => ({ ...item })) : [];
+    if (childIndex < 0 || childIndex >= children.length) {
+        return { applied: false, message: `bsNameChild skipped for ${female}: childIndex ${childIndex} out of range.` };
+    }
+    children[childIndex].name = childName;
+    profile.children = children;
+    next.profile = profile;
+    chatState.characters[female] = next;
+    return { applied: true, message: `bsNameChild applied to ${female}: child ${childIndex} named ${childName}.` };
+}
+function applyRegisterSkillDefinition(chatState, args) {
+    const result = registerSkillDefinition(chatState.skillCatalog, args, chatState.nextSkillId);
+    if (!result.ok)
+        return { applied: false, message: `bsRegisterSkillDefinition skipped: ${result.message}` };
+    chatState.skillCatalog = result.catalog;
+    chatState.nextSkillId = result.nextSkillId;
+    return {
+        applied: result.created,
+        message: result.created
+            ? `bsRegisterSkillDefinition registered #${result.definition.id} ${result.definition.name}.`
+            : `bsRegisterSkillDefinition skipped: ${result.definition.name} already exists as #${result.definition.id}.`,
+    };
+}
+const FETAL_TALENT_TRANSFER_STAGES = new Set(['孕中期', '孕晚期', '临产期', '逾期', '产兆前驱', '第一产程']);
+function applyTrainSkill(chatState, args) {
+    const female = String(args?.female || '').trim();
+    const character = chatState.characters?.[female];
+    if (!female || !character)
+        return { applied: false, message: `bsTrainSkill skipped: unknown character ${female || '(empty)'}.` };
+    const definition = resolveSkillDefinition(chatState.skillCatalog, args?.skill);
+    const reason = String(args?.reason || '').trim();
+    const skillExp = Number(args?.skillExp);
+    if (!definition)
+        return { applied: false, message: `bsTrainSkill skipped for ${female}: skill is not registered in skill_catalog.` };
+    if (!reason)
+        return { applied: false, message: `bsTrainSkill skipped for ${female}: training reason is required.` };
+    if (args?.talentExp !== undefined) {
+        return { applied: false, message: `bsTrainSkill skipped for ${female}: character talents are read-only to LLM tools; remove talentExp.` };
+    }
+    if (!Number.isInteger(skillExp) || skillExp < 0 || skillExp > 1000000) {
+        return { applied: false, message: `bsTrainSkill skipped for ${female}: skillExp must be an integer from 0 to 1000000.` };
+    }
+    const next = cloneValue(character);
+    const profile = next.profile || {};
+    const skills = normalizeSkillList(profile.skills);
+    let skill = skills.find((item) => item.skillId === definition.id);
+    const previousLevel = skill?.level || 0;
+    const awakened = !skill && args?.awaken === true;
+    if (!skill && !awakened) {
+        return { applied: false, message: `bsTrainSkill skipped for ${female}: ${definition.name} is not awakened; pass awaken=true only when the story triggers awakening.` };
+    }
+    if (!skill) {
+        skill = { skillId: definition.id, level: 1, exp: 0 };
+        skills.push(skill);
+    }
+    const trained = addSkillExperience(skill, skillExp);
+    Object.assign(skill, trained);
+    profile.skills = skills;
+    let levelUpNotify = null;
+    if (skill.level > previousLevel) {
+        profile.skillHistory = appendSkillHistory(profile.skillHistory, {
+            skillId: definition.id,
+            fromLevel: previousLevel,
+            toLevel: skill.level,
+            reason,
+            source: 'story',
+            timestamp: Date.now(),
+        });
+        const awakenedNow = previousLevel === 0;
+        levelUpNotify = {
+            type: awakenedNow ? 'skill_awakened' : 'skill_level_up',
+            female,
+            skillId: definition.id,
+            skillName: definition.name,
+            fromLevel: previousLevel,
+            toLevel: skill.level,
+            awakened: awakenedNow,
+            text: awakenedNow
+                ? `${female}觉醒了技能「${definition.name}」${skill.level > 1 ? `，并提升至 Lv${skill.level}` : ''}`
+                : `${female}的「${definition.name}」由 Lv${previousLevel} 提升至 Lv${skill.level}`,
+        };
+    }
+    let inheritedFetusIndex = -1;
+    let inheritedExp = 0;
+    const stage = String(profile?.base?.stage || '');
+    if (skillExp > 0 && FETAL_TALENT_TRANSFER_STAGES.has(stage)) {
+        const pregnant = profile.pregnant || {};
+        const fetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses.map((fetus) => ({ ...fetus })) : [];
+        if (fetuses.length > 0) {
+            inheritedFetusIndex = randomInt(0, fetuses.length - 1);
+            const selectedFetus = fetuses[inheritedFetusIndex];
+            const affinity = clampNumber(selectedFetus?.affinity, -50, 50, 0);
+            inheritedExp = Math.round(skillExp * (Math.abs(affinity) / 50)) * Math.sign(affinity);
+            const fetusTalents = normalizeTalentList(selectedFetus.talents ?? selectedFetus.inheritedTalents);
+            let fetusTalent = fetusTalents.find((item) => item.skillId === definition.id);
+            if (inheritedExp !== 0 && !fetusTalent) {
+                fetusTalent = { skillId: definition.id, level: 0, exp: 0 };
+                fetusTalents.push(fetusTalent);
+            }
+            if (inheritedExp !== 0) {
+                Object.assign(fetusTalent, addTalentExperience(fetusTalent, inheritedExp));
+                selectedFetus.talents = fetusTalents;
+                delete selectedFetus.inheritedTalents;
+            }
+        }
+        pregnant.fetuses = fetuses;
+        profile.pregnant = pregnant;
+    }
+    next.profile = profile;
+    next.updatedAt = Date.now();
+    chatState.characters[female] = next;
+    return {
+        applied: true,
+        message: `bsTrainSkill applied to ${female}: ${definition.name} Lv${skill.level}, EXP ${skill.exp}/${skill.level >= 10 ? 0 : requiredExp(skill.level)}${awakened ? '; awakened' : ''}${inheritedFetusIndex >= 0 ? `; fetus #${inheritedFetusIndex + 1} selected${inheritedExp !== 0 ? `, inherited EXP ${inheritedExp}` : ', no inherited EXP'}` : ''}.`,
+        ...(levelUpNotify ? { notify: levelUpNotify } : {}),
+    };
+}
+function applyUpdatePsychology(chatState, args) {
+    const female = String(args?.female || '').trim();
+    const character = chatState.characters?.[female];
+    const options = args?.options && typeof args.options === 'object' ? args.options : null;
+    if (!female || !character)
+        return { applied: false, message: `bsUpdatePsychology skipped: unknown character ${female || '(empty)'}.` };
+    if (!options)
+        return { applied: false, message: 'bsUpdatePsychology skipped: empty options.' };
+    const next = cloneValue(character);
+    const profile = next.profile || {};
+    if (!hasBreedingPsychology$1(profile)) {
+        return { applied: false, message: `bsUpdatePsychology skipped for ${female}: breeding psychology is not inferred.` };
+    }
+    const psychology = profile.psychology || {};
+    const base = profile.base || {};
+    const stage = String(base.stage || '');
+    const isPregnancySide = PREGNANCY_STAGES.includes(stage) || stage === '假孕期' || stage === '产兆前驱' || LABOR_STAGES.includes(stage);
+    const targetGroup = isPregnancySide ? 'preg' : 'mens';
+    const sourcePatch = options[targetGroup];
+    if (!sourcePatch || typeof sourcePatch !== 'object') {
+        return { applied: false, message: `bsUpdatePsychology skipped for ${female}: current stage expects ${targetGroup} updates.` };
+    }
+    const fieldConfig = targetGroup === 'preg' ? PSY_PREG_FIELDS : PSY_MENS_FIELDS;
+    const boolFieldConfig = targetGroup === 'preg' ? PSY_PREG_BOOL_FIELDS : PSY_MENS_BOOL_FIELDS;
+    const stageProfiles = normalizePsychologyStageProfiles(psychology.stageProfiles);
+    const target = normalizePsychologyGroup(psychology[targetGroup], fieldConfig, {
+        booleanFields: boolFieldConfig,
+        stageProfiles: stageProfiles[targetGroup],
+    });
+    const allowedFields = Object.keys(fieldConfig);
+    const allowedBoolFields = Object.keys(boolFieldConfig);
+    let changed = false;
+    for (const field of allowedFields) {
+        if (sourcePatch[field] === undefined)
+            continue;
+        const valueKey = `${field}_value`;
+        const currentValue = target[valueKey] === null || target[valueKey] === undefined ? 0 : clampNumber(target[valueKey], 0, 100, 0);
+        target[valueKey] = clampNumber(currentValue + Number(sourcePatch[field] || 0), 0, 100, currentValue);
+        changed = true;
+    }
+    for (const field of allowedBoolFields) {
+        if (sourcePatch[field] === undefined)
+            continue;
+        target[field] = Boolean(sourcePatch[field]);
+        changed = true;
+    }
+    if (!changed) {
+        return { applied: false, message: `bsUpdatePsychology skipped for ${female}: no allowed ${targetGroup} fields.` };
+    }
+    const cooldown = profile.cooldown || {};
+    if (cooldown.psychologyUpdateUsed) {
+        return { applied: false, message: `bsUpdatePsychology skipped for ${female}: already changed during this story hour.` };
+    }
+    const normalizedTarget = normalizePsychologyGroup(target, fieldConfig, {
+        booleanFields: boolFieldConfig,
+        stageProfiles: stageProfiles[targetGroup],
+    });
+    profile.psychology = {
+        ...(profile.psychology || {}),
+        stageProfiles,
+        mens: targetGroup === 'mens'
+            ? normalizedTarget
+            : normalizePsychologyGroup(profile.psychology?.mens, PSY_MENS_FIELDS, {
+                booleanFields: PSY_MENS_BOOL_FIELDS,
+                stageProfiles: stageProfiles.mens,
+            }),
+        preg: targetGroup === 'preg'
+            ? normalizedTarget
+            : normalizePsychologyGroup(profile.psychology?.preg, PSY_PREG_FIELDS, {
+                booleanFields: PSY_PREG_BOOL_FIELDS,
+                stageProfiles: stageProfiles.preg,
+            }),
+    };
+    profile.cooldown = {
+        ...cooldown,
+        psychologyUpdateUsed: true,
+    };
+    next.profile = profile;
+    chatState.characters[female] = next;
+    return { applied: true, message: `bsUpdatePsychology applied to ${female}.` };
+}
+function applyAddSperm(chatState, args) {
+    const female = String(args?.female || '').trim();
+    const male = String(args?.male || '').trim();
+    const parsedRace = parseRaceDescriptor(args?.race || '人类');
+    const race = parsedRace.race || '人类';
+    const amount = Number(args?.amount || 0);
+    const character = chatState.characters?.[female];
+    if (!female || !character)
+        return { applied: false, message: `bsAddSperm skipped: unknown character ${female || '(empty)'}.` };
+    if (!male)
+        return { applied: false, message: 'bsAddSperm skipped: empty male.' };
+    if (!Number.isFinite(amount) || amount === 0)
+        return { applied: false, message: 'bsAddSperm skipped: invalid amount.' };
+    const next = cloneValue(character);
+    const base = next.profile?.base || {};
+    const sperms = Array.isArray(base.sperms) ? base.sperms.map((item) => ({ ...item })) : [];
+    const maleDerivedType = parsedRace.derivedType || null;
+    const existing = sperms.find((item) => String(item?.male || '') === male);
+    if (existing) {
+        existing.value = Math.max(0, clampNumber(existing.value, 0, 999999, 0) + amount);
+        existing.race = race;
+        existing.derivedType = maleDerivedType;
+    }
+    else if (amount > 0) {
+        sperms.push({ male, race, derivedType: maleDerivedType, value: amount });
+    }
+    base.sperms = sperms.filter((item) => clampNumber(item?.value, 0, 999999, 0) > 0);
+    base.latestSexDays = 0;
+    next.profile.base = base;
+    const experience = {
+        ...(next.profile?.experience || {}),
+        latestSexPartner: male,
+    };
+    if (experience.virginity === null || experience.virginity === undefined) {
+        experience.virginity = male;
+    }
+    next.profile.experience = experience;
+    if (amount > 0) {
+        applyOdorGain(next.profile, Math.min(18, 4 + Math.log10(Math.max(1, amount)) * 4));
+    }
+    chatState.characters[female] = next;
+    return { applied: true, message: `bsAddSperm applied to ${female}.` };
+}
+function applyDrainSperm(chatState, args) {
+    const female = String(args?.female || '').trim();
+    const amount = Number(args?.amount || 0);
+    const character = chatState.characters?.[female];
+    if (!female || !character)
+        return { applied: false, message: `bsDrainSperm skipped: unknown character ${female || '(empty)'}.` };
+    if (!Number.isFinite(amount) || amount <= 0)
+        return { applied: false, message: 'bsDrainSperm skipped: invalid amount.' };
+    const next = cloneValue(character);
+    const base = next.profile?.base || {};
+    let sperms = Array.isArray(base.sperms) ? base.sperms.map((item) => ({ ...item })) : [];
+    const total = sperms.reduce((sum, item) => sum + clampNumber(item?.value, 0, 999999, 0), 0);
+    if (total <= amount) {
+        base.sperms = [];
+        next.profile.base = base;
+        chatState.characters[female] = next;
+        return { applied: true, message: `bsDrainSperm cleared all sperm for ${female}.` };
+    }
+    const factor = amount / total;
+    sperms = sperms
+        .map((item) => ({
+        ...item,
+        value: Math.max(Math.floor(clampNumber(item?.value, 0, 999999, 0) - (clampNumber(item?.value, 0, 999999, 0) * factor)), 0),
+    }))
+        .filter((item) => item.value > 0);
+    base.sperms = sperms;
+    next.profile.base = base;
+    chatState.characters[female] = next;
+    return { applied: true, message: `bsDrainSperm applied to ${female}.` };
+}
+function applySetMenstrualPhases(chatState, args) {
+    const female = String(args?.female || '').trim();
+    const stage = String(args?.stage || '').trim();
+    const character = chatState.characters?.[female];
+    if (!female || !character)
+        return { applied: false, message: `bsSetMenstrualPhases skipped: unknown character ${female || '(empty)'}.` };
+    if (!stage)
+        return { applied: false, message: 'bsSetMenstrualPhases skipped: empty stage.' };
+    const allowedStages = new Set([...MENSTRUAL_STAGES, '产后恢复', '假孕期']);
+    if (!allowedStages.has(stage)) {
+        return { applied: false, message: `bsSetMenstrualPhases skipped: invalid stage ${stage}.` };
+    }
+    const next = cloneValue(character);
+    const profile = next.profile || {};
+    const base = profile.base || {};
+    const pregnant = profile.pregnant || {};
+    const cooldown = profile.cooldown || {};
+    const notify = profile.notify || {};
+    const currentStage = String(base.stage || '');
+    const fetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [];
+    const hasConceptionState = fetuses.length > 0
+        || clampNumber(base.fertilizationDays, 0, 9999, 0) > 0
+        || clampNumber(pregnant.pregnantDays, 0, 9999, 0) > 0
+        || clampNumber(pregnant.effectivePregnantDays, 0, 9999, 0) > 0;
+    const hasProtectedPregnancyState = PREGNANCY_STAGES.includes(currentStage)
+        || currentStage === '产兆前驱'
+        || LABOR_STAGES.includes(currentStage);
+    if (hasConceptionState || hasProtectedPregnancyState) {
+        return {
+            applied: false,
+            message: `bsSetMenstrualPhases skipped for ${female}: active conception or pregnancy state must not be overridden.`,
+        };
+    }
+    base.stage = stage;
+    base.days = 0;
+    profile.base = base;
+    if (stage === '卵泡期') {
+        const metabolism = profile.metabolism || {};
+        metabolism.milk = 0;
+        profile.metabolism = metabolism;
+    }
+    if (stage === '排卵期') {
+        profile.cooldown = {
+            ...cooldown,
+            orgasmOvulationUsed: false,
+        };
+    }
+    else {
+        profile.cooldown = {
+            ...cooldown,
+            orgasmOvulationUsed: shouldResetOrgasmOvulation(stage) ? false : Boolean(cooldown.orgasmOvulationUsed),
+        };
+    }
+    if (stage === '假孕期') {
+        pregnant.pregnantDays = 0;
+        pregnant.effectivePregnantDays = 0;
+    }
+    profile.base = base;
+    profile.pregnant = pregnant;
+    profile.notify = {
+        ...notify,
+        firstly: `${female}进入了${stage}`,
+    };
+    next.profile = profile;
+    chatState.characters[female] = syncCharacterStageFromProfile(next);
+    return { applied: true, message: `bsSetMenstrualPhases applied to ${female}.` };
+}
+function applyDebugInjectPregnancy(chatState, args) {
+    const female = String(args?.female || '').trim();
+    const fatherInput = String(args?.father || '').trim();
+    const raceInput = String(args?.race || '人类').trim();
+    const fetusCount = clampNumber(args?.fetusCount, 1, 9, 1);
+    const equivalentDays = clampNumber(args?.equivalentDays, 0, 300, 0);
+    const genderInput = String(args?.genders || '').trim();
+    const character = chatState.characters?.[female];
+    if (!female || !character)
+        return { applied: false, message: `bsDebugInjectPregnancy skipped: unknown character ${female || '(empty)'}.` };
+    const next = cloneValue(character);
+    const profile = next.profile || {};
+    const base = profile.base || {};
+    const pregnant = profile.pregnant || {};
+    const experience = profile.experience || {};
+    const notify = profile.notify || {};
+    const bio = profile.bio || {};
+    const currentStage = String(base.stage || '');
+    const existingFetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [];
+    const hasConceptionState = existingFetuses.length > 0
+        || clampNumber(base.fertilizationDays, 0, 9999, 0) > 0
+        || isPregnancyStage(currentStage);
+    if (hasConceptionState) {
+        return { applied: false, message: `bsDebugInjectPregnancy skipped for ${female}: pregnancy/conception state already exists.` };
+    }
+    const rawGenderList = genderInput
+        ? genderInput.split(',').map((item) => String(item || '').trim()).filter(Boolean)
+        : [];
+    if (rawGenderList.length > 1 && rawGenderList.length !== fetusCount) {
+        return { applied: false, message: `bsDebugInjectPregnancy skipped for ${female}: genders count must be 1 or match fetusCount.` };
+    }
+    const rawFatherList = fatherInput
+        ? fatherInput.split(',').map((item) => String(item || '').trim()).filter(Boolean)
+        : [];
+    if (rawFatherList.length > 1 && rawFatherList.length !== fetusCount) {
+        return { applied: false, message: `bsDebugInjectPregnancy skipped for ${female}: fathers count must be 1 or match fetusCount.` };
+    }
+    const rawRaceList = raceInput
+        ? raceInput.split(',').map((item) => String(item || '').trim()).filter(Boolean)
+        : ['人类'];
+    if (rawRaceList.length > 1 && rawRaceList.length !== fetusCount) {
+        return { applied: false, message: `bsDebugInjectPregnancy skipped for ${female}: races count must be 1 or match fetusCount.` };
+    }
+    const allowedGenderMap = {
+        男: '男',
+        女: '女',
+        双: '双',
+        雙: '双',
+        無: '无',
+        无: '无',
+    };
+    const normalizedGenderList = rawGenderList.map((item) => allowedGenderMap[item]);
+    if (normalizedGenderList.some((item) => !item)) {
+        return { applied: false, message: `bsDebugInjectPregnancy skipped for ${female}: unsupported gender value.` };
+    }
+    const fetuses = [];
+    for (let index = 0; index < fetusCount; index += 1) {
+        const spermSeed = {
+            male: rawFatherList.length === 0 ? '未知' : (rawFatherList.length === 1 ? rawFatherList[0] : rawFatherList[index]),
+            race: parseRaceDescriptor(rawRaceList.length === 1 ? rawRaceList[0] : rawRaceList[index]).race || '人类',
+            derivedType: null,
+        };
+        const fetus = createSimpleFetus(profile, spermSeed, equivalentDays === 0 ? currentStage : '孕早期');
+        if (normalizedGenderList.length === 1) {
+            fetus.gender = normalizedGenderList[0];
+        }
+        else if (normalizedGenderList.length === fetusCount) {
+            fetus.gender = normalizedGenderList[index];
+        }
+        fetuses.push(fetus);
+    }
+    pregnant.fetuses = fetuses;
+    pregnant.fetusesCount = fetuses.length;
+    pregnant.laborHours = 0;
+    pregnant.effectiveLaborHours = 0;
+    pregnant.laborPhase = null;
+    pregnant.laborFetusIndex = 0;
+    pregnant.laborPain = 0;
+    pregnant.prodromalOriginStage = null;
+    pregnant.prodromalRemainingHours = 0;
+    pregnant.prodromalDelayProgressHours = 0;
+    pregnant.amnionDurability = equivalentDays === 0 ? 0 : 100;
+    pregnant.pregnantDays = 0;
+    pregnant.effectivePregnantDays = equivalentDays === 0 ? 0 : equivalentDays;
+    profile.base = base;
+    if (equivalentDays === 0) {
+        base.fertilizationDays = 0;
+    }
+    else {
+        applyPregnancyPhysiology(profile, next.runtime || {});
+        const actualGestationSpeed = clampNumber(getGestationEffectiveSpeed(profile), 0, 20, 1);
+        pregnant.pregnantDays = actualGestationSpeed > 0 ? Math.max(0, equivalentDays / actualGestationSpeed) : equivalentDays;
+        pregnant.effectivePregnantDays = Math.max(0, equivalentDays);
+        const derived = derivePregnancyStageState(pregnant.effectivePregnantDays, 1);
+        base.stage = derived.stage;
+        base.days = derived.days;
+        base.fertilizationDays = 0;
+        experience.pregnantExperience = clampNumber(experience.pregnantExperience, 0, 999, 0) + 1;
+    }
+    profile.pregnant = pregnant;
+    profile.experience = experience;
+    updateFetalEnergyDrain(profile);
+    profile.notify = {
+        ...notify,
+        secondly: equivalentDays === 0
+            ? `${female}已注入${fetusCount}个刚受精胚胎，尚未着床`
+            : `${female}已注入${fetusCount}胎，当前为等效妊娠${equivalentDays}天`,
+    };
+    next.profile = profile;
+    chatState.characters[female] = equivalentDays > 0 ? syncCharacterStageFromProfile(next) : next;
+    return { applied: true, message: `bsDebugInjectPregnancy applied to ${female}.` };
+}
+function applyDebugClearContainers(chatState, args) {
+    const female = String(args?.female || '').trim();
+    const container = String(args?.container || '').trim();
+    const character = chatState.characters?.[female];
+    if (!female || !character)
+        return { applied: false, message: `bsDebugClearContainers skipped: unknown character ${female || '(empty)'}.` };
+    if (!['sperms', 'fetuses', 'children'].includes(container)) {
+        return { applied: false, message: `bsDebugClearContainers skipped for ${female}: unsupported container ${container || '(empty)'}.` };
+    }
+    const next = cloneValue(character);
+    const profile = next.profile || {};
+    const base = profile.base || {};
+    const pregnant = profile.pregnant || {};
+    const experience = profile.experience || {};
+    const notify = profile.notify || {};
+    const stage = String(base.stage || '');
+    if (container === 'sperms') {
+        const sperms = Array.isArray(base.sperms) ? base.sperms : [];
+        if (sperms.length === 0) {
+            return { applied: false, message: `bsDebugClearContainers skipped for ${female}: no sperms.` };
+        }
+        base.sperms = [];
+        profile.base = base;
+        profile.notify = {
+            ...notify,
+            secondly: `${female}体内残留精液已被调试淨空`,
+        };
+        next.profile = profile;
+        chatState.characters[female] = next;
+        return { applied: true, message: `bsDebugClearContainers cleared sperms for ${female}.` };
+    }
+    if (container === 'children') {
+        const children = Array.isArray(profile.children) ? profile.children : [];
+        if (children.length === 0) {
+            return { applied: false, message: `bsDebugClearContainers skipped for ${female}: no children.` };
+        }
+        profile.children = [];
+        profile.notify = {
+            ...notify,
+            secondly: `${female}的孩子记录已被调试淨空`,
+        };
+        next.profile = profile;
+        chatState.characters[female] = next;
+        return { applied: true, message: `bsDebugClearContainers cleared children for ${female}.` };
+    }
+    const fetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [];
+    const fertilizationDays = clampNumber(base.fertilizationDays, 0, 9999, 0);
+    const hasConceptionState = fetuses.length > 0 || fertilizationDays > 0 || isPregnancyStage(stage);
+    if (!hasConceptionState) {
+        return { applied: false, message: `bsDebugClearContainers skipped for ${female}: no fetuses or conception state.` };
+    }
+    const implantedPregnancy = isPregnancyStage(stage) || clampNumber(pregnant.effectivePregnantDays, 0, 9999, 0) > 0;
+    clearPregnancyState(profile);
+    restorePregnancyPhysiology(profile, next.runtime || {});
+    if (implantedPregnancy) {
+        base.stage = '产后恢复';
+        base.days = 0;
+        experience.miscarriageExperience = clampNumber(experience.miscarriageExperience, 0, 999, 0) + 1;
+        profile.experience = experience;
+        profile.notify = {
+            ...notify,
+            firstly: `${female}进入了产后恢复`,
+            secondly: `${female}的胎儿已被调试淨空，并记录一次流产/堕胎经验`,
+        };
+        next.profile = profile;
+        chatState.characters[female] = syncCharacterStageFromProfile(next);
+        return { applied: true, message: `bsDebugClearContainers cleared implanted pregnancy for ${female}.` };
+    }
+    profile.notify = {
+        ...notify,
+        secondly: `${female}尚未着床的受精卵已被调试淨空`,
+    };
+    next.profile = profile;
+    chatState.characters[female] = next;
+    return { applied: true, message: `bsDebugClearContainers cleared pre-implantation conception for ${female}.` };
+}
+function applyDebugSetGestationModifier(chatState, args) {
+    const female = String(args?.female || '').trim();
+    const character = chatState.characters?.[female];
+    const clear = Boolean(args?.clear);
+    if (!female || !character)
+        return { applied: false, message: `bsDebugSetGestationModifier skipped: unknown character ${female || '(empty)'}.` };
+    const next = cloneValue(character);
+    const profile = next.profile || {};
+    const bio = profile.bio || {};
+    const notify = profile.notify || {};
+    const stage = String(profile?.base?.stage || '');
+    const fetuses = Array.isArray(profile?.pregnant?.fetuses) ? profile.pregnant.fetuses : [];
+    const runtimeBaseSpeed = Number(next.runtime?.originalPregnancyBio?.gestationSpeciesSpeed);
+    const baseSpeed = clampNumber(Number.isFinite(runtimeBaseSpeed) && runtimeBaseSpeed > 0 ? runtimeBaseSpeed : getGestationSpeciesSpeed(profile), 0.1, 20, 1.0);
+    bio.gestationSpeciesSpeed = baseSpeed;
+    if (clear) {
+        bio.gestationModifierMultiplier = 1.0;
+        bio.gestationModifierName = '';
+        bio.gestationModifierDescription = '';
+    }
+    else {
+        const name = String(args?.name || '').trim();
+        const description = String(args?.description || '').trim();
+        const multiplier = clampNumber(args?.multiplier, 0, 20, 1.0);
+        if (!name)
+            return { applied: false, message: `bsDebugSetGestationModifier skipped for ${female}: empty name.` };
+        bio.gestationModifierMultiplier = multiplier;
+        bio.gestationModifierName = name;
+        bio.gestationModifierDescription = description;
+    }
+    bio.gestationEffectiveSpeed = clampNumber(getGestationEffectiveSpeed({ ...profile, bio }), 0, 20, baseSpeed);
+    profile.bio = bio;
+    if (fetuses.length > 0 && isPregnancyStage(stage)) {
+        applyPregnancyPhysiology(profile, next.runtime || {});
+    }
+    profile.notify = {
+        ...notify,
+        firstly: clear
+            ? `${female}失去了妊娠变速效果`
+            : `${female}获得了妊娠变速效果「${bio.gestationModifierName}」x${Number(bio.gestationModifierMultiplier || 0).toFixed(2)}`,
+        secondly: clear
+            ? `${female}的妊娠变速效果已被清除`
+            : Number(bio.gestationModifierMultiplier || 0) === 0
+                ? `${female}的胎儿发育已被冻结`
+                : `${female}当前妊娠变速倍率为 x${Number(bio.gestationModifierMultiplier || 0).toFixed(2)}`,
+    };
+    next.profile = profile;
+    chatState.characters[female] = syncCharacterStageFromProfile(next);
+    return { applied: true, message: `bsDebugSetGestationModifier applied to ${female}.` };
+}
+function applyDebugFetalActivity(chatState, args) {
+    const female = String(args?.female || '').trim();
+    const activityText = String(args?.activityText || '').trim().slice(0, 500);
+    const character = chatState.characters?.[female];
+    if (!female || !character)
+        return { applied: false, message: `bsDebugFetalActivity skipped: unknown character ${female || '(empty)'}.` };
+    if (!activityText)
+        return { applied: false, message: `bsDebugFetalActivity skipped for ${female}: empty activity text.` };
+    const next = cloneValue(character);
+    const profile = next.profile || {};
+    const base = profile.base || {};
+    const pregnant = profile.pregnant || {};
+    const fetuses = Array.isArray(pregnant.fetuses) ? pregnant.fetuses : [];
+    const stage = String(base.stage || '');
+    const allowedStages = [...PREGNANCY_STAGES, '产兆前驱', ...LABOR_STAGES];
+    if (fetuses.length === 0 || !allowedStages.includes(stage)) {
+        return { applied: false, message: `bsDebugFetalActivity skipped for ${female}: fetal activity requires an active pregnancy or labor state with fetuses.` };
+    }
+    const notify = profile.notify || {};
+    const existingSecondary = String(notify.secondly || '').trim();
+    profile.notify = {
+        ...notify,
+        secondly: existingSecondary ? `${existingSecondary}；${activityText}` : activityText,
+    };
+    next.profile = profile;
+    chatState.characters[female] = next;
+    return { applied: true, message: `bsDebugFetalActivity applied to ${female}.` };
+}
+function applyDebugSetProdromal(chatState, args) {
+    const female = String(args?.female || '').trim();
+    const character = chatState.characters?.[female];
+    if (!female || !character)
+        return { applied: false, message: `bsDebugSetProdromal skipped: unknown character ${female || '(empty)'}.` };
+    const next = cloneValue(character);
+    const profile = next.profile || {};
+    const base = profile.base || {};
+    const pregnant = profile.pregnant || {};
+    const stage = String(base.stage || '');
+    const allowedEntryStages = ['孕晚期', '临产期', '逾期'];
+    if (!allowedEntryStages.includes(stage) && stage !== '产兆前驱') {
+        return { applied: false, message: `bsDebugSetProdromal skipped for ${female}: stage must be late pregnancy, term, overdue, or prodromal.` };
+    }
+    const progressPercent = clampNumber(args?.progressPercent, 0, 100, 0);
+    const enteringProdromal = stage !== '产兆前驱';
+    if (enteringProdromal) {
+        enterProdromalStage(profile, female, stage, `${female}已通过调试进入产兆前驱`);
+    }
+    const initialHours = getProdromalInitialHours(profile);
+    pregnant.prodromalRemainingHours = initialHours * (1 - (progressPercent / 100));
+    pregnant.prodromalDelayProgressHours = 0;
+    updateLaborPain(profile, '产兆前驱', null, progressPercent / 100);
+    profile.notify = {
+        ...(profile.notify || {}),
+        firstly: enteringProdromal ? `${female}进入了产兆前驱` : '',
+        secondly: `${female}的产兆前驱调试进度设为${Math.round(progressPercent)}%，剩余约${Math.ceil(pregnant.prodromalRemainingHours)}小时`,
+    };
+    next.profile = profile;
+    chatState.characters[female] = syncCharacterStageFromProfile(next);
+    return { applied: true, message: `bsDebugSetProdromal applied to ${female}.` };
+}
+function applyToolCall(chatState, call) {
+    const name = String(call?.name || '').trim();
+    const args = normalizeToolCallArguments(call?.arguments);
+    if (!name)
+        return { applied: false, message: 'Empty tool call name.' };
+    if (name === 'bsPassedTime')
+        return applyPassedTime(chatState, args);
+    if (name === 'bsWriteDiary')
+        return applyWriteDiary(chatState, args);
+    if (name === 'bsUpdateCharacterStatus')
+        return applyCharacterStatus(chatState, args);
+    if (name === 'bsAddWardrobeItem')
+        return applyAddWardrobeItem(chatState, args);
+    if (name === 'bsRemoveWardrobeItem')
+        return applyRemoveWardrobeItem(chatState, args);
+    if (name === 'bsChangeOutfit')
+        return applyChangeOutfit(chatState, args);
+    if (name === 'bsSetDescription')
+        return applyDescription(chatState, args);
+    if (name === 'bsSetCharacterPresence')
+        return applySetCharacterPresence(chatState, args);
+    if (name === 'bsUpdateExperience')
+        return applyUpdateExperience(chatState, args);
+    if (name === 'bsNameChild')
+        return applyNameChild(chatState, args);
+    if (name === 'bsRegisterSkillDefinition')
+        return applyRegisterSkillDefinition(chatState, args);
+    if (name === 'bsTrainSkill')
+        return applyTrainSkill(chatState, args);
+    if (name === 'bsUpdatePsychology')
+        return applyUpdatePsychology(chatState, args);
+    if (name === 'bsAddSperm')
+        return applyAddSperm(chatState, args);
+    if (name === 'bsDrainSperm')
+        return applyDrainSperm(chatState, args);
+    if (name === 'bsSetMenstrualPhases')
+        return applySetMenstrualPhases(chatState, args);
+    if (name === 'bsExcreteMetabolism')
+        return applyExcreteMetabolism(chatState, args);
+    if (name === 'bsAbortion')
+        return applyAbortion(chatState, args);
+    if (name === 'bsImplantEmbryo')
+        return applyImplantEmbryo(chatState, args);
+    if (name === 'bsRuptureMembranes')
+        return applyRuptureMembranes(chatState, args);
+    if (name === 'bsChildbirth')
+        return applyChildbirth(chatState, args);
+    if (name === 'bsMaternalFetalInteraction')
+        return applyMaternalFetalInteraction(chatState, args);
+    if (name === 'bsDebugInjectPregnancy')
+        return applyDebugInjectPregnancy(chatState, args);
+    if (name === 'bsDebugClearContainers')
+        return applyDebugClearContainers(chatState, args);
+    if (name === 'bsDebugSetGestationModifier')
+        return applyDebugSetGestationModifier(chatState, args);
+    if (name === 'bsDebugFetalActivity')
+        return applyDebugFetalActivity(chatState, args);
+    if (name === 'bsDebugSetProdromal')
+        return applyDebugSetProdromal(chatState, args);
+    return { applied: false, message: `Unsupported tool: ${name}` };
+}
+function applyToolCallsResult(ctx, result) {
+    const settings = getSettings(ctx);
+    const chatState = getChatState(ctx, settings);
+    const toolCalls = Array.isArray(result?.tool_calls) ? result.tool_calls : [];
+    const logs = [];
+    for (const call of toolCalls) {
+        const normalizedCall = {
+            name: String(call?.name || '').trim(),
+            arguments: normalizeToolCallArguments(call?.arguments),
+        };
+        const appliedResult = applyToolCall(chatState, normalizedCall);
+        if (appliedResult?.notify?.text)
+            globalThis.toastr?.info?.(appliedResult.notify.text, '[BS BioTracker]');
+        logs.push({
+            ...appliedResult,
+            name: normalizedCall.name,
+            arguments: cloneValue(normalizedCall.arguments),
+        });
+    }
+    if (result?.scene_summary !== undefined)
+        chatState.sceneSummary = String(result.scene_summary || '');
+    chatState.lastRawResult = summarizeRawResult(result);
+    chatState.lastOperationLogs = summarizeOperationLogs(logs);
+    saveSettings(ctx);
+    return { chatState, logs };
+}
+
+const POLL_RUNTIME_KEY = '__bs_biotracker_poll__';
+const RUN_RUNTIME_KEY = '__bs_biotracker_running__';
+const RUN_STARTED_AT_KEY = '__bs_biotracker_running_started_at__';
+/** 单条消息之外的准备工作（世界书、宿主上下文）也算在看门狗里，留一段余量 */
+const RUN_WATCHDOG_MARGIN_MS = 120000;
+const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
+const AFTER_AI_SETTLE_MS = 1400;
+const MAINFLOW_CONTEXT_SNAPSHOT_KEY = '__bs_biotracker_mainflow_context_snapshot__';
+const DEBUG_LAST_TRACKER_REQUEST_KEY = '__bs_biotracker_debug_last_tracker_request__';
+const DEBUG_LAST_TRACKER_RESULT_KEY = '__bs_biotracker_debug_last_tracker_result__';
+/** 心跳：每处理完一条消息就刷新，避免长队列被看门狗误判为卡死 */
+function markTrackerRunProgress() {
+    globalThis[RUN_STARTED_AT_KEY] = Date.now();
+}
+/**
+ * 看门狗：请求若因为宿主代理挂起而永不返回，运行锁会一直留在 true，
+ * 之后所有手动/自动分析都会被 already_running 挡掉。超过整轮总时限即视为死锁并放行。
+ * 以总时限（含全部重试）为准，避免误判还在合法重试的长轮次、让 poll 抢跑造成并发。
+ */
+function isTrackerRunStale(settings) {
+    const startedAt = Number(globalThis[RUN_STARTED_AT_KEY]);
+    if (!Number.isFinite(startedAt) || startedAt <= 0)
+        return true;
+    const limitMs = resolveOverallDeadlineMs(settings) + RUN_WATCHDOG_MARGIN_MS;
+    return Date.now() - startedAt > limitMs;
+}
+function getTrackerResumeIndexes(ctx, settings) {
+    const chatKey = getChatKey(ctx);
+    const snapshots = settings?.chatStates?.[chatKey]?.snapshots;
+    if (!Array.isArray(snapshots))
+        return [0];
+    return snapshots.map((snapshot) => {
+        const count = Number(snapshot?.messageCount);
+        return Number.isInteger(count) && count >= 0 ? count : null;
+    }).filter((count) => count !== null);
+}
+/**
+ * 失败后是否该挡下自动重试。
+ *
+ * 旧版只拿「失败那一楼的签名」去比「整段对话最后一楼的签名」：
+ * 重放中间楼失败时两者永远对不上，于是轮询会无限重发同一个失败请求
+ * （删掉最新一楼后特别容易触发，因为回放会从较早的楼开始）。
+ * 改为记录失败当下整段对话的签名——只要对话没有任何变化，重试必然重复同一个失败。
+ * 对话一有变动（新楼、改写、删楼）签名就变，自动重试随即恢复；手动分析不受此限。
+ */
+function isFailedAutoRetryBlocked(ctx, chatState) {
+    const chat = getHostChat(ctx);
+    if (chat.length === 0)
+        return false;
+    const currentChatSignature = buildSignature(ctx, chat.length);
+    const failedChatSignature = String(chatState?.lastFailedChatSignature || '');
+    if (failedChatSignature)
+        return failedChatSignature === currentChatSignature;
+    // 旧存档没有这个栏位时，沿用原本的尾楼比对
+    const failedSignature = String(chatState?.lastFailedSignature || '');
+    if (!failedSignature)
+        return false;
+    return failedSignature === currentChatSignature;
+}
+function normalizeWorldbookMode(value) {
+    const mode = String(value || 'exclude').trim();
+    if (mode === 'mainflow' || mode === 'allowlist_all' || mode === 'exclude')
+        return mode;
+    return 'exclude';
+}
+function getVitalityLevelText(level) {
+    const levels = {
+        1: '一推就倒',
+        2: '身怀病弱',
+        3: '难产体态',
+        4: '均衡活力',
+        5: '安产体态',
+        6: '经过锻炼',
+        7: '无坚不摧',
+    };
+    return levels[Math.max(1, Math.min(7, Math.round(Number(level) || 4)))] || '未知';
+}
+function getPsyStressLevelText(level) {
+    const levels = {
+        1: '情感丧失、麻木不仁',
+        2: '内向压抑、冷感',
+        3: '情绪平缓、理性',
+        4: '情绪均衡、稳定',
+        5: '情绪丰富、敏感',
+        6: '强烈波动、焦躁',
+        7: '极端情绪、精神异常',
+    };
+    return levels[Math.max(1, Math.min(7, Math.round(Number(level) || 4)))] || '未知';
+}
+function getTendencyAngleText(angle) {
+    const value = Number(angle);
+    if (!Number.isFinite(value))
+        return '未知';
+    if ((value >= 0 && value <= 15) || (value >= 345 && value <= 360))
+        return '正位(↓)';
+    if ((value >= 165 && value <= 195))
+        return '倒位(↑)';
+    if ((value >= 75 && value <= 105))
+        return '横位(←)';
+    if ((value >= 255 && value <= 285))
+        return '横位(→)';
+    if (value > 15 && value < 75)
+        return '斜位(↗)';
+    if (value > 105 && value < 165)
+        return '斜位(↖)';
+    if (value > 195 && value < 255)
+        return '斜位(↙)';
+    if (value > 285 && value < 345)
+        return '斜位(↘)';
+    return '斜位';
+}
+function getDiaryRecentLimit(settings, characterCount) {
+    const singleLimit = Math.max(0, Math.min(20, Math.floor(Number(settings?.diaryRecentLimit) || 0)));
+    if (singleLimit <= 0)
+        return 0;
+    return characterCount > 1 ? Math.max(1, Math.floor(singleLimit / 2)) : singleLimit;
+}
+function hasPreparedWardrobe(existingState = {}) {
+    return Object.values(existingState || {}).some((item) => item?.profile?.wardrobe?.enabled === true);
+}
+function hasBreedingPsychology(existingState = {}) {
+    return Object.values(existingState || {}).some((item) => {
+        const stageProfiles = item?.profile?.psychology?.stageProfiles;
+        return stageProfiles && typeof stageProfiles === 'object' && !Array.isArray(stageProfiles)
+            && Object.keys(stageProfiles).length > 0;
+    });
+}
+/** 与 applyRuptureMembranes 允许的阶段一致：更早的阶段羊膜恒不破 */
+function hasRupturableStage(existingState = {}) {
+    return Object.values(existingState || {}).some((item) => (['产兆前驱', '第一产程', '第二产程'].includes(String(item?.profile?.base?.stage || ''))));
+}
+function getTrackerToolDefinitions(settings, existingState = {}) {
+    const diaryEnabled = Math.max(0, Math.min(20, Math.floor(Number(settings?.diaryRecentLimit) || 0))) > 0;
+    const wardrobeEnabled = hasPreparedWardrobe(existingState);
+    const psychologyEnabled = hasBreedingPsychology(existingState);
+    const hiddenTools = new Set();
+    if (!diaryEnabled)
+        hiddenTools.add('bsWriteDiary');
+    if (!psychologyEnabled)
+        hiddenTools.add('bsUpdatePsychology');
+    // 破水只在产兆前驱与前两个产程有意义；平时挂着只是占用模型的注意力
+    if (!hasRupturableStage(existingState))
+        hiddenTools.add('bsRuptureMembranes');
+    if (!wardrobeEnabled) {
+        hiddenTools.add('bsAddWardrobeItem');
+        hiddenTools.add('bsRemoveWardrobeItem');
+        hiddenTools.add('bsChangeOutfit');
+    }
+    return TOOL_DEFINITIONS.filter((tool) => !hiddenTools.has(tool?.name));
+}
+function getRecentDiaryEntries(profile, limit) {
+    if (limit <= 0 || !Array.isArray(profile?.diary))
+        return [];
+    return profile.diary.slice(-limit);
+}
+function shouldSendPregnantState(base = {}, pregnant = {}) {
+    const stage = String(base.stage || '');
+    const hasFetuses = Array.isArray(pregnant.fetuses) && pregnant.fetuses.length > 0;
+    return hasFetuses
+        || PREGNANCY_STAGES.includes(stage)
+        || stage === '产兆前驱'
+        || LABOR_STAGES.includes(stage)
+        || stage === '产后恢复'
+        || stage === '假孕期';
+}
+function getPromptFacingMetabolismSymptoms(pregnant = {}) {
+    const result = {};
+    for (const symptomType of ['blockage', 'acceleration', 'expansion']) {
+        const symptom = pregnant[symptomType];
+        if (!symptom || typeof symptom !== 'object')
+            continue;
+        const key = String(symptom.key || '').trim();
+        if (!key)
+            continue;
+        result[symptomType] = {
+            key,
+            severity: Number.isFinite(Number(symptom.severity)) ? Number(symptom.severity) : 0,
+        };
+    }
+    return result;
+}
+function getPromptFacingLaborState(base = {}, pregnant = {}) {
+    const stage = String(base.stage || '');
+    if (stage !== '产兆前驱' && !LABOR_STAGES.includes(stage))
+        return {};
+    return {
+        laborHours: Number.isFinite(Number(pregnant.laborHours)) ? Number(pregnant.laborHours) : 0,
+        effectiveLaborHours: Number.isFinite(Number(pregnant.effectiveLaborHours)) ? Number(pregnant.effectiveLaborHours) : 0,
+        laborPhase: pregnant.laborPhase ?? null,
+        laborFetusIndex: Number.isFinite(Number(pregnant.laborFetusIndex)) ? Number(pregnant.laborFetusIndex) : 0,
+        laborPain: Number.isFinite(Number(pregnant.laborPain)) ? Number(pregnant.laborPain) : 0,
+    };
+}
+function getOutfitCurrentWearText(profile) {
+    const wardrobe = profile?.wardrobe;
+    const outfit = profile?.outfit;
+    if (!wardrobe?.enabled || !outfit || typeof outfit !== 'object')
+        return '';
+    const availableItems = [
+        ...(Array.isArray(wardrobe.items) ? wardrobe.items : []),
+        ...(Array.isArray(outfit.temporaryItems) ? outfit.temporaryItems : []),
+    ];
+    const findItem = (id) => availableItems.find((entry) => entry?.id === id) || null;
+    const itemName = (id) => {
+        const found = findItem(id);
+        if (found?.name)
+            return String(found.name);
+        return id === 0 ? '全裸' : `未知衣物#${id}`;
+    };
+    const mainId = outfit.mainItemId ?? 0;
+    const wearState = sanitizeWearState(outfit.wearState);
+    const stateSuffix = wearState !== DEFAULT_WEAR_STATE ? `（${wearState}）` : '';
+    const accessoryIds = Array.isArray(outfit.accessoryItemIds) ? outfit.accessoryItemIds : [];
+    const innerNames = [];
+    const outerNames = [];
+    for (const id of accessoryIds) {
+        (findItem(id)?.layer === 'inner' ? innerNames : outerNames).push(itemName(id));
+    }
+    if (mainId === 0 && (innerNames.length > 0 || outerNames.length > 0)) {
+        return `仅着：${[...innerNames, ...outerNames].join(' + ')}${stateSuffix}`;
+    }
+    const base = [itemName(mainId) + stateSuffix, ...outerNames].join(' + ');
+    return innerNames.length > 0 ? `${base}（内着：${innerNames.join('、')}）` : base;
+}
+function buildSlimWardrobeItem(entry) {
+    return {
+        id: entry?.id,
+        name: entry?.name,
+        slot: entry?.slot,
+        ...(entry?.layer ? { layer: entry.layer } : {}),
+    };
+}
+// 四维数值只在孕期窗口（真妊娠/产兆前驱/产程/产后恢复）有机械消费者（pregFit）；
+// 窗口外的 payload 衣物瘦身为 id/name/slot/note，四维仍保存在持久化状态中。
+function isWearFitWindowActive(base = {}) {
+    const stage = String(base?.stage || '');
+    return PREGNANCY_STAGES.includes(stage)
+        || stage === '产兆前驱'
+        || LABOR_STAGES.includes(stage)
+        || stage === '产后恢复';
+}
+function buildNarrativeWardrobeItem(entry) {
+    return {
+        id: entry?.id,
+        name: entry?.name,
+        slot: entry?.slot,
+        note: entry?.note,
+        ...(Array.isArray(entry?.parts) && entry.parts.length > 0 ? { parts: entry.parts } : {}),
+        ...(entry?.layer ? { layer: entry.layer } : {}),
+    };
+}
+function buildPromptFacingCharacterState(item, diaryLimit = 0) {
+    const next = cloneValue(item);
+    const profile = next?.profile || {};
+    const base = profile.base || {};
+    const pregnant = profile.pregnant || {};
+    const immune = profile.immune || {};
+    const metabolism = profile.metabolism || {};
+    const hasFetuses = Array.isArray(pregnant.fetuses) && pregnant.fetuses.length > 0;
+    const sendPregnantState = shouldSendPregnantState(base, pregnant);
+    profile.base = {
+        ...base,
+        vitalityLevelText: getVitalityLevelText(base.vitalityLevel),
+        psyStressLevelText: getPsyStressLevelText(base.psyStressLevel),
+    };
+    if (!sendPregnantState) {
+        delete profile.pregnant;
+    }
+    else if (Array.isArray(pregnant.fetuses)) {
+        profile.pregnant = {
+            pregnantDays: Number.isFinite(Number(pregnant.pregnantDays)) ? Number(pregnant.pregnantDays) : 0,
+            effectivePregnantDays: Number.isFinite(Number(pregnant.effectivePregnantDays)) ? Number(pregnant.effectivePregnantDays) : 0,
+            ...getPromptFacingLaborState(base, pregnant),
+            amnionDurability: Number.isFinite(Number(pregnant.amnionDurability)) ? Number(pregnant.amnionDurability) : 0,
+            ...(hasFetuses ? { nutrition: Number.isFinite(Number(pregnant.nutrition)) ? Number(pregnant.nutrition) : 0 } : {}),
+            ...(hasFetuses ? { symptomReliefPending: Number.isFinite(Number(pregnant.symptomReliefPending)) ? Number(pregnant.symptomReliefPending) : 0 } : {}),
+            ...getPromptFacingMetabolismSymptoms(pregnant),
+            fetuses: pregnant.fetuses.map((fetus) => {
+                const { embryoId: _embryoId, fusionCheckedWith: _fusionCheckedWith, ...visibleFetus } = fetus;
+                return {
+                    ...visibleFetus,
+                    tendencyAngleText: getTendencyAngleText(fetus?.tendencyAngle),
+                    race: undefined,
+                };
+            }),
+        };
+    }
+    else {
+        profile.pregnant = {
+            pregnantDays: Number.isFinite(Number(pregnant.pregnantDays)) ? Number(pregnant.pregnantDays) : 0,
+            effectivePregnantDays: Number.isFinite(Number(pregnant.effectivePregnantDays)) ? Number(pregnant.effectivePregnantDays) : 0,
+            ...getPromptFacingLaborState(base, pregnant),
+            amnionDurability: Number.isFinite(Number(pregnant.amnionDurability)) ? Number(pregnant.amnionDurability) : 0,
+            ...getPromptFacingMetabolismSymptoms(pregnant),
+            fetuses: [],
+        };
+    }
+    if (base.derivedType) {
+        const exemptions = new Set(getDerivedTypeMetabolismExemptions(base.derivedType));
+        const includeNeed = (key) => (exemptions.has(key) ? {} : { [key]: metabolism[key] ?? 0 });
+        profile.metabolism = {
+            flux: Number.isFinite(Number(metabolism.flux)) ? Number(metabolism.flux) : 0,
+            ...includeNeed('excretion'),
+            ...includeNeed('hunger'),
+            ...includeNeed('sleep'),
+            ...includeNeed('milk'),
+            ...includeNeed('odor'),
+            ...includeNeed('companionship'),
+        };
+    }
+    else {
+        profile.metabolism = {
+            excretion: metabolism.excretion ?? 0,
+            hunger: metabolism.hunger ?? 0,
+            sleep: metabolism.sleep ?? 0,
+            milk: metabolism.milk ?? 0,
+            odor: metabolism.odor ?? 0,
+            companionship: metabolism.companionship ?? 0,
+        };
+    }
+    if (profile.wardrobe?.enabled && profile.outfit && typeof profile.outfit === 'object') {
+        profile.outfit.currentWearText = getOutfitCurrentWearText(profile);
+        if (!isWearFitWindowActive(base)) {
+            profile.wardrobe.items = (Array.isArray(profile.wardrobe.items) ? profile.wardrobe.items : []).map(buildNarrativeWardrobeItem);
+            if (Array.isArray(profile.outfit.temporaryItems)) {
+                profile.outfit.temporaryItems = profile.outfit.temporaryItems.map((entry) => ({ ...buildNarrativeWardrobeItem(entry), source: entry?.source }));
+            }
+        }
+    }
+    delete profile.bio;
+    delete profile.immune;
+    delete profile.cooldown;
+    if (immune.metabolism)
+        delete profile.metabolism;
+    if (!hasBreedingPsychology({ current: item }))
+        delete profile.psychology;
+    profile.diary = getRecentDiaryEntries(item?.profile || {}, diaryLimit);
+    delete next.updatedAt;
+    delete next.runtime;
+    next.profile = profile;
+    return next;
+}
+function buildOffscreenCharacterState(item, diaryLimit = 0) {
+    const profile = item?.profile || {};
+    const base = profile.base || {};
+    const pregnant = profile.pregnant || {};
+    const notify = profile.notify || {};
+    const hasFetuses = Array.isArray(pregnant.fetuses) && pregnant.fetuses.length > 0;
+    const sendPregnantState = shouldSendPregnantState(base, pregnant);
+    return {
+        name: item?.name || '',
+        initialized: Boolean(item?.initialized),
+        offscreen: true,
+        profile: {
+            base: {
+                isHere: false,
+                stage: base.stage ?? null,
+                days: base.days ?? 0,
+                age: base.age ?? null,
+                race: base.race ?? null,
+                derivedType: base.derivedType ?? null,
+            },
+            ...(sendPregnantState ? {
+                pregnant: {
+                    pregnantDays: pregnant.pregnantDays ?? 0,
+                    effectivePregnantDays: pregnant.effectivePregnantDays ?? 0,
+                    ...getPromptFacingLaborState(base, pregnant),
+                    fetusesCount: hasFetuses ? pregnant.fetuses.length : 0,
+                    ...getPromptFacingMetabolismSymptoms(pregnant),
+                },
+            } : {}),
+            ...(profile.wardrobe?.enabled ? {
+                wardrobe: {
+                    enabled: true,
+                    items: (Array.isArray(profile.wardrobe.items) ? profile.wardrobe.items : []).map(buildSlimWardrobeItem),
+                },
+                outfit: {
+                    mainItemId: profile.outfit?.mainItemId ?? 0,
+                    accessoryItemIds: Array.isArray(profile.outfit?.accessoryItemIds) ? [...profile.outfit.accessoryItemIds] : [],
+                    wearState: sanitizeWearState(profile.outfit?.wearState),
+                    ...(Array.isArray(profile.outfit?.temporaryItems) && profile.outfit.temporaryItems.length > 0
+                        ? { temporaryItems: profile.outfit.temporaryItems.map(buildSlimWardrobeItem) }
+                        : {}),
+                    currentWearText: getOutfitCurrentWearText(profile),
+                },
+            } : {}),
+            diary: getRecentDiaryEntries(profile, diaryLimit),
+            skills: Array.isArray(profile.skills) ? profile.skills : [],
+            talents: Array.isArray(profile.talents) ? profile.talents : [],
+            skillHistory: Array.isArray(profile.skillHistory) ? profile.skillHistory.slice(-10) : [],
+            notify: Object.values(notify).some((value) => String(value || '').trim()) ? notify : undefined,
+        },
+    };
+}
+function buildTrackerStateView(existingState, settings = null) {
+    const characterCount = Object.keys(existingState || {}).length;
+    const diaryLimit = getDiaryRecentLimit(settings, characterCount);
+    return Object.fromEntries(Object.entries(existingState).map(([name, item]) => {
+        if (item?.profile?.base?.isHere === false)
+            return [name, buildOffscreenCharacterState(item, diaryLimit)];
+        return [name, buildPromptFacingCharacterState(item, diaryLimit)];
+    }));
+}
+function parseTrackerWorldbookExcludeNames(settings) {
+    return new Set(String(settings?.trackerWorldbookExcludeNames || '')
+        .split(/\r?\n+/)
+        .map((item) => item.trim())
+        .filter(Boolean));
+}
+function parseTrackerWorldbookIncludeNames(settings) {
+    return new Set(String(settings?.trackerWorldbookIncludeNames || '')
+        .split(/\r?\n+/)
+        .map((item) => item.trim())
+        .filter(Boolean));
+}
+function parseTrackerGlobalWorldbookExcludeNames(settings) {
+    return new Set(String(settings?.trackerGlobalWorldbookExcludeNames || '')
+        .split(/\r?\n+/)
+        .map((item) => item.trim())
+        .filter(Boolean));
+}
+function parseTrackerGlobalWorldbookIncludeNames(settings) {
+    return new Set(String(settings?.trackerGlobalWorldbookIncludeNames || '')
+        .split(/\r?\n+/)
+        .map((item) => item.trim())
+        .filter(Boolean));
+}
+function formatGlobalWorldbookSelectionName(bookName, entryName) {
+    return `${String(bookName || '').trim()} :: ${String(entryName || '').trim()}`;
+}
+function normalizeWorldbookKeywords(value) {
+    if (Array.isArray(value))
+        return value.map((item) => String(item || '').trim()).filter(Boolean);
+    if (typeof value === 'string')
+        return value.split(/[\r\n,]+/).map((item) => item.trim()).filter(Boolean);
+    return [];
+}
+function buildWorldbookActivationText(recentMessages = []) {
+    return (Array.isArray(recentMessages) ? recentMessages : [])
+        .map((message) => `${message?.name || ''}\n${message?.text || ''}`)
+        .join('\n')
+        .toLowerCase();
+}
+function getWorldbookEntryActivationMode(entry) {
+    const mode = String(entry?.activationMode || '').trim().toLowerCase();
+    if (mode)
+        return mode;
+    if (entry?.constant === true || entry?.always === true)
+        return 'always';
+    if (entry?.selective === true || normalizeWorldbookKeywords(entry?.key).length > 0 || normalizeWorldbookKeywords(entry?.keys).length > 0)
+        return 'keyword';
+    return '';
+}
+function worldbookKeywordMatches(entry, activationText) {
+    if (!activationText)
+        return false;
+    const primaryKeys = [
+        ...normalizeWorldbookKeywords(entry?.key),
+        ...normalizeWorldbookKeywords(entry?.keys),
+    ];
+    if (primaryKeys.length === 0)
+        return false;
+    const primaryMatched = primaryKeys.some((keyword) => activationText.includes(keyword.toLowerCase()));
+    if (!primaryMatched)
+        return false;
+    const secondaryKeys = [
+        ...normalizeWorldbookKeywords(entry?.keysecondary),
+        ...normalizeWorldbookKeywords(entry?.keySecondary),
+        ...normalizeWorldbookKeywords(entry?.secondary_keys),
+        ...normalizeWorldbookKeywords(entry?.secondaryKeys),
+    ];
+    if (entry?.selective === true && secondaryKeys.length > 0) {
+        return secondaryKeys.some((keyword) => activationText.includes(keyword.toLowerCase()));
+    }
+    return true;
+}
+function filterTrackerWorldbookEntries(value, excludedNames, settings = null, recentMessages = [], options = {}) {
+    if (!value || typeof value !== 'object')
+        return value;
+    const mode = normalizeWorldbookMode(settings?.trackerWorldbookMode);
+    const globalBookName = String(options.globalBookName || '').trim();
+    // characterScopeLists：附加知识书带书名前缀，但白名单仍走角色侧名单
+    const includedNames = globalBookName && options.characterScopeLists !== true
+        ? parseTrackerGlobalWorldbookIncludeNames(settings)
+        : parseTrackerWorldbookIncludeNames(settings);
+    const activationText = mode === 'mainflow' ? buildWorldbookActivationText(recentMessages) : '';
+    const normalizeEntryName = (entry) => getWorldbookEntryDisplayName(entry);
+    const keepEntry = (entry) => {
+        const name = normalizeEntryName(entry);
+        const selectionName = globalBookName ? formatGlobalWorldbookSelectionName(globalBookName, name) : name;
+        if (mode === 'allowlist_all')
+            return Boolean(name) && worldbookSelectionMatches(includedNames, selectionName, name);
+        if (entry?.enabled === false || entry?.disable === true)
+            return false;
+        if (name && worldbookSelectionMatches(excludedNames, selectionName, name))
+            return false;
+        if (mode === 'mainflow') {
+            const activationMode = getWorldbookEntryActivationMode(entry);
+            if (activationMode === 'always' || activationMode === 'constant')
+                return true;
+            if (activationMode === 'keyword' || activationMode === 'selective')
+                return worldbookKeywordMatches(entry, activationText);
+            return false;
+        }
+        if (!excludedNames || excludedNames.size === 0)
+            return true;
+        return true;
+    };
+    if (Array.isArray(value.entries)) {
+        return {
+            ...value,
+            entries: value.entries.filter(keepEntry),
+        };
+    }
+    if (value.entries && typeof value.entries === 'object') {
+        const filteredEntries = Object.fromEntries(Object.entries(value.entries).filter(([, entry]) => keepEntry(entry)));
+        return {
+            ...value,
+            entries: filteredEntries,
+        };
+    }
+    return value;
+}
+async function getFilteredGlobalWorldbooks(ctx, settings, recentMessages = []) {
+    const boundName = String(getCharacterWorldBookName(ctx) || await getCharacterWorldBookNameViaSTscript() || '').trim();
+    try {
+        const names = (await getActiveGlobalWorldBookNames()).filter((name) => name !== boundName);
+        const excludedNames = parseTrackerGlobalWorldbookExcludeNames(settings);
+        const books = await Promise.all(names.map(async (name) => {
+            try {
+                const worldBook = await loadGlobalWorldBook(ctx, name);
+                return filterTrackerWorldbookEntries(worldBook || null, excludedNames, settings, recentMessages, { globalBookName: name });
+            }
+            catch (error) {
+                console.warn(`[BS BioTracker] load global worldbook "${name}" for tracker failed`, error);
+                return null;
+            }
+        }));
+        return books.filter((book) => book && ((Array.isArray(book.entries) && book.entries.length > 0) || (book.entries && typeof book.entries === 'object' && Object.keys(book.entries).length > 0)));
+    }
+    catch (error) {
+        console.warn('[BS BioTracker] load active global worldbooks for tracker failed', error);
+        return [];
+    }
+}
+// 附加知识书走角色侧排除名单，条目以「书名 :: 条目名」参与匹配
+async function getCharacterAdditionalWorldbooksForTracker(ctx, settings, recentMessages = []) {
+    const excludedNames = parseTrackerWorldbookExcludeNames(settings);
+    return loadCharacterAdditionalWorldBooks(ctx, {
+        recentMessages,
+        filterBook: (worldBook, bookName, messages) => filterTrackerWorldbookEntries(worldBook, excludedNames, settings, messages, { globalBookName: bookName, characterScopeLists: true }),
+    });
+}
+function mergeTrackerWorldbookLists(...lists) {
+    const seen = new Set();
+    const merged = [];
+    for (const list of lists) {
+        for (const book of Array.isArray(list) ? list : []) {
+            if (!book || typeof book !== 'object')
+                continue;
+            const key = String(book.name || '').trim();
+            if (key && seen.has(key))
+                continue;
+            if (key)
+                seen.add(key);
+            merged.push(book);
+        }
+    }
+    return merged;
+}
+function getMainflowContextSnapshot() {
+    const snapshot = globalThis[MAINFLOW_CONTEXT_SNAPSHOT_KEY];
+    if (!snapshot || typeof snapshot !== 'object')
+        return null;
+    const messages = Array.isArray(snapshot.messages)
+        ? snapshot.messages
+            .filter((message) => message && typeof message === 'object' && String(message.content || '').trim())
+            .map((message) => ({
+            role: String(message.role || 'user'),
+            content: String(message.content || ''),
+            name: message.name ? String(message.name) : undefined,
+        }))
+        : [];
+    if (messages.length === 0)
+        return null;
+    return {
+        source: String(snapshot.source || 'st_request'),
+        capturedAt: Number(snapshot.capturedAt || 0) || null,
+        model: snapshot.model ? String(snapshot.model) : '',
+        messages,
+    };
+}
+function buildTrackerPayload(ctx, settings, reason = 'manual', endIndexExclusive = null) {
+    const currentCharacter = getCharacterCard(ctx);
+    const chatState = getChatState(ctx, settings);
+    const existingState = chatState.characters || {};
+    const recentMessages = buildRecentMessages(ctx, settings, endIndexExclusive);
+    const useMainflowMode = normalizeWorldbookMode(settings?.trackerWorldbookMode) === 'mainflow';
+    let mainflowContextSnapshot = useMainflowMode ? getMainflowContextSnapshot() : null;
+    if (mainflowContextSnapshot && settings?.useStPresetForAsync) {
+        mainflowContextSnapshot = {
+            ...mainflowContextSnapshot,
+            messages: mainflowContextSnapshot.messages.filter((m) => m.role !== 'system'),
+        };
+        if (mainflowContextSnapshot.messages.length === 0)
+            mainflowContextSnapshot = null;
+    }
+    const filteredWorldBook = filterTrackerWorldbookEntries(currentCharacter.worldBook || null, parseTrackerWorldbookExcludeNames(settings), settings, recentMessages);
+    const payloadWorldBook = mainflowContextSnapshot ? null : filteredWorldBook;
+    const diaryEnabled = getDiaryRecentLimit(settings, Object.keys(existingState || {}).length) > 0;
+    const psychologyEnabled = hasBreedingPsychology(existingState);
+    return {
+        reason,
+        chat_id: getChatKey(ctx),
+        current_character: {
+            ...currentCharacter,
+            worldBook: payloadWorldBook,
+        },
+        character_description: currentCharacter.description || '',
+        character_worldbook_name: getCharacterWorldBookName(ctx) || null,
+        character_worldbook: payloadWorldBook,
+        mainflow_context_snapshot: mainflowContextSnapshot,
+        tracked_females: getRegisteredTargetNames(ctx, settings, chatState),
+        priority_character_names: getPriorityCharacterNames(ctx, settings, chatState),
+        skill_catalog: Array.isArray(chatState.skillCatalog) ? chatState.skillCatalog : [],
+        existing_state: buildTrackerStateView(existingState, settings),
+        available_tools: getTrackerToolDefinitions(settings, existingState),
+        diary_enabled: diaryEnabled,
+        require_full_description_updates: settings?.requireFullDescriptionUpdates === true,
+        ...(psychologyEnabled ? { breeding_psychology_enabled: true } : {}),
+        wardrobe_enabled: hasPreparedWardrobe(existingState),
+        recent_messages: recentMessages,
+    };
+}
+function buildMainFlowPrompt(ctx, settings) {
+    const chatState = getChatState(ctx, settings);
+    reconcileChatStateSnapshots(ctx, chatState, settings);
+    return buildMainFlowStatePrompt(buildTrackerPayload(ctx, settings, 'mainflow'));
+}
+function normalizeTrackerCall(call) {
+    if (!call || typeof call !== 'object')
+        return call;
+    const functionCall = call.function && typeof call.function === 'object' ? call.function : null;
+    return {
+        ...call,
+        name: String(call.name || call.tool_name || call.tool || call.operation || functionCall?.name || '').trim(),
+        arguments: call.arguments ?? call.args ?? call.parameters ?? call.params ?? functionCall?.arguments ?? {},
+    };
+}
+function getTrackerToolCalls(result) {
+    const candidates = [
+        result?.tool_calls,
+        result?.toolCalls,
+        result?.calls,
+        result?.operations,
+        result?.actions,
+        result?.data?.tool_calls,
+        result?.data?.toolCalls,
+        result?.data?.operations,
+    ];
+    const calls = candidates.find((value) => Array.isArray(value));
+    return Array.isArray(calls) ? calls.map(normalizeTrackerCall) : [];
+}
+function getCharacterChecks(result) {
+    const candidates = [
+        result?.character_checks,
+        result?.characterChecks,
+        result?.checks,
+        result?.data?.character_checks,
+        result?.data?.characterChecks,
+    ];
+    const checks = candidates.find((value) => Array.isArray(value));
+    if (!Array.isArray(checks))
+        return [];
+    return checks.map((check) => ({
+        female: String(check?.female || check?.name || '').trim(),
+        status: String(check?.status || check?.result || '').trim(),
+    })).filter((check) => check.female);
+}
+function buildCharacterCheckCoverage(expectedNames, checks) {
+    const expected = [...new Set((Array.isArray(expectedNames) ? expectedNames : []).map((name) => String(name || '').trim()).filter(Boolean))];
+    const checked = [...new Set((Array.isArray(checks) ? checks : []).map((check) => String(check?.female || '').trim()).filter(Boolean))];
+    return {
+        expected,
+        checked,
+        missing: expected.filter((name) => !checked.includes(name)),
+    };
+}
+function normalizeTrackerResult(result) {
+    if (!result || typeof result !== 'object') {
+        throw new Error('Tracker response must be a JSON object.');
+    }
+    return {
+        ...result,
+        tool_calls: getTrackerToolCalls(result),
+        character_checks: getCharacterChecks(result),
+    };
+}
+/**
+ * 用 lastProcessedSignature 定位「上次处理到哪一楼」。
+ * 快照因为删楼／改写而失效时，仍能靠它找到续跑点，不必从第 0 楼重来。
+ */
+function findProcessedResumeCount(ctx, chatState, chatLength) {
+    const processed = String(chatState?.lastProcessedSignature || '');
+    if (!processed)
+        return null;
+    for (let count = chatLength; count >= 1; count -= 1) {
+        if (buildSignature(ctx, count) === processed)
+            return count;
+    }
+    return null;
+}
+function reconcileChatStateSnapshots(ctx, chatState, settings) {
+    const matchedSnapshot = getLatestMatchingSnapshot(ctx, chatState);
+    if (matchedSnapshot) {
+        restoreChatStateFromSnapshot(chatState, matchedSnapshot);
+        return { nextMessageIndex: matchedSnapshot.messageCount };
+    }
+    // 没有可用快照时绝不从第 0 楼重跑整个聊天：每一楼都是一次 LLM 请求，
+    // 长对话可以跑上几十分钟看起来完全卡死；而且缺少基准可回滚，
+    // 从头重放等于把历史变化重复叠加到当前状态上。
+    // 回放上限取 contextSize——payload 本来就只带这么多条，更早的楼没有对应上下文可分析。
+    const chatLength = getHostChat(ctx).length;
+    const budget = Math.max(1, Math.floor(Number(settings?.contextSize) || DEFAULT_SETTINGS.contextSize));
+    const floorIndex = Math.max(0, chatLength - budget);
+    const resumeCount = findProcessedResumeCount(ctx, chatState, chatLength);
+    if (resumeCount !== null)
+        return { nextMessageIndex: Math.max(resumeCount, floorIndex) };
+    return { nextMessageIndex: floorIndex };
+}
+function prepareManualReplay(ctx, chatState, chatLength) {
+    if (chatLength <= 0) {
+        return { nextMessageIndex: 0 };
+    }
+    const replayStart = Math.max(0, chatLength - 1);
+    const baseSnapshot = replayStart > 0 ? getLatestMatchingSnapshot(ctx, chatState, replayStart) : null;
+    if (baseSnapshot) {
+        restoreChatStateFromSnapshot(chatState, baseSnapshot);
+    }
+    return { nextMessageIndex: replayStart };
+}
+function hasPendingChatHistory(ctx, chatState) {
+    const matchedSnapshot = getLatestMatchingSnapshot(ctx, chatState);
+    const currentLength = getHostChat(ctx).length;
+    return !matchedSnapshot || matchedSnapshot.messageCount !== currentLength;
+}
+function emitTrackerUpdateCue(detail = {}) {
+    globalThis.dispatchEvent?.(new CustomEvent(UPDATE_CUE_EVENT, { detail }));
+}
+function recordTrackerRequestDebug(systemPrompt, payload) {
+    globalThis[DEBUG_LAST_TRACKER_REQUEST_KEY] = {
+        capturedAt: Date.now(),
+        systemPrompt,
+        payload,
+        messages: [
+            { role: 'system', content: String(systemPrompt || '') },
+            { role: 'user', content: JSON.stringify(payload, null, 2) },
+        ],
+    };
+}
+function recordTrackerResultDebug(result, error = null) {
+    globalThis[DEBUG_LAST_TRACKER_RESULT_KEY] = {
+        capturedAt: Date.now(),
+        ok: !error,
+        result: result ?? null,
+        error: error ? String(error?.message || error) : null,
+    };
+}
+function buildStreamingGuardSignature(ctx) {
+    const chat = getHostChat(ctx);
+    const last = chat[chat.length - 1];
+    if (!last)
+        return '';
+    const content = String(last.mes || '');
+    return [
+        getChatKey(ctx),
+        chat.length,
+        last.is_user ? 'user' : 'assistant',
+        String(last.name || ''),
+        content.length,
+        content.slice(0, 180),
+        content.slice(-120),
+    ].join('|');
+}
+function isAfterAiMessageSettled(ctx, settings, chatState) {
+    if (settings.triggerTiming !== 'after_ai')
+        return true;
+    const chat = getHostChat(ctx);
+    const lastMessage = chat[chat.length - 1];
+    if (!lastMessage || lastMessage.is_user) {
+        delete chatState.pendingAssistantSignature;
+        delete chatState.pendingAssistantUpdatedAt;
+        return true;
+    }
+    const signature = buildStreamingGuardSignature(ctx);
+    const now = Date.now();
+    if (chatState.pendingAssistantSignature !== signature) {
+        chatState.pendingAssistantSignature = signature;
+        chatState.pendingAssistantUpdatedAt = now;
+        saveSettings(ctx);
+        return false;
+    }
+    const updatedAt = Number(chatState.pendingAssistantUpdatedAt || 0);
+    if (!Number.isFinite(updatedAt) || now - updatedAt < AFTER_AI_SETTLE_MS)
+        return false;
+    return true;
+}
+async function processTrackerMessage(ctx, settings, chatState, deps, reason, messageIndex) {
+    const chat = getHostChat(ctx);
+    const message = chat[messageIndex];
+    const shouldTrigger = reason === 'manual' ? true : shouldTriggerForMessage(settings, message);
+    if (!shouldTrigger) {
+        recordChatStateSnapshot(ctx, chatState, { messageCount: messageIndex + 1, reason: 'skip' });
+        saveSettings(ctx);
+        return;
+    }
+    const payload = buildTrackerPayload(ctx, settings, reason, messageIndex + 1);
+    if (payload.mainflow_context_snapshot) {
+        payload.character_worldbook_name = null;
+    }
+    else if (!payload.character_worldbook && !payload.character_worldbook_name) {
+        payload.character_worldbook_name = await getCharacterWorldBookNameViaSTscript();
+    }
+    if (!payload.character_worldbook && payload.character_worldbook_name && canLoadHostWorldInfo(ctx)) {
+        try {
+            const loadedWorldBook = await loadHostWorldInfo(ctx, payload.character_worldbook_name);
+            payload.character_worldbook = filterTrackerWorldbookEntries(loadedWorldBook || null, parseTrackerWorldbookExcludeNames(settings), settings, payload.recent_messages);
+        }
+        catch (error) {
+            console.warn('[BS BioTracker] loadWorldInfo for tracker failed', error);
+        }
+    }
+    if (payload.mainflow_context_snapshot) {
+        payload.character_additional_worldbook_names = [];
+        payload.global_worldbooks = [];
+    }
+    else {
+        const additionalBooks = await getCharacterAdditionalWorldbooksForTracker(ctx, settings, payload.recent_messages);
+        const globalBooks = await getFilteredGlobalWorldbooks(ctx, settings, payload.recent_messages);
+        payload.character_additional_worldbook_names = await getCharacterAdditionalWorldBookNames(ctx);
+        // 附加知识书与全局启用书合并传输，按书名去重
+        payload.global_worldbooks = mergeTrackerWorldbookLists(globalBooks, additionalBooks);
+    }
+    chatState.lastRunAt = Date.now();
+    const attemptedSignature = buildSignature(ctx, messageIndex + 1);
+    chatState.lastAttemptedSignature = attemptedSignature;
+    saveSettings(ctx);
+    const systemPrompt = buildTrackerSystemPrompt(settings.systemPrompt || DEFAULT_SYSTEM_PROMPT, settings.registryDescriptionGuides || null, payload);
+    recordTrackerRequestDebug(systemPrompt, payload);
+    const rawResult = await callOpenAICompatible(settings, payload, systemPrompt);
+    recordTrackerResultDebug(rawResult);
+    // 请求往返期间使用者可能删除或改写了这一楼。此时结果已经不对应任何现存讯息，
+    // 照样套用会把状态写到不存在的楼上，还会记下一个与聊天对不起来的快照，
+    // 后续对账便一路错下去。先把宿主视图刷新到最新再比对签名，不一致就整份作废。
+    try {
+        await refreshHostChatView(ctx, {
+            resumeIndexes: getTrackerResumeIndexes(ctx, settings),
+            contextSize: settings.contextSize,
+        });
+    }
+    catch (error) {
+        console.warn('[BS BioTracker] 分析后刷新聊天视图失败，改用现有视图比对', error);
+    }
+    if (buildSignature(ctx, messageIndex + 1) !== attemptedSignature) {
+        console.warn('[BS BioTracker] 该消息在分析期间被修改或删除，本次结果已作废');
+        chatState.lastRawResult = {
+            message: '该消息在分析期间被修改或删除，本次结果已作废，未写入任何状态。',
+            tool_calls: [],
+        };
+        chatState.lastOperationLogs = [];
+        chatState.lastAttemptedSignature = '';
+        saveSettings(ctx);
+        return { discarded: true };
+    }
+    const result = normalizeTrackerResult(rawResult);
+    result.character_check_coverage = buildCharacterCheckCoverage(payload.tracked_females, result.character_checks);
+    applyToolCallsResult(ctx, result);
+    chatState.lastProcessedSignature = attemptedSignature;
+    chatState.lastFailedSignature = '';
+    chatState.lastFailedChatSignature = '';
+    recordChatStateSnapshot(ctx, chatState, { messageCount: messageIndex + 1, reason: 'tracker' });
+    saveSettings(ctx);
+    return { discarded: false };
+}
+async function runTracker(ctx, deps, reason = 'manual') {
+    const settings = getSettings(ctx);
+    await hydrateChatStateFromHost(ctx, settings);
+    await refreshHostChatView(ctx, {
+        resumeIndexes: getTrackerResumeIndexes(ctx, settings),
+        contextSize: settings.contextSize,
+    });
+    const chatState = getChatState(ctx, settings);
+    const registeredTargets = getRegisteredTargetNames(ctx, settings, chatState);
+    const chat = getHostChat(ctx);
+    const lastMessage = chat[chat.length - 1];
+    if (!lastMessage) {
+        chatState.lastRawResult = {
+            message: '当前对话没有可分析的消息，已跳过追踪。',
+            tool_calls: [],
+        };
+        chatState.lastOperationLogs = [];
+        saveSettings(ctx);
+        deps.renderStatusPanel(ctx);
+        return { skipped: true, reason: 'empty_chat' };
+    }
+    if (globalThis[RUN_RUNTIME_KEY]) {
+        if (!isTrackerRunStale(settings)) {
+            chatState.lastRawResult = {
+                message: '已有一轮追踪请求正在执行，本次请求未重复发送。',
+                tool_calls: [],
+            };
+            chatState.lastOperationLogs = [];
+            saveSettings(ctx);
+            deps.renderStatusPanel(ctx);
+            return { skipped: true, reason: 'already_running' };
+        }
+        console.warn('[BS BioTracker] 上一轮追踪已超时未结束，强制释放运行锁');
+        globalThis[RUN_RUNTIME_KEY] = null;
+    }
+    if (registeredTargets.length === 0) {
+        chatState.lastRawResult = {
+            message: '尚无已注册角色，跳过分析。',
+            tool_calls: [],
+        };
+        chatState.lastOperationLogs = [];
+        saveSettings(ctx);
+        deps.renderStatusPanel(ctx);
+        deps.updateMainFlowPrompt?.(ctx);
+        return { skipped: true, reason: 'no_registered_targets' };
+    }
+    if (reason === 'poll' && getHostKind() === 'luker' && settings.lukerMultiAgentManualOnly !== false) {
+        chatState.lastRawResult = {
+            message: 'Luker 多智能体安全模式已开启，自动追踪暂停；请在编排完成后手动分析。',
+            tool_calls: [],
+        };
+        chatState.lastOperationLogs = [];
+        saveSettings(ctx);
+        deps.renderStatusPanel(ctx);
+        return { skipped: true, reason: 'luker_multi_agent_manual' };
+    }
+    if (reason === 'poll') {
+        const agentBarrier = await getHostAgentRunBarrier(ctx, lastMessage);
+        if (agentBarrier.state === 'pending') {
+            chatState.lastRawResult = {
+                message: `TauriTavern Agent run ${agentBarrier.runId} 尚未完成，自动追踪将等待最终提交。`,
+                tool_calls: [],
+            };
+            chatState.lastOperationLogs = [];
+            saveSettings(ctx);
+            deps.renderStatusPanel(ctx);
+            return { skipped: true, reason: 'agent_run_pending' };
+        }
+        if (agentBarrier.state === 'aborted') {
+            chatState.lastRawResult = {
+                message: `TauriTavern Agent run ${agentBarrier.runId} 已取消或失败，未自动追踪该提交；可手动分析。`,
+                tool_calls: [],
+            };
+            chatState.lastOperationLogs = [];
+            saveSettings(ctx);
+            deps.renderStatusPanel(ctx);
+            return { skipped: true, reason: 'agent_run_aborted' };
+        }
+    }
+    if (reason === 'poll' && !isAfterAiMessageSettled(ctx, settings, chatState)) {
+        return { skipped: true, reason: 'message_not_settled' };
+    }
+    if (reason === 'poll' && !hasPendingChatHistory(ctx, chatState)) {
+        return { skipped: true, reason: 'no_pending_history' };
+    }
+    if (reason === 'poll' && isFailedAutoRetryBlocked(ctx, chatState)) {
+        return { skipped: true, reason: 'failed_message_blocked' };
+    }
+    const runToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    globalThis[RUN_RUNTIME_KEY] = runToken;
+    markTrackerRunProgress();
+    try {
+        const { nextMessageIndex } = reason === 'manual' ? prepareManualReplay(ctx, chatState, chat.length) : reconcileChatStateSnapshots(ctx, chatState, settings);
+        let processedCount = 0;
+        let discarded = false;
+        for (let index = nextMessageIndex; index < chat.length; index += 1) {
+            markTrackerRunProgress();
+            const outcome = await processTrackerMessage(ctx, settings, chatState, deps, reason, index);
+            // 聊天在分析途中被改动：后面的索引已经不可信，交给下一轮重新对账
+            if (outcome?.discarded) {
+                discarded = true;
+                break;
+            }
+            processedCount += 1;
+        }
+        deps.renderStatusPanel(ctx);
+        deps.updateMainFlowPrompt?.(ctx);
+        if (discarded)
+            return { skipped: true, reason: 'message_changed_during_run', processedCount };
+        if (reason === 'poll' && processedCount === 0)
+            return;
+        const toolCalls = Array.isArray(chatState.lastRawResult?.tool_calls) ? chatState.lastRawResult.tool_calls : [];
+        emitTrackerUpdateCue({
+            hasChanges: toolCalls.length > 0,
+            processedCount,
+            reason,
+        });
+        return { skipped: false, processedCount, toolCalls };
+    }
+    catch (error) {
+        console.error('[BS BioTracker] runTracker failed', error);
+        recordTrackerResultDebug(null, error);
+        chatState.lastFailedSignature = chatState.lastAttemptedSignature || buildSignature(ctx, chat.length);
+        // 记下失败当下「整段对话」的签名：只要对话没变，自动重试就该被挡住。
+        // 失败可能发生在回放的中间楼，只比对尾楼会让轮询无限重发。
+        chatState.lastFailedChatSignature = buildSignature(ctx, getHostChat(ctx).length);
+        chatState.lastRawResult = {
+            error: String(error?.message || error),
+            tool_calls: [],
+        };
+        chatState.lastOperationLogs = [];
+        saveSettings(ctx);
+        deps.renderStatusPanel(ctx);
+        globalThis.toastr?.error?.(String(error?.message || error), '[BS BioTracker]');
+        throw error;
+    }
+    finally {
+        // 被看门狗判死的旧轮次可能在新一轮开始后才走到这里，不能清掉别人的锁
+        if (globalThis[RUN_RUNTIME_KEY] === runToken) {
+            globalThis[RUN_RUNTIME_KEY] = null;
+            globalThis[RUN_STARTED_AT_KEY] = 0;
+        }
+    }
+}
+async function poll(ctx, deps) {
+    const settings = getSettings(ctx);
+    if (!settings.enabled)
+        return;
+    await runTracker(ctx, deps, 'poll');
+}
+function resetPoller(ctx, deps) {
+    if (globalThis[POLL_RUNTIME_KEY])
+        clearInterval(globalThis[POLL_RUNTIME_KEY]);
+    const settings = getSettings(ctx);
+    globalThis[POLL_RUNTIME_KEY] = setInterval(() => {
+        deps.updateClock(settings);
+        poll(ctx, deps).catch((error) => console.error('[BS BioTracker] poll failed', error));
+    }, Math.max(800, Number(settings.pollMs) || DEFAULT_SETTINGS.pollMs));
+}
+
+/**
+ * service/biotracker/biotracker-adapter.ts
+ * BS BioTracker（生理状态追踪）合并适配层。
+ *
+ * biotracker 核心（vendor/*.js）原样嵌入，宿主接口经 host.js 的 ctx 依赖注入对接：
+ * - 存储：settings_ACU.bsBiotracker 独立命名空间（含 chatStates，格式与 biotracker 原 extensionSettings.bs_biotracker 兼容，便于复用其前端）
+ * - AI：独立 API 配置（settings_ACU.bsBiotracker.apiUrl/apiKey/model），走酒馆代理 fetch
+ * - 恒字系列：异步追踪恒开启（enabled）、恒 after_ai、恒完整更新（requireFullDescriptionUpdates）、恒格式化输出（formattedOutputV4）、默认 json 响应
+ * - 高级设置开关（生理追踪总开关）映射 settings_ACU.bsBiotracker.enabled
+ */
+// ═══════════════════════════════════════════════════════════════
+// 存储命名空间（settings_ACU.bsBiotracker）
+// ═══════════════════════════════════════════════════════════════
+/** biotracker 存储根对象（映射到 settings_ACU.bsBiotracker，惰性初始化） */
+function getBiotrackerRoot() {
+    if (!settings_ACU[MODULE_NAME] || typeof settings_ACU[MODULE_NAME] !== 'object') {
+        settings_ACU[MODULE_NAME] = cloneValue(DEFAULT_SETTINGS);
+    }
+    return settings_ACU[MODULE_NAME];
+}
+// ═══════════════════════════════════════════════════════════════
+// ctx 构造（biotracker 宿主上下文依赖注入）
+// ═══════════════════════════════════════════════════════════════
+let saveTimer = null;
+function scheduleSettingsSave() {
+    if (saveTimer)
+        clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+        saveTimer = null;
+        try {
+            saveSettings_ACU();
+        }
+        catch (e) {
+            logWarn_ACU('[生理追踪] 保存设置失败:', e);
+        }
+    }, 400);
+}
+/** 构造 biotracker 宿主上下文（每次调用取当前运行态） */
+function createBiotrackerCtx_ACU() {
+    const host = getHostContext() || globalThis.SillyTavern?.getContext?.() || null;
+    const extensionSettings = { [MODULE_NAME]: getBiotrackerRoot() };
+    return {
+        extensionSettings,
+        saveSettingsDebounced: scheduleSettingsSave,
+        chat: Array.isArray(allChatMessages_ACU) ? allChatMessages_ACU : [],
+        characters: Array.isArray(host?.characters) ? host.characters : [],
+        chatId: String(currentChatFileIdentifier_ACU || ''),
+        getCurrentChatId: () => String(currentChatFileIdentifier_ACU || ''),
+        eventSource: host?.eventSource || null,
+        event_types: host?.eventTypes || null,
+        chatCompletionSettings: host?.chatCompletionSettings || null,
+        loadWorldInfo: async (name) => {
+            try {
+                const entries = await getLorebookEntries_ACU(String(name || ''));
+                return Array.isArray(entries) ? entries : null;
+            }
+            catch (e) {
+                logWarn_ACU('[生理追踪] 读取世界书失败:', name, e);
+                return null;
+            }
+        },
+        setExtensionPrompt: () => { },
+        getContext: () => host,
+    };
+}
+// ═══════════════════════════════════════════════════════════════
+// 开关与恒字系列
+// ═══════════════════════════════════════════════════════════════
+/** 高级设置总开关（settings_ACU.bsBiotracker.enabled）读写 */
+function isBiotrackerEnabled_ACU() {
+    return getBiotrackerRoot().enabled === true;
+}
+function setBiotrackerEnabled_ACU(enabled) {
+    getBiotrackerRoot().enabled = !!enabled;
+    if (getBiotrackerRoot().enabled) {
+        // 恒字系列：after_ai / 完整更新 / 格式化输出 / json
+        getBiotrackerRoot().triggerTiming = 'after_ai';
+        getBiotrackerRoot().requireFullDescriptionUpdates = true;
+        getBiotrackerRoot().formattedOutputV4 = true;
+    }
+    scheduleSettingsSave();
+    syncPoller();
+}
+// ═══════════════════════════════════════════════════════════════
+// 初始化与轮询
+// ═══════════════════════════════════════════════════════════════
+const trackerDeps = { renderStatusPanel: () => { }, updateClock: () => { } };
+let pollerActive = false;
+function syncPoller() {
+    const ctx = createBiotrackerCtx_ACU();
+    if (isBiotrackerEnabled_ACU()) {
+        if (!pollerActive) {
+            pollerActive = true;
+            resetPoller(ctx, trackerDeps);
+        }
+    }
+    else if (pollerActive) {
+        pollerActive = false;
+        resetPoller(ctx, trackerDeps);
+    }
+}
+let initialized = false;
+/** 初始化生理追踪模块（entry 启动时调用一次） */
+function initBiotracker_ACU() {
+    if (initialized)
+        return;
+    initialized = true;
+    try {
+        const ctx = createBiotrackerCtx_ACU();
+        const settings = getSettings(ctx);
+        // 恒字系列强制（异步追踪恒开启/after_ai/完整更新/格式化输出/json）
+        settings.enabled = true;
+        settings.triggerTiming = 'after_ai';
+        settings.requireFullDescriptionUpdates = true;
+        settings.formattedOutputV4 = true;
+        scheduleSettingsSave();
+        // 订阅聊天切换：预热当前聊天状态（chatStates[chatKey]）
+        const eventSource = ctx.eventSource;
+        const chatChangedType = ctx.event_types?.CHAT_CHANGED;
+        if (eventSource && chatChangedType && typeof eventSource.on === 'function') {
+            eventSource.on(chatChangedType, () => {
+                try {
+                    const nextCtx = createBiotrackerCtx_ACU();
+                    const nextSettings = getSettings(nextCtx);
+                    getChatState(nextCtx, nextSettings);
+                    syncPoller();
+                }
+                catch (e) {
+                    logWarn_ACU('[生理追踪] CHAT_CHANGED 处理失败:', e);
+                }
+            });
+        }
+        logDebug_ACU('[生理追踪] 初始化完成，已注册角色数:', Object.keys(getChatState(ctx, settings).characters || {}).length);
+    }
+    catch (e) {
+        logWarn_ACU('[生理追踪] 初始化失败（宿主未就绪，等待重试）:', e);
+    }
+}
+/** 手动注册角色（种族手动选择） */
+async function registerCharacter_ACU(options) {
+    try {
+        const ctx = createBiotrackerCtx_ACU();
+        const name = String(options.name || '').trim();
+        if (!name)
+            return { ok: false, message: '请填写要注册的角色名。' };
+        await runRegistry(ctx, {
+            targetName: name,
+            customNotes: options.customNotes,
+            declaredRace: options.declaredRace || '',
+            breedingInference: false,
+        });
+        saveSettings(ctx);
+        return { ok: true, message: `角色「${name}」注册完成。` };
+    }
+    catch (e) {
+        logWarn_ACU('[生理追踪] 注册角色失败:', e);
+        return { ok: false, message: `注册失败：${e?.message || e}` };
+    }
+}
+/** 手动触发一次追踪分析（调试/入口用） */
+async function runBiotrackerNow_ACU() {
+    const ctx = createBiotrackerCtx_ACU();
+    await runTracker(ctx, trackerDeps, 'manual');
 }
 
 /**
@@ -98823,8 +111745,15 @@ function mainInitialize_ACU() {
     console.log('ACU_INIT_DEBUG: mainInitialize_ACU called.');
     if (attemptToLoadCoreApis_ACU()) {
         logDebug_ACU('AutoCardUpdater Initialization successful! Core APIs loaded.');
-        showToastr_ACU('success', '数据库自动更新脚本已加载！', '脚本启动');
+        showToastr_ACU('success', '数据库已加载！', '数据库');
         loadSettings_ACU();
+        // 生理追踪模块初始化（BS BioTracker 合并）
+        try {
+            initBiotracker_ACU();
+        }
+        catch (e) {
+            logWarn_ACU('[生理追踪] 初始化挂载失败:', e);
+        }
         if (SillyTavern_API_ACU &&
             SillyTavern_API_ACU.eventSource &&
             typeof SillyTavern_API_ACU.eventSource.on === 'function' &&
@@ -99274,7 +112203,7 @@ function mainInitialize_ACU() {
     }
     else {
         logError_ACU('ACU: Failed to initialize. Core APIs not available on DOM ready.');
-        console.error('数据库自动更新脚本初始化失败：核心API加载失败。');
+        console.error('数据库初始化失败：核心API加载失败。');
     }
 }
 
@@ -101495,6 +114424,213 @@ async function cleanupWorldbookEntriesAfterDataDeletion_ACU() {
     return totalDeleted;
 }
 
+// ═══════════════════════════════════════════════════════════
+// service/settings/settings-write-service.ts — 通用重要配置写边界
+//
+// 统一事务式写入原语：校验 → 快照 → 改内存 → saveSettings_ACU → 失败回滚。
+// 按字段簇提供语义 setter（storage/update/prompt/preset-reference）。
+// vector 配置权威在 service/vector/vector-memory-config.ts，此处不重复。
+// ═══════════════════════════════════════════════════════════════
+/** 读取字段快照（深拷贝） */
+function snapshotSettingsFields_ACU(fields) {
+    const snapshot = {};
+    for (const field of fields) {
+        const value = settings_ACU[field];
+        snapshot[field] =
+            value && typeof value === 'object'
+                ? JSON.parse(JSON.stringify(value))
+                : value;
+    }
+    return snapshot;
+}
+/** 恢复字段快照 */
+function restoreSettingsFields_ACU(snapshot) {
+    for (const [field, value] of Object.entries(snapshot)) {
+        settings_ACU[field] =
+            value && typeof value === 'object'
+                ? JSON.parse(JSON.stringify(value))
+                : value;
+    }
+}
+/** 执行写事务：mutate 内直接修改 settings_ACU；保存失败自动回滚 */
+function withSettingsWrite_ACU(fields, mutate, options = {}) {
+    const snapshot = snapshotSettingsFields_ACU(fields);
+    let mutated = false;
+    try {
+        mutate();
+        mutated = true;
+    }
+    catch (e) {
+        restoreSettingsFields_ACU(snapshot);
+        return {
+            ok: false,
+            code: 'invalid_input',
+            changed: false,
+            message: options.message || '设置写入失败：输入无效。',
+        };
+    }
+    const saveResult = saveSettings_ACU();
+    if (!saveResult.saved) {
+        restoreSettingsFields_ACU(snapshot);
+        return {
+            ok: false,
+            code: saveResult.code === 'settings_loading' ? 'settings_loading' : 'save_failed',
+            changed: mutated,
+            saveResult,
+            message: saveResult.warning || saveResult.error || '保存失败，已回滚。',
+        };
+    }
+    return { ok: true, code: 'ok', changed: mutated, saveResult };
+}
+const UPDATE_NUMBER_DEFAULTS_ACU = {
+    autoUpdateThreshold: DEFAULT_AUTO_UPDATE_THRESHOLD_ACU,
+    autoUpdateFrequency: DEFAULT_AUTO_UPDATE_FREQUENCY_ACU,
+    autoUpdateTokenThreshold: DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU,
+    updateBatchSize: 3,
+    maxConcurrentGroups: 1,
+    skipUpdateFloors: 0,
+    retainRecentLayers: 100,
+    importSplitSize: 10000,
+    tableMaxRetries: 3,
+};
+function normalizeUpdateNumber_ACU(key, value) {
+    const fallback = UPDATE_NUMBER_DEFAULTS_ACU[key];
+    const min = key === 'importSplitSize'
+        ? 100
+        : (key === 'autoUpdateThreshold' || key === 'autoUpdateTokenThreshold' || key === 'skipUpdateFloors' || key === 'retainRecentLayers' ? 0 : 1);
+    const normalized = min > 0
+        ? normalizePositiveInteger_ACU$1(value, fallback)
+        : normalizeNonNegativeInteger_ACU$1(value, fallback);
+    return Math.max(min, normalized);
+}
+/** 更新自动更新数值字段（批量原子写） */
+function setUpdateNumberFields_ACU(patch) {
+    const keys = Object.keys(patch);
+    if (keys.length === 0) {
+        return { ok: true, code: 'ok', changed: false };
+    }
+    const normalizedMap = {};
+    for (const key of keys) {
+        const normalized = normalizeUpdateNumber_ACU(key, patch[key]);
+        if (normalized === null) {
+            return { ok: false, code: 'invalid_input', changed: false, message: `字段 ${key} 数值无效。` };
+        }
+        normalizedMap[key] = normalized;
+    }
+    return withSettingsWrite_ACU([...keys], () => {
+        for (const [key, value] of Object.entries(normalizedMap)) {
+            settings_ACU[key] = value;
+        }
+    });
+}
+/** 自动更新总开关 */
+function setAutoUpdateEnabled_ACU(enabled) {
+    return withSettingsWrite_ACU(['autoUpdateEnabled'], () => {
+        settings_ACU.autoUpdateEnabled = !!enabled;
+    });
+}
+// ═══ prompt 字段簇 ═══
+function setCharCardPrompt_ACU(prompt) {
+    return withSettingsWrite_ACU(['charCardPrompt'], () => {
+        settings_ACU.charCardPrompt = prompt && typeof prompt === 'object'
+            ? JSON.parse(JSON.stringify(prompt))
+            : prompt;
+    });
+}
+/** 解析当前填表提示词应写入的字段名（严格 JSON 填表已剥离，恒为 charCardPrompt） */
+function resolveCurrentPromptKey_ACU(_mode = getCurrentStorageMode()) {
+    return 'charCardPrompt';
+}
+/** 按当前填表模式保存提示词（V1 语义收敛到 service） */
+function setCurrentPromptSegments_ACU(prompt) {
+    const key = resolveCurrentPromptKey_ACU();
+    return withSettingsWrite_ACU([key], () => {
+        settings_ACU[key] = prompt && typeof prompt === 'object'
+            ? JSON.parse(JSON.stringify(prompt))
+            : prompt;
+    });
+}
+/** 按当前填表模式恢复默认提示词（V1 语义收敛到 service） */
+function resetCurrentPromptToDefault_ACU() {
+    const mode = getCurrentStorageMode();
+    const key = resolveCurrentPromptKey_ACU(mode);
+    const defaultValue = mode === 'sqlite' ? DEFAULT_CHAR_CARD_PROMPT_SQL_ACU : DEFAULT_CHAR_CARD_PROMPT_ACU;
+    return withSettingsWrite_ACU([key], () => {
+        settings_ACU[key] = JSON.parse(JSON.stringify(defaultValue));
+    });
+}
+/** 按指定模式恢复默认填表提示词（applyModeDefaultCharCardPrompt_ACU 语义收敛） */
+function applyDefaultCharCardPrompt_ACU(mode) {
+    const key = resolveCurrentPromptKey_ACU(mode);
+    const defaultValue = mode === 'sqlite' ? DEFAULT_CHAR_CARD_PROMPT_SQL_ACU : DEFAULT_CHAR_CARD_PROMPT_ACU;
+    return withSettingsWrite_ACU([key], () => {
+        settings_ACU[key] = JSON.parse(JSON.stringify(defaultValue));
+    });
+}
+/** 恢复默认填表提示词（按当前存储模式） */
+function resetFormFillPromptsToDefault_ACU() {
+    return withSettingsWrite_ACU(['charCardPrompt'], () => {
+        const mode = getCurrentStorageMode();
+        settings_ACU.charCardPrompt = JSON.parse(JSON.stringify(mode === 'sqlite' ? DEFAULT_CHAR_CARD_PROMPT_SQL_ACU : DEFAULT_CHAR_CARD_PROMPT_ACU));
+    });
+}
+/**
+ * 一次性恢复默认填表提示词与合并纪要提示词（resetAllToDefaults 语义收敛）。
+ *
+ * 原 V1 行为：无条件写 `charCardPrompt` 与 `mergeSummaryPrompt`（不区分 strictJson 分支），
+ * 按当前存储模式选择 native/sqlite 默认值。此 API 保持该语义，且两字段原子写入：
+ * 任一保存失败则整体回滚。
+ *
+ * `save: false` 供编排场景使用（调用方自行统一保存，例如 V2 resetAllDefaults
+ * 在应用模板后一次性 `saveSettings_ACU()`，避免中间多次保存引入部分失败窗口）。
+ */
+function resetAllPromptsToDefault_ACU(mode = getCurrentStorageMode(), options = {}) {
+    if (mode !== 'native' && mode !== 'sqlite') {
+        return { ok: false, code: 'invalid_input', changed: false, message: '存储模式无效。' };
+    }
+    const applyDefaults = () => {
+        settings_ACU.charCardPrompt = JSON.parse(JSON.stringify(mode === 'sqlite' ? DEFAULT_CHAR_CARD_PROMPT_SQL_ACU : DEFAULT_CHAR_CARD_PROMPT_ACU));
+        settings_ACU.mergeSummaryPrompt = JSON.parse(JSON.stringify(mode === 'sqlite' ? DEFAULT_MERGE_SUMMARY_PROMPT_SQL_ACU : DEFAULT_MERGE_SUMMARY_PROMPT_ACU));
+    };
+    if (options.save === false) {
+        try {
+            applyDefaults();
+            return { ok: true, code: 'ok', changed: true };
+        }
+        catch (e) {
+            return { ok: false, code: 'invalid_input', changed: false, message: '恢复默认提示词失败：输入无效。' };
+        }
+    }
+    return withSettingsWrite_ACU(['charCardPrompt', 'mergeSummaryPrompt'], applyDefaults);
+}
+function setMergeSummaryPrompt_ACU(prompt) {
+    return withSettingsWrite_ACU(['mergeSummaryPrompt'], () => {
+        settings_ACU.mergeSummaryPrompt = prompt && typeof prompt === 'object'
+            ? JSON.parse(JSON.stringify(prompt))
+            : prompt;
+    });
+}
+function resetMergeSummaryPrompt_ACU(mode = getCurrentStorageMode()) {
+    if (mode !== 'native' && mode !== 'sqlite') {
+        return { ok: false, code: 'invalid_input', changed: false, message: '存储模式无效。' };
+    }
+    return withSettingsWrite_ACU(['mergeSummaryPrompt'], () => {
+        settings_ACU.mergeSummaryPrompt = JSON.parse(JSON.stringify(mode === 'sqlite' ? DEFAULT_MERGE_SUMMARY_PROMPT_SQL_ACU : DEFAULT_MERGE_SUMMARY_PROMPT_ACU));
+    });
+}
+/** 表格标签提取/排除规则 */
+function setTableContextRules_ACU(kind, rules) {
+    const field = kind === 'extract' ? 'tableContextExtractRules' : 'tableContextExcludeRules';
+    const tagField = kind === 'extract' ? 'tableContextExtractTags' : 'tableContextExcludeTags';
+    const normalized = (kind === 'extract'
+        ? normalizeExtractRules_ACU(rules, '')
+        : normalizeExcludeRules_ACU(rules, ''));
+    return withSettingsWrite_ACU([field, tagField], () => {
+        settings_ACU[field] = JSON.parse(JSON.stringify(normalized));
+        settings_ACU[tagField] = '';
+    });
+}
+
 /**
  * presentation/triggers/data-admin-ui.ts — 导入/导出/重置 UI
  * 从 features/data/01_data_admin.js 迁移而来
@@ -101955,6 +115091,7 @@ function importTableTemplate_ACU({ scope = 'global' } = {}) {
 // 手动合并纪要功能已从主界面隐藏并停用；保留导出函数形状，防止旧调用方直接报错。
 async function handleManualMergeSummary_ACU() {
     showToastr_ACU('info', '合并总结功能已停用。');
+    return false;
 }
 function exportCombinedSettings_ACU() {
     const promptSegments = getCharCardPromptFromUI_ACU();
@@ -131194,10 +144331,20 @@ function useDashboardPage() {
         if (!displayData)
             return [];
         const chat = getChatArray_ACU();
-        const totalAi = chat.filter((msg) => msg && !msg.is_user).length;
+        const currentIsolationKey = getCurrentIsolationKey_ACU();
+        // 批量解析所有表的历史状态（单次扫描 chat），避免每表各自全量逆序扫描
+        const historyStates = resolveTableHistoryStatesFromChat_ACU(chat, sheetKeys.value.map((key) => {
+            const table = displayData[key] || {};
+            return {
+                sheetKey: key,
+                isSummaryTable: isSummaryOrOutlineTable_ACU(String(table.name || "")),
+                isolationKey: currentIsolationKey,
+                settings: settings_ACU,
+            };
+        }));
+        const totalAi = aiMessageCount.value;
         const globalFrequency = normalizePositiveInteger_ACU$1(settings_ACU.autoUpdateFrequency, 1);
         const globalSkip = normalizeNonNegativeInteger_ACU$1(settings_ACU.skipUpdateFloors, 0);
-        const currentIsolationKey = getCurrentIsolationKey_ACU();
         return sheetKeys.value.map((key) => {
             const table = displayData[key] || {};
             const config = table.updateConfig || {};
@@ -131210,12 +144357,15 @@ function useDashboardPage() {
             const frequency = rawFrequency === -1 ? globalFrequency : rawFrequency;
             const skip = Math.max(0, rawSkip === -1 ? globalSkip : rawSkip);
             const disabled = frequency <= 0;
-            const history = resolveTableHistoryStateFromChat_ACU(chat, {
-                sheetKey: key,
-                isSummaryTable: isSummaryOrOutlineTable_ACU(String(table.name || "")),
-                isolationKey: currentIsolationKey,
-                settings: settings_ACU,
-            });
+            const history = historyStates.get(key) || {
+                latestAiMessageIndex: -1,
+                latestDataMessageIndex: -1,
+                lastTrackedUpdateMessageIndex: -1,
+                latestDataAiFloor: 0,
+                lastTrackedUpdateAiFloor: 0,
+                hasAnyData: false,
+                hasTrackedUpdate: false,
+            };
             const lastFloor = history.lastTrackedUpdateAiFloor;
             const found = history.hasTrackedUpdate;
             if (disabled) {

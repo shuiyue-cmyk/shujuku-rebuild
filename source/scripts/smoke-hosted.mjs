@@ -89,6 +89,7 @@ g.SillyTavern = window.SillyTavern;
 log('step3: ST stub ready');
 
 // 隐藏 Node 全局，强制 bundle 走浏览器分支（emscripten 用 process 检测 Node 环境）
+const realProcessExit = process.exit.bind(process);
 Object.defineProperty(g, 'process', { value: undefined, writable: true, configurable: true });
 try { delete g.module; } catch {}
 log('step3b: process hidden');
@@ -136,3 +137,6 @@ const ok = report.autoCardUpdaterAPI === 'object'
   && report.acuAppV2Mounted
   && report.errorCount === 0;
 console.log(ok ? 'SMOKE PASS' : 'SMOKE FAIL', JSON.stringify(report, null, 2));
+// 显式退出：插件可能持有常驻定时器（如生理追踪 poll），依赖自然退出会挂死
+// process 全局已被隐藏（step3b），须用保存的真实引用；延迟等 stdout flush
+setTimeout(() => realProcessExit(ok ? 0 : 1), 100);
