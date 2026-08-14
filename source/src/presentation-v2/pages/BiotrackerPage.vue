@@ -44,9 +44,6 @@
           <AcuButton size="sm" :disabled="registering" @click="doRegister">
             {{ registering ? '注册中...' : '注册角色' }}
           </AcuButton>
-          <AcuButton size="sm" :disabled="autoRunning" @click="runAutoRegister">
-            {{ autoRunning ? '自动注册中...' : '立即自动注册' }}
-          </AcuButton>
           <AcuButton size="sm" variant="secondary" @click="runTrackerNow">立即追踪分析</AcuButton>
         </div>
         <AcuFormRow label="自动搜寻注册">
@@ -58,6 +55,11 @@
         <AcuFormRow label="读取楼层数" hint="每次自动搜寻读取最近多少层（2-100）">
           <input v-model.number="autoScanCount" type="number" min="2" max="100" class="acu-input" @change="setAutoScanCount(autoScanCount)" />
         </AcuFormRow>
+        <div class="acu-v2-biotracker-page__actions">
+          <AcuButton size="sm" :disabled="autoRunning" @click="runAutoRegister">
+            {{ autoRunning ? '自动注册中...' : '立即自动注册' }}
+          </AcuButton>
+        </div>
         <p v-if="status" class="acu-v2-biotracker-page__status" :data-error="statusIsError">
           {{ status }}
         </p>
