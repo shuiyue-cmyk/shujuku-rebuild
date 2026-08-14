@@ -134,7 +134,7 @@ export function useBiotrackerPage() {
     registerName,
     registerRace,
     registerNotes,
-    registerRaceOptions: ALL_BUILTIN_RACES,
+    registerRaceOptions: ref(ALL_BUILTIN_RACES),
     registering,
     doRegister,
     autoRegister,

@@ -10,13 +10,13 @@
         :description="copy.apiDescription"
       >
         <AcuFormRow label="OpenAI 兼容 API Base URL" hint="例如 https://example.com/v1">
-          <input v-model="apiUrl.value" type="text" class="acu-input" placeholder="https://example.com/v1" />
+          <input v-model="apiUrl" type="text" class="acu-input" placeholder="https://example.com/v1" />
         </AcuFormRow>
         <AcuFormRow label="API Key">
-          <input v-model="apiKey.value" type="password" class="acu-input" placeholder="sk-..." />
+          <input v-model="apiKey" type="password" class="acu-input" placeholder="sk-..." />
         </AcuFormRow>
         <AcuFormRow label="模型名称">
-          <input v-model="apiModel.value" type="text" class="acu-input" placeholder="gpt-4.1-mini" />
+          <input v-model="apiModel" type="text" class="acu-input" placeholder="gpt-4.1-mini" />
         </AcuFormRow>
         <div class="acu-v2-biotracker-page__actions">
           <AcuButton size="sm" @click="saveApiConfig">保存 API 配置</AcuButton>
@@ -30,34 +30,34 @@
         :description="copy.registerDescription"
       >
         <AcuFormRow label="角色名">
-          <input v-model="registerName.value" type="text" class="acu-input" placeholder="要注册的角色名" />
+          <input v-model="registerName" type="text" class="acu-input" placeholder="要注册的角色名" />
         </AcuFormRow>
         <AcuFormRow label="种族（手动模式选择，自动模式由 AI 判断）">
-          <select v-model="registerRace.value" class="acu-input">
+          <select v-model="registerRace" class="acu-input">
             <option value="">（由 AI 判断 / 手动留空）</option>
-            <option v-for="race in registerRaceOptions.value" :key="race" :value="race">{{ race }}</option>
+            <option v-for="race in registerRaceOptions" :key="race" :value="race">{{ race }}</option>
           </select>
         </AcuFormRow>
         <AcuFormRow label="补充设定（可选）">
-          <textarea v-model="registerNotes.value" class="acu-input" rows="2" placeholder="种族生理/心理/描述补充"></textarea>
+          <textarea v-model="registerNotes" class="acu-input" rows="2" placeholder="种族生理/心理/描述补充"></textarea>
         </AcuFormRow>
         <div class="acu-v2-biotracker-page__actions">
-          <AcuButton size="sm" :disabled="registering.value" @click="doRegister">
-            {{ registering.value ? '注册中...' : '注册角色' }}
+          <AcuButton size="sm" :disabled="registering" @click="doRegister">
+            {{ registering ? '注册中...' : '注册角色' }}
           </AcuButton>
-          <AcuButton size="sm" :disabled="autoRunning.value" @click="runAutoRegister">
-            {{ autoRunning.value ? '自动注册中...' : '立即自动注册' }}
+          <AcuButton size="sm" :disabled="autoRunning" @click="runAutoRegister">
+            {{ autoRunning ? '自动注册中...' : '立即自动注册' }}
           </AcuButton>
           <AcuButton size="sm" variant="secondary" @click="runTrackerNow">立即追踪分析</AcuButton>
         </div>
         <AcuFormRow label="自动注册">
           <label class="acu-v2-biotracker-page__toggle">
-            <AcuCheckbox :model-value="autoRegister.value" @update:model-value="toggleAutoRegister" />
+            <AcuCheckbox :model-value="autoRegister" @update:model-value="toggleAutoRegister" />
             <span>消息后由 AI 读取最新楼层，自动发现有价值的角色并注册（种族交 AI 判断）</span>
           </label>
         </AcuFormRow>
-        <p v-if="status.value" class="acu-v2-biotracker-page__status" :data-error="statusIsError.value">
-          {{ status.value }}
+        <p v-if="status" class="acu-v2-biotracker-page__status" :data-error="statusIsError">
+          {{ status }}
         </p>
       </AcuPanel>
 
@@ -67,7 +67,7 @@
         :title="copy.dataTitle"
         :description="copy.dataDescription"
       >
-        <div v-if="characters.value.length === 0" class="acu-v2-biotracker-page__empty">
+        <div v-if="characters.length === 0" class="acu-v2-biotracker-page__empty">
           当前聊天尚未注册角色。请先注册，或开启自动注册后发送消息等待发现。
         </div>
         <table v-else class="acu-v2-biotracker-page__table">
@@ -79,7 +79,7 @@
             </tr>
           </thead>
           <tbody>
-            <tr v-for="c in characters.value" :key="c.name">
+            <tr v-for="c in characters" :key="c.name">
               <td>{{ c.name }}</td>
               <td>{{ c.race }}</td>
               <td>{{ c.summary }}</td>
@@ -110,12 +110,31 @@ const copy = {
   dataDescription: '当前聊天的生理追踪数据（只读）。完整数据由异步追踪持续更新。',
 };
 
-const page = useBiotrackerPage();
+const {
+  apiUrl,
+  apiKey,
+  apiModel,
+  saveApiConfig,
+  registerName,
+  registerRace,
+  registerNotes,
+  registerRaceOptions,
+  registering,
+  doRegister,
+  autoRegister,
+  toggleAutoRegister,
+  autoRunning,
+  runAutoRegister,
+  runTrackerNow,
+  characters,
+  status,
+  statusIsError,
+} = useBiotrackerPage();
 
 const panelNavItems = computed(() => [
-  { key: 'biotracker-api-panel', label: copy.apiTitle },
-  { key: 'biotracker-register-panel', label: copy.registerTitle },
-  { key: 'biotracker-data-panel', label: copy.dataTitle },
+  { id: 'biotracker-api-panel', label: copy.apiTitle },
+  { id: 'biotracker-register-panel', label: copy.registerTitle },
+  { id: 'biotracker-data-panel', label: copy.dataTitle },
 ]);
 </script>
 
