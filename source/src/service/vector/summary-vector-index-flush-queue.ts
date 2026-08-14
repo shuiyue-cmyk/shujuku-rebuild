@@ -1,5 +1,11 @@
-import { currentChatFileIdentifier_ACU, getCurrentIsolationKey_ACU } from '../runtime/state-manager';
-import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
+import {
+  currentChatFileIdentifier_ACU,
+  getCurrentIsolationKey_ACU
+} from '../runtime/state-manager';
+import {
+  logDebug_ACU,
+  logWarn_ACU
+} from '../../shared/utils';
 import {
     deleteSummaryVectorFlushTask_ACU,
     deleteSummaryVectorFlushTaskStrict_ACU,
@@ -21,11 +27,21 @@ import {
     runSummaryVectorIndexArchiveScopeMutationExclusive_ACU,
     type SummaryVectorIndexArchiveResult_ACU,
 } from './summary-vector-index-archive-service';
-import { clearSummaryVectorIndexDirtyForRealign_ACU } from './summary-vector-index-realign-state';
-import { logSummaryVectorIndexIdentityEvent_ACU } from './summary-vector-index-storage-service';
-import { normalizeSummaryVectorIndexScope_ACU } from '../../shared/summary-vector-index-scope';
-import { getEffectiveSummaryVectorIndexConfig_ACU } from './vector-memory-config';
-import { hashUserInput_ACU } from '../../shared/utils';
+import {
+  clearSummaryVectorIndexDirtyForRealign_ACU
+} from './summary-vector-index-realign-state';
+import {
+  logSummaryVectorIndexIdentityEvent_ACU
+} from './summary-vector-index-storage-service';
+import {
+  normalizeSummaryVectorIndexScope_ACU
+} from '../../shared/summary-vector-index-scope';
+import {
+  getEffectiveSummaryVectorIndexConfig_ACU
+} from './vector-memory-config';
+import {
+  hashUserInput_ACU
+} from '../../shared/utils';
 
 const SUMMARY_VECTOR_INDEX_FLUSH_DEBOUNCE_MS_ACU = 2500;
 const SUMMARY_VECTOR_INDEX_FLUSHING_STALE_MS_ACU = 60_000;

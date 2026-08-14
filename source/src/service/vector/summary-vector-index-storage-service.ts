@@ -1,6 +1,16 @@
-import { getCurrentIsolationKey_ACU, currentChatFileIdentifier_ACU } from '../runtime/state-manager';
-import { hashUserInput_ACU, logDebug_ACU, logWarn_ACU } from '../../shared/utils';
-import { normalizeSummaryVectorIndexScope_ACU, normalizeSummaryVectorIsolationKey_ACU } from '../../shared/summary-vector-index-scope';
+import {
+  getCurrentIsolationKey_ACU,
+  currentChatFileIdentifier_ACU
+} from '../runtime/state-manager';
+import {
+  hashUserInput_ACU,
+  logDebug_ACU,
+  logWarn_ACU
+} from '../../shared/utils';
+import {
+  normalizeSummaryVectorIndexScope_ACU,
+  normalizeSummaryVectorIsolationKey_ACU
+} from '../../shared/summary-vector-index-scope';
 import {
     buildVectorIndexFileName_ACU,
     buildVectorIndexContentPackPathV2_ACU,
@@ -65,8 +75,12 @@ import {
     SUMMARY_VECTOR_INDEX_CONTENT_PACK_VERSION_ACU,
     SUMMARY_VECTOR_INDEX_MANIFEST_VERSION_ACU,
 } from './summary-vector-index-types';
-import { getAllSummaryVectorIndexSnapshotLayers_ACU } from './summary-vector-index-state-service';
-import { getEffectiveSummaryVectorIndexConfig_ACU } from './vector-memory-config';
+import {
+  getAllSummaryVectorIndexSnapshotLayers_ACU
+} from './summary-vector-index-state-service';
+import {
+  getEffectiveSummaryVectorIndexConfig_ACU
+} from './vector-memory-config';
 
 const DEFAULT_SHARD_CHUNK_LIMIT_ACU = 128;
 const SUMMARY_VECTOR_INDEX_PACK_CHUNK_LIMIT_ACU = 64;

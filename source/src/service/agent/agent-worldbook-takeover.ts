@@ -2,8 +2,12 @@ import type {
   AgentWorldbookControlSnapshot_ACU,
   AgentWorldbookControlSnapshotEntry_ACU,
 } from '../../shared/models/agent-worldbook-model';
-import type { StrictLorebookReadContext_ACU } from '../worldbook/pipeline';
-import { getAgentRuntimeLorebookEntries_ACU } from './agent-worldbook-runtime-read';
+import type {
+  StrictLorebookReadContext_ACU
+} from '../worldbook/pipeline';
+import {
+  getAgentRuntimeLorebookEntries_ACU
+} from './agent-worldbook-runtime-read';
 import {
   deleteLorebookEntriesRequired_ACU,
   deleteLorebookEntries_ACU,
@@ -12,10 +16,20 @@ import {
   setLorebookEntries_ACU,
   setLorebookEntriesRequired_ACU,
 } from '../../data/gateways/worldbook-gateway';
-import { persistTavernSettings_ACU } from '../../data/storage/tavern-storage';
-import { hashUserInput_ACU, logWarn_ACU } from '../../shared/utils';
-import { classifyLorebookReadError_ACU, summarizeLorebookRuntimeError_ACU } from '../../shared/lorebook-read-error';
-import { buildAgentWorldbookSnapshotSelectionSignature_ACU } from '../../shared/agent-worldbook-snapshot';
+import {
+  persistTavernSettings_ACU
+} from '../../data/storage/tavern-storage';
+import {
+  hashUserInput_ACU,
+  logWarn_ACU
+} from '../../shared/utils';
+import {
+  classifyLorebookReadError_ACU,
+  summarizeLorebookRuntimeError_ACU
+} from '../../shared/lorebook-read-error';
+import {
+  buildAgentWorldbookSnapshotSelectionSignature_ACU
+} from '../../shared/agent-worldbook-snapshot';
 import {
   AGENT_TAKEOVER_META_END_ACU,
   AGENT_TAKEOVER_META_START_ACU,
@@ -28,7 +42,9 @@ import {
   setAgentWorldbookSnapshotState_ACU,
   setAgentWorldbookSnapshotStateIfRevision_ACU,
 } from './agent-worldbook-snapshot-state';
-import { settings_ACU } from '../runtime/state-manager';
+import {
+  settings_ACU
+} from '../runtime/state-manager';
 import {
   getWorldbookEntryKeywordsForSkillify_ACU,
   isWorldbookEntrySkillifyCandidate_ACU,

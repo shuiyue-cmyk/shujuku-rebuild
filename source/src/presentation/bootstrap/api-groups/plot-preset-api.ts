@@ -3,18 +3,48 @@
  * 剧情推进预设管理 API + 游戏初始化 API
  */
 
-import { deriveTemplatePresetNameForImport_ACU } from '../../../shared/template-preset-utils';
-import { logDebug_ACU, logError_ACU, logWarn_ACU } from '../../../shared/utils';
-import { settings_ACU } from '../../../service/runtime/state-manager';
-import { getCurrentRuntimePlotPresetName_ACU, normalizePlotPresetExcludeRules_ACU, switchCurrentChatPlotPreset_ACU } from '../../../service/plot/plot-logic';
-import { resetCurrentChatTableStateFromTemplate_ACU } from '../../../service/table/template-state-reset';
-import { applyChatTemplateSnapshotWithReconciliation_ACU, upsertTemplatePreset_ACU } from '../../../service/template/template-preset-service';
-import { sanitizeTemplateSnapshotForChat_ACU } from '../../../service/template/chat-scope';
-import { isSqliteMode } from '../../../service/table/storage-mode';
-import { didSqliteFallbackAfterReload_ACU, reloadStorageProvider } from '../../../service/table/table-storage-strategy';
-import { saveSettingsAndNotify_ACU } from '../../components/settings-ui-helpers';
-import { refreshPresetUIAfterSwitch_ACU } from '../../components/pipeline-ui-helpers';
-import type { ApiGroupContext } from './callback-api';
+import {
+  deriveTemplatePresetNameForImport_ACU
+} from '../../../shared/template-preset-utils';
+import {
+  logDebug_ACU,
+  logError_ACU,
+  logWarn_ACU
+} from '../../../shared/utils';
+import {
+  settings_ACU
+} from '../../../service/runtime/state-manager';
+import {
+  getCurrentRuntimePlotPresetName_ACU,
+  normalizePlotPresetExcludeRules_ACU,
+  switchCurrentChatPlotPreset_ACU
+} from '../../../service/plot/plot-logic';
+import {
+  resetCurrentChatTableStateFromTemplate_ACU
+} from '../../../service/table/template-state-reset';
+import {
+  applyChatTemplateSnapshotWithReconciliation_ACU,
+  upsertTemplatePreset_ACU
+} from '../../../service/template/template-preset-service';
+import {
+  sanitizeTemplateSnapshotForChat_ACU
+} from '../../../service/template/chat-scope';
+import {
+  isSqliteMode
+} from '../../../service/table/storage-mode';
+import {
+  didSqliteFallbackAfterReload_ACU,
+  reloadStorageProvider
+} from '../../../service/table/table-storage-strategy';
+import {
+  saveSettingsAndNotify_ACU
+} from '../../components/settings-ui-helpers';
+import {
+  refreshPresetUIAfterSwitch_ACU
+} from '../../components/pipeline-ui-helpers';
+import type {
+  ApiGroupContext
+} from './callback-api';
 
 export function createPlotPresetApi(ctx: ApiGroupContext): Record<string, Function> {
     return {

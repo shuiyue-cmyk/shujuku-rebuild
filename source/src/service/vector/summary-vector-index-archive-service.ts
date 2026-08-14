@@ -2,23 +2,43 @@ import {
     readIsolatedTagData_ACU,
     writeMessageIdentity_ACU,
 } from '../../data/repositories/chat-message-data-repo';
-import { commitVectorMetadataPatch_ACU } from './summary-vector-index-chat-commit';
+import {
+  commitVectorMetadataPatch_ACU
+} from './summary-vector-index-chat-commit';
 import type {
     ChatSummaryVectorIndexChunk_ACU,
     ChatSummaryVectorIndexRow_ACU,
     ChatSummaryVectorIndexState_ACU,
 } from '../../data/models/chat-message-data';
-import type { SummaryVectorIndexExternalFileRef_ACU } from './summary-vector-index-types';
+import type {
+  SummaryVectorIndexExternalFileRef_ACU
+} from './summary-vector-index-types';
 import {
     assertSummaryVectorFlushGenerationCurrent_ACU,
     SummaryVectorFlushGenerationInvalidatedError_ACU,
 } from '../../data/storage/vector-index-hot-cache';
-import { createEmbeddings_ACU, isVectorEmbeddingError_ACU } from '../../data/gateways/vector-embedding-gateway';
-import type { VectorEmbeddingResult_ACU } from '../../data/gateways/vector-embedding-gateway';
-import { buildVectorIndexSingleSnapshotV2FilePath_ACU } from '../../data/storage/vector-index-st-files-storage';
-import { currentChatFileIdentifier_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU, settings_ACU } from '../runtime/state-manager';
-import { getChatArray_ACU } from '../chat/chat-service';
-import { getLatestAiMessageIndexFromChat_ACU } from '../table/table-history';
+import {
+  createEmbeddings_ACU,
+  isVectorEmbeddingError_ACU
+} from '../../data/gateways/vector-embedding-gateway';
+import type {
+  VectorEmbeddingResult_ACU
+} from '../../data/gateways/vector-embedding-gateway';
+import {
+  buildVectorIndexSingleSnapshotV2FilePath_ACU
+} from '../../data/storage/vector-index-st-files-storage';
+import {
+  currentChatFileIdentifier_ACU,
+  currentJsonTableData_ACU,
+  getCurrentIsolationKey_ACU,
+  settings_ACU
+} from '../runtime/state-manager';
+import {
+  getChatArray_ACU
+} from '../chat/chat-service';
+import {
+  getLatestAiMessageIndexFromChat_ACU
+} from '../table/table-history';
 import {
     persistRemoteMemorySnapshotAnchorIfNeeded_ACU,
     resolveRemoteMemorySnapshotAnchor_ACU,
@@ -40,8 +60,16 @@ import {
     finalizeSummaryVectorIndexSnapshotPublication_ACU,
     persistSummaryVectorIndexSnapshot_ACU,
 } from './summary-vector-index-storage-service';
-import { hashUserInput_ACU, isSummaryOrOutlineTable_ACU, logDebug_ACU, logWarn_ACU } from '../../shared/utils';
-import { normalizeSummaryVectorIndexScope_ACU, serializeSummaryVectorIndexScope_ACU } from '../../shared/summary-vector-index-scope';
+import {
+  hashUserInput_ACU,
+  isSummaryOrOutlineTable_ACU,
+  logDebug_ACU,
+  logWarn_ACU
+} from '../../shared/utils';
+import {
+  normalizeSummaryVectorIndexScope_ACU,
+  serializeSummaryVectorIndexScope_ACU
+} from '../../shared/summary-vector-index-scope';
 
 type SummaryVectorIndexArchiveMode_ACU = 'append' | 'sync';
 

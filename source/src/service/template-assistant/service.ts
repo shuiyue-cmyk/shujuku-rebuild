@@ -1,14 +1,41 @@
-import { callAIWithPreset_ACU } from '../ai/api-call';
-import { settings_ACU } from '../runtime/state-manager';
-import { withSettingsWrite_ACU } from '../settings/settings-write-service';
-import { getSortedSheetKeys_ACU } from '../template/chat-scope';
-import { getGlobalInjectionConfigFromData_ACU } from '../worldbook/injection-engine';
-import { safeJsonStringify_ACU } from '../../shared/json-helpers';
-import { hashUserInput_ACU, logError_ACU } from '../../shared/utils';
-import { buildTemplateAssistantCumulativeCompileResult_ACU, collectV3RowIdGuardFindings_ACU, compileTemplateAssistantDraft_ACU, type TemplateAssistantCompileResult_ACU } from './compiler';
-import { preflightSchemaMigrations_ACU, type SchemaMigrationPreflightIntent_ACU } from '../table/schema-migration-preflight';
-import { buildTemplateAssistantEmbeddedReferenceText_ACU } from './reference-docs';
-import { SqliteRuntimeUnavailableError_ACU } from '../../data/sqlite/sqlite-engine';
+import {
+  callAIWithPreset_ACU
+} from '../ai/api-call';
+import {
+  settings_ACU
+} from '../runtime/state-manager';
+import {
+  withSettingsWrite_ACU
+} from '../settings/settings-write-service';
+import {
+  getSortedSheetKeys_ACU
+} from '../template/chat-scope';
+import {
+  getGlobalInjectionConfigFromData_ACU
+} from '../worldbook/injection-engine';
+import {
+  safeJsonStringify_ACU
+} from '../../shared/json-helpers';
+import {
+  hashUserInput_ACU,
+  logError_ACU
+} from '../../shared/utils';
+import {
+  buildTemplateAssistantCumulativeCompileResult_ACU,
+  collectV3RowIdGuardFindings_ACU,
+  compileTemplateAssistantDraft_ACU,
+  type TemplateAssistantCompileResult_ACU
+} from './compiler';
+import {
+  preflightSchemaMigrations_ACU,
+  type SchemaMigrationPreflightIntent_ACU
+} from '../table/schema-migration-preflight';
+import {
+  buildTemplateAssistantEmbeddedReferenceText_ACU
+} from './reference-docs';
+import {
+  SqliteRuntimeUnavailableError_ACU
+} from '../../data/sqlite/sqlite-engine';
 
 type AnyRecord = Record<string, any>;
 

@@ -5,8 +5,12 @@
  * 所有写操作委托 service/api-preset-service，不再直接改 settings_ACU。
  * 保存失败时 service 已回滚内存，store 同步恢复快照并传播失败结果。
  */
-import { defineStore } from 'pinia';
-import { currentChatFileIdentifier_ACU, settings_ACU } from '../../service/runtime/state-manager';
+import {
+  defineStore
+} from 'pinia';
+import {
+  settings_ACU
+} from '../../service/runtime/state-manager';
 import {
   ensureApiSettingsShape_ACU,
   findPresetByName_ACU,
@@ -25,7 +29,9 @@ import {
   type ApiPresetBinding_ACU,
   type ApiPresetWriteResult_ACU,
 } from '../../service/settings/api-preset-service';
-import { fetchAvailableModels_ACU } from '../../service/ai/ai-service';
+import {
+  fetchAvailableModels_ACU
+} from '../../service/ai/ai-service';
 
 export type AcuV2ApiMode = ApiPresetApiMode_ACU;
 

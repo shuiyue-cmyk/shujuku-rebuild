@@ -9,9 +9,18 @@
  * 不做猜测性修复。
  */
 
-import { canonicalizeDisplayName_ACU } from '../../shared/sheet-identity';
-import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../../shared/stable-row-id-allocator';
-import { injectRowIdPrimaryKeyColumn_ACU, parseDDLColumnInfos_ACU, validateDDLTextAgainstHeaders_ACU } from '../../shared/ddl-utils';
+import {
+  canonicalizeDisplayName_ACU
+} from '../../shared/sheet-identity';
+import {
+  allocateStableRowId_ACU,
+  createStableRowIdReservation_ACU
+} from '../../shared/stable-row-id-allocator';
+import {
+  injectRowIdPrimaryKeyColumn_ACU,
+  parseDDLColumnInfos_ACU,
+  validateDDLTextAgainstHeaders_ACU
+} from '../../shared/ddl-utils';
 
 // ═══ 公共类型 ═══
 

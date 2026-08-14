@@ -2,20 +2,67 @@
  * service/worldbook/injection-engine-state.ts — 状态重置、目标获取、隔离前缀、条目清理、聊天历史清理
  * 从 injection-engine.ts 拆出
  */
-import { getCurrentWorldbookConfig_ACU } from '../settings/settings-readers';
-import { CHAT_SHEET_GUIDE_FIELD_ACU } from '../../data/storage/chat-history';
-import { currentChatFileIdentifier_ACU, currentJsonTableData_ACU, generationGate_ACU, getCurrentIsolationKey_ACU, settings_ACU, _set_currentChatFileIdentifier_ACU, _set_allChatMessages_ACU, _set_currentJsonTableData_ACU, _set_independentTableStates_ACU, _set_lastTotalAiMessages_ACU } from '../runtime/state-manager';
-import { getLorebookEntries_ACU, deleteLorebookEntries_ACU, getCurrentCharacterWorldbookBinding_ACU, getCurrentCharPrimaryLorebook_ACU as gwGetCurrentCharPrimaryLorebook_ACU, listLorebooks_ACU, resolveLorebookNameFromList_ACU } from '../../data/gateways/worldbook-gateway';
-import { getChatArray_ACU, saveChatToHost_ACU } from '../../data/gateways/chat-gateway';
-import { applyTemplateScopeForCurrentChat_ACU, loadSettings_ACU, saveSettings_ACU } from '../settings/settings-service';
-import { getSortedSheetKeys_ACU } from '../template/chat-scope';
-import { loadAllChatMessages_ACU } from './pipeline';
-import { cleanChatName_ACU, cloneScopedConfigData_ACU, getChatFirstLayerMessage_ACU, logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
-import { getImportStablePrefix_ACU } from '../../shared/constants';
+import {
+  getCurrentWorldbookConfig_ACU
+} from '../settings/settings-readers';
+import {
+  CHAT_SHEET_GUIDE_FIELD_ACU
+} from '../../data/storage/chat-history';
+import {
+  currentChatFileIdentifier_ACU,
+  currentJsonTableData_ACU,
+  generationGate_ACU,
+  getCurrentIsolationKey_ACU,
+  settings_ACU,
+  _set_currentChatFileIdentifier_ACU,
+  _set_allChatMessages_ACU,
+  _set_currentJsonTableData_ACU,
+  _set_independentTableStates_ACU,
+  _set_lastTotalAiMessages_ACU
+} from '../runtime/state-manager';
+import {
+  getLorebookEntries_ACU,
+  deleteLorebookEntries_ACU,
+  getCurrentCharacterWorldbookBinding_ACU,
+  getCurrentCharPrimaryLorebook_ACU as gwGetCurrentCharPrimaryLorebook_ACU,
+  listLorebooks_ACU,
+  resolveLorebookNameFromList_ACU
+} from '../../data/gateways/worldbook-gateway';
+import {
+  getChatArray_ACU,
+  saveChatToHost_ACU
+} from '../../data/gateways/chat-gateway';
+import {
+  loadSettings_ACU,
+  saveSettings_ACU
+} from '../settings/settings-service';
+import {
+  getSortedSheetKeys_ACU
+} from '../template/chat-scope';
+import {
+  loadAllChatMessages_ACU
+} from './pipeline';
+import {
+  cleanChatName_ACU,
+  cloneScopedConfigData_ACU,
+  getChatFirstLayerMessage_ACU,
+  logDebug_ACU,
+  logError_ACU,
+  logWarn_ACU
+} from '../../shared/utils';
+import {
+  getImportStablePrefix_ACU
+} from '../../shared/constants';
 
-import { purgeSheetKeysFromMessage_ACU } from '../../data/repositories/chat-message-data-repo';
-import { runTableWriteTransaction_ACU } from '../table/table-write-transaction';
-import { resetPlotAgentWorldbookSessionSnapshot_ACU } from '../agent/agent-worldbook-takeover';
+import {
+  purgeSheetKeysFromMessage_ACU
+} from '../../data/repositories/chat-message-data-repo';
+import {
+  runTableWriteTransaction_ACU
+} from '../table/table-write-transaction';
+import {
+  resetPlotAgentWorldbookSessionSnapshot_ACU
+} from '../agent/agent-worldbook-takeover';
 
   async function enforceCleanupOfCharacterWorldbook_ACU() {
       // 延迟一段时间，确保其他操作完成

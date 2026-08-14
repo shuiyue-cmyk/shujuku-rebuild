@@ -1,24 +1,63 @@
 // update-process.ts — 表格更新 UI 壳（presentation 层：负责 UI 交互）
 // service 层只返回结果，presentation 层根据返回值自行决定 UI 操作。
 
-import { _set_isAutoUpdatingCard_ACU, _set_wasStoppedByUser_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU, settings_ACU } from '../../service/runtime/state-manager';
-import { getChatArray_ACU } from '../../service/chat/chat-service';
-import { getSelectedManualTableKeys_ACU } from '../../service/settings/settings-readers';
-import { showToastr_ACU } from '../theme/toast';
-import { showCustomConfirm_ACU } from '../theme/custom-confirm';
-import { ACU_TOAST_CATEGORY_ACU } from '../../shared/constants';
-import { logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
+import {
+  _set_isAutoUpdatingCard_ACU,
+  _set_wasStoppedByUser_ACU,
+  currentJsonTableData_ACU,
+  getCurrentIsolationKey_ACU,
+  settings_ACU
+} from '../../service/runtime/state-manager';
+import {
+  getChatArray_ACU
+} from '../../service/chat/chat-service';
+import {
+  getSelectedManualTableKeys_ACU
+} from '../../service/settings/settings-readers';
+import {
+  showToastr_ACU
+} from '../theme/toast';
+import {
+  showCustomConfirm_ACU
+} from '../theme/custom-confirm';
+import {
+  ACU_TOAST_CATEGORY_ACU
+} from '../../shared/constants';
+import {
+  logDebug_ACU
+} from '../../shared/utils';
 // re-export 从 service 层搬迁的业务逻辑函数，保持外部调用方兼容
 export { saveCurrentDataForTable_ACU } from '../../service/chat/chat-service';
-import { toastr_API_ACU } from '../../shared/host-api';
-import { $statusMessageSpan_ACU } from '../state/ui-refs';
-import { topLevelWindow_ACU } from '../../shared/env';
-import { renderStopButton_ACU } from '../../shared/html-helpers';
-import { bindTableFillStopButton_ACU, resetManualUpdateButton_ACU, shouldShowVectorMemoryManualUpdateWarning_ACU, syncManualUpdateButtonAvailability_ACU } from '../components/status-display';
-import { updateCardUpdateStatusDisplay_ACU } from '../components/update-status-display';
-import { collectManualExtraHint_ACU } from './settings-ui-sync';
-import { refreshMergedDataAndNotifyWithUI_ACU } from '../components/pipeline-ui-helpers';
-import { abortAllActiveRequests_ACU } from '../../service/runtime/state-manager';
+import {
+  toastr_API_ACU
+} from '../../shared/host-api';
+import {
+  $statusMessageSpan_ACU
+} from '../state/ui-refs';
+import {
+  topLevelWindow_ACU
+} from '../../shared/env';
+import {
+  renderStopButton_ACU
+} from '../../shared/html-helpers';
+import {
+  bindTableFillStopButton_ACU,
+  resetManualUpdateButton_ACU,
+  shouldShowVectorMemoryManualUpdateWarning_ACU,
+  syncManualUpdateButtonAvailability_ACU
+} from '../components/status-display';
+import {
+  updateCardUpdateStatusDisplay_ACU
+} from '../components/update-status-display';
+import {
+  collectManualExtraHint_ACU
+} from './settings-ui-sync';
+import {
+  refreshMergedDataAndNotifyWithUI_ACU
+} from '../components/pipeline-ui-helpers';
+import {
+  abortAllActiveRequests_ACU
+} from '../../service/runtime/state-manager';
 import {
     processUpdatesBatch_ACU,
     executeCardUpdateCore_ACU,
@@ -28,7 +67,9 @@ import {
     type CardUpdateProgressEvent,
     type BatchUpdateProgressContext,
 } from '../../service/table/update-orchestrator';
-import { collectV2CheckpointFloorsFromChat_ACU } from '../../service/table/table-history';
+import {
+  collectV2CheckpointFloorsFromChat_ACU
+} from '../../service/table/table-history';
 
 // ============================================================
 // UI 辅助函数

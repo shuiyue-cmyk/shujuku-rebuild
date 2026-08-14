@@ -3,13 +3,48 @@
  * 剧情推进 — 预设加载/迁移 + 历史记录读写
  * 从 helpers-plot-runtime.ts 拆出（L1024-L1400）
  */
-import { currentPlotTaskEditorId_ACU, _set_currentPlotTaskEditorId_ACU } from '../../plot/plot-state';
-import { currentChatFileIdentifier_ACU, planningGuard_ACU, settings_ACU, tempPlotToSave_ACU, _set_tempPlotToSave_ACU } from '../state-manager';
-import { getChatArray_ACU, saveChatToHost_ACU, saveChatToHostStrict_ACU } from '../../../data/gateways/chat-gateway';
-import { saveSettings_ACU } from '../../settings/settings-service';
-import { clearCurrentChatPlotScopeState_ACU, getCurrentChatPlotScopeState_ACU } from '../../template/chat-scope';
-import { hashUserInput_ACU, logDebug_ACU, logWarn_ACU } from '../../../shared/utils';
-import { applyPlotPresetToSettings_ACU, clearPlotPresetBindingForChat_ACU, ensurePlotPresetBindingsStore_ACU, ensurePlotTasksCompat_ACU, findPlotPresetByName_ACU, getCurrentRuntimePlotPresetName_ACU, getPlotPresetBindingForChat_ACU, isDefaultPlotPresetSelection_ACU, normalizePlotPresetSelectionValue_ACU, replaceCurrentPlotSettingsWithSnapshot_ACU, resetPlotSettingsToDefault_ACU, setPlotPresetBindingForChat_ACU, syncCurrentEditablePlotPresetState_ACU } from '../../plot/plot-logic';
+import {
+  _set_currentPlotTaskEditorId_ACU
+} from '../../plot/plot-state';
+import {
+  currentChatFileIdentifier_ACU,
+  planningGuard_ACU,
+  settings_ACU,
+  tempPlotToSave_ACU,
+  _set_tempPlotToSave_ACU
+} from '../state-manager';
+import {
+  getChatArray_ACU,
+  saveChatToHost_ACU,
+  saveChatToHostStrict_ACU
+} from '../../../data/gateways/chat-gateway';
+import {
+  saveSettings_ACU
+} from '../../settings/settings-service';
+import {
+  clearCurrentChatPlotScopeState_ACU,
+  getCurrentChatPlotScopeState_ACU
+} from '../../template/chat-scope';
+import {
+  hashUserInput_ACU,
+  logDebug_ACU,
+  logWarn_ACU
+} from '../../../shared/utils';
+import {
+  applyPlotPresetToSettings_ACU,
+  clearPlotPresetBindingForChat_ACU,
+  ensurePlotPresetBindingsStore_ACU,
+  ensurePlotTasksCompat_ACU,
+  findPlotPresetByName_ACU,
+  getCurrentRuntimePlotPresetName_ACU,
+  getPlotPresetBindingForChat_ACU,
+  isDefaultPlotPresetSelection_ACU,
+  normalizePlotPresetSelectionValue_ACU,
+  replaceCurrentPlotSettingsWithSnapshot_ACU,
+  resetPlotSettingsToDefault_ACU,
+  setPlotPresetBindingForChat_ACU,
+  syncCurrentEditablePlotPresetState_ACU
+} from '../../plot/plot-logic';
 
   /**
    * 加载上次使用的预设到全局设置，并清除当前角色卡上冲突的陈旧设置。

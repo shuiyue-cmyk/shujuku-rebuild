@@ -1,14 +1,35 @@
 // merge-logic.ts
 
-import { DEFAULT_CHAR_CARD_PROMPT_ACU, DEFAULT_CHAR_CARD_PROMPT_SQL_ACU, DEFAULT_MERGE_SUMMARY_PROMPT_ACU } from '../../shared/defaults-json.js';
-import { isSqliteMode } from '../table/storage-mode';
-import { buildCustomApiRequestBody_ACU, postChatCompletion_ACU } from '../ai/api-call';
-import { currentJsonTableData_ACU, settings_ACU } from '../runtime/state-manager';
-import { getLastMessageIndex_ACU } from '../../data/gateways/chat-gateway';
-import { updateReadableLorebookEntry_ACU } from '../worldbook/pipeline';
-import { logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
-import { runTableUpdateCommit_ACU } from '../table/table-update-commit';
-import { extractTableEditInner_ACU } from '../ai/prompt-builder';
+import {
+  DEFAULT_CHAR_CARD_PROMPT_ACU,
+  DEFAULT_CHAR_CARD_PROMPT_SQL_ACU
+} from '../../shared/defaults-json.js';
+import {
+  isSqliteMode
+} from '../table/storage-mode';
+import {
+  buildCustomApiRequestBody_ACU,
+  postChatCompletion_ACU
+} from '../ai/api-call';
+import {
+  currentJsonTableData_ACU,
+  settings_ACU
+} from '../runtime/state-manager';
+import {
+  getLastMessageIndex_ACU
+} from '../../data/gateways/chat-gateway';
+import {
+  updateReadableLorebookEntry_ACU
+} from '../worldbook/pipeline';
+import {
+  logWarn_ACU
+} from '../../shared/utils';
+import {
+  runTableUpdateCommit_ACU
+} from '../table/table-update-commit';
+import {
+  extractTableEditInner_ACU
+} from '../ai/prompt-builder';
 
 // ═══ 自动合并纪要：触发检查 ═══
 

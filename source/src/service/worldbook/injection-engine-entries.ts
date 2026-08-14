@@ -2,14 +2,43 @@
  * service/worldbook/injection-engine-entries.ts — 大纲表、总结表、重要人物表注入
  * 从 injection-engine.ts 拆出
  */
-import { getCurrentWorldbookConfig_ACU } from '../settings/settings-readers';
-import { isWorldbookApiAvailable_ACU, getLorebookEntries_ACU, setLorebookEntries_ACU, createLorebookEntries_ACU, deleteLorebookEntries_ACU } from '../../data/gateways/worldbook-gateway';
-import { logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
-import { getImportBatchPrefix_ACU } from '../../shared/constants';
-import { ensureExportConfigDefaults_ACU, normalizePlacementConfig_ACU, getFixedPlacementDefaultsForTable_ACU, applyPlacementToEntry_ACU, isEntryPlacementMatched_ACU } from './injection-engine-config';
-import { buildUsedOrderSet_ACU, allocOrder_ACU, allocConsecutiveOrderBlock_ACU } from './injection-engine-order';
-import { getInjectionTargetLorebook_ACU, getIsolationPrefix_ACU } from './injection-engine-state';
-import { getSheetColumnProjection_ACU } from '../../shared/ddl-utils';
+import {
+  getCurrentWorldbookConfig_ACU
+} from '../settings/settings-readers';
+import {
+  isWorldbookApiAvailable_ACU,
+  getLorebookEntries_ACU,
+  setLorebookEntries_ACU,
+  createLorebookEntries_ACU,
+  deleteLorebookEntries_ACU
+} from '../../data/gateways/worldbook-gateway';
+import {
+  logDebug_ACU,
+  logError_ACU,
+  logWarn_ACU
+} from '../../shared/utils';
+import {
+  getImportBatchPrefix_ACU
+} from '../../shared/constants';
+import {
+  ensureExportConfigDefaults_ACU,
+  normalizePlacementConfig_ACU,
+  getFixedPlacementDefaultsForTable_ACU,
+  applyPlacementToEntry_ACU,
+  isEntryPlacementMatched_ACU
+} from './injection-engine-config';
+import {
+  buildUsedOrderSet_ACU,
+  allocOrder_ACU,
+  allocConsecutiveOrderBlock_ACU
+} from './injection-engine-order';
+import {
+  getInjectionTargetLorebook_ACU,
+  getIsolationPrefix_ACU
+} from './injection-engine-state';
+import {
+  getSheetColumnProjection_ACU
+} from '../../shared/ddl-utils';
 
 function projectWorldbookTable_ACU(table: any): { headers: string[]; rows: any[][] } {
     const visibleColumns = getSheetColumnProjection_ACU(table).visibleColumns.filter(column => column.sourceIndex > 0);

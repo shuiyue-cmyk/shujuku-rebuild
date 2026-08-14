@@ -34,9 +34,6 @@ vi.mock('../../src/presentation/components/update-status-display', () => ({
 vi.mock('../../src/presentation/components/template-preset-ui', () => ({
   loadTemplatePresetSelect_ACU: vi.fn(),
 }));
-vi.mock('../../src/presentation/pages/popup-helpers', () => ({
-  loadPlotSettingsToUI_ACU: vi.fn(),
-}));
 
 import { refreshMergedDataAndNotifyWithUI_ACU } from '../../src/presentation/components/pipeline-ui-helpers';
 import { topLevelWindow_ACU } from '../../src/shared/env';

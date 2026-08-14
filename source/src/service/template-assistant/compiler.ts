@@ -1,11 +1,34 @@
-import { TABLE_ORDER_FIELD_ACU } from '../../shared/constants';
-import { parseDDLColumnNames, updateDDLColumnComment, validateDDLTextAgainstHeaders_ACU } from '../../shared/ddl-utils';
-import { allocateStableSheetKeys_ACU, canonicalizeDisplayName_ACU } from '../../shared/sheet-identity';
-import { isSummaryOrOutlineTable_ACU } from '../../shared/utils';
-import type { SchemaMigrationPreflightIntent_ACU } from '../table/schema-migration-preflight';
-import { applySummaryIndexSequenceToTable_ACU, getSummaryIndexColumnIndex_ACU, isSpecialIndexLockEnabled_ACU } from '../runtime/helpers-remaining';
-import { getSortedSheetKeys_ACU } from '../template/chat-scope';
-import { buildDefaultExportConfig_ACU, ensureGlobalInjectionConfigDefaults_ACU, ensureSheetExportConfigDefaults_ACU } from '../worldbook/injection-engine';
+import {
+  TABLE_ORDER_FIELD_ACU
+} from '../../shared/constants';
+import {
+  parseDDLColumnNames,
+  updateDDLColumnComment,
+  validateDDLTextAgainstHeaders_ACU
+} from '../../shared/ddl-utils';
+import {
+  allocateStableSheetKeys_ACU,
+  canonicalizeDisplayName_ACU
+} from '../../shared/sheet-identity';
+import {
+  isSummaryOrOutlineTable_ACU
+} from '../../shared/utils';
+import type {
+  SchemaMigrationPreflightIntent_ACU
+} from '../table/schema-migration-preflight';
+import {
+  applySummaryIndexSequenceToTable_ACU,
+  getSummaryIndexColumnIndex_ACU,
+  isSpecialIndexLockEnabled_ACU
+} from '../runtime/helpers-remaining';
+import {
+  getSortedSheetKeys_ACU
+} from '../template/chat-scope';
+import {
+  buildDefaultExportConfig_ACU,
+  ensureGlobalInjectionConfigDefaults_ACU,
+  ensureSheetExportConfigDefaults_ACU
+} from '../worldbook/injection-engine';
 
 type AnyRecord = Record<string, any>;
 

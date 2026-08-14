@@ -7,7 +7,11 @@
  * - 立即构建（buildNow）：调用 service 层统一的普通即时重建链路。
  * - Vue 组件只读写本 composable 暴露的 ref / form / 方法。
  */
-import { computed, reactive, ref } from 'vue';
+import {
+  computed,
+  reactive,
+  ref
+} from 'vue';
 import {
   getCurrentVectorMemoryConfig_ACU,
   updateGlobalVectorMemoryConfigFields_ACU,
@@ -15,11 +19,13 @@ import {
   type VectorMemoryConfig_ACU,
   type VectorMemoryKeywordPromptSegment_ACU,
 } from '../../service/vector/vector-memory-config';
-import { saveSettings_ACU } from '../../service/settings/settings-service';
+
 import {
   migrateLegacySummaryVectorIndexToContentAddressed_ACU,
 } from '../../service/vector/summary-vector-index-archive-service';
-import { rebuildCurrentSummaryVectorIndexNow_ACU } from '../../service/vector/summary-vector-index-rebuild-service';
+import {
+  rebuildCurrentSummaryVectorIndexNow_ACU
+} from '../../service/vector/summary-vector-index-rebuild-service';
 import {
   getLatestSummaryVectorIndexSnapshotState_ACU,
 } from '../../service/vector/summary-vector-index-state-service';
@@ -27,14 +33,22 @@ import {
   getSummaryVectorIndexStats_ACU,
   inspectSummaryVectorIndexHealth_ACU,
 } from '../../service/vector/summary-vector-index-storage-service';
-import { clearAllSummaryVectorIndexCaches_ACU } from '../../service/vector/summary-vector-index-cache-service';
-import { deleteCurrentSummaryVectorIndexFromChat_ACU } from '../../service/vector/summary-vector-index-chat-service';
-import { defaultVectorMemoryConfig_ACU } from '../../shared/defaults';
+import {
+  clearAllSummaryVectorIndexCaches_ACU
+} from '../../service/vector/summary-vector-index-cache-service';
+import {
+  deleteCurrentSummaryVectorIndexFromChat_ACU
+} from '../../service/vector/summary-vector-index-chat-service';
+import {
+  defaultVectorMemoryConfig_ACU
+} from '../../shared/defaults';
 import type {
   SummaryVectorIndexHealthReport_ACU,
   SummaryVectorIndexStats_ACU,
 } from '../../service/vector/summary-vector-index-types';
-import { useToastStore } from '../stores/toast-store';
+import {
+  useToastStore
+} from '../stores/toast-store';
 
 type MessageKind = 'info' | 'success' | 'warning' | 'error';
 type BadgeVariant = 'neutral' | 'accent' | 'success' | 'warning' | 'danger';

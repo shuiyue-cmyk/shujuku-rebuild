@@ -1,27 +1,89 @@
-import { deriveTemplatePresetNameForImport_ACU, getCurrentTemplatePresetName_ACU, normalizeTemplatePresetSelectionValue_ACU, sanitizeFilenameComponent_ACU } from '../../shared/template-preset-utils';
-import { renderPromptSegments_ACU } from '../components/plot-editors';
-import { getDefaultTemplateSnapshot_ACU, getTemplatePreset_ACU, resolveTemplateForExport_ACU } from '../../service/template/template-preset-service';
-import { showToastr_ACU } from '../theme/toast';
-import { ACU_TOAST_CATEGORY_ACU } from '../../shared/constants';
-import { isSqliteMode } from '../../service/table/storage-mode';
-import { reloadStorageProvider } from '../../service/table/table-storage-strategy';
-import { getChatArray_ACU, deleteLocalDataWithScope_ACU, overrideLatestLayerWithTemplateCore_ACU } from '../../service/chat/chat-service';
-import { isWorldbookApiAvailable_ACU } from '../../service/worldbook/worldbook-service';
-import { cleanupWorldbookEntriesAfterDataDeletion_ACU } from '../../service/worldbook/worldbook-cleanup';
-import { currentChatFileIdentifier_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU, settings_ACU } from '../../service/runtime/state-manager';
-import { $popupInstance_ACU } from '../state/ui-refs';
-import { resetAllPromptsToDefault_ACU } from '../../service/settings/settings-write-service';
-import { sanitizeChatSheetsObject_ACU } from '../../service/template/chat-scope';
-import { refreshMergedDataAndNotifyWithUI_ACU, refreshPresetUIAfterSwitch_ACU } from '../components/pipeline-ui-helpers';
-import { SCRIPT_ID_PREFIX_ACU } from '../../shared/constants';
+import {
+  deriveTemplatePresetNameForImport_ACU,
+  getCurrentTemplatePresetName_ACU,
+  normalizeTemplatePresetSelectionValue_ACU,
+  sanitizeFilenameComponent_ACU
+} from '../../shared/template-preset-utils';
+import {
+  renderPromptSegments_ACU
+} from '../components/plot-editors';
+import {
+  getDefaultTemplateSnapshot_ACU,
+  resolveTemplateForExport_ACU
+} from '../../service/template/template-preset-service';
+import {
+  showToastr_ACU
+} from '../theme/toast';
+import {
+  ACU_TOAST_CATEGORY_ACU
+} from '../../shared/constants';
+import {
+  isSqliteMode
+} from '../../service/table/storage-mode';
+import {
+  reloadStorageProvider
+} from '../../service/table/table-storage-strategy';
+import {
+  getChatArray_ACU,
+  deleteLocalDataWithScope_ACU,
+  overrideLatestLayerWithTemplateCore_ACU
+} from '../../service/chat/chat-service';
 
-import { ensureSheetOrderNumbers_ACU, logDebug_ACU, logError_ACU, logWarn_ACU, parseTableTemplateJson_ACU } from '../../shared/utils';
-import { loadOrCreateJsonTableFromChatHistory_ACU } from '../../service/table/table-service';
-import { applyChatTemplateSnapshotWithReconciliation_ACU, applyTemplateSnapshotToScope_ACU, normalizeTemplateOperationScope_ACU, parseImportedTemplateData_ACU, upsertTemplatePreset_ACU } from '../../service/template/template-preset-service';
-import { applyCombinedSettingsImport_ACU } from '../../service/settings/settings-service';
-import { getTemplatePresetSelectJQ_ACU, refreshTemplatePresetSelectInUI_ACU } from '../components/template-preset-ui';
-import { updateCardUpdateStatusDisplay_ACU } from '../components/update-status-display';
-import { migrateLegacySummaryVectorIndexToContentAddressed_ACU } from '../../service/vector/summary-vector-index-archive-service';
+import {
+  cleanupWorldbookEntriesAfterDataDeletion_ACU
+} from '../../service/worldbook/worldbook-cleanup';
+import {
+  currentChatFileIdentifier_ACU,
+  currentJsonTableData_ACU,
+  settings_ACU
+} from '../../service/runtime/state-manager';
+import {
+  $popupInstance_ACU
+} from '../state/ui-refs';
+import {
+  resetAllPromptsToDefault_ACU
+} from '../../service/settings/settings-write-service';
+import {
+  sanitizeChatSheetsObject_ACU
+} from '../../service/template/chat-scope';
+import {
+  refreshMergedDataAndNotifyWithUI_ACU,
+  refreshPresetUIAfterSwitch_ACU
+} from '../components/pipeline-ui-helpers';
+import {
+  SCRIPT_ID_PREFIX_ACU
+} from '../../shared/constants';
+
+import {
+  ensureSheetOrderNumbers_ACU,
+  logDebug_ACU,
+  logError_ACU,
+  logWarn_ACU,
+  parseTableTemplateJson_ACU
+} from '../../shared/utils';
+import {
+  loadOrCreateJsonTableFromChatHistory_ACU
+} from '../../service/table/table-service';
+import {
+  applyChatTemplateSnapshotWithReconciliation_ACU,
+  applyTemplateSnapshotToScope_ACU,
+  normalizeTemplateOperationScope_ACU,
+  parseImportedTemplateData_ACU,
+  upsertTemplatePreset_ACU
+} from '../../service/template/template-preset-service';
+import {
+  applyCombinedSettingsImport_ACU
+} from '../../service/settings/settings-service';
+import {
+  getTemplatePresetSelectJQ_ACU,
+  refreshTemplatePresetSelectInUI_ACU
+} from '../components/template-preset-ui';
+import {
+  updateCardUpdateStatusDisplay_ACU
+} from '../components/update-status-display';
+import {
+  migrateLegacySummaryVectorIndexToContentAddressed_ACU
+} from '../../service/vector/summary-vector-index-archive-service';
 /**
  * presentation/triggers/data-admin-ui.ts — 导入/导出/重置 UI
  * 从 features/data/01_data_admin.js 迁移而来

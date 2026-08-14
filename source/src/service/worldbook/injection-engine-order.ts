@@ -2,7 +2,10 @@
  * service/worldbook/injection-engine-order.ts — 注入位置与Order分配工具
  * 从 injection-engine.ts 拆出
  */
-import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
+import {
+  logDebug_ACU,
+  logWarn_ACU
+} from '../../shared/utils';
 
 // =========================
 // [世界书] 注入位置：强制改为 @D 系统深度（避免默认"角色定义之前"）

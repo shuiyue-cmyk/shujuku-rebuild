@@ -3,32 +3,106 @@
  * AI 输入准备 — 格式化表格数据和对话内容为 AI 可读文本
  * 从 prompt-builder.ts 拆出（L14-L194）
  */
-import { manualExtraHint_ACU } from '../../runtime/state-manager';
-import { currentJsonTableData_ACU, settings_ACU } from '../../runtime/state-manager';
-import type { TemplateScope_ACU } from '../../template/chat-scope';
-import type { SqlTableApplyScope_ACU } from '../../../shared/table-storage-provider';
-import { getUserName_ACU } from '../../../data/gateways/host-state-gateway';
-import { attachSeedRowsToCurrentDataFromGuide_ACU, ensureChatSheetGuideSeeded_ACU, getEffectiveSeedRowsForSheet_ACU, getSortedSheetKeys_ACU, filterSheetKeysByTemplateScope_ACU, projectSheetForTemplateScope_ACU, resolveTemplateScope_ACU } from '../../template/chat-scope';
-import { getCombinedWorldbookContent_ACU } from '../../worldbook/pipeline';
-import { isDatabaseGeneratedLorebookEntry_ACU, resolveGeneratedEntriesForTable_ACU, resolveUniqueTableExportIdentity_ACU } from '../../worldbook/worldbook-placeholder-classification';
-import { createLorebookReadContext_ACU, type LorebookReadContext_ACU } from '../../worldbook/read-context';
-import { buildTableCandidateScope_ACU, collectAsyncTableCandidateScope_ACU, resolveLorebookReadTargets_ACU } from '../../worldbook/read-scope';
-import { getCurrentWorldbookConfig_ACU } from '../../settings/settings-readers';
-import { getInjectionTargetLorebook_ACU } from '../../worldbook/injection-engine';
-import { getCurrentCharacterWorldbookBinding_ACU } from '../../../data/gateways/character-gateway';
-import { resolvePreTakeoverWorldbookSnapshot_ACU } from '../../agent/agent-worldbook-takeover';
-import { isSummaryOrOutlineTable_ACU, logDebug_ACU, logError_ACU, logWarn_ACU, normalizeExcludeRules_ACU, normalizeExtractRules_ACU } from '../../../shared/utils';
-import { applyContextTagFilters_ACU } from '../../runtime/helpers-remaining';
-import { isSqliteMode } from '../../table/storage-mode';
-import { ensureStorageProviderReady_ACU, getStorageRuntimeHealth_ACU } from '../../table/table-storage-strategy';
-import { parseDDLTableName, rebindCreateTableName_ACU, resolveEffectiveDDL, type EffectiveDDLColumnMap_ACU } from '../../../data/sqlite/schema-mapper';
-import { getSheetColumnProjection_ACU, projectSheetDDLForVisibleColumns_ACU } from '../../../shared/ddl-utils';
-import { getPhysicalTableNameForSheet_ACU } from '../../../shared/sheet-identity';
-import { buildSheetTableAliasMap_ACU } from '../../../shared/sql-read-resolver';
-import { decodeSqlIdentifier_ACU } from '../../../shared/sql-mutation-table-rebind';
-import { replaceDbSqlVariables } from '../../runtime/template-vars/sql-query-var';
-import { getCurrentFlightModeState_ACU } from '../../flight-mode/flight-mode-state';
-import { projectFlightModeHiddenChronicleRows_ACU } from '../../flight-mode/flight-mode-hidden-rows';
+import {
+  manualExtraHint_ACU
+} from '../../runtime/state-manager';
+import {
+  currentJsonTableData_ACU,
+  settings_ACU
+} from '../../runtime/state-manager';
+import type {
+  TemplateScope_ACU
+} from '../../template/chat-scope';
+import type {
+  SqlTableApplyScope_ACU
+} from '../../../shared/table-storage-provider';
+import {
+  getUserName_ACU
+} from '../../../data/gateways/host-state-gateway';
+import {
+  attachSeedRowsToCurrentDataFromGuide_ACU,
+  ensureChatSheetGuideSeeded_ACU,
+  getEffectiveSeedRowsForSheet_ACU,
+  getSortedSheetKeys_ACU,
+  filterSheetKeysByTemplateScope_ACU,
+  projectSheetForTemplateScope_ACU,
+  resolveTemplateScope_ACU
+} from '../../template/chat-scope';
+import {
+  getCombinedWorldbookContent_ACU
+} from '../../worldbook/pipeline';
+import {
+  isDatabaseGeneratedLorebookEntry_ACU,
+  resolveGeneratedEntriesForTable_ACU,
+  resolveUniqueTableExportIdentity_ACU
+} from '../../worldbook/worldbook-placeholder-classification';
+import {
+  createLorebookReadContext_ACU,
+  type LorebookReadContext_ACU
+} from '../../worldbook/read-context';
+import {
+  buildTableCandidateScope_ACU,
+  collectAsyncTableCandidateScope_ACU,
+  resolveLorebookReadTargets_ACU
+} from '../../worldbook/read-scope';
+import {
+  getCurrentWorldbookConfig_ACU
+} from '../../settings/settings-readers';
+import {
+  getInjectionTargetLorebook_ACU
+} from '../../worldbook/injection-engine';
+import {
+  getCurrentCharacterWorldbookBinding_ACU
+} from '../../../data/gateways/character-gateway';
+import {
+  resolvePreTakeoverWorldbookSnapshot_ACU
+} from '../../agent/agent-worldbook-takeover';
+import {
+  isSummaryOrOutlineTable_ACU,
+  logDebug_ACU,
+  logError_ACU,
+  logWarn_ACU,
+  normalizeExcludeRules_ACU,
+  normalizeExtractRules_ACU
+} from '../../../shared/utils';
+import {
+  applyContextTagFilters_ACU
+} from '../../runtime/helpers-remaining';
+import {
+  isSqliteMode
+} from '../../table/storage-mode';
+import {
+  ensureStorageProviderReady_ACU,
+  getStorageRuntimeHealth_ACU
+} from '../../table/table-storage-strategy';
+import {
+  parseDDLTableName,
+  rebindCreateTableName_ACU,
+  resolveEffectiveDDL,
+  type EffectiveDDLColumnMap_ACU
+} from '../../../data/sqlite/schema-mapper';
+import {
+  getSheetColumnProjection_ACU,
+  projectSheetDDLForVisibleColumns_ACU
+} from '../../../shared/ddl-utils';
+import {
+  getPhysicalTableNameForSheet_ACU
+} from '../../../shared/sheet-identity';
+import {
+  buildSheetTableAliasMap_ACU
+} from '../../../shared/sql-read-resolver';
+import {
+  decodeSqlIdentifier_ACU
+} from '../../../shared/sql-mutation-table-rebind';
+import {
+  replaceDbSqlVariables
+} from '../../runtime/template-vars/sql-query-var';
+import {
+  getCurrentFlightModeState_ACU
+} from '../../flight-mode/flight-mode-state';
+import {
+  projectFlightModeHiddenChronicleRows_ACU
+} from '../../flight-mode/flight-mode-hidden-rows';
 
 const AUTHOR_SQL_TABLE_IDENTIFIER_ACU = /^[A-Za-z_][A-Za-z0-9_]*$/;
 

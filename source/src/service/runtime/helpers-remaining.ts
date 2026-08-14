@@ -10,11 +10,34 @@
  * 本文件保留 handleChatCompletionReady_ACU（依赖多个子模块，不适合放入任何单一子模块），
  * 并 re-export 所有子模块的公开 API。
  */
-import { currentJsonTableData_ACU, pendingFinalGenerationGreenlights_ACU, settings_ACU } from './state-manager';
-import { logDebug_ACU } from '../../shared/utils';
-import { parseRandomTags_ACU, replaceRandomVariables_ACU, parseCalcTags_ACU, parseMaxTags_ACU, parseMinTags_ACU, replaceCalcVariables_ACU, replaceMaxVariables_ACU, replaceMinVariables_ACU, parseIfBlockRecursive_ACU, getLatestAIMessageContent_ACU, replaceDbSqlVariables } from './template-vars';
-import { getPlotFromHistory_ACU, getWorldbookContentForPlot_ACU, getAgentControlledWorldbookEntriesForFinalPrompt_ACU } from './plot-runtime';
-import { isWorldbookTakeoverActive_ACU } from '../agent/agent-worldbook-takeover';
+import {
+  currentJsonTableData_ACU,
+  pendingFinalGenerationGreenlights_ACU,
+  settings_ACU
+} from './state-manager';
+import {
+  logDebug_ACU
+} from '../../shared/utils';
+import {
+  parseRandomTags_ACU,
+  replaceRandomVariables_ACU,
+  parseCalcTags_ACU,
+  parseMaxTags_ACU,
+  parseMinTags_ACU,
+  replaceCalcVariables_ACU,
+  replaceMaxVariables_ACU,
+  replaceMinVariables_ACU,
+  parseIfBlockRecursive_ACU,
+  getLatestAIMessageContent_ACU,
+  replaceDbSqlVariables
+} from './template-vars';
+import {
+  getPlotFromHistory_ACU,
+  getAgentControlledWorldbookEntriesForFinalPrompt_ACU
+} from './plot-runtime';
+import {
+  isWorldbookTakeoverActive_ACU
+} from '../agent/agent-worldbook-takeover';
 
 // ═══ 上下文标签提取/过滤 ═══
 export {

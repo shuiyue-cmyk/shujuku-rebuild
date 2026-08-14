@@ -2,7 +2,9 @@
  * service/runtime/helpers-context-tags.ts — 上下文标签提取/过滤
  * 从 helpers-remaining.ts 拆出
  */
-import { DEFAULT_PLOT_SETTINGS_ACU } from "../../shared/defaults-json.js";
+import {
+  DEFAULT_PLOT_SETTINGS_ACU
+} from "../../shared/defaults-json.js";
 import {
   normalizeExcludeRules_ACU,
   normalizeExtractRules_ACU,

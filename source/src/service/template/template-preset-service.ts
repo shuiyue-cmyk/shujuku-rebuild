@@ -5,40 +5,129 @@
  * 不操作 DOM，不引用 $popupInstance_ACU / jQuery_API_ACU 等 UI 对象。
  */
 
-import { STORAGE_KEY_TEMPLATE_PRESETS_ACU } from '../../shared/data-constants';
-import { DEFAULT_TABLE_TEMPLATE_ACU, TABLE_TEMPLATE_ACU, _set_TABLE_TEMPLATE_ACU } from '../../shared/defaults-json.js';
-import { DEFAULT_TEMPLATE_PRESET_OPTION_VALUE_ACU, getCurrentTemplatePresetName_ACU, isDefaultTemplatePresetSelection_ACU, normalizeTemplatePresetSelectionValue_ACU } from '../../shared/template-preset-utils';
-import { getConfigStorage_ACU } from '../../data/storage/tavern-storage';
-import { saveCurrentProfileTemplate_ACU } from '../../data/repositories/profile-repo';
-import { persistCurrentTemplatePresetName_ACU, saveSettings_ACU } from '../settings/settings-service';
-import { applyTemplateScopeForCurrentChat_ACU } from '../settings/settings-service';
-import { currentJsonTableData_ACU, getCurrentIsolationKey_ACU, settings_ACU, _set_currentJsonTableData_ACU } from '../runtime/state-manager';
-import { getChatArray_ACU, saveChatToHost_ACU } from '../../data/gateways/chat-gateway';
-import { getActiveChatStorageIdentity_ACU } from '../../data/storage/chat-history';
-import { buildChatSheetGuideDataFromData_ACU, buildChatSheetGuideDataFromTemplateObj_ACU, buildChatTemplateScopeStateFromCurrent_ACU, clearChatSheetGuideDataForIsolationKey_ACU, getChatSheetGuideDataForIsolationKey_ACU, getCurrentChatTemplateScopeState_ACU, getGlobalTemplateSnapshotForCurrentProfile_ACU, listChatTemplatePresetEntries_ACU, migrateLegacyTemplateScopeForCurrentChat_ACU, normalizeTemplateScopeIsolationKey_ACU, normalizeTemplateScopeMode_ACU, sanitizeChatSheetsObject_ACU, sanitizeTemplateSnapshotForChat_ACU, setCurrentChatTemplateScopeState_ACU } from '../template/chat-scope';
-import { refreshMergedDataAndNotify_ACU } from '../worldbook/pipeline';
-import { safeJsonParse_ACU, safeJsonStringify_ACU } from '../../shared/json-helpers';
-import { ensureSheetOrderNumbers_ACU, logDebug_ACU, logWarn_ACU, parseTableTemplateJson_ACU } from '../../shared/utils';
-import { buildDefaultExportConfig_ACU, ensureExportConfigDefaults_ACU } from '../worldbook/injection-engine';
+import {
+  STORAGE_KEY_TEMPLATE_PRESETS_ACU
+} from '../../shared/data-constants';
+import {
+  DEFAULT_TABLE_TEMPLATE_ACU,
+  TABLE_TEMPLATE_ACU,
+  _set_TABLE_TEMPLATE_ACU
+} from '../../shared/defaults-json.js';
+import {
+  getCurrentTemplatePresetName_ACU,
+  isDefaultTemplatePresetSelection_ACU,
+  normalizeTemplatePresetSelectionValue_ACU
+} from '../../shared/template-preset-utils';
+import {
+  getConfigStorage_ACU
+} from '../../data/storage/tavern-storage';
+import {
+  saveCurrentProfileTemplate_ACU
+} from '../../data/repositories/profile-repo';
+import {
+  persistCurrentTemplatePresetName_ACU,
+  saveSettings_ACU
+} from '../settings/settings-service';
+import {
+  applyTemplateScopeForCurrentChat_ACU
+} from '../settings/settings-service';
+import {
+  currentJsonTableData_ACU,
+  getCurrentIsolationKey_ACU,
+  settings_ACU,
+  _set_currentJsonTableData_ACU
+} from '../runtime/state-manager';
+import {
+  getChatArray_ACU,
+  saveChatToHost_ACU
+} from '../../data/gateways/chat-gateway';
+import {
+  getActiveChatStorageIdentity_ACU
+} from '../../data/storage/chat-history';
+import {
+  buildChatSheetGuideDataFromData_ACU,
+  buildChatSheetGuideDataFromTemplateObj_ACU,
+  buildChatTemplateScopeStateFromCurrent_ACU,
+  clearChatSheetGuideDataForIsolationKey_ACU,
+  getChatSheetGuideDataForIsolationKey_ACU,
+  getCurrentChatTemplateScopeState_ACU,
+  getGlobalTemplateSnapshotForCurrentProfile_ACU,
+  listChatTemplatePresetEntries_ACU,
+  migrateLegacyTemplateScopeForCurrentChat_ACU,
+  normalizeTemplateScopeIsolationKey_ACU,
+  normalizeTemplateScopeMode_ACU,
+  sanitizeChatSheetsObject_ACU,
+  sanitizeTemplateSnapshotForChat_ACU,
+  setCurrentChatTemplateScopeState_ACU
+} from '../template/chat-scope';
+import {
+  refreshMergedDataAndNotify_ACU
+} from '../worldbook/pipeline';
+import {
+  safeJsonParse_ACU,
+  safeJsonStringify_ACU
+} from '../../shared/json-helpers';
+import {
+  ensureSheetOrderNumbers_ACU,
+  logDebug_ACU,
+  logWarn_ACU,
+  parseTableTemplateJson_ACU
+} from '../../shared/utils';
+import {
+  buildDefaultExportConfig_ACU,
+  ensureExportConfigDefaults_ACU
+} from '../worldbook/injection-engine';
 import {
     detectDisplayNameTranslationHazards_ACU,
     TemplateImportValidationError_ACU,
     type TemplateImportDiagnostic_ACU,
     validateImportedTemplateObject_ACU,
 } from './template-import-validator';
-import { allocateStableSheetKeys_ACU } from '../../shared/sheet-identity';
-import { reconcileChatTemplate_ACU } from './chat-template-reconciler';
-import { commitCurrentFloorTemplateChanges_ACU, commitCurrentFloorTemplateScopeOnly_ACU } from '../table/storage-frame-v2-persist';
-import { deriveSheetLifecycleFromFramesV2_ACU, hasStructuralReplayCompatibilityRepairs_ACU, loadTableStateFromFramesV2Detailed_ACU, V2ReplayAbortedError_ACU } from '../table/storage-frame-v2-replay';
-import type { TableSheetLifecycleProjectionV2_ACU } from '../table/storage-frame-v2-types';
-import { resolveTableStorageStrategy_ACU } from '../table/storage-strategy-resolver';
-import { resolveTemplateSwitchMode_ACU } from '../table/template-switch-mode-resolver';
-import { captureTableRuntimeRevisionForWriteSet_ACU } from '../table/table-write-transaction';
-import { getCurrentStorageMode, isSqliteMode } from '../table/storage-mode';
-import { didSqliteFallbackAfterReload_ACU, reloadStorageProvider } from '../table/table-storage-strategy';
-import { normalizeTemplateRowIds_ACU } from './template-row-id-normalizer';
-import { abortableDelay } from '../../shared/abortable-delay';
-import { notifyTemplateRuntimeCommitted_ACU } from '../../shared/template-runtime-change';
+import {
+  allocateStableSheetKeys_ACU
+} from '../../shared/sheet-identity';
+import {
+  reconcileChatTemplate_ACU
+} from './chat-template-reconciler';
+import {
+  commitCurrentFloorTemplateChanges_ACU,
+  commitCurrentFloorTemplateScopeOnly_ACU
+} from '../table/storage-frame-v2-persist';
+import {
+  deriveSheetLifecycleFromFramesV2_ACU,
+  hasStructuralReplayCompatibilityRepairs_ACU,
+  loadTableStateFromFramesV2Detailed_ACU,
+  V2ReplayAbortedError_ACU
+} from '../table/storage-frame-v2-replay';
+import type {
+  TableSheetLifecycleProjectionV2_ACU
+} from '../table/storage-frame-v2-types';
+import {
+  resolveTableStorageStrategy_ACU
+} from '../table/storage-strategy-resolver';
+import {
+  resolveTemplateSwitchMode_ACU
+} from '../table/template-switch-mode-resolver';
+import {
+  captureTableRuntimeRevisionForWriteSet_ACU
+} from '../table/table-write-transaction';
+import {
+  getCurrentStorageMode,
+  isSqliteMode
+} from '../table/storage-mode';
+import {
+  didSqliteFallbackAfterReload_ACU,
+  reloadStorageProvider
+} from '../table/table-storage-strategy';
+import {
+  normalizeTemplateRowIds_ACU
+} from './template-row-id-normalizer';
+import {
+  abortableDelay
+} from '../../shared/abortable-delay';
+import {
+  notifyTemplateRuntimeCommitted_ACU
+} from '../../shared/template-runtime-change';
 import {
   normalizeTemplateConflictPolicy_ACU,
   resolveDefaultTemplateDataMode_ACU,
@@ -46,7 +135,9 @@ import {
   type TemplateImportDataOptions_ACU,
   type TemplateMergeConflictPolicy_ACU,
 } from '../../shared/template-data-mode';
-import { preflightTemplateDataImport_ACU } from './template-data-preflight';
+import {
+  preflightTemplateDataImport_ACU
+} from './template-data-preflight';
 
 // ═══ 预设存储 CRUD（内部辅助） ═══
 

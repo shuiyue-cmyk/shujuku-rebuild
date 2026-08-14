@@ -2,27 +2,49 @@
  * service/template/chat-scope/chat-scope-sheet.ts
  * Sheet 排序和清洗（E 组）
  */
-import { DEFAULT_TABLE_TEMPLATE_ACU, TABLE_TEMPLATE_ACU, _set_TABLE_TEMPLATE_ACU} from '../../../shared/defaults-json.js';
-import { readProfileTemplateFromStorage_ACU, saveCurrentProfileTemplate_ACU } from '../../../data/repositories/profile-repo';
-import { DEFAULT_TEMPLATE_PRESET_OPTION_VALUE_ACU, deriveTemplatePresetNameForImport_ACU, getCurrentTemplatePresetName_ACU, normalizeTemplatePresetSelectionValue_ACU } from '../../../shared/template-preset-utils';
-import { CHAT_SCOPED_CONFIG_FIELD_ACU, CHAT_SHEET_GUIDE_FIELD_ACU, CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU, CHAT_SHEET_GUIDE_VERSION_ACU, CHAT_TEMPLATE_ARCHIVE_OPTION_PREFIX_ACU, LEGACY_CHAT_TABLE_HEADER_GUIDE_FIELD_ACU, MAX_CHAT_TEMPLATE_ARCHIVES_PER_TAG_ACU, getChatScopedConfigContainer_ACU, getChatSheetGuideContainer_ACU, normalizeChatScopedConfigContainer_ACU } from '../../../data/storage/chat-history';
-import { getDefaultTemplateSnapshot_ACU, getTemplatePreset_ACU } from '../template-preset-service';
-import { currentJsonTableData_ACU, getCurrentIsolationKey_ACU, settings_ACU } from '../../runtime/state-manager';
-import { getChatArray_ACU, saveChatToHost_ACU } from '../../../data/gateways/chat-gateway';
-import { TABLE_ORDER_FIELD_ACU } from '../../../shared/constants';
-import { applyTemplateScopeForCurrentChat_ACU } from '../../settings/settings-service';
-import { refreshMergedDataAndNotify_ACU } from '../../worldbook/pipeline';
-import { safeJsonParse_ACU, safeJsonStringify_ACU } from '../../../shared/json-helpers';
-import { applySheetOrderNumbers_ACU, cloneScopedConfigData_ACU, ensureSheetOrderNumbers_ACU, getChatFirstLayerMessage_ACU, hashUserInput_ACU, isSummaryOrOutlineTable_ACU, logDebug_ACU, logWarn_ACU, parseTableTemplateJson_ACU } from '../../../shared/utils';
+import {
+  TABLE_TEMPLATE_ACU,
+  _set_TABLE_TEMPLATE_ACU
+} from '../../../shared/defaults-json.js';
+import {
+  saveCurrentProfileTemplate_ACU
+} from '../../../data/repositories/profile-repo';
+import {
+  getCurrentIsolationKey_ACU,
+  settings_ACU
+} from '../../runtime/state-manager';
+import {
+  TABLE_ORDER_FIELD_ACU
+} from '../../../shared/constants';
 
-import { getTemplatePresetDisplayName_ACU, persistTemplateScopeSelectionState_ACU, upsertTemplatePreset_ACU } from '../template-preset-service';
-import { formatPlotScopeUpdatedAt_ACU } from '../../../shared/utils';
-import { ensureExportConfigDefaults_ACU, ensureGlobalInjectionConfigDefaults_ACU } from '../../worldbook/injection-engine';
-import { readIsolatedTagData_ACU, readLegacyIndependentData_ACU, readLegacyStandardData_ACU, readLegacySummaryData_ACU, isLegacyMatchForIsolation_ACU } from '../../../data/repositories/chat-message-data-repo';
-import { normalizeGuideData_ACU } from './chat-scope-base';
-import { normalizeSheetGuideRowIds_ACU } from './sheet-guide-row-id-normalizer';
-import { getCurrentChatTemplateScopeState_ACU, buildChatTemplateScopeStateFromCurrent_ACU, setCurrentChatTemplateScopeState_ACU } from './chat-scope-template';
-import { migrateLegacyTemplateScopeForCurrentChat_ACU, getChatSheetGuideDataForIsolationKey_ACU, buildChatSheetGuideDataFromTemplateObj_ACU } from './chat-scope-guide';
+
+import {
+  ensureSheetOrderNumbers_ACU,
+  logDebug_ACU,
+  logWarn_ACU,
+  parseTableTemplateJson_ACU
+} from '../../../shared/utils';
+
+
+import {
+  ensureExportConfigDefaults_ACU
+} from '../../worldbook/injection-engine';
+import {
+  normalizeGuideData_ACU
+} from './chat-scope-base';
+import {
+  normalizeSheetGuideRowIds_ACU
+} from './sheet-guide-row-id-normalizer';
+import {
+  getCurrentChatTemplateScopeState_ACU,
+  buildChatTemplateScopeStateFromCurrent_ACU,
+  setCurrentChatTemplateScopeState_ACU
+} from './chat-scope-template';
+import {
+  migrateLegacyTemplateScopeForCurrentChat_ACU,
+  getChatSheetGuideDataForIsolationKey_ACU,
+  buildChatSheetGuideDataFromTemplateObj_ACU
+} from './chat-scope-guide';
 
   export function getSortedSheetKeys_ACU(dataObj: any, { ignoreChatGuide = false, includeMissingFromGuide = false } = {}) {
       if (!dataObj || typeof dataObj !== 'object') return [];

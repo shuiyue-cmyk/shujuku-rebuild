@@ -19,16 +19,35 @@ import type {
   ApplyEditsResult,
   SqlQueryExecutionOptions_ACU,
 } from '../../shared/table-storage-provider';
-import type { TableDataObject_ACU, Mate_ACU } from '../../shared/models/table-data';
-import type { TableMutationOperationV2_ACU, TableSqlBindValueV2_ACU } from './storage-frame-v2-types';
-import { SqliteEngine } from '../../data/sqlite/sqlite-engine';
-import { SyncBridge } from '../../data/sqlite/sync-bridge';
+import type {
+  TableDataObject_ACU,
+  Mate_ACU
+} from '../../shared/models/table-data';
+import type {
+  TableMutationOperationV2_ACU,
+  TableSqlBindValueV2_ACU
+} from './storage-frame-v2-types';
+import {
+  SqliteEngine
+} from '../../data/sqlite/sqlite-engine';
+import {
+  SyncBridge
+} from '../../data/sqlite/sync-bridge';
 import {
   currentJsonTableData_ACU,
   _set_currentJsonTableData_ACU,
 } from '../runtime/state-manager';
-import { mergeAllIndependentTables_ACU } from '../runtime/helpers-data-merge';
-import { hashUserInput_ACU, logDebug_ACU, logError_ACU, logWarn_ACU, parseTableTemplateJson_ACU, stripSeedRowsFromTemplate_ACU } from '../../shared/utils';
+import {
+  mergeAllIndependentTables_ACU
+} from '../runtime/helpers-data-merge';
+import {
+  hashUserInput_ACU,
+  logDebug_ACU,
+  logError_ACU,
+  logWarn_ACU,
+  parseTableTemplateJson_ACU,
+  stripSeedRowsFromTemplate_ACU
+} from '../../shared/utils';
 import {
   createNameMapperOwnerToken_ACU,
   publishGlobalNameMapperEmptySchema_ACU,
@@ -36,18 +55,55 @@ import {
   releaseGlobalNameMapperForOwner_ACU,
   type NameMapperOwnerToken_ACU,
 } from '../runtime/template-vars/name-mapper';
-import { parseDDLTableName, generateDDL, generateInserts, resolveEffectiveDDL } from '../../data/sqlite/schema-mapper';
-import { normalizeSqlStructure, normalizeStatementValues } from '../../data/sqlite/sql-normalizer';
-import { ensureStableRowIdsForSheetContent_ACU, getEffectiveSeedRowsForSheet_ACU, getCurrentChatTemplateScopeState_ACU, sanitizeTemplateSnapshotForChat_ACU, shouldUseInitialSeedRows_ACU } from '../template/chat-scope';
-import { isSqlActiveTemplateSheet_ACU, projectSqlActiveTemplateData_ACU } from '../../shared/sql-active-template';
-import { getTemplatePreset_ACU } from '../template/template-preset-service';
-import { safeJsonParse_ACU } from '../../shared/json-helpers';
-import { assertNoPhysicalTableNameCollision_ACU, getPhysicalTableNameForSheet_ACU, PhysicalTableNameCollisionError_ACU, resolvePhysicalTableNames_ACU } from '../../shared/sheet-identity';
-import { getRuntimeEffectiveSchema_ACU, getSheetColumnProjection_ACU } from '../../shared/ddl-utils';
-import { rebindSqlMutationTableReferences_ACU, rebindSqlMutationColumnsByTarget_ACU, decodeSqlIdentifier_ACU } from '../../shared/sql-mutation-table-rebind';
-import { buildSheetTableAliasMap_ACU, buildSheetColumnAliasMap_ACU } from '../../shared/sql-read-resolver';
-import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../../shared/stable-row-id-allocator';
-import { extractBusinessKeyColumns_ACU } from '../template/template-data-preflight';
+import {
+  resolveEffectiveDDL
+} from '../../data/sqlite/schema-mapper';
+import {
+  normalizeSqlStructure,
+  normalizeStatementValues
+} from '../../data/sqlite/sql-normalizer';
+import {
+  ensureStableRowIdsForSheetContent_ACU,
+  getEffectiveSeedRowsForSheet_ACU,
+  getCurrentChatTemplateScopeState_ACU,
+  shouldUseInitialSeedRows_ACU
+} from '../template/chat-scope';
+import {
+  isSqlActiveTemplateSheet_ACU,
+  projectSqlActiveTemplateData_ACU
+} from '../../shared/sql-active-template';
+import {
+  getTemplatePreset_ACU
+} from '../template/template-preset-service';
+import {
+  safeJsonParse_ACU
+} from '../../shared/json-helpers';
+import {
+  assertNoPhysicalTableNameCollision_ACU,
+  getPhysicalTableNameForSheet_ACU,
+  PhysicalTableNameCollisionError_ACU,
+  resolvePhysicalTableNames_ACU
+} from '../../shared/sheet-identity';
+import {
+  getRuntimeEffectiveSchema_ACU,
+  getSheetColumnProjection_ACU
+} from '../../shared/ddl-utils';
+import {
+  rebindSqlMutationTableReferences_ACU,
+  rebindSqlMutationColumnsByTarget_ACU,
+  decodeSqlIdentifier_ACU
+} from '../../shared/sql-mutation-table-rebind';
+import {
+  buildSheetTableAliasMap_ACU,
+  buildSheetColumnAliasMap_ACU
+} from '../../shared/sql-read-resolver';
+import {
+  allocateStableRowId_ACU,
+  createStableRowIdReservation_ACU
+} from '../../shared/stable-row-id-allocator';
+import {
+  extractBusinessKeyColumns_ACU
+} from '../template/template-data-preflight';
 
 export interface SnapshotSqlApplyResult_ACU extends ApplyEditsResult {
   workingData?: TableDataObject_ACU;

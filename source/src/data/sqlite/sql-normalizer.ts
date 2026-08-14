@@ -13,7 +13,9 @@
  * - 不对正文文本做无差别替换
  */
 
-import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
+import {
+  logDebug_ACU
+} from '../../shared/utils';
 
 // ═══════════════════════════════════════════════════════════════
 // 全角 → ASCII 映射表

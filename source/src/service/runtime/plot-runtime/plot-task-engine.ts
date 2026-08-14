@@ -3,31 +3,135 @@
  * 剧情推进 — Task 执行引擎（排序/分组/上下文构建/单任务执行/运行时调度）+ 世界书内容获取
  * 从 helpers-plot-runtime.ts 拆出（L532-L1023 + L1513-L1618）
  */
-import { DEFAULT_PLOT_SETTINGS_ACU } from '../../../shared/defaults-json.js';
-import { callApiWithPlotPreset_ACU, getApiConfigByPreset_ACU } from '../../ai/api-call';
-import { abortController_ACU, currentChatFileIdentifier_ACU, currentJsonTableData_ACU, planningGuard_ACU, settings_ACU, tempPlotToSave_ACU, _set_tempPlotToSave_ACU, _set_currentJsonTableData_ACU, _set_pendingFinalGenerationGreenlights_ACU } from '../state-manager';
-import { getCurrentCharacterWorldbookBinding_ACU } from '../../../data/gateways/character-gateway';
-import { getChatArray_ACU } from '../../../data/gateways/chat-gateway';
-import { getPersonaDescription_ACU, getCharDescription_ACU } from '../../../data/gateways/host-state-gateway';
-import { capturePlotRuntimeScope_ACU, isSamePlotRuntimeScope_ACU, isTransientLorebookNotFoundError_ACU, summarizePlotRuntimeError_ACU, summarizePlotRuntimeScope_ACU } from './plot-runtime-scope';
-import { buildCombinedWorldbookContentByStrategy_ACU, collectCombinedWorldbookEntriesByStrategy_ACU, createStrictLorebookReadError_ACU, formatCombinedWorldbookEntries_ACU, getLorebookEntriesStrict_ACU, isStrictLorebookReadError_ACU, summarizeStrictLorebookReadError_ACU, type StrictLorebookReadContext_ACU } from '../../worldbook/pipeline';
-import { createPlotWorldbookReadContext_ACU, type PlotWorldbookReadContext_ACU } from './plot-worldbook-read-context';
-import { isDatabaseGeneratedLorebookEntry_ACU, resolveGeneratedEntriesForTable_ACU } from '../../worldbook/worldbook-placeholder-classification';
-import { PlotStageError_ACU } from './plot-runtime-phase';
-import { escapeRegExp_ACU, hashUserInput_ACU, isEntryBlocked_ACU, logDebug_ACU, logError_ACU, logWarn_ACU, normalizeNonNegativeInteger_ACU, normalizePositiveInteger_ACU, normalizeExcludeRules_ACU, normalizeExtractRules_ACU } from '../../../shared/utils';
-import { ensurePlotTasksCompat_ACU, getPlotPromptContentByIdFromSettings_ACU, normalizePlotTask_ACU, normalizePlotTasks_ACU } from '../../plot/plot-logic';
-import { parseRandomTags_ACU, replaceRandomVariables_ACU, getLatestAIMessageContent_ACU, replaceDbSqlVariables } from '../template-vars';
-import { applyContextTagFilters_ACU, applyExcludeRulesToText_ACU } from '../helpers-context-tags';
-import { mergeAllIndependentTables_ACU } from '../helpers-data-merge';
-import { formatTableDataForLLM_ACU, formatOutlineTableForPlot_ACU, formatSummaryIndexForPlot_ACU, getSummaryIndexContentForPlot_ACU } from './plot-data-format';
-import { getNormalizedPlotMessageRole_ACU, tryRenderPlotTemplateWithEjs_ACU, renderPlotTaskContentWithIsolatedVariables_ACU, extractPlotTagsFromResponse_ACU, getPlotPlaceholderTagNames_ACU, buildPlotTagMapFromText_ACU, replacePlotTagPlaceholders_ACU, buildTaskWorldbookTriggerText_ACU, sortPlotTaskResults_ACU, aggregatePlotTaskTags_ACU, buildPlotSaveContentFromTaskResults_ACU, buildFinalPlotInjectionMessage_ACU } from './plot-tag-utils';
-import { flushPlotPendingSave_ACU, getPlotFromHistory_ACU, savePlotToLatestMessage_ACU } from './plot-history-preset';
-import { abortableDelay } from '../../../shared/abortable-delay';
-import { runAgentDecisionForPlot_ACU, type AgentDecisionResult_ACU, type AgentWorldbookRef_ACU } from '../../agent/agent-decision-engine';
-import { normalizeAgentContextSettings_ACU } from '../../agent/agent-prompt-template';
-import { getWorldbookEntryKeywordsForSkillify_ACU, isDatabaseGeneratedWorldbookEntryForAgent_ACU } from '../../agent/agent-skillify-service';
-import { clearFinalGenerationGreenlights_ACU, resolvePreTakeoverWorldbookSnapshot_ACU, writeFinalGenerationGreenlights_ACU } from '../../agent/agent-worldbook-takeover';
-import { hasUsableWorldbookSkillMeta_ACU, resolveAgentWorldbookFilterAvailability_ACU } from '../../agent/agent-worldbook-skill-meta';
+import {
+  DEFAULT_PLOT_SETTINGS_ACU
+} from '../../../shared/defaults-json.js';
+import {
+  callApiWithPlotPreset_ACU
+} from '../../ai/api-call';
+import {
+  abortController_ACU,
+  currentChatFileIdentifier_ACU,
+  currentJsonTableData_ACU,
+  settings_ACU,
+  tempPlotToSave_ACU,
+  _set_tempPlotToSave_ACU,
+  _set_currentJsonTableData_ACU,
+  _set_pendingFinalGenerationGreenlights_ACU
+} from '../state-manager';
+import {
+  getCurrentCharacterWorldbookBinding_ACU
+} from '../../../data/gateways/character-gateway';
+import {
+  getChatArray_ACU
+} from '../../../data/gateways/chat-gateway';
+import {
+  getPersonaDescription_ACU,
+  getCharDescription_ACU
+} from '../../../data/gateways/host-state-gateway';
+import {
+  capturePlotRuntimeScope_ACU,
+  isSamePlotRuntimeScope_ACU,
+  isTransientLorebookNotFoundError_ACU,
+  summarizePlotRuntimeError_ACU,
+  summarizePlotRuntimeScope_ACU
+} from './plot-runtime-scope';
+import {
+  buildCombinedWorldbookContentByStrategy_ACU,
+  collectCombinedWorldbookEntriesByStrategy_ACU,
+  createStrictLorebookReadError_ACU,
+  formatCombinedWorldbookEntries_ACU,
+  getLorebookEntriesStrict_ACU,
+  isStrictLorebookReadError_ACU,
+  summarizeStrictLorebookReadError_ACU
+} from '../../worldbook/pipeline';
+import {
+  createPlotWorldbookReadContext_ACU,
+  type PlotWorldbookReadContext_ACU
+} from './plot-worldbook-read-context';
+import {
+  isDatabaseGeneratedLorebookEntry_ACU
+} from '../../worldbook/worldbook-placeholder-classification';
+import {
+  PlotStageError_ACU
+} from './plot-runtime-phase';
+import {
+  escapeRegExp_ACU,
+  hashUserInput_ACU,
+  isEntryBlocked_ACU,
+  logDebug_ACU,
+  logError_ACU,
+  logWarn_ACU,
+  normalizeNonNegativeInteger_ACU,
+  normalizePositiveInteger_ACU,
+  normalizeExcludeRules_ACU,
+  normalizeExtractRules_ACU
+} from '../../../shared/utils';
+import {
+  ensurePlotTasksCompat_ACU,
+  getPlotPromptContentByIdFromSettings_ACU,
+  normalizePlotTask_ACU,
+  normalizePlotTasks_ACU
+} from '../../plot/plot-logic';
+import {
+  parseRandomTags_ACU,
+  replaceRandomVariables_ACU,
+  getLatestAIMessageContent_ACU,
+  replaceDbSqlVariables
+} from '../template-vars';
+import {
+  applyContextTagFilters_ACU,
+  applyExcludeRulesToText_ACU
+} from '../helpers-context-tags';
+import {
+  mergeAllIndependentTables_ACU
+} from '../helpers-data-merge';
+import {
+  formatOutlineTableForPlot_ACU,
+  formatSummaryIndexForPlot_ACU,
+  getSummaryIndexContentForPlot_ACU
+} from './plot-data-format';
+import {
+  getNormalizedPlotMessageRole_ACU,
+  tryRenderPlotTemplateWithEjs_ACU,
+  renderPlotTaskContentWithIsolatedVariables_ACU,
+  extractPlotTagsFromResponse_ACU,
+  buildPlotTagMapFromText_ACU,
+  replacePlotTagPlaceholders_ACU,
+  buildTaskWorldbookTriggerText_ACU,
+  aggregatePlotTaskTags_ACU,
+  buildPlotSaveContentFromTaskResults_ACU,
+  buildFinalPlotInjectionMessage_ACU
+} from './plot-tag-utils';
+import {
+  flushPlotPendingSave_ACU,
+  getPlotFromHistory_ACU,
+  savePlotToLatestMessage_ACU
+} from './plot-history-preset';
+import {
+  abortableDelay
+} from '../../../shared/abortable-delay';
+import {
+  runAgentDecisionForPlot_ACU,
+  type AgentDecisionResult_ACU,
+  type AgentWorldbookRef_ACU
+} from '../../agent/agent-decision-engine';
+import {
+  normalizeAgentContextSettings_ACU
+} from '../../agent/agent-prompt-template';
+import {
+  getWorldbookEntryKeywordsForSkillify_ACU,
+  isDatabaseGeneratedWorldbookEntryForAgent_ACU
+} from '../../agent/agent-skillify-service';
+import {
+  clearFinalGenerationGreenlights_ACU,
+  resolvePreTakeoverWorldbookSnapshot_ACU,
+  writeFinalGenerationGreenlights_ACU
+} from '../../agent/agent-worldbook-takeover';
+import {
+  hasUsableWorldbookSkillMeta_ACU,
+  resolveAgentWorldbookFilterAvailability_ACU
+} from '../../agent/agent-worldbook-skill-meta';
 
   type PlotWorldbookAgentMode_ACU = 'normal' | 'agent-controlled';
 

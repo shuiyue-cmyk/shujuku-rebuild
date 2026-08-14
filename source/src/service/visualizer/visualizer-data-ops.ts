@@ -1,16 +1,50 @@
-import { getChatArray_ACU } from '../chat/chat-service';
-import { currentChatFileIdentifier_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU, _set_currentJsonTableData_ACU } from '../runtime/state-manager';
-import { getLatestV2FullCheckpointMessageIndex_ACU, getLatestV2SheetReplayMessageIndex_ACU } from '../table/table-history';
-import { ensureLegacyStorageMigratedBeforeWrite_ACU } from '../table/table-service';
-import { persistTableMutationLogBatchV2_ACU } from '../table/storage-frame-v2-persist';
-import { hasStructuralReplayCompatibilityRepairs_ACU, loadTableStateFromFramesV2Detailed_ACU } from '../table/storage-frame-v2-replay';
-import { reloadStorageProvider, getRuntimeLifecycleEpoch_ACU, hydrateStorageProviderFromSnapshot_ACU } from '../table/table-storage-strategy';
-import { createCanonicalSnapshotEnvelope_ACU } from '../table/canonical-snapshot-envelope';
-import { runTableWriteTransaction_ACU } from '../table/table-write-transaction';
-import { isSqliteMode } from '../table/storage-mode';
-import type { TableMutationOperationV2_ACU, TableWriteConflictUnitV2_ACU } from '../table/storage-frame-v2-types';
-import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../../shared/stable-row-id-allocator';
-import { logDebug_ACU } from '../../shared/utils';
+import {
+  getChatArray_ACU
+} from '../chat/chat-service';
+import {
+  currentChatFileIdentifier_ACU,
+  getCurrentIsolationKey_ACU,
+  _set_currentJsonTableData_ACU
+} from '../runtime/state-manager';
+import {
+  getLatestV2FullCheckpointMessageIndex_ACU,
+  getLatestV2SheetReplayMessageIndex_ACU
+} from '../table/table-history';
+import {
+  ensureLegacyStorageMigratedBeforeWrite_ACU
+} from '../table/table-service';
+import {
+  persistTableMutationLogBatchV2_ACU
+} from '../table/storage-frame-v2-persist';
+import {
+  hasStructuralReplayCompatibilityRepairs_ACU,
+  loadTableStateFromFramesV2Detailed_ACU
+} from '../table/storage-frame-v2-replay';
+import {
+  reloadStorageProvider,
+  getRuntimeLifecycleEpoch_ACU,
+  hydrateStorageProviderFromSnapshot_ACU
+} from '../table/table-storage-strategy';
+import {
+  createCanonicalSnapshotEnvelope_ACU
+} from '../table/canonical-snapshot-envelope';
+import {
+  runTableWriteTransaction_ACU
+} from '../table/table-write-transaction';
+import {
+  isSqliteMode
+} from '../table/storage-mode';
+import type {
+  TableMutationOperationV2_ACU,
+  TableWriteConflictUnitV2_ACU
+} from '../table/storage-frame-v2-types';
+import {
+  allocateStableRowId_ACU,
+  createStableRowIdReservation_ACU
+} from '../../shared/stable-row-id-allocator';
+import {
+  logDebug_ACU
+} from '../../shared/utils';
 
 const TEMP_ROW_ID_PREFIX_ACU = '__acu_vis_tmp_row_';
 

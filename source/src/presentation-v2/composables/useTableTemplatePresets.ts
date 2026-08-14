@@ -1,4 +1,9 @@
-import { computed, getCurrentScope, onScopeDispose, ref } from 'vue';
+import {
+  computed,
+  getCurrentScope,
+  onScopeDispose,
+  ref
+} from 'vue';
 import {
   applyTemplateSnapshotToScope_ACU,
   applyTemplatePresetToCurrent_ACU,
@@ -21,14 +26,30 @@ import {
   listChatTemplateArchiveEntries_ACU,
   sanitizeChatSheetsObject_ACU,
 } from '../../service/template/chat-scope';
-import { deleteLocalDataInChatCore_ACU } from '../../service/chat/chat-service';
-import { settings_ACU } from '../../service/runtime/state-manager';
-import { safeJsonParse_ACU } from '../../shared/json-helpers';
-import { getCurrentTemplatePresetName_ACU, normalizeTemplatePresetSelectionValue_ACU, sanitizeFilenameComponent_ACU } from '../../shared/template-preset-utils';
-import { deriveTemplatePresetNameForImport_ACU } from '../../shared/template-preset-utils';
-import { useDialogStore } from '../stores/dialog-store';
-import { useToastStore } from '../stores/toast-store';
-import { ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU } from './useTemplateRecoveryGuard';
+
+import {
+  settings_ACU
+} from '../../service/runtime/state-manager';
+import {
+  safeJsonParse_ACU
+} from '../../shared/json-helpers';
+import {
+  getCurrentTemplatePresetName_ACU,
+  normalizeTemplatePresetSelectionValue_ACU,
+  sanitizeFilenameComponent_ACU
+} from '../../shared/template-preset-utils';
+import {
+  deriveTemplatePresetNameForImport_ACU
+} from '../../shared/template-preset-utils';
+import {
+  useDialogStore
+} from '../stores/dialog-store';
+import {
+  useToastStore
+} from '../stores/toast-store';
+import {
+  ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU
+} from './useTemplateRecoveryGuard';
 
 export type TemplateScope = 'global' | 'chat' | 'runtime';
 

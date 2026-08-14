@@ -1,14 +1,54 @@
-import { DEFAULT_CONTENT_OPTIMIZATION_PROMPT_GROUP_ACU } from '../../shared/defaults-json.js';
-import { currentJsonTableData_ACU, settings_ACU } from '../runtime/state-manager';
-import { getChatArray_ACU } from '../../data/gateways/chat-gateway';
-import { getPersonaDescription_ACU, getCharDescription_ACU } from '../../data/gateways/host-state-gateway';
-import { callAIWithPreset_ACU } from '../ai/api-call';
-import { applyOptimizations_ACU } from '../../shared/text-optimization';
-import { logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
-import { saveOptimizationBaseToCache_ACU, loadOptimizationBaseFromCache_ACU } from '../../data/storage/optimization-cache-storage';
-import { formatOutlineTableForPlot_ACU, formatSummaryIndexForPlot_ACU, getLatestAIMessageContent_ACU, getPlotFromHistory_ACU, getWorldbookContentForPlot_ACU, parseCalcTags_ACU, parseIfBlockRecursive_ACU, parseMaxTags_ACU, parseMinTags_ACU, parseRandomTags_ACU, replaceCalcVariables_ACU, replaceMaxVariables_ACU, replaceMinVariables_ACU, replaceRandomVariables_ACU } from '../runtime/helpers-remaining';
-import { getSummaryIndexContentForPlot_ACU } from '../runtime/plot-runtime/plot-data-format';
-import { replaceDbSqlVariables } from '../runtime/template-vars/sql-query-var';
+import {
+  DEFAULT_CONTENT_OPTIMIZATION_PROMPT_GROUP_ACU
+} from '../../shared/defaults-json.js';
+import {
+  currentJsonTableData_ACU,
+  settings_ACU
+} from '../runtime/state-manager';
+import {
+  getChatArray_ACU
+} from '../../data/gateways/chat-gateway';
+import {
+  getPersonaDescription_ACU,
+  getCharDescription_ACU
+} from '../../data/gateways/host-state-gateway';
+import {
+  callAIWithPreset_ACU
+} from '../ai/api-call';
+import {
+  applyOptimizations_ACU
+} from '../../shared/text-optimization';
+import {
+  logDebug_ACU,
+  logError_ACU,
+  logWarn_ACU
+} from '../../shared/utils';
+import {
+  saveOptimizationBaseToCache_ACU,
+  loadOptimizationBaseFromCache_ACU
+} from '../../data/storage/optimization-cache-storage';
+import {
+  formatOutlineTableForPlot_ACU,
+  formatSummaryIndexForPlot_ACU,
+  getLatestAIMessageContent_ACU,
+  getPlotFromHistory_ACU,
+  getWorldbookContentForPlot_ACU,
+  parseCalcTags_ACU,
+  parseIfBlockRecursive_ACU,
+  parseMaxTags_ACU,
+  parseMinTags_ACU,
+  parseRandomTags_ACU,
+  replaceCalcVariables_ACU,
+  replaceMaxVariables_ACU,
+  replaceMinVariables_ACU,
+  replaceRandomVariables_ACU
+} from '../runtime/helpers-remaining';
+import {
+  getSummaryIndexContentForPlot_ACU
+} from '../runtime/plot-runtime/plot-data-format';
+import {
+  replaceDbSqlVariables
+} from '../runtime/template-vars/sql-query-var';
 /**
  * service/optimization/content-optimization.ts — 正文优化服务逻辑
  * 从 src/core/02_storage_and_profile.js:630~1325 迁移而来。

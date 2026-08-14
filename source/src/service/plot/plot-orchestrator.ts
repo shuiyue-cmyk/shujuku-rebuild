@@ -6,8 +6,14 @@
  * 不负责：写回消息、清空输入框、停止生成等 UI 操作。
  */
 
-import { _set_isProcessing_Plot_ACU } from '../runtime/state-manager';
-import { logDebug_ACU, logError_ACU, hashUserInput_ACU } from '../../shared/utils';
+import {
+  _set_isProcessing_Plot_ACU
+} from '../runtime/state-manager';
+import {
+  logDebug_ACU,
+  logError_ACU,
+  hashUserInput_ACU
+} from '../../shared/utils';
 
 // ============================================================
 // 类型定义

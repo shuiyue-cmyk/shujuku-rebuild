@@ -15,21 +15,47 @@
  *  - 零猜测恢复：runId/原根指纹/聊天标识/隔离键/frame 拓扑不匹配时 fail-closed；
  *  - 终态：complete/stopped/failed/sync_pending 只在 session finalize/rollback 后写入。
  */
-import { getChatArray_ACU, saveChatToHostStrict_ACU } from '../../data/gateways/chat-gateway';
-import { readIsolatedDataContainer_ACU, readIsolatedTagData_ACU, writeMessageIdentity_ACU } from '../../data/repositories/chat-message-data-repo';
-import { getActiveChatStorageIdentity_ACU } from '../../data/storage/chat-history';
-import { currentChatFileIdentifier_ACU, getCurrentIsolationKey_ACU, settings_ACU } from '../runtime/state-manager';
-import { logDebug_ACU, logWarn_ACU, logError_ACU } from '../../shared/utils';
-import { isV2TagData_ACU } from './storage-strategy-resolver';
-import { loadTableStateFromFramesV2Detailed_ACU, loadTableStatesAtBoundariesFromFramesV2Detailed_ACU } from './storage-frame-v2-replay';
-import { buildCanonicalFullCheckpoint_ACU, buildCanonicalSheetCheckpoint_ACU } from './canonical-checkpoint-builder';
-import { getTableDataFingerprint_ACU } from './table-data-upgrade-audit';
+import {
+  getChatArray_ACU,
+  saveChatToHostStrict_ACU
+} from '../../data/gateways/chat-gateway';
+import {
+  readIsolatedDataContainer_ACU,
+  readIsolatedTagData_ACU,
+  writeMessageIdentity_ACU
+} from '../../data/repositories/chat-message-data-repo';
+import {
+  getActiveChatStorageIdentity_ACU
+} from '../../data/storage/chat-history';
+import {
+  currentChatFileIdentifier_ACU,
+  getCurrentIsolationKey_ACU,
+  settings_ACU
+} from '../runtime/state-manager';
+import {
+  logDebug_ACU,
+  logWarn_ACU
+} from '../../shared/utils';
+import {
+  isV2TagData_ACU
+} from './storage-strategy-resolver';
+import {
+  loadTableStateFromFramesV2Detailed_ACU,
+  loadTableStatesAtBoundariesFromFramesV2Detailed_ACU
+} from './storage-frame-v2-replay';
+import {
+  buildCanonicalFullCheckpoint_ACU,
+  buildCanonicalSheetCheckpoint_ACU
+} from './canonical-checkpoint-builder';
+
 import type {
   ManualCatchUpProvisionalBridgeV1_ACU,
   TableStorageFrameV2_ACU,
   TableV2RecoveryBackup_ACU,
 } from './storage-frame-v2-types';
-import { runTableWriteTransaction_ACU } from './table-write-transaction';
+import {
+  runTableWriteTransaction_ACU
+} from './table-write-transaction';
 
 /** bridge 元数据所在 isolation tag 上的非 replay 字段名。 */
 export const MANUAL_CATCH_UP_BRIDGE_FIELD_ACU = 'manualCatchUpProvisionalBridge';

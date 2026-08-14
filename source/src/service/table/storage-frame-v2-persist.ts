@@ -1,26 +1,113 @@
-import { getChatArray_ACU, saveChatToHost_ACU, saveChatToHostStrict_ACU } from '../../data/gateways/chat-gateway';
-import { advanceProvisionalBridgeCommitProgress_ACU, authorizeManualCatchUpBucketWrite_ACU, readActiveProvisionalBridge_ACU } from './manual-catch-up-provisional-bridge';
-import { cloneIsolatedData_ACU, collectSqlTargetTableNamesFromStorageFrameV2_ACU, purgeManualRefillIncrementalSheetKeysFromStorageFrameV2_ACU, purgeSheetKeysFromMessage_ACU, readIsolatedDataContainer_ACU, readIsolatedTagData_ACU, writeMessageIdentity_ACU } from '../../data/repositories/chat-message-data-repo';
-import { getActiveChatStorageIdentity_ACU, peekChatScopedConfigContainer_ACU, peekChatSheetGuideContainer_ACU, setChatScopedConfigContainer_ACU, setChatSheetGuideContainer_ACU } from '../../data/storage/chat-history';
-import type { Sheet_ACU, TableDataObject_ACU } from '../../shared/models/table-data';
-import type { StorageMode } from '../../shared/table-storage-provider';
-import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
-import { startRuntimePerformanceSpan_ACU } from '../../shared/runtime-performance';
-import { getCurrentIsolationKey_ACU, settings_ACU } from '../runtime/state-manager';
-import { normalizeGuideData_ACU, setChatSheetGuideDataForIsolationKey_ACU } from '../template/chat-scope';
-import { ensureGlobalInjectionConfigDefaults_ACU } from '../worldbook/injection-engine';
-import type { ManualRefillProgressV2_ACU, TableMutationEventV2_ACU, TableMutationLogEntryV2_ACU, TableMutationSourceV2_ACU, TableStorageFrameV2_ACU, TableCheckpointV2_ACU, TableMutationWriteSetV2_ACU, TableMutationOperationV2_ACU, TableSheetCheckpointV2_ACU, TableV2RecoveryBackup_ACU } from './storage-frame-v2-types';
-import { hasLegacyTopLevelTableData_ACU, hasV2TableHistoryEvidence_ACU, isLegacyV1TagData_ACU, isV2TagData_ACU } from './storage-strategy-resolver';
-import { applyTableOperationV2_ACU, collectScheduleSummaryFromFramesV2_ACU, hasStructuralReplayCompatibilityRepairs_ACU, hasUnanchoredReplayArtifactsForChatV2_ACU, loadTableStateFromFramesV2Detailed_ACU, resolveHeaderOnlyTemplateSnapshot_ACU, type TableReplayCompatibilityRepairV2_ACU } from './storage-frame-v2-replay';
-import { runTableWriteTransaction_ACU, type TableWriteTransactionContext_ACU } from './table-write-transaction';
-import { formatCanonicalRowIssues_ACU, normalizeCanonicalTableRows_ACU } from '../../shared/canonical-row-normalizer';
-import { createSheetInsertPlan, generateDDL, validateDDLTextAgainstHeaders_ACU } from '../../data/sqlite/schema-mapper';
-import { hydrateTableDataStrict_ACU } from './sqlite-template-validation';
-import { buildCanonicalFullCheckpoint_ACU, buildCanonicalSheetCheckpoint_ACU } from './canonical-checkpoint-builder';
-import { getTableDataFingerprint_ACU } from './table-data-upgrade-audit';
-import { parseDDLColumnInfos_ACU } from '../../shared/ddl-utils';
-import { validateCanonicalCheckpoint_ACU } from '../../shared/canonical-checkpoint-validator';
-import { findLatestSpv79TransitionCheckpoint_ACU } from './spv79-transition-checkpoint';
+import {
+  getChatArray_ACU,
+  saveChatToHost_ACU,
+  saveChatToHostStrict_ACU
+} from '../../data/gateways/chat-gateway';
+import {
+  advanceProvisionalBridgeCommitProgress_ACU,
+  authorizeManualCatchUpBucketWrite_ACU,
+  readActiveProvisionalBridge_ACU
+} from './manual-catch-up-provisional-bridge';
+import {
+  cloneIsolatedData_ACU,
+  collectSqlTargetTableNamesFromStorageFrameV2_ACU,
+  purgeManualRefillIncrementalSheetKeysFromStorageFrameV2_ACU,
+  purgeSheetKeysFromMessage_ACU,
+  readIsolatedDataContainer_ACU,
+  readIsolatedTagData_ACU,
+  writeMessageIdentity_ACU
+} from '../../data/repositories/chat-message-data-repo';
+import {
+  getActiveChatStorageIdentity_ACU,
+  peekChatScopedConfigContainer_ACU,
+  peekChatSheetGuideContainer_ACU,
+  setChatScopedConfigContainer_ACU,
+  setChatSheetGuideContainer_ACU
+} from '../../data/storage/chat-history';
+import type {
+  Sheet_ACU,
+  TableDataObject_ACU
+} from '../../shared/models/table-data';
+import type {
+  StorageMode
+} from '../../shared/table-storage-provider';
+import {
+  logDebug_ACU,
+  logWarn_ACU
+} from '../../shared/utils';
+import {
+  startRuntimePerformanceSpan_ACU
+} from '../../shared/runtime-performance';
+import {
+  getCurrentIsolationKey_ACU,
+  settings_ACU
+} from '../runtime/state-manager';
+import {
+  normalizeGuideData_ACU,
+  setChatSheetGuideDataForIsolationKey_ACU
+} from '../template/chat-scope';
+import {
+  ensureGlobalInjectionConfigDefaults_ACU
+} from '../worldbook/injection-engine';
+import type {
+  ManualRefillProgressV2_ACU,
+  TableMutationEventV2_ACU,
+  TableMutationLogEntryV2_ACU,
+  TableMutationSourceV2_ACU,
+  TableStorageFrameV2_ACU,
+  TableCheckpointV2_ACU,
+  TableMutationWriteSetV2_ACU,
+  TableMutationOperationV2_ACU,
+  TableSheetCheckpointV2_ACU,
+  TableV2RecoveryBackup_ACU
+} from './storage-frame-v2-types';
+import {
+  hasLegacyTopLevelTableData_ACU,
+  hasV2TableHistoryEvidence_ACU,
+  isLegacyV1TagData_ACU,
+  isV2TagData_ACU
+} from './storage-strategy-resolver';
+import {
+  applyTableOperationV2_ACU,
+  collectScheduleSummaryFromFramesV2_ACU,
+  hasStructuralReplayCompatibilityRepairs_ACU,
+  hasUnanchoredReplayArtifactsForChatV2_ACU,
+  loadTableStateFromFramesV2Detailed_ACU,
+  resolveHeaderOnlyTemplateSnapshot_ACU,
+  type TableReplayCompatibilityRepairV2_ACU
+} from './storage-frame-v2-replay';
+import {
+  runTableWriteTransaction_ACU,
+  type TableWriteTransactionContext_ACU
+} from './table-write-transaction';
+import {
+  formatCanonicalRowIssues_ACU,
+  normalizeCanonicalTableRows_ACU
+} from '../../shared/canonical-row-normalizer';
+import {
+  createSheetInsertPlan,
+  generateDDL,
+  validateDDLTextAgainstHeaders_ACU
+} from '../../data/sqlite/schema-mapper';
+import {
+  hydrateTableDataStrict_ACU
+} from './sqlite-template-validation';
+import {
+  buildCanonicalFullCheckpoint_ACU,
+  buildCanonicalSheetCheckpoint_ACU
+} from './canonical-checkpoint-builder';
+import {
+  getTableDataFingerprint_ACU
+} from './table-data-upgrade-audit';
+import {
+  parseDDLColumnInfos_ACU
+} from '../../shared/ddl-utils';
+import {
+  validateCanonicalCheckpoint_ACU
+} from '../../shared/canonical-checkpoint-validator';
+import {
+  findLatestSpv79TransitionCheckpoint_ACU
+} from './spv79-transition-checkpoint';
 
 export interface TableCheckpointGenerationConfig_ACU {
   maxEntriesAfterCheckpoint: number;

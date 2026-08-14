@@ -8,10 +8,19 @@
  * - DDL 解析（表名、中文名、列信息）
  */
 
-import type { Sheet_ACU } from '../../shared/models/table-data';
-import { logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
-import { mapSqlColumnIdentifiers_ACU } from '../../shared/sql-identifier-mapper';
-import { normalizeSqlStructure, normalizeConstrainedValue } from './sql-normalizer';
+import type {
+  Sheet_ACU
+} from '../../shared/models/table-data';
+import {
+  logDebug_ACU
+} from '../../shared/utils';
+import {
+  mapSqlColumnIdentifiers_ACU
+} from '../../shared/sql-identifier-mapper';
+import {
+  normalizeSqlStructure,
+  normalizeConstrainedValue
+} from './sql-normalizer';
 
 // DDL 纯解析函数已移至 shared/ddl-utils.ts，此处 re-export 保持 data 层内部调用不变
 export {

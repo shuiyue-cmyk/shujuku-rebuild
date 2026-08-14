@@ -5,9 +5,13 @@
  * 只负责「验证新消息是否应该触发更新 + 决定执行模式」，不涉及 UI（toast/防抖定时器）。
  */
 
-import { logDebug_ACU } from '../../shared/utils';
-import type { AutoFillSkipReason_ACU } from '../../shared/trigger-diagnostics';
-import { getCurrentCharacterFallback_ACU } from '../host/host-state-service';
+
+import type {
+  AutoFillSkipReason_ACU
+} from '../../shared/trigger-diagnostics';
+import {
+  getCurrentCharacterFallback_ACU
+} from '../host/host-state-service';
 
 export type MessageAction = 'skip' | 'update_only' | 'optimize_parallel' | 'optimize_then_update' | 'optimize_manual';
 

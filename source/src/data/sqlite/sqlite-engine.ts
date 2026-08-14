@@ -14,8 +14,13 @@
 //                运行时解码为 wasmBinary 交给 emscripten（无外部 wasm fetch）；
 //   asm（回滚）：sql.js/dist/sql-asm-memory-growth.js（纯 JS，无 wasm）。
 import initSqlJs from '__ACU_SQLITE_ENGINE_IMPORT__';
-import { logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
-import { resolveSqlWasmUrl_ACU } from './sql-wasm-locator';
+import {
+  logDebug_ACU,
+  logError_ACU
+} from '../../shared/utils';
+import {
+  resolveSqlWasmUrl_ACU
+} from './sql-wasm-locator';
 
 /** 列信息（PRAGMA table_info 返回的结构） */
 export interface ColumnInfo {

@@ -4,24 +4,94 @@
  * service 层不驱动 UI，只返回结果/状态，presentation 层根据返回值自行决定 UI 操作。
  */
 
-import { currentChatFileIdentifier_ACU, isAutoUpdatingCard_ACU, pendingFinalGenerationGreenlights_ACU, wasStoppedByUser_ACU, _set_isAutoUpdatingCard_ACU, _set_manualExtraHint_ACU, _set_wasStoppedByUser_ACU } from '../runtime/state-manager';
-import { readIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
-import { callCustomOpenAI_ACU, RetryableAiResponseError_ACU } from '../ai/prompt-builder';
-import { clearManualRefillSheetDataInRange_ACU, commitManualRefillSheetSnapshotInRangeAtomic_ACU, ensureManualCatchUpAnchorBeforeTarget_ACU, ensureV2BoundaryCheckpointForRetainedBuffer_ACU, establishManualRefillTemplateRoot_ACU, getChatArray_ACU, shouldRotateV2BoundaryCheckpointForRetainedBuffer_ACU } from '../chat/chat-service';
-import { coreApisAreReady_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU, settings_ACU, _set_currentJsonTableData_ACU } from '../runtime/state-manager';
-import { checkAutoMergeTrigger_ACU, prepareAutoMergeBatches_ACU, executeAutoMergeBatch_ACU, finalizeAutoMerge_ACU } from '../summary/merge-logic';
-import { ensureStableRowIdsForSheetContent_ACU, filterSheetKeysByTemplateScope_ACU, getChatSheetGuideDataForIsolationKey_ACU, getCurrentChatTemplateScopeState_ACU, getEffectiveSeedRowsForSheet_ACU, getGlobalTemplateSnapshotForCurrentProfile_ACU, resolveTemplateScope_ACU, sanitizeTemplateSnapshotForChat_ACU, shouldUseInitialSeedRows_ACU } from '../template/chat-scope';
-import type { TemplateScope_ACU } from '../template/chat-scope';
-import { loadAllChatMessages_ACU, updateReadableLorebookEntry_ACU } from '../worldbook/pipeline';
-import { enqueueSummaryVectorIndexFlush_ACU } from '../vector/summary-vector-index-flush-queue';
-import { getCurrentWorldbookConfig_ACU } from '../settings/settings-readers';
-import { getLatestV2FullCheckpointMessageIndex_ACU, resolveTableHistoryStateFromChat_ACU } from './table-history';
-import { planManualCatchUpWaves_ACU, type ManualCatchUpPlan_ACU } from './manual-fill-planner';
-import type { ManualRefillProgressV2_ACU } from './storage-frame-v2-types';
-import type { SqlTableApplyScope_ACU } from '../../shared/table-storage-provider';
-import type { TableDataObject_ACU } from '../../shared/models/table-data';
-import { rebindSheetKeysThroughTableAliases_ACU, resolveHistoricalSheetKeyMigrations_ACU, SheetTableAliasResolutionError_ACU } from '../../shared/sql-read-resolver';
-import { recoverProvisionalBridgeSession_ACU, hasActiveProvisionalBridgeAnywhere_ACU } from './manual-catch-up-provisional-bridge';
+import {
+  currentChatFileIdentifier_ACU,
+  isAutoUpdatingCard_ACU,
+  pendingFinalGenerationGreenlights_ACU,
+  wasStoppedByUser_ACU,
+  _set_isAutoUpdatingCard_ACU,
+  _set_manualExtraHint_ACU,
+  _set_wasStoppedByUser_ACU
+} from '../runtime/state-manager';
+import {
+  readIsolatedTagData_ACU
+} from '../../data/repositories/chat-message-data-repo';
+import {
+  callCustomOpenAI_ACU,
+  RetryableAiResponseError_ACU
+} from '../ai/prompt-builder';
+import {
+  clearManualRefillSheetDataInRange_ACU,
+  commitManualRefillSheetSnapshotInRangeAtomic_ACU,
+  ensureManualCatchUpAnchorBeforeTarget_ACU,
+  ensureV2BoundaryCheckpointForRetainedBuffer_ACU,
+  establishManualRefillTemplateRoot_ACU,
+  getChatArray_ACU,
+  shouldRotateV2BoundaryCheckpointForRetainedBuffer_ACU
+} from '../chat/chat-service';
+import {
+  coreApisAreReady_ACU,
+  currentJsonTableData_ACU,
+  getCurrentIsolationKey_ACU,
+  settings_ACU,
+  _set_currentJsonTableData_ACU
+} from '../runtime/state-manager';
+import {
+  checkAutoMergeTrigger_ACU,
+  prepareAutoMergeBatches_ACU,
+  executeAutoMergeBatch_ACU,
+  finalizeAutoMerge_ACU
+} from '../summary/merge-logic';
+import {
+  ensureStableRowIdsForSheetContent_ACU,
+  filterSheetKeysByTemplateScope_ACU,
+  getChatSheetGuideDataForIsolationKey_ACU,
+  getCurrentChatTemplateScopeState_ACU,
+  getEffectiveSeedRowsForSheet_ACU,
+  getGlobalTemplateSnapshotForCurrentProfile_ACU,
+  resolveTemplateScope_ACU,
+  sanitizeTemplateSnapshotForChat_ACU,
+  shouldUseInitialSeedRows_ACU
+} from '../template/chat-scope';
+import type {
+  TemplateScope_ACU
+} from '../template/chat-scope';
+import {
+  loadAllChatMessages_ACU,
+  updateReadableLorebookEntry_ACU
+} from '../worldbook/pipeline';
+import {
+  enqueueSummaryVectorIndexFlush_ACU
+} from '../vector/summary-vector-index-flush-queue';
+import {
+  getCurrentWorldbookConfig_ACU
+} from '../settings/settings-readers';
+import {
+  getLatestV2FullCheckpointMessageIndex_ACU,
+  resolveTableHistoryStateFromChat_ACU
+} from './table-history';
+import {
+  planManualCatchUpWaves_ACU,
+  type ManualCatchUpPlan_ACU
+} from './manual-fill-planner';
+import type {
+  ManualRefillProgressV2_ACU
+} from './storage-frame-v2-types';
+import type {
+  SqlTableApplyScope_ACU
+} from '../../shared/table-storage-provider';
+import type {
+  TableDataObject_ACU
+} from '../../shared/models/table-data';
+import {
+  rebindSheetKeysThroughTableAliases_ACU,
+  resolveHistoricalSheetKeyMigrations_ACU,
+  SheetTableAliasResolutionError_ACU
+} from '../../shared/sql-read-resolver';
+import {
+  recoverProvisionalBridgeSession_ACU,
+  hasActiveProvisionalBridgeAnywhere_ACU
+} from './manual-catch-up-provisional-bridge';
 import {
   commitStagedSheetsAtFullBoundaryAtomic_ACU,
   planTableFillBoundaryStaging_ACU,
@@ -30,13 +100,29 @@ import {
   type TableFillBoundaryStagingPlan_ACU,
   type TableFillStagingRunContext_ACU,
 } from './table-fill-boundary-staging';
-import { getTableDataFingerprint_ACU } from './table-data-upgrade-audit';
+import {
+  getTableDataFingerprint_ACU
+} from './table-data-upgrade-audit';
 
-import { isSummaryOrOutlineTable_ACU, logDebug_ACU, logError_ACU, logWarn_ACU, parseTableTemplateJson_ACU } from '../../shared/utils';
-import { startRuntimePerformanceSpan_ACU } from '../../shared/runtime-performance';
-import { createLorebookReadContext_ACU, type LorebookReadContext_ACU } from '../worldbook/read-context';
+import {
+  isSummaryOrOutlineTable_ACU,
+  logDebug_ACU,
+  logError_ACU,
+  logWarn_ACU,
+  parseTableTemplateJson_ACU
+} from '../../shared/utils';
+import {
+  startRuntimePerformanceSpan_ACU
+} from '../../shared/runtime-performance';
+import {
+  createLorebookReadContext_ACU,
+  type LorebookReadContext_ACU
+} from '../worldbook/read-context';
 
-import { applyTableDelta_ACU, isDeltaTagData_ACU } from './table-delta';
+import {
+  applyTableDelta_ACU,
+  isDeltaTagData_ACU
+} from './table-delta';
 /**
  * 表名标准化：trim 后空串视为无效键
  */
@@ -57,23 +143,80 @@ function resolveTableApiPresetOverride_ACU(tableName: any): string {
     const preset = overrides[normalizedName];
     return (typeof preset === 'string' && preset.trim()) ? preset.trim() : '';
 }
-import { checkIfFirstTimeInit_ACU, ensureLegacyStorageMigratedBeforeWrite_ACU } from './table-service';
-import { assertSingleActiveFullCheckpointV2_ACU, assertWriteTargetNotBeforeReplayRoot_ACU, hasAnyV2Checkpoint_ACU } from './storage-frame-v2-persist';
-import { parseAndApplyTableEditsToData_ACU, prepareAIInput_ACU } from '../ai/prompt-builder';
-import { isSqlContent } from '../ai/prompt-builder/table-edit-parser';
-import { buildGuidedBaseDataFromSheetGuide_ACU, getSortedSheetKeys_ACU } from '../template/chat-scope';
-import { isSqliteMode } from './storage-mode';
-import type { TableMutationOperationV2_ACU } from './storage-frame-v2-types';
-import { applySqlEditsToTableDataSnapshot_ACU, assertNoHiddenPhysicalColumnMutations_ACU, buildSqlSheetBatchOperations_ACU, captureSqlTableApplyScope_ACU, extractTableNamesFromStatements, mapSqlTableNamesToSheetKeys_ACU, normalizeSqlStatementsForRuntimeLog_ACU, rebindSqlMutationIdentifiers_ACU, splitSqlStatements, SqlRowIdMaterializationError_ACU, SqlRuntimeSchemaInvalidError_ACU, SqlRuntimeSchemaStaleError_ACU, SqlRuntimeSnapshotError_ACU } from './sql-table-service';
-import { hasStructuralReplayCompatibilityRepairs_ACU, hasUnanchoredReplayArtifactsForChatV2_ACU, loadTableStateFromFramesV2Detailed_ACU } from './storage-frame-v2-replay';
-import { ensureStorageProviderReady_ACU, getStorageProvider, reloadStorageProvider } from './table-storage-strategy';
-import { applySpecialIndexSequenceToSummaryTables_ACU } from '../runtime/helpers-remaining';
-import { isSameSheetHeader_ACU } from '../template/guide-metadata-overlay';
-import { captureTableRuntimeRevisionForWriteSet_ACU } from './table-write-transaction';
-import { runTableUpdateCommit_ACU, type TableUpdateCommitErrorCategory_ACU } from './table-update-commit';
-import { isV2TagData_ACU, resolveTableStorageStrategy_ACU } from './storage-strategy-resolver';
-import { getHiddenChronicleRowIdsAfterBigSummaryInsert_ACU } from '../flight-mode/flight-mode-hidden-rows';
-import { getCurrentFlightModeState_ACU, stageFlightModeHiddenRowIds_ACU } from '../flight-mode/flight-mode-state';
+import {
+  checkIfFirstTimeInit_ACU,
+  ensureLegacyStorageMigratedBeforeWrite_ACU
+} from './table-service';
+import {
+  assertSingleActiveFullCheckpointV2_ACU,
+  assertWriteTargetNotBeforeReplayRoot_ACU,
+  hasAnyV2Checkpoint_ACU
+} from './storage-frame-v2-persist';
+import {
+  parseAndApplyTableEditsToData_ACU,
+  prepareAIInput_ACU
+} from '../ai/prompt-builder';
+import {
+  isSqlContent
+} from '../ai/prompt-builder/table-edit-parser';
+import {
+  buildGuidedBaseDataFromSheetGuide_ACU,
+  getSortedSheetKeys_ACU
+} from '../template/chat-scope';
+import {
+  isSqliteMode
+} from './storage-mode';
+import type {
+  TableMutationOperationV2_ACU
+} from './storage-frame-v2-types';
+import {
+  applySqlEditsToTableDataSnapshot_ACU,
+  assertNoHiddenPhysicalColumnMutations_ACU,
+  buildSqlSheetBatchOperations_ACU,
+  captureSqlTableApplyScope_ACU,
+  extractTableNamesFromStatements,
+  mapSqlTableNamesToSheetKeys_ACU,
+  normalizeSqlStatementsForRuntimeLog_ACU,
+  rebindSqlMutationIdentifiers_ACU,
+  splitSqlStatements,
+  SqlRowIdMaterializationError_ACU,
+  SqlRuntimeSchemaInvalidError_ACU,
+  SqlRuntimeSchemaStaleError_ACU,
+  SqlRuntimeSnapshotError_ACU
+} from './sql-table-service';
+import {
+  hasStructuralReplayCompatibilityRepairs_ACU,
+  hasUnanchoredReplayArtifactsForChatV2_ACU,
+  loadTableStateFromFramesV2Detailed_ACU
+} from './storage-frame-v2-replay';
+import {
+  ensureStorageProviderReady_ACU,
+  getStorageProvider,
+  reloadStorageProvider
+} from './table-storage-strategy';
+import {
+  applySpecialIndexSequenceToSummaryTables_ACU
+} from '../runtime/helpers-remaining';
+import {
+  isSameSheetHeader_ACU
+} from '../template/guide-metadata-overlay';
+import {
+  captureTableRuntimeRevisionForWriteSet_ACU
+} from './table-write-transaction';
+import {
+  runTableUpdateCommit_ACU,
+  type TableUpdateCommitErrorCategory_ACU
+} from './table-update-commit';
+import {
+  resolveTableStorageStrategy_ACU
+} from './storage-strategy-resolver';
+import {
+  getHiddenChronicleRowIdsAfterBigSummaryInsert_ACU
+} from '../flight-mode/flight-mode-hidden-rows';
+import {
+  getCurrentFlightModeState_ACU,
+  stageFlightModeHiddenRowIds_ACU
+} from '../flight-mode/flight-mode-state';
 
 // ============================================================
 // 类型定义：返回值 + 进度事件（service 层不驱动 UI）

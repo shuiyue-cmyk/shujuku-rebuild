@@ -3,14 +3,45 @@
  * AI API 调用 — prompt 组装 + API 调用 + 流式/非流式响应处理
  * 从 prompt-builder.ts 拆出（L195-L501 + L1519-L1604）
  */
-import { currentAbortController_ACU, trackAbortController_ACU, untrackAbortController_ACU, _set_currentAbortController_ACU } from '../../runtime/state-manager';
-import { getApiConfigByPreset_ACU, buildCustomApiRequestBody_ACU, postChatCompletion_ACU } from '../api-call';
-import { currentJsonTableData_ACU, settings_ACU } from '../../runtime/state-manager';
-import { getPersonaDescription_ACU, getCharDescription_ACU } from '../../../data/gateways/host-state-gateway';
-import { logDebug_ACU, logError_ACU, logWarn_ACU, normalizeExcludeRules_ACU } from '../../../shared/utils';
-import { applyExcludeRulesToText_ACU, getLatestAIMessageContent_ACU, getPlotFromHistory_ACU, parseIfBlocksInContent_ACU, parseRandomTags_ACU, replaceRandomVariables_ACU } from '../../runtime/helpers-remaining';
-import { replaceDbSqlVariables } from '../../runtime/template-vars/sql-query-var';
-import { isSqliteMode } from '../../table/storage-mode';
+import {
+  currentAbortController_ACU,
+  trackAbortController_ACU,
+  untrackAbortController_ACU,
+  _set_currentAbortController_ACU
+} from '../../runtime/state-manager';
+import {
+  getApiConfigByPreset_ACU,
+  buildCustomApiRequestBody_ACU,
+  postChatCompletion_ACU
+} from '../api-call';
+import {
+  currentJsonTableData_ACU,
+  settings_ACU
+} from '../../runtime/state-manager';
+import {
+  getPersonaDescription_ACU,
+  getCharDescription_ACU
+} from '../../../data/gateways/host-state-gateway';
+import {
+  logDebug_ACU,
+  logError_ACU,
+  logWarn_ACU,
+  normalizeExcludeRules_ACU
+} from '../../../shared/utils';
+import {
+  applyExcludeRulesToText_ACU,
+  getLatestAIMessageContent_ACU,
+  getPlotFromHistory_ACU,
+  parseIfBlocksInContent_ACU,
+  parseRandomTags_ACU,
+  replaceRandomVariables_ACU
+} from '../../runtime/helpers-remaining';
+import {
+  replaceDbSqlVariables
+} from '../../runtime/template-vars/sql-query-var';
+import {
+  isSqliteMode
+} from '../../table/storage-mode';
 
 /**
  * The request reached a provider successfully, but its body contained no

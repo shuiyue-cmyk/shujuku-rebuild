@@ -6,7 +6,9 @@ import {
   type ComputedRef,
   type Ref,
 } from "vue";
-import { getChatArray_ACU } from "../../service/chat/chat-service";
+import {
+  getChatArray_ACU
+} from "../../service/chat/chat-service";
 import {
   coreApisAreReady_ACU,
   currentChatFileIdentifier_ACU,
@@ -18,26 +20,36 @@ import {
   setGlobalPlotEnabled_ACU,
   setSummaryVectorIndexMode_ACU,
 } from "../../service/settings/settings-service";
-import { resolveTableHistoryStateFromChat_ACU } from "../../service/table/table-history";
-import { getCurrentTableDisplayData_ACU } from "../../service/settings/settings-readers";
-import { getSortedSheetKeys_ACU } from "../../service/template/chat-scope";
-import { getActiveTemplatePresetMeta_ACU } from "../../service/template/template-preset-service";
+import {
+  resolveTableHistoryStateFromChat_ACU
+} from "../../service/table/table-history";
+import {
+  getCurrentTableDisplayData_ACU
+} from "../../service/settings/settings-readers";
+import {
+  getSortedSheetKeys_ACU
+} from "../../service/template/chat-scope";
+
 import {
   disableFlightMode_ACU,
   enableFlightMode_ACU,
   type FlightModeTransitionResult_ACU,
 } from "../../service/flight-mode/flight-mode-transition";
-import { getCurrentFlightModeState_ACU } from "../../service/flight-mode/flight-mode-state";
+import {
+  getCurrentFlightModeState_ACU
+} from "../../service/flight-mode/flight-mode-state";
 import {
   getCurrentVectorMemoryConfig_ACU,
   validateSummaryVectorIndexConfig_ACU,
 } from "../../service/vector/vector-memory-config";
-import { validateDDLTextAgainstHeaders_ACU } from "../../shared/ddl-utils";
 import {
-  DEFAULT_CHAR_CARD_PROMPT_ACU,
-  DEFAULT_CHAR_CARD_PROMPT_SQL_ACU,
-} from "../../shared/defaults-json.js";
-import { getAllLogs, subscribe, type LogEntry } from "../../shared/log-buffer";
+  validateDDLTextAgainstHeaders_ACU
+} from "../../shared/ddl-utils";
+import {
+  getAllLogs,
+  subscribe,
+  type LogEntry
+} from "../../shared/log-buffer";
 import {
   logError_ACU,
   isSummaryOrOutlineTable_ACU,
@@ -49,8 +61,12 @@ import {
   setContentReplaceEnabledBySettings,
   syncContentReplaceAvailability,
 } from "../stores/content-replace-gate";
-import { dashboardCopy } from "../copy/dashboard-copy";
-import { useDevOptions } from "./useDevOptions";
+import {
+  dashboardCopy
+} from "../copy/dashboard-copy";
+import {
+  useDevOptions
+} from "./useDevOptions";
 
 type MessageKind = "info" | "success" | "warning" | "error";
 type HealthKind = "ok" | "info" | "warning" | "error";

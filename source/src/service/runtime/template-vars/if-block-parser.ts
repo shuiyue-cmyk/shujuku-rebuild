@@ -3,14 +3,33 @@
  * if 块递归解析器 + 辅助函数（getLatestAIMessageContent）
  * 从 helpers-template-vars.ts 拆出
  */
-import { logWarn_ACU } from '../../../shared/utils';
-import { settings_ACU, currentJsonTableData_ACU } from '../state-manager';
-import { getChatArray_ACU } from '../../../data/gateways/chat-gateway';
-import { evaluateCellExpression_ACU } from './cell-utils';
-import { evaluateSeedExpression_ACU, evaluateCondExpression_ACU } from './seed-condition';
-import { evaluateDbCondition, evaluateSqlCondition, replaceVarReferences } from './sql-query-var';
-import { getCurrentFlightModeState_ACU } from '../../flight-mode/flight-mode-state';
-import { projectFlightModeHiddenChronicleRows_ACU } from '../../flight-mode/flight-mode-hidden-rows';
+import {
+  logWarn_ACU
+} from '../../../shared/utils';
+import {
+  settings_ACU
+} from '../state-manager';
+import {
+  getChatArray_ACU
+} from '../../../data/gateways/chat-gateway';
+import {
+  evaluateCellExpression_ACU
+} from './cell-utils';
+import {
+  evaluateSeedExpression_ACU,
+  evaluateCondExpression_ACU
+} from './seed-condition';
+import {
+  evaluateDbCondition,
+  evaluateSqlCondition,
+  replaceVarReferences
+} from './sql-query-var';
+import {
+  getCurrentFlightModeState_ACU
+} from '../../flight-mode/flight-mode-state';
+import {
+  projectFlightModeHiddenChronicleRows_ACU
+} from '../../flight-mode/flight-mode-hidden-rows';
 
   /**
    * 解析条件模板（支持 else 和嵌套）

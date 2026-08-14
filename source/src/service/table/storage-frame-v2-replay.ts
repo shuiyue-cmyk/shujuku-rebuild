@@ -1,28 +1,114 @@
-import { getChatArray_ACU, saveChatToHostStrict_ACU } from '../../data/gateways/chat-gateway';
-import { getCurrentIsolationKey_ACU, independentTableStates_ACU, settings_ACU } from '../runtime/state-manager';
-import type { TableDataObject_ACU, Sheet_ACU, Mate_ACU } from '../../shared/models/table-data';
-import { logError_ACU, logWarn_ACU, stripSeedRowsFromTemplate_ACU } from '../../shared/utils';
-import { startRuntimePerformanceSpan_ACU } from '../../shared/runtime-performance';
-import { SqliteEngine } from '../../data/sqlite/sqlite-engine';
-import { SyncBridge } from '../../data/sqlite/sync-bridge';
-import { normalizeSqlStructure, normalizeStatementValues } from '../../data/sqlite/sql-normalizer';
-import type { TableCheckpointV2_ACU, TableMutationLogEntryV2_ACU, TableMutationOperationV2_ACU, TablePatchV2_ACU, TableSheetCheckpointV2_ACU, TableSheetLifecycleEntryV2_ACU, TableSheetLifecycleProjectionV2_ACU, TableStorageFrameV2_ACU } from './storage-frame-v2-types';
-import { isV2TagData_ACU } from './storage-strategy-resolver';
-import { writeMessageIdentity_ACU } from '../../data/repositories/chat-message-data-repo';
-import { readIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
-import { ensureStableRowIdsForSeedRows_ACU, getCurrentChatTemplateScopeState_ACU, getEffectiveSeedRowsForSheet_ACU, getGlobalTemplateSnapshotForCurrentProfile_ACU, getSortedSheetKeys_ACU, sanitizeTemplateSnapshotForChat_ACU } from '../template/chat-scope';
-import { formatCanonicalRowIssues_ACU, isEmptyCanonicalRowId_ACU, normalizeCanonicalTableRows_ACU, restoreLegacyRowIdentity_ACU } from '../../shared/canonical-row-normalizer';
-import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../../shared/stable-row-id-allocator';
-import { applySheetSchemaMigrationOperation_ACU } from './table-schema-migration';
-import { getPhysicalTableNameFromResolvedMap_ACU, getPhysicalTableNameForSheet_ACU, resolvePhysicalTableNames_ACU } from '../../shared/sheet-identity';
-import { parseDDLTableName } from '../../shared/ddl-utils';
-import { decodeSqlIdentifier_ACU, rebindSqlMutationColumnReferences_ACU, rebindSqlMutationTableReferences_ACU } from '../../shared/sql-mutation-table-rebind';
-import { buildSheetColumnAliasMap_ACU, buildSheetTableAliasMap_ACU, type SheetAliasMapResult_ACU, type SheetColumnAliasMapResult_ACU, type SheetColumnAliasEvidence_ACU } from '../../shared/sql-read-resolver';
-import { auditTableDataForUpgrade_ACU, getTableDataFingerprint_ACU } from './table-data-upgrade-audit';
-import { repairTableDataFromAudit_ACU } from './table-data-repair';
-import { cloneSpv79TransitionData_ACU, findLatestSpv79TransitionCheckpoint_ACU, isAfterSpv79TransitionCutoff_ACU, isEntryAfterSpv79TransitionCutoff_ACU, isFrameArtifactAfterSpv79TransitionCutoff_ACU, reindexSpv79TransitionState_ACU } from './spv79-transition-checkpoint';
-import { runTableWriteTransaction_ACU } from './table-write-transaction';
-import { computeReplayHeadRevisionDigest_ACU, validateV2ReplayEvidenceFresh_ACU } from './v2-replay-session';
+import {
+  getChatArray_ACU,
+  saveChatToHostStrict_ACU
+} from '../../data/gateways/chat-gateway';
+import {
+  getCurrentIsolationKey_ACU,
+  independentTableStates_ACU,
+  settings_ACU
+} from '../runtime/state-manager';
+import type {
+  TableDataObject_ACU,
+  Sheet_ACU,
+  Mate_ACU
+} from '../../shared/models/table-data';
+import {
+  logError_ACU,
+  logWarn_ACU,
+  stripSeedRowsFromTemplate_ACU
+} from '../../shared/utils';
+import {
+  startRuntimePerformanceSpan_ACU
+} from '../../shared/runtime-performance';
+import {
+  SqliteEngine
+} from '../../data/sqlite/sqlite-engine';
+import {
+  SyncBridge
+} from '../../data/sqlite/sync-bridge';
+import {
+  normalizeSqlStructure,
+  normalizeStatementValues
+} from '../../data/sqlite/sql-normalizer';
+import type {
+  TableCheckpointV2_ACU,
+  TableMutationLogEntryV2_ACU,
+  TableMutationOperationV2_ACU,
+  TablePatchV2_ACU,
+  TableSheetCheckpointV2_ACU,
+  TableSheetLifecycleEntryV2_ACU,
+  TableSheetLifecycleProjectionV2_ACU,
+  TableStorageFrameV2_ACU
+} from './storage-frame-v2-types';
+import {
+  isV2TagData_ACU
+} from './storage-strategy-resolver';
+import {
+  writeMessageIdentity_ACU
+} from '../../data/repositories/chat-message-data-repo';
+import {
+  readIsolatedTagData_ACU
+} from '../../data/repositories/chat-message-data-repo';
+import {
+  ensureStableRowIdsForSeedRows_ACU,
+  getCurrentChatTemplateScopeState_ACU,
+  getEffectiveSeedRowsForSheet_ACU,
+  getGlobalTemplateSnapshotForCurrentProfile_ACU,
+  getSortedSheetKeys_ACU,
+  sanitizeTemplateSnapshotForChat_ACU
+} from '../template/chat-scope';
+import {
+  formatCanonicalRowIssues_ACU,
+  isEmptyCanonicalRowId_ACU,
+  normalizeCanonicalTableRows_ACU,
+  restoreLegacyRowIdentity_ACU
+} from '../../shared/canonical-row-normalizer';
+import {
+  allocateStableRowId_ACU,
+  createStableRowIdReservation_ACU
+} from '../../shared/stable-row-id-allocator';
+import {
+  applySheetSchemaMigrationOperation_ACU
+} from './table-schema-migration';
+import {
+  getPhysicalTableNameFromResolvedMap_ACU,
+  getPhysicalTableNameForSheet_ACU,
+  resolvePhysicalTableNames_ACU
+} from '../../shared/sheet-identity';
+
+import {
+  decodeSqlIdentifier_ACU,
+  rebindSqlMutationColumnReferences_ACU,
+  rebindSqlMutationTableReferences_ACU
+} from '../../shared/sql-mutation-table-rebind';
+import {
+  buildSheetColumnAliasMap_ACU,
+  buildSheetTableAliasMap_ACU,
+  type SheetAliasMapResult_ACU,
+  type SheetColumnAliasMapResult_ACU
+} from '../../shared/sql-read-resolver';
+import {
+  auditTableDataForUpgrade_ACU,
+  getTableDataFingerprint_ACU
+} from './table-data-upgrade-audit';
+import {
+  repairTableDataFromAudit_ACU
+} from './table-data-repair';
+import {
+  cloneSpv79TransitionData_ACU,
+  findLatestSpv79TransitionCheckpoint_ACU,
+  isAfterSpv79TransitionCutoff_ACU,
+  isEntryAfterSpv79TransitionCutoff_ACU,
+  isFrameArtifactAfterSpv79TransitionCutoff_ACU,
+  reindexSpv79TransitionState_ACU
+} from './spv79-transition-checkpoint';
+import {
+  runTableWriteTransaction_ACU
+} from './table-write-transaction';
+import {
+  computeReplayHeadRevisionDigest_ACU,
+  validateV2ReplayEvidenceFresh_ACU
+} from './v2-replay-session';
 
 interface V2FrameRef_ACU {
   messageIndex: number;

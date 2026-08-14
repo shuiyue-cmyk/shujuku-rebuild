@@ -1,21 +1,76 @@
-import { getChatArray_ACU, saveChatToHostStrict_ACU } from '../../data/gateways/chat-gateway';
-import type { IsolationConfig_ACU } from '../../data/models/chat-message-data';
-import { cloneIsolatedData_ACU, isLegacyMatchForIsolation_ACU, readIsolatedTagData_ACU, readLegacyIndependentData_ACU, readLegacyStandardData_ACU, readLegacySummaryData_ACU, readModifiedKeys_ACU, readUpdateGroupKeys_ACU, writeMessageIdentity_ACU } from '../../data/repositories/chat-message-data-repo';
-import { currentChatFileIdentifier_ACU, getCurrentIsolationKey_ACU } from '../runtime/state-manager';
-import type { TableDataObject_ACU } from '../../shared/models/table-data';
-import { validateMigrationProvenanceV1_ACU } from '../../shared/canonical-checkpoint-validator';
-import { resolveHistoricalSheetKeyMigrations_ACU } from '../../shared/sql-read-resolver';
-import { logDebug_ACU } from '../../shared/utils';
-import { hasV2TableHistoryEvidence_ACU, isV2TagData_ACU, resolveTableStorageStrategy_ACU } from './storage-strategy-resolver';
-import type { TableCheckpointScheduleSummaryV2_ACU, TableMigrationAuditBackupV1_ACU, TableMigrationProvenanceV1_ACU, TableStorageFrameV2_ACU } from './storage-frame-v2-types';
-import { commitMixedStorageDecision_ACU } from './mixed-storage-commit';
-import { evaluateMixedStorageDecision_ACU, type MixedStorageDecision_ACU } from './mixed-storage-decision';
-import { registerMixedStorageDecision_ACU } from './mixed-storage-decision-registry';
-import { collectV2SheetKeyEvidenceStatically_ACU, type V2StaticSheetEvidence_ACU } from './mixed-storage-evidence';
-import { buildCanonicalFullCheckpoint_ACU } from './canonical-checkpoint-builder';
-import { auditTableDataForUpgrade_ACU, getTableDataFingerprint_ACU, type UpgradeAuditResult_ACU } from './table-data-upgrade-audit';
-import { repairTableDataFromAudit_ACU, type RepairResult_ACU } from './table-data-repair';
-import { loadTableStateFromFramesV2Detailed_ACU } from './storage-frame-v2-replay';
+import {
+  getChatArray_ACU,
+  saveChatToHostStrict_ACU
+} from '../../data/gateways/chat-gateway';
+import type {
+  IsolationConfig_ACU
+} from '../../data/models/chat-message-data';
+import {
+  cloneIsolatedData_ACU,
+  isLegacyMatchForIsolation_ACU,
+  readIsolatedTagData_ACU,
+  readLegacyIndependentData_ACU,
+  readLegacyStandardData_ACU,
+  readLegacySummaryData_ACU,
+  readModifiedKeys_ACU,
+  readUpdateGroupKeys_ACU
+} from '../../data/repositories/chat-message-data-repo';
+import {
+  currentChatFileIdentifier_ACU,
+  getCurrentIsolationKey_ACU
+} from '../runtime/state-manager';
+import type {
+  TableDataObject_ACU
+} from '../../shared/models/table-data';
+import {
+  validateMigrationProvenanceV1_ACU
+} from '../../shared/canonical-checkpoint-validator';
+import {
+  resolveHistoricalSheetKeyMigrations_ACU
+} from '../../shared/sql-read-resolver';
+import {
+  logDebug_ACU
+} from '../../shared/utils';
+import {
+  hasV2TableHistoryEvidence_ACU,
+  isV2TagData_ACU,
+  resolveTableStorageStrategy_ACU
+} from './storage-strategy-resolver';
+import type {
+  TableCheckpointScheduleSummaryV2_ACU,
+  TableMigrationAuditBackupV1_ACU,
+  TableMigrationProvenanceV1_ACU,
+  TableStorageFrameV2_ACU
+} from './storage-frame-v2-types';
+import {
+  commitMixedStorageDecision_ACU
+} from './mixed-storage-commit';
+import {
+  evaluateMixedStorageDecision_ACU,
+  type MixedStorageDecision_ACU
+} from './mixed-storage-decision';
+import {
+  registerMixedStorageDecision_ACU
+} from './mixed-storage-decision-registry';
+import {
+  collectV2SheetKeyEvidenceStatically_ACU,
+  type V2StaticSheetEvidence_ACU
+} from './mixed-storage-evidence';
+import {
+  buildCanonicalFullCheckpoint_ACU
+} from './canonical-checkpoint-builder';
+import {
+  auditTableDataForUpgrade_ACU,
+  getTableDataFingerprint_ACU,
+  type UpgradeAuditResult_ACU
+} from './table-data-upgrade-audit';
+import {
+  repairTableDataFromAudit_ACU,
+  type RepairResult_ACU
+} from './table-data-repair';
+import {
+  loadTableStateFromFramesV2Detailed_ACU
+} from './storage-frame-v2-replay';
 
 export interface LegacyToV2MigrationOptions_ACU {
   data: Record<string, any> | null;

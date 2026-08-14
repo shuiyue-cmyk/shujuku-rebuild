@@ -3,10 +3,24 @@
 // 从 data/repositories/table-repo.ts 迁入（消除 data 层越权）
 // ═══════════════════════════════════════════════════════════════
 
-import { getChatArray_ACU, saveChatToHost_ACU } from '../../data/gateways/chat-gateway';
-import { logDebug_ACU, logError_ACU, logWarn_ACU, parseTableTemplateJson_ACU } from '../../shared/utils';
-import { currentJsonTableData_ACU, getCurrentIsolationKey_ACU, settings_ACU, _set_currentJsonTableData_ACU } from '../runtime/state-manager';
-import { applyTemplateScopeForCurrentChat_ACU } from '../settings/settings-service';
+import {
+  getChatArray_ACU
+} from '../../data/gateways/chat-gateway';
+import {
+  logDebug_ACU,
+  logError_ACU,
+  logWarn_ACU,
+  parseTableTemplateJson_ACU
+} from '../../shared/utils';
+import {
+  currentJsonTableData_ACU,
+  getCurrentIsolationKey_ACU,
+  settings_ACU,
+  _set_currentJsonTableData_ACU
+} from '../runtime/state-manager';
+import {
+  applyTemplateScopeForCurrentChat_ACU
+} from '../settings/settings-service';
 import {
   attachSeedRowsToCurrentDataFromGuide_ACU,
   buildChatSheetGuideDataFromData_ACU,
@@ -15,15 +29,42 @@ import {
   getSortedSheetKeys_ACU,
   setChatSheetGuideDataForIsolationKey_ACU,
 } from '../template/chat-scope';
-import { deleteAllGeneratedEntries_ACU } from '../worldbook/pipeline';
-import { mergeAllIndependentTables_ACU, mergeAllIndependentTablesLegacyV1_ACU } from '../runtime/helpers-remaining';
-import { readIsolatedTagData_ACU, readLegacyIndependentData_ACU, isLegacyMatchForIsolation_ACU } from '../../data/repositories/chat-message-data-repo';
-import { isV2TagData_ACU, resolveTableStorageStrategy_ACU } from './storage-strategy-resolver';
-import { persistTableMutationLogV2_ACU, type ReplaceExistingIncrementalOptions_ACU } from './storage-frame-v2-persist';
-import { migrateLegacyStorageToV2OnLoad_ACU } from './storage-v2-migration';
-import type { ManualRefillProgressV2_ACU, TableCheckpointV2_ACU, TableMutationOperationV2_ACU, TableMutationSourceV2_ACU, TableWriteConflictUnitV2_ACU } from './storage-frame-v2-types';
-import type { TableWriteTransactionContext_ACU } from './table-write-transaction';
-import type { TableDataObject_ACU } from '../../shared/models/table-data';
+import {
+  deleteAllGeneratedEntries_ACU
+} from '../worldbook/pipeline';
+import {
+  mergeAllIndependentTables_ACU,
+  mergeAllIndependentTablesLegacyV1_ACU
+} from '../runtime/helpers-remaining';
+import {
+  readIsolatedTagData_ACU,
+  readLegacyIndependentData_ACU,
+  isLegacyMatchForIsolation_ACU
+} from '../../data/repositories/chat-message-data-repo';
+import {
+  isV2TagData_ACU,
+  resolveTableStorageStrategy_ACU
+} from './storage-strategy-resolver';
+import {
+  persistTableMutationLogV2_ACU,
+  type ReplaceExistingIncrementalOptions_ACU
+} from './storage-frame-v2-persist';
+import {
+  migrateLegacyStorageToV2OnLoad_ACU
+} from './storage-v2-migration';
+import type {
+  ManualRefillProgressV2_ACU,
+  TableCheckpointV2_ACU,
+  TableMutationOperationV2_ACU,
+  TableMutationSourceV2_ACU,
+  TableWriteConflictUnitV2_ACU
+} from './storage-frame-v2-types';
+import type {
+  TableWriteTransactionContext_ACU
+} from './table-write-transaction';
+import type {
+  TableDataObject_ACU
+} from '../../shared/models/table-data';
 
 export interface TableChatPersistOptions_ACU {
   targetMessageIndex?: number;

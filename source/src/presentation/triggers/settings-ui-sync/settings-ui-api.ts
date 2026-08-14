@@ -1,17 +1,38 @@
 /**
  * presentation/triggers/settings-ui-sync/settings-ui-api.ts
  */
-import { refreshCurrentPlotTaskApiPresetSelect_ACU } from '../../components/plot-editors';
-import { showToastr_ACU } from '../../theme/toast';
-import { ACU_TOAST_CATEGORY_ACU, SCRIPT_ID_PREFIX_ACU } from '../../../shared/constants';
-import { jQuery_API_ACU } from '../../dom-utils';
-import { settings_ACU } from '../../../service/runtime/state-manager';
-import { $popupInstance_ACU } from '../../state/ui-refs';
-import { renderOption_ACU } from '../../../shared/html-helpers';
-import { logError_ACU } from '../../../shared/utils';
-import { getCurrentVectorMemoryConfig_ACU } from '../../../service/vector/vector-memory-config';
+import {
+  refreshCurrentPlotTaskApiPresetSelect_ACU
+} from '../../components/plot-editors';
+import {
+  showToastr_ACU
+} from '../../theme/toast';
+import {
+  SCRIPT_ID_PREFIX_ACU
+} from '../../../shared/constants';
+import {
+  jQuery_API_ACU
+} from '../../dom-utils';
+import {
+  settings_ACU
+} from '../../../service/runtime/state-manager';
+import {
+  $popupInstance_ACU
+} from '../../state/ui-refs';
+import {
+  renderOption_ACU
+} from '../../../shared/html-helpers';
+
+import {
+  getCurrentVectorMemoryConfig_ACU
+} from '../../../service/vector/vector-memory-config';
 // V1 API 写权限已收敛到 service 层；此处仅保留事务式委托与 fail-closed 提示。
-import { saveApiPreset_ACU as serviceSaveApiPreset_ACU, deleteApiPreset_ACU as serviceDeleteApiPreset_ACU, setActivePresetForCurrentChat_ACU, saveCurrentConfigAsPreset_ACU } from '../../../service/settings/api-preset-service';
+import {
+  saveApiPreset_ACU as serviceSaveApiPreset_ACU,
+  deleteApiPreset_ACU as serviceDeleteApiPreset_ACU,
+  setActivePresetForCurrentChat_ACU,
+  saveCurrentConfigAsPreset_ACU
+} from '../../../service/settings/api-preset-service';
 /**
  * presentation/triggers/settings-ui-sync.ts — UI读写/保存/刷新函数
  * 从 service/runtime/helpers-remaining.ts 提取的纯 UI 函数

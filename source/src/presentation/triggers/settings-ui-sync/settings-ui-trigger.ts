@@ -1,36 +1,104 @@
 /**
  * presentation/triggers/settings-ui-sync/settings-ui-trigger.ts
  */
-import { DEFAULT_CHAR_CARD_PROMPT_ACU } from '../../../shared/defaults-json.js';
-import { AUTO_UPDATE_FLOOR_INCREASE_DELAY_ACU } from '../../../shared/defaults';
-import { bindTableFillStopButton_ACU } from '../../components/status-display';
-import { updateCardUpdateStatusDisplay_ACU } from '../../components/update-status-display';
-import { getCharCardPromptFromUI_ACU, isAutoUpdatingCard_ACU, renderPromptSegments_ACU, wasStoppedByUser_ACU, _set_isAutoUpdatingCard_ACU } from '../../components/plot-editors';
-import { showToastr_ACU } from '../../theme/toast';
-import { ACU_TOAST_CATEGORY_ACU } from '../../../shared/constants';
-import { SillyTavern_API_ACU, TavernHelper_API_ACU, toastr_API_ACU, _set_SillyTavern_API_ACU, _set_TavernHelper_API_ACU, _set_jQuery_API_ACU, _set_toastr_API_ACU } from '../../../shared/host-api';
-import { jQuery_API_ACU } from '../../dom-utils';
-import { getChatArray_ACU, saveChatToHost_ACU } from '../../../service/chat/chat-service';
-import { getConnectionManagerProfiles_ACU } from '../../../service/ai/ai-service';
-import { getCurrentCharacterFallback_ACU } from '../../../service/host/host-state-service';
-import { NEW_MESSAGE_DEBOUNCE_DELAY_ACU, abortAllActiveRequests_ACU, allChatMessages_ACU, coreApisAreReady_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU, lastTotalAiMessages_ACU, settings_ACU , _set_coreApisAreReady_ACU, _set_lastTotalAiMessages_ACU, _set_manualExtraHint_ACU, _set_wasStoppedByUser_ACU} from '../../../service/runtime/state-manager';
-import { $popupInstance_ACU, $customApiUrlInput_ACU, $customApiKeyInput_ACU, $customApiModelInput_ACU, $customApiModelSelect_ACU, $maxTokensInput_ACU, $temperatureInput_ACU, $apiStatusDisplay_ACU, $charCardPromptSegmentsContainer_ACU, $autoUpdateThresholdInput_ACU, $autoUpdateTokenThresholdInput_ACU, $autoUpdateFrequencyInput_ACU, $updateBatchSizeInput_ACU, $maxConcurrentGroupsInput_ACU, $skipUpdateFloorsInput_ACU, $retainRecentLayersInput_ACU, $tableMaxRetriesInput_ACU, $manualExtraHintCheckbox_ACU } from '../../state/ui-refs';
-import { processUpdates_ACU } from '../update-process';
-import { getSortedSheetKeys_ACU } from '../../../service/template/chat-scope';
-import { loadAllChatMessages_ACU, updateReadableLorebookEntry_ACU } from '../../../service/worldbook/pipeline';
-import { getStorageProvider } from '../../../service/table/table-storage-strategy';
-import { SCRIPT_ID_PREFIX_ACU } from '../../../shared/constants';
-import { escapeHtml_ACU, renderStopButton_ACU } from '../../../shared/html-helpers';
-import { topLevelWindow_ACU } from '../../../shared/env';
-import { isSummaryOrOutlineTable_ACU, logDebug_ACU, logError_ACU, logWarn_ACU } from '../../../shared/utils';
-import { executeContentOptimization_ACU } from '../../components/optimization-ui';
-import { maybeLiftWorldbookSuppression_ACU } from '../../../service/runtime/helpers-remaining';
-import { purgeOldLayerData_ACU } from './settings-ui-config';
-import { buildAutoUpdatePlan_ACU, checkAutoUpdatePreConditions_ACU, executeAutoUpdatePlan_ACU, handleFloorIncreaseDelay_ACU } from '../../../service/table/update-scheduler';
-import { executeAutoFillStagingGroups_ACU, processGroupedRuntimeChunk_ACU, type CardUpdateProgressEvent } from '../../../service/table/update-orchestrator';
-import { isSqliteMode } from '../../../service/table/storage-mode';
-import { startRuntimePerformanceSpan_ACU } from '../../../shared/runtime-performance';
-import { logAutoFillSkip_ACU } from '../../../shared/trigger-diagnostics';
+
+import {
+  AUTO_UPDATE_FLOOR_INCREASE_DELAY_ACU
+} from '../../../shared/defaults';
+import {
+  bindTableFillStopButton_ACU
+} from '../../components/status-display';
+import {
+  updateCardUpdateStatusDisplay_ACU
+} from '../../components/update-status-display';
+import {
+  isAutoUpdatingCard_ACU,
+  wasStoppedByUser_ACU,
+  _set_isAutoUpdatingCard_ACU
+} from '../../components/plot-editors';
+import {
+  showToastr_ACU
+} from '../../theme/toast';
+import {
+  ACU_TOAST_CATEGORY_ACU
+} from '../../../shared/constants';
+import {
+  toastr_API_ACU,
+  _set_SillyTavern_API_ACU,
+  _set_TavernHelper_API_ACU,
+  _set_jQuery_API_ACU,
+  _set_toastr_API_ACU
+} from '../../../shared/host-api';
+
+import {
+  getChatArray_ACU
+} from '../../../service/chat/chat-service';
+
+
+import {
+  abortAllActiveRequests_ACU,
+  allChatMessages_ACU,
+  coreApisAreReady_ACU,
+  currentJsonTableData_ACU,
+  getCurrentIsolationKey_ACU,
+  lastTotalAiMessages_ACU,
+  settings_ACU,
+  _set_coreApisAreReady_ACU,
+  _set_lastTotalAiMessages_ACU,
+  _set_manualExtraHint_ACU,
+  _set_wasStoppedByUser_ACU
+} from '../../../service/runtime/state-manager';
+import {
+  $manualExtraHintCheckbox_ACU
+} from '../../state/ui-refs';
+import {
+  processUpdates_ACU
+} from '../update-process';
+import {
+  getSortedSheetKeys_ACU
+} from '../../../service/template/chat-scope';
+import {
+  loadAllChatMessages_ACU,
+  updateReadableLorebookEntry_ACU
+} from '../../../service/worldbook/pipeline';
+import {
+  getStorageProvider
+} from '../../../service/table/table-storage-strategy';
+
+import {
+  renderStopButton_ACU
+} from '../../../shared/html-helpers';
+import {
+  topLevelWindow_ACU
+} from '../../../shared/env';
+import {
+  logDebug_ACU
+} from '../../../shared/utils';
+
+
+import {
+  purgeOldLayerData_ACU
+} from './settings-ui-config';
+import {
+  buildAutoUpdatePlan_ACU,
+  checkAutoUpdatePreConditions_ACU,
+  executeAutoUpdatePlan_ACU,
+  handleFloorIncreaseDelay_ACU
+} from '../../../service/table/update-scheduler';
+import {
+  executeAutoFillStagingGroups_ACU,
+  processGroupedRuntimeChunk_ACU,
+  type CardUpdateProgressEvent
+} from '../../../service/table/update-orchestrator';
+import {
+  isSqliteMode
+} from '../../../service/table/storage-mode';
+import {
+  startRuntimePerformanceSpan_ACU
+} from '../../../shared/runtime-performance';
+import {
+  logAutoFillSkip_ACU
+} from '../../../shared/trigger-diagnostics';
 
 function buildAutoUpdateProgressLabel_ACU(event: Partial<CardUpdateProgressEvent>): string {
     if (Number.isFinite(event.currentBatch) && Number.isFinite(event.totalBatches)) {

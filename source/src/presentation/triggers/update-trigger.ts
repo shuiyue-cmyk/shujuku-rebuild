@@ -1,11 +1,28 @@
-import { DEFAULT_CHAR_CARD_PROMPT_ACU, DEFAULT_MERGE_SUMMARY_PROMPT_ACU, DEFAULT_MERGE_SUMMARY_PROMPT_SQL_ACU } from '../../shared/defaults-json.js';
-import { getCharCardPromptFromUI_ACU, isAutoUpdatingCard_ACU } from '../components/plot-editors';
-import { showToastr_ACU } from '../theme/toast';
-import { SCRIPT_ID_PREFIX_ACU } from '../../shared/constants';
-import { settings_ACU } from '../../service/runtime/state-manager';
-import { sanitizeChatSheetsObject_ACU } from '../../service/template/chat-scope';
-import { isSqliteMode } from '../../service/table/storage-mode';
-import { ensureSheetOrderNumbers_ACU, logError_ACU, parseTableTemplateJson_ACU } from '../../shared/utils';
+import {
+  DEFAULT_MERGE_SUMMARY_PROMPT_ACU,
+  DEFAULT_MERGE_SUMMARY_PROMPT_SQL_ACU
+} from '../../shared/defaults-json.js';
+import {
+  getCharCardPromptFromUI_ACU
+} from '../components/plot-editors';
+import {
+  showToastr_ACU
+} from '../theme/toast';
+
+import {
+  settings_ACU
+} from '../../service/runtime/state-manager';
+import {
+  sanitizeChatSheetsObject_ACU
+} from '../../service/template/chat-scope';
+import {
+  isSqliteMode
+} from '../../service/table/storage-mode';
+import {
+  ensureSheetOrderNumbers_ACU,
+  logError_ACU,
+  parseTableTemplateJson_ACU
+} from '../../shared/utils';
 /**
  * presentation/triggers/update-trigger.ts — 手动更新触发 UI
  * 从 features/ui/01_update_trigger.js 迁移而来

@@ -1,32 +1,114 @@
 // init.ts — 初始化编排（presentation 层：负责事件绑定、UI 初始化、模块串联）
 // 从 05_core_tail.js 迁入
 
-import { DEFAULT_PLOT_SETTINGS_ACU } from '../../shared/defaults-json.js';
-import { cancelPendingChatMutationRefresh_ACU, scheduleChatMutationRefresh_ACU } from './chat-mutation-scheduler';
-import { showToastr_ACU } from '../theme/toast';
-import { attemptToLoadCoreApis_ACU } from '../triggers/settings-ui-sync/settings-ui-connect';
-import { ensureInitialSeedCheckpoint_ACU, handleChatCompletionReady_ACU, loadPresetAndCleanCharacterData_ACU } from '../../service/runtime/helpers-remaining';
-import { SillyTavern_API_ACU } from '../../shared/host-api';
-import { currentChatFileIdentifier_ACU, discardLatestGenerationContext_ACU, generationGate_ACU, getCurrentIsolationKey_ACU, markUserSendIntent_ACU, isProcessing_Plot_ACU, isQuietLikeGeneration_ACU, isRecentUserSendIntent_ACU, recordGenerationContext_ACU, recordLastUserSend_ACU, settings_ACU, shouldProcessAutoTableUpdateForGenerationEnded_ACU, shouldProcessPlotForGeneration_ACU, shouldProcessSummaryVectorIndexForGeneration_ACU, _set_allChatMessages_ACU, _set_currentChatFileIdentifier_ACU, _set_currentJsonTableData_ACU, _set_independentTableStates_ACU, _set_isProcessing_Plot_ACU, _set_lastTotalAiMessages_ACU} from '../../service/runtime/state-manager';
-import { applyTemplateScopeForCurrentChat_ACU, loadSettings_ACU } from '../../service/settings/settings-service';
-import { resetScriptStateForNewChat_ACU } from '../../service/worldbook/injection-engine';
-import { resetPlotAgentWorldbookSessionSnapshot_ACU } from '../../service/agent/agent-worldbook-takeover';
-import { reloadStorageProvider, disposeStorageProvider, getRuntimeLifecycleEpoch_ACU, hydrateStorageProviderFromSnapshot_ACU } from '../../service/table/table-storage-strategy';
-import { createCanonicalSnapshotEnvelope_ACU } from '../../service/table/canonical-snapshot-envelope';
-import { isSqliteMode } from '../../service/table/storage-mode';
-import { ensureNoActiveProvisionalBridgeForCurrentScope_ACU } from '../../service/table/manual-catch-up-provisional-bridge';
-import { loadAllChatMessages_ACU } from '../../service/worldbook/pipeline';
-import { refreshMergedDataAndNotifyWithUI_ACU } from '../components/pipeline-ui-helpers';
-import { cleanChatName_ACU, logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
-import { orchestrateAfterCommandsStrategy1_ACU, orchestrateAfterCommandsStrategy2_ACU } from '../../service/plot/plot-orchestrator';
-import { getSendTextareaValue_ACU, setSendTextareaValue_ACU } from '../../shared/host-input';
-import { handleNewMessageDebounced_ACU } from '../triggers/settings-ui-sync/settings-ui-connect';
-import { runOptimizationLogicWithUI_ACU } from '../components/plot-planning-ui';
-import { processSummaryVectorIndexBeforeGenerationWithUI_ACU, rebuildCurrentSummaryVectorIndexWithUI_ACU, shouldRebuildSummaryVectorIndexWithUI_ACU } from '../components/summary-vector-index-ui';
-import { preloadSummaryVectorIndexCacheForCurrentChat_ACU } from '../../service/vector/summary-vector-index-cache-service';
-import { restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU } from '../../service/vector/summary-vector-index-flush-queue';
-import { topLevelWindow_ACU } from '../../shared/env';
-import { logAutoFillSkip_ACU } from '../../shared/trigger-diagnostics';
+
+import {
+  cancelPendingChatMutationRefresh_ACU,
+  scheduleChatMutationRefresh_ACU
+} from './chat-mutation-scheduler';
+import {
+  showToastr_ACU
+} from '../theme/toast';
+import {
+  attemptToLoadCoreApis_ACU
+} from '../triggers/settings-ui-sync/settings-ui-connect';
+import {
+  ensureInitialSeedCheckpoint_ACU,
+  handleChatCompletionReady_ACU,
+  loadPresetAndCleanCharacterData_ACU
+} from '../../service/runtime/helpers-remaining';
+import {
+  SillyTavern_API_ACU
+} from '../../shared/host-api';
+import {
+  currentChatFileIdentifier_ACU,
+  discardLatestGenerationContext_ACU,
+  generationGate_ACU,
+  getCurrentIsolationKey_ACU,
+  markUserSendIntent_ACU,
+  isProcessing_Plot_ACU,
+  isQuietLikeGeneration_ACU,
+  isRecentUserSendIntent_ACU,
+  recordGenerationContext_ACU,
+  recordLastUserSend_ACU,
+  shouldProcessAutoTableUpdateForGenerationEnded_ACU,
+  shouldProcessPlotForGeneration_ACU,
+  shouldProcessSummaryVectorIndexForGeneration_ACU,
+  _set_allChatMessages_ACU,
+  _set_currentChatFileIdentifier_ACU,
+  _set_currentJsonTableData_ACU,
+  _set_independentTableStates_ACU,
+  _set_isProcessing_Plot_ACU,
+  _set_lastTotalAiMessages_ACU
+} from '../../service/runtime/state-manager';
+import {
+  applyTemplateScopeForCurrentChat_ACU,
+  loadSettings_ACU
+} from '../../service/settings/settings-service';
+import {
+  resetScriptStateForNewChat_ACU
+} from '../../service/worldbook/injection-engine';
+import {
+  resetPlotAgentWorldbookSessionSnapshot_ACU
+} from '../../service/agent/agent-worldbook-takeover';
+import {
+  reloadStorageProvider,
+  disposeStorageProvider,
+  getRuntimeLifecycleEpoch_ACU,
+  hydrateStorageProviderFromSnapshot_ACU
+} from '../../service/table/table-storage-strategy';
+import {
+  createCanonicalSnapshotEnvelope_ACU
+} from '../../service/table/canonical-snapshot-envelope';
+import {
+  isSqliteMode
+} from '../../service/table/storage-mode';
+import {
+  ensureNoActiveProvisionalBridgeForCurrentScope_ACU
+} from '../../service/table/manual-catch-up-provisional-bridge';
+import {
+  loadAllChatMessages_ACU
+} from '../../service/worldbook/pipeline';
+import {
+  refreshMergedDataAndNotifyWithUI_ACU
+} from '../components/pipeline-ui-helpers';
+import {
+  cleanChatName_ACU,
+  logDebug_ACU,
+  logError_ACU,
+  logWarn_ACU
+} from '../../shared/utils';
+import {
+  orchestrateAfterCommandsStrategy1_ACU,
+  orchestrateAfterCommandsStrategy2_ACU
+} from '../../service/plot/plot-orchestrator';
+import {
+  getSendTextareaValue_ACU,
+  setSendTextareaValue_ACU
+} from '../../shared/host-input';
+import {
+  handleNewMessageDebounced_ACU
+} from '../triggers/settings-ui-sync/settings-ui-connect';
+import {
+  runOptimizationLogicWithUI_ACU
+} from '../components/plot-planning-ui';
+import {
+  processSummaryVectorIndexBeforeGenerationWithUI_ACU,
+  rebuildCurrentSummaryVectorIndexWithUI_ACU,
+  shouldRebuildSummaryVectorIndexWithUI_ACU
+} from '../components/summary-vector-index-ui';
+import {
+  preloadSummaryVectorIndexCacheForCurrentChat_ACU
+} from '../../service/vector/summary-vector-index-cache-service';
+import {
+  restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU
+} from '../../service/vector/summary-vector-index-flush-queue';
+import {
+  topLevelWindow_ACU
+} from '../../shared/env';
+import {
+  logAutoFillSkip_ACU
+} from '../../shared/trigger-diagnostics';
 
 // [从 state-manager.ts 搬入 presentation 层] 安装发送意图捕捉钩子（DOM 事件绑定）
 async function ensureInitialSeedCheckpointBeforeGeneration_ACU(reason: string, { allowPendingFirstUserMessage = true } = {}) {

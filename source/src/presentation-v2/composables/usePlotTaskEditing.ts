@@ -4,9 +4,17 @@
  * 一次只编辑一个 preset 的 plotTasks 数组；操作的是抽屉内的 draft（不是 settings_ACU），
  * 直到外层的 management 调 savePreset 才落地。
  */
-import { computed, reactive, ref } from 'vue';
-import { normalizePlotTask_ACU, normalizePlotTasks_ACU } from '../../service/plot/plot-logic';
-import { buildDefaultPlotPromptGroup_ACU } from '../../service/plot/plot-state';
+import {
+  computed,
+  ref
+} from 'vue';
+import {
+  normalizePlotTask_ACU,
+  normalizePlotTasks_ACU
+} from '../../service/plot/plot-logic';
+import {
+  buildDefaultPlotPromptGroup_ACU
+} from '../../service/plot/plot-state';
 
 export interface PlotPromptSegment {
   role: string;

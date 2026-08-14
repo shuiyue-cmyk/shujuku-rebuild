@@ -2,30 +2,106 @@
  * service/runtime/helpers-data-merge.ts — 数据合并/格式化/首楼初始化/阈值
  * 从 helpers-remaining.ts 拆出
  */
-import { deriveTemplatePresetNameForImport_ACU } from '../../shared/template-preset-utils';
-import { TABLE_ORDER_FIELD_ACU } from '../../shared/constants';
-import { currentJsonTableData_ACU, getCurrentIsolationKey_ACU, independentTableStates_ACU, settings_ACU, suppressWorldbookInjectionInGreeting_ACU, _set_suppressWorldbookInjectionInGreeting_ACU, _set_currentJsonTableData_ACU } from './state-manager';
-import { isSqliteMode } from '../table/storage-mode';
-import { getChatArray_ACU, saveChatToHost_ACU } from '../../data/gateways/chat-gateway';
-import { applyTemplateScopeForCurrentChat_ACU, saveSettings_ACU } from '../settings/settings-service';
-import { buildChatSheetGuideDataFromTemplateObj_ACU, ensureStableRowIdsForSheetContent_ACU, getChatSheetGuideDataForIsolationKey_ACU, getSortedSheetKeys_ACU, materializeDataFromSheetGuide_ACU, reorderDataBySheetKeys_ACU, sanitizeTemplateSnapshotForChat_ACU, setChatSheetGuideDataForIsolationKey_ACU } from '../template/chat-scope';
-import { deleteAllGeneratedEntries_ACU } from '../worldbook/pipeline';
-import { ensureSheetOrderNumbers_ACU, isSummaryOrOutlineTable_ACU, logDebug_ACU, logError_ACU, logWarn_ACU, parseTableTemplateJson_ACU } from '../../shared/utils';
-import { getTemplateSheetKeys_ACU } from '../template/chat-scope';
-import { upsertTemplatePreset_ACU } from '../template/template-preset-service';
-import { readIsolatedTagData_ACU, readLegacyIndependentData_ACU, readLegacyStandardData_ACU, readLegacySummaryData_ACU, readModifiedKeys_ACU, readUpdateGroupKeys_ACU, readMessageIdentity_ACU, isLegacyMatchForIsolation_ACU } from '../../data/repositories/chat-message-data-repo';
-import { applyTableDelta_ACU, isDeltaTagData_ACU, isCheckpointTagData_ACU } from '../table/table-delta';
-import { isV2TagData_ACU, resolveTableStorageStrategy_ACU } from '../table/storage-strategy-resolver';
-import { loadTableStateFromFramesV2_ACU } from '../table/storage-frame-v2-replay';
-import { persistTableMutationLogV2_ACU } from '../table/storage-frame-v2-persist';
-import { migrateLegacyStorageToV2OnLoad_ACU } from '../table/storage-v2-migration';
-import { runTableWriteTransaction_ACU } from '../table/table-write-transaction';
-import { normalizeCanonicalTableRows_ACU } from '../../shared/canonical-row-normalizer';
-import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../../shared/stable-row-id-allocator';
-import { getSheetColumnProjection_ACU } from '../../shared/ddl-utils';
-import { canonicalizeDisplayName_ACU } from '../../shared/sheet-identity';
-import { applyGuideMetadataToSheet_ACU, isSameSheetHeader_ACU } from '../template/guide-metadata-overlay';
-import { repairLegacyAutoMergedRowTails_ACU } from '../../shared/canonical-row-normalizer';
+import {
+  deriveTemplatePresetNameForImport_ACU
+} from '../../shared/template-preset-utils';
+import {
+  TABLE_ORDER_FIELD_ACU
+} from '../../shared/constants';
+import {
+  currentJsonTableData_ACU,
+  getCurrentIsolationKey_ACU,
+  independentTableStates_ACU,
+  settings_ACU,
+  suppressWorldbookInjectionInGreeting_ACU,
+  _set_suppressWorldbookInjectionInGreeting_ACU,
+  _set_currentJsonTableData_ACU
+} from './state-manager';
+import {
+  isSqliteMode
+} from '../table/storage-mode';
+import {
+  getChatArray_ACU
+} from '../../data/gateways/chat-gateway';
+import {
+  applyTemplateScopeForCurrentChat_ACU
+} from '../settings/settings-service';
+import {
+  buildChatSheetGuideDataFromTemplateObj_ACU,
+  ensureStableRowIdsForSheetContent_ACU,
+  getChatSheetGuideDataForIsolationKey_ACU,
+  getSortedSheetKeys_ACU,
+  materializeDataFromSheetGuide_ACU,
+  reorderDataBySheetKeys_ACU,
+  sanitizeTemplateSnapshotForChat_ACU,
+  setChatSheetGuideDataForIsolationKey_ACU
+} from '../template/chat-scope';
+import {
+  deleteAllGeneratedEntries_ACU
+} from '../worldbook/pipeline';
+import {
+  ensureSheetOrderNumbers_ACU,
+  isSummaryOrOutlineTable_ACU,
+  logDebug_ACU,
+  logError_ACU,
+  logWarn_ACU,
+  parseTableTemplateJson_ACU
+} from '../../shared/utils';
+import {
+  getTemplateSheetKeys_ACU
+} from '../template/chat-scope';
+import {
+  upsertTemplatePreset_ACU
+} from '../template/template-preset-service';
+import {
+  readIsolatedTagData_ACU,
+  readLegacyIndependentData_ACU,
+  readLegacyStandardData_ACU,
+  readLegacySummaryData_ACU,
+  readModifiedKeys_ACU,
+  readUpdateGroupKeys_ACU,
+  isLegacyMatchForIsolation_ACU
+} from '../../data/repositories/chat-message-data-repo';
+import {
+  applyTableDelta_ACU,
+  isDeltaTagData_ACU
+} from '../table/table-delta';
+import {
+  isV2TagData_ACU,
+  resolveTableStorageStrategy_ACU
+} from '../table/storage-strategy-resolver';
+import {
+  loadTableStateFromFramesV2_ACU
+} from '../table/storage-frame-v2-replay';
+import {
+  persistTableMutationLogV2_ACU
+} from '../table/storage-frame-v2-persist';
+import {
+  migrateLegacyStorageToV2OnLoad_ACU
+} from '../table/storage-v2-migration';
+import {
+  runTableWriteTransaction_ACU
+} from '../table/table-write-transaction';
+import {
+  normalizeCanonicalTableRows_ACU
+} from '../../shared/canonical-row-normalizer';
+import {
+  allocateStableRowId_ACU,
+  createStableRowIdReservation_ACU
+} from '../../shared/stable-row-id-allocator';
+import {
+  getSheetColumnProjection_ACU
+} from '../../shared/ddl-utils';
+import {
+  canonicalizeDisplayName_ACU
+} from '../../shared/sheet-identity';
+import {
+  applyGuideMetadataToSheet_ACU,
+  isSameSheetHeader_ACU
+} from '../template/guide-metadata-overlay';
+import {
+  repairLegacyAutoMergedRowTails_ACU
+} from '../../shared/canonical-row-normalizer';
 
 /**
  * Legacy entry point retained for callers that need in-place normalization.

@@ -3,14 +3,35 @@
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-import { DEFAULT_PLOT_SETTINGS_ACU } from '../../../shared/defaults-json.js';
-import { abortController_ACU, planningGuard_ACU, settings_ACU, _set_abortController_ACU } from '../state-manager';
-import { logDebug_ACU, logError_ACU } from '../../../shared/utils';
-import { runPlotTasksRuntime_ACU } from './plot-task-engine';
-import { capturePlotRuntimeScope_ACU, summarizePlotRuntimeError_ACU, summarizePlotRuntimeScope_ACU } from './plot-runtime-scope';
-import { isFlightModeActive_ACU } from '../../flight-mode/flight-mode-state';
-import { isLorebookReadAbortedError_ACU } from '../../../shared/lorebook-read-error';
-import { isPlotStageError_ACU } from './plot-runtime-phase';
+import {
+  DEFAULT_PLOT_SETTINGS_ACU
+} from '../../../shared/defaults-json.js';
+import {
+  planningGuard_ACU,
+  settings_ACU,
+  _set_abortController_ACU
+} from '../state-manager';
+import {
+  logDebug_ACU,
+  logError_ACU
+} from '../../../shared/utils';
+import {
+  runPlotTasksRuntime_ACU
+} from './plot-task-engine';
+import {
+  capturePlotRuntimeScope_ACU,
+  summarizePlotRuntimeError_ACU,
+  summarizePlotRuntimeScope_ACU
+} from './plot-runtime-scope';
+import {
+  isFlightModeActive_ACU
+} from '../../flight-mode/flight-mode-state';
+import {
+  isLorebookReadAbortedError_ACU
+} from '../../../shared/lorebook-read-error';
+import {
+  isPlotStageError_ACU
+} from './plot-runtime-phase';
 
 const PLOT_RUNTIME_BUILD_VERSION_ACU = (globalThis as any).__ACU_BUILD_VERSION__ || 'unknown';
 

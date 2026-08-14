@@ -3,8 +3,14 @@
  * 模板预设 API — 模板预设的列表/切换/导入
  */
 
-import { deriveTemplatePresetNameForImport_ACU, normalizeTemplatePresetSelectionValue_ACU } from '../../../shared/template-preset-utils';
-import { logDebug_ACU, logError_ACU } from '../../../shared/utils';
+import {
+  deriveTemplatePresetNameForImport_ACU,
+  normalizeTemplatePresetSelectionValue_ACU
+} from '../../../shared/template-preset-utils';
+import {
+  logDebug_ACU,
+  logError_ACU
+} from '../../../shared/utils';
 import {
     applyTemplatePresetToCurrent_ACU,
     applyChatTemplateSnapshotWithReconciliation_ACU,
@@ -14,9 +20,13 @@ import {
     resolveTemplateForExport_ACU,
     upsertTemplatePreset_ACU,
 } from '../../../service/template/template-preset-service';
-import { refreshTemplatePresetSelectInUI_ACU } from '../../components/template-preset-ui';
-import { refreshPresetUIAfterSwitch_ACU } from '../../components/pipeline-ui-helpers';
-import type { ApiGroupContext } from './callback-api';
+
+import {
+  refreshPresetUIAfterSwitch_ACU
+} from '../../components/pipeline-ui-helpers';
+import type {
+  ApiGroupContext
+} from './callback-api';
 
 export function createTemplatePresetApi(ctx: ApiGroupContext): Record<string, Function> {
     return {

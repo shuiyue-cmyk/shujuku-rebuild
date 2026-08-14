@@ -5,14 +5,47 @@
  * 不操作 DOM，不引用 $popupInstance_ACU / jQuery_API_ACU 等 UI 对象。
  */
 
-import { DEFAULT_PLOT_SETTINGS_ACU } from '../../shared/defaults-json.js';
-import { activePlotEditorSettings_ACU, buildDefaultPlotPromptGroup_ACU, currentEditablePlotPresetState_ACU, ensurePlotPromptGroup_ACU, _set_currentEditablePlotPresetState_ACU, _set_activePlotEditorSettings_ACU, _set_currentPlotTaskEditorId_ACU } from './plot-state';
-import { currentChatFileIdentifier_ACU, settings_ACU } from '../runtime/state-manager';
-import { getChatArray_ACU, saveChatToHost_ACU } from '../../data/gateways/chat-gateway';
-import { saveSettings_ACU } from '../settings/settings-service';
-import { clearCurrentChatPlotScopeState_ACU, getCurrentChatPlotScopeState_ACU, sanitizePlotSettingsSnapshotForChat_ACU } from '../template/chat-scope';
-import { cleanChatName_ACU, logDebug_ACU, logWarn_ACU, normalizeExcludeRules_ACU, normalizeExtractRules_ACU, normalizeNonNegativeInteger_ACU, normalizePositiveInteger_ACU } from '../../shared/utils';
-import { getLastOptimizationBase_ACU, setLastOptimizationBase_ACU } from '../optimization/content-optimization';
+import {
+  DEFAULT_PLOT_SETTINGS_ACU
+} from '../../shared/defaults-json.js';
+import {
+  activePlotEditorSettings_ACU,
+  buildDefaultPlotPromptGroup_ACU,
+  currentEditablePlotPresetState_ACU,
+  ensurePlotPromptGroup_ACU,
+  _set_currentEditablePlotPresetState_ACU,
+  _set_activePlotEditorSettings_ACU,
+  _set_currentPlotTaskEditorId_ACU
+} from './plot-state';
+import {
+  currentChatFileIdentifier_ACU,
+  settings_ACU
+} from '../runtime/state-manager';
+import {
+  getChatArray_ACU,
+  saveChatToHost_ACU
+} from '../../data/gateways/chat-gateway';
+import {
+  saveSettings_ACU
+} from '../settings/settings-service';
+import {
+  clearCurrentChatPlotScopeState_ACU,
+  getCurrentChatPlotScopeState_ACU,
+  sanitizePlotSettingsSnapshotForChat_ACU
+} from '../template/chat-scope';
+import {
+  cleanChatName_ACU,
+  logDebug_ACU,
+  logWarn_ACU,
+  normalizeExcludeRules_ACU,
+  normalizeExtractRules_ACU,
+  normalizeNonNegativeInteger_ACU,
+  normalizePositiveInteger_ACU
+} from '../../shared/utils';
+import {
+  getLastOptimizationBase_ACU,
+  setLastOptimizationBase_ACU
+} from '../optimization/content-optimization';
 
 // ═══ 循环提示词/提示词组兼容 ═══
 

@@ -2,27 +2,96 @@
  * service/template/chat-scope/chat-scope-guide.ts
  * Sheet Guide 数据操作（D 组）
  */
-import { DEFAULT_TEMPLATE_PRESET_OPTION_VALUE_ACU, deriveTemplatePresetNameForImport_ACU, getCurrentTemplatePresetName_ACU, normalizeTemplatePresetSelectionValue_ACU } from '../../../shared/template-preset-utils';
-import { CHAT_SCOPED_CONFIG_FIELD_ACU, CHAT_SHEET_GUIDE_FIELD_ACU, CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU, CHAT_SHEET_GUIDE_VERSION_ACU, CHAT_TEMPLATE_ARCHIVE_OPTION_PREFIX_ACU, LEGACY_CHAT_TABLE_HEADER_GUIDE_FIELD_ACU, MAX_CHAT_TEMPLATE_ARCHIVES_PER_TAG_ACU, getChatScopedConfigContainer_ACU, getChatSheetGuideContainer_ACU, peekChatScopedConfigContainer_ACU, peekChatSheetGuideContainer_ACU, normalizeChatScopedConfigContainer_ACU, setChatSheetGuideContainer_ACU } from '../../../data/storage/chat-history';
-import { getDefaultTemplateSnapshot_ACU, getTemplatePreset_ACU } from '../template-preset-service';
-import { currentJsonTableData_ACU, getCurrentIsolationKey_ACU, settings_ACU } from '../../runtime/state-manager';
-import { getChatArray_ACU, saveChatToHost_ACU } from '../../../data/gateways/chat-gateway';
-import { TABLE_ORDER_FIELD_ACU } from '../../../shared/constants';
-import { applyTemplateScopeForCurrentChat_ACU } from '../../settings/settings-service';
-import { refreshMergedDataAndNotify_ACU } from '../../worldbook/pipeline';
-import { safeJsonParse_ACU, safeJsonStringify_ACU } from '../../../shared/json-helpers';
-import { applySheetOrderNumbers_ACU, cloneScopedConfigData_ACU, ensureSheetOrderNumbers_ACU, getChatFirstLayerMessage_ACU, hashUserInput_ACU, isSummaryOrOutlineTable_ACU, logDebug_ACU, logWarn_ACU, parseTableTemplateJson_ACU } from '../../../shared/utils';
+import {
+  deriveTemplatePresetNameForImport_ACU,
+  getCurrentTemplatePresetName_ACU,
+  normalizeTemplatePresetSelectionValue_ACU
+} from '../../../shared/template-preset-utils';
+import {
+  CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU,
+  CHAT_SHEET_GUIDE_VERSION_ACU,
+  LEGACY_CHAT_TABLE_HEADER_GUIDE_FIELD_ACU,
+  getChatSheetGuideContainer_ACU,
+  peekChatScopedConfigContainer_ACU,
+  peekChatSheetGuideContainer_ACU,
+  setChatSheetGuideContainer_ACU
+} from '../../../data/storage/chat-history';
+import {
+  getDefaultTemplateSnapshot_ACU,
+  getTemplatePreset_ACU
+} from '../template-preset-service';
+import {
+  currentJsonTableData_ACU,
+  getCurrentIsolationKey_ACU,
+  settings_ACU
+} from '../../runtime/state-manager';
+import {
+  getChatArray_ACU,
+  saveChatToHost_ACU
+} from '../../../data/gateways/chat-gateway';
+import {
+  TABLE_ORDER_FIELD_ACU
+} from '../../../shared/constants';
+import {
+  applyTemplateScopeForCurrentChat_ACU
+} from '../../settings/settings-service';
+import {
+  refreshMergedDataAndNotify_ACU
+} from '../../worldbook/pipeline';
+import {
+  safeJsonParse_ACU
+} from '../../../shared/json-helpers';
+import {
+  applySheetOrderNumbers_ACU,
+  cloneScopedConfigData_ACU,
+  ensureSheetOrderNumbers_ACU,
+  getChatFirstLayerMessage_ACU,
+  isSummaryOrOutlineTable_ACU,
+  logDebug_ACU,
+  logWarn_ACU,
+  parseTableTemplateJson_ACU
+} from '../../../shared/utils';
 
-import { getTemplatePresetDisplayName_ACU, persistTemplateScopeSelectionState_ACU, upsertTemplatePreset_ACU } from '../template-preset-service';
-import { formatPlotScopeUpdatedAt_ACU } from '../../../shared/utils';
-import { ensureExportConfigDefaults_ACU, ensureGlobalInjectionConfigDefaults_ACU } from '../../worldbook/injection-engine';
-import { readIsolatedTagData_ACU, readLegacyIndependentData_ACU, readLegacyStandardData_ACU, readLegacySummaryData_ACU, isLegacyMatchForIsolation_ACU } from '../../../data/repositories/chat-message-data-repo';
-import { normalizeChatScopedConfigSource_ACU, normalizeGuideData_ACU } from './chat-scope-base';
-import { normalizeSheetGuideRowIds_ACU } from './sheet-guide-row-id-normalizer';
+import {
+  upsertTemplatePreset_ACU
+} from '../template-preset-service';
+
+import {
+  ensureExportConfigDefaults_ACU,
+  ensureGlobalInjectionConfigDefaults_ACU
+} from '../../worldbook/injection-engine';
+import {
+  readIsolatedTagData_ACU,
+  readLegacyIndependentData_ACU,
+  readLegacyStandardData_ACU,
+  readLegacySummaryData_ACU,
+  isLegacyMatchForIsolation_ACU
+} from '../../../data/repositories/chat-message-data-repo';
+import {
+  normalizeChatScopedConfigSource_ACU,
+  normalizeGuideData_ACU
+} from './chat-scope-base';
+import {
+  normalizeSheetGuideRowIds_ACU
+} from './sheet-guide-row-id-normalizer';
 // 循环 import — 运行时安全
-import { normalizeTemplateScopeMode_ACU, normalizeTemplateScopeIsolationKey_ACU, sanitizeTemplateSnapshotForChat_ACU, getCurrentChatTemplateScopeState_ACU, setCurrentChatTemplateScopeState_ACU, buildChatTemplateScopeStateFromCurrent_ACU, getGlobalTemplateSnapshotForCurrentProfile_ACU, normalizeChatTemplateScopeState_ACU } from './chat-scope-template';
-import { getSortedSheetKeys_ACU } from './chat-scope-sheet';
-import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../../../shared/stable-row-id-allocator';
+import {
+  normalizeTemplateScopeMode_ACU,
+  normalizeTemplateScopeIsolationKey_ACU,
+  sanitizeTemplateSnapshotForChat_ACU,
+  getCurrentChatTemplateScopeState_ACU,
+  setCurrentChatTemplateScopeState_ACU,
+  buildChatTemplateScopeStateFromCurrent_ACU,
+  getGlobalTemplateSnapshotForCurrentProfile_ACU,
+  normalizeChatTemplateScopeState_ACU
+} from './chat-scope-template';
+import {
+  getSortedSheetKeys_ACU
+} from './chat-scope-sheet';
+import {
+  allocateStableRowId_ACU,
+  createStableRowIdReservation_ACU
+} from '../../../shared/stable-row-id-allocator';
 
 function cloneTableRows_ACU(rows: any[] | null | undefined) {
     return Array.isArray(rows) ? JSON.parse(JSON.stringify(rows)) : [];

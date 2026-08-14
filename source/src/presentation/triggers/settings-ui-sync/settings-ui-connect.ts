@@ -1,35 +1,98 @@
 /**
  * presentation/triggers/settings-ui-sync/settings-ui-connect.ts
  */
-import { DEFAULT_CHAR_CARD_PROMPT_ACU } from '../../../shared/defaults-json.js';
-import { AUTO_UPDATE_FLOOR_INCREASE_DELAY_ACU } from '../../../shared/defaults';
-import { updateCardUpdateStatusDisplay_ACU } from '../../components/update-status-display';
-import { autoFillDebounceTimer_ACU, getCharCardPromptFromUI_ACU, isAutoUpdatingCard_ACU, manualExtraHint_ACU, renderPromptSegments_ACU, wasStoppedByUser_ACU, _set_autoFillDebounceTimer_ACU, _set_isAutoUpdatingCard_ACU, _set_manualExtraHint_ACU } from '../../components/plot-editors';
-import { showToastr_ACU } from '../../theme/toast';
-import { ACU_TOAST_CATEGORY_ACU } from '../../../shared/constants';
-import { SillyTavern_API_ACU, TavernHelper_API_ACU, toastr_API_ACU, _set_SillyTavern_API_ACU, _set_TavernHelper_API_ACU, _set_jQuery_API_ACU, _set_toastr_API_ACU } from '../../../shared/host-api';
-import { jQuery_API_ACU } from '../../dom-utils';
-import { isExtensionMode, getHostWindow } from '../../../shared/runtime-env';
-import { getChatArray_ACU, saveChatToHost_ACU } from '../../../service/chat/chat-service';
-import { getConnectionManagerProfiles_ACU, fetchAvailableModels_ACU } from '../../../service/ai/ai-service';
-import { getCurrentCharacterFallback_ACU } from '../../../service/host/host-state-service';
-import { AI_MATERIALIZATION_MAX_RETRIES_ACU, AI_MATERIALIZATION_RETRY_DELAY_MS_ACU, NEW_MESSAGE_DEBOUNCE_DELAY_ACU, allChatMessages_ACU, coreApisAreReady_ACU, currentChatFileIdentifier_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU, lastTotalAiMessages_ACU, settings_ACU , _set_coreApisAreReady_ACU, _set_lastTotalAiMessages_ACU} from '../../../service/runtime/state-manager';
-import { $popupInstance_ACU, $customApiUrlInput_ACU, $customApiKeyInput_ACU, $customApiModelInput_ACU, $customApiModelSelect_ACU, $maxTokensInput_ACU, $temperatureInput_ACU, $apiStatusDisplay_ACU, $charCardPromptSegmentsContainer_ACU, $autoUpdateThresholdInput_ACU, $autoUpdateTokenThresholdInput_ACU, $autoUpdateFrequencyInput_ACU, $updateBatchSizeInput_ACU, $maxConcurrentGroupsInput_ACU, $skipUpdateFloorsInput_ACU, $retainRecentLayersInput_ACU, $tableMaxRetriesInput_ACU, $manualExtraHintCheckbox_ACU } from '../../state/ui-refs';
-import { checkAutoMergeTrigger_ACU, prepareAutoMergeBatches_ACU, executeAutoMergeBatch_ACU, finalizeAutoMerge_ACU } from '../../../service/summary/merge-logic';
-import { processUpdates_ACU } from '../update-process';
-import { getSortedSheetKeys_ACU } from '../../../service/template/chat-scope';
-import { loadAllChatMessages_ACU } from '../../../service/worldbook/pipeline';
-import { refreshMergedDataAndNotifyWithUI_ACU } from '../../components/pipeline-ui-helpers';
-import { SCRIPT_ID_PREFIX_ACU } from '../../../shared/constants';
-import { escapeHtml_ACU } from '../../../shared/html-helpers';
-import { topLevelWindow_ACU } from '../../../shared/env';
-import { isSummaryOrOutlineTable_ACU, logDebug_ACU, logError_ACU, logWarn_ACU } from '../../../shared/utils';
-import { startRuntimePerformanceSpan_ACU } from '../../../shared/runtime-performance';
-import { executeContentOptimization_ACU } from '../../components/optimization-ui';
-import { maybeLiftWorldbookSuppression_ACU } from '../../../service/runtime/helpers-remaining';
-import { triggerAutomaticUpdateIfNeeded_ACU } from './settings-ui-trigger';
-import { evaluateNewMessageAction_ACU, resolveGeneratedAiMessageIndex_ACU, type AutoFillIntent_ACU } from '../../../service/runtime/message-handler';
-import { logAutoFillSkip_ACU } from '../../../shared/trigger-diagnostics';
+
+
+
+import {
+  autoFillDebounceTimer_ACU,
+  isAutoUpdatingCard_ACU,
+  wasStoppedByUser_ACU,
+  _set_autoFillDebounceTimer_ACU,
+  _set_isAutoUpdatingCard_ACU,
+  _set_manualExtraHint_ACU
+} from '../../components/plot-editors';
+import {
+  showToastr_ACU
+} from '../../theme/toast';
+
+import {
+  SillyTavern_API_ACU,
+  TavernHelper_API_ACU,
+  toastr_API_ACU,
+  _set_SillyTavern_API_ACU,
+  _set_TavernHelper_API_ACU,
+  _set_jQuery_API_ACU,
+  _set_toastr_API_ACU
+} from '../../../shared/host-api';
+import {
+  jQuery_API_ACU
+} from '../../dom-utils';
+import {
+  isExtensionMode,
+  getHostWindow
+} from '../../../shared/runtime-env';
+import {
+  getChatArray_ACU
+} from '../../../service/chat/chat-service';
+import {
+  fetchAvailableModels_ACU
+} from '../../../service/ai/ai-service';
+
+import {
+  AI_MATERIALIZATION_MAX_RETRIES_ACU,
+  AI_MATERIALIZATION_RETRY_DELAY_MS_ACU,
+  NEW_MESSAGE_DEBOUNCE_DELAY_ACU,
+  coreApisAreReady_ACU,
+  currentChatFileIdentifier_ACU,
+  getCurrentIsolationKey_ACU,
+  settings_ACU,
+  _set_coreApisAreReady_ACU,
+  _set_lastTotalAiMessages_ACU
+} from '../../../service/runtime/state-manager';
+import {
+  $popupInstance_ACU,
+  $customApiUrlInput_ACU,
+  $customApiKeyInput_ACU,
+  $customApiModelSelect_ACU,
+  $apiStatusDisplay_ACU
+} from '../../state/ui-refs';
+
+
+import {
+  loadAllChatMessages_ACU
+} from '../../../service/worldbook/pipeline';
+
+
+import {
+  escapeHtml_ACU
+} from '../../../shared/html-helpers';
+
+import {
+  logDebug_ACU,
+  logError_ACU,
+  logWarn_ACU
+} from '../../../shared/utils';
+import {
+  startRuntimePerformanceSpan_ACU
+} from '../../../shared/runtime-performance';
+import {
+  executeContentOptimization_ACU
+} from '../../components/optimization-ui';
+import {
+  maybeLiftWorldbookSuppression_ACU
+} from '../../../service/runtime/helpers-remaining';
+import {
+  triggerAutomaticUpdateIfNeeded_ACU
+} from './settings-ui-trigger';
+import {
+  evaluateNewMessageAction_ACU,
+  resolveGeneratedAiMessageIndex_ACU,
+  type AutoFillIntent_ACU
+} from '../../../service/runtime/message-handler';
+import {
+  logAutoFillSkip_ACU
+} from '../../../shared/trigger-diagnostics';
 
   export async function fetchModelsAndConnect_ACU() {
     if (

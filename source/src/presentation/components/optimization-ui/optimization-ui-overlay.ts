@@ -2,23 +2,35 @@
  * presentation/components/optimization-ui/optimization-ui-overlay.ts
  * 优化覆盖层和进度 Toast
  */
-import { DEFAULT_PLOT_SETTINGS_ACU } from '../../../shared/defaults-json.js';
-import { activePlotEditorSettings_ACU, buildDefaultPlotPromptGroup_ACU, currentEditablePlotPresetState_ACU, currentPlotTaskEditorId_ACU, ensurePlotPromptGroup_ACU , _set_currentEditablePlotPresetState_ACU, _set_activePlotEditorSettings_ACU, _set_currentPlotTaskEditorId_ACU} from '../../../service/plot/plot-state';
-import { showToastr_ACU } from '../../theme/toast';
-import { getChatArray_ACU, saveChatToHost_ACU, setChatMessages_ACU, emitMessageUpdated_ACU } from '../../../service/chat/chat-service';
-import { jQuery_API_ACU } from '../../dom-utils';
-import { toastr_API_ACU } from '../../../shared/host-api';
-import { currentChatFileIdentifier_ACU, settings_ACU } from '../../../service/runtime/state-manager';
-import { $popupInstance_ACU } from '../../state/ui-refs';
-import { saveSettingsAndNotify_ACU } from '../settings-ui-helpers';
-import { buildChatPlotScopeStateFromSettings_ACU, clearCurrentChatPlotScopeState_ACU, getCurrentChatPlotScopeState_ACU, sanitizePlotSettingsSnapshotForChat_ACU, setCurrentChatPlotScopeState_ACU } from '../../../service/template/chat-scope';
-import { SCRIPT_ID_PREFIX_ACU } from '../../../shared/constants';
-import { escapeHtml_ACU, renderStopButton_ACU } from '../../../shared/html-helpers';
-import { cleanChatName_ACU, logDebug_ACU, logError_ACU, logWarn_ACU, normalizeExcludeRules_ACU, normalizeExtractRules_ACU, normalizeNonNegativeInteger_ACU, normalizePositiveInteger_ACU } from '../../../shared/utils';
-import { triggerAutomaticUpdateIfNeeded_ACU } from '../../triggers/settings-ui-sync';
-import { cancelContentOptimization_ACU, contentOptimizationAbortRequested_ACU, ensureOptimizationNotCancelled_ACU, getLastOptimizationBase_ACU, optimizationProgressToast_ACU, performContentOptimization_ACU, setLastOptimizationBase_ACU, _set_optimizationProgressToast_ACU, _set_contentOptimizationAbortRequested_ACU } from '../../../service/optimization/content-optimization';
-import { applyContextTagFilters_ACU } from '../../../service/runtime/helpers-remaining';
-import { getActivePlotEditorSettings_ACU, getPlotPromptContentByIdFromSettings_ACU, setPlotPromptContentByIdForSettings_ACU, ensureLoopPromptsArray_ACU } from '../../../service/plot/plot-logic';
+
+import {
+  _set_currentEditablePlotPresetState_ACU,
+  _set_activePlotEditorSettings_ACU,
+  _set_currentPlotTaskEditorId_ACU
+} from '../../../service/plot/plot-state';
+import {
+  showToastr_ACU
+} from '../../theme/toast';
+import {
+  jQuery_API_ACU
+} from '../../dom-utils';
+import {
+  toastr_API_ACU
+} from '../../../shared/host-api';
+
+
+
+import {
+  renderStopButton_ACU
+} from '../../../shared/html-helpers';
+
+import {
+  cancelContentOptimization_ACU,
+  optimizationProgressToast_ACU,
+  _set_optimizationProgressToast_ACU,
+  _set_contentOptimizationAbortRequested_ACU
+} from '../../../service/optimization/content-optimization';
+
 
   // --- [正文优化] 构建默认提示词组 ---
   export function showOptimizationOverlay_ACU(message = '正在优化正文...') {

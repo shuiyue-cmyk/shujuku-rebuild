@@ -1,21 +1,50 @@
-import { createEmbeddings_ACU } from '../../data/gateways/vector-embedding-gateway';
-import { readIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
-import { commitVectorMetadataPatch_ACU } from './summary-vector-index-chat-commit';
-import { loadVectorIndexRegistry_ACU, readVectorIndexJsonFile_ACU } from '../../data/storage/vector-index-st-files-storage';
-import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
-import { normalizeSummaryVectorIndexScope_ACU, normalizeSummaryVectorIsolationKey_ACU } from '../../shared/summary-vector-index-scope';
-import { getChatArray_ACU } from '../chat/chat-service';
-import { callAIWithPreset_ACU } from '../ai/api-call';
-import { getCurrentWorldbookConfig_ACU } from '../settings/settings-readers';
-import { globalMeta_ACU } from '../../data/repositories/profile-repo';
-import { getInjectionTargetLorebook_ACU, getIsolationPrefix_ACU } from '../worldbook/injection-engine';
+import {
+  createEmbeddings_ACU
+} from '../../data/gateways/vector-embedding-gateway';
+import {
+  readIsolatedTagData_ACU
+} from '../../data/repositories/chat-message-data-repo';
+import {
+  commitVectorMetadataPatch_ACU
+} from './summary-vector-index-chat-commit';
+import {
+  loadVectorIndexRegistry_ACU,
+  readVectorIndexJsonFile_ACU
+} from '../../data/storage/vector-index-st-files-storage';
+import {
+  logDebug_ACU,
+  logWarn_ACU
+} from '../../shared/utils';
+import {
+  normalizeSummaryVectorIndexScope_ACU,
+  normalizeSummaryVectorIsolationKey_ACU
+} from '../../shared/summary-vector-index-scope';
+import {
+  getChatArray_ACU
+} from '../chat/chat-service';
+import {
+  callAIWithPreset_ACU
+} from '../ai/api-call';
+import {
+  getCurrentWorldbookConfig_ACU
+} from '../settings/settings-readers';
+import {
+  globalMeta_ACU
+} from '../../data/repositories/profile-repo';
+import {
+  getInjectionTargetLorebook_ACU,
+  getIsolationPrefix_ACU
+} from '../worldbook/injection-engine';
 import {
     createLorebookEntries_ACU,
     getLorebookEntries_ACU,
     isWorldbookApiAvailable_ACU,
     setLorebookEntries_ACU,
 } from '../worldbook/worldbook-service';
-import { getEffectiveSummaryVectorIndexConfig_ACU, validateSummaryVectorIndexConfig_ACU } from './vector-memory-config';
+import {
+  getEffectiveSummaryVectorIndexConfig_ACU,
+  validateSummaryVectorIndexConfig_ACU
+} from './vector-memory-config';
 import {
     getLatestSummaryVectorIndexSnapshotState_ACU,
 } from './summary-vector-index-state-service';

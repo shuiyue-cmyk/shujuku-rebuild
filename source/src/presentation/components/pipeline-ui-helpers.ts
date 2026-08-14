@@ -113,7 +113,7 @@ export function refreshPresetUIAfterSwitch_ACU(
         logDebug_ACU('[refreshPresetUI] 数据库状态卡片刷新失败:', e);
     }
 
-    // 4. V2 数据库编辑器
+    // 3. V2 数据库编辑器
     try {
         const surface = getUiSurface_ACU();
         if (surface) {

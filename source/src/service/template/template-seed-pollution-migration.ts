@@ -13,18 +13,39 @@
  * 只修正 guide seedRows 与 chat scope。迁移前 prepare 已导出备份快照，commit 后可回滚。
  */
 
-import { getChatArray_ACU, saveChatToHostStrict_ACU } from '../../data/gateways/chat-gateway';
-import { getCurrentIsolationKey_ACU, settings_ACU } from '../runtime/state-manager';
-import { extractBusinessKeyColumns_ACU } from './template-data-preflight';
-import { runTableWriteTransaction_ACU } from '../table/table-write-transaction';
-import { reloadStorageProvider, didSqliteFallbackAfterReload_ACU } from '../table/table-storage-strategy';
-import { getCurrentStorageMode } from '../table/storage-mode';
+import {
+  getChatArray_ACU,
+  saveChatToHostStrict_ACU
+} from '../../data/gateways/chat-gateway';
+import {
+  getCurrentIsolationKey_ACU,
+  settings_ACU
+} from '../runtime/state-manager';
+import {
+  extractBusinessKeyColumns_ACU
+} from './template-data-preflight';
+import {
+  runTableWriteTransaction_ACU
+} from '../table/table-write-transaction';
+import {
+  reloadStorageProvider,
+  didSqliteFallbackAfterReload_ACU
+} from '../table/table-storage-strategy';
+import {
+  getCurrentStorageMode
+} from '../table/storage-mode';
 import {
   getChatSheetGuideDataForIsolationKey_ACU,
   setChatSheetGuideDataForIsolationKey_ACU,
 } from './chat-scope';
-import { CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU, getChatSheetGuideContainer_ACU, getChatScopedConfigContainer_ACU, setChatSheetGuideContainer_ACU, setChatScopedConfigContainer_ACU } from '../../data/storage/chat-history';
-import { logWarn_ACU } from '../../shared/utils';
+import {
+  CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU,
+  getChatSheetGuideContainer_ACU,
+  getChatScopedConfigContainer_ACU,
+  setChatSheetGuideContainer_ACU,
+  setChatScopedConfigContainer_ACU
+} from '../../data/storage/chat-history';
+
 
 /** 单表迁移动作 */
 export type SeedMigrationAction_ACU =

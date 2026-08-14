@@ -1,8 +1,12 @@
 // plot-editors.ts
 // 从 02_shared_editors_and_selectors.js 整体迁入
 
-import { DEFAULT_CHAR_CARD_PROMPT_ACU } from '../../shared/defaults-json.js';
-import { showToastr_ACU } from '../theme/toast';
+import {
+  DEFAULT_CHAR_CARD_PROMPT_ACU
+} from '../../shared/defaults-json.js';
+import {
+  showToastr_ACU
+} from '../theme/toast';
 
 import {
   settings_ACU,
@@ -25,15 +29,48 @@ import {
 } from '../../service/runtime/state-manager';
 
 let plotTaskEditorAutoSaveTimer_ACU: ReturnType<typeof setTimeout> | null = null;
-import { saveSettingsAndNotify_ACU } from './settings-ui-helpers';
-import { SCRIPT_ID_PREFIX_ACU } from '../../shared/constants';
-import { escapeHtml_ACU } from '../../shared/html-helpers';
-import { logWarn_ACU, normalizePositiveInteger_ACU } from '../../shared/utils';
-import { ensurePlotTasksCompat_ACU, getActivePlotEditorSettings_ACU, getPlotPromptGroupFromSource_ACU, normalizePlotTask_ACU, normalizePlotTasks_ACU, persistCurrentChatPlotEditorSnapshot_ACU, syncLegacyPlotSettingsFromTask_ACU } from '../../service/plot/plot-logic';
-import { activePlotEditorSettings_ACU, currentEditablePlotPresetState_ACU, currentPlotTaskEditorId_ACU, _set_currentPlotTaskEditorId_ACU, buildDefaultPlotPromptGroup_ACU, ensurePlotPromptGroup_ACU } from '../../service/plot/plot-state';
-import { $popupInstance_ACU, $charCardPromptSegmentsContainer_ACU, $plotPromptSegmentsContainer_ACU, $plotTaskListContainer_ACU, _assignUIPlaceholders_ACU } from '../state/ui-refs';
-import { DEFAULT_PLOT_SETTINGS_ACU } from '../../shared/defaults-json.js';
-import { jQuery_API_ACU } from '../dom-utils';
+import {
+  saveSettingsAndNotify_ACU
+} from './settings-ui-helpers';
+import {
+  SCRIPT_ID_PREFIX_ACU
+} from '../../shared/constants';
+import {
+  escapeHtml_ACU
+} from '../../shared/html-helpers';
+import {
+  logWarn_ACU,
+  normalizePositiveInteger_ACU
+} from '../../shared/utils';
+import {
+  ensurePlotTasksCompat_ACU,
+  getActivePlotEditorSettings_ACU,
+  getPlotPromptGroupFromSource_ACU,
+  normalizePlotTask_ACU,
+  normalizePlotTasks_ACU,
+  persistCurrentChatPlotEditorSnapshot_ACU,
+  syncLegacyPlotSettingsFromTask_ACU
+} from '../../service/plot/plot-logic';
+import {
+  currentEditablePlotPresetState_ACU,
+  currentPlotTaskEditorId_ACU,
+  _set_currentPlotTaskEditorId_ACU,
+  buildDefaultPlotPromptGroup_ACU,
+  ensurePlotPromptGroup_ACU
+} from '../../service/plot/plot-state';
+import {
+  $popupInstance_ACU,
+  $charCardPromptSegmentsContainer_ACU,
+  $plotPromptSegmentsContainer_ACU,
+  $plotTaskListContainer_ACU,
+  _assignUIPlaceholders_ACU
+} from '../state/ui-refs';
+import {
+  DEFAULT_PLOT_SETTINGS_ACU
+} from '../../shared/defaults-json.js';
+import {
+  jQuery_API_ACU
+} from '../dom-utils';
 
 function getPlotTaskApiPresetOverrides_ACU(): Record<string, string> {
     if (!settings_ACU.plotTaskApiPresetOverridesById || typeof settings_ACU.plotTaskApiPresetOverridesById !== 'object' || Array.isArray(settings_ACU.plotTaskApiPresetOverridesById)) {

@@ -1,6 +1,12 @@
-import { TABLE_ORDER_FIELD_ACU } from '../../../shared/constants';
-import { topLevelWindow_ACU } from '../../../shared/env';
-import { notifyTemplateRuntimeCommitted_ACU } from '../../../shared/template-runtime-change';
+import {
+  TABLE_ORDER_FIELD_ACU
+} from '../../../shared/constants';
+import {
+  topLevelWindow_ACU
+} from '../../../shared/env';
+import {
+  notifyTemplateRuntimeCommitted_ACU
+} from '../../../shared/template-runtime-change';
 import {
   applySheetOrderNumbers_ACU,
   ensureSheetOrderNumbers_ACU,
@@ -13,7 +19,9 @@ import {
   isDefaultTemplatePresetSelection_ACU,
   normalizeTemplatePresetSelectionValue_ACU,
 } from '../../../shared/template-preset-utils';
-import { getChatArray_ACU } from '../../../service/chat/chat-service';
+import {
+  getChatArray_ACU
+} from '../../../service/chat/chat-service';
 import {
   currentJsonTableData_ACU,
   getCurrentIsolationKey_ACU,
@@ -27,28 +35,53 @@ import {
   saveTableLocksForSheet_ACU,
   setSpecialIndexLockEnabled_ACU,
 } from '../../../service/runtime/helpers-remaining';
-import { getCurrentWorldbookConfig_ACU } from '../../../service/settings/settings-readers';
-import { runTableUpdateCommit_ACU } from '../../../service/table/table-update-commit';
+import {
+  getCurrentWorldbookConfig_ACU
+} from '../../../service/settings/settings-readers';
+import {
+  runTableUpdateCommit_ACU
+} from '../../../service/table/table-update-commit';
 import {
   getLatestAiMessageIndexFromChat_ACU,
   resolveTableHistoryStateFromChat_ACU,
 } from '../../../service/table/table-history';
-import { isSqliteMode } from '../../../service/table/storage-mode';
-import { commitCurrentFloorTemplateChanges_ACU, commitCurrentFloorTemplateScopeOnly_ACU, demoteTemplateOnlyRootToScopeOnly_ACU } from '../../../service/table/storage-frame-v2-persist';
-import { captureTableRuntimeRevisionForWriteSet_ACU } from '../../../service/table/table-write-transaction';
-import { preflightSchemaMigrations_ACU } from '../../../service/table/schema-migration-preflight';
-import { resolveTemplateSwitchMode_ACU } from '../../../service/table/template-switch-mode-resolver';
-import type { TableDataObject_ACU } from '../../../shared/models/table-data';
-import { normalizeCanonicalTableRows_ACU } from '../../../shared/canonical-row-normalizer';
-import { reloadStorageProvider } from '../../../service/table/table-storage-strategy';
-import { applyTemplateScopeForCurrentChat_ACU } from '../../../service/settings/settings-service';
+import {
+  isSqliteMode
+} from '../../../service/table/storage-mode';
+import {
+  commitCurrentFloorTemplateChanges_ACU,
+  commitCurrentFloorTemplateScopeOnly_ACU,
+  demoteTemplateOnlyRootToScopeOnly_ACU
+} from '../../../service/table/storage-frame-v2-persist';
+import {
+  captureTableRuntimeRevisionForWriteSet_ACU
+} from '../../../service/table/table-write-transaction';
+import {
+  preflightSchemaMigrations_ACU
+} from '../../../service/table/schema-migration-preflight';
+import {
+  resolveTemplateSwitchMode_ACU
+} from '../../../service/table/template-switch-mode-resolver';
+
+import {
+  normalizeCanonicalTableRows_ACU
+} from '../../../shared/canonical-row-normalizer';
+import {
+  reloadStorageProvider
+} from '../../../service/table/table-storage-strategy';
+import {
+  applyTemplateScopeForCurrentChat_ACU
+} from '../../../service/settings/settings-service';
 import {
   buildChatSheetGuideDataFromData_ACU,
   getChatSheetGuideDataForIsolationKey_ACU,
   getSortedSheetKeys_ACU,
   sanitizeTemplateSnapshotForChat_ACU,
 } from '../../../service/template/chat-scope';
-import { generateDDL, validateDDLTextAgainstHeaders_ACU } from '../../../data/sqlite/schema-mapper';
+import {
+  generateDDL,
+  validateDDLTextAgainstHeaders_ACU
+} from '../../../data/sqlite/schema-mapper';
 import {
   applyTemplatePresetToCurrent_ACU,
   getTemplatePreset_ACU,
@@ -60,16 +93,27 @@ import {
   getGlobalInjectionConfigFromData_ACU,
   purgeSheetKeysFromChatHistoryHard_ACU,
 } from '../../../service/worldbook/injection-engine';
-import { refreshMergedDataAndNotify_ACU, updateReadableLorebookEntry_ACU } from '../../../service/worldbook/pipeline';
-import { enqueueSummaryVectorIndexFlush_ACU } from '../../../service/vector/summary-vector-index-flush-queue';
-import { deleteCurrentSummaryVectorIndexFromChat_ACU } from '../../../service/vector/summary-vector-index-chat-service';
+import {
+  refreshMergedDataAndNotify_ACU
+} from '../../../service/worldbook/pipeline';
+import {
+  enqueueSummaryVectorIndexFlush_ACU
+} from '../../../service/vector/summary-vector-index-flush-queue';
+import {
+  deleteCurrentSummaryVectorIndexFromChat_ACU
+} from '../../../service/vector/summary-vector-index-chat-service';
 import {
   applyVisualizerPendingDataOps_ACU,
   hasVisualizerPendingDataOps_ACU,
   replaceVisualizerTemporaryRowIds_ACU,
 } from '../../../service/visualizer/visualizer-data-ops';
-import { useToastStore } from '../../stores/toast-store';
-import { useVisualizerStore, type VisualizerLockDraft, type VisualizerSaveTarget } from '../../stores/visualizer-store';
+import {
+  useToastStore
+} from '../../stores/toast-store';
+import {
+  useVisualizerStore,
+  type VisualizerLockDraft
+} from '../../stores/visualizer-store';
 
 export interface VisualizerSaveInteractions {
   requestGlobalPresetName?: (defaultName: string) => string | null | Promise<string | null>;

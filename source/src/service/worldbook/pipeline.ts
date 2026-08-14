@@ -1,21 +1,106 @@
-import type { AgentWorldbookControlSnapshot_ACU, AgentWorldbookControlSnapshotEntry_ACU } from '../../shared/models/agent-worldbook-model';
-import { getCurrentWorldbookConfig_ACU } from '../settings/settings-readers';
-import { allChatMessages_ACU, coreApisAreReady_ACU, currentChatFileIdentifier_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU, settings_ACU, _set_currentJsonTableData_ACU, _set_allChatMessages_ACU} from '../runtime/state-manager';
-import { getLorebookEntriesRequired_ACU as gwGetLorebookEntriesRequired_ACU, getLorebookEntries_ACU as gwGetLorebookEntries_ACU, setLorebookEntries_ACU as gwSetLorebookEntries_ACU, createLorebookEntries_ACU as gwCreateLorebookEntries_ACU, deleteLorebookEntries_ACU as gwDeleteLorebookEntries_ACU, listLorebooks_ACU, getWorldBooks_ACU as gwGetWorldBooks_ACU, isWorldbookApiAvailable_ACU, normalizeLorebookEntriesForRead_ACU, resolveLorebookNameFromList_ACU } from '../../data/gateways/worldbook-gateway';
-import { getCharLorebooks_ACU, getChatMessages_ACU } from '../../data/gateways/character-gateway';
-import { getChatLength_ACU } from '../../data/gateways/chat-gateway';
-import { saveSettings_ACU } from '../settings/settings-service';
-import { getChatSheetGuideDataForIsolationKey_ACU, getSortedSheetKeys_ACU, materializeDataFromSheetGuide_ACU, reorderDataBySheetKeys_ACU } from '../template/chat-scope';
-import { getImportBatchPrefix_ACU, getImportStablePrefix_ACU } from '../../shared/constants';
-import { logDebug_ACU, logError_ACU, logWarn_ACU, parseTableTemplateJson_ACU } from '../../shared/utils';
-import { isEntryBlocked_ACU } from '../../shared/utils';
-import { classifyLorebookReadError_ACU, summarizeStrictLorebookReadError_ACU as sharedSummarizeStrictLorebookReadError_ACU } from '../../shared/lorebook-read-error';
-import { resolveLorebookReadTargets_ACU } from './read-scope';
-import { consumeLastMergeQuarantinedSheetKeys_ACU, consumeLastMergeWarnings_ACU, formatJsonToReadable_ACU, maybeLiftWorldbookSuppression_ACU, mergeAllIndependentTables_ACU, shouldSuppressWorldbookInjection_ACU } from '../runtime/helpers-remaining';
-import { normalizeCanonicalTableRows_ACU, repairLegacyAutoMergedRowTails_ACU } from '../../shared/canonical-row-normalizer';
-import { getSheetColumnProjection_ACU } from '../../shared/ddl-utils';
-import { persistNullRowCleanupShards_ACU, type NullRowCleanupPersistStatus_ACU } from '../table/storage-frame-v2-persist';
-import { allocConsecutiveOrderBlock_ACU, applyPlacementToEntry_ACU, buildDefaultGlobalInjectionConfig_ACU, buildUsedOrderSet_ACU, ensureExportConfigDefaults_ACU, ensureGlobalInjectionConfigDefaults_ACU, getEntryOrderNumber_ACU, getFixedPlacementDefaultsForTable_ACU, getInjectionTargetLorebook_ACU, getIsolationPrefix_ACU, isEntryPlacementMatched_ACU, normalizeLorebookPosition_ACU, normalizePlacementConfig_ACU, updateCustomTableExports_ACU, updateImportantPersonsRelatedEntries_ACU, updateOutlineTableEntry_ACU, updateSummaryTableEntries_ACU } from './injection-engine';
+import type {
+  AgentWorldbookControlSnapshot_ACU,
+  AgentWorldbookControlSnapshotEntry_ACU
+} from '../../shared/models/agent-worldbook-model';
+import {
+  getCurrentWorldbookConfig_ACU
+} from '../settings/settings-readers';
+import {
+  allChatMessages_ACU,
+  coreApisAreReady_ACU,
+  currentChatFileIdentifier_ACU,
+  currentJsonTableData_ACU,
+  getCurrentIsolationKey_ACU,
+  settings_ACU,
+  _set_currentJsonTableData_ACU,
+  _set_allChatMessages_ACU
+} from '../runtime/state-manager';
+import {
+  getLorebookEntriesRequired_ACU as gwGetLorebookEntriesRequired_ACU,
+  getLorebookEntries_ACU as gwGetLorebookEntries_ACU,
+  setLorebookEntries_ACU as gwSetLorebookEntries_ACU,
+  createLorebookEntries_ACU as gwCreateLorebookEntries_ACU,
+  deleteLorebookEntries_ACU as gwDeleteLorebookEntries_ACU,
+  listLorebooks_ACU,
+  getWorldBooks_ACU as gwGetWorldBooks_ACU,
+  isWorldbookApiAvailable_ACU,
+  normalizeLorebookEntriesForRead_ACU,
+  resolveLorebookNameFromList_ACU
+} from '../../data/gateways/worldbook-gateway';
+import {
+  getCharLorebooks_ACU,
+  getChatMessages_ACU
+} from '../../data/gateways/character-gateway';
+import {
+  getChatLength_ACU
+} from '../../data/gateways/chat-gateway';
+import {
+  saveSettings_ACU
+} from '../settings/settings-service';
+import {
+  getChatSheetGuideDataForIsolationKey_ACU,
+  getSortedSheetKeys_ACU,
+  materializeDataFromSheetGuide_ACU,
+  reorderDataBySheetKeys_ACU
+} from '../template/chat-scope';
+import {
+  getImportBatchPrefix_ACU,
+  getImportStablePrefix_ACU
+} from '../../shared/constants';
+import {
+  logDebug_ACU,
+  logError_ACU,
+  logWarn_ACU,
+  parseTableTemplateJson_ACU
+} from '../../shared/utils';
+import {
+  isEntryBlocked_ACU
+} from '../../shared/utils';
+import {
+  classifyLorebookReadError_ACU,
+  summarizeStrictLorebookReadError_ACU as sharedSummarizeStrictLorebookReadError_ACU
+} from '../../shared/lorebook-read-error';
+import {
+  resolveLorebookReadTargets_ACU
+} from './read-scope';
+import {
+  consumeLastMergeQuarantinedSheetKeys_ACU,
+  consumeLastMergeWarnings_ACU,
+  formatJsonToReadable_ACU,
+  maybeLiftWorldbookSuppression_ACU,
+  mergeAllIndependentTables_ACU,
+  shouldSuppressWorldbookInjection_ACU
+} from '../runtime/helpers-remaining';
+import {
+  normalizeCanonicalTableRows_ACU,
+  repairLegacyAutoMergedRowTails_ACU
+} from '../../shared/canonical-row-normalizer';
+import {
+  getSheetColumnProjection_ACU
+} from '../../shared/ddl-utils';
+import {
+  persistNullRowCleanupShards_ACU,
+  type NullRowCleanupPersistStatus_ACU
+} from '../table/storage-frame-v2-persist';
+import {
+  allocConsecutiveOrderBlock_ACU,
+  applyPlacementToEntry_ACU,
+  buildDefaultGlobalInjectionConfig_ACU,
+  buildUsedOrderSet_ACU,
+  ensureExportConfigDefaults_ACU,
+  ensureGlobalInjectionConfigDefaults_ACU,
+  getEntryOrderNumber_ACU,
+  getFixedPlacementDefaultsForTable_ACU,
+  getInjectionTargetLorebook_ACU,
+  getIsolationPrefix_ACU,
+  isEntryPlacementMatched_ACU,
+  normalizeLorebookPosition_ACU,
+  normalizePlacementConfig_ACU,
+  updateCustomTableExports_ACU,
+  updateImportantPersonsRelatedEntries_ACU,
+  updateOutlineTableEntry_ACU,
+  updateSummaryTableEntries_ACU
+} from './injection-engine';
 // pipeline.ts
 // 从 05_core_tail.js 迁入
 

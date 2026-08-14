@@ -9,14 +9,19 @@
  * 约定：content[i][0] 为 row_id；缺失/重复/列结构变化时退化为 checkpoint。
  */
 
-import type { Sheet_ACU } from '../../shared/models/table-data';
+import type {
+  Sheet_ACU
+} from '../../shared/models/table-data';
 import type {
     TableIncrementalUpdate_ACU,
     TableRowDelta_ACU,
     TableStorageMode_ACU,
     IsolationTagData_ACU,
 } from '../../data/models/chat-message-data';
-import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
+import {
+  logDebug_ACU,
+  logWarn_ACU
+} from '../../shared/utils';
 
 // ── 常量 ──
 
