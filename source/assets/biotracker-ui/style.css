@@ -1071,48 +1071,48 @@
 }
 
 #bs-biotracker-settings .bs-bt-home-tile__icon--filter {
-  mask-image: url('./assets/icons/filter-xmark-svgrepo-com.svg');
-  -webkit-mask-image: url('./assets/icons/filter-xmark-svgrepo-com.svg');
+  mask-image: url('./icons/filter-xmark-svgrepo-com.svg');
+  -webkit-mask-image: url('./icons/filter-xmark-svgrepo-com.svg');
 }
 
 #bs-biotracker-settings .bs-bt-home-tile__icon--register {
-  mask-image: url('./assets/icons/register-svgrepo-com.svg');
-  -webkit-mask-image: url('./assets/icons/register-svgrepo-com.svg');
+  mask-image: url('./icons/register-svgrepo-com.svg');
+  -webkit-mask-image: url('./icons/register-svgrepo-com.svg');
 }
 
 #bs-biotracker-settings .bs-bt-home-tile__icon--track {
-  mask-image: url('./assets/icons/pulse-svgrepo-com.svg');
-  -webkit-mask-image: url('./assets/icons/pulse-svgrepo-com.svg');
+  mask-image: url('./icons/pulse-svgrepo-com.svg');
+  -webkit-mask-image: url('./icons/pulse-svgrepo-com.svg');
 }
 
 #bs-biotracker-settings .bs-bt-home-tile__icon--json {
-  mask-image: url('./assets/icons/json-svgrepo-com.svg');
-  -webkit-mask-image: url('./assets/icons/json-svgrepo-com.svg');
+  mask-image: url('./icons/json-svgrepo-com.svg');
+  -webkit-mask-image: url('./icons/json-svgrepo-com.svg');
 }
 
 #bs-biotracker-settings .bs-bt-home-tile__icon--clock {
-  mask-image: url('./assets/icons/clock-lines-svgrepo-com.svg');
-  -webkit-mask-image: url('./assets/icons/clock-lines-svgrepo-com.svg');
+  mask-image: url('./icons/clock-lines-svgrepo-com.svg');
+  -webkit-mask-image: url('./icons/clock-lines-svgrepo-com.svg');
 }
 
 #bs-biotracker-settings .bs-bt-home-tile__icon--dna {
-  mask-image: url('./assets/icons/dna-svgrepo-com.svg');
-  -webkit-mask-image: url('./assets/icons/dna-svgrepo-com.svg');
+  mask-image: url('./icons/dna-svgrepo-com.svg');
+  -webkit-mask-image: url('./icons/dna-svgrepo-com.svg');
 }
 
 #bs-biotracker-settings .bs-bt-home-tile__icon--theme {
-  mask-image: url('./assets/icons/painting-bucket-logo-icon.svg');
-  -webkit-mask-image: url('./assets/icons/painting-bucket-logo-icon.svg');
+  mask-image: url('./icons/painting-bucket-logo-icon.svg');
+  -webkit-mask-image: url('./icons/painting-bucket-logo-icon.svg');
 }
 
 #bs-biotracker-settings .bs-bt-home-tile__icon--preset {
-  mask-image: url('./assets/icons/book-sparkles-svgrepo-com.svg');
-  -webkit-mask-image: url('./assets/icons/book-sparkles-svgrepo-com.svg');
+  mask-image: url('./icons/book-sparkles-svgrepo-com.svg');
+  -webkit-mask-image: url('./icons/book-sparkles-svgrepo-com.svg');
 }
 
 #bs-biotracker-settings .bs-bt-home-tile__icon--wardrobe {
-  mask-image: url('./assets/icons/hanger-svgrepo-com.svg');
-  -webkit-mask-image: url('./assets/icons/hanger-svgrepo-com.svg');
+  mask-image: url('./icons/hanger-svgrepo-com.svg');
+  -webkit-mask-image: url('./icons/hanger-svgrepo-com.svg');
 }
 
 #bs-biotracker-settings .bs-bt-home-tile__label {
@@ -1191,8 +1191,8 @@
 }
 
 #bs-biotracker-settings .bs-bt-home-tile__icon--skill {
-  mask-image: url('./assets/icons/light-bulb-on-svgrepo-com.svg');
-  -webkit-mask-image: url('./assets/icons/light-bulb-on-svgrepo-com.svg');
+  mask-image: url('./icons/light-bulb-on-svgrepo-com.svg');
+  -webkit-mask-image: url('./icons/light-bulb-on-svgrepo-com.svg');
 }
 
 #bs-biotracker-settings .bs-bt-skill-catalog-list {
@@ -2187,8 +2187,8 @@
   width: 14px;
   height: 14px;
   color: var(--bs-bt-need-color);
-  mask-image: url('./assets/icons/bolt-svgrepo-com.svg');
-  -webkit-mask-image: url('./assets/icons/bolt-svgrepo-com.svg');
+  mask-image: url('./icons/bolt-svgrepo-com.svg');
+  -webkit-mask-image: url('./icons/bolt-svgrepo-com.svg');
 }
 
 #bs-biotracker-settings .bs-bt-need-expansion {
@@ -2199,8 +2199,8 @@
   width: 14px;
   height: 14px;
   color: var(--bs-bt-need-color);
-  mask-image: url('./assets/icons/balloon-svgrepo-com.svg');
-  -webkit-mask-image: url('./assets/icons/balloon-svgrepo-com.svg');
+  mask-image: url('./icons/balloon-svgrepo-com.svg');
+  -webkit-mask-image: url('./icons/balloon-svgrepo-com.svg');
 }
 
 #bs-biotracker-settings .bs-bt-need-icon {
@@ -2242,8 +2242,8 @@
   width: 14px;
   height: 14px;
   color: var(--bs-bt-need-color);
-  mask-image: url('./assets/icons/chain-svgrepo-com.svg');
-  -webkit-mask-image: url('./assets/icons/chain-svgrepo-com.svg');
+  mask-image: url('./icons/chain-svgrepo-com.svg');
+  -webkit-mask-image: url('./icons/chain-svgrepo-com.svg');
 }
 
 #bs-biotracker-settings .bs-bt-need-label {
@@ -2266,38 +2266,38 @@
 }
 
 #bs-biotracker-settings .bs-bt-need-icon--excretion {
-  mask-image: url('./assets/icons/toilet-paper-svgrepo-com.svg');
-  -webkit-mask-image: url('./assets/icons/toilet-paper-svgrepo-com.svg');
+  mask-image: url('./icons/toilet-paper-svgrepo-com.svg');
+  -webkit-mask-image: url('./icons/toilet-paper-svgrepo-com.svg');
 }
 
 #bs-biotracker-settings .bs-bt-need-icon--hunger {
-  mask-image: url('./assets/icons/food-meat-chicken-svgrepo-com.svg');
-  -webkit-mask-image: url('./assets/icons/food-meat-chicken-svgrepo-com.svg');
+  mask-image: url('./icons/food-meat-chicken-svgrepo-com.svg');
+  -webkit-mask-image: url('./icons/food-meat-chicken-svgrepo-com.svg');
 }
 
 #bs-biotracker-settings .bs-bt-need-icon--sleep {
-  mask-image: url('./assets/icons/sleep-bed-bedroom-furniture-chair-households-belongings-svgrepo-com.svg');
-  -webkit-mask-image: url('./assets/icons/sleep-bed-bedroom-furniture-chair-households-belongings-svgrepo-com.svg');
+  mask-image: url('./icons/sleep-bed-bedroom-furniture-chair-households-belongings-svgrepo-com.svg');
+  -webkit-mask-image: url('./icons/sleep-bed-bedroom-furniture-chair-households-belongings-svgrepo-com.svg');
 }
 
 #bs-biotracker-settings .bs-bt-need-icon--milk {
-  mask-image: url('./assets/icons/baby-bottle-svgrepo-com.svg');
-  -webkit-mask-image: url('./assets/icons/baby-bottle-svgrepo-com.svg');
+  mask-image: url('./icons/baby-bottle-svgrepo-com.svg');
+  -webkit-mask-image: url('./icons/baby-bottle-svgrepo-com.svg');
 }
 
 #bs-biotracker-settings .bs-bt-need-icon--odor {
-  mask-image: url('./assets/icons/soap-svgrepo-com.svg');
-  -webkit-mask-image: url('./assets/icons/soap-svgrepo-com.svg');
+  mask-image: url('./icons/soap-svgrepo-com.svg');
+  -webkit-mask-image: url('./icons/soap-svgrepo-com.svg');
 }
 
 #bs-biotracker-settings .bs-bt-need-icon--companionship {
-  mask-image: url('./assets/icons/chat-bubble-svgrepo-com.svg');
-  -webkit-mask-image: url('./assets/icons/chat-bubble-svgrepo-com.svg');
+  mask-image: url('./icons/chat-bubble-svgrepo-com.svg');
+  -webkit-mask-image: url('./icons/chat-bubble-svgrepo-com.svg');
 }
 
 #bs-biotracker-settings .bs-bt-need-icon--flux {
-  mask-image: url('./assets/icons/pentagram-svgrepo-com.svg');
-  -webkit-mask-image: url('./assets/icons/pentagram-svgrepo-com.svg');
+  mask-image: url('./icons/pentagram-svgrepo-com.svg');
+  -webkit-mask-image: url('./icons/pentagram-svgrepo-com.svg');
 }
 
 #bs-biotracker-settings .bs-bt-track-tag {

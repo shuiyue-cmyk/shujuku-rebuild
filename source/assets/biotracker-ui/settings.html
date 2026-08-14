@@ -31,6 +31,10 @@
                 <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--track" aria-hidden="true"></span>
                 <span class="bs-bt-home-tile__label">追踪</span>
               </button>
+              <button class="bs-bt-home-tile" type="button" data-nav-view="wardrobe">
+                <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--wardrobe" aria-hidden="true"></span>
+                <span class="bs-bt-home-tile__label">衣柜</span>
+              </button>
               <button class="bs-bt-home-tile" type="button" data-nav-view="theme">
                 <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--theme" aria-hidden="true"></span>
                 <span class="bs-bt-home-tile__label">主题</span>
@@ -105,6 +109,21 @@
               <div class="bs-bt-status-title" id="bs-bt-table-name">数据库表格</div>
               <div id="bs-bt-table-content" class="bs-bt-table-wrap">尚无表格数据。</div>
             </div>
+          </div>
+        </section>
+
+        <section id="bs-bt-view-wardrobe" class="bs-bt-view" data-view="wardrobe">
+          <div class="bs-bt-panel">
+            <div class="settings_section">
+              <div class="bs-bt-track-tabs bs-bt-wardrobe-tabs" id="bs-bt-wardrobe-tabs">
+                <button type="button" class="bs-bt-track-tab is-active" data-wardrobe-tab="characters">角色衣柜</button>
+                <button type="button" class="bs-bt-track-tab" data-wardrobe-tab="add">新增衣物</button>
+              </div>
+            </div>
+            <div id="bs-bt-wardrobe-characters-page" class="settings_section">
+              <div id="bs-bt-wardrobe-list" class="bs-bt-wardrobe-list"></div>
+            </div>
+            <div id="bs-bt-wardrobe-add-page" class="settings_section" hidden></div>
           </div>
         </section>
 
