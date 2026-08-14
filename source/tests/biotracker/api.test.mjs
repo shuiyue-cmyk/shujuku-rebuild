@@ -96,6 +96,51 @@ test('callOpenAICompatible sends chat completions through the SillyTavern backen
   assert.equal(Array.isArray(body.messages), true);
 });
 
+test('callOpenAICompatible 采用数据库配置的温度与 max_tokens（适配层同步进 settings 的场景）', async () => {
+  const calls = [];
+  installBrowserHost(async (url, options) => {
+    calls.push({ url, options });
+    return jsonResponse({ choices: [{ message: { content: JSON.stringify({ operations: [] }) } }] });
+  });
+
+  await callOpenAICompatible({
+    apiUrl: 'https://example-model-host.test/v1/chat/completions',
+    apiKey: 'secret-key',
+    model: 'grok-compatible',
+    temperature: 1,
+    maxTokens: 60000,
+  }, { recent_messages: [] }, 'Return JSON.');
+
+  const body = JSON.parse(calls[0].options.body);
+  assert.equal(body.temperature, 1, '温度应采用数据库配置的 1');
+  assert.equal(body.max_tokens, 60000, 'max_tokens 应采用数据库配置的 60000');
+});
+
+test('callOpenAICompatible 追踪内部调用未同步 settings 时经 probe 兜底采用数据库配置', async () => {
+  const calls = [];
+  installBrowserHost(async (url, options) => {
+    calls.push({ url, options });
+    return jsonResponse({ choices: [{ message: { content: JSON.stringify({ operations: [] }) } }] });
+  });
+
+  // 适配层注入的 probe：读取数据库主 API 配置（温度 1 / max_tokens 60000）
+  globalThis.__bs_biotracker_api_probe__ = () => ({ temperature: 1, maxTokens: 60000 });
+  try {
+    await callOpenAICompatible({
+      apiUrl: 'https://example-model-host.test/v1/chat/completions',
+      apiKey: 'secret-key',
+      model: 'grok-compatible',
+      // settings 未同步：无 temperature/maxTokens 字段（追踪内部直连场景）
+    }, { recent_messages: [] }, 'Return JSON.');
+  } finally {
+    delete globalThis.__bs_biotracker_api_probe__;
+  }
+
+  const body = JSON.parse(calls[0].options.body);
+  assert.equal(body.temperature, 1, 'probe 兜底应传入数据库温度 1，而非默认 0.2');
+  assert.equal(body.max_tokens, 60000, 'probe 兜底应传入数据库 max_tokens');
+});
+
 test('fetchModelList falls back to direct access when the SillyTavern proxy returns 403', async () => {
   const calls = [];
   installBrowserHost(async (url, options) => {
@@ -207,9 +252,11 @@ test('the retry counter counts total tries so 3/3 can no longer hide a 4th attem
   globalThis.toastr = { warning: (message) => warnings.push(String(message)) };
   const badContent = { choices: [{ message: { content: '这不是 JSON' } }] };
   const goodContent = { choices: [{ message: { content: JSON.stringify({ operations: [] }) } }] };
+  const bodies = [];
   let call = 0;
-  installBrowserHost(async () => {
+  installBrowserHost(async (url, options) => {
     call += 1;
+    bodies.push(JSON.parse(options.body));
     // 第 1 轮的 primary + JSON 纠错子请求都坏 → 触发一次重试；第 2 轮 primary 就好
     return jsonResponse(call <= 2 ? badContent : goodContent);
   });
@@ -219,6 +266,8 @@ test('the retry counter counts total tries so 3/3 can no longer hide a 4th attem
       apiUrl: 'https://relay.example.test/v1',
       apiKey: 'k',
       model: 'm',
+      temperature: 1,
+      maxTokens: 60000,
       apiTimeoutMs: 180000,
     }, { recent_messages: [] }, 'Return JSON.');
     assert.deepEqual(result, { operations: [] });
@@ -226,6 +275,9 @@ test('the retry counter counts total tries so 3/3 can no longer hide a 4th attem
     // 分母是总轮次 4，而不是旧的 maxRetries 3
     assert.match(warnings[0], /第 1\/4 次失败/);
     assert.doesNotMatch(warnings[0], /\/3 /);
+    // JSON 纠错子请求（第 2 个）也应采用数据库配置的温度/max_tokens，而非硬编码 0.1
+    assert.equal(bodies[1].temperature, 1, 'JSON 纠错重试温度应采用数据库配置');
+    assert.equal(bodies[1].max_tokens, 60000, 'JSON 纠错重试 max_tokens 应采用数据库配置');
   } finally {
     if (previousToastr === undefined) delete globalThis.toastr;
     else globalThis.toastr = previousToastr;

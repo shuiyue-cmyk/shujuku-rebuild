@@ -780,7 +780,7 @@ function worldbookKeywordMatches(entry, activationText) {
   return true;
 }
 
-function filterTrackerWorldbookEntries(value, excludedNames, settings = null, recentMessages = [], options = {}) {
+export function filterTrackerWorldbookEntries(value, excludedNames, settings = null, recentMessages = [], options = {}) {
   if (!value || typeof value !== 'object') return value;
   const mode = normalizeWorldbookMode(settings?.trackerWorldbookMode);
   const globalBookName = String(options.globalBookName || '').trim();

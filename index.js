@@ -100400,11 +100400,14 @@ async function callOpenAICompatible(settings, payload, systemPrompt = DEFAULT_SY
             let parsed = extractJson(content);
             if (parsed && typeof parsed === 'object')
                 return parsed;
-            // 同一轮全局尝试内：先做一次「请只输出 JSON」纠错请求
+            // 同一轮全局尝试内：先做一次「请只输出 JSON」纠错请求（采样参数同样采用数据库配置）
             const retryBody = {
                 model,
-                temperature: 0.1,
                 ...stPresetSampling,
+                temperature: pickFiniteNumber(settings.temperature, dbProbe?.temperature, stPresetSampling.temperature, 0.1),
+                ...(pickFiniteNumber(settings.maxTokens, dbProbe?.maxTokens) > 0
+                    ? { max_tokens: Math.max(1, Math.floor(pickFiniteNumber(settings.maxTokens, dbProbe?.maxTokens))) }
+                    : {}),
                 messages: [
                     ...effectiveMessages,
                     { role: 'assistant', content: String(content || '') },
