@@ -42,11 +42,11 @@ afterEach(() => {
 });
 
 describe('router-store · pageRegistry 基线', () => {
-  it('注册表恰好 12 项，分布于 5 分组', async () => {
+  it('注册表恰好 13 项，分布于 5 分组', async () => {
     const m = await freshImport();
     m.pinia.setActivePinia(m.pinia.createPinia());
     const r = m.router.useRouterStore();
-    expect(r.pageRegistry.length).toBe(12);
+    expect(r.pageRegistry.length).toBe(13);
     const byGroup = r.pageRegistry.reduce<Record<string, number>>((acc, p) => {
       acc[p.group] = (acc[p.group] || 0) + 1;
       return acc;
@@ -54,7 +54,7 @@ describe('router-store · pageRegistry 基线', () => {
     expect(byGroup).toEqual({
       overview: 2,
       config: 5,
-      feature: 2,
+      feature: 3,
       tool: 2,
       developer: 1,
     });
@@ -77,6 +77,7 @@ describe('router-store · pageRegistry 基线', () => {
       ['content-replace', '正文替换', 'feature'],
       ['data-mgmt', '数据管理', 'tool'],
       ['advanced-tools', '高级工具', 'tool'],
+      ['biotracker', '生理追踪', 'feature'],
       ['developer', '开发者选项', 'developer'],
     ]);
   });
@@ -209,14 +210,14 @@ describe('router-store · 高手模式可见性', () => {
     expect(state.settings_ACU.contentOptimizationSettings?.enabled).toBe(true);
   });
 
-  it('visiblePagesByGroup 在高手模式默认状态下：overview=1 / config=5 / feature=0 / tool=2 / developer=0', async () => {
+  it('visiblePagesByGroup 在高手模式默认状态下：overview=1 / config=5 / feature=1 / tool=2 / developer=0', async () => {
     persistAdvancedMode();
     const m = await freshImport();
     m.pinia.setActivePinia(m.pinia.createPinia());
     const r = m.router.useRouterStore();
     expect(r.visiblePagesByGroup.overview.length).toBe(1);
     expect(r.visiblePagesByGroup.config.length).toBe(5);
-    expect(r.visiblePagesByGroup.feature.length).toBe(0); // 交火/正文替换默认均关闭
+    expect(r.visiblePagesByGroup.feature.length).toBe(1); // 生理追踪恒可见；交火/正文替换默认关闭
     expect(r.visiblePagesByGroup.tool.length).toBe(2); // 数据管理 + 高级工具
     expect(r.visiblePagesByGroup.developer.length).toBe(0); // 默认 developerOptionsEnabled=false
   });
@@ -236,7 +237,7 @@ describe('router-store · 高手模式可见性', () => {
     m.pinia.setActivePinia(m.pinia.createPinia());
     const r = m.router.useRouterStore();
 
-    expect(r.visiblePagesByGroup.feature).toEqual([]);
+    expect(r.visiblePagesByGroup.feature.map((p: any) => p.id)).toEqual(['biotracker']); // 生理追踪恒可见
     expect(r.visiblePages.map(p => p.id)).not.toContain('vector-index');
     expect(r.visiblePages.map(p => p.id)).not.toContain('content-replace');
   });

@@ -16,6 +16,10 @@ import {
   settings_ACU,
 } from "../../service/runtime/state-manager";
 import {
+  isBiotrackerEnabled_ACU,
+  setBiotrackerEnabled_ACU,
+} from "../../service/biotracker/biotracker-adapter";
+import {
   saveSettings_ACU,
   setGlobalPlotEnabled_ACU,
   setSummaryVectorIndexMode_ACU,
@@ -891,6 +895,12 @@ export function useDashboardPage(): DashboardPageState {
         value: settings_ACU.summaryVectorIndexModeDefault === true,
       },
       {
+        key: "biotrackerEnabled",
+        label: dashboardCopy.toggles.biotracker.label,
+        description: dashboardCopy.toggles.biotracker.description,
+        value: isBiotrackerEnabled_ACU(),
+      },
+      {
         key: "developerOptionsEnabled",
         label: dashboardCopy.developerToggle.label,
         description: dashboardCopy.developerToggle.description,
@@ -995,6 +1005,8 @@ export function useDashboardPage(): DashboardPageState {
       saveSettings_ACU();
     } else if (key === "summaryVectorIndexModeEnabled") {
       setSummaryVectorIndexMode_ACU(!!value);
+    } else if (key === "biotrackerEnabled") {
+      setBiotrackerEnabled_ACU(!!value);
     } else if (key === "developerOptionsEnabled") {
       setDeveloperOptionsEnabled(!!value);
     } else if (key === "contentReplaceEnabled") {

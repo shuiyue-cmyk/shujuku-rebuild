@@ -700,6 +700,7 @@ describe("DashboardPage", () => {
       "plotEnabled",
       "contentReplaceEnabled",
       "summaryVectorIndexModeEnabled",
+      "biotrackerEnabled",
       "developerOptionsEnabled",
     ]);
 
@@ -787,6 +788,7 @@ describe("DashboardPage", () => {
       "plotEnabled",
       "contentReplaceEnabled",
       "summaryVectorIndexModeEnabled",
+      "biotrackerEnabled",
       "developerOptionsEnabled",
     ]);
 
