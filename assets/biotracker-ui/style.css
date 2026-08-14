@@ -3899,3 +3899,111 @@
 #bs-biotracker-settings .bs-bt-track-section--wardrobe-description .bs-bt-track-meta-label {
   font-weight: 700;
 }
+
+/* ─── 数据库表格列表（只读查看） ─── */
+#bs-biotracker-settings .bs-bt-table-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+#bs-biotracker-settings .bs-bt-table-list-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 13px;
+  text-align: left;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.5);
+  color: var(--bsbt-lcd-text, inherit);
+  cursor: pointer;
+}
+#bs-biotracker-settings .bs-bt-table-list-item:hover,
+#bs-biotracker-settings .bs-bt-table-list-item:focus-visible {
+  background: rgba(255, 255, 255, 0.8);
+}
+#bs-biotracker-settings .bs-bt-table-list-name {
+  font-weight: 600;
+}
+#bs-biotracker-settings .bs-bt-table-wrap {
+  overflow-x: auto;
+  max-height: 380px;
+  overflow-y: auto;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.5);
+}
+#bs-biotracker-settings .bs-bt-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+#bs-biotracker-settings .bs-bt-table th,
+#bs-biotracker-settings .bs-bt-table td {
+  text-align: left;
+  padding: 5px 8px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+#bs-biotracker-settings .bs-bt-table th {
+  font-weight: 700;
+  background: rgba(0, 0, 0, 0.05);
+  position: sticky;
+  top: 0;
+}
+#bs-biotracker-settings .bs-bt-table tr:last-child td {
+  border-bottom: none;
+}
+
+/* ─── 选项表行动选项（点击注入聊天框） ─── */
+#bs-biotracker-settings .bs-bt-options-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+#bs-biotracker-settings .bs-bt-option-btn {
+  display: block;
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: left;
+  border: 1px solid rgba(0, 0, 0, 0.16);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--bsbt-lcd-text, inherit);
+  cursor: pointer;
+}
+#bs-biotracker-settings .bs-bt-option-btn:hover,
+#bs-biotracker-settings .bs-bt-option-btn:focus-visible {
+  background: rgba(255, 255, 255, 0.85);
+}
+
+/* ─── 最新楼层更新状态（只显示成功/失败/跳过，不展开详情） ─── */
+#bs-biotracker-settings .bs-bt-track-update-state {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+#bs-biotracker-settings .bs-bt-track-update-badge {
+  align-self: flex-start;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  border-radius: 999px;
+  color: #fff;
+}
+#bs-biotracker-settings .bs-bt-track-update-badge.is-success { background: #2e9e5b; }
+#bs-biotracker-settings .bs-bt-track-update-badge.is-failed { background: #c0392b; }
+#bs-biotracker-settings .bs-bt-track-update-badge.is-skipped { background: #b8860b; }
+#bs-biotracker-settings .bs-bt-track-update-badge.is-pending { background: #5b7fa6; }
+#bs-biotracker-settings .bs-bt-track-update-badge.is-empty { background: #8a8a8a; }
+#bs-biotracker-settings .bs-bt-track-update-detail {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--bsbt-lcd-text, inherit);
+  opacity: 0.85;
+}
+

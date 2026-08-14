@@ -114749,31 +114749,50 @@ function renderStatusPanel(ctx) {
     updateBatteryIndicator(settings);
     list.innerHTML = '';
     if (latestCall) {
-        const toolCalls = Array.isArray(chatState.lastRawResult?.tool_calls) ? chatState.lastRawResult.tool_calls : [];
-        const characterChecks = Array.isArray(chatState.lastRawResult?.character_checks) ? chatState.lastRawResult.character_checks : [];
-        const operationLogs = Array.isArray(chatState.lastOperationLogs) ? chatState.lastOperationLogs : [];
-        if (toolCalls.length > 0 || characterChecks.length > 0 || operationLogs.length > 0) {
-            const toolCallView = { tool_calls: toolCalls };
-            if (characterChecks.length > 0)
-                toolCallView.character_checks = characterChecks;
-            if (chatState.lastRawResult?.character_check_coverage)
-                toolCallView.character_check_coverage = chatState.lastRawResult.character_check_coverage;
-            if (chatState.lastRawResult?.message)
-                toolCallView.message = chatState.lastRawResult.message;
-            if (chatState.lastRawResult?.error)
-                toolCallView.error = chatState.lastRawResult.error;
-            latestCall.innerHTML = [
-                `<pre class="bs-bt-debug-json">${escapeHtml$1(JSON.stringify(toolCallView, null, 2))}</pre>`,
-                operationLogs.length > 0
-                    ? `<details class="bs-bt-debug-details"><summary>执行结果 (${operationLogs.length})</summary><pre class="bs-bt-debug-json">${escapeHtml$1(JSON.stringify(operationLogs, null, 2))}</pre></details>`
-                    : '',
-            ].join('');
+        // 只显示「最新楼层是否更新成功」，不展开工具调用详情
+        const lastRawResult = chatState.lastRawResult || null;
+        const attempted = String(chatState.lastAttemptedSignature || '');
+        const processed = String(chatState.lastProcessedSignature || '');
+        const failed = String(chatState.lastFailedSignature || '');
+        const errorMessage = lastRawResult?.error ? String(lastRawResult.error) : '';
+        const skipMessage = lastRawResult?.message ? String(lastRawResult.message) : '';
+        const stateEl = document.createElement('div');
+        stateEl.className = 'bs-bt-track-update-state';
+        const statusEl = document.createElement('span');
+        statusEl.className = 'bs-bt-track-update-badge';
+        const detailEl = document.createElement('div');
+        detailEl.className = 'bs-bt-track-update-detail';
+        // 判定顺序：失败（lastFailedSignature 或 error）→ 成功（processed===attempted）→
+        // 跳过（跳过分支只写 lastRawResult.message，成功路径 summarizeRawResult 不保留 message）→ 尚无
+        if (failed || errorMessage) {
+            statusEl.className += ' is-failed';
+            statusEl.textContent = '更新失败';
+            detailEl.textContent = errorMessage || '最近一次楼层更新失败。';
+        }
+        else if (processed && processed === attempted) {
+            statusEl.className += ' is-success';
+            statusEl.textContent = '更新成功';
+            detailEl.textContent = '已成功更新最新楼层。';
+        }
+        else if (skipMessage) {
+            statusEl.className += ' is-skipped';
+            statusEl.textContent = '更新跳过';
+            detailEl.textContent = skipMessage;
+        }
+        else if (attempted) {
+            statusEl.className += ' is-pending';
+            statusEl.textContent = '更新中';
+            detailEl.textContent = '追踪分析已发起，等待结果写入。';
         }
         else {
-            latestCall.textContent = chatState.lastRawResult
-                ? JSON.stringify(chatState.lastRawResult, null, 2)
-                : '尚无数据';
+            statusEl.className += ' is-empty';
+            statusEl.textContent = '尚无更新';
+            detailEl.textContent = '尚无楼层更新记录。';
         }
+        stateEl.appendChild(statusEl);
+        stateEl.appendChild(detailEl);
+        latestCall.innerHTML = '';
+        latestCall.appendChild(stateEl);
     }
     if (characters.length === 0) {
         selectedTrackName = '';
@@ -116684,6 +116703,17 @@ async function ensureModal(ctx) {
             renderWardrobePage(ctx);
         });
     });
+    // 表格详情「返回列表」
+    document.getElementById('bs-bt-table-back')?.addEventListener('click', () => {
+        const detailEl = document.getElementById('bs-bt-table-detail');
+        const listEl = document.getElementById('bs-bt-table-list');
+        globalThis.__bsBtOpenTableKey__ = '';
+        if (detailEl)
+            detailEl.hidden = true;
+        if (listEl)
+            listEl.hidden = false;
+        renderTablePage(ctx);
+    });
     const wardrobeList = document.getElementById('bs-bt-wardrobe-list');
     const wardrobeAddPage = document.getElementById('bs-bt-wardrobe-add-page');
     wardrobeAddPage?.addEventListener('change', (event) => {
@@ -116883,7 +116913,16 @@ async function ensureModal(ctx) {
         applyTheme$1(settings);
         setView('theme');
     }));
-    document.getElementById('bs-bt-system-button')?.addEventListener('click', () => setView('system'));
+    // 物理按钮「数据库」：打开数据库可视化前端（AutoCardUpdaterV2API.openVisualizer）
+    document.getElementById('bs-bt-system-button')?.addEventListener('click', () => {
+        const openVisualizer = globalThis.AutoCardUpdaterV2API?.openVisualizer;
+        if (typeof openVisualizer === 'function') {
+            openVisualizer().catch((error) => console.warn('[BS BioTracker] 打开数据库失败', error));
+        }
+        else {
+            console.warn('[BS BioTracker] 数据库 V2 API 未就绪，无法打开数据库');
+        }
+    });
     document.getElementById('bs-bt-home-button')?.addEventListener('click', () => setView('home'));
     document.getElementById('bs-bt-track-back')?.addEventListener('click', () => setView('track-list'));
     document.getElementById('bs-bt-model-list')?.addEventListener('change', (event) => {
@@ -117806,64 +117845,137 @@ async function ensureChatStateHydrated(ctx) {
     };
     globalThis[HYDRATE_RETRY_TIMER_KEY] = setTimeout(retry, HYDRATE_RETRY_DELAYS_MS[0]);
 }
-// 数据库表格视图（只读）：数据来自数据库适配层桥（顶层 currentJsonTableData_ACU）
+// 选项表识别（参考 st-acu-visualizer index.js:2726-2746）：
+// 表名含「选项」、key=sheet_OptionsNew、或所有非 row_id 列名都以「选项」开头
+function isOptionsSheet(key, sheet) {
+    if (key === 'sheet_OptionsNew')
+        return true;
+    const name = String(sheet?.name || '');
+    if (/选项/.test(name))
+        return true;
+    const headers = Array.isArray(sheet?.content?.[0]) ? sheet.content[0] : [];
+    const optionHeaders = headers.filter((h) => String(h).trim() && String(h).trim().toLowerCase() !== 'row_id');
+    return optionHeaders.length > 0 && optionHeaders.every((h) => String(h).startsWith('选项'));
+}
+// 点击选项注入到聊天输入框（顶层 DOM 同 window：直接 document.querySelector('#send_textarea')）
+function injectOptionToChatbox(value) {
+    const text = String(value || '').trim();
+    if (!text)
+        return;
+    const textarea = document.querySelector('#send_textarea') || document.querySelector('textarea#send_textarea');
+    if (textarea) {
+        textarea.value += (textarea.value && !/[\s\n]$/.test(textarea.value) ? ' ' : '') + text;
+        textarea.dispatchEvent(new Event('input', { bubbles: true }));
+        textarea.dispatchEvent(new Event('change', { bubbles: true }));
+        textarea.focus();
+        globalThis.toastr?.success?.('[BS BioTracker] 选项已填入聊天输入框');
+    }
+    else {
+        globalThis.toastr?.warning?.('[BS BioTracker] 未找到聊天输入框，无法注入选项');
+    }
+}
+// 数据库表格视图（只读）：数据来自数据库适配层桥（顶层 currentJsonTableData_ACU）。
+// 表格列表保持数据库 sheet 顺序（默认 8 表在前 + 自定义表在后），点表展开只读内容；
+// 选项表（sheet_OptionsNew）渲染为行动选项按钮，点击注入聊天框。
 function renderTablePage(ctx) {
     try {
         const bridge = globalThis.__ACU_BIOTRACKER_BRIDGE__;
         const tables = bridge?.getTables ? bridge.getTables() : {};
-        const select = document.getElementById('bs-bt-table-select');
-        if (!select)
+        const listEl = document.getElementById('bs-bt-table-list');
+        if (!listEl)
             return;
         const keys = Object.keys(tables).filter((k) => k.startsWith('sheet_'));
-        const prev = select.value;
-        const currentKeys = Array.from(select.options).map((o) => o.value);
-        if (JSON.stringify(currentKeys) !== JSON.stringify(keys)) {
-            select.innerHTML = '';
-            const empty = document.createElement('option');
-            empty.value = '';
-            empty.textContent = '请选择表格';
-            select.appendChild(empty);
-            keys.forEach((k) => {
-                const opt = document.createElement('option');
-                opt.value = k;
-                opt.textContent = String(tables[k]?.name || k);
-                select.appendChild(opt);
-            });
-        }
-        if (keys.length > 0 && !keys.includes(prev)) {
-            select.value = keys[0];
-        }
-        const sheet = tables[select.value] || null;
-        const nameEl = document.getElementById('bs-bt-table-name');
-        const contentEl = document.getElementById('bs-bt-table-content');
-        if (nameEl)
-            nameEl.textContent = String(sheet?.name || select.value || '数据库表格');
-        const content = Array.isArray(sheet?.content) ? sheet.content : [];
-        if (!contentEl)
-            return;
-        if (content.length === 0) {
-            contentEl.textContent = '尚无表格数据。';
+        if (keys.length === 0) {
+            listEl.innerHTML = '<div class="bs-bt-connect-status">尚无表格数据。</div>';
             return;
         }
-        let html = '<table class="bs-bt-table">';
-        html += '<thead><tr>';
-        (Array.isArray(content[0]) ? content[0] : []).forEach((h) => { html += '<th>' + escapeHtml$1(String(h)) + '</th>'; });
-        html += '</tr></thead><tbody>';
-        content.slice(1).forEach((row) => {
-            html += '<tr>';
-            (Array.isArray(row) ? row : []).forEach((c) => { html += '<td>' + escapeHtml$1(String(c)) + '</td>'; });
-            html += '</tr>';
-        });
-        html += '</tbody></table>';
-        contentEl.innerHTML = html;
-        if (!select._acuTableChangeBound) {
-            select._acuTableChangeBound = true;
-            select.addEventListener('change', () => { renderTablePage(ctx); });
+        listEl.innerHTML = '';
+        for (const key of keys) {
+            const sheet = tables[key] || {};
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'bs-bt-table-list-item';
+            button.innerHTML = `<span class="bs-bt-table-list-name">${escapeHtml$1(String(sheet?.name || key))}</span>`;
+            button.addEventListener('click', () => openTableDetail(ctx, key));
+            listEl.appendChild(button);
         }
+        // 列表模式下隐藏详情（打开表后由 openTableDetail 切换）
+        const detailEl = document.getElementById('bs-bt-table-detail');
+        if (detailEl)
+            detailEl.hidden = true;
     }
     catch (e) {
         console.error('[BS BioTracker] renderTablePage failed', e);
     }
+}
+function openTableDetail(ctx, key) {
+    const bridge = globalThis.__ACU_BIOTRACKER_BRIDGE__;
+    const tables = bridge?.getTables ? bridge.getTables() : {};
+    const sheet = tables[key] || null;
+    const nameEl = document.getElementById('bs-bt-table-name');
+    const contentEl = document.getElementById('bs-bt-table-content');
+    const detailEl = document.getElementById('bs-bt-table-detail');
+    const listEl = document.getElementById('bs-bt-table-list');
+    globalThis.__bsBtOpenTableKey__ = key;
+    if (nameEl)
+        nameEl.textContent = String(sheet?.name || key || '数据库表格');
+    if (detailEl)
+        detailEl.hidden = false;
+    if (listEl)
+        listEl.hidden = true;
+    if (!contentEl)
+        return;
+    const content = Array.isArray(sheet?.content) ? sheet.content : [];
+    if (isOptionsSheet(key, sheet)) {
+        // 选项表：渲染为行动选项按钮，点击注入聊天框（只读查看交互，不改数据库）
+        contentEl.innerHTML = '';
+        const wrap = document.createElement('div');
+        wrap.className = 'bs-bt-options-list';
+        const rows = content.slice(1);
+        if (rows.length === 0) {
+            wrap.innerHTML = '<div class="bs-bt-connect-status">选项表暂无数据。</div>';
+        }
+        else {
+            const headers = Array.isArray(content[0]) ? content[0] : [];
+            for (const row of rows) {
+                if (!Array.isArray(row))
+                    continue;
+                for (let i = 0; i < row.length; i += 1) {
+                    const value = String(row[i] ?? '').trim();
+                    if (!value)
+                        continue;
+                    const header = String(headers[i] || '').trim();
+                    if (!header || header.toLowerCase() === 'row_id')
+                        continue;
+                    const optionButton = document.createElement('button');
+                    optionButton.type = 'button';
+                    optionButton.className = 'bs-bt-option-btn';
+                    optionButton.textContent = value;
+                    optionButton.title = '点击填入聊天输入框';
+                    optionButton.addEventListener('click', () => injectOptionToChatbox(value));
+                    wrap.appendChild(optionButton);
+                }
+            }
+        }
+        contentEl.appendChild(wrap);
+        return;
+    }
+    // 普通表：只读渲染
+    if (content.length === 0) {
+        contentEl.textContent = '尚无表格数据。';
+        return;
+    }
+    let html = '<table class="bs-bt-table">';
+    html += '<thead><tr>';
+    (Array.isArray(content[0]) ? content[0] : []).forEach((h) => { html += '<th>' + escapeHtml$1(String(h)) + '</th>'; });
+    html += '</tr></thead><tbody>';
+    content.slice(1).forEach((row) => {
+        html += '<tr>';
+        (Array.isArray(row) ? row : []).forEach((c) => { html += '<td>' + escapeHtml$1(String(c)) + '</td>'; });
+        html += '</tr>';
+    });
+    html += '</tbody></table>';
+    contentEl.innerHTML = html;
 }
 // 顶层 DOM 渲染场景：面板与适配层同 bundle 同 window。
 // ctx 必须取适配层桥（extensionSettings 指向 settings_ACU.bs_biotracker），
@@ -117905,8 +118017,15 @@ async function bootstrap() {
                         return;
                     if (document.querySelector('#bs-bt-view-track-list')?.classList.contains('is-active'))
                         renderStatusPanel(ctx);
-                    if (document.querySelector('#bs-bt-view-table-view')?.classList.contains('is-active'))
-                        renderTablePage(ctx);
+                    if (document.querySelector('#bs-bt-view-table-view')?.classList.contains('is-active')) {
+                        const detailEl = document.getElementById('bs-bt-table-detail');
+                        if (detailEl && !detailEl.hidden && globalThis.__bsBtOpenTableKey__) {
+                            openTableDetail(ctx, globalThis.__bsBtOpenTableKey__);
+                        }
+                        else {
+                            renderTablePage(ctx);
+                        }
+                    }
                 }
                 catch (e) { }
             }, 2000);
@@ -118104,12 +118223,25 @@ function installBiotrackerFrontendBridge() {
                     return {};
                 }
             },
-            // 表格数据快照（iframe 渲染用；序列化避免 iframe 意外改写）
+            // 表格数据快照（弹窗渲染用；序列化避免面板意外改写，键序按数据库排序）
             getTables: () => {
                 try {
                     if (!currentJsonTableData_ACU || typeof currentJsonTableData_ACU !== 'object')
                         return {};
-                    return JSON.parse(JSON.stringify(currentJsonTableData_ACU)) || {};
+                    const snapshot = JSON.parse(JSON.stringify(currentJsonTableData_ACU)) || {};
+                    const orderedKeys = getSortedSheetKeys_ACU(snapshot);
+                    if (orderedKeys.length === 0)
+                        return snapshot;
+                    const ordered = {};
+                    for (const key of orderedKeys) {
+                        if (snapshot[key] !== undefined)
+                            ordered[key] = snapshot[key];
+                    }
+                    for (const key of Object.keys(snapshot)) {
+                        if (ordered[key] === undefined)
+                            ordered[key] = snapshot[key];
+                    }
+                    return ordered;
                 }
                 catch (e) {
                     return {};
@@ -118296,6 +118428,23 @@ async function runBiotrackerNow_ACU() {
     }
     finally {
         trackerInFlight = false;
+    }
+}
+/** 清空当前聊天的生理追踪数据（恢复到初始空状态），返回是否执行 */
+function clearBiotrackerChatState_ACU() {
+    try {
+        const ctx = createBiotrackerCtx_ACU();
+        const settings = getSettings(ctx);
+        const key = getChatKey(ctx);
+        if (!settings.chatStates || typeof settings.chatStates !== 'object')
+            return false;
+        settings.chatStates[key] = createEmptyChatState();
+        scheduleSettingsSave();
+        return true;
+    }
+    catch (e) {
+        logWarn_ACU('[生理追踪] 清空当前聊天状态失败:', e);
+        return false;
     }
 }
 // ═══════════════════════════════════════════════════════════════
@@ -148331,7 +148480,7 @@ const _hoisted_8$h = { class: "acu-v2-plot-task-editor__grid" };
 const _hoisted_9$e = { class: "acu-v2-plot-task-editor__grid acu-v2-plot-task-editor__grid--wide" };
 const _hoisted_10$d = { class: "acu-v2-plot-task-editor__section" };
 const _hoisted_11$c = { class: "acu-v2-plot-task-editor__section" };
-const _hoisted_12$9 = {
+const _hoisted_12$a = {
 	key: 1,
 	class: "acu-v2-plot-task-editor__empty"
 };
@@ -148574,7 +148723,7 @@ function _sfc_render$H(_ctx, _cache, $props, $setup, $data, $options) {
 			onMove: _cache[21] || (_cache[21] = (index, delta) => _ctx.$emit("segment-move", index, delta)),
 			onUpdate: _cache[22] || (_cache[22] = (index, patch) => _ctx.$emit("segment-update", index, patch))
 		}, null, 8, ["segments"])])
-	])) : (openBlock(), createElementBlock("div", _hoisted_12$9, " 请在上方选择一个任务进行编辑。 "));
+	])) : (openBlock(), createElementBlock("div", _hoisted_12$a, " 请在上方选择一个任务进行编辑。 "));
 }
 var PlotTaskEditor = /* @__PURE__ */ _export_sfc(_sfc_main$H, [["render", _sfc_render$H], ["__scopeId", "data-v-7b343fef"]]);
 
@@ -156631,7 +156780,7 @@ const _hoisted_8$b = { class: "acu-agent-advanced__section-head" };
 const _hoisted_9$9 = { class: "acu-agent-advanced__grid" };
 const _hoisted_10$9 = { class: "acu-agent-advanced__section" };
 const _hoisted_11$9 = { class: "acu-agent-advanced__section-head" };
-const _hoisted_12$8 = { class: "acu-agent-advanced__grid" };
+const _hoisted_12$9 = { class: "acu-agent-advanced__grid" };
 const _hoisted_13$6 = { class: "acu-agent-advanced__section" };
 const _hoisted_14$6 = { class: "acu-agent-advanced__section-head" };
 const _hoisted_15$6 = { class: "acu-agent-advanced__prompt-scope" };
@@ -156767,7 +156916,7 @@ function _sfc_render$n(_ctx, _cache, $props, $setup, $data, $options) {
 				toDisplayString($setup.plotCopy.agentControl.skillifySettings.description),
 				1
 				/* TEXT */
-			)])]), createBaseVNode("div", _hoisted_12$8, [createVNode($setup["AcuFormRow"], {
+			)])]), createBaseVNode("div", _hoisted_12$9, [createVNode($setup["AcuFormRow"], {
 				label: $setup.plotCopy.agentControl.skillifySettings.maxConcurrency.label,
 				hint: $setup.plotCopy.agentControl.skillifySettings.maxConcurrency.hint
 			}, {
@@ -158953,7 +159102,7 @@ const _hoisted_8$9 = { class: "acu-v2-vector-api-form__actions" };
 const _hoisted_9$8 = { class: "acu-v2-vector-index-page__prompt-actions" };
 const _hoisted_10$8 = { class: "acu-v2-vector-index-page__number-grid" };
 const _hoisted_11$8 = { class: "acu-v2-vector-index-page__number-grid" };
-const _hoisted_12$7 = ["value"];
+const _hoisted_12$8 = ["value"];
 function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("section", _hoisted_1$i, [
 		createVNode($setup["AcuMobilePanelNav"], { items: $setup.panelNavItems }, null, 8, ["items"]),
@@ -159445,7 +159594,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 							spellcheck: "false",
 							placeholder: "每行一个 scope fingerprint",
 							onChange: _cache[21] || (_cache[21] = ($event) => $setup.vector.setV2WriteScopeAllowlist($event.target.value))
-						}, null, 40, _hoisted_12$7)]),
+						}, null, 40, _hoisted_12$8)]),
 						_: 1
 					})) : createCommentVNode("v-if", true)
 				]),
@@ -161001,7 +161150,7 @@ const _hoisted_10$7 = {
 	"aria-labelledby": "acu-checkpoint-title"
 };
 const _hoisted_11$7 = { class: "acu-v2-data-mgmt-page__checkpoint-actions" };
-const _hoisted_12$6 = {
+const _hoisted_12$7 = {
 	key: 1,
 	class: "acu-v2-data-mgmt-page__checkpoint-section",
 	"aria-labelledby": "acu-mixed-storage-title"
@@ -161283,7 +161432,7 @@ function _sfc_render$h(_ctx, _cache, $props, $setup, $data, $options) {
 						_: 1
 					}, 8, ["disabled"])])
 				]),
-				$setup.flow.mixedStorageDecision.value ? (openBlock(), createElementBlock("section", _hoisted_12$6, [
+				$setup.flow.mixedStorageDecision.value ? (openBlock(), createElementBlock("section", _hoisted_12$7, [
 					_cache[25] || (_cache[25] = createBaseVNode(
 						"h3",
 						{
@@ -162860,7 +163009,7 @@ const _hoisted_8$7 = { class: "acu-v2-content-replace-page__select-row" };
 const _hoisted_9$6 = { class: "acu-v2-content-replace-page__form-grid" };
 const _hoisted_10$6 = { class: "acu-v2-content-replace-page__rule-stack" };
 const _hoisted_11$6 = { class: "acu-v2-content-replace-page__actions" };
-const _hoisted_12$5 = {
+const _hoisted_12$6 = {
 	key: 0,
 	class: "acu-v2-content-replace-page__test-output"
 };
@@ -163188,7 +163337,7 @@ function _sfc_render$e(_ctx, _cache, $props, $setup, $data, $options) {
 						}, 8, ["loading", "onClick"])]),
 						$setup.store.testOutput ? (openBlock(), createElementBlock(
 							"pre",
-							_hoisted_12$5,
+							_hoisted_12$6,
 							toDisplayString($setup.store.testOutput),
 							1
 							/* TEXT */
@@ -163686,7 +163835,7 @@ const _hoisted_8$6 = { class: "acu-v2-advanced-tools-page__sql-result-table" };
 const _hoisted_9$5 = { key: 0 };
 const _hoisted_10$5 = ["colspan"];
 const _hoisted_11$5 = { class: "acu-v2-advanced-tools-page__sql-result-meta" };
-const _hoisted_12$4 = {
+const _hoisted_12$5 = {
 	class: "acu-v2-advanced-tools-page__sql-history-section",
 	"aria-label": "SQL 执行历史"
 };
@@ -163917,7 +164066,7 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 					64
 					/* STABLE_FRAGMENT */
 				))]),
-				createBaseVNode("section", _hoisted_12$4, [_cache[10] || (_cache[10] = createBaseVNode(
+				createBaseVNode("section", _hoisted_12$5, [_cache[10] || (_cache[10] = createBaseVNode(
 					"h4",
 					{ class: "acu-v2-advanced-tools-page__section-title" },
 					"执行历史",
@@ -164443,6 +164592,17 @@ function useBiotrackerPage() {
     // ─── 已注册角色只读（chatState.characters） ───
     const characters = ref([]);
     const dataRefreshTick = ref(0);
+    /** 清空当前聊天的生理追踪数据（恢复初始空状态） */
+    function clearChatState() {
+        const cleared = clearBiotrackerChatState_ACU();
+        if (cleared) {
+            showToastr_ACU('success', '已清空本聊天的生理追踪数据。', { title: '生理追踪', acuToastCategory: 'biotracker' });
+            refreshCharacters();
+        }
+        else {
+            showToastr_ACU('warning', '清空失败：当前聊天尚无数据或状态不可用。', { title: '生理追踪', acuToastCategory: 'biotracker' });
+        }
+    }
     function refreshCharacters() {
         dataRefreshTick.value++;
         const chatStates = settings_ACU.bs_biotracker?.chatStates || {};
@@ -164515,6 +164675,7 @@ function useBiotrackerPage() {
         tracking,
         runAutoRegister,
         runTrackerNow,
+        clearChatState,
         characters,
         status,
         statusIsError,
@@ -164535,21 +164696,21 @@ var _sfc_main$b = /*@__PURE__*/ defineComponent({
             dataTitle: '已注册角色',
             dataDescription: '当前聊天的生理追踪数据（只读）。完整数据由异步追踪持续更新。',
         };
-        const { apiPreset, setApiPreset, apiPresetSelectOptions, followActiveApiLabel, apiUrl, apiKey, apiModel, registerName, registerRace, registerNotes, registerRecentCount, setRegisterRecentCount, registerRaceOptions, registering, doRegister, autoRegister, toggleAutoRegister, autoFrequency, setAutoFrequency, autoFrequencyOptions, autoRecentCount, setAutoRecentCount, autoRunning, tracking, runAutoRegister, runTrackerNow, characters, status, statusIsError, } = useBiotrackerPage();
+        const { apiPreset, setApiPreset, apiPresetSelectOptions, followActiveApiLabel, apiUrl, apiKey, apiModel, registerName, registerRace, registerNotes, registerRecentCount, setRegisterRecentCount, registerRaceOptions, registering, doRegister, autoRegister, toggleAutoRegister, autoFrequency, setAutoFrequency, autoFrequencyOptions, autoRecentCount, setAutoRecentCount, autoRunning, tracking, runAutoRegister, runTrackerNow, clearChatState, characters, status, statusIsError, } = useBiotrackerPage();
         const panelNavItems = computed(() => [
             { id: 'biotracker-api-panel', label: copy.apiTitle },
             { id: 'biotracker-register-panel', label: copy.registerTitle },
             { id: 'biotracker-auto-panel', label: copy.autoTitle },
             { id: 'biotracker-data-panel', label: copy.dataTitle },
         ]);
-        const __returned__ = { copy, apiPreset, setApiPreset, apiPresetSelectOptions, followActiveApiLabel, apiUrl, apiKey, apiModel, registerName, registerRace, registerNotes, registerRecentCount, setRegisterRecentCount, registerRaceOptions, registering, doRegister, autoRegister, toggleAutoRegister, autoFrequency, setAutoFrequency, autoFrequencyOptions, autoRecentCount, setAutoRecentCount, autoRunning, tracking, runAutoRegister, runTrackerNow, characters, status, statusIsError, panelNavItems, AcuMobilePanelNav, AcuPanel, AcuFormRow, AcuSelect, AcuButton, AcuToggle };
+        const __returned__ = { copy, apiPreset, setApiPreset, apiPresetSelectOptions, followActiveApiLabel, apiUrl, apiKey, apiModel, registerName, registerRace, registerNotes, registerRecentCount, setRegisterRecentCount, registerRaceOptions, registering, doRegister, autoRegister, toggleAutoRegister, autoFrequency, setAutoFrequency, autoFrequencyOptions, autoRecentCount, setAutoRecentCount, autoRunning, tracking, runAutoRegister, runTrackerNow, clearChatState, characters, status, statusIsError, panelNavItems, AcuMobilePanelNav, AcuPanel, AcuFormRow, AcuSelect, AcuButton, AcuToggle };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.acu-v2-biotracker-page[data-v-c7b9e176] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-biotracker-page__panel-stack[data-v-c7b9e176] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 16px;\n}\n.acu-v2-biotracker-page__api-readonly[data-v-c7b9e176] {\r\n  color: var(--acu-text-2, inherit);\r\n  margin: 0;\r\n  line-height: 1.55;\n}\n.acu-v2-biotracker-page__actions[data-v-c7b9e176] {\r\n  display: flex;\r\n  gap: 0.5rem;\r\n  flex-wrap: wrap;\r\n  margin-top: 0.5rem;\n}\n.acu-v2-biotracker-page__toggle[data-v-c7b9e176] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 0.5rem;\r\n  cursor: pointer;\n}\n.acu-v2-biotracker-page__status[data-v-c7b9e176] {\r\n  margin-top: 0.75rem;\r\n  padding: 0.4rem 0.6rem;\r\n  border-radius: 4px;\r\n  background: rgba(125, 73, 64, 0.12);\r\n  color: var(--acu-text, inherit);\n}\n.acu-v2-biotracker-page__status[data-error='true'][data-v-c7b9e176] {\r\n  background: rgba(220, 60, 60, 0.15);\r\n  color: #e06060;\n}\n.acu-v2-biotracker-page__empty[data-v-c7b9e176] {\r\n  color: var(--acu-text-dim, #8a8075);\r\n  padding: 0.5rem 0;\n}\n.acu-v2-biotracker-page__table[data-v-c7b9e176] {\r\n  width: 100%;\r\n  border-collapse: collapse;\r\n  font-size: 0.9em;\n}\n.acu-v2-biotracker-page__table th[data-v-c7b9e176],\r\n.acu-v2-biotracker-page__table td[data-v-c7b9e176] {\r\n  text-align: left;\r\n  padding: 0.4rem 0.5rem;\r\n  border-bottom: 1px solid rgba(128, 128, 128, 0.2);\n}\r\n", "src/presentation-v2/pages/BiotrackerPage.vue#style-0-c7b9e176");
-var BiotrackerPage_vue_vue_type_style_index_0_scoped_c7b9e176_lang = null;
+injectSfcStyle("\n.acu-v2-biotracker-page[data-v-26f94d89] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-biotracker-page__panel-stack[data-v-26f94d89] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 16px;\n}\n.acu-v2-biotracker-page__api-readonly[data-v-26f94d89] {\r\n  color: var(--acu-text-2, inherit);\r\n  margin: 0;\r\n  line-height: 1.55;\n}\n.acu-v2-biotracker-page__actions[data-v-26f94d89] {\r\n  display: flex;\r\n  gap: 0.5rem;\r\n  flex-wrap: wrap;\r\n  margin-top: 0.5rem;\n}\n.acu-v2-biotracker-page__toggle[data-v-26f94d89] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 0.5rem;\r\n  cursor: pointer;\n}\n.acu-v2-biotracker-page__status[data-v-26f94d89] {\r\n  margin-top: 0.75rem;\r\n  padding: 0.4rem 0.6rem;\r\n  border-radius: 4px;\r\n  background: rgba(125, 73, 64, 0.12);\r\n  color: var(--acu-text, inherit);\n}\n.acu-v2-biotracker-page__status[data-error='true'][data-v-26f94d89] {\r\n  background: rgba(220, 60, 60, 0.15);\r\n  color: #e06060;\n}\n.acu-v2-biotracker-page__empty[data-v-26f94d89] {\r\n  color: var(--acu-text-dim, #8a8075);\r\n  padding: 0.5rem 0;\n}\n.acu-v2-biotracker-page__table[data-v-26f94d89] {\r\n  width: 100%;\r\n  border-collapse: collapse;\r\n  font-size: 0.9em;\n}\n.acu-v2-biotracker-page__table th[data-v-26f94d89],\r\n.acu-v2-biotracker-page__table td[data-v-26f94d89] {\r\n  text-align: left;\r\n  padding: 0.4rem 0.5rem;\r\n  border-bottom: 1px solid rgba(128, 128, 128, 0.2);\n}\r\n", "src/presentation-v2/pages/BiotrackerPage.vue#style-0-26f94d89");
+var BiotrackerPage_vue_vue_type_style_index_0_scoped_26f94d89_lang = null;
 
 const _hoisted_1$b = { class: "acu-v2-biotracker-page" };
 const _hoisted_2$a = { class: "acu-v2-biotracker-page__panel-stack" };
@@ -164568,6 +164729,7 @@ const _hoisted_11$4 = {
 	key: 1,
 	class: "acu-v2-biotracker-page__table"
 };
+const _hoisted_12$4 = { class: "acu-v2-biotracker-page__actions" };
 function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("section", _hoisted_1$b, [createVNode($setup["AcuMobilePanelNav"], { items: $setup.panelNavItems }, null, 8, ["items"]), createBaseVNode("div", _hoisted_2$a, [
 		createCommentVNode(" API 设置（参照剧情推进：API 预设选择） "),
@@ -164858,12 +165020,23 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 				}),
 				128
 				/* KEYED_FRAGMENT */
-			))])]))]),
+			))])])), createBaseVNode("div", _hoisted_12$4, [createVNode($setup["AcuButton"], {
+				size: "sm",
+				variant: "secondary",
+				onClick: $setup.clearChatState
+			}, {
+				default: withCtx(() => [..._cache[11] || (_cache[11] = [createTextVNode(
+					" 清空本聊天数据（恢复初始） ",
+					-1
+					/* CACHED */
+				)])]),
+				_: 1
+			}, 8, ["onClick"])])]),
 			_: 1
 		}, 8, ["title", "description"])
 	])]);
 }
-var BiotrackerPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$b], ["__scopeId", "data-v-c7b9e176"]]);
+var BiotrackerPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$b], ["__scopeId", "data-v-26f94d89"]]);
 
 /**
  * page-registry — 一级页静态注册表（plan §4.1 + §D24）

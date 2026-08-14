@@ -4413,26 +4413,46 @@ function renderStatusPanel(ctx) {
 
   list.innerHTML = '';
   if (latestCall) {
-    const toolCalls = Array.isArray(chatState.lastRawResult?.tool_calls) ? chatState.lastRawResult.tool_calls : [];
-    const characterChecks = Array.isArray(chatState.lastRawResult?.character_checks) ? chatState.lastRawResult.character_checks : [];
-    const operationLogs = Array.isArray(chatState.lastOperationLogs) ? chatState.lastOperationLogs : [];
-    if (toolCalls.length > 0 || characterChecks.length > 0 || operationLogs.length > 0) {
-      const toolCallView = { tool_calls: toolCalls };
-      if (characterChecks.length > 0) toolCallView.character_checks = characterChecks;
-      if (chatState.lastRawResult?.character_check_coverage) toolCallView.character_check_coverage = chatState.lastRawResult.character_check_coverage;
-      if (chatState.lastRawResult?.message) toolCallView.message = chatState.lastRawResult.message;
-      if (chatState.lastRawResult?.error) toolCallView.error = chatState.lastRawResult.error;
-      latestCall.innerHTML = [
-        `<pre class="bs-bt-debug-json">${escapeHtml(JSON.stringify(toolCallView, null, 2))}</pre>`,
-        operationLogs.length > 0
-          ? `<details class="bs-bt-debug-details"><summary>执行结果 (${operationLogs.length})</summary><pre class="bs-bt-debug-json">${escapeHtml(JSON.stringify(operationLogs, null, 2))}</pre></details>`
-          : '',
-      ].join('');
+    // 只显示「最新楼层是否更新成功」，不展开工具调用详情
+    const lastRawResult = chatState.lastRawResult || null;
+    const attempted = String(chatState.lastAttemptedSignature || '');
+    const processed = String(chatState.lastProcessedSignature || '');
+    const failed = String(chatState.lastFailedSignature || '');
+    const errorMessage = lastRawResult?.error ? String(lastRawResult.error) : '';
+    const skipMessage = lastRawResult?.message ? String(lastRawResult.message) : '';
+    const stateEl = document.createElement('div');
+    stateEl.className = 'bs-bt-track-update-state';
+    const statusEl = document.createElement('span');
+    statusEl.className = 'bs-bt-track-update-badge';
+    const detailEl = document.createElement('div');
+    detailEl.className = 'bs-bt-track-update-detail';
+    // 判定顺序：失败（lastFailedSignature 或 error）→ 成功（processed===attempted）→
+    // 跳过（跳过分支只写 lastRawResult.message，成功路径 summarizeRawResult 不保留 message）→ 尚无
+    if (failed || errorMessage) {
+      statusEl.className += ' is-failed';
+      statusEl.textContent = '更新失败';
+      detailEl.textContent = errorMessage || '最近一次楼层更新失败。';
+    } else if (processed && processed === attempted) {
+      statusEl.className += ' is-success';
+      statusEl.textContent = '更新成功';
+      detailEl.textContent = '已成功更新最新楼层。';
+    } else if (skipMessage) {
+      statusEl.className += ' is-skipped';
+      statusEl.textContent = '更新跳过';
+      detailEl.textContent = skipMessage;
+    } else if (attempted) {
+      statusEl.className += ' is-pending';
+      statusEl.textContent = '更新中';
+      detailEl.textContent = '追踪分析已发起，等待结果写入。';
     } else {
-      latestCall.textContent = chatState.lastRawResult
-        ? JSON.stringify(chatState.lastRawResult, null, 2)
-        : '尚无数据';
+      statusEl.className += ' is-empty';
+      statusEl.textContent = '尚无更新';
+      detailEl.textContent = '尚无楼层更新记录。';
     }
+    stateEl.appendChild(statusEl);
+    stateEl.appendChild(detailEl);
+    latestCall.innerHTML = '';
+    latestCall.appendChild(stateEl);
   }
 
   if (characters.length === 0) {
@@ -6318,6 +6338,15 @@ async function ensureModal(ctx) {
       renderWardrobePage(ctx);
     });
   });
+  // 表格详情「返回列表」
+  document.getElementById('bs-bt-table-back')?.addEventListener('click', () => {
+    const detailEl = document.getElementById('bs-bt-table-detail');
+    const listEl = document.getElementById('bs-bt-table-list');
+    globalThis.__bsBtOpenTableKey__ = '';
+    if (detailEl) detailEl.hidden = true;
+    if (listEl) listEl.hidden = false;
+    renderTablePage(ctx);
+  });
   const wardrobeList = document.getElementById('bs-bt-wardrobe-list');
   const wardrobeAddPage = document.getElementById('bs-bt-wardrobe-add-page');
   wardrobeAddPage?.addEventListener('change', (event) => {
@@ -6505,7 +6534,15 @@ async function ensureModal(ctx) {
       setView('theme');
     }),
   );
-  document.getElementById('bs-bt-system-button')?.addEventListener('click', () => setView('system'));
+  // 物理按钮「数据库」：打开数据库可视化前端（AutoCardUpdaterV2API.openVisualizer）
+  document.getElementById('bs-bt-system-button')?.addEventListener('click', () => {
+    const openVisualizer = globalThis.AutoCardUpdaterV2API?.openVisualizer;
+    if (typeof openVisualizer === 'function') {
+      openVisualizer().catch((error) => console.warn('[BS BioTracker] 打开数据库失败', error));
+    } else {
+      console.warn('[BS BioTracker] 数据库 V2 API 未就绪，无法打开数据库');
+    }
+  });
   document.getElementById('bs-bt-home-button')?.addEventListener('click', () => setView('home'));
   document.getElementById('bs-bt-track-back')?.addEventListener('click', () => setView('track-list'));
   document.getElementById('bs-bt-model-list')?.addEventListener('change', (event) => {
@@ -7368,55 +7405,122 @@ async function ensureChatStateHydrated(ctx) {
   globalThis[HYDRATE_RETRY_TIMER_KEY] = setTimeout(retry, HYDRATE_RETRY_DELAYS_MS[0]);
 }
 
-// 数据库表格视图（只读）：数据来自数据库适配层桥（顶层 currentJsonTableData_ACU）
+// 选项表识别（参考 st-acu-visualizer index.js:2726-2746）：
+// 表名含「选项」、key=sheet_OptionsNew、或所有非 row_id 列名都以「选项」开头
+function isOptionsSheet(key, sheet) {
+  if (key === 'sheet_OptionsNew') return true;
+  const name = String(sheet?.name || '');
+  if (/选项/.test(name)) return true;
+  const headers = Array.isArray(sheet?.content?.[0]) ? sheet.content[0] : [];
+  const optionHeaders = headers.filter((h) => String(h).trim() && String(h).trim().toLowerCase() !== 'row_id');
+  return optionHeaders.length > 0 && optionHeaders.every((h) => String(h).startsWith('选项'));
+}
+
+// 点击选项注入到聊天输入框（顶层 DOM 同 window：直接 document.querySelector('#send_textarea')）
+function injectOptionToChatbox(value) {
+  const text = String(value || '').trim();
+  if (!text) return;
+  const textarea = document.querySelector('#send_textarea') || document.querySelector('textarea#send_textarea');
+  if (textarea) {
+    textarea.value += (textarea.value && !/[\s\n]$/.test(textarea.value) ? ' ' : '') + text;
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    textarea.dispatchEvent(new Event('change', { bubbles: true }));
+    textarea.focus();
+    globalThis.toastr?.success?.('[BS BioTracker] 选项已填入聊天输入框');
+  } else {
+    globalThis.toastr?.warning?.('[BS BioTracker] 未找到聊天输入框，无法注入选项');
+  }
+}
+
+// 数据库表格视图（只读）：数据来自数据库适配层桥（顶层 currentJsonTableData_ACU）。
+// 表格列表保持数据库 sheet 顺序（默认 8 表在前 + 自定义表在后），点表展开只读内容；
+// 选项表（sheet_OptionsNew）渲染为行动选项按钮，点击注入聊天框。
 function renderTablePage(ctx) {
   try {
     const bridge = globalThis.__ACU_BIOTRACKER_BRIDGE__;
     const tables = bridge?.getTables ? bridge.getTables() : {};
-    const select = document.getElementById('bs-bt-table-select');
-    if (!select) return;
+    const listEl = document.getElementById('bs-bt-table-list');
+    if (!listEl) return;
     const keys = Object.keys(tables).filter((k) => k.startsWith('sheet_'));
-    const prev = select.value;
-    const currentKeys = Array.from(select.options).map((o) => o.value);
-    if (JSON.stringify(currentKeys) !== JSON.stringify(keys)) {
-      select.innerHTML = '';
-      const empty = document.createElement('option');
-      empty.value = '';
-      empty.textContent = '请选择表格';
-      select.appendChild(empty);
-      keys.forEach((k) => {
-        const opt = document.createElement('option');
-        opt.value = k;
-        opt.textContent = String(tables[k]?.name || k);
-        select.appendChild(opt);
-      });
+    if (keys.length === 0) {
+      listEl.innerHTML = '<div class="bs-bt-connect-status">尚无表格数据。</div>';
+      return;
     }
-    if (keys.length > 0 && !keys.includes(prev)) { select.value = keys[0]; }
-    const sheet = tables[select.value] || null;
-    const nameEl = document.getElementById('bs-bt-table-name');
-    const contentEl = document.getElementById('bs-bt-table-content');
-    if (nameEl) nameEl.textContent = String(sheet?.name || select.value || '数据库表格');
-    const content = Array.isArray(sheet?.content) ? sheet.content : [];
-    if (!contentEl) return;
-    if (content.length === 0) { contentEl.textContent = '尚无表格数据。'; return; }
-    let html = '<table class="bs-bt-table">';
-    html += '<thead><tr>';
-    (Array.isArray(content[0]) ? content[0] : []).forEach((h) => { html += '<th>' + escapeHtml(String(h)) + '</th>'; });
-    html += '</tr></thead><tbody>';
-    content.slice(1).forEach((row) => {
-      html += '<tr>';
-      (Array.isArray(row) ? row : []).forEach((c) => { html += '<td>' + escapeHtml(String(c)) + '</td>'; });
-      html += '</tr>';
-    });
-    html += '</tbody></table>';
-    contentEl.innerHTML = html;
-    if (!select._acuTableChangeBound) {
-      select._acuTableChangeBound = true;
-      select.addEventListener('change', () => { renderTablePage(ctx); });
+    listEl.innerHTML = '';
+    for (const key of keys) {
+      const sheet = tables[key] || {};
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'bs-bt-table-list-item';
+      button.innerHTML = `<span class="bs-bt-table-list-name">${escapeHtml(String(sheet?.name || key))}</span>`;
+      button.addEventListener('click', () => openTableDetail(ctx, key));
+      listEl.appendChild(button);
     }
+    // 列表模式下隐藏详情（打开表后由 openTableDetail 切换）
+    const detailEl = document.getElementById('bs-bt-table-detail');
+    if (detailEl) detailEl.hidden = true;
   } catch (e) {
     console.error('[BS BioTracker] renderTablePage failed', e);
   }
+}
+
+function openTableDetail(ctx, key) {
+  const bridge = globalThis.__ACU_BIOTRACKER_BRIDGE__;
+  const tables = bridge?.getTables ? bridge.getTables() : {};
+  const sheet = tables[key] || null;
+  const nameEl = document.getElementById('bs-bt-table-name');
+  const contentEl = document.getElementById('bs-bt-table-content');
+  const detailEl = document.getElementById('bs-bt-table-detail');
+  const listEl = document.getElementById('bs-bt-table-list');
+  globalThis.__bsBtOpenTableKey__ = key;
+  if (nameEl) nameEl.textContent = String(sheet?.name || key || '数据库表格');
+  if (detailEl) detailEl.hidden = false;
+  if (listEl) listEl.hidden = true;
+  if (!contentEl) return;
+  const content = Array.isArray(sheet?.content) ? sheet.content : [];
+  if (isOptionsSheet(key, sheet)) {
+    // 选项表：渲染为行动选项按钮，点击注入聊天框（只读查看交互，不改数据库）
+    contentEl.innerHTML = '';
+    const wrap = document.createElement('div');
+    wrap.className = 'bs-bt-options-list';
+    const rows = content.slice(1);
+    if (rows.length === 0) {
+      wrap.innerHTML = '<div class="bs-bt-connect-status">选项表暂无数据。</div>';
+    } else {
+      const headers = Array.isArray(content[0]) ? content[0] : [];
+      for (const row of rows) {
+        if (!Array.isArray(row)) continue;
+        for (let i = 0; i < row.length; i += 1) {
+          const value = String(row[i] ?? '').trim();
+          if (!value) continue;
+          const header = String(headers[i] || '').trim();
+          if (!header || header.toLowerCase() === 'row_id') continue;
+          const optionButton = document.createElement('button');
+          optionButton.type = 'button';
+          optionButton.className = 'bs-bt-option-btn';
+          optionButton.textContent = value;
+          optionButton.title = '点击填入聊天输入框';
+          optionButton.addEventListener('click', () => injectOptionToChatbox(value));
+          wrap.appendChild(optionButton);
+        }
+      }
+    }
+    contentEl.appendChild(wrap);
+    return;
+  }
+  // 普通表：只读渲染
+  if (content.length === 0) { contentEl.textContent = '尚无表格数据。'; return; }
+  let html = '<table class="bs-bt-table">';
+  html += '<thead><tr>';
+  (Array.isArray(content[0]) ? content[0] : []).forEach((h) => { html += '<th>' + escapeHtml(String(h)) + '</th>'; });
+  html += '</tr></thead><tbody>';
+  content.slice(1).forEach((row) => {
+    html += '<tr>';
+    (Array.isArray(row) ? row : []).forEach((c) => { html += '<td>' + escapeHtml(String(c)) + '</td>'; });
+    html += '</tr>';
+  });
+  html += '</tbody></table>';
+  contentEl.innerHTML = html;
 }
 
 // 顶层 DOM 渲染场景：面板与适配层同 bundle 同 window。
@@ -7455,7 +7559,14 @@ async function bootstrap() {
         try {
           if (!document.getElementById('bs-biotracker-settings')) return;
           if (document.querySelector('#bs-bt-view-track-list')?.classList.contains('is-active')) renderStatusPanel(ctx);
-          if (document.querySelector('#bs-bt-view-table-view')?.classList.contains('is-active')) renderTablePage(ctx);
+          if (document.querySelector('#bs-bt-view-table-view')?.classList.contains('is-active')) {
+            const detailEl = document.getElementById('bs-bt-table-detail');
+            if (detailEl && !detailEl.hidden && globalThis.__bsBtOpenTableKey__) {
+              openTableDetail(ctx, globalThis.__bsBtOpenTableKey__);
+            } else {
+              renderTablePage(ctx);
+            }
+          }
         } catch (e) {}
       }, 2000);
     }  } catch (error) {

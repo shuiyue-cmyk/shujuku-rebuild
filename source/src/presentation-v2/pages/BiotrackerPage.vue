@@ -106,6 +106,11 @@
             </tr>
           </tbody>
         </table>
+        <div class="acu-v2-biotracker-page__actions">
+          <AcuButton size="sm" variant="secondary" @click="clearChatState">
+            清空本聊天数据（恢复初始）
+          </AcuButton>
+        </div>
       </AcuPanel>
     </div>
   </section>
@@ -159,6 +164,7 @@ const {
   tracking,
   runAutoRegister,
   runTrackerNow,
+  clearChatState,
   characters,
   status,
   statusIsError,

@@ -16,6 +16,7 @@ vi.mock('../../../src/service/biotracker/biotracker-adapter', () => ({
   registerCharacter_ACU: vi.fn(async () => ({ ok: true, message: 'ok' })),
   autoRegisterCharacters_ACU: vi.fn(async () => ({ ok: true, registered: [], message: 'none' })),
   runBiotrackerNow_ACU: vi.fn(async () => {}),
+  clearBiotrackerChatState_ACU: vi.fn(() => true),
 }));
 
 vi.mock('../../../src/service/biotracker/vendor/race_config.js', () => ({
@@ -69,6 +70,12 @@ describe('BiotrackerPage 渲染', () => {
   it('已注册角色为空时显示空态', () => {
     const { el, app } = mountPage();
     expect(el.textContent).toContain('尚未注册角色');
+    app.unmount();
+  });
+
+  it('已注册角色面板提供清空本聊天数据按钮', () => {
+    const { el, app } = mountPage();
+    expect(el.textContent).toContain('清空本聊天数据（恢复初始）');
     app.unmount();
   });
 });

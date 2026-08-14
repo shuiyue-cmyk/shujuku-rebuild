@@ -101,12 +101,11 @@
         <section id="bs-bt-view-table-view" class="bs-bt-view" data-view="table-view">
           <div class="bs-bt-panel">
             <div class="settings_section">
-              <label for="bs-bt-table-select">选择表格</label>
-              <select id="bs-bt-table-select" class="text_pole">
-                <option value="">请选择表格</option>
-              </select>
+              <div class="bs-bt-status-title">数据库表格</div>
+              <div id="bs-bt-table-list" class="bs-bt-table-list">加载中…</div>
             </div>
-            <div class="settings_section">
+            <div class="settings_section" id="bs-bt-table-detail" hidden>
+              <button id="bs-bt-table-back" class="menu_button" type="button">返回表格列表</button>
               <div class="bs-bt-status-title" id="bs-bt-table-name">数据库表格</div>
               <div id="bs-bt-table-content" class="bs-bt-table-wrap">尚无表格数据。</div>
             </div>
@@ -158,6 +157,14 @@
   </div>
 
   <div class="bs-bt-physical-buttons">
+    <button id="bs-bt-system-button" class="bs-bt-physical-button" type="button" title="数据库" aria-label="数据库">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"
+        aria-hidden="true">
+        <ellipse cx="12" cy="5" rx="9" ry="3"></ellipse>
+        <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"></path>
+        <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path>
+      </svg>
+    </button>
     <button id="bs-bt-home-button" class="bs-bt-physical-button" type="button" title="HOME" aria-label="HOME">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"
         aria-hidden="true">

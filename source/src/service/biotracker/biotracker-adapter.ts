@@ -8,12 +8,13 @@
  * - 恒字系列：异步追踪恒开启（enabled）、恒 after_ai、恒完整更新（requireFullDescriptionUpdates）、恒格式化输出（formattedOutputV4）、默认 json 响应
  * - 高级设置开关（生理追踪总开关）映射 settings_ACU.bs_biotracker.enabled
  */
-import { MODULE_NAME, DEFAULT_SETTINGS, getSettings, saveSettings, getChatState, getChatKey, cloneValue, buildRecentMessages } from './vendor/state.js';
+import { MODULE_NAME, DEFAULT_SETTINGS, getSettings, saveSettings, getChatState, getChatKey, cloneValue, buildRecentMessages, createEmptyChatState } from './vendor/state.js';
 import { runRegistry, runRegistryBreedingInference } from './vendor/registry.js';
 import { resetPoller, runTracker } from './vendor/tracker.js';
 import { callOpenAICompatible, extractJson } from './vendor/api.js';
 import { getHostContext } from './vendor/host.js';
 import { settings_ACU, currentChatFileIdentifier_ACU, allChatMessages_ACU, currentJsonTableData_ACU } from '../runtime/state-manager';
+import { getSortedSheetKeys_ACU } from '../template/chat-scope';
 import { saveSettings_ACU } from '../settings/settings-service';
 import { resolveApiConfigByPreset_ACU } from '../settings/api-preset-service';
 import { getCurrentCharacterFallback_ACU } from '../host/host-state-service';
@@ -179,11 +180,21 @@ function installBiotrackerFrontendBridge(): void {
           return {};
         }
       },
-      // 表格数据快照（iframe 渲染用；序列化避免 iframe 意外改写）
+      // 表格数据快照（弹窗渲染用；序列化避免面板意外改写，键序按数据库排序）
       getTables: () => {
         try {
           if (!currentJsonTableData_ACU || typeof currentJsonTableData_ACU !== 'object') return {};
-          return JSON.parse(JSON.stringify(currentJsonTableData_ACU)) || {};
+          const snapshot = JSON.parse(JSON.stringify(currentJsonTableData_ACU)) || {};
+          const orderedKeys = getSortedSheetKeys_ACU(snapshot);
+          if (orderedKeys.length === 0) return snapshot;
+          const ordered: Record<string, any> = {};
+          for (const key of orderedKeys) {
+            if (snapshot[key] !== undefined) ordered[key] = snapshot[key];
+          }
+          for (const key of Object.keys(snapshot)) {
+            if (ordered[key] === undefined) ordered[key] = snapshot[key];
+          }
+          return ordered;
         } catch (e) {
           return {};
         }
@@ -382,6 +393,22 @@ export async function runBiotrackerNow_ACU(): Promise<void> {
     await runTracker(ctx, trackerDeps, 'manual');
   } finally {
     trackerInFlight = false;
+  }
+}
+
+/** 清空当前聊天的生理追踪数据（恢复到初始空状态），返回是否执行 */
+export function clearBiotrackerChatState_ACU(): boolean {
+  try {
+    const ctx = createBiotrackerCtx_ACU();
+    const settings = getSettings(ctx);
+    const key = getChatKey(ctx);
+    if (!settings.chatStates || typeof settings.chatStates !== 'object') return false;
+    settings.chatStates[key] = createEmptyChatState();
+    scheduleSettingsSave();
+    return true;
+  } catch (e) {
+    logWarn_ACU('[生理追踪] 清空当前聊天状态失败:', e);
+    return false;
   }
 }
 

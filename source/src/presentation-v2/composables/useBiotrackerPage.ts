@@ -16,6 +16,7 @@ import {
   registerCharacter_ACU,
   autoRegisterCharacters_ACU,
   runBiotrackerNow_ACU,
+  clearBiotrackerChatState_ACU,
 } from '../../service/biotracker/biotracker-adapter';
 import { useApiPresetSelectOptions } from './useApiPresetSelectOptions';
 import { ALL_BUILTIN_RACES } from '../../service/biotracker/vendor/race_config.js';
@@ -205,6 +206,17 @@ export function useBiotrackerPage() {
   const characters = ref<Array<{ name: string; race: string; summary: string }>>([]);
   const dataRefreshTick = ref(0);
 
+  /** 清空当前聊天的生理追踪数据（恢复初始空状态） */
+  function clearChatState(): void {
+    const cleared = clearBiotrackerChatState_ACU();
+    if (cleared) {
+      showToastr_ACU('success', '已清空本聊天的生理追踪数据。', { title: '生理追踪', acuToastCategory: 'biotracker' });
+      refreshCharacters();
+    } else {
+      showToastr_ACU('warning', '清空失败：当前聊天尚无数据或状态不可用。', { title: '生理追踪', acuToastCategory: 'biotracker' });
+    }
+  }
+
   function refreshCharacters(): void {
     dataRefreshTick.value++;
     const chatStates = settings_ACU.bs_biotracker?.chatStates || {};
@@ -276,6 +288,7 @@ export function useBiotrackerPage() {
     tracking,
     runAutoRegister,
     runTrackerNow,
+    clearChatState,
     characters,
     status,
     statusIsError,
