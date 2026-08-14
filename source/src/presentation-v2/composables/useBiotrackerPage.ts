@@ -17,6 +17,7 @@ import {
   autoRegisterCharacters_ACU,
   runBiotrackerNow_ACU,
   clearBiotrackerChatState_ACU,
+  generateWardrobe_ACU,
 } from '../../service/biotracker/biotracker-adapter';
 import { useApiPresetSelectOptions } from './useApiPresetSelectOptions';
 import { ALL_BUILTIN_RACES } from '../../service/biotracker/vendor/race_config.js';
@@ -202,11 +203,38 @@ export function useBiotrackerPage() {
     }
   }
 
+  // ─── 生成备装（手动注册卡：普通 / 增强） ───
+  const wardrobeGenerating = ref(false);
+  async function generateWardrobe(enhanced: boolean): Promise<void> {
+    if (wardrobeGenerating.value) return;
+    const name = String(registerName.value || '').trim();
+    if (!name) {
+      showToastr_ACU('warning', '请先填写要生成备装的角色名。', { title: '生理追踪', acuToastCategory: 'biotracker' });
+      return;
+    }
+    wardrobeGenerating.value = true;
+    statusIsError.value = false;
+    showPendingToast(enhanced ? `正在为「${name}」增强生成备装…` : `正在为「${name}」生成备装…`);
+    try {
+      const result = await generateWardrobe_ACU({ name, enhanced });
+      status.value = result.message;
+      statusIsError.value = !result.ok;
+      finishPendingToast();
+      showToastr_ACU(result.ok ? 'success' : 'warning', result.message, { title: '生理追踪', acuToastCategory: 'biotracker' });
+      refreshCharacters();
+    } catch (e: any) {
+      status.value = `生成备装失败：${e?.message || e}`;
+      statusIsError.value = true;
+      finishPendingToast();
+      showToastr_ACU('error', `生成备装失败：${e?.message || e}`, { title: '生理追踪', acuToastCategory: 'biotracker' });
+    } finally {
+      wardrobeGenerating.value = false;
+    }
+  }
+
   // ─── 已注册角色只读（chatState.characters） ───
   const characters = ref<Array<{ name: string; race: string; summary: string }>>([]);
-  const dataRefreshTick = ref(0);
-
-  /** 清空当前聊天的生理追踪数据（恢复初始空状态） */
+  const dataRefreshTick = ref(0);  /** 清空当前聊天的生理追踪数据（恢复初始空状态） */
   function clearChatState(): void {
     const cleared = clearBiotrackerChatState_ACU();
     if (cleared) {
@@ -289,6 +317,8 @@ export function useBiotrackerPage() {
     runAutoRegister,
     runTrackerNow,
     clearChatState,
+    generateWardrobe,
+    wardrobeGenerating,
     characters,
     status,
     statusIsError,

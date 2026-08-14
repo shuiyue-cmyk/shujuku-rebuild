@@ -8,8 +8,9 @@
  * - 恒字系列：异步追踪恒开启（enabled）、恒 after_ai、恒完整更新（requireFullDescriptionUpdates）、恒格式化输出（formattedOutputV4）、默认 json 响应
  * - 高级设置开关（生理追踪总开关）映射 settings_ACU.bs_biotracker.enabled
  */
-import { MODULE_NAME, DEFAULT_SETTINGS, getSettings, saveSettings, getChatState, getChatKey, cloneValue, buildRecentMessages, createEmptyChatState } from './vendor/state.js';
-import { runRegistry, runRegistryBreedingInference } from './vendor/registry.js';
+import { MODULE_NAME, DEFAULT_SETTINGS, getSettings, saveSettings, getChatState, getChatKey, cloneValue, buildRecentMessages, createEmptyChatState, recordChatStateSnapshot, resolveRegisteredCharacterName } from './vendor/state.js';
+import { runRegistry, runRegistryBreedingInference, runRegistryWardrobeInference } from './vendor/registry.js';
+import { applyToolCall } from './vendor/tools.js';
 import { resetPoller, runTracker } from './vendor/tracker.js';
 import { callOpenAICompatible, extractJson } from './vendor/api.js';
 import { getHostContext } from './vendor/host.js';
@@ -393,6 +394,69 @@ export async function runBiotrackerNow_ACU(): Promise<void> {
     await runTracker(ctx, trackerDeps, 'manual');
   } finally {
     trackerInFlight = false;
+  }
+}
+
+/**
+ * 生成并套用角色备装（衣柜+当前穿着）。
+ * - enhanced=false：常规生成（只发角色/衣柜上下文）
+ * - enhanced=true：增强生成（includeStyleBook=true，把内置服装风格世界书一并发送）
+ * 生成后直接套用到角色 profile.wardrobe/outfit 并持久化。
+ */
+export async function generateWardrobe_ACU(options: { name: string; enhanced?: boolean }): Promise<{ ok: boolean; message: string }> {
+  const ctx = createBiotrackerCtx_ACU();
+  try {
+    const name = String(options.name || '').trim();
+    if (!name) return { ok: false, message: '请填写要生成备装的角色名。' };
+    const settings = getSettings(ctx);
+    const chatState = getChatState(ctx, settings);
+    const targetName = resolveRegisteredCharacterName(chatState, name);
+    if (!targetName) return { ok: false, message: `尚未找到已注册角色：${name}。请先注册，再生成备装。` };
+    const enhanced = options.enhanced === true;
+    logDebug_ACU(`[生理追踪] 备装生成开始（${enhanced ? '增强' : '普通'}）:`, targetName);
+    const result = await runRegistryWardrobeInference(ctx, {
+      targetName,
+      customNotes: '',
+      skillPrompt: '',
+      includeStyleBook: enhanced,
+    });
+    // 套用：克隆工作状态 → 重置衣柜/穿着 → bsAddWardrobeItem + bsChangeOutfit → 写回
+    const workingState = cloneValue(chatState);
+    const workingCharacter = workingState.characters?.[targetName];
+    if (!workingCharacter?.profile) return { ok: false, message: '备装目标状态异常。' };
+    workingCharacter.profile.wardrobe = {
+      enabled: true,
+      items: [{ id: 0, name: '全裸', note: '未着衣物。', slot: 'main', masking: 0, support: 0, capacity: 10, convenience: 10 }],
+    };
+    workingCharacter.profile.outfit = { mainItemId: 0, accessoryItemIds: [], temporaryItems: [], wearState: '整齐', pregFit: null };
+    const items = Array.isArray(result?.wardrobe?.items) ? result.wardrobe.items : [];
+    const outfit: any = result?.outfit && typeof result.outfit === 'object' ? result.outfit : {};
+    const logs: any[] = [];
+    for (const item of items) {
+      if (Number(item?.id) === 0 || String(item?.id || '').trim() === 'nude') continue;
+      logs.push(applyToolCall(workingState, { name: 'bsAddWardrobeItem', arguments: { female: targetName, item } }));
+    }
+    logs.push(applyToolCall(workingState, {
+      name: 'bsChangeOutfit',
+      arguments: {
+        female: targetName,
+        mainItemId: Number.isInteger(Number(outfit.mainItemId)) ? Number(outfit.mainItemId) : 0,
+        accessoryItemIds: Array.isArray(outfit.accessoryItemIds) ? outfit.accessoryItemIds.map((id: any) => Number(id)).filter((id: any) => Number.isInteger(id) && id >= 0) : [],
+        temporaryItems: Array.isArray(outfit.temporaryItems) ? outfit.temporaryItems : [],
+      },
+    }));
+    const failed = logs.find((item) => item && item.applied === false);
+    if (failed) return { ok: false, message: String(failed?.message || '备装失败。') };
+    const preparedCharacter = workingState.characters?.[targetName];
+    if (!preparedCharacter?.profile) return { ok: false, message: '备装目标状态异常。' };
+    chatState.characters[targetName] = preparedCharacter;
+    recordChatStateSnapshot(ctx, chatState, { reason: 'wardrobe_prep' });
+    saveSettings(ctx);
+    logDebug_ACU(`[生理追踪] 备装完成（${enhanced ? '增强' : '普通'}）:`, targetName);
+    return { ok: true, message: `已为「${targetName}」生成并套用备装（${enhanced ? '增强' : '普通'}）。` };
+  } catch (e: any) {
+    logWarn_ACU('[生理追踪] 生成备装失败:', e);
+    return { ok: false, message: `生成备装失败：${e?.message || e}` };
   }
 }
 

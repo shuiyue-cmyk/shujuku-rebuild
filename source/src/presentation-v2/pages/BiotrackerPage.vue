@@ -47,10 +47,16 @@
           <AcuButton size="sm" :disabled="registering" @click="doRegister">
             {{ registering ? '注册中...' : '注册角色' }}
           </AcuButton>
-          <AcuButton size="sm" variant="secondary" :disabled="tracking" @click="runTrackerNow">
-            {{ tracking ? '分析中...' : '立即追踪分析' }}
+          <AcuButton size="sm" variant="secondary" :disabled="wardrobeGenerating" @click="generateWardrobe(false)">
+            {{ wardrobeGenerating ? '生成中...' : '生成备装' }}
+          </AcuButton>
+          <AcuButton size="sm" variant="secondary" :disabled="wardrobeGenerating" @click="generateWardrobe(true)">
+            {{ wardrobeGenerating ? '生成中...' : '增强生成备装' }}
           </AcuButton>
         </div>
+        <p class="acu-v2-biotracker-page__api-readonly">
+          增强生成备装会把内置服装风格世界书一并发送给 AI（更贴合当前世界观的着装）。
+        </p>
         <p v-if="status" class="acu-v2-biotracker-page__status" :data-error="statusIsError">
           {{ status }}
         </p>
@@ -107,6 +113,9 @@
           </tbody>
         </table>
         <div class="acu-v2-biotracker-page__actions">
+          <AcuButton size="sm" :disabled="tracking" @click="runTrackerNow">
+            {{ tracking ? '分析中...' : '立即追踪分析' }}
+          </AcuButton>
           <AcuButton size="sm" variant="secondary" @click="clearChatState">
             清空本聊天数据（恢复初始）
           </AcuButton>
@@ -165,6 +174,8 @@ const {
   runAutoRegister,
   runTrackerNow,
   clearChatState,
+  generateWardrobe,
+  wardrobeGenerating,
   characters,
   status,
   statusIsError,

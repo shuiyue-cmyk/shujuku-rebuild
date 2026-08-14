@@ -17,6 +17,7 @@ vi.mock('../../../src/service/biotracker/biotracker-adapter', () => ({
   autoRegisterCharacters_ACU: vi.fn(async () => ({ ok: true, registered: [], message: 'none' })),
   runBiotrackerNow_ACU: vi.fn(async () => {}),
   clearBiotrackerChatState_ACU: vi.fn(() => true),
+  generateWardrobe_ACU: vi.fn(async () => ({ ok: true, message: 'ok' })),
 }));
 
 vi.mock('../../../src/service/biotracker/vendor/race_config.js', () => ({
@@ -54,10 +55,11 @@ describe('BiotrackerPage 渲染', () => {
     app.unmount();
   });
 
-  it('渲染手动注册与自动注册两卡片（按钮/频率）', () => {
+  it('渲染手动注册卡（注册/生成备装/增强生成备装）与自动注册卡', () => {
     const { el, app } = mountPage();
     expect(el.textContent).toContain('注册角色');
-    expect(el.textContent).toContain('立即追踪分析');
+    expect(el.textContent).toContain('生成备装');
+    expect(el.textContent).toContain('增强生成备装');
     expect(el.textContent).toContain('立即分析并注册');
     expect(el.textContent).toContain('更新频率');
     const inputs = el.querySelectorAll('input');
@@ -67,15 +69,16 @@ describe('BiotrackerPage 渲染', () => {
     app.unmount();
   });
 
-  it('已注册角色为空时显示空态', () => {
+  it('已注册角色面板提供立即追踪分析与清空本聊天数据按钮', () => {
     const { el, app } = mountPage();
-    expect(el.textContent).toContain('尚未注册角色');
+    expect(el.textContent).toContain('立即追踪分析');
+    expect(el.textContent).toContain('清空本聊天数据（恢复初始）');
     app.unmount();
   });
 
-  it('已注册角色面板提供清空本聊天数据按钮', () => {
+  it('已注册角色为空时显示空态', () => {
     const { el, app } = mountPage();
-    expect(el.textContent).toContain('清空本聊天数据（恢复初始）');
+    expect(el.textContent).toContain('尚未注册角色');
     app.unmount();
   });
 });

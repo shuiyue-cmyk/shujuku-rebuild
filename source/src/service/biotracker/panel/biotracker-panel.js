@@ -7555,19 +7555,36 @@ function openTableDetail(ctx, key) {
     contentEl.appendChild(wrap);
     return;
   }
-  // 普通表：只读渲染
+  // 普通表：只读纵向卡片渲染（每条数据一个卡片，字段名+值换行排列，可读性优先）
   if (content.length === 0) { contentEl.textContent = '尚无表格数据。'; return; }
-  let html = '<table class="bs-bt-table">';
-  html += '<thead><tr>';
-  (Array.isArray(content[0]) ? content[0] : []).forEach((h) => { html += '<th>' + escapeHtml(String(h)) + '</th>'; });
-  html += '</tr></thead><tbody>';
-  content.slice(1).forEach((row) => {
-    html += '<tr>';
-    (Array.isArray(row) ? row : []).forEach((c) => { html += '<td>' + escapeHtml(String(c)) + '</td>'; });
-    html += '</tr>';
-  });
-  html += '</tbody></table>';
-  contentEl.innerHTML = html;
+  const headers = Array.isArray(content[0]) ? content[0].map((h) => String(h ?? '')) : [];
+  const rows = content.slice(1).filter((row) => Array.isArray(row));
+  if (rows.length === 0) { contentEl.textContent = '尚无表格数据。'; return; }
+  contentEl.innerHTML = '';
+  const list = document.createElement('div');
+  list.className = 'bs-bt-table-card-list';
+  for (const row of rows) {
+    const card = document.createElement('div');
+    card.className = 'bs-bt-table-card';
+    for (let i = 0; i < row.length; i += 1) {
+      const label = String(headers[i] || `列${i + 1}`);
+      const value = String(row[i] ?? '');
+      if (value === '') continue;
+      const field = document.createElement('div');
+      field.className = 'bs-bt-table-field';
+      const labelEl = document.createElement('div');
+      labelEl.className = 'bs-bt-table-field-label';
+      labelEl.textContent = label;
+      const valueEl = document.createElement('div');
+      valueEl.className = 'bs-bt-table-field-value';
+      valueEl.textContent = value;
+      field.appendChild(labelEl);
+      field.appendChild(valueEl);
+      card.appendChild(field);
+    }
+    list.appendChild(card);
+  }
+  contentEl.appendChild(list);
 }
 
 // 顶层 DOM 渲染场景：面板与适配层同 bundle 同 window。
