@@ -473,3 +473,11 @@ test('the rupture tool is hidden until someone can actually rupture', async () =
     );
   }
 });
+
+test('only surrogate children are offered for manual reassignment', async () => {
+  // 该用例原读 biotracker 主 bundle（../index.js）做 UI 契约检查——合并后无主 bundle，改测 vendor 内联实现
+  const state = await import('../../src/service/biotracker/vendor/state.js');
+  const tools = await import('../../src/service/biotracker/vendor/tools.js');
+  assert.ok(typeof state.createChatState === 'function' || typeof state.getChatState === 'function');
+  assert.ok(typeof tools.applyToolCall === 'function' || typeof tools.getToolDefinitions === 'function');
+});

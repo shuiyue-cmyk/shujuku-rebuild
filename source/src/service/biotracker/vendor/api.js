@@ -41,6 +41,48 @@ export function extractJson(text) {
   return null;
 }
 
+/**
+ * DeepSeek 系列模型对 response_format(json_object) 支持良好，且工具调用兼容层不稳定——
+ * 按用户需求：模型名只要包含 deepseek 或 ds（大小写不敏感）即判定为 DeepSeek 系，
+ * 公益站可能带各种前后缀（如 deepseek-v4-flash / deepseek-v4-pro），故用宽松子串匹配。
+ */
+export function isDeepSeekFamilyModel(model) {
+  const name = String(model || '').trim().toLowerCase();
+  return name.includes('deepseek') || name.includes('ds');
+}
+
+/**
+ * 是否附加 response_format.json_object（普通格式化输出）：
+ * 按钮开启（formattedOutputV4 !== false）或模型为 DeepSeek 系（自动切换）。
+ */
+export function shouldUseResponseFormat(settings, model) {
+  if (settings?.formattedOutputV4 !== false) return true;
+  return isDeepSeekFamilyModel(model);
+}
+
+/**
+ * 是否注入 v4 兼容提示词结构指令（完整 v4 兼容）：
+ * 仅 DeepSeek 系模型触发——普通模型按钮开启时只加 response_format，不注入指令。
+ */
+export function shouldInjectV4Instruction(settings, model) {
+  return isDeepSeekFamilyModel(model);
+}
+
+/**
+ * MVU 式「格式化输出」提示词指令：v4 兼容模式下要求模型只输出符合 tool_calls 结构的 JSON 对象，
+ * 与 response_format(json_object) 双重约束，降低 DeepSeek 等模型掉格式概率。
+ */
+function buildFormattedOutputV4Instruction() {
+  return [
+    '【输出格式（强制）】',
+    '你处于格式化输出模式：不要输出 Markdown、不要输出 ```json 代码块、不要输出解释文字或任何对象之外的字符。',
+    '只输出一个可直接 JSON.parse 的 JSON 对象，结构为：',
+    '{"tool_calls": [{"name": "工具名", "arguments": {"参数名": "值"}}], "character_checks": [{"female": "角色名", "status": "no_change|updated|present|offscreen"}]}',
+    'arguments 必须是一个对象；工具名与参数必须来自 available_tools 与变量语义说明。',
+    'character_checks 必须对每名已追踪角色恰好输出一笔（即使无变化 status 也写 no_change）；无工具操作时输出 {"tool_calls": []}，但 character_checks 仍须完整。',
+  ].join('\n');
+}
+
 export function getApiBase(settings) {
   let apiBase = String(settings.apiUrl || '').trim().replace(/\/+$/, '');
   apiBase = apiBase.replace(/\/(chat\/completions|models)$/i, '');
@@ -100,11 +142,98 @@ function shouldUseHostProxy(url) {
   return isBrowserRuntime() && isCrossOriginUrl(url);
 }
 
+/**
+ * 直连会把 API Key 放进 Authorization 头；远程 http 端点属于明文传输，
+ * 仅放行 localhost 的 http（本地 Ollama/代理调试场景）。
+ * 相对路径/无 scheme 的 apiBase 视为同源路径（浏览器自行解析），不在此列。
+ * 前缀判定须覆盖任何 http(s) scheme 形式（含 `http:`/`http:/` 这类少打斜杠的畸形串，
+ * WHATWG 会把它解析成远程主机，不能只认 `http://`）。
+ */
+export function assertSafeDirectApiBase(apiBase) {
+  const raw = String(apiBase || '').trim();
+  if (!raw) return;
+  // 非 http(s) scheme（file://、gopher://、ftp://、javascript: 等）一律拒绝——
+  // 直连时浏览器可能拦截，但 host-proxy 路径会把 URL 交给 ST 后端服务端 fetch，
+  // 成为 SSRF 放大器（网络面审查 P2）。
+  if (!/^https?:/i.test(raw)) {
+    // 相对路径/无 scheme（'api/v1'、'api.example.com:8080'、'localhost:8000'）
+    // 视为同源/回环路径，放行；显式 scheme（file://、gopher://、ftp://、javascript:、
+    // data: 等）一律拒绝——直连时浏览器可能拦截，但 host-proxy 路径会把 URL 交给
+    // ST 后端服务端 fetch，成为 SSRF 放大器（网络面审查 P2）。
+    const schemeMatch = raw.match(/^([a-z][a-z0-9+.-]*):/i);
+    if (schemeMatch) {
+      const scheme = schemeMatch[1].toLowerCase();
+      const rest = raw.slice(schemeMatch[0].length);
+      // 'localhost:8000' / 'api.example.com:8080' = 无 scheme 的 host:port，放行
+      const isPortOnly = /^\d+$/.test(rest);
+      const isDangerousScheme = ['file', 'gopher', 'ftp', 'javascript', 'data', 'vbscript', 'jar', 'ws', 'wss'].includes(scheme);
+      if (!isPortOnly && isDangerousScheme) {
+        throw new Error('API Base URL 仅支持 http:// 或 https://，其他协议一律拒绝。');
+      }
+    }
+    return;
+  }
+  try {
+    const url = new URL(raw);
+    // WHATWG URL 对 IPv6 回环返回带方括号的 hostname（'[::1]'），须去掉再比较
+    const host = url.hostname.replace(/^\[|\]$/g, '');
+    if (url.protocol === 'http:' && !['localhost', '127.0.0.1', '::1'].includes(host)) {
+      throw new Error('API Base URL 使用 http:// 时仅允许 localhost；远程地址请使用 https://，避免 API Key 明文传输。');
+    }
+    // 解析后 IP 复核：私网/环回/链路本地/保留地址在代理路径会被 ST 后端放大成
+    // SSRF（如 169.254.169.254 云元数据、10.x 内网、0.0.0.0）——即使 scheme 是 https。
+    const numericHost = host.replace(/^::ffff:/, '').toLowerCase();
+    if (isPrivateNetworkHost(numericHost) && !['localhost', '127.0.0.1', '::1'].includes(numericHost)) {
+      throw new Error('API Base URL 指向私网/环回/链路本地地址，代理路径存在 SSRF 风险，请使用公网 https 地址。');
+    }
+  } catch (error) {
+    if (error instanceof TypeError) throw new Error('API Base URL 无法解析。');
+    throw error;
+  }
+}
+
+/**
+ * 错误文本脱敏：API 响应体可能回显 Authorization/key/token 等敏感字段，
+ * 拼入错误消息（toastr/UI 可见）前剥离（网络面审查 P3）。
+ */
+function sanitizeErrorText(text) {
+  return String(text || '')
+    .replace(/("?(?:authorization|api[-_]?key|proxy[-_]?password|token)"?\s*[:=]\s*")[^"]{4,}(")/gi, '$1***$2')
+    .replace(/(Bearer\s+)[A-Za-z0-9._~+/-]{8,}/gi, '$1***')
+    .slice(0, 300);
+}
+
+/** 判定主机是否为私网/环回/链路本地/保留 IP（用于代理路径 SSRF 防护）。 */
+function isPrivateNetworkHost(host) {
+  if (!/^[\d.]+$/.test(host) && !/^[0-9a-f:]+$/i.test(host)) return false; // 域名放行（DNS rebinding 由解析后复核兜底不了时依赖宿主）
+  if (host.includes(':')) {
+    // IPv6：环回 ::1、链路本地 fe80::/10、唯一本地 fc00::/7、保留 ::/128
+    if (host === '::1' || host === '::') return true;
+    const first = host.split(':')[0].toLowerCase();
+    if (first === 'fe80' || first === 'feb0' || first === 'fe90' || first === 'fea0' || first === 'feb1' || first === 'feb2' || first === 'feb3' || first === 'feb4' || first === 'feb5' || first === 'feb6' || first === 'feb7' || first === 'feb8' || first === 'feb9' || first === 'feba' || first === 'febb' || first === 'febc' || first === 'febd' || first === 'febe' || first === 'febf') return true;
+    if (first === 'fc' || first === 'fd') return true;
+    return false;
+  }
+  const parts = host.split('.').map((n) => Number(n));
+  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
+  const [a, b] = parts;
+  if (a === 10) return true;
+  if (a === 127) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 0) return true;
+  if (a >= 224) return true; // 组播/保留
+  return false;
+}
+
 function shouldFallbackFromHostProxy(responseText, status) {
   return status === 401
     || status === 403
     || status === 404
     || status === 405
+    || status === 429
+    || (status >= 500 && status <= 599)
     || /cannot\s+post|not\s+found|no\s+route|ENOENT/i.test(String(responseText || ''));
 }
 
@@ -298,7 +427,7 @@ function isNonRetriableApiError(error) {
   if (isApiDeadlineError(error)) return true;
   const message = String(error?.message || error || '');
   // 配置/鉴权类错误重试无意义
-  return /请先填写|尚未配置|API URL 或模型名称|401|403|Unauthorized|invalid.?api.?key|Incorrect API key/i.test(message);
+  return /请先填写|尚未配置|API URL 或模型名称|无法解析|仅允许 localhost|401|403|Unauthorized|invalid.?api.?key|Incorrect API key/i.test(message);
 }
 
 /**
@@ -641,6 +770,9 @@ function buildPresetSamplingBodyFromPreset(preset) {
 
 async function requestChatCompletion(apiBase, settings, body, runContext = {}) {
   const logApiDebug = (phase, details = {}) => {
+    // 默认关闭：全量 request/response（含聊天/角色态）只会在显式开启调试时落 console，
+    // 避免无条件泄露（网络面审查 P3）。开启：控制台执行 globalThis.__bs_biotracker_debug_api__ = true
+    if (!globalThis.__bs_biotracker_debug_api__) return;
     try {
       const label = `[BS BioTracker][API debug] ${phase}`;
       if (typeof console.groupCollapsed === 'function') console.groupCollapsed(label);
@@ -655,6 +787,9 @@ async function requestChatCompletion(apiBase, settings, body, runContext = {}) {
     globalThis.__bs_biotracker_async_request__ = true;
     const url = `${apiBase}/chat/completions`;
     const useHostProxy = shouldUseHostProxy(url);
+    // 无条件校验 http 明文：代理路径同样把 key 交给 ST 后端（proxy_password/custom_include_headers），
+    // 远程 http 一律拒绝——不校验会在代理转发段以明文发往远程主机（安全审查 P2）。
+    assertSafeDirectApiBase(apiBase);
     let transport = useHostProxy ? 'host-proxy' : 'direct';
     let requestText = '';
     try {
@@ -681,6 +816,8 @@ async function requestChatCompletion(apiBase, settings, body, runContext = {}) {
         }
         if (proxyError || (!response.ok && shouldFallbackFromHostProxy(responseText, response.status))) {
           transport = proxyError ? 'direct-after-proxy-error' : `direct-after-proxy-${response.status}`;
+          // 回退直连同样会把 Key 放进 Authorization 头：远程 http 必须拒绝
+          assertSafeDirectApiBase(apiBase);
           ({ response, responseText } = await fetchText(url, {
             method: 'POST',
             headers: getAuthHeaders(settings),
@@ -700,16 +837,19 @@ async function requestChatCompletion(apiBase, settings, body, runContext = {}) {
           deadlineMs: runContext.deadlineMs || 0,
         }));
       }
-      globalThis[DEBUG_LAST_API_RESPONSE_KEY] = {
-        capturedAt: Date.now(),
-        attempt,
-        transport,
-        url: transport === 'host-proxy' ? '/api/backends/chat-completions/generate' : url,
-        status: response.status,
-        ok: response.ok,
-        responseText,
-        requestText,
-      };
+      // 调试快照同样默认关闭（网络面审查 P3），避免无门控暂存完整请求/响应于 globalThis
+      if (globalThis.__bs_biotracker_debug_api__) {
+        globalThis[DEBUG_LAST_API_RESPONSE_KEY] = {
+          capturedAt: Date.now(),
+          attempt,
+          transport,
+          url: transport === 'host-proxy' ? '/api/backends/chat-completions/generate' : url,
+          status: response.status,
+          ok: response.ok,
+          responseText,
+          requestText,
+        };
+      }
       logApiDebug(`response:${attempt}`, {
         transport,
         url: transport === 'host-proxy' ? '/api/backends/chat-completions/generate' : url,
@@ -744,6 +884,7 @@ async function requestChatCompletion(apiBase, settings, body, runContext = {}) {
       model: body.model,
       temperature: body.temperature,
       top_p: body.top_p,
+      top_k: body.top_k,
       frequency_penalty: body.frequency_penalty,
       presence_penalty: body.presence_penalty,
       max_tokens: body.max_tokens,
@@ -769,7 +910,7 @@ async function requestChatCompletion(apiBase, settings, body, runContext = {}) {
   }
 
   if (!response.ok) {
-    throw new Error(`API ${response.status}: ${errorText.slice(0, 300)}`);
+    throw new Error(`API ${response.status}: ${sanitizeErrorText(errorText)}`);
   }
   try {
     return JSON.parse(responseText);
@@ -798,6 +939,8 @@ export async function fetchModelList(settings) {
   let responseText = '';
   const url = `${apiBase}/models`;
   const useHostProxy = shouldUseHostProxy(url);
+  // 无条件校验 http 明文（代理与直连同标准），见 postBody 注释
+  assertSafeDirectApiBase(apiBase);
   let transport = useHostProxy ? 'host-proxy' : 'direct';
   try {
     if (useHostProxy) {
@@ -810,6 +953,8 @@ export async function fetchModelList(settings) {
       }
       if (proxyError || (!response.ok && shouldFallbackFromHostProxy(responseText, response.status))) {
         transport = proxyError ? 'direct-after-proxy-error' : `direct-after-proxy-${response.status}`;
+        // 回退直连同样会带 Authorization 头：远程 http 必须拒绝
+        assertSafeDirectApiBase(apiBase);
         ({ response, responseText } = await fetchText(url, { method: 'GET', headers: getAuthHeaders(settings), timeoutMs: resolveModelListTimeoutMs(settings) }));
       }
     } else {
@@ -819,13 +964,13 @@ export async function fetchModelList(settings) {
     throw new Error(`模型列表连接失败（${transport}）。请检查 Base URL / API Key；也可手动填写模型名称后直接使用追踪/注册。原始错误: ${String(error?.message || error)}`);
   }
   if (!response.ok) {
-    throw new Error(`模型列表请求失败 ${response.status}（${transport}）: ${responseText.slice(0, 240)}。如果此 API 不支持 /models，可手动填写模型名称。`);
+    throw new Error(`模型列表请求失败 ${response.status}（${transport}）: ${sanitizeErrorText(responseText)}。如果此 API 不支持 /models，可手动填写模型名称。`);
   }
   let data;
   try {
     data = JSON.parse(responseText);
   } catch {
-    throw new Error(`模型列表响应不是 JSON（${transport}）: ${responseText.slice(0, 180)}`);
+    throw new Error(`模型列表响应不是 JSON（${transport}）: ${sanitizeErrorText(responseText)}`);
   }
   if (data && typeof data === 'object' && data.data == null && data.models == null && data.response) {
     try {
@@ -918,20 +1063,31 @@ export async function callOpenAICompatible(settings, payload, systemPrompt = DEF
   const presetEnvelope = shouldApplyAsyncPreset(settings)
     ? await buildPresetEnvelope(settings, safeSystemPrompt, payloadText)
     : null;
-  const effectiveMessages = presetEnvelope?.messages?.length ? presetEnvelope.messages : baseMessages;
+  let effectiveMessages = presetEnvelope?.messages?.length ? presetEnvelope.messages : baseMessages;
   const stPresetSampling = presetEnvelope?.sampling || {};
   const effectivePresetName = presetEnvelope?.presetName || '';
-  // 格式化输出(v4兼容)：仅 response_format.type = json_object（无 json_schema），可在设置关闭
-  const useFormattedOutputV4 = settings?.formattedOutputV4 !== false;
+  // 格式化输出：response_format.type = json_object 普通模式（按钮开启或 DeepSeek 系自动启用）。
+  // v4 兼容提示词结构指令仅 DeepSeek 系模型注入（按钮开时普通模型只有 response_format 不加指令）。
+  // 注意：指令只在 tracker 流程注入——registry/日记/备装/技能/繁育推演各自声明了
+  // 不同的 JSON 结构（profile/wardrobe/diary 等），注入 tool_calls 指令会压过它们的 schema。
+  const useResponseFormat = shouldUseResponseFormat(settings, model);
+  const injectV4Instruction = shouldInjectV4Instruction(settings, model);
+  const isTrackerFlow = !safePayload?.target_character;
+  if (injectV4Instruction && isTrackerFlow && effectiveMessages[0]?.role === 'system') {
+    effectiveMessages = [
+      { role: 'system', content: `${effectiveMessages[0].content}\n\n${buildFormattedOutputV4Instruction()}` },
+      ...effectiveMessages.slice(1),
+    ];
+  }
   const body = {
     model,
     temperature: 0.2,
     ...stPresetSampling,
     messages: effectiveMessages,
-    ...(useFormattedOutputV4 ? { response_format: { type: 'json_object' } } : {}),
+    ...(useResponseFormat ? { response_format: { type: 'json_object' } } : {}),
   };
   recordEffectiveRequestDebug(
-    `${safePayload?.target_character ? 'registry' : 'tracker'}${mainflowCopy.hasMainflowCopy ? '-mainflow-copy' : (safePayload?.resolved_worldbook_prompt ? '-mainflow-worldinfo' : '')}${useFormattedOutputV4 ? '' : '-no-response-format'}`,
+    `${safePayload?.target_character ? 'registry' : 'tracker'}${mainflowCopy.hasMainflowCopy ? '-mainflow-copy' : (safePayload?.resolved_worldbook_prompt ? '-mainflow-worldinfo' : '')}${useResponseFormat ? '' : '-no-response-format'}${injectV4Instruction ? '-v4-instruction' : ''}`,
     effectivePresetName,
     stPresetSampling,
     effectiveMessages,
@@ -970,7 +1126,7 @@ export async function callOpenAICompatible(settings, payload, systemPrompt = DEF
           { role: 'assistant', content: String(content || '') },
           { role: 'user', content: buildJsonRetryInstruction() },
         ],
-        ...(useFormattedOutputV4 ? { response_format: { type: 'json_object' } } : {}),
+        ...(useResponseFormat ? { response_format: { type: 'json_object' } } : {}),
       };
       const retryData = await requestChatCompletion(apiBase, settings, retryBody, runContext);
       const retryContent = retryData?.choices?.[0]?.message?.content || '';

@@ -341,7 +341,7 @@ export const TOOL_DEFINITIONS = Object.freeze([
   },
   {
     name: 'bsAddSperm',
-    description: '向单一角色体内加入或扣除精液，用于性交后留下受孕机会。race 使用 [derivedType-装饰子项]race-装饰子项 格式，混血种族以 X 分隔；父系 derivedType 直接从这个字符串解析。',
+    description: '向单一角色体内加入精液，用于性交后留下受孕机会。amount 必须为正数；扣除/排出精液请用 bsDrainSperm。race 使用 [derivedType-装饰子项]race-装饰子项 格式，混血种族以 X 分隔；父系 derivedType 直接从这个字符串解析。',
     input_schema: {
       type: 'object',
       properties: {
@@ -1849,7 +1849,7 @@ function applyPassiveMetabolism(profile, tick) {
 }
 
 function applyMilkFromLibido(profile, changeValue) {
-  const delta = Math.abs(Number(changeValue) || 0);
+  const delta = Number(changeValue) || 0;
   if (delta <= 0) return;
   if (String(profile?.base?.stage || '') === '排卵期') {
     addMetabolismValue(profile, 'milk', delta * 0.05, 0, 150);
@@ -2981,6 +2981,11 @@ function applyAbortion(chatState, args) {
     return { applied: false, message: `bsAbortion skipped for ${female}: no conception state.` };
   }
 
+  // 假孕期无胎儿：结束假孕请走 bsSetMenstrualPhases，不算流产
+  if (stage === '假孕期' && fetuses.length === 0) {
+    return { applied: false, message: `bsAbortion skipped for ${female}: 假孕期无胎儿，请用 bsSetMenstrualPhases 结束假孕。` };
+  }
+
   if (immune.miscarriage && !force) {
     profile.notify = {
       ...notify,
@@ -3209,6 +3214,11 @@ function applyChildbirth(chatState, args) {
   const fetuses = Array.isArray(profile?.pregnant?.fetuses) ? profile.pregnant.fetuses : [];
   if (fetuses.length === 0) {
     return { applied: false, message: `bsChildbirth skipped for ${female}: no fetuses.` };
+  }
+  const childbirthStage = String(profile?.base?.stage || '');
+  const childbirthAllowedStages = ['孕早期', '孕中期', '孕晚期', '临产期', '逾期', '产兆前驱', '第一产程', '第二产程', '第三产程'];
+  if (!childbirthAllowedStages.includes(childbirthStage)) {
+    return { applied: false, message: `bsChildbirth skipped for ${female}: stage ${childbirthStage || '(none)'} 不允许手术分娩（需已着床进入妊娠阶段；假孕期/未着床请先推进剧情）。` };
   }
 
   profile.__runtimeRef = next.runtime || {};
@@ -3864,7 +3874,14 @@ function applyPassedTime(chatState, args) {
   const week = clampNumber(args?.week, 0, 5200, 0);
   const month = clampNumber(args?.month, 0, 1200, 0);
   const year = clampNumber(args?.year, 0, 200, 0);
-  const totalMinutes = minute + (hour * 60) + (day * 24 * 60) + (week * 7 * 24 * 60) + (month * 30 * 24 * 60) + (year * 365 * 24 * 60);
+  let totalMinutes = minute + (hour * 60) + (day * 24 * 60) + (week * 7 * 24 * 60) + (month * 30 * 24 * 60) + (year * 365 * 24 * 60);
+  // 总量上限：各分量独立 clamp 后合计可达 2.6e8 分钟，妊娠代谢循环
+  // rounds=ceil(drain)×ceil(deltaDays) 会到 ~1e9 轮冻结 UI（安全审查 P1 实测）。
+  // 单次推进封顶一年（365 天）已远超任何剧情场景，阻断总量放大。
+  const MAX_TOTAL_MINUTES = 60 * 24 * 365;
+  if (totalMinutes > MAX_TOTAL_MINUTES) {
+    totalMinutes = MAX_TOTAL_MINUTES;
+  }
   if (totalMinutes <= 0) return { applied: false, message: 'bsPassedTime skipped: no positive duration.' };
 
   for (const name of Object.keys(chatState.characters || {})) {
@@ -4131,8 +4148,9 @@ function applyDescription(chatState, args) {
 function applySetCharacterPresence(chatState, args) {
   const female = String(args?.female || '').trim();
   const character = chatState.characters?.[female];
-  const isPresent = args?.isPresent === undefined ? true : Boolean(args.isPresent);
   if (!female || !character) return { applied: false, message: `bsSetCharacterPresence skipped: unknown character ${female || '(empty)'}.` };
+  if (args?.isPresent === undefined) return { applied: false, message: `bsSetCharacterPresence skipped for ${female}: isPresent 必须显式传入 true/false。` };
+  const isPresent = Boolean(args.isPresent);
 
   const next = cloneValue(character);
   const profile = next.profile || {};
@@ -4405,6 +4423,7 @@ function applyAddSperm(chatState, args) {
   if (!female || !character) return { applied: false, message: `bsAddSperm skipped: unknown character ${female || '(empty)'}.` };
   if (!male) return { applied: false, message: 'bsAddSperm skipped: empty male.' };
   if (!Number.isFinite(amount) || amount === 0) return { applied: false, message: 'bsAddSperm skipped: invalid amount.' };
+  if (amount < 0) return { applied: false, message: 'bsAddSperm skipped: negative amount 请改用 bsDrainSperm 扣除精液。' };
 
   const next = cloneValue(character);
   const base = next.profile?.base || {};

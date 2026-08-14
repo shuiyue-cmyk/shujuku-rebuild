@@ -1,5 +1,19 @@
 import { getDerivedTypeFluxProfile, getDerivedTypeIntroductionLine, getDerivedTypeMetabolismExemptions, getEmbryoTypeByRace, getMergedRacePhysiologyProfile, getRaceComponents, getRaceDescriptorComponents, getRaceIntroductionLine, getRacePhysiologyProfile } from './race_config.js';
 
+/**
+ * 提示词插值防线：剥离换行、闭合标签与控制字符——race/derivedType 等用户可控字符串
+ * 直接拼进高优先级规则段（<bs_race>），含换行或 `</` 可闭合段注入伪指令（安全审查 P1/P2）。
+ * 只影响显示，不改语义（种族名本身不含换行才是合法）。
+ */
+function sanitizePromptText(value) {
+  return String(value ?? '')
+    .replace(/[\r\n\t]/g, ' ')
+    .replace(/<\//g, '<\\/')
+    // C0 (\u0000-\u001f) + DEL (\u007f) + C1 控制区 (\u0080-\u009f，含 NEL U+0085)
+    .replace(/[\u0000-\u001f\u007f\u0080-\u009f]/g, ' ')
+    .trim();
+}
+
 function formatNumber(value, digits = 2) {
   const num = Number(value);
   if (!Number.isFinite(num)) return '未知';
@@ -174,7 +188,7 @@ function buildSingleRacePhysiologyBlock(race) {
   if (!profile) return '';
   const introductionLine = getRaceIntroductionLine(race);
   return [
-    `【${race}】`,
+    `【${sanitizePromptText(race)}】`,
     introductionLine ? `- 物种短敘述: ${introductionLine}` : '',
     `- 经期长度: ${formatCycleDays(profile.menstrualLengthRatio)}`,
     `- 妊娠长度: ${formatGestation(profile.gestationSpeciesSpeed)}`,
@@ -196,6 +210,7 @@ function buildHybridAverageBlock(race) {
   return [
     '【混血平均参考】',
     '- 以下是系统层面的平均参考值，仅供综合判断；不要用它覆盖各族原始特征。',
+    merged.hasUnknownRace ? '- 注意：该混血包含未收录种族，以下平均数值不完整，仅供粗略参考。' : '',
     `- 平均经期长度: ${formatCycleDays(merged.menstrualLengthRatio)}`,
     `- 平均妊娠长度: ${formatGestation(merged.gestationSpeciesSpeed)}`,
     `- 平均产后恢复时间: ${formatRecoveryDays(merged.recoveryDays)}`,
@@ -203,7 +218,7 @@ function buildHybridAverageBlock(race) {
     `- 平均受精难度: ${getImpregnationDifficultyText(merged.impregnationDifficulty)}`,
     `- 平均多产性参考: ${getProlificacyText(merged.orgasmOvulationAmount, merged.identicalProbability)}；额外排卵倾向 ${formatNumber(merged.orgasmOvulationAmount)}，同卵多胎概率 ${formatNumber(merged.identicalProbability)}%`,
     `- 平均性别比参考: ${getGenderRatioText(merged.genderRatio)}`,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
 function buildRacePhysiologyLoreBlock(race) {
@@ -214,7 +229,7 @@ function buildRacePhysiologyLoreBlock(race) {
   if (components.length === 1) return [`[种族生理补充设定]`, buildSingleRacePhysiologyBlock(components[0])].join('\n');
   return [
     '[种族生理补充设定]',
-    `该角色为混血/复合种族：${components.join(' x ')}`,
+    `该角色为混血/复合种族：${components.map(sanitizePromptText).join(' x ')}`,
     '请同时理解各族生理参数，不要把混血直接脑补成单一物种。',
     ...components.map((part) => buildSingleRacePhysiologyBlock(part)).filter(Boolean),
     buildHybridAverageBlock(value),
@@ -231,7 +246,7 @@ function buildDerivedFluxLoreBlock(derivedType) {
   const exemptions = getDerivedTypeMetabolismExemptions(value);
   return [
     '[衍生需求补充设定]',
-    `【${value}】`,
+    `【${sanitizePromptText(value)}】`,
     ...(introductionLine ? [introductionLine] : []),
     `该衍生类型由 flux 抵免的普通需求：${exemptions.length > 0 ? exemptions.join(' / ') : '无'}。未被抵免的需求仍会作为 metabolism 保留。`,
     fluxDefinition,
@@ -263,7 +278,7 @@ function buildSpermCalculationBlock(characterState) {
   const lines = [
     '[异种精液受精补充设定]',
     '以下为系统在非怀孕状态下处理异种精液时使用的简化判断逻辑，请据此理解该角色当前的受孕难度与后代性别倾向。',
-    `- 母体种族: ${motherRace}`,
+    `- 母体种族: ${sanitizePromptText(motherRace)}`,
     `- 母体受精难度: ${formatNumber(motherDifficulty)} (${getImpregnationDifficultyText(motherDifficulty)})`,
     `- 母体胚胎类型: ${motherEmbryoType}`,
   ];
@@ -281,12 +296,12 @@ function buildSpermCalculationBlock(characterState) {
     lines.push(
       [
         `【异种精液 ${index + 1}】`,
-        `- 精方: ${String(sperm?.male || '未知')} / ${fatherRace}`,
+        `- 精方: ${sanitizePromptText(String(sperm?.male || '未知'))} / ${sanitizePromptText(fatherRace)}`,
         `- 精方受精难度: ${formatNumber(fatherDifficulty)} (${getImpregnationDifficultyText(fatherDifficulty)})`,
         `- 精方胚胎类型: ${fatherEmbryoType}`,
         `- 系统受精难度计算: 母体 ${formatNumber(motherDifficulty)} + 精方 ${formatNumber(fatherDifficulty)}${motherEmbryoType !== fatherEmbryoType ? `，且因胚胎类型不同（${motherEmbryoType} vs ${fatherEmbryoType}）再 ×1.5` : ''} = ${formatNumber(effectiveDifficulty)}`,
-        `- 混合后胎儿种族: ${fetusRace}`,
-        `- 系统性别比计算: 以后代种族 ${fetusRace} 的 genderRatio 为准，当前结果为 ${getGenderRatioDisplay(fetusGenderRatio)} (${getGenderRatioText(fetusGenderRatio)})`,
+        `- 混合后胎儿种族: ${sanitizePromptText(fetusRace)}`,
+        `- 系统性别比计算: 以后代种族 ${sanitizePromptText(fetusRace)} 的 genderRatio 为准，当前结果为 ${getGenderRatioDisplay(fetusGenderRatio)} (${getGenderRatioText(fetusGenderRatio)})`,
       ].join('\n'),
     );
   });
@@ -306,7 +321,7 @@ function buildPregnancyShiftBlock(characterState) {
   if (!motherRace || !motherProfile) return '';
 
   let totalWeight = 0;
-  let gestationAccumulator = 0;
+  let gestationDaysAccumulator = 0;
   let birthAccumulator = 0;
   let toleranceAccumulator = 0;
   let recoveryAccumulator = 0;
@@ -315,17 +330,21 @@ function buildPregnancyShiftBlock(characterState) {
     const weight = Math.max(0.33, Math.min(3.0, Number(fetus?.weight) || 1.0));
     const raceProfile = getMergedRacePhysiologyProfile(fetus?.race) || {};
     totalWeight += weight;
-    gestationAccumulator += weight * Math.max(0.1, Math.min(20, Number(raceProfile?.gestationSpeciesSpeed) || 1.0));
-    birthAccumulator += weight * Math.max(0.1, Math.min(100, Number(raceProfile?.birthDifficulty) || 1.0));
+    // 与工具侧保持一致：妊娠取「天数平均」（调和），不按胎重——胎儿 weight 只影响自己的发育天数
+    const fetusGestationSpeed = Math.max(0.1, Math.min(20, Number(raceProfile?.gestationSpeciesSpeed) || 1.0));
+    gestationDaysAccumulator += 280 / fetusGestationSpeed;
+    // 出生难度在工具侧也不按胎重，直接平均
+    birthAccumulator += Math.max(0.1, Math.min(100, Number(raceProfile?.birthDifficulty) || 1.0));
     toleranceAccumulator += weight * Math.max(0.1, Math.min(100, Number(raceProfile?.breedTolerance) || 1.0));
     recoveryAccumulator += weight * getEmbryoRecoveryCoefficient(fetus?.embryoType);
   }
 
-  const safeTotalWeight = Math.max(totalWeight, 0.5);
-  const averageGestation = gestationAccumulator / safeTotalWeight;
-  const averageBirth = birthAccumulator / safeTotalWeight;
-  const averageTolerance = toleranceAccumulator / safeTotalWeight;
-  const averageRecoveryCoefficient = recoveryAccumulator / safeTotalWeight;
+  const fetusCount = Math.max(1, fetuses.length);
+  const averageGestationDays = gestationDaysAccumulator / fetusCount;
+  const averageGestation = 280 / Math.max(averageGestationDays, 1);
+  const averageBirth = birthAccumulator / fetusCount;
+  const averageTolerance = toleranceAccumulator / Math.max(totalWeight, 0.33);
+  const averageRecoveryCoefficient = recoveryAccumulator / Math.max(totalWeight, 0.33);
   const fetusCountModifier = 1 + ((fetuses.length - 1) * 0.08);
   const toleranceCountModifier = Math.max(0.6, 1 - ((fetuses.length - 1) * 0.04));
 
@@ -337,6 +356,7 @@ function buildPregnancyShiftBlock(characterState) {
   const shiftedGestationSpeciesSpeed = Math.max(0.1, Math.min(20, baseGestationSpeciesSpeed * averageGestation));
   const shiftedBirthDifficulty = Math.max(0.1, Math.min(100, baseBirthDifficulty * averageBirth * fetusCountModifier));
   const shiftedBreedTolerance = Math.max(0.1, Math.min(100, baseBreedTolerance * averageTolerance * toleranceCountModifier));
+  // 与工具侧一致：恢复天数按「胚胎类型恢复系数 × (280/妊娠速度) × (分娩难度/承载耐受)」计算
   const shiftedRecoveryDays = Math.max(
     1,
     Math.round(Math.max(0.1, Math.min(2.0, averageRecoveryCoefficient)) * (280 / shiftedGestationSpeciesSpeed) * (shiftedBirthDifficulty / Math.max(shiftedBreedTolerance, 0.1))),
@@ -352,7 +372,7 @@ function buildPregnancyShiftBlock(characterState) {
   return [
     '[妊娠生理偏移补充设定]',
     '以下为系统在怀孕后依据胎儿种族、胚胎类型、胎数与胎重，对母体生理参数产生的偏移结果。',
-    `- 母体种族: ${motherRace}`,
+    `- 母体种族: ${sanitizePromptText(motherRace)}`,
     `- 妊娠长度偏移: ${describeShift(gestationShiftedDays, gestationBaseDays, (value) => formatGestation(280 / value))}`,
     `- 分娩难度偏移: ${describeShift(shiftedBirthDifficulty, baseBirthDifficulty, (value) => `${formatNumber(value)}（${getBirthDifficultyText(value)}）`)}`,
     `- 产后恢复时间偏移: ${describeShift(shiftedRecoveryDays, baseRecoveryDays, (value) => formatRecoveryDays(value))}`,

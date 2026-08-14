@@ -145,6 +145,11 @@ const extensionConfig = {
         // 复制 sql.js wasm 到 dist/extension/ 与仓库根目录
         copySqlWasmTo(distExtensionDir);
         copySqlWasmTo(repoRoot);
+        // 复制生理追踪衣橱风格世界书资源（vendor loadWardrobeStyleBook 经 import.meta.url 相对路径读取）
+        mkdirSync(join(distExtensionDir, 'assets'), { recursive: true });
+        mkdirSync(join(repoRoot, 'assets'), { recursive: true });
+        copyFileSync(join(__dirname, 'assets', 'wardrobe-style-book.json'), join(distExtensionDir, 'assets', 'wardrobe-style-book.json'));
+        copyFileSync(join(__dirname, 'assets', 'wardrobe-style-book.json'), join(repoRoot, 'assets', 'wardrobe-style-book.json'));
       },
     },
   ],

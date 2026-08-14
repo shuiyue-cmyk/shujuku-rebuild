@@ -1,5 +1,6 @@
 export const VIVIPAROUS_RACES = Object.freeze([
   "人类",
+  "扶她",
   "精灵",
   "兽耳族",
   "袋兽族",
@@ -81,8 +82,11 @@ export const ALL_BUILTIN_RACES = Object.freeze([
   ...AMORPHOUS_RACES,
 ]);
 
-export const RACE_INTRODUCTION_LINES = Object.freeze(Object.fromEntries(
-  ALL_BUILTIN_RACES.map((race) => [race, ""]),
+export const RACE_INTRODUCTION_LINES = Object.freeze(Object.assign(
+  Object.fromEntries(ALL_BUILTIN_RACES.map((race) => [race, ""])),
+  {
+    "扶她": "女性身体与女性二次性征，同时具备阴茎、阴囊与外阴（含阴道）；既能使人受孕，也能自身受孕。",
+  },
 ));
 export const RACE_INTRODUCTION_FIELD = "introductionLine";
 
@@ -198,6 +202,16 @@ export const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
     "orgasmOvulationAmount": 1,
     "identicalProbability": 5,
     "genderRatio": 50
+  },
+  "扶她": {
+    "menstrualLengthRatio": 1,
+    "gestationSpeciesSpeed": 1,
+    "birthDifficulty": 1,
+    "breedTolerance": 1,
+    "impregnationDifficulty": 1,
+    "orgasmOvulationAmount": 1,
+    "identicalProbability": 5,
+    "genderRatio": null
   },
   "精灵": {
     "menstrualLengthRatio": 3,
@@ -1036,21 +1050,27 @@ export function getBaseRaceName(race) {
 }
 
 export function getRaceComponents(race) {
+  // 同基种族带不同装饰子项（如「兽耳族-兔x兽耳族-猫」）时按基种族去重，避免平均时双重加权
+  const seen = new Set();
   return getRaceDescriptorComponents(race)
     .map((component) => getBaseRaceComponentName(component))
-    .filter(Boolean);
+    .filter((name) => {
+      if (!name || seen.has(name)) return false;
+      seen.add(name);
+      return true;
+    });
 }
 
 function mergeGenderRatioValues(values) {
-  const normalValues = values.filter((value) => Number.isFinite(value) && value >= 0 && value <= 100);
-  if (normalValues.length > 0) {
-    return normalValues.reduce((sum, value) => sum + value, 0) / normalValues.length;
-  }
-
+  // 双性/无性是稳定的身体构造：混血时优先保留，避免「扶她x人类」这类组合把性别体系抹成普通男女
   const hasHerm = values.some((value) => value === null);
   const hasAsexual = values.some((value) => value === -1);
   if (hasHerm) return null;
   if (hasAsexual) return -1;
+  const normalValues = values.filter((value) => Number.isFinite(value) && value >= 0 && value <= 100);
+  if (normalValues.length > 0) {
+    return normalValues.reduce((sum, value) => sum + value, 0) / normalValues.length;
+  }
   return 50;
 }
 
@@ -1087,6 +1107,8 @@ export function getMergedRacePhysiologyProfile(race) {
   }
 
   merged.genderRatio = mergeGenderRatioValues(profiles.map((profile) => profile.genderRatio));
+  // 存在未收录的混血成分：不静默丢弃，标记出来让提示词明确「数值仅供参考」
+  if (profiles.length < parts.length) merged.hasUnknownRace = true;
   return merged;
 }
 
