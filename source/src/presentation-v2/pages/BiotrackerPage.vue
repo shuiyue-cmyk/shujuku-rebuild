@@ -60,12 +60,7 @@
         :title="copy.autoTitle"
         :description="copy.autoDescription"
       >
-        <AcuFormRow label="自动注册">
-          <label class="acu-v2-biotracker-page__toggle">
-            <AcuCheckbox :model-value="autoRegister" @update:model-value="toggleAutoRegister" />
-            <span>由配置的模型读取正文，自动发现有价值的角色并注册（种族交 AI 判断）</span>
-          </label>
-        </AcuFormRow>
+        <AcuToggle :model-value="autoRegister" label="自动注册" @update:model-value="toggleAutoRegister" />
         <AcuFormRow label="更新频率" hint="每几层新楼层送入一次分析">
           <select v-model="autoFrequency" class="acu-input" @change="setAutoFrequency(autoFrequency)">
             <option v-for="freq in autoFrequencyOptions" :key="freq" :value="freq">每 {{ freq }} 层</option>
@@ -76,7 +71,7 @@
             {{ autoRunning ? '分析中...' : '立即分析并注册' }}
           </AcuButton>
         </div>
-        <AcuFormRow label="发送最近 N 条 AI 回复" hint="点击「立即分析并注册」时发送给 AI 的最近 AI 回复条数">
+        <AcuFormRow label="发送最近 N 条 AI 回复" hint="手动点击「立即分析并注册」时，发送给 AI 的最近 AI 回复条数">
           <input v-model.number="autoRecentCount" type="number" min="1" max="100" class="acu-input" @change="setAutoRecentCount(autoRecentCount)" />
         </AcuFormRow>
         <p class="acu-v2-biotracker-page__api-readonly">
@@ -121,7 +116,7 @@ import AcuPanel from '../components/_lib/AcuPanel.vue';
 import AcuFormRow from '../components/_lib/AcuFormRow.vue';
 import AcuSelect from '../components/_lib/AcuSelect.vue';
 import AcuButton from '../components/_lib/AcuButton.vue';
-import AcuCheckbox from '../components/_lib/AcuCheckbox.vue';
+import AcuToggle from '../components/_lib/AcuToggle.vue';
 import { useBiotrackerPage } from '../composables/useBiotrackerPage';
 
 const copy = {
