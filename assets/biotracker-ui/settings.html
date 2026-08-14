@@ -35,6 +35,10 @@
                 <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--wardrobe" aria-hidden="true"></span>
                 <span class="bs-bt-home-tile__label">衣柜</span>
               </button>
+              <button class="bs-bt-home-tile" type="button" data-nav-view="full-state">
+                <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--json" aria-hidden="true"></span>
+                <span class="bs-bt-home-tile__label">变量</span>
+              </button>
               <button class="bs-bt-home-tile" type="button" data-nav-view="theme">
                 <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--theme" aria-hidden="true"></span>
                 <span class="bs-bt-home-tile__label">主题</span>
@@ -124,6 +128,58 @@
               <div id="bs-bt-wardrobe-list" class="bs-bt-wardrobe-list"></div>
             </div>
             <div id="bs-bt-wardrobe-add-page" class="settings_section" hidden></div>
+          </div>
+        </section>
+
+        <section id="bs-bt-view-full-state" class="bs-bt-view" data-view="full-state">
+          <div class="bs-bt-panel">
+            <div class="settings_section">
+              <div class="bs-bt-status-title">全角色时间推进</div>
+
+              <div style="display: grid; gap: 8px;">
+                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;">
+                  <label>
+                    <div style="text-align: center; font-size: 0.85em; margin-bottom: 2px;">年</div><input
+                      id="bs-bt-time-year" type="number" class="text_pole" value="0" min="0"
+                      style="text-align: center;" />
+                  </label>
+                  <label>
+                    <div style="text-align: center; font-size: 0.85em; margin-bottom: 2px;">月</div><input
+                      id="bs-bt-time-month" type="number" class="text_pole" value="0" min="0"
+                      style="text-align: center;" />
+                  </label>
+                  <label>
+                    <div style="text-align: center; font-size: 0.85em; margin-bottom: 2px;">周</div><input
+                      id="bs-bt-time-week" type="number" class="text_pole" value="0" min="0"
+                      style="text-align: center;" />
+                  </label>
+                </div>
+                <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px;">
+                  <label>
+                    <div style="text-align: center; font-size: 0.85em; margin-bottom: 2px;">天</div><input
+                      id="bs-bt-time-day" type="number" class="text_pole" value="0" min="0"
+                      style="text-align: center;" />
+                  </label>
+                  <label>
+                    <div style="text-align: center; font-size: 0.85em; margin-bottom: 2px;">时</div><input
+                      id="bs-bt-time-hour" type="number" class="text_pole" value="0" min="0"
+                      style="text-align: center;" />
+                  </label>
+                  <label>
+                    <div style="text-align: center; font-size: 0.85em; margin-bottom: 2px;">分</div><input
+                      id="bs-bt-time-minute" type="number" class="text_pole" value="0" min="0"
+                      style="text-align: center;" />
+                  </label>
+                </div>
+              </div>
+
+              <div class="settings_section bs-bt-action-row" style="margin-top:12px;">
+                <button id="bs-bt-time-lapse-submit" class="menu_button" type="button">推进所有角色</button>
+              </div>
+
+              <pre id="bs-bt-time-lapse-status" class="bs-bt-status-box"
+                style="margin-top:12px;">准备就绪：这里会推进当前聊天内所有已注册角色的生理时间。</pre>
+            </div>
           </div>
         </section>
 

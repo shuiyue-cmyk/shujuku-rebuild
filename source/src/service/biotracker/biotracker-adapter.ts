@@ -460,6 +460,59 @@ export async function generateWardrobe_ACU(options: { name: string; enhanced?: b
   }
 }
 
+/**
+ * 读取角色完整状态变量（只读，调试/查看用）。
+ * 返回角色的完整 profile（含生理/心理/妊娠/衣橱/技能等原始字段）。
+ */
+export function getCharacterFullState_ACU(name: string): { ok: boolean; state?: any; message?: string } {
+  try {
+    const ctx = createBiotrackerCtx_ACU();
+    const settings = getSettings(ctx);
+    const chatState = getChatState(ctx, settings);
+    const targetName = resolveRegisteredCharacterName(chatState, String(name || '').trim());
+    if (!targetName) return { ok: false, message: `尚未找到已注册角色：${name}` };
+    return { ok: true, state: cloneValue(chatState.characters[targetName]) };
+  } catch (e: any) {
+    logWarn_ACU('[生理追踪] 读取完整变量失败:', e);
+    return { ok: false, message: `读取失败：${e?.message || e}` };
+  }
+}
+
+/** 允许页面触发的调试工具白名单（仅暴露调试类工具，防误用其他写操作） */
+const DEBUG_TOOL_ALLOWLIST = new Set([
+  'bsSetCharacterPresence', // 在场切换
+  'bsDebugInjectPregnancy', // 妊娠注入
+  'bsDebugClearContainers', // 清空容器（精液/胎儿/孩子）
+  'bsDebugSetGestationModifier', // 妊娠加速效果
+  'bsDebugFetalActivity', // 触发胎动
+  'bsDebugSetProdromal', // 产前状态
+]);
+
+/**
+ * 调试工具：对指定角色执行白名单内的调试操作（write）。
+ * 返回 applyToolCall 的结果与成功状态。
+ */
+export function debugCharacterAction_ACU(name: string, toolName: string, args: Record<string, any> = {}): { ok: boolean; message?: string; result?: any } {
+  try {
+    const tool = String(toolName || '').trim();
+    if (!DEBUG_TOOL_ALLOWLIST.has(tool)) return { ok: false, message: `不允许的调试工具：${tool}` };
+    const ctx = createBiotrackerCtx_ACU();
+    const settings = getSettings(ctx);
+    const chatState = getChatState(ctx, settings);
+    const targetName = resolveRegisteredCharacterName(chatState, String(name || '').trim());
+    if (!targetName) return { ok: false, message: `尚未找到已注册角色：${name}` };
+    const callArgs = { female: targetName, ...(args || {}) };
+    const result = applyToolCall(chatState, { name: tool, arguments: callArgs });
+    if (!result?.applied) return { ok: false, message: String(result?.message || '操作失败。'), result };
+    recordChatStateSnapshot(ctx, chatState, { reason: `debug_${tool}` });
+    saveSettings(ctx);
+    return { ok: true, message: String(result?.message || '操作完成。'), result };
+  } catch (e: any) {
+    logWarn_ACU('[生理追踪] 调试操作失败:', e);
+    return { ok: false, message: `操作失败：${e?.message || e}` };
+  }
+}
+
 /** 清空当前聊天的生理追踪数据（恢复到初始空状态），返回是否执行 */
 export function clearBiotrackerChatState_ACU(): boolean {
   try {

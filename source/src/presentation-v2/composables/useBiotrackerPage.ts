@@ -18,6 +18,8 @@ import {
   runBiotrackerNow_ACU,
   clearBiotrackerChatState_ACU,
   generateWardrobe_ACU,
+  getCharacterFullState_ACU,
+  debugCharacterAction_ACU,
 } from '../../service/biotracker/biotracker-adapter';
 import { useApiPresetSelectOptions } from './useApiPresetSelectOptions';
 import { ALL_BUILTIN_RACES } from '../../service/biotracker/vendor/race_config.js';
@@ -234,7 +236,54 @@ export function useBiotrackerPage() {
 
   // ─── 已注册角色只读（chatState.characters） ───
   const characters = ref<Array<{ name: string; race: string; summary: string }>>([]);
-  const dataRefreshTick = ref(0);  /** 清空当前聊天的生理追踪数据（恢复初始空状态） */
+  const dataRefreshTick = ref(0);
+
+  // ─── 完整变量查看 + 调试工具（数据库页面） ───
+  const selectedFullStateName = ref('');
+  const fullStateJson = ref('');
+  const fullStateError = ref('');
+  const debugBusy = ref(false);
+  const debugMessage = ref('');
+
+  /** 读取指定角色的完整状态变量 JSON（只读展示） */
+  function viewFullState(name: string): void {
+    selectedFullStateName.value = String(name || '').trim();
+    fullStateError.value = '';
+    const result = getCharacterFullState_ACU(selectedFullStateName.value);
+    if (!result.ok) {
+      fullStateError.value = String(result.message || '读取失败。');
+      fullStateJson.value = '';
+      return;
+    }
+    fullStateJson.value = JSON.stringify(result.state, null, 2);
+  }
+
+  /** 调试工具操作（在场/妊娠注入/清空容器等，白名单内） */
+  async function runDebugAction(toolName: string, args: Record<string, any> = {}): Promise<void> {
+    if (!selectedFullStateName.value) {
+      showToastr_ACU('warning', '请先选择要调试的角色。', { title: '生理追踪', acuToastCategory: 'biotracker' });
+      return;
+    }
+    if (debugBusy.value) return;
+    debugBusy.value = true;
+    debugMessage.value = '';
+    try {
+      const result = debugCharacterAction_ACU(selectedFullStateName.value, toolName, args);
+      debugMessage.value = String(result.message || '');
+      showToastr_ACU(result.ok ? 'success' : 'warning', result.message || '', { title: '生理追踪', acuToastCategory: 'biotracker' });
+      if (result.ok) {
+        viewFullState(selectedFullStateName.value);
+        refreshCharacters();
+      }
+    } catch (e: any) {
+      debugMessage.value = `操作失败：${e?.message || e}`;
+      showToastr_ACU('error', `调试失败：${e?.message || e}`, { title: '生理追踪', acuToastCategory: 'biotracker' });
+    } finally {
+      debugBusy.value = false;
+    }
+  }
+
+  /** 清空当前聊天的生理追踪数据（恢复初始空状态） */
   function clearChatState(): void {
     const cleared = clearBiotrackerChatState_ACU();
     if (cleared) {
@@ -319,6 +368,13 @@ export function useBiotrackerPage() {
     clearChatState,
     generateWardrobe,
     wardrobeGenerating,
+    selectedFullStateName,
+    fullStateJson,
+    fullStateError,
+    debugBusy,
+    debugMessage,
+    viewFullState,
+    runDebugAction,
     characters,
     status,
     statusIsError,

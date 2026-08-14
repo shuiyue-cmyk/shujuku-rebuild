@@ -102,6 +102,7 @@
               <th>角色名</th>
               <th>种族</th>
               <th>状态</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -109,9 +110,36 @@
               <td>{{ c.name }}</td>
               <td>{{ c.race }}</td>
               <td>{{ c.summary }}</td>
+              <td>
+                <AcuButton size="xs" variant="secondary" @click="viewFullState(c.name)">
+                  {{ selectedFullStateName === c.name ? '已选中' : '完整变量' }}
+                </AcuButton>
+              </td>
             </tr>
           </tbody>
         </table>
+        <div v-if="selectedFullStateName" class="acu-v2-biotracker-page__fullstate">
+          <div class="acu-v2-biotracker-page__fullstate-title">
+            完整变量：{{ selectedFullStateName }}
+            <AcuButton size="xs" variant="secondary" @click="viewFullState(selectedFullStateName)">刷新</AcuButton>
+          </div>
+          <p v-if="fullStateError" class="acu-v2-biotracker-page__status" data-error="true">{{ fullStateError }}</p>
+          <pre v-else class="acu-v2-biotracker-page__fullstate-json">{{ fullStateJson }}</pre>
+
+          <div class="acu-v2-biotracker-page__fullstate-debug">
+            <div class="acu-v2-biotracker-page__fullstate-title">调试工具</div>
+            <div class="acu-v2-biotracker-page__actions">
+              <AcuButton size="xs" variant="secondary" :disabled="debugBusy" @click="runDebugAction('bsSetCharacterPresence', { isPresent: false })">标记离场</AcuButton>
+              <AcuButton size="xs" variant="secondary" :disabled="debugBusy" @click="runDebugAction('bsSetCharacterPresence', { isPresent: true })">标记在场</AcuButton>
+              <AcuButton size="xs" variant="secondary" :disabled="debugBusy" @click="runDebugAction('bsDebugClearContainers', { container: 'sperms' })">清空精液</AcuButton>
+              <AcuButton size="xs" variant="secondary" :disabled="debugBusy" @click="runDebugAction('bsDebugClearContainers', { container: 'fetuses' })">清空胎儿</AcuButton>
+              <AcuButton size="xs" variant="secondary" :disabled="debugBusy" @click="runDebugAction('bsDebugClearContainers', { container: 'children' })">清空孩子</AcuButton>
+            </div>
+            <p v-if="debugMessage" class="acu-v2-biotracker-page__status" :data-error="!debugMessage.includes('完成') && debugMessage.includes('失败')">
+              {{ debugMessage }}
+            </p>
+          </div>
+        </div>
         <div class="acu-v2-biotracker-page__actions">
           <AcuButton size="sm" :disabled="tracking" @click="runTrackerNow">
             {{ tracking ? '分析中...' : '立即追踪分析' }}
@@ -176,6 +204,13 @@ const {
   clearChatState,
   generateWardrobe,
   wardrobeGenerating,
+  selectedFullStateName,
+  fullStateJson,
+  fullStateError,
+  debugBusy,
+  debugMessage,
+  viewFullState,
+  runDebugAction,
   characters,
   status,
   statusIsError,
@@ -246,5 +281,32 @@ const panelNavItems = computed(() => [
   text-align: left;
   padding: 0.4rem 0.5rem;
   border-bottom: 1px solid rgba(128, 128, 128, 0.2);
+}
+.acu-v2-biotracker-page__fullstate {
+  margin-top: 0.75rem;
+  border-top: 1px solid rgba(128, 128, 128, 0.25);
+  padding-top: 0.75rem;
+}
+.acu-v2-biotracker-page__fullstate-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 700;
+  margin-bottom: 0.4rem;
+  gap: 0.5rem;
+}
+.acu-v2-biotracker-page__fullstate-json {
+  max-height: 260px;
+  overflow: auto;
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 4px;
+  padding: 0.5rem;
+  font-size: 0.78em;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.acu-v2-biotracker-page__fullstate-debug {
+  margin-top: 0.75rem;
 }
 </style>
