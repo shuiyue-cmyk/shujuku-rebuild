@@ -625,12 +625,9 @@ describe('P4 批量删除：真实 repository 写屏障', () => {
 });
 
 describe('P4 单一 service 边界', () => {
-  it('5.1 popup 与 V2 UI 调用同一 service，不存在重复实现', async () => {
-    // popup 绑定层只 import 该 service 的公开函数，不自行实现 writer；V2 UI 复用同一 service 边界。
+  it('5.1 service 边界公开 writer 函数，V2 UI 复用同一 service 边界', async () => {
     const chatService = await import('../../../src/service/vector/summary-vector-index-chat-service');
     expect(typeof chatService.deleteCurrentSummaryVectorIndexFromChat_ACU).toBe('function');
     expect(typeof chatService.clearSummaryVectorIndexLayerFromChat_ACU).toBe('function');
-    const popup = await import('../../../src/presentation/pages/popup-bindings-data');
-    expect(popup).toBeDefined();
   });
 });

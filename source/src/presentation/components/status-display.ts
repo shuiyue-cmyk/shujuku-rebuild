@@ -4,7 +4,6 @@ import { getCurrentWorldbookConfig_ACU } from '../../service/settings/settings-r
 import { getCurrentVectorMemoryConfig_ACU } from '../../service/vector/vector-memory-config';
 import { getAggregatedSummaryVectorIndexSnapshot_ACU } from '../../service/vector/summary-vector-index-state-service';
 import { renderPromptSegments_ACU } from './plot-editors';
-import { renderKeywordPromptGroupToUI_ACU, renderSummaryPromptGroupToUI_ACU } from '../pages/popup-bindings-worldbook';
 import { renderImportTableSelector_ACU, renderManualTableSelector_ACU } from './table-selector';
 import { SCRIPT_ID_PREFIX_ACU } from '../../shared/constants';
 import { escapeHtml_ACU } from '../../shared/html-helpers';
@@ -177,8 +176,6 @@ import { $popupInstance_ACU, $statusMessageSpan_ACU, $manualUpdateCardButton_ACU
       setVal('worldbook-vector-memory-keyword-api-preset', vectorMemoryConfig.keywordApiPreset);
       setVal('worldbook-vector-memory-keyword-context-pair-count', (vectorMemoryConfig as any).keywordContextPairCount || 1);
       setVal('worldbook-vector-memory-keyword-generation-max-attempts', (vectorMemoryConfig as any).keywordGenerationMaxAttempts || 3);
-      renderKeywordPromptGroupToUI_ACU((vectorMemoryConfig as any).keywordPromptGroup || []);
-      renderSummaryPromptGroupToUI_ACU((vectorMemoryConfig as any).summaryPromptGroup || []);
       const $vectorMemoryBlock = find('worldbook-vector-memory-config-block');
       if ($vectorMemoryBlock.length) $vectorMemoryBlock.toggle(summaryVectorIndexEnabled);
       syncManualUpdateButtonAvailability_ACU();

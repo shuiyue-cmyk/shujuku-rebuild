@@ -13,7 +13,6 @@ import { topLevelWindow_ACU } from '../../shared/env';
 import { getUiSurface_ACU } from '../../shared/ui-surface-registry';
 import { logDebug_ACU } from '../../shared/utils';
 import { loadTemplatePresetSelect_ACU } from './template-preset-ui';
-import { loadPlotSettingsToUI_ACU } from '../pages/popup-helpers';
 
 /**
  * 刷新合并数据后自动通知前端 + 刷新可视化编辑器 + 刷新 UI 选择器和状态面板
@@ -107,15 +106,7 @@ export function refreshPresetUIAfterSwitch_ACU(
         logDebug_ACU('[refreshPresetUI] 模板预设 UI 刷新失败:', e);
     }
 
-    // 2. 剧情推进编辑区全量重载（任务列表 + 参数 + 提示词 + 速率 + 循环 + 排除规则 + 预设选择器）
-    //    loadPlotSettingsToUI_ACU 内部会调用 loadPlotPresetSelect_ACU，无需再单独调
-    try {
-        loadPlotSettingsToUI_ACU();
-    } catch (e) {
-        logDebug_ACU('[refreshPresetUI] 剧情推进编辑区刷新失败:', e);
-    }
-
-    // 3. 数据库状态卡片（含"当前生效模板预设"显示）
+    // 2. 数据库状态卡片（含"当前生效模板预设"显示）
     try {
         updateCardUpdateStatusDisplay_ACU();
     } catch (e) {
