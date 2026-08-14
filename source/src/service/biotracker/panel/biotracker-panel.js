@@ -5300,21 +5300,21 @@ function setView(view) {
   const root = document.getElementById(PANEL_ID);
   if (!root) return;
   const normalizedView = view === 'time-lapse' ? 'full-state' : view;
-  const next = ['home', 'theme', 'system', 'register', 'worldbook-filter', 'track-list', 'track-char', 'full-state', 'race-encyclopedia', 'tracker-preset', 'wardrobe', 'skill-catalog'].includes(normalizedView) ? normalizedView : 'home';
+  const next = ['home', 'theme', 'system', 'register', 'worldbook-filter', 'track-list', 'track-char', 'table-view', 'full-state', 'race-encyclopedia', 'tracker-preset', 'wardrobe', 'skill-catalog'].includes(normalizedView) ? normalizedView : 'home';
   root.dataset.view = next;
   try {
     globalThis.localStorage?.setItem(LAST_VIEW_STORAGE_KEY, next);
   } catch {}
   document.querySelectorAll('#bs-biotracker-settings .bs-bt-view').forEach((node) => node.classList.toggle('is-active', node.dataset.view === next));
   const title = document.getElementById('bs-bt-title');
-  if (title) title.textContent = next === 'theme' ? 'THEME' : next === 'system' ? 'SYSTEM' : next === 'register' ? 'REGISTRY' : next === 'worldbook-filter' ? 'WORLDBOOK' : next === 'track-list' ? 'TRACK LIST' : next === 'track-char' ? 'TRACK CHAR' : next === 'full-state' ? 'FULL STATE' : next === 'race-encyclopedia' ? 'RACE DATA' : next === 'tracker-preset' ? 'PRESET' : next === 'wardrobe' ? 'WARDROBE' : next === 'skill-catalog' ? 'SKILLS' : 'HOME';
+  if (title) title.textContent = next === 'theme' ? 'THEME' : next === 'system' ? 'SYSTEM' : next === 'register' ? 'REGISTRY' : next === 'worldbook-filter' ? 'WORLDBOOK' : next === 'track-list' ? 'TRACK LIST' : next === 'track-char' ? 'TRACK CHAR' : next === 'table-view' ? 'TABLES' : next === 'full-state' ? 'FULL STATE' : next === 'race-encyclopedia' ? 'RACE DATA' : next === 'tracker-preset' ? 'PRESET' : next === 'wardrobe' ? 'WARDROBE' : next === 'skill-catalog' ? 'SKILLS' : 'HOME';
 }
 
 function getLastPagerView() {
   try {
     const value = String(globalThis.localStorage?.getItem(LAST_VIEW_STORAGE_KEY) || '').trim();
     if (value === 'time-lapse') return 'full-state';
-    if (['home', 'theme', 'system', 'register', 'worldbook-filter', 'track-list', 'track-char', 'full-state', 'race-encyclopedia', 'tracker-preset', 'wardrobe', 'skill-catalog'].includes(value)) {
+    if (['home', 'theme', 'system', 'register', 'worldbook-filter', 'track-list', 'track-char', 'table-view', 'full-state', 'race-encyclopedia', 'tracker-preset', 'wardrobe', 'skill-catalog'].includes(value)) {
       return value;
     }
   } catch {}
@@ -5374,6 +5374,8 @@ function applySettingsToForm(ctx) {
   renderRegisterChildSourceOptions(ctx);
   syncTrackerPresetSelectionUi(ctx);
   setView(getLastPagerView());
+  // 恢复上次停在表格视图时，立即渲染表格列表（否则列表区保持「加载中…」）
+  if (getLastPagerView() === 'table-view') renderTablePage(ctx);
 }
 
 const trackerDeps = { renderStatusPanel, updateClock };
@@ -7452,13 +7454,21 @@ function renderTablePage(ctx) {
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'bs-bt-table-list-item';
-      button.innerHTML = `<span class="bs-bt-table-list-name">${escapeHtml(String(sheet?.name || key))}</span>`;
+      // 首字作图标（大字），去掉首字的部分作小字；单字名则图标用整名、小字留空
+      const fullName = String(sheet?.name || key || '表');
+      const first = Array.from(fullName)[0] || '表';
+      const rest = fullName.slice(first.length);
+      button.innerHTML = `
+        <span class="bs-bt-table-list-icon" aria-hidden="true">${escapeHtml(first)}</span>
+        <span class="bs-bt-table-list-label">${escapeHtml(rest || '')}</span>
+      `;
       button.addEventListener('click', () => openTableDetail(ctx, key));
       listEl.appendChild(button);
     }
     // 列表模式下隐藏详情（打开表后由 openTableDetail 切换）
     const detailEl = document.getElementById('bs-bt-table-detail');
     if (detailEl) detailEl.hidden = true;
+    globalThis.__bsBtOpenTableKey__ = '';
   } catch (e) {
     console.error('[BS BioTracker] renderTablePage failed', e);
   }
