@@ -311,6 +311,7 @@ beforeEach(() => {
   mockSettings.maxConcurrentGroups = 1;
   mockSettings.zeroTkOccupyModeDefault = false;
   mockSettings.characterSettings = {};
+  delete mockSettings.bs_biotracker; // 清空上一用例写入的 biotracker 命名空间，避免泄漏
   mockGlobalMeta.activeIsolationCode = '';
   mockGlobalMeta.isolationCodeList = [];
   mockGlobalMeta.migratedLegacySingleStore = true;
@@ -656,6 +657,21 @@ describe('loadSettings_ACU', () => {
     // 异常路径也会调用 _set_settings_ACU(buildDefaultSettings_ACU())
     const calledWith = mockSetSettings.mock.calls[0][0];
     expect(calledWith.autoUpdateEnabled).toBe(true);
+  });
+
+  it('settings 重载整体替换时保留 biotracker 运行时命名空间（bs_biotracker）', () => {
+    // 模拟 biotracker 适配层在 settings 加载完成前已在旧 settings_ACU 上写入的运行时数据
+    mockSettings.bs_biotracker = { chatStates: { 'chat-1': { characters: { 艾莉丝: { profile: { base: { race: '人类' } } } } } } };
+    // 模拟真实 _set_settings_ACU 语义：整体替换（清空旧对象再合并），而非测试默认的 Object.assign 合并
+    mockSetSettings.mockImplementationOnce((newSettings: any) => {
+      for (const key of Object.keys(mockSettings)) delete mockSettings[key];
+      Object.assign(mockSettings, newSettings);
+    });
+    // 有保存设置分支：deepMerge 后的新对象不含 bs_biotracker（模拟保存被 settings 就绪门控拒绝、未落盘）
+    mockReadProfileSettings.mockReturnValue({ autoUpdateEnabled: false });
+    loadSettings_ACU();
+    expect(mockSettings.bs_biotracker).toBeDefined();
+    expect(mockSettings.bs_biotracker.chatStates['chat-1'].characters['艾莉丝']).toBeDefined();
   });
 
   it('一次性默认模板刷新会覆盖旧默认模板', () => {

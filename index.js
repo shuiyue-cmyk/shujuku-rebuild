@@ -83334,6 +83334,20 @@ catch (_) { }
 let settingsStorageReadyForSave_ACU = false;
 const _set_settingsStorageReadyForSave_ACU = (val) => { settingsStorageReadyForSave_ACU = val; };
 let settingsReloadAfterIdbScheduled_ACU = false;
+/**
+ * 替换 settings_ACU 整体对象，同时保留 biotracker 运行时命名空间（bs_biotracker）。
+ * biotracker 适配层在 settings 加载完成前（IndexedDB 缓存未就绪时 loadSettings 挂起重载）
+ * 可能已在旧 settings_ACU 对象上惰性创建 bs_biotracker 并写入注册数据（保存被
+ * settingsStorageReadyForSave_ACU 门控拒绝落盘）。若这里整体替换丢掉该命名空间：
+ * 面板 ctx（bootstrap 时对旧对象的引用快照）仍显示已注册角色，而数据库页面读新对象为空。
+ */
+function replaceSettingsPreservingBiotracker(next) {
+    const prevBiotracker = settings_ACU?.bs_biotracker;
+    _set_settings_ACU(next);
+    if (prevBiotracker && !settings_ACU.bs_biotracker) {
+        settings_ACU.bs_biotracker = prevBiotracker;
+    }
+}
 function scheduleSettingsReloadAfterIdbReady_ACU(reason) {
     if (settingsReloadAfterIdbScheduled_ACU)
         return;
@@ -83646,7 +83660,7 @@ function loadSettings_ACU() {
                 delete savedSettings.worldbookConfig;
             }
             // Deep merge saved settings into defaults to ensure new properties are added
-            _set_settings_ACU(deepMerge_ACU(defaultSettings, savedSettings));
+            replaceSettingsPreservingBiotracker(deepMerge_ACU(defaultSettings, savedSettings));
             // [剧情推进] 迁移/兜底：确保 plotWorldbookConfig 存在且结构完整
             if (!settings_ACU.plotSettings)
                 settings_ACU.plotSettings = JSON.parse(JSON.stringify(DEFAULT_PLOT_SETTINGS_ACU));
@@ -83700,7 +83714,7 @@ function loadSettings_ACU() {
         }
         else {
             // No saved settings, use the defaults
-            _set_settings_ACU(defaultSettings);
+            replaceSettingsPreservingBiotracker(defaultSettings);
             // [剧情推进] 默认兜底
             if (!settings_ACU.plotSettings.plotWorldbookConfig) {
                 settings_ACU.plotSettings.plotWorldbookConfig = buildDefaultPlotWorldbookConfig_ACU();
@@ -83720,7 +83734,7 @@ function loadSettings_ACU() {
     }
     catch (error) {
         logError_ACU('Failed to load or parse settings, using defaults:', error);
-        _set_settings_ACU(buildDefaultSettings_ACU());
+        replaceSettingsPreservingBiotracker(buildDefaultSettings_ACU());
         settings_ACU.dataIsolationCode = activeCode;
         settings_ACU.dataIsolationEnabled = (activeCode !== '');
     }
