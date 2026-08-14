@@ -110502,7 +110502,7 @@ const WARDROBE_DIMENSION_LABELS = Object.freeze({ masking: '掩形', support: '�
 const PREG_FIT_GAP_LABELS = Object.freeze({ masking: '掩形', support: '支撑', capacity: '容身', convenience: '便捷' });
 const MAX_PROGRESS_BAR_CAP = 200;
 // 构建时间戳（rollup replace 注入；测试/dev 环境无替换时回退 'dev'）——全局水印用，截图辨别构建
-const ACU_BUILD_STAMP = typeof "20260814-13" === 'string' ? "20260814-13" : 'dev';
+const ACU_BUILD_STAMP = typeof "20260814-14" === 'string' ? "20260814-14" : 'dev';
 const MODAL_EDGE_GAP = 24;
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const FLOATING_SPHERE_POSITION_KEY = `${MODULE_NAME}_floating_sphere_position`;
@@ -118003,22 +118003,43 @@ function openTableDetail(ctx, key) {
         contentEl.appendChild(wrap);
         return;
     }
-    // 普通表：只读渲染
+    // 普通表：只读纵向卡片渲染（每条数据一个卡片，字段名+值换行排列，可读性优先）
     if (content.length === 0) {
         contentEl.textContent = '尚无表格数据。';
         return;
     }
-    let html = '<table class="bs-bt-table">';
-    html += '<thead><tr>';
-    (Array.isArray(content[0]) ? content[0] : []).forEach((h) => { html += '<th>' + escapeHtml$1(String(h)) + '</th>'; });
-    html += '</tr></thead><tbody>';
-    content.slice(1).forEach((row) => {
-        html += '<tr>';
-        (Array.isArray(row) ? row : []).forEach((c) => { html += '<td>' + escapeHtml$1(String(c)) + '</td>'; });
-        html += '</tr>';
-    });
-    html += '</tbody></table>';
-    contentEl.innerHTML = html;
+    const headers = Array.isArray(content[0]) ? content[0].map((h) => String(h ?? '')) : [];
+    const rows = content.slice(1).filter((row) => Array.isArray(row));
+    if (rows.length === 0) {
+        contentEl.textContent = '尚无表格数据。';
+        return;
+    }
+    contentEl.innerHTML = '';
+    const list = document.createElement('div');
+    list.className = 'bs-bt-table-card-list';
+    for (const row of rows) {
+        const card = document.createElement('div');
+        card.className = 'bs-bt-table-card';
+        for (let i = 0; i < row.length; i += 1) {
+            const label = String(headers[i] || `列${i + 1}`);
+            const value = String(row[i] ?? '');
+            if (value === '')
+                continue;
+            const field = document.createElement('div');
+            field.className = 'bs-bt-table-field';
+            const labelEl = document.createElement('div');
+            labelEl.className = 'bs-bt-table-field-label';
+            labelEl.textContent = label;
+            const valueEl = document.createElement('div');
+            valueEl.className = 'bs-bt-table-field-value';
+            valueEl.textContent = value;
+            field.appendChild(labelEl);
+            field.appendChild(valueEl);
+            card.appendChild(field);
+        }
+        list.appendChild(card);
+    }
+    contentEl.appendChild(list);
 }
 // 顶层 DOM 渲染场景：面板与适配层同 bundle 同 window。
 // ctx 必须取适配层桥（extensionSettings 指向 settings_ACU.bs_biotracker），
