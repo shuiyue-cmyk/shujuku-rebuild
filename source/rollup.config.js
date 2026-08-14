@@ -23,6 +23,8 @@ const __dirname = dirname(__filename);
 
 const PACKAGE_VERSION = JSON.parse(readFileSync(join(__dirname, 'package.json'), 'utf8')).version;
 const ACU_BUILD_VERSION = process.env.ACU_BUILD_VERSION || PACKAGE_VERSION;
+// 构建时间戳（每次 build 唯一）：注入全局水印，用于截图辨别设备实际运行的构建
+const ACU_BUILD_STAMP = new Date().toISOString().replace(/[-:]/g, '').slice(0, 11).replace('T', '-');
 
 const nodeBuiltinsShim = {
   name: 'node-builtins-shim',
@@ -65,6 +67,7 @@ function createReplacePlugin() {
     values: {
       'process.env.NODE_ENV': JSON.stringify('production'),
       'globalThis.__ACU_BUILD_VERSION__': JSON.stringify(ACU_BUILD_VERSION),
+      'globalThis.__ACU_BUILD_STAMP__': JSON.stringify(ACU_BUILD_STAMP),
       'globalThis.__ACU_SQLITE_ENGINE__': JSON.stringify(ACU_SQLITE_ENGINE),
       [SQL_WASM_BASE64_GLOBAL]: sqlWasmBase64Value,
       '__ACU_SQLITE_ENGINE_IMPORT__': SQL_WASM_IMPORT_ID,

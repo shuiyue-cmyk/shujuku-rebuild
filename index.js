@@ -110501,6 +110501,8 @@ const TRACK_SUBPAGES = ['overview', 'description', 'pregnancy', 'experience', 'd
 const WARDROBE_DIMENSION_LABELS = Object.freeze({ masking: '掩形', support: '支撑', capacity: '容身', convenience: '便捷' });
 const PREG_FIT_GAP_LABELS = Object.freeze({ masking: '掩形', support: '支撑', capacity: '容身', convenience: '便捷' });
 const MAX_PROGRESS_BAR_CAP = 200;
+// 构建时间戳（rollup replace 注入；测试/dev 环境无替换时回退 'dev'）——全局水印用，截图辨别构建
+const ACU_BUILD_STAMP = typeof "20260814-13" === 'string' ? "20260814-13" : 'dev';
 const MODAL_EDGE_GAP = 24;
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const FLOATING_SPHERE_POSITION_KEY = `${MODULE_NAME}_floating_sphere_position`;
@@ -115638,7 +115640,7 @@ function applyTheme$1(settings) {
     });
     const brand = document.getElementById('bs-bt-brand');
     if (brand)
-        brand.textContent = 'Bastneth Pager';
+        brand.textContent = `Bastneth Pager ·${ACU_BUILD_STAMP}`;
     updateBatteryIndicator(settings);
     updateClock();
 }
@@ -118064,6 +118066,26 @@ function scheduleBootstrapFallback(retries = 60) {
         });
     };
     setTimeout(attempt, 250);
+}
+// 全局构建水印（右下角固定小字）：任何截图都能辨别设备实际运行的构建。
+// 角标缺失 = 设备没有加载本插件代码（缓存/CDN 旧版本）；角标时间戳旧 = 加载了旧构建。
+function installGlobalBuildBadge() {
+    try {
+        if (document.getElementById('acu-build-stamp-badge'))
+            return;
+        const badge = document.createElement('div');
+        badge.id = 'acu-build-stamp-badge';
+        badge.textContent = `ACU·${ACU_BUILD_STAMP}`;
+        badge.style.cssText = 'position:fixed;bottom:2px;right:6px;z-index:2147483600;font-size:10px;line-height:1;opacity:0.55;pointer-events:none;color:#9a9a9a;mix-blend-mode:difference;user-select:none;font-family:monospace;';
+        (document.body || document.documentElement).appendChild(badge);
+    }
+    catch (e) { /* 水印失败不影响功能 */ }
+}
+if (typeof document !== 'undefined') {
+    if (document.body)
+        installGlobalBuildBadge();
+    else
+        document.addEventListener('DOMContentLoaded', installGlobalBuildBadge, { once: true });
 }
 scheduleBootstrapFallback();
 
