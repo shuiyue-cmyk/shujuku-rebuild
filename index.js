@@ -109455,7 +109455,7 @@ function shouldWaitForMvuExtraAnalysis(ctx, settings) {
 }
 function normalizeWorldbookMode(value) {
     const mode = String(value || 'exclude').trim();
-    if (mode === 'mainflow' || mode === 'allowlist_all' || mode === 'exclude')
+    if (mode === 'mainflow' || mode === 'allowlist_all' || mode === 'exclude' || mode === 'agent_greenlights')
         return mode;
     return 'exclude';
 }
@@ -109884,6 +109884,17 @@ function filterTrackerWorldbookEntries(value, excludedNames, settings = null, re
     const keepEntry = (entry) => {
         const name = normalizeEntryName(entry);
         const selectionName = globalBookName ? formatGlobalWorldbookSelectionName(globalBookName, name) : name;
+        if (mode === 'agent_greenlights') {
+            // 蓝灯（constant 恒常条目）固有发送 + 数据库 agent 正文放行的绿灯（uid 白名单，适配层注入 settings.agentGreenlightUids）
+            if (entry?.enabled === false || entry?.disable === true)
+                return false;
+            if (entry?.type === 'constant')
+                return true;
+            const greenUids = settings?.agentGreenlightUids;
+            if (Array.isArray(greenUids))
+                return greenUids.includes(entry?.uid) || greenUids.includes(entry?.id);
+            return false;
+        }
         if (mode === 'allowlist_all')
             return Boolean(name) && worldbookSelectionMatches(includedNames, selectionName, name);
         if (entry?.enabled === false || entry?.disable === true)
@@ -110489,6 +110500,17 @@ function getBiotrackerSettings(ctx) {
     // 温度/max token 采用数据库保存的（选中预设时预设值优先，缺字段回退主配置）
     settings.temperature = Number.isFinite(Number(cfg.temperature)) ? Number(cfg.temperature) : Number(mainCfg.temperature);
     settings.maxTokens = Number.isFinite(Number(cfg.max_tokens)) ? Number(cfg.max_tokens) : Number(mainCfg.max_tokens);
+    // 每轮追踪分析的世界书 = 固有的蓝灯（constant 条目）+ 数据库 agent 正文放行的绿灯（readFinalGenerationGreenlights_ACU）
+    // （注册流程走 registry 自己的世界书逻辑，保持插件主流模式，不受此模式影响）
+    settings.trackerWorldbookMode = 'agent_greenlights';
+    try {
+        const greenlights = readFinalGenerationGreenlights_ACU();
+        settings.agentGreenlightUids = Array.isArray(greenlights) ? greenlights.map((g) => String(g?.uid || '')).filter(Boolean) : [];
+    }
+    catch (e) {
+        logWarn_ACU('[生理追踪] 读取 agent 放行世界书失败:', e);
+        settings.agentGreenlightUids = [];
+    }
     return settings;
 }
 // ═══════════════════════════════════════════════════════════════

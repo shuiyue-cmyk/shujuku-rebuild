@@ -350,7 +350,7 @@ export function shouldWaitForMvuExtraAnalysis(ctx, settings) {
 
 function normalizeWorldbookMode(value) {
   const mode = String(value || 'exclude').trim();
-  if (mode === 'mainflow' || mode === 'allowlist_all' || mode === 'exclude') return mode;
+  if (mode === 'mainflow' || mode === 'allowlist_all' || mode === 'exclude' || mode === 'agent_greenlights') return mode;
   return 'exclude';
 }
 
@@ -795,6 +795,14 @@ function filterTrackerWorldbookEntries(value, excludedNames, settings = null, re
   const keepEntry = (entry) => {
     const name = normalizeEntryName(entry);
     const selectionName = globalBookName ? formatGlobalWorldbookSelectionName(globalBookName, name) : name;
+    if (mode === 'agent_greenlights') {
+      // 蓝灯（constant 恒常条目）固有发送 + 数据库 agent 正文放行的绿灯（uid 白名单，适配层注入 settings.agentGreenlightUids）
+      if (entry?.enabled === false || entry?.disable === true) return false;
+      if (entry?.type === 'constant') return true;
+      const greenUids = settings?.agentGreenlightUids;
+      if (Array.isArray(greenUids)) return greenUids.includes(entry?.uid) || greenUids.includes(entry?.id);
+      return false;
+    }
     if (mode === 'allowlist_all') return Boolean(name) && worldbookSelectionMatches(includedNames, selectionName, name);
     if (entry?.enabled === false || entry?.disable === true) return false;
     if (name && worldbookSelectionMatches(excludedNames, selectionName, name)) return false;

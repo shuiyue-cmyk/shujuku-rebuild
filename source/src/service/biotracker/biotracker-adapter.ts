@@ -18,6 +18,7 @@ import { saveSettings_ACU } from '../settings/settings-service';
 import { resolveApiConfigByPreset_ACU } from '../settings/api-preset-service';
 import { getCurrentCharacterFallback_ACU } from '../host/host-state-service';
 import { getLorebookEntries_ACU } from '../../data/gateways/worldbook-gateway';
+import { readFinalGenerationGreenlights_ACU } from '../agent/agent-worldbook-takeover';
 import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
 
 // ═══════════════════════════════════════════════════════════════
@@ -54,6 +55,16 @@ function getBiotrackerSettings(ctx: BiotrackerCtx_ACU): any {
   // 温度/max token 采用数据库保存的（选中预设时预设值优先，缺字段回退主配置）
   settings.temperature = Number.isFinite(Number(cfg.temperature)) ? Number(cfg.temperature) : Number(mainCfg.temperature);
   settings.maxTokens = Number.isFinite(Number(cfg.max_tokens)) ? Number(cfg.max_tokens) : Number(mainCfg.max_tokens);
+  // 每轮追踪分析的世界书 = 固有的蓝灯（constant 条目）+ 数据库 agent 正文放行的绿灯（readFinalGenerationGreenlights_ACU）
+  // （注册流程走 registry 自己的世界书逻辑，保持插件主流模式，不受此模式影响）
+  settings.trackerWorldbookMode = 'agent_greenlights';
+  try {
+    const greenlights = readFinalGenerationGreenlights_ACU();
+    settings.agentGreenlightUids = Array.isArray(greenlights) ? greenlights.map((g) => String(g?.uid || '')).filter(Boolean) : [];
+  } catch (e) {
+    logWarn_ACU('[生理追踪] 读取 agent 放行世界书失败:', e);
+    settings.agentGreenlightUids = [];
+  }
   return settings;
 }
 
