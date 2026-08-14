@@ -198,10 +198,10 @@ function _acuNormalizeToastArgs_ACU(type: any, message: any, titleOrOptions: any
     options = (titleOrOptions && typeof titleOrOptions === 'object') ? titleOrOptions : {};
   }
   const defaultTimeOut =
-    type === 'success' ? 2500 :
-    type === 'info' ? 2500 :
-    type === 'warning' ? 3500 :
-    type === 'error' ? 5000 : 2500;
+    type === 'success' ? 1500 :
+    type === 'info' ? 1500 :
+    type === 'warning' ? 2000 :
+    type === 'error' ? 4000 : 1500;
   const isNarrow = (() => {
     try {
       const w = (topLevelWindow_ACU && typeof topLevelWindow_ACU.innerWidth === 'number')
@@ -238,6 +238,7 @@ function _acuShouldShowToast_ACU(type: any, title: any, message: any, options: a
       ACU_TOAST_CATEGORY_ACU.MANUAL_TABLE,
       ACU_TOAST_CATEGORY_ACU.MERGE_TABLE,
       ACU_TOAST_CATEGORY_ACU.IMPORT,
+      ACU_TOAST_CATEGORY_ACU.BIOTRACKER,
     ]);
     if (cat && allow.has(cat)) return true;
     try {

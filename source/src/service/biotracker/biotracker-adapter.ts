@@ -20,6 +20,7 @@ import { getCurrentCharacterFallback_ACU } from '../host/host-state-service';
 import { getLorebookEntries_ACU } from '../../data/gateways/worldbook-gateway';
 import { readFinalGenerationGreenlights_ACU } from '../agent/agent-worldbook-takeover';
 import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
+import { pushLog } from '../../shared/log-buffer';
 
 // ═══════════════════════════════════════════════════════════════
 // 存储命名空间（settings_ACU.bsBiotracker）
@@ -81,6 +82,28 @@ function scheduleSettingsSave(): void {
   }, 400);
 }
 
+/**
+ * 把 biotracker vendor 的 console.warn/error 桥接到数据库日志系统。
+ * 只转发带 [BS BioTracker] 前缀的日志（vendor 统一前缀），其余 console 行为保持不变。
+ * error 无条件写入；warn 受日志系统 warn 采集开关门控（与 logWarn_ACU 一致）。
+ */
+let consoleBridgeInstalled = false;
+function installBiotrackerConsoleBridge(): void {
+  if (consoleBridgeInstalled) return;
+  consoleBridgeInstalled = true;
+  const BIOTRACKER_LOG_PREFIX = '[BS BioTracker]';
+  const bridge = (level: 'warn' | 'error') => (original: (...args: any[]) => void) => (...args: any[]) => {
+    original(...args);
+    try {
+      if (String(args[0] || '').includes(BIOTRACKER_LOG_PREFIX)) {
+        pushLog(level, args);
+      }
+    } catch (e) { /* 桥接失败不影响原 console */ }
+  };
+  console.warn = bridge('warn')(console.warn.bind(console));
+  console.error = bridge('error')(console.error.bind(console));
+}
+
 export interface BiotrackerCtx_ACU {
   extensionSettings: Record<string, any>;
   saveSettingsDebounced: () => void;
@@ -113,7 +136,9 @@ export function createBiotrackerCtx_ACU(): BiotrackerCtx_ACU {
     loadWorldInfo: async (name: string) => {
       try {
         const entries = await getLorebookEntries_ACU(String(name || ''));
-        return Array.isArray(entries) ? entries : null;
+        if (!Array.isArray(entries)) return null;
+        // vendor 过滤函数只认 { name, entries } 结构——裸数组会被原样返回导致蓝灯+绿灯过滤不生效
+        return { name: String(name || ''), entries };
       } catch (e) {
         logWarn_ACU('[生理追踪] 读取世界书失败:', name, e);
         return null;
@@ -172,6 +197,8 @@ let initialized = false;
 export function initBiotracker_ACU(): void {
   if (initialized) return;
   initialized = true;
+  // 桥接 biotracker vendor 日志（console.warn/error）到数据库日志系统（高级工具日志查看器可见）
+  installBiotrackerConsoleBridge();
   try {
     const ctx = createBiotrackerCtx_ACU();
     const settings = getBiotrackerSettings(ctx);

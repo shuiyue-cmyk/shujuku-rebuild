@@ -122,6 +122,7 @@ const ACU_TOAST_CATEGORY_ACU = {
     MANUAL_TABLE: 'manual_table',
     MERGE_TABLE: 'merge_table',
     IMPORT: 'import',
+    BIOTRACKER: 'biotracker',
 };
 const TABLE_ORDER_FIELD_ACU = 'orderNo';
 
@@ -84829,10 +84830,10 @@ function _acuNormalizeToastArgs_ACU(type, message, titleOrOptions = {}, maybeOpt
     else {
         options = (titleOrOptions && typeof titleOrOptions === 'object') ? titleOrOptions : {};
     }
-    const defaultTimeOut = type === 'success' ? 2500 :
-        type === 'info' ? 2500 :
-            type === 'warning' ? 3500 :
-                type === 'error' ? 5000 : 2500;
+    const defaultTimeOut = type === 'success' ? 1500 :
+        type === 'info' ? 1500 :
+            type === 'warning' ? 2000 :
+                type === 'error' ? 4000 : 1500;
     const isNarrow = (() => {
         try {
             const w = (topLevelWindow_ACU && typeof topLevelWindow_ACU.innerWidth === 'number')
@@ -84873,6 +84874,7 @@ function _acuShouldShowToast_ACU(type, title, message, options = {}) {
             ACU_TOAST_CATEGORY_ACU.MANUAL_TABLE,
             ACU_TOAST_CATEGORY_ACU.MERGE_TABLE,
             ACU_TOAST_CATEGORY_ACU.IMPORT,
+            ACU_TOAST_CATEGORY_ACU.BIOTRACKER,
         ]);
         if (cat && allow.has(cat))
             return true;
@@ -110541,6 +110543,29 @@ function scheduleSettingsSave() {
         }
     }, 400);
 }
+/**
+ * 把 biotracker vendor 的 console.warn/error 桥接到数据库日志系统。
+ * 只转发带 [BS BioTracker] 前缀的日志（vendor 统一前缀），其余 console 行为保持不变。
+ * error 无条件写入；warn 受日志系统 warn 采集开关门控（与 logWarn_ACU 一致）。
+ */
+let consoleBridgeInstalled = false;
+function installBiotrackerConsoleBridge() {
+    if (consoleBridgeInstalled)
+        return;
+    consoleBridgeInstalled = true;
+    const BIOTRACKER_LOG_PREFIX = '[BS BioTracker]';
+    const bridge = (level) => (original) => (...args) => {
+        original(...args);
+        try {
+            if (String(args[0] || '').includes(BIOTRACKER_LOG_PREFIX)) {
+                pushLog(level, args);
+            }
+        }
+        catch (e) { /* 桥接失败不影响原 console */ }
+    };
+    console.warn = bridge('warn')(console.warn.bind(console));
+    console.error = bridge('error')(console.error.bind(console));
+}
 /** 构造 biotracker 宿主上下文（每次调用取当前运行态） */
 function createBiotrackerCtx_ACU() {
     const host = getHostContext() || globalThis.SillyTavern?.getContext?.() || null;
@@ -110558,7 +110583,10 @@ function createBiotrackerCtx_ACU() {
         loadWorldInfo: async (name) => {
             try {
                 const entries = await getLorebookEntries_ACU(String(name || ''));
-                return Array.isArray(entries) ? entries : null;
+                if (!Array.isArray(entries))
+                    return null;
+                // vendor 过滤函数只认 { name, entries } 结构——裸数组会被原样返回导致蓝灯+绿灯过滤不生效
+                return { name: String(name || ''), entries };
             }
             catch (e) {
                 logWarn_ACU('[生理追踪] 读取世界书失败:', name, e);
@@ -110611,6 +110639,8 @@ function initBiotracker_ACU() {
     if (initialized)
         return;
     initialized = true;
+    // 桥接 biotracker vendor 日志（console.warn/error）到数据库日志系统（高级工具日志查看器可见）
+    installBiotrackerConsoleBridge();
     try {
         const ctx = createBiotrackerCtx_ACU();
         const settings = getBiotrackerSettings(ctx);
@@ -156717,7 +156747,7 @@ function useBiotrackerPage() {
             return;
         registering.value = true;
         statusIsError.value = false;
-        showToastr_ACU('info', `正在繁育推演并注册「${registerName.value || '角色'}」…`, '生理追踪');
+        showToastr_ACU('info', `正在繁育推演并注册「${registerName.value || '角色'}」…`, { title: '生理追踪', acuToastCategory: 'biotracker' });
         try {
             const result = await registerCharacter_ACU({
                 name: registerName.value,
@@ -156727,7 +156757,7 @@ function useBiotrackerPage() {
             });
             status.value = result.message;
             statusIsError.value = !result.ok;
-            showToastr_ACU(result.ok ? 'success' : 'warning', result.message, '生理追踪');
+            showToastr_ACU(result.ok ? 'success' : 'warning', result.message, { title: '生理追踪', acuToastCategory: 'biotracker' });
             // 注册成功后保留表单内容（草稿已持久化），便于连续注册或对照
             refreshCharacters();
         }
@@ -156762,13 +156792,13 @@ function useBiotrackerPage() {
             return;
         autoRunning.value = true;
         statusIsError.value = false;
-        showToastr_ACU('info', '正在分析楼层并注册角色…', '生理追踪');
+        showToastr_ACU('info', '正在分析楼层并注册角色…', { title: '生理追踪', acuToastCategory: 'biotracker' });
         try {
             // 手动触发：发送用户指定的最近 N 条 AI 回复
             const result = await autoRegisterCharacters_ACU({ recentCount: autoRecentCount.value });
             status.value = result.message;
             statusIsError.value = !result.ok;
-            showToastr_ACU(result.ok ? 'success' : 'warning', result.message, '生理追踪');
+            showToastr_ACU(result.ok ? 'success' : 'warning', result.message, { title: '生理追踪', acuToastCategory: 'biotracker' });
             refreshCharacters();
         }
         finally {
@@ -156777,17 +156807,17 @@ function useBiotrackerPage() {
     }
     async function runTrackerNow() {
         statusIsError.value = false;
-        showToastr_ACU('info', '正在执行生理追踪分析…', '生理追踪');
+        showToastr_ACU('info', '正在执行生理追踪分析…', { title: '生理追踪', acuToastCategory: 'biotracker' });
         try {
             await runBiotrackerNow_ACU();
             status.value = '追踪分析完成。';
-            showToastr_ACU('success', '追踪分析完成。', '生理追踪');
+            showToastr_ACU('success', '追踪分析完成。', { title: '生理追踪', acuToastCategory: 'biotracker' });
             refreshCharacters();
         }
         catch (e) {
             status.value = `追踪失败：${e?.message || e}`;
             statusIsError.value = true;
-            showToastr_ACU('error', `追踪失败：${e?.message || e}`, '生理追踪');
+            showToastr_ACU('error', `追踪失败：${e?.message || e}`, { title: '生理追踪', acuToastCategory: 'biotracker' });
         }
     }
     // ─── 已注册角色只读（chatState.characters） ───
