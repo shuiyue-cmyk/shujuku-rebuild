@@ -15,19 +15,10 @@ import {
 import { ALL_BUILTIN_RACES } from '../../service/biotracker/vendor/race_config.js';
 
 export function useBiotrackerPage() {
-  // ─── API 独立配置（settings_ACU.bsBiotracker） ───
-  const apiUrl = ref(settings_ACU.bs_biotracker?.apiUrl || '');
-  const apiKey = ref(settings_ACU.bs_biotracker?.apiKey || '');
-  const apiModel = ref(settings_ACU.bs_biotracker?.model || '');
-
-  function saveApiConfig(): void {
-    const root = settings_ACU.bs_biotracker;
-    root.apiUrl = String(apiUrl.value || '').trim();
-    root.apiKey = String(apiKey.value || '').trim();
-    root.model = String(apiModel.value || '').trim();
-    saveSettings_ACU();
-    status.value = 'API 配置已保存。';
-  }
+  // ─── API 配置（复用数据库主 API 配置，只读展示） ───
+  const apiUrl = ref(settings_ACU.apiConfig?.url || '');
+  const apiKey = ref(settings_ACU.apiConfig?.apiKey || '');
+  const apiModel = ref(settings_ACU.apiConfig?.model || '');
 
   // ─── 手动注册 ───
   const registerName = ref('');
@@ -130,7 +121,6 @@ export function useBiotrackerPage() {
     apiUrl,
     apiKey,
     apiModel,
-    saveApiConfig,
     registerName,
     registerRace,
     registerNotes,

@@ -31,6 +31,18 @@ function getBiotrackerRoot(): Record<string, any> {
   return settings_ACU[MODULE_NAME];
 }
 
+/**
+ * 获取 biotracker settings 并把 API 三字段恒同步为数据库主 API 配置
+ * （用户拍板：API 配置直接选用数据库保存的，不独立配置）
+ */
+function getBiotrackerSettings(ctx: BiotrackerCtx_ACU): any {
+  const settings = getBiotrackerSettings(ctx);
+  settings.apiUrl = settings_ACU.apiConfig?.url || settings.apiUrl || '';
+  settings.apiKey = settings_ACU.apiConfig?.apiKey || settings.apiKey || '';
+  settings.model = settings_ACU.apiConfig?.model || settings.model || '';
+  return settings;
+}
+
 // ═══════════════════════════════════════════════════════════════
 // ctx 构造（biotracker 宿主上下文依赖注入）
 // ═══════════════════════════════════════════════════════════════
@@ -137,7 +149,7 @@ export function initBiotracker_ACU(): void {
   initialized = true;
   try {
     const ctx = createBiotrackerCtx_ACU();
-    const settings = getSettings(ctx);
+    const settings = getBiotrackerSettings(ctx);
     // 恒字系列强制（异步追踪恒开启/after_ai/完整更新/格式化输出/json）
     settings.enabled = true;
     settings.triggerTiming = 'after_ai';
@@ -238,7 +250,7 @@ export function setAutoRegisterEnabled_ACU(enabled: boolean): void {
 export async function autoRegisterCharacters_ACU(): Promise<{ ok: boolean; registered: string[]; message: string }> {
   const ctx = createBiotrackerCtx_ACU();
   try {
-    const settings = getSettings(ctx);
+    const settings = getBiotrackerSettings(ctx);
     if (!settings.apiUrl || !settings.model) {
       return { ok: false, registered: [], message: '生理追踪 API 尚未配置（API URL/模型）。' };
     }

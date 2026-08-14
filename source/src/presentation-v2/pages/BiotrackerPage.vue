@@ -2,25 +2,17 @@
   <section class="acu-v2-biotracker-page">
     <AcuMobilePanelNav :items="panelNavItems" />
 
-    <AcuPanelGrid class="acu-v2-biotracker-page__grid" collapse-at="lg">
-      <!-- API 配置（独立配置） -->
+    <div class="acu-v2-biotracker-page__panel-stack">
+      <!-- API 配置（复用数据库主 API 配置，只读） -->
       <AcuPanel
         id="biotracker-api-panel"
         :title="copy.apiTitle"
         :description="copy.apiDescription"
       >
-        <AcuFormRow label="OpenAI 兼容 API Base URL" hint="例如 https://example.com/v1">
-          <input v-model="apiUrl" type="text" class="acu-input" placeholder="https://example.com/v1" />
-        </AcuFormRow>
-        <AcuFormRow label="API Key">
-          <input v-model="apiKey" type="password" class="acu-input" placeholder="sk-..." />
-        </AcuFormRow>
-        <AcuFormRow label="模型名称">
-          <input v-model="apiModel" type="text" class="acu-input" placeholder="gpt-4.1-mini" />
-        </AcuFormRow>
-        <div class="acu-v2-biotracker-page__actions">
-          <AcuButton size="sm" @click="saveApiConfig">保存 API 配置</AcuButton>
-        </div>
+        <p class="acu-v2-biotracker-page__api-readonly">
+          生理追踪/注册使用数据库已配置的 API（在「API」页面配置）。
+          当前：{{ apiUrl ? apiUrl : '未配置 URL' }} / {{ apiModel ? apiModel : '未配置模型' }}
+        </p>
       </AcuPanel>
 
       <!-- 注册与自动注册 -->
@@ -87,14 +79,13 @@
           </tbody>
         </table>
       </AcuPanel>
-    </AcuPanelGrid>
+    </div>
   </section>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue';
 import AcuMobilePanelNav from '../components/_lib/AcuMobilePanelNav.vue';
-import AcuPanelGrid from '../components/_lib/AcuPanelGrid.vue';
 import AcuPanel from '../components/_lib/AcuPanel.vue';
 import AcuFormRow from '../components/_lib/AcuFormRow.vue';
 import AcuButton from '../components/_lib/AcuButton.vue';
@@ -103,7 +94,7 @@ import { useBiotrackerPage } from '../composables/useBiotrackerPage';
 
 const copy = {
   apiTitle: 'API 配置',
-  apiDescription: '生理追踪/注册使用独立 API 配置，与数据库主 API 分离。需支持 OpenAI 兼容 /chat/completions 并能稳定输出 JSON。',
+  apiDescription: '生理追踪/注册使用数据库已配置的 API（「API」页面）。需支持 OpenAI 兼容 /chat/completions 并能稳定输出 JSON。',
   registerTitle: '注册与自动注册',
   registerDescription: '手动注册：填写角色名并选择种族。自动注册：由 AI 读取最新楼层发现值得记录的角色并注册，种族由 AI 判断。',
   dataTitle: '已注册角色',
@@ -114,7 +105,6 @@ const {
   apiUrl,
   apiKey,
   apiModel,
-  saveApiConfig,
   registerName,
   registerRace,
   registerNotes,
@@ -139,8 +129,24 @@ const panelNavItems = computed(() => [
 </script>
 
 <style scoped>
-.acu-v2-biotracker-page__grid {
-  gap: 1rem;
+.acu-v2-biotracker-page {
+  min-height: 100%;
+  min-width: 0;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.acu-v2-biotracker-page__panel-stack {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.acu-v2-biotracker-page__api-readonly {
+  color: var(--acu-text-2, inherit);
+  margin: 0;
+  line-height: 1.55;
 }
 .acu-v2-biotracker-page__actions {
   display: flex;

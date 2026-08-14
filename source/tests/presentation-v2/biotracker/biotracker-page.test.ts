@@ -17,7 +17,7 @@ vi.mock('../../../src/service/biotracker/vendor/race_config.js', () => ({
 }));
 
 vi.mock('../../../src/service/runtime/state-manager', () => ({
-  settings_ACU: { bs_biotracker: { apiUrl: '', apiKey: '', model: '', chatStates: {} } },
+  settings_ACU: { bs_biotracker: { chatStates: {} }, apiConfig: { url: '', apiKey: '', model: '' } },
   currentChatFileIdentifier_ACU: 'test-chat',
 }));
 
@@ -38,11 +38,11 @@ describe('BiotrackerPage 渲染', () => {
     document.body.innerHTML = '';
   });
 
-  it('渲染 API 配置输入框（url/key/model）', () => {
+  it('API 配置面板显示数据库 API 只读信息', () => {
     const { el, app } = mountPage();
-    const inputs = el.querySelectorAll('input');
-    expect(inputs.length).toBeGreaterThanOrEqual(3); // url / key / model
     expect(el.textContent).toContain('API 配置');
+    expect(el.textContent).toContain('数据库已配置的 API');
+    expect(el.textContent).toContain('未配置 URL'); // mock apiConfig 为空
     app.unmount();
   });
 
@@ -51,6 +51,8 @@ describe('BiotrackerPage 渲染', () => {
     expect(el.textContent).toContain('注册角色');
     expect(el.textContent).toContain('立即自动注册');
     expect(el.textContent).toContain('立即追踪分析');
+    const inputs = el.querySelectorAll('input');
+    expect(inputs.length).toBeGreaterThanOrEqual(1); // 角色名输入
     const raceOptions = el.querySelectorAll('option');
     expect(raceOptions.length).toBeGreaterThanOrEqual(2); // 空选项 + 种族
     app.unmount();
