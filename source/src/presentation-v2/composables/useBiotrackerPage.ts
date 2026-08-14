@@ -19,7 +19,7 @@ import { ALL_BUILTIN_RACES } from '../../service/biotracker/vendor/race_config.j
 
 export function useBiotrackerPage() {
   // ─── API 预设（参照剧情推进：跟随当前活动 API 或选择专用预设） ───
-  const { apiStore, apiPresetSelectOptions } = useApiPresetSelectOptions();
+  const { apiStore, apiPresetSelectOptions, followActiveApiLabel } = useApiPresetSelectOptions();
   const apiPreset = ref(String(settings_ACU.bs_biotracker?.apiPreset || ''));
   const apiUrl = ref(settings_ACU.apiConfig?.url || '');
   const apiKey = ref(settings_ACU.apiConfig?.apiKey || '');
@@ -145,6 +145,7 @@ export function useBiotrackerPage() {
     apiPreset,
     setApiPreset,
     apiPresetSelectOptions,
+    followActiveApiLabel,
     apiUrl,
     apiKey,
     apiModel,

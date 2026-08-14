@@ -3,16 +3,19 @@
     <AcuMobilePanelNav :items="panelNavItems" />
 
     <div class="acu-v2-biotracker-page__panel-stack">
-      <!-- API 设置（参照剧情推进：跟随当前活动 API 或选择专用预设） -->
+      <!-- API 设置（参照剧情推进：API 预设选择） -->
       <AcuPanel
         id="biotracker-api-panel"
         :title="copy.apiTitle"
         :description="copy.apiDescription"
       >
-        <AcuFormRow label="API 预设" hint="选「跟随当前活动 API」则使用数据库当前配置；亦可为生理追踪选择专用预设">
-          <select v-model="apiPreset" class="acu-input" @change="setApiPreset(apiPreset)">
-            <option v-for="opt in apiPresetSelectOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
-          </select>
+        <AcuFormRow label="生理追踪 API 预设" hint="默认使用当前的API，选择后仅影响生理追踪功能。">
+          <AcuSelect
+            :options="apiPresetSelectOptions"
+            :model-value="apiPreset"
+            :placeholder="followActiveApiLabel"
+            @update:model-value="setApiPreset"
+          />
         </AcuFormRow>
         <p class="acu-v2-biotracker-page__api-readonly">
           当前生效：{{ apiUrl ? apiUrl : '未配置 URL' }} / {{ apiModel ? apiModel : '未配置模型' }}
@@ -95,6 +98,7 @@ import { computed } from 'vue';
 import AcuMobilePanelNav from '../components/_lib/AcuMobilePanelNav.vue';
 import AcuPanel from '../components/_lib/AcuPanel.vue';
 import AcuFormRow from '../components/_lib/AcuFormRow.vue';
+import AcuSelect from '../components/_lib/AcuSelect.vue';
 import AcuButton from '../components/_lib/AcuButton.vue';
 import AcuCheckbox from '../components/_lib/AcuCheckbox.vue';
 import { useBiotrackerPage } from '../composables/useBiotrackerPage';
@@ -112,6 +116,7 @@ const {
   apiPreset,
   setApiPreset,
   apiPresetSelectOptions,
+  followActiveApiLabel,
   apiUrl,
   apiKey,
   apiModel,
