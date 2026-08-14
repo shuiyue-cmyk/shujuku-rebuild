@@ -1,0 +1,3901 @@
+@import url('https://fonts.googleapis.com/css2?family=Chewy&family=Chiron+GoRound+TC:wght@400;700&family=Ma+Shan+Zheng&family=Long+Cang&family=LXGW+WenKai+TC&family=Noto+Sans+TC:wght@400;700&family=Noto+Serif+TC:wght@400;700&family=Special+Elite&family=UnifrakturCook:wght@700&family=Zhi+Mang+Xing&family=Audiowide&family=Chocolate+Classical+Sans&family=Silkscreen&family=DotGothic16&family=WDXL+Lubrifont+SC&family=ZCOOL+KuaiLe&family=ZCOOL+XiaoWei&display=swap');
+
+:root {
+  --bsbt-pager-bg: #2d3436;
+  --bsbt-lcd-bg: #87a96b;
+  --bsbt-lcd-text: #2d3436;
+  --bsbt-border-color: #1a1a1a;
+  --bsbt-font-main: 'Courier New', 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans TC', Courier, monospace;
+  --bsbt-btn-grad-1: #4d5456;
+  --bsbt-btn-grad-2: #282e30;
+  --bsbt-btn-text: #ffffff;
+  --bsbt-off-bg: #3d4446;
+  --bsbt-off-text: #dfe7dc;
+  --bsbt-case-radius: 40px;
+  --bsbt-case-shadow: 0 25px 0 rgba(0, 0, 0, 0.3);
+  --bsbt-case-border: 5px solid rgba(255, 255, 255, 0.1);
+  --bsbt-home-tile-bg: rgba(255, 255, 255, 0.12);
+  --bsbt-home-tile-glow: rgba(255, 255, 255, 0.18);
+  --bsbt-home-tile-shadow: rgba(0, 0, 0, 0.28);
+}
+
+#bs-biotracker-settings.theme-retro, .bs-bt-floating-sphere.theme-retro {
+  --bsbt-pager-bg: #2d3436;
+  --bsbt-lcd-bg: #87a96b;
+  --bsbt-lcd-text: #2d3436;
+  --bsbt-border-color: #1a1a1a;
+  --bsbt-font-main: 'Courier New', 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans TC', Courier, monospace;
+  --bsbt-btn-grad-1: #4d5456;
+  --bsbt-btn-grad-2: #282e30;
+  --bsbt-btn-text: #ffffff;
+  --bsbt-off-bg: #3d4446;
+  --bsbt-off-text: #dfe7dc;
+  --bsbt-case-radius: 40px;
+  --bsbt-case-shadow: 0 25px 0 rgba(0, 0, 0, 0.3);
+  --bsbt-case-border: 5px solid rgba(255, 255, 255, 0.1);
+  --bsbt-home-tile-bg: rgba(255, 255, 255, 0.12);
+  --bsbt-home-tile-glow: rgba(255, 255, 255, 0.18);
+  --bsbt-home-tile-shadow: rgba(0, 0, 0, 0.28);
+}
+
+#bs-biotracker-settings.theme-cultivation, .bs-bt-floating-sphere.theme-cultivation {
+  --bsbt-pager-bg: linear-gradient(135deg, #1a3c34 0%, #2d5a4e 50%, #1a3c34 100%);
+  --bsbt-lcd-bg: #e0f2f1;
+  --bsbt-lcd-text: #004d40;
+  --bsbt-border-color: #00695c;
+  --bsbt-font-main: 'Ma Shan Zheng', 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans TC', cursive;
+  --bsbt-btn-grad-1: #264d4d;
+  --bsbt-btn-grad-2: #0d1a1a;
+  --bsbt-btn-text: #a7ffeb;
+  --bsbt-off-bg: #051a14;
+  --bsbt-off-text: #a7ffeb;
+  --bsbt-case-radius: 60px 20px 60px 20px;
+  --bsbt-case-shadow: 0 15px 30px rgba(0, 77, 64, 0.4);
+  --bsbt-case-border: 4px solid #4db6ac;
+  --bsbt-home-tile-bg: rgba(8, 77, 67, 0.18);
+  --bsbt-home-tile-glow: rgba(167, 255, 235, 0.24);
+  --bsbt-home-tile-shadow: rgba(0, 50, 44, 0.35);
+}
+
+#bs-biotracker-settings.theme-fantasy, .bs-bt-floating-sphere.theme-fantasy {
+  --bsbt-pager-bg: #4e342e;
+  --bsbt-lcd-bg: #f5e6c8;
+  --bsbt-lcd-text: #3e2723;
+  --bsbt-border-color: #795548;
+  --bsbt-font-main: 'Long Cang', 'Noto Serif TC', 'Microsoft JhengHei', 'PingFang TC', serif;
+  --bsbt-btn-grad-1: #8d6e63;
+  --bsbt-btn-grad-2: #3e2723;
+  --bsbt-btn-text: #efebe9;
+  --bsbt-off-bg: #21130d;
+  --bsbt-off-text: #efebe9;
+  --bsbt-case-radius: 10px;
+  --bsbt-case-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+  --bsbt-case-border: 8px solid #3e2723;
+  --bsbt-home-tile-bg: rgba(62, 39, 35, 0.18);
+  --bsbt-home-tile-glow: rgba(245, 230, 200, 0.2);
+  --bsbt-home-tile-shadow: rgba(31, 20, 17, 0.4);
+}
+
+#bs-biotracker-settings.theme-cyber-egypt, .bs-bt-floating-sphere.theme-cyber-egypt {
+  --bsbt-pager-bg: linear-gradient(45deg, #d4af37, #f1c40f, #d4af37);
+  --bsbt-lcd-bg: #00f2ff;
+  --bsbt-lcd-text: #002b2b;
+  --bsbt-border-color: #002b2b;
+  --bsbt-font-main: 'Audiowide', 'Chocolate Classical Sans', 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans TC', sans-serif;
+  --bsbt-btn-grad-1: #daa520;
+  --bsbt-btn-grad-2: #8b4513;
+  --bsbt-btn-text: #002b2b;
+  --bsbt-off-bg: #4a3c00;
+  --bsbt-off-text: #00f2ff;
+  --bsbt-case-radius: 30px;
+  --bsbt-case-shadow: 0 0 50px rgba(212, 175, 55, 0.4);
+  --bsbt-case-border: 6px solid #002b2b;
+  --bsbt-home-tile-bg: rgba(0, 242, 255, 0.12);
+  --bsbt-home-tile-glow: rgba(0, 242, 255, 0.35);
+  --bsbt-home-tile-shadow: rgba(84, 67, 0, 0.38);
+}
+
+#bs-biotracker-settings.theme-wasteland, .bs-bt-floating-sphere.theme-wasteland {
+  --bsbt-pager-bg: #515c30;
+  --bsbt-lcd-bg: #0d120a;
+  --bsbt-lcd-text: #18ff62;
+  --bsbt-border-color: #3d4421;
+  --bsbt-font-main: 'Silkscreen', 'DotGothic16', 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans TC', cursive;
+  --bsbt-btn-grad-1: #6b7a3f;
+  --bsbt-btn-grad-2: #2d3516;
+  --bsbt-btn-text: #18ff62;
+  --bsbt-off-bg: #000000;
+  --bsbt-off-text: #18ff62;
+  --bsbt-case-radius: 5px;
+  --bsbt-case-shadow: 0 25px 0 #2d3516;
+  --bsbt-case-border: 10px solid #3d4421;
+  --bsbt-home-tile-bg: rgba(24, 255, 98, 0.08);
+  --bsbt-home-tile-glow: rgba(24, 255, 98, 0.26);
+  --bsbt-home-tile-shadow: rgba(13, 18, 10, 0.55);
+}
+
+#bs-biotracker-settings.theme-sakura, .bs-bt-floating-sphere.theme-sakura {
+  --bsbt-pager-bg: linear-gradient(to bottom, #ffffff, #f8bbd0);
+  --bsbt-lcd-bg: #ffffff;
+  --bsbt-lcd-text: #ff4081;
+  --bsbt-border-color: #f8bbd0;
+  --bsbt-font-main: 'Chewy', 'ZCOOL KuaiLe', 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans TC', sans-serif;
+  --bsbt-btn-grad-1: #ffffff;
+  --bsbt-btn-grad-2: #f48fb1;
+  --bsbt-btn-text: #ad1457;
+  --bsbt-off-bg: #f8bbd0;
+  --bsbt-off-text: #ffffff;
+  --bsbt-case-radius: 50px;
+  --bsbt-case-shadow: 0 15px 40px rgba(248, 187, 208, 0.5);
+  --bsbt-case-border: 2px solid #ffffff;
+  --bsbt-home-tile-bg: rgba(255, 255, 255, 0.45);
+  --bsbt-home-tile-glow: rgba(255, 255, 255, 0.55);
+  --bsbt-home-tile-shadow: rgba(173, 20, 87, 0.18);
+}
+
+#bs-biotracker-settings.theme-holo, .bs-bt-floating-sphere.theme-holo {
+  --bsbt-pager-bg: rgba(2, 18, 36, 0.18);
+  --bsbt-lcd-bg: rgba(3, 28, 52, 0.22);
+  --bsbt-lcd-text: #8df7ff;
+  --bsbt-border-color: rgba(74, 223, 255, 0.74);
+  --bsbt-font-main: 'Chiron GoRound TC', 'Noto Sans TC', 'Microsoft JhengHei UI', 'PingFang TC', sans-serif;
+  --bsbt-btn-grad-1: rgba(22, 198, 255, 0.16);
+  --bsbt-btn-grad-2: rgba(10, 82, 155, 0.1);
+  --bsbt-btn-text: #b8fbff;
+  --bsbt-off-bg: rgba(2, 14, 28, 0.14);
+  --bsbt-off-text: #8df7ff;
+  --bsbt-case-radius: 18px;
+  --bsbt-case-shadow:
+    0 0 0 1px rgba(141, 247, 255, 0.28),
+    0 0 24px rgba(52, 204, 255, 0.24),
+    inset 0 0 26px rgba(65, 217, 255, 0.1);
+  --bsbt-case-border: 2px solid rgba(141, 247, 255, 0.58);
+  --bsbt-home-tile-bg: rgba(47, 202, 255, 0.08);
+  --bsbt-home-tile-glow: rgba(141, 247, 255, 0.32);
+  --bsbt-home-tile-shadow: rgba(17, 197, 255, 0.22);
+}
+
+#bs-biotracker-settings.theme-gothic, .bs-bt-floating-sphere.theme-gothic {
+  --bsbt-pager-bg:
+    radial-gradient(circle at 50% 0%, rgba(137, 60, 76, 0.34), transparent 34%),
+    linear-gradient(155deg, #22141f 0%, #110911 46%, #2b1119 100%);
+  --bsbt-lcd-bg: #1a1016;
+  --bsbt-lcd-text: #e8d8cf;
+  --bsbt-border-color: #8f3f4b;
+  --bsbt-font-main: 'ZCOOL XiaoWei', 'Noto Serif TC', 'Microsoft JhengHei', 'PingFang TC', serif;
+  --bsbt-btn-grad-1: #5c2734;
+  --bsbt-btn-grad-2: #160a10;
+  --bsbt-btn-text: #eadbd2;
+  --bsbt-off-bg: #0d070b;
+  --bsbt-off-text: #c9aaa4;
+  --bsbt-case-radius: 0;
+  --bsbt-case-shadow:
+    0 18px 34px rgba(4, 0, 4, 0.72),
+    0 0 0 1px rgba(222, 198, 174, 0.18),
+    inset 0 0 0 2px rgba(181, 106, 114, 0.28),
+    inset 0 0 34px rgba(4, 0, 4, 0.52);
+  --bsbt-case-border: 0;
+  --bsbt-home-tile-bg: rgba(91, 40, 52, 0.22);
+  --bsbt-home-tile-glow: rgba(181, 106, 114, 0.2);
+  --bsbt-home-tile-shadow: rgba(8, 3, 8, 0.56);
+}
+
+#bs-biotracker-settings.theme-steampunk, .bs-bt-floating-sphere.theme-steampunk {
+  --bsbt-pager-bg:
+    radial-gradient(circle at 12% 10%, rgba(209, 168, 90, 0.22), transparent 28%),
+    radial-gradient(circle at 88% 90%, rgba(138, 75, 45, 0.22), transparent 26%),
+    linear-gradient(145deg, #3b2a1e 0%, #211711 48%, #4a2f1f 100%);
+  --bsbt-lcd-bg: #ead8b4;
+  --bsbt-lcd-text: #2a1b12;
+  --bsbt-border-color: #8a4b2d;
+  --bsbt-font-main: 'Special Elite', 'Noto Serif TC', 'Courier New', serif;
+  --bsbt-btn-grad-1: #b88a3d;
+  --bsbt-btn-grad-2: #4a2f1f;
+  --bsbt-btn-text: #f4e4c2;
+  --bsbt-off-bg: #1d1b18;
+  --bsbt-off-text: #d1a85a;
+  --bsbt-case-radius: 14px;
+  --bsbt-case-shadow:
+    0 20px 0 rgba(21, 13, 8, 0.62),
+    0 24px 38px rgba(0, 0, 0, 0.48),
+    inset 0 0 0 2px rgba(209, 168, 90, 0.24),
+    inset 0 0 28px rgba(21, 13, 8, 0.5);
+  --bsbt-case-border: 6px solid #1d1b18;
+  --bsbt-home-tile-bg: rgba(138, 75, 45, 0.18);
+  --bsbt-home-tile-glow: rgba(209, 168, 90, 0.22);
+  --bsbt-home-tile-shadow: rgba(42, 27, 18, 0.42);
+}
+
+#bs-biotracker-settings.theme-eldritch, .bs-bt-floating-sphere.theme-eldritch {
+  --bsbt-pager-bg:
+    radial-gradient(circle at 16% 12%, rgba(91, 59, 115, 0.28), transparent 30%),
+    radial-gradient(circle at 84% 86%, rgba(104, 214, 194, 0.16), transparent 28%),
+    linear-gradient(145deg, #101714 0%, #18221f 48%, #3b2430 100%);
+  --bsbt-lcd-bg: #12302f;
+  --bsbt-lcd-text: #d7efe8;
+  --bsbt-border-color: #5c8f83;
+  --bsbt-font-main: 'UnifrakturCook', 'Zhi Mang Xing', 'Noto Serif TC', 'Microsoft JhengHei', 'PingFang TC', serif;
+  --bsbt-btn-grad-1: #3b2430;
+  --bsbt-btn-grad-2: #101714;
+  --bsbt-btn-text: #d7efe8;
+  --bsbt-off-bg: #070b0a;
+  --bsbt-off-text: #68d6c2;
+  --bsbt-case-radius: 44px 18px 46px 20px;
+  --bsbt-case-shadow:
+    0 18px 34px rgba(3, 7, 6, 0.72),
+    0 0 34px rgba(104, 214, 194, 0.16),
+    inset 0 0 0 2px rgba(185, 168, 138, 0.24),
+    inset 0 0 38px rgba(91, 59, 115, 0.34);
+  --bsbt-case-border: 0;
+  --bsbt-home-tile-bg: rgba(18, 48, 47, 0.34);
+  --bsbt-home-tile-glow: rgba(104, 214, 194, 0.2);
+  --bsbt-home-tile-shadow: rgba(3, 7, 6, 0.58);
+}
+
+#bs-biotracker-settings.theme-ink, .bs-bt-floating-sphere.theme-ink {
+  --bsbt-pager-bg:
+    radial-gradient(ellipse at 50% 12%, rgba(31, 37, 34, 0.1), transparent 30%),
+    linear-gradient(90deg, #c9b98f 0 5%, #f3ead8 5% 95%, #c9b98f 95% 100%);
+  --bsbt-lcd-bg: rgba(243, 234, 216, 0.82);
+  --bsbt-lcd-text: #1f2522;
+  --bsbt-border-color: rgba(31, 37, 34, 0.42);
+  --bsbt-font-main: 'LXGW WenKai TC', 'Noto Serif TC', 'Microsoft JhengHei', 'PingFang TC', serif;
+  --bsbt-btn-grad-1: #f3ead8;
+  --bsbt-btn-grad-2: #dfd1b6;
+  --bsbt-btn-text: #1f2522;
+  --bsbt-off-bg: #dfd1b6;
+  --bsbt-off-text: #1f2522;
+  --bsbt-case-radius: 3px;
+  --bsbt-case-shadow:
+    0 18px 28px rgba(31, 37, 34, 0.24),
+    inset 0 0 0 1px rgba(31, 37, 34, 0.12),
+    inset 0 0 34px rgba(75, 81, 76, 0.08);
+  --bsbt-case-border: 0;
+  --bsbt-home-tile-bg: transparent;
+  --bsbt-home-tile-glow: rgba(31, 37, 34, 0.08);
+  --bsbt-home-tile-shadow: rgba(31, 37, 34, 0.16);
+}
+
+#bs-biotracker-settings.theme-constructivism, .bs-bt-floating-sphere.theme-constructivism {
+  --bsbt-pager-bg:
+    repeating-linear-gradient(90deg, rgba(236, 227, 207, 0.05) 0 1px, transparent 1px 10px),
+    linear-gradient(135deg, rgba(182, 37, 37, 0.24) 0 17%, transparent 17%),
+    linear-gradient(315deg, rgba(20, 20, 20, 0.28) 0 18%, transparent 18%),
+    linear-gradient(90deg, #5f6668 0%, #3f4547 48%, #6c7375 100%);
+  --bsbt-lcd-bg: #d8d2c3;
+  --bsbt-lcd-text: #141414;
+  --bsbt-border-color: #141414;
+  --bsbt-font-main: 'WDXL Lubrifont SC', 'Microsoft JhengHei', 'PingFang TC', 'Noto Sans TC', sans-serif;
+  --bsbt-btn-grad-1: #b62525;
+  --bsbt-btn-grad-2: #141414;
+  --bsbt-btn-text: #ece3cf;
+  --bsbt-off-bg: #141414;
+  --bsbt-off-text: #ece3cf;
+  --bsbt-case-radius: 0;
+  --bsbt-case-shadow:
+    10px 10px 0 rgba(20, 20, 20, 0.62),
+    0 18px 34px rgba(0, 0, 0, 0.4),
+    inset 0 0 0 2px rgba(236, 227, 207, 0.16),
+    inset 0 0 28px rgba(20, 20, 20, 0.28);
+  --bsbt-case-border: 6px solid #141414;
+  --bsbt-home-tile-bg: transparent;
+  --bsbt-home-tile-glow: rgba(182, 37, 37, 0.18);
+  --bsbt-home-tile-shadow: rgba(20, 20, 20, 0.36);
+}
+
+.bs-bt-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: none;
+  pointer-events: none;
+}
+
+.bs-bt-modal.is-open {
+  display: block;
+}
+
+.bs-bt-modal__backdrop {
+  position: absolute;
+  inset: 0;
+  background: transparent;
+  backdrop-filter: none;
+  pointer-events: none;
+}
+
+.bs-bt-modal__dialog {
+  position: fixed;
+  z-index: 1;
+  width: fit-content;
+  max-width: calc(100vw - 24px);
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  transform-origin: center center;
+  align-items: stretch;
+  max-height: calc(100vh - 48px);
+  pointer-events: auto;
+}
+
+.bs-bt-modal__dialog.is-shrinking {
+  animation: bs-bt-shrink-anim 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  pointer-events: none;
+}
+
+@keyframes bs-bt-shrink-anim {
+  0% { transform: scale(1); opacity: 1; }
+  100% { transform: scale(0); opacity: 0; }
+}
+
+.bs-bt-floating-sphere {
+  position: fixed;
+  z-index: 10000;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: linear-gradient(145deg, var(--bsbt-btn-grad-1, #4d5456), var(--bsbt-btn-grad-2, #282e30));
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4), inset 0 2px 4px rgba(255, 255, 255, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--bsbt-btn-text, #fff);
+  font-size: 1.6rem;
+  cursor: pointer;
+  user-select: none;
+  touch-action: none;
+  border: 2px solid rgba(255, 255, 255, 0.1);
+  transition: filter 0.2s ease, box-shadow 0.25s ease, transform 0.25s ease;
+}
+
+.bs-bt-floating-sphere:hover {
+  filter: brightness(1.2);
+}
+
+.bs-bt-floating-sphere:active {
+  filter: brightness(0.9);
+}
+
+.bs-bt-floating-sphere.is-dragging {
+  cursor: grabbing;
+  transition: none;
+  filter: brightness(1.1);
+}
+
+.bs-bt-floating-sphere.is-appearing {
+  animation: bs-bt-grow-anim 0.3s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+.bs-bt-floating-sphere.is-shrinking {
+  animation: bs-bt-shrink-anim 0.2s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
+.bs-bt-floating-sphere.has-update {
+  filter: brightness(1.12) saturate(1.18);
+  box-shadow:
+    0 0 0 3px rgba(255, 255, 255, 0.12),
+    0 0 18px rgba(255, 255, 255, 0.28),
+    0 0 34px rgba(255, 255, 255, 0.16),
+    0 4px 12px rgba(0, 0, 0, 0.4),
+    inset 0 2px 4px rgba(255, 255, 255, 0.28);
+}
+
+.bs-bt-floating-sphere.is-pulsing {
+  animation: bs-bt-sphere-pulse 1.1s ease-out;
+}
+
+@keyframes bs-bt-grow-anim {
+  0% { transform: scale(0); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+@keyframes bs-bt-sphere-pulse {
+  0% {
+    transform: scale(1);
+  }
+  35% {
+    transform: scale(1.08);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.bs-bt-modal__dialog.is-dragging {
+  cursor: grabbing;
+}
+
+.bs-bt-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  color: #f7f0d5;
+}
+
+.bs-bt-modal__title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.bs-bt-modal__title-icon {
+  font-size: 18px;
+}
+
+.bs-bt-modal__title {
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.bs-bt-modal__close {
+  min-height: 34px;
+  padding: 0 12px;
+}
+
+.bs-bt-modal__body {
+  display: flex;
+  justify-content: center;
+  min-height: 0;
+}
+
+#bs-biotracker-settings.bs-bt-device {
+  box-sizing: border-box;
+  --bsbt-device-width: 360px;
+  --bsbt-device-height: 540px;
+  --bsbt-ui-font-scale: 1;
+  --bsbt-content-font-size: calc(0.95rem * var(--bsbt-ui-font-scale));
+  --bsbt-header-font-size: calc(0.85rem * var(--bsbt-ui-font-scale));
+  --bsbt-home-label-font-size: calc(0.8rem * var(--bsbt-ui-font-scale));
+  width: min(var(--bsbt-device-width), calc(100vw - 24px));
+  max-width: 100%;
+  height: min(var(--bsbt-device-height), calc(100vh - 48px));
+  background: var(--bsbt-pager-bg);
+  border-radius: var(--bsbt-case-radius);
+  padding: 25px;
+  box-shadow: var(--bsbt-case-shadow);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border: var(--bsbt-case-border);
+  color: var(--bsbt-lcd-text);
+  font-family: var(--bsbt-font-main);
+  overflow: hidden;
+}
+
+#bs-biotracker-settings.bs-bt-device.size-tablet {
+  --bsbt-device-width: 560px;
+  --bsbt-device-height: 720px;
+}
+
+#bs-biotracker-settings.bs-bt-device.font-compact {
+  --bsbt-ui-font-scale: 0.92;
+}
+
+#bs-biotracker-settings.bs-bt-device.font-large {
+  --bsbt-ui-font-scale: 1.12;
+}
+
+/* 必须是 `*`：宿主酒馆会直接给 .menu_button / .text_pole / select 设字体，
+   只靠容器继承压不过去。代价是想让某个元素用别的字体时，不能设在容器上等继承，
+   要直接命中该元素本身（例：`.bs-bt-skill-tile-numeral text`）。 */
+#bs-biotracker-settings,
+#bs-biotracker-settings * {
+  font-family: var(--bsbt-font-main);
+}
+
+#bs-biotracker-settings .bs-bt-drag-handle {
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+#bs-biotracker-settings .bs-bt-hardware-detail {
+  position: absolute;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+}
+
+#bs-biotracker-settings.theme-fantasy .bs-bt-metal-corner {
+  opacity: 1;
+  width: 40px;
+  height: 40px;
+  border: 4px solid #daa520;
+  background: #b8860b;
+}
+
+#bs-biotracker-settings.theme-fantasy .bs-bt-screw-bl,
+#bs-biotracker-settings.theme-fantasy .bs-bt-screw-br {
+  opacity: 1;
+  width: 40px;
+  height: 40px;
+  border: 4px solid #daa520;
+  background: #b8860b;
+  box-shadow: 0 0 10px rgba(218, 165, 32, 0.2), inset 0 0 0 1px rgba(245, 230, 200, 0.18);
+}
+
+#bs-biotracker-settings .bs-bt-corner-tl {
+  top: -5px;
+  left: -5px;
+  border-radius: 10px 0 0 0;
+}
+
+#bs-biotracker-settings .bs-bt-corner-tr {
+  top: -5px;
+  right: -5px;
+  border-radius: 0 10px 0 0;
+}
+
+#bs-biotracker-settings.theme-wasteland .bs-bt-screw {
+  opacity: 1;
+  width: 15px;
+  height: 15px;
+  background: #2d3516;
+  border-radius: 50%;
+  box-shadow: inset 2px 2px 5px rgba(0, 0, 0, 0.8);
+}
+
+#bs-biotracker-settings .bs-bt-screw-tl { top: 10px; left: 10px; }
+#bs-biotracker-settings .bs-bt-screw-tr { top: 10px; right: 10px; }
+#bs-biotracker-settings .bs-bt-screw-bl { bottom: 100px; left: 10px; }
+#bs-biotracker-settings .bs-bt-screw-br { bottom: 100px; right: 10px; }
+
+#bs-biotracker-settings.theme-fantasy .bs-bt-screw-bl {
+  bottom: -5px;
+  left: -5px;
+  border-radius: 0 0 0 10px;
+}
+
+#bs-biotracker-settings.theme-fantasy .bs-bt-screw-br {
+  right: -5px;
+  bottom: -5px;
+  border-radius: 0 0 10px 0;
+}
+
+#bs-biotracker-settings.theme-steampunk .bs-bt-metal-corner {
+  opacity: 1;
+  width: 18px;
+  height: 18px;
+  border: 2px solid #6f3c22;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 35% 30%, #f4e4c2 0 14%, #d1a85a 15% 48%, #8a4b2d 49% 100%);
+  box-shadow:
+    0 0 0 1px rgba(42, 27, 18, 0.78),
+    inset 2px 2px 4px rgba(244, 228, 194, 0.26),
+    inset -2px -2px 4px rgba(42, 27, 18, 0.46);
+}
+
+#bs-biotracker-settings.theme-steampunk .bs-bt-corner-tl {
+  top: 10px;
+  left: 10px;
+}
+
+#bs-biotracker-settings.theme-steampunk .bs-bt-corner-tr {
+  top: 10px;
+  right: 10px;
+}
+
+#bs-biotracker-settings.theme-steampunk .bs-bt-screw {
+  opacity: 1;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 35% 30%, #f4e4c2 0 12%, #d1a85a 13% 42%, #8a4b2d 43% 100%);
+  box-shadow:
+    0 0 0 1px rgba(42, 27, 18, 0.85),
+    inset 2px 2px 4px rgba(244, 228, 194, 0.24),
+    inset -2px -2px 4px rgba(42, 27, 18, 0.45);
+}
+
+#bs-biotracker-settings .bs-bt-brand {
+  color: rgba(0, 0, 0, 0.42);
+  font-size: 8px;
+  margin-bottom: 12px;
+  letter-spacing: 0.4em;
+  line-height: 1;
+  text-align: center;
+  text-indent: 0.4em;
+  text-transform: uppercase;
+  flex: 0 0 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#bs-biotracker-settings .bs-bt-screen-shell {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+#bs-biotracker-settings .bs-bt-screen {
+  height: 100%;
+  min-height: 0;
+  background-color: var(--bsbt-lcd-bg);
+  border-radius: 10px;
+  border: 12px solid var(--bsbt-border-color);
+  box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.5);
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  color: var(--bsbt-lcd-text);
+}
+
+#bs-biotracker-settings.theme-wasteland .bs-bt-screen {
+  border-radius: 30px;
+}
+
+#bs-biotracker-settings .bs-bt-screen::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.05) 50%);
+  background-size: 100% 3px;
+  pointer-events: none;
+  opacity: 0.2;
+}
+
+#bs-biotracker-settings .bs-bt-screen-header {
+  padding: 8px 12px;
+  border-bottom: 2px solid currentColor;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  font-size: var(--bsbt-header-font-size);
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+#bs-biotracker-settings #bs-bt-time,
+#bs-biotracker-settings #bs-bt-title,
+#bs-biotracker-settings #bs-bt-status-icons {
+  min-width: 0;
+}
+
+#bs-biotracker-settings #bs-bt-time {
+  justify-self: start;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#bs-biotracker-settings #bs-bt-title {
+  justify-self: center;
+  text-align: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#bs-biotracker-settings #bs-bt-status-icons {
+  justify-self: end;
+}
+
+#bs-biotracker-settings .bs-bt-screen-content {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  padding: 12px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  font-size: var(--bsbt-content-font-size);
+  line-height: 1.35;
+}
+
+#bs-biotracker-settings .bs-bt-screen-content::-webkit-scrollbar,
+#bs-biotracker-settings .bs-bt-status-box::-webkit-scrollbar {
+  display: none;
+}
+
+#bs-biotracker-settings .bs-bt-view {
+  display: none;
+}
+
+#bs-biotracker-settings .bs-bt-view.is-active {
+  display: block;
+}
+
+#bs-biotracker-settings .bs-bt-menu-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 8px;
+  margin-top: 0;
+}
+
+#bs-biotracker-settings .bs-bt-menu-card,
+#bs-biotracker-settings .bs-bt-size-option,
+#bs-biotracker-settings .bs-bt-theme-option {
+  border: 2px solid currentColor;
+  min-height: 34px;
+  padding: 6px 10px;
+  text-align: center;
+  border-radius: 5px;
+  background: rgba(0, 0, 0, 0.05);
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  width: 100%;
+  box-sizing: border-box;
+  line-height: 1.15;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#bs-biotracker-settings .bs-bt-theme-list {
+  display: grid;
+  gap: 6px;
+}
+
+#bs-biotracker-settings .bs-bt-worldbook-scope-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+#bs-biotracker-settings .bs-bt-worldbook-scope-tabs .bs-bt-track-tab {
+  border-right: 0;
+}
+
+#bs-biotracker-settings .bs-bt-worldbook-scope-panel {
+  display: none;
+  gap: 10px;
+}
+
+#bs-biotracker-settings .bs-bt-worldbook-scope-panel.is-active {
+  display: grid;
+}
+
+#bs-biotracker-settings .bs-bt-size-options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+  gap: 8px;
+}
+
+#bs-biotracker-settings .bs-bt-theme-option.is-active {
+  background: var(--bsbt-lcd-text);
+  color: var(--bsbt-lcd-bg);
+}
+
+#bs-biotracker-settings .bs-bt-size-option.is-active {
+  background: var(--bsbt-lcd-text);
+  color: var(--bsbt-lcd-bg);
+}
+
+#bs-biotracker-settings .bs-bt-panel {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+#bs-biotracker-settings .bs-bt-section-title,
+#bs-biotracker-settings .bs-bt-status-title,
+#bs-biotracker-settings label {
+  display: block;
+  margin-bottom: 4px;
+  color: inherit;
+}
+
+#bs-biotracker-settings .settings_section {
+  margin: 0;
+  color: inherit;
+}
+
+/* 设置项下方的小字解释：宿主默认 small 是低对比灰，在浅色屏/毛玻璃上几乎不可读；
+   统一用辅助文字色（各主题经 --bsbt-off-text 自适应）保证可读性 */
+#bs-biotracker-settings .settings_section small {
+  color: var(--bsbt-off-text);
+  font-size: 11.5px;
+  line-height: 1.45;
+  display: block;
+  margin-top: 4px;
+  opacity: 0.95;
+}
+
+#bs-biotracker-settings .sysHR {
+  margin: 2px 0;
+  border: 0;
+  border-top: 1px solid currentColor;
+  opacity: 0.35;
+}
+
+#bs-biotracker-settings .text_pole,
+#bs-biotracker-settings select,
+#bs-biotracker-settings textarea,
+#bs-biotracker-settings input[type='text'],
+#bs-biotracker-settings input[type='password'],
+#bs-biotracker-settings input[type='number'] {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.12);
+  color: inherit;
+  border: 1px solid rgba(0, 0, 0, 0.28);
+  border-radius: 4px;
+  padding: 8px 10px;
+  font: inherit;
+  box-sizing: border-box;
+}
+
+#bs-biotracker-settings select,
+#bs-biotracker-settings select option,
+#bs-biotracker-settings select optgroup {
+  font-family: var(--bsbt-font-main);
+}
+
+#bs-biotracker-settings .text_pole::placeholder,
+#bs-biotracker-settings textarea::placeholder,
+#bs-biotracker-settings input::placeholder {
+  color: color-mix(in srgb, currentColor 55%, transparent);
+}
+
+#bs-biotracker-settings input[type='checkbox'] {
+  accent-color: currentColor;
+}
+
+#bs-biotracker-settings .menu_button {
+  min-height: 32px;
+  padding: 4px 10px;
+  background: rgba(0, 0, 0, 0.08);
+  border: 1px solid rgba(0, 0, 0, 0.28);
+  border-radius: 4px;
+  color: inherit;
+  font: inherit;
+  width: 100%;
+  box-sizing: border-box;
+  line-height: 1.1;
+}
+
+#bs-biotracker-settings .menu_button:hover,
+#bs-biotracker-settings .bs-bt-menu-card:hover,
+#bs-biotracker-settings .bs-bt-size-option:hover,
+#bs-biotracker-settings .bs-bt-theme-option:hover,
+#bs-biotracker-settings .bs-bt-physical-button:hover {
+  filter: brightness(1.05);
+}
+
+#bs-biotracker-settings .bs-bt-connect-row {
+  align-items: stretch;
+}
+
+#bs-biotracker-settings .bs-bt-connect-status {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  min-height: 36px;
+  border: 1px solid rgba(0, 0, 0, 0.22);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+#bs-biotracker-settings .bs-bt-connect-status[data-state='error'] {
+  color: #6b1111;
+  border-color: rgba(107, 17, 17, 0.35);
+  background: rgba(255, 173, 173, 0.32);
+}
+
+#bs-biotracker-settings.theme-wasteland .bs-bt-connect-status[data-state='error'] {
+  color: #f9a3a3;
+}
+
+#bs-biotracker-settings .bs-bt-textarea {
+  min-height: 180px;
+  resize: vertical;
+}
+
+#bs-biotracker-settings .bs-bt-status-box {
+  white-space: pre-wrap;
+  min-height: 160px;
+  max-height: 280px;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.22);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.12);
+  color: inherit;
+  box-sizing: border-box;
+  font-family: inherit;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#bs-biotracker-settings .bs-bt-debug-json {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font: inherit;
+}
+
+#bs-biotracker-settings .bs-bt-debug-details {
+  margin-top: 8px;
+  border-top: 1px solid rgba(0, 0, 0, 0.16);
+  padding-top: 8px;
+}
+
+#bs-biotracker-settings .bs-bt-debug-details summary {
+  cursor: pointer;
+  font-weight: 700;
+  opacity: 0.86;
+}
+
+#bs-biotracker-settings .bs-bt-debug-details .bs-bt-debug-json {
+  margin-top: 6px;
+}
+
+#bs-biotracker-settings .bs-bt-register-page[hidden] {
+  display: none;
+}
+
+#bs-biotracker-settings .bs-bt-register-source-section {
+  display: grid;
+  gap: 6px;
+}
+
+#bs-biotracker-settings #bs-bt-register-source-summary {
+  min-height: 1.35em;
+  line-height: 1.35;
+}
+
+#bs-biotracker-settings #bs-bt-register-race[readonly] {
+  background: color-mix(in srgb, var(--bsbt-lcd-bg) 84%, currentColor 16%);
+  cursor: not-allowed;
+}
+
+#bs-biotracker-settings [data-race-picker-target='bs-bt-register-race']:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+#bs-biotracker-settings .bs-bt-register-page[data-register-page='skills']:not([hidden]) {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+#bs-biotracker-settings #bs-bt-register-skill-prompt {
+  min-height: 104px;
+}
+
+#bs-biotracker-settings #bs-bt-register-skill-result {
+  min-height: 260px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
+  font-size: 0.9em;
+  line-height: 1.4;
+}
+
+#bs-biotracker-settings .bs-bt-inline-status {
+  margin-top: 8px;
+  min-height: 1.4em;
+  white-space: pre-wrap;
+  color: var(--bs-bt-text-dim, currentColor);
+  font-size: 0.9em;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+#bs-biotracker-settings .bs-bt-setting-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+}
+
+#bs-biotracker-settings .bs-bt-setting-toggle-row label {
+  flex: 0 1 auto;
+  margin: 0;
+}
+
+#bs-biotracker-settings .bs-bt-setting-toggle-row input[type='checkbox'] {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+#bs-biotracker-settings .bs-bt-inline-status[data-kind='error'] {
+  color: #8a1f1f;
+}
+
+#bs-biotracker-settings.theme-wasteland .bs-bt-inline-status[data-kind='error'] {
+  color: #f9a3a3;
+}
+
+#bs-biotracker-settings .bs-bt-inline-status[data-kind='success'] {
+  color: #0c6b4f;
+}
+
+#bs-biotracker-settings .bs-bt-home-tile {
+  position: relative;
+  display: grid;
+  place-items: center;
+  grid-template-rows: auto auto;
+  gap: 6px;
+  min-height: 86px;
+  padding: 8px 6px 6px;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  box-sizing: border-box;
+  min-width: 0;
+  overflow: hidden;
+  box-shadow: none;
+  transition: transform 0.12s ease, filter 0.12s ease, background-color 0.12s ease;
+}
+
+#bs-biotracker-settings .bs-bt-home-tile:hover,
+#bs-biotracker-settings .bs-bt-home-tile:focus-visible {
+  filter: brightness(1.03);
+}
+
+#bs-biotracker-settings .bs-bt-home-tile:focus-visible {
+  outline: none;
+}
+
+#bs-biotracker-settings .bs-bt-home-tile:active {
+  transform: scale(0.97);
+}
+
+#bs-biotracker-settings .bs-bt-home-tile--empty,
+#bs-biotracker-settings .bs-bt-home-tile--empty:hover,
+#bs-biotracker-settings .bs-bt-home-tile--empty:focus-visible,
+#bs-biotracker-settings .bs-bt-home-tile--empty:active {
+  pointer-events: none;
+  visibility: hidden;
+  transform: none;
+  filter: none;
+}
+
+#bs-biotracker-settings .bs-bt-home-tile__icon {
+  width: 30px;
+  height: 30px;
+  display: block;
+  background-color: currentColor;
+  filter: drop-shadow(0 0 2px color-mix(in srgb, currentColor 10%, transparent));
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: 88% 88%;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  -webkit-mask-size: 88% 88%;
+  transition: filter 0.12s ease, transform 0.12s ease;
+}
+
+#bs-biotracker-settings .bs-bt-home-tile__icon--filter {
+  mask-image: url('./assets/icons/filter-xmark-svgrepo-com.svg');
+  -webkit-mask-image: url('./assets/icons/filter-xmark-svgrepo-com.svg');
+}
+
+#bs-biotracker-settings .bs-bt-home-tile__icon--register {
+  mask-image: url('./assets/icons/register-svgrepo-com.svg');
+  -webkit-mask-image: url('./assets/icons/register-svgrepo-com.svg');
+}
+
+#bs-biotracker-settings .bs-bt-home-tile__icon--track {
+  mask-image: url('./assets/icons/pulse-svgrepo-com.svg');
+  -webkit-mask-image: url('./assets/icons/pulse-svgrepo-com.svg');
+}
+
+#bs-biotracker-settings .bs-bt-home-tile__icon--json {
+  mask-image: url('./assets/icons/json-svgrepo-com.svg');
+  -webkit-mask-image: url('./assets/icons/json-svgrepo-com.svg');
+}
+
+#bs-biotracker-settings .bs-bt-home-tile__icon--clock {
+  mask-image: url('./assets/icons/clock-lines-svgrepo-com.svg');
+  -webkit-mask-image: url('./assets/icons/clock-lines-svgrepo-com.svg');
+}
+
+#bs-biotracker-settings .bs-bt-home-tile__icon--dna {
+  mask-image: url('./assets/icons/dna-svgrepo-com.svg');
+  -webkit-mask-image: url('./assets/icons/dna-svgrepo-com.svg');
+}
+
+#bs-biotracker-settings .bs-bt-home-tile__icon--theme {
+  mask-image: url('./assets/icons/painting-bucket-logo-icon.svg');
+  -webkit-mask-image: url('./assets/icons/painting-bucket-logo-icon.svg');
+}
+
+#bs-biotracker-settings .bs-bt-home-tile__icon--preset {
+  mask-image: url('./assets/icons/book-sparkles-svgrepo-com.svg');
+  -webkit-mask-image: url('./assets/icons/book-sparkles-svgrepo-com.svg');
+}
+
+#bs-biotracker-settings .bs-bt-home-tile__icon--wardrobe {
+  mask-image: url('./assets/icons/hanger-svgrepo-com.svg');
+  -webkit-mask-image: url('./assets/icons/hanger-svgrepo-com.svg');
+}
+
+#bs-biotracker-settings .bs-bt-home-tile__label {
+  font-size: var(--bsbt-home-label-font-size);
+  font-weight: 700;
+  line-height: 1.08;
+  text-align: center;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  transition: text-shadow 0.12s ease, transform 0.12s ease;
+}
+
+#bs-biotracker-settings .bs-bt-home-tile:hover .bs-bt-home-tile__icon,
+#bs-biotracker-settings .bs-bt-home-tile:focus-visible .bs-bt-home-tile__icon,
+#bs-biotracker-settings .bs-bt-home-tile:active .bs-bt-home-tile__icon {
+  filter:
+    drop-shadow(0 0 4px color-mix(in srgb, currentColor 30%, transparent))
+    drop-shadow(0 0 10px color-mix(in srgb, var(--bsbt-home-tile-glow) 92%, transparent));
+}
+
+#bs-biotracker-settings .bs-bt-home-tile:hover .bs-bt-home-tile__label,
+#bs-biotracker-settings .bs-bt-home-tile:focus-visible .bs-bt-home-tile__label,
+#bs-biotracker-settings .bs-bt-home-tile:active .bs-bt-home-tile__label {
+  text-shadow:
+    0 0 6px color-mix(in srgb, currentColor 24%, transparent),
+    0 0 14px color-mix(in srgb, var(--bsbt-home-tile-glow) 90%, transparent);
+}
+
+#bs-biotracker-settings .bs-bt-home-tile:active .bs-bt-home-tile__icon,
+#bs-biotracker-settings .bs-bt-home-tile:active .bs-bt-home-tile__label {
+  transform: scale(0.98);
+}
+
+#bs-biotracker-settings #bs-bt-view-home {
+  height: 100%;
+}
+
+#bs-biotracker-settings #bs-bt-view-home .bs-bt-panel {
+  height: 100%;
+}
+
+#bs-biotracker-settings #bs-bt-view-home .bs-bt-menu-grid {
+  height: 100%;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: repeat(3, minmax(0, 1fr));
+  align-content: stretch;
+}
+
+#bs-biotracker-settings .bs-bt-track-character-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
+#bs-biotracker-settings .bs-bt-track-list-note {
+  margin-top: auto;
+  padding: 8px 10px;
+  border: 1px solid rgba(0, 0, 0, 0.22);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.12);
+  font-size: 0.84em;
+  line-height: 1.35;
+  opacity: 0.82;
+}
+
+#bs-biotracker-settings .bs-bt-prompt-toggles {
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  padding: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+#bs-biotracker-settings .bs-bt-home-tile__icon--skill {
+  mask-image: url('./assets/icons/light-bulb-on-svgrepo-com.svg');
+  -webkit-mask-image: url('./assets/icons/light-bulb-on-svgrepo-com.svg');
+}
+
+#bs-biotracker-settings .bs-bt-skill-catalog-list {
+  display: grid;
+  gap: 10px;
+}
+
+#bs-biotracker-settings #bs-bt-skill-catalog-overview:not([hidden]),
+#bs-biotracker-settings #bs-bt-skill-definition-detail:not([hidden]),
+#bs-biotracker-settings .bs-bt-skill-detail-characters {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+#bs-biotracker-settings #bs-bt-skill-catalog-overview[hidden],
+#bs-biotracker-settings #bs-bt-skill-definition-detail[hidden] {
+  display: none;
+}
+
+#bs-biotracker-settings .bs-bt-skill-card {
+  border: 1px solid color-mix(in srgb, var(--bsbt-border-color) 55%, transparent);
+  border-radius: 8px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+#bs-biotracker-settings .bs-bt-skill-card__title {
+  font-weight: 700;
+}
+
+#bs-biotracker-settings .bs-bt-skill-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+#bs-biotracker-settings .bs-bt-skill-card__delete {
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 1.1em;
+  line-height: 1;
+  cursor: pointer;
+}
+
+#bs-biotracker-settings .bs-bt-skill-card__delete:disabled {
+  cursor: not-allowed;
+  opacity: 0.3;
+}
+
+#bs-biotracker-settings .bs-bt-skill-card--interactive {
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease, transform 0.12s ease;
+}
+
+#bs-biotracker-settings .bs-bt-skill-card--interactive .bs-bt-skill-card__header {
+  margin-bottom: 0;
+}
+
+#bs-biotracker-settings .bs-bt-skill-card--interactive:hover,
+#bs-biotracker-settings .bs-bt-skill-card--interactive:focus-visible {
+  border-color: currentColor;
+  background: rgba(255, 255, 255, 0.15);
+  outline: none;
+}
+
+#bs-biotracker-settings .bs-bt-skill-card--interactive:active {
+  transform: scale(0.99);
+}
+
+#bs-biotracker-settings .bs-bt-skill-definition-form {
+  display: grid;
+  gap: 7px;
+}
+
+#bs-biotracker-settings .bs-bt-skill-detail-head .menu_button {
+  width: auto;
+  margin: 0;
+}
+
+#bs-biotracker-settings .bs-bt-skill-detail-head {
+  display: grid;
+  gap: 6px;
+}
+
+#bs-biotracker-settings .bs-bt-skill-detail-head .bs-bt-section-title {
+  margin-top: 4px;
+  font-size: 1.08em;
+  font-weight: 750;
+}
+
+#bs-biotracker-settings .bs-bt-skill-character-card {
+  display: grid;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--bsbt-border-color) 55%, transparent);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+#bs-biotracker-settings .bs-bt-skill-character-card__name {
+  font-weight: 750;
+  font-size: 1.02em;
+}
+
+#bs-biotracker-settings .bs-bt-character-skill-row {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) minmax(0, 1fr);
+  align-items: end;
+  gap: 6px;
+  min-width: 0;
+}
+
+#bs-biotracker-settings .bs-bt-character-skill-row label {
+  display: grid;
+  gap: 3px;
+  font-size: 0.86em;
+}
+
+#bs-biotracker-settings .bs-bt-character-skill-name {
+  align-self: center;
+  font-weight: 700;
+}
+
+#bs-biotracker-settings .bs-bt-character-skill-row .menu_button {
+  width: 100%;
+  margin: 0;
+}
+
+#bs-biotracker-settings .bs-bt-skill-history {
+  border-top: 1px solid color-mix(in srgb, var(--bsbt-border-color) 45%, transparent);
+  padding-top: 8px;
+}
+
+#bs-biotracker-settings .bs-bt-skill-history summary {
+  cursor: pointer;
+  font-weight: 650;
+}
+
+#bs-biotracker-settings .bs-bt-skill-history ul {
+  display: grid;
+  gap: 5px;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+#bs-biotracker-settings .bs-bt-skill-history li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: baseline;
+  font-size: 0.86em;
+}
+
+#bs-biotracker-settings .bs-bt-prompt-toggle-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 42px;
+  padding: 8px 12px;
+  font-size: 0.88em;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+#bs-biotracker-settings .bs-bt-prompt-toggle-item:last-child {
+  border-bottom: none;
+}
+
+#bs-biotracker-settings .bs-bt-prompt-toggle-item.is-disabled {
+  opacity: 0.62;
+}
+
+#bs-biotracker-settings .bs-bt-prompt-toggle-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  color: inherit;
+}
+
+#bs-biotracker-settings .bs-bt-prompt-toggle-name > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#bs-biotracker-settings .bs-bt-prompt-toggle-glyph {
+  width: 12px;
+  flex: 0 0 12px;
+  text-align: center;
+  opacity: 0.88;
+}
+
+#bs-biotracker-settings .bs-bt-prompt-toggle-action {
+  width: 30px;
+  height: 16px;
+  border: 1px solid color-mix(in srgb, var(--bsbt-border-color, #1a1a1a) 45%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bsbt-off-bg, #3d4446) 78%, transparent);
+  cursor: pointer;
+  padding: 1px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+}
+
+#bs-biotracker-settings .bs-bt-prompt-toggle-action.is-on {
+  background: linear-gradient(145deg, var(--bsbt-btn-grad-1, #4d5456), var(--bsbt-btn-grad-2, #282e30));
+  border-color: color-mix(in srgb, var(--bsbt-btn-text, #ffffff) 24%, var(--bsbt-border-color, #1a1a1a));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bsbt-btn-text, #ffffff) 14%, transparent);
+}
+
+#bs-biotracker-settings .bs-bt-prompt-toggle-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bsbt-lcd-bg, #87a96b) 68%, white);
+  display: block;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.22);
+  transition: transform 120ms ease, background 120ms ease;
+}
+
+#bs-biotracker-settings .bs-bt-prompt-toggle-action.is-on .bs-bt-prompt-toggle-thumb {
+  transform: translateX(14px);
+  background: color-mix(in srgb, var(--bsbt-btn-text, #ffffff) 82%, white);
+}
+
+#bs-biotracker-settings .bs-bt-track-tabs {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0;
+  padding: 0;
+  border: 1px solid rgba(0, 0, 0, 0.22);
+  border-radius: 10px 10px 0 0;
+  background: rgba(255, 255, 255, 0.1);
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+#bs-biotracker-settings #bs-bt-register-tabs {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+#bs-biotracker-settings #bs-bt-register-tabs .bs-bt-track-tab {
+  padding-inline: 4px;
+  white-space: nowrap;
+}
+
+#bs-biotracker-settings .bs-bt-inference-target {
+  margin: 0 0 10px;
+  padding: 7px 10px;
+  border: 1px solid color-mix(in srgb, var(--bsbt-border-color, #1a1a1a) 42%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bsbt-lcd-bg, #87a96b) 30%, transparent);
+  font-size: 0.9em;
+  font-weight: 700;
+  word-break: break-word;
+}
+
+#bs-biotracker-settings #bs-bt-encyclopedia-tabs {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+#bs-biotracker-settings .bs-bt-encyclopedia-page {
+  display: grid;
+  gap: 10px;
+}
+
+#bs-biotracker-settings .bs-bt-encyclopedia-page[hidden] {
+  display: none;
+}
+
+#bs-biotracker-settings .bs-bt-full-state-tabs {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+#bs-biotracker-settings .bs-bt-track-tabs::-webkit-scrollbar,
+#bs-biotracker-settings .bs-bt-track-cards::-webkit-scrollbar {
+  display: none;
+}
+
+#bs-biotracker-settings .bs-bt-track-character-button,
+#bs-biotracker-settings .bs-bt-track-tab {
+  border: 1px solid rgba(0, 0, 0, 0.28);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.12);
+  color: inherit;
+  font: inherit;
+  padding: 7px 10px;
+  cursor: pointer;
+  line-height: 1.1;
+  min-width: 0;
+}
+
+#bs-biotracker-settings .bs-bt-track-character-button.is-active,
+#bs-biotracker-settings .bs-bt-track-tab.is-active {
+  background: var(--bsbt-lcd-text);
+  color: var(--bsbt-lcd-bg);
+}
+
+#bs-biotracker-settings .bs-bt-track-character-button {
+  width: 100%;
+  min-height: 60px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-items: start;
+  text-align: left;
+  gap: 6px;
+}
+
+#bs-biotracker-settings .bs-bt-track-tab {
+  width: 100%;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0;
+  padding: 6px 4px;
+  border-radius: 0;
+  border-top: 0;
+  border-bottom: 0;
+  border-left: 0;
+  border-right: 1px solid rgba(0, 0, 0, 0.18);
+  white-space: nowrap;
+}
+
+#bs-biotracker-settings .bs-bt-track-tab:last-child {
+  border-right: 0;
+}
+
+#bs-biotracker-settings .bs-bt-track-character-name {
+  font-weight: 700;
+  grid-column: 1 / -1;
+  grid-row: 1 / 2;
+  align-self: start;
+  justify-self: start;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#bs-biotracker-settings .bs-bt-track-character-stage {
+  font-size: 0.84em;
+  opacity: 0.82;
+  grid-column: 1 / -1;
+  grid-row: 2 / 3;
+  align-self: end;
+  justify-self: end;
+  text-align: right;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#bs-biotracker-settings .bs-bt-track-character-button[disabled] {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+#bs-biotracker-settings .bs-bt-track-character-button.is-offscreen {
+  opacity: 0.62;
+  border-style: dashed;
+}
+
+#bs-biotracker-settings .bs-bt-track-dashboard[hidden] {
+  display: none;
+}
+
+#bs-biotracker-settings .bs-bt-track-dashboard {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+#bs-biotracker-settings .bs-bt-track-content {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  overflow-x: hidden;
+}
+
+#bs-biotracker-settings .bs-bt-track-debug-list {
+  display: grid;
+  gap: 8px;
+}
+
+#bs-biotracker-settings .bs-bt-track-debug-form {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+#bs-biotracker-settings .bs-bt-track-debug-form[disabled] {
+  opacity: 0.55;
+}
+
+#bs-biotracker-settings .bs-bt-track-debug-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  overflow: visible;
+}
+
+#bs-biotracker-settings .bs-bt-track-inline-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  width: 100%;
+  align-items: stretch;
+}
+
+#bs-biotracker-settings .bs-bt-inline-button {
+  width: auto;
+  min-width: 92px;
+  padding: 4px 8px;
+  white-space: nowrap;
+}
+
+#bs-biotracker-settings .bs-bt-track-inline-action-equal {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+
+#bs-biotracker-settings .bs-bt-track-inline-action-equal .bs-bt-inline-button {
+  width: 100%;
+  min-width: 0;
+}
+
+#bs-biotracker-settings .bs-bt-race-picker-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+#bs-biotracker-settings .bs-bt-race-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 40px;
+  gap: 6px;
+  align-items: stretch;
+}
+
+#bs-biotracker-settings .bs-bt-race-picker-button {
+  min-height: 36px;
+  border: 1px solid rgba(0, 0, 0, 0.28);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.12);
+  color: inherit;
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+#bs-biotracker-settings .bs-bt-race-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 20;
+  width: min(360px, calc(100vw - 88px));
+  max-width: 100%;
+  padding: 10px;
+  border: 1px solid var(--bsbt-border-color);
+  border-radius: 10px;
+  background: var(--bsbt-lcd-bg);
+  color: inherit;
+  box-shadow:
+    0 10px 24px color-mix(in srgb, var(--bsbt-border-color) 35%, transparent),
+    0 0 0 1px color-mix(in srgb, currentColor 12%, transparent);
+}
+
+#bs-biotracker-settings .bs-bt-track-debug-label {
+  font-size: 0.86em;
+  opacity: 0.82;
+}
+
+#bs-biotracker-settings .bs-bt-track-debug-hint {
+  margin-top: 8px;
+  font-size: 0.84em;
+  line-height: 1.35;
+  opacity: 0.82;
+}
+
+#bs-biotracker-settings .bs-bt-race-palette {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+
+#bs-biotracker-settings .bs-bt-race-palette-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+#bs-biotracker-settings .bs-bt-race-palette-title {
+  font-size: 0.92em;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+#bs-biotracker-settings .bs-bt-race-close-button {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--bsbt-border-color);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bsbt-lcd-bg) 78%, var(--bsbt-pager-bg) 22%);
+  color: inherit;
+  font: inherit;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+#bs-biotracker-settings .bs-bt-race-palette select {
+  width: 100%;
+}
+
+#bs-biotracker-settings .bs-bt-race-preview-hint {
+  font-size: 0.84em;
+  line-height: 1.35;
+  opacity: 0.8;
+}
+
+#bs-biotracker-settings .bs-bt-race-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+#bs-biotracker-settings .bs-bt-race-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 4px 10px;
+  border: 1px solid var(--bsbt-border-color);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bsbt-lcd-bg) 72%, var(--bsbt-pager-bg) 28%);
+  color: inherit;
+  font: inherit;
+  font-size: 0.9em;
+  line-height: 1.2;
+  max-width: 100%;
+}
+
+#bs-biotracker-settings .bs-bt-race-tag span:first-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+#bs-biotracker-settings .bs-bt-race-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+#bs-biotracker-settings .bs-bt-race-editor-modal {
+  position: absolute;
+  inset: 44px 12px 18px;
+  z-index: 18;
+  display: grid;
+  align-items: start;
+  padding: 10px;
+  background: color-mix(in srgb, var(--bsbt-pager-bg) 58%, black 42%);
+}
+
+#bs-biotracker-settings .bs-bt-race-editor-modal[hidden] {
+  display: none;
+}
+
+#bs-biotracker-settings .bs-bt-race-editor-dialog {
+  display: grid;
+  gap: 10px;
+  max-height: 100%;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--bsbt-border-color);
+  border-radius: 8px;
+  background: var(--bsbt-lcd-bg);
+  color: inherit;
+  box-shadow:
+    0 12px 26px color-mix(in srgb, var(--bsbt-border-color) 36%, transparent),
+    0 0 0 1px color-mix(in srgb, currentColor 12%, transparent);
+}
+
+#bs-biotracker-settings .bs-bt-race-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+#bs-biotracker-settings .bs-bt-race-editor {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+#bs-biotracker-settings .bs-bt-race-editor-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+#bs-biotracker-settings .bs-bt-race-editor-field-wide {
+  grid-column: 1 / -1;
+}
+
+#bs-biotracker-settings .bs-bt-race-introduction-input {
+  min-height: 56px;
+  resize: vertical;
+}
+
+#bs-biotracker-settings .bs-bt-race-editor-field > span:first-child {
+  font-size: 0.84em;
+  opacity: 0.82;
+}
+
+#bs-biotracker-settings .bs-bt-race-editor-badge {
+  width: fit-content;
+  padding: 1px 6px;
+  border: 1px solid var(--bsbt-border-color);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bsbt-lcd-bg) 74%, var(--bsbt-pager-bg) 26%);
+  font-size: 0.76em;
+  opacity: 0.8;
+}
+
+#bs-biotracker-settings .bs-bt-track-debug-button {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+  border: 1px solid rgba(0, 0, 0, 0.22);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.12);
+  color: inherit;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+#bs-biotracker-settings .bs-bt-track-debug-button.is-active {
+  background: rgba(255, 255, 255, 0.22);
+  border-color: rgba(0, 0, 0, 0.38);
+}
+
+#bs-biotracker-settings .bs-bt-track-debug-title {
+  font-weight: 700;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#bs-biotracker-settings .bs-bt-track-debug-state {
+  font-size: 0.86em;
+  opacity: 0.82;
+  flex: 0 0 auto;
+}
+
+#bs-biotracker-settings .bs-bt-track-section {
+  border: 1px solid rgba(0, 0, 0, 0.22);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.12);
+  padding: 10px;
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+#bs-biotracker-settings .bs-bt-track-section-title {
+  font-weight: 700;
+  margin-bottom: 8px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#bs-biotracker-settings .bs-bt-fetal-talent-editor {
+  display: grid;
+  gap: 9px;
+  margin-top: 10px;
+}
+
+#bs-biotracker-settings .bs-bt-fetal-talent-current {
+  display: grid;
+  gap: 5px;
+}
+
+#bs-biotracker-settings .bs-bt-fetal-talent-current-row {
+  display: grid;
+  gap: 2px;
+  padding: 7px 8px;
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  border-radius: 7px;
+  font-size: 0.86em;
+}
+
+#bs-biotracker-settings .bs-bt-fetal-talent-values,
+#bs-biotracker-settings .bs-bt-fetal-talent-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  align-items: stretch;
+}
+
+#bs-biotracker-settings .bs-bt-fetal-talent-values .bs-bt-track-debug-field {
+  grid-template-rows: minmax(2.8em, auto) auto;
+}
+
+#bs-biotracker-settings .bs-bt-fetal-talent-values input,
+#bs-biotracker-settings .bs-bt-fetal-talent-actions .menu_button {
+  width: 100%;
+  margin: 0;
+  box-sizing: border-box;
+}
+
+#bs-biotracker-settings .bs-bt-fetal-talent-actions .menu_button {
+  min-width: 0;
+}
+
+#bs-biotracker-settings .bs-bt-track-section-title--split {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+#bs-biotracker-settings .bs-bt-track-title-left,
+#bs-biotracker-settings .bs-bt-track-section-title:not(.bs-bt-track-section-title--split) {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+#bs-biotracker-settings .bs-bt-track-title-main {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#bs-biotracker-settings .bs-bt-track-title-badge {
+  flex: 0 0 auto;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-size: 0.78em;
+  line-height: 1.45;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.16);
+  opacity: 0.86;
+  white-space: nowrap;
+}
+
+#bs-biotracker-settings .bs-bt-track-section--labor-pain {
+  position: relative;
+  border-color: rgba(184, 34, 92, calc(0.16 + (var(--bsbt-labor-pain, 0) * 0.4)));
+  box-shadow:
+    inset 0 0 calc(2px + (var(--bsbt-labor-pain, 0) * 8px)) rgba(246, 80, 139, calc(var(--bsbt-labor-pain, 0) * 0.08)),
+    0 0 calc(1px + (var(--bsbt-labor-pain, 0) * 9px)) rgba(242, 56, 120, calc(var(--bsbt-labor-pain, 0) * 0.16));
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+
+#bs-biotracker-settings .bs-bt-track-section--labor-pain::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  opacity: calc(var(--bsbt-labor-pain, 0) * 0.14);
+  background: radial-gradient(ellipse at 50% 45%, rgba(248, 72, 135, 0.6), transparent 72%);
+}
+
+#bs-biotracker-settings .bs-bt-track-section--labor-pain.is-critical {
+  border-color: rgba(210, 30, 95, 0.62);
+  box-shadow:
+    inset 0 0 11px rgba(246, 80, 139, 0.12),
+    0 0 12px rgba(242, 56, 120, 0.22);
+  animation: bs-bt-labor-critical-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes bs-bt-labor-critical-pulse {
+  0%,
+  100% {
+    box-shadow:
+      inset 0 0 11px rgba(246, 80, 139, 0.12),
+      0 0 10px rgba(242, 56, 120, 0.19);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 14px rgba(246, 80, 139, 0.16),
+      0 0 16px rgba(242, 56, 120, 0.3);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #bs-biotracker-settings .bs-bt-track-section--labor-pain.is-critical {
+    animation: none;
+  }
+}
+
+#bs-biotracker-settings .bs-bt-track-section--amnion {
+  position: relative;
+  border-color: rgba(0, 0, 0, calc(0.18 + (var(--bsbt-amnion-ratio, 0.5) * 0.34)));
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, calc(0.04 + (var(--bsbt-amnion-ratio, 0.5) * 0.14))),
+    0 0 calc(4px + (var(--bsbt-amnion-ratio, 0.5) * 10px)) rgba(255, 255, 255, calc(0.06 + (var(--bsbt-amnion-ratio, 0.5) * 0.16)));
+}
+
+#bs-biotracker-settings .bs-bt-track-section--amnion::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  pointer-events: none;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, calc(0.08 + (var(--bsbt-amnion-ratio, 0.5) * 0.22)));
+}
+
+#bs-biotracker-settings .bs-bt-track-meta {
+  display: grid;
+  gap: 6px;
+}
+
+#bs-biotracker-settings .bs-bt-track-meta-row,
+#bs-biotracker-settings .bs-bt-track-list-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 10px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.12);
+  padding: 6px 0;
+}
+
+#bs-biotracker-settings .bs-bt-track-meta-row:last-child,
+#bs-biotracker-settings .bs-bt-track-list-row:last-child {
+  border-bottom: 0;
+}
+
+#bs-biotracker-settings .bs-bt-track-meta-label,
+#bs-biotracker-settings .bs-bt-track-list-label {
+  opacity: 0.8;
+  min-width: 88px;
+}
+
+#bs-biotracker-settings .bs-bt-track-meta-value,
+#bs-biotracker-settings .bs-bt-track-list-value {
+  flex: 1 1 auto;
+  text-align: right;
+  word-break: break-word;
+}
+
+#bs-biotracker-settings .bs-bt-track-progress-list {
+  display: grid;
+  gap: 8px;
+}
+
+#bs-biotracker-settings .bs-bt-track-progress {
+  display: grid;
+  gap: 4px;
+}
+
+#bs-biotracker-settings .bs-bt-track-progress-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.9em;
+}
+
+#bs-biotracker-settings .bs-bt-track-progress-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.16);
+  overflow: hidden;
+}
+
+#bs-biotracker-settings .bs-bt-track-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: currentColor;
+  opacity: 0.78;
+}
+
+#bs-biotracker-settings .bs-bt-track-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+#bs-biotracker-settings .bs-bt-track-metabolism-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+#bs-biotracker-settings .bs-bt-track-metabolism-grid.is-derived {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+#bs-biotracker-settings .bs-bt-need-tile {
+  --bs-bt-need-color: var(--bsbt-lcd-text);
+  --bs-bt-need-over-color: color-mix(in srgb, #ff4d5f 72%, var(--bsbt-lcd-text));
+  --bs-bt-need-base: color-mix(in srgb, var(--bsbt-lcd-text) 24%, transparent);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 86px;
+  gap: 3px;
+  border: 1px solid color-mix(in srgb, var(--bsbt-lcd-text) 22%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bsbt-lcd-bg) 72%, transparent);
+  color: var(--bs-bt-need-color);
+  overflow: hidden;
+}
+
+#bs-biotracker-settings .bs-bt-need-tile--high {
+  --bs-bt-need-color: color-mix(in srgb, #ff4d5f 72%, var(--bsbt-lcd-text));
+}
+
+#bs-biotracker-settings .bs-bt-need-tile--positive {
+  --bs-bt-need-color: color-mix(in srgb, #00d6ff 70%, var(--bsbt-lcd-text));
+}
+
+#bs-biotracker-settings .bs-bt-need-tile--negative {
+  --bs-bt-need-color: color-mix(in srgb, #ff4dcc 70%, var(--bsbt-lcd-text));
+}
+
+#bs-biotracker-settings .bs-bt-need-tile.is-blocked {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bs-bt-need-color) 52%, transparent);
+}
+
+#bs-biotracker-settings .bs-bt-need-tile.is-accelerated {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bs-bt-need-color) 52%, transparent);
+}
+
+#bs-biotracker-settings .bs-bt-need-tile.is-expanded {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bs-bt-need-color) 52%, transparent);
+}
+
+#bs-biotracker-settings .bs-bt-need-icon-wrap {
+  position: relative;
+  width: 34px;
+  height: 34px;
+}
+
+#bs-biotracker-settings .bs-bt-need-icon,
+#bs-biotracker-settings .bs-bt-need-blockage,
+#bs-biotracker-settings .bs-bt-need-acceleration,
+#bs-biotracker-settings .bs-bt-need-expansion {
+  display: block;
+  background: currentColor;
+  mask-position: center;
+  mask-repeat: no-repeat;
+  mask-size: contain;
+  -webkit-mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+}
+
+#bs-biotracker-settings .bs-bt-need-acceleration {
+  position: absolute;
+  z-index: 1;
+  top: 5px;
+  left: 5px;
+  width: 14px;
+  height: 14px;
+  color: var(--bs-bt-need-color);
+  mask-image: url('./assets/icons/bolt-svgrepo-com.svg');
+  -webkit-mask-image: url('./assets/icons/bolt-svgrepo-com.svg');
+}
+
+#bs-biotracker-settings .bs-bt-need-expansion {
+  position: absolute;
+  z-index: 1;
+  top: 5px;
+  left: 5px;
+  width: 14px;
+  height: 14px;
+  color: var(--bs-bt-need-color);
+  mask-image: url('./assets/icons/balloon-svgrepo-com.svg');
+  -webkit-mask-image: url('./assets/icons/balloon-svgrepo-com.svg');
+}
+
+#bs-biotracker-settings .bs-bt-need-icon {
+  width: 100%;
+  height: 100%;
+}
+
+#bs-biotracker-settings .bs-bt-need-icon-base {
+  color: var(--bs-bt-need-base);
+}
+
+#bs-biotracker-settings .bs-bt-need-icon-fill {
+  position: absolute;
+  inset: auto 0 0 0;
+  height: var(--bs-bt-need-fill);
+  overflow: hidden;
+  color: var(--bs-bt-need-color);
+}
+
+#bs-biotracker-settings .bs-bt-need-icon-overfill {
+  position: absolute;
+  inset: auto 0 0 0;
+  height: var(--bs-bt-need-overfill);
+  overflow: hidden;
+  color: var(--bs-bt-need-over-color);
+}
+
+#bs-biotracker-settings .bs-bt-need-icon-fill .bs-bt-need-icon,
+#bs-biotracker-settings .bs-bt-need-icon-overfill .bs-bt-need-icon {
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 34px;
+}
+
+#bs-biotracker-settings .bs-bt-need-blockage {
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  width: 14px;
+  height: 14px;
+  color: var(--bs-bt-need-color);
+  mask-image: url('./assets/icons/chain-svgrepo-com.svg');
+  -webkit-mask-image: url('./assets/icons/chain-svgrepo-com.svg');
+}
+
+#bs-biotracker-settings .bs-bt-need-label {
+  font-size: 0.78em;
+  line-height: 1.1;
+  opacity: 0.86;
+}
+
+#bs-biotracker-settings .bs-bt-need-value {
+  max-width: 100%;
+  font-size: 0.82em;
+  line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#bs-biotracker-settings .bs-bt-track-metabolism-label {
+  opacity: 0.82;
+}
+
+#bs-biotracker-settings .bs-bt-need-icon--excretion {
+  mask-image: url('./assets/icons/toilet-paper-svgrepo-com.svg');
+  -webkit-mask-image: url('./assets/icons/toilet-paper-svgrepo-com.svg');
+}
+
+#bs-biotracker-settings .bs-bt-need-icon--hunger {
+  mask-image: url('./assets/icons/food-meat-chicken-svgrepo-com.svg');
+  -webkit-mask-image: url('./assets/icons/food-meat-chicken-svgrepo-com.svg');
+}
+
+#bs-biotracker-settings .bs-bt-need-icon--sleep {
+  mask-image: url('./assets/icons/sleep-bed-bedroom-furniture-chair-households-belongings-svgrepo-com.svg');
+  -webkit-mask-image: url('./assets/icons/sleep-bed-bedroom-furniture-chair-households-belongings-svgrepo-com.svg');
+}
+
+#bs-biotracker-settings .bs-bt-need-icon--milk {
+  mask-image: url('./assets/icons/baby-bottle-svgrepo-com.svg');
+  -webkit-mask-image: url('./assets/icons/baby-bottle-svgrepo-com.svg');
+}
+
+#bs-biotracker-settings .bs-bt-need-icon--odor {
+  mask-image: url('./assets/icons/soap-svgrepo-com.svg');
+  -webkit-mask-image: url('./assets/icons/soap-svgrepo-com.svg');
+}
+
+#bs-biotracker-settings .bs-bt-need-icon--companionship {
+  mask-image: url('./assets/icons/chat-bubble-svgrepo-com.svg');
+  -webkit-mask-image: url('./assets/icons/chat-bubble-svgrepo-com.svg');
+}
+
+#bs-biotracker-settings .bs-bt-need-icon--flux {
+  mask-image: url('./assets/icons/pentagram-svgrepo-com.svg');
+  -webkit-mask-image: url('./assets/icons/pentagram-svgrepo-com.svg');
+}
+
+#bs-biotracker-settings .bs-bt-track-tag {
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 0.88em;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+#bs-biotracker-settings .bs-bt-track-description-list {
+  display: grid;
+  gap: 6px;
+}
+
+#bs-biotracker-settings .bs-bt-track-description-item {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.12);
+  padding-bottom: 6px;
+}
+
+#bs-biotracker-settings .bs-bt-track-description-item:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+#bs-biotracker-settings .bs-bt-track-description-title {
+  font-weight: 700;
+  margin-bottom: 2px;
+}
+
+#bs-biotracker-settings .bs-bt-track-description-empty {
+  opacity: 0.75;
+}
+
+#bs-biotracker-settings .bs-bt-track-radar-wrap {
+  display: flex;
+  justify-content: center;
+}
+
+#bs-biotracker-settings .bs-bt-track-psych-prompts {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+#bs-biotracker-settings .bs-bt-track-psych-prompt {
+  border: 1px solid rgba(0, 0, 0, 0.18);
+  border-radius: 6px;
+  padding: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  font-size: 0.92em;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#bs-biotracker-settings .bs-bt-track-psych-prompt-empty {
+  margin-top: 8px;
+  text-align: center;
+}
+
+#bs-biotracker-settings .bs-bt-track-psych-flags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+#bs-biotracker-settings .bs-bt-track-radar {
+  width: 180px;
+  max-width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+#bs-biotracker-settings .bs-bt-track-tag.is-active {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(0, 0, 0, 0.35);
+  font-weight: 700;
+}
+
+#bs-biotracker-settings .bs-bt-track-cards {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+}
+
+#bs-biotracker-settings .bs-bt-track-cards.bs-bt-track-cards--single {
+  display: block;
+  overflow: visible;
+  padding-bottom: 0;
+}
+
+#bs-biotracker-settings .bs-bt-track-cards::-webkit-scrollbar {
+  display: none;
+}
+
+#bs-biotracker-settings .bs-bt-track-card {
+  flex: 0 0 78%;
+  min-width: 0;
+  border: 1px solid rgba(0, 0, 0, 0.22);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.12);
+  padding: 10px;
+  scroll-snap-align: start;
+}
+
+#bs-biotracker-settings .bs-bt-track-cards.bs-bt-track-cards--single .bs-bt-track-card {
+  flex: none;
+  width: 100%;
+  max-width: none;
+  box-sizing: border-box;
+}
+
+#bs-biotracker-settings .bs-bt-track-card-title {
+  font-weight: 700;
+  margin-bottom: 6px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#bs-biotracker-settings .bs-bt-track-card-title--split {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+#bs-biotracker-settings .bs-bt-track-talent-tag {
+  font-size: 0.78em;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* 技能方格墙：一行三格自动换行，格子超过三行时列表内部滚动，不撑开整个手机 */
+#bs-biotracker-settings .bs-bt-skill-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  max-height: 268px;
+  overflow-y: auto;
+  padding-right: 2px;
+  -webkit-overflow-scrolling: touch;
+}
+
+#bs-biotracker-settings .bs-bt-skill-grid::-webkit-scrollbar {
+  width: 4px;
+}
+
+#bs-biotracker-settings .bs-bt-skill-grid::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.22);
+}
+
+#bs-biotracker-settings .bs-bt-skill-tile {
+  position: relative;
+  display: grid;
+  grid-template-rows: 1fr auto;
+  gap: 2px;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid rgba(0, 0, 0, 0.22);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  padding: 6px 4px 5px;
+}
+
+#bs-biotracker-settings .bs-bt-skill-tile.is-maxed {
+  border-color: rgba(0, 0, 0, 0.38);
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* 天赋角标：军衔式楔形，楔形数 = 等级，朝上擅长／朝下苦手。
+   viewBox 高度随数量变化，所以固定宽度、高度交给等比缩放。 */
+#bs-biotracker-settings .bs-bt-skill-tile-talent {
+  position: absolute;
+  top: 4px;
+  right: 5px;
+  z-index: 1;
+  width: 10px;
+  height: auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.88;
+}
+
+#bs-biotracker-settings .bs-bt-skill-tile-talent.is-negative {
+  opacity: 0.72;
+}
+
+#bs-biotracker-settings .bs-bt-skill-tile-numeral {
+  display: block;
+  width: 100%;
+  height: 38px;
+}
+
+/* 罗马数字跟随各主题自己的字体（`#bs-biotracker-settings *` 已经把字体刷到 text 上）。
+   字间距是关键：无衬线主题的大写 I 是光杆竖线，靠原生字距 III 的间隙只有 2px，
+   与 II 难以分辨。拉开到 0.16em 后间隙约与笔画同宽，各主题都能用自己的字体。
+   用 em 而非绝对单位，fitSkillNumerals 改 font-size 时字距会跟着缩放。 */
+#bs-biotracker-settings .bs-bt-skill-tile-numeral text {
+  font-weight: 700;
+  letter-spacing: 0.16em;
+}
+
+/* 未填满的部分留作淡色底，填实高度即经验进度 */
+#bs-biotracker-settings .bs-bt-skill-numeral-base {
+  fill: currentColor;
+  opacity: 0.2;
+}
+
+#bs-biotracker-settings .bs-bt-skill-numeral-fill {
+  fill: currentColor;
+  opacity: 0.92;
+}
+
+#bs-biotracker-settings .bs-bt-skill-tile-name {
+  font-size: 0.72em;
+  font-weight: 700;
+  line-height: 1.25;
+  text-align: center;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+#bs-biotracker-settings .bs-bt-track-card-empty {
+  border: 1px dashed rgba(0, 0, 0, 0.22);
+  border-radius: 8px;
+  padding: 10px;
+  opacity: 0.8;
+}
+
+#bs-biotracker-settings .bs-bt-physical-buttons {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 25px 5px 5px 5px;
+  flex: 0 0 auto;
+}
+
+#bs-biotracker-settings .bs-bt-physical-button {
+  width: 94px;
+  min-height: 50px;
+  background: linear-gradient(145deg, var(--bsbt-btn-grad-1), var(--bsbt-btn-grad-2));
+  border-radius: 12px;
+  color: var(--bsbt-btn-text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: 0 6px 0 rgba(0, 0, 0, 0.3);
+  transition: all 0.2s ease;
+  font: inherit;
+  border: 0;
+}
+
+#bs-biotracker-settings .bs-bt-physical-button:active {
+  transform: translateY(4px);
+  box-shadow: 0 2px 0 rgba(0, 0, 0, 0.3);
+}
+
+#bs-biotracker-settings .bs-bt-physical-button-off {
+  background: linear-gradient(145deg, var(--bsbt-btn-grad-1), var(--bsbt-btn-grad-2));
+  color: var(--bsbt-btn-text);
+}
+
+#bs-biotracker-settings .bs-bt-physical-button svg {
+  width: 26px;
+  height: 26px;
+  stroke-width: 2.5;
+}
+
+#bs-biotracker-settings.theme-cyber-egypt.bs-bt-device {
+  background:
+    linear-gradient(180deg,
+      #f1c40f 0 49.5%,
+      #002b2b 49.5% 50.5%,
+      #8f7b28 50.5% 100%),
+    linear-gradient(45deg, #d4af37, #f1c40f, #d4af37);
+  box-shadow:
+    0 0 50px rgba(212, 175, 55, 0.4),
+    inset 0 0 0 1px rgba(0, 43, 43, 0.28),
+    inset 18px 0 0 rgba(0, 43, 43, 0.12),
+    inset -18px 0 0 rgba(139, 69, 19, 0.16);
+}
+
+#bs-biotracker-settings.theme-cyber-egypt.bs-bt-device::before,
+#bs-biotracker-settings.theme-cyber-egypt.bs-bt-device::after {
+  content: '';
+  position: absolute;
+  pointer-events: none;
+  z-index: 0;
+}
+
+#bs-biotracker-settings.theme-cyber-egypt.bs-bt-device::before {
+  left: 18px;
+  right: 50%;
+  top: 70%;
+  height: 4px;
+  transform: none;
+  background: #002b2b;
+  box-shadow:
+    0 0 10px rgba(0, 43, 43, 0.42);
+}
+
+#bs-biotracker-settings.theme-cyber-egypt.bs-bt-device::after {
+  left: 50%;
+  right: 18px;
+  top: 30%;
+  height: 4px;
+  background: #002b2b;
+  box-shadow:
+    0 0 10px rgba(0, 43, 43, 0.42);
+}
+
+#bs-biotracker-settings.theme-cyber-egypt > :not(.bs-bt-hardware-detail) {
+  position: relative;
+  z-index: 1;
+}
+
+#bs-biotracker-settings.theme-holo.bs-bt-device {
+  backdrop-filter: blur(12px) saturate(1.2);
+}
+
+#bs-biotracker-settings.theme-holo .bs-bt-brand {
+  color: rgba(141, 247, 255, 0.74);
+  text-shadow: 0 0 10px rgba(78, 222, 255, 0.56);
+}
+
+#bs-biotracker-settings.theme-holo .bs-bt-screen {
+  background:
+    linear-gradient(rgba(141, 247, 255, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(141, 247, 255, 0.08) 1px, transparent 1px),
+    var(--bsbt-lcd-bg);
+  background-size: 18px 18px, 18px 18px, auto;
+  border-width: 2px;
+  box-shadow:
+    0 0 18px rgba(78, 222, 255, 0.34),
+    inset 0 0 28px rgba(78, 222, 255, 0.16);
+}
+
+#bs-biotracker-settings.theme-holo .bs-bt-screen::after {
+  background:
+    linear-gradient(rgba(141, 247, 255, 0) 50%, rgba(141, 247, 255, 0.08) 50%);
+  background-size: 100% 4px;
+  opacity: 0.42;
+}
+
+#bs-biotracker-settings.theme-holo .bs-bt-menu-card,
+#bs-biotracker-settings.theme-holo .bs-bt-size-option,
+#bs-biotracker-settings.theme-holo .bs-bt-theme-option,
+#bs-biotracker-settings.theme-holo .bs-bt-status-box,
+#bs-biotracker-settings.theme-holo .text_pole,
+#bs-biotracker-settings.theme-holo select,
+#bs-biotracker-settings.theme-holo textarea,
+#bs-biotracker-settings.theme-holo input[type='text'],
+#bs-biotracker-settings.theme-holo input[type='password'],
+#bs-biotracker-settings.theme-holo input[type='number'],
+#bs-biotracker-settings.theme-holo .menu_button {
+  border-color: rgba(141, 247, 255, 0.52);
+  background: rgba(5, 31, 61, 0.18);
+  box-shadow: inset 0 0 14px rgba(78, 222, 255, 0.08);
+  text-shadow: 0 0 8px rgba(141, 247, 255, 0.42);
+}
+
+#bs-biotracker-settings.theme-holo .bs-bt-size-option.is-active,
+#bs-biotracker-settings.theme-holo .bs-bt-theme-option.is-active {
+  background: rgba(141, 247, 255, 0.18);
+  color: #d9fdff;
+  box-shadow:
+    inset 0 0 16px rgba(141, 247, 255, 0.18),
+    0 0 14px rgba(78, 222, 255, 0.28);
+}
+
+#bs-biotracker-settings.theme-holo .bs-bt-home-tile {
+  border: 1px solid rgba(141, 247, 255, 0.28);
+  background: rgba(47, 202, 255, 0.06);
+  box-shadow: inset 0 0 18px rgba(78, 222, 255, 0.08);
+}
+
+#bs-biotracker-settings.theme-holo .bs-bt-home-tile:hover,
+#bs-biotracker-settings.theme-holo .bs-bt-home-tile:focus-visible {
+  background: rgba(47, 202, 255, 0.12);
+  box-shadow:
+    inset 0 0 22px rgba(78, 222, 255, 0.12),
+    0 0 16px rgba(78, 222, 255, 0.2);
+}
+
+#bs-biotracker-settings.theme-holo .bs-bt-physical-button,
+#bs-biotracker-settings.theme-holo .bs-bt-physical-button-off {
+  border: 1px solid rgba(141, 247, 255, 0.52);
+  box-shadow:
+    0 0 16px rgba(78, 222, 255, 0.22),
+    inset 0 0 18px rgba(141, 247, 255, 0.14);
+}
+
+.bs-bt-floating-sphere.theme-holo {
+  border-color: rgba(141, 247, 255, 0.7);
+  backdrop-filter: blur(8px) saturate(1.3);
+  box-shadow:
+    0 0 0 1px rgba(141, 247, 255, 0.28),
+    0 0 22px rgba(78, 222, 255, 0.38),
+    inset 0 0 18px rgba(141, 247, 255, 0.18);
+  text-shadow: 0 0 10px rgba(141, 247, 255, 0.72);
+}
+
+#bs-biotracker-settings.theme-gothic.bs-bt-device {
+  --bsbt-gothic-crystal-shape: polygon(0 0, 50% 2.2%, 100% 0, 97.8% 50%, 100% 100%, 50% 97.8%, 0 100%, 2.2% 50%);
+  clip-path: polygon(0 0, 50% 2.2%, 100% 0, 97.8% 50%, 100% 100%, 50% 97.8%, 0 100%, 2.2% 50%);
+  padding: 25px;
+  outline: 1px solid rgba(48, 21, 32, 0.9);
+  background:
+    linear-gradient(120deg, rgba(232, 216, 207, 0.14), transparent 24%),
+    linear-gradient(240deg, rgba(181, 106, 114, 0.18), transparent 28%),
+    linear-gradient(300deg, rgba(232, 216, 207, 0.08), transparent 24%),
+    var(--bsbt-pager-bg);
+  box-shadow:
+    0 18px 34px rgba(4, 0, 4, 0.72),
+    0 0 26px rgba(143, 63, 75, 0.2),
+    inset 0 0 0 2px rgba(214, 186, 164, 0.48),
+    inset 0 0 0 6px rgba(143, 63, 75, 0.18),
+    inset 0 0 34px rgba(4, 0, 4, 0.52);
+}
+
+#bs-biotracker-settings.theme-gothic.bs-bt-device::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  clip-path: var(--bsbt-gothic-crystal-shape);
+  pointer-events: none;
+  background:
+    linear-gradient(135deg, rgba(232, 216, 207, 0.55), rgba(143, 63, 75, 0.48) 48%, rgba(232, 216, 207, 0.3));
+  z-index: 0;
+}
+
+#bs-biotracker-settings.theme-gothic.bs-bt-device::after {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  clip-path: var(--bsbt-gothic-crystal-shape);
+  pointer-events: none;
+  background: var(--bsbt-pager-bg);
+  z-index: 0;
+}
+
+#bs-biotracker-settings.theme-gothic > :not(.bs-bt-hardware-detail) {
+  position: relative;
+  z-index: 1;
+}
+
+#bs-biotracker-settings.theme-gothic .bs-bt-brand {
+  color: rgba(232, 216, 207, 0.76);
+  text-shadow: 0 1px 0 #070305, 0 0 12px rgba(181, 106, 114, 0.24);
+}
+
+#bs-biotracker-settings.theme-gothic .bs-bt-screen {
+  background:
+    radial-gradient(circle at 50% 12%, rgba(181, 106, 114, 0.16), transparent 34%),
+    linear-gradient(180deg, rgba(232, 216, 207, 0.05), transparent 26%),
+    var(--bsbt-lcd-bg);
+  border-width: 4px;
+  box-shadow:
+    inset 0 0 34px rgba(0, 0, 0, 0.74),
+    inset 0 0 0 1px rgba(232, 216, 207, 0.15),
+    0 0 22px rgba(91, 40, 52, 0.36);
+  text-shadow: 0 0 7px rgba(232, 216, 207, 0.18);
+}
+
+#bs-biotracker-settings.theme-gothic .bs-bt-screen-header {
+  border-bottom-color: rgba(181, 106, 114, 0.58);
+  color: #eadbd2;
+}
+
+#bs-biotracker-settings.theme-gothic .bs-bt-screen::after {
+  background:
+    linear-gradient(rgba(232, 216, 207, 0) 50%, rgba(181, 106, 114, 0.045) 50%);
+  background-size: 100% 4px;
+  opacity: 0.34;
+}
+
+#bs-biotracker-settings.theme-gothic .bs-bt-menu-card,
+#bs-biotracker-settings.theme-gothic .bs-bt-size-option,
+#bs-biotracker-settings.theme-gothic .bs-bt-theme-option,
+#bs-biotracker-settings.theme-gothic .bs-bt-status-box,
+#bs-biotracker-settings.theme-gothic .text_pole,
+#bs-biotracker-settings.theme-gothic select,
+#bs-biotracker-settings.theme-gothic textarea,
+#bs-biotracker-settings.theme-gothic input[type='text'],
+#bs-biotracker-settings.theme-gothic input[type='password'],
+#bs-biotracker-settings.theme-gothic input[type='number'],
+#bs-biotracker-settings.theme-gothic .menu_button {
+  border-color: rgba(181, 106, 114, 0.5);
+  background: rgba(21, 9, 15, 0.58);
+  box-shadow:
+    inset 0 0 0 1px rgba(232, 216, 207, 0.06),
+    inset 0 0 16px rgba(0, 0, 0, 0.24);
+}
+
+#bs-biotracker-settings.theme-gothic .bs-bt-size-option.is-active,
+#bs-biotracker-settings.theme-gothic .bs-bt-theme-option.is-active {
+  background: rgba(143, 63, 75, 0.42);
+  color: #f0e3d8;
+  border-color: rgba(214, 186, 164, 0.68);
+  box-shadow:
+    inset 0 0 18px rgba(18, 7, 12, 0.45),
+    0 0 14px rgba(143, 63, 75, 0.22);
+}
+
+#bs-biotracker-settings.theme-gothic .bs-bt-home-tile {
+  border: 1px solid rgba(181, 106, 114, 0.34);
+  border-radius: 7px;
+  background:
+    linear-gradient(160deg, rgba(232, 216, 207, 0.05), transparent 38%),
+    var(--bsbt-home-tile-bg);
+  box-shadow:
+    0 2px 8px var(--bsbt-home-tile-shadow),
+    inset 0 0 0 1px rgba(232, 216, 207, 0.05);
+}
+
+#bs-biotracker-settings.theme-gothic .bs-bt-home-tile:hover,
+#bs-biotracker-settings.theme-gothic .bs-bt-home-tile:focus-visible {
+  background:
+    linear-gradient(160deg, rgba(232, 216, 207, 0.08), transparent 38%),
+    rgba(91, 40, 52, 0.3);
+  box-shadow:
+    0 0 14px rgba(181, 106, 114, 0.16),
+    inset 0 0 0 1px rgba(214, 186, 164, 0.14);
+}
+
+#bs-biotracker-settings.theme-gothic .bs-bt-physical-button,
+#bs-biotracker-settings.theme-gothic .bs-bt-physical-button-off {
+  border: 1px solid rgba(214, 186, 164, 0.34);
+  box-shadow:
+    0 6px 0 rgba(6, 2, 5, 0.68),
+    inset 0 1px 0 rgba(232, 216, 207, 0.12),
+    inset 0 0 16px rgba(0, 0, 0, 0.34);
+}
+
+.bs-bt-floating-sphere.theme-gothic {
+  clip-path: none;
+  border: 2px double rgba(214, 186, 164, 0.58);
+  border-radius: 50%;
+  background:
+    linear-gradient(145deg, rgba(232, 216, 207, 0.16), transparent 32%),
+    linear-gradient(315deg, var(--bsbt-btn-grad-1), var(--bsbt-btn-grad-2));
+  box-shadow:
+    0 10px 18px rgba(4, 0, 4, 0.58),
+    0 0 18px rgba(143, 63, 75, 0.32),
+    inset 0 0 0 2px rgba(214, 186, 164, 0.42),
+    inset 0 0 18px rgba(232, 216, 207, 0.08);
+  text-shadow: 0 0 8px rgba(232, 216, 207, 0.28);
+}
+
+#bs-biotracker-settings.theme-steampunk.bs-bt-device {
+  background:
+    linear-gradient(90deg, rgba(209, 168, 90, 0.08), transparent 18%, transparent 82%, rgba(209, 168, 90, 0.08)),
+    var(--bsbt-pager-bg);
+  box-shadow:
+    0 28px 0 rgba(21, 13, 8, 0.78),
+    0 34px 42px rgba(0, 0, 0, 0.52),
+    inset 0 0 0 2px rgba(209, 168, 90, 0.24),
+    inset 0 0 28px rgba(21, 13, 8, 0.5);
+}
+
+#bs-biotracker-settings.theme-steampunk.bs-bt-device::before {
+  content: '';
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 6px;
+  height: 108px;
+  pointer-events: none;
+  opacity: 0.24;
+  background:
+    radial-gradient(circle at 50% 50%, transparent 0 24px, rgba(209, 168, 90, 0.62) 25px 29px, transparent 30px),
+    repeating-conic-gradient(from 0deg, rgba(209, 168, 90, 0.5) 0 10deg, transparent 10deg 20deg);
+  background-repeat: no-repeat;
+  background-size: 156px 108px, 156px 108px;
+  background-position: center, center;
+  mask-image: linear-gradient(90deg, transparent, #000 10%, #000 90%, transparent);
+}
+
+#bs-biotracker-settings.theme-steampunk > :not(.bs-bt-hardware-detail) {
+  position: relative;
+  z-index: 1;
+}
+
+#bs-biotracker-settings.theme-steampunk .bs-bt-brand {
+  color: rgba(244, 228, 194, 0.72);
+  text-shadow: 0 1px 0 #1d1b18;
+}
+
+#bs-biotracker-settings.theme-steampunk .bs-bt-screen {
+  background:
+    radial-gradient(circle at 18% 12%, rgba(255, 255, 255, 0.24), transparent 26%),
+    linear-gradient(rgba(138, 75, 45, 0.06) 1px, transparent 1px),
+    var(--bsbt-lcd-bg);
+  background-size: auto, 100% 5px, auto;
+  border-width: 8px;
+  box-shadow:
+    inset 0 0 26px rgba(42, 27, 18, 0.32),
+    inset 0 0 0 1px rgba(244, 228, 194, 0.34),
+    0 0 16px rgba(209, 168, 90, 0.14);
+}
+
+#bs-biotracker-settings.theme-steampunk .bs-bt-screen-header {
+  border-bottom-color: rgba(42, 27, 18, 0.5);
+}
+
+#bs-biotracker-settings.theme-steampunk .bs-bt-screen::after {
+  background:
+    linear-gradient(rgba(42, 27, 18, 0) 50%, rgba(42, 27, 18, 0.045) 50%);
+  background-size: 100% 4px;
+  opacity: 0.36;
+}
+
+#bs-biotracker-settings.theme-steampunk .bs-bt-menu-card,
+#bs-biotracker-settings.theme-steampunk .bs-bt-size-option,
+#bs-biotracker-settings.theme-steampunk .bs-bt-theme-option,
+#bs-biotracker-settings.theme-steampunk .bs-bt-status-box,
+#bs-biotracker-settings.theme-steampunk .text_pole,
+#bs-biotracker-settings.theme-steampunk select,
+#bs-biotracker-settings.theme-steampunk textarea,
+#bs-biotracker-settings.theme-steampunk input[type='text'],
+#bs-biotracker-settings.theme-steampunk input[type='password'],
+#bs-biotracker-settings.theme-steampunk input[type='number'],
+#bs-biotracker-settings.theme-steampunk .menu_button {
+  border-color: rgba(138, 75, 45, 0.58);
+  background: rgba(234, 216, 180, 0.34);
+  box-shadow:
+    inset 0 0 0 1px rgba(244, 228, 194, 0.18),
+    inset 0 0 16px rgba(138, 75, 45, 0.12);
+}
+
+#bs-biotracker-settings.theme-steampunk .bs-bt-size-option.is-active,
+#bs-biotracker-settings.theme-steampunk .bs-bt-theme-option.is-active {
+  background: rgba(138, 75, 45, 0.72);
+  color: #f4e4c2;
+  border-color: rgba(209, 168, 90, 0.78);
+  box-shadow:
+    inset 0 0 16px rgba(42, 27, 18, 0.26),
+    0 0 12px rgba(209, 168, 90, 0.18);
+}
+
+#bs-biotracker-settings.theme-steampunk .bs-bt-home-tile {
+  border: 1px solid rgba(138, 75, 45, 0.38);
+  background:
+    linear-gradient(150deg, rgba(244, 228, 194, 0.1), transparent 38%),
+    var(--bsbt-home-tile-bg);
+  box-shadow:
+    0 2px 8px var(--bsbt-home-tile-shadow),
+    inset 0 0 0 1px rgba(244, 228, 194, 0.1);
+}
+
+#bs-biotracker-settings.theme-steampunk .bs-bt-physical-button,
+#bs-biotracker-settings.theme-steampunk .bs-bt-physical-button-off {
+  border: 2px solid rgba(42, 27, 18, 0.62);
+  box-shadow:
+    0 6px 0 rgba(21, 13, 8, 0.76),
+    inset 0 2px 0 rgba(244, 228, 194, 0.2),
+    inset 0 0 14px rgba(42, 27, 18, 0.32);
+}
+
+.bs-bt-floating-sphere.theme-steampunk {
+  border: 3px solid rgba(42, 27, 18, 0.7);
+  box-shadow:
+    0 8px 16px rgba(21, 13, 8, 0.56),
+    0 0 18px rgba(209, 168, 90, 0.22),
+    inset 0 0 0 2px rgba(244, 228, 194, 0.16),
+    inset 0 0 16px rgba(42, 27, 18, 0.32);
+}
+
+#bs-biotracker-settings.theme-eldritch.bs-bt-device {
+  --bsbt-eldritch-shell-shape: polygon(
+    8% 1.5%,
+    26% 0,
+    44% 1.2%,
+    61% 0.2%,
+    82% 2%,
+    98% 9%,
+    100% 28%,
+    98.2% 48%,
+    100% 69%,
+    96% 91%,
+    82% 99%,
+    61% 97.8%,
+    43% 100%,
+    24% 98.4%,
+    6% 94%,
+    0 76%,
+    1.8% 54%,
+    0 33%,
+    2.8% 12%
+  );
+  clip-path: polygon(
+    8% 1.5%,
+    26% 0,
+    44% 1.2%,
+    61% 0.2%,
+    82% 2%,
+    98% 9%,
+    100% 28%,
+    98.2% 48%,
+    100% 69%,
+    96% 91%,
+    82% 99%,
+    61% 97.8%,
+    43% 100%,
+    24% 98.4%,
+    6% 94%,
+    0 76%,
+    1.8% 54%,
+    0 33%,
+    2.8% 12%
+  );
+  animation: bs-bt-eldritch-breathe 7s ease-in-out infinite;
+  filter:
+    saturate(1)
+    brightness(1);
+  background:
+    radial-gradient(ellipse at 50% 50%, transparent 0 19%, rgba(104, 214, 194, 0.13) 20% 21%, transparent 22%),
+    repeating-radial-gradient(ellipse at 50% 52%, transparent 0 18px, rgba(104, 214, 194, 0.06) 19px 20px, transparent 21px 42px),
+    radial-gradient(ellipse at 52% 6%, rgba(215, 239, 232, 0.08), transparent 26%),
+    radial-gradient(ellipse at 20% 78%, rgba(91, 59, 115, 0.24), transparent 28%),
+    var(--bsbt-pager-bg);
+}
+
+#bs-biotracker-settings.theme-eldritch.bs-bt-device::before {
+  content: '';
+  position: absolute;
+  inset: 14px;
+  pointer-events: none;
+  opacity: 0.28;
+  background:
+    radial-gradient(ellipse at 50% 50%, transparent 0 19%, rgba(104, 214, 194, 0.16) 20% 21%, transparent 22%),
+    repeating-radial-gradient(ellipse at 50% 52%, transparent 0 18px, rgba(104, 214, 194, 0.08) 19px 20px, transparent 21px 42px);
+  filter: blur(0.2px);
+  z-index: 0;
+}
+
+#bs-biotracker-settings.theme-eldritch.bs-bt-device::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+  background: url("data:image/svg+xml,%3Csvg viewBox='0 0 100 100' preserveAspectRatio='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpolygon points='8,1.5 26,0 44,1.2 61,0.2 82,2 98,9 100,28 98.2,48 100,69 96,91 82,99 61,97.8 43,100 24,98.4 6,94 0,76 1.8,54 0,33 2.8,12' fill='none' stroke='%2368d6c2' stroke-width='2.25' stroke-linejoin='round' stroke-linecap='round' vector-effect='non-scaling-stroke'/%3E%3Cpolygon points='8,1.5 26,0 44,1.2 61,0.2 82,2 98,9 100,28 98.2,48 100,69 96,91 82,99 61,97.8 43,100 24,98.4 6,94 0,76 1.8,54 0,33 2.8,12' fill='none' stroke='%23b9a88a' stroke-width='.85' stroke-linejoin='round' stroke-linecap='round' vector-effect='non-scaling-stroke' opacity='.78'/%3E%3C/svg%3E") center / 100% 100% no-repeat;
+  filter: drop-shadow(0 0 4px rgba(104, 214, 194, 0.28));
+}
+
+#bs-biotracker-settings.theme-eldritch > :not(.bs-bt-hardware-detail) {
+  position: relative;
+  z-index: 1;
+}
+
+#bs-biotracker-settings.theme-eldritch .bs-bt-brand {
+  color: rgba(215, 239, 232, 0.68);
+  text-shadow: 0 0 10px rgba(104, 214, 194, 0.32);
+}
+
+#bs-biotracker-settings.theme-eldritch .bs-bt-screen {
+  background:
+    radial-gradient(circle at 50% 8%, rgba(104, 214, 194, 0.2), transparent 32%),
+    linear-gradient(rgba(215, 239, 232, 0.05) 1px, transparent 1px),
+    var(--bsbt-lcd-bg);
+  background-size: auto, 100% 4px, auto;
+  border-width: 5px;
+  box-shadow:
+    inset 0 0 30px rgba(7, 11, 10, 0.78),
+    inset 0 0 0 1px rgba(215, 239, 232, 0.14),
+    0 0 20px rgba(104, 214, 194, 0.18);
+  text-shadow: 0 0 8px rgba(104, 214, 194, 0.22);
+}
+
+#bs-biotracker-settings.theme-eldritch .bs-bt-screen-header {
+  border-bottom-color: rgba(104, 214, 194, 0.46);
+}
+
+#bs-biotracker-settings.theme-eldritch .bs-bt-screen::after {
+  background:
+    linear-gradient(rgba(104, 214, 194, 0) 50%, rgba(104, 214, 194, 0.045) 50%);
+  background-size: 100% 4px;
+  opacity: 0.38;
+}
+
+#bs-biotracker-settings.theme-eldritch .bs-bt-menu-card,
+#bs-biotracker-settings.theme-eldritch .bs-bt-size-option,
+#bs-biotracker-settings.theme-eldritch .bs-bt-theme-option,
+#bs-biotracker-settings.theme-eldritch .bs-bt-status-box,
+#bs-biotracker-settings.theme-eldritch .text_pole,
+#bs-biotracker-settings.theme-eldritch select,
+#bs-biotracker-settings.theme-eldritch textarea,
+#bs-biotracker-settings.theme-eldritch input[type='text'],
+#bs-biotracker-settings.theme-eldritch input[type='password'],
+#bs-biotracker-settings.theme-eldritch input[type='number'],
+#bs-biotracker-settings.theme-eldritch .menu_button {
+  border-color: rgba(104, 214, 194, 0.38);
+  background: rgba(7, 11, 10, 0.38);
+  box-shadow:
+    inset 0 0 0 1px rgba(215, 239, 232, 0.05),
+    inset 0 0 18px rgba(91, 59, 115, 0.18);
+}
+
+#bs-biotracker-settings.theme-eldritch .bs-bt-size-option.is-active,
+#bs-biotracker-settings.theme-eldritch .bs-bt-theme-option.is-active {
+  background: rgba(104, 214, 194, 0.2);
+  color: #d7efe8;
+  border-color: rgba(215, 239, 232, 0.54);
+  box-shadow:
+    inset 0 0 18px rgba(104, 214, 194, 0.12),
+    0 0 14px rgba(104, 214, 194, 0.18);
+}
+
+#bs-biotracker-settings.theme-eldritch .bs-bt-home-tile {
+  border: 1px solid rgba(104, 214, 194, 0.28);
+  background:
+    radial-gradient(ellipse at 50% 35%, rgba(215, 239, 232, 0.08), transparent 45%),
+    var(--bsbt-home-tile-bg);
+  box-shadow:
+    0 2px 10px var(--bsbt-home-tile-shadow),
+    inset 0 0 0 1px rgba(215, 239, 232, 0.05),
+    inset 0 0 16px rgba(91, 59, 115, 0.12);
+}
+
+#bs-biotracker-settings.theme-holo .bs-bt-home-tile,
+#bs-biotracker-settings.theme-gothic .bs-bt-home-tile,
+#bs-biotracker-settings.theme-steampunk .bs-bt-home-tile,
+#bs-biotracker-settings.theme-eldritch .bs-bt-home-tile {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+#bs-biotracker-settings.theme-holo .bs-bt-home-tile:hover,
+#bs-biotracker-settings.theme-holo .bs-bt-home-tile:focus-visible,
+#bs-biotracker-settings.theme-gothic .bs-bt-home-tile:hover,
+#bs-biotracker-settings.theme-gothic .bs-bt-home-tile:focus-visible,
+#bs-biotracker-settings.theme-steampunk .bs-bt-home-tile:hover,
+#bs-biotracker-settings.theme-steampunk .bs-bt-home-tile:focus-visible,
+#bs-biotracker-settings.theme-eldritch .bs-bt-home-tile:hover,
+#bs-biotracker-settings.theme-eldritch .bs-bt-home-tile:focus-visible {
+  background: transparent;
+  box-shadow: none;
+}
+
+#bs-biotracker-settings.theme-eldritch .bs-bt-physical-button,
+#bs-biotracker-settings.theme-eldritch .bs-bt-physical-button-off {
+  border: 1px solid rgba(185, 168, 138, 0.3);
+  box-shadow:
+    0 6px 0 rgba(3, 7, 6, 0.76),
+    inset 0 1px 0 rgba(215, 239, 232, 0.1),
+    inset 0 0 18px rgba(104, 214, 194, 0.1);
+}
+
+.bs-bt-floating-sphere.theme-eldritch {
+  animation: bs-bt-eldritch-breathe 7s ease-in-out infinite;
+  border: 2px solid rgba(104, 214, 194, 0.4);
+  box-shadow:
+    0 8px 16px rgba(3, 7, 6, 0.58),
+    0 0 20px rgba(104, 214, 194, 0.24),
+    inset 0 0 18px rgba(91, 59, 115, 0.26);
+}
+
+@keyframes bs-bt-eldritch-breathe {
+  0%, 100% {
+    filter:
+      saturate(1)
+      brightness(1);
+  }
+  50% {
+    filter:
+      saturate(1.16)
+      brightness(1.06);
+  }
+}
+
+#bs-biotracker-settings.theme-ink.bs-bt-device {
+  padding: 42px 28px 36px;
+  background:
+    radial-gradient(ellipse at 26% 22%, rgba(31, 37, 34, 0.08), transparent 30%),
+    radial-gradient(ellipse at 76% 74%, rgba(164, 56, 47, 0.08), transparent 24%),
+    var(--bsbt-pager-bg);
+  overflow: visible;
+}
+
+#bs-biotracker-settings.theme-ink.bs-bt-device::before,
+#bs-biotracker-settings.theme-ink.bs-bt-device::after {
+  content: '';
+  position: absolute;
+  left: -18px;
+  right: -18px;
+  height: 24px;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 20px 50%, #4b3324 0 9px, transparent 10px),
+    radial-gradient(circle at calc(100% - 20px) 50%, #4b3324 0 9px, transparent 10px),
+    linear-gradient(90deg, #4b3324, #7a5638 16%, #9f7650 50%, #7a5638 84%, #4b3324);
+  border-radius: 999px;
+  box-shadow:
+    0 2px 0 rgba(31, 37, 34, 0.28),
+    inset 0 1px 0 rgba(243, 234, 216, 0.18);
+  z-index: 0;
+}
+
+#bs-biotracker-settings.theme-ink.bs-bt-device::before {
+  top: 8px;
+}
+
+#bs-biotracker-settings.theme-ink.bs-bt-device::after {
+  bottom: 8px;
+}
+
+#bs-biotracker-settings.theme-ink > :not(.bs-bt-hardware-detail) {
+  position: relative;
+  z-index: 1;
+}
+
+#bs-biotracker-settings.theme-ink .bs-bt-brand {
+  color: rgba(31, 37, 34, 0.42);
+  letter-spacing: 0.32em;
+  text-shadow: none;
+}
+
+#bs-biotracker-settings.theme-ink .bs-bt-screen {
+  background:
+    radial-gradient(ellipse at 20% 10%, rgba(31, 37, 34, 0.08), transparent 34%),
+    radial-gradient(ellipse at 80% 88%, rgba(164, 56, 47, 0.06), transparent 28%),
+    linear-gradient(rgba(31, 37, 34, 0.035) 1px, transparent 1px),
+    var(--bsbt-lcd-bg);
+  background-size: auto, auto, 100% 8px, auto;
+  border: 2px solid rgba(31, 37, 34, 0.28);
+  border-radius: 2px;
+  box-shadow:
+    inset 0 0 32px rgba(75, 81, 76, 0.08),
+    0 0 0 1px rgba(243, 234, 216, 0.64);
+}
+
+#bs-biotracker-settings.theme-ink .bs-bt-screen-header {
+  border-bottom: 1px solid rgba(31, 37, 34, 0.36);
+}
+
+#bs-biotracker-settings.theme-ink .bs-bt-screen::after {
+  background: none;
+}
+
+#bs-biotracker-settings.theme-ink .bs-bt-menu-card,
+#bs-biotracker-settings.theme-ink .bs-bt-size-option,
+#bs-biotracker-settings.theme-ink .bs-bt-theme-option,
+#bs-biotracker-settings.theme-ink .bs-bt-status-box,
+#bs-biotracker-settings.theme-ink .text_pole,
+#bs-biotracker-settings.theme-ink select,
+#bs-biotracker-settings.theme-ink textarea,
+#bs-biotracker-settings.theme-ink input[type='text'],
+#bs-biotracker-settings.theme-ink input[type='password'],
+#bs-biotracker-settings.theme-ink input[type='number'],
+#bs-biotracker-settings.theme-ink .menu_button {
+  border-color: rgba(31, 37, 34, 0.32);
+  background: rgba(243, 234, 216, 0.44);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+#bs-biotracker-settings.theme-ink .bs-bt-size-option.is-active,
+#bs-biotracker-settings.theme-ink .bs-bt-theme-option.is-active {
+  background: rgba(164, 56, 47, 0.18);
+  color: #1f2522;
+  border-color: rgba(164, 56, 47, 0.5);
+}
+
+#bs-biotracker-settings.theme-ink .bs-bt-home-tile {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+#bs-biotracker-settings.theme-ink .bs-bt-home-tile:hover,
+#bs-biotracker-settings.theme-ink .bs-bt-home-tile:focus-visible {
+  background: transparent;
+  box-shadow: none;
+}
+
+#bs-biotracker-settings.theme-ink .bs-bt-physical-buttons {
+  padding-top: 18px;
+}
+
+#bs-biotracker-settings.theme-ink .bs-bt-physical-button,
+#bs-biotracker-settings.theme-ink .bs-bt-physical-button-off {
+  border: 1px solid rgba(164, 56, 47, 0.58);
+  border-radius: 3px 2px 4px 2px;
+  background:
+    radial-gradient(ellipse at 12% 18%, rgba(164, 56, 47, 0.26), transparent 24%),
+    radial-gradient(ellipse at 92% 76%, rgba(164, 56, 47, 0.22), transparent 22%),
+    linear-gradient(90deg, rgba(164, 56, 47, 0.2), transparent 8% 92%, rgba(164, 56, 47, 0.18)),
+    linear-gradient(180deg, rgba(164, 56, 47, 0.2), transparent 10% 88%, rgba(164, 56, 47, 0.16)),
+    rgba(164, 56, 47, 0.08);
+  color: #a4382f;
+  box-shadow:
+    inset 0 0 0 1px rgba(164, 56, 47, 0.18),
+    inset 0 0 12px rgba(164, 56, 47, 0.08),
+    0 0 0 1px rgba(164, 56, 47, 0.12);
+}
+
+#bs-biotracker-settings.theme-ink .bs-bt-physical-button:active {
+  transform: none;
+  box-shadow: none;
+}
+
+#bs-biotracker-settings.theme-ink .bs-bt-power-off-overlay {
+  background: rgba(223, 209, 182, 0.96);
+}
+
+.bs-bt-floating-sphere.theme-ink {
+  border: 2px solid rgba(31, 37, 34, 0.34);
+  background:
+    #f3ead8;
+  color: #a4382f;
+  box-shadow:
+    0 6px 14px rgba(31, 37, 34, 0.22),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.24);
+}
+
+#bs-biotracker-settings.theme-constructivism.bs-bt-device {
+  background:
+    linear-gradient(135deg, rgba(182, 37, 37, 0.86) 0 18%, transparent 18%),
+    linear-gradient(315deg, rgba(20, 20, 20, 0.9) 0 16%, transparent 16%),
+    repeating-linear-gradient(90deg, rgba(236, 227, 207, 0.06) 0 1px, transparent 1px 9px),
+    var(--bsbt-pager-bg);
+}
+
+#bs-biotracker-settings.theme-constructivism.bs-bt-device::before {
+  content: '';
+  position: absolute;
+  inset: 18px;
+  pointer-events: none;
+  border: 2px solid rgba(20, 20, 20, 0.72);
+  background:
+    linear-gradient(135deg, transparent 0 47%, rgba(182, 37, 37, 0.72) 47% 53%, transparent 53%),
+    linear-gradient(315deg, transparent 0 46%, rgba(20, 20, 20, 0.64) 46% 54%, transparent 54%);
+  box-shadow:
+    inset 0 0 0 1px rgba(236, 227, 207, 0.14),
+    0 0 0 1px rgba(236, 227, 207, 0.08);
+  z-index: 0;
+}
+
+#bs-biotracker-settings.theme-constructivism > :not(.bs-bt-hardware-detail) {
+  position: relative;
+  z-index: 1;
+}
+
+#bs-biotracker-settings.theme-constructivism .bs-bt-brand {
+  color: rgba(236, 227, 207, 0.72);
+  letter-spacing: 0.26em;
+  text-shadow: none;
+}
+
+#bs-biotracker-settings.theme-constructivism .bs-bt-screen {
+  background:
+    linear-gradient(rgba(20, 20, 20, 0.04) 1px, transparent 1px),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.2), transparent 35%),
+    var(--bsbt-lcd-bg);
+  background-size: 100% 6px, auto, auto;
+  border-width: 4px;
+  border-radius: 0;
+  box-shadow:
+    7px 7px 0 rgba(20, 20, 20, 0.58),
+    inset 0 0 0 1px rgba(236, 227, 207, 0.28),
+    inset 0 0 22px rgba(20, 20, 20, 0.1);
+}
+
+#bs-biotracker-settings.theme-constructivism .bs-bt-screen-shell {
+  border-radius: 0;
+}
+
+#bs-biotracker-settings.theme-constructivism .bs-bt-screen-header {
+  border-bottom-color: #141414;
+}
+
+#bs-biotracker-settings.theme-constructivism .bs-bt-screen::after {
+  background:
+    repeating-linear-gradient(90deg, transparent 0 8px, rgba(20, 20, 20, 0.06) 8px 9px),
+    repeating-linear-gradient(0deg, transparent 0 12px, rgba(182, 37, 37, 0.04) 12px 13px);
+  opacity: 0.5;
+}
+
+#bs-biotracker-settings.theme-constructivism .bs-bt-menu-card,
+#bs-biotracker-settings.theme-constructivism .bs-bt-size-option,
+#bs-biotracker-settings.theme-constructivism .bs-bt-theme-option,
+#bs-biotracker-settings.theme-constructivism .bs-bt-status-box,
+#bs-biotracker-settings.theme-constructivism .text_pole,
+#bs-biotracker-settings.theme-constructivism select,
+#bs-biotracker-settings.theme-constructivism textarea,
+#bs-biotracker-settings.theme-constructivism input[type='text'],
+#bs-biotracker-settings.theme-constructivism input[type='password'],
+#bs-biotracker-settings.theme-constructivism input[type='number'],
+#bs-biotracker-settings.theme-constructivism .menu_button {
+  border: 2px solid #141414;
+  border-radius: 0;
+  background:
+    linear-gradient(135deg, rgba(182, 37, 37, 0.08), transparent 34%),
+    rgba(236, 227, 207, 0.52);
+  box-shadow: none;
+}
+
+#bs-biotracker-settings.theme-constructivism .bs-bt-size-option.is-active,
+#bs-biotracker-settings.theme-constructivism .bs-bt-theme-option.is-active {
+  background:
+    linear-gradient(135deg, #b62525 0 58%, #141414 58% 100%);
+  color: #ece3cf;
+  border-color: #141414;
+}
+
+#bs-biotracker-settings.theme-constructivism .bs-bt-home-tile {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+#bs-biotracker-settings.theme-constructivism .bs-bt-home-tile:hover,
+#bs-biotracker-settings.theme-constructivism .bs-bt-home-tile:focus-visible {
+  background: transparent;
+  box-shadow: none;
+}
+
+#bs-biotracker-settings.theme-constructivism .bs-bt-physical-button,
+#bs-biotracker-settings.theme-constructivism .bs-bt-physical-button-off {
+  border: 3px solid #141414;
+  border-radius: 0;
+  background:
+    linear-gradient(135deg, #b62525 0 52%, #141414 52% 100%);
+  color: #ece3cf;
+  box-shadow:
+    5px 5px 0 rgba(20, 20, 20, 0.72),
+    inset 0 0 0 1px rgba(236, 227, 207, 0.18);
+}
+
+#bs-biotracker-settings.theme-constructivism .bs-bt-physical-button:active {
+  transform: translate(3px, 3px);
+  box-shadow: 2px 2px 0 rgba(20, 20, 20, 0.72);
+}
+
+#bs-biotracker-settings.theme-constructivism .bs-bt-power-off-overlay {
+  background: rgba(20, 20, 20, 0.96);
+}
+
+.bs-bt-floating-sphere.theme-constructivism {
+  border: 3px solid #141414;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at 34% 28%, rgba(236, 227, 207, 0.26), transparent 28%),
+    linear-gradient(135deg, #b62525 0 52%, #141414 52% 100%);
+  color: #ece3cf;
+  box-shadow:
+    0 8px 16px rgba(20, 20, 20, 0.46),
+    inset 0 0 0 2px rgba(236, 227, 207, 0.14);
+}
+
+#bs-biotracker-settings .bs-bt-power-off-overlay {
+  position: absolute;
+  inset: 0;
+  background: var(--bsbt-off-bg);
+  color: var(--bsbt-off-text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-family: var(--bsbt-font-main);
+  font-size: 1.5rem;
+  letter-spacing: 0.12em;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  z-index: 20;
+  text-shadow: 0 0 12px currentColor;
+}
+
+#bs-biotracker-settings .bs-bt-power-off-overlay.is-active {
+  opacity: 1;
+}
+
+@media (max-width: 520px) {
+  .bs-bt-modal__dialog {
+    width: calc(100vw - 16px);
+    max-height: calc(100vh - 16px);
+  }
+
+  #bs-biotracker-settings.bs-bt-device {
+    width: 100%;
+    height: min(var(--bsbt-device-height), calc(100vh - 16px));
+    padding: 18px;
+  }
+}
+
+#bs-biotracker-settings .bs-bt-status-icons {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  position: relative;
+  cursor: help;
+  outline: none;
+}
+
+#bs-biotracker-settings .bs-bt-status-icons::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 10px);
+  right: 0;
+  width: max-content;
+  max-width: min(250px, calc(100vw - 96px));
+  padding: 7px 9px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  background: var(--bsbt-lcd-bg);
+  color: var(--bsbt-lcd-text);
+  box-shadow: 3px 3px 0 color-mix(in srgb, currentColor 32%, transparent);
+  font-family: var(--bsbt-font-main);
+  font-size: max(11px, calc(var(--bsbt-header-font-size) * 0.78));
+  font-weight: 400;
+  line-height: 1.35;
+  letter-spacing: normal;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-3px);
+  transition: opacity 120ms ease, transform 120ms ease, visibility 120ms ease;
+  pointer-events: none;
+}
+
+#bs-biotracker-settings .bs-bt-status-icons:hover::after,
+#bs-biotracker-settings .bs-bt-status-icons:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+#bs-biotracker-settings .bs-bt-status-icons:focus-visible {
+  filter: drop-shadow(0 0 2px currentColor);
+}
+
+#bs-biotracker-settings .bs-bt-status-icons[data-battery-state='critical'] {
+  color: #7d2c2c;
+}
+
+#bs-biotracker-settings.theme-wasteland .bs-bt-status-icons[data-battery-state='critical'] {
+  color: #ff7c7c;
+}
+
+#bs-biotracker-settings .bs-bt-battery-icon {
+  width: 30px;
+  height: 14px;
+  display: block;
+}
+
+
+
+
+
+
+
+#bs-biotracker-settings #bs-bt-view-track,
+#bs-biotracker-settings #bs-bt-view-track * {
+  min-width: 0;
+}
+
+#bs-biotracker-settings #bs-bt-view-full-state,
+#bs-biotracker-settings #bs-bt-view-full-state * {
+  min-width: 0;
+}
+
+#bs-biotracker-settings #bs-bt-view-track {
+  overflow-x: hidden;
+}
+
+#bs-biotracker-settings #bs-bt-view-full-state {
+  overflow-x: hidden;
+}
+
+#bs-biotracker-settings #bs-bt-view-track .settings_section {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+#bs-biotracker-settings #bs-bt-view-full-state .settings_section {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+#bs-biotracker-settings .bs-bt-action-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
+#bs-biotracker-settings .bs-bt-action-row[hidden] {
+  display: none !important;
+}
+
+#bs-biotracker-settings #bs-bt-view-track .menu_button,
+#bs-biotracker-settings #bs-bt-view-track .text_pole,
+#bs-biotracker-settings #bs-bt-view-track textarea,
+#bs-biotracker-settings #bs-bt-view-track select,
+#bs-biotracker-settings #bs-bt-view-track input {
+  max-width: 100%;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-list {
+  display: grid;
+  gap: 10px;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-character-card,
+#bs-biotracker-settings .bs-bt-wardrobe-row {
+  width: 100%;
+  border: 1px solid color-mix(in srgb, var(--bsbt-lcd-text) 18%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bsbt-lcd-bg) 76%, transparent);
+  color: var(--bsbt-lcd-text);
+  text-align: left;
+  cursor: pointer;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-character-card {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-character-card:hover,
+#bs-biotracker-settings .bs-bt-wardrobe-row:hover {
+  border-color: color-mix(in srgb, var(--bsbt-lcd-text) 36%, transparent);
+  background: color-mix(in srgb, var(--bsbt-lcd-text) 7%, var(--bsbt-lcd-bg));
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-row.is-current {
+  border-color: color-mix(in srgb, var(--bsbt-lcd-text) 34%, transparent);
+  box-shadow: inset 3px 0 0 color-mix(in srgb, var(--bsbt-lcd-text) 62%, transparent);
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-character-head,
+#bs-biotracker-settings .bs-bt-wardrobe-character-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-character {
+  display: grid;
+  gap: 10px;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-page-title {
+  font-size: 1.15em;
+  font-weight: 800;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-current,
+#bs-biotracker-settings .bs-bt-wardrobe-group {
+  border-top: 1px solid color-mix(in srgb, var(--bsbt-lcd-text) 18%, transparent);
+  padding-top: 10px;
+  display: grid;
+  gap: 7px;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-group-title {
+  font-weight: 800;
+  color: color-mix(in srgb, var(--bsbt-lcd-text) 88%, transparent);
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-current-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-pressure-tag {
+  border: 1px solid color-mix(in srgb, var(--bsbt-lcd-text) 24%, transparent);
+  border-radius: 999px;
+  padding: 2px 7px;
+  font-size: 0.78em;
+  color: color-mix(in srgb, var(--bsbt-lcd-text) 78%, transparent);
+  white-space: nowrap;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-summary {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  line-height: 1.35;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-summary b {
+  flex: 0 0 auto;
+  min-width: 3em;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-row {
+  display: block;
+  padding: 8px 9px;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-row-wrap {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 26px;
+  align-items: center;
+  gap: 8px;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-row-delete {
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  margin: 0;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--bsbt-lcd-text) 38%, transparent);
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 20px;
+  text-align: center;
+  cursor: pointer;
+  opacity: 0.72;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-row-delete:hover {
+  opacity: 1;
+  border-color: currentColor;
+}
+
+#bs-biotracker-settings #bs-bt-wardrobe-add-page[hidden],
+#bs-biotracker-settings #bs-bt-wardrobe-characters-page[hidden],
+#bs-biotracker-settings [data-wardrobe-type-field][hidden] {
+  display: none;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-tabs {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-outfit-editor,
+#bs-biotracker-settings .bs-bt-wardrobe-add-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 6px;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-outfit-editor label,
+#bs-biotracker-settings .bs-bt-wardrobe-add-form label {
+  display: grid;
+  gap: 4px;
+  font-size: 0.88em;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-accessory-checks,
+#bs-biotracker-settings .bs-bt-wardrobe-editor-wide,
+#bs-biotracker-settings .bs-bt-wardrobe-outfit-editor > .menu_button {
+  grid-column: 1 / -1;
+}
+
+#bs-biotracker-settings #bs-bt-wardrobe-item-note {
+  min-height: 90px;
+  resize: vertical;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-accessory-checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+@media (max-width: 560px) {
+  #bs-biotracker-settings .bs-bt-skill-history li,
+  #bs-biotracker-settings .bs-bt-wardrobe-outfit-editor,
+  #bs-biotracker-settings .bs-bt-wardrobe-add-form {
+    grid-template-columns: 1fr;
+  }
+
+  #bs-biotracker-settings .bs-bt-wardrobe-accessory-checks,
+  #bs-biotracker-settings .bs-bt-wardrobe-editor-wide,
+  #bs-biotracker-settings .bs-bt-wardrobe-outfit-editor > .menu_button {
+    grid-column: auto;
+  }
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-row-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-row-title {
+  font-weight: 750;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-row-note {
+  color: color-mix(in srgb, var(--bsbt-lcd-text) 70%, transparent);
+  font-size: 0.86em;
+  line-height: 1.45;
+  white-space: normal;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-metrics,
+.bs-bt-wardrobe-detail-bubble .bs-bt-wardrobe-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  font-size: 0.9em;
+}
+
+#bs-biotracker-settings .bs-bt-wardrobe-metric,
+.bs-bt-wardrobe-detail-bubble .bs-bt-wardrobe-metric {
+  border: 1px solid color-mix(in srgb, var(--bsbt-lcd-text) 14%, transparent);
+  border-radius: 6px;
+  padding: 4px 5px;
+  min-width: 0;
+  display: flex;
+  justify-content: center;
+  gap: 3px;
+  white-space: nowrap;
+}
+
+.bs-bt-wardrobe-detail-bubble {
+  position: fixed;
+  z-index: 10050;
+  width: min(320px, calc(100vw - 20px));
+  max-height: min(420px, calc(100vh - 20px));
+  overflow: auto;
+  border: 1px solid color-mix(in srgb, var(--bsbt-lcd-text) 28%, transparent);
+  border-radius: 8px;
+  background: var(--bsbt-lcd-bg);
+  color: var(--bsbt-lcd-text);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.24);
+  padding: 8px;
+  display: grid;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.bs-bt-wardrobe-detail-title {
+  font-weight: 850;
+  font-size: 1.02em;
+}
+
+.bs-bt-wardrobe-detail-subtitle,
+.bs-bt-wardrobe-detail-note,
+.bs-bt-wardrobe-detail-hint {
+  color: color-mix(in srgb, var(--bsbt-lcd-text) 72%, transparent);
+  line-height: 1.45;
+}
+
+.bs-bt-wardrobe-detail-hint {
+  font-size: 0.86em;
+}
+#bs-biotracker-settings .bs-bt-inline-grid {
+  display: grid;
+  gap: 8px;
+}
+
+#bs-biotracker-settings .bs-bt-inline-grid--two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+#bs-biotracker-settings .bs-bt-mini-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+#bs-biotracker-settings .bs-bt-mini-field span {
+  font-size: 0.88em;
+  color: color-mix(in srgb, var(--bsbt-lcd-text) 78%, transparent);
+}
+
+
+#bs-biotracker-settings .bs-bt-track-description-list--wardrobe {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(0, 0, 0, 0.12);
+}
+
+
+#bs-biotracker-settings .bs-bt-track-section--wardrobe-description .bs-bt-track-meta-label {
+  font-weight: 700;
+}

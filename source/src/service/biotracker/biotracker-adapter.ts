@@ -113,6 +113,56 @@ function installBiotrackerConsoleBridge(): void {
   console.log = bridge('debug')(console.log.bind(console));
 }
 
+/**
+ * 挂 biotracker 前端 iframe 桥（window.__ACU_BIOTRACKER_BRIDGE__）。
+ * biotracker-ui 弹窗（同源 iframe）经此拿到数据库适配层 ctx / 宿主全局。
+ */
+let frontendBridgeInstalled = false;
+function installBiotrackerFrontendBridge(): void {
+  if (frontendBridgeInstalled) return;
+  frontendBridgeInstalled = true;
+  try {
+    const bridge = {
+      createCtx: createBiotrackerCtx_ACU,
+      getRequestHeaders: () => {
+        try {
+          const host = getHostContext() || (globalThis as any).SillyTavern?.getContext?.() || null;
+          return typeof host?.getRequestHeaders === 'function' ? host.getRequestHeaders() : {};
+        } catch (e) {
+          return {};
+        }
+      },
+    };
+    (globalThis as any).__ACU_BIOTRACKER_BRIDGE__ = bridge;
+  } catch (e) {
+    logWarn_ACU('[生理追踪] 前端桥安装失败:', e);
+  }
+}
+
+/**
+ * 创建 biotracker 弹窗（同源 iframe 加载 biotracker-ui/index.html）。
+ * 开启生理追踪时调用；弹窗不可关闭（悬浮常驻）。
+ */
+let popupCreated = false;
+export function ensureBiotrackerPopup_ACU(): void {
+  try {
+    const doc = (globalThis as any).topLevelWindow_ACU?.document || document;
+    if (popupCreated || doc.getElementById('bs-biotracker-popup-frame')) return;
+    popupCreated = true;
+    const frame = doc.createElement('iframe');
+    frame.id = 'bs-biotracker-popup-frame';
+    frame.setAttribute('aria-label', '生理追踪');
+    // 打包后资源位于 dist/extension/assets/biotracker-ui/index.html
+    frame.src = new URL('./assets/biotracker-ui/index.html', import.meta.url).href;
+    frame.style.cssText = 'position:fixed;top:0;right:0;z-index:2147483000;width:420px;height:100vh;border:none;background:transparent;';
+    doc.body.appendChild(frame);
+    logDebug_ACU('[生理追踪] 悬浮窗已创建');
+  } catch (e) {
+    logWarn_ACU('[生理追踪] 悬浮窗创建失败:', e);
+    popupCreated = false;
+  }
+}
+
 export interface BiotrackerCtx_ACU {
   extensionSettings: Record<string, any>;
   saveSettingsDebounced: () => void;
@@ -208,6 +258,8 @@ export function initBiotracker_ACU(): void {
   initialized = true;
   // 桥接 biotracker vendor 日志（console.warn/error）到数据库日志系统（高级工具日志查看器可见）
   installBiotrackerConsoleBridge();
+  // 挂 iframe 前端桥：弹窗（biotracker-ui）经同源 iframe 引用数据库适配层 ctx
+  installBiotrackerFrontendBridge();
   try {
     const ctx = createBiotrackerCtx_ACU();
     const settings = getBiotrackerSettings(ctx);
@@ -245,6 +297,8 @@ export function initBiotracker_ACU(): void {
       });
     }
     logDebug_ACU('[生理追踪] 初始化完成，已注册角色数:', Object.keys(getChatState(ctx, settings).characters || {}).length);
+    // 生理追踪恒开启 → 默认出现悬浮窗（biotracker 前端弹窗）
+    ensureBiotrackerPopup_ACU();
   } catch (e) {
     logWarn_ACU('[生理追踪] 初始化失败（宿主未就绪，等待重试）:', e);
   }
