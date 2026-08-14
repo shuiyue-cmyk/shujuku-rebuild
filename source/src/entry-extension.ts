@@ -59,8 +59,6 @@ import './service/optimization/content-optimization';
 import './presentation/triggers/update-process';
 import './presentation/bootstrap/init';
 import './presentation/bootstrap/api-registry';
-import './presentation/window/window-system';
-import './presentation/window/window-styles';
 import './presentation/theme/toast';
 import './presentation/components/table-selector';
 import './presentation/components/plot-editors';
