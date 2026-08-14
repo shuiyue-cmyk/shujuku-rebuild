@@ -107,37 +107,6 @@
           </tbody>
         </table>
       </AcuPanel>
-
-      <!-- 数据库表格查看（只读） -->
-      <AcuPanel
-        id="biotracker-table-panel"
-        :title="copy.tableTitle"
-        :description="copy.tableDescription"
-      >
-        <AcuFormRow label="选择表格">
-          <AcuSelect
-            :options="tableOptions"
-            :model-value="selectedTableKey"
-            placeholder="选择要查看的表格"
-            @update:model-value="selectTable"
-          />
-        </AcuFormRow>
-        <div v-if="tableData.headers.length > 0" class="acu-v2-biotracker-page__table-wrap">
-          <table class="acu-v2-biotracker-page__table">
-            <thead>
-              <tr>
-                <th v-for="h in tableData.headers" :key="h">{{ h }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(row, i) in tableData.rows" :key="i">
-                <td v-for="(cell, j) in row" :key="j">{{ cell }}</td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <p v-else class="acu-v2-biotracker-page__empty">暂无表格数据。</p>
-      </AcuPanel>
     </div>
   </section>
 </template>
@@ -161,8 +130,6 @@ const copy = {
   autoDescription: '开启后由配置的模型读取正文，自动发现有价值的角色并注册（种族交 AI 判断）。',
   dataTitle: '已注册角色',
   dataDescription: '当前聊天的生理追踪数据（只读）。完整数据由异步追踪持续更新。',
-  tableTitle: '数据库表格',
-  tableDescription: '查看数据库保存的表格内容（只读，每 3 秒自动刷新）。',
 };
 
 const {
@@ -195,10 +162,6 @@ const {
   characters,
   status,
   statusIsError,
-  tableOptions,
-  selectedTableKey,
-  tableData,
-  selectTable,
 } = useBiotrackerPage();
 
 const panelNavItems = computed(() => [
@@ -206,7 +169,6 @@ const panelNavItems = computed(() => [
   { id: 'biotracker-register-panel', label: copy.registerTitle },
   { id: 'biotracker-auto-panel', label: copy.autoTitle },
   { id: 'biotracker-data-panel', label: copy.dataTitle },
-  { id: 'biotracker-table-panel', label: copy.tableTitle },
 ]);
 </script>
 

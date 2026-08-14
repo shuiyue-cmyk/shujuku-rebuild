@@ -1,4 +1,4 @@
-import { fetchModelList } from './scripts/api.js';
+import { fetchModelList } from '../vendor/api.js';
 import {
   applyInitialSkillTalentConfig,
   applyRegistryBreedingInference,
@@ -10,7 +10,7 @@ import {
   runRegistryDiaryInference,
   runRegistrySkillInference,
   runRegistryWardrobeInference,
-} from './scripts/registry.js';
+} from '../vendor/registry.js';
 import {
   AMORPHOUS_RACES,
   DERIVED_TYPE_FLUX_PROFILES,
@@ -33,7 +33,7 @@ import {
   OVIPAROUS_RACES,
   OVOVIVIPAROUS_RACES,
   VIVIPAROUS_RACES,
-} from './scripts/race_config.js';
+} from '../vendor/race_config.js';
 import {
   FIRST_STAGE_NATURAL_BIRTH_EXPERIENCE,
   LABOR_STAGES,
@@ -43,12 +43,12 @@ import {
   MENSTRUAL_STAGE_DAYS,
   PREGNANCY_STAGE_DAYS,
   PREGNANCY_STAGES,
-} from './scripts/stage_config.js';
-import { buildMainFlowPrompt, resetPoller, runTracker } from './scripts/tracker.js';
-import { applyToolCall } from './scripts/tools.js';
-import { getEmbryoTypeReferenceText } from './scripts/embryo_prompt_context.js';
-import { buildSingleRacePhysiologyText } from './scripts/race_prompt_context.js';
-import { appendSkillHistory, getTalentLabel, normalizeTalentList, removeSkillDefinition, requiredExp, resolveSkillDefinition, SKILL_MAX_LEVEL, TALENT_MAX_LEVEL } from './scripts/skill_config.js';
+} from '../vendor/stage_config.js';
+import { buildMainFlowPrompt, resetPoller, runTracker } from '../vendor/tracker.js';
+import { applyToolCall } from '../vendor/tools.js';
+import { getEmbryoTypeReferenceText } from '../vendor/embryo_prompt_context.js';
+import { buildSingleRacePhysiologyText } from '../vendor/race_prompt_context.js';
+import { appendSkillHistory, getTalentLabel, normalizeTalentList, removeSkillDefinition, requiredExp, resolveSkillDefinition, SKILL_MAX_LEVEL, TALENT_MAX_LEVEL } from '../vendor/skill_config.js';
 import {
   canLoadHostWorldInfo,
   getHostChatCompletionSettings,
@@ -62,7 +62,7 @@ import {
   loadHostWorldInfo,
   registerHostExtensionMenuItem,
   replaceHostEventSubscription,
-} from './scripts/host.js';
+} from '../vendor/host.js';
 import {
   createEmptyChatState,
   DEFAULT_SYSTEM_PROMPT,
@@ -91,7 +91,7 @@ import {
   saveSettings,
   THEME_CONFIG,
   worldbookSelectionMatches,
-} from './scripts/state.js';
+} from '../vendor/state.js';
 
 const PANEL_ID = 'bs-biotracker-settings';
 const MODAL_ID = 'bs-biotracker-modal';
@@ -3849,8 +3849,7 @@ function toggleSelectedTrackPresence(ctx) {
   saveSettings(ctx);
   renderStatusPanel(ctx);
   renderFullStatePage(ctx);
-  updateMainFlowPrompt(ctx);
-  resetPoller(ctx, trackerDeps);
+  // 纯渲染面板不重启轮询：追踪核心由数据库适配层单实例驱动（resetPoller 用全局 key，面板侧调用会抢走适配层轮询）
   globalThis.toastr?.success?.(`[BS BioTracker] ${selectedTrackName} 已${nextValue ? '标记为在场' : '标记为离场'}`);
 }
 
@@ -5217,7 +5216,7 @@ function renderFullStatePage(ctx) {
 function updateClock(settings) {
   const timeEl = document.getElementById('bs-bt-time');
   if (!timeEl) return;
-  const ctx = getContextSafe();
+  const ctx = resolvePanelCtx();
   if (!ctx) return;
   const currentSettings = settings || getSettings(ctx);
   const chatState = getChatState(ctx, currentSettings);
@@ -6230,10 +6229,25 @@ function toggleModal(ctx) {
   modal.classList.contains('is-open') ? closeModal() : openModal(ctx);
 }
 
+// 顶层注入 biotracker 前端样式（bundle 相对路径：./assets/biotracker-ui/style.css）
+function ensurePanelStyles() {
+  try {
+    const styleId = 'bs-bt-panel-style';
+    if (document.getElementById(styleId)) return;
+    const link = document.createElement('link');
+    link.id = styleId;
+    link.rel = 'stylesheet';
+    link.href = new URL('./assets/biotracker-ui/style.css', import.meta.url).href;
+    (document.head || document.documentElement).appendChild(link);
+  } catch (e) {
+    console.warn('[BS BioTracker] style inject failed', e);
+  }
+}
+
 async function ensureModal(ctx) {
   let modal = document.getElementById(MODAL_ID);
   if (modal) return modal;
-  const settingsUrl = new URL('./settings.html', import.meta.url);
+  const settingsUrl = new URL('./assets/biotracker-ui/settings.html', import.meta.url);
   const html = await fetch(settingsUrl).then((response) => response.text());
   modal = document.createElement('div');
   modal.id = MODAL_ID;
@@ -6968,8 +6982,8 @@ async function ensureModal(ctx) {
       button.disabled = true;
       button.textContent = '分析请求发送中...';
       globalThis.toastr?.info?.('[BS BioTracker] 开始手动发送分析请求...');
-      // 追踪核心由数据库适配层单实例驱动：仅桥接触发，不在 iframe 内跑第二实例
-      const bridge = window.parent.__ACU_BIOTRACKER_BRIDGE__;
+      // 追踪核心由数据库适配层单实例驱动：仅桥接触发，不在面板内跑第二实例
+      const bridge = globalThis.__ACU_BIOTRACKER_BRIDGE__;
       const result = bridge?.runTrackerNow ? await bridge.runTrackerNow() : { skipped: true, reason: 'no_bridge' };
       if (result?.skipped && result.reason === 'already_running') {
         globalThis.toastr?.info?.('[BS BioTracker] 已有一轮追踪正在执行，本次未重复发送');
@@ -7354,7 +7368,7 @@ async function ensureChatStateHydrated(ctx) {
 // 数据库表格视图（只读）：数据来自数据库适配层桥（顶层 currentJsonTableData_ACU）
 function renderTablePage(ctx) {
   try {
-    const bridge = window.parent.__ACU_BIOTRACKER_BRIDGE__;
+    const bridge = globalThis.__ACU_BIOTRACKER_BRIDGE__;
     const tables = bridge?.getTables ? bridge.getTables() : {};
     const select = document.getElementById('bs-bt-table-select');
     if (!select) return;
@@ -7402,16 +7416,37 @@ function renderTablePage(ctx) {
   }
 }
 
+// 顶层 DOM 渲染场景：面板与适配层同 bundle 同 window。
+// ctx 必须取适配层桥（extensionSettings 指向 settings_ACU.bs_biotracker），
+// 否则 getContextSafe() 拿到 ST 真实 ctx，其 extensionSettings 是 ST 自己的命名空间，面板会渲染空数据。
+function resolvePanelCtx() {
+  const bridge = globalThis.__ACU_BIOTRACKER_BRIDGE__;
+  if (bridge && typeof bridge.createCtx === 'function') {
+    try {
+      return bridge.createCtx();
+    } catch (e) {
+      console.warn('[BS BioTracker] 桥 ctx 创建失败，回退宿主 ctx', e);
+    }
+  }
+  return getContextSafe();
+}
+
 async function bootstrap() {
-  const ctx = getContextSafe();
-  if (!ctx) return;
+  // 顶层 DOM 场景必须等适配层桥挂好：桥未装就返回，交给 scheduleBootstrapFallback 重试；
+  // 否则回退 ST 真实 ctx 会渲染空数据且 BOOTSTRAP_RUNTIME_KEY 永久置位不再重试。
+  const bridge = globalThis.__ACU_BIOTRACKER_BRIDGE__;
+  if (!bridge || typeof bridge.createCtx !== 'function') return;
   if (globalThis[BOOTSTRAP_RUNTIME_KEY]) return;
   globalThis[BOOTSTRAP_RUNTIME_KEY] = true;
   try {
+    const ctx = bridge.createCtx();
     installSafeToastr();
+    ensurePanelStyles();
     await ensureModal(ctx);
+    // 生理追踪恒开启 → 弹窗默认打开（顶层 DOM 渲染，无 iframe）
+    openModal(ctx);
     renderStatusPanel(ctx);
-    // 纯渲染轮询：追踪核心由数据库适配层单实例驱动，iframe 只定时刷新视图
+    // 纯渲染轮询：追踪核心由数据库适配层单实例驱动，面板只定时刷新视图
     if (!globalThis.__bsBtRenderTimerKey__) {
       globalThis.__bsBtRenderTimerKey__ = setInterval(() => {
         try {
@@ -7426,7 +7461,7 @@ async function bootstrap() {
   }
 }
 
-const ctx = getContextSafe();
+const ctx = resolvePanelCtx();
 globalThis[APP_READY_HANDLER_KEY] = replaceHostEventSubscription(
   ctx,
   'appReady',

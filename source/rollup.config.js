@@ -150,15 +150,12 @@ const extensionConfig = {
         mkdirSync(join(repoRoot, 'assets'), { recursive: true });
         copyFileSync(join(__dirname, 'assets', 'wardrobe-style-book.json'), join(distExtensionDir, 'assets', 'wardrobe-style-book.json'));
         copyFileSync(join(__dirname, 'assets', 'wardrobe-style-book.json'), join(repoRoot, 'assets', 'wardrobe-style-book.json'));
-        // 复制 biotracker 前端弹窗资源（iframe 经 ./assets/biotracker-ui/ 加载；dist 与仓库根目录都复制，兼容两种安装形态）
+        // 复制 biotracker 前端面板资源（settings.html/style.css；面板经 ./assets/biotracker-ui/ 相对路径加载；dist 与仓库根目录都复制，兼容两种安装形态）
         const uiSrc = join(__dirname, 'assets', 'biotracker-ui');
         for (const uiDist of [join(distExtensionDir, 'assets', 'biotracker-ui'), join(repoRoot, 'assets', 'biotracker-ui')]) {
-          mkdirSync(join(uiDist, 'scripts'), { recursive: true });
-          for (const file of ['index.html', 'settings.html', 'style.css', 'index.js', 'bootstrap.js']) {
+          mkdirSync(uiDist, { recursive: true });
+          for (const file of ['settings.html', 'style.css']) {
             copyFileSync(join(uiSrc, file), join(uiDist, file));
-          }
-          for (const file of readdirSync(join(uiSrc, 'scripts'))) {
-            copyFileSync(join(uiSrc, 'scripts', file), join(uiDist, 'scripts', file));
           }
         }
       },

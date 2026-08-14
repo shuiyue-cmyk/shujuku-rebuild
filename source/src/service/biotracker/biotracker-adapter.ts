@@ -21,6 +21,7 @@ import { getLorebookEntries_ACU } from '../../data/gateways/worldbook-gateway';
 import { readFinalGenerationGreenlights_ACU } from '../agent/agent-worldbook-takeover';
 import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
 import { pushLog, isDebugLogEnabled } from '../../shared/log-buffer';
+import { ensureBiotrackerPanelLoaded_ACU } from './panel/panel-entry';
 
 // ═══════════════════════════════════════════════════════════════
 // 存储命名空间（settings_ACU.bsBiotracker）
@@ -206,25 +207,20 @@ function installBiotrackerFrontendBridge(): void {
 }
 
 /**
- * 创建 biotracker 悬浮窗（同源 iframe 加载 biotracker-ui/index.html，纯渲染版）。
- * 生理追踪恒开启 → 默认出现；弹窗不可关闭（settings.html 无 close 按钮）。
+ * 确保 biotracker 面板已加载（顶层 DOM 渲染，无 iframe）。
+ * 生理追踪恒开启 → 面板 bootstrap 自动挂载弹窗并默认打开；不可关闭（settings.html 无 close 按钮）。
+ * 追踪核心由本适配层单实例驱动，面板只渲染 + 桥接触发。
  */
-let popupCreated = false;
+let panelLoadRequested = false;
 export function ensureBiotrackerPopup_ACU(): void {
+  if (panelLoadRequested) return;
+  panelLoadRequested = true;
   try {
-    const doc = (globalThis as any).topLevelWindow_ACU?.document || document;
-    if (popupCreated || doc.getElementById('bs-biotracker-popup-frame')) return;
-    popupCreated = true;
-    const frame = doc.createElement('iframe');
-    frame.id = 'bs-biotracker-popup-frame';
-    frame.setAttribute('aria-label', '生理追踪');
-    frame.src = new URL('./assets/biotracker-ui/index.html', import.meta.url).href;
-    frame.style.cssText = 'position:fixed;top:0;right:0;z-index:2147483000;width:420px;height:100vh;border:none;background:transparent;';
-    doc.body.appendChild(frame);
-    logDebug_ACU('[生理追踪] 悬浮窗已创建');
+    ensureBiotrackerPanelLoaded_ACU();
+    logDebug_ACU('[生理追踪] 面板已加载');
   } catch (e) {
-    logWarn_ACU('[生理追踪] 悬浮窗创建失败:', e);
-    popupCreated = false;
+    logWarn_ACU('[生理追踪] 面板加载失败:', e);
+    panelLoadRequested = false;
   }
 }
 
