@@ -16,6 +16,7 @@ import {
 } from '../../service/biotracker/biotracker-adapter';
 import { useApiPresetSelectOptions } from './useApiPresetSelectOptions';
 import { ALL_BUILTIN_RACES } from '../../service/biotracker/vendor/race_config.js';
+import { showToastr_ACU } from '../../presentation/theme/toast';
 
 export function useBiotrackerPage() {
   // ─── API 预设（参照剧情推进：跟随当前活动 API 或选择专用预设） ───
@@ -56,6 +57,7 @@ export function useBiotrackerPage() {
     if (registering.value) return;
     registering.value = true;
     statusIsError.value = false;
+    showToastr_ACU('info', `正在繁育推演并注册「${registerName.value || '角色'}」…`, '生理追踪');
     try {
       const result = await registerCharacter_ACU({
         name: registerName.value,
@@ -65,6 +67,7 @@ export function useBiotrackerPage() {
       });
       status.value = result.message;
       statusIsError.value = !result.ok;
+      showToastr_ACU(result.ok ? 'success' : 'warning', result.message, '生理追踪');
       if (result.ok) {
         registerName.value = '';
         registerNotes.value = '';
@@ -105,11 +108,13 @@ export function useBiotrackerPage() {
     if (autoRunning.value) return;
     autoRunning.value = true;
     statusIsError.value = false;
+    showToastr_ACU('info', '正在分析楼层并注册角色…', '生理追踪');
     try {
       // 手动触发：发送用户指定的最近 N 条 AI 回复
       const result = await autoRegisterCharacters_ACU({ recentCount: autoRecentCount.value });
       status.value = result.message;
       statusIsError.value = !result.ok;
+      showToastr_ACU(result.ok ? 'success' : 'warning', result.message, '生理追踪');
       refreshCharacters();
     } finally {
       autoRunning.value = false;
@@ -118,13 +123,16 @@ export function useBiotrackerPage() {
 
   async function runTrackerNow(): Promise<void> {
     statusIsError.value = false;
+    showToastr_ACU('info', '正在执行生理追踪分析…', '生理追踪');
     try {
       await runBiotrackerNow_ACU();
       status.value = '追踪分析完成。';
+      showToastr_ACU('success', '追踪分析完成。', '生理追踪');
       refreshCharacters();
     } catch (e: any) {
       status.value = `追踪失败：${e?.message || e}`;
       statusIsError.value = true;
+      showToastr_ACU('error', `追踪失败：${e?.message || e}`, '生理追踪');
     }
   }
 
