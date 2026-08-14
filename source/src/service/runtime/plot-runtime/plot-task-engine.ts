@@ -712,6 +712,17 @@ import {
 
       let rawResponse = '';
       let lastErrorMessage = '';
+      let lastExtractedTags: Record<string, string> = {};
+      let lastInjectedFragments: string[] = [];
+      let lastInjectOnlyTags: Record<string, string> = {};
+      let lastInjectOnlyFragments: string[] = [];
+      let lastInjectOnlyTagNames: string[] = [];
+
+      // 任务配置了 extractTags / extractInjectTags 时，要求至少摘到 1 个标签才算成功。
+      // 否则（如 API 返回 200 但内容是错误文本）会被误判成功、不重试、不阻断后续阶段。
+      const requiredTagNames = String(normalizedTask.extractTags || '').split(',').map((s: string) => s.trim()).filter(Boolean)
+        .concat(String(normalizedTask.extractInjectTags || '').split(',').map((s: string) => s.trim()).filter(Boolean));
+      const requiresTags = requiredTagNames.length > 0;
 
       for (let attemptIndex = 0; attemptIndex < maxRetries; attemptIndex++) {
         checkPlotAbortRequested_ACU();
@@ -735,13 +746,26 @@ import {
         checkPlotAbortRequested_ACU();
 
         if (!apiError && tempMessage) {
-          if (minLength <= 0 || tempMessage.length >= minLength) {
-            rawResponse = tempMessage;
-            logDebug_ACU(`[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] 在第 ${attemptIndex + 1} 次尝试中成功完成。`);
-            break;
+          if (minLength > 0 && tempMessage.length < minLength) {
+            lastErrorMessage = `回复长度不足（${tempMessage.length}/${minLength}）`;
+            logWarn_ACU(`[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] 第 ${attemptIndex + 1} 次回复过短: ${tempMessage.length}/${minLength}`);
+          } else {
+            const tagResult = extractPlotTagsFromResponse_ACU(tempMessage, normalizedTask.extractTags, normalizedTask.extractInjectTags);
+            if (requiresTags && tagResult.tagNames.length > 0 && Object.keys(tagResult.extractedTags).length === 0) {
+              // API 返回了内容但配置的标签一个都没摘到（常见于 200+错误文本）→ 视为失败进重试
+              lastErrorMessage = `未摘到任何 extractTags 标签（${tagResult.tagNames.join(', ')}）`;
+              logWarn_ACU(`[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] 第 ${attemptIndex + 1} 次尝试 API 返回内容长度 ${tempMessage.length} 但未摘到任何 extractTags 标签，按失败重试`);
+            } else {
+              rawResponse = tempMessage;
+              lastExtractedTags = tagResult.extractedTags;
+              lastInjectedFragments = tagResult.injectedFragments;
+              lastInjectOnlyTags = tagResult.injectOnlyTags;
+              lastInjectOnlyFragments = tagResult.injectOnlyFragments;
+              lastInjectOnlyTagNames = tagResult.injectOnlyTagNames;
+              logDebug_ACU(`[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] 在第 ${attemptIndex + 1} 次尝试中成功完成。`);
+              break;
+            }
           }
-          lastErrorMessage = `回复长度不足（${tempMessage.length}/${minLength}）`;
-          logWarn_ACU(`[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] 第 ${attemptIndex + 1} 次回复过短: ${tempMessage.length}/${minLength}`);
         }
 
         if (attemptIndex < maxRetries - 1) {
@@ -764,13 +788,9 @@ import {
         };
       }
 
-      const { tagNames, extractedTags, injectedFragments, injectOnlyTags, injectOnlyFragments, injectOnlyTagNames } = extractPlotTagsFromResponse_ACU(rawResponse, normalizedTask.extractTags, normalizedTask.extractInjectTags);
+      const { tagNames, extractedTags } = extractPlotTagsFromResponse_ACU(rawResponse, normalizedTask.extractTags, normalizedTask.extractInjectTags);
       if (tagNames.length > 0 && Object.keys(extractedTags).length > 0) {
         logDebug_ACU(`[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] 成功摘取标签: ${Object.keys(extractedTags).join(', ')}`);
-      } else if (tagNames.length > 0 && Object.keys(extractedTags).length === 0) {
-        // 任务配置了 extractTags 但一个都没摘到：任务仍按成功返回（不重试、不阻断阶段），
-        // 显式告警便于从日志定位「判定任务看似成功但标签缺失」。
-        logWarn_ACU(`[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] API 返回内容长度 ${rawResponse.length} 但未摘到任何 extractTags 标签（${tagNames.join(', ')}），任务仍按成功处理`);
       }
 
       return {
@@ -778,11 +798,11 @@ import {
         taskName: taskLabel,
         success: true,
         rawResponse,
-        extractedTags,
-        injectedFragments,
-        injectOnlyTags,
-        injectOnlyFragments,
-        injectOnlyTagNames,
+        extractedTags: lastExtractedTags,
+        injectedFragments: lastInjectedFragments,
+        injectOnlyTags: lastInjectOnlyTags,
+        injectOnlyFragments: lastInjectOnlyFragments,
+        injectOnlyTagNames: lastInjectOnlyTagNames,
         error: null as string | null,
         stage: taskStage,
         order: normalizedTask.order ?? 0,
