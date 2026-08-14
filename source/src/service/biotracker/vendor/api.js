@@ -1122,6 +1122,23 @@ export async function callOpenAICompatible(settings, payload, systemPrompt = DEF
       } catch {}
     }, deadlineMs);
   }
+  // 聊天变更中止：删楼/ROLL/切聊天（CHAT_CHANGED）时数据库 abortOnChatMutation_ACU
+  // 会 abort 全局信号 → 这里转发中止本轮全部在飞子请求（fetchText 已支持 externalSignal）。
+  // 每次请求取最新 signal（abortOnChatMutation 会轮换旧 controller）。
+  const chatMutationSignal = (typeof globalThis.__bs_biotracker_chat_mutation_abort_signal__ === 'function')
+    ? globalThis.__bs_biotracker_chat_mutation_abort_signal__()
+    : null;
+  let onChatMutationAbort = null;
+  if (overallController && chatMutationSignal) {
+    if (chatMutationSignal.aborted) {
+      try { overallController.abort(); } catch {}
+    } else {
+      onChatMutationAbort = () => {
+        try { overallController.abort(); } catch {}
+      };
+      chatMutationSignal.addEventListener('abort', onChatMutationAbort, { once: true });
+    }
+  }
   const runContext = { signal: overallController?.signal || null, deadlineMs };
 
   try {
@@ -1157,5 +1174,9 @@ export async function callOpenAICompatible(settings, payload, systemPrompt = DEF
     }, { label: callLabel, overallSignal: overallController?.signal || null, deadlineMs });
   } finally {
     if (overallTimer) clearTimeout(overallTimer);
+    // 清理全局中止信号监听，避免请求正常完成/超时后监听累积到下次删楼/ROLL
+    if (chatMutationSignal && onChatMutationAbort) {
+      chatMutationSignal.removeEventListener('abort', onChatMutationAbort);
+    }
   }
 }

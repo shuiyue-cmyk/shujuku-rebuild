@@ -14,7 +14,7 @@ import { applyToolCall } from './vendor/tools.js';
 import { resetPoller, runTracker } from './vendor/tracker.js';
 import { callOpenAICompatible, extractJson } from './vendor/api.js';
 import { getHostContext } from './vendor/host.js';
-import { settings_ACU, currentChatFileIdentifier_ACU, allChatMessages_ACU, currentJsonTableData_ACU } from '../runtime/state-manager';
+import { settings_ACU, currentChatFileIdentifier_ACU, allChatMessages_ACU, currentJsonTableData_ACU, getChatMutationAbortSignal_ACU } from '../runtime/state-manager';
 import { getSortedSheetKeys_ACU } from '../template/chat-scope';
 import { saveSettings_ACU } from '../settings/settings-service';
 import { resolveApiConfigByPreset_ACU } from '../settings/api-preset-service';
@@ -114,6 +114,9 @@ function installBiotrackerConsoleBridge(): void {
       return settings_ACU.nonPrefillSupport === true;
     }
   };
+  // 聊天变更中止信号探针：删楼/ROLL/切聊天（CHAT_CHANGED）时 abortOnChatMutation_ACU
+  // 会 abort 该信号 → vendor 在飞请求随之中止（fetchText 已支持 externalSignal）
+  (globalThis as any).__bs_biotracker_chat_mutation_abort_signal__ = () => getChatMutationAbortSignal_ACU();
   const bridge = (level: 'warn' | 'error' | 'debug') => (original: (...args: any[]) => void) => (...args: any[]) => {
     original(...args);
     try {

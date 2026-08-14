@@ -82968,6 +82968,28 @@ function abortAllActiveRequests_ACU() {
     });
     activeAbortControllers_ACU.clear();
 }
+// ═══ 全局「聊天变更」中止信号（删楼/ROLL/切聊天时中止在飞的依赖楼层的 API 调用） ═══
+let chatMutationAbortController_ACU = null;
+/** 获取当前聊天变更中止信号（供依赖楼层的调用方监听：楼层变化即中止） */
+function getChatMutationAbortSignal_ACU() {
+    if (typeof AbortController === 'undefined')
+        return null;
+    if (!chatMutationAbortController_ACU)
+        chatMutationAbortController_ACU = new AbortController();
+    return chatMutationAbortController_ACU.signal;
+}
+/** 楼层/聊天变更（CHAT_CHANGED：删楼/ROLL/切聊天）：中止所有在飞的依赖楼层调用，并重建信号供下一轮使用 */
+function abortOnChatMutation_ACU() {
+    logWarn_ACU('[状态管理] 聊天变更（删楼/ROLL/切聊天）：中止在飞的依赖楼层 API 调用');
+    if (chatMutationAbortController_ACU) {
+        try {
+            chatMutationAbortController_ACU.abort();
+        }
+        catch (e) { }
+        chatMutationAbortController_ACU = null;
+    }
+    abortAllActiveRequests_ACU();
+}
 function _set_currentAbortController_ACU(v) { currentAbortController_ACU = v; }
 function _set_isAutoUpdatingCard_ACU(v) { isAutoUpdatingCard_ACU = v; }
 function _set_manualExtraHint_ACU(v) { manualExtraHint_ACU = v; }
@@ -100434,6 +100456,30 @@ async function callOpenAICompatible(settings, payload, systemPrompt = DEFAULT_SY
             catch { }
         }, deadlineMs);
     }
+    // 聊天变更中止：删楼/ROLL/切聊天（CHAT_CHANGED）时数据库 abortOnChatMutation_ACU
+    // 会 abort 全局信号 → 这里转发中止本轮全部在飞子请求（fetchText 已支持 externalSignal）。
+    // 每次请求取最新 signal（abortOnChatMutation 会轮换旧 controller）。
+    const chatMutationSignal = (typeof globalThis.__bs_biotracker_chat_mutation_abort_signal__ === 'function')
+        ? globalThis.__bs_biotracker_chat_mutation_abort_signal__()
+        : null;
+    let onChatMutationAbort = null;
+    if (overallController && chatMutationSignal) {
+        if (chatMutationSignal.aborted) {
+            try {
+                overallController.abort();
+            }
+            catch { }
+        }
+        else {
+            onChatMutationAbort = () => {
+                try {
+                    overallController.abort();
+                }
+                catch { }
+            };
+            chatMutationSignal.addEventListener('abort', onChatMutationAbort, { once: true });
+        }
+    }
     const runContext = { signal: overallController?.signal || null, deadlineMs };
     try {
         return await withGlobalApiRetries(async (globalAttempt) => {
@@ -100468,6 +100514,10 @@ async function callOpenAICompatible(settings, payload, systemPrompt = DEFAULT_SY
     finally {
         if (overallTimer)
             clearTimeout(overallTimer);
+        // 清理全局中止信号监听，避免请求正常完成/超时后监听累积到下次删楼/ROLL
+        if (chatMutationSignal && onChatMutationAbort) {
+            chatMutationSignal.removeEventListener('abort', onChatMutationAbort);
+        }
     }
 }
 
@@ -110530,7 +110580,7 @@ const WARDROBE_DIMENSION_LABELS = Object.freeze({ masking: '掩形', support: '�
 const PREG_FIT_GAP_LABELS = Object.freeze({ masking: '掩形', support: '支撑', capacity: '容身', convenience: '便捷' });
 const MAX_PROGRESS_BAR_CAP = 200;
 // 构建时间戳（rollup replace 注入；测试/dev 环境无替换时回退 'dev'）——全局水印用，截图辨别构建
-const ACU_BUILD_STAMP = typeof "20260814-19" === 'string' ? "20260814-19" : 'dev';
+const ACU_BUILD_STAMP = typeof "20260814-20" === 'string' ? "20260814-20" : 'dev';
 const MODAL_EDGE_GAP = 24;
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const FLOATING_SPHERE_POSITION_KEY = `${MODULE_NAME}_floating_sphere_position`;
@@ -118279,6 +118329,9 @@ function installBiotrackerConsoleBridge() {
             return settings_ACU.nonPrefillSupport === true;
         }
     };
+    // 聊天变更中止信号探针：删楼/ROLL/切聊天（CHAT_CHANGED）时 abortOnChatMutation_ACU
+    // 会 abort 该信号 → vendor 在飞请求随之中止（fetchText 已支持 externalSignal）
+    globalThis.__bs_biotracker_chat_mutation_abort_signal__ = () => getChatMutationAbortSignal_ACU();
     const bridge = (level) => (original) => (...args) => {
         original(...args);
         try {
@@ -120739,6 +120792,9 @@ function mainInitialize_ACU() {
             }
             SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.CHAT_CHANGED, async (chatFileName) => {
                 logDebug_ACU(`ACU CHAT_CHANGED event: ${chatFileName}`);
+                // [中止] 楼层变更（删楼/ROLL/切聊天）时中止所有在飞的依赖楼层的 API 调用
+                //（表格填表/生理追踪等），避免用旧上下文的结果写入当前状态。
+                abortOnChatMutation_ACU();
                 const hasValidChatFileName_ACU = isValidChatFileName_ACU(chatFileName);
                 if (!hasValidChatFileName_ACU && !hasActiveChatMessages_ACU()) {
                     clearRuntimeForNoActiveChat_ACU(chatFileName);

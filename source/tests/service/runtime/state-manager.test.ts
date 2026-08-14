@@ -62,6 +62,8 @@ import {
   trackAbortController_ACU,
   untrackAbortController_ACU,
   abortAllActiveRequests_ACU,
+  abortOnChatMutation_ACU,
+  getChatMutationAbortSignal_ACU,
   activeAbortControllers_ACU,
 } from '../../../src/service/runtime/state-manager';
 
@@ -405,6 +407,26 @@ describe('AbortController 管理', () => {
     expect(() => abortAllActiveRequests_ACU()).not.toThrow();
     expect(c2.abort).toHaveBeenCalled();
     expect(activeAbortControllers_ACU.size).toBe(0);
+  });
+
+  it('abortOnChatMutation_ACU 中止活跃请求并轮换全局信号（删楼/ROLL/切聊天场景）', () => {
+    const c = { abort: vi.fn() };
+    trackAbortController_ACU(c);
+    const s1 = getChatMutationAbortSignal_ACU();
+    expect(s1).not.toBeNull();
+    expect(s1!.aborted).toBe(false);
+
+    abortOnChatMutation_ACU();
+
+    // 活跃请求被中止且清空
+    expect(c.abort).toHaveBeenCalled();
+    expect(activeAbortControllers_ACU.size).toBe(0);
+    // 旧信号已 abort，新请求拿到的是重建后的新信号
+    expect(s1!.aborted).toBe(true);
+    const s2 = getChatMutationAbortSignal_ACU();
+    expect(s2).not.toBeNull();
+    expect(s2!.aborted).toBe(false);
+    expect(s2).not.toBe(s1);
   });
 });
 

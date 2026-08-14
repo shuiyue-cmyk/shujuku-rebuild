@@ -315,6 +315,26 @@ export function abortAllActiveRequests_ACU() {
     activeAbortControllers_ACU.clear();
 }
 
+// ═══ 全局「聊天变更」中止信号（删楼/ROLL/切聊天时中止在飞的依赖楼层的 API 调用） ═══
+let chatMutationAbortController_ACU: AbortController | null = null;
+
+/** 获取当前聊天变更中止信号（供依赖楼层的调用方监听：楼层变化即中止） */
+export function getChatMutationAbortSignal_ACU(): AbortSignal | null {
+    if (typeof AbortController === 'undefined') return null;
+    if (!chatMutationAbortController_ACU) chatMutationAbortController_ACU = new AbortController();
+    return chatMutationAbortController_ACU.signal;
+}
+
+/** 楼层/聊天变更（CHAT_CHANGED：删楼/ROLL/切聊天）：中止所有在飞的依赖楼层调用，并重建信号供下一轮使用 */
+export function abortOnChatMutation_ACU() {
+    logWarn_ACU('[状态管理] 聊天变更（删楼/ROLL/切聊天）：中止在飞的依赖楼层 API 调用');
+    if (chatMutationAbortController_ACU) {
+        try { chatMutationAbortController_ACU.abort(); } catch (e) {}
+        chatMutationAbortController_ACU = null;
+    }
+    abortAllActiveRequests_ACU();
+}
+
 export function _set_currentAbortController_ACU(v: any) { currentAbortController_ACU = v; }
 export function _set_isAutoUpdatingCard_ACU(v: any) { isAutoUpdatingCard_ACU = v; }
 export function _set_manualExtraHint_ACU(v: any) { manualExtraHint_ACU = v; }

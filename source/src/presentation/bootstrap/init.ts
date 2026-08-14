@@ -39,7 +39,8 @@ import {
   _set_currentJsonTableData_ACU,
   _set_independentTableStates_ACU,
   _set_isProcessing_Plot_ACU,
-  _set_lastTotalAiMessages_ACU
+  _set_lastTotalAiMessages_ACU,
+  abortOnChatMutation_ACU
 } from '../../service/runtime/state-manager';
 import {
   applyTemplateScopeForCurrentChat_ACU,
@@ -248,6 +249,10 @@ export   function mainInitialize_ACU() {
         
         SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.CHAT_CHANGED, async (chatFileName: string) => {
           logDebug_ACU(`ACU CHAT_CHANGED event: ${chatFileName}`);
+
+          // [中止] 楼层变更（删楼/ROLL/切聊天）时中止所有在飞的依赖楼层的 API 调用
+          //（表格填表/生理追踪等），避免用旧上下文的结果写入当前状态。
+          abortOnChatMutation_ACU();
 
           const hasValidChatFileName_ACU = isValidChatFileName_ACU(chatFileName);
           if (!hasValidChatFileName_ACU && !hasActiveChatMessages_ACU()) {
