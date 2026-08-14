@@ -102195,7 +102195,7 @@ function resolveRegistryTargetName(ctx, value) {
 }
 function normalizeWorldbookMode$1(value) {
     const mode = String(value || 'exclude').trim();
-    if (mode === 'mainflow' || mode === 'allowlist_all' || mode === 'exclude')
+    if (mode === 'mainflow' || mode === 'allowlist_all' || mode === 'exclude' || mode === 'agent_greenlights')
         return mode;
     return 'exclude';
 }
@@ -102307,6 +102307,17 @@ function filterRegistryWorldbookEntries(value, excludedNames, settings = null, r
     const keepEntry = (entry) => {
         const name = normalizeEntryName(entry);
         const selectionName = globalBookName ? formatGlobalWorldbookSelectionName$1(globalBookName, name) : name;
+        if (mode === 'agent_greenlights') {
+            // 与追踪一致：蓝灯（constant 恒常条目）固有发送 + 数据库 agent 正文放行的绿灯（uid 白名单）
+            if (entry?.enabled === false || entry?.disable === true)
+                return false;
+            if (entry?.type === 'constant')
+                return true;
+            const greenUids = settings?.agentGreenlightUids;
+            if (Array.isArray(greenUids))
+                return greenUids.includes(entry?.uid) || greenUids.includes(entry?.id);
+            return false;
+        }
         if (mode === 'allowlist_all')
             return Boolean(name) && worldbookSelectionMatches(includedNames, selectionName, name);
         if (entry?.enabled === false || entry?.disable === true)
