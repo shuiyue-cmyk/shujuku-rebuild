@@ -21,19 +21,18 @@ export function useBiotrackerPage() {
   // ─── API 预设（参照剧情推进：跟随当前活动 API 或选择专用预设） ───
   const { apiStore, apiPresetSelectOptions, followActiveApiLabel } = useApiPresetSelectOptions();
   const apiPreset = ref(String(settings_ACU.bs_biotracker?.apiPreset || ''));
-  const apiUrl = ref(settings_ACU.apiConfig?.url || '');
-  const apiKey = ref(settings_ACU.apiConfig?.apiKey || '');
-  const apiModel = ref(settings_ACU.apiConfig?.model || '');
+  // 生效配置 = 选中预设 → 活动 API 预设 → 数据库主配置（响应式跟随，避免初始快照误报未配置）
+  const effectiveApiConfig = computed(() => {
+    const chosen = apiPreset.value ? apiStore.presets.find(p => p.name === apiPreset.value) : null;
+    return chosen?.apiConfig || apiStore.activePreset?.apiConfig || settings_ACU.apiConfig || {};
+  });
+  const apiUrl = computed(() => effectiveApiConfig.value.url || '');
+  const apiKey = computed(() => effectiveApiConfig.value.apiKey || '');
+  const apiModel = computed(() => effectiveApiConfig.value.model || '');
 
   function setApiPreset(value: string): void {
     apiPreset.value = String(value || '');
     settings_ACU.bs_biotracker.apiPreset = apiPreset.value;
-    // 选中预设后展示其 url/model
-    const preset = apiStore.presets.find(p => p.name === apiPreset.value);
-    const cfg = preset?.apiConfig || settings_ACU.apiConfig || {};
-    apiUrl.value = cfg.url || '';
-    apiKey.value = cfg.apiKey || '';
-    apiModel.value = cfg.model || '';
     saveSettings_ACU();
   }
 
@@ -153,6 +152,8 @@ export function useBiotrackerPage() {
 
   let timer: ReturnType<typeof setInterval> | null = null;
   onMounted(() => {
+    // 刷新 API 预设快照（activePreset/currentConfigReady），与剧情推进页一致
+    apiStore.refreshFromSettings();
     refreshCharacters();
     timer = setInterval(refreshCharacters, 3000);
   });
