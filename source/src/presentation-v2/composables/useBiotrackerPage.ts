@@ -41,9 +41,17 @@ export function useBiotrackerPage() {
   const registerName = ref('');
   const registerRace = ref('');
   const registerNotes = ref('');
+  // 手动注册/追踪发送给 AI 的最近 AI 回复条数（默认 12）
+  const registerRecentCount = ref(Number(settings_ACU.bs_biotracker?.registerRecentCount) > 0 ? settings_ACU.bs_biotracker.registerRecentCount : 12);
   const registering = ref(false);
   const status = ref('');
   const statusIsError = ref(false);
+
+  function setRegisterRecentCount(value: number): void {
+    registerRecentCount.value = Math.max(1, Math.min(100, Math.floor(Number(value) || 12)));
+    settings_ACU.bs_biotracker.registerRecentCount = registerRecentCount.value;
+    saveSettings_ACU();
+  }
 
   async function doRegister(): Promise<void> {
     if (registering.value) return;
@@ -54,6 +62,7 @@ export function useBiotrackerPage() {
         name: registerName.value,
         declaredRace: registerRace.value,
         customNotes: registerNotes.value,
+        recentCount: registerRecentCount.value,
       });
       status.value = result.message;
       statusIsError.value = !result.ok;
@@ -70,8 +79,16 @@ export function useBiotrackerPage() {
   // ─── 自动注册（主开关 + 更新频率：每 N 层新楼层送入分析一次） ───
   const autoRegister = ref(isAutoRegisterEnabled_ACU());
   const autoFrequency = ref(getAutoRegisterFrequency_ACU());
+  // 立即分析并注册发送的最近 AI 回复条数（默认 12）
+  const autoRecentCount = ref(Number(settings_ACU.bs_biotracker?.autoRecentCount) > 0 ? settings_ACU.bs_biotracker.autoRecentCount : 12);
   const autoRunning = ref(false);
   const autoFrequencyOptions = [1, 3, 5, 10, 20, 30, 50];
+
+  function setAutoRecentCount(value: number): void {
+    autoRecentCount.value = Math.max(1, Math.min(100, Math.floor(Number(value) || 12)));
+    settings_ACU.bs_biotracker.autoRecentCount = autoRecentCount.value;
+    saveSettings_ACU();
+  }
 
   function toggleAutoRegister(value: boolean): void {
     autoRegister.value = !!value;
@@ -90,7 +107,8 @@ export function useBiotrackerPage() {
     autoRunning.value = true;
     statusIsError.value = false;
     try {
-      const result = await autoRegisterCharacters_ACU();
+      // 手动触发：发送用户指定的最近 N 条 AI 回复
+      const result = await autoRegisterCharacters_ACU({ recentCount: autoRecentCount.value });
       status.value = result.message;
       statusIsError.value = !result.ok;
       refreshCharacters();
@@ -153,6 +171,8 @@ export function useBiotrackerPage() {
     registerName,
     registerRace,
     registerNotes,
+    registerRecentCount,
+    setRegisterRecentCount,
     registerRaceOptions: ref(ALL_BUILTIN_RACES),
     registering,
     doRegister,
@@ -161,6 +181,8 @@ export function useBiotrackerPage() {
     autoFrequency,
     setAutoFrequency,
     autoFrequencyOptions,
+    autoRecentCount,
+    setAutoRecentCount,
     autoRunning,
     runAutoRegister,
     runTrackerNow,

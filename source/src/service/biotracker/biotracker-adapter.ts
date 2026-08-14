@@ -206,6 +206,8 @@ export interface RegisterCharacterOptions_ACU {
   name: string;
   declaredRace?: string;
   customNotes?: string;
+  /** 发送给 AI 分析的最近 N 条 AI 回复（覆盖 contextSize） */
+  recentCount?: number;
 }
 
 /**
@@ -222,6 +224,12 @@ export async function registerCharacter_ACU(options: RegisterCharacterOptions_AC
       customNotes: options.customNotes,
       declaredRace: options.declaredRace || '',
     };
+    // 用户可指定发送最近 N 条 AI 回复（覆盖 contextSize）
+    const recentCount = Number(options.recentCount);
+    const settings = getBiotrackerSettings(ctx);
+    if (Number.isFinite(recentCount) && recentCount > 0) {
+      settings.contextSize = Math.max(1, Math.min(100, Math.floor(recentCount)));
+    }
     // 第一步：繁育推演（API 1）
     const breedingInference = await runRegistryBreedingInference(ctx, shared);
     // 第二步：注册并套用推演结果（API 2）
@@ -261,20 +269,12 @@ export function setAutoRegisterEnabled_ACU(enabled: boolean): void {
   scheduleSettingsSave();
 }
 
-/** 自动搜寻注册的扫描楼层数（用户可选：读取最近 N 层发现角色） */
-export function getAutoRegisterScanCount_ACU(): number {
-  const raw = Number(getBiotrackerRoot().autoRegisterScanCount);
-  const count = Math.floor(Number.isFinite(raw) ? raw : DEFAULT_SETTINGS.contextSize);
-  return Math.max(2, Math.min(100, count));
-}
-
-export function setAutoRegisterScanCount_ACU(count: number): void {
-  getBiotrackerRoot().autoRegisterScanCount = Math.max(2, Math.min(100, Math.floor(Number.isFinite(count) ? count : DEFAULT_SETTINGS.contextSize)));
-  scheduleSettingsSave();
-}
-
-/** 扫描最新楼层并自动注册 AI 发现的角色（种族由 AI 推断，declaredRace 留空） */
-export async function autoRegisterCharacters_ACU(): Promise<{ ok: boolean; registered: string[]; message: string }> {
+/**
+ * 自动注册分析：发现正文角色并注册（种族由 AI 推断）。
+ * - 手动触发（立即分析并注册）：recentCount 指定发送最近 N 条 AI 回复
+ * - 自动触发（频率驱动）：fromIndex 指定发送自该楼层索引以来的新增楼层（增量）
+ */
+export async function autoRegisterCharacters_ACU(options: { recentCount?: number; fromIndex?: number } = {}): Promise<{ ok: boolean; registered: string[]; message: string }> {
   const ctx = createBiotrackerCtx_ACU();
   try {
     const settings = getBiotrackerSettings(ctx);
@@ -282,9 +282,21 @@ export async function autoRegisterCharacters_ACU(): Promise<{ ok: boolean; regis
       return { ok: false, registered: [], message: '生理追踪 API 尚未配置（API URL/模型）。' };
     }
     const chatState = getChatState(ctx, settings);
-    // 用用户配置的扫描楼层数覆盖 contextSize（读取最近 N 层）
-    const scanCount = getAutoRegisterScanCount_ACU();
-    const recent = buildRecentMessages(ctx, { ...settings, contextSize: scanCount });
+    const chat = Array.isArray(allChatMessages_ACU) ? allChatMessages_ACU : [];
+
+    // 手动触发：recentCount（最近 N 条）；自动触发：fromIndex（增量起点）
+    const recentCount = Number(options.recentCount);
+    let sliceStart: number;
+    if (Number.isFinite(recentCount) && recentCount > 0) {
+      sliceStart = Math.max(0, chat.length - Math.max(1, Math.min(100, Math.floor(recentCount))));
+    } else {
+      sliceStart = Number.isFinite(options.fromIndex) ? Math.max(0, Math.floor(Number(options.fromIndex))) : 0;
+    }
+    const recent = chat.slice(sliceStart).map((message: any) => ({
+      name: message.name || (message.is_user ? 'user' : 'assistant') || '',
+      role: message.is_user ? 'user' : 'assistant',
+      text: String(message.mes || ''),
+    }));
     if (recent.length === 0) return { ok: false, registered: [], message: '暂无楼层可扫描。' };
 
     // AI 发现候选角色（恒 json 响应）
@@ -359,10 +371,12 @@ export function scheduleAutoRegisterCheck_ACU(): void {
   }
   const frequency = getAutoRegisterFrequency_ACU();
   if (messageCount - lastAutoCheckedMessageCount < frequency) return;
+  // 本次触发发送「自上次分析以来的新增楼层」（fromIndex = 旧基线），随后更新基线
+  const fromIndex = lastAutoCheckedMessageCount;
   lastAutoCheckedMessageCount = messageCount;
   autoRegisterInFlight = true;
   setTimeout(() => {
-    autoRegisterCharacters_ACU()
+    autoRegisterCharacters_ACU({ fromIndex })
       .then((r) => { if (r.registered.length > 0) logDebug_ACU('[生理追踪]', r.message); })
       .catch((e) => logWarn_ACU('[生理追踪] 自动注册异常:', e))
       .finally(() => { autoRegisterInFlight = false; });

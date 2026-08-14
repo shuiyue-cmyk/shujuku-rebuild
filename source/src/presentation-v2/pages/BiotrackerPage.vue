@@ -40,6 +40,9 @@
         <AcuFormRow label="补充设定（可选）">
           <textarea v-model="registerNotes" class="acu-input" rows="2" placeholder="种族生理/心理/描述补充"></textarea>
         </AcuFormRow>
+        <AcuFormRow label="发送最近 N 条 AI 回复" hint="注册/推演分析发送给 AI 的最近 AI 回复条数">
+          <input v-model.number="registerRecentCount" type="number" min="1" max="100" class="acu-input" @change="setRegisterRecentCount(registerRecentCount)" />
+        </AcuFormRow>
         <div class="acu-v2-biotracker-page__actions">
           <AcuButton size="sm" :disabled="registering" @click="doRegister">
             {{ registering ? '注册中...' : '注册角色' }}
@@ -67,6 +70,9 @@
           <select v-model="autoFrequency" class="acu-input" @change="setAutoFrequency(autoFrequency)">
             <option v-for="freq in autoFrequencyOptions" :key="freq" :value="freq">每 {{ freq }} 层</option>
           </select>
+        </AcuFormRow>
+        <AcuFormRow label="发送最近 N 条 AI 回复" hint="点击「立即分析并注册」时发送给 AI 的最近 AI 回复条数">
+          <input v-model.number="autoRecentCount" type="number" min="1" max="100" class="acu-input" @change="setAutoRecentCount(autoRecentCount)" />
         </AcuFormRow>
         <div class="acu-v2-biotracker-page__actions">
           <AcuButton size="sm" :disabled="autoRunning || !autoRegister" @click="runAutoRegister">
@@ -140,6 +146,8 @@ const {
   registerName,
   registerRace,
   registerNotes,
+  registerRecentCount,
+  setRegisterRecentCount,
   registerRaceOptions,
   registering,
   doRegister,
@@ -148,6 +156,8 @@ const {
   autoFrequency,
   setAutoFrequency,
   autoFrequencyOptions,
+  autoRecentCount,
+  setAutoRecentCount,
   autoRunning,
   runAutoRegister,
   runTrackerNow,
