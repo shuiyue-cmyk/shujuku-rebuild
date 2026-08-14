@@ -3,18 +3,19 @@
  * BS BioTracker（生理状态追踪）合并适配层。
  *
  * biotracker 核心（vendor/*.js）原样嵌入，宿主接口经 host.js 的 ctx 依赖注入对接：
- * - 存储：settings_ACU.bsBiotracker 独立命名空间（含 chatStates，格式与 biotracker 原 extensionSettings.bs_biotracker 兼容，便于复用其前端）
- * - AI：独立 API 配置（settings_ACU.bsBiotracker.apiUrl/apiKey/model），走酒馆代理 fetch
+ * - 存储：settings_ACU.bs_biotracker 独立命名空间（含 chatStates，格式与 biotracker 原 extensionSettings.bs_biotracker 兼容，便于复用其前端）
+ * - AI：默认复用数据库主 API 配置；可选生理追踪专用 API 预设（settings_ACU.bs_biotracker.apiPreset，参照剧情推进的 API 预设选择），走酒馆代理 fetch
  * - 恒字系列：异步追踪恒开启（enabled）、恒 after_ai、恒完整更新（requireFullDescriptionUpdates）、恒格式化输出（formattedOutputV4）、默认 json 响应
- * - 高级设置开关（生理追踪总开关）映射 settings_ACU.bsBiotracker.enabled
+ * - 高级设置开关（生理追踪总开关）映射 settings_ACU.bs_biotracker.enabled
  */
 import { MODULE_NAME, DEFAULT_SETTINGS, getSettings, saveSettings, getChatState, getChatKey, cloneValue, buildRecentMessages } from './vendor/state.js';
-import { runRegistry } from './vendor/registry.js';
+import { runRegistry, runRegistryBreedingInference } from './vendor/registry.js';
 import { resetPoller, runTracker } from './vendor/tracker.js';
 import { callOpenAICompatible, extractJson } from './vendor/api.js';
 import { getHostContext } from './vendor/host.js';
 import { settings_ACU, currentChatFileIdentifier_ACU, allChatMessages_ACU } from '../runtime/state-manager';
 import { saveSettings_ACU } from '../settings/settings-service';
+import { resolveApiConfigByPreset_ACU } from '../settings/api-preset-service';
 import { getCurrentCharacterFallback_ACU } from '../host/host-state-service';
 import { getLorebookEntries_ACU } from '../../data/gateways/worldbook-gateway';
 import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
@@ -35,11 +36,19 @@ function getBiotrackerRoot(): Record<string, any> {
  * 获取 biotracker settings 并把 API 三字段恒同步为数据库主 API 配置
  * （用户拍板：API 配置直接选用数据库保存的，不独立配置）
  */
+/**
+ * 获取 biotracker settings 并解析 API 配置：
+ * 选定了生理追踪专用 API 预设（bs_biotracker.apiPreset）则用预设的 url/key/model，
+ * 否则回退数据库主 API 配置（用户拍板：API 配置直接选用数据库保存的）
+ */
 function getBiotrackerSettings(ctx: BiotrackerCtx_ACU): any {
-  const settings = getBiotrackerSettings(ctx);
-  settings.apiUrl = settings_ACU.apiConfig?.url || settings.apiUrl || '';
-  settings.apiKey = settings_ACU.apiConfig?.apiKey || settings.apiKey || '';
-  settings.model = settings_ACU.apiConfig?.model || settings.model || '';
+  const settings = getSettings(ctx);
+  const presetName = String(settings.apiPreset || '').trim();
+  const resolved = presetName ? resolveApiConfigByPreset_ACU(presetName) : null;
+  const cfg = resolved?.apiConfig || settings_ACU.apiConfig || {};
+  settings.apiUrl = cfg.url || settings.apiUrl || '';
+  settings.apiKey = cfg.apiKey || settings.apiKey || '';
+  settings.model = cfg.model || settings.model || '';
   return settings;
 }
 
@@ -199,20 +208,26 @@ export interface RegisterCharacterOptions_ACU {
   customNotes?: string;
 }
 
-/** 手动注册角色（种族手动选择） */
+/**
+ * 手动注册角色：一次点击串联两次 API（先繁育推演，再注册并套用推演结果）。
+ * 流程与 biotracker 插件手动注册一致，简化为单按钮触发。
+ */
 export async function registerCharacter_ACU(options: RegisterCharacterOptions_ACU): Promise<{ ok: boolean; message: string }> {
   try {
     const ctx = createBiotrackerCtx_ACU();
     const name = String(options.name || '').trim();
     if (!name) return { ok: false, message: '请填写要注册的角色名。' };
-    await runRegistry(ctx, {
+    const shared = {
       targetName: name,
       customNotes: options.customNotes,
       declaredRace: options.declaredRace || '',
-      breedingInference: false,
-    });
+    };
+    // 第一步：繁育推演（API 1）
+    const breedingInference = await runRegistryBreedingInference(ctx, shared);
+    // 第二步：注册并套用推演结果（API 2）
+    await runRegistry(ctx, { ...shared, breedingInference });
     saveSettings(ctx);
-    return { ok: true, message: `角色「${name}」注册完成。` };
+    return { ok: true, message: `角色「${name}」注册完成（已套用繁育推演）。` };
   } catch (e: any) {
     logWarn_ACU('[生理追踪] 注册角色失败:', e);
     return { ok: false, message: `注册失败：${e?.message || e}` };
@@ -246,6 +261,18 @@ export function setAutoRegisterEnabled_ACU(enabled: boolean): void {
   scheduleSettingsSave();
 }
 
+/** 自动搜寻注册的扫描楼层数（用户可选：读取最近 N 层发现角色） */
+export function getAutoRegisterScanCount_ACU(): number {
+  const raw = Number(getBiotrackerRoot().autoRegisterScanCount);
+  const count = Math.floor(Number.isFinite(raw) ? raw : DEFAULT_SETTINGS.contextSize);
+  return Math.max(2, Math.min(100, count));
+}
+
+export function setAutoRegisterScanCount_ACU(count: number): void {
+  getBiotrackerRoot().autoRegisterScanCount = Math.max(2, Math.min(100, Math.floor(Number.isFinite(count) ? count : DEFAULT_SETTINGS.contextSize)));
+  scheduleSettingsSave();
+}
+
 /** 扫描最新楼层并自动注册 AI 发现的角色（种族由 AI 推断，declaredRace 留空） */
 export async function autoRegisterCharacters_ACU(): Promise<{ ok: boolean; registered: string[]; message: string }> {
   const ctx = createBiotrackerCtx_ACU();
@@ -255,7 +282,9 @@ export async function autoRegisterCharacters_ACU(): Promise<{ ok: boolean; regis
       return { ok: false, registered: [], message: '生理追踪 API 尚未配置（API URL/模型）。' };
     }
     const chatState = getChatState(ctx, settings);
-    const recent = buildRecentMessages(ctx, settings);
+    // 用用户配置的扫描楼层数覆盖 contextSize（读取最近 N 层）
+    const scanCount = getAutoRegisterScanCount_ACU();
+    const recent = buildRecentMessages(ctx, { ...settings, contextSize: scanCount });
     if (recent.length === 0) return { ok: false, registered: [], message: '暂无楼层可扫描。' };
 
     // AI 发现候选角色（恒 json 响应）
@@ -274,11 +303,17 @@ export async function autoRegisterCharacters_ACU(): Promise<{ ok: boolean; regis
       if (chatState.characters?.[name]) continue; // 已注册跳过
       const reason = String(candidate?.reason || '').trim();
       try {
-        await runRegistry(ctx, {
+        // 自动注册同样走「繁育推演 + 注册」两段（与手动注册一致）
+        const breedingInference = await runRegistryBreedingInference(ctx, {
           targetName: name,
           customNotes: reason || '由自动注册发现',
           declaredRace: '', // 种族交由 AI 判断
-          breedingInference: false,
+        });
+        await runRegistry(ctx, {
+          targetName: name,
+          customNotes: reason || '由自动注册发现',
+          declaredRace: '',
+          breedingInference,
         });
         registered.push(name);
       } catch (e) {

@@ -3,15 +3,19 @@
     <AcuMobilePanelNav :items="panelNavItems" />
 
     <div class="acu-v2-biotracker-page__panel-stack">
-      <!-- API 配置（复用数据库主 API 配置，只读） -->
+      <!-- API 设置（参照剧情推进：跟随当前活动 API 或选择专用预设） -->
       <AcuPanel
         id="biotracker-api-panel"
         :title="copy.apiTitle"
         :description="copy.apiDescription"
       >
+        <AcuFormRow label="API 预设" hint="选「跟随当前活动 API」则使用数据库当前配置；亦可为生理追踪选择专用预设">
+          <select v-model="apiPreset" class="acu-input" @change="setApiPreset(apiPreset)">
+            <option v-for="opt in apiPresetSelectOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+          </select>
+        </AcuFormRow>
         <p class="acu-v2-biotracker-page__api-readonly">
-          生理追踪/注册使用数据库已配置的 API（在「API」页面配置）。
-          当前：{{ apiUrl ? apiUrl : '未配置 URL' }} / {{ apiModel ? apiModel : '未配置模型' }}
+          当前生效：{{ apiUrl ? apiUrl : '未配置 URL' }} / {{ apiModel ? apiModel : '未配置模型' }}
         </p>
       </AcuPanel>
 
@@ -42,11 +46,14 @@
           </AcuButton>
           <AcuButton size="sm" variant="secondary" @click="runTrackerNow">立即追踪分析</AcuButton>
         </div>
-        <AcuFormRow label="自动注册">
+        <AcuFormRow label="自动搜寻注册">
           <label class="acu-v2-biotracker-page__toggle">
             <AcuCheckbox :model-value="autoRegister" @update:model-value="toggleAutoRegister" />
-            <span>消息后由 AI 读取最新楼层，自动发现有价值的角色并注册（种族交 AI 判断）</span>
+            <span>由配置的模型读取正文，自动发现有价值的角色并注册（种族交 AI 判断）</span>
           </label>
+        </AcuFormRow>
+        <AcuFormRow label="读取楼层数" hint="每次自动搜寻读取最近多少层（2-100）">
+          <input v-model.number="autoScanCount" type="number" min="2" max="100" class="acu-input" @change="setAutoScanCount(autoScanCount)" />
         </AcuFormRow>
         <p v-if="status" class="acu-v2-biotracker-page__status" :data-error="statusIsError">
           {{ status }}
@@ -93,15 +100,18 @@ import AcuCheckbox from '../components/_lib/AcuCheckbox.vue';
 import { useBiotrackerPage } from '../composables/useBiotrackerPage';
 
 const copy = {
-  apiTitle: 'API 配置',
-  apiDescription: '生理追踪/注册使用数据库已配置的 API（「API」页面）。需支持 OpenAI 兼容 /chat/completions 并能稳定输出 JSON。',
-  registerTitle: '注册与自动注册',
-  registerDescription: '手动注册：填写角色名并选择种族。自动注册：由 AI 读取最新楼层发现值得记录的角色并注册，种族由 AI 判断。',
+  apiTitle: 'API 设置',
+  apiDescription: '生理追踪/注册默认使用数据库当前活动 API；可为本页选择专用 API 预设（与剧情推进一致）。需支持 OpenAI 兼容 /chat/completions 并能稳定输出 JSON。',
+  registerTitle: '注册与自动搜寻',
+  registerDescription: '手动注册：点击一次即依次执行「繁育推演 + 注册」两次调用。自动搜寻：由配置的模型读取正文发现值得记录的角色并注册，种族交 AI 判断。',
   dataTitle: '已注册角色',
   dataDescription: '当前聊天的生理追踪数据（只读）。完整数据由异步追踪持续更新。',
 };
 
 const {
+  apiPreset,
+  setApiPreset,
+  apiPresetSelectOptions,
   apiUrl,
   apiKey,
   apiModel,
@@ -113,6 +123,8 @@ const {
   doRegister,
   autoRegister,
   toggleAutoRegister,
+  autoScanCount,
+  setAutoScanCount,
   autoRunning,
   runAutoRegister,
   runTrackerNow,

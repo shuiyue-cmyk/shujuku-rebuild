@@ -1,6 +1,6 @@
 /**
  * presentation-v2/composables/useBiotrackerPage.ts
- * 生理追踪页逻辑：API 独立配置 + 注册（手动/自动）+ 已注册角色只读
+ * 生理追踪页逻辑：API 预设（参照剧情推进）+ 注册（手动/自动搜寻）+ 已注册角色只读
  */
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { settings_ACU, currentChatFileIdentifier_ACU } from '../../service/runtime/state-manager';
@@ -8,19 +8,36 @@ import { saveSettings_ACU } from '../../service/settings/settings-service';
 import {
   isAutoRegisterEnabled_ACU,
   setAutoRegisterEnabled_ACU,
+  getAutoRegisterScanCount_ACU,
+  setAutoRegisterScanCount_ACU,
   registerCharacter_ACU,
   autoRegisterCharacters_ACU,
   runBiotrackerNow_ACU,
 } from '../../service/biotracker/biotracker-adapter';
+import { useApiPresetSelectOptions } from './useApiPresetSelectOptions';
 import { ALL_BUILTIN_RACES } from '../../service/biotracker/vendor/race_config.js';
 
 export function useBiotrackerPage() {
-  // ─── API 配置（复用数据库主 API 配置，只读展示） ───
+  // ─── API 预设（参照剧情推进：跟随当前活动 API 或选择专用预设） ───
+  const { apiStore, apiPresetSelectOptions } = useApiPresetSelectOptions();
+  const apiPreset = ref(String(settings_ACU.bs_biotracker?.apiPreset || ''));
   const apiUrl = ref(settings_ACU.apiConfig?.url || '');
   const apiKey = ref(settings_ACU.apiConfig?.apiKey || '');
   const apiModel = ref(settings_ACU.apiConfig?.model || '');
 
-  // ─── 手动注册 ───
+  function setApiPreset(value: string): void {
+    apiPreset.value = String(value || '');
+    settings_ACU.bs_biotracker.apiPreset = apiPreset.value;
+    // 选中预设后展示其 url/model
+    const preset = apiStore.presets.find(p => p.name === apiPreset.value);
+    const cfg = preset?.apiConfig || settings_ACU.apiConfig || {};
+    apiUrl.value = cfg.url || '';
+    apiKey.value = cfg.apiKey || '';
+    apiModel.value = cfg.model || '';
+    saveSettings_ACU();
+  }
+
+  // ─── 手动注册（一次点击 = 繁育推演 + 注册两次 API） ───
   const registerName = ref('');
   const registerRace = ref('');
   const registerNotes = ref('');
@@ -50,13 +67,20 @@ export function useBiotrackerPage() {
     }
   }
 
-  // ─── 自动注册 ───
+  // ─── 自动搜寻注册（开关 + 扫描楼层数） ───
   const autoRegister = ref(isAutoRegisterEnabled_ACU());
+  const autoScanCount = ref(getAutoRegisterScanCount_ACU());
   const autoRunning = ref(false);
 
   function toggleAutoRegister(value: boolean): void {
     autoRegister.value = !!value;
     setAutoRegisterEnabled_ACU(!!value);
+    saveSettings_ACU();
+  }
+
+  function setAutoScanCount(value: number): void {
+    autoScanCount.value = Math.max(2, Math.min(100, Math.floor(Number(value) || 12)));
+    setAutoRegisterScanCount_ACU(autoScanCount.value);
     saveSettings_ACU();
   }
 
@@ -118,6 +142,9 @@ export function useBiotrackerPage() {
   });
 
   return {
+    apiPreset,
+    setApiPreset,
+    apiPresetSelectOptions,
     apiUrl,
     apiKey,
     apiModel,
@@ -129,6 +156,8 @@ export function useBiotrackerPage() {
     doRegister,
     autoRegister,
     toggleAutoRegister,
+    autoScanCount,
+    setAutoScanCount,
     autoRunning,
     runAutoRegister,
     runTrackerNow,

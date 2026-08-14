@@ -2,11 +2,14 @@
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import { createApp } from 'vue';
+import { createPinia } from 'pinia';
 import BiotrackerPage from '../../../src/presentation-v2/pages/BiotrackerPage.vue';
 
 vi.mock('../../../src/service/biotracker/biotracker-adapter', () => ({
   isAutoRegisterEnabled_ACU: () => false,
   setAutoRegisterEnabled_ACU: vi.fn(),
+  getAutoRegisterScanCount_ACU: () => 12,
+  setAutoRegisterScanCount_ACU: vi.fn(),
   registerCharacter_ACU: vi.fn(async () => ({ ok: true, message: 'ok' })),
   autoRegisterCharacters_ACU: vi.fn(async () => ({ ok: true, registered: [], message: 'none' })),
   runBiotrackerNow_ACU: vi.fn(async () => {}),
@@ -29,6 +32,7 @@ function mountPage() {
   const el = document.createElement('div');
   document.body.appendChild(el);
   const app = createApp(BiotrackerPage);
+  app.use(createPinia());
   app.mount(el);
   return { el, app };
 }
@@ -38,10 +42,10 @@ describe('BiotrackerPage 渲染', () => {
     document.body.innerHTML = '';
   });
 
-  it('API 配置面板显示数据库 API 只读信息', () => {
+  it('API 设置面板显示预设下拉与当前生效 API', () => {
     const { el, app } = mountPage();
-    expect(el.textContent).toContain('API 配置');
-    expect(el.textContent).toContain('数据库已配置的 API');
+    expect(el.textContent).toContain('API 设置');
+    expect(el.textContent).toContain('跟随当前活动 API');
     expect(el.textContent).toContain('未配置 URL'); // mock apiConfig 为空
     app.unmount();
   });
