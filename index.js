@@ -1921,15 +1921,19 @@ function readWarnLogEnabled() {
 // ═══════════════════════════════════════════════════════════════
 // 常量
 // ═══════════════════════════════════════════════════════════════
-/** 缓冲区最大容量 */
-const MAX_BUFFER_SIZE = 2000;
+/** 缓冲区最大容量（环形覆盖：超过时覆盖最旧日志，写入 O(1) 无拷贝） */
+const MAX_BUFFER_SIZE = 50000;
 /** 未分类标签 */
 const UNCATEGORIZED_TAG = '未分类';
 // ═══════════════════════════════════════════════════════════════
 // 内部状态
 // ═══════════════════════════════════════════════════════════════
-/** 日志缓冲区（环形数组） */
-let _buffer = [];
+/** 日志缓冲区（环形数组，固定容量） */
+let _buffer = new Array(MAX_BUFFER_SIZE);
+/** 环形写入游标（下一个写入位置） */
+let _writeIndex = 0;
+/** 当前缓冲区中的有效条数 */
+let _count = 0;
 /** 自增 ID 计数器 */
 let _nextId = 1;
 /** 订阅者列表 */
@@ -2072,11 +2076,11 @@ function pushLog(level, args) {
         tag,
         message: formatArgs(args),
     };
-    // 环形缓冲区：超过上限时丢弃最旧的
-    _buffer.push(entry);
-    if (_buffer.length > MAX_BUFFER_SIZE) {
-        _buffer = _buffer.slice(_buffer.length - MAX_BUFFER_SIZE);
-    }
+    // 环形缓冲区：固定容量覆盖写，O(1) 无数组拷贝
+    _buffer[_writeIndex] = entry;
+    _writeIndex = (_writeIndex + 1) % MAX_BUFFER_SIZE;
+    if (_count < MAX_BUFFER_SIZE)
+        _count++;
     // 通知所有订阅者
     for (const subscriber of _subscribers) {
         try {
@@ -2091,19 +2095,30 @@ function pushLog(level, args) {
  * 获取缓冲区中的所有日志（按时间顺序）
  */
 function getAllLogs() {
-    return [..._buffer];
+    if (_count === 0)
+        return [];
+    const start = _count < MAX_BUFFER_SIZE ? 0 : _writeIndex;
+    const result = [];
+    for (let i = 0; i < _count; i++) {
+        const entry = _buffer[(start + i) % MAX_BUFFER_SIZE];
+        if (entry)
+            result.push(entry);
+    }
+    return result;
 }
 /**
  * 获取缓冲区中的日志数量
  */
 function getLogCount() {
-    return _buffer.length;
+    return _count;
 }
 /**
  * 清空缓冲区
  */
 function clearLogs() {
-    _buffer = [];
+    _buffer = new Array(MAX_BUFFER_SIZE);
+    _writeIndex = 0;
+    _count = 0;
 }
 /**
  * 获取所有已知的模块标签（供 UI 过滤器使用）
@@ -2137,7 +2152,9 @@ function getSubscriberCount() {
  * 重置整个日志系统（仅供测试使用）
  */
 function _resetForTesting() {
-    _buffer = [];
+    _buffer = new Array(MAX_BUFFER_SIZE);
+    _writeIndex = 0;
+    _count = 0;
     _nextId = 1;
     _subscribers.clear();
     _knownTags.clear();
@@ -62227,13 +62244,18 @@ async function parseStreamResponse_ACU(response) {
     try {
         const text = await response.text();
         let result = '';
+        let sawDone = false;
         for (const line of text.split('\n')) {
             const trimmed = line.trim();
             if (!trimmed.startsWith('data:'))
                 continue;
             const payload = trimmed.slice(5).trim();
-            if (!payload || payload === '[DONE]')
+            if (!payload)
                 continue;
+            if (payload === '[DONE]') {
+                sawDone = true;
+                continue;
+            }
             try {
                 const data = JSON.parse(payload);
                 const delta = data?.choices?.[0]?.delta?.content;
@@ -62243,6 +62265,14 @@ async function parseStreamResponse_ACU(response) {
             catch {
                 // 忽略无法解析的 data 行（注释/空行）
             }
+        }
+        if (!sawDone) {
+            // 流式响应未收到 [DONE]（网络中断/超时截断）：返回部分内容会让调用方误判任务成功，
+            // 显式告警以便从日志定位「任务看似成功但内容不完整」。
+            logWarn_ACU(`[parseStreamResponse] 流式响应未收到 [DONE]（可能被网络中断/截断），已收集内容长度: ${result.length}`);
+        }
+        if (!result) {
+            logWarn_ACU('[parseStreamResponse] 流式响应未解析出任何内容。');
         }
         return result || null;
     }
@@ -63805,12 +63835,21 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
  * 返回 AI 响应文本（原始，未 trim），失败抛错。
  */
 async function postChatCompletion_ACU(body, signal) {
-    const res = await fetch('/api/backends/chat-completions/generate', {
-        method: 'POST',
-        headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: signal || undefined,
-    });
+    let res;
+    try {
+        res = await fetch('/api/backends/chat-completions/generate', {
+            method: 'POST',
+            headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+            signal: signal || undefined,
+        });
+    }
+    catch (e) {
+        // 网络层失败（Failed to fetch / NetworkError）：调用方（剧情推进任务循环等）会决定是否重试，
+        // 这里显式记录便于从日志区分「网络失败」与「后端返回错误状态」。
+        logWarn_ACU(`[postChatCompletion] 网络请求失败: ${String(e?.message || e?.name || 'unknown')}`, { aborted: e?.name === 'AbortError' || String(e?.message || '').toLowerCase().includes('aborted') });
+        throw e;
+    }
     if (!res.ok) {
         const errTxt = await res.text();
         throw new Error(`API请求失败: ${res.status} ${errTxt}`);
@@ -67223,6 +67262,10 @@ async function runAgentDecisionForPlot_ACU(params) {
         if (successfulShards.length === 0) {
             const firstFailure = settled.find((result) => result.status === 'rejected');
             const reason = String(firstFailure?.reason?.message || 'agent_decision_error').split(':').pop() || 'agent_decision_error';
+            logError_ACU(`[Agent决策] 全部分片决策失败（共 ${shards.length} 片），已回退原剧情推进逻辑。失败原因: ${reason}`, {
+                phase: 'agent_decision_all_failed',
+                shardCount: shards.length,
+            });
             return emptyDecision_ACU(originalTasks, reason);
         }
         if (successfulShards.length !== shards.length) {
@@ -67859,6 +67902,11 @@ async function executeSinglePlotTask_ACU(task, sharedContext, runtimeOptions = {
         const { tagNames, extractedTags, injectedFragments, injectOnlyTags, injectOnlyFragments, injectOnlyTagNames } = extractPlotTagsFromResponse_ACU(rawResponse, normalizedTask.extractTags, normalizedTask.extractInjectTags);
         if (tagNames.length > 0 && Object.keys(extractedTags).length > 0) {
             logDebug_ACU(`[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] 成功摘取标签: ${Object.keys(extractedTags).join(', ')}`);
+        }
+        else if (tagNames.length > 0 && Object.keys(extractedTags).length === 0) {
+            // 任务配置了 extractTags 但一个都没摘到：任务仍按成功返回（不重试、不阻断阶段），
+            // 显式告警便于从日志定位「判定任务看似成功但标签缺失」。
+            logWarn_ACU(`[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] API 返回内容长度 ${rawResponse.length} 但未摘到任何 extractTags 标签（${tagNames.join(', ')}），任务仍按成功处理`);
         }
         return {
             taskId: normalizedTask.id,
@@ -110580,7 +110628,7 @@ const WARDROBE_DIMENSION_LABELS = Object.freeze({ masking: '掩形', support: '�
 const PREG_FIT_GAP_LABELS = Object.freeze({ masking: '掩形', support: '支撑', capacity: '容身', convenience: '便捷' });
 const MAX_PROGRESS_BAR_CAP = 200;
 // 构建时间戳（rollup replace 注入；测试/dev 环境无替换时回退 'dev'）——全局水印用，截图辨别构建
-const ACU_BUILD_STAMP = typeof "20260814-20" === 'string' ? "20260814-20" : 'dev';
+const ACU_BUILD_STAMP = typeof "20260814-21" === 'string' ? "20260814-21" : 'dev';
 const MODAL_EDGE_GAP = 24;
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const FLOATING_SPHERE_POSITION_KEY = `${MODULE_NAME}_floating_sphere_position`;

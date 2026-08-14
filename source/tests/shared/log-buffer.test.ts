@@ -96,15 +96,34 @@ describe('Warn 日志开关', () => {
 // 环形缓冲区上限
 // ═══════════════════════════════════════════════════════════════
 describe('环形缓冲区', () => {
-  it('超过 2000 条时丢弃最旧的', () => {
-    for (let i = 0; i < 2100; i++) {
+  it('超过 50000 条时丢弃最旧的（环形覆盖）', () => {
+    for (let i = 0; i < 50100; i++) {
       pushLog('debug', ['[ACU]', `日志 ${i}`]);
     }
-    expect(getLogCount()).toBe(2000);
+    expect(getLogCount()).toBe(50000);
     const logs = getAllLogs();
-    // 最旧的应该是第 100 条（0-99 被丢弃）
+    // 最旧的应该是第 100 条（0-99 被覆盖丢弃）
     expect(logs[0].message).toContain('日志 100');
-    expect(logs[logs.length - 1].message).toContain('日志 2099');
+    expect(logs[logs.length - 1].message).toContain('日志 50099');
+  });
+
+  it('未超上限时按写入顺序完整返回（环形游标不破坏顺序）', () => {
+    for (let i = 0; i < 100; i++) {
+      pushLog('debug', ['[ACU]', `顺序 ${i}`]);
+    }
+    const logs = getAllLogs();
+    expect(logs).toHaveLength(100);
+    expect(logs[0].message).toContain('顺序 0');
+    expect(logs[99].message).toContain('顺序 99');
+  });
+
+  it('恰好等于上限时全部保留', () => {
+    for (let i = 0; i < 50000; i++) {
+      pushLog('debug', ['[ACU]', `满额 ${i}`]);
+    }
+    expect(getLogCount()).toBe(50000);
+    expect(getAllLogs()[0].message).toContain('满额 0');
+    expect(getAllLogs()[49999].message).toContain('满额 49999');
   });
 });
 

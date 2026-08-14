@@ -233,11 +233,16 @@ export class RetryableAiResponseError_ACU extends Error {
     try {
       const text = await response.text();
       let result = '';
+      let sawDone = false;
       for (const line of text.split('\n')) {
         const trimmed = line.trim();
         if (!trimmed.startsWith('data:')) continue;
         const payload = trimmed.slice(5).trim();
-        if (!payload || payload === '[DONE]') continue;
+        if (!payload) continue;
+        if (payload === '[DONE]') {
+          sawDone = true;
+          continue;
+        }
         try {
           const data = JSON.parse(payload);
           const delta = data?.choices?.[0]?.delta?.content;
@@ -245,6 +250,14 @@ export class RetryableAiResponseError_ACU extends Error {
         } catch {
           // 忽略无法解析的 data 行（注释/空行）
         }
+      }
+      if (!sawDone) {
+        // 流式响应未收到 [DONE]（网络中断/超时截断）：返回部分内容会让调用方误判任务成功，
+        // 显式告警以便从日志定位「任务看似成功但内容不完整」。
+        logWarn_ACU(`[parseStreamResponse] 流式响应未收到 [DONE]（可能被网络中断/截断），已收集内容长度: ${result.length}`);
+      }
+      if (!result) {
+        logWarn_ACU('[parseStreamResponse] 流式响应未解析出任何内容。');
       }
       return result || null;
     } catch (e) {

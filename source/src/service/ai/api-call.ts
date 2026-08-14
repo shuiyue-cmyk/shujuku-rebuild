@@ -107,12 +107,20 @@ export function buildCustomApiRequestBody_ACU(
  * 返回 AI 响应文本（原始，未 trim），失败抛错。
  */
 export async function postChatCompletion_ACU(body: unknown, signal?: AbortSignal | null): Promise<string | null> {
-    const res = await fetch('/api/backends/chat-completions/generate', {
-        method: 'POST',
-        headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: signal || undefined,
-    });
+    let res: Response;
+    try {
+        res = await fetch('/api/backends/chat-completions/generate', {
+            method: 'POST',
+            headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+            signal: signal || undefined,
+        });
+    } catch (e: any) {
+        // 网络层失败（Failed to fetch / NetworkError）：调用方（剧情推进任务循环等）会决定是否重试，
+        // 这里显式记录便于从日志区分「网络失败」与「后端返回错误状态」。
+        logWarn_ACU(`[postChatCompletion] 网络请求失败: ${String(e?.message || e?.name || 'unknown')}`, { aborted: e?.name === 'AbortError' || String(e?.message || '').toLowerCase().includes('aborted') });
+        throw e;
+    }
     if (!res.ok) {
         const errTxt = await res.text();
         throw new Error(`API请求失败: ${res.status} ${errTxt}`);

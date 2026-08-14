@@ -33,8 +33,8 @@ export type LogSubscriber = (entry: LogEntry) => void;
 // 常量
 // ═══════════════════════════════════════════════════════════════
 
-/** 缓冲区最大容量 */
-const MAX_BUFFER_SIZE = 2000;
+/** 缓冲区最大容量（环形覆盖：超过时覆盖最旧日志，写入 O(1) 无拷贝） */
+const MAX_BUFFER_SIZE = 50000;
 
 /** 未分类标签 */
 const UNCATEGORIZED_TAG = '未分类';
@@ -43,8 +43,12 @@ const UNCATEGORIZED_TAG = '未分类';
 // 内部状态
 // ═══════════════════════════════════════════════════════════════
 
-/** 日志缓冲区（环形数组） */
-let _buffer: LogEntry[] = [];
+/** 日志缓冲区（环形数组，固定容量） */
+let _buffer: (LogEntry | undefined)[] = new Array(MAX_BUFFER_SIZE);
+/** 环形写入游标（下一个写入位置） */
+let _writeIndex = 0;
+/** 当前缓冲区中的有效条数 */
+let _count = 0;
 
 /** 自增 ID 计数器 */
 let _nextId = 1;
@@ -193,11 +197,10 @@ export function pushLog(level: LogLevel, args: any[]): void {
     message: formatArgs(args),
   };
 
-  // 环形缓冲区：超过上限时丢弃最旧的
-  _buffer.push(entry);
-  if (_buffer.length > MAX_BUFFER_SIZE) {
-    _buffer = _buffer.slice(_buffer.length - MAX_BUFFER_SIZE);
-  }
+  // 环形缓冲区：固定容量覆盖写，O(1) 无数组拷贝
+  _buffer[_writeIndex] = entry;
+  _writeIndex = (_writeIndex + 1) % MAX_BUFFER_SIZE;
+  if (_count < MAX_BUFFER_SIZE) _count++;
 
   // 通知所有订阅者
   for (const subscriber of _subscribers) {
@@ -213,21 +216,30 @@ export function pushLog(level: LogLevel, args: any[]): void {
  * 获取缓冲区中的所有日志（按时间顺序）
  */
 export function getAllLogs(): LogEntry[] {
-  return [..._buffer];
+  if (_count === 0) return [];
+  const start = _count < MAX_BUFFER_SIZE ? 0 : _writeIndex;
+  const result: LogEntry[] = [];
+  for (let i = 0; i < _count; i++) {
+    const entry = _buffer[(start + i) % MAX_BUFFER_SIZE];
+    if (entry) result.push(entry);
+  }
+  return result;
 }
 
 /**
  * 获取缓冲区中的日志数量
  */
 export function getLogCount(): number {
-  return _buffer.length;
+  return _count;
 }
 
 /**
  * 清空缓冲区
  */
 export function clearLogs(): void {
-  _buffer = [];
+  _buffer = new Array(MAX_BUFFER_SIZE);
+  _writeIndex = 0;
+  _count = 0;
 }
 
 /**
@@ -266,7 +278,9 @@ export function getSubscriberCount(): number {
  * 重置整个日志系统（仅供测试使用）
  */
 export function _resetForTesting(): void {
-  _buffer = [];
+  _buffer = new Array(MAX_BUFFER_SIZE);
+  _writeIndex = 0;
+  _count = 0;
   _nextId = 1;
   _subscribers.clear();
   _knownTags.clear();

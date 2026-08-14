@@ -767,6 +767,10 @@ import {
       const { tagNames, extractedTags, injectedFragments, injectOnlyTags, injectOnlyFragments, injectOnlyTagNames } = extractPlotTagsFromResponse_ACU(rawResponse, normalizedTask.extractTags, normalizedTask.extractInjectTags);
       if (tagNames.length > 0 && Object.keys(extractedTags).length > 0) {
         logDebug_ACU(`[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] 成功摘取标签: ${Object.keys(extractedTags).join(', ')}`);
+      } else if (tagNames.length > 0 && Object.keys(extractedTags).length === 0) {
+        // 任务配置了 extractTags 但一个都没摘到：任务仍按成功返回（不重试、不阻断阶段），
+        // 显式告警便于从日志定位「判定任务看似成功但标签缺失」。
+        logWarn_ACU(`[剧情推进] [阶段:${taskStage}] [任务:${taskLabel}] API 返回内容长度 ${rawResponse.length} 但未摘到任何 extractTags 标签（${tagNames.join(', ')}），任务仍按成功处理`);
       }
 
       return {
