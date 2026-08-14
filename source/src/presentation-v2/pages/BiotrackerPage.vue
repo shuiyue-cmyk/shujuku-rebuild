@@ -71,14 +71,14 @@
             <option v-for="freq in autoFrequencyOptions" :key="freq" :value="freq">每 {{ freq }} 层</option>
           </select>
         </AcuFormRow>
-        <AcuFormRow label="发送最近 N 条 AI 回复" hint="点击「立即分析并注册」时发送给 AI 的最近 AI 回复条数">
-          <input v-model.number="autoRecentCount" type="number" min="1" max="100" class="acu-input" @change="setAutoRecentCount(autoRecentCount)" />
-        </AcuFormRow>
         <div class="acu-v2-biotracker-page__actions">
           <AcuButton size="sm" :disabled="autoRunning || !autoRegister" @click="runAutoRegister">
             {{ autoRunning ? '分析中...' : '立即分析并注册' }}
           </AcuButton>
         </div>
+        <AcuFormRow label="发送最近 N 条 AI 回复" hint="点击「立即分析并注册」时发送给 AI 的最近 AI 回复条数">
+          <input v-model.number="autoRecentCount" type="number" min="1" max="100" class="acu-input" @change="setAutoRecentCount(autoRecentCount)" />
+        </AcuFormRow>
         <p class="acu-v2-biotracker-page__api-readonly">
           {{ autoRegister ? '已开启：最新楼层达到更新频率后自动送入分析。' : '关闭状态：仅可手动点击「立即分析并注册」。' }}
         </p>
