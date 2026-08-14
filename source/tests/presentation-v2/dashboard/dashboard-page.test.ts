@@ -371,7 +371,7 @@ describe("DashboardPage", () => {
     expect(text).toContain("高级设置");
     expect(text).toContain("自动更新");
     expect(text).toContain("静默提示框");
-    expect(text).toContain("开启流式输出");
+    expect(text).not.toContain("开启流式输出"); // 已移至 API 页
 
     const visibleToggleKeys = Array.from(
       document.querySelectorAll<HTMLButtonElement>(
@@ -382,7 +382,6 @@ describe("DashboardPage", () => {
       "flightMode",
       "autoUpdateEnabled",
       "toastMuteEnabled",
-      "streamingEnabled",
     ]);
 
     // 默认在基础设置视图下，高级字段不可见

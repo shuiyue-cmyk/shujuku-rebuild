@@ -861,12 +861,6 @@ export function useDashboardPage(): DashboardPageState {
         description: dashboardCopy.toggles.toastMute.description,
         value: settings_ACU.toastMuteEnabled === true,
       },
-      {
-        key: "streamingEnabled",
-        label: dashboardCopy.toggles.streaming.label,
-        description: dashboardCopy.toggles.streaming.description,
-        value: settings_ACU.streamingEnabled === true,
-      },
     ];
   });
 

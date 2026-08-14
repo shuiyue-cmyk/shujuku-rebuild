@@ -319,6 +319,34 @@ describe('buildCustomApiRequestBody_ACU', () => {
       null,
     ]);
   });
+
+  it('非预填充支持开启时 assistant 消息改写为 user 并加「助手：」前缀', () => {
+    mockSettings.nonPrefillSupport = true;
+    const input = [
+      { role: 'system', content: '你是改表助手。' },
+      { role: 'assistant', content: '收到。' },
+      { role: 'user', content: '请改表。' },
+    ];
+    const body = buildCustomApiRequestBody_ACU(input, { url: 'https://api.example.com', model: 'gpt-4' });
+    expect(body.messages).toEqual([
+      { role: 'system', content: '你是改表助手。' },
+      { role: 'user', content: '助手：\n收到。' },
+      { role: 'user', content: '请改表。' },
+    ]);
+    // 不原地修改调用方
+    expect(input[1]).toEqual({ role: 'assistant', content: '收到。' });
+    delete mockSettings.nonPrefillSupport;
+  });
+
+  it('非预填充支持关闭时 assistant 消息保持原样', () => {
+    delete mockSettings.nonPrefillSupport;
+    delete mockSettings.nonPrefillGlobal;
+    const input = [
+      { role: 'assistant', content: '收到。' },
+    ];
+    const body = buildCustomApiRequestBody_ACU(input, { url: 'https://api.example.com', model: 'gpt-4' });
+    expect(body.messages).toEqual([{ role: 'assistant', content: '收到。' }]);
+  });
 });
 
 // ═══ callAIWithPreset_ACU 自定义模式最终发送 body 层面：role 小写化回归 ═══

@@ -85,7 +85,9 @@ describe('ApiPage', () => {
 
     // Active preset shown in preset panel and opened in config panel.
     expect(page!.textContent).toContain('beta');
-    expect(page!.textContent).not.toContain('流式输出');
+    expect(page!.textContent).toContain('非预填充支持');
+    expect(page!.textContent).toContain('全局支持');
+    expect(page!.textContent).toContain('流式输出');
     expect(page!.textContent).toContain('当前聊天');
     expect(page!.textContent).not.toContain('当前配置状态');
     expect(page!.textContent).not.toContain('已保存预设');
@@ -97,7 +99,7 @@ describe('ApiPage', () => {
     const apiPanel = Array.from(page!.querySelectorAll<HTMLElement>('.acu-panel'))
       .find(panel => panel.querySelector('.acu-panel__title')?.textContent?.includes('API 预设'))!;
     expect(Array.from(page!.querySelectorAll<HTMLElement>('.acu-panel'))[0]).toBe(apiPanel);
-    expect(apiPanel.querySelector('.acu-toggle')).toBeNull();
+    expect(apiPanel.querySelectorAll('.acu-toggle').length).toBe(3); // 非预填充支持/全局支持/流式输出
     expect(apiPanel.querySelector('button[title="新建预设"]')).not.toBeNull();
     expect(apiPanel.querySelector('button[title="删除当前预设"]')).not.toBeNull();
     expect(document.body.textContent).not.toContain('管理 API 预设');

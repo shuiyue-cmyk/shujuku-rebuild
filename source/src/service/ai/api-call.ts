@@ -43,6 +43,11 @@ export function buildCustomApiRequestBody_ACU(
     }
   }
 
+  // 非预填充支持：开启后把 messages 中的 assistant 消息改写为 user，
+  // 内容首行加「助手：」前缀（换行接原内容），用于不支持 assistant 预填充的接口。
+  // 主开关 nonPrefillSupport 或全局 nonPrefillGlobal 任一开启即生效。
+  const applyNonPrefill = settings_ACU.nonPrefillSupport === true || settings_ACU.nonPrefillGlobal === true;
+
   const body: Record<string, any> = {
     // 统一将 messages 的 role 归一为小写（system / user / assistant）。
     //
@@ -60,11 +65,16 @@ export function buildCustomApiRequestBody_ACU(
     // 数组/原始值等异常消息一律原样保留，交由后端校验，绝不把缺失 role 静默
     // 改造成 "undefined" / "null"。
     messages: Array.isArray(messages)
-        ? messages.map((m) =>
-              m && typeof m === 'object' && !Array.isArray(m) && typeof m.role === 'string'
-                  ? { ...m, role: m.role.toLowerCase() }
-                  : m,
-          )
+        ? messages.map((m) => {
+              if (!m || typeof m !== 'object' || Array.isArray(m) || typeof m.role !== 'string') return m;
+              let role = m.role.toLowerCase();
+              let content = m.content;
+              if (applyNonPrefill && role === 'assistant') {
+                role = 'user';
+                content = `助手：\n${typeof content === 'string' ? content : String(content ?? '')}`;
+              }
+              return { ...m, role, ...(content !== undefined ? { content } : {}) };
+          })
         : messages,
     model,
     max_tokens: maxTokens,

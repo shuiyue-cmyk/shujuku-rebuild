@@ -33,6 +33,27 @@
       </div>
     </AcuFormRow>
 
+    <div class="acu-api-config-panel__behavior">
+      <AcuToggle
+        :model-value="nonPrefillSupport"
+        label="非预填充支持"
+        description="开启后，发送给 AI 的 API 调用中所有 assistant 消息会改写为 user 消息，并在首行加上「助手：」前缀（默认关闭）。用于不支持 assistant 预填充的模型/接口。"
+        @update:model-value="setNonPrefillSupport"
+      />
+      <AcuToggle
+        :model-value="nonPrefillGlobal"
+        label="全局支持"
+        description="开启后，数据库中所有 AI 调用（含剧情推进/填表等内部调用）都应用上面的改写逻辑。"
+        @update:model-value="setNonPrefillGlobal"
+      />
+      <AcuToggle
+        :model-value="streamingEnabled"
+        label="开启流式输出"
+        description="开启后 AI 响应以流式方式输出（用于对话类调用）。"
+        @update:model-value="setStreamingEnabled"
+      />
+    </div>
+
     <form
       v-if="formMode !== 'empty'"
       class="acu-api-config-panel__editor"
@@ -177,6 +198,32 @@ import AcuTextarea from "./_lib/AcuTextarea.vue";
 import type { PresetDropdownItem } from "./_lib/AcuPresetDropdown.vue";
 import AcuPresetDropdown from "./_lib/AcuPresetDropdown.vue";
 import AcuSelect, { type AcuSelectOption } from "./_lib/AcuSelect.vue";
+import AcuToggle from "./_lib/AcuToggle.vue";
+import { settings_ACU } from "../../service/runtime/state-manager";
+import { saveSettings_ACU } from "../../service/settings/settings-service";
+
+// ─── 非预填充支持（API 行为开关，与预设同级） ───
+const nonPrefillSupport = ref(settings_ACU.nonPrefillSupport === true);
+const nonPrefillGlobal = ref(settings_ACU.nonPrefillGlobal === true);
+const streamingEnabled = ref(settings_ACU.streamingEnabled === true);
+
+function setNonPrefillSupport(value: boolean): void {
+  nonPrefillSupport.value = !!value;
+  settings_ACU.nonPrefillSupport = nonPrefillSupport.value;
+  saveSettings_ACU();
+}
+
+function setNonPrefillGlobal(value: boolean): void {
+  nonPrefillGlobal.value = !!value;
+  settings_ACU.nonPrefillGlobal = nonPrefillGlobal.value;
+  saveSettings_ACU();
+}
+
+function setStreamingEnabled(value: boolean): void {
+  streamingEnabled.value = !!value;
+  settings_ACU.streamingEnabled = streamingEnabled.value;
+  saveSettings_ACU();
+}
 
 const store = useApiPresetStore();
 const dialogStore = useDialogStore();
@@ -331,6 +378,16 @@ watch(
   grid-template-columns: minmax(0, 1fr) max-content max-content;
   gap: 6px;
   align-items: stretch;
+}
+
+.acu-api-config-panel__behavior {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(128, 128, 128, 0.25);
 }
 
 .acu-api-config-panel__editor {
