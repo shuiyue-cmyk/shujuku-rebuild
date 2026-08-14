@@ -156902,8 +156902,22 @@ function useBiotrackerPage() {
         dataRefreshTick.value++;
         const chatStates = settings_ACU.bs_biotracker?.chatStates || {};
         const chatKey = String(currentChatFileIdentifier_ACU || '');
-        const chatState = chatStates[chatKey];
-        const map = chatState?.characters || {};
+        // 当前聊天无匹配数据时（chatKey 为空/插件重载后 CHAT_CHANGED 未触发/隔离码 profile 差异），
+        // 回退聚合所有聊天的已注册角色，避免「更新后已注册角色丢失」
+        let map = chatStates[chatKey]?.characters || {};
+        if (Object.keys(map).length === 0) {
+            const merged = {};
+            for (const key of Object.keys(chatStates)) {
+                const chars = chatStates[key]?.characters;
+                if (!chars || typeof chars !== 'object')
+                    continue;
+                for (const name of Object.keys(chars)) {
+                    if (!merged[name])
+                        merged[name] = chars[name];
+                }
+            }
+            map = merged;
+        }
         characters.value = Object.keys(map).map((name) => {
             const profile = map[name]?.profile || {};
             const base = profile.base || {};
