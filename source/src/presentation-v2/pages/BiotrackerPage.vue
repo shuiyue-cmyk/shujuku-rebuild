@@ -63,7 +63,7 @@
             <span>由配置的模型读取正文，自动发现有价值的角色并注册（种族交 AI 判断）</span>
           </label>
         </AcuFormRow>
-        <AcuFormRow label="更新频率" hint="每几层新楼层送入一次分析（1-50）">
+        <AcuFormRow label="更新频率" hint="每几层新楼层送入一次分析">
           <select v-model="autoFrequency" class="acu-input" @change="setAutoFrequency(autoFrequency)">
             <option v-for="freq in autoFrequencyOptions" :key="freq" :value="freq">每 {{ freq }} 层</option>
           </select>
