@@ -110612,6 +110612,82 @@ function createBiotrackerCtx_ACU() {
         getContext: () => host,
     };
 }
+/**
+ * 挂 biotracker 前端 iframe 桥（window.__ACU_BIOTRACKER_BRIDGE__）。
+ * biotracker-ui 弹窗（同源 iframe）经此拿到数据库适配层 ctx / 表格数据 / 追踪触发。
+ * 追踪核心由适配层单实例驱动——iframe 前端只渲染，绝不在 iframe 内跑第二实例。
+ */
+let frontendBridgeInstalled = false;
+function installBiotrackerFrontendBridge() {
+    if (frontendBridgeInstalled)
+        return;
+    frontendBridgeInstalled = true;
+    try {
+        const bridge = {
+            createCtx: createBiotrackerCtx_ACU,
+            getRequestHeaders: () => {
+                try {
+                    const host = getHostContext() || globalThis.SillyTavern?.getContext?.() || null;
+                    return typeof host?.getRequestHeaders === 'function' ? host.getRequestHeaders() : {};
+                }
+                catch (e) {
+                    return {};
+                }
+            },
+            // 表格数据快照（iframe 渲染用；序列化避免 iframe 意外改写）
+            getTables: () => {
+                try {
+                    if (!currentJsonTableData_ACU || typeof currentJsonTableData_ACU !== 'object')
+                        return {};
+                    return JSON.parse(JSON.stringify(currentJsonTableData_ACU)) || {};
+                }
+                catch (e) {
+                    return {};
+                }
+            },
+            // 手动「立即分析」：调顶层单实例追踪入口
+            runTrackerNow: async () => {
+                try {
+                    await runBiotrackerNow_ACU();
+                    return {};
+                }
+                catch (e) {
+                    logWarn_ACU('[生理追踪] 弹窗触发追踪失败:', e);
+                    return { skipped: true, reason: 'failed' };
+                }
+            },
+        };
+        globalThis.__ACU_BIOTRACKER_BRIDGE__ = bridge;
+        logDebug_ACU('[生理追踪] 前端桥已挂载');
+    }
+    catch (e) {
+        logWarn_ACU('[生理追踪] 前端桥安装失败:', e);
+    }
+}
+/**
+ * 创建 biotracker 悬浮窗（同源 iframe 加载 biotracker-ui/index.html，纯渲染版）。
+ * 生理追踪恒开启 → 默认出现；弹窗不可关闭（settings.html 无 close 按钮）。
+ */
+let popupCreated = false;
+function ensureBiotrackerPopup_ACU() {
+    try {
+        const doc = globalThis.topLevelWindow_ACU?.document || document;
+        if (popupCreated || doc.getElementById('bs-biotracker-popup-frame'))
+            return;
+        popupCreated = true;
+        const frame = doc.createElement('iframe');
+        frame.id = 'bs-biotracker-popup-frame';
+        frame.setAttribute('aria-label', '生理追踪');
+        frame.src = new URL('./assets/biotracker-ui/index.html', import.meta.url).href;
+        frame.style.cssText = 'position:fixed;top:0;right:0;z-index:2147483000;width:420px;height:100vh;border:none;background:transparent;';
+        doc.body.appendChild(frame);
+        logDebug_ACU('[生理追踪] 悬浮窗已创建');
+    }
+    catch (e) {
+        logWarn_ACU('[生理追踪] 悬浮窗创建失败:', e);
+        popupCreated = false;
+    }
+}
 // ═══════════════════════════════════════════════════════════════
 // 开关与恒字系列
 // ═══════════════════════════════════════════════════════════════
@@ -110656,6 +110732,8 @@ function initBiotracker_ACU() {
     initialized = true;
     // 桥接 biotracker vendor 日志（console.warn/error）到数据库日志系统（高级工具日志查看器可见）
     installBiotrackerConsoleBridge();
+    // 挂 iframe 前端桥（弹窗渲染用；追踪核心保持本模块单实例）
+    installBiotrackerFrontendBridge();
     try {
         const ctx = createBiotrackerCtx_ACU();
         const settings = getBiotrackerSettings(ctx);
@@ -110694,6 +110772,8 @@ function initBiotracker_ACU() {
             });
         }
         logDebug_ACU('[生理追踪] 初始化完成，已注册角色数:', Object.keys(getChatState(ctx, settings).characters || {}).length);
+        // 生理追踪恒开启 → 默认出现悬浮窗（biotracker 前端弹窗，纯渲染）
+        ensureBiotrackerPopup_ACU();
     }
     catch (e) {
         logWarn_ACU('[生理追踪] 初始化失败（宿主未就绪，等待重试）:', e);
@@ -157039,8 +157119,8 @@ var _sfc_main$b = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-v2-biotracker-page[data-v-1f51d67c] {\n  min-height: 100%;\n  min-width: 0;\n  padding: 20px;\n  display: flex;\n  flex-direction: column;\n  gap: 18px;\n}\n.acu-v2-biotracker-page__panel-stack[data-v-1f51d67c] {\n  min-width: 0;\n  display: flex;\n  flex-direction: column;\n  gap: 16px;\n}\n.acu-v2-biotracker-page__api-readonly[data-v-1f51d67c] {\n  color: var(--acu-text-2, inherit);\n  margin: 0;\n  line-height: 1.55;\n}\n.acu-v2-biotracker-page__actions[data-v-1f51d67c] {\n  display: flex;\n  gap: 0.5rem;\n  flex-wrap: wrap;\n  margin-top: 0.5rem;\n}\n.acu-v2-biotracker-page__toggle[data-v-1f51d67c] {\n  display: flex;\n  align-items: center;\n  gap: 0.5rem;\n  cursor: pointer;\n}\n.acu-v2-biotracker-page__status[data-v-1f51d67c] {\n  margin-top: 0.75rem;\n  padding: 0.4rem 0.6rem;\n  border-radius: 4px;\n  background: rgba(125, 73, 64, 0.12);\n  color: var(--acu-text, inherit);\n}\n.acu-v2-biotracker-page__status[data-error='true'][data-v-1f51d67c] {\n  background: rgba(220, 60, 60, 0.15);\n  color: #e06060;\n}\n.acu-v2-biotracker-page__empty[data-v-1f51d67c] {\n  color: var(--acu-text-dim, #8a8075);\n  padding: 0.5rem 0;\n}\n.acu-v2-biotracker-page__table[data-v-1f51d67c] {\n  width: 100%;\n  border-collapse: collapse;\n  font-size: 0.9em;\n}\n.acu-v2-biotracker-page__table th[data-v-1f51d67c],\n.acu-v2-biotracker-page__table td[data-v-1f51d67c] {\n  text-align: left;\n  padding: 0.4rem 0.5rem;\n  border-bottom: 1px solid rgba(128, 128, 128, 0.2);\n}\n", "src/presentation-v2/pages/BiotrackerPage.vue#style-0-1f51d67c");
-var BiotrackerPage_vue_vue_type_style_index_0_scoped_1f51d67c_lang = null;
+injectSfcStyle("\n.acu-v2-biotracker-page[data-v-a1f0d719] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-biotracker-page__panel-stack[data-v-a1f0d719] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 16px;\n}\n.acu-v2-biotracker-page__api-readonly[data-v-a1f0d719] {\r\n  color: var(--acu-text-2, inherit);\r\n  margin: 0;\r\n  line-height: 1.55;\n}\n.acu-v2-biotracker-page__actions[data-v-a1f0d719] {\r\n  display: flex;\r\n  gap: 0.5rem;\r\n  flex-wrap: wrap;\r\n  margin-top: 0.5rem;\n}\n.acu-v2-biotracker-page__toggle[data-v-a1f0d719] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 0.5rem;\r\n  cursor: pointer;\n}\n.acu-v2-biotracker-page__status[data-v-a1f0d719] {\r\n  margin-top: 0.75rem;\r\n  padding: 0.4rem 0.6rem;\r\n  border-radius: 4px;\r\n  background: rgba(125, 73, 64, 0.12);\r\n  color: var(--acu-text, inherit);\n}\n.acu-v2-biotracker-page__status[data-error='true'][data-v-a1f0d719] {\r\n  background: rgba(220, 60, 60, 0.15);\r\n  color: #e06060;\n}\n.acu-v2-biotracker-page__empty[data-v-a1f0d719] {\r\n  color: var(--acu-text-dim, #8a8075);\r\n  padding: 0.5rem 0;\n}\n.acu-v2-biotracker-page__table[data-v-a1f0d719] {\r\n  width: 100%;\r\n  border-collapse: collapse;\r\n  font-size: 0.9em;\n}\n.acu-v2-biotracker-page__table th[data-v-a1f0d719],\r\n.acu-v2-biotracker-page__table td[data-v-a1f0d719] {\r\n  text-align: left;\r\n  padding: 0.4rem 0.5rem;\r\n  border-bottom: 1px solid rgba(128, 128, 128, 0.2);\n}\r\n", "src/presentation-v2/pages/BiotrackerPage.vue#style-0-a1f0d719");
+var BiotrackerPage_vue_vue_type_style_index_0_scoped_a1f0d719_lang = null;
 
 const _hoisted_1$b = { class: "acu-v2-biotracker-page" };
 const _hoisted_2$a = { class: "acu-v2-biotracker-page__panel-stack" };
@@ -157420,7 +157500,7 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 		}, 8, ["title", "description"])
 	])]);
 }
-var BiotrackerPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$b], ["__scopeId", "data-v-1f51d67c"]]);
+var BiotrackerPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$b], ["__scopeId", "data-v-a1f0d719"]]);
 
 /**
  * page-registry — 一级页静态注册表（plan §4.1 + §D24）

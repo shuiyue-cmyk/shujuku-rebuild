@@ -13,7 +13,7 @@ import replace from '@rollup/plugin-replace';
 import vuePlugin from 'unplugin-vue/rollup';
 import sfcStyleInjector from './src/presentation-v2/build/rollup-sfc-style-injector.js';
 import vueScriptTranspiler from './src/presentation-v2/build/rollup-vue-script-transpiler.js';
-import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { ACU_SQLITE_ENGINE, SQL_WASM_IMPORT_ID, SQL_WASM_BASE64, SQL_WASM_BASE64_GLOBAL, copySqlWasmTo } from './scripts/sql-wasm-assets.mjs';
@@ -150,6 +150,17 @@ const extensionConfig = {
         mkdirSync(join(repoRoot, 'assets'), { recursive: true });
         copyFileSync(join(__dirname, 'assets', 'wardrobe-style-book.json'), join(distExtensionDir, 'assets', 'wardrobe-style-book.json'));
         copyFileSync(join(__dirname, 'assets', 'wardrobe-style-book.json'), join(repoRoot, 'assets', 'wardrobe-style-book.json'));
+        // 复制 biotracker 前端弹窗资源（iframe 经 ./assets/biotracker-ui/ 加载；dist 与仓库根目录都复制，兼容两种安装形态）
+        const uiSrc = join(__dirname, 'assets', 'biotracker-ui');
+        for (const uiDist of [join(distExtensionDir, 'assets', 'biotracker-ui'), join(repoRoot, 'assets', 'biotracker-ui')]) {
+          mkdirSync(join(uiDist, 'scripts'), { recursive: true });
+          for (const file of ['index.html', 'settings.html', 'style.css', 'index.js', 'bootstrap.js']) {
+            copyFileSync(join(uiSrc, file), join(uiDist, file));
+          }
+          for (const file of readdirSync(join(uiSrc, 'scripts'))) {
+            copyFileSync(join(uiSrc, 'scripts', file), join(uiDist, 'scripts', file));
+          }
+        }
       },
     },
   ],

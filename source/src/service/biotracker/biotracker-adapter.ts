@@ -13,7 +13,7 @@ import { runRegistry, runRegistryBreedingInference } from './vendor/registry.js'
 import { resetPoller, runTracker } from './vendor/tracker.js';
 import { callOpenAICompatible, extractJson } from './vendor/api.js';
 import { getHostContext } from './vendor/host.js';
-import { settings_ACU, currentChatFileIdentifier_ACU, allChatMessages_ACU } from '../runtime/state-manager';
+import { settings_ACU, currentChatFileIdentifier_ACU, allChatMessages_ACU, currentJsonTableData_ACU } from '../runtime/state-manager';
 import { saveSettings_ACU } from '../settings/settings-service';
 import { resolveApiConfigByPreset_ACU } from '../settings/api-preset-service';
 import { getCurrentCharacterFallback_ACU } from '../host/host-state-service';
@@ -158,6 +158,76 @@ export function createBiotrackerCtx_ACU(): BiotrackerCtx_ACU {
   };
 }
 
+/**
+ * 挂 biotracker 前端 iframe 桥（window.__ACU_BIOTRACKER_BRIDGE__）。
+ * biotracker-ui 弹窗（同源 iframe）经此拿到数据库适配层 ctx / 表格数据 / 追踪触发。
+ * 追踪核心由适配层单实例驱动——iframe 前端只渲染，绝不在 iframe 内跑第二实例。
+ */
+let frontendBridgeInstalled = false;
+function installBiotrackerFrontendBridge(): void {
+  if (frontendBridgeInstalled) return;
+  frontendBridgeInstalled = true;
+  try {
+    const bridge = {
+      createCtx: createBiotrackerCtx_ACU,
+      getRequestHeaders: () => {
+        try {
+          const host = getHostContext() || (globalThis as any).SillyTavern?.getContext?.() || null;
+          return typeof host?.getRequestHeaders === 'function' ? host.getRequestHeaders() : {};
+        } catch (e) {
+          return {};
+        }
+      },
+      // 表格数据快照（iframe 渲染用；序列化避免 iframe 意外改写）
+      getTables: () => {
+        try {
+          if (!currentJsonTableData_ACU || typeof currentJsonTableData_ACU !== 'object') return {};
+          return JSON.parse(JSON.stringify(currentJsonTableData_ACU)) || {};
+        } catch (e) {
+          return {};
+        }
+      },
+      // 手动「立即分析」：调顶层单实例追踪入口
+      runTrackerNow: async () => {
+        try {
+          await runBiotrackerNow_ACU();
+          return {};
+        } catch (e) {
+          logWarn_ACU('[生理追踪] 弹窗触发追踪失败:', e);
+          return { skipped: true, reason: 'failed' };
+        }
+      },
+    };
+    (globalThis as any).__ACU_BIOTRACKER_BRIDGE__ = bridge;
+    logDebug_ACU('[生理追踪] 前端桥已挂载');
+  } catch (e) {
+    logWarn_ACU('[生理追踪] 前端桥安装失败:', e);
+  }
+}
+
+/**
+ * 创建 biotracker 悬浮窗（同源 iframe 加载 biotracker-ui/index.html，纯渲染版）。
+ * 生理追踪恒开启 → 默认出现；弹窗不可关闭（settings.html 无 close 按钮）。
+ */
+let popupCreated = false;
+export function ensureBiotrackerPopup_ACU(): void {
+  try {
+    const doc = (globalThis as any).topLevelWindow_ACU?.document || document;
+    if (popupCreated || doc.getElementById('bs-biotracker-popup-frame')) return;
+    popupCreated = true;
+    const frame = doc.createElement('iframe');
+    frame.id = 'bs-biotracker-popup-frame';
+    frame.setAttribute('aria-label', '生理追踪');
+    frame.src = new URL('./assets/biotracker-ui/index.html', import.meta.url).href;
+    frame.style.cssText = 'position:fixed;top:0;right:0;z-index:2147483000;width:420px;height:100vh;border:none;background:transparent;';
+    doc.body.appendChild(frame);
+    logDebug_ACU('[生理追踪] 悬浮窗已创建');
+  } catch (e) {
+    logWarn_ACU('[生理追踪] 悬浮窗创建失败:', e);
+    popupCreated = false;
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════
 // 开关与恒字系列
 // ═══════════════════════════════════════════════════════════════
@@ -208,6 +278,8 @@ export function initBiotracker_ACU(): void {
   initialized = true;
   // 桥接 biotracker vendor 日志（console.warn/error）到数据库日志系统（高级工具日志查看器可见）
   installBiotrackerConsoleBridge();
+  // 挂 iframe 前端桥（弹窗渲染用；追踪核心保持本模块单实例）
+  installBiotrackerFrontendBridge();
   try {
     const ctx = createBiotrackerCtx_ACU();
     const settings = getBiotrackerSettings(ctx);
@@ -245,6 +317,8 @@ export function initBiotracker_ACU(): void {
       });
     }
     logDebug_ACU('[生理追踪] 初始化完成，已注册角色数:', Object.keys(getChatState(ctx, settings).characters || {}).length);
+    // 生理追踪恒开启 → 默认出现悬浮窗（biotracker 前端弹窗，纯渲染）
+    ensureBiotrackerPopup_ACU();
   } catch (e) {
     logWarn_ACU('[生理追踪] 初始化失败（宿主未就绪，等待重试）:', e);
   }
