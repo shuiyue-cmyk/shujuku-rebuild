@@ -22,7 +22,7 @@ function normalizeExcludeBodyParamsForSillyTavern_ACU(raw: any): string {
 export function buildCustomApiRequestBody_ACU(
   messages: any[],
   effectiveApiConfig: any,
-  overrides?: { maxTokens?: number; temperature?: number; topP?: number; stripModelPrefix?: boolean }
+  overrides?: { maxTokens?: number; temperature?: number; topP?: number; stripModelPrefix?: boolean; nonPrefillSupport?: boolean }
 ): Record<string, any> {
   const opts = overrides || {};
   const model = opts.stripModelPrefix !== false
@@ -45,8 +45,10 @@ export function buildCustomApiRequestBody_ACU(
 
   // 非预填充支持：开启后把 messages 中的 assistant 消息改写为 user，
   // 内容首行加「助手：」前缀（换行接原内容），用于不支持 assistant 预填充的接口。
-  // 主开关 nonPrefillSupport 或全局 nonPrefillGlobal 任一开启即生效。
-  const applyNonPrefill = settings_ACU.nonPrefillSupport === true || settings_ACU.nonPrefillGlobal === true;
+  // 优先取调用点传入的预设级值；未传入时读全局设置。
+  const applyNonPrefill = opts.nonPrefillSupport !== undefined
+    ? opts.nonPrefillSupport === true
+    : settings_ACU.nonPrefillSupport === true;
 
   const body: Record<string, any> = {
     // 统一将 messages 的 role 归一为小写（system / user / assistant）。
@@ -136,7 +138,7 @@ export async function callApiWithPlotPreset_ACU(messages: any[], presetName: str
         throw new Error('自定义API的URL或模型未配置。');
     }
 
-    const requestBody = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig);
+    const requestBody = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { nonPrefillSupport: apiPresetConfig.nonPrefillSupport });
 
     const content = await postChatCompletion_ACU(requestBody, abortSignal);
     if (content) {
@@ -153,6 +155,7 @@ export function getApiConfigByPreset_ACU(presetName: string) {
       apiMode: resolved.apiMode,
       apiConfig: resolved.apiConfig,
       tavernProfile: resolved.tavernProfile,
+      nonPrefillSupport: resolved.nonPrefillSupport,
     };
 }
 
@@ -183,7 +186,7 @@ export async function callAIWithPreset_ACU(messages: any[], presetName: string =
         throw new Error('自定义API的URL或模型未配置。');
     }
 
-    const body = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens, stripModelPrefix: false });
+    const body = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens, stripModelPrefix: false, nonPrefillSupport: apiPresetConfig.nonPrefillSupport });
 
     const content = await postChatCompletion_ACU(body, signal);
     return content ? content.trim() : null;

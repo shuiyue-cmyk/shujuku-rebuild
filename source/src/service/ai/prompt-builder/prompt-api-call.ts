@@ -193,7 +193,7 @@ export class RetryableAiResponseError_ACU extends Error {
             throw new Error('自定义API的URL或模型未配置。');
         }
         logDebug_ACU('ACU: 调用后端生成 API, Model:', effectiveApiConfig.model);
-        const content = await postChatCompletion_ACU(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { stripModelPrefix: false }), abortSignal);
+        const content = await postChatCompletion_ACU(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { stripModelPrefix: false, nonPrefillSupport: apiPresetConfig.nonPrefillSupport }), abortSignal);
         if (content) {
             return content.trim();
         }

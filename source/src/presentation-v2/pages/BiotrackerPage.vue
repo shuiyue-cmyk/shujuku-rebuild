@@ -112,7 +112,7 @@
               <td>{{ c.summary }}</td>
               <td>
                 <AcuButton size="xs" variant="secondary" @click="viewFullState(c.name)">
-                  {{ selectedFullStateName === c.name ? '已选中' : '完整变量' }}
+                  {{ selectedFullStateName === c.name ? '收起' : '完整变量' }}
                 </AcuButton>
               </td>
             </tr>
@@ -121,10 +121,24 @@
         <div v-if="selectedFullStateName" class="acu-v2-biotracker-page__fullstate">
           <div class="acu-v2-biotracker-page__fullstate-title">
             完整变量：{{ selectedFullStateName }}
-            <AcuButton size="xs" variant="secondary" @click="viewFullState(selectedFullStateName)">刷新</AcuButton>
+            <div class="acu-v2-biotracker-page__actions">
+              <AcuButton size="xs" variant="secondary" @click="viewFullState(selectedFullStateName)">刷新</AcuButton>
+              <AcuButton size="xs" :disabled="savingFullState" @click="saveFullState">
+                {{ savingFullState ? '保存中...' : '保存修改' }}
+              </AcuButton>
+            </div>
           </div>
           <p v-if="fullStateError" class="acu-v2-biotracker-page__status" data-error="true">{{ fullStateError }}</p>
-          <pre v-else class="acu-v2-biotracker-page__fullstate-json">{{ fullStateJson }}</pre>
+          <textarea
+            v-else
+            v-model="fullStateJson"
+            class="acu-v2-biotracker-page__fullstate-json"
+            rows="18"
+            spellcheck="false"
+          ></textarea>
+          <p v-if="fullStateSaveMessage" class="acu-v2-biotracker-page__status" :data-error="fullStateSaveError">
+            {{ fullStateSaveMessage }}
+          </p>
 
           <div class="acu-v2-biotracker-page__fullstate-debug">
             <div class="acu-v2-biotracker-page__fullstate-title">调试工具</div>
@@ -211,6 +225,10 @@ const {
   debugMessage,
   viewFullState,
   runDebugAction,
+  saveFullState,
+  savingFullState,
+  fullStateSaveMessage,
+  fullStateSaveError,
   characters,
   status,
   statusIsError,
@@ -296,15 +314,25 @@ const panelNavItems = computed(() => [
   gap: 0.5rem;
 }
 .acu-v2-biotracker-page__fullstate-json {
+  display: block;
+  width: 100%;
   max-height: 260px;
   overflow: auto;
   background: rgba(0, 0, 0, 0.06);
+  border: 1px solid rgba(128, 128, 128, 0.3);
   border-radius: 4px;
   padding: 0.5rem;
+  font-family: inherit;
   font-size: 0.78em;
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
+  color: var(--acu-text, inherit);
+  resize: vertical;
+}
+.acu-v2-biotracker-page__fullstate-json:focus {
+  outline: none;
+  border-color: var(--acu-accent, #b8736a);
 }
 .acu-v2-biotracker-page__fullstate-debug {
   margin-top: 0.75rem;

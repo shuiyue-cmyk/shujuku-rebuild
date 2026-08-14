@@ -20,6 +20,7 @@ import {
   generateWardrobe_ACU,
   getCharacterFullState_ACU,
   debugCharacterAction_ACU,
+  saveCharacterFullState_ACU,
 } from '../../service/biotracker/biotracker-adapter';
 import { useApiPresetSelectOptions } from './useApiPresetSelectOptions';
 import { ALL_BUILTIN_RACES } from '../../service/biotracker/vendor/race_config.js';
@@ -244,11 +245,49 @@ export function useBiotrackerPage() {
   const fullStateError = ref('');
   const debugBusy = ref(false);
   const debugMessage = ref('');
+  const savingFullState = ref(false);
+  const fullStateSaveMessage = ref('');
+  const fullStateSaveError = ref(false);
 
-  /** 读取指定角色的完整状态变量 JSON（只读展示） */
+  /** 保存编辑后的完整变量（先做 JSON 格式与基础结构校验） */
+  async function saveFullState(): Promise<void> {
+    if (!selectedFullStateName.value) return;
+    if (savingFullState.value) return;
+    savingFullState.value = true;
+    fullStateSaveMessage.value = '';
+    fullStateSaveError.value = false;
+    try {
+      const result = saveCharacterFullState_ACU(selectedFullStateName.value, fullStateJson.value);
+      fullStateSaveMessage.value = String(result.message || '');
+      fullStateSaveError.value = !result.ok;
+      showToastr_ACU(result.ok ? 'success' : 'warning', result.message || '', { title: '生理追踪', acuToastCategory: 'biotracker' });
+      if (result.ok) {
+        viewFullState(selectedFullStateName.value);
+        refreshCharacters();
+      }
+    } catch (e: any) {
+      fullStateSaveMessage.value = `保存失败：${e?.message || e}`;
+      fullStateSaveError.value = true;
+      showToastr_ACU('error', `保存失败：${e?.message || e}`, { title: '生理追踪', acuToastCategory: 'biotracker' });
+    } finally {
+      savingFullState.value = false;
+    }
+  }
+
+  /** 读取指定角色的完整状态变量 JSON（只读展示）；再次点击已选中角色时收起 */
   function viewFullState(name: string): void {
-    selectedFullStateName.value = String(name || '').trim();
+    const nextName = String(name || '').trim();
+    if (selectedFullStateName.value === nextName) {
+      // 点击已选中 → 收起
+      selectedFullStateName.value = '';
+      fullStateJson.value = '';
+      fullStateError.value = '';
+      fullStateSaveMessage.value = '';
+      return;
+    }
+    selectedFullStateName.value = nextName;
     fullStateError.value = '';
+    fullStateSaveMessage.value = '';
     const result = getCharacterFullState_ACU(selectedFullStateName.value);
     if (!result.ok) {
       fullStateError.value = String(result.message || '读取失败。');
@@ -375,6 +414,10 @@ export function useBiotrackerPage() {
     debugMessage,
     viewFullState,
     runDebugAction,
+    saveFullState,
+    savingFullState,
+    fullStateSaveMessage,
+    fullStateSaveError,
     characters,
     status,
     statusIsError,

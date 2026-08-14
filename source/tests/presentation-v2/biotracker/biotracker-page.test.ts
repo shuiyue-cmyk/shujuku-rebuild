@@ -20,6 +20,7 @@ vi.mock('../../../src/service/biotracker/biotracker-adapter', () => ({
   generateWardrobe_ACU: vi.fn(async () => ({ ok: true, message: 'ok' })),
   getCharacterFullState_ACU: vi.fn(() => ({ ok: true, state: { name: '测试', profile: { base: { race: '人类' } } } })),
   debugCharacterAction_ACU: vi.fn(() => ({ ok: true, message: 'ok' })),
+  saveCharacterFullState_ACU: vi.fn(() => ({ ok: true, message: '已保存。' })),
 }));
 
 vi.mock('../../../src/service/biotracker/vendor/race_config.js', () => ({
@@ -95,10 +96,18 @@ describe('BiotrackerPage 渲染', () => {
     app.unmount();
   });
 
-  it('已注册角色卡提供完整变量/调试工具入口', async () => {
+  it('已注册角色卡提供完整变量/调试工具入口（点击展开后可编辑保存）', async () => {
     const { el, app } = mountPage();
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(el.textContent).toContain('完整变量');
+    const buttons = Array.from(el.querySelectorAll('button'));
+    const openBtn = buttons.find((b) => b.textContent?.includes('完整变量'));
+    expect(openBtn).toBeDefined();
+    openBtn!.click();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(el.textContent).toContain('保存修改');
+    expect(el.textContent).toContain('调试工具');
+    expect(el.textContent).toContain('收起');
     app.unmount();
   });
 });

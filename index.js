@@ -62188,7 +62188,7 @@ async function callCustomOpenAI_ACU(dynamicContent, abortController = null, opti
             throw new Error('自定义API的URL或模型未配置。');
         }
         logDebug_ACU('ACU: 调用后端生成 API, Model:', effectiveApiConfig.model);
-        const content = await postChatCompletion_ACU(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { stripModelPrefix: false }), abortSignal);
+        const content = await postChatCompletion_ACU(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { stripModelPrefix: false, nonPrefillSupport: apiPresetConfig.nonPrefillSupport }), abortSignal);
         if (content) {
             return content.trim();
         }
@@ -63348,6 +63348,7 @@ function normalizePreset_ACU(value) {
         name,
         apiMode: normalizeApiMode_ACU(value.apiMode),
         apiConfig: normalizeApiConfig_ACU(value.apiConfig),
+        nonPrefillSupport: value.nonPrefillSupport === true,
     };
 }
 function normalizePresetList_ACU(value) {
@@ -63433,6 +63434,7 @@ function resolveApiConfigByPreset_ACU(presetName) {
             apiConfig: settings_ACU.apiConfig,
             tavernProfile: settings_ACU.tavernProfile,
             resolved: false,
+            nonPrefillSupport: settings_ACU.nonPrefillSupport === true,
         };
     }
     const preset = findPresetByName_ACU(settings_ACU.apiPresets, normalized);
@@ -63442,6 +63444,7 @@ function resolveApiConfigByPreset_ACU(presetName) {
             apiConfig: preset.apiConfig,
             tavernProfile: settings_ACU.tavernProfile,
             resolved: true,
+            nonPrefillSupport: preset.nonPrefillSupport === true,
         };
     }
     // 悬挂引用：返回当前配置但标记未解析，调用方应据此拒绝或回退，而不是静默误用。
@@ -63451,6 +63454,7 @@ function resolveApiConfigByPreset_ACU(presetName) {
         apiConfig: settings_ACU.apiConfig,
         tavernProfile: settings_ACU.tavernProfile,
         resolved: false,
+        nonPrefillSupport: settings_ACU.nonPrefillSupport === true,
     };
 }
 /** 聊天切换后 reconcile：把当前聊天绑定重新投影到 apiMode/apiConfig/tavernProfile */
@@ -63741,8 +63745,10 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
     }
     // 非预填充支持：开启后把 messages 中的 assistant 消息改写为 user，
     // 内容首行加「助手：」前缀（换行接原内容），用于不支持 assistant 预填充的接口。
-    // 主开关 nonPrefillSupport 或全局 nonPrefillGlobal 任一开启即生效。
-    const applyNonPrefill = settings_ACU.nonPrefillSupport === true || settings_ACU.nonPrefillGlobal === true;
+    // 优先取调用点传入的预设级值；未传入时读全局设置。
+    const applyNonPrefill = opts.nonPrefillSupport !== undefined
+        ? opts.nonPrefillSupport === true
+        : settings_ACU.nonPrefillSupport === true;
     const body = {
         // 统一将 messages 的 role 归一为小写（system / user / assistant）。
         //
@@ -63825,7 +63831,7 @@ async function callApiWithPlotPreset_ACU(messages, presetName, abortSignal = nul
     if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
         throw new Error('自定义API的URL或模型未配置。');
     }
-    const requestBody = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig);
+    const requestBody = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { nonPrefillSupport: apiPresetConfig.nonPrefillSupport });
     const content = await postChatCompletion_ACU(requestBody, abortSignal);
     if (content) {
         return content.trim();
@@ -63839,6 +63845,7 @@ function getApiConfigByPreset_ACU(presetName) {
         apiMode: resolved.apiMode,
         apiConfig: resolved.apiConfig,
         tavernProfile: resolved.tavernProfile,
+        nonPrefillSupport: resolved.nonPrefillSupport,
     };
 }
 /**
@@ -63863,7 +63870,7 @@ async function callAIWithPreset_ACU(messages, presetName = '', maxTokensOverride
     if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
         throw new Error('自定义API的URL或模型未配置。');
     }
-    const body = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens, stripModelPrefix: false });
+    const body = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens, stripModelPrefix: false, nonPrefillSupport: apiPresetConfig.nonPrefillSupport });
     const content = await postChatCompletion_ACU(body, signal);
     return content ? content.trim() : null;
 }
@@ -100393,6 +100400,15 @@ async function callOpenAICompatible(settings, payload, systemPrompt = DEFAULT_SY
     // 采样参数优先数据库配置（适配层同步进 settings.temperature/maxTokens 或经 __bs_biotracker_api_probe__ 兜底），
     // 其次 ST 预设采样，最后回退默认 0.2。probe 兜底保证追踪/注册内部直连调用也始终采用数据库配置。
     const dbProbe = (typeof globalThis.__bs_biotracker_api_probe__ === 'function') ? globalThis.__bs_biotracker_api_probe__() : null;
+    // 非预填充支持（预设级，经适配层探针）：把 assistant 消息改写为 user +「助手：」前缀，
+    // 用于不支持 assistant 预填充的模型/接口。
+    if (typeof globalThis.__bs_biotracker_non_prefill_probe__ === 'function' && globalThis.__bs_biotracker_non_prefill_probe__() === true) {
+        effectiveMessages = (Array.isArray(effectiveMessages) ? effectiveMessages : []).map((m) => {
+            if (!m || typeof m !== 'object' || String(m.role || '').toLowerCase() !== 'assistant')
+                return m;
+            return { ...m, role: 'user', content: `助手：\n${typeof m.content === 'string' ? m.content : String(m.content ?? '')}` };
+        });
+    }
     const body = {
         model,
         ...stPresetSampling,
@@ -110514,7 +110530,7 @@ const WARDROBE_DIMENSION_LABELS = Object.freeze({ masking: '掩形', support: '�
 const PREG_FIT_GAP_LABELS = Object.freeze({ masking: '掩形', support: '支撑', capacity: '容身', convenience: '便捷' });
 const MAX_PROGRESS_BAR_CAP = 200;
 // 构建时间戳（rollup replace 注入；测试/dev 环境无替换时回退 'dev'）——全局水印用，截图辨别构建
-const ACU_BUILD_STAMP = typeof "20260814-15" === 'string' ? "20260814-15" : 'dev';
+const ACU_BUILD_STAMP = typeof "20260814-16" === 'string' ? "20260814-16" : 'dev';
 const MODAL_EDGE_GAP = 24;
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const FLOATING_SPHERE_POSITION_KEY = `${MODULE_NAME}_floating_sphere_position`;
@@ -118251,6 +118267,18 @@ function installBiotrackerConsoleBridge() {
         temperature: Number.isFinite(Number(settings_ACU.apiConfig?.temperature)) ? Number(settings_ACU.apiConfig.temperature) : undefined,
         maxTokens: Number.isFinite(Number(settings_ACU.apiConfig?.max_tokens)) ? Number(settings_ACU.apiConfig.max_tokens) : undefined,
     });
+    // 非预填充探针：生理追踪专用预设（bs_biotracker.apiPreset）的 nonPrefillSupport 优先，
+    // 未选预设时回退全局 settings_ACU.nonPrefillSupport（vendor 直连调用同样生效）
+    globalThis.__bs_biotracker_non_prefill_probe__ = () => {
+        try {
+            const presetName = String(settings_ACU.bs_biotracker?.apiPreset || '').trim();
+            const resolved = resolveApiConfigByPreset_ACU(presetName);
+            return resolved.nonPrefillSupport === true;
+        }
+        catch (e) {
+            return settings_ACU.nonPrefillSupport === true;
+        }
+    };
     const bridge = (level) => (original) => (...args) => {
         original(...args);
         try {
@@ -118647,6 +118675,62 @@ function debugCharacterAction_ACU(name, toolName, args = {}) {
     catch (e) {
         logWarn_ACU('[生理追踪] 调试操作失败:', e);
         return { ok: false, message: `操作失败：${e?.message || e}` };
+    }
+}
+/**
+ * 保存角色完整状态变量（编辑后写回）。
+ * 先校验 JSON 格式与基础结构（顶层对象 / name 一致 / profile 对象），通过后写回并持久化。
+ */
+function saveCharacterFullState_ACU(name, stateJson) {
+    try {
+        const targetName = String(name || '').trim();
+        if (!targetName)
+            return { ok: false, message: '缺少角色名。' };
+        let parsed;
+        try {
+            parsed = JSON.parse(String(stateJson || ''));
+        }
+        catch (e) {
+            return { ok: false, message: `JSON 格式不完整：${e?.message || e}` };
+        }
+        // 基础结构校验（精简版，参照 panel validateManualCharacterState）
+        const isPlainObject = (v) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
+        const errors = [];
+        if (!isPlainObject(parsed))
+            errors.push('顶层必须是 JSON 对象。');
+        if (!errors.length && String(parsed.name || '').trim() !== targetName)
+            errors.push('不能在这里修改角色 name；请保持与当前选中角色一致。');
+        if (!isPlainObject(parsed.profile))
+            errors.push('profile 必须是对象。');
+        const profile = isPlainObject(parsed.profile) ? parsed.profile : {};
+        for (const path of ['base', 'pregnant', 'experience', 'bio', 'metabolism', 'notify', 'immune', 'psychology', 'wardrobe', 'outfit', 'descriptions', 'cooldown']) {
+            if (profile[path] !== undefined && !isPlainObject(profile[path]))
+                errors.push(`profile.${path} 必须是对象。`);
+        }
+        for (const path of ['children', 'skills', 'talents', 'skillHistory']) {
+            if (profile[path] !== undefined && !Array.isArray(profile[path]))
+                errors.push(`profile.${path} 必须是数组。`);
+        }
+        if (profile.base?.sperms !== undefined && !Array.isArray(profile.base.sperms))
+            errors.push('profile.base.sperms 必须是数组。');
+        if (profile.pregnant?.fetuses !== undefined && !Array.isArray(profile.pregnant.fetuses))
+            errors.push('profile.pregnant.fetuses 必须是数组。');
+        if (errors.length > 0)
+            return { ok: false, message: `变量检查未通过：\n${errors.map((item) => `- ${item}`).join('\n')}` };
+        const ctx = createBiotrackerCtx_ACU();
+        const settings = getSettings(ctx);
+        const chatState = getChatState(ctx, settings);
+        const resolved = resolveRegisteredCharacterName(chatState, targetName);
+        if (!resolved)
+            return { ok: false, message: `尚未找到已注册角色：${name}` };
+        chatState.characters[resolved] = parsed;
+        recordChatStateSnapshot(ctx, chatState, { reason: 'manual_full_state_edit' });
+        saveSettings(ctx);
+        return { ok: true, message: `已保存「${resolved}」的完整变量。` };
+    }
+    catch (e) {
+        logWarn_ACU('[生理追踪] 保存完整变量失败:', e);
+        return { ok: false, message: `保存失败：${e?.message || e}` };
     }
 }
 /** 清空当前聊天的生理追踪数据（恢复到初始空状态），返回是否执行 */
@@ -144206,6 +144290,7 @@ function createEmptyApiPresetDraft() {
         bodyParams: '',
         excludeBodyParams: '',
         requestHeaders: '',
+        nonPrefillSupport: false,
     };
 }
 function apiPresetDraftFromPreset(preset) {
@@ -144220,6 +144305,7 @@ function apiPresetDraftFromPreset(preset) {
         bodyParams: preset.apiConfig.bodyParams || '',
         excludeBodyParams: preset.apiConfig.excludeBodyParams || '',
         requestHeaders: preset.apiConfig.requestHeaders || '',
+        nonPrefillSupport: preset.nonPrefillSupport === true,
     };
 }
 function apiPresetFromDraft(draft) {
@@ -144236,6 +144322,7 @@ function apiPresetFromDraft(draft) {
             excludeBodyParams: draft.excludeBodyParams || '',
             requestHeaders: draft.requestHeaders || '',
         },
+        nonPrefillSupport: draft.nonPrefillSupport === true,
     };
 }
 
@@ -145273,24 +145360,12 @@ function _sfc_render$R(_ctx, _cache, $props, $setup, $data, $options) {
 }
 var AcuToggle = /* @__PURE__ */ _export_sfc(_sfc_main$R, [["render", _sfc_render$R], ["__scopeId", "data-v-61c4c790"]]);
 
-// ─── 非预填充支持（API 行为开关，与预设同级） ───
+// ─── 流式输出（全局 API 行为开关，与预设同级） ───
 var _sfc_main$Q = /*@__PURE__*/ defineComponent({
     __name: 'ApiConfigPanel',
     setup(__props, { expose: __expose }) {
         __expose();
-        const nonPrefillSupport = ref(settings_ACU.nonPrefillSupport === true);
-        const nonPrefillGlobal = ref(settings_ACU.nonPrefillGlobal === true);
         const streamingEnabled = ref(settings_ACU.streamingEnabled === true);
-        function setNonPrefillSupport(value) {
-            nonPrefillSupport.value = !!value;
-            settings_ACU.nonPrefillSupport = nonPrefillSupport.value;
-            saveSettings_ACU();
-        }
-        function setNonPrefillGlobal(value) {
-            nonPrefillGlobal.value = !!value;
-            settings_ACU.nonPrefillGlobal = nonPrefillGlobal.value;
-            saveSettings_ACU();
-        }
         function setStreamingEnabled(value) {
             streamingEnabled.value = !!value;
             settings_ACU.streamingEnabled = streamingEnabled.value;
@@ -145418,14 +145493,14 @@ var _sfc_main$Q = /*@__PURE__*/ defineComponent({
             });
         }
         watch(() => store.activePresetName, () => syncActiveDraft(), { flush: "sync" });
-        const __returned__ = { nonPrefillSupport, nonPrefillGlobal, streamingEnabled, setNonPrefillSupport, setNonPrefillGlobal, setStreamingEnabled, store, dialogStore, toast, formMode, activeDraft, activeDraftOriginalName, activeDraftSnapshot, activeDraftError, activeDraftSavedAt, activeDraftDirty, modelSelectOptions, presetDropdownItems, refreshAll, syncActiveDraft, startCreateDraft, selectPreset, deletePreset, presetMeta, validateActiveDraft, saveActiveDraft, loadModelsForActive, get apiCopy() { return apiCopy; }, AcuButton, AcuFormRow, AcuIconButton, AcuInput, AcuMessage, AcuPanel, AcuTextarea, AcuPresetDropdown, AcuSelect, AcuToggle };
+        const __returned__ = { streamingEnabled, setStreamingEnabled, store, dialogStore, toast, formMode, activeDraft, activeDraftOriginalName, activeDraftSnapshot, activeDraftError, activeDraftSavedAt, activeDraftDirty, modelSelectOptions, presetDropdownItems, refreshAll, syncActiveDraft, startCreateDraft, selectPreset, deletePreset, presetMeta, validateActiveDraft, saveActiveDraft, loadModelsForActive, get apiCopy() { return apiCopy; }, AcuButton, AcuFormRow, AcuIconButton, AcuInput, AcuMessage, AcuPanel, AcuTextarea, AcuPresetDropdown, AcuSelect, AcuToggle };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.acu-api-config-panel__select-row[data-v-5e2d480b] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-5e2d480b] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-5e2d480b] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-5e2d480b] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-5e2d480b] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-5e2d480b] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-5e2d480b] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-5e2d480b] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-5e2d480b] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-5e2d480b");
-var ApiConfigPanel_vue_vue_type_style_index_0_scoped_5e2d480b_lang = null;
+injectSfcStyle("\n.acu-api-config-panel__select-row[data-v-025bba31] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-025bba31] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-025bba31] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-025bba31] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-025bba31] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-025bba31] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-025bba31] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-025bba31] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-025bba31] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-025bba31");
+var ApiConfigPanel_vue_vue_type_style_index_0_scoped_025bba31_lang = null;
 
 const _hoisted_1$O = { class: "acu-api-config-panel__select-row" };
 const _hoisted_2$H = { class: "acu-api-config-panel__behavior" };
@@ -145452,7 +145527,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 				key: 0,
 				kind: "warning"
 			}, {
-				default: withCtx(() => [..._cache[12] || (_cache[12] = [createTextVNode(
+				default: withCtx(() => [..._cache[13] || (_cache[13] = [createTextVNode(
 					" 暂无可用 API 预设，请新建并设为当前或全局默认。 ",
 					-1
 					/* CACHED */
@@ -145493,26 +145568,12 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 				])]),
 				_: 1
 			}),
-			createBaseVNode("div", _hoisted_2$H, [
-				createVNode($setup["AcuToggle"], {
-					"model-value": $setup.nonPrefillSupport,
-					label: "非预填充支持",
-					description: "开启后，发送给 AI 的 API 调用中所有 assistant 消息会改写为 user 消息，并在首行加上「助手：」前缀（默认关闭）。用于不支持 assistant 预填充的模型/接口。",
-					"onUpdate:modelValue": $setup.setNonPrefillSupport
-				}, null, 8, ["model-value"]),
-				createVNode($setup["AcuToggle"], {
-					"model-value": $setup.nonPrefillGlobal,
-					label: "全局支持",
-					description: "开启后，数据库中所有 AI 调用（含剧情推进/填表等内部调用）都应用上面的改写逻辑。",
-					"onUpdate:modelValue": $setup.setNonPrefillGlobal
-				}, null, 8, ["model-value"]),
-				createVNode($setup["AcuToggle"], {
-					"model-value": $setup.streamingEnabled,
-					label: "开启流式输出",
-					description: "开启后 AI 响应以流式方式输出（用于对话类调用）。",
-					"onUpdate:modelValue": $setup.setStreamingEnabled
-				}, null, 8, ["model-value"])
-			]),
+			createBaseVNode("div", _hoisted_2$H, [createVNode($setup["AcuToggle"], {
+				"model-value": $setup.streamingEnabled,
+				label: "开启流式输出",
+				description: "开启后 AI 响应以流式方式输出（用于对话类调用）。",
+				"onUpdate:modelValue": $setup.setStreamingEnabled
+			}, null, 8, ["model-value"])]),
 			$setup.formMode !== "empty" ? (openBlock(), createElementBlock(
 				"form",
 				{
@@ -145558,7 +145619,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 							_: 1
 						}),
 						createBaseVNode("div", _hoisted_4$u, [createVNode($setup["AcuButton"], { onClick: $setup.loadModelsForActive }, {
-							default: withCtx(() => [..._cache[13] || (_cache[13] = [createTextVNode(
+							default: withCtx(() => [..._cache[14] || (_cache[14] = [createTextVNode(
 								"加载模型",
 								-1
 								/* CACHED */
@@ -145604,6 +145665,12 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 						}, null, 8, ["modelValue"])]),
 						_: 1
 					})]),
+					createVNode($setup["AcuToggle"], {
+						modelValue: $setup.activeDraft.nonPrefillSupport,
+						"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.activeDraft.nonPrefillSupport = $event),
+						label: "非预填充支持",
+						description: "该预设开启后，所有使用本预设的调用（剧情推进/填表/生理追踪等）会把 assistant 消息改写为 user，并在首行加上「助手：」前缀。用于不支持 assistant 预填充的模型/接口。"
+					}, null, 8, ["modelValue"]),
 					createBaseVNode("div", _hoisted_8$j, [
 						createVNode($setup["AcuFormRow"], {
 							label: "附加主体参数",
@@ -145611,7 +145678,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
 								modelValue: $setup.activeDraft.bodyParams,
-								"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.activeDraft.bodyParams = $event),
+								"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.activeDraft.bodyParams = $event),
 								rows: 3,
 								placeholder: "response_format:\n  type: json_object\ntop_k: 50"
 							}, null, 8, ["modelValue"])]),
@@ -145623,7 +145690,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
 								modelValue: $setup.activeDraft.excludeBodyParams,
-								"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.activeDraft.excludeBodyParams = $event),
+								"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.activeDraft.excludeBodyParams = $event),
 								rows: 2,
 								placeholder: "top_p, reasoning_effort"
 							}, null, 8, ["modelValue"])]),
@@ -145635,7 +145702,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
 								modelValue: $setup.activeDraft.requestHeaders,
-								"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.activeDraft.requestHeaders = $event),
+								"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.activeDraft.requestHeaders = $event),
 								rows: 2,
 								placeholder: "X-Custom-Header: value"
 							}, null, 8, ["modelValue"])]),
@@ -145657,7 +145724,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 						disabled: !$setup.activeDraftDirty,
 						onClick: $setup.syncActiveDraft
 					}, {
-						default: withCtx(() => [..._cache[14] || (_cache[14] = [createTextVNode(
+						default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
 							"放弃修改",
 							-1
 							/* CACHED */
@@ -145682,7 +145749,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 				key: 2,
 				kind: "warning"
 			}, {
-				default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
+				default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
 					" 暂无可用 API 预设，请新建并设为当前或全局默认。 ",
 					-1
 					/* CACHED */
@@ -145693,7 +145760,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["title", "description"]);
 }
-var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$Q, [["render", _sfc_render$Q], ["__scopeId", "data-v-5e2d480b"]]);
+var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$Q, [["render", _sfc_render$Q], ["__scopeId", "data-v-025bba31"]]);
 
 // ═══════════════════════════════════════════════════════════
 // service/settings/feature-preset-reference-service.ts — 功能级 API 预设引用
@@ -161423,7 +161490,7 @@ const _hoisted_18$5 = {
 	"aria-labelledby": "acu-v2-isolation-diagnostics-title"
 };
 const _hoisted_19$5 = { class: "acu-v2-data-mgmt-page__form-stack" };
-const _hoisted_20$3 = { key: 0 };
+const _hoisted_20$4 = { key: 0 };
 const _hoisted_21$3 = { key: 1 };
 const _hoisted_22$2 = {
 	key: 4,
@@ -161872,7 +161939,7 @@ function _sfc_render$h(_ctx, _cache, $props, $setup, $data, $options) {
 								1
 								/* TEXT */
 							),
-							!diagnostic.isCurrentIsolation ? (openBlock(), createElementBlock("p", _hoisted_20$3, "请切换到该隔离域后重新诊断；当前恢复提交不会跨隔离域执行。")) : diagnostic.status.startsWith("recoverable_") ? (openBlock(), createElementBlock("p", _hoisted_21$3, "当前隔离域存在可恢复候选，请使用下方“诊断 V2 数据恢复”生成可提交计划。")) : createCommentVNode("v-if", true)
+							!diagnostic.isCurrentIsolation ? (openBlock(), createElementBlock("p", _hoisted_20$4, "请切换到该隔离域后重新诊断；当前恢复提交不会跨隔离域执行。")) : diagnostic.status.startsWith("recoverable_") ? (openBlock(), createElementBlock("p", _hoisted_21$3, "当前隔离域存在可恢复候选，请使用下方“诊断 V2 数据恢复”生成可提交计划。")) : createCommentVNode("v-if", true)
 						]);
 					}),
 					128
@@ -164105,7 +164172,7 @@ const _hoisted_16$5 = { class: "acu-v2-advanced-tools-page__log-time" };
 const _hoisted_17$4 = { class: "acu-v2-advanced-tools-page__log-message acu-v2-advanced-tools-page__log-body" };
 const _hoisted_18$4 = { class: "acu-v2-advanced-tools-page__filter-grid" };
 const _hoisted_19$4 = { class: "acu-v2-advanced-tools-page__log-control-row" };
-const _hoisted_20$2 = { class: "acu-v2-advanced-tools-page__log-control-main" };
+const _hoisted_20$3 = { class: "acu-v2-advanced-tools-page__log-control-main" };
 const _hoisted_21$2 = { class: "acu-v2-advanced-tools-page__log-actions" };
 const _hoisted_22$1 = { class: "acu-v2-advanced-tools-page__toggles" };
 const _hoisted_23$1 = { class: "acu-v2-advanced-tools-page__hint" };
@@ -164423,7 +164490,7 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 						_: 1
 					})
 				]),
-				createBaseVNode("div", _hoisted_19$4, [createBaseVNode("div", _hoisted_20$2, [createBaseVNode("div", _hoisted_21$2, [
+				createBaseVNode("div", _hoisted_19$4, [createBaseVNode("div", _hoisted_20$3, [createBaseVNode("div", _hoisted_21$2, [
 					createVNode($setup["AcuButton"], {
 						variant: $setup.logFlow.paused.value ? "primary" : "default",
 						onClick: _cache[3] || (_cache[3] = ($event) => $setup.logFlow.setPaused(!$setup.logFlow.paused.value))
@@ -164882,10 +164949,51 @@ function useBiotrackerPage() {
     const fullStateError = ref('');
     const debugBusy = ref(false);
     const debugMessage = ref('');
-    /** 读取指定角色的完整状态变量 JSON（只读展示） */
+    const savingFullState = ref(false);
+    const fullStateSaveMessage = ref('');
+    const fullStateSaveError = ref(false);
+    /** 保存编辑后的完整变量（先做 JSON 格式与基础结构校验） */
+    async function saveFullState() {
+        if (!selectedFullStateName.value)
+            return;
+        if (savingFullState.value)
+            return;
+        savingFullState.value = true;
+        fullStateSaveMessage.value = '';
+        fullStateSaveError.value = false;
+        try {
+            const result = saveCharacterFullState_ACU(selectedFullStateName.value, fullStateJson.value);
+            fullStateSaveMessage.value = String(result.message || '');
+            fullStateSaveError.value = !result.ok;
+            showToastr_ACU(result.ok ? 'success' : 'warning', result.message || '', { title: '生理追踪', acuToastCategory: 'biotracker' });
+            if (result.ok) {
+                viewFullState(selectedFullStateName.value);
+                refreshCharacters();
+            }
+        }
+        catch (e) {
+            fullStateSaveMessage.value = `保存失败：${e?.message || e}`;
+            fullStateSaveError.value = true;
+            showToastr_ACU('error', `保存失败：${e?.message || e}`, { title: '生理追踪', acuToastCategory: 'biotracker' });
+        }
+        finally {
+            savingFullState.value = false;
+        }
+    }
+    /** 读取指定角色的完整状态变量 JSON（只读展示）；再次点击已选中角色时收起 */
     function viewFullState(name) {
-        selectedFullStateName.value = String(name || '').trim();
+        const nextName = String(name || '').trim();
+        if (selectedFullStateName.value === nextName) {
+            // 点击已选中 → 收起
+            selectedFullStateName.value = '';
+            fullStateJson.value = '';
+            fullStateError.value = '';
+            fullStateSaveMessage.value = '';
+            return;
+        }
+        selectedFullStateName.value = nextName;
         fullStateError.value = '';
+        fullStateSaveMessage.value = '';
         const result = getCharacterFullState_ACU(selectedFullStateName.value);
         if (!result.ok) {
             fullStateError.value = String(result.message || '读取失败。');
@@ -165014,6 +165122,10 @@ function useBiotrackerPage() {
         debugMessage,
         viewFullState,
         runDebugAction,
+        saveFullState,
+        savingFullState,
+        fullStateSaveMessage,
+        fullStateSaveError,
         characters,
         status,
         statusIsError,
@@ -165034,21 +165146,21 @@ var _sfc_main$b = /*@__PURE__*/ defineComponent({
             dataTitle: '已注册角色',
             dataDescription: '当前聊天的生理追踪数据（只读）。完整数据由异步追踪持续更新。',
         };
-        const { apiPreset, setApiPreset, apiPresetSelectOptions, followActiveApiLabel, apiUrl, apiKey, apiModel, registerName, registerRace, registerNotes, registerRecentCount, setRegisterRecentCount, registerRaceOptions, registering, doRegister, autoRegister, toggleAutoRegister, autoFrequency, setAutoFrequency, autoFrequencyOptions, autoRecentCount, setAutoRecentCount, autoRunning, tracking, runAutoRegister, runTrackerNow, clearChatState, generateWardrobe, wardrobeGenerating, selectedFullStateName, fullStateJson, fullStateError, debugBusy, debugMessage, viewFullState, runDebugAction, characters, status, statusIsError, } = useBiotrackerPage();
+        const { apiPreset, setApiPreset, apiPresetSelectOptions, followActiveApiLabel, apiUrl, apiKey, apiModel, registerName, registerRace, registerNotes, registerRecentCount, setRegisterRecentCount, registerRaceOptions, registering, doRegister, autoRegister, toggleAutoRegister, autoFrequency, setAutoFrequency, autoFrequencyOptions, autoRecentCount, setAutoRecentCount, autoRunning, tracking, runAutoRegister, runTrackerNow, clearChatState, generateWardrobe, wardrobeGenerating, selectedFullStateName, fullStateJson, fullStateError, debugBusy, debugMessage, viewFullState, runDebugAction, saveFullState, savingFullState, fullStateSaveMessage, fullStateSaveError, characters, status, statusIsError, } = useBiotrackerPage();
         const panelNavItems = computed(() => [
             { id: 'biotracker-api-panel', label: copy.apiTitle },
             { id: 'biotracker-register-panel', label: copy.registerTitle },
             { id: 'biotracker-auto-panel', label: copy.autoTitle },
             { id: 'biotracker-data-panel', label: copy.dataTitle },
         ]);
-        const __returned__ = { copy, apiPreset, setApiPreset, apiPresetSelectOptions, followActiveApiLabel, apiUrl, apiKey, apiModel, registerName, registerRace, registerNotes, registerRecentCount, setRegisterRecentCount, registerRaceOptions, registering, doRegister, autoRegister, toggleAutoRegister, autoFrequency, setAutoFrequency, autoFrequencyOptions, autoRecentCount, setAutoRecentCount, autoRunning, tracking, runAutoRegister, runTrackerNow, clearChatState, generateWardrobe, wardrobeGenerating, selectedFullStateName, fullStateJson, fullStateError, debugBusy, debugMessage, viewFullState, runDebugAction, characters, status, statusIsError, panelNavItems, AcuMobilePanelNav, AcuPanel, AcuFormRow, AcuSelect, AcuButton, AcuToggle };
+        const __returned__ = { copy, apiPreset, setApiPreset, apiPresetSelectOptions, followActiveApiLabel, apiUrl, apiKey, apiModel, registerName, registerRace, registerNotes, registerRecentCount, setRegisterRecentCount, registerRaceOptions, registering, doRegister, autoRegister, toggleAutoRegister, autoFrequency, setAutoFrequency, autoFrequencyOptions, autoRecentCount, setAutoRecentCount, autoRunning, tracking, runAutoRegister, runTrackerNow, clearChatState, generateWardrobe, wardrobeGenerating, selectedFullStateName, fullStateJson, fullStateError, debugBusy, debugMessage, viewFullState, runDebugAction, saveFullState, savingFullState, fullStateSaveMessage, fullStateSaveError, characters, status, statusIsError, panelNavItems, AcuMobilePanelNav, AcuPanel, AcuFormRow, AcuSelect, AcuButton, AcuToggle };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.acu-v2-biotracker-page[data-v-29d3831d] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-biotracker-page__panel-stack[data-v-29d3831d] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 16px;\n}\n.acu-v2-biotracker-page__api-readonly[data-v-29d3831d] {\r\n  color: var(--acu-text-2, inherit);\r\n  margin: 0;\r\n  line-height: 1.55;\n}\n.acu-v2-biotracker-page__actions[data-v-29d3831d] {\r\n  display: flex;\r\n  gap: 0.5rem;\r\n  flex-wrap: wrap;\r\n  margin-top: 0.5rem;\n}\n.acu-v2-biotracker-page__toggle[data-v-29d3831d] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 0.5rem;\r\n  cursor: pointer;\n}\n.acu-v2-biotracker-page__status[data-v-29d3831d] {\r\n  margin-top: 0.75rem;\r\n  padding: 0.4rem 0.6rem;\r\n  border-radius: 4px;\r\n  background: rgba(125, 73, 64, 0.12);\r\n  color: var(--acu-text, inherit);\n}\n.acu-v2-biotracker-page__status[data-error='true'][data-v-29d3831d] {\r\n  background: rgba(220, 60, 60, 0.15);\r\n  color: #e06060;\n}\n.acu-v2-biotracker-page__empty[data-v-29d3831d] {\r\n  color: var(--acu-text-dim, #8a8075);\r\n  padding: 0.5rem 0;\n}\n.acu-v2-biotracker-page__table[data-v-29d3831d] {\r\n  width: 100%;\r\n  border-collapse: collapse;\r\n  font-size: 0.9em;\n}\n.acu-v2-biotracker-page__table th[data-v-29d3831d],\r\n.acu-v2-biotracker-page__table td[data-v-29d3831d] {\r\n  text-align: left;\r\n  padding: 0.4rem 0.5rem;\r\n  border-bottom: 1px solid rgba(128, 128, 128, 0.2);\n}\n.acu-v2-biotracker-page__fullstate[data-v-29d3831d] {\r\n  margin-top: 0.75rem;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\r\n  padding-top: 0.75rem;\n}\n.acu-v2-biotracker-page__fullstate-title[data-v-29d3831d] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  font-weight: 700;\r\n  margin-bottom: 0.4rem;\r\n  gap: 0.5rem;\n}\n.acu-v2-biotracker-page__fullstate-json[data-v-29d3831d] {\r\n  max-height: 260px;\r\n  overflow: auto;\r\n  background: rgba(0, 0, 0, 0.06);\r\n  border-radius: 4px;\r\n  padding: 0.5rem;\r\n  font-size: 0.78em;\r\n  line-height: 1.5;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\n}\n.acu-v2-biotracker-page__fullstate-debug[data-v-29d3831d] {\r\n  margin-top: 0.75rem;\n}\r\n", "src/presentation-v2/pages/BiotrackerPage.vue#style-0-29d3831d");
-var BiotrackerPage_vue_vue_type_style_index_0_scoped_29d3831d_lang = null;
+injectSfcStyle("\n.acu-v2-biotracker-page[data-v-30e7a2f7] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-biotracker-page__panel-stack[data-v-30e7a2f7] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 16px;\n}\n.acu-v2-biotracker-page__api-readonly[data-v-30e7a2f7] {\r\n  color: var(--acu-text-2, inherit);\r\n  margin: 0;\r\n  line-height: 1.55;\n}\n.acu-v2-biotracker-page__actions[data-v-30e7a2f7] {\r\n  display: flex;\r\n  gap: 0.5rem;\r\n  flex-wrap: wrap;\r\n  margin-top: 0.5rem;\n}\n.acu-v2-biotracker-page__toggle[data-v-30e7a2f7] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 0.5rem;\r\n  cursor: pointer;\n}\n.acu-v2-biotracker-page__status[data-v-30e7a2f7] {\r\n  margin-top: 0.75rem;\r\n  padding: 0.4rem 0.6rem;\r\n  border-radius: 4px;\r\n  background: rgba(125, 73, 64, 0.12);\r\n  color: var(--acu-text, inherit);\n}\n.acu-v2-biotracker-page__status[data-error='true'][data-v-30e7a2f7] {\r\n  background: rgba(220, 60, 60, 0.15);\r\n  color: #e06060;\n}\n.acu-v2-biotracker-page__empty[data-v-30e7a2f7] {\r\n  color: var(--acu-text-dim, #8a8075);\r\n  padding: 0.5rem 0;\n}\n.acu-v2-biotracker-page__table[data-v-30e7a2f7] {\r\n  width: 100%;\r\n  border-collapse: collapse;\r\n  font-size: 0.9em;\n}\n.acu-v2-biotracker-page__table th[data-v-30e7a2f7],\r\n.acu-v2-biotracker-page__table td[data-v-30e7a2f7] {\r\n  text-align: left;\r\n  padding: 0.4rem 0.5rem;\r\n  border-bottom: 1px solid rgba(128, 128, 128, 0.2);\n}\n.acu-v2-biotracker-page__fullstate[data-v-30e7a2f7] {\r\n  margin-top: 0.75rem;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\r\n  padding-top: 0.75rem;\n}\n.acu-v2-biotracker-page__fullstate-title[data-v-30e7a2f7] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  font-weight: 700;\r\n  margin-bottom: 0.4rem;\r\n  gap: 0.5rem;\n}\n.acu-v2-biotracker-page__fullstate-json[data-v-30e7a2f7] {\r\n  display: block;\r\n  width: 100%;\r\n  max-height: 260px;\r\n  overflow: auto;\r\n  background: rgba(0, 0, 0, 0.06);\r\n  border: 1px solid rgba(128, 128, 128, 0.3);\r\n  border-radius: 4px;\r\n  padding: 0.5rem;\r\n  font-family: inherit;\r\n  font-size: 0.78em;\r\n  line-height: 1.5;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  color: var(--acu-text, inherit);\r\n  resize: vertical;\n}\n.acu-v2-biotracker-page__fullstate-json[data-v-30e7a2f7]:focus {\r\n  outline: none;\r\n  border-color: var(--acu-accent, #b8736a);\n}\n.acu-v2-biotracker-page__fullstate-debug[data-v-30e7a2f7] {\r\n  margin-top: 0.75rem;\n}\r\n", "src/presentation-v2/pages/BiotrackerPage.vue#style-0-30e7a2f7");
+var BiotrackerPage_vue_vue_type_style_index_0_scoped_30e7a2f7_lang = null;
 
 const _hoisted_1$b = { class: "acu-v2-biotracker-page" };
 const _hoisted_2$a = { class: "acu-v2-biotracker-page__panel-stack" };
@@ -165072,19 +165184,17 @@ const _hoisted_12$4 = {
 	class: "acu-v2-biotracker-page__fullstate"
 };
 const _hoisted_13$4 = { class: "acu-v2-biotracker-page__fullstate-title" };
-const _hoisted_14$4 = {
+const _hoisted_14$4 = { class: "acu-v2-biotracker-page__actions" };
+const _hoisted_15$4 = {
 	key: 0,
 	class: "acu-v2-biotracker-page__status",
 	"data-error": "true"
 };
-const _hoisted_15$4 = {
-	key: 1,
-	class: "acu-v2-biotracker-page__fullstate-json"
-};
-const _hoisted_16$4 = { class: "acu-v2-biotracker-page__fullstate-debug" };
-const _hoisted_17$3 = { class: "acu-v2-biotracker-page__actions" };
-const _hoisted_18$3 = ["data-error"];
-const _hoisted_19$3 = { class: "acu-v2-biotracker-page__actions" };
+const _hoisted_16$4 = ["data-error"];
+const _hoisted_17$3 = { class: "acu-v2-biotracker-page__fullstate-debug" };
+const _hoisted_18$3 = { class: "acu-v2-biotracker-page__actions" };
+const _hoisted_19$3 = ["data-error"];
+const _hoisted_20$2 = { class: "acu-v2-biotracker-page__actions" };
 function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("section", _hoisted_1$b, [createVNode($setup["AcuMobilePanelNav"], { items: $setup.panelNavItems }, null, 8, ["items"]), createBaseVNode("div", _hoisted_2$a, [
 		createCommentVNode(" API 设置（参照剧情推进：API 预设选择） "),
@@ -165147,7 +165257,7 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 							"onUpdate:modelValue": _cache[1] || (_cache[1] = ($event) => $setup.registerRace = $event),
 							class: "acu-input"
 						},
-						[_cache[17] || (_cache[17] = createBaseVNode(
+						[_cache[18] || (_cache[18] = createBaseVNode(
 							"option",
 							{ value: "" },
 							"（由 AI 判断）",
@@ -165250,7 +165360,7 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 						_: 1
 					}, 8, ["disabled"])
 				]),
-				_cache[18] || (_cache[18] = createBaseVNode(
+				_cache[19] || (_cache[19] = createBaseVNode(
 					"p",
 					{ class: "acu-v2-biotracker-page__api-readonly" },
 					" 增强生成备装会把内置服装风格世界书一并发送给 AI（更贴合当前世界观的着装）。 ",
@@ -165359,7 +165469,7 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 			description: $setup.copy.dataDescription
 		}, {
 			default: withCtx(() => [
-				$setup.characters.length === 0 ? (openBlock(), createElementBlock("div", _hoisted_10$4, " 当前聊天尚未注册角色。请先注册，或开启自动注册后发送消息等待发现。 ")) : (openBlock(), createElementBlock("table", _hoisted_11$4, [_cache[19] || (_cache[19] = createBaseVNode(
+				$setup.characters.length === 0 ? (openBlock(), createElementBlock("div", _hoisted_10$4, " 当前聊天尚未注册角色。请先注册，或开启自动注册后发送消息等待发现。 ")) : (openBlock(), createElementBlock("table", _hoisted_11$4, [_cache[20] || (_cache[20] = createBaseVNode(
 					"thead",
 					null,
 					[createBaseVNode("tr", null, [
@@ -165402,7 +165512,7 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 								onClick: ($event) => $setup.viewFullState(c.name)
 							}, {
 								default: withCtx(() => [createTextVNode(
-									toDisplayString($setup.selectedFullStateName === c.name ? "已选中" : "完整变量"),
+									toDisplayString($setup.selectedFullStateName === c.name ? "收起" : "完整变量"),
 									1
 									/* TEXT */
 								)]),
@@ -165418,47 +165528,69 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 						" 完整变量：" + toDisplayString($setup.selectedFullStateName) + " ",
 						1
 						/* TEXT */
-					), createVNode($setup["AcuButton"], {
+					), createBaseVNode("div", _hoisted_14$4, [createVNode($setup["AcuButton"], {
 						size: "xs",
 						variant: "secondary",
 						onClick: _cache[11] || (_cache[11] = ($event) => $setup.viewFullState($setup.selectedFullStateName))
 					}, {
-						default: withCtx(() => [..._cache[20] || (_cache[20] = [createTextVNode(
+						default: withCtx(() => [..._cache[21] || (_cache[21] = [createTextVNode(
 							"刷新",
 							-1
 							/* CACHED */
 						)])]),
 						_: 1
-					})]),
+					}), createVNode($setup["AcuButton"], {
+						size: "xs",
+						disabled: $setup.savingFullState,
+						onClick: $setup.saveFullState
+					}, {
+						default: withCtx(() => [createTextVNode(
+							toDisplayString($setup.savingFullState ? "保存中..." : "保存修改"),
+							1
+							/* TEXT */
+						)]),
+						_: 1
+					}, 8, ["disabled", "onClick"])])]),
 					$setup.fullStateError ? (openBlock(), createElementBlock(
 						"p",
-						_hoisted_14$4,
+						_hoisted_15$4,
 						toDisplayString($setup.fullStateError),
 						1
 						/* TEXT */
-					)) : (openBlock(), createElementBlock(
-						"pre",
-						_hoisted_15$4,
-						toDisplayString($setup.fullStateJson),
-						1
-						/* TEXT */
-					)),
-					createBaseVNode("div", _hoisted_16$4, [
-						_cache[26] || (_cache[26] = createBaseVNode(
+					)) : withDirectives((openBlock(), createElementBlock(
+						"textarea",
+						{
+							key: 1,
+							"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.fullStateJson = $event),
+							class: "acu-v2-biotracker-page__fullstate-json",
+							rows: "18",
+							spellcheck: "false"
+						},
+						null,
+						512
+						/* NEED_PATCH */
+					)), [[vModelText, $setup.fullStateJson]]),
+					$setup.fullStateSaveMessage ? (openBlock(), createElementBlock("p", {
+						key: 2,
+						class: "acu-v2-biotracker-page__status",
+						"data-error": $setup.fullStateSaveError
+					}, toDisplayString($setup.fullStateSaveMessage), 9, _hoisted_16$4)) : createCommentVNode("v-if", true),
+					createBaseVNode("div", _hoisted_17$3, [
+						_cache[27] || (_cache[27] = createBaseVNode(
 							"div",
 							{ class: "acu-v2-biotracker-page__fullstate-title" },
 							"调试工具",
 							-1
 							/* CACHED */
 						)),
-						createBaseVNode("div", _hoisted_17$3, [
+						createBaseVNode("div", _hoisted_18$3, [
 							createVNode($setup["AcuButton"], {
 								size: "xs",
 								variant: "secondary",
 								disabled: $setup.debugBusy,
-								onClick: _cache[12] || (_cache[12] = ($event) => $setup.runDebugAction("bsSetCharacterPresence", { isPresent: false }))
+								onClick: _cache[13] || (_cache[13] = ($event) => $setup.runDebugAction("bsSetCharacterPresence", { isPresent: false }))
 							}, {
-								default: withCtx(() => [..._cache[21] || (_cache[21] = [createTextVNode(
+								default: withCtx(() => [..._cache[22] || (_cache[22] = [createTextVNode(
 									"标记离场",
 									-1
 									/* CACHED */
@@ -165469,9 +165601,9 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 								size: "xs",
 								variant: "secondary",
 								disabled: $setup.debugBusy,
-								onClick: _cache[13] || (_cache[13] = ($event) => $setup.runDebugAction("bsSetCharacterPresence", { isPresent: true }))
+								onClick: _cache[14] || (_cache[14] = ($event) => $setup.runDebugAction("bsSetCharacterPresence", { isPresent: true }))
 							}, {
-								default: withCtx(() => [..._cache[22] || (_cache[22] = [createTextVNode(
+								default: withCtx(() => [..._cache[23] || (_cache[23] = [createTextVNode(
 									"标记在场",
 									-1
 									/* CACHED */
@@ -165482,9 +165614,9 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 								size: "xs",
 								variant: "secondary",
 								disabled: $setup.debugBusy,
-								onClick: _cache[14] || (_cache[14] = ($event) => $setup.runDebugAction("bsDebugClearContainers", { container: "sperms" }))
+								onClick: _cache[15] || (_cache[15] = ($event) => $setup.runDebugAction("bsDebugClearContainers", { container: "sperms" }))
 							}, {
-								default: withCtx(() => [..._cache[23] || (_cache[23] = [createTextVNode(
+								default: withCtx(() => [..._cache[24] || (_cache[24] = [createTextVNode(
 									"清空精液",
 									-1
 									/* CACHED */
@@ -165495,9 +165627,9 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 								size: "xs",
 								variant: "secondary",
 								disabled: $setup.debugBusy,
-								onClick: _cache[15] || (_cache[15] = ($event) => $setup.runDebugAction("bsDebugClearContainers", { container: "fetuses" }))
+								onClick: _cache[16] || (_cache[16] = ($event) => $setup.runDebugAction("bsDebugClearContainers", { container: "fetuses" }))
 							}, {
-								default: withCtx(() => [..._cache[24] || (_cache[24] = [createTextVNode(
+								default: withCtx(() => [..._cache[25] || (_cache[25] = [createTextVNode(
 									"清空胎儿",
 									-1
 									/* CACHED */
@@ -165508,9 +165640,9 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 								size: "xs",
 								variant: "secondary",
 								disabled: $setup.debugBusy,
-								onClick: _cache[16] || (_cache[16] = ($event) => $setup.runDebugAction("bsDebugClearContainers", { container: "children" }))
+								onClick: _cache[17] || (_cache[17] = ($event) => $setup.runDebugAction("bsDebugClearContainers", { container: "children" }))
 							}, {
-								default: withCtx(() => [..._cache[25] || (_cache[25] = [createTextVNode(
+								default: withCtx(() => [..._cache[26] || (_cache[26] = [createTextVNode(
 									"清空孩子",
 									-1
 									/* CACHED */
@@ -165522,10 +165654,10 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 							key: 0,
 							class: "acu-v2-biotracker-page__status",
 							"data-error": !$setup.debugMessage.includes("完成") && $setup.debugMessage.includes("失败")
-						}, toDisplayString($setup.debugMessage), 9, _hoisted_18$3)) : createCommentVNode("v-if", true)
+						}, toDisplayString($setup.debugMessage), 9, _hoisted_19$3)) : createCommentVNode("v-if", true)
 					])
 				])) : createCommentVNode("v-if", true),
-				createBaseVNode("div", _hoisted_19$3, [createVNode($setup["AcuButton"], {
+				createBaseVNode("div", _hoisted_20$2, [createVNode($setup["AcuButton"], {
 					size: "sm",
 					disabled: $setup.tracking,
 					onClick: $setup.runTrackerNow
@@ -165541,7 +165673,7 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 					variant: "secondary",
 					onClick: $setup.clearChatState
 				}, {
-					default: withCtx(() => [..._cache[27] || (_cache[27] = [createTextVNode(
+					default: withCtx(() => [..._cache[28] || (_cache[28] = [createTextVNode(
 						" 清空本聊天数据（恢复初始） ",
 						-1
 						/* CACHED */
@@ -165553,7 +165685,7 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 		}, 8, ["title", "description"])
 	])]);
 }
-var BiotrackerPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$b], ["__scopeId", "data-v-29d3831d"]]);
+var BiotrackerPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$b], ["__scopeId", "data-v-30e7a2f7"]]);
 
 /**
  * page-registry — 一级页静态注册表（plan §4.1 + §D24）

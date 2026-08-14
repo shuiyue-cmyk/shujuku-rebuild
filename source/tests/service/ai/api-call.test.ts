@@ -347,6 +347,19 @@ describe('buildCustomApiRequestBody_ACU', () => {
     const body = buildCustomApiRequestBody_ACU(input, { url: 'https://api.example.com', model: 'gpt-4' });
     expect(body.messages).toEqual([{ role: 'assistant', content: '收到。' }]);
   });
+
+  it('overrides 传入 nonPrefillSupport 时优先于全局设置（预设级）', () => {
+    mockSettings.nonPrefillSupport = false;
+    const input = [{ role: 'assistant', content: '收到。' }];
+    // 全局关闭但预设开启 → 应用转换
+    const onBody = buildCustomApiRequestBody_ACU(input, { url: 'https://api.example.com', model: 'gpt-4' }, { nonPrefillSupport: true });
+    expect(onBody.messages).toEqual([{ role: 'user', content: '助手：\n收到。' }]);
+    // 全局开启但预设关闭 → 不转换
+    mockSettings.nonPrefillSupport = true;
+    const offBody = buildCustomApiRequestBody_ACU(input, { url: 'https://api.example.com', model: 'gpt-4' }, { nonPrefillSupport: false });
+    expect(offBody.messages).toEqual([{ role: 'assistant', content: '收到。' }]);
+    delete mockSettings.nonPrefillSupport;
+  });
 });
 
 // ═══ callAIWithPreset_ACU 自定义模式最终发送 body 层面：role 小写化回归 ═══

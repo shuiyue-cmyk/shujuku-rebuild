@@ -11,6 +11,8 @@ export interface ApiPresetDraft {
   bodyParams: string;
   excludeBodyParams: string;
   requestHeaders: string;
+  /** 非预填充支持（预设级）：assistant 消息改写为 user +「助手：」前缀 */
+  nonPrefillSupport: boolean;
 }
 
 /** 连接模式（酒馆主 API / 酒馆预设已剥离，恒为自定义 API） */
@@ -28,6 +30,7 @@ export function createEmptyApiPresetDraft(): ApiPresetDraft {
     bodyParams: '',
     excludeBodyParams: '',
     requestHeaders: '',
+    nonPrefillSupport: false,
   };
 }
 
@@ -43,6 +46,7 @@ export function apiPresetDraftFromPreset(preset: AcuV2ApiPreset): ApiPresetDraft
     bodyParams: preset.apiConfig.bodyParams || '',
     excludeBodyParams: preset.apiConfig.excludeBodyParams || '',
     requestHeaders: preset.apiConfig.requestHeaders || '',
+    nonPrefillSupport: preset.nonPrefillSupport === true,
   };
 }
 
@@ -60,5 +64,6 @@ export function apiPresetFromDraft(draft: ApiPresetDraft): AcuV2ApiPreset {
       excludeBodyParams: draft.excludeBodyParams || '',
       requestHeaders: draft.requestHeaders || '',
     },
+    nonPrefillSupport: draft.nonPrefillSupport === true,
   };
 }

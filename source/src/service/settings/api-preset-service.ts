@@ -30,6 +30,8 @@ export interface ApiPreset_ACU {
   name: string;
   apiMode: ApiPresetApiMode_ACU;
   apiConfig: ApiPresetApiConfig_ACU;
+  /** 非预填充支持（预设级）：该预设是否把 assistant 消息改写为 user +「助手：」前缀 */
+  nonPrefillSupport?: boolean;
 }
 
 export interface ApiPresetBinding_ACU {
@@ -86,6 +88,7 @@ export function normalizePreset_ACU(value: any): ApiPreset_ACU | null {
     name,
     apiMode: normalizeApiMode_ACU(value.apiMode),
     apiConfig: normalizeApiConfig_ACU(value.apiConfig),
+    nonPrefillSupport: value.nonPrefillSupport === true,
   };
 }
 
@@ -172,6 +175,8 @@ export function resolveApiConfigByPreset_ACU(presetName: string): {
   apiConfig: ApiPresetApiConfig_ACU;
   tavernProfile: string;
   resolved: boolean;
+  /** 预设级非预填充支持；未指定预设/悬挂引用时回退全局 settings_ACU.nonPrefillSupport */
+  nonPrefillSupport: boolean;
 } {
   ensureApiSettingsShape_ACU();
   const normalized = String(presetName || '').trim();
@@ -181,6 +186,7 @@ export function resolveApiConfigByPreset_ACU(presetName: string): {
       apiConfig: settings_ACU.apiConfig,
       tavernProfile: settings_ACU.tavernProfile,
       resolved: false,
+      nonPrefillSupport: settings_ACU.nonPrefillSupport === true,
     };
   }
   const preset = findPresetByName_ACU(settings_ACU.apiPresets, normalized);
@@ -190,6 +196,7 @@ export function resolveApiConfigByPreset_ACU(presetName: string): {
       apiConfig: preset.apiConfig,
       tavernProfile: settings_ACU.tavernProfile,
       resolved: true,
+      nonPrefillSupport: preset.nonPrefillSupport === true,
     };
   }
   // 悬挂引用：返回当前配置但标记未解析，调用方应据此拒绝或回退，而不是静默误用。
@@ -199,6 +206,7 @@ export function resolveApiConfigByPreset_ACU(presetName: string): {
     apiConfig: settings_ACU.apiConfig,
     tavernProfile: settings_ACU.tavernProfile,
     resolved: false,
+    nonPrefillSupport: settings_ACU.nonPrefillSupport === true,
   };
 }
 

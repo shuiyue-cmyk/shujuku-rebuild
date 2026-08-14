@@ -35,18 +35,6 @@
 
     <div class="acu-api-config-panel__behavior">
       <AcuToggle
-        :model-value="nonPrefillSupport"
-        label="非预填充支持"
-        description="开启后，发送给 AI 的 API 调用中所有 assistant 消息会改写为 user 消息，并在首行加上「助手：」前缀（默认关闭）。用于不支持 assistant 预填充的模型/接口。"
-        @update:model-value="setNonPrefillSupport"
-      />
-      <AcuToggle
-        :model-value="nonPrefillGlobal"
-        label="全局支持"
-        description="开启后，数据库中所有 AI 调用（含剧情推进/填表等内部调用）都应用上面的改写逻辑。"
-        @update:model-value="setNonPrefillGlobal"
-      />
-      <AcuToggle
         :model-value="streamingEnabled"
         label="开启流式输出"
         description="开启后 AI 响应以流式方式输出（用于对话类调用）。"
@@ -123,6 +111,12 @@
           />
         </AcuFormRow>
       </div>
+
+      <AcuToggle
+        v-model="activeDraft.nonPrefillSupport"
+        label="非预填充支持"
+        description="该预设开启后，所有使用本预设的调用（剧情推进/填表/生理追踪等）会把 assistant 消息改写为 user，并在首行加上「助手：」前缀。用于不支持 assistant 预填充的模型/接口。"
+      />
 
       <div class="acu-api-config-panel__editor-section">
         <AcuFormRow label="附加主体参数" hint="SillyTavern custom_include_body，填写 YAML object，会合并到最终模型请求体。">
@@ -202,22 +196,8 @@ import AcuToggle from "./_lib/AcuToggle.vue";
 import { settings_ACU } from "../../service/runtime/state-manager";
 import { saveSettings_ACU } from "../../service/settings/settings-service";
 
-// ─── 非预填充支持（API 行为开关，与预设同级） ───
-const nonPrefillSupport = ref(settings_ACU.nonPrefillSupport === true);
-const nonPrefillGlobal = ref(settings_ACU.nonPrefillGlobal === true);
+// ─── 流式输出（全局 API 行为开关，与预设同级） ───
 const streamingEnabled = ref(settings_ACU.streamingEnabled === true);
-
-function setNonPrefillSupport(value: boolean): void {
-  nonPrefillSupport.value = !!value;
-  settings_ACU.nonPrefillSupport = nonPrefillSupport.value;
-  saveSettings_ACU();
-}
-
-function setNonPrefillGlobal(value: boolean): void {
-  nonPrefillGlobal.value = !!value;
-  settings_ACU.nonPrefillGlobal = nonPrefillGlobal.value;
-  saveSettings_ACU();
-}
 
 function setStreamingEnabled(value: boolean): void {
   streamingEnabled.value = !!value;

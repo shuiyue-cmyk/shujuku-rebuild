@@ -103,6 +103,17 @@ function installBiotrackerConsoleBridge(): void {
     temperature: Number.isFinite(Number(settings_ACU.apiConfig?.temperature)) ? Number(settings_ACU.apiConfig.temperature) : undefined,
     maxTokens: Number.isFinite(Number(settings_ACU.apiConfig?.max_tokens)) ? Number(settings_ACU.apiConfig.max_tokens) : undefined,
   });
+  // 非预填充探针：生理追踪专用预设（bs_biotracker.apiPreset）的 nonPrefillSupport 优先，
+  // 未选预设时回退全局 settings_ACU.nonPrefillSupport（vendor 直连调用同样生效）
+  (globalThis as any).__bs_biotracker_non_prefill_probe__ = () => {
+    try {
+      const presetName = String(settings_ACU.bs_biotracker?.apiPreset || '').trim();
+      const resolved = resolveApiConfigByPreset_ACU(presetName);
+      return resolved.nonPrefillSupport === true;
+    } catch (e) {
+      return settings_ACU.nonPrefillSupport === true;
+    }
+  };
   const bridge = (level: 'warn' | 'error' | 'debug') => (original: (...args: any[]) => void) => (...args: any[]) => {
     original(...args);
     try {
@@ -510,6 +521,52 @@ export function debugCharacterAction_ACU(name: string, toolName: string, args: R
   } catch (e: any) {
     logWarn_ACU('[生理追踪] 调试操作失败:', e);
     return { ok: false, message: `操作失败：${e?.message || e}` };
+  }
+}
+
+/**
+ * 保存角色完整状态变量（编辑后写回）。
+ * 先校验 JSON 格式与基础结构（顶层对象 / name 一致 / profile 对象），通过后写回并持久化。
+ */
+export function saveCharacterFullState_ACU(name: string, stateJson: string): { ok: boolean; message?: string } {
+  try {
+    const targetName = String(name || '').trim();
+    if (!targetName) return { ok: false, message: '缺少角色名。' };
+    let parsed: any;
+    try {
+      parsed = JSON.parse(String(stateJson || ''));
+    } catch (e: any) {
+      return { ok: false, message: `JSON 格式不完整：${e?.message || e}` };
+    }
+    // 基础结构校验（精简版，参照 panel validateManualCharacterState）
+    const isPlainObject = (v: any) => Boolean(v) && typeof v === 'object' && !Array.isArray(v);
+    const errors: string[] = [];
+    if (!isPlainObject(parsed)) errors.push('顶层必须是 JSON 对象。');
+    if (!errors.length && String(parsed.name || '').trim() !== targetName) errors.push('不能在这里修改角色 name；请保持与当前选中角色一致。');
+    if (!isPlainObject(parsed.profile)) errors.push('profile 必须是对象。');
+    const profile = isPlainObject(parsed.profile) ? parsed.profile : {};
+    for (const path of ['base', 'pregnant', 'experience', 'bio', 'metabolism', 'notify', 'immune', 'psychology', 'wardrobe', 'outfit', 'descriptions', 'cooldown']) {
+      if (profile[path] !== undefined && !isPlainObject(profile[path])) errors.push(`profile.${path} 必须是对象。`);
+    }
+    for (const path of ['children', 'skills', 'talents', 'skillHistory']) {
+      if (profile[path] !== undefined && !Array.isArray(profile[path])) errors.push(`profile.${path} 必须是数组。`);
+    }
+    if (profile.base?.sperms !== undefined && !Array.isArray(profile.base.sperms)) errors.push('profile.base.sperms 必须是数组。');
+    if (profile.pregnant?.fetuses !== undefined && !Array.isArray(profile.pregnant.fetuses)) errors.push('profile.pregnant.fetuses 必须是数组。');
+    if (errors.length > 0) return { ok: false, message: `变量检查未通过：\n${errors.map((item) => `- ${item}`).join('\n')}` };
+
+    const ctx = createBiotrackerCtx_ACU();
+    const settings = getSettings(ctx);
+    const chatState = getChatState(ctx, settings);
+    const resolved = resolveRegisteredCharacterName(chatState, targetName);
+    if (!resolved) return { ok: false, message: `尚未找到已注册角色：${name}` };
+    chatState.characters[resolved] = parsed;
+    recordChatStateSnapshot(ctx, chatState, { reason: 'manual_full_state_edit' });
+    saveSettings(ctx);
+    return { ok: true, message: `已保存「${resolved}」的完整变量。` };
+  } catch (e: any) {
+    logWarn_ACU('[生理追踪] 保存完整变量失败:', e);
+    return { ok: false, message: `保存失败：${e?.message || e}` };
   }
 }
 
