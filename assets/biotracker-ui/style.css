@@ -3900,11 +3900,18 @@
   font-weight: 700;
 }
 
-/* ─── 数据库表格列表（只读查看） ─── */
-#bs-biotracker-settings .bs-bt-table-list {
+/* ─── 主页数据库表格区（分页 tile） ─── */
+#bs-biotracker-settings .bs-bt-home-section-title {
+  margin-top: 12px;
+  font-size: 12px;
+  font-weight: 700;
+  opacity: 0.75;
+}
+#bs-biotracker-settings .bs-bt-home-tables {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 8px;
+  margin-top: 8px;
 }
 #bs-biotracker-settings .bs-bt-table-list-item {
   display: flex;
@@ -3941,6 +3948,39 @@
   font-size: 11px;
   line-height: 1.3;
   overflow-wrap: anywhere;
+}
+#bs-biotracker-settings .bs-bt-home-pager {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+#bs-biotracker-settings .bs-bt-home-pager-btn {
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  line-height: 1;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.5);
+  color: var(--bsbt-lcd-text, inherit);
+  cursor: pointer;
+}
+#bs-biotracker-settings .bs-bt-home-pager-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.85);
+}
+#bs-biotracker-settings .bs-bt-home-pager-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+#bs-biotracker-settings .bs-bt-home-pager-label {
+  font-size: 12px;
+  opacity: 0.8;
 }
 #bs-biotracker-settings .bs-bt-table-wrap {
   overflow-x: auto;

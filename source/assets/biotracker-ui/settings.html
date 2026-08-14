@@ -31,15 +31,13 @@
                 <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--track" aria-hidden="true"></span>
                 <span class="bs-bt-home-tile__label">追踪</span>
               </button>
-              <button class="bs-bt-home-tile" type="button" data-nav-view="table-view">
-                <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--json" aria-hidden="true"></span>
-                <span class="bs-bt-home-tile__label">表格</span>
-              </button>
               <button class="bs-bt-home-tile" type="button" data-nav-view="theme">
                 <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--theme" aria-hidden="true"></span>
                 <span class="bs-bt-home-tile__label">主题</span>
               </button>
             </div>
+            <div class="bs-bt-home-section-title">数据库表格</div>
+            <div id="bs-bt-home-tables" class="bs-bt-home-tables">加载中…</div>
           </div>
         </section>
 
@@ -101,11 +99,9 @@
         <section id="bs-bt-view-table-view" class="bs-bt-view" data-view="table-view">
           <div class="bs-bt-panel">
             <div class="settings_section">
-              <div class="bs-bt-status-title">数据库表格</div>
-              <div id="bs-bt-table-list" class="bs-bt-table-list">加载中…</div>
+              <button id="bs-bt-table-back" class="menu_button" type="button">返回主页</button>
             </div>
-            <div class="settings_section" id="bs-bt-table-detail" hidden>
-              <button id="bs-bt-table-back" class="menu_button" type="button">返回表格列表</button>
+            <div class="settings_section">
               <div class="bs-bt-status-title" id="bs-bt-table-name">数据库表格</div>
               <div id="bs-bt-table-content" class="bs-bt-table-wrap">尚无表格数据。</div>
             </div>

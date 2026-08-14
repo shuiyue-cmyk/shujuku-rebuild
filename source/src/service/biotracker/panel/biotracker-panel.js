@@ -5376,8 +5376,13 @@ function applySettingsToForm(ctx) {
   renderRegisterChildSourceOptions(ctx);
   syncTrackerPresetSelectionUi(ctx);
   setView(getLastPagerView());
-  // 恢复上次停在表格视图时，立即渲染表格列表（否则列表区保持「加载中…」）
-  if (getLastPagerView() === 'table-view') renderTablePage(ctx);
+  // 主页固定渲染数据库表格区（否则表区保持「加载中…」）；恢复表格视图时渲染当前表详情
+  const lastView = getLastPagerView();
+  if (lastView === 'home') {
+    renderTablePage(ctx);
+  } else if (lastView === 'table-view' && globalThis.__bsBtOpenTableKey__) {
+    openTableDetail(ctx, globalThis.__bsBtOpenTableKey__);
+  }
 }
 
 const trackerDeps = { renderStatusPanel, updateClock };
@@ -6342,13 +6347,10 @@ async function ensureModal(ctx) {
       renderWardrobePage(ctx);
     });
   });
-  // 表格详情「返回列表」
+  // 表格详情「返回主页」
   document.getElementById('bs-bt-table-back')?.addEventListener('click', () => {
-    const detailEl = document.getElementById('bs-bt-table-detail');
-    const listEl = document.getElementById('bs-bt-table-list');
     globalThis.__bsBtOpenTableKey__ = '';
-    if (detailEl) detailEl.hidden = true;
-    if (listEl) listEl.hidden = false;
+    setView('home');
     renderTablePage(ctx);
   });
   const wardrobeList = document.getElementById('bs-bt-wardrobe-list');
@@ -7437,21 +7439,28 @@ function injectOptionToChatbox(value) {
 }
 
 // 数据库表格视图（只读）：数据来自数据库适配层桥（顶层 currentJsonTableData_ACU）。
-// 表格列表保持数据库 sheet 顺序（默认 8 表在前 + 自定义表在后），点表展开只读内容；
-// 选项表（sheet_OptionsNew）渲染为行动选项按钮，点击注入聊天框。
+// 主页数据库表格区：每个表一个 tile（首字作图标+去首字小字），点表进详情；
+// 每页最多 6 个表，超出用左右翻页。
+const HOME_TABLE_PAGE_SIZE = 6;
+let homeTablePageIndex = 0;
+
 function renderTablePage(ctx) {
   try {
     const bridge = globalThis.__ACU_BIOTRACKER_BRIDGE__;
     const tables = bridge?.getTables ? bridge.getTables() : {};
-    const listEl = document.getElementById('bs-bt-table-list');
-    if (!listEl) return;
+    const homeEl = document.getElementById('bs-bt-home-tables');
+    if (!homeEl) return;
     const keys = Object.keys(tables).filter((k) => k.startsWith('sheet_'));
     if (keys.length === 0) {
-      listEl.innerHTML = '<div class="bs-bt-connect-status">尚无表格数据。</div>';
+      homeEl.innerHTML = '<div class="bs-bt-connect-status">尚无表格数据。</div>';
       return;
     }
-    listEl.innerHTML = '';
-    for (const key of keys) {
+    const totalPages = Math.max(1, Math.ceil(keys.length / HOME_TABLE_PAGE_SIZE));
+    if (homeTablePageIndex >= totalPages) homeTablePageIndex = totalPages - 1;
+    const start = homeTablePageIndex * HOME_TABLE_PAGE_SIZE;
+    const pageKeys = keys.slice(start, start + HOME_TABLE_PAGE_SIZE);
+    homeEl.innerHTML = '';
+    for (const key of pageKeys) {
       const sheet = tables[key] || {};
       const button = document.createElement('button');
       button.type = 'button';
@@ -7464,13 +7473,43 @@ function renderTablePage(ctx) {
         <span class="bs-bt-table-list-icon" aria-hidden="true">${escapeHtml(first)}</span>
         <span class="bs-bt-table-list-label">${escapeHtml(rest || '')}</span>
       `;
-      button.addEventListener('click', () => openTableDetail(ctx, key));
-      listEl.appendChild(button);
+      button.addEventListener('click', () => {
+        globalThis.__bsBtOpenTableKey__ = key;
+        setView('table-view');
+        openTableDetail(ctx, key);
+      });
+      homeEl.appendChild(button);
     }
-    // 列表模式下隐藏详情（打开表后由 openTableDetail 切换）
-    const detailEl = document.getElementById('bs-bt-table-detail');
-    if (detailEl) detailEl.hidden = true;
-    globalThis.__bsBtOpenTableKey__ = '';
+    // 翻页控件（页数>1 才显示）
+    if (totalPages > 1) {
+      const pager = document.createElement('div');
+      pager.className = 'bs-bt-home-pager';
+      const prev = document.createElement('button');
+      prev.type = 'button';
+      prev.className = 'bs-bt-home-pager-btn';
+      prev.textContent = '‹';
+      prev.disabled = homeTablePageIndex <= 0;
+      prev.addEventListener('click', () => {
+        homeTablePageIndex = Math.max(0, homeTablePageIndex - 1);
+        renderTablePage(ctx);
+      });
+      const pageLabel = document.createElement('span');
+      pageLabel.className = 'bs-bt-home-pager-label';
+      pageLabel.textContent = `${homeTablePageIndex + 1}/${totalPages}`;
+      const next = document.createElement('button');
+      next.type = 'button';
+      next.className = 'bs-bt-home-pager-btn';
+      next.textContent = '›';
+      next.disabled = homeTablePageIndex >= totalPages - 1;
+      next.addEventListener('click', () => {
+        homeTablePageIndex = Math.min(totalPages - 1, homeTablePageIndex + 1);
+        renderTablePage(ctx);
+      });
+      pager.appendChild(prev);
+      pager.appendChild(pageLabel);
+      pager.appendChild(next);
+      homeEl.appendChild(pager);
+    }
   } catch (e) {
     console.error('[BS BioTracker] renderTablePage failed', e);
   }
@@ -7482,12 +7521,8 @@ function openTableDetail(ctx, key) {
   const sheet = tables[key] || null;
   const nameEl = document.getElementById('bs-bt-table-name');
   const contentEl = document.getElementById('bs-bt-table-content');
-  const detailEl = document.getElementById('bs-bt-table-detail');
-  const listEl = document.getElementById('bs-bt-table-list');
   globalThis.__bsBtOpenTableKey__ = key;
   if (nameEl) nameEl.textContent = String(sheet?.name || key || '数据库表格');
-  if (detailEl) detailEl.hidden = false;
-  if (listEl) listEl.hidden = true;
   if (!contentEl) return;
   const content = Array.isArray(sheet?.content) ? sheet.content : [];
   if (isOptionsSheet(key, sheet)) {
@@ -7571,12 +7606,10 @@ async function bootstrap() {
         try {
           if (!document.getElementById('bs-biotracker-settings')) return;
           if (document.querySelector('#bs-bt-view-track-list')?.classList.contains('is-active')) renderStatusPanel(ctx);
+          if (document.querySelector('#bs-bt-view-home')?.classList.contains('is-active')) renderTablePage(ctx);
           if (document.querySelector('#bs-bt-view-table-view')?.classList.contains('is-active')) {
-            const detailEl = document.getElementById('bs-bt-table-detail');
-            if (detailEl && !detailEl.hidden && globalThis.__bsBtOpenTableKey__) {
+            if (globalThis.__bsBtOpenTableKey__) {
               openTableDetail(ctx, globalThis.__bsBtOpenTableKey__);
-            } else {
-              renderTablePage(ctx);
             }
           }
         } catch (e) {}
