@@ -2,7 +2,7 @@
  * presentation-v2/composables/useBiotrackerPage.ts
  * 生理追踪页逻辑：API 预设（参照剧情推进）+ 注册（手动/自动搜寻）+ 已注册角色只读
  */
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { settings_ACU, currentChatFileIdentifier_ACU } from '../../service/runtime/state-manager';
 import { saveSettings_ACU } from '../../service/settings/settings-service';
 import {
@@ -38,9 +38,24 @@ export function useBiotrackerPage() {
   }
 
   // ─── 手动注册（一次点击 = 繁育推演 + 注册两次 API） ───
-  const registerName = ref('');
-  const registerRace = ref('');
-  const registerNotes = ref('');
+  // 表单草稿按聊天分桶（regDrafts[chatKey]）：切换聊天恢复对应草稿，新聊天/关闭聊天回初始状态
+  function getBiotrackerRoot(): Record<string, any> {
+    if (!settings_ACU.bs_biotracker || typeof settings_ACU.bs_biotracker !== 'object') {
+      settings_ACU.bs_biotracker = {};
+    }
+    return settings_ACU.bs_biotracker;
+  }
+  const currentChatKey = () => String(currentChatFileIdentifier_ACU || '');
+  function getRegDraft(): Record<string, any> {
+    const root = getBiotrackerRoot();
+    if (!root.regDrafts) root.regDrafts = {};
+    const key = currentChatKey();
+    if (!root.regDrafts[key]) root.regDrafts[key] = {};
+    return root.regDrafts[key];
+  }
+  const registerName = ref(String(getRegDraft().name || ''));
+  const registerRace = ref(String(getRegDraft().race || ''));
+  const registerNotes = ref(String(getRegDraft().notes || ''));
   // 手动注册/追踪发送给 AI 的最近 AI 回复条数（默认 12）
   const registerRecentCount = ref(Number(settings_ACU.bs_biotracker?.registerRecentCount) > 0 ? settings_ACU.bs_biotracker.registerRecentCount : 12);
   const registering = ref(false);
@@ -52,6 +67,23 @@ export function useBiotrackerPage() {
     settings_ACU.bs_biotracker.registerRecentCount = registerRecentCount.value;
     saveSettings_ACU();
   }
+
+  // 输入即存当前聊天的草稿（watch 自动触发）
+  watch([registerName, registerRace, registerNotes], () => {
+    const draft = getRegDraft();
+    draft.name = registerName.value;
+    draft.race = registerRace.value;
+    draft.notes = registerNotes.value;
+    saveSettings_ACU();
+  });
+
+  // 切换聊天 → 恢复该聊天的草稿（无草稿的新聊天回初始状态）
+  watch(currentChatKey, () => {
+    const draft = getRegDraft();
+    registerName.value = String(draft.name || '');
+    registerRace.value = String(draft.race || '');
+    registerNotes.value = String(draft.notes || '');
+  });
 
   async function doRegister(): Promise<void> {
     if (registering.value) return;
@@ -68,10 +100,7 @@ export function useBiotrackerPage() {
       status.value = result.message;
       statusIsError.value = !result.ok;
       showToastr_ACU(result.ok ? 'success' : 'warning', result.message, '生理追踪');
-      if (result.ok) {
-        registerName.value = '';
-        registerNotes.value = '';
-      }
+      // 注册成功后保留表单内容（草稿已持久化），便于连续注册或对照
       refreshCharacters();
     } finally {
       registering.value = false;
