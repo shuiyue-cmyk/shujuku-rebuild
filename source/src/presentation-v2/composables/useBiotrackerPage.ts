@@ -3,7 +3,7 @@
  * 生理追踪页逻辑：API 预设（参照剧情推进）+ 注册（手动/自动搜寻）+ 已注册角色只读
  */
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
-import { settings_ACU, currentChatFileIdentifier_ACU } from '../../service/runtime/state-manager';
+import { settings_ACU, currentChatFileIdentifier_ACU, currentJsonTableData_ACU } from '../../service/runtime/state-manager';
 import { saveSettings_ACU } from '../../service/settings/settings-service';
 import {
   isAutoRegisterEnabled_ACU,
@@ -235,12 +235,45 @@ export function useBiotrackerPage() {
     });
   }
 
+  // ─── 数据库表格查看（只读：currentJsonTableData_ACU[sheetKey] = { name, content 二维数组 }） ───
+  const tableOptions = computed(() => {
+    const tables = currentJsonTableData_ACU && typeof currentJsonTableData_ACU === 'object' ? currentJsonTableData_ACU as Record<string, any> : {};
+    return Object.keys(tables)
+      .filter(k => k.startsWith('sheet_'))
+      .map(k => ({ value: k, label: String(tables[k]?.name || k) }));
+  });
+  const selectedTableKey = ref('');
+  const tableData = ref<{ name: string; headers: string[]; rows: string[][] }>({ name: '', headers: [], rows: [] });
+
+  function refreshTables(): void {
+    const keys = tableOptions.value.map(o => o.value);
+    if (selectedTableKey.value && !keys.includes(selectedTableKey.value)) selectedTableKey.value = '';
+    if (!selectedTableKey.value && keys.length > 0) selectedTableKey.value = keys[0];
+    const tables = currentJsonTableData_ACU && typeof currentJsonTableData_ACU === 'object' ? currentJsonTableData_ACU as Record<string, any> : {};
+    const sheet = selectedTableKey.value ? tables[selectedTableKey.value] : null;
+    const content = Array.isArray(sheet?.content) ? sheet.content : [];
+    tableData.value = {
+      name: String(sheet?.name || selectedTableKey.value || ''),
+      headers: Array.isArray(content[0]) ? content[0].map(String) : [],
+      rows: content.slice(1).map((r: any) => (Array.isArray(r) ? r.map(String) : [])),
+    };
+  }
+
+  function selectTable(key: string): void {
+    selectedTableKey.value = String(key || '');
+    refreshTables();
+  }
+
   let timer: ReturnType<typeof setInterval> | null = null;
   onMounted(() => {
     // 刷新 API 预设快照（activePreset/currentConfigReady），与剧情推进页一致
     apiStore.refreshFromSettings();
     refreshCharacters();
-    timer = setInterval(refreshCharacters, 3000);
+    refreshTables();
+    timer = setInterval(() => {
+      refreshCharacters();
+      refreshTables();
+    }, 3000);
   });
   onBeforeUnmount(() => {
     if (timer) clearInterval(timer);
@@ -276,5 +309,9 @@ export function useBiotrackerPage() {
     characters,
     status,
     statusIsError,
+    tableOptions,
+    selectedTableKey,
+    tableData,
+    selectTable,
   };
 }
