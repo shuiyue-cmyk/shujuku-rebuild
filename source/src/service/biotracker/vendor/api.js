@@ -772,7 +772,8 @@ async function requestChatCompletion(apiBase, settings, body, runContext = {}) {
   const logApiDebug = (phase, details = {}) => {
     // 默认关闭：全量 request/response（含聊天/角色态）只会在显式开启调试时落 console，
     // 避免无条件泄露（网络面审查 P3）。开启：控制台执行 globalThis.__bs_biotracker_debug_api__ = true
-    if (!globalThis.__bs_biotracker_debug_api__) return;
+    // 数据库插件：适配层注入 __bs_biotracker_debug_api_probe__（读取数据库 debug 采集开关）联动开启
+    if (!globalThis.__bs_biotracker_debug_api__ && !(typeof globalThis.__bs_biotracker_debug_api_probe__ === 'function' && globalThis.__bs_biotracker_debug_api_probe__())) return;
     try {
       const label = `[BS BioTracker][API debug] ${phase}`;
       if (typeof console.groupCollapsed === 'function') console.groupCollapsed(label);
@@ -838,7 +839,7 @@ async function requestChatCompletion(apiBase, settings, body, runContext = {}) {
         }));
       }
       // 调试快照同样默认关闭（网络面审查 P3），避免无门控暂存完整请求/响应于 globalThis
-      if (globalThis.__bs_biotracker_debug_api__) {
+      if (globalThis.__bs_biotracker_debug_api__ || (typeof globalThis.__bs_biotracker_debug_api_probe__ === 'function' && globalThis.__bs_biotracker_debug_api_probe__())) {
         globalThis[DEBUG_LAST_API_RESPONSE_KEY] = {
           capturedAt: Date.now(),
           attempt,
@@ -1079,14 +1080,16 @@ export async function callOpenAICompatible(settings, payload, systemPrompt = DEF
       ...effectiveMessages.slice(1),
     ];
   }
+  // 采样参数优先数据库配置（适配层同步进 settings.temperature/maxTokens 或经 __bs_biotracker_api_probe__ 兜底），
+  // 其次 ST 预设采样，最后回退默认 0.2。probe 兜底保证追踪/注册内部直连调用也始终采用数据库配置。
+  const dbProbe = (typeof globalThis.__bs_biotracker_api_probe__ === 'function') ? globalThis.__bs_biotracker_api_probe__() : null;
   const body = {
     model,
-    // 采样参数：优先数据库主配置（适配层同步进 settings.temperature/maxTokens），无则回退默认 0.2
-    temperature: pickFiniteNumber(settings.temperature, 0.2),
-    ...(Number.isFinite(Number(settings.maxTokens)) && Number(settings.maxTokens) > 0
-      ? { max_tokens: Math.max(1, Math.floor(Number(settings.maxTokens))) }
-      : {}),
     ...stPresetSampling,
+    temperature: pickFiniteNumber(settings.temperature, dbProbe?.temperature, stPresetSampling.temperature, 0.2),
+    ...(pickFiniteNumber(settings.maxTokens, dbProbe?.maxTokens) > 0
+      ? { max_tokens: Math.max(1, Math.floor(pickFiniteNumber(settings.maxTokens, dbProbe?.maxTokens))) }
+      : {}),
     messages: effectiveMessages,
     ...(useResponseFormat ? { response_format: { type: 'json_object' } } : {}),
   };

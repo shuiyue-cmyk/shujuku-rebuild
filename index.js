@@ -100042,7 +100042,8 @@ async function requestChatCompletion(apiBase, settings, body, runContext = {}) {
     const logApiDebug = (phase, details = {}) => {
         // 默认关闭：全量 request/response（含聊天/角色态）只会在显式开启调试时落 console，
         // 避免无条件泄露（网络面审查 P3）。开启：控制台执行 globalThis.__bs_biotracker_debug_api__ = true
-        if (!globalThis.__bs_biotracker_debug_api__)
+        // 数据库插件：适配层注入 __bs_biotracker_debug_api_probe__（读取数据库 debug 采集开关）联动开启
+        if (!globalThis.__bs_biotracker_debug_api__ && !(typeof globalThis.__bs_biotracker_debug_api_probe__ === 'function' && globalThis.__bs_biotracker_debug_api_probe__()))
             return;
         try {
             const label = `[BS BioTracker][API debug] ${phase}`;
@@ -100115,7 +100116,7 @@ async function requestChatCompletion(apiBase, settings, body, runContext = {}) {
                 }));
             }
             // 调试快照同样默认关闭（网络面审查 P3），避免无门控暂存完整请求/响应于 globalThis
-            if (globalThis.__bs_biotracker_debug_api__) {
+            if (globalThis.__bs_biotracker_debug_api__ || (typeof globalThis.__bs_biotracker_debug_api_probe__ === 'function' && globalThis.__bs_biotracker_debug_api_probe__())) {
                 globalThis[DEBUG_LAST_API_RESPONSE_KEY] = {
                     capturedAt: Date.now(),
                     attempt,
@@ -100363,14 +100364,16 @@ async function callOpenAICompatible(settings, payload, systemPrompt = DEFAULT_SY
             ...effectiveMessages.slice(1),
         ];
     }
+    // 采样参数优先数据库配置（适配层同步进 settings.temperature/maxTokens 或经 __bs_biotracker_api_probe__ 兜底），
+    // 其次 ST 预设采样，最后回退默认 0.2。probe 兜底保证追踪/注册内部直连调用也始终采用数据库配置。
+    const dbProbe = (typeof globalThis.__bs_biotracker_api_probe__ === 'function') ? globalThis.__bs_biotracker_api_probe__() : null;
     const body = {
         model,
-        // 采样参数：优先数据库主配置（适配层同步进 settings.temperature/maxTokens），无则回退默认 0.2
-        temperature: pickFiniteNumber(settings.temperature, 0.2),
-        ...(Number.isFinite(Number(settings.maxTokens)) && Number(settings.maxTokens) > 0
-            ? { max_tokens: Math.max(1, Math.floor(Number(settings.maxTokens))) }
-            : {}),
         ...stPresetSampling,
+        temperature: pickFiniteNumber(settings.temperature, dbProbe?.temperature, stPresetSampling.temperature, 0.2),
+        ...(pickFiniteNumber(settings.maxTokens, dbProbe?.maxTokens) > 0
+            ? { max_tokens: Math.max(1, Math.floor(pickFiniteNumber(settings.maxTokens, dbProbe?.maxTokens))) }
+            : {}),
         messages: effectiveMessages,
         ...(useResponseFormat ? { response_format: { type: 'json_object' } } : {}),
     };
@@ -110544,9 +110547,10 @@ function scheduleSettingsSave() {
     }, 400);
 }
 /**
- * 把 biotracker vendor 的 console.warn/error 桥接到数据库日志系统。
+ * 把 biotracker vendor 的 console.warn/error/log 桥接到数据库日志系统。
  * 只转发带 [BS BioTracker] 前缀的日志（vendor 统一前缀），其余 console 行为保持不变。
- * error 无条件写入；warn 受日志系统 warn 采集开关门控（与 logWarn_ACU 一致）。
+ * error 无条件写入；warn 受日志系统 warn 采集开关门控；log 视为 debug（受 debug 采集开关门控）。
+ * 同时注入 vendor API 调试门控探针：数据库 debug 采集开启时 vendor 的 API request/response 详情也记录。
  */
 let consoleBridgeInstalled = false;
 function installBiotrackerConsoleBridge() {
@@ -110554,6 +110558,13 @@ function installBiotrackerConsoleBridge() {
         return;
     consoleBridgeInstalled = true;
     const BIOTRACKER_LOG_PREFIX = '[BS BioTracker]';
+    globalThis.__bs_biotracker_debug_api_probe__ = () => isDebugLogEnabled();
+    // API 采样参数兜底：vendor 每次 API 调用时读取数据库当前配置（温度/max token），
+    // 保证追踪/注册内部直连调用（不经适配层同步）也采用数据库设置
+    globalThis.__bs_biotracker_api_probe__ = () => ({
+        temperature: Number.isFinite(Number(settings_ACU.apiConfig?.temperature)) ? Number(settings_ACU.apiConfig.temperature) : undefined,
+        maxTokens: Number.isFinite(Number(settings_ACU.apiConfig?.max_tokens)) ? Number(settings_ACU.apiConfig.max_tokens) : undefined,
+    });
     const bridge = (level) => (original) => (...args) => {
         original(...args);
         try {
@@ -110565,6 +110576,7 @@ function installBiotrackerConsoleBridge() {
     };
     console.warn = bridge('warn')(console.warn.bind(console));
     console.error = bridge('error')(console.error.bind(console));
+    console.log = bridge('debug')(console.log.bind(console));
 }
 /** 构造 biotracker 宿主上下文（每次调用取当前运行态） */
 function createBiotrackerCtx_ACU() {

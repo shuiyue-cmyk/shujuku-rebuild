@@ -20,7 +20,7 @@ import { getCurrentCharacterFallback_ACU } from '../host/host-state-service';
 import { getLorebookEntries_ACU } from '../../data/gateways/worldbook-gateway';
 import { readFinalGenerationGreenlights_ACU } from '../agent/agent-worldbook-takeover';
 import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
-import { pushLog } from '../../shared/log-buffer';
+import { pushLog, isDebugLogEnabled } from '../../shared/log-buffer';
 
 // ═══════════════════════════════════════════════════════════════
 // 存储命名空间（settings_ACU.bsBiotracker）
@@ -83,16 +83,24 @@ function scheduleSettingsSave(): void {
 }
 
 /**
- * 把 biotracker vendor 的 console.warn/error 桥接到数据库日志系统。
+ * 把 biotracker vendor 的 console.warn/error/log 桥接到数据库日志系统。
  * 只转发带 [BS BioTracker] 前缀的日志（vendor 统一前缀），其余 console 行为保持不变。
- * error 无条件写入；warn 受日志系统 warn 采集开关门控（与 logWarn_ACU 一致）。
+ * error 无条件写入；warn 受日志系统 warn 采集开关门控；log 视为 debug（受 debug 采集开关门控）。
+ * 同时注入 vendor API 调试门控探针：数据库 debug 采集开启时 vendor 的 API request/response 详情也记录。
  */
 let consoleBridgeInstalled = false;
 function installBiotrackerConsoleBridge(): void {
   if (consoleBridgeInstalled) return;
   consoleBridgeInstalled = true;
   const BIOTRACKER_LOG_PREFIX = '[BS BioTracker]';
-  const bridge = (level: 'warn' | 'error') => (original: (...args: any[]) => void) => (...args: any[]) => {
+  (globalThis as any).__bs_biotracker_debug_api_probe__ = () => isDebugLogEnabled();
+  // API 采样参数兜底：vendor 每次 API 调用时读取数据库当前配置（温度/max token），
+  // 保证追踪/注册内部直连调用（不经适配层同步）也采用数据库设置
+  (globalThis as any).__bs_biotracker_api_probe__ = () => ({
+    temperature: Number.isFinite(Number(settings_ACU.apiConfig?.temperature)) ? Number(settings_ACU.apiConfig.temperature) : undefined,
+    maxTokens: Number.isFinite(Number(settings_ACU.apiConfig?.max_tokens)) ? Number(settings_ACU.apiConfig.max_tokens) : undefined,
+  });
+  const bridge = (level: 'warn' | 'error' | 'debug') => (original: (...args: any[]) => void) => (...args: any[]) => {
     original(...args);
     try {
       if (String(args[0] || '').includes(BIOTRACKER_LOG_PREFIX)) {
@@ -102,6 +110,7 @@ function installBiotrackerConsoleBridge(): void {
   };
   console.warn = bridge('warn')(console.warn.bind(console));
   console.error = bridge('error')(console.error.bind(console));
+  console.log = bridge('debug')(console.log.bind(console));
 }
 
 export interface BiotrackerCtx_ACU {
