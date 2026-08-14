@@ -205,16 +205,22 @@ async function mountDashboardPage(
     }),
   }));
   vi.doMock("../../../src/service/table/table-history", () => ({
-    resolveTableHistoryStateFromChat_ACU: (_chat: any[], opts: any) => ({
-      latestAiMessageIndex: 4,
-      latestDataMessageIndex: 3,
-      lastTrackedUpdateMessageIndex: opts.sheetKey === "sheet_a" ? 1 : -1,
-      latestDataAiFloor: 2,
-      lastTrackedUpdateAiFloor: opts.sheetKey === "sheet_a" ? 1 : 0,
-      hasAnyData: opts.sheetKey === "sheet_a",
-      hasTrackedUpdate: opts.sheetKey === "sheet_a",
-      ...(options.historyState || {}),
-    }),
+    resolveTableHistoryStatesFromChat_ACU: (_chat: any[], optsList: any[]) => {
+      const map = new Map<string, any>();
+      for (const opts of optsList || []) {
+        map.set(opts.sheetKey, {
+          latestAiMessageIndex: 4,
+          latestDataMessageIndex: 3,
+          lastTrackedUpdateMessageIndex: opts.sheetKey === "sheet_a" ? 1 : -1,
+          latestDataAiFloor: 2,
+          lastTrackedUpdateAiFloor: opts.sheetKey === "sheet_a" ? 1 : 0,
+          hasAnyData: opts.sheetKey === "sheet_a",
+          hasTrackedUpdate: opts.sheetKey === "sheet_a",
+          ...(options.historyState || {}),
+        });
+      }
+      return map;
+    },
   }));
   vi.doMock("../../../src/service/table/storage-mode", () => ({
     getCurrentStorageMode: () => settings.storageMode,

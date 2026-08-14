@@ -21,7 +21,7 @@ import {
   setSummaryVectorIndexMode_ACU,
 } from "../../service/settings/settings-service";
 import {
-  resolveTableHistoryStateFromChat_ACU
+  resolveTableHistoryStatesFromChat_ACU
 } from "../../service/table/table-history";
 import {
   getCurrentTableDisplayData_ACU
@@ -721,7 +721,25 @@ export function useDashboardPage(): DashboardPageState {
     const displayData = getCurrentTableDisplayData_ACU();
     if (!displayData) return [];
     const chat = getChatArray_ACU();
-    const totalAi = chat.filter((msg: any) => msg && !msg.is_user).length;
+    const currentIsolationKey = getCurrentIsolationKey_ACU();
+
+    // 批量解析所有表的历史状态（单次扫描 chat），避免每表各自全量逆序扫描
+    const historyStates = resolveTableHistoryStatesFromChat_ACU(
+      chat,
+      sheetKeys.value.map((key) => {
+        const table = displayData[key] || {};
+        return {
+          sheetKey: key,
+          isSummaryTable: isSummaryOrOutlineTable_ACU(
+            String(table.name || ""),
+          ),
+          isolationKey: currentIsolationKey,
+          settings: settings_ACU,
+        };
+      }),
+    );
+
+    const totalAi = aiMessageCount.value;
     const globalFrequency = normalizePositiveInteger_ACU(
       settings_ACU.autoUpdateFrequency,
       1,
@@ -730,7 +748,6 @@ export function useDashboardPage(): DashboardPageState {
       settings_ACU.skipUpdateFloors,
       0,
     );
-    const currentIsolationKey = getCurrentIsolationKey_ACU();
 
     return sheetKeys.value.map((key) => {
       const table = displayData[key] || {};
@@ -744,12 +761,15 @@ export function useDashboardPage(): DashboardPageState {
       const frequency = rawFrequency === -1 ? globalFrequency : rawFrequency;
       const skip = Math.max(0, rawSkip === -1 ? globalSkip : rawSkip);
       const disabled = frequency <= 0;
-      const history = resolveTableHistoryStateFromChat_ACU(chat, {
-        sheetKey: key,
-        isSummaryTable: isSummaryOrOutlineTable_ACU(String(table.name || "")),
-        isolationKey: currentIsolationKey,
-        settings: settings_ACU,
-      });
+      const history = historyStates.get(key) || {
+        latestAiMessageIndex: -1,
+        latestDataMessageIndex: -1,
+        lastTrackedUpdateMessageIndex: -1,
+        latestDataAiFloor: 0,
+        lastTrackedUpdateAiFloor: 0,
+        hasAnyData: false,
+        hasTrackedUpdate: false,
+      };
       const lastFloor = history.lastTrackedUpdateAiFloor;
       const found = history.hasTrackedUpdate;
 

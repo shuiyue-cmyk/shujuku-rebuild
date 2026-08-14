@@ -201,15 +201,21 @@ async function mountFormFillPage(
   }));
   vi.doMock('../../../src/service/table/table-history', () => ({
     collectV2CheckpointFloorsFromChat_ACU: () => checkpointFloors,
-    resolveTableHistoryStateFromChat_ACU: (_chat: any[], options: any) => ({
-      latestAiMessageIndex: 4,
-      latestDataMessageIndex: 3,
-      lastTrackedUpdateMessageIndex: options.sheetKey === 'sheet_a' ? 1 : -1,
-      latestDataAiFloor: 2,
-      lastTrackedUpdateAiFloor: options.sheetKey === 'sheet_a' ? 1 : 0,
-      hasAnyData: true,
-      hasTrackedUpdate: options.sheetKey === 'sheet_a',
-    }),
+    resolveTableHistoryStatesFromChat_ACU: (_chat: any[], optsList: any[]) => {
+      const map = new Map<string, any>();
+      for (const opts of optsList || []) {
+        map.set(opts.sheetKey, {
+          latestAiMessageIndex: 4,
+          latestDataMessageIndex: 3,
+          lastTrackedUpdateMessageIndex: opts.sheetKey === 'sheet_a' ? 1 : -1,
+          latestDataAiFloor: 2,
+          lastTrackedUpdateAiFloor: opts.sheetKey === 'sheet_a' ? 1 : 0,
+          hasAnyData: true,
+          hasTrackedUpdate: opts.sheetKey === 'sheet_a',
+        });
+      }
+      return map;
+    },
   }));
   vi.doMock('../../../src/service/table/table-storage-strategy', () => ({
     reloadStorageProvider: vi.fn(async () => {}),

@@ -6,8 +6,6 @@
  * 供模板预设 / 剧情推进预设的手工切换与 API 切换复用。
  */
 import { refreshMergedDataAndNotify_ACU } from '../../service/worldbook/pipeline';
-import { $manualTableSelector_ACU, $importTableSelector_ACU } from '../state/ui-refs';
-import { renderManualTableSelector_ACU, renderImportTableSelector_ACU } from './table-selector';
 import { updateCardUpdateStatusDisplay_ACU } from './update-status-display';
 import { topLevelWindow_ACU } from '../../shared/env';
 import { getUiSurface_ACU } from '../../shared/ui-surface-registry';
@@ -57,13 +55,7 @@ export async function refreshMergedDataAndNotifyWithUI_ACU(
         logDebug_ACU('Skipped V2 visualizer refresh: surface inactive or not registered.');
     }
 
-    // 3. UI 选择器刷新
-    if ($manualTableSelector_ACU) {
-        try { renderManualTableSelector_ACU(); } catch (_) {}
-    }
-    if ($importTableSelector_ACU) {
-        try { renderImportTableSelector_ACU(); } catch (_) {}
-    }
+    // 3. UI 选择器刷新（旧弹窗表格选择器已随旧弹窗删除）
     if (typeof updateCardUpdateStatusDisplay_ACU === 'function') {
         try { updateCardUpdateStatusDisplay_ACU(); } catch (error) {
             logDebug_ACU('Failed to refresh card update status display:', error);

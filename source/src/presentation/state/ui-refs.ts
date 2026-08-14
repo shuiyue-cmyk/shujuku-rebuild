@@ -50,13 +50,7 @@ export let $apiConfigSectionToggle_ACU: JQRef,
   $skipUpdateFloorsInput_ACU: JQRef,
   $saveSkipUpdateFloorsButton_ACU: JQRef,
   $retainRecentLayersInput_ACU: JQRef,
-  $saveRetainRecentLayersButton_ACU: JQRef,
-  $manualTableSelector_ACU: JQRef,
-  $manualTableSelectAll_ACU: JQRef,
-  $manualTableSelectNone_ACU: JQRef,
-  $importTableSelector_ACU: JQRef,
-  $importTableSelectAll_ACU: JQRef,
-  $importTableSelectNone_ACU: JQRef;
+  $saveRetainRecentLayersButton_ACU: JQRef;
 
 export function _set_$popupInstance_ACU(v: JQRef) { $popupInstance_ACU = v; }
 
@@ -104,10 +98,4 @@ export function _assignUIPlaceholders_ACU(map: Record<string, JQRef>) {
   if (map.$saveSkipUpdateFloorsButton_ACU !== undefined) $saveSkipUpdateFloorsButton_ACU = map.$saveSkipUpdateFloorsButton_ACU;
   if (map.$retainRecentLayersInput_ACU !== undefined) $retainRecentLayersInput_ACU = map.$retainRecentLayersInput_ACU;
   if (map.$saveRetainRecentLayersButton_ACU !== undefined) $saveRetainRecentLayersButton_ACU = map.$saveRetainRecentLayersButton_ACU;
-  if (map.$manualTableSelector_ACU !== undefined) $manualTableSelector_ACU = map.$manualTableSelector_ACU;
-  if (map.$manualTableSelectAll_ACU !== undefined) $manualTableSelectAll_ACU = map.$manualTableSelectAll_ACU;
-  if (map.$manualTableSelectNone_ACU !== undefined) $manualTableSelectNone_ACU = map.$manualTableSelectNone_ACU;
-  if (map.$importTableSelector_ACU !== undefined) $importTableSelector_ACU = map.$importTableSelector_ACU;
-  if (map.$importTableSelectAll_ACU !== undefined) $importTableSelectAll_ACU = map.$importTableSelectAll_ACU;
-  if (map.$importTableSelectNone_ACU !== undefined) $importTableSelectNone_ACU = map.$importTableSelectNone_ACU;
 }

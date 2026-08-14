@@ -85,15 +85,21 @@ async function mountBasicConfigPage(settings = createSettings()) {
     switchStorageMode: vi.fn(async (mode: string) => { settings.storageMode = mode; }),
   }));
   vi.doMock('../../../src/service/table/table-history', () => ({
-    resolveTableHistoryStateFromChat_ACU: () => ({
-      latestAiMessageIndex: -1,
-      latestDataMessageIndex: -1,
-      lastTrackedUpdateMessageIndex: -1,
-      latestDataAiFloor: 0,
-      lastTrackedUpdateAiFloor: 0,
-      hasAnyData: false,
-      hasTrackedUpdate: false,
-    }),
+    resolveTableHistoryStatesFromChat_ACU: (_chat: any[], optsList: any[]) => {
+      const map = new Map<string, any>();
+      for (const opts of optsList || []) {
+        map.set(opts.sheetKey, {
+          latestAiMessageIndex: -1,
+          latestDataMessageIndex: -1,
+          lastTrackedUpdateMessageIndex: -1,
+          latestDataAiFloor: 0,
+          lastTrackedUpdateAiFloor: 0,
+          hasAnyData: false,
+          hasTrackedUpdate: false,
+        });
+      }
+      return map;
+    },
   }));
   vi.doMock('../../../src/service/ai/ai-service', () => ({
     getConnectionManagerProfiles_ACU: () => [],
