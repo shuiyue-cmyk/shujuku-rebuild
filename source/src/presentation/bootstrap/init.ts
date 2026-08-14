@@ -208,7 +208,7 @@ export   function mainInitialize_ACU() {
     console.log('ACU_INIT_DEBUG: mainInitialize_ACU called.');
     if (attemptToLoadCoreApis_ACU()) {
       logDebug_ACU('AutoCardUpdater Initialization successful! Core APIs loaded.');
-      showToastr_ACU('success', '数据库自动更新脚本已加载！', '脚本启动');
+      showToastr_ACU('success', '数据库已加载！', '数据库');
 
       loadSettings_ACU();
       if (
@@ -658,6 +658,6 @@ export   function mainInitialize_ACU() {
       }
     } else {
       logError_ACU('ACU: Failed to initialize. Core APIs not available on DOM ready.');
-      console.error('数据库自动更新脚本初始化失败：核心API加载失败。');
+      console.error('数据库初始化失败：核心API加载失败。');
     }
   }
