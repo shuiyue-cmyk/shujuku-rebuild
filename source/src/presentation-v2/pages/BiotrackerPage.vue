@@ -22,7 +22,7 @@
         </p>
       </AcuPanel>
 
-      <!-- 注册与自动注册 -->
+      <!-- 手动注册 -->
       <AcuPanel
         id="biotracker-register-panel"
         :title="copy.registerTitle"
@@ -31,9 +31,9 @@
         <AcuFormRow label="角色名">
           <input v-model="registerName" type="text" class="acu-input" placeholder="要注册的角色名" />
         </AcuFormRow>
-        <AcuFormRow label="种族（手动模式选择，自动模式由 AI 判断）">
+        <AcuFormRow label="种族（留空则由 AI 判断）">
           <select v-model="registerRace" class="acu-input">
-            <option value="">（由 AI 判断 / 手动留空）</option>
+            <option value="">（由 AI 判断）</option>
             <option v-for="race in registerRaceOptions" :key="race" :value="race">{{ race }}</option>
           </select>
         </AcuFormRow>
@@ -46,22 +46,35 @@
           </AcuButton>
           <AcuButton size="sm" variant="secondary" @click="runTrackerNow">立即追踪分析</AcuButton>
         </div>
-        <AcuFormRow label="自动搜寻注册">
+        <p v-if="status" class="acu-v2-biotracker-page__status" :data-error="statusIsError">
+          {{ status }}
+        </p>
+      </AcuPanel>
+
+      <!-- 自动注册 -->
+      <AcuPanel
+        id="biotracker-auto-panel"
+        :title="copy.autoTitle"
+        :description="copy.autoDescription"
+      >
+        <AcuFormRow label="自动注册">
           <label class="acu-v2-biotracker-page__toggle">
             <AcuCheckbox :model-value="autoRegister" @update:model-value="toggleAutoRegister" />
             <span>由配置的模型读取正文，自动发现有价值的角色并注册（种族交 AI 判断）</span>
           </label>
         </AcuFormRow>
-        <AcuFormRow label="读取楼层数" hint="每次自动搜寻读取最近多少层（2-100）">
-          <input v-model.number="autoScanCount" type="number" min="2" max="100" class="acu-input" @change="setAutoScanCount(autoScanCount)" />
+        <AcuFormRow label="更新频率" hint="每几层新楼层送入一次分析（1-50）">
+          <select v-model="autoFrequency" class="acu-input" @change="setAutoFrequency(autoFrequency)">
+            <option v-for="freq in autoFrequencyOptions" :key="freq" :value="freq">每 {{ freq }} 层</option>
+          </select>
         </AcuFormRow>
         <div class="acu-v2-biotracker-page__actions">
-          <AcuButton size="sm" :disabled="autoRunning" @click="runAutoRegister">
-            {{ autoRunning ? '自动注册中...' : '立即自动注册' }}
+          <AcuButton size="sm" :disabled="autoRunning || !autoRegister" @click="runAutoRegister">
+            {{ autoRunning ? '分析中...' : '立即分析并注册' }}
           </AcuButton>
         </div>
-        <p v-if="status" class="acu-v2-biotracker-page__status" :data-error="statusIsError">
-          {{ status }}
+        <p class="acu-v2-biotracker-page__api-readonly">
+          {{ autoRegister ? '已开启：最新楼层达到更新频率后自动送入分析。' : '关闭状态：仅可手动点击「立即分析并注册」。' }}
         </p>
       </AcuPanel>
 
@@ -108,8 +121,10 @@ import { useBiotrackerPage } from '../composables/useBiotrackerPage';
 const copy = {
   apiTitle: 'API 设置',
   apiDescription: '生理追踪/注册默认使用数据库当前活动 API；可为本页选择专用 API 预设（与剧情推进一致）。需支持 OpenAI 兼容 /chat/completions 并能稳定输出 JSON。',
-  registerTitle: '注册与自动搜寻',
-  registerDescription: '手动注册：点击一次即依次执行「繁育推演 + 注册」两次调用。自动搜寻：由配置的模型读取正文发现值得记录的角色并注册，种族交 AI 判断。',
+  registerTitle: '手动注册',
+  registerDescription: '填写角色名（可选手动种族）后点击「注册角色」，一次点击即依次执行「繁育推演 + 注册」两次调用。',
+  autoTitle: '自动注册',
+  autoDescription: '开启后由配置的模型读取正文，自动发现有价值的角色并注册（种族交 AI 判断）。',
   dataTitle: '已注册角色',
   dataDescription: '当前聊天的生理追踪数据（只读）。完整数据由异步追踪持续更新。',
 };
@@ -130,8 +145,9 @@ const {
   doRegister,
   autoRegister,
   toggleAutoRegister,
-  autoScanCount,
-  setAutoScanCount,
+  autoFrequency,
+  setAutoFrequency,
+  autoFrequencyOptions,
   autoRunning,
   runAutoRegister,
   runTrackerNow,
@@ -143,6 +159,7 @@ const {
 const panelNavItems = computed(() => [
   { id: 'biotracker-api-panel', label: copy.apiTitle },
   { id: 'biotracker-register-panel', label: copy.registerTitle },
+  { id: 'biotracker-auto-panel', label: copy.autoTitle },
   { id: 'biotracker-data-panel', label: copy.dataTitle },
 ]);
 </script>

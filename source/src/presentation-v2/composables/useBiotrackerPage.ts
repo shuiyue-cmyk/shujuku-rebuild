@@ -8,8 +8,8 @@ import { saveSettings_ACU } from '../../service/settings/settings-service';
 import {
   isAutoRegisterEnabled_ACU,
   setAutoRegisterEnabled_ACU,
-  getAutoRegisterScanCount_ACU,
-  setAutoRegisterScanCount_ACU,
+  getAutoRegisterFrequency_ACU,
+  setAutoRegisterFrequency_ACU,
   registerCharacter_ACU,
   autoRegisterCharacters_ACU,
   runBiotrackerNow_ACU,
@@ -67,10 +67,11 @@ export function useBiotrackerPage() {
     }
   }
 
-  // ─── 自动搜寻注册（开关 + 扫描楼层数） ───
+  // ─── 自动注册（主开关 + 更新频率：每 N 层新楼层送入分析一次） ───
   const autoRegister = ref(isAutoRegisterEnabled_ACU());
-  const autoScanCount = ref(getAutoRegisterScanCount_ACU());
+  const autoFrequency = ref(getAutoRegisterFrequency_ACU());
   const autoRunning = ref(false);
+  const autoFrequencyOptions = [1, 3, 5, 10, 20];
 
   function toggleAutoRegister(value: boolean): void {
     autoRegister.value = !!value;
@@ -78,9 +79,9 @@ export function useBiotrackerPage() {
     saveSettings_ACU();
   }
 
-  function setAutoScanCount(value: number): void {
-    autoScanCount.value = Math.max(2, Math.min(100, Math.floor(Number(value) || 12)));
-    setAutoRegisterScanCount_ACU(autoScanCount.value);
+  function setAutoFrequency(value: number): void {
+    autoFrequency.value = Math.max(1, Math.min(50, Math.floor(Number(value) || 5)));
+    setAutoRegisterFrequency_ACU(autoFrequency.value);
     saveSettings_ACU();
   }
 
@@ -157,8 +158,9 @@ export function useBiotrackerPage() {
     doRegister,
     autoRegister,
     toggleAutoRegister,
-    autoScanCount,
-    setAutoScanCount,
+    autoFrequency,
+    setAutoFrequency,
+    autoFrequencyOptions,
     autoRunning,
     runAutoRegister,
     runTrackerNow,

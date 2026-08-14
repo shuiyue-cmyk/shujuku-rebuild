@@ -332,16 +332,35 @@ export async function autoRegisterCharacters_ACU(): Promise<{ ok: boolean; regis
   }
 }
 
-// 自动注册的周期触发：消息后延迟执行（防重入 + 冷却）
+/** 自动注册的更新频率（每 N 层新楼层送入分析一次，默认 5） */
+export function getAutoRegisterFrequency_ACU(): number {
+  const raw = Number(getBiotrackerRoot().autoRegisterFrequency);
+  const freq = Math.floor(Number.isFinite(raw) ? raw : 5);
+  return Math.max(1, Math.min(50, freq));
+}
+
+export function setAutoRegisterFrequency_ACU(freq: number): void {
+  getBiotrackerRoot().autoRegisterFrequency = Math.max(1, Math.min(50, Math.floor(Number.isFinite(freq) ? freq : 5)));
+  scheduleSettingsSave();
+}
+
+// 自动注册的周期触发：按「更新频率」楼层增量触发（防重入）
 let autoRegisterInFlight = false;
-let lastAutoRegisterAt = 0;
+let lastAutoCheckedMessageCount = -1;
 
 export function scheduleAutoRegisterCheck_ACU(): void {
   if (!isAutoRegisterEnabled_ACU() || autoRegisterInFlight) return;
-  const now = Date.now();
-  if (now - lastAutoRegisterAt < 30000) return; // 30s 冷却
+  // 楼层增量判断：最新楼层数较上次分析增长 ≥ 更新频率才送入分析
+  const messageCount = Array.isArray(allChatMessages_ACU) ? allChatMessages_ACU.length : 0;
+  if (lastAutoCheckedMessageCount < 0) {
+    // 首次：记录基线，不触发（避免启动即全量分析）
+    lastAutoCheckedMessageCount = messageCount;
+    return;
+  }
+  const frequency = getAutoRegisterFrequency_ACU();
+  if (messageCount - lastAutoCheckedMessageCount < frequency) return;
+  lastAutoCheckedMessageCount = messageCount;
   autoRegisterInFlight = true;
-  lastAutoRegisterAt = now;
   setTimeout(() => {
     autoRegisterCharacters_ACU()
       .then((r) => { if (r.registered.length > 0) logDebug_ACU('[生理追踪]', r.message); })

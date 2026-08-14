@@ -8,8 +8,8 @@ import BiotrackerPage from '../../../src/presentation-v2/pages/BiotrackerPage.vu
 vi.mock('../../../src/service/biotracker/biotracker-adapter', () => ({
   isAutoRegisterEnabled_ACU: () => false,
   setAutoRegisterEnabled_ACU: vi.fn(),
-  getAutoRegisterScanCount_ACU: () => 12,
-  setAutoRegisterScanCount_ACU: vi.fn(),
+  getAutoRegisterFrequency_ACU: () => 5,
+  setAutoRegisterFrequency_ACU: vi.fn(),
   registerCharacter_ACU: vi.fn(async () => ({ ok: true, message: 'ok' })),
   autoRegisterCharacters_ACU: vi.fn(async () => ({ ok: true, registered: [], message: 'none' })),
   runBiotrackerNow_ACU: vi.fn(async () => {}),
@@ -50,11 +50,12 @@ describe('BiotrackerPage 渲染', () => {
     app.unmount();
   });
 
-  it('渲染注册区（角色名/种族/备注）与按钮', () => {
+  it('渲染手动注册与自动注册两卡片（按钮/频率）', () => {
     const { el, app } = mountPage();
     expect(el.textContent).toContain('注册角色');
-    expect(el.textContent).toContain('立即自动注册');
     expect(el.textContent).toContain('立即追踪分析');
+    expect(el.textContent).toContain('立即分析并注册');
+    expect(el.textContent).toContain('更新频率');
     const inputs = el.querySelectorAll('input');
     expect(inputs.length).toBeGreaterThanOrEqual(1); // 角色名输入
     const raceOptions = el.querySelectorAll('option');
