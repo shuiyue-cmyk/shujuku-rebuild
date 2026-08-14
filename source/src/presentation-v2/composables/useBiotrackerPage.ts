@@ -71,7 +71,7 @@ export function useBiotrackerPage() {
   const autoRegister = ref(isAutoRegisterEnabled_ACU());
   const autoFrequency = ref(getAutoRegisterFrequency_ACU());
   const autoRunning = ref(false);
-  const autoFrequencyOptions = [1, 3, 5, 10, 20];
+  const autoFrequencyOptions = [1, 3, 5, 10, 20, 30, 50];
 
   function toggleAutoRegister(value: boolean): void {
     autoRegister.value = !!value;
