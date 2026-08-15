@@ -26,10 +26,10 @@ import { pushLog, isDebugLogEnabled } from '../../shared/log-buffer';
 import { ensureBiotrackerPanelLoaded_ACU } from './panel/panel-entry';
 
 // ═══════════════════════════════════════════════════════════════
-// 存储命名空间（settings_ACU.bsBiotracker）
+// 存储命名空间（settings_ACU.bs_biotracker）
 // ═══════════════════════════════════════════════════════════════
 
-/** biotracker 存储根对象（映射到 settings_ACU.bsBiotracker，惰性初始化） */
+/** biotracker 存储根对象（映射到 settings_ACU.bs_biotracker，惰性初始化） */
 function getBiotrackerRoot(): Record<string, any> {
   if (!settings_ACU[MODULE_NAME] || typeof settings_ACU[MODULE_NAME] !== 'object') {
     settings_ACU[MODULE_NAME] = cloneValue(DEFAULT_SETTINGS);

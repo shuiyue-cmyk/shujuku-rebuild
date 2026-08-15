@@ -261,8 +261,8 @@ export class SqliteEngine {
     logDebug_ACU(`[SQLite引擎] runBatch: 执行 ${statements.length} 条语句`);
 
     let totalChanges = 0;
-    this.db!.run('BEGIN TRANSACTION;');
     try {
+      this.db!.run('BEGIN TRANSACTION;');
       for (let i = 0; i < statements.length; i++) {
         const stmt = statements[i].trim();
         if (!stmt) continue;
@@ -304,8 +304,8 @@ export class SqliteEngine {
     logDebug_ACU(`[SQLite引擎] runBatchWithFinalize: 执行 ${statements.length} 条语句`);
 
     let totalChanges = 0;
-    this.db!.run('BEGIN TRANSACTION;');
     try {
+      this.db!.run('BEGIN TRANSACTION;');
       for (let i = 0; i < statements.length; i++) {
         const stmt = statements[i].trim();
         if (!stmt) continue;

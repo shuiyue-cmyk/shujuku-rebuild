@@ -258,7 +258,11 @@ export async function executeAutoMergeBatch_ACU(
 
         } catch (e) {
             logWarn_ACU(`自动合并批次 ${batchIndex + 1} 尝试 ${attempt} 失败: ${e.message}`);
-            if (attempt < maxRetries) await new Promise(resolve => setTimeout(resolve, 5000));
+            // 指数退避（与 content-optimization 一致）：5000 * 2^(attempt-1)，上限 30s
+            if (attempt < maxRetries) {
+                const delay = Math.min(5000 * Math.pow(2, attempt - 1), 30000);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
         }
     }
 

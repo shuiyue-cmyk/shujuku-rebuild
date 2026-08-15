@@ -357,6 +357,10 @@ export class SyncBridge {
 
   /** 从 SQLite 导出单张表为 Sheet_ACU */
   private _exportSheet(tableName: string, meta: SheetMeta): Sheet_ACU {
+    // 表名合法性校验（与 sqlite-engine 一致），防止注入/异常表名进入 SQL
+    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(String(tableName || ''))) {
+      throw new Error(`[SyncBridge] 拒绝导出非法表名: ${String(tableName || '').slice(0, 80)}`);
+    }
     // 查询所有数据
     const queryResult = this.engine.query(`SELECT * FROM ${tableName};`);
 
