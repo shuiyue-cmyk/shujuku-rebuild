@@ -1045,6 +1045,14 @@ async function buildPresetEnvelope(settings, baseSystemPrompt, payloadText) {
 }
 
 export async function callOpenAICompatible(settings, payload, systemPrompt = DEFAULT_SYSTEM_PROMPT) {
+  // F4：每次调用时从数据库拉最新 API 配置（url/apiKey/model/温度），运行中改配置即时生效
+  const liveApiProbe = typeof globalThis.__bs_biotracker_api_probe__ === 'function' ? globalThis.__bs_biotracker_api_probe__() : null;
+  if (liveApiProbe) {
+    const live = { ...settings, ...liveApiProbe };
+    if (liveApiProbe.temperature === undefined) delete live.temperature;
+    if (liveApiProbe.maxTokens === undefined) delete live.maxTokens;
+    settings = live;
+  }
   const apiBase = getApiBase(settings);
   const model = String(settings.model || '').trim();
   const stCtx = getSillyTavernContext();

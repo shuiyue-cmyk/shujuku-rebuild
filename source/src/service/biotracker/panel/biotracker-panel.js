@@ -7661,6 +7661,15 @@ function scheduleBootstrapFallback(retries = 60) {
   setTimeout(attempt, 250);
 }
 
+// 生命周期钩子挂载：聊天删除/新建时由适配层事件回调调用（F5）
+// 暴露给全局供 biotracker-adapter 在 chatDeleted/groupChatDeleted/chatCreated/groupChatCreated 时调用
+try {
+  globalThis.__bs_biotracker_lifecycle__ = {
+    cleanupOrphanedChatStateByKey,
+    tryInheritForkedChatState,
+  };
+} catch (e) { /* 挂载失败不影响面板渲染 */ }
+
 // 全局构建水印（右下角固定小字）：任何截图都能辨别设备实际运行的构建。
 // 角标缺失 = 设备没有加载本插件代码（缓存/CDN 旧版本）；角标时间戳旧 = 加载了旧构建。
 function installGlobalBuildBadge() {

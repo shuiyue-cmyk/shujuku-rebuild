@@ -796,9 +796,9 @@ export function filterTrackerWorldbookEntries(value, excludedNames, settings = n
     const name = normalizeEntryName(entry);
     const selectionName = globalBookName ? formatGlobalWorldbookSelectionName(globalBookName, name) : name;
     if (mode === 'agent_greenlights') {
-      // 蓝灯（constant 恒常条目）固有发送 + 数据库 agent 正文放行的绿灯（uid 白名单，适配层注入 settings.agentGreenlightUids）
+      // 蓝灯（constant 恒常条目，ST 数据形状为 constant:true 布尔）固有发送 + 数据库 agent 正文放行的绿灯（uid 白名单，适配层注入 settings.agentGreenlightUids）
       if (entry?.enabled === false || entry?.disable === true) return false;
-      if (entry?.type === 'constant') return true;
+      if (entry?.constant === true || entry?.type === 'constant') return true;
       const greenUids = settings?.agentGreenlightUids;
       if (Array.isArray(greenUids)) return greenUids.includes(entry?.uid) || greenUids.includes(entry?.id);
       return false;

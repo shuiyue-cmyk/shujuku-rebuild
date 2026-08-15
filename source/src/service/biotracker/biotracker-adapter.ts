@@ -59,14 +59,23 @@ function getBiotrackerSettings(ctx: BiotrackerCtx_ACU): any {
   // 温度/max token 采用数据库保存的（选中预设时预设值优先，缺字段回退主配置）
   settings.temperature = Number.isFinite(Number(cfg.temperature)) ? Number(cfg.temperature) : Number(mainCfg.temperature);
   settings.maxTokens = Number.isFinite(Number(cfg.max_tokens)) ? Number(cfg.max_tokens) : Number(mainCfg.max_tokens);
-  // 每轮追踪分析的世界书 = 固有的蓝灯（constant 条目）+ 数据库 agent 正文放行的绿灯（readFinalGenerationGreenlights_ACU）
-  // （注册流程走 registry 自己的世界书逻辑，保持插件主流模式，不受此模式影响）
-  settings.trackerWorldbookMode = 'agent_greenlights';
-  try {
-    const greenlights = readFinalGenerationGreenlights_ACU();
-    settings.agentGreenlightUids = Array.isArray(greenlights) ? greenlights.map((g) => String(g?.uid || '')).filter(Boolean) : [];
-  } catch (e) {
-    logWarn_ACU('[生理追踪] 读取 agent 放行世界书失败:', e);
+  // 世界书模式（F6）：
+  // - agent 世界书接管开启（plotSettings.agentWorldbookControl.enabled===true 且 mode==='agent'）时：
+  //   追踪世界书 = 蓝灯（constant 恒常条目）+ agent 正文放行的绿灯（readFinalGenerationGreenlights_ACU）
+  // - 未开启 agent 时：走插件主流模式（mainflow：关键词命中+恒常条目正常触发，用户可在设置页配 exclude/include）
+  const agentControl = settings_ACU.plotSettings?.agentWorldbookControl;
+  const agentModeOn = agentControl?.enabled === true && agentControl?.mode === 'agent';
+  if (agentModeOn) {
+    settings.trackerWorldbookMode = 'agent_greenlights';
+    try {
+      const greenlights = readFinalGenerationGreenlights_ACU();
+      settings.agentGreenlightUids = Array.isArray(greenlights) ? greenlights.map((g) => String(g?.uid || '')).filter(Boolean) : [];
+    } catch (e) {
+      logWarn_ACU('[生理追踪] 读取 agent 放行世界书失败:', e);
+      settings.agentGreenlightUids = [];
+    }
+  } else {
+    settings.trackerWorldbookMode = String(settings.trackerWorldbookMode || 'mainflow');
     settings.agentGreenlightUids = [];
   }
   return settings;
@@ -97,12 +106,25 @@ function installBiotrackerConsoleBridge(): void {
   consoleBridgeInstalled = true;
   const BIOTRACKER_LOG_PREFIX = '[BS BioTracker]';
   (globalThis as any).__bs_biotracker_debug_api_probe__ = () => isDebugLogEnabled();
-  // API 采样参数兜底：vendor 每次 API 调用时读取数据库当前配置（温度/max token），
-  // 保证追踪/注册内部直连调用（不经适配层同步）也采用数据库设置
-  (globalThis as any).__bs_biotracker_api_probe__ = () => ({
-    temperature: Number.isFinite(Number(settings_ACU.apiConfig?.temperature)) ? Number(settings_ACU.apiConfig.temperature) : undefined,
-    maxTokens: Number.isFinite(Number(settings_ACU.apiConfig?.max_tokens)) ? Number(settings_ACU.apiConfig.max_tokens) : undefined,
-  });
+  // API 配置探针：vendor 每次 API 调用时读取数据库当前配置（url/apiKey/model/温度/max token），
+  // 保证追踪/注册内部直连调用（不经适配层同步）也采用最新数据库设置（F4：运行中改配置即时生效）
+  (globalThis as any).__bs_biotracker_api_probe__ = () => {
+    const presetName = String(settings_ACU.bs_biotracker?.apiPreset || '').trim();
+    let cfg: any = null;
+    try {
+      const resolved = presetName ? resolveApiConfigByPreset_ACU(presetName) : null;
+      cfg = resolved?.apiConfig || settings_ACU.apiConfig || {};
+    } catch (e) {
+      cfg = settings_ACU.apiConfig || {};
+    }
+    return {
+      apiUrl: cfg.url || settings_ACU.apiConfig?.url || '',
+      apiKey: cfg.apiKey || settings_ACU.apiConfig?.apiKey || '',
+      model: cfg.model || settings_ACU.apiConfig?.model || '',
+      temperature: Number.isFinite(Number(cfg.temperature)) ? Number(cfg.temperature) : undefined,
+      maxTokens: Number.isFinite(Number(cfg.max_tokens)) ? Number(cfg.max_tokens) : undefined,
+    };
+  };
   // 非预填充探针：生理追踪专用预设（bs_biotracker.apiPreset）的 nonPrefillSupport 优先，
   // 未选预设时回退全局 settings_ACU.nonPrefillSupport（vendor 直连调用同样生效）
   (globalThis as any).__bs_biotracker_non_prefill_probe__ = () => {
@@ -152,7 +174,11 @@ export function createBiotrackerCtx_ACU(): BiotrackerCtx_ACU {
   return {
     extensionSettings,
     saveSettingsDebounced: scheduleSettingsSave,
-    chat: Array.isArray(allChatMessages_ACU) ? allChatMessages_ACU : [],
+    // chat 用 getter：每次读取取最新 allChatMessages_ACU 引用，
+    // 避免 resetPoller 闭包捕获旧数组导致同聊天内新楼层轮询读不到（F1）
+    get chat() {
+      return Array.isArray(allChatMessages_ACU) ? allChatMessages_ACU : [];
+    },
     characters: Array.isArray(host?.characters) ? host.characters : [],
     chatId: String(currentChatFileIdentifier_ACU || ''),
     getCurrentChatId: () => String(currentChatFileIdentifier_ACU || ''),
@@ -305,8 +331,8 @@ export function initBiotracker_ACU(): void {
   try {
     const ctx = createBiotrackerCtx_ACU();
     const settings = getBiotrackerSettings(ctx);
-    // 恒字系列强制（异步追踪恒开启/after_ai/完整更新/格式化输出/json）
-    settings.enabled = true;
+    // 恒字系列强制（开启时 after_ai/完整更新/格式化输出/json）——但不强制 enabled：
+    // enabled 尊重用户开关（高级设置「生理追踪」总开关），关闭后重启不会自动开启（F2）
     settings.triggerTiming = 'after_ai';
     settings.requireFullDescriptionUpdates = true;
     settings.formattedOutputV4 = true;
@@ -337,6 +363,31 @@ export function initBiotracker_ACU(): void {
           logWarn_ACU('[生理追踪] 自动注册调度失败:', e);
         }
       });
+    }
+    // 订阅聊天生命周期（F5）：删除聊天清理孤儿 chatStates、新建聊天继承 fork 状态
+    // panel 侧 cleanupOrphanedChatStateByKey/tryInheritForkedChatState 经全局生命周期钩子调用
+    const lifecycle = () => (globalThis as any).__bs_biotracker_lifecycle__;
+    const safeLifecycleCall = (handlerName: string, ...args: any[]) => {
+      try {
+        const hooks = lifecycle();
+        if (hooks && typeof hooks[handlerName] === 'function') {
+          const panelCtx = createBiotrackerCtx_ACU();
+          hooks[handlerName](panelCtx, ...args);
+        }
+      } catch (e) {
+        logWarn_ACU(`[生理追踪] 生命周期处理失败（${handlerName}）:`, e);
+      }
+    };
+    if (eventSource && typeof eventSource.on === 'function') {
+      const deletedType = ctx.event_types?.CHAT_DELETED || ctx.event_types?.chatDeleted;
+      if (deletedType) {
+        eventSource.on(deletedType, (payload: any) => {
+          try {
+            const chatKey = String((payload && typeof payload === 'object' && payload.chatId !== undefined) ? payload.chatId : '').trim();
+            if (chatKey) safeLifecycleCall('cleanupOrphanedChatStateByKey', chatKey, 'chat_deleted');
+          } catch (e) { logWarn_ACU('[生理追踪] CHAT_DELETED 处理失败:', e); }
+        });
+      }
     }
     logDebug_ACU('[生理追踪] 初始化完成，已注册角色数:', Object.keys(getChatState(ctx, settings).characters || {}).length);
     // 生理追踪恒开启 → 默认出现悬浮窗（biotracker 前端弹窗，纯渲染）
