@@ -104129,8 +104129,11 @@ function applyRegistrySkillSetup(chatState, targetName, result, report = null) {
         ? childSource.inheritedTalents
         : (resolvedChildSource?.child?.talents ?? workingState.characters[name]?.profile?.talents);
     const inheritedTalents = normalizeTalentList(inheritedTalentSource);
+    // 用户拍板（2026-08-14）：注册时只落地天赋，技能不预置——技能完全交给追踪时
+    // AI 依剧情自动 bsRegisterSkillDefinition + bsTrainSkill 发现登记（避免注册生成的
+    // 初始技能与追踪发现重复/漂移）。技能定义（skillDefinitions）仍登记进图鉴供追踪引用。
     let character = applyInitialSkillTalentConfig(workingState, name, {
-        skills: initialSkills,
+        skills: [],
         talents: initialTalents,
     }, report);
     if (childSource) {
@@ -110829,7 +110832,7 @@ const WARDROBE_DIMENSION_LABELS = Object.freeze({ masking: '掩形', support: '�
 const PREG_FIT_GAP_LABELS = Object.freeze({ masking: '掩形', support: '支撑', capacity: '容身', convenience: '便捷' });
 const MAX_PROGRESS_BAR_CAP = 200;
 // 构建时间戳（rollup replace 注入；测试/dev 环境无替换时回退 'dev'）——全局水印用，截图辨别构建
-const ACU_BUILD_STAMP = typeof "20260815-07" === 'string' ? "20260815-07" : 'dev';
+const ACU_BUILD_STAMP = typeof "20260815-08" === 'string' ? "20260815-08" : 'dev';
 const MODAL_EDGE_GAP = 24;
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const FLOATING_SPHERE_POSITION_KEY = `${MODULE_NAME}_floating_sphere_position`;
