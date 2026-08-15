@@ -217,6 +217,7 @@ import {
   getCurrentFlightModeState_ACU,
   stageFlightModeHiddenRowIds_ACU
 } from '../flight-mode/flight-mode-state';
+import { SqliteEngine } from '../../data/sqlite/sqlite-engine';
 
 // ============================================================
 // 类型定义：返回值 + 进度事件（service 层不驱动 UI）
@@ -1727,6 +1728,11 @@ async function applyUnifiedGroupFillResponsesCore_ACU(
     const modifiedKeySet = new Set<string>();
     const operations: TableMutationOperationV2_ACU[] = [];
 
+    // H1：SQL 模式下复用同一 SqliteEngine 处理全部响应（每条响应新建引擎=每响应一次 wasm 初始化+dispose）
+    const sharedSqlEngine = isSqliteMode() && sortedResponses.some((r: any) => typeof r?.tableEditText === 'string' && isSqlContent(r.tableEditText))
+      ? new SqliteEngine()
+      : null;
+
     for (const response of sortedResponses) {
         let parseResult: any;
         if (isSqliteMode() && typeof response.tableEditText === 'string' && isSqlContent(response.tableEditText)) {
@@ -1739,6 +1745,7 @@ async function applyUnifiedGroupFillResponsesCore_ACU(
                     requireSheetScopedOperations: true,
                     allowSingleTargetFallback: true,
                 },
+                sharedSqlEngine || undefined,
             );
             if (parseResult?.success && parseResult.workingData) {
                 workingTableData = parseResult.workingData;
@@ -1780,6 +1787,9 @@ async function applyUnifiedGroupFillResponsesCore_ACU(
         }
         parsedKeys.forEach((sheetKey: string) => modifiedKeySet.add(sheetKey));
     }
+
+    // H1：释放复用的 SQL 引擎
+    if (sharedSqlEngine) sharedSqlEngine.dispose();
 
     applySpecialIndexSequenceToSummaryTables_ACU(workingTableData);
 

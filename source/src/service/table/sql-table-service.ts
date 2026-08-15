@@ -1577,6 +1577,8 @@ export class SqlTableService implements ITableStorageProvider {
 
     const statements = [...reseedPlan.inserts, ...materializedStatements];
     try {
+      // 保留 runBatchWithFinalize：finalize（严格导出）失败时回滚本次补种与 AI SQL，
+      // 保证 SQLite 内存态与 JSON 视图的一致性（导出失败=不提交，测试「提交前 finalize 严格导出失败时回滚」覆盖此契约）。
       const result = this.engine.runBatchWithFinalize(
         statements,
         statements.map((): undefined => undefined),
@@ -2144,9 +2146,11 @@ export async function applySqlEditsToTableDataSnapshot_ACU(
   tableData: TableDataObject_ACU,
   _updateMode?: string,
   operationOptions: SnapshotSqlOperationOptions_ACU = {},
+  reuseEngine?: SqliteEngine,
 ): Promise<SnapshotSqlApplyResult_ACU> {
-  const engine = new SqliteEngine();
+  const engine = reuseEngine ?? new SqliteEngine();
   const syncBridge = new SyncBridge(engine);
+  const ownsEngine = !reuseEngine;
   try {
     const cleaned = sqlStatements.replace(/<!--|-->/g, '').trim();
     if (!cleaned) {
@@ -2167,7 +2171,8 @@ export async function applySqlEditsToTableDataSnapshot_ACU(
       { requireKnownTables, requireKnownInsertColumns: true },
     );
     const statements = materializeSystemRowIdsForSqlInserts_ACU(reboundStatements, snapshotCopy);
-    await engine.init();
+    if (ownsEngine) await engine.init();
+    else if (!engine.isReady) await engine.init();
     syncBridge.loadFromTableData(snapshotCopy, { strict: true });
     engine.runBatch(statements);
 
@@ -2195,7 +2200,7 @@ export async function applySqlEditsToTableDataSnapshot_ACU(
     logError_ACU(`[SqlTableService] 快照 SQL 执行失败: ${errMsg}`);
     return { success: false, modifiedKeys: [], appliedEdits: 0, error: errMsg };
   } finally {
-    engine.dispose();
+    if (ownsEngine) engine.dispose();
   }
 }
 
