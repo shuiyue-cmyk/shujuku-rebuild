@@ -6547,8 +6547,8 @@ class SqliteEngine {
             return { totalChanges: 0 };
         logDebug_ACU(`[SQLite引擎] runBatch: 执行 ${statements.length} 条语句`);
         let totalChanges = 0;
-        this.db.run('BEGIN TRANSACTION;');
         try {
+            this.db.run('BEGIN TRANSACTION;');
             for (let i = 0; i < statements.length; i++) {
                 const stmt = statements[i].trim();
                 if (!stmt)
@@ -6594,8 +6594,8 @@ class SqliteEngine {
         }
         logDebug_ACU(`[SQLite引擎] runBatchWithFinalize: 执行 ${statements.length} 条语句`);
         let totalChanges = 0;
-        this.db.run('BEGIN TRANSACTION;');
         try {
+            this.db.run('BEGIN TRANSACTION;');
             for (let i = 0; i < statements.length; i++) {
                 const stmt = statements[i].trim();
                 if (!stmt)
@@ -34879,6 +34879,10 @@ class SyncBridge {
     }
     /** 从 SQLite 导出单张表为 Sheet_ACU */
     _exportSheet(tableName, meta) {
+        // 表名合法性校验（与 sqlite-engine 一致），防止注入/异常表名进入 SQL
+        if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(String(tableName || ''))) {
+            throw new Error(`[SyncBridge] 拒绝导出非法表名: ${String(tableName || '').slice(0, 80)}`);
+        }
         // 查询所有数据
         const queryResult = this.engine.query(`SELECT * FROM ${tableName};`);
         // 导出必须以实际创建到 runtime SQLite 的 schema 为准；meta.sourceData.ddl
@@ -54238,6 +54242,8 @@ class SqlTableService {
         }
         const statements = [...reseedPlan.inserts, ...materializedStatements];
         try {
+            // 保留 runBatchWithFinalize：finalize（严格导出）失败时回滚本次补种与 AI SQL，
+            // 保证 SQLite 内存态与 JSON 视图的一致性（导出失败=不提交，测试「提交前 finalize 严格导出失败时回滚」覆盖此契约）。
             const result = this.engine.runBatchWithFinalize(statements, statements.map(() => undefined), () => this._exportCurrentDataStrict());
             const tableData = result.finalizeResult;
             _set_currentJsonTableData_ACU(tableData);
@@ -54780,9 +54786,10 @@ async function applyParameterizedSqlMutationToTableDataSnapshot_ACU(sql, params,
         engine.dispose();
     }
 }
-async function applySqlEditsToTableDataSnapshot_ACU(sqlStatements, tableData, _updateMode, operationOptions = {}) {
-    const engine = new SqliteEngine();
+async function applySqlEditsToTableDataSnapshot_ACU(sqlStatements, tableData, _updateMode, operationOptions = {}, reuseEngine) {
+    const engine = reuseEngine ?? new SqliteEngine();
     const syncBridge = new SyncBridge(engine);
+    const ownsEngine = !reuseEngine;
     try {
         const cleaned = sqlStatements.replace(/<!--|-->/g, '').trim();
         if (!cleaned) {
@@ -54796,7 +54803,10 @@ async function applySqlEditsToTableDataSnapshot_ACU(sqlStatements, tableData, _u
         const requireKnownTables = operationOptions.requireSheetScopedOperations === true;
         const reboundStatements = rebindSqlMutationIdentifiers_ACU(rawStatements.map(stmt => normalizeStatementValues(normalizeSqlStructure(stmt))), snapshotCopy, undefined, { requireKnownTables, requireKnownInsertColumns: true });
         const statements = materializeSystemRowIdsForSqlInserts_ACU(reboundStatements, snapshotCopy);
-        await engine.init();
+        if (ownsEngine)
+            await engine.init();
+        else if (!engine.isReady)
+            await engine.init();
         syncBridge.loadFromTableData(snapshotCopy, { strict: true });
         engine.runBatch(statements);
         const workingData = syncBridge.exportToTableData(resolveSnapshotMate_ACU(snapshotCopy), { strict: true });
@@ -54823,7 +54833,8 @@ async function applySqlEditsToTableDataSnapshot_ACU(sqlStatements, tableData, _u
         return { success: false, modifiedKeys: [], appliedEdits: 0, error: errMsg };
     }
     finally {
-        engine.dispose();
+        if (ownsEngine)
+            engine.dispose();
     }
 }
 // ═══════════════════════════════════════════════════════════════
@@ -55878,8 +55889,12 @@ class TableQueryBuilder {
         const mapper = getNameMapper();
         const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
         if (value !== undefined) {
-            // 三参数形式：where("列名", ">", 数值)
-            this.conditions.push({ column: resolvedColumn, operator: String(valueOrOperator), value });
+            // 三参数形式：where("列名", ">", 数值)——operator 白名单校验（C1），防止 operator 注入任意 SQL
+            const operator = String(valueOrOperator);
+            if (!/^(=|!=|<>|<|<=|>|>=|LIKE|NOT LIKE|IN|NOT IN|IS|IS NOT)$/i.test(operator.trim())) {
+                throw new Error(`[ORM] where 运算符不合法: ${operator}`);
+            }
+            this.conditions.push({ column: resolvedColumn, operator, value });
         }
         else {
             // 两参数形式：where("列名", "值")
@@ -55997,7 +56012,15 @@ class TableQueryBuilder {
      *   having("COUNT(*) > 1")  → HAVING COUNT(*) > 1
      */
     having(expression) {
-        this._having = expression;
+        // C1：HAVING 表达式做轻量只读校验——拒绝写语句关键字/分号/子查询逃逸（片段模式，非完整 SELECT）
+        const rawExpr = String(expression || '');
+        const stripped = rawExpr.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/'[^']*'|"[^"]*"/g, ' ');
+        const tokens = stripped.toUpperCase().match(/[A-Z_]+/g) || [];
+        const forbidden = new Set(['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'REPLACE', 'TRUNCATE', 'VACUUM', 'ATTACH', 'DETACH', 'PRAGMA']);
+        if (rawExpr.includes(';') || tokens.some(t => forbidden.has(t))) {
+            throw new Error('[ORM] having 表达式包含不允许的 SQL 关键字或分号');
+        }
+        this._having = rawExpr;
         return this;
     }
     /**
@@ -83548,9 +83571,7 @@ function scheduleSettingsReloadAfterIdbReady_ACU(reason) {
     });
 }
 function applyGlobalPlotEnabledSetting_ACU() {
-    if (!settings_ACU.plotSettings || typeof settings_ACU.plotSettings !== 'object' || Array.isArray(settings_ACU.plotSettings)) {
-        settings_ACU.plotSettings = JSON.parse(JSON.stringify(DEFAULT_PLOT_SETTINGS_ACU));
-    }
+    ensurePlotSettingsObject_ACU();
     if (typeof globalMeta_ACU.plotEnabledGlobal !== 'boolean') {
         globalMeta_ACU.plotEnabledGlobal = settings_ACU.plotSettings.enabled === false ? false : true;
         saveGlobalMeta_ACU();
@@ -83561,14 +83582,18 @@ function applyGlobalPlotEnabledSetting_ACU() {
 function cloneDefaultValue_ACU(value) {
     return JSON.parse(JSON.stringify(value));
 }
+/** C5：确保 plotSettings 是有效对象，缺失时用默认值初始化 */
+function ensurePlotSettingsObject_ACU() {
+    if (!settings_ACU.plotSettings || typeof settings_ACU.plotSettings !== 'object' || Array.isArray(settings_ACU.plotSettings)) {
+        settings_ACU.plotSettings = cloneDefaultValue_ACU(DEFAULT_PLOT_SETTINGS_ACU);
+    }
+}
 function hasNonEmptyPromptSegments_ACU(value) {
     return Array.isArray(value)
         && value.some(segment => segment && typeof segment === 'object' && typeof segment.content === 'string' && segment.content.trim());
 }
 function ensureAgentPromptTemplateDefaults_ACU() {
-    if (!settings_ACU.plotSettings || typeof settings_ACU.plotSettings !== 'object' || Array.isArray(settings_ACU.plotSettings)) {
-        settings_ACU.plotSettings = JSON.parse(JSON.stringify(DEFAULT_PLOT_SETTINGS_ACU));
-    }
+    ensurePlotSettingsObject_ACU();
     const defaults = buildDefaultAgentWorldbookPromptTemplates_ACU();
     const current = settings_ACU.plotSettings.agentPromptTemplates;
     if (!current || typeof current !== 'object' || Array.isArray(current)) {
@@ -83587,9 +83612,7 @@ function ensureAgentWorldbookControlDefaults_ACU() {
     // Legacy/template compatibility only: card-level Agent worldbook control is
     // stored in TavernDB-ACU-AgentWorldbookConfig entries. Do not treat this
     // settings field as the current character card's configuration source.
-    if (!settings_ACU.plotSettings || typeof settings_ACU.plotSettings !== 'object' || Array.isArray(settings_ACU.plotSettings)) {
-        settings_ACU.plotSettings = JSON.parse(JSON.stringify(DEFAULT_PLOT_SETTINGS_ACU));
-    }
+    ensurePlotSettingsObject_ACU();
     const defaults = buildDefaultAgentWorldbookControl_ACU();
     const current = settings_ACU.plotSettings.agentWorldbookControl;
     let changed = false;
@@ -83609,9 +83632,7 @@ function ensureAgentWorldbookControlDefaults_ACU() {
     return changed;
 }
 function ensureBuiltinPlotPresets_ACU() {
-    if (!settings_ACU.plotSettings || typeof settings_ACU.plotSettings !== 'object' || Array.isArray(settings_ACU.plotSettings)) {
-        settings_ACU.plotSettings = JSON.parse(JSON.stringify(DEFAULT_PLOT_SETTINGS_ACU));
-    }
+    ensurePlotSettingsObject_ACU();
     if (!Array.isArray(settings_ACU.plotSettings.promptPresets)) {
         settings_ACU.plotSettings.promptPresets = [];
     }
@@ -83623,7 +83644,7 @@ function ensureBuiltinPlotPresets_ACU() {
         if (!name)
             continue;
         const idx = settings_ACU.plotSettings.promptPresets.findIndex((preset) => String(preset?.name || '').trim() === name);
-        const cloned = JSON.parse(JSON.stringify(builtinPreset));
+        const cloned = cloneDefaultValue_ACU(builtinPreset);
         if (idx < 0) {
             settings_ACU.plotSettings.promptPresets.push(cloned);
             changed = true;
@@ -83882,8 +83903,7 @@ function loadSettings_ACU() {
             // Deep merge saved settings into defaults to ensure new properties are added
             replaceSettingsPreservingBiotracker(deepMerge_ACU(defaultSettings, savedSettings));
             // [剧情推进] 迁移/兜底：确保 plotWorldbookConfig 存在且结构完整
-            if (!settings_ACU.plotSettings)
-                settings_ACU.plotSettings = JSON.parse(JSON.stringify(DEFAULT_PLOT_SETTINGS_ACU));
+            ensurePlotSettingsObject_ACU();
             if (!settings_ACU.plotSettings.plotWorldbookConfig) {
                 // 兼容旧字段迁移：worldbookSource/selectedWorldbooks -> plotWorldbookConfig
                 const legacySource = settings_ACU.plotSettings.worldbookSource || 'character';
@@ -83919,17 +83939,17 @@ function loadSettings_ACU() {
             if (!settings_ACU.characterSettings || typeof settings_ACU.characterSettings !== 'object') {
                 settings_ACU.characterSettings = {};
             }
-            const defaultWorldbookConfig = JSON.parse(JSON.stringify(defaultWorldbookConfig_ACU));
+            const defaultWorldbookConfig = cloneDefaultValue_ACU(defaultWorldbookConfig_ACU);
             Object.keys(settings_ACU.characterSettings).forEach((charId) => {
                 const charSettings = settings_ACU.characterSettings[charId];
                 if (!charSettings || typeof charSettings !== 'object')
                     return;
                 const worldbookConfig = charSettings.worldbookConfig;
                 if (!worldbookConfig || typeof worldbookConfig !== 'object' || Array.isArray(worldbookConfig)) {
-                    charSettings.worldbookConfig = JSON.parse(JSON.stringify(defaultWorldbookConfig));
+                    charSettings.worldbookConfig = cloneDefaultValue_ACU(defaultWorldbookConfig);
                     return;
                 }
-                charSettings.worldbookConfig = deepMerge_ACU(JSON.parse(JSON.stringify(defaultWorldbookConfig)), worldbookConfig);
+                charSettings.worldbookConfig = deepMerge_ACU(cloneDefaultValue_ACU(defaultWorldbookConfig), worldbookConfig);
             });
         }
         else {
@@ -83996,8 +84016,8 @@ function loadSettings_ACU() {
             }
         }
         globalMeta_ACU.vectorMemoryConfigGlobal = bestSource
-            ? JSON.parse(JSON.stringify(bestSource))
-            : JSON.parse(JSON.stringify(defaultVectorMemoryConfig_ACU));
+            ? cloneDefaultValue_ACU(bestSource)
+            : cloneDefaultValue_ACU(defaultVectorMemoryConfig_ACU);
         saveGlobalMeta_ACU();
         logDebug_ACU(bestSource
             ? '[交火模式配置] 已从旧 profile/角色配置迁移到全局 globalMeta.vectorMemoryConfigGlobal'
@@ -84093,13 +84113,14 @@ function loadSettings_ACU() {
     refreshDefaultTableTemplateOnce_ACU(activeCode);
     forceDefaultTableFillPromptsOnce_ACU();
     forceDefaultTemplateAssistantPromptOnce_ACU();
+    // C7：maxConcurrentGroups 归一化移到 persist 之前，修正值随本次落盘
+    if (!Number.isFinite(settings_ACU.maxConcurrentGroups) || settings_ACU.maxConcurrentGroups < 1) {
+        settings_ACU.maxConcurrentGroups = 1;
+    }
     if (shouldPersistSettingsAfterLoad_ACU) {
         saveGlobalMeta_ACU();
         persistSettingsToStorage_ACU(settings_ACU, activeCode);
         logDebug_ACU(`[设置加载] 已持久化加载期默认值补齐，交火配置版本: ${VECTOR_MEMORY_DEFAULTS_REFRESH_VERSION_ACU}`);
-    }
-    if (!Number.isFinite(settings_ACU.maxConcurrentGroups) || settings_ACU.maxConcurrentGroups < 1) {
-        settings_ACU.maxConcurrentGroups = 1;
     }
     // [API 绑定 reconcile] 存储重载后把当前聊天绑定重新投影到 apiMode/apiConfig/tavernProfile。
     // 覆盖三条路径：CHAT_CHANGED（resetScriptStateForNewChat）、profile 切换（switchIsolationProfile）、
@@ -84325,7 +84346,7 @@ function buildDefaultSettings_ACU() {
         standardizedTableFillEnabled: true, // [新增] 规范填表功能
         toastMuteEnabled: false,
         // [剧情推进] 设置
-        plotSettings: JSON.parse(JSON.stringify(DEFAULT_PLOT_SETTINGS_ACU)),
+        plotSettings: cloneDefaultValue_ACU(DEFAULT_PLOT_SETTINGS_ACU),
         plotPresetBindings: {}, // [剧情推进] 按聊天记录绑定剧情推进预设
         currentTemplatePresetName: '', // [模板预设] 当前模板预设名，空表示默认预设
         tableTemplateDefaultsRefreshVersion: '', // [模板预设] 默认表格模板一次性刷新版本
@@ -84475,9 +84496,7 @@ function persistCurrentTemplatePresetName_ACU(settingsObj, presetName, { save = 
 // getCurrentCharSettings_ACU 和 getCurrentWorldbookConfig_ACU 已移至 settings-readers.ts
 function setGlobalPlotEnabled_ACU(modeEnabled) {
     const enabled = !!modeEnabled;
-    if (!settings_ACU.plotSettings || typeof settings_ACU.plotSettings !== 'object' || Array.isArray(settings_ACU.plotSettings)) {
-        settings_ACU.plotSettings = JSON.parse(JSON.stringify(DEFAULT_PLOT_SETTINGS_ACU));
-    }
+    ensurePlotSettingsObject_ACU();
     settings_ACU.plotSettings.enabled = enabled;
     globalMeta_ACU.plotEnabledGlobal = enabled;
     saveGlobalMeta_ACU();
@@ -84557,7 +84576,7 @@ function applyCombinedSettingsImport_ACU(combinedData) {
     for (const field of FIELDS) {
         const value = settings_ACU[field];
         snapshot[field] = value && typeof value === 'object'
-            ? JSON.parse(JSON.stringify(value))
+            ? cloneDefaultValue_ACU(value)
             : value;
     }
     // 导入提示词
@@ -84797,8 +84816,11 @@ async function executeAutoMergeBatch_ACU(prepared, batch, accumulatedSummary) {
         }
         catch (e) {
             logWarn_ACU(`自动合并批次 ${batchIndex + 1} 尝试 ${attempt} 失败: ${e.message}`);
-            if (attempt < maxRetries)
-                await new Promise(resolve => setTimeout(resolve, 5000));
+            // 指数退避（与 content-optimization 一致）：5000 * 2^(attempt-1)，上限 30s
+            if (attempt < maxRetries) {
+                const delay = Math.min(5000 * Math.pow(2, attempt - 1), 30000);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
         }
     }
     throw new Error(`批次 ${batchIndex + 1} 在 ${maxRetries} 次尝试后均失败`);
@@ -85081,7 +85103,8 @@ function _acuNormalizeToastArgs_ACU(type, message, titleOrOptions = {}, maybeOpt
         }
     })();
     const finalOptions = {
-        escapeHtml: false,
+        // C8：默认转义 HTML（防 toast 内容注入 XSS）；需要富文本的调用方显式传 escapeHtml:false
+        escapeHtml: options.escapeHtml !== undefined ? !!options.escapeHtml : true,
         closeButton: true,
         progressBar: true,
         newestOnTop: true,
@@ -86503,6 +86526,7 @@ function showOptimizationProgressToast_ACU(message = '正在进行正文优化..
         timeOut: 0,
         extendedTimeOut: 0,
         tapToDismiss: false,
+        escapeHtml: false,
         onShown: function () {
             jQuery_API_ACU('#acu-opt-stop-btn').off('click.acu_opt_cancel').on('click.acu_opt_cancel', function (e) {
                 e.preventDefault();
@@ -91351,6 +91375,10 @@ async function applyUnifiedGroupFillResponsesCore_ACU(responses, baseSnapshot, o
     const initializedSheetKeys = sqlInitialization.initializedSheetKeys;
     const modifiedKeySet = new Set();
     const operations = [];
+    // H1：SQL 模式下复用同一 SqliteEngine 处理全部响应（每条响应新建引擎=每响应一次 wasm 初始化+dispose）
+    const sharedSqlEngine = isSqliteMode() && sortedResponses.some((r) => typeof r?.tableEditText === 'string' && isSqlContent(r.tableEditText))
+        ? new SqliteEngine()
+        : null;
     for (const response of sortedResponses) {
         let parseResult;
         if (isSqliteMode() && typeof response.tableEditText === 'string' && isSqlContent(response.tableEditText)) {
@@ -91358,7 +91386,7 @@ async function applyUnifiedGroupFillResponsesCore_ACU(responses, baseSnapshot, o
                 targetSheetKeys: response.job.targetSheetKeys,
                 requireSheetScopedOperations: true,
                 allowSingleTargetFallback: true,
-            });
+            }, sharedSqlEngine || undefined);
             if (parseResult?.success && parseResult.workingData) {
                 workingTableData = parseResult.workingData;
                 if (Array.isArray(parseResult.operations))
@@ -91401,6 +91429,9 @@ async function applyUnifiedGroupFillResponsesCore_ACU(responses, baseSnapshot, o
         }
         parsedKeys.forEach((sheetKey) => modifiedKeySet.add(sheetKey));
     }
+    // H1：释放复用的 SQL 引擎
+    if (sharedSqlEngine)
+        sharedSqlEngine.dispose();
     applySpecialIndexSequenceToSummaryTables_ACU(workingTableData);
     const modifiedKeys = [...modifiedKeySet].sort();
     if (!options.isImportMode) {
@@ -95586,6 +95617,7 @@ async function handleManualUpdate_ACU() {
             extendedTimeOut: 0,
             tapToDismiss: false,
             acuToastCategory: ACU_TOAST_CATEGORY_ACU.MANUAL_TABLE,
+            escapeHtml: false,
             onShown: function () {
                 if (typeof bindTableFillStopButton_ACU === 'function') {
                     bindTableFillStopButton_ACU(stopButtonId, () => {
@@ -100562,9 +100594,20 @@ async function buildPresetEnvelope(settings, baseSystemPrompt, payloadText) {
         return null;
     }
 }
+/** C13：安全调用全局探针——探针被第三方覆盖/抛错时降级为 null，不击穿整个请求 */
+function safeProbeCall(name, fallback = null) {
+    try {
+        const fn = globalThis[name];
+        return typeof fn === 'function' ? fn() : fallback;
+    }
+    catch (e) {
+        console.warn('[BS BioTracker] probe call failed:', name, e && e.message);
+        return fallback;
+    }
+}
 async function callOpenAICompatible(settings, payload, systemPrompt = DEFAULT_SYSTEM_PROMPT) {
     // F4：每次调用时从数据库拉最新 API 配置（url/apiKey/model/温度），运行中改配置即时生效
-    const liveApiProbe = typeof globalThis.__bs_biotracker_api_probe__ === 'function' ? globalThis.__bs_biotracker_api_probe__() : null;
+    const liveApiProbe = safeProbeCall('__bs_biotracker_api_probe__');
     if (liveApiProbe) {
         const live = { ...settings, ...liveApiProbe };
         if (liveApiProbe.temperature === undefined)
@@ -100610,10 +100653,10 @@ async function callOpenAICompatible(settings, payload, systemPrompt = DEFAULT_SY
     }
     // 采样参数优先数据库配置（适配层同步进 settings.temperature/maxTokens 或经 __bs_biotracker_api_probe__ 兜底），
     // 其次 ST 预设采样，最后回退默认 0.2。probe 兜底保证追踪/注册内部直连调用也始终采用数据库配置。
-    const dbProbe = (typeof globalThis.__bs_biotracker_api_probe__ === 'function') ? globalThis.__bs_biotracker_api_probe__() : null;
+    const dbProbe = safeProbeCall('__bs_biotracker_api_probe__');
     // 非预填充支持（预设级，经适配层探针）：把 assistant 消息改写为 user +「助手：」前缀，
     // 用于不支持 assistant 预填充的模型/接口。
-    if (typeof globalThis.__bs_biotracker_non_prefill_probe__ === 'function' && globalThis.__bs_biotracker_non_prefill_probe__() === true) {
+    if (safeProbeCall('__bs_biotracker_non_prefill_probe__') === true) {
         effectiveMessages = (Array.isArray(effectiveMessages) ? effectiveMessages : []).map((m) => {
             if (!m || typeof m !== 'object' || String(m.role || '').toLowerCase() !== 'assistant')
                 return m;
@@ -110756,6 +110799,13 @@ async function poll(ctx, deps) {
         return;
     await runTracker(ctx, deps, 'poll');
 }
+/** 停止追踪轮询（H5）：清除 interval 且不重建，供禁用/卸载时调用，避免空转 */
+function stopPoller() {
+    if (globalThis[POLL_RUNTIME_KEY]) {
+        clearInterval(globalThis[POLL_RUNTIME_KEY]);
+        globalThis[POLL_RUNTIME_KEY] = null;
+    }
+}
 function resetPoller(ctx, deps) {
     if (globalThis[POLL_RUNTIME_KEY])
         clearInterval(globalThis[POLL_RUNTIME_KEY]);
@@ -110779,7 +110829,7 @@ const WARDROBE_DIMENSION_LABELS = Object.freeze({ masking: '掩形', support: '�
 const PREG_FIT_GAP_LABELS = Object.freeze({ masking: '掩形', support: '支撑', capacity: '容身', convenience: '便捷' });
 const MAX_PROGRESS_BAR_CAP = 200;
 // 构建时间戳（rollup replace 注入；测试/dev 环境无替换时回退 'dev'）——全局水印用，截图辨别构建
-const ACU_BUILD_STAMP = typeof "20260815-06" === 'string' ? "20260815-06" : 'dev';
+const ACU_BUILD_STAMP = typeof "20260815-07" === 'string' ? "20260815-07" : 'dev';
 const MODAL_EDGE_GAP = 24;
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const FLOATING_SPHERE_POSITION_KEY = `${MODULE_NAME}_floating_sphere_position`;
@@ -118449,9 +118499,9 @@ function ensureBiotrackerPanelLoaded_ACU() {
  * - 高级设置开关（生理追踪总开关）映射 settings_ACU.bs_biotracker.enabled
  */
 // ═══════════════════════════════════════════════════════════════
-// 存储命名空间（settings_ACU.bsBiotracker）
+// 存储命名空间（settings_ACU.bs_biotracker）
 // ═══════════════════════════════════════════════════════════════
-/** biotracker 存储根对象（映射到 settings_ACU.bsBiotracker，惰性初始化） */
+/** biotracker 存储根对象（映射到 settings_ACU.bs_biotracker，惰性初始化） */
 function getBiotrackerRoot() {
     if (!settings_ACU[MODULE_NAME] || typeof settings_ACU[MODULE_NAME] !== 'object') {
         settings_ACU[MODULE_NAME] = cloneValue(DEFAULT_SETTINGS);
@@ -118739,16 +118789,17 @@ function setBiotrackerEnabled_ACU(enabled) {
 const trackerDeps = { renderStatusPanel: () => { }, updateClock: () => { } };
 let pollerActive = false;
 function syncPoller() {
-    const ctx = createBiotrackerCtx_ACU();
     if (isBiotrackerEnabled_ACU()) {
         if (!pollerActive) {
             pollerActive = true;
+            const ctx = createBiotrackerCtx_ACU();
             resetPoller(ctx, trackerDeps);
         }
     }
     else if (pollerActive) {
         pollerActive = false;
-        resetPoller(ctx, trackerDeps);
+        // H5：禁用时停止轮询（不再重建空转 interval）
+        stopPoller();
     }
 }
 let initialized = false;
@@ -118770,6 +118821,9 @@ function initBiotracker_ACU() {
         settings.requireFullDescriptionUpdates = true;
         settings.formattedOutputV4 = true;
         scheduleSettingsSave();
+        // H4：初始化即同步轮询状态——enabled=true 时启动追踪轮询（无需等切聊天），
+        // enabled=false 时确保无轮询空转
+        syncPoller();
         // 订阅聊天切换：预热当前聊天状态（chatStates[chatKey]）
         const eventSource = ctx.eventSource;
         const chatChangedType = ctx.event_types?.CHAT_CHANGED;
@@ -118858,18 +118912,29 @@ async function registerCharacter_ACU(options) {
             customNotes: options.customNotes,
             declaredRace: options.declaredRace || '',
         };
-        // 用户可指定发送最近 N 条 AI 回复（覆盖 contextSize）
+        // 用户可指定发送最近 N 条 AI 回复（覆盖 contextSize）——仅本次调用生效，结束后还原（H6）
         const recentCount = Number(options.recentCount);
         const settings = getBiotrackerSettings(ctx);
+        const originalContextSize = settings.contextSize;
+        let contextSizePatched = false;
         if (Number.isFinite(recentCount) && recentCount > 0) {
             settings.contextSize = Math.max(1, Math.min(100, Math.floor(recentCount)));
+            contextSizePatched = true;
         }
-        // 第一步：繁育推演（API 1）
-        const breedingInference = await runRegistryBreedingInference(ctx, shared);
-        // 第二步：注册并套用推演结果（API 2）
-        await runRegistry(ctx, { ...shared, breedingInference });
-        saveSettings(ctx);
-        return { ok: true, message: `角色「${name}」注册完成（已套用繁育推演）。` };
+        try {
+            // 第一步：繁育推演（API 1）
+            const breedingInference = await runRegistryBreedingInference(ctx, shared);
+            // 第二步：注册并套用推演结果（API 2）
+            await runRegistry(ctx, { ...shared, breedingInference });
+            saveSettings(ctx);
+            return { ok: true, message: `角色「${name}」注册完成（已套用繁育推演）。` };
+        }
+        finally {
+            if (contextSizePatched) {
+                settings.contextSize = originalContextSize;
+                scheduleSettingsSave();
+            }
+        }
     }
     catch (e) {
         logWarn_ACU('[生理追踪] 注册角色失败:', e);
@@ -121097,7 +121162,8 @@ function mainInitialize_ACU() {
                 }
                 await resetScriptStateForNewChat_ACU(chatFileName);
                 // [触发门控] generationGate 重置已搬到 service 层的 resetScriptStateForNewChat_ACU 中
-                // [触发门控] 每次切换聊天都尝试安装一次 capture 钩子（防止 DOM 重新渲染导致丢失）          installSendIntentCaptureHooks_ACU();
+                // [触发门控] 每次切换聊天都尝试安装一次 capture 钩子（防止 DOM 重新渲染导致丢失）
+                installSendIntentCaptureHooks_ACU();
                 // [剧情推进] 切换聊天时加载预设
                 await loadPresetAndCleanCharacterData_ACU();
                 // [新增] 切换角色卡（聊天）时，强制从新聊天记录的本地数据读取最新的表格并刷新UI
@@ -123775,7 +123841,20 @@ function withSettingsWrite_ACU(fields, mutate, options = {}) {
             message: options.message || '设置写入失败：输入无效。',
         };
     }
-    const saveResult = saveSettings_ACU();
+    // C3：保存本身也可能抛异常（持久化层失败）——捕获后回滚内存修改，避免「内存已改、落盘失败」的不一致
+    let saveResult;
+    try {
+        saveResult = saveSettings_ACU();
+    }
+    catch (e) {
+        restoreSettingsFields_ACU(snapshot);
+        return {
+            ok: false,
+            code: 'save_failed',
+            changed: false,
+            message: `设置保存失败：${e?.message || '未知错误'}，已回滚。`,
+        };
+    }
     if (!saveResult.saved) {
         restoreSettingsFields_ACU(snapshot);
         return {
@@ -165420,8 +165499,12 @@ function useBiotrackerPage() {
         apiStore.refreshFromSettings();
         refreshCharacters();
         timer = setInterval(() => {
-            // P4 门控：页面不可见（tab 切走/最小化）时跳过轮询，避免无谓的聚合重建
+            // P4/C11 门控：页面不可见（tab 切走/最小化）或应用根容器被隐藏（closeAcuV2App 只切 display 不 unmount）
+            // 时跳过轮询，避免无谓的聚合重建与后台运行
             if (typeof document === 'undefined' || document.hidden)
+                return;
+            const rootEl = document.getElementById('acu-app-v2');
+            if (rootEl && rootEl.style.display === 'none')
                 return;
             refreshCharacters();
         }, 3000);
