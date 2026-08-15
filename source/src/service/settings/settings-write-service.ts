@@ -75,7 +75,19 @@ export function withSettingsWrite_ACU(
       message: options.message || '设置写入失败：输入无效。',
     };
   }
-  const saveResult = saveSettings_ACU();
+  // C3：保存本身也可能抛异常（持久化层失败）——捕获后回滚内存修改，避免「内存已改、落盘失败」的不一致
+  let saveResult;
+  try {
+    saveResult = saveSettings_ACU();
+  } catch (e) {
+    restoreSettingsFields_ACU(snapshot);
+    return {
+      ok: false,
+      code: 'save_failed',
+      changed: false,
+      message: `设置保存失败：${e?.message || '未知错误'}，已回滚。`,
+    };
+  }
   if (!saveResult.saved) {
     restoreSettingsFields_ACU(snapshot);
     return {

@@ -1044,9 +1044,21 @@ async function buildPresetEnvelope(settings, baseSystemPrompt, payloadText) {
   }
 }
 
+
+/** C13：安全调用全局探针——探针被第三方覆盖/抛错时降级为 null，不击穿整个请求 */
+function safeProbeCall(name, fallback = null) {
+  try {
+    const fn = globalThis[name];
+    return typeof fn === 'function' ? fn() : fallback;
+  } catch (e) {
+    console.warn('[BS BioTracker] probe call failed:', name, e && e.message);
+    return fallback;
+  }
+}
+
 export async function callOpenAICompatible(settings, payload, systemPrompt = DEFAULT_SYSTEM_PROMPT) {
   // F4：每次调用时从数据库拉最新 API 配置（url/apiKey/model/温度），运行中改配置即时生效
-  const liveApiProbe = typeof globalThis.__bs_biotracker_api_probe__ === 'function' ? globalThis.__bs_biotracker_api_probe__() : null;
+  const liveApiProbe = safeProbeCall('__bs_biotracker_api_probe__');
   if (liveApiProbe) {
     const live = { ...settings, ...liveApiProbe };
     if (liveApiProbe.temperature === undefined) delete live.temperature;
@@ -1090,10 +1102,10 @@ export async function callOpenAICompatible(settings, payload, systemPrompt = DEF
   }
   // 采样参数优先数据库配置（适配层同步进 settings.temperature/maxTokens 或经 __bs_biotracker_api_probe__ 兜底），
   // 其次 ST 预设采样，最后回退默认 0.2。probe 兜底保证追踪/注册内部直连调用也始终采用数据库配置。
-  const dbProbe = (typeof globalThis.__bs_biotracker_api_probe__ === 'function') ? globalThis.__bs_biotracker_api_probe__() : null;
+  const dbProbe = safeProbeCall('__bs_biotracker_api_probe__');
   // 非预填充支持（预设级，经适配层探针）：把 assistant 消息改写为 user +「助手：」前缀，
   // 用于不支持 assistant 预填充的模型/接口。
-  if (typeof globalThis.__bs_biotracker_non_prefill_probe__ === 'function' && globalThis.__bs_biotracker_non_prefill_probe__() === true) {
+  if (safeProbeCall('__bs_biotracker_non_prefill_probe__') === true) {
     effectiveMessages = (Array.isArray(effectiveMessages) ? effectiveMessages : []).map((m) => {
       if (!m || typeof m !== 'object' || String(m.role || '').toLowerCase() !== 'assistant') return m;
       return { ...m, role: 'user', content: `助手：\n${typeof m.content === 'string' ? m.content : String(m.content ?? '')}` };

@@ -68,9 +68,7 @@ function scheduleSettingsReloadAfterIdbReady_ACU(reason: string): void {
 }
 
 function applyGlobalPlotEnabledSetting_ACU(): boolean {
-  if (!settings_ACU.plotSettings || typeof settings_ACU.plotSettings !== 'object' || Array.isArray(settings_ACU.plotSettings)) {
-    settings_ACU.plotSettings = cloneDefaultValue_ACU(DEFAULT_PLOT_SETTINGS_ACU);
-  }
+  ensurePlotSettingsObject_ACU();
 
   if (typeof globalMeta_ACU.plotEnabledGlobal !== 'boolean') {
     globalMeta_ACU.plotEnabledGlobal = settings_ACU.plotSettings.enabled === false ? false : true;
@@ -85,15 +83,20 @@ function cloneDefaultValue_ACU<T>(value: T): T {
   return JSON.parse(JSON.stringify(value));
 }
 
+/** C5：确保 plotSettings 是有效对象，缺失时用默认值初始化 */
+function ensurePlotSettingsObject_ACU(): void {
+  if (!settings_ACU.plotSettings || typeof settings_ACU.plotSettings !== 'object' || Array.isArray(settings_ACU.plotSettings)) {
+    settings_ACU.plotSettings = cloneDefaultValue_ACU(DEFAULT_PLOT_SETTINGS_ACU);
+  }
+}
+
 function hasNonEmptyPromptSegments_ACU(value: unknown): boolean {
   return Array.isArray(value)
     && value.some(segment => segment && typeof segment === 'object' && typeof (segment as any).content === 'string' && (segment as any).content.trim());
 }
 
 function ensureAgentPromptTemplateDefaults_ACU(): boolean {
-  if (!settings_ACU.plotSettings || typeof settings_ACU.plotSettings !== 'object' || Array.isArray(settings_ACU.plotSettings)) {
-    settings_ACU.plotSettings = cloneDefaultValue_ACU(DEFAULT_PLOT_SETTINGS_ACU);
-  }
+  ensurePlotSettingsObject_ACU();
   const defaults = buildDefaultAgentWorldbookPromptTemplates_ACU();
   const current = settings_ACU.plotSettings.agentPromptTemplates;
   if (!current || typeof current !== 'object' || Array.isArray(current)) {
@@ -119,9 +122,7 @@ function ensureAgentWorldbookControlDefaults_ACU(): boolean {
   // Legacy/template compatibility only: card-level Agent worldbook control is
   // stored in TavernDB-ACU-AgentWorldbookConfig entries. Do not treat this
   // settings field as the current character card's configuration source.
-  if (!settings_ACU.plotSettings || typeof settings_ACU.plotSettings !== 'object' || Array.isArray(settings_ACU.plotSettings)) {
-    settings_ACU.plotSettings = cloneDefaultValue_ACU(DEFAULT_PLOT_SETTINGS_ACU);
-  }
+  ensurePlotSettingsObject_ACU();
   const defaults = buildDefaultAgentWorldbookControl_ACU();
   const current = settings_ACU.plotSettings.agentWorldbookControl;
   let changed = false;
@@ -142,9 +143,7 @@ function ensureAgentWorldbookControlDefaults_ACU(): boolean {
 }
 
 function ensureBuiltinPlotPresets_ACU(): boolean {
-  if (!settings_ACU.plotSettings || typeof settings_ACU.plotSettings !== 'object' || Array.isArray(settings_ACU.plotSettings)) {
-    settings_ACU.plotSettings = cloneDefaultValue_ACU(DEFAULT_PLOT_SETTINGS_ACU);
-  }
+  ensurePlotSettingsObject_ACU();
   if (!Array.isArray(settings_ACU.plotSettings.promptPresets)) {
     settings_ACU.plotSettings.promptPresets = [];
   }
@@ -416,7 +415,7 @@ export   function loadSettings_ACU() {
               replaceSettingsPreservingBiotracker(deepMerge_ACU(defaultSettings, savedSettings));
 
               // [剧情推进] 迁移/兜底：确保 plotWorldbookConfig 存在且结构完整
-              if (!settings_ACU.plotSettings) settings_ACU.plotSettings = cloneDefaultValue_ACU(DEFAULT_PLOT_SETTINGS_ACU);
+              ensurePlotSettingsObject_ACU();
               if (!settings_ACU.plotSettings.plotWorldbookConfig) {
                   // 兼容旧字段迁移：worldbookSource/selectedWorldbooks -> plotWorldbookConfig
                   const legacySource = settings_ACU.plotSettings.worldbookSource || 'character';
@@ -1022,9 +1021,7 @@ export function persistCurrentTemplatePresetName_ACU(settingsObj: any, presetNam
 // getCurrentCharSettings_ACU 和 getCurrentWorldbookConfig_ACU 已移至 settings-readers.ts
 export function setGlobalPlotEnabled_ACU(modeEnabled: boolean): boolean {
     const enabled = !!modeEnabled;
-    if (!settings_ACU.plotSettings || typeof settings_ACU.plotSettings !== 'object' || Array.isArray(settings_ACU.plotSettings)) {
-        settings_ACU.plotSettings = cloneDefaultValue_ACU(DEFAULT_PLOT_SETTINGS_ACU);
-    }
+    ensurePlotSettingsObject_ACU();
 
     settings_ACU.plotSettings.enabled = enabled;
     globalMeta_ACU.plotEnabledGlobal = enabled;
