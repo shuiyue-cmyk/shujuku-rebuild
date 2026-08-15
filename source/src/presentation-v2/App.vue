@@ -193,7 +193,7 @@ let themeMenuCloseTimer: AcuTimerHandle | undefined;
 let mobileNavCloseTimer: AcuTimerHandle | undefined;
 
 const shellTitle = computed(() =>
-  visualizer.isActive ? "数据库编辑器" : router.activePage?.title || "SP·数据库 VIII",
+  visualizer.isActive ? "数据库编辑器" : router.activePage?.title || "幻想·数据库",
 );
 
 const uiScaleOptions = computed(() =>

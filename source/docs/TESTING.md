@@ -5,7 +5,7 @@
 ## 0. 安装
 
 1. 扩展面板 → Install extension → 粘贴 `https://github.com/shuiyue-cmyk/shujuku-rebuild`
-2. 确认扩展列表出现「SP·数据库（重构版）」，`manifest.json` 中 `auto_update: true`
+2. 确认扩展列表出现「幻想·数据库」，`manifest.json` 中 `auto_update: true`
 3. 刷新页面后，确认右上/侧边出现数据库入口（V2 面板 `#acu-app-v2`）
 
 ## 1. 启动与核心（不依赖酒馆助手）

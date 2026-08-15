@@ -3,7 +3,7 @@
     <div class="acu-v2-sidebar__brand">
       <span class="acu-v2-sidebar__brand-mark" aria-hidden="true">SP</span>
       <span class="acu-v2-sidebar__brand-copy">
-        <span class="acu-v2-sidebar__brand-title">SP·数据库 VIII</span>
+        <span class="acu-v2-sidebar__brand-title">幻想·数据库</span>
         <span class="acu-v2-sidebar__brand-tag">新 UI · {{ uiMode.modeLabel }}</span>
       </span>
     </div>
