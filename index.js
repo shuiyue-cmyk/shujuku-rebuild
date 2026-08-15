@@ -165258,7 +165258,13 @@ function useBiotrackerPage() {
             status.value = result.message;
             statusIsError.value = !result.ok;
             finishPendingToast();
-            showToastr_ACU(result.ok ? 'success' : 'warning', result.message, { title: '生理追踪', acuToastCategory: 'biotracker' });
+            if (result.ok) {
+                // 注册成功提示：角色已注册 + 天赋已判定 + 技能将在后续追踪中自动发现
+                showToastr_ACU('success', `${result.message} 天赋已按角色资料判定；技能将在后续剧情追踪中自动发现登记。`, { title: '生理追踪', acuToastCategory: 'biotracker' });
+            }
+            else {
+                showToastr_ACU('warning', result.message, { title: '生理追踪', acuToastCategory: 'biotracker' });
+            }
             // 注册成功后保留表单内容（草稿已持久化），便于连续注册或对照
             refreshCharacters();
         }
@@ -165590,8 +165596,8 @@ var _sfc_main$b = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-v2-biotracker-page[data-v-30e7a2f7] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-biotracker-page__panel-stack[data-v-30e7a2f7] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 16px;\n}\n.acu-v2-biotracker-page__api-readonly[data-v-30e7a2f7] {\r\n  color: var(--acu-text-2, inherit);\r\n  margin: 0;\r\n  line-height: 1.55;\n}\n.acu-v2-biotracker-page__actions[data-v-30e7a2f7] {\r\n  display: flex;\r\n  gap: 0.5rem;\r\n  flex-wrap: wrap;\r\n  margin-top: 0.5rem;\n}\n.acu-v2-biotracker-page__toggle[data-v-30e7a2f7] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 0.5rem;\r\n  cursor: pointer;\n}\n.acu-v2-biotracker-page__status[data-v-30e7a2f7] {\r\n  margin-top: 0.75rem;\r\n  padding: 0.4rem 0.6rem;\r\n  border-radius: 4px;\r\n  background: rgba(125, 73, 64, 0.12);\r\n  color: var(--acu-text, inherit);\n}\n.acu-v2-biotracker-page__status[data-error='true'][data-v-30e7a2f7] {\r\n  background: rgba(220, 60, 60, 0.15);\r\n  color: #e06060;\n}\n.acu-v2-biotracker-page__empty[data-v-30e7a2f7] {\r\n  color: var(--acu-text-dim, #8a8075);\r\n  padding: 0.5rem 0;\n}\n.acu-v2-biotracker-page__table[data-v-30e7a2f7] {\r\n  width: 100%;\r\n  border-collapse: collapse;\r\n  font-size: 0.9em;\n}\n.acu-v2-biotracker-page__table th[data-v-30e7a2f7],\r\n.acu-v2-biotracker-page__table td[data-v-30e7a2f7] {\r\n  text-align: left;\r\n  padding: 0.4rem 0.5rem;\r\n  border-bottom: 1px solid rgba(128, 128, 128, 0.2);\n}\n.acu-v2-biotracker-page__fullstate[data-v-30e7a2f7] {\r\n  margin-top: 0.75rem;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\r\n  padding-top: 0.75rem;\n}\n.acu-v2-biotracker-page__fullstate-title[data-v-30e7a2f7] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  font-weight: 700;\r\n  margin-bottom: 0.4rem;\r\n  gap: 0.5rem;\n}\n.acu-v2-biotracker-page__fullstate-json[data-v-30e7a2f7] {\r\n  display: block;\r\n  width: 100%;\r\n  max-height: 260px;\r\n  overflow: auto;\r\n  background: rgba(0, 0, 0, 0.06);\r\n  border: 1px solid rgba(128, 128, 128, 0.3);\r\n  border-radius: 4px;\r\n  padding: 0.5rem;\r\n  font-family: inherit;\r\n  font-size: 0.78em;\r\n  line-height: 1.5;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  color: var(--acu-text, inherit);\r\n  resize: vertical;\n}\n.acu-v2-biotracker-page__fullstate-json[data-v-30e7a2f7]:focus {\r\n  outline: none;\r\n  border-color: var(--acu-accent, #b8736a);\n}\n.acu-v2-biotracker-page__fullstate-debug[data-v-30e7a2f7] {\r\n  margin-top: 0.75rem;\n}\r\n", "src/presentation-v2/pages/BiotrackerPage.vue#style-0-30e7a2f7");
-var BiotrackerPage_vue_vue_type_style_index_0_scoped_30e7a2f7_lang = null;
+injectSfcStyle("\n.acu-v2-biotracker-page[data-v-61330414] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-biotracker-page__panel-stack[data-v-61330414] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 16px;\n}\n.acu-v2-biotracker-page__api-readonly[data-v-61330414] {\r\n  color: var(--acu-text-2, inherit);\r\n  margin: 0;\r\n  line-height: 1.55;\n}\n.acu-v2-biotracker-page__actions[data-v-61330414] {\r\n  display: flex;\r\n  gap: 0.5rem;\r\n  flex-wrap: wrap;\r\n  margin-top: 0.5rem;\n}\n.acu-v2-biotracker-page__toggle[data-v-61330414] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 0.5rem;\r\n  cursor: pointer;\n}\n.acu-v2-biotracker-page__status[data-v-61330414] {\r\n  margin-top: 0.75rem;\r\n  padding: 0.4rem 0.6rem;\r\n  border-radius: 4px;\r\n  background: rgba(125, 73, 64, 0.12);\r\n  color: var(--acu-text, inherit);\n}\n.acu-v2-biotracker-page__status[data-error='true'][data-v-61330414] {\r\n  background: rgba(220, 60, 60, 0.15);\r\n  color: #e06060;\n}\n.acu-v2-biotracker-page__empty[data-v-61330414] {\r\n  color: var(--acu-text-dim, #8a8075);\r\n  padding: 0.5rem 0;\n}\n.acu-v2-biotracker-page__table[data-v-61330414] {\r\n  width: 100%;\r\n  border-collapse: collapse;\r\n  font-size: 0.9em;\n}\n.acu-v2-biotracker-page__table th[data-v-61330414],\r\n.acu-v2-biotracker-page__table td[data-v-61330414] {\r\n  text-align: left;\r\n  padding: 0.4rem 0.5rem;\r\n  border-bottom: 1px solid rgba(128, 128, 128, 0.2);\n}\n.acu-v2-biotracker-page__fullstate[data-v-61330414] {\r\n  margin-top: 0.75rem;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\r\n  padding-top: 0.75rem;\n}\n.acu-v2-biotracker-page__fullstate-title[data-v-61330414] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  font-weight: 700;\r\n  margin-bottom: 0.4rem;\r\n  gap: 0.5rem;\n}\n.acu-v2-biotracker-page__fullstate-json[data-v-61330414] {\r\n  display: block;\r\n  width: 100%;\r\n  max-height: 260px;\r\n  overflow: auto;\r\n  background: rgba(0, 0, 0, 0.06);\r\n  border: 1px solid rgba(128, 128, 128, 0.3);\r\n  border-radius: 4px;\r\n  padding: 0.5rem;\r\n  font-family: inherit;\r\n  font-size: 0.78em;\r\n  line-height: 1.5;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  color: var(--acu-text, inherit);\r\n  resize: vertical;\n}\n.acu-v2-biotracker-page__fullstate-json[data-v-61330414]:focus {\r\n  outline: none;\r\n  border-color: var(--acu-accent, #b8736a);\n}\n.acu-v2-biotracker-page__fullstate-debug[data-v-61330414] {\r\n  margin-top: 0.75rem;\n}\r\n", "src/presentation-v2/pages/BiotrackerPage.vue#style-0-61330414");
+var BiotrackerPage_vue_vue_type_style_index_0_scoped_61330414_lang = null;
 
 const _hoisted_1$b = { class: "acu-v2-biotracker-page" };
 const _hoisted_2$a = { class: "acu-v2-biotracker-page__panel-stack" };
@@ -165751,6 +165757,13 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 					]])]),
 					_: 1
 				}),
+				_cache[19] || (_cache[19] = createBaseVNode(
+					"p",
+					{ class: "acu-v2-biotracker-page__api-readonly" },
+					" ⚠ 注册将依次调用 2 次 API（先繁育推演、再注册），耗时较长且 token 消耗较大；过程中请勿重复点击。 ",
+					-1
+					/* CACHED */
+				)),
 				createBaseVNode("div", _hoisted_5$8, [
 					createVNode($setup["AcuButton"], {
 						size: "sm",
@@ -165791,7 +165804,7 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 						_: 1
 					}, 8, ["disabled"])
 				]),
-				_cache[19] || (_cache[19] = createBaseVNode(
+				_cache[20] || (_cache[20] = createBaseVNode(
 					"p",
 					{ class: "acu-v2-biotracker-page__api-readonly" },
 					" 增强生成备装会把内置服装风格世界书一并发送给 AI（更贴合当前世界观的着装）。 ",
@@ -165900,7 +165913,7 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 			description: $setup.copy.dataDescription
 		}, {
 			default: withCtx(() => [
-				$setup.characters.length === 0 ? (openBlock(), createElementBlock("div", _hoisted_10$4, " 当前聊天尚未注册角色。请先注册，或开启自动注册后发送消息等待发现。 ")) : (openBlock(), createElementBlock("table", _hoisted_11$4, [_cache[20] || (_cache[20] = createBaseVNode(
+				$setup.characters.length === 0 ? (openBlock(), createElementBlock("div", _hoisted_10$4, " 当前聊天尚未注册角色。请先注册，或开启自动注册后发送消息等待发现。 ")) : (openBlock(), createElementBlock("table", _hoisted_11$4, [_cache[21] || (_cache[21] = createBaseVNode(
 					"thead",
 					null,
 					[createBaseVNode("tr", null, [
@@ -165964,7 +165977,7 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 						variant: "secondary",
 						onClick: _cache[11] || (_cache[11] = ($event) => $setup.viewFullState($setup.selectedFullStateName))
 					}, {
-						default: withCtx(() => [..._cache[21] || (_cache[21] = [createTextVNode(
+						default: withCtx(() => [..._cache[22] || (_cache[22] = [createTextVNode(
 							"刷新",
 							-1
 							/* CACHED */
@@ -166007,7 +166020,7 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 						"data-error": $setup.fullStateSaveError
 					}, toDisplayString($setup.fullStateSaveMessage), 9, _hoisted_16$4)) : createCommentVNode("v-if", true),
 					createBaseVNode("div", _hoisted_17$3, [
-						_cache[27] || (_cache[27] = createBaseVNode(
+						_cache[28] || (_cache[28] = createBaseVNode(
 							"div",
 							{ class: "acu-v2-biotracker-page__fullstate-title" },
 							"调试工具",
@@ -166021,7 +166034,7 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 								disabled: $setup.debugBusy,
 								onClick: _cache[13] || (_cache[13] = ($event) => $setup.runDebugAction("bsSetCharacterPresence", { isPresent: false }))
 							}, {
-								default: withCtx(() => [..._cache[22] || (_cache[22] = [createTextVNode(
+								default: withCtx(() => [..._cache[23] || (_cache[23] = [createTextVNode(
 									"标记离场",
 									-1
 									/* CACHED */
@@ -166034,7 +166047,7 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 								disabled: $setup.debugBusy,
 								onClick: _cache[14] || (_cache[14] = ($event) => $setup.runDebugAction("bsSetCharacterPresence", { isPresent: true }))
 							}, {
-								default: withCtx(() => [..._cache[23] || (_cache[23] = [createTextVNode(
+								default: withCtx(() => [..._cache[24] || (_cache[24] = [createTextVNode(
 									"标记在场",
 									-1
 									/* CACHED */
@@ -166047,7 +166060,7 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 								disabled: $setup.debugBusy,
 								onClick: _cache[15] || (_cache[15] = ($event) => $setup.runDebugAction("bsDebugClearContainers", { container: "sperms" }))
 							}, {
-								default: withCtx(() => [..._cache[24] || (_cache[24] = [createTextVNode(
+								default: withCtx(() => [..._cache[25] || (_cache[25] = [createTextVNode(
 									"清空精液",
 									-1
 									/* CACHED */
@@ -166060,7 +166073,7 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 								disabled: $setup.debugBusy,
 								onClick: _cache[16] || (_cache[16] = ($event) => $setup.runDebugAction("bsDebugClearContainers", { container: "fetuses" }))
 							}, {
-								default: withCtx(() => [..._cache[25] || (_cache[25] = [createTextVNode(
+								default: withCtx(() => [..._cache[26] || (_cache[26] = [createTextVNode(
 									"清空胎儿",
 									-1
 									/* CACHED */
@@ -166073,7 +166086,7 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 								disabled: $setup.debugBusy,
 								onClick: _cache[17] || (_cache[17] = ($event) => $setup.runDebugAction("bsDebugClearContainers", { container: "children" }))
 							}, {
-								default: withCtx(() => [..._cache[26] || (_cache[26] = [createTextVNode(
+								default: withCtx(() => [..._cache[27] || (_cache[27] = [createTextVNode(
 									"清空孩子",
 									-1
 									/* CACHED */
@@ -166104,7 +166117,7 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 					variant: "secondary",
 					onClick: $setup.clearChatState
 				}, {
-					default: withCtx(() => [..._cache[28] || (_cache[28] = [createTextVNode(
+					default: withCtx(() => [..._cache[29] || (_cache[29] = [createTextVNode(
 						" 清空本聊天数据（恢复初始） ",
 						-1
 						/* CACHED */
@@ -166116,7 +166129,7 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 		}, 8, ["title", "description"])
 	])]);
 }
-var BiotrackerPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$b], ["__scopeId", "data-v-30e7a2f7"]]);
+var BiotrackerPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$b], ["__scopeId", "data-v-61330414"]]);
 
 /**
  * page-registry — 一级页静态注册表（plan §4.1 + §D24）

@@ -130,7 +130,12 @@ export function useBiotrackerPage() {
       status.value = result.message;
       statusIsError.value = !result.ok;
       finishPendingToast();
-      showToastr_ACU(result.ok ? 'success' : 'warning', result.message, { title: '生理追踪', acuToastCategory: 'biotracker' });
+      if (result.ok) {
+        // 注册成功提示：角色已注册 + 天赋已判定 + 技能将在后续追踪中自动发现
+        showToastr_ACU('success', `${result.message} 天赋已按角色资料判定；技能将在后续剧情追踪中自动发现登记。`, { title: '生理追踪', acuToastCategory: 'biotracker' });
+      } else {
+        showToastr_ACU('warning', result.message, { title: '生理追踪', acuToastCategory: 'biotracker' });
+      }
       // 注册成功后保留表单内容（草稿已持久化），便于连续注册或对照
       refreshCharacters();
     } finally {

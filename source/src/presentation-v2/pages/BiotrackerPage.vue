@@ -43,6 +43,9 @@
         <AcuFormRow label="发送最近 N 条 AI 回复" hint="注册/推演分析发送给 AI 的最近 AI 回复条数">
           <input v-model.number="registerRecentCount" type="number" min="1" max="100" class="acu-input" @change="setRegisterRecentCount(registerRecentCount)" />
         </AcuFormRow>
+        <p class="acu-v2-biotracker-page__api-readonly">
+          ⚠ 注册将依次调用 2 次 API（先繁育推演、再注册），耗时较长且 token 消耗较大；过程中请勿重复点击。
+        </p>
         <div class="acu-v2-biotracker-page__actions">
           <AcuButton size="sm" :disabled="registering" @click="doRegister">
             {{ registering ? '注册中...' : '注册角色' }}
