@@ -635,14 +635,15 @@ export   function loadSettings_ACU() {
       forceDefaultTableFillPromptsOnce_ACU();
       forceDefaultTemplateAssistantPromptOnce_ACU();
 
+      // C7：maxConcurrentGroups 归一化移到 persist 之前，修正值随本次落盘
+      if (!Number.isFinite(settings_ACU.maxConcurrentGroups) || settings_ACU.maxConcurrentGroups < 1) {
+          settings_ACU.maxConcurrentGroups = 1;
+      }
+
       if (shouldPersistSettingsAfterLoad_ACU) {
           saveGlobalMeta_ACU();
           persistSettingsToStorage_ACU(settings_ACU, activeCode);
           logDebug_ACU(`[设置加载] 已持久化加载期默认值补齐，交火配置版本: ${VECTOR_MEMORY_DEFAULTS_REFRESH_VERSION_ACU}`);
-      }
-
-      if (!Number.isFinite(settings_ACU.maxConcurrentGroups) || settings_ACU.maxConcurrentGroups < 1) {
-          settings_ACU.maxConcurrentGroups = 1;
       }
 
       // [API 绑定 reconcile] 存储重载后把当前聊天绑定重新投影到 apiMode/apiConfig/tavernProfile。
