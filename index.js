@@ -2505,6 +2505,78 @@ function isEntryBlocked_ACU(entry) {
     const name = String(entry.comment || entry.name || '');
     return blockedKeywords.some(keyword => name.includes(keyword));
 }
+/**
+ * SSRF 防护：校验 HTTP 端点（embedding/rerank 等用户可配置的直连端点）。
+ * 仅放行 http(s)；http:// 仅允许 localhost/回环；私网/环回/链路本地/保留 IP 一律拒绝
+ * （云元数据 169.254.169.254、内网 10.x/192.168.x、0.0.0.0 等）。
+ */
+function isPrivateNetworkHost_ACU(host) {
+    if (!/^[\d.]+$/.test(host) && !/^[0-9a-f:]+$/i.test(host))
+        return false; // 域名放行
+    if (host.includes(':')) {
+        if (host === '::1' || host === '::')
+            return true;
+        const first = host.split(':')[0].toLowerCase();
+        if (first === 'fe80' || first === 'feb0' || first === 'fe90' || first === 'fea0' || first === 'feb1' || first === 'feb2' || first === 'feb3' || first === 'feb4' || first === 'feb5' || first === 'feb6' || first === 'feb7' || first === 'feb8' || first === 'feb9' || first === 'feba' || first === 'febb' || first === 'febc' || first === 'febd' || first === 'febe' || first === 'febf')
+            return true;
+        if (first === 'fc' || first === 'fd')
+            return true;
+        return false;
+    }
+    const parts = host.split('.').map((n) => Number(n));
+    if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255))
+        return false;
+    const [a, b] = parts;
+    if (a === 10)
+        return true;
+    if (a === 127)
+        return true;
+    if (a === 169 && b === 254)
+        return true;
+    if (a === 172 && b >= 16 && b <= 31)
+        return true;
+    if (a === 192 && b === 168)
+        return true;
+    if (a === 0)
+        return true;
+    if (a >= 224)
+        return true;
+    return false;
+}
+function assertSafeHttpEndpoint_ACU(endpoint) {
+    const raw = String(endpoint || '').trim();
+    if (!raw)
+        throw new Error('端点地址为空。');
+    if (!/^https?:/i.test(raw)) {
+        // 相对路径放行（同源）；显式危险 scheme 拒绝
+        const schemeMatch = raw.match(/^([a-z][a-z0-9+.-]*):/i);
+        if (schemeMatch) {
+            const scheme = schemeMatch[1].toLowerCase();
+            const rest = raw.slice(schemeMatch[0].length);
+            const isPortOnly = /^\d+$/.test(rest);
+            const dangerous = ['file', 'gopher', 'ftp', 'javascript', 'data', 'vbscript', 'jar', 'ws', 'wss'];
+            if (!isPortOnly && dangerous.includes(scheme)) {
+                throw new Error('端点仅支持 http:// 或 https://，其他协议一律拒绝。');
+            }
+        }
+        return;
+    }
+    let url;
+    try {
+        url = new URL(raw);
+    }
+    catch (e) {
+        throw new Error('端点地址无法解析。');
+    }
+    const host = url.hostname.replace(/^\[|\]$/g, '');
+    if (url.protocol === 'http:' && !['localhost', '127.0.0.1', '::1'].includes(host)) {
+        throw new Error('端点使用 http:// 时仅允许 localhost；远程地址请使用 https://。');
+    }
+    const numericHost = host.replace(/^::ffff:/, '').toLowerCase();
+    if (isPrivateNetworkHost_ACU(numericHost) && !['localhost', '127.0.0.1', '::1'].includes(numericHost)) {
+        throw new Error('端点指向私网/环回/链路本地地址，存在 SSRF 风险，请使用公网 https 地址。');
+    }
+}
 
 /**
  * shared/html-helpers.ts — HTML 工具函数
@@ -54714,11 +54786,11 @@ async function applySqlEditsToTableDataSnapshot_ACU(sqlStatements, tableData, _u
     try {
         const cleaned = sqlStatements.replace(/<!--|-->/g, '').trim();
         if (!cleaned) {
-            return { success: true, modifiedKeys: [], appliedEdits: 0, workingData: JSON.parse(JSON.stringify(tableData || {})) };
+            return { success: true, modifiedKeys: [], appliedEdits: 0, workingData: tableData ?? {} };
         }
         const rawStatements = splitSqlStatements(cleaned);
         if (rawStatements.length === 0) {
-            return { success: true, modifiedKeys: [], appliedEdits: 0, workingData: JSON.parse(JSON.stringify(tableData || {})) };
+            return { success: true, modifiedKeys: [], appliedEdits: 0, workingData: tableData ?? {} };
         }
         const snapshotCopy = JSON.parse(JSON.stringify(tableData || {}));
         const requireKnownTables = operationOptions.requireSheetScopedOperations === true;
@@ -65827,6 +65899,10 @@ async function savePlotToLatestMessage_ACU(force = false, options = {}) {
         }
         const result = tryFindTarget();
         if (result) {
+            // 抢占 pending：writeAndCommit 执行期间置空，另一并发路径（flush）看到 null 即放弃，避免同值双写
+            if (tempPlotToSave_ACU === roundRef) {
+                _set_tempPlotToSave_ACU(null);
+            }
             delayedFinished = true;
             await writeAndCommit(result);
             return;
@@ -83630,6 +83706,41 @@ function relaxStoredOriginalDefaultDdls_ACU(templateObj) {
     });
     return changed;
 }
+/** R1：settings 日志脱敏摘要——仅暴露少量结构信息，所有 apiKey/密钥字段一律掩码 */
+function maskSecret_ACU(value) {
+    if (typeof value !== 'string' || !value)
+        return String(value ?? '');
+    if (value.length <= 8)
+        return '***';
+    return `${value.slice(0, 3)}***${value.slice(-3)}`;
+}
+function summarizeSettingsForLog_ACU(settings) {
+    if (!settings || typeof settings !== 'object')
+        return {};
+    const safe = {
+        apiMode: settings.apiMode,
+        streamingEnabled: settings.streamingEnabled === true,
+        nonPrefillSupport: settings.nonPrefillSupport === true,
+        plotEnabled: settings.plotSettings?.enabled === true,
+        storageMode: settings.storageMode,
+    };
+    if (settings.apiConfig) {
+        safe.apiConfig = {
+            url: typeof settings.apiConfig.url === 'string' ? settings.apiConfig.url : '',
+            model: typeof settings.apiConfig.model === 'string' ? settings.apiConfig.model : '',
+            apiKey: maskSecret_ACU(settings.apiConfig.apiKey),
+        };
+    }
+    if (Array.isArray(settings.apiPresets)) {
+        safe.apiPresets = settings.apiPresets.map((p) => ({
+            name: p?.name,
+            apiKey: maskSecret_ACU(p?.apiKey),
+            model: p?.model,
+            url: p?.url,
+        }));
+    }
+    return safe;
+}
 function saveSettings_ACU() {
     if (!settingsStorageReadyForSave_ACU) {
         if (isIndexedDbAvailable_ACU() && !configIdbCacheLoaded_ACU) {
@@ -83999,7 +84110,8 @@ function loadSettings_ACU() {
         persistSettingsToStorage_ACU(settings_ACU, activeCode);
         logDebug_ACU(`[API绑定] 已把当前聊天绑定投影到运行配置: ${bound.presetName}`);
     }
-    logDebug_ACU('Settings loaded:', settings_ACU);
+    // R1：日志脱敏——settings 含 apiKey/apiPresets key，不整对象打印，仅打脱敏摘要
+    logDebug_ACU('Settings loaded:', summarizeSettingsForLog_ACU(settings_ACU));
 }
 // loadSettingsAndRefreshUI_ACU 已搬到 presentation/components/settings-ui-helpers.ts
 function loadTemplateFromStorage_ACU(codeOverride = null) {
@@ -87449,11 +87561,9 @@ async function executeAutoUpdatePlan_ACU(plan, settings, setAutoUpdating, ops, p
             const errorSummary = failedGroupErrors.length > 0 ? `原因：${failedGroupErrors.slice(0, 3).join('；')}` : '未返回具体原因。';
             logWarn_ACU(`并发分组更新失败 ${failedGroupKeys.length}/${totalGroups} 组。${errorSummary}`);
         }
-        // 并发更新完成后统一刷新数据链条
+        // 并发更新完成后统一刷新数据链条（P5：仅保留一次刷新，消除重复 refreshData 与固定 500ms 等待后的二次刷新）
         logDebug_ACU(`All group updates completed. Forcing data refresh...`);
         await ops.loadAllChatMessages();
-        await ops.refreshData();
-        await new Promise(resolve => setTimeout(resolve, 500));
         setAutoUpdating(false);
         await ops.refreshData();
         // 自动合并总结检测
@@ -87780,6 +87890,7 @@ async function createEmbeddings_ACU(request) {
     if (apiKey) {
         headers.Authorization = `Bearer ${apiKey}`;
     }
+    assertSafeHttpEndpoint_ACU(endpoint);
     const response = await fetch(endpoint, {
         method: 'POST',
         headers,
@@ -100452,6 +100563,16 @@ async function buildPresetEnvelope(settings, baseSystemPrompt, payloadText) {
     }
 }
 async function callOpenAICompatible(settings, payload, systemPrompt = DEFAULT_SYSTEM_PROMPT) {
+    // F4：每次调用时从数据库拉最新 API 配置（url/apiKey/model/温度），运行中改配置即时生效
+    const liveApiProbe = typeof globalThis.__bs_biotracker_api_probe__ === 'function' ? globalThis.__bs_biotracker_api_probe__() : null;
+    if (liveApiProbe) {
+        const live = { ...settings, ...liveApiProbe };
+        if (liveApiProbe.temperature === undefined)
+            delete live.temperature;
+        if (liveApiProbe.maxTokens === undefined)
+            delete live.maxTokens;
+        settings = live;
+    }
     const apiBase = getApiBase(settings);
     const model = String(settings.model || '').trim();
     const stCtx = getSillyTavernContext();
@@ -102476,10 +102597,10 @@ function filterRegistryWorldbookEntries(value, excludedNames, settings = null, r
         const name = normalizeEntryName(entry);
         const selectionName = globalBookName ? formatGlobalWorldbookSelectionName$2(globalBookName, name) : name;
         if (mode === 'agent_greenlights') {
-            // 与追踪一致：蓝灯（constant 恒常条目）固有发送 + 数据库 agent 正文放行的绿灯（uid 白名单）
+            // 与追踪一致：蓝灯（constant 恒常条目，ST 数据形状为 constant:true 布尔）固有发送 + 数据库 agent 正文放行的绿灯（uid 白名单）
             if (entry?.enabled === false || entry?.disable === true)
                 return false;
-            if (entry?.type === 'constant')
+            if (entry?.constant === true || entry?.type === 'constant')
                 return true;
             const greenUids = settings?.agentGreenlightUids;
             if (Array.isArray(greenUids))
@@ -110064,10 +110185,10 @@ function filterTrackerWorldbookEntries(value, excludedNames, settings = null, re
         const name = normalizeEntryName(entry);
         const selectionName = globalBookName ? formatGlobalWorldbookSelectionName$1(globalBookName, name) : name;
         if (mode === 'agent_greenlights') {
-            // 蓝灯（constant 恒常条目）固有发送 + 数据库 agent 正文放行的绿灯（uid 白名单，适配层注入 settings.agentGreenlightUids）
+            // 蓝灯（constant 恒常条目，ST 数据形状为 constant:true 布尔）固有发送 + 数据库 agent 正文放行的绿灯（uid 白名单，适配层注入 settings.agentGreenlightUids）
             if (entry?.enabled === false || entry?.disable === true)
                 return false;
-            if (entry?.type === 'constant')
+            if (entry?.constant === true || entry?.type === 'constant')
                 return true;
             const greenUids = settings?.agentGreenlightUids;
             if (Array.isArray(greenUids))
@@ -110474,6 +110595,17 @@ async function processTrackerMessage(ctx, settings, chatState, deps, reason, mes
 }
 async function runTracker(ctx, deps, reason = 'manual') {
     const settings = getSettings(ctx);
+    const chat = getHostChat(ctx);
+    // P1 性能短路：轮询模式下聊天长度未变化（无新楼层/无编辑）时跳过整段 hydrate/比对，
+    // 避免每 tick 无谓的 JSON.stringify 与快照逐条比对（手动触发不短路）
+    if (reason === 'poll') {
+        const currentLength = Array.isArray(chat) ? chat.length : 0;
+        const lastProcessed = globalThis.__bs_biotracker_last_polled_length__;
+        if (typeof lastProcessed === 'number' && lastProcessed === currentLength && currentLength > 0) {
+            return { skipped: true, reason: 'no_new_messages' };
+        }
+        globalThis.__bs_biotracker_last_polled_length__ = currentLength;
+    }
     await hydrateChatStateFromHost(ctx, settings);
     await refreshHostChatView(ctx, {
         resumeIndexes: getTrackerResumeIndexes(ctx, settings),
@@ -110481,7 +110613,6 @@ async function runTracker(ctx, deps, reason = 'manual') {
     });
     const chatState = getChatState(ctx, settings);
     const registeredTargets = getRegisteredTargetNames(ctx, settings, chatState);
-    const chat = getHostChat(ctx);
     const lastMessage = chat[chat.length - 1];
     if (!lastMessage) {
         chatState.lastRawResult = {
@@ -110648,7 +110779,7 @@ const WARDROBE_DIMENSION_LABELS = Object.freeze({ masking: '掩形', support: '�
 const PREG_FIT_GAP_LABELS = Object.freeze({ masking: '掩形', support: '支撑', capacity: '容身', convenience: '便捷' });
 const MAX_PROGRESS_BAR_CAP = 200;
 // 构建时间戳（rollup replace 注入；测试/dev 环境无替换时回退 'dev'）——全局水印用，截图辨别构建
-const ACU_BUILD_STAMP = typeof "20260815-04" === 'string' ? "20260815-04" : 'dev';
+const ACU_BUILD_STAMP = typeof "20260815-06" === 'string' ? "20260815-06" : 'dev';
 const MODAL_EDGE_GAP = 24;
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const FLOATING_SPHERE_POSITION_KEY = `${MODULE_NAME}_floating_sphere_position`;
@@ -111153,7 +111284,6 @@ function writeRegistrySkillSetup(ctx) {
         const character = applyRegistrySkillSetup(chatState, targetName, parsed, report);
         recordChatStateSnapshot(ctx, chatState, { reason: 'registry_initial_skills' });
         saveSettings(ctx);
-        resetPoller(ctx, trackerDeps$1);
         renderStatusPanel(ctx);
         renderFullStatePage(ctx);
         renderSkillCatalogPage(ctx);
@@ -111295,7 +111425,6 @@ function applyWardrobePrep(ctx) {
     chatState.characters[targetName] = preparedCharacter;
     recordChatStateSnapshot(ctx, chatState, { reason: 'wardrobe_prep' });
     saveSettings(ctx);
-    resetPoller(ctx, trackerDeps$1);
     renderStatusPanel(ctx);
     renderWardrobePage(ctx);
     setWardrobePrepStatus(`已为 ${targetName} 重新套用备装；旧衣柜已由本次 JSON 覆盖。`);
@@ -111366,7 +111495,6 @@ function applyRegistryDiary(ctx) {
     }
     recordChatStateSnapshot(ctx, chatState, { reason: 'manual_diary' });
     saveSettings(ctx);
-    resetPoller(ctx, trackerDeps$1);
     renderStatusPanel(ctx);
     setDiaryStatus(`已写入 ${targetName} 的日记：${String(parsed.time || '')}`);
     globalThis.toastr?.success?.(`[BS BioTracker] 已写入 ${targetName} 的日记`);
@@ -111699,7 +111827,6 @@ function saveWorldbookExcludeNamesFromList(ctx, names) {
     syncWorldbookFilterInput(ctx);
     saveSettings(ctx);
     updateMainFlowPrompt(ctx);
-    resetPoller(ctx, trackerDeps$1);
 }
 function saveWorldbookIncludeNamesFromList(ctx, names) {
     const normalized = normalizeWorldbookNameList(names);
@@ -111708,7 +111835,6 @@ function saveWorldbookIncludeNamesFromList(ctx, names) {
     syncWorldbookFilterInput(ctx);
     saveSettings(ctx);
     updateMainFlowPrompt(ctx);
-    resetPoller(ctx, trackerDeps$1);
 }
 function saveGlobalWorldbookExcludeNamesFromList(ctx, names) {
     const normalized = normalizeWorldbookNameList(names);
@@ -111717,7 +111843,6 @@ function saveGlobalWorldbookExcludeNamesFromList(ctx, names) {
     syncWorldbookFilterInput(ctx);
     saveSettings(ctx);
     updateMainFlowPrompt(ctx);
-    resetPoller(ctx, trackerDeps$1);
 }
 function saveGlobalWorldbookIncludeNamesFromList(ctx, names) {
     const normalized = normalizeWorldbookNameList(names);
@@ -111726,7 +111851,6 @@ function saveGlobalWorldbookIncludeNamesFromList(ctx, names) {
     syncWorldbookFilterInput(ctx);
     saveSettings(ctx);
     updateMainFlowPrompt(ctx);
-    resetPoller(ctx, trackerDeps$1);
 }
 function applyWorldbookFilterSelection(ctx, entries = []) {
     latestWorldbookEntries = Array.isArray(entries) ? entries : [];
@@ -115460,7 +115584,6 @@ function applyFullStateManualEdit(ctx) {
     renderStatusPanel(ctx);
     renderFullStatePage(ctx);
     updateMainFlowPrompt(ctx);
-    resetPoller(ctx, trackerDeps$1);
     setFullStateEditStatus(`已应用 ${selectedFullStateName} 的变量修改。`, 'success');
     globalThis.toastr?.success?.(`[BS BioTracker] 已应用 ${selectedFullStateName} 的变量修改`);
 }
@@ -115618,7 +115741,6 @@ function applyFetalTalentDebugChange(ctx, action) {
     renderSkillCatalogPage(ctx);
     renderFullStatePage(ctx);
     updateMainFlowPrompt(ctx);
-    resetPoller(ctx, trackerDeps$1);
     const message = action === 'delete'
         ? `已删除胎儿 ${fetusIndex + 1} 的「${definition.name}」天赋。`
         : `已写入胎儿 ${fetusIndex + 1} 的「${definition.name}」天赋。`;
@@ -115884,7 +116006,6 @@ function applySettingsToForm(ctx) {
         openTableDetail(ctx, globalThis.__bsBtOpenTableKey__);
     }
 }
-const trackerDeps$1 = { renderStatusPanel, updateClock };
 function getWorldbookFilterSnapshot(ctx) {
     const settings = getSettings(ctx);
     const mode = normalizeWorldbookMode(settings.trackerWorldbookMode);
@@ -115901,7 +116022,6 @@ function persistWorldbookFilterIfChanged(ctx, beforeSnapshot) {
         return;
     saveSettings(ctx);
     updateMainFlowPrompt(ctx);
-    resetPoller(ctx, trackerDeps$1);
 }
 async function refreshWorldbookFilterPage(ctx) {
     const beforeSnapshot = getWorldbookFilterSnapshot(ctx);
@@ -116482,7 +116602,6 @@ function readSettingsFromForm(ctx) {
     syncRacePhysiologyOverrides(settings);
     saveSettings(ctx);
     updateMainFlowPrompt(ctx);
-    resetPoller(ctx, trackerDeps$1);
 }
 function closeModal() {
     const modal = document.getElementById(MODAL_ID);
@@ -118221,19 +118340,35 @@ async function bootstrap() {
         renderStatusPanel(ctx);
         // 纯渲染轮询：追踪核心由数据库适配层单实例驱动，面板只定时刷新视图
         if (!globalThis.__bsBtRenderTimerKey__) {
+            let lastRenderedStaticView = '';
             globalThis.__bsBtRenderTimerKey__ = setInterval(() => {
                 try {
-                    if (!document.getElementById('bs-biotracker-settings'))
+                    // H1 门控：页面隐藏（浏览器 tab 切走/最小化）或弹窗未打开时跳过，避免无谓的 DOM 全量重建
+                    if (typeof document === 'undefined' || !document.getElementById('bs-biotracker-settings'))
                         return;
-                    if (document.querySelector('#bs-bt-view-track-list')?.classList.contains('is-active'))
+                    if (document.hidden)
+                        return;
+                    const modal = document.getElementById('bs-biotracker-settings');
+                    if (modal && !modal.classList.contains('is-open') && modal.getAttribute('aria-hidden') === 'true')
+                        return;
+                    const viewActive = (selector) => document.querySelector(selector)?.classList.contains('is-active') ?? false;
+                    // track-list 是动态追踪视图（状态每轮变化），每 tick 渲染；
+                    // home/table-view 是静态列表，视图无变化时跳过（避免每 2s 全量 innerHTML 重建）
+                    if (viewActive('#bs-bt-view-track-list')) {
+                        lastRenderedStaticView = '';
                         renderStatusPanel(ctx);
-                    if (document.querySelector('#bs-bt-view-home')?.classList.contains('is-active'))
-                        renderTablePage(ctx);
-                    if (document.querySelector('#bs-bt-view-table-view')?.classList.contains('is-active')) {
-                        if (globalThis.__bsBtOpenTableKey__) {
-                            openTableDetail(ctx, globalThis.__bsBtOpenTableKey__);
-                        }
+                        return;
                     }
+                    const currentStaticView = viewActive('#bs-bt-view-home') ? 'home'
+                        : viewActive('#bs-bt-view-table-view') ? 'table-view'
+                            : '';
+                    if (currentStaticView === lastRenderedStaticView)
+                        return;
+                    lastRenderedStaticView = currentStaticView;
+                    if (currentStaticView === 'home')
+                        renderTablePage(ctx);
+                    else if (currentStaticView === 'table-view' && globalThis.__bsBtOpenTableKey__)
+                        openTableDetail(ctx, globalThis.__bsBtOpenTableKey__);
                 }
                 catch (e) { }
             }, 2000);
@@ -118262,6 +118397,15 @@ function scheduleBootstrapFallback(retries = 60) {
     };
     setTimeout(attempt, 250);
 }
+// 生命周期钩子挂载：聊天删除/新建时由适配层事件回调调用（F5）
+// 暴露给全局供 biotracker-adapter 在 chatDeleted/groupChatDeleted/chatCreated/groupChatCreated 时调用
+try {
+    globalThis.__bs_biotracker_lifecycle__ = {
+        cleanupOrphanedChatStateByKey,
+        tryInheritForkedChatState,
+    };
+}
+catch (e) { /* 挂载失败不影响面板渲染 */ }
 // 全局构建水印（右下角固定小字）：任何截图都能辨别设备实际运行的构建。
 // 角标缺失 = 设备没有加载本插件代码（缓存/CDN 旧版本）；角标时间戳旧 = 加载了旧构建。
 function installGlobalBuildBadge() {
@@ -118336,15 +118480,25 @@ function getBiotrackerSettings(ctx) {
     // 温度/max token 采用数据库保存的（选中预设时预设值优先，缺字段回退主配置）
     settings.temperature = Number.isFinite(Number(cfg.temperature)) ? Number(cfg.temperature) : Number(mainCfg.temperature);
     settings.maxTokens = Number.isFinite(Number(cfg.max_tokens)) ? Number(cfg.max_tokens) : Number(mainCfg.max_tokens);
-    // 每轮追踪分析的世界书 = 固有的蓝灯（constant 条目）+ 数据库 agent 正文放行的绿灯（readFinalGenerationGreenlights_ACU）
-    // （注册流程走 registry 自己的世界书逻辑，保持插件主流模式，不受此模式影响）
-    settings.trackerWorldbookMode = 'agent_greenlights';
-    try {
-        const greenlights = readFinalGenerationGreenlights_ACU();
-        settings.agentGreenlightUids = Array.isArray(greenlights) ? greenlights.map((g) => String(g?.uid || '')).filter(Boolean) : [];
+    // 世界书模式（F6）：
+    // - agent 世界书接管开启（plotSettings.agentWorldbookControl.enabled===true 且 mode==='agent'）时：
+    //   追踪世界书 = 蓝灯（constant 恒常条目）+ agent 正文放行的绿灯（readFinalGenerationGreenlights_ACU）
+    // - 未开启 agent 时：走插件主流模式（mainflow：关键词命中+恒常条目正常触发，用户可在设置页配 exclude/include）
+    const agentControl = settings_ACU.plotSettings?.agentWorldbookControl;
+    const agentModeOn = agentControl?.enabled === true && agentControl?.mode === 'agent';
+    if (agentModeOn) {
+        settings.trackerWorldbookMode = 'agent_greenlights';
+        try {
+            const greenlights = readFinalGenerationGreenlights_ACU();
+            settings.agentGreenlightUids = Array.isArray(greenlights) ? greenlights.map((g) => String(g?.uid || '')).filter(Boolean) : [];
+        }
+        catch (e) {
+            logWarn_ACU('[生理追踪] 读取 agent 放行世界书失败:', e);
+            settings.agentGreenlightUids = [];
+        }
     }
-    catch (e) {
-        logWarn_ACU('[生理追踪] 读取 agent 放行世界书失败:', e);
+    else {
+        settings.trackerWorldbookMode = String(settings.trackerWorldbookMode || 'mainflow');
         settings.agentGreenlightUids = [];
     }
     return settings;
@@ -118379,12 +118533,26 @@ function installBiotrackerConsoleBridge() {
     consoleBridgeInstalled = true;
     const BIOTRACKER_LOG_PREFIX = '[BS BioTracker]';
     globalThis.__bs_biotracker_debug_api_probe__ = () => isDebugLogEnabled();
-    // API 采样参数兜底：vendor 每次 API 调用时读取数据库当前配置（温度/max token），
-    // 保证追踪/注册内部直连调用（不经适配层同步）也采用数据库设置
-    globalThis.__bs_biotracker_api_probe__ = () => ({
-        temperature: Number.isFinite(Number(settings_ACU.apiConfig?.temperature)) ? Number(settings_ACU.apiConfig.temperature) : undefined,
-        maxTokens: Number.isFinite(Number(settings_ACU.apiConfig?.max_tokens)) ? Number(settings_ACU.apiConfig.max_tokens) : undefined,
-    });
+    // API 配置探针：vendor 每次 API 调用时读取数据库当前配置（url/apiKey/model/温度/max token），
+    // 保证追踪/注册内部直连调用（不经适配层同步）也采用最新数据库设置（F4：运行中改配置即时生效）
+    globalThis.__bs_biotracker_api_probe__ = () => {
+        const presetName = String(settings_ACU.bs_biotracker?.apiPreset || '').trim();
+        let cfg = null;
+        try {
+            const resolved = presetName ? resolveApiConfigByPreset_ACU(presetName) : null;
+            cfg = resolved?.apiConfig || settings_ACU.apiConfig || {};
+        }
+        catch (e) {
+            cfg = settings_ACU.apiConfig || {};
+        }
+        return {
+            apiUrl: cfg.url || settings_ACU.apiConfig?.url || '',
+            apiKey: cfg.apiKey || settings_ACU.apiConfig?.apiKey || '',
+            model: cfg.model || settings_ACU.apiConfig?.model || '',
+            temperature: Number.isFinite(Number(cfg.temperature)) ? Number(cfg.temperature) : undefined,
+            maxTokens: Number.isFinite(Number(cfg.max_tokens)) ? Number(cfg.max_tokens) : undefined,
+        };
+    };
     // 非预填充探针：生理追踪专用预设（bs_biotracker.apiPreset）的 nonPrefillSupport 优先，
     // 未选预设时回退全局 settings_ACU.nonPrefillSupport（vendor 直连调用同样生效）
     globalThis.__bs_biotracker_non_prefill_probe__ = () => {
@@ -118409,9 +118577,13 @@ function installBiotrackerConsoleBridge() {
         }
         catch (e) { /* 桥接失败不影响原 console */ }
     };
-    console.warn = bridge('warn')(console.warn.bind(console));
-    console.error = bridge('error')(console.error.bind(console));
-    console.log = bridge('debug')(console.log.bind(console));
+    // 幂等：标记避免重复包装（init 重入/热重载时不叠加多层代理）
+    if (!globalThis.__bs_biotracker_console_bridged__) {
+        globalThis.__bs_biotracker_console_bridged__ = true;
+        console.warn = bridge('warn')(console.warn.bind(console));
+        console.error = bridge('error')(console.error.bind(console));
+        console.log = bridge('debug')(console.log.bind(console));
+    }
 }
 /** 构造 biotracker 宿主上下文（每次调用取当前运行态） */
 function createBiotrackerCtx_ACU() {
@@ -118420,7 +118592,11 @@ function createBiotrackerCtx_ACU() {
     return {
         extensionSettings,
         saveSettingsDebounced: scheduleSettingsSave,
-        chat: Array.isArray(allChatMessages_ACU) ? allChatMessages_ACU : [],
+        // chat 用 getter：每次读取取最新 allChatMessages_ACU 引用，
+        // 避免 resetPoller 闭包捕获旧数组导致同聊天内新楼层轮询读不到（F1）
+        get chat() {
+            return Array.isArray(allChatMessages_ACU) ? allChatMessages_ACU : [];
+        },
         characters: Array.isArray(host?.characters) ? host.characters : [],
         chatId: String(currentChatFileIdentifier_ACU || ''),
         getCurrentChatId: () => String(currentChatFileIdentifier_ACU || ''),
@@ -118440,7 +118616,18 @@ function createBiotrackerCtx_ACU() {
                 return null;
             }
         },
-        setExtensionPrompt: () => { },
+        setExtensionPrompt: (key, text, position, budget) => {
+            // 主流程提示注入：宿主（SillyTavern）支持 setExtensionPrompt 时透传，否则 no-op
+            try {
+                const stCtx = host || globalThis.SillyTavern?.getContext?.() || null;
+                if (stCtx && typeof stCtx.setExtensionPrompt === 'function') {
+                    stCtx.setExtensionPrompt(key, text, position, budget, false);
+                }
+            }
+            catch (e) {
+                logWarn_ACU('[生理追踪] setExtensionPrompt 失败:', e);
+            }
+        },
         getContext: () => host,
     };
 }
@@ -118577,8 +118764,8 @@ function initBiotracker_ACU() {
     try {
         const ctx = createBiotrackerCtx_ACU();
         const settings = getBiotrackerSettings(ctx);
-        // 恒字系列强制（异步追踪恒开启/after_ai/完整更新/格式化输出/json）
-        settings.enabled = true;
+        // 恒字系列强制（开启时 after_ai/完整更新/格式化输出/json）——但不强制 enabled：
+        // enabled 尊重用户开关（高级设置「生理追踪」总开关），关闭后重启不会自动开启（F2）
         settings.triggerTiming = 'after_ai';
         settings.requireFullDescriptionUpdates = true;
         settings.formattedOutputV4 = true;
@@ -118610,6 +118797,36 @@ function initBiotracker_ACU() {
                     logWarn_ACU('[生理追踪] 自动注册调度失败:', e);
                 }
             });
+        }
+        // 订阅聊天生命周期（F5）：删除聊天清理孤儿 chatStates、新建聊天继承 fork 状态
+        // panel 侧 cleanupOrphanedChatStateByKey/tryInheritForkedChatState 经全局生命周期钩子调用
+        const lifecycle = () => globalThis.__bs_biotracker_lifecycle__;
+        const safeLifecycleCall = (handlerName, ...args) => {
+            try {
+                const hooks = lifecycle();
+                if (hooks && typeof hooks[handlerName] === 'function') {
+                    const panelCtx = createBiotrackerCtx_ACU();
+                    hooks[handlerName](panelCtx, ...args);
+                }
+            }
+            catch (e) {
+                logWarn_ACU(`[生理追踪] 生命周期处理失败（${handlerName}）:`, e);
+            }
+        };
+        if (eventSource && typeof eventSource.on === 'function') {
+            const deletedType = ctx.event_types?.CHAT_DELETED || ctx.event_types?.chatDeleted;
+            if (deletedType) {
+                eventSource.on(deletedType, (payload) => {
+                    try {
+                        const chatKey = String((payload && typeof payload === 'object' && payload.chatId !== undefined) ? payload.chatId : '').trim();
+                        if (chatKey)
+                            safeLifecycleCall('cleanupOrphanedChatStateByKey', chatKey, 'chat_deleted');
+                    }
+                    catch (e) {
+                        logWarn_ACU('[生理追踪] CHAT_DELETED 处理失败:', e);
+                    }
+                });
+            }
         }
         logDebug_ACU('[生理追踪] 初始化完成，已注册角色数:', Object.keys(getChatState(ctx, settings).characters || {}).length);
         // 生理追踪恒开启 → 默认出现悬浮窗（biotracker 前端弹窗，纯渲染）
@@ -119956,6 +120173,7 @@ async function rerankCandidates_ACU(config, query, candidates) {
         };
         if (instruction)
             body.instruction = instruction;
+        assertSafeHttpEndpoint_ACU(endpoint);
         const response = await fetch(endpoint, {
             method: 'POST',
             headers,
@@ -165202,6 +165420,9 @@ function useBiotrackerPage() {
         apiStore.refreshFromSettings();
         refreshCharacters();
         timer = setInterval(() => {
+            // P4 门控：页面不可见（tab 切走/最小化）时跳过轮询，避免无谓的聚合重建
+            if (typeof document === 'undefined' || document.hidden)
+                return;
             refreshCharacters();
         }, 3000);
     });
