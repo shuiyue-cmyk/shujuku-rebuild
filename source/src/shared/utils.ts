@@ -352,3 +352,63 @@ export   function cloneScopedConfigData_ACU(value: any, fallback: any = null) {
     const name = String(entry.comment || entry.name || '');
     return blockedKeywords.some(keyword => name.includes(keyword));
   }
+
+  /**
+   * SSRF 防护：校验 HTTP 端点（embedding/rerank 等用户可配置的直连端点）。
+   * 仅放行 http(s)；http:// 仅允许 localhost/回环；私网/环回/链路本地/保留 IP 一律拒绝
+   * （云元数据 169.254.169.254、内网 10.x/192.168.x、0.0.0.0 等）。
+   */
+  function isPrivateNetworkHost_ACU(host: string): boolean {
+    if (!/^[\d.]+$/.test(host) && !/^[0-9a-f:]+$/i.test(host)) return false; // 域名放行
+    if (host.includes(':')) {
+      if (host === '::1' || host === '::') return true;
+      const first = host.split(':')[0].toLowerCase();
+      if (first === 'fe80' || first === 'feb0' || first === 'fe90' || first === 'fea0' || first === 'feb1' || first === 'feb2' || first === 'feb3' || first === 'feb4' || first === 'feb5' || first === 'feb6' || first === 'feb7' || first === 'feb8' || first === 'feb9' || first === 'feba' || first === 'febb' || first === 'febc' || first === 'febd' || first === 'febe' || first === 'febf') return true;
+      if (first === 'fc' || first === 'fd') return true;
+      return false;
+    }
+    const parts = host.split('.').map((n) => Number(n));
+    if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
+    const [a, b] = parts;
+    if (a === 10) return true;
+    if (a === 127) return true;
+    if (a === 169 && b === 254) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 0) return true;
+    if (a >= 224) return true;
+    return false;
+  }
+
+  export function assertSafeHttpEndpoint_ACU(endpoint: string): void {
+    const raw = String(endpoint || '').trim();
+    if (!raw) throw new Error('端点地址为空。');
+    if (!/^https?:/i.test(raw)) {
+      // 相对路径放行（同源）；显式危险 scheme 拒绝
+      const schemeMatch = raw.match(/^([a-z][a-z0-9+.-]*):/i);
+      if (schemeMatch) {
+        const scheme = schemeMatch[1].toLowerCase();
+        const rest = raw.slice(schemeMatch[0].length);
+        const isPortOnly = /^\d+$/.test(rest);
+        const dangerous = ['file', 'gopher', 'ftp', 'javascript', 'data', 'vbscript', 'jar', 'ws', 'wss'];
+        if (!isPortOnly && dangerous.includes(scheme)) {
+          throw new Error('端点仅支持 http:// 或 https://，其他协议一律拒绝。');
+        }
+      }
+      return;
+    }
+    let url: URL;
+    try {
+      url = new URL(raw);
+    } catch (e) {
+      throw new Error('端点地址无法解析。');
+    }
+    const host = url.hostname.replace(/^\[|\]$/g, '');
+    if (url.protocol === 'http:' && !['localhost', '127.0.0.1', '::1'].includes(host)) {
+      throw new Error('端点使用 http:// 时仅允许 localhost；远程地址请使用 https://。');
+    }
+    const numericHost = host.replace(/^::ffff:/, '').toLowerCase();
+    if (isPrivateNetworkHost_ACU(numericHost) && !['localhost', '127.0.0.1', '::1'].includes(numericHost)) {
+      throw new Error('端点指向私网/环回/链路本地地址，存在 SSRF 风险，请使用公网 https 地址。');
+    }
+  }

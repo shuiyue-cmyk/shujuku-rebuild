@@ -1,4 +1,5 @@
 import { getHostRequestHeaders_ACU } from './ai-gateway';
+import { assertSafeHttpEndpoint_ACU } from '../../shared/utils';
 
 export interface VectorRerankResult_ACU {
     index: number;
@@ -89,6 +90,7 @@ export async function createRerankScores_ACU(request: VectorRerankRequest_ACU): 
     const payload: Record<string, any> = { model, query, documents };
     if (instruction) payload.instruction = instruction;
 
+    assertSafeHttpEndpoint_ACU(endpoint);
     const response = await fetch(endpoint, {
         method: 'POST',
         headers: buildRerankHeaders_ACU(request.apiKey),

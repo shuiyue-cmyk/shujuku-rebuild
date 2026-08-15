@@ -77,6 +77,7 @@ import {
     findSummaryTable_ACU,
     type SummaryVectorArchivePreparedRow_ACU,
 } from './summary-vector-index-archive-service';
+import { assertSafeHttpEndpoint_ACU } from '../../shared/utils';
 
 interface SummaryVectorIndexRuntimeOptions_ACU {
     userInput?: string;
@@ -245,6 +246,7 @@ async function rerankCandidates_ACU(config: any, query: string, candidates: Rank
             documents: candidates.map((candidate) => candidate.chunk.text),
         };
         if (instruction) body.instruction = instruction;
+        assertSafeHttpEndpoint_ACU(endpoint);
         const response = await fetch(endpoint, {
             method: 'POST',
             headers,

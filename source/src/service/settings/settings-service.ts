@@ -237,6 +237,40 @@ function relaxStoredOriginalDefaultDdls_ACU(templateObj: any): boolean {
   return changed;
 }
 
+/** R1：settings 日志脱敏摘要——仅暴露少量结构信息，所有 apiKey/密钥字段一律掩码 */
+function maskSecret_ACU(value: unknown): string {
+  if (typeof value !== 'string' || !value) return String(value ?? '');
+  if (value.length <= 8) return '***';
+  return `${value.slice(0, 3)}***${value.slice(-3)}`;
+}
+
+function summarizeSettingsForLog_ACU(settings: any): Record<string, any> {
+  if (!settings || typeof settings !== 'object') return {};
+  const safe: Record<string, any> = {
+    apiMode: settings.apiMode,
+    streamingEnabled: settings.streamingEnabled === true,
+    nonPrefillSupport: settings.nonPrefillSupport === true,
+    plotEnabled: settings.plotSettings?.enabled === true,
+    storageMode: settings.storageMode,
+  };
+  if (settings.apiConfig) {
+    safe.apiConfig = {
+      url: typeof settings.apiConfig.url === 'string' ? settings.apiConfig.url : '',
+      model: typeof settings.apiConfig.model === 'string' ? settings.apiConfig.model : '',
+      apiKey: maskSecret_ACU(settings.apiConfig.apiKey),
+    };
+  }
+  if (Array.isArray(settings.apiPresets)) {
+    safe.apiPresets = settings.apiPresets.map((p: any) => ({
+      name: p?.name,
+      apiKey: maskSecret_ACU(p?.apiKey),
+      model: p?.model,
+      url: p?.url,
+    }));
+  }
+  return safe;
+}
+
 export function saveSettings_ACU(): SaveSettingsResult_ACU {
   if (!settingsStorageReadyForSave_ACU) {
       if (isIndexedDbAvailable_ACU() && !configIdbCacheLoaded_ACU) {
@@ -621,7 +655,8 @@ export   function loadSettings_ACU() {
           persistSettingsToStorage_ACU(settings_ACU, activeCode);
           logDebug_ACU(`[API绑定] 已把当前聊天绑定投影到运行配置: ${bound.presetName}`);
       }
-      logDebug_ACU('Settings loaded:', settings_ACU);
+      // R1：日志脱敏——settings 含 apiKey/apiPresets key，不整对象打印，仅打脱敏摘要
+      logDebug_ACU('Settings loaded:', summarizeSettingsForLog_ACU(settings_ACU));
   }
 
   // loadSettingsAndRefreshUI_ACU 已搬到 presentation/components/settings-ui-helpers.ts

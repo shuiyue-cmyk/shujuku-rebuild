@@ -1,6 +1,7 @@
+import { assertSafeHttpEndpoint_ACU } from '../../shared/utils';
+
 export type VectorEmbeddingErrorKind_ACU =
     | 'credential' | 'request' | 'provider-contract' | 'retryable' | 'limited-retryable';
-
 export interface VectorEmbeddingRequest_ACU {
     endpoint: string;
     apiKey?: string;
@@ -158,12 +159,12 @@ export async function createEmbeddings_ACU(request: VectorEmbeddingRequest_ACU):
     if (apiKey) {
         headers.Authorization = `Bearer ${apiKey}`;
     }
+    assertSafeHttpEndpoint_ACU(endpoint);
     const response = await fetch(endpoint, {
         method: 'POST',
         headers,
         body: JSON.stringify({ model, input }),
-    });
-    if (!response.ok) {
+    });    if (!response.ok) {
         await throwEmbeddingHttpErrorAsync_ACU(response, endpoint, model);
     }
     const payload = await response.json();
