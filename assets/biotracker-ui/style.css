@@ -705,7 +705,7 @@
 
 #bs-biotracker-settings .bs-bt-menu-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 6px 8px;
   margin-top: 0;
 }
@@ -1159,7 +1159,7 @@
 
 #bs-biotracker-settings #bs-bt-view-home .bs-bt-menu-grid {
   height: auto;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   grid-template-rows: auto;
   align-content: start;
 }

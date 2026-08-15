@@ -47,6 +47,10 @@
                 <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--dna" aria-hidden="true"></span>
                 <span class="bs-bt-home-tile__label">百科</span>
               </button>
+              <button class="bs-bt-home-tile" type="button" data-nav-view="skill-catalog">
+                <span class="bs-bt-home-tile__icon bs-bt-home-tile__icon--skill" aria-hidden="true"></span>
+                <span class="bs-bt-home-tile__label">技能</span>
+              </button>
             </div>
             <div class="bs-bt-home-section-title">数据库表格</div>
             <div id="bs-bt-home-tables" class="bs-bt-home-tables">加载中…</div>
@@ -300,6 +304,36 @@
               <div class="bs-bt-status-title">衍生资料</div>
               <pre id="bs-bt-derived-output" class="bs-bt-status-box">请选择衍生查看 Flux 资料。</pre>
             </div>
+            </div>
+          </div>
+        </section>
+        <section id="bs-bt-view-skill-catalog" class="bs-bt-view" data-view="skill-catalog">
+          <div class="bs-bt-panel">
+            <div id="bs-bt-skill-catalog-overview">
+              <div id="bs-bt-skill-catalog-list" class="bs-bt-skill-catalog-list"></div>
+
+              <hr class="sysHR" />
+
+              <div class="settings_section bs-bt-skill-definition-form">
+                <div class="bs-bt-section-title">新增技能</div>
+                <label for="bs-bt-skill-definition-name">技能名称</label>
+                <input id="bs-bt-skill-definition-name" class="text_pole" type="text" placeholder="例如：NTR" />
+                <label for="bs-bt-skill-definition-description">定义描述</label>
+                <textarea id="bs-bt-skill-definition-description" class="text_pole bs-bt-textarea" rows="4" placeholder="新增技能必须提供清楚且稳定的定义。"></textarea>
+                <button id="bs-bt-skill-definition-add" class="menu_button" type="button">新增技能</button>
+              </div>
+
+              <div id="bs-bt-skill-catalog-status" class="bs-bt-inline-status"></div>
+            </div>
+
+            <div id="bs-bt-skill-definition-detail" hidden>
+              <div class="settings_section bs-bt-skill-detail-head">
+                <button id="bs-bt-skill-detail-back" class="menu_button" type="button">返回技能列表</button>
+                <div id="bs-bt-skill-detail-title" class="bs-bt-section-title"></div>
+                <div id="bs-bt-skill-detail-description"></div>
+              </div>
+              <div id="bs-bt-skill-detail-characters" class="bs-bt-skill-detail-characters"></div>
+              <div id="bs-bt-character-skill-status" class="bs-bt-inline-status"></div>
             </div>
           </div>
         </section>

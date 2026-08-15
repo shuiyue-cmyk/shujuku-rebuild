@@ -1704,8 +1704,11 @@ export function applyRegistrySkillSetup(chatState, targetName, result, report = 
     ? childSource.inheritedTalents
     : (resolvedChildSource?.child?.talents ?? workingState.characters[name]?.profile?.talents);
   const inheritedTalents = normalizeTalentList(inheritedTalentSource);
+  // 用户拍板（2026-08-14）：注册时只落地天赋，技能不预置——技能完全交给追踪时
+  // AI 依剧情自动 bsRegisterSkillDefinition + bsTrainSkill 发现登记（避免注册生成的
+  // 初始技能与追踪发现重复/漂移）。技能定义（skillDefinitions）仍登记进图鉴供追踪引用。
   let character = applyInitialSkillTalentConfig(workingState, name, {
-    skills: initialSkills,
+    skills: [],
     talents: initialTalents,
   }, report);
   if (childSource) {
