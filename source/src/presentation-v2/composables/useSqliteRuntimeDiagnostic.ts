@@ -66,7 +66,13 @@ export function useSqliteRuntimeDiagnostic() {
   }
 
   onMounted(() => {
-    timer = setInterval(refresh, HEALTH_REFRESH_INTERVAL_MS);
+    timer = setInterval(() => {
+      // 可见性门控（与 C11 一致）：页面隐藏或应用根容器被关闭时跳过轮询
+      if (typeof document === 'undefined' || document.hidden) return;
+      const rootEl = document.getElementById('acu-app-v2');
+      if (rootEl && rootEl.style.display === 'none') return;
+      refresh();
+    }, HEALTH_REFRESH_INTERVAL_MS);
   });
   onUnmounted(() => {
     if (timer !== undefined) clearInterval(timer);

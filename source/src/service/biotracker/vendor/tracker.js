@@ -1230,14 +1230,15 @@ export async function runTracker(ctx, deps, reason = 'manual') {
   const settings = getSettings(ctx);
   const chat = getHostChat(ctx);
   // P1 性能短路：轮询模式下聊天长度未变化（无新楼层/无编辑）时跳过整段 hydrate/比对，
-  // 避免每 tick 无谓的 JSON.stringify 与快照逐条比对（手动触发不短路）
+  // 避免每 tick 无谓的 JSON.stringify 与快照逐条比对（手动触发不短路）。
+  // 注意：标记只在「真正进入分析」时更新——若因 after_ai 未settled/MVU 等待等
+  // skip 分支提前返回，标记保持旧值，下一轮仍会重查（否则新 AI 楼会被永久短路）。
   if (reason === 'poll') {
     const currentLength = Array.isArray(chat) ? chat.length : 0;
     const lastProcessed = globalThis.__bs_biotracker_last_polled_length__;
     if (typeof lastProcessed === 'number' && lastProcessed === currentLength && currentLength > 0) {
       return { skipped: true, reason: 'no_new_messages' };
     }
-    globalThis.__bs_biotracker_last_polled_length__ = currentLength;
   }
   await hydrateChatStateFromHost(ctx, settings);
   await refreshHostChatView(ctx, {
@@ -1328,6 +1329,10 @@ export async function runTracker(ctx, deps, reason = 'manual') {
     return { skipped: true, reason: 'failed_message_blocked' };
   }
   const runToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  // P1：真正进入分析才更新长度标记（所有 skip 分支不更新，下一轮会重查）
+  if (reason === 'poll') {
+    globalThis.__bs_biotracker_last_polled_length__ = Array.isArray(chat) ? chat.length : 0;
+  }
   globalThis[RUN_RUNTIME_KEY] = runToken;
   markTrackerRunProgress();
   try {

@@ -220,6 +220,7 @@ import {
       timeOut: 10000,
       extendedTimeOut: 3000,
       tapToDismiss: false,
+      escapeHtml: false,
       onShown: function() {
         jQuery_API_ACU('#acu-opt-toast-reoptimize').off('click.acu_reopt').on('click.acu_reopt', async function(e) {
           e.preventDefault();

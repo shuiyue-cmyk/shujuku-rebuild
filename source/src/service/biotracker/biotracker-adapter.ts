@@ -366,6 +366,8 @@ export function initBiotracker_ACU(): void {
           const nextSettings = getSettings(nextCtx);
           getChatState(nextCtx, nextSettings);
           syncPoller();
+          // F5：切换聊天时尝试继承 fork 聊天状态（原聊天删除/改名后保留追踪数据）
+          safeLifecycleCall('tryInheritForkedChatState', 'chat_changed');
         } catch (e) {
           logWarn_ACU('[生理追踪] CHAT_CHANGED 处理失败:', e);
         }
@@ -401,7 +403,11 @@ export function initBiotracker_ACU(): void {
       if (deletedType) {
         eventSource.on(deletedType, (payload: any) => {
           try {
-            const chatKey = String((payload && typeof payload === 'object' && payload.chatId !== undefined) ? payload.chatId : '').trim();
+            // ST chatDeleted 可能传字符串 chatId，也可能是 { chatId } 对象——两者都支持
+            const rawChatId = typeof payload === 'string'
+              ? payload
+              : (payload && typeof payload === 'object' && payload.chatId !== undefined ? payload.chatId : '');
+            const chatKey = String(rawChatId || '').trim();
             if (chatKey) safeLifecycleCall('cleanupOrphanedChatStateByKey', chatKey, 'chat_deleted');
           } catch (e) { logWarn_ACU('[生理追踪] CHAT_DELETED 处理失败:', e); }
         });

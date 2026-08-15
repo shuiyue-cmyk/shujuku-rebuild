@@ -1560,14 +1560,14 @@ export function buildRegistrySkillSystemPrompt(options = {}) {
     inheritedTalentsLocked ? 'payload.existing_skill_setup.talents 是孩子出生后保留的既有天赋，属于固定继承内容。必须参考它们配置技能，不得在 initialTalents 中输出同一技能的不同等级、方向或经验。' : '',
     '没有充分依据的项目不要添加；不得把性格、身体状态或一次性事件滥列为技能。',
     skillPrompt ? '严格参考 payload.initial_skill_prompt 的额外要求。' : '用户没有提供额外要求，请仅依现有角色资料谨慎判断。',
-    '输出前请逐条自检：initialSkills 与 initialTalents 里的每一个 skill，都必须能在 payload.skill_catalog 或本次 skillDefinitions 中找到完全相同的名称。'
+    '输出前请逐条自检：initialTalents 里的每一个 skill，都必须能在 payload.skill_catalog 或本次 skillDefinitions 中找到完全相同的名称。'
       + '对不上的条目会被系统丢弃，请在输出前补上定义或删掉该条目。',
     '只输出 JSON，不要输出解释或 Markdown。结构必须是：',
     '{',
     '  "skillDefinitions": [{"name":"string","description":"string"}],',
-    '  "initialSkills": [{"skill":"技能精确名称或ID","level":1,"exp":0}],',
     '  "initialTalents": [{"skill":"技能精确名称或ID","level":0,"exp":0}]',
     '}',
+    '说明：技能不在此处注册到角色——角色技能由后续剧情追踪时按实际运用自动发现登记。本步骤只产出技能定义（供图鉴）与先天天赋。',
     '没有项目的数组也必须输出为空数组。',
   ].join('\n');
 }

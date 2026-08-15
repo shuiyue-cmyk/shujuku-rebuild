@@ -46,6 +46,8 @@ function isSafeDbExpression_ACU(expr: string): boolean {
   const trimmed = expr.trim();
   if (!trimmed.startsWith('db.')) return false;
   const sanitized = trimmed.replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"/g, '""');
+  // 全局正则 .test() 有 lastIndex 状态：每次测试前重置，避免上次匹配末尾导致后续表达式绕过黑名单
+  DB_EXPR_BLACKLIST_RE_ACU.lastIndex = 0;
   if (DB_EXPR_BLACKLIST_RE_ACU.test(sanitized)) return false;
   return DB_EXPR_CHAIN_RE_ACU.test(sanitized) || DB_EXPR_WITH_COMPARE_RE_ACU.test(sanitized);
 }

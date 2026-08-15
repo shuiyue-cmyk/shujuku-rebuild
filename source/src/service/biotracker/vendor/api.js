@@ -773,7 +773,7 @@ async function requestChatCompletion(apiBase, settings, body, runContext = {}) {
     // 默认关闭：全量 request/response（含聊天/角色态）只会在显式开启调试时落 console，
     // 避免无条件泄露（网络面审查 P3）。开启：控制台执行 globalThis.__bs_biotracker_debug_api__ = true
     // 数据库插件：适配层注入 __bs_biotracker_debug_api_probe__（读取数据库 debug 采集开关）联动开启
-    if (!globalThis.__bs_biotracker_debug_api__ && !(typeof globalThis.__bs_biotracker_debug_api_probe__ === 'function' && globalThis.__bs_biotracker_debug_api_probe__())) return;
+    if (!globalThis.__bs_biotracker_debug_api__ && !safeProbeCall('__bs_biotracker_debug_api_probe__')) return;
     try {
       const label = `[BS BioTracker][API debug] ${phase}`;
       if (typeof console.groupCollapsed === 'function') console.groupCollapsed(label);
@@ -1145,9 +1145,7 @@ export async function callOpenAICompatible(settings, payload, systemPrompt = DEF
   // 聊天变更中止：删楼/ROLL/切聊天（CHAT_CHANGED）时数据库 abortOnChatMutation_ACU
   // 会 abort 全局信号 → 这里转发中止本轮全部在飞子请求（fetchText 已支持 externalSignal）。
   // 每次请求取最新 signal（abortOnChatMutation 会轮换旧 controller）。
-  const chatMutationSignal = (typeof globalThis.__bs_biotracker_chat_mutation_abort_signal__ === 'function')
-    ? globalThis.__bs_biotracker_chat_mutation_abort_signal__()
-    : null;
+  const chatMutationSignal = safeProbeCall('__bs_biotracker_chat_mutation_abort_signal__');
   let onChatMutationAbort = null;
   if (overallController && chatMutationSignal) {
     if (chatMutationSignal.aborted) {

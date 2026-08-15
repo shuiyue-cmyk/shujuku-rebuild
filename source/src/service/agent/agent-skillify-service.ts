@@ -244,9 +244,16 @@ async function skillifySingleEntry_ACU(
   let lastReason = 'AI 未返回内容';
   let meta: Pick<WorldbookSkillMeta_ACU, 'description' | 'triggerWhen' | 'tk'> | null = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const response = await callAIWithPreset_ACU(messages, presetName);
+    let response: string | null = null;
+    try {
+      response = await callAIWithPreset_ACU(messages, presetName);
+    } catch (e: any) {
+      // 单条网络/配置失败不中断整批：记录 reason 进入下一轮尝试
+      lastReason = `AI 调用失败：${e?.message || e}`;
+      response = null;
+    }
     if (!response) {
-      lastReason = 'AI 未返回内容';
+      lastReason = lastReason || 'AI 未返回内容';
     } else {
       meta = parseAgentSkillifyResponse_ACU(response, summary.tk);
       if (meta) break;

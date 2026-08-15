@@ -2146,11 +2146,9 @@ export async function applySqlEditsToTableDataSnapshot_ACU(
   tableData: TableDataObject_ACU,
   _updateMode?: string,
   operationOptions: SnapshotSqlOperationOptions_ACU = {},
-  reuseEngine?: SqliteEngine,
 ): Promise<SnapshotSqlApplyResult_ACU> {
-  const engine = reuseEngine ?? new SqliteEngine();
+  const engine = new SqliteEngine();
   const syncBridge = new SyncBridge(engine);
-  const ownsEngine = !reuseEngine;
   try {
     const cleaned = sqlStatements.replace(/<!--|-->/g, '').trim();
     if (!cleaned) {
@@ -2171,8 +2169,7 @@ export async function applySqlEditsToTableDataSnapshot_ACU(
       { requireKnownTables, requireKnownInsertColumns: true },
     );
     const statements = materializeSystemRowIdsForSqlInserts_ACU(reboundStatements, snapshotCopy);
-    if (ownsEngine) await engine.init();
-    else if (!engine.isReady) await engine.init();
+    await engine.init();
     syncBridge.loadFromTableData(snapshotCopy, { strict: true });
     engine.runBatch(statements);
 
@@ -2200,7 +2197,7 @@ export async function applySqlEditsToTableDataSnapshot_ACU(
     logError_ACU(`[SqlTableService] 快照 SQL 执行失败: ${errMsg}`);
     return { success: false, modifiedKeys: [], appliedEdits: 0, error: errMsg };
   } finally {
-    if (ownsEngine) engine.dispose();
+    engine.dispose();
   }
 }
 

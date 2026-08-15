@@ -5,6 +5,7 @@
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { settings_ACU, currentChatFileIdentifier_ACU } from '../../service/runtime/state-manager';
 import { saveSettings_ACU } from '../../service/settings/settings-service';
+import { useChatChangedTick } from './useChatChangedListener';
 import {
   isAutoRegisterEnabled_ACU,
   setAutoRegisterEnabled_ACU,
@@ -108,7 +109,10 @@ export function useBiotrackerPage() {
   });
 
   // 切换聊天 → 恢复该聊天的草稿（无草稿的新聊天回初始状态）
-  watch(currentChatKey, () => {
+  // 源用 useChatChangedTick（响应式计数器，CHAT_CHANGED 延迟刷新后 +1），
+  // 而非读普通变量 currentChatFileIdentifier_ACU（Vue 无法追踪，永不触发）
+  const chatChangedTick = useChatChangedTick();
+  watch(chatChangedTick, () => {
     const draft = getRegDraft();
     registerName.value = String(draft.name || '');
     registerRace.value = String(draft.race || '');

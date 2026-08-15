@@ -54786,10 +54786,9 @@ async function applyParameterizedSqlMutationToTableDataSnapshot_ACU(sql, params,
         engine.dispose();
     }
 }
-async function applySqlEditsToTableDataSnapshot_ACU(sqlStatements, tableData, _updateMode, operationOptions = {}, reuseEngine) {
-    const engine = reuseEngine ?? new SqliteEngine();
+async function applySqlEditsToTableDataSnapshot_ACU(sqlStatements, tableData, _updateMode, operationOptions = {}) {
+    const engine = new SqliteEngine();
     const syncBridge = new SyncBridge(engine);
-    const ownsEngine = !reuseEngine;
     try {
         const cleaned = sqlStatements.replace(/<!--|-->/g, '').trim();
         if (!cleaned) {
@@ -54803,10 +54802,7 @@ async function applySqlEditsToTableDataSnapshot_ACU(sqlStatements, tableData, _u
         const requireKnownTables = operationOptions.requireSheetScopedOperations === true;
         const reboundStatements = rebindSqlMutationIdentifiers_ACU(rawStatements.map(stmt => normalizeStatementValues(normalizeSqlStructure(stmt))), snapshotCopy, undefined, { requireKnownTables, requireKnownInsertColumns: true });
         const statements = materializeSystemRowIdsForSqlInserts_ACU(reboundStatements, snapshotCopy);
-        if (ownsEngine)
-            await engine.init();
-        else if (!engine.isReady)
-            await engine.init();
+        await engine.init();
         syncBridge.loadFromTableData(snapshotCopy, { strict: true });
         engine.runBatch(statements);
         const workingData = syncBridge.exportToTableData(resolveSnapshotMate_ACU(snapshotCopy), { strict: true });
@@ -54833,8 +54829,7 @@ async function applySqlEditsToTableDataSnapshot_ACU(sqlStatements, tableData, _u
         return { success: false, modifiedKeys: [], appliedEdits: 0, error: errMsg };
     }
     finally {
-        if (ownsEngine)
-            engine.dispose();
+        engine.dispose();
     }
 }
 // ═══════════════════════════════════════════════════════════════
@@ -55803,6 +55798,8 @@ function isSafeDbExpression_ACU(expr) {
     if (!trimmed.startsWith('db.'))
         return false;
     const sanitized = trimmed.replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"/g, '""');
+    // 全局正则 .test() 有 lastIndex 状态：每次测试前重置，避免上次匹配末尾导致后续表达式绕过黑名单
+    DB_EXPR_BLACKLIST_RE_ACU.lastIndex = 0;
     if (DB_EXPR_BLACKLIST_RE_ACU.test(sanitized))
         return false;
     return DB_EXPR_CHAIN_RE_ACU.test(sanitized) || DB_EXPR_WITH_COMPARE_RE_ACU.test(sanitized);
@@ -60146,9 +60143,17 @@ async function skillifySingleEntry_ACU(summary, options, control, progressState)
     let lastReason = 'AI 未返回内容';
     let meta = null;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-        const response = await callAIWithPreset_ACU(messages, presetName);
+        let response = null;
+        try {
+            response = await callAIWithPreset_ACU(messages, presetName);
+        }
+        catch (e) {
+            // 单条网络/配置失败不中断整批：记录 reason 进入下一轮尝试
+            lastReason = `AI 调用失败：${e?.message || e}`;
+            response = null;
+        }
         if (!response) {
-            lastReason = 'AI 未返回内容';
+            lastReason = lastReason || 'AI 未返回内容';
         }
         else {
             meta = parseAgentSkillifyResponse_ACU(response, summary.tk);
@@ -86731,6 +86736,7 @@ function showOptimizationDiff_ACU(messageIndex, result) {
         timeOut: 10000,
         extendedTimeOut: 3000,
         tapToDismiss: false,
+        escapeHtml: false,
         onShown: function () {
             jQuery_API_ACU('#acu-opt-toast-reoptimize').off('click.acu_reopt').on('click.acu_reopt', async function (e) {
                 e.preventDefault();
@@ -91375,10 +91381,6 @@ async function applyUnifiedGroupFillResponsesCore_ACU(responses, baseSnapshot, o
     const initializedSheetKeys = sqlInitialization.initializedSheetKeys;
     const modifiedKeySet = new Set();
     const operations = [];
-    // H1：SQL 模式下复用同一 SqliteEngine 处理全部响应（每条响应新建引擎=每响应一次 wasm 初始化+dispose）
-    const sharedSqlEngine = isSqliteMode() && sortedResponses.some((r) => typeof r?.tableEditText === 'string' && isSqlContent(r.tableEditText))
-        ? new SqliteEngine()
-        : null;
     for (const response of sortedResponses) {
         let parseResult;
         if (isSqliteMode() && typeof response.tableEditText === 'string' && isSqlContent(response.tableEditText)) {
@@ -91386,7 +91388,7 @@ async function applyUnifiedGroupFillResponsesCore_ACU(responses, baseSnapshot, o
                 targetSheetKeys: response.job.targetSheetKeys,
                 requireSheetScopedOperations: true,
                 allowSingleTargetFallback: true,
-            }, sharedSqlEngine || undefined);
+            });
             if (parseResult?.success && parseResult.workingData) {
                 workingTableData = parseResult.workingData;
                 if (Array.isArray(parseResult.operations))
@@ -91429,9 +91431,6 @@ async function applyUnifiedGroupFillResponsesCore_ACU(responses, baseSnapshot, o
         }
         parsedKeys.forEach((sheetKey) => modifiedKeySet.add(sheetKey));
     }
-    // H1：释放复用的 SQL 引擎
-    if (sharedSqlEngine)
-        sharedSqlEngine.dispose();
     applySpecialIndexSequenceToSummaryTables_ACU(workingTableData);
     const modifiedKeys = [...modifiedKeySet].sort();
     if (!options.isImportMode) {
@@ -94342,6 +94341,7 @@ async function triggerAutomaticUpdateIfNeeded_ACU(performanceContext) {
                 extendedTimeOut: 0,
                 tapToDismiss: false,
                 acuToastCategory: ACU_TOAST_CATEGORY_ACU.MANUAL_TABLE,
+                escapeHtml: false,
                 onShown: function () {
                     if (typeof bindTableFillStopButton_ACU === 'function') {
                         bindTableFillStopButton_ACU(stopButtonId, () => {
@@ -95518,6 +95518,7 @@ async function proceedWithCardUpdate_ACU(messagesToUse, batchToastMessage = '正
             extendedTimeOut: 0,
             tapToDismiss: false,
             acuToastCategory: ACU_TOAST_CATEGORY_ACU.MANUAL_TABLE,
+            escapeHtml: false,
             onShown: function () {
                 if (typeof bindTableFillStopButton_ACU === 'function') {
                     bindTableFillStopButton_ACU(stopButtonId, () => {
@@ -100309,7 +100310,7 @@ async function requestChatCompletion(apiBase, settings, body, runContext = {}) {
         // 默认关闭：全量 request/response（含聊天/角色态）只会在显式开启调试时落 console，
         // 避免无条件泄露（网络面审查 P3）。开启：控制台执行 globalThis.__bs_biotracker_debug_api__ = true
         // 数据库插件：适配层注入 __bs_biotracker_debug_api_probe__（读取数据库 debug 采集开关）联动开启
-        if (!globalThis.__bs_biotracker_debug_api__ && !(typeof globalThis.__bs_biotracker_debug_api_probe__ === 'function' && globalThis.__bs_biotracker_debug_api_probe__()))
+        if (!globalThis.__bs_biotracker_debug_api__ && !safeProbeCall('__bs_biotracker_debug_api_probe__'))
             return;
         try {
             const label = `[BS BioTracker][API debug] ${phase}`;
@@ -100691,9 +100692,7 @@ async function callOpenAICompatible(settings, payload, systemPrompt = DEFAULT_SY
     // 聊天变更中止：删楼/ROLL/切聊天（CHAT_CHANGED）时数据库 abortOnChatMutation_ACU
     // 会 abort 全局信号 → 这里转发中止本轮全部在飞子请求（fetchText 已支持 externalSignal）。
     // 每次请求取最新 signal（abortOnChatMutation 会轮换旧 controller）。
-    const chatMutationSignal = (typeof globalThis.__bs_biotracker_chat_mutation_abort_signal__ === 'function')
-        ? globalThis.__bs_biotracker_chat_mutation_abort_signal__()
-        : null;
+    const chatMutationSignal = safeProbeCall('__bs_biotracker_chat_mutation_abort_signal__');
     let onChatMutationAbort = null;
     if (overallController && chatMutationSignal) {
         if (chatMutationSignal.aborted) {
@@ -103981,14 +103980,14 @@ function buildRegistrySkillSystemPrompt(options = {}) {
         inheritedTalentsLocked ? 'payload.existing_skill_setup.talents 是孩子出生后保留的既有天赋，属于固定继承内容。必须参考它们配置技能，不得在 initialTalents 中输出同一技能的不同等级、方向或经验。' : '',
         '没有充分依据的项目不要添加；不得把性格、身体状态或一次性事件滥列为技能。',
         skillPrompt ? '严格参考 payload.initial_skill_prompt 的额外要求。' : '用户没有提供额外要求，请仅依现有角色资料谨慎判断。',
-        '输出前请逐条自检：initialSkills 与 initialTalents 里的每一个 skill，都必须能在 payload.skill_catalog 或本次 skillDefinitions 中找到完全相同的名称。'
+        '输出前请逐条自检：initialTalents 里的每一个 skill，都必须能在 payload.skill_catalog 或本次 skillDefinitions 中找到完全相同的名称。'
             + '对不上的条目会被系统丢弃，请在输出前补上定义或删掉该条目。',
         '只输出 JSON，不要输出解释或 Markdown。结构必须是：',
         '{',
         '  "skillDefinitions": [{"name":"string","description":"string"}],',
-        '  "initialSkills": [{"skill":"技能精确名称或ID","level":1,"exp":0}],',
         '  "initialTalents": [{"skill":"技能精确名称或ID","level":0,"exp":0}]',
         '}',
+        '说明：技能不在此处注册到角色——角色技能由后续剧情追踪时按实际运用自动发现登记。本步骤只产出技能定义（供图鉴）与先天天赋。',
         '没有项目的数组也必须输出为空数组。',
     ].join('\n');
 }
@@ -110643,14 +110642,15 @@ async function runTracker(ctx, deps, reason = 'manual') {
     const settings = getSettings(ctx);
     const chat = getHostChat(ctx);
     // P1 性能短路：轮询模式下聊天长度未变化（无新楼层/无编辑）时跳过整段 hydrate/比对，
-    // 避免每 tick 无谓的 JSON.stringify 与快照逐条比对（手动触发不短路）
+    // 避免每 tick 无谓的 JSON.stringify 与快照逐条比对（手动触发不短路）。
+    // 注意：标记只在「真正进入分析」时更新——若因 after_ai 未settled/MVU 等待等
+    // skip 分支提前返回，标记保持旧值，下一轮仍会重查（否则新 AI 楼会被永久短路）。
     if (reason === 'poll') {
         const currentLength = Array.isArray(chat) ? chat.length : 0;
         const lastProcessed = globalThis.__bs_biotracker_last_polled_length__;
         if (typeof lastProcessed === 'number' && lastProcessed === currentLength && currentLength > 0) {
             return { skipped: true, reason: 'no_new_messages' };
         }
-        globalThis.__bs_biotracker_last_polled_length__ = currentLength;
     }
     await hydrateChatStateFromHost(ctx, settings);
     await refreshHostChatView(ctx, {
@@ -110741,6 +110741,10 @@ async function runTracker(ctx, deps, reason = 'manual') {
         return { skipped: true, reason: 'failed_message_blocked' };
     }
     const runToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    // P1：真正进入分析才更新长度标记（所有 skip 分支不更新，下一轮会重查）
+    if (reason === 'poll') {
+        globalThis.__bs_biotracker_last_polled_length__ = Array.isArray(chat) ? chat.length : 0;
+    }
     globalThis[RUN_RUNTIME_KEY] = runToken;
     markTrackerRunProgress();
     try {
@@ -118837,6 +118841,8 @@ function initBiotracker_ACU() {
                     const nextSettings = getSettings(nextCtx);
                     getChatState(nextCtx, nextSettings);
                     syncPoller();
+                    // F5：切换聊天时尝试继承 fork 聊天状态（原聊天删除/改名后保留追踪数据）
+                    safeLifecycleCall('tryInheritForkedChatState', 'chat_changed');
                 }
                 catch (e) {
                     logWarn_ACU('[生理追踪] CHAT_CHANGED 处理失败:', e);
@@ -118875,7 +118881,11 @@ function initBiotracker_ACU() {
             if (deletedType) {
                 eventSource.on(deletedType, (payload) => {
                     try {
-                        const chatKey = String((payload && typeof payload === 'object' && payload.chatId !== undefined) ? payload.chatId : '').trim();
+                        // ST chatDeleted 可能传字符串 chatId，也可能是 { chatId } 对象——两者都支持
+                        const rawChatId = typeof payload === 'string'
+                            ? payload
+                            : (payload && typeof payload === 'object' && payload.chatId !== undefined ? payload.chatId : '');
+                        const chatKey = String(rawChatId || '').trim();
                         if (chatKey)
                             safeLifecycleCall('cleanupOrphanedChatStateByKey', chatKey, 'chat_deleted');
                     }
@@ -160453,7 +160463,15 @@ function useSqliteRuntimeDiagnostic() {
         }
     }
     onMounted(() => {
-        timer = setInterval(refresh, HEALTH_REFRESH_INTERVAL_MS);
+        timer = setInterval(() => {
+            // 可见性门控（与 C11 一致）：页面隐藏或应用根容器被关闭时跳过轮询
+            if (typeof document === 'undefined' || document.hidden)
+                return;
+            const rootEl = document.getElementById('acu-app-v2');
+            if (rootEl && rootEl.style.display === 'none')
+                return;
+            refresh();
+        }, HEALTH_REFRESH_INTERVAL_MS);
     });
     onUnmounted(() => {
         if (timer !== undefined)
@@ -165236,7 +165254,10 @@ function useBiotrackerPage() {
         saveSettings_ACU();
     });
     // 切换聊天 → 恢复该聊天的草稿（无草稿的新聊天回初始状态）
-    watch(currentChatKey, () => {
+    // 源用 useChatChangedTick（响应式计数器，CHAT_CHANGED 延迟刷新后 +1），
+    // 而非读普通变量 currentChatFileIdentifier_ACU（Vue 无法追踪，永不触发）
+    const chatChangedTick = useChatChangedTick();
+    watch(chatChangedTick, () => {
         const draft = getRegDraft();
         registerName.value = String(draft.name || '');
         registerRace.value = String(draft.race || '');
