@@ -273,7 +273,8 @@ export   function mainInitialize_ACU() {
 
           // [触发门控] generationGate 重置已搬到 service 层的 resetScriptStateForNewChat_ACU 中
 
-          // [触发门控] 每次切换聊天都尝试安装一次 capture 钩子（防止 DOM 重新渲染导致丢失）          installSendIntentCaptureHooks_ACU();
+          // [触发门控] 每次切换聊天都尝试安装一次 capture 钩子（防止 DOM 重新渲染导致丢失）
+          installSendIntentCaptureHooks_ACU();
 
           // [剧情推进] 切换聊天时加载预设
           await loadPresetAndCleanCharacterData_ACU();

@@ -69,7 +69,7 @@ function scheduleSettingsReloadAfterIdbReady_ACU(reason: string): void {
 
 function applyGlobalPlotEnabledSetting_ACU(): boolean {
   if (!settings_ACU.plotSettings || typeof settings_ACU.plotSettings !== 'object' || Array.isArray(settings_ACU.plotSettings)) {
-    settings_ACU.plotSettings = JSON.parse(JSON.stringify(DEFAULT_PLOT_SETTINGS_ACU));
+    settings_ACU.plotSettings = cloneDefaultValue_ACU(DEFAULT_PLOT_SETTINGS_ACU);
   }
 
   if (typeof globalMeta_ACU.plotEnabledGlobal !== 'boolean') {
@@ -92,7 +92,7 @@ function hasNonEmptyPromptSegments_ACU(value: unknown): boolean {
 
 function ensureAgentPromptTemplateDefaults_ACU(): boolean {
   if (!settings_ACU.plotSettings || typeof settings_ACU.plotSettings !== 'object' || Array.isArray(settings_ACU.plotSettings)) {
-    settings_ACU.plotSettings = JSON.parse(JSON.stringify(DEFAULT_PLOT_SETTINGS_ACU));
+    settings_ACU.plotSettings = cloneDefaultValue_ACU(DEFAULT_PLOT_SETTINGS_ACU);
   }
   const defaults = buildDefaultAgentWorldbookPromptTemplates_ACU();
   const current = settings_ACU.plotSettings.agentPromptTemplates;
@@ -120,7 +120,7 @@ function ensureAgentWorldbookControlDefaults_ACU(): boolean {
   // stored in TavernDB-ACU-AgentWorldbookConfig entries. Do not treat this
   // settings field as the current character card's configuration source.
   if (!settings_ACU.plotSettings || typeof settings_ACU.plotSettings !== 'object' || Array.isArray(settings_ACU.plotSettings)) {
-    settings_ACU.plotSettings = JSON.parse(JSON.stringify(DEFAULT_PLOT_SETTINGS_ACU));
+    settings_ACU.plotSettings = cloneDefaultValue_ACU(DEFAULT_PLOT_SETTINGS_ACU);
   }
   const defaults = buildDefaultAgentWorldbookControl_ACU();
   const current = settings_ACU.plotSettings.agentWorldbookControl;
@@ -143,7 +143,7 @@ function ensureAgentWorldbookControlDefaults_ACU(): boolean {
 
 function ensureBuiltinPlotPresets_ACU(): boolean {
   if (!settings_ACU.plotSettings || typeof settings_ACU.plotSettings !== 'object' || Array.isArray(settings_ACU.plotSettings)) {
-    settings_ACU.plotSettings = JSON.parse(JSON.stringify(DEFAULT_PLOT_SETTINGS_ACU));
+    settings_ACU.plotSettings = cloneDefaultValue_ACU(DEFAULT_PLOT_SETTINGS_ACU);
   }
   if (!Array.isArray(settings_ACU.plotSettings.promptPresets)) {
     settings_ACU.plotSettings.promptPresets = [];
@@ -155,7 +155,7 @@ function ensureBuiltinPlotPresets_ACU(): boolean {
     const name = String((builtinPreset as any)?.name || '').trim();
     if (!name) continue;
     const idx = settings_ACU.plotSettings.promptPresets.findIndex((preset: any) => String(preset?.name || '').trim() === name);
-    const cloned = JSON.parse(JSON.stringify(builtinPreset));
+    const cloned = cloneDefaultValue_ACU(builtinPreset);
     if (idx < 0) {
       settings_ACU.plotSettings.promptPresets.push(cloned);
       changed = true;
@@ -416,7 +416,7 @@ export   function loadSettings_ACU() {
               replaceSettingsPreservingBiotracker(deepMerge_ACU(defaultSettings, savedSettings));
 
               // [剧情推进] 迁移/兜底：确保 plotWorldbookConfig 存在且结构完整
-              if (!settings_ACU.plotSettings) settings_ACU.plotSettings = JSON.parse(JSON.stringify(DEFAULT_PLOT_SETTINGS_ACU));
+              if (!settings_ACU.plotSettings) settings_ACU.plotSettings = cloneDefaultValue_ACU(DEFAULT_PLOT_SETTINGS_ACU);
               if (!settings_ACU.plotSettings.plotWorldbookConfig) {
                   // 兼容旧字段迁移：worldbookSource/selectedWorldbooks -> plotWorldbookConfig
                   const legacySource = settings_ACU.plotSettings.worldbookSource || 'character';
@@ -454,17 +454,17 @@ export   function loadSettings_ACU() {
               if (!settings_ACU.characterSettings || typeof settings_ACU.characterSettings !== 'object') {
                   settings_ACU.characterSettings = {};
               }
-              const defaultWorldbookConfig = JSON.parse(JSON.stringify(defaultWorldbookConfig_ACU));
+              const defaultWorldbookConfig = cloneDefaultValue_ACU(defaultWorldbookConfig_ACU);
               Object.keys(settings_ACU.characterSettings).forEach((charId) => {
                   const charSettings = settings_ACU.characterSettings[charId];
                   if (!charSettings || typeof charSettings !== 'object') return;
                   const worldbookConfig = charSettings.worldbookConfig;
                   if (!worldbookConfig || typeof worldbookConfig !== 'object' || Array.isArray(worldbookConfig)) {
-                      charSettings.worldbookConfig = JSON.parse(JSON.stringify(defaultWorldbookConfig));
+                      charSettings.worldbookConfig = cloneDefaultValue_ACU(defaultWorldbookConfig);
                       return;
                   }
                   charSettings.worldbookConfig = deepMerge_ACU(
-                      JSON.parse(JSON.stringify(defaultWorldbookConfig)),
+                      cloneDefaultValue_ACU(defaultWorldbookConfig),
                       worldbookConfig,
                   );
               });
@@ -534,8 +534,8 @@ export   function loadSettings_ACU() {
               }
           }
           globalMeta_ACU.vectorMemoryConfigGlobal = bestSource
-              ? JSON.parse(JSON.stringify(bestSource))
-              : JSON.parse(JSON.stringify(defaultVectorMemoryConfig_ACU));
+              ? cloneDefaultValue_ACU(bestSource)
+              : cloneDefaultValue_ACU(defaultVectorMemoryConfig_ACU);
           saveGlobalMeta_ACU();
           logDebug_ACU(bestSource
               ? '[交火模式配置] 已从旧 profile/角色配置迁移到全局 globalMeta.vectorMemoryConfigGlobal'
@@ -865,7 +865,7 @@ export   function buildDefaultSettings_ACU() {
           standardizedTableFillEnabled: true, // [新增] 规范填表功能
           toastMuteEnabled: false,
           // [剧情推进] 设置
-          plotSettings: JSON.parse(JSON.stringify(DEFAULT_PLOT_SETTINGS_ACU)),
+          plotSettings: cloneDefaultValue_ACU(DEFAULT_PLOT_SETTINGS_ACU),
           plotPresetBindings: {}, // [剧情推进] 按聊天记录绑定剧情推进预设
           currentTemplatePresetName: '', // [模板预设] 当前模板预设名，空表示默认预设
           tableTemplateDefaultsRefreshVersion: '', // [模板预设] 默认表格模板一次性刷新版本
@@ -1023,7 +1023,7 @@ export function persistCurrentTemplatePresetName_ACU(settingsObj: any, presetNam
 export function setGlobalPlotEnabled_ACU(modeEnabled: boolean): boolean {
     const enabled = !!modeEnabled;
     if (!settings_ACU.plotSettings || typeof settings_ACU.plotSettings !== 'object' || Array.isArray(settings_ACU.plotSettings)) {
-        settings_ACU.plotSettings = JSON.parse(JSON.stringify(DEFAULT_PLOT_SETTINGS_ACU));
+        settings_ACU.plotSettings = cloneDefaultValue_ACU(DEFAULT_PLOT_SETTINGS_ACU);
     }
 
     settings_ACU.plotSettings.enabled = enabled;
@@ -1107,7 +1107,7 @@ export function applyCombinedSettingsImport_ACU(combinedData: any): string[] {
     for (const field of FIELDS) {
         const value = (settings_ACU as Record<string, unknown>)[field];
         snapshot[field] = value && typeof value === 'object'
-            ? JSON.parse(JSON.stringify(value))
+            ? cloneDefaultValue_ACU(value)
             : value;
     }
 

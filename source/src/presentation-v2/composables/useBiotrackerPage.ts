@@ -370,8 +370,11 @@ export function useBiotrackerPage() {
     apiStore.refreshFromSettings();
     refreshCharacters();
     timer = setInterval(() => {
-      // P4 门控：页面不可见（tab 切走/最小化）时跳过轮询，避免无谓的聚合重建
+      // P4/C11 门控：页面不可见（tab 切走/最小化）或应用根容器被隐藏（closeAcuV2App 只切 display 不 unmount）
+      // 时跳过轮询，避免无谓的聚合重建与后台运行
       if (typeof document === 'undefined' || document.hidden) return;
+      const rootEl = document.getElementById('acu-app-v2');
+      if (rootEl && rootEl.style.display === 'none') return;
       refreshCharacters();
     }, 3000);
   });

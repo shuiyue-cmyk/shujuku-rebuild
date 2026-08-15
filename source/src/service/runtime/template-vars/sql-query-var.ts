@@ -161,8 +161,12 @@ export class TableQueryBuilder {
     const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
 
     if (value !== undefined) {
-      // 三参数形式：where("列名", ">", 数值)
-      this.conditions.push({ column: resolvedColumn, operator: String(valueOrOperator), value });
+      // 三参数形式：where("列名", ">", 数值)——operator 白名单校验（C1），防止 operator 注入任意 SQL
+      const operator = String(valueOrOperator);
+      if (!/^(=|!=|<>|<|<=|>|>=|LIKE|NOT LIKE|IN|NOT IN|IS|IS NOT)$/i.test(operator.trim())) {
+        throw new Error(`[ORM] where 运算符不合法: ${operator}`);
+      }
+      this.conditions.push({ column: resolvedColumn, operator, value });
     } else {
       // 两参数形式：where("列名", "值")
       this.conditions.push({ column: resolvedColumn, operator: '=', value: valueOrOperator });
@@ -288,7 +292,15 @@ export class TableQueryBuilder {
    *   having("COUNT(*) > 1")  → HAVING COUNT(*) > 1
    */
   having(expression: string): TableQueryBuilder {
-    this._having = expression;
+    // C1：HAVING 表达式做轻量只读校验——拒绝写语句关键字/分号/子查询逃逸（片段模式，非完整 SELECT）
+    const rawExpr = String(expression || '');
+    const stripped = rawExpr.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/'[^']*'|"[^"]*"/g, ' ');
+    const tokens = stripped.toUpperCase().match(/[A-Z_]+/g) || [];
+    const forbidden = new Set(['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'REPLACE', 'TRUNCATE', 'VACUUM', 'ATTACH', 'DETACH', 'PRAGMA']);
+    if (rawExpr.includes(';') || tokens.some(t => forbidden.has(t))) {
+      throw new Error('[ORM] having 表达式包含不允许的 SQL 关键字或分号');
+    }
+    this._having = rawExpr;
     return this;
   }
 

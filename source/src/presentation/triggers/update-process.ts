@@ -389,6 +389,7 @@ export async function handleManualUpdate_ACU() {
             extendedTimeOut: 0,
             tapToDismiss: false,
             acuToastCategory: ACU_TOAST_CATEGORY_ACU.MANUAL_TABLE,
+            escapeHtml: false,
             onShown: function () {
                 if (typeof bindTableFillStopButton_ACU === 'function') {
                     bindTableFillStopButton_ACU(stopButtonId, () => {

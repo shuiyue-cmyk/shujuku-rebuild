@@ -106,6 +106,7 @@ import {
       timeOut: 0,
       extendedTimeOut: 0,
       tapToDismiss: false,
+      escapeHtml: false,
       onShown: function() {
         jQuery_API_ACU('#acu-opt-stop-btn').off('click.acu_opt_cancel').on('click.acu_opt_cancel', function(e) {
           e.preventDefault();

@@ -211,7 +211,8 @@ function _acuNormalizeToastArgs_ACU(type: any, message: any, titleOrOptions: any
     } catch (e) { return false; }
   })();
   const finalOptions = {
-    escapeHtml: false,
+    // C8：默认转义 HTML（防 toast 内容注入 XSS）；需要富文本的调用方显式传 escapeHtml:false
+    escapeHtml: options.escapeHtml !== undefined ? !!options.escapeHtml : true,
     closeButton: true,
     progressBar: true,
     newestOnTop: true,
