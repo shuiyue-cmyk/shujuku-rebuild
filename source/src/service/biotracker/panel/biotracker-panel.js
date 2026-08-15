@@ -5961,6 +5961,31 @@ function closeModal() {
   modal.setAttribute('aria-hidden', 'true');
 }
 
+/**
+ * 收起为悬浮球：进入酒馆默认展示收起态（用户需求 2026-08-14），点球展开、close 收球。
+ * 与物理 close 按钮（bs-bt-close 点击）的收球流程一致。
+ */
+function collapseToSphere() {
+  try {
+    const modalRoot = document.getElementById(MODAL_ID);
+    const dialog = modalRoot?.querySelector('.bs-bt-modal__dialog');
+    const sphere = document.getElementById('bs-bt-floating-sphere');
+    if (!modalRoot || !dialog || !sphere) {
+      closeModal();
+      return;
+    }
+    dialog.classList.add('is-shrinking');
+    setTimeout(() => {
+      dialog.classList.remove('is-shrinking');
+      closeModal();
+      restoreFloatingSpherePositionForElement(sphere);
+      sphere.style.display = 'flex';
+      sphere.classList.add('is-appearing');
+      setTimeout(() => sphere.classList.remove('is-appearing'), 300);
+    }, 300);
+  } catch (e) { /* 收起失败不影响挂载 */ }
+}
+
 function clampModalPosition(left, top, dialog) {
   const width = dialog?.offsetWidth || 420;
   const height = dialog?.offsetHeight || 540;
@@ -7601,10 +7626,10 @@ async function bootstrap() {
     installSafeToastr();
     ensurePanelStyles();
     await ensureModal(ctx);
-    // 前端跟随生理追踪开关：开启时首次进入以弹窗展示；关闭时仅挂载面板（不弹窗），
-    // 后续由适配层 setBiotrackerEnabled_ACU 经 lifecycle.openModal/closeModal 联动显隐
+    // 前端跟随生理追踪开关：开启时默认展示「收起态悬浮球」（点球展开、close 收球），
+    // 关闭时仅挂载面板（不显示）；后续由适配层 setBiotrackerEnabled_ACU 联动显隐
     if (typeof bridge.isEnabled === 'function' ? bridge.isEnabled() : true) {
-      openModal(ctx);
+      collapseToSphere();
     }
     renderStatusPanel(ctx);
     // 纯渲染轮询：追踪核心由数据库适配层单实例驱动，面板只定时刷新视图
