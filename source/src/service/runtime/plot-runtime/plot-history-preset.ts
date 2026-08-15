@@ -559,6 +559,10 @@ import {
 
       const result = tryFindTarget();
       if (result) {
+        // 抢占 pending：writeAndCommit 执行期间置空，另一并发路径（flush）看到 null 即放弃，避免同值双写
+        if (tempPlotToSave_ACU === roundRef) {
+          _set_tempPlotToSave_ACU(null);
+        }
         delayedFinished = true;
         await writeAndCommit(result);
         return;

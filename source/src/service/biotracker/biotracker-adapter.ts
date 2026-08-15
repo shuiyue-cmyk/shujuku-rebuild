@@ -147,9 +147,13 @@ function installBiotrackerConsoleBridge(): void {
       }
     } catch (e) { /* 桥接失败不影响原 console */ }
   };
-  console.warn = bridge('warn')(console.warn.bind(console));
-  console.error = bridge('error')(console.error.bind(console));
-  console.log = bridge('debug')(console.log.bind(console));
+  // 幂等：标记避免重复包装（init 重入/热重载时不叠加多层代理）
+  if (!(globalThis as any).__bs_biotracker_console_bridged__) {
+    (globalThis as any).__bs_biotracker_console_bridged__ = true;
+    console.warn = bridge('warn')(console.warn.bind(console));
+    console.error = bridge('error')(console.error.bind(console));
+    console.log = bridge('debug')(console.log.bind(console));
+  }
 }
 
 export interface BiotrackerCtx_ACU {
@@ -196,7 +200,17 @@ export function createBiotrackerCtx_ACU(): BiotrackerCtx_ACU {
         return null;
       }
     },
-    setExtensionPrompt: () => {},
+    setExtensionPrompt: (key: string, text: string, position: number, budget: number) => {
+      // 主流程提示注入：宿主（SillyTavern）支持 setExtensionPrompt 时透传，否则 no-op
+      try {
+        const stCtx = host || (globalThis as any).SillyTavern?.getContext?.() || null;
+        if (stCtx && typeof stCtx.setExtensionPrompt === 'function') {
+          stCtx.setExtensionPrompt(key, text, position, budget, false);
+        }
+      } catch (e) {
+        logWarn_ACU('[生理追踪] setExtensionPrompt 失败:', e);
+      }
+    },
     getContext: () => host,
   };
 }
