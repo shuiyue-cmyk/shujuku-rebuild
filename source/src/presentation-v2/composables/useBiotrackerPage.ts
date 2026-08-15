@@ -370,6 +370,8 @@ export function useBiotrackerPage() {
     apiStore.refreshFromSettings();
     refreshCharacters();
     timer = setInterval(() => {
+      // P4 门控：页面不可见（tab 切走/最小化）时跳过轮询，避免无谓的聚合重建
+      if (typeof document === 'undefined' || document.hidden) return;
       refreshCharacters();
     }, 3000);
   });

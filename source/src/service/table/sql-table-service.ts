@@ -2150,12 +2150,12 @@ export async function applySqlEditsToTableDataSnapshot_ACU(
   try {
     const cleaned = sqlStatements.replace(/<!--|-->/g, '').trim();
     if (!cleaned) {
-      return { success: true, modifiedKeys: [], appliedEdits: 0, workingData: JSON.parse(JSON.stringify(tableData || {})) };
+      return { success: true, modifiedKeys: [], appliedEdits: 0, workingData: tableData ?? ({} as TableDataObject_ACU) };
     }
 
     const rawStatements = splitSqlStatements(cleaned);
     if (rawStatements.length === 0) {
-      return { success: true, modifiedKeys: [], appliedEdits: 0, workingData: JSON.parse(JSON.stringify(tableData || {})) };
+      return { success: true, modifiedKeys: [], appliedEdits: 0, workingData: tableData ?? ({} as TableDataObject_ACU) };
     }
 
     const snapshotCopy = JSON.parse(JSON.stringify(tableData || {})) as TableDataObject_ACU;

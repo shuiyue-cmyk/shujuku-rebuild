@@ -419,12 +419,9 @@ export async function executeAutoUpdatePlan_ACU(
         logWarn_ACU(`并发分组更新失败 ${failedGroupKeys.length}/${totalGroups} 组。${errorSummary}`);
     }
 
-    // 并发更新完成后统一刷新数据链条
+    // 并发更新完成后统一刷新数据链条（P5：仅保留一次刷新，消除重复 refreshData 与固定 500ms 等待后的二次刷新）
     logDebug_ACU(`All group updates completed. Forcing data refresh...`);
     await ops.loadAllChatMessages();
-    await ops.refreshData();
-    await new Promise(resolve => setTimeout(resolve, 500));
-
     setAutoUpdating(false);
     await ops.refreshData();
 

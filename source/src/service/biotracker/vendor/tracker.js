@@ -1228,6 +1228,17 @@ async function processTrackerMessage(ctx, settings, chatState, deps, reason, mes
 
 export async function runTracker(ctx, deps, reason = 'manual') {
   const settings = getSettings(ctx);
+  const chat = getHostChat(ctx);
+  // P1 性能短路：轮询模式下聊天长度未变化（无新楼层/无编辑）时跳过整段 hydrate/比对，
+  // 避免每 tick 无谓的 JSON.stringify 与快照逐条比对（手动触发不短路）
+  if (reason === 'poll') {
+    const currentLength = Array.isArray(chat) ? chat.length : 0;
+    const lastProcessed = globalThis.__bs_biotracker_last_polled_length__;
+    if (typeof lastProcessed === 'number' && lastProcessed === currentLength && currentLength > 0) {
+      return { skipped: true, reason: 'no_new_messages' };
+    }
+    globalThis.__bs_biotracker_last_polled_length__ = currentLength;
+  }
   await hydrateChatStateFromHost(ctx, settings);
   await refreshHostChatView(ctx, {
     resumeIndexes: getTrackerResumeIndexes(ctx, settings),
@@ -1235,7 +1246,6 @@ export async function runTracker(ctx, deps, reason = 'manual') {
   });
   const chatState = getChatState(ctx, settings);
   const registeredTargets = getRegisteredTargetNames(ctx, settings, chatState);
-  const chat = getHostChat(ctx);
   const lastMessage = chat[chat.length - 1];
   if (!lastMessage) {
     chatState.lastRawResult = {

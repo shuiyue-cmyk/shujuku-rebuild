@@ -44,7 +44,7 @@ import {
   PREGNANCY_STAGE_DAYS,
   PREGNANCY_STAGES,
 } from '../vendor/stage_config.js';
-import { buildMainFlowPrompt, resetPoller, runTracker } from '../vendor/tracker.js';
+import { buildMainFlowPrompt, runTracker } from '../vendor/tracker.js';
 import { applyToolCall } from '../vendor/tools.js';
 import { getEmbryoTypeReferenceText } from '../vendor/embryo_prompt_context.js';
 import { buildSingleRacePhysiologyText } from '../vendor/race_prompt_context.js';
@@ -608,7 +608,6 @@ function writeRegistrySkillSetup(ctx) {
     const character = applyRegistrySkillSetup(chatState, targetName, parsed, report);
     recordChatStateSnapshot(ctx, chatState, { reason: 'registry_initial_skills' });
     saveSettings(ctx);
-    resetPoller(ctx, trackerDeps);
     renderStatusPanel(ctx);
     renderFullStatePage(ctx);
     renderSkillCatalogPage(ctx);
@@ -746,7 +745,6 @@ function applyWardrobePrep(ctx) {
   chatState.characters[targetName] = preparedCharacter;
   recordChatStateSnapshot(ctx, chatState, { reason: 'wardrobe_prep' });
   saveSettings(ctx);
-  resetPoller(ctx, trackerDeps);
   renderStatusPanel(ctx);
   renderWardrobePage(ctx);
   setWardrobePrepStatus(`已为 ${targetName} 重新套用备装；旧衣柜已由本次 JSON 覆盖。`);
@@ -815,7 +813,6 @@ function applyRegistryDiary(ctx) {
   }
   recordChatStateSnapshot(ctx, chatState, { reason: 'manual_diary' });
   saveSettings(ctx);
-  resetPoller(ctx, trackerDeps);
   renderStatusPanel(ctx);
   setDiaryStatus(`已写入 ${targetName} 的日记：${String(parsed.time || '')}`);
   globalThis.toastr?.success?.(`[BS BioTracker] 已写入 ${targetName} 的日记`);
@@ -1132,7 +1129,6 @@ function saveWorldbookExcludeNamesFromList(ctx, names) {
   syncWorldbookFilterInput(ctx);
   saveSettings(ctx);
   updateMainFlowPrompt(ctx);
-  resetPoller(ctx, trackerDeps);
 }
 
 function saveWorldbookIncludeNamesFromList(ctx, names) {
@@ -1142,7 +1138,6 @@ function saveWorldbookIncludeNamesFromList(ctx, names) {
   syncWorldbookFilterInput(ctx);
   saveSettings(ctx);
   updateMainFlowPrompt(ctx);
-  resetPoller(ctx, trackerDeps);
 }
 
 function saveGlobalWorldbookExcludeNamesFromList(ctx, names) {
@@ -1152,7 +1147,6 @@ function saveGlobalWorldbookExcludeNamesFromList(ctx, names) {
   syncWorldbookFilterInput(ctx);
   saveSettings(ctx);
   updateMainFlowPrompt(ctx);
-  resetPoller(ctx, trackerDeps);
 }
 
 function saveGlobalWorldbookIncludeNamesFromList(ctx, names) {
@@ -1162,7 +1156,6 @@ function saveGlobalWorldbookIncludeNamesFromList(ctx, names) {
   syncWorldbookFilterInput(ctx);
   saveSettings(ctx);
   updateMainFlowPrompt(ctx);
-  resetPoller(ctx, trackerDeps);
 }
 
 function applyWorldbookFilterSelection(ctx, entries = []) {
@@ -4982,7 +4975,6 @@ function applyFullStateManualEdit(ctx) {
   renderStatusPanel(ctx);
   renderFullStatePage(ctx);
   updateMainFlowPrompt(ctx);
-  resetPoller(ctx, trackerDeps);
   setFullStateEditStatus(`已应用 ${selectedFullStateName} 的变量修改。`, 'success');
   globalThis.toastr?.success?.(`[BS BioTracker] 已应用 ${selectedFullStateName} 的变量修改`);
 }
@@ -5137,7 +5129,6 @@ function applyFetalTalentDebugChange(ctx, action) {
   renderSkillCatalogPage(ctx);
   renderFullStatePage(ctx);
   updateMainFlowPrompt(ctx);
-  resetPoller(ctx, trackerDeps);
   const message = action === 'delete'
     ? `已删除胎儿 ${fetusIndex + 1} 的「${definition.name}」天赋。`
     : `已写入胎儿 ${fetusIndex + 1} 的「${definition.name}」天赋。`;
@@ -5385,8 +5376,6 @@ function applySettingsToForm(ctx) {
   }
 }
 
-const trackerDeps = { renderStatusPanel, updateClock };
-
 function getWorldbookFilterSnapshot(ctx) {
   const settings = getSettings(ctx);
   const mode = normalizeWorldbookMode(settings.trackerWorldbookMode);
@@ -5403,7 +5392,6 @@ function persistWorldbookFilterIfChanged(ctx, beforeSnapshot) {
   if (getWorldbookFilterSnapshot(ctx) === beforeSnapshot) return;
   saveSettings(ctx);
   updateMainFlowPrompt(ctx);
-  resetPoller(ctx, trackerDeps);
 }
 
 async function refreshWorldbookFilterPage(ctx) {
@@ -5964,7 +5952,6 @@ function readSettingsFromForm(ctx) {
   syncRacePhysiologyOverrides(settings);
   saveSettings(ctx);
   updateMainFlowPrompt(ctx);
-  resetPoller(ctx, trackerDeps);
 }
 
 function closeModal() {
@@ -7619,16 +7606,29 @@ async function bootstrap() {
     renderStatusPanel(ctx);
     // 纯渲染轮询：追踪核心由数据库适配层单实例驱动，面板只定时刷新视图
     if (!globalThis.__bsBtRenderTimerKey__) {
+      let lastRenderedStaticView = '';
       globalThis.__bsBtRenderTimerKey__ = setInterval(() => {
         try {
-          if (!document.getElementById('bs-biotracker-settings')) return;
-          if (document.querySelector('#bs-bt-view-track-list')?.classList.contains('is-active')) renderStatusPanel(ctx);
-          if (document.querySelector('#bs-bt-view-home')?.classList.contains('is-active')) renderTablePage(ctx);
-          if (document.querySelector('#bs-bt-view-table-view')?.classList.contains('is-active')) {
-            if (globalThis.__bsBtOpenTableKey__) {
-              openTableDetail(ctx, globalThis.__bsBtOpenTableKey__);
-            }
+          // H1 门控：页面隐藏（浏览器 tab 切走/最小化）或弹窗未打开时跳过，避免无谓的 DOM 全量重建
+          if (typeof document === 'undefined' || !document.getElementById('bs-biotracker-settings')) return;
+          if (document.hidden) return;
+          const modal = document.getElementById('bs-biotracker-settings');
+          if (modal && !modal.classList.contains('is-open') && modal.getAttribute('aria-hidden') === 'true') return;
+          const viewActive = (selector) => document.querySelector(selector)?.classList.contains('is-active') ?? false;
+          // track-list 是动态追踪视图（状态每轮变化），每 tick 渲染；
+          // home/table-view 是静态列表，视图无变化时跳过（避免每 2s 全量 innerHTML 重建）
+          if (viewActive('#bs-bt-view-track-list')) {
+            lastRenderedStaticView = '';
+            renderStatusPanel(ctx);
+            return;
           }
+          const currentStaticView = viewActive('#bs-bt-view-home') ? 'home'
+            : viewActive('#bs-bt-view-table-view') ? 'table-view'
+            : '';
+          if (currentStaticView === lastRenderedStaticView) return;
+          lastRenderedStaticView = currentStaticView;
+          if (currentStaticView === 'home') renderTablePage(ctx);
+          else if (currentStaticView === 'table-view' && globalThis.__bsBtOpenTableKey__) openTableDetail(ctx, globalThis.__bsBtOpenTableKey__);
         } catch (e) {}
       }, 2000);
     }  } catch (error) {
