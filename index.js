@@ -110836,7 +110836,7 @@ const WARDROBE_DIMENSION_LABELS = Object.freeze({ masking: '掩形', support: '�
 const PREG_FIT_GAP_LABELS = Object.freeze({ masking: '掩形', support: '支撑', capacity: '容身', convenience: '便捷' });
 const MAX_PROGRESS_BAR_CAP = 200;
 // 构建时间戳（rollup replace 注入；测试/dev 环境无替换时回退 'dev'）——全局水印用，截图辨别构建
-const ACU_BUILD_STAMP = typeof "20260815-08" === 'string' ? "20260815-08" : 'dev';
+const ACU_BUILD_STAMP = typeof "20260815-09" === 'string' ? "20260815-09" : 'dev';
 const MODAL_EDGE_GAP = 24;
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const FLOATING_SPHERE_POSITION_KEY = `${MODULE_NAME}_floating_sphere_position`;
@@ -118392,8 +118392,11 @@ async function bootstrap() {
         installSafeToastr();
         ensurePanelStyles();
         await ensureModal(ctx);
-        // 生理追踪恒开启 → 手机前端默认打开（close 物理按钮可收起成小悬浮球，点球再展开）
-        openModal(ctx);
+        // 前端跟随生理追踪开关：开启时首次进入以弹窗展示；关闭时仅挂载面板（不弹窗），
+        // 后续由适配层 setBiotrackerEnabled_ACU 经 lifecycle.openModal/closeModal 联动显隐
+        if (typeof bridge.isEnabled === 'function' ? bridge.isEnabled() : true) {
+            openModal(ctx);
+        }
         renderStatusPanel(ctx);
         // 纯渲染轮询：追踪核心由数据库适配层单实例驱动，面板只定时刷新视图
         if (!globalThis.__bsBtRenderTimerKey__) {
@@ -118454,12 +118457,14 @@ function scheduleBootstrapFallback(retries = 60) {
     };
     setTimeout(attempt, 250);
 }
-// 生命周期钩子挂载：聊天删除/新建时由适配层事件回调调用（F5）
-// 暴露给全局供 biotracker-adapter 在 chatDeleted/groupChatDeleted/chatCreated/groupChatCreated 时调用
+// 生命周期钩子挂载：聊天删除/新建/开关联动时由适配层事件回调调用（F5 + 开关跟随）
+// 暴露给全局供 biotracker-adapter 调用
 try {
     globalThis.__bs_biotracker_lifecycle__ = {
         cleanupOrphanedChatStateByKey,
         tryInheritForkedChatState,
+        openModal,
+        closeModal,
     };
 }
 catch (e) { /* 挂载失败不影响面板渲染 */ }
@@ -118701,6 +118706,8 @@ function installBiotrackerFrontendBridge() {
     try {
         const bridge = {
             createCtx: createBiotrackerCtx_ACU,
+            // 生理追踪开关状态：面板 bootstrap 据此决定是否默认弹出（关闭时只挂载不弹窗）
+            isEnabled: () => isBiotrackerEnabled_ACU(),
             getRequestHeaders: () => {
                 try {
                     const host = getHostContext() || globalThis.SillyTavern?.getContext?.() || null;
@@ -118760,6 +118767,9 @@ function installBiotrackerFrontendBridge() {
  */
 let panelLoadRequested = false;
 function ensureBiotrackerPopup_ACU() {
+    // 前端跟随生理追踪开关：关闭时不加载面板（避免关闭状态下弹窗出现）
+    if (!isBiotrackerEnabled_ACU())
+        return;
     if (panelLoadRequested)
         return;
     panelLoadRequested = true;
@@ -118789,6 +118799,25 @@ function setBiotrackerEnabled_ACU(enabled) {
     }
     scheduleSettingsSave();
     syncPoller();
+    // 前端跟随开关：开启时加载面板并弹出，关闭时隐藏弹窗（面板已加载则收起）
+    try {
+        if (getBiotrackerRoot().enabled) {
+            ensureBiotrackerPopup_ACU();
+            const lifecycle = globalThis.__bs_biotracker_lifecycle__;
+            if (lifecycle && typeof lifecycle.openModal === 'function') {
+                lifecycle.openModal(createBiotrackerCtx_ACU());
+            }
+        }
+        else {
+            const lifecycle = globalThis.__bs_biotracker_lifecycle__;
+            if (lifecycle && typeof lifecycle.closeModal === 'function') {
+                lifecycle.closeModal();
+            }
+        }
+    }
+    catch (e) {
+        logWarn_ACU('[生理追踪] 开关联动弹窗失败:', e);
+    }
 }
 // ═══════════════════════════════════════════════════════════════
 // 初始化与轮询

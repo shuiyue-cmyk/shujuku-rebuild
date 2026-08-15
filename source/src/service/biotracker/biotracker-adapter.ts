@@ -227,6 +227,8 @@ function installBiotrackerFrontendBridge(): void {
   try {
     const bridge = {
       createCtx: createBiotrackerCtx_ACU,
+      // 生理追踪开关状态：面板 bootstrap 据此决定是否默认弹出（关闭时只挂载不弹窗）
+      isEnabled: () => isBiotrackerEnabled_ACU(),
       getRequestHeaders: () => {
         try {
           const host = getHostContext() || (globalThis as any).SillyTavern?.getContext?.() || null;
@@ -279,6 +281,8 @@ function installBiotrackerFrontendBridge(): void {
  */
 let panelLoadRequested = false;
 export function ensureBiotrackerPopup_ACU(): void {
+  // 前端跟随生理追踪开关：关闭时不加载面板（避免关闭状态下弹窗出现）
+  if (!isBiotrackerEnabled_ACU()) return;
   if (panelLoadRequested) return;
   panelLoadRequested = true;
   try {
@@ -309,6 +313,23 @@ export function setBiotrackerEnabled_ACU(enabled: boolean): void {
   }
   scheduleSettingsSave();
   syncPoller();
+  // 前端跟随开关：开启时加载面板并弹出，关闭时隐藏弹窗（面板已加载则收起）
+  try {
+    if (getBiotrackerRoot().enabled) {
+      ensureBiotrackerPopup_ACU();
+      const lifecycle = (globalThis as any).__bs_biotracker_lifecycle__;
+      if (lifecycle && typeof lifecycle.openModal === 'function') {
+        lifecycle.openModal(createBiotrackerCtx_ACU());
+      }
+    } else {
+      const lifecycle = (globalThis as any).__bs_biotracker_lifecycle__;
+      if (lifecycle && typeof lifecycle.closeModal === 'function') {
+        lifecycle.closeModal();
+      }
+    }
+  } catch (e) {
+    logWarn_ACU('[生理追踪] 开关联动弹窗失败:', e);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════

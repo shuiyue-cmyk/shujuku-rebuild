@@ -7601,8 +7601,11 @@ async function bootstrap() {
     installSafeToastr();
     ensurePanelStyles();
     await ensureModal(ctx);
-    // 生理追踪恒开启 → 手机前端默认打开（close 物理按钮可收起成小悬浮球，点球再展开）
-    openModal(ctx);
+    // 前端跟随生理追踪开关：开启时首次进入以弹窗展示；关闭时仅挂载面板（不弹窗），
+    // 后续由适配层 setBiotrackerEnabled_ACU 经 lifecycle.openModal/closeModal 联动显隐
+    if (typeof bridge.isEnabled === 'function' ? bridge.isEnabled() : true) {
+      openModal(ctx);
+    }
     renderStatusPanel(ctx);
     // 纯渲染轮询：追踪核心由数据库适配层单实例驱动，面板只定时刷新视图
     if (!globalThis.__bsBtRenderTimerKey__) {
@@ -7661,12 +7664,14 @@ function scheduleBootstrapFallback(retries = 60) {
   setTimeout(attempt, 250);
 }
 
-// 生命周期钩子挂载：聊天删除/新建时由适配层事件回调调用（F5）
-// 暴露给全局供 biotracker-adapter 在 chatDeleted/groupChatDeleted/chatCreated/groupChatCreated 时调用
+// 生命周期钩子挂载：聊天删除/新建/开关联动时由适配层事件回调调用（F5 + 开关跟随）
+// 暴露给全局供 biotracker-adapter 调用
 try {
   globalThis.__bs_biotracker_lifecycle__ = {
     cleanupOrphanedChatStateByKey,
     tryInheritForkedChatState,
+    openModal,
+    closeModal,
   };
 } catch (e) { /* 挂载失败不影响面板渲染 */ }
 
