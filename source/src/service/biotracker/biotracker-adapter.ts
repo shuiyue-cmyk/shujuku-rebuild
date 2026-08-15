@@ -11,7 +11,7 @@
 import { MODULE_NAME, DEFAULT_SETTINGS, getSettings, saveSettings, getChatState, getChatKey, cloneValue, buildRecentMessages, createEmptyChatState, recordChatStateSnapshot, resolveRegisteredCharacterName } from './vendor/state.js';
 import { runRegistry, runRegistryBreedingInference, runRegistryWardrobeInference } from './vendor/registry.js';
 import { applyToolCall } from './vendor/tools.js';
-import { resetPoller, runTracker } from './vendor/tracker.js';
+import { resetPoller, stopPoller, runTracker } from './vendor/tracker.js';
 import { callOpenAICompatible, extractJson } from './vendor/api.js';
 import { getHostContext } from './vendor/host.js';
 import { settings_ACU, currentChatFileIdentifier_ACU, allChatMessages_ACU, currentJsonTableData_ACU, getChatMutationAbortSignal_ACU } from '../runtime/state-manager';
@@ -320,15 +320,16 @@ const trackerDeps = { renderStatusPanel: () => {}, updateClock: () => {} };
 let pollerActive = false;
 
 function syncPoller(): void {
-  const ctx = createBiotrackerCtx_ACU();
   if (isBiotrackerEnabled_ACU()) {
     if (!pollerActive) {
       pollerActive = true;
+      const ctx = createBiotrackerCtx_ACU();
       resetPoller(ctx, trackerDeps);
     }
   } else if (pollerActive) {
     pollerActive = false;
-    resetPoller(ctx, trackerDeps);
+    // H5：禁用时停止轮询（不再重建空转 interval）
+    stopPoller();
   }
 }
 
@@ -351,6 +352,9 @@ export function initBiotracker_ACU(): void {
     settings.requireFullDescriptionUpdates = true;
     settings.formattedOutputV4 = true;
     scheduleSettingsSave();
+    // H4：初始化即同步轮询状态——enabled=true 时启动追踪轮询（无需等切聊天），
+    // enabled=false 时确保无轮询空转
+    syncPoller();
 
     // 订阅聊天切换：预热当前聊天状态（chatStates[chatKey]）
     const eventSource = ctx.eventSource;
@@ -445,18 +449,28 @@ export async function registerCharacter_ACU(options: RegisterCharacterOptions_AC
       customNotes: options.customNotes,
       declaredRace: options.declaredRace || '',
     };
-    // 用户可指定发送最近 N 条 AI 回复（覆盖 contextSize）
+    // 用户可指定发送最近 N 条 AI 回复（覆盖 contextSize）——仅本次调用生效，结束后还原（H6）
     const recentCount = Number(options.recentCount);
     const settings = getBiotrackerSettings(ctx);
+    const originalContextSize = settings.contextSize;
+    let contextSizePatched = false;
     if (Number.isFinite(recentCount) && recentCount > 0) {
       settings.contextSize = Math.max(1, Math.min(100, Math.floor(recentCount)));
+      contextSizePatched = true;
     }
-    // 第一步：繁育推演（API 1）
-    const breedingInference = await runRegistryBreedingInference(ctx, shared);
-    // 第二步：注册并套用推演结果（API 2）
-    await runRegistry(ctx, { ...shared, breedingInference });
-    saveSettings(ctx);
-    return { ok: true, message: `角色「${name}」注册完成（已套用繁育推演）。` };
+    try {
+      // 第一步：繁育推演（API 1）
+      const breedingInference = await runRegistryBreedingInference(ctx, shared);
+      // 第二步：注册并套用推演结果（API 2）
+      await runRegistry(ctx, { ...shared, breedingInference });
+      saveSettings(ctx);
+      return { ok: true, message: `角色「${name}」注册完成（已套用繁育推演）。` };
+    } finally {
+      if (contextSizePatched) {
+        settings.contextSize = originalContextSize;
+        scheduleSettingsSave();
+      }
+    }
   } catch (e: any) {
     logWarn_ACU('[生理追踪] 注册角色失败:', e);
     return { ok: false, message: `注册失败：${e?.message || e}` };

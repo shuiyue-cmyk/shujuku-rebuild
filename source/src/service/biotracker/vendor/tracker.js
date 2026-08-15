@@ -1387,6 +1387,14 @@ export async function poll(ctx, deps) {
   await runTracker(ctx, deps, 'poll');
 }
 
+/** 停止追踪轮询（H5）：清除 interval 且不重建，供禁用/卸载时调用，避免空转 */
+export function stopPoller() {
+  if (globalThis[POLL_RUNTIME_KEY]) {
+    clearInterval(globalThis[POLL_RUNTIME_KEY]);
+    globalThis[POLL_RUNTIME_KEY] = null;
+  }
+}
+
 export function resetPoller(ctx, deps) {
   if (globalThis[POLL_RUNTIME_KEY]) clearInterval(globalThis[POLL_RUNTIME_KEY]);
   // 尽早安装 MVU 生成请求钩子，避免正文后第一时间启动的 MVU 请求漏观测
