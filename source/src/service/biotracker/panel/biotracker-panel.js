@@ -5936,7 +5936,13 @@ function readSettingsFromForm(ctx) {
   const styleBookToggle = document.getElementById('bs-bt-wardrobe-prep-style-book');
   if (styleBookToggle) settings.wardrobePrepStyleBook = Boolean(styleBookToggle.checked);
   settings.targetNames = String(getValue('bs-bt-targets')).trim();
-  settings.trackerWorldbookMode = normalizeWorldbookMode(getValue('bs-bt-tracker-worldbook-mode'));
+  // 数据库集成（F6）：settings.html 已无世界书模式下拉（模式由数据库 agent 开关经探针控制），
+  // 空值时保留现值（不覆盖 agent_greenlights），仅显式选择才写入
+  const worldbookModeEl = document.getElementById('bs-bt-tracker-worldbook-mode');
+  const worldbookModeRaw = worldbookModeEl ? getValue('bs-bt-tracker-worldbook-mode') : '';
+  if (worldbookModeEl && String(worldbookModeRaw).trim()) {
+    settings.trackerWorldbookMode = normalizeWorldbookMode(worldbookModeRaw);
+  }
   const filterNames = String(getValue('bs-bt-worldbook-filter-input')).trim();
   if (settings.trackerWorldbookMode === 'allowlist_all') settings.trackerWorldbookIncludeNames = filterNames;
   else settings.trackerWorldbookExcludeNames = filterNames;

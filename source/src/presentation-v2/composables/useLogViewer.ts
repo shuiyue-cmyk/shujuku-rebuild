@@ -43,7 +43,8 @@ function downloadJson(filename: string, data: unknown): void {
   doc.body.appendChild(a);
   a.click();
   doc.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  // 延迟 revoke：WebView2/部分内核在 click 后立即 revoke 会取消下载
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export function useLogViewer() {

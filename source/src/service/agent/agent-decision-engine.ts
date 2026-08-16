@@ -637,6 +637,7 @@ async function runAgentDecisionShard_ACU(params: {
   contextSettings: ReturnType<typeof normalizeAgentContextSettings_ACU>;
   presetName: string;
   maxAiAttempts: number;
+  signal?: AbortSignal | null;
 }): Promise<AgentDecisionShardResult_ACU> {
   const messages = buildAgentDecisionPrompt_ACU({
     plotSettings: params.plotSettings,
@@ -654,8 +655,13 @@ async function runAgentDecisionShard_ACU(params: {
   let failureReason = 'empty_agent_response';
   for (let attempt = 1; attempt <= params.maxAiAttempts; attempt++) {
     try {
-      rawResponse = await callAIWithPreset_ACU(messages, params.presetName);
+      // 中止信号透传：剧情推进「停止」可中断 agent 决策请求（与 plot-task-engine 一致）
+      rawResponse = await callAIWithPreset_ACU(messages, params.presetName, undefined, params.signal || null);
     } catch (error: any) {
+      // 用户「停止」触发的 AbortError：直接终止，不做无意义重试空转
+      if (params.signal?.aborted || error?.name === 'AbortError') {
+        throw new Error(`agent_decision_shard_${params.shard.index + 1}_aborted`);
+      }
       failureReason = 'agent_request_error';
       logWarn_ACU(`[Agent决策] 分片 ${params.shard.index + 1}/${params.shardCount} 第 ${attempt}/${params.maxAiAttempts} 次请求失败；候选 ${params.shard.summaries.length} 条：${String(error?.message || 'unknown')}`);
       continue;
@@ -678,6 +684,7 @@ export async function runAgentDecisionForPlot_ACU(params: {
   sharedContext: Record<string, any>;
   enabledTasks: any[];
   requireTaskPlan?: boolean;
+  signal?: AbortSignal | null;
 }): Promise<AgentDecisionResult_ACU> {
   const originalTasks = Array.isArray(params.enabledTasks) ? params.enabledTasks : [];
   try {
@@ -710,6 +717,7 @@ export async function runAgentDecisionForPlot_ACU(params: {
       contextSettings,
       presetName,
       maxAiAttempts,
+      signal: params.signal,
     })));
     const successfulShards = settled
       .filter((result): result is PromiseFulfilledResult<AgentDecisionShardResult_ACU> => result.status === 'fulfilled')

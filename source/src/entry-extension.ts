@@ -97,11 +97,17 @@ function installGlobalErrorCapture(): void {
     err instanceof Error ? err.stack || `${err.name}: ${err.message}` : String(err);
 
   g.addEventListener?.('error', (event: ErrorEvent) => {
-    logError_ACU(`[全局] 未捕获异常: ${event.message || fmt(event.error)}`);
+    try {
+      // 优先取 event.error 保留堆栈；资源加载失败时 error 为 null，退化为 message
+      const detail = event.error ? fmt(event.error) : `（资源加载失败）${event.message || event.filename || ''}`;
+      logError_ACU(`[全局] 未捕获异常: ${detail}`);
+    } catch { /* 捕获逻辑自身异常不递归 */ }
   });
 
   g.addEventListener?.('unhandledrejection', (event: PromiseRejectionEvent) => {
-    logError_ACU(`[全局] 未处理 Promise 拒绝: ${fmt(event.reason)}`);
+    try {
+      logError_ACU(`[全局] 未处理 Promise 拒绝: ${fmt(event.reason)}`);
+    } catch { /* 捕获逻辑自身异常不递归 */ }
   });
 }
 

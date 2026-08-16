@@ -1406,6 +1406,9 @@ export async function runTracker(ctx, deps, reason = 'manual') {
       // 聊天在分析途中被改动：后面的索引已经不可信，交给下一轮重新对账
       if (outcome?.discarded) {
         discarded = true;
+        // 数据库集成（P1 补丁）：丢弃时清长度标记——原地改楼（MESSAGE_EDITED）不触发
+        // CHAT_CHANGED，若长度不变会永久短路；清除后下一轮重新分析
+        try { delete globalThis.__bs_biotracker_last_polled_length__; } catch (e) { /* ignore */ }
         break;
       }
       processedCount += 1;
@@ -1459,8 +1462,15 @@ export async function poll(ctx, deps) {
     const probe = globalThis.__bs_biotracker_greenlights_probe__;
     if (typeof probe === 'function') {
       const { agentModeOn, uids } = probe();
-      settings.trackerWorldbookMode = agentModeOn ? 'agent_greenlights' : String(settings.trackerWorldbookMode || 'mainflow');
-      settings.agentGreenlightUids = agentModeOn ? uids : [];
+      if (agentModeOn) {
+        settings.trackerWorldbookMode = 'agent_greenlights';
+        settings.agentGreenlightUids = uids;
+      } else {
+        // agent 关闭：若当前是探针写入的 agent_greenlights，还原主流模式，避免
+        // 空白名单过滤只剩 constant 条目导致世界书集成退化
+        if (settings.trackerWorldbookMode === 'agent_greenlights') settings.trackerWorldbookMode = 'mainflow';
+        settings.agentGreenlightUids = [];
+      }
     }
   } catch (e) {
     console.error('[BS BioTracker] refresh greenlights failed', e);

@@ -59,8 +59,12 @@ function maskSensitiveFields(value: unknown): unknown {
   if (value && typeof value === 'object') {
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      if (SENSITIVE_KEYS.test(k)) out[k] = maskSecret(v);
-      else out[k] = maskSensitiveFields(v);
+      if (SENSITIVE_KEYS.test(k)) {
+        // 敏感键：字符串值掩码；对象/数组值递归脱敏（保持结构，不退化 [object Object]）
+        out[k] = v && typeof v === 'object' ? maskSensitiveFields(v) : maskSecret(v);
+      } else {
+        out[k] = maskSensitiveFields(v);
+      }
     }
     return out;
   }

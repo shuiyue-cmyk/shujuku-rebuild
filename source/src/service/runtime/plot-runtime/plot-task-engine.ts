@@ -947,6 +947,7 @@ import {
         sharedContext,
         enabledTasks,
         requireTaskPlan: false,
+        signal: abortController_ACU?.signal,
       });
     } else if (agentWorldbookControl) {
       const agentDecision: AgentDecisionResult_ACU = await runAgentDecisionForPlot_ACU({
@@ -955,6 +956,7 @@ import {
         userMessage,
         sharedContext,
         enabledTasks,
+        signal: abortController_ACU?.signal,
       });
       sharedContext.agentDecision = agentDecision;
       await applyAgentFinalGreenlights_ACU(agentDecision);

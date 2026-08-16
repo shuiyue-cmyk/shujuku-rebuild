@@ -274,11 +274,15 @@ function sanitizeFilename(value: string): string {
 function downloadJson(filename: string, data: unknown): void {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
-  const a = getAcuHostDocument().createElement("a");
+  const doc = getAcuHostDocument();
+  const a = doc.createElement("a");
   a.href = url;
   a.download = filename;
+  doc.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  doc.body.removeChild(a);
+  // 延迟 revoke：WebView2/部分内核在 click 后立即 revoke 会取消下载
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function onDocPointer(e: Event): void {
