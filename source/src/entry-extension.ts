@@ -75,44 +75,16 @@ import './presentation/triggers/settings-ui-sync';
 import { mainInitialize_ACU } from './presentation/bootstrap/init';
 import { bootstrapAcuV2 } from './presentation-v2/bootstrap';
 import { logDebug_ACU, logError_ACU } from './shared/utils';
+import { waitForAcuHostReady, isAcuTauriRuntime } from './shared/host-bridge';
 
 /**
  * 等待宿主 API 就绪：主窗口的 window.SillyTavern 只有 {libs, getContext}，
  * 真正的 API 都要经 SillyTavern.getContext() 拿到，所以就绪判定就是
  * getContext() 能返回带核心字段的快照。不依赖酒馆助手。
+ * TT 适配：TauriTavern 下额外等待 __TAURITAVERN__?.ready（宿主异步引导，避免竞态）。
  */
 async function waitForHostApi(maxWaitMs = 15000): Promise<boolean> {
-  const start = Date.now();
-  let lastStatus = '';
-
-  const probe = () => {
-    if (typeof (window as any).SillyTavern?.getContext !== 'function') {
-      return 'no_getContext';
-    }
-    try {
-      const ctx = (window as any).SillyTavern.getContext();
-      const hasEvent = !!(ctx?.eventSource && ctx?.eventTypes);
-      const hasSave = typeof ctx?.saveSettingsDebounced === 'function';
-      if (hasEvent && hasSave) return 'ready';
-      return 'partial';
-    } catch {
-      return 'getContext_error';
-    }
-  };
-
-  while (Date.now() - start < maxWaitMs) {
-    const status = probe();
-    if (status !== lastStatus) {
-      logDebug_ACU(`[插件启动] 等待宿主就绪... ${status}`);
-      lastStatus = status;
-    }
-    if (status === 'ready') return true;
-    await new Promise(r => setTimeout(r, 100));
-  }
-
-  const finalStatus = probe();
-  logError_ACU(`[插件启动] 等待 SillyTavern 就绪超时（${maxWaitMs}ms），最终状态: ${finalStatus}`);
-  return false;
+  return waitForAcuHostReady(maxWaitMs);
 }
 
 /**

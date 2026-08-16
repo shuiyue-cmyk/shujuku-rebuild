@@ -7,6 +7,7 @@
 import { logDebug_ACU, logError_ACU } from '../../shared/utils';
 import { getAcuHostDocument, getAcuHostWindow, getAcuHostSource } from './host-document';
 import { openAcuV2App } from './mount';
+import { isAcuTauriRuntime, getAcuTauriReady } from '../../shared/host-bridge';
 
 const MENU_CONTAINER_ID = 'acu-v2-menu-container';
 const MENU_ITEM_ID = 'acu-v2-menu-item';
@@ -14,6 +15,18 @@ const CLICK_NS = 'click.acu-v2';
 
 /** 等待 host document 中出现 #extensionsMenu 后注入按钮；找不到时轮询。 */
 export function registerAcuV2MenuButton(): void {
+  // TT 适配：TauriTavern 下先等 TT 内部 ABI 就绪（宿主异步引导，避免扩展先于 store/菜单就绪注册失败）
+  if (isAcuTauriRuntime()) {
+    const { ready, promise } = getAcuTauriReady();
+    if (!ready && promise) {
+      promise.then(() => attemptInsert(0)).catch(() => attemptInsert(0));
+    } else if (!ready) {
+      attemptInsert(0); // 布尔未就绪：交给 attemptInsert 轮询
+    } else {
+      attemptInsert(0);
+    }
+    return;
+  }
   attemptInsert(0);
 }
 
