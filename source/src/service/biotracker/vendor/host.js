@@ -106,7 +106,7 @@ function assignHistoryPage(target, page) {
   }
 }
 
-export async function refreshHostChatView(ctx, options = {}) {
+export async function refreshHostChatView(ctx, options = {}, retriesLeft = 2) {
   if (getHostKind() !== 'tauritavern') return getHostChat(ctx);
   const ready = globalThis.__TAURITAVERN__?.ready || globalThis.__TAURITAVERN_MAIN_READY__;
   if (ready && typeof ready.then === 'function') await ready;
@@ -130,15 +130,17 @@ export async function refreshHostChatView(ctx, options = {}) {
   assignHistoryPage(messages, page);
 
   while (page?.hasMoreBefore && Number(page.startIndex) > requiredStartIndex) {
-    // 分页期间宿主可能被切走：若当前聊天已变，直接放弃本次结果
+    // 翻页是异步的，期间宿主可能被切到另一个聊天：继续翻只会把两个聊天的楼层混在一起
     page = await handle.history.before(page, { limit: TAURI_HISTORY_PAGE_SIZE });
     assignHistoryPage(messages, page);
     if (getHostChatId(ctx) !== startChatId) break;
   }
 
-  // 中途切换聊天 → 旧数据不写缓存，通知调用方本轮作废重试
-  const endChatId = getHostChatId(ctx);
-  if (endChatId !== startChatId) return refreshHostChatView(ctx, options);
+  // 中途切换聊天 → 本轮结果作废，不写缓存；重试有限次，避免用户连续切聊天时无限递归
+  if (getHostChatId(ctx) !== startChatId) {
+    if (retriesLeft > 0) return refreshHostChatView(ctx, options, retriesLeft - 1);
+    return getHostChat(ctx);
+  }
 
   HOST_CHAT_VIEW_CACHE.set(ctx, {
     absolute: true,

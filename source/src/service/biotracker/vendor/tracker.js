@@ -43,12 +43,19 @@ const AFTER_AI_SETTLE_MS = 1400;
 const MAINFLOW_CONTEXT_SNAPSHOT_KEY = '__bs_biotracker_mainflow_context_snapshot__';
 const DEBUG_LAST_TRACKER_REQUEST_KEY = '__bs_biotracker_debug_last_tracker_request__';
 const DEBUG_LAST_TRACKER_RESULT_KEY = '__bs_biotracker_debug_last_tracker_result__';
+const DEBUG_MVU_GATE_KEY = '__bs_biotracker_debug_mvu_gate__';
 
 // ---- MVU 额外模型解析兼容 ----
 // MVU 变量框架开启「额外模型解析」时，正文出完后会再调一次 API 更新变量；
 // 此时立刻发追踪请求会与 MVU 的更新请求重复消耗额度。
 // 检测到该模式时，把追踪请求推迟到本轮变量更新结束（或确认本轮不会解析）后再发送。
+// MVU 自己导出了事件常数表（Mvu.events），优先读它；读不到（MVU 尚未初始化）
+// 才退回字面量——字面量只是兜底，事件名以 MVU 当前版本导出的为准
 const MVU_VARIABLE_UPDATE_ENDED_EVENT = 'mag_variable_update_ended';
+function getMvuVariableUpdateEndedEvent() {
+  const exported = getMvuApi()?.events?.VARIABLE_UPDATE_ENDED;
+  return typeof exported === 'string' && exported ? exported : MVU_VARIABLE_UPDATE_ENDED_EVENT;
+}
 /** 等待 MVU 开始解析的宽限期：宽限期内未开始即视为本轮不会解析 */
 const MVU_EXTRA_WAIT_GRACE_MS = 4000;
 /** 单轮等待的异常保护上限 */
@@ -64,7 +71,8 @@ const mvuGateState = {
   pendingKey: '',
   pendingContentKey: '',
   pendingSince: 0,
-  announced: false,
+  // 提示只在每个聊天第一次真正等待时弹一次：逐轮提示在长对话里等同于噪音
+  announcedChatKey: '',
   // fetch 钩子观测：正文之后出现的额外生成请求（MVU 额外模型解析的硬信号）
   fetchHooked: false,
   generateInFlight: 0,
@@ -74,6 +82,9 @@ const mvuGateState = {
 };
 // 仅测试用：允许用例直接读写门控状态
 export const __mvuGateStateForTest = mvuGateState;
+// 门控状态挂到全局，方便在真实 ST 的 console 里排查等待判定；
+// 只有轮次键与消息签名（长度+哈希），不含聊天原文，故无需像 API 调试那样加开关
+globalThis[DEBUG_MVU_GATE_KEY] = mvuGateState;
 
 /** 心跳：每处理完一条消息就刷新，避免长队列被看门狗误判为卡死 */
 function markTrackerRunProgress() {
@@ -177,13 +188,14 @@ function installMvuGateListener(ctx) {
     mvuGateState.lastEndedAt = Date.now();
   };
   let installed = false;
+  const eventName = getMvuVariableUpdateEndedEvent();
   try {
     // MVU 自身的 eventEmit/eventOn 走同一套全局事件通道，优先使用；拿不到时退回宿主 eventSource
     if (typeof globalThis.eventOn === 'function') {
-      globalThis.eventOn(MVU_VARIABLE_UPDATE_ENDED_EVENT, handler);
+      globalThis.eventOn(eventName, handler);
       installed = true;
     } else if (ctx?.eventSource && typeof ctx.eventSource.on === 'function') {
-      ctx.eventSource.on(MVU_VARIABLE_UPDATE_ENDED_EVENT, handler);
+      ctx.eventSource.on(eventName, handler);
       installed = true;
     }
   } catch (error) {
@@ -192,7 +204,10 @@ function installMvuGateListener(ctx) {
   mvuGateState.eventInstalled = installed;
 }
 
-function notifyMvuGateWaiting() {
+function notifyMvuGateWaiting(ctx) {
+  const chatKey = getChatKey(ctx);
+  if (!chatKey || mvuGateState.announcedChatKey === chatKey) return;
+  mvuGateState.announcedChatKey = chatKey;
   try {
     globalThis.toastr?.info?.('检测到 MVU 额外模型解析请求，等待变量更新完成后再追踪', '[BS BioTracker] MVU 兼容');
   } catch {
@@ -313,14 +328,12 @@ export function shouldWaitForMvuExtraAnalysis(ctx, settings) {
     mvuGateState.pendingKey = roundKey;
     mvuGateState.pendingContentKey = contentKey;
     mvuGateState.pendingSince = now;
-    mvuGateState.announced = false;
     mvuGateState.sawGenerateThisRound = false;
   } else if (mvuGateState.pendingContentKey !== contentKey) {
     // 同 id 消息被重掷/编辑：内容已变，视为新轮次，重新开启等待窗口，
     // 避免旧 pendingSince 过期导致宽限路径立即放行
     mvuGateState.pendingContentKey = contentKey;
     mvuGateState.pendingSince = now;
-    mvuGateState.announced = false;
     mvuGateState.sawGenerateThisRound = false;
   }
 
@@ -332,13 +345,15 @@ export function shouldWaitForMvuExtraAnalysis(ctx, settings) {
   // 否则普通 ST 主流请求也会让设备被标记为「见过 MVU 信号」，导致每轮白等宽限
   if (during) mvuGateState.everSawMvuSignal = true;
 
-  if (method === '额外模型解析' || (mvuGateState.sawGenerateThisRound && generateActive)) {
-    if (!mvuGateState.announced) {
-      mvuGateState.announced = true;
-      notifyMvuGateWaiting();
-    }
-  }
-  if (during || generateActive) return now - mvuGateState.pendingSince < MVU_EXTRA_MAX_WAIT_MS;
+  const waiting = resolveMvuGateWaiting(roundKey, contentKey, now, during || generateActive);
+  // 提示只在真的推迟了追踪时才弹：先前无条件按「更新方式=额外模型解析」提示，
+  // 会在本轮解析早已结束、根本没等待的情况下也弹一次
+  if (waiting) notifyMvuGateWaiting(ctx);
+  return waiting;
+}
+
+function resolveMvuGateWaiting(roundKey, contentKey, now, signalActive) {
+  if (signalActive) return now - mvuGateState.pendingSince < MVU_EXTRA_MAX_WAIT_MS;
   // 本轮变量更新已结束（事件新鲜且内容指纹一致）→ 放行
   if (mvuGateState.lastEndedKey === roundKey
     && mvuGateState.lastEndedContentKey === contentKey
@@ -350,6 +365,7 @@ export function shouldWaitForMvuExtraAnalysis(ctx, settings) {
 
 function normalizeWorldbookMode(value) {
   const mode = String(value || 'exclude').trim();
+  // 数据库集成（F6）：agent_greenlights（蓝灯 constant + 绿灯 uid 白名单）为数据库 agent 世界书接管模式
   if (mode === 'mainflow' || mode === 'allowlist_all' || mode === 'exclude' || mode === 'agent_greenlights') return mode;
   return 'exclude';
 }
@@ -796,7 +812,7 @@ export function filterTrackerWorldbookEntries(value, excludedNames, settings = n
     const name = normalizeEntryName(entry);
     const selectionName = globalBookName ? formatGlobalWorldbookSelectionName(globalBookName, name) : name;
     if (mode === 'agent_greenlights') {
-      // 蓝灯（constant 恒常条目，ST 数据形状为 constant:true 布尔）固有发送 + 数据库 agent 正文放行的绿灯（uid 白名单，适配层注入 settings.agentGreenlightUids）
+      // 数据库集成（F6）：蓝灯（constant 恒常条目，ST 数据形状为 constant:true 布尔）固有发送 + agent 正文放行的绿灯（uid 白名单）
       if (entry?.enabled === false || entry?.disable === true) return false;
       if (entry?.constant === true || entry?.type === 'constant') return true;
       const greenUids = settings?.agentGreenlightUids;
@@ -951,6 +967,7 @@ export function buildTrackerPayload(ctx, settings, reason = 'manual', endIndexEx
     existing_state: buildTrackerStateView(existingState, settings),
     available_tools: getTrackerToolDefinitions(settings, existingState),
     diary_enabled: diaryEnabled,
+    race_catalog_enabled: settings?.raceCatalogInPrompt !== false,
     require_full_description_updates: settings?.requireFullDescriptionUpdates === true,
     ...(psychologyEnabled ? { breeding_psychology_enabled: true } : {}),
     wardrobe_enabled: hasPreparedWardrobe(existingState),
@@ -1077,6 +1094,46 @@ function hasPendingChatHistory(ctx, chatState) {
 
 function emitTrackerUpdateCue(detail = {}) {
   globalThis.dispatchEvent?.(new CustomEvent(UPDATE_CUE_EVENT, { detail }));
+}
+
+// ---- 追踪进行中提示 ----
+// 浮球脉动是「事后」才闪、且无变化时不闪，面板里的状态文字在手机上也看不见，
+// 于是整轮追踪期间没有任何可见反馈。用一条常驻 toast 顶住，结束时换成结果提示。
+let trackerBusyToast = null;
+
+function showTrackerBusyToast() {
+  if (trackerBusyToast) return;
+  try {
+    // timeOut/extendedTimeOut = 0：不自动消失，由本轮结束时显式清掉
+    trackerBusyToast = globalThis.toastr?.info?.('追踪更新中…', '[BS BioTracker]', {
+      timeOut: 0,
+      extendedTimeOut: 0,
+    }) || null;
+  } catch {
+    trackerBusyToast = null;
+  }
+}
+
+function clearTrackerBusyToast() {
+  if (!trackerBusyToast) return;
+  try {
+    globalThis.toastr?.clear?.(trackerBusyToast);
+  } catch {
+    // toastr 缺失或已被宿主清空时无需处理
+  }
+  trackerBusyToast = null;
+}
+
+function notifyTrackerDone(hasChanges) {
+  try {
+    globalThis.toastr?.success?.(
+      hasChanges ? '追踪完成，状态已更新' : '追踪完成，本轮无状态变化',
+      '[BS BioTracker]',
+      { timeOut: 3000 },
+    );
+  } catch {
+    // 无 toastr 的环境静默即可
+  }
 }
 
 function recordTrackerRequestDebug(systemPrompt, payload) {
@@ -1228,13 +1285,13 @@ async function processTrackerMessage(ctx, settings, chatState, deps, reason, mes
 
 export async function runTracker(ctx, deps, reason = 'manual') {
   const settings = getSettings(ctx);
-  const chat = getHostChat(ctx);
-  // P1 性能短路：轮询模式下聊天长度未变化（无新楼层/无编辑）时跳过整段 hydrate/比对，
+  // 数据库集成（P1 性能短路）：轮询模式下聊天长度未变化（无新楼层/无编辑）时跳过整段 hydrate/比对，
   // 避免每 tick 无谓的 JSON.stringify 与快照逐条比对（手动触发不短路）。
-  // 注意：标记只在「真正进入分析」时更新——若因 after_ai 未settled/MVU 等待等
-  // skip 分支提前返回，标记保持旧值，下一轮仍会重查（否则新 AI 楼会被永久短路）。
+  // 标记只在「真正进入分析」时更新——若因 after_ai 未settled/MVU 等待等 skip 分支提前返回，
+  // 标记保持旧值，下一轮仍会重查（否则新 AI 楼会被永久短路）。
   if (reason === 'poll') {
-    const currentLength = Array.isArray(chat) ? chat.length : 0;
+    const hostChat = getHostChat(ctx);
+    const currentLength = Array.isArray(hostChat) ? hostChat.length : 0;
     const lastProcessed = globalThis.__bs_biotracker_last_polled_length__;
     if (typeof lastProcessed === 'number' && lastProcessed === currentLength && currentLength > 0) {
       return { skipped: true, reason: 'no_new_messages' };
@@ -1247,6 +1304,7 @@ export async function runTracker(ctx, deps, reason = 'manual') {
   });
   const chatState = getChatState(ctx, settings);
   const registeredTargets = getRegisteredTargetNames(ctx, settings, chatState);
+  const chat = getHostChat(ctx);
   const lastMessage = chat[chat.length - 1];
   if (!lastMessage) {
     chatState.lastRawResult = {
@@ -1329,12 +1387,14 @@ export async function runTracker(ctx, deps, reason = 'manual') {
     return { skipped: true, reason: 'failed_message_blocked' };
   }
   const runToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  // P1：真正进入分析才更新长度标记（所有 skip 分支不更新，下一轮会重查）
+  // 数据库集成（P1）：真正进入分析才更新长度标记（所有 skip 分支不更新，下一轮会重查）
   if (reason === 'poll') {
-    globalThis.__bs_biotracker_last_polled_length__ = Array.isArray(chat) ? chat.length : 0;
+    const hostChat = getHostChat(ctx);
+    globalThis.__bs_biotracker_last_polled_length__ = Array.isArray(hostChat) ? hostChat.length : 0;
   }
   globalThis[RUN_RUNTIME_KEY] = runToken;
   markTrackerRunProgress();
+  showTrackerBusyToast();
   try {
     const { nextMessageIndex } =
       reason === 'manual' ? prepareManualReplay(ctx, chatState, chat.length) : reconcileChatStateSnapshots(ctx, chatState, settings);
@@ -1360,6 +1420,8 @@ export async function runTracker(ctx, deps, reason = 'manual') {
       processedCount,
       reason,
     });
+    clearTrackerBusyToast();
+    notifyTrackerDone(toolCalls.length > 0);
     return { skipped: false, processedCount, toolCalls };
   } catch (error) {
     console.error('[BS BioTracker] runTracker failed', error);
@@ -1378,6 +1440,8 @@ export async function runTracker(ctx, deps, reason = 'manual') {
     globalThis.toastr?.error?.(String(error?.message || error), '[BS BioTracker]');
     throw error;
   } finally {
+    // 中途放弃（对话被改动）与失败路径都会走到这里，常驻提示不能留在屏幕上
+    clearTrackerBusyToast();
     // 被看门狗判死的旧轮次可能在新一轮开始后才走到这里，不能清掉别人的锁
     if (globalThis[RUN_RUNTIME_KEY] === runToken) {
       globalThis[RUN_RUNTIME_KEY] = null;
@@ -1392,7 +1456,7 @@ export async function poll(ctx, deps) {
   await runTracker(ctx, deps, 'poll');
 }
 
-/** 停止追踪轮询（H5）：清除 interval 且不重建，供禁用/卸载时调用，避免空转 */
+/** 数据库集成（H5）：停止追踪轮询——清除 interval 且不重建，供禁用/卸载时调用，避免空转 */
 export function stopPoller() {
   if (globalThis[POLL_RUNTIME_KEY]) {
     clearInterval(globalThis[POLL_RUNTIME_KEY]);

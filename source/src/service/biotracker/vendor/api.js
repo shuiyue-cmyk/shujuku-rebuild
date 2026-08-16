@@ -42,40 +42,29 @@ export function extractJson(text) {
 }
 
 /**
- * DeepSeek 系列模型对 response_format(json_object) 支持良好，且工具调用兼容层不稳定——
- * 按用户需求：模型名只要包含 deepseek 或 ds（大小写不敏感）即判定为 DeepSeek 系，
- * 公益站可能带各种前后缀（如 deepseek-v4-flash / deepseek-v4-pro），故用宽松子串匹配。
+ * DeepSeek 系模型对 response_format(json_object) 支持好，但工具调用兼容层不稳定，
+ * 掉格式概率明显高于其他模型，需要额外注入输出结构指令。
+ * 只匹配 deepseek——原始实现还匹配子串 ds，会误伤名字里恰好含 ds 的其他模型。
  */
 export function isDeepSeekFamilyModel(model) {
-  const name = String(model || '').trim().toLowerCase();
-  return name.includes('deepseek') || name.includes('ds');
+  return String(model || '').trim().toLowerCase().includes('deepseek');
 }
 
-/**
- * 是否附加 response_format.json_object（普通格式化输出）：
- * 按钮开启（formattedOutputV4 !== false）或模型为 DeepSeek 系（自动切换）。
- */
-export function shouldUseResponseFormat(settings, model) {
-  if (settings?.formattedOutputV4 !== false) return true;
-  return isDeepSeekFamilyModel(model);
+/** 是否附加 response_format.json_object：完全听使用者的开关（渠道不支持时要能关掉）。 */
+export function shouldUseResponseFormat(settings, _model) {
+  return settings?.formattedOutputV4 !== false;
 }
 
-/**
- * 是否注入 v4 兼容提示词结构指令（完整 v4 兼容）：
- * 仅 DeepSeek 系模型触发——普通模型按钮开启时只加 response_format，不注入指令。
- */
+/** 是否注入 v4 结构指令：开关开着且模型是 DeepSeek 系才注入。 */
 export function shouldInjectV4Instruction(settings, model) {
-  return isDeepSeekFamilyModel(model);
+  return shouldUseResponseFormat(settings, model) && isDeepSeekFamilyModel(model);
 }
 
-/**
- * MVU 式「格式化输出」提示词指令：v4 兼容模式下要求模型只输出符合 tool_calls 结构的 JSON 对象，
- * 与 response_format(json_object) 双重约束，降低 DeepSeek 等模型掉格式概率。
- */
+/** v4 兼容模式的输出结构指令，与 response_format 双重约束降低掉格式概率。 */
 function buildFormattedOutputV4Instruction() {
   return [
     '【输出格式（强制）】',
-    '你处于格式化输出模式：不要输出 Markdown、不要输出 ```json 代码块、不要输出解释文字或任何对象之外的字符。',
+    '你处于格式化输出模式：不要输出 Markdown、不要输出代码块、不要输出解释文字或任何对象之外的字符。',
     '只输出一个可直接 JSON.parse 的 JSON 对象，结构为：',
     '{"tool_calls": [{"name": "工具名", "arguments": {"参数名": "值"}}], "character_checks": [{"female": "角色名", "status": "no_change|updated|present|offscreen"}]}',
     'arguments 必须是一个对象；工具名与参数必须来自 available_tools 与变量语义说明。',
@@ -138,63 +127,66 @@ function buildHostProxyConfig(apiBase, settings) {
   };
 }
 
-function shouldUseHostProxy(url) {
-  return isBrowserRuntime() && isCrossOriginUrl(url);
-}
-
 /**
- * 直连会把 API Key 放进 Authorization 头；远程 http 端点属于明文传输，
- * 仅放行 localhost 的 http（本地 Ollama/代理调试场景）。
- * 相对路径/无 scheme 的 apiBase 视为同源路径（浏览器自行解析），不在此列。
- * 前缀判定须覆盖任何 http(s) scheme 形式（含 `http:`/`http:/` 这类少打斜杠的畸形串，
- * WHATWG 会把它解析成远程主机，不能只认 `http://`）。
+ * 直连会把 API Key 放进 Authorization 头，代理路径同样把 key 交给 ST 后端转发，
+ * 所以两条路都要校验：远程 http 属于明文传输，一律拒绝。
+ * 内网地址（localhost / 私网段 / 链路本地）放行——在另一台机器跑 ollama、
+ * koboldcpp 是常规用法，封掉会直接让这些人不能用。
+ * 相对路径/无 scheme 视为同源，交给浏览器自行解析。
  */
 export function assertSafeDirectApiBase(apiBase) {
   const raw = String(apiBase || '').trim();
   if (!raw) return;
-  // 非 http(s) scheme（file://、gopher://、ftp://、javascript: 等）一律拒绝——
-  // 直连时浏览器可能拦截，但 host-proxy 路径会把 URL 交给 ST 后端服务端 fetch，
-  // 成为 SSRF 放大器（网络面审查 P2）。
   if (!/^https?:/i.test(raw)) {
-    // 相对路径/无 scheme（'api/v1'、'api.example.com:8080'、'localhost:8000'）
-    // 视为同源/回环路径，放行；显式 scheme（file://、gopher://、ftp://、javascript:、
-    // data: 等）一律拒绝——直连时浏览器可能拦截，但 host-proxy 路径会把 URL 交给
-    // ST 后端服务端 fetch，成为 SSRF 放大器（网络面审查 P2）。
+    // 显式的非 http(s) scheme 一律拒绝：代理路径会把 URL 交给 ST 后端服务端 fetch，
+    // file:// / gopher:// 之类会让它变成 SSRF 放大器
     const schemeMatch = raw.match(/^([a-z][a-z0-9+.-]*):/i);
     if (schemeMatch) {
-      const scheme = schemeMatch[1].toLowerCase();
       const rest = raw.slice(schemeMatch[0].length);
-      // 'localhost:8000' / 'api.example.com:8080' = 无 scheme 的 host:port，放行
+      // 'localhost:8000' / 'api.example.com:8080' 是无 scheme 的 host:port，放行
       const isPortOnly = /^\d+$/.test(rest);
-      const isDangerousScheme = ['file', 'gopher', 'ftp', 'javascript', 'data', 'vbscript', 'jar', 'ws', 'wss'].includes(scheme);
-      if (!isPortOnly && isDangerousScheme) {
+      if (!isPortOnly) {
         throw new Error('API Base URL 仅支持 http:// 或 https://，其他协议一律拒绝。');
       }
     }
     return;
   }
+  let url;
   try {
-    const url = new URL(raw);
-    // WHATWG URL 对 IPv6 回环返回带方括号的 hostname（'[::1]'），须去掉再比较
-    const host = url.hostname.replace(/^\[|\]$/g, '');
-    if (url.protocol === 'http:' && !['localhost', '127.0.0.1', '::1'].includes(host)) {
-      throw new Error('API Base URL 使用 http:// 时仅允许 localhost；远程地址请使用 https://，避免 API Key 明文传输。');
-    }
-    // 解析后 IP 复核：私网/环回/链路本地/保留地址在代理路径会被 ST 后端放大成
-    // SSRF（如 169.254.169.254 云元数据、10.x 内网、0.0.0.0）——即使 scheme 是 https。
-    const numericHost = host.replace(/^::ffff:/, '').toLowerCase();
-    if (isPrivateNetworkHost(numericHost) && !['localhost', '127.0.0.1', '::1'].includes(numericHost)) {
-      throw new Error('API Base URL 指向私网/环回/链路本地地址，代理路径存在 SSRF 风险，请使用公网 https 地址。');
-    }
-  } catch (error) {
-    if (error instanceof TypeError) throw new Error('API Base URL 无法解析。');
-    throw error;
+    url = new URL(raw);
+  } catch {
+    throw new Error('API Base URL 无法解析。');
+  }
+  if (url.protocol !== 'http:') return;
+  // WHATWG URL 对 IPv6 返回带方括号的 hostname
+  const host = url.hostname.replace(/^\[|\]$/g, '').replace(/^::ffff:/, '').toLowerCase();
+  if (!isLocalNetworkHost(host)) {
+    throw new Error('API Base URL 使用 http:// 时仅允许本机或内网地址；公网地址请改用 https://，避免 API Key 明文传输。');
   }
 }
 
+/** 本机/内网主机判定：这些地址上的 http 明文不出本地网络，放行。 */
+function isLocalNetworkHost(host) {
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true;
+  if (host === '::1' || host === '::') return true;
+  // IPv6 链路本地 fe80::/10 与唯一本地 fc00::/7
+  if (host.includes(':')) {
+    const first = host.split(':')[0];
+    return /^fe[89ab]/.test(first) || /^f[cd]/.test(first);
+  }
+  const parts = host.split('.').map((n) => Number(n));
+  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
+  const [a, b] = parts;
+  if (a === 127 || a === 10 || a === 0) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 169 && b === 254) return true; // 链路本地
+  return false;
+}
+
 /**
- * 错误文本脱敏：API 响应体可能回显 Authorization/key/token 等敏感字段，
- * 拼入错误消息（toastr/UI 可见）前剥离（网络面审查 P3）。
+ * 错误文本脱敏：API 响应体可能回显 Authorization/key/token，
+ * 拼进错误消息（toastr/UI 可见）前剥离。
  */
 function sanitizeErrorText(text) {
   return String(text || '')
@@ -203,36 +195,17 @@ function sanitizeErrorText(text) {
     .slice(0, 300);
 }
 
-/** 判定主机是否为私网/环回/链路本地/保留 IP（用于代理路径 SSRF 防护）。 */
-function isPrivateNetworkHost(host) {
-  if (!/^[\d.]+$/.test(host) && !/^[0-9a-f:]+$/i.test(host)) return false; // 域名放行（DNS rebinding 由解析后复核兜底不了时依赖宿主）
-  if (host.includes(':')) {
-    // IPv6：环回 ::1、链路本地 fe80::/10、唯一本地 fc00::/7、保留 ::/128
-    if (host === '::1' || host === '::') return true;
-    const first = host.split(':')[0].toLowerCase();
-    if (first === 'fe80' || first === 'feb0' || first === 'fe90' || first === 'fea0' || first === 'feb1' || first === 'feb2' || first === 'feb3' || first === 'feb4' || first === 'feb5' || first === 'feb6' || first === 'feb7' || first === 'feb8' || first === 'feb9' || first === 'feba' || first === 'febb' || first === 'febc' || first === 'febd' || first === 'febe' || first === 'febf') return true;
-    if (first === 'fc' || first === 'fd') return true;
-    return false;
-  }
-  const parts = host.split('.').map((n) => Number(n));
-  if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
-  const [a, b] = parts;
-  if (a === 10) return true;
-  if (a === 127) return true;
-  if (a === 169 && b === 254) return true;
-  if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 168) return true;
-  if (a === 0) return true;
-  if (a >= 224) return true; // 组播/保留
-  return false;
+function shouldUseHostProxy(url) {
+  return isBrowserRuntime() && isCrossOriginUrl(url);
 }
 
 function shouldFallbackFromHostProxy(responseText, status) {
+  // 不含 429：上游限流时再直连一次等于对已限流的端点翻倍施压，
+  // 而浏览器跨域直连多半又会 CORS 失败，白白多打一次
   return status === 401
     || status === 403
     || status === 404
     || status === 405
-    || status === 429
     || (status >= 500 && status <= 599)
     || /cannot\s+post|not\s+found|no\s+route|ENOENT/i.test(String(responseText || ''));
 }
@@ -427,7 +400,7 @@ function isNonRetriableApiError(error) {
   if (isApiDeadlineError(error)) return true;
   const message = String(error?.message || error || '');
   // 配置/鉴权类错误重试无意义
-  return /请先填写|尚未配置|API URL 或模型名称|无法解析|仅允许 localhost|401|403|Unauthorized|invalid.?api.?key|Incorrect API key/i.test(message);
+  return /请先填写|尚未配置|API URL 或模型名称|无法解析|仅允许本机或内网|其他协议一律拒绝|401|403|Unauthorized|invalid.?api.?key|Incorrect API key/i.test(message);
 }
 
 /**
@@ -770,9 +743,10 @@ function buildPresetSamplingBodyFromPreset(preset) {
 
 async function requestChatCompletion(apiBase, settings, body, runContext = {}) {
   const logApiDebug = (phase, details = {}) => {
-    // 默认关闭：全量 request/response（含聊天/角色态）只会在显式开启调试时落 console，
-    // 避免无条件泄露（网络面审查 P3）。开启：控制台执行 globalThis.__bs_biotracker_debug_api__ = true
-    // 数据库插件：适配层注入 __bs_biotracker_debug_api_probe__（读取数据库 debug 采集开关）联动开启
+    // 默认关闭：完整 request/response 含聊天内容，同页任何脚本（其他扩展、角色卡的
+    // TH 脚本经 window.parent）都读得到。排查时在控制台执行：
+    //   globalThis.__bs_biotracker_debug_api__ = true
+    // 数据库集成：适配层注入 __bs_biotracker_debug_api_probe__（读取数据库 debug 采集开关）联动开启
     if (!globalThis.__bs_biotracker_debug_api__ && !safeProbeCall('__bs_biotracker_debug_api_probe__')) return;
     try {
       const label = `[BS BioTracker][API debug] ${phase}`;
@@ -787,10 +761,9 @@ async function requestChatCompletion(apiBase, settings, body, runContext = {}) {
     const previousAsyncFlag = globalThis.__bs_biotracker_async_request__;
     globalThis.__bs_biotracker_async_request__ = true;
     const url = `${apiBase}/chat/completions`;
-    const useHostProxy = shouldUseHostProxy(url);
-    // 无条件校验 http 明文：代理路径同样把 key 交给 ST 后端（proxy_password/custom_include_headers），
-    // 远程 http 一律拒绝——不校验会在代理转发段以明文发往远程主机（安全审查 P2）。
+    // 代理路径同样把 key 交给 ST 后端转发，所以无条件校验，不只校验直连
     assertSafeDirectApiBase(apiBase);
+    const useHostProxy = shouldUseHostProxy(url);
     let transport = useHostProxy ? 'host-proxy' : 'direct';
     let requestText = '';
     try {
@@ -817,8 +790,6 @@ async function requestChatCompletion(apiBase, settings, body, runContext = {}) {
         }
         if (proxyError || (!response.ok && shouldFallbackFromHostProxy(responseText, response.status))) {
           transport = proxyError ? 'direct-after-proxy-error' : `direct-after-proxy-${response.status}`;
-          // 回退直连同样会把 Key 放进 Authorization 头：远程 http 必须拒绝
-          assertSafeDirectApiBase(apiBase);
           ({ response, responseText } = await fetchText(url, {
             method: 'POST',
             headers: getAuthHeaders(settings),
@@ -838,8 +809,8 @@ async function requestChatCompletion(apiBase, settings, body, runContext = {}) {
           deadlineMs: runContext.deadlineMs || 0,
         }));
       }
-      // 调试快照同样默认关闭（网络面审查 P3），避免无门控暂存完整请求/响应于 globalThis
-      if (globalThis.__bs_biotracker_debug_api__ || (typeof globalThis.__bs_biotracker_debug_api_probe__ === 'function' && globalThis.__bs_biotracker_debug_api_probe__())) {
+      // 调试快照同样默认关闭，避免无条件把完整请求/响应暂存在 globalThis
+      if (globalThis.__bs_biotracker_debug_api__ || safeProbeCall('__bs_biotracker_debug_api_probe__')) {
         globalThis[DEBUG_LAST_API_RESPONSE_KEY] = {
           capturedAt: Date.now(),
           attempt,
@@ -885,7 +856,6 @@ async function requestChatCompletion(apiBase, settings, body, runContext = {}) {
       model: body.model,
       temperature: body.temperature,
       top_p: body.top_p,
-      top_k: body.top_k,
       frequency_penalty: body.frequency_penalty,
       presence_penalty: body.presence_penalty,
       max_tokens: body.max_tokens,
@@ -939,9 +909,8 @@ export async function fetchModelList(settings) {
   let response;
   let responseText = '';
   const url = `${apiBase}/models`;
-  const useHostProxy = shouldUseHostProxy(url);
-  // 无条件校验 http 明文（代理与直连同标准），见 postBody 注释
   assertSafeDirectApiBase(apiBase);
+  const useHostProxy = shouldUseHostProxy(url);
   let transport = useHostProxy ? 'host-proxy' : 'direct';
   try {
     if (useHostProxy) {
@@ -954,8 +923,6 @@ export async function fetchModelList(settings) {
       }
       if (proxyError || (!response.ok && shouldFallbackFromHostProxy(responseText, response.status))) {
         transport = proxyError ? 'direct-after-proxy-error' : `direct-after-proxy-${response.status}`;
-        // 回退直连同样会带 Authorization 头：远程 http 必须拒绝
-        assertSafeDirectApiBase(apiBase);
         ({ response, responseText } = await fetchText(url, { method: 'GET', headers: getAuthHeaders(settings), timeoutMs: resolveModelListTimeoutMs(settings) }));
       }
     } else {
@@ -1044,8 +1011,7 @@ async function buildPresetEnvelope(settings, baseSystemPrompt, payloadText) {
   }
 }
 
-
-/** C13：安全调用全局探针——探针被第三方覆盖/抛错时降级为 null，不击穿整个请求 */
+/** 数据库集成（C13）：安全调用全局探针——探针被第三方覆盖/抛错时降级为 null，不击穿整个请求 */
 function safeProbeCall(name, fallback = null) {
   try {
     const fn = globalThis[name];
@@ -1057,7 +1023,7 @@ function safeProbeCall(name, fallback = null) {
 }
 
 export async function callOpenAICompatible(settings, payload, systemPrompt = DEFAULT_SYSTEM_PROMPT) {
-  // F4：每次调用时从数据库拉最新 API 配置（url/apiKey/model/温度），运行中改配置即时生效
+  // 数据库集成（F4）：每次调用时从数据库拉最新 API 配置（url/apiKey/model/温度），运行中改配置即时生效
   const liveApiProbe = safeProbeCall('__bs_biotracker_api_probe__');
   if (liveApiProbe) {
     const live = { ...settings, ...liveApiProbe };
@@ -1087,42 +1053,42 @@ export async function callOpenAICompatible(settings, payload, systemPrompt = DEF
   let effectiveMessages = presetEnvelope?.messages?.length ? presetEnvelope.messages : baseMessages;
   const stPresetSampling = presetEnvelope?.sampling || {};
   const effectivePresetName = presetEnvelope?.presetName || '';
-  // 格式化输出：response_format.type = json_object 普通模式（按钮开启或 DeepSeek 系自动启用）。
-  // v4 兼容提示词结构指令仅 DeepSeek 系模型注入（按钮开时普通模型只有 response_format 不加指令）。
-  // 注意：指令只在 tracker 流程注入——registry/日记/备装/技能/繁育推演各自声明了
-  // 不同的 JSON 结构（profile/wardrobe/diary 等），注入 tool_calls 指令会压过它们的 schema。
-  const useResponseFormat = shouldUseResponseFormat(settings, model);
-  const injectV4Instruction = shouldInjectV4Instruction(settings, model);
+  // 格式化输出(v4兼容)：response_format.type = json_object（无 json_schema），可在设置关闭。
+  // DeepSeek 系额外注入输出结构指令——但只在追踪流程注入：registry/日记/备装/技能/
+  // 繁育推演各自声明了不同的 JSON 结构，注入 tool_calls 指令会压过它们的 schema。
+  const useFormattedOutputV4 = shouldUseResponseFormat(settings, model);
   const isTrackerFlow = !safePayload?.target_character;
-  if (injectV4Instruction && isTrackerFlow && effectiveMessages[0]?.role === 'system') {
+  const injectV4Instruction = shouldInjectV4Instruction(settings, model) && isTrackerFlow;
+  if (injectV4Instruction && effectiveMessages[0]?.role === 'system') {
     effectiveMessages = [
       { role: 'system', content: `${effectiveMessages[0].content}\n\n${buildFormattedOutputV4Instruction()}` },
       ...effectiveMessages.slice(1),
     ];
   }
-  // 采样参数优先数据库配置（适配层同步进 settings.temperature/maxTokens 或经 __bs_biotracker_api_probe__ 兜底），
-  // 其次 ST 预设采样，最后回退默认 0.2。probe 兜底保证追踪/注册内部直连调用也始终采用数据库配置。
-  const dbProbe = safeProbeCall('__bs_biotracker_api_probe__');
-  // 非预填充支持（预设级，经适配层探针）：把 assistant 消息改写为 user +「助手：」前缀，
-  // 用于不支持 assistant 预填充的模型/接口。
+  // 数据库集成（非预填充支持）：开启后把 assistant 消息改写为 user，内容首行加「助手：」前缀，
+  // 用于不支持 assistant 预填充的接口（适配层探针按预设级开关判定）
   if (safeProbeCall('__bs_biotracker_non_prefill_probe__') === true) {
-    effectiveMessages = (Array.isArray(effectiveMessages) ? effectiveMessages : []).map((m) => {
-      if (!m || typeof m !== 'object' || String(m.role || '').toLowerCase() !== 'assistant') return m;
-      return { ...m, role: 'user', content: `助手：\n${typeof m.content === 'string' ? m.content : String(m.content ?? '')}` };
+    effectiveMessages = effectiveMessages.map((m) => {
+      if (!m || typeof m !== 'object' || typeof m.role !== 'string') return m;
+      if (m.role.toLowerCase() === 'assistant') {
+        return { ...m, role: 'user', content: `助手：\n${typeof m.content === 'string' ? m.content : String(m.content ?? '')}` };
+      }
+      return m;
     });
   }
   const body = {
     model,
-    ...stPresetSampling,
-    temperature: pickFiniteNumber(settings.temperature, dbProbe?.temperature, stPresetSampling.temperature, 0.2),
-    ...(pickFiniteNumber(settings.maxTokens, dbProbe?.maxTokens) > 0
-      ? { max_tokens: Math.max(1, Math.floor(pickFiniteNumber(settings.maxTokens, dbProbe?.maxTokens))) }
+    // 数据库集成（F4）：采样参数优先数据库配置（温度经探针兜底，liveApiProbe 已并入 settings）
+    temperature: Number.isFinite(Number(settings.temperature)) ? Number(settings.temperature) : 0.2,
+    ...(Number.isFinite(Number(settings.maxTokens)) && Number(settings.maxTokens) > 0
+      ? { max_tokens: Math.max(1, Math.floor(Number(settings.maxTokens))) }
       : {}),
+    ...stPresetSampling,
     messages: effectiveMessages,
-    ...(useResponseFormat ? { response_format: { type: 'json_object' } } : {}),
+    ...(useFormattedOutputV4 ? { response_format: { type: 'json_object' } } : {}),
   };
   recordEffectiveRequestDebug(
-    `${safePayload?.target_character ? 'registry' : 'tracker'}${mainflowCopy.hasMainflowCopy ? '-mainflow-copy' : (safePayload?.resolved_worldbook_prompt ? '-mainflow-worldinfo' : '')}${useResponseFormat ? '' : '-no-response-format'}${injectV4Instruction ? '-v4-instruction' : ''}`,
+    `${safePayload?.target_character ? 'registry' : 'tracker'}${mainflowCopy.hasMainflowCopy ? '-mainflow-copy' : (safePayload?.resolved_worldbook_prompt ? '-mainflow-worldinfo' : '')}${useFormattedOutputV4 ? '' : '-no-response-format'}${injectV4Instruction ? '-v4-instruction' : ''}`,
     effectivePresetName,
     stPresetSampling,
     effectiveMessages,
@@ -1142,9 +1108,10 @@ export async function callOpenAICompatible(settings, payload, systemPrompt = DEF
       } catch {}
     }, deadlineMs);
   }
-  // 聊天变更中止：删楼/ROLL/切聊天（CHAT_CHANGED）时数据库 abortOnChatMutation_ACU
-  // 会 abort 全局信号 → 这里转发中止本轮全部在飞子请求（fetchText 已支持 externalSignal）。
-  // 每次请求取最新 signal（abortOnChatMutation 会轮换旧 controller）。
+  const runContext = { signal: overallController?.signal || null, deadlineMs };
+
+  // 数据库集成（聊天变更中止）：删楼/ROLL/切聊天（CHAT_CHANGED）时数据库 abortOnChatMutation_ACU
+  // 会 abort 全局信号 → 这里转发中止本轮全部在飞子请求（fetchText 已支持 externalSignal）
   const chatMutationSignal = safeProbeCall('__bs_biotracker_chat_mutation_abort_signal__');
   let onChatMutationAbort = null;
   if (overallController && chatMutationSignal) {
@@ -1157,7 +1124,6 @@ export async function callOpenAICompatible(settings, payload, systemPrompt = DEF
       chatMutationSignal.addEventListener('abort', onChatMutationAbort, { once: true });
     }
   }
-  const runContext = { signal: overallController?.signal || null, deadlineMs };
 
   try {
     return await withGlobalApiRetries(async (globalAttempt) => {
@@ -1166,20 +1132,17 @@ export async function callOpenAICompatible(settings, payload, systemPrompt = DEF
       let parsed = extractJson(content);
       if (parsed && typeof parsed === 'object') return parsed;
 
-      // 同一轮全局尝试内：先做一次「请只输出 JSON」纠错请求（采样参数同样采用数据库配置）
+      // 同一轮全局尝试内：先做一次「请只输出 JSON」纠错请求
       const retryBody = {
         model,
+        temperature: 0.1,
         ...stPresetSampling,
-        temperature: pickFiniteNumber(settings.temperature, dbProbe?.temperature, stPresetSampling.temperature, 0.1),
-        ...(pickFiniteNumber(settings.maxTokens, dbProbe?.maxTokens) > 0
-          ? { max_tokens: Math.max(1, Math.floor(pickFiniteNumber(settings.maxTokens, dbProbe?.maxTokens))) }
-          : {}),
         messages: [
           ...effectiveMessages,
           { role: 'assistant', content: String(content || '') },
           { role: 'user', content: buildJsonRetryInstruction() },
         ],
-        ...(useResponseFormat ? { response_format: { type: 'json_object' } } : {}),
+        ...(useFormattedOutputV4 ? { response_format: { type: 'json_object' } } : {}),
       };
       const retryData = await requestChatCompletion(apiBase, settings, retryBody, runContext);
       const retryContent = retryData?.choices?.[0]?.message?.content || '';
@@ -1192,7 +1155,7 @@ export async function callOpenAICompatible(settings, payload, systemPrompt = DEF
     }, { label: callLabel, overallSignal: overallController?.signal || null, deadlineMs });
   } finally {
     if (overallTimer) clearTimeout(overallTimer);
-    // 清理全局中止信号监听，避免请求正常完成/超时后监听累积到下次删楼/ROLL
+    // 清理全局中止信号监听，避免请求正常完成/超时后监听累积
     if (chatMutationSignal && onChatMutationAbort) {
       chatMutationSignal.removeEventListener('abort', onChatMutationAbort);
     }

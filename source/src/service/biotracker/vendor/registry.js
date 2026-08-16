@@ -1,6 +1,6 @@
 import { callOpenAICompatible } from './api.js';
 import { buildEmbryoTypeLorePrompt } from './embryo_prompt_context.js';
-import { buildRegistryRacePhysiologyPrompt } from './race_prompt_context.js';
+import { buildRaceCatalogBlock, buildRegistryRacePhysiologyPrompt } from './race_prompt_context.js';
 import { DEFAULT_DIARY_WRITING_PROMPT, DEFAULT_REGISTRY_DESCRIPTION_GUIDES } from './registry_config.js';
 import {
   buildEmptyPsychologyGroup,
@@ -12,19 +12,6 @@ import {
   PSY_PREG_FIELDS,
   PSY_PREG_BOOL_FIELDS,
 } from './registry_psy_config.js';
-
-/**
- * 提示词插值防线：剥离换行、闭合标签与控制字符——注册提示词模板内插的
- * declared_race/custom_notes/user_instruction 来自用户输入，含换行或 `</`
- * 可破坏模板行（网络面审查 P3）。与 race_prompt_context.sanitizePromptText 同规则。
- */
-function sanitizePromptText(value) {
-  return String(value ?? '')
-    .replace(/[\r\n\t]/g, ' ')
-    .replace(/<\//g, '<\\/')
-    .replace(/[\u0000-\u001f\u007f\u0080-\u009f]/g, ' ')
-    .trim();
-}
 import {
   getEmbryoTypeByRace,
   getMergedRacePhysiologyProfile,
@@ -100,6 +87,7 @@ export function resolveRegistryTargetName(ctx, value) {
 
 function normalizeWorldbookMode(value) {
   const mode = String(value || 'exclude').trim();
+  // 数据库集成（F6）：agent_greenlights（蓝灯 constant + 绿灯 uid 白名单）为数据库 agent 世界书接管模式
   if (mode === 'mainflow' || mode === 'allowlist_all' || mode === 'exclude' || mode === 'agent_greenlights') return mode;
   return 'exclude';
 }
@@ -222,7 +210,7 @@ function filterRegistryWorldbookEntries(value, excludedNames, settings = null, r
     const name = normalizeEntryName(entry);
     const selectionName = globalBookName ? formatGlobalWorldbookSelectionName(globalBookName, name) : name;
     if (mode === 'agent_greenlights') {
-      // 与追踪一致：蓝灯（constant 恒常条目，ST 数据形状为 constant:true 布尔）固有发送 + 数据库 agent 正文放行的绿灯（uid 白名单）
+      // 数据库集成（F6）：蓝灯（constant 恒常条目，ST 数据形状为 constant:true 布尔）固有发送 + agent 正文放行的绿灯（uid 白名单）
       if (entry?.enabled === false || entry?.disable === true) return false;
       if (entry?.constant === true || entry?.type === 'constant') return true;
       const greenUids = settings?.agentGreenlightUids;
@@ -354,6 +342,19 @@ function recordBreedingInferenceResultDebug(result, error = null) {
   };
 }
 
+/**
+ * 提示词插值防线：剥离换行、闭合标签与控制字符——注册提示词模板内插的
+ * declared_race/custom_notes/user_instruction 来自用户输入，含换行或闭合标签可破坏模板行。
+ * 与 race_prompt_context.sanitizePromptText 同规则。
+ */
+function sanitizePromptText(value) {
+  return String(value ?? '')
+    .replace(/[\r\n\t]/g, ' ')
+    .replace(/<\//g, '<\\/')
+    .replace(/[\u0000-\u001f\u007f\u0080-\u009f]/g, ' ')
+    .trim();
+}
+
 export function buildBreedingInferenceSystemPrompt(settings, options = {}) {
   const targetName = String(options.targetName || '').trim();
   const customNotes = String(options.customNotes !== undefined ? options.customNotes : (settings?.registryCustomNotes || '')).trim();
@@ -443,10 +444,8 @@ export function buildWardrobePrepSystemPrompt(settings, options = {}) {
   const userPrompt = String(options.wardrobePrepPrompt || settings?.wardrobePrepPrompt || '').trim();
   const mainCount = Math.max(1, Math.min(12, Math.floor(Number(options.wardrobePrepMainCount ?? settings?.wardrobePrepMainCount ?? 3) || 3)));
   const accessoryCount = Math.max(0, Math.min(12, Math.floor(Number(options.wardrobePrepAccessoryCount ?? settings?.wardrobePrepAccessoryCount ?? 3) || 0)));
-  // options.styleBookRaw：调用方已异步加载的世界书原始 JSON（浏览器 fetch / Node 读文件）
-  const styleBookBlock = options.includeStyleBook ? buildWardrobeStyleBookBlock(options.styleBookRaw) : '';
   return [
-    '你是 AIRP 女性角色衣柜备装初始化器。',
+    '你是 AIRP 角色衣柜备装初始化器。',
     '你只为 payload.target_character 生成衣柜 JSON，不得新增其他角色。',
     '根据角色卡、世界书、最近对话、已注册状态、normalDescription/pregnantDescription 与衣柜记录中的服装线索，推断该角色合理拥有的长期衣物与当前穿着。',
     `默认生成 ${mainCount} 套 main 主件、${accessoryCount} 件 accessory 配件；main 的计数单位是完整套装，不是单件。若用户额外提示指定更合理的数量或场景，可在接近该数量的范围内微调。`,
@@ -469,96 +468,9 @@ export function buildWardrobePrepSystemPrompt(settings, options = {}) {
     '配件中通常应包含 1-2 件 layer=inner 的贴身衣物（如内衣），其四维补正同样遵守 -3 到 3 的配件规则。',
     'outfit.mainItemId 必须是 wardrobe.items 或 outfit.temporaryItems 中 slot=main 的 id；若无法判断当前穿着，选择最日常的一件主件。',
     'outfit.accessoryItemIds 只能包含 slot=accessory 的 id；未知则空数组。',
-    ...(styleBookBlock ? [styleBookBlock] : []),
     '[用户额外备装提示]',
     userPrompt || '无',
   ].join('\n');
-}
-
-/**
- * 读取内置服装风格世界书（assets/wardrobe-style-book.json），拼接除「服装描写强化」外的
- * 性格穿搭风格条目，供备装生成参考。读取失败返回空串（不阻塞备装）。
- */
-/** 惰性获取 Node require：浏览器 bundle 中动态 import 被 stub 成抛错函数，被调用方 catch 吞掉 */
-async function getNodeRequire() {
-  if (typeof require === 'function') return require;
-  try {
-    const nodeModule = await import('node:module');
-    return nodeModule.createRequire(import.meta.url);
-  } catch {
-    return null;
-  }
-}
-
-/**
- * 浏览器环境异步加载服装风格世界书内容（主模式用 import.meta.url 解析真实 assets 路径；
- * bundle 模式由 _bundle/entry.js 的 fetch 补丁提供 JSON）。Node 环境直接读文件。
- * 返回原始 JSON 文本或 null（失败静默降级，不阻塞备装）。
- */
-export async function loadWardrobeStyleBook() {
-  try {
-    if (typeof window !== 'undefined' && typeof fetch === 'function') {
-      try {
-        const url = new URL('./assets/wardrobe-style-book.json', import.meta.url).href;
-        const response = await fetch(url);
-        if (response.ok) return await response.text();
-      } catch {}
-      return null;
-    }
-  } catch {}
-  try {
-    const nodeRequire = await getNodeRequire();
-    if (!nodeRequire) return null;
-    const fs = nodeRequire('node:fs');
-    const path = nodeRequire('node:path');
-    const scriptDir = path.dirname(nodeRequire('node:url').fileURLToPath(import.meta.url));
-    const candidates = [
-      path.join(scriptDir, '..', 'assets', 'wardrobe-style-book.json'),
-      path.join(process.cwd(), 'assets', 'wardrobe-style-book.json'),
-    ];
-    for (const candidate of candidates) {
-      try {
-        if (fs.existsSync(candidate)) return fs.readFileSync(candidate, 'utf8');
-      } catch {}
-    }
-  } catch {}
-  return null;
-}
-
-/**
- * 把服装风格世界书原始 JSON 拼接成提示词块：只发送条目正文 content，
- * 排除「服装描写强化」，skill 化触发提示（key/triggerWhen）与说明
- * （comment 的 ACU_SKILL_META 元数据）一律不进入提示词。
- */
-export function buildWardrobeStyleBookBlock(raw = null) {
-  try {
-    if (!raw) return '';
-    const data = JSON.parse(raw);
-    const entries = data?.entries && typeof data.entries === 'object' ? data.entries : {};
-    const blocks = Object.entries(entries)
-      .filter(([, entry]) => {
-        // 只按首行风格名判断：排除「服装描写强化」，其余性格风格条目保留
-        const commentFirstLine = String(entry?.comment || '').split('\n')[0].trim();
-        return commentFirstLine && !commentFirstLine.startsWith('服装描写强化');
-      })
-      .map(([, entry]) => {
-        // 只发送条目正文 content；表头仅取 comment 首行（风格名）
-        const label = String(entry?.comment || '').split('\n')[0].trim();
-        const content = String(entry?.content || entry?.entry || '').trim();
-        if (!content) return '';
-        return `【服装风格参考：${label}】\n${content}`;
-      })
-      .filter(Boolean);
-    if (blocks.length === 0) return '';
-    return [
-      '[服装风格世界书参考]',
-      '以下是可参考的性格穿搭风格条目。根据 payload.target_character 的角色卡、normalDescription 与已注册状态判断其气质，选择最匹配的 1-3 条作为衣柜风格基调；风格冲突时以角色设定为准。',
-      ...blocks,
-    ].join('\n');
-  } catch (error) {
-    console.warn('[BS BioTracker] failed to load wardrobe style book', error);
-    return '';
-  }
 }
 
 function sanitizeWardrobePrepResult(result) {
@@ -759,10 +671,7 @@ export async function runRegistryWardrobeInference(ctx, options = {}) {
   payload.wardrobe_prep_accessory_count = wardrobePrepAccessoryCount;
   payload.existing_wardrobe = chatState.characters[targetName]?.profile?.wardrobe || null;
   payload.existing_outfit = chatState.characters[targetName]?.profile?.outfit || null;
-  const includeStyleBook = options.includeStyleBook === true;
-  // 异步加载世界书（浏览器 fetch / Node 读文件），失败时 styleBookRaw 为 null → 块为空串，不阻塞备装
-  const styleBookRaw = includeStyleBook ? await loadWardrobeStyleBook() : null;
-  const systemPrompt = options.wardrobePrepSystemPrompt || buildWardrobePrepSystemPrompt(settings, { ...options, includeStyleBook, styleBookRaw, wardrobePrepPrompt, wardrobePrepMainCount, wardrobePrepAccessoryCount });
+  const systemPrompt = options.wardrobePrepSystemPrompt || buildWardrobePrepSystemPrompt(settings, { ...options, wardrobePrepPrompt, wardrobePrepMainCount, wardrobePrepAccessoryCount });
   const result = await callOpenAICompatible(settings, payload, systemPrompt);
   return sanitizeWardrobePrepResult(result);
 }
@@ -850,6 +759,8 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
   const sourceChild = options.payload?.source_child || null;
   const embryoTypeLorePrompt = buildEmbryoTypeLorePrompt(options.payload || {}, { includeAllIfEmpty: true });
   const racePhysiologyPrompt = buildRegistryRacePhysiologyPrompt(options.payload || {});
+  // 注册是一次性请求，附上辨识提示帮模型在形近种族间选对（人鱼／鱼人、精灵／妖精）
+  const raceCatalogPrompt = settings?.raceCatalogInPrompt === false ? '' : buildRaceCatalogBlock({ withHints: true });
   const psyMensLines = Object.entries(PSY_MENS_FIELDS).flatMap(([key, value]) => [
     `- psychology.mens.${key}_value: ${value.definition}`,
     `  阶段预览: ${value.preview}`,
@@ -862,7 +773,8 @@ export function buildRegistrySystemPrompt(settings, options = {}) {
   const psyPregBoolLines = Object.entries(PSY_PREG_BOOL_FIELDS).map(([key, value]) => `- psychology.preg.${key}: ${value.definition}`);
   const prompt = [
     racePhysiologyPrompt,
-    '你是 AIRP 女性角色注册初始化器。',
+    raceCatalogPrompt,
+    '你是 AIRP 角色注册初始化器。',
     '只在用户明确要求注册指定角色时工作，不得擅自新增其他角色。',
     '根据角色卡、用户要求、已有资料，输出角色初始化 JSON。',
     sourceChild ? '本次注册来源为已有角色的孩子。payload.source_child 是固定事实：base.race 必须沿用其 race／derivedType；其 talents 会由系统确定性继承。你只能参考这些天赋塑造初始化内容，不得删除、改名、换向或重算天赋。' : '',
@@ -1142,6 +1054,7 @@ function sanitizeChildren(value) {
         name: item.name ?? item.babyName ?? null,
         fathers: item.fathers ?? null,
         provider: item.provider ?? null,
+        // 多母源/嵌合体的来源字段必须原样保留，否则手动转交会失去归属依据
         providerSources: Array.isArray(item.providerSources)
           ? [...item.providerSources]
           : (item.provider ? String(item.provider).split(/\s*[×Xx]\s*/).map((part) => part.trim()).filter(Boolean) : undefined),
@@ -1189,16 +1102,16 @@ function sanitizePregnant(value) {
       .filter((item) => item && typeof item === 'object')
       .map((item) => {
         const parsed = parseRaceDescriptor(item.race);
-        const parsedFetusRace = parsed.race || null;
-        // race 字段 = 胎儿完整种族（父×母，或纯种），模型按提示词示例填写，normalize 不会再二次混血。
-        // fatherRace 是可选显式字段：仅当模型显式提供父系时才保留；缺失时置 null，normalize 将信任 race 原样。
+        // race 是胎儿的完整种族（父系x母系，或纯种），模型按提示词示例填写。
+        // fatherRace 只在模型显式给出时保留；缺失时置 null，normalize 会原样信任 race，
+        // 否则代孕/移植胚胎会被硬塞进承载者的血统。
         const explicitFatherRace = item.fatherRace !== undefined && item.fatherRace !== null
           ? parseRaceDescriptor(item.fatherRace).race || null
           : null;
         return {
           fathers: item.fathers ?? null,
           provider: item.provider ?? null,
-          race: parsedFetusRace,
+          race: parsed.race || null,
           fatherRace: explicitFatherRace,
           fatherDerivedType: item.fatherDerivedType ?? parsed.derivedType ?? null,
           gender: item.gender ?? null,
@@ -1277,13 +1190,13 @@ function normalizeRegisteredPregnancy(profile) {
   const motherRace = parseRaceDescriptor(profile?.base?.race || '人类').race || '人类';
 
   pregnant.fetuses = fetuses.map((fetus) => {
-    // race 已是模型给出的胎儿完整种族：仅当显式提供 fatherRace 时才按「父系×母系」重算；
-    // fatherRace 缺失时信任 race 原样，避免把已完整的混血种族再二次混入母系。
+    // 只有显式给出父系时才按「父系x母系」重算；否则信任 race 原样，
+    // 避免把已完整的胎儿种族再跟承载者混一次（代孕/移植胚胎会因此被改血统）
     const explicitFatherRace = parseRaceDescriptor(fetus?.fatherRace || '').race || null;
-    const fatherRace = explicitFatherRace || null;
+    const fatherRace = explicitFatherRace;
     const fetusRace = explicitFatherRace
       ? (explicitFatherRace === motherRace ? motherRace : deriveRegisteredFetusRace(motherRace, explicitFatherRace))
-      : (fetus?.race ? parseRaceDescriptor(fetus.race).race : motherRace);
+      : (fetus?.race ? parseRaceDescriptor(fetus.race).race || motherRace : motherRace);
     return {
       ...fetus,
       race: fetusRace,
@@ -1546,12 +1459,12 @@ export function buildRegistrySkillSystemPrompt(options = {}) {
     '你是 AIRP 角色初始技能与天赋配置器。只处理 payload.target_character。',
     '根据角色卡、世界书、最近对话、已注册角色状态及用户提示，生成可供用户确认的初始技能／天赋 JSON。',
     emptyCatalog
-      ? '注意：payload.skill_catalog 目前是空的（这是本聊天的第一个角色）。因此 initialSkills 与 initialTalents 用到的每一个技能，都必须由你在本次 skillDefinitions 中完整定义，没有任何既有技能可以复用。'
+      ? '注意：payload.skill_catalog 目前是空的（这是本聊天的第一个角色）。因此 initialTalents 用到的每一个技能，都必须由你在本次 skillDefinitions 中完整定义，没有任何既有技能可以复用。'
       : '先查阅 payload.skill_catalog。语义适合的技能必须复用其精确 name 或 id，不得用近义词建立重复技能。',
     emptyCatalog
       ? '每个新定义必须同时提供 name 与明确说明技能范围的 description，缺一不可。'
       : '只有现有图鉴确实无法表达所需技能时，才能放入 skillDefinitions；每个新定义必须同时提供 name 与明确说明技能范围的 description。',
-    'initialSkills 与 initialTalents 的 skill 必须使用图鉴中的精确 name/id，或本次 skillDefinitions 中的新技能精确 name。',
+    'initialTalents 的 skill 必须使用图鉴中的精确 name/id，或本次 skillDefinitions 中的新技能精确 name。',
     '【天赋同样需要技能作为载体】天赋不是独立的性格标签，而是「对某个技能的先天擅长／苦手」。'
       + '因此 initialTalents 引用的技能若不在 payload.skill_catalog 中，必须先在本次 skillDefinitions 里定义它，否则该天赋会被丢弃。'
       + '若某个先天特质无法对应到一个明确的技能，就不要写成天赋。',
@@ -1704,7 +1617,7 @@ export function applyRegistrySkillSetup(chatState, targetName, result, report = 
     ? childSource.inheritedTalents
     : (resolvedChildSource?.child?.talents ?? workingState.characters[name]?.profile?.talents);
   const inheritedTalents = normalizeTalentList(inheritedTalentSource);
-  // 用户拍板（2026-08-14）：注册时只落地天赋，技能不预置——技能完全交给追踪时
+  // 数据库集成（用户拍板）：注册时只落地天赋，技能不预置——技能完全交给追踪时
   // AI 依剧情自动 bsRegisterSkillDefinition + bsTrainSkill 发现登记（避免注册生成的
   // 初始技能与追踪发现重复/漂移）。技能定义（skillDefinitions）仍登记进图鉴供追踪引用。
   let character = applyInitialSkillTalentConfig(workingState, name, {

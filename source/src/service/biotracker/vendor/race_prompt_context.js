@@ -1,17 +1,75 @@
-import { getDerivedTypeFluxProfile, getDerivedTypeIntroductionLine, getDerivedTypeMetabolismExemptions, getEmbryoTypeByRace, getMergedRacePhysiologyProfile, getRaceComponents, getRaceDescriptorComponents, getRaceIntroductionLine, getRacePhysiologyProfile } from './race_config.js';
+import { AMORPHOUS_RACES, DERIVED_TYPE_RACES, METOVIVIPAROUS_RACES, OVIPAROUS_RACES, OVOVIVIPAROUS_RACES, VIVIPAROUS_RACES, getDerivedTypeFluxProfile, getDerivedTypeIntroductionLine, getDerivedTypeMetabolismExemptions, getEmbryoTypeByRace, getMergedRacePhysiologyProfile, getRaceComponents, getRaceDescriptorComponents, getRaceIntroductionLine, getRacePhysiologyProfile } from './race_config.js';
 
 /**
  * 提示词插值防线：剥离换行、闭合标签与控制字符——race/derivedType 等用户可控字符串
- * 直接拼进高优先级规则段（<bs_race>），含换行或 `</` 可闭合段注入伪指令（安全审查 P1/P2）。
+ * 直接拼进高优先级规则段，含换行或闭合标签可截断段落注入伪指令。
  * 只影响显示，不改语义（种族名本身不含换行才是合法）。
  */
 function sanitizePromptText(value) {
   return String(value ?? '')
     .replace(/[\r\n\t]/g, ' ')
     .replace(/<\//g, '<\\/')
-    // C0 (\u0000-\u001f) + DEL (\u007f) + C1 控制区 (\u0080-\u009f，含 NEL U+0085)
+    // C0 + DEL + C1 控制区（含 NEL U+0085）
     .replace(/[\u0000-\u001f\u007f\u0080-\u009f]/g, ' ')
     .trim();
+}
+
+const RACE_CATALOG_GROUPS = Object.freeze([
+  ['胎生', VIVIPAROUS_RACES],
+  ['卵生', OVIPAROUS_RACES],
+  ['卵胎生', OVOVIVIPAROUS_RACES],
+  ['胎转卵生', METOVIVIPAROUS_RACES],
+  ['不定型', AMORPHOUS_RACES],
+]);
+
+/**
+ * 从短敘述里取一句极短的辨识提示：按逗号逐句累积到长度上限，
+ * 且至少收到一句中文（短敘述多以英文原名开头，只有英文时信息量不足）。
+ * 目的是让模型在名录阶段就能分辨形近种族（人鱼／鱼人、精灵／妖精），
+ * 完整介绍仍由 buildSingleRacePhysiologyBlock 在该族真正登场时给出。
+ */
+function buildRaceCatalogHint(text) {
+  const line = sanitizePromptText(text);
+  if (!line) return '';
+  const clauses = line.split(/[；。]/)[0].split('，').map((part) => part.trim()).filter(Boolean);
+  const picked = [];
+  for (const clause of clauses) {
+    // 长度上限只在已经收到中文之后才生效——只有英文原名的提示没有辨识价值，
+    // 不能因为下一句中文超出预算就把它挡在外面
+    const hasChinese = /[一-龥]/.test(picked.join('，'));
+    if (picked.length > 0 && hasChinese && [...picked, clause].join('，').length > 28) break;
+    picked.push(clause);
+    const current = picked.join('，');
+    if (current.length >= 10 && /[一-龥]/.test(current)) break;
+  }
+  return picked.join('，');
+}
+
+/**
+ * 种族名录：模型在写 base.race 或 bsAddSperm.race 时唯一的词汇表来源。
+ * 没有它模型只能凭空造名，而自创种族查不到生理参数、会静默走预设值。
+ * withHints=false 只有名字，约 350 token，适合每轮都发的追踪请求；
+ * withHints=true 附极短辨识提示，适合一次性的注册请求。
+ */
+export function buildRaceCatalogBlock({ withHints = false } = {}) {
+  const groupLines = RACE_CATALOG_GROUPS.map(([label, races]) => {
+    const names = races.map((race) => {
+      const hint = withHints ? buildRaceCatalogHint(getRaceIntroductionLine(race)) : '';
+      return hint ? `${race}(${hint})` : race;
+    });
+    return `- ${label}: ${names.join('、')}`;
+  });
+  return [
+    '[可用种族名录]',
+    '以下是系统内建的种族，写 base.race、fatherRace、bsAddSperm.race 时应优先从中选择。',
+    ...groupLines,
+    `- 衍生类型（写作 [类型]种族，如 [血族]人类）: ${DERIVED_TYPE_RACES.map((type) => {
+      const hint = withHints ? buildRaceCatalogHint(getDerivedTypeIntroductionLine(type)) : '';
+      return hint ? `${type}(${hint})` : type;
+    }).join('、')}`,
+    '名录外的形象请就近归入最相似的一项（例如鲸鱼娘归入空鲸或鱼人），不要自创种族名——自创名称在系统内查不到生理参数。',
+    '混血以 x 分隔，装饰子项以 - 附加，例如 兽耳族-兔x精灵-木。',
+  ].join('\n');
 }
 
 function formatNumber(value, digits = 2) {
@@ -326,14 +384,15 @@ function buildPregnancyShiftBlock(characterState) {
   let toleranceAccumulator = 0;
   let recoveryAccumulator = 0;
 
+  // 下面的累加与平均方式必须跟 tools.js 的妊娠偏移一致，否则提示词报的数值和实际推进对不上
   for (const fetus of fetuses) {
     const weight = Math.max(0.33, Math.min(3.0, Number(fetus?.weight) || 1.0));
     const raceProfile = getMergedRacePhysiologyProfile(fetus?.race) || {};
     totalWeight += weight;
-    // 与工具侧保持一致：妊娠取「天数平均」（调和），不按胎重——胎儿 weight 只影响自己的发育天数
+    // 妊娠取「天数平均」：胎重只影响胎儿自己的发育天数，不参与族速平均
     const fetusGestationSpeed = Math.max(0.1, Math.min(20, Number(raceProfile?.gestationSpeciesSpeed) || 1.0));
     gestationDaysAccumulator += 280 / fetusGestationSpeed;
-    // 出生难度在工具侧也不按胎重，直接平均
+    // 分娩难度同样不按胎重加权
     birthAccumulator += Math.max(0.1, Math.min(100, Number(raceProfile?.birthDifficulty) || 1.0));
     toleranceAccumulator += weight * Math.max(0.1, Math.min(100, Number(raceProfile?.breedTolerance) || 1.0));
     recoveryAccumulator += weight * getEmbryoRecoveryCoefficient(fetus?.embryoType);
@@ -341,7 +400,7 @@ function buildPregnancyShiftBlock(characterState) {
 
   const fetusCount = Math.max(1, fetuses.length);
   const averageGestationDays = gestationDaysAccumulator / fetusCount;
-  const averageGestation = 280 / Math.max(averageGestationDays, 1);
+  const averageGestation = averageGestationDays > 0 ? 280 / averageGestationDays : 1.0;
   const averageBirth = birthAccumulator / fetusCount;
   const averageTolerance = toleranceAccumulator / Math.max(totalWeight, 0.33);
   const averageRecoveryCoefficient = recoveryAccumulator / Math.max(totalWeight, 0.33);
@@ -353,10 +412,12 @@ function buildPregnancyShiftBlock(characterState) {
   const baseBreedTolerance = Math.max(0.1, Math.min(100, Number(motherProfile.breedTolerance) || 1.0));
   const baseRecoveryDays = Math.max(1, Math.round(Number(motherProfile.recoveryDays) || 56));
 
-  const shiftedGestationSpeciesSpeed = Math.max(0.1, Math.min(20, baseGestationSpeciesSpeed * averageGestation));
-  const shiftedBirthDifficulty = Math.max(0.1, Math.min(100, baseBirthDifficulty * averageBirth * fetusCountModifier));
+  // 妊娠速度与分娩难度完全由胎儿族决定，母体 base 不参与相乘（tools.js 同）；
+  // 只有承载耐受是在母体 base 上做偏移
+  const shiftedGestationSpeciesSpeed = Math.max(0.1, Math.min(20, averageGestation));
+  const shiftedBirthDifficulty = Math.max(0.1, Math.min(100, averageBirth * fetusCountModifier));
   const shiftedBreedTolerance = Math.max(0.1, Math.min(100, baseBreedTolerance * averageTolerance * toleranceCountModifier));
-  // 与工具侧一致：恢复天数按「胚胎类型恢复系数 × (280/妊娠速度) × (分娩难度/承载耐受)」计算
+  // 恢复天数按「胚胎类型恢复系数 × (280/妊娠速度) × (分娩难度/承载耐受)」计算
   const shiftedRecoveryDays = Math.max(
     1,
     Math.round(Math.max(0.1, Math.min(2.0, averageRecoveryCoefficient)) * (280 / shiftedGestationSpeciesSpeed) * (shiftedBirthDifficulty / Math.max(shiftedBreedTolerance, 0.1))),

@@ -79,7 +79,8 @@ export const DEFAULT_WARDROBE_PREP_PROMPT = [
 
 
 export const DEFAULT_SYSTEM_PROMPT = [
-  '你是 AIRP 女性角色生理状态追踪器的工具调度器。',
+  '你是 AIRP 角色生理状态追踪器的工具调度器。',
+  '工具参数中的 female 指「孕育者」——被追踪的承载方，不限定性别；扶她、孕夫、雄性孕育系（如海龙人）同样使用该字段。',
   '你要根据角色卡、最近对话、已有状态，决定这次应调用哪些工具更新状态。',
   '只输出 JSON，不要输出额外解释。',
   'JSON 结构必须是：',
@@ -125,6 +126,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   modelOptions: [],
   formattedOutputV4: true,
   mvuExtraAnalysisCompat: true,
+  raceCatalogInPrompt: true,
   triggerTiming: 'after_ai',
   pollMs: 1800,
   apiTimeoutMs: 180000,
@@ -137,7 +139,6 @@ export const DEFAULT_SETTINGS = Object.freeze({
   wardrobePrepPrompt: '',
   wardrobePrepMainCount: 3,
   wardrobePrepAccessoryCount: 3,
-  wardrobePrepStyleBook: false,
   targetNames: '',
   trackerWorldbookMode: 'exclude',
   trackerWorldbookExcludeNames: '',
@@ -734,8 +735,9 @@ function sanitizeChildrenList(value) {
 
 function sanitizeProfilePatch(profilePatch) {
   if (!profilePatch || typeof profilePatch !== 'object' || Array.isArray(profilePatch)) return null;
-  const cooldown = sanitizeObjectPatch(profilePatch.cooldown, ['orgasmOvulationUsed', 'pregnancyPressureWarning', 'psychologyUpdateUsed', 'maternalFetalInteractionUsed'], {
+  const cooldown = sanitizeObjectPatch(profilePatch.cooldown, ['orgasmOvulationUsed', 'naturalOvulationUsed', 'pregnancyPressureWarning', 'psychologyUpdateUsed', 'maternalFetalInteractionUsed'], {
     orgasmOvulationUsed: (value) => Boolean(value),
+    naturalOvulationUsed: (value) => Boolean(value),
     pregnancyPressureWarning: (value) => Boolean(value),
     psychologyUpdateUsed: (value) => Boolean(value),
     maternalFetalInteractionUsed: (value) => Boolean(value),
@@ -931,7 +933,8 @@ export function createEmptyChatState() {
     minutesPassed: 0,
     skillCatalog: [],
     nextSkillId: 1,
-    // null-proto：角色名直接作键，`__proto__`/`constructor` 键不会触发原型污染（安全审查 P2）
+    // null-proto：角色名直接作键，模型吐出 constructor/toString/__proto__ 之类的名字时
+    // 不会取到继承来的内建属性（那会让本该 skip 的调用变成拿函数当角色对象崩掉）
     characters: Object.create(null),
     lastRawResult: null,
     lastOperationLogs: [],
@@ -948,6 +951,7 @@ export function createDefaultFemaleState(name = '') {
     profile: {
       cooldown: {
         orgasmOvulationUsed: false,
+        naturalOvulationUsed: false,
         pregnancyPressureWarning: false,
         psychologyUpdateUsed: false,
         maternalFetalInteractionUsed: false,
@@ -1061,8 +1065,8 @@ export function getSettings(ctx) {
   const settings = root[MODULE_NAME];
   const useHostChatStore = ['tauritavern', 'luker'].includes(getHostKind());
   if (useHostChatStore) {
-    // TT/Luker 下 chatStates 与宿主 sidecar 绑定，属性描述符可能特殊（旧数据/宿主注入），
-    // 重定义失败不应拖垮整个设置读写——否则「点击主题没反应」（安全审查后防御加固）。
+    // TT/Luker 下 chatStates 与宿主 sidecar 绑定，属性描述符可能特殊（旧数据/宿主注入）。
+    // 重定义失败不该拖垮整个设置读取——否则连主题切换这种纯 UI 操作都会「点了没反应」。
     try {
       const descriptor = Object.getOwnPropertyDescriptor(settings, 'chatStates');
       const runtimeChatStates = descriptor && descriptor.enumerable === false && settings.chatStates && typeof settings.chatStates === 'object'
@@ -1190,8 +1194,7 @@ export function getChatState(ctx, settings) {
   if (!settings.chatStates[chatKey]) settings.chatStates[chatKey] = createEmptyChatState();
   const chatState = settings.chatStates[chatKey];
   let shouldSave = false;
-  // 存量状态迁移：早期 characters 是普通 {}，`__proto__` 键可污染原型（安全审查 P2）——
-  // 读取时重建为 null-proto（丢弃被污染的 prototype 键），新写入一律走 null-proto。
+  // 存量状态迁移：早期 characters 是普通 {}，读取时重建为 null-proto
   const rawCharacters = chatState.characters;
   if (!rawCharacters || typeof rawCharacters !== 'object') {
     chatState.characters = Object.create(null);
@@ -1765,6 +1768,7 @@ function createSnapshotCharacterBaseline(name = '') {
     profile: {
       cooldown: {
         orgasmOvulationUsed: false,
+        naturalOvulationUsed: false,
         pregnancyPressureWarning: false,
         psychologyUpdateUsed: false,
         maternalFetalInteractionUsed: false,

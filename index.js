@@ -96685,7 +96685,7 @@ function assignHistoryPage(target, page) {
         target[startIndex + index] = messages[index];
     }
 }
-async function refreshHostChatView(ctx, options = {}) {
+async function refreshHostChatView(ctx, options = {}, retriesLeft = 2) {
     if (getHostKind() !== 'tauritavern')
         return getHostChat(ctx);
     const ready = globalThis.__TAURITAVERN__?.ready || globalThis.__TAURITAVERN_MAIN_READY__;
@@ -96710,16 +96710,18 @@ async function refreshHostChatView(ctx, options = {}) {
     const messages = new Array(totalCount);
     assignHistoryPage(messages, page);
     while (page?.hasMoreBefore && Number(page.startIndex) > requiredStartIndex) {
-        // 分页期间宿主可能被切走：若当前聊天已变，直接放弃本次结果
+        // 翻页是异步的，期间宿主可能被切到另一个聊天：继续翻只会把两个聊天的楼层混在一起
         page = await handle.history.before(page, { limit: TAURI_HISTORY_PAGE_SIZE });
         assignHistoryPage(messages, page);
         if (getHostChatId(ctx) !== startChatId)
             break;
     }
-    // 中途切换聊天 → 旧数据不写缓存，通知调用方本轮作废重试
-    const endChatId = getHostChatId(ctx);
-    if (endChatId !== startChatId)
-        return refreshHostChatView(ctx, options);
+    // 中途切换聊天 → 本轮结果作废，不写缓存；重试有限次，避免用户连续切聊天时无限递归
+    if (getHostChatId(ctx) !== startChatId) {
+        if (retriesLeft > 0)
+            return refreshHostChatView(ctx, options, retriesLeft - 1);
+        return getHostChat(ctx);
+    }
     HOST_CHAT_VIEW_CACHE.set(ctx, {
         absolute: true,
         chatId: startChatId,
@@ -97145,7 +97147,8 @@ const DEFAULT_WARDROBE_PREP_PROMPT = [
     'temporaryItems 只用于病服、借装、旅馆睡衣等临时衣物；备装长期衣柜时通常输出空数组。',
 ].join('\n');
 const DEFAULT_SYSTEM_PROMPT = [
-    '你是 AIRP 女性角色生理状态追踪器的工具调度器。',
+    '你是 AIRP 角色生理状态追踪器的工具调度器。',
+    '工具参数中的 female 指「孕育者」——被追踪的承载方，不限定性别；扶她、孕夫、雄性孕育系（如海龙人）同样使用该字段。',
     '你要根据角色卡、最近对话、已有状态，决定这次应调用哪些工具更新状态。',
     '只输出 JSON，不要输出额外解释。',
     'JSON 结构必须是：',
@@ -97190,6 +97193,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     modelOptions: [],
     formattedOutputV4: true,
     mvuExtraAnalysisCompat: true,
+    raceCatalogInPrompt: true,
     triggerTiming: 'after_ai',
     pollMs: 1800,
     apiTimeoutMs: 180000,
@@ -97202,7 +97206,6 @@ const DEFAULT_SETTINGS = Object.freeze({
     wardrobePrepPrompt: '',
     wardrobePrepMainCount: 3,
     wardrobePrepAccessoryCount: 3,
-    wardrobePrepStyleBook: false,
     targetNames: '',
     trackerWorldbookMode: 'exclude',
     trackerWorldbookExcludeNames: '',
@@ -97792,8 +97795,9 @@ function sanitizeChildrenList(value) {
 function sanitizeProfilePatch(profilePatch) {
     if (!profilePatch || typeof profilePatch !== 'object' || Array.isArray(profilePatch))
         return null;
-    const cooldown = sanitizeObjectPatch(profilePatch.cooldown, ['orgasmOvulationUsed', 'pregnancyPressureWarning', 'psychologyUpdateUsed', 'maternalFetalInteractionUsed'], {
+    const cooldown = sanitizeObjectPatch(profilePatch.cooldown, ['orgasmOvulationUsed', 'naturalOvulationUsed', 'pregnancyPressureWarning', 'psychologyUpdateUsed', 'maternalFetalInteractionUsed'], {
         orgasmOvulationUsed: (value) => Boolean(value),
+        naturalOvulationUsed: (value) => Boolean(value),
         pregnancyPressureWarning: (value) => Boolean(value),
         psychologyUpdateUsed: (value) => Boolean(value),
         maternalFetalInteractionUsed: (value) => Boolean(value),
@@ -97989,7 +97993,8 @@ function createEmptyChatState() {
         minutesPassed: 0,
         skillCatalog: [],
         nextSkillId: 1,
-        // null-proto：角色名直接作键，`__proto__`/`constructor` 键不会触发原型污染（安全审查 P2）
+        // null-proto：角色名直接作键，模型吐出 constructor/toString/__proto__ 之类的名字时
+        // 不会取到继承来的内建属性（那会让本该 skip 的调用变成拿函数当角色对象崩掉）
         characters: Object.create(null),
         lastRawResult: null,
         lastOperationLogs: [],
@@ -98005,6 +98010,7 @@ function createDefaultFemaleState(name = '') {
         profile: {
             cooldown: {
                 orgasmOvulationUsed: false,
+                naturalOvulationUsed: false,
                 pregnancyPressureWarning: false,
                 psychologyUpdateUsed: false,
                 maternalFetalInteractionUsed: false,
@@ -98119,8 +98125,8 @@ function getSettings(ctx) {
     const settings = root[MODULE_NAME];
     const useHostChatStore = ['tauritavern', 'luker'].includes(getHostKind());
     if (useHostChatStore) {
-        // TT/Luker 下 chatStates 与宿主 sidecar 绑定，属性描述符可能特殊（旧数据/宿主注入），
-        // 重定义失败不应拖垮整个设置读写——否则「点击主题没反应」（安全审查后防御加固）。
+        // TT/Luker 下 chatStates 与宿主 sidecar 绑定，属性描述符可能特殊（旧数据/宿主注入）。
+        // 重定义失败不该拖垮整个设置读取——否则连主题切换这种纯 UI 操作都会「点了没反应」。
         try {
             const descriptor = Object.getOwnPropertyDescriptor(settings, 'chatStates');
             const runtimeChatStates = descriptor && descriptor.enumerable === false && settings.chatStates && typeof settings.chatStates === 'object'
@@ -98256,8 +98262,7 @@ function getChatState(ctx, settings) {
         settings.chatStates[chatKey] = createEmptyChatState();
     const chatState = settings.chatStates[chatKey];
     let shouldSave = false;
-    // 存量状态迁移：早期 characters 是普通 {}，`__proto__` 键可污染原型（安全审查 P2）——
-    // 读取时重建为 null-proto（丢弃被污染的 prototype 键），新写入一律走 null-proto。
+    // 存量状态迁移：早期 characters 是普通 {}，读取时重建为 null-proto
     const rawCharacters = chatState.characters;
     if (!rawCharacters || typeof rawCharacters !== 'object') {
         chatState.characters = Object.create(null);
@@ -98867,6 +98872,7 @@ function createSnapshotCharacterBaseline(name = '') {
         profile: {
             cooldown: {
                 orgasmOvulationUsed: false,
+                naturalOvulationUsed: false,
                 pregnancyPressureWarning: false,
                 psychologyUpdateUsed: false,
                 maternalFetalInteractionUsed: false,
@@ -99553,38 +99559,26 @@ function extractJson(text) {
     return null;
 }
 /**
- * DeepSeek 系列模型对 response_format(json_object) 支持良好，且工具调用兼容层不稳定——
- * 按用户需求：模型名只要包含 deepseek 或 ds（大小写不敏感）即判定为 DeepSeek 系，
- * 公益站可能带各种前后缀（如 deepseek-v4-flash / deepseek-v4-pro），故用宽松子串匹配。
+ * DeepSeek 系模型对 response_format(json_object) 支持好，但工具调用兼容层不稳定，
+ * 掉格式概率明显高于其他模型，需要额外注入输出结构指令。
+ * 只匹配 deepseek——原始实现还匹配子串 ds，会误伤名字里恰好含 ds 的其他模型。
  */
 function isDeepSeekFamilyModel(model) {
-    const name = String(model || '').trim().toLowerCase();
-    return name.includes('deepseek') || name.includes('ds');
+    return String(model || '').trim().toLowerCase().includes('deepseek');
 }
-/**
- * 是否附加 response_format.json_object（普通格式化输出）：
- * 按钮开启（formattedOutputV4 !== false）或模型为 DeepSeek 系（自动切换）。
- */
-function shouldUseResponseFormat(settings, model) {
-    if (settings?.formattedOutputV4 !== false)
-        return true;
-    return isDeepSeekFamilyModel(model);
+/** 是否附加 response_format.json_object：完全听使用者的开关（渠道不支持时要能关掉）。 */
+function shouldUseResponseFormat(settings, _model) {
+    return settings?.formattedOutputV4 !== false;
 }
-/**
- * 是否注入 v4 兼容提示词结构指令（完整 v4 兼容）：
- * 仅 DeepSeek 系模型触发——普通模型按钮开启时只加 response_format，不注入指令。
- */
+/** 是否注入 v4 结构指令：开关开着且模型是 DeepSeek 系才注入。 */
 function shouldInjectV4Instruction(settings, model) {
-    return isDeepSeekFamilyModel(model);
+    return shouldUseResponseFormat(settings, model) && isDeepSeekFamilyModel(model);
 }
-/**
- * MVU 式「格式化输出」提示词指令：v4 兼容模式下要求模型只输出符合 tool_calls 结构的 JSON 对象，
- * 与 response_format(json_object) 双重约束，降低 DeepSeek 等模型掉格式概率。
- */
+/** v4 兼容模式的输出结构指令，与 response_format 双重约束降低掉格式概率。 */
 function buildFormattedOutputV4Instruction() {
     return [
         '【输出格式（强制）】',
-        '你处于格式化输出模式：不要输出 Markdown、不要输出 ```json 代码块、不要输出解释文字或任何对象之外的字符。',
+        '你处于格式化输出模式：不要输出 Markdown、不要输出代码块、不要输出解释文字或任何对象之外的字符。',
         '只输出一个可直接 JSON.parse 的 JSON 对象，结构为：',
         '{"tool_calls": [{"name": "工具名", "arguments": {"参数名": "值"}}], "character_checks": [{"female": "角色名", "status": "no_change|updated|present|offscreen"}]}',
         'arguments 必须是一个对象；工具名与参数必须来自 available_tools 与变量语义说明。',
@@ -99647,64 +99641,74 @@ function buildHostProxyConfig(apiBase, settings) {
         custom_include_headers: apiKey ? `Authorization: Bearer ${apiKey}` : '',
     };
 }
-function shouldUseHostProxy(url) {
-    return isBrowserRuntime() && isCrossOriginUrl(url);
-}
 /**
- * 直连会把 API Key 放进 Authorization 头；远程 http 端点属于明文传输，
- * 仅放行 localhost 的 http（本地 Ollama/代理调试场景）。
- * 相对路径/无 scheme 的 apiBase 视为同源路径（浏览器自行解析），不在此列。
- * 前缀判定须覆盖任何 http(s) scheme 形式（含 `http:`/`http:/` 这类少打斜杠的畸形串，
- * WHATWG 会把它解析成远程主机，不能只认 `http://`）。
+ * 直连会把 API Key 放进 Authorization 头，代理路径同样把 key 交给 ST 后端转发，
+ * 所以两条路都要校验：远程 http 属于明文传输，一律拒绝。
+ * 内网地址（localhost / 私网段 / 链路本地）放行——在另一台机器跑 ollama、
+ * koboldcpp 是常规用法，封掉会直接让这些人不能用。
+ * 相对路径/无 scheme 视为同源，交给浏览器自行解析。
  */
 function assertSafeDirectApiBase(apiBase) {
     const raw = String(apiBase || '').trim();
     if (!raw)
         return;
-    // 非 http(s) scheme（file://、gopher://、ftp://、javascript: 等）一律拒绝——
-    // 直连时浏览器可能拦截，但 host-proxy 路径会把 URL 交给 ST 后端服务端 fetch，
-    // 成为 SSRF 放大器（网络面审查 P2）。
     if (!/^https?:/i.test(raw)) {
-        // 相对路径/无 scheme（'api/v1'、'api.example.com:8080'、'localhost:8000'）
-        // 视为同源/回环路径，放行；显式 scheme（file://、gopher://、ftp://、javascript:、
-        // data: 等）一律拒绝——直连时浏览器可能拦截，但 host-proxy 路径会把 URL 交给
-        // ST 后端服务端 fetch，成为 SSRF 放大器（网络面审查 P2）。
+        // 显式的非 http(s) scheme 一律拒绝：代理路径会把 URL 交给 ST 后端服务端 fetch，
+        // file:// / gopher:// 之类会让它变成 SSRF 放大器
         const schemeMatch = raw.match(/^([a-z][a-z0-9+.-]*):/i);
         if (schemeMatch) {
-            const scheme = schemeMatch[1].toLowerCase();
             const rest = raw.slice(schemeMatch[0].length);
-            // 'localhost:8000' / 'api.example.com:8080' = 无 scheme 的 host:port，放行
+            // 'localhost:8000' / 'api.example.com:8080' 是无 scheme 的 host:port，放行
             const isPortOnly = /^\d+$/.test(rest);
-            const isDangerousScheme = ['file', 'gopher', 'ftp', 'javascript', 'data', 'vbscript', 'jar', 'ws', 'wss'].includes(scheme);
-            if (!isPortOnly && isDangerousScheme) {
+            if (!isPortOnly) {
                 throw new Error('API Base URL 仅支持 http:// 或 https://，其他协议一律拒绝。');
             }
         }
         return;
     }
+    let url;
     try {
-        const url = new URL(raw);
-        // WHATWG URL 对 IPv6 回环返回带方括号的 hostname（'[::1]'），须去掉再比较
-        const host = url.hostname.replace(/^\[|\]$/g, '');
-        if (url.protocol === 'http:' && !['localhost', '127.0.0.1', '::1'].includes(host)) {
-            throw new Error('API Base URL 使用 http:// 时仅允许 localhost；远程地址请使用 https://，避免 API Key 明文传输。');
-        }
-        // 解析后 IP 复核：私网/环回/链路本地/保留地址在代理路径会被 ST 后端放大成
-        // SSRF（如 169.254.169.254 云元数据、10.x 内网、0.0.0.0）——即使 scheme 是 https。
-        const numericHost = host.replace(/^::ffff:/, '').toLowerCase();
-        if (isPrivateNetworkHost(numericHost) && !['localhost', '127.0.0.1', '::1'].includes(numericHost)) {
-            throw new Error('API Base URL 指向私网/环回/链路本地地址，代理路径存在 SSRF 风险，请使用公网 https 地址。');
-        }
+        url = new URL(raw);
     }
-    catch (error) {
-        if (error instanceof TypeError)
-            throw new Error('API Base URL 无法解析。');
-        throw error;
+    catch {
+        throw new Error('API Base URL 无法解析。');
+    }
+    if (url.protocol !== 'http:')
+        return;
+    // WHATWG URL 对 IPv6 返回带方括号的 hostname
+    const host = url.hostname.replace(/^\[|\]$/g, '').replace(/^::ffff:/, '').toLowerCase();
+    if (!isLocalNetworkHost(host)) {
+        throw new Error('API Base URL 使用 http:// 时仅允许本机或内网地址；公网地址请改用 https://，避免 API Key 明文传输。');
     }
 }
+/** 本机/内网主机判定：这些地址上的 http 明文不出本地网络，放行。 */
+function isLocalNetworkHost(host) {
+    if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local'))
+        return true;
+    if (host === '::1' || host === '::')
+        return true;
+    // IPv6 链路本地 fe80::/10 与唯一本地 fc00::/7
+    if (host.includes(':')) {
+        const first = host.split(':')[0];
+        return /^fe[89ab]/.test(first) || /^f[cd]/.test(first);
+    }
+    const parts = host.split('.').map((n) => Number(n));
+    if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255))
+        return false;
+    const [a, b] = parts;
+    if (a === 127 || a === 10 || a === 0)
+        return true;
+    if (a === 172 && b >= 16 && b <= 31)
+        return true;
+    if (a === 192 && b === 168)
+        return true;
+    if (a === 169 && b === 254)
+        return true; // 链路本地
+    return false;
+}
 /**
- * 错误文本脱敏：API 响应体可能回显 Authorization/key/token 等敏感字段，
- * 拼入错误消息（toastr/UI 可见）前剥离（网络面审查 P3）。
+ * 错误文本脱敏：API 响应体可能回显 Authorization/key/token，
+ * 拼进错误消息（toastr/UI 可见）前剥离。
  */
 function sanitizeErrorText(text) {
     return String(text || '')
@@ -99712,47 +99716,16 @@ function sanitizeErrorText(text) {
         .replace(/(Bearer\s+)[A-Za-z0-9._~+/-]{8,}/gi, '$1***')
         .slice(0, 300);
 }
-/** 判定主机是否为私网/环回/链路本地/保留 IP（用于代理路径 SSRF 防护）。 */
-function isPrivateNetworkHost(host) {
-    if (!/^[\d.]+$/.test(host) && !/^[0-9a-f:]+$/i.test(host))
-        return false; // 域名放行（DNS rebinding 由解析后复核兜底不了时依赖宿主）
-    if (host.includes(':')) {
-        // IPv6：环回 ::1、链路本地 fe80::/10、唯一本地 fc00::/7、保留 ::/128
-        if (host === '::1' || host === '::')
-            return true;
-        const first = host.split(':')[0].toLowerCase();
-        if (first === 'fe80' || first === 'feb0' || first === 'fe90' || first === 'fea0' || first === 'feb1' || first === 'feb2' || first === 'feb3' || first === 'feb4' || first === 'feb5' || first === 'feb6' || first === 'feb7' || first === 'feb8' || first === 'feb9' || first === 'feba' || first === 'febb' || first === 'febc' || first === 'febd' || first === 'febe' || first === 'febf')
-            return true;
-        if (first === 'fc' || first === 'fd')
-            return true;
-        return false;
-    }
-    const parts = host.split('.').map((n) => Number(n));
-    if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255))
-        return false;
-    const [a, b] = parts;
-    if (a === 10)
-        return true;
-    if (a === 127)
-        return true;
-    if (a === 169 && b === 254)
-        return true;
-    if (a === 172 && b >= 16 && b <= 31)
-        return true;
-    if (a === 192 && b === 168)
-        return true;
-    if (a === 0)
-        return true;
-    if (a >= 224)
-        return true; // 组播/保留
-    return false;
+function shouldUseHostProxy(url) {
+    return isBrowserRuntime() && isCrossOriginUrl(url);
 }
 function shouldFallbackFromHostProxy(responseText, status) {
+    // 不含 429：上游限流时再直连一次等于对已限流的端点翻倍施压，
+    // 而浏览器跨域直连多半又会 CORS 失败，白白多打一次
     return status === 401
         || status === 403
         || status === 404
         || status === 405
-        || status === 429
         || (status >= 500 && status <= 599)
         || /cannot\s+post|not\s+found|no\s+route|ENOENT/i.test(String(responseText || ''));
 }
@@ -99945,7 +99918,7 @@ function isNonRetriableApiError(error) {
         return true;
     const message = String(error?.message || error || '');
     // 配置/鉴权类错误重试无意义
-    return /请先填写|尚未配置|API URL 或模型名称|无法解析|仅允许 localhost|401|403|Unauthorized|invalid.?api.?key|Incorrect API key/i.test(message);
+    return /请先填写|尚未配置|API URL 或模型名称|无法解析|仅允许本机或内网|其他协议一律拒绝|401|403|Unauthorized|invalid.?api.?key|Incorrect API key/i.test(message);
 }
 /**
  * 全局自动重试：首次失败后按 1s/2s/3s 间隔再试，最多 3 次（合计最多 4 轮）。
@@ -100307,9 +100280,10 @@ function buildPresetSamplingBodyFromPreset(preset) {
 }
 async function requestChatCompletion(apiBase, settings, body, runContext = {}) {
     const logApiDebug = (phase, details = {}) => {
-        // 默认关闭：全量 request/response（含聊天/角色态）只会在显式开启调试时落 console，
-        // 避免无条件泄露（网络面审查 P3）。开启：控制台执行 globalThis.__bs_biotracker_debug_api__ = true
-        // 数据库插件：适配层注入 __bs_biotracker_debug_api_probe__（读取数据库 debug 采集开关）联动开启
+        // 默认关闭：完整 request/response 含聊天内容，同页任何脚本（其他扩展、角色卡的
+        // TH 脚本经 window.parent）都读得到。排查时在控制台执行：
+        //   globalThis.__bs_biotracker_debug_api__ = true
+        // 数据库集成：适配层注入 __bs_biotracker_debug_api_probe__（读取数据库 debug 采集开关）联动开启
         if (!globalThis.__bs_biotracker_debug_api__ && !safeProbeCall('__bs_biotracker_debug_api_probe__'))
             return;
         try {
@@ -100328,10 +100302,9 @@ async function requestChatCompletion(apiBase, settings, body, runContext = {}) {
         const previousAsyncFlag = globalThis.__bs_biotracker_async_request__;
         globalThis.__bs_biotracker_async_request__ = true;
         const url = `${apiBase}/chat/completions`;
-        const useHostProxy = shouldUseHostProxy(url);
-        // 无条件校验 http 明文：代理路径同样把 key 交给 ST 后端（proxy_password/custom_include_headers），
-        // 远程 http 一律拒绝——不校验会在代理转发段以明文发往远程主机（安全审查 P2）。
+        // 代理路径同样把 key 交给 ST 后端转发，所以无条件校验，不只校验直连
         assertSafeDirectApiBase(apiBase);
+        const useHostProxy = shouldUseHostProxy(url);
         let transport = useHostProxy ? 'host-proxy' : 'direct';
         let requestText = '';
         try {
@@ -100360,8 +100333,6 @@ async function requestChatCompletion(apiBase, settings, body, runContext = {}) {
                 }
                 if (proxyError || (!response.ok && shouldFallbackFromHostProxy(responseText, response.status))) {
                     transport = proxyError ? 'direct-after-proxy-error' : `direct-after-proxy-${response.status}`;
-                    // 回退直连同样会把 Key 放进 Authorization 头：远程 http 必须拒绝
-                    assertSafeDirectApiBase(apiBase);
                     ({ response, responseText } = await fetchText(url, {
                         method: 'POST',
                         headers: getAuthHeaders(settings),
@@ -100382,8 +100353,8 @@ async function requestChatCompletion(apiBase, settings, body, runContext = {}) {
                     deadlineMs: runContext.deadlineMs || 0,
                 }));
             }
-            // 调试快照同样默认关闭（网络面审查 P3），避免无门控暂存完整请求/响应于 globalThis
-            if (globalThis.__bs_biotracker_debug_api__ || (typeof globalThis.__bs_biotracker_debug_api_probe__ === 'function' && globalThis.__bs_biotracker_debug_api_probe__())) {
+            // 调试快照同样默认关闭，避免无条件把完整请求/响应暂存在 globalThis
+            if (globalThis.__bs_biotracker_debug_api__ || safeProbeCall('__bs_biotracker_debug_api_probe__')) {
                 globalThis[DEBUG_LAST_API_RESPONSE_KEY] = {
                     capturedAt: Date.now(),
                     attempt,
@@ -100430,7 +100401,6 @@ async function requestChatCompletion(apiBase, settings, body, runContext = {}) {
             model: body.model,
             temperature: body.temperature,
             top_p: body.top_p,
-            top_k: body.top_k,
             frequency_penalty: body.frequency_penalty,
             presence_penalty: body.presence_penalty,
             max_tokens: body.max_tokens,
@@ -100484,9 +100454,8 @@ async function fetchModelList(settings) {
     let response;
     let responseText = '';
     const url = `${apiBase}/models`;
-    const useHostProxy = shouldUseHostProxy(url);
-    // 无条件校验 http 明文（代理与直连同标准），见 postBody 注释
     assertSafeDirectApiBase(apiBase);
+    const useHostProxy = shouldUseHostProxy(url);
     let transport = useHostProxy ? 'host-proxy' : 'direct';
     try {
         if (useHostProxy) {
@@ -100500,8 +100469,6 @@ async function fetchModelList(settings) {
             }
             if (proxyError || (!response.ok && shouldFallbackFromHostProxy(responseText, response.status))) {
                 transport = proxyError ? 'direct-after-proxy-error' : `direct-after-proxy-${response.status}`;
-                // 回退直连同样会带 Authorization 头：远程 http 必须拒绝
-                assertSafeDirectApiBase(apiBase);
                 ({ response, responseText } = await fetchText(url, { method: 'GET', headers: getAuthHeaders(settings), timeoutMs: resolveModelListTimeoutMs(settings) }));
             }
         }
@@ -100595,7 +100562,7 @@ async function buildPresetEnvelope(settings, baseSystemPrompt, payloadText) {
         return null;
     }
 }
-/** C13：安全调用全局探针——探针被第三方覆盖/抛错时降级为 null，不击穿整个请求 */
+/** 数据库集成（C13）：安全调用全局探针——探针被第三方覆盖/抛错时降级为 null，不击穿整个请求 */
 function safeProbeCall(name, fallback = null) {
     try {
         const fn = globalThis[name];
@@ -100607,7 +100574,7 @@ function safeProbeCall(name, fallback = null) {
     }
 }
 async function callOpenAICompatible(settings, payload, systemPrompt = DEFAULT_SYSTEM_PROMPT) {
-    // F4：每次调用时从数据库拉最新 API 配置（url/apiKey/model/温度），运行中改配置即时生效
+    // 数据库集成（F4）：每次调用时从数据库拉最新 API 配置（url/apiKey/model/温度），运行中改配置即时生效
     const liveApiProbe = safeProbeCall('__bs_biotracker_api_probe__');
     if (liveApiProbe) {
         const live = { ...settings, ...liveApiProbe };
@@ -100639,42 +100606,42 @@ async function callOpenAICompatible(settings, payload, systemPrompt = DEFAULT_SY
     let effectiveMessages = presetEnvelope?.messages?.length ? presetEnvelope.messages : baseMessages;
     const stPresetSampling = presetEnvelope?.sampling || {};
     const effectivePresetName = presetEnvelope?.presetName || '';
-    // 格式化输出：response_format.type = json_object 普通模式（按钮开启或 DeepSeek 系自动启用）。
-    // v4 兼容提示词结构指令仅 DeepSeek 系模型注入（按钮开时普通模型只有 response_format 不加指令）。
-    // 注意：指令只在 tracker 流程注入——registry/日记/备装/技能/繁育推演各自声明了
-    // 不同的 JSON 结构（profile/wardrobe/diary 等），注入 tool_calls 指令会压过它们的 schema。
-    const useResponseFormat = shouldUseResponseFormat(settings, model);
-    const injectV4Instruction = shouldInjectV4Instruction(settings, model);
+    // 格式化输出(v4兼容)：response_format.type = json_object（无 json_schema），可在设置关闭。
+    // DeepSeek 系额外注入输出结构指令——但只在追踪流程注入：registry/日记/备装/技能/
+    // 繁育推演各自声明了不同的 JSON 结构，注入 tool_calls 指令会压过它们的 schema。
+    const useFormattedOutputV4 = shouldUseResponseFormat(settings, model);
     const isTrackerFlow = !safePayload?.target_character;
-    if (injectV4Instruction && isTrackerFlow && effectiveMessages[0]?.role === 'system') {
+    const injectV4Instruction = shouldInjectV4Instruction(settings, model) && isTrackerFlow;
+    if (injectV4Instruction && effectiveMessages[0]?.role === 'system') {
         effectiveMessages = [
             { role: 'system', content: `${effectiveMessages[0].content}\n\n${buildFormattedOutputV4Instruction()}` },
             ...effectiveMessages.slice(1),
         ];
     }
-    // 采样参数优先数据库配置（适配层同步进 settings.temperature/maxTokens 或经 __bs_biotracker_api_probe__ 兜底），
-    // 其次 ST 预设采样，最后回退默认 0.2。probe 兜底保证追踪/注册内部直连调用也始终采用数据库配置。
-    const dbProbe = safeProbeCall('__bs_biotracker_api_probe__');
-    // 非预填充支持（预设级，经适配层探针）：把 assistant 消息改写为 user +「助手：」前缀，
-    // 用于不支持 assistant 预填充的模型/接口。
+    // 数据库集成（非预填充支持）：开启后把 assistant 消息改写为 user，内容首行加「助手：」前缀，
+    // 用于不支持 assistant 预填充的接口（适配层探针按预设级开关判定）
     if (safeProbeCall('__bs_biotracker_non_prefill_probe__') === true) {
-        effectiveMessages = (Array.isArray(effectiveMessages) ? effectiveMessages : []).map((m) => {
-            if (!m || typeof m !== 'object' || String(m.role || '').toLowerCase() !== 'assistant')
+        effectiveMessages = effectiveMessages.map((m) => {
+            if (!m || typeof m !== 'object' || typeof m.role !== 'string')
                 return m;
-            return { ...m, role: 'user', content: `助手：\n${typeof m.content === 'string' ? m.content : String(m.content ?? '')}` };
+            if (m.role.toLowerCase() === 'assistant') {
+                return { ...m, role: 'user', content: `助手：\n${typeof m.content === 'string' ? m.content : String(m.content ?? '')}` };
+            }
+            return m;
         });
     }
     const body = {
         model,
-        ...stPresetSampling,
-        temperature: pickFiniteNumber(settings.temperature, dbProbe?.temperature, stPresetSampling.temperature, 0.2),
-        ...(pickFiniteNumber(settings.maxTokens, dbProbe?.maxTokens) > 0
-            ? { max_tokens: Math.max(1, Math.floor(pickFiniteNumber(settings.maxTokens, dbProbe?.maxTokens))) }
+        // 数据库集成（F4）：采样参数优先数据库配置（温度经探针兜底，liveApiProbe 已并入 settings）
+        temperature: Number.isFinite(Number(settings.temperature)) ? Number(settings.temperature) : 0.2,
+        ...(Number.isFinite(Number(settings.maxTokens)) && Number(settings.maxTokens) > 0
+            ? { max_tokens: Math.max(1, Math.floor(Number(settings.maxTokens))) }
             : {}),
+        ...stPresetSampling,
         messages: effectiveMessages,
-        ...(useResponseFormat ? { response_format: { type: 'json_object' } } : {}),
+        ...(useFormattedOutputV4 ? { response_format: { type: 'json_object' } } : {}),
     };
-    recordEffectiveRequestDebug(`${safePayload?.target_character ? 'registry' : 'tracker'}${mainflowCopy.hasMainflowCopy ? '-mainflow-copy' : (safePayload?.resolved_worldbook_prompt ? '-mainflow-worldinfo' : '')}${useResponseFormat ? '' : '-no-response-format'}${injectV4Instruction ? '-v4-instruction' : ''}`, effectivePresetName, stPresetSampling, effectiveMessages, body);
+    recordEffectiveRequestDebug(`${safePayload?.target_character ? 'registry' : 'tracker'}${mainflowCopy.hasMainflowCopy ? '-mainflow-copy' : (safePayload?.resolved_worldbook_prompt ? '-mainflow-worldinfo' : '')}${useFormattedOutputV4 ? '' : '-no-response-format'}${injectV4Instruction ? '-v4-instruction' : ''}`, effectivePresetName, stPresetSampling, effectiveMessages, body);
     const callLabel = safePayload?.target_character ? '注册请求' : '追踪请求';
     // 整轮总时限：一个信号统管全部重试与子请求，到点后中止在飞的 fetch 并停止重试，
     // 让手动按钮无论后端多离谱都能在有限时间内解禁。单次超时为 0 时它是唯一的终点保障。
@@ -100689,9 +100656,9 @@ async function callOpenAICompatible(settings, payload, systemPrompt = DEFAULT_SY
             catch { }
         }, deadlineMs);
     }
-    // 聊天变更中止：删楼/ROLL/切聊天（CHAT_CHANGED）时数据库 abortOnChatMutation_ACU
-    // 会 abort 全局信号 → 这里转发中止本轮全部在飞子请求（fetchText 已支持 externalSignal）。
-    // 每次请求取最新 signal（abortOnChatMutation 会轮换旧 controller）。
+    const runContext = { signal: overallController?.signal || null, deadlineMs };
+    // 数据库集成（聊天变更中止）：删楼/ROLL/切聊天（CHAT_CHANGED）时数据库 abortOnChatMutation_ACU
+    // 会 abort 全局信号 → 这里转发中止本轮全部在飞子请求（fetchText 已支持 externalSignal）
     const chatMutationSignal = safeProbeCall('__bs_biotracker_chat_mutation_abort_signal__');
     let onChatMutationAbort = null;
     if (overallController && chatMutationSignal) {
@@ -100711,7 +100678,6 @@ async function callOpenAICompatible(settings, payload, systemPrompt = DEFAULT_SY
             chatMutationSignal.addEventListener('abort', onChatMutationAbort, { once: true });
         }
     }
-    const runContext = { signal: overallController?.signal || null, deadlineMs };
     try {
         return await withGlobalApiRetries(async (globalAttempt) => {
             const data = await requestChatCompletion(apiBase, settings, body, runContext);
@@ -100719,20 +100685,17 @@ async function callOpenAICompatible(settings, payload, systemPrompt = DEFAULT_SY
             let parsed = extractJson(content);
             if (parsed && typeof parsed === 'object')
                 return parsed;
-            // 同一轮全局尝试内：先做一次「请只输出 JSON」纠错请求（采样参数同样采用数据库配置）
+            // 同一轮全局尝试内：先做一次「请只输出 JSON」纠错请求
             const retryBody = {
                 model,
+                temperature: 0.1,
                 ...stPresetSampling,
-                temperature: pickFiniteNumber(settings.temperature, dbProbe?.temperature, stPresetSampling.temperature, 0.1),
-                ...(pickFiniteNumber(settings.maxTokens, dbProbe?.maxTokens) > 0
-                    ? { max_tokens: Math.max(1, Math.floor(pickFiniteNumber(settings.maxTokens, dbProbe?.maxTokens))) }
-                    : {}),
                 messages: [
                     ...effectiveMessages,
                     { role: 'assistant', content: String(content || '') },
                     { role: 'user', content: buildJsonRetryInstruction() },
                 ],
-                ...(useResponseFormat ? { response_format: { type: 'json_object' } } : {}),
+                ...(useFormattedOutputV4 ? { response_format: { type: 'json_object' } } : {}),
             };
             const retryData = await requestChatCompletion(apiBase, settings, retryBody, runContext);
             const retryContent = retryData?.choices?.[0]?.message?.content || '';
@@ -100745,7 +100708,7 @@ async function callOpenAICompatible(settings, payload, systemPrompt = DEFAULT_SY
     finally {
         if (overallTimer)
             clearTimeout(overallTimer);
-        // 清理全局中止信号监听，避免请求正常完成/超时后监听累积到下次删楼/ROLL
+        // 清理全局中止信号监听，避免请求正常完成/超时后监听累积
         if (chatMutationSignal && onChatMutationAbort) {
             chatMutationSignal.removeEventListener('abort', onChatMutationAbort);
         }
@@ -100754,7 +100717,6 @@ async function callOpenAICompatible(settings, payload, systemPrompt = DEFAULT_SY
 
 const VIVIPAROUS_RACES = Object.freeze([
     "人类",
-    "扶她",
     "精灵",
     "兽耳族",
     "袋兽族",
@@ -100768,7 +100730,8 @@ const VIVIPAROUS_RACES = Object.freeze([
     "雪族",
     "夜叉",
     "妖狐",
-    "貓又"
+    "貓又",
+    "月兔族"
 ]);
 const OVIPAROUS_RACES = Object.freeze([
     "鸟人",
@@ -100785,7 +100748,8 @@ const OVIPAROUS_RACES = Object.freeze([
     "阿拉克涅",
     "百足姬",
     "天狗",
-    "深潜者"
+    "深潜者",
+    "狗头人"
 ]);
 const OVOVIVIPAROUS_RACES = Object.freeze([
     "人鱼",
@@ -100797,7 +100761,8 @@ const OVOVIVIPAROUS_RACES = Object.freeze([
     "眼魔",
     "水母族",
     "海龙人",
-    "河童"
+    "河童",
+    "梅杜莎"
 ]);
 const METOVIVIPAROUS_RACES = Object.freeze([
     "龙族",
@@ -100809,7 +100774,8 @@ const METOVIVIPAROUS_RACES = Object.freeze([
     "凤凰",
     "白泽",
     "独角兽",
-    "空鲸"
+    "空鲸",
+    "修格斯"
 ]);
 const AMORPHOUS_RACES = Object.freeze([
     "史萊姆",
@@ -100821,7 +100787,9 @@ const AMORPHOUS_RACES = Object.freeze([
     "奈米丛族",
     "元素灵",
     "灯神",
-    "影魔"
+    "影魔",
+    "活体铠甲",
+    "伪人"
 ]);
 const ALL_BUILTIN_RACES = Object.freeze([
     ...VIVIPAROUS_RACES,
@@ -100830,12 +100798,79 @@ const ALL_BUILTIN_RACES = Object.freeze([
     ...METOVIVIPAROUS_RACES,
     ...AMORPHOUS_RACES,
 ]);
-const RACE_INTRODUCTION_LINES = Object.freeze(Object.assign(Object.fromEntries(ALL_BUILTIN_RACES.map((race) => [race, ""])), {
-    "扶她": "女性身体与女性二次性征，同时具备阴茎、阴囊与外阴（含阴道）；既能使人受孕，也能自身受孕。",
+const RACE_INTRODUCTION_LINES = Object.freeze(Object.assign(
+// 未列出的种族留空，提示词会自动略过该行
+Object.fromEntries(ALL_BUILTIN_RACES.map((race) => [race, ""])), {
+    "精灵": "Elf，长寿的尖耳亚人，面容姣好、擅长魔法；肤色深青的亚种称黑暗精灵（卓尔）。",
+    "兽耳族": "Kemonomimi／Beastfolk，保有人形、带兽耳兽尾的亚人；日系兽娘与西方 furry 皆归此类。",
+    "袋兽族": "Marsupial-folk，有袋目亚人。幼体极早产出后转入育儿袋，因此承载耐受极低。",
+    "哥布林": "Goblin，西幻小型怪物，繁殖力旺盛且几乎只诞下雄性；少数雌性个体存在。",
+    "兽人": "即 Orc（绿皮），高大粗野的战斗种族；与「兽耳族」无关，勿混用。",
+    "矮人": "Dwarf，居于矿山、擅长锻造的短躯亚人。",
+    "半身人": "Halfling，又称哈比人，身形矮小的和平亚人。",
+    "半人马": "Centaur，上身为人、下身为马的亚人，源自希腊神话。",
+    "巨人": "Giant，体型远超人类的种族；巨魔、山怪、独眼巨人、泰坦皆归此类。",
+    "魅魔": "Succubus／Incubus，性欲特化的恶魔系亚人，与恶魔已分家；男性的梦魔同属此类。",
+    "雪族": "Yuki-onna／Yeti，雪女与雪怪的复合群体，栖于严寒。",
+    "夜叉": "Yaksha／Oni，头生角的日系鬼族，罗刹与阿修罗皆归此类。",
+    "妖狐": "Kitsune，祖先为兽耳族，沾妖后独立演化的狐系妖族，修行增尾；未沾妖的兽耳狐娘应写作兽耳族-狐。",
+    "貓又": "Nekomata，祖先为兽耳族，沾妖后独立演化的猫系妖族，久养成妖、尾端分岔；未沾妖的兽耳猫娘应写作兽耳族-猫。",
+    "鸟人": "Harpy，典型形象为哈比，带翼的鸟类亚人；现代创作已性别比正常化。",
+    "植物亚人": "Dryad／Plant-folk，植物拟人，具自花授粉特性；亦可作为纯粹的播种方怪物。",
+    "社会虫族": "Eusocial Insectfolk，蜜蜂与蚂蚁一类的真社会性虫族，以雌性为绝对多数。",
+    "蜥蜴人": "Lizardfolk，又称亚龙人的鳞甲亚人；设定上从部落怪物到与人平起平坐皆有。",
+    "触手怪": "Tentacle Monster，成群触手构成的无性种族，繁殖上通常作为播种方。",
+    "妖精": "fairy，娇小带翅的精怪；与长身尖耳的「精灵」不同。",
+    "真菌亚人": "Myconid，菌类拟人，具自体授粉特性；亦可作为纯粹的播种方怪物。",
+    "海蛞蝓族": "Sea Slug-folk，海兔拟人，雌雄同体；交配方式奇特（交配列车、阴茎击剑）。",
+    "龟族": "Turtle-folk，龟类拟人，长寿而孕期极长。",
+    "甲壳族": "Crustacean-folk，蟹虾一类的甲壳拟人；亦可作为纯粹的播种方怪物。",
+    "宝箱怪": "Mimic，宝箱拟态怪，雌雄同体；所产之卵呈金币状。",
+    "阿拉克涅": "Arachne，上身为人、下身为蜘蛛的亚人，源自希腊神话。",
+    "百足姬": "Centipede-folk，上身为人、下身为蜈蚣的亚人，雅称天龙；可视为蜈蚣版的阿拉克涅。",
+    "天狗": "Tengu，日系妖怪，形象有鸦、狼、长鼻数种；族群政治性强。",
+    "深潜者": "Deep One，源自克苏鲁的海系异种，潜伏于人类社会；胚胎类型刻意与其他海系亚人不同。",
+    "人鱼": "Mermaid，以鱼尾替代双足的美人鱼；可借魔法置换双足上陆。",
+    "鱼人": "Fishfolk，人形而带鱼类特徵与粗尾鳍，可视为海中的精灵——孕期长、产子少。萨尔达的佐拉族属此。",
+    "海妖": "Scylla，章鱼乌贼一类，以触腕替代双足；无须变形即可上陆。",
+    "独居虫族": "Solitary Insectfolk，与社会虫族相对的独居性虫族；蛾、螳螂等拟人归此，部分会将卵寄入异族代孕孵化。",
+    "蛇人": "Lamia，上身为人、下身为蛇的亚人，形象参考拉米亚。",
+    "蛙人": "Frogfolk，蛙类拟人，出生时性别由外在环境决定，故不适用固定男女比；亦可作为纯粹的播种方怪物。",
+    "眼魔": "Beholder，引用 D&D 的眼球暴君，经拟人化后的形象。",
+    "水母族": "Jellyfish-folk，水母拟人，幼体（水螅体）与成体（水母体）形态差异极大。",
+    "海龙人": "Seahorse-folk，外形似龙、本质为海马的海系亚人，属雄性孕育系。",
+    "河童": "Kappa，头顶盛水皿的日系妖怪，蛙人的妖系分支。",
+    "龙族": "Dragon，可在人态与完全态之间自由转换的上位生物，孕期极长。",
+    "狮鹫族": "Griffin，鹰首狮身的上位幻兽，可在人态与完全态之间转换。",
+    "天使": "Angel，天界种族，以「天使之卵」孕育。",
+    "恶魔": "Demon，魔界种族，以「恶魔之卵」孕育；与已分家的魅魔不同。",
+    "奇美拉": "Chimera，合成兽。胎转卵生的过程可在孕育期平衡混杂血脉的冲突。",
+    "麒麟": "Qilin，东方上位神兽，汲取环境灵气孕育，自身承载耐受偏低；可拟人化。",
+    "凤凰": "Phoenix，东方上位神兽，浴火重生，汲取环境灵气孕育；可拟人化。",
+    "白泽": "Bai Ze，东方上位神兽，通晓万物，汲取环境灵气孕育；承载耐受为神兽中最低。",
+    "独角兽": "Unicorn，额生独角的上位幻兽，可在人态与完全态之间转换。",
+    "空鲸": "Sky Whale，翱翔天际的巨鲸，可在常态人形与巨态鱼形间切换（鲲鹏之属），孕期为全表最长。",
+    "史萊姆": "Slime，繁殖策略极多样：可无性分裂，可孕育任何种族之胎，亦可寄入异族子宫。",
+    "石像鬼": "Gargoyle，人类造物之一，石质无性种族；受精难度极高，繁殖基本限于同族。",
+    "烛灵": "Candle Spirit，人类造物之一，烛火所寄的无性种族；受精难度极高，繁殖基本限于同族。",
+    "人偶": "Living Doll，人类造物之一，得灵的人偶，无性；受精难度极高，繁殖基本限于同族。",
+    "心魇": "Kaijin，由人心中的黑暗诞生的怪人（魔法少女题材），亦会对人类播种。",
+    "宝石人": "Gem-folk，矿物构成的种族，可参考宝石之国一类的设定。",
+    "奈米丛族": "Nanite Swarm，由亿级奈米机械单元构成的液态金属体。",
+    "元素灵": "Elemental，自然元素的拟人体，如水元素温蒂妮。",
+    "灯神": "Djinn，阿拉丁神灯一类的愿望精灵。",
+    "影魔": "Shadow-folk，可在平面与立体之间切换、投影于影中的种族。",
+    "月兔族": "Moon Rabbit，居于月球的兔系亚人；繁殖力为胎生种族之最，族中多为雌性。",
+    "狗头人": "Kobold，与哥布林同生态位的小型犬首亚人；却如鸭嘴兽般产卵，分娩负担远低于哥布林。",
+    "梅杜莎": "Medusa，蛇人沾妖后独立演化的分支，发为群蛇；比蛇人更难受孕、孕期更长。",
+    "修格斯": "Shoggoth，形似史莱姆却更为古老的太古存在，承载力极强而极难受孕。",
+    "活体铠甲": "Living Armor，寄生型无性种族，附着于冒险者身上；将卵寄入宿主体内孵化，不自行孕育。",
+    "伪人": "Doppelganger，模仿并取代人类的不定型种族；各项生理刻意贴近人类，同卵分裂倾向极高。",
 }));
 const RACE_INTRODUCTION_FIELD = "introductionLine";
 const DERIVED_TYPE_RACES = Object.freeze([
-    "修行",
+    "修炼",
+    "魔导",
     "妖怪",
     "神祇",
     "不死",
@@ -100846,9 +100881,25 @@ const DERIVED_TYPE_RACES = Object.freeze([
     "变异",
     "序列"
 ]);
+const DERIVED_TYPE_INTRODUCTION_LINES = Object.freeze({
+    "修炼": "Cultivator，东方修仙体系；吸收天地灵气、化为自身超凡力量的个体。",
+    "魔导": "Magus，西方魔法体系：以魔力与术式为根基；巫师血脉、猎魔士与法师皆归此类，不限性别。",
+    "妖怪": "Youkai，由执念生智、汲取世人畏惧与认知而存在的异类，遵循自身的怪谈规则。",
+    "神祇": "Deity，受凡人祈求与香火供奉而维持神格的存在，具明确神职领域。",
+    "不死": "Undead，以死气驱动躯壳的亡者，保留生前记忆但情感淡漠。",
+    "血族": "Vampire，以血为食的优雅掠食者，畏光。",
+    "星际": "Xeno，具蜂群思维或高维精神体特质的星际物种，与母体网路心灵共鸣。",
+    "机械": "Android，以核心能源与算力驱动的机械体，具拟似人格。",
+    "器灵": "Artifact Spirit，器物生智而成的灵体，与持有者共鸣。",
+    "变异": "Mutant，基因突变而获得超自然能力的个体。",
+    "序列": "ABO，具 Alpha／Omega 等序列阶级与信息素本能的个体。",
+});
 const DERIVED_TYPE_INHERITANCE_PROFILES = Object.freeze({
-    "修行": Object.freeze({
+    "修炼": Object.freeze({
         inheritanceSpeed: 0.75
+    }),
+    "魔导": Object.freeze({
+        inheritanceSpeed: 1.0
     }),
     "妖怪": Object.freeze({
         inheritanceSpeed: 1.25
@@ -100879,9 +100930,13 @@ const DERIVED_TYPE_INHERITANCE_PROFILES = Object.freeze({
     })
 });
 const DERIVED_TYPE_FLUX_PROFILES = Object.freeze({
-    "修行": Object.freeze({
+    "修炼": Object.freeze({
         fluxName: "炁",
         fluxDefinition: "个体吸收天地灵气转化为自身的超凡生命能量。\n[平衡] 气息绵长，身心空灵，能完美掌控超凡能力，与自然环境共鸣。\n[正极] 表现为‘走火入魔’：生理上经脉胀痛欲裂、体表溢出肉眼可见的能量狂潮甚至七窍流血；心理上狂躁易怒、心魔幻象丛生，容易失去理智进行无差别破坏。\n[负极] 表现为‘散功衰败’：生理上经脉萎缩闭塞、肉身加速衰老、畏寒骨痛；心理上神识昏沉、感知迟钝，完全无法调动任何术法，甚至退化为凡人状态。",
+    }),
+    "魔导": Object.freeze({
+        fluxName: "魔力",
+        fluxDefinition: "体内蓄积并循环的魔力总量与操控余裕，是施术与维持术式的基础。\n[平衡] 魔力循环平顺，能稳定维持术式与结界，咏唱精准；对魔力波动的感知敏锐，研究与日常生活兼顾。\n[正极] 表现为‘魔力暴走’：生理上魔纹自体表浮现并发烫、魔力外泄扭曲周遭（灯火自燃、物件浮空、气温骤降），指尖不受控地放电；心理上被求知欲与万能感吞噬，无视代价推进禁忌术式，对旁人的劝阻显出居高临下的不耐。\n[负极] 表现为‘魔力枯竭’：生理上失温畏寒、指节僵冷、咏唱中断，连最基础的术式都点不燃，伴随剧烈偏头痛与耳鸣；心理上陷入‘不再是魔法师’的存在危机，回避同行，藏起法杖与魔导书。",
     }),
     "妖怪": Object.freeze({
         fluxName: "妖力",
@@ -100923,7 +100978,8 @@ const DERIVED_TYPE_FLUX_PROFILES = Object.freeze({
 const DERIVED_TYPE_METABOLISM_EXEMPTIONS = Object.freeze({
     "血族": Object.freeze(["hunger", "excretion", "odor"]),
     "不死": Object.freeze(["odor", "sleep", "milk"]),
-    "修行": Object.freeze(["hunger", "excretion", "companionship"]),
+    "修炼": Object.freeze(["hunger", "excretion", "companionship"]),
+    "魔导": Object.freeze(["sleep", "companionship", "odor"]),
     "妖怪": Object.freeze(["hunger", "excretion", "sleep"]),
     "神祇": Object.freeze(["hunger", "sleep", "companionship"]),
     "机械": Object.freeze(["hunger", "milk", "companionship"]),
@@ -100942,16 +100998,6 @@ const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
         "orgasmOvulationAmount": 1,
         "identicalProbability": 5,
         "genderRatio": 50
-    },
-    "扶她": {
-        "menstrualLengthRatio": 1,
-        "gestationSpeciesSpeed": 1,
-        "birthDifficulty": 1,
-        "breedTolerance": 1,
-        "impregnationDifficulty": 1,
-        "orgasmOvulationAmount": 1,
-        "identicalProbability": 5,
-        "genderRatio": null
     },
     "精灵": {
         "menstrualLengthRatio": 3,
@@ -100991,7 +101037,7 @@ const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
         "impregnationDifficulty": 0.2,
         "orgasmOvulationAmount": 2,
         "identicalProbability": 40,
-        "genderRatio": 99
+        "genderRatio": 95
     },
     "兽人": {
         "menstrualLengthRatio": 0.75,
@@ -101364,7 +101410,7 @@ const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
         "genderRatio": 50
     },
     "天使": {
-        "menstrualLengthRatio": 1.25,
+        "menstrualLengthRatio": 13,
         "gestationSpeciesSpeed": 0.8,
         "birthDifficulty": 2.5,
         "breedTolerance": 7,
@@ -101374,7 +101420,7 @@ const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
         "genderRatio": 50
     },
     "恶魔": {
-        "menstrualLengthRatio": 1.25,
+        "menstrualLengthRatio": 13,
         "gestationSpeciesSpeed": 0.8,
         "birthDifficulty": 2.5,
         "breedTolerance": 7,
@@ -101542,6 +101588,66 @@ const RACE_PHYSIOLOGY_PROFILES = Object.freeze({
         "orgasmOvulationAmount": 0,
         "identicalProbability": 33,
         "genderRatio": 50
+    },
+    "月兔族": {
+        "menstrualLengthRatio": 0.5,
+        "gestationSpeciesSpeed": 2,
+        "birthDifficulty": 0.6,
+        "breedTolerance": 2.5,
+        "impregnationDifficulty": 0.4,
+        "orgasmOvulationAmount": 4,
+        "identicalProbability": 30,
+        "genderRatio": 30
+    },
+    "狗头人": {
+        "menstrualLengthRatio": 0.5,
+        "gestationSpeciesSpeed": 2.5,
+        "birthDifficulty": 0.4,
+        "breedTolerance": 1.2,
+        "impregnationDifficulty": 0.3,
+        "orgasmOvulationAmount": 3,
+        "identicalProbability": 20,
+        "genderRatio": 50
+    },
+    "梅杜莎": {
+        "menstrualLengthRatio": 1.5,
+        "gestationSpeciesSpeed": 0.7,
+        "birthDifficulty": 1.5,
+        "breedTolerance": 1,
+        "impregnationDifficulty": 2.5,
+        "orgasmOvulationAmount": 1,
+        "identicalProbability": 5,
+        "genderRatio": 20
+    },
+    "修格斯": {
+        "menstrualLengthRatio": 2,
+        "gestationSpeciesSpeed": 0.3,
+        "birthDifficulty": 2,
+        "breedTolerance": 12,
+        "impregnationDifficulty": 5,
+        "orgasmOvulationAmount": 2,
+        "identicalProbability": 50,
+        "genderRatio": null
+    },
+    "活体铠甲": {
+        "menstrualLengthRatio": 1,
+        "gestationSpeciesSpeed": 1.5,
+        "birthDifficulty": 1.5,
+        "breedTolerance": 2,
+        "impregnationDifficulty": 0.5,
+        "orgasmOvulationAmount": 4,
+        "identicalProbability": 15,
+        "genderRatio": -1
+    },
+    "伪人": {
+        "menstrualLengthRatio": 1,
+        "gestationSpeciesSpeed": 1,
+        "birthDifficulty": 1,
+        "breedTolerance": 2,
+        "impregnationDifficulty": 3,
+        "orgasmOvulationAmount": 1,
+        "identicalProbability": 33,
+        "genderRatio": 50
     }
 });
 const RACE_PHYSIOLOGY_FIELDS = Object.freeze([
@@ -101596,7 +101702,11 @@ function getDerivedTypeOverride(derivedType) {
 }
 function getDerivedTypeIntroductionLine(derivedType) {
     const baseName = getBaseDerivedTypeName(derivedType);
-    return String(customDerivedTypeProfiles[baseName]?.introductionLine || '').trim();
+    // 使用者覆写优先，内建为 fallback（与 getRaceIntroductionLine 同规则）
+    const customLine = customDerivedTypeProfiles[baseName]?.introductionLine;
+    if (customLine !== undefined)
+        return String(customLine || '').trim();
+    return String(DERIVED_TYPE_INTRODUCTION_LINES[baseName] || '').trim();
 }
 function sanitizeRacePhysiologyProfilePatch(profile) {
     if (!profile || typeof profile !== 'object' || Array.isArray(profile))
@@ -101719,14 +101829,23 @@ function getRacePhysiologyProfile(race) {
         recoveryDays: resolveRecoveryDays(profile, getEmbryoTypeByRace(key)),
     };
 }
+/**
+ * 衍生类型别名：`修行` 在 v0.9.5 拆成东方的 `修炼` 与西方的 `魔导`，
+ * 旧存档里写着 `[修行]XXX` 的角色必须仍能查到 flux/遗传/代谢抵免，否则会静默失效。
+ * 繁体写法一并映射，模型写哪种字形都认得。
+ */
+const DERIVED_TYPE_ALIASES = Object.freeze({
+    修行: '修炼',
+    修煉: '修炼',
+    魔導: '魔导',
+});
 function getBaseDerivedTypeName(derivedType) {
     const value = String(derivedType || '').trim();
     if (!value)
         return '';
     const subtypeMatch = value.match(/^(.+?)-(.+)$/);
-    if (subtypeMatch)
-        return subtypeMatch[1];
-    return value;
+    const base = subtypeMatch ? subtypeMatch[1] : value;
+    return DERIVED_TYPE_ALIASES[base] || base;
 }
 function getDerivedTypeInheritanceProfile(derivedType) {
     const baseName = getBaseDerivedTypeName(derivedType);
@@ -101807,17 +101926,17 @@ function getRaceComponents$1(race) {
     });
 }
 function mergeGenderRatioValues(values) {
-    // 双性/无性是稳定的身体构造：混血时优先保留，避免「扶她x人类」这类组合把性别体系抹成普通男女
-    const hasHerm = values.some((value) => value === null);
-    const hasAsexual = values.some((value) => value === -1);
-    if (hasHerm)
+    // 双性优先于数值平均：多一套器官是稳定的身体构造，混血时应当保留，
+    // 否则「史莱姆x人类」会被平均成普通男女，双性只剩嵌合体那条 20% 的路径。
+    // 无性不比照办理——它是「少一套」的减法，让触手怪x人类的后代全部绝育过重。
+    if (values.some((value) => value === null))
         return null;
-    if (hasAsexual)
-        return -1;
     const normalValues = values.filter((value) => Number.isFinite(value) && value >= 0 && value <= 100);
     if (normalValues.length > 0) {
         return normalValues.reduce((sum, value) => sum + value, 0) / normalValues.length;
     }
+    if (values.some((value) => value === -1))
+        return -1;
     return 50;
 }
 function mergeGestationSpeciesSpeedByAverageDays(values) {
@@ -101981,16 +102100,74 @@ function getEmbryoTypeReferenceText(embryoType) {
 
 /**
  * 提示词插值防线：剥离换行、闭合标签与控制字符——race/derivedType 等用户可控字符串
- * 直接拼进高优先级规则段（<bs_race>），含换行或 `</` 可闭合段注入伪指令（安全审查 P1/P2）。
+ * 直接拼进高优先级规则段，含换行或闭合标签可截断段落注入伪指令。
  * 只影响显示，不改语义（种族名本身不含换行才是合法）。
  */
 function sanitizePromptText$1(value) {
     return String(value ?? '')
         .replace(/[\r\n\t]/g, ' ')
         .replace(/<\//g, '<\\/')
-        // C0 (\u0000-\u001f) + DEL (\u007f) + C1 控制区 (\u0080-\u009f，含 NEL U+0085)
+        // C0 + DEL + C1 控制区（含 NEL U+0085）
         .replace(/[\u0000-\u001f\u007f\u0080-\u009f]/g, ' ')
         .trim();
+}
+const RACE_CATALOG_GROUPS = Object.freeze([
+    ['胎生', VIVIPAROUS_RACES],
+    ['卵生', OVIPAROUS_RACES],
+    ['卵胎生', OVOVIVIPAROUS_RACES],
+    ['胎转卵生', METOVIVIPAROUS_RACES],
+    ['不定型', AMORPHOUS_RACES],
+]);
+/**
+ * 从短敘述里取一句极短的辨识提示：按逗号逐句累积到长度上限，
+ * 且至少收到一句中文（短敘述多以英文原名开头，只有英文时信息量不足）。
+ * 目的是让模型在名录阶段就能分辨形近种族（人鱼／鱼人、精灵／妖精），
+ * 完整介绍仍由 buildSingleRacePhysiologyBlock 在该族真正登场时给出。
+ */
+function buildRaceCatalogHint(text) {
+    const line = sanitizePromptText$1(text);
+    if (!line)
+        return '';
+    const clauses = line.split(/[；。]/)[0].split('，').map((part) => part.trim()).filter(Boolean);
+    const picked = [];
+    for (const clause of clauses) {
+        // 长度上限只在已经收到中文之后才生效——只有英文原名的提示没有辨识价值，
+        // 不能因为下一句中文超出预算就把它挡在外面
+        const hasChinese = /[一-龥]/.test(picked.join('，'));
+        if (picked.length > 0 && hasChinese && [...picked, clause].join('，').length > 28)
+            break;
+        picked.push(clause);
+        const current = picked.join('，');
+        if (current.length >= 10 && /[一-龥]/.test(current))
+            break;
+    }
+    return picked.join('，');
+}
+/**
+ * 种族名录：模型在写 base.race 或 bsAddSperm.race 时唯一的词汇表来源。
+ * 没有它模型只能凭空造名，而自创种族查不到生理参数、会静默走预设值。
+ * withHints=false 只有名字，约 350 token，适合每轮都发的追踪请求；
+ * withHints=true 附极短辨识提示，适合一次性的注册请求。
+ */
+function buildRaceCatalogBlock({ withHints = false } = {}) {
+    const groupLines = RACE_CATALOG_GROUPS.map(([label, races]) => {
+        const names = races.map((race) => {
+            const hint = withHints ? buildRaceCatalogHint(getRaceIntroductionLine(race)) : '';
+            return hint ? `${race}(${hint})` : race;
+        });
+        return `- ${label}: ${names.join('、')}`;
+    });
+    return [
+        '[可用种族名录]',
+        '以下是系统内建的种族，写 base.race、fatherRace、bsAddSperm.race 时应优先从中选择。',
+        ...groupLines,
+        `- 衍生类型（写作 [类型]种族，如 [血族]人类）: ${DERIVED_TYPE_RACES.map((type) => {
+            const hint = withHints ? buildRaceCatalogHint(getDerivedTypeIntroductionLine(type)) : '';
+            return hint ? `${type}(${hint})` : type;
+        }).join('、')}`,
+        '名录外的形象请就近归入最相似的一项（例如鲸鱼娘归入空鲸或鱼人），不要自创种族名——自创名称在系统内查不到生理参数。',
+        '混血以 x 分隔，装饰子项以 - 附加，例如 兽耳族-兔x精灵-木。',
+    ].join('\n');
 }
 function formatNumber(value, digits = 2) {
     const num = Number(value);
@@ -102335,21 +102512,22 @@ function buildPregnancyShiftBlock(characterState) {
     let birthAccumulator = 0;
     let toleranceAccumulator = 0;
     let recoveryAccumulator = 0;
+    // 下面的累加与平均方式必须跟 tools.js 的妊娠偏移一致，否则提示词报的数值和实际推进对不上
     for (const fetus of fetuses) {
         const weight = Math.max(0.33, Math.min(3.0, Number(fetus?.weight) || 1.0));
         const raceProfile = getMergedRacePhysiologyProfile(fetus?.race) || {};
         totalWeight += weight;
-        // 与工具侧保持一致：妊娠取「天数平均」（调和），不按胎重——胎儿 weight 只影响自己的发育天数
+        // 妊娠取「天数平均」：胎重只影响胎儿自己的发育天数，不参与族速平均
         const fetusGestationSpeed = Math.max(0.1, Math.min(20, Number(raceProfile?.gestationSpeciesSpeed) || 1.0));
         gestationDaysAccumulator += 280 / fetusGestationSpeed;
-        // 出生难度在工具侧也不按胎重，直接平均
+        // 分娩难度同样不按胎重加权
         birthAccumulator += Math.max(0.1, Math.min(100, Number(raceProfile?.birthDifficulty) || 1.0));
         toleranceAccumulator += weight * Math.max(0.1, Math.min(100, Number(raceProfile?.breedTolerance) || 1.0));
         recoveryAccumulator += weight * getEmbryoRecoveryCoefficient(fetus?.embryoType);
     }
     const fetusCount = Math.max(1, fetuses.length);
     const averageGestationDays = gestationDaysAccumulator / fetusCount;
-    const averageGestation = 280 / Math.max(averageGestationDays, 1);
+    const averageGestation = averageGestationDays > 0 ? 280 / averageGestationDays : 1.0;
     const averageBirth = birthAccumulator / fetusCount;
     const averageTolerance = toleranceAccumulator / Math.max(totalWeight, 0.33);
     const averageRecoveryCoefficient = recoveryAccumulator / Math.max(totalWeight, 0.33);
@@ -102359,10 +102537,12 @@ function buildPregnancyShiftBlock(characterState) {
     const baseBirthDifficulty = Math.max(0.1, Math.min(100, Number(motherProfile.birthDifficulty) || 1.0));
     const baseBreedTolerance = Math.max(0.1, Math.min(100, Number(motherProfile.breedTolerance) || 1.0));
     const baseRecoveryDays = Math.max(1, Math.round(Number(motherProfile.recoveryDays) || 56));
-    const shiftedGestationSpeciesSpeed = Math.max(0.1, Math.min(20, baseGestationSpeciesSpeed * averageGestation));
-    const shiftedBirthDifficulty = Math.max(0.1, Math.min(100, baseBirthDifficulty * averageBirth * fetusCountModifier));
+    // 妊娠速度与分娩难度完全由胎儿族决定，母体 base 不参与相乘（tools.js 同）；
+    // 只有承载耐受是在母体 base 上做偏移
+    const shiftedGestationSpeciesSpeed = Math.max(0.1, Math.min(20, averageGestation));
+    const shiftedBirthDifficulty = Math.max(0.1, Math.min(100, averageBirth * fetusCountModifier));
     const shiftedBreedTolerance = Math.max(0.1, Math.min(100, baseBreedTolerance * averageTolerance * toleranceCountModifier));
-    // 与工具侧一致：恢复天数按「胚胎类型恢复系数 × (280/妊娠速度) × (分娩难度/承载耐受)」计算
+    // 恢复天数按「胚胎类型恢复系数 × (280/妊娠速度) × (分娩难度/承载耐受)」计算
     const shiftedRecoveryDays = Math.max(1, Math.round(Math.max(0.1, Math.min(2.0, averageRecoveryCoefficient)) * (280 / shiftedGestationSpeciesSpeed) * (shiftedBirthDifficulty / Math.max(shiftedBreedTolerance, 0.1))));
     const gestationBaseDays = 280 / baseGestationSpeciesSpeed;
     const gestationShiftedDays = 280 / shiftedGestationSpeciesSpeed;
@@ -102482,18 +102662,6 @@ function buildRegistryRacePhysiologyPrompt(payload = {}) {
     ].join('\n\n');
 }
 
-/**
- * 提示词插值防线：剥离换行、闭合标签与控制字符——注册提示词模板内插的
- * declared_race/custom_notes/user_instruction 来自用户输入，含换行或 `</`
- * 可破坏模板行（网络面审查 P3）。与 race_prompt_context.sanitizePromptText 同规则。
- */
-function sanitizePromptText(value) {
-    return String(value ?? '')
-        .replace(/[\r\n\t]/g, ' ')
-        .replace(/<\//g, '<\\/')
-        .replace(/[\u0000-\u001f\u007f\u0080-\u009f]/g, ' ')
-        .trim();
-}
 const DEBUG_LAST_REGISTRY_REQUEST_KEY = '__bs_biotracker_debug_last_registry_request__';
 const DEBUG_LAST_REGISTRY_RESULT_KEY = '__bs_biotracker_debug_last_registry_result__';
 const DEBUG_LAST_BREEDING_INFERENCE_REQUEST_KEY = '__bs_biotracker_debug_last_breeding_inference_request__';
@@ -102526,6 +102694,7 @@ function resolveRegistryTargetName(ctx, value) {
 }
 function normalizeWorldbookMode$2(value) {
     const mode = String(value || 'exclude').trim();
+    // 数据库集成（F6）：agent_greenlights（蓝灯 constant + 绿灯 uid 白名单）为数据库 agent 世界书接管模式
     if (mode === 'mainflow' || mode === 'allowlist_all' || mode === 'exclude' || mode === 'agent_greenlights')
         return mode;
     return 'exclude';
@@ -102639,7 +102808,7 @@ function filterRegistryWorldbookEntries(value, excludedNames, settings = null, r
         const name = normalizeEntryName(entry);
         const selectionName = globalBookName ? formatGlobalWorldbookSelectionName$2(globalBookName, name) : name;
         if (mode === 'agent_greenlights') {
-            // 与追踪一致：蓝灯（constant 恒常条目，ST 数据形状为 constant:true 布尔）固有发送 + 数据库 agent 正文放行的绿灯（uid 白名单）
+            // 数据库集成（F6）：蓝灯（constant 恒常条目，ST 数据形状为 constant:true 布尔）固有发送 + agent 正文放行的绿灯（uid 白名单）
             if (entry?.enabled === false || entry?.disable === true)
                 return false;
             if (entry?.constant === true || entry?.type === 'constant')
@@ -102766,6 +102935,18 @@ function recordBreedingInferenceResultDebug(result, error = null) {
         error: error ? String(error?.message || error) : null,
     };
 }
+/**
+ * 提示词插值防线：剥离换行、闭合标签与控制字符——注册提示词模板内插的
+ * declared_race/custom_notes/user_instruction 来自用户输入，含换行或闭合标签可破坏模板行。
+ * 与 race_prompt_context.sanitizePromptText 同规则。
+ */
+function sanitizePromptText(value) {
+    return String(value ?? '')
+        .replace(/[\r\n\t]/g, ' ')
+        .replace(/<\//g, '<\\/')
+        .replace(/[\u0000-\u001f\u007f\u0080-\u009f]/g, ' ')
+        .trim();
+}
 function buildBreedingInferenceSystemPrompt(settings, options = {}) {
     const targetName = String(options.targetName || '').trim();
     const customNotes = String(options.customNotes !== undefined ? options.customNotes : (settings?.registryCustomNotes || '')).trim();
@@ -102854,10 +103035,8 @@ function buildWardrobePrepSystemPrompt(settings, options = {}) {
     const userPrompt = String(options.wardrobePrepPrompt || settings?.wardrobePrepPrompt || '').trim();
     const mainCount = Math.max(1, Math.min(12, Math.floor(Number(options.wardrobePrepMainCount ?? settings?.wardrobePrepMainCount ?? 3) || 3)));
     const accessoryCount = Math.max(0, Math.min(12, Math.floor(Number(options.wardrobePrepAccessoryCount ?? settings?.wardrobePrepAccessoryCount ?? 3) || 0)));
-    // options.styleBookRaw：调用方已异步加载的世界书原始 JSON（浏览器 fetch / Node 读文件）
-    const styleBookBlock = options.includeStyleBook ? buildWardrobeStyleBookBlock(options.styleBookRaw) : '';
     return [
-        '你是 AIRP 女性角色衣柜备装初始化器。',
+        '你是 AIRP 角色衣柜备装初始化器。',
         '你只为 payload.target_character 生成衣柜 JSON，不得新增其他角色。',
         '根据角色卡、世界书、最近对话、已注册状态、normalDescription/pregnantDescription 与衣柜记录中的服装线索，推断该角色合理拥有的长期衣物与当前穿着。',
         `默认生成 ${mainCount} 套 main 主件、${accessoryCount} 件 accessory 配件；main 的计数单位是完整套装，不是单件。若用户额外提示指定更合理的数量或场景，可在接近该数量的范围内微调。`,
@@ -102880,106 +103059,9 @@ function buildWardrobePrepSystemPrompt(settings, options = {}) {
         '配件中通常应包含 1-2 件 layer=inner 的贴身衣物（如内衣），其四维补正同样遵守 -3 到 3 的配件规则。',
         'outfit.mainItemId 必须是 wardrobe.items 或 outfit.temporaryItems 中 slot=main 的 id；若无法判断当前穿着，选择最日常的一件主件。',
         'outfit.accessoryItemIds 只能包含 slot=accessory 的 id；未知则空数组。',
-        ...(styleBookBlock ? [styleBookBlock] : []),
         '[用户额外备装提示]',
         userPrompt || '无',
     ].join('\n');
-}
-/**
- * 读取内置服装风格世界书（assets/wardrobe-style-book.json），拼接除「服装描写强化」外的
- * 性格穿搭风格条目，供备装生成参考。读取失败返回空串（不阻塞备装）。
- */
-/** 惰性获取 Node require：浏览器 bundle 中动态 import 被 stub 成抛错函数，被调用方 catch 吞掉 */
-async function getNodeRequire() {
-    if (typeof require === 'function')
-        return require;
-    try {
-        const nodeModule = await import('node:module');
-        return nodeModule.createRequire(import.meta.url);
-    }
-    catch {
-        return null;
-    }
-}
-/**
- * 浏览器环境异步加载服装风格世界书内容（主模式用 import.meta.url 解析真实 assets 路径；
- * bundle 模式由 _bundle/entry.js 的 fetch 补丁提供 JSON）。Node 环境直接读文件。
- * 返回原始 JSON 文本或 null（失败静默降级，不阻塞备装）。
- */
-async function loadWardrobeStyleBook() {
-    try {
-        if (typeof window !== 'undefined' && typeof fetch === 'function') {
-            try {
-                const url = new URL('./assets/wardrobe-style-book.json', import.meta.url).href;
-                const response = await fetch(url);
-                if (response.ok)
-                    return await response.text();
-            }
-            catch { }
-            return null;
-        }
-    }
-    catch { }
-    try {
-        const nodeRequire = await getNodeRequire();
-        if (!nodeRequire)
-            return null;
-        const fs = nodeRequire('node:fs');
-        const path = nodeRequire('node:path');
-        const scriptDir = path.dirname(nodeRequire('node:url').fileURLToPath(import.meta.url));
-        const candidates = [
-            path.join(scriptDir, '..', 'assets', 'wardrobe-style-book.json'),
-            path.join(process.cwd(), 'assets', 'wardrobe-style-book.json'),
-        ];
-        for (const candidate of candidates) {
-            try {
-                if (fs.existsSync(candidate))
-                    return fs.readFileSync(candidate, 'utf8');
-            }
-            catch { }
-        }
-    }
-    catch { }
-    return null;
-}
-/**
- * 把服装风格世界书原始 JSON 拼接成提示词块：只发送条目正文 content，
- * 排除「服装描写强化」，skill 化触发提示（key/triggerWhen）与说明
- * （comment 的 ACU_SKILL_META 元数据）一律不进入提示词。
- */
-function buildWardrobeStyleBookBlock(raw = null) {
-    try {
-        if (!raw)
-            return '';
-        const data = JSON.parse(raw);
-        const entries = data?.entries && typeof data.entries === 'object' ? data.entries : {};
-        const blocks = Object.entries(entries)
-            .filter(([, entry]) => {
-            // 只按首行风格名判断：排除「服装描写强化」，其余性格风格条目保留
-            const commentFirstLine = String(entry?.comment || '').split('\n')[0].trim();
-            return commentFirstLine && !commentFirstLine.startsWith('服装描写强化');
-        })
-            .map(([, entry]) => {
-            // 只发送条目正文 content；表头仅取 comment 首行（风格名）
-            const label = String(entry?.comment || '').split('\n')[0].trim();
-            const content = String(entry?.content || entry?.entry || '').trim();
-            if (!content)
-                return '';
-            return `【服装风格参考：${label}】\n${content}`;
-        })
-            .filter(Boolean);
-        if (blocks.length === 0)
-            return '';
-        return [
-            '[服装风格世界书参考]',
-            '以下是可参考的性格穿搭风格条目。根据 payload.target_character 的角色卡、normalDescription 与已注册状态判断其气质，选择最匹配的 1-3 条作为衣柜风格基调；风格冲突时以角色设定为准。',
-            ...blocks,
-        ].join('\n');
-    }
-    catch (error) {
-        console.warn('[BS BioTracker] failed to load wardrobe style book', error);
-        return '';
-    }
 }
 function sanitizeWardrobePrepResult(result) {
     if (!result || typeof result !== 'object' || Array.isArray(result))
@@ -103175,10 +103257,7 @@ async function runRegistryWardrobeInference(ctx, options = {}) {
     payload.wardrobe_prep_accessory_count = wardrobePrepAccessoryCount;
     payload.existing_wardrobe = chatState.characters[targetName]?.profile?.wardrobe || null;
     payload.existing_outfit = chatState.characters[targetName]?.profile?.outfit || null;
-    const includeStyleBook = options.includeStyleBook === true;
-    // 异步加载世界书（浏览器 fetch / Node 读文件），失败时 styleBookRaw 为 null → 块为空串，不阻塞备装
-    const styleBookRaw = includeStyleBook ? await loadWardrobeStyleBook() : null;
-    const systemPrompt = options.wardrobePrepSystemPrompt || buildWardrobePrepSystemPrompt(settings, { ...options, includeStyleBook, styleBookRaw, wardrobePrepPrompt, wardrobePrepMainCount, wardrobePrepAccessoryCount });
+    const systemPrompt = options.wardrobePrepSystemPrompt || buildWardrobePrepSystemPrompt(settings, { ...options, wardrobePrepPrompt, wardrobePrepMainCount, wardrobePrepAccessoryCount });
     const result = await callOpenAICompatible(settings, payload, systemPrompt);
     return sanitizeWardrobePrepResult(result);
 }
@@ -103267,6 +103346,8 @@ function buildRegistrySystemPrompt(settings, options = {}) {
     const sourceChild = options.payload?.source_child || null;
     const embryoTypeLorePrompt = buildEmbryoTypeLorePrompt(options.payload || {}, { includeAllIfEmpty: true });
     const racePhysiologyPrompt = buildRegistryRacePhysiologyPrompt(options.payload || {});
+    // 注册是一次性请求，附上辨识提示帮模型在形近种族间选对（人鱼／鱼人、精灵／妖精）
+    const raceCatalogPrompt = settings?.raceCatalogInPrompt === false ? '' : buildRaceCatalogBlock({ withHints: true });
     const psyMensLines = Object.entries(PSY_MENS_FIELDS).flatMap(([key, value]) => [
         `- psychology.mens.${key}_value: ${value.definition}`,
         `  阶段预览: ${value.preview}`,
@@ -103279,7 +103360,8 @@ function buildRegistrySystemPrompt(settings, options = {}) {
     const psyPregBoolLines = Object.entries(PSY_PREG_BOOL_FIELDS).map(([key, value]) => `- psychology.preg.${key}: ${value.definition}`);
     const prompt = [
         racePhysiologyPrompt,
-        '你是 AIRP 女性角色注册初始化器。',
+        raceCatalogPrompt,
+        '你是 AIRP 角色注册初始化器。',
         '只在用户明确要求注册指定角色时工作，不得擅自新增其他角色。',
         '根据角色卡、用户要求、已有资料，输出角色初始化 JSON。',
         sourceChild ? '本次注册来源为已有角色的孩子。payload.source_child 是固定事实：base.race 必须沿用其 race／derivedType；其 talents 会由系统确定性继承。你只能参考这些天赋塑造初始化内容，不得删除、改名、换向或重算天赋。' : '',
@@ -103557,6 +103639,7 @@ function sanitizeChildren(value) {
             name: item.name ?? item.babyName ?? null,
             fathers: item.fathers ?? null,
             provider: item.provider ?? null,
+            // 多母源/嵌合体的来源字段必须原样保留，否则手动转交会失去归属依据
             providerSources: Array.isArray(item.providerSources)
                 ? [...item.providerSources]
                 : (item.provider ? String(item.provider).split(/\s*[×Xx]\s*/).map((part) => part.trim()).filter(Boolean) : undefined),
@@ -103604,16 +103687,16 @@ function sanitizePregnant(value) {
             .filter((item) => item && typeof item === 'object')
             .map((item) => {
             const parsed = parseRaceDescriptor(item.race);
-            const parsedFetusRace = parsed.race || null;
-            // race 字段 = 胎儿完整种族（父×母，或纯种），模型按提示词示例填写，normalize 不会再二次混血。
-            // fatherRace 是可选显式字段：仅当模型显式提供父系时才保留；缺失时置 null，normalize 将信任 race 原样。
+            // race 是胎儿的完整种族（父系x母系，或纯种），模型按提示词示例填写。
+            // fatherRace 只在模型显式给出时保留；缺失时置 null，normalize 会原样信任 race，
+            // 否则代孕/移植胚胎会被硬塞进承载者的血统。
             const explicitFatherRace = item.fatherRace !== undefined && item.fatherRace !== null
                 ? parseRaceDescriptor(item.fatherRace).race || null
                 : null;
             return {
                 fathers: item.fathers ?? null,
                 provider: item.provider ?? null,
-                race: parsedFetusRace,
+                race: parsed.race || null,
                 fatherRace: explicitFatherRace,
                 fatherDerivedType: item.fatherDerivedType ?? parsed.derivedType ?? null,
                 gender: item.gender ?? null,
@@ -103693,13 +103776,13 @@ function normalizeRegisteredPregnancy(profile) {
         return;
     const motherRace = parseRaceDescriptor(profile?.base?.race || '人类').race || '人类';
     pregnant.fetuses = fetuses.map((fetus) => {
-        // race 已是模型给出的胎儿完整种族：仅当显式提供 fatherRace 时才按「父系×母系」重算；
-        // fatherRace 缺失时信任 race 原样，避免把已完整的混血种族再二次混入母系。
+        // 只有显式给出父系时才按「父系x母系」重算；否则信任 race 原样，
+        // 避免把已完整的胎儿种族再跟承载者混一次（代孕/移植胚胎会因此被改血统）
         const explicitFatherRace = parseRaceDescriptor(fetus?.fatherRace || '').race || null;
-        const fatherRace = explicitFatherRace || null;
+        const fatherRace = explicitFatherRace;
         const fetusRace = explicitFatherRace
             ? (explicitFatherRace === motherRace ? motherRace : deriveRegisteredFetusRace(motherRace, explicitFatherRace))
-            : (fetus?.race ? parseRaceDescriptor(fetus.race).race : motherRace);
+            : (fetus?.race ? parseRaceDescriptor(fetus.race).race || motherRace : motherRace);
         return {
             ...fetus,
             race: fetusRace,
@@ -103966,12 +104049,12 @@ function buildRegistrySkillSystemPrompt(options = {}) {
         '你是 AIRP 角色初始技能与天赋配置器。只处理 payload.target_character。',
         '根据角色卡、世界书、最近对话、已注册角色状态及用户提示，生成可供用户确认的初始技能／天赋 JSON。',
         emptyCatalog
-            ? '注意：payload.skill_catalog 目前是空的（这是本聊天的第一个角色）。因此 initialSkills 与 initialTalents 用到的每一个技能，都必须由你在本次 skillDefinitions 中完整定义，没有任何既有技能可以复用。'
+            ? '注意：payload.skill_catalog 目前是空的（这是本聊天的第一个角色）。因此 initialTalents 用到的每一个技能，都必须由你在本次 skillDefinitions 中完整定义，没有任何既有技能可以复用。'
             : '先查阅 payload.skill_catalog。语义适合的技能必须复用其精确 name 或 id，不得用近义词建立重复技能。',
         emptyCatalog
             ? '每个新定义必须同时提供 name 与明确说明技能范围的 description，缺一不可。'
             : '只有现有图鉴确实无法表达所需技能时，才能放入 skillDefinitions；每个新定义必须同时提供 name 与明确说明技能范围的 description。',
-        'initialSkills 与 initialTalents 的 skill 必须使用图鉴中的精确 name/id，或本次 skillDefinitions 中的新技能精确 name。',
+        'initialTalents 的 skill 必须使用图鉴中的精确 name/id，或本次 skillDefinitions 中的新技能精确 name。',
         '【天赋同样需要技能作为载体】天赋不是独立的性格标签，而是「对某个技能的先天擅长／苦手」。'
             + '因此 initialTalents 引用的技能若不在 payload.skill_catalog 中，必须先在本次 skillDefinitions 里定义它，否则该天赋会被丢弃。'
             + '若某个先天特质无法对应到一个明确的技能，就不要写成天赋。',
@@ -104128,7 +104211,7 @@ function applyRegistrySkillSetup(chatState, targetName, result, report = null) {
         ? childSource.inheritedTalents
         : (resolvedChildSource?.child?.talents ?? workingState.characters[name]?.profile?.talents);
     const inheritedTalents = normalizeTalentList(inheritedTalentSource);
-    // 用户拍板（2026-08-14）：注册时只落地天赋，技能不预置——技能完全交给追踪时
+    // 数据库集成（用户拍板）：注册时只落地天赋，技能不预置——技能完全交给追踪时
     // AI 依剧情自动 bsRegisterSkillDefinition + bsTrainSkill 发现登记（避免注册生成的
     // 初始技能与追踪发现重复/漂移）。技能定义（skillDefinitions）仍登记进图鉴供追踪引用。
     let character = applyInitialSkillTalentConfig(workingState, name, {
@@ -104890,11 +104973,21 @@ function refreshOutfitPregFit(profile) {
     };
     return outfit;
 }
-function getNaturalOvulationDailyAmount(profile) {
-    const ovulationAmount = clampNumber(profile?.bio?.orgasmOvulationAmount, 0, 100, 1);
-    const menstrualRatio = clampNumber(profile?.bio?.menstrualLengthRatio, 0.1, 20, 1);
-    const ovulationDays = Math.max(1, MENSTRUAL_STAGE_DAYS['排卵期'] * menstrualRatio);
-    return Math.max(1, Math.ceil(ovulationAmount / ovulationDays));
+/**
+ * 单个排卵期自然排出的卵数 = 1 颗基础 + orgasmOvulationAmount 额外排卵倾向。
+ *
+ * 旧算法是「每天至少 1 颗 x 排卵天数」，而排卵天数随 menstrualLengthRatio 线性拉长，
+ * 于是长周期种族按窗口长度虚增：精灵额外倾向明明是 0 却每周期排 6 颗、龙族排 8 颗，
+ * 与该字段的语义（高潮诱发的额外排卵量，见 applyOrgasmOvulation）完全无关。
+ * 周期越长排得越多也让「一年一次经期」这类设定无法成立。
+ */
+function getNaturalOvulationTotal(profile) {
+    const extra = clampNumber(profile?.bio?.orgasmOvulationAmount, 0, 100, 1);
+    return Math.max(1, Math.round(1 + extra));
+}
+/** 自然排卵每个排卵期只发生一次，离开排卵期即重置 */
+function shouldResetNaturalOvulation(stage) {
+    return stage !== '排卵期';
 }
 function getImplantationDays(profile) {
     const cycleLength = getMenstrualCycleLength(profile);
@@ -105484,7 +105577,11 @@ function updateFetalPositions(profile, tick, female) {
     if (fetuses.length === 0)
         return;
     const gestationSpeed = clampNumber(getGestationEffectiveSpeed(profile), 0, 20, 1);
-    const iterations = Math.max(0, tick.passedDays);
+    // 逐日步进的上限：bsPassedTime 可以叠出十几万天，逐日推进会拖死 UI。
+    // 10 年远超任何种族的妊娠期（最慢的 gestationSpeciesSpeed=0.1 也才 2800 天），
+    // 正常剧情不会触到；只有荒谬的时间跳跃才会被截断。
+    const MAX_DAILY_STEPS = 3650;
+    const iterations = Math.min(MAX_DAILY_STEPS, Math.max(0, tick.passedDays));
     if (iterations <= 0 || !PREGNANCY_STAGES.includes(stage))
         return;
     for (let step = 0; step < iterations; step += 1) {
@@ -105668,8 +105765,11 @@ function processSimpleConception(profile, tick, notify, name) {
     const passedHours = tick.passedHours;
     const allowsNaturalConception = [...MENSTRUAL_STAGES, '产后恢复'].includes(stage);
     if (allowsNaturalConception) {
-        if (stage === '排卵期' && fullDays > 0) {
-            base.eggs = clampNumber(base.eggs, 0, 99, 0) + (getNaturalOvulationDailyAmount(profile) * fullDays);
+        // 一次性排出本周期的份额：按天累加会让长排卵期窗口把卵数堆到上限，
+        // 而取 min 封顶又会把高潮诱发排卵已经排出的卵砍掉
+        if (stage === '排卵期' && fullDays > 0 && !(profile.cooldown || {}).naturalOvulationUsed) {
+            base.eggs = clampNumber(base.eggs, 0, 99, 0) + getNaturalOvulationTotal(profile);
+            profile.cooldown = { ...(profile.cooldown || {}), naturalOvulationUsed: true };
         }
         if (stage === '月经期' && passedHours > 0) {
             base.eggs = 0;
@@ -106094,6 +106194,7 @@ function applyPassiveMetabolism(profile, tick) {
     addMetabolismValue(profile, 'companionship', 0.05 * hours, 0, 150);
 }
 function applyMilkFromLibido(profile, changeValue) {
+    // 性欲下降不该泌乳：调用方传的是带符号的增量
     const delta = Number(changeValue) || 0;
     if (delta <= 0)
         return;
@@ -106178,7 +106279,12 @@ function applyHourlyPregnancyMetabolism(profile, tick, female) {
     applyDerivedMetabolismExemptions(profile);
     const vitality = clampNumber(profile?.base?.vitality, 0, 200, 100);
     const days = Math.max(1, Math.ceil(tick.deltaDays));
-    const rounds = Math.max(1, Math.ceil(fetalEnergyDrain)) * days;
+    // 症状抽样的轮数上限：bsPassedTime 各分量独立 clamp 后可叠到十几万天，
+    // 乘上 fetalEnergyDrain 就是十亿级循环，会把 UI 冻死。
+    // 封顶的是循环次数而不是时间本身——时间推进与阶段推进保持原语义，
+    // 超长时间跳跃只是症状擲骰次数不再线性增长（本来也不该线性增长）。
+    const MAX_SYMPTOM_ROUNDS = 2000;
+    const rounds = Math.min(MAX_SYMPTOM_ROUNDS, Math.max(1, Math.ceil(fetalEnergyDrain)) * days);
     for (let i = 0; i < rounds; i += 1) {
         const symptomChance = (200 - vitality) * 0.5;
         if (Math.random() * 100 < symptomChance) {
@@ -107179,7 +107285,7 @@ function applyAbortion(chatState, args) {
     if (!hasConceptionState) {
         return { applied: false, message: `bsAbortion skipped for ${female}: no conception state.` };
     }
-    // 假孕期无胎儿：结束假孕请走 bsSetMenstrualPhases，不算流产
+    // 假孕期没有胎儿：结束假孕请走 bsSetMenstrualPhases，不该记进流产经验
     if (stage === '假孕期' && fetuses.length === 0) {
         return { applied: false, message: `bsAbortion skipped for ${female}: 假孕期无胎儿，请用 bsSetMenstrualPhases 结束假孕。` };
     }
@@ -107398,7 +107504,7 @@ function applyChildbirth(chatState, args) {
     const childbirthStage = String(profile?.base?.stage || '');
     const childbirthAllowedStages = ['孕早期', '孕中期', '孕晚期', '临产期', '逾期', '产兆前驱', '第一产程', '第二产程', '第三产程'];
     if (!childbirthAllowedStages.includes(childbirthStage)) {
-        return { applied: false, message: `bsChildbirth skipped for ${female}: stage ${childbirthStage || '(none)'} 不允许手术分娩（需已着床进入妊娠阶段；假孕期/未着床请先推进剧情）。` };
+        return { applied: false, message: `bsChildbirth skipped for ${female}: stage ${childbirthStage || '(none)'} 不允许手术分娩（需已着床进入妊娠阶段）。` };
     }
     profile.__runtimeRef = next.runtime || {};
     applyChildbirthInternal(profile, female, false);
@@ -107973,6 +108079,7 @@ function applyTimeToCharacter(character, tick) {
     profile.cooldown = {
         ...cooldown,
         orgasmOvulationUsed: shouldResetOrgasmOvulation(stage) ? false : Boolean(cooldown.orgasmOvulationUsed),
+        naturalOvulationUsed: shouldResetNaturalOvulation(stage) ? false : Boolean((profile.cooldown || cooldown).naturalOvulationUsed),
         pregnancyPressureWarning: shouldKeepPregnancyPressureWarning(profile) ? Boolean((profile.cooldown || cooldown).pregnancyPressureWarning) : false,
         psychologyUpdateUsed: tick.passedHours > 0 ? false : Boolean(cooldown.psychologyUpdateUsed),
         maternalFetalInteractionUsed: tick.passedHours > 0 ? false : Boolean(cooldown.maternalFetalInteractionUsed),
@@ -108030,14 +108137,7 @@ function applyPassedTime(chatState, args) {
     const week = clampNumber(args?.week, 0, 5200, 0);
     const month = clampNumber(args?.month, 0, 1200, 0);
     const year = clampNumber(args?.year, 0, 200, 0);
-    let totalMinutes = minute + (hour * 60) + (day * 24 * 60) + (week * 7 * 24 * 60) + (month * 30 * 24 * 60) + (year * 365 * 24 * 60);
-    // 总量上限：各分量独立 clamp 后合计可达 2.6e8 分钟，妊娠代谢循环
-    // rounds=ceil(drain)×ceil(deltaDays) 会到 ~1e9 轮冻结 UI（安全审查 P1 实测）。
-    // 单次推进封顶一年（365 天）已远超任何剧情场景，阻断总量放大。
-    const MAX_TOTAL_MINUTES = 60 * 24 * 365;
-    if (totalMinutes > MAX_TOTAL_MINUTES) {
-        totalMinutes = MAX_TOTAL_MINUTES;
-    }
+    const totalMinutes = minute + (hour * 60) + (day * 24 * 60) + (week * 7 * 24 * 60) + (month * 30 * 24 * 60) + (year * 365 * 24 * 60);
     if (totalMinutes <= 0)
         return { applied: false, message: 'bsPassedTime skipped: no positive duration.' };
     for (const name of Object.keys(chatState.characters || {})) {
@@ -108329,6 +108429,7 @@ function applySetCharacterPresence(chatState, args) {
     const character = chatState.characters?.[female];
     if (!female || !character)
         return { applied: false, message: `bsSetCharacterPresence skipped: unknown character ${female || '(empty)'}.` };
+    // 缺省视为在场会让模型漏填时静默改状态：要求显式传入
     if (args?.isPresent === undefined)
         return { applied: false, message: `bsSetCharacterPresence skipped for ${female}: isPresent 必须显式传入 true/false。` };
     const isPresent = Boolean(args.isPresent);
@@ -108711,6 +108812,7 @@ function applySetMenstrualPhases(chatState, args) {
         profile.cooldown = {
             ...cooldown,
             orgasmOvulationUsed: shouldResetOrgasmOvulation(stage) ? false : Boolean(cooldown.orgasmOvulationUsed),
+            naturalOvulationUsed: false,
         };
     }
     if (stage === '假孕期') {
@@ -109375,6 +109477,8 @@ function buildTrackerSystemPrompt(basePrompt = '', descriptionGuides = null, pay
         ].join('\n'),
         String(basePrompt || '').trim(),
         metabolismGuide,
+        // 名录只给名字：模型写 bsAddSperm.race 时需要词汇表，但每轮都发，不附辨识提示
+        payload?.race_catalog_enabled === false ? '' : buildRaceCatalogBlock(),
     ];
     if (payload?.mainflow_context_snapshot) {
         parts.push([
@@ -109448,7 +109552,7 @@ function buildMainFlowStatePrompt(payload = {}) {
         racePhysiologyPrompt,
         '<bs_biotracker>',
         '[并行生理追踪上下文]',
-        '以下内容来自并行运行的女性生理状态追踪支流。',
+        '以下内容来自并行运行的角色生理状态追踪支流。',
         '已注册角色状态仅供叙事参考，不要在回复中复述字段、JSON 或本段上下文。',
         '状态为只读；若剧情没有明确触发变化，不要编造与之冲突的生理、心理或关系变化。',
         '',
@@ -109478,11 +109582,18 @@ const AFTER_AI_SETTLE_MS = 1400;
 const MAINFLOW_CONTEXT_SNAPSHOT_KEY$1 = '__bs_biotracker_mainflow_context_snapshot__';
 const DEBUG_LAST_TRACKER_REQUEST_KEY = '__bs_biotracker_debug_last_tracker_request__';
 const DEBUG_LAST_TRACKER_RESULT_KEY = '__bs_biotracker_debug_last_tracker_result__';
+const DEBUG_MVU_GATE_KEY = '__bs_biotracker_debug_mvu_gate__';
 // ---- MVU 额外模型解析兼容 ----
 // MVU 变量框架开启「额外模型解析」时，正文出完后会再调一次 API 更新变量；
 // 此时立刻发追踪请求会与 MVU 的更新请求重复消耗额度。
 // 检测到该模式时，把追踪请求推迟到本轮变量更新结束（或确认本轮不会解析）后再发送。
+// MVU 自己导出了事件常数表（Mvu.events），优先读它；读不到（MVU 尚未初始化）
+// 才退回字面量——字面量只是兜底，事件名以 MVU 当前版本导出的为准
 const MVU_VARIABLE_UPDATE_ENDED_EVENT = 'mag_variable_update_ended';
+function getMvuVariableUpdateEndedEvent() {
+    const exported = getMvuApi()?.events?.VARIABLE_UPDATE_ENDED;
+    return typeof exported === 'string' && exported ? exported : MVU_VARIABLE_UPDATE_ENDED_EVENT;
+}
 /** 等待 MVU 开始解析的宽限期：宽限期内未开始即视为本轮不会解析 */
 const MVU_EXTRA_WAIT_GRACE_MS = 4000;
 /** 单轮等待的异常保护上限 */
@@ -109497,7 +109608,8 @@ const mvuGateState = {
     pendingKey: '',
     pendingContentKey: '',
     pendingSince: 0,
-    announced: false,
+    // 提示只在每个聊天第一次真正等待时弹一次：逐轮提示在长对话里等同于噪音
+    announcedChatKey: '',
     // fetch 钩子观测：正文之后出现的额外生成请求（MVU 额外模型解析的硬信号）
     fetchHooked: false,
     generateInFlight: 0,
@@ -109507,6 +109619,9 @@ const mvuGateState = {
 };
 // 仅测试用：允许用例直接读写门控状态
 const __mvuGateStateForTest = mvuGateState;
+// 门控状态挂到全局，方便在真实 ST 的 console 里排查等待判定；
+// 只有轮次键与消息签名（长度+哈希），不含聊天原文，故无需像 API 调试那样加开关
+globalThis[DEBUG_MVU_GATE_KEY] = mvuGateState;
 /** 心跳：每处理完一条消息就刷新，避免长队列被看门狗误判为卡死 */
 function markTrackerRunProgress() {
     globalThis[RUN_STARTED_AT_KEY] = Date.now();
@@ -109612,14 +109727,15 @@ function installMvuGateListener(ctx) {
         mvuGateState.lastEndedAt = Date.now();
     };
     let installed = false;
+    const eventName = getMvuVariableUpdateEndedEvent();
     try {
         // MVU 自身的 eventEmit/eventOn 走同一套全局事件通道，优先使用；拿不到时退回宿主 eventSource
         if (typeof globalThis.eventOn === 'function') {
-            globalThis.eventOn(MVU_VARIABLE_UPDATE_ENDED_EVENT, handler);
+            globalThis.eventOn(eventName, handler);
             installed = true;
         }
         else if (ctx?.eventSource && typeof ctx.eventSource.on === 'function') {
-            ctx.eventSource.on(MVU_VARIABLE_UPDATE_ENDED_EVENT, handler);
+            ctx.eventSource.on(eventName, handler);
             installed = true;
         }
     }
@@ -109628,7 +109744,11 @@ function installMvuGateListener(ctx) {
     }
     mvuGateState.eventInstalled = installed;
 }
-function notifyMvuGateWaiting() {
+function notifyMvuGateWaiting(ctx) {
+    const chatKey = getChatKey(ctx);
+    if (!chatKey || mvuGateState.announcedChatKey === chatKey)
+        return;
+    mvuGateState.announcedChatKey = chatKey;
     try {
         globalThis.toastr?.info?.('检测到 MVU 额外模型解析请求，等待变量更新完成后再追踪', '[BS BioTracker] MVU 兼容');
     }
@@ -109761,7 +109881,6 @@ function shouldWaitForMvuExtraAnalysis(ctx, settings) {
         mvuGateState.pendingKey = roundKey;
         mvuGateState.pendingContentKey = contentKey;
         mvuGateState.pendingSince = now;
-        mvuGateState.announced = false;
         mvuGateState.sawGenerateThisRound = false;
     }
     else if (mvuGateState.pendingContentKey !== contentKey) {
@@ -109769,7 +109888,6 @@ function shouldWaitForMvuExtraAnalysis(ctx, settings) {
         // 避免旧 pendingSince 过期导致宽限路径立即放行
         mvuGateState.pendingContentKey = contentKey;
         mvuGateState.pendingSince = now;
-        mvuGateState.announced = false;
         mvuGateState.sawGenerateThisRound = false;
     }
     // 信号 1：MVU 全局 API 报告正在解析
@@ -109780,13 +109898,15 @@ function shouldWaitForMvuExtraAnalysis(ctx, settings) {
     // 否则普通 ST 主流请求也会让设备被标记为「见过 MVU 信号」，导致每轮白等宽限
     if (during)
         mvuGateState.everSawMvuSignal = true;
-    if (method === '额外模型解析' || (mvuGateState.sawGenerateThisRound && generateActive)) {
-        if (!mvuGateState.announced) {
-            mvuGateState.announced = true;
-            notifyMvuGateWaiting();
-        }
-    }
-    if (during || generateActive)
+    const waiting = resolveMvuGateWaiting(roundKey, contentKey, now, during || generateActive);
+    // 提示只在真的推迟了追踪时才弹：先前无条件按「更新方式=额外模型解析」提示，
+    // 会在本轮解析早已结束、根本没等待的情况下也弹一次
+    if (waiting)
+        notifyMvuGateWaiting(ctx);
+    return waiting;
+}
+function resolveMvuGateWaiting(roundKey, contentKey, now, signalActive) {
+    if (signalActive)
         return now - mvuGateState.pendingSince < MVU_EXTRA_MAX_WAIT_MS;
     // 本轮变量更新已结束（事件新鲜且内容指纹一致）→ 放行
     if (mvuGateState.lastEndedKey === roundKey
@@ -109800,6 +109920,7 @@ function shouldWaitForMvuExtraAnalysis(ctx, settings) {
 }
 function normalizeWorldbookMode$1(value) {
     const mode = String(value || 'exclude').trim();
+    // 数据库集成（F6）：agent_greenlights（蓝灯 constant + 绿灯 uid 白名单）为数据库 agent 世界书接管模式
     if (mode === 'mainflow' || mode === 'allowlist_all' || mode === 'exclude' || mode === 'agent_greenlights')
         return mode;
     return 'exclude';
@@ -110230,7 +110351,7 @@ function filterTrackerWorldbookEntries(value, excludedNames, settings = null, re
         const name = normalizeEntryName(entry);
         const selectionName = globalBookName ? formatGlobalWorldbookSelectionName$1(globalBookName, name) : name;
         if (mode === 'agent_greenlights') {
-            // 蓝灯（constant 恒常条目，ST 数据形状为 constant:true 布尔）固有发送 + 数据库 agent 正文放行的绿灯（uid 白名单，适配层注入 settings.agentGreenlightUids）
+            // 数据库集成（F6）：蓝灯（constant 恒常条目，ST 数据形状为 constant:true 布尔）固有发送 + agent 正文放行的绿灯（uid 白名单）
             if (entry?.enabled === false || entry?.disable === true)
                 return false;
             if (entry?.constant === true || entry?.type === 'constant')
@@ -110382,6 +110503,7 @@ function buildTrackerPayload(ctx, settings, reason = 'manual', endIndexExclusive
         existing_state: buildTrackerStateView(existingState, settings),
         available_tools: getTrackerToolDefinitions(settings, existingState),
         diary_enabled: diaryEnabled,
+        race_catalog_enabled: settings?.raceCatalogInPrompt !== false,
         require_full_description_updates: settings?.requireFullDescriptionUpdates === true,
         ...(psychologyEnabled ? { breeding_psychology_enabled: true } : {}),
         wardrobe_enabled: hasPreparedWardrobe(existingState),
@@ -110502,6 +110624,43 @@ function hasPendingChatHistory(ctx, chatState) {
 }
 function emitTrackerUpdateCue(detail = {}) {
     globalThis.dispatchEvent?.(new CustomEvent(UPDATE_CUE_EVENT$1, { detail }));
+}
+// ---- 追踪进行中提示 ----
+// 浮球脉动是「事后」才闪、且无变化时不闪，面板里的状态文字在手机上也看不见，
+// 于是整轮追踪期间没有任何可见反馈。用一条常驻 toast 顶住，结束时换成结果提示。
+let trackerBusyToast = null;
+function showTrackerBusyToast() {
+    if (trackerBusyToast)
+        return;
+    try {
+        // timeOut/extendedTimeOut = 0：不自动消失，由本轮结束时显式清掉
+        trackerBusyToast = globalThis.toastr?.info?.('追踪更新中…', '[BS BioTracker]', {
+            timeOut: 0,
+            extendedTimeOut: 0,
+        }) || null;
+    }
+    catch {
+        trackerBusyToast = null;
+    }
+}
+function clearTrackerBusyToast() {
+    if (!trackerBusyToast)
+        return;
+    try {
+        globalThis.toastr?.clear?.(trackerBusyToast);
+    }
+    catch {
+        // toastr 缺失或已被宿主清空时无需处理
+    }
+    trackerBusyToast = null;
+}
+function notifyTrackerDone(hasChanges) {
+    try {
+        globalThis.toastr?.success?.(hasChanges ? '追踪完成，状态已更新' : '追踪完成，本轮无状态变化', '[BS BioTracker]', { timeOut: 3000 });
+    }
+    catch {
+        // 无 toastr 的环境静默即可
+    }
 }
 function recordTrackerRequestDebug(systemPrompt, payload) {
     globalThis[DEBUG_LAST_TRACKER_REQUEST_KEY] = {
@@ -110640,13 +110799,13 @@ async function processTrackerMessage(ctx, settings, chatState, deps, reason, mes
 }
 async function runTracker(ctx, deps, reason = 'manual') {
     const settings = getSettings(ctx);
-    const chat = getHostChat(ctx);
-    // P1 性能短路：轮询模式下聊天长度未变化（无新楼层/无编辑）时跳过整段 hydrate/比对，
+    // 数据库集成（P1 性能短路）：轮询模式下聊天长度未变化（无新楼层/无编辑）时跳过整段 hydrate/比对，
     // 避免每 tick 无谓的 JSON.stringify 与快照逐条比对（手动触发不短路）。
-    // 注意：标记只在「真正进入分析」时更新——若因 after_ai 未settled/MVU 等待等
-    // skip 分支提前返回，标记保持旧值，下一轮仍会重查（否则新 AI 楼会被永久短路）。
+    // 标记只在「真正进入分析」时更新——若因 after_ai 未settled/MVU 等待等 skip 分支提前返回，
+    // 标记保持旧值，下一轮仍会重查（否则新 AI 楼会被永久短路）。
     if (reason === 'poll') {
-        const currentLength = Array.isArray(chat) ? chat.length : 0;
+        const hostChat = getHostChat(ctx);
+        const currentLength = Array.isArray(hostChat) ? hostChat.length : 0;
         const lastProcessed = globalThis.__bs_biotracker_last_polled_length__;
         if (typeof lastProcessed === 'number' && lastProcessed === currentLength && currentLength > 0) {
             return { skipped: true, reason: 'no_new_messages' };
@@ -110659,6 +110818,7 @@ async function runTracker(ctx, deps, reason = 'manual') {
     });
     const chatState = getChatState(ctx, settings);
     const registeredTargets = getRegisteredTargetNames(ctx, settings, chatState);
+    const chat = getHostChat(ctx);
     const lastMessage = chat[chat.length - 1];
     if (!lastMessage) {
         chatState.lastRawResult = {
@@ -110741,12 +110901,14 @@ async function runTracker(ctx, deps, reason = 'manual') {
         return { skipped: true, reason: 'failed_message_blocked' };
     }
     const runToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    // P1：真正进入分析才更新长度标记（所有 skip 分支不更新，下一轮会重查）
+    // 数据库集成（P1）：真正进入分析才更新长度标记（所有 skip 分支不更新，下一轮会重查）
     if (reason === 'poll') {
-        globalThis.__bs_biotracker_last_polled_length__ = Array.isArray(chat) ? chat.length : 0;
+        const hostChat = getHostChat(ctx);
+        globalThis.__bs_biotracker_last_polled_length__ = Array.isArray(hostChat) ? hostChat.length : 0;
     }
     globalThis[RUN_RUNTIME_KEY] = runToken;
     markTrackerRunProgress();
+    showTrackerBusyToast();
     try {
         const { nextMessageIndex } = reason === 'manual' ? prepareManualReplay(ctx, chatState, chat.length) : reconcileChatStateSnapshots(ctx, chatState, settings);
         let processedCount = 0;
@@ -110773,6 +110935,8 @@ async function runTracker(ctx, deps, reason = 'manual') {
             processedCount,
             reason,
         });
+        clearTrackerBusyToast();
+        notifyTrackerDone(toolCalls.length > 0);
         return { skipped: false, processedCount, toolCalls };
     }
     catch (error) {
@@ -110793,6 +110957,8 @@ async function runTracker(ctx, deps, reason = 'manual') {
         throw error;
     }
     finally {
+        // 中途放弃（对话被改动）与失败路径都会走到这里，常驻提示不能留在屏幕上
+        clearTrackerBusyToast();
         // 被看门狗判死的旧轮次可能在新一轮开始后才走到这里，不能清掉别人的锁
         if (globalThis[RUN_RUNTIME_KEY] === runToken) {
             globalThis[RUN_RUNTIME_KEY] = null;
@@ -110806,7 +110972,7 @@ async function poll(ctx, deps) {
         return;
     await runTracker(ctx, deps, 'poll');
 }
-/** 停止追踪轮询（H5）：清除 interval 且不重建，供禁用/卸载时调用，避免空转 */
+/** 数据库集成（H5）：停止追踪轮询——清除 interval 且不重建，供禁用/卸载时调用，避免空转 */
 function stopPoller() {
     if (globalThis[POLL_RUNTIME_KEY]) {
         clearInterval(globalThis[POLL_RUNTIME_KEY]);
@@ -110836,7 +111002,7 @@ const WARDROBE_DIMENSION_LABELS = Object.freeze({ masking: '掩形', support: '�
 const PREG_FIT_GAP_LABELS = Object.freeze({ masking: '掩形', support: '支撑', capacity: '容身', convenience: '便捷' });
 const MAX_PROGRESS_BAR_CAP = 200;
 // 构建时间戳（rollup replace 注入；测试/dev 环境无替换时回退 'dev'）——全局水印用，截图辨别构建
-const ACU_BUILD_STAMP = typeof "20260815-09" === 'string' ? "20260815-09" : 'dev';
+const ACU_BUILD_STAMP = typeof "20260816-10" === 'string' ? "20260816-10" : 'dev';
 const MODAL_EDGE_GAP = 24;
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const FLOATING_SPHERE_POSITION_KEY = `${MODULE_NAME}_floating_sphere_position`;

@@ -618,11 +618,22 @@ function refreshOutfitPregFit(profile) {
   };
   return outfit;
 }
-function getNaturalOvulationDailyAmount(profile) {
-  const ovulationAmount = clampNumber(profile?.bio?.orgasmOvulationAmount, 0, 100, 1);
-  const menstrualRatio = clampNumber(profile?.bio?.menstrualLengthRatio, 0.1, 20, 1);
-  const ovulationDays = Math.max(1, MENSTRUAL_STAGE_DAYS['排卵期'] * menstrualRatio);
-  return Math.max(1, Math.ceil(ovulationAmount / ovulationDays));
+/**
+ * 单个排卵期自然排出的卵数 = 1 颗基础 + orgasmOvulationAmount 额外排卵倾向。
+ *
+ * 旧算法是「每天至少 1 颗 x 排卵天数」，而排卵天数随 menstrualLengthRatio 线性拉长，
+ * 于是长周期种族按窗口长度虚增：精灵额外倾向明明是 0 却每周期排 6 颗、龙族排 8 颗，
+ * 与该字段的语义（高潮诱发的额外排卵量，见 applyOrgasmOvulation）完全无关。
+ * 周期越长排得越多也让「一年一次经期」这类设定无法成立。
+ */
+function getNaturalOvulationTotal(profile) {
+  const extra = clampNumber(profile?.bio?.orgasmOvulationAmount, 0, 100, 1);
+  return Math.max(1, Math.round(1 + extra));
+}
+
+/** 自然排卵每个排卵期只发生一次，离开排卵期即重置 */
+function shouldResetNaturalOvulation(stage) {
+  return stage !== '排卵期';
 }
 
 function getImplantationDays(profile) {
@@ -1235,7 +1246,11 @@ function updateFetalPositions(profile, tick, female) {
   if (fetuses.length === 0) return;
 
   const gestationSpeed = clampNumber(getGestationEffectiveSpeed(profile), 0, 20, 1);
-  const iterations = Math.max(0, tick.passedDays);
+  // 逐日步进的上限：bsPassedTime 可以叠出十几万天，逐日推进会拖死 UI。
+  // 10 年远超任何种族的妊娠期（最慢的 gestationSpeciesSpeed=0.1 也才 2800 天），
+  // 正常剧情不会触到；只有荒谬的时间跳跃才会被截断。
+  const MAX_DAILY_STEPS = 3650;
+  const iterations = Math.min(MAX_DAILY_STEPS, Math.max(0, tick.passedDays));
   if (iterations <= 0 || !PREGNANCY_STAGES.includes(stage)) return;
 
   for (let step = 0; step < iterations; step += 1) {
@@ -1416,8 +1431,11 @@ function processSimpleConception(profile, tick, notify, name) {
   const allowsNaturalConception = [...MENSTRUAL_STAGES, '产后恢复'].includes(stage);
 
   if (allowsNaturalConception) {
-    if (stage === '排卵期' && fullDays > 0) {
-      base.eggs = clampNumber(base.eggs, 0, 99, 0) + (getNaturalOvulationDailyAmount(profile) * fullDays);
+    // 一次性排出本周期的份额：按天累加会让长排卵期窗口把卵数堆到上限，
+    // 而取 min 封顶又会把高潮诱发排卵已经排出的卵砍掉
+    if (stage === '排卵期' && fullDays > 0 && !(profile.cooldown || {}).naturalOvulationUsed) {
+      base.eggs = clampNumber(base.eggs, 0, 99, 0) + getNaturalOvulationTotal(profile);
+      profile.cooldown = { ...(profile.cooldown || {}), naturalOvulationUsed: true };
     }
 
     if (stage === '月经期' && passedHours > 0) {
@@ -1849,6 +1867,7 @@ function applyPassiveMetabolism(profile, tick) {
 }
 
 function applyMilkFromLibido(profile, changeValue) {
+  // 性欲下降不该泌乳：调用方传的是带符号的增量
   const delta = Number(changeValue) || 0;
   if (delta <= 0) return;
   if (String(profile?.base?.stage || '') === '排卵期') {
@@ -1932,7 +1951,12 @@ function applyHourlyPregnancyMetabolism(profile, tick, female) {
 
   const vitality = clampNumber(profile?.base?.vitality, 0, 200, 100);
   const days = Math.max(1, Math.ceil(tick.deltaDays));
-  const rounds = Math.max(1, Math.ceil(fetalEnergyDrain)) * days;
+  // 症状抽样的轮数上限：bsPassedTime 各分量独立 clamp 后可叠到十几万天，
+  // 乘上 fetalEnergyDrain 就是十亿级循环，会把 UI 冻死。
+  // 封顶的是循环次数而不是时间本身——时间推进与阶段推进保持原语义，
+  // 超长时间跳跃只是症状擲骰次数不再线性增长（本来也不该线性增长）。
+  const MAX_SYMPTOM_ROUNDS = 2000;
+  const rounds = Math.min(MAX_SYMPTOM_ROUNDS, Math.max(1, Math.ceil(fetalEnergyDrain)) * days);
   for (let i = 0; i < rounds; i += 1) {
     const symptomChance = (200 - vitality) * 0.5;
     if (Math.random() * 100 < symptomChance) {
@@ -2981,7 +3005,7 @@ function applyAbortion(chatState, args) {
     return { applied: false, message: `bsAbortion skipped for ${female}: no conception state.` };
   }
 
-  // 假孕期无胎儿：结束假孕请走 bsSetMenstrualPhases，不算流产
+  // 假孕期没有胎儿：结束假孕请走 bsSetMenstrualPhases，不该记进流产经验
   if (stage === '假孕期' && fetuses.length === 0) {
     return { applied: false, message: `bsAbortion skipped for ${female}: 假孕期无胎儿，请用 bsSetMenstrualPhases 结束假孕。` };
   }
@@ -3218,7 +3242,7 @@ function applyChildbirth(chatState, args) {
   const childbirthStage = String(profile?.base?.stage || '');
   const childbirthAllowedStages = ['孕早期', '孕中期', '孕晚期', '临产期', '逾期', '产兆前驱', '第一产程', '第二产程', '第三产程'];
   if (!childbirthAllowedStages.includes(childbirthStage)) {
-    return { applied: false, message: `bsChildbirth skipped for ${female}: stage ${childbirthStage || '(none)'} 不允许手术分娩（需已着床进入妊娠阶段；假孕期/未着床请先推进剧情）。` };
+    return { applied: false, message: `bsChildbirth skipped for ${female}: stage ${childbirthStage || '(none)'} 不允许手术分娩（需已着床进入妊娠阶段）。` };
   }
 
   profile.__runtimeRef = next.runtime || {};
@@ -3816,6 +3840,7 @@ function applyTimeToCharacter(character, tick) {
   profile.cooldown = {
     ...cooldown,
     orgasmOvulationUsed: shouldResetOrgasmOvulation(stage) ? false : Boolean(cooldown.orgasmOvulationUsed),
+    naturalOvulationUsed: shouldResetNaturalOvulation(stage) ? false : Boolean((profile.cooldown || cooldown).naturalOvulationUsed),
     pregnancyPressureWarning: shouldKeepPregnancyPressureWarning(profile) ? Boolean((profile.cooldown || cooldown).pregnancyPressureWarning) : false,
     psychologyUpdateUsed: tick.passedHours > 0 ? false : Boolean(cooldown.psychologyUpdateUsed),
     maternalFetalInteractionUsed: tick.passedHours > 0 ? false : Boolean(cooldown.maternalFetalInteractionUsed),
@@ -3874,14 +3899,7 @@ function applyPassedTime(chatState, args) {
   const week = clampNumber(args?.week, 0, 5200, 0);
   const month = clampNumber(args?.month, 0, 1200, 0);
   const year = clampNumber(args?.year, 0, 200, 0);
-  let totalMinutes = minute + (hour * 60) + (day * 24 * 60) + (week * 7 * 24 * 60) + (month * 30 * 24 * 60) + (year * 365 * 24 * 60);
-  // 总量上限：各分量独立 clamp 后合计可达 2.6e8 分钟，妊娠代谢循环
-  // rounds=ceil(drain)×ceil(deltaDays) 会到 ~1e9 轮冻结 UI（安全审查 P1 实测）。
-  // 单次推进封顶一年（365 天）已远超任何剧情场景，阻断总量放大。
-  const MAX_TOTAL_MINUTES = 60 * 24 * 365;
-  if (totalMinutes > MAX_TOTAL_MINUTES) {
-    totalMinutes = MAX_TOTAL_MINUTES;
-  }
+  const totalMinutes = minute + (hour * 60) + (day * 24 * 60) + (week * 7 * 24 * 60) + (month * 30 * 24 * 60) + (year * 365 * 24 * 60);
   if (totalMinutes <= 0) return { applied: false, message: 'bsPassedTime skipped: no positive duration.' };
 
   for (const name of Object.keys(chatState.characters || {})) {
@@ -4149,6 +4167,7 @@ function applySetCharacterPresence(chatState, args) {
   const female = String(args?.female || '').trim();
   const character = chatState.characters?.[female];
   if (!female || !character) return { applied: false, message: `bsSetCharacterPresence skipped: unknown character ${female || '(empty)'}.` };
+  // 缺省视为在场会让模型漏填时静默改状态：要求显式传入
   if (args?.isPresent === undefined) return { applied: false, message: `bsSetCharacterPresence skipped for ${female}: isPresent 必须显式传入 true/false。` };
   const isPresent = Boolean(args.isPresent);
 
@@ -4540,6 +4559,7 @@ function applySetMenstrualPhases(chatState, args) {
     profile.cooldown = {
       ...cooldown,
       orgasmOvulationUsed: shouldResetOrgasmOvulation(stage) ? false : Boolean(cooldown.orgasmOvulationUsed),
+      naturalOvulationUsed: false,
     };
   }
 
