@@ -136,9 +136,6 @@
           <AcuBadge :variant="logFlow.debugLogEnabled.value ? 'accent' : 'neutral'">
             {{ logFlow.debugLabel.value }}
           </AcuBadge>
-          <AcuBadge :variant="logFlow.warnLogEnabled.value ? 'warning' : 'neutral'">
-            {{ logFlow.warnLabel.value }}
-          </AcuBadge>
         </template>
 
         <div class="acu-v2-advanced-tools-page__filter-grid">
@@ -189,21 +186,11 @@
                 label="自动滚动"
                 @update:model-value="logFlow.autoScroll.value = $event"
               />
-              <AcuToggle
-                :model-value="logFlow.warnLogEnabled.value"
-                label="Warn"
-                @update:model-value="logFlow.setWarnCollection"
-              />
-              <AcuToggle
-                :model-value="logFlow.debugLogEnabled.value"
-                label="Debug"
-                @update:model-value="logFlow.setDebugCollection"
-              />
             </div>
           </div>
 
           <p class="acu-v2-advanced-tools-page__hint">
-            最多保留最近 2000 条；当前显示 {{ logFlow.filteredCount.value }} / {{ logFlow.totalCount.value }} 条。{{ logFlow.pendingCount.value ? `${logFlow.pendingCount.value} 条暂停期间新增日志等待显示。` : '没有暂停期间积压的日志。' }}
+            最多保留最近 50000 条；当前显示 {{ logFlow.filteredCount.value }} / {{ logFlow.totalCount.value }} 条。{{ logFlow.pendingCount.value ? `${logFlow.pendingCount.value} 条暂停期间新增日志等待显示。` : '没有暂停期间积压的日志。' }}
           </p>
         </div>
 

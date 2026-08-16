@@ -81,7 +81,7 @@ describe('AdvancedToolsPage log panel', () => {
     expect(text).not.toContain('缓冲区状态');
 
     const panels = document.querySelectorAll('.acu-v2-advanced-tools-page .acu-panel');
-    expect(panels.length).toBe(2);
+    expect(panels.length).toBe(3);
     panels.forEach(panel => {
       expect(panel.querySelector('.acu-panel__description-region .acu-info-banner')).not.toBeNull();
       expect(panel.querySelector('.acu-panel__header .acu-info-banner')).toBeNull();
@@ -89,7 +89,7 @@ describe('AdvancedToolsPage log panel', () => {
 
     const mobileNavItems = Array.from(page.querySelectorAll('.acu-mobile-panel-nav__item'))
       .map(item => item.textContent?.trim());
-    expect(mobileNavItems).toEqual(['SQL 控制台', '运行日志']);
+    expect(mobileNavItems).toEqual(['SQL 控制台', '运行日志', 'Debug']);
     expect(document.querySelector('.acu-v2-app__page-title')?.textContent?.trim()).toBe('高级工具');
     expect(page.querySelector('.acu-page-header')).toBeNull();
     expect(page.querySelector('.acu-v2-advanced-tools-page__log-panel .acu-panel__header')?.textContent || '').toContain('实时更新中');
@@ -104,7 +104,7 @@ describe('AdvancedToolsPage log panel', () => {
     expect(toggles.classList.contains('acu-v2-advanced-tools-page__toggles')).toBe(true);
     const toggleLabels = Array.from(toggles.querySelectorAll<HTMLButtonElement>('.acu-toggle'))
       .map(toggle => toggle.textContent?.trim());
-    expect(toggleLabels).toEqual(['自动滚动', 'Warn', 'Debug']);
+    expect(toggleLabels).toEqual(['自动滚动']);
     expect(hint.textContent || '').toContain('当前显示');
 
     mount.__resetAcuV2MountForTests();
@@ -139,38 +139,33 @@ describe('AdvancedToolsPage log panel', () => {
     mount.__resetAcuV2MountForTests();
   });
 
-  it('Warn 默认关闭，开启后持久化并恢复采集', async () => {
+  it('Debug 卡片「开始 Debug」开启全部采集（debug+warn），日志进入缓冲区', async () => {
     const { mount, logBuffer } = await mountAdvancedToolsLogPanel(false, false);
 
-    expect(logBuffer.isWarnLogEnabled()).toBe(false);
-    logBuffer.pushLog('warn', ['[ACU]', '[SQL] 默认隐藏']);
+    expect(logBuffer.isDebugLogEnabled()).toBe(false);
+    logBuffer.pushLog('debug', ['[ACU]', '[调试] 未开启不应出现']);
     await waitForUi(30);
-    expect(getPage().textContent || '').not.toContain('默认隐藏');
+    expect(getPage().textContent || '').not.toContain('未开启不应出现');
 
-    const warnToggle = Array.from(document.querySelectorAll<HTMLButtonElement>('.acu-v2-advanced-tools-page .acu-toggle'))
-      .find(button => button.textContent?.includes('Warn'));
-    expect(warnToggle).not.toBeUndefined();
-    expect(warnToggle!.getAttribute('aria-checked')).toBe('false');
-    warnToggle!.click();
+    // Debug 卡片一键开启采集（统一管理 debug+warn，替代旧的运行日志开关）
+    const debugStartButton = Array.from(document.querySelectorAll<HTMLButtonElement>('.acu-v2-advanced-tools-page button'))
+      .find(el => el.textContent?.includes('开始 Debug'));
+    expect(debugStartButton).not.toBeUndefined();
+    debugStartButton!.click();
     await waitForUi();
 
-    const persisted = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');
-    expect(persisted?.devOptions?.warnLogEnabled).toBe(true);
-    expect(warnToggle!.getAttribute('aria-checked')).toBe('true');
+    expect(logBuffer.isDebugLogEnabled()).toBe(true);
     expect(logBuffer.isWarnLogEnabled()).toBe(true);
 
-    logBuffer.pushLog('warn', ['[ACU]', '[SQL] 开启后显示']);
+    logBuffer.pushLog('debug', ['[ACU]', '[调试] Debug 已采集']);
+    logBuffer.pushLog('warn', ['[ACU]', '[SQL] Warn 已采集']);
     await waitForUi(30);
-    expect(getPage().textContent || '').toContain('开启后显示');
+
+    const text = getPage().textContent || '';
+    expect(text).toContain('Debug 已采集');
+    expect(text).toContain('Warn 已采集');
 
     mount.__resetAcuV2MountForTests();
-    vi.resetModules();
-
-    const reloadedLogBuffer = await import('../../../src/shared/log-buffer');
-    expect(reloadedLogBuffer.isWarnLogEnabled()).toBe(true);
-    reloadedLogBuffer.pushLog('warn', ['[ACU]', '[SQL] 重载后仍显示']);
-    expect(reloadedLogBuffer.getAllLogs().some(entry => entry.message.includes('重载后仍显示'))).toBe(true);
-    reloadedLogBuffer._resetForTesting();
   });
 
   it('暂停时新日志进入积压，恢复后刷新显示', async () => {
@@ -191,29 +186,6 @@ describe('AdvancedToolsPage log panel', () => {
     pageText = getPage().textContent || '';
     expect(pageText).toContain('暂停期间新增');
     expect(pageText).toContain('实时更新中');
-
-    mount.__resetAcuV2MountForTests();
-  });
-
-  it('Debug 采集开关会控制 debug 日志进入缓冲区', async () => {
-    const { mount, logBuffer } = await mountAdvancedToolsLogPanel(false);
-
-    logBuffer.pushLog('debug', ['[ACU]', '[调试] 不应出现']);
-    await waitForUi(30);
-    expect(getPage().textContent || '').not.toContain('不应出现');
-
-    const debugToggle = Array.from(document.querySelectorAll<HTMLButtonElement>('.acu-v2-advanced-tools-page .acu-toggle'))
-      .find(button => button.textContent?.includes('Debug'));
-    expect(debugToggle).not.toBeUndefined();
-    debugToggle!.click();
-    await waitForUi();
-
-    logBuffer.pushLog('debug', ['[ACU]', '[调试] Debug 已采集']);
-    await waitForUi(30);
-
-    const text = getPage().textContent || '';
-    expect(text).toContain('Debug 已采集');
-    expect(text).toContain('Debug 采集中');
 
     mount.__resetAcuV2MountForTests();
   });

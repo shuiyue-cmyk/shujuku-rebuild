@@ -83,11 +83,11 @@ describe('AdvancedToolsPage SQL panel', () => {
     expect(text).toContain('执行历史');
     expect(text).toContain('结果');
     expect(text).toContain('SQLite 模式');
-    expect(page!.querySelectorAll('.acu-panel')).toHaveLength(2);
-    expect(page!.querySelectorAll('.acu-v2-advanced-tools-page__tools-grid > .acu-panel')).toHaveLength(2);
+    expect(page!.querySelectorAll('.acu-panel')).toHaveLength(3);
+    expect(page!.querySelectorAll('.acu-v2-advanced-tools-page__tools-grid > .acu-panel')).toHaveLength(3);
     const mobileNavItems = Array.from(page!.querySelectorAll('.acu-mobile-panel-nav__item'))
       .map(item => item.textContent?.trim());
-    expect(mobileNavItems).toEqual(['SQL 控制台', '运行日志']);
+    expect(mobileNavItems).toEqual(['SQL 控制台', '运行日志', 'Debug']);
 
     expect(document.querySelector('.acu-v2-app__page-title')?.textContent?.trim()).toBe('高级工具');
     expect(page!.querySelector('.acu-page-header')).toBeNull();
@@ -99,7 +99,7 @@ describe('AdvancedToolsPage SQL panel', () => {
     const { mount } = await mountAdvancedToolsSqlPanel();
 
     const panels = document.querySelectorAll('.acu-v2-advanced-tools-page .acu-panel');
-    expect(panels.length).toBe(2);
+    expect(panels.length).toBe(3);
     panels.forEach(panel => {
       expect(panel.querySelector('.acu-panel__description-region .acu-info-banner')).not.toBeNull();
       expect(panel.querySelector('.acu-panel__header .acu-info-banner')).toBeNull();

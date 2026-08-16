@@ -111002,7 +111002,7 @@ const WARDROBE_DIMENSION_LABELS = Object.freeze({ masking: '掩形', support: '�
 const PREG_FIT_GAP_LABELS = Object.freeze({ masking: '掩形', support: '支撑', capacity: '容身', convenience: '便捷' });
 const MAX_PROGRESS_BAR_CAP = 200;
 // 构建时间戳（rollup replace 注入；测试/dev 环境无替换时回退 'dev'）——全局水印用，截图辨别构建
-const ACU_BUILD_STAMP = typeof "20260816-10" === 'string' ? "20260816-10" : 'dev';
+const ACU_BUILD_STAMP = typeof "20260816-11" === 'string' ? "20260816-11" : 'dev';
 const MODAL_EDGE_GAP = 24;
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const FLOATING_SPHERE_POSITION_KEY = `${MODULE_NAME}_floating_sphere_position`;
@@ -164568,7 +164568,6 @@ function downloadJson$1(filename, data) {
 }
 function useLogViewer() {
     const toast = useToastStore();
-    const { warnLogEnabled, setWarnLogEnabled } = useDevOptions();
     const logs = ref([]);
     const knownTags = ref([]);
     const totalCount = ref(0);
@@ -164578,7 +164577,8 @@ function useLogViewer() {
     const paused = ref(false);
     const pendingEntries = ref([]);
     const autoScroll = ref(true);
-    const debugLogEnabled = ref(false);
+    // 采集状态由「Debug 问题上报」卡片统一管理；此处只读展示
+    const debugLogEnabled = ref(isDebugLogEnabled());
     const message = ref(null);
     let unsubscribe = null;
     let rafId = null;
@@ -164607,7 +164607,6 @@ function useLogViewer() {
         return '实时更新中';
     });
     const debugLabel = computed(() => (debugLogEnabled.value ? 'Debug 采集中' : 'Debug 未采集'));
-    const warnLabel = computed(() => (warnLogEnabled.value ? 'Warn 采集中' : 'Warn 未采集'));
     function refresh() {
         logs.value = getAllLogs();
         knownTags.value = getKnownTags();
@@ -164638,23 +164637,6 @@ function useLogViewer() {
         refresh();
         message.value = null;
         toast.success('日志缓冲区已清空。');
-    }
-    function setDebugCollection(enabled) {
-        setDebugLogEnabled(enabled);
-        debugLogEnabled.value = enabled;
-        message.value = null;
-        if (enabled)
-            toast.info('已开始采集 Debug 日志；排查完成后建议关闭。');
-        else
-            toast.success('已停止采集 Debug 日志。');
-    }
-    function setWarnCollection(enabled) {
-        setWarnLogEnabled(enabled);
-        message.value = null;
-        if (enabled)
-            toast.info('已开始采集 Warn 日志；排查完成后建议关闭。');
-        else
-            toast.success('已停止采集 Warn 日志。');
     }
     function exportFiltered() {
         const exportData = filteredLogs.value.map(entry => ({
@@ -164699,19 +164681,15 @@ function useLogViewer() {
         paused,
         autoScroll,
         debugLogEnabled,
-        warnLogEnabled,
         message,
         totalCount,
         filteredCount,
         pendingCount,
         statusLabel,
         debugLabel,
-        warnLabel,
         refresh,
         setPaused,
         clearAll,
-        setDebugCollection,
-        setWarnCollection,
         exportFiltered,
     };
 }
@@ -164815,7 +164793,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260816-10";
+        const stamp = "20260816-11";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -165059,8 +165037,8 @@ var _sfc_main$d = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-v2-advanced-tools-page[data-v-acd4ed2f] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-advanced-tools-page__sql-panel[data-v-acd4ed2f],\r\n.acu-v2-advanced-tools-page__log-panel[data-v-acd4ed2f],\r\n.acu-v2-advanced-tools-page__debug-panel[data-v-acd4ed2f] {\r\n  min-width: 0;\n}\n.acu-v2-advanced-tools-page__debug-actions[data-v-acd4ed2f] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__quick-actions[data-v-acd4ed2f],\r\n.acu-v2-advanced-tools-page__log-actions[data-v-acd4ed2f] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-textarea[data-v-acd4ed2f] {\r\n  font-family: var(--acu-font-mono);\r\n  min-height: 210px;\r\n  white-space: pre;\n}\n.acu-v2-advanced-tools-page__sql-actions[data-v-acd4ed2f] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\r\n  justify-content: flex-end;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-advanced-tools-page__sql-status[data-v-acd4ed2f] {\r\n  margin-left: auto;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.5;\n}\n.acu-v2-advanced-tools-page__sql-status--success[data-v-acd4ed2f] {\r\n  color: var(--acu-success);\n}\n.acu-v2-advanced-tools-page__sql-status--warning[data-v-acd4ed2f] {\r\n  color: var(--acu-warning);\n}\n.acu-v2-advanced-tools-page__sql-status--error[data-v-acd4ed2f] {\r\n  color: var(--acu-danger);\n}\n.acu-v2-advanced-tools-page__sql-result-section[data-v-acd4ed2f],\r\n.acu-v2-advanced-tools-page__sql-history-section[data-v-acd4ed2f] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-v2-advanced-tools-page__sql-history-section[data-v-acd4ed2f] {\r\n  padding-top: 12px;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n}\n.acu-v2-advanced-tools-page__section-title[data-v-acd4ed2f] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 600;\r\n  line-height: 1.35;\n}\n.acu-v2-advanced-tools-page__empty[data-v-acd4ed2f] {\r\n  min-height: 96px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: center;\r\n  border: 0;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__empty--compact[data-v-acd4ed2f] {\r\n  min-height: 72px;\n}\n.acu-v2-advanced-tools-page__empty--log[data-v-acd4ed2f] {\r\n  min-height: 180px;\r\n  border: 0;\n}\n.acu-v2-advanced-tools-page__sql-table-wrap[data-v-acd4ed2f] {\r\n  max-height: 330px;\r\n  overflow: auto;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-result-table[data-v-acd4ed2f] {\r\n  width: 100%;\r\n  border-collapse: collapse;\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-advanced-tools-page__sql-result-table th[data-v-acd4ed2f],\r\n.acu-v2-advanced-tools-page__sql-result-table td[data-v-acd4ed2f] {\r\n  max-width: 300px;\r\n  padding: 7px 10px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  text-align: left;\r\n  white-space: nowrap;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\n}\n.acu-v2-advanced-tools-page__sql-result-table th[data-v-acd4ed2f] {\r\n  position: sticky;\r\n  top: 0;\r\n  z-index: 1;\r\n  background: var(--acu-bg-1);\r\n  color: var(--acu-text-1);\r\n  font-weight: 600;\n}\n.acu-v2-advanced-tools-page__sql-result-table tbody tr[data-v-acd4ed2f]:nth-child(even) {\r\n  background: color-mix(in srgb, var(--acu-text-3) 5%, transparent);\n}\n.acu-v2-advanced-tools-page__cell-null[data-v-acd4ed2f],\r\n.acu-v2-advanced-tools-page__empty-cell[data-v-acd4ed2f] {\r\n  color: var(--acu-text-3);\r\n  font-style: italic;\n}\n.acu-v2-advanced-tools-page__sql-result-meta[data-v-acd4ed2f] {\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: right;\n}\n.acu-v2-advanced-tools-page__sql-error[data-v-acd4ed2f] {\r\n  margin: 0;\r\n  min-height: 96px;\r\n  padding: 12px;\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-danger) 8%, transparent);\r\n  color: var(--acu-danger);\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__filter-grid[data-v-acd4ed2f] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 12px;\r\n  align-items: stretch;\n}\n.acu-v2-advanced-tools-page__keyword-row[data-v-acd4ed2f] {\r\n  grid-column: 1 / -1;\n}\n.acu-v2-advanced-tools-page__log-control-row[data-v-acd4ed2f] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  min-width: 0;\n}\n.acu-v2-advanced-tools-page__log-control-main[data-v-acd4ed2f] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 10px 14px;\r\n  align-items: center;\r\n  justify-content: space-between;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-acd4ed2f] {\r\n  width: max-content;\r\n  max-width: 100%;\r\n  display: grid;\r\n  grid-template-columns: max-content max-content;\r\n  gap: 10px 18px;\r\n  align-items: center;\r\n  justify-content: flex-start;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-acd4ed2f] .acu-toggle {\r\n  width: max-content;\r\n  max-width: none;\r\n  min-width: max-content;\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-acd4ed2f] .acu-toggle__label {\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__hint[data-v-acd4ed2f] {\r\n  max-width: 100%;\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\r\n  overflow-wrap: anywhere;\n}\n.acu-v2-advanced-tools-page__sql-history-list[data-v-acd4ed2f],\r\n.acu-v2-advanced-tools-page__log-list[data-v-acd4ed2f] {\r\n  overflow: auto;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-list[data-v-acd4ed2f] {\r\n  max-height: 230px;\n}\n.acu-v2-advanced-tools-page__log-list[data-v-acd4ed2f] {\r\n  min-height: 360px;\r\n  max-height: 58vh;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-acd4ed2f],\r\n.acu-v2-advanced-tools-page__log-row[data-v-acd4ed2f] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 8px;\r\n  align-items: baseline;\r\n  padding: 7px 10px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-acd4ed2f] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: stretch;\r\n  gap: 6px;\r\n  padding-block: 9px;\r\n  border: 0;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  background: transparent;\r\n  color: inherit;\r\n  cursor: pointer;\r\n  font: inherit;\r\n  text-align: left;\r\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-advanced-tools-page__log-row[data-v-acd4ed2f] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: stretch;\r\n  gap: 6px;\r\n  padding-block: 9px;\n}\n.acu-v2-advanced-tools-page__log-meta[data-v-acd4ed2f] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 6px 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-history-meta[data-v-acd4ed2f] {\r\n  flex-wrap: nowrap;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-acd4ed2f]:last-child,\r\n.acu-v2-advanced-tools-page__log-row[data-v-acd4ed2f]:last-child {\r\n  border-bottom: 0;\n}\n.acu-v2-advanced-tools-page__sql-history-item--failure[data-v-acd4ed2f],\r\n.acu-v2-advanced-tools-page__log-row--error[data-v-acd4ed2f] {\r\n  background: color-mix(in srgb, var(--acu-danger) 7%, transparent);\n}\n.acu-v2-advanced-tools-page__log-row--warn[data-v-acd4ed2f] {\r\n  background: color-mix(in srgb, var(--acu-warning) 6%, transparent);\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-acd4ed2f]:hover {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-acd4ed2f]:focus-visible {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\r\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\r\n  outline: none;\n}\n.acu-v2-advanced-tools-page__log-time[data-v-acd4ed2f],\r\n.acu-v2-advanced-tools-page__log-tag[data-v-acd4ed2f],\r\n.acu-v2-advanced-tools-page__log-message[data-v-acd4ed2f] {\r\n  min-width: 0;\r\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-advanced-tools-page__log-time[data-v-acd4ed2f] {\r\n  color: var(--acu-text-3);\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__log-tag[data-v-acd4ed2f] {\r\n  flex: 1 1 180px;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  color: var(--acu-text-2);\n}\n.acu-v2-advanced-tools-page__log-message[data-v-acd4ed2f] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__log-body[data-v-acd4ed2f] {\r\n  display: block;\r\n  width: 100%;\n}\n@media (max-width: 1080px) {\n.acu-v2-advanced-tools-page[data-v-acd4ed2f] {\r\n    padding: 14px;\n}\n.acu-v2-advanced-tools-page__sql-actions[data-v-acd4ed2f] {\r\n    justify-content: stretch;\n}\n.acu-v2-advanced-tools-page__sql-status[data-v-acd4ed2f] {\r\n    width: 100%;\r\n    margin-left: 0;\r\n    text-align: right;\n}\n.acu-v2-advanced-tools-page__filter-grid[data-v-acd4ed2f] {\r\n    grid-template-columns: 1fr;\n}\n.acu-v2-advanced-tools-page__log-control-main[data-v-acd4ed2f] {\r\n    align-items: stretch;\r\n    flex-direction: column;\r\n    justify-content: flex-start;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-acd4ed2f] {\r\n    align-self: flex-start;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-acd4ed2f],\r\n  .acu-v2-advanced-tools-page__log-row[data-v-acd4ed2f] {\r\n    padding-inline: 9px;\n}\n}\r\n", "src/presentation-v2/pages/AdvancedToolsPage.vue#style-0-acd4ed2f");
-var AdvancedToolsPage_vue_vue_type_style_index_0_scoped_acd4ed2f_lang = null;
+injectSfcStyle("\n.acu-v2-advanced-tools-page[data-v-c2a4104e] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-advanced-tools-page__sql-panel[data-v-c2a4104e],\r\n.acu-v2-advanced-tools-page__log-panel[data-v-c2a4104e],\r\n.acu-v2-advanced-tools-page__debug-panel[data-v-c2a4104e] {\r\n  min-width: 0;\n}\n.acu-v2-advanced-tools-page__debug-actions[data-v-c2a4104e] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__quick-actions[data-v-c2a4104e],\r\n.acu-v2-advanced-tools-page__log-actions[data-v-c2a4104e] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-textarea[data-v-c2a4104e] {\r\n  font-family: var(--acu-font-mono);\r\n  min-height: 210px;\r\n  white-space: pre;\n}\n.acu-v2-advanced-tools-page__sql-actions[data-v-c2a4104e] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\r\n  justify-content: flex-end;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-advanced-tools-page__sql-status[data-v-c2a4104e] {\r\n  margin-left: auto;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.5;\n}\n.acu-v2-advanced-tools-page__sql-status--success[data-v-c2a4104e] {\r\n  color: var(--acu-success);\n}\n.acu-v2-advanced-tools-page__sql-status--warning[data-v-c2a4104e] {\r\n  color: var(--acu-warning);\n}\n.acu-v2-advanced-tools-page__sql-status--error[data-v-c2a4104e] {\r\n  color: var(--acu-danger);\n}\n.acu-v2-advanced-tools-page__sql-result-section[data-v-c2a4104e],\r\n.acu-v2-advanced-tools-page__sql-history-section[data-v-c2a4104e] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-v2-advanced-tools-page__sql-history-section[data-v-c2a4104e] {\r\n  padding-top: 12px;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n}\n.acu-v2-advanced-tools-page__section-title[data-v-c2a4104e] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 600;\r\n  line-height: 1.35;\n}\n.acu-v2-advanced-tools-page__empty[data-v-c2a4104e] {\r\n  min-height: 96px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: center;\r\n  border: 0;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__empty--compact[data-v-c2a4104e] {\r\n  min-height: 72px;\n}\n.acu-v2-advanced-tools-page__empty--log[data-v-c2a4104e] {\r\n  min-height: 180px;\r\n  border: 0;\n}\n.acu-v2-advanced-tools-page__sql-table-wrap[data-v-c2a4104e] {\r\n  max-height: 330px;\r\n  overflow: auto;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-result-table[data-v-c2a4104e] {\r\n  width: 100%;\r\n  border-collapse: collapse;\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-advanced-tools-page__sql-result-table th[data-v-c2a4104e],\r\n.acu-v2-advanced-tools-page__sql-result-table td[data-v-c2a4104e] {\r\n  max-width: 300px;\r\n  padding: 7px 10px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  text-align: left;\r\n  white-space: nowrap;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\n}\n.acu-v2-advanced-tools-page__sql-result-table th[data-v-c2a4104e] {\r\n  position: sticky;\r\n  top: 0;\r\n  z-index: 1;\r\n  background: var(--acu-bg-1);\r\n  color: var(--acu-text-1);\r\n  font-weight: 600;\n}\n.acu-v2-advanced-tools-page__sql-result-table tbody tr[data-v-c2a4104e]:nth-child(even) {\r\n  background: color-mix(in srgb, var(--acu-text-3) 5%, transparent);\n}\n.acu-v2-advanced-tools-page__cell-null[data-v-c2a4104e],\r\n.acu-v2-advanced-tools-page__empty-cell[data-v-c2a4104e] {\r\n  color: var(--acu-text-3);\r\n  font-style: italic;\n}\n.acu-v2-advanced-tools-page__sql-result-meta[data-v-c2a4104e] {\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: right;\n}\n.acu-v2-advanced-tools-page__sql-error[data-v-c2a4104e] {\r\n  margin: 0;\r\n  min-height: 96px;\r\n  padding: 12px;\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-danger) 8%, transparent);\r\n  color: var(--acu-danger);\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__filter-grid[data-v-c2a4104e] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 12px;\r\n  align-items: stretch;\n}\n.acu-v2-advanced-tools-page__keyword-row[data-v-c2a4104e] {\r\n  grid-column: 1 / -1;\n}\n.acu-v2-advanced-tools-page__log-control-row[data-v-c2a4104e] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  min-width: 0;\n}\n.acu-v2-advanced-tools-page__log-control-main[data-v-c2a4104e] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 10px 14px;\r\n  align-items: center;\r\n  justify-content: space-between;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-c2a4104e] {\r\n  width: max-content;\r\n  max-width: 100%;\r\n  display: grid;\r\n  grid-template-columns: max-content max-content;\r\n  gap: 10px 18px;\r\n  align-items: center;\r\n  justify-content: flex-start;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-c2a4104e] .acu-toggle {\r\n  width: max-content;\r\n  max-width: none;\r\n  min-width: max-content;\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-c2a4104e] .acu-toggle__label {\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__hint[data-v-c2a4104e] {\r\n  max-width: 100%;\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\r\n  overflow-wrap: anywhere;\n}\n.acu-v2-advanced-tools-page__sql-history-list[data-v-c2a4104e],\r\n.acu-v2-advanced-tools-page__log-list[data-v-c2a4104e] {\r\n  overflow: auto;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-list[data-v-c2a4104e] {\r\n  max-height: 230px;\n}\n.acu-v2-advanced-tools-page__log-list[data-v-c2a4104e] {\r\n  min-height: 360px;\r\n  max-height: 58vh;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-c2a4104e],\r\n.acu-v2-advanced-tools-page__log-row[data-v-c2a4104e] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 8px;\r\n  align-items: baseline;\r\n  padding: 7px 10px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-c2a4104e] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: stretch;\r\n  gap: 6px;\r\n  padding-block: 9px;\r\n  border: 0;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  background: transparent;\r\n  color: inherit;\r\n  cursor: pointer;\r\n  font: inherit;\r\n  text-align: left;\r\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-advanced-tools-page__log-row[data-v-c2a4104e] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: stretch;\r\n  gap: 6px;\r\n  padding-block: 9px;\n}\n.acu-v2-advanced-tools-page__log-meta[data-v-c2a4104e] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 6px 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-history-meta[data-v-c2a4104e] {\r\n  flex-wrap: nowrap;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-c2a4104e]:last-child,\r\n.acu-v2-advanced-tools-page__log-row[data-v-c2a4104e]:last-child {\r\n  border-bottom: 0;\n}\n.acu-v2-advanced-tools-page__sql-history-item--failure[data-v-c2a4104e],\r\n.acu-v2-advanced-tools-page__log-row--error[data-v-c2a4104e] {\r\n  background: color-mix(in srgb, var(--acu-danger) 7%, transparent);\n}\n.acu-v2-advanced-tools-page__log-row--warn[data-v-c2a4104e] {\r\n  background: color-mix(in srgb, var(--acu-warning) 6%, transparent);\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-c2a4104e]:hover {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-c2a4104e]:focus-visible {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\r\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\r\n  outline: none;\n}\n.acu-v2-advanced-tools-page__log-time[data-v-c2a4104e],\r\n.acu-v2-advanced-tools-page__log-tag[data-v-c2a4104e],\r\n.acu-v2-advanced-tools-page__log-message[data-v-c2a4104e] {\r\n  min-width: 0;\r\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-advanced-tools-page__log-time[data-v-c2a4104e] {\r\n  color: var(--acu-text-3);\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__log-tag[data-v-c2a4104e] {\r\n  flex: 1 1 180px;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  color: var(--acu-text-2);\n}\n.acu-v2-advanced-tools-page__log-message[data-v-c2a4104e] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__log-body[data-v-c2a4104e] {\r\n  display: block;\r\n  width: 100%;\n}\n@media (max-width: 1080px) {\n.acu-v2-advanced-tools-page[data-v-c2a4104e] {\r\n    padding: 14px;\n}\n.acu-v2-advanced-tools-page__sql-actions[data-v-c2a4104e] {\r\n    justify-content: stretch;\n}\n.acu-v2-advanced-tools-page__sql-status[data-v-c2a4104e] {\r\n    width: 100%;\r\n    margin-left: 0;\r\n    text-align: right;\n}\n.acu-v2-advanced-tools-page__filter-grid[data-v-c2a4104e] {\r\n    grid-template-columns: 1fr;\n}\n.acu-v2-advanced-tools-page__log-control-main[data-v-c2a4104e] {\r\n    align-items: stretch;\r\n    flex-direction: column;\r\n    justify-content: flex-start;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-c2a4104e] {\r\n    align-self: flex-start;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-c2a4104e],\r\n  .acu-v2-advanced-tools-page__log-row[data-v-c2a4104e] {\r\n    padding-inline: 9px;\n}\n}\r\n", "src/presentation-v2/pages/AdvancedToolsPage.vue#style-0-c2a4104e");
+var AdvancedToolsPage_vue_vue_type_style_index_0_scoped_c2a4104e_lang = null;
 
 const _hoisted_1$d = { class: "acu-v2-advanced-tools-page" };
 const _hoisted_2$c = {
@@ -165369,32 +165347,21 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 				title: $setup.advancedToolsCopy.panels.logs.title,
 				description: $setup.advancedToolsCopy.panels.logs.description
 			}, {
-				actions: withCtx(() => [
-					createVNode($setup["AcuBadge"], { variant: $setup.logFlow.paused.value ? "warning" : "success" }, {
-						default: withCtx(() => [createTextVNode(
-							toDisplayString($setup.logFlow.statusLabel.value),
-							1
-							/* TEXT */
-						)]),
-						_: 1
-					}, 8, ["variant"]),
-					createVNode($setup["AcuBadge"], { variant: $setup.logFlow.debugLogEnabled.value ? "accent" : "neutral" }, {
-						default: withCtx(() => [createTextVNode(
-							toDisplayString($setup.logFlow.debugLabel.value),
-							1
-							/* TEXT */
-						)]),
-						_: 1
-					}, 8, ["variant"]),
-					createVNode($setup["AcuBadge"], { variant: $setup.logFlow.warnLogEnabled.value ? "warning" : "neutral" }, {
-						default: withCtx(() => [createTextVNode(
-							toDisplayString($setup.logFlow.warnLabel.value),
-							1
-							/* TEXT */
-						)]),
-						_: 1
-					}, 8, ["variant"])
-				]),
+				actions: withCtx(() => [createVNode($setup["AcuBadge"], { variant: $setup.logFlow.paused.value ? "warning" : "success" }, {
+					default: withCtx(() => [createTextVNode(
+						toDisplayString($setup.logFlow.statusLabel.value),
+						1
+						/* TEXT */
+					)]),
+					_: 1
+				}, 8, ["variant"]), createVNode($setup["AcuBadge"], { variant: $setup.logFlow.debugLogEnabled.value ? "accent" : "neutral" }, {
+					default: withCtx(() => [createTextVNode(
+						toDisplayString($setup.logFlow.debugLabel.value),
+						1
+						/* TEXT */
+					)]),
+					_: 1
+				}, 8, ["variant"])]),
 				default: withCtx(() => [
 					createBaseVNode("div", _hoisted_18$4, [
 						createVNode($setup["AcuFormRow"], null, {
@@ -165476,26 +165443,14 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 							)])]),
 							_: 1
 						}, 8, ["disabled", "onClick"])
-					]), createBaseVNode("div", _hoisted_22$1, [
-						createVNode($setup["AcuToggle"], {
-							"model-value": $setup.logFlow.autoScroll.value,
-							label: "自动滚动",
-							"onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => $setup.logFlow.autoScroll.value = $event)
-						}, null, 8, ["model-value"]),
-						createVNode($setup["AcuToggle"], {
-							"model-value": $setup.logFlow.warnLogEnabled.value,
-							label: "Warn",
-							"onUpdate:modelValue": $setup.logFlow.setWarnCollection
-						}, null, 8, ["model-value", "onUpdate:modelValue"]),
-						createVNode($setup["AcuToggle"], {
-							"model-value": $setup.logFlow.debugLogEnabled.value,
-							label: "Debug",
-							"onUpdate:modelValue": $setup.logFlow.setDebugCollection
-						}, null, 8, ["model-value", "onUpdate:modelValue"])
-					])]), createBaseVNode(
+					]), createBaseVNode("div", _hoisted_22$1, [createVNode($setup["AcuToggle"], {
+						"model-value": $setup.logFlow.autoScroll.value,
+						label: "自动滚动",
+						"onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => $setup.logFlow.autoScroll.value = $event)
+					}, null, 8, ["model-value"])])]), createBaseVNode(
 						"p",
 						_hoisted_23$1,
-						" 最多保留最近 2000 条；当前显示 " + toDisplayString($setup.logFlow.filteredCount.value) + " / " + toDisplayString($setup.logFlow.totalCount.value) + " 条。" + toDisplayString($setup.logFlow.pendingCount.value ? `${$setup.logFlow.pendingCount.value} 条暂停期间新增日志等待显示。` : "没有暂停期间积压的日志。"),
+						" 最多保留最近 50000 条；当前显示 " + toDisplayString($setup.logFlow.filteredCount.value) + " / " + toDisplayString($setup.logFlow.totalCount.value) + " 条。" + toDisplayString($setup.logFlow.pendingCount.value ? `${$setup.logFlow.pendingCount.value} 条暂停期间新增日志等待显示。` : "没有暂停期间积压的日志。"),
 						1
 						/* TEXT */
 					)]),
@@ -165624,7 +165579,7 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	})]);
 }
-var AdvancedToolsPage = /* @__PURE__ */ _export_sfc(_sfc_main$d, [["render", _sfc_render$d], ["__scopeId", "data-v-acd4ed2f"]]);
+var AdvancedToolsPage = /* @__PURE__ */ _export_sfc(_sfc_main$d, [["render", _sfc_render$d], ["__scopeId", "data-v-c2a4104e"]]);
 
 const developerCopy = {
     panels: {
