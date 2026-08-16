@@ -75,7 +75,7 @@ import './presentation/triggers/settings-ui-sync';
 import { mainInitialize_ACU } from './presentation/bootstrap/init';
 import { bootstrapAcuV2 } from './presentation-v2/bootstrap';
 import { logDebug_ACU, logError_ACU } from './shared/utils';
-import { waitForAcuHostReady, isAcuTauriRuntime } from './shared/host-bridge';
+import { waitForAcuHostReady } from './shared/host-bridge';
 
 /**
  * 等待宿主 API 就绪：主窗口的 window.SillyTavern 只有 {libs, getContext}，
@@ -87,10 +87,29 @@ async function waitForHostApi(maxWaitMs = 15000): Promise<boolean> {
   return waitForAcuHostReady(maxWaitMs);
 }
 
+/** 全局错误捕获（幂等）：未捕获异常 / 未处理 Promise rejection 写入日志缓冲，供 Debug 导出定位 */
+function installGlobalErrorCapture(): void {
+  const g = globalThis as any;
+  if (g.__ACU_GLOBAL_ERROR_CAPTURE_INSTALLED__) return;
+  g.__ACU_GLOBAL_ERROR_CAPTURE_INSTALLED__ = true;
+
+  const fmt = (err: unknown): string =>
+    err instanceof Error ? err.stack || `${err.name}: ${err.message}` : String(err);
+
+  g.addEventListener?.('error', (event: ErrorEvent) => {
+    logError_ACU(`[全局] 未捕获异常: ${event.message || fmt(event.error)}`);
+  });
+
+  g.addEventListener?.('unhandledrejection', (event: PromiseRejectionEvent) => {
+    logError_ACU(`[全局] 未处理 Promise 拒绝: ${fmt(event.reason)}`);
+  });
+}
+
 /**
  * 扩展启动流程
  */
 async function extensionMain() {
+    installGlobalErrorCapture();
     if (checkAndMarkInstance()) {
         logError_ACU('[插件启动] 检测到已有实例运行，跳过初始化。请勿同时安装油猴脚本和本扩展。');
         return;
@@ -98,6 +117,7 @@ async function extensionMain() {
 
     const ready = await waitForHostApi();
     if (!ready) {
+        logError_ACU('[插件启动] 等待宿主（SillyTavern/TauriTavern）就绪超时，初始化中止。');
         return;
     }
 
@@ -106,5 +126,7 @@ async function extensionMain() {
     bootstrapAcuV2();
 }
 
-// 扩展加载时 DOM 已就绪，直接启动
-extensionMain();
+// 扩展加载时 DOM 已就绪，直接启动；捕获异步错误，避免未处理 rejection 静默丢失
+extensionMain().catch(error => {
+    logError_ACU(`[插件启动] 初始化失败: ${error instanceof Error ? error.stack || error.message : String(error)}`);
+});

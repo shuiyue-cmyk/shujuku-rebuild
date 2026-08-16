@@ -260,12 +260,15 @@ function summarizeSettingsForLog_ACU(settings: any): Record<string, any> {
     };
   }
   if (Array.isArray(settings.apiPresets)) {
-    safe.apiPresets = settings.apiPresets.map((p: any) => ({
-      name: p?.name,
-      apiKey: maskSecret_ACU(p?.apiKey),
-      model: p?.model,
-      url: p?.url,
-    }));
+    safe.apiPresets = settings.apiPresets.map((p: any) => {
+      const apiConfig = p?.apiConfig || {};
+      return {
+        name: p?.name,
+        apiKey: maskSecret_ACU(apiConfig.apiKey),
+        model: apiConfig.model,
+        url: apiConfig.url,
+      };
+    });
   }
   return safe;
 }

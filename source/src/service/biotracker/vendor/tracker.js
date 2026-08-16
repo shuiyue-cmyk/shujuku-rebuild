@@ -1453,6 +1453,18 @@ export async function runTracker(ctx, deps, reason = 'manual') {
 export async function poll(ctx, deps) {
   const settings = getSettings(ctx);
   if (!settings.enabled) return;
+  // 数据库集成（F6）：每轮轮询前经探针刷新 agent 世界书模式与绿灯 uid 白名单，
+  // 运行中 agent 开关/放行变更即时生效（避免沿用 init/注册时点的旧值）
+  try {
+    const probe = globalThis.__bs_biotracker_greenlights_probe__;
+    if (typeof probe === 'function') {
+      const { agentModeOn, uids } = probe();
+      settings.trackerWorldbookMode = agentModeOn ? 'agent_greenlights' : String(settings.trackerWorldbookMode || 'mainflow');
+      settings.agentGreenlightUids = agentModeOn ? uids : [];
+    }
+  } catch (e) {
+    console.error('[BS BioTracker] refresh greenlights failed', e);
+  }
   await runTracker(ctx, deps, 'poll');
 }
 

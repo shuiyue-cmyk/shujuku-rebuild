@@ -52,7 +52,7 @@ https://github.com/shuiyue-cmyk/shujuku-rebuild
 
 ## 兼容契约
 
-保持不变的对外表面（详见 [`source/docs/COMPATIBILITY.md`](source/docs/COMPATIBILITY.md)）：
+保持不变的对外表面（详见下方清单与 `source/docs/TESTING.md`）：
 
 - 全局 API：`window.AutoCardUpdaterAPI`（exportTableAsJson / importTableAsJson / updateCell / updateRow / deleteRow / insertRow / openSettings / openVisualizer / manualUpdate / registerTableUpdateCallback / _notifyTableUpdate 等）、`window.AutoCardUpdaterV2API`（open / openVisualizer）
 - DOM：`#acu-app-v2`、`button[data-page-id="form-fill"]`、按钮文案「全选」「一键追平所选表未填楼层」「切换到高手模式」
@@ -90,7 +90,7 @@ npm run build         # rollup → source/dist/extension + 仓库根目录直装
     │   ├── presentation/        # 旧弹窗 UI（DOM/jQuery）
     │   └── presentation-v2/     # v2 UI（Vue 3 + Pinia）
     ├── tests/           # vitest 单元/集成测试（~290 文件）
-    └── docs/            # COMPATIBILITY.md / TESTING.md
+    └── docs/            # TESTING.md（运行时测试清单）
 ```
 
 ## 从旧版迁移

@@ -25,7 +25,7 @@ import {
 import { getAcuHostDocument } from '../bootstrap/host-document';
 import { useToastStore } from '../stores/toast-store';
 import { getAcuHostKind } from '../../shared/host-bridge';
-import { settings_ACU, currentJsonTableData_ACU } from '../../service/runtime/state-manager';
+import { settings_ACU, currentJsonTableData_ACU, currentChatFileIdentifier_ACU } from '../../service/runtime/state-manager';
 
 function getBuildStamp(): string {
   try {
@@ -38,16 +38,33 @@ function getBuildStamp(): string {
 
 function getPluginVersion(): string {
   try {
-    const m = (globalThis as any).__ACU_MANIFEST__;
-    if (m && typeof m.version === 'string') return m.version;
-  } catch { /* ignore */ }
-  return 'unknown';
+    const v = (globalThis as any).__ACU_BUILD_VERSION__;
+    return typeof v === 'string' && v ? v : 'unknown';
+  } catch {
+    return 'unknown';
+  }
 }
 
 function maskSecret(value: unknown): string {
   if (typeof value !== 'string' || !value) return String(value ?? '');
   if (value.length <= 8) return '***';
   return `${value.slice(0, 3)}***${value.slice(-3)}`;
+}
+
+const SENSITIVE_KEYS = /^(api[_-]?key|key|token|authorization|auth|password|proxy[_-]?password|secret)$/i;
+
+/** 递归脱敏对象中的敏感字段（biotracker 请求/响应快照可能含 Authorization/key 回显） */
+function maskSensitiveFields(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(maskSensitiveFields);
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (SENSITIVE_KEYS.test(k)) out[k] = maskSecret(v);
+      else out[k] = maskSensitiveFields(v);
+    }
+    return out;
+  }
+  return value;
 }
 
 function downloadJson(filename: string, data: unknown): void {
@@ -60,7 +77,8 @@ function downloadJson(filename: string, data: unknown): void {
   doc.body.appendChild(a);
   a.click();
   doc.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  // 延迟 revoke：WebView2/部分内核在 click 后立即 revoke 会取消下载
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 export function useDebugPanel() {
@@ -90,6 +108,7 @@ export function useDebugPanel() {
 
   function stopDebug(): void {
     setDebugLogEnabled(false);
+    setWarnLogEnabled(false);
     active.value = false;
     toast.success('Debug 采集已停止。');
   }
@@ -105,12 +124,15 @@ export function useDebugPanel() {
       return;
     }
     const logs: LogEntry[] = getAllLogs();
+    // 防护：Debug 未由本页开启（如持久化 warn 导致挂载即 active）时，以当前时间为起点
+    const effectiveStart = startedAt || Date.now();
     const cfg = settings_ACU?.apiConfig || {};
     const env = {
       host: getAcuHostKind(),
       buildStamp: getBuildStamp(),
       version: getPluginVersion(),
       exportedAt: new Date().toISOString(),
+      chatId: currentChatFileIdentifier_ACU,
       streamingEnabled: settings_ACU?.streamingEnabled === true,
       nonPrefillSupport: settings_ACU?.nonPrefillSupport === true,
       apiMode: settings_ACU?.apiMode || '',
@@ -130,21 +152,23 @@ export function useDebugPanel() {
     try {
       const req = (globalThis as any).__bs_biotracker_debug_last_effective_request__;
       const resp = (globalThis as any).__bs_biotracker_debug_last_api_response__;
-      if (req) biotrackerDebug.lastRequest = req;
-      if (resp) biotrackerDebug.lastResponse = resp;
+      if (req) biotrackerDebug.lastRequest = maskSensitiveFields(req);
+      if (resp) biotrackerDebug.lastResponse = maskSensitiveFields(resp);
       const trackerReq = (globalThis as any).__bs_biotracker_debug_last_tracker_request__;
       const trackerResult = (globalThis as any).__bs_biotracker_debug_last_tracker_result__;
-      if (trackerReq) biotrackerDebug.lastTrackerRequest = trackerReq;
-      if (trackerResult) biotrackerDebug.lastTrackerResult = trackerResult;
+      if (trackerReq) biotrackerDebug.lastTrackerRequest = maskSensitiveFields(trackerReq);
+      if (trackerResult) biotrackerDebug.lastTrackerResult = maskSensitiveFields(trackerResult);
     } catch { /* biotracker debug 数据读取失败不影响导出 */ }
 
-    const tables: Record<string, number> = {};
+    const tables: Record<string, { rows: number; headers: string[] }> = {};
     try {
       const data = currentJsonTableData_ACU || {};
       for (const [key, sheet] of Object.entries(data)) {
         if (key === 'mate') continue;
-        const rows = Array.isArray((sheet as any)?.content) ? Math.max(0, (sheet as any).content.length - 1) : 0;
-        tables[key] = rows;
+        const content = Array.isArray((sheet as any)?.content) ? (sheet as any).content : [];
+        const rows = Math.max(0, content.length - 1);
+        const headers = Array.isArray(content[0]) ? content[0].map(String) : [];
+        tables[key] = { rows, headers };
       }
     } catch { /* 表统计失败不影响导出 */ }
 
@@ -155,7 +179,7 @@ export function useDebugPanel() {
         buildStamp: env.buildStamp,
         host: env.host,
         exportedAt: env.exportedAt,
-        debugStartedAt: new Date(startedAt).toISOString(),
+        debugStartedAt: new Date(effectiveStart).toISOString(),
       },
       env,
       logCount: logs.length,

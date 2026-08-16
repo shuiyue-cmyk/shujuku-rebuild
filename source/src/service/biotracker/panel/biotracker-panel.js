@@ -176,7 +176,8 @@ let racePaletteState = {
 
 function normalizeWorldbookMode(value) {
   const mode = String(value || 'exclude').trim();
-  if (mode === 'mainflow' || mode === 'allowlist_all' || mode === 'exclude') return mode;
+  // 数据库集成（F6）：agent_greenlights（蓝灯 constant + 绿灯 uid 白名单）为数据库 agent 世界书接管模式
+  if (mode === 'mainflow' || mode === 'allowlist_all' || mode === 'exclude' || mode === 'agent_greenlights') return mode;
   return 'exclude';
 }
 let debugInjectDraft = {

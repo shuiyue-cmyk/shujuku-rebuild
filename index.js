@@ -2119,6 +2119,7 @@ function clearLogs() {
     _buffer = new Array(MAX_BUFFER_SIZE);
     _writeIndex = 0;
     _count = 0;
+    _knownTags.clear();
 }
 /**
  * 获取所有已知的模块标签（供 UI 过滤器使用）
@@ -83758,12 +83759,15 @@ function summarizeSettingsForLog_ACU(settings) {
         };
     }
     if (Array.isArray(settings.apiPresets)) {
-        safe.apiPresets = settings.apiPresets.map((p) => ({
-            name: p?.name,
-            apiKey: maskSecret_ACU(p?.apiKey),
-            model: p?.model,
-            url: p?.url,
-        }));
+        safe.apiPresets = settings.apiPresets.map((p) => {
+            const apiConfig = p?.apiConfig || {};
+            return {
+                name: p?.name,
+                apiKey: maskSecret_ACU(apiConfig.apiKey),
+                model: apiConfig.model,
+                url: apiConfig.url,
+            };
+        });
     }
     return safe;
 }
@@ -100686,15 +100690,22 @@ async function callOpenAICompatible(settings, payload, systemPrompt = DEFAULT_SY
             if (parsed && typeof parsed === 'object')
                 return parsed;
             // 同一轮全局尝试内：先做一次「请只输出 JSON」纠错请求
+            const retryMessages = [
+                ...effectiveMessages,
+                // 数据库集成（非预填充支持）：纠错重试的 assistant 消息同样转换，避免非预填充接口拒收
+                { role: 'assistant', content: String(content || '') },
+                { role: 'user', content: buildJsonRetryInstruction() },
+            ].map((m) => {
+                if (safeProbeCall('__bs_biotracker_non_prefill_probe__') === true && m && typeof m.role === 'string' && m.role.toLowerCase() === 'assistant') {
+                    return { ...m, role: 'user', content: `助手：\n${typeof m.content === 'string' ? m.content : String(m.content ?? '')}` };
+                }
+                return m;
+            });
             const retryBody = {
                 model,
                 temperature: 0.1,
                 ...stPresetSampling,
-                messages: [
-                    ...effectiveMessages,
-                    { role: 'assistant', content: String(content || '') },
-                    { role: 'user', content: buildJsonRetryInstruction() },
-                ],
+                messages: retryMessages,
                 ...(useFormattedOutputV4 ? { response_format: { type: 'json_object' } } : {}),
             };
             const retryData = await requestChatCompletion(apiBase, settings, retryBody, runContext);
@@ -110970,6 +110981,19 @@ async function poll(ctx, deps) {
     const settings = getSettings(ctx);
     if (!settings.enabled)
         return;
+    // 数据库集成（F6）：每轮轮询前经探针刷新 agent 世界书模式与绿灯 uid 白名单，
+    // 运行中 agent 开关/放行变更即时生效（避免沿用 init/注册时点的旧值）
+    try {
+        const probe = globalThis.__bs_biotracker_greenlights_probe__;
+        if (typeof probe === 'function') {
+            const { agentModeOn, uids } = probe();
+            settings.trackerWorldbookMode = agentModeOn ? 'agent_greenlights' : String(settings.trackerWorldbookMode || 'mainflow');
+            settings.agentGreenlightUids = agentModeOn ? uids : [];
+        }
+    }
+    catch (e) {
+        console.error('[BS BioTracker] refresh greenlights failed', e);
+    }
     await runTracker(ctx, deps, 'poll');
 }
 /** 数据库集成（H5）：停止追踪轮询——清除 interval 且不重建，供禁用/卸载时调用，避免空转 */
@@ -111002,7 +111026,7 @@ const WARDROBE_DIMENSION_LABELS = Object.freeze({ masking: '掩形', support: '�
 const PREG_FIT_GAP_LABELS = Object.freeze({ masking: '掩形', support: '支撑', capacity: '容身', convenience: '便捷' });
 const MAX_PROGRESS_BAR_CAP = 200;
 // 构建时间戳（rollup replace 注入；测试/dev 环境无替换时回退 'dev'）——全局水印用，截图辨别构建
-const ACU_BUILD_STAMP = typeof "20260816-11" === 'string' ? "20260816-11" : 'dev';
+const ACU_BUILD_STAMP = typeof "20260816-12" === 'string' ? "20260816-12" : 'dev';
 const MODAL_EDGE_GAP = 24;
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const FLOATING_SPHERE_POSITION_KEY = `${MODULE_NAME}_floating_sphere_position`;
@@ -111072,7 +111096,8 @@ let racePaletteState = {
 };
 function normalizeWorldbookMode(value) {
     const mode = String(value || 'exclude').trim();
-    if (mode === 'mainflow' || mode === 'allowlist_all' || mode === 'exclude')
+    // 数据库集成（F6）：agent_greenlights（蓝灯 constant + 绿灯 uid 白名单）为数据库 agent 世界书接管模式
+    if (mode === 'mainflow' || mode === 'allowlist_all' || mode === 'exclude' || mode === 'agent_greenlights')
         return mode;
     return 'exclude';
 }
@@ -118821,6 +118846,24 @@ function installBiotrackerConsoleBridge() {
     // 聊天变更中止信号探针：删楼/ROLL/切聊天（CHAT_CHANGED）时 abortOnChatMutation_ACU
     // 会 abort 该信号 → vendor 在飞请求随之中止（fetchText 已支持 externalSignal）
     globalThis.__bs_biotracker_chat_mutation_abort_signal__ = () => getChatMutationAbortSignal_ACU();
+    // 世界书绿灯探针（F6）：轮询 runTracker 前刷新 agent 模式判定与绿灯 uid 白名单——
+    // 运行中 agent 开关/放行变更即时生效（无需等 init/注册时点刷新）
+    globalThis.__bs_biotracker_greenlights_probe__ = () => {
+        try {
+            const agentControl = settings_ACU.plotSettings?.agentWorldbookControl;
+            const agentModeOn = agentControl?.enabled === true && agentControl?.mode === 'agent';
+            let uids = [];
+            if (agentModeOn) {
+                const greenlights = readFinalGenerationGreenlights_ACU();
+                uids = Array.isArray(greenlights) ? greenlights.map((g) => String(g?.uid || '')).filter(Boolean) : [];
+            }
+            return { agentModeOn, uids };
+        }
+        catch (e) {
+            logWarn_ACU('[生理追踪] 刷新 agent 绿灯失败:', e);
+            return { agentModeOn: false, uids: [] };
+        }
+    };
     const bridge = (level) => (original) => (...args) => {
         original(...args);
         try {
@@ -119057,6 +119100,11 @@ function initBiotracker_ACU() {
         if (eventSource && chatChangedType && typeof eventSource.on === 'function') {
             eventSource.on(chatChangedType, () => {
                 try {
+                    // 聊天切换/删楼/ROLL：重置 P1 长度短路标记，避免等长聊天/同楼数被永久跳过分析
+                    try {
+                        delete globalThis.__bs_biotracker_last_polled_length__;
+                    }
+                    catch { /* ignore */ }
                     const nextCtx = createBiotrackerCtx_ACU();
                     const nextSettings = getSettings(nextCtx);
                     getChatState(nextCtx, nextSettings);
@@ -164793,7 +164841,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260816-11";
+        const stamp = "20260816-12";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -164802,12 +164850,12 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const m = globalThis.__ACU_MANIFEST__;
-        if (m && typeof m.version === 'string')
-            return m.version;
+        const v = "9.0.0";
+        return typeof v === 'string' && v ? v : 'unknown';
     }
-    catch { /* ignore */ }
-    return 'unknown';
+    catch {
+        return 'unknown';
+    }
 }
 function maskSecret(value) {
     if (typeof value !== 'string' || !value)
@@ -164815,6 +164863,23 @@ function maskSecret(value) {
     if (value.length <= 8)
         return '***';
     return `${value.slice(0, 3)}***${value.slice(-3)}`;
+}
+const SENSITIVE_KEYS = /^(api[_-]?key|key|token|authorization|auth|password|proxy[_-]?password|secret)$/i;
+/** 递归脱敏对象中的敏感字段（biotracker 请求/响应快照可能含 Authorization/key 回显） */
+function maskSensitiveFields(value) {
+    if (Array.isArray(value))
+        return value.map(maskSensitiveFields);
+    if (value && typeof value === 'object') {
+        const out = {};
+        for (const [k, v] of Object.entries(value)) {
+            if (SENSITIVE_KEYS.test(k))
+                out[k] = maskSecret(v);
+            else
+                out[k] = maskSensitiveFields(v);
+        }
+        return out;
+    }
+    return value;
 }
 function downloadJson(filename, data) {
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -164826,7 +164891,8 @@ function downloadJson(filename, data) {
     doc.body.appendChild(a);
     a.click();
     doc.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    // 延迟 revoke：WebView2/部分内核在 click 后立即 revoke 会取消下载
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 function useDebugPanel() {
     const toast = useToastStore();
@@ -164851,6 +164917,7 @@ function useDebugPanel() {
     }
     function stopDebug() {
         setDebugLogEnabled(false);
+        setWarnLogEnabled(false);
         active.value = false;
         toast.success('Debug 采集已停止。');
     }
@@ -164866,12 +164933,15 @@ function useDebugPanel() {
             return;
         }
         const logs = getAllLogs();
+        // 防护：Debug 未由本页开启（如持久化 warn 导致挂载即 active）时，以当前时间为起点
+        const effectiveStart = startedAt || Date.now();
         const cfg = settings_ACU?.apiConfig || {};
         const env = {
             host: getAcuHostKind(),
             buildStamp: getBuildStamp(),
             version: getPluginVersion(),
             exportedAt: new Date().toISOString(),
+            chatId: currentChatFileIdentifier_ACU,
             streamingEnabled: settings_ACU?.streamingEnabled === true,
             nonPrefillSupport: settings_ACU?.nonPrefillSupport === true,
             apiMode: settings_ACU?.apiMode || '',
@@ -164891,15 +164961,15 @@ function useDebugPanel() {
             const req = globalThis.__bs_biotracker_debug_last_effective_request__;
             const resp = globalThis.__bs_biotracker_debug_last_api_response__;
             if (req)
-                biotrackerDebug.lastRequest = req;
+                biotrackerDebug.lastRequest = maskSensitiveFields(req);
             if (resp)
-                biotrackerDebug.lastResponse = resp;
+                biotrackerDebug.lastResponse = maskSensitiveFields(resp);
             const trackerReq = globalThis.__bs_biotracker_debug_last_tracker_request__;
             const trackerResult = globalThis.__bs_biotracker_debug_last_tracker_result__;
             if (trackerReq)
-                biotrackerDebug.lastTrackerRequest = trackerReq;
+                biotrackerDebug.lastTrackerRequest = maskSensitiveFields(trackerReq);
             if (trackerResult)
-                biotrackerDebug.lastTrackerResult = trackerResult;
+                biotrackerDebug.lastTrackerResult = maskSensitiveFields(trackerResult);
         }
         catch { /* biotracker debug 数据读取失败不影响导出 */ }
         const tables = {};
@@ -164908,8 +164978,10 @@ function useDebugPanel() {
             for (const [key, sheet] of Object.entries(data)) {
                 if (key === 'mate')
                     continue;
-                const rows = Array.isArray(sheet?.content) ? Math.max(0, sheet.content.length - 1) : 0;
-                tables[key] = rows;
+                const content = Array.isArray(sheet?.content) ? sheet.content : [];
+                const rows = Math.max(0, content.length - 1);
+                const headers = Array.isArray(content[0]) ? content[0].map(String) : [];
+                tables[key] = { rows, headers };
             }
         }
         catch { /* 表统计失败不影响导出 */ }
@@ -164920,7 +164992,7 @@ function useDebugPanel() {
                 buildStamp: env.buildStamp,
                 host: env.host,
                 exportedAt: env.exportedAt,
-                debugStartedAt: new Date(startedAt).toISOString(),
+                debugStartedAt: new Date(effectiveStart).toISOString(),
             },
             env,
             logCount: logs.length,
@@ -177181,21 +177253,39 @@ _forceExtensionMode();
 async function waitForHostApi(maxWaitMs = 15000) {
     return waitForAcuHostReady(maxWaitMs);
 }
+/** 全局错误捕获（幂等）：未捕获异常 / 未处理 Promise rejection 写入日志缓冲，供 Debug 导出定位 */
+function installGlobalErrorCapture() {
+    const g = globalThis;
+    if (g.__ACU_GLOBAL_ERROR_CAPTURE_INSTALLED__)
+        return;
+    g.__ACU_GLOBAL_ERROR_CAPTURE_INSTALLED__ = true;
+    const fmt = (err) => err instanceof Error ? err.stack || `${err.name}: ${err.message}` : String(err);
+    g.addEventListener?.('error', (event) => {
+        logError_ACU(`[全局] 未捕获异常: ${event.message || fmt(event.error)}`);
+    });
+    g.addEventListener?.('unhandledrejection', (event) => {
+        logError_ACU(`[全局] 未处理 Promise 拒绝: ${fmt(event.reason)}`);
+    });
+}
 /**
  * 扩展启动流程
  */
 async function extensionMain() {
+    installGlobalErrorCapture();
     if (checkAndMarkInstance()) {
         logError_ACU('[插件启动] 检测到已有实例运行，跳过初始化。请勿同时安装油猴脚本和本扩展。');
         return;
     }
     const ready = await waitForHostApi();
     if (!ready) {
+        logError_ACU('[插件启动] 等待宿主（SillyTavern/TauriTavern）就绪超时，初始化中止。');
         return;
     }
     logDebug_ACU('[插件启动] 宿主 API 已就绪，开始初始化...');
     mainInitialize_ACU();
     bootstrapAcuV2();
 }
-// 扩展加载时 DOM 已就绪，直接启动
-extensionMain();
+// 扩展加载时 DOM 已就绪，直接启动；捕获异步错误，避免未处理 rejection 静默丢失
+extensionMain().catch(error => {
+    logError_ACU(`[插件启动] 初始化失败: ${error instanceof Error ? error.stack || error.message : String(error)}`);
+});

@@ -240,6 +240,7 @@ export function clearLogs(): void {
   _buffer = new Array(MAX_BUFFER_SIZE);
   _writeIndex = 0;
   _count = 0;
+  _knownTags.clear();
 }
 
 /**

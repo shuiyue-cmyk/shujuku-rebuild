@@ -139,6 +139,23 @@ function installBiotrackerConsoleBridge(): void {
   // 聊天变更中止信号探针：删楼/ROLL/切聊天（CHAT_CHANGED）时 abortOnChatMutation_ACU
   // 会 abort 该信号 → vendor 在飞请求随之中止（fetchText 已支持 externalSignal）
   (globalThis as any).__bs_biotracker_chat_mutation_abort_signal__ = () => getChatMutationAbortSignal_ACU();
+  // 世界书绿灯探针（F6）：轮询 runTracker 前刷新 agent 模式判定与绿灯 uid 白名单——
+  // 运行中 agent 开关/放行变更即时生效（无需等 init/注册时点刷新）
+  (globalThis as any).__bs_biotracker_greenlights_probe__ = () => {
+    try {
+      const agentControl = settings_ACU.plotSettings?.agentWorldbookControl;
+      const agentModeOn = agentControl?.enabled === true && agentControl?.mode === 'agent';
+      let uids: string[] = [];
+      if (agentModeOn) {
+        const greenlights = readFinalGenerationGreenlights_ACU();
+        uids = Array.isArray(greenlights) ? greenlights.map((g) => String(g?.uid || '')).filter(Boolean) : [];
+      }
+      return { agentModeOn, uids };
+    } catch (e) {
+      logWarn_ACU('[生理追踪] 刷新 agent 绿灯失败:', e);
+      return { agentModeOn: false, uids: [] };
+    }
+  };
   const bridge = (level: 'warn' | 'error' | 'debug') => (original: (...args: any[]) => void) => (...args: any[]) => {
     original(...args);
     try {
@@ -383,6 +400,8 @@ export function initBiotracker_ACU(): void {
     if (eventSource && chatChangedType && typeof eventSource.on === 'function') {
       eventSource.on(chatChangedType, () => {
         try {
+          // 聊天切换/删楼/ROLL：重置 P1 长度短路标记，避免等长聊天/同楼数被永久跳过分析
+          try { delete (globalThis as any).__bs_biotracker_last_polled_length__; } catch { /* ignore */ }
           const nextCtx = createBiotrackerCtx_ACU();
           const nextSettings = getSettings(nextCtx);
           getChatState(nextCtx, nextSettings);

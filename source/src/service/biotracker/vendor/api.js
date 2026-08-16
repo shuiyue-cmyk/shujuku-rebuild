@@ -1133,15 +1133,22 @@ export async function callOpenAICompatible(settings, payload, systemPrompt = DEF
       if (parsed && typeof parsed === 'object') return parsed;
 
       // 同一轮全局尝试内：先做一次「请只输出 JSON」纠错请求
+      const retryMessages = [
+        ...effectiveMessages,
+        // 数据库集成（非预填充支持）：纠错重试的 assistant 消息同样转换，避免非预填充接口拒收
+        { role: 'assistant', content: String(content || '') },
+        { role: 'user', content: buildJsonRetryInstruction() },
+      ].map((m) => {
+        if (safeProbeCall('__bs_biotracker_non_prefill_probe__') === true && m && typeof m.role === 'string' && m.role.toLowerCase() === 'assistant') {
+          return { ...m, role: 'user', content: `助手：\n${typeof m.content === 'string' ? m.content : String(m.content ?? '')}` };
+        }
+        return m;
+      });
       const retryBody = {
         model,
         temperature: 0.1,
         ...stPresetSampling,
-        messages: [
-          ...effectiveMessages,
-          { role: 'assistant', content: String(content || '') },
-          { role: 'user', content: buildJsonRetryInstruction() },
-        ],
+        messages: retryMessages,
         ...(useFormattedOutputV4 ? { response_format: { type: 'json_object' } } : {}),
       };
       const retryData = await requestChatCompletion(apiBase, settings, retryBody, runContext);
