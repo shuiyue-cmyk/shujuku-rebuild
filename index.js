@@ -151787,7 +151787,7 @@ function isStaleRevisionConflict$1(result) {
         && result.saved === false
         && /^V2 stale_revision_conflict(?:\b|:)/.test(String(result.error || ''));
 }
-function downloadJson$4(jsonData, filename) {
+function downloadJson$5(jsonData, filename) {
     const blob = new Blob([JSON.stringify(jsonData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -152024,7 +152024,7 @@ function useTablePresetManagement() {
         }
         const sanitized = sanitizeChatSheetsObject_ACU(resolved.jsonData, { ensureMate: true });
         const safeName = sanitizeFilenameComponent_ACU(resolved.fromPresetName) || 'template';
-        downloadJson$4(sanitized, isRuntimeItem ? `TavernDB_template_runtime_${safeName}.json` : `TavernDB_template_${safeName}.json`);
+        downloadJson$5(sanitized, isRuntimeItem ? `TavernDB_template_runtime_${safeName}.json` : `TavernDB_template_${safeName}.json`);
         message.value = null;
         toast.success(isRuntimeItem ? '当前生效模板已导出。' : `「${resolved.fromPresetName || '默认预设'}」已导出。`);
     }
@@ -152188,7 +152188,7 @@ function readFileText$2(file) {
         reader.readAsText(file, 'UTF-8');
     });
 }
-function downloadJson$3(jsonData, filename) {
+function downloadJson$4(jsonData, filename) {
     const blob = new Blob([JSON.stringify(jsonData, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -152653,7 +152653,7 @@ function useTableTemplatePresets() {
             : (scope === 'chat'
                 ? `TavernDB_template_chat_${safeName}.json`
                 : `TavernDB_template_runtime_${safeName}.json`);
-        downloadJson$3(sanitized, filename);
+        downloadJson$4(sanitized, filename);
         message.value = null;
         toast.success(scope === 'global' ? '全局模板已导出。' : (scope === 'chat' ? '当前聊天模板已导出。' : '当前生效模板已导出。'));
     }
@@ -161116,7 +161116,7 @@ function formatCheckpointExportTimestamp(date = new Date()) {
         pad(date.getDate()),
     ].join('') + `-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
 }
-function downloadJson$2(filename, data) {
+function downloadJson$3(filename, data) {
     const jsonString = JSON.stringify(data, null, 2);
     const blob = new Blob([jsonString], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -161309,7 +161309,7 @@ function useDataManagement() {
     function exportCombinedSettings() {
         try {
             const payload = buildCombinedExportPayload();
-            downloadJson$2('TavernDB_Combined_Settings.json', payload);
+            downloadJson$3('TavernDB_Combined_Settings.json', payload);
             message.value = null;
             toast.success('合并配置已导出。');
         }
@@ -161328,7 +161328,7 @@ function useDataManagement() {
         try {
             const sanitized = sanitizeChatSheetsObject_ACU(currentJsonTableData_ACU, { ensureMate: true });
             const chatName = String(currentChatFileIdentifier_ACU || 'current_chat').replace(/[\\/:*?"<>|]+/g, '_');
-            downloadJson$2(`TavernDB_data_${chatName}.json`, sanitized);
+            downloadJson$3(`TavernDB_data_${chatName}.json`, sanitized);
             message.value = null;
             toast.success('当前聊天数据库 JSON 已导出。');
         }
@@ -161342,7 +161342,7 @@ function useDataManagement() {
         try {
             const checkpoint = buildCurrentTableCheckpoint_ACU();
             const chatName = String(currentChatFileIdentifier_ACU || 'current_chat').replace(/[\\/:*?"<>|]+/g, '_');
-            downloadJson$2(`TavernDB_checkpoint_${chatName}_${formatCheckpointExportTimestamp()}.json`, checkpoint);
+            downloadJson$3(`TavernDB_checkpoint_${chatName}_${formatCheckpointExportTimestamp()}.json`, checkpoint);
             message.value = null;
             toast.success('当前聊天 Checkpoint 已导出。');
         }
@@ -161361,8 +161361,8 @@ function useDataManagement() {
         busyAction.value = 'export-mixed-storage-snapshots';
         try {
             const transfer = buildRegisteredMixedStorageSnapshotTransfer_ACU(decision.decisionId);
-            downloadJson$2(transfer.legacy.filename, transfer.legacy.payload);
-            downloadJson$2(transfer.v2.filename, transfer.v2.payload);
+            downloadJson$3(transfer.legacy.filename, transfer.legacy.payload);
+            downloadJson$3(transfer.v2.filename, transfer.v2.payload);
             toast.success('已导出 legacy-v1 与 V2 两份混合存储快照。');
         }
         catch (e) {
@@ -161470,7 +161470,7 @@ function useDataManagement() {
         }
         try {
             const chatName = String(currentChatFileIdentifier_ACU || 'current_chat').replace(/[\/:*?"<>|]+/g, '_');
-            downloadJson$2(`TavernDB_v2_recovery_backups_${chatName}_${formatCheckpointExportTimestamp()}.json`, { version: 1, isolationKey, backups });
+            downloadJson$3(`TavernDB_v2_recovery_backups_${chatName}_${formatCheckpointExportTimestamp()}.json`, { version: 1, isolationKey, backups });
             toast.success(`已导出 ${backups.length} 份 V2 恢复原始 frame 备份。`);
         }
         catch (e) {
@@ -162181,7 +162181,7 @@ const _hoisted_29$1 = {
 	class: "acu-v2-data-mgmt-page__cleanup-section",
 	"aria-labelledby": "acu-cleanup-auto-title"
 };
-const _hoisted_30 = { class: "acu-v2-data-mgmt-page__form-stack" };
+const _hoisted_30$1 = { class: "acu-v2-data-mgmt-page__form-stack" };
 const _hoisted_31 = {
 	class: "acu-v2-data-mgmt-page__cleanup-section",
 	"aria-labelledby": "acu-cleanup-manual-title"
@@ -162766,7 +162766,7 @@ function _sfc_render$h(_ctx, _cache, $props, $setup, $data, $options) {
 					" 自动清理 ",
 					-1
 					/* CACHED */
-				)), createBaseVNode("div", _hoisted_30, [createVNode($setup["AcuFormRow"], {
+				)), createBaseVNode("div", _hoisted_30$1, [createVNode($setup["AcuFormRow"], {
 					label: "保留数据层数",
 					hint: "自动更新结束后，超过保留范围的旧楼层插件数据会被清理；不影响聊天正文。"
 				}, {
@@ -163375,7 +163375,7 @@ function uniquePresetName(existing, baseName) {
 function persist$1() {
     saveSettings_ACU();
 }
-function downloadJson$1(filename, data) {
+function downloadJson$2(filename, data) {
     const jsonString = JSON.stringify(data, null, 2);
     const blob = new Blob([jsonString], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -163723,7 +163723,7 @@ const useContentReplaceStore = defineStore('acu-v2-content-replace', {
             this.busyAction = 'export-preset';
             try {
                 const safeName = preset.name.replace(/[^a-z0-9_\-\u4e00-\u9fa5]/gi, '_');
-                downloadJson$1(`optimization_preset_${safeName}.json`, [preset]);
+                downloadJson$2(`optimization_preset_${safeName}.json`, [preset]);
                 clearMessageAndToast(this, 'success', '正文替换预设 JSON 已导出。');
             }
             finally {
@@ -164554,7 +164554,7 @@ const levelOptions = [
     { value: 'warn', label: 'Warn' },
     { value: 'error', label: 'Error' },
 ];
-function downloadJson(filename, data) {
+function downloadJson$1(filename, data) {
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const doc = getAcuHostDocument();
@@ -164664,7 +164664,7 @@ function useLogViewer() {
             message: entry.message,
         }));
         const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-        downloadJson(`acu-logs-${stamp}.json`, exportData);
+        downloadJson$1(`acu-logs-${stamp}.json`, exportData);
         message.value = null;
         toast.success(`已导出 ${exportData.length} 条日志。`);
     }
@@ -164716,10 +164716,272 @@ function useLogViewer() {
     };
 }
 
+/**
+ * shared/host-bridge.ts — 宿主（ST / TT / Luker）适配桥（隔离层）
+ *
+ * 目的：数据库核心的 TT（TauriTavern）针对性适配全部集中在此，业务文件
+ * 通过本桥访问宿主信息，不直接触碰 `__TAURITAVERN__` 等 TT 内部 ABI。
+ * 这样业务文件保持「纯 ST 标准 API」形态，上游（AlbusKen/shujuku）发布更新时
+ * 只同步业务文件、桥层不动，从而兼顾「TT 差异化适配」与「上游更新采纳」。
+ *
+ * TT 环境判定：TT 是 Tauri 壳 + SillyTavern 1.18 前端，注入 `__TAURITAVERN__` ABI
+ * 与 `__TAURITAVERN_MAIN_READY__`。核心差异点：宿主异步引导、扩展与 host ready 存在
+ * 竞态，因此核心启动、菜单注入须额外等待 TT 就绪。
+ */
+function tauriWindow() {
+    return (typeof window !== 'undefined' ? window : globalThis);
+}
+/** 判定宿主类型：TT / Luker 扩展 / 纯 SillyTavern，顺时针检测 */
+function getAcuHostKind() {
+    const w = tauriWindow();
+    if (w.__TAURITAVERN__)
+        return 'tauritavern';
+    if (w.Luker?.getContext)
+        return 'luker';
+    return 'sillytavern';
+}
+/** 是否跑在 TauriTavern 下 */
+function isAcuTauriRuntime() {
+    return getAcuHostKind() === 'tauritavern';
+}
+/**
+ * 取 TT 就绪 Promise/标志。TT 主线程由 init.js 异步引导，先于扩展注册完成
+ * 的 APP_READY 不代表 TT 内部 ABI 就绪；`__TAURITAVERN__?.ready` 可能是个
+ * Promise（可 await），也可能是布尔完成标志。
+ */
+function getAcuTauriReady() {
+    const w = tauriWindow();
+    const ready = w.__TAURITAVERN__?.ready || w.__TAURITAVERN_MAIN_READY__;
+    if (ready && typeof ready.then === 'function') {
+        return { ready: false, promise: ready };
+    }
+    return { ready: ready === true, promise: null };
+}
+/**
+ * 等待宿主 API 就绪（扩展可安全初始化）。
+ * - ST/Luker：等 window.SillyTavern.getContext() 返回带核心字段的快照。
+ * - TT：在此基础上额外等 __TAURITAVERN__?.ready（异步 promise 或布尔），
+ *   避免扩展在 TT 内部 ABI（store/Agent/菜单）就绪前初始化。
+ */
+async function waitForAcuHostReady(maxWaitMs = 15000) {
+    const start = Date.now();
+    const tauri = isAcuTauriRuntime();
+    const getContextReady = () => {
+        try {
+            const w = tauriWindow();
+            if (typeof w.SillyTavern?.getContext !== 'function')
+                return false;
+            const ctx = w.SillyTavern.getContext();
+            return !!(ctx?.eventSource && ctx?.eventTypes && typeof ctx?.saveSettingsDebounced === 'function');
+        }
+        catch {
+            return false;
+        }
+    };
+    while (Date.now() - start < maxWaitMs) {
+        if (getContextReady()) {
+            if (!tauri)
+                return true;
+            // TT：getContext 就绪后再等 TT ABI
+            const { ready, promise } = getAcuTauriReady();
+            if (ready)
+                return true;
+            if (promise) {
+                try {
+                    await Promise.race([promise, new Promise((r) => setTimeout(r, Math.max(0, maxWaitMs - (Date.now() - start))))]);
+                }
+                catch { /* TT ready promise 拒绝则继续轮询 */ }
+                if (getAcuTauriReady().ready || getContextReady())
+                    return true;
+            }
+        }
+        await new Promise((r) => setTimeout(r, 100));
+    }
+    return getContextReady();
+}
+
+/**
+ * useDebugPanel — 高级工具「Debug」卡片：傻瓜式问题上报
+ *
+ * 用法：用户遇到可复现问题 → 打开 Debug → 复现 → 导出 .json → 把文件喂给
+ * 开发者/Agent 即可定位。
+ *
+ * 导出内容（全量）：
+ * - meta：插件版本（manifest）/构建水印/宿主类型（ST/TT/Luker）/导出时间
+ * - env：API 配置（密钥脱敏）/关键运行设置摘要
+ * - logs：log-buffer 全量日志（含 Debug 采集开启后的细粒度日志）
+ * - biotracker：最近一次追踪/注册请求与响应（biotracker debug 采集数据，body 已脱敏）
+ * - tables：表名 + 行数（不含数据本身，避免体积爆炸与隐私）
+ */
+function getBuildStamp() {
+    try {
+        const stamp = "20260816-10";
+        return typeof stamp === 'string' && stamp ? stamp : 'dev';
+    }
+    catch {
+        return 'dev';
+    }
+}
+function getPluginVersion() {
+    try {
+        const m = globalThis.__ACU_MANIFEST__;
+        if (m && typeof m.version === 'string')
+            return m.version;
+    }
+    catch { /* ignore */ }
+    return 'unknown';
+}
+function maskSecret(value) {
+    if (typeof value !== 'string' || !value)
+        return String(value ?? '');
+    if (value.length <= 8)
+        return '***';
+    return `${value.slice(0, 3)}***${value.slice(-3)}`;
+}
+function downloadJson(filename, data) {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const doc = getAcuHostDocument();
+    const a = doc.createElement('a');
+    a.href = url;
+    a.download = filename;
+    doc.body.appendChild(a);
+    a.click();
+    doc.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+function useDebugPanel() {
+    const toast = useToastStore();
+    const active = ref(false);
+    const entryCount = ref(0);
+    /** Debug 开启时刻：导出时只包含开启后的日志（避免无关历史噪音） */
+    let startedAt = 0;
+    let unsubscribe = null;
+    const statusLabel = computed(() => (active.value ? '采集中' : '未开启'));
+    function refreshCount() {
+        entryCount.value = getAllLogs().length;
+    }
+    function startDebug() {
+        setDebugLogEnabled(true);
+        setWarnLogEnabled(true);
+        // 清空旧日志，让导出只含本次排查内容
+        clearLogs();
+        startedAt = Date.now();
+        active.value = true;
+        refreshCount();
+        toast.info('Debug 采集已开启：请复现问题，完成后点「导出 Debug 数据」。');
+    }
+    function stopDebug() {
+        setDebugLogEnabled(false);
+        active.value = false;
+        toast.success('Debug 采集已停止。');
+    }
+    function toggleDebug() {
+        if (active.value)
+            stopDebug();
+        else
+            startDebug();
+    }
+    function exportDebugData() {
+        if (!active.value) {
+            toast.warning('请先开启 Debug 采集再导出。');
+            return;
+        }
+        const logs = getAllLogs();
+        const cfg = settings_ACU?.apiConfig || {};
+        const env = {
+            host: getAcuHostKind(),
+            buildStamp: getBuildStamp(),
+            version: getPluginVersion(),
+            exportedAt: new Date().toISOString(),
+            streamingEnabled: settings_ACU?.streamingEnabled === true,
+            nonPrefillSupport: settings_ACU?.nonPrefillSupport === true,
+            apiMode: settings_ACU?.apiMode || '',
+            apiConfig: {
+                url: typeof cfg.url === 'string' ? cfg.url : '',
+                model: typeof cfg.model === 'string' ? cfg.model : '',
+                apiKey: maskSecret(cfg.apiKey),
+                temperature: cfg.temperature,
+                max_tokens: cfg.max_tokens,
+            },
+            plotEnabled: settings_ACU?.plotSettings?.enabled === true,
+            biotrackerEnabled: settings_ACU?.bs_biotracker?.enabled === true,
+            autoRegister: settings_ACU?.bs_biotracker?.autoRegister === true,
+        };
+        const biotrackerDebug = {};
+        try {
+            const req = globalThis.__bs_biotracker_debug_last_effective_request__;
+            const resp = globalThis.__bs_biotracker_debug_last_api_response__;
+            if (req)
+                biotrackerDebug.lastRequest = req;
+            if (resp)
+                biotrackerDebug.lastResponse = resp;
+            const trackerReq = globalThis.__bs_biotracker_debug_last_tracker_request__;
+            const trackerResult = globalThis.__bs_biotracker_debug_last_tracker_result__;
+            if (trackerReq)
+                biotrackerDebug.lastTrackerRequest = trackerReq;
+            if (trackerResult)
+                biotrackerDebug.lastTrackerResult = trackerResult;
+        }
+        catch { /* biotracker debug 数据读取失败不影响导出 */ }
+        const tables = {};
+        try {
+            const data = currentJsonTableData_ACU || {};
+            for (const [key, sheet] of Object.entries(data)) {
+                if (key === 'mate')
+                    continue;
+                const rows = Array.isArray(sheet?.content) ? Math.max(0, sheet.content.length - 1) : 0;
+                tables[key] = rows;
+            }
+        }
+        catch { /* 表统计失败不影响导出 */ }
+        const payload = {
+            meta: {
+                plugin: '幻想·数据库',
+                version: env.version,
+                buildStamp: env.buildStamp,
+                host: env.host,
+                exportedAt: env.exportedAt,
+                debugStartedAt: new Date(startedAt).toISOString(),
+            },
+            env,
+            logCount: logs.length,
+            logs: logs.map((e) => ({
+                time: new Date(e.timestamp).toISOString(),
+                level: e.level,
+                tag: e.tag,
+                message: e.message,
+            })),
+            biotracker: biotrackerDebug,
+            tables,
+        };
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        downloadJson(`acu-debug-${stamp}.json`, payload);
+        toast.success(`已导出 ${logs.length} 条日志。`);
+    }
+    onMounted(() => {
+        active.value = isDebugLogEnabled() || isWarnLogEnabled();
+        refreshCount();
+        unsubscribe = subscribe(() => refreshCount());
+    });
+    onBeforeUnmount(() => {
+        unsubscribe?.();
+        unsubscribe = null;
+    });
+    return {
+        active,
+        entryCount,
+        statusLabel,
+        toggleDebug,
+        exportDebugData,
+    };
+}
+
 const advancedToolsCopy = {
     nav: {
         sql: "SQL 控制台",
         logs: "运行日志",
+        debug: "Debug",
     },
     panels: {
         sql: {
@@ -164730,6 +164992,10 @@ const advancedToolsCopy = {
             title: "运行日志",
             description: "查看数据库运行日志。筛选仅影响显示和导出。未看到日志请开启采集后重试。",
         },
+        debug: {
+            title: "Debug 问题上报",
+            description: "遇到可复现的问题时：开启 Debug → 复现问题 → 导出 Debug 数据（.json）→ 将文件交给开发者即可定位。导出包含版本、环境摘要（密钥脱敏）、全量日志、生理追踪最近请求与表结构概览。",
+        },
     },
 };
 
@@ -164739,10 +165005,12 @@ var _sfc_main$d = /*@__PURE__*/ defineComponent({
         __expose();
         const sqlFlow = useSqlConsole();
         const logFlow = useLogViewer();
+        const debugFlow = useDebugPanel();
         const logListRef = ref(null);
         const panelNavItems = [
             { id: 'advanced-tools-sql-panel', label: advancedToolsCopy.nav.sql },
             { id: 'advanced-tools-log-panel', label: advancedToolsCopy.nav.logs },
+            { id: 'advanced-tools-debug-panel', label: advancedToolsCopy.nav.debug },
         ];
         function onSqlEditorKeydown(event) {
             if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
@@ -164785,14 +165053,14 @@ var _sfc_main$d = /*@__PURE__*/ defineComponent({
         }
         onMounted(sqlFlow.refresh);
         watch(() => logFlow.visibleLogs.value.length, scrollLogListToTop, { flush: 'post' });
-        const __returned__ = { sqlFlow, logFlow, logListRef, panelNavItems, onSqlEditorKeydown, formatTime, formatSqlCell, logLevelVariant, setLogLevelFilter, scrollLogListToTop, AcuBadge, AcuButton, AcuFormRow, AcuInput, AcuMessage, AcuMobilePanelNav, AcuPanel, AcuPanelGrid, AcuSelect, AcuTextarea, AcuToggle, get advancedToolsCopy() { return advancedToolsCopy; } };
+        const __returned__ = { sqlFlow, logFlow, debugFlow, logListRef, panelNavItems, onSqlEditorKeydown, formatTime, formatSqlCell, logLevelVariant, setLogLevelFilter, scrollLogListToTop, AcuBadge, AcuButton, AcuFormRow, AcuInput, AcuMessage, AcuMobilePanelNav, AcuPanel, AcuPanelGrid, AcuSelect, AcuTextarea, AcuToggle, get advancedToolsCopy() { return advancedToolsCopy; } };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.acu-v2-advanced-tools-page[data-v-51eb8cd3] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-advanced-tools-page__sql-panel[data-v-51eb8cd3],\r\n.acu-v2-advanced-tools-page__log-panel[data-v-51eb8cd3] {\r\n  min-width: 0;\n}\n.acu-v2-advanced-tools-page__quick-actions[data-v-51eb8cd3],\r\n.acu-v2-advanced-tools-page__log-actions[data-v-51eb8cd3] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-textarea[data-v-51eb8cd3] {\r\n  font-family: var(--acu-font-mono);\r\n  min-height: 210px;\r\n  white-space: pre;\n}\n.acu-v2-advanced-tools-page__sql-actions[data-v-51eb8cd3] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\r\n  justify-content: flex-end;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-advanced-tools-page__sql-status[data-v-51eb8cd3] {\r\n  margin-left: auto;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.5;\n}\n.acu-v2-advanced-tools-page__sql-status--success[data-v-51eb8cd3] {\r\n  color: var(--acu-success);\n}\n.acu-v2-advanced-tools-page__sql-status--warning[data-v-51eb8cd3] {\r\n  color: var(--acu-warning);\n}\n.acu-v2-advanced-tools-page__sql-status--error[data-v-51eb8cd3] {\r\n  color: var(--acu-danger);\n}\n.acu-v2-advanced-tools-page__sql-result-section[data-v-51eb8cd3],\r\n.acu-v2-advanced-tools-page__sql-history-section[data-v-51eb8cd3] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-v2-advanced-tools-page__sql-history-section[data-v-51eb8cd3] {\r\n  padding-top: 12px;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n}\n.acu-v2-advanced-tools-page__section-title[data-v-51eb8cd3] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 600;\r\n  line-height: 1.35;\n}\n.acu-v2-advanced-tools-page__empty[data-v-51eb8cd3] {\r\n  min-height: 96px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: center;\r\n  border: 0;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__empty--compact[data-v-51eb8cd3] {\r\n  min-height: 72px;\n}\n.acu-v2-advanced-tools-page__empty--log[data-v-51eb8cd3] {\r\n  min-height: 180px;\r\n  border: 0;\n}\n.acu-v2-advanced-tools-page__sql-table-wrap[data-v-51eb8cd3] {\r\n  max-height: 330px;\r\n  overflow: auto;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-result-table[data-v-51eb8cd3] {\r\n  width: 100%;\r\n  border-collapse: collapse;\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-advanced-tools-page__sql-result-table th[data-v-51eb8cd3],\r\n.acu-v2-advanced-tools-page__sql-result-table td[data-v-51eb8cd3] {\r\n  max-width: 300px;\r\n  padding: 7px 10px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  text-align: left;\r\n  white-space: nowrap;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\n}\n.acu-v2-advanced-tools-page__sql-result-table th[data-v-51eb8cd3] {\r\n  position: sticky;\r\n  top: 0;\r\n  z-index: 1;\r\n  background: var(--acu-bg-1);\r\n  color: var(--acu-text-1);\r\n  font-weight: 600;\n}\n.acu-v2-advanced-tools-page__sql-result-table tbody tr[data-v-51eb8cd3]:nth-child(even) {\r\n  background: color-mix(in srgb, var(--acu-text-3) 5%, transparent);\n}\n.acu-v2-advanced-tools-page__cell-null[data-v-51eb8cd3],\r\n.acu-v2-advanced-tools-page__empty-cell[data-v-51eb8cd3] {\r\n  color: var(--acu-text-3);\r\n  font-style: italic;\n}\n.acu-v2-advanced-tools-page__sql-result-meta[data-v-51eb8cd3] {\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: right;\n}\n.acu-v2-advanced-tools-page__sql-error[data-v-51eb8cd3] {\r\n  margin: 0;\r\n  min-height: 96px;\r\n  padding: 12px;\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-danger) 8%, transparent);\r\n  color: var(--acu-danger);\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__filter-grid[data-v-51eb8cd3] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 12px;\r\n  align-items: stretch;\n}\n.acu-v2-advanced-tools-page__keyword-row[data-v-51eb8cd3] {\r\n  grid-column: 1 / -1;\n}\n.acu-v2-advanced-tools-page__log-control-row[data-v-51eb8cd3] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  min-width: 0;\n}\n.acu-v2-advanced-tools-page__log-control-main[data-v-51eb8cd3] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 10px 14px;\r\n  align-items: center;\r\n  justify-content: space-between;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-51eb8cd3] {\r\n  width: max-content;\r\n  max-width: 100%;\r\n  display: grid;\r\n  grid-template-columns: max-content max-content;\r\n  gap: 10px 18px;\r\n  align-items: center;\r\n  justify-content: flex-start;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-51eb8cd3] .acu-toggle {\r\n  width: max-content;\r\n  max-width: none;\r\n  min-width: max-content;\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-51eb8cd3] .acu-toggle__label {\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__hint[data-v-51eb8cd3] {\r\n  max-width: 100%;\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\r\n  overflow-wrap: anywhere;\n}\n.acu-v2-advanced-tools-page__sql-history-list[data-v-51eb8cd3],\r\n.acu-v2-advanced-tools-page__log-list[data-v-51eb8cd3] {\r\n  overflow: auto;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-list[data-v-51eb8cd3] {\r\n  max-height: 230px;\n}\n.acu-v2-advanced-tools-page__log-list[data-v-51eb8cd3] {\r\n  min-height: 360px;\r\n  max-height: 58vh;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-51eb8cd3],\r\n.acu-v2-advanced-tools-page__log-row[data-v-51eb8cd3] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 8px;\r\n  align-items: baseline;\r\n  padding: 7px 10px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-51eb8cd3] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: stretch;\r\n  gap: 6px;\r\n  padding-block: 9px;\r\n  border: 0;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  background: transparent;\r\n  color: inherit;\r\n  cursor: pointer;\r\n  font: inherit;\r\n  text-align: left;\r\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-advanced-tools-page__log-row[data-v-51eb8cd3] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: stretch;\r\n  gap: 6px;\r\n  padding-block: 9px;\n}\n.acu-v2-advanced-tools-page__log-meta[data-v-51eb8cd3] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 6px 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-history-meta[data-v-51eb8cd3] {\r\n  flex-wrap: nowrap;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-51eb8cd3]:last-child,\r\n.acu-v2-advanced-tools-page__log-row[data-v-51eb8cd3]:last-child {\r\n  border-bottom: 0;\n}\n.acu-v2-advanced-tools-page__sql-history-item--failure[data-v-51eb8cd3],\r\n.acu-v2-advanced-tools-page__log-row--error[data-v-51eb8cd3] {\r\n  background: color-mix(in srgb, var(--acu-danger) 7%, transparent);\n}\n.acu-v2-advanced-tools-page__log-row--warn[data-v-51eb8cd3] {\r\n  background: color-mix(in srgb, var(--acu-warning) 6%, transparent);\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-51eb8cd3]:hover {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-51eb8cd3]:focus-visible {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\r\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\r\n  outline: none;\n}\n.acu-v2-advanced-tools-page__log-time[data-v-51eb8cd3],\r\n.acu-v2-advanced-tools-page__log-tag[data-v-51eb8cd3],\r\n.acu-v2-advanced-tools-page__log-message[data-v-51eb8cd3] {\r\n  min-width: 0;\r\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-advanced-tools-page__log-time[data-v-51eb8cd3] {\r\n  color: var(--acu-text-3);\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__log-tag[data-v-51eb8cd3] {\r\n  flex: 1 1 180px;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  color: var(--acu-text-2);\n}\n.acu-v2-advanced-tools-page__log-message[data-v-51eb8cd3] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__log-body[data-v-51eb8cd3] {\r\n  display: block;\r\n  width: 100%;\n}\n@media (max-width: 1080px) {\n.acu-v2-advanced-tools-page[data-v-51eb8cd3] {\r\n    padding: 14px;\n}\n.acu-v2-advanced-tools-page__sql-actions[data-v-51eb8cd3] {\r\n    justify-content: stretch;\n}\n.acu-v2-advanced-tools-page__sql-status[data-v-51eb8cd3] {\r\n    width: 100%;\r\n    margin-left: 0;\r\n    text-align: right;\n}\n.acu-v2-advanced-tools-page__filter-grid[data-v-51eb8cd3] {\r\n    grid-template-columns: 1fr;\n}\n.acu-v2-advanced-tools-page__log-control-main[data-v-51eb8cd3] {\r\n    align-items: stretch;\r\n    flex-direction: column;\r\n    justify-content: flex-start;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-51eb8cd3] {\r\n    align-self: flex-start;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-51eb8cd3],\r\n  .acu-v2-advanced-tools-page__log-row[data-v-51eb8cd3] {\r\n    padding-inline: 9px;\n}\n}\r\n", "src/presentation-v2/pages/AdvancedToolsPage.vue#style-0-51eb8cd3");
-var AdvancedToolsPage_vue_vue_type_style_index_0_scoped_51eb8cd3_lang = null;
+injectSfcStyle("\n.acu-v2-advanced-tools-page[data-v-acd4ed2f] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-advanced-tools-page__sql-panel[data-v-acd4ed2f],\r\n.acu-v2-advanced-tools-page__log-panel[data-v-acd4ed2f],\r\n.acu-v2-advanced-tools-page__debug-panel[data-v-acd4ed2f] {\r\n  min-width: 0;\n}\n.acu-v2-advanced-tools-page__debug-actions[data-v-acd4ed2f] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__quick-actions[data-v-acd4ed2f],\r\n.acu-v2-advanced-tools-page__log-actions[data-v-acd4ed2f] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-textarea[data-v-acd4ed2f] {\r\n  font-family: var(--acu-font-mono);\r\n  min-height: 210px;\r\n  white-space: pre;\n}\n.acu-v2-advanced-tools-page__sql-actions[data-v-acd4ed2f] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\r\n  justify-content: flex-end;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-advanced-tools-page__sql-status[data-v-acd4ed2f] {\r\n  margin-left: auto;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.5;\n}\n.acu-v2-advanced-tools-page__sql-status--success[data-v-acd4ed2f] {\r\n  color: var(--acu-success);\n}\n.acu-v2-advanced-tools-page__sql-status--warning[data-v-acd4ed2f] {\r\n  color: var(--acu-warning);\n}\n.acu-v2-advanced-tools-page__sql-status--error[data-v-acd4ed2f] {\r\n  color: var(--acu-danger);\n}\n.acu-v2-advanced-tools-page__sql-result-section[data-v-acd4ed2f],\r\n.acu-v2-advanced-tools-page__sql-history-section[data-v-acd4ed2f] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-v2-advanced-tools-page__sql-history-section[data-v-acd4ed2f] {\r\n  padding-top: 12px;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n}\n.acu-v2-advanced-tools-page__section-title[data-v-acd4ed2f] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 600;\r\n  line-height: 1.35;\n}\n.acu-v2-advanced-tools-page__empty[data-v-acd4ed2f] {\r\n  min-height: 96px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: center;\r\n  border: 0;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__empty--compact[data-v-acd4ed2f] {\r\n  min-height: 72px;\n}\n.acu-v2-advanced-tools-page__empty--log[data-v-acd4ed2f] {\r\n  min-height: 180px;\r\n  border: 0;\n}\n.acu-v2-advanced-tools-page__sql-table-wrap[data-v-acd4ed2f] {\r\n  max-height: 330px;\r\n  overflow: auto;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-result-table[data-v-acd4ed2f] {\r\n  width: 100%;\r\n  border-collapse: collapse;\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-advanced-tools-page__sql-result-table th[data-v-acd4ed2f],\r\n.acu-v2-advanced-tools-page__sql-result-table td[data-v-acd4ed2f] {\r\n  max-width: 300px;\r\n  padding: 7px 10px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  text-align: left;\r\n  white-space: nowrap;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\n}\n.acu-v2-advanced-tools-page__sql-result-table th[data-v-acd4ed2f] {\r\n  position: sticky;\r\n  top: 0;\r\n  z-index: 1;\r\n  background: var(--acu-bg-1);\r\n  color: var(--acu-text-1);\r\n  font-weight: 600;\n}\n.acu-v2-advanced-tools-page__sql-result-table tbody tr[data-v-acd4ed2f]:nth-child(even) {\r\n  background: color-mix(in srgb, var(--acu-text-3) 5%, transparent);\n}\n.acu-v2-advanced-tools-page__cell-null[data-v-acd4ed2f],\r\n.acu-v2-advanced-tools-page__empty-cell[data-v-acd4ed2f] {\r\n  color: var(--acu-text-3);\r\n  font-style: italic;\n}\n.acu-v2-advanced-tools-page__sql-result-meta[data-v-acd4ed2f] {\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: right;\n}\n.acu-v2-advanced-tools-page__sql-error[data-v-acd4ed2f] {\r\n  margin: 0;\r\n  min-height: 96px;\r\n  padding: 12px;\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-danger) 8%, transparent);\r\n  color: var(--acu-danger);\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__filter-grid[data-v-acd4ed2f] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 12px;\r\n  align-items: stretch;\n}\n.acu-v2-advanced-tools-page__keyword-row[data-v-acd4ed2f] {\r\n  grid-column: 1 / -1;\n}\n.acu-v2-advanced-tools-page__log-control-row[data-v-acd4ed2f] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  min-width: 0;\n}\n.acu-v2-advanced-tools-page__log-control-main[data-v-acd4ed2f] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 10px 14px;\r\n  align-items: center;\r\n  justify-content: space-between;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-acd4ed2f] {\r\n  width: max-content;\r\n  max-width: 100%;\r\n  display: grid;\r\n  grid-template-columns: max-content max-content;\r\n  gap: 10px 18px;\r\n  align-items: center;\r\n  justify-content: flex-start;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-acd4ed2f] .acu-toggle {\r\n  width: max-content;\r\n  max-width: none;\r\n  min-width: max-content;\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-acd4ed2f] .acu-toggle__label {\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__hint[data-v-acd4ed2f] {\r\n  max-width: 100%;\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\r\n  overflow-wrap: anywhere;\n}\n.acu-v2-advanced-tools-page__sql-history-list[data-v-acd4ed2f],\r\n.acu-v2-advanced-tools-page__log-list[data-v-acd4ed2f] {\r\n  overflow: auto;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-list[data-v-acd4ed2f] {\r\n  max-height: 230px;\n}\n.acu-v2-advanced-tools-page__log-list[data-v-acd4ed2f] {\r\n  min-height: 360px;\r\n  max-height: 58vh;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-acd4ed2f],\r\n.acu-v2-advanced-tools-page__log-row[data-v-acd4ed2f] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 8px;\r\n  align-items: baseline;\r\n  padding: 7px 10px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-acd4ed2f] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: stretch;\r\n  gap: 6px;\r\n  padding-block: 9px;\r\n  border: 0;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  background: transparent;\r\n  color: inherit;\r\n  cursor: pointer;\r\n  font: inherit;\r\n  text-align: left;\r\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-advanced-tools-page__log-row[data-v-acd4ed2f] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: stretch;\r\n  gap: 6px;\r\n  padding-block: 9px;\n}\n.acu-v2-advanced-tools-page__log-meta[data-v-acd4ed2f] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 6px 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-history-meta[data-v-acd4ed2f] {\r\n  flex-wrap: nowrap;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-acd4ed2f]:last-child,\r\n.acu-v2-advanced-tools-page__log-row[data-v-acd4ed2f]:last-child {\r\n  border-bottom: 0;\n}\n.acu-v2-advanced-tools-page__sql-history-item--failure[data-v-acd4ed2f],\r\n.acu-v2-advanced-tools-page__log-row--error[data-v-acd4ed2f] {\r\n  background: color-mix(in srgb, var(--acu-danger) 7%, transparent);\n}\n.acu-v2-advanced-tools-page__log-row--warn[data-v-acd4ed2f] {\r\n  background: color-mix(in srgb, var(--acu-warning) 6%, transparent);\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-acd4ed2f]:hover {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-acd4ed2f]:focus-visible {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\r\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\r\n  outline: none;\n}\n.acu-v2-advanced-tools-page__log-time[data-v-acd4ed2f],\r\n.acu-v2-advanced-tools-page__log-tag[data-v-acd4ed2f],\r\n.acu-v2-advanced-tools-page__log-message[data-v-acd4ed2f] {\r\n  min-width: 0;\r\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-advanced-tools-page__log-time[data-v-acd4ed2f] {\r\n  color: var(--acu-text-3);\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__log-tag[data-v-acd4ed2f] {\r\n  flex: 1 1 180px;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  color: var(--acu-text-2);\n}\n.acu-v2-advanced-tools-page__log-message[data-v-acd4ed2f] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__log-body[data-v-acd4ed2f] {\r\n  display: block;\r\n  width: 100%;\n}\n@media (max-width: 1080px) {\n.acu-v2-advanced-tools-page[data-v-acd4ed2f] {\r\n    padding: 14px;\n}\n.acu-v2-advanced-tools-page__sql-actions[data-v-acd4ed2f] {\r\n    justify-content: stretch;\n}\n.acu-v2-advanced-tools-page__sql-status[data-v-acd4ed2f] {\r\n    width: 100%;\r\n    margin-left: 0;\r\n    text-align: right;\n}\n.acu-v2-advanced-tools-page__filter-grid[data-v-acd4ed2f] {\r\n    grid-template-columns: 1fr;\n}\n.acu-v2-advanced-tools-page__log-control-main[data-v-acd4ed2f] {\r\n    align-items: stretch;\r\n    flex-direction: column;\r\n    justify-content: flex-start;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-acd4ed2f] {\r\n    align-self: flex-start;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-acd4ed2f],\r\n  .acu-v2-advanced-tools-page__log-row[data-v-acd4ed2f] {\r\n    padding-inline: 9px;\n}\n}\r\n", "src/presentation-v2/pages/AdvancedToolsPage.vue#style-0-acd4ed2f");
+var AdvancedToolsPage_vue_vue_type_style_index_0_scoped_acd4ed2f_lang = null;
 
 const _hoisted_1$d = { class: "acu-v2-advanced-tools-page" };
 const _hoisted_2$c = {
@@ -164852,442 +165120,511 @@ const _hoisted_26$1 = { class: "acu-v2-advanced-tools-page__log-meta" };
 const _hoisted_27$1 = { class: "acu-v2-advanced-tools-page__log-time" };
 const _hoisted_28 = { class: "acu-v2-advanced-tools-page__log-tag" };
 const _hoisted_29 = { class: "acu-v2-advanced-tools-page__log-message acu-v2-advanced-tools-page__log-body" };
+const _hoisted_30 = { class: "acu-v2-advanced-tools-page__debug-actions" };
 function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("section", _hoisted_1$d, [createVNode($setup["AcuMobilePanelNav"], { items: $setup.panelNavItems }), createVNode($setup["AcuPanelGrid"], {
 		class: "acu-v2-advanced-tools-page__tools-grid",
 		"collapse-at": "lg"
 	}, {
-		default: withCtx(() => [createVNode($setup["AcuPanel"], {
-			id: "advanced-tools-sql-panel",
-			class: "acu-v2-advanced-tools-page__sql-panel",
-			title: $setup.advancedToolsCopy.panels.sql.title,
-			description: $setup.advancedToolsCopy.panels.sql.description
-		}, {
-			actions: withCtx(() => [createVNode($setup["AcuBadge"], { variant: $setup.sqlFlow.isSqliteAvailable.value ? "success" : "warning" }, {
-				default: withCtx(() => [createTextVNode(
-					toDisplayString($setup.sqlFlow.isSqliteAvailable.value ? "SQLite 模式" : "SQL 不可用"),
-					1
-					/* TEXT */
-				)]),
-				_: 1
-			}, 8, ["variant"])]),
-			default: withCtx(() => [
-				createBaseVNode("div", _hoisted_2$c, [createVNode($setup["AcuButton"], {
-					size: "sm",
-					disabled: !!$setup.sqlFlow.busyAction.value,
-					onClick: $setup.sqlFlow.showTables
-				}, {
-					default: withCtx(() => [..._cache[5] || (_cache[5] = [createBaseVNode(
-						"i",
-						{ class: "fa-solid fa-list" },
-						null,
-						-1
-						/* CACHED */
-					), createTextVNode(
-						" 查看所有表 ",
-						-1
-						/* CACHED */
-					)])]),
-					_: 1
-				}, 8, ["disabled", "onClick"]), createVNode($setup["AcuButton"], {
-					size: "sm",
-					disabled: !!$setup.sqlFlow.busyAction.value,
-					onClick: $setup.sqlFlow.showSchema
-				}, {
-					default: withCtx(() => [..._cache[6] || (_cache[6] = [createBaseVNode(
-						"i",
-						{ class: "fa-solid fa-sitemap" },
-						null,
-						-1
-						/* CACHED */
-					), createTextVNode(
-						" 查看表结构 ",
-						-1
-						/* CACHED */
-					)])]),
-					_: 1
-				}, 8, ["disabled", "onClick"])]),
-				createVNode($setup["AcuFormRow"], {
-					label: "SQL 语句",
-					hint: "Ctrl / Command + Enter 执行；多行语句会原样交给 SQLite provider 处理。"
-				}, {
-					default: withCtx(() => [createVNode($setup["AcuTextarea"], {
-						"model-value": $setup.sqlFlow.sqlText.value,
-						rows: 10,
-						placeholder: "SELECT * FROM 表名;\n\nUPDATE 表名 SET 列名 = '新值' WHERE row_id = 1;",
-						class: "acu-v2-advanced-tools-page__sql-textarea",
-						"aria-label": "SQL 语句",
-						"onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => $setup.sqlFlow.sqlText.value = $event),
-						onKeydown: $setup.onSqlEditorKeydown
-					}, null, 8, ["model-value"])]),
-					_: 1
-				}),
-				createBaseVNode("div", _hoisted_3$a, [
-					createVNode($setup["AcuButton"], {
-						variant: "primary",
-						loading: $setup.sqlFlow.busyAction.value === "execute",
-						disabled: !$setup.sqlFlow.hasSqlText.value,
-						onClick: $setup.sqlFlow.executeCurrent
-					}, {
-						default: withCtx(() => [..._cache[7] || (_cache[7] = [createBaseVNode(
-							"i",
-							{ class: "fa-solid fa-play" },
-							null,
-							-1
-							/* CACHED */
-						), createTextVNode(
-							" 执行 ",
-							-1
-							/* CACHED */
-						)])]),
-						_: 1
-					}, 8, [
-						"loading",
-						"disabled",
-						"onClick"
-					]),
-					createVNode($setup["AcuButton"], {
-						disabled: !$setup.sqlFlow.hasSqlText.value || !!$setup.sqlFlow.busyAction.value,
-						onClick: $setup.sqlFlow.clearSql
-					}, {
-						default: withCtx(() => [..._cache[8] || (_cache[8] = [createBaseVNode(
-							"i",
-							{ class: "fa-solid fa-eraser" },
-							null,
-							-1
-							/* CACHED */
-						), createTextVNode(
-							" 清空 ",
-							-1
-							/* CACHED */
-						)])]),
-						_: 1
-					}, 8, ["disabled", "onClick"]),
-					createBaseVNode(
-						"span",
-						{ class: normalizeClass(["acu-v2-advanced-tools-page__sql-status", `acu-v2-advanced-tools-page__sql-status--${$setup.sqlFlow.statusKind.value}`]) },
-						toDisplayString($setup.sqlFlow.statusLabel.value),
-						3
-						/* TEXT, CLASS */
-					)
-				]),
-				createBaseVNode("section", _hoisted_4$9, [_cache[9] || (_cache[9] = createBaseVNode(
-					"h4",
-					{ class: "acu-v2-advanced-tools-page__section-title" },
-					"结果",
-					-1
-					/* CACHED */
-				)), $setup.sqlFlow.result.value.kind === "idle" ? (openBlock(), createElementBlock("div", _hoisted_5$9, " 执行 SQL 后结果会显示在这里 ")) : $setup.sqlFlow.result.value.kind === "mutation" ? (openBlock(), createBlock($setup["AcuMessage"], {
-					key: 1,
-					kind: "success"
-				}, {
+		default: withCtx(() => [
+			createVNode($setup["AcuPanel"], {
+				id: "advanced-tools-sql-panel",
+				class: "acu-v2-advanced-tools-page__sql-panel",
+				title: $setup.advancedToolsCopy.panels.sql.title,
+				description: $setup.advancedToolsCopy.panels.sql.description
+			}, {
+				actions: withCtx(() => [createVNode($setup["AcuBadge"], { variant: $setup.sqlFlow.isSqliteAvailable.value ? "success" : "warning" }, {
 					default: withCtx(() => [createTextVNode(
-						" 执行成功，" + toDisplayString($setup.sqlFlow.result.value.changes) + " 行受影响，耗时 " + toDisplayString($setup.sqlFlow.result.value.elapsedMs) + "ms。 ",
+						toDisplayString($setup.sqlFlow.isSqliteAvailable.value ? "SQLite 模式" : "SQL 不可用"),
 						1
 						/* TEXT */
 					)]),
 					_: 1
-				})) : $setup.sqlFlow.result.value.kind === "error" ? (openBlock(), createElementBlock(
-					"pre",
-					_hoisted_6$8,
-					toDisplayString($setup.sqlFlow.result.value.error),
-					1
-					/* TEXT */
-				)) : (openBlock(), createElementBlock(
-					Fragment,
-					{ key: 3 },
-					[createBaseVNode("div", _hoisted_7$6, [createBaseVNode("table", _hoisted_8$6, [createBaseVNode("thead", null, [createBaseVNode("tr", null, [(openBlock(true), createElementBlock(
-						Fragment,
-						null,
-						renderList($setup.sqlFlow.result.value.columns, (column) => {
-							return openBlock(), createElementBlock(
-								"th",
-								{ key: column },
-								toDisplayString(column),
-								1
-								/* TEXT */
-							);
-						}),
-						128
-						/* KEYED_FRAGMENT */
-					))])]), createBaseVNode("tbody", null, [!$setup.sqlFlow.result.value.values.length ? (openBlock(), createElementBlock("tr", _hoisted_9$5, [createBaseVNode("td", {
-						colspan: Math.max($setup.sqlFlow.result.value.columns.length, 1),
-						class: "acu-v2-advanced-tools-page__empty-cell"
-					}, " 查询成功，没有返回行 ", 8, _hoisted_10$5)])) : createCommentVNode("v-if", true), (openBlock(true), createElementBlock(
-						Fragment,
-						null,
-						renderList($setup.sqlFlow.result.value.values, (row, rowIndex) => {
-							return openBlock(), createElementBlock("tr", { key: rowIndex }, [(openBlock(true), createElementBlock(
-								Fragment,
+				}, 8, ["variant"])]),
+				default: withCtx(() => [
+					createBaseVNode("div", _hoisted_2$c, [createVNode($setup["AcuButton"], {
+						size: "sm",
+						disabled: !!$setup.sqlFlow.busyAction.value,
+						onClick: $setup.sqlFlow.showTables
+					}, {
+						default: withCtx(() => [..._cache[5] || (_cache[5] = [createBaseVNode(
+							"i",
+							{ class: "fa-solid fa-list" },
+							null,
+							-1
+							/* CACHED */
+						), createTextVNode(
+							" 查看所有表 ",
+							-1
+							/* CACHED */
+						)])]),
+						_: 1
+					}, 8, ["disabled", "onClick"]), createVNode($setup["AcuButton"], {
+						size: "sm",
+						disabled: !!$setup.sqlFlow.busyAction.value,
+						onClick: $setup.sqlFlow.showSchema
+					}, {
+						default: withCtx(() => [..._cache[6] || (_cache[6] = [createBaseVNode(
+							"i",
+							{ class: "fa-solid fa-sitemap" },
+							null,
+							-1
+							/* CACHED */
+						), createTextVNode(
+							" 查看表结构 ",
+							-1
+							/* CACHED */
+						)])]),
+						_: 1
+					}, 8, ["disabled", "onClick"])]),
+					createVNode($setup["AcuFormRow"], {
+						label: "SQL 语句",
+						hint: "Ctrl / Command + Enter 执行；多行语句会原样交给 SQLite provider 处理。"
+					}, {
+						default: withCtx(() => [createVNode($setup["AcuTextarea"], {
+							"model-value": $setup.sqlFlow.sqlText.value,
+							rows: 10,
+							placeholder: "SELECT * FROM 表名;\n\nUPDATE 表名 SET 列名 = '新值' WHERE row_id = 1;",
+							class: "acu-v2-advanced-tools-page__sql-textarea",
+							"aria-label": "SQL 语句",
+							"onUpdate:modelValue": _cache[0] || (_cache[0] = ($event) => $setup.sqlFlow.sqlText.value = $event),
+							onKeydown: $setup.onSqlEditorKeydown
+						}, null, 8, ["model-value"])]),
+						_: 1
+					}),
+					createBaseVNode("div", _hoisted_3$a, [
+						createVNode($setup["AcuButton"], {
+							variant: "primary",
+							loading: $setup.sqlFlow.busyAction.value === "execute",
+							disabled: !$setup.sqlFlow.hasSqlText.value,
+							onClick: $setup.sqlFlow.executeCurrent
+						}, {
+							default: withCtx(() => [..._cache[7] || (_cache[7] = [createBaseVNode(
+								"i",
+								{ class: "fa-solid fa-play" },
 								null,
-								renderList(row, (cell, cellIndex) => {
-									return openBlock(), createElementBlock(
-										"td",
-										{
-											key: cellIndex,
-											class: normalizeClass({ "acu-v2-advanced-tools-page__cell-null": cell === null })
-										},
-										toDisplayString($setup.formatSqlCell(cell)),
-										3
-										/* TEXT, CLASS */
-									);
-								}),
-								128
-								/* KEYED_FRAGMENT */
-							))]);
-						}),
-						128
-						/* KEYED_FRAGMENT */
-					))])])]), createBaseVNode(
-						"p",
-						_hoisted_11$5,
-						toDisplayString($setup.sqlFlow.result.value.rowCount) + " 行 · " + toDisplayString($setup.sqlFlow.result.value.elapsedMs) + "ms ",
+								-1
+								/* CACHED */
+							), createTextVNode(
+								" 执行 ",
+								-1
+								/* CACHED */
+							)])]),
+							_: 1
+						}, 8, [
+							"loading",
+							"disabled",
+							"onClick"
+						]),
+						createVNode($setup["AcuButton"], {
+							disabled: !$setup.sqlFlow.hasSqlText.value || !!$setup.sqlFlow.busyAction.value,
+							onClick: $setup.sqlFlow.clearSql
+						}, {
+							default: withCtx(() => [..._cache[8] || (_cache[8] = [createBaseVNode(
+								"i",
+								{ class: "fa-solid fa-eraser" },
+								null,
+								-1
+								/* CACHED */
+							), createTextVNode(
+								" 清空 ",
+								-1
+								/* CACHED */
+							)])]),
+							_: 1
+						}, 8, ["disabled", "onClick"]),
+						createBaseVNode(
+							"span",
+							{ class: normalizeClass(["acu-v2-advanced-tools-page__sql-status", `acu-v2-advanced-tools-page__sql-status--${$setup.sqlFlow.statusKind.value}`]) },
+							toDisplayString($setup.sqlFlow.statusLabel.value),
+							3
+							/* TEXT, CLASS */
+						)
+					]),
+					createBaseVNode("section", _hoisted_4$9, [_cache[9] || (_cache[9] = createBaseVNode(
+						"h4",
+						{ class: "acu-v2-advanced-tools-page__section-title" },
+						"结果",
+						-1
+						/* CACHED */
+					)), $setup.sqlFlow.result.value.kind === "idle" ? (openBlock(), createElementBlock("div", _hoisted_5$9, " 执行 SQL 后结果会显示在这里 ")) : $setup.sqlFlow.result.value.kind === "mutation" ? (openBlock(), createBlock($setup["AcuMessage"], {
+						key: 1,
+						kind: "success"
+					}, {
+						default: withCtx(() => [createTextVNode(
+							" 执行成功，" + toDisplayString($setup.sqlFlow.result.value.changes) + " 行受影响，耗时 " + toDisplayString($setup.sqlFlow.result.value.elapsedMs) + "ms。 ",
+							1
+							/* TEXT */
+						)]),
+						_: 1
+					})) : $setup.sqlFlow.result.value.kind === "error" ? (openBlock(), createElementBlock(
+						"pre",
+						_hoisted_6$8,
+						toDisplayString($setup.sqlFlow.result.value.error),
 						1
 						/* TEXT */
-					)],
-					64
-					/* STABLE_FRAGMENT */
-				))]),
-				createBaseVNode("section", _hoisted_12$5, [_cache[10] || (_cache[10] = createBaseVNode(
-					"h4",
-					{ class: "acu-v2-advanced-tools-page__section-title" },
-					"执行历史",
-					-1
-					/* CACHED */
-				)), !$setup.sqlFlow.history.value.length ? (openBlock(), createElementBlock("div", _hoisted_13$5, " 暂无执行历史 ")) : (openBlock(), createElementBlock("div", _hoisted_14$5, [(openBlock(true), createElementBlock(
-					Fragment,
-					null,
-					renderList($setup.sqlFlow.history.value, (item, index) => {
-						return openBlock(), createBlock($setup["AcuButton"], {
-							key: `${item.timestamp}-${index}`,
-							class: normalizeClass(["acu-v2-advanced-tools-page__sql-history-item", item.success ? "acu-v2-advanced-tools-page__sql-history-item--success" : "acu-v2-advanced-tools-page__sql-history-item--failure"]),
-							title: "填入编辑器",
-							onClick: ($event) => $setup.sqlFlow.useHistoryItem(item)
-						}, {
-							default: withCtx(() => [createBaseVNode("div", _hoisted_15$5, [createBaseVNode(
-								"span",
-								_hoisted_16$5,
-								toDisplayString($setup.formatTime(item.timestamp)),
-								1
-								/* TEXT */
-							), createVNode($setup["AcuBadge"], { variant: item.success ? "success" : "danger" }, {
-								default: withCtx(() => [createTextVNode(
-									toDisplayString(item.success ? "成功" : "失败"),
+					)) : (openBlock(), createElementBlock(
+						Fragment,
+						{ key: 3 },
+						[createBaseVNode("div", _hoisted_7$6, [createBaseVNode("table", _hoisted_8$6, [createBaseVNode("thead", null, [createBaseVNode("tr", null, [(openBlock(true), createElementBlock(
+							Fragment,
+							null,
+							renderList($setup.sqlFlow.result.value.columns, (column) => {
+								return openBlock(), createElementBlock(
+									"th",
+									{ key: column },
+									toDisplayString(column),
+									1
+									/* TEXT */
+								);
+							}),
+							128
+							/* KEYED_FRAGMENT */
+						))])]), createBaseVNode("tbody", null, [!$setup.sqlFlow.result.value.values.length ? (openBlock(), createElementBlock("tr", _hoisted_9$5, [createBaseVNode("td", {
+							colspan: Math.max($setup.sqlFlow.result.value.columns.length, 1),
+							class: "acu-v2-advanced-tools-page__empty-cell"
+						}, " 查询成功，没有返回行 ", 8, _hoisted_10$5)])) : createCommentVNode("v-if", true), (openBlock(true), createElementBlock(
+							Fragment,
+							null,
+							renderList($setup.sqlFlow.result.value.values, (row, rowIndex) => {
+								return openBlock(), createElementBlock("tr", { key: rowIndex }, [(openBlock(true), createElementBlock(
+									Fragment,
+									null,
+									renderList(row, (cell, cellIndex) => {
+										return openBlock(), createElementBlock(
+											"td",
+											{
+												key: cellIndex,
+												class: normalizeClass({ "acu-v2-advanced-tools-page__cell-null": cell === null })
+											},
+											toDisplayString($setup.formatSqlCell(cell)),
+											3
+											/* TEXT, CLASS */
+										);
+									}),
+									128
+									/* KEYED_FRAGMENT */
+								))]);
+							}),
+							128
+							/* KEYED_FRAGMENT */
+						))])])]), createBaseVNode(
+							"p",
+							_hoisted_11$5,
+							toDisplayString($setup.sqlFlow.result.value.rowCount) + " 行 · " + toDisplayString($setup.sqlFlow.result.value.elapsedMs) + "ms ",
+							1
+							/* TEXT */
+						)],
+						64
+						/* STABLE_FRAGMENT */
+					))]),
+					createBaseVNode("section", _hoisted_12$5, [_cache[10] || (_cache[10] = createBaseVNode(
+						"h4",
+						{ class: "acu-v2-advanced-tools-page__section-title" },
+						"执行历史",
+						-1
+						/* CACHED */
+					)), !$setup.sqlFlow.history.value.length ? (openBlock(), createElementBlock("div", _hoisted_13$5, " 暂无执行历史 ")) : (openBlock(), createElementBlock("div", _hoisted_14$5, [(openBlock(true), createElementBlock(
+						Fragment,
+						null,
+						renderList($setup.sqlFlow.history.value, (item, index) => {
+							return openBlock(), createBlock($setup["AcuButton"], {
+								key: `${item.timestamp}-${index}`,
+								class: normalizeClass(["acu-v2-advanced-tools-page__sql-history-item", item.success ? "acu-v2-advanced-tools-page__sql-history-item--success" : "acu-v2-advanced-tools-page__sql-history-item--failure"]),
+								title: "填入编辑器",
+								onClick: ($event) => $setup.sqlFlow.useHistoryItem(item)
+							}, {
+								default: withCtx(() => [createBaseVNode("div", _hoisted_15$5, [createBaseVNode(
+									"span",
+									_hoisted_16$5,
+									toDisplayString($setup.formatTime(item.timestamp)),
+									1
+									/* TEXT */
+								), createVNode($setup["AcuBadge"], { variant: item.success ? "success" : "danger" }, {
+									default: withCtx(() => [createTextVNode(
+										toDisplayString(item.success ? "成功" : "失败"),
+										1
+										/* TEXT */
+									)]),
+									_: 2
+								}, 1032, ["variant"])]), createBaseVNode(
+									"code",
+									_hoisted_17$4,
+									toDisplayString(item.sql),
 									1
 									/* TEXT */
 								)]),
 								_: 2
-							}, 1032, ["variant"])]), createBaseVNode(
-								"code",
-								_hoisted_17$4,
-								toDisplayString(item.sql),
-								1
-								/* TEXT */
-							)]),
-							_: 2
-						}, 1032, ["class", "onClick"]);
-					}),
-					128
-					/* KEYED_FRAGMENT */
-				))]))])
-			]),
-			_: 1
-		}, 8, ["title", "description"]), createVNode($setup["AcuPanel"], {
-			id: "advanced-tools-log-panel",
-			class: "acu-v2-advanced-tools-page__log-panel",
-			title: $setup.advancedToolsCopy.panels.logs.title,
-			description: $setup.advancedToolsCopy.panels.logs.description
-		}, {
-			actions: withCtx(() => [
-				createVNode($setup["AcuBadge"], { variant: $setup.logFlow.paused.value ? "warning" : "success" }, {
-					default: withCtx(() => [createTextVNode(
-						toDisplayString($setup.logFlow.statusLabel.value),
-						1
-						/* TEXT */
-					)]),
-					_: 1
-				}, 8, ["variant"]),
-				createVNode($setup["AcuBadge"], { variant: $setup.logFlow.debugLogEnabled.value ? "accent" : "neutral" }, {
-					default: withCtx(() => [createTextVNode(
-						toDisplayString($setup.logFlow.debugLabel.value),
-						1
-						/* TEXT */
-					)]),
-					_: 1
-				}, 8, ["variant"]),
-				createVNode($setup["AcuBadge"], { variant: $setup.logFlow.warnLogEnabled.value ? "warning" : "neutral" }, {
-					default: withCtx(() => [createTextVNode(
-						toDisplayString($setup.logFlow.warnLabel.value),
-						1
-						/* TEXT */
-					)]),
-					_: 1
-				}, 8, ["variant"])
-			]),
-			default: withCtx(() => [
-				createBaseVNode("div", _hoisted_18$4, [
-					createVNode($setup["AcuFormRow"], null, {
-						default: withCtx(() => [createVNode($setup["AcuSelect"], {
-							options: $setup.logFlow.levelOptions,
-							"model-value": $setup.logFlow.levelFilter.value,
-							"onUpdate:modelValue": $setup.setLogLevelFilter
-						}, null, 8, ["options", "model-value"])]),
-						_: 1
-					}),
-					createVNode($setup["AcuFormRow"], null, {
-						default: withCtx(() => [createVNode($setup["AcuSelect"], {
-							options: $setup.logFlow.tagOptions.value,
-							"model-value": $setup.logFlow.tagFilter.value,
-							"onUpdate:modelValue": _cache[1] || (_cache[1] = ($event) => $setup.logFlow.tagFilter.value = $event)
-						}, null, 8, ["options", "model-value"])]),
-						_: 1
-					}),
-					createVNode($setup["AcuFormRow"], { class: "acu-v2-advanced-tools-page__keyword-row" }, {
-						default: withCtx(() => [createVNode($setup["AcuInput"], {
-							"model-value": $setup.logFlow.keyword.value,
-							type: "text",
-							placeholder: "搜索日志内容",
-							"onUpdate:modelValue": _cache[2] || (_cache[2] = ($event) => $setup.logFlow.keyword.value = String($event))
-						}, null, 8, ["model-value"])]),
-						_: 1
-					})
-				]),
-				createBaseVNode("div", _hoisted_19$4, [createBaseVNode("div", _hoisted_20$3, [createBaseVNode("div", _hoisted_21$2, [
-					createVNode($setup["AcuButton"], {
-						variant: $setup.logFlow.paused.value ? "primary" : "default",
-						onClick: _cache[3] || (_cache[3] = ($event) => $setup.logFlow.setPaused(!$setup.logFlow.paused.value))
-					}, {
-						default: withCtx(() => [createBaseVNode(
-							"i",
-							{ class: normalizeClass($setup.logFlow.paused.value ? "fa-solid fa-play" : "fa-solid fa-pause") },
-							null,
-							2
-							/* CLASS */
-						), _cache[11] || (_cache[11] = createTextVNode(
-							" 暂停 ",
-							-1
-							/* CACHED */
-						))]),
-						_: 1
-					}, 8, ["variant"]),
-					createVNode($setup["AcuButton"], {
-						disabled: !$setup.logFlow.totalCount.value,
-						onClick: $setup.logFlow.exportFiltered
-					}, {
-						default: withCtx(() => [..._cache[12] || (_cache[12] = [createBaseVNode(
-							"i",
-							{ class: "fa-solid fa-upload" },
-							null,
-							-1
-							/* CACHED */
-						), createTextVNode(
-							" 导出 ",
-							-1
-							/* CACHED */
-						)])]),
-						_: 1
-					}, 8, ["disabled", "onClick"]),
-					createVNode($setup["AcuButton"], {
-						variant: "danger",
-						disabled: !$setup.logFlow.totalCount.value,
-						onClick: $setup.logFlow.clearAll
-					}, {
-						default: withCtx(() => [..._cache[13] || (_cache[13] = [createBaseVNode(
-							"i",
-							{ class: "fa-solid fa-trash" },
-							null,
-							-1
-							/* CACHED */
-						), createTextVNode(
-							" 清空 ",
-							-1
-							/* CACHED */
-						)])]),
-						_: 1
-					}, 8, ["disabled", "onClick"])
-				]), createBaseVNode("div", _hoisted_22$1, [
-					createVNode($setup["AcuToggle"], {
-						"model-value": $setup.logFlow.autoScroll.value,
-						label: "自动滚动",
-						"onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => $setup.logFlow.autoScroll.value = $event)
-					}, null, 8, ["model-value"]),
-					createVNode($setup["AcuToggle"], {
-						"model-value": $setup.logFlow.warnLogEnabled.value,
-						label: "Warn",
-						"onUpdate:modelValue": $setup.logFlow.setWarnCollection
-					}, null, 8, ["model-value", "onUpdate:modelValue"]),
-					createVNode($setup["AcuToggle"], {
-						"model-value": $setup.logFlow.debugLogEnabled.value,
-						label: "Debug",
-						"onUpdate:modelValue": $setup.logFlow.setDebugCollection
-					}, null, 8, ["model-value", "onUpdate:modelValue"])
-				])]), createBaseVNode(
-					"p",
-					_hoisted_23$1,
-					" 最多保留最近 2000 条；当前显示 " + toDisplayString($setup.logFlow.filteredCount.value) + " / " + toDisplayString($setup.logFlow.totalCount.value) + " 条。" + toDisplayString($setup.logFlow.pendingCount.value ? `${$setup.logFlow.pendingCount.value} 条暂停期间新增日志等待显示。` : "没有暂停期间积压的日志。"),
-					1
-					/* TEXT */
-				)]),
-				createBaseVNode(
-					"div",
-					_hoisted_24$1,
-					[!$setup.logFlow.visibleLogs.value.length ? (openBlock(), createElementBlock("div", _hoisted_25$1, " 暂无匹配日志 ")) : createCommentVNode("v-if", true), (openBlock(true), createElementBlock(
-						Fragment,
-						null,
-						renderList($setup.logFlow.visibleLogs.value, (entry) => {
-							return openBlock(), createElementBlock(
-								"div",
-								{
-									key: entry.id,
-									class: normalizeClass(["acu-v2-advanced-tools-page__log-row", `acu-v2-advanced-tools-page__log-row--${entry.level}`])
-								},
-								[createBaseVNode("div", _hoisted_26$1, [
-									createBaseVNode(
-										"span",
-										_hoisted_27$1,
-										toDisplayString($setup.formatTime(entry.timestamp)),
-										1
-										/* TEXT */
-									),
-									createVNode($setup["AcuBadge"], { variant: $setup.logLevelVariant(entry.level) }, {
-										default: withCtx(() => [createTextVNode(
-											toDisplayString(entry.level.toUpperCase()),
-											1
-											/* TEXT */
-										)]),
-										_: 2
-									}, 1032, ["variant"]),
-									createBaseVNode(
-										"span",
-										_hoisted_28,
-										toDisplayString(entry.tag),
-										1
-										/* TEXT */
-									)
-								]), createBaseVNode(
-									"code",
-									_hoisted_29,
-									toDisplayString(entry.message),
-									1
-									/* TEXT */
-								)],
-								2
-								/* CLASS */
-							);
+							}, 1032, ["class", "onClick"]);
 						}),
 						128
 						/* KEYED_FRAGMENT */
-					))],
-					512
-					/* NEED_PATCH */
-				)
-			]),
-			_: 1
-		}, 8, ["title", "description"])]),
+					))]))])
+				]),
+				_: 1
+			}, 8, ["title", "description"]),
+			createVNode($setup["AcuPanel"], {
+				id: "advanced-tools-log-panel",
+				class: "acu-v2-advanced-tools-page__log-panel",
+				title: $setup.advancedToolsCopy.panels.logs.title,
+				description: $setup.advancedToolsCopy.panels.logs.description
+			}, {
+				actions: withCtx(() => [
+					createVNode($setup["AcuBadge"], { variant: $setup.logFlow.paused.value ? "warning" : "success" }, {
+						default: withCtx(() => [createTextVNode(
+							toDisplayString($setup.logFlow.statusLabel.value),
+							1
+							/* TEXT */
+						)]),
+						_: 1
+					}, 8, ["variant"]),
+					createVNode($setup["AcuBadge"], { variant: $setup.logFlow.debugLogEnabled.value ? "accent" : "neutral" }, {
+						default: withCtx(() => [createTextVNode(
+							toDisplayString($setup.logFlow.debugLabel.value),
+							1
+							/* TEXT */
+						)]),
+						_: 1
+					}, 8, ["variant"]),
+					createVNode($setup["AcuBadge"], { variant: $setup.logFlow.warnLogEnabled.value ? "warning" : "neutral" }, {
+						default: withCtx(() => [createTextVNode(
+							toDisplayString($setup.logFlow.warnLabel.value),
+							1
+							/* TEXT */
+						)]),
+						_: 1
+					}, 8, ["variant"])
+				]),
+				default: withCtx(() => [
+					createBaseVNode("div", _hoisted_18$4, [
+						createVNode($setup["AcuFormRow"], null, {
+							default: withCtx(() => [createVNode($setup["AcuSelect"], {
+								options: $setup.logFlow.levelOptions,
+								"model-value": $setup.logFlow.levelFilter.value,
+								"onUpdate:modelValue": $setup.setLogLevelFilter
+							}, null, 8, ["options", "model-value"])]),
+							_: 1
+						}),
+						createVNode($setup["AcuFormRow"], null, {
+							default: withCtx(() => [createVNode($setup["AcuSelect"], {
+								options: $setup.logFlow.tagOptions.value,
+								"model-value": $setup.logFlow.tagFilter.value,
+								"onUpdate:modelValue": _cache[1] || (_cache[1] = ($event) => $setup.logFlow.tagFilter.value = $event)
+							}, null, 8, ["options", "model-value"])]),
+							_: 1
+						}),
+						createVNode($setup["AcuFormRow"], { class: "acu-v2-advanced-tools-page__keyword-row" }, {
+							default: withCtx(() => [createVNode($setup["AcuInput"], {
+								"model-value": $setup.logFlow.keyword.value,
+								type: "text",
+								placeholder: "搜索日志内容",
+								"onUpdate:modelValue": _cache[2] || (_cache[2] = ($event) => $setup.logFlow.keyword.value = String($event))
+							}, null, 8, ["model-value"])]),
+							_: 1
+						})
+					]),
+					createBaseVNode("div", _hoisted_19$4, [createBaseVNode("div", _hoisted_20$3, [createBaseVNode("div", _hoisted_21$2, [
+						createVNode($setup["AcuButton"], {
+							variant: $setup.logFlow.paused.value ? "primary" : "default",
+							onClick: _cache[3] || (_cache[3] = ($event) => $setup.logFlow.setPaused(!$setup.logFlow.paused.value))
+						}, {
+							default: withCtx(() => [createBaseVNode(
+								"i",
+								{ class: normalizeClass($setup.logFlow.paused.value ? "fa-solid fa-play" : "fa-solid fa-pause") },
+								null,
+								2
+								/* CLASS */
+							), _cache[11] || (_cache[11] = createTextVNode(
+								" 暂停 ",
+								-1
+								/* CACHED */
+							))]),
+							_: 1
+						}, 8, ["variant"]),
+						createVNode($setup["AcuButton"], {
+							disabled: !$setup.logFlow.totalCount.value,
+							onClick: $setup.logFlow.exportFiltered
+						}, {
+							default: withCtx(() => [..._cache[12] || (_cache[12] = [createBaseVNode(
+								"i",
+								{ class: "fa-solid fa-upload" },
+								null,
+								-1
+								/* CACHED */
+							), createTextVNode(
+								" 导出 ",
+								-1
+								/* CACHED */
+							)])]),
+							_: 1
+						}, 8, ["disabled", "onClick"]),
+						createVNode($setup["AcuButton"], {
+							variant: "danger",
+							disabled: !$setup.logFlow.totalCount.value,
+							onClick: $setup.logFlow.clearAll
+						}, {
+							default: withCtx(() => [..._cache[13] || (_cache[13] = [createBaseVNode(
+								"i",
+								{ class: "fa-solid fa-trash" },
+								null,
+								-1
+								/* CACHED */
+							), createTextVNode(
+								" 清空 ",
+								-1
+								/* CACHED */
+							)])]),
+							_: 1
+						}, 8, ["disabled", "onClick"])
+					]), createBaseVNode("div", _hoisted_22$1, [
+						createVNode($setup["AcuToggle"], {
+							"model-value": $setup.logFlow.autoScroll.value,
+							label: "自动滚动",
+							"onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => $setup.logFlow.autoScroll.value = $event)
+						}, null, 8, ["model-value"]),
+						createVNode($setup["AcuToggle"], {
+							"model-value": $setup.logFlow.warnLogEnabled.value,
+							label: "Warn",
+							"onUpdate:modelValue": $setup.logFlow.setWarnCollection
+						}, null, 8, ["model-value", "onUpdate:modelValue"]),
+						createVNode($setup["AcuToggle"], {
+							"model-value": $setup.logFlow.debugLogEnabled.value,
+							label: "Debug",
+							"onUpdate:modelValue": $setup.logFlow.setDebugCollection
+						}, null, 8, ["model-value", "onUpdate:modelValue"])
+					])]), createBaseVNode(
+						"p",
+						_hoisted_23$1,
+						" 最多保留最近 2000 条；当前显示 " + toDisplayString($setup.logFlow.filteredCount.value) + " / " + toDisplayString($setup.logFlow.totalCount.value) + " 条。" + toDisplayString($setup.logFlow.pendingCount.value ? `${$setup.logFlow.pendingCount.value} 条暂停期间新增日志等待显示。` : "没有暂停期间积压的日志。"),
+						1
+						/* TEXT */
+					)]),
+					createBaseVNode(
+						"div",
+						_hoisted_24$1,
+						[!$setup.logFlow.visibleLogs.value.length ? (openBlock(), createElementBlock("div", _hoisted_25$1, " 暂无匹配日志 ")) : createCommentVNode("v-if", true), (openBlock(true), createElementBlock(
+							Fragment,
+							null,
+							renderList($setup.logFlow.visibleLogs.value, (entry) => {
+								return openBlock(), createElementBlock(
+									"div",
+									{
+										key: entry.id,
+										class: normalizeClass(["acu-v2-advanced-tools-page__log-row", `acu-v2-advanced-tools-page__log-row--${entry.level}`])
+									},
+									[createBaseVNode("div", _hoisted_26$1, [
+										createBaseVNode(
+											"span",
+											_hoisted_27$1,
+											toDisplayString($setup.formatTime(entry.timestamp)),
+											1
+											/* TEXT */
+										),
+										createVNode($setup["AcuBadge"], { variant: $setup.logLevelVariant(entry.level) }, {
+											default: withCtx(() => [createTextVNode(
+												toDisplayString(entry.level.toUpperCase()),
+												1
+												/* TEXT */
+											)]),
+											_: 2
+										}, 1032, ["variant"]),
+										createBaseVNode(
+											"span",
+											_hoisted_28,
+											toDisplayString(entry.tag),
+											1
+											/* TEXT */
+										)
+									]), createBaseVNode(
+										"code",
+										_hoisted_29,
+										toDisplayString(entry.message),
+										1
+										/* TEXT */
+									)],
+									2
+									/* CLASS */
+								);
+							}),
+							128
+							/* KEYED_FRAGMENT */
+						))],
+						512
+						/* NEED_PATCH */
+					)
+				]),
+				_: 1
+			}, 8, ["title", "description"]),
+			createVNode($setup["AcuPanel"], {
+				id: "advanced-tools-debug-panel",
+				class: "acu-v2-advanced-tools-page__debug-panel",
+				title: $setup.advancedToolsCopy.panels.debug.title,
+				description: $setup.advancedToolsCopy.panels.debug.description
+			}, {
+				actions: withCtx(() => [createVNode($setup["AcuBadge"], { variant: $setup.debugFlow.active.value ? "danger" : "neutral" }, {
+					default: withCtx(() => [createTextVNode(
+						toDisplayString($setup.debugFlow.statusLabel.value),
+						1
+						/* TEXT */
+					)]),
+					_: 1
+				}, 8, ["variant"]), $setup.debugFlow.active.value ? (openBlock(), createBlock($setup["AcuBadge"], {
+					key: 0,
+					variant: "accent"
+				}, {
+					default: withCtx(() => [createTextVNode(
+						" 已采集 " + toDisplayString($setup.debugFlow.entryCount.value) + " 条 ",
+						1
+						/* TEXT */
+					)]),
+					_: 1
+				})) : createCommentVNode("v-if", true)]),
+				default: withCtx(() => [createBaseVNode("div", _hoisted_30, [createVNode($setup["AcuButton"], {
+					variant: $setup.debugFlow.active.value ? "danger" : "primary",
+					onClick: $setup.debugFlow.toggleDebug
+				}, {
+					default: withCtx(() => [createBaseVNode(
+						"i",
+						{ class: normalizeClass($setup.debugFlow.active.value ? "fa-solid fa-stop" : "fa-solid fa-bug") },
+						null,
+						2
+						/* CLASS */
+					), createTextVNode(
+						" " + toDisplayString($setup.debugFlow.active.value ? "停止 Debug" : "开始 Debug"),
+						1
+						/* TEXT */
+					)]),
+					_: 1
+				}, 8, ["variant", "onClick"]), createVNode($setup["AcuButton"], {
+					disabled: !$setup.debugFlow.active.value,
+					onClick: $setup.debugFlow.exportDebugData
+				}, {
+					default: withCtx(() => [..._cache[14] || (_cache[14] = [createBaseVNode(
+						"i",
+						{ class: "fa-solid fa-download" },
+						null,
+						-1
+						/* CACHED */
+					), createTextVNode(
+						" 导出 Debug 数据 ",
+						-1
+						/* CACHED */
+					)])]),
+					_: 1
+				}, 8, ["disabled", "onClick"])]), _cache[15] || (_cache[15] = createBaseVNode(
+					"p",
+					{ class: "acu-v2-advanced-tools-page__hint" },
+					" 使用步骤：① 点「开始 Debug」（自动开启全部采集并清空旧日志）→ ② 复现问题 → ③ 点「导出 Debug 数据」生成 .json 文件 → ④ 把文件交给开发者即可定位问题。 排查完成后记得「停止 Debug」。 ",
+					-1
+					/* CACHED */
+				))]),
+				_: 1
+			}, 8, ["title", "description"])
+		]),
 		_: 1
 	})]);
 }
-var AdvancedToolsPage = /* @__PURE__ */ _export_sfc(_sfc_main$d, [["render", _sfc_render$d], ["__scopeId", "data-v-51eb8cd3"]]);
+var AdvancedToolsPage = /* @__PURE__ */ _export_sfc(_sfc_main$d, [["render", _sfc_render$d], ["__scopeId", "data-v-acd4ed2f"]]);
 
 const developerCopy = {
     panels: {
@@ -176756,90 +177093,6 @@ function __resetAcuV2MountForTests() {
     __resetAppearanceInjectorForTests();
     __resetHostDocumentCacheForTests();
     __resetHostRendererForTests();
-}
-
-/**
- * shared/host-bridge.ts — 宿主（ST / TT / Luker）适配桥（隔离层）
- *
- * 目的：数据库核心的 TT（TauriTavern）针对性适配全部集中在此，业务文件
- * 通过本桥访问宿主信息，不直接触碰 `__TAURITAVERN__` 等 TT 内部 ABI。
- * 这样业务文件保持「纯 ST 标准 API」形态，上游（AlbusKen/shujuku）发布更新时
- * 只同步业务文件、桥层不动，从而兼顾「TT 差异化适配」与「上游更新采纳」。
- *
- * TT 环境判定：TT 是 Tauri 壳 + SillyTavern 1.18 前端，注入 `__TAURITAVERN__` ABI
- * 与 `__TAURITAVERN_MAIN_READY__`。核心差异点：宿主异步引导、扩展与 host ready 存在
- * 竞态，因此核心启动、菜单注入须额外等待 TT 就绪。
- */
-function tauriWindow() {
-    return (typeof window !== 'undefined' ? window : globalThis);
-}
-/** 判定宿主类型：TT / Luker 扩展 / 纯 SillyTavern，顺时针检测 */
-function getAcuHostKind() {
-    const w = tauriWindow();
-    if (w.__TAURITAVERN__)
-        return 'tauritavern';
-    if (w.Luker?.getContext)
-        return 'luker';
-    return 'sillytavern';
-}
-/** 是否跑在 TauriTavern 下 */
-function isAcuTauriRuntime() {
-    return getAcuHostKind() === 'tauritavern';
-}
-/**
- * 取 TT 就绪 Promise/标志。TT 主线程由 init.js 异步引导，先于扩展注册完成
- * 的 APP_READY 不代表 TT 内部 ABI 就绪；`__TAURITAVERN__?.ready` 可能是个
- * Promise（可 await），也可能是布尔完成标志。
- */
-function getAcuTauriReady() {
-    const w = tauriWindow();
-    const ready = w.__TAURITAVERN__?.ready || w.__TAURITAVERN_MAIN_READY__;
-    if (ready && typeof ready.then === 'function') {
-        return { ready: false, promise: ready };
-    }
-    return { ready: ready === true, promise: null };
-}
-/**
- * 等待宿主 API 就绪（扩展可安全初始化）。
- * - ST/Luker：等 window.SillyTavern.getContext() 返回带核心字段的快照。
- * - TT：在此基础上额外等 __TAURITAVERN__?.ready（异步 promise 或布尔），
- *   避免扩展在 TT 内部 ABI（store/Agent/菜单）就绪前初始化。
- */
-async function waitForAcuHostReady(maxWaitMs = 15000) {
-    const start = Date.now();
-    const tauri = isAcuTauriRuntime();
-    const getContextReady = () => {
-        try {
-            const w = tauriWindow();
-            if (typeof w.SillyTavern?.getContext !== 'function')
-                return false;
-            const ctx = w.SillyTavern.getContext();
-            return !!(ctx?.eventSource && ctx?.eventTypes && typeof ctx?.saveSettingsDebounced === 'function');
-        }
-        catch {
-            return false;
-        }
-    };
-    while (Date.now() - start < maxWaitMs) {
-        if (getContextReady()) {
-            if (!tauri)
-                return true;
-            // TT：getContext 就绪后再等 TT ABI
-            const { ready, promise } = getAcuTauriReady();
-            if (ready)
-                return true;
-            if (promise) {
-                try {
-                    await Promise.race([promise, new Promise((r) => setTimeout(r, Math.max(0, maxWaitMs - (Date.now() - start))))]);
-                }
-                catch { /* TT ready promise 拒绝则继续轮询 */ }
-                if (getAcuTauriReady().ready || getContextReady())
-                    return true;
-            }
-        }
-        await new Promise((r) => setTimeout(r, 100));
-    }
-    return getContextReady();
 }
 
 /**

@@ -226,6 +226,41 @@
           </div>
         </div>
       </AcuPanel>
+      <AcuPanel
+        id="advanced-tools-debug-panel"
+        class="acu-v2-advanced-tools-page__debug-panel"
+        :title="advancedToolsCopy.panels.debug.title"
+        :description="advancedToolsCopy.panels.debug.description"
+      >
+        <template #actions>
+          <AcuBadge :variant="debugFlow.active.value ? 'danger' : 'neutral'">
+            {{ debugFlow.statusLabel.value }}
+          </AcuBadge>
+          <AcuBadge v-if="debugFlow.active.value" variant="accent">
+            已采集 {{ debugFlow.entryCount.value }} 条
+          </AcuBadge>
+        </template>
+
+        <div class="acu-v2-advanced-tools-page__debug-actions">
+          <AcuButton
+            :variant="debugFlow.active.value ? 'danger' : 'primary'"
+            @click="debugFlow.toggleDebug"
+          >
+            <i :class="debugFlow.active.value ? 'fa-solid fa-stop' : 'fa-solid fa-bug'"></i>
+            {{ debugFlow.active.value ? '停止 Debug' : '开始 Debug' }}
+          </AcuButton>
+          <AcuButton :disabled="!debugFlow.active.value" @click="debugFlow.exportDebugData">
+            <i class="fa-solid fa-download"></i>
+            导出 Debug 数据
+          </AcuButton>
+        </div>
+
+        <p class="acu-v2-advanced-tools-page__hint">
+          使用步骤：① 点「开始 Debug」（自动开启全部采集并清空旧日志）→ ② 复现问题 →
+          ③ 点「导出 Debug 数据」生成 .json 文件 → ④ 把文件交给开发者即可定位问题。
+          排查完成后记得「停止 Debug」。
+        </p>
+      </AcuPanel>
     </AcuPanelGrid>
   </section>
 </template>
@@ -246,14 +281,17 @@ import AcuToggle from '../components/_lib/AcuToggle.vue';
 import { type LogLevel } from '../../shared/log-buffer';
 import { useSqlConsole } from '../composables/useSqlConsole';
 import { type LogLevelFilter, useLogViewer } from '../composables/useLogViewer';
+import { useDebugPanel } from '../composables/useDebugPanel';
 import { advancedToolsCopy } from '../copy/advanced-tools-copy';
 
 const sqlFlow = useSqlConsole();
 const logFlow = useLogViewer();
+const debugFlow = useDebugPanel();
 const logListRef = ref<HTMLElement | null>(null);
 const panelNavItems = [
   { id: 'advanced-tools-sql-panel', label: advancedToolsCopy.nav.sql },
   { id: 'advanced-tools-log-panel', label: advancedToolsCopy.nav.logs },
+  { id: 'advanced-tools-debug-panel', label: advancedToolsCopy.nav.debug },
 ];
 
 function onSqlEditorKeydown(event: KeyboardEvent): void {
@@ -310,8 +348,16 @@ watch(() => logFlow.visibleLogs.value.length, scrollLogListToTop, { flush: 'post
 }
 
 .acu-v2-advanced-tools-page__sql-panel,
-.acu-v2-advanced-tools-page__log-panel {
+.acu-v2-advanced-tools-page__log-panel,
+.acu-v2-advanced-tools-page__debug-panel {
   min-width: 0;
+}
+
+.acu-v2-advanced-tools-page__debug-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
 }
 
 .acu-v2-advanced-tools-page__quick-actions,

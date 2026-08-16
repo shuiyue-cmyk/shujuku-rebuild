@@ -2,6 +2,7 @@ export const advancedToolsCopy = {
   nav: {
     sql: "SQL 控制台",
     logs: "运行日志",
+    debug: "Debug",
   },
   panels: {
     sql: {
@@ -13,6 +14,11 @@ export const advancedToolsCopy = {
       title: "运行日志",
       description:
         "查看数据库运行日志。筛选仅影响显示和导出。未看到日志请开启采集后重试。",
+    },
+    debug: {
+      title: "Debug 问题上报",
+      description:
+        "遇到可复现的问题时：开启 Debug → 复现问题 → 导出 Debug 数据（.json）→ 将文件交给开发者即可定位。导出包含版本、环境摘要（密钥脱敏）、全量日志、生理追踪最近请求与表结构概览。",
     },
   },
 };
