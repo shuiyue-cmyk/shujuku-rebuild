@@ -1159,10 +1159,18 @@ export async function collectGroupFillResponse_ACU(
                 throw new ModelOutputRetryError_ACU(`AI回复过短 (${aiResponse.length} 字符)，低于阈值 (${minReplyLength} 字符)`);
             }
             let tableEditText = '';
-            if (!aiResponse || !aiResponse.includes('<tableEdit>') || !aiResponse.includes('</tableEdit>')) {
+            // 提取 <tableEdit> 内容：取「最后一对」标签（lastPairOnly 语义）。
+            // 裸正则取第一对会在 AI 于 <thought> 内提到 "<tableEdit>" 字样时匹配到假标签，
+            // 把 thought 文本混入 tableEditText → isSqlContent 判定失败 → SQL 全被当作指令跳过（2026-08-16 线上问题）。
+            // 取「最后一个 <tableEdit> 开标签」之后、其后第一个 </tableEdit> 之前的内容。
+            // 原因：AI 常在 <thought> 里写 "使用 <tableEdit> 标签包裹 SQL 语句"（无闭合），
+            // 若用成对正则会把 thought+content 整段吞掉；真正的编辑内容总是最后出现的标签对。
+            const openIdx = (aiResponse || '').lastIndexOf('<tableEdit>');
+            const closeIdx = openIdx === -1 ? -1 : (aiResponse || '').indexOf('</tableEdit>', openIdx + '<tableEdit>'.length);
+            if (openIdx === -1 || closeIdx === -1) {
                 throw new ModelOutputRetryError_ACU('AI响应中未找到完整有效的 <tableEdit> 标签');
             }
-            tableEditText = (aiResponse.match(/<tableEdit>([\s\S]*?)<\/tableEdit>/i)?.[1] || '').trim();
+            tableEditText = (aiResponse || '').substring(openIdx + '<tableEdit>'.length, closeIdx).trim();
             if (isSqliteMode() && tableEditText && isSqlContent(tableEditText)) {
                 try {
                     // 隐藏列保护使用请求前冻结的 live runtime schema 证据，而不是 baseSnapshot：

@@ -3932,6 +3932,27 @@ describe('collectGroupFillResponse_ACU', () => {
     vi.mocked(isSqliteMode).mockReturnValue(false);
   });
 
+  it('AI 在 <thought> 内提及 <tableEdit> 字样时仍正确提取最后一对标签内的 SQL（2026-08-16 线上 bug 回归）', async () => {
+    const job = createJob();
+    const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
+    vi.mocked(isSqliteMode).mockReturnValue(true);
+    mockPrepareAIInput.mockResolvedValue({ tableDataText: '投影后的数据' });
+    // AI 在 thought 里提到了 <tableEdit>（引导语），真正的编辑内容在最后一对标签内
+    mockCallCustomOpenAI.mockResolvedValue(
+      '<thought>请使用 <tableEdit> 标签包裹 SQL 语句。本轮需要记录物品。</thought>\n' +
+      '<content><tableEdit>INSERT INTO inventory (item_name, quantity) VALUES (\'铁剑\', 1);</tableEdit></content>'
+    );
+
+    const result: any = await collectGroupFillResponse_ACU(job);
+
+    expect(result.success).toBe(true);
+    // 提取结果必须是最后一对标签内的纯 SQL，不得混入 thought 文本
+    expect(result.tableEditText).toContain('INSERT INTO inventory');
+    expect(result.tableEditText).not.toContain('请使用');
+    expect(result.tableEditText).not.toContain('</thought>');
+    vi.mocked(isSqliteMode).mockReturnValue(false);
+  });
+
   it.each([
     'SELECT legacy_note FROM inventory',
     'PRAGMA table_info(inventory)',
