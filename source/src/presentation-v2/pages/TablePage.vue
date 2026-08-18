@@ -20,6 +20,7 @@
             :groups="entries.groups.value"
             :loading="entries.status.value === 'loading'"
             :empty-text="entryEmptyText"
+            allow-active
             @update:source="onEntriesSourceChange($event)"
             @toggle-book="onEntriesManualBookToggle"
             @select-all="entries.selectAll()"
@@ -183,7 +184,7 @@ import { formFillCopy } from '../copy/form-fill-copy';
 import { tableCopy } from '../copy/table-copy';
 import { useDialogStore } from '../stores/dialog-store';
 
-type WorldbookSource = 'character' | 'manual';
+type WorldbookSource = 'character' | 'manual' | 'active';
 
 const dialogStore = useDialogStore();
 const settings = useFormFillSettings();
@@ -253,6 +254,8 @@ async function refreshEntriesGroups(): Promise<void> {
     entriesSourceLabel.value = charPrimary
       ? `角色卡所有世界书 · 主册 ${charPrimary}`
       : '角色卡所有世界书';
+  } else if (entriesSource.source.value === 'active') {
+    entriesSourceLabel.value = names.length ? names.join('、') : '（未找到正文接收的世界书）';
   } else {
     const names = entriesSource.manualSelection.value;
     entriesSourceLabel.value = names.length ? names.join('、') : '（未选择）';
@@ -262,6 +265,9 @@ async function refreshEntriesGroups(): Promise<void> {
 function resolveEntryEmptyText(names: string[]): string {
   if (entriesSource.source.value === 'character' && names.length === 0) {
     return tableCopy.worldbook.emptyCharacter;
+  }
+  if (entriesSource.source.value === 'active' && names.length === 0) {
+    return '未找到正文能接收到的世界书（无激活全局书且角色卡未绑定）。可切回「跟随角色卡」或「手动选择」。';
   }
   if (entriesSource.source.value === 'manual' && entriesSource.manualSelection.value.length === 0) {
     return tableCopy.worldbook.emptyManual;

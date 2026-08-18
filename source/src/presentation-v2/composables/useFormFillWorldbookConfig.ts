@@ -11,9 +11,9 @@
 import { computed, ref } from 'vue';
 import { getCurrentWorldbookConfig_ACU } from '../../service/settings/settings-readers';
 import { saveSettings_ACU } from '../../service/settings/settings-service';
-import { getCharLorebooks_ACU } from '../../service/worldbook/worldbook-service';
+import { getCharLorebooks_ACU, getActiveWorldbookNamesForFill_ACU } from '../../service/worldbook/worldbook-service';
 
-export type FormFillWorldbookSource = 'character' | 'manual';
+export type FormFillWorldbookSource = 'character' | 'manual' | 'active';
 
 function normalizeSelection(names: unknown): string[] {
   if (!Array.isArray(names)) return [];
@@ -32,7 +32,7 @@ export function useFormFillWorldbookConfig() {
 
   function refreshFromSettings(): void {
     const cfg = getCurrentWorldbookConfig_ACU();
-    source.value = cfg.source === 'manual' ? 'manual' : 'character';
+    source.value = cfg.source === 'manual' ? 'manual' : (cfg.source === 'active' ? 'active' : 'character');
     cfg.manualSelection = normalizeSelection(cfg.manualSelection);
     manualSelection.value = [...cfg.manualSelection];
   }
@@ -68,6 +68,13 @@ export function useFormFillWorldbookConfig() {
     const cfg = getCurrentWorldbookConfig_ACU();
     if (cfg.source === 'manual') {
       return normalizeSelection(cfg.manualSelection);
+    }
+    if (cfg.source === 'active') {
+      // 正文接收：激活全局书 + 角色卡绑定书（agent 绿灯书由运行时按 options.agentGreenlights 并入）
+      try {
+        return await getActiveWorldbookNamesForFill_ACU();
+      } catch { /* empty */ }
+      return [];
     }
     const names: string[] = [];
     try {

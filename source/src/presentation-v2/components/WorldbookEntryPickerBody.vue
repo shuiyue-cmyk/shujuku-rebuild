@@ -7,6 +7,7 @@
       :status="selectorStatus"
       :error="selectorError"
       :filterable="filterable"
+      :allow-active="allowActive"
       @update:source="$emit('update:source', $event)"
       @toggle-book="(name: string, checked: boolean) => $emit('toggle-book', name, checked)"
     />
@@ -47,7 +48,7 @@ import type { WorldbookLoadStatus } from '../composables/useWorldbookSelector';
 import type { EntryLoadStatus } from '../composables/usePlotWorldbookEntries';
 import type { WorldbookEntryDisplayGroup_ACU } from '../composables/worldbook-entry-display';
 
-type WorldbookSource = 'character' | 'manual';
+type WorldbookSource = 'character' | 'manual' | 'active';
 
 withDefaults(defineProps<{
   source: WorldbookSource;
@@ -63,8 +64,11 @@ withDefaults(defineProps<{
   entryError?: string;
   emptyText?: string;
   filterable?: boolean;
+  /** 是否显示「正文接收」来源（填表页用；剧情推进/Agent 页不显示） */
+  allowActive?: boolean;
 }>(), {
   filterable: true,
+  allowActive: false,
   emptyText: '所选世界书中无可显示的条目。',
   entryStatus: 'success',
   entryError: '',

@@ -300,6 +300,58 @@ export async function getWorldBooks_ACU(): Promise<string[]> {
  * 获取当前角色的主绑定世界书名称
  * @returns 世界书名称，不可用时返回 null
  */
+/**
+ * 获取「正文实际能接收到的」激活世界书名称（聊天级全局激活书，不依赖角色卡绑定）。
+ * 复刻 biotracker vendor 的激活书探测：selected_world_info + world_info.globalSelect +
+ * 页面 #world_info 多选框 + TavernHelper.getLorebookSettings。
+ * 填表「正文接收」来源（active）用；正文生成时这些书会被注入，角色卡绑定关系读不到。
+ * @returns 去重后的激活世界书名称数组
+ */
+export function getActiveGlobalWorldbookNames_ACU(): string[] {
+  const names: string[] = [];
+  const push = (list: unknown): void => {
+    if (!Array.isArray(list)) return;
+    for (const item of list) {
+      const name = String(item ?? '').trim();
+      if (name && !names.includes(name)) names.push(name);
+    }
+  };
+  const g = globalThis as any;
+  try { push(g?.selected_world_info); } catch { /* ignore */ }
+  try { push(g?.world_info?.globalSelect); } catch { /* ignore */ }
+  try { push(g?.world_info_settings?.world_info?.globalSelect); } catch { /* ignore */ }
+  try { push(g?.power_user?.world_info?.globalSelect); } catch { /* ignore */ }
+  try {
+    const select: any = typeof document !== 'undefined' ? document.querySelector?.('#world_info') : null;
+    if (select?.selectedOptions) {
+      push(Array.from(select.selectedOptions).map((o: any) => o.textContent || o.label || o.value));
+    }
+  } catch { /* ignore */ }
+  return [...new Set(names.filter(Boolean))];
+}
+
+/**
+ * 获取「正文实际能接收到的」世界书名称全集：激活全局书 + 角色卡绑定书（primary+additional）。
+ * 填表「正文接收」来源的书列表真源（UI 与运行时共用）。
+ */
+export async function getActiveWorldbookNamesForFill_ACU(): Promise<string[]> {
+  const names = getActiveGlobalWorldbookNames_ACU();
+  try {
+    const charLorebooks = await getCharLorebooks_ACU({ type: 'all' });
+    if (charLorebooks?.primary) {
+      const p = String(charLorebooks.primary).trim();
+      if (p && !names.includes(p)) names.push(p);
+    }
+    if (Array.isArray(charLorebooks?.additional)) {
+      for (const b of charLorebooks.additional) {
+        const n = String(b ?? '').trim();
+        if (n && !names.includes(n)) names.push(n);
+      }
+    }
+  } catch { /* 角色书读取失败不影响激活书 */ }
+  return names;
+}
+
 export async function getCurrentCharPrimaryLorebook_ACU(): Promise<string | null> {
     if (!TavernHelper_API_ACU || typeof TavernHelper_API_ACU.getCurrentCharPrimaryLorebook !== 'function') {
         logWarn_ACU('[WorldbookGateway] getCurrentCharPrimaryLorebook 不可用，返回 null');

@@ -55,6 +55,9 @@ import {
   getCurrentCharacterWorldbookBinding_ACU
 } from '../../../data/gateways/character-gateway';
 import {
+  getActiveWorldbookNamesForFill_ACU
+} from '../../../data/gateways/worldbook-gateway';
+import {
   resolvePreTakeoverWorldbookSnapshot_ACU
 } from '../../agent/agent-worldbook-takeover';
 import {
@@ -472,6 +475,14 @@ function resolvePromptRowWindow_ACU(
         if (worldbookConfig?.source !== 'character') return [];
         const binding = await getCurrentCharacterWorldbookBinding_ACU();
         return binding?.orderedNames || [];
+      },
+      // 来源 6（数据库集成）：正文接收模式下读激活全局书 + 角色绑定书（agent 绿灯书已由来源 3 覆盖）
+      async () => {
+        if (worldbookConfig?.source !== 'active') return [];
+        try {
+          return await getActiveWorldbookNamesForFill_ACU();
+        } catch { /* 激活书读取失败不影响其它来源 */ }
+        return [];
       },
     ]);
     const readScopeNames = [...syncReadScopeNames, ...asyncReadScopeNames];

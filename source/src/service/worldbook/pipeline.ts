@@ -25,7 +25,8 @@ import {
   getWorldBooks_ACU as gwGetWorldBooks_ACU,
   isWorldbookApiAvailable_ACU,
   normalizeLorebookEntriesForRead_ACU,
-  resolveLorebookNameFromList_ACU
+  resolveLorebookNameFromList_ACU,
+  getActiveWorldbookNamesForFill_ACU
 } from '../../data/gateways/worldbook-gateway';
 import {
   getCharLorebooks_ACU,
@@ -1488,6 +1489,24 @@ export   async function getCombinedWorldbookContent_ACU(initialScanTextOverride 
         
         if (worldbookConfig.source === 'manual') {
             bookNames = worldbookConfig.manualSelection || [];
+        } else if (worldbookConfig.source === 'active') {
+            // 数据库集成：正文接收来源——激活全局书 + 角色卡绑定书 + agent 绿灯放行的书
+            // （agent 接管开启时正文会注入绿灯条目，填表应同步纳入）
+            try {
+                bookNames = await getActiveWorldbookNamesForFill_ACU();
+            } catch {
+                logError_ACU('[Worldbook] 获取正文接收世界书失败:', {
+                    phase: 'resolve_active',
+                    error: { category: 'read_failed' },
+                });
+                return '';
+            }
+            const greenlightBooks = (Array.isArray(options?.agentGreenlights) ? options.agentGreenlights : [])
+                .map((ref: any) => String(ref?.bookName || '').trim())
+                .filter(Boolean);
+            for (const gb of greenlightBooks) {
+                if (gb && !bookNames.includes(gb)) bookNames.push(gb);
+            }
         } else { // 'character' mode
             try {
                 const charLorebooks = await getCharLorebooks_ACU({ type: 'all' });

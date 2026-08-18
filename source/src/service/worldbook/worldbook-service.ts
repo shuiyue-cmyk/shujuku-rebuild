@@ -17,5 +17,6 @@ export {
     getCurrentCharPrimaryLorebook_ACU,
     getCurrentCharacterWorldbookBinding_ACU,
     getCharLorebooks_ACU,
+    getActiveWorldbookNamesForFill_ACU,
 } from '../../data/gateways/worldbook-gateway';
 

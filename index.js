@@ -5212,6 +5212,74 @@ async function getWorldBooks_ACU$1() {
  * 获取当前角色的主绑定世界书名称
  * @returns 世界书名称，不可用时返回 null
  */
+/**
+ * 获取「正文实际能接收到的」激活世界书名称（聊天级全局激活书，不依赖角色卡绑定）。
+ * 复刻 biotracker vendor 的激活书探测：selected_world_info + world_info.globalSelect +
+ * 页面 #world_info 多选框 + TavernHelper.getLorebookSettings。
+ * 填表「正文接收」来源（active）用；正文生成时这些书会被注入，角色卡绑定关系读不到。
+ * @returns 去重后的激活世界书名称数组
+ */
+function getActiveGlobalWorldbookNames_ACU() {
+    const names = [];
+    const push = (list) => {
+        if (!Array.isArray(list))
+            return;
+        for (const item of list) {
+            const name = String(item ?? '').trim();
+            if (name && !names.includes(name))
+                names.push(name);
+        }
+    };
+    const g = globalThis;
+    try {
+        push(g?.selected_world_info);
+    }
+    catch { /* ignore */ }
+    try {
+        push(g?.world_info?.globalSelect);
+    }
+    catch { /* ignore */ }
+    try {
+        push(g?.world_info_settings?.world_info?.globalSelect);
+    }
+    catch { /* ignore */ }
+    try {
+        push(g?.power_user?.world_info?.globalSelect);
+    }
+    catch { /* ignore */ }
+    try {
+        const select = typeof document !== 'undefined' ? document.querySelector?.('#world_info') : null;
+        if (select?.selectedOptions) {
+            push(Array.from(select.selectedOptions).map((o) => o.textContent || o.label || o.value));
+        }
+    }
+    catch { /* ignore */ }
+    return [...new Set(names.filter(Boolean))];
+}
+/**
+ * 获取「正文实际能接收到的」世界书名称全集：激活全局书 + 角色卡绑定书（primary+additional）。
+ * 填表「正文接收」来源的书列表真源（UI 与运行时共用）。
+ */
+async function getActiveWorldbookNamesForFill_ACU() {
+    const names = getActiveGlobalWorldbookNames_ACU();
+    try {
+        const charLorebooks = await getCharLorebooks_ACU({ type: 'all' });
+        if (charLorebooks?.primary) {
+            const p = String(charLorebooks.primary).trim();
+            if (p && !names.includes(p))
+                names.push(p);
+        }
+        if (Array.isArray(charLorebooks?.additional)) {
+            for (const b of charLorebooks.additional) {
+                const n = String(b ?? '').trim();
+                if (n && !names.includes(n))
+                    names.push(n);
+            }
+        }
+    }
+    catch { /* 角色书读取失败不影响激活书 */ }
+    return names;
+}
 async function getCurrentCharPrimaryLorebook_ACU() {
     if (!TavernHelper_API_ACU || typeof TavernHelper_API_ACU.getCurrentCharPrimaryLorebook !== 'function') {
         logWarn_ACU('[WorldbookGateway] getCurrentCharPrimaryLorebook 不可用，返回 null');
@@ -61823,6 +61891,16 @@ async function prepareAIInput_ACU(messages, updateMode = 'standard', targetSheet
             const binding = await getCurrentCharacterWorldbookBinding_ACU();
             return binding?.orderedNames || [];
         },
+        // 来源 6（数据库集成）：正文接收模式下读激活全局书 + 角色绑定书（agent 绿灯书已由来源 3 覆盖）
+        async () => {
+            if (worldbookConfig?.source !== 'active')
+                return [];
+            try {
+                return await getActiveWorldbookNamesForFill_ACU();
+            }
+            catch { /* 激活书读取失败不影响其它来源 */ }
+            return [];
+        },
     ]);
     const readScopeNames = [...syncReadScopeNames, ...asyncReadScopeNames];
     const [worldbookContent, worldbookDatabaseExcludedContent] = await Promise.all([
@@ -70727,6 +70805,27 @@ async function getCombinedWorldbookContent_ACU(initialScanTextOverride = '', opt
         let bookNames = [];
         if (worldbookConfig.source === 'manual') {
             bookNames = worldbookConfig.manualSelection || [];
+        }
+        else if (worldbookConfig.source === 'active') {
+            // 数据库集成：正文接收来源——激活全局书 + 角色卡绑定书 + agent 绿灯放行的书
+            // （agent 接管开启时正文会注入绿灯条目，填表应同步纳入）
+            try {
+                bookNames = await getActiveWorldbookNamesForFill_ACU();
+            }
+            catch {
+                logError_ACU('[Worldbook] 获取正文接收世界书失败:', {
+                    phase: 'resolve_active',
+                    error: { category: 'read_failed' },
+                });
+                return '';
+            }
+            const greenlightBooks = (Array.isArray(options?.agentGreenlights) ? options.agentGreenlights : [])
+                .map((ref) => String(ref?.bookName || '').trim())
+                .filter(Boolean);
+            for (const gb of greenlightBooks) {
+                if (gb && !bookNames.includes(gb))
+                    bookNames.push(gb);
+            }
         }
         else { // 'character' mode
             try {
@@ -111057,7 +111156,7 @@ const WARDROBE_DIMENSION_LABELS = Object.freeze({ masking: '掩形', support: '�
 const PREG_FIT_GAP_LABELS = Object.freeze({ masking: '掩形', support: '支撑', capacity: '容身', convenience: '便捷' });
 const MAX_PROGRESS_BAR_CAP = 200;
 // 构建时间戳（rollup replace 注入；测试/dev 环境无替换时回退 'dev'）——全局水印用，截图辨别构建
-const ACU_BUILD_STAMP = typeof "20260816-18" === 'string' ? "20260816-18" : 'dev';
+const ACU_BUILD_STAMP = typeof "20260818-13" === 'string' ? "20260818-13" : 'dev';
 const MODAL_EDGE_GAP = 24;
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const FLOATING_SPHERE_POSITION_KEY = `${MODULE_NAME}_floating_sphere_position`;
@@ -155857,7 +155956,8 @@ var _sfc_main$u = /*@__PURE__*/ defineComponent({
         names: {},
         status: {},
         error: {},
-        filterable: { type: Boolean, default: true }
+        filterable: { type: Boolean, default: true },
+        allowActive: { type: Boolean, default: false }
     },
     emits: ["update:source", "toggle-book"],
     setup(__props, { expose: __expose, emit: __emit }) {
@@ -155867,6 +155967,7 @@ var _sfc_main$u = /*@__PURE__*/ defineComponent({
         const filter = ref('');
         const sourceOptions = [
             { value: 'character', label: '跟随角色卡' },
+            ...(props.allowActive ? [{ value: 'active', label: '正文接收' }] : []),
             { value: 'manual', label: '手动选择' },
         ];
         const selectedSet = computed(() => new Set(props.selectedNames.filter(Boolean)));
@@ -155877,7 +155978,12 @@ var _sfc_main$u = /*@__PURE__*/ defineComponent({
             return props.names.filter(name => name.toLowerCase().includes(f));
         });
         function onSourceChange(value) {
-            emit('update:source', value === 'manual' ? 'manual' : 'character');
+            if (value === 'manual' || value === 'active') {
+                emit('update:source', value);
+            }
+            else {
+                emit('update:source', 'character');
+            }
         }
         const __returned__ = { props, emit, filter, sourceOptions, selectedSet, filteredNames, onSourceChange, AcuFormRow, AcuInput, AcuSegmentedControl, AcuText };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
@@ -155885,8 +155991,8 @@ var _sfc_main$u = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-v2-wb-source-picker[data-v-3bd327f1] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  min-width: 0;\n}\n.acu-v2-wb-source-picker__list[data-v-3bd327f1] {\r\n  min-width: 0;\r\n  max-height: 180px;\r\n  overflow-y: auto;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  padding: 8px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-2);\n}\n.acu-v2-wb-source-picker__list--disabled[data-v-3bd327f1] {\r\n  opacity: 0.65;\n}\n.acu-v2-wb-source-picker__item[data-v-3bd327f1] {\r\n  width: 100%;\r\n  min-width: 0;\r\n  min-height: 32px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 10px;\r\n  margin: 0;\r\n  padding: 7px 9px;\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font: inherit;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.4;\r\n  text-align: left;\r\n  cursor: pointer;\r\n  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-wb-source-picker__item[data-v-3bd327f1]:hover:not(:disabled) {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-wb-source-picker__item[data-v-3bd327f1]:disabled {\r\n  cursor: not-allowed;\n}\n.acu-v2-wb-source-picker__item[data-v-3bd327f1]:focus-visible {\r\n  outline: none;\r\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-v2-wb-source-picker__item--selected[data-v-3bd327f1] {\r\n  background: color-mix(in srgb, var(--acu-accent) 14%, transparent);\r\n  color: var(--acu-text-1);\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-accent) 42%, transparent);\n}\n.acu-v2-wb-source-picker__item--selected[data-v-3bd327f1]:hover:not(:disabled) {\r\n  background: color-mix(in srgb, var(--acu-accent) 20%, transparent);\r\n  color: var(--acu-text-1);\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-accent) 54%, transparent);\n}\n.acu-v2-wb-source-picker__item-label[data-v-3bd327f1] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-wb-source-picker__item-check[data-v-3bd327f1] {\r\n  flex-shrink: 0;\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  color: var(--acu-accent);\r\n  opacity: 0;\r\n  transform: scale(0.86);\r\n  transition: opacity 0.15s ease, transform 0.15s ease;\n}\n.acu-v2-wb-source-picker__item--selected .acu-v2-wb-source-picker__item-check[data-v-3bd327f1] {\r\n  opacity: 1;\r\n  transform: scale(1);\n}\n.acu-v2-wb-source-picker__empty[data-v-3bd327f1] {\r\n  padding: 8px 2px;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: center;\n}\n.acu-v2-wb-source-picker__error[data-v-3bd327f1] {\r\n  margin: 0;\n}\r\n", "src/presentation-v2/components/WorldbookSourcePicker.vue#style-0-3bd327f1");
-var WorldbookSourcePicker_vue_vue_type_style_index_0_scoped_3bd327f1_lang = null;
+injectSfcStyle("\n.acu-v2-wb-source-picker[data-v-bb0a28c7] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  min-width: 0;\n}\n.acu-v2-wb-source-picker__list[data-v-bb0a28c7] {\r\n  min-width: 0;\r\n  max-height: 180px;\r\n  overflow-y: auto;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  padding: 8px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-2);\n}\n.acu-v2-wb-source-picker__list--disabled[data-v-bb0a28c7] {\r\n  opacity: 0.65;\n}\n.acu-v2-wb-source-picker__item[data-v-bb0a28c7] {\r\n  width: 100%;\r\n  min-width: 0;\r\n  min-height: 32px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 10px;\r\n  margin: 0;\r\n  padding: 7px 9px;\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font: inherit;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.4;\r\n  text-align: left;\r\n  cursor: pointer;\r\n  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-wb-source-picker__item[data-v-bb0a28c7]:hover:not(:disabled) {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-wb-source-picker__item[data-v-bb0a28c7]:disabled {\r\n  cursor: not-allowed;\n}\n.acu-v2-wb-source-picker__item[data-v-bb0a28c7]:focus-visible {\r\n  outline: none;\r\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-v2-wb-source-picker__item--selected[data-v-bb0a28c7] {\r\n  background: color-mix(in srgb, var(--acu-accent) 14%, transparent);\r\n  color: var(--acu-text-1);\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-accent) 42%, transparent);\n}\n.acu-v2-wb-source-picker__item--selected[data-v-bb0a28c7]:hover:not(:disabled) {\r\n  background: color-mix(in srgb, var(--acu-accent) 20%, transparent);\r\n  color: var(--acu-text-1);\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-accent) 54%, transparent);\n}\n.acu-v2-wb-source-picker__item-label[data-v-bb0a28c7] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-wb-source-picker__item-check[data-v-bb0a28c7] {\r\n  flex-shrink: 0;\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  color: var(--acu-accent);\r\n  opacity: 0;\r\n  transform: scale(0.86);\r\n  transition: opacity 0.15s ease, transform 0.15s ease;\n}\n.acu-v2-wb-source-picker__item--selected .acu-v2-wb-source-picker__item-check[data-v-bb0a28c7] {\r\n  opacity: 1;\r\n  transform: scale(1);\n}\n.acu-v2-wb-source-picker__empty[data-v-bb0a28c7] {\r\n  padding: 8px 2px;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: center;\n}\n.acu-v2-wb-source-picker__error[data-v-bb0a28c7] {\r\n  margin: 0;\n}\r\n", "src/presentation-v2/components/WorldbookSourcePicker.vue#style-0-bb0a28c7");
+var WorldbookSourcePicker_vue_vue_type_style_index_0_scoped_bb0a28c7_lang = null;
 
 const _hoisted_1$u = { class: "acu-v2-wb-source-picker" };
 const _hoisted_2$p = [
@@ -155985,7 +156091,7 @@ function _sfc_render$u(_ctx, _cache, $props, $setup, $data, $options) {
 		})) : createCommentVNode("v-if", true)
 	]);
 }
-var WorldbookSourcePicker = /* @__PURE__ */ _export_sfc(_sfc_main$u, [["render", _sfc_render$u], ["__scopeId", "data-v-3bd327f1"]]);
+var WorldbookSourcePicker = /* @__PURE__ */ _export_sfc(_sfc_main$u, [["render", _sfc_render$u], ["__scopeId", "data-v-bb0a28c7"]]);
 
 var _sfc_main$t = /*@__PURE__*/ defineComponent({
     __name: 'WorldbookEntryList',
@@ -156397,7 +156503,8 @@ var _sfc_main$r = /*@__PURE__*/ defineComponent({
         entryStatus: { default: 'success' },
         entryError: { default: '' },
         emptyText: { default: '所选世界书中无可显示的条目。' },
-        filterable: { type: Boolean, default: true }
+        filterable: { type: Boolean, default: true },
+        allowActive: { type: Boolean, default: false }
     },
     emits: ["update:source", "toggle-book", "update:filter", "select-all", "deselect-all", "toggle", "toggle-group"],
     setup(__props, { expose: __expose }) {
@@ -156408,8 +156515,8 @@ var _sfc_main$r = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-v2-wb-entry-picker[data-v-648a8ff3] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\r\n  min-width: 0;\n}\n.acu-v2-wb-entry-picker__hint[data-v-648a8ff3] {\r\n  margin: 0;\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  color: var(--acu-text-3);\n}\n.acu-v2-wb-entry-picker__hint strong[data-v-648a8ff3] {\r\n  color: var(--acu-text-1);\r\n  font-weight: 500;\n}\r\n\r\n\r\n", "src/presentation-v2/components/WorldbookEntryPickerBody.vue#style-0-648a8ff3");
-var WorldbookEntryPickerBody_vue_vue_type_style_index_0_scoped_648a8ff3_lang = null;
+injectSfcStyle("\n.acu-v2-wb-entry-picker[data-v-d0e4bc34] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\r\n  min-width: 0;\n}\n.acu-v2-wb-entry-picker__hint[data-v-d0e4bc34] {\r\n  margin: 0;\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  color: var(--acu-text-3);\n}\n.acu-v2-wb-entry-picker__hint strong[data-v-d0e4bc34] {\r\n  color: var(--acu-text-1);\r\n  font-weight: 500;\n}\r\n\r\n\r\n", "src/presentation-v2/components/WorldbookEntryPickerBody.vue#style-0-d0e4bc34");
+var WorldbookEntryPickerBody_vue_vue_type_style_index_0_scoped_d0e4bc34_lang = null;
 
 const _hoisted_1$r = { class: "acu-v2-wb-entry-picker" };
 const _hoisted_2$n = { class: "acu-v2-wb-entry-picker__hint" };
@@ -156422,6 +156529,7 @@ function _sfc_render$r(_ctx, _cache, $props, $setup, $data, $options) {
 			status: $props.selectorStatus,
 			error: $props.selectorError,
 			filterable: $props.filterable,
+			"allow-active": $props.allowActive,
 			"onUpdate:source": _cache[0] || (_cache[0] = ($event) => _ctx.$emit("update:source", $event)),
 			onToggleBook: _cache[1] || (_cache[1] = (name, checked) => _ctx.$emit("toggle-book", name, checked))
 		}, null, 8, [
@@ -156430,7 +156538,8 @@ function _sfc_render$r(_ctx, _cache, $props, $setup, $data, $options) {
 			"names",
 			"status",
 			"error",
-			"filterable"
+			"filterable",
+			"allow-active"
 		]),
 		createBaseVNode("p", _hoisted_2$n, [_cache[7] || (_cache[7] = createTextVNode(
 			" 目前已选: ",
@@ -156472,7 +156581,7 @@ function _sfc_render$r(_ctx, _cache, $props, $setup, $data, $options) {
 		])
 	]);
 }
-var WorldbookEntryPickerBody = /* @__PURE__ */ _export_sfc(_sfc_main$r, [["render", _sfc_render$r], ["__scopeId", "data-v-648a8ff3"]]);
+var WorldbookEntryPickerBody = /* @__PURE__ */ _export_sfc(_sfc_main$r, [["render", _sfc_render$r], ["__scopeId", "data-v-d0e4bc34"]]);
 
 /**
  * useFormFillInjectionTarget — 填表"注入目标世界书"（Component A，§4.2）
@@ -156610,7 +156719,7 @@ function useFormFillWorldbookConfig() {
     const manualBook = computed(() => manualSelection.value[0] || '');
     function refreshFromSettings() {
         const cfg = getCurrentWorldbookConfig_ACU();
-        source.value = cfg.source === 'manual' ? 'manual' : 'character';
+        source.value = cfg.source === 'manual' ? 'manual' : (cfg.source === 'active' ? 'active' : 'character');
         cfg.manualSelection = normalizeSelection$1(cfg.manualSelection);
         manualSelection.value = [...cfg.manualSelection];
     }
@@ -156643,6 +156752,14 @@ function useFormFillWorldbookConfig() {
         const cfg = getCurrentWorldbookConfig_ACU();
         if (cfg.source === 'manual') {
             return normalizeSelection$1(cfg.manualSelection);
+        }
+        if (cfg.source === 'active') {
+            // 正文接收：激活全局书 + 角色卡绑定书（agent 绿灯书由运行时按 options.agentGreenlights 并入）
+            try {
+                return await getActiveWorldbookNamesForFill_ACU();
+            }
+            catch { /* empty */ }
+            return [];
         }
         const names = [];
         try {
@@ -156972,6 +157089,9 @@ var _sfc_main$q = /*@__PURE__*/ defineComponent({
                     ? `角色卡所有世界书 · 主册 ${charPrimary}`
                     : '角色卡所有世界书';
             }
+            else if (entriesSource.source.value === 'active') {
+                entriesSourceLabel.value = names.length ? names.join('、') : '（未找到正文接收的世界书）';
+            }
             else {
                 const names = entriesSource.manualSelection.value;
                 entriesSourceLabel.value = names.length ? names.join('、') : '（未选择）';
@@ -156980,6 +157100,9 @@ var _sfc_main$q = /*@__PURE__*/ defineComponent({
         function resolveEntryEmptyText(names) {
             if (entriesSource.source.value === 'character' && names.length === 0) {
                 return tableCopy.worldbook.emptyCharacter;
+            }
+            if (entriesSource.source.value === 'active' && names.length === 0) {
+                return '未找到正文能接收到的世界书（无激活全局书且角色卡未绑定）。可切回「跟随角色卡」或「手动选择」。';
             }
             if (entriesSource.source.value === 'manual' && entriesSource.manualSelection.value.length === 0) {
                 return tableCopy.worldbook.emptyManual;
@@ -157020,8 +157143,8 @@ var _sfc_main$q = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-v2-table-page[data-v-7cb55cc9] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-table-page__col[data-v-7cb55cc9] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 16px;\r\n  min-width: 0;\n}\n.acu-v2-table-page__filter[data-v-7cb55cc9] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-v2-table-page__toggle-row[data-v-7cb55cc9] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\n}\n.acu-v2-table-page__toggle-head[data-v-7cb55cc9] {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\n}\n.acu-v2-table-page__toggle-label[data-v-7cb55cc9] {\r\n  min-width: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 500;\r\n  line-height: 1.35;\n}\n.acu-v2-table-page__toggle-desc[data-v-7cb55cc9] {\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.5;\n}\n.acu-v2-table-page__actions[data-v-7cb55cc9] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-table-page__status-line[data-v-7cb55cc9] {\r\n  margin: 0 0 10px;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-3);\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  flex-wrap: wrap;\n}\n.acu-v2-table-page__status-line strong[data-v-7cb55cc9] {\r\n  color: var(--acu-text-1);\r\n  font-weight: 500;\n}\n.acu-v2-table-page__preset-row[data-v-7cb55cc9] {\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) repeat(3, max-content);\r\n  gap: 6px;\r\n  align-items: stretch;\r\n  min-width: 0;\n}\n.acu-v2-table-page__badge[data-v-7cb55cc9] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  padding: 2px 8px;\r\n  border-radius: var(--acu-radius-sm);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 500;\n}\n.acu-v2-table-page__badge--inherit[data-v-7cb55cc9] {\r\n  background: color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  color: var(--acu-text-2);\n}\n.acu-v2-table-page__badge--override[data-v-7cb55cc9] {\r\n  background: var(--acu-accent);\r\n  color: var(--acu-on-accent);\n}\n.acu-v2-table-page__hint[data-v-7cb55cc9] {\r\n  margin: 0;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-3);\n}\n.acu-v2-table-page__hint strong[data-v-7cb55cc9] {\r\n  color: var(--acu-text-1);\r\n  font-weight: 500;\n}\n@media (max-width: 860px) {\n.acu-v2-table-page[data-v-7cb55cc9] {\r\n    padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/TablePage.vue#style-0-7cb55cc9");
-var TablePage_vue_vue_type_style_index_0_scoped_7cb55cc9_lang = null;
+injectSfcStyle("\n.acu-v2-table-page[data-v-a9f35fd2] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-table-page__col[data-v-a9f35fd2] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 16px;\r\n  min-width: 0;\n}\n.acu-v2-table-page__filter[data-v-a9f35fd2] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-v2-table-page__toggle-row[data-v-a9f35fd2] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\n}\n.acu-v2-table-page__toggle-head[data-v-a9f35fd2] {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\n}\n.acu-v2-table-page__toggle-label[data-v-a9f35fd2] {\r\n  min-width: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 500;\r\n  line-height: 1.35;\n}\n.acu-v2-table-page__toggle-desc[data-v-a9f35fd2] {\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.5;\n}\n.acu-v2-table-page__actions[data-v-a9f35fd2] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-table-page__status-line[data-v-a9f35fd2] {\r\n  margin: 0 0 10px;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-3);\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  flex-wrap: wrap;\n}\n.acu-v2-table-page__status-line strong[data-v-a9f35fd2] {\r\n  color: var(--acu-text-1);\r\n  font-weight: 500;\n}\n.acu-v2-table-page__preset-row[data-v-a9f35fd2] {\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) repeat(3, max-content);\r\n  gap: 6px;\r\n  align-items: stretch;\r\n  min-width: 0;\n}\n.acu-v2-table-page__badge[data-v-a9f35fd2] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  padding: 2px 8px;\r\n  border-radius: var(--acu-radius-sm);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 500;\n}\n.acu-v2-table-page__badge--inherit[data-v-a9f35fd2] {\r\n  background: color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  color: var(--acu-text-2);\n}\n.acu-v2-table-page__badge--override[data-v-a9f35fd2] {\r\n  background: var(--acu-accent);\r\n  color: var(--acu-on-accent);\n}\n.acu-v2-table-page__hint[data-v-a9f35fd2] {\r\n  margin: 0;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-3);\n}\n.acu-v2-table-page__hint strong[data-v-a9f35fd2] {\r\n  color: var(--acu-text-1);\r\n  font-weight: 500;\n}\n@media (max-width: 860px) {\n.acu-v2-table-page[data-v-a9f35fd2] {\r\n    padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/TablePage.vue#style-0-a9f35fd2");
+var TablePage_vue_vue_type_style_index_0_scoped_a9f35fd2_lang = null;
 
 const _hoisted_1$q = { class: "acu-v2-table-page" };
 const _hoisted_2$m = { class: "acu-v2-table-page__col" };
@@ -157054,6 +157177,7 @@ function _sfc_render$q(_ctx, _cache, $props, $setup, $data, $options) {
 					groups: $setup.entries.groups.value,
 					loading: $setup.entries.status.value === "loading",
 					"empty-text": $setup.entryEmptyText,
+					"allow-active": "",
 					"onUpdate:source": _cache[1] || (_cache[1] = ($event) => $setup.onEntriesSourceChange($event)),
 					onToggleBook: $setup.onEntriesManualBookToggle,
 					onSelectAll: _cache[2] || (_cache[2] = ($event) => $setup.entries.selectAll()),
@@ -157228,7 +157352,7 @@ function _sfc_render$q(_ctx, _cache, $props, $setup, $data, $options) {
 		])
 	]);
 }
-var TablePage = /* @__PURE__ */ _export_sfc(_sfc_main$q, [["render", _sfc_render$q], ["__scopeId", "data-v-7cb55cc9"]]);
+var TablePage = /* @__PURE__ */ _export_sfc(_sfc_main$q, [["render", _sfc_render$q], ["__scopeId", "data-v-a9f35fd2"]]);
 
 var _sfc_main$p = /*@__PURE__*/ defineComponent({
     __name: 'ApiPage',
@@ -164879,7 +165003,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260816-18";
+        const stamp = "20260818-13";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

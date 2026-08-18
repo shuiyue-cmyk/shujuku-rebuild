@@ -55,7 +55,7 @@ import AcuSegmentedControl, { type AcuSegmentedOption } from './_lib/AcuSegmente
 import AcuText from './_lib/AcuText.vue';
 import type { WorldbookLoadStatus } from '../composables/useWorldbookSelector';
 
-type WorldbookSource = 'character' | 'manual';
+type WorldbookSource = 'character' | 'manual' | 'active';
 
 const props = withDefaults(defineProps<{
   source: WorldbookSource;
@@ -64,8 +64,11 @@ const props = withDefaults(defineProps<{
   status: WorldbookLoadStatus;
   error: string;
   filterable?: boolean;
+  /** 是否显示「正文接收」来源（填表页用；剧情推进/Agent 页不显示） */
+  allowActive?: boolean;
 }>(), {
   filterable: true,
+  allowActive: false,
 });
 
 const emit = defineEmits<{
@@ -77,6 +80,7 @@ const filter = ref('');
 
 const sourceOptions: AcuSegmentedOption[] = [
   { value: 'character', label: '跟随角色卡' },
+  ...(props.allowActive ? [{ value: 'active', label: '正文接收' }] : []),
   { value: 'manual', label: '手动选择' },
 ];
 
@@ -89,7 +93,11 @@ const filteredNames = computed<string[]>(() => {
 });
 
 function onSourceChange(value: string): void {
-  emit('update:source', value === 'manual' ? 'manual' : 'character');
+  if (value === 'manual' || value === 'active') {
+    emit('update:source', value);
+  } else {
+    emit('update:source', 'character');
+  }
 }
 </script>
 
