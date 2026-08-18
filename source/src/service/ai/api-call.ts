@@ -82,11 +82,15 @@ export function buildCustomApiRequestBody_ACU(
     max_tokens: maxTokens,
     temperature,
     top_p: topP,
-    stream: settings_ACU.streamingEnabled === true,
+    // 流式输出（预设级优先）：effectiveApiConfig.streamingEnabled 未定义时回退全局 settings_ACU.streamingEnabled
+    stream: effectiveApiConfig.streamingEnabled !== undefined
+      ? effectiveApiConfig.streamingEnabled === true
+      : settings_ACU.streamingEnabled === true,
     chat_completion_source: 'custom',
     group_names: [],
     include_reasoning: false,
-    reasoning_effort: 'medium',
+    // 思考强度（预设级优先）：effectiveApiConfig.reasoningEffort 未定义时回退全局/默认 medium
+    reasoning_effort: effectiveApiConfig.reasoningEffort || settings_ACU.reasoningEffort || 'medium',
     enable_web_search: false,
     request_images: false,
     custom_prompt_post_processing: 'strict',

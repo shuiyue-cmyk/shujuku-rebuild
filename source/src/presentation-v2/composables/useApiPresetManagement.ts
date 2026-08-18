@@ -13,6 +13,10 @@ export interface ApiPresetDraft {
   requestHeaders: string;
   /** 非预填充支持（预设级）：assistant 消息改写为 user +「助手：」前缀 */
   nonPrefillSupport: boolean;
+  /** 流式输出（预设级） */
+  streamingEnabled: boolean;
+  /** 思考强度（预设级）：low / medium / high / max */
+  reasoningEffort: string;
 }
 
 /** 连接模式（酒馆主 API / 酒馆预设已剥离，恒为自定义 API） */
@@ -31,6 +35,8 @@ export function createEmptyApiPresetDraft(): ApiPresetDraft {
     excludeBodyParams: '',
     requestHeaders: '',
     nonPrefillSupport: false,
+    streamingEnabled: false,
+    reasoningEffort: 'medium',
   };
 }
 
@@ -47,6 +53,8 @@ export function apiPresetDraftFromPreset(preset: AcuV2ApiPreset): ApiPresetDraft
     excludeBodyParams: preset.apiConfig.excludeBodyParams || '',
     requestHeaders: preset.apiConfig.requestHeaders || '',
     nonPrefillSupport: preset.nonPrefillSupport === true,
+    streamingEnabled: preset.apiConfig.streamingEnabled === true,
+    reasoningEffort: preset.apiConfig.reasoningEffort || 'medium',
   };
 }
 
@@ -63,6 +71,10 @@ export function apiPresetFromDraft(draft: ApiPresetDraft): AcuV2ApiPreset {
       bodyParams: draft.bodyParams || '',
       excludeBodyParams: draft.excludeBodyParams || '',
       requestHeaders: draft.requestHeaders || '',
+      streamingEnabled: draft.streamingEnabled === true,
+      reasoningEffort: (['low', 'medium', 'high', 'max'] as const).includes(draft.reasoningEffort as any)
+        ? (draft.reasoningEffort as 'low' | 'medium' | 'high' | 'max')
+        : 'medium',
     },
     nonPrefillSupport: draft.nonPrefillSupport === true,
   };

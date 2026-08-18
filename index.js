@@ -63991,11 +63991,15 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
         max_tokens: maxTokens,
         temperature,
         top_p: topP,
-        stream: settings_ACU.streamingEnabled === true,
+        // 流式输出（预设级优先）：effectiveApiConfig.streamingEnabled 未定义时回退全局 settings_ACU.streamingEnabled
+        stream: effectiveApiConfig.streamingEnabled !== undefined
+            ? effectiveApiConfig.streamingEnabled === true
+            : settings_ACU.streamingEnabled === true,
         chat_completion_source: 'custom',
         group_names: [],
         include_reasoning: false,
-        reasoning_effort: 'medium',
+        // 思考强度（预设级优先）：effectiveApiConfig.reasoningEffort 未定义时回退全局/默认 medium
+        reasoning_effort: effectiveApiConfig.reasoningEffort || settings_ACU.reasoningEffort || 'medium',
         enable_web_search: false,
         request_images: false,
         custom_prompt_post_processing: 'strict',
@@ -145129,6 +145133,8 @@ function createEmptyApiPresetDraft() {
         excludeBodyParams: '',
         requestHeaders: '',
         nonPrefillSupport: false,
+        streamingEnabled: false,
+        reasoningEffort: 'medium',
     };
 }
 function apiPresetDraftFromPreset(preset) {
@@ -145144,6 +145150,8 @@ function apiPresetDraftFromPreset(preset) {
         excludeBodyParams: preset.apiConfig.excludeBodyParams || '',
         requestHeaders: preset.apiConfig.requestHeaders || '',
         nonPrefillSupport: preset.nonPrefillSupport === true,
+        streamingEnabled: preset.apiConfig.streamingEnabled === true,
+        reasoningEffort: preset.apiConfig.reasoningEffort || 'medium',
     };
 }
 function apiPresetFromDraft(draft) {
@@ -145159,6 +145167,10 @@ function apiPresetFromDraft(draft) {
             bodyParams: draft.bodyParams || '',
             excludeBodyParams: draft.excludeBodyParams || '',
             requestHeaders: draft.requestHeaders || '',
+            streamingEnabled: draft.streamingEnabled === true,
+            reasoningEffort: ['low', 'medium', 'high', 'max'].includes(draft.reasoningEffort)
+                ? draft.reasoningEffort
+                : 'medium',
         },
         nonPrefillSupport: draft.nonPrefillSupport === true,
     };
@@ -145951,7 +145963,7 @@ const _hoisted_8$k = {
 	key: 2,
 	class: "fa-solid fa-check acu-preset-dd__check"
 };
-const _hoisted_9$g = {
+const _hoisted_9$f = {
 	key: 0,
 	class: "acu-preset-dd__empty"
 };
@@ -146022,7 +146034,7 @@ function _sfc_render$T(_ctx, _cache, $props, $setup, $data, $options) {
 			/* KEYED_FRAGMENT */
 		)), !$props.items.length ? (openBlock(), createElementBlock(
 			"li",
-			_hoisted_9$g,
+			_hoisted_9$f,
 			toDisplayString($props.emptyText),
 			1
 			/* TEXT */
@@ -146198,17 +146210,17 @@ function _sfc_render$R(_ctx, _cache, $props, $setup, $data, $options) {
 }
 var AcuToggle = /* @__PURE__ */ _export_sfc(_sfc_main$R, [["render", _sfc_render$R], ["__scopeId", "data-v-61c4c790"]]);
 
-// ─── 流式输出（全局 API 行为开关，与预设同级） ───
+// ─── 思考强度选项（每个 API 预设独立） ───
 var _sfc_main$Q = /*@__PURE__*/ defineComponent({
     __name: 'ApiConfigPanel',
     setup(__props, { expose: __expose }) {
         __expose();
-        const streamingEnabled = ref(settings_ACU.streamingEnabled === true);
-        function setStreamingEnabled(value) {
-            streamingEnabled.value = !!value;
-            settings_ACU.streamingEnabled = streamingEnabled.value;
-            saveSettings_ACU();
-        }
+        const reasoningEffortOptions = [
+            { value: "low", label: "Low" },
+            { value: "medium", label: "Medium" },
+            { value: "high", label: "High" },
+            { value: "max", label: "Max" },
+        ];
         const store = useApiPresetStore();
         const dialogStore = useDialogStore();
         const toast = useToastStore();
@@ -146331,30 +146343,29 @@ var _sfc_main$Q = /*@__PURE__*/ defineComponent({
             });
         }
         watch(() => store.activePresetName, () => syncActiveDraft(), { flush: "sync" });
-        const __returned__ = { streamingEnabled, setStreamingEnabled, store, dialogStore, toast, formMode, activeDraft, activeDraftOriginalName, activeDraftSnapshot, activeDraftError, activeDraftSavedAt, activeDraftDirty, modelSelectOptions, presetDropdownItems, refreshAll, syncActiveDraft, startCreateDraft, selectPreset, deletePreset, presetMeta, validateActiveDraft, saveActiveDraft, loadModelsForActive, get apiCopy() { return apiCopy; }, AcuButton, AcuFormRow, AcuIconButton, AcuInput, AcuMessage, AcuPanel, AcuTextarea, AcuPresetDropdown, AcuSelect, AcuToggle };
+        const __returned__ = { reasoningEffortOptions, store, dialogStore, toast, formMode, activeDraft, activeDraftOriginalName, activeDraftSnapshot, activeDraftError, activeDraftSavedAt, activeDraftDirty, modelSelectOptions, presetDropdownItems, refreshAll, syncActiveDraft, startCreateDraft, selectPreset, deletePreset, presetMeta, validateActiveDraft, saveActiveDraft, loadModelsForActive, get apiCopy() { return apiCopy; }, AcuButton, AcuFormRow, AcuIconButton, AcuInput, AcuMessage, AcuPanel, AcuTextarea, AcuPresetDropdown, AcuSelect, AcuToggle };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.acu-api-config-panel__select-row[data-v-ff3e4a93] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-ff3e4a93] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-ff3e4a93] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-ff3e4a93] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-ff3e4a93] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-ff3e4a93] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-ff3e4a93] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-ff3e4a93] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-ff3e4a93] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-ff3e4a93");
-var ApiConfigPanel_vue_vue_type_style_index_0_scoped_ff3e4a93_lang = null;
+injectSfcStyle("\n.acu-api-config-panel__select-row[data-v-78b69998] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-78b69998] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-78b69998] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-78b69998] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-78b69998] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-78b69998] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-78b69998] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-78b69998] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-78b69998] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-78b69998");
+var ApiConfigPanel_vue_vue_type_style_index_0_scoped_78b69998_lang = null;
 
 const _hoisted_1$O = { class: "acu-api-config-panel__select-row" };
-const _hoisted_2$H = { class: "acu-api-config-panel__behavior" };
-const _hoisted_3$z = { class: "acu-api-config-panel__editor-section" };
-const _hoisted_4$u = { class: "acu-api-config-panel__inline-action" };
-const _hoisted_5$o = {
+const _hoisted_2$H = { class: "acu-api-config-panel__editor-section" };
+const _hoisted_3$z = { class: "acu-api-config-panel__inline-action" };
+const _hoisted_4$u = {
 	key: 0,
 	class: "acu-api-config-panel__muted"
 };
-const _hoisted_6$n = {
+const _hoisted_5$o = {
 	key: 1,
 	class: "acu-api-config-panel__danger"
 };
-const _hoisted_7$k = { class: "acu-api-config-panel__two-col" };
-const _hoisted_8$j = { class: "acu-api-config-panel__editor-section" };
-const _hoisted_9$f = { class: "acu-api-config-panel__actions" };
+const _hoisted_6$n = { class: "acu-api-config-panel__two-col" };
+const _hoisted_7$k = { class: "acu-api-config-panel__editor-section" };
+const _hoisted_8$j = { class: "acu-api-config-panel__actions" };
 function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["AcuPanel"], {
 		title: $setup.apiCopy.panels.preset.title,
@@ -146365,7 +146376,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 				key: 0,
 				kind: "warning"
 			}, {
-				default: withCtx(() => [..._cache[13] || (_cache[13] = [createTextVNode(
+				default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
 					" 暂无可用 API 预设，请新建并设为当前或全局默认。 ",
 					-1
 					/* CACHED */
@@ -146406,12 +146417,6 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 				])]),
 				_: 1
 			}),
-			createBaseVNode("div", _hoisted_2$H, [createVNode($setup["AcuToggle"], {
-				"model-value": $setup.streamingEnabled,
-				label: "流式输出",
-				description: "开启后 AI 响应以流式方式输出（用于对话类调用）。",
-				"onUpdate:modelValue": $setup.setStreamingEnabled
-			}, null, 8, ["model-value"])]),
 			$setup.formMode !== "empty" ? (openBlock(), createElementBlock(
 				"form",
 				{
@@ -146429,7 +146434,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 						}, null, 8, ["modelValue"])]),
 						_: 1
 					}),
-					createBaseVNode("div", _hoisted_3$z, [
+					createBaseVNode("div", _hoisted_2$H, [
 						createVNode($setup["AcuFormRow"], { label: "端点(基础URL)" }, {
 							default: withCtx(() => [createVNode($setup["AcuInput"], {
 								modelValue: $setup.activeDraft.url,
@@ -146456,16 +146461,16 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 							}, null, 8, ["modelValue"])]),
 							_: 1
 						}),
-						createBaseVNode("div", _hoisted_4$u, [createVNode($setup["AcuButton"], { onClick: $setup.loadModelsForActive }, {
-							default: withCtx(() => [..._cache[14] || (_cache[14] = [createTextVNode(
+						createBaseVNode("div", _hoisted_3$z, [createVNode($setup["AcuButton"], { onClick: $setup.loadModelsForActive }, {
+							default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
 								"加载模型",
 								-1
 								/* CACHED */
 							)])]),
 							_: 1
-						}), $setup.store.modelLoadStatus === "loading" ? (openBlock(), createElementBlock("span", _hoisted_5$o, "加载中...")) : $setup.store.modelLoadStatus === "error" ? (openBlock(), createElementBlock(
+						}), $setup.store.modelLoadStatus === "loading" ? (openBlock(), createElementBlock("span", _hoisted_4$u, "加载中...")) : $setup.store.modelLoadStatus === "error" ? (openBlock(), createElementBlock(
 							"span",
-							_hoisted_6$n,
+							_hoisted_5$o,
 							toDisplayString($setup.store.modelLoadError),
 							1
 							/* TEXT */
@@ -146483,7 +146488,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 							_: 1
 						})) : createCommentVNode("v-if", true)
 					]),
-					createBaseVNode("div", _hoisted_7$k, [createVNode($setup["AcuFormRow"], { label: "最大回复长度" }, {
+					createBaseVNode("div", _hoisted_6$n, [createVNode($setup["AcuFormRow"], { label: "最大回复长度" }, {
 						default: withCtx(() => [createVNode($setup["AcuInput"], {
 							modelValue: $setup.activeDraft.max_tokens,
 							"onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => $setup.activeDraft.max_tokens = $event),
@@ -146504,19 +146509,37 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 						_: 1
 					})]),
 					createVNode($setup["AcuToggle"], {
+						modelValue: $setup.activeDraft.streamingEnabled,
+						"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.activeDraft.streamingEnabled = $event),
+						label: "流式输出",
+						description: "该预设开启后 AI 响应以流式方式输出（用于对话类调用）。每个 API 预设独立。"
+					}, null, 8, ["modelValue"]),
+					createVNode($setup["AcuFormRow"], {
+						label: "思考强度",
+						hint: "reasoning_effort，随预设保存。每个 API 预设独立。"
+					}, {
+						default: withCtx(() => [createVNode($setup["AcuSelect"], {
+							options: $setup.reasoningEffortOptions,
+							"model-value": $setup.activeDraft.reasoningEffort,
+							placeholder: "请选择",
+							"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.activeDraft.reasoningEffort = $event)
+						}, null, 8, ["model-value"])]),
+						_: 1
+					}),
+					createVNode($setup["AcuToggle"], {
 						modelValue: $setup.activeDraft.nonPrefillSupport,
-						"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.activeDraft.nonPrefillSupport = $event),
+						"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.activeDraft.nonPrefillSupport = $event),
 						label: "非预填充支持",
 						description: "该预设开启后，所有使用本预设的调用（剧情推进/填表/生理追踪等）会把 assistant 消息改写为 user，并在首行加上「助手：」前缀。用于不支持 assistant 预填充的模型/接口。"
 					}, null, 8, ["modelValue"]),
-					createBaseVNode("div", _hoisted_8$j, [
+					createBaseVNode("div", _hoisted_7$k, [
 						createVNode($setup["AcuFormRow"], {
 							label: "附加主体参数",
 							hint: "SillyTavern custom_include_body，填写 YAML object，会合并到最终模型请求体。"
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
 								modelValue: $setup.activeDraft.bodyParams,
-								"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.activeDraft.bodyParams = $event),
+								"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.activeDraft.bodyParams = $event),
 								rows: 3,
 								placeholder: "response_format:\n  type: json_object\ntop_k: 50"
 							}, null, 8, ["modelValue"])]),
@@ -146528,7 +146551,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
 								modelValue: $setup.activeDraft.excludeBodyParams,
-								"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.activeDraft.excludeBodyParams = $event),
+								"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.activeDraft.excludeBodyParams = $event),
 								rows: 2,
 								placeholder: "top_p, reasoning_effort"
 							}, null, 8, ["modelValue"])]),
@@ -146540,7 +146563,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
 								modelValue: $setup.activeDraft.requestHeaders,
-								"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.activeDraft.requestHeaders = $event),
+								"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.activeDraft.requestHeaders = $event),
 								rows: 2,
 								placeholder: "X-Custom-Header: value"
 							}, null, 8, ["modelValue"])]),
@@ -146558,11 +146581,11 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 						)]),
 						_: 1
 					})) : createCommentVNode("v-if", true),
-					createBaseVNode("div", _hoisted_9$f, [createVNode($setup["AcuButton"], {
+					createBaseVNode("div", _hoisted_8$j, [createVNode($setup["AcuButton"], {
 						disabled: !$setup.activeDraftDirty,
 						onClick: $setup.syncActiveDraft
 					}, {
-						default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
+						default: withCtx(() => [..._cache[17] || (_cache[17] = [createTextVNode(
 							"放弃修改",
 							-1
 							/* CACHED */
@@ -146587,7 +146610,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 				key: 2,
 				kind: "warning"
 			}, {
-				default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
+				default: withCtx(() => [..._cache[18] || (_cache[18] = [createTextVNode(
 					" 暂无可用 API 预设，请新建并设为当前或全局默认。 ",
 					-1
 					/* CACHED */
@@ -146598,7 +146621,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["title", "description"]);
 }
-var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$Q, [["render", _sfc_render$Q], ["__scopeId", "data-v-ff3e4a93"]]);
+var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$Q, [["render", _sfc_render$Q], ["__scopeId", "data-v-78b69998"]]);
 
 // ═══════════════════════════════════════════════════════════
 // service/settings/feature-preset-reference-service.ts — 功能级 API 预设引用

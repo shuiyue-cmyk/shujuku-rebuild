@@ -14,6 +14,9 @@ import { logWarn_ACU } from '../../shared/utils';
 
 export type ApiPresetApiMode_ACU = 'custom';
 
+/** 思考强度等级（reasoning_effort） */
+export type ReasoningEffort_ACU = 'low' | 'medium' | 'high' | 'max';
+
 export interface ApiPresetApiConfig_ACU {
   url: string;
   apiKey: string;
@@ -24,6 +27,10 @@ export interface ApiPresetApiConfig_ACU {
   bodyParams: string;
   excludeBodyParams: string;
   requestHeaders: string;
+  /** 流式输出（预设级）：该预设是否开启流式输出；缺省时回退全局 settings_ACU.streamingEnabled */
+  streamingEnabled?: boolean;
+  /** 思考强度（预设级）：该预设的 reasoning_effort 等级；缺省时回退全局 */
+  reasoningEffort?: ReasoningEffort_ACU;
 }
 
 export interface ApiPreset_ACU {

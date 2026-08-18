@@ -33,14 +33,6 @@
       </div>
     </AcuFormRow>
 
-    <div class="acu-api-config-panel__behavior">
-      <AcuToggle
-        :model-value="streamingEnabled"
-        label="流式输出"
-        description="开启后 AI 响应以流式方式输出（用于对话类调用）。"
-        @update:model-value="setStreamingEnabled"
-      />
-    </div>
 
     <form
       v-if="formMode !== 'empty'"
@@ -111,6 +103,20 @@
           />
         </AcuFormRow>
       </div>
+
+      <AcuToggle
+        v-model="activeDraft.streamingEnabled"
+        label="流式输出"
+        description="该预设开启后 AI 响应以流式方式输出（用于对话类调用）。每个 API 预设独立。"
+      />
+      <AcuFormRow label="思考强度" hint="reasoning_effort，随预设保存。每个 API 预设独立。">
+        <AcuSelect
+          :options="reasoningEffortOptions"
+          :model-value="activeDraft.reasoningEffort"
+          placeholder="请选择"
+          @update:model-value="activeDraft.reasoningEffort = $event"
+        />
+      </AcuFormRow>
 
       <AcuToggle
         v-model="activeDraft.nonPrefillSupport"
@@ -196,14 +202,13 @@ import AcuToggle from "./_lib/AcuToggle.vue";
 import { settings_ACU } from "../../service/runtime/state-manager";
 import { saveSettings_ACU } from "../../service/settings/settings-service";
 
-// ─── 流式输出（全局 API 行为开关，与预设同级） ───
-const streamingEnabled = ref(settings_ACU.streamingEnabled === true);
-
-function setStreamingEnabled(value: boolean): void {
-  streamingEnabled.value = !!value;
-  settings_ACU.streamingEnabled = streamingEnabled.value;
-  saveSettings_ACU();
-}
+// ─── 思考强度选项（每个 API 预设独立） ───
+const reasoningEffortOptions: AcuSelectOption[] = [
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+  { value: "max", label: "Max" },
+];
 
 const store = useApiPresetStore();
 const dialogStore = useDialogStore();
