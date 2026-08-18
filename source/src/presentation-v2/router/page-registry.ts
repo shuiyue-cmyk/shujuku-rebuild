@@ -57,7 +57,7 @@ export const ACU_V2_PAGE_REGISTRY: readonly AcuV2Page[] = Object.freeze([
   // 工具
   { id: 'data-mgmt', title: '数据管理', group: 'tool', component: markRaw(DataMgmtPage) },
   { id: 'advanced-tools', title: '高级工具', group: 'tool', component: markRaw(AdvancedToolsPage) },
-  { id: 'biotracker', title: '生理追踪', group: 'feature', component: markRaw(BiotrackerPage) },
+  { id: 'biotracker', title: '生理追踪', group: 'developer', component: markRaw(BiotrackerPage), visibleWhen: () => useDevOptionsStore().developerOptionsEnabled },
 
   // 开发者（plan §D24：仪表盘"启用开发者选项"总开关 gate）
   {

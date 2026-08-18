@@ -54,9 +54,9 @@ describe('router-store · pageRegistry 基线', () => {
     expect(byGroup).toEqual({
       overview: 2,
       config: 5,
-      feature: 3,
+      feature: 2,
       tool: 2,
-      developer: 1,
+      developer: 2,
     });
   });
 
@@ -77,7 +77,7 @@ describe('router-store · pageRegistry 基线', () => {
       ['content-replace', '正文替换', 'feature'],
       ['data-mgmt', '数据管理', 'tool'],
       ['advanced-tools', '高级工具', 'tool'],
-      ['biotracker', '生理追踪', 'feature'],
+      ['biotracker', '生理追踪', 'developer'],
       ['developer', '开发者选项', 'developer'],
     ]);
   });
@@ -217,9 +217,9 @@ describe('router-store · 高手模式可见性', () => {
     const r = m.router.useRouterStore();
     expect(r.visiblePagesByGroup.overview.length).toBe(1);
     expect(r.visiblePagesByGroup.config.length).toBe(5);
-    expect(r.visiblePagesByGroup.feature.length).toBe(1); // 生理追踪恒可见；交火/正文替换默认关闭
+    expect(r.visiblePagesByGroup.feature.length).toBe(0); // 交火/正文替换默认关闭；生理追踪已移到开发者组
     expect(r.visiblePagesByGroup.tool.length).toBe(2); // 数据管理 + 高级工具
-    expect(r.visiblePagesByGroup.developer.length).toBe(0); // 默认 developerOptionsEnabled=false
+    expect(r.visiblePagesByGroup.developer.length).toBe(0); // 默认 developerOptionsEnabled=false（开发者页 + 生理追踪均隐藏）
   });
 
   it('交火模式、正文替换都关闭时功能分组为空', async () => {
@@ -237,7 +237,7 @@ describe('router-store · 高手模式可见性', () => {
     m.pinia.setActivePinia(m.pinia.createPinia());
     const r = m.router.useRouterStore();
 
-    expect(r.visiblePagesByGroup.feature.map((p: any) => p.id)).toEqual(['biotracker']); // 生理追踪恒可见
+    expect(r.visiblePagesByGroup.feature.map((p: any) => p.id)).toEqual([]); // 生理追踪已移到开发者组
     expect(r.visiblePages.map(p => p.id)).not.toContain('vector-index');
     expect(r.visiblePages.map(p => p.id)).not.toContain('content-replace');
   });

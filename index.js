@@ -111156,7 +111156,7 @@ const WARDROBE_DIMENSION_LABELS = Object.freeze({ masking: '掩形', support: '�
 const PREG_FIT_GAP_LABELS = Object.freeze({ masking: '掩形', support: '支撑', capacity: '容身', convenience: '便捷' });
 const MAX_PROGRESS_BAR_CAP = 200;
 // 构建时间戳（rollup replace 注入；测试/dev 环境无替换时回退 'dev'）——全局水印用，截图辨别构建
-const ACU_BUILD_STAMP = typeof "20260818-13" === 'string' ? "20260818-13" : 'dev';
+const ACU_BUILD_STAMP = typeof "20260818-14" === 'string' ? "20260818-14" : 'dev';
 const MODAL_EDGE_GAP = 24;
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const FLOATING_SPHERE_POSITION_KEY = `${MODULE_NAME}_floating_sphere_position`;
@@ -154304,16 +154304,21 @@ function useDashboardPage() {
             description: dashboardCopy.toggles.vector.description,
             value: settings_ACU.summaryVectorIndexModeDefault === true,
         }, {
-            key: "biotrackerEnabled",
-            label: dashboardCopy.toggles.biotracker.label,
-            description: dashboardCopy.toggles.biotracker.description,
-            value: isBiotrackerEnabled_ACU(),
-        }, {
             key: "developerOptionsEnabled",
             label: dashboardCopy.developerToggle.label,
             description: dashboardCopy.developerToggle.description,
             value: developerOptionsEnabled.value,
         });
+        // 生理追踪（内置 biotracker）为开发者调试功能：仅在「启用开发者选项」开启时显示开关。
+        // 普通用户使用上游 biotracker 插件，不暴露数据库内置入口。
+        if (developerOptionsEnabled.value) {
+            items.push({
+                key: "biotrackerEnabled",
+                label: dashboardCopy.toggles.biotracker.label,
+                description: dashboardCopy.toggles.biotracker.description,
+                value: isBiotrackerEnabled_ACU(),
+            });
+        }
         return items;
     });
     const healthItems = computed(() => {
@@ -165003,7 +165008,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260818-13";
+        const stamp = "20260818-14";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -166936,7 +166941,7 @@ const ACU_V2_PAGE_REGISTRY = Object.freeze([
     // 工具
     { id: 'data-mgmt', title: '数据管理', group: 'tool', component: markRaw(DataMgmtPage) },
     { id: 'advanced-tools', title: '高级工具', group: 'tool', component: markRaw(AdvancedToolsPage) },
-    { id: 'biotracker', title: '生理追踪', group: 'feature', component: markRaw(BiotrackerPage) },
+    { id: 'biotracker', title: '生理追踪', group: 'developer', component: markRaw(BiotrackerPage), visibleWhen: () => useDevOptionsStore().developerOptionsEnabled },
     // 开发者（plan §D24：仪表盘"启用开发者选项"总开关 gate）
     {
         id: 'developer',
