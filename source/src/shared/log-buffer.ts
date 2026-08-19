@@ -97,10 +97,29 @@ export function extractTag(args: any[]): string {
   return UNCATEGORIZED_TAG;
 }
 
+const LOG_SENSITIVE_KEYS = /^(api[_-]?key|key|token|authorization|auth|password|proxy[_-]?password|secret|bearer)$/i;
+
+function maskSensitiveInLogValue(value: any, depth = 0): any {
+  if (depth > 6 || value === null || value === undefined) return value;
+  if (Array.isArray(value)) return value.map((v) => maskSensitiveInLogValue(v, depth + 1));
+  if (typeof value === 'object') {
+    const out: Record<string, any> = {};
+    for (const [k, v] of Object.entries(value)) {
+      if (LOG_SENSITIVE_KEYS.test(k)) out[k] = '***';
+      else out[k] = maskSensitiveInLogValue(v, depth + 1);
+    }
+    return out;
+  }
+  return value;
+}
+
 function normalizeLogArg_ACU(arg: any): string {
   if (arg === null) return 'null';
   if (arg === undefined) return 'undefined';
-  if (typeof arg === 'string') return arg;
+  if (typeof arg === 'string') {
+    // 对可能含敏感头/体的长字符串做键名脱敏（如 \"apiKey\":\"sk-...\"）
+    return arg.replace(/\"(api[_-]?key|authorization|token|password|secret)\"\s*:\s*\"[^\"]*\"/gi, '\"$1\":\"***\"');
+  }
   if (typeof arg === 'number' || typeof arg === 'boolean' || typeof arg === 'bigint') return String(arg);
   if (typeof arg === 'symbol') return String(arg);
   if (typeof arg === 'function') return `[Function ${arg.name || 'anonymous'}]`;
@@ -118,7 +137,8 @@ function normalizeLogArg_ACU(arg: any): string {
   }
 
   try {
-    const json = JSON.stringify(arg, null, 0);
+    const masked = maskSensitiveInLogValue(arg);
+    const json = JSON.stringify(masked, null, 0);
     if (json && json !== '{}') return json;
   } catch {
     // Fall through to structural fallback below.

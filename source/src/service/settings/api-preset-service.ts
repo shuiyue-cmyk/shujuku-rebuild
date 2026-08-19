@@ -67,6 +67,11 @@ export function normalizeApiConfig_ACU(value: any): ApiPresetApiConfig_ACU {
   const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   const maxTokens = Number(source.max_tokens ?? source.maxTokens ?? 60000);
   const temperature = Number(source.temperature ?? 1);
+  const streamingEnabled = source.streamingEnabled === true ? true : source.streamingEnabled === false ? false : undefined;
+  const rawReasoning = String(source.reasoningEffort ?? '').trim().toLowerCase();
+  const reasoningEffort = (['low', 'medium', 'high', 'max'] as const).includes(rawReasoning as any)
+    ? (rawReasoning as ReasoningEffort_ACU)
+    : undefined;
   // [修复] 保留源对象中所有非白名单字段（如 topP/top_p/frequency_penalty），
   // 避免对运行中 apiConfig 的归一化破坏调用方依赖的透传字段。
   return {
@@ -79,9 +84,11 @@ export function normalizeApiConfig_ACU(value: any): ApiPresetApiConfig_ACU {
     bodyParams: typeof source.bodyParams === 'string' ? source.bodyParams : '',
     excludeBodyParams: typeof source.excludeBodyParams === 'string' ? source.excludeBodyParams : '',
     requestHeaders: typeof source.requestHeaders === 'string' ? source.requestHeaders : '',
+    ...(streamingEnabled !== undefined ? { streamingEnabled } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
     ...Object.fromEntries(
       Object.entries(source).filter(([key]) =>
-        !['url', 'apiKey', 'model', 'useMainApi', 'max_tokens', 'maxTokens', 'temperature', 'bodyParams', 'excludeBodyParams', 'requestHeaders'].includes(key)
+        !['url', 'apiKey', 'model', 'useMainApi', 'max_tokens', 'maxTokens', 'temperature', 'bodyParams', 'excludeBodyParams', 'requestHeaders', 'streamingEnabled', 'reasoningEffort'].includes(key)
       )
     ),
   };

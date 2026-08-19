@@ -199,8 +199,7 @@ import type { PresetDropdownItem } from "./_lib/AcuPresetDropdown.vue";
 import AcuPresetDropdown from "./_lib/AcuPresetDropdown.vue";
 import AcuSelect, { type AcuSelectOption } from "./_lib/AcuSelect.vue";
 import AcuToggle from "./_lib/AcuToggle.vue";
-import { settings_ACU } from "../../service/runtime/state-manager";
-import { saveSettings_ACU } from "../../service/settings/settings-service";
+import { assertSafeHttpEndpoint_ACU } from "../../shared/utils";
 
 // ─── 思考强度选项（每个 API 预设独立） ───
 const reasoningEffortOptions: AcuSelectOption[] = [
@@ -311,6 +310,12 @@ function validateActiveDraft(): boolean {
   }
   if (!activeDraft.url.trim()) {
     activeDraftError.value = "自定义 API 需要填写端点(基础URL)。";
+    return false;
+  }
+  try {
+    assertSafeHttpEndpoint_ACU(activeDraft.url.trim());
+  } catch (e: any) {
+    activeDraftError.value = String(e?.message || '端点地址不安全，请检查 URL。');
     return false;
   }
   if (!activeDraft.model.trim()) {

@@ -72,9 +72,14 @@ export async function waitForAcuHostReady(maxWaitMs = 15000): Promise<boolean> {
       const { ready, promise } = getAcuTauriReady();
       if (ready) return true;
       if (promise) {
+        let promiseResolved = false;
         try {
-          await Promise.race([promise, new Promise<void>((r) => setTimeout(r, Math.max(0, maxWaitMs - (Date.now() - start))))]);
+          await Promise.race([
+            promise.then(() => { promiseResolved = true; }),
+            new Promise<void>((r) => setTimeout(r, Math.max(0, maxWaitMs - (Date.now() - start)))),
+          ]);
         } catch { /* TT ready promise 拒绝则继续轮询 */ }
+        if (promiseResolved) return true;
         if (getAcuTauriReady().ready || getContextReady()) return true;
       }
     }

@@ -127,18 +127,37 @@ export function useDebugPanel() {
       toast.warning('请先开启 Debug 采集再导出。');
       return;
     }
-    const logs: LogEntry[] = getAllLogs();
-    // 防护：Debug 未由本页开启（如持久化 warn 导致挂载即 active）时，以当前时间为起点
+    // 防护：Debug 未由本页开启（如持久化 warn 导致挂载即 active）时，以当前时间为起点，并按时间切片日志
     const effectiveStart = startedAt || Date.now();
+    const allLogs = getAllLogs();
+    const logs: LogEntry[] = allLogs.filter((e) => e.timestamp >= effectiveStart);
     const cfg = settings_ACU?.apiConfig || {};
+    const activePreset = (() => {
+      try {
+        const name = String((settings_ACU as any)?.apiPresetBindingsByChat?.[String(currentChatFileIdentifier_ACU || '').trim()]?.presetName || (settings_ACU as any)?.defaultApiPresetName || '').trim();
+        if (!name) return null;
+        const list = Array.isArray((settings_ACU as any)?.apiPresets) ? (settings_ACU as any).apiPresets : [];
+        return list.find((p: any) => p?.name === name) || null;
+      } catch { return null; }
+    })();
+    const presetCfg = activePreset?.apiConfig || null;
     const env = {
       host: getAcuHostKind(),
       buildStamp: getBuildStamp(),
       version: getPluginVersion(),
       exportedAt: new Date().toISOString(),
       chatId: currentChatFileIdentifier_ACU,
-      streamingEnabled: settings_ACU?.streamingEnabled === true,
+      streamingEnabled: presetCfg ? presetCfg.streamingEnabled === true : settings_ACU?.streamingEnabled === true,
+      streamingEnabledGlobal: settings_ACU?.streamingEnabled === true,
+      streamingEnabledPreset: presetCfg ? presetCfg.streamingEnabled === true : undefined,
+      reasoningEffort: presetCfg?.reasoningEffort || (settings_ACU as any)?.reasoningEffort || 'medium',
+      reasoningEffortPreset: presetCfg?.reasoningEffort,
+      reasoningEffortGlobal: (settings_ACU as any)?.reasoningEffort,
+      activePresetName: activePreset?.name || '',
+      worldbookSource: (settings_ACU as any)?.worldbookConfig?.source || (settings_ACU as any)?.characterSettings?.[String(currentChatFileIdentifier_ACU || '').trim()]?.worldbookConfig?.source || '',
+      formFillPromptLength: Array.isArray((settings_ACU as any)?.charCardPrompt) ? (settings_ACU as any).charCardPrompt.length : 0,
       nonPrefillSupport: settings_ACU?.nonPrefillSupport === true,
+      nonPrefillSupportPreset: activePreset?.nonPrefillSupport,
       apiMode: settings_ACU?.apiMode || '',
       apiConfig: {
         url: typeof cfg.url === 'string' ? cfg.url : '',

@@ -4,7 +4,7 @@
 import { handleApiResponse_ACU } from './prompt-builder';
 import { settings_ACU } from '../runtime/state-manager';
 import { getHostRequestHeaders_ACU } from '../../data/gateways/ai-gateway';
-import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
+import { assertSafeHttpEndpoint_ACU, logDebug_ACU, logWarn_ACU } from '../../shared/utils';
 import { resolveApiConfigByPreset_ACU } from '../settings/api-preset-service';
 
 function normalizeExcludeBodyParamsForSillyTavern_ACU(raw: any): string {
@@ -25,6 +25,9 @@ export function buildCustomApiRequestBody_ACU(
   overrides?: { maxTokens?: number; temperature?: number; topP?: number; stripModelPrefix?: boolean; nonPrefillSupport?: boolean }
 ): Record<string, any> {
   const opts = overrides || {};
+  if (effectiveApiConfig?.url) {
+    assertSafeHttpEndpoint_ACU(String(effectiveApiConfig.url));
+  }
   const model = opts.stripModelPrefix !== false
     ? (effectiveApiConfig.model || '').replace(/^models\//, '')
     : (effectiveApiConfig.model || '');
@@ -89,8 +92,11 @@ export function buildCustomApiRequestBody_ACU(
     chat_completion_source: 'custom',
     group_names: [],
     include_reasoning: false,
-    // 思考强度（预设级优先）：effectiveApiConfig.reasoningEffort 未定义时回退全局/默认 medium
-    reasoning_effort: effectiveApiConfig.reasoningEffort || settings_ACU.reasoningEffort || 'medium',
+    // 思考强度（预设级优先）：仅允许 low/medium/high/max，非法值回退 medium
+    reasoning_effort: ((): string => {
+      const raw = String(effectiveApiConfig.reasoningEffort || settings_ACU.reasoningEffort || 'medium').trim().toLowerCase();
+      return ['low', 'medium', 'high', 'max'].includes(raw) ? raw : 'medium';
+    })(),
     enable_web_search: false,
     request_images: false,
     custom_prompt_post_processing: 'strict',

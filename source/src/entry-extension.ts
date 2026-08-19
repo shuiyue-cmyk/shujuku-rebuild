@@ -132,6 +132,9 @@ async function extensionMain() {
     bootstrapAcuV2();
 }
 
+// 顶层立即安装全局捕获，覆盖静态 import 期的异常（extensionMain 内幂等 guard 避免重复）
+try { installGlobalErrorCapture(); } catch { /* ignore */ }
+
 // 扩展加载时 DOM 已就绪，直接启动；捕获异步错误，避免未处理 rejection 静默丢失
 extensionMain().catch(error => {
     logError_ACU(`[插件启动] 初始化失败: ${error instanceof Error ? error.stack || error.message : String(error)}`);

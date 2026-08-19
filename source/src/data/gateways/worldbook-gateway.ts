@@ -336,6 +336,19 @@ export function getActiveGlobalWorldbookNames_ACU(): string[] {
  */
 export async function getActiveWorldbookNamesForFill_ACU(): Promise<string[]> {
   const names = getActiveGlobalWorldbookNames_ACU();
+  for (const fn of [(globalThis as any).getLorebookSettings, (globalThis as any).TavernHelper?.getLorebookSettings] as Array<(() => any) | undefined>) {
+    if (typeof fn !== 'function') continue;
+    try {
+      const cfg = await Promise.resolve(fn());
+      const list = cfg?.selected_global_lorebooks ?? cfg?.selected_world_info ?? [];
+      if (Array.isArray(list)) {
+        for (const item of list) {
+          const n = String(item ?? '').trim();
+          if (n && !names.includes(n)) names.push(n);
+        }
+      }
+    } catch { /* ignore */ }
+  }
   try {
     const charLorebooks = await getCharLorebooks_ACU({ type: 'all' });
     if (charLorebooks?.primary) {

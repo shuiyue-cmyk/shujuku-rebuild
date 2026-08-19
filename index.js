@@ -1976,13 +1976,33 @@ function extractTag(args) {
     }
     return UNCATEGORIZED_TAG;
 }
+const LOG_SENSITIVE_KEYS = /^(api[_-]?key|key|token|authorization|auth|password|proxy[_-]?password|secret|bearer)$/i;
+function maskSensitiveInLogValue(value, depth = 0) {
+    if (depth > 6 || value === null || value === undefined)
+        return value;
+    if (Array.isArray(value))
+        return value.map((v) => maskSensitiveInLogValue(v, depth + 1));
+    if (typeof value === 'object') {
+        const out = {};
+        for (const [k, v] of Object.entries(value)) {
+            if (LOG_SENSITIVE_KEYS.test(k))
+                out[k] = '***';
+            else
+                out[k] = maskSensitiveInLogValue(v, depth + 1);
+        }
+        return out;
+    }
+    return value;
+}
 function normalizeLogArg_ACU(arg) {
     if (arg === null)
         return 'null';
     if (arg === undefined)
         return 'undefined';
-    if (typeof arg === 'string')
-        return arg;
+    if (typeof arg === 'string') {
+        // 对可能含敏感头/体的长字符串做键名脱敏（如 \"apiKey\":\"sk-...\"）
+        return arg.replace(/\"(api[_-]?key|authorization|token|password|secret)\"\s*:\s*\"[^\"]*\"/gi, '\"$1\":\"***\"');
+    }
     if (typeof arg === 'number' || typeof arg === 'boolean' || typeof arg === 'bigint')
         return String(arg);
     if (typeof arg === 'symbol')
@@ -2003,7 +2023,8 @@ function normalizeLogArg_ACU(arg) {
         return parts.join(' | ');
     }
     try {
-        const json = JSON.stringify(arg, null, 0);
+        const masked = maskSensitiveInLogValue(arg);
+        const json = JSON.stringify(masked, null, 0);
         if (json && json !== '{}')
             return json;
     }
@@ -5264,6 +5285,22 @@ function getActiveGlobalWorldbookNames_ACU() {
  */
 async function getActiveWorldbookNamesForFill_ACU() {
     const names = getActiveGlobalWorldbookNames_ACU();
+    for (const fn of [globalThis.getLorebookSettings, globalThis.TavernHelper?.getLorebookSettings]) {
+        if (typeof fn !== 'function')
+            continue;
+        try {
+            const cfg = await Promise.resolve(fn());
+            const list = cfg?.selected_global_lorebooks ?? cfg?.selected_world_info ?? [];
+            if (Array.isArray(list)) {
+                for (const item of list) {
+                    const n = String(item ?? '').trim();
+                    if (n && !names.includes(n))
+                        names.push(n);
+                }
+            }
+        }
+        catch { /* ignore */ }
+    }
     try {
         const charLorebooks = await getCharLorebooks_ACU({ type: 'all' });
         if (charLorebooks?.primary) {
@@ -63534,6 +63571,11 @@ function normalizeApiConfig_ACU(value) {
     const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
     const maxTokens = Number(source.max_tokens ?? source.maxTokens ?? 60000);
     const temperature = Number(source.temperature ?? 1);
+    const streamingEnabled = source.streamingEnabled === true ? true : source.streamingEnabled === false ? false : undefined;
+    const rawReasoning = String(source.reasoningEffort ?? '').trim().toLowerCase();
+    const reasoningEffort = ['low', 'medium', 'high', 'max'].includes(rawReasoning)
+        ? rawReasoning
+        : undefined;
     // [修复] 保留源对象中所有非白名单字段（如 topP/top_p/frequency_penalty），
     // 避免对运行中 apiConfig 的归一化破坏调用方依赖的透传字段。
     return {
@@ -63546,7 +63588,9 @@ function normalizeApiConfig_ACU(value) {
         bodyParams: typeof source.bodyParams === 'string' ? source.bodyParams : '',
         excludeBodyParams: typeof source.excludeBodyParams === 'string' ? source.excludeBodyParams : '',
         requestHeaders: typeof source.requestHeaders === 'string' ? source.requestHeaders : '',
-        ...Object.fromEntries(Object.entries(source).filter(([key]) => !['url', 'apiKey', 'model', 'useMainApi', 'max_tokens', 'maxTokens', 'temperature', 'bodyParams', 'excludeBodyParams', 'requestHeaders'].includes(key))),
+        ...(streamingEnabled !== undefined ? { streamingEnabled } : {}),
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+        ...Object.fromEntries(Object.entries(source).filter(([key]) => !['url', 'apiKey', 'model', 'useMainApi', 'max_tokens', 'maxTokens', 'temperature', 'bodyParams', 'excludeBodyParams', 'requestHeaders', 'streamingEnabled', 'reasoningEffort'].includes(key))),
     };
 }
 function normalizePreset_ACU(value) {
@@ -63938,6 +63982,9 @@ function normalizeExcludeBodyParamsForSillyTavern_ACU(raw) {
  */
 function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) {
     const opts = overrides || {};
+    if (effectiveApiConfig?.url) {
+        assertSafeHttpEndpoint_ACU(String(effectiveApiConfig.url));
+    }
     const model = opts.stripModelPrefix !== false
         ? (effectiveApiConfig.model || '').replace(/^models\//, '')
         : (effectiveApiConfig.model || '');
@@ -64000,8 +64047,11 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
         chat_completion_source: 'custom',
         group_names: [],
         include_reasoning: false,
-        // 思考强度（预设级优先）：effectiveApiConfig.reasoningEffort 未定义时回退全局/默认 medium
-        reasoning_effort: effectiveApiConfig.reasoningEffort || settings_ACU.reasoningEffort || 'medium',
+        // 思考强度（预设级优先）：仅允许 low/medium/high/max，非法值回退 medium
+        reasoning_effort: (() => {
+            const raw = String(effectiveApiConfig.reasoningEffort || settings_ACU.reasoningEffort || 'medium').trim().toLowerCase();
+            return ['low', 'medium', 'high', 'max'].includes(raw) ? raw : 'medium';
+        })(),
         enable_web_search: false,
         request_images: false,
         custom_prompt_post_processing: 'strict',
@@ -111162,7 +111212,7 @@ const WARDROBE_DIMENSION_LABELS = Object.freeze({ masking: '掩形', support: '�
 const PREG_FIT_GAP_LABELS = Object.freeze({ masking: '掩形', support: '支撑', capacity: '容身', convenience: '便捷' });
 const MAX_PROGRESS_BAR_CAP = 200;
 // 构建时间戳（rollup replace 注入；测试/dev 环境无替换时回退 'dev'）——全局水印用，截图辨别构建
-const ACU_BUILD_STAMP = typeof "20260818-14" === 'string' ? "20260818-14" : 'dev';
+const ACU_BUILD_STAMP = typeof "20260819-05" === 'string' ? "20260819-05" : 'dev';
 const MODAL_EDGE_GAP = 24;
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const FLOATING_SPHERE_POSITION_KEY = `${MODULE_NAME}_floating_sphere_position`;
@@ -146310,6 +146360,13 @@ var _sfc_main$Q = /*@__PURE__*/ defineComponent({
                 activeDraftError.value = "自定义 API 需要填写端点(基础URL)。";
                 return false;
             }
+            try {
+                assertSafeHttpEndpoint_ACU(activeDraft.url.trim());
+            }
+            catch (e) {
+                activeDraftError.value = String(e?.message || '端点地址不安全，请检查 URL。');
+                return false;
+            }
             if (!activeDraft.model.trim()) {
                 activeDraftError.value = "自定义 API 需要填写模型。";
                 return false;
@@ -146351,8 +146408,8 @@ var _sfc_main$Q = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-api-config-panel__select-row[data-v-78b69998] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-78b69998] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-78b69998] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-78b69998] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-78b69998] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-78b69998] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-78b69998] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-78b69998] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-78b69998] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-78b69998");
-var ApiConfigPanel_vue_vue_type_style_index_0_scoped_78b69998_lang = null;
+injectSfcStyle("\n.acu-api-config-panel__select-row[data-v-1678809c] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-1678809c] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-1678809c] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-1678809c] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-1678809c] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-1678809c] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-1678809c] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-1678809c] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-1678809c] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-1678809c");
+var ApiConfigPanel_vue_vue_type_style_index_0_scoped_1678809c_lang = null;
 
 const _hoisted_1$O = { class: "acu-api-config-panel__select-row" };
 const _hoisted_2$H = { class: "acu-api-config-panel__editor-section" };
@@ -146623,7 +146680,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["title", "description"]);
 }
-var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$Q, [["render", _sfc_render$Q], ["__scopeId", "data-v-78b69998"]]);
+var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$Q, [["render", _sfc_render$Q], ["__scopeId", "data-v-1678809c"]]);
 
 // ═══════════════════════════════════════════════════════════
 // service/settings/feature-preset-reference-service.ts — 功能级 API 预设引用
@@ -165005,10 +165062,16 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
             if (ready)
                 return true;
             if (promise) {
+                let promiseResolved = false;
                 try {
-                    await Promise.race([promise, new Promise((r) => setTimeout(r, Math.max(0, maxWaitMs - (Date.now() - start))))]);
+                    await Promise.race([
+                        promise.then(() => { promiseResolved = true; }),
+                        new Promise((r) => setTimeout(r, Math.max(0, maxWaitMs - (Date.now() - start)))),
+                    ]);
                 }
                 catch { /* TT ready promise 拒绝则继续轮询 */ }
+                if (promiseResolved)
+                    return true;
                 if (getAcuTauriReady().ready || getContextReady())
                     return true;
             }
@@ -165033,7 +165096,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260818-14";
+        const stamp = "20260819-05";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -165127,18 +165190,41 @@ function useDebugPanel() {
             toast.warning('请先开启 Debug 采集再导出。');
             return;
         }
-        const logs = getAllLogs();
-        // 防护：Debug 未由本页开启（如持久化 warn 导致挂载即 active）时，以当前时间为起点
+        // 防护：Debug 未由本页开启（如持久化 warn 导致挂载即 active）时，以当前时间为起点，并按时间切片日志
         const effectiveStart = startedAt || Date.now();
+        const allLogs = getAllLogs();
+        const logs = allLogs.filter((e) => e.timestamp >= effectiveStart);
         const cfg = settings_ACU?.apiConfig || {};
+        const activePreset = (() => {
+            try {
+                const name = String(settings_ACU?.apiPresetBindingsByChat?.[String(currentChatFileIdentifier_ACU || '').trim()]?.presetName || settings_ACU?.defaultApiPresetName || '').trim();
+                if (!name)
+                    return null;
+                const list = Array.isArray(settings_ACU?.apiPresets) ? settings_ACU.apiPresets : [];
+                return list.find((p) => p?.name === name) || null;
+            }
+            catch {
+                return null;
+            }
+        })();
+        const presetCfg = activePreset?.apiConfig || null;
         const env = {
             host: getAcuHostKind(),
             buildStamp: getBuildStamp(),
             version: getPluginVersion(),
             exportedAt: new Date().toISOString(),
             chatId: currentChatFileIdentifier_ACU,
-            streamingEnabled: settings_ACU?.streamingEnabled === true,
+            streamingEnabled: presetCfg ? presetCfg.streamingEnabled === true : settings_ACU?.streamingEnabled === true,
+            streamingEnabledGlobal: settings_ACU?.streamingEnabled === true,
+            streamingEnabledPreset: presetCfg ? presetCfg.streamingEnabled === true : undefined,
+            reasoningEffort: presetCfg?.reasoningEffort || settings_ACU?.reasoningEffort || 'medium',
+            reasoningEffortPreset: presetCfg?.reasoningEffort,
+            reasoningEffortGlobal: settings_ACU?.reasoningEffort,
+            activePresetName: activePreset?.name || '',
+            worldbookSource: settings_ACU?.worldbookConfig?.source || settings_ACU?.characterSettings?.[String(currentChatFileIdentifier_ACU || '').trim()]?.worldbookConfig?.source || '',
+            formFillPromptLength: Array.isArray(settings_ACU?.charCardPrompt) ? settings_ACU.charCardPrompt.length : 0,
             nonPrefillSupport: settings_ACU?.nonPrefillSupport === true,
+            nonPrefillSupportPreset: activePreset?.nonPrefillSupport,
             apiMode: settings_ACU?.apiMode || '',
             apiConfig: {
                 url: typeof cfg.url === 'string' ? cfg.url : '',
@@ -177492,6 +177578,11 @@ async function extensionMain() {
     mainInitialize_ACU();
     bootstrapAcuV2();
 }
+// 顶层立即安装全局捕获，覆盖静态 import 期的异常（extensionMain 内幂等 guard 避免重复）
+try {
+    installGlobalErrorCapture();
+}
+catch { /* ignore */ }
 // 扩展加载时 DOM 已就绪，直接启动；捕获异步错误，避免未处理 rejection 静默丢失
 extensionMain().catch(error => {
     logError_ACU(`[插件启动] 初始化失败: ${error instanceof Error ? error.stack || error.message : String(error)}`);
