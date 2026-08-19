@@ -159,9 +159,18 @@ function installBiotrackerConsoleBridge(): void {
   const bridge = (level: 'warn' | 'error' | 'debug') => (original: (...args: any[]) => void) => (...args: any[]) => {
     original(...args);
     try {
-      if (String(args[0] || '').includes(BIOTRACKER_LOG_PREFIX)) {
-        pushLog(level, args);
+      const first = String(args[0] || '');
+      if (!first.includes(BIOTRACKER_LOG_PREFIX)) return;
+      // 与上游共存时：无活跃角色的轮询失败是预期状态，降级避免刷屏（无论数据库开关）
+      const joined = args.map((a) => String((a as any)?.message || a || '')).join(' ');
+      if (first.includes('poll failed') || first.includes('poll skipped')) {
+        if (joined.includes('Failed to resolve active character id') || joined.includes('getActiveChatSnapshot')) {
+          // 降级为 debug 仅在开启时记录，不污染 error 日志
+          if (isDebugLogEnabled()) pushLog('debug', args);
+          return;
+        }
       }
+      pushLog(level, args);
     } catch (e) { /* 桥接失败不影响原 console */ }
   };
   // 幂等：标记避免重复包装（init 重入/热重载时不叠加多层代理）

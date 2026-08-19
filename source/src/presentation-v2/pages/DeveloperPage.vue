@@ -37,7 +37,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 import AcuFormRow from "../components/_lib/AcuFormRow.vue";
 import AcuInput from "../components/_lib/AcuInput.vue";
 import AcuPanel from "../components/_lib/AcuPanel.vue";
@@ -46,9 +46,14 @@ import ToggleRow from "../components/DashboardToggleRow.vue";
 import { useDevOptions } from "../composables/useDevOptions";
 import { useFormFillSettings } from "../composables/useFormFillSettings";
 import { developerCopy } from "../copy/developer-copy";
+import {
+  isBiotrackerEnabled_ACU,
+  setBiotrackerEnabled_ACU,
+} from "../../service/biotracker/biotracker-adapter";
 
 const devOptions = useDevOptions();
 const settings = useFormFillSettings();
+const biotrackerTick = ref(0);
 
 interface DeveloperFieldItem {
   key: string;
@@ -57,20 +62,30 @@ interface DeveloperFieldItem {
   value: boolean;
 }
 
-const toggles = computed<DeveloperFieldItem[]>(() => [
-  {
-    key: "plotAdvanced",
-    label: "剧情推进",
-    description: '在编辑剧情推进预设的侧抽屉中显示"匹配替换"字段。',
-    value: devOptions.plotAdvanced.value,
-  },
-  {
-    key: "vectorIndexAdvanced",
-    label: "交火模式",
-    description: "显示召回参数与归档分块面板。需要调整向量相关参数时开启。",
-    value: devOptions.vectorIndexAdvanced.value,
-  },
-]);
+const toggles = computed<DeveloperFieldItem[]>(() => {
+  void biotrackerTick.value;
+  return [
+    {
+      key: "plotAdvanced",
+      label: "剧情推进",
+      description: '在编辑剧情推进预设的侧抽屉中显示"匹配替换"字段。',
+      value: devOptions.plotAdvanced.value,
+    },
+    {
+      key: "vectorIndexAdvanced",
+      label: "交火模式",
+      description: "显示召回参数与归档分块面板。需要调整向量相关参数时开启。",
+      value: devOptions.vectorIndexAdvanced.value,
+    },
+    {
+      key: "biotrackerEnabled",
+      label: "生理追踪（内置）",
+      description:
+        "数据库内置生理追踪（调试用，与上游 biotracker 插件数据隔离）。开启后在开发者选项中显示生理追踪页面。",
+      value: isBiotrackerEnabled_ACU(),
+    },
+  ];
+});
 const maxConcurrentGroups = computed(
   () =>
     settings.numberFields.value.find(
@@ -84,6 +99,10 @@ function handleToggleChange(key: string, value: boolean): void {
   }
   if (key === "vectorIndexAdvanced") {
     devOptions.setVectorIndexAdvanced(value);
+  }
+  if (key === "biotrackerEnabled") {
+    setBiotrackerEnabled_ACU(value);
+    biotrackerTick.value++;
   }
 }
 </script>

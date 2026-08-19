@@ -111197,7 +111197,15 @@ function resetPoller(ctx, deps) {
     const settings = getSettings(ctx);
     globalThis[POLL_RUNTIME_KEY] = setInterval(() => {
         deps.updateClock(settings);
-        poll(ctx, deps).catch((error) => console.error('[BS BioTracker] poll failed', error));
+        poll(ctx, deps).catch((error) => {
+            const msg = String(error?.message || error || '');
+            // 无活跃角色时轮询失败是预期状态（常见于启动时/未选聊天），降级为 warn 避免刷屏
+            if (msg.includes('Failed to resolve active character id') || msg.includes('getActiveChatSnapshot')) {
+                console.warn('[BS BioTracker] poll skipped (no active character)', error);
+                return;
+            }
+            console.error('[BS BioTracker] poll failed', error);
+        });
     }, Math.max(800, Number(settings.pollMs) || DEFAULT_SETTINGS.pollMs));
 }
 
@@ -111212,7 +111220,7 @@ const WARDROBE_DIMENSION_LABELS = Object.freeze({ masking: '掩形', support: '�
 const PREG_FIT_GAP_LABELS = Object.freeze({ masking: '掩形', support: '支撑', capacity: '容身', convenience: '便捷' });
 const MAX_PROGRESS_BAR_CAP = 200;
 // 构建时间戳（rollup replace 注入；测试/dev 环境无替换时回退 'dev'）——全局水印用，截图辨别构建
-const ACU_BUILD_STAMP = typeof "20260819-05" === 'string' ? "20260819-05" : 'dev';
+const ACU_BUILD_STAMP = typeof "20260819-06" === 'string' ? "20260819-06" : 'dev';
 const MODAL_EDGE_GAP = 24;
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const FLOATING_SPHERE_POSITION_KEY = `${MODULE_NAME}_floating_sphere_position`;
@@ -119059,9 +119067,20 @@ function installBiotrackerConsoleBridge() {
     const bridge = (level) => (original) => (...args) => {
         original(...args);
         try {
-            if (String(args[0] || '').includes(BIOTRACKER_LOG_PREFIX)) {
-                pushLog(level, args);
+            const first = String(args[0] || '');
+            if (!first.includes(BIOTRACKER_LOG_PREFIX))
+                return;
+            // 与上游共存时：无活跃角色的轮询失败是预期状态，降级避免刷屏（无论数据库开关）
+            const joined = args.map((a) => String(a?.message || a || '')).join(' ');
+            if (first.includes('poll failed') || first.includes('poll skipped')) {
+                if (joined.includes('Failed to resolve active character id') || joined.includes('getActiveChatSnapshot')) {
+                    // 降级为 debug 仅在开启时记录，不污染 error 日志
+                    if (isDebugLogEnabled())
+                        pushLog('debug', args);
+                    return;
+                }
             }
+            pushLog(level, args);
         }
         catch (e) { /* 桥接失败不影响原 console */ }
     };
@@ -154391,16 +154410,6 @@ function useDashboardPage() {
             description: dashboardCopy.developerToggle.description,
             value: developerOptionsEnabled.value,
         });
-        // 生理追踪（内置 biotracker）为开发者调试功能：仅在「启用开发者选项」开启时显示开关。
-        // 普通用户使用上游 biotracker 插件，不暴露数据库内置入口。
-        if (developerOptionsEnabled.value) {
-            items.push({
-                key: "biotrackerEnabled",
-                label: dashboardCopy.toggles.biotracker.label,
-                description: dashboardCopy.toggles.biotracker.description,
-                value: isBiotrackerEnabled_ACU(),
-            });
-        }
         return items;
     });
     const healthItems = computed(() => {
@@ -154485,9 +154494,6 @@ function useDashboardPage() {
         }
         else if (key === "summaryVectorIndexModeEnabled") {
             setSummaryVectorIndexMode_ACU(!!value);
-        }
-        else if (key === "biotrackerEnabled") {
-            setBiotrackerEnabled_ACU(!!value);
         }
         else if (key === "developerOptionsEnabled") {
             setDeveloperOptionsEnabled(!!value);
@@ -165096,7 +165102,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260819-05";
+        const stamp = "20260819-06";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -165953,20 +165959,30 @@ var _sfc_main$c = /*@__PURE__*/ defineComponent({
         __expose();
         const devOptions = useDevOptions();
         const settings = useFormFillSettings();
-        const toggles = computed(() => [
-            {
-                key: "plotAdvanced",
-                label: "剧情推进",
-                description: '在编辑剧情推进预设的侧抽屉中显示"匹配替换"字段。',
-                value: devOptions.plotAdvanced.value,
-            },
-            {
-                key: "vectorIndexAdvanced",
-                label: "交火模式",
-                description: "显示召回参数与归档分块面板。需要调整向量相关参数时开启。",
-                value: devOptions.vectorIndexAdvanced.value,
-            },
-        ]);
+        const biotrackerTick = ref(0);
+        const toggles = computed(() => {
+            void biotrackerTick.value;
+            return [
+                {
+                    key: "plotAdvanced",
+                    label: "剧情推进",
+                    description: '在编辑剧情推进预设的侧抽屉中显示"匹配替换"字段。',
+                    value: devOptions.plotAdvanced.value,
+                },
+                {
+                    key: "vectorIndexAdvanced",
+                    label: "交火模式",
+                    description: "显示召回参数与归档分块面板。需要调整向量相关参数时开启。",
+                    value: devOptions.vectorIndexAdvanced.value,
+                },
+                {
+                    key: "biotrackerEnabled",
+                    label: "生理追踪（内置）",
+                    description: "数据库内置生理追踪（调试用，与上游 biotracker 插件数据隔离）。开启后在开发者选项中显示生理追踪页面。",
+                    value: isBiotrackerEnabled_ACU(),
+                },
+            ];
+        });
         const maxConcurrentGroups = computed(() => settings.numberFields.value.find((field) => field.key === "maxConcurrentGroups")?.value ?? 1);
         function handleToggleChange(key, value) {
             if (key === "plotAdvanced") {
@@ -165975,15 +165991,19 @@ var _sfc_main$c = /*@__PURE__*/ defineComponent({
             if (key === "vectorIndexAdvanced") {
                 devOptions.setVectorIndexAdvanced(value);
             }
+            if (key === "biotrackerEnabled") {
+                setBiotrackerEnabled_ACU(value);
+                biotrackerTick.value++;
+            }
         }
-        const __returned__ = { devOptions, settings, toggles, maxConcurrentGroups, handleToggleChange, AcuFormRow, AcuInput, AcuPanel, AcuPanelGrid, ToggleRow, get developerCopy() { return developerCopy; } };
+        const __returned__ = { devOptions, settings, biotrackerTick, toggles, maxConcurrentGroups, handleToggleChange, AcuFormRow, AcuInput, AcuPanel, AcuPanelGrid, ToggleRow, get developerCopy() { return developerCopy; } };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.acu-v2-developer-page[data-v-13190b1d] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-developer-page__toggle-list[data-v-13190b1d] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n@media (max-width: 860px) {\n.acu-v2-developer-page[data-v-13190b1d] {\r\n    padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/DeveloperPage.vue#style-0-13190b1d");
-var DeveloperPage_vue_vue_type_style_index_0_scoped_13190b1d_lang = null;
+injectSfcStyle("\n.acu-v2-developer-page[data-v-59a46971] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-developer-page__toggle-list[data-v-59a46971] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n@media (max-width: 860px) {\n.acu-v2-developer-page[data-v-59a46971] {\r\n    padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/DeveloperPage.vue#style-0-59a46971");
+var DeveloperPage_vue_vue_type_style_index_0_scoped_59a46971_lang = null;
 
 const _hoisted_1$c = { class: "acu-v2-developer-page" };
 const _hoisted_2$b = { class: "acu-v2-developer-page__toggle-list" };
@@ -166029,7 +166049,7 @@ function _sfc_render$c(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	})]);
 }
-var DeveloperPage = /* @__PURE__ */ _export_sfc(_sfc_main$c, [["render", _sfc_render$c], ["__scopeId", "data-v-13190b1d"]]);
+var DeveloperPage = /* @__PURE__ */ _export_sfc(_sfc_main$c, [["render", _sfc_render$c], ["__scopeId", "data-v-59a46971"]]);
 
 /**
  * presentation-v2/composables/useBiotrackerPage.ts

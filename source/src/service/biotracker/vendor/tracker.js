@@ -1493,6 +1493,14 @@ export function resetPoller(ctx, deps) {
   const settings = getSettings(ctx);
   globalThis[POLL_RUNTIME_KEY] = setInterval(() => {
     deps.updateClock(settings);
-    poll(ctx, deps).catch((error) => console.error('[BS BioTracker] poll failed', error));
+    poll(ctx, deps).catch((error) => {
+      const msg = String(error?.message || error || '');
+      // 无活跃角色时轮询失败是预期状态（常见于启动时/未选聊天），降级为 warn 避免刷屏
+      if (msg.includes('Failed to resolve active character id') || msg.includes('getActiveChatSnapshot')) {
+        console.warn('[BS BioTracker] poll skipped (no active character)', error);
+        return;
+      }
+      console.error('[BS BioTracker] poll failed', error);
+    });
   }, Math.max(800, Number(settings.pollMs) || DEFAULT_SETTINGS.pollMs));
 }

@@ -16,10 +16,6 @@ import {
   settings_ACU,
 } from "../../service/runtime/state-manager";
 import {
-  isBiotrackerEnabled_ACU,
-  setBiotrackerEnabled_ACU,
-} from "../../service/biotracker/biotracker-adapter";
-import {
   saveSettings_ACU,
   setGlobalPlotEnabled_ACU,
   setSummaryVectorIndexMode_ACU,
@@ -895,16 +891,6 @@ export function useDashboardPage(): DashboardPageState {
         value: developerOptionsEnabled.value,
       },
     );
-    // 生理追踪（内置 biotracker）为开发者调试功能：仅在「启用开发者选项」开启时显示开关。
-    // 普通用户使用上游 biotracker 插件，不暴露数据库内置入口。
-    if (developerOptionsEnabled.value) {
-      items.push({
-        key: "biotrackerEnabled",
-        label: dashboardCopy.toggles.biotracker.label,
-        description: dashboardCopy.toggles.biotracker.description,
-        value: isBiotrackerEnabled_ACU(),
-      });
-    }
     return items;
   });
 
@@ -1003,8 +989,6 @@ export function useDashboardPage(): DashboardPageState {
       saveSettings_ACU();
     } else if (key === "summaryVectorIndexModeEnabled") {
       setSummaryVectorIndexMode_ACU(!!value);
-    } else if (key === "biotrackerEnabled") {
-      setBiotrackerEnabled_ACU(!!value);
     } else if (key === "developerOptionsEnabled") {
       setDeveloperOptionsEnabled(!!value);
     } else if (key === "contentReplaceEnabled") {
