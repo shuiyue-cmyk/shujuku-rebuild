@@ -38,6 +38,7 @@ vi.mock('../../../src/data/gateways/ai-gateway', () => ({
 vi.mock('../../../src/shared/utils', () => ({
   logDebug_ACU: vi.fn(),
   logWarn_ACU: vi.fn(),
+  assertSafeHttpEndpoint_ACU: vi.fn(),
 }));
 
 // mock fetch
