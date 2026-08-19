@@ -17,6 +17,7 @@ vi.mock('../../../src/presentation-v2/composables/usePlotWorldbookAgentControl',
   return {
     usePlotWorldbookAgentControl: () => ({
       worldbookScope: ref({ source: 'character', manualSelection: [] }),
+      isAgentMode: ref(false),
       refresh: harness.refreshControl,
       setWorldbookScope: harness.setScope,
       toggleWorldbookScopeBook: harness.toggleScopeBook,
@@ -33,6 +34,8 @@ vi.mock('../../../src/presentation-v2/composables/useAgentWorldbookEntries', asy
       loadEntries: harness.loadEntries, toggleSkillifyEntry: vi.fn(), toggleGroupExpanded: vi.fn(),
       selectAllForSkillify: vi.fn(), deselectAllForSkillify: vi.fn(), getSelectedSkillifyEntries: () => [],
       saveEntrySkillMeta: vi.fn(), deleteEntrySkillMeta: vi.fn(),
+      batchEnableDisabledSkillEntries: vi.fn(async () => 0),
+      batchConvertBlueToGreenEntries: vi.fn(async () => 0),
     }),
   };
 });
