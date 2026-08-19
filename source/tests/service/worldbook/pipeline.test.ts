@@ -198,6 +198,7 @@ vi.mock('../../../src/service/template/chat-scope', () => ({
 vi.mock('../../../src/shared/constants', () => ({
   getImportBatchPrefix_ACU: mockGetImportBatchPrefix,
   getImportStablePrefix_ACU: mockGetImportStablePrefix,
+  SCRIPT_ID_PREFIX_ACU: 'ACU',
 }));
 
 vi.mock('../../../src/shared/utils', () => ({

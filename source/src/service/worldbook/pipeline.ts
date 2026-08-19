@@ -29,6 +29,10 @@ import {
   getActiveWorldbookNamesForFill_ACU
 } from '../../data/gateways/worldbook-gateway';
 import {
+  hasUsableWorldbookSkillMeta_ACU
+} from '../agent/agent-worldbook-skill-meta';
+
+import {
   getCharLorebooks_ACU,
   getChatMessages_ACU
 } from '../../data/gateways/character-gateway';
@@ -1378,8 +1382,18 @@ export   async function collectCombinedWorldbookEntriesByStrategy_ACU(options: a
       }
       baseScanText = baseScanText.toLowerCase();
 
-      const constantEntries = userEnabledEntries.filter(entry => entry.type === 'constant');
-      let keywordEntries = userEnabledEntries.filter(entry => entry.type !== 'constant' && !forcedEntrySet.has(entry));
+      const isActivePrimary = options?.primarySource === 'active';
+      const constantEntries = userEnabledEntries.filter(
+        entry => {
+          if (entry.type !== 'constant') return false;
+          if (!isActivePrimary) return true; // 非 active：恒常蓝灯照发
+          // active（正文接收）：蓝灯恒常条目照发；skill 化条目需本轮 agent 放行才发
+          return !hasUsableWorldbookSkillMeta_ACU(entry.comment) || forcedEntrySet.has(entry);
+        },
+      );
+      let keywordEntries = userEnabledEntries.filter(
+        entry => !constantEntries.includes(entry) && !forcedEntrySet.has(entry),
+      );
 
       if (includeConstantEntriesInBaseScan) {
           const constantBaseText = constantEntries
@@ -1530,6 +1544,7 @@ export   async function getCombinedWorldbookContent_ACU(initialScanTextOverride 
             bookNames,
             entriesByBook: options?.entriesByBook,
             readContext: options?.readContext,
+            primarySource: worldbookConfig?.source,
             formatEntry: (entry: any) => String(entry?.content || '').trim(),
             baseScanText: (typeof initialScanTextOverride === 'string' && initialScanTextOverride.trim()) ? initialScanTextOverride : '',
             fallbackScanText: allChatMessages_ACU.map(message => message.message).join('\n'),

@@ -5328,674 +5328,306 @@ async function getCurrentCharPrimaryLorebook_ACU() {
 }
 
 /**
- * service/worldbook/read-scope.ts
- * 表格候选作用域：requested→host 目标解析、候选集合构建与顺序稳定去重。
+ * service/agent/agent-worldbook-runtime-read.ts
+ * Agent 世界书只读 helper 唯一真源。
  *
- * 候选集合只保留本次逻辑阶段的显式目标（当前选择 / enabledEntries 键 /
- * Agent greenlight / 注入目标 / 角色绑定），禁止用于全库扫描。
+ * decision-engine 与 skill-meta 共用同一实现，参数固定为 agent_runtime + trusted_direct，
+ * 避免两份等价副本的错误分类与缓存策略漂移。
  */
 /**
- * 将一组逻辑名称解析为 requested→host 目标，保持首次出现顺序、按 hostName 去重。
- * 精确匹配优先；归一化多解返回 null（调用方拒绝读取）。
- * 使用请求级上下文内的 catalog 懒解析，避免每次调用重复列全库。
+ * 读取单本世界书条目。有 read context 时走请求级物理去重（agent_runtime + trusted_direct）；
+ * 无 context 时退回 gateway 直接读取（UI/独立操作路径）。
+ * not-found/unknown 读取失败统一以 StrictLorebookReadError 抛出，由调用方决定跳过或阻断。
  */
-async function resolveLorebookReadTargets_ACU(context, requestedNames) {
-    const seenRequested = new Set();
-    const seenHosts = new Set();
-    const targets = [];
-    for (const raw of requestedNames) {
-        const requested = String(raw ?? '').trim();
-        if (!requested || seenRequested.has(requested))
-            continue;
-        seenRequested.add(requested);
-        let hostName = null;
-        if (context) {
-            hostName = await context.resolveBookName(requested);
-        }
-        else {
-            hostName = resolveLorebookNameFromList_ACU(requested, await listLorebooks_ACU());
-        }
-        if (hostName && seenHosts.has(hostName))
-            continue;
-        if (hostName)
-            seenHosts.add(hostName);
-        targets.push({ requestedName: requested, hostName });
-    }
-    return targets;
+async function getAgentRuntimeLorebookEntries_ACU(bookName, readContext) {
+    if (!readContext)
+        return getLorebookEntries_ACU(bookName);
+    const result = await getLorebookEntriesStrict_ACU([bookName], {
+        source: 'agent_runtime',
+        validationPolicy: 'trusted_direct',
+        runId: readContext.runId,
+        context: readContext,
+    });
+    if (result.status !== 'success')
+        throw createStrictLorebookReadError_ACU(result);
+    return result.entriesByBook[bookName] || [];
+}
+
+function normalizeAgentWorldbookSnapshotBookNames_ACU(bookNames) {
+    if (!Array.isArray(bookNames))
+        return [];
+    return [...new Set(bookNames.map(name => String(name || '').trim()).filter(Boolean))]
+        .sort((left, right) => left.localeCompare(right));
+}
+function buildAgentWorldbookSnapshotSelectionSignature_ACU(bookNames) {
+    return hashUserInput_ACU(JSON.stringify({
+        scope: 'agent-worldbook-takeover',
+        books: normalizeAgentWorldbookSnapshotBookNames_ACU(bookNames),
+    }));
+}
+function isAgentWorldbookSnapshotValidForBooks_ACU(snapshot, bookNames) {
+    return snapshot?.active === true
+        && snapshot.selectionSignature === buildAgentWorldbookSnapshotSelectionSignature_ACU(bookNames);
+}
+
+/**
+ * Agent 世界书 comment 元数据标记/剥离的单一出口。
+ *
+ * 本模块是跨 service 与 presentation-v2 两层的纯字符串工具：
+ * - service 层：takeover / snapshot-restore / skill-meta / decision-engine
+ * - presentation 层：三个条目列表 composable 的 label 派生
+ *
+ * 约束（防止回归）：
+ * 1. 本模块除 TS 类型外不得 import 任何项目内模块，保持零依赖。
+ * 2. strict / loose / skill 三个剥离函数必须与迁移前逐字符等价（含空白归一化），
+ *    任何改动都会破坏 commentHash 比对与快照恢复的一致性。
+ * 3. 单行压缩只发生在 buildWorldbookEntryDisplayLabel_ACU（展示专用），
+ *    绝不进入任何 hash 输入路径。
+ */
+const AGENT_TAKEOVER_META_START_ACU = 'ACU_AGENT_WORLDBOOK_TAKEOVER_META_START';
+const AGENT_TAKEOVER_META_END_ACU = 'ACU_AGENT_WORLDBOOK_TAKEOVER_META_END';
+const ACU_SKILL_META_START_ACU = 'ACU_SKILL_META_START';
+const ACU_SKILL_META_END_ACU = 'ACU_SKILL_META_END';
+/**
+ * 工厂而非共享常量实例：带 g 标志的 RegExp 共享 lastIndex，
+ * 跨调用 exec/test 会漏匹配。每次返回新实例避免污染。
+ */
+function createAgentTakeoverMetaPattern_ACU() {
+    return /\n?<!--\s*ACU_AGENT_WORLDBOOK_TAKEOVER_META_START\s*\n([\s\S]*?)\nACU_AGENT_WORLDBOOK_TAKEOVER_META_END\s*-->\n?/g;
+}
+function createSkillMetaPattern_ACU() {
+    return /\n?<!--\s*ACU_SKILL_META_START\s*\n([\s\S]*?)\nACU_SKILL_META_END\s*-->\n?/g;
+}
+function normalizeCommentText_ACU$2(comment) {
+    return typeof comment === 'string' ? comment : '';
 }
 /**
- * 表格候选作用域：从当前配置/角色绑定/注入目标等显式来源收集候选书名。
- * 保持首次出现顺序并去重；不包含任何全库枚举。
+ * 严格剥离：仅移除 version===1 且 kind==='agent_worldbook_takeover' 的块。
+ * 未知版本 / 非 JSON 块原样保留（恢复路径需识别为不支持并跳过）。
+ * 逐字照搬自 agent-worldbook-takeover.ts 的 stripTakeoverMetaBlock_ACU。
  */
-function buildTableCandidateScope_ACU(collectors) {
-    const seen = new Set();
-    const names = [];
-    for (const collect of collectors) {
-        for (const raw of collect()) {
-            const name = String(raw ?? '').trim();
-            if (name && !seen.has(name)) {
-                seen.add(name);
-                names.push(name);
-            }
-        }
-    }
-    return names;
-}
-/**
- * 收集异步来源的候选书名（注入目标 / 角色绑定等），与 buildTableCandidateScope_ACU
- * 保持相同的保序去重语义。单个来源失败时静默跳过：这些是可选来源，不阻断填表主流程，
- * 失败仅意味着该书本次不进入候选作用域（后续仍可通过来源 1-3 进入）。
- */
-async function collectAsyncTableCandidateScope_ACU(collectors) {
-    const seen = new Set();
-    const names = [];
-    for (const collect of collectors) {
-        let values;
+function stripAgentTakeoverMetaBlockStrict_ACU(comment) {
+    return normalizeCommentText_ACU$2(comment)
+        .replace(createAgentTakeoverMetaPattern_ACU(), (block, rawMeta) => {
         try {
-            values = await collect();
+            const meta = JSON.parse(rawMeta.trim());
+            return meta.version === 1 && meta.kind === 'agent_worldbook_takeover' ? '\n' : block;
         }
         catch {
+            return block;
+        }
+    })
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+/**
+ * 宽松剥离：不校验 version/kind，清除任何残留 takeover 块（含 {} 等非法 meta）。
+ * 逐字照搬自 agent-worldbook-snapshot-restore.ts 的 stripTakeoverMeta_ACU。
+ * 与 strict 版行为相反，禁止合并。
+ */
+function stripAgentTakeoverMetaBlockLoose_ACU(comment) {
+    return String(comment || '').replace(createAgentTakeoverMetaPattern_ACU(), '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+/** 剥离 Skill meta 块（不校验内容）。逐字照搬自 agent-worldbook-skill-meta.ts 的 stripWorldbookSkillMetaBlock_ACU。 */
+function stripWorldbookSkillMetaBlockCore_ACU(comment) {
+    return normalizeCommentText_ACU$2(comment)
+        .replace(createSkillMetaPattern_ACU(), '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+}
+/**
+ * 展示专用标题：strict 剥 takeover → 剥 Skill → 压成单行 → 空则回退 `条目 ${uid}`。
+ * 注意：单行压缩只在这里，绝不进入任何 hash 输入路径。
+ */
+function buildWorldbookEntryDisplayLabel_ACU(comment, uid) {
+    const cleaned = stripWorldbookSkillMetaBlockCore_ACU(stripAgentTakeoverMetaBlockStrict_ACU(comment))
+        .replace(/\s+/g, ' ')
+        .trim();
+    return cleaned || `条目 ${uid}`;
+}
+
+function isSamePatchValue_ACU(left, right) {
+    return JSON.stringify(left) === JSON.stringify(right);
+}
+function doesEntryMatchPatch_ACU(entry, patch) {
+    if (!entry || String(entry.uid) !== String(patch.uid))
+        return false;
+    return Object.entries(patch)
+        .filter(([key]) => key !== 'uid')
+        .every(([key, value]) => isSamePatchValue_ACU(entry[key], value));
+}
+async function readConfirmedPatches_ACU(bookName, patches) {
+    const entries = await getLorebookEntries_ACU(bookName);
+    const entriesByUid = new Map((entries || []).map(entry => [String(entry?.uid), entry]));
+    return patches.filter(patch => doesEntryMatchPatch_ACU(entriesByUid.get(String(patch.uid)), patch));
+}
+/**
+ * 恢复操作实际改动过的字段在写入前的值。仅保存此次 restore patch 涉及的字段，
+ * 使调用方可在后续 scope 配置持久化失败时将条目恢复为接管中的原始状态。
+ */
+async function rollbackAgentWorldbookSnapshotRestore_ACU(rollbackPatchesByBook, restoredPatchesByBook) {
+    let succeeded = true;
+    for (const [rawBookName, patches] of Object.entries(rollbackPatchesByBook || {})) {
+        const bookName = String(rawBookName || '').trim();
+        if (!bookName || !Array.isArray(patches) || patches.length === 0)
             continue;
-        }
-        for (const raw of values) {
-            const name = String(raw ?? '').trim();
-            if (name && !seen.has(name)) {
-                seen.add(name);
-                names.push(name);
+        try {
+            const restoredPatches = restoredPatchesByBook?.[bookName];
+            if (!Array.isArray(restoredPatches) || restoredPatches.length === 0) {
+                succeeded = false;
+                logWarn_ACU(`[Agent世界书] 回滚世界书条目恢复缺少恢复后状态：${bookName}`);
+                continue;
+            }
+            const restoredByUid = new Map(restoredPatches.map(patch => [String(patch.uid), patch]));
+            const entries = await getLorebookEntries_ACU(bookName);
+            const entriesByUid = new Map((entries || []).map(entry => [String(entry?.uid), entry]));
+            const safePatches = patches.filter(patch => {
+                const restoredPatch = restoredByUid.get(String(patch.uid));
+                return restoredPatch !== undefined
+                    && doesEntryMatchPatch_ACU(entriesByUid.get(String(patch.uid)), restoredPatch);
+            });
+            if (safePatches.length !== patches.length) {
+                succeeded = false;
+                logWarn_ACU(`[Agent世界书] 回滚世界书条目恢复发生并发冲突：${bookName}`);
+            }
+            if (safePatches.length === 0)
+                continue;
+            await setLorebookEntries_ACU(bookName, safePatches);
+            const confirmed = await readConfirmedPatches_ACU(bookName, safePatches);
+            if (confirmed.length !== safePatches.length) {
+                succeeded = false;
+                logWarn_ACU(`[Agent世界书] 回滚世界书条目恢复未被完整确认：${bookName}`);
             }
         }
+        catch (error) {
+            succeeded = false;
+            logWarn_ACU(`[Agent世界书] 回滚世界书条目恢复失败：${bookName}`, error);
+        }
     }
-    return names;
+    return succeeded;
 }
-
-/**
- * service/runtime/template-vars/cell-utils.ts
- * 表格单元格操作纯函数（getCellValue / normalizeOperators / compareValue / evaluateCellExpression）
- * 从 helpers-template-vars.ts 拆出
- */
-/**
- * 获取表格中指定单元格的值
- * @param allTablesJson - 完整的表格数据对象
- * @param tableName - 表格名
- * @param rowName - 行标识（在任意列中匹配）
- * @param colName - 列名（在表头中匹配）
- * @returns {{ success: boolean, value: any, rawValue?: string, error?: string }}
- */
-function getCellValue_ACU(allTablesJson, tableName, rowName, colName) {
-    try {
-        if (!allTablesJson || typeof allTablesJson !== 'object') {
-            return { success: false, value: null, error: '表格数据为空' };
-        }
-        const sheets = Object.values(allTablesJson).filter((x) => x && typeof x === 'object' && x.name && x.content);
-        const targetTable = sheets.find(s => String(s.name || '').trim() === tableName.trim());
-        if (!targetTable) {
-            return { success: false, value: null, error: `未找到表格: ${tableName}` };
-        }
-        if (!Array.isArray(targetTable.content) || targetTable.content.length < 1) {
-            return { success: false, value: null, error: `表格 ${tableName} 没有数据` };
-        }
-        const headerRow = targetTable.content[0];
-        if (!Array.isArray(headerRow)) {
-            return { success: false, value: null, error: `表格 ${tableName} 表头格式错误` };
-        }
-        const colIndex = headerRow.findIndex(h => String(h || '').trim() === colName.trim());
-        if (colIndex === -1) {
-            return { success: false, value: null, error: `未找到列: ${colName}` };
-        }
-        const normalizedRowName = String(rowName || '').trim();
-        const dataRows = targetTable.content.slice(1);
-        const targetRow = dataRows.find((row) => {
-            if (!Array.isArray(row))
-                return false;
-            return row.some((cell) => String(cell || '').trim() === normalizedRowName);
-        });
-        if (!targetRow) {
-            return { success: false, value: null, error: `未找到行标识: ${rowName}` };
-        }
-        const cellValue = targetRow[colIndex];
-        const numValue = parseFloat(cellValue);
-        if (!isNaN(numValue) && isFinite(numValue)) {
-            return { success: true, value: numValue, rawValue: String(cellValue) };
-        }
-        return { success: true, value: String(cellValue || ''), rawValue: String(cellValue || '') };
-    }
-    catch (e) {
-        logError_ACU('[剧情推进] getCellValue_ACU 出错:', e);
-        return { success: false, value: null, error: String(e.message || e) };
-    }
+function buildAgentWorldbookSelectionSignature_ACU(bookNames) {
+    return buildAgentWorldbookSnapshotSelectionSignature_ACU(bookNames);
 }
-/**
- * 规范化运算符表达式（将全角运算符转换为半角）
- */
-function normalizeOperators_ACU(expression) {
-    if (!expression || typeof expression !== 'string')
-        return expression;
-    return expression
-        .replace(/＞/g, '>')
-        .replace(/＜/g, '<')
-        .replace(/＝/g, '==')
-        .replace(/≥/g, '>=')
-        .replace(/≦/g, '<=')
-        .replace(/≤/g, '<=')
-        .replace(/≠/g, '!=');
+function hasValidUid_ACU(value) {
+    return value !== null && value !== undefined && String(value).trim() !== '';
 }
-/**
- * 执行单个值的比较
- */
-function compareValue_ACU(cellValue, operator, compareValue) {
-    const numCompareValue = parseFloat(compareValue);
-    const isNumericComparison = !isNaN(numCompareValue) && isFinite(numCompareValue);
-    if (isNumericComparison && typeof cellValue === 'number') {
-        switch (operator) {
-            case '>': return cellValue > numCompareValue;
-            case '<': return cellValue < numCompareValue;
-            case '>=': return cellValue >= numCompareValue;
-            case '<=': return cellValue <= numCompareValue;
-            case '==': return cellValue === numCompareValue;
-            case '!=': return cellValue !== numCompareValue;
-            default: return false;
-        }
-    }
-    else {
-        const strCellValue = String(cellValue);
-        const strCompareValue = String(compareValue);
-        switch (operator) {
-            case '==': return strCellValue === strCompareValue;
-            case '!=': return strCellValue !== strCompareValue;
-            case '>': return strCellValue > strCompareValue;
-            case '<': return strCellValue < strCompareValue;
-            case '>=': return strCellValue >= strCompareValue;
-            case '<=': return strCellValue <= strCompareValue;
-            default: return false;
-        }
-    }
+function stripTakeoverMeta_ACU(comment) {
+    return stripAgentTakeoverMetaBlockLoose_ACU(comment);
 }
-/**
- * 解析数值比较表达式（简化版）
- * 支持格式：
- * - 精确匹配：表格名/行标识/列名 > 50
- * - 模糊匹配（某行）：表格名/行名 > 50
- * - 模糊匹配（某列）：表格名/列名 > 50
- */
-function evaluateCellExpression_ACU(expression, allTablesJson) {
-    if (!expression || typeof expression !== 'string')
-        return false;
-    const normalizedExpr = normalizeOperators_ACU(expression);
-    const operators = ['>=', '<=', '!=', '==', '>', '<'];
-    let matchedOperator = null;
-    let cellRef = '';
-    let compareValue = '';
-    for (const op of operators) {
-        const opIndex = normalizedExpr.indexOf(op);
-        if (opIndex !== -1) {
-            cellRef = normalizedExpr.substring(0, opIndex).trim();
-            compareValue = normalizedExpr.substring(opIndex + op.length).trim();
-            matchedOperator = op;
-            break;
-        }
+function comparableComment_ACU(comment) {
+    return stripTakeoverMeta_ACU(comment).replace(createSkillMetaPattern_ACU(), '\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+function isCommentHashMatched_ACU(snapshotHash, currentComment) {
+    if (!snapshotHash)
+        return true;
+    const stripped = stripTakeoverMeta_ACU(currentComment);
+    return hashUserInput_ACU(comparableComment_ACU(currentComment)) === snapshotHash
+        || hashUserInput_ACU(stripped) === snapshotHash;
+}
+async function restoreAgentWorldbookSnapshotEntries_ACU(snapshot, expectedBookNames) {
+    const expectedSignature = buildAgentWorldbookSelectionSignature_ACU(expectedBookNames);
+    if (snapshot.active !== true || snapshot.selectionSignature !== expectedSignature) {
+        return {
+            restored: 0,
+            skipped: 0,
+            failed: 0,
+            signatureMatched: false,
+            rollbackPatchesByBook: {},
+            restoredPatchesByBook: {},
+        };
     }
-    if (!matchedOperator) {
-        logWarn_ACU('[剧情推进] evaluateCellExpression_ACU: 未找到有效的比较运算符, expression=', expression);
-        return false;
-    }
-    const parts = cellRef.split('/').map(p => p.trim()).filter(p => p);
-    if (parts.length < 2 || parts.length > 3) {
-        logWarn_ACU('[剧情推进] evaluateCellExpression_ACU: 单元格引用格式错误, cellRef=', cellRef);
-        return false;
-    }
-    const [tableName, name1, name2] = parts;
-    if (!allTablesJson || typeof allTablesJson !== 'object') {
-        return matchedOperator === '!=';
-    }
-    const sheets = Object.values(allTablesJson).filter((x) => x && typeof x === 'object' && x.name && x.content);
-    const targetTable = sheets.find(s => String(s.name || '').trim() === tableName.trim());
-    if (!targetTable || !Array.isArray(targetTable.content) || targetTable.content.length < 1) {
-        logDebug_ACU('[剧情推进] evaluateCellExpression_ACU: 未找到表格或表格为空, tableName=', tableName);
-        return matchedOperator === '!=';
-    }
-    const headerRow = targetTable.content[0];
-    if (!Array.isArray(headerRow)) {
-        return false;
-    }
-    const dataRows = targetTable.content.slice(1);
-    if (parts.length === 3) {
-        const rowName = name1;
-        const colName = name2;
-        let cellResult = getCellValue_ACU(allTablesJson, tableName, rowName, colName);
-        if (cellResult.success) {
-            return compareValue_ACU(cellResult.value, matchedOperator, compareValue);
-        }
-        cellResult = getCellValue_ACU(allTablesJson, tableName, colName, rowName);
-        if (cellResult.success) {
-            return compareValue_ACU(cellResult.value, matchedOperator, compareValue);
-        }
-        return matchedOperator === '!=';
-    }
-    else if (parts.length === 2) {
-        const targetName = name1;
-        let foundAnyCell = false;
-        const targetRow = dataRows.find((row) => {
-            if (!Array.isArray(row))
-                return false;
-            return String(row[0] || '').trim() === targetName.trim();
-        });
-        if (targetRow) {
-            foundAnyCell = true;
-            for (let colIdx = 1; colIdx < targetRow.length; colIdx++) {
-                const cellValue = targetRow[colIdx];
-                if (compareValue_ACU(cellValue, matchedOperator, compareValue)) {
-                    return true;
-                }
-            }
-        }
-        const colIndex = headerRow.findIndex(h => String(h || '').trim() === targetName.trim());
-        if (colIndex !== -1) {
-            foundAnyCell = true;
-            for (const row of dataRows) {
-                if (!Array.isArray(row))
+    let restored = 0;
+    let skipped = 0;
+    let failed = 0;
+    const rollbackPatchesByBook = {};
+    const restoredPatchesByBook = {};
+    for (const [rawBookName, rawSnapshotEntries] of Object.entries(snapshot.books || {})) {
+        const bookName = String(rawBookName || '').trim();
+        const snapshotEntries = Array.isArray(rawSnapshotEntries) ? rawSnapshotEntries : [];
+        if (!bookName || snapshotEntries.length === 0)
+            continue;
+        try {
+            const entries = await getLorebookEntries_ACU(bookName);
+            const currentByUid = new Map((entries || []).map(entry => [String(entry?.uid), entry]));
+            const patches = [];
+            const rollbackPatches = [];
+            let restoredInBook = 0;
+            for (const snapshotEntry of snapshotEntries) {
+                if (!hasValidUid_ACU(snapshotEntry?.uid)) {
+                    skipped += 1;
                     continue;
-                const cellValue = row[colIndex];
-                if (compareValue_ACU(cellValue, matchedOperator, compareValue)) {
-                    return true;
+                }
+                const current = currentByUid.get(String(snapshotEntry.uid));
+                if (!current || !isCommentHashMatched_ACU(snapshotEntry.commentHash, current.comment)) {
+                    if (current) {
+                        const strippedComment = stripTakeoverMeta_ACU(current.comment);
+                        if (strippedComment !== String(current.comment || '')) {
+                            patches.push({ uid: snapshotEntry.uid, comment: strippedComment });
+                            rollbackPatches.push({ uid: snapshotEntry.uid, comment: current.comment });
+                        }
+                    }
+                    skipped += 1;
+                    continue;
+                }
+                const patch = {
+                    uid: snapshotEntry.uid,
+                    comment: stripTakeoverMeta_ACU(current.comment),
+                    enabled: snapshotEntry.previousEnabled !== false,
+                    keys: Array.isArray(snapshotEntry.previousKeys) ? snapshotEntry.previousKeys : [],
+                    type: snapshotEntry.previousType,
+                };
+                patches.push(patch);
+                rollbackPatches.push({
+                    uid: snapshotEntry.uid,
+                    comment: current.comment,
+                    enabled: current.enabled,
+                    keys: current.keys,
+                    type: current.type,
+                });
+                restoredInBook += 1;
+            }
+            if (patches.length > 0) {
+                // 宿主批量写在 reject 前仍可能已应用部分 patch，因此先保留完整 pre-image。
+                rollbackPatchesByBook[bookName] = rollbackPatches;
+                restoredPatchesByBook[bookName] = patches;
+                let writeFailed = false;
+                try {
+                    await setLorebookEntries_ACU(bookName, patches);
+                }
+                catch (error) {
+                    writeFailed = true;
+                    logWarn_ACU(`[Agent世界书] 恢复世界书条目写入失败：${bookName}`, error);
+                }
+                try {
+                    const confirmed = await readConfirmedPatches_ACU(bookName, patches);
+                    const confirmedUidSet = new Set(confirmed.map(patch => String(patch.uid)));
+                    rollbackPatchesByBook[bookName] = rollbackPatches.filter(patch => confirmedUidSet.has(String(patch.uid)));
+                    restoredPatchesByBook[bookName] = patches.filter(patch => confirmedUidSet.has(String(patch.uid)));
+                    if (rollbackPatchesByBook[bookName].length === 0)
+                        delete rollbackPatchesByBook[bookName];
+                    if (restoredPatchesByBook[bookName].length === 0)
+                        delete restoredPatchesByBook[bookName];
+                    if (writeFailed || confirmed.length !== patches.length) {
+                        restoredInBook = 0;
+                        failed += snapshotEntries.length;
+                    }
+                }
+                catch (error) {
+                    // 无法读回时不能假定零副作用；保留完整 pre-image 交由上层补偿。
+                    restoredInBook = 0;
+                    failed += snapshotEntries.length;
+                    logWarn_ACU(`[Agent世界书] 恢复世界书条目后确认失败：${bookName}`, error);
                 }
             }
+            restored += restoredInBook;
         }
-        if (foundAnyCell) {
-            return false;
-        }
-        else {
-            return matchedOperator === '!=';
+        catch (error) {
+            logWarn_ACU(`[Agent世界书] 恢复世界书条目失败：${bookName}`, error);
+            failed += snapshotEntries.length;
         }
     }
-    return false;
-}
-
-/**
- * service/runtime/template-vars/var-store-and-tags.ts
- * 模板变量存储管理 + Random/Calc/Max/Min 标签解析与替换
- * 从 helpers-template-vars.ts 拆出
- */
-let randomVariables_ACU = {};
-let calcVariables_ACU = {};
-let maxVariables_ACU = {};
-let minVariables_ACU = {};
-/** 获取模板变量存储的当前快照（供 plot-runtime 跨模块读取） */
-function getTemplateVariableStores_ACU() {
-    return { randomVariables_ACU, calcVariables_ACU, maxVariables_ACU, minVariables_ACU };
-}
-/** 批量设置模板变量存储（供 plot-runtime 跨模块恢复/重置） */
-function setTemplateVariableStores_ACU(stores) {
-    randomVariables_ACU = (stores && typeof stores.randomVariables_ACU === 'object') ? { ...stores.randomVariables_ACU } : {};
-    calcVariables_ACU = (stores && typeof stores.calcVariables_ACU === 'object') ? { ...stores.calcVariables_ACU } : {};
-    maxVariables_ACU = (stores && typeof stores.maxVariables_ACU === 'object') ? { ...stores.maxVariables_ACU } : {};
-    minVariables_ACU = (stores && typeof stores.minVariables_ACU === 'object') ? { ...stores.minVariables_ACU } : {};
-}
-/**
- * 解析随机数标签，生成随机整数
- * 语法：
- * - <random min="1" max="100" /> - 生成随机数并替换标签
- * - <random id="dice" min="1" max="6" /> - 生成随机数并存储为变量
- */
-function parseRandomTags_ACU(content) {
-    if (!content || typeof content !== 'string') {
-        return content || '';
-    }
-    randomVariables_ACU = {};
-    const randomRegex = /<random\s+([^>]*?)\s*\/?>/gi;
-    return content.replace(randomRegex, (match, attrs) => {
-        const idMatch = attrs.match(/id\s*=\s*"([^"]*)"/i);
-        const minMatch = attrs.match(/min\s*=\s*"(\d+)"/i);
-        const maxMatch = attrs.match(/max\s*=\s*"(\d+)"/i);
-        if (!minMatch || !maxMatch) {
-            logWarn_ACU('[随机函数] 缺少 min 或 max 参数:', attrs);
-            return match;
-        }
-        const id = idMatch ? idMatch[1].trim() : null;
-        const min = parseInt(minMatch[1], 10);
-        const max = parseInt(maxMatch[1], 10);
-        if (isNaN(min) || isNaN(max)) {
-            logWarn_ACU('[随机函数] 无效的随机参数:', minMatch[1], maxMatch[1]);
-            return match;
-        }
-        let randomValue;
-        if (min > max) {
-            logWarn_ACU('[随机函数] 最小值大于最大值，自动交换:', min, max);
-            randomValue = Math.floor(Math.random() * (min - max + 1)) + max;
-        }
-        else {
-            randomValue = Math.floor(Math.random() * (max - min + 1)) + min;
-        }
-        if (id) {
-            randomVariables_ACU[id] = randomValue;
-            logDebug_ACU('[随机函数] 生成随机数变量:', id, '=', randomValue, '范围:', min, '-', max);
-            return '';
-        }
-        else {
-            logDebug_ACU('[随机函数] 生成随机数:', randomValue, '范围:', min, '-', max);
-            return String(randomValue);
-        }
-    });
-}
-/**
- * 替换随机数变量引用 $random:id
- */
-function replaceRandomVariables_ACU(content) {
-    if (!content || typeof content !== 'string') {
-        return content || '';
-    }
-    return content.replace(/\$random:([a-zA-Z_][a-zA-Z0-9_]*)/gi, (match, id) => {
-        if (randomVariables_ACU.hasOwnProperty(id)) {
-            return String(randomVariables_ACU[id]);
-        }
-        logWarn_ACU('[随机函数] 未找到随机数变量:', id);
-        return match;
-    });
-}
-/**
- * 获取随机数变量值（用于条件判断）
- */
-function getRandomVariable_ACU(id) {
-    if (randomVariables_ACU.hasOwnProperty(id)) {
-        return randomVariables_ACU[id];
-    }
-    return null;
-}
-// =========================
-// [剧情推进] 计算变量功能
-// =========================
-/**
- * 解析表达式中的变量引用，返回数值
- * 支持：cell:表名/行名/列名、$random:id、$calc:id、$max:id、$min:id
- */
-function parseCalcExpressionValue_ACU(expr, context) {
-    if (!expr || typeof expr !== 'string') {
-        return { success: false, value: null, error: '表达式为空' };
-    }
-    const trimmed = expr.trim();
-    if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
-        return { success: true, value: parseFloat(trimmed), error: null };
-    }
-    if (trimmed.startsWith('cell:')) {
-        const cellPath = trimmed.substring(5).trim();
-        const parts = cellPath.split('/');
-        if (parts.length !== 3) {
-            return { success: false, value: null, error: `cell 路径格式错误: ${cellPath}` };
-        }
-        const [tableName, rowName, colName] = parts.map((p) => p.trim());
-        const cellValue = getCellValue_ACU(tableName, rowName, colName, context.allTablesJson);
-        if (cellValue === null || cellValue === undefined || cellValue === '') {
-            return { success: false, value: null, error: `cell 值不存在: ${cellPath}` };
-        }
-        const numValue = parseFloat(cellValue);
-        if (isNaN(numValue)) {
-            return { success: false, value: null, error: `cell 值不是数字: ${cellPath} = ${cellValue}` };
-        }
-        return { success: true, value: numValue, error: null };
-    }
-    const randomMatch = trimmed.match(/^\$random:([a-zA-Z_][a-zA-Z0-9_]*)$/i);
-    if (randomMatch) {
-        const randomId = randomMatch[1];
-        const randomValue = getRandomVariable_ACU(randomId);
-        if (randomValue === null) {
-            return { success: false, value: null, error: `随机数变量不存在: ${randomId}` };
-        }
-        return { success: true, value: randomValue, error: null };
-    }
-    const calcMatch = trimmed.match(/^\$calc:([a-zA-Z_][a-zA-Z0-9_]*)$/i);
-    if (calcMatch) {
-        const calcId = calcMatch[1];
-        if (calcVariables_ACU.hasOwnProperty(calcId)) {
-            return { success: true, value: calcVariables_ACU[calcId], error: null };
-        }
-        return { success: false, value: null, error: `计算变量不存在: ${calcId}` };
-    }
-    const maxMatch = trimmed.match(/^\$max:([a-zA-Z_][a-zA-Z0-9_]*)$/i);
-    if (maxMatch) {
-        const maxId = maxMatch[1];
-        if (maxVariables_ACU.hasOwnProperty(maxId)) {
-            return { success: true, value: maxVariables_ACU[maxId], error: null };
-        }
-        return { success: false, value: null, error: `最大值变量不存在: ${maxId}` };
-    }
-    const minMatch = trimmed.match(/^\$min:([a-zA-Z_][a-zA-Z0-9_]*)$/i);
-    if (minMatch) {
-        const minId = minMatch[1];
-        if (minVariables_ACU.hasOwnProperty(minId)) {
-            return { success: true, value: minVariables_ACU[minId], error: null };
-        }
-        return { success: false, value: null, error: `最小值变量不存在: ${minId}` };
-    }
-    return { success: false, value: null, error: `无法解析表达式: ${trimmed}` };
-}
-/**
- * 计算表达式（支持四则运算和括号）
- */
-function evaluateCalcExpression_ACU(expr, context) {
-    if (!expr || typeof expr !== 'string') {
-        return { success: false, value: null, error: '表达式为空' };
-    }
-    let processedExpr = expr.trim();
-    processedExpr = processedExpr.replace(/cell:([^+\-*/%()\s]+)/gi, (match, cellPath) => {
-        const parts = cellPath.split('/');
-        if (parts.length !== 3) {
-            return 'NaN';
-        }
-        const [tableName, rowName, colName] = parts.map((p) => p.trim());
-        const cellValue = getCellValue_ACU(tableName, rowName, colName, context.allTablesJson);
-        if (cellValue === null || cellValue === undefined || cellValue === '') {
-            return 'NaN';
-        }
-        const numValue = parseFloat(cellValue);
-        return isNaN(numValue) ? 'NaN' : String(numValue);
-    });
-    processedExpr = processedExpr.replace(/\$random:([a-zA-Z_][a-zA-Z0-9_]*)/gi, (match, id) => {
-        const value = getRandomVariable_ACU(id);
-        return value === null ? 'NaN' : String(value);
-    });
-    processedExpr = processedExpr.replace(/\$calc:([a-zA-Z_][a-zA-Z0-9_]*)/gi, (match, id) => {
-        if (calcVariables_ACU.hasOwnProperty(id)) {
-            return String(calcVariables_ACU[id]);
-        }
-        return 'NaN';
-    });
-    processedExpr = processedExpr.replace(/\$max:([a-zA-Z_][a-zA-Z0-9_]*)/gi, (match, id) => {
-        if (maxVariables_ACU.hasOwnProperty(id)) {
-            return String(maxVariables_ACU[id]);
-        }
-        return 'NaN';
-    });
-    processedExpr = processedExpr.replace(/\$min:([a-zA-Z_][a-zA-Z0-9_]*)/gi, (match, id) => {
-        if (minVariables_ACU.hasOwnProperty(id)) {
-            return String(minVariables_ACU[id]);
-        }
-        return 'NaN';
-    });
-    if (processedExpr.includes('NaN')) {
-        return { success: false, value: null, error: `表达式包含无效变量: ${processedExpr}` };
-    }
-    if (/\/\s*0(?![.\d])/.test(processedExpr)) {
-        return { success: false, value: null, error: '除数为零' };
-    }
-    try {
-        if (!/^[\d+\-*/%().\s]+$/.test(processedExpr)) {
-            return { success: false, value: null, error: `表达式包含非法字符: ${processedExpr}` };
-        }
-        const result = new Function('return ' + processedExpr)();
-        if (typeof result !== 'number' || isNaN(result) || !isFinite(result)) {
-            return { success: false, value: null, error: `计算结果无效: ${result}` };
-        }
-        const intResult = Math.floor(result);
-        return { success: true, value: intResult, error: null };
-    }
-    catch (e) {
-        return { success: false, value: null, error: `计算错误: ${e.message}` };
-    }
-}
-/**
- * 解析计算变量标签 <calc id="xxx" expr="表达式" />
- */
-function parseCalcTags_ACU(content, context) {
-    if (!content || typeof content !== 'string') {
-        return content || '';
-    }
-    calcVariables_ACU = {};
-    const calcRegex = /<calc\s+([^>]*?)\s*\/?>/gi;
-    return content.replace(calcRegex, (match, attrs) => {
-        const idMatch = attrs.match(/id\s*=\s*"([^"]*)"/i);
-        const exprMatch = attrs.match(/expr\s*=\s*"([^"]*)"/i);
-        if (!idMatch || !exprMatch) {
-            logWarn_ACU('[计算变量] 缺少 id 或 expr 参数:', attrs);
-            return match;
-        }
-        const id = idMatch[1].trim();
-        const expr = exprMatch[1].trim();
-        const result = evaluateCalcExpression_ACU(expr, context);
-        if (result.success) {
-            calcVariables_ACU[id] = result.value;
-            logDebug_ACU('[计算变量] 定义成功:', id, '=', result.value, '表达式:', expr);
-            return '';
-        }
-        else {
-            logWarn_ACU('[计算变量] 定义失败:', id, '-', result.error);
-            return match;
-        }
-    });
-}
-/**
- * 解析最大值变量标签 <max id="xxx" values="值1, 值2, ..." />
- */
-function parseMaxTags_ACU(content, context) {
-    if (!content || typeof content !== 'string') {
-        return content || '';
-    }
-    maxVariables_ACU = {};
-    const maxRegex = /<max\s+([^>]*?)\s*\/?>/gi;
-    return content.replace(maxRegex, (match, attrs) => {
-        const idMatch = attrs.match(/id\s*=\s*"([^"]*)"/i);
-        const valuesMatch = attrs.match(/values\s*=\s*"([^"]*)"/i);
-        if (!idMatch || !valuesMatch) {
-            logWarn_ACU('[最大值变量] 缺少 id 或 values 参数:', attrs);
-            return match;
-        }
-        const id = idMatch[1].trim();
-        const valuesStr = valuesMatch[1].trim();
-        const valueExprs = valuesStr.split(',').map((v) => v.trim()).filter((v) => v);
-        if (valueExprs.length === 0) {
-            logWarn_ACU('[最大值变量] 值列表为空:', id);
-            return match;
-        }
-        const values = [];
-        for (const expr of valueExprs) {
-            const result = parseCalcExpressionValue_ACU(expr, context);
-            if (!result.success) {
-                logWarn_ACU('[最大值变量] 解析值失败:', id, '-', result.error, '表达式:', expr);
-                return match;
-            }
-            values.push(result.value);
-        }
-        const maxValue = Math.max(...values);
-        maxVariables_ACU[id] = maxValue;
-        logDebug_ACU('[最大值变量] 定义成功:', id, '=', maxValue, '值列表:', values);
-        return '';
-    });
-}
-/**
- * 解析最小值变量标签 <min id="xxx" values="值1, 值2, ..." />
- */
-function parseMinTags_ACU(content, context) {
-    if (!content || typeof content !== 'string') {
-        return content || '';
-    }
-    minVariables_ACU = {};
-    const minRegex = /<min\s+([^>]*?)\s*\/?>/gi;
-    return content.replace(minRegex, (match, attrs) => {
-        const idMatch = attrs.match(/id\s*=\s*"([^"]*)"/i);
-        const valuesMatch = attrs.match(/values\s*=\s*"([^"]*)"/i);
-        if (!idMatch || !valuesMatch) {
-            logWarn_ACU('[最小值变量] 缺少 id 或 values 参数:', attrs);
-            return match;
-        }
-        const id = idMatch[1].trim();
-        const valuesStr = valuesMatch[1].trim();
-        const valueExprs = valuesStr.split(',').map((v) => v.trim()).filter((v) => v);
-        if (valueExprs.length === 0) {
-            logWarn_ACU('[最小值变量] 值列表为空:', id);
-            return match;
-        }
-        const values = [];
-        for (const expr of valueExprs) {
-            const result = parseCalcExpressionValue_ACU(expr, context);
-            if (!result.success) {
-                logWarn_ACU('[最小值变量] 解析值失败:', id, '-', result.error, '表达式:', expr);
-                return match;
-            }
-            values.push(result.value);
-        }
-        const minValue = Math.min(...values);
-        minVariables_ACU[id] = minValue;
-        logDebug_ACU('[最小值变量] 定义成功:', id, '=', minValue, '值列表:', values);
-        return '';
-    });
-}
-/** 替换计算变量引用 $calc:id */
-function replaceCalcVariables_ACU(content) {
-    if (!content || typeof content !== 'string') {
-        return content || '';
-    }
-    return content.replace(/\$calc:([a-zA-Z_][a-zA-Z0-9_]*)/gi, (match, id) => {
-        if (calcVariables_ACU.hasOwnProperty(id)) {
-            return String(calcVariables_ACU[id]);
-        }
-        logWarn_ACU('[计算变量] 未找到变量:', id);
-        return match;
-    });
-}
-/** 替换最大值变量引用 $max:id */
-function replaceMaxVariables_ACU(content) {
-    if (!content || typeof content !== 'string') {
-        return content || '';
-    }
-    return content.replace(/\$max:([a-zA-Z_][a-zA-Z0-9_]*)/gi, (match, id) => {
-        if (maxVariables_ACU.hasOwnProperty(id)) {
-            return String(maxVariables_ACU[id]);
-        }
-        logWarn_ACU('[最大值变量] 未找到变量:', id);
-        return match;
-    });
-}
-/** 替换最小值变量引用 $min:id */
-function replaceMinVariables_ACU(content) {
-    if (!content || typeof content !== 'string') {
-        return content || '';
-    }
-    return content.replace(/\$min:([a-zA-Z_][a-zA-Z0-9_]*)/gi, (match, id) => {
-        if (minVariables_ACU.hasOwnProperty(id)) {
-            return String(minVariables_ACU[id]);
-        }
-        logWarn_ACU('[最小值变量] 未找到变量:', id);
-        return match;
-    });
-}
-/** 获取计算变量值（用于条件判断） */
-function getCalcVariable_ACU(id) {
-    if (calcVariables_ACU.hasOwnProperty(id)) {
-        return calcVariables_ACU[id];
-    }
-    return null;
-}
-/** 获取最大值变量值（用于条件判断） */
-function getMaxVariable_ACU(id) {
-    if (maxVariables_ACU.hasOwnProperty(id)) {
-        return maxVariables_ACU[id];
-    }
-    return null;
-}
-/** 获取最小值变量值（用于条件判断） */
-function getMinVariable_ACU(id) {
-    if (minVariables_ACU.hasOwnProperty(id)) {
-        return minVariables_ACU[id];
-    }
-    return null;
+    return { restored, skipped, failed, signatureMatched: true, rollbackPatchesByBook, restoredPatchesByBook };
 }
 
 /**
@@ -55016,1999 +54648,594 @@ function extractTableNamesFromStatements(statements) {
     return Array.from(tableNames);
 }
 
-// ═══════════════════════════════════════════════════════════════
-// service/table/table-service.ts — 表格数据操作 service 层
-// 从 data/repositories/table-repo.ts 迁入（消除 data 层越权）
-// ═══════════════════════════════════════════════════════════════
-const TABLE_PERSIST_COMMIT_MODEL_REQUIRED_ACU = 'Table persistence requires table update commit model; direct unsafe writes are not allowed.';
-async function ensureLegacyStorageMigratedBeforeWrite_ACU(reason = 'table_write') {
-    const chat = getChatArray_ACU();
-    if (!Array.isArray(chat) || chat.length === 0)
-        return { success: true, migrated: false };
-    const isolationKey = getCurrentIsolationKey_ACU();
-    const isolationConfig = {
-        enabled: settings_ACU.dataIsolationEnabled,
-        code: settings_ACU.dataIsolationCode,
-    };
-    const strategy = resolveTableStorageStrategy_ACU(chat, isolationKey, isolationConfig);
-    if (strategy.mode !== 'legacy-v1')
-        return { success: true, migrated: false };
-    logWarn_ACU(`[LegacyMigrationGate] ${reason}: detected legacy-v1 before write, migrating first. reason=${strategy.reason}${strategy.warning ? `; warning=${strategy.warning}` : ''}`);
-    const mergedLegacyData = await mergeAllIndependentTablesLegacyV1_ACU();
-    if (!mergedLegacyData || !Object.keys(mergedLegacyData).some(k => k.startsWith('sheet_'))) {
-        return { success: false, error: '旧存储迁移失败：无法从 legacy-v1 合并出有效表格数据。' };
-    }
-    const migrationResult = await migrateLegacyStorageToV2OnLoad_ACU({
-        data: mergedLegacyData,
-        isolationKey,
-        isolationConfig,
-        skipUpdateFloors: settings_ACU.skipUpdateFloors,
-    });
-    if (!migrationResult.migrated) {
-        return { success: false, error: `旧存储迁移到 V2 失败: ${migrationResult.error || '未执行迁移'}` };
-    }
-    if (!migrationResult.data) {
-        return { success: false, error: '旧存储迁移到 V2 失败: 迁移成功结果缺少修复后的表格数据。' };
-    }
-    const postStrategy = resolveTableStorageStrategy_ACU(chat, isolationKey, isolationConfig);
-    if (postStrategy.mode === 'legacy-v1') {
-        return { success: false, error: `旧存储迁移后仍检测到 legacy-v1: ${postStrategy.reason}` };
-    }
-    const migratedData = migrationResult.data;
-    _set_currentJsonTableData_ACU(JSON.parse(JSON.stringify(migratedData)));
-    return { success: true, migrated: true, data: migratedData };
-}
-async function persistTablesToChatMessage_ACU(options = {}) {
-    if (!options.transactionContext || options.assumeCommitLock !== true) {
-        logError_ACU(TABLE_PERSIST_COMMIT_MODEL_REQUIRED_ACU);
-        return { saved: false, error: TABLE_PERSIST_COMMIT_MODEL_REQUIRED_ACU };
-    }
-    return persistTablesToChatMessageWithLockOption_ACU(options);
-}
-async function persistTablesToChatMessageWithLockOption_ACU(options = {}) {
-    const { targetMessageIndex = -1, targetSheetKeys = null, updateGroupKeys = null, trackingSheetKeys, filledSheetKeys: explicitFilledSheetKeys, tableData: explicitTableData, trackAsUpdate = true, source, requestId, batchId, operations, revisionWriteSet, forceCheckpoint, checkpointReason, manualRefillProgress, replaceExistingIncremental, assumeCommitLock, strictSave, manualCatchUpRunId, performanceRunId, performanceParentSpanId, transactionContext, } = options;
-    const effectiveTableData = explicitTableData !== undefined ? explicitTableData : currentJsonTableData_ACU;
-    if (!effectiveTableData) {
-        logError_ACU('Save aborted: currentJsonTableData_ACU is null.');
-        return { saved: false, error: 'currentJsonTableData is null' };
-    }
-    const currentIsolationKey = getCurrentIsolationKey_ACU();
-    const persistCore = async () => {
-        const chat = getChatArray_ACU();
-        if (!chat || chat.length === 0) {
-            logError_ACU('Save failed: Chat history is empty.');
-            return { saved: false, error: 'chat history is empty' };
+/**
+ * service/runtime/template-vars/cell-utils.ts
+ * 表格单元格操作纯函数（getCellValue / normalizeOperators / compareValue / evaluateCellExpression）
+ * 从 helpers-template-vars.ts 拆出
+ */
+/**
+ * 获取表格中指定单元格的值
+ * @param allTablesJson - 完整的表格数据对象
+ * @param tableName - 表格名
+ * @param rowName - 行标识（在任意列中匹配）
+ * @param colName - 列名（在表头中匹配）
+ * @returns {{ success: boolean, value: any, rawValue?: string, error?: string }}
+ */
+function getCellValue_ACU(allTablesJson, tableName, rowName, colName) {
+    try {
+        if (!allTablesJson || typeof allTablesJson !== 'object') {
+            return { success: false, value: null, error: '表格数据为空' };
         }
-        let strategy = resolveTableStorageStrategy_ACU(chat, currentIsolationKey, {
-            enabled: settings_ACU.dataIsolationEnabled,
-            code: settings_ACU.dataIsolationCode,
+        const sheets = Object.values(allTablesJson).filter((x) => x && typeof x === 'object' && x.name && x.content);
+        const targetTable = sheets.find(s => String(s.name || '').trim() === tableName.trim());
+        if (!targetTable) {
+            return { success: false, value: null, error: `未找到表格: ${tableName}` };
+        }
+        if (!Array.isArray(targetTable.content) || targetTable.content.length < 1) {
+            return { success: false, value: null, error: `表格 ${tableName} 没有数据` };
+        }
+        const headerRow = targetTable.content[0];
+        if (!Array.isArray(headerRow)) {
+            return { success: false, value: null, error: `表格 ${tableName} 表头格式错误` };
+        }
+        const colIndex = headerRow.findIndex(h => String(h || '').trim() === colName.trim());
+        if (colIndex === -1) {
+            return { success: false, value: null, error: `未找到列: ${colName}` };
+        }
+        const normalizedRowName = String(rowName || '').trim();
+        const dataRows = targetTable.content.slice(1);
+        const targetRow = dataRows.find((row) => {
+            if (!Array.isArray(row))
+                return false;
+            return row.some((cell) => String(cell || '').trim() === normalizedRowName);
         });
-        if (strategy.mode === 'legacy-v1') {
-            const migration = await ensureLegacyStorageMigratedBeforeWrite_ACU('persistTablesToChatMessage');
-            if (!migration.success) {
-                const message = migration.error || 'legacy-v1 table storage migration failed before write.';
-                logError_ACU(message);
-                return { saved: false, error: message };
-            }
-            strategy = resolveTableStorageStrategy_ACU(chat, currentIsolationKey, {
-                enabled: settings_ACU.dataIsolationEnabled,
-                code: settings_ACU.dataIsolationCode,
-            });
-            if (strategy.mode === 'legacy-v1') {
-                const message = `legacy-v1 table storage still detected after migration: ${strategy.reason}`;
-                logError_ACU(message);
-                return { saved: false, error: message };
-            }
+        if (!targetRow) {
+            return { success: false, value: null, error: `未找到行标识: ${rowName}` };
         }
-        let keysToSave = Array.isArray(targetSheetKeys)
-            ? targetSheetKeys.filter((sheetKey) => typeof sheetKey === 'string' && sheetKey.length > 0)
-            : getSortedSheetKeys_ACU(effectiveTableData);
-        keysToSave = [...new Set(keysToSave.filter(sheetKey => Boolean(effectiveTableData[sheetKey])))];
-        const changedCandidateKeys = Array.isArray(trackingSheetKeys)
-            ? trackingSheetKeys.filter((sheetKey) => typeof sheetKey === 'string' && sheetKey.length > 0)
-            : keysToSave;
-        const trackingKeySet = new Set(changedCandidateKeys.filter(sheetKey => Boolean(effectiveTableData[sheetKey])));
-        const metadataOnlyUpdateGroupKeys = Array.isArray(updateGroupKeys)
-            ? [...new Set(updateGroupKeys.filter(sheetKey => typeof sheetKey === 'string' && Boolean(effectiveTableData[sheetKey])))]
-            : [];
-        const filledSheetKeys = explicitFilledSheetKeys !== undefined
-            ? [...new Set((explicitFilledSheetKeys || []).filter(sheetKey => typeof sheetKey === 'string' && Boolean(effectiveTableData[sheetKey])))]
-            : (trackAsUpdate ? metadataOnlyUpdateGroupKeys : []);
-        try {
-            const existingGuide = getChatSheetGuideDataForIsolationKey_ACU(currentIsolationKey);
-            if (!existingGuide || !Object.keys(existingGuide).some(k => k.startsWith('sheet_'))) {
-                const templateObjForSeed = parseTableTemplateJson_ACU({ stripSeedRows: false });
-                const guideData = buildChatSheetGuideDataFromData_ACU(effectiveTableData, {
-                    preserveSeedRowsFromGuideData: null,
-                    seedRowsFromTemplateObj: templateObjForSeed,
-                });
-                if (guideData && Object.keys(guideData).some(k => k.startsWith('sheet_'))) {
-                    setChatSheetGuideDataForIsolationKey_ACU(currentIsolationKey, guideData, { reason: 'first_fill' });
-                    logDebug_ACU(`[SheetGuide] Created chat sheet guide for tag [${currentIsolationKey || '无标签'}] (tables=${Object.keys(guideData).filter(k => k.startsWith('sheet_')).length}).`);
-                }
-            }
+        const cellValue = targetRow[colIndex];
+        const numValue = parseFloat(cellValue);
+        if (!isNaN(numValue) && isFinite(numValue)) {
+            return { success: true, value: numValue, rawValue: String(cellValue) };
         }
-        catch (e) {
-            logWarn_ACU('[SheetGuide] Failed to create sheet guide on first fill:', e);
-        }
-        const persistedOperations = strategy.mode === 'empty' ? [] : operations;
-        const persistV2InTransaction = async (transactionContext) => {
-            const result = await persistTableMutationLogV2_ACU({
-                targetMessageIndex,
-                source: source || (metadataOnlyUpdateGroupKeys.length > 0 ? 'group_fill' : 'system'),
-                afterData: effectiveTableData,
-                operations: persistedOperations,
-                filledSheetKeys,
-                candidateChangedSheetKeys: [...trackingKeySet],
-                groupKeys: metadataOnlyUpdateGroupKeys,
-                requestId,
-                batchId,
-                forceCheckpoint: forceCheckpoint === true || strategy.mode === 'empty',
-                checkpointReason: checkpointReason || (strategy.mode === 'empty' ? 'init' : undefined),
-                manualRefillProgress,
-                replaceExistingIncremental,
-                isolationKey: currentIsolationKey,
-                revisionWriteSet,
-                assumeCommitLock,
-                strictSave,
-                manualCatchUpRunId,
-                performanceRunId,
-                performanceParentSpanId,
-                transactionContext,
-            });
-            return { saved: result.saved, messageIndex: result.messageIndex, error: result.error };
-        };
-        if (!transactionContext || assumeCommitLock !== true) {
-            logError_ACU(TABLE_PERSIST_COMMIT_MODEL_REQUIRED_ACU);
-            return { saved: false, error: TABLE_PERSIST_COMMIT_MODEL_REQUIRED_ACU };
-        }
-        transactionContext.assertFresh?.('persistTablesToChatMessage:before_v2_persist');
-        return persistV2InTransaction(transactionContext);
-    };
-    return persistCore();
-}
-/**
- * @deprecated 旧兼容写入口已收口禁用。所有表格写入必须走 runTableUpdateCommit_ACU。
- */
-async function saveIndependentTableToChatHistory_ACU(_targetMessageIndex = -1, _targetSheetKeys = null, _updateGroupKeys = null, _skipPostRefresh = false, _trackingSheetKeys = _targetSheetKeys, _source, _requestId, _batchId, _transactionContext, _operations, _revisionWriteSet) {
-    logError_ACU(TABLE_PERSIST_COMMIT_MODEL_REQUIRED_ACU);
-    return { saved: false, error: TABLE_PERSIST_COMMIT_MODEL_REQUIRED_ACU };
-}
-/**
- * 检查当前聊天是否为首次初始化（无任何已有表格数据）。
- */
-async function checkIfFirstTimeInit_ACU() {
-    const chat = getChatArray_ACU();
-    if (!chat || chat.length === 0)
-        return true;
-    const currentIsolationKey = getCurrentIsolationKey_ACU();
-    for (let i = chat.length - 1; i >= 0; i--) {
-        const message = chat[i];
-        if (message.is_user)
-            continue;
-        const tagData = readIsolatedTagData_ACU(message, currentIsolationKey);
-        if (isV2TagData_ACU(tagData)) {
-            const checkpointData = tagData.storageFrame?.checkpoint?.data;
-            if (checkpointData && Object.keys(checkpointData).some(k => k.startsWith('sheet_'))) {
-                return false;
-            }
-            const hasV2SheetOperation = (tagData.storageFrame?.logEntries || []).some((entry) => Array.isArray(entry?.operations) && entry.operations.some((operation) => {
-                if (operation?.kind === 'sheet_replace')
-                    return typeof operation.sheetKey === 'string' && operation.sheetKey.startsWith('sheet_');
-                if (operation?.kind === 'sheet_schema_migrate')
-                    return typeof operation.sheetKey === 'string' && operation.sheetKey.startsWith('sheet_');
-                if (operation?.kind === 'row_upsert' || operation?.kind === 'row_delete' || operation?.kind === 'meta_update')
-                    return typeof operation.sheetKey === 'string' && operation.sheetKey.startsWith('sheet_');
-                if (operation?.kind === 'data_replace')
-                    return operation.data && Object.keys(operation.data).some((k) => k.startsWith('sheet_'));
-                if (operation?.kind === 'sql_sheet_batch')
-                    return typeof operation.sheetKey === 'string' && operation.sheetKey.startsWith('sheet_') && Array.isArray(operation.statements) && operation.statements.length > 0;
-                if (operation?.kind === 'sql_batch')
-                    return Array.isArray(operation.statements) && operation.statements.length > 0;
-                return false;
-            }));
-            if (hasV2SheetOperation)
-                return false;
-        }
-        if (tagData?.independentData && Object.keys(tagData.independentData).some(k => k.startsWith('sheet_'))) {
-            return false;
-        }
-        const isolationConfig = { enabled: settings_ACU.dataIsolationEnabled, code: settings_ACU.dataIsolationCode };
-        if (isLegacyMatchForIsolation_ACU(message, isolationConfig)) {
-            const legacyIndep = readLegacyIndependentData_ACU(message);
-            if (legacyIndep && Object.keys(legacyIndep).some(k => k.startsWith('sheet_'))) {
-                return false;
-            }
-        }
-    }
-    return true;
-}
-/**
- * 从模板初始化数据库到内存（不写聊天记录）。
- * 返回 { initialized: boolean, error?: string }
- */
-async function initializeJsonTableInChatHistory_ACU() {
-    logDebug_ACU('No database found in chat history. Initializing a new one from template.');
-    try {
-        _set_currentJsonTableData_ACU(parseTableTemplateJson_ACU({ stripSeedRows: true }));
-        logDebug_ACU('Successfully initialized database in memory.');
-    }
-    catch (error) {
-        logError_ACU('Failed to parse template and initialize database in memory:', error);
-        _set_currentJsonTableData_ACU(null);
-        return { initialized: false, error: '从模板解析数据库失败，请检查模板格式。' };
-    }
-    if (!currentJsonTableData_ACU) {
-        return { initialized: false, error: '从模板解析数据库失败，请检查模板格式。' };
-    }
-    logDebug_ACU('Database initialized in memory. It will be saved to chat history on the first update.');
-    try {
-        const guideData = await ensureChatSheetGuideSeeded_ACU({ reason: 'init_chat_seedrows' });
-        if (guideData) {
-            attachSeedRowsToCurrentDataFromGuide_ACU(guideData);
-        }
+        return { success: true, value: String(cellValue || ''), rawValue: String(cellValue || '') };
     }
     catch (e) {
-        logWarn_ACU('[SheetGuide] Failed to ensure sheet guide during initialization:', e);
-    }
-    try {
-        await deleteAllGeneratedEntries_ACU$1();
-        logDebug_ACU('Deleted all generated lorebook entries during initialization.');
-    }
-    catch (deleteError) {
-        logWarn_ACU('Failed to delete generated lorebook entries during initialization:', deleteError);
-    }
-    return { initialized: true };
-}
-/**
- * 从聊天记录加载或创建表格数据到内存。
- * 返回 { loaded: boolean, source: 'merged'|'initialized'|'empty', error?: string }
- * 注意：不再内部调用 refreshMergedDataAndNotify，调用方按需自行刷新。
- */
-async function loadOrCreateJsonTableFromChatHistory_ACU() {
-    _set_currentJsonTableData_ACU(null);
-    logDebug_ACU('Attempting to load database from chat history...');
-    const chat = getChatArray_ACU();
-    applyTemplateScopeForCurrentChat_ACU();
-    if (!chat || chat.length === 0) {
-        logDebug_ACU('Chat history is empty. Initializing new database.');
-        const initResult = await initializeJsonTableInChatHistory_ACU();
-        return {
-            loaded: initResult.initialized,
-            source: 'initialized',
-            error: initResult.error,
-            data: currentJsonTableData_ACU,
-        };
-    }
-    const mergedData = await mergeAllIndependentTables_ACU();
-    if (mergedData) {
-        const canonicalData = JSON.parse(JSON.stringify(mergedData));
-        _set_currentJsonTableData_ACU(canonicalData);
-        logDebug_ACU('Database content successfully merged (tag-aware) and loaded into memory.');
-        return { loaded: true, source: 'merged', data: canonicalData };
-    }
-    logDebug_ACU('No database found for current tag in chat history. Initializing a new one.');
-    const initResult = await initializeJsonTableInChatHistory_ACU();
-    return {
-        loaded: initResult.initialized,
-        source: 'initialized',
-        error: initResult.error,
-        data: currentJsonTableData_ACU,
-    };
-}
-
-/**
- * service/table/canonical-snapshot-envelope.ts — CanonicalSnapshotEnvelope 内部契约
- *
- * 阶段 C：同一调用链内可信 canonical 数据的显式载体（不是缓存）。
- *
- * 约束（计划 §3.2）：
- * - 不暴露为公共插件 API；仅本扩展内部 service/table 与 worldbook pipeline 使用。
- * - envelope 只能被当前 orchestration 立即消费；函数返回后不得进入长期 Map、store 或单例。
- * - 构造入口使用白名单（createCanonicalSnapshotEnvelope_ACU），禁止任意调用方自称 canonical。
- * - data 必须是与调用方隔离的深克隆：provider 与 UI/runtime 不共享可变引用。
- * - createdAt 仅用于诊断，不作为 freshness 判据；freshness 由调用方在 hydrate 前后
- *   复核 chat/isolation/storageMode/lifecycleEpoch 决定。
- */
-/**
- * 白名单构造 helper。data 为 null/undefined 时返回 null（禁止伪造 canonical）。
- * data 被深克隆，调用方对入参的后续修改不影响 envelope。
- */
-function createCanonicalSnapshotEnvelope_ACU(params) {
-    if (!params.data || typeof params.data !== 'object')
-        return null;
-    const data = JSON.parse(JSON.stringify(params.data));
-    return {
-        data,
-        chatIdentity: String(params.chatIdentity || ''),
-        isolationKey: String(params.isolationKey || ''),
-        storageMode: params.storageMode,
-        lifecycleEpoch: params.lifecycleEpoch,
-        ...(params.headRevision ? { headRevision: String(params.headRevision) } : {}),
-        source: params.source,
-        fingerprint: getTableDataFingerprint_ACU(data),
-        createdAt: Date.now(),
-    };
-}
-/**
- * 结构校验：确认对象确实是本契约的 envelope（不含身份比对）。
- * 身份比对（chat/isolation/mode/lifecycle）由调用方在 hydrate 前后执行。
- */
-function isCanonicalSnapshotEnvelope_ACU(value) {
-    if (!value || typeof value !== 'object')
-        return false;
-    const candidate = value;
-    return typeof candidate.data === 'object'
-        && candidate.data !== null
-        && typeof candidate.chatIdentity === 'string'
-        && typeof candidate.isolationKey === 'string'
-        && (candidate.storageMode === 'native' || candidate.storageMode === 'sqlite')
-        && typeof candidate.lifecycleEpoch === 'number'
-        && (candidate.source === 'merged_refresh'
-            || candidate.source === 'post_save_replay'
-            || candidate.source === 'system_reload_replay')
-        && typeof candidate.fingerprint === 'string'
-        && typeof candidate.createdAt === 'number';
-}
-
-/**
- * service/table/table-storage-strategy.ts — 表格存储提供者管理（仅 SQLite）
- *
- * 原生存储模式已移除，Provider 只存在 SqlTableService 一种实现。
- * 保留单例/生命周期/健康状态管理，作为上层代码获取 Provider 的唯一入口。
- */
-/** 当前活跃的 Provider 实例 */
-let currentProvider = null;
-let runtimeHealth = {
-    status: 'idle',
-    expectedMode: 'sqlite',
-    activeMode: null,
-    loadToken: 0,
-};
-let activeInitialization = null;
-let initializationEpoch_ACU = 0;
-let activeReload_ACU = null;
-let runtimeLifecycleEpoch_ACU = 0;
-/**
- * 当前存储 runtime 生命周期 epoch（只读）。阶段 D/E 编排层用它构造
- * CanonicalSnapshotEnvelope 并在 hydrate 前后复核身份；模块内其余路径
- * 仍直接访问私有 runtimeLifecycleEpoch_ACU，不经过本 getter。
- */
-function getRuntimeLifecycleEpoch_ACU() {
-    return runtimeLifecycleEpoch_ACU;
-}
-function canonicalRuntimeData_ACU(value) {
-    if (Array.isArray(value))
-        return `[${value.map(canonicalRuntimeData_ACU).join(',')}]`;
-    if (!value || typeof value !== 'object')
-        return JSON.stringify(value) ?? 'null';
-    const record = value;
-    return `{${Object.keys(record)
-        .sort()
-        .map(key => `${JSON.stringify(key)}:${canonicalRuntimeData_ACU(record[key])}`)
-        .join(',')}}`;
-}
-function captureRuntimeIdentity_ACU(provider) {
-    if (!provider)
-        return null;
-    try {
-        return {
-            mode: provider.mode,
-            data: canonicalRuntimeData_ACU(provider.getCurrentData()),
-        };
-    }
-    catch (_) {
-        return null;
+        logError_ACU('[剧情推进] getCellValue_ACU 出错:', e);
+        return { success: false, value: null, error: String(e.message || e) };
     }
 }
-function runtimeIdentityChanged_ACU(before, after) {
-    return !before || !after || before.mode !== after.mode || before.data !== after.data;
-}
-function setRuntimeHealth_ACU(next) {
-    runtimeHealth = { ...next, loadToken: runtimeHealth.loadToken + 1 };
-}
-/** 只读健康快照；绝不触发 provider 懒初始化。 */
-function getStorageRuntimeHealth_ACU() {
-    return { ...runtimeHealth };
-}
-/** 同步读路径门禁。模板渲染不能在这里异步 hydrate 或创建裸 SQLite provider。 */
-function isStorageRuntimeReadyForSyncRead_ACU() {
-    const expectedMode = getCurrentStorageMode();
-    return runtimeHealth.status === 'ready'
-        && runtimeHealth.expectedMode === expectedMode
-        && currentProvider?.mode === expectedMode
-        && currentProvider.isReady();
+/**
+ * 规范化运算符表达式（将全角运算符转换为半角）
+ */
+function normalizeOperators_ACU(expression) {
+    if (!expression || typeof expression !== 'string')
+        return expression;
+    return expression
+        .replace(/＞/g, '>')
+        .replace(/＜/g, '<')
+        .replace(/＝/g, '==')
+        .replace(/≥/g, '>=')
+        .replace(/≦/g, '<=')
+        .replace(/≤/g, '<=')
+        .replace(/≠/g, '!=');
 }
 /**
- * 获取当前存储提供者
- * 如果尚未初始化，会根据当前设置自动创建
+ * 执行单个值的比较
  */
-function getStorageProvider() {
-    const mode = getCurrentStorageMode();
-    if (!currentProvider || currentProvider.mode !== mode) {
-        if (currentProvider) {
-            logDebug_ACU(`[StorageStrategy] Provider 模式变化，重建: ${currentProvider.mode} → ${mode}`);
-            currentProvider.dispose();
+function compareValue_ACU(cellValue, operator, compareValue) {
+    const numCompareValue = parseFloat(compareValue);
+    const isNumericComparison = !isNaN(numCompareValue) && isFinite(numCompareValue);
+    if (isNumericComparison && typeof cellValue === 'number') {
+        switch (operator) {
+            case '>': return cellValue > numCompareValue;
+            case '<': return cellValue < numCompareValue;
+            case '>=': return cellValue >= numCompareValue;
+            case '<=': return cellValue <= numCompareValue;
+            case '==': return cellValue === numCompareValue;
+            case '!=': return cellValue !== numCompareValue;
+            default: return false;
         }
-        // 懒初始化：根据当前模式创建 Provider
-        currentProvider = createProvider(mode);
-        logDebug_ACU(`[StorageStrategy] 懒初始化 Provider: ${mode}`);
-    }
-    return currentProvider;
-}
-/**
- * 获取当前已激活的 Provider，不会按设置懒初始化或重建实例。
- * 用于需要观察 SQLite fallback 后实际运行时状态的恢复与诊断流程。
- */
-function getActiveStorageProvider() {
-    return currentProvider;
-}
-function createStorageWaitAbortError_ACU() {
-    const error = new Error('Storage runtime readiness wait aborted.');
-    error.name = 'AbortError';
-    return error;
-}
-async function awaitStorageFlight_ACU(promise, options) {
-    const { signal, timeoutMs } = options;
-    if (signal?.aborted)
-        throw createStorageWaitAbortError_ACU();
-    return new Promise((resolve, reject) => {
-        let settled = false;
-        let timeout = null;
-        const cleanup = () => {
-            if (timeout !== null)
-                clearTimeout(timeout);
-            signal?.removeEventListener('abort', onAbort);
-        };
-        const finish = (task) => {
-            if (settled)
-                return;
-            settled = true;
-            cleanup();
-            task();
-        };
-        const onAbort = () => finish(() => reject(createStorageWaitAbortError_ACU()));
-        signal?.addEventListener('abort', onAbort, { once: true });
-        if (Number.isFinite(timeoutMs) && Number(timeoutMs) >= 0) {
-            timeout = setTimeout(() => finish(() => reject(new Error('Storage runtime readiness wait timed out.'))), Number(timeoutMs));
-        }
-        promise.then(value => finish(() => resolve(value)), error => finish(() => reject(error)));
-    });
-}
-async function ensureStorageProviderReady_ACU(options = {}) {
-    const expectedMode = getCurrentStorageMode();
-    let activeProvider = getActiveStorageProvider();
-    // A reload owns the authoritative current-chat hydrate flight. Joining it is
-    // materially different from polling or starting a competing initialization:
-    // only the reload may publish the post-transition runtime.
-    let loadResult;
-    if (activeReload_ACU) {
-        loadResult = await awaitStorageFlight_ACU(activeReload_ACU, options);
-        activeProvider = getActiveStorageProvider();
-        if (activeProvider?.mode === expectedMode && activeProvider.isReady() && runtimeHealth.status === 'ready')
-            return activeProvider;
     }
     else {
-        if (activeProvider?.mode === expectedMode && activeProvider.isReady() && runtimeHealth.status === 'ready')
-            return activeProvider;
-        loadResult = await awaitStorageFlight_ACU(initStorageProvider(), options);
-    }
-    const initializedProvider = getActiveStorageProvider();
-    if (!initializedProvider || initializedProvider.mode !== expectedMode || !initializedProvider.isReady()) {
-        const reason = loadResult.failureCode || runtimeHealth.failureCode || 'unknown';
-        throw new Error(`[StorageStrategy] ${expectedMode} 存储运行时未就绪（${reason}），已阻止 SQL 写入。`);
-    }
-    return initializedProvider;
-}
-/**
- * 初始化存储提供者（应用启动时调用）
- * 根据当前设置创建 Provider 并执行 loadFromChat
- */
-async function initStorageProvider(options = {}) {
-    const mode = getCurrentStorageMode();
-    if (!options.forceNewFlight && activeInitialization?.mode === mode)
-        return activeInitialization.promise;
-    const epoch = ++initializationEpoch_ACU;
-    const promise = initializeStorageProvider_ACU(mode, epoch);
-    activeInitialization = { mode, promise };
-    try {
-        return await promise;
-    }
-    finally {
-        if (activeInitialization?.promise === promise)
-            activeInitialization = null;
-    }
-}
-async function initializeStorageProvider_ACU(mode, epoch) {
-    setRuntimeHealth_ACU({ status: 'loading', expectedMode: mode, activeMode: currentProvider?.mode ?? null });
-    logDebug_ACU(`[StorageStrategy] 初始化 Provider: ${mode}`);
-    let result;
-    let nextProvider = null;
-    try {
-        nextProvider = createProvider(mode);
-        result = await loadProviderForCurrentChat_ACU(nextProvider, mode);
-        logDebug_ACU(`[StorageStrategy] 数据加载完成: loaded=${result.loaded}, source=${result.source}`);
-        if (epoch !== initializationEpoch_ACU) {
-            nextProvider.dispose();
-            return { ok: false, degraded: false, source: result.source, failureCode: 'stale_load_discarded' };
+        const strCellValue = String(cellValue);
+        const strCompareValue = String(compareValue);
+        switch (operator) {
+            case '==': return strCellValue === strCompareValue;
+            case '!=': return strCellValue !== strCompareValue;
+            case '>': return strCellValue > strCompareValue;
+            case '<': return strCellValue < strCompareValue;
+            case '>=': return strCellValue >= strCompareValue;
+            case '<=': return strCellValue <= strCompareValue;
+            default: return false;
         }
-        const failure = evaluateProviderPublishFailure_ACU(result, nextProvider, 'provider_not_ready_after_init');
-        if (failure) {
-            logError_ACU(`[StorageStrategy] SQLite 加载失败: ${failure}`);
-            nextProvider.dispose();
-            setRuntimeHealth_ACU({
-                status: 'failed', expectedMode: mode, activeMode: currentProvider?.mode ?? null,
-                failureCode: 'provider_init_failed', error: failure,
-            });
-            return { ok: false, degraded: false, source: result.source, failureCode: 'provider_init_failed', error: failure };
-        }
-        replaceActiveProvider_ACU(nextProvider);
-        setRuntimeHealth_ACU({ status: 'ready', expectedMode: mode, activeMode: mode, source: result.source });
-        return { ok: true, degraded: false, source: result.source };
-    }
-    catch (e) {
-        const error = e?.message || String(e);
-        nextProvider?.dispose();
-        if (epoch !== initializationEpoch_ACU) {
-            return { ok: false, degraded: false, failureCode: 'stale_load_discarded' };
-        }
-        logError_ACU(`[StorageStrategy] 初始化失败: ${error}`);
-        setRuntimeHealth_ACU({ status: 'failed', expectedMode: mode, activeMode: currentProvider?.mode ?? null, failureCode: 'provider_init_failed', error });
-        return { ok: false, degraded: false, failureCode: 'provider_init_failed', error };
     }
 }
 /**
- * 立即销毁当前 Provider 实例，释放内存数据库资源
- * 用于换卡/换聊天时在状态重置之前立即清理旧数据库，
- * 避免 1200ms 延迟窗口内的数据不一致问题。
- *
- * 销毁后 getStorageProvider() 会触发懒初始化创建新实例。
- * 调用方应在适当时机调用 reloadStorageProvider() 重建并加载数据。
+ * 解析数值比较表达式（简化版）
+ * 支持格式：
+ * - 精确匹配：表格名/行标识/列名 > 50
+ * - 模糊匹配（某行）：表格名/行名 > 50
+ * - 模糊匹配（某列）：表格名/列名 > 50
  */
-function disposeStorageProvider() {
-    // chat 切换可能发生在候选 hydrate 未完成时；旧候选绝不能在 dispose 后重新发布。
-    invalidateInFlightInitialization_ACU();
-    runtimeLifecycleEpoch_ACU += 1;
-    activeInitialization = null;
-    activeReload_ACU = null;
-    if (currentProvider) {
-        logDebug_ACU(`[StorageStrategy] 销毁当前 Provider: ${currentProvider.mode}`);
-        currentProvider.dispose();
-        currentProvider = null;
-    }
-    setRuntimeHealth_ACU({ status: 'disposed', expectedMode: getCurrentStorageMode(), activeMode: null });
-}
-/**
- * 受控清空当前表格运行时，专用于“当前聊天级硬清空”成功后的收尾。
- *
- * 此函数只清运行时：canonical JSON、独立表状态、活跃 Native/SQLite provider 与
- * provider 持有的 NameMapper，并推进当前 scope 的 runtime revision；它绝不读取聊天、
- * 绝不解析模板/Guide、更不会通过 getStorageProvider() 懒创建新实例。
- *
- * 调用方必须已完成聊天严格保存。若保存未成功就清 runtime，会制造“内存是空、磁盘仍有
- * 数据”的假状态，因此该顺序不允许被颠倒。
- */
-function clearTableRuntimeWithoutReload_ACU() {
-    _set_currentJsonTableData_ACU(null);
-    _set_independentTableStates_ACU({});
-    disposeStorageProvider();
-    invalidateTableRuntimeRevision_ACU({ reason: 'database_purged' });
-    logDebug_ACU('[StorageStrategy] 当前聊天表格运行时已受控清空，未触发 reload。');
-}
-/** 让已在锁外启动的初始化候选失去发布资格，避免其覆盖排队中的受控重载。 */
-function invalidateInFlightInitialization_ACU() {
-    initializationEpoch_ACU += 1;
-}
-/**
- * 重新加载数据（楼层删除、回滚等场景）
- * 不切换模式，只重新从聊天消息加载。
- *
- * 进入当前 chat/isolation 的排他维护锁，避免 hydrate 候选与并发写事务互相覆盖。
- * 持有表写事务的调用方必须在其事务释放后再调用本函数，禁止嵌套获取同一维护锁。
- */
-async function reloadStorageProvider() {
-    // 多个重载请求描述同一个当前 chat/isolation 的目标状态；合并它们，不能让后到请求废弃已持锁航班。
-    if (activeReload_ACU)
-        return activeReload_ACU;
-    const lifecycleEpoch = runtimeLifecycleEpoch_ACU;
-    // 排他锁可能需要等待已有写事务。先废弃锁外航班，禁止它在等待窗口发布并置换活跃 provider。
-    invalidateInFlightInitialization_ACU();
-    const promise = runTableWriteTransaction_ACU({
-        source: 'system_reload',
-        reason: 'reloadStorageProvider',
-        writeSet: [{ kind: 'all' }],
-        maintenanceMode: 'exclusive',
-    }, async () => {
-        if (lifecycleEpoch !== runtimeLifecycleEpoch_ACU) {
-            return { ok: false, degraded: false, failureCode: 'stale_load_discarded' };
-        }
-        const beforeIdentity = captureRuntimeIdentity_ACU(currentProvider);
-        const mode = getCurrentStorageMode();
-        logDebug_ACU(`[StorageStrategy] 重新加载数据: ${mode}`);
-        const result = await initStorageProvider({ forceNewFlight: true });
-        const afterIdentity = captureRuntimeIdentity_ACU(currentProvider);
-        if (runtimeIdentityChanged_ACU(beforeIdentity, afterIdentity)) {
-            invalidateTableRuntimeRevision_ACU({ reason: 'reloadStorageProvider:data_changed' });
-        }
-        else {
-            logDebug_ACU('[StorageStrategy] 重载前后运行时数据一致，不推进 RuntimeRevision。');
-        }
-        return result;
-    });
-    activeReload_ACU = promise;
-    try {
-        return await promise;
-    }
-    finally {
-        if (activeReload_ACU === promise)
-            activeReload_ACU = null;
-    }
-}
-/**
- * 阶段 C：经身份复核的 canonical snapshot hydrate 窄入口。
- *
- * 与 reloadStorageProvider 的区别：不重新 replay 聊天，直接用调用链刚完成的
- * canonical snapshot（CanonicalSnapshotEnvelope_ACU）hydrate 候选 provider。
- *
- * 安全边界（计划 §3.3）：
- * - 调用开始捕获 chat/isolation/mode/lifecycle token；
- * - hydrate 前、后各校验一次 envelope 身份；仅两次校验均通过才原子发布；
- * - stale 候选立即 dispose，返回结构化 stale_load_discarded；
- * - hydrate 失败沿用现有 fallback/health 语义，不复活上一聊天 provider；
- * - 仅接受 sqlite 模式（native 不创建 SQLite provider，直接返回 ok）。
- * - envelope 不是缓存：本函数消费后立即失效，调用方不得复用同一 envelope 重复发布。
- */
-async function hydrateStorageProviderFromSnapshot_ACU(envelope) {
-    if (!isCanonicalSnapshotEnvelope_ACU(envelope)) {
-        return { ok: false, degraded: false, failureCode: 'provider_load_failed', error: '[StorageStrategy] 非法 canonical snapshot envelope。' };
-    }
-    const lifecycleEpoch = runtimeLifecycleEpoch_ACU;
-    const mode = getCurrentStorageMode();
-    const chatIdentity = String(currentChatFileIdentifier_ACU || '');
-    const isolationKey = getCurrentIsolationKey_ACU();
-    // 身份预检：envelope 与当前运行时目标不一致时直接丢弃，不得进入 hydrate。
-    if (mode !== envelope.storageMode
-        || lifecycleEpoch !== envelope.lifecycleEpoch
-        || chatIdentity !== envelope.chatIdentity
-        || isolationKey !== envelope.isolationKey) {
-        logDebug_ACU('[StorageStrategy] snapshot hydrate 身份预检失败，丢弃候选（stale_load_discarded）。');
-        return { ok: false, degraded: false, failureCode: 'stale_load_discarded' };
-    }
-    const nextProvider = createProvider('sqlite');
-    try {
-        const result = await nextProvider.loadFromData(envelope.data);
-        const failure = evaluateProviderPublishFailure_ACU(result, nextProvider, 'provider_not_ready_after_hydrate');
-        if (failure) {
-            nextProvider.dispose();
-            logError_ACU(`[StorageStrategy] snapshot hydrate 失败: ${failure}`);
-            setRuntimeHealth_ACU({
-                status: 'failed', expectedMode: 'sqlite', activeMode: currentProvider?.mode ?? null,
-                failureCode: 'provider_init_failed', error: failure,
-            });
-            return { ok: false, degraded: false, source: result.source, failureCode: 'provider_init_failed', error: failure };
-        }
-        // 身份复检：hydrate 期间 chat/isolation/mode/lifecycle 变化则丢弃候选。
-        if (lifecycleEpoch !== runtimeLifecycleEpoch_ACU
-            || getCurrentStorageMode() !== mode
-            || String(currentChatFileIdentifier_ACU || '') !== chatIdentity
-            || getCurrentIsolationKey_ACU() !== isolationKey) {
-            nextProvider.dispose();
-            logDebug_ACU('[StorageStrategy] snapshot hydrate 复检失败（stale_load_discarded），候选已销毁。');
-            return { ok: false, degraded: false, source: result.source, failureCode: 'stale_load_discarded' };
-        }
-        replaceActiveProvider_ACU(nextProvider);
-        setRuntimeHealth_ACU({ status: 'ready', expectedMode: 'sqlite', activeMode: 'sqlite', source: result.source });
-        if (result.source === 'empty') {
-            // 空 schema 是正常状态，只允许 debug 级记录，不输出“失败”或 fallback ERROR。
-            logDebug_ACU('[StorageStrategy] SQLite 空 schema 已就绪（normal empty snapshot），无降级。');
-        }
-        return { ok: true, degraded: false, source: result.source };
-    }
-    catch (error) {
-        const message = error?.message || String(error);
-        nextProvider.dispose();
-        if (lifecycleEpoch !== runtimeLifecycleEpoch_ACU) {
-            return { ok: false, degraded: false, failureCode: 'stale_load_discarded' };
-        }
-        logError_ACU(`[StorageStrategy] snapshot hydrate 异常: ${message}`);
-        setRuntimeHealth_ACU({ status: 'failed', expectedMode: 'sqlite', activeMode: currentProvider?.mode ?? null, failureCode: 'provider_init_failed', error: message });
-        return { ok: false, degraded: false, failureCode: 'provider_init_failed', error: message };
-    }
-}
-/**
- * 获取当前 Provider 的模式
- * 如果未初始化返回 null
- */
-function getCurrentProviderMode() {
-    return currentProvider?.mode ?? null;
-}
-/**
- * Reports a completed SQLite reload that silently degraded to the native runtime.
- * 原生模式已移除，恒为 false。
- */
-function didSqliteFallbackAfterReload_ACU(_expectedModeBeforeReload) {
-    return false;
-}
-// ═══════════════════════════════════════════════════════════════
-// 内部工具函数
-// ═══════════════════════════════════════════════════════════════
-/** 根据模式创建 Provider 实例（原生模式已移除，恒为 SQLite） */
-function createProvider(_mode) {
-    return new SqlTableService();
-}
-async function loadProviderForCurrentChat_ACU(provider, _mode) {
-    const replay = await loadOrCreateJsonTableFromChatHistory_ACU();
-    if (typeof provider.loadFromData !== 'function') {
-        throw new Error('[StorageStrategy] SQLite provider 未实现 canonical snapshot hydrate。');
-    }
-    return provider.loadFromData(replay.data || null);
-}
-/**
- * 阶段 A：统一加载结果发布判定（冷初始化、模式切换、snapshot hydrate 共用）。
- *
- * 失败 = `result.error` 存在（优先保留 Provider 原始错误），或 Provider 未通过
- * `isReady()` 后置条件（生成稳定错误码，禁止发布裸/半初始化 SQLite，杜绝 `unknown`）。
- * 空状态（`loaded=false/source=empty` 且无 error）不是失败：只要 Provider ready，
- * 无论 `loaded` 为 true/false 都可以发布。
- *
- * @param notReadyCode 无 error 但 Provider not-ready 时使用的稳定错误码（区分调用路径）。
- * @returns 失败信息（非空则不得发布候选）；可发布时返回 null。
- */
-function evaluateProviderPublishFailure_ACU(result, provider, notReadyCode) {
-    if (result.error)
-        return result.error;
-    if (!provider.isReady())
-        return notReadyCode;
-    return null;
-}
-function replaceActiveProvider_ACU(nextProvider) {
-    const previousProvider = currentProvider;
-    currentProvider = nextProvider;
-    previousProvider?.dispose();
-}
-
-/**
- * Resolves user-facing read SQL against the published runtime schema.
- *
- * ITableStorageProvider#getCurrentData() is intentionally not called here: the
- * SQLite implementation exports the engine and writes currentJsonTableData_ACU
- * as a side effect. Calling it from a read resolver would both mutate global
- * state and erase the very mismatch this boundary is meant to diagnose. Runtime
- * publication validates schema before marking the provider ready, so the
- * published snapshot is the only side-effect-free canonical source available to
- * synchronous read callers.
- */
-function resolveCurrentRuntimeReadSql_ACU(sql) {
-    const mapper = getNameMapper();
-    return resolveReadQuerySql_ACU(sql, currentJsonTableData_ACU, mapper.translateSql.bind(mapper));
-}
-
-const FORBIDDEN_SQL_KEYWORDS_ACU = new Set([
-    'ALTER', 'ANALYZE', 'ATTACH', 'BEGIN', 'COMMIT', 'CREATE', 'DELETE', 'DETACH',
-    'DROP', 'END', 'INSERT', 'REINDEX', 'RELEASE', 'REPLACE', 'ROLLBACK', 'SAVEPOINT',
-    'TRUNCATE', 'UPDATE', 'VACUUM',
-]);
-const ALLOWED_PRAGMAS_ACU = new Set([
-    'table_info', 'table_xinfo', 'index_list', 'index_info', 'index_xinfo', 'foreign_key_list',
-]);
-function stripSqlCommentsAndStrings_ACU$1(sql) {
-    let result = '';
-    let index = 0;
-    while (index < sql.length) {
-        const char = sql[index];
-        const next = sql[index + 1];
-        if (char === '-' && next === '-') {
-            index += 2;
-            while (index < sql.length && sql[index] !== '\n')
-                index++;
-            result += ' ';
-            continue;
-        }
-        if (char === '/' && next === '*') {
-            index += 2;
-            while (index < sql.length && !(sql[index] === '*' && sql[index + 1] === '/'))
-                index++;
-            index = Math.min(sql.length, index + 2);
-            result += ' ';
-            continue;
-        }
-        if (char === "'" || char === '"' || char === '`') {
-            const quote = char;
-            index++;
-            while (index < sql.length) {
-                if (sql[index] === quote) {
-                    if (sql[index + 1] === quote) {
-                        index += 2;
-                        continue;
-                    }
-                    index++;
-                    break;
-                }
-                index++;
-            }
-            result += ' ';
-            continue;
-        }
-        result += char;
-        index++;
-    }
-    return result;
-}
-function hasMultipleStatements_ACU(sql) {
-    const stripped = stripSqlCommentsAndStrings_ACU$1(sql).trim();
-    const withoutTrailingTerminator = stripped.replace(/;\s*$/, '');
-    return withoutTrailingTerminator.includes(';');
-}
-function validateReadOnlySql_ACU(sql) {
-    const source = String(sql || '').trim();
-    if (!source)
-        return { valid: false, reason: 'empty_sql' };
-    if (hasMultipleStatements_ACU(source))
-        return { valid: false, reason: 'multiple_statements' };
-    const normalized = stripSqlCommentsAndStrings_ACU$1(source).replace(/;\s*$/, '').trim();
-    const tokens = normalized.toUpperCase().match(/[A-Z_]+/g) || [];
-    if (tokens.some(token => FORBIDDEN_SQL_KEYWORDS_ACU.has(token))) {
-        return { valid: false, reason: 'write_or_maintenance_statement' };
-    }
-    const pragmaMatch = normalized.match(/^PRAGMA\s+([A-Za-z_][\w]*)\s*(?:\(([^)]*)\))?\s*$/i);
-    if (pragmaMatch) {
-        if (!ALLOWED_PRAGMAS_ACU.has(pragmaMatch[1].toLowerCase()))
-            return { valid: false, reason: 'pragma_not_allowed' };
-        if (!String(pragmaMatch[2] || '').trim())
-            return { valid: false, reason: 'pragma_argument_required' };
-        if (/=/.test(normalized))
-            return { valid: false, reason: 'pragma_assignment_not_allowed' };
-        return { valid: true };
-    }
-    if (/^EXPLAIN\s+(?:QUERY\s+PLAN\s+)?(?:SELECT\b|WITH\b)/i.test(normalized))
-        return { valid: true };
-    if (/^(?:SELECT\b|WITH\b)/i.test(normalized))
-        return { valid: true };
-    return { valid: false, reason: 'statement_not_read_only' };
-}
-/** Shared read-path classifier. Callers that need a diagnostic should use validateReadOnlySql_ACU directly. */
-function isReadOnlySqlStatement_ACU(sql) {
-    return validateReadOnlySql_ACU(sql).valid;
-}
-
-/**
- * service/runtime/template-vars/sql-query-var.ts
- * SQL 查询模板变量 — ORM 风格查询构建器 + 原生 SQL 兜底 + 值替换
- *
- * ORM 风格语法：
- *   {[db.表名.where("列名", "值").get("列名")]}
- *   {[db.表名.where("列名", ">", 数值).count()]}
- *   {[db.表名.all()]}
- *
- * 原生 SQL 兜底：
- *   {[sql "SELECT 列名 FROM 表名 WHERE 条件"]}
- */
-// ═══════════════════════════════════════════════════════════════
-// 模板变量 SQL/ORM 表达式安全校验（H1/H2 加固）
-// ═══════════════════════════════════════════════════════════════
-/** 原始 SQL 的只读前置校验（翻译前）。 */
-function isTemplateSqlReadOnly_ACU(sql) {
-    const result = validateReadOnlySql_ACU(sql);
-    if (!result.valid) {
-        logWarn_ACU(`[模板变量] 拒绝执行非只读 SQL: ${String(sql).slice(0, 120)} (${result.reason})`);
-    }
-    return result.valid;
-}
-// 安全 ORM/条件表达式结构白名单：仅允许方法链调用（db.标识符(.标识符(参数))*) 与
-// 末尾比较（> 3 / == "x" 等）。字符串字面量先替换为占位，黑名单模式再兜底。
-const DB_EXPR_BLACKLIST_RE_ACU = /constructor|__proto__|prototype|\beval\b|\bfetch\b|\bFunction\b|\brequire\b|\bimport\b|\bnew\s+\w|=>|;|globalThis|window\.|document\.|\bprocess\b|alert|confirm|prompt|\.open\(/gi;
-const DB_EXPR_CHAIN_RE_ACU = /^db(\.[A-Za-z\u4e00-\u9fa5_$][\w\u4e00-\u9fa5$]*(?:\([^()]*\)|\[[^\[\]]*\])?)+$/;
-const DB_EXPR_WITH_COMPARE_RE_ACU = /^db(\.[A-Za-z\u4e00-\u9fa5_$][\w\u4e00-\u9fa5$]*(?:\([^()]*\)|\[[^\[\]]*\])?)*\s*(?:===|==|!==|!=|>=|<=|>|<|&&|\|\||!)\s*[^()\[\]]+$/;
-function isSafeDbExpression_ACU(expr) {
-    if (!expr || typeof expr !== 'string')
+function evaluateCellExpression_ACU(expression, allTablesJson) {
+    if (!expression || typeof expression !== 'string')
         return false;
-    const trimmed = expr.trim();
-    if (!trimmed.startsWith('db.'))
-        return false;
-    const sanitized = trimmed.replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"/g, '""');
-    // 全局正则 .test() 有 lastIndex 状态：每次测试前重置，避免上次匹配末尾导致后续表达式绕过黑名单
-    DB_EXPR_BLACKLIST_RE_ACU.lastIndex = 0;
-    if (DB_EXPR_BLACKLIST_RE_ACU.test(sanitized))
-        return false;
-    return DB_EXPR_CHAIN_RE_ACU.test(sanitized) || DB_EXPR_WITH_COMPARE_RE_ACU.test(sanitized);
-}
-// ═══════════════════════════════════════════════════════════════
-// 变量系统 — 存储 {[db...as X]} / {[sql...as X]} 的结果
-// ═══════════════════════════════════════════════════════════════
-/** 模块级变量存储（每次 replaceDbSqlVariables 调用时重置） */
-let _dbSqlVars = {};
-let lastBlockedQueryKey_ACU = '';
-function resolveTemplateReadSql_ACU(sql) {
-    const mapper = getNameMapper();
-    return resolveReadQuerySql_ACU(sql, currentJsonTableData_ACU, mapper.translateSql.bind(mapper)).sql;
-}
-/**
- * 模板渲染是同步路径，绝不能为了一个 SELECT 在这里创建未 hydrate 的 SQLite provider。
- * 未就绪时 fail-closed，避免中文展示名被空 NameMapper 原样下发给 SQLite。
- */
-function isTemplateQueryRuntimeReady_ACU(source) {
-    if (!isStorageRuntimeReadyForSyncRead_ACU()) {
-        const health = getStorageRuntimeHealth_ACU();
-        const key = `${health.loadToken}:${health.status}:${source}`;
-        if (lastBlockedQueryKey_ACU !== key) {
-            lastBlockedQueryKey_ACU = key;
-            logWarn_ACU(`[SQL][readiness] 运行时未就绪，已跳过${source}查询: status=${health.status}, expected=${health.expectedMode}, active=${health.activeMode || 'none'}, code=${health.failureCode || 'none'}`);
-        }
-        return false;
-    }
-    const mapperStatus = getGlobalNameMapperStatus_ACU();
-    if (!mapperStatus.ready) {
-        const health = getStorageRuntimeHealth_ACU();
-        const key = `${health.loadToken}:mapper:${mapperStatus.binding}:${source}`;
-        if (lastBlockedQueryKey_ACU !== key) {
-            lastBlockedQueryKey_ACU = key;
-            if (mapperStatus.binding === 'empty_schema') {
-                // 新聊天首次填表前 runtime 就是空的，没有表可查。这是预期状态，
-                // 不能按异常反复 WARN，否则会掩盖真正的 mapper 丢失。
-                logDebug_ACU(`[SQL][readiness] 运行时尚无表结构，已跳过${source}查询。`);
-            }
-            else {
-                logWarn_ACU(`[SQL][readiness] NameMapper 未就绪，已跳过${source}查询。`);
-            }
-        }
-        return false;
-    }
-    return true;
-}
-/** 获取变量值（供外部条件求值使用） */
-function getDbSqlVariable(name) {
-    if (_dbSqlVars.hasOwnProperty(name))
-        return _dbSqlVars[name];
-    return null;
-}
-/** 清空变量存储（每轮处理开始时调用） */
-function clearDbSqlVariables() {
-    _dbSqlVars = {};
-}
-/** 获取所有变量的快照（调试用） */
-function getDbSqlVariableSnapshot() {
-    return { ..._dbSqlVars };
-}
-class TableQueryBuilder {
-    constructor(tableName, options = {}) {
-        this.conditions = [];
-        this._orGroups = [];
-        this._orderBy = null;
-        this._limit = null;
-        this._groupBy = null;
-        this._having = null;
-        this._distinct = false;
-        this._offset = null;
-        // 通过 NameMapper 解析表名（中文→英文）
-        const mapper = getNameMapper();
-        this.tableName = mapper.resolveTableName(tableName);
-        this.options = options;
-    }
-    /**
-     * 添加 WHERE 条件
-     * 支持两种调用方式：
-     *   where("列名", "值")        → 列名 = '值'
-     *   where("列名", ">", 数值)   → 列名 > 数值
-     */
-    where(column, valueOrOperator, value) {
-        const mapper = getNameMapper();
-        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
-        if (value !== undefined) {
-            // 三参数形式：where("列名", ">", 数值)——operator 白名单校验（C1），防止 operator 注入任意 SQL
-            const operator = String(valueOrOperator);
-            if (!/^(=|!=|<>|<|<=|>|>=|LIKE|NOT LIKE|IN|NOT IN|IS|IS NOT)$/i.test(operator.trim())) {
-                throw new Error(`[ORM] where 运算符不合法: ${operator}`);
-            }
-            this.conditions.push({ column: resolvedColumn, operator, value });
-        }
-        else {
-            // 两参数形式：where("列名", "值")
-            this.conditions.push({ column: resolvedColumn, operator: '=', value: valueOrOperator });
-        }
-        return this;
-    }
-    /**
-     * 添加 OR WHERE 条件组
-     * 将当前 AND 条件组保存，开始新的 OR 分支
-     *   orWhere("列名", "值")        → OR 列名 = '值'
-     *   orWhere("列名", ">", 数值)   → OR 列名 > 数值
-     */
-    orWhere(column, valueOrOperator, value) {
-        // 将当前 AND 条件组保存为一个 OR 分支
-        if (this.conditions.length > 0) {
-            this._orGroups.push([...this.conditions]);
-            this.conditions = [];
-        }
-        // 添加新条件到新的 AND 组
-        return this.where(column, valueOrOperator, value);
-    }
-    /**
-     * IN 查询
-     *   whereIn("列名", [值1, 值2, 值3])  → 列名 IN ('值1', '值2', '值3')
-     */
-    whereIn(column, values) {
-        const mapper = getNameMapper();
-        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
-        if (!values || values.length === 0) {
-            // 空数组：永假条件
-            this.conditions.push({ column: '1', operator: '=', value: 0 });
-        }
-        else {
-            const escaped = values.map(v => escapeParam(v)).join(', ');
-            // 用特殊 operator 标记 IN 查询，_buildSelect 中特殊处理
-            this.conditions.push({ column: resolvedColumn, operator: '__IN__', value: escaped });
-        }
-        return this;
-    }
-    /**
-     * BETWEEN 查询
-     *   whereBetween("列名", 10, 50)  → 列名 BETWEEN 10 AND 50
-     */
-    whereBetween(column, min, max) {
-        const mapper = getNameMapper();
-        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
-        // min > max 时自动交换
-        const actualMin = (typeof min === 'number' && typeof max === 'number' && min > max) ? max : min;
-        const actualMax = (typeof min === 'number' && typeof max === 'number' && min > max) ? min : max;
-        this.conditions.push({ column: resolvedColumn, operator: '__BETWEEN__', value: { min: actualMin, max: actualMax } });
-        return this;
-    }
-    /**
-     * 分组
-     */
-    groupBy(column) {
-        const mapper = getNameMapper();
-        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
-        this._groupBy = resolvedColumn;
-        return this;
-    }
-    /**
-     * 去重
-     */
-    distinct() {
-        this._distinct = true;
-        return this;
-    }
-    /**
-     * NOT IN 查询
-     *   whereNotIn("列名", [值1, 值2])  → 列名 NOT IN ('值1', '值2')
-     */
-    whereNotIn(column, values) {
-        const mapper = getNameMapper();
-        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
-        if (!values || values.length === 0) {
-            // 空数组：不添加条件（返回所有行）
-            return this;
-        }
-        const escaped = values.map(v => escapeParam(v)).join(', ');
-        this.conditions.push({ column: resolvedColumn, operator: '__NOT_IN__', value: escaped });
-        return this;
-    }
-    /**
-     * IS NULL 条件
-     */
-    whereNull(column) {
-        const mapper = getNameMapper();
-        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
-        this.conditions.push({ column: resolvedColumn, operator: '=', value: null });
-        return this;
-    }
-    /**
-     * IS NOT NULL 条件
-     */
-    whereNotNull(column) {
-        const mapper = getNameMapper();
-        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
-        this.conditions.push({ column: resolvedColumn, operator: '!=', value: null });
-        return this;
-    }
-    /**
-     * LIKE 模糊匹配
-     *   whereLike("列名", "%关键词%")  → 列名 LIKE '%关键词%'
-     */
-    whereLike(column, pattern) {
-        const mapper = getNameMapper();
-        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
-        this.conditions.push({ column: resolvedColumn, operator: '__LIKE__', value: pattern });
-        return this;
-    }
-    /**
-     * HAVING 子句（配合 groupBy 使用）
-     *   having("COUNT(*) > 1")  → HAVING COUNT(*) > 1
-     */
-    having(expression) {
-        // C1：HAVING 表达式做轻量只读校验——拒绝写语句关键字/分号/子查询逃逸（片段模式，非完整 SELECT）
-        const rawExpr = String(expression || '');
-        const stripped = rawExpr.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/'[^']*'|"[^"]*"/g, ' ');
-        const tokens = stripped.toUpperCase().match(/[A-Z_]+/g) || [];
-        const forbidden = new Set(['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'REPLACE', 'TRUNCATE', 'VACUUM', 'ATTACH', 'DETACH', 'PRAGMA']);
-        if (rawExpr.includes(';') || tokens.some(t => forbidden.has(t))) {
-            throw new Error('[ORM] having 表达式包含不允许的 SQL 关键字或分号');
-        }
-        this._having = rawExpr;
-        return this;
-    }
-    /**
-     * 偏移量（配合 limit 使用，用于分页）
-     */
-    offset(n) {
-        this._offset = (typeof n === 'number' && n >= 0) ? n : 0;
-        return this;
-    }
-    /**
-     * 排序
-     */
-    orderBy(column, direction = 'ASC') {
-        const mapper = getNameMapper();
-        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
-        this._orderBy = `${resolvedColumn} ${direction}`;
-        return this;
-    }
-    /**
-     * 限制返回行数
-     */
-    limit(n) {
-        this._limit = n;
-        return this;
-    }
-    /**
-     * 获取单个值（第一行指定列）
-     */
-    get(column) {
-        const mapper = getNameMapper();
-        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
-        const sql = this._buildSelect(resolvedColumn);
-        const result = this._executeQuery(sql + ' LIMIT 1');
-        if (result.values.length === 0)
-            return null;
-        return result.values[0][0];
-    }
-    /**
-     * 获取单行（所有列）
-     */
-    first() {
-        const sql = this._buildSelect('*') + ' LIMIT 1';
-        const result = this._executeQuery(sql);
-        if (result.values.length === 0)
-            return null;
-        const row = {};
-        for (let i = 0; i < result.columns.length; i++) {
-            row[result.columns[i]] = result.values[0][i];
-        }
-        return row;
-    }
-    /**
-     * 获取某列的值列表
-     */
-    list(column) {
-        const mapper = getNameMapper();
-        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
-        const sql = this._buildSelect(resolvedColumn);
-        const result = this._executeQuery(sql);
-        return result.values.map(row => row[0]);
-    }
-    /**
-     * 获取所有行
-     */
-    all() {
-        const sql = this._buildSelect('*');
-        const result = this._executeQuery(sql);
-        return result.values.map(row => {
-            const obj = {};
-            for (let i = 0; i < result.columns.length; i++) {
-                obj[result.columns[i]] = row[i];
-            }
-            return obj;
-        });
-    }
-    /**
-     * 计数
-     */
-    count() {
-        const sql = this._buildSelect('COUNT(*)');
-        const result = this._executeQuery(sql);
-        if (result.values.length === 0)
-            return 0;
-        return Number(result.values[0][0]) || 0;
-    }
-    /**
-     * 求和
-     */
-    sum(column) {
-        const mapper = getNameMapper();
-        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
-        const sql = this._buildSelect(`SUM(${resolvedColumn})`);
-        const result = this._executeQuery(sql);
-        if (result.values.length === 0)
-            return 0;
-        return Number(result.values[0][0]) || 0;
-    }
-    /**
-     * 求平均值
-     */
-    avg(column) {
-        const mapper = getNameMapper();
-        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
-        const sql = this._buildSelect(`AVG(${resolvedColumn})`);
-        const result = this._executeQuery(sql);
-        if (result.values.length === 0)
-            return 0;
-        return Number(result.values[0][0]) || 0;
-    }
-    /**
-     * 求最大值
-     */
-    max(column) {
-        const mapper = getNameMapper();
-        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
-        const sql = this._buildSelect(`MAX(${resolvedColumn})`);
-        const result = this._executeQuery(sql);
-        if (result.values.length === 0)
-            return 0;
-        return Number(result.values[0][0]) || 0;
-    }
-    /**
-     * 求最小值
-     */
-    min(column) {
-        const mapper = getNameMapper();
-        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
-        const sql = this._buildSelect(`MIN(${resolvedColumn})`);
-        const result = this._executeQuery(sql);
-        if (result.values.length === 0)
-            return 0;
-        return Number(result.values[0][0]) || 0;
-    }
-    /**
-     * 自定义 SELECT 表达式（在查询上下文中执行任意 SQL 表达式）
-     * 语法：db.背包物品表.where('类别', '武器').value("SUM(数量) * 2")
-     */
-    value(expression) {
-        const translatedExpr = resolveTemplateReadSql_ACU(expression);
-        const sql = this._buildSelect(translatedExpr);
-        const result = this._executeQuery(sql);
-        if (result.values.length === 0)
-            return null;
-        const raw = result.values[0][0];
-        if (raw === null || raw === undefined)
-            return null;
-        if (typeof raw === 'number')
-            return raw;
-        return String(raw);
-    }
-    /**
-     * 判断是否存在
-     */
-    exists() {
-        const sql = `SELECT EXISTS(${this._buildSelect('1')}) AS e`;
-        const result = this._executeQuery(sql);
-        if (result.values.length === 0)
-            return false;
-        return result.values[0][0] === 1;
-    }
-    /**
-     * 生成 SQL（调试用）
-     */
-    toSQL() {
-        return this._buildSelect('*');
-    }
-    // ═══ 内部方法 ═══
-    _buildSelect(selectExpr) {
-        const selectKeyword = this._distinct ? 'SELECT DISTINCT' : 'SELECT';
-        let sql = `${selectKeyword} ${selectExpr} FROM ${this.tableName}`;
-        // 构建 WHERE 子句（支持 OR 分组）
-        const buildAndGroup = (clauses) => {
-            return clauses.map(c => {
-                if (c.operator === '__IN__') {
-                    return `${c.column} IN (${c.value})`;
-                }
-                if (c.operator === '__NOT_IN__') {
-                    return `${c.column} NOT IN (${c.value})`;
-                }
-                if (c.operator === '__LIKE__') {
-                    return `${c.column} LIKE ${escapeParam(c.value)}`;
-                }
-                if (c.operator === '__BETWEEN__') {
-                    return `${c.column} BETWEEN ${escapeParam(c.value.min)} AND ${escapeParam(c.value.max)}`;
-                }
-                if (c.value === null) {
-                    return c.operator === '=' ? `${c.column} IS NULL` : `${c.column} IS NOT NULL`;
-                }
-                return `${c.column} ${c.operator} ${escapeParam(c.value)}`;
-            }).join(' AND ');
-        };
-        // 收集所有 OR 分组
-        const allGroups = [];
-        if (this._orGroups.length > 0) {
-            allGroups.push(...this._orGroups);
-        }
-        if (this.conditions.length > 0) {
-            allGroups.push(this.conditions);
-        }
-        if (allGroups.length > 0) {
-            if (allGroups.length === 1) {
-                sql += ` WHERE ${buildAndGroup(allGroups[0])}`;
-            }
-            else {
-                const orParts = allGroups.map(g => `(${buildAndGroup(g)})`);
-                sql += ` WHERE ${orParts.join(' OR ')}`;
-            }
-        }
-        if (this._groupBy) {
-            sql += ` GROUP BY ${this._groupBy}`;
-        }
-        if (this._having) {
-            sql += ` HAVING ${this._having}`;
-        }
-        if (this._orderBy) {
-            sql += ` ORDER BY ${this._orderBy}`;
-        }
-        if (this._limit !== null) {
-            sql += ` LIMIT ${this._limit}`;
-        }
-        else if (this._offset !== null) {
-            // SQLite 要求有 LIMIT 才能用 OFFSET，用 -1 表示无限制
-            sql += ` LIMIT -1`;
-        }
-        if (this._offset !== null) {
-            sql += ` OFFSET ${this._offset}`;
-        }
-        return sql;
-    }
-    _executeQuery(sql) {
-        if (!isTemplateQueryRuntimeReady_ACU('ORM')) {
-            if (this.options.throwOnQueryError === true)
-                throw new Error('orm_runtime_not_ready');
-            return { columns: [], values: [] };
-        }
-        try {
-            const provider = getStorageProvider();
-            const executableSql = resolveCurrentRuntimeReadSql_ACU(sql).sql;
-            const result = provider.executeQuery(executableSql, undefined, {
-                suppressErrorLog: this.options.suppressQueryErrorLog === true,
-            });
-            return { columns: result.columns, values: result.values };
-        }
-        catch (e) {
-            if (this.options.throwOnQueryError === true)
-                throw new Error('orm_query_execution_failed');
-            logWarn_ACU('[ORM] 查询执行失败: orm_query_execution_failed');
-            return { columns: [], values: [] };
-        }
-    }
-}
-// ═══════════════════════════════════════════════════════════════
-// ORM 表达式解析
-// ═══════════════════════════════════════════════════════════════
-/**
- * 创建 db Proxy 对象
- * 访问 db.xxx 时自动创建 TableQueryBuilder(xxx)
- * 特殊属性名 expr/rand/calc 返回对应的静态方法
- * 让 JS 引擎原生处理链式调用、括号嵌套、引号转义
- */
-function createDbProxy() {
-    return new Proxy({}, {
-        get(_target, propName) {
-            // 静态方法：db.expr("SQL表达式") — 执行任意 SQL 表达式
-            if (propName === 'expr')
-                return execExpr;
-            // 静态方法：db.rand(min, max) — 生成随机整数
-            if (propName === 'rand')
-                return execRand;
-            // 静态方法：db.calc("算术表达式") — 执行含 $v: 变量引用的算术表达式
-            if (propName === 'calc')
-                return execCalc;
-            // 静态方法：db.max(值1, 值2, ...) — 取多个值中的最大值
-            if (propName === 'max')
-                return execMax;
-            // 静态方法：db.min(值1, 值2, ...) — 取多个值中的最小值
-            if (propName === 'min')
-                return execMin;
-            // 默认：创建 TableQueryBuilder
-            return new TableQueryBuilder(propName);
-        }
-    });
-}
-/**
- * db.expr("SQL表达式") — 执行任意 SQL 表达式并返回结果
- * 支持中文表名/列名翻译、子查询、算术运算
- * 示例：
- *   db.expr("3 + 5 * 2")  → 13
- *   db.expr("(SELECT 数量 FROM 背包物品表 WHERE 物品名称='铁剑') * 2")  → 6
- */
-function execExpr(expression) {
-    try {
-        if (!expression || typeof expression !== 'string' || !expression.trim()) {
-            logWarn_ACU('[db.expr] 空表达式');
-            return null;
-        }
-        // H1 加固：db.expr 以 SELECT 包裹校验只读（拒绝写语句/多语句）
-        if (!isTemplateSqlReadOnly_ACU(`SELECT ${expression.trim()}`))
-            return null;
-        if (!isTemplateQueryRuntimeReady_ACU('db.expr'))
-            return null;
-        const translatedExpr = resolveTemplateReadSql_ACU(expression.trim());
-        if (!isTemplateSqlReadOnly_ACU(`SELECT ${translatedExpr}`))
-            return null;
-        const sql = `SELECT ${translatedExpr}`;
-        const provider = getStorageProvider();
-        const result = provider.executeQuery(sql);
-        if (result.values.length === 0)
-            return null;
-        const val = result.values[0][0];
-        if (val === null || val === undefined)
-            return null;
-        if (typeof val === 'number')
-            return val;
-        return String(val);
-    }
-    catch (e) {
-        logError_ACU(`[db.expr] 表达式执行失败: ${expression} → ${e?.message}`);
-        return null;
-    }
-}
-/**
- * db.rand(min, max) — 生成 min 到 max 之间的随机整数（含两端）
- * 使用 SQLite 的 RANDOM() 函数
- * min > max 时自动交换
- */
-function execRand(min, max) {
-    try {
-        let lo = typeof min === 'number' ? min : parseInt(String(min), 10);
-        let hi = typeof max === 'number' ? max : parseInt(String(max), 10);
-        if (isNaN(lo) || isNaN(hi)) {
-            logWarn_ACU(`[db.rand] 参数无效: min=${min}, max=${max}`);
-            return 0;
-        }
-        if (lo > hi) {
-            const tmp = lo;
-            lo = hi;
-            hi = tmp;
-        }
-        if (!isTemplateQueryRuntimeReady_ACU('db.rand'))
-            return 0;
-        const range = hi - lo + 1;
-        const provider = getStorageProvider();
-        const result = provider.executeQuery(`SELECT ABS(RANDOM()) % ${range} + ${lo}`);
-        if (result.values.length === 0)
-            return lo;
-        return Number(result.values[0][0]) || lo;
-    }
-    catch (e) {
-        logError_ACU(`[db.rand] 随机数生成失败: ${min}-${max} → ${e?.message}`);
-        return 0;
-    }
-}
-/**
- * db.calc("算术表达式") — 执行含 $v: 变量引用的算术表达式
- * 先替换 $v: 引用为实际值，再通过 SQLite SELECT 执行计算
- * 示例：
- *   db.calc("$v:sword_count + $v:shield_count * 2")
- *   db.calc("($v:attack - $v:defense) * $v:dice")
- */
-function execCalc(expression) {
-    try {
-        if (!expression || typeof expression !== 'string' || !expression.trim()) {
-            logWarn_ACU('[db.calc] 空表达式');
-            return null;
-        }
-        // 替换 $v: 变量引用
-        let processed = expression.trim().replace(/\$v:([a-zA-Z_][a-zA-Z0-9_]*)/gi, (_m, refName) => {
-            if (_dbSqlVars.hasOwnProperty(refName)) {
-                return String(_dbSqlVars[refName]);
-            }
-            logWarn_ACU(`[db.calc] 引用的变量不存在: ${refName}`);
-            return 'NULL';
-        });
-        // 包含 NULL 说明有变量未找到
-        if (processed.includes('NULL')) {
-            logWarn_ACU(`[db.calc] 表达式包含未定义变量: ${expression}`);
-            return null;
-        }
-        // H1 加固：算术表达式以 SELECT 包裹校验只读
-        if (!isTemplateSqlReadOnly_ACU(`SELECT ${processed}`))
-            return null;
-        if (!isTemplateQueryRuntimeReady_ACU('db.calc'))
-            return null;
-        const provider = getStorageProvider();
-        const result = provider.executeQuery(`SELECT ${processed}`);
-        if (result.values.length === 0)
-            return null;
-        const val = Number(result.values[0][0]);
-        if (isNaN(val) || !isFinite(val)) {
-            logWarn_ACU(`[db.calc] 计算结果无效: ${expression} → ${result.values[0][0]}`);
-            return null;
-        }
-        return val;
-    }
-    catch (e) {
-        logError_ACU(`[db.calc] 表达式执行失败: ${expression} → ${e?.message}`);
-        return null;
-    }
-}
-/**
- * db.max(值1, 值2, ...) — 取多个值中的最大值
- * 支持 $v: 变量引用和纯数字
- * 示例：
- *   db.max(3, 7, 1)  → 7
- *   db.max($v:a, $v:b, $v:c)  → 最大值
- *   注意：在 new Function 执行时，$v: 已经被替换为实际值（如果在 {[db...]} 中使用）
- *   但如果直接调用，需要传入数字
- */
-function execMax(...values) {
-    try {
-        // 展平数组参数（支持 db.max([1,2,3]) 和 db.max(1,2,3) 两种形式）
-        const flat = values.flat(Infinity);
-        if (flat.length === 0) {
-            logWarn_ACU('[db.max] 参数为空');
-            return null;
-        }
-        const nums = flat.map(v => {
-            if (typeof v === 'number')
-                return v;
-            const n = Number(v);
-            return isNaN(n) ? null : n;
-        }).filter((v) => v !== null);
-        if (nums.length === 0) {
-            logWarn_ACU(`[db.max] 无有效数值参数: ${JSON.stringify(values)}`);
-            return null;
-        }
-        return Math.max(...nums);
-    }
-    catch (e) {
-        logError_ACU(`[db.max] 执行失败: ${e?.message}`);
-        return null;
-    }
-}
-/**
- * db.min(值1, 值2, ...) — 取多个值中的最小值
- * 支持 $v: 变量引用和纯数字
- */
-function execMin(...values) {
-    try {
-        const flat = values.flat(Infinity);
-        if (flat.length === 0) {
-            logWarn_ACU('[db.min] 参数为空');
-            return null;
-        }
-        const nums = flat.map(v => {
-            if (typeof v === 'number')
-                return v;
-            const n = Number(v);
-            return isNaN(n) ? null : n;
-        }).filter((v) => v !== null);
-        if (nums.length === 0) {
-            logWarn_ACU(`[db.min] 无有效数值参数: ${JSON.stringify(values)}`);
-            return null;
-        }
-        return Math.min(...nums);
-    }
-    catch (e) {
-        logError_ACU(`[db.min] 执行失败: ${e?.message}`);
-        return null;
-    }
-}
-/**
- * 解析并执行 ORM 表达式
- * 输入: "db.重要人物表.where('姓名', '角色A').get('状态')"
- * 输出: 执行结果字符串
- *
- * 通过 Proxy + new Function 让 JS 引擎直接执行链式调用，
- * 不再手动用正则解析方法链。
- */
-function evaluateOrmExpression(expr) {
-    try {
-        const trimmed = expr.trim();
-        if (!trimmed)
-            return '';
-        if (!isTemplateQueryRuntimeReady_ACU('ORM'))
-            return '';
-        // 确保表达式以 db. 开头
-        const fullExpr = trimmed.startsWith('db.') ? trimmed : 'db.' + trimmed;
-        // H2 加固：仅允许白名单方法链结构，拒绝任意 JS 表达式执行
-        if (!isSafeDbExpression_ACU(fullExpr)) {
-            logWarn_ACU(`[ORM] 拒绝执行非白名单表达式: ${fullExpr.slice(0, 120)}`);
-            return '';
-        }
-        const db = createDbProxy();
-        const fn = new Function('db', `return ${fullExpr}`);
-        const result = fn(db);
-        return formatResult(result);
-    }
-    catch (e) {
-        logError_ACU(`[ORM] 表达式执行失败: ${expr} → ${e?.message}`);
-        return '';
-    }
-}
-function evaluateRawSqlExpression(expr, options = {}) {
-    try {
-        let trimmed = expr.trim();
-        // 去掉 "sql " 前缀
-        if (trimmed.startsWith('sql ')) {
-            trimmed = trimmed.substring(4).trim();
-        }
-        // 去掉外层引号
-        if ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
-            (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
-            trimmed = trimmed.substring(1, trimmed.length - 1);
-        }
-        if (!trimmed) {
-            logWarn_ACU('[SQL] 空的 SQL 表达式');
-            return '';
-        }
-        if (!isTemplateQueryRuntimeReady_ACU('SQL')) {
-            if (options.throwOnError === true)
-                throw new Error('sql_runtime_not_ready');
-            return '';
-        }
-        // H1 加固：翻译前只读校验（翻译后二次校验在下方执行前）
-        if (!isTemplateSqlReadOnly_ACU(trimmed)) {
-            if (options.throwOnError === true)
-                throw new Error('sql_not_read_only');
-            return '';
-        }
-        // 通过 NameMapper 翻译中文名
-        const translatedSql = resolveTemplateReadSql_ACU(trimmed);
-        // H1 加固：翻译后二次校验（防中文表/列名翻译引入写语句）
-        if (!isTemplateSqlReadOnly_ACU(translatedSql)) {
-            if (options.throwOnError === true)
-                throw new Error('sql_not_read_only');
-            return '';
-        }
-        // 执行查询
-        const provider = getStorageProvider();
-        const result = provider.executeQuery(translatedSql, undefined, {
-            suppressErrorLog: options.suppressQueryErrorLog === true,
-        });
-        // 格式化结果
-        if (result.values.length === 0)
-            return '';
-        if (result.values.length === 1 && result.columns.length === 1) {
-            // 单值：直接返回
-            return String(result.values[0][0] ?? '');
-        }
-        // 多行多列：返回表格格式
-        return formatQueryResultAsText(result.columns, result.values);
-    }
-    catch (e) {
-        if (options.throwOnError === true)
-            throw new Error('sql_query_execution_failed');
-        const message = e?.message || String(e);
-        // 未建表属于预期时序（首次填表前模板 SELECT 先行），降级为 debug，避免刷 ERROR。
-        if (/no such table/i.test(message)) {
-            logDebug_ACU(`[SQL] 查询命中未建表（预期时序）: ${expr} → ${message}`);
-        }
-        else {
-            logError_ACU(`[SQL] 表达式执行失败: ${expr} → ${message}`);
-        }
-        return '';
-    }
-}
-// ═══════════════════════════════════════════════════════════════
-// {[db...]} / {[sql...]} 值替换
-// ═══════════════════════════════════════════════════════════════
-/**
- * 替换文本中的 {[db...]} 和 {[sql...]} 模板变量
- * 在 Random/Calc 替换之后、<if> 之前执行
- *
- * @param content 待处理的文本
- * @returns 替换后的文本
- */
-function replaceDbSqlVariables(content) {
-    if (!content || typeof content !== 'string')
-        return content || '';
-    if (!isSqliteMode())
-        return content;
-    if (!isTemplateQueryRuntimeReady_ACU('模板变量'))
-        return content;
-    // 每轮处理开始时重置变量存储
-    clearDbSqlVariables();
-    let result = content;
-    // [P1] {[db.xxx.xxx(...) as 变量名]} / {[db.xxx.xxx(...)]} — ORM 风格（含 db.expr/db.rand/db.calc/db.max/db.min 静态方法）
-    result = replaceDbExpressions(result);
-    // [P2] {[sql "..." as 变量名]} / {[sql "..."]} — 原生 SQL
-    result = replaceSqlExpressions(result);
-    // [P3] $v:变量名 — 变量引用替换
-    result = replaceVarReferences(result);
-    return result;
-}
-// ═══════════════════════════════════════════════════════════════
-// <if db="..."> / <if sql="..."> 条件求值
-// ═══════════════════════════════════════════════════════════════
-/**
- * 求值 <if db="..."> 条件
- * 返回布尔值：结果非零/非空/非false = true
- *
- * 通过 Proxy + new Function 直接执行整个表达式（含比较运算），
- * 例如 db.重要人物表.where('阵营','敌方').count() > 3 直接返回布尔值。
- * 纯 ORM 表达式（无比较运算）则对结果做 truthy 判断。
- */
-function evaluateDbCondition(expression) {
-    if (!isSqliteMode())
-        return false;
-    if (!isTemplateQueryRuntimeReady_ACU('<if db>'))
-        return false;
-    try {
-        const trimmed = expression.trim();
-        if (!trimmed)
-            return false;
-        const fullExpr = trimmed.startsWith('db.') ? trimmed : 'db.' + trimmed;
-        // H2 加固：仅允许白名单方法链/比较结构
-        if (!isSafeDbExpression_ACU(fullExpr)) {
-            logWarn_ACU(`[<if db>] 拒绝执行非白名单表达式: ${fullExpr.slice(0, 120)}`);
-            return false;
-        }
-        const db = createDbProxy();
-        const fn = new Function('db', `return ${fullExpr}`);
-        const result = fn(db);
-        // 如果表达式本身包含比较运算（如 > 3），result 已经是布尔值
-        if (typeof result === 'boolean')
-            return result;
-        // 否则做 truthy 判断
-        return isTruthy(result);
-    }
-    catch (e) {
-        logWarn_ACU(`[<if db>] 条件求值失败: ${expression} → ${e?.message}`);
-        return false;
-    }
-}
-/**
- * 求值 <if sql="..."> 条件
- * 返回布尔值：结果非零/非空 = true
- */
-function evaluateSqlCondition(expression) {
-    if (!isSqliteMode())
-        return false;
-    if (!isTemplateQueryRuntimeReady_ACU('<if sql>'))
-        return false;
-    try {
-        // 直接传入 SQL 表达式，不需要包引号
-        // evaluateRawSqlExpression 内部会处理 "sql " 前缀和引号剥离
-        // 但这里的 expression 来自 <if sql="...">，本身就是纯 SQL，直接执行即可
-        const rawSql = expression.trim();
-        // H1 加固：翻译前只读校验
-        if (!isTemplateSqlReadOnly_ACU(rawSql))
-            return false;
-        const translatedSql = resolveTemplateReadSql_ACU(rawSql);
-        // H1 加固：翻译后二次校验
-        if (!isTemplateSqlReadOnly_ACU(translatedSql))
-            return false;
-        const provider = getStorageProvider();
-        const result = provider.executeQuery(translatedSql);
-        if (result.values.length === 0)
-            return false;
-        return isTruthy(result.values[0][0]);
-    }
-    catch (e) {
-        logWarn_ACU(`[<if sql>] 条件求值失败: ${expression} → ${e?.message}`);
-        return false;
-    }
-}
-// ═══════════════════════════════════════════════════════════════
-// 内部工具函数
-// ═══════════════════════════════════════════════════════════════
-/**
- * SQL 参数转义
- */
-function escapeParam(value) {
-    if (value === null || value === undefined)
-        return 'NULL';
-    if (typeof value === 'number')
-        return String(value);
-    // 字符串：单引号转义
-    return `'${String(value).replace(/'/g, "''")}'`;
-}
-/**
- * 格式化查询结果为文本
- */
-function formatQueryResultAsText(columns, values) {
-    if (values.length === 0)
-        return '';
-    if (values.length === 1 && columns.length === 1) {
-        return String(values[0][0] ?? '');
-    }
-    // 多行单列：每条记录一行，避免单元格内容里的逗号造成歧义。
-    if (columns.length === 1) {
-        return values.map(row => String(row[0] ?? '')).join('\n');
-    }
-    // 多列：用表格格式
-    const lines = [];
-    for (const row of values) {
-        const parts = columns.map((col, i) => `${col}: ${row[i] ?? ''}`);
-        lines.push(parts.join(', '));
-    }
-    return lines.join('\n');
-}
-/**
- * 格式化 ORM 结果为字符串
- */
-function formatResult(result) {
-    if (result === null || result === undefined)
-        return '';
-    if (typeof result === 'boolean')
-        return result ? 'true' : 'false';
-    if (typeof result === 'number')
-        return String(result);
-    if (typeof result === 'string')
-        return result;
-    if (Array.isArray(result)) {
-        if (result.length === 0)
-            return '';
-        if (typeof result[0] === 'object') {
-            // Record 数组：格式化为表格
-            return result.map(obj => {
-                return Object.entries(obj).map(([k, v]) => `${k}: ${v ?? ''}`).join(', ');
-            }).join('\n');
-        }
-        return result.map(String).join(', ');
-    }
-    if (typeof result === 'object') {
-        return Object.entries(result).map(([k, v]) => `${k}: ${v ?? ''}`).join(', ');
-    }
-    return String(result);
-}
-/**
- * 判断值是否为"真"（用于 <if> 条件判断）
- * 非零/非空/非false = true
- */
-function isTruthy(value) {
-    if (value === null || value === undefined || value === '')
-        return false;
-    if (value === 'false' || value === '0')
-        return false;
-    if (typeof value === 'number')
-        return value !== 0;
-    if (typeof value === 'boolean')
-        return value;
-    return true;
-}
-/**
- * 内联替换表达式中的 $v:变量名 引用（在 ORM 表达式执行前调用）
- * 让 db.max($v:a, $v:b) 在执行前变成 db.max(3, 5)
- */
-function inlineVarReplace(expr) {
-    return expr.replace(/\$v:([a-zA-Z_][a-zA-Z0-9_]*)/gi, (_match, varName) => {
-        if (_dbSqlVars.hasOwnProperty(varName)) {
-            return String(_dbSqlVars[varName]);
-        }
-        logWarn_ACU(`[变量系统] 内联替换未找到变量: ${varName}`);
-        return _match;
-    });
-}
-/**
- * 手动解析并替换文本中的 {[db.xxx]} ORM 模板变量
- * 支持 {[db.xxx.xxx(...) as 变量名]} 语法：结果存入变量，标签替换为空字符串
- * 使用括号深度跟踪替代正则，以正确处理嵌套方括号（如 whereIn(['值1', '值2'])）
- */
-function replaceDbExpressions(content) {
-    const marker = '{[db.';
-    let result = '';
-    let i = 0;
-    while (i < content.length) {
-        const markerIndex = content.indexOf(marker, i);
-        if (markerIndex === -1) {
-            result += content.slice(i);
+    const normalizedExpr = normalizeOperators_ACU(expression);
+    const operators = ['>=', '<=', '!=', '==', '>', '<'];
+    let matchedOperator = null;
+    let cellRef = '';
+    let compareValue = '';
+    for (const op of operators) {
+        const opIndex = normalizedExpr.indexOf(op);
+        if (opIndex !== -1) {
+            cellRef = normalizedExpr.substring(0, opIndex).trim();
+            compareValue = normalizedExpr.substring(opIndex + op.length).trim();
+            matchedOperator = op;
             break;
         }
-        // 添加 marker 之前的文本
-        result += content.slice(i, markerIndex);
-        // 从 {[ 之后开始，跟踪括号深度找到匹配的 ]}
-        const exprStart = markerIndex + 2; // 跳过 {[
-        let bracketDepth = 1; // 已经有一个 [
-        let parenDepth = 0;
-        let inSingleQuote = false;
-        let inDoubleQuote = false;
-        let j = exprStart;
-        let found = false;
-        while (j < content.length) {
-            const ch = content[j];
-            // 处理引号状态（引号内的括号不计入深度）
-            if (ch === "'" && !inDoubleQuote) {
-                inSingleQuote = !inSingleQuote;
-                j++;
-                continue;
-            }
-            if (ch === '"' && !inSingleQuote) {
-                inDoubleQuote = !inDoubleQuote;
-                j++;
-                continue;
-            }
-            if (!inSingleQuote && !inDoubleQuote) {
-                if (ch === '[') {
-                    bracketDepth++;
-                }
-                else if (ch === ']') {
-                    bracketDepth--;
-                    if (bracketDepth === 0) {
-                        if (j + 1 < content.length && content[j + 1] === '}') {
-                            // 找到了匹配的 ]}
-                            const fullExpr = content.slice(exprStart, j); // db.xxx.xxx(...) 或 db.xxx.xxx(...) as varName
-                            const endPos = j + 2; // 跳过 ]}
-                            // 检查是否有 "as 变量名" 后缀
-                            const asMatch = fullExpr.match(/^(.+?)\s+as\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*$/);
-                            try {
-                                if (asMatch) {
-                                    // 有 as：执行表达式，存入变量，标签替换为空
-                                    const ormExpr = inlineVarReplace(asMatch[1].trim());
-                                    const varName = asMatch[2];
-                                    const value = evaluateOrmExpression(ormExpr);
-                                    _dbSqlVars[varName] = isNaN(Number(value)) ? value : Number(value);
-                                    logDebug_ACU(`[变量系统] db as: ${varName} = ${value}`);
-                                    // 不输出任何内容（标签被移除）
-                                }
-                                else {
-                                    // 无 as：正常替换为查询结果
-                                    const replacement = evaluateOrmExpression(inlineVarReplace(fullExpr));
-                                    result += replacement;
-                                }
-                            }
-                            catch (e) {
-                                logWarn_ACU(`[模板变量] ORM 表达式执行失败: ${fullExpr} → ${e?.message}`);
-                            }
-                            i = endPos;
-                            found = true;
-                            break;
-                        }
-                        else {
-                            // ] 后面不是 }，这个 ] 不是结束标记，恢复深度
-                            bracketDepth++;
-                        }
-                    }
-                }
-                else if (ch === '(') {
-                    parenDepth++;
-                }
-                else if (ch === ')') {
-                    parenDepth--;
-                }
-            }
-            j++;
+    }
+    if (!matchedOperator) {
+        logWarn_ACU('[剧情推进] evaluateCellExpression_ACU: 未找到有效的比较运算符, expression=', expression);
+        return false;
+    }
+    const parts = cellRef.split('/').map(p => p.trim()).filter(p => p);
+    if (parts.length < 2 || parts.length > 3) {
+        logWarn_ACU('[剧情推进] evaluateCellExpression_ACU: 单元格引用格式错误, cellRef=', cellRef);
+        return false;
+    }
+    const [tableName, name1, name2] = parts;
+    if (!allTablesJson || typeof allTablesJson !== 'object') {
+        return matchedOperator === '!=';
+    }
+    const sheets = Object.values(allTablesJson).filter((x) => x && typeof x === 'object' && x.name && x.content);
+    const targetTable = sheets.find(s => String(s.name || '').trim() === tableName.trim());
+    if (!targetTable || !Array.isArray(targetTable.content) || targetTable.content.length < 1) {
+        logDebug_ACU('[剧情推进] evaluateCellExpression_ACU: 未找到表格或表格为空, tableName=', tableName);
+        return matchedOperator === '!=';
+    }
+    const headerRow = targetTable.content[0];
+    if (!Array.isArray(headerRow)) {
+        return false;
+    }
+    const dataRows = targetTable.content.slice(1);
+    if (parts.length === 3) {
+        const rowName = name1;
+        const colName = name2;
+        let cellResult = getCellValue_ACU(allTablesJson, tableName, rowName, colName);
+        if (cellResult.success) {
+            return compareValue_ACU(cellResult.value, matchedOperator, compareValue);
         }
-        if (!found) {
-            // 没有找到匹配的 ]}，原样输出 marker
-            result += marker;
-            i = markerIndex + marker.length;
+        cellResult = getCellValue_ACU(allTablesJson, tableName, colName, rowName);
+        if (cellResult.success) {
+            return compareValue_ACU(cellResult.value, matchedOperator, compareValue);
+        }
+        return matchedOperator === '!=';
+    }
+    else if (parts.length === 2) {
+        const targetName = name1;
+        let foundAnyCell = false;
+        const targetRow = dataRows.find((row) => {
+            if (!Array.isArray(row))
+                return false;
+            return String(row[0] || '').trim() === targetName.trim();
+        });
+        if (targetRow) {
+            foundAnyCell = true;
+            for (let colIdx = 1; colIdx < targetRow.length; colIdx++) {
+                const cellValue = targetRow[colIdx];
+                if (compareValue_ACU(cellValue, matchedOperator, compareValue)) {
+                    return true;
+                }
+            }
+        }
+        const colIndex = headerRow.findIndex(h => String(h || '').trim() === targetName.trim());
+        if (colIndex !== -1) {
+            foundAnyCell = true;
+            for (const row of dataRows) {
+                if (!Array.isArray(row))
+                    continue;
+                const cellValue = row[colIndex];
+                if (compareValue_ACU(cellValue, matchedOperator, compareValue)) {
+                    return true;
+                }
+            }
+        }
+        if (foundAnyCell) {
+            return false;
+        }
+        else {
+            return matchedOperator === '!=';
         }
     }
-    return result;
+    return false;
+}
+
+/**
+ * service/runtime/template-vars/var-store-and-tags.ts
+ * 模板变量存储管理 + Random/Calc/Max/Min 标签解析与替换
+ * 从 helpers-template-vars.ts 拆出
+ */
+let randomVariables_ACU = {};
+let calcVariables_ACU = {};
+let maxVariables_ACU = {};
+let minVariables_ACU = {};
+/** 获取模板变量存储的当前快照（供 plot-runtime 跨模块读取） */
+function getTemplateVariableStores_ACU() {
+    return { randomVariables_ACU, calcVariables_ACU, maxVariables_ACU, minVariables_ACU };
+}
+/** 批量设置模板变量存储（供 plot-runtime 跨模块恢复/重置） */
+function setTemplateVariableStores_ACU(stores) {
+    randomVariables_ACU = (stores && typeof stores.randomVariables_ACU === 'object') ? { ...stores.randomVariables_ACU } : {};
+    calcVariables_ACU = (stores && typeof stores.calcVariables_ACU === 'object') ? { ...stores.calcVariables_ACU } : {};
+    maxVariables_ACU = (stores && typeof stores.maxVariables_ACU === 'object') ? { ...stores.maxVariables_ACU } : {};
+    minVariables_ACU = (stores && typeof stores.minVariables_ACU === 'object') ? { ...stores.minVariables_ACU } : {};
 }
 /**
- * 替换 {[sql "..."]} 和 {[sql "..." as 变量名]} 模板变量
- * 支持 as 语法：结果存入变量，标签替换为空字符串
+ * 解析随机数标签，生成随机整数
+ * 语法：
+ * - <random min="1" max="100" /> - 生成随机数并替换标签
+ * - <random id="dice" min="1" max="6" /> - 生成随机数并存储为变量
  */
-function replaceSqlExpressions(content) {
-    // 匹配 {[sql "..."]} 或 {[sql '...']}，可选 as 变量名
-    return content.replace(/\{\[sql\s+(["'])(.*?)\1(?:\s+as\s+([a-zA-Z_][a-zA-Z0-9_]*))?\s*\]\}/gs, (_match, _quote, sqlContent, varName) => {
-        try {
-            const value = evaluateRawSqlExpression('sql "' + sqlContent + '"');
-            if (varName) {
-                // 有 as：存入变量，标签替换为空
-                _dbSqlVars[varName] = isNaN(Number(value)) || value === '' ? value : Number(value);
-                logDebug_ACU(`[变量系统] sql as: ${varName} = ${value}`);
-                return '';
-            }
-            // 无 as：正常替换为查询结果
-            return value;
+function parseRandomTags_ACU(content) {
+    if (!content || typeof content !== 'string') {
+        return content || '';
+    }
+    randomVariables_ACU = {};
+    const randomRegex = /<random\s+([^>]*?)\s*\/?>/gi;
+    return content.replace(randomRegex, (match, attrs) => {
+        const idMatch = attrs.match(/id\s*=\s*"([^"]*)"/i);
+        const minMatch = attrs.match(/min\s*=\s*"(\d+)"/i);
+        const maxMatch = attrs.match(/max\s*=\s*"(\d+)"/i);
+        if (!minMatch || !maxMatch) {
+            logWarn_ACU('[随机函数] 缺少 min 或 max 参数:', attrs);
+            return match;
         }
-        catch (e) {
-            logWarn_ACU(`[模板变量] SQL 表达式执行失败: ${sqlContent} → ${e?.message}`);
+        const id = idMatch ? idMatch[1].trim() : null;
+        const min = parseInt(minMatch[1], 10);
+        const max = parseInt(maxMatch[1], 10);
+        if (isNaN(min) || isNaN(max)) {
+            logWarn_ACU('[随机函数] 无效的随机参数:', minMatch[1], maxMatch[1]);
+            return match;
+        }
+        let randomValue;
+        if (min > max) {
+            logWarn_ACU('[随机函数] 最小值大于最大值，自动交换:', min, max);
+            randomValue = Math.floor(Math.random() * (min - max + 1)) + max;
+        }
+        else {
+            randomValue = Math.floor(Math.random() * (max - min + 1)) + min;
+        }
+        if (id) {
+            randomVariables_ACU[id] = randomValue;
+            logDebug_ACU('[随机函数] 生成随机数变量:', id, '=', randomValue, '范围:', min, '-', max);
             return '';
         }
+        else {
+            logDebug_ACU('[随机函数] 生成随机数:', randomValue, '范围:', min, '-', max);
+            return String(randomValue);
+        }
     });
 }
 /**
- * 替换文本中的 $v:变量名 引用
- * 在所有标签解析完成后执行
- * 也供 if-block-parser 在选中分支内容中替换 $v: 引用
+ * 替换随机数变量引用 $random:id
  */
-function replaceVarReferences(content) {
-    return content.replace(/\$v:([a-zA-Z_][a-zA-Z0-9_]*)/gi, (match, varName) => {
-        if (_dbSqlVars.hasOwnProperty(varName)) {
-            return String(_dbSqlVars[varName]);
+function replaceRandomVariables_ACU(content) {
+    if (!content || typeof content !== 'string') {
+        return content || '';
+    }
+    return content.replace(/\$random:([a-zA-Z_][a-zA-Z0-9_]*)/gi, (match, id) => {
+        if (randomVariables_ACU.hasOwnProperty(id)) {
+            return String(randomVariables_ACU[id]);
         }
-        logWarn_ACU(`[变量系统] 未找到变量: ${varName}`);
+        logWarn_ACU('[随机函数] 未找到随机数变量:', id);
         return match;
     });
+}
+/**
+ * 获取随机数变量值（用于条件判断）
+ */
+function getRandomVariable_ACU(id) {
+    if (randomVariables_ACU.hasOwnProperty(id)) {
+        return randomVariables_ACU[id];
+    }
+    return null;
+}
+// =========================
+// [剧情推进] 计算变量功能
+// =========================
+/**
+ * 解析表达式中的变量引用，返回数值
+ * 支持：cell:表名/行名/列名、$random:id、$calc:id、$max:id、$min:id
+ */
+function parseCalcExpressionValue_ACU(expr, context) {
+    if (!expr || typeof expr !== 'string') {
+        return { success: false, value: null, error: '表达式为空' };
+    }
+    const trimmed = expr.trim();
+    if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
+        return { success: true, value: parseFloat(trimmed), error: null };
+    }
+    if (trimmed.startsWith('cell:')) {
+        const cellPath = trimmed.substring(5).trim();
+        const parts = cellPath.split('/');
+        if (parts.length !== 3) {
+            return { success: false, value: null, error: `cell 路径格式错误: ${cellPath}` };
+        }
+        const [tableName, rowName, colName] = parts.map((p) => p.trim());
+        const cellValue = getCellValue_ACU(tableName, rowName, colName, context.allTablesJson);
+        if (cellValue === null || cellValue === undefined || cellValue === '') {
+            return { success: false, value: null, error: `cell 值不存在: ${cellPath}` };
+        }
+        const numValue = parseFloat(cellValue);
+        if (isNaN(numValue)) {
+            return { success: false, value: null, error: `cell 值不是数字: ${cellPath} = ${cellValue}` };
+        }
+        return { success: true, value: numValue, error: null };
+    }
+    const randomMatch = trimmed.match(/^\$random:([a-zA-Z_][a-zA-Z0-9_]*)$/i);
+    if (randomMatch) {
+        const randomId = randomMatch[1];
+        const randomValue = getRandomVariable_ACU(randomId);
+        if (randomValue === null) {
+            return { success: false, value: null, error: `随机数变量不存在: ${randomId}` };
+        }
+        return { success: true, value: randomValue, error: null };
+    }
+    const calcMatch = trimmed.match(/^\$calc:([a-zA-Z_][a-zA-Z0-9_]*)$/i);
+    if (calcMatch) {
+        const calcId = calcMatch[1];
+        if (calcVariables_ACU.hasOwnProperty(calcId)) {
+            return { success: true, value: calcVariables_ACU[calcId], error: null };
+        }
+        return { success: false, value: null, error: `计算变量不存在: ${calcId}` };
+    }
+    const maxMatch = trimmed.match(/^\$max:([a-zA-Z_][a-zA-Z0-9_]*)$/i);
+    if (maxMatch) {
+        const maxId = maxMatch[1];
+        if (maxVariables_ACU.hasOwnProperty(maxId)) {
+            return { success: true, value: maxVariables_ACU[maxId], error: null };
+        }
+        return { success: false, value: null, error: `最大值变量不存在: ${maxId}` };
+    }
+    const minMatch = trimmed.match(/^\$min:([a-zA-Z_][a-zA-Z0-9_]*)$/i);
+    if (minMatch) {
+        const minId = minMatch[1];
+        if (minVariables_ACU.hasOwnProperty(minId)) {
+            return { success: true, value: minVariables_ACU[minId], error: null };
+        }
+        return { success: false, value: null, error: `最小值变量不存在: ${minId}` };
+    }
+    return { success: false, value: null, error: `无法解析表达式: ${trimmed}` };
+}
+/**
+ * 计算表达式（支持四则运算和括号）
+ */
+function evaluateCalcExpression_ACU(expr, context) {
+    if (!expr || typeof expr !== 'string') {
+        return { success: false, value: null, error: '表达式为空' };
+    }
+    let processedExpr = expr.trim();
+    processedExpr = processedExpr.replace(/cell:([^+\-*/%()\s]+)/gi, (match, cellPath) => {
+        const parts = cellPath.split('/');
+        if (parts.length !== 3) {
+            return 'NaN';
+        }
+        const [tableName, rowName, colName] = parts.map((p) => p.trim());
+        const cellValue = getCellValue_ACU(tableName, rowName, colName, context.allTablesJson);
+        if (cellValue === null || cellValue === undefined || cellValue === '') {
+            return 'NaN';
+        }
+        const numValue = parseFloat(cellValue);
+        return isNaN(numValue) ? 'NaN' : String(numValue);
+    });
+    processedExpr = processedExpr.replace(/\$random:([a-zA-Z_][a-zA-Z0-9_]*)/gi, (match, id) => {
+        const value = getRandomVariable_ACU(id);
+        return value === null ? 'NaN' : String(value);
+    });
+    processedExpr = processedExpr.replace(/\$calc:([a-zA-Z_][a-zA-Z0-9_]*)/gi, (match, id) => {
+        if (calcVariables_ACU.hasOwnProperty(id)) {
+            return String(calcVariables_ACU[id]);
+        }
+        return 'NaN';
+    });
+    processedExpr = processedExpr.replace(/\$max:([a-zA-Z_][a-zA-Z0-9_]*)/gi, (match, id) => {
+        if (maxVariables_ACU.hasOwnProperty(id)) {
+            return String(maxVariables_ACU[id]);
+        }
+        return 'NaN';
+    });
+    processedExpr = processedExpr.replace(/\$min:([a-zA-Z_][a-zA-Z0-9_]*)/gi, (match, id) => {
+        if (minVariables_ACU.hasOwnProperty(id)) {
+            return String(minVariables_ACU[id]);
+        }
+        return 'NaN';
+    });
+    if (processedExpr.includes('NaN')) {
+        return { success: false, value: null, error: `表达式包含无效变量: ${processedExpr}` };
+    }
+    if (/\/\s*0(?![.\d])/.test(processedExpr)) {
+        return { success: false, value: null, error: '除数为零' };
+    }
+    try {
+        if (!/^[\d+\-*/%().\s]+$/.test(processedExpr)) {
+            return { success: false, value: null, error: `表达式包含非法字符: ${processedExpr}` };
+        }
+        const result = new Function('return ' + processedExpr)();
+        if (typeof result !== 'number' || isNaN(result) || !isFinite(result)) {
+            return { success: false, value: null, error: `计算结果无效: ${result}` };
+        }
+        const intResult = Math.floor(result);
+        return { success: true, value: intResult, error: null };
+    }
+    catch (e) {
+        return { success: false, value: null, error: `计算错误: ${e.message}` };
+    }
+}
+/**
+ * 解析计算变量标签 <calc id="xxx" expr="表达式" />
+ */
+function parseCalcTags_ACU(content, context) {
+    if (!content || typeof content !== 'string') {
+        return content || '';
+    }
+    calcVariables_ACU = {};
+    const calcRegex = /<calc\s+([^>]*?)\s*\/?>/gi;
+    return content.replace(calcRegex, (match, attrs) => {
+        const idMatch = attrs.match(/id\s*=\s*"([^"]*)"/i);
+        const exprMatch = attrs.match(/expr\s*=\s*"([^"]*)"/i);
+        if (!idMatch || !exprMatch) {
+            logWarn_ACU('[计算变量] 缺少 id 或 expr 参数:', attrs);
+            return match;
+        }
+        const id = idMatch[1].trim();
+        const expr = exprMatch[1].trim();
+        const result = evaluateCalcExpression_ACU(expr, context);
+        if (result.success) {
+            calcVariables_ACU[id] = result.value;
+            logDebug_ACU('[计算变量] 定义成功:', id, '=', result.value, '表达式:', expr);
+            return '';
+        }
+        else {
+            logWarn_ACU('[计算变量] 定义失败:', id, '-', result.error);
+            return match;
+        }
+    });
+}
+/**
+ * 解析最大值变量标签 <max id="xxx" values="值1, 值2, ..." />
+ */
+function parseMaxTags_ACU(content, context) {
+    if (!content || typeof content !== 'string') {
+        return content || '';
+    }
+    maxVariables_ACU = {};
+    const maxRegex = /<max\s+([^>]*?)\s*\/?>/gi;
+    return content.replace(maxRegex, (match, attrs) => {
+        const idMatch = attrs.match(/id\s*=\s*"([^"]*)"/i);
+        const valuesMatch = attrs.match(/values\s*=\s*"([^"]*)"/i);
+        if (!idMatch || !valuesMatch) {
+            logWarn_ACU('[最大值变量] 缺少 id 或 values 参数:', attrs);
+            return match;
+        }
+        const id = idMatch[1].trim();
+        const valuesStr = valuesMatch[1].trim();
+        const valueExprs = valuesStr.split(',').map((v) => v.trim()).filter((v) => v);
+        if (valueExprs.length === 0) {
+            logWarn_ACU('[最大值变量] 值列表为空:', id);
+            return match;
+        }
+        const values = [];
+        for (const expr of valueExprs) {
+            const result = parseCalcExpressionValue_ACU(expr, context);
+            if (!result.success) {
+                logWarn_ACU('[最大值变量] 解析值失败:', id, '-', result.error, '表达式:', expr);
+                return match;
+            }
+            values.push(result.value);
+        }
+        const maxValue = Math.max(...values);
+        maxVariables_ACU[id] = maxValue;
+        logDebug_ACU('[最大值变量] 定义成功:', id, '=', maxValue, '值列表:', values);
+        return '';
+    });
+}
+/**
+ * 解析最小值变量标签 <min id="xxx" values="值1, 值2, ..." />
+ */
+function parseMinTags_ACU(content, context) {
+    if (!content || typeof content !== 'string') {
+        return content || '';
+    }
+    minVariables_ACU = {};
+    const minRegex = /<min\s+([^>]*?)\s*\/?>/gi;
+    return content.replace(minRegex, (match, attrs) => {
+        const idMatch = attrs.match(/id\s*=\s*"([^"]*)"/i);
+        const valuesMatch = attrs.match(/values\s*=\s*"([^"]*)"/i);
+        if (!idMatch || !valuesMatch) {
+            logWarn_ACU('[最小值变量] 缺少 id 或 values 参数:', attrs);
+            return match;
+        }
+        const id = idMatch[1].trim();
+        const valuesStr = valuesMatch[1].trim();
+        const valueExprs = valuesStr.split(',').map((v) => v.trim()).filter((v) => v);
+        if (valueExprs.length === 0) {
+            logWarn_ACU('[最小值变量] 值列表为空:', id);
+            return match;
+        }
+        const values = [];
+        for (const expr of valueExprs) {
+            const result = parseCalcExpressionValue_ACU(expr, context);
+            if (!result.success) {
+                logWarn_ACU('[最小值变量] 解析值失败:', id, '-', result.error, '表达式:', expr);
+                return match;
+            }
+            values.push(result.value);
+        }
+        const minValue = Math.min(...values);
+        minVariables_ACU[id] = minValue;
+        logDebug_ACU('[最小值变量] 定义成功:', id, '=', minValue, '值列表:', values);
+        return '';
+    });
+}
+/** 替换计算变量引用 $calc:id */
+function replaceCalcVariables_ACU(content) {
+    if (!content || typeof content !== 'string') {
+        return content || '';
+    }
+    return content.replace(/\$calc:([a-zA-Z_][a-zA-Z0-9_]*)/gi, (match, id) => {
+        if (calcVariables_ACU.hasOwnProperty(id)) {
+            return String(calcVariables_ACU[id]);
+        }
+        logWarn_ACU('[计算变量] 未找到变量:', id);
+        return match;
+    });
+}
+/** 替换最大值变量引用 $max:id */
+function replaceMaxVariables_ACU(content) {
+    if (!content || typeof content !== 'string') {
+        return content || '';
+    }
+    return content.replace(/\$max:([a-zA-Z_][a-zA-Z0-9_]*)/gi, (match, id) => {
+        if (maxVariables_ACU.hasOwnProperty(id)) {
+            return String(maxVariables_ACU[id]);
+        }
+        logWarn_ACU('[最大值变量] 未找到变量:', id);
+        return match;
+    });
+}
+/** 替换最小值变量引用 $min:id */
+function replaceMinVariables_ACU(content) {
+    if (!content || typeof content !== 'string') {
+        return content || '';
+    }
+    return content.replace(/\$min:([a-zA-Z_][a-zA-Z0-9_]*)/gi, (match, id) => {
+        if (minVariables_ACU.hasOwnProperty(id)) {
+            return String(minVariables_ACU[id]);
+        }
+        logWarn_ACU('[最小值变量] 未找到变量:', id);
+        return match;
+    });
+}
+/** 获取计算变量值（用于条件判断） */
+function getCalcVariable_ACU(id) {
+    if (calcVariables_ACU.hasOwnProperty(id)) {
+        return calcVariables_ACU[id];
+    }
+    return null;
+}
+/** 获取最大值变量值（用于条件判断） */
+function getMaxVariable_ACU(id) {
+    if (maxVariables_ACU.hasOwnProperty(id)) {
+        return maxVariables_ACU[id];
+    }
+    return null;
+}
+/** 获取最小值变量值（用于条件判断） */
+function getMinVariable_ACU(id) {
+    if (minVariables_ACU.hasOwnProperty(id)) {
+        return minVariables_ACU[id];
+    }
+    return null;
 }
 
 /**
@@ -58514,122 +56741,84 @@ function dedupeLorebookHostNames_ACU(hostNames) {
 }
 
 /**
- * service/agent/agent-worldbook-runtime-read.ts
- * Agent 世界书只读 helper 唯一真源。
+ * service/worldbook/read-scope.ts
+ * 表格候选作用域：requested→host 目标解析、候选集合构建与顺序稳定去重。
  *
- * decision-engine 与 skill-meta 共用同一实现，参数固定为 agent_runtime + trusted_direct，
- * 避免两份等价副本的错误分类与缓存策略漂移。
+ * 候选集合只保留本次逻辑阶段的显式目标（当前选择 / enabledEntries 键 /
+ * Agent greenlight / 注入目标 / 角色绑定），禁止用于全库扫描。
  */
 /**
- * 读取单本世界书条目。有 read context 时走请求级物理去重（agent_runtime + trusted_direct）；
- * 无 context 时退回 gateway 直接读取（UI/独立操作路径）。
- * not-found/unknown 读取失败统一以 StrictLorebookReadError 抛出，由调用方决定跳过或阻断。
+ * 将一组逻辑名称解析为 requested→host 目标，保持首次出现顺序、按 hostName 去重。
+ * 精确匹配优先；归一化多解返回 null（调用方拒绝读取）。
+ * 使用请求级上下文内的 catalog 懒解析，避免每次调用重复列全库。
  */
-async function getAgentRuntimeLorebookEntries_ACU(bookName, readContext) {
-    if (!readContext)
-        return getLorebookEntries_ACU(bookName);
-    const result = await getLorebookEntriesStrict_ACU([bookName], {
-        source: 'agent_runtime',
-        validationPolicy: 'trusted_direct',
-        runId: readContext.runId,
-        context: readContext,
-    });
-    if (result.status !== 'success')
-        throw createStrictLorebookReadError_ACU(result);
-    return result.entriesByBook[bookName] || [];
-}
-
-function normalizeAgentWorldbookSnapshotBookNames_ACU(bookNames) {
-    if (!Array.isArray(bookNames))
-        return [];
-    return [...new Set(bookNames.map(name => String(name || '').trim()).filter(Boolean))]
-        .sort((left, right) => left.localeCompare(right));
-}
-function buildAgentWorldbookSnapshotSelectionSignature_ACU(bookNames) {
-    return hashUserInput_ACU(JSON.stringify({
-        scope: 'agent-worldbook-takeover',
-        books: normalizeAgentWorldbookSnapshotBookNames_ACU(bookNames),
-    }));
-}
-function isAgentWorldbookSnapshotValidForBooks_ACU(snapshot, bookNames) {
-    return snapshot?.active === true
-        && snapshot.selectionSignature === buildAgentWorldbookSnapshotSelectionSignature_ACU(bookNames);
-}
-
-/**
- * Agent 世界书 comment 元数据标记/剥离的单一出口。
- *
- * 本模块是跨 service 与 presentation-v2 两层的纯字符串工具：
- * - service 层：takeover / snapshot-restore / skill-meta / decision-engine
- * - presentation 层：三个条目列表 composable 的 label 派生
- *
- * 约束（防止回归）：
- * 1. 本模块除 TS 类型外不得 import 任何项目内模块，保持零依赖。
- * 2. strict / loose / skill 三个剥离函数必须与迁移前逐字符等价（含空白归一化），
- *    任何改动都会破坏 commentHash 比对与快照恢复的一致性。
- * 3. 单行压缩只发生在 buildWorldbookEntryDisplayLabel_ACU（展示专用），
- *    绝不进入任何 hash 输入路径。
- */
-const AGENT_TAKEOVER_META_START_ACU = 'ACU_AGENT_WORLDBOOK_TAKEOVER_META_START';
-const AGENT_TAKEOVER_META_END_ACU = 'ACU_AGENT_WORLDBOOK_TAKEOVER_META_END';
-const ACU_SKILL_META_START_ACU = 'ACU_SKILL_META_START';
-const ACU_SKILL_META_END_ACU = 'ACU_SKILL_META_END';
-/**
- * 工厂而非共享常量实例：带 g 标志的 RegExp 共享 lastIndex，
- * 跨调用 exec/test 会漏匹配。每次返回新实例避免污染。
- */
-function createAgentTakeoverMetaPattern_ACU() {
-    return /\n?<!--\s*ACU_AGENT_WORLDBOOK_TAKEOVER_META_START\s*\n([\s\S]*?)\nACU_AGENT_WORLDBOOK_TAKEOVER_META_END\s*-->\n?/g;
-}
-function createSkillMetaPattern_ACU() {
-    return /\n?<!--\s*ACU_SKILL_META_START\s*\n([\s\S]*?)\nACU_SKILL_META_END\s*-->\n?/g;
-}
-function normalizeCommentText_ACU$2(comment) {
-    return typeof comment === 'string' ? comment : '';
+async function resolveLorebookReadTargets_ACU(context, requestedNames) {
+    const seenRequested = new Set();
+    const seenHosts = new Set();
+    const targets = [];
+    for (const raw of requestedNames) {
+        const requested = String(raw ?? '').trim();
+        if (!requested || seenRequested.has(requested))
+            continue;
+        seenRequested.add(requested);
+        let hostName = null;
+        if (context) {
+            hostName = await context.resolveBookName(requested);
+        }
+        else {
+            hostName = resolveLorebookNameFromList_ACU(requested, await listLorebooks_ACU());
+        }
+        if (hostName && seenHosts.has(hostName))
+            continue;
+        if (hostName)
+            seenHosts.add(hostName);
+        targets.push({ requestedName: requested, hostName });
+    }
+    return targets;
 }
 /**
- * 严格剥离：仅移除 version===1 且 kind==='agent_worldbook_takeover' 的块。
- * 未知版本 / 非 JSON 块原样保留（恢复路径需识别为不支持并跳过）。
- * 逐字照搬自 agent-worldbook-takeover.ts 的 stripTakeoverMetaBlock_ACU。
+ * 表格候选作用域：从当前配置/角色绑定/注入目标等显式来源收集候选书名。
+ * 保持首次出现顺序并去重；不包含任何全库枚举。
  */
-function stripAgentTakeoverMetaBlockStrict_ACU(comment) {
-    return normalizeCommentText_ACU$2(comment)
-        .replace(createAgentTakeoverMetaPattern_ACU(), (block, rawMeta) => {
+function buildTableCandidateScope_ACU(collectors) {
+    const seen = new Set();
+    const names = [];
+    for (const collect of collectors) {
+        for (const raw of collect()) {
+            const name = String(raw ?? '').trim();
+            if (name && !seen.has(name)) {
+                seen.add(name);
+                names.push(name);
+            }
+        }
+    }
+    return names;
+}
+/**
+ * 收集异步来源的候选书名（注入目标 / 角色绑定等），与 buildTableCandidateScope_ACU
+ * 保持相同的保序去重语义。单个来源失败时静默跳过：这些是可选来源，不阻断填表主流程，
+ * 失败仅意味着该书本次不进入候选作用域（后续仍可通过来源 1-3 进入）。
+ */
+async function collectAsyncTableCandidateScope_ACU(collectors) {
+    const seen = new Set();
+    const names = [];
+    for (const collect of collectors) {
+        let values;
         try {
-            const meta = JSON.parse(rawMeta.trim());
-            return meta.version === 1 && meta.kind === 'agent_worldbook_takeover' ? '\n' : block;
+            values = await collect();
         }
         catch {
-            return block;
+            continue;
         }
-    })
-        .replace(/\n{3,}/g, '\n\n')
-        .trim();
-}
-/**
- * 宽松剥离：不校验 version/kind，清除任何残留 takeover 块（含 {} 等非法 meta）。
- * 逐字照搬自 agent-worldbook-snapshot-restore.ts 的 stripTakeoverMeta_ACU。
- * 与 strict 版行为相反，禁止合并。
- */
-function stripAgentTakeoverMetaBlockLoose_ACU(comment) {
-    return String(comment || '').replace(createAgentTakeoverMetaPattern_ACU(), '\n').replace(/\n{3,}/g, '\n\n').trim();
-}
-/** 剥离 Skill meta 块（不校验内容）。逐字照搬自 agent-worldbook-skill-meta.ts 的 stripWorldbookSkillMetaBlock_ACU。 */
-function stripWorldbookSkillMetaBlockCore_ACU(comment) {
-    return normalizeCommentText_ACU$2(comment)
-        .replace(createSkillMetaPattern_ACU(), '\n')
-        .replace(/\n{3,}/g, '\n\n')
-        .trim();
-}
-/**
- * 展示专用标题：strict 剥 takeover → 剥 Skill → 压成单行 → 空则回退 `条目 ${uid}`。
- * 注意：单行压缩只在这里，绝不进入任何 hash 输入路径。
- */
-function buildWorldbookEntryDisplayLabel_ACU(comment, uid) {
-    const cleaned = stripWorldbookSkillMetaBlockCore_ACU(stripAgentTakeoverMetaBlockStrict_ACU(comment))
-        .replace(/\s+/g, ' ')
-        .trim();
-    return cleaned || `条目 ${uid}`;
+        for (const raw of values) {
+            const name = String(raw ?? '').trim();
+            if (name && !seen.has(name)) {
+                seen.add(name);
+                names.push(name);
+            }
+        }
+    }
+    return names;
 }
 
 let cachedAgentWorldbookSnapshot_ACU = {
@@ -58667,1445 +56856,6 @@ function normalizeTkBudgetNumber_ACU(value, fallback = 0) {
     const raw = Number(value);
     const base = Number.isFinite(raw) ? Math.trunc(raw) : fallback;
     return Math.max(0, base);
-}
-
-function isSamePatchValue_ACU(left, right) {
-    return JSON.stringify(left) === JSON.stringify(right);
-}
-function doesEntryMatchPatch_ACU(entry, patch) {
-    if (!entry || String(entry.uid) !== String(patch.uid))
-        return false;
-    return Object.entries(patch)
-        .filter(([key]) => key !== 'uid')
-        .every(([key, value]) => isSamePatchValue_ACU(entry[key], value));
-}
-async function readConfirmedPatches_ACU(bookName, patches) {
-    const entries = await getLorebookEntries_ACU(bookName);
-    const entriesByUid = new Map((entries || []).map(entry => [String(entry?.uid), entry]));
-    return patches.filter(patch => doesEntryMatchPatch_ACU(entriesByUid.get(String(patch.uid)), patch));
-}
-/**
- * 恢复操作实际改动过的字段在写入前的值。仅保存此次 restore patch 涉及的字段，
- * 使调用方可在后续 scope 配置持久化失败时将条目恢复为接管中的原始状态。
- */
-async function rollbackAgentWorldbookSnapshotRestore_ACU(rollbackPatchesByBook, restoredPatchesByBook) {
-    let succeeded = true;
-    for (const [rawBookName, patches] of Object.entries(rollbackPatchesByBook || {})) {
-        const bookName = String(rawBookName || '').trim();
-        if (!bookName || !Array.isArray(patches) || patches.length === 0)
-            continue;
-        try {
-            const restoredPatches = restoredPatchesByBook?.[bookName];
-            if (!Array.isArray(restoredPatches) || restoredPatches.length === 0) {
-                succeeded = false;
-                logWarn_ACU(`[Agent世界书] 回滚世界书条目恢复缺少恢复后状态：${bookName}`);
-                continue;
-            }
-            const restoredByUid = new Map(restoredPatches.map(patch => [String(patch.uid), patch]));
-            const entries = await getLorebookEntries_ACU(bookName);
-            const entriesByUid = new Map((entries || []).map(entry => [String(entry?.uid), entry]));
-            const safePatches = patches.filter(patch => {
-                const restoredPatch = restoredByUid.get(String(patch.uid));
-                return restoredPatch !== undefined
-                    && doesEntryMatchPatch_ACU(entriesByUid.get(String(patch.uid)), restoredPatch);
-            });
-            if (safePatches.length !== patches.length) {
-                succeeded = false;
-                logWarn_ACU(`[Agent世界书] 回滚世界书条目恢复发生并发冲突：${bookName}`);
-            }
-            if (safePatches.length === 0)
-                continue;
-            await setLorebookEntries_ACU(bookName, safePatches);
-            const confirmed = await readConfirmedPatches_ACU(bookName, safePatches);
-            if (confirmed.length !== safePatches.length) {
-                succeeded = false;
-                logWarn_ACU(`[Agent世界书] 回滚世界书条目恢复未被完整确认：${bookName}`);
-            }
-        }
-        catch (error) {
-            succeeded = false;
-            logWarn_ACU(`[Agent世界书] 回滚世界书条目恢复失败：${bookName}`, error);
-        }
-    }
-    return succeeded;
-}
-function buildAgentWorldbookSelectionSignature_ACU(bookNames) {
-    return buildAgentWorldbookSnapshotSelectionSignature_ACU(bookNames);
-}
-function hasValidUid_ACU(value) {
-    return value !== null && value !== undefined && String(value).trim() !== '';
-}
-function stripTakeoverMeta_ACU(comment) {
-    return stripAgentTakeoverMetaBlockLoose_ACU(comment);
-}
-function comparableComment_ACU(comment) {
-    return stripTakeoverMeta_ACU(comment).replace(createSkillMetaPattern_ACU(), '\n').replace(/\n{3,}/g, '\n\n').trim();
-}
-function isCommentHashMatched_ACU(snapshotHash, currentComment) {
-    if (!snapshotHash)
-        return true;
-    const stripped = stripTakeoverMeta_ACU(currentComment);
-    return hashUserInput_ACU(comparableComment_ACU(currentComment)) === snapshotHash
-        || hashUserInput_ACU(stripped) === snapshotHash;
-}
-async function restoreAgentWorldbookSnapshotEntries_ACU(snapshot, expectedBookNames) {
-    const expectedSignature = buildAgentWorldbookSelectionSignature_ACU(expectedBookNames);
-    if (snapshot.active !== true || snapshot.selectionSignature !== expectedSignature) {
-        return {
-            restored: 0,
-            skipped: 0,
-            failed: 0,
-            signatureMatched: false,
-            rollbackPatchesByBook: {},
-            restoredPatchesByBook: {},
-        };
-    }
-    let restored = 0;
-    let skipped = 0;
-    let failed = 0;
-    const rollbackPatchesByBook = {};
-    const restoredPatchesByBook = {};
-    for (const [rawBookName, rawSnapshotEntries] of Object.entries(snapshot.books || {})) {
-        const bookName = String(rawBookName || '').trim();
-        const snapshotEntries = Array.isArray(rawSnapshotEntries) ? rawSnapshotEntries : [];
-        if (!bookName || snapshotEntries.length === 0)
-            continue;
-        try {
-            const entries = await getLorebookEntries_ACU(bookName);
-            const currentByUid = new Map((entries || []).map(entry => [String(entry?.uid), entry]));
-            const patches = [];
-            const rollbackPatches = [];
-            let restoredInBook = 0;
-            for (const snapshotEntry of snapshotEntries) {
-                if (!hasValidUid_ACU(snapshotEntry?.uid)) {
-                    skipped += 1;
-                    continue;
-                }
-                const current = currentByUid.get(String(snapshotEntry.uid));
-                if (!current || !isCommentHashMatched_ACU(snapshotEntry.commentHash, current.comment)) {
-                    if (current) {
-                        const strippedComment = stripTakeoverMeta_ACU(current.comment);
-                        if (strippedComment !== String(current.comment || '')) {
-                            patches.push({ uid: snapshotEntry.uid, comment: strippedComment });
-                            rollbackPatches.push({ uid: snapshotEntry.uid, comment: current.comment });
-                        }
-                    }
-                    skipped += 1;
-                    continue;
-                }
-                const patch = {
-                    uid: snapshotEntry.uid,
-                    comment: stripTakeoverMeta_ACU(current.comment),
-                    enabled: snapshotEntry.previousEnabled !== false,
-                    keys: Array.isArray(snapshotEntry.previousKeys) ? snapshotEntry.previousKeys : [],
-                    type: snapshotEntry.previousType,
-                };
-                patches.push(patch);
-                rollbackPatches.push({
-                    uid: snapshotEntry.uid,
-                    comment: current.comment,
-                    enabled: current.enabled,
-                    keys: current.keys,
-                    type: current.type,
-                });
-                restoredInBook += 1;
-            }
-            if (patches.length > 0) {
-                // 宿主批量写在 reject 前仍可能已应用部分 patch，因此先保留完整 pre-image。
-                rollbackPatchesByBook[bookName] = rollbackPatches;
-                restoredPatchesByBook[bookName] = patches;
-                let writeFailed = false;
-                try {
-                    await setLorebookEntries_ACU(bookName, patches);
-                }
-                catch (error) {
-                    writeFailed = true;
-                    logWarn_ACU(`[Agent世界书] 恢复世界书条目写入失败：${bookName}`, error);
-                }
-                try {
-                    const confirmed = await readConfirmedPatches_ACU(bookName, patches);
-                    const confirmedUidSet = new Set(confirmed.map(patch => String(patch.uid)));
-                    rollbackPatchesByBook[bookName] = rollbackPatches.filter(patch => confirmedUidSet.has(String(patch.uid)));
-                    restoredPatchesByBook[bookName] = patches.filter(patch => confirmedUidSet.has(String(patch.uid)));
-                    if (rollbackPatchesByBook[bookName].length === 0)
-                        delete rollbackPatchesByBook[bookName];
-                    if (restoredPatchesByBook[bookName].length === 0)
-                        delete restoredPatchesByBook[bookName];
-                    if (writeFailed || confirmed.length !== patches.length) {
-                        restoredInBook = 0;
-                        failed += snapshotEntries.length;
-                    }
-                }
-                catch (error) {
-                    // 无法读回时不能假定零副作用；保留完整 pre-image 交由上层补偿。
-                    restoredInBook = 0;
-                    failed += snapshotEntries.length;
-                    logWarn_ACU(`[Agent世界书] 恢复世界书条目后确认失败：${bookName}`, error);
-                }
-            }
-            restored += restoredInBook;
-        }
-        catch (error) {
-            logWarn_ACU(`[Agent世界书] 恢复世界书条目失败：${bookName}`, error);
-            failed += snapshotEntries.length;
-        }
-    }
-    return { restored, skipped, failed, signatureMatched: true, rollbackPatchesByBook, restoredPatchesByBook };
-}
-
-const ORM_CHAIN_METHODS_ACU = new Set([
-    'where', 'orWhere', 'whereIn', 'whereBetween', 'groupBy', 'distinct', 'whereNotIn',
-    'whereNull', 'whereNotNull', 'whereLike', 'orderBy', 'limit', 'offset', 'get', 'first',
-    'list', 'all', 'count', 'sum', 'avg', 'max', 'min', 'exists',
-]);
-const ORM_TERMINAL_METHODS_ACU = new Set(['get', 'first', 'list', 'all', 'count', 'sum', 'avg', 'max', 'min', 'exists']);
-function splitAgentQueryTemplateParts_ACU(content) {
-    const source = String(content || '');
-    const parts = [];
-    let cursor = 0;
-    while (cursor < source.length) {
-        const dbIndex = source.indexOf('{[db.', cursor);
-        const sqlIndex = source.indexOf('{[sql ', cursor);
-        const candidates = [dbIndex, sqlIndex].filter(index => index >= 0);
-        if (candidates.length === 0) {
-            parts.push({ kind: 'text', value: source.slice(cursor) });
-            break;
-        }
-        const start = Math.min(...candidates);
-        if (start > cursor)
-            parts.push({ kind: 'text', value: source.slice(cursor, start) });
-        let quote = '';
-        let bracketDepth = 1;
-        let end = -1;
-        for (let index = start + 2; index < source.length; index++) {
-            const char = source[index];
-            if (quote) {
-                if (char === quote && source[index - 1] !== '\\')
-                    quote = '';
-                continue;
-            }
-            if (char === "'" || char === '"' || char === '`') {
-                quote = char;
-                continue;
-            }
-            if (char === '[')
-                bracketDepth++;
-            if (char === ']') {
-                bracketDepth--;
-                if (bracketDepth === 0 && source[index + 1] === '}') {
-                    end = index + 2;
-                    break;
-                }
-            }
-        }
-        if (end < 0) {
-            parts.push({ kind: 'text', value: source.slice(start) });
-            break;
-        }
-        parts.push({ kind: 'query', value: source.slice(start, end) });
-        cursor = end;
-    }
-    return parts.length > 0 ? parts : [{ kind: 'text', value: source }];
-}
-function splitAlias_ACU(expression) {
-    const match = expression.match(/^([\s\S]*?)\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\s*$/i);
-    return match ? { expression: match[1].trim(), alias: match[2] } : { expression: expression.trim(), alias: null };
-}
-function replaceLocalAliasesInExpression_ACU(expression, aliases) {
-    return expression.replace(/\$v:([A-Za-z_][A-Za-z0-9_]*)/g, (raw, name) => (aliases.has(name) ? JSON.stringify(aliases.get(name)) : raw));
-}
-function replaceLocalAliasesInText_ACU(content, aliases) {
-    return content.replace(/\$v:([A-Za-z_][A-Za-z0-9_]*)/g, (raw, name) => (aliases.has(name) ? String(aliases.get(name)) : raw));
-}
-function splitTopLevelArguments_ACU(source) {
-    const trimmed = source.trim();
-    if (!trimmed)
-        return [];
-    const result = [];
-    let start = 0;
-    let quote = '';
-    let depth = 0;
-    for (let index = 0; index < source.length; index++) {
-        const char = source[index];
-        if (quote) {
-            if (char === quote && source[index - 1] !== '\\')
-                quote = '';
-            continue;
-        }
-        if (char === "'" || char === '"') {
-            quote = char;
-            continue;
-        }
-        if (char === '[')
-            depth++;
-        if (char === ']')
-            depth--;
-        if (char === ',' && depth === 0) {
-            result.push(source.slice(start, index).trim());
-            start = index + 1;
-        }
-    }
-    if (quote || depth !== 0)
-        throw new Error('orm_argument_syntax_invalid');
-    result.push(source.slice(start).trim());
-    return result;
-}
-function parseOrmLiteral_ACU(source) {
-    const value = source.trim();
-    if (/^-?(?:\d+\.?\d*|\.\d+)$/.test(value))
-        return Number(value);
-    if (/^(?:true|false)$/i.test(value))
-        return value.toLowerCase() === 'true';
-    if (/^null$/i.test(value))
-        return null;
-    if ((value.startsWith("'") && value.endsWith("'")) || (value.startsWith('"') && value.endsWith('"'))) {
-        const quote = value[0];
-        return value.slice(1, -1)
-            .replace(new RegExp(`\\\\${quote}`, 'g'), quote)
-            .replace(/\\\\n/g, '\n')
-            .replace(/\\\\r/g, '\r')
-            .replace(/\\\\t/g, '\t')
-            .replace(/\\\\\\\\/g, '\\');
-    }
-    if (value.startsWith('[') && value.endsWith(']')) {
-        return splitTopLevelArguments_ACU(value.slice(1, -1)).map(parseOrmLiteral_ACU);
-    }
-    throw new Error('orm_literal_not_allowed');
-}
-function parseOrmChain_ACU(expression) {
-    const tableMatch = expression.match(/^db\.([^\s.()[\]{};]+)/u);
-    if (!tableMatch)
-        throw new Error('orm_table_invalid');
-    const tableName = tableMatch[1];
-    const calls = [];
-    let cursor = tableMatch[0].length;
-    while (cursor < expression.length) {
-        const methodMatch = expression.slice(cursor).match(/^\.([A-Za-z_][A-Za-z0-9_]*)\s*\(/);
-        if (!methodMatch)
-            throw new Error('orm_chain_invalid');
-        const method = methodMatch[1];
-        if (!ORM_CHAIN_METHODS_ACU.has(method))
-            throw new Error('orm_method_not_allowed');
-        const argsStart = cursor + methodMatch[0].length;
-        let quote = '';
-        let arrayDepth = 0;
-        let parenDepth = 1;
-        let end = -1;
-        for (let index = argsStart; index < expression.length; index++) {
-            const char = expression[index];
-            if (quote) {
-                if (char === quote && expression[index - 1] !== '\\')
-                    quote = '';
-                continue;
-            }
-            if (char === "'" || char === '"') {
-                quote = char;
-                continue;
-            }
-            if (char === '[')
-                arrayDepth++;
-            if (char === ']')
-                arrayDepth--;
-            if (arrayDepth === 0 && char === '(')
-                parenDepth++;
-            if (arrayDepth === 0 && char === ')') {
-                parenDepth--;
-                if (parenDepth === 0) {
-                    end = index;
-                    break;
-                }
-            }
-        }
-        if (end < 0)
-            throw new Error('orm_parenthesis_unclosed');
-        const args = splitTopLevelArguments_ACU(expression.slice(argsStart, end)).map(parseOrmLiteral_ACU);
-        calls.push({ method, args });
-        cursor = end + 1;
-    }
-    if (calls.length === 0 || !ORM_TERMINAL_METHODS_ACU.has(calls[calls.length - 1].method)) {
-        throw new Error('orm_terminal_required');
-    }
-    if (calls.slice(0, -1).some(call => ORM_TERMINAL_METHODS_ACU.has(call.method))) {
-        throw new Error('orm_terminal_must_be_last');
-    }
-    return { tableName, calls };
-}
-function evaluateAgentOrmExpression_ACU(expression) {
-    const parsed = parseOrmChain_ACU(expression);
-    let current = new TableQueryBuilder(parsed.tableName, {
-        throwOnQueryError: true,
-        suppressQueryErrorLog: true,
-    });
-    for (const call of parsed.calls) {
-        const method = current?.[call.method];
-        if (typeof method !== 'function')
-            throw new Error('orm_method_unavailable');
-        current = method.apply(current, call.args);
-    }
-    if (current === null || typeof current === 'undefined')
-        return '';
-    if (typeof current === 'string' || typeof current === 'number' || typeof current === 'boolean')
-        return String(current);
-    return JSON.stringify(current);
-}
-function extractRawSql_ACU(expression) {
-    const match = expression.match(/^sql\s+(["'])([\s\S]*)\1$/i);
-    return match ? match[2] : null;
-}
-function renderAgentReadOnlyQueryTemplates_ACU(content) {
-    const parts = splitAgentQueryTemplateParts_ACU(content);
-    const aliases = new Map();
-    let tagCount = 0;
-    let executedCount = 0;
-    let rejectedCount = 0;
-    const rendered = parts.map(part => {
-        if (part.kind === 'text') {
-            return replaceLocalAliasesInText_ACU(part.value, aliases);
-        }
-        tagCount++;
-        if (!isSqliteMode() || part.value.includes('{{')) {
-            rejectedCount++;
-            return part.value;
-        }
-        const inner = part.value.slice(2, -2).trim();
-        const { expression, alias } = splitAlias_ACU(inner);
-        try {
-            let value;
-            if (expression.startsWith('db.')) {
-                const resolved = replaceLocalAliasesInExpression_ACU(expression, aliases);
-                value = evaluateAgentOrmExpression_ACU(resolved);
-            }
-            else {
-                const rawSql = extractRawSql_ACU(expression);
-                if (rawSql === null)
-                    throw new Error('query_tag_not_supported');
-                const before = validateReadOnlySql_ACU(rawSql);
-                const mapper = getNameMapper();
-                const translated = resolveReadQuerySql_ACU(rawSql, currentJsonTableData_ACU, mapper.translateSql.bind(mapper)).sql;
-                const after = validateReadOnlySql_ACU(translated);
-                if (!before.valid || !after.valid)
-                    throw new Error(before.reason || after.reason || 'sql_not_allowed');
-                value = evaluateRawSqlExpression(`sql ${JSON.stringify(rawSql)}`, {
-                    throwOnError: true,
-                    suppressQueryErrorLog: true,
-                });
-            }
-            executedCount++;
-            if (alias) {
-                aliases.set(alias, value);
-                return '';
-            }
-            return value;
-        }
-        catch (error) {
-            rejectedCount++;
-            logWarn_ACU(`[AgentPromptSQL] query rejected; reason=${String(error?.message || 'unknown')}`);
-            return part.value;
-        }
-    }).join('');
-    logDebug_ACU(`[AgentPromptSQL] tags=${tagCount}; executed=${executedCount}; rejected=${rejectedCount}`);
-    return { content: rendered, tagCount, executedCount, rejectedCount };
-}
-
-function clonePromptSegments_ACU(value) {
-    return JSON.parse(JSON.stringify(value || []));
-}
-function normalizeAgentContextSettings_ACU(value) {
-    const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-    const result = {};
-    for (const [key, fallback] of Object.entries(DEFAULT_AGENT_CONTEXT_SETTINGS_ACU)) {
-        const limits = AGENT_CONTEXT_SETTINGS_LIMITS_ACU[key];
-        const raw = Number(source[key]);
-        const base = Number.isFinite(raw) ? Math.trunc(raw) : fallback;
-        result[key] = Math.max(limits.min, Math.min(Number.MAX_SAFE_INTEGER, base));
-    }
-    return result;
-}
-function normalizeRole_ACU(value) {
-    const role = String(value || '').trim().toLowerCase();
-    return role || 'user';
-}
-function normalizeEditablePromptSegments_ACU(value, fallback) {
-    if (!Array.isArray(value))
-        return clonePromptSegments_ACU(fallback);
-    const raw = value;
-    return raw
-        .map(item => item && typeof item === 'object' ? item : null)
-        .filter(Boolean)
-        .map(item => ({
-        role: normalizeRole_ACU(item?.role),
-        content: typeof item?.content === 'string' ? item.content : '',
-        deletable: item?.deletable !== false,
-        ...(typeof item?.mainSlot === 'string' && item.mainSlot ? { mainSlot: item.mainSlot } : {}),
-        ...(item?.isMain === true ? { isMain: true } : {}),
-        ...(item?.isMain2 === true ? { isMain2: true } : {}),
-    }));
-}
-function normalizePromptSegments_ACU(value, fallback) {
-    const normalized = normalizeEditablePromptSegments_ACU(value, [])
-        .filter(item => item.content.trim());
-    return normalized.length > 0 ? normalized : clonePromptSegments_ACU(fallback);
-}
-function getDefaultAgentDecisionPromptSegments_ACU() {
-    return buildDefaultAgentDecisionPromptSegments_ACU();
-}
-function getDefaultAgentSkillifyPromptSegments_ACU() {
-    return buildDefaultAgentSkillifyPromptSegments_ACU();
-}
-function stringifyPlaceholderValue_ACU$1(value) {
-    if (typeof value === 'string')
-        return value;
-    if (value === null || typeof value === 'undefined')
-        return '';
-    try {
-        return JSON.stringify(value, null, 2);
-    }
-    catch {
-        return String(value);
-    }
-}
-function buildPlaceholderToken_ACU(content, segmentIndex, tokenIndex) {
-    for (let attempt = 0; attempt < 20; attempt++) {
-        const nonce = Math.random().toString(36).slice(2);
-        const token = `__ACU_AGENT_PLACEHOLDER_${segmentIndex}_${tokenIndex}_${nonce}__`;
-        if (!content.includes(token))
-            return token;
-    }
-    throw new Error('agent_placeholder_token_collision');
-}
-function renderAgentPromptContent_ACU(content, placeholders, segmentIndex, options) {
-    if (options.enableSqlRender !== true) {
-        return content.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (raw, key) => (Object.prototype.hasOwnProperty.call(placeholders, key) ? stringifyPlaceholderValue_ACU$1(placeholders[key]) : raw));
-    }
-    const startedAt = Date.now();
-    const tokenValues = new Map();
-    let tokenIndex = 0;
-    try {
-        const protectedContent = splitAgentQueryTemplateParts_ACU(content)
-            .map(part => {
-            if (part.kind === 'query')
-                return part.value;
-            return part.value.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (raw, key) => {
-                if (!Object.prototype.hasOwnProperty.call(placeholders, key))
-                    return raw;
-                const token = buildPlaceholderToken_ACU(content, segmentIndex, tokenIndex++);
-                tokenValues.set(token, stringifyPlaceholderValue_ACU$1(placeholders[key]));
-                return token;
-            });
-        })
-            .join('');
-        const queryResult = renderAgentReadOnlyQueryTemplates_ACU(protectedContent);
-        let restored = queryResult.content;
-        for (const [token, value] of tokenValues)
-            restored = restored.split(token).join(value);
-        logDebug_ACU(`[AgentPromptSQL] kind=${options.promptKind || 'unknown'}; segment=${segmentIndex}; tags=${queryResult.tagCount}; durationMs=${Date.now() - startedAt}; status=${queryResult.rejectedCount > 0 ? 'partial' : 'ok'}`);
-        return restored;
-    }
-    catch (error) {
-        logWarn_ACU(`[AgentPromptSQL] kind=${options.promptKind || 'unknown'}; segment=${segmentIndex}; tags=unknown; durationMs=${Date.now() - startedAt}; status=failed; reason=${String(error?.message || 'unknown')}`);
-        return content.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (raw, key) => (Object.prototype.hasOwnProperty.call(placeholders, key) ? stringifyPlaceholderValue_ACU$1(placeholders[key]) : raw));
-    }
-}
-function renderAgentPromptSegments_ACU(segments, placeholders, options = {}) {
-    return normalizePromptSegments_ACU(segments, [])
-        .map((segment, segmentIndex) => ({
-        role: normalizeRole_ACU(segment.role),
-        content: renderAgentPromptContent_ACU(segment.content, placeholders, segmentIndex, options),
-    }))
-        .filter(message => message.content.trim());
-}
-
-const AGENT_WORLDBOOK_CONFIG_COMMENT_ACU = 'TavernDB-ACU-AgentWorldbookConfig';
-function cloneDefaultAgentControl_ACU() {
-    return JSON.parse(JSON.stringify(buildDefaultAgentWorldbookControl_ACU()));
-}
-function cloneDefaultAgentSnapshot_ACU() {
-    return JSON.parse(JSON.stringify(buildDefaultAgentWorldbookControlSnapshot_ACU()));
-}
-function cloneAgentPromptTemplates_ACU(value) {
-    return JSON.parse(JSON.stringify(value));
-}
-function normalizeAgentPromptTemplates_ACU(value) {
-    const defaults = buildDefaultAgentWorldbookPromptTemplates_ACU();
-    const source = normalizeControlPatch_ACU(value);
-    return {
-        agentDecisionPromptSegments: normalizeEditablePromptSegments_ACU(source.agentDecisionPromptSegments, defaults.agentDecisionPromptSegments),
-        agentSkillifyPromptSegments: normalizeEditablePromptSegments_ACU(source.agentSkillifyPromptSegments, defaults.agentSkillifyPromptSegments),
-    };
-}
-function getAgentPromptTemplateDefaults_ACU() {
-    const plotSettings = settings_ACU.plotSettings && typeof settings_ACU.plotSettings === 'object'
-        ? settings_ACU.plotSettings
-        : {};
-    return cloneAgentPromptTemplates_ACU(normalizeAgentPromptTemplates_ACU(plotSettings.agentPromptTemplates));
-}
-function setAgentPromptTemplateDefaults_ACU(value) {
-    if (!settings_ACU.plotSettings || typeof settings_ACU.plotSettings !== 'object' || Array.isArray(settings_ACU.plotSettings))
-        return false;
-    const plotSettings = settings_ACU.plotSettings;
-    const hadPreviousTemplates = Object.prototype.hasOwnProperty.call(plotSettings, 'agentPromptTemplates');
-    const previousTemplates = plotSettings.agentPromptTemplates;
-    plotSettings.agentPromptTemplates = normalizeAgentPromptTemplates_ACU(value);
-    try {
-        if (saveSettings_ACU().saved)
-            return true;
-    }
-    catch {
-        // 保存失败时同样回滚；调用方只需要收到 false，异常不应留下内存脏写。
-    }
-    if (hadPreviousTemplates)
-        plotSettings.agentPromptTemplates = previousTemplates;
-    else
-        delete plotSettings.agentPromptTemplates;
-    return false;
-}
-function normalizeBookNameList_ACU(value) {
-    if (!Array.isArray(value))
-        return [];
-    const result = [];
-    for (const item of value) {
-        const name = String(item || '').trim();
-        if (name && !result.includes(name))
-            result.push(name);
-    }
-    return result;
-}
-function normalizeMode_ACU(value) {
-    return value === 'passive' || value === 'agent' ? value : 'disabled';
-}
-function normalizeExecutionMode_ACU(value) {
-    return value === 'sequential' ? 'sequential' : 'concurrent';
-}
-function normalizePositiveInt_ACU(value, fallback, min, max) {
-    const raw = Number(value);
-    const base = Number.isFinite(raw) ? Math.trunc(raw) : fallback;
-    const bounded = max === undefined ? Math.min(Number.MAX_SAFE_INTEGER, base) : Math.min(max, base);
-    return Math.max(min, bounded);
-}
-function normalizeControlPatch_ACU(value) {
-    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-}
-function normalizeAgentWorldbookScope_ACU(value, fallback) {
-    const source = normalizeControlPatch_ACU(value);
-    if (!Object.prototype.hasOwnProperty.call(source, 'source')) {
-        return {
-            source: fallback.source,
-            manualSelection: [...fallback.manualSelection],
-        };
-    }
-    if (source.source !== 'manual')
-        return { source: 'character', manualSelection: [] };
-    return {
-        source: 'manual',
-        manualSelection: normalizeBookNameList_ACU(source.manualSelection),
-    };
-}
-function getLegacyAgentWorldbookScope_ACU() {
-    const cfg = getPlotWorldbookConfig_ACU();
-    return cfg.source === 'manual'
-        ? { source: 'manual', manualSelection: normalizeBookNameList_ACU(cfg.manualSelection) }
-        : { source: 'character', manualSelection: [] };
-}
-function isSameAgentWorldbookScope_ACU(left, right) {
-    return left.source === right.source
-        && left.manualSelection.length === right.manualSelection.length
-        && left.manualSelection.every((bookName, index) => bookName === right.manualSelection[index]);
-}
-function hasExplicitWorldbookScope_ACU(value) {
-    return Object.prototype.hasOwnProperty.call(normalizeControlPatch_ACU(value), 'worldbookScope');
-}
-function normalizeAgentWorldbookControlForCardConfig_ACU(value, promptTemplates = getAgentPromptTemplateDefaults_ACU()) {
-    const defaults = cloneDefaultAgentControl_ACU();
-    const source = normalizeControlPatch_ACU(value);
-    const mode = normalizeMode_ACU(source.mode);
-    const agentPlotExecutionMode = normalizeExecutionMode_ACU(source.agentPlotExecutionMode);
-    const contextSettings = normalizeAgentContextSettings_ACU(source.contextSettings);
-    const maxEntriesPerChannel = normalizeControlPatch_ACU(source.maxEntriesPerChannel);
-    return {
-        ...defaults,
-        enabled: mode !== 'disabled',
-        mode,
-        agentPlotExecutionMode,
-        scopeMode: 'follow_worldbook_page_selection',
-        worldbookScope: normalizeAgentWorldbookScope_ACU(source.worldbookScope, getLegacyAgentWorldbookScope_ACU()),
-        agentApiPreset: typeof source.agentApiPreset === 'string' ? source.agentApiPreset.trim() : defaults.agentApiPreset,
-        agentSkillApiPreset: typeof source.agentSkillApiPreset === 'string' ? source.agentSkillApiPreset.trim() : defaults.agentSkillApiPreset,
-        skillMetadataPolicy: 'comment_block',
-        managedEntryPrefix: typeof source.managedEntryPrefix === 'string' && source.managedEntryPrefix.trim()
-            ? source.managedEntryPrefix.trim()
-            : defaults.managedEntryPrefix,
-        finalInjectionMode: 'prompt_template',
-        restoreOnDisable: source.restoreOnDisable !== false,
-        agentDecisionConcurrency: normalizePositiveInt_ACU(source.agentDecisionConcurrency, defaults.agentDecisionConcurrency, 1),
-        maxSkillifyConcurrency: normalizePositiveInt_ACU(source.maxSkillifyConcurrency, defaults.maxSkillifyConcurrency, 1),
-        contextSettings,
-        contextSettingsConfigured: source.contextSettingsConfigured === true,
-        agentDecisionPromptSegments: normalizeEditablePromptSegments_ACU(source.agentDecisionPromptSegments, promptTemplates.agentDecisionPromptSegments),
-        agentSkillifyPromptSegments: normalizeEditablePromptSegments_ACU(source.agentSkillifyPromptSegments, promptTemplates.agentSkillifyPromptSegments),
-        maxEntriesPerChannel: {
-            plot: normalizePositiveInt_ACU(maxEntriesPerChannel.plot, defaults.maxEntriesPerChannel.plot, 1, 200),
-            tableFill: normalizePositiveInt_ACU(maxEntriesPerChannel.tableFill, defaults.maxEntriesPerChannel.tableFill, 1, 200),
-            finalGeneration: normalizePositiveInt_ACU(maxEntriesPerChannel.finalGeneration, defaults.maxEntriesPerChannel.finalGeneration, 1, 200),
-        },
-    };
-}
-function normalizeSnapshotKeys_ACU(value) {
-    if (!Array.isArray(value))
-        return [];
-    return value.map(key => String(key || '').trim()).filter(Boolean);
-}
-function hasValidWorldbookUid_ACU$1(uid) {
-    return uid !== null && uid !== undefined && String(uid).trim() !== '';
-}
-function isSameWorldbookUid_ACU(left, right) {
-    return hasValidWorldbookUid_ACU$1(left) && hasValidWorldbookUid_ACU$1(right) && String(left) === String(right);
-}
-function normalizeSnapshotEntry_ACU(value) {
-    if (!value || typeof value !== 'object' || Array.isArray(value))
-        return null;
-    const source = value;
-    if (!hasValidWorldbookUid_ACU$1(source.uid))
-        return null;
-    const previousType = source.previousType === undefined || source.previousType === null ? undefined : String(source.previousType);
-    const commentHash = typeof source.commentHash === 'string' && source.commentHash.trim() ? source.commentHash.trim() : undefined;
-    return {
-        uid: source.uid,
-        ...(source.takeoverStatus === 'pending' || source.takeoverStatus === 'applied'
-            ? { takeoverStatus: source.takeoverStatus }
-            : {}),
-        previousEnabled: source.previousEnabled !== false,
-        previousKeys: normalizeSnapshotKeys_ACU(source.previousKeys),
-        previousType,
-        commentHash,
-    };
-}
-function normalizeAgentWorldbookSnapshotForCardState_ACU(value) {
-    const defaults = cloneDefaultAgentSnapshot_ACU();
-    if (!value || typeof value !== 'object' || Array.isArray(value))
-        return defaults;
-    const source = value;
-    const booksSource = source.books && typeof source.books === 'object' && !Array.isArray(source.books)
-        ? source.books
-        : {};
-    const books = {};
-    for (const [rawBookName, rawEntries] of Object.entries(booksSource)) {
-        const bookName = String(rawBookName || '').trim();
-        if (!bookName || !Array.isArray(rawEntries))
-            continue;
-        const entries = rawEntries
-            .map(entry => normalizeSnapshotEntry_ACU(entry))
-            .filter(Boolean);
-        if (entries.length > 0)
-            books[bookName] = entries;
-    }
-    return {
-        active: source.active === true,
-        selectionSignature: typeof source.selectionSignature === 'string' ? source.selectionSignature.trim() : defaults.selectionSignature,
-        createdAt: Number.isFinite(Number(source.createdAt)) ? Number(source.createdAt) : defaults.createdAt,
-        books,
-    };
-}
-function normalizeAgentWorldbookStateIdentity_ACU(value) {
-    if (!value || typeof value !== 'object' || Array.isArray(value))
-        return undefined;
-    const source = value;
-    const marker = typeof source.marker === 'string' && source.marker.trim()
-        ? source.marker.trim()
-        : '';
-    if (marker !== AGENT_WORLDBOOK_CONFIG_COMMENT_ACU)
-        return undefined;
-    const stateEntryUid = hasValidWorldbookUid_ACU$1(source.stateEntryUid) ? source.stateEntryUid : undefined;
-    const hostBookName = typeof source.hostBookName === 'string' && source.hostBookName.trim()
-        ? source.hostBookName.trim()
-        : undefined;
-    return { marker, ...(stateEntryUid !== undefined ? { stateEntryUid } : {}), ...(hostBookName ? { hostBookName } : {}) };
-}
-function buildAgentWorldbookStateIdentity_ACU(hostBookName, stateEntryUid) {
-    return {
-        marker: AGENT_WORLDBOOK_CONFIG_COMMENT_ACU,
-        ...(hasValidWorldbookUid_ACU$1(stateEntryUid) ? { stateEntryUid } : {}),
-        ...(hostBookName.trim() ? { hostBookName: hostBookName.trim() } : {}),
-    };
-}
-function buildAgentWorldbookStateMeta_ACU(control, snapshot, identity) {
-    return {
-        version: 2,
-        kind: 'agent_worldbook_state',
-        updatedAt: Date.now(),
-        ...(identity ? { identity } : {}),
-        control,
-        snapshot,
-    };
-}
-function parseAgentWorldbookStateMeta_ACU(value) {
-    const text = typeof value === 'string' ? value.trim() : '';
-    if (!text)
-        return null;
-    try {
-        const raw = JSON.parse(text);
-        if (raw.version === 2 && raw.kind === 'agent_worldbook_state') {
-            return {
-                updatedAt: Number.isFinite(Number(raw.updatedAt)) ? Number(raw.updatedAt) : 0,
-                identity: normalizeAgentWorldbookStateIdentity_ACU(raw.identity),
-                control: normalizeControlPatch_ACU(raw.control),
-                snapshot: normalizeAgentWorldbookSnapshotForCardState_ACU(raw.snapshot),
-                legacy: false,
-            };
-        }
-        if (raw.version !== 1 || raw.kind !== 'agent_worldbook_config')
-            return null;
-        const legacyMeta = {
-            version: 1,
-            kind: 'agent_worldbook_config',
-            updatedAt: Number.isFinite(Number(raw.updatedAt)) ? Number(raw.updatedAt) : 0,
-            control: normalizeControlPatch_ACU(raw.control),
-        };
-        return {
-            updatedAt: legacyMeta.updatedAt,
-            control: legacyMeta.control,
-            snapshot: cloneDefaultAgentSnapshot_ACU(),
-            legacy: true,
-        };
-    }
-    catch {
-        return null;
-    }
-}
-function findAgentConfigEntries_ACU(entries) {
-    return (Array.isArray(entries) ? entries : [])
-        .filter(entry => String(entry?.comment || '').trim() === AGENT_WORLDBOOK_CONFIG_COMMENT_ACU);
-}
-function buildAgentStateEntryCandidates_ACU(entries, hostBookName) {
-    const result = [];
-    for (const entry of Array.isArray(entries) ? entries : []) {
-        const meta = parseAgentWorldbookStateMeta_ACU(entry?.content);
-        const legacyCommentMatch = String(entry?.comment || '').trim() === AGENT_WORLDBOOK_CONFIG_COMMENT_ACU;
-        if (!meta && !legacyCommentMatch)
-            continue;
-        if (!meta)
-            continue;
-        let score = 10;
-        if (!meta.legacy)
-            score += 20;
-        if (legacyCommentMatch)
-            score += 5;
-        if (meta.identity?.hostBookName && meta.identity.hostBookName === hostBookName)
-            score += 30;
-        if (isSameWorldbookUid_ACU(meta.identity?.stateEntryUid, entry?.uid))
-            score += 50;
-        if (meta.identity && !isSameWorldbookUid_ACU(meta.identity.stateEntryUid, entry?.uid) && hasValidWorldbookUid_ACU$1(meta.identity.stateEntryUid))
-            score -= 40;
-        result.push({ entry, meta, score, legacyCommentMatch });
-    }
-    return result.sort((left, right) => right.score - left.score || Number(right.meta.updatedAt || 0) - Number(left.meta.updatedAt || 0));
-}
-function findAgentStateEntry_ACU(entries, hostBookName) {
-    const candidates = buildAgentStateEntryCandidates_ACU(entries, hostBookName);
-    const selected = candidates[0];
-    return {
-        entry: selected?.entry || null,
-        meta: selected?.meta || null,
-        duplicateCount: Math.max(0, candidates.length - (selected ? 1 : 0)),
-    };
-}
-function findCreatedAgentStateEntry_ACU(entries, hostBookName, createdAfter) {
-    const candidates = buildAgentStateEntryCandidates_ACU(entries, hostBookName)
-        .filter(candidate => candidate.entry?.uid !== null && candidate.entry?.uid !== undefined);
-    return candidates.find(candidate => Number(candidate.meta.updatedAt || 0) >= createdAfter)?.entry
-        || candidates[0]?.entry
-        || null;
-}
-function buildConfigEntryPayload_ACU(control, snapshot, hostBookName, existing, stateEntryUid) {
-    const resolvedUid = hasValidWorldbookUid_ACU$1(stateEntryUid) ? stateEntryUid : existing?.uid;
-    const identity = buildAgentWorldbookStateIdentity_ACU(hostBookName, resolvedUid);
-    return {
-        ...(existing || {}),
-        comment: typeof existing?.comment === 'string' && existing.comment.trim() ? existing.comment : AGENT_WORLDBOOK_CONFIG_COMMENT_ACU,
-        content: JSON.stringify(buildAgentWorldbookStateMeta_ACU(control, snapshot, identity), null, 2),
-        keys: Array.isArray(existing?.keys) ? existing.keys : [],
-        enabled: false,
-        type: 'keyword',
-        order: Number.isFinite(Number(existing?.order)) ? Number(existing.order) : 10000,
-        prevent_recursion: true,
-    };
-}
-function stringifyStableJsonValue_ACU(value) {
-    if (value === null || typeof value !== 'object')
-        return JSON.stringify(value);
-    if (Array.isArray(value))
-        return `[${value.map(item => stringifyStableJsonValue_ACU(item)).join(',')}]`;
-    const record = value;
-    return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${stringifyStableJsonValue_ACU(record[key])}`).join(',')}}`;
-}
-function isSameStableJsonValue_ACU(left, right) {
-    return stringifyStableJsonValue_ACU(left) === stringifyStableJsonValue_ACU(right);
-}
-function isPartialNextScopeWrite_ACU(persistedControl, persistedSnapshot, currentPersistedControl, nextPersistedControl, nextSnapshot) {
-    if (!isSameStableJsonValue_ACU(persistedSnapshot, nextSnapshot)
-        || !isSameStableJsonValue_ACU(persistedControl.worldbookScope, nextPersistedControl.worldbookScope))
-        return false;
-    return Object.entries(persistedControl).every(([key, value]) => {
-        const hasNext = Object.prototype.hasOwnProperty.call(nextPersistedControl, key);
-        const hasCurrent = Object.prototype.hasOwnProperty.call(currentPersistedControl, key);
-        return (hasNext && isSameStableJsonValue_ACU(value, nextPersistedControl[key]))
-            || (hasCurrent && isSameStableJsonValue_ACU(value, currentPersistedControl[key]));
-    });
-}
-async function confirmAgentWorldbookScopeWrite_ACU(hostBookName, entryUid, currentPersistedControl, nextPersistedControl, currentSnapshot, nextSnapshot) {
-    try {
-        const entries = await getLorebookEntries_ACU(hostBookName);
-        const entry = (entries || []).find(candidate => isSameWorldbookUid_ACU(candidate?.uid, entryUid));
-        if (!entry)
-            return 'missing';
-        const meta = parseAgentWorldbookStateMeta_ACU(entry.content);
-        if (!meta)
-            return 'unknown';
-        const persistedControl = normalizeControlPatch_ACU(meta.control);
-        const persistedSnapshot = normalizeAgentWorldbookSnapshotForCardState_ACU(meta.snapshot);
-        if (isSameStableJsonValue_ACU(persistedControl, nextPersistedControl)
-            && isSameStableJsonValue_ACU(persistedSnapshot, nextSnapshot))
-            return 'next';
-        if (isSameStableJsonValue_ACU(persistedControl, currentPersistedControl)
-            && isSameStableJsonValue_ACU(persistedSnapshot, currentSnapshot))
-            return 'current';
-        if (isPartialNextScopeWrite_ACU(persistedControl, persistedSnapshot, currentPersistedControl, nextPersistedControl, nextSnapshot))
-            return 'partial_next';
-        return 'unknown';
-    }
-    catch {
-        return 'unknown';
-    }
-}
-function getPlotWorldbookConfig_ACU() {
-    const plotSettings = settings_ACU.plotSettings && typeof settings_ACU.plotSettings === 'object'
-        ? settings_ACU.plotSettings
-        : {};
-    const cfg = plotSettings.plotWorldbookConfig;
-    return cfg && typeof cfg === 'object' && !Array.isArray(cfg) ? cfg : {};
-}
-function getManualPlotWorldbookNames_ACU() {
-    const cfg = getPlotWorldbookConfig_ACU();
-    return normalizeBookNameList_ACU(cfg.manualSelection);
-}
-async function resolveAgentWorldbookScopeBookNamesFromScope_ACU(scope) {
-    if (scope.source === 'manual')
-        return normalizeBookNameList_ACU(scope.manualSelection);
-    const binding = await getCurrentCharacterWorldbookBinding_ACU();
-    return binding.orderedNames.slice();
-}
-async function resolveAgentWorldbookScopeBookNames_ACU(scope, readContext) {
-    const resolvedScope = scope || (await readAgentWorldbookStateFromWorldbooks_ACU(readContext)).control.worldbookScope;
-    return resolveAgentWorldbookScopeBookNamesFromScope_ACU(resolvedScope);
-}
-async function resolveAgentWorldbookBootstrapBookNames_ACU() {
-    const binding = await getCurrentCharacterWorldbookBinding_ACU();
-    return normalizeBookNameList_ACU([
-        ...binding.orderedNames,
-        ...getManualPlotWorldbookNames_ACU(),
-    ]);
-}
-async function resolveAgentWorldbookHostBookForScope_ACU(scope) {
-    const binding = await getCurrentCharacterWorldbookBinding_ACU();
-    if (binding.primary)
-        return binding.primary;
-    if (scope.source === 'manual')
-        return scope.manualSelection[0] || '';
-    return '';
-}
-async function resolveAgentWorldbookConfigHostBook_ACU() {
-    const state = await readAgentWorldbookStateFromWorldbooks_ACU();
-    return state.bookName || resolveAgentWorldbookHostBookForScope_ACU(state.control.worldbookScope);
-}
-function getLegacyAgentWorldbookControl_ACU() {
-    const plotSettings = settings_ACU.plotSettings && typeof settings_ACU.plotSettings === 'object'
-        ? settings_ACU.plotSettings
-        : {};
-    const legacy = plotSettings.agentWorldbookControl;
-    if (!legacy || typeof legacy !== 'object' || Array.isArray(legacy))
-        return null;
-    return normalizeAgentWorldbookControlForCardConfig_ACU(legacy);
-}
-async function readWorldbookConfigEntry_ACU(bookName, readContext) {
-    const entries = await getAgentRuntimeLorebookEntries_ACU(bookName, readContext);
-    const result = findAgentStateEntry_ACU(entries, bookName);
-    if (!result.entry || !result.meta)
-        return { bookName, entry: null, duplicateCount: result.duplicateCount, control: null, snapshot: null };
-    return {
-        bookName,
-        entry: result.entry,
-        duplicateCount: result.duplicateCount,
-        control: normalizeAgentWorldbookControlForCardConfig_ACU(result.meta.control),
-        snapshot: normalizeAgentWorldbookSnapshotForCardState_ACU(result.meta.snapshot),
-    };
-}
-async function readAgentWorldbookStateFromWorldbooks_ACU(readContext) {
-    const scanBookNames = await resolveAgentWorldbookBootstrapBookNames_ACU();
-    const defaultScope = getLegacyAgentWorldbookScope_ACU();
-    const writableBookName = await resolveAgentWorldbookHostBookForScope_ACU(defaultScope);
-    for (const bookName of scanBookNames) {
-        let result;
-        try {
-            result = await readWorldbookConfigEntry_ACU(bookName, readContext);
-        }
-        catch (error) {
-            if (isLorebookNotFoundError_ACU(error))
-                continue;
-            throw error;
-        }
-        if (!result.control)
-            continue;
-        return {
-            control: result.control,
-            snapshot: result.snapshot || cloneDefaultAgentSnapshot_ACU(),
-            source: 'worldbook',
-            bookName: result.bookName,
-            entryUid: result.entry?.uid,
-            duplicateCount: result.duplicateCount,
-            writableBookName,
-        };
-    }
-    const legacy = getLegacyAgentWorldbookControl_ACU();
-    if (legacy) {
-        return {
-            control: legacy,
-            snapshot: cloneDefaultAgentSnapshot_ACU(),
-            source: 'legacy_settings',
-            bookName: '',
-            duplicateCount: 0,
-            writableBookName,
-            reason: 'legacy_settings_fallback',
-        };
-    }
-    return {
-        control: normalizeAgentWorldbookControlForCardConfig_ACU({}),
-        snapshot: cloneDefaultAgentSnapshot_ACU(),
-        source: 'default',
-        bookName: '',
-        duplicateCount: 0,
-        writableBookName,
-        reason: writableBookName ? 'worldbook_config_not_found' : 'no_config_host_book',
-    };
-}
-async function readAgentWorldbookControlFromWorldbooks_ACU(readContext) {
-    const state = await readAgentWorldbookStateFromWorldbooks_ACU(readContext);
-    return {
-        control: state.control,
-        source: state.source,
-        bookName: state.bookName,
-        entryUid: state.entryUid,
-        duplicateCount: state.duplicateCount,
-        writableBookName: state.writableBookName,
-        reason: state.reason,
-    };
-}
-async function writeAgentWorldbookStateToWorldbook_ACU(patch) {
-    const current = await readAgentWorldbookStateFromWorldbooks_ACU();
-    const requestedControlPatch = normalizeControlPatch_ACU(patch?.control);
-    let nextControl = normalizeAgentWorldbookControlForCardConfig_ACU({
-        ...current.control,
-        ...requestedControlPatch,
-    });
-    let nextSnapshot = patch?.snapshot === undefined
-        ? normalizeAgentWorldbookSnapshotForCardState_ACU(current.snapshot)
-        : normalizeAgentWorldbookSnapshotForCardState_ACU(patch.snapshot);
-    const changesScope = patch?.control !== undefined
-        && hasExplicitWorldbookScope_ACU(patch.control)
-        && !isSameAgentWorldbookScope_ACU(current.control.worldbookScope, nextControl.worldbookScope);
-    const hostBookName = current.bookName || await resolveAgentWorldbookHostBookForScope_ACU(nextControl.worldbookScope);
-    if (!hostBookName) {
-        return {
-            updated: false,
-            bookName: '',
-            reason: 'no_config_host_book',
-            control: current.control,
-            snapshot: current.snapshot,
-        };
-    }
-    // 在恢复旧范围前完成配置宿主的读取和定位。这样宿主读取失败不会发生物理 restore，
-    // active snapshot 的 scope 切换也不会因为并发删除状态条目而退化为“创建新条目”。
-    const entries = await getLorebookEntries_ACU(hostBookName);
-    const currentEntryUid = current.bookName === hostBookName ? current.entryUid : undefined;
-    const existingByUid = hasValidWorldbookUid_ACU$1(currentEntryUid)
-        ? entries.find(entry => isSameWorldbookUid_ACU(entry?.uid, currentEntryUid))
-        : undefined;
-    const existing = existingByUid || findAgentStateEntry_ACU(entries, hostBookName).entry;
-    let restoreRollbackPatchesByBook = null;
-    let restoreRestoredPatchesByBook = null;
-    if (changesScope && current.snapshot.active === true) {
-        if (current.source !== 'worldbook' || !existing || !hasValidWorldbookUid_ACU$1(existing.uid)) {
-            return {
-                updated: false,
-                bookName: current.bookName,
-                entryUid: current.entryUid,
-                reason: 'scope_state_entry_missing',
-                control: current.control,
-                snapshot: current.snapshot,
-            };
-        }
-        const oldBookNames = await resolveAgentWorldbookScopeBookNamesFromScope_ACU(current.control.worldbookScope);
-        const restore = await restoreAgentWorldbookSnapshotEntries_ACU(current.snapshot, oldBookNames);
-        if (!restore.signatureMatched || restore.skipped > 0 || restore.failed > 0) {
-            const rollbackSucceeded = await rollbackAgentWorldbookSnapshotRestore_ACU(restore.rollbackPatchesByBook, restore.restoredPatchesByBook);
-            return {
-                updated: false,
-                bookName: current.bookName,
-                entryUid: current.entryUid,
-                reason: !rollbackSucceeded
-                    ? 'scope_restore_rollback_failed'
-                    : (!restore.signatureMatched ? 'scope_restore_signature_mismatch' : 'scope_restore_incomplete'),
-                control: current.control,
-                snapshot: current.snapshot,
-            };
-        }
-        restoreRollbackPatchesByBook = restore.rollbackPatchesByBook;
-        restoreRestoredPatchesByBook = restore.restoredPatchesByBook;
-        nextSnapshot = cloneDefaultAgentSnapshot_ACU();
-    }
-    const existingMeta = existing ? parseAgentWorldbookStateMeta_ACU(existing.content) : null;
-    const existingControl = normalizeControlPatch_ACU(existingMeta?.control);
-    if (existingMeta) {
-        nextControl = normalizeAgentWorldbookControlForCardConfig_ACU({
-            ...existingControl,
-            ...requestedControlPatch,
-        });
-    }
-    const persistedControl = { ...nextControl };
-    for (const key of ['agentDecisionPromptSegments', 'agentSkillifyPromptSegments']) {
-        if (!Object.prototype.hasOwnProperty.call(existingControl, key) && !Object.prototype.hasOwnProperty.call(requestedControlPatch, key)) {
-            delete persistedControl[key];
-        }
-    }
-    try {
-        const nextEntry = buildConfigEntryPayload_ACU(persistedControl, nextSnapshot, hostBookName, existing || undefined, existing?.uid);
-        if (existing?.uid !== null && existing?.uid !== undefined) {
-            if (!restoreRollbackPatchesByBook) {
-                await setLorebookEntries_ACU(hostBookName, [{ ...nextEntry, uid: existing.uid }]);
-                return { updated: true, bookName: hostBookName, entryUid: existing.uid, control: nextControl, snapshot: nextSnapshot };
-            }
-            let writeFailed = false;
-            try {
-                await setLorebookEntries_ACU(hostBookName, [{ ...nextEntry, uid: existing.uid }]);
-            }
-            catch {
-                writeFailed = true;
-            }
-            const confirmation = await confirmAgentWorldbookScopeWrite_ACU(hostBookName, existing.uid, existingControl, persistedControl, current.snapshot, nextSnapshot);
-            if (confirmation === 'next') {
-                return { updated: true, bookName: hostBookName, entryUid: existing.uid, control: nextControl, snapshot: nextSnapshot };
-            }
-            let confirmedWriteState = confirmation;
-            if (confirmation === 'partial_next') {
-                try {
-                    await setLorebookEntries_ACU(hostBookName, [{ ...nextEntry, uid: existing.uid }]);
-                }
-                catch {
-                    // 继续按读回结果判定；宿主可能已提交但响应失败。
-                }
-                confirmedWriteState = await confirmAgentWorldbookScopeWrite_ACU(hostBookName, existing.uid, existingControl, persistedControl, current.snapshot, nextSnapshot);
-                if (confirmedWriteState === 'next') {
-                    return { updated: true, bookName: hostBookName, entryUid: existing.uid, control: nextControl, snapshot: nextSnapshot };
-                }
-            }
-            if (confirmedWriteState === 'current') {
-                const rollbackSucceeded = await rollbackAgentWorldbookSnapshotRestore_ACU(restoreRollbackPatchesByBook, restoreRestoredPatchesByBook || {});
-                return {
-                    updated: false,
-                    bookName: current.bookName,
-                    entryUid: current.entryUid,
-                    reason: rollbackSucceeded
-                        ? (writeFailed ? 'scope_state_write_failed' : 'scope_state_write_unconfirmed')
-                        : 'scope_state_write_rollback_failed',
-                    control: current.control,
-                    snapshot: current.snapshot,
-                };
-            }
-            return {
-                updated: false,
-                bookName: current.bookName,
-                entryUid: current.entryUid,
-                reason: 'scope_state_write_unconfirmed',
-                stateConfirmed: false,
-                control: current.control,
-                snapshot: current.snapshot,
-            };
-        }
-        const createdAfter = Date.now();
-        await createLorebookEntries_ACU(hostBookName, [nextEntry]);
-        const refreshedEntries = await getLorebookEntries_ACU(hostBookName);
-        const created = findCreatedAgentStateEntry_ACU(refreshedEntries, hostBookName, createdAfter);
-        if (created?.uid !== null && created?.uid !== undefined) {
-            const backfilledEntry = buildConfigEntryPayload_ACU(persistedControl, nextSnapshot, hostBookName, created, created.uid);
-            await setLorebookEntries_ACU(hostBookName, [{ ...backfilledEntry, uid: created.uid }]);
-            return { updated: true, bookName: hostBookName, entryUid: created.uid, control: nextControl, snapshot: nextSnapshot };
-        }
-        return { updated: true, bookName: hostBookName, reason: 'state_entry_uid_unresolved', control: nextControl, snapshot: nextSnapshot };
-    }
-    catch (error) {
-        if (!restoreRollbackPatchesByBook)
-            throw error;
-        const rollbackSucceeded = await rollbackAgentWorldbookSnapshotRestore_ACU(restoreRollbackPatchesByBook, restoreRestoredPatchesByBook || {});
-        return {
-            updated: false,
-            bookName: current.bookName,
-            entryUid: current.entryUid,
-            reason: rollbackSucceeded ? 'scope_state_write_failed' : 'scope_state_write_rollback_failed',
-            control: current.control,
-            snapshot: current.snapshot,
-        };
-    }
-}
-async function writeAgentWorldbookControlToWorldbook_ACU(controlPatch) {
-    const result = await writeAgentWorldbookStateToWorldbook_ACU({ control: controlPatch });
-    return {
-        updated: result.updated,
-        bookName: result.bookName,
-        entryUid: result.entryUid,
-        reason: result.reason,
-        stateConfirmed: result.stateConfirmed,
-        control: result.control,
-    };
-}
-async function resolveAgentWorldbookStateCleanupBookNames_ACU(explicitBookName) {
-    if (explicitBookName)
-        return [explicitBookName];
-    const names = [
-        await resolveAgentWorldbookConfigHostBook_ACU(),
-        ...(await resolveAgentWorldbookScopeBookNames_ACU()),
-        ...getManualPlotWorldbookNames_ACU(),
-    ];
-    try {
-        const charLorebooks = await getCharLorebooks_ACU({ type: 'all' });
-        const primary = String(charLorebooks?.primary || '').trim();
-        if (primary)
-            names.push(primary);
-        names.push(...normalizeBookNameList_ACU(charLorebooks?.additional));
-    }
-    catch {
-        // Cleanup must remain best-effort across host/config changes; existing host/config names above are still valid.
-    }
-    return normalizeBookNameList_ACU(names);
-}
-async function deleteAgentWorldbookStateEntry_ACU(bookName) {
-    const explicitBookName = String(bookName || '').trim();
-    const scanBookNames = await resolveAgentWorldbookStateCleanupBookNames_ACU(explicitBookName);
-    let deleted = 0;
-    for (const targetBookName of scanBookNames) {
-        const entries = await getLorebookEntries_ACU(targetBookName);
-        const candidates = buildAgentStateEntryCandidates_ACU(entries, targetBookName)
-            .map(candidate => candidate.entry)
-            .filter(entry => entry?.uid !== null && entry?.uid !== undefined);
-        const legacyCommentMatches = findAgentConfigEntries_ACU(entries)
-            .filter(entry => entry?.uid !== null && entry?.uid !== undefined);
-        const matchedByUid = new Map();
-        for (const entry of [...candidates, ...legacyCommentMatches]) {
-            if (!hasValidWorldbookUid_ACU$1(entry?.uid))
-                continue;
-            matchedByUid.set(String(entry.uid), entry);
-        }
-        const matched = Array.from(matchedByUid.values());
-        if (matched.length === 0)
-            continue;
-        await deleteLorebookEntries_ACU(targetBookName, matched.map(entry => entry.uid));
-        deleted += matched.length;
-    }
-    return deleted;
-}
-
-function normalizeCommentText_ACU$1(comment) {
-    return typeof comment === 'string' ? comment : '';
-}
-function normalizeSkillMetaText_ACU(value) {
-    return typeof value === 'string' ? value.trim() : '';
-}
-function normalizeSkillMetaTk_ACU(value) {
-    const raw = Number(value);
-    if (!Number.isFinite(raw))
-        return 0;
-    return Math.max(0, Math.trunc(raw));
-}
-function isValidUpdatedBy_ACU(value) {
-    return value === 'manual' || value === 'agent-skillify';
-}
-function stripWorldbookSkillMetaBlock_ACU(comment) {
-    return stripWorldbookSkillMetaBlockCore_ACU(comment);
-}
-function parseWorldbookSkillMetaFromComment_ACU(comment) {
-    const text = normalizeCommentText_ACU$1(comment);
-    const pattern = createSkillMetaPattern_ACU();
-    const match = pattern.exec(text);
-    if (!match)
-        return null;
-    try {
-        const raw = JSON.parse(match[1].trim());
-        if (raw.version !== 1)
-            return null;
-        const updatedBy = isValidUpdatedBy_ACU(raw.updatedBy) ? raw.updatedBy : 'manual';
-        return {
-            version: 1,
-            description: normalizeSkillMetaText_ACU(raw.description),
-            triggerWhen: normalizeSkillMetaText_ACU(raw.triggerWhen),
-            tk: normalizeSkillMetaTk_ACU(raw.tk),
-            updatedAt: Number.isFinite(Number(raw.updatedAt)) ? Number(raw.updatedAt) : 0,
-            updatedBy,
-        };
-    }
-    catch {
-        return null;
-    }
-}
-function hasUsableWorldbookSkillMeta_ACU$1(comment) {
-    const meta = parseWorldbookSkillMetaFromComment_ACU(comment);
-    if (!meta)
-        return false;
-    return !!meta.description || !!meta.triggerWhen || meta.tk > 0;
-}
-function normalizeWorldbookSkillMetaDraft_ACU(draft, updatedBy = 'manual', now = Date.now()) {
-    return {
-        version: 1,
-        description: normalizeSkillMetaText_ACU(draft.description),
-        triggerWhen: normalizeSkillMetaText_ACU(draft.triggerWhen),
-        tk: normalizeSkillMetaTk_ACU(draft.tk),
-        updatedAt: Number.isFinite(Number(draft.updatedAt)) && Number(draft.updatedAt) > 0 ? Number(draft.updatedAt) : now,
-        updatedBy: isValidUpdatedBy_ACU(draft.updatedBy) ? draft.updatedBy : updatedBy,
-    };
-}
-function buildWorldbookSkillMetaComment_ACU(comment, metaDraft) {
-    const meta = normalizeWorldbookSkillMetaDraft_ACU(metaDraft);
-    const baseComment = stripWorldbookSkillMetaBlock_ACU(comment);
-    if (!meta.description && !meta.triggerWhen)
-        return baseComment;
-    const metaJson = JSON.stringify(meta);
-    const metaBlock = `<!-- ${ACU_SKILL_META_START_ACU}\n${metaJson}\n${ACU_SKILL_META_END_ACU} -->`;
-    return [baseComment, metaBlock].filter(Boolean).join('\n\n');
-}
-function findWorldbookEntryByUid_ACU(entries, uid) {
-    return entries.find(entry => entry?.uid === uid || String(entry?.uid) === String(uid)) || null;
-}
-function validateWorldbookSkillMetaTarget_ACU(bookName, uid) {
-    if (!bookName || !bookName.trim())
-        return '世界书名称为空';
-    if (uid === null || uid === undefined || uid === '')
-        return '世界书条目 uid 为空';
-    return null;
-}
-async function saveWorldbookEntrySkillMeta_ACU(bookName, uid, metaDraft, updatedBy = 'manual') {
-    const targetError = validateWorldbookSkillMetaTarget_ACU(bookName, uid);
-    if (targetError)
-        return { updated: false, reason: targetError };
-    const entries = await getLorebookEntries_ACU(bookName);
-    const entry = findWorldbookEntryByUid_ACU(entries, uid);
-    if (!entry)
-        return { updated: false, reason: '未找到世界书条目' };
-    const meta = normalizeWorldbookSkillMetaDraft_ACU(metaDraft, updatedBy);
-    const nextComment = buildWorldbookSkillMetaComment_ACU(entry.comment, meta);
-    if (nextComment === normalizeCommentText_ACU$1(entry.comment)) {
-        return { updated: false, reason: '世界书 Skill 元数据未变化', entry };
-    }
-    await setLorebookEntries_ACU(bookName, [{ uid: entry.uid, comment: nextComment }]);
-    return { updated: true, entry: { ...entry, comment: nextComment } };
-}
-async function deleteWorldbookEntrySkillMeta_ACU(bookName, uid) {
-    const targetError = validateWorldbookSkillMetaTarget_ACU(bookName, uid);
-    if (targetError)
-        return { updated: false, reason: targetError };
-    const entries = await getLorebookEntries_ACU(bookName);
-    const entry = findWorldbookEntryByUid_ACU(entries, uid);
-    if (!entry)
-        return { updated: false, reason: '未找到世界书条目' };
-    const currentComment = normalizeCommentText_ACU$1(entry.comment);
-    const nextComment = stripWorldbookSkillMetaBlock_ACU(currentComment);
-    if (nextComment === currentComment) {
-        return { updated: false, reason: '世界书条目没有 Skill 元数据', entry };
-    }
-    await setLorebookEntries_ACU(bookName, [{ uid: entry.uid, comment: nextComment }]);
-    return { updated: true, entry: { ...entry, comment: nextComment } };
-}
-function buildWorldbookSkillMetaReadResult_ACU(bookName, entry) {
-    const uid = entry?.uid;
-    if (uid === null || uid === undefined || String(uid).trim() === '')
-        return null;
-    const comment = normalizeCommentText_ACU$1(entry?.comment || entry?.name);
-    const skillMeta = parseWorldbookSkillMetaFromComment_ACU(comment);
-    if (!skillMeta)
-        return null;
-    return {
-        bookName,
-        uid,
-        comment,
-        label: buildWorldbookEntryDisplayLabel_ACU(comment, uid),
-        skillMeta,
-    };
-}
-async function getWorldbookEntrySkillMeta_ACU(bookName, uid) {
-    const targetError = validateWorldbookSkillMetaTarget_ACU(bookName, uid);
-    if (targetError)
-        return null;
-    const entries = await getLorebookEntries_ACU(bookName);
-    const entry = findWorldbookEntryByUid_ACU(entries, uid);
-    if (!entry)
-        return null;
-    return buildWorldbookSkillMetaReadResult_ACU(bookName, entry);
-}
-async function listWorldbookSkillMetas_ACU(bookNames = [], readContext) {
-    const uniqueBookNames = [...new Set((Array.isArray(bookNames) ? bookNames : [])
-            .map(name => String(name || '').trim())
-            .filter(Boolean))];
-    const results = [];
-    for (const bookName of uniqueBookNames) {
-        const entries = await getAgentRuntimeLorebookEntries_ACU(bookName, readContext);
-        for (const entry of Array.isArray(entries) ? entries : []) {
-            const item = buildWorldbookSkillMetaReadResult_ACU(bookName, entry);
-            if (item)
-                results.push(item);
-        }
-    }
-    return results;
-}
-async function clearWorldbookSkillMetaBlocks_ACU(bookNames = []) {
-    const targets = await listWorldbookSkillMetas_ACU(bookNames);
-    const result = {
-        total: targets.length,
-        cleared: 0,
-        skipped: 0,
-        failed: 0,
-        errors: [],
-    };
-    for (const target of targets) {
-        try {
-            const deleteResult = await deleteWorldbookEntrySkillMeta_ACU(target.bookName, target.uid);
-            if (deleteResult.updated)
-                result.cleared += 1;
-            else
-                result.skipped += 1;
-        }
-        catch (error) {
-            result.failed += 1;
-            result.errors.push({ bookName: target.bookName, uid: target.uid, reason: error?.message || '清除 Skill 元数据失败' });
-        }
-    }
-    return result;
-}
-async function resolveAgentWorldbookFilterAvailability_ACU(readContext) {
-    const config = await readAgentWorldbookControlFromWorldbooks_ACU(readContext);
-    const bookNames = await resolveAgentWorldbookScopeBookNames_ACU(undefined, readContext);
-    const skillMetas = bookNames.length > 0 ? await listWorldbookSkillMetas_ACU(bookNames, readContext) : [];
-    const base = {
-        configuredMode: config.control.mode,
-        control: config.control,
-        configSource: config.source,
-        skillCount: skillMetas.length,
-        bookNames,
-        configBookName: config.bookName || '',
-        writableBookName: config.writableBookName || '',
-        skillMetas,
-    };
-    if (bookNames.length === 0)
-        return { ...base, available: false, reason: 'empty_scope' };
-    if (config.source !== 'worldbook')
-        return { ...base, available: false, reason: 'no_card_agent_config' };
-    if (config.control.mode !== 'agent')
-        return { ...base, available: false, reason: 'not_agent_mode' };
-    return { ...base, available: true, reason: 'available' };
 }
 
 function readLegacyAgentSkillifyControl_ACU() {
@@ -60398,10 +57148,10 @@ function normalizeBookNamesForTakeover_ACU(bookNames) {
         return [];
     return [...new Set(bookNames.map(name => String(name || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
 }
-function normalizeCommentText_ACU(comment) {
+function normalizeCommentText_ACU$1(comment) {
     return typeof comment === 'string' ? comment : '';
 }
-function hasValidWorldbookUid_ACU(uid) {
+function hasValidWorldbookUid_ACU$1(uid) {
     return uid !== null && uid !== undefined && String(uid).trim() !== '';
 }
 /**
@@ -60426,7 +57176,7 @@ async function deleteInternalEntriesByComment_ACU(bookNames, comment, options = 
             }
             throw error;
         }
-        const matched = (entries || []).filter(entry => String(entry?.comment || '').trim() === comment && hasValidWorldbookUid_ACU(entry?.uid));
+        const matched = (entries || []).filter(entry => String(entry?.comment || '').trim() === comment && hasValidWorldbookUid_ACU$1(entry?.uid));
         if (matched.length === 0)
             continue;
         await deleteLorebookEntriesRequired_ACU(bookName, matched.map(entry => entry.uid));
@@ -60445,7 +57195,7 @@ function normalizeAgentWorldbookRefs_ACU(greenlights) {
             continue;
         const bookName = String(ref.bookName || '').trim();
         const uid = ref.uid;
-        if (!bookName || !hasValidWorldbookUid_ACU(uid))
+        if (!bookName || !hasValidWorldbookUid_ACU$1(uid))
             continue;
         const key = `${bookName}\u0000${String(uid).trim()}`;
         if (seen.has(key))
@@ -60466,7 +57216,7 @@ function buildSnapshotUidSetByBook_ACU(snapshot) {
             continue;
         const uidSet = new Set();
         for (const entry of entries) {
-            if (!hasValidWorldbookUid_ACU(entry?.uid) || entry.takeoverStatus === 'pending')
+            if (!hasValidWorldbookUid_ACU$1(entry?.uid) || entry.takeoverStatus === 'pending')
                 continue;
             uidSet.add(String(entry.uid));
         }
@@ -60568,7 +57318,7 @@ function mergeSnapshotBooks_ACU(existingBooks, candidateBooks) {
             const mergedEntries = mergedBooks[normalizedBookName] || (mergedBooks[normalizedBookName] = []);
             const entryIndexByUid = new Map(mergedEntries.map((entry, index) => [String(entry?.uid), index]));
             for (const entry of entries) {
-                if (!hasValidWorldbookUid_ACU(entry?.uid))
+                if (!hasValidWorldbookUid_ACU$1(entry?.uid))
                     continue;
                 const existingIndex = entryIndexByUid.get(String(entry.uid));
                 if (existingIndex === undefined) {
@@ -60586,7 +57336,7 @@ function setSnapshotEntryStatusByUpdates_ACU(books, updates, takeoverStatus) {
     const uidsByBook = new Map();
     for (const update of updates) {
         const bookName = String(update.bookName || '').trim();
-        if (!bookName || !hasValidWorldbookUid_ACU(update.uid))
+        if (!bookName || !hasValidWorldbookUid_ACU$1(update.uid))
             continue;
         const uids = uidsByBook.get(bookName) || new Set();
         uids.add(String(update.uid));
@@ -60611,7 +57361,7 @@ function hasSnapshotEntriesAbsentFrom_ACU(existingBooks, incomingBooks) {
         const existingEntriesByUid = new Map((existingBooks[bookName] || []).map(entry => [String(entry?.uid), entry]));
         const mergedEntriesByUid = new Map((mergedBooks[bookName] || []).map(entry => [String(entry?.uid), entry]));
         if ((entries || []).some(entry => {
-            if (!hasValidWorldbookUid_ACU(entry?.uid))
+            if (!hasValidWorldbookUid_ACU$1(entry?.uid))
                 return false;
             const existingEntry = existingEntriesByUid.get(String(entry.uid));
             const mergedEntry = mergedEntriesByUid.get(String(entry.uid));
@@ -60633,10 +57383,10 @@ function stripTakeoverMetaBlock_ACU(comment) {
     return stripAgentTakeoverMetaBlockStrict_ACU(comment);
 }
 function hasTakeoverMetaBlock_ACU(comment) {
-    return new RegExp(createAgentTakeoverMetaPattern_ACU().source).test(normalizeCommentText_ACU(comment));
+    return new RegExp(createAgentTakeoverMetaPattern_ACU().source).test(normalizeCommentText_ACU$1(comment));
 }
 function hasUnsupportedTakeoverMetaBlock_ACU(comment) {
-    const text = normalizeCommentText_ACU(comment);
+    const text = normalizeCommentText_ACU$1(comment);
     const pattern = createAgentTakeoverMetaPattern_ACU();
     let match;
     while ((match = pattern.exec(text))) {
@@ -60664,7 +57414,7 @@ function doesTakeoverSnapshotCommentHashMatch_ACU(snapshotCommentHash, currentCo
         || hashUserInput_ACU(strippedComment) === snapshotCommentHash;
 }
 function parseTakeoverMetaFromComment_ACU(comment) {
-    const text = normalizeCommentText_ACU(comment);
+    const text = normalizeCommentText_ACU$1(comment);
     const pattern = createAgentTakeoverMetaPattern_ACU();
     const match = pattern.exec(text);
     if (!match)
@@ -60789,14 +57539,14 @@ async function backfillMissingTakeoverMeta_ACU(snapshot) {
             continue;
         try {
             const snapshotEntriesByUid = new Map(snapshotEntries
-                .filter(snapshotEntry => hasValidWorldbookUid_ACU(snapshotEntry?.uid))
+                .filter(snapshotEntry => hasValidWorldbookUid_ACU$1(snapshotEntry?.uid))
                 .map(snapshotEntry => [String(snapshotEntry.uid), snapshotEntry]));
             const entries = await getLorebookEntries_ACU(bookName);
             const patches = (entries || []).flatMap(entry => {
                 const snapshotEntry = snapshotEntriesByUid.get(String(entry?.uid));
                 if (!snapshotEntry)
                     return [];
-                const currentComment = normalizeCommentText_ACU(entry?.comment);
+                const currentComment = normalizeCommentText_ACU$1(entry?.comment);
                 if (hasTakeoverMetaBlock_ACU(currentComment)
                     || !doesTakeoverSnapshotCommentHashMatch_ACU(snapshotEntry.commentHash, currentComment)
                     || (entry?.enabled !== false && !isFinalGenerationBlueLightEntry_ACU(entry)))
@@ -60839,7 +57589,7 @@ async function readPlotAgentWorldbookSnapshotFromStateOrLegacy_ACU(resolvedBookN
         }
         const bookSnapshot = [];
         for (const entry of entries || []) {
-            if (!hasValidWorldbookUid_ACU(entry?.uid))
+            if (!hasValidWorldbookUid_ACU$1(entry?.uid))
                 continue;
             const meta = parseTakeoverMetaFromComment_ACU(entry?.comment);
             if (!meta || meta.selectionSignature !== selectionSignature)
@@ -60926,7 +57676,7 @@ async function resolveTakeoverBookNames_ACU(readContext) {
     return normalizeBookNamesForTakeover_ACU(await resolveAgentWorldbookScopeBookNames_ACU(undefined, readContext));
 }
 function buildSnapshotEntry_ACU(entry) {
-    if (!hasValidWorldbookUid_ACU(entry?.uid))
+    if (!hasValidWorldbookUid_ACU$1(entry?.uid))
         return null;
     const previousType = entry?.type === undefined || entry?.type === null ? undefined : String(entry.type);
     const comment = normalizeTakeoverComparableComment_ACU(entry?.comment);
@@ -60947,7 +57697,7 @@ async function collectTakeoverCandidates_ACU(bookNames) {
         for (const entry of entries || []) {
             if (!isWorldbookEntrySkillifyCandidate_ACU(entry))
                 continue;
-            if (!hasUsableWorldbookSkillMeta_ACU$1(entry?.comment))
+            if (!hasUsableWorldbookSkillMeta_ACU(entry?.comment))
                 continue;
             const snapshotEntry = buildSnapshotEntry_ACU(entry);
             if (!snapshotEntry)
@@ -60972,7 +57722,7 @@ async function reconcileExistingTakeoverSnapshotWithSkillMeta_ACU(existingSnapsh
         const currentEntries = await getLorebookEntries_ACU(normalizedBookName);
         const currentByUid = new Map((currentEntries || []).map(entry => [String(entry?.uid), entry]));
         for (const snapshotEntry of entriesToCheck) {
-            if (!hasValidWorldbookUid_ACU(snapshotEntry?.uid))
+            if (!hasValidWorldbookUid_ACU$1(snapshotEntry?.uid))
                 continue;
             if (snapshotEntry.takeoverStatus === 'pending') {
                 if (!keptBooks[normalizedBookName])
@@ -60981,7 +57731,7 @@ async function reconcileExistingTakeoverSnapshotWithSkillMeta_ACU(existingSnapsh
                 continue;
             }
             const currentEntry = currentByUid.get(String(snapshotEntry.uid));
-            const stillHasSkillMeta = currentEntry ? hasUsableWorldbookSkillMeta_ACU$1(currentEntry?.comment) : false;
+            const stillHasSkillMeta = currentEntry ? hasUsableWorldbookSkillMeta_ACU(currentEntry?.comment) : false;
             if (stillHasSkillMeta) {
                 if (!keptBooks[normalizedBookName])
                     keptBooks[normalizedBookName] = [];
@@ -61011,7 +57761,7 @@ function filterSnapshotBooksByUpdates_ACU(books, updates) {
     const allowedByBook = new Map();
     for (const update of updates) {
         const bookName = String(update?.bookName || '').trim();
-        if (!bookName || !hasValidWorldbookUid_ACU(update?.uid))
+        if (!bookName || !hasValidWorldbookUid_ACU$1(update?.uid))
             continue;
         const allowed = allowedByBook.get(bookName) || new Set();
         allowed.add(String(update.uid));
@@ -61027,7 +57777,7 @@ function excludeSnapshotEntriesByUpdates_ACU(books, updates) {
     const excludedByBook = new Map();
     for (const update of updates) {
         const bookName = String(update?.bookName || '').trim();
-        if (!bookName || !hasValidWorldbookUid_ACU(update?.uid))
+        if (!bookName || !hasValidWorldbookUid_ACU$1(update?.uid))
             continue;
         const excluded = excludedByBook.get(bookName) || new Set();
         excluded.add(String(update.uid));
@@ -61046,7 +57796,7 @@ async function disableTakeoverCandidates_ACU(snapshot, candidateBooks) {
             continue;
         const uidSet = new Set();
         for (const snapshotEntry of Array.isArray(snapshotEntries) ? snapshotEntries : []) {
-            if (!hasValidWorldbookUid_ACU(snapshotEntry?.uid))
+            if (!hasValidWorldbookUid_ACU$1(snapshotEntry?.uid))
                 continue;
             uidSet.add(String(snapshotEntry.uid));
         }
@@ -61064,7 +57814,7 @@ async function disableTakeoverCandidates_ACU(snapshot, candidateBooks) {
         try {
             const entries = await getLorebookEntries_ACU(bookName);
             const snapshotEntriesByUid = new Map((snapshot.books[bookName] || [])
-                .filter(snapshotEntry => hasValidWorldbookUid_ACU(snapshotEntry?.uid))
+                .filter(snapshotEntry => hasValidWorldbookUid_ACU$1(snapshotEntry?.uid))
                 .map(snapshotEntry => [String(snapshotEntry.uid), snapshotEntry]));
             const patchEntries = (entries || [])
                 .map(entry => ({ entry, snapshotEntry: snapshotEntriesByUid.get(String(entry?.uid)) }))
@@ -61119,7 +57869,7 @@ async function restoreSnapshotEntries_ACU(snapshot) {
             currentEntriesRead = true;
             const currentByUid = new Map((currentEntries || []).map(entry => [String(entry?.uid), entry]));
             for (const snapshotEntry of entriesToRestore) {
-                if (!hasValidWorldbookUid_ACU(snapshotEntry?.uid)) {
+                if (!hasValidWorldbookUid_ACU$1(snapshotEntry?.uid)) {
                     logWarn_ACU(`[Agent世界书] 跳过恢复世界书条目：${normalizedBookName} 中存在无效 uid。`, snapshotEntry?.uid);
                     skipped += 1;
                     continue;
@@ -61183,7 +57933,7 @@ async function restoreSnapshotEntries_ACU(snapshot) {
             const failedUpdates = currentEntriesRead
                 ? patches.map(patch => ({ bookName: normalizedBookName, uid: patch.uid }))
                 : entriesToRestore
-                    .filter(entry => hasValidWorldbookUid_ACU(entry?.uid))
+                    .filter(entry => hasValidWorldbookUid_ACU$1(entry?.uid))
                     .map(entry => ({ bookName: normalizedBookName, uid: entry.uid }));
             failed += failedUpdates.length;
             report.failed.push(...failedUpdates);
@@ -61194,7 +57944,7 @@ async function restoreSnapshotEntries_ACU(snapshot) {
 async function collectRecoveredPendingSnapshotUpdates_ACU(snapshot) {
     const recovered = [];
     for (const [bookName, snapshotEntries] of Object.entries(snapshot.books || {})) {
-        const pendingEntries = (snapshotEntries || []).filter(entry => entry.takeoverStatus === 'pending' && hasValidWorldbookUid_ACU(entry?.uid));
+        const pendingEntries = (snapshotEntries || []).filter(entry => entry.takeoverStatus === 'pending' && hasValidWorldbookUid_ACU$1(entry?.uid));
         if (pendingEntries.length === 0)
             continue;
         const entries = await getLorebookEntries_ACU(bookName);
@@ -61224,7 +57974,7 @@ async function writeFinalGenerationGreenlights_ACU(greenlights) {
     const normalizedGreenlights = normalizeAgentWorldbookRefs_ACU(greenlights);
     const allowedKeySet = buildAllowedFinalGreenlightKeySet_ACU(normalizedGreenlights, snapshotUidSetByBook);
     const patchResult = await patchSnapshotEntries_ACU(snapshotUidSetByBook, (bookName, entry) => {
-        if (!hasValidWorldbookUid_ACU(entry?.uid))
+        if (!hasValidWorldbookUid_ACU$1(entry?.uid))
             return null;
         const isAllowed = allowedKeySet.has(buildFinalGreenlightKey_ACU(bookName, entry.uid));
         if (isAllowed) {
@@ -61257,7 +58007,7 @@ async function readFinalGenerationGreenlights_ACU() {
     for (const [bookName, uidSet] of snapshotUidSetByBook.entries()) {
         const entries = await getLorebookEntries_ACU(bookName);
         for (const entry of entries || []) {
-            if (!hasValidWorldbookUid_ACU(entry?.uid) || !uidSet.has(String(entry.uid)) || !isFinalGenerationBlueLightEntry_ACU(entry))
+            if (!hasValidWorldbookUid_ACU$1(entry?.uid) || !uidSet.has(String(entry.uid)) || !isFinalGenerationBlueLightEntry_ACU(entry))
                 continue;
             const key = buildFinalGreenlightKey_ACU(bookName, entry.uid);
             if (seen.has(key))
@@ -61509,7 +58259,7 @@ async function restoreWorldbookGreenlights_ACU(options = {}) {
     }
     const restoreUpdates = cleanupMode === 'full' && shouldRestoreSnapshot
         ? Object.entries(snapshot.books || {}).flatMap(([bookName, entries]) => (entries || [])
-            .filter(entry => entry.takeoverStatus !== 'pending' && hasValidWorldbookUid_ACU(entry?.uid))
+            .filter(entry => entry.takeoverStatus !== 'pending' && hasValidWorldbookUid_ACU$1(entry?.uid))
             .map(entry => ({ bookName, uid: entry.uid })))
         : [];
     const restorePendingSnapshot = shouldRestoreSnapshot && restoreUpdates.length > 0
@@ -67068,7 +63818,7 @@ function resolveWorldbookEntryTk_ACU(entry, meta, comment) {
         return Math.trunc(metaTk);
     return estimateTextTk_ACU(entry?.content || comment);
 }
-function hasUsableWorldbookSkillMeta_ACU(meta) {
+function hasUsableWorldbookSkillMeta_ACU$1(meta) {
     return !!meta && (!!String(meta.description || '').trim() || !!String(meta.triggerWhen || '').trim());
 }
 function buildFallbackWorldbookSummaryText_ACU(entry, comment, keys) {
@@ -67097,7 +63847,7 @@ async function collectWorldbookSummariesFromSnapshot_ACU(contextSettings, readCo
             const comment = String(entry.comment || entry.name || '');
             const meta = parseWorldbookSkillMetaFromComment_ACU(comment);
             const keys = getWorldbookEntryKeywordsForSkillify_ACU(entry);
-            const fallback = hasUsableWorldbookSkillMeta_ACU(meta) ? null : buildFallbackWorldbookSummaryText_ACU(entry, comment, keys);
+            const fallback = hasUsableWorldbookSkillMeta_ACU$1(meta) ? null : buildFallbackWorldbookSummaryText_ACU(entry, comment, keys);
             allowedKeys.add(refKey_ACU(bookName, uid));
             const index = summaries.length + 1;
             summaries.push({
@@ -67119,7 +63869,7 @@ async function collectWorldbookSummariesFromSnapshot_ACU(contextSettings, readCo
     const candidates = await collectWorldbookSkillifyCandidates_ACU(bookNames, { maxEntries: contextSettings.decisionWorldbookCandidateLimit });
     for (const candidate of candidates) {
         const meta = candidate.existingSkillMeta;
-        if (!hasUsableWorldbookSkillMeta_ACU(meta))
+        if (!hasUsableWorldbookSkillMeta_ACU$1(meta))
             continue;
         allowedKeys.add(refKey_ACU(candidate.bookName, candidate.uid));
         const index = summaries.length + 1;
@@ -67593,7 +64343,7 @@ function isAgentControlledFinalPromptWorldbookEntry_ACU(entry) {
 function isAgentControlledWorldbookEntryForPlot_ACU(entry) {
     if (!entry || isDatabaseGeneratedWorldbookEntryForAgent_ACU(entry))
         return false;
-    return hasUsableWorldbookSkillMeta_ACU$1(entry?.comment || entry?.rawComment || entry?.name);
+    return hasUsableWorldbookSkillMeta_ACU(entry?.comment || entry?.rawComment || entry?.name);
 }
 function shouldUseAgentWorldbookForPlotTask_ACU(task, agentDecision) {
     return agentDecision?.active === true && task?.agentControl?.selectable !== false && hasPlotTaskAgentSkill_ACU(task);
@@ -69571,6 +66321,3256 @@ async function handleChatCompletionReady_ACU(data) {
     logDebug_ACU(`[提示词模板] 处理完成，共处理 ${processedCount} 个消息块，耗时 ${endTime - startTime}ms`);
 }
 
+// ═══════════════════════════════════════════════════════════════
+// service/table/table-service.ts — 表格数据操作 service 层
+// 从 data/repositories/table-repo.ts 迁入（消除 data 层越权）
+// ═══════════════════════════════════════════════════════════════
+const TABLE_PERSIST_COMMIT_MODEL_REQUIRED_ACU = 'Table persistence requires table update commit model; direct unsafe writes are not allowed.';
+async function ensureLegacyStorageMigratedBeforeWrite_ACU(reason = 'table_write') {
+    const chat = getChatArray_ACU();
+    if (!Array.isArray(chat) || chat.length === 0)
+        return { success: true, migrated: false };
+    const isolationKey = getCurrentIsolationKey_ACU();
+    const isolationConfig = {
+        enabled: settings_ACU.dataIsolationEnabled,
+        code: settings_ACU.dataIsolationCode,
+    };
+    const strategy = resolveTableStorageStrategy_ACU(chat, isolationKey, isolationConfig);
+    if (strategy.mode !== 'legacy-v1')
+        return { success: true, migrated: false };
+    logWarn_ACU(`[LegacyMigrationGate] ${reason}: detected legacy-v1 before write, migrating first. reason=${strategy.reason}${strategy.warning ? `; warning=${strategy.warning}` : ''}`);
+    const mergedLegacyData = await mergeAllIndependentTablesLegacyV1_ACU();
+    if (!mergedLegacyData || !Object.keys(mergedLegacyData).some(k => k.startsWith('sheet_'))) {
+        return { success: false, error: '旧存储迁移失败：无法从 legacy-v1 合并出有效表格数据。' };
+    }
+    const migrationResult = await migrateLegacyStorageToV2OnLoad_ACU({
+        data: mergedLegacyData,
+        isolationKey,
+        isolationConfig,
+        skipUpdateFloors: settings_ACU.skipUpdateFloors,
+    });
+    if (!migrationResult.migrated) {
+        return { success: false, error: `旧存储迁移到 V2 失败: ${migrationResult.error || '未执行迁移'}` };
+    }
+    if (!migrationResult.data) {
+        return { success: false, error: '旧存储迁移到 V2 失败: 迁移成功结果缺少修复后的表格数据。' };
+    }
+    const postStrategy = resolveTableStorageStrategy_ACU(chat, isolationKey, isolationConfig);
+    if (postStrategy.mode === 'legacy-v1') {
+        return { success: false, error: `旧存储迁移后仍检测到 legacy-v1: ${postStrategy.reason}` };
+    }
+    const migratedData = migrationResult.data;
+    _set_currentJsonTableData_ACU(JSON.parse(JSON.stringify(migratedData)));
+    return { success: true, migrated: true, data: migratedData };
+}
+async function persistTablesToChatMessage_ACU(options = {}) {
+    if (!options.transactionContext || options.assumeCommitLock !== true) {
+        logError_ACU(TABLE_PERSIST_COMMIT_MODEL_REQUIRED_ACU);
+        return { saved: false, error: TABLE_PERSIST_COMMIT_MODEL_REQUIRED_ACU };
+    }
+    return persistTablesToChatMessageWithLockOption_ACU(options);
+}
+async function persistTablesToChatMessageWithLockOption_ACU(options = {}) {
+    const { targetMessageIndex = -1, targetSheetKeys = null, updateGroupKeys = null, trackingSheetKeys, filledSheetKeys: explicitFilledSheetKeys, tableData: explicitTableData, trackAsUpdate = true, source, requestId, batchId, operations, revisionWriteSet, forceCheckpoint, checkpointReason, manualRefillProgress, replaceExistingIncremental, assumeCommitLock, strictSave, manualCatchUpRunId, performanceRunId, performanceParentSpanId, transactionContext, } = options;
+    const effectiveTableData = explicitTableData !== undefined ? explicitTableData : currentJsonTableData_ACU;
+    if (!effectiveTableData) {
+        logError_ACU('Save aborted: currentJsonTableData_ACU is null.');
+        return { saved: false, error: 'currentJsonTableData is null' };
+    }
+    const currentIsolationKey = getCurrentIsolationKey_ACU();
+    const persistCore = async () => {
+        const chat = getChatArray_ACU();
+        if (!chat || chat.length === 0) {
+            logError_ACU('Save failed: Chat history is empty.');
+            return { saved: false, error: 'chat history is empty' };
+        }
+        let strategy = resolveTableStorageStrategy_ACU(chat, currentIsolationKey, {
+            enabled: settings_ACU.dataIsolationEnabled,
+            code: settings_ACU.dataIsolationCode,
+        });
+        if (strategy.mode === 'legacy-v1') {
+            const migration = await ensureLegacyStorageMigratedBeforeWrite_ACU('persistTablesToChatMessage');
+            if (!migration.success) {
+                const message = migration.error || 'legacy-v1 table storage migration failed before write.';
+                logError_ACU(message);
+                return { saved: false, error: message };
+            }
+            strategy = resolveTableStorageStrategy_ACU(chat, currentIsolationKey, {
+                enabled: settings_ACU.dataIsolationEnabled,
+                code: settings_ACU.dataIsolationCode,
+            });
+            if (strategy.mode === 'legacy-v1') {
+                const message = `legacy-v1 table storage still detected after migration: ${strategy.reason}`;
+                logError_ACU(message);
+                return { saved: false, error: message };
+            }
+        }
+        let keysToSave = Array.isArray(targetSheetKeys)
+            ? targetSheetKeys.filter((sheetKey) => typeof sheetKey === 'string' && sheetKey.length > 0)
+            : getSortedSheetKeys_ACU(effectiveTableData);
+        keysToSave = [...new Set(keysToSave.filter(sheetKey => Boolean(effectiveTableData[sheetKey])))];
+        const changedCandidateKeys = Array.isArray(trackingSheetKeys)
+            ? trackingSheetKeys.filter((sheetKey) => typeof sheetKey === 'string' && sheetKey.length > 0)
+            : keysToSave;
+        const trackingKeySet = new Set(changedCandidateKeys.filter(sheetKey => Boolean(effectiveTableData[sheetKey])));
+        const metadataOnlyUpdateGroupKeys = Array.isArray(updateGroupKeys)
+            ? [...new Set(updateGroupKeys.filter(sheetKey => typeof sheetKey === 'string' && Boolean(effectiveTableData[sheetKey])))]
+            : [];
+        const filledSheetKeys = explicitFilledSheetKeys !== undefined
+            ? [...new Set((explicitFilledSheetKeys || []).filter(sheetKey => typeof sheetKey === 'string' && Boolean(effectiveTableData[sheetKey])))]
+            : (trackAsUpdate ? metadataOnlyUpdateGroupKeys : []);
+        try {
+            const existingGuide = getChatSheetGuideDataForIsolationKey_ACU(currentIsolationKey);
+            if (!existingGuide || !Object.keys(existingGuide).some(k => k.startsWith('sheet_'))) {
+                const templateObjForSeed = parseTableTemplateJson_ACU({ stripSeedRows: false });
+                const guideData = buildChatSheetGuideDataFromData_ACU(effectiveTableData, {
+                    preserveSeedRowsFromGuideData: null,
+                    seedRowsFromTemplateObj: templateObjForSeed,
+                });
+                if (guideData && Object.keys(guideData).some(k => k.startsWith('sheet_'))) {
+                    setChatSheetGuideDataForIsolationKey_ACU(currentIsolationKey, guideData, { reason: 'first_fill' });
+                    logDebug_ACU(`[SheetGuide] Created chat sheet guide for tag [${currentIsolationKey || '无标签'}] (tables=${Object.keys(guideData).filter(k => k.startsWith('sheet_')).length}).`);
+                }
+            }
+        }
+        catch (e) {
+            logWarn_ACU('[SheetGuide] Failed to create sheet guide on first fill:', e);
+        }
+        const persistedOperations = strategy.mode === 'empty' ? [] : operations;
+        const persistV2InTransaction = async (transactionContext) => {
+            const result = await persistTableMutationLogV2_ACU({
+                targetMessageIndex,
+                source: source || (metadataOnlyUpdateGroupKeys.length > 0 ? 'group_fill' : 'system'),
+                afterData: effectiveTableData,
+                operations: persistedOperations,
+                filledSheetKeys,
+                candidateChangedSheetKeys: [...trackingKeySet],
+                groupKeys: metadataOnlyUpdateGroupKeys,
+                requestId,
+                batchId,
+                forceCheckpoint: forceCheckpoint === true || strategy.mode === 'empty',
+                checkpointReason: checkpointReason || (strategy.mode === 'empty' ? 'init' : undefined),
+                manualRefillProgress,
+                replaceExistingIncremental,
+                isolationKey: currentIsolationKey,
+                revisionWriteSet,
+                assumeCommitLock,
+                strictSave,
+                manualCatchUpRunId,
+                performanceRunId,
+                performanceParentSpanId,
+                transactionContext,
+            });
+            return { saved: result.saved, messageIndex: result.messageIndex, error: result.error };
+        };
+        if (!transactionContext || assumeCommitLock !== true) {
+            logError_ACU(TABLE_PERSIST_COMMIT_MODEL_REQUIRED_ACU);
+            return { saved: false, error: TABLE_PERSIST_COMMIT_MODEL_REQUIRED_ACU };
+        }
+        transactionContext.assertFresh?.('persistTablesToChatMessage:before_v2_persist');
+        return persistV2InTransaction(transactionContext);
+    };
+    return persistCore();
+}
+/**
+ * @deprecated 旧兼容写入口已收口禁用。所有表格写入必须走 runTableUpdateCommit_ACU。
+ */
+async function saveIndependentTableToChatHistory_ACU(_targetMessageIndex = -1, _targetSheetKeys = null, _updateGroupKeys = null, _skipPostRefresh = false, _trackingSheetKeys = _targetSheetKeys, _source, _requestId, _batchId, _transactionContext, _operations, _revisionWriteSet) {
+    logError_ACU(TABLE_PERSIST_COMMIT_MODEL_REQUIRED_ACU);
+    return { saved: false, error: TABLE_PERSIST_COMMIT_MODEL_REQUIRED_ACU };
+}
+/**
+ * 检查当前聊天是否为首次初始化（无任何已有表格数据）。
+ */
+async function checkIfFirstTimeInit_ACU() {
+    const chat = getChatArray_ACU();
+    if (!chat || chat.length === 0)
+        return true;
+    const currentIsolationKey = getCurrentIsolationKey_ACU();
+    for (let i = chat.length - 1; i >= 0; i--) {
+        const message = chat[i];
+        if (message.is_user)
+            continue;
+        const tagData = readIsolatedTagData_ACU(message, currentIsolationKey);
+        if (isV2TagData_ACU(tagData)) {
+            const checkpointData = tagData.storageFrame?.checkpoint?.data;
+            if (checkpointData && Object.keys(checkpointData).some(k => k.startsWith('sheet_'))) {
+                return false;
+            }
+            const hasV2SheetOperation = (tagData.storageFrame?.logEntries || []).some((entry) => Array.isArray(entry?.operations) && entry.operations.some((operation) => {
+                if (operation?.kind === 'sheet_replace')
+                    return typeof operation.sheetKey === 'string' && operation.sheetKey.startsWith('sheet_');
+                if (operation?.kind === 'sheet_schema_migrate')
+                    return typeof operation.sheetKey === 'string' && operation.sheetKey.startsWith('sheet_');
+                if (operation?.kind === 'row_upsert' || operation?.kind === 'row_delete' || operation?.kind === 'meta_update')
+                    return typeof operation.sheetKey === 'string' && operation.sheetKey.startsWith('sheet_');
+                if (operation?.kind === 'data_replace')
+                    return operation.data && Object.keys(operation.data).some((k) => k.startsWith('sheet_'));
+                if (operation?.kind === 'sql_sheet_batch')
+                    return typeof operation.sheetKey === 'string' && operation.sheetKey.startsWith('sheet_') && Array.isArray(operation.statements) && operation.statements.length > 0;
+                if (operation?.kind === 'sql_batch')
+                    return Array.isArray(operation.statements) && operation.statements.length > 0;
+                return false;
+            }));
+            if (hasV2SheetOperation)
+                return false;
+        }
+        if (tagData?.independentData && Object.keys(tagData.independentData).some(k => k.startsWith('sheet_'))) {
+            return false;
+        }
+        const isolationConfig = { enabled: settings_ACU.dataIsolationEnabled, code: settings_ACU.dataIsolationCode };
+        if (isLegacyMatchForIsolation_ACU(message, isolationConfig)) {
+            const legacyIndep = readLegacyIndependentData_ACU(message);
+            if (legacyIndep && Object.keys(legacyIndep).some(k => k.startsWith('sheet_'))) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+/**
+ * 从模板初始化数据库到内存（不写聊天记录）。
+ * 返回 { initialized: boolean, error?: string }
+ */
+async function initializeJsonTableInChatHistory_ACU() {
+    logDebug_ACU('No database found in chat history. Initializing a new one from template.');
+    try {
+        _set_currentJsonTableData_ACU(parseTableTemplateJson_ACU({ stripSeedRows: true }));
+        logDebug_ACU('Successfully initialized database in memory.');
+    }
+    catch (error) {
+        logError_ACU('Failed to parse template and initialize database in memory:', error);
+        _set_currentJsonTableData_ACU(null);
+        return { initialized: false, error: '从模板解析数据库失败，请检查模板格式。' };
+    }
+    if (!currentJsonTableData_ACU) {
+        return { initialized: false, error: '从模板解析数据库失败，请检查模板格式。' };
+    }
+    logDebug_ACU('Database initialized in memory. It will be saved to chat history on the first update.');
+    try {
+        const guideData = await ensureChatSheetGuideSeeded_ACU({ reason: 'init_chat_seedrows' });
+        if (guideData) {
+            attachSeedRowsToCurrentDataFromGuide_ACU(guideData);
+        }
+    }
+    catch (e) {
+        logWarn_ACU('[SheetGuide] Failed to ensure sheet guide during initialization:', e);
+    }
+    try {
+        await deleteAllGeneratedEntries_ACU$1();
+        logDebug_ACU('Deleted all generated lorebook entries during initialization.');
+    }
+    catch (deleteError) {
+        logWarn_ACU('Failed to delete generated lorebook entries during initialization:', deleteError);
+    }
+    return { initialized: true };
+}
+/**
+ * 从聊天记录加载或创建表格数据到内存。
+ * 返回 { loaded: boolean, source: 'merged'|'initialized'|'empty', error?: string }
+ * 注意：不再内部调用 refreshMergedDataAndNotify，调用方按需自行刷新。
+ */
+async function loadOrCreateJsonTableFromChatHistory_ACU() {
+    _set_currentJsonTableData_ACU(null);
+    logDebug_ACU('Attempting to load database from chat history...');
+    const chat = getChatArray_ACU();
+    applyTemplateScopeForCurrentChat_ACU();
+    if (!chat || chat.length === 0) {
+        logDebug_ACU('Chat history is empty. Initializing new database.');
+        const initResult = await initializeJsonTableInChatHistory_ACU();
+        return {
+            loaded: initResult.initialized,
+            source: 'initialized',
+            error: initResult.error,
+            data: currentJsonTableData_ACU,
+        };
+    }
+    const mergedData = await mergeAllIndependentTables_ACU();
+    if (mergedData) {
+        const canonicalData = JSON.parse(JSON.stringify(mergedData));
+        _set_currentJsonTableData_ACU(canonicalData);
+        logDebug_ACU('Database content successfully merged (tag-aware) and loaded into memory.');
+        return { loaded: true, source: 'merged', data: canonicalData };
+    }
+    logDebug_ACU('No database found for current tag in chat history. Initializing a new one.');
+    const initResult = await initializeJsonTableInChatHistory_ACU();
+    return {
+        loaded: initResult.initialized,
+        source: 'initialized',
+        error: initResult.error,
+        data: currentJsonTableData_ACU,
+    };
+}
+
+/**
+ * service/table/canonical-snapshot-envelope.ts — CanonicalSnapshotEnvelope 内部契约
+ *
+ * 阶段 C：同一调用链内可信 canonical 数据的显式载体（不是缓存）。
+ *
+ * 约束（计划 §3.2）：
+ * - 不暴露为公共插件 API；仅本扩展内部 service/table 与 worldbook pipeline 使用。
+ * - envelope 只能被当前 orchestration 立即消费；函数返回后不得进入长期 Map、store 或单例。
+ * - 构造入口使用白名单（createCanonicalSnapshotEnvelope_ACU），禁止任意调用方自称 canonical。
+ * - data 必须是与调用方隔离的深克隆：provider 与 UI/runtime 不共享可变引用。
+ * - createdAt 仅用于诊断，不作为 freshness 判据；freshness 由调用方在 hydrate 前后
+ *   复核 chat/isolation/storageMode/lifecycleEpoch 决定。
+ */
+/**
+ * 白名单构造 helper。data 为 null/undefined 时返回 null（禁止伪造 canonical）。
+ * data 被深克隆，调用方对入参的后续修改不影响 envelope。
+ */
+function createCanonicalSnapshotEnvelope_ACU(params) {
+    if (!params.data || typeof params.data !== 'object')
+        return null;
+    const data = JSON.parse(JSON.stringify(params.data));
+    return {
+        data,
+        chatIdentity: String(params.chatIdentity || ''),
+        isolationKey: String(params.isolationKey || ''),
+        storageMode: params.storageMode,
+        lifecycleEpoch: params.lifecycleEpoch,
+        ...(params.headRevision ? { headRevision: String(params.headRevision) } : {}),
+        source: params.source,
+        fingerprint: getTableDataFingerprint_ACU(data),
+        createdAt: Date.now(),
+    };
+}
+/**
+ * 结构校验：确认对象确实是本契约的 envelope（不含身份比对）。
+ * 身份比对（chat/isolation/mode/lifecycle）由调用方在 hydrate 前后执行。
+ */
+function isCanonicalSnapshotEnvelope_ACU(value) {
+    if (!value || typeof value !== 'object')
+        return false;
+    const candidate = value;
+    return typeof candidate.data === 'object'
+        && candidate.data !== null
+        && typeof candidate.chatIdentity === 'string'
+        && typeof candidate.isolationKey === 'string'
+        && (candidate.storageMode === 'native' || candidate.storageMode === 'sqlite')
+        && typeof candidate.lifecycleEpoch === 'number'
+        && (candidate.source === 'merged_refresh'
+            || candidate.source === 'post_save_replay'
+            || candidate.source === 'system_reload_replay')
+        && typeof candidate.fingerprint === 'string'
+        && typeof candidate.createdAt === 'number';
+}
+
+/**
+ * service/table/table-storage-strategy.ts — 表格存储提供者管理（仅 SQLite）
+ *
+ * 原生存储模式已移除，Provider 只存在 SqlTableService 一种实现。
+ * 保留单例/生命周期/健康状态管理，作为上层代码获取 Provider 的唯一入口。
+ */
+/** 当前活跃的 Provider 实例 */
+let currentProvider = null;
+let runtimeHealth = {
+    status: 'idle',
+    expectedMode: 'sqlite',
+    activeMode: null,
+    loadToken: 0,
+};
+let activeInitialization = null;
+let initializationEpoch_ACU = 0;
+let activeReload_ACU = null;
+let runtimeLifecycleEpoch_ACU = 0;
+/**
+ * 当前存储 runtime 生命周期 epoch（只读）。阶段 D/E 编排层用它构造
+ * CanonicalSnapshotEnvelope 并在 hydrate 前后复核身份；模块内其余路径
+ * 仍直接访问私有 runtimeLifecycleEpoch_ACU，不经过本 getter。
+ */
+function getRuntimeLifecycleEpoch_ACU() {
+    return runtimeLifecycleEpoch_ACU;
+}
+function canonicalRuntimeData_ACU(value) {
+    if (Array.isArray(value))
+        return `[${value.map(canonicalRuntimeData_ACU).join(',')}]`;
+    if (!value || typeof value !== 'object')
+        return JSON.stringify(value) ?? 'null';
+    const record = value;
+    return `{${Object.keys(record)
+        .sort()
+        .map(key => `${JSON.stringify(key)}:${canonicalRuntimeData_ACU(record[key])}`)
+        .join(',')}}`;
+}
+function captureRuntimeIdentity_ACU(provider) {
+    if (!provider)
+        return null;
+    try {
+        return {
+            mode: provider.mode,
+            data: canonicalRuntimeData_ACU(provider.getCurrentData()),
+        };
+    }
+    catch (_) {
+        return null;
+    }
+}
+function runtimeIdentityChanged_ACU(before, after) {
+    return !before || !after || before.mode !== after.mode || before.data !== after.data;
+}
+function setRuntimeHealth_ACU(next) {
+    runtimeHealth = { ...next, loadToken: runtimeHealth.loadToken + 1 };
+}
+/** 只读健康快照；绝不触发 provider 懒初始化。 */
+function getStorageRuntimeHealth_ACU() {
+    return { ...runtimeHealth };
+}
+/** 同步读路径门禁。模板渲染不能在这里异步 hydrate 或创建裸 SQLite provider。 */
+function isStorageRuntimeReadyForSyncRead_ACU() {
+    const expectedMode = getCurrentStorageMode();
+    return runtimeHealth.status === 'ready'
+        && runtimeHealth.expectedMode === expectedMode
+        && currentProvider?.mode === expectedMode
+        && currentProvider.isReady();
+}
+/**
+ * 获取当前存储提供者
+ * 如果尚未初始化，会根据当前设置自动创建
+ */
+function getStorageProvider() {
+    const mode = getCurrentStorageMode();
+    if (!currentProvider || currentProvider.mode !== mode) {
+        if (currentProvider) {
+            logDebug_ACU(`[StorageStrategy] Provider 模式变化，重建: ${currentProvider.mode} → ${mode}`);
+            currentProvider.dispose();
+        }
+        // 懒初始化：根据当前模式创建 Provider
+        currentProvider = createProvider(mode);
+        logDebug_ACU(`[StorageStrategy] 懒初始化 Provider: ${mode}`);
+    }
+    return currentProvider;
+}
+/**
+ * 获取当前已激活的 Provider，不会按设置懒初始化或重建实例。
+ * 用于需要观察 SQLite fallback 后实际运行时状态的恢复与诊断流程。
+ */
+function getActiveStorageProvider() {
+    return currentProvider;
+}
+function createStorageWaitAbortError_ACU() {
+    const error = new Error('Storage runtime readiness wait aborted.');
+    error.name = 'AbortError';
+    return error;
+}
+async function awaitStorageFlight_ACU(promise, options) {
+    const { signal, timeoutMs } = options;
+    if (signal?.aborted)
+        throw createStorageWaitAbortError_ACU();
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        let timeout = null;
+        const cleanup = () => {
+            if (timeout !== null)
+                clearTimeout(timeout);
+            signal?.removeEventListener('abort', onAbort);
+        };
+        const finish = (task) => {
+            if (settled)
+                return;
+            settled = true;
+            cleanup();
+            task();
+        };
+        const onAbort = () => finish(() => reject(createStorageWaitAbortError_ACU()));
+        signal?.addEventListener('abort', onAbort, { once: true });
+        if (Number.isFinite(timeoutMs) && Number(timeoutMs) >= 0) {
+            timeout = setTimeout(() => finish(() => reject(new Error('Storage runtime readiness wait timed out.'))), Number(timeoutMs));
+        }
+        promise.then(value => finish(() => resolve(value)), error => finish(() => reject(error)));
+    });
+}
+async function ensureStorageProviderReady_ACU(options = {}) {
+    const expectedMode = getCurrentStorageMode();
+    let activeProvider = getActiveStorageProvider();
+    // A reload owns the authoritative current-chat hydrate flight. Joining it is
+    // materially different from polling or starting a competing initialization:
+    // only the reload may publish the post-transition runtime.
+    let loadResult;
+    if (activeReload_ACU) {
+        loadResult = await awaitStorageFlight_ACU(activeReload_ACU, options);
+        activeProvider = getActiveStorageProvider();
+        if (activeProvider?.mode === expectedMode && activeProvider.isReady() && runtimeHealth.status === 'ready')
+            return activeProvider;
+    }
+    else {
+        if (activeProvider?.mode === expectedMode && activeProvider.isReady() && runtimeHealth.status === 'ready')
+            return activeProvider;
+        loadResult = await awaitStorageFlight_ACU(initStorageProvider(), options);
+    }
+    const initializedProvider = getActiveStorageProvider();
+    if (!initializedProvider || initializedProvider.mode !== expectedMode || !initializedProvider.isReady()) {
+        const reason = loadResult.failureCode || runtimeHealth.failureCode || 'unknown';
+        throw new Error(`[StorageStrategy] ${expectedMode} 存储运行时未就绪（${reason}），已阻止 SQL 写入。`);
+    }
+    return initializedProvider;
+}
+/**
+ * 初始化存储提供者（应用启动时调用）
+ * 根据当前设置创建 Provider 并执行 loadFromChat
+ */
+async function initStorageProvider(options = {}) {
+    const mode = getCurrentStorageMode();
+    if (!options.forceNewFlight && activeInitialization?.mode === mode)
+        return activeInitialization.promise;
+    const epoch = ++initializationEpoch_ACU;
+    const promise = initializeStorageProvider_ACU(mode, epoch);
+    activeInitialization = { mode, promise };
+    try {
+        return await promise;
+    }
+    finally {
+        if (activeInitialization?.promise === promise)
+            activeInitialization = null;
+    }
+}
+async function initializeStorageProvider_ACU(mode, epoch) {
+    setRuntimeHealth_ACU({ status: 'loading', expectedMode: mode, activeMode: currentProvider?.mode ?? null });
+    logDebug_ACU(`[StorageStrategy] 初始化 Provider: ${mode}`);
+    let result;
+    let nextProvider = null;
+    try {
+        nextProvider = createProvider(mode);
+        result = await loadProviderForCurrentChat_ACU(nextProvider, mode);
+        logDebug_ACU(`[StorageStrategy] 数据加载完成: loaded=${result.loaded}, source=${result.source}`);
+        if (epoch !== initializationEpoch_ACU) {
+            nextProvider.dispose();
+            return { ok: false, degraded: false, source: result.source, failureCode: 'stale_load_discarded' };
+        }
+        const failure = evaluateProviderPublishFailure_ACU(result, nextProvider, 'provider_not_ready_after_init');
+        if (failure) {
+            logError_ACU(`[StorageStrategy] SQLite 加载失败: ${failure}`);
+            nextProvider.dispose();
+            setRuntimeHealth_ACU({
+                status: 'failed', expectedMode: mode, activeMode: currentProvider?.mode ?? null,
+                failureCode: 'provider_init_failed', error: failure,
+            });
+            return { ok: false, degraded: false, source: result.source, failureCode: 'provider_init_failed', error: failure };
+        }
+        replaceActiveProvider_ACU(nextProvider);
+        setRuntimeHealth_ACU({ status: 'ready', expectedMode: mode, activeMode: mode, source: result.source });
+        return { ok: true, degraded: false, source: result.source };
+    }
+    catch (e) {
+        const error = e?.message || String(e);
+        nextProvider?.dispose();
+        if (epoch !== initializationEpoch_ACU) {
+            return { ok: false, degraded: false, failureCode: 'stale_load_discarded' };
+        }
+        logError_ACU(`[StorageStrategy] 初始化失败: ${error}`);
+        setRuntimeHealth_ACU({ status: 'failed', expectedMode: mode, activeMode: currentProvider?.mode ?? null, failureCode: 'provider_init_failed', error });
+        return { ok: false, degraded: false, failureCode: 'provider_init_failed', error };
+    }
+}
+/**
+ * 立即销毁当前 Provider 实例，释放内存数据库资源
+ * 用于换卡/换聊天时在状态重置之前立即清理旧数据库，
+ * 避免 1200ms 延迟窗口内的数据不一致问题。
+ *
+ * 销毁后 getStorageProvider() 会触发懒初始化创建新实例。
+ * 调用方应在适当时机调用 reloadStorageProvider() 重建并加载数据。
+ */
+function disposeStorageProvider() {
+    // chat 切换可能发生在候选 hydrate 未完成时；旧候选绝不能在 dispose 后重新发布。
+    invalidateInFlightInitialization_ACU();
+    runtimeLifecycleEpoch_ACU += 1;
+    activeInitialization = null;
+    activeReload_ACU = null;
+    if (currentProvider) {
+        logDebug_ACU(`[StorageStrategy] 销毁当前 Provider: ${currentProvider.mode}`);
+        currentProvider.dispose();
+        currentProvider = null;
+    }
+    setRuntimeHealth_ACU({ status: 'disposed', expectedMode: getCurrentStorageMode(), activeMode: null });
+}
+/**
+ * 受控清空当前表格运行时，专用于“当前聊天级硬清空”成功后的收尾。
+ *
+ * 此函数只清运行时：canonical JSON、独立表状态、活跃 Native/SQLite provider 与
+ * provider 持有的 NameMapper，并推进当前 scope 的 runtime revision；它绝不读取聊天、
+ * 绝不解析模板/Guide、更不会通过 getStorageProvider() 懒创建新实例。
+ *
+ * 调用方必须已完成聊天严格保存。若保存未成功就清 runtime，会制造“内存是空、磁盘仍有
+ * 数据”的假状态，因此该顺序不允许被颠倒。
+ */
+function clearTableRuntimeWithoutReload_ACU() {
+    _set_currentJsonTableData_ACU(null);
+    _set_independentTableStates_ACU({});
+    disposeStorageProvider();
+    invalidateTableRuntimeRevision_ACU({ reason: 'database_purged' });
+    logDebug_ACU('[StorageStrategy] 当前聊天表格运行时已受控清空，未触发 reload。');
+}
+/** 让已在锁外启动的初始化候选失去发布资格，避免其覆盖排队中的受控重载。 */
+function invalidateInFlightInitialization_ACU() {
+    initializationEpoch_ACU += 1;
+}
+/**
+ * 重新加载数据（楼层删除、回滚等场景）
+ * 不切换模式，只重新从聊天消息加载。
+ *
+ * 进入当前 chat/isolation 的排他维护锁，避免 hydrate 候选与并发写事务互相覆盖。
+ * 持有表写事务的调用方必须在其事务释放后再调用本函数，禁止嵌套获取同一维护锁。
+ */
+async function reloadStorageProvider() {
+    // 多个重载请求描述同一个当前 chat/isolation 的目标状态；合并它们，不能让后到请求废弃已持锁航班。
+    if (activeReload_ACU)
+        return activeReload_ACU;
+    const lifecycleEpoch = runtimeLifecycleEpoch_ACU;
+    // 排他锁可能需要等待已有写事务。先废弃锁外航班，禁止它在等待窗口发布并置换活跃 provider。
+    invalidateInFlightInitialization_ACU();
+    const promise = runTableWriteTransaction_ACU({
+        source: 'system_reload',
+        reason: 'reloadStorageProvider',
+        writeSet: [{ kind: 'all' }],
+        maintenanceMode: 'exclusive',
+    }, async () => {
+        if (lifecycleEpoch !== runtimeLifecycleEpoch_ACU) {
+            return { ok: false, degraded: false, failureCode: 'stale_load_discarded' };
+        }
+        const beforeIdentity = captureRuntimeIdentity_ACU(currentProvider);
+        const mode = getCurrentStorageMode();
+        logDebug_ACU(`[StorageStrategy] 重新加载数据: ${mode}`);
+        const result = await initStorageProvider({ forceNewFlight: true });
+        const afterIdentity = captureRuntimeIdentity_ACU(currentProvider);
+        if (runtimeIdentityChanged_ACU(beforeIdentity, afterIdentity)) {
+            invalidateTableRuntimeRevision_ACU({ reason: 'reloadStorageProvider:data_changed' });
+        }
+        else {
+            logDebug_ACU('[StorageStrategy] 重载前后运行时数据一致，不推进 RuntimeRevision。');
+        }
+        return result;
+    });
+    activeReload_ACU = promise;
+    try {
+        return await promise;
+    }
+    finally {
+        if (activeReload_ACU === promise)
+            activeReload_ACU = null;
+    }
+}
+/**
+ * 阶段 C：经身份复核的 canonical snapshot hydrate 窄入口。
+ *
+ * 与 reloadStorageProvider 的区别：不重新 replay 聊天，直接用调用链刚完成的
+ * canonical snapshot（CanonicalSnapshotEnvelope_ACU）hydrate 候选 provider。
+ *
+ * 安全边界（计划 §3.3）：
+ * - 调用开始捕获 chat/isolation/mode/lifecycle token；
+ * - hydrate 前、后各校验一次 envelope 身份；仅两次校验均通过才原子发布；
+ * - stale 候选立即 dispose，返回结构化 stale_load_discarded；
+ * - hydrate 失败沿用现有 fallback/health 语义，不复活上一聊天 provider；
+ * - 仅接受 sqlite 模式（native 不创建 SQLite provider，直接返回 ok）。
+ * - envelope 不是缓存：本函数消费后立即失效，调用方不得复用同一 envelope 重复发布。
+ */
+async function hydrateStorageProviderFromSnapshot_ACU(envelope) {
+    if (!isCanonicalSnapshotEnvelope_ACU(envelope)) {
+        return { ok: false, degraded: false, failureCode: 'provider_load_failed', error: '[StorageStrategy] 非法 canonical snapshot envelope。' };
+    }
+    const lifecycleEpoch = runtimeLifecycleEpoch_ACU;
+    const mode = getCurrentStorageMode();
+    const chatIdentity = String(currentChatFileIdentifier_ACU || '');
+    const isolationKey = getCurrentIsolationKey_ACU();
+    // 身份预检：envelope 与当前运行时目标不一致时直接丢弃，不得进入 hydrate。
+    if (mode !== envelope.storageMode
+        || lifecycleEpoch !== envelope.lifecycleEpoch
+        || chatIdentity !== envelope.chatIdentity
+        || isolationKey !== envelope.isolationKey) {
+        logDebug_ACU('[StorageStrategy] snapshot hydrate 身份预检失败，丢弃候选（stale_load_discarded）。');
+        return { ok: false, degraded: false, failureCode: 'stale_load_discarded' };
+    }
+    const nextProvider = createProvider('sqlite');
+    try {
+        const result = await nextProvider.loadFromData(envelope.data);
+        const failure = evaluateProviderPublishFailure_ACU(result, nextProvider, 'provider_not_ready_after_hydrate');
+        if (failure) {
+            nextProvider.dispose();
+            logError_ACU(`[StorageStrategy] snapshot hydrate 失败: ${failure}`);
+            setRuntimeHealth_ACU({
+                status: 'failed', expectedMode: 'sqlite', activeMode: currentProvider?.mode ?? null,
+                failureCode: 'provider_init_failed', error: failure,
+            });
+            return { ok: false, degraded: false, source: result.source, failureCode: 'provider_init_failed', error: failure };
+        }
+        // 身份复检：hydrate 期间 chat/isolation/mode/lifecycle 变化则丢弃候选。
+        if (lifecycleEpoch !== runtimeLifecycleEpoch_ACU
+            || getCurrentStorageMode() !== mode
+            || String(currentChatFileIdentifier_ACU || '') !== chatIdentity
+            || getCurrentIsolationKey_ACU() !== isolationKey) {
+            nextProvider.dispose();
+            logDebug_ACU('[StorageStrategy] snapshot hydrate 复检失败（stale_load_discarded），候选已销毁。');
+            return { ok: false, degraded: false, source: result.source, failureCode: 'stale_load_discarded' };
+        }
+        replaceActiveProvider_ACU(nextProvider);
+        setRuntimeHealth_ACU({ status: 'ready', expectedMode: 'sqlite', activeMode: 'sqlite', source: result.source });
+        if (result.source === 'empty') {
+            // 空 schema 是正常状态，只允许 debug 级记录，不输出“失败”或 fallback ERROR。
+            logDebug_ACU('[StorageStrategy] SQLite 空 schema 已就绪（normal empty snapshot），无降级。');
+        }
+        return { ok: true, degraded: false, source: result.source };
+    }
+    catch (error) {
+        const message = error?.message || String(error);
+        nextProvider.dispose();
+        if (lifecycleEpoch !== runtimeLifecycleEpoch_ACU) {
+            return { ok: false, degraded: false, failureCode: 'stale_load_discarded' };
+        }
+        logError_ACU(`[StorageStrategy] snapshot hydrate 异常: ${message}`);
+        setRuntimeHealth_ACU({ status: 'failed', expectedMode: 'sqlite', activeMode: currentProvider?.mode ?? null, failureCode: 'provider_init_failed', error: message });
+        return { ok: false, degraded: false, failureCode: 'provider_init_failed', error: message };
+    }
+}
+/**
+ * 获取当前 Provider 的模式
+ * 如果未初始化返回 null
+ */
+function getCurrentProviderMode() {
+    return currentProvider?.mode ?? null;
+}
+/**
+ * Reports a completed SQLite reload that silently degraded to the native runtime.
+ * 原生模式已移除，恒为 false。
+ */
+function didSqliteFallbackAfterReload_ACU(_expectedModeBeforeReload) {
+    return false;
+}
+// ═══════════════════════════════════════════════════════════════
+// 内部工具函数
+// ═══════════════════════════════════════════════════════════════
+/** 根据模式创建 Provider 实例（原生模式已移除，恒为 SQLite） */
+function createProvider(_mode) {
+    return new SqlTableService();
+}
+async function loadProviderForCurrentChat_ACU(provider, _mode) {
+    const replay = await loadOrCreateJsonTableFromChatHistory_ACU();
+    if (typeof provider.loadFromData !== 'function') {
+        throw new Error('[StorageStrategy] SQLite provider 未实现 canonical snapshot hydrate。');
+    }
+    return provider.loadFromData(replay.data || null);
+}
+/**
+ * 阶段 A：统一加载结果发布判定（冷初始化、模式切换、snapshot hydrate 共用）。
+ *
+ * 失败 = `result.error` 存在（优先保留 Provider 原始错误），或 Provider 未通过
+ * `isReady()` 后置条件（生成稳定错误码，禁止发布裸/半初始化 SQLite，杜绝 `unknown`）。
+ * 空状态（`loaded=false/source=empty` 且无 error）不是失败：只要 Provider ready，
+ * 无论 `loaded` 为 true/false 都可以发布。
+ *
+ * @param notReadyCode 无 error 但 Provider not-ready 时使用的稳定错误码（区分调用路径）。
+ * @returns 失败信息（非空则不得发布候选）；可发布时返回 null。
+ */
+function evaluateProviderPublishFailure_ACU(result, provider, notReadyCode) {
+    if (result.error)
+        return result.error;
+    if (!provider.isReady())
+        return notReadyCode;
+    return null;
+}
+function replaceActiveProvider_ACU(nextProvider) {
+    const previousProvider = currentProvider;
+    currentProvider = nextProvider;
+    previousProvider?.dispose();
+}
+
+/**
+ * Resolves user-facing read SQL against the published runtime schema.
+ *
+ * ITableStorageProvider#getCurrentData() is intentionally not called here: the
+ * SQLite implementation exports the engine and writes currentJsonTableData_ACU
+ * as a side effect. Calling it from a read resolver would both mutate global
+ * state and erase the very mismatch this boundary is meant to diagnose. Runtime
+ * publication validates schema before marking the provider ready, so the
+ * published snapshot is the only side-effect-free canonical source available to
+ * synchronous read callers.
+ */
+function resolveCurrentRuntimeReadSql_ACU(sql) {
+    const mapper = getNameMapper();
+    return resolveReadQuerySql_ACU(sql, currentJsonTableData_ACU, mapper.translateSql.bind(mapper));
+}
+
+const FORBIDDEN_SQL_KEYWORDS_ACU = new Set([
+    'ALTER', 'ANALYZE', 'ATTACH', 'BEGIN', 'COMMIT', 'CREATE', 'DELETE', 'DETACH',
+    'DROP', 'END', 'INSERT', 'REINDEX', 'RELEASE', 'REPLACE', 'ROLLBACK', 'SAVEPOINT',
+    'TRUNCATE', 'UPDATE', 'VACUUM',
+]);
+const ALLOWED_PRAGMAS_ACU = new Set([
+    'table_info', 'table_xinfo', 'index_list', 'index_info', 'index_xinfo', 'foreign_key_list',
+]);
+function stripSqlCommentsAndStrings_ACU$1(sql) {
+    let result = '';
+    let index = 0;
+    while (index < sql.length) {
+        const char = sql[index];
+        const next = sql[index + 1];
+        if (char === '-' && next === '-') {
+            index += 2;
+            while (index < sql.length && sql[index] !== '\n')
+                index++;
+            result += ' ';
+            continue;
+        }
+        if (char === '/' && next === '*') {
+            index += 2;
+            while (index < sql.length && !(sql[index] === '*' && sql[index + 1] === '/'))
+                index++;
+            index = Math.min(sql.length, index + 2);
+            result += ' ';
+            continue;
+        }
+        if (char === "'" || char === '"' || char === '`') {
+            const quote = char;
+            index++;
+            while (index < sql.length) {
+                if (sql[index] === quote) {
+                    if (sql[index + 1] === quote) {
+                        index += 2;
+                        continue;
+                    }
+                    index++;
+                    break;
+                }
+                index++;
+            }
+            result += ' ';
+            continue;
+        }
+        result += char;
+        index++;
+    }
+    return result;
+}
+function hasMultipleStatements_ACU(sql) {
+    const stripped = stripSqlCommentsAndStrings_ACU$1(sql).trim();
+    const withoutTrailingTerminator = stripped.replace(/;\s*$/, '');
+    return withoutTrailingTerminator.includes(';');
+}
+function validateReadOnlySql_ACU(sql) {
+    const source = String(sql || '').trim();
+    if (!source)
+        return { valid: false, reason: 'empty_sql' };
+    if (hasMultipleStatements_ACU(source))
+        return { valid: false, reason: 'multiple_statements' };
+    const normalized = stripSqlCommentsAndStrings_ACU$1(source).replace(/;\s*$/, '').trim();
+    const tokens = normalized.toUpperCase().match(/[A-Z_]+/g) || [];
+    if (tokens.some(token => FORBIDDEN_SQL_KEYWORDS_ACU.has(token))) {
+        return { valid: false, reason: 'write_or_maintenance_statement' };
+    }
+    const pragmaMatch = normalized.match(/^PRAGMA\s+([A-Za-z_][\w]*)\s*(?:\(([^)]*)\))?\s*$/i);
+    if (pragmaMatch) {
+        if (!ALLOWED_PRAGMAS_ACU.has(pragmaMatch[1].toLowerCase()))
+            return { valid: false, reason: 'pragma_not_allowed' };
+        if (!String(pragmaMatch[2] || '').trim())
+            return { valid: false, reason: 'pragma_argument_required' };
+        if (/=/.test(normalized))
+            return { valid: false, reason: 'pragma_assignment_not_allowed' };
+        return { valid: true };
+    }
+    if (/^EXPLAIN\s+(?:QUERY\s+PLAN\s+)?(?:SELECT\b|WITH\b)/i.test(normalized))
+        return { valid: true };
+    if (/^(?:SELECT\b|WITH\b)/i.test(normalized))
+        return { valid: true };
+    return { valid: false, reason: 'statement_not_read_only' };
+}
+/** Shared read-path classifier. Callers that need a diagnostic should use validateReadOnlySql_ACU directly. */
+function isReadOnlySqlStatement_ACU(sql) {
+    return validateReadOnlySql_ACU(sql).valid;
+}
+
+/**
+ * service/runtime/template-vars/sql-query-var.ts
+ * SQL 查询模板变量 — ORM 风格查询构建器 + 原生 SQL 兜底 + 值替换
+ *
+ * ORM 风格语法：
+ *   {[db.表名.where("列名", "值").get("列名")]}
+ *   {[db.表名.where("列名", ">", 数值).count()]}
+ *   {[db.表名.all()]}
+ *
+ * 原生 SQL 兜底：
+ *   {[sql "SELECT 列名 FROM 表名 WHERE 条件"]}
+ */
+// ═══════════════════════════════════════════════════════════════
+// 模板变量 SQL/ORM 表达式安全校验（H1/H2 加固）
+// ═══════════════════════════════════════════════════════════════
+/** 原始 SQL 的只读前置校验（翻译前）。 */
+function isTemplateSqlReadOnly_ACU(sql) {
+    const result = validateReadOnlySql_ACU(sql);
+    if (!result.valid) {
+        logWarn_ACU(`[模板变量] 拒绝执行非只读 SQL: ${String(sql).slice(0, 120)} (${result.reason})`);
+    }
+    return result.valid;
+}
+// 安全 ORM/条件表达式结构白名单：仅允许方法链调用（db.标识符(.标识符(参数))*) 与
+// 末尾比较（> 3 / == "x" 等）。字符串字面量先替换为占位，黑名单模式再兜底。
+const DB_EXPR_BLACKLIST_RE_ACU = /constructor|__proto__|prototype|\beval\b|\bfetch\b|\bFunction\b|\brequire\b|\bimport\b|\bnew\s+\w|=>|;|globalThis|window\.|document\.|\bprocess\b|alert|confirm|prompt|\.open\(/gi;
+const DB_EXPR_CHAIN_RE_ACU = /^db(\.[A-Za-z\u4e00-\u9fa5_$][\w\u4e00-\u9fa5$]*(?:\([^()]*\)|\[[^\[\]]*\])?)+$/;
+const DB_EXPR_WITH_COMPARE_RE_ACU = /^db(\.[A-Za-z\u4e00-\u9fa5_$][\w\u4e00-\u9fa5$]*(?:\([^()]*\)|\[[^\[\]]*\])?)*\s*(?:===|==|!==|!=|>=|<=|>|<|&&|\|\||!)\s*[^()\[\]]+$/;
+function isSafeDbExpression_ACU(expr) {
+    if (!expr || typeof expr !== 'string')
+        return false;
+    const trimmed = expr.trim();
+    if (!trimmed.startsWith('db.'))
+        return false;
+    const sanitized = trimmed.replace(/'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"/g, '""');
+    // 全局正则 .test() 有 lastIndex 状态：每次测试前重置，避免上次匹配末尾导致后续表达式绕过黑名单
+    DB_EXPR_BLACKLIST_RE_ACU.lastIndex = 0;
+    if (DB_EXPR_BLACKLIST_RE_ACU.test(sanitized))
+        return false;
+    return DB_EXPR_CHAIN_RE_ACU.test(sanitized) || DB_EXPR_WITH_COMPARE_RE_ACU.test(sanitized);
+}
+// ═══════════════════════════════════════════════════════════════
+// 变量系统 — 存储 {[db...as X]} / {[sql...as X]} 的结果
+// ═══════════════════════════════════════════════════════════════
+/** 模块级变量存储（每次 replaceDbSqlVariables 调用时重置） */
+let _dbSqlVars = {};
+let lastBlockedQueryKey_ACU = '';
+function resolveTemplateReadSql_ACU(sql) {
+    const mapper = getNameMapper();
+    return resolveReadQuerySql_ACU(sql, currentJsonTableData_ACU, mapper.translateSql.bind(mapper)).sql;
+}
+/**
+ * 模板渲染是同步路径，绝不能为了一个 SELECT 在这里创建未 hydrate 的 SQLite provider。
+ * 未就绪时 fail-closed，避免中文展示名被空 NameMapper 原样下发给 SQLite。
+ */
+function isTemplateQueryRuntimeReady_ACU(source) {
+    if (!isStorageRuntimeReadyForSyncRead_ACU()) {
+        const health = getStorageRuntimeHealth_ACU();
+        const key = `${health.loadToken}:${health.status}:${source}`;
+        if (lastBlockedQueryKey_ACU !== key) {
+            lastBlockedQueryKey_ACU = key;
+            logWarn_ACU(`[SQL][readiness] 运行时未就绪，已跳过${source}查询: status=${health.status}, expected=${health.expectedMode}, active=${health.activeMode || 'none'}, code=${health.failureCode || 'none'}`);
+        }
+        return false;
+    }
+    const mapperStatus = getGlobalNameMapperStatus_ACU();
+    if (!mapperStatus.ready) {
+        const health = getStorageRuntimeHealth_ACU();
+        const key = `${health.loadToken}:mapper:${mapperStatus.binding}:${source}`;
+        if (lastBlockedQueryKey_ACU !== key) {
+            lastBlockedQueryKey_ACU = key;
+            if (mapperStatus.binding === 'empty_schema') {
+                // 新聊天首次填表前 runtime 就是空的，没有表可查。这是预期状态，
+                // 不能按异常反复 WARN，否则会掩盖真正的 mapper 丢失。
+                logDebug_ACU(`[SQL][readiness] 运行时尚无表结构，已跳过${source}查询。`);
+            }
+            else {
+                logWarn_ACU(`[SQL][readiness] NameMapper 未就绪，已跳过${source}查询。`);
+            }
+        }
+        return false;
+    }
+    return true;
+}
+/** 获取变量值（供外部条件求值使用） */
+function getDbSqlVariable(name) {
+    if (_dbSqlVars.hasOwnProperty(name))
+        return _dbSqlVars[name];
+    return null;
+}
+/** 清空变量存储（每轮处理开始时调用） */
+function clearDbSqlVariables() {
+    _dbSqlVars = {};
+}
+/** 获取所有变量的快照（调试用） */
+function getDbSqlVariableSnapshot() {
+    return { ..._dbSqlVars };
+}
+class TableQueryBuilder {
+    constructor(tableName, options = {}) {
+        this.conditions = [];
+        this._orGroups = [];
+        this._orderBy = null;
+        this._limit = null;
+        this._groupBy = null;
+        this._having = null;
+        this._distinct = false;
+        this._offset = null;
+        // 通过 NameMapper 解析表名（中文→英文）
+        const mapper = getNameMapper();
+        this.tableName = mapper.resolveTableName(tableName);
+        this.options = options;
+    }
+    /**
+     * 添加 WHERE 条件
+     * 支持两种调用方式：
+     *   where("列名", "值")        → 列名 = '值'
+     *   where("列名", ">", 数值)   → 列名 > 数值
+     */
+    where(column, valueOrOperator, value) {
+        const mapper = getNameMapper();
+        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
+        if (value !== undefined) {
+            // 三参数形式：where("列名", ">", 数值)——operator 白名单校验（C1），防止 operator 注入任意 SQL
+            const operator = String(valueOrOperator);
+            if (!/^(=|!=|<>|<|<=|>|>=|LIKE|NOT LIKE|IN|NOT IN|IS|IS NOT)$/i.test(operator.trim())) {
+                throw new Error(`[ORM] where 运算符不合法: ${operator}`);
+            }
+            this.conditions.push({ column: resolvedColumn, operator, value });
+        }
+        else {
+            // 两参数形式：where("列名", "值")
+            this.conditions.push({ column: resolvedColumn, operator: '=', value: valueOrOperator });
+        }
+        return this;
+    }
+    /**
+     * 添加 OR WHERE 条件组
+     * 将当前 AND 条件组保存，开始新的 OR 分支
+     *   orWhere("列名", "值")        → OR 列名 = '值'
+     *   orWhere("列名", ">", 数值)   → OR 列名 > 数值
+     */
+    orWhere(column, valueOrOperator, value) {
+        // 将当前 AND 条件组保存为一个 OR 分支
+        if (this.conditions.length > 0) {
+            this._orGroups.push([...this.conditions]);
+            this.conditions = [];
+        }
+        // 添加新条件到新的 AND 组
+        return this.where(column, valueOrOperator, value);
+    }
+    /**
+     * IN 查询
+     *   whereIn("列名", [值1, 值2, 值3])  → 列名 IN ('值1', '值2', '值3')
+     */
+    whereIn(column, values) {
+        const mapper = getNameMapper();
+        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
+        if (!values || values.length === 0) {
+            // 空数组：永假条件
+            this.conditions.push({ column: '1', operator: '=', value: 0 });
+        }
+        else {
+            const escaped = values.map(v => escapeParam(v)).join(', ');
+            // 用特殊 operator 标记 IN 查询，_buildSelect 中特殊处理
+            this.conditions.push({ column: resolvedColumn, operator: '__IN__', value: escaped });
+        }
+        return this;
+    }
+    /**
+     * BETWEEN 查询
+     *   whereBetween("列名", 10, 50)  → 列名 BETWEEN 10 AND 50
+     */
+    whereBetween(column, min, max) {
+        const mapper = getNameMapper();
+        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
+        // min > max 时自动交换
+        const actualMin = (typeof min === 'number' && typeof max === 'number' && min > max) ? max : min;
+        const actualMax = (typeof min === 'number' && typeof max === 'number' && min > max) ? min : max;
+        this.conditions.push({ column: resolvedColumn, operator: '__BETWEEN__', value: { min: actualMin, max: actualMax } });
+        return this;
+    }
+    /**
+     * 分组
+     */
+    groupBy(column) {
+        const mapper = getNameMapper();
+        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
+        this._groupBy = resolvedColumn;
+        return this;
+    }
+    /**
+     * 去重
+     */
+    distinct() {
+        this._distinct = true;
+        return this;
+    }
+    /**
+     * NOT IN 查询
+     *   whereNotIn("列名", [值1, 值2])  → 列名 NOT IN ('值1', '值2')
+     */
+    whereNotIn(column, values) {
+        const mapper = getNameMapper();
+        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
+        if (!values || values.length === 0) {
+            // 空数组：不添加条件（返回所有行）
+            return this;
+        }
+        const escaped = values.map(v => escapeParam(v)).join(', ');
+        this.conditions.push({ column: resolvedColumn, operator: '__NOT_IN__', value: escaped });
+        return this;
+    }
+    /**
+     * IS NULL 条件
+     */
+    whereNull(column) {
+        const mapper = getNameMapper();
+        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
+        this.conditions.push({ column: resolvedColumn, operator: '=', value: null });
+        return this;
+    }
+    /**
+     * IS NOT NULL 条件
+     */
+    whereNotNull(column) {
+        const mapper = getNameMapper();
+        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
+        this.conditions.push({ column: resolvedColumn, operator: '!=', value: null });
+        return this;
+    }
+    /**
+     * LIKE 模糊匹配
+     *   whereLike("列名", "%关键词%")  → 列名 LIKE '%关键词%'
+     */
+    whereLike(column, pattern) {
+        const mapper = getNameMapper();
+        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
+        this.conditions.push({ column: resolvedColumn, operator: '__LIKE__', value: pattern });
+        return this;
+    }
+    /**
+     * HAVING 子句（配合 groupBy 使用）
+     *   having("COUNT(*) > 1")  → HAVING COUNT(*) > 1
+     */
+    having(expression) {
+        // C1：HAVING 表达式做轻量只读校验——拒绝写语句关键字/分号/子查询逃逸（片段模式，非完整 SELECT）
+        const rawExpr = String(expression || '');
+        const stripped = rawExpr.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/'[^']*'|"[^"]*"/g, ' ');
+        const tokens = stripped.toUpperCase().match(/[A-Z_]+/g) || [];
+        const forbidden = new Set(['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'REPLACE', 'TRUNCATE', 'VACUUM', 'ATTACH', 'DETACH', 'PRAGMA']);
+        if (rawExpr.includes(';') || tokens.some(t => forbidden.has(t))) {
+            throw new Error('[ORM] having 表达式包含不允许的 SQL 关键字或分号');
+        }
+        this._having = rawExpr;
+        return this;
+    }
+    /**
+     * 偏移量（配合 limit 使用，用于分页）
+     */
+    offset(n) {
+        this._offset = (typeof n === 'number' && n >= 0) ? n : 0;
+        return this;
+    }
+    /**
+     * 排序
+     */
+    orderBy(column, direction = 'ASC') {
+        const mapper = getNameMapper();
+        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
+        this._orderBy = `${resolvedColumn} ${direction}`;
+        return this;
+    }
+    /**
+     * 限制返回行数
+     */
+    limit(n) {
+        this._limit = n;
+        return this;
+    }
+    /**
+     * 获取单个值（第一行指定列）
+     */
+    get(column) {
+        const mapper = getNameMapper();
+        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
+        const sql = this._buildSelect(resolvedColumn);
+        const result = this._executeQuery(sql + ' LIMIT 1');
+        if (result.values.length === 0)
+            return null;
+        return result.values[0][0];
+    }
+    /**
+     * 获取单行（所有列）
+     */
+    first() {
+        const sql = this._buildSelect('*') + ' LIMIT 1';
+        const result = this._executeQuery(sql);
+        if (result.values.length === 0)
+            return null;
+        const row = {};
+        for (let i = 0; i < result.columns.length; i++) {
+            row[result.columns[i]] = result.values[0][i];
+        }
+        return row;
+    }
+    /**
+     * 获取某列的值列表
+     */
+    list(column) {
+        const mapper = getNameMapper();
+        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
+        const sql = this._buildSelect(resolvedColumn);
+        const result = this._executeQuery(sql);
+        return result.values.map(row => row[0]);
+    }
+    /**
+     * 获取所有行
+     */
+    all() {
+        const sql = this._buildSelect('*');
+        const result = this._executeQuery(sql);
+        return result.values.map(row => {
+            const obj = {};
+            for (let i = 0; i < result.columns.length; i++) {
+                obj[result.columns[i]] = row[i];
+            }
+            return obj;
+        });
+    }
+    /**
+     * 计数
+     */
+    count() {
+        const sql = this._buildSelect('COUNT(*)');
+        const result = this._executeQuery(sql);
+        if (result.values.length === 0)
+            return 0;
+        return Number(result.values[0][0]) || 0;
+    }
+    /**
+     * 求和
+     */
+    sum(column) {
+        const mapper = getNameMapper();
+        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
+        const sql = this._buildSelect(`SUM(${resolvedColumn})`);
+        const result = this._executeQuery(sql);
+        if (result.values.length === 0)
+            return 0;
+        return Number(result.values[0][0]) || 0;
+    }
+    /**
+     * 求平均值
+     */
+    avg(column) {
+        const mapper = getNameMapper();
+        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
+        const sql = this._buildSelect(`AVG(${resolvedColumn})`);
+        const result = this._executeQuery(sql);
+        if (result.values.length === 0)
+            return 0;
+        return Number(result.values[0][0]) || 0;
+    }
+    /**
+     * 求最大值
+     */
+    max(column) {
+        const mapper = getNameMapper();
+        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
+        const sql = this._buildSelect(`MAX(${resolvedColumn})`);
+        const result = this._executeQuery(sql);
+        if (result.values.length === 0)
+            return 0;
+        return Number(result.values[0][0]) || 0;
+    }
+    /**
+     * 求最小值
+     */
+    min(column) {
+        const mapper = getNameMapper();
+        const resolvedColumn = mapper.resolveColumnName(this.tableName, column);
+        const sql = this._buildSelect(`MIN(${resolvedColumn})`);
+        const result = this._executeQuery(sql);
+        if (result.values.length === 0)
+            return 0;
+        return Number(result.values[0][0]) || 0;
+    }
+    /**
+     * 自定义 SELECT 表达式（在查询上下文中执行任意 SQL 表达式）
+     * 语法：db.背包物品表.where('类别', '武器').value("SUM(数量) * 2")
+     */
+    value(expression) {
+        const translatedExpr = resolveTemplateReadSql_ACU(expression);
+        const sql = this._buildSelect(translatedExpr);
+        const result = this._executeQuery(sql);
+        if (result.values.length === 0)
+            return null;
+        const raw = result.values[0][0];
+        if (raw === null || raw === undefined)
+            return null;
+        if (typeof raw === 'number')
+            return raw;
+        return String(raw);
+    }
+    /**
+     * 判断是否存在
+     */
+    exists() {
+        const sql = `SELECT EXISTS(${this._buildSelect('1')}) AS e`;
+        const result = this._executeQuery(sql);
+        if (result.values.length === 0)
+            return false;
+        return result.values[0][0] === 1;
+    }
+    /**
+     * 生成 SQL（调试用）
+     */
+    toSQL() {
+        return this._buildSelect('*');
+    }
+    // ═══ 内部方法 ═══
+    _buildSelect(selectExpr) {
+        const selectKeyword = this._distinct ? 'SELECT DISTINCT' : 'SELECT';
+        let sql = `${selectKeyword} ${selectExpr} FROM ${this.tableName}`;
+        // 构建 WHERE 子句（支持 OR 分组）
+        const buildAndGroup = (clauses) => {
+            return clauses.map(c => {
+                if (c.operator === '__IN__') {
+                    return `${c.column} IN (${c.value})`;
+                }
+                if (c.operator === '__NOT_IN__') {
+                    return `${c.column} NOT IN (${c.value})`;
+                }
+                if (c.operator === '__LIKE__') {
+                    return `${c.column} LIKE ${escapeParam(c.value)}`;
+                }
+                if (c.operator === '__BETWEEN__') {
+                    return `${c.column} BETWEEN ${escapeParam(c.value.min)} AND ${escapeParam(c.value.max)}`;
+                }
+                if (c.value === null) {
+                    return c.operator === '=' ? `${c.column} IS NULL` : `${c.column} IS NOT NULL`;
+                }
+                return `${c.column} ${c.operator} ${escapeParam(c.value)}`;
+            }).join(' AND ');
+        };
+        // 收集所有 OR 分组
+        const allGroups = [];
+        if (this._orGroups.length > 0) {
+            allGroups.push(...this._orGroups);
+        }
+        if (this.conditions.length > 0) {
+            allGroups.push(this.conditions);
+        }
+        if (allGroups.length > 0) {
+            if (allGroups.length === 1) {
+                sql += ` WHERE ${buildAndGroup(allGroups[0])}`;
+            }
+            else {
+                const orParts = allGroups.map(g => `(${buildAndGroup(g)})`);
+                sql += ` WHERE ${orParts.join(' OR ')}`;
+            }
+        }
+        if (this._groupBy) {
+            sql += ` GROUP BY ${this._groupBy}`;
+        }
+        if (this._having) {
+            sql += ` HAVING ${this._having}`;
+        }
+        if (this._orderBy) {
+            sql += ` ORDER BY ${this._orderBy}`;
+        }
+        if (this._limit !== null) {
+            sql += ` LIMIT ${this._limit}`;
+        }
+        else if (this._offset !== null) {
+            // SQLite 要求有 LIMIT 才能用 OFFSET，用 -1 表示无限制
+            sql += ` LIMIT -1`;
+        }
+        if (this._offset !== null) {
+            sql += ` OFFSET ${this._offset}`;
+        }
+        return sql;
+    }
+    _executeQuery(sql) {
+        if (!isTemplateQueryRuntimeReady_ACU('ORM')) {
+            if (this.options.throwOnQueryError === true)
+                throw new Error('orm_runtime_not_ready');
+            return { columns: [], values: [] };
+        }
+        try {
+            const provider = getStorageProvider();
+            const executableSql = resolveCurrentRuntimeReadSql_ACU(sql).sql;
+            const result = provider.executeQuery(executableSql, undefined, {
+                suppressErrorLog: this.options.suppressQueryErrorLog === true,
+            });
+            return { columns: result.columns, values: result.values };
+        }
+        catch (e) {
+            if (this.options.throwOnQueryError === true)
+                throw new Error('orm_query_execution_failed');
+            logWarn_ACU('[ORM] 查询执行失败: orm_query_execution_failed');
+            return { columns: [], values: [] };
+        }
+    }
+}
+// ═══════════════════════════════════════════════════════════════
+// ORM 表达式解析
+// ═══════════════════════════════════════════════════════════════
+/**
+ * 创建 db Proxy 对象
+ * 访问 db.xxx 时自动创建 TableQueryBuilder(xxx)
+ * 特殊属性名 expr/rand/calc 返回对应的静态方法
+ * 让 JS 引擎原生处理链式调用、括号嵌套、引号转义
+ */
+function createDbProxy() {
+    return new Proxy({}, {
+        get(_target, propName) {
+            // 静态方法：db.expr("SQL表达式") — 执行任意 SQL 表达式
+            if (propName === 'expr')
+                return execExpr;
+            // 静态方法：db.rand(min, max) — 生成随机整数
+            if (propName === 'rand')
+                return execRand;
+            // 静态方法：db.calc("算术表达式") — 执行含 $v: 变量引用的算术表达式
+            if (propName === 'calc')
+                return execCalc;
+            // 静态方法：db.max(值1, 值2, ...) — 取多个值中的最大值
+            if (propName === 'max')
+                return execMax;
+            // 静态方法：db.min(值1, 值2, ...) — 取多个值中的最小值
+            if (propName === 'min')
+                return execMin;
+            // 默认：创建 TableQueryBuilder
+            return new TableQueryBuilder(propName);
+        }
+    });
+}
+/**
+ * db.expr("SQL表达式") — 执行任意 SQL 表达式并返回结果
+ * 支持中文表名/列名翻译、子查询、算术运算
+ * 示例：
+ *   db.expr("3 + 5 * 2")  → 13
+ *   db.expr("(SELECT 数量 FROM 背包物品表 WHERE 物品名称='铁剑') * 2")  → 6
+ */
+function execExpr(expression) {
+    try {
+        if (!expression || typeof expression !== 'string' || !expression.trim()) {
+            logWarn_ACU('[db.expr] 空表达式');
+            return null;
+        }
+        // H1 加固：db.expr 以 SELECT 包裹校验只读（拒绝写语句/多语句）
+        if (!isTemplateSqlReadOnly_ACU(`SELECT ${expression.trim()}`))
+            return null;
+        if (!isTemplateQueryRuntimeReady_ACU('db.expr'))
+            return null;
+        const translatedExpr = resolveTemplateReadSql_ACU(expression.trim());
+        if (!isTemplateSqlReadOnly_ACU(`SELECT ${translatedExpr}`))
+            return null;
+        const sql = `SELECT ${translatedExpr}`;
+        const provider = getStorageProvider();
+        const result = provider.executeQuery(sql);
+        if (result.values.length === 0)
+            return null;
+        const val = result.values[0][0];
+        if (val === null || val === undefined)
+            return null;
+        if (typeof val === 'number')
+            return val;
+        return String(val);
+    }
+    catch (e) {
+        logError_ACU(`[db.expr] 表达式执行失败: ${expression} → ${e?.message}`);
+        return null;
+    }
+}
+/**
+ * db.rand(min, max) — 生成 min 到 max 之间的随机整数（含两端）
+ * 使用 SQLite 的 RANDOM() 函数
+ * min > max 时自动交换
+ */
+function execRand(min, max) {
+    try {
+        let lo = typeof min === 'number' ? min : parseInt(String(min), 10);
+        let hi = typeof max === 'number' ? max : parseInt(String(max), 10);
+        if (isNaN(lo) || isNaN(hi)) {
+            logWarn_ACU(`[db.rand] 参数无效: min=${min}, max=${max}`);
+            return 0;
+        }
+        if (lo > hi) {
+            const tmp = lo;
+            lo = hi;
+            hi = tmp;
+        }
+        if (!isTemplateQueryRuntimeReady_ACU('db.rand'))
+            return 0;
+        const range = hi - lo + 1;
+        const provider = getStorageProvider();
+        const result = provider.executeQuery(`SELECT ABS(RANDOM()) % ${range} + ${lo}`);
+        if (result.values.length === 0)
+            return lo;
+        return Number(result.values[0][0]) || lo;
+    }
+    catch (e) {
+        logError_ACU(`[db.rand] 随机数生成失败: ${min}-${max} → ${e?.message}`);
+        return 0;
+    }
+}
+/**
+ * db.calc("算术表达式") — 执行含 $v: 变量引用的算术表达式
+ * 先替换 $v: 引用为实际值，再通过 SQLite SELECT 执行计算
+ * 示例：
+ *   db.calc("$v:sword_count + $v:shield_count * 2")
+ *   db.calc("($v:attack - $v:defense) * $v:dice")
+ */
+function execCalc(expression) {
+    try {
+        if (!expression || typeof expression !== 'string' || !expression.trim()) {
+            logWarn_ACU('[db.calc] 空表达式');
+            return null;
+        }
+        // 替换 $v: 变量引用
+        let processed = expression.trim().replace(/\$v:([a-zA-Z_][a-zA-Z0-9_]*)/gi, (_m, refName) => {
+            if (_dbSqlVars.hasOwnProperty(refName)) {
+                return String(_dbSqlVars[refName]);
+            }
+            logWarn_ACU(`[db.calc] 引用的变量不存在: ${refName}`);
+            return 'NULL';
+        });
+        // 包含 NULL 说明有变量未找到
+        if (processed.includes('NULL')) {
+            logWarn_ACU(`[db.calc] 表达式包含未定义变量: ${expression}`);
+            return null;
+        }
+        // H1 加固：算术表达式以 SELECT 包裹校验只读
+        if (!isTemplateSqlReadOnly_ACU(`SELECT ${processed}`))
+            return null;
+        if (!isTemplateQueryRuntimeReady_ACU('db.calc'))
+            return null;
+        const provider = getStorageProvider();
+        const result = provider.executeQuery(`SELECT ${processed}`);
+        if (result.values.length === 0)
+            return null;
+        const val = Number(result.values[0][0]);
+        if (isNaN(val) || !isFinite(val)) {
+            logWarn_ACU(`[db.calc] 计算结果无效: ${expression} → ${result.values[0][0]}`);
+            return null;
+        }
+        return val;
+    }
+    catch (e) {
+        logError_ACU(`[db.calc] 表达式执行失败: ${expression} → ${e?.message}`);
+        return null;
+    }
+}
+/**
+ * db.max(值1, 值2, ...) — 取多个值中的最大值
+ * 支持 $v: 变量引用和纯数字
+ * 示例：
+ *   db.max(3, 7, 1)  → 7
+ *   db.max($v:a, $v:b, $v:c)  → 最大值
+ *   注意：在 new Function 执行时，$v: 已经被替换为实际值（如果在 {[db...]} 中使用）
+ *   但如果直接调用，需要传入数字
+ */
+function execMax(...values) {
+    try {
+        // 展平数组参数（支持 db.max([1,2,3]) 和 db.max(1,2,3) 两种形式）
+        const flat = values.flat(Infinity);
+        if (flat.length === 0) {
+            logWarn_ACU('[db.max] 参数为空');
+            return null;
+        }
+        const nums = flat.map(v => {
+            if (typeof v === 'number')
+                return v;
+            const n = Number(v);
+            return isNaN(n) ? null : n;
+        }).filter((v) => v !== null);
+        if (nums.length === 0) {
+            logWarn_ACU(`[db.max] 无有效数值参数: ${JSON.stringify(values)}`);
+            return null;
+        }
+        return Math.max(...nums);
+    }
+    catch (e) {
+        logError_ACU(`[db.max] 执行失败: ${e?.message}`);
+        return null;
+    }
+}
+/**
+ * db.min(值1, 值2, ...) — 取多个值中的最小值
+ * 支持 $v: 变量引用和纯数字
+ */
+function execMin(...values) {
+    try {
+        const flat = values.flat(Infinity);
+        if (flat.length === 0) {
+            logWarn_ACU('[db.min] 参数为空');
+            return null;
+        }
+        const nums = flat.map(v => {
+            if (typeof v === 'number')
+                return v;
+            const n = Number(v);
+            return isNaN(n) ? null : n;
+        }).filter((v) => v !== null);
+        if (nums.length === 0) {
+            logWarn_ACU(`[db.min] 无有效数值参数: ${JSON.stringify(values)}`);
+            return null;
+        }
+        return Math.min(...nums);
+    }
+    catch (e) {
+        logError_ACU(`[db.min] 执行失败: ${e?.message}`);
+        return null;
+    }
+}
+/**
+ * 解析并执行 ORM 表达式
+ * 输入: "db.重要人物表.where('姓名', '角色A').get('状态')"
+ * 输出: 执行结果字符串
+ *
+ * 通过 Proxy + new Function 让 JS 引擎直接执行链式调用，
+ * 不再手动用正则解析方法链。
+ */
+function evaluateOrmExpression(expr) {
+    try {
+        const trimmed = expr.trim();
+        if (!trimmed)
+            return '';
+        if (!isTemplateQueryRuntimeReady_ACU('ORM'))
+            return '';
+        // 确保表达式以 db. 开头
+        const fullExpr = trimmed.startsWith('db.') ? trimmed : 'db.' + trimmed;
+        // H2 加固：仅允许白名单方法链结构，拒绝任意 JS 表达式执行
+        if (!isSafeDbExpression_ACU(fullExpr)) {
+            logWarn_ACU(`[ORM] 拒绝执行非白名单表达式: ${fullExpr.slice(0, 120)}`);
+            return '';
+        }
+        const db = createDbProxy();
+        const fn = new Function('db', `return ${fullExpr}`);
+        const result = fn(db);
+        return formatResult(result);
+    }
+    catch (e) {
+        logError_ACU(`[ORM] 表达式执行失败: ${expr} → ${e?.message}`);
+        return '';
+    }
+}
+function evaluateRawSqlExpression(expr, options = {}) {
+    try {
+        let trimmed = expr.trim();
+        // 去掉 "sql " 前缀
+        if (trimmed.startsWith('sql ')) {
+            trimmed = trimmed.substring(4).trim();
+        }
+        // 去掉外层引号
+        if ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+            (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+            trimmed = trimmed.substring(1, trimmed.length - 1);
+        }
+        if (!trimmed) {
+            logWarn_ACU('[SQL] 空的 SQL 表达式');
+            return '';
+        }
+        if (!isTemplateQueryRuntimeReady_ACU('SQL')) {
+            if (options.throwOnError === true)
+                throw new Error('sql_runtime_not_ready');
+            return '';
+        }
+        // H1 加固：翻译前只读校验（翻译后二次校验在下方执行前）
+        if (!isTemplateSqlReadOnly_ACU(trimmed)) {
+            if (options.throwOnError === true)
+                throw new Error('sql_not_read_only');
+            return '';
+        }
+        // 通过 NameMapper 翻译中文名
+        const translatedSql = resolveTemplateReadSql_ACU(trimmed);
+        // H1 加固：翻译后二次校验（防中文表/列名翻译引入写语句）
+        if (!isTemplateSqlReadOnly_ACU(translatedSql)) {
+            if (options.throwOnError === true)
+                throw new Error('sql_not_read_only');
+            return '';
+        }
+        // 执行查询
+        const provider = getStorageProvider();
+        const result = provider.executeQuery(translatedSql, undefined, {
+            suppressErrorLog: options.suppressQueryErrorLog === true,
+        });
+        // 格式化结果
+        if (result.values.length === 0)
+            return '';
+        if (result.values.length === 1 && result.columns.length === 1) {
+            // 单值：直接返回
+            return String(result.values[0][0] ?? '');
+        }
+        // 多行多列：返回表格格式
+        return formatQueryResultAsText(result.columns, result.values);
+    }
+    catch (e) {
+        if (options.throwOnError === true)
+            throw new Error('sql_query_execution_failed');
+        const message = e?.message || String(e);
+        // 未建表属于预期时序（首次填表前模板 SELECT 先行），降级为 debug，避免刷 ERROR。
+        if (/no such table/i.test(message)) {
+            logDebug_ACU(`[SQL] 查询命中未建表（预期时序）: ${expr} → ${message}`);
+        }
+        else {
+            logError_ACU(`[SQL] 表达式执行失败: ${expr} → ${message}`);
+        }
+        return '';
+    }
+}
+// ═══════════════════════════════════════════════════════════════
+// {[db...]} / {[sql...]} 值替换
+// ═══════════════════════════════════════════════════════════════
+/**
+ * 替换文本中的 {[db...]} 和 {[sql...]} 模板变量
+ * 在 Random/Calc 替换之后、<if> 之前执行
+ *
+ * @param content 待处理的文本
+ * @returns 替换后的文本
+ */
+function replaceDbSqlVariables(content) {
+    if (!content || typeof content !== 'string')
+        return content || '';
+    if (!isSqliteMode())
+        return content;
+    if (!isTemplateQueryRuntimeReady_ACU('模板变量'))
+        return content;
+    // 每轮处理开始时重置变量存储
+    clearDbSqlVariables();
+    let result = content;
+    // [P1] {[db.xxx.xxx(...) as 变量名]} / {[db.xxx.xxx(...)]} — ORM 风格（含 db.expr/db.rand/db.calc/db.max/db.min 静态方法）
+    result = replaceDbExpressions(result);
+    // [P2] {[sql "..." as 变量名]} / {[sql "..."]} — 原生 SQL
+    result = replaceSqlExpressions(result);
+    // [P3] $v:变量名 — 变量引用替换
+    result = replaceVarReferences(result);
+    return result;
+}
+// ═══════════════════════════════════════════════════════════════
+// <if db="..."> / <if sql="..."> 条件求值
+// ═══════════════════════════════════════════════════════════════
+/**
+ * 求值 <if db="..."> 条件
+ * 返回布尔值：结果非零/非空/非false = true
+ *
+ * 通过 Proxy + new Function 直接执行整个表达式（含比较运算），
+ * 例如 db.重要人物表.where('阵营','敌方').count() > 3 直接返回布尔值。
+ * 纯 ORM 表达式（无比较运算）则对结果做 truthy 判断。
+ */
+function evaluateDbCondition(expression) {
+    if (!isSqliteMode())
+        return false;
+    if (!isTemplateQueryRuntimeReady_ACU('<if db>'))
+        return false;
+    try {
+        const trimmed = expression.trim();
+        if (!trimmed)
+            return false;
+        const fullExpr = trimmed.startsWith('db.') ? trimmed : 'db.' + trimmed;
+        // H2 加固：仅允许白名单方法链/比较结构
+        if (!isSafeDbExpression_ACU(fullExpr)) {
+            logWarn_ACU(`[<if db>] 拒绝执行非白名单表达式: ${fullExpr.slice(0, 120)}`);
+            return false;
+        }
+        const db = createDbProxy();
+        const fn = new Function('db', `return ${fullExpr}`);
+        const result = fn(db);
+        // 如果表达式本身包含比较运算（如 > 3），result 已经是布尔值
+        if (typeof result === 'boolean')
+            return result;
+        // 否则做 truthy 判断
+        return isTruthy(result);
+    }
+    catch (e) {
+        logWarn_ACU(`[<if db>] 条件求值失败: ${expression} → ${e?.message}`);
+        return false;
+    }
+}
+/**
+ * 求值 <if sql="..."> 条件
+ * 返回布尔值：结果非零/非空 = true
+ */
+function evaluateSqlCondition(expression) {
+    if (!isSqliteMode())
+        return false;
+    if (!isTemplateQueryRuntimeReady_ACU('<if sql>'))
+        return false;
+    try {
+        // 直接传入 SQL 表达式，不需要包引号
+        // evaluateRawSqlExpression 内部会处理 "sql " 前缀和引号剥离
+        // 但这里的 expression 来自 <if sql="...">，本身就是纯 SQL，直接执行即可
+        const rawSql = expression.trim();
+        // H1 加固：翻译前只读校验
+        if (!isTemplateSqlReadOnly_ACU(rawSql))
+            return false;
+        const translatedSql = resolveTemplateReadSql_ACU(rawSql);
+        // H1 加固：翻译后二次校验
+        if (!isTemplateSqlReadOnly_ACU(translatedSql))
+            return false;
+        const provider = getStorageProvider();
+        const result = provider.executeQuery(translatedSql);
+        if (result.values.length === 0)
+            return false;
+        return isTruthy(result.values[0][0]);
+    }
+    catch (e) {
+        logWarn_ACU(`[<if sql>] 条件求值失败: ${expression} → ${e?.message}`);
+        return false;
+    }
+}
+// ═══════════════════════════════════════════════════════════════
+// 内部工具函数
+// ═══════════════════════════════════════════════════════════════
+/**
+ * SQL 参数转义
+ */
+function escapeParam(value) {
+    if (value === null || value === undefined)
+        return 'NULL';
+    if (typeof value === 'number')
+        return String(value);
+    // 字符串：单引号转义
+    return `'${String(value).replace(/'/g, "''")}'`;
+}
+/**
+ * 格式化查询结果为文本
+ */
+function formatQueryResultAsText(columns, values) {
+    if (values.length === 0)
+        return '';
+    if (values.length === 1 && columns.length === 1) {
+        return String(values[0][0] ?? '');
+    }
+    // 多行单列：每条记录一行，避免单元格内容里的逗号造成歧义。
+    if (columns.length === 1) {
+        return values.map(row => String(row[0] ?? '')).join('\n');
+    }
+    // 多列：用表格格式
+    const lines = [];
+    for (const row of values) {
+        const parts = columns.map((col, i) => `${col}: ${row[i] ?? ''}`);
+        lines.push(parts.join(', '));
+    }
+    return lines.join('\n');
+}
+/**
+ * 格式化 ORM 结果为字符串
+ */
+function formatResult(result) {
+    if (result === null || result === undefined)
+        return '';
+    if (typeof result === 'boolean')
+        return result ? 'true' : 'false';
+    if (typeof result === 'number')
+        return String(result);
+    if (typeof result === 'string')
+        return result;
+    if (Array.isArray(result)) {
+        if (result.length === 0)
+            return '';
+        if (typeof result[0] === 'object') {
+            // Record 数组：格式化为表格
+            return result.map(obj => {
+                return Object.entries(obj).map(([k, v]) => `${k}: ${v ?? ''}`).join(', ');
+            }).join('\n');
+        }
+        return result.map(String).join(', ');
+    }
+    if (typeof result === 'object') {
+        return Object.entries(result).map(([k, v]) => `${k}: ${v ?? ''}`).join(', ');
+    }
+    return String(result);
+}
+/**
+ * 判断值是否为"真"（用于 <if> 条件判断）
+ * 非零/非空/非false = true
+ */
+function isTruthy(value) {
+    if (value === null || value === undefined || value === '')
+        return false;
+    if (value === 'false' || value === '0')
+        return false;
+    if (typeof value === 'number')
+        return value !== 0;
+    if (typeof value === 'boolean')
+        return value;
+    return true;
+}
+/**
+ * 内联替换表达式中的 $v:变量名 引用（在 ORM 表达式执行前调用）
+ * 让 db.max($v:a, $v:b) 在执行前变成 db.max(3, 5)
+ */
+function inlineVarReplace(expr) {
+    return expr.replace(/\$v:([a-zA-Z_][a-zA-Z0-9_]*)/gi, (_match, varName) => {
+        if (_dbSqlVars.hasOwnProperty(varName)) {
+            return String(_dbSqlVars[varName]);
+        }
+        logWarn_ACU(`[变量系统] 内联替换未找到变量: ${varName}`);
+        return _match;
+    });
+}
+/**
+ * 手动解析并替换文本中的 {[db.xxx]} ORM 模板变量
+ * 支持 {[db.xxx.xxx(...) as 变量名]} 语法：结果存入变量，标签替换为空字符串
+ * 使用括号深度跟踪替代正则，以正确处理嵌套方括号（如 whereIn(['值1', '值2'])）
+ */
+function replaceDbExpressions(content) {
+    const marker = '{[db.';
+    let result = '';
+    let i = 0;
+    while (i < content.length) {
+        const markerIndex = content.indexOf(marker, i);
+        if (markerIndex === -1) {
+            result += content.slice(i);
+            break;
+        }
+        // 添加 marker 之前的文本
+        result += content.slice(i, markerIndex);
+        // 从 {[ 之后开始，跟踪括号深度找到匹配的 ]}
+        const exprStart = markerIndex + 2; // 跳过 {[
+        let bracketDepth = 1; // 已经有一个 [
+        let parenDepth = 0;
+        let inSingleQuote = false;
+        let inDoubleQuote = false;
+        let j = exprStart;
+        let found = false;
+        while (j < content.length) {
+            const ch = content[j];
+            // 处理引号状态（引号内的括号不计入深度）
+            if (ch === "'" && !inDoubleQuote) {
+                inSingleQuote = !inSingleQuote;
+                j++;
+                continue;
+            }
+            if (ch === '"' && !inSingleQuote) {
+                inDoubleQuote = !inDoubleQuote;
+                j++;
+                continue;
+            }
+            if (!inSingleQuote && !inDoubleQuote) {
+                if (ch === '[') {
+                    bracketDepth++;
+                }
+                else if (ch === ']') {
+                    bracketDepth--;
+                    if (bracketDepth === 0) {
+                        if (j + 1 < content.length && content[j + 1] === '}') {
+                            // 找到了匹配的 ]}
+                            const fullExpr = content.slice(exprStart, j); // db.xxx.xxx(...) 或 db.xxx.xxx(...) as varName
+                            const endPos = j + 2; // 跳过 ]}
+                            // 检查是否有 "as 变量名" 后缀
+                            const asMatch = fullExpr.match(/^(.+?)\s+as\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*$/);
+                            try {
+                                if (asMatch) {
+                                    // 有 as：执行表达式，存入变量，标签替换为空
+                                    const ormExpr = inlineVarReplace(asMatch[1].trim());
+                                    const varName = asMatch[2];
+                                    const value = evaluateOrmExpression(ormExpr);
+                                    _dbSqlVars[varName] = isNaN(Number(value)) ? value : Number(value);
+                                    logDebug_ACU(`[变量系统] db as: ${varName} = ${value}`);
+                                    // 不输出任何内容（标签被移除）
+                                }
+                                else {
+                                    // 无 as：正常替换为查询结果
+                                    const replacement = evaluateOrmExpression(inlineVarReplace(fullExpr));
+                                    result += replacement;
+                                }
+                            }
+                            catch (e) {
+                                logWarn_ACU(`[模板变量] ORM 表达式执行失败: ${fullExpr} → ${e?.message}`);
+                            }
+                            i = endPos;
+                            found = true;
+                            break;
+                        }
+                        else {
+                            // ] 后面不是 }，这个 ] 不是结束标记，恢复深度
+                            bracketDepth++;
+                        }
+                    }
+                }
+                else if (ch === '(') {
+                    parenDepth++;
+                }
+                else if (ch === ')') {
+                    parenDepth--;
+                }
+            }
+            j++;
+        }
+        if (!found) {
+            // 没有找到匹配的 ]}，原样输出 marker
+            result += marker;
+            i = markerIndex + marker.length;
+        }
+    }
+    return result;
+}
+/**
+ * 替换 {[sql "..."]} 和 {[sql "..." as 变量名]} 模板变量
+ * 支持 as 语法：结果存入变量，标签替换为空字符串
+ */
+function replaceSqlExpressions(content) {
+    // 匹配 {[sql "..."]} 或 {[sql '...']}，可选 as 变量名
+    return content.replace(/\{\[sql\s+(["'])(.*?)\1(?:\s+as\s+([a-zA-Z_][a-zA-Z0-9_]*))?\s*\]\}/gs, (_match, _quote, sqlContent, varName) => {
+        try {
+            const value = evaluateRawSqlExpression('sql "' + sqlContent + '"');
+            if (varName) {
+                // 有 as：存入变量，标签替换为空
+                _dbSqlVars[varName] = isNaN(Number(value)) || value === '' ? value : Number(value);
+                logDebug_ACU(`[变量系统] sql as: ${varName} = ${value}`);
+                return '';
+            }
+            // 无 as：正常替换为查询结果
+            return value;
+        }
+        catch (e) {
+            logWarn_ACU(`[模板变量] SQL 表达式执行失败: ${sqlContent} → ${e?.message}`);
+            return '';
+        }
+    });
+}
+/**
+ * 替换文本中的 $v:变量名 引用
+ * 在所有标签解析完成后执行
+ * 也供 if-block-parser 在选中分支内容中替换 $v: 引用
+ */
+function replaceVarReferences(content) {
+    return content.replace(/\$v:([a-zA-Z_][a-zA-Z0-9_]*)/gi, (match, varName) => {
+        if (_dbSqlVars.hasOwnProperty(varName)) {
+            return String(_dbSqlVars[varName]);
+        }
+        logWarn_ACU(`[变量系统] 未找到变量: ${varName}`);
+        return match;
+    });
+}
+
+const ORM_CHAIN_METHODS_ACU = new Set([
+    'where', 'orWhere', 'whereIn', 'whereBetween', 'groupBy', 'distinct', 'whereNotIn',
+    'whereNull', 'whereNotNull', 'whereLike', 'orderBy', 'limit', 'offset', 'get', 'first',
+    'list', 'all', 'count', 'sum', 'avg', 'max', 'min', 'exists',
+]);
+const ORM_TERMINAL_METHODS_ACU = new Set(['get', 'first', 'list', 'all', 'count', 'sum', 'avg', 'max', 'min', 'exists']);
+function splitAgentQueryTemplateParts_ACU(content) {
+    const source = String(content || '');
+    const parts = [];
+    let cursor = 0;
+    while (cursor < source.length) {
+        const dbIndex = source.indexOf('{[db.', cursor);
+        const sqlIndex = source.indexOf('{[sql ', cursor);
+        const candidates = [dbIndex, sqlIndex].filter(index => index >= 0);
+        if (candidates.length === 0) {
+            parts.push({ kind: 'text', value: source.slice(cursor) });
+            break;
+        }
+        const start = Math.min(...candidates);
+        if (start > cursor)
+            parts.push({ kind: 'text', value: source.slice(cursor, start) });
+        let quote = '';
+        let bracketDepth = 1;
+        let end = -1;
+        for (let index = start + 2; index < source.length; index++) {
+            const char = source[index];
+            if (quote) {
+                if (char === quote && source[index - 1] !== '\\')
+                    quote = '';
+                continue;
+            }
+            if (char === "'" || char === '"' || char === '`') {
+                quote = char;
+                continue;
+            }
+            if (char === '[')
+                bracketDepth++;
+            if (char === ']') {
+                bracketDepth--;
+                if (bracketDepth === 0 && source[index + 1] === '}') {
+                    end = index + 2;
+                    break;
+                }
+            }
+        }
+        if (end < 0) {
+            parts.push({ kind: 'text', value: source.slice(start) });
+            break;
+        }
+        parts.push({ kind: 'query', value: source.slice(start, end) });
+        cursor = end;
+    }
+    return parts.length > 0 ? parts : [{ kind: 'text', value: source }];
+}
+function splitAlias_ACU(expression) {
+    const match = expression.match(/^([\s\S]*?)\s+as\s+([A-Za-z_][A-Za-z0-9_]*)\s*$/i);
+    return match ? { expression: match[1].trim(), alias: match[2] } : { expression: expression.trim(), alias: null };
+}
+function replaceLocalAliasesInExpression_ACU(expression, aliases) {
+    return expression.replace(/\$v:([A-Za-z_][A-Za-z0-9_]*)/g, (raw, name) => (aliases.has(name) ? JSON.stringify(aliases.get(name)) : raw));
+}
+function replaceLocalAliasesInText_ACU(content, aliases) {
+    return content.replace(/\$v:([A-Za-z_][A-Za-z0-9_]*)/g, (raw, name) => (aliases.has(name) ? String(aliases.get(name)) : raw));
+}
+function splitTopLevelArguments_ACU(source) {
+    const trimmed = source.trim();
+    if (!trimmed)
+        return [];
+    const result = [];
+    let start = 0;
+    let quote = '';
+    let depth = 0;
+    for (let index = 0; index < source.length; index++) {
+        const char = source[index];
+        if (quote) {
+            if (char === quote && source[index - 1] !== '\\')
+                quote = '';
+            continue;
+        }
+        if (char === "'" || char === '"') {
+            quote = char;
+            continue;
+        }
+        if (char === '[')
+            depth++;
+        if (char === ']')
+            depth--;
+        if (char === ',' && depth === 0) {
+            result.push(source.slice(start, index).trim());
+            start = index + 1;
+        }
+    }
+    if (quote || depth !== 0)
+        throw new Error('orm_argument_syntax_invalid');
+    result.push(source.slice(start).trim());
+    return result;
+}
+function parseOrmLiteral_ACU(source) {
+    const value = source.trim();
+    if (/^-?(?:\d+\.?\d*|\.\d+)$/.test(value))
+        return Number(value);
+    if (/^(?:true|false)$/i.test(value))
+        return value.toLowerCase() === 'true';
+    if (/^null$/i.test(value))
+        return null;
+    if ((value.startsWith("'") && value.endsWith("'")) || (value.startsWith('"') && value.endsWith('"'))) {
+        const quote = value[0];
+        return value.slice(1, -1)
+            .replace(new RegExp(`\\\\${quote}`, 'g'), quote)
+            .replace(/\\\\n/g, '\n')
+            .replace(/\\\\r/g, '\r')
+            .replace(/\\\\t/g, '\t')
+            .replace(/\\\\\\\\/g, '\\');
+    }
+    if (value.startsWith('[') && value.endsWith(']')) {
+        return splitTopLevelArguments_ACU(value.slice(1, -1)).map(parseOrmLiteral_ACU);
+    }
+    throw new Error('orm_literal_not_allowed');
+}
+function parseOrmChain_ACU(expression) {
+    const tableMatch = expression.match(/^db\.([^\s.()[\]{};]+)/u);
+    if (!tableMatch)
+        throw new Error('orm_table_invalid');
+    const tableName = tableMatch[1];
+    const calls = [];
+    let cursor = tableMatch[0].length;
+    while (cursor < expression.length) {
+        const methodMatch = expression.slice(cursor).match(/^\.([A-Za-z_][A-Za-z0-9_]*)\s*\(/);
+        if (!methodMatch)
+            throw new Error('orm_chain_invalid');
+        const method = methodMatch[1];
+        if (!ORM_CHAIN_METHODS_ACU.has(method))
+            throw new Error('orm_method_not_allowed');
+        const argsStart = cursor + methodMatch[0].length;
+        let quote = '';
+        let arrayDepth = 0;
+        let parenDepth = 1;
+        let end = -1;
+        for (let index = argsStart; index < expression.length; index++) {
+            const char = expression[index];
+            if (quote) {
+                if (char === quote && expression[index - 1] !== '\\')
+                    quote = '';
+                continue;
+            }
+            if (char === "'" || char === '"') {
+                quote = char;
+                continue;
+            }
+            if (char === '[')
+                arrayDepth++;
+            if (char === ']')
+                arrayDepth--;
+            if (arrayDepth === 0 && char === '(')
+                parenDepth++;
+            if (arrayDepth === 0 && char === ')') {
+                parenDepth--;
+                if (parenDepth === 0) {
+                    end = index;
+                    break;
+                }
+            }
+        }
+        if (end < 0)
+            throw new Error('orm_parenthesis_unclosed');
+        const args = splitTopLevelArguments_ACU(expression.slice(argsStart, end)).map(parseOrmLiteral_ACU);
+        calls.push({ method, args });
+        cursor = end + 1;
+    }
+    if (calls.length === 0 || !ORM_TERMINAL_METHODS_ACU.has(calls[calls.length - 1].method)) {
+        throw new Error('orm_terminal_required');
+    }
+    if (calls.slice(0, -1).some(call => ORM_TERMINAL_METHODS_ACU.has(call.method))) {
+        throw new Error('orm_terminal_must_be_last');
+    }
+    return { tableName, calls };
+}
+function evaluateAgentOrmExpression_ACU(expression) {
+    const parsed = parseOrmChain_ACU(expression);
+    let current = new TableQueryBuilder(parsed.tableName, {
+        throwOnQueryError: true,
+        suppressQueryErrorLog: true,
+    });
+    for (const call of parsed.calls) {
+        const method = current?.[call.method];
+        if (typeof method !== 'function')
+            throw new Error('orm_method_unavailable');
+        current = method.apply(current, call.args);
+    }
+    if (current === null || typeof current === 'undefined')
+        return '';
+    if (typeof current === 'string' || typeof current === 'number' || typeof current === 'boolean')
+        return String(current);
+    return JSON.stringify(current);
+}
+function extractRawSql_ACU(expression) {
+    const match = expression.match(/^sql\s+(["'])([\s\S]*)\1$/i);
+    return match ? match[2] : null;
+}
+function renderAgentReadOnlyQueryTemplates_ACU(content) {
+    const parts = splitAgentQueryTemplateParts_ACU(content);
+    const aliases = new Map();
+    let tagCount = 0;
+    let executedCount = 0;
+    let rejectedCount = 0;
+    const rendered = parts.map(part => {
+        if (part.kind === 'text') {
+            return replaceLocalAliasesInText_ACU(part.value, aliases);
+        }
+        tagCount++;
+        if (!isSqliteMode() || part.value.includes('{{')) {
+            rejectedCount++;
+            return part.value;
+        }
+        const inner = part.value.slice(2, -2).trim();
+        const { expression, alias } = splitAlias_ACU(inner);
+        try {
+            let value;
+            if (expression.startsWith('db.')) {
+                const resolved = replaceLocalAliasesInExpression_ACU(expression, aliases);
+                value = evaluateAgentOrmExpression_ACU(resolved);
+            }
+            else {
+                const rawSql = extractRawSql_ACU(expression);
+                if (rawSql === null)
+                    throw new Error('query_tag_not_supported');
+                const before = validateReadOnlySql_ACU(rawSql);
+                const mapper = getNameMapper();
+                const translated = resolveReadQuerySql_ACU(rawSql, currentJsonTableData_ACU, mapper.translateSql.bind(mapper)).sql;
+                const after = validateReadOnlySql_ACU(translated);
+                if (!before.valid || !after.valid)
+                    throw new Error(before.reason || after.reason || 'sql_not_allowed');
+                value = evaluateRawSqlExpression(`sql ${JSON.stringify(rawSql)}`, {
+                    throwOnError: true,
+                    suppressQueryErrorLog: true,
+                });
+            }
+            executedCount++;
+            if (alias) {
+                aliases.set(alias, value);
+                return '';
+            }
+            return value;
+        }
+        catch (error) {
+            rejectedCount++;
+            logWarn_ACU(`[AgentPromptSQL] query rejected; reason=${String(error?.message || 'unknown')}`);
+            return part.value;
+        }
+    }).join('');
+    logDebug_ACU(`[AgentPromptSQL] tags=${tagCount}; executed=${executedCount}; rejected=${rejectedCount}`);
+    return { content: rendered, tagCount, executedCount, rejectedCount };
+}
+
+function clonePromptSegments_ACU(value) {
+    return JSON.parse(JSON.stringify(value || []));
+}
+function normalizeAgentContextSettings_ACU(value) {
+    const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    const result = {};
+    for (const [key, fallback] of Object.entries(DEFAULT_AGENT_CONTEXT_SETTINGS_ACU)) {
+        const limits = AGENT_CONTEXT_SETTINGS_LIMITS_ACU[key];
+        const raw = Number(source[key]);
+        const base = Number.isFinite(raw) ? Math.trunc(raw) : fallback;
+        result[key] = Math.max(limits.min, Math.min(Number.MAX_SAFE_INTEGER, base));
+    }
+    return result;
+}
+function normalizeRole_ACU(value) {
+    const role = String(value || '').trim().toLowerCase();
+    return role || 'user';
+}
+function normalizeEditablePromptSegments_ACU(value, fallback) {
+    if (!Array.isArray(value))
+        return clonePromptSegments_ACU(fallback);
+    const raw = value;
+    return raw
+        .map(item => item && typeof item === 'object' ? item : null)
+        .filter(Boolean)
+        .map(item => ({
+        role: normalizeRole_ACU(item?.role),
+        content: typeof item?.content === 'string' ? item.content : '',
+        deletable: item?.deletable !== false,
+        ...(typeof item?.mainSlot === 'string' && item.mainSlot ? { mainSlot: item.mainSlot } : {}),
+        ...(item?.isMain === true ? { isMain: true } : {}),
+        ...(item?.isMain2 === true ? { isMain2: true } : {}),
+    }));
+}
+function normalizePromptSegments_ACU(value, fallback) {
+    const normalized = normalizeEditablePromptSegments_ACU(value, [])
+        .filter(item => item.content.trim());
+    return normalized.length > 0 ? normalized : clonePromptSegments_ACU(fallback);
+}
+function getDefaultAgentDecisionPromptSegments_ACU() {
+    return buildDefaultAgentDecisionPromptSegments_ACU();
+}
+function getDefaultAgentSkillifyPromptSegments_ACU() {
+    return buildDefaultAgentSkillifyPromptSegments_ACU();
+}
+function stringifyPlaceholderValue_ACU$1(value) {
+    if (typeof value === 'string')
+        return value;
+    if (value === null || typeof value === 'undefined')
+        return '';
+    try {
+        return JSON.stringify(value, null, 2);
+    }
+    catch {
+        return String(value);
+    }
+}
+function buildPlaceholderToken_ACU(content, segmentIndex, tokenIndex) {
+    for (let attempt = 0; attempt < 20; attempt++) {
+        const nonce = Math.random().toString(36).slice(2);
+        const token = `__ACU_AGENT_PLACEHOLDER_${segmentIndex}_${tokenIndex}_${nonce}__`;
+        if (!content.includes(token))
+            return token;
+    }
+    throw new Error('agent_placeholder_token_collision');
+}
+function renderAgentPromptContent_ACU(content, placeholders, segmentIndex, options) {
+    if (options.enableSqlRender !== true) {
+        return content.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (raw, key) => (Object.prototype.hasOwnProperty.call(placeholders, key) ? stringifyPlaceholderValue_ACU$1(placeholders[key]) : raw));
+    }
+    const startedAt = Date.now();
+    const tokenValues = new Map();
+    let tokenIndex = 0;
+    try {
+        const protectedContent = splitAgentQueryTemplateParts_ACU(content)
+            .map(part => {
+            if (part.kind === 'query')
+                return part.value;
+            return part.value.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (raw, key) => {
+                if (!Object.prototype.hasOwnProperty.call(placeholders, key))
+                    return raw;
+                const token = buildPlaceholderToken_ACU(content, segmentIndex, tokenIndex++);
+                tokenValues.set(token, stringifyPlaceholderValue_ACU$1(placeholders[key]));
+                return token;
+            });
+        })
+            .join('');
+        const queryResult = renderAgentReadOnlyQueryTemplates_ACU(protectedContent);
+        let restored = queryResult.content;
+        for (const [token, value] of tokenValues)
+            restored = restored.split(token).join(value);
+        logDebug_ACU(`[AgentPromptSQL] kind=${options.promptKind || 'unknown'}; segment=${segmentIndex}; tags=${queryResult.tagCount}; durationMs=${Date.now() - startedAt}; status=${queryResult.rejectedCount > 0 ? 'partial' : 'ok'}`);
+        return restored;
+    }
+    catch (error) {
+        logWarn_ACU(`[AgentPromptSQL] kind=${options.promptKind || 'unknown'}; segment=${segmentIndex}; tags=unknown; durationMs=${Date.now() - startedAt}; status=failed; reason=${String(error?.message || 'unknown')}`);
+        return content.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (raw, key) => (Object.prototype.hasOwnProperty.call(placeholders, key) ? stringifyPlaceholderValue_ACU$1(placeholders[key]) : raw));
+    }
+}
+function renderAgentPromptSegments_ACU(segments, placeholders, options = {}) {
+    return normalizePromptSegments_ACU(segments, [])
+        .map((segment, segmentIndex) => ({
+        role: normalizeRole_ACU(segment.role),
+        content: renderAgentPromptContent_ACU(segment.content, placeholders, segmentIndex, options),
+    }))
+        .filter(message => message.content.trim());
+}
+
+const AGENT_WORLDBOOK_CONFIG_COMMENT_ACU = 'TavernDB-ACU-AgentWorldbookConfig';
+function cloneDefaultAgentControl_ACU() {
+    return JSON.parse(JSON.stringify(buildDefaultAgentWorldbookControl_ACU()));
+}
+function cloneDefaultAgentSnapshot_ACU() {
+    return JSON.parse(JSON.stringify(buildDefaultAgentWorldbookControlSnapshot_ACU()));
+}
+function cloneAgentPromptTemplates_ACU(value) {
+    return JSON.parse(JSON.stringify(value));
+}
+function normalizeAgentPromptTemplates_ACU(value) {
+    const defaults = buildDefaultAgentWorldbookPromptTemplates_ACU();
+    const source = normalizeControlPatch_ACU(value);
+    return {
+        agentDecisionPromptSegments: normalizeEditablePromptSegments_ACU(source.agentDecisionPromptSegments, defaults.agentDecisionPromptSegments),
+        agentSkillifyPromptSegments: normalizeEditablePromptSegments_ACU(source.agentSkillifyPromptSegments, defaults.agentSkillifyPromptSegments),
+    };
+}
+function getAgentPromptTemplateDefaults_ACU() {
+    const plotSettings = settings_ACU.plotSettings && typeof settings_ACU.plotSettings === 'object'
+        ? settings_ACU.plotSettings
+        : {};
+    return cloneAgentPromptTemplates_ACU(normalizeAgentPromptTemplates_ACU(plotSettings.agentPromptTemplates));
+}
+function setAgentPromptTemplateDefaults_ACU(value) {
+    if (!settings_ACU.plotSettings || typeof settings_ACU.plotSettings !== 'object' || Array.isArray(settings_ACU.plotSettings))
+        return false;
+    const plotSettings = settings_ACU.plotSettings;
+    const hadPreviousTemplates = Object.prototype.hasOwnProperty.call(plotSettings, 'agentPromptTemplates');
+    const previousTemplates = plotSettings.agentPromptTemplates;
+    plotSettings.agentPromptTemplates = normalizeAgentPromptTemplates_ACU(value);
+    try {
+        if (saveSettings_ACU().saved)
+            return true;
+    }
+    catch {
+        // 保存失败时同样回滚；调用方只需要收到 false，异常不应留下内存脏写。
+    }
+    if (hadPreviousTemplates)
+        plotSettings.agentPromptTemplates = previousTemplates;
+    else
+        delete plotSettings.agentPromptTemplates;
+    return false;
+}
+function normalizeBookNameList_ACU(value) {
+    if (!Array.isArray(value))
+        return [];
+    const result = [];
+    for (const item of value) {
+        const name = String(item || '').trim();
+        if (name && !result.includes(name))
+            result.push(name);
+    }
+    return result;
+}
+function normalizeMode_ACU(value) {
+    return value === 'passive' || value === 'agent' ? value : 'disabled';
+}
+function normalizeExecutionMode_ACU(value) {
+    return value === 'sequential' ? 'sequential' : 'concurrent';
+}
+function normalizePositiveInt_ACU(value, fallback, min, max) {
+    const raw = Number(value);
+    const base = Number.isFinite(raw) ? Math.trunc(raw) : fallback;
+    const bounded = max === undefined ? Math.min(Number.MAX_SAFE_INTEGER, base) : Math.min(max, base);
+    return Math.max(min, bounded);
+}
+function normalizeControlPatch_ACU(value) {
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+function normalizeAgentWorldbookScope_ACU(value, fallback) {
+    const source = normalizeControlPatch_ACU(value);
+    if (!Object.prototype.hasOwnProperty.call(source, 'source')) {
+        return {
+            source: fallback.source,
+            manualSelection: [...fallback.manualSelection],
+        };
+    }
+    if (source.source !== 'manual')
+        return { source: 'character', manualSelection: [] };
+    return {
+        source: 'manual',
+        manualSelection: normalizeBookNameList_ACU(source.manualSelection),
+    };
+}
+function getLegacyAgentWorldbookScope_ACU() {
+    const cfg = getPlotWorldbookConfig_ACU();
+    return cfg.source === 'manual'
+        ? { source: 'manual', manualSelection: normalizeBookNameList_ACU(cfg.manualSelection) }
+        : { source: 'character', manualSelection: [] };
+}
+function isSameAgentWorldbookScope_ACU(left, right) {
+    return left.source === right.source
+        && left.manualSelection.length === right.manualSelection.length
+        && left.manualSelection.every((bookName, index) => bookName === right.manualSelection[index]);
+}
+function hasExplicitWorldbookScope_ACU(value) {
+    return Object.prototype.hasOwnProperty.call(normalizeControlPatch_ACU(value), 'worldbookScope');
+}
+function normalizeAgentWorldbookControlForCardConfig_ACU(value, promptTemplates = getAgentPromptTemplateDefaults_ACU()) {
+    const defaults = cloneDefaultAgentControl_ACU();
+    const source = normalizeControlPatch_ACU(value);
+    const mode = normalizeMode_ACU(source.mode);
+    const agentPlotExecutionMode = normalizeExecutionMode_ACU(source.agentPlotExecutionMode);
+    const contextSettings = normalizeAgentContextSettings_ACU(source.contextSettings);
+    const maxEntriesPerChannel = normalizeControlPatch_ACU(source.maxEntriesPerChannel);
+    return {
+        ...defaults,
+        enabled: mode !== 'disabled',
+        mode,
+        agentPlotExecutionMode,
+        scopeMode: 'follow_worldbook_page_selection',
+        worldbookScope: normalizeAgentWorldbookScope_ACU(source.worldbookScope, getLegacyAgentWorldbookScope_ACU()),
+        agentApiPreset: typeof source.agentApiPreset === 'string' ? source.agentApiPreset.trim() : defaults.agentApiPreset,
+        agentSkillApiPreset: typeof source.agentSkillApiPreset === 'string' ? source.agentSkillApiPreset.trim() : defaults.agentSkillApiPreset,
+        skillMetadataPolicy: 'comment_block',
+        managedEntryPrefix: typeof source.managedEntryPrefix === 'string' && source.managedEntryPrefix.trim()
+            ? source.managedEntryPrefix.trim()
+            : defaults.managedEntryPrefix,
+        finalInjectionMode: 'prompt_template',
+        restoreOnDisable: source.restoreOnDisable !== false,
+        agentDecisionConcurrency: normalizePositiveInt_ACU(source.agentDecisionConcurrency, defaults.agentDecisionConcurrency, 1),
+        maxSkillifyConcurrency: normalizePositiveInt_ACU(source.maxSkillifyConcurrency, defaults.maxSkillifyConcurrency, 1),
+        contextSettings,
+        contextSettingsConfigured: source.contextSettingsConfigured === true,
+        agentDecisionPromptSegments: normalizeEditablePromptSegments_ACU(source.agentDecisionPromptSegments, promptTemplates.agentDecisionPromptSegments),
+        agentSkillifyPromptSegments: normalizeEditablePromptSegments_ACU(source.agentSkillifyPromptSegments, promptTemplates.agentSkillifyPromptSegments),
+        maxEntriesPerChannel: {
+            plot: normalizePositiveInt_ACU(maxEntriesPerChannel.plot, defaults.maxEntriesPerChannel.plot, 1, 200),
+            tableFill: normalizePositiveInt_ACU(maxEntriesPerChannel.tableFill, defaults.maxEntriesPerChannel.tableFill, 1, 200),
+            finalGeneration: normalizePositiveInt_ACU(maxEntriesPerChannel.finalGeneration, defaults.maxEntriesPerChannel.finalGeneration, 1, 200),
+        },
+    };
+}
+function normalizeSnapshotKeys_ACU(value) {
+    if (!Array.isArray(value))
+        return [];
+    return value.map(key => String(key || '').trim()).filter(Boolean);
+}
+function hasValidWorldbookUid_ACU(uid) {
+    return uid !== null && uid !== undefined && String(uid).trim() !== '';
+}
+function isSameWorldbookUid_ACU(left, right) {
+    return hasValidWorldbookUid_ACU(left) && hasValidWorldbookUid_ACU(right) && String(left) === String(right);
+}
+function normalizeSnapshotEntry_ACU(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return null;
+    const source = value;
+    if (!hasValidWorldbookUid_ACU(source.uid))
+        return null;
+    const previousType = source.previousType === undefined || source.previousType === null ? undefined : String(source.previousType);
+    const commentHash = typeof source.commentHash === 'string' && source.commentHash.trim() ? source.commentHash.trim() : undefined;
+    return {
+        uid: source.uid,
+        ...(source.takeoverStatus === 'pending' || source.takeoverStatus === 'applied'
+            ? { takeoverStatus: source.takeoverStatus }
+            : {}),
+        previousEnabled: source.previousEnabled !== false,
+        previousKeys: normalizeSnapshotKeys_ACU(source.previousKeys),
+        previousType,
+        commentHash,
+    };
+}
+function normalizeAgentWorldbookSnapshotForCardState_ACU(value) {
+    const defaults = cloneDefaultAgentSnapshot_ACU();
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return defaults;
+    const source = value;
+    const booksSource = source.books && typeof source.books === 'object' && !Array.isArray(source.books)
+        ? source.books
+        : {};
+    const books = {};
+    for (const [rawBookName, rawEntries] of Object.entries(booksSource)) {
+        const bookName = String(rawBookName || '').trim();
+        if (!bookName || !Array.isArray(rawEntries))
+            continue;
+        const entries = rawEntries
+            .map(entry => normalizeSnapshotEntry_ACU(entry))
+            .filter(Boolean);
+        if (entries.length > 0)
+            books[bookName] = entries;
+    }
+    return {
+        active: source.active === true,
+        selectionSignature: typeof source.selectionSignature === 'string' ? source.selectionSignature.trim() : defaults.selectionSignature,
+        createdAt: Number.isFinite(Number(source.createdAt)) ? Number(source.createdAt) : defaults.createdAt,
+        books,
+    };
+}
+function normalizeAgentWorldbookStateIdentity_ACU(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return undefined;
+    const source = value;
+    const marker = typeof source.marker === 'string' && source.marker.trim()
+        ? source.marker.trim()
+        : '';
+    if (marker !== AGENT_WORLDBOOK_CONFIG_COMMENT_ACU)
+        return undefined;
+    const stateEntryUid = hasValidWorldbookUid_ACU(source.stateEntryUid) ? source.stateEntryUid : undefined;
+    const hostBookName = typeof source.hostBookName === 'string' && source.hostBookName.trim()
+        ? source.hostBookName.trim()
+        : undefined;
+    return { marker, ...(stateEntryUid !== undefined ? { stateEntryUid } : {}), ...(hostBookName ? { hostBookName } : {}) };
+}
+function buildAgentWorldbookStateIdentity_ACU(hostBookName, stateEntryUid) {
+    return {
+        marker: AGENT_WORLDBOOK_CONFIG_COMMENT_ACU,
+        ...(hasValidWorldbookUid_ACU(stateEntryUid) ? { stateEntryUid } : {}),
+        ...(hostBookName.trim() ? { hostBookName: hostBookName.trim() } : {}),
+    };
+}
+function buildAgentWorldbookStateMeta_ACU(control, snapshot, identity) {
+    return {
+        version: 2,
+        kind: 'agent_worldbook_state',
+        updatedAt: Date.now(),
+        ...(identity ? { identity } : {}),
+        control,
+        snapshot,
+    };
+}
+function parseAgentWorldbookStateMeta_ACU(value) {
+    const text = typeof value === 'string' ? value.trim() : '';
+    if (!text)
+        return null;
+    try {
+        const raw = JSON.parse(text);
+        if (raw.version === 2 && raw.kind === 'agent_worldbook_state') {
+            return {
+                updatedAt: Number.isFinite(Number(raw.updatedAt)) ? Number(raw.updatedAt) : 0,
+                identity: normalizeAgentWorldbookStateIdentity_ACU(raw.identity),
+                control: normalizeControlPatch_ACU(raw.control),
+                snapshot: normalizeAgentWorldbookSnapshotForCardState_ACU(raw.snapshot),
+                legacy: false,
+            };
+        }
+        if (raw.version !== 1 || raw.kind !== 'agent_worldbook_config')
+            return null;
+        const legacyMeta = {
+            version: 1,
+            kind: 'agent_worldbook_config',
+            updatedAt: Number.isFinite(Number(raw.updatedAt)) ? Number(raw.updatedAt) : 0,
+            control: normalizeControlPatch_ACU(raw.control),
+        };
+        return {
+            updatedAt: legacyMeta.updatedAt,
+            control: legacyMeta.control,
+            snapshot: cloneDefaultAgentSnapshot_ACU(),
+            legacy: true,
+        };
+    }
+    catch {
+        return null;
+    }
+}
+function findAgentConfigEntries_ACU(entries) {
+    return (Array.isArray(entries) ? entries : [])
+        .filter(entry => String(entry?.comment || '').trim() === AGENT_WORLDBOOK_CONFIG_COMMENT_ACU);
+}
+function buildAgentStateEntryCandidates_ACU(entries, hostBookName) {
+    const result = [];
+    for (const entry of Array.isArray(entries) ? entries : []) {
+        const meta = parseAgentWorldbookStateMeta_ACU(entry?.content);
+        const legacyCommentMatch = String(entry?.comment || '').trim() === AGENT_WORLDBOOK_CONFIG_COMMENT_ACU;
+        if (!meta && !legacyCommentMatch)
+            continue;
+        if (!meta)
+            continue;
+        let score = 10;
+        if (!meta.legacy)
+            score += 20;
+        if (legacyCommentMatch)
+            score += 5;
+        if (meta.identity?.hostBookName && meta.identity.hostBookName === hostBookName)
+            score += 30;
+        if (isSameWorldbookUid_ACU(meta.identity?.stateEntryUid, entry?.uid))
+            score += 50;
+        if (meta.identity && !isSameWorldbookUid_ACU(meta.identity.stateEntryUid, entry?.uid) && hasValidWorldbookUid_ACU(meta.identity.stateEntryUid))
+            score -= 40;
+        result.push({ entry, meta, score, legacyCommentMatch });
+    }
+    return result.sort((left, right) => right.score - left.score || Number(right.meta.updatedAt || 0) - Number(left.meta.updatedAt || 0));
+}
+function findAgentStateEntry_ACU(entries, hostBookName) {
+    const candidates = buildAgentStateEntryCandidates_ACU(entries, hostBookName);
+    const selected = candidates[0];
+    return {
+        entry: selected?.entry || null,
+        meta: selected?.meta || null,
+        duplicateCount: Math.max(0, candidates.length - (selected ? 1 : 0)),
+    };
+}
+function findCreatedAgentStateEntry_ACU(entries, hostBookName, createdAfter) {
+    const candidates = buildAgentStateEntryCandidates_ACU(entries, hostBookName)
+        .filter(candidate => candidate.entry?.uid !== null && candidate.entry?.uid !== undefined);
+    return candidates.find(candidate => Number(candidate.meta.updatedAt || 0) >= createdAfter)?.entry
+        || candidates[0]?.entry
+        || null;
+}
+function buildConfigEntryPayload_ACU(control, snapshot, hostBookName, existing, stateEntryUid) {
+    const resolvedUid = hasValidWorldbookUid_ACU(stateEntryUid) ? stateEntryUid : existing?.uid;
+    const identity = buildAgentWorldbookStateIdentity_ACU(hostBookName, resolvedUid);
+    return {
+        ...(existing || {}),
+        comment: typeof existing?.comment === 'string' && existing.comment.trim() ? existing.comment : AGENT_WORLDBOOK_CONFIG_COMMENT_ACU,
+        content: JSON.stringify(buildAgentWorldbookStateMeta_ACU(control, snapshot, identity), null, 2),
+        keys: Array.isArray(existing?.keys) ? existing.keys : [],
+        enabled: false,
+        type: 'keyword',
+        order: Number.isFinite(Number(existing?.order)) ? Number(existing.order) : 10000,
+        prevent_recursion: true,
+    };
+}
+function stringifyStableJsonValue_ACU(value) {
+    if (value === null || typeof value !== 'object')
+        return JSON.stringify(value);
+    if (Array.isArray(value))
+        return `[${value.map(item => stringifyStableJsonValue_ACU(item)).join(',')}]`;
+    const record = value;
+    return `{${Object.keys(record).sort().map(key => `${JSON.stringify(key)}:${stringifyStableJsonValue_ACU(record[key])}`).join(',')}}`;
+}
+function isSameStableJsonValue_ACU(left, right) {
+    return stringifyStableJsonValue_ACU(left) === stringifyStableJsonValue_ACU(right);
+}
+function isPartialNextScopeWrite_ACU(persistedControl, persistedSnapshot, currentPersistedControl, nextPersistedControl, nextSnapshot) {
+    if (!isSameStableJsonValue_ACU(persistedSnapshot, nextSnapshot)
+        || !isSameStableJsonValue_ACU(persistedControl.worldbookScope, nextPersistedControl.worldbookScope))
+        return false;
+    return Object.entries(persistedControl).every(([key, value]) => {
+        const hasNext = Object.prototype.hasOwnProperty.call(nextPersistedControl, key);
+        const hasCurrent = Object.prototype.hasOwnProperty.call(currentPersistedControl, key);
+        return (hasNext && isSameStableJsonValue_ACU(value, nextPersistedControl[key]))
+            || (hasCurrent && isSameStableJsonValue_ACU(value, currentPersistedControl[key]));
+    });
+}
+async function confirmAgentWorldbookScopeWrite_ACU(hostBookName, entryUid, currentPersistedControl, nextPersistedControl, currentSnapshot, nextSnapshot) {
+    try {
+        const entries = await getLorebookEntries_ACU(hostBookName);
+        const entry = (entries || []).find(candidate => isSameWorldbookUid_ACU(candidate?.uid, entryUid));
+        if (!entry)
+            return 'missing';
+        const meta = parseAgentWorldbookStateMeta_ACU(entry.content);
+        if (!meta)
+            return 'unknown';
+        const persistedControl = normalizeControlPatch_ACU(meta.control);
+        const persistedSnapshot = normalizeAgentWorldbookSnapshotForCardState_ACU(meta.snapshot);
+        if (isSameStableJsonValue_ACU(persistedControl, nextPersistedControl)
+            && isSameStableJsonValue_ACU(persistedSnapshot, nextSnapshot))
+            return 'next';
+        if (isSameStableJsonValue_ACU(persistedControl, currentPersistedControl)
+            && isSameStableJsonValue_ACU(persistedSnapshot, currentSnapshot))
+            return 'current';
+        if (isPartialNextScopeWrite_ACU(persistedControl, persistedSnapshot, currentPersistedControl, nextPersistedControl, nextSnapshot))
+            return 'partial_next';
+        return 'unknown';
+    }
+    catch {
+        return 'unknown';
+    }
+}
+function getPlotWorldbookConfig_ACU() {
+    const plotSettings = settings_ACU.plotSettings && typeof settings_ACU.plotSettings === 'object'
+        ? settings_ACU.plotSettings
+        : {};
+    const cfg = plotSettings.plotWorldbookConfig;
+    return cfg && typeof cfg === 'object' && !Array.isArray(cfg) ? cfg : {};
+}
+function getManualPlotWorldbookNames_ACU() {
+    const cfg = getPlotWorldbookConfig_ACU();
+    return normalizeBookNameList_ACU(cfg.manualSelection);
+}
+async function resolveAgentWorldbookScopeBookNamesFromScope_ACU(scope) {
+    if (scope.source === 'manual')
+        return normalizeBookNameList_ACU(scope.manualSelection);
+    const binding = await getCurrentCharacterWorldbookBinding_ACU();
+    return binding.orderedNames.slice();
+}
+async function resolveAgentWorldbookScopeBookNames_ACU(scope, readContext) {
+    const resolvedScope = scope || (await readAgentWorldbookStateFromWorldbooks_ACU(readContext)).control.worldbookScope;
+    return resolveAgentWorldbookScopeBookNamesFromScope_ACU(resolvedScope);
+}
+async function resolveAgentWorldbookBootstrapBookNames_ACU() {
+    const binding = await getCurrentCharacterWorldbookBinding_ACU();
+    return normalizeBookNameList_ACU([
+        ...binding.orderedNames,
+        ...getManualPlotWorldbookNames_ACU(),
+    ]);
+}
+async function resolveAgentWorldbookHostBookForScope_ACU(scope) {
+    const binding = await getCurrentCharacterWorldbookBinding_ACU();
+    if (binding.primary)
+        return binding.primary;
+    if (scope.source === 'manual')
+        return scope.manualSelection[0] || '';
+    return '';
+}
+async function resolveAgentWorldbookConfigHostBook_ACU() {
+    const state = await readAgentWorldbookStateFromWorldbooks_ACU();
+    return state.bookName || resolveAgentWorldbookHostBookForScope_ACU(state.control.worldbookScope);
+}
+function getLegacyAgentWorldbookControl_ACU() {
+    const plotSettings = settings_ACU.plotSettings && typeof settings_ACU.plotSettings === 'object'
+        ? settings_ACU.plotSettings
+        : {};
+    const legacy = plotSettings.agentWorldbookControl;
+    if (!legacy || typeof legacy !== 'object' || Array.isArray(legacy))
+        return null;
+    return normalizeAgentWorldbookControlForCardConfig_ACU(legacy);
+}
+async function readWorldbookConfigEntry_ACU(bookName, readContext) {
+    const entries = await getAgentRuntimeLorebookEntries_ACU(bookName, readContext);
+    const result = findAgentStateEntry_ACU(entries, bookName);
+    if (!result.entry || !result.meta)
+        return { bookName, entry: null, duplicateCount: result.duplicateCount, control: null, snapshot: null };
+    return {
+        bookName,
+        entry: result.entry,
+        duplicateCount: result.duplicateCount,
+        control: normalizeAgentWorldbookControlForCardConfig_ACU(result.meta.control),
+        snapshot: normalizeAgentWorldbookSnapshotForCardState_ACU(result.meta.snapshot),
+    };
+}
+async function readAgentWorldbookStateFromWorldbooks_ACU(readContext) {
+    const scanBookNames = await resolveAgentWorldbookBootstrapBookNames_ACU();
+    const defaultScope = getLegacyAgentWorldbookScope_ACU();
+    const writableBookName = await resolveAgentWorldbookHostBookForScope_ACU(defaultScope);
+    for (const bookName of scanBookNames) {
+        let result;
+        try {
+            result = await readWorldbookConfigEntry_ACU(bookName, readContext);
+        }
+        catch (error) {
+            if (isLorebookNotFoundError_ACU(error))
+                continue;
+            throw error;
+        }
+        if (!result.control)
+            continue;
+        return {
+            control: result.control,
+            snapshot: result.snapshot || cloneDefaultAgentSnapshot_ACU(),
+            source: 'worldbook',
+            bookName: result.bookName,
+            entryUid: result.entry?.uid,
+            duplicateCount: result.duplicateCount,
+            writableBookName,
+        };
+    }
+    const legacy = getLegacyAgentWorldbookControl_ACU();
+    if (legacy) {
+        return {
+            control: legacy,
+            snapshot: cloneDefaultAgentSnapshot_ACU(),
+            source: 'legacy_settings',
+            bookName: '',
+            duplicateCount: 0,
+            writableBookName,
+            reason: 'legacy_settings_fallback',
+        };
+    }
+    return {
+        control: normalizeAgentWorldbookControlForCardConfig_ACU({}),
+        snapshot: cloneDefaultAgentSnapshot_ACU(),
+        source: 'default',
+        bookName: '',
+        duplicateCount: 0,
+        writableBookName,
+        reason: writableBookName ? 'worldbook_config_not_found' : 'no_config_host_book',
+    };
+}
+async function readAgentWorldbookControlFromWorldbooks_ACU(readContext) {
+    const state = await readAgentWorldbookStateFromWorldbooks_ACU(readContext);
+    return {
+        control: state.control,
+        source: state.source,
+        bookName: state.bookName,
+        entryUid: state.entryUid,
+        duplicateCount: state.duplicateCount,
+        writableBookName: state.writableBookName,
+        reason: state.reason,
+    };
+}
+async function writeAgentWorldbookStateToWorldbook_ACU(patch) {
+    const current = await readAgentWorldbookStateFromWorldbooks_ACU();
+    const requestedControlPatch = normalizeControlPatch_ACU(patch?.control);
+    let nextControl = normalizeAgentWorldbookControlForCardConfig_ACU({
+        ...current.control,
+        ...requestedControlPatch,
+    });
+    let nextSnapshot = patch?.snapshot === undefined
+        ? normalizeAgentWorldbookSnapshotForCardState_ACU(current.snapshot)
+        : normalizeAgentWorldbookSnapshotForCardState_ACU(patch.snapshot);
+    const changesScope = patch?.control !== undefined
+        && hasExplicitWorldbookScope_ACU(patch.control)
+        && !isSameAgentWorldbookScope_ACU(current.control.worldbookScope, nextControl.worldbookScope);
+    const hostBookName = current.bookName || await resolveAgentWorldbookHostBookForScope_ACU(nextControl.worldbookScope);
+    if (!hostBookName) {
+        return {
+            updated: false,
+            bookName: '',
+            reason: 'no_config_host_book',
+            control: current.control,
+            snapshot: current.snapshot,
+        };
+    }
+    // 在恢复旧范围前完成配置宿主的读取和定位。这样宿主读取失败不会发生物理 restore，
+    // active snapshot 的 scope 切换也不会因为并发删除状态条目而退化为“创建新条目”。
+    const entries = await getLorebookEntries_ACU(hostBookName);
+    const currentEntryUid = current.bookName === hostBookName ? current.entryUid : undefined;
+    const existingByUid = hasValidWorldbookUid_ACU(currentEntryUid)
+        ? entries.find(entry => isSameWorldbookUid_ACU(entry?.uid, currentEntryUid))
+        : undefined;
+    const existing = existingByUid || findAgentStateEntry_ACU(entries, hostBookName).entry;
+    let restoreRollbackPatchesByBook = null;
+    let restoreRestoredPatchesByBook = null;
+    if (changesScope && current.snapshot.active === true) {
+        if (current.source !== 'worldbook' || !existing || !hasValidWorldbookUid_ACU(existing.uid)) {
+            return {
+                updated: false,
+                bookName: current.bookName,
+                entryUid: current.entryUid,
+                reason: 'scope_state_entry_missing',
+                control: current.control,
+                snapshot: current.snapshot,
+            };
+        }
+        const oldBookNames = await resolveAgentWorldbookScopeBookNamesFromScope_ACU(current.control.worldbookScope);
+        const restore = await restoreAgentWorldbookSnapshotEntries_ACU(current.snapshot, oldBookNames);
+        if (!restore.signatureMatched || restore.skipped > 0 || restore.failed > 0) {
+            const rollbackSucceeded = await rollbackAgentWorldbookSnapshotRestore_ACU(restore.rollbackPatchesByBook, restore.restoredPatchesByBook);
+            return {
+                updated: false,
+                bookName: current.bookName,
+                entryUid: current.entryUid,
+                reason: !rollbackSucceeded
+                    ? 'scope_restore_rollback_failed'
+                    : (!restore.signatureMatched ? 'scope_restore_signature_mismatch' : 'scope_restore_incomplete'),
+                control: current.control,
+                snapshot: current.snapshot,
+            };
+        }
+        restoreRollbackPatchesByBook = restore.rollbackPatchesByBook;
+        restoreRestoredPatchesByBook = restore.restoredPatchesByBook;
+        nextSnapshot = cloneDefaultAgentSnapshot_ACU();
+    }
+    const existingMeta = existing ? parseAgentWorldbookStateMeta_ACU(existing.content) : null;
+    const existingControl = normalizeControlPatch_ACU(existingMeta?.control);
+    if (existingMeta) {
+        nextControl = normalizeAgentWorldbookControlForCardConfig_ACU({
+            ...existingControl,
+            ...requestedControlPatch,
+        });
+    }
+    const persistedControl = { ...nextControl };
+    for (const key of ['agentDecisionPromptSegments', 'agentSkillifyPromptSegments']) {
+        if (!Object.prototype.hasOwnProperty.call(existingControl, key) && !Object.prototype.hasOwnProperty.call(requestedControlPatch, key)) {
+            delete persistedControl[key];
+        }
+    }
+    try {
+        const nextEntry = buildConfigEntryPayload_ACU(persistedControl, nextSnapshot, hostBookName, existing || undefined, existing?.uid);
+        if (existing?.uid !== null && existing?.uid !== undefined) {
+            if (!restoreRollbackPatchesByBook) {
+                await setLorebookEntries_ACU(hostBookName, [{ ...nextEntry, uid: existing.uid }]);
+                return { updated: true, bookName: hostBookName, entryUid: existing.uid, control: nextControl, snapshot: nextSnapshot };
+            }
+            let writeFailed = false;
+            try {
+                await setLorebookEntries_ACU(hostBookName, [{ ...nextEntry, uid: existing.uid }]);
+            }
+            catch {
+                writeFailed = true;
+            }
+            const confirmation = await confirmAgentWorldbookScopeWrite_ACU(hostBookName, existing.uid, existingControl, persistedControl, current.snapshot, nextSnapshot);
+            if (confirmation === 'next') {
+                return { updated: true, bookName: hostBookName, entryUid: existing.uid, control: nextControl, snapshot: nextSnapshot };
+            }
+            let confirmedWriteState = confirmation;
+            if (confirmation === 'partial_next') {
+                try {
+                    await setLorebookEntries_ACU(hostBookName, [{ ...nextEntry, uid: existing.uid }]);
+                }
+                catch {
+                    // 继续按读回结果判定；宿主可能已提交但响应失败。
+                }
+                confirmedWriteState = await confirmAgentWorldbookScopeWrite_ACU(hostBookName, existing.uid, existingControl, persistedControl, current.snapshot, nextSnapshot);
+                if (confirmedWriteState === 'next') {
+                    return { updated: true, bookName: hostBookName, entryUid: existing.uid, control: nextControl, snapshot: nextSnapshot };
+                }
+            }
+            if (confirmedWriteState === 'current') {
+                const rollbackSucceeded = await rollbackAgentWorldbookSnapshotRestore_ACU(restoreRollbackPatchesByBook, restoreRestoredPatchesByBook || {});
+                return {
+                    updated: false,
+                    bookName: current.bookName,
+                    entryUid: current.entryUid,
+                    reason: rollbackSucceeded
+                        ? (writeFailed ? 'scope_state_write_failed' : 'scope_state_write_unconfirmed')
+                        : 'scope_state_write_rollback_failed',
+                    control: current.control,
+                    snapshot: current.snapshot,
+                };
+            }
+            return {
+                updated: false,
+                bookName: current.bookName,
+                entryUid: current.entryUid,
+                reason: 'scope_state_write_unconfirmed',
+                stateConfirmed: false,
+                control: current.control,
+                snapshot: current.snapshot,
+            };
+        }
+        const createdAfter = Date.now();
+        await createLorebookEntries_ACU(hostBookName, [nextEntry]);
+        const refreshedEntries = await getLorebookEntries_ACU(hostBookName);
+        const created = findCreatedAgentStateEntry_ACU(refreshedEntries, hostBookName, createdAfter);
+        if (created?.uid !== null && created?.uid !== undefined) {
+            const backfilledEntry = buildConfigEntryPayload_ACU(persistedControl, nextSnapshot, hostBookName, created, created.uid);
+            await setLorebookEntries_ACU(hostBookName, [{ ...backfilledEntry, uid: created.uid }]);
+            return { updated: true, bookName: hostBookName, entryUid: created.uid, control: nextControl, snapshot: nextSnapshot };
+        }
+        return { updated: true, bookName: hostBookName, reason: 'state_entry_uid_unresolved', control: nextControl, snapshot: nextSnapshot };
+    }
+    catch (error) {
+        if (!restoreRollbackPatchesByBook)
+            throw error;
+        const rollbackSucceeded = await rollbackAgentWorldbookSnapshotRestore_ACU(restoreRollbackPatchesByBook, restoreRestoredPatchesByBook || {});
+        return {
+            updated: false,
+            bookName: current.bookName,
+            entryUid: current.entryUid,
+            reason: rollbackSucceeded ? 'scope_state_write_failed' : 'scope_state_write_rollback_failed',
+            control: current.control,
+            snapshot: current.snapshot,
+        };
+    }
+}
+async function writeAgentWorldbookControlToWorldbook_ACU(controlPatch) {
+    const result = await writeAgentWorldbookStateToWorldbook_ACU({ control: controlPatch });
+    return {
+        updated: result.updated,
+        bookName: result.bookName,
+        entryUid: result.entryUid,
+        reason: result.reason,
+        stateConfirmed: result.stateConfirmed,
+        control: result.control,
+    };
+}
+async function resolveAgentWorldbookStateCleanupBookNames_ACU(explicitBookName) {
+    if (explicitBookName)
+        return [explicitBookName];
+    const names = [
+        await resolveAgentWorldbookConfigHostBook_ACU(),
+        ...(await resolveAgentWorldbookScopeBookNames_ACU()),
+        ...getManualPlotWorldbookNames_ACU(),
+    ];
+    try {
+        const charLorebooks = await getCharLorebooks_ACU({ type: 'all' });
+        const primary = String(charLorebooks?.primary || '').trim();
+        if (primary)
+            names.push(primary);
+        names.push(...normalizeBookNameList_ACU(charLorebooks?.additional));
+    }
+    catch {
+        // Cleanup must remain best-effort across host/config changes; existing host/config names above are still valid.
+    }
+    return normalizeBookNameList_ACU(names);
+}
+async function deleteAgentWorldbookStateEntry_ACU(bookName) {
+    const explicitBookName = String(bookName || '').trim();
+    const scanBookNames = await resolveAgentWorldbookStateCleanupBookNames_ACU(explicitBookName);
+    let deleted = 0;
+    for (const targetBookName of scanBookNames) {
+        const entries = await getLorebookEntries_ACU(targetBookName);
+        const candidates = buildAgentStateEntryCandidates_ACU(entries, targetBookName)
+            .map(candidate => candidate.entry)
+            .filter(entry => entry?.uid !== null && entry?.uid !== undefined);
+        const legacyCommentMatches = findAgentConfigEntries_ACU(entries)
+            .filter(entry => entry?.uid !== null && entry?.uid !== undefined);
+        const matchedByUid = new Map();
+        for (const entry of [...candidates, ...legacyCommentMatches]) {
+            if (!hasValidWorldbookUid_ACU(entry?.uid))
+                continue;
+            matchedByUid.set(String(entry.uid), entry);
+        }
+        const matched = Array.from(matchedByUid.values());
+        if (matched.length === 0)
+            continue;
+        await deleteLorebookEntries_ACU(targetBookName, matched.map(entry => entry.uid));
+        deleted += matched.length;
+    }
+    return deleted;
+}
+
+function normalizeCommentText_ACU(comment) {
+    return typeof comment === 'string' ? comment : '';
+}
+function normalizeSkillMetaText_ACU(value) {
+    return typeof value === 'string' ? value.trim() : '';
+}
+function normalizeSkillMetaTk_ACU(value) {
+    const raw = Number(value);
+    if (!Number.isFinite(raw))
+        return 0;
+    return Math.max(0, Math.trunc(raw));
+}
+function isValidUpdatedBy_ACU(value) {
+    return value === 'manual' || value === 'agent-skillify';
+}
+function stripWorldbookSkillMetaBlock_ACU(comment) {
+    return stripWorldbookSkillMetaBlockCore_ACU(comment);
+}
+function parseWorldbookSkillMetaFromComment_ACU(comment) {
+    const text = normalizeCommentText_ACU(comment);
+    const pattern = createSkillMetaPattern_ACU();
+    const match = pattern.exec(text);
+    if (!match)
+        return null;
+    try {
+        const raw = JSON.parse(match[1].trim());
+        if (raw.version !== 1)
+            return null;
+        const updatedBy = isValidUpdatedBy_ACU(raw.updatedBy) ? raw.updatedBy : 'manual';
+        return {
+            version: 1,
+            description: normalizeSkillMetaText_ACU(raw.description),
+            triggerWhen: normalizeSkillMetaText_ACU(raw.triggerWhen),
+            tk: normalizeSkillMetaTk_ACU(raw.tk),
+            updatedAt: Number.isFinite(Number(raw.updatedAt)) ? Number(raw.updatedAt) : 0,
+            updatedBy,
+        };
+    }
+    catch {
+        return null;
+    }
+}
+function hasUsableWorldbookSkillMeta_ACU(comment) {
+    const meta = parseWorldbookSkillMetaFromComment_ACU(comment);
+    if (!meta)
+        return false;
+    return !!meta.description || !!meta.triggerWhen || meta.tk > 0;
+}
+function normalizeWorldbookSkillMetaDraft_ACU(draft, updatedBy = 'manual', now = Date.now()) {
+    return {
+        version: 1,
+        description: normalizeSkillMetaText_ACU(draft.description),
+        triggerWhen: normalizeSkillMetaText_ACU(draft.triggerWhen),
+        tk: normalizeSkillMetaTk_ACU(draft.tk),
+        updatedAt: Number.isFinite(Number(draft.updatedAt)) && Number(draft.updatedAt) > 0 ? Number(draft.updatedAt) : now,
+        updatedBy: isValidUpdatedBy_ACU(draft.updatedBy) ? draft.updatedBy : updatedBy,
+    };
+}
+function buildWorldbookSkillMetaComment_ACU(comment, metaDraft) {
+    const meta = normalizeWorldbookSkillMetaDraft_ACU(metaDraft);
+    const baseComment = stripWorldbookSkillMetaBlock_ACU(comment);
+    if (!meta.description && !meta.triggerWhen)
+        return baseComment;
+    const metaJson = JSON.stringify(meta);
+    const metaBlock = `<!-- ${ACU_SKILL_META_START_ACU}\n${metaJson}\n${ACU_SKILL_META_END_ACU} -->`;
+    return [baseComment, metaBlock].filter(Boolean).join('\n\n');
+}
+function findWorldbookEntryByUid_ACU(entries, uid) {
+    return entries.find(entry => entry?.uid === uid || String(entry?.uid) === String(uid)) || null;
+}
+function validateWorldbookSkillMetaTarget_ACU(bookName, uid) {
+    if (!bookName || !bookName.trim())
+        return '世界书名称为空';
+    if (uid === null || uid === undefined || uid === '')
+        return '世界书条目 uid 为空';
+    return null;
+}
+async function saveWorldbookEntrySkillMeta_ACU(bookName, uid, metaDraft, updatedBy = 'manual') {
+    const targetError = validateWorldbookSkillMetaTarget_ACU(bookName, uid);
+    if (targetError)
+        return { updated: false, reason: targetError };
+    const entries = await getLorebookEntries_ACU(bookName);
+    const entry = findWorldbookEntryByUid_ACU(entries, uid);
+    if (!entry)
+        return { updated: false, reason: '未找到世界书条目' };
+    const meta = normalizeWorldbookSkillMetaDraft_ACU(metaDraft, updatedBy);
+    const nextComment = buildWorldbookSkillMetaComment_ACU(entry.comment, meta);
+    if (nextComment === normalizeCommentText_ACU(entry.comment)) {
+        return { updated: false, reason: '世界书 Skill 元数据未变化', entry };
+    }
+    await setLorebookEntries_ACU(bookName, [{ uid: entry.uid, comment: nextComment }]);
+    return { updated: true, entry: { ...entry, comment: nextComment } };
+}
+async function deleteWorldbookEntrySkillMeta_ACU(bookName, uid) {
+    const targetError = validateWorldbookSkillMetaTarget_ACU(bookName, uid);
+    if (targetError)
+        return { updated: false, reason: targetError };
+    const entries = await getLorebookEntries_ACU(bookName);
+    const entry = findWorldbookEntryByUid_ACU(entries, uid);
+    if (!entry)
+        return { updated: false, reason: '未找到世界书条目' };
+    const currentComment = normalizeCommentText_ACU(entry.comment);
+    const nextComment = stripWorldbookSkillMetaBlock_ACU(currentComment);
+    if (nextComment === currentComment) {
+        return { updated: false, reason: '世界书条目没有 Skill 元数据', entry };
+    }
+    await setLorebookEntries_ACU(bookName, [{ uid: entry.uid, comment: nextComment }]);
+    return { updated: true, entry: { ...entry, comment: nextComment } };
+}
+function buildWorldbookSkillMetaReadResult_ACU(bookName, entry) {
+    const uid = entry?.uid;
+    if (uid === null || uid === undefined || String(uid).trim() === '')
+        return null;
+    const comment = normalizeCommentText_ACU(entry?.comment || entry?.name);
+    const skillMeta = parseWorldbookSkillMetaFromComment_ACU(comment);
+    if (!skillMeta)
+        return null;
+    return {
+        bookName,
+        uid,
+        comment,
+        label: buildWorldbookEntryDisplayLabel_ACU(comment, uid),
+        skillMeta,
+    };
+}
+async function getWorldbookEntrySkillMeta_ACU(bookName, uid) {
+    const targetError = validateWorldbookSkillMetaTarget_ACU(bookName, uid);
+    if (targetError)
+        return null;
+    const entries = await getLorebookEntries_ACU(bookName);
+    const entry = findWorldbookEntryByUid_ACU(entries, uid);
+    if (!entry)
+        return null;
+    return buildWorldbookSkillMetaReadResult_ACU(bookName, entry);
+}
+async function listWorldbookSkillMetas_ACU(bookNames = [], readContext) {
+    const uniqueBookNames = [...new Set((Array.isArray(bookNames) ? bookNames : [])
+            .map(name => String(name || '').trim())
+            .filter(Boolean))];
+    const results = [];
+    for (const bookName of uniqueBookNames) {
+        const entries = await getAgentRuntimeLorebookEntries_ACU(bookName, readContext);
+        for (const entry of Array.isArray(entries) ? entries : []) {
+            const item = buildWorldbookSkillMetaReadResult_ACU(bookName, entry);
+            if (item)
+                results.push(item);
+        }
+    }
+    return results;
+}
+async function clearWorldbookSkillMetaBlocks_ACU(bookNames = []) {
+    const targets = await listWorldbookSkillMetas_ACU(bookNames);
+    const result = {
+        total: targets.length,
+        cleared: 0,
+        skipped: 0,
+        failed: 0,
+        errors: [],
+    };
+    for (const target of targets) {
+        try {
+            const deleteResult = await deleteWorldbookEntrySkillMeta_ACU(target.bookName, target.uid);
+            if (deleteResult.updated)
+                result.cleared += 1;
+            else
+                result.skipped += 1;
+        }
+        catch (error) {
+            result.failed += 1;
+            result.errors.push({ bookName: target.bookName, uid: target.uid, reason: error?.message || '清除 Skill 元数据失败' });
+        }
+    }
+    return result;
+}
+async function resolveAgentWorldbookFilterAvailability_ACU(readContext) {
+    const config = await readAgentWorldbookControlFromWorldbooks_ACU(readContext);
+    const bookNames = await resolveAgentWorldbookScopeBookNames_ACU(undefined, readContext);
+    const skillMetas = bookNames.length > 0 ? await listWorldbookSkillMetas_ACU(bookNames, readContext) : [];
+    const base = {
+        configuredMode: config.control.mode,
+        control: config.control,
+        configSource: config.source,
+        skillCount: skillMetas.length,
+        bookNames,
+        configBookName: config.bookName || '',
+        writableBookName: config.writableBookName || '',
+        skillMetas,
+    };
+    if (bookNames.length === 0)
+        return { ...base, available: false, reason: 'empty_scope' };
+    if (config.source !== 'worldbook')
+        return { ...base, available: false, reason: 'no_card_agent_config' };
+    if (config.control.mode !== 'agent')
+        return { ...base, available: false, reason: 'not_agent_mode' };
+    return { ...base, available: true, reason: 'available' };
+}
+
 // pipeline.ts
 // 从 05_core_tail.js 迁入
 async function updateReadableLorebookEntry_ACU(createIfNeeded = false, isImport = false, targetLorebookOverride = null, dataOverride = null) {
@@ -70773,8 +70773,16 @@ async function collectCombinedWorldbookEntriesByStrategy_ACU(options = {}) {
         baseScanText = options.fallbackScanText;
     }
     baseScanText = baseScanText.toLowerCase();
-    const constantEntries = userEnabledEntries.filter(entry => entry.type === 'constant');
-    let keywordEntries = userEnabledEntries.filter(entry => entry.type !== 'constant' && !forcedEntrySet.has(entry));
+    const isActivePrimary = options?.primarySource === 'active';
+    const constantEntries = userEnabledEntries.filter(entry => {
+        if (entry.type !== 'constant')
+            return false;
+        if (!isActivePrimary)
+            return true; // 非 active：恒常蓝灯照发
+        // active（正文接收）：蓝灯恒常条目照发；skill 化条目需本轮 agent 放行才发
+        return !hasUsableWorldbookSkillMeta_ACU(entry.comment) || forcedEntrySet.has(entry);
+    });
+    let keywordEntries = userEnabledEntries.filter(entry => !constantEntries.includes(entry) && !forcedEntrySet.has(entry));
     if (includeConstantEntriesInBaseScan) {
         const constantBaseText = constantEntries
             .filter(entry => !entry.prevent_recursion)
@@ -70908,6 +70916,7 @@ async function getCombinedWorldbookContent_ACU(initialScanTextOverride = '', opt
             bookNames,
             entriesByBook: options?.entriesByBook,
             readContext: options?.readContext,
+            primarySource: worldbookConfig?.source,
             formatEntry: (entry) => String(entry?.content || '').trim(),
             baseScanText: (typeof initialScanTextOverride === 'string' && initialScanTextOverride.trim()) ? initialScanTextOverride : '',
             fallbackScanText: allChatMessages_ACU.map(message => message.message).join('\n'),
@@ -111235,7 +111244,7 @@ const WARDROBE_DIMENSION_LABELS = Object.freeze({ masking: '掩形', support: '�
 const PREG_FIT_GAP_LABELS = Object.freeze({ masking: '掩形', support: '支撑', capacity: '容身', convenience: '便捷' });
 const MAX_PROGRESS_BAR_CAP = 200;
 // 构建时间戳（rollup replace 注入；测试/dev 环境无替换时回退 'dev'）——全局水印用，截图辨别构建
-const ACU_BUILD_STAMP = typeof "20260819-07" === 'string' ? "20260819-07" : 'dev';
+const ACU_BUILD_STAMP = typeof "20260819-08" === 'string' ? "20260819-08" : 'dev';
 const MODAL_EDGE_GAP = 24;
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const FLOATING_SPHERE_POSITION_KEY = `${MODULE_NAME}_floating_sphere_position`;
@@ -165117,7 +165126,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260819-07";
+        const stamp = "20260819-08";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
