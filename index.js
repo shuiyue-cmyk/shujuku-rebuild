@@ -70901,6 +70901,8 @@ async function getCombinedWorldbookContent_ACU(initialScanTextOverride = '', opt
         }
         const enabledEntriesMap = worldbookConfig?.enabledEntries;
         const hasAnySelection = enabledEntriesMap && typeof enabledEntriesMap === 'object' && Object.keys(enabledEntriesMap).length > 0;
+        const isActiveSource = worldbookConfig?.source === 'active';
+        const hasAnyNonEmptySelection = enabledEntriesMap && typeof enabledEntriesMap === 'object' && Object.values(enabledEntriesMap).some((v) => Array.isArray(v) && v.length > 0);
         const entryStateView = options?.entryStateView === 'pre_takeover' ? 'pre_takeover' : 'live';
         return await buildCombinedWorldbookContentByStrategy_ACU({
             logPrefix: '[Worldbook]',
@@ -70936,12 +70938,18 @@ async function getCombinedWorldbookContent_ACU(initialScanTextOverride = '', opt
                 const isAgentGreenlight = agentGreenlightKeySet.has(`${String(entry.bookName || '').trim()}\u0000${String(entry.uid || '').trim()}`);
                 if (isAgentGreenlight)
                     return true;
+                // 正文接收：全不选（所有列表为空）时视为全选，正文能收到的都发
+                if (isActiveSource && !hasAnyNonEmptySelection)
+                    return true;
                 if (!hasAnySelection)
                     return true;
                 const list = enabledEntriesMap?.[entry.bookName];
                 if (typeof list === 'undefined')
                     return true;
                 if (!Array.isArray(list))
+                    return true;
+                // 正文接收下，某本书空列表视为该书全选（直观）
+                if (isActiveSource && list.length === 0)
                     return true;
                 return list.includes(entry.uid);
             },
@@ -111220,7 +111228,7 @@ const WARDROBE_DIMENSION_LABELS = Object.freeze({ masking: '掩形', support: '�
 const PREG_FIT_GAP_LABELS = Object.freeze({ masking: '掩形', support: '支撑', capacity: '容身', convenience: '便捷' });
 const MAX_PROGRESS_BAR_CAP = 200;
 // 构建时间戳（rollup replace 注入；测试/dev 环境无替换时回退 'dev'）——全局水印用，截图辨别构建
-const ACU_BUILD_STAMP = typeof "20260819-06" === 'string' ? "20260819-06" : 'dev';
+const ACU_BUILD_STAMP = typeof "20260819-07" === 'string' ? "20260819-07" : 'dev';
 const MODAL_EDGE_GAP = 24;
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const FLOATING_SPHERE_POSITION_KEY = `${MODULE_NAME}_floating_sphere_position`;
@@ -165102,7 +165110,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260819-06";
+        const stamp = "20260819-07";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

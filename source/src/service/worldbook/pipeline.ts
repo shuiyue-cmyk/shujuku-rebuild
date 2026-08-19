@@ -1523,6 +1523,8 @@ export   async function getCombinedWorldbookContent_ACU(initialScanTextOverride 
 
         const enabledEntriesMap = worldbookConfig?.enabledEntries;
         const hasAnySelection = enabledEntriesMap && typeof enabledEntriesMap === 'object' && Object.keys(enabledEntriesMap).length > 0;
+        const isActiveSource = worldbookConfig?.source === 'active';
+        const hasAnyNonEmptySelection = enabledEntriesMap && typeof enabledEntriesMap === 'object' && Object.values(enabledEntriesMap).some((v: any) => Array.isArray(v) && v.length > 0);
         const entryStateView: WorldbookEntryStateView_ACU = options?.entryStateView === 'pre_takeover' ? 'pre_takeover' : 'live';
         return await buildCombinedWorldbookContentByStrategy_ACU({
             logPrefix: '[Worldbook]',
@@ -1551,10 +1553,14 @@ export   async function getCombinedWorldbookContent_ACU(initialScanTextOverride 
             isSelected: (entry: any) => {
                 const isAgentGreenlight = agentGreenlightKeySet.has(`${String(entry.bookName || '').trim()}\u0000${String(entry.uid || '').trim()}`);
                 if (isAgentGreenlight) return true;
+                // 正文接收：全不选（所有列表为空）时视为全选，正文能收到的都发
+                if (isActiveSource && !hasAnyNonEmptySelection) return true;
                 if (!hasAnySelection) return true;
                 const list = enabledEntriesMap?.[entry.bookName];
                 if (typeof list === 'undefined') return true;
                 if (!Array.isArray(list)) return true;
+                // 正文接收下，某本书空列表视为该书全选（直观）
+                if (isActiveSource && list.length === 0) return true;
                 return list.includes(entry.uid);
             },
             forceIncludeEntry: (entry: any) => {
