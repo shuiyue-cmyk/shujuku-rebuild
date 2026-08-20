@@ -1165,12 +1165,13 @@ export async function collectGroupFillResponse_ACU(
             // 取「最后一个 <tableEdit> 开标签」之后、其后第一个 </tableEdit> 之前的内容。
             // 原因：AI 常在 <thought> 里写 "使用 <tableEdit> 标签包裹 SQL 语句"（无闭合），
             // 若用成对正则会把 thought+content 整段吞掉；真正的编辑内容总是最后出现的标签对。
-            const openIdx = (aiResponse || '').lastIndexOf('<tableEdit>');
-            const closeIdx = openIdx === -1 ? -1 : (aiResponse || '').indexOf('</tableEdit>', openIdx + '<tableEdit>'.length);
+            const lowerResponse = (aiResponse || '').toLowerCase();
+            const openIdx = lowerResponse.lastIndexOf('<tableedit>');
+            const closeIdx = openIdx === -1 ? -1 : lowerResponse.indexOf('</tableedit>', openIdx + '<tableedit>'.length);
             if (openIdx === -1 || closeIdx === -1) {
                 throw new ModelOutputRetryError_ACU('AI响应中未找到完整有效的 <tableEdit> 标签');
             }
-            tableEditText = (aiResponse || '').substring(openIdx + '<tableEdit>'.length, closeIdx).trim();
+            tableEditText = (aiResponse || '').substring(openIdx + '<tableEdit>'.length, closeIdx).replace(/^\uFEFF/, '').trim();
             if (isSqliteMode() && tableEditText && isSqlContent(tableEditText)) {
                 try {
                     // 隐藏列保护使用请求前冻结的 live runtime schema 证据，而不是 baseSnapshot：

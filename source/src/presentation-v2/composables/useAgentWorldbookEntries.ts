@@ -60,6 +60,7 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
   const status = ref<AgentWorldbookEntryLoadStatus>('idle');
   const error = ref('');
   const selected = ref(new Map<string, AgentWorldbookSkillifySelectedEntry>());
+  const batchBusy = ref(false);
 
   async function loadEntries(): Promise<string[]> {
     status.value = 'loading';
@@ -89,6 +90,7 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
           }
           const key = selectionKey_ACU(bookName, entry.uid);
           visibleSelections.add(key);
+          const isConstant = String((entry as any)?.type || '').trim().toLowerCase() === 'constant';
           return [{
             uid: entry.uid,
             bookName,
@@ -100,6 +102,7 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
             checked: false,
             skillifySelected: selected.value.has(key),
             skillifySelectable: isWorldbookEntrySkillifyCandidate_ACU(entry),
+            isConstant,
             disabled: false,
           }];
         });
@@ -231,96 +234,123 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
 
   /** 世界书编辑①：把「skill 化且当前关闭（enabled=false，initial_disabled）」的条目一键启用 */
   async function batchEnableDisabledSkillEntries(): Promise<number> {
+    if (batchBusy.value) return 0;
+    batchBusy.value = true;
     const byBook = collectTargetUidsByBook(entry => entry.hasSkill === true && entry.agentTakeoverState === 'initial_disabled');
     let changed = 0;
-    for (const [bookName, uids] of byBook) {
-      const uidSet = new Set(uids.map(uid => String(uid)));
-      try {
-        const all = await getLorebookEntries_ACU(bookName);
-        const patched = (Array.isArray(all) ? all : []).map(entry => {
-          if (!uidSet.has(String(entry.uid))) return entry;
-          if (entry.enabled === false) { entry.enabled = true; }
-          return entry;
-        });
-        await setLorebookEntries_ACU(bookName, patched);
-        changed += uids.length;
-      } catch (cause: any) {
-        logError_ACU(`[ACU-V2] 启用 skill 世界书失败（${bookName}）`, cause);
+    try {
+      for (const [bookName, uids] of byBook) {
+        const uidSet = new Set(uids.map(uid => String(uid)));
+        try {
+          const all = await getLorebookEntries_ACU(bookName);
+          let touchedInBook = 0;
+          const patched = (Array.isArray(all) ? all : []).map(entry => {
+            if (!uidSet.has(String(entry.uid))) return entry;
+            if (entry.enabled === false) {
+              touchedInBook++;
+              return { ...entry, enabled: true };
+            }
+            return entry;
+          });
+          if (touchedInBook === 0) continue;
+          await setLorebookEntries_ACU(bookName, patched);
+          changed += touchedInBook;
+        } catch (cause: any) {
+          logError_ACU(`[ACU-V2] 启用 skill 世界书失败（${bookName}）`, cause);
+        }
       }
+    } finally {
+      batchBusy.value = false;
     }
     if (changed > 0) {
-      await loadEntries();
-      await notifySkillMetaChanged();
+      try { await loadEntries(); } catch {}
+      try { await notifySkillMetaChanged(); } catch {}
     }
     return changed;
   }
 
   /** 世界书编辑②：把「skill 化且当前为蓝灯（type=constant，恒常注入）」的条目转为绿灯（去掉 constant，改由 agent 放行） */
   async function batchConvertBlueToGreenEntries(): Promise<number> {
+    if (batchBusy.value) return 0;
+    batchBusy.value = true;
     const byBook = collectTargetUidsByBook(entry => entry.hasSkill === true && entry.isConstant === true);
     let changed = 0;
-    for (const [bookName, uids] of byBook) {
-      const uidSet = new Set(uids.map(uid => String(uid)));
-      try {
-        const all = await getLorebookEntries_ACU(bookName);
-        const patched = (Array.isArray(all) ? all : []).map(entry => {
-          if (!uidSet.has(String(entry.uid))) return entry;
-          const currentType = String(entry.type || '').trim().toLowerCase();
-          if (currentType === 'constant') entry.type = '';
-          return entry;
-        });
-        await setLorebookEntries_ACU(bookName, patched);
-        changed += uids.length;
-      } catch (cause: any) {
-        logError_ACU(`[ACU-V2] 蓝灯转绿灯失败（${bookName}）`, cause);
+    try {
+      for (const [bookName, uids] of byBook) {
+        const uidSet = new Set(uids.map(uid => String(uid)));
+        try {
+          const all = await getLorebookEntries_ACU(bookName);
+          let touchedInBook = 0;
+          const patched = (Array.isArray(all) ? all : []).map(entry => {
+            if (!uidSet.has(String(entry.uid))) return entry;
+            const currentType = String(entry.type || '').trim().toLowerCase();
+            if (currentType === 'constant') {
+              touchedInBook++;
+              return { ...entry, type: '' };
+            }
+            return entry;
+          });
+          if (touchedInBook === 0) continue;
+          await setLorebookEntries_ACU(bookName, patched);
+          changed += touchedInBook;
+        } catch (cause: any) {
+          logError_ACU(`[ACU-V2] 蓝灯转绿灯失败（${bookName}）`, cause);
+        }
       }
+    } finally {
+      batchBusy.value = false;
     }
     if (changed > 0) {
-      await loadEntries();
-      await notifySkillMetaChanged();
+      try { await loadEntries(); } catch {}
+      try { await notifySkillMetaChanged(); } catch {}
     }
     return changed;
   }
 
   /** 世界书编辑③二合一：skill 化蓝灯变绿灯，然后绿灯全开启（两步合并为一次遍历） */
   async function batchCombinedBlueToGreenAndEnable(): Promise<{ converted: number; enabled: number }> {
+    if (batchBusy.value) return { converted: 0, enabled: 0 };
+    batchBusy.value = true;
     const blueByBook = collectTargetUidsByBook(entry => entry.hasSkill === true && entry.isConstant === true);
     const disabledByBook = collectTargetUidsByBook(entry => entry.hasSkill === true && entry.agentTakeoverState === 'initial_disabled');
     const allBooks = new Set<string>([...blueByBook.keys(), ...disabledByBook.keys()]);
     let converted = 0;
     let enabled = 0;
-    for (const bookName of allBooks) {
-      const blueSet = new Set((blueByBook.get(bookName) || []).map(uid => String(uid)));
-      const disabledSet = new Set((disabledByBook.get(bookName) || []).map(uid => String(uid)));
-      try {
-        const all = await getLorebookEntries_ACU(bookName);
-        const patched = (Array.isArray(all) ? all : []).map(entry => {
-          const uidStr = String(entry.uid);
-          let touched = false;
-          if (blueSet.has(uidStr)) {
-            const currentType = String(entry.type || '').trim().toLowerCase();
-            if (currentType === 'constant') { entry.type = ''; touched = true; }
+    try {
+      for (const bookName of allBooks) {
+        const blueSet = new Set((blueByBook.get(bookName) || []).map(uid => String(uid)));
+        const disabledSet = new Set((disabledByBook.get(bookName) || []).map(uid => String(uid)));
+        try {
+          const all = await getLorebookEntries_ACU(bookName);
+          let convertedInBook = 0;
+          let enabledInBook = 0;
+          const patched = (Array.isArray(all) ? all : []).map(entry => {
+            const uidStr = String(entry.uid);
+            let next = entry;
+            if (blueSet.has(uidStr)) {
+              const currentType = String(entry.type || '').trim().toLowerCase();
+              if (currentType === 'constant') { next = { ...next, type: '' }; convertedInBook++; }
+            }
+            if (disabledSet.has(uidStr) && (entry as any).enabled === false) {
+              next = { ...next, enabled: true }; enabledInBook++;
+            }
+            return next;
+          });
+          if (convertedInBook > 0 || enabledInBook > 0) {
+            await setLorebookEntries_ACU(bookName, patched);
+            converted += convertedInBook;
+            enabled += enabledInBook;
           }
-          if (disabledSet.has(uidStr) && entry.enabled === false) {
-            entry.enabled = true; touched = true;
-          }
-          return entry;
-        });
-        const blueCount = blueByBook.get(bookName)?.length || 0;
-        const disabledCount = disabledByBook.get(bookName)?.length || 0;
-        // 只要有任一命中就写回，避免空写
-        if (blueCount > 0 || disabledCount > 0) {
-          await setLorebookEntries_ACU(bookName, patched);
-          converted += blueCount;
-          enabled += disabledCount;
-        }
       } catch (cause: any) {
         logError_ACU(`[ACU-V2] 二合一失败（${bookName}）`, cause);
       }
     }
-    if (converted > 0 || enabled > 0) {
-      await loadEntries();
-      await notifySkillMetaChanged();
+      if (converted > 0 || enabled > 0) {
+        try { await loadEntries(); } catch {}
+        try { await notifySkillMetaChanged(); } catch {}
+      }
+    } finally {
+      batchBusy.value = false;
     }
     return { converted, enabled };
   }

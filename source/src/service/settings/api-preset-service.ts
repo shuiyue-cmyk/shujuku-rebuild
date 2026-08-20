@@ -67,7 +67,11 @@ export function normalizeApiConfig_ACU(value: any): ApiPresetApiConfig_ACU {
   const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   const maxTokens = Number(source.max_tokens ?? source.maxTokens ?? 60000);
   const temperature = Number(source.temperature ?? 1);
-  const streamingEnabled = source.streamingEnabled === true ? true : source.streamingEnabled === false ? false : undefined;
+  const rawStreaming = source.streamingEnabled;
+  let streamingEnabled: boolean | undefined;
+  if (rawStreaming === true || (typeof rawStreaming === 'string' && rawStreaming.trim().toLowerCase() === 'true')) streamingEnabled = true;
+  else if (rawStreaming === false || (typeof rawStreaming === 'string' && rawStreaming.trim().toLowerCase() === 'false')) streamingEnabled = false;
+  else streamingEnabled = undefined;
   const rawReasoning = String(source.reasoningEffort ?? '').trim().toLowerCase();
   const reasoningEffort = (['low', 'medium', 'high', 'max', 'xhigh'] as const).includes(rawReasoning as any)
     ? (rawReasoning as ReasoningEffort_ACU)

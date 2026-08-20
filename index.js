@@ -58660,7 +58660,7 @@ async function prepareAIInput_ACU(messages, updateMode = 'standard', targetSheet
     const readContext = options?.worldbookReadContext ?? ownedReadContext;
     const worldbookConfig = getCurrentWorldbookConfig_ACU();
     const syncReadScopeNames = buildTableCandidateScope_ACU([
-        () => Array.isArray(worldbookConfig?.manualSelection) ? worldbookConfig.manualSelection : [],
+        () => worldbookConfig?.source === 'manual' && Array.isArray(worldbookConfig?.manualSelection) ? worldbookConfig.manualSelection : [],
         () => {
             const enabled = worldbookConfig?.enabledEntries;
             return enabled && typeof enabled === 'object' ? Object.keys(enabled) : [];
@@ -60234,11 +60234,17 @@ function parseAndApplyTableEdits_ACU(aiResponse, updateMode = 'standard', isImpo
 function isSqlContent(content) {
     const lines = content.split('\n');
     for (const line of lines) {
-        const trimmed = line.trim();
+        let trimmed = line.trim();
+        if (!trimmed)
+            continue;
+        if (trimmed.charCodeAt(0) === 0xFEFF)
+            trimmed = trimmed.slice(1).trim();
         if (!trimmed)
             continue;
         // 跳过 SQL 注释
         if (trimmed.startsWith('--'))
+            continue;
+        if (trimmed.startsWith('/*'))
             continue;
         // 跳过 HTML 注释残留
         if (trimmed.startsWith('<!--') || trimmed.startsWith('-->'))
@@ -60321,7 +60327,14 @@ function normalizeApiConfig_ACU(value) {
     const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
     const maxTokens = Number(source.max_tokens ?? source.maxTokens ?? 60000);
     const temperature = Number(source.temperature ?? 1);
-    const streamingEnabled = source.streamingEnabled === true ? true : source.streamingEnabled === false ? false : undefined;
+    const rawStreaming = source.streamingEnabled;
+    let streamingEnabled;
+    if (rawStreaming === true || (typeof rawStreaming === 'string' && rawStreaming.trim().toLowerCase() === 'true'))
+        streamingEnabled = true;
+    else if (rawStreaming === false || (typeof rawStreaming === 'string' && rawStreaming.trim().toLowerCase() === 'false'))
+        streamingEnabled = false;
+    else
+        streamingEnabled = undefined;
     const rawReasoning = String(source.reasoningEffort ?? '').trim().toLowerCase();
     const reasoningEffort = ['low', 'medium', 'high', 'max', 'xhigh'].includes(rawReasoning)
         ? rawReasoning
@@ -91058,12 +91071,13 @@ async function collectGroupFillResponse_ACU(job, feedback, abortController = new
             // 取「最后一个 <tableEdit> 开标签」之后、其后第一个 </tableEdit> 之前的内容。
             // 原因：AI 常在 <thought> 里写 "使用 <tableEdit> 标签包裹 SQL 语句"（无闭合），
             // 若用成对正则会把 thought+content 整段吞掉；真正的编辑内容总是最后出现的标签对。
-            const openIdx = (aiResponse || '').lastIndexOf('<tableEdit>');
-            const closeIdx = openIdx === -1 ? -1 : (aiResponse || '').indexOf('</tableEdit>', openIdx + '<tableEdit>'.length);
+            const lowerResponse = (aiResponse || '').toLowerCase();
+            const openIdx = lowerResponse.lastIndexOf('<tableedit>');
+            const closeIdx = openIdx === -1 ? -1 : lowerResponse.indexOf('</tableedit>', openIdx + '<tableedit>'.length);
             if (openIdx === -1 || closeIdx === -1) {
                 throw new ModelOutputRetryError_ACU('AI响应中未找到完整有效的 <tableEdit> 标签');
             }
-            tableEditText = (aiResponse || '').substring(openIdx + '<tableEdit>'.length, closeIdx).trim();
+            tableEditText = (aiResponse || '').substring(openIdx + '<tableEdit>'.length, closeIdx).replace(/^\uFEFF/, '').trim();
             if (isSqliteMode() && tableEditText && isSqlContent(tableEditText)) {
                 try {
                     // 隐藏列保护使用请求前冻结的 live runtime schema 证据，而不是 baseSnapshot：
@@ -146378,7 +146392,17 @@ var _sfc_main$Q = /*@__PURE__*/ defineComponent({
             activeDraftError.value = "";
             activeDraftSavedAt.value = null;
         }
-        function selectPreset(name) {
+        async function selectPreset(name) {
+            if (activeDraftDirty.value) {
+                const confirmed = await dialogStore.confirm({
+                    title: '切换预设',
+                    message: '当前预设有未保存的修改，切换将丢失这些修改，确定要切换吗？',
+                    confirmLabel: '切换',
+                    confirmVariant: 'danger',
+                });
+                if (!confirmed)
+                    return;
+            }
             store.setActivePresetForCurrentChat(name);
         }
         async function deletePreset(name) {
@@ -146452,8 +146476,8 @@ var _sfc_main$Q = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-api-config-panel__select-row[data-v-8a963a74] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-8a963a74] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-8a963a74] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-8a963a74] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-8a963a74] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-8a963a74] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-8a963a74] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-8a963a74] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-8a963a74] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-8a963a74");
-var ApiConfigPanel_vue_vue_type_style_index_0_scoped_8a963a74_lang = null;
+injectSfcStyle("\n.acu-api-config-panel__select-row[data-v-f30c63cf] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-f30c63cf] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-f30c63cf] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-f30c63cf] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-f30c63cf] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-f30c63cf] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-f30c63cf] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-f30c63cf] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-f30c63cf] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-f30c63cf");
+var ApiConfigPanel_vue_vue_type_style_index_0_scoped_f30c63cf_lang = null;
 
 const _hoisted_1$O = { class: "acu-api-config-panel__select-row" };
 const _hoisted_2$H = { class: "acu-api-config-panel__editor-section" };
@@ -146724,7 +146748,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["title", "description"]);
 }
-var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$Q, [["render", _sfc_render$Q], ["__scopeId", "data-v-8a963a74"]]);
+var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$Q, [["render", _sfc_render$Q], ["__scopeId", "data-v-f30c63cf"]]);
 
 // ═══════════════════════════════════════════════════════════
 // service/settings/feature-preset-reference-service.ts — 功能级 API 预设引用
@@ -156083,11 +156107,11 @@ var _sfc_main$u = /*@__PURE__*/ defineComponent({
         const props = __props;
         const emit = __emit;
         const filter = ref('');
-        const sourceOptions = [
+        const sourceOptions = computed(() => [
             { value: 'character', label: '跟随角色卡' },
             ...(props.allowActive ? [{ value: 'active', label: '正文接收' }] : []),
             { value: 'manual', label: '手动选择' },
-        ];
+        ]);
         const selectedSet = computed(() => new Set(props.selectedNames.filter(Boolean)));
         const filteredNames = computed(() => {
             const f = filter.value.trim().toLowerCase();
@@ -156109,8 +156133,8 @@ var _sfc_main$u = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-v2-wb-source-picker[data-v-bb0a28c7] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  min-width: 0;\n}\n.acu-v2-wb-source-picker__list[data-v-bb0a28c7] {\r\n  min-width: 0;\r\n  max-height: 180px;\r\n  overflow-y: auto;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  padding: 8px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-2);\n}\n.acu-v2-wb-source-picker__list--disabled[data-v-bb0a28c7] {\r\n  opacity: 0.65;\n}\n.acu-v2-wb-source-picker__item[data-v-bb0a28c7] {\r\n  width: 100%;\r\n  min-width: 0;\r\n  min-height: 32px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 10px;\r\n  margin: 0;\r\n  padding: 7px 9px;\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font: inherit;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.4;\r\n  text-align: left;\r\n  cursor: pointer;\r\n  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-wb-source-picker__item[data-v-bb0a28c7]:hover:not(:disabled) {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-wb-source-picker__item[data-v-bb0a28c7]:disabled {\r\n  cursor: not-allowed;\n}\n.acu-v2-wb-source-picker__item[data-v-bb0a28c7]:focus-visible {\r\n  outline: none;\r\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-v2-wb-source-picker__item--selected[data-v-bb0a28c7] {\r\n  background: color-mix(in srgb, var(--acu-accent) 14%, transparent);\r\n  color: var(--acu-text-1);\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-accent) 42%, transparent);\n}\n.acu-v2-wb-source-picker__item--selected[data-v-bb0a28c7]:hover:not(:disabled) {\r\n  background: color-mix(in srgb, var(--acu-accent) 20%, transparent);\r\n  color: var(--acu-text-1);\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-accent) 54%, transparent);\n}\n.acu-v2-wb-source-picker__item-label[data-v-bb0a28c7] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-wb-source-picker__item-check[data-v-bb0a28c7] {\r\n  flex-shrink: 0;\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  color: var(--acu-accent);\r\n  opacity: 0;\r\n  transform: scale(0.86);\r\n  transition: opacity 0.15s ease, transform 0.15s ease;\n}\n.acu-v2-wb-source-picker__item--selected .acu-v2-wb-source-picker__item-check[data-v-bb0a28c7] {\r\n  opacity: 1;\r\n  transform: scale(1);\n}\n.acu-v2-wb-source-picker__empty[data-v-bb0a28c7] {\r\n  padding: 8px 2px;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: center;\n}\n.acu-v2-wb-source-picker__error[data-v-bb0a28c7] {\r\n  margin: 0;\n}\r\n", "src/presentation-v2/components/WorldbookSourcePicker.vue#style-0-bb0a28c7");
-var WorldbookSourcePicker_vue_vue_type_style_index_0_scoped_bb0a28c7_lang = null;
+injectSfcStyle("\n.acu-v2-wb-source-picker[data-v-59b18616] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  min-width: 0;\n}\n.acu-v2-wb-source-picker__list[data-v-59b18616] {\r\n  min-width: 0;\r\n  max-height: 180px;\r\n  overflow-y: auto;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  padding: 8px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-2);\n}\n.acu-v2-wb-source-picker__list--disabled[data-v-59b18616] {\r\n  opacity: 0.65;\n}\n.acu-v2-wb-source-picker__item[data-v-59b18616] {\r\n  width: 100%;\r\n  min-width: 0;\r\n  min-height: 32px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 10px;\r\n  margin: 0;\r\n  padding: 7px 9px;\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font: inherit;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.4;\r\n  text-align: left;\r\n  cursor: pointer;\r\n  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-wb-source-picker__item[data-v-59b18616]:hover:not(:disabled) {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-wb-source-picker__item[data-v-59b18616]:disabled {\r\n  cursor: not-allowed;\n}\n.acu-v2-wb-source-picker__item[data-v-59b18616]:focus-visible {\r\n  outline: none;\r\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-v2-wb-source-picker__item--selected[data-v-59b18616] {\r\n  background: color-mix(in srgb, var(--acu-accent) 14%, transparent);\r\n  color: var(--acu-text-1);\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-accent) 42%, transparent);\n}\n.acu-v2-wb-source-picker__item--selected[data-v-59b18616]:hover:not(:disabled) {\r\n  background: color-mix(in srgb, var(--acu-accent) 20%, transparent);\r\n  color: var(--acu-text-1);\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-accent) 54%, transparent);\n}\n.acu-v2-wb-source-picker__item-label[data-v-59b18616] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-wb-source-picker__item-check[data-v-59b18616] {\r\n  flex-shrink: 0;\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  color: var(--acu-accent);\r\n  opacity: 0;\r\n  transform: scale(0.86);\r\n  transition: opacity 0.15s ease, transform 0.15s ease;\n}\n.acu-v2-wb-source-picker__item--selected .acu-v2-wb-source-picker__item-check[data-v-59b18616] {\r\n  opacity: 1;\r\n  transform: scale(1);\n}\n.acu-v2-wb-source-picker__empty[data-v-59b18616] {\r\n  padding: 8px 2px;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: center;\n}\n.acu-v2-wb-source-picker__error[data-v-59b18616] {\r\n  margin: 0;\n}\r\n", "src/presentation-v2/components/WorldbookSourcePicker.vue#style-0-59b18616");
+var WorldbookSourcePicker_vue_vue_type_style_index_0_scoped_59b18616_lang = null;
 
 const _hoisted_1$u = { class: "acu-v2-wb-source-picker" };
 const _hoisted_2$p = [
@@ -156131,7 +156155,7 @@ function _sfc_render$u(_ctx, _cache, $props, $setup, $data, $options) {
 				options: $setup.sourceOptions,
 				"aria-label": "世界书来源",
 				"onUpdate:modelValue": $setup.onSourceChange
-			}, null, 8, ["model-value"])]),
+			}, null, 8, ["model-value", "options"])]),
 			_: 1
 		}),
 		$props.source === "manual" ? (openBlock(), createElementBlock(
@@ -156209,7 +156233,7 @@ function _sfc_render$u(_ctx, _cache, $props, $setup, $data, $options) {
 		})) : createCommentVNode("v-if", true)
 	]);
 }
-var WorldbookSourcePicker = /* @__PURE__ */ _export_sfc(_sfc_main$u, [["render", _sfc_render$u], ["__scopeId", "data-v-bb0a28c7"]]);
+var WorldbookSourcePicker = /* @__PURE__ */ _export_sfc(_sfc_main$u, [["render", _sfc_render$u], ["__scopeId", "data-v-59b18616"]]);
 
 var _sfc_main$t = /*@__PURE__*/ defineComponent({
     __name: 'WorldbookEntryList',
@@ -158605,6 +158629,7 @@ function useAgentWorldbookEntries(options = {}) {
     const status = ref('idle');
     const error = ref('');
     const selected = ref(new Map());
+    const batchBusy = ref(false);
     async function loadEntries() {
         status.value = 'loading';
         error.value = '';
@@ -158633,6 +158658,7 @@ function useAgentWorldbookEntries(options = {}) {
                     }
                     const key = selectionKey_ACU(bookName, entry.uid);
                     visibleSelections.add(key);
+                    const isConstant = String(entry?.type || '').trim().toLowerCase() === 'constant';
                     return [{
                             uid: entry.uid,
                             bookName,
@@ -158644,6 +158670,7 @@ function useAgentWorldbookEntries(options = {}) {
                             checked: false,
                             skillifySelected: selected.value.has(key),
                             skillifySelectable: isWorldbookEntrySkillifyCandidate_ACU(entry),
+                            isConstant,
                             disabled: false,
                         }];
                 });
@@ -158769,106 +158796,156 @@ function useAgentWorldbookEntries(options = {}) {
     }
     /** 世界书编辑①：把「skill 化且当前关闭（enabled=false，initial_disabled）」的条目一键启用 */
     async function batchEnableDisabledSkillEntries() {
+        if (batchBusy.value)
+            return 0;
+        batchBusy.value = true;
         const byBook = collectTargetUidsByBook(entry => entry.hasSkill === true && entry.agentTakeoverState === 'initial_disabled');
         let changed = 0;
-        for (const [bookName, uids] of byBook) {
-            const uidSet = new Set(uids.map(uid => String(uid)));
-            try {
-                const all = await getLorebookEntries_ACU(bookName);
-                const patched = (Array.isArray(all) ? all : []).map(entry => {
-                    if (!uidSet.has(String(entry.uid)))
+        try {
+            for (const [bookName, uids] of byBook) {
+                const uidSet = new Set(uids.map(uid => String(uid)));
+                try {
+                    const all = await getLorebookEntries_ACU(bookName);
+                    let touchedInBook = 0;
+                    const patched = (Array.isArray(all) ? all : []).map(entry => {
+                        if (!uidSet.has(String(entry.uid)))
+                            return entry;
+                        if (entry.enabled === false) {
+                            touchedInBook++;
+                            return { ...entry, enabled: true };
+                        }
                         return entry;
-                    if (entry.enabled === false) {
-                        entry.enabled = true;
-                    }
-                    return entry;
-                });
-                await setLorebookEntries_ACU(bookName, patched);
-                changed += uids.length;
-            }
-            catch (cause) {
-                logError_ACU(`[ACU-V2] 启用 skill 世界书失败（${bookName}）`, cause);
+                    });
+                    if (touchedInBook === 0)
+                        continue;
+                    await setLorebookEntries_ACU(bookName, patched);
+                    changed += touchedInBook;
+                }
+                catch (cause) {
+                    logError_ACU(`[ACU-V2] 启用 skill 世界书失败（${bookName}）`, cause);
+                }
             }
         }
+        finally {
+            batchBusy.value = false;
+        }
         if (changed > 0) {
-            await loadEntries();
-            await notifySkillMetaChanged();
+            try {
+                await loadEntries();
+            }
+            catch { }
+            try {
+                await notifySkillMetaChanged();
+            }
+            catch { }
         }
         return changed;
     }
     /** 世界书编辑②：把「skill 化且当前为蓝灯（type=constant，恒常注入）」的条目转为绿灯（去掉 constant，改由 agent 放行） */
     async function batchConvertBlueToGreenEntries() {
+        if (batchBusy.value)
+            return 0;
+        batchBusy.value = true;
         const byBook = collectTargetUidsByBook(entry => entry.hasSkill === true && entry.isConstant === true);
         let changed = 0;
-        for (const [bookName, uids] of byBook) {
-            const uidSet = new Set(uids.map(uid => String(uid)));
-            try {
-                const all = await getLorebookEntries_ACU(bookName);
-                const patched = (Array.isArray(all) ? all : []).map(entry => {
-                    if (!uidSet.has(String(entry.uid)))
+        try {
+            for (const [bookName, uids] of byBook) {
+                const uidSet = new Set(uids.map(uid => String(uid)));
+                try {
+                    const all = await getLorebookEntries_ACU(bookName);
+                    let touchedInBook = 0;
+                    const patched = (Array.isArray(all) ? all : []).map(entry => {
+                        if (!uidSet.has(String(entry.uid)))
+                            return entry;
+                        const currentType = String(entry.type || '').trim().toLowerCase();
+                        if (currentType === 'constant') {
+                            touchedInBook++;
+                            return { ...entry, type: '' };
+                        }
                         return entry;
-                    const currentType = String(entry.type || '').trim().toLowerCase();
-                    if (currentType === 'constant')
-                        entry.type = '';
-                    return entry;
-                });
-                await setLorebookEntries_ACU(bookName, patched);
-                changed += uids.length;
-            }
-            catch (cause) {
-                logError_ACU(`[ACU-V2] 蓝灯转绿灯失败（${bookName}）`, cause);
+                    });
+                    if (touchedInBook === 0)
+                        continue;
+                    await setLorebookEntries_ACU(bookName, patched);
+                    changed += touchedInBook;
+                }
+                catch (cause) {
+                    logError_ACU(`[ACU-V2] 蓝灯转绿灯失败（${bookName}）`, cause);
+                }
             }
         }
+        finally {
+            batchBusy.value = false;
+        }
         if (changed > 0) {
-            await loadEntries();
-            await notifySkillMetaChanged();
+            try {
+                await loadEntries();
+            }
+            catch { }
+            try {
+                await notifySkillMetaChanged();
+            }
+            catch { }
         }
         return changed;
     }
     /** 世界书编辑③二合一：skill 化蓝灯变绿灯，然后绿灯全开启（两步合并为一次遍历） */
     async function batchCombinedBlueToGreenAndEnable() {
+        if (batchBusy.value)
+            return { converted: 0, enabled: 0 };
+        batchBusy.value = true;
         const blueByBook = collectTargetUidsByBook(entry => entry.hasSkill === true && entry.isConstant === true);
         const disabledByBook = collectTargetUidsByBook(entry => entry.hasSkill === true && entry.agentTakeoverState === 'initial_disabled');
         const allBooks = new Set([...blueByBook.keys(), ...disabledByBook.keys()]);
         let converted = 0;
         let enabled = 0;
-        for (const bookName of allBooks) {
-            const blueSet = new Set((blueByBook.get(bookName) || []).map(uid => String(uid)));
-            const disabledSet = new Set((disabledByBook.get(bookName) || []).map(uid => String(uid)));
-            try {
-                const all = await getLorebookEntries_ACU(bookName);
-                const patched = (Array.isArray(all) ? all : []).map(entry => {
-                    const uidStr = String(entry.uid);
-                    let touched = false;
-                    if (blueSet.has(uidStr)) {
-                        const currentType = String(entry.type || '').trim().toLowerCase();
-                        if (currentType === 'constant') {
-                            entry.type = '';
-                            touched = true;
+        try {
+            for (const bookName of allBooks) {
+                const blueSet = new Set((blueByBook.get(bookName) || []).map(uid => String(uid)));
+                const disabledSet = new Set((disabledByBook.get(bookName) || []).map(uid => String(uid)));
+                try {
+                    const all = await getLorebookEntries_ACU(bookName);
+                    let convertedInBook = 0;
+                    let enabledInBook = 0;
+                    const patched = (Array.isArray(all) ? all : []).map(entry => {
+                        const uidStr = String(entry.uid);
+                        let next = entry;
+                        if (blueSet.has(uidStr)) {
+                            const currentType = String(entry.type || '').trim().toLowerCase();
+                            if (currentType === 'constant') {
+                                next = { ...next, type: '' };
+                                convertedInBook++;
+                            }
                         }
+                        if (disabledSet.has(uidStr) && entry.enabled === false) {
+                            next = { ...next, enabled: true };
+                            enabledInBook++;
+                        }
+                        return next;
+                    });
+                    if (convertedInBook > 0 || enabledInBook > 0) {
+                        await setLorebookEntries_ACU(bookName, patched);
+                        converted += convertedInBook;
+                        enabled += enabledInBook;
                     }
-                    if (disabledSet.has(uidStr) && entry.enabled === false) {
-                        entry.enabled = true;
-                        touched = true;
-                    }
-                    return entry;
-                });
-                const blueCount = blueByBook.get(bookName)?.length || 0;
-                const disabledCount = disabledByBook.get(bookName)?.length || 0;
-                // 只要有任一命中就写回，避免空写
-                if (blueCount > 0 || disabledCount > 0) {
-                    await setLorebookEntries_ACU(bookName, patched);
-                    converted += blueCount;
-                    enabled += disabledCount;
+                }
+                catch (cause) {
+                    logError_ACU(`[ACU-V2] 二合一失败（${bookName}）`, cause);
                 }
             }
-            catch (cause) {
-                logError_ACU(`[ACU-V2] 二合一失败（${bookName}）`, cause);
+            if (converted > 0 || enabled > 0) {
+                try {
+                    await loadEntries();
+                }
+                catch { }
+                try {
+                    await notifySkillMetaChanged();
+                }
+                catch { }
             }
         }
-        if (converted > 0 || enabled > 0) {
-            await loadEntries();
-            await notifySkillMetaChanged();
+        finally {
+            batchBusy.value = false;
         }
         return { converted, enabled };
     }
@@ -159488,10 +159565,23 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
             try {
                 useToastStore()[success ? 'success' : 'error'](message);
             }
-            catch { /* 无 pinia 环境跳过 */ }
+            catch (e) {
+                const msg = String(e?.message || '');
+                if (msg.includes('getActivePinia') || msg.includes('Pinia'))
+                    return;
+                console.error('[AgentPage] toast failed', e);
+            }
         }
         // ─── 世界书编辑（仅 Agent 接管关闭时可用） ───
-        const editingEnabled = computed(() => !agentControl.isAgentMode.value);
+        const editingEnabled = computed(() => {
+            if (agentControl.isAgentMode.value)
+                return false;
+            if (entries.status.value === 'loading')
+                return false;
+            if (worldbook.status.value === 'loading')
+                return false;
+            return true;
+        });
         const disabledSkillCount = computed(() => entries.groups.value.reduce((sum, group) => sum + group.entries.filter(entry => entry.hasSkill === true && entry.agentTakeoverState === 'initial_disabled').length, 0));
         const blueSkillCount = computed(() => entries.groups.value.reduce((sum, group) => sum + group.entries.filter(entry => entry.hasSkill === true && entry.isConstant === true).length, 0));
         const combinedCount = computed(() => {
@@ -159506,15 +159596,33 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
             return seen.size;
         });
         async function onEnableDisabledSkills() {
+            if (!editingEnabled.value)
+                return;
             const changed = await entries.batchEnableDisabledSkillEntries();
+            if (changed === 0) {
+                safeToast(false, '没有可启用的关闭状态 Skill 条目。');
+                return;
+            }
             safeToast(true, `已启用 ${changed} 个关闭状态的 Skill 世界书条目。`);
         }
         async function onConvertBlueToGreen() {
+            if (!editingEnabled.value)
+                return;
             const changed = await entries.batchConvertBlueToGreenEntries();
+            if (changed === 0) {
+                safeToast(false, '没有可转换的蓝灯 Skill 条目。');
+                return;
+            }
             safeToast(true, `已将 ${changed} 个蓝灯 Skill 世界书条目转为绿灯。`);
         }
         async function onCombined() {
+            if (!editingEnabled.value)
+                return;
             const { converted, enabled } = await entries.batchCombinedBlueToGreenAndEnable();
+            if (converted === 0 && enabled === 0) {
+                safeToast(false, '没有可处理的 Skill 条目。');
+                return;
+            }
             safeToast(true, `二合一完成：${converted} 个蓝灯转绿灯，${enabled} 个绿灯已启用。`);
         }
         const currentScopeLabel = computed(() => {
@@ -159563,8 +159671,8 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-v2-agent-page[data-v-a0548ace] { min-height: 100%; min-width: 0; padding: 20px; display: flex; flex-direction: column; gap: 18px;\n}\n.acu-v2-agent-page__hint[data-v-a0548ace] { margin: 12px 0 0; color: var(--acu-text-3); font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-agent-page__hint strong[data-v-a0548ace] { color: var(--acu-text-1); font-weight: 500;\n}\n.acu-v2-agent-page__editing[data-v-a0548ace] {\r\n  margin-top: 16px;\r\n  padding-top: 14px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  min-width: 0;\n}\n.acu-v2-agent-page__editing-title[data-v-a0548ace] { margin: 0; font-size: var(--acu-font-size-body, 12px); color: var(--acu-text-1);\n}\n.acu-v2-agent-page__editing-hint[data-v-a0548ace] { margin: 0; font-size: var(--acu-font-size-caption, 11px); color: var(--acu-text-3);\n}\n.acu-v2-agent-page__editing-actions[data-v-a0548ace] { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;\n}\n.acu-v2-agent-page__editing-count[data-v-a0548ace] {\r\n  margin-left: 4px; padding: 0 5px; border-radius: 8px; font-size: 10px;\r\n  background: color-mix(in srgb, var(--acu-accent) 18%, transparent);\r\n  color: var(--acu-accent);\n}\n@media (max-width: 860px) {\n.acu-v2-agent-page[data-v-a0548ace] { padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/AgentPage.vue#style-0-a0548ace");
-var AgentPage_vue_vue_type_style_index_0_scoped_a0548ace_lang = null;
+injectSfcStyle("\n.acu-v2-agent-page[data-v-03b90bed] { min-height: 100%; min-width: 0; padding: 20px; display: flex; flex-direction: column; gap: 18px;\n}\n.acu-v2-agent-page__hint[data-v-03b90bed] { margin: 12px 0 0; color: var(--acu-text-3); font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-agent-page__hint strong[data-v-03b90bed] { color: var(--acu-text-1); font-weight: 500;\n}\n.acu-v2-agent-page__editing[data-v-03b90bed] {\r\n  margin-top: 16px;\r\n  padding-top: 14px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  min-width: 0;\n}\n.acu-v2-agent-page__editing-title[data-v-03b90bed] { margin: 0; font-size: var(--acu-font-size-body, 12px); color: var(--acu-text-1);\n}\n.acu-v2-agent-page__editing-hint[data-v-03b90bed] { margin: 0; font-size: var(--acu-font-size-caption, 11px); color: var(--acu-text-3);\n}\n.acu-v2-agent-page__editing-actions[data-v-03b90bed] { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;\n}\n.acu-v2-agent-page__editing-count[data-v-03b90bed] {\r\n  margin-left: 4px; padding: 0 5px; border-radius: 8px; font-size: 10px;\r\n  background: color-mix(in srgb, var(--acu-accent) 18%, transparent);\r\n  color: var(--acu-accent);\n}\n@media (max-width: 860px) {\n.acu-v2-agent-page[data-v-03b90bed] { padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/AgentPage.vue#style-0-03b90bed");
+var AgentPage_vue_vue_type_style_index_0_scoped_03b90bed_lang = null;
 
 const _hoisted_1$l = { class: "acu-v2-agent-page" };
 const _hoisted_2$j = { class: "acu-v2-agent-page__hint" };
@@ -159749,7 +159857,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	})]);
 }
-var AgentPage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-a0548ace"]]);
+var AgentPage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-03b90bed"]]);
 
 var _sfc_main$k = /*@__PURE__*/ defineComponent({
     __name: 'AcuStatsList',
@@ -165369,22 +165477,29 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
                 return true;
             if (promise) {
                 let promiseResolved = false;
+                let promiseRejected = false;
                 try {
                     await Promise.race([
-                        promise.then(() => { promiseResolved = true; }),
+                        promise.then(() => { promiseResolved = true; }).catch(() => { promiseRejected = true; }),
                         new Promise((r) => setTimeout(r, Math.max(0, maxWaitMs - (Date.now() - start)))),
                     ]);
                 }
-                catch { /* TT ready promise 拒绝则继续轮询 */ }
+                catch {
+                    promiseRejected = true;
+                }
                 if (promiseResolved)
                     return true;
-                if (getAcuTauriReady().ready || getContextReady())
+                if (promiseRejected) {
+                    // TT ready 被拒绝：不直接回退为成功，继续轮询等待 TT 恢复或超时
+                }
+                else if (getAcuTauriReady().ready) {
                     return true;
+                }
             }
         }
         await new Promise((r) => setTimeout(r, 100));
     }
-    return getContextReady();
+    return tauri ? (getAcuTauriReady().ready && getContextReady()) : getContextReady();
 }
 
 /**

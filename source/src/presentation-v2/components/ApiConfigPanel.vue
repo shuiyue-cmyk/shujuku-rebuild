@@ -285,7 +285,16 @@ function startCreateDraft(): void {
   activeDraftSavedAt.value = null;
 }
 
-function selectPreset(name: string): void {
+async function selectPreset(name: string): Promise<void> {
+  if (activeDraftDirty.value) {
+    const confirmed = await dialogStore.confirm({
+      title: '切换预设',
+      message: '当前预设有未保存的修改，切换将丢失这些修改，确定要切换吗？',
+      confirmLabel: '切换',
+      confirmVariant: 'danger',
+    });
+    if (!confirmed) return;
+  }
   store.setActivePresetForCurrentChat(name);
 }
 

@@ -509,10 +509,13 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
   export function isSqlContent(content: string): boolean {
     const lines = content.split('\n');
     for (const line of lines) {
-      const trimmed = line.trim();
+      let trimmed = line.trim();
+      if (!trimmed) continue;
+      if (trimmed.charCodeAt(0) === 0xFEFF) trimmed = trimmed.slice(1).trim();
       if (!trimmed) continue;
       // 跳过 SQL 注释
       if (trimmed.startsWith('--')) continue;
+      if (trimmed.startsWith('/*')) continue;
       // 跳过 HTML 注释残留
       if (trimmed.startsWith('<!--') || trimmed.startsWith('-->')) continue;
       // 检查是否以 SQL 关键字开头

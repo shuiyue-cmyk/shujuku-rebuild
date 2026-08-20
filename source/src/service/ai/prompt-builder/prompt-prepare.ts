@@ -457,7 +457,7 @@ function resolvePromptRowWindow_ACU(
     const readContext = options?.worldbookReadContext ?? ownedReadContext;
     const worldbookConfig = getCurrentWorldbookConfig_ACU();
     const syncReadScopeNames = buildTableCandidateScope_ACU([
-      () => Array.isArray(worldbookConfig?.manualSelection) ? worldbookConfig.manualSelection : [],
+      () => worldbookConfig?.source === 'manual' && Array.isArray(worldbookConfig?.manualSelection) ? worldbookConfig.manualSelection : [],
       () => {
         const enabled = worldbookConfig?.enabledEntries;
         return enabled && typeof enabled === 'object' ? Object.keys(enabled) : [];

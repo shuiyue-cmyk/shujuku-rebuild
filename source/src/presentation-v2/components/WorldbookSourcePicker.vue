@@ -78,11 +78,11 @@ const emit = defineEmits<{
 
 const filter = ref('');
 
-const sourceOptions: AcuSegmentedOption[] = [
+const sourceOptions = computed<AcuSegmentedOption[]>(() => [
   { value: 'character', label: '跟随角色卡' },
-  ...(props.allowActive ? [{ value: 'active', label: '正文接收' }] : []),
+  ...(props.allowActive ? [{ value: 'active', label: '正文接收' } as AcuSegmentedOption] : []),
   { value: 'manual', label: '手动选择' },
-];
+]);
 
 const selectedSet = computed(() => new Set(props.selectedNames.filter(Boolean)));
 

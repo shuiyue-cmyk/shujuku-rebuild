@@ -73,17 +73,22 @@ export async function waitForAcuHostReady(maxWaitMs = 15000): Promise<boolean> {
       if (ready) return true;
       if (promise) {
         let promiseResolved = false;
+        let promiseRejected = false;
         try {
           await Promise.race([
-            promise.then(() => { promiseResolved = true; }),
+            promise.then(() => { promiseResolved = true; }).catch(() => { promiseRejected = true; }),
             new Promise<void>((r) => setTimeout(r, Math.max(0, maxWaitMs - (Date.now() - start)))),
           ]);
-        } catch { /* TT ready promise 拒绝则继续轮询 */ }
+        } catch { promiseRejected = true; }
         if (promiseResolved) return true;
-        if (getAcuTauriReady().ready || getContextReady()) return true;
+        if (promiseRejected) {
+          // TT ready 被拒绝：不直接回退为成功，继续轮询等待 TT 恢复或超时
+        } else if (getAcuTauriReady().ready) {
+          return true;
+        }
       }
     }
     await new Promise((r) => setTimeout(r, 100));
   }
-  return getContextReady();
+  return tauri ? (getAcuTauriReady().ready && getContextReady()) : getContextReady();
 }

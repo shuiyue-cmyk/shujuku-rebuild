@@ -103,11 +103,20 @@ const entryEmptyText = ref('当前 Agent 世界书范围内无可 Skill 化的�
 function safeToast(success: boolean, message: string): void {
   try {
     useToastStore()[success ? 'success' : 'error'](message);
-  } catch { /* 无 pinia 环境跳过 */ }
+  } catch (e: any) {
+    const msg = String(e?.message || '');
+    if (msg.includes('getActivePinia') || msg.includes('Pinia')) return;
+    console.error('[AgentPage] toast failed', e);
+  }
 }
 
 // ─── 世界书编辑（仅 Agent 接管关闭时可用） ───
-const editingEnabled = computed(() => !agentControl.isAgentMode.value);
+const editingEnabled = computed(() => {
+  if (agentControl.isAgentMode.value) return false;
+  if (entries.status.value === 'loading') return false;
+  if (worldbook.status.value === 'loading') return false;
+  return true;
+});
 const disabledSkillCount = computed(() => entries.groups.value.reduce(
   (sum, group) => sum + group.entries.filter(entry => entry.hasSkill === true && entry.agentTakeoverState === 'initial_disabled').length, 0,
 ));
@@ -127,17 +136,23 @@ const combinedCount = computed(() => {
 });
 
 async function onEnableDisabledSkills(): Promise<void> {
+  if (!editingEnabled.value) return;
   const changed = await entries.batchEnableDisabledSkillEntries();
+  if (changed === 0) { safeToast(false, '没有可启用的关闭状态 Skill 条目。'); return; }
   safeToast(true, `已启用 ${changed} 个关闭状态的 Skill 世界书条目。`);
 }
 
 async function onConvertBlueToGreen(): Promise<void> {
+  if (!editingEnabled.value) return;
   const changed = await entries.batchConvertBlueToGreenEntries();
+  if (changed === 0) { safeToast(false, '没有可转换的蓝灯 Skill 条目。'); return; }
   safeToast(true, `已将 ${changed} 个蓝灯 Skill 世界书条目转为绿灯。`);
 }
 
 async function onCombined(): Promise<void> {
+  if (!editingEnabled.value) return;
   const { converted, enabled } = await entries.batchCombinedBlueToGreenAndEnable();
+  if (converted === 0 && enabled === 0) { safeToast(false, '没有可处理的 Skill 条目。'); return; }
   safeToast(true, `二合一完成：${converted} 个蓝灯转绿灯，${enabled} 个绿灯已启用。`);
 }
 
