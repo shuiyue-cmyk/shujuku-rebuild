@@ -1977,18 +1977,26 @@ function extractTag(args) {
     return UNCATEGORIZED_TAG;
 }
 const LOG_SENSITIVE_KEYS = /^(api[_-]?key|apikey|key|token|authorization|auth|password|proxy[_-]?password|secret|bearer|accessToken|access_token)$/i;
-function maskSensitiveInLogValue(value, depth = 0) {
+function maskSensitiveInLogValue(value, depth = 0, seen = new WeakSet()) {
     if (depth > 6 || value === null || value === undefined)
-        return value;
-    if (Array.isArray(value))
-        return value.map((v) => maskSensitiveInLogValue(v, depth + 1));
+        return depth > 6 ? '[Truncated]' : value;
+    if (typeof value === 'object') {
+        if (seen.has(value))
+            return '[Circular]';
+        seen.add(value);
+    }
+    if (Array.isArray(value)) {
+        if (value.length > 200)
+            return `[Array(${value.length}) truncated]`;
+        return value.map((v) => maskSensitiveInLogValue(v, depth + 1, seen));
+    }
     if (typeof value === 'object') {
         const out = {};
         for (const [k, v] of Object.entries(value)) {
             if (LOG_SENSITIVE_KEYS.test(k))
                 out[k] = '***';
             else
-                out[k] = maskSensitiveInLogValue(v, depth + 1);
+                out[k] = maskSensitiveInLogValue(v, depth + 1, seen);
         }
         return out;
     }
@@ -165580,18 +165588,25 @@ function maskSecret(value) {
 }
 const SENSITIVE_KEYS = /^(api[_-]?key|apikey|key|token|authorization|auth|password|proxy[_-]?password|secret|bearer|accessToken|access_token)$/i;
 /** 递归脱敏对象中的敏感字段（biotracker 请求/响应快照可能含 Authorization/key 回显） */
-function maskSensitiveFields(value) {
-    if (Array.isArray(value))
-        return value.map(maskSensitiveFields);
+function maskSensitiveFields(value, depth = 0, seen = new WeakSet()) {
+    if (depth > 6)
+        return '[Truncated]';
+    if (Array.isArray(value)) {
+        if (value.length > 200)
+            return `[Array(${value.length}) truncated]`;
+        return value.map(v => maskSensitiveFields(v, depth + 1, seen));
+    }
     if (value && typeof value === 'object') {
+        if (seen.has(value))
+            return '[Circular]';
+        seen.add(value);
         const out = {};
         for (const [k, v] of Object.entries(value)) {
             if (SENSITIVE_KEYS.test(k)) {
-                // 敏感键：字符串值掩码；对象/数组值递归脱敏（保持结构，不退化 [object Object]）
-                out[k] = v && typeof v === 'object' ? maskSensitiveFields(v) : maskSecret(v);
+                out[k] = v && typeof v === 'object' ? maskSensitiveFields(v, depth + 1, seen) : maskSecret(v);
             }
             else {
-                out[k] = maskSensitiveFields(v);
+                out[k] = maskSensitiveFields(v, depth + 1, seen);
             }
         }
         return out;
@@ -165649,10 +165664,10 @@ function useDebugPanel() {
             toast.warning('请先开启 Debug 采集再导出。');
             return;
         }
-        // 防护：Debug 未由本页开启（如持久化 warn 导致挂载即 active）时，以当前时间为起点，并按时间切片日志
-        const effectiveStart = startedAt || Date.now();
         const allLogs = getAllLogs();
-        const logs = allLogs.filter((e) => e.timestamp >= effectiveStart);
+        // 仅当通过本页 startDebug 启动时才按时间切片；持久化 active 导致 startedAt===0 时不切片，避免空导出
+        const logs = startedAt ? allLogs.filter((e) => e.timestamp >= startedAt) : allLogs;
+        const effectiveStart = startedAt || (allLogs[0]?.timestamp ?? Date.now());
         const cfg = settings_ACU?.apiConfig || {};
         const activePreset = (() => {
             try {

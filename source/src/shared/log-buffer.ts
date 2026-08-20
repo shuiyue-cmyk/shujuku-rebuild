@@ -99,14 +99,21 @@ export function extractTag(args: any[]): string {
 
 const LOG_SENSITIVE_KEYS = /^(api[_-]?key|apikey|key|token|authorization|auth|password|proxy[_-]?password|secret|bearer|accessToken|access_token)$/i;
 
-function maskSensitiveInLogValue(value: any, depth = 0): any {
-  if (depth > 6 || value === null || value === undefined) return value;
-  if (Array.isArray(value)) return value.map((v) => maskSensitiveInLogValue(v, depth + 1));
+function maskSensitiveInLogValue(value: any, depth = 0, seen = new WeakSet()): any {
+  if (depth > 6 || value === null || value === undefined) return depth > 6 ? '[Truncated]' : value;
+  if (typeof value === 'object') {
+    if (seen.has(value)) return '[Circular]';
+    seen.add(value);
+  }
+  if (Array.isArray(value)) {
+    if (value.length > 200) return `[Array(${value.length}) truncated]`;
+    return value.map((v) => maskSensitiveInLogValue(v, depth + 1, seen));
+  }
   if (typeof value === 'object') {
     const out: Record<string, any> = {};
     for (const [k, v] of Object.entries(value)) {
       if (LOG_SENSITIVE_KEYS.test(k)) out[k] = '***';
-      else out[k] = maskSensitiveInLogValue(v, depth + 1);
+      else out[k] = maskSensitiveInLogValue(v, depth + 1, seen);
     }
     return out;
   }

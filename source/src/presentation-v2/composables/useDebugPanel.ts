@@ -54,16 +54,21 @@ function maskSecret(value: unknown): string {
 const SENSITIVE_KEYS = /^(api[_-]?key|apikey|key|token|authorization|auth|password|proxy[_-]?password|secret|bearer|accessToken|access_token)$/i;
 
 /** 递归脱敏对象中的敏感字段（biotracker 请求/响应快照可能含 Authorization/key 回显） */
-function maskSensitiveFields(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(maskSensitiveFields);
+function maskSensitiveFields(value: unknown, depth = 0, seen = new WeakSet<object>()): unknown {
+  if (depth > 6) return '[Truncated]';
+  if (Array.isArray(value)) {
+    if (value.length > 200) return `[Array(${value.length}) truncated]`;
+    return value.map(v => maskSensitiveFields(v, depth + 1, seen));
+  }
   if (value && typeof value === 'object') {
+    if (seen.has(value as object)) return '[Circular]';
+    seen.add(value as object);
     const out: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
       if (SENSITIVE_KEYS.test(k)) {
-        // 敏感键：字符串值掩码；对象/数组值递归脱敏（保持结构，不退化 [object Object]）
-        out[k] = v && typeof v === 'object' ? maskSensitiveFields(v) : maskSecret(v);
+        out[k] = v && typeof v === 'object' ? maskSensitiveFields(v, depth + 1, seen) : maskSecret(v);
       } else {
-        out[k] = maskSensitiveFields(v);
+        out[k] = maskSensitiveFields(v, depth + 1, seen);
       }
     }
     return out;
@@ -127,10 +132,10 @@ export function useDebugPanel() {
       toast.warning('请先开启 Debug 采集再导出。');
       return;
     }
-    // 防护：Debug 未由本页开启（如持久化 warn 导致挂载即 active）时，以当前时间为起点，并按时间切片日志
-    const effectiveStart = startedAt || Date.now();
     const allLogs = getAllLogs();
-    const logs: LogEntry[] = allLogs.filter((e) => e.timestamp >= effectiveStart);
+    // 仅当通过本页 startDebug 启动时才按时间切片；持久化 active 导致 startedAt===0 时不切片，避免空导出
+    const logs: LogEntry[] = startedAt ? allLogs.filter((e) => e.timestamp >= startedAt) : allLogs;
+    const effectiveStart = startedAt || (allLogs[0]?.timestamp ?? Date.now());
     const cfg = settings_ACU?.apiConfig || {};
     const activePreset = (() => {
       try {
