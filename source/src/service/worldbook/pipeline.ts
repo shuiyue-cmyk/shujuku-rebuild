@@ -1391,9 +1391,13 @@ export   async function collectCombinedWorldbookEntriesByStrategy_ACU(options: a
           return !hasUsableWorldbookSkillMeta_ACU(entry.comment) || forcedEntrySet.has(entry);
         },
       );
-      let keywordEntries = userEnabledEntries.filter(
-        entry => !constantEntries.includes(entry) && !forcedEntrySet.has(entry),
-      );
+      let keywordEntries = userEnabledEntries.filter(entry => {
+        if (constantEntries.includes(entry)) return false;
+        if (forcedEntrySet.has(entry)) return false;
+        // active 下 skill 化蓝灯未放行不参与关键词触发（避免被正文关键词误触发）
+        if (isActivePrimary && hasUsableWorldbookSkillMeta_ACU(entry.comment) && String(entry.type || '').trim().toLowerCase() === 'constant') return false;
+        return true;
+      });
 
       if (includeConstantEntriesInBaseScan) {
           const constantBaseText = constantEntries

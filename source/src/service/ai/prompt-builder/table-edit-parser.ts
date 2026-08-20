@@ -149,9 +149,19 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
         }
 
         if (commandReconstructor) {
-            const totalOpen = (commandReconstructor.match(/{/g) || []).length;
-            const totalClose = (commandReconstructor.match(/}/g) || []).length;
-            if (totalOpen > totalClose) {
+            let openBraces = 0, closeBraces = 0, inSingle = false, inDouble = false, escaped = false;
+            for (let i = 0; i < commandReconstructor.length; i++) {
+                const ch = commandReconstructor[i];
+                if (escaped) { escaped = false; continue; }
+                if (ch === '\\') { escaped = true; continue; }
+                if (inSingle) { if (ch === "'") inSingle = false; continue; }
+                if (inDouble) { if (ch === '"') inDouble = false; continue; }
+                if (ch === "'") { inSingle = true; continue; }
+                if (ch === '"') { inDouble = true; continue; }
+                if (ch === '{') openBraces++;
+                else if (ch === '}') closeBraces++;
+            }
+            if (openBraces > closeBraces) {
                 isInJsonBlock = true;
             } else {
                 isInJsonBlock = false;

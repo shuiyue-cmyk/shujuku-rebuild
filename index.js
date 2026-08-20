@@ -59895,9 +59895,41 @@ function parseAndApplyTableEditsToData_ACU(aiResponse, tableData, updateMode = '
             commandReconstructor += ' ' + lineContent;
         }
         if (commandReconstructor) {
-            const totalOpen = (commandReconstructor.match(/{/g) || []).length;
-            const totalClose = (commandReconstructor.match(/}/g) || []).length;
-            if (totalOpen > totalClose) {
+            let openBraces = 0, closeBraces = 0, inSingle = false, inDouble = false, escaped = false;
+            for (let i = 0; i < commandReconstructor.length; i++) {
+                const ch = commandReconstructor[i];
+                if (escaped) {
+                    escaped = false;
+                    continue;
+                }
+                if (ch === '\\') {
+                    escaped = true;
+                    continue;
+                }
+                if (inSingle) {
+                    if (ch === "'")
+                        inSingle = false;
+                    continue;
+                }
+                if (inDouble) {
+                    if (ch === '"')
+                        inDouble = false;
+                    continue;
+                }
+                if (ch === "'") {
+                    inSingle = true;
+                    continue;
+                }
+                if (ch === '"') {
+                    inDouble = true;
+                    continue;
+                }
+                if (ch === '{')
+                    openBraces++;
+                else if (ch === '}')
+                    closeBraces++;
+            }
+            if (openBraces > closeBraces) {
                 isInJsonBlock = true;
             }
             else {
@@ -70832,7 +70864,16 @@ async function collectCombinedWorldbookEntriesByStrategy_ACU(options = {}) {
         // active（正文接收）：蓝灯恒常条目照发；skill 化条目需本轮 agent 放行才发
         return !hasUsableWorldbookSkillMeta_ACU(entry.comment) || forcedEntrySet.has(entry);
     });
-    let keywordEntries = userEnabledEntries.filter(entry => !constantEntries.includes(entry) && !forcedEntrySet.has(entry));
+    let keywordEntries = userEnabledEntries.filter(entry => {
+        if (constantEntries.includes(entry))
+            return false;
+        if (forcedEntrySet.has(entry))
+            return false;
+        // active 下 skill 化蓝灯未放行不参与关键词触发（避免被正文关键词误触发）
+        if (isActivePrimary && hasUsableWorldbookSkillMeta_ACU(entry.comment) && String(entry.type || '').trim().toLowerCase() === 'constant')
+            return false;
+        return true;
+    });
     if (includeConstantEntriesInBaseScan) {
         const constantBaseText = constantEntries
             .filter(entry => !entry.prevent_recursion)
