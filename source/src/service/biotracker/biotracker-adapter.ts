@@ -15,6 +15,7 @@ import { resetPoller, stopPoller, runTracker } from './vendor/tracker.js';
 import { callOpenAICompatible, extractJson } from './vendor/api.js';
 import { getHostContext } from './vendor/host.js';
 import { settings_ACU, currentChatFileIdentifier_ACU, allChatMessages_ACU, currentJsonTableData_ACU, getChatMutationAbortSignal_ACU } from '../runtime/state-manager';
+import { ref } from 'vue';
 import { getSortedSheetKeys_ACU } from '../template/chat-scope';
 import { saveSettings_ACU } from '../settings/settings-service';
 import { resolveApiConfigByPreset_ACU } from '../settings/api-preset-service';
@@ -324,6 +325,9 @@ export function ensureBiotrackerPopup_ACU(): void {
 // 开关与恒字系列
 // ═══════════════════════════════════════════════════════════════
 
+/** 响应式 tick，用于让 visibleWhen 等计算属性在开关切换时重新求值 */
+export const biotrackerEnabledTick = ref(0);
+
 /** 高级设置总开关（settings_ACU.bsBiotracker.enabled）读写 */
 export function isBiotrackerEnabled_ACU(): boolean {
   return getBiotrackerRoot().enabled === true;
@@ -331,6 +335,7 @@ export function isBiotrackerEnabled_ACU(): boolean {
 
 export function setBiotrackerEnabled_ACU(enabled: boolean): void {
   getBiotrackerRoot().enabled = !!enabled;
+  biotrackerEnabledTick.value++;
   if (getBiotrackerRoot().enabled) {
     // 恒字系列：after_ai / 完整更新 / 格式化输出 / json
     getBiotrackerRoot().triggerTiming = 'after_ai';

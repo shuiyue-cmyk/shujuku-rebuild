@@ -23,6 +23,7 @@ import DeveloperPage from '../pages/DeveloperPage.vue';
 import BiotrackerPage from '../pages/BiotrackerPage.vue';
 import { dashboardCopy } from '../copy/dashboard-copy';
 import { useDevOptionsStore } from '../stores/dev-options-store';
+import { biotrackerEnabledTick, isBiotrackerEnabled_ACU } from '../../service/biotracker/biotracker-adapter';
 
 /** 正文替换页对应的 feature gate key；页面可见性由正文替换自身 enabled 控制。 */
 export const FEATURE_GATE_CONTENT_REPLACE = 'content-replace';
@@ -57,7 +58,7 @@ export const ACU_V2_PAGE_REGISTRY: readonly AcuV2Page[] = Object.freeze([
   // 工具
   { id: 'data-mgmt', title: '数据管理', group: 'tool', component: markRaw(DataMgmtPage) },
   { id: 'advanced-tools', title: '高级工具', group: 'tool', component: markRaw(AdvancedToolsPage) },
-  { id: 'biotracker', title: '生理追踪', group: 'developer', component: markRaw(BiotrackerPage), visibleWhen: () => useDevOptionsStore().developerOptionsEnabled },
+  { id: 'biotracker', title: '生理追踪', group: 'developer', component: markRaw(BiotrackerPage), visibleWhen: () => { void biotrackerEnabledTick.value; return useDevOptionsStore().developerOptionsEnabled && isBiotrackerEnabled_ACU(); } },
 
   // 开发者（plan §D24：仪表盘"启用开发者选项"总开关 gate）
   {
