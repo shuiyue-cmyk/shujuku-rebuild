@@ -282,6 +282,49 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
     return changed;
   }
 
+  /** 世界书编辑③二合一：skill 化蓝灯变绿灯，然后绿灯全开启（两步合并为一次遍历） */
+  async function batchCombinedBlueToGreenAndEnable(): Promise<{ converted: number; enabled: number }> {
+    const blueByBook = collectTargetUidsByBook(entry => entry.hasSkill === true && entry.isConstant === true);
+    const disabledByBook = collectTargetUidsByBook(entry => entry.hasSkill === true && entry.agentTakeoverState === 'initial_disabled');
+    const allBooks = new Set<string>([...blueByBook.keys(), ...disabledByBook.keys()]);
+    let converted = 0;
+    let enabled = 0;
+    for (const bookName of allBooks) {
+      const blueSet = new Set((blueByBook.get(bookName) || []).map(uid => String(uid)));
+      const disabledSet = new Set((disabledByBook.get(bookName) || []).map(uid => String(uid)));
+      try {
+        const all = await getLorebookEntries_ACU(bookName);
+        const patched = (Array.isArray(all) ? all : []).map(entry => {
+          const uidStr = String(entry.uid);
+          let touched = false;
+          if (blueSet.has(uidStr)) {
+            const currentType = String(entry.type || '').trim().toLowerCase();
+            if (currentType === 'constant') { entry.type = ''; touched = true; }
+          }
+          if (disabledSet.has(uidStr) && entry.enabled === false) {
+            entry.enabled = true; touched = true;
+          }
+          return entry;
+        });
+        const blueCount = blueByBook.get(bookName)?.length || 0;
+        const disabledCount = disabledByBook.get(bookName)?.length || 0;
+        // 只要有任一命中就写回，避免空写
+        if (blueCount > 0 || disabledCount > 0) {
+          await setLorebookEntries_ACU(bookName, patched);
+          converted += blueCount;
+          enabled += disabledCount;
+        }
+      } catch (cause: any) {
+        logError_ACU(`[ACU-V2] 二合一失败（${bookName}）`, cause);
+      }
+    }
+    if (converted > 0 || enabled > 0) {
+      await loadEntries();
+      await notifySkillMetaChanged();
+    }
+    return { converted, enabled };
+  }
+
   return {
     groups,
     status,
@@ -296,5 +339,6 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
     toggleGroupExpanded,
     batchEnableDisabledSkillEntries,
     batchConvertBlueToGreenEntries,
+    batchCombinedBlueToGreenAndEnable,
   };
 }

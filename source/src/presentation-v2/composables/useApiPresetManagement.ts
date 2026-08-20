@@ -15,7 +15,7 @@ export interface ApiPresetDraft {
   nonPrefillSupport: boolean;
   /** 流式输出（预设级） */
   streamingEnabled: boolean;
-  /** 思考强度（预设级）：low / medium / high / max */
+  /** 思考强度（预设级）：low / medium / high / max / xhigh */
   reasoningEffort: string;
 }
 
@@ -72,8 +72,8 @@ export function apiPresetFromDraft(draft: ApiPresetDraft): AcuV2ApiPreset {
       excludeBodyParams: draft.excludeBodyParams || '',
       requestHeaders: draft.requestHeaders || '',
       streamingEnabled: draft.streamingEnabled === true,
-      reasoningEffort: (['low', 'medium', 'high', 'max'] as const).includes(draft.reasoningEffort as any)
-        ? (draft.reasoningEffort as 'low' | 'medium' | 'high' | 'max')
+      reasoningEffort: (['low', 'medium', 'high', 'max', 'xhigh'] as const).includes(draft.reasoningEffort as any)
+        ? (draft.reasoningEffort as 'low' | 'medium' | 'high' | 'max' | 'xhigh')
         : 'medium',
     },
     nonPrefillSupport: draft.nonPrefillSupport === true,

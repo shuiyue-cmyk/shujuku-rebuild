@@ -207,6 +207,7 @@ const reasoningEffortOptions: AcuSelectOption[] = [
   { value: "medium", label: "Medium" },
   { value: "high", label: "High" },
   { value: "max", label: "Max" },
+  { value: "xhigh", label: "XHigh" },
 ];
 
 const store = useApiPresetStore();

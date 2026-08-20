@@ -92,10 +92,10 @@ export function buildCustomApiRequestBody_ACU(
     chat_completion_source: 'custom',
     group_names: [],
     include_reasoning: false,
-    // 思考强度（预设级优先）：仅允许 low/medium/high/max，非法值回退 medium
+    // 思考强度（预设级优先）：仅允许 low/medium/high/max/xhigh，非法值回退 medium
     reasoning_effort: ((): string => {
       const raw = String(effectiveApiConfig.reasoningEffort || settings_ACU.reasoningEffort || 'medium').trim().toLowerCase();
-      return ['low', 'medium', 'high', 'max'].includes(raw) ? raw : 'medium';
+      return ['low', 'medium', 'high', 'max', 'xhigh'].includes(raw) ? raw : 'medium';
     })(),
     enable_web_search: false,
     request_images: false,

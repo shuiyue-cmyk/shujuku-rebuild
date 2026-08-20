@@ -15,7 +15,7 @@ import { logWarn_ACU } from '../../shared/utils';
 export type ApiPresetApiMode_ACU = 'custom';
 
 /** 思考强度等级（reasoning_effort） */
-export type ReasoningEffort_ACU = 'low' | 'medium' | 'high' | 'max';
+export type ReasoningEffort_ACU = 'low' | 'medium' | 'high' | 'max' | 'xhigh';
 
 export interface ApiPresetApiConfig_ACU {
   url: string;
@@ -69,7 +69,7 @@ export function normalizeApiConfig_ACU(value: any): ApiPresetApiConfig_ACU {
   const temperature = Number(source.temperature ?? 1);
   const streamingEnabled = source.streamingEnabled === true ? true : source.streamingEnabled === false ? false : undefined;
   const rawReasoning = String(source.reasoningEffort ?? '').trim().toLowerCase();
-  const reasoningEffort = (['low', 'medium', 'high', 'max'] as const).includes(rawReasoning as any)
+  const reasoningEffort = (['low', 'medium', 'high', 'max', 'xhigh'] as const).includes(rawReasoning as any)
     ? (rawReasoning as ReasoningEffort_ACU)
     : undefined;
   // [修复] 保留源对象中所有非白名单字段（如 topP/top_p/frequency_penalty），

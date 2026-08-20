@@ -59,6 +59,13 @@
               <i class="fa-solid fa-wand-magic-sparkles"></i> 蓝灯 Skill 转绿灯
               <span v-if="blueSkillCount > 0" class="acu-v2-agent-page__editing-count">{{ blueSkillCount }}</span>
             </AcuButton>
+            <AcuButton
+              :disabled="!editingEnabled || combinedCount === 0"
+              @click="onCombined"
+            >
+              <i class="fa-solid fa-layer-group"></i> 二合一
+              <span v-if="combinedCount > 0" class="acu-v2-agent-page__editing-count">{{ combinedCount }}</span>
+            </AcuButton>
           </div>
         </div>
       </AcuPanel>
@@ -107,6 +114,17 @@ const disabledSkillCount = computed(() => entries.groups.value.reduce(
 const blueSkillCount = computed(() => entries.groups.value.reduce(
   (sum, group) => sum + group.entries.filter(entry => entry.hasSkill === true && entry.isConstant === true).length, 0,
 ));
+const combinedCount = computed(() => {
+  const seen = new Set<string>();
+  for (const group of entries.groups.value) {
+    for (const entry of group.entries) {
+      if (entry.hasSkill === true && (entry.isConstant === true || entry.agentTakeoverState === 'initial_disabled')) {
+        seen.add(`${entry.bookName}\u0000${String(entry.uid)}`);
+      }
+    }
+  }
+  return seen.size;
+});
 
 async function onEnableDisabledSkills(): Promise<void> {
   const changed = await entries.batchEnableDisabledSkillEntries();
@@ -116,6 +134,11 @@ async function onEnableDisabledSkills(): Promise<void> {
 async function onConvertBlueToGreen(): Promise<void> {
   const changed = await entries.batchConvertBlueToGreenEntries();
   safeToast(true, `已将 ${changed} 个蓝灯 Skill 世界书条目转为绿灯。`);
+}
+
+async function onCombined(): Promise<void> {
+  const { converted, enabled } = await entries.batchCombinedBlueToGreenAndEnable();
+  safeToast(true, `二合一完成：${converted} 个蓝灯转绿灯，${enabled} 个绿灯已启用。`);
 }
 
 const currentScopeLabel = computed(() => {
