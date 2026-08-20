@@ -245,10 +245,14 @@ function updatePromptSegment(
   settings.updatePromptSegment(index, patch);
 }
 
+let entriesRefreshSeq = 0;
 async function refreshEntriesGroups(): Promise<void> {
+  const seq = ++entriesRefreshSeq;
   const names = await entriesSource.resolveBookNames();
+  if (seq !== entriesRefreshSeq) return;
   entryEmptyText.value = resolveEntryEmptyText(names);
   await entries.loadEntries(names);
+  if (seq !== entriesRefreshSeq) return;
   if (entriesSource.source.value === 'character') {
     const charPrimary = entriesWb.charPrimary.value;
     entriesSourceLabel.value = charPrimary
