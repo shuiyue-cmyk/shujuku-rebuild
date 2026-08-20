@@ -165,14 +165,14 @@ import { $popupInstance_ACU, $cardUpdateStatusDisplay_ACU } from '../state/ui-re
           
           let statusText = "";
           if (readyList.length > 0) {
-               statusText += `<span style="color: lightgreen;">[就绪] ${readyList.map(u => u.name).join(', ')}</span> `;
+               statusText += `<span style="color: lightgreen;">[就绪] ${readyList.map(u => escapeHtml_ACU(u.name)).join(', ')}</span> `;
           }
           
           if (upcomingList.length > 0) {
               const next = upcomingList[0];
               const othersSameFloor = upcomingList.filter(u => u.floor === next.floor && u !== next);
-              let names = next.name;
-              if (othersSameFloor.length > 0) names += ", " + othersSameFloor.map(u => u.name).join(", ");
+              let names = escapeHtml_ACU(next.name);
+              if (othersSameFloor.length > 0) names += ", " + othersSameFloor.map(u => escapeHtml_ACU(u.name)).join(", ");
               
               if (statusText) statusText += " | ";
               statusText += `下一次: <b>${names}</b> (AI楼层 ${next.floor})`;

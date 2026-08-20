@@ -97,7 +97,7 @@ export function extractTag(args: any[]): string {
   return UNCATEGORIZED_TAG;
 }
 
-const LOG_SENSITIVE_KEYS = /^(api[_-]?key|key|token|authorization|auth|password|proxy[_-]?password|secret|bearer)$/i;
+const LOG_SENSITIVE_KEYS = /^(api[_-]?key|apikey|key|token|authorization|auth|password|proxy[_-]?password|secret|bearer|accessToken|access_token)$/i;
 
 function maskSensitiveInLogValue(value: any, depth = 0): any {
   if (depth > 6 || value === null || value === undefined) return value;
@@ -118,7 +118,7 @@ function normalizeLogArg_ACU(arg: any): string {
   if (arg === undefined) return 'undefined';
   if (typeof arg === 'string') {
     // 对可能含敏感头/体的长字符串做键名脱敏（如 \"apiKey\":\"sk-...\"）
-    return arg.replace(/\"(api[_-]?key|authorization|token|password|secret)\"\s*:\s*\"[^\"]*\"/gi, '\"$1\":\"***\"');
+    return arg.replace(/\"(api[_-]?key|apikey|authorization|token|password|secret|auth|bearer|accessToken|access_token)\"\s*:\s*\"[^\"]*\"/gi, '\"$1\":\"***\"');
   }
   if (typeof arg === 'number' || typeof arg === 'boolean' || typeof arg === 'bigint') return String(arg);
   if (typeof arg === 'symbol') return String(arg);

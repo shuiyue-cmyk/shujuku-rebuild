@@ -383,6 +383,7 @@ export   function cloneScopedConfigData_ACU(value: any, fallback: any = null) {
   export function assertSafeHttpEndpoint_ACU(endpoint: string): void {
     const raw = String(endpoint || '').trim();
     if (!raw) throw new Error('端点地址为空。');
+    if (raw.startsWith('//')) throw new Error('端点不能使用协议相对 URL（//host），请使用完整 http(s):// 地址。');
     if (!/^https?:/i.test(raw)) {
       // 相对路径放行（同源）；显式危险 scheme 拒绝
       const schemeMatch = raw.match(/^([a-z][a-z0-9+.-]*):/i);

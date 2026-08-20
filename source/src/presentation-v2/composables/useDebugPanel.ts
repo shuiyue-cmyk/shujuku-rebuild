@@ -51,7 +51,7 @@ function maskSecret(value: unknown): string {
   return `${value.slice(0, 3)}***${value.slice(-3)}`;
 }
 
-const SENSITIVE_KEYS = /^(api[_-]?key|key|token|authorization|auth|password|proxy[_-]?password|secret)$/i;
+const SENSITIVE_KEYS = /^(api[_-]?key|apikey|key|token|authorization|auth|password|proxy[_-]?password|secret|bearer|accessToken|access_token)$/i;
 
 /** 递归脱敏对象中的敏感字段（biotracker 请求/响应快照可能含 Authorization/key 回显） */
 function maskSensitiveFields(value: unknown): unknown {

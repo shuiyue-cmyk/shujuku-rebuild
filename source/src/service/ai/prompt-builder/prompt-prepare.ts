@@ -486,16 +486,17 @@ function resolvePromptRowWindow_ACU(
       },
     ]);
     const readScopeNames = [...syncReadScopeNames, ...asyncReadScopeNames];
+    const sharedEntriesByBook = await buildSharedEntriesByBook_ACU(readContext, readScopeNames);
     const [worldbookContent, worldbookDatabaseExcludedContent] = await Promise.all([
         getCombinedWorldbookContent_ACU(worldbookScanText, {
             ...worldbookOptions,
             readContext,
-            entriesByBook: await buildSharedEntriesByBook_ACU(readContext, readScopeNames),
+            entriesByBook: sharedEntriesByBook,
         }),
         getCombinedWorldbookContent_ACU(worldbookScanText, {
             ...worldbookOptions,
             readContext,
-            entriesByBook: await buildSharedEntriesByBook_ACU(readContext, readScopeNames),
+            entriesByBook: sharedEntriesByBook,
             excludeEntry: isDatabaseGeneratedLorebookEntry_ACU,
         }),
     ]);

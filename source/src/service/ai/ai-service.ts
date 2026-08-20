@@ -33,6 +33,12 @@ export async function fetchAvailableModels_ACU(apiUrl: string, apiKey: string): 
     if (!apiUrl) {
         return { success: false, error: '请输入API基础URL。' };
     }
+    try {
+        const { assertSafeHttpEndpoint_ACU } = await import('../../shared/utils');
+        assertSafeHttpEndpoint_ACU(apiUrl);
+    } catch (e: any) {
+        return { success: false, error: String(e?.message || '端点地址不安全。') };
+    }
 
     const statusUrl = `/api/backends/chat-completions/status`;
     const body = {

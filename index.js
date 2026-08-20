@@ -1976,7 +1976,7 @@ function extractTag(args) {
     }
     return UNCATEGORIZED_TAG;
 }
-const LOG_SENSITIVE_KEYS = /^(api[_-]?key|key|token|authorization|auth|password|proxy[_-]?password|secret|bearer)$/i;
+const LOG_SENSITIVE_KEYS = /^(api[_-]?key|apikey|key|token|authorization|auth|password|proxy[_-]?password|secret|bearer|accessToken|access_token)$/i;
 function maskSensitiveInLogValue(value, depth = 0) {
     if (depth > 6 || value === null || value === undefined)
         return value;
@@ -2001,7 +2001,7 @@ function normalizeLogArg_ACU(arg) {
         return 'undefined';
     if (typeof arg === 'string') {
         // 对可能含敏感头/体的长字符串做键名脱敏（如 \"apiKey\":\"sk-...\"）
-        return arg.replace(/\"(api[_-]?key|authorization|token|password|secret)\"\s*:\s*\"[^\"]*\"/gi, '\"$1\":\"***\"');
+        return arg.replace(/\"(api[_-]?key|apikey|authorization|token|password|secret|auth|bearer|accessToken|access_token)\"\s*:\s*\"[^\"]*\"/gi, '\"$1\":\"***\"');
     }
     if (typeof arg === 'number' || typeof arg === 'boolean' || typeof arg === 'bigint')
         return String(arg);
@@ -2571,6 +2571,8 @@ function assertSafeHttpEndpoint_ACU(endpoint) {
     const raw = String(endpoint || '').trim();
     if (!raw)
         throw new Error('端点地址为空。');
+    if (raw.startsWith('//'))
+        throw new Error('端点不能使用协议相对 URL（//host），请使用完整 http(s):// 地址。');
     if (!/^https?:/i.test(raw)) {
         // 相对路径放行（同源）；显式危险 scheme 拒绝
         const schemeMatch = raw.match(/^([a-z][a-z0-9+.-]*):/i);
@@ -2601,6 +2603,32 @@ function assertSafeHttpEndpoint_ACU(endpoint) {
         throw new Error('端点指向私网/环回/链路本地地址，存在 SSRF 风险，请使用公网 https 地址。');
     }
 }
+
+var utils = /*#__PURE__*/Object.freeze({
+    __proto__: null,
+    applySheetOrderNumbers_ACU: applySheetOrderNumbers_ACU,
+    assertSafeHttpEndpoint_ACU: assertSafeHttpEndpoint_ACU,
+    buildBoundaryRulesFromLegacyTags_ACU: buildBoundaryRulesFromLegacyTags_ACU,
+    cleanChatName_ACU: cleanChatName_ACU,
+    cloneScopedConfigData_ACU: cloneScopedConfigData_ACU,
+    deepMerge_ACU: deepMerge_ACU,
+    ensureSheetOrderNumbers_ACU: ensureSheetOrderNumbers_ACU,
+    escapeRegExp_ACU: escapeRegExp_ACU,
+    formatPlotScopeUpdatedAt_ACU: formatPlotScopeUpdatedAt_ACU,
+    getChatFirstLayerMessage_ACU: getChatFirstLayerMessage_ACU,
+    hashUserInput_ACU: hashUserInput_ACU,
+    isEntryBlocked_ACU: isEntryBlocked_ACU,
+    isSummaryOrOutlineTable_ACU: isSummaryOrOutlineTable_ACU,
+    logDebug_ACU: logDebug_ACU,
+    logError_ACU: logError_ACU,
+    logWarn_ACU: logWarn_ACU,
+    normalizeExcludeRules_ACU: normalizeExcludeRules_ACU,
+    normalizeExtractRules_ACU: normalizeExtractRules_ACU,
+    normalizeNonNegativeInteger_ACU: normalizeNonNegativeInteger_ACU$1,
+    normalizePositiveInteger_ACU: normalizePositiveInteger_ACU$1,
+    parseTableTemplateJson_ACU: parseTableTemplateJson_ACU,
+    stripSeedRowsFromTemplate_ACU: stripSeedRowsFromTemplate_ACU
+});
 
 /**
  * shared/html-helpers.ts — HTML 工具函数
@@ -58692,16 +58720,17 @@ async function prepareAIInput_ACU(messages, updateMode = 'standard', targetSheet
         },
     ]);
     const readScopeNames = [...syncReadScopeNames, ...asyncReadScopeNames];
+    const sharedEntriesByBook = await buildSharedEntriesByBook_ACU(readContext, readScopeNames);
     const [worldbookContent, worldbookDatabaseExcludedContent] = await Promise.all([
         getCombinedWorldbookContent_ACU(worldbookScanText, {
             ...worldbookOptions,
             readContext,
-            entriesByBook: await buildSharedEntriesByBook_ACU(readContext, readScopeNames),
+            entriesByBook: sharedEntriesByBook,
         }),
         getCombinedWorldbookContent_ACU(worldbookScanText, {
             ...worldbookOptions,
             readContext,
-            entriesByBook: await buildSharedEntriesByBook_ACU(readContext, readScopeNames),
+            entriesByBook: sharedEntriesByBook,
             excludeEntry: isDatabaseGeneratedLorebookEntry_ACU,
         }),
     ]);
@@ -85851,14 +85880,14 @@ async function updateCardUpdateStatusDisplay_ACU() {
             const upcomingList = nextUpdates.filter(u => !u.isReady);
             let statusText = "";
             if (readyList.length > 0) {
-                statusText += `<span style="color: lightgreen;">[就绪] ${readyList.map(u => u.name).join(', ')}</span> `;
+                statusText += `<span style="color: lightgreen;">[就绪] ${readyList.map(u => escapeHtml_ACU$1(u.name)).join(', ')}</span> `;
             }
             if (upcomingList.length > 0) {
                 const next = upcomingList[0];
                 const othersSameFloor = upcomingList.filter(u => u.floor === next.floor && u !== next);
-                let names = next.name;
+                let names = escapeHtml_ACU$1(next.name);
                 if (othersSameFloor.length > 0)
-                    names += ", " + othersSameFloor.map(u => u.name).join(", ");
+                    names += ", " + othersSameFloor.map(u => escapeHtml_ACU$1(u.name)).join(", ");
                 if (statusText)
                     statusText += " | ";
                 statusText += `下一次: <b>${names}</b> (AI楼层 ${next.floor})`;
@@ -86612,6 +86641,13 @@ function refreshApiPresetSelectors_ACU() {
 async function fetchAvailableModels_ACU(apiUrl, apiKey) {
     if (!apiUrl) {
         return { success: false, error: '请输入API基础URL。' };
+    }
+    try {
+        const { assertSafeHttpEndpoint_ACU } = await Promise.resolve().then(function () { return utils; });
+        assertSafeHttpEndpoint_ACU(apiUrl);
+    }
+    catch (e) {
+        return { success: false, error: String(e?.message || '端点地址不安全。') };
     }
     const statusUrl = `/api/backends/chat-completions/status`;
     const body = {
@@ -111258,7 +111294,7 @@ const WARDROBE_DIMENSION_LABELS = Object.freeze({ masking: '掩形', support: '�
 const PREG_FIT_GAP_LABELS = Object.freeze({ masking: '掩形', support: '支撑', capacity: '容身', convenience: '便捷' });
 const MAX_PROGRESS_BAR_CAP = 200;
 // 构建时间戳（rollup replace 注入；测试/dev 环境无替换时回退 'dev'）——全局水印用，截图辨别构建
-const ACU_BUILD_STAMP = typeof "20260819-19" === 'string' ? "20260819-19" : 'dev';
+const ACU_BUILD_STAMP = typeof "20260819-20" === 'string' ? "20260819-20" : 'dev';
 const MODAL_EDGE_GAP = 24;
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const FLOATING_SPHERE_POSITION_KEY = `${MODULE_NAME}_floating_sphere_position`;
@@ -127474,6 +127510,8 @@ function isSqlReadStatement_ACU(sql) {
     if (statements.length !== 1)
         return false;
     const statement = statements[0].trim();
+    if (/^PRAGMA\b/i.test(statement))
+        return validateReadOnlySql_ACU(statement).valid;
     if (!/^(SELECT|PRAGMA|EXPLAIN|WITH)\b/i.test(statement))
         return false;
     if (/^WITH\b/i.test(statement) && containsWriteKeyword_ACU(statement))
@@ -165517,7 +165555,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260819-19";
+        const stamp = "20260819-20";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -165540,7 +165578,7 @@ function maskSecret(value) {
         return '***';
     return `${value.slice(0, 3)}***${value.slice(-3)}`;
 }
-const SENSITIVE_KEYS = /^(api[_-]?key|key|token|authorization|auth|password|proxy[_-]?password|secret)$/i;
+const SENSITIVE_KEYS = /^(api[_-]?key|apikey|key|token|authorization|auth|password|proxy[_-]?password|secret|bearer|accessToken|access_token)$/i;
 /** 递归脱敏对象中的敏感字段（biotracker 请求/响应快照可能含 Authorization/key 回显） */
 function maskSensitiveFields(value) {
     if (Array.isArray(value))

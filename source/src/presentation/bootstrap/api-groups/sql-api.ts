@@ -15,6 +15,7 @@ import type { SqlMutationResult, SqlQueryResult } from '../../../shared/table-st
 import { buildSheetColumnAliasMap_ACU, buildSheetTableAliasMap_ACU, type ReadQueryResolveResult_ACU } from '../../../shared/sql-read-resolver';
 import { resolveCurrentRuntimeReadSql_ACU } from '../../../service/runtime/read-query-resolver';
 import { logDebug_ACU, logError_ACU } from '../../../shared/utils';
+import { validateReadOnlySql_ACU } from '../../../service/runtime/template-vars/read-only-sql-validation';
 import type { ApiGroupContext } from './callback-api';
 
 type SqlParam_ACU = string | number | null;
@@ -317,6 +318,7 @@ export function isSqlReadStatement_ACU(sql: string): boolean {
     const statements = splitTopLevelSqlStatements_ACU(sql);
     if (statements.length !== 1) return false;
     const statement = statements[0].trim();
+    if (/^PRAGMA\b/i.test(statement)) return validateReadOnlySql_ACU(statement).valid;
     if (!/^(SELECT|PRAGMA|EXPLAIN|WITH)\b/i.test(statement)) return false;
     if (/^WITH\b/i.test(statement) && containsWriteKeyword_ACU(statement)) return false;
     if (!/^WITH\b/i.test(statement) && /^(INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER|TRUNCATE|VACUUM|ATTACH|DETACH|REINDEX|ANALYZE)\b/i.test(statement)) return false;
