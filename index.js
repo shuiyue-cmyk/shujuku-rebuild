@@ -56684,7 +56684,12 @@ function createLorebookReadContext_ACU(options) {
                 cacheHits += 1;
                 return existing.then(entries => cloneEntriesForRead_ACU(entries, normalizedHost));
             }
-            const promise = runPhysicalRead(normalizedHost);
+            const rawPromise = runPhysicalRead(normalizedHost);
+            const promise = rawPromise.catch((err) => {
+                // 失败 Promise 不常驻缓存，允许同 context 内重试（否则 cacheHits 直接返回失败）
+                bookEntriesPromises.delete(normalizedHost);
+                throw err;
+            });
             bookEntriesPromises.set(normalizedHost, promise);
             return promise.then(entries => cloneEntriesForRead_ACU(entries, normalizedHost));
         },
@@ -124791,7 +124796,7 @@ const WARDROBE_DIMENSION_LABELS = Object.freeze({ masking: '掩形', support: '�
 const PREG_FIT_GAP_LABELS = Object.freeze({ masking: '掩形', support: '支撑', capacity: '容身', convenience: '便捷' });
 const MAX_PROGRESS_BAR_CAP = 200;
 // 构建时间戳（rollup replace 注入；测试/dev 环境无替换时回退 'dev'）——全局水印用，截图辨别构建
-const ACU_BUILD_STAMP = typeof "20260821-07" === 'string' ? "20260821-07" : 'dev';
+const ACU_BUILD_STAMP = typeof "20260821-14" === 'string' ? "20260821-14" : 'dev';
 const MODAL_EDGE_GAP = 24;
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const FLOATING_SPHERE_POSITION_KEY = `${MODULE_NAME}_floating_sphere_position`;
@@ -165673,7 +165678,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260821-07";
+        const stamp = "20260821-14";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

@@ -133,7 +133,12 @@ export function createLorebookReadContext_ACU(options: CreateLorebookReadContext
         cacheHits += 1;
         return existing.then(entries => cloneEntriesForRead_ACU(entries, normalizedHost));
       }
-      const promise = runPhysicalRead(normalizedHost);
+      const rawPromise = runPhysicalRead(normalizedHost);
+      const promise = rawPromise.catch((err: any) => {
+        // 失败 Promise 不常驻缓存，允许同 context 内重试（否则 cacheHits 直接返回失败）
+        bookEntriesPromises.delete(normalizedHost);
+        throw err;
+      });
       bookEntriesPromises.set(normalizedHost, promise);
       return promise.then(entries => cloneEntriesForRead_ACU(entries, normalizedHost));
     },
