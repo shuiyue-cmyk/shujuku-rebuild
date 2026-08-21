@@ -98,3 +98,9 @@ npm run build         # rollup → source/dist/extension + 仓库根目录直装
 - 旧聊天中的 V1 表格数据会在加载时自动迁移为 V2 帧格式（保留既有迁移逻辑）。
 - 旧设置字段（`storageMode: 'native'` 等）会被忽略（恒为 SQLite）。
 - 智能续写配置（`loopSettings.quickReplyContent` 等）不再使用，数据字段保留不破坏旧预设。
+
+## 支持我
+
+如果你喜欢这个项目，欢迎通过我的 AFF 支持我 — 使用 OpenCode 时会获得额外福利：
+
+[https://opencode.ai/go?ref=S2XBM2KR89](https://opencode.ai/go?ref=S2XBM2KR89)
