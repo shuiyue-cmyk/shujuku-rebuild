@@ -101,6 +101,6 @@ npm run build         # rollup → source/dist/extension + 仓库根目录直装
 
 ## 支持我
 
-如果你喜欢这个项目，欢迎通过我的 AFF 支持我 — 使用 OpenCode 时会获得额外福利：
+我一直在用 Opencode GO 的套餐游玩酒馆，如果你喜欢这个项目，欢迎通过我的 AFF 支持我 — 使用链接一起获得5美元的额外赠金：
 
 [https://opencode.ai/go?ref=S2XBM2KR89](https://opencode.ai/go?ref=S2XBM2KR89)
