@@ -359,15 +359,17 @@ export   function cloneScopedConfigData_ACU(value: any, fallback: any = null) {
    * （云元数据 169.254.169.254、内网 10.x/192.168.x、0.0.0.0 等）。
    */
   function isPrivateNetworkHost_ACU(host: string): boolean {
-    if (!/^[\d.]+$/.test(host) && !/^[0-9a-f:]+$/i.test(host)) return false; // 域名放行
-    if (host.includes(':')) {
-      if (host === '::1' || host === '::') return true;
-      const first = host.split(':')[0].toLowerCase();
-      if (first === 'fe80' || first === 'feb0' || first === 'fe90' || first === 'fea0' || first === 'feb1' || first === 'feb2' || first === 'feb3' || first === 'feb4' || first === 'feb5' || first === 'feb6' || first === 'feb7' || first === 'feb8' || first === 'feb9' || first === 'feba' || first === 'febb' || first === 'febc' || first === 'febd' || first === 'febe' || first === 'febf') return true;
-      if (first === 'fc' || first === 'fd') return true;
+    const normalized = host.replace(/^::ffff:/, '').toLowerCase();
+    if (!/^[\d.]+$/.test(normalized) && !/^[0-9a-f:]+(%[0-9a-z]+)?$/i.test(normalized)) return false; // 域名放行
+    if (normalized.includes(':')) {
+      if (normalized === '::1' || normalized === '::') return true;
+      // IPv6：按首段前缀判定（fd00::1 的首段是 fd00，整段相等会漏检全部 ULA）
+      const first = normalized.split('%')[0].split(':')[0];
+      if (first.startsWith('fe8') || first.startsWith('fe9') || first.startsWith('fea') || first.startsWith('feb')) return true; // 链路本地 fe80::/10
+      if (first.startsWith('fc') || first.startsWith('fd')) return true; // ULA fc00::/7
       return false;
     }
-    const parts = host.split('.').map((n) => Number(n));
+    const parts = normalized.split('.').map((n) => Number(n));
     if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
     const [a, b] = parts;
     if (a === 10) return true;
@@ -383,18 +385,12 @@ export   function cloneScopedConfigData_ACU(value: any, fallback: any = null) {
   export function assertSafeHttpEndpoint_ACU(endpoint: string): void {
     const raw = String(endpoint || '').trim();
     if (!raw) throw new Error('端点地址为空。');
-    if (raw.startsWith('//')) throw new Error('端点不能使用协议相对 URL（//host），请使用完整 http(s):// 地址。');
+    if (raw.startsWith('//') || raw.startsWith('/\\')) throw new Error('端点不能使用协议相对 URL（//host），请使用完整 http(s):// 地址。');
     if (!/^https?:/i.test(raw)) {
-      // 相对路径放行（同源）；显式危险 scheme 拒绝
+      // 仅放行同源相对路径（/path、./path、无 scheme 纯路径）；任何具名 scheme 一律拒绝
       const schemeMatch = raw.match(/^([a-z][a-z0-9+.-]*):/i);
       if (schemeMatch) {
-        const scheme = schemeMatch[1].toLowerCase();
-        const rest = raw.slice(schemeMatch[0].length);
-        const isPortOnly = /^\d+$/.test(rest);
-        const dangerous = ['file', 'gopher', 'ftp', 'javascript', 'data', 'vbscript', 'jar', 'ws', 'wss'];
-        if (!isPortOnly && dangerous.includes(scheme)) {
-          throw new Error('端点仅支持 http:// 或 https://，其他协议一律拒绝。');
-        }
+        throw new Error(`端点仅支持 http:// 或 https://，检测到不支持的协议「${schemeMatch[1]}」。`);
       }
       return;
     }

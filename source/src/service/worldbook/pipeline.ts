@@ -1383,9 +1383,11 @@ export   async function collectCombinedWorldbookEntriesByStrategy_ACU(options: a
       baseScanText = baseScanText.toLowerCase();
 
       const isActivePrimary = options?.primarySource === 'active';
+      // 统一归一化判定 constant，避免严格比较与归一化比较不一致导致条目双向排除后静默丢弃
+      const isConstantEntry = (entry: any) => String(entry?.type || '').trim().toLowerCase() === 'constant';
       const constantEntries = userEnabledEntries.filter(
         entry => {
-          if (entry.type !== 'constant') return false;
+          if (!isConstantEntry(entry)) return false;
           if (!isActivePrimary) return true; // 非 active：恒常蓝灯照发
           // active（正文接收）：蓝灯恒常条目照发；skill 化条目需本轮 agent 放行才发
           return !hasUsableWorldbookSkillMeta_ACU(entry.comment) || forcedEntrySet.has(entry);
@@ -1395,7 +1397,7 @@ export   async function collectCombinedWorldbookEntriesByStrategy_ACU(options: a
         if (constantEntries.includes(entry)) return false;
         if (forcedEntrySet.has(entry)) return false;
         // active 下 skill 化蓝灯未放行不参与关键词触发（避免被正文关键词误触发）
-        if (isActivePrimary && hasUsableWorldbookSkillMeta_ACU(entry.comment) && String(entry.type || '').trim().toLowerCase() === 'constant') return false;
+        if (isActivePrimary && hasUsableWorldbookSkillMeta_ACU(entry.comment) && isConstantEntry(entry)) return false;
         return true;
       });
 
@@ -1573,10 +1575,9 @@ export   async function getCombinedWorldbookContent_ACU(initialScanTextOverride 
                 if (isAgentGreenlight) return true;
                 const list = enabledEntriesMap?.[entry.bookName];
                 if (isActiveSource) {
-                    // 正文接收：该书列表为空/未定义（未勾选）= 默认发正文实际命中的条目（引擎按关键词/常驻/绿灯过滤）；
-                    // 勾选的条目作为额外附加并一同发送。
-                    if (!Array.isArray(list) || list.length === 0) return true;
-                    return list.includes(entry.uid);
+                    // 正文接收：勾选与否不影响 isSelected（未勾选=发正文命中，勾选=经 forceIncludeEntry 附加），
+                    // 避免某书一旦勾选就白名单化、丢掉该书未勾选的蓝灯/关键词条目
+                    return true;
                 }
                 if (worldbookConfig?.source === 'character') {
                     // 跟随角色卡：默认全选——只有显式勾选（列表非空）才按勾选过滤
@@ -1590,7 +1591,14 @@ export   async function getCombinedWorldbookContent_ACU(initialScanTextOverride 
                 return list.includes(entry.uid);
             },
             forceIncludeEntry: (entry: any) => {
-                return agentGreenlightKeySet.has(`${String(entry.bookName || '').trim()}\u0000${String(entry.uid || '').trim()}`);
+                const key = `${String(entry.bookName || '').trim()}\u0000${String(entry.uid || '').trim()}`;
+                if (agentGreenlightKeySet.has(key)) return true;
+                // 正文接收：用户显式勾选的条目作为「额外附加」强制发送（不依赖关键词命中）
+                if (isActiveSource) {
+                    const list = enabledEntriesMap?.[entry.bookName];
+                    if (Array.isArray(list) && list.length > 0 && list.includes(entry.uid)) return true;
+                }
+                return false;
             },
             onEntriesFiltered: (entries: any[]) => {
                 if (excludeImportTaggedEntries) {

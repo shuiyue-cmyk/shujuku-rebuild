@@ -115,6 +115,7 @@ const editingEnabled = computed(() => {
   if (agentControl.isAgentMode.value) return false;
   if (entries.status.value === 'loading') return false;
   if (worldbook.status.value === 'loading') return false;
+  if (entries.batchBusy.value) return false;
   return true;
 });
 const disabledSkillCount = computed(() => entries.groups.value.reduce(

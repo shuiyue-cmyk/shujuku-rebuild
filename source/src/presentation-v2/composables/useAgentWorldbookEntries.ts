@@ -61,22 +61,29 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
   const error = ref('');
   const selected = ref(new Map<string, AgentWorldbookSkillifySelectedEntry>());
   const batchBusy = ref(false);
+  /** loadEntries 代际 guard：并发调用时旧响应不覆盖新数据 */
+  let loadGeneration = 0;
 
   async function loadEntries(): Promise<string[]> {
+    const generation = ++loadGeneration;
     status.value = 'loading';
     error.value = '';
     try {
       const bookNames = await resolveAgentWorldbookScopeBookNames_ACU();
+      if (generation !== loadGeneration) return [];
       const uniqueBookNames = [...new Set(bookNames.map(name => String(name || '').trim()).filter(Boolean))];
       if (uniqueBookNames.length === 0) {
+        if (generation !== loadGeneration) return [];
         groups.value = [];
         selected.value = new Map();
         status.value = 'success';
         return [];
       }
       const snapshot = await refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU();
+      if (generation !== loadGeneration) return [];
       const snapshotEntryIndexByBook = buildWorldbookSnapshotEntryIndexByBook_ACU(snapshot);
       const entriesByBook = await getLorebookEntriesByNames_ACU(uniqueBookNames) as Record<string, any[]>;
+      if (generation !== loadGeneration) return [];
       const nextGroups: AgentWorldbookEntryGroup[] = [];
       const visibleSelections = new Set<string>();
       for (const bookName of uniqueBookNames) {
@@ -108,6 +115,7 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
         });
         if (items.length > 0) nextGroups.push({ bookName, entries: items, expanded: false });
       }
+      if (generation !== loadGeneration) return [];
       selected.value = new Map([...selected.value].filter(([key]) => visibleSelections.has(key)));
       groups.value = nextGroups;
       status.value = 'success';
@@ -359,6 +367,7 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
     groups,
     status,
     error,
+    batchBusy,
     loadEntries,
     toggleSkillifyEntry,
     selectAllForSkillify,

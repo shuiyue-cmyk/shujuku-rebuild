@@ -30,7 +30,7 @@ vi.mock('../../../src/presentation-v2/composables/useAgentWorldbookEntries', asy
   const { ref } = await import('vue');
   return {
     useAgentWorldbookEntries: () => ({
-      groups: ref([]), status: ref('success'), error: ref(''),
+      groups: ref([]), status: ref('success'), error: ref(''), batchBusy: ref(false),
       loadEntries: harness.loadEntries, toggleSkillifyEntry: vi.fn(), toggleGroupExpanded: vi.fn(),
       selectAllForSkillify: vi.fn(), deselectAllForSkillify: vi.fn(), getSelectedSkillifyEntries: () => [],
       saveEntrySkillMeta: vi.fn(), deleteEntrySkillMeta: vi.fn(),

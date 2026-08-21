@@ -30,7 +30,8 @@ export type {
 /** 世界书注入配置 */
 
 export interface WorldbookConfig_ACU {
-  source: 'character' | 'manual';
+  /** 条目来源：character=角色卡绑定 / manual=手动选择 / active=正文接收（填表页） */
+  source: 'character' | 'manual' | 'active';
   manualSelection: string[];
   injectionTarget: string;
   entryBlockList: string[];

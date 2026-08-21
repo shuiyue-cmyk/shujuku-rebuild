@@ -2543,19 +2543,21 @@ function isEntryBlocked_ACU(entry) {
  * （云元数据 169.254.169.254、内网 10.x/192.168.x、0.0.0.0 等）。
  */
 function isPrivateNetworkHost_ACU(host) {
-    if (!/^[\d.]+$/.test(host) && !/^[0-9a-f:]+$/i.test(host))
+    const normalized = host.replace(/^::ffff:/, '').toLowerCase();
+    if (!/^[\d.]+$/.test(normalized) && !/^[0-9a-f:]+(%[0-9a-z]+)?$/i.test(normalized))
         return false; // 域名放行
-    if (host.includes(':')) {
-        if (host === '::1' || host === '::')
+    if (normalized.includes(':')) {
+        if (normalized === '::1' || normalized === '::')
             return true;
-        const first = host.split(':')[0].toLowerCase();
-        if (first === 'fe80' || first === 'feb0' || first === 'fe90' || first === 'fea0' || first === 'feb1' || first === 'feb2' || first === 'feb3' || first === 'feb4' || first === 'feb5' || first === 'feb6' || first === 'feb7' || first === 'feb8' || first === 'feb9' || first === 'feba' || first === 'febb' || first === 'febc' || first === 'febd' || first === 'febe' || first === 'febf')
-            return true;
-        if (first === 'fc' || first === 'fd')
-            return true;
+        // IPv6：按首段前缀判定（fd00::1 的首段是 fd00，整段相等会漏检全部 ULA）
+        const first = normalized.split('%')[0].split(':')[0];
+        if (first.startsWith('fe8') || first.startsWith('fe9') || first.startsWith('fea') || first.startsWith('feb'))
+            return true; // 链路本地 fe80::/10
+        if (first.startsWith('fc') || first.startsWith('fd'))
+            return true; // ULA fc00::/7
         return false;
     }
-    const parts = host.split('.').map((n) => Number(n));
+    const parts = normalized.split('.').map((n) => Number(n));
     if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255))
         return false;
     const [a, b] = parts;
@@ -2579,19 +2581,13 @@ function assertSafeHttpEndpoint_ACU(endpoint) {
     const raw = String(endpoint || '').trim();
     if (!raw)
         throw new Error('端点地址为空。');
-    if (raw.startsWith('//'))
+    if (raw.startsWith('//') || raw.startsWith('/\\'))
         throw new Error('端点不能使用协议相对 URL（//host），请使用完整 http(s):// 地址。');
     if (!/^https?:/i.test(raw)) {
-        // 相对路径放行（同源）；显式危险 scheme 拒绝
+        // 仅放行同源相对路径（/path、./path、无 scheme 纯路径）；任何具名 scheme 一律拒绝
         const schemeMatch = raw.match(/^([a-z][a-z0-9+.-]*):/i);
         if (schemeMatch) {
-            const scheme = schemeMatch[1].toLowerCase();
-            const rest = raw.slice(schemeMatch[0].length);
-            const isPortOnly = /^\d+$/.test(rest);
-            const dangerous = ['file', 'gopher', 'ftp', 'javascript', 'data', 'vbscript', 'jar', 'ws', 'wss'];
-            if (!isPortOnly && dangerous.includes(scheme)) {
-                throw new Error('端点仅支持 http:// 或 https://，其他协议一律拒绝。');
-            }
+            throw new Error(`端点仅支持 http:// 或 https://，检测到不支持的协议「${schemeMatch[1]}」。`);
         }
         return;
     }
@@ -59286,8 +59282,16 @@ async function parseStreamResponse_ACU(response) {
         return null;
     }
 }
-async function handleApiResponse_ACU(response) {
-    if (settings_ACU.streamingEnabled === true) {
+/**
+ * 响应解析分流：按「请求实际携带的 stream 值」而非全局开关——
+ * 预设级流式开关可能与全局不同，若按全局判断会把 SSE 当 JSON（或反之）解析失败。
+ * requestWantsStream 缺省时回退全局 settings_ACU.streamingEnabled（兼容旧调用方）。
+ */
+async function handleApiResponse_ACU(response, requestWantsStream) {
+    const wantsStream = requestWantsStream !== undefined
+        ? requestWantsStream === true
+        : settings_ACU.streamingEnabled === true;
+    if (wantsStream) {
         return await parseStreamResponse_ACU(response);
     }
     return await parseNonStreamResponse_ACU(response);
@@ -60302,6 +60306,7 @@ function parseAndApplyTableEdits_ACU(aiResponse, updateMode = 'standard', isImpo
  */
 function isSqlContent(content) {
     const lines = content.split('\n');
+    let inBlockComment = false;
     for (const line of lines) {
         let trimmed = line.trim();
         if (!trimmed)
@@ -60313,8 +60318,21 @@ function isSqlContent(content) {
         // 跳过 SQL 注释
         if (trimmed.startsWith('--'))
             continue;
-        if (trimmed.startsWith('/*'))
+        // 跳过块注释：单行 /* ... */ 整行跳过；多行块注释的续行（* xxx）与收尾行（*/）也跳过
+        if (trimmed.startsWith('/*') && trimmed.includes('*/'))
             continue;
+        if (trimmed.startsWith('/*')) {
+            inBlockComment = true;
+            continue;
+        }
+        if (inBlockComment) {
+            const endIdx = trimmed.indexOf('*/');
+            if (endIdx === -1)
+                continue;
+            trimmed = trimmed.slice(endIdx + 2).trim();
+            if (!trimmed)
+                continue;
+        }
         // 跳过 HTML 注释残留
         if (trimmed.startsWith('<!--') || trimmed.startsWith('-->'))
             continue;
@@ -60701,7 +60719,13 @@ function saveApiPreset_ACU$1(presetInput, originalName = '') {
     const oldName = String(originalName || '').trim();
     const existingByNewName = settings_ACU.apiPresets.findIndex((p) => p.name === preset.name);
     if (existingByNewName >= 0 && settings_ACU.apiPresets[existingByNewName].name !== oldName) {
-        settings_ACU.apiPresets[existingByNewName] = preset;
+        // 重命名/新建撞上已有名称：拒绝覆盖，避免静默销毁已有预设（不可逆数据丢失）
+        return {
+            ok: false,
+            code: 'invalid_input',
+            changed: false,
+            message: `预设名称「${preset.name}」已存在，请换一个名称。`,
+        };
     }
     else {
         const existingByOldName = oldName ? settings_ACU.apiPresets.findIndex((p) => p.name === oldName) : -1;
@@ -60899,6 +60923,7 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
 /**
  * 自定义 API 统一出口：调用宿主 /api/backends/chat-completions/generate。
  * stream 参数由 streamingEnabled 开关决定（见 buildCustomApiRequestBody_ACU）；
+ * 响应解析按请求实际携带的 stream 值分流（预设级开关可能与全局不同）。
  * 返回 AI 响应文本（原始，未 trim），失败抛错。
  */
 async function postChatCompletion_ACU(body, signal) {
@@ -60921,7 +60946,8 @@ async function postChatCompletion_ACU(body, signal) {
         const errTxt = await res.text();
         throw new Error(`API请求失败: ${res.status} ${errTxt}`);
     }
-    return handleApiResponse_ACU(res);
+    const requestWantsStream = body?.stream === true;
+    return handleApiResponse_ACU(res, requestWantsStream);
 }
 /**
  * 剧情推进任务级 API 调用 — 接受显式预设名称
@@ -70856,8 +70882,10 @@ async function collectCombinedWorldbookEntriesByStrategy_ACU(options = {}) {
     }
     baseScanText = baseScanText.toLowerCase();
     const isActivePrimary = options?.primarySource === 'active';
+    // 统一归一化判定 constant，避免严格比较与归一化比较不一致导致条目双向排除后静默丢弃
+    const isConstantEntry = (entry) => String(entry?.type || '').trim().toLowerCase() === 'constant';
     const constantEntries = userEnabledEntries.filter(entry => {
-        if (entry.type !== 'constant')
+        if (!isConstantEntry(entry))
             return false;
         if (!isActivePrimary)
             return true; // 非 active：恒常蓝灯照发
@@ -70870,7 +70898,7 @@ async function collectCombinedWorldbookEntriesByStrategy_ACU(options = {}) {
         if (forcedEntrySet.has(entry))
             return false;
         // active 下 skill 化蓝灯未放行不参与关键词触发（避免被正文关键词误触发）
-        if (isActivePrimary && hasUsableWorldbookSkillMeta_ACU(entry.comment) && String(entry.type || '').trim().toLowerCase() === 'constant')
+        if (isActivePrimary && hasUsableWorldbookSkillMeta_ACU(entry.comment) && isConstantEntry(entry))
             return false;
         return true;
     });
@@ -71039,11 +71067,9 @@ async function getCombinedWorldbookContent_ACU(initialScanTextOverride = '', opt
                     return true;
                 const list = enabledEntriesMap?.[entry.bookName];
                 if (isActiveSource) {
-                    // 正文接收：该书列表为空/未定义（未勾选）= 默认发正文实际命中的条目（引擎按关键词/常驻/绿灯过滤）；
-                    // 勾选的条目作为额外附加并一同发送。
-                    if (!Array.isArray(list) || list.length === 0)
-                        return true;
-                    return list.includes(entry.uid);
+                    // 正文接收：勾选与否不影响 isSelected（未勾选=发正文命中，勾选=经 forceIncludeEntry 附加），
+                    // 避免某书一旦勾选就白名单化、丢掉该书未勾选的蓝灯/关键词条目
+                    return true;
                 }
                 if (worldbookConfig?.source === 'character') {
                     // 跟随角色卡：默认全选——只有显式勾选（列表非空）才按勾选过滤
@@ -71061,7 +71087,16 @@ async function getCombinedWorldbookContent_ACU(initialScanTextOverride = '', opt
                 return list.includes(entry.uid);
             },
             forceIncludeEntry: (entry) => {
-                return agentGreenlightKeySet.has(`${String(entry.bookName || '').trim()}\u0000${String(entry.uid || '').trim()}`);
+                const key = `${String(entry.bookName || '').trim()}\u0000${String(entry.uid || '').trim()}`;
+                if (agentGreenlightKeySet.has(key))
+                    return true;
+                // 正文接收：用户显式勾选的条目作为「额外附加」强制发送（不依赖关键词命中）
+                if (isActiveSource) {
+                    const list = enabledEntriesMap?.[entry.bookName];
+                    if (Array.isArray(list) && list.length > 0 && list.includes(entry.uid))
+                        return true;
+                }
+                return false;
             },
             onEntriesFiltered: (entries) => {
                 if (excludeImportTaggedEntries) {
@@ -91149,20 +91184,26 @@ async function collectGroupFillResponse_ACU(job, feedback, abortController = new
             if (aiResponse && minReplyLength > 0 && aiResponse.length < minReplyLength) {
                 throw new ModelOutputRetryError_ACU(`AI回复过短 (${aiResponse.length} 字符)，低于阈值 (${minReplyLength} 字符)`);
             }
-            let tableEditText = '';
             // 提取 <tableEdit> 内容：取「最后一对」标签（lastPairOnly 语义）。
             // 裸正则取第一对会在 AI 于 <thought> 内提到 "<tableEdit>" 字样时匹配到假标签，
             // 把 thought 文本混入 tableEditText → isSqlContent 判定失败 → SQL 全被当作指令跳过（2026-08-16 线上问题）。
-            // 取「最后一个 <tableEdit> 开标签」之后、其后第一个 </tableEdit> 之前的内容。
-            // 原因：AI 常在 <thought> 里写 "使用 <tableEdit> 标签包裹 SQL 语句"（无闭合），
-            // 若用成对正则会把 thought+content 整段吞掉；真正的编辑内容总是最后出现的标签对。
             const lowerResponse = (aiResponse || '').toLowerCase();
-            const openIdx = lowerResponse.lastIndexOf('<tableedit>');
-            const closeIdx = openIdx === -1 ? -1 : lowerResponse.indexOf('</tableedit>', openIdx + '<tableedit>'.length);
-            if (openIdx === -1 || closeIdx === -1) {
+            // 取「最后一个完整标签对」：从最后一个 </tableEdit> 闭标签向前找配对的开标签，
+            // 避免结尾散文里无闭合的 "<tableEdit>" 字样让 closeIdx=-1 误抛重试（反向陷阱）
+            const lastCloseIdx = lowerResponse.lastIndexOf('</tableedit>');
+            let foundTagPair = false;
+            let tableEditText = '';
+            if (lastCloseIdx !== -1) {
+                const openIdx = lowerResponse.lastIndexOf('<tableedit>', lastCloseIdx);
+                if (openIdx !== -1) {
+                    foundTagPair = true;
+                    tableEditText = (aiResponse || '').substring(openIdx + '<tableEdit>'.length, lastCloseIdx).replace(/^\uFEFF/, '').trim();
+                }
+            }
+            // 找不到完整标签对才报错；找到但内容为空是合法语义（AI 判断本轮无需更新）
+            if (!foundTagPair) {
                 throw new ModelOutputRetryError_ACU('AI响应中未找到完整有效的 <tableEdit> 标签');
             }
-            tableEditText = (aiResponse || '').substring(openIdx + '<tableEdit>'.length, closeIdx).replace(/^\uFEFF/, '').trim();
             if (isSqliteMode() && tableEditText && isSqlContent(tableEditText)) {
                 try {
                     // 隐藏列保护使用请求前冻结的 live runtime schema 证据，而不是 baseSnapshot：
@@ -124750,7 +124791,7 @@ const WARDROBE_DIMENSION_LABELS = Object.freeze({ masking: '掩形', support: '�
 const PREG_FIT_GAP_LABELS = Object.freeze({ masking: '掩形', support: '支撑', capacity: '容身', convenience: '便捷' });
 const MAX_PROGRESS_BAR_CAP = 200;
 // 构建时间戳（rollup replace 注入；测试/dev 环境无替换时回退 'dev'）——全局水印用，截图辨别构建
-const ACU_BUILD_STAMP = typeof "20260820-08" === 'string' ? "20260820-08" : 'dev';
+const ACU_BUILD_STAMP = typeof "20260821-07" === 'string' ? "20260821-07" : 'dev';
 const MODAL_EDGE_GAP = 24;
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const FLOATING_SPHERE_POSITION_KEY = `${MODULE_NAME}_floating_sphere_position`;
@@ -156210,6 +156251,9 @@ var _sfc_main$u = /*@__PURE__*/ defineComponent({
             return props.names.filter(name => name.toLowerCase().includes(f));
         });
         function onSourceChange(value) {
+            // 防御：未启用 allowActive 时忽略 active（正常 UI 不可达，防编程式误触）
+            if (value === 'active' && !props.allowActive)
+                return;
             if (value === 'manual' || value === 'active') {
                 emit('update:source', value);
             }
@@ -156223,8 +156267,8 @@ var _sfc_main$u = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-v2-wb-source-picker[data-v-59b18616] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  min-width: 0;\n}\n.acu-v2-wb-source-picker__list[data-v-59b18616] {\r\n  min-width: 0;\r\n  max-height: 180px;\r\n  overflow-y: auto;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  padding: 8px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-2);\n}\n.acu-v2-wb-source-picker__list--disabled[data-v-59b18616] {\r\n  opacity: 0.65;\n}\n.acu-v2-wb-source-picker__item[data-v-59b18616] {\r\n  width: 100%;\r\n  min-width: 0;\r\n  min-height: 32px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 10px;\r\n  margin: 0;\r\n  padding: 7px 9px;\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font: inherit;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.4;\r\n  text-align: left;\r\n  cursor: pointer;\r\n  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-wb-source-picker__item[data-v-59b18616]:hover:not(:disabled) {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-wb-source-picker__item[data-v-59b18616]:disabled {\r\n  cursor: not-allowed;\n}\n.acu-v2-wb-source-picker__item[data-v-59b18616]:focus-visible {\r\n  outline: none;\r\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-v2-wb-source-picker__item--selected[data-v-59b18616] {\r\n  background: color-mix(in srgb, var(--acu-accent) 14%, transparent);\r\n  color: var(--acu-text-1);\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-accent) 42%, transparent);\n}\n.acu-v2-wb-source-picker__item--selected[data-v-59b18616]:hover:not(:disabled) {\r\n  background: color-mix(in srgb, var(--acu-accent) 20%, transparent);\r\n  color: var(--acu-text-1);\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-accent) 54%, transparent);\n}\n.acu-v2-wb-source-picker__item-label[data-v-59b18616] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-wb-source-picker__item-check[data-v-59b18616] {\r\n  flex-shrink: 0;\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  color: var(--acu-accent);\r\n  opacity: 0;\r\n  transform: scale(0.86);\r\n  transition: opacity 0.15s ease, transform 0.15s ease;\n}\n.acu-v2-wb-source-picker__item--selected .acu-v2-wb-source-picker__item-check[data-v-59b18616] {\r\n  opacity: 1;\r\n  transform: scale(1);\n}\n.acu-v2-wb-source-picker__empty[data-v-59b18616] {\r\n  padding: 8px 2px;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: center;\n}\n.acu-v2-wb-source-picker__error[data-v-59b18616] {\r\n  margin: 0;\n}\r\n", "src/presentation-v2/components/WorldbookSourcePicker.vue#style-0-59b18616");
-var WorldbookSourcePicker_vue_vue_type_style_index_0_scoped_59b18616_lang = null;
+injectSfcStyle("\n.acu-v2-wb-source-picker[data-v-4580f5af] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  min-width: 0;\n}\n.acu-v2-wb-source-picker__list[data-v-4580f5af] {\r\n  min-width: 0;\r\n  max-height: 180px;\r\n  overflow-y: auto;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  padding: 8px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-2);\n}\n.acu-v2-wb-source-picker__list--disabled[data-v-4580f5af] {\r\n  opacity: 0.65;\n}\n.acu-v2-wb-source-picker__item[data-v-4580f5af] {\r\n  width: 100%;\r\n  min-width: 0;\r\n  min-height: 32px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 10px;\r\n  margin: 0;\r\n  padding: 7px 9px;\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font: inherit;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.4;\r\n  text-align: left;\r\n  cursor: pointer;\r\n  transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-wb-source-picker__item[data-v-4580f5af]:hover:not(:disabled) {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-wb-source-picker__item[data-v-4580f5af]:disabled {\r\n  cursor: not-allowed;\n}\n.acu-v2-wb-source-picker__item[data-v-4580f5af]:focus-visible {\r\n  outline: none;\r\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-v2-wb-source-picker__item--selected[data-v-4580f5af] {\r\n  background: color-mix(in srgb, var(--acu-accent) 14%, transparent);\r\n  color: var(--acu-text-1);\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-accent) 42%, transparent);\n}\n.acu-v2-wb-source-picker__item--selected[data-v-4580f5af]:hover:not(:disabled) {\r\n  background: color-mix(in srgb, var(--acu-accent) 20%, transparent);\r\n  color: var(--acu-text-1);\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-accent) 54%, transparent);\n}\n.acu-v2-wb-source-picker__item-label[data-v-4580f5af] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-wb-source-picker__item-check[data-v-4580f5af] {\r\n  flex-shrink: 0;\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  color: var(--acu-accent);\r\n  opacity: 0;\r\n  transform: scale(0.86);\r\n  transition: opacity 0.15s ease, transform 0.15s ease;\n}\n.acu-v2-wb-source-picker__item--selected .acu-v2-wb-source-picker__item-check[data-v-4580f5af] {\r\n  opacity: 1;\r\n  transform: scale(1);\n}\n.acu-v2-wb-source-picker__empty[data-v-4580f5af] {\r\n  padding: 8px 2px;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: center;\n}\n.acu-v2-wb-source-picker__error[data-v-4580f5af] {\r\n  margin: 0;\n}\r\n", "src/presentation-v2/components/WorldbookSourcePicker.vue#style-0-4580f5af");
+var WorldbookSourcePicker_vue_vue_type_style_index_0_scoped_4580f5af_lang = null;
 
 const _hoisted_1$u = { class: "acu-v2-wb-source-picker" };
 const _hoisted_2$p = [
@@ -156323,7 +156367,7 @@ function _sfc_render$u(_ctx, _cache, $props, $setup, $data, $options) {
 		})) : createCommentVNode("v-if", true)
 	]);
 }
-var WorldbookSourcePicker = /* @__PURE__ */ _export_sfc(_sfc_main$u, [["render", _sfc_render$u], ["__scopeId", "data-v-59b18616"]]);
+var WorldbookSourcePicker = /* @__PURE__ */ _export_sfc(_sfc_main$u, [["render", _sfc_render$u], ["__scopeId", "data-v-4580f5af"]]);
 
 var _sfc_main$t = /*@__PURE__*/ defineComponent({
     __name: 'WorldbookEntryList',
@@ -158726,21 +158770,32 @@ function useAgentWorldbookEntries(options = {}) {
     const error = ref('');
     const selected = ref(new Map());
     const batchBusy = ref(false);
+    /** loadEntries 代际 guard：并发调用时旧响应不覆盖新数据 */
+    let loadGeneration = 0;
     async function loadEntries() {
+        const generation = ++loadGeneration;
         status.value = 'loading';
         error.value = '';
         try {
             const bookNames = await resolveAgentWorldbookScopeBookNames_ACU();
+            if (generation !== loadGeneration)
+                return [];
             const uniqueBookNames = [...new Set(bookNames.map(name => String(name || '').trim()).filter(Boolean))];
             if (uniqueBookNames.length === 0) {
+                if (generation !== loadGeneration)
+                    return [];
                 groups.value = [];
                 selected.value = new Map();
                 status.value = 'success';
                 return [];
             }
             const snapshot = await refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU();
+            if (generation !== loadGeneration)
+                return [];
             const snapshotEntryIndexByBook = buildWorldbookSnapshotEntryIndexByBook_ACU(snapshot);
             const entriesByBook = await getLorebookEntriesByNames_ACU(uniqueBookNames);
+            if (generation !== loadGeneration)
+                return [];
             const nextGroups = [];
             const visibleSelections = new Set();
             for (const bookName of uniqueBookNames) {
@@ -158773,6 +158828,8 @@ function useAgentWorldbookEntries(options = {}) {
                 if (items.length > 0)
                     nextGroups.push({ bookName, entries: items, expanded: false });
             }
+            if (generation !== loadGeneration)
+                return [];
             selected.value = new Map([...selected.value].filter(([key]) => visibleSelections.has(key)));
             groups.value = nextGroups;
             status.value = 'success';
@@ -159049,6 +159106,7 @@ function useAgentWorldbookEntries(options = {}) {
         groups,
         status,
         error,
+        batchBusy,
         loadEntries,
         toggleSkillifyEntry,
         selectAllForSkillify,
@@ -159676,6 +159734,8 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
                 return false;
             if (worldbook.status.value === 'loading')
                 return false;
+            if (entries.batchBusy.value)
+                return false;
             return true;
         });
         const disabledSkillCount = computed(() => entries.groups.value.reduce((sum, group) => sum + group.entries.filter(entry => entry.hasSkill === true && entry.agentTakeoverState === 'initial_disabled').length, 0));
@@ -159767,8 +159827,8 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-v2-agent-page[data-v-03b90bed] { min-height: 100%; min-width: 0; padding: 20px; display: flex; flex-direction: column; gap: 18px;\n}\n.acu-v2-agent-page__hint[data-v-03b90bed] { margin: 12px 0 0; color: var(--acu-text-3); font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-agent-page__hint strong[data-v-03b90bed] { color: var(--acu-text-1); font-weight: 500;\n}\n.acu-v2-agent-page__editing[data-v-03b90bed] {\r\n  margin-top: 16px;\r\n  padding-top: 14px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  min-width: 0;\n}\n.acu-v2-agent-page__editing-title[data-v-03b90bed] { margin: 0; font-size: var(--acu-font-size-body, 12px); color: var(--acu-text-1);\n}\n.acu-v2-agent-page__editing-hint[data-v-03b90bed] { margin: 0; font-size: var(--acu-font-size-caption, 11px); color: var(--acu-text-3);\n}\n.acu-v2-agent-page__editing-actions[data-v-03b90bed] { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;\n}\n.acu-v2-agent-page__editing-count[data-v-03b90bed] {\r\n  margin-left: 4px; padding: 0 5px; border-radius: 8px; font-size: 10px;\r\n  background: color-mix(in srgb, var(--acu-accent) 18%, transparent);\r\n  color: var(--acu-accent);\n}\n@media (max-width: 860px) {\n.acu-v2-agent-page[data-v-03b90bed] { padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/AgentPage.vue#style-0-03b90bed");
-var AgentPage_vue_vue_type_style_index_0_scoped_03b90bed_lang = null;
+injectSfcStyle("\n.acu-v2-agent-page[data-v-c817bc28] { min-height: 100%; min-width: 0; padding: 20px; display: flex; flex-direction: column; gap: 18px;\n}\n.acu-v2-agent-page__hint[data-v-c817bc28] { margin: 12px 0 0; color: var(--acu-text-3); font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-agent-page__hint strong[data-v-c817bc28] { color: var(--acu-text-1); font-weight: 500;\n}\n.acu-v2-agent-page__editing[data-v-c817bc28] {\r\n  margin-top: 16px;\r\n  padding-top: 14px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  min-width: 0;\n}\n.acu-v2-agent-page__editing-title[data-v-c817bc28] { margin: 0; font-size: var(--acu-font-size-body, 12px); color: var(--acu-text-1);\n}\n.acu-v2-agent-page__editing-hint[data-v-c817bc28] { margin: 0; font-size: var(--acu-font-size-caption, 11px); color: var(--acu-text-3);\n}\n.acu-v2-agent-page__editing-actions[data-v-c817bc28] { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;\n}\n.acu-v2-agent-page__editing-count[data-v-c817bc28] {\r\n  margin-left: 4px; padding: 0 5px; border-radius: 8px; font-size: 10px;\r\n  background: color-mix(in srgb, var(--acu-accent) 18%, transparent);\r\n  color: var(--acu-accent);\n}\n@media (max-width: 860px) {\n.acu-v2-agent-page[data-v-c817bc28] { padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/AgentPage.vue#style-0-c817bc28");
+var AgentPage_vue_vue_type_style_index_0_scoped_c817bc28_lang = null;
 
 const _hoisted_1$l = { class: "acu-v2-agent-page" };
 const _hoisted_2$j = { class: "acu-v2-agent-page__hint" };
@@ -159953,7 +160013,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	})]);
 }
-var AgentPage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-03b90bed"]]);
+var AgentPage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-c817bc28"]]);
 
 var _sfc_main$k = /*@__PURE__*/ defineComponent({
     __name: 'AcuStatsList',
@@ -165613,7 +165673,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260820-08";
+        const stamp = "20260821-07";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

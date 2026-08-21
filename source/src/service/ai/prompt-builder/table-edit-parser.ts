@@ -518,6 +518,7 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
    */
   export function isSqlContent(content: string): boolean {
     const lines = content.split('\n');
+    let inBlockComment = false;
     for (const line of lines) {
       let trimmed = line.trim();
       if (!trimmed) continue;
@@ -525,7 +526,15 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
       if (!trimmed) continue;
       // 跳过 SQL 注释
       if (trimmed.startsWith('--')) continue;
-      if (trimmed.startsWith('/*')) continue;
+      // 跳过块注释：单行 /* ... */ 整行跳过；多行块注释的续行（* xxx）与收尾行（*/）也跳过
+      if (trimmed.startsWith('/*') && trimmed.includes('*/')) continue;
+      if (trimmed.startsWith('/*')) { inBlockComment = true; continue; }
+      if (inBlockComment) {
+        const endIdx = trimmed.indexOf('*/');
+        if (endIdx === -1) continue;
+        trimmed = trimmed.slice(endIdx + 2).trim();
+        if (!trimmed) continue;
+      }
       // 跳过 HTML 注释残留
       if (trimmed.startsWith('<!--') || trimmed.startsWith('-->')) continue;
       // 检查是否以 SQL 关键字开头

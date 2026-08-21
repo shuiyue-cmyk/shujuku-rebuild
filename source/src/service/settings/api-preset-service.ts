@@ -385,7 +385,13 @@ export function saveApiPreset_ACU(presetInput: ApiPreset_ACU, originalName = '')
   const oldName = String(originalName || '').trim();
   const existingByNewName = settings_ACU.apiPresets.findIndex((p: ApiPreset_ACU) => p.name === preset.name);
   if (existingByNewName >= 0 && settings_ACU.apiPresets[existingByNewName].name !== oldName) {
-    settings_ACU.apiPresets[existingByNewName] = preset;
+    // 重命名/新建撞上已有名称：拒绝覆盖，避免静默销毁已有预设（不可逆数据丢失）
+    return {
+      ok: false,
+      code: 'invalid_input',
+      changed: false,
+      message: `预设名称「${preset.name}」已存在，请换一个名称。`,
+    };
   } else {
     const existingByOldName = oldName ? settings_ACU.apiPresets.findIndex((p: ApiPreset_ACU) => p.name === oldName) : -1;
     if (existingByOldName >= 0) settings_ACU.apiPresets[existingByOldName] = preset;

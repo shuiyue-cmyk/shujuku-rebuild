@@ -1158,20 +1158,26 @@ export async function collectGroupFillResponse_ACU(
             if (aiResponse && minReplyLength > 0 && aiResponse.length < minReplyLength) {
                 throw new ModelOutputRetryError_ACU(`AI回复过短 (${aiResponse.length} 字符)，低于阈值 (${minReplyLength} 字符)`);
             }
-            let tableEditText = '';
             // 提取 <tableEdit> 内容：取「最后一对」标签（lastPairOnly 语义）。
             // 裸正则取第一对会在 AI 于 <thought> 内提到 "<tableEdit>" 字样时匹配到假标签，
             // 把 thought 文本混入 tableEditText → isSqlContent 判定失败 → SQL 全被当作指令跳过（2026-08-16 线上问题）。
-            // 取「最后一个 <tableEdit> 开标签」之后、其后第一个 </tableEdit> 之前的内容。
-            // 原因：AI 常在 <thought> 里写 "使用 <tableEdit> 标签包裹 SQL 语句"（无闭合），
-            // 若用成对正则会把 thought+content 整段吞掉；真正的编辑内容总是最后出现的标签对。
             const lowerResponse = (aiResponse || '').toLowerCase();
-            const openIdx = lowerResponse.lastIndexOf('<tableedit>');
-            const closeIdx = openIdx === -1 ? -1 : lowerResponse.indexOf('</tableedit>', openIdx + '<tableedit>'.length);
-            if (openIdx === -1 || closeIdx === -1) {
+            // 取「最后一个完整标签对」：从最后一个 </tableEdit> 闭标签向前找配对的开标签，
+            // 避免结尾散文里无闭合的 "<tableEdit>" 字样让 closeIdx=-1 误抛重试（反向陷阱）
+            const lastCloseIdx = lowerResponse.lastIndexOf('</tableedit>');
+            let foundTagPair = false;
+            let tableEditText = '';
+            if (lastCloseIdx !== -1) {
+                const openIdx = lowerResponse.lastIndexOf('<tableedit>', lastCloseIdx);
+                if (openIdx !== -1) {
+                    foundTagPair = true;
+                    tableEditText = (aiResponse || '').substring(openIdx + '<tableEdit>'.length, lastCloseIdx).replace(/^\uFEFF/, '').trim();
+                }
+            }
+            // 找不到完整标签对才报错；找到但内容为空是合法语义（AI 判断本轮无需更新）
+            if (!foundTagPair) {
                 throw new ModelOutputRetryError_ACU('AI响应中未找到完整有效的 <tableEdit> 标签');
             }
-            tableEditText = (aiResponse || '').substring(openIdx + '<tableEdit>'.length, closeIdx).replace(/^\uFEFF/, '').trim();
             if (isSqliteMode() && tableEditText && isSqlContent(tableEditText)) {
                 try {
                     // 隐藏列保护使用请求前冻结的 live runtime schema 证据，而不是 baseSnapshot：

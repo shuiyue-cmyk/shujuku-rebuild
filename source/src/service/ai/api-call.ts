@@ -114,6 +114,7 @@ export function buildCustomApiRequestBody_ACU(
 /**
  * 自定义 API 统一出口：调用宿主 /api/backends/chat-completions/generate。
  * stream 参数由 streamingEnabled 开关决定（见 buildCustomApiRequestBody_ACU）；
+ * 响应解析按请求实际携带的 stream 值分流（预设级开关可能与全局不同）。
  * 返回 AI 响应文本（原始，未 trim），失败抛错。
  */
 export async function postChatCompletion_ACU(body: unknown, signal?: AbortSignal | null): Promise<string | null> {
@@ -135,7 +136,8 @@ export async function postChatCompletion_ACU(body: unknown, signal?: AbortSignal
         const errTxt = await res.text();
         throw new Error(`API请求失败: ${res.status} ${errTxt}`);
     }
-    return handleApiResponse_ACU(res);
+    const requestWantsStream = (body as any)?.stream === true;
+    return handleApiResponse_ACU(res, requestWantsStream);
 }
 
 /**

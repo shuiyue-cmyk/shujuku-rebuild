@@ -25,6 +25,7 @@ vi.mock('../../../src/data/gateways/ai-gateway', () => ({
 
 vi.mock('../../../src/shared/utils', () => ({
   logDebug_ACU: mockLogDebug,
+  assertSafeHttpEndpoint_ACU: vi.fn(),
 }));
 
 import { fetchAvailableModels_ACU } from '../../../src/service/ai/ai-service';

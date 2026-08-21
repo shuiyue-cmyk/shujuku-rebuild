@@ -266,8 +266,16 @@ export class RetryableAiResponseError_ACU extends Error {
     }
   }
 
-  export async function handleApiResponse_ACU(response: any) {
-    if (settings_ACU.streamingEnabled === true) {
+  /**
+   * 响应解析分流：按「请求实际携带的 stream 值」而非全局开关——
+   * 预设级流式开关可能与全局不同，若按全局判断会把 SSE 当 JSON（或反之）解析失败。
+   * requestWantsStream 缺省时回退全局 settings_ACU.streamingEnabled（兼容旧调用方）。
+   */
+  export async function handleApiResponse_ACU(response: any, requestWantsStream?: boolean) {
+    const wantsStream = requestWantsStream !== undefined
+      ? requestWantsStream === true
+      : settings_ACU.streamingEnabled === true;
+    if (wantsStream) {
       return await parseStreamResponse_ACU(response);
     }
     return await parseNonStreamResponse_ACU(response);

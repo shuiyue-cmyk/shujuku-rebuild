@@ -93,6 +93,8 @@ const filteredNames = computed<string[]>(() => {
 });
 
 function onSourceChange(value: string): void {
+  // 防御：未启用 allowActive 时忽略 active（正常 UI 不可达，防编程式误触）
+  if (value === 'active' && !props.allowActive) return;
   if (value === 'manual' || value === 'active') {
     emit('update:source', value);
   } else {

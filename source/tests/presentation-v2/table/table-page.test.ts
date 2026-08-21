@@ -349,8 +349,9 @@ describe('TablePage', () => {
     const other = checkboxes.find(button => button.textContent?.trim() === 'Other')!;
     charBook.click();
     other.click();
-    await Promise.resolve();
-    await Promise.resolve();
+    // 两次 toggle 各触发一次 refreshEntriesGroups（带 seq guard，旧调用中止），
+    // 需要多次微任务刷新让最后一次调用的 resolveBookNames + loadEntries + label 写入全部完成
+    for (let i = 0; i < 8; i++) await Promise.resolve();
 
     expect(entriesPanel.textContent).toContain('目前已选: CharBookT、Other');
     expect(charBook.getAttribute('aria-checked')).toBe('true');
