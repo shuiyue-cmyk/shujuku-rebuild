@@ -1445,6 +1445,20 @@ export   async function collectCombinedWorldbookEntriesByStrategy_ACU(options: a
             let finalEntries = Array.from(workerTriggered);
             if (sortEntries) finalEntries = finalEntries.sort(sortEntries);
             logDebug_ACU(`${logPrefix} Worldbook via Worker, triggered ${finalEntries.length}/${userEnabledEntries.length}`);
+            try {
+              (globalThis as any).__ACU_DEBUG_LAST_WORLDBOOK__ = {
+                entryCount: allEntries.length,
+                userEnabledCount: userEnabledEntries.length,
+                constantCount: constantEntries.length,
+                forcedCount: forcedEntrySet.size,
+                baseScanLen: baseScanText.length,
+                chatLen: allChatMessages_ACU.length,
+                triggeredCount: finalEntries.length,
+                shouldUseWorker: useWorker,
+                via: 'worker',
+                timestamp: Date.now(),
+              };
+            } catch {}
             return finalEntries;
           } else if (useWorker) {
             logWarn_ACU(`${logPrefix} Worker not used or timed out, fallback to main thread`);
@@ -1503,6 +1517,20 @@ export   async function collectCombinedWorldbookEntriesByStrategy_ACU(options: a
       if (sortEntries) {
           finalEntries = finalEntries.sort(sortEntries);
       }
+      try {
+        (globalThis as any).__ACU_DEBUG_LAST_WORLDBOOK__ = {
+          entryCount: allEntries.length,
+          userEnabledCount: userEnabledEntries.length,
+          constantCount: constantEntries.length,
+          forcedCount: forcedEntrySet.size,
+          baseScanLen: baseScanText.length,
+          chatLen: allChatMessages_ACU.length,
+          triggeredCount: finalEntries.length,
+          shouldUseWorker: useWorker,
+          via: 'main',
+          timestamp: Date.now(),
+        };
+      } catch {}
 
       return finalEntries;
   }

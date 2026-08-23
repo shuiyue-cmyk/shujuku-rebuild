@@ -61214,6 +61214,14 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
         custom_exclude_body: sanitizeExcludeBodyForPresetFields_ACU(effectiveApiConfig.excludeBodyParams, effectiveApiConfig),
     };
     logDebug_ACU(`[API] 构建请求体: model=${model}, reasoning_effort=${body.reasoning_effort}, stream=${body.stream}, temperature=${body.temperature}, max_tokens=${body.max_tokens}, exclude=${body.custom_exclude_body ? '有' : '无'}`);
+    try {
+        globalThis.__ACU_DEBUG_LAST_API_BODY__ = JSON.parse(JSON.stringify(body));
+    }
+    catch { }
+    try {
+        globalThis.__ACU_DEBUG_LAST_API_BODY_AT__ = Date.now();
+    }
+    catch { }
     return body;
 }
 /**
@@ -71240,6 +71248,21 @@ async function collectCombinedWorldbookEntriesByStrategy_ACU(options = {}) {
                 if (sortEntries)
                     finalEntries = finalEntries.sort(sortEntries);
                 logDebug_ACU(`${logPrefix} Worldbook via Worker, triggered ${finalEntries.length}/${userEnabledEntries.length}`);
+                try {
+                    globalThis.__ACU_DEBUG_LAST_WORLDBOOK__ = {
+                        entryCount: allEntries.length,
+                        userEnabledCount: userEnabledEntries.length,
+                        constantCount: constantEntries.length,
+                        forcedCount: forcedEntrySet.size,
+                        baseScanLen: baseScanText.length,
+                        chatLen: allChatMessages_ACU.length,
+                        triggeredCount: finalEntries.length,
+                        shouldUseWorker: useWorker,
+                        via: 'worker',
+                        timestamp: Date.now(),
+                    };
+                }
+                catch { }
                 return finalEntries;
             }
             else if (useWorker) {
@@ -71290,6 +71313,21 @@ async function collectCombinedWorldbookEntriesByStrategy_ACU(options = {}) {
     if (sortEntries) {
         finalEntries = finalEntries.sort(sortEntries);
     }
+    try {
+        globalThis.__ACU_DEBUG_LAST_WORLDBOOK__ = {
+            entryCount: allEntries.length,
+            userEnabledCount: userEnabledEntries.length,
+            constantCount: constantEntries.length,
+            forcedCount: forcedEntrySet.size,
+            baseScanLen: baseScanText.length,
+            chatLen: allChatMessages_ACU.length,
+            triggeredCount: finalEntries.length,
+            shouldUseWorker: useWorker,
+            via: 'main',
+            timestamp: Date.now(),
+        };
+    }
+    catch { }
     return finalEntries;
 }
 function formatCombinedWorldbookEntries_ACU(entries, formatEntry) {
@@ -166030,9 +166068,12 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  * 导出内容（全量）：
  * - meta：插件版本（manifest）/构建水印/宿主类型（ST/TT/Luker）/导出时间
  * - env：API 配置（密钥脱敏）/关键运行设置摘要
+ * - settingsSnapshot：全量 settings_ACU 脱敏快照
+ * - worldbookDebug：最近一次世界书扫描（entryCount/baseScanLen/chatLen/triggeredCount/shouldUseWorker）
+ * - lastApiBody：最近一次 buildCustomApiRequestBody 完整请求体（脱敏）与时间
  * - logs：log-buffer 全量日志（含 Debug 采集开启后的细粒度日志）
  * - biotracker：最近一次追踪/注册请求与响应（biotracker debug 采集数据，body 已脱敏）
- * - tables：表名 + 行数（不含数据本身，避免体积爆炸与隐私）
+ * - tables：表名 + 行数 + 脱敏 sampleRows（前 3 行各前 8 列，超长截断）
  */
 function getBuildStamp() {
     try {
@@ -166121,10 +166162,159 @@ function useDebugPanel() {
         toast.info('Debug 采集已开启：请复现问题，完成后点「导出 Debug 数据」。');
     }
     function stopDebug() {
+        if (!active.value) {
+            toast.warning('Debug 未开启，无需停止。');
+            return;
+        }
+        // 增强：停止时自动导出一次，避免用户忘记点导出
+        try {
+            const allLogs = getAllLogs();
+            const logs = startedAt ? allLogs.filter((e) => e.timestamp >= startedAt) : allLogs;
+            if (logs.length > 0) {
+                // 复用导出逻辑但不依赖 active 状态
+                const effectiveStart = startedAt || (allLogs[0]?.timestamp ?? Date.now());
+                const cfg = settings_ACU?.apiConfig || {};
+                const activePreset = (() => {
+                    try {
+                        const name = String(settings_ACU?.apiPresetBindingsByChat?.[String(currentChatFileIdentifier_ACU || '').trim()]?.presetName || settings_ACU?.defaultApiPresetName || '').trim();
+                        if (!name)
+                            return null;
+                        const list = Array.isArray(settings_ACU?.apiPresets) ? settings_ACU.apiPresets : [];
+                        return list.find((p) => p?.name === name) || null;
+                    }
+                    catch {
+                        return null;
+                    }
+                })();
+                const presetCfg = activePreset?.apiConfig || null;
+                const env = {
+                    host: getAcuHostKind(),
+                    buildStamp: getBuildStamp(),
+                    version: getPluginVersion(),
+                    exportedAt: new Date().toISOString(),
+                    chatId: currentChatFileIdentifier_ACU,
+                    streamingEnabled: presetCfg ? presetCfg.streamingEnabled === true : settings_ACU?.streamingEnabled === true,
+                    streamingEnabledGlobal: settings_ACU?.streamingEnabled === true,
+                    streamingEnabledPreset: presetCfg ? presetCfg.streamingEnabled === true : undefined,
+                    reasoningEffort: presetCfg?.reasoningEffort || settings_ACU?.reasoningEffort || 'medium',
+                    reasoningEffortPreset: presetCfg?.reasoningEffort,
+                    reasoningEffortGlobal: settings_ACU?.reasoningEffort,
+                    activePresetName: activePreset?.name || '',
+                    worldbookSource: settings_ACU?.worldbookConfig?.source || settings_ACU?.characterSettings?.[String(currentChatFileIdentifier_ACU || '').trim()]?.worldbookConfig?.source || '',
+                    formFillPromptLength: Array.isArray(settings_ACU?.charCardPrompt) ? settings_ACU.charCardPrompt.length : 0,
+                    nonPrefillSupport: settings_ACU?.nonPrefillSupport === true,
+                    nonPrefillSupportPreset: activePreset?.nonPrefillSupport,
+                    apiMode: settings_ACU?.apiMode || '',
+                    apiConfig: {
+                        url: typeof cfg.url === 'string' ? cfg.url : '',
+                        model: typeof cfg.model === 'string' ? cfg.model : '',
+                        apiKey: maskSecret(cfg.apiKey),
+                        temperature: cfg.temperature,
+                        max_tokens: cfg.max_tokens,
+                    },
+                    plotEnabled: settings_ACU?.plotSettings?.enabled === true,
+                    biotrackerEnabled: settings_ACU?.bs_biotracker?.enabled === true,
+                    autoRegister: settings_ACU?.bs_biotracker?.autoRegister === true,
+                };
+                const biotrackerDebug = {};
+                try {
+                    const req = globalThis.__bs_biotracker_debug_last_effective_request__;
+                    const resp = globalThis.__bs_biotracker_debug_last_api_response__;
+                    if (req)
+                        biotrackerDebug.lastRequest = maskSensitiveFields(req);
+                    if (resp)
+                        biotrackerDebug.lastResponse = maskSensitiveFields(resp);
+                    const trackerReq = globalThis.__bs_biotracker_debug_last_tracker_request__;
+                    const trackerResult = globalThis.__bs_biotracker_debug_last_tracker_result__;
+                    if (trackerReq)
+                        biotrackerDebug.lastTrackerRequest = maskSensitiveFields(trackerReq);
+                    if (trackerResult)
+                        biotrackerDebug.lastTrackerResult = maskSensitiveFields(trackerResult);
+                }
+                catch { }
+                const tables = {};
+                try {
+                    const data = currentJsonTableData_ACU || {};
+                    for (const [key, sheet] of Object.entries(data)) {
+                        if (key === 'mate')
+                            continue;
+                        const content = Array.isArray(sheet?.content) ? sheet.content : [];
+                        const rows = Math.max(0, content.length - 1);
+                        const headers = Array.isArray(content[0]) ? content[0].map(String) : [];
+                        const sampleRows = content.slice(1, 4).map((r) => Array.isArray(r) ? r.slice(0, 8).map((c) => typeof c === 'string' && c.length > 200 ? c.slice(0, 200) + '…' : c) : r);
+                        tables[key] = { rows, headers, ...(sampleRows.length ? { sampleRows } : {}) };
+                    }
+                }
+                catch { }
+                let settingsSnapshot = null;
+                try {
+                    settingsSnapshot = maskSensitiveFields(JSON.parse(JSON.stringify(settings_ACU)));
+                }
+                catch {
+                    settingsSnapshot = '[Snapshot failed]';
+                }
+                const worldbookDebug = (() => {
+                    try {
+                        return globalThis.__ACU_DEBUG_LAST_WORLDBOOK__ || null;
+                    }
+                    catch {
+                        return null;
+                    }
+                })();
+                const lastApiBody = (() => {
+                    try {
+                        return globalThis.__ACU_DEBUG_LAST_API_BODY__ || null;
+                    }
+                    catch {
+                        return null;
+                    }
+                })();
+                const lastApiBodyAt = (() => {
+                    try {
+                        return globalThis.__ACU_DEBUG_LAST_API_BODY_AT__ || null;
+                    }
+                    catch {
+                        return null;
+                    }
+                })();
+                const payload = {
+                    meta: {
+                        plugin: '幻想·数据库',
+                        version: env.version,
+                        buildStamp: env.buildStamp,
+                        host: env.host,
+                        exportedAt: env.exportedAt,
+                        debugStartedAt: new Date(effectiveStart).toISOString(),
+                    },
+                    env,
+                    settingsSnapshot,
+                    worldbookDebug: worldbookDebug ? maskSensitiveFields(worldbookDebug) : null,
+                    lastApiBody: lastApiBody ? maskSensitiveFields(lastApiBody) : null,
+                    lastApiBodyAt: lastApiBodyAt ? new Date(lastApiBodyAt).toISOString() : null,
+                    logCount: logs.length,
+                    logs: logs.map((e) => ({
+                        time: new Date(e.timestamp).toISOString(),
+                        level: e.level,
+                        tag: e.tag,
+                        message: e.message,
+                    })),
+                    biotracker: biotrackerDebug,
+                    tables,
+                };
+                const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+                downloadJson(`acu-debug-${stamp}.json`, payload);
+                toast.success(`Debug 采集已停止，已自动导出 ${logs.length} 条日志。`);
+            }
+            else {
+                toast.success('Debug 采集已停止（无日志可导出）。');
+            }
+        }
+        catch (e) {
+            toast.success('Debug 采集已停止（自动导出失败，请手动导出）。');
+        }
         setDebugLogEnabled(false);
         setWarnLogEnabled(false);
         active.value = false;
-        toast.success('Debug 采集已停止。');
     }
     function toggleDebug() {
         if (active.value)
@@ -166209,10 +166399,42 @@ function useDebugPanel() {
                 const content = Array.isArray(sheet?.content) ? sheet.content : [];
                 const rows = Math.max(0, content.length - 1);
                 const headers = Array.isArray(content[0]) ? content[0].map(String) : [];
-                tables[key] = { rows, headers };
+                const sampleRows = content.slice(1, 4).map((r) => Array.isArray(r) ? r.slice(0, 8).map((c) => typeof c === 'string' && c.length > 200 ? c.slice(0, 200) + '…' : c) : r);
+                tables[key] = { rows, headers, ...(sampleRows.length ? { sampleRows } : {}) };
             }
         }
         catch { /* 表统计失败不影响导出 */ }
+        let settingsSnapshot = null;
+        try {
+            settingsSnapshot = maskSensitiveFields(JSON.parse(JSON.stringify(settings_ACU)));
+        }
+        catch {
+            settingsSnapshot = '[Snapshot failed]';
+        }
+        const worldbookDebug = (() => {
+            try {
+                return globalThis.__ACU_DEBUG_LAST_WORLDBOOK__ || null;
+            }
+            catch {
+                return null;
+            }
+        })();
+        const lastApiBody = (() => {
+            try {
+                return globalThis.__ACU_DEBUG_LAST_API_BODY__ || null;
+            }
+            catch {
+                return null;
+            }
+        })();
+        const lastApiBodyAt = (() => {
+            try {
+                return globalThis.__ACU_DEBUG_LAST_API_BODY_AT__ || null;
+            }
+            catch {
+                return null;
+            }
+        })();
         const payload = {
             meta: {
                 plugin: '幻想·数据库',
@@ -166223,6 +166445,10 @@ function useDebugPanel() {
                 debugStartedAt: new Date(effectiveStart).toISOString(),
             },
             env,
+            settingsSnapshot,
+            worldbookDebug: worldbookDebug ? maskSensitiveFields(worldbookDebug) : null,
+            lastApiBody: lastApiBody ? maskSensitiveFields(lastApiBody) : null,
+            lastApiBodyAt: lastApiBodyAt ? new Date(lastApiBodyAt).toISOString() : null,
             logCount: logs.length,
             logs: logs.map((e) => ({
                 time: new Date(e.timestamp).toISOString(),
@@ -166238,7 +166464,11 @@ function useDebugPanel() {
         toast.success(`已导出 ${logs.length} 条日志。`);
     }
     onMounted(() => {
-        active.value = isDebugLogEnabled() || isWarnLogEnabled();
+        // 默认关闭：每次进入高级工具均不自动开启，需用户显式点“开始 Debug”
+        setDebugLogEnabled(false);
+        setWarnLogEnabled(false);
+        active.value = false;
+        startedAt = 0;
         refreshCount();
         unsubscribe = subscribe(() => refreshCount());
     });

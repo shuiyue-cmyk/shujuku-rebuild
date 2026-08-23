@@ -131,6 +131,8 @@ export function buildCustomApiRequestBody_ACU(
   };
 
   logDebug_ACU(`[API] 构建请求体: model=${model}, reasoning_effort=${body.reasoning_effort}, stream=${body.stream}, temperature=${body.temperature}, max_tokens=${body.max_tokens}, exclude=${body.custom_exclude_body ? '有' : '无'}`);
+  try { (globalThis as any).__ACU_DEBUG_LAST_API_BODY__ = JSON.parse(JSON.stringify(body)); } catch {}
+  try { (globalThis as any).__ACU_DEBUG_LAST_API_BODY_AT__ = Date.now(); } catch {}
 
   return body;
 }
