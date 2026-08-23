@@ -203,11 +203,11 @@ import { assertSafeHttpEndpoint_ACU } from "../../shared/utils";
 
 // ─── 思考强度选项（每个 API 预设独立） ───
 const reasoningEffortOptions: AcuSelectOption[] = [
-  { value: "low", label: "low" },
-  { value: "medium", label: "medium" },
-  { value: "high", label: "high" },
-  { value: "max", label: "max" },
-  { value: "xhigh", label: "xhigh" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+  { value: "max", label: "Max" },
+  { value: "xhigh", label: "XHigh" },
 ];
 
 const store = useApiPresetStore();

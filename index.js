@@ -146490,11 +146490,11 @@ var _sfc_main$Q = /*@__PURE__*/ defineComponent({
     setup(__props, { expose: __expose }) {
         __expose();
         const reasoningEffortOptions = [
-            { value: "low", label: "low" },
-            { value: "medium", label: "medium" },
-            { value: "high", label: "high" },
-            { value: "max", label: "max" },
-            { value: "xhigh", label: "xhigh" },
+            { value: "low", label: "Low" },
+            { value: "medium", label: "Medium" },
+            { value: "high", label: "High" },
+            { value: "max", label: "Max" },
+            { value: "xhigh", label: "XHigh" },
         ];
         const store = useApiPresetStore();
         const dialogStore = useDialogStore();
@@ -146641,8 +146641,8 @@ var _sfc_main$Q = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-api-config-panel__select-row[data-v-34df7ed3] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-34df7ed3] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-34df7ed3] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-34df7ed3] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-34df7ed3] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-34df7ed3] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-34df7ed3] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-34df7ed3] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-34df7ed3] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-34df7ed3");
-var ApiConfigPanel_vue_vue_type_style_index_0_scoped_34df7ed3_lang = null;
+injectSfcStyle("\n.acu-api-config-panel__select-row[data-v-dc197e26] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-dc197e26] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-dc197e26] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-dc197e26] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-dc197e26] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-dc197e26] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-dc197e26] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-dc197e26] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-dc197e26] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-dc197e26");
+var ApiConfigPanel_vue_vue_type_style_index_0_scoped_dc197e26_lang = null;
 
 const _hoisted_1$O = { class: "acu-api-config-panel__select-row" };
 const _hoisted_2$H = { class: "acu-api-config-panel__editor-section" };
@@ -146913,7 +146913,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["title", "description"]);
 }
-var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$Q, [["render", _sfc_render$Q], ["__scopeId", "data-v-34df7ed3"]]);
+var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$Q, [["render", _sfc_render$Q], ["__scopeId", "data-v-dc197e26"]]);
 
 // ═══════════════════════════════════════════════════════════
 // service/settings/feature-preset-reference-service.ts — 功能级 API 预设引用
