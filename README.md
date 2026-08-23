@@ -2,6 +2,8 @@
 
 SillyTavern / TauriTavern 数据库插件「幻想·数据库」的干净重构版（v9.0.0）。
 
+> 持续更新中，详见提交历史：https://github.com/shuiyue-cmyk/shujuku-rebuild/commits/master
+
 基于上游 [`AlbusKen/shujuku`](https://github.com/AlbusKen/shujuku)（spv8.9.2 / main）重构：保留全部对外兼容面（SQL 表格模板、剧情推进预设、skill 化、数据库可视化前端），移除原生存储模式与智能续写，**运行时零依赖酒馆助手（JS-Slash-Runner）**，并以标准扩展形式通过 GitHub 仓库地址直接安装、自带更新——不再需要手动改版本号。
 
 ## 生理追踪（内置 BioTracker）
@@ -50,6 +52,13 @@ https://github.com/shuiyue-cmyk/shujuku-rebuild
 | 发布形态 | 纯标准扩展，仓库根目录直装 + GitHub 自动更新 |
 | 版本号 | 9.0.0（延续 spv8.9.2 之后） |
 
+## 更新日志（v9.0.0+）
+
+- **多线程优化（大世界书+长聊天+大表）**：世界书递归扫描改 `Aho-Corasick` Worker（阈值自动启用，8s 超时回退）+ 长聊天逆扫与大表格式化 `setTimeout(0)` 分片，面向 `>100 条目 / >20 表 / >2000 行` 场景不卡 UI
+- **Debug 增强**：高级工具 Debug 默认关闭，需显式“开始 Debug”；“停止 Debug”自动导出一次防忘记；导出包新增 `settingsSnapshot`（全量脱敏）、`worldbookDebug`（`entryCount/baseScanLen/chatLen/triggeredCount`）、`lastApiBody`（脱敏的 `buildCustomApiRequestBody` 完整请求体）、`tables.sampleRows`，`Authorization: Bearer` 等敏感头已脱敏
+- **填表世界书正文接收**：`active` 明确为“全部挂载蓝灯常驻 / 绿灯关键词匹配才发 / skill 化仅正文放行才发”；下列世界书中默认已发送的自动勾选并锁定，用户仅可额外勾选未覆盖条目，去重由 `Set` 保证
+- **API 预设**：`reasoning_effort` / `stream` 等随预设独立，支持 `xhigh`，`custom_exclude_body` 中与预设显式配置冲突的键已自动过滤避免误剔除；思考强度旁提示“偏小尺寸的模型拉高思考强度有助于保证输出内容正确性”
+
 ## 兼容契约
 
 保持不变的对外表面（详见下方清单与 `source/docs/TESTING.md`）：
@@ -87,6 +96,7 @@ npm run build         # rollup → source/dist/extension + 仓库根目录直装
     │   ├── entry-extension.ts   # 扩展入口（零 JSR 依赖）
     │   ├── data/                # 数据层：sqlite 引擎 / 网关 / 仓储 / 存储
     │   ├── service/             # 服务层：表格 / 剧情推进 / skill / 世界书 / 设置
+    │   │   └── workers/         # 多线程：worker-pool（Blob Worker，Aho-Corasick）
     │   ├── presentation/        # 旧弹窗 UI（DOM/jQuery）
     │   └── presentation-v2/     # v2 UI（Vue 3 + Pinia）
     ├── tests/           # vitest 单元/集成测试（~290 文件）
