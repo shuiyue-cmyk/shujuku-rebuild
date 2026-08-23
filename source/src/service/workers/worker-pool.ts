@@ -6,7 +6,7 @@
 
 import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
 
-type WorkerTaskType = 'worldbookScan' | 'mergeTables' | 'formatTables' | 'normalizeRows';
+type WorkerTaskType = 'worldbookScan';
 
 interface WorkerRequest {
   id: string;
@@ -31,25 +31,25 @@ function getWorkerCode(): string {
   return `
   // Aho-Corasick for worldbook keyword scanning
   function buildAhoTrie(keywords) {
-    const root = { next: {}, fail: null, out: [] };
+    const root = { next: Object.create(null), fail: null, out: [] };
     for (let idx = 0; idx < keywords.length; idx++) {
       const word = keywords[idx];
       let node = root;
       for (const ch of word) {
-        if (!node.next[ch]) node.next[ch] = { next: {}, fail: null, out: [] };
+        if (!node.next[ch]) node.next[ch] = { next: Object.create(null), fail: null, out: [] };
         node = node.next[ch];
       }
       node.out.push(idx);
     }
     const queue = [];
-    for (const ch in root.next) {
+    for (const ch of Object.keys(root.next)) {
       const child = root.next[ch];
       child.fail = root;
       queue.push(child);
     }
     while (queue.length) {
       const cur = queue.shift();
-      for (const ch in cur.next) {
+      for (const ch of Object.keys(cur.next)) {
         const child = cur.next[ch];
         let f = cur.fail;
         while (f && !f.next[ch]) f = f.fail;
@@ -77,23 +77,27 @@ function getWorkerCode(): string {
       let result = null;
       if (req.type === 'worldbookScan') {
         const { allEntries, baseScanText, constantUids, forcedKeys, skillKeys } = req.payload;
+        const constantSet = new Set(constantUids);
+        const forcedSet = new Set(forcedKeys);
+        const skillSet = new Set(skillKeys);
         const keywordEntries = allEntries.filter(entry => {
           const uidKey = entry.bookName + '\\u0000' + entry.uid;
-          if (constantUids.includes(uidKey)) return false;
-          if (forcedKeys.includes(uidKey)) return false;
-          if (skillKeys.includes(uidKey)) return false;
+          if (constantSet.has(uidKey)) return false;
+          if (forcedSet.has(uidKey)) return false;
+          if (skillSet.has(uidKey)) return false;
           return true;
         });
         // 预小写并建树
         const allKeywords = [];
-        const entryKeywordIdx = [];
         const entryKeyMap = new Map();
         for (const entry of keywordEntries) {
-          const keys = [];
-          const toArr = (v) => Array.isArray(v) ? v : (typeof v === 'string' && v.trim() ? [v] : []);
+          const toArr = (v) => {
+            if (Array.isArray(v)) return v.filter(x => typeof x === 'string' && x.trim());
+            if (typeof v === 'string' && v.trim()) return [v];
+            return [];
+          };
           const arr = [...toArr(entry.key), ...toArr(entry.keys)];
-          const dedup = [...new Set(arr)].map(k => String(k).toLowerCase()).filter(Boolean);
-          entryKeywordIdx.push({ entry, kws: dedup });
+          const dedup = [...new Set(arr)].map(k => k.toLowerCase()).filter(Boolean);
           entryKeyMap.set(entry.bookName + '\\u0000' + entry.uid, dedup);
           for (const kw of dedup) allKeywords.push(kw);
         }
@@ -127,7 +131,7 @@ function getWorkerCode(): string {
             const kws = entryKeyMap.get(uidKey) || [];
             let hit = false;
             if (entry.exclude_recursion) {
-              hit = kws.some(kw => baseFoundSet.has(kwToIdx.get(kw)) || base.includes(kw));
+              hit = kws.some(kw => baseFoundSet.has(kwToIdx.get(kw)));
             } else {
               hit = kws.some(kw => foundSet.has(kwToIdx.get(kw)));
             }
@@ -155,7 +159,12 @@ function getWorkerCode(): string {
   `;
 }
 
+let workerTimeoutCount = 0;
+
 function ensureWorker(): Worker | null {
+  if (typeof Worker === 'undefined' || typeof Blob === 'undefined' || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
+    return null;
+  }
   if (workerFailed) return null;
   if (workerInstance) return workerInstance;
   try {
@@ -163,14 +172,17 @@ function ensureWorker(): Worker | null {
     const blob = new Blob([code], { type: 'application/javascript' });
     const url = URL.createObjectURL(blob);
     workerInstance = new Worker(url);
+    URL.revokeObjectURL(url);
     workerInstance.onmessage = (e: MessageEvent<WorkerResponse>) => {
       const res = e.data;
       const entry = pending.get(res.id);
       if (!entry) return;
       clearTimeout(entry.timer);
       pending.delete(res.id);
-      if (res.success) entry.resolve(res.result);
-      else entry.reject(new Error(res.error || 'worker error'));
+      if (res.success) {
+        workerTimeoutCount = 0;
+        entry.resolve(res.result);
+      } else entry.reject(new Error(res.error || 'worker error'));
     };
     workerInstance.onerror = (ev) => {
       logWarn_ACU('[Worker] Worker error, fallback to main thread', ev);
@@ -202,7 +214,15 @@ export async function runInWorkerIfNeeded<T>(type: WorkerTaskType, payload: any,
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id);
-      logWarn_ACU(`[Worker] ${type} timeout ${timeoutMs}ms, fallback`);
+      workerTimeoutCount += 1;
+      logWarn_ACU(`[Worker] ${type} timeout ${timeoutMs}ms, fallback (${workerTimeoutCount}/3)`);
+      if (workerTimeoutCount >= 3) {
+        logWarn_ACU('[Worker] Too many timeouts, disabling Worker');
+        workerFailed = true;
+        try { workerInstance?.terminate(); } catch {}
+        workerInstance = null;
+        workerReady = false;
+      }
       reject(new Error('worker timeout'));
     }, timeoutMs);
     pending.set(id, { resolve, reject, timer });
@@ -221,9 +241,19 @@ export async function runInWorkerIfNeeded<T>(type: WorkerTaskType, payload: any,
 }
 
 export function shouldUseWorkerForWorldbook(entryCount: number, baseScanLen: number, chatLen: number): boolean {
-  return entryCount > 100 || baseScanLen > 20000 || chatLen > 500;
+  return entryCount > 200 || baseScanLen > 30000 || chatLen > 800 || (entryCount > 100 && baseScanLen > 10000);
 }
 
 export function shouldUseWorkerForTables(tableCount: number, totalRows: number, totalCells: number): boolean {
-  return tableCount > 20 || totalRows > 2000 || totalCells > 50000;
+  return tableCount > 30 || totalRows > 3000 || totalCells > 80000 || (tableCount > 20 && totalRows > 1500);
+}
+
+export function resetWorkerForTests_ACU(): void {
+  workerTimeoutCount = 0;
+  workerFailed = false;
+  workerReady = false;
+  if (workerInstance) { try { workerInstance.terminate(); } catch {} }
+  workerInstance = null;
+  for (const [, entry] of pending) clearTimeout(entry.timer);
+  pending.clear();
 }

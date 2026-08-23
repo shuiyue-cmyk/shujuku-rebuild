@@ -429,7 +429,9 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
           pendingDeltas.reverse();
           logDebug_ACU(`[表格重建] 正序叠加 ${pendingDeltas.length} 个 delta 楼层到 base 上`);
 
-          for (const { index: deltaIndex, tagData: deltaTagData } of pendingDeltas) {
+          for (let _di = 0; _di < pendingDeltas.length; _di++) {
+              if (pendingDeltas.length > 20 && _di % 10 === 0) await new Promise<void>(r => setTimeout(r, 0));
+              const { index: deltaIndex, tagData: deltaTagData } = pendingDeltas[_di];
               const incrementalData = deltaTagData.incrementalData || {};
               for (const [sheetKey, delta] of Object.entries(incrementalData)) {
                   if (!templateSheetKeySet.has(sheetKey)) continue;

@@ -5372,25 +5372,25 @@ function getWorkerCode() {
     return `
   // Aho-Corasick for worldbook keyword scanning
   function buildAhoTrie(keywords) {
-    const root = { next: {}, fail: null, out: [] };
+    const root = { next: Object.create(null), fail: null, out: [] };
     for (let idx = 0; idx < keywords.length; idx++) {
       const word = keywords[idx];
       let node = root;
       for (const ch of word) {
-        if (!node.next[ch]) node.next[ch] = { next: {}, fail: null, out: [] };
+        if (!node.next[ch]) node.next[ch] = { next: Object.create(null), fail: null, out: [] };
         node = node.next[ch];
       }
       node.out.push(idx);
     }
     const queue = [];
-    for (const ch in root.next) {
+    for (const ch of Object.keys(root.next)) {
       const child = root.next[ch];
       child.fail = root;
       queue.push(child);
     }
     while (queue.length) {
       const cur = queue.shift();
-      for (const ch in cur.next) {
+      for (const ch of Object.keys(cur.next)) {
         const child = cur.next[ch];
         let f = cur.fail;
         while (f && !f.next[ch]) f = f.fail;
@@ -5418,23 +5418,27 @@ function getWorkerCode() {
       let result = null;
       if (req.type === 'worldbookScan') {
         const { allEntries, baseScanText, constantUids, forcedKeys, skillKeys } = req.payload;
+        const constantSet = new Set(constantUids);
+        const forcedSet = new Set(forcedKeys);
+        const skillSet = new Set(skillKeys);
         const keywordEntries = allEntries.filter(entry => {
           const uidKey = entry.bookName + '\\u0000' + entry.uid;
-          if (constantUids.includes(uidKey)) return false;
-          if (forcedKeys.includes(uidKey)) return false;
-          if (skillKeys.includes(uidKey)) return false;
+          if (constantSet.has(uidKey)) return false;
+          if (forcedSet.has(uidKey)) return false;
+          if (skillSet.has(uidKey)) return false;
           return true;
         });
         // 预小写并建树
         const allKeywords = [];
-        const entryKeywordIdx = [];
         const entryKeyMap = new Map();
         for (const entry of keywordEntries) {
-          const keys = [];
-          const toArr = (v) => Array.isArray(v) ? v : (typeof v === 'string' && v.trim() ? [v] : []);
+          const toArr = (v) => {
+            if (Array.isArray(v)) return v.filter(x => typeof x === 'string' && x.trim());
+            if (typeof v === 'string' && v.trim()) return [v];
+            return [];
+          };
           const arr = [...toArr(entry.key), ...toArr(entry.keys)];
-          const dedup = [...new Set(arr)].map(k => String(k).toLowerCase()).filter(Boolean);
-          entryKeywordIdx.push({ entry, kws: dedup });
+          const dedup = [...new Set(arr)].map(k => k.toLowerCase()).filter(Boolean);
           entryKeyMap.set(entry.bookName + '\\u0000' + entry.uid, dedup);
           for (const kw of dedup) allKeywords.push(kw);
         }
@@ -5468,7 +5472,7 @@ function getWorkerCode() {
             const kws = entryKeyMap.get(uidKey) || [];
             let hit = false;
             if (entry.exclude_recursion) {
-              hit = kws.some(kw => baseFoundSet.has(kwToIdx.get(kw)) || base.includes(kw));
+              hit = kws.some(kw => baseFoundSet.has(kwToIdx.get(kw)));
             } else {
               hit = kws.some(kw => foundSet.has(kwToIdx.get(kw)));
             }
@@ -5495,7 +5499,11 @@ function getWorkerCode() {
   };
   `;
 }
+let workerTimeoutCount = 0;
 function ensureWorker() {
+    if (typeof Worker === 'undefined' || typeof Blob === 'undefined' || typeof URL === 'undefined' || typeof URL.createObjectURL !== 'function') {
+        return null;
+    }
     if (workerFailed)
         return null;
     if (workerInstance)
@@ -5505,6 +5513,7 @@ function ensureWorker() {
         const blob = new Blob([code], { type: 'application/javascript' });
         const url = URL.createObjectURL(blob);
         workerInstance = new Worker(url);
+        URL.revokeObjectURL(url);
         workerInstance.onmessage = (e) => {
             const res = e.data;
             const entry = pending.get(res.id);
@@ -5512,8 +5521,10 @@ function ensureWorker() {
                 return;
             clearTimeout(entry.timer);
             pending.delete(res.id);
-            if (res.success)
+            if (res.success) {
+                workerTimeoutCount = 0;
                 entry.resolve(res.result);
+            }
             else
                 entry.reject(new Error(res.error || 'worker error'));
         };
@@ -5552,7 +5563,18 @@ async function runInWorkerIfNeeded(type, payload, opts) {
     return new Promise((resolve, reject) => {
         const timer = setTimeout(() => {
             pending.delete(id);
-            logWarn_ACU(`[Worker] ${type} timeout ${timeoutMs}ms, fallback`);
+            workerTimeoutCount += 1;
+            logWarn_ACU(`[Worker] ${type} timeout ${timeoutMs}ms, fallback (${workerTimeoutCount}/3)`);
+            if (workerTimeoutCount >= 3) {
+                logWarn_ACU('[Worker] Too many timeouts, disabling Worker');
+                workerFailed = true;
+                try {
+                    workerInstance?.terminate();
+                }
+                catch { }
+                workerInstance = null;
+                workerReady = false;
+            }
             reject(new Error('worker timeout'));
         }, timeoutMs);
         pending.set(id, { resolve, reject, timer });
@@ -5571,10 +5593,25 @@ async function runInWorkerIfNeeded(type, payload, opts) {
     });
 }
 function shouldUseWorkerForWorldbook(entryCount, baseScanLen, chatLen) {
-    return entryCount > 100 || baseScanLen > 20000 || chatLen > 500;
+    return entryCount > 200 || baseScanLen > 30000 || chatLen > 800 || (entryCount > 100 && baseScanLen > 10000);
 }
 function shouldUseWorkerForTables(tableCount, totalRows, totalCells) {
-    return tableCount > 20 || totalRows > 2000 || totalCells > 50000;
+    return tableCount > 30 || totalRows > 3000 || totalCells > 80000 || (tableCount > 20 && totalRows > 1500);
+}
+function resetWorkerForTests_ACU() {
+    workerTimeoutCount = 0;
+    workerFailed = false;
+    workerReady = false;
+    if (workerInstance) {
+        try {
+            workerInstance.terminate();
+        }
+        catch { }
+    }
+    workerInstance = null;
+    for (const [, entry] of pending)
+        clearTimeout(entry.timer);
+    pending.clear();
 }
 
 /**
@@ -52025,7 +52062,10 @@ async function mergeAllIndependentTablesLegacyV1_ACU() {
         // pendingDeltas 是逆序收集的，需要反转为正序（从旧到新）
         pendingDeltas.reverse();
         logDebug_ACU(`[表格重建] 正序叠加 ${pendingDeltas.length} 个 delta 楼层到 base 上`);
-        for (const { index: deltaIndex, tagData: deltaTagData } of pendingDeltas) {
+        for (let _di = 0; _di < pendingDeltas.length; _di++) {
+            if (pendingDeltas.length > 20 && _di % 10 === 0)
+                await new Promise(r => setTimeout(r, 0));
+            const { index: deltaIndex, tagData: deltaTagData } = pendingDeltas[_di];
             const incrementalData = deltaTagData.incrementalData || {};
             for (const [sheetKey, delta] of Object.entries(incrementalData)) {
                 if (!templateSheetKeySet.has(sheetKey))
@@ -58758,7 +58798,7 @@ async function prepareAIInput_ACU(messages, updateMode = 'standard', targetSheet
         ? resolvePromptTableNameForSheet_ACU(promptIdentifierSource, tableIndexes)
         : null;
     for (let tableIndex = 0; tableIndex < tableIndexes.length; tableIndex += 1) {
-        if (tableIndexes.length > 20 && tableIndex % 5 === 0)
+        if (tableIndexes.length > 20 && tableIndex !== 0 && tableIndex % 5 === 0)
             await new Promise(r => setTimeout(r, 0));
         const sheetKey = tableIndexes[tableIndex];
         const rawTable = workingTableData[sheetKey];
@@ -71170,14 +71210,14 @@ async function collectCombinedWorldbookEntriesByStrategy_ACU(options = {}) {
     }
     const triggeredEntries = new Set([...constantEntries, ...userEnabledEntries.filter(entry => forcedEntrySet.has(entry))]);
     // 大负载时尝试 Worker 加速（Aho-Corasick），失败回退主线程
-    const useWorker = shouldUseWorkerForWorldbook(allEntries.length, baseScanText.length, allChatMessages_ACU.length);
+    const useWorker = shouldUseWorkerForWorldbook(userEnabledEntries.length, baseScanText.length, allChatMessages_ACU.length);
     if (useWorker) {
         try {
             const constantUids = constantEntries.map(e => e.bookName + '\u0000' + e.uid);
             const forcedKeysArr = Array.from(forcedEntrySet).map((e) => e.bookName + '\u0000' + e.uid);
-            const skillKeysArr = allEntries.filter((e) => hasUsableWorldbookSkillMeta_ACU(e.comment) && !forcedEntrySet.has(e)).map((e) => e.bookName + '\u0000' + e.uid);
+            const skillKeysArr = userEnabledEntries.filter((e) => hasUsableWorldbookSkillMeta_ACU(e.comment) && !forcedEntrySet.has(e)).map((e) => e.bookName + '\u0000' + e.uid);
             const workerRes = await runInWorkerIfNeeded('worldbookScan', {
-                allEntries: allEntries.map((e) => ({
+                allEntries: userEnabledEntries.map((e) => ({
                     uid: e.uid,
                     bookName: e.bookName,
                     content: e.content,
@@ -71194,13 +71234,16 @@ async function collectCombinedWorldbookEntriesByStrategy_ACU(options = {}) {
                 skillKeys: skillKeysArr,
             }, { timeoutMs: 8000, threshold: true });
             if (workerRes && Array.isArray(workerRes.triggered)) {
-                const keyToEntry = new Map(allEntries.map((e) => [e.bookName + '\u0000' + e.uid, e]));
+                const keyToEntry = new Map(userEnabledEntries.map((e) => [e.bookName + '\u0000' + e.uid, e]));
                 const workerTriggered = new Set(workerRes.triggered.map((k) => keyToEntry.get(k)).filter(Boolean));
                 let finalEntries = Array.from(workerTriggered);
                 if (sortEntries)
                     finalEntries = finalEntries.sort(sortEntries);
-                logDebug_ACU(`${logPrefix} Worldbook via Worker, triggered ${finalEntries.length}/${allEntries.length}`);
+                logDebug_ACU(`${logPrefix} Worldbook via Worker, triggered ${finalEntries.length}/${userEnabledEntries.length}`);
                 return finalEntries;
+            }
+            else if (useWorker) {
+                logWarn_ACU(`${logPrefix} Worker not used or timed out, fallback to main thread`);
             }
         }
         catch (e) {
