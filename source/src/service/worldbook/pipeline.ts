@@ -1388,16 +1388,16 @@ export   async function collectCombinedWorldbookEntriesByStrategy_ACU(options: a
       const constantEntries = userEnabledEntries.filter(
         entry => {
           if (!isConstantEntry(entry)) return false;
-          if (!isActivePrimary) return true; // 非 active：恒常蓝灯照发
-          // active（正文接收）：蓝灯恒常条目照发；skill 化条目需本轮 agent 放行才发
+          if (!isActivePrimary) return true;
+          // 正文接收：全部挂载的蓝灯（非 skill 常驻）照发；skill 化蓝灯需正文放行（agent greenlight/勾选）才发
           return !hasUsableWorldbookSkillMeta_ACU(entry.comment) || forcedEntrySet.has(entry);
         },
       );
       let keywordEntries = userEnabledEntries.filter(entry => {
         if (constantEntries.includes(entry)) return false;
         if (forcedEntrySet.has(entry)) return false;
-        // active 下 skill 化蓝灯未放行不参与关键词触发（避免被正文关键词误触发）
-        if (isActivePrimary && hasUsableWorldbookSkillMeta_ACU(entry.comment) && isConstantEntry(entry)) return false;
+        // 正文接收：绿灯按关键词匹配；skill 化条目未被正文放行（非 greenlight/勾选强制）不参与关键词触发
+        if (isActivePrimary && hasUsableWorldbookSkillMeta_ACU(entry.comment) && !forcedEntrySet.has(entry)) return false;
         return true;
       });
 
@@ -1575,8 +1575,8 @@ export   async function getCombinedWorldbookContent_ACU(initialScanTextOverride 
                 if (isAgentGreenlight) return true;
                 const list = enabledEntriesMap?.[entry.bookName];
                 if (isActiveSource) {
-                    // 正文接收：勾选与否不影响 isSelected（未勾选=发正文命中，勾选=经 forceIncludeEntry 附加），
-                    // 避免某书一旦勾选就白名单化、丢掉该书未勾选的蓝灯/关键词条目
+                    // 正文接收：默认发送全部挂载的蓝灯（isSelected 不过滤，蓝灯常驻由 collect 层决定）；
+                    // 绿灯按关键词匹配，skill 化条目仅当 agent 正放行（greenlight/勾选强制）时才参与
                     return true;
                 }
                 if (worldbookConfig?.source === 'character') {

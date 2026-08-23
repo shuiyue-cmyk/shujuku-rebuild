@@ -70893,8 +70893,8 @@ async function collectCombinedWorldbookEntriesByStrategy_ACU(options = {}) {
         if (!isConstantEntry(entry))
             return false;
         if (!isActivePrimary)
-            return true; // 非 active：恒常蓝灯照发
-        // active（正文接收）：蓝灯恒常条目照发；skill 化条目需本轮 agent 放行才发
+            return true;
+        // 正文接收：全部挂载的蓝灯（非 skill 常驻）照发；skill 化蓝灯需正文放行（agent greenlight/勾选）才发
         return !hasUsableWorldbookSkillMeta_ACU(entry.comment) || forcedEntrySet.has(entry);
     });
     let keywordEntries = userEnabledEntries.filter(entry => {
@@ -70902,8 +70902,8 @@ async function collectCombinedWorldbookEntriesByStrategy_ACU(options = {}) {
             return false;
         if (forcedEntrySet.has(entry))
             return false;
-        // active 下 skill 化蓝灯未放行不参与关键词触发（避免被正文关键词误触发）
-        if (isActivePrimary && hasUsableWorldbookSkillMeta_ACU(entry.comment) && isConstantEntry(entry))
+        // 正文接收：绿灯按关键词匹配；skill 化条目未被正文放行（非 greenlight/勾选强制）不参与关键词触发
+        if (isActivePrimary && hasUsableWorldbookSkillMeta_ACU(entry.comment) && !forcedEntrySet.has(entry))
             return false;
         return true;
     });
@@ -71072,8 +71072,8 @@ async function getCombinedWorldbookContent_ACU(initialScanTextOverride = '', opt
                     return true;
                 const list = enabledEntriesMap?.[entry.bookName];
                 if (isActiveSource) {
-                    // 正文接收：勾选与否不影响 isSelected（未勾选=发正文命中，勾选=经 forceIncludeEntry 附加），
-                    // 避免某书一旦勾选就白名单化、丢掉该书未勾选的蓝灯/关键词条目
+                    // 正文接收：默认发送全部挂载的蓝灯（isSelected 不过滤，蓝灯常驻由 collect 层决定）；
+                    // 绿灯按关键词匹配，skill 化条目仅当 agent 正放行（greenlight/勾选强制）时才参与
                     return true;
                 }
                 if (worldbookConfig?.source === 'character') {
@@ -124796,7 +124796,7 @@ const WARDROBE_DIMENSION_LABELS = Object.freeze({ masking: '掩形', support: '�
 const PREG_FIT_GAP_LABELS = Object.freeze({ masking: '掩形', support: '支撑', capacity: '容身', convenience: '便捷' });
 const MAX_PROGRESS_BAR_CAP = 200;
 // 构建时间戳（rollup replace 注入；测试/dev 环境无替换时回退 'dev'）——全局水印用，截图辨别构建
-const ACU_BUILD_STAMP = typeof "20260821-14" === 'string' ? "20260821-14" : 'dev';
+const ACU_BUILD_STAMP = typeof "20260823-09" === 'string' ? "20260823-09" : 'dev';
 const MODAL_EDGE_GAP = 24;
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const FLOATING_SPHERE_POSITION_KEY = `${MODULE_NAME}_floating_sphere_position`;
@@ -165678,7 +165678,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260821-14";
+        const stamp = "20260823-09";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
