@@ -56,8 +56,17 @@ function maskSecret(value: unknown): string {
 
 const SENSITIVE_KEYS = /^(api[_-]?key|apikey|key|token|authorization|auth|password|proxy[_-]?password|secret|bearer|accessToken|access_token)$/i;
 
-/** 递归脱敏对象中的敏感字段（biotracker 请求/响应快照可能含 Authorization/key 回显） */
+function maskSensitiveString(str: string): string {
+  return str
+    .replace(/(Authorization\s*:\s*Bearer\s+)([^\s"',}\n]+)/gi, '$1***')
+    .replace(/(Bearer\s+)(sk-[A-Za-z0-9-_]+)/g, '$1***')
+    .replace(/([?&](?:api[_-]?key|token|authorization)=)([^&#\s"',}]+)/gi, '$1***')
+    .replace(/("(?:api[_-]?key|apikey|authorization|token|password|secret)"\s*:\s*")([^"]+)(")/gi, '$1***$3');
+}
+
+ /** 递归脱敏对象中的敏感字段（biotracker 请求/响应快照可能含 Authorization/key 回显） */
 function maskSensitiveFields(value: unknown, depth = 0, seen = new WeakSet<object>()): unknown {
+  if (typeof value === 'string') return maskSensitiveString(value);
   if (depth > 6) return '[Truncated]';
   if (Array.isArray(value)) {
     if (value.length > 200) return `[Array(${value.length}) truncated]`;

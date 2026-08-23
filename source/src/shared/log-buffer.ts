@@ -100,6 +100,12 @@ export function extractTag(args: any[]): string {
 const LOG_SENSITIVE_KEYS = /^(api[_-]?key|apikey|key|token|authorization|auth|password|proxy[_-]?password|secret|bearer|accessToken|access_token)$/i;
 
 function maskSensitiveInLogValue(value: any, depth = 0, seen = new WeakSet()): any {
+  if (typeof value === 'string') {
+    return value
+      .replace(/(Authorization\s*:\s*Bearer\s+)([^\s"',}\n]+)/gi, '$1***')
+      .replace(/(Bearer\s+)(sk-[A-Za-z0-9-_]+)/g, '$1***')
+      .replace(/("(?:api[_-]?key|apikey|authorization|token|password|secret)"\s*:\s*")([^"]+)(")/gi, '$1***$3');
+  }
   if (depth > 6 || value === null || value === undefined) return depth > 6 ? '[Truncated]' : value;
   if (typeof value === 'object') {
     if (seen.has(value)) return '[Circular]';
@@ -124,8 +130,9 @@ function normalizeLogArg_ACU(arg: any): string {
   if (arg === null) return 'null';
   if (arg === undefined) return 'undefined';
   if (typeof arg === 'string') {
-    // 对可能含敏感头/体的长字符串做键名脱敏（如 \"apiKey\":\"sk-...\"）
-    return arg.replace(/\"(api[_-]?key|apikey|authorization|token|password|secret|auth|bearer|accessToken|access_token)\"\s*:\s*\"[^\"]*\"/gi, '\"$1\":\"***\"');
+    return arg
+      .replace(/(Authorization\s*:\s*Bearer\s+)([^\s"',}\n]+)/gi, '$1***')
+      .replace(/\"(api[_-]?key|apikey|authorization|token|password|secret|auth|bearer|accessToken|access_token)\"\s*:\s*\"[^\"]*\"/gi, '\"$1\":\"***\"');
   }
   if (typeof arg === 'number' || typeof arg === 'boolean' || typeof arg === 'bigint') return String(arg);
   if (typeof arg === 'symbol') return String(arg);

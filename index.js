@@ -1978,6 +1978,12 @@ function extractTag(args) {
 }
 const LOG_SENSITIVE_KEYS = /^(api[_-]?key|apikey|key|token|authorization|auth|password|proxy[_-]?password|secret|bearer|accessToken|access_token)$/i;
 function maskSensitiveInLogValue(value, depth = 0, seen = new WeakSet()) {
+    if (typeof value === 'string') {
+        return value
+            .replace(/(Authorization\s*:\s*Bearer\s+)([^\s"',}\n]+)/gi, '$1***')
+            .replace(/(Bearer\s+)(sk-[A-Za-z0-9-_]+)/g, '$1***')
+            .replace(/("(?:api[_-]?key|apikey|authorization|token|password|secret)"\s*:\s*")([^"]+)(")/gi, '$1***$3');
+    }
     if (depth > 6 || value === null || value === undefined)
         return depth > 6 ? '[Truncated]' : value;
     if (typeof value === 'object') {
@@ -2008,8 +2014,9 @@ function normalizeLogArg_ACU(arg) {
     if (arg === undefined)
         return 'undefined';
     if (typeof arg === 'string') {
-        // 对可能含敏感头/体的长字符串做键名脱敏（如 \"apiKey\":\"sk-...\"）
-        return arg.replace(/\"(api[_-]?key|apikey|authorization|token|password|secret|auth|bearer|accessToken|access_token)\"\s*:\s*\"[^\"]*\"/gi, '\"$1\":\"***\"');
+        return arg
+            .replace(/(Authorization\s*:\s*Bearer\s+)([^\s"',}\n]+)/gi, '$1***')
+            .replace(/\"(api[_-]?key|apikey|authorization|token|password|secret|auth|bearer|accessToken|access_token)\"\s*:\s*\"[^\"]*\"/gi, '\"$1\":\"***\"');
     }
     if (typeof arg === 'number' || typeof arg === 'boolean' || typeof arg === 'bigint')
         return String(arg);
@@ -125170,7 +125177,7 @@ const WARDROBE_DIMENSION_LABELS = Object.freeze({ masking: '掩形', support: '�
 const PREG_FIT_GAP_LABELS = Object.freeze({ masking: '掩形', support: '支撑', capacity: '容身', convenience: '便捷' });
 const MAX_PROGRESS_BAR_CAP = 200;
 // 构建时间戳（rollup replace 注入；测试/dev 环境无替换时回退 'dev'）——全局水印用，截图辨别构建
-const ACU_BUILD_STAMP = typeof "20260823-10" === 'string' ? "20260823-10" : 'dev';
+const ACU_BUILD_STAMP = typeof "20260823-12" === 'string' ? "20260823-12" : 'dev';
 const MODAL_EDGE_GAP = 24;
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const FLOATING_SPHERE_POSITION_KEY = `${MODULE_NAME}_floating_sphere_position`;
@@ -166077,7 +166084,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260823-10";
+        const stamp = "20260823-12";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -166101,8 +166108,17 @@ function maskSecret(value) {
     return `${value.slice(0, 3)}***${value.slice(-3)}`;
 }
 const SENSITIVE_KEYS = /^(api[_-]?key|apikey|key|token|authorization|auth|password|proxy[_-]?password|secret|bearer|accessToken|access_token)$/i;
+function maskSensitiveString(str) {
+    return str
+        .replace(/(Authorization\s*:\s*Bearer\s+)([^\s"',}\n]+)/gi, '$1***')
+        .replace(/(Bearer\s+)(sk-[A-Za-z0-9-_]+)/g, '$1***')
+        .replace(/([?&](?:api[_-]?key|token|authorization)=)([^&#\s"',}]+)/gi, '$1***')
+        .replace(/("(?:api[_-]?key|apikey|authorization|token|password|secret)"\s*:\s*")([^"]+)(")/gi, '$1***$3');
+}
 /** 递归脱敏对象中的敏感字段（biotracker 请求/响应快照可能含 Authorization/key 回显） */
 function maskSensitiveFields(value, depth = 0, seen = new WeakSet()) {
+    if (typeof value === 'string')
+        return maskSensitiveString(value);
     if (depth > 6)
         return '[Truncated]';
     if (Array.isArray(value)) {
