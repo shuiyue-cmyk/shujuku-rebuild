@@ -157183,11 +157183,20 @@ function useFormFillWorldbookEntries() {
                 const enabledList = Array.isArray(enabledEntries[bookName])
                     ? enabledEntries[bookName]
                     : [];
+                const cfgSource = getCurrentWorldbookConfig_ACU()?.source;
                 const visible = visibleBookEntries.map((entry) => {
                     const comment = String(entry?.comment || entry?.name || '');
                     const skillMeta = parseWorldbookSkillMetaFromComment_ACU(comment);
                     const snapshotEntry = getWorldbookSnapshotEntryForDisplay_ACU(snapshotEntryIndexByBook, bookName, entry);
                     const displayView = buildWorldbookEntryDisplayView_ACU(entry, snapshotEntry);
+                    const agentState = resolveWorldbookEntryTakeoverState_ACU(entry, !!skillMeta, snapshotEntry);
+                    const isDefaultActive = cfgSource === 'active'
+                        && !displayView.disabled
+                        && ((displayView.isConstant && !skillMeta) // 全部挂载的蓝灯
+                            || agentState === 'final_greenlight' // 正文放行的 skill 化
+                        );
+                    const checked = isDefaultActive ? true : enabledList.includes(entry.uid);
+                    const disabled = displayView.disabled || isDefaultActive;
                     return {
                         uid: entry.uid,
                         bookName,
@@ -157195,12 +157204,14 @@ function useFormFillWorldbookEntries() {
                         comment,
                         skillMeta,
                         hasSkill: !!skillMeta,
-                        agentTakeoverState: resolveWorldbookEntryTakeoverState_ACU(entry, !!skillMeta, snapshotEntry),
-                        checked: enabledList.includes(entry.uid),
+                        agentTakeoverState: agentState,
+                        checked,
                         skillifySelected: false,
                         skillifySelectable: false,
                         isConstant: displayView.isConstant,
-                        disabled: displayView.disabled,
+                        disabled,
+                        // @ts-ignore 额外标记供 UI 区分默认已发送
+                        _isDefaultActive: isDefaultActive,
                     };
                 });
                 if (visible.length > 0) {
@@ -157219,6 +157230,10 @@ function useFormFillWorldbookEntries() {
         }
     }
     function toggleEntry(bookName, uid, checked) {
+        const targetGroup = groups.value.find(g => g.bookName === bookName);
+        const targetEntry = targetGroup?.entries.find((e) => e.uid === uid);
+        if (targetEntry?._isDefaultActive)
+            return;
         const enabledEntries = ensureEnabledEntries();
         if (!Array.isArray(enabledEntries[bookName])) {
             enabledEntries[bookName] = [];
@@ -157242,14 +157257,21 @@ function useFormFillWorldbookEntries() {
     function selectAll() {
         const enabledEntries = ensureEnabledEntries();
         for (const group of groups.value) {
-            enabledEntries[group.bookName] = group.entries
-                .filter(e => !e.disabled)
+            const extraUids = group.entries
+                .filter((e) => !e.disabled && !e._isDefaultActive)
                 .map(e => e.uid);
+            enabledEntries[group.bookName] = extraUids;
         }
         saveSettings_ACU();
         groups.value = groups.value.map(g => ({
             ...g,
-            entries: g.entries.map(e => ({ ...e, checked: !e.disabled })),
+            entries: g.entries.map((e) => {
+                if (e._isDefaultActive)
+                    return { ...e, checked: true };
+                if (e.disabled)
+                    return { ...e, checked: false };
+                return { ...e, checked: true };
+            }),
         }));
     }
     function deselectAll() {
@@ -157260,7 +157282,7 @@ function useFormFillWorldbookEntries() {
         saveSettings_ACU();
         groups.value = groups.value.map(g => ({
             ...g,
-            entries: g.entries.map(e => ({ ...e, checked: false })),
+            entries: g.entries.map((e) => ({ ...e, checked: !!e._isDefaultActive })),
         }));
     }
     function toggleGroupExpanded(bookName) {

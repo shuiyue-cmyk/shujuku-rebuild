@@ -88,12 +88,22 @@ export function useFormFillWorldbookEntries() {
         const enabledList: number[] = Array.isArray(enabledEntries[bookName])
           ? enabledEntries[bookName]
           : [];
+        const cfgSource = (getCurrentWorldbookConfig_ACU() as any)?.source;
 
         const visible: FormFillWorldbookEntryItem[] = visibleBookEntries.map((entry: any) => {
           const comment = String(entry?.comment || entry?.name || '');
           const skillMeta = parseWorldbookSkillMetaFromComment_ACU(comment);
           const snapshotEntry = getWorldbookSnapshotEntryForDisplay_ACU(snapshotEntryIndexByBook, bookName, entry);
           const displayView = buildWorldbookEntryDisplayView_ACU(entry, snapshotEntry);
+          const agentState = resolveWorldbookEntryTakeoverState_ACU(entry, !!skillMeta, snapshotEntry);
+          const isDefaultActive = cfgSource === 'active'
+            && !displayView.disabled
+            && (
+              (displayView.isConstant && !skillMeta) // 全部挂载的蓝灯
+              || agentState === 'final_greenlight' // 正文放行的 skill 化
+            );
+          const checked = isDefaultActive ? true : enabledList.includes(entry.uid);
+          const disabled = displayView.disabled || isDefaultActive;
           return {
             uid: entry.uid,
             bookName,
@@ -101,13 +111,15 @@ export function useFormFillWorldbookEntries() {
             comment,
             skillMeta,
             hasSkill: !!skillMeta,
-            agentTakeoverState: resolveWorldbookEntryTakeoverState_ACU(entry, !!skillMeta, snapshotEntry),
-            checked: enabledList.includes(entry.uid),
+            agentTakeoverState: agentState,
+            checked,
             skillifySelected: false,
             skillifySelectable: false,
             isConstant: displayView.isConstant,
-            disabled: displayView.disabled,
-          };
+            disabled,
+            // @ts-ignore 额外标记供 UI 区分默认已发送
+            _isDefaultActive: isDefaultActive,
+          } as any;
         });
 
         if (visible.length > 0) {
@@ -126,6 +138,9 @@ export function useFormFillWorldbookEntries() {
   }
 
   function toggleEntry(bookName: string, uid: number, checked: boolean): void {
+    const targetGroup = groups.value.find(g => g.bookName === bookName);
+    const targetEntry: any = targetGroup?.entries.find((e: any) => e.uid === uid);
+    if ((targetEntry as any)?._isDefaultActive) return;
     const enabledEntries = ensureEnabledEntries();
     if (!Array.isArray(enabledEntries[bookName])) {
       enabledEntries[bookName] = [];
@@ -150,15 +165,20 @@ export function useFormFillWorldbookEntries() {
   function selectAll(): void {
     const enabledEntries = ensureEnabledEntries();
     for (const group of groups.value) {
-      enabledEntries[group.bookName] = group.entries
-        .filter(e => !e.disabled)
+      const extraUids = group.entries
+        .filter((e: any) => !e.disabled && !(e as any)._isDefaultActive)
         .map(e => e.uid);
+      enabledEntries[group.bookName] = extraUids;
     }
     saveSettings_ACU();
 
     groups.value = groups.value.map(g => ({
       ...g,
-      entries: g.entries.map(e => ({ ...e, checked: !e.disabled })),
+      entries: g.entries.map((e: any) => {
+        if ((e as any)._isDefaultActive) return { ...e, checked: true };
+        if (e.disabled) return { ...e, checked: false };
+        return { ...e, checked: true };
+      }),
     }));
   }
 
@@ -171,7 +191,7 @@ export function useFormFillWorldbookEntries() {
 
     groups.value = groups.value.map(g => ({
       ...g,
-      entries: g.entries.map(e => ({ ...e, checked: false })),
+      entries: g.entries.map((e: any) => ({ ...e, checked: !!(e as any)._isDefaultActive })),
     }));
   }
 
