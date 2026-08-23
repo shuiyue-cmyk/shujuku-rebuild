@@ -294,6 +294,7 @@ function resolvePromptRowWindow_ACU(
         ? resolvePromptTableNameForSheet_ACU(promptIdentifierSource, tableIndexes)
         : null;
     for (let tableIndex = 0; tableIndex < tableIndexes.length; tableIndex += 1) {
+        if (tableIndexes.length > 20 && tableIndex % 5 === 0) await new Promise<void>(r => setTimeout(r, 0));
         const sheetKey = tableIndexes[tableIndex];
         const rawTable = workingTableData[sheetKey];
         if (!rawTable || !rawTable.name || !rawTable.content) continue;

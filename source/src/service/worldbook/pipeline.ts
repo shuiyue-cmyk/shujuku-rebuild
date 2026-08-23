@@ -28,6 +28,7 @@ import {
   resolveLorebookNameFromList_ACU,
   getActiveWorldbookNamesForFill_ACU
 } from '../../data/gateways/worldbook-gateway';
+import { runInWorkerIfNeeded, shouldUseWorkerForWorldbook } from '../workers/worker-pool';
 import {
   hasUsableWorldbookSkillMeta_ACU
 } from '../agent/agent-worldbook-skill-meta';
@@ -1413,6 +1414,44 @@ export   async function collectCombinedWorldbookEntriesByStrategy_ACU(options: a
       }
 
       const triggeredEntries = new Set([...constantEntries, ...userEnabledEntries.filter(entry => forcedEntrySet.has(entry))]);
+
+      // 大负载时尝试 Worker 加速（Aho-Corasick），失败回退主线程
+      const useWorker = shouldUseWorkerForWorldbook(allEntries.length, baseScanText.length, allChatMessages_ACU.length);
+      if (useWorker) {
+        try {
+          const constantUids = constantEntries.map(e => e.bookName + '\u0000' + e.uid);
+          const forcedKeysArr = Array.from(forcedEntrySet).map((e: any) => e.bookName + '\u0000' + e.uid);
+          const skillKeysArr = allEntries.filter((e: any) => hasUsableWorldbookSkillMeta_ACU(e.comment) && !forcedEntrySet.has(e)).map((e: any) => e.bookName + '\u0000' + e.uid);
+          const workerRes: any = await runInWorkerIfNeeded('worldbookScan', {
+            allEntries: allEntries.map((e: any) => ({
+              uid: e.uid,
+              bookName: e.bookName,
+              content: e.content,
+              key: e.key,
+              keys: e.keys,
+              type: e.type,
+              comment: e.comment,
+              prevent_recursion: !!e.prevent_recursion,
+              exclude_recursion: !!e.exclude_recursion,
+            })),
+            baseScanText,
+            constantUids,
+            forcedKeys: forcedKeysArr,
+            skillKeys: skillKeysArr,
+          }, { timeoutMs: 8000, threshold: true });
+          if (workerRes && Array.isArray(workerRes.triggered)) {
+            const keyToEntry = new Map(allEntries.map((e: any) => [e.bookName + '\u0000' + e.uid, e]));
+            const workerTriggered = new Set(workerRes.triggered.map((k: string) => keyToEntry.get(k)).filter(Boolean));
+            let finalEntries = Array.from(workerTriggered);
+            if (sortEntries) finalEntries = finalEntries.sort(sortEntries);
+            logDebug_ACU(`${logPrefix} Worldbook via Worker, triggered ${finalEntries.length}/${allEntries.length}`);
+            return finalEntries;
+          }
+        } catch (e) {
+          logWarn_ACU(`${logPrefix} Worker worldbookScan failed, fallback to main thread`, e);
+        }
+      }
+
       let recursionDepth = 0;
       const MAX_RECURSION_DEPTH = 10;
 
@@ -1448,6 +1487,10 @@ export   async function collectCombinedWorldbookEntriesByStrategy_ACU(options: a
           }
 
           keywordEntries = remainingKeywordEntries;
+          // 大负载让出事件循环，避免阻塞 UI
+          if (keywordEntries.length > 500 && recursionDepth % 2 === 0) {
+            await new Promise<void>(r => setTimeout(r, 0));
+          }
       }
 
       if (recursionDepth >= MAX_RECURSION_DEPTH) {

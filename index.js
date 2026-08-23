@@ -5360,6 +5360,224 @@ async function getCurrentCharPrimaryLorebook_ACU() {
 }
 
 /**
+ * worker-pool.ts — 主线程 Worker 池与回退
+ * 单例 Blob Worker，处理 worldbookScan / mergeTables / formatTables
+ * 失败或 CSP 拦截时回退主线程同步执行
+ */
+let workerInstance = null;
+let workerReady = false;
+let workerFailed = false;
+const pending = new Map();
+function getWorkerCode() {
+    return `
+  // Aho-Corasick for worldbook keyword scanning
+  function buildAhoTrie(keywords) {
+    const root = { next: {}, fail: null, out: [] };
+    for (let idx = 0; idx < keywords.length; idx++) {
+      const word = keywords[idx];
+      let node = root;
+      for (const ch of word) {
+        if (!node.next[ch]) node.next[ch] = { next: {}, fail: null, out: [] };
+        node = node.next[ch];
+      }
+      node.out.push(idx);
+    }
+    const queue = [];
+    for (const ch in root.next) {
+      const child = root.next[ch];
+      child.fail = root;
+      queue.push(child);
+    }
+    while (queue.length) {
+      const cur = queue.shift();
+      for (const ch in cur.next) {
+        const child = cur.next[ch];
+        let f = cur.fail;
+        while (f && !f.next[ch]) f = f.fail;
+        child.fail = f ? f.next[ch] : root;
+        child.out = child.out.concat(child.fail.out);
+        queue.push(child);
+      }
+    }
+    return root;
+  }
+  function ahoSearch(text, root) {
+    const found = new Set();
+    let node = root;
+    for (const ch of text) {
+      while (node && !node.next[ch]) node = node.fail;
+      node = node ? node.next[ch] : root;
+      if (!node) { node = root; continue; }
+      for (const idx of node.out) found.add(idx);
+    }
+    return found;
+  }
+  self.onmessage = function(e) {
+    const req = e.data;
+    try {
+      let result = null;
+      if (req.type === 'worldbookScan') {
+        const { allEntries, baseScanText, constantUids, forcedKeys, skillKeys } = req.payload;
+        const keywordEntries = allEntries.filter(entry => {
+          const uidKey = entry.bookName + '\\u0000' + entry.uid;
+          if (constantUids.includes(uidKey)) return false;
+          if (forcedKeys.includes(uidKey)) return false;
+          if (skillKeys.includes(uidKey)) return false;
+          return true;
+        });
+        // 预小写并建树
+        const allKeywords = [];
+        const entryKeywordIdx = [];
+        const entryKeyMap = new Map();
+        for (const entry of keywordEntries) {
+          const keys = [];
+          const toArr = (v) => Array.isArray(v) ? v : (typeof v === 'string' && v.trim() ? [v] : []);
+          const arr = [...toArr(entry.key), ...toArr(entry.keys)];
+          const dedup = [...new Set(arr)].map(k => String(k).toLowerCase()).filter(Boolean);
+          entryKeywordIdx.push({ entry, kws: dedup });
+          entryKeyMap.set(entry.bookName + '\\u0000' + entry.uid, dedup);
+          for (const kw of dedup) allKeywords.push(kw);
+        }
+        const uniqKeywords = [...new Set(allKeywords)];
+        const kwToIdx = new Map(uniqKeywords.map((k,i)=>[k,i]));
+        const trie = uniqKeywords.length ? buildAhoTrie(uniqKeywords) : null;
+        let base = baseScanText.toLowerCase();
+        const baseFoundSet = trie && uniqKeywords.length ? ahoSearch(base, trie) : new Set();
+        const triggered = new Set(constantUids);
+        forcedKeys.forEach(k => triggered.add(k));
+        let keywordRemaining = keywordEntries.slice();
+        let depth = 0;
+        const MAX_DEPTH = 10;
+        while (depth < MAX_DEPTH) {
+          depth++;
+          // 构建 fullSearchText
+          let recursionContent = '';
+          for (const uid of triggered) {
+            const ent = allEntries.find(e => (e.bookName + '\\u0000' + e.uid) === uid);
+            if (ent && !ent.prevent_recursion) recursionContent += '\\n' + (ent.content || '');
+          }
+          const fullText = (base + '\\n' + recursionContent.toLowerCase());
+          let foundSet = new Set();
+          if (trie && uniqKeywords.length) {
+            foundSet = ahoSearch(fullText, trie);
+          }
+          let changed = false;
+          const nextRemaining = [];
+          for (const entry of keywordRemaining) {
+            const uidKey = entry.bookName + '\\u0000' + entry.uid;
+            const kws = entryKeyMap.get(uidKey) || [];
+            let hit = false;
+            if (entry.exclude_recursion) {
+              hit = kws.some(kw => baseFoundSet.has(kwToIdx.get(kw)) || base.includes(kw));
+            } else {
+              hit = kws.some(kw => foundSet.has(kwToIdx.get(kw)));
+            }
+            if (hit) { triggered.add(uidKey); changed = true; }
+            else nextRemaining.push(entry);
+          }
+          if (!changed) break;
+          keywordRemaining = nextRemaining;
+        }
+        result = { triggered: Array.from(triggered) };
+      } else if (req.type === 'normalizeRows') {
+        // 简化：逐行 RowId 归一，复用主线程逻辑的子集（仅示例，实际由主线程回退）
+        result = { ok: true };
+      } else if (req.type === 'formatTables') {
+        // 占位：大表格式化在主线程分片回退
+        result = { ok: true };
+      } else if (req.type === 'mergeTables') {
+        result = { ok: true };
+      }
+      self.postMessage({ id: req.id, success: true, result });
+    } catch (err) {
+      self.postMessage({ id: req.id, success: false, error: String(err && err.message || err) });
+    }
+  };
+  `;
+}
+function ensureWorker() {
+    if (workerFailed)
+        return null;
+    if (workerInstance)
+        return workerInstance;
+    try {
+        const code = getWorkerCode();
+        const blob = new Blob([code], { type: 'application/javascript' });
+        const url = URL.createObjectURL(blob);
+        workerInstance = new Worker(url);
+        workerInstance.onmessage = (e) => {
+            const res = e.data;
+            const entry = pending.get(res.id);
+            if (!entry)
+                return;
+            clearTimeout(entry.timer);
+            pending.delete(res.id);
+            if (res.success)
+                entry.resolve(res.result);
+            else
+                entry.reject(new Error(res.error || 'worker error'));
+        };
+        workerInstance.onerror = (ev) => {
+            logWarn_ACU('[Worker] Worker error, fallback to main thread', ev);
+            workerFailed = true;
+            for (const [, entry] of pending) {
+                clearTimeout(entry.timer);
+                entry.reject(new Error('worker error'));
+            }
+            pending.clear();
+            try {
+                workerInstance?.terminate();
+            }
+            catch { }
+            workerInstance = null;
+        };
+        workerReady = true;
+        logDebug_ACU('[Worker] Blob Worker created');
+        return workerInstance;
+    }
+    catch (e) {
+        logWarn_ACU('[Worker] Failed to create Worker, fallback to main thread', e);
+        workerFailed = true;
+        return null;
+    }
+}
+async function runInWorkerIfNeeded(type, payload, opts) {
+    if (opts?.threshold === false)
+        return null;
+    const worker = ensureWorker();
+    if (!worker || !workerReady)
+        return null;
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const timeoutMs = opts?.timeoutMs ?? 8000;
+    return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+            pending.delete(id);
+            logWarn_ACU(`[Worker] ${type} timeout ${timeoutMs}ms, fallback`);
+            reject(new Error('worker timeout'));
+        }, timeoutMs);
+        pending.set(id, { resolve, reject, timer });
+        const req = { id, type, payload };
+        try {
+            worker.postMessage(req);
+        }
+        catch (e) {
+            clearTimeout(timer);
+            pending.delete(id);
+            reject(e);
+        }
+    }).catch((e) => {
+        logWarn_ACU(`[Worker] ${type} failed, fallback`, e);
+        return null;
+    });
+}
+function shouldUseWorkerForWorldbook(entryCount, baseScanLen, chatLen) {
+    return entryCount > 100 || baseScanLen > 20000 || chatLen > 500;
+}
+function shouldUseWorkerForTables(tableCount, totalRows, totalCells) {
+    return tableCount > 20 || totalRows > 2000 || totalCells > 50000;
+}
+
+/**
  * service/agent/agent-worldbook-runtime-read.ts
  * Agent 世界书只读 helper 唯一真源。
  *
@@ -51667,6 +51885,8 @@ async function mergeAllIndependentTablesLegacyV1_ACU() {
     // 收集 delta 楼层的增量数据（逆序收集，后续正序叠加）
     const pendingDeltas = [];
     for (let i = chat.length - 1; i >= 0; i--) {
+        if (chat.length > 500 && i % 200 === 0)
+            await new Promise(r => setTimeout(r, 0));
         const message = chat[i];
         if (message.is_user)
             continue;
@@ -58538,6 +58758,8 @@ async function prepareAIInput_ACU(messages, updateMode = 'standard', targetSheet
         ? resolvePromptTableNameForSheet_ACU(promptIdentifierSource, tableIndexes)
         : null;
     for (let tableIndex = 0; tableIndex < tableIndexes.length; tableIndex += 1) {
+        if (tableIndexes.length > 20 && tableIndex % 5 === 0)
+            await new Promise(r => setTimeout(r, 0));
         const sheetKey = tableIndexes[tableIndex];
         const rawTable = workingTableData[sheetKey];
         if (!rawTable || !rawTable.name || !rawTable.content)
@@ -70947,6 +71169,44 @@ async function collectCombinedWorldbookEntriesByStrategy_ACU(options = {}) {
         }
     }
     const triggeredEntries = new Set([...constantEntries, ...userEnabledEntries.filter(entry => forcedEntrySet.has(entry))]);
+    // 大负载时尝试 Worker 加速（Aho-Corasick），失败回退主线程
+    const useWorker = shouldUseWorkerForWorldbook(allEntries.length, baseScanText.length, allChatMessages_ACU.length);
+    if (useWorker) {
+        try {
+            const constantUids = constantEntries.map(e => e.bookName + '\u0000' + e.uid);
+            const forcedKeysArr = Array.from(forcedEntrySet).map((e) => e.bookName + '\u0000' + e.uid);
+            const skillKeysArr = allEntries.filter((e) => hasUsableWorldbookSkillMeta_ACU(e.comment) && !forcedEntrySet.has(e)).map((e) => e.bookName + '\u0000' + e.uid);
+            const workerRes = await runInWorkerIfNeeded('worldbookScan', {
+                allEntries: allEntries.map((e) => ({
+                    uid: e.uid,
+                    bookName: e.bookName,
+                    content: e.content,
+                    key: e.key,
+                    keys: e.keys,
+                    type: e.type,
+                    comment: e.comment,
+                    prevent_recursion: !!e.prevent_recursion,
+                    exclude_recursion: !!e.exclude_recursion,
+                })),
+                baseScanText,
+                constantUids,
+                forcedKeys: forcedKeysArr,
+                skillKeys: skillKeysArr,
+            }, { timeoutMs: 8000, threshold: true });
+            if (workerRes && Array.isArray(workerRes.triggered)) {
+                const keyToEntry = new Map(allEntries.map((e) => [e.bookName + '\u0000' + e.uid, e]));
+                const workerTriggered = new Set(workerRes.triggered.map((k) => keyToEntry.get(k)).filter(Boolean));
+                let finalEntries = Array.from(workerTriggered);
+                if (sortEntries)
+                    finalEntries = finalEntries.sort(sortEntries);
+                logDebug_ACU(`${logPrefix} Worldbook via Worker, triggered ${finalEntries.length}/${allEntries.length}`);
+                return finalEntries;
+            }
+        }
+        catch (e) {
+            logWarn_ACU(`${logPrefix} Worker worldbookScan failed, fallback to main thread`, e);
+        }
+    }
     let recursionDepth = 0;
     const MAX_RECURSION_DEPTH = 10;
     while (recursionDepth < MAX_RECURSION_DEPTH) {
@@ -70975,6 +71235,10 @@ async function collectCombinedWorldbookEntriesByStrategy_ACU(options = {}) {
             break;
         }
         keywordEntries = remainingKeywordEntries;
+        // 大负载让出事件循环，避免阻塞 UI
+        if (keywordEntries.length > 500 && recursionDepth % 2 === 0) {
+            await new Promise(r => setTimeout(r, 0));
+        }
     }
     if (recursionDepth >= MAX_RECURSION_DEPTH) {
         logWarn_ACU(`${logPrefix} Worldbook recursion reached max depth of ${MAX_RECURSION_DEPTH}. Breaking loop.`);

@@ -284,6 +284,7 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
       const pendingDeltas: { index: number; tagData: any }[] = [];
 
       for (let i = chat.length - 1; i >= 0; i--) {
+          if (chat.length > 500 && i % 200 === 0) await new Promise<void>(r => setTimeout(r, 0));
           const message = chat[i];
           if (message.is_user) continue;
 
