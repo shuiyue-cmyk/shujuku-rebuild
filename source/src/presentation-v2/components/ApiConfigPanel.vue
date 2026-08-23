@@ -109,7 +109,7 @@
         label="流式输出"
         description="该预设开启后 AI 响应以流式方式输出（用于对话类调用）。每个 API 预设独立。"
       />
-      <AcuFormRow label="思考强度" hint="reasoning_effort，随预设保存。每个 API 预设独立。">
+      <AcuFormRow label="思考强度" hint="reasoning_effort，随预设保存。每个 API 预设独立。偏小尺寸的模型拉高思考强度有助于保证输出内容正确性">
         <AcuSelect
           :options="reasoningEffortOptions"
           :model-value="activeDraft.reasoningEffort"

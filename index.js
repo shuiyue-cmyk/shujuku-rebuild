@@ -60838,6 +60838,34 @@ function normalizeExcludeBodyParamsForSillyTavern_ACU(raw) {
     const keys = trimmed.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
     return keys.map((key) => `- ${key}`).join('\n');
 }
+function sanitizeExcludeBodyForPresetFields_ACU(rawExclude, effectiveApiConfig) {
+    if (!rawExclude || typeof rawExclude !== 'string' || !rawExclude.trim())
+        return normalizeExcludeBodyParamsForSillyTavern_ACU(rawExclude);
+    const rawKeys = rawExclude.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+    const normalizedLower = rawKeys.map(k => k.toLowerCase());
+    const shouldKeep = (key) => {
+        const lower = key.toLowerCase();
+        if (lower === 'reasoning_effort' && effectiveApiConfig?.reasoningEffort)
+            return false;
+        if (lower === 'reasoning_effort' && settings_ACU?.reasoningEffort)
+            return false;
+        if ((lower === 'temperature' || lower === 'temp') && effectiveApiConfig?.temperature !== undefined)
+            return false;
+        if ((lower === 'max_tokens' || lower === 'max_tokens ') && (effectiveApiConfig?.max_tokens !== undefined || effectiveApiConfig?.maxTokens !== undefined))
+            return false;
+        if ((lower === 'top_p' || lower === 'top_p ') && (effectiveApiConfig?.top_p !== undefined || effectiveApiConfig?.topP !== undefined))
+            return false;
+        if (lower === 'stream' && effectiveApiConfig?.streamingEnabled !== undefined)
+            return false;
+        return true;
+    };
+    const filtered = rawKeys.filter(shouldKeep);
+    if (filtered.length !== rawKeys.length) {
+        const removed = rawKeys.filter(k => !shouldKeep(k));
+        logWarn_ACU(`[API] 已自动移除 custom_exclude_body 中与预设显式配置冲突的字段: ${removed.join(', ')}，以保证预设配置生效。`);
+    }
+    return normalizeExcludeBodyParamsForSillyTavern_ACU(filtered.join(', '));
+}
 /**
  * 构建 Chat Completions 自定义 API 请求体（支持 bodyParams / excludeBodyParams / requestHeaders）
  */
@@ -60921,8 +60949,9 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
         custom_url: effectiveApiConfig.url,
         custom_include_headers: headers,
         custom_include_body: effectiveApiConfig.bodyParams || '',
-        custom_exclude_body: normalizeExcludeBodyParamsForSillyTavern_ACU(effectiveApiConfig.excludeBodyParams),
+        custom_exclude_body: sanitizeExcludeBodyForPresetFields_ACU(effectiveApiConfig.excludeBodyParams, effectiveApiConfig),
     };
+    logDebug_ACU(`[API] 构建请求体: model=${model}, reasoning_effort=${body.reasoning_effort}, stream=${body.stream}, temperature=${body.temperature}, max_tokens=${body.max_tokens}, exclude=${body.custom_exclude_body ? '有' : '无'}`);
     return body;
 }
 /**
@@ -146612,8 +146641,8 @@ var _sfc_main$Q = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-api-config-panel__select-row[data-v-f30c63cf] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-f30c63cf] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-f30c63cf] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-f30c63cf] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-f30c63cf] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-f30c63cf] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-f30c63cf] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-f30c63cf] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-f30c63cf] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-f30c63cf");
-var ApiConfigPanel_vue_vue_type_style_index_0_scoped_f30c63cf_lang = null;
+injectSfcStyle("\n.acu-api-config-panel__select-row[data-v-dc197e26] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-dc197e26] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-dc197e26] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-dc197e26] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-dc197e26] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-dc197e26] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-dc197e26] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-dc197e26] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-dc197e26] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-dc197e26");
+var ApiConfigPanel_vue_vue_type_style_index_0_scoped_dc197e26_lang = null;
 
 const _hoisted_1$O = { class: "acu-api-config-panel__select-row" };
 const _hoisted_2$H = { class: "acu-api-config-panel__editor-section" };
@@ -146779,7 +146808,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 					}, null, 8, ["modelValue"]),
 					createVNode($setup["AcuFormRow"], {
 						label: "思考强度",
-						hint: "reasoning_effort，随预设保存。每个 API 预设独立。"
+						hint: "reasoning_effort，随预设保存。每个 API 预设独立。偏小尺寸的模型拉高思考强度有助于保证输出内容正确性"
 					}, {
 						default: withCtx(() => [createVNode($setup["AcuSelect"], {
 							options: $setup.reasoningEffortOptions,
@@ -146884,7 +146913,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["title", "description"]);
 }
-var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$Q, [["render", _sfc_render$Q], ["__scopeId", "data-v-f30c63cf"]]);
+var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$Q, [["render", _sfc_render$Q], ["__scopeId", "data-v-dc197e26"]]);
 
 // ═══════════════════════════════════════════════════════════
 // service/settings/feature-preset-reference-service.ts — 功能级 API 预设引用

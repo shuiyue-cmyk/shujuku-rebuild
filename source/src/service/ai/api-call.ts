@@ -16,6 +16,28 @@ function normalizeExcludeBodyParamsForSillyTavern_ACU(raw: any): string {
   return keys.map((key: string) => `- ${key}`).join('\n');
 }
 
+function sanitizeExcludeBodyForPresetFields_ACU(rawExclude: string, effectiveApiConfig: any): string {
+  if (!rawExclude || typeof rawExclude !== 'string' || !rawExclude.trim()) return normalizeExcludeBodyParamsForSillyTavern_ACU(rawExclude);
+  const rawKeys = rawExclude.split(/[,\n]/).map((s: string) => s.trim()).filter(Boolean);
+  const normalizedLower = rawKeys.map(k => k.toLowerCase());
+  const shouldKeep = (key: string): boolean => {
+    const lower = key.toLowerCase();
+    if (lower === 'reasoning_effort' && effectiveApiConfig?.reasoningEffort) return false;
+    if (lower === 'reasoning_effort' && settings_ACU?.reasoningEffort) return false;
+    if ((lower === 'temperature' || lower === 'temp') && effectiveApiConfig?.temperature !== undefined) return false;
+    if ((lower === 'max_tokens' || lower === 'max_tokens ') && (effectiveApiConfig?.max_tokens !== undefined || effectiveApiConfig?.maxTokens !== undefined)) return false;
+    if ((lower === 'top_p' || lower === 'top_p ') && (effectiveApiConfig?.top_p !== undefined || effectiveApiConfig?.topP !== undefined)) return false;
+    if (lower === 'stream' && effectiveApiConfig?.streamingEnabled !== undefined) return false;
+    return true;
+  };
+  const filtered = rawKeys.filter(shouldKeep);
+  if (filtered.length !== rawKeys.length) {
+    const removed = rawKeys.filter(k => !shouldKeep(k));
+    logWarn_ACU(`[API] 已自动移除 custom_exclude_body 中与预设显式配置冲突的字段: ${removed.join(', ')}，以保证预设配置生效。`);
+  }
+  return normalizeExcludeBodyParamsForSillyTavern_ACU(filtered.join(', '));
+}
+
 /**
  * 构建 Chat Completions 自定义 API 请求体（支持 bodyParams / excludeBodyParams / requestHeaders）
  */
@@ -105,8 +127,10 @@ export function buildCustomApiRequestBody_ACU(
     custom_url: effectiveApiConfig.url,
     custom_include_headers: headers,
     custom_include_body: effectiveApiConfig.bodyParams || '',
-    custom_exclude_body: normalizeExcludeBodyParamsForSillyTavern_ACU(effectiveApiConfig.excludeBodyParams),
+    custom_exclude_body: sanitizeExcludeBodyForPresetFields_ACU(effectiveApiConfig.excludeBodyParams, effectiveApiConfig),
   };
+
+  logDebug_ACU(`[API] 构建请求体: model=${model}, reasoning_effort=${body.reasoning_effort}, stream=${body.stream}, temperature=${body.temperature}, max_tokens=${body.max_tokens}, exclude=${body.custom_exclude_body ? '有' : '无'}`);
 
   return body;
 }
