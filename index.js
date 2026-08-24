@@ -153261,6 +153261,8 @@ function installAutoCardUpdaterV2ApiOnTarget_ACU(target) {
     target.AutoCardUpdaterV2API = {
         ...previous,
         open: openAcuV2Shell_ACU,
+        openApp: openAcuV2Shell_ACU,
+        openShell: openAcuV2Shell_ACU,
         openVisualizer: () => openVisualizerSurface_ACU({ source: 'external-api' }),
         refreshVisualizer: requestVisualizerExternalRefresh_ACU,
     };

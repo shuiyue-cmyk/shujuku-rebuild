@@ -17,6 +17,9 @@ interface OpenVisualizerSurfaceOptions {
 
 interface AutoCardUpdaterV2Api {
   open: () => Promise<boolean>;
+  /** 第三方前端（如 st-yuzi-phone）探测的打开别名，语义同 open */
+  openApp: () => Promise<boolean>;
+  openShell: () => Promise<boolean>;
   openVisualizer: () => Promise<boolean>;
   refreshVisualizer: () => Promise<void>;
 }
@@ -86,6 +89,8 @@ function installAutoCardUpdaterV2ApiOnTarget_ACU(target: any): void {
   target.AutoCardUpdaterV2API = {
     ...previous,
     open: openAcuV2Shell_ACU,
+    openApp: openAcuV2Shell_ACU,
+    openShell: openAcuV2Shell_ACU,
     openVisualizer: () => openVisualizerSurface_ACU({ source: 'external-api' }),
     refreshVisualizer: requestVisualizerExternalRefresh_ACU,
   } satisfies AutoCardUpdaterV2Api;
