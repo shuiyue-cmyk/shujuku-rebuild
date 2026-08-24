@@ -261,6 +261,9 @@ vi.mock('../../../src/shared/json-helpers', () => ({
   safeJsonParse_ACU: (json: string, fallback: any) => {
     try { return JSON.parse(json); } catch { return fallback; }
   },
+  safeJsonStringify_ACU: (value: any, fallback: string) => {
+    try { return JSON.stringify(value); } catch { return fallback; }
+  },
 }));
 
 vi.mock('../../../src/shared/utils', () => ({

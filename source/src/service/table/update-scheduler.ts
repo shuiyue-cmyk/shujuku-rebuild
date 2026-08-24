@@ -272,13 +272,13 @@ export interface AutoUpdateResult {
  */
 export interface AutoUpdateOperations {
     processUpdates: (indices: number[], mode: string, options: any) => Promise<any>;
-    processGroupedUpdates?: (groups: Array<{ key: string; groupId: number; indices: number[]; batchSize: number; sheetKeys: string[]; requestOptions: Record<string, any> | null }>, mode: string, options: any) => Promise<{ success: boolean; failedGroups: string[]; error?: string }>;
+    processGroupedUpdates?: (groups: Array<{ key: string; groupId: number; indices: number[]; batchSize: number; sheetKeys: string[]; requestOptions: Record<string, any> | null }>, mode: string, options: any) => Promise<{ success: boolean; failedGroups: string[]; error?: string; skippedGroups?: string[] }>;
     /**
      * 跨 full checkpoint 边界分组的执行委托（由 orchestrator 提供共享 staging runner）。
      * 传入的是 requiresBoundaryStaging=true 的组；执行器负责 pre 段 stage_only、
      * 边界原子汇合与 post 段普通持久化。缺省时降级为 processGroupedUpdates。
      */
-    processStagingGroupedUpdates?: (groups: Array<{ key: string; groupId: number; indices: number[]; batchSize: number; sheetKeys: string[]; requestOptions: Record<string, any> | null }>, mode: string, options: any) => Promise<{ success: boolean; failedGroups: string[]; error?: string }>;
+    processStagingGroupedUpdates?: (groups: Array<{ key: string; groupId: number; indices: number[]; batchSize: number; sheetKeys: string[]; requestOptions: Record<string, any> | null }>, mode: string, options: any) => Promise<{ success: boolean; failedGroups: string[]; error?: string; skippedGroups?: string[] }>;
     refreshData: () => Promise<any>;
     loadAllChatMessages: () => Promise<void>;
     purgeOldLayerData: () => Promise<void>;
@@ -321,7 +321,7 @@ export async function executeAutoUpdatePlan_ACU(
     const normalGroupKeys = groupKeys.filter(key => updateGroups[key].requiresBoundaryStaging !== true);
     const executeGroupChunk = async (
         chunkKeys: string[],
-        runner: ((groups: Array<{ key: string; groupId: number; indices: number[]; batchSize: number; sheetKeys: string[]; requestOptions: Record<string, any> | null }>, mode: string, options: any) => Promise<{ success: boolean; failedGroups: string[]; error?: string }>),
+        runner: ((groups: Array<{ key: string; groupId: number; indices: number[]; batchSize: number; sheetKeys: string[]; requestOptions: Record<string, any> | null }>, mode: string, options: any) => Promise<{ success: boolean; failedGroups: string[]; error?: string; skippedGroups?: string[] }>),
     ): Promise<void> => {
         const groupedChunk = chunkKeys.map(key => {
             const group = updateGroups[key];
@@ -346,6 +346,12 @@ export async function executeAutoUpdatePlan_ACU(
             failedGroupKeys.push(...groupedResult.failedGroups);
             const groupedError = groupedResult.error || '分组更新失败，未返回具体错误。';
             groupedResult.failedGroups.forEach(groupKey => pushGroupError_ACU(groupKey, groupedError));
+            const skippedGroupKeys = groupedResult.skippedGroups || [];
+            if (skippedGroupKeys.length > 0) {
+                // 归因补全：前沿中断后被阻断、从未尝试的组不计入 failedGroups（并非失败），
+                // 这里单独留痕「N 组未尝试」，不改变 success 判定与失败组统计。
+                logWarn_ACU(`[Parallel] 前沿中断后另有 ${skippedGroupKeys.length} 组未尝试（被失败 bucket 阻断，非失败）：${skippedGroupKeys.join('、')}`);
+            }
         }
     };
 

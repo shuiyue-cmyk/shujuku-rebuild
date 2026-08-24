@@ -736,8 +736,13 @@ export function createTableCrudApi(ctx: ApiGroupContext): Record<string, Functio
                             return { success: false, error: `Table "${tableName}" not found.` };
                         }
                         const workingSheet = workingTarget.sheet;
+                        // [L3] 越界补行复用 insertRow 的稳定 row_id 分配器：
+                        // 此前补行 row[0]='' 导致下方 rowId 取空、row_upsert 操作列表为空，
+                        // 补出的幽灵行永远不入库。预留集在循环外创建，逐行分配不重号。
+                        const paddedRowIdReservation = createStableRowIdReservation_ACU(workingSheet.content.slice(1));
                         while (workingSheet.content.length <= normalizedRowIndex) {
                             const newRow = new Array((workingSheet.content[0] || []).length).fill('');
+                            newRow[0] = allocateStableRowId_ACU(paddedRowIdReservation);
                             workingSheet.content.push(newRow);
                         }
 

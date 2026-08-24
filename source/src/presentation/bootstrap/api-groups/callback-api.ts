@@ -4,7 +4,7 @@
  */
 
 import { currentJsonTableData_ACU } from '../../../service/runtime/state-manager';
-import { logDebug_ACU, logError_ACU } from '../../../shared/utils';
+import { logDebug_ACU, logError_ACU, logWarn_ACU } from '../../../shared/utils';
 
 export interface ApiGroupContext {
     /** 表格更新回调列表 */
@@ -54,8 +54,16 @@ function notifyTableUpdateCallbacksSafely_ACU(ctx: ApiGroupContext): void {
         hasPendingTableUpdateNotification_ACU = false;
         notifyTableUpdateCallbacksOnce_ACU(ctx);
 
-        if (hasPendingTableUpdateNotification_ACU) {
+        // [M2] 排空改为 while 循环：第二段通知执行期间回调同步触发的新 pending
+        // 也会被继续消费，不再被丢弃。防重入标志逻辑保持不变（异步触发仍走排队合并）。
+        // 上限保护：回调在通知期间持续同步回推 notify 时终止排空，避免死循环卡死主线程。
+        let drainRounds = 0;
+        while (hasPendingTableUpdateNotification_ACU) {
             hasPendingTableUpdateNotification_ACU = false;
+            if (++drainRounds > 10) {
+                logWarn_ACU('[回调管理] 表格更新通知连续重入超过 10 轮，终止本轮排空（疑似回调内同步回推 notify）。');
+                break;
+            }
             notifyTableUpdateCallbacksOnce_ACU(ctx);
         }
     } finally {

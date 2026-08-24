@@ -380,9 +380,10 @@ export function useDebugPanel() {
   }
 
   onMounted(() => {
-    // 默认关闭：每次进入高级工具均不自动开启，需用户显式点“开始 Debug”
+    // 默认关闭：每次进入高级工具均不自动开启，需用户显式点“开始 Debug”。
+    // 只强制关 debug；warn 采集是开发者选项里的持久化开关（dev-options-store 初始化时已应用），
+    // 在这里一并强关会每次进入页面都清掉用户的常开设置。
     setDebugLogEnabled(false);
-    setWarnLogEnabled(false);
     active.value = false;
     startedAt = 0;
     refreshCount();

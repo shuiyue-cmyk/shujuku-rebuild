@@ -7050,12 +7050,25 @@ async function ensureModal(ctx) {
       // 追踪核心由数据库适配层单实例驱动：仅桥接触发，不在面板内跑第二实例
       const bridge = globalThis.__ACU_BIOTRACKER_BRIDGE__;
       const result = bridge?.runTrackerNow ? await bridge.runTrackerNow() : { skipped: true, reason: 'no_bridge' };
-      if (result?.skipped && result.reason === 'already_running') {
-        globalThis.toastr?.info?.('[BS BioTracker] 已有一轮追踪正在执行，本次未重复发送');
-      } else if (result?.skipped && result.reason === 'empty_chat') {
-        globalThis.toastr?.warning?.('[BS BioTracker] 当前对话没有可分析的消息');
-      } else if (result?.skipped && result.reason === 'no_registered_targets') {
-        globalThis.toastr?.warning?.('[BS BioTracker] 尚无已注册角色，无法发送追踪请求');
+      // 桥已改为透传 runTracker 的返回值（{skipped:true,reason} 或 {skipped:false,...}），
+      // 这里按 reason 给出完整结果反馈（此前 skip 原因被桥吞掉、失败/成功无任何提示）
+      if (result?.skipped) {
+        if (result.reason === 'already_running') {
+          globalThis.toastr?.info?.('[BS BioTracker] 已有一轮追踪正在执行，本次未重复发送');
+        } else if (result.reason === 'empty_chat') {
+          globalThis.toastr?.warning?.('[BS BioTracker] 当前对话没有可分析的消息');
+        } else if (result.reason === 'no_registered_targets') {
+          globalThis.toastr?.warning?.('[BS BioTracker] 尚无已注册角色，无法发送追踪请求');
+        } else if (result.reason === 'no_bridge' || result.reason === 'failed') {
+          // failed 时 vendor runTracker 内部通常已 toast 过错误详情，这里补一条结果反馈
+          globalThis.toastr?.error?.(result.reason === 'no_bridge'
+            ? '[BS BioTracker] 追踪核心桥尚未就绪，请稍后重试'
+            : '[BS BioTracker] 手动分析执行失败，详情见日志');
+        } else {
+          globalThis.toastr?.info?.(`[BS BioTracker] 本轮分析未发送（${String(result.reason || '未知原因')}）`);
+        }
+      } else {
+        globalThis.toastr?.success?.('[BS BioTracker] 手动分析已完成');
       }
     } finally {
       button.disabled = false;
@@ -7463,6 +7476,33 @@ function injectOptionToChatbox(value) {
 const HOME_TABLE_PAGE_SIZE = 6;
 let homeTablePageIndex = 0;
 
+// home/table-view 渲染节流用的轻量数据指纹：
+// 表键集 + 各表名称/行数 + 内容序列化的长度与滚动哈希（能感知原地改值）。
+// 任一步失败都返回 null 哨兵——调用方视 null 为「指纹不可用」，照常重绘（fail-open 到刷新而非卡死旧画面）。
+function computeTableDataFingerprint(tables) {
+  try {
+    const keys = Object.keys(tables || {}).filter((k) => k.startsWith('sheet_')).sort();
+    const parts = [`n=${keys.length}`];
+    for (const key of keys) {
+      const sheet = tables[key] || {};
+      const content = Array.isArray(sheet?.content) ? sheet.content : [];
+      let digest = '';
+      try {
+        const serialized = JSON.stringify(content) || '';
+        let hash = 0;
+        for (let i = 0; i < serialized.length; i += 1) hash = (((hash << 5) - hash) + serialized.charCodeAt(i)) | 0;
+        digest = `${serialized.length}:${hash}`;
+      } catch (e) {
+        digest = `raw:${content.length}`;
+      }
+      parts.push(`${key}=${String(sheet?.name || '')}#${content.length}#${digest}`);
+    }
+    return parts.join(';');
+  } catch (e) {
+    return null;
+  }
+}
+
 function renderTablePage(ctx) {
   try {
     const bridge = globalThis.__ACU_BIOTRACKER_BRIDGE__;
@@ -7609,6 +7649,9 @@ function openTableDetail(ctx, key) {
 // 顶层 DOM 渲染场景：面板与适配层同 bundle 同 window。
 // ctx 必须取适配层桥（extensionSettings 指向 settings_ACU.bs_biotracker），
 // 否则 getContextSafe() 拿到 ST 真实 ctx，其 extensionSettings 是 ST 自己的命名空间，面板会渲染空数据。
+// 注意：本模块静态 import 的求值时序早于适配层装桥，下方 `const ctx = resolvePanelCtx()` 求值时
+// 桥通常尚未挂载，必走 getContextSafe() fallback——功能无害：该 ctx 仅用于 appReady 事件订阅；
+// 真正的渲染 ctx 由 bootstrap() 在桥就绪后经 bridge.createCtx() 取得（updateClock 等运行时路径同理）。
 function resolvePanelCtx() {
   const bridge = globalThis.__ACU_BIOTRACKER_BRIDGE__;
   if (bridge && typeof bridge.createCtx === 'function') {
@@ -7633,6 +7676,13 @@ async function bootstrap() {
     installSafeToastr();
     ensurePanelStyles();
     await ensureModal(ctx);
+    // 悬浮球恢复入口（M2）：dismissFloatingSphere 非 TT 宿主下会直接隐藏球，
+    // 必须在此实际注册菜单项，否则球被隐藏后没有任何可见的重新打开入口。
+    // registerMenuItem 内部已含 TT 宿主的 ensureTauriMenuRecovery 与手动注入兜底；
+    // 宿主菜单容器缺失时内部自行重试/跳过，不阻塞面板初始化（异步 fire-and-forget）。
+    registerMenuItem(ctx).catch((error) => {
+      console.warn('[BS BioTracker] 注册悬浮球恢复菜单项失败。', error);
+    });
     // 前端跟随生理追踪开关：开启时默认展示「收起态悬浮球」（点球展开、close 收球），
     // 关闭时仅挂载面板（不显示）；后续由适配层 setBiotrackerEnabled_ACU 联动显隐
     if (typeof bridge.isEnabled === 'function' ? bridge.isEnabled() : true) {
@@ -7641,7 +7691,8 @@ async function bootstrap() {
     renderStatusPanel(ctx);
     // 纯渲染轮询：追踪核心由数据库适配层单实例驱动，面板只定时刷新视图
     if (!globalThis.__bsBtRenderTimerKey__) {
-      let lastRenderedStaticView = '';
+      let lastRenderedView = '';
+      let lastDataFingerprint = null;
       globalThis.__bsBtRenderTimerKey__ = setInterval(() => {
         try {
           // H1 门控：页面隐藏（浏览器 tab 切走/最小化）或弹窗未打开时跳过，避免无谓的 DOM 全量重建
@@ -7651,17 +7702,25 @@ async function bootstrap() {
           if (modal && !modal.classList.contains('is-open') && modal.getAttribute('aria-hidden') === 'true') return;
           const viewActive = (selector) => document.querySelector(selector)?.classList.contains('is-active') ?? false;
           // track-list 是动态追踪视图（状态每轮变化），每 tick 渲染；
-          // home/table-view 是静态列表，视图无变化时跳过（避免每 2s 全量 innerHTML 重建）
+          // home/table-view 按「本次渲染所用数据的指纹」节流：视图+指纹都与上次相同才跳过，
+          // 数据一变（表增删/改名/行数/内容哈希）即照常重绘。旧实现按「视图名是否变化」节流，
+          // 数据变了视图名没变会被误跳过，导致表格内容不刷新。
           if (viewActive('#bs-bt-view-track-list')) {
-            lastRenderedStaticView = '';
+            lastRenderedView = '';
+            lastDataFingerprint = null;
             renderStatusPanel(ctx);
             return;
           }
           const currentStaticView = viewActive('#bs-bt-view-home') ? 'home'
             : viewActive('#bs-bt-view-table-view') ? 'table-view'
             : '';
-          if (currentStaticView === lastRenderedStaticView) return;
-          lastRenderedStaticView = currentStaticView;
+          if (!currentStaticView) return;
+          const fingerprint = `${currentStaticView}#${computeTableDataFingerprint(
+            globalThis.__ACU_BIOTRACKER_BRIDGE__?.getTables?.() || {},
+          )}`;
+          if (currentStaticView === lastRenderedView && fingerprint !== null && fingerprint === lastDataFingerprint) return;
+          lastRenderedView = currentStaticView;
+          lastDataFingerprint = fingerprint;
           if (currentStaticView === 'home') renderTablePage(ctx);
           else if (currentStaticView === 'table-view' && globalThis.__bsBtOpenTableKey__) openTableDetail(ctx, globalThis.__bsBtOpenTableKey__);
         } catch (e) {}

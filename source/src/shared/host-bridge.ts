@@ -41,7 +41,9 @@ export function getAcuTauriReady(): { ready: boolean; promise: Promise<void> | n
   if (ready && typeof ready.then === 'function') {
     return { ready: false, promise: ready as Promise<void> };
   }
-  return { ready: ready === true, promise: null };
+  // [L1] 宽容处理：TT ABI 的 ready 除布尔/Promise 外还可能是真值对象（如完成标记对象），
+  // 一律按真值视为就绪；仅 promise-like 走上面的等待分支。
+  return { ready: Boolean(ready), promise: null };
 }
 
 /**
@@ -52,7 +54,6 @@ export function getAcuTauriReady(): { ready: boolean; promise: Promise<void> | n
  */
 export async function waitForAcuHostReady(maxWaitMs = 15000): Promise<boolean> {
   const start = Date.now();
-  const tauri = isAcuTauriRuntime();
 
   const getContextReady = (): boolean => {
     try {
@@ -66,8 +67,11 @@ export async function waitForAcuHostReady(maxWaitMs = 15000): Promise<boolean> {
   };
 
   while (Date.now() - start < maxWaitMs) {
+    // [H1] 每轮重估宿主类型：TT 的 __TAURITAVERN__ ABI 可能晚于扩展注入，
+    // 循环外只读一次会把 tauri 固化为 false，导致 TT 下跳过 __TAURITAVERN__.ready 等待。
+    const isTauri = isAcuTauriRuntime();
     if (getContextReady()) {
-      if (!tauri) return true;
+      if (!isTauri) return true;
       // TT：getContext 就绪后再等 TT ABI
       const { ready, promise } = getAcuTauriReady();
       if (ready) return true;
@@ -90,5 +94,7 @@ export async function waitForAcuHostReady(maxWaitMs = 15000): Promise<boolean> {
     }
     await new Promise((r) => setTimeout(r, 100));
   }
-  return tauri ? (getAcuTauriReady().ready && getContextReady()) : getContextReady();
+  // [H1] 终判同样用当轮重估值，不用循环外的固化快照
+  const finalIsTauri = isAcuTauriRuntime();
+  return finalIsTauri ? (getAcuTauriReady().ready && getContextReady()) : getContextReady();
 }

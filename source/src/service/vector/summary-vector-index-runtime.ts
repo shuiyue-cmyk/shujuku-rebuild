@@ -231,6 +231,17 @@ function cosineSimilarity_ACU(left: number[], right: number[], leftNorm: number)
     return dot / (leftNorm * Math.sqrt(rightNorm));
 }
 
+// [M5] Rerank fetch 防悬挂超时。目标运行环境（现代 WebView/Tauri）AbortSignal.timeout 可用性存疑，
+// 用手动 AbortController+setTimeout 兜底；AbortController 不可用时退化为无超时（与旧行为一致）。
+const RERANK_FETCH_TIMEOUT_MS_ACU = 30000;
+
+function createFetchAbortTimer_ACU(timeoutMs: number): { signal: AbortSignal; cleanup: () => void } | null {
+    if (typeof AbortController !== 'function') return null;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
+    return { signal: controller.signal, cleanup: () => clearTimeout(timer) };
+}
+
 async function rerankCandidates_ACU(config: any, query: string, candidates: RankedSummaryCandidate_ACU[]): Promise<RankedSummaryCandidate_ACU[]> {
     const endpoint = normalizeText_ACU(config.rerankEndpoint);
     const model = normalizeText_ACU(config.rerankModel);
@@ -247,12 +258,20 @@ async function rerankCandidates_ACU(config: any, query: string, candidates: Rank
         };
         if (instruction) body.instruction = instruction;
         assertSafeHttpEndpoint_ACU(endpoint);
-        const response = await fetch(endpoint, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(body),
-            redirect: 'error',
-        });
+        // [M5] 挂 30s 超时：超时 abort 让 fetch 抛 AbortError，由下方既有 catch 记日志并回退 Embedding 排序。
+        const abortTimer = createFetchAbortTimer_ACU(RERANK_FETCH_TIMEOUT_MS_ACU);
+        let response: Response;
+        try {
+            response = await fetch(endpoint, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(body),
+                redirect: 'error',
+                ...(abortTimer ? { signal: abortTimer.signal } : {}),
+            });
+        } finally {
+            abortTimer?.cleanup();
+        }
         if (!response.ok) throw new Error(await response.text().catch(() => response.statusText));
         const payload = await response.json();
         const results = Array.isArray(payload?.results) ? payload.results : Array.isArray(payload?.data) ? payload.data : [];
@@ -613,12 +632,15 @@ async function tryRealignSummaryVectorIndexPointerFromDisk_ACU(params: {
 
 // T5：query embedding 失败时的降级路径 —— 仅注入最近固定行，不依赖向量检索。
 // 仅在 recentFixedRows 非空时调用；调用方负责确认 recentFixedRows.length > 0。
-async function injectRecentFixedRowsOnly_ACU(recentFixedRows: ChatSummaryVectorIndexRow_ACU[]): Promise<SummaryVectorIndexRuntimeResult_ACU> {
+async function injectRecentFixedRowsOnly_ACU(recentFixedRows: ChatSummaryVectorIndexRow_ACU[], signature: string): Promise<SummaryVectorIndexRuntimeResult_ACU> {
     const selected = recentFixedRows
         .map((row): SummaryIndexSelectedCandidate_ACU => ({ kind: 'recent_fixed', row }))
         .sort((left, right) => (Number(left.row.rowOrder) || 0) - (Number(right.row.rowOrder) || 0));
     const content = buildSummaryIndexOverwriteContent_ACU(selected);
     await upsertOriginalSummaryIndexEntry_ACU(content);
+    // [M2] 降级注入同样以 upsert 成功为收尾：登记签名后 8s 窗口内才允许 dedupe。
+    lastRuntimeSignature_ACU = signature;
+    lastRuntimeAt_ACU = Date.now();
     return {
         success: true,
         reason: 'query_embedding_failed_recent_fixed_only',
@@ -647,8 +669,8 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
     if (signature === lastRuntimeSignature_ACU && Date.now() - lastRuntimeAt_ACU <= SUMMARY_VECTOR_INDEX_RUNTIME_DEDUPE_MS_ACU) {
         return { success: true, skipped: true, reason: 'deduped' };
     }
-    lastRuntimeSignature_ACU = signature;
-    lastRuntimeAt_ACU = Date.now();
+    // [M2] 签名登记移到成功收尾（upsert 完成处）：失败轮次不再谎报 success:'deduped'，
+    // 8s 窗口内的下一次调用可以正常重试。
 
     const config = getEffectiveSummaryVectorIndexConfig_ACU();
     const validation = validateSummaryVectorIndexConfig_ACU(config);
@@ -800,14 +822,14 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
         if (queryVector.length === 0) {
             if (recentFixedRows.length > 0) {
                 logWarn_ACU('[交火模式纪要索引] query embedding 返回空向量，降级为仅注入最近固定行:', userInput);
-                return await injectRecentFixedRowsOnly_ACU(recentFixedRows);
+                return await injectRecentFixedRowsOnly_ACU(recentFixedRows, signature);
             }
             return { success: false, skipped: true, reason: 'empty_query_embedding' };
         }
     } catch (error) {
         if (recentFixedRows.length > 0) {
             logWarn_ACU('[交火模式纪要索引] query embedding 失败，降级为仅注入最近固定行，继续原始生成:', error);
-            return await injectRecentFixedRowsOnly_ACU(recentFixedRows);
+            return await injectRecentFixedRowsOnly_ACU(recentFixedRows, signature);
         }
         throw error;
     }
@@ -885,6 +907,9 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
 
     const content = buildSummaryIndexOverwriteContent_ACU(selected);
     await upsertOriginalSummaryIndexEntry_ACU(content);
+    // [M2] 成功收尾处登记 dedupe 签名：upsert 失败抛错时不登记，8s 窗口内的重试不被吞掉。
+    lastRuntimeSignature_ACU = signature;
+    lastRuntimeAt_ACU = Date.now();
     logDebug_ACU(
         `[交火模式纪要索引] 已覆盖原概要索引条目：${selected.length} 条（其中固定注入 ${recentFixedRows.length} 条，排序选取 ${selected.length - recentFixedRows.length} 条），关键词 ${keywords.length} 个，输出顺序按纪要表原 rowOrder。`,
     );

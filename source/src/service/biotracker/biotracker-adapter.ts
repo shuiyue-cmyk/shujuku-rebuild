@@ -296,11 +296,10 @@ function installBiotrackerFrontendBridge(): void {
           return {};
         }
       },
-      // 手动「立即分析」：调顶层单实例追踪入口
+      // 手动「立即分析」：调顶层单实例追踪入口；透传 skip 原因给面板做结果反馈（此前被吞成 {}）
       runTrackerNow: async () => {
         try {
-          await runBiotrackerNow_ACU();
-          return {};
+          return await runBiotrackerNow_ACU();
         } catch (e) {
           logWarn_ACU('[生理追踪] 弹窗触发追踪失败:', e);
           return { skipped: true, reason: 'failed' };
@@ -400,10 +399,9 @@ function syncPoller(): void {
 
 let initialized = false;
 
-/** 初始化生理追踪模块（entry 启动时调用一次） */
+/** 初始化生理追踪模块（entry 启动时调用一次；失败回滚标记，后续调用可自然重试） */
 export function initBiotracker_ACU(): void {
   if (initialized) return;
-  initialized = true;
   // 桥接 biotracker vendor 日志（console.warn/error）到数据库日志系统（高级工具日志查看器可见）
   installBiotrackerConsoleBridge();
   // 挂 iframe 前端桥（弹窗渲染用；追踪核心保持本模块单实例）
@@ -483,7 +481,11 @@ export function initBiotracker_ACU(): void {
     logDebug_ACU('[生理追踪] 初始化完成，已注册角色数:', Object.keys(getChatState(ctx, settings).characters || {}).length);
     // 生理追踪恒开启 → 默认出现悬浮窗（biotracker 前端弹窗，纯渲染）
     ensureBiotrackerPopup_ACU();
+    // 初始化主体全部成功才置位：此前先置位、失败不回滚，宿主未就绪时初始化会被永久跳过
+    initialized = true;
   } catch (e) {
+    // 回滚置位：下次调用（如 CHAT_CHANGED 等事件链路再次进入初始化）可自然重试
+    initialized = false;
     logWarn_ACU('[生理追踪] 初始化失败（宿主未就绪，等待重试）:', e);
   }
 }
@@ -552,12 +554,13 @@ export async function registerCharacter_ACU(options: RegisterCharacterOptions_AC
   }
 }
 
-/** 手动触发一次追踪分析（调试/入口用） */
-export async function runBiotrackerNow_ACU(): Promise<void> {
+/** 手动触发一次追踪分析（调试/入口用）；透传 runTracker 返回值（skip 时 {skipped:true,reason}，成功 {skipped:false,...}，无返回时 {}）供调用方做结果反馈 */
+export async function runBiotrackerNow_ACU(): Promise<{ skipped?: boolean; reason?: string; processedCount?: number }> {
   trackerInFlight = true;
   const ctx = createBiotrackerCtx_ACU();
   try {
-    await runTracker(ctx, trackerDeps, 'manual');
+    const result: any = await runTracker(ctx, trackerDeps, 'manual');
+    return result || {};
   } finally {
     trackerInFlight = false;
   }

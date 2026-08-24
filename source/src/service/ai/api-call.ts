@@ -26,8 +26,10 @@ function sanitizeExcludeBodyForPresetFields_ACU(rawExclude: string, effectiveApi
     if (lower === 'reasoning_effort' && effectiveApiConfig?.reasoningEffort) return false;
     if (lower === 'reasoning_effort' && settings_ACU?.reasoningEffort) return false;
     if ((lower === 'temperature' || lower === 'temp') && effectiveApiConfig?.temperature !== undefined) return false;
-    if ((lower === 'max_tokens' || lower === 'max_tokens ') && (effectiveApiConfig?.max_tokens !== undefined || effectiveApiConfig?.maxTokens !== undefined)) return false;
-    if ((lower === 'top_p' || lower === 'top_p ') && (effectiveApiConfig?.top_p !== undefined || effectiveApiConfig?.topP !== undefined)) return false;
+    // [L6] 原先的 `lower === 'max_tokens '` / `'top_p '` 尾空格分支不可达：
+    // rawKeys 已逐项 trim，删除死分支。
+    if (lower === 'max_tokens' && (effectiveApiConfig?.max_tokens !== undefined || effectiveApiConfig?.maxTokens !== undefined)) return false;
+    if (lower === 'top_p' && (effectiveApiConfig?.top_p !== undefined || effectiveApiConfig?.topP !== undefined)) return false;
     if (lower === 'stream' && effectiveApiConfig?.streamingEnabled !== undefined) return false;
     return true;
   };

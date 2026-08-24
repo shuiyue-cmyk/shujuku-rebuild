@@ -283,6 +283,15 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
       // 收集 delta 楼层的增量数据（逆序收集，后续正序叠加）
       const pendingDeltas: { index: number; tagData: any }[] = [];
 
+      // AI 楼层前缀计数表：aiFloorPrefixByIndex[k] = chat[0..k] 中非用户消息数。
+      // 一次遍历预计算，替代循环内 chat.slice(0, i+1).filter(...).length 的 O(n²) 重复扫描。
+      const aiFloorPrefixByIndex: number[] = new Array(chat.length);
+      let aiFloorRunningCount = 0;
+      for (let k = 0; k < chat.length; k++) {
+          if (!chat[k].is_user) aiFloorRunningCount += 1;
+          aiFloorPrefixByIndex[k] = aiFloorRunningCount;
+      }
+
       for (let i = chat.length - 1; i >= 0; i--) {
           if (chat.length > 500 && i % 200 === 0) await new Promise<void>(r => setTimeout(r, 0));
           const message = chat[i];
@@ -337,7 +346,7 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
                           if (!independentTableStates_ACU[storedSheetKey]) {
                               independentTableStates_ACU[storedSheetKey] = {};
                           }
-                          const currentAiFloor = chat.slice(0, i + 1).filter(m => !m.is_user).length;
+                          const currentAiFloor = aiFloorPrefixByIndex[i];
                           independentTableStates_ACU[storedSheetKey].lastUpdatedAiFloor = currentAiFloor;
                       }
                   }
@@ -378,7 +387,7 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
 
                           if (wasUpdated) {
                               if (!independentTableStates_ACU[storedSheetKey]) independentTableStates_ACU[storedSheetKey] = {};
-                              const currentAiFloor = chat.slice(0, i + 1).filter(m => !m.is_user).length;
+                              const currentAiFloor = aiFloorPrefixByIndex[i];
                               independentTableStates_ACU[storedSheetKey].lastUpdatedAiFloor = currentAiFloor;
                           }
                       }
@@ -398,7 +407,7 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
                           mergedData[k] = JSON.parse(JSON.stringify(standardData[k]));
                           foundSheets[k] = true;
                           if (!independentTableStates_ACU[k]) independentTableStates_ACU[k] = {};
-                          const currentAiFloor = chat.slice(0, i + 1).filter(m => !m.is_user).length;
+                          const currentAiFloor = aiFloorPrefixByIndex[i];
                           independentTableStates_ACU[k].lastUpdatedAiFloor = currentAiFloor;
                       }
                   });
@@ -415,7 +424,7 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
                           mergedData[k] = JSON.parse(JSON.stringify(summaryData[k]));
                           foundSheets[k] = true;
                           if (!independentTableStates_ACU[k]) independentTableStates_ACU[k] = {};
-                          const currentAiFloor = chat.slice(0, i + 1).filter(m => !m.is_user).length;
+                          const currentAiFloor = aiFloorPrefixByIndex[i];
                           independentTableStates_ACU[k].lastUpdatedAiFloor = currentAiFloor;
                       }
                   });
@@ -445,7 +454,7 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
                       if (!independentTableStates_ACU[sheetKey]) {
                           independentTableStates_ACU[sheetKey] = {};
                       }
-                      const currentAiFloor = chat.slice(0, deltaIndex + 1).filter((m: any) => !m.is_user).length;
+                      const currentAiFloor = aiFloorPrefixByIndex[deltaIndex];
                       independentTableStates_ACU[sheetKey].lastUpdatedAiFloor = currentAiFloor;
                   } catch (e) {
                       logError_ACU(`[表格重建] 应用 delta 失败: sheetKey=${sheetKey}, 楼层=#${deltaIndex}`, e);
@@ -971,6 +980,8 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
                 if (newRow.length < originalHeaderRow.length) {
                      while(newRow.length < originalHeaderRow.length) newRow.push('');
                 } else if (newRow.length > originalHeaderRow.length) {
+                    // 截断是有意设计（对齐原表头列数），但需留痕：静默截断会掩盖 AI 输出格式异常。
+                    logWarn_ACU(`[表格重建] Markdown 数据行列数(${newRow.length})超过表头列数(${originalHeaderRow.length})，已按表头截断多余列：sheetKey=${sheetKey}, 数据行#${i}`);
                     newRow.splice(originalHeaderRow.length);
                 }
                 newContent.push(newRow);

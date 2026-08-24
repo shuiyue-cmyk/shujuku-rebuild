@@ -977,7 +977,10 @@ async function restoreSnapshotEntries_ACU(snapshot: AgentWorldbookControlSnapsho
         const patchedEntriesByUid = new Map((await getLorebookEntries_ACU(normalizedBookName) || []).map(entry => [String(entry?.uid), entry]));
         for (const patch of patches) {
           const currentEntry = patchedEntriesByUid.get(String(patch.uid));
-          const keysMatch = JSON.stringify(currentEntry?.keys || []) === JSON.stringify(patch.keys || []);
+          // [L5] keys 按集合比较（长度相同 + 逐元素 includes），不再依赖 JSON.stringify 的数组顺序。
+          const snapshotKeys = Array.isArray(patch.keys) ? patch.keys.map((key: unknown) => String(key)) : [];
+          const currentKeys = Array.isArray(currentEntry?.keys) ? (currentEntry.keys as unknown[]).map((key: unknown) => String(key)) : [];
+          const keysMatch = currentKeys.length === snapshotKeys.length && snapshotKeys.every((key: string) => currentKeys.includes(key));
           const restoredEntry = currentEntry
             && currentEntry.enabled === patch.enabled
             && currentEntry.type === patch.type
@@ -1401,7 +1404,8 @@ export async function restoreWorldbookGreenlights_ACU(options: {
       logWarn_ACU('[Agent世界书] 标记接管恢复待处理状态失败，未恢复条目以保留可重试状态。', error);
     }
   }
-  const restoreResult = shouldRestoreSnapshot && (cleanupMode !== 'full' || restoreUpdates.length === 0 || pendingSnapshotPersisted)
+  // [M4] let：清理阶段失败会计入 failed（见下方 deleteInternalEntriesByComment 的 try/catch）。
+  let restoreResult = shouldRestoreSnapshot && (cleanupMode !== 'full' || restoreUpdates.length === 0 || pendingSnapshotPersisted)
     ? await restoreSnapshotEntries_ACU(snapshot)
     : { restored: 0, skipped: 0, failed: 0, report: { applied: [], failed: [] } };
   const completedRestoreUpdates = [
@@ -1437,9 +1441,25 @@ export async function restoreWorldbookGreenlights_ACU(options: {
     && shouldRestoreSnapshot
     && stateWriteFailed === 0
     && finalizedSnapshot.active !== true;
+  // [M4] 内部条目清理失败不得中断收敛：此前裸奔抛错会跳过下方 setPlotAgentWorldbookSnapshot
+  // 快照更新。失败归入 restoreResult.failed 分类并告警后继续，保证收敛写盘与快照更新必然执行。
+  let deletedFinalGreenlights = 0;
+  try {
+    deletedFinalGreenlights = (await deleteInternalEntriesByComment_ACU(resolvedBookNames, AGENT_FINAL_GENERATION_GREENLIGHT_COMMENT_ACU)).deleted;
+  } catch (error) {
+    restoreResult.failed += 1;
+    logWarn_ACU('[Agent世界书] 清理最终生成绿灯内部条目失败；继续执行快照收敛。', error);
+  }
+  let deletedSnapshots = 0;
+  if (cleanupMode === 'full') {
+    try {
+      deletedSnapshots = (await deleteInternalEntriesByComment_ACU(resolvedBookNames, AGENT_WORLDBOOK_SNAPSHOT_COMMENT_ACU)).deleted;
+    } catch (error) {
+      restoreResult.failed += 1;
+      logWarn_ACU('[Agent世界书] 清理接管快照内部条目失败；继续执行快照收敛。', error);
+    }
+  }
   const canClearLegacySnapshot = cleanupMode === 'full' && shouldUseLegacySnapshot && restoreResult.skipped === 0 && restoreResult.failed === 0;
-  const deletedFinalGreenlights = (await deleteInternalEntriesByComment_ACU(resolvedBookNames, AGENT_FINAL_GENERATION_GREENLIGHT_COMMENT_ACU)).deleted;
-  const deletedSnapshots = cleanupMode === 'full' ? (await deleteInternalEntriesByComment_ACU(resolvedBookNames, AGENT_WORLDBOOK_SNAPSHOT_COMMENT_ACU)).deleted : 0;
   const deletedStateEntries = canCleanupPersistentSnapshot ? await deleteAgentWorldbookStateEntry_ACU() : 0;
   const legacySnapshotCleared = canClearLegacySnapshot && clearLegacyPlotAgentWorldbookSnapshot_ACU() ? 1 : 0;
   const cleaned = deletedFinalGreenlights + deletedSnapshots + deletedStateEntries + legacySnapshotCleared;

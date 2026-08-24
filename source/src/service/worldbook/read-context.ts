@@ -185,7 +185,13 @@ export function createLorebookReadContext_ACU(options: CreateLorebookReadContext
         options.onDisposeSummary(stats, { runId, source: options.source });
       }
       bookEntriesPromises.clear();
-      queue.length = 0;
+      // [M3] 先逐个唤醒排队中的 acquire 等待者再清队列：直接 queue.length=0 会把 resolver
+      // 连同等待方一起悬挂（Promise 永不 settle）。唤醒后 runPhysicalRead 在 acquire 恢复执行处
+      // 命中既有 disposed 检查，按既有路径抛 TaskAbortedByUser。
+      while (queue.length > 0) {
+        const resolve = queue.shift();
+        resolve?.();
+      }
       availableBookNamesPromise = undefined;
     },
   };

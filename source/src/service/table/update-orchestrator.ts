@@ -1985,7 +1985,7 @@ async function processGroupedRuntimeChunkCore_ACU(
         performanceRunId?: string;
         performanceParentSpanId?: string;
     } = {}
-): Promise<{ success: boolean; failedGroups: string[]; error?: string; aborted?: boolean; committedBucketCount: number; diagnosticCode?: ManualUpdateResult['diagnosticCode'] }> {
+): Promise<{ success: boolean; failedGroups: string[]; error?: string; aborted?: boolean; committedBucketCount: number; diagnosticCode?: ManualUpdateResult['diagnosticCode']; skippedGroups?: string[] }> {
     if (!Array.isArray(groups) || groups.length === 0) {
         return { success: true, failedGroups: [], committedBucketCount: 0 };
     }
@@ -2025,6 +2025,9 @@ async function processGroupedRuntimeChunkCore_ACU(
     });
     const templateForLookup = executionScope.sqlApplyScope?.templateData || parseTableTemplateJson_ACU({ stripSeedRows: true });
     const failedGroups = new Set<string>();
+    // 前沿中断后剩余未尝试 bucket 的所属组：不进 failedGroups（它们并未失败），
+    // 单独随结果返回，供调度层归因「N 组未尝试」（不改变 success 判定）。
+    const skippedGroups = new Set<string>();
     let firstError: string | undefined;
     // 模板只起指导作用：只有模板声明的表参与填表。
     // 范围未知时不过滤，避免把所有表判成不参与导致数据写不进去。
@@ -2123,6 +2126,10 @@ async function processGroupedRuntimeChunkCore_ACU(
         const maxBucketRetries = Math.max(1, Number(settings_ACU.tableMaxRetries) || 3);
         let retryUnifiedError: string | null = null;
         let bucketSucceeded = false;
+        // 回卷全局快照前留存的运行时快照（attempt 内赋值，bucket 失败分支用于对称还原）。
+        // null 哨兵：尚未走到快照留存点就早失败（基底边界不一致/空基底/别名重绑抛错）时
+        // 不还原，避免把真实运行时抹成空对象。
+        let preRollbackRuntimeSnapshot: Record<string, any> | null = null;
         // 阶段 G1：bucket 重试循环外持有 request-scoped replay evidence。
         // 同 bucket 的各次 attempt 共享同一 boundary（mergeBaseMaxMessageIndex），
         // 因此重试可复用首次冷 replay 结果；bucket 提交写入新 chat entry 后
@@ -2183,6 +2190,9 @@ async function processGroupedRuntimeChunkCore_ACU(
                 firstError = firstError || (error instanceof Error ? error.message : String(error));
                 break;
             }
+            // 回卷全局快照前先留存当前运行时：bucket 失败时在失败分支对称还原，
+            // 避免「提交前失败」后 UI 停留在合并基底旧态（同 applyUnified 失败路径回写快照的做法）。
+            preRollbackRuntimeSnapshot = JSON.parse(JSON.stringify(currentJsonTableData_ACU || {}));
             _set_currentJsonTableData_ACU(mergedBatchData);
             const baseSnapshot = JSON.parse(JSON.stringify(mergedBatchData));
             const bucketSheetKeys = [...new Set(bucket.plannedJobs.flatMap(job => job.group.sheetKeys || []))].sort();
@@ -2442,6 +2452,19 @@ async function processGroupedRuntimeChunkCore_ACU(
         }
         if (!bucketSucceeded) {
             // 连续前沿模型不允许跨过失败 bucket 继续提交，否则会制造无法自动追平的内部空洞。
+            // 剩余未尝试 bucket 的所属组不进 failedGroups（并未尝试、非失败）：
+            // 记入 skippedGroups 随结果返回，供调度层归因「N 组未尝试」。
+            for (let remainingIndex = bucketIndex + 1; remainingIndex < orderedBuckets.length; remainingIndex++) {
+                orderedBuckets[remainingIndex].plannedJobs.forEach(job => {
+                    if (!failedGroups.has(job.group.key)) skippedGroups.add(job.group.key);
+                });
+            }
+            // 对称还原回卷前的全局运行时快照：所有非 abort 失败都汇入此分支，
+            // 还原后 UI 不再停留在线 :2186 回卷出的旧态（外层兜底刷新仍保留）。
+            // null 哨兵 = 尚未执行过回卷就失败，无需还原。
+            if (preRollbackRuntimeSnapshot !== null) {
+                _set_currentJsonTableData_ACU(preRollbackRuntimeSnapshot);
+            }
             break;
         }
     }
@@ -2450,7 +2473,7 @@ async function processGroupedRuntimeChunkCore_ACU(
         return { success: false, failedGroups: [...failedGroups], error: '手动更新已终止。', aborted: true, committedBucketCount };
     }
     return failedGroups.size > 0
-        ? { success: false, failedGroups: [...failedGroups], error: firstError || '统一提交失败。', committedBucketCount }
+        ? { success: false, failedGroups: [...failedGroups], error: firstError || '统一提交失败。', committedBucketCount, skippedGroups: [...skippedGroups] }
         : { success: true, failedGroups: [], committedBucketCount };
 }
 
@@ -2505,7 +2528,7 @@ export async function executeAutoFillStagingGroups_ACU(
             requiresBoundaryStaging: boolean;
         };
     } = {},
-): Promise<{ success: boolean; failedGroups: string[]; error?: string; aborted?: boolean; committedBucketCount: number }> {
+): Promise<{ success: boolean; failedGroups: string[]; error?: string; aborted?: boolean; committedBucketCount: number; skippedGroups?: string[] }> {
     const boundary = options.boundary;
     const originalFullIndex = boundary?.fullCheckpointIndices?.length === 1 ? boundary.fullCheckpointIndices[0] : null;
     const normalizedGroups = Array.isArray(groups) ? groups : [];
@@ -2522,6 +2545,8 @@ export async function executeAutoFillStagingGroups_ACU(
     }
 
     const failedGroups = new Set<string>();
+    // 透传内部 chunk 的未尝试组清单（前沿中断归因），随结果返回给调度层。
+    const skippedGroups = new Set<string>();
     let firstError: string | undefined;
     let committedBucketCount = 0;
     let boundaryCommitted = false;
@@ -2607,6 +2632,8 @@ export async function executeAutoFillStagingGroups_ACU(
         const segments = splitMessageIndicesAtBoundary_ACU(groupIndices, originalFullIndex);
         const preSegments = segments.filter(segment => segment.indices.length > 0 && segment.indices[0] < originalFullIndex);
         const postSegments = segments.filter(segment => segment.indices.length > 0 && segment.indices[0] >= originalFullIndex);
+        // 组级失败标志：与手动追平路径的跨根 staging 分支同款守卫。
+        let groupFailed = false;
 
         for (const preSegment of preSegments) {
             if (options.abortController?.signal.aborted) {
@@ -2628,9 +2655,11 @@ export async function executeAutoFillStagingGroups_ACU(
                 performanceParentSpanId: options.performanceParentSpanId,
             });
             committedBucketCount += preResult.committedBucketCount;
+            preResult.skippedGroups?.forEach(key => skippedGroups.add(key));
             if (!preResult.success) {
                 failedGroups.add(group.key);
                 firstError = firstError || preResult.error || '边界前 staging 提交失败。';
+                groupFailed = true;
                 break;
             }
             // 累积 staging 快照：bucket 提交后 runtime 已更新为目标表最新 AI 结果。
@@ -2644,7 +2673,9 @@ export async function executeAutoFillStagingGroups_ACU(
         }
 
         // 首个 post 段提交前收敛 staging：边界前累计快照原子折叠回原根；零 staging 则丢弃。
-        if (postSegments.length > 0) {
+        // pre 段已失败时不得继续 settle 或写入 post 段（与手动路径一致）：该组整体失败，
+        // 已累计的部分 staging 只保留在内存中等待丢弃，绝不在此处被原子持久化。
+        if (!groupFailed && postSegments.length > 0) {
             if (options.abortController?.signal.aborted) {
                 return { success: false, failedGroups: [...failedGroups, ...normalizedGroups.map(g => g.key)], error: '自动填表已终止。', aborted: true, committedBucketCount };
             }
@@ -2656,7 +2687,7 @@ export async function executeAutoFillStagingGroups_ACU(
             }
         }
 
-        for (const postSegment of postSegments) {
+        for (const postSegment of groupFailed ? [] : postSegments) {
             if (options.abortController?.signal.aborted) {
                 return { success: false, failedGroups: [...failedGroups, ...normalizedGroups.map(g => g.key)], error: '自动填表已终止。', aborted: true, committedBucketCount };
             }
@@ -2675,6 +2706,7 @@ export async function executeAutoFillStagingGroups_ACU(
                 performanceParentSpanId: options.performanceParentSpanId,
             });
             committedBucketCount += postResult.committedBucketCount;
+            postResult.skippedGroups?.forEach(key => skippedGroups.add(key));
             if (!postResult.success) {
                 failedGroups.add(group.key);
                 firstError = firstError || postResult.error || '边界后持久化提交失败。';
@@ -2684,7 +2716,11 @@ export async function executeAutoFillStagingGroups_ACU(
     }
 
     // 所有组都只有 pre-boundary 段（未触发循环内汇合）：正常收尾时仍须把 staging 汇合回原根。
-    if (!boundaryCommitted && stagingRun && stagingRun.stagedBucketCount > 0) {
+    // 有组失败时不得收尾汇合：staging 快照为全组共享，settle 会连带失败组的撕裂数据落盘，
+    // 绕过本函数头「失败只丢弃内存 staging、零持久化改写」契约。
+    // 注意：这是自动路径独有的语义——手动追平路径（:4772 附近）失败也会 settle（有
+    // failManualRefillSession 兜底丢弃），两处刻意不同步，勿互相「对齐」。
+    if (failedGroups.size === 0 && !boundaryCommitted && stagingRun && stagingRun.stagedBucketCount > 0) {
         const settleResult = await settleStagingBoundary();
         if (!settleResult.ok) {
             normalizedGroups.forEach(g => failedGroups.add(g.key));
@@ -2693,7 +2729,7 @@ export async function executeAutoFillStagingGroups_ACU(
     }
 
     return failedGroups.size > 0
-        ? { success: false, failedGroups: [...failedGroups], error: firstError || '跨根 staging 执行失败。', committedBucketCount }
+        ? { success: false, failedGroups: [...failedGroups], error: firstError || '跨根 staging 执行失败。', committedBucketCount, skippedGroups: [...skippedGroups] }
         : { success: true, failedGroups: [], committedBucketCount };
 }
 

@@ -711,12 +711,18 @@ export async function migrateLegacyStorageToV2OnLoad_ACU(
     return { migrated: false, error: scopeChangeError };
   }
 
-  const originalChat = deepClone_ACU(chat);
-  chat.splice(0, chat.length, ...candidateChat);
+  // 回滚副本只需浅拷贝数组：candidateChat 是唯一深克隆的工作副本（:634），
+  // 从克隆到提交之间所有改写都只落在 candidateChat 上，原 chat 消息对象从未被触碰；
+  // 失败时按原对象身份逐条还原比再深克隆一份更省且更安全（不产生身份漂移）。
+  const originalChat = chat.slice();
+  // 逐条替换：超长聊天下 splice(0, len, ...arr) 的 spread 展开会触及引擎参数栈上限。
+  chat.splice(0, chat.length);
+  for (let i = 0; i < candidateChat.length; i += 1) chat.push(candidateChat[i]);
   try {
     await saveChatToHostStrict_ACU();
   } catch (error) {
-    chat.splice(0, chat.length, ...originalChat);
+    chat.splice(0, chat.length);
+    for (let i = 0; i < originalChat.length; i += 1) chat.push(originalChat[i]);
     return { migrated: false, error: `legacy migration save failed: ${error instanceof Error ? error.message : String(error)}` };
   }
   logDebug_ACU(`[V2 Migration] legacy-v1 migrated to V2 checkpoint: messageIndex=${target.index}, skipUpdateFloors=${skipUpdateFloors}, isolationKey=[${options.isolationKey || '无标签'}], sheets=${sheetKeys.length}`);

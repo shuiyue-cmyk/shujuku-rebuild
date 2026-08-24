@@ -79,15 +79,54 @@ function getHostWindow() {
  * 检查是否已有另一个实例在运行（互斥检测）。
  * 如果已有实例，返回 true（应跳过初始化）。
  * 如果没有，标记当前实例并返回 false。
+ *
+ * [M2] 接管判定：命中已有标记时，检测旧实例的 V2 UI DOM 根（#acu-app-v2）是否仍存在于
+ * 宿主文档中——扩展「禁用再启用」等场景下旧实例已被卸载（其挂载的 UI 根随之移除），
+ * 但 window 上的布尔标记只写不清会永久占位；此时视为旧实例已死，允许新实例接管并 logWarn 说明。
+ * 旧实例 DOM 根仍在则认为它确实在运行，维持拦截。
  */
 function checkAndMarkInstance() {
     const hostWin = getHostWindow();
     if (hostWin[ACU_INSTANCE_FLAG]) {
+        if (!isPreviousInstanceDomRootAlive()) {
+            console.warn('[幻想·数据库] 检测到历史实例标记，但其 UI 根节点(#acu-app-v2)已不在文档中，判定旧实例已卸载，允许本实例接管。');
+            hostWin[ACU_INSTANCE_FLAG] = true;
+            return false;
+        }
         console.warn('[幻想·数据库] 检测到另一个实例已在运行，跳过初始化。请勿同时安装油猴脚本和酒馆插件。');
         return true; // 已有实例
     }
     hostWin[ACU_INSTANCE_FLAG] = true;
     return false; // 首个实例
+}
+/**
+ * [M2] 旧实例 DOM 根是否仍存活：在宿主窗口文档里找 #acu-app-v2（presentation-v2 的应用根 id，
+ * 与 presentation-v2/bootstrap/mount.ts、theme/theme-injector.ts 的 APP_ROOT_ID 保持一致）。
+ * 探测失败（跨域等）一律按「仍在」处理，保守维持拦截。
+ */
+function isPreviousInstanceDomRootAlive() {
+    try {
+        const doc = getHostWindow()?.document;
+        if (!doc)
+            return true; // 无法探测时保守视为仍在
+        return !!doc.getElementById('acu-app-v2');
+    }
+    catch (e) {
+        return true; // 探测异常时保守视为仍在
+    }
+}
+/**
+ * [M5] 释放互斥标记。仅供启动早期（waitForHostApi 超时中止、尚未做任何实质初始化）
+ * 回滚 checkAndMarkInstance 的置位使用，避免超时后标记永久占位拦死后续启动。
+ */
+function releaseInstanceMark() {
+    const hostWin = getHostWindow();
+    try {
+        delete hostWin[ACU_INSTANCE_FLAG];
+    }
+    catch (e) {
+        hostWin[ACU_INSTANCE_FLAG] = false;
+    }
 }
 
 /**
@@ -2016,7 +2055,13 @@ function normalizeLogArg_ACU(arg) {
     if (typeof arg === 'string') {
         return arg
             .replace(/(Authorization\s*:\s*Bearer\s+)([^\s"',}\n]+)/gi, '$1***')
-            .replace(/\"(api[_-]?key|apikey|authorization|token|password|secret|auth|bearer|accessToken|access_token)\"\s*:\s*\"[^\"]*\"/gi, '\"$1\":\"***\"');
+            .replace(/(Bearer\s+)(sk-[A-Za-z0-9-_]+)/g, '$1***')
+            .replace(/\"(api[_-]?key|apikey|authorization|token|password|secret|auth|bearer|accessToken|access_token)\"\s*:\s*\"[^\"]*\"/gi, '\"$1\":\"***\"')
+            // [L4] 裸形态脱敏：apiKey=xxx / token: xxx（键与值均不带引号的日志形态）。
+            // 值若以 bearer 开头（如 Authorization: Bearer xxx）交由上方既有规则处理，避免双重掩码。
+            .replace(/\b(api[_-]?key|apikey|authorization|token|password|secret|auth|bearer|accessToken|access_token)\b(\s*[:=]\s*)(?!["']|bearer\b)[^\s"',;}\n]+/gi, '$1$2***')
+            // [L4] 无前缀独立出现的 sk- 开头密钥串（长度阈值避免误伤普通词）
+            .replace(/\bsk-[A-Za-z0-9_-]{16,}/g, 'sk-***');
     }
     if (typeof arg === 'number' || typeof arg === 'boolean' || typeof arg === 'bigint')
         return String(arg);
@@ -2549,25 +2594,118 @@ function isEntryBlocked_ACU(entry) {
  * 仅放行 http(s)；http:// 仅允许 localhost/回环；私网/环回/链路本地/保留 IP 一律拒绝
  * （云元数据 169.254.169.254、内网 10.x/192.168.x、0.0.0.0 等）。
  */
+/**
+ * [L2] 按 inet_aton 语义解析非规范 IPv4 文本（1/2/3/4 段十进制与 0x 前缀十六进制），
+ * 还原为标准点分四元组。解析失败（非法字符/数值越界）返回 null，由调用方按域名放行。
+ */
+function canonicalizeNonCanonicalIpv4_ACU(host) {
+    const parsePartValue_ACU = (part) => {
+        if (/^0x[0-9a-f]{1,8}$/i.test(part))
+            return parseInt(part, 16);
+        if (/^\d{1,10}$/.test(part))
+            return parseInt(part, 10);
+        return null;
+    };
+    const segs = host.split('.');
+    if (segs.length < 1 || segs.length > 4)
+        return null;
+    const values = [];
+    for (const seg of segs) {
+        const v = parsePartValue_ACU(seg);
+        if (v === null || v < 0)
+            return null;
+        values.push(v);
+    }
+    let num = -1;
+    if (segs.length === 4) {
+        if (values.some((v) => v > 255))
+            return null;
+        num = (((values[0] << 24) | (values[1] << 16) | (values[2] << 8) | values[3])) >>> 0;
+    }
+    else if (segs.length === 3) {
+        if (values[0] > 255 || values[1] > 255 || values[2] > 0xffff)
+            return null;
+        num = (((values[0] << 24) >>> 0) + (values[1] << 16) + values[2]) >>> 0;
+    }
+    else if (segs.length === 2) {
+        if (values[0] > 255 || values[1] > 0xffffff)
+            return null;
+        num = (((values[0] << 24) >>> 0) + values[1]) >>> 0;
+    }
+    else {
+        if (values[0] > 0xffffffff)
+            return null;
+        num = values[0] >>> 0;
+    }
+    return `${(num >>> 24) & 255}.${(num >>> 16) & 255}.${(num >>> 8) & 255}.${num & 255}`;
+}
+/**
+ * [L7] 把 IPv6 地址文本展开为 8 组 16bit 数值；支持 :: 压缩（%zone 由调用方先行剥离）。
+ * 无法解析时返回 null，由调用方回退到首段前缀粗判。
+ */
+function expandIpv6Groups_ACU(addr) {
+    if (!addr || /[^0-9a-f:]/i.test(addr))
+        return null;
+    const doubleColonCount = (addr.match(/::/g) || []).length;
+    if (doubleColonCount > 1)
+        return null;
+    let head = [];
+    let tail = [];
+    if (doubleColonCount === 1) {
+        const [left, right] = addr.split('::');
+        head = left ? left.split(':') : [];
+        tail = right ? right.split(':') : [];
+    }
+    else {
+        head = addr.split(':');
+    }
+    const groupOk = (g) => /^[0-9a-f]{1,4}$/i.test(g);
+    if (!head.every(groupOk) || !tail.every(groupOk))
+        return null;
+    const total = head.length + tail.length;
+    if (total > 8 || (doubleColonCount === 0 && total !== 8))
+        return null;
+    return [
+        ...head.map((g) => parseInt(g, 16)),
+        ...new Array(8 - total).fill(0),
+        ...tail.map((g) => parseInt(g, 16)),
+    ];
+}
 function isPrivateNetworkHost_ACU(host) {
     const normalized = host.replace(/^::ffff:/, '').toLowerCase();
     if (!/^[\d.]+$/.test(normalized) && !/^[0-9a-f:]+(%[0-9a-z]+)?$/i.test(normalized))
         return false; // 域名放行
     if (normalized.includes(':')) {
-        if (normalized === '::1' || normalized === '::')
-            return true;
-        // IPv6：按首段前缀判定（fd00::1 的首段是 fd00，整段相等会漏检全部 ULA）
-        const first = normalized.split('%')[0].split(':')[0];
+        const bareV6 = normalized.split('%')[0];
+        // [L7] 先展开为 8 组再比较：'0:0:0:0:0:0:0:1' 等全展开形此前既不等于 '::1'、
+        // 首段 '0' 也不命中前缀规则，会漏检回环地址。
+        const groups = expandIpv6Groups_ACU(bareV6);
+        if (groups) {
+            if (groups.every((g) => g === 0))
+                return true; // '::' 与全零展开形
+            if (groups.slice(0, 7).every((g) => g === 0) && groups[7] === 1)
+                return true; // 回环 ::1
+            const hi = groups[0];
+            if (hi >= 0xfe80 && hi <= 0xfebf)
+                return true; // 链路本地 fe80::/10
+            if (hi >= 0xfc00 && hi <= 0xfdff)
+                return true; // ULA fc00::/7
+            return false;
+        }
+        // 无法解析的形态：保留旧的首段前缀粗判兜底
+        const first = bareV6.split(':')[0];
         if (first.startsWith('fe8') || first.startsWith('fe9') || first.startsWith('fea') || first.startsWith('feb'))
             return true; // 链路本地 fe80::/10
         if (first.startsWith('fc') || first.startsWith('fd'))
             return true; // ULA fc00::/7
         return false;
     }
-    const parts = normalized.split('.').map((n) => Number(n));
-    if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255))
-        return false;
-    const [a, b] = parts;
+    // [L2] 非规范 IPv4（'127.1' 两段、纯十进制 '2130706433'、十六进制 '0x7f000001' 等）
+    // 此前因分段数≠4 被当域名放行。先按 inet_aton 语义还原四元组再判定；还原失败才视为域名放行。
+    const canonicalV4 = canonicalizeNonCanonicalIpv4_ACU(normalized);
+    if (!canonicalV4)
+        return false; // 域名放行
+    const [a, b] = canonicalV4.split('.').map(Number);
     if (a === 10)
         return true;
     if (a === 127)
@@ -4152,7 +4290,38 @@ function readProfileSettingsFromStorage_ACU(code) {
     if (!raw)
         return null;
     const parsed = safeJsonParse_ACU(raw, null);
-    return (parsed && typeof parsed === 'object') ? parsed : null;
+    if (parsed && typeof parsed === 'object')
+        return parsed;
+    // [H1] 原始串存在但解析失败：先把原串备份到旁路键，再返回 null 走默认值分支。
+    // 否则后续加载期默认配置补齐会覆盖写回同一分桶键，且无任何备份，配置永久丢失。
+    backupProfileSettingsRawBeforeDegradation_ACU(code, 'json_parse_failed');
+    return null;
+}
+/** [H1] Profile 设置原始串旁路备份键（仅降级路径写入，正常保存路径不写备份以避免写放大） */
+function getProfileSettingsBackupKey_ACU(code) {
+    return `${getProfileSettingsKey_ACU(code)}.bak`;
+}
+/**
+ * [H1] 配置损坏防丢备份：把当前 profile settings 的原始存储串复制到旁路 .bak 键。
+ * 仅在「原串存在但解析失败 / 加载处理异常」、即将降级为默认配置并可能覆盖写回同一分桶键之前调用；
+ * 内容相同时跳过重复写（避免每次重载都触发持久化）。不做自动恢复 UI，加载成功时忽略 .bak。
+ */
+function backupProfileSettingsRawBeforeDegradation_ACU(code, reason) {
+    try {
+        const store = getConfigStorage_ACU();
+        const key = getProfileSettingsKey_ACU(code);
+        const raw = store?.getItem?.(key);
+        if (typeof raw !== 'string' || !raw.trim())
+            return;
+        const backupKey = getProfileSettingsBackupKey_ACU(code);
+        if (store.getItem(backupKey) === raw)
+            return;
+        store.setItem(backupKey, raw);
+        logWarn_ACU(`[Profile] 设置数据无法可信读取（${reason}），已把原始内容备份到旁路键后再降级默认配置：${backupKey}`);
+    }
+    catch (e) {
+        logWarn_ACU('[Profile] 设置原始串旁路备份失败（继续按默认配置降级）:', e);
+    }
 }
 function writeProfileSettingsToStorage_ACU(code, settingsObj) {
     const store = getConfigStorage_ACU();
@@ -41882,9 +42051,15 @@ function replayCheckpointSchedule_ACU(checkpoint, fallbackAiFloor) {
     }
     replayEventForState_ACU(checkpoint.event, fallbackAiFloor);
 }
+/**
+ * 以 next 整体替换 state 内容。
+ * 契约：调用方传入的 next 必须是本地私有副本（deepClone / SQLite 导出 / repair 克隆），
+ * 本函数直接采纳、不再深拷贝——此前 Object.assign(state, deepClone(next)) 的第二次克隆
+ * 是每 patch 双份全量深拷贝中的纯冗余（已核实全部调用点的 next 均为私有新对象）。
+ */
 function replaceState_ACU(state, next) {
     Object.keys(state).forEach(key => delete state[key]);
-    Object.assign(state, deepClone_ACU$3(next));
+    Object.assign(state, next);
 }
 /**
  * Repairs ordering metadata of a legacy timeline shard for this replay only.
@@ -42744,17 +42919,24 @@ function applyTableEditDslOperationV2_ACU(state, text) {
     const commands = extractTableEditDslCommands_ACU(text);
     for (const commandLine of commands) {
         const match = commandLine.match(/^(insertRow|deleteRow|updateRow)\s*\((.*)\)$/);
-        if (!match)
+        if (!match) {
+            // 物理索引寻址系 DSL 既定语义，跳过行为不变；此处仅补留痕，避免静默丢失。
+            logWarn_ACU(`[V2 Replay] table_edit_dsl 命令无法识别，已跳过：${commandLine.slice(0, 120)}`);
             continue;
+        }
         const command = match[1];
         const args = parseDslArgs_ACU(match[2]);
-        if (!args)
+        if (!args) {
+            logWarn_ACU(`[V2 Replay] table_edit_dsl 参数解析失败，已跳过：${commandLine.slice(0, 120)}`);
             continue;
+        }
         const tableIndex = Number(args[0]);
         const sheetKey = sheetKeys[tableIndex];
         const sheet = sheetKey ? state[sheetKey] : null;
-        if (!sheet || !Array.isArray(sheet.content))
+        if (!sheet || !Array.isArray(sheet.content)) {
+            logWarn_ACU(`[V2 Replay] table_edit_dsl 物理表索引越界或表内容缺失，已跳过：tableIndex=${tableIndex}, sheetKey=${sheetKey || '未知'}, command=${command}, 原文=${commandLine.slice(0, 120)}`);
             continue;
+        }
         materializeSeedRowsForDslReplay_ACU(sheet);
         if (command === 'insertRow') {
             const data = args[1] || {};
@@ -51653,13 +51835,21 @@ async function migrateLegacyStorageToV2OnLoad_ACU(options) {
     if (scopeChangeError) {
         return { migrated: false, error: scopeChangeError };
     }
-    const originalChat = deepClone_ACU(chat);
-    chat.splice(0, chat.length, ...candidateChat);
+    // 回滚副本只需浅拷贝数组：candidateChat 是唯一深克隆的工作副本（:634），
+    // 从克隆到提交之间所有改写都只落在 candidateChat 上，原 chat 消息对象从未被触碰；
+    // 失败时按原对象身份逐条还原比再深克隆一份更省且更安全（不产生身份漂移）。
+    const originalChat = chat.slice();
+    // 逐条替换：超长聊天下 splice(0, len, ...arr) 的 spread 展开会触及引擎参数栈上限。
+    chat.splice(0, chat.length);
+    for (let i = 0; i < candidateChat.length; i += 1)
+        chat.push(candidateChat[i]);
     try {
         await saveChatToHostStrict_ACU();
     }
     catch (error) {
-        chat.splice(0, chat.length, ...originalChat);
+        chat.splice(0, chat.length);
+        for (let i = 0; i < originalChat.length; i += 1)
+            chat.push(originalChat[i]);
         return { migrated: false, error: `legacy migration save failed: ${error instanceof Error ? error.message : String(error)}` };
     }
     logDebug_ACU(`[V2 Migration] legacy-v1 migrated to V2 checkpoint: messageIndex=${target.index}, skipUpdateFloors=${skipUpdateFloors}, isolationKey=[${options.isolationKey || '无标签'}], sheets=${sheetKeys.length}`);
@@ -51954,6 +52144,15 @@ async function mergeAllIndependentTablesLegacyV1_ACU() {
     const foundSheets = {};
     // 收集 delta 楼层的增量数据（逆序收集，后续正序叠加）
     const pendingDeltas = [];
+    // AI 楼层前缀计数表：aiFloorPrefixByIndex[k] = chat[0..k] 中非用户消息数。
+    // 一次遍历预计算，替代循环内 chat.slice(0, i+1).filter(...).length 的 O(n²) 重复扫描。
+    const aiFloorPrefixByIndex = new Array(chat.length);
+    let aiFloorRunningCount = 0;
+    for (let k = 0; k < chat.length; k++) {
+        if (!chat[k].is_user)
+            aiFloorRunningCount += 1;
+        aiFloorPrefixByIndex[k] = aiFloorRunningCount;
+    }
     for (let i = chat.length - 1; i >= 0; i--) {
         if (chat.length > 500 && i % 200 === 0)
             await new Promise(r => setTimeout(r, 0));
@@ -52006,7 +52205,7 @@ async function mergeAllIndependentTablesLegacyV1_ACU() {
                         if (!independentTableStates_ACU[storedSheetKey]) {
                             independentTableStates_ACU[storedSheetKey] = {};
                         }
-                        const currentAiFloor = chat.slice(0, i + 1).filter(m => !m.is_user).length;
+                        const currentAiFloor = aiFloorPrefixByIndex[i];
                         independentTableStates_ACU[storedSheetKey].lastUpdatedAiFloor = currentAiFloor;
                     }
                 }
@@ -52045,7 +52244,7 @@ async function mergeAllIndependentTablesLegacyV1_ACU() {
                         if (wasUpdated) {
                             if (!independentTableStates_ACU[storedSheetKey])
                                 independentTableStates_ACU[storedSheetKey] = {};
-                            const currentAiFloor = chat.slice(0, i + 1).filter(m => !m.is_user).length;
+                            const currentAiFloor = aiFloorPrefixByIndex[i];
                             independentTableStates_ACU[storedSheetKey].lastUpdatedAiFloor = currentAiFloor;
                         }
                     }
@@ -52065,7 +52264,7 @@ async function mergeAllIndependentTablesLegacyV1_ACU() {
                         foundSheets[k] = true;
                         if (!independentTableStates_ACU[k])
                             independentTableStates_ACU[k] = {};
-                        const currentAiFloor = chat.slice(0, i + 1).filter(m => !m.is_user).length;
+                        const currentAiFloor = aiFloorPrefixByIndex[i];
                         independentTableStates_ACU[k].lastUpdatedAiFloor = currentAiFloor;
                     }
                 });
@@ -52083,7 +52282,7 @@ async function mergeAllIndependentTablesLegacyV1_ACU() {
                         foundSheets[k] = true;
                         if (!independentTableStates_ACU[k])
                             independentTableStates_ACU[k] = {};
-                        const currentAiFloor = chat.slice(0, i + 1).filter(m => !m.is_user).length;
+                        const currentAiFloor = aiFloorPrefixByIndex[i];
                         independentTableStates_ACU[k].lastUpdatedAiFloor = currentAiFloor;
                     }
                 });
@@ -52113,7 +52312,7 @@ async function mergeAllIndependentTablesLegacyV1_ACU() {
                     if (!independentTableStates_ACU[sheetKey]) {
                         independentTableStates_ACU[sheetKey] = {};
                     }
-                    const currentAiFloor = chat.slice(0, deltaIndex + 1).filter((m) => !m.is_user).length;
+                    const currentAiFloor = aiFloorPrefixByIndex[deltaIndex];
                     independentTableStates_ACU[sheetKey].lastUpdatedAiFloor = currentAiFloor;
                 }
                 catch (e) {
@@ -52605,6 +52804,8 @@ function parseReadableToJson_ACU(text) {
                         newRow.push('');
                 }
                 else if (newRow.length > originalHeaderRow.length) {
+                    // 截断是有意设计（对齐原表头列数），但需留痕：静默截断会掩盖 AI 输出格式异常。
+                    logWarn_ACU(`[表格重建] Markdown 数据行列数(${newRow.length})超过表头列数(${originalHeaderRow.length})，已按表头截断多余列：sheetKey=${sheetKey}, 数据行#${i}`);
                     newRow.splice(originalHeaderRow.length);
                 }
                 newContent.push(newRow);
@@ -57124,7 +57325,13 @@ function createLorebookReadContext_ACU(options) {
                 options.onDisposeSummary(stats, { runId, source: options.source });
             }
             bookEntriesPromises.clear();
-            queue.length = 0;
+            // [M3] 先逐个唤醒排队中的 acquire 等待者再清队列：直接 queue.length=0 会把 resolver
+            // 连同等待方一起悬挂（Promise 永不 settle）。唤醒后 runPhysicalRead 在 acquire 恢复执行处
+            // 命中既有 disposed 检查，按既有路径抛 TaskAbortedByUser。
+            while (queue.length > 0) {
+                const resolve = queue.shift();
+                resolve?.();
+            }
             availableBookNamesPromise = undefined;
         },
     };
@@ -58333,7 +58540,10 @@ async function restoreSnapshotEntries_ACU(snapshot) {
                 const patchedEntriesByUid = new Map((await getLorebookEntries_ACU(normalizedBookName) || []).map(entry => [String(entry?.uid), entry]));
                 for (const patch of patches) {
                     const currentEntry = patchedEntriesByUid.get(String(patch.uid));
-                    const keysMatch = JSON.stringify(currentEntry?.keys || []) === JSON.stringify(patch.keys || []);
+                    // [L5] keys 按集合比较（长度相同 + 逐元素 includes），不再依赖 JSON.stringify 的数组顺序。
+                    const snapshotKeys = Array.isArray(patch.keys) ? patch.keys.map((key) => String(key)) : [];
+                    const currentKeys = Array.isArray(currentEntry?.keys) ? currentEntry.keys.map((key) => String(key)) : [];
+                    const keysMatch = currentKeys.length === snapshotKeys.length && snapshotKeys.every((key) => currentKeys.includes(key));
                     const restoredEntry = currentEntry
                         && currentEntry.enabled === patch.enabled
                         && currentEntry.type === patch.type
@@ -58702,7 +58912,8 @@ async function restoreWorldbookGreenlights_ACU(options = {}) {
             logWarn_ACU('[Agent世界书] 标记接管恢复待处理状态失败，未恢复条目以保留可重试状态。', error);
         }
     }
-    const restoreResult = shouldRestoreSnapshot && (cleanupMode !== 'full' || restoreUpdates.length === 0 || pendingSnapshotPersisted)
+    // [M4] let：清理阶段失败会计入 failed（见下方 deleteInternalEntriesByComment 的 try/catch）。
+    let restoreResult = shouldRestoreSnapshot && (cleanupMode !== 'full' || restoreUpdates.length === 0 || pendingSnapshotPersisted)
         ? await restoreSnapshotEntries_ACU(snapshot)
         : { restored: 0, skipped: 0, failed: 0, report: { applied: [], failed: [] } };
     const completedRestoreUpdates = [
@@ -58740,9 +58951,27 @@ async function restoreWorldbookGreenlights_ACU(options = {}) {
         && shouldRestoreSnapshot
         && stateWriteFailed === 0
         && finalizedSnapshot.active !== true;
+    // [M4] 内部条目清理失败不得中断收敛：此前裸奔抛错会跳过下方 setPlotAgentWorldbookSnapshot
+    // 快照更新。失败归入 restoreResult.failed 分类并告警后继续，保证收敛写盘与快照更新必然执行。
+    let deletedFinalGreenlights = 0;
+    try {
+        deletedFinalGreenlights = (await deleteInternalEntriesByComment_ACU(resolvedBookNames, AGENT_FINAL_GENERATION_GREENLIGHT_COMMENT_ACU)).deleted;
+    }
+    catch (error) {
+        restoreResult.failed += 1;
+        logWarn_ACU('[Agent世界书] 清理最终生成绿灯内部条目失败；继续执行快照收敛。', error);
+    }
+    let deletedSnapshots = 0;
+    if (cleanupMode === 'full') {
+        try {
+            deletedSnapshots = (await deleteInternalEntriesByComment_ACU(resolvedBookNames, AGENT_WORLDBOOK_SNAPSHOT_COMMENT_ACU)).deleted;
+        }
+        catch (error) {
+            restoreResult.failed += 1;
+            logWarn_ACU('[Agent世界书] 清理接管快照内部条目失败；继续执行快照收敛。', error);
+        }
+    }
     const canClearLegacySnapshot = cleanupMode === 'full' && shouldUseLegacySnapshot && restoreResult.skipped === 0 && restoreResult.failed === 0;
-    const deletedFinalGreenlights = (await deleteInternalEntriesByComment_ACU(resolvedBookNames, AGENT_FINAL_GENERATION_GREENLIGHT_COMMENT_ACU)).deleted;
-    const deletedSnapshots = cleanupMode === 'full' ? (await deleteInternalEntriesByComment_ACU(resolvedBookNames, AGENT_WORLDBOOK_SNAPSHOT_COMMENT_ACU)).deleted : 0;
     const deletedStateEntries = canCleanupPersistentSnapshot ? await deleteAgentWorldbookStateEntry_ACU() : 0;
     const legacySnapshotCleared = canClearLegacySnapshot && clearLegacyPlotAgentWorldbookSnapshot_ACU() ? 1 : 0;
     const cleaned = deletedFinalGreenlights + deletedSnapshots + deletedStateEntries + legacySnapshotCleared;
@@ -59083,6 +59312,9 @@ async function prepareAIInput_ACU(messages, updateMode = 'standard', targetSheet
     const ownedReadContext = options?.worldbookReadContext
         ?? createLorebookReadContext_ACU({ source: 'form_fill', isActive: () => options?.signal?.aborted !== true });
     const readContext = options?.worldbookReadContext ?? ownedReadContext;
+    // 注意：惰性创建的 ownedReadContext 不能随本函数退出 dispose——返回的
+    // resolveTableWorldbookContent 闭包持有 readContext 且在调用方替换占位符时才执行，
+    // 提前 dispose 会令其读取全部失败。生命周期仍由调用方（填表 bucket attempt）管理。
     const worldbookConfig = getCurrentWorldbookConfig_ACU();
     const syncReadScopeNames = buildTableCandidateScope_ACU([
         () => worldbookConfig?.source === 'manual' && Array.isArray(worldbookConfig?.manualSelection) ? worldbookConfig.manualSelection : [],
@@ -59535,16 +59767,27 @@ async function callCustomOpenAI_ACU(dynamicContent, abortController = null, opti
     };
     for (const segment of promptSegments) {
         let finalContent = segment.content;
-        // 指令/数据边界：$1/$4 为不可信数据，需明确标记不得执行其中指令
+        // 指令/数据边界：$0/$1/$4/$9 承载不可信文本（表格投影/聊天记录/世界书内容），
+        // 用标签包裹并明确标记不得执行其中指令
         const wrapUntrusted = (text, label) => text ? `<${label}>\n${text}\n</${label}>` : text;
-        finalContent = finalContent.replace('$0', filterTableInjectedContent(dynamicContent.tableDataText, '$0'));
-        finalContent = finalContent.replace('$1', filterTableInjectedContent(wrapUntrusted(dynamicContent.messagesText, 'user_data'), '$1'));
-        finalContent = finalContent.replace('$4', filterTableInjectedContent(wrapUntrusted(dynamicContent.worldbookContent, 'worldbook_data'), '$4'));
-        finalContent = finalContent.replace(/\$6/g, filterTableInjectedContent(lastPlotContent || '', '$6'));
-        finalContent = finalContent.replace('$8', filterTableInjectedContent(dynamicContent.manualExtraHint || '', '$8'));
-        finalContent = finalContent.replace(/\$9/g, filterTableInjectedContent(dynamicContent.worldbookDatabaseExcludedContent || '', '$9'));
-        finalContent = finalContent.replace(/\$U/g, filterTableInjectedContent(userInfoContent_Table, '$U'));
-        finalContent = finalContent.replace(/\$C/g, filterTableInjectedContent(charInfoContent_Table, '$C'));
+        // [H1] 占位符统一为「全局正则 + 替换函数」单遍替换：
+        // - 字符串第二参数会把值中的 $&/$`/$'/$0 等当作特殊模式展开（模板片段被复制进包裹块内部），
+        //   替换函数的返回值永远按字面量插入；
+        // - 单遍扫描同时避免先注入的值中恰好含有后续占位符（如 $6）被二次展开。
+        const placeholderValues = {
+            '$0': filterTableInjectedContent(wrapUntrusted(dynamicContent.tableDataText, 'table_data'), '$0'),
+            // [L1] $1 不再外层包 <user_data>：prompt-prepare 构造 messagesText 时已含
+            // 「当前最新对话内容…<user_data>…</user_data>」包裹与免责声明，原实现形成双层嵌套。
+            '$1': filterTableInjectedContent(dynamicContent.messagesText, '$1'),
+            '$4': filterTableInjectedContent(wrapUntrusted(dynamicContent.worldbookContent, 'worldbook_data'), '$4'),
+            '$6': filterTableInjectedContent(lastPlotContent || '', '$6'),
+            '$8': filterTableInjectedContent(dynamicContent.manualExtraHint || '', '$8'),
+            // [L2] $9 与 $1/$4 同类，补边界包裹。
+            '$9': filterTableInjectedContent(wrapUntrusted(dynamicContent.worldbookDatabaseExcludedContent || '', 'worldbook_data'), '$9'),
+            '$U': filterTableInjectedContent(userInfoContent_Table, '$U'),
+            '$C': filterTableInjectedContent(charInfoContent_Table, '$C'),
+        };
+        finalContent = finalContent.replace(/\$(?:0|1|4|6|8|9|U|C)/g, (match) => placeholderValues[match] ?? match);
         if (typeof dynamicContent?.resolveTableWorldbookContent === 'function') {
             const tableTokens = [];
             const seenTableTokens = new Set();
@@ -59663,9 +59906,12 @@ async function parseStreamResponse_ACU(response) {
             }
         }
         if (!sawDone) {
-            // 流式响应未收到 [DONE]（网络中断/超时截断）：返回部分内容会让调用方误判任务成功，
-            // 显式告警以便从日志定位「任务看似成功但内容不完整」。
-            logWarn_ACU(`[parseStreamResponse] 流式响应未收到 [DONE]（可能被网络中断/截断），已收集内容长度: ${result.length}`);
+            // [M1] 流式响应未收到 [DONE]：按截断处理，丢弃部分内容返回 null。
+            // 上游 callCustomOpenAI 会把 null 转成 RetryableAiResponseError_ACU（model 类可重试错误），
+            // collectGroupFillResponse 据此走重试；此前仅告警仍返回半截内容，会让调用方把截断误判为成功。
+            // 本函数拿不到 abort 标志，一律按截断处理（用户中止场景在 fetch 层已抛 AbortError，不会走到这里）。
+            logWarn_ACU(`[parseStreamResponse] 流式响应未收到 [DONE]（可能被网络中断/截断），丢弃已收集的部分内容，长度: ${result.length}`);
+            return null;
         }
         if (!result) {
             logWarn_ACU('[parseStreamResponse] 流式响应未解析出任何内容。');
@@ -61245,9 +61491,11 @@ function sanitizeExcludeBodyForPresetFields_ACU(rawExclude, effectiveApiConfig) 
             return false;
         if ((lower === 'temperature' || lower === 'temp') && effectiveApiConfig?.temperature !== undefined)
             return false;
-        if ((lower === 'max_tokens' || lower === 'max_tokens ') && (effectiveApiConfig?.max_tokens !== undefined || effectiveApiConfig?.maxTokens !== undefined))
+        // [L6] 原先的 `lower === 'max_tokens '` / `'top_p '` 尾空格分支不可达：
+        // rawKeys 已逐项 trim，删除死分支。
+        if (lower === 'max_tokens' && (effectiveApiConfig?.max_tokens !== undefined || effectiveApiConfig?.maxTokens !== undefined))
             return false;
-        if ((lower === 'top_p' || lower === 'top_p ') && (effectiveApiConfig?.top_p !== undefined || effectiveApiConfig?.topP !== undefined))
+        if (lower === 'top_p' && (effectiveApiConfig?.top_p !== undefined || effectiveApiConfig?.topP !== undefined))
             return false;
         if (lower === 'stream' && effectiveApiConfig?.streamingEnabled !== undefined)
             return false;
@@ -71584,6 +71832,8 @@ async function resetScriptStateForNewChat_ACU(chatFileName) {
     // 以保留当前的数据库状态，等待一个有效的 CHAT_CHANGED 事件。
     if (!chatFileName || typeof chatFileName !== 'string' || chatFileName.trim() === '' || chatFileName.trim() === 'null') {
         if (!Array.isArray(getChatArray_ACU()) || getChatArray_ACU().length === 0) {
+            // [L9] 此处手写清空与 presentation/bootstrap/init.ts 的 clearDerivedRuntimeState_ACU / clearRuntimeForNoActiveChat_ACU 保持同步；
+            // 差异：init.ts 是 presentation 层，额外 disposeStorageProvider() 并 notifyRuntimeTableCleared_ACU()；本 service 层刻意不触碰 UI/storage 生命周期。字段变动需两边同步。
             logDebug_ACU(`ACU: Received invalid chat file name "${chatFileName}" with no active chat. Clearing runtime state.`);
             resetPlotAgentWorldbookSessionSnapshot_ACU();
             _set_currentChatFileIdentifier_ACU('');
@@ -84309,8 +84559,29 @@ catch (_) { }
 // 属于 service 层（业务编排），不是纯 data 层。
 // ═══════════════════════════════════════════════════════════════
 let settingsStorageReadyForSave_ACU = false;
-const _set_settingsStorageReadyForSave_ACU = (val) => { settingsStorageReadyForSave_ACU = val; };
+const _set_settingsStorageReadyForSave_ACU = (val) => {
+    settingsStorageReadyForSave_ACU = val;
+    // [M5] 存储就绪翻转点：补存此前被门控拒绝的挂起保存，避免静默丢失
+    if (val)
+        flushPendingSaveAfterStorageReady_ACU();
+};
 let settingsReloadAfterIdbScheduled_ACU = false;
+// [M5] 门控拒绝期间的挂起保存标志：settings_loading 拒绝不再静默丢弃，
+// 就绪翻转为 true 时（loadSettings 内两处 + 导出 setter）触发一次补存。
+let pendingSaveAfterStorageReady_ACU = false;
+/** [M5] 存储就绪后补存一次挂起保存；失败仅告警，不无限重试 */
+function flushPendingSaveAfterStorageReady_ACU() {
+    if (!pendingSaveAfterStorageReady_ACU || !settingsStorageReadyForSave_ACU)
+        return;
+    pendingSaveAfterStorageReady_ACU = false;
+    logDebug_ACU('[设置保存] 存储已完成可靠加载，补存此前被门控拒绝的设置。');
+    try {
+        saveSettings_ACU();
+    }
+    catch (e) {
+        logWarn_ACU('[设置保存] 挂起保存补存失败:', e);
+    }
+}
 /**
  * 替换 settings_ACU 整体对象，同时保留 biotracker 运行时命名空间（bs_biotracker）。
  * biotracker 适配层在 settings 加载完成前（IndexedDB 缓存未就绪时 loadSettings 挂起重载）
@@ -84322,7 +84593,9 @@ function replaceSettingsPreservingBiotracker(next) {
     const prevBiotracker = settings_ACU?.bs_biotracker;
     _set_settings_ACU(next);
     if (prevBiotracker && !settings_ACU.bs_biotracker) {
-        settings_ACU.bs_biotracker = prevBiotracker;
+        // [M6] 移植时深拷贝：避免新旧 settings 对象共享同一 bs_biotracker 子对象引用，
+        // 否则任一侧的运行时写入都会穿透到另一侧。拷贝失败时回退原引用（保数据优先）。
+        settings_ACU.bs_biotracker = safeJsonParse_ACU(safeJsonStringify_ACU(prevBiotracker, ''), prevBiotracker) || prevBiotracker;
     }
 }
 function scheduleSettingsReloadAfterIdbReady_ACU(reason) {
@@ -84536,13 +84809,16 @@ function summarizeSettingsForLog_ACU(settings) {
 }
 function saveSettings_ACU() {
     if (!settingsStorageReadyForSave_ACU) {
+        // [M5] 记录挂起保存：存储就绪翻转点会补存一次，避免门控拒绝导致静默丢失。
+        // fire-and-forget 调用方无需感知；重试仍失败时由常规保存路径兜底。
+        pendingSaveAfterStorageReady_ACU = true;
         if (isIndexedDbAvailable_ACU() && !configIdbCacheLoaded_ACU) {
             scheduleSettingsReloadAfterIdbReady_ACU('save_before_config_cache_ready');
         }
         else {
             void initTavernSettingsBridge_ACU();
         }
-        logWarn_ACU('[设置保存] 设置尚未完成可靠加载，已拒绝本次保存以避免默认配置覆盖真实配置。');
+        logWarn_ACU('[设置保存] 设置尚未完成可靠加载，已拒绝本次保存以避免默认配置覆盖真实配置（已登记，就绪后自动补存）。');
         return {
             saved: false,
             storageType: 'memory',
@@ -84746,6 +85022,12 @@ function loadSettings_ACU() {
     }
     catch (error) {
         logError_ACU('Failed to load or parse settings, using defaults:', error);
+        // [H1] 加载处理异常同样视为不可信读取：先把存储中的原始串备份到旁路键再降级默认配置，
+        // 防止下方 shouldPersist=true 的默认值补齐覆盖写回同一分桶键导致真实配置永久丢失。
+        try {
+            backupProfileSettingsRawBeforeDegradation_ACU?.(activeCode, 'load_exception');
+        }
+        catch (backupError) { /* ignore */ }
         replaceSettingsPreservingBiotracker(buildDefaultSettings_ACU());
         settings_ACU.dataIsolationCode = activeCode;
         settings_ACU.dataIsolationEnabled = (activeCode !== '');
@@ -84763,6 +85045,8 @@ function loadSettings_ACU() {
         logDebug_ACU('[剧情推进预设] 已补齐内置预设：时间召回');
     }
     settingsStorageReadyForSave_ACU = true;
+    // [M5] 就绪翻转点：补存门控拒绝期间登记的挂起保存
+    flushPendingSaveAfterStorageReady_ACU();
     // [交火模式配置] 权威配置存放在 globalMeta.vectorMemoryConfigGlobal（跨 profile 全局）。
     // settings_ACU.vectorMemoryConfig 只保留为运行时投影，兼容旧调用方。
     if (!globalMeta_ACU.vectorMemoryConfigGlobal || typeof globalMeta_ACU.vectorMemoryConfigGlobal !== 'object' || Array.isArray(globalMeta_ACU.vectorMemoryConfigGlobal)) {
@@ -84882,6 +85166,8 @@ function loadSettings_ACU() {
     }
     settings_ACU.vectorMemoryConfig = globalMeta_ACU.vectorMemoryConfigGlobal;
     settingsStorageReadyForSave_ACU = true;
+    // [M5] 就绪翻转点：补存门控拒绝期间登记的挂起保存（若前一个翻转点已消费则为空操作）
+    flushPendingSaveAfterStorageReady_ACU();
     refreshDefaultTableTemplateOnce_ACU(activeCode);
     forceDefaultTableFillPromptsOnce_ACU();
     forceDefaultTemplateAssistantPromptOnce_ACU();
@@ -88299,6 +88585,12 @@ async function executeAutoUpdatePlan_ACU(plan, settings, setAutoUpdating, ops, p
             failedGroupKeys.push(...groupedResult.failedGroups);
             const groupedError = groupedResult.error || '分组更新失败，未返回具体错误。';
             groupedResult.failedGroups.forEach(groupKey => pushGroupError_ACU(groupKey, groupedError));
+            const skippedGroupKeys = groupedResult.skippedGroups || [];
+            if (skippedGroupKeys.length > 0) {
+                // 归因补全：前沿中断后被阻断、从未尝试的组不计入 failedGroups（并非失败），
+                // 这里单独留痕「N 组未尝试」，不改变 success 判定与失败组统计。
+                logWarn_ACU(`[Parallel] 前沿中断后另有 ${skippedGroupKeys.length} 组未尝试（被失败 bucket 阻断，非失败）：${skippedGroupKeys.join('、')}`);
+            }
         }
     };
     try {
@@ -88677,6 +88969,18 @@ async function throwEmbeddingHttpErrorAsync_ACU(response, endpoint, model) {
         model,
     });
 }
+// [M5] Embedding fetch 防悬挂超时。目标运行环境（现代 WebView/Tauri）AbortSignal.timeout 可用性存疑，
+// 用手动 AbortController+setTimeout 兜底；AbortController 不可用时退化为无超时（与旧行为一致）。
+// 取 120s：本网关除 query 单条外还承载归档构建的批量 chunk 嵌入（summary-vector-index-archive-service），
+// 30s 可能误杀原本能完成的大批量请求；120s 对悬挂仍是有效上界。
+const EMBEDDING_FETCH_TIMEOUT_MS_ACU = 120000;
+function createFetchAbortTimer_ACU$1(timeoutMs) {
+    if (typeof AbortController !== 'function')
+        return null;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
+    return { signal: controller.signal, cleanup: () => clearTimeout(timer) };
+}
 async function createEmbeddings_ACU(request) {
     const endpoint = String(request.endpoint || '').trim();
     const model = String(request.model || '').trim();
@@ -88696,12 +89000,21 @@ async function createEmbeddings_ACU(request) {
         headers.Authorization = `Bearer ${apiKey}`;
     }
     assertSafeHttpEndpoint_ACU(endpoint);
-    const response = await fetch(endpoint, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ model, input }),
-        redirect: 'error',
-    });
+    // [M5] 挂超时：超时 abort 让 fetch 抛 AbortError 向上传播（运行时 T5 路径已有降级处理）。
+    const abortTimer = createFetchAbortTimer_ACU$1(EMBEDDING_FETCH_TIMEOUT_MS_ACU);
+    let response;
+    try {
+        response = await fetch(endpoint, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ model, input }),
+            redirect: 'error',
+            ...(abortTimer ? { signal: abortTimer.signal } : {}),
+        });
+    }
+    finally {
+        abortTimer?.cleanup();
+    }
     if (!response.ok) {
         await throwEmbeddingHttpErrorAsync_ACU(response, endpoint, model);
     }
@@ -92401,6 +92714,9 @@ async function processGroupedRuntimeChunkCore_ACU(groups, mode, options = {}) {
     });
     const templateForLookup = executionScope.sqlApplyScope?.templateData || parseTableTemplateJson_ACU({ stripSeedRows: true });
     const failedGroups = new Set();
+    // 前沿中断后剩余未尝试 bucket 的所属组：不进 failedGroups（它们并未失败），
+    // 单独随结果返回，供调度层归因「N 组未尝试」（不改变 success 判定）。
+    const skippedGroups = new Set();
     let firstError;
     // 模板只起指导作用：只有模板声明的表参与填表。
     // 范围未知时不过滤，避免把所有表判成不参与导致数据写不进去。
@@ -92492,6 +92808,10 @@ async function processGroupedRuntimeChunkCore_ACU(groups, mode, options = {}) {
         const maxBucketRetries = Math.max(1, Number(settings_ACU.tableMaxRetries) || 3);
         let retryUnifiedError = null;
         let bucketSucceeded = false;
+        // 回卷全局快照前留存的运行时快照（attempt 内赋值，bucket 失败分支用于对称还原）。
+        // null 哨兵：尚未走到快照留存点就早失败（基底边界不一致/空基底/别名重绑抛错）时
+        // 不还原，避免把真实运行时抹成空对象。
+        let preRollbackRuntimeSnapshot = null;
         // 阶段 G1：bucket 重试循环外持有 request-scoped replay evidence。
         // 同 bucket 的各次 attempt 共享同一 boundary（mergeBaseMaxMessageIndex），
         // 因此重试可复用首次冷 replay 结果；bucket 提交写入新 chat entry 后
@@ -92540,6 +92860,9 @@ async function processGroupedRuntimeChunkCore_ACU(groups, mode, options = {}) {
                 firstError = firstError || (error instanceof Error ? error.message : String(error));
                 break;
             }
+            // 回卷全局快照前先留存当前运行时：bucket 失败时在失败分支对称还原，
+            // 避免「提交前失败」后 UI 停留在合并基底旧态（同 applyUnified 失败路径回写快照的做法）。
+            preRollbackRuntimeSnapshot = JSON.parse(JSON.stringify(currentJsonTableData_ACU || {}));
             _set_currentJsonTableData_ACU(mergedBatchData);
             const baseSnapshot = JSON.parse(JSON.stringify(mergedBatchData));
             const bucketSheetKeys = [...new Set(bucket.plannedJobs.flatMap(job => job.group.sheetKeys || []))].sort();
@@ -92778,6 +93101,20 @@ async function processGroupedRuntimeChunkCore_ACU(groups, mode, options = {}) {
         }
         if (!bucketSucceeded) {
             // 连续前沿模型不允许跨过失败 bucket 继续提交，否则会制造无法自动追平的内部空洞。
+            // 剩余未尝试 bucket 的所属组不进 failedGroups（并未尝试、非失败）：
+            // 记入 skippedGroups 随结果返回，供调度层归因「N 组未尝试」。
+            for (let remainingIndex = bucketIndex + 1; remainingIndex < orderedBuckets.length; remainingIndex++) {
+                orderedBuckets[remainingIndex].plannedJobs.forEach(job => {
+                    if (!failedGroups.has(job.group.key))
+                        skippedGroups.add(job.group.key);
+                });
+            }
+            // 对称还原回卷前的全局运行时快照：所有非 abort 失败都汇入此分支，
+            // 还原后 UI 不再停留在线 :2186 回卷出的旧态（外层兜底刷新仍保留）。
+            // null 哨兵 = 尚未执行过回卷就失败，无需还原。
+            if (preRollbackRuntimeSnapshot !== null) {
+                _set_currentJsonTableData_ACU(preRollbackRuntimeSnapshot);
+            }
             break;
         }
     }
@@ -92785,7 +93122,7 @@ async function processGroupedRuntimeChunkCore_ACU(groups, mode, options = {}) {
         return { success: false, failedGroups: [...failedGroups], error: '手动更新已终止。', aborted: true, committedBucketCount };
     }
     return failedGroups.size > 0
-        ? { success: false, failedGroups: [...failedGroups], error: firstError || '统一提交失败。', committedBucketCount }
+        ? { success: false, failedGroups: [...failedGroups], error: firstError || '统一提交失败。', committedBucketCount, skippedGroups: [...skippedGroups] }
         : { success: true, failedGroups: [], committedBucketCount };
 }
 function processGroupedRuntimeChunk_ACU(...args) {
@@ -92837,6 +93174,8 @@ async function executeAutoFillStagingGroups_ACU(groups, mode, options = {}) {
         });
     }
     const failedGroups = new Set();
+    // 透传内部 chunk 的未尝试组清单（前沿中断归因），随结果返回给调度层。
+    const skippedGroups = new Set();
     let firstError;
     let committedBucketCount = 0;
     let boundaryCommitted = false;
@@ -92921,6 +93260,8 @@ async function executeAutoFillStagingGroups_ACU(groups, mode, options = {}) {
         const segments = splitMessageIndicesAtBoundary_ACU(groupIndices, originalFullIndex);
         const preSegments = segments.filter(segment => segment.indices.length > 0 && segment.indices[0] < originalFullIndex);
         const postSegments = segments.filter(segment => segment.indices.length > 0 && segment.indices[0] >= originalFullIndex);
+        // 组级失败标志：与手动追平路径的跨根 staging 分支同款守卫。
+        let groupFailed = false;
         for (const preSegment of preSegments) {
             if (options.abortController?.signal.aborted) {
                 return { success: false, failedGroups: [...failedGroups, ...normalizedGroups.map(g => g.key)], error: '自动填表已终止。', aborted: true, committedBucketCount };
@@ -92941,9 +93282,11 @@ async function executeAutoFillStagingGroups_ACU(groups, mode, options = {}) {
                 performanceParentSpanId: options.performanceParentSpanId,
             });
             committedBucketCount += preResult.committedBucketCount;
+            preResult.skippedGroups?.forEach(key => skippedGroups.add(key));
             if (!preResult.success) {
                 failedGroups.add(group.key);
                 firstError = firstError || preResult.error || '边界前 staging 提交失败。';
+                groupFailed = true;
                 break;
             }
             // 累积 staging 快照：bucket 提交后 runtime 已更新为目标表最新 AI 结果。
@@ -92956,7 +93299,9 @@ async function executeAutoFillStagingGroups_ACU(groups, mode, options = {}) {
             }
         }
         // 首个 post 段提交前收敛 staging：边界前累计快照原子折叠回原根；零 staging 则丢弃。
-        if (postSegments.length > 0) {
+        // pre 段已失败时不得继续 settle 或写入 post 段（与手动路径一致）：该组整体失败，
+        // 已累计的部分 staging 只保留在内存中等待丢弃，绝不在此处被原子持久化。
+        if (!groupFailed && postSegments.length > 0) {
             if (options.abortController?.signal.aborted) {
                 return { success: false, failedGroups: [...failedGroups, ...normalizedGroups.map(g => g.key)], error: '自动填表已终止。', aborted: true, committedBucketCount };
             }
@@ -92967,7 +93312,7 @@ async function executeAutoFillStagingGroups_ACU(groups, mode, options = {}) {
                 break;
             }
         }
-        for (const postSegment of postSegments) {
+        for (const postSegment of groupFailed ? [] : postSegments) {
             if (options.abortController?.signal.aborted) {
                 return { success: false, failedGroups: [...failedGroups, ...normalizedGroups.map(g => g.key)], error: '自动填表已终止。', aborted: true, committedBucketCount };
             }
@@ -92986,6 +93331,7 @@ async function executeAutoFillStagingGroups_ACU(groups, mode, options = {}) {
                 performanceParentSpanId: options.performanceParentSpanId,
             });
             committedBucketCount += postResult.committedBucketCount;
+            postResult.skippedGroups?.forEach(key => skippedGroups.add(key));
             if (!postResult.success) {
                 failedGroups.add(group.key);
                 firstError = firstError || postResult.error || '边界后持久化提交失败。';
@@ -92994,7 +93340,11 @@ async function executeAutoFillStagingGroups_ACU(groups, mode, options = {}) {
         }
     }
     // 所有组都只有 pre-boundary 段（未触发循环内汇合）：正常收尾时仍须把 staging 汇合回原根。
-    if (!boundaryCommitted && stagingRun && stagingRun.stagedBucketCount > 0) {
+    // 有组失败时不得收尾汇合：staging 快照为全组共享，settle 会连带失败组的撕裂数据落盘，
+    // 绕过本函数头「失败只丢弃内存 staging、零持久化改写」契约。
+    // 注意：这是自动路径独有的语义——手动追平路径（:4772 附近）失败也会 settle（有
+    // failManualRefillSession 兜底丢弃），两处刻意不同步，勿互相「对齐」。
+    if (failedGroups.size === 0 && !boundaryCommitted && stagingRun && stagingRun.stagedBucketCount > 0) {
         const settleResult = await settleStagingBoundary();
         if (!settleResult.ok) {
             normalizedGroups.forEach(g => failedGroups.add(g.key));
@@ -93002,7 +93352,7 @@ async function executeAutoFillStagingGroups_ACU(groups, mode, options = {}) {
         }
     }
     return failedGroups.size > 0
-        ? { success: false, failedGroups: [...failedGroups], error: firstError || '跨根 staging 执行失败。', committedBucketCount }
+        ? { success: false, failedGroups: [...failedGroups], error: firstError || '跨根 staging 执行失败。', committedBucketCount, skippedGroups: [...skippedGroups] }
         : { success: true, failedGroups: [], committedBucketCount };
 }
 /**
@@ -125279,7 +125629,7 @@ const WARDROBE_DIMENSION_LABELS = Object.freeze({ masking: '掩形', support: '�
 const PREG_FIT_GAP_LABELS = Object.freeze({ masking: '掩形', support: '支撑', capacity: '容身', convenience: '便捷' });
 const MAX_PROGRESS_BAR_CAP = 200;
 // 构建时间戳（rollup replace 注入；测试/dev 环境无替换时回退 'dev'）——全局水印用，截图辨别构建
-const ACU_BUILD_STAMP = typeof "20260824-11" === 'string' ? "20260824-11" : 'dev';
+const ACU_BUILD_STAMP = typeof "20260824-20" === 'string' ? "20260824-20" : 'dev';
 const MODAL_EDGE_GAP = 24;
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const FLOATING_SPHERE_POSITION_KEY = `${MODULE_NAME}_floating_sphere_position`;
@@ -132256,14 +132606,30 @@ async function ensureModal(ctx) {
             // 追踪核心由数据库适配层单实例驱动：仅桥接触发，不在面板内跑第二实例
             const bridge = globalThis.__ACU_BIOTRACKER_BRIDGE__;
             const result = bridge?.runTrackerNow ? await bridge.runTrackerNow() : { skipped: true, reason: 'no_bridge' };
-            if (result?.skipped && result.reason === 'already_running') {
-                globalThis.toastr?.info?.('[BS BioTracker] 已有一轮追踪正在执行，本次未重复发送');
+            // 桥已改为透传 runTracker 的返回值（{skipped:true,reason} 或 {skipped:false,...}），
+            // 这里按 reason 给出完整结果反馈（此前 skip 原因被桥吞掉、失败/成功无任何提示）
+            if (result?.skipped) {
+                if (result.reason === 'already_running') {
+                    globalThis.toastr?.info?.('[BS BioTracker] 已有一轮追踪正在执行，本次未重复发送');
+                }
+                else if (result.reason === 'empty_chat') {
+                    globalThis.toastr?.warning?.('[BS BioTracker] 当前对话没有可分析的消息');
+                }
+                else if (result.reason === 'no_registered_targets') {
+                    globalThis.toastr?.warning?.('[BS BioTracker] 尚无已注册角色，无法发送追踪请求');
+                }
+                else if (result.reason === 'no_bridge' || result.reason === 'failed') {
+                    // failed 时 vendor runTracker 内部通常已 toast 过错误详情，这里补一条结果反馈
+                    globalThis.toastr?.error?.(result.reason === 'no_bridge'
+                        ? '[BS BioTracker] 追踪核心桥尚未就绪，请稍后重试'
+                        : '[BS BioTracker] 手动分析执行失败，详情见日志');
+                }
+                else {
+                    globalThis.toastr?.info?.(`[BS BioTracker] 本轮分析未发送（${String(result.reason || '未知原因')}）`);
+                }
             }
-            else if (result?.skipped && result.reason === 'empty_chat') {
-                globalThis.toastr?.warning?.('[BS BioTracker] 当前对话没有可分析的消息');
-            }
-            else if (result?.skipped && result.reason === 'no_registered_targets') {
-                globalThis.toastr?.warning?.('[BS BioTracker] 尚无已注册角色，无法发送追踪请求');
+            else {
+                globalThis.toastr?.success?.('[BS BioTracker] 手动分析已完成');
             }
         }
         finally {
@@ -132681,6 +133047,35 @@ function injectOptionToChatbox(value) {
 // 每页最多 6 个表，超出用左右翻页。
 const HOME_TABLE_PAGE_SIZE = 6;
 let homeTablePageIndex = 0;
+// home/table-view 渲染节流用的轻量数据指纹：
+// 表键集 + 各表名称/行数 + 内容序列化的长度与滚动哈希（能感知原地改值）。
+// 任一步失败都返回 null 哨兵——调用方视 null 为「指纹不可用」，照常重绘（fail-open 到刷新而非卡死旧画面）。
+function computeTableDataFingerprint(tables) {
+    try {
+        const keys = Object.keys(tables || {}).filter((k) => k.startsWith('sheet_')).sort();
+        const parts = [`n=${keys.length}`];
+        for (const key of keys) {
+            const sheet = tables[key] || {};
+            const content = Array.isArray(sheet?.content) ? sheet.content : [];
+            let digest = '';
+            try {
+                const serialized = JSON.stringify(content) || '';
+                let hash = 0;
+                for (let i = 0; i < serialized.length; i += 1)
+                    hash = (((hash << 5) - hash) + serialized.charCodeAt(i)) | 0;
+                digest = `${serialized.length}:${hash}`;
+            }
+            catch (e) {
+                digest = `raw:${content.length}`;
+            }
+            parts.push(`${key}=${String(sheet?.name || '')}#${content.length}#${digest}`);
+        }
+        return parts.join(';');
+    }
+    catch (e) {
+        return null;
+    }
+}
 function renderTablePage(ctx) {
     try {
         const bridge = globalThis.__ACU_BIOTRACKER_BRIDGE__;
@@ -132841,6 +133236,9 @@ function openTableDetail(ctx, key) {
 // 顶层 DOM 渲染场景：面板与适配层同 bundle 同 window。
 // ctx 必须取适配层桥（extensionSettings 指向 settings_ACU.bs_biotracker），
 // 否则 getContextSafe() 拿到 ST 真实 ctx，其 extensionSettings 是 ST 自己的命名空间，面板会渲染空数据。
+// 注意：本模块静态 import 的求值时序早于适配层装桥，下方 `const ctx = resolvePanelCtx()` 求值时
+// 桥通常尚未挂载，必走 getContextSafe() fallback——功能无害：该 ctx 仅用于 appReady 事件订阅；
+// 真正的渲染 ctx 由 bootstrap() 在桥就绪后经 bridge.createCtx() 取得（updateClock 等运行时路径同理）。
 function resolvePanelCtx() {
     const bridge = globalThis.__ACU_BIOTRACKER_BRIDGE__;
     if (bridge && typeof bridge.createCtx === 'function') {
@@ -132867,6 +133265,13 @@ async function bootstrap() {
         installSafeToastr();
         ensurePanelStyles();
         await ensureModal(ctx);
+        // 悬浮球恢复入口（M2）：dismissFloatingSphere 非 TT 宿主下会直接隐藏球，
+        // 必须在此实际注册菜单项，否则球被隐藏后没有任何可见的重新打开入口。
+        // registerMenuItem 内部已含 TT 宿主的 ensureTauriMenuRecovery 与手动注入兜底；
+        // 宿主菜单容器缺失时内部自行重试/跳过，不阻塞面板初始化（异步 fire-and-forget）。
+        registerMenuItem(ctx).catch((error) => {
+            console.warn('[BS BioTracker] 注册悬浮球恢复菜单项失败。', error);
+        });
         // 前端跟随生理追踪开关：开启时默认展示「收起态悬浮球」（点球展开、close 收球），
         // 关闭时仅挂载面板（不显示）；后续由适配层 setBiotrackerEnabled_ACU 联动显隐
         if (typeof bridge.isEnabled === 'function' ? bridge.isEnabled() : true) {
@@ -132875,7 +133280,8 @@ async function bootstrap() {
         renderStatusPanel(ctx);
         // 纯渲染轮询：追踪核心由数据库适配层单实例驱动，面板只定时刷新视图
         if (!globalThis.__bsBtRenderTimerKey__) {
-            let lastRenderedStaticView = '';
+            let lastRenderedView = '';
+            let lastDataFingerprint = null;
             globalThis.__bsBtRenderTimerKey__ = setInterval(() => {
                 try {
                     // H1 门控：页面隐藏（浏览器 tab 切走/最小化）或弹窗未打开时跳过，避免无谓的 DOM 全量重建
@@ -132888,18 +133294,25 @@ async function bootstrap() {
                         return;
                     const viewActive = (selector) => document.querySelector(selector)?.classList.contains('is-active') ?? false;
                     // track-list 是动态追踪视图（状态每轮变化），每 tick 渲染；
-                    // home/table-view 是静态列表，视图无变化时跳过（避免每 2s 全量 innerHTML 重建）
+                    // home/table-view 按「本次渲染所用数据的指纹」节流：视图+指纹都与上次相同才跳过，
+                    // 数据一变（表增删/改名/行数/内容哈希）即照常重绘。旧实现按「视图名是否变化」节流，
+                    // 数据变了视图名没变会被误跳过，导致表格内容不刷新。
                     if (viewActive('#bs-bt-view-track-list')) {
-                        lastRenderedStaticView = '';
+                        lastRenderedView = '';
+                        lastDataFingerprint = null;
                         renderStatusPanel(ctx);
                         return;
                     }
                     const currentStaticView = viewActive('#bs-bt-view-home') ? 'home'
                         : viewActive('#bs-bt-view-table-view') ? 'table-view'
                             : '';
-                    if (currentStaticView === lastRenderedStaticView)
+                    if (!currentStaticView)
                         return;
-                    lastRenderedStaticView = currentStaticView;
+                    const fingerprint = `${currentStaticView}#${computeTableDataFingerprint(globalThis.__ACU_BIOTRACKER_BRIDGE__?.getTables?.() || {})}`;
+                    if (currentStaticView === lastRenderedView && fingerprint !== null && fingerprint === lastDataFingerprint)
+                        return;
+                    lastRenderedView = currentStaticView;
+                    lastDataFingerprint = fingerprint;
                     if (currentStaticView === 'home')
                         renderTablePage(ctx);
                     else if (currentStaticView === 'table-view' && globalThis.__bsBtOpenTableKey__)
@@ -133258,11 +133671,10 @@ function installBiotrackerFrontendBridge() {
                     return {};
                 }
             },
-            // 手动「立即分析」：调顶层单实例追踪入口
+            // 手动「立即分析」：调顶层单实例追踪入口；透传 skip 原因给面板做结果反馈（此前被吞成 {}）
             runTrackerNow: async () => {
                 try {
-                    await runBiotrackerNow_ACU();
-                    return {};
+                    return await runBiotrackerNow_ACU();
                 }
                 catch (e) {
                     logWarn_ACU('[生理追踪] 弹窗触发追踪失败:', e);
@@ -133359,11 +133771,10 @@ function syncPoller() {
     }
 }
 let initialized = false;
-/** 初始化生理追踪模块（entry 启动时调用一次） */
+/** 初始化生理追踪模块（entry 启动时调用一次；失败回滚标记，后续调用可自然重试） */
 function initBiotracker_ACU() {
     if (initialized)
         return;
-    initialized = true;
     // 桥接 biotracker vendor 日志（console.warn/error）到数据库日志系统（高级工具日志查看器可见）
     installBiotrackerConsoleBridge();
     // 挂 iframe 前端桥（弹窗渲染用；追踪核心保持本模块单实例）
@@ -133452,8 +133863,12 @@ function initBiotracker_ACU() {
         logDebug_ACU('[生理追踪] 初始化完成，已注册角色数:', Object.keys(getChatState(ctx, settings).characters || {}).length);
         // 生理追踪恒开启 → 默认出现悬浮窗（biotracker 前端弹窗，纯渲染）
         ensureBiotrackerPopup_ACU();
+        // 初始化主体全部成功才置位：此前先置位、失败不回滚，宿主未就绪时初始化会被永久跳过
+        initialized = true;
     }
     catch (e) {
+        // 回滚置位：下次调用（如 CHAT_CHANGED 等事件链路再次进入初始化）可自然重试
+        initialized = false;
         logWarn_ACU('[生理追踪] 初始化失败（宿主未就绪，等待重试）:', e);
     }
 }
@@ -133511,12 +133926,13 @@ async function registerCharacter_ACU(options) {
         registerInFlight = false;
     }
 }
-/** 手动触发一次追踪分析（调试/入口用） */
+/** 手动触发一次追踪分析（调试/入口用）；透传 runTracker 返回值（skip 时 {skipped:true,reason}，成功 {skipped:false,...}，无返回时 {}）供调用方做结果反馈 */
 async function runBiotrackerNow_ACU() {
     trackerInFlight = true;
     const ctx = createBiotrackerCtx_ACU();
     try {
-        await runTracker(ctx, trackerDeps, 'manual');
+        const result = await runTracker(ctx, trackerDeps, 'manual');
+        return result || {};
     }
     finally {
         trackerInFlight = false;
@@ -133994,7 +134410,8 @@ function getSendTextareaValue_ACU() {
     try {
         return String(jQuery_API_ACU?.('#send_textarea').val() || '');
     }
-    catch {
+    catch (e) {
+        logWarn_ACU('[HostInput] 读取 #send_textarea 值失败（宿主输入框可能暂不可用）:', e);
         return '';
     }
 }
@@ -134004,16 +134421,18 @@ function setSendTextareaValue_ACU(text) {
         $textarea?.val(text);
         $textarea?.trigger('input');
     }
-    catch {
+    catch (e) {
         // 宿主输入框在页面切换期间可能暂时不存在。
+        logWarn_ACU('[HostInput] 写入 #send_textarea 失败（宿主输入框可能暂不可用）:', e);
     }
 }
 function clickSendButton_ACU() {
     try {
         jQuery_API_ACU?.('#send_but').click();
     }
-    catch {
+    catch (e) {
         // 宿主发送按钮在页面切换期间可能暂时不存在。
+        logWarn_ACU('[HostInput] 点击 #send_but 失败（宿主发送按钮可能暂不可用）:', e);
     }
 }
 
@@ -134787,6 +135206,16 @@ function cosineSimilarity_ACU(left, right, leftNorm) {
         return 0;
     return dot / (leftNorm * Math.sqrt(rightNorm));
 }
+// [M5] Rerank fetch 防悬挂超时。目标运行环境（现代 WebView/Tauri）AbortSignal.timeout 可用性存疑，
+// 用手动 AbortController+setTimeout 兜底；AbortController 不可用时退化为无超时（与旧行为一致）。
+const RERANK_FETCH_TIMEOUT_MS_ACU = 30000;
+function createFetchAbortTimer_ACU(timeoutMs) {
+    if (typeof AbortController !== 'function')
+        return null;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
+    return { signal: controller.signal, cleanup: () => clearTimeout(timer) };
+}
 async function rerankCandidates_ACU(config, query, candidates) {
     const endpoint = normalizeText_ACU(config.rerankEndpoint);
     const model = normalizeText_ACU(config.rerankModel);
@@ -134806,12 +135235,21 @@ async function rerankCandidates_ACU(config, query, candidates) {
         if (instruction)
             body.instruction = instruction;
         assertSafeHttpEndpoint_ACU(endpoint);
-        const response = await fetch(endpoint, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify(body),
-            redirect: 'error',
-        });
+        // [M5] 挂 30s 超时：超时 abort 让 fetch 抛 AbortError，由下方既有 catch 记日志并回退 Embedding 排序。
+        const abortTimer = createFetchAbortTimer_ACU(RERANK_FETCH_TIMEOUT_MS_ACU);
+        let response;
+        try {
+            response = await fetch(endpoint, {
+                method: 'POST',
+                headers,
+                body: JSON.stringify(body),
+                redirect: 'error',
+                ...(abortTimer ? { signal: abortTimer.signal } : {}),
+            });
+        }
+        finally {
+            abortTimer?.cleanup();
+        }
         if (!response.ok)
             throw new Error(await response.text().catch(() => response.statusText));
         const payload = await response.json();
@@ -135163,12 +135601,15 @@ async function tryRealignSummaryVectorIndexPointerFromDisk_ACU(params) {
 }
 // T5：query embedding 失败时的降级路径 —— 仅注入最近固定行，不依赖向量检索。
 // 仅在 recentFixedRows 非空时调用；调用方负责确认 recentFixedRows.length > 0。
-async function injectRecentFixedRowsOnly_ACU(recentFixedRows) {
+async function injectRecentFixedRowsOnly_ACU(recentFixedRows, signature) {
     const selected = recentFixedRows
         .map((row) => ({ kind: 'recent_fixed', row }))
         .sort((left, right) => (Number(left.row.rowOrder) || 0) - (Number(right.row.rowOrder) || 0));
     const content = buildSummaryIndexOverwriteContent_ACU(selected);
     await upsertOriginalSummaryIndexEntry_ACU(content);
+    // [M2] 降级注入同样以 upsert 成功为收尾：登记签名后 8s 窗口内才允许 dedupe。
+    lastRuntimeSignature_ACU = signature;
+    lastRuntimeAt_ACU = Date.now();
     return {
         success: true,
         reason: 'query_embedding_failed_recent_fixed_only',
@@ -135194,8 +135635,8 @@ async function processSummaryVectorIndexBeforeGeneration_ACU(options = {}) {
     if (signature === lastRuntimeSignature_ACU && Date.now() - lastRuntimeAt_ACU <= SUMMARY_VECTOR_INDEX_RUNTIME_DEDUPE_MS_ACU) {
         return { success: true, skipped: true, reason: 'deduped' };
     }
-    lastRuntimeSignature_ACU = signature;
-    lastRuntimeAt_ACU = Date.now();
+    // [M2] 签名登记移到成功收尾（upsert 完成处）：失败轮次不再谎报 success:'deduped'，
+    // 8s 窗口内的下一次调用可以正常重试。
     const config = getEffectiveSummaryVectorIndexConfig_ACU();
     const validation = validateSummaryVectorIndexConfig_ACU(config);
     if (!validation.valid) {
@@ -135343,7 +135784,7 @@ async function processSummaryVectorIndexBeforeGeneration_ACU(options = {}) {
         if (queryVector.length === 0) {
             if (recentFixedRows.length > 0) {
                 logWarn_ACU('[交火模式纪要索引] query embedding 返回空向量，降级为仅注入最近固定行:', userInput);
-                return await injectRecentFixedRowsOnly_ACU(recentFixedRows);
+                return await injectRecentFixedRowsOnly_ACU(recentFixedRows, signature);
             }
             return { success: false, skipped: true, reason: 'empty_query_embedding' };
         }
@@ -135351,7 +135792,7 @@ async function processSummaryVectorIndexBeforeGeneration_ACU(options = {}) {
     catch (error) {
         if (recentFixedRows.length > 0) {
             logWarn_ACU('[交火模式纪要索引] query embedding 失败，降级为仅注入最近固定行，继续原始生成:', error);
-            return await injectRecentFixedRowsOnly_ACU(recentFixedRows);
+            return await injectRecentFixedRowsOnly_ACU(recentFixedRows, signature);
         }
         throw error;
     }
@@ -135422,6 +135863,9 @@ async function processSummaryVectorIndexBeforeGeneration_ACU(options = {}) {
     }
     const content = buildSummaryIndexOverwriteContent_ACU(selected);
     await upsertOriginalSummaryIndexEntry_ACU(content);
+    // [M2] 成功收尾处登记 dedupe 签名：upsert 失败抛错时不登记，8s 窗口内的重试不被吞掉。
+    lastRuntimeSignature_ACU = signature;
+    lastRuntimeAt_ACU = Date.now();
     logDebug_ACU(`[交火模式纪要索引] 已覆盖原概要索引条目：${selected.length} 条（其中固定注入 ${recentFixedRows.length} 条，排序选取 ${selected.length - recentFixedRows.length} 条），关键词 ${keywords.length} 个，输出顺序按纪要表原 rowOrder。`);
     return { success: true, keywordCount: keywords.length, candidateCount: candidates.length, injectedCount: selected.length, denseCandidateCount: denseCandidates.length, sparseCandidateCount: sparseCandidates.length, fusionCandidateCount: candidates.length };
 }
@@ -135591,6 +136035,65 @@ async function processSummaryVectorIndexBeforeGenerationWithUI_ACU(options = {})
 
 // init.ts — 初始化编排（presentation 层：负责事件绑定、UI 初始化、模块串联）
 // 从 05_core_tail.js 迁入
+// ═══ [H2/M4] 启动期重建链互斥守卫 ═══
+// 背景：启动时可能存在两条并发的重建链——chatId 可用路径的 setTimeout(initWithChatId, 1000)
+// 与 CHAT_CHANGED 的 1200ms 延迟链，二者执行同一套 loadAllChatMessages / merged refresh /
+// snapshot hydrate；同名聊天连续两次 CHAT_CHANGED 也会排出两个定时器并发执行，产生竞态。
+// 机制（参照 chat-mutation-scheduler.ts 的 generation+running 范式）：
+// - 排程延迟链时递增 initChainGeneration_ACU 并捕获当次代次号；
+// - 回调触发时先比对代次号（不等 ⇒ 已被更晚排程的链取代，放弃），再抢 running 标志
+//   （被占 ⇒ 放弃，由更晚排程的那条链负责本轮重建）。
+let initChainGeneration_ACU = 0;
+let initChainRunning_ACU = false;
+function scheduleInitChainRun_ACU(delayMs, label, body) {
+    initChainGeneration_ACU += 1;
+    const scheduledGeneration = initChainGeneration_ACU;
+    logDebug_ACU(`[InitChain] 排程「${label}」（代次 ${scheduledGeneration}，延迟 ${delayMs}ms）。`);
+    setTimeout(() => { void runInitChainRound_ACU(scheduledGeneration, label, body); }, delayMs);
+}
+async function runInitChainRound_ACU(scheduledGeneration, label, body) {
+    // ① 代次比对：期间又有新链排程（或旧链被新事件取代），本轮视为过期
+    if (scheduledGeneration !== initChainGeneration_ACU) {
+        logDebug_ACU(`[InitChain] 「${label}」代次过期（${scheduledGeneration} ≠ 当前 ${initChainGeneration_ACU}），放弃本轮启动重建。`);
+        return;
+    }
+    // ② 抢 running 标志：被占则放弃（更晚排程的链到达时会以最新代次执行）
+    if (initChainRunning_ACU) {
+        logWarn_ACU(`[InitChain] 「${label}」到达时已有重建链在执行，放弃本轮并发请求。`);
+        return;
+    }
+    initChainRunning_ACU = true;
+    try {
+        await body();
+    }
+    catch (bodyError) {
+        // 兜底：任何走守卫入口的链不允许产生未处理 rejection；CHAT_CHANGED 链内部有自己的
+        // catch（含轻量恢复），走到这里的通常是 initWithChatId 链。
+        await recoverDelayedRebuildFailure_ACU(`[InitChain] 「${label}」重建链`, bodyError);
+    }
+    finally {
+        initChainRunning_ACU = false;
+    }
+}
+// [M3] 最近一轮延迟重建中 merged refresh 是否已成功过；异常恢复时避免对同一轮重复刷新
+let lastDelayedRebuildRefreshOk_ACU = false;
+function describeError_ACU(error) {
+    return error instanceof Error ? (error.stack || error.message) : String(error);
+}
+/** [M3] 延迟重建/事件处理失败后的兜底：logError 并尽力补调一次已有的轻量恢复（merged refresh）。 */
+async function recoverDelayedRebuildFailure_ACU(scope, error) {
+    logError_ACU(`${scope} 失败: ${describeError_ACU(error)}`);
+    if (lastDelayedRebuildRefreshOk_ACU)
+        return; // 本轮刷新已成功过，无需补救
+    try {
+        logWarn_ACU(`${scope} 异常后尝试一次轻量恢复（refreshMergedDataAndNotifyWithUI）...`);
+        await refreshMergedDataAndNotifyWithUI_ACU();
+        lastDelayedRebuildRefreshOk_ACU = true;
+    }
+    catch (recoverError) {
+        logError_ACU(`${scope} 轻量恢复失败（仅记录，不再重试）: ${describeError_ACU(recoverError)}`);
+    }
+}
 // [从 state-manager.ts 搬入 presentation 层] 安装发送意图捕捉钩子（DOM 事件绑定）
 async function ensureInitialSeedCheckpointBeforeGeneration_ACU(reason, { allowPendingFirstUserMessage = true } = {}) {
     try {
@@ -135617,6 +136120,8 @@ function notifyRuntimeTableCleared_ACU() {
     }
     catch (_) { }
 }
+// [L9] 此处字段集与 service/worldbook/injection-engine-state.ts resetScriptStateForNewChat_ACU（无效聊天名分支）的手写清空保持同步；
+// 差异：本 presentation 层版本额外 disposeStorageProvider()，clearRuntimeForNoActiveChat_ACU 还会 notifyRuntimeTableCleared_ACU()。字段变动需两边同步。
 function clearDerivedRuntimeState_ACU() {
     disposeStorageProvider();
     _set_currentJsonTableData_ACU(null);
@@ -135638,22 +136143,25 @@ function clearRuntimeForNoActiveChat_ACU(chatFileName) {
     notifyRuntimeTableCleared_ACU();
     logDebug_ACU(`ACU: No active chat after CHAT_CHANGED (${String(chatFileName)}), runtime table state cleared.`);
 }
+// [M1] 发送意图钩子改按「当前已绑定元素实例」记录（沿用 __ACU_sendIntentHooksInstalled 结构，
+// send/enter 字段由布尔改为当前绑定的元素引用）：宿主 DOM 重建后 #send_but/#send_textarea 是新
+// 元素实例，必须按实例比对才能感知并重绑。
+const SEND_INTENT_HOOK_MAX_SELF_RETRY_ACU = 10; // [L5] 元素缺失时自重排重试上限
 function installSendIntentCaptureHooks_ACU() {
     try {
         const parentDoc = (window.parent || window).document;
         const doc = parentDoc || document;
-        if (!window.__ACU_sendIntentHooksInstalled) {
-            window.__ACU_sendIntentHooksInstalled = { send: false, enter: false };
-        }
+        const hooksState = window.__ACU_sendIntentHooksInstalled
+            || (window.__ACU_sendIntentHooksInstalled = { send: null, enter: null });
         const sendBtn = doc.getElementById('send_but');
-        if (sendBtn && !window.__ACU_sendIntentHooksInstalled.send) {
+        if (sendBtn && hooksState.send !== sendBtn) {
             sendBtn.addEventListener('click', () => markUserSendIntent_ACU(), true);
             sendBtn.addEventListener('pointerup', () => markUserSendIntent_ACU(), true);
             sendBtn.addEventListener('touchend', () => markUserSendIntent_ACU(), true);
-            window.__ACU_sendIntentHooksInstalled.send = true;
+            hooksState.send = sendBtn;
         }
         const ta = doc.getElementById('send_textarea');
-        if (ta && !window.__ACU_sendIntentHooksInstalled.enter) {
+        if (ta && hooksState.enter !== ta) {
             ta.addEventListener('keydown', (e) => {
                 try {
                     const key = e.key || e.code;
@@ -135663,10 +136171,22 @@ function installSendIntentCaptureHooks_ACU() {
                 }
                 catch (err) { }
             }, true);
-            window.__ACU_sendIntentHooksInstalled.enter = true;
+            hooksState.enter = ta;
         }
-        if ((!sendBtn || !ta) && !window.__ACU_sendIntentHooksRetryScheduled) {
+        if (sendBtn && ta) {
+            window.__ACU_sendIntentHooksRetryCount = 0; // 绑定齐全，复位自重试计数
+            return;
+        }
+        // [L5] 元素缺失时自重排重试，加上限防止无限循环；超限放弃自动重试，
+        // 但 CHAT_CHANGED 重装路径仍会显式调用本函数按元素实例比对补绑。
+        const retryCount = Number(window.__ACU_sendIntentHooksRetryCount) || 0;
+        if (retryCount >= SEND_INTENT_HOOK_MAX_SELF_RETRY_ACU) {
+            logWarn_ACU(`[触发门控] 发送意图钩子自重试已达上限（${SEND_INTENT_HOOK_MAX_SELF_RETRY_ACU} 次；缺 send_but=${!sendBtn}, 缺 send_textarea=${!ta}），停止自动重试，等待 CHAT_CHANGED 重装路径补绑。`);
+            return;
+        }
+        if (!window.__ACU_sendIntentHooksRetryScheduled) {
             window.__ACU_sendIntentHooksRetryScheduled = true;
+            window.__ACU_sendIntentHooksRetryCount = retryCount + 1;
             setTimeout(() => {
                 window.__ACU_sendIntentHooksRetryScheduled = false;
                 installSendIntentCaptureHooks_ACU();
@@ -135677,8 +136197,156 @@ function installSendIntentCaptureHooks_ACU() {
         // ignore
     }
 }
+/**
+ * [H2/M3] CHAT_CHANGED 延迟重建链执行体（原 1200ms setTimeout 体迁入）：
+ * 持久化消息读取 → 模板应用 → merged refresh → SQLite snapshot hydrate → 向量索引预热/队列恢复。
+ * 整体包一层 try/catch：缓存已清后的任何 await 抛错都记录并尽力轻量恢复，不产生未处理 rejection。
+ */
+async function runChatChangedDelayedRebuild_ACU(chatFileName) {
+    try {
+        lastDelayedRebuildRefreshOk_ACU = false; // [M3]
+        const scheduledChatIdentifier_ACU = cleanChatName_ACU(chatFileName);
+        if (scheduledChatIdentifier_ACU && currentChatFileIdentifier_ACU !== scheduledChatIdentifier_ACU) {
+            logDebug_ACU(`ACU: Skip delayed chat refresh because active chat already changed to "${currentChatFileIdentifier_ACU || '未知'}".`);
+            return;
+        }
+        if (!hasActiveChatMessages_ACU()) {
+            clearRuntimeForNoActiveChat_ACU(chatFileName);
+            return;
+        }
+        // 先重新读取当前聊天持久化消息，再应用 chat_metadata 中的聊天模板快照。
+        // 此处是“持久化 → 派生缓存”的唯一重建入口，不能依赖切换前遗留的 TABLE_TEMPLATE/currentJsonTableData。
+        await loadAllChatMessages_ACU();
+        applyTemplateScopeForCurrentChat_ACU();
+        // 阶段 D：合并刷新（一轮 V2 replay，产出 canonical）与 provider hydrate 收敛。
+        // 先执行 merged refresh 拿到最终 canonical 数据，SQLite 模式下用 envelope
+        // hydrate provider（零 replay）；refresh 失败/degraded/身份漂移时回退冷
+        // reloadStorageProvider（保持既有两轮链路的完整语义与 fallback 状态机）。
+        // UI 通知由 refreshMergedDataAndNotifyWithUI_ACU 内部完成。
+        const refreshResult = await refreshMergedDataAndNotifyWithUI_ACU();
+        lastDelayedRebuildRefreshOk_ACU = true; // [M3] 本轮合并刷新已成功
+        if (isSqliteMode()) {
+            const envelope = refreshResult
+                && !refreshResult.degraded
+                && refreshResult.mergedData
+                ? createCanonicalSnapshotEnvelope_ACU({
+                    data: refreshResult.mergedData,
+                    chatIdentity: String(currentChatFileIdentifier_ACU || ''),
+                    isolationKey: getCurrentIsolationKey_ACU(),
+                    storageMode: 'sqlite',
+                    lifecycleEpoch: getRuntimeLifecycleEpoch_ACU(),
+                    source: 'merged_refresh',
+                })
+                : null;
+            if (envelope) {
+                logDebug_ACU('[SQLite] CHAT_CHANGED: 用 canonical snapshot hydrate 内存数据库...');
+                const hydrated = await hydrateStorageProviderFromSnapshot_ACU(envelope);
+                if (hydrated.ok) {
+                    logDebug_ACU('[SQLite] CHAT_CHANGED: snapshot hydrate 完成');
+                }
+                else if (hydrated.failureCode === 'stale_load_discarded') {
+                    logDebug_ACU(`[SQLite] CHAT_CHANGED: snapshot 身份漂移（${hydrated.failureCode}），回退冷 reload。`);
+                    try {
+                        await reloadStorageProvider();
+                    }
+                    catch (e) {
+                        logError_ACU(`[SQLite] CHAT_CHANGED: 冷 reload 失败: ${e?.message}`);
+                    }
+                }
+                else {
+                    // provider_fallback（SQLite hydrate 失败已自动回退 native）或
+                    // provider_load_failed：保持 hydrate 返回的 fallback 状态机。
+                    logError_ACU(`[SQLite] CHAT_CHANGED: snapshot hydrate 失败: ${hydrated.failureCode || 'unknown'}${hydrated.error ? `: ${hydrated.error}` : ''}`);
+                }
+            }
+            else {
+                logDebug_ACU('[SQLite] CHAT_CHANGED: merged refresh 未产出可用 canonical（degraded/空数据），回退冷 reload。');
+                try {
+                    await reloadStorageProvider();
+                }
+                catch (e) {
+                    logError_ACU(`[SQLite] CHAT_CHANGED: 数据库重建失败: ${e?.message}`);
+                }
+            }
+        }
+        // [交火向量索引] 聊天数据刷新完成后，预热当前聊天对应的外置分片缓存。
+        // 注意：必须放在 refreshMergedDataAndNotifyWithUI_ACU 之后，否则可能读取到旧聊天的 manifest。
+        const vectorCacheResult = await preloadSummaryVectorIndexCacheForCurrentChat_ACU();
+        logDebug_ACU(`[交火向量索引] CHAT_CHANGED 缓存预热结果：success=${vectorCacheResult.success}, skipped=${vectorCacheResult.skipped === true}, reason=${vectorCacheResult.reason || 'none'}, chunks=${vectorCacheResult.chunkCount}, indexId=${vectorCacheResult.indexId || 'none'}`);
+        if (shouldRebuildSummaryVectorIndexWithUI_ACU(vectorCacheResult.reason)) {
+            try {
+                await rebuildCurrentSummaryVectorIndexWithUI_ACU();
+            }
+            catch (rebuildError) {
+                logWarn_ACU('[交火向量索引] 失效索引已删除，但普通重建路径执行失败:', rebuildError);
+            }
+        }
+        const shouldRestoreFlushQueue = !String(vectorCacheResult.reason || '').startsWith('external_files_missing_state_clear');
+        if (!shouldRestoreFlushQueue) {
+            logWarn_ACU(`[交火向量索引] CHAT_CHANGED 跳过 flush 队列恢复：missing-file 状态清理未完成或已进入重建恢复，reason=${vectorCacheResult.reason || 'unknown'}`);
+        }
+        if (shouldRestoreFlushQueue)
+            try {
+                const restoredFlushCount = await restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU();
+                if (restoredFlushCount > 0) {
+                    logDebug_ACU(`[交火向量索引] CHAT_CHANGED 已恢复防抖归档队列：count=${restoredFlushCount}`);
+                }
+            }
+            catch (restoreFlushError) {
+                logWarn_ACU('[交火向量索引] CHAT_CHANGED 恢复防抖归档队列失败:', restoreFlushError);
+            }
+        logDebug_ACU('ACU: Chat data reload and UI refresh triggered after chat change (Delayed).');
+    }
+    catch (error) {
+        // [M3] 同步段已清派生缓存，此处任何失败都要兜底恢复，避免停留空白态
+        await recoverDelayedRebuildFailure_ACU('CHAT_CHANGED 延迟重建', error);
+    }
+}
+/**
+ * [H2/M3] CHAT_CHANGED 处理体（原内联匿名回调迁出）：
+ * - 同步段：中止在飞调用 → 无活动聊天早退 → 立即清派生缓存 → 重置脚本状态 → 重装意图钩子 → 加载预设；
+ * - 延迟段：经 scheduleInitChainRun_ACU 互斥守卫入口排程（代次号 + running 标志，参照 chat-mutation-scheduler）。
+ * 整体 try/catch 兜底，确保不再产生未处理 rejection。
+ */
+async function handleChatChangedEvent_ACU(chatFileName) {
+    try {
+        logDebug_ACU(`ACU CHAT_CHANGED event: ${chatFileName}`);
+        // [中止] 楼层变更（删楼/ROLL/切聊天）时中止所有在飞的依赖楼层的 API 调用
+        //（表格填表/生理追踪等），避免用旧上下文的结果写入当前状态。
+        abortOnChatMutation_ACU();
+        const hasValidChatFileName_ACU = isValidChatFileName_ACU(chatFileName);
+        if (!hasValidChatFileName_ACU && !hasActiveChatMessages_ACU()) {
+            clearRuntimeForNoActiveChat_ACU(chatFileName);
+            return;
+        }
+        // [修复] 换卡/换聊天时立即丢弃所有派生缓存。
+        // 后续延迟阶段只从当前聊天持久化 metadata / 消息日志重建，避免旧表和旧模板在窗口期继续显示。
+        if (hasValidChatFileName_ACU) {
+            clearDerivedRuntimeState_ACU();
+            notifyRuntimeTableCleared_ACU();
+            cancelPendingChatMutationRefresh_ACU();
+            if (isSqliteMode())
+                logDebug_ACU('[SQLite] CHAT_CHANGED: 立即销毁旧数据库实例');
+        }
+        await resetScriptStateForNewChat_ACU(chatFileName);
+        // [触发门控] generationGate 重置已搬到 service 层的 resetScriptStateForNewChat_ACU 中
+        // [触发门控] 每次切换聊天都尝试安装一次 capture 钩子（防止 DOM 重新渲染导致丢失）
+        installSendIntentCaptureHooks_ACU();
+        // [剧情推进] 切换聊天时加载预设
+        await loadPresetAndCleanCharacterData_ACU();
+        // [新增] 切换角色卡（聊天）时，强制从新聊天记录的本地数据读取最新的表格并刷新UI
+        logDebug_ACU('ACU: Chat changed, forcing reload of table data from new chat history.');
+        // [H2/M4] 排程 1200ms 延迟重建链：排程即递增代次号；同名聊天连续两次事件时，
+        // 后排程者的代次更新，先到的定时器因代次不等被放弃，两个定时器不会并发重建。
+        scheduleInitChainRun_ACU(1200, 'CHAT_CHANGED', () => runChatChangedDelayedRebuild_ACU(chatFileName));
+    }
+    catch (error) {
+        // [M3] 同步段在清缓存后任一 await 抛错：logError + 尽力一次轻量恢复
+        await recoverDelayedRebuildFailure_ACU('CHAT_CHANGED 处理', error);
+    }
+}
 function mainInitialize_ACU() {
-    console.log('ACU_INIT_DEBUG: mainInitialize_ACU called.');
+    logDebug_ACU('ACU_INIT_DEBUG: mainInitialize_ACU called.');
     if (attemptToLoadCoreApis_ACU()) {
         logDebug_ACU('AutoCardUpdater Initialization successful! Core APIs loaded.');
         showToastr_ACU('success', '数据库已加载！', '数据库');
@@ -135709,127 +136377,13 @@ function mainInitialize_ACU() {
                     logDebug_ACU('[提示词模板] 已注册 CHAT_COMPLETION_SETTINGS_READY 事件监听（on）');
                 }
             }
-            SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.CHAT_CHANGED, async (chatFileName) => {
-                logDebug_ACU(`ACU CHAT_CHANGED event: ${chatFileName}`);
-                // [中止] 楼层变更（删楼/ROLL/切聊天）时中止所有在飞的依赖楼层的 API 调用
-                //（表格填表/生理追踪等），避免用旧上下文的结果写入当前状态。
-                abortOnChatMutation_ACU();
-                const hasValidChatFileName_ACU = isValidChatFileName_ACU(chatFileName);
-                if (!hasValidChatFileName_ACU && !hasActiveChatMessages_ACU()) {
-                    clearRuntimeForNoActiveChat_ACU(chatFileName);
-                    return;
-                }
-                // [修复] 换卡/换聊天时立即丢弃所有派生缓存。
-                // 后续延迟阶段只从当前聊天持久化 metadata / 消息日志重建，避免旧表和旧模板在窗口期继续显示。
-                if (hasValidChatFileName_ACU) {
-                    clearDerivedRuntimeState_ACU();
-                    notifyRuntimeTableCleared_ACU();
-                    cancelPendingChatMutationRefresh_ACU();
-                    if (isSqliteMode())
-                        logDebug_ACU('[SQLite] CHAT_CHANGED: 立即销毁旧数据库实例');
-                }
-                await resetScriptStateForNewChat_ACU(chatFileName);
-                // [触发门控] generationGate 重置已搬到 service 层的 resetScriptStateForNewChat_ACU 中
-                // [触发门控] 每次切换聊天都尝试安装一次 capture 钩子（防止 DOM 重新渲染导致丢失）
-                installSendIntentCaptureHooks_ACU();
-                // [剧情推进] 切换聊天时加载预设
-                await loadPresetAndCleanCharacterData_ACU();
-                // [新增] 切换角色卡（聊天）时，强制从新聊天记录的本地数据读取最新的表格并刷新UI
-                logDebug_ACU('ACU: Chat changed, forcing reload of table data from new chat history.');
-                const scheduledChatIdentifier_ACU = cleanChatName_ACU(chatFileName);
-                // 稍作延迟以确保SillyTavern已完全加载新聊天的消息列表
-                setTimeout(async () => {
-                    if (scheduledChatIdentifier_ACU && currentChatFileIdentifier_ACU !== scheduledChatIdentifier_ACU) {
-                        logDebug_ACU(`ACU: Skip delayed chat refresh because active chat already changed to "${currentChatFileIdentifier_ACU || '未知'}".`);
-                        return;
-                    }
-                    if (!hasActiveChatMessages_ACU()) {
-                        clearRuntimeForNoActiveChat_ACU(chatFileName);
-                        return;
-                    }
-                    // 先重新读取当前聊天持久化消息，再应用 chat_metadata 中的聊天模板快照。
-                    // 此处是“持久化 → 派生缓存”的唯一重建入口，不能依赖切换前遗留的 TABLE_TEMPLATE/currentJsonTableData。
-                    await loadAllChatMessages_ACU();
-                    applyTemplateScopeForCurrentChat_ACU();
-                    // 阶段 D：合并刷新（一轮 V2 replay，产出 canonical）与 provider hydrate 收敛。
-                    // 先执行 merged refresh 拿到最终 canonical 数据，SQLite 模式下用 envelope
-                    // hydrate provider（零 replay）；refresh 失败/degraded/身份漂移时回退冷
-                    // reloadStorageProvider（保持既有两轮链路的完整语义与 fallback 状态机）。
-                    // UI 通知由 refreshMergedDataAndNotifyWithUI_ACU 内部完成。
-                    const refreshResult = await refreshMergedDataAndNotifyWithUI_ACU();
-                    if (isSqliteMode()) {
-                        const envelope = refreshResult
-                            && !refreshResult.degraded
-                            && refreshResult.mergedData
-                            ? createCanonicalSnapshotEnvelope_ACU({
-                                data: refreshResult.mergedData,
-                                chatIdentity: String(currentChatFileIdentifier_ACU || ''),
-                                isolationKey: getCurrentIsolationKey_ACU(),
-                                storageMode: 'sqlite',
-                                lifecycleEpoch: getRuntimeLifecycleEpoch_ACU(),
-                                source: 'merged_refresh',
-                            })
-                            : null;
-                        if (envelope) {
-                            logDebug_ACU('[SQLite] CHAT_CHANGED: 用 canonical snapshot hydrate 内存数据库...');
-                            const hydrated = await hydrateStorageProviderFromSnapshot_ACU(envelope);
-                            if (hydrated.ok) {
-                                logDebug_ACU('[SQLite] CHAT_CHANGED: snapshot hydrate 完成');
-                            }
-                            else if (hydrated.failureCode === 'stale_load_discarded') {
-                                logDebug_ACU(`[SQLite] CHAT_CHANGED: snapshot 身份漂移（${hydrated.failureCode}），回退冷 reload。`);
-                                try {
-                                    await reloadStorageProvider();
-                                }
-                                catch (e) {
-                                    logError_ACU(`[SQLite] CHAT_CHANGED: 冷 reload 失败: ${e?.message}`);
-                                }
-                            }
-                            else {
-                                // provider_fallback（SQLite hydrate 失败已自动回退 native）或
-                                // provider_load_failed：保持 hydrate 返回的 fallback 状态机。
-                                logError_ACU(`[SQLite] CHAT_CHANGED: snapshot hydrate 失败: ${hydrated.failureCode || 'unknown'}${hydrated.error ? `: ${hydrated.error}` : ''}`);
-                            }
-                        }
-                        else {
-                            logDebug_ACU('[SQLite] CHAT_CHANGED: merged refresh 未产出可用 canonical（degraded/空数据），回退冷 reload。');
-                            try {
-                                await reloadStorageProvider();
-                            }
-                            catch (e) {
-                                logError_ACU(`[SQLite] CHAT_CHANGED: 数据库重建失败: ${e?.message}`);
-                            }
-                        }
-                    }
-                    // [交火向量索引] 聊天数据刷新完成后，预热当前聊天对应的外置分片缓存。
-                    // 注意：必须放在 refreshMergedDataAndNotifyWithUI_ACU 之后，否则可能读取到旧聊天的 manifest。
-                    const vectorCacheResult = await preloadSummaryVectorIndexCacheForCurrentChat_ACU();
-                    logDebug_ACU(`[交火向量索引] CHAT_CHANGED 缓存预热结果：success=${vectorCacheResult.success}, skipped=${vectorCacheResult.skipped === true}, reason=${vectorCacheResult.reason || 'none'}, chunks=${vectorCacheResult.chunkCount}, indexId=${vectorCacheResult.indexId || 'none'}`);
-                    if (shouldRebuildSummaryVectorIndexWithUI_ACU(vectorCacheResult.reason)) {
-                        try {
-                            await rebuildCurrentSummaryVectorIndexWithUI_ACU();
-                        }
-                        catch (rebuildError) {
-                            logWarn_ACU('[交火向量索引] 失效索引已删除，但普通重建路径执行失败:', rebuildError);
-                        }
-                    }
-                    const shouldRestoreFlushQueue = !String(vectorCacheResult.reason || '').startsWith('external_files_missing_state_clear');
-                    if (!shouldRestoreFlushQueue) {
-                        logWarn_ACU(`[交火向量索引] CHAT_CHANGED 跳过 flush 队列恢复：missing-file 状态清理未完成或已进入重建恢复，reason=${vectorCacheResult.reason || 'unknown'}`);
-                    }
-                    if (shouldRestoreFlushQueue)
-                        try {
-                            const restoredFlushCount = await restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU();
-                            if (restoredFlushCount > 0) {
-                                logDebug_ACU(`[交火向量索引] CHAT_CHANGED 已恢复防抖归档队列：count=${restoredFlushCount}`);
-                            }
-                        }
-                        catch (restoreFlushError) {
-                            logWarn_ACU('[交火向量索引] CHAT_CHANGED 恢复防抖归档队列失败:', restoreFlushError);
-                        }
-                    logDebug_ACU('ACU: Chat data reload and UI refresh triggered after chat change (Delayed).');
-                }, 1200); // 增加延迟到1200ms，给SillyTavern更多的DOM渲染和上下文切换时间
-            });
+            // [L4] 与其余注册一致的 eventTypes 存在性守卫（eventSource/eventTypes 整体缺失已有外层守卫）。
+            // [H2/M3] 处理体抽至模块级 handleChatChangedEvent_ACU：整体 try/catch，延迟链走互斥守卫入口。
+            if (SillyTavern_API_ACU.eventTypes.CHAT_CHANGED) {
+                SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.CHAT_CHANGED, (chatFileName) => {
+                    void handleChatChangedEvent_ACU(chatFileName);
+                });
+            }
             // [触发门控] 记录“用户真实发送”的消息ID，用于剧情推进触发判定
             if (SillyTavern_API_ACU.eventTypes.MESSAGE_SENT) {
                 SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.MESSAGE_SENT, (messageId) => {
@@ -135985,7 +136539,8 @@ function mainInitialize_ACU() {
                                 // 写回 params 和消息对象
                                 params.prompt = s1.finalMessage;
                                 lastMessage.mes = s1.finalMessage;
-                                SillyTavern_API_ACU.eventSource.emit(SillyTavern_API_ACU.eventTypes.MESSAGE_UPDATED, lastMessageIndex);
+                                // [L6] 裸 emit 改走 chat-gateway 的统一出口（含 eventTypes 缺失降级与空值防御）
+                                emitMessageUpdated_ACU(lastMessageIndex);
                                 if (getSendTextareaValue_ACU() === s1.originalMessage)
                                     setSendTextareaValue_ACU('');
                                 break;
@@ -136055,6 +136610,7 @@ function mainInitialize_ACU() {
         // 这确保了无论脚本何时加载，都能正确初始化。
         // [修复] 添加轮询重试机制：如果 chatId 暂时不可用，持续轮询直到可用
         const initWithChatId = async (chatId) => {
+            lastDelayedRebuildRefreshOk_ACU = false; // [M3]
             logDebug_ACU(`ACU: Initializing with current chat on load: ${chatId}`);
             await resetScriptStateForNewChat_ACU(chatId);
             await loadPresetAndCleanCharacterData_ACU();
@@ -136072,6 +136628,7 @@ function mainInitialize_ACU() {
             // 老卡（有聊天历史）从聊天记录合并数据建表；新卡（无数据）由 refresh
             // 走 guide/模板基底，hydrate 失败或 degraded 时回退冷 reload。
             const refreshResult = await refreshMergedDataAndNotifyWithUI_ACU();
+            lastDelayedRebuildRefreshOk_ACU = true; // [M3]
             if (isSqliteMode()) {
                 const envelope = refreshResult
                     && !refreshResult.degraded
@@ -136116,10 +136673,8 @@ function mainInitialize_ACU() {
             }
         };
         if (SillyTavern_API_ACU && SillyTavern_API_ACU.chatId) {
-            // chatId 已可用，延迟初始化
-            setTimeout(async () => {
-                await initWithChatId(SillyTavern_API_ACU.chatId);
-            }, 1000);
+            // chatId 已可用，延迟初始化。[H2/M4] 与 CHAT_CHANGED 延迟链共用同一互斥守卫入口
+            scheduleInitChainRun_ACU(1000, 'initWithChatId', () => initWithChatId(SillyTavern_API_ACU.chatId));
         }
         else {
             // chatId 暂时不可用，启动轮询重试（每200ms检查一次，最多等15秒）
@@ -136132,7 +136687,7 @@ function mainInitialize_ACU() {
                 if (chatId) {
                     clearInterval(pollTimer);
                     logDebug_ACU(`ACU: chatId became available after ${pollCount * 200}ms polling: ${chatId}`);
-                    await initWithChatId(chatId);
+                    scheduleInitChainRun_ACU(0, 'chatId-polling', () => initWithChatId(chatId));
                 }
                 else if (pollCount >= maxPolls) {
                     clearInterval(pollTimer);
@@ -136186,8 +136741,16 @@ function notifyTableUpdateCallbacksSafely_ACU(ctx) {
     try {
         hasPendingTableUpdateNotification_ACU = false;
         notifyTableUpdateCallbacksOnce_ACU(ctx);
-        if (hasPendingTableUpdateNotification_ACU) {
+        // [M2] 排空改为 while 循环：第二段通知执行期间回调同步触发的新 pending
+        // 也会被继续消费，不再被丢弃。防重入标志逻辑保持不变（异步触发仍走排队合并）。
+        // 上限保护：回调在通知期间持续同步回推 notify 时终止排空，避免死循环卡死主线程。
+        let drainRounds = 0;
+        while (hasPendingTableUpdateNotification_ACU) {
             hasPendingTableUpdateNotification_ACU = false;
+            if (++drainRounds > 10) {
+                logWarn_ACU('[回调管理] 表格更新通知连续重入超过 10 轮，终止本轮排空（疑似回调内同步回推 notify）。');
+                break;
+            }
             notifyTableUpdateCallbacksOnce_ACU(ctx);
         }
     }
@@ -136429,7 +136992,9 @@ function createCoreDataApi(ctx) {
     return {
         // 导出当前表格数据
         exportTableAsJson: function () {
-            return currentJsonTableData_ACU || {};
+            // [M3] 返回深拷贝：此前直接返回活引用，调用方改写导出对象会穿透修改
+            // 运行时 currentJsonTableData_ACU。该 API 为手动/第三方低频调用，深拷贝开销可接受。
+            return currentJsonTableData_ACU ? JSON.parse(JSON.stringify(currentJsonTableData_ACU)) : {};
         },
         // 导入并覆盖当前表格数据；默认外部导入会持久化，传 { persist:false } / { mode:'restore' } 时仅恢复运行时。
         importTableAsJson: async function (jsonString, options) {
@@ -137119,8 +137684,13 @@ function createTableCrudApi(ctx) {
                             return { success: false, error: `Table "${tableName}" not found.` };
                         }
                         const workingSheet = workingTarget.sheet;
+                        // [L3] 越界补行复用 insertRow 的稳定 row_id 分配器：
+                        // 此前补行 row[0]='' 导致下方 rowId 取空、row_upsert 操作列表为空，
+                        // 补出的幽灵行永远不入库。预留集在循环外创建，逐行分配不重号。
+                        const paddedRowIdReservation = createStableRowIdReservation_ACU(workingSheet.content.slice(1));
                         while (workingSheet.content.length <= normalizedRowIndex) {
                             const newRow = new Array((workingSheet.content[0] || []).length).fill('');
+                            newRow[0] = allocateStableRowId_ACU(paddedRowIdReservation);
                             workingSheet.content.push(newRow);
                         }
                         const headers = workingSheet.content[0] || [];
@@ -141958,7 +142528,32 @@ const ctx = {
 };
 const sqlApi = createSqlApi(ctx);
 // --- 组装所有领域 API ---
-const api = Object.assign({}, createCallbackApi(ctx), createCoreDataApi(ctx), createTableCrudApi(ctx), createTableLockApi(ctx), createTemplatePresetApi(ctx), createPlotPresetApi(ctx), createDataAdminApi(ctx), createSettingsConfigApi(ctx), createWorldbookAiApi(ctx), createAgentWorldbookApi(ctx), createPerformanceDiagnosticsApi(), sqlApi);
+// [M7] 逐键合并并检测重名：保持 Object.assign「后注册者胜出」的既有语义，
+// 但对重复键打 warn 指明被覆盖方，避免静默覆盖（如 openVisualizer 曾在
+// data-admin-api 与 settings-config-api 中重复定义）。不删除重复定义本身。
+const apiGroupEntries = [
+    { name: 'callback', methods: createCallbackApi(ctx) },
+    { name: 'core-data', methods: createCoreDataApi(ctx) },
+    { name: 'table-crud', methods: createTableCrudApi(ctx) },
+    { name: 'table-lock', methods: createTableLockApi(ctx) },
+    { name: 'template-preset', methods: createTemplatePresetApi(ctx) },
+    { name: 'plot-preset', methods: createPlotPresetApi(ctx) },
+    { name: 'data-admin', methods: createDataAdminApi(ctx) },
+    { name: 'settings-config', methods: createSettingsConfigApi(ctx) },
+    { name: 'worldbook-ai', methods: createWorldbookAiApi(ctx) },
+    { name: 'agent-worldbook', methods: createAgentWorldbookApi(ctx) },
+    { name: 'performance-diagnostics', methods: createPerformanceDiagnosticsApi() },
+    { name: 'sql', methods: sqlApi },
+];
+const api = {};
+for (const { name, methods } of apiGroupEntries) {
+    for (const key of Object.keys(methods)) {
+        if (Object.prototype.hasOwnProperty.call(api, key)) {
+            logWarn_ACU(`[API注册] 方法 "${key}" 在多个分组中重复定义，后注册的 "${name}" 分组实现将覆盖先前实现。`);
+        }
+        api[key] = methods[key];
+    }
+}
 // SQL 同步读取只能在 SQLite runtime 完整发布后对外可见。
 // getter 会在聊天切换/重载窗口自动隐藏，避免第三方脚本把“函数存在”误判为“运行时可查询”。
 installRuntimeGatedSqlReadApi_ACU(api, sqlApi);
@@ -166124,7 +166719,9 @@ function getAcuTauriReady() {
     if (ready && typeof ready.then === 'function') {
         return { ready: false, promise: ready };
     }
-    return { ready: ready === true, promise: null };
+    // [L1] 宽容处理：TT ABI 的 ready 除布尔/Promise 外还可能是真值对象（如完成标记对象），
+    // 一律按真值视为就绪；仅 promise-like 走上面的等待分支。
+    return { ready: Boolean(ready), promise: null };
 }
 /**
  * 等待宿主 API 就绪（扩展可安全初始化）。
@@ -166134,7 +166731,6 @@ function getAcuTauriReady() {
  */
 async function waitForAcuHostReady(maxWaitMs = 15000) {
     const start = Date.now();
-    const tauri = isAcuTauriRuntime();
     const getContextReady = () => {
         try {
             const w = tauriWindow();
@@ -166148,8 +166744,11 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
         }
     };
     while (Date.now() - start < maxWaitMs) {
+        // [H1] 每轮重估宿主类型：TT 的 __TAURITAVERN__ ABI 可能晚于扩展注入，
+        // 循环外只读一次会把 tauri 固化为 false，导致 TT 下跳过 __TAURITAVERN__.ready 等待。
+        const isTauri = isAcuTauriRuntime();
         if (getContextReady()) {
-            if (!tauri)
+            if (!isTauri)
                 return true;
             // TT：getContext 就绪后再等 TT ABI
             const { ready, promise } = getAcuTauriReady();
@@ -166179,7 +166778,9 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
         }
         await new Promise((r) => setTimeout(r, 100));
     }
-    return tauri ? (getAcuTauriReady().ready && getContextReady()) : getContextReady();
+    // [H1] 终判同样用当轮重估值，不用循环外的固化快照
+    const finalIsTauri = isAcuTauriRuntime();
+    return finalIsTauri ? (getAcuTauriReady().ready && getContextReady()) : getContextReady();
 }
 
 /**
@@ -166200,7 +166801,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260824-11";
+        const stamp = "20260824-20";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -166605,9 +167206,10 @@ function useDebugPanel() {
         toast.success(`已导出 ${logs.length} 条日志。`);
     }
     onMounted(() => {
-        // 默认关闭：每次进入高级工具均不自动开启，需用户显式点“开始 Debug”
+        // 默认关闭：每次进入高级工具均不自动开启，需用户显式点“开始 Debug”。
+        // 只强制关 debug；warn 采集是开发者选项里的持久化开关（dev-options-store 初始化时已应用），
+        // 在这里一并强关会每次进入页面都清掉用户的常开设置。
         setDebugLogEnabled(false);
-        setWarnLogEnabled(false);
         active.value = false;
         startedAt = 0;
         refreshCount();
@@ -167381,7 +167983,8 @@ function useBiotrackerPage() {
     const apiModel = computed(() => effectiveApiConfig.value.model || '');
     function setApiPreset(value) {
         apiPreset.value = String(value || '');
-        settings_ACU.bs_biotracker.apiPreset = apiPreset.value;
+        // 经 getBiotrackerRoot() 守卫赋值：bs_biotracker 根缺失时先补建，避免直写 undefined 抛 TypeError
+        getBiotrackerRoot().apiPreset = apiPreset.value;
         saveSettings_ACU();
     }
     // ─── 手动注册（一次点击 = 繁育推演 + 注册两次 API） ───
@@ -167439,7 +168042,8 @@ function useBiotrackerPage() {
     }
     function setRegisterRecentCount(value) {
         registerRecentCount.value = Math.max(1, Math.min(100, Math.floor(Number(value) || 12)));
-        settings_ACU.bs_biotracker.registerRecentCount = registerRecentCount.value;
+        // 经 getBiotrackerRoot() 守卫赋值，根缺失时先补建（下同）
+        getBiotrackerRoot().registerRecentCount = registerRecentCount.value;
         saveSettings_ACU();
     }
     // 输入即存当前聊天的草稿（watch 自动触发）
@@ -167501,7 +168105,7 @@ function useBiotrackerPage() {
     const autoFrequencyOptions = [1, 3, 5, 10, 20, 30, 50];
     function setAutoRecentCount(value) {
         autoRecentCount.value = Math.max(1, Math.min(100, Math.floor(Number(value) || 12)));
-        settings_ACU.bs_biotracker.autoRecentCount = autoRecentCount.value;
+        getBiotrackerRoot().autoRecentCount = autoRecentCount.value;
         saveSettings_ACU();
     }
     function toggleAutoRegister(value) {
@@ -167727,10 +168331,13 @@ function useBiotrackerPage() {
         refreshCharacters();
         timer = setInterval(() => {
             // P4/C11 门控：页面不可见（tab 切走/最小化）或应用根容器被隐藏（closeAcuV2App 只切 display 不 unmount）
-            // 时跳过轮询，避免无谓的聚合重建与后台运行
+            // 时跳过轮询，避免无谓的聚合重建与后台运行。
+            // 根节点挂在 host document（iframe 场景为 parent.document，见 bootstrap/mount.ts），
+            // 必须经 getAcuHostDocument() 探测；用局部 document.getElementById 在 iframe 内拿不到
+            // #acu-app-v2，rootEl 恒为 null 会让门控失效、页面隐藏后仍空刷。
             if (typeof document === 'undefined' || document.hidden)
                 return;
-            const rootEl = document.getElementById('acu-app-v2');
+            const rootEl = getAcuHostDocument().getElementById('acu-app-v2');
             if (rootEl && rootEl.style.display === 'none')
                 return;
             refreshCharacters();
@@ -178903,7 +179510,11 @@ async function extensionMain() {
     }
     const ready = await waitForHostApi();
     if (!ready) {
-        logError_ACU('[插件启动] 等待宿主（SillyTavern/TauriTavern）就绪超时，初始化中止。');
+        // [M5] 超时中止时尚未做任何实质初始化（事件监听/UI 挂载都未开始），
+        // 回滚 checkAndMarkInstance 的置位，避免标记永久占位拦死后续启动
+        //（配合 runtime-env.checkAndMarkInstance 的旧实例 DOM 根接管判定双保险）。
+        releaseInstanceMark();
+        logWarn_ACU('[插件启动] 等待宿主（SillyTavern/TauriTavern）就绪超时，初始化中止；已释放实例互斥标记，下次启动可重试。');
         return;
     }
     logDebug_ACU('[插件启动] 宿主 API 已就绪，开始初始化...');

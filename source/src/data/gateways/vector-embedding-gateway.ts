@@ -141,6 +141,19 @@ async function throwEmbeddingHttpErrorAsync_ACU(
     });
 }
 
+// [M5] Embedding fetch 防悬挂超时。目标运行环境（现代 WebView/Tauri）AbortSignal.timeout 可用性存疑，
+// 用手动 AbortController+setTimeout 兜底；AbortController 不可用时退化为无超时（与旧行为一致）。
+// 取 120s：本网关除 query 单条外还承载归档构建的批量 chunk 嵌入（summary-vector-index-archive-service），
+// 30s 可能误杀原本能完成的大批量请求；120s 对悬挂仍是有效上界。
+const EMBEDDING_FETCH_TIMEOUT_MS_ACU = 120000;
+
+function createFetchAbortTimer_ACU(timeoutMs: number): { signal: AbortSignal; cleanup: () => void } | null {
+    if (typeof AbortController !== 'function') return null;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
+    return { signal: controller.signal, cleanup: () => clearTimeout(timer) };
+}
+
 export async function createEmbeddings_ACU(request: VectorEmbeddingRequest_ACU): Promise<VectorEmbeddingResult_ACU[]> {
     const endpoint = String(request.endpoint || '').trim();
     const model = String(request.model || '').trim();
@@ -160,12 +173,20 @@ export async function createEmbeddings_ACU(request: VectorEmbeddingRequest_ACU):
         headers.Authorization = `Bearer ${apiKey}`;
     }
     assertSafeHttpEndpoint_ACU(endpoint);
-    const response = await fetch(endpoint, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({ model, input }),
-        redirect: 'error',
-    });
+    // [M5] 挂超时：超时 abort 让 fetch 抛 AbortError 向上传播（运行时 T5 路径已有降级处理）。
+    const abortTimer = createFetchAbortTimer_ACU(EMBEDDING_FETCH_TIMEOUT_MS_ACU);
+    let response: Response;
+    try {
+        response = await fetch(endpoint, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({ model, input }),
+            redirect: 'error',
+            ...(abortTimer ? { signal: abortTimer.signal } : {}),
+        });
+    } finally {
+        abortTimer?.cleanup();
+    }
     if (!response.ok) {
         await throwEmbeddingHttpErrorAsync_ACU(response, endpoint, model);
     }

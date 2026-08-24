@@ -236,12 +236,13 @@ describe('callCustomOpenAI_ACU — prompt 组装', () => {
     // 验证 generateRaw 收到的 messages 中占位符已被替换
     const calledMessages = JSON.parse(mockFetch.mock.calls[0][1].body).messages;
     const content = calledMessages[0].content;
-    expect(content).toContain('表格数据');
+    expect(content).toContain('表格:<table_data>\n表格数据\n</table_data>');
     expect(content).toContain('消息数据');
     expect(content).toContain('世界书数据');
     expect(content).toContain('上轮剧情');
     expect(content).toContain('额外提示');
-    expect(content).toContain('内部已排除世界书:仅保留非内部条目/仅保留非内部条目');
+    // [边界包裹] $9 与 $1/$4 同类，替换值带 <worldbook_data> 边界标签
+    expect(content).toContain('内部已排除世界书:<worldbook_data>\n仅保留非内部条目\n</worldbook_data>/<worldbook_data>\n仅保留非内部条目\n</worldbook_data>');
     expect(content).toContain('用户设定');
     expect(content).toContain('角色描述');
     expect(content).not.toContain('$0');
@@ -329,15 +330,16 @@ describe('callCustomOpenAI_ACU — prompt 组装', () => {
     delete (globalThis as any).EjsTemplate;
   });
 
-  it('$9 按填表上下文排除规则过滤', async () => {
+  it('$9 按填表上下文排除规则过滤（带 <worldbook_data> 边界包裹）', async () => {
     mockSettings.charCardPrompt = [{ role: 'USER', content: '$9' }];
     mockSettings.tableContextExcludeRules = ['已排除'];
-    mockApplyExcludeRulesToText.mockImplementation((text: string) => text === '已排除的世界书正文' ? '过滤后的世界书' : text);
+    mockApplyExcludeRulesToText.mockImplementation((text: string) =>
+      text.includes('已排除的世界书正文') ? '<worldbook_data>\n过滤后的世界书\n</worldbook_data>' : text);
 
     await callCustomOpenAI_ACU({ worldbookDatabaseExcludedContent: '已排除的世界书正文' });
 
-    expect(mockApplyExcludeRulesToText).toHaveBeenCalledWith('已排除的世界书正文', expect.any(Object));
-    expect(JSON.parse(mockFetch.mock.calls[0][1].body).messages[0].content).toBe('过滤后的世界书');
+    expect(mockApplyExcludeRulesToText).toHaveBeenCalledWith(expect.stringContaining('已排除的世界书正文'), expect.any(Object));
+    expect(JSON.parse(mockFetch.mock.calls[0][1].body).messages[0].content).toBe('<worldbook_data>\n过滤后的世界书\n</worldbook_data>');
   });
 });
 

@@ -358,20 +358,96 @@ export   function cloneScopedConfigData_ACU(value: any, fallback: any = null) {
    * 仅放行 http(s)；http:// 仅允许 localhost/回环；私网/环回/链路本地/保留 IP 一律拒绝
    * （云元数据 169.254.169.254、内网 10.x/192.168.x、0.0.0.0 等）。
    */
+  /**
+   * [L2] 按 inet_aton 语义解析非规范 IPv4 文本（1/2/3/4 段十进制与 0x 前缀十六进制），
+   * 还原为标准点分四元组。解析失败（非法字符/数值越界）返回 null，由调用方按域名放行。
+   */
+  function canonicalizeNonCanonicalIpv4_ACU(host: string): string | null {
+    const parsePartValue_ACU = (part: string): number | null => {
+      if (/^0x[0-9a-f]{1,8}$/i.test(part)) return parseInt(part, 16);
+      if (/^\d{1,10}$/.test(part)) return parseInt(part, 10);
+      return null;
+    };
+    const segs = host.split('.');
+    if (segs.length < 1 || segs.length > 4) return null;
+    const values: number[] = [];
+    for (const seg of segs) {
+      const v = parsePartValue_ACU(seg);
+      if (v === null || v < 0) return null;
+      values.push(v);
+    }
+    let num = -1;
+    if (segs.length === 4) {
+      if (values.some((v) => v > 255)) return null;
+      num = (((values[0] << 24) | (values[1] << 16) | (values[2] << 8) | values[3])) >>> 0;
+    } else if (segs.length === 3) {
+      if (values[0] > 255 || values[1] > 255 || values[2] > 0xffff) return null;
+      num = (((values[0] << 24) >>> 0) + (values[1] << 16) + values[2]) >>> 0;
+    } else if (segs.length === 2) {
+      if (values[0] > 255 || values[1] > 0xffffff) return null;
+      num = (((values[0] << 24) >>> 0) + values[1]) >>> 0;
+    } else {
+      if (values[0] > 0xffffffff) return null;
+      num = values[0] >>> 0;
+    }
+    return `${(num >>> 24) & 255}.${(num >>> 16) & 255}.${(num >>> 8) & 255}.${num & 255}`;
+  }
+
+  /**
+   * [L7] 把 IPv6 地址文本展开为 8 组 16bit 数值；支持 :: 压缩（%zone 由调用方先行剥离）。
+   * 无法解析时返回 null，由调用方回退到首段前缀粗判。
+   */
+  function expandIpv6Groups_ACU(addr: string): number[] | null {
+    if (!addr || /[^0-9a-f:]/i.test(addr)) return null;
+    const doubleColonCount = (addr.match(/::/g) || []).length;
+    if (doubleColonCount > 1) return null;
+    let head: string[] = [];
+    let tail: string[] = [];
+    if (doubleColonCount === 1) {
+      const [left, right] = addr.split('::');
+      head = left ? left.split(':') : [];
+      tail = right ? right.split(':') : [];
+    } else {
+      head = addr.split(':');
+    }
+    const groupOk = (g: string) => /^[0-9a-f]{1,4}$/i.test(g);
+    if (!head.every(groupOk) || !tail.every(groupOk)) return null;
+    const total = head.length + tail.length;
+    if (total > 8 || (doubleColonCount === 0 && total !== 8)) return null;
+    return [
+      ...head.map((g) => parseInt(g, 16)),
+      ...new Array(8 - total).fill(0),
+      ...tail.map((g) => parseInt(g, 16)),
+    ];
+  }
+
   function isPrivateNetworkHost_ACU(host: string): boolean {
     const normalized = host.replace(/^::ffff:/, '').toLowerCase();
     if (!/^[\d.]+$/.test(normalized) && !/^[0-9a-f:]+(%[0-9a-z]+)?$/i.test(normalized)) return false; // 域名放行
     if (normalized.includes(':')) {
-      if (normalized === '::1' || normalized === '::') return true;
-      // IPv6：按首段前缀判定（fd00::1 的首段是 fd00，整段相等会漏检全部 ULA）
-      const first = normalized.split('%')[0].split(':')[0];
+      const bareV6 = normalized.split('%')[0];
+      // [L7] 先展开为 8 组再比较：'0:0:0:0:0:0:0:1' 等全展开形此前既不等于 '::1'、
+      // 首段 '0' 也不命中前缀规则，会漏检回环地址。
+      const groups = expandIpv6Groups_ACU(bareV6);
+      if (groups) {
+        if (groups.every((g) => g === 0)) return true; // '::' 与全零展开形
+        if (groups.slice(0, 7).every((g) => g === 0) && groups[7] === 1) return true; // 回环 ::1
+        const hi = groups[0];
+        if (hi >= 0xfe80 && hi <= 0xfebf) return true; // 链路本地 fe80::/10
+        if (hi >= 0xfc00 && hi <= 0xfdff) return true; // ULA fc00::/7
+        return false;
+      }
+      // 无法解析的形态：保留旧的首段前缀粗判兜底
+      const first = bareV6.split(':')[0];
       if (first.startsWith('fe8') || first.startsWith('fe9') || first.startsWith('fea') || first.startsWith('feb')) return true; // 链路本地 fe80::/10
       if (first.startsWith('fc') || first.startsWith('fd')) return true; // ULA fc00::/7
       return false;
     }
-    const parts = normalized.split('.').map((n) => Number(n));
-    if (parts.length !== 4 || parts.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return false;
-    const [a, b] = parts;
+    // [L2] 非规范 IPv4（'127.1' 两段、纯十进制 '2130706433'、十六进制 '0x7f000001' 等）
+    // 此前因分段数≠4 被当域名放行。先按 inet_aton 语义还原四元组再判定；还原失败才视为域名放行。
+    const canonicalV4 = canonicalizeNonCanonicalIpv4_ACU(normalized);
+    if (!canonicalV4) return false; // 域名放行
+    const [a, b] = canonicalV4.split('.').map(Number);
     if (a === 10) return true;
     if (a === 127) return true;
     if (a === 169 && b === 254) return true;

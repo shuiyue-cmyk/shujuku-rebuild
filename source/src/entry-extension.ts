@@ -12,7 +12,7 @@
 // ═══════════════════════════════════════════════════════════════
 // 运行时环境（必须最先导入并设置模式）
 // ═══════════════════════════════════════════════════════════════
-import { _forceExtensionMode, checkAndMarkInstance } from './shared/runtime-env';
+import { _forceExtensionMode, checkAndMarkInstance, releaseInstanceMark } from './shared/runtime-env';
 
 _forceExtensionMode();
 
@@ -74,7 +74,7 @@ import './presentation/triggers/settings-ui-sync';
 // ═══════════════════════════════════════════════════════════════
 import { mainInitialize_ACU } from './presentation/bootstrap/init';
 import { bootstrapAcuV2 } from './presentation-v2/bootstrap';
-import { logDebug_ACU, logError_ACU } from './shared/utils';
+import { logDebug_ACU, logError_ACU, logWarn_ACU } from './shared/utils';
 import { waitForAcuHostReady } from './shared/host-bridge';
 
 /**
@@ -123,7 +123,11 @@ async function extensionMain() {
 
     const ready = await waitForHostApi();
     if (!ready) {
-        logError_ACU('[插件启动] 等待宿主（SillyTavern/TauriTavern）就绪超时，初始化中止。');
+        // [M5] 超时中止时尚未做任何实质初始化（事件监听/UI 挂载都未开始），
+        // 回滚 checkAndMarkInstance 的置位，避免标记永久占位拦死后续启动
+        //（配合 runtime-env.checkAndMarkInstance 的旧实例 DOM 根接管判定双保险）。
+        releaseInstanceMark();
+        logWarn_ACU('[插件启动] 等待宿主（SillyTavern/TauriTavern）就绪超时，初始化中止；已释放实例互斥标记，下次启动可重试。');
         return;
     }
 

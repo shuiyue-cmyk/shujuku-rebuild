@@ -26,6 +26,7 @@ import {
 import { useApiPresetSelectOptions } from './useApiPresetSelectOptions';
 import { ALL_BUILTIN_RACES } from '../../service/biotracker/vendor/race_config.js';
 import { showToastr_ACU } from '../../presentation/theme/toast';
+import { getAcuHostDocument } from '../bootstrap/host-document';
 
 export function useBiotrackerPage() {
   // ─── API 预设（参照剧情推进：跟随当前活动 API 或选择专用预设） ───
@@ -42,7 +43,8 @@ export function useBiotrackerPage() {
 
   function setApiPreset(value: string): void {
     apiPreset.value = String(value || '');
-    settings_ACU.bs_biotracker.apiPreset = apiPreset.value;
+    // 经 getBiotrackerRoot() 守卫赋值：bs_biotracker 根缺失时先补建，避免直写 undefined 抛 TypeError
+    getBiotrackerRoot().apiPreset = apiPreset.value;
     saveSettings_ACU();
   }
 
@@ -95,7 +97,8 @@ export function useBiotrackerPage() {
 
   function setRegisterRecentCount(value: number): void {
     registerRecentCount.value = Math.max(1, Math.min(100, Math.floor(Number(value) || 12)));
-    settings_ACU.bs_biotracker.registerRecentCount = registerRecentCount.value;
+    // 经 getBiotrackerRoot() 守卫赋值，根缺失时先补建（下同）
+    getBiotrackerRoot().registerRecentCount = registerRecentCount.value;
     saveSettings_ACU();
   }
 
@@ -159,7 +162,7 @@ export function useBiotrackerPage() {
 
   function setAutoRecentCount(value: number): void {
     autoRecentCount.value = Math.max(1, Math.min(100, Math.floor(Number(value) || 12)));
-    settings_ACU.bs_biotracker.autoRecentCount = autoRecentCount.value;
+    getBiotrackerRoot().autoRecentCount = autoRecentCount.value;
     saveSettings_ACU();
   }
 
@@ -380,9 +383,12 @@ export function useBiotrackerPage() {
     refreshCharacters();
     timer = setInterval(() => {
       // P4/C11 门控：页面不可见（tab 切走/最小化）或应用根容器被隐藏（closeAcuV2App 只切 display 不 unmount）
-      // 时跳过轮询，避免无谓的聚合重建与后台运行
+      // 时跳过轮询，避免无谓的聚合重建与后台运行。
+      // 根节点挂在 host document（iframe 场景为 parent.document，见 bootstrap/mount.ts），
+      // 必须经 getAcuHostDocument() 探测；用局部 document.getElementById 在 iframe 内拿不到
+      // #acu-app-v2，rootEl 恒为 null 会让门控失效、页面隐藏后仍空刷。
       if (typeof document === 'undefined' || document.hidden) return;
-      const rootEl = document.getElementById('acu-app-v2');
+      const rootEl = getAcuHostDocument().getElementById('acu-app-v2');
       if (rootEl && rootEl.style.display === 'none') return;
       refreshCharacters();
     }, 3000);

@@ -65,10 +65,10 @@ describe('createAgentWorldbookApi', () => {
     const registrySource = readFileSync('src/presentation/bootstrap/api-registry.ts', 'utf-8');
 
     expect(registrySource).toContain("import { createAgentWorldbookApi } from './api-groups/agent-worldbook-api';");
-    expect(registrySource).toContain('createAgentWorldbookApi(ctx),');
-    expect(registrySource.indexOf('createWorldbookAiApi(ctx),')).toBeGreaterThan(-1);
-    expect(registrySource.indexOf('createAgentWorldbookApi(ctx),')).toBeGreaterThan(
-      registrySource.indexOf('createWorldbookAiApi(ctx),')
+    expect(registrySource).toContain('createAgentWorldbookApi(ctx)');
+    expect(registrySource.indexOf('createWorldbookAiApi(ctx)')).toBeGreaterThan(-1);
+    expect(registrySource.indexOf('createAgentWorldbookApi(ctx)')).toBeGreaterThan(
+      registrySource.indexOf('createWorldbookAiApi(ctx)')
     );
   });
 

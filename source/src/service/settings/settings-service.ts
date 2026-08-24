@@ -10,7 +10,7 @@ import { STORAGE_KEY_ALL_SETTINGS_ACU, STORAGE_KEY_CUSTOM_TEMPLATE_ACU, normaliz
 import { DEFAULT_BUILTIN_PLOT_PRESETS_ACU, DEFAULT_CHAR_CARD_PROMPT_SQL_ACU, DEFAULT_MERGE_SUMMARY_PROMPT_ACU, DEFAULT_PLOT_SETTINGS_ACU, DEFAULT_TABLE_TEMPLATE_ACU, ORIGINAL_DEFAULT_TABLE_TEMPLATE_ACU, TABLE_TEMPLATE_ACU, _set_TABLE_TEMPLATE_ACU } from '../../shared/defaults-json.js';
 import { DEFAULT_AUTO_UPDATE_FREQUENCY_ACU, DEFAULT_AUTO_UPDATE_THRESHOLD_ACU, DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU, SUMMARY_INDEX_V2_WRITER_FORCE_ENABLE_VERSION_ACU, TABLE_FILL_PROMPT_FORCE_DEFAULT_VERSION_ACU, TABLE_TEMPLATE_DEFAULTS_REFRESH_VERSION_ACU, TEMPLATE_ASSISTANT_PROMPT_FORCE_DEFAULT_VERSION_ACU, VECTOR_MEMORY_DEFAULTS_REFRESH_VERSION_ACU, buildDefaultAgentWorldbookControl_ACU, buildDefaultAgentWorldbookPromptTemplates_ACU, buildDefaultPlotWorldbookConfig_ACU, buildDefaultContentOptimizationPromptGroup_ACU, defaultWorldbookConfig_ACU, defaultVectorMemoryConfig_ACU } from '../../shared/defaults';
 import { addDataIsolationHistory_ACU, ensureProfileExists_ACU, normalizeDataIsolationHistory_ACU } from '../../data/repositories/isolation-repo';
-import { globalMeta_ACU, loadGlobalMeta_ACU, readProfileSettingsFromStorage_ACU, readProfileTemplateFromStorage_ACU, sanitizeSettingsForProfileSave_ACU, saveGlobalMeta_ACU, writeProfileSettingsToStorage_ACU, writeProfileTemplateToStorage_ACU } from '../../data/repositories/profile-repo';
+import { backupProfileSettingsRawBeforeDegradation_ACU, globalMeta_ACU, loadGlobalMeta_ACU, readProfileSettingsFromStorage_ACU, readProfileTemplateFromStorage_ACU, sanitizeSettingsForProfileSave_ACU, saveGlobalMeta_ACU, writeProfileSettingsToStorage_ACU, writeProfileTemplateToStorage_ACU } from '../../data/repositories/profile-repo';
 import { getCurrentTemplatePresetName_ACU, normalizeTemplatePresetSelectionValue_ACU } from '../../shared/template-preset-utils';
 import { persistSettingsToStorage_ACU } from '../../data/storage/config-storage';
 import { getCurrentVectorMemoryConfig_ACU } from '../vector/vector-memory-config';
@@ -22,7 +22,7 @@ import { currentChatFileIdentifier_ACU, getCurrentIsolationKey_ACU, settings_ACU
 import { getCurrentCharSettings_ACU, getCurrentWorldbookConfig_ACU } from './settings-readers';
 import { reconcileApiBindingForCurrentChat_ACU } from './api-preset-service';
 import { getCurrentChatTemplateScopeState_ACU, getGlobalTemplateSnapshotForCurrentProfile_ACU, migrateLegacyTemplateScopeForCurrentChat_ACU, normalizeTemplateScopeIsolationKey_ACU, sanitizeChatSheetsObject_ACU, sanitizeTemplateSnapshotForChat_ACU } from '../template/chat-scope';
-import { safeJsonParse_ACU } from '../../shared/json-helpers';
+import { safeJsonParse_ACU, safeJsonStringify_ACU } from '../../shared/json-helpers';
 import { deepMerge_ACU, ensureSheetOrderNumbers_ACU, logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
 import { normalizeEditablePromptSegments_ACU } from '../agent/agent-prompt-template';
 
@@ -35,8 +35,28 @@ export type SaveSettingsResult_ACU = {
 };
 
 let settingsStorageReadyForSave_ACU = false;
-export const _set_settingsStorageReadyForSave_ACU = (val: boolean) => { settingsStorageReadyForSave_ACU = val; };
+export const _set_settingsStorageReadyForSave_ACU = (val: boolean) => {
+  settingsStorageReadyForSave_ACU = val;
+  // [M5] 存储就绪翻转点：补存此前被门控拒绝的挂起保存，避免静默丢失
+  if (val) flushPendingSaveAfterStorageReady_ACU();
+};
 let settingsReloadAfterIdbScheduled_ACU = false;
+
+// [M5] 门控拒绝期间的挂起保存标志：settings_loading 拒绝不再静默丢弃，
+// 就绪翻转为 true 时（loadSettings 内两处 + 导出 setter）触发一次补存。
+let pendingSaveAfterStorageReady_ACU = false;
+
+/** [M5] 存储就绪后补存一次挂起保存；失败仅告警，不无限重试 */
+function flushPendingSaveAfterStorageReady_ACU(): void {
+  if (!pendingSaveAfterStorageReady_ACU || !settingsStorageReadyForSave_ACU) return;
+  pendingSaveAfterStorageReady_ACU = false;
+  logDebug_ACU('[设置保存] 存储已完成可靠加载，补存此前被门控拒绝的设置。');
+  try {
+    saveSettings_ACU();
+  } catch (e) {
+    logWarn_ACU('[设置保存] 挂起保存补存失败:', e);
+  }
+}
 
 /**
  * 替换 settings_ACU 整体对象，同时保留 biotracker 运行时命名空间（bs_biotracker）。
@@ -49,7 +69,9 @@ function replaceSettingsPreservingBiotracker(next: any): void {
   const prevBiotracker = settings_ACU?.bs_biotracker;
   _set_settings_ACU(next);
   if (prevBiotracker && !settings_ACU.bs_biotracker) {
-    settings_ACU.bs_biotracker = prevBiotracker;
+    // [M6] 移植时深拷贝：避免新旧 settings 对象共享同一 bs_biotracker 子对象引用，
+    // 否则任一侧的运行时写入都会穿透到另一侧。拷贝失败时回退原引用（保数据优先）。
+    settings_ACU.bs_biotracker = safeJsonParse_ACU(safeJsonStringify_ACU(prevBiotracker, ''), prevBiotracker) || prevBiotracker;
   }
 }
 
@@ -275,12 +297,15 @@ function summarizeSettingsForLog_ACU(settings: any): Record<string, any> {
 
 export function saveSettings_ACU(): SaveSettingsResult_ACU {
   if (!settingsStorageReadyForSave_ACU) {
+      // [M5] 记录挂起保存：存储就绪翻转点会补存一次，避免门控拒绝导致静默丢失。
+      // fire-and-forget 调用方无需感知；重试仍失败时由常规保存路径兜底。
+      pendingSaveAfterStorageReady_ACU = true;
       if (isIndexedDbAvailable_ACU() && !configIdbCacheLoaded_ACU) {
           scheduleSettingsReloadAfterIdbReady_ACU('save_before_config_cache_ready');
       } else {
           void initTavernSettingsBridge_ACU();
       }
-      logWarn_ACU('[设置保存] 设置尚未完成可靠加载，已拒绝本次保存以避免默认配置覆盖真实配置。');
+      logWarn_ACU('[设置保存] 设置尚未完成可靠加载，已拒绝本次保存以避免默认配置覆盖真实配置（已登记，就绪后自动补存）。');
       return {
           saved: false,
           storageType: 'memory',
@@ -491,6 +516,9 @@ export   function loadSettings_ACU() {
           }
       } catch (error) {
           logError_ACU('Failed to load or parse settings, using defaults:', error);
+          // [H1] 加载处理异常同样视为不可信读取：先把存储中的原始串备份到旁路键再降级默认配置，
+          // 防止下方 shouldPersist=true 的默认值补齐覆盖写回同一分桶键导致真实配置永久丢失。
+          try { backupProfileSettingsRawBeforeDegradation_ACU?.(activeCode, 'load_exception'); } catch (backupError) { /* ignore */ }
           replaceSettingsPreservingBiotracker(buildDefaultSettings_ACU());
           settings_ACU.dataIsolationCode = activeCode;
           settings_ACU.dataIsolationEnabled = (activeCode !== '');
@@ -510,6 +538,8 @@ export   function loadSettings_ACU() {
       }
 
       settingsStorageReadyForSave_ACU = true;
+      // [M5] 就绪翻转点：补存门控拒绝期间登记的挂起保存
+      flushPendingSaveAfterStorageReady_ACU();
 
       // [交火模式配置] 权威配置存放在 globalMeta.vectorMemoryConfigGlobal（跨 profile 全局）。
       // settings_ACU.vectorMemoryConfig 只保留为运行时投影，兼容旧调用方。
@@ -634,6 +664,8 @@ export   function loadSettings_ACU() {
       settings_ACU.vectorMemoryConfig = globalMeta_ACU.vectorMemoryConfigGlobal;
 
       settingsStorageReadyForSave_ACU = true;
+      // [M5] 就绪翻转点：补存门控拒绝期间登记的挂起保存（若前一个翻转点已消费则为空操作）
+      flushPendingSaveAfterStorageReady_ACU();
       refreshDefaultTableTemplateOnce_ACU(activeCode);
       forceDefaultTableFillPromptsOnce_ACU();
       forceDefaultTemplateAssistantPromptOnce_ACU();

@@ -456,6 +456,9 @@ function resolvePromptRowWindow_ACU(
     const ownedReadContext = options?.worldbookReadContext
       ?? createLorebookReadContext_ACU({ source: 'form_fill', isActive: () => options?.signal?.aborted !== true });
     const readContext = options?.worldbookReadContext ?? ownedReadContext;
+    // 注意：惰性创建的 ownedReadContext 不能随本函数退出 dispose——返回的
+    // resolveTableWorldbookContent 闭包持有 readContext 且在调用方替换占位符时才执行，
+    // 提前 dispose 会令其读取全部失败。生命周期仍由调用方（填表 bucket attempt）管理。
     const worldbookConfig = getCurrentWorldbookConfig_ACU();
     const syncReadScopeNames = buildTableCandidateScope_ACU([
       () => worldbookConfig?.source === 'manual' && Array.isArray(worldbookConfig?.manualSelection) ? worldbookConfig.manualSelection : [],

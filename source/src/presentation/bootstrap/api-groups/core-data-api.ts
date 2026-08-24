@@ -33,7 +33,9 @@ export function createCoreDataApi(ctx: ApiGroupContext): Record<string, Function
     return {
         // 导出当前表格数据
         exportTableAsJson: function() {
-            return currentJsonTableData_ACU || {};
+            // [M3] 返回深拷贝：此前直接返回活引用，调用方改写导出对象会穿透修改
+            // 运行时 currentJsonTableData_ACU。该 API 为手动/第三方低频调用，深拷贝开销可接受。
+            return currentJsonTableData_ACU ? JSON.parse(JSON.stringify(currentJsonTableData_ACU)) : {};
         },
 
         // 导入并覆盖当前表格数据；默认外部导入会持久化，传 { persist:false } / { mode:'restore' } 时仅恢复运行时。

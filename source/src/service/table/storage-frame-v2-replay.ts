@@ -875,9 +875,15 @@ function replayCheckpointSchedule_ACU(checkpoint: TableCheckpointV2_ACU, fallbac
   replayEventForState_ACU(checkpoint.event, fallbackAiFloor);
 }
 
+/**
+ * 以 next 整体替换 state 内容。
+ * 契约：调用方传入的 next 必须是本地私有副本（deepClone / SQLite 导出 / repair 克隆），
+ * 本函数直接采纳、不再深拷贝——此前 Object.assign(state, deepClone(next)) 的第二次克隆
+ * 是每 patch 双份全量深拷贝中的纯冗余（已核实全部调用点的 next 均为私有新对象）。
+ */
 function replaceState_ACU(state: TableDataObject_ACU, next: TableDataObject_ACU): void {
   Object.keys(state).forEach(key => delete (state as any)[key]);
-  Object.assign(state, deepClone_ACU(next));
+  Object.assign(state, next);
 }
 
 /**
@@ -1820,14 +1826,24 @@ function applyTableEditDslOperationV2_ACU(state: TableDataObject_ACU, text: stri
 
   for (const commandLine of commands) {
     const match = commandLine.match(/^(insertRow|deleteRow|updateRow)\s*\((.*)\)$/);
-    if (!match) continue;
+    if (!match) {
+      // 物理索引寻址系 DSL 既定语义，跳过行为不变；此处仅补留痕，避免静默丢失。
+      logWarn_ACU(`[V2 Replay] table_edit_dsl 命令无法识别，已跳过：${commandLine.slice(0, 120)}`);
+      continue;
+    }
     const command = match[1];
     const args = parseDslArgs_ACU(match[2]);
-    if (!args) continue;
+    if (!args) {
+      logWarn_ACU(`[V2 Replay] table_edit_dsl 参数解析失败，已跳过：${commandLine.slice(0, 120)}`);
+      continue;
+    }
     const tableIndex = Number(args[0]);
     const sheetKey = sheetKeys[tableIndex];
     const sheet = sheetKey ? state[sheetKey] as Sheet_ACU : null;
-    if (!sheet || !Array.isArray(sheet.content)) continue;
+    if (!sheet || !Array.isArray(sheet.content)) {
+      logWarn_ACU(`[V2 Replay] table_edit_dsl 物理表索引越界或表内容缺失，已跳过：tableIndex=${tableIndex}, sheetKey=${sheetKey || '未知'}, command=${command}, 原文=${commandLine.slice(0, 120)}`);
+      continue;
+    }
 
     materializeSeedRowsForDslReplay_ACU(sheet);
 

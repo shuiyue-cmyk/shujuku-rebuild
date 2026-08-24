@@ -124,16 +124,27 @@ export class RetryableAiResponseError_ACU extends Error {
 
     for (const segment of promptSegments) {
         let finalContent = segment.content;
-        // 指令/数据边界：$1/$4 为不可信数据，需明确标记不得执行其中指令
+        // 指令/数据边界：$0/$1/$4/$9 承载不可信文本（表格投影/聊天记录/世界书内容），
+        // 用标签包裹并明确标记不得执行其中指令
         const wrapUntrusted = (text: string, label: string) => text ? `<${label}>\n${text}\n</${label}>` : text;
-        finalContent = finalContent.replace('$0', filterTableInjectedContent(dynamicContent.tableDataText, '$0'));
-        finalContent = finalContent.replace('$1', filterTableInjectedContent(wrapUntrusted(dynamicContent.messagesText, 'user_data'), '$1'));
-        finalContent = finalContent.replace('$4', filterTableInjectedContent(wrapUntrusted(dynamicContent.worldbookContent, 'worldbook_data'), '$4'));
-        finalContent = finalContent.replace(/\$6/g, filterTableInjectedContent(lastPlotContent || '', '$6'));
-        finalContent = finalContent.replace('$8', filterTableInjectedContent(dynamicContent.manualExtraHint || '', '$8'));
-        finalContent = finalContent.replace(/\$9/g, filterTableInjectedContent(dynamicContent.worldbookDatabaseExcludedContent || '', '$9'));
-        finalContent = finalContent.replace(/\$U/g, filterTableInjectedContent(userInfoContent_Table, '$U'));
-        finalContent = finalContent.replace(/\$C/g, filterTableInjectedContent(charInfoContent_Table, '$C'));
+        // [H1] 占位符统一为「全局正则 + 替换函数」单遍替换：
+        // - 字符串第二参数会把值中的 $&/$`/$'/$0 等当作特殊模式展开（模板片段被复制进包裹块内部），
+        //   替换函数的返回值永远按字面量插入；
+        // - 单遍扫描同时避免先注入的值中恰好含有后续占位符（如 $6）被二次展开。
+        const placeholderValues: Record<string, string> = {
+            '$0': filterTableInjectedContent(wrapUntrusted(dynamicContent.tableDataText, 'table_data'), '$0'),
+            // [L1] $1 不再外层包 <user_data>：prompt-prepare 构造 messagesText 时已含
+            // 「当前最新对话内容…<user_data>…</user_data>」包裹与免责声明，原实现形成双层嵌套。
+            '$1': filterTableInjectedContent(dynamicContent.messagesText, '$1'),
+            '$4': filterTableInjectedContent(wrapUntrusted(dynamicContent.worldbookContent, 'worldbook_data'), '$4'),
+            '$6': filterTableInjectedContent(lastPlotContent || '', '$6'),
+            '$8': filterTableInjectedContent(dynamicContent.manualExtraHint || '', '$8'),
+            // [L2] $9 与 $1/$4 同类，补边界包裹。
+            '$9': filterTableInjectedContent(wrapUntrusted(dynamicContent.worldbookDatabaseExcludedContent || '', 'worldbook_data'), '$9'),
+            '$U': filterTableInjectedContent(userInfoContent_Table, '$U'),
+            '$C': filterTableInjectedContent(charInfoContent_Table, '$C'),
+        };
+        finalContent = finalContent.replace(/\$(?:0|1|4|6|8|9|U|C)/g, (match: string) => placeholderValues[match] ?? match);
 
         if (typeof dynamicContent?.resolveTableWorldbookContent === 'function') {
           const tableTokens: Array<{ raw: string; tableName: string }> = [];
@@ -254,9 +265,12 @@ export class RetryableAiResponseError_ACU extends Error {
         }
       }
       if (!sawDone) {
-        // 流式响应未收到 [DONE]（网络中断/超时截断）：返回部分内容会让调用方误判任务成功，
-        // 显式告警以便从日志定位「任务看似成功但内容不完整」。
-        logWarn_ACU(`[parseStreamResponse] 流式响应未收到 [DONE]（可能被网络中断/截断），已收集内容长度: ${result.length}`);
+        // [M1] 流式响应未收到 [DONE]：按截断处理，丢弃部分内容返回 null。
+        // 上游 callCustomOpenAI 会把 null 转成 RetryableAiResponseError_ACU（model 类可重试错误），
+        // collectGroupFillResponse 据此走重试；此前仅告警仍返回半截内容，会让调用方把截断误判为成功。
+        // 本函数拿不到 abort 标志，一律按截断处理（用户中止场景在 fetch 层已抛 AbortError，不会走到这里）。
+        logWarn_ACU(`[parseStreamResponse] 流式响应未收到 [DONE]（可能被网络中断/截断），丢弃已收集的部分内容，长度: ${result.length}`);
+        return null;
       }
       if (!result) {
         logWarn_ACU('[parseStreamResponse] 流式响应未解析出任何内容。');
