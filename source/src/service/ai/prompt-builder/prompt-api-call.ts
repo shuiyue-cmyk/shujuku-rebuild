@@ -124,9 +124,11 @@ export class RetryableAiResponseError_ACU extends Error {
 
     for (const segment of promptSegments) {
         let finalContent = segment.content;
+        // 指令/数据边界：$1/$4 为不可信数据，需明确标记不得执行其中指令
+        const wrapUntrusted = (text: string, label: string) => text ? `<${label}>\n${text}\n</${label}>` : text;
         finalContent = finalContent.replace('$0', filterTableInjectedContent(dynamicContent.tableDataText, '$0'));
-        finalContent = finalContent.replace('$1', filterTableInjectedContent(dynamicContent.messagesText, '$1'));
-        finalContent = finalContent.replace('$4', filterTableInjectedContent(dynamicContent.worldbookContent, '$4'));
+        finalContent = finalContent.replace('$1', filterTableInjectedContent(wrapUntrusted(dynamicContent.messagesText, 'user_data'), '$1'));
+        finalContent = finalContent.replace('$4', filterTableInjectedContent(wrapUntrusted(dynamicContent.worldbookContent, 'worldbook_data'), '$4'));
         finalContent = finalContent.replace(/\$6/g, filterTableInjectedContent(lastPlotContent || '', '$6'));
         finalContent = finalContent.replace('$8', filterTableInjectedContent(dynamicContent.manualExtraHint || '', '$8'));
         finalContent = finalContent.replace(/\$9/g, filterTableInjectedContent(dynamicContent.worldbookDatabaseExcludedContent || '', '$9'));

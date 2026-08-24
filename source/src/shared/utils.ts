@@ -385,6 +385,7 @@ export   function cloneScopedConfigData_ACU(value: any, fallback: any = null) {
   export function assertSafeHttpEndpoint_ACU(endpoint: string): void {
     const raw = String(endpoint || '').trim();
     if (!raw) throw new Error('端点地址为空。');
+    if (raw.includes('\\')) throw new Error('端点不能包含反斜杠，请使用正斜杠。');
     if (raw.startsWith('//') || raw.startsWith('/\\')) throw new Error('端点不能使用协议相对 URL（//host），请使用完整 http(s):// 地址。');
     if (!/^https?:/i.test(raw)) {
       // 仅放行同源相对路径（/path、./path、无 scheme 纯路径）；任何具名 scheme 一律拒绝
@@ -404,7 +405,30 @@ export   function cloneScopedConfigData_ACU(value: any, fallback: any = null) {
     if (url.protocol === 'http:' && !['localhost', '127.0.0.1', '::1'].includes(host)) {
       throw new Error('端点使用 http:// 时仅允许 localhost；远程地址请使用 https://。');
     }
-    const numericHost = host.replace(/^::ffff:/, '').toLowerCase();
+    // 处理 IPv4-mapped IPv6：URL 会把 ::ffff:10.0.0.1 规范化为 ::ffff:a00:1，需还原为点分十进制再判定
+    let numericHost = host.replace(/^::ffff:/i, '').toLowerCase();
+    if (host.toLowerCase().startsWith('::ffff:')) {
+      const hexPart = host.replace(/^::ffff:/i, '').toLowerCase();
+      if (/^[0-9a-f:]+$/i.test(hexPart) && hexPart.includes(':')) {
+        const hexGroups = hexPart.split(':').filter(Boolean);
+        if (hexGroups.length === 2) {
+          const hi = parseInt(hexGroups[0], 16);
+          const lo = parseInt(hexGroups[1], 16);
+          if (!isNaN(hi) && !isNaN(lo)) {
+            const b0 = (hi >> 8) & 0xff;
+            const b1 = hi & 0xff;
+            const b2 = (lo >> 8) & 0xff;
+            const b3 = lo & 0xff;
+            numericHost = `${b0}.${b1}.${b2}.${b3}`;
+          }
+        } else if (hexGroups.length === 1 && hexGroups[0].length === 8) {
+          const v = parseInt(hexGroups[0], 16);
+          if (!isNaN(v)) {
+            numericHost = `${(v >> 24) & 0xff}.${(v >> 16) & 0xff}.${(v >> 8) & 0xff}.${v & 0xff}`;
+          }
+        }
+      }
+    }
     if (isPrivateNetworkHost_ACU(numericHost) && !['localhost', '127.0.0.1', '::1'].includes(numericHost)) {
       throw new Error('端点指向私网/环回/链路本地地址，存在 SSRF 风险，请使用公网 https 地址。');
     }

@@ -197,7 +197,15 @@ export function useDebugPanel() {
             const content = Array.isArray((sheet as any)?.content) ? (sheet as any).content : [];
             const rows = Math.max(0, content.length - 1);
             const headers = Array.isArray(content[0]) ? content[0].map(String) : [];
-            const sampleRows = content.slice(1, 4).map((r: any) => Array.isArray(r) ? r.slice(0, 8).map((c: any) => typeof c === 'string' && c.length > 200 ? c.slice(0, 200) + '…' : c) : r);
+            const sensitiveCols = new Set(headers.map((h: string, idx: number) => SENSITIVE_KEYS.test(h) ? idx : -1).filter((idx: number) => idx !== -1));
+            const sampleRows = content.slice(1, 4).map((r: any) => Array.isArray(r) ? r.slice(0, 8).map((c: any, colIdx: number) => {
+              if (sensitiveCols.has(colIdx)) return '***';
+              if (typeof c === 'string') {
+                const masked = maskSensitiveString(c);
+                return masked.length > 200 ? masked.slice(0, 200) + '…' : masked;
+              }
+              return c;
+            }) : r);
             tables[key] = { rows, headers, ...(sampleRows.length ? { sampleRows } : {}) };
           }
         } catch {}
@@ -231,7 +239,7 @@ export function useDebugPanel() {
             time: new Date(e.timestamp).toISOString(),
             level: e.level,
             tag: e.tag,
-            message: e.message,
+            message: maskSensitiveString(e.message),
           })),
           biotracker: biotrackerDebug,
           tables,
@@ -360,7 +368,7 @@ export function useDebugPanel() {
         time: new Date(e.timestamp).toISOString(),
         level: e.level,
         tag: e.tag,
-        message: e.message,
+        message: maskSensitiveString(e.message),
       })),
       biotracker: biotrackerDebug,
       tables,

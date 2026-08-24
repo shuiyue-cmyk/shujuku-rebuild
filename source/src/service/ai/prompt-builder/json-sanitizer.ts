@@ -459,6 +459,10 @@ export function coerceLooseRowObject_ACU(jsonStr: string) {
                     error: `Failed to parse keyed segment: ${segment}`,
                 };
             }
+            if (['__proto__', 'constructor', 'prototype'].includes(parsedKey)) {
+                logDebug_ACU(`[JSON清洗] 忽略原型污染键: ${parsedKey}`);
+                continue;
+            }
             result[parsedKey] = parsedValue.value;
             const numericKey = Number.parseInt(parsedKey, 10);
             if (!Number.isNaN(numericKey) && String(numericKey) === parsedKey) {

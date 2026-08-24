@@ -251,6 +251,7 @@ async function rerankCandidates_ACU(config: any, query: string, candidates: Rank
             method: 'POST',
             headers,
             body: JSON.stringify(body),
+            redirect: 'error',
         });
         if (!response.ok) throw new Error(await response.text().catch(() => response.statusText));
         const payload = await response.json();

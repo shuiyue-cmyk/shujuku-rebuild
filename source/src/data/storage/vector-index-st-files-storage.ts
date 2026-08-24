@@ -260,14 +260,25 @@ export function buildLegacyVectorIndexSingleSnapshotFilePath_ACU(parts: {
 }
 
 function encodeUserFilePath_ACU(path: string): string {
-    return String(path || '')
+    const raw = String(path || '').trim();
+    if (raw.includes('..') || raw.includes('\\') || raw.includes('\0')) {
+      throw new Error('文件路径不能包含 .. 或反斜杠');
+    }
+    return raw
         .split('/')
         .filter((segment) => segment.length > 0)
-        .map((segment) => encodeURIComponent(segment))
+        .map((segment) => {
+          if (segment === '..' || segment.includes('\\')) throw new Error('文件路径不能包含 .. 或反斜杠');
+          return encodeURIComponent(segment);
+        })
         .join('/');
 }
 
 function getUserFileUrl_ACU(path: string): string {
+    const raw = String(path || '').trim();
+    if (raw.includes('..') || raw.includes('\\') || raw.includes('\0')) {
+      throw new Error('文件路径不能包含 .. 或反斜杠');
+    }
     return `/user/files/${encodeUserFilePath_ACU(path)}?t=${Date.now()}`;
 }
 

@@ -80,7 +80,8 @@ export function getApiBase(settings) {
 
 export function getAuthHeaders(settings) {
   const headers = { 'Content-Type': 'application/json' };
-  if (settings.apiKey) headers.Authorization = `Bearer ${settings.apiKey}`;
+  const sanitizedKey = String(settings.apiKey || '').replace(/[\r\n\0]+/g, '');
+  if (sanitizedKey) headers.Authorization = `Bearer ${sanitizedKey}`;
   return headers;
 }
 
@@ -117,7 +118,7 @@ function getHostProxyHeaders(extraHeaders = {}) {
 }
 
 function buildHostProxyConfig(apiBase, settings) {
-  const apiKey = String(settings?.apiKey || '');
+  const apiKey = String(settings?.apiKey || '').replace(/[\r\n\0]+/g, '');
   return {
     chat_completion_source: 'custom',
     custom_url: apiBase,
@@ -137,19 +138,18 @@ function buildHostProxyConfig(apiBase, settings) {
 export function assertSafeDirectApiBase(apiBase) {
   const raw = String(apiBase || '').trim();
   if (!raw) return;
+  if (raw.includes('\\')) throw new Error('API Base URL 不能包含反斜杠');
+  if (raw.startsWith('//')) throw new Error('API Base URL 不能使用协议相对 URL');
   if (!/^https?:/i.test(raw)) {
     // 显式的非 http(s) scheme 一律拒绝：代理路径会把 URL 交给 ST 后端服务端 fetch，
     // file:// / gopher:// 之类会让它变成 SSRF 放大器
-    const schemeMatch = raw.match(/^([a-z][a-z0-9+.-]*):/i);
-    if (schemeMatch) {
-      const rest = raw.slice(schemeMatch[0].length);
-      // 'localhost:8000' / 'api.example.com:8080' 是无 scheme 的 host:port，放行
-      const isPortOnly = /^\d+$/.test(rest);
-      if (!isPortOnly) {
-        throw new Error('API Base URL 仅支持 http:// 或 https://，其他协议一律拒绝。');
-      }
+    // 仅放行 host:port 形式的无 scheme 地址，且 host 必须为合法域名/IP
+    if (/^[a-z][a-z0-9+.-]*:/i.test(raw)) {
+      throw new Error('API Base URL 仅支持 http:// 或 https://，其他协议一律拒绝。');
     }
-    return;
+    if (/^[a-z0-9.-]+:\d+$/i.test(raw)) return;
+    if (raw.startsWith('/') || raw.startsWith('./') || raw.startsWith('../') || !raw.includes(':')) return;
+    throw new Error('API Base URL 仅支持 http:// 或 https://，其他协议一律拒绝。');
   }
   let url;
   try {
@@ -157,9 +157,27 @@ export function assertSafeDirectApiBase(apiBase) {
   } catch {
     throw new Error('API Base URL 无法解析。');
   }
+  const rawHost = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  // 处理 IPv4-mapped IPv6 的十六进制规范化（如 ::ffff:a00:1）
+  let hostForPrivateCheck = rawHost.replace(/^::ffff:/i, '').toLowerCase();
+  if (rawHost.toLowerCase().startsWith('::ffff:')) {
+    const hexPart = rawHost.replace(/^::ffff:/i, '').toLowerCase();
+    if (/^[0-9a-f:]+$/i.test(hexPart) && hexPart.includes(':')) {
+      const hexGroups = hexPart.split(':').filter(Boolean);
+      if (hexGroups.length === 2) {
+        const hi = parseInt(hexGroups[0], 16);
+        const lo = parseInt(hexGroups[1], 16);
+        if (!isNaN(hi) && !isNaN(lo)) {
+          hostForPrivateCheck = `${(hi >> 8) & 0xff}.${hi & 0xff}.${(lo >> 8) & 0xff}.${lo & 0xff}`;
+        }
+      }
+    }
+  }
+  if (isLocalNetworkHost(hostForPrivateCheck) && !['localhost', '127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(hostForPrivateCheck) && !['localhost', '127.0.0.1', '::1'].includes(rawHost)) {
+    throw new Error('API Base URL 指向私网/内网地址，请检查');
+  }
   if (url.protocol !== 'http:') return;
-  // WHATWG URL 对 IPv6 返回带方括号的 hostname
-  const host = url.hostname.replace(/^\[|\]$/g, '').replace(/^::ffff:/, '').toLowerCase();
+  const host = rawHost.replace(/^::ffff:/i, '').toLowerCase();
   if (!isLocalNetworkHost(host)) {
     throw new Error('API Base URL 使用 http:// 时仅允许本机或内网地址；公网地址请改用 https://，避免 API Key 明文传输。');
   }
@@ -275,6 +293,7 @@ async function fetchText(url, options = {}) {
   let timedOut = false;
   let externalAborted = false;
   let onExternalAbort = null;
+  fetchOptions.redirect = 'error';
   if (controller) {
     fetchOptions.signal = controller.signal;
     if (limitMs > 0) {
@@ -1023,8 +1042,18 @@ function safeProbeCall(name, fallback = null) {
 }
 
 export async function callOpenAICompatible(settings, payload, systemPrompt = DEFAULT_SYSTEM_PROMPT) {
-  // 数据库集成（F4）：每次调用时从数据库拉最新 API 配置（url/apiKey/model/温度），运行中改配置即时生效
-  const liveApiProbe = safeProbeCall('__bs_biotracker_api_probe__');
+  // 数据库集成（F4）：每次调用时从数据库拉最新 API 配置，优先使用 Symbol 安全通道（真实 key），兼容旧字符串探针（已脱敏）
+  let liveApiProbe = null;
+  try {
+    const secureFn = globalThis[Symbol.for('__bs_biotracker_secure_api_key__')];
+    if (typeof secureFn === 'function') liveApiProbe = secureFn();
+    else liveApiProbe = safeProbeCall('__bs_biotracker_api_probe__');
+    if (liveApiProbe && liveApiProbe.apiKey === '***') {
+      const rest = { ...liveApiProbe };
+      delete rest.apiKey;
+      liveApiProbe = rest;
+    }
+  } catch {}
   if (liveApiProbe) {
     const live = { ...settings, ...liveApiProbe };
     if (liveApiProbe.temperature === undefined) delete live.temperature;

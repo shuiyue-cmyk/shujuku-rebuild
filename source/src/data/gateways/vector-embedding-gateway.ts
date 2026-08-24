@@ -164,7 +164,9 @@ export async function createEmbeddings_ACU(request: VectorEmbeddingRequest_ACU):
         method: 'POST',
         headers,
         body: JSON.stringify({ model, input }),
-    });    if (!response.ok) {
+        redirect: 'error',
+    });
+    if (!response.ok) {
         await throwEmbeddingHttpErrorAsync_ACU(response, endpoint, model);
     }
     const payload = await response.json();

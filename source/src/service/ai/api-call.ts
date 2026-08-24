@@ -6,6 +6,7 @@ import { settings_ACU } from '../runtime/state-manager';
 import { getHostRequestHeaders_ACU } from '../../data/gateways/ai-gateway';
 import { assertSafeHttpEndpoint_ACU, logDebug_ACU, logWarn_ACU } from '../../shared/utils';
 import { resolveApiConfigByPreset_ACU } from '../settings/api-preset-service';
+import { isDebugLogEnabled } from '../../shared/log-buffer';
 
 function normalizeExcludeBodyParamsForSillyTavern_ACU(raw: any): string {
   if (typeof raw !== 'string') return '';
@@ -131,8 +132,20 @@ export function buildCustomApiRequestBody_ACU(
   };
 
   logDebug_ACU(`[API] 构建请求体: model=${model}, reasoning_effort=${body.reasoning_effort}, stream=${body.stream}, temperature=${body.temperature}, max_tokens=${body.max_tokens}, exclude=${body.custom_exclude_body ? '有' : '无'}`);
-  try { (globalThis as any).__ACU_DEBUG_LAST_API_BODY__ = JSON.parse(JSON.stringify(body)); } catch {}
-  try { (globalThis as any).__ACU_DEBUG_LAST_API_BODY_AT__ = Date.now(); } catch {}
+  if (isDebugLogEnabled()) {
+    try {
+      const toStore: any = JSON.parse(JSON.stringify(body));
+      if (toStore.custom_include_headers) {
+        toStore.custom_include_headers = String(toStore.custom_include_headers).replace(/(Authorization\s*:\s*Bearer\s+)([^\s"',}\n]+)/gi, '$1***');
+      }
+      if (toStore.proxy_password) toStore.proxy_password = '***';
+      (globalThis as any).__ACU_DEBUG_LAST_API_BODY__ = toStore;
+      (globalThis as any).__ACU_DEBUG_LAST_API_BODY_AT__ = Date.now();
+    } catch {}
+  } else {
+    try { delete (globalThis as any).__ACU_DEBUG_LAST_API_BODY__; } catch {}
+    try { delete (globalThis as any).__ACU_DEBUG_LAST_API_BODY_AT__; } catch {}
+  }
 
   return body;
 }

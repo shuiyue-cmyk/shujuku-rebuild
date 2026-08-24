@@ -109,7 +109,8 @@ function installBiotrackerConsoleBridge(): void {
   (globalThis as any).__bs_biotracker_debug_api_probe__ = () => isDebugLogEnabled();
   // API 配置探针：vendor 每次 API 调用时读取数据库当前配置（url/apiKey/model/温度/max token），
   // 保证追踪/注册内部直连调用（不经适配层同步）也采用最新数据库设置（F4：运行中改配置即时生效）
-  (globalThis as any).__bs_biotracker_api_probe__ = () => {
+  // 安全：探针返回脱敏 apiKey，真实 key 通过闭包通道传递，避免全局明文泄露
+  const getBiotrackerVendorApiConfigReal_ACU = () => {
     const presetName = String(settings_ACU.bs_biotracker?.apiPreset || '').trim();
     let cfg: any = null;
     try {
@@ -126,6 +127,18 @@ function installBiotrackerConsoleBridge(): void {
       maxTokens: Number.isFinite(Number(cfg.max_tokens)) ? Number(cfg.max_tokens) : undefined,
     };
   };
+  (globalThis as any).__bs_biotracker_api_probe__ = () => {
+    const real = getBiotrackerVendorApiConfigReal_ACU();
+    return {
+      apiUrl: real.apiUrl,
+      apiKey: real.apiKey ? '***' : '',
+      model: real.model,
+      temperature: real.temperature,
+      maxTokens: real.maxTokens,
+    };
+  };
+  // 内部安全通道：vendor 通过 Symbol 获取真实 key，不暴露于字符串全局键
+  (globalThis as any)[Symbol.for('__bs_biotracker_secure_api_key__')] = getBiotrackerVendorApiConfigReal_ACU;
   // 非预填充探针：生理追踪专用预设（bs_biotracker.apiPreset）的 nonPrefillSupport 优先，
   // 未选预设时回退全局 settings_ACU.nonPrefillSupport（vendor 直连调用同样生效）
   (globalThis as any).__bs_biotracker_non_prefill_probe__ = () => {

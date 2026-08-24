@@ -95,6 +95,7 @@ export async function createRerankScores_ACU(request: VectorRerankRequest_ACU): 
         method: 'POST',
         headers: buildRerankHeaders_ACU(request.apiKey),
         body: JSON.stringify(payload),
+        redirect: 'error',
     });
 
     if (!response.ok) {

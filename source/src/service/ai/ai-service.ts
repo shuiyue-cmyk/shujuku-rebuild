@@ -41,12 +41,13 @@ export async function fetchAvailableModels_ACU(apiUrl: string, apiKey: string): 
     }
 
     const statusUrl = `/api/backends/chat-completions/status`;
+    const sanitizedKey = String(apiKey || '').replace(/[\r\n\0]+/g, '');
     const body = {
         "reverse_proxy": apiUrl,
         "proxy_password": "",
         "chat_completion_source": "custom",
         "custom_url": apiUrl,
-        "custom_include_headers": apiKey ? `Authorization: Bearer ${apiKey}` : ""
+        "custom_include_headers": sanitizedKey ? `Authorization: Bearer ${sanitizedKey}` : ""
     };
 
     const response = await fetch(statusUrl, {

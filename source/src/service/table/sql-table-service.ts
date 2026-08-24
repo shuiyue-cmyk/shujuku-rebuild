@@ -40,6 +40,7 @@ import {
 import {
   mergeAllIndependentTables_ACU
 } from '../runtime/helpers-data-merge';
+import { validateReadOnlySql_ACU } from '../runtime/template-vars/read-only-sql-validation';
 import {
   hashUserInput_ACU,
   logDebug_ACU,
@@ -1614,6 +1615,8 @@ export class SqlTableService implements ITableStorageProvider {
     params?: (string | number | null)[],
     options?: SqlQueryExecutionOptions_ACU,
   ): SqlQueryResult {
+    const v = validateReadOnlySql_ACU(sql);
+    if (!v.valid) throw new Error(v.reason || 'Only SELECT/PRAGMA/EXPLAIN/WITH allowed');
     this._ensureInitialized();
     const result = this.engine.query(sql, params, options);
     return {
@@ -1628,6 +1631,7 @@ export class SqlTableService implements ITableStorageProvider {
    * 执行后自动同步到 JSON 视图
    */
   executeMutation(sql: string, params?: (string | number | null)[]): SqlMutationResult {
+    if (!/^\s*(INSERT|UPDATE|DELETE|REPLACE)\b/i.test(sql)) throw new Error('Only INSERT/UPDATE/DELETE/REPLACE allowed');
     this._ensureInitialized();
     this._ensureTablesFromTemplate();
     try {
