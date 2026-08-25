@@ -277,5 +277,34 @@ export function showToastr_ACU(type: string, message: string, titleOrOptions: an
     if (now - last < 1200) return null;
     _acuToastDedup_ACU.set(key, now);
   } catch (e) {}
+  // 富文本修复：标准 toastr 尊重 escapeHtml:false，但部分宿主/美化脚本会替换 toastr
+  // 实现并忽略该选项、把 message 按纯文本转义（用户可见 <div><span…> 字面量）。
+  // 渲染后检测消息节点是否被转义，是则用我们自己的受信标记重写。
+  // 双保险：onShown 钩子 + 400ms 定时兜底（被替换的 toastr 可能不回调 onShown）。
+  const wantsHtml = finalOptions.escapeHtml === false && /<[^>]+>/.test(String(message));
+  if (wantsHtml) {
+    const repairEscapedMessage = (): void => {
+      try {
+        const raw = String(message);
+        const prefix = raw.replace(/\s+/g, ' ').slice(0, 40);
+        const candidates = typeof document !== 'undefined'
+          ? Array.from(document.querySelectorAll('.acu-toast .toast-message'))
+          : [];
+        for (const el of candidates) {
+          const text = (el.textContent || '').replace(/\s+/g, ' ');
+          if (!el.children.length && text.startsWith(prefix)) {
+            el.innerHTML = raw;
+            break;
+          }
+        }
+      } catch (e) {}
+    };
+    const userOnShown = finalOptions.onShown;
+    finalOptions.onShown = function (this: unknown, ...args: unknown[]) {
+      try { repairEscapedMessage(); } catch (e) {}
+      if (typeof userOnShown === 'function') userOnShown.apply(this, args as any);
+    };
+    setTimeout(repairEscapedMessage, 400);
+  }
   return (toastr_API_ACU as unknown as Record<string, (message: string, title: string, options: Record<string, unknown>) => JQuery<HTMLElement> | null>)[type]?.(message, title, finalOptions) ?? null;
 }
