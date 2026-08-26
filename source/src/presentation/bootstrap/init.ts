@@ -58,7 +58,6 @@ import {
   getRuntimeLifecycleEpoch_ACU,
   hydrateStorageProviderFromSnapshot_ACU
 } from '../../service/table/table-storage-strategy';
-import { initBiotracker_ACU } from '../../service/biotracker/biotracker-adapter';
 import {
   createCanonicalSnapshotEnvelope_ACU
 } from '../../service/table/canonical-snapshot-envelope';
@@ -452,12 +451,6 @@ export   function mainInitialize_ACU() {
       showToastr_ACU('success', '数据库已加载！', '数据库');
 
       loadSettings_ACU();
-      // 生理追踪模块初始化（BS BioTracker 合并）
-      try {
-        initBiotracker_ACU();
-      } catch (e) {
-        logWarn_ACU('[生理追踪] 初始化挂载失败:', e);
-      }
       if (
         SillyTavern_API_ACU &&
         SillyTavern_API_ACU.eventSource &&

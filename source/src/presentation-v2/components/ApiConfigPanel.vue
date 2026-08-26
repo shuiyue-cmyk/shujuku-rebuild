@@ -121,7 +121,7 @@
       <AcuToggle
         v-model="activeDraft.nonPrefillSupport"
         label="非预填充支持"
-        description="该预设开启后，所有使用本预设的调用（剧情推进/填表/生理追踪等）会把 assistant 消息改写为 user，并在首行加上「助手：」前缀。用于不支持 assistant 预填充的模型/接口。"
+        description="该预设开启后，所有使用本预设的调用（剧情推进/填表等）会把 assistant 消息改写为 user，并在首行加上「助手：」前缀。用于不支持 assistant 预填充的模型/接口。"
       />
 
       <div class="acu-api-config-panel__editor-section">

@@ -37,7 +37,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed } from "vue";
 import AcuFormRow from "../components/_lib/AcuFormRow.vue";
 import AcuInput from "../components/_lib/AcuInput.vue";
 import AcuPanel from "../components/_lib/AcuPanel.vue";
@@ -46,14 +46,9 @@ import ToggleRow from "../components/DashboardToggleRow.vue";
 import { useDevOptions } from "../composables/useDevOptions";
 import { useFormFillSettings } from "../composables/useFormFillSettings";
 import { developerCopy } from "../copy/developer-copy";
-import {
-  isBiotrackerEnabled_ACU,
-  setBiotrackerEnabled_ACU,
-} from "../../service/biotracker/biotracker-adapter";
 
 const devOptions = useDevOptions();
 const settings = useFormFillSettings();
-const biotrackerTick = ref(0);
 
 interface DeveloperFieldItem {
   key: string;
@@ -63,7 +58,6 @@ interface DeveloperFieldItem {
 }
 
 const toggles = computed<DeveloperFieldItem[]>(() => {
-  void biotrackerTick.value;
   return [
     {
       key: "plotAdvanced",
@@ -76,13 +70,6 @@ const toggles = computed<DeveloperFieldItem[]>(() => {
       label: "交火模式",
       description: "显示召回参数与归档分块面板。需要调整向量相关参数时开启。",
       value: devOptions.vectorIndexAdvanced.value,
-    },
-    {
-      key: "biotrackerEnabled",
-      label: "生理追踪（内置）",
-      description:
-        "数据库内置生理追踪（调试用，与上游 biotracker 插件数据隔离）。开启后在开发者选项中显示生理追踪页面。",
-      value: isBiotrackerEnabled_ACU(),
     },
   ];
 });
@@ -99,10 +86,6 @@ function handleToggleChange(key: string, value: boolean): void {
   }
   if (key === "vectorIndexAdvanced") {
     devOptions.setVectorIndexAdvanced(value);
-  }
-  if (key === "biotrackerEnabled") {
-    setBiotrackerEnabled_ACU(value);
-    biotrackerTick.value++;
   }
 }
 </script>

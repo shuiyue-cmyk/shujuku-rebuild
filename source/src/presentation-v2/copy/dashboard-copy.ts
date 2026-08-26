@@ -205,11 +205,6 @@ export const dashboardCopy = {
       description:
         "默认开启。详情前往对应页面；默认仅召回记忆，进阶版含剧情规划。仅推荐在测试或自由发挥时关闭。",
     },
-    biotracker: {
-      label: "生理追踪",
-      description:
-        "角色生理状态追踪（注册/异步追踪）。开启后需在「生理追踪」页面配置 API 并注册角色；详情前往对应页面。",
-    },
     contentReplace: {
       label: "正文替换",
       description:

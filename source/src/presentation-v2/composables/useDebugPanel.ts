@@ -175,8 +175,6 @@ export function useDebugPanel() {
             max_tokens: cfg.max_tokens,
           },
           plotEnabled: settings_ACU?.plotSettings?.enabled === true,
-          biotrackerEnabled: settings_ACU?.bs_biotracker?.enabled === true,
-          autoRegister: settings_ACU?.bs_biotracker?.autoRegister === true,
         };
         const biotrackerDebug: Record<string, unknown> = {};
         try {
@@ -308,8 +306,6 @@ export function useDebugPanel() {
         max_tokens: cfg.max_tokens,
       },
       plotEnabled: settings_ACU?.plotSettings?.enabled === true,
-      biotrackerEnabled: settings_ACU?.bs_biotracker?.enabled === true,
-      autoRegister: settings_ACU?.bs_biotracker?.autoRegister === true,
     };
 
     const biotrackerDebug: Record<string, unknown> = {};

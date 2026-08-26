@@ -42,11 +42,11 @@ afterEach(() => {
 });
 
 describe('router-store · pageRegistry 基线', () => {
-  it('注册表恰好 13 项，分布于 5 分组', async () => {
+  it('注册表恰好 12 项，分布于 5 分组（生理追踪已剥离）', async () => {
     const m = await freshImport();
     m.pinia.setActivePinia(m.pinia.createPinia());
     const r = m.router.useRouterStore();
-    expect(r.pageRegistry.length).toBe(13);
+    expect(r.pageRegistry.length).toBe(12);
     const byGroup = r.pageRegistry.reduce<Record<string, number>>((acc, p) => {
       acc[p.group] = (acc[p.group] || 0) + 1;
       return acc;
@@ -56,7 +56,7 @@ describe('router-store · pageRegistry 基线', () => {
       config: 5,
       feature: 2,
       tool: 2,
-      developer: 2,
+      developer: 1,
     });
   });
 
@@ -77,7 +77,6 @@ describe('router-store · pageRegistry 基线', () => {
       ['content-replace', '正文替换', 'feature'],
       ['data-mgmt', '数据管理', 'tool'],
       ['advanced-tools', '高级工具', 'tool'],
-      ['biotracker', '生理追踪', 'developer'],
       ['developer', '开发者选项', 'developer'],
     ]);
   });
