@@ -123761,6 +123761,133 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 }
 var AcuToggle = /* @__PURE__ */ _export_sfc(_sfc_main$Q, [["render", _sfc_render$Q], ["__scopeId", "data-v-61c4c790"]]);
 
+// presentation-v2/composables/client-header-presets.ts — API 预设「客户端伪装」可选预设
+// 把常见模型 CLI/GUI 客户端的身份请求头（User-Agent / HTTP-Referer / X-Title / x-app /
+// originator 等）做成可选预设，选中后合并进附加请求标头文本框（同名键覆盖、其余行保留）。
+/**
+ * 客户端身份头预设清单（键值对经源码/文档查证；版本号随上游更新会过期，
+ * 仅作为「像该客户端」的伪装基线，用户可在文本框中手动改版本号）。
+ * 查证结论（2026-08-26）：Codex/Gemini/Qwen/OpenCode/Roo/Kilo 源码实证；
+ * Claude Code/Z Code 为用户提供样本；Cline/Cherry Studio/Chatbox 未实证故不收录。
+ */
+const CLIENT_HEADER_PRESETS_ACU = [
+    {
+        id: 'claude-code',
+        label: 'Claude Code CLI',
+        headers: [
+            'x-app: cli',
+            'User-Agent: claude-cli/2.1.207 (external, cli)',
+        ],
+    },
+    {
+        id: 'zcode',
+        label: 'Z Code（智谱桌面端）',
+        headers: [
+            'HTTP-Referer: https://zcode.z.ai/',
+            'X-Title: Z Code@electron',
+            'User-Agent: ZCode/3.7.7',
+        ],
+    },
+    {
+        id: 'codex-cli',
+        label: 'OpenAI Codex CLI',
+        headers: [
+            'originator: codex_cli_rs',
+            'User-Agent: codex_cli_rs/0.46.0 (Windows 10.0; x86_64) WindowsTerminal',
+        ],
+    },
+    {
+        id: 'gemini-cli',
+        label: 'Gemini CLI',
+        headers: [
+            'User-Agent: GeminiCLI/v0.8.1/gemini-2.5-pro (windows; x86_64; cli)',
+        ],
+    },
+    {
+        id: 'qwen-code',
+        label: 'Qwen Code',
+        headers: [
+            'User-Agent: QwenCode/v3.1.0 (windows; x86_64)',
+        ],
+    },
+    {
+        id: 'roo-code',
+        label: 'Roo Code',
+        headers: [
+            'HTTP-Referer: https://github.com/RooVetGit/Roo-Cline',
+            'X-Title: Roo Code',
+            'User-Agent: RooCode/3.20.0',
+        ],
+    },
+    {
+        id: 'opencode',
+        label: 'OpenCode',
+        headers: [
+            'HTTP-Referer: https://opencode.ai/',
+            'X-Title: opencode',
+        ],
+    },
+    {
+        id: 'kilo-code',
+        label: 'Kilo Code',
+        headers: [
+            'HTTP-Referer: https://kilo.ai/',
+            'X-Title: Kilo Code',
+        ],
+    },
+];
+/** 提取一行头的键（冒号前），小写化用于不区分大小写比较 */
+function headerKeyOf(line) {
+    const idx = line.indexOf(':');
+    return (idx === -1 ? line : line.slice(0, idx)).trim().toLowerCase();
+}
+/**
+ * 把预设头合并进现有附加请求标头文本：
+ * - 与预设键同名（不区分大小写）的现有行被替换为预设行（保持原有行序位置）
+ * - 现有行中与预设不同名的行原样保留（含 Authorization 等敏感行，不动）
+ * - 预设中现有文本没有的键追加到末尾
+ */
+function applyClientHeaderPreset_ACU(currentHeaders, preset) {
+    const existingLines = String(currentHeaders || '')
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter(Boolean);
+    const presetLines = preset.headers.map((l) => l.trim()).filter(Boolean);
+    const replacedKeys = new Set();
+    const merged = [];
+    for (const line of existingLines) {
+        const key = headerKeyOf(line);
+        const presetLine = presetLines.find((p) => headerKeyOf(p) === key);
+        if (presetLine) {
+            merged.push(presetLine);
+            replacedKeys.add(key);
+        }
+        else {
+            merged.push(line);
+        }
+    }
+    for (const presetLine of presetLines) {
+        if (!replacedKeys.has(headerKeyOf(presetLine))) {
+            merged.push(presetLine);
+        }
+    }
+    return merged.join('\n');
+}
+/** 从文本框内容反查当前命中的预设 id（全部键都命中才算），供回显选中态 */
+function matchClientHeaderPreset_ACU(currentHeaders) {
+    const lines = String(currentHeaders || '')
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter(Boolean);
+    const existingKeys = new Set(lines.map(headerKeyOf));
+    for (const preset of CLIENT_HEADER_PRESETS_ACU) {
+        const allMatch = preset.headers.every((h) => existingKeys.has(headerKeyOf(h)));
+        if (allMatch)
+            return preset.id;
+    }
+    return '';
+}
+
 // ─── 思考强度选项（每个 API 预设独立） ───
 var _sfc_main$P = /*@__PURE__*/ defineComponent({
     __name: 'ApiConfigPanel',
@@ -123773,6 +123900,20 @@ var _sfc_main$P = /*@__PURE__*/ defineComponent({
             { value: "max", label: "Max" },
             { value: "xhigh", label: "XHigh" },
         ];
+        // ─── 客户端伪装预设（附加请求标头的可选填充） ───
+        const clientPresetOptions = CLIENT_HEADER_PRESETS_ACU.map((p) => ({
+            value: p.id,
+            label: p.label,
+        }));
+        const matchedClientPresetId = computed(() => matchClientHeaderPreset_ACU(activeDraft.requestHeaders));
+        function applyClientPreset(id) {
+            if (activeDraft.publicServiceMode)
+                return;
+            const preset = CLIENT_HEADER_PRESETS_ACU.find((p) => p.id === String(id ?? ""));
+            if (!preset)
+                return;
+            activeDraft.requestHeaders = applyClientHeaderPreset_ACU(activeDraft.requestHeaders, preset);
+        }
         const store = useApiPresetStore();
         const dialogStore = useDialogStore();
         const toast = useToastStore();
@@ -123912,14 +124053,14 @@ var _sfc_main$P = /*@__PURE__*/ defineComponent({
             });
         }
         watch(() => store.activePresetName, () => syncActiveDraft(), { flush: "sync" });
-        const __returned__ = { reasoningEffortOptions, store, dialogStore, toast, formMode, activeDraft, activeDraftOriginalName, activeDraftSnapshot, activeDraftError, activeDraftSavedAt, activeDraftDirty, modelSelectOptions, presetDropdownItems, refreshAll, syncActiveDraft, startCreateDraft, selectPreset, deletePreset, presetMeta, validateActiveDraft, saveActiveDraft, loadModelsForActive, get apiCopy() { return apiCopy; }, AcuButton, AcuFormRow, AcuIconButton, AcuInput, AcuMessage, AcuPanel, AcuTextarea, AcuPresetDropdown, AcuSelect, AcuToggle };
+        const __returned__ = { reasoningEffortOptions, clientPresetOptions, matchedClientPresetId, applyClientPreset, store, dialogStore, toast, formMode, activeDraft, activeDraftOriginalName, activeDraftSnapshot, activeDraftError, activeDraftSavedAt, activeDraftDirty, modelSelectOptions, presetDropdownItems, refreshAll, syncActiveDraft, startCreateDraft, selectPreset, deletePreset, presetMeta, validateActiveDraft, saveActiveDraft, loadModelsForActive, get apiCopy() { return apiCopy; }, AcuButton, AcuFormRow, AcuIconButton, AcuInput, AcuMessage, AcuPanel, AcuTextarea, AcuPresetDropdown, AcuSelect, AcuToggle };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.acu-api-config-panel__select-row[data-v-8cf428f0] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-8cf428f0] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-8cf428f0] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-8cf428f0] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-8cf428f0] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-8cf428f0] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-8cf428f0] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-8cf428f0] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-8cf428f0] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-8cf428f0");
-var ApiConfigPanel_vue_vue_type_style_index_0_scoped_8cf428f0_lang = null;
+injectSfcStyle("\n.acu-api-config-panel__select-row[data-v-a185e8f0] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-a185e8f0] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-a185e8f0] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-a185e8f0] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-a185e8f0] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-a185e8f0] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-a185e8f0] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-a185e8f0] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-a185e8f0] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-a185e8f0");
+var ApiConfigPanel_vue_vue_type_style_index_0_scoped_a185e8f0_lang = null;
 
 const _hoisted_1$N = { class: "acu-api-config-panel__select-row" };
 const _hoisted_2$G = { class: "acu-api-config-panel__editor-section" };
@@ -123945,7 +124086,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 				key: 0,
 				kind: "warning"
 			}, {
-				default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
+				default: withCtx(() => [..._cache[17] || (_cache[17] = [createTextVNode(
 					" 暂无可用 API 预设，请新建并设为当前或全局默认。 ",
 					-1
 					/* CACHED */
@@ -124031,7 +124172,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 							_: 1
 						}),
 						createBaseVNode("div", _hoisted_3$z, [createVNode($setup["AcuButton"], { onClick: $setup.loadModelsForActive }, {
-							default: withCtx(() => [..._cache[17] || (_cache[17] = [createTextVNode(
+							default: withCtx(() => [..._cache[18] || (_cache[18] = [createTextVNode(
 								"加载模型",
 								-1
 								/* CACHED */
@@ -124133,12 +124274,30 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 							_: 1
 						}),
 						createVNode($setup["AcuFormRow"], {
+							label: "客户端伪装",
+							hint: "选择一个客户端身份后，其特征请求头（User-Agent / HTTP-Referer / X-Title 等）会合并进下方附加请求标头：同名键覆盖、其余行保留。用于部分屏蔽第三方客户端的供应商。如果您不清楚这是做什么用的请不要选择。选择启用后的风险自行评估，后果自担。"
+						}, {
+							default: withCtx(() => [createVNode($setup["AcuSelect"], {
+								options: $setup.clientPresetOptions,
+								"model-value": $setup.matchedClientPresetId,
+								disabled: $setup.activeDraft.publicServiceMode,
+								placeholder: $setup.activeDraft.publicServiceMode ? "已开启公益站兼容，不可使用客户端伪装" : "不使用预设",
+								"onUpdate:modelValue": _cache[15] || (_cache[15] = ($event) => $setup.applyClientPreset($event))
+							}, null, 8, [
+								"options",
+								"model-value",
+								"disabled",
+								"placeholder"
+							])]),
+							_: 1
+						}),
+						createVNode($setup["AcuFormRow"], {
 							label: "附加请求标头",
 							hint: "每行一个 Header: Value，追加到请求头中。"
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
 								modelValue: $setup.activeDraft.requestHeaders,
-								"onUpdate:modelValue": _cache[15] || (_cache[15] = ($event) => $setup.activeDraft.requestHeaders = $event),
+								"onUpdate:modelValue": _cache[16] || (_cache[16] = ($event) => $setup.activeDraft.requestHeaders = $event),
 								rows: 2,
 								placeholder: "X-Custom-Header: value"
 							}, null, 8, ["modelValue"])]),
@@ -124160,7 +124319,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 						disabled: !$setup.activeDraftDirty,
 						onClick: $setup.syncActiveDraft
 					}, {
-						default: withCtx(() => [..._cache[18] || (_cache[18] = [createTextVNode(
+						default: withCtx(() => [..._cache[19] || (_cache[19] = [createTextVNode(
 							"放弃修改",
 							-1
 							/* CACHED */
@@ -124185,7 +124344,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 				key: 2,
 				kind: "warning"
 			}, {
-				default: withCtx(() => [..._cache[19] || (_cache[19] = [createTextVNode(
+				default: withCtx(() => [..._cache[20] || (_cache[20] = [createTextVNode(
 					" 暂无可用 API 预设，请新建并设为当前或全局默认。 ",
 					-1
 					/* CACHED */
@@ -124196,7 +124355,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["title", "description"]);
 }
-var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$P, [["render", _sfc_render$P], ["__scopeId", "data-v-8cf428f0"]]);
+var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$P, [["render", _sfc_render$P], ["__scopeId", "data-v-a185e8f0"]]);
 
 // ═══════════════════════════════════════════════════════════
 // service/settings/feature-preset-reference-service.ts — 功能级 API 预设引用
@@ -143019,7 +143178,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260826-10";
+        const stamp = "20260826-11";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
