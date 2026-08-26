@@ -123763,12 +123763,14 @@ var AcuToggle = /* @__PURE__ */ _export_sfc(_sfc_main$Q, [["render", _sfc_render
 
 // presentation-v2/composables/client-header-presets.ts — API 预设「客户端伪装」可选预设
 // 把常见模型 CLI/GUI 客户端的身份请求头（User-Agent / HTTP-Referer / X-Title / x-app /
-// originator 等）做成可选预设，选中后合并进附加请求标头文本框（同名键覆盖、其余行保留）。
+// originator 等）做成可选预设。受管身份键由预设统一接管：应用预设时先移除全部受管键
+// 旧行再追加新预设行（切换不残留）；无关行（如 Authorization）原样保留。
 /**
  * 客户端身份头预设清单（键值对经源码/文档查证；版本号随上游更新会过期，
  * 仅作为「像该客户端」的伪装基线，用户可在文本框中手动改版本号）。
- * 查证结论（2026-08-26）：Codex/Gemini/Qwen/OpenCode/Roo/Kilo 源码实证；
- * Claude Code/Z Code 为用户提供样本；Cline/Cherry Studio/Chatbox 未实证故不收录。
+ * 查证结论（2026-08-26）：Codex/Gemini/Qwen/OpenCode/Roo/Kilo/Grok Build/MiMo Code/
+ * DeepSeek Harness/OpenClaw/OpenDesign 源码实证；Claude Code/Z Code 为用户提供样本；
+ * Trae（IDE 闭源未查到，trae-agent 无硬编码头）未实证故不收录。
  */
 const CLIENT_HEADER_PRESETS_ACU = [
     {
@@ -123800,7 +123802,7 @@ const CLIENT_HEADER_PRESETS_ACU = [
         id: 'gemini-cli',
         label: 'Gemini CLI',
         headers: [
-            'User-Agent: GeminiCLI/v0.8.1/gemini-2.5-pro (windows; x86_64; cli)',
+            'User-Agent: GeminiCLI/v0.8.1 (windows; x86_64; cli)',
         ],
     },
     {
@@ -123835,17 +123837,58 @@ const CLIENT_HEADER_PRESETS_ACU = [
             'X-Title: Kilo Code',
         ],
     },
+    {
+        id: 'grok-build',
+        label: 'Grok Build（xAI）',
+        headers: [
+            'User-Agent: grok-shell/0.1.171 (windows; x86_64)',
+        ],
+    },
+    {
+        id: 'mimo-code',
+        label: 'MiMo Code（小米）',
+        headers: [
+            'User-Agent: mimocode/stable/1.0.0/cli',
+            'HTTP-Referer: https://mimo.xiaomi.com/coder/',
+            'X-Title: mimocode',
+        ],
+    },
+    {
+        id: 'deepseek-harness',
+        label: 'DeepSeek Harness',
+        headers: [
+            'User-Agent: deepseek-harness/0.1.0 (+https://github.com/deepseek-ai/deepseek-harness)',
+        ],
+    },
+    {
+        id: 'openclaw',
+        label: 'OpenClaw',
+        headers: [
+            'User-Agent: openclaw/1.0.0',
+            'HTTP-Referer: https://openclaw.ai',
+            'X-OpenRouter-Title: OpenClaw',
+        ],
+    },
+    {
+        id: 'open-design',
+        label: 'OpenDesign（AIHubMix 归因）',
+        headers: [
+            'APP-Code: DMCY9912',
+        ],
+    },
 ];
 /** 提取一行头的键（冒号前），小写化用于不区分大小写比较 */
 function headerKeyOf(line) {
     const idx = line.indexOf(':');
     return (idx === -1 ? line : line.slice(0, idx)).trim().toLowerCase();
 }
+/** 所有预设管理的身份键并集（小写）：这些键由客户端伪装预设统一接管 */
+const MANAGED_KEYS_ACU = new Set(CLIENT_HEADER_PRESETS_ACU.flatMap((p) => p.headers.map(headerKeyOf)));
 /**
  * 把预设头合并进现有附加请求标头文本：
- * - 与预设键同名（不区分大小写）的现有行被替换为预设行（保持原有行序位置）
- * - 现有行中与预设不同名的行原样保留（含 Authorization 等敏感行，不动）
- * - 预设中现有文本没有的键追加到末尾
+ * - 所有被任一预设管理的身份键旧行先移除（切换预设时旧预设的独有键不留残留）
+ * - 再追加新预设的全部行
+ * - 与预设无关的行（含 Authorization 等敏感行）原样保留
  */
 function applyClientHeaderPreset_ACU(currentHeaders, preset) {
     const existingLines = String(currentHeaders || '')
@@ -123853,35 +123896,33 @@ function applyClientHeaderPreset_ACU(currentHeaders, preset) {
         .map((l) => l.trim())
         .filter(Boolean);
     const presetLines = preset.headers.map((l) => l.trim()).filter(Boolean);
-    const replacedKeys = new Set();
-    const merged = [];
-    for (const line of existingLines) {
-        const key = headerKeyOf(line);
-        const presetLine = presetLines.find((p) => headerKeyOf(p) === key);
-        if (presetLine) {
-            merged.push(presetLine);
-            replacedKeys.add(key);
-        }
-        else {
-            merged.push(line);
-        }
-    }
-    for (const presetLine of presetLines) {
-        if (!replacedKeys.has(headerKeyOf(presetLine))) {
-            merged.push(presetLine);
-        }
-    }
-    return merged.join('\n');
+    const kept = existingLines.filter((line) => !MANAGED_KEYS_ACU.has(headerKeyOf(line)));
+    return [...kept, ...presetLines].join('\n');
 }
-/** 从文本框内容反查当前命中的预设 id（全部键都命中才算），供回显选中态 */
+/** 行的值（冒号后）小写化，用于键+值精确匹配 */
+function headerValueOf(line) {
+    const idx = line.indexOf(':');
+    return (idx === -1 ? '' : line.slice(idx + 1)).trim().toLowerCase();
+}
+/**
+ * 从文本框内容反查当前命中的预设 id，供回显选中态。
+ * 键+值双匹配（值不区分大小写、去首尾空白后比较）：任一预设的某行在文本中找不到同键同值即不命中。
+ * 只按键匹配会把「键集相同但值不同」的预设误回显（如 OpenCode/Kilo Code）。
+ */
 function matchClientHeaderPreset_ACU(currentHeaders) {
     const lines = String(currentHeaders || '')
         .split(/\r?\n/)
         .map((l) => l.trim())
         .filter(Boolean);
-    const existingKeys = new Set(lines.map(headerKeyOf));
+    const byKey = new Map();
+    for (const line of lines) {
+        const key = headerKeyOf(line);
+        if (!byKey.has(key))
+            byKey.set(key, new Set());
+        byKey.get(key).add(headerValueOf(line));
+    }
     for (const preset of CLIENT_HEADER_PRESETS_ACU) {
-        const allMatch = preset.headers.every((h) => existingKeys.has(headerKeyOf(h)));
+        const allMatch = preset.headers.every((h) => byKey.get(headerKeyOf(h))?.has(headerValueOf(h)));
         if (allMatch)
             return preset.id;
     }
@@ -143178,7 +143219,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260826-11";
+        const stamp = "20260826-12";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
