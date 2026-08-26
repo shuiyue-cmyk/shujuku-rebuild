@@ -84582,6 +84582,24 @@ function flushPendingSaveAfterStorageReady_ACU() {
         logWarn_ACU('[设置保存] 挂起保存补存失败:', e);
     }
 }
+/** 对外查询：当前是否存在被门控挂起、尚未落盘的设置保存（供 AutoCardUpdaterAPI.hasPendingSaves） */
+function hasPendingSettingsSave_ACU() {
+    return pendingSaveAfterStorageReady_ACU;
+}
+/** 对外冲刷：立即补存挂起的设置保存并返回结果；无挂起时返回 null（供 AutoCardUpdaterAPI.flushPendingSaves） */
+function flushPendingSettingsSave_ACU() {
+    if (!pendingSaveAfterStorageReady_ACU)
+        return null;
+    pendingSaveAfterStorageReady_ACU = false;
+    logDebug_ACU('[设置保存] 外部调用冲刷挂起的设置保存。');
+    try {
+        return saveSettings_ACU();
+    }
+    catch (e) {
+        logWarn_ACU('[设置保存] 外部冲刷挂起保存失败:', e);
+        return { saved: false, storageType: 'memory', code: 'storage_error', error: String(e) };
+    }
+}
 /**
  * 替换 settings_ACU 整体对象，同时保留 biotracker 运行时命名空间（bs_biotracker）。
  * biotracker 适配层在 settings 加载完成前（IndexedDB 缓存未就绪时 loadSettings 挂起重载）
@@ -125663,7 +125681,7 @@ const WARDROBE_DIMENSION_LABELS = Object.freeze({ masking: '掩形', support: '�
 const PREG_FIT_GAP_LABELS = Object.freeze({ masking: '掩形', support: '支撑', capacity: '容身', convenience: '便捷' });
 const MAX_PROGRESS_BAR_CAP = 200;
 // 构建时间戳（rollup replace 注入；测试/dev 环境无替换时回退 'dev'）——全局水印用，截图辨别构建
-const ACU_BUILD_STAMP = typeof "20260825-10" === 'string' ? "20260825-10" : 'dev';
+const ACU_BUILD_STAMP = typeof "20260826-06" === 'string' ? "20260826-06" : 'dev';
 const MODAL_EDGE_GAP = 24;
 const UPDATE_CUE_EVENT = 'bs-biotracker:update-cue';
 const FLOATING_SPHERE_POSITION_KEY = `${MODULE_NAME}_floating_sphere_position`;
@@ -137029,6 +137047,29 @@ function createCoreDataApi(ctx) {
             // [M3] 返回深拷贝：此前直接返回活引用，调用方改写导出对象会穿透修改
             // 运行时 currentJsonTableData_ACU。该 API 为手动/第三方低频调用，深拷贝开销可接受。
             return currentJsonTableData_ACU ? JSON.parse(JSON.stringify(currentJsonTableData_ACU)) : {};
+        },
+        // 查询是否存在尚未落盘的挂起保存（第三方脚本在执行重建/恢复类操作前探测用）
+        hasPendingSaves: function () {
+            try {
+                return hasPendingSettingsSave_ACU();
+            }
+            catch (error) {
+                logWarn_ACU('hasPendingSaves failed:', error);
+                return false;
+            }
+        },
+        // 冲刷挂起保存：立即补存被门控挂起的设置，并把当前表格运行态强制保存到宿主聊天
+        flushPendingSaves: async function () {
+            try {
+                const pendingResult = flushPendingSettingsSave_ACU();
+                await saveChatToHost_ACU();
+                logDebug_ACU(`[数据API] flushPendingSaves 完成：挂起设置保存=${pendingResult ? (pendingResult.saved ? '已落盘' : pendingResult.code) : '无'}，表格运行态已 saveChat。`);
+                return true;
+            }
+            catch (error) {
+                logError_ACU('flushPendingSaves failed:', error);
+                return false;
+            }
         },
         // 导入并覆盖当前表格数据；默认外部导入会持久化，传 { persist:false } / { mode:'restore' } 时仅恢复运行时。
         importTableAsJson: async function (jsonString, options) {
@@ -166837,7 +166878,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260825-10";
+        const stamp = "20260826-06";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

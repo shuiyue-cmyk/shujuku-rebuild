@@ -58,6 +58,24 @@ function flushPendingSaveAfterStorageReady_ACU(): void {
   }
 }
 
+/** 对外查询：当前是否存在被门控挂起、尚未落盘的设置保存（供 AutoCardUpdaterAPI.hasPendingSaves） */
+export function hasPendingSettingsSave_ACU(): boolean {
+  return pendingSaveAfterStorageReady_ACU;
+}
+
+/** 对外冲刷：立即补存挂起的设置保存并返回结果；无挂起时返回 null（供 AutoCardUpdaterAPI.flushPendingSaves） */
+export function flushPendingSettingsSave_ACU(): SaveSettingsResult_ACU | null {
+  if (!pendingSaveAfterStorageReady_ACU) return null;
+  pendingSaveAfterStorageReady_ACU = false;
+  logDebug_ACU('[设置保存] 外部调用冲刷挂起的设置保存。');
+  try {
+    return saveSettings_ACU();
+  } catch (e) {
+    logWarn_ACU('[设置保存] 外部冲刷挂起保存失败:', e);
+    return { saved: false, storageType: 'memory', code: 'storage_error', error: String(e) };
+  }
+}
+
 /**
  * 替换 settings_ACU 整体对象，同时保留 biotracker 运行时命名空间（bs_biotracker）。
  * biotracker 适配层在 settings 加载完成前（IndexedDB 缓存未就绪时 loadSettings 挂起重载）
