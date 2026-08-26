@@ -59685,6 +59685,66 @@ async function resolveCandidateScopeEntriesForTable_ACU(readContext, scopeNames,
     return resolveGeneratedEntriesForTable_ACU(allEntries, tableName, tableData);
 }
 
+// service/ai/preset-rate-limiter.ts — 预设级请求限速（公益站兼容）
+// 每个开启「公益站兼容」的 API 预设独立计数：滑动窗口内最多 maxPerMinute 次请求，
+// 超出时挂起等待最早一条记录滑出窗口，期间响应 abort 信号。
+const WINDOW_MS = 60000;
+const DEFAULT_MAX_PER_MINUTE = 3;
+const windowsByPreset = new Map();
+function pruneWindow(timestamps, now) {
+    while (timestamps.length > 0 && now - timestamps[0] >= WINDOW_MS) {
+        timestamps.shift();
+    }
+}
+function sleepWithAbort(ms, signal) {
+    return new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+            const e = new Error('Aborted');
+            e.name = 'AbortError';
+            reject(e);
+            return;
+        }
+        const timer = setTimeout(() => {
+            signal?.removeEventListener('abort', onAbort);
+            resolve();
+        }, ms);
+        function onAbort() {
+            clearTimeout(timer);
+            const e = new Error('Aborted');
+            e.name = 'AbortError';
+            reject(e);
+        }
+        signal?.addEventListener('abort', onAbort, { once: true });
+    });
+}
+/**
+ * 获取一个限速槽位：该 key 在滑动窗口内已有 maxPerMinute 次请求时挂起等待。
+ * 中止时抛出 name==='AbortError' 的错误，由调用方既有中止链路处理。
+ */
+async function acquirePresetRateLimitSlot_ACU(key, options = {}) {
+    const normalizedKey = String(key || '').trim() || '_default';
+    const max = Math.max(1, Math.floor(Number(options.maxPerMinute) || DEFAULT_MAX_PER_MINUTE));
+    let timestamps = windowsByPreset.get(normalizedKey);
+    if (!timestamps) {
+        timestamps = [];
+        windowsByPreset.set(normalizedKey, timestamps);
+    }
+    for (;;) {
+        const now = Date.now();
+        pruneWindow(timestamps, now);
+        if (timestamps.length < max) {
+            timestamps.push(now);
+            return;
+        }
+        const waitMs = WINDOW_MS - (now - timestamps[0]) + 50;
+        await sleepWithAbort(waitMs, options.signal);
+    }
+}
+/** 测试/调试用：清空全部限速计数 */
+function resetPresetRateLimiter_ACU() {
+    windowsByPreset.clear();
+}
+
 /**
  * service/ai/prompt-builder/prompt-api-call.ts
  * AI API 调用 — prompt 组装 + API 调用 + 流式/非流式响应处理
@@ -59842,6 +59902,10 @@ async function callCustomOpenAI_ACU(dynamicContent, abortController = null, opti
     try {
         if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
             throw new Error('自定义API的URL或模型未配置。');
+        }
+        // 公益站兼容（预设级）：该预设限速每分钟最多 3 次请求（各预设独立计数）
+        if (apiPresetConfig.publicServiceMode) {
+            await acquirePresetRateLimitSlot_ACU(effectiveTableApiPreset || '_current_config', { signal: abortSignal });
         }
         logDebug_ACU('ACU: 调用后端生成 API, Model:', effectiveApiConfig.model);
         const content = await postChatCompletion_ACU(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { stripModelPrefix: false, nonPrefillSupport: apiPresetConfig.nonPrefillSupport }), abortSignal);
@@ -61099,6 +61163,7 @@ function normalizePreset_ACU(value) {
         apiMode: normalizeApiMode_ACU(value.apiMode),
         apiConfig: normalizeApiConfig_ACU(value.apiConfig),
         nonPrefillSupport: value.nonPrefillSupport === true,
+        publicServiceMode: value.publicServiceMode === true,
     };
 }
 function normalizePresetList_ACU(value) {
@@ -61185,6 +61250,7 @@ function resolveApiConfigByPreset_ACU(presetName) {
             tavernProfile: settings_ACU.tavernProfile,
             resolved: false,
             nonPrefillSupport: settings_ACU.nonPrefillSupport === true,
+            publicServiceMode: false,
         };
     }
     const preset = findPresetByName_ACU(settings_ACU.apiPresets, normalized);
@@ -61195,6 +61261,7 @@ function resolveApiConfigByPreset_ACU(presetName) {
             tavernProfile: settings_ACU.tavernProfile,
             resolved: true,
             nonPrefillSupport: preset.nonPrefillSupport === true,
+            publicServiceMode: preset.publicServiceMode === true,
         };
     }
     // 悬挂引用：返回当前配置但标记未解析，调用方应据此拒绝或回退，而不是静默误用。
@@ -61205,6 +61272,7 @@ function resolveApiConfigByPreset_ACU(presetName) {
         tavernProfile: settings_ACU.tavernProfile,
         resolved: false,
         nonPrefillSupport: settings_ACU.nonPrefillSupport === true,
+        publicServiceMode: false,
     };
 }
 /** 聊天切换后 reconcile：把当前聊天绑定重新投影到 apiMode/apiConfig/tavernProfile */
@@ -61663,6 +61731,10 @@ async function callApiWithPlotPreset_ACU(messages, presetName, abortSignal = nul
         throw new Error('自定义API的URL或模型未配置。');
     }
     const requestBody = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { nonPrefillSupport: apiPresetConfig.nonPrefillSupport });
+    // 公益站兼容（预设级）：该预设限速每分钟最多 3 次请求（各预设独立计数）
+    if (apiPresetConfig.publicServiceMode) {
+        await acquirePresetRateLimitSlot_ACU(effectivePresetName || '_current_config', { signal: abortSignal });
+    }
     const content = await postChatCompletion_ACU(requestBody, abortSignal);
     if (content) {
         return content.trim();
@@ -61677,6 +61749,7 @@ function getApiConfigByPreset_ACU(presetName) {
         apiConfig: resolved.apiConfig,
         tavernProfile: resolved.tavernProfile,
         nonPrefillSupport: resolved.nonPrefillSupport,
+        publicServiceMode: resolved.publicServiceMode,
     };
 }
 /**
@@ -61702,6 +61775,10 @@ async function callAIWithPreset_ACU(messages, presetName = '', maxTokensOverride
         throw new Error('自定义API的URL或模型未配置。');
     }
     const body = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens, stripModelPrefix: false, nonPrefillSupport: apiPresetConfig.nonPrefillSupport });
+    // 公益站兼容（预设级）：该预设限速每分钟最多 3 次请求（各预设独立计数）
+    if (apiPresetConfig.publicServiceMode) {
+        await acquirePresetRateLimitSlot_ACU(presetName || '_current_config', { signal });
+    }
     const content = await postChatCompletion_ACU(body, signal);
     return content ? content.trim() : null;
 }
@@ -122606,6 +122683,7 @@ function createEmptyApiPresetDraft() {
         nonPrefillSupport: false,
         streamingEnabled: false,
         reasoningEffort: 'medium',
+        publicServiceMode: false,
     };
 }
 function apiPresetDraftFromPreset(preset) {
@@ -122623,6 +122701,7 @@ function apiPresetDraftFromPreset(preset) {
         nonPrefillSupport: preset.nonPrefillSupport === true,
         streamingEnabled: preset.apiConfig.streamingEnabled === true,
         reasoningEffort: preset.apiConfig.reasoningEffort || 'medium',
+        publicServiceMode: preset.publicServiceMode === true,
     };
 }
 function apiPresetFromDraft(draft) {
@@ -122644,6 +122723,7 @@ function apiPresetFromDraft(draft) {
                 : 'medium',
         },
         nonPrefillSupport: draft.nonPrefillSupport === true,
+        publicServiceMode: draft.publicServiceMode === true,
     };
 }
 
@@ -123838,8 +123918,8 @@ var _sfc_main$P = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-api-config-panel__select-row[data-v-0b60e5a9] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-0b60e5a9] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-0b60e5a9] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-0b60e5a9] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-0b60e5a9] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-0b60e5a9] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-0b60e5a9] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-0b60e5a9] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-0b60e5a9] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-0b60e5a9");
-var ApiConfigPanel_vue_vue_type_style_index_0_scoped_0b60e5a9_lang = null;
+injectSfcStyle("\n.acu-api-config-panel__select-row[data-v-8cf428f0] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-8cf428f0] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-8cf428f0] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-8cf428f0] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-8cf428f0] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-8cf428f0] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-8cf428f0] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-8cf428f0] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-8cf428f0] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-8cf428f0");
+var ApiConfigPanel_vue_vue_type_style_index_0_scoped_8cf428f0_lang = null;
 
 const _hoisted_1$N = { class: "acu-api-config-panel__select-row" };
 const _hoisted_2$G = { class: "acu-api-config-panel__editor-section" };
@@ -123865,7 +123945,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 				key: 0,
 				kind: "warning"
 			}, {
-				default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
+				default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
 					" 暂无可用 API 预设，请新建并设为当前或全局默认。 ",
 					-1
 					/* CACHED */
@@ -123951,7 +124031,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 							_: 1
 						}),
 						createBaseVNode("div", _hoisted_3$z, [createVNode($setup["AcuButton"], { onClick: $setup.loadModelsForActive }, {
-							default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
+							default: withCtx(() => [..._cache[17] || (_cache[17] = [createTextVNode(
 								"加载模型",
 								-1
 								/* CACHED */
@@ -123997,12 +124077,6 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 						}, null, 8, ["modelValue"])]),
 						_: 1
 					})]),
-					createVNode($setup["AcuToggle"], {
-						modelValue: $setup.activeDraft.streamingEnabled,
-						"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.activeDraft.streamingEnabled = $event),
-						label: "流式输出",
-						description: "该预设开启后 AI 响应以流式方式输出（用于对话类调用）。每个 API 预设独立。"
-					}, null, 8, ["modelValue"]),
 					createVNode($setup["AcuFormRow"], {
 						label: "思考强度",
 						hint: "reasoning_effort，随预设保存。每个 API 预设独立。偏小尺寸的模型拉高思考强度有助于保证输出内容正确性"
@@ -124011,15 +124085,27 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 							options: $setup.reasoningEffortOptions,
 							"model-value": $setup.activeDraft.reasoningEffort,
 							placeholder: "请选择",
-							"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.activeDraft.reasoningEffort = $event)
+							"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.activeDraft.reasoningEffort = $event)
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
+					createVNode($setup["AcuToggle"], {
+						modelValue: $setup.activeDraft.streamingEnabled,
+						"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.activeDraft.streamingEnabled = $event),
+						label: "流式输出",
+						description: "该预设开启后 AI 响应以流式方式输出（用于对话类调用）。每个 API 预设独立。"
+					}, null, 8, ["modelValue"]),
 					createVNode($setup["AcuToggle"], {
 						modelValue: $setup.activeDraft.nonPrefillSupport,
 						"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.activeDraft.nonPrefillSupport = $event),
 						label: "非预填充支持",
 						description: "该预设开启后，所有使用本预设的调用（剧情推进/填表等）会把 assistant 消息改写为 user，并在首行加上「助手：」前缀。用于不支持 assistant 预填充的模型/接口。"
+					}, null, 8, ["modelValue"]),
+					createVNode($setup["AcuToggle"], {
+						modelValue: $setup.activeDraft.publicServiceMode,
+						"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.activeDraft.publicServiceMode = $event),
+						label: "公益站兼容",
+						description: "该预设开启后限速：每分钟最多发送 3 次请求（各预设独立计数），超出时自动排队等待。用于有频率限制的公益站/共享接口。默认关闭。"
 					}, null, 8, ["modelValue"]),
 					createBaseVNode("div", _hoisted_7$k, [
 						createVNode($setup["AcuFormRow"], {
@@ -124028,7 +124114,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
 								modelValue: $setup.activeDraft.bodyParams,
-								"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.activeDraft.bodyParams = $event),
+								"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.activeDraft.bodyParams = $event),
 								rows: 3,
 								placeholder: "response_format:\n  type: json_object\ntop_k: 50"
 							}, null, 8, ["modelValue"])]),
@@ -124040,7 +124126,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
 								modelValue: $setup.activeDraft.excludeBodyParams,
-								"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.activeDraft.excludeBodyParams = $event),
+								"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.activeDraft.excludeBodyParams = $event),
 								rows: 2,
 								placeholder: "top_p, reasoning_effort"
 							}, null, 8, ["modelValue"])]),
@@ -124052,7 +124138,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
 								modelValue: $setup.activeDraft.requestHeaders,
-								"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.activeDraft.requestHeaders = $event),
+								"onUpdate:modelValue": _cache[15] || (_cache[15] = ($event) => $setup.activeDraft.requestHeaders = $event),
 								rows: 2,
 								placeholder: "X-Custom-Header: value"
 							}, null, 8, ["modelValue"])]),
@@ -124074,7 +124160,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 						disabled: !$setup.activeDraftDirty,
 						onClick: $setup.syncActiveDraft
 					}, {
-						default: withCtx(() => [..._cache[17] || (_cache[17] = [createTextVNode(
+						default: withCtx(() => [..._cache[18] || (_cache[18] = [createTextVNode(
 							"放弃修改",
 							-1
 							/* CACHED */
@@ -124099,7 +124185,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 				key: 2,
 				kind: "warning"
 			}, {
-				default: withCtx(() => [..._cache[18] || (_cache[18] = [createTextVNode(
+				default: withCtx(() => [..._cache[19] || (_cache[19] = [createTextVNode(
 					" 暂无可用 API 预设，请新建并设为当前或全局默认。 ",
 					-1
 					/* CACHED */
@@ -124110,7 +124196,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["title", "description"]);
 }
-var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$P, [["render", _sfc_render$P], ["__scopeId", "data-v-0b60e5a9"]]);
+var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$P, [["render", _sfc_render$P], ["__scopeId", "data-v-8cf428f0"]]);
 
 // ═══════════════════════════════════════════════════════════
 // service/settings/feature-preset-reference-service.ts — 功能级 API 预设引用
@@ -142933,7 +143019,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260826-08";
+        const stamp = "20260826-10";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

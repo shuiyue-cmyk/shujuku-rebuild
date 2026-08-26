@@ -104,11 +104,6 @@
         </AcuFormRow>
       </div>
 
-      <AcuToggle
-        v-model="activeDraft.streamingEnabled"
-        label="流式输出"
-        description="该预设开启后 AI 响应以流式方式输出（用于对话类调用）。每个 API 预设独立。"
-      />
       <AcuFormRow label="思考强度" hint="reasoning_effort，随预设保存。每个 API 预设独立。偏小尺寸的模型拉高思考强度有助于保证输出内容正确性">
         <AcuSelect
           :options="reasoningEffortOptions"
@@ -119,9 +114,19 @@
       </AcuFormRow>
 
       <AcuToggle
+        v-model="activeDraft.streamingEnabled"
+        label="流式输出"
+        description="该预设开启后 AI 响应以流式方式输出（用于对话类调用）。每个 API 预设独立。"
+      />
+      <AcuToggle
         v-model="activeDraft.nonPrefillSupport"
         label="非预填充支持"
         description="该预设开启后，所有使用本预设的调用（剧情推进/填表等）会把 assistant 消息改写为 user，并在首行加上「助手：」前缀。用于不支持 assistant 预填充的模型/接口。"
+      />
+      <AcuToggle
+        v-model="activeDraft.publicServiceMode"
+        label="公益站兼容"
+        description="该预设开启后限速：每分钟最多发送 3 次请求（各预设独立计数），超出时自动排队等待。用于有频率限制的公益站/共享接口。默认关闭。"
       />
 
       <div class="acu-api-config-panel__editor-section">

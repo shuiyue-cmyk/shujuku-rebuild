@@ -6,6 +6,7 @@ import { settings_ACU } from '../runtime/state-manager';
 import { getHostRequestHeaders_ACU } from '../../data/gateways/ai-gateway';
 import { assertSafeHttpEndpoint_ACU, logDebug_ACU, logWarn_ACU } from '../../shared/utils';
 import { resolveApiConfigByPreset_ACU } from '../settings/api-preset-service';
+import { acquirePresetRateLimitSlot_ACU } from './preset-rate-limiter';
 import { isDebugLogEnabled } from '../../shared/log-buffer';
 
 function normalizeExcludeBodyParamsForSillyTavern_ACU(raw: any): string {
@@ -201,6 +202,11 @@ export async function callApiWithPlotPreset_ACU(messages: any[], presetName: str
 
     const requestBody = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { nonPrefillSupport: apiPresetConfig.nonPrefillSupport });
 
+    // 公益站兼容（预设级）：该预设限速每分钟最多 3 次请求（各预设独立计数）
+    if (apiPresetConfig.publicServiceMode) {
+        await acquirePresetRateLimitSlot_ACU(effectivePresetName || '_current_config', { signal: abortSignal });
+    }
+
     const content = await postChatCompletion_ACU(requestBody, abortSignal);
     if (content) {
         return content.trim();
@@ -217,6 +223,7 @@ export function getApiConfigByPreset_ACU(presetName: string) {
       apiConfig: resolved.apiConfig,
       tavernProfile: resolved.tavernProfile,
       nonPrefillSupport: resolved.nonPrefillSupport,
+      publicServiceMode: resolved.publicServiceMode,
     };
 }
 
@@ -248,6 +255,11 @@ export async function callAIWithPreset_ACU(messages: any[], presetName: string =
     }
 
     const body = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens, stripModelPrefix: false, nonPrefillSupport: apiPresetConfig.nonPrefillSupport });
+
+    // 公益站兼容（预设级）：该预设限速每分钟最多 3 次请求（各预设独立计数）
+    if (apiPresetConfig.publicServiceMode) {
+        await acquirePresetRateLimitSlot_ACU(presetName || '_current_config', { signal });
+    }
 
     const content = await postChatCompletion_ACU(body, signal);
     return content ? content.trim() : null;

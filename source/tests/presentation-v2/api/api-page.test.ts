@@ -98,7 +98,7 @@ describe('ApiPage', () => {
     const apiPanel = Array.from(page!.querySelectorAll<HTMLElement>('.acu-panel'))
       .find(panel => panel.querySelector('.acu-panel__title')?.textContent?.includes('API 预设'))!;
     expect(Array.from(page!.querySelectorAll<HTMLElement>('.acu-panel'))[0]).toBe(apiPanel);
-    expect(apiPanel.querySelectorAll('.acu-toggle').length).toBe(2); // 非预填充支持（预设级）/ 流式输出（全局）
+    expect(apiPanel.querySelectorAll('.acu-toggle').length).toBe(3); // 流式输出 / 非预填充支持 / 公益站兼容（均预设级）
     expect(apiPanel.querySelector('button[title="新建预设"]')).not.toBeNull();
     expect(apiPanel.querySelector('button[title="删除当前预设"]')).not.toBeNull();
     expect(document.body.textContent).not.toContain('管理 API 预设');

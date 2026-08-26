@@ -14,6 +14,7 @@ import {
   buildCustomApiRequestBody_ACU,
   postChatCompletion_ACU
 } from '../api-call';
+import { acquirePresetRateLimitSlot_ACU } from '../preset-rate-limiter';
 import {
   currentJsonTableData_ACU,
   settings_ACU
@@ -204,6 +205,10 @@ export class RetryableAiResponseError_ACU extends Error {
     try {
         if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
             throw new Error('自定义API的URL或模型未配置。');
+        }
+        // 公益站兼容（预设级）：该预设限速每分钟最多 3 次请求（各预设独立计数）
+        if (apiPresetConfig.publicServiceMode) {
+            await acquirePresetRateLimitSlot_ACU(effectiveTableApiPreset || '_current_config', { signal: abortSignal });
         }
         logDebug_ACU('ACU: 调用后端生成 API, Model:', effectiveApiConfig.model);
         const content = await postChatCompletion_ACU(buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { stripModelPrefix: false, nonPrefillSupport: apiPresetConfig.nonPrefillSupport }), abortSignal);

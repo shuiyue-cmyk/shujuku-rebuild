@@ -17,6 +17,8 @@ export interface ApiPresetDraft {
   streamingEnabled: boolean;
   /** 思考强度（预设级）：low / medium / high / max / xhigh */
   reasoningEffort: string;
+  /** 公益站兼容（预设级）：限速每分钟最多 3 次请求（各预设独立计数） */
+  publicServiceMode: boolean;
 }
 
 /** 连接模式（酒馆主 API / 酒馆预设已剥离，恒为自定义 API） */
@@ -37,6 +39,7 @@ export function createEmptyApiPresetDraft(): ApiPresetDraft {
     nonPrefillSupport: false,
     streamingEnabled: false,
     reasoningEffort: 'medium',
+    publicServiceMode: false,
   };
 }
 
@@ -55,6 +58,7 @@ export function apiPresetDraftFromPreset(preset: AcuV2ApiPreset): ApiPresetDraft
     nonPrefillSupport: preset.nonPrefillSupport === true,
     streamingEnabled: preset.apiConfig.streamingEnabled === true,
     reasoningEffort: preset.apiConfig.reasoningEffort || 'medium',
+    publicServiceMode: preset.publicServiceMode === true,
   };
 }
 
@@ -77,5 +81,6 @@ export function apiPresetFromDraft(draft: ApiPresetDraft): AcuV2ApiPreset {
         : 'medium',
     },
     nonPrefillSupport: draft.nonPrefillSupport === true,
+    publicServiceMode: draft.publicServiceMode === true,
   };
 }
