@@ -122893,8 +122893,8 @@ var _sfc_main$X = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-form-row[data-v-16cf0b7e] {\r\n  display: flex; flex-direction: column; gap: var(--acu-space-125, 5px);\r\n  color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\r\n  min-width: 0;\n}\n.acu-form-row__label[data-v-16cf0b7e] { font-weight: 500;\n}\n.acu-form-row__hint[data-v-16cf0b7e] { color: var(--acu-text-3); font-size: var(--acu-font-size-caption, 11px); line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-form-row[data-v-16cf0b7e] input[type=\"text\"],\r\n.acu-form-row[data-v-16cf0b7e] input[type=\"password\"],\r\n.acu-form-row[data-v-16cf0b7e] input[type=\"number\"],\r\n.acu-form-row[data-v-16cf0b7e] select,\r\n.acu-form-row[data-v-16cf0b7e] textarea {\r\n  min-width: 0; min-height: var(--acu-control-height-md, 32px); padding: var(--acu-control-padding-y-md, 6px) var(--acu-control-padding-x-md, 9px);\r\n  border: 0 !important;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-2) !important;\r\n  color: var(--acu-text-1) !important;\r\n  font: inherit;\r\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-form-row[data-v-16cf0b7e] textarea {\r\n  min-height: unset;\r\n  resize: none;\n}\n.acu-form-row[data-v-16cf0b7e] select {\r\n  appearance: none;\r\n  -webkit-appearance: none;\r\n  padding-right: var(--acu-space-7, 28px);\r\n  background-image: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236b7280' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E\") !important;\r\n  background-repeat: no-repeat !important;\r\n  background-position: right var(--acu-control-padding-x-md, 9px) center !important;\r\n  background-size: var(--acu-space-250, 10px) var(--acu-space-150, 6px) !important;\r\n  cursor: pointer;\n}\n.acu-form-row[data-v-16cf0b7e] input:focus,\r\n.acu-form-row[data-v-16cf0b7e] select:focus,\r\n.acu-form-row[data-v-16cf0b7e] textarea:focus {\r\n  outline: none;\r\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\r\n", "src/presentation-v2/components/_lib/AcuFormRow.vue#style-0-16cf0b7e");
-var AcuFormRow_vue_vue_type_style_index_0_scoped_16cf0b7e_lang = null;
+injectSfcStyle("\n.acu-form-row[data-v-63b7226c] {\r\n  display: flex; flex-direction: column; gap: var(--acu-space-125, 5px);\r\n  color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\r\n  min-width: 0;\n}\n.acu-form-row__label[data-v-63b7226c] { font-weight: 500;\n}\n.acu-form-row__hint[data-v-63b7226c] { color: var(--acu-text-3); font-size: var(--acu-font-size-caption, 11px); line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-form-row[data-v-63b7226c] input[type=\"text\"],\r\n.acu-form-row[data-v-63b7226c] input[type=\"password\"],\r\n.acu-form-row[data-v-63b7226c] input[type=\"number\"],\r\n.acu-form-row[data-v-63b7226c] select,\r\n.acu-form-row[data-v-63b7226c] textarea {\r\n  min-width: 0; min-height: var(--acu-control-height-md, 32px); padding: var(--acu-control-padding-y-md, 6px) var(--acu-control-padding-x-md, 9px);\r\n  border: 0 !important;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-2) !important;\r\n  color: var(--acu-text-1) !important;\r\n  font: inherit;\r\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-form-row[data-v-63b7226c] textarea {\r\n  min-height: unset;\r\n  resize: none;\n}\n.acu-form-row[data-v-63b7226c] select {\r\n  appearance: none;\r\n  -webkit-appearance: none;\r\n  padding-right: var(--acu-space-7, 28px);\r\n  background-image: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%236b7280' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E\") !important;\r\n  background-repeat: no-repeat !important;\r\n  background-position: right var(--acu-control-padding-x-md, 9px) center !important;\r\n  background-size: var(--acu-space-250, 10px) var(--acu-space-150, 6px) !important;\r\n  cursor: pointer;\n}\n.acu-form-row[data-v-63b7226c] input:focus,\r\n.acu-form-row[data-v-63b7226c] select:focus,\r\n.acu-form-row[data-v-63b7226c] textarea:focus {\r\n  outline: none;\r\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\r\n", "src/presentation-v2/components/_lib/AcuFormRow.vue#style-0-63b7226c");
+var AcuFormRow_vue_vue_type_style_index_0_scoped_63b7226c_lang = null;
 
 const _hoisted_1$U = { class: "acu-form-row" };
 const _hoisted_2$L = {
@@ -122902,7 +122902,7 @@ const _hoisted_2$L = {
 	class: "acu-form-row__label"
 };
 const _hoisted_3$D = {
-	key: 1,
+	key: 0,
 	class: "acu-form-row__hint"
 };
 function _sfc_render$X(_ctx, _cache, $props, $setup, $data, $options) {
@@ -122915,16 +122915,16 @@ function _sfc_render$X(_ctx, _cache, $props, $setup, $data, $options) {
 			/* TEXT */
 		)) : createCommentVNode("v-if", true),
 		renderSlot(_ctx.$slots, "default", {}, undefined, true),
-		$props.hint ? (openBlock(), createElementBlock(
+		renderSlot(_ctx.$slots, "hint", {}, () => [$props.hint ? (openBlock(), createElementBlock(
 			"span",
 			_hoisted_3$D,
 			toDisplayString($props.hint),
 			1
 			/* TEXT */
-		)) : createCommentVNode("v-if", true)
+		)) : createCommentVNode("v-if", true)], true)
 	]);
 }
-var AcuFormRow = /* @__PURE__ */ _export_sfc(_sfc_main$X, [["render", _sfc_render$X], ["__scopeId", "data-v-16cf0b7e"]]);
+var AcuFormRow = /* @__PURE__ */ _export_sfc(_sfc_main$X, [["render", _sfc_render$X], ["__scopeId", "data-v-63b7226c"]]);
 
 var _sfc_main$W = /*@__PURE__*/ defineComponent({
     __name: 'AcuMessage',
@@ -123783,7 +123783,7 @@ const CLIENT_HEADER_PRESETS_ACU = [
     },
     {
         id: 'zcode',
-        label: 'Z Code（智谱桌面端）',
+        label: 'Z Code',
         headers: [
             'HTTP-Referer: https://zcode.z.ai/',
             'X-Title: Z Code@electron',
@@ -123839,14 +123839,14 @@ const CLIENT_HEADER_PRESETS_ACU = [
     },
     {
         id: 'grok-build',
-        label: 'Grok Build（xAI）',
+        label: 'Grok Build',
         headers: [
             'User-Agent: grok-shell/0.1.171 (windows; x86_64)',
         ],
     },
     {
         id: 'mimo-code',
-        label: 'MiMo Code（小米）',
+        label: 'MiMo Code',
         headers: [
             'User-Agent: mimocode/stable/1.0.0/cli',
             'HTTP-Referer: https://mimo.xiaomi.com/coder/',
@@ -123871,7 +123871,7 @@ const CLIENT_HEADER_PRESETS_ACU = [
     },
     {
         id: 'open-design',
-        label: 'OpenDesign（AIHubMix 归因）',
+        label: 'OpenDesign',
         headers: [
             'APP-Code: DMCY9912',
         ],
@@ -123928,6 +123928,22 @@ function matchClientHeaderPreset_ACU(currentHeaders) {
     }
     return '';
 }
+/** 「不使用预设」下拉哨兵值：选中后清除全部受管身份键 */
+const CLIENT_HEADER_PRESET_NONE_ACU = '__none__';
+/** 移除文本中全部受管身份键的行（「不使用预设」的实现），无关行保留 */
+function stripManagedClientHeaders_ACU(currentHeaders) {
+    const kept = String(currentHeaders || '')
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter((l) => l && !MANAGED_KEYS_ACU.has(headerKeyOf(l)));
+    return kept.join('\n');
+}
+/** 文本中是否还残留任一受管身份键（区分「未使用」与「部分残留」两种回显态） */
+function hasManagedClientKeys_ACU(currentHeaders) {
+    return String(currentHeaders || '')
+        .split(/\r?\n/)
+        .some((l) => l.trim() && MANAGED_KEYS_ACU.has(headerKeyOf(l)));
+}
 
 // ─── 思考强度选项（每个 API 预设独立） ───
 var _sfc_main$P = /*@__PURE__*/ defineComponent({
@@ -123942,14 +123958,24 @@ var _sfc_main$P = /*@__PURE__*/ defineComponent({
             { value: "xhigh", label: "XHigh" },
         ];
         // ─── 客户端伪装预设（附加请求标头的可选填充） ───
-        const clientPresetOptions = CLIENT_HEADER_PRESETS_ACU.map((p) => ({
-            value: p.id,
-            label: p.label,
-        }));
-        const matchedClientPresetId = computed(() => matchClientHeaderPreset_ACU(activeDraft.requestHeaders));
+        const clientPresetOptions = [
+            { value: CLIENT_HEADER_PRESET_NONE_ACU, label: "不使用预设" },
+            ...CLIENT_HEADER_PRESETS_ACU.map((p) => ({ value: p.id, label: p.label })),
+        ];
+        const matchedClientPresetId = computed(() => {
+            const matched = matchClientHeaderPreset_ACU(activeDraft.requestHeaders);
+            if (matched)
+                return matched;
+            // 无任何受管身份键时回显「不使用预设」；部分残留（手改过值）则不回显
+            return hasManagedClientKeys_ACU(activeDraft.requestHeaders) ? "" : CLIENT_HEADER_PRESET_NONE_ACU;
+        });
         function applyClientPreset(id) {
             if (activeDraft.publicServiceMode)
                 return;
+            if (String(id ?? "") === CLIENT_HEADER_PRESET_NONE_ACU) {
+                activeDraft.requestHeaders = stripManagedClientHeaders_ACU(activeDraft.requestHeaders);
+                return;
+            }
             const preset = CLIENT_HEADER_PRESETS_ACU.find((p) => p.id === String(id ?? ""));
             if (!preset)
                 return;
@@ -124100,8 +124126,8 @@ var _sfc_main$P = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-api-config-panel__select-row[data-v-a185e8f0] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-a185e8f0] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-a185e8f0] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-a185e8f0] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-a185e8f0] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-a185e8f0] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-a185e8f0] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-a185e8f0] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-a185e8f0] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-a185e8f0");
-var ApiConfigPanel_vue_vue_type_style_index_0_scoped_a185e8f0_lang = null;
+injectSfcStyle("\n.acu-api-config-panel__hint[data-v-048ced7d] {\r\n  color: var(--acu-text-3, #9e978e);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-api-config-panel__hint-danger[data-v-048ced7d] {\r\n  color: var(--acu-danger, #e5484d);\n}\n.acu-api-config-panel__select-row[data-v-048ced7d] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-048ced7d] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-048ced7d] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-048ced7d] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-048ced7d] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-048ced7d] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-048ced7d] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-048ced7d] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-048ced7d] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-048ced7d");
+var ApiConfigPanel_vue_vue_type_style_index_0_scoped_048ced7d_lang = null;
 
 const _hoisted_1$N = { class: "acu-api-config-panel__select-row" };
 const _hoisted_2$G = { class: "acu-api-config-panel__editor-section" };
@@ -124314,18 +124340,21 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 							}, null, 8, ["modelValue"])]),
 							_: 1
 						}),
-						createVNode($setup["AcuFormRow"], {
-							label: "客户端伪装",
-							hint: "选择一个客户端身份后，其特征请求头（User-Agent / HTTP-Referer / X-Title 等）会合并进下方附加请求标头：同名键覆盖、其余行保留。用于部分屏蔽第三方客户端的供应商。如果您不清楚这是做什么用的请不要选择。选择启用后的风险自行评估，后果自担。"
-						}, {
+						createVNode($setup["AcuFormRow"], { label: "客户端伪装" }, {
+							hint: withCtx(() => [..._cache[19] || (_cache[19] = [createBaseVNode(
+								"span",
+								{ class: "acu-api-config-panel__hint" },
+								[createTextVNode(" 选择一个客户端身份后，其特征请求头（User-Agent / HTTP-Referer / X-Title 等）会合并进下方附加请求标头：受管身份键统一替换、其余行保留。用于部分屏蔽第三方客户端的供应商。 "), createBaseVNode("span", { class: "acu-api-config-panel__hint-danger" }, "如果您不清楚这是做什么用的请不要选择。选择启用后的风险自行评估，后果自担。")],
+								-1
+								/* CACHED */
+							)])]),
 							default: withCtx(() => [createVNode($setup["AcuSelect"], {
 								options: $setup.clientPresetOptions,
 								"model-value": $setup.matchedClientPresetId,
 								disabled: $setup.activeDraft.publicServiceMode,
-								placeholder: $setup.activeDraft.publicServiceMode ? "已开启公益站兼容，不可使用客户端伪装" : "不使用预设",
+								placeholder: $setup.activeDraft.publicServiceMode ? "已开启公益站兼容，不可使用客户端伪装" : "请选择",
 								"onUpdate:modelValue": _cache[15] || (_cache[15] = ($event) => $setup.applyClientPreset($event))
 							}, null, 8, [
-								"options",
 								"model-value",
 								"disabled",
 								"placeholder"
@@ -124360,7 +124389,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 						disabled: !$setup.activeDraftDirty,
 						onClick: $setup.syncActiveDraft
 					}, {
-						default: withCtx(() => [..._cache[19] || (_cache[19] = [createTextVNode(
+						default: withCtx(() => [..._cache[20] || (_cache[20] = [createTextVNode(
 							"放弃修改",
 							-1
 							/* CACHED */
@@ -124385,7 +124414,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 				key: 2,
 				kind: "warning"
 			}, {
-				default: withCtx(() => [..._cache[20] || (_cache[20] = [createTextVNode(
+				default: withCtx(() => [..._cache[21] || (_cache[21] = [createTextVNode(
 					" 暂无可用 API 预设，请新建并设为当前或全局默认。 ",
 					-1
 					/* CACHED */
@@ -124396,7 +124425,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["title", "description"]);
 }
-var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$P, [["render", _sfc_render$P], ["__scopeId", "data-v-a185e8f0"]]);
+var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$P, [["render", _sfc_render$P], ["__scopeId", "data-v-048ced7d"]]);
 
 // ═══════════════════════════════════════════════════════════
 // service/settings/feature-preset-reference-service.ts — 功能级 API 预设引用
@@ -143219,7 +143248,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260826-12";
+        const stamp = "20260826-13";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

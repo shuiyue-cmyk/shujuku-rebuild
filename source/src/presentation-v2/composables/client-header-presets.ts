@@ -28,7 +28,7 @@ export const CLIENT_HEADER_PRESETS_ACU: ClientHeaderPreset_ACU[] = [
   },
   {
     id: 'zcode',
-    label: 'Z Code（智谱桌面端）',
+    label: 'Z Code',
     headers: [
       'HTTP-Referer: https://zcode.z.ai/',
       'X-Title: Z Code@electron',
@@ -84,14 +84,14 @@ export const CLIENT_HEADER_PRESETS_ACU: ClientHeaderPreset_ACU[] = [
   },
   {
     id: 'grok-build',
-    label: 'Grok Build（xAI）',
+    label: 'Grok Build',
     headers: [
       'User-Agent: grok-shell/0.1.171 (windows; x86_64)',
     ],
   },
   {
     id: 'mimo-code',
-    label: 'MiMo Code（小米）',
+    label: 'MiMo Code',
     headers: [
       'User-Agent: mimocode/stable/1.0.0/cli',
       'HTTP-Referer: https://mimo.xiaomi.com/coder/',
@@ -116,7 +116,7 @@ export const CLIENT_HEADER_PRESETS_ACU: ClientHeaderPreset_ACU[] = [
   },
   {
     id: 'open-design',
-    label: 'OpenDesign（AIHubMix 归因）',
+    label: 'OpenDesign',
     headers: [
       'APP-Code: DMCY9912',
     ],
@@ -178,4 +178,23 @@ export function matchClientHeaderPreset_ACU(currentHeaders: string): string {
     if (allMatch) return preset.id;
   }
   return '';
+}
+
+/** 「不使用预设」下拉哨兵值：选中后清除全部受管身份键 */
+export const CLIENT_HEADER_PRESET_NONE_ACU = '__none__';
+
+/** 移除文本中全部受管身份键的行（「不使用预设」的实现），无关行保留 */
+export function stripManagedClientHeaders_ACU(currentHeaders: string): string {
+  const kept = String(currentHeaders || '')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter((l) => l && !MANAGED_KEYS_ACU.has(headerKeyOf(l)));
+  return kept.join('\n');
+}
+
+/** 文本中是否还残留任一受管身份键（区分「未使用」与「部分残留」两种回显态） */
+export function hasManagedClientKeys_ACU(currentHeaders: string): boolean {
+  return String(currentHeaders || '')
+    .split(/\r?\n/)
+    .some((l) => l.trim() && MANAGED_KEYS_ACU.has(headerKeyOf(l)));
 }

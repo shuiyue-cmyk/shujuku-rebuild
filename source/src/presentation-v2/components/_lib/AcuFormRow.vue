@@ -2,7 +2,9 @@
   <div class="acu-form-row">
     <span v-if="label" class="acu-form-row__label">{{ label }}</span>
     <slot />
-    <span v-if="hint" class="acu-form-row__hint">{{ hint }}</span>
+    <slot name="hint">
+      <span v-if="hint" class="acu-form-row__hint">{{ hint }}</span>
+    </slot>
   </div>
 </template>
 

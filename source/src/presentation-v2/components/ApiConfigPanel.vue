@@ -144,17 +144,20 @@
             placeholder="top_p, reasoning_effort"
           />
         </AcuFormRow>
-        <AcuFormRow
-          label="客户端伪装"
-          hint="选择一个客户端身份后，其特征请求头（User-Agent / HTTP-Referer / X-Title 等）会合并进下方附加请求标头：同名键覆盖、其余行保留。用于部分屏蔽第三方客户端的供应商。如果您不清楚这是做什么用的请不要选择。选择启用后的风险自行评估，后果自担。"
-        >
+        <AcuFormRow label="客户端伪装">
           <AcuSelect
             :options="clientPresetOptions"
             :model-value="matchedClientPresetId"
             :disabled="activeDraft.publicServiceMode"
-            :placeholder="activeDraft.publicServiceMode ? '已开启公益站兼容，不可使用客户端伪装' : '不使用预设'"
+            :placeholder="activeDraft.publicServiceMode ? '已开启公益站兼容，不可使用客户端伪装' : '请选择'"
             @update:model-value="applyClientPreset($event)"
           />
+          <template #hint>
+            <span class="acu-api-config-panel__hint">
+              选择一个客户端身份后，其特征请求头（User-Agent / HTTP-Referer / X-Title 等）会合并进下方附加请求标头：受管身份键统一替换、其余行保留。用于部分屏蔽第三方客户端的供应商。
+              <span class="acu-api-config-panel__hint-danger">如果您不清楚这是做什么用的请不要选择。选择启用后的风险自行评估，后果自担。</span>
+            </span>
+          </template>
         </AcuFormRow>
         <AcuFormRow label="附加请求标头" hint="每行一个 Header: Value，追加到请求头中。">
           <AcuTextarea
@@ -219,8 +222,11 @@ import AcuToggle from "./_lib/AcuToggle.vue";
 import { assertSafeHttpEndpoint_ACU } from "../../shared/utils";
 import {
   CLIENT_HEADER_PRESETS_ACU,
+  CLIENT_HEADER_PRESET_NONE_ACU,
   applyClientHeaderPreset_ACU,
   matchClientHeaderPreset_ACU,
+  stripManagedClientHeaders_ACU,
+  hasManagedClientKeys_ACU,
 } from "../composables/client-header-presets";
 
 // ─── 思考强度选项（每个 API 预设独立） ───
@@ -233,13 +239,22 @@ const reasoningEffortOptions: AcuSelectOption[] = [
 ];
 
 // ─── 客户端伪装预设（附加请求标头的可选填充） ───
-const clientPresetOptions: AcuSelectOption[] = CLIENT_HEADER_PRESETS_ACU.map((p) => ({
-  value: p.id,
-  label: p.label,
-}));
-const matchedClientPresetId = computed(() => matchClientHeaderPreset_ACU(activeDraft.requestHeaders));
+const clientPresetOptions: AcuSelectOption[] = [
+  { value: CLIENT_HEADER_PRESET_NONE_ACU, label: "不使用预设" },
+  ...CLIENT_HEADER_PRESETS_ACU.map((p) => ({ value: p.id, label: p.label })),
+];
+const matchedClientPresetId = computed(() => {
+  const matched = matchClientHeaderPreset_ACU(activeDraft.requestHeaders);
+  if (matched) return matched;
+  // 无任何受管身份键时回显「不使用预设」；部分残留（手改过值）则不回显
+  return hasManagedClientKeys_ACU(activeDraft.requestHeaders) ? "" : CLIENT_HEADER_PRESET_NONE_ACU;
+});
 function applyClientPreset(id: string | number | null): void {
   if (activeDraft.publicServiceMode) return;
+  if (String(id ?? "") === CLIENT_HEADER_PRESET_NONE_ACU) {
+    activeDraft.requestHeaders = stripManagedClientHeaders_ACU(activeDraft.requestHeaders);
+    return;
+  }
   const preset = CLIENT_HEADER_PRESETS_ACU.find((p) => p.id === String(id ?? ""));
   if (!preset) return;
   activeDraft.requestHeaders = applyClientHeaderPreset_ACU(activeDraft.requestHeaders, preset);
@@ -407,6 +422,16 @@ watch(
 </script>
 
 <style scoped>
+.acu-api-config-panel__hint {
+  color: var(--acu-text-3, #9e978e);
+  font-size: var(--acu-font-size-caption, 11px);
+  line-height: var(--acu-line-height-caption, 1.5);
+}
+
+.acu-api-config-panel__hint-danger {
+  color: var(--acu-danger, #e5484d);
+}
+
 .acu-api-config-panel__select-row {
   min-width: 0;
   display: grid;
