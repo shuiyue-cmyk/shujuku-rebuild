@@ -4504,6 +4504,46 @@ export async function orchestrateManualUpdate_ACU(
                 }
             }
 
+            // A方案保护：检测范围内是否存在导入检查点（reason==='import'）且与本次重填目标表重叠，
+            // 若存在则阻断本次重填，避免“导入后手动填表覆盖导入”静默丢失。
+            const importOverlap = (() => {
+                const targetSet = new Set(targetKeys);
+                for (const idx of contextScopeIndices) {
+                    const msg: any = (liveChat as any)[idx];
+                    if (!msg || msg.is_user) continue;
+                    const tagData: any = readIsolatedTagData_ACU(msg, currentIsolationKey);
+                    if (!tagData?.storageFrame) continue;
+                    const frame: any = tagData.storageFrame;
+                    if (frame.checkpoint && frame.checkpoint.reason === 'import') {
+                        const cpData = frame.checkpoint.data;
+                        if (cpData && typeof cpData === 'object' && !Array.isArray(cpData)) {
+                            for (const k of Object.keys(cpData)) {
+                                if (k.startsWith('sheet_') && targetSet.has(k)) return true;
+                            }
+                        }
+                    }
+                    if (Array.isArray(frame.logEntries)) {
+                        for (const entry of frame.logEntries) {
+                            if (!entry || typeof entry !== 'object') continue;
+                            const ops: any = (entry as any).operations;
+                            if (!Array.isArray(ops)) continue;
+                            for (const op of ops) {
+                                if (op && op.kind === 'data_replace' && (op as any).reason === 'import' && op.data && typeof op.data === 'object' && !Array.isArray(op.data)) {
+                                    for (const k of Object.keys(op.data)) {
+                                        if (k.startsWith('sheet_') && targetSet.has(k)) return true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                return false;
+            })();
+            if (importOverlap) {
+                logWarn_ACU('[Manual Refill] 检测到重填范围内存在导入检查点（reason=import）且与目标表重叠，已阻断本次重填以避免覆盖导入。');
+                return { success: false, error: '检测到本次重填范围内存在“导入检查点”（通过导入/恢复写入的权威快照），为避免覆盖导入，已阻止本次手动填表。如需重填该范围，请先确认是否需要保留导入数据，或选择不含导入楼层的范围/表。' };
+            }
+
             try {
                 // 破坏性清理不可逆：一旦开始，后续任何失败都不回滚、不恢复已删数据。
                 refillCleanupStarted = true;

@@ -621,18 +621,23 @@ function purgeSheetKeysFromStorageFrameV2_ACU(frame: any, sheetKeys: Set<string>
 
     const checkpoint = frame.checkpoint;
     if (isObjectRecord_ACU(checkpoint)) {
-        if (deleteSheetKeysFromRecord_ACU(checkpoint.data, sheetKeys)) changed = true;
-        if (deleteSheetKeysFromRecord_ACU(checkpoint.scheduleSummary, sheetKeys)) changed = true;
-        if (purgeEventSheetKeysV2_ACU(checkpoint.event, sheetKeys)) changed = true;
-        if (purgeManualRefillProgressV2_ACU(checkpoint.manualRefillProgress, sheetKeys)) changed = true;
-        // Task 5：checkpoint.data 已无任何 sheet_ 键时，该 checkpoint 失去全部表内容，
-        // 保留只会让 replay 以空根继续（并诱发“写目标早于回放根”类伪拓扑）。直接移除，
-        // 让 frame 退回“无锚点 + logEntries”形态，由后续写入按初始 checkpoint 重建。
-        // 例外：checkpoint 仍携带 manualRefillProgress 时保留——那是进度的合法载体，
-        // 删除会丢失重填进度（既有测试「从 V2 manualRefillProgress 中移除目标 sheet」依赖此行为）。
-        if (!hasSheetKeyInRecord_ACU(checkpoint.data) && checkpoint.manualRefillProgress === undefined) {
-            delete frame.checkpoint;
-            changed = true;
+        // A方案保护：导入检查点（reason==='import'）为用户显式导入的权威快照，
+        // 手动重填的范围清理不得删除或裁剪它，避免“导入后手动填表覆盖导入”静默丢失。
+        const isImportCheckpoint = (checkpoint as any).reason === 'import';
+        if (!isImportCheckpoint) {
+            if (deleteSheetKeysFromRecord_ACU(checkpoint.data, sheetKeys)) changed = true;
+            if (deleteSheetKeysFromRecord_ACU(checkpoint.scheduleSummary, sheetKeys)) changed = true;
+            if (purgeEventSheetKeysV2_ACU(checkpoint.event, sheetKeys)) changed = true;
+            if (purgeManualRefillProgressV2_ACU(checkpoint.manualRefillProgress, sheetKeys)) changed = true;
+            // Task 5：checkpoint.data 已无任何 sheet_ 键时，该 checkpoint 失去全部表内容，
+            // 保留只会让 replay 以空根继续（并诱发“写目标早于回放根”类伪拓扑）。直接移除，
+            // 让 frame 退回“无锚点 + logEntries”形态，由后续写入按初始 checkpoint 重建。
+            // 例外：checkpoint 仍携带 manualRefillProgress 时保留——那是进度的合法载体，
+            // 删除会丢失重填进度（既有测试「从 V2 manualRefillProgress 中移除目标 sheet」依赖此行为）。
+            if (!hasSheetKeyInRecord_ACU(checkpoint.data) && checkpoint.manualRefillProgress === undefined) {
+                delete frame.checkpoint;
+                changed = true;
+            }
         }
     }
 
