@@ -250,10 +250,10 @@ const reasoningEffortOptions: AcuSelectOption[] = [
 
 // ─── 接口协议选项（对齐 TT 主 API 四个「自定义」选项，custom_api_format 契约） ───
 const customApiFormatOptions: AcuSelectOption[] = [
-  { value: "openai_compat", label: "自定义（兼容 OpenAI）" },
-  { value: "openai_responses", label: "自定义（兼容 OpenAI Responses）" },
-  { value: "claude_messages", label: "自定义（兼容 Claude Messages）" },
-  { value: "gemini_interactions", label: "自定义（兼容 Gemini Interactions）" },
+  { value: "openai_compat", label: "兼容 OpenAI" },
+  { value: "openai_responses", label: "兼容 OpenAI Responses" },
+  { value: "claude_messages", label: "兼容 Claude Messages" },
+  { value: "gemini_interactions", label: "兼容 Gemini Interactions" },
 ];
 
 // ─── 客户端伪装预设（附加请求标头的可选填充） ───

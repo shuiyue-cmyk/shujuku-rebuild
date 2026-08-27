@@ -191,7 +191,7 @@ describe('ApiPage', () => {
     await Promise.resolve();
 
     const modelRow = Array.from(page.querySelectorAll('.acu-form-row'))
-      .find(row => (row.textContent || '').includes('模型名')) as HTMLElement;
+      .find(row => (row.querySelector('input') instanceof HTMLInputElement) && (row.textContent || '').includes('模型名')) as HTMLElement;
     const modelInput = modelRow.querySelector('input') as HTMLInputElement;
     modelInput.value = 'first-model';
     modelInput.dispatchEvent(new Event('input', { bubbles: true }));
