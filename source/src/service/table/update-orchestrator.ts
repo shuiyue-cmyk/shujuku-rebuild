@@ -4526,11 +4526,23 @@ export async function orchestrateManualUpdate_ACU(
                         for (const entry of frame.logEntries) {
                             if (!entry || typeof entry !== 'object') continue;
                             const ops: any = (entry as any).operations;
-                            if (!Array.isArray(ops)) continue;
-                            for (const op of ops) {
-                                if (op && op.kind === 'data_replace' && (op as any).reason === 'import' && op.data && typeof op.data === 'object' && !Array.isArray(op.data)) {
-                                    for (const k of Object.keys(op.data)) {
-                                        if (k.startsWith('sheet_') && targetSet.has(k)) return true;
+                            if (Array.isArray(ops)) {
+                                for (const op of ops) {
+                                    if (op && op.kind === 'data_replace' && (op as any).reason === 'import' && op.data && typeof op.data === 'object' && !Array.isArray(op.data)) {
+                                        for (const k of Object.keys(op.data)) {
+                                            if (k.startsWith('sheet_') && targetSet.has(k)) return true;
+                                        }
+                                    }
+                                }
+                            }
+                            // 历史兼容：极老聊天可能用 patches 承载 data_replace import（现 V2 不再产新），一并扫描闭环
+                            const patches: any = (entry as any).patches;
+                            if (Array.isArray(patches)) {
+                                for (const patch of patches) {
+                                    if (patch && patch.kind === 'data_replace' && (patch as any).reason === 'import' && patch.data && typeof patch.data === 'object' && !Array.isArray(patch.data)) {
+                                        for (const k of Object.keys(patch.data)) {
+                                            if (k.startsWith('sheet_') && targetSet.has(k)) return true;
+                                        }
                                     }
                                 }
                             }
