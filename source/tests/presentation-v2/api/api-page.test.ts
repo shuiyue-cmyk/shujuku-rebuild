@@ -184,7 +184,7 @@ describe('ApiPage', () => {
     await Promise.resolve();
 
     const urlRow = Array.from(page.querySelectorAll('.acu-form-row'))
-      .find(row => (row.textContent || '').includes('端点')) as HTMLElement;
+      .find(row => (row.querySelector('input') instanceof HTMLInputElement) && (row.textContent || '').includes('端点(基础URL)')) as HTMLElement;
     const urlInput = urlRow.querySelector('input') as HTMLInputElement;
     urlInput.value = 'https://first.test';
     urlInput.dispatchEvent(new Event('input', { bubbles: true }));

@@ -59947,7 +59947,9 @@ async function parseNonStreamResponse_ACU(response) {
         return null;
     }
 }
-// SSE 流式响应解析：逐行提取 data: 前缀的 JSON，拼接 choices[0].delta.content
+// SSE 流式响应解析：逐行提取 data: 前缀的 JSON，拼接 choices[0].delta.content。
+// 兼容 Claude Messages 原样透传的 Anthropic SSE（接口协议=claude_messages 时 TT 不归一化流）：
+// content_block_delta(text_delta).delta.text 拼内容，message_stop 视为流结束（等价 [DONE]）。
 async function parseStreamResponse_ACU(response) {
     try {
         const text = await response.text();
@@ -59967,8 +59969,17 @@ async function parseStreamResponse_ACU(response) {
             try {
                 const data = JSON.parse(payload);
                 const delta = data?.choices?.[0]?.delta?.content;
-                if (typeof delta === 'string')
+                if (typeof delta === 'string') {
                     result += delta;
+                    continue;
+                }
+                // Anthropic SSE 分支（claude_messages 接口协议）
+                if (data?.type === 'content_block_delta' && data?.delta?.type === 'text_delta' && typeof data?.delta?.text === 'string') {
+                    result += data.delta.text;
+                }
+                else if (data?.type === 'message_stop') {
+                    sawDone = true;
+                }
             }
             catch {
                 // 忽略无法解析的 data 行（注释/空行）
@@ -61119,6 +61130,11 @@ function getHostRequestHeaders_ACU() {
 // V1 presentation 不得直接修改这些字段；V2 必须通过本 service 操作。
 // 写操作流程：校验 → 快照 → 改内存 → saveSettings_ACU → 失败回滚。
 // ═══════════════════════════════════════════════════════════════
+const CUSTOM_API_FORMATS_ACU = ['openai_compat', 'openai_responses', 'claude_messages', 'gemini_interactions'];
+function normalizeCustomApiFormat_ACU(value) {
+    const raw = String(value ?? '').trim();
+    return CUSTOM_API_FORMATS_ACU.includes(raw) ? raw : 'openai_compat';
+}
 // ═══ 归一化 ═══
 /** 酒馆主 API（tavern）已剥离，API 模式恒为自定义 */
 function normalizeApiMode_ACU(_value) {
@@ -61152,9 +61168,10 @@ function normalizeApiConfig_ACU(value) {
         bodyParams: typeof source.bodyParams === 'string' ? source.bodyParams : '',
         excludeBodyParams: typeof source.excludeBodyParams === 'string' ? source.excludeBodyParams : '',
         requestHeaders: typeof source.requestHeaders === 'string' ? source.requestHeaders : '',
+        customApiFormat: normalizeCustomApiFormat_ACU(source.customApiFormat),
         ...(streamingEnabled !== undefined ? { streamingEnabled } : {}),
         ...(reasoningEffort ? { reasoningEffort } : {}),
-        ...Object.fromEntries(Object.entries(source).filter(([key]) => !['url', 'apiKey', 'model', 'useMainApi', 'max_tokens', 'maxTokens', 'temperature', 'bodyParams', 'excludeBodyParams', 'requestHeaders', 'streamingEnabled', 'reasoningEffort'].includes(key))),
+        ...Object.fromEntries(Object.entries(source).filter(([key]) => !['url', 'apiKey', 'model', 'useMainApi', 'max_tokens', 'maxTokens', 'temperature', 'bodyParams', 'excludeBodyParams', 'requestHeaders', 'streamingEnabled', 'reasoningEffort', 'customApiFormat'].includes(key))),
     };
 }
 function normalizePreset_ACU(value) {
@@ -61649,6 +61666,14 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
             ? effectiveApiConfig.streamingEnabled === true
             : settings_ACU.streamingEnabled === true,
         chat_completion_source: 'custom',
+        // 接口协议（预设级）：对齐 TT 四「自定义」选项（custom_api_format 契约）。
+        // TT 后端按该值分流上游端点与请求/响应变形：openai_compat→/chat/completions、
+        // openai_responses→/responses、claude_messages→/messages、gemini_interactions→/interactions；
+        // 非流式响应由 TT 归一化为 OpenAI 形态，流式 Claude 为原样 Anthropic SSE（解析见 prompt-api-call）。
+        // 白名单兜底：调用点可能传未归一化的 config，非法值回退 openai_compat。
+        custom_api_format: ['openai_compat', 'openai_responses', 'claude_messages', 'gemini_interactions'].includes(effectiveApiConfig.customApiFormat)
+            ? effectiveApiConfig.customApiFormat
+            : 'openai_compat',
         group_names: [],
         include_reasoning: false,
         // 思考强度（预设级优先）：仅允许 low/medium/high/max/xhigh，非法值回退 medium
@@ -122746,6 +122771,7 @@ function createEmptyApiPresetDraft() {
         streamingEnabled: false,
         reasoningEffort: 'medium',
         publicServiceMode: false,
+        customApiFormat: 'openai_compat',
     };
 }
 function apiPresetDraftFromPreset(preset) {
@@ -122764,6 +122790,7 @@ function apiPresetDraftFromPreset(preset) {
         streamingEnabled: preset.apiConfig.streamingEnabled === true,
         reasoningEffort: preset.apiConfig.reasoningEffort || 'medium',
         publicServiceMode: preset.publicServiceMode === true,
+        customApiFormat: preset.apiConfig.customApiFormat || 'openai_compat',
     };
 }
 function apiPresetFromDraft(draft) {
@@ -122783,6 +122810,9 @@ function apiPresetFromDraft(draft) {
             reasoningEffort: ['low', 'medium', 'high', 'max', 'xhigh'].includes(draft.reasoningEffort)
                 ? draft.reasoningEffort
                 : 'medium',
+            customApiFormat: ['openai_compat', 'openai_responses', 'claude_messages', 'gemini_interactions'].includes(draft.customApiFormat)
+                ? draft.customApiFormat
+                : 'openai_compat',
         },
         nonPrefillSupport: draft.nonPrefillSupport === true,
         publicServiceMode: draft.publicServiceMode === true,
@@ -124019,6 +124049,13 @@ var _sfc_main$P = /*@__PURE__*/ defineComponent({
             { value: "max", label: "Max" },
             { value: "xhigh", label: "XHigh" },
         ];
+        // ─── 接口协议选项（对齐 TT 主 API 四个「自定义」选项，custom_api_format 契约） ───
+        const customApiFormatOptions = [
+            { value: "openai_compat", label: "自定义（兼容 OpenAI）" },
+            { value: "openai_responses", label: "自定义（兼容 OpenAI Responses）" },
+            { value: "claude_messages", label: "自定义（兼容 Claude Messages）" },
+            { value: "gemini_interactions", label: "自定义（兼容 Gemini Interactions）" },
+        ];
         // ─── 客户端伪装预设（附加请求标头的可选填充） ───
         const clientPresetOptions = [
             { value: CLIENT_HEADER_PRESET_NONE_ACU, label: "不使用预设" },
@@ -124182,14 +124219,14 @@ var _sfc_main$P = /*@__PURE__*/ defineComponent({
             });
         }
         watch(() => store.activePresetName, () => syncActiveDraft(), { flush: "sync" });
-        const __returned__ = { reasoningEffortOptions, clientPresetOptions, matchedClientPresetId, applyClientPreset, store, dialogStore, toast, formMode, activeDraft, activeDraftOriginalName, activeDraftSnapshot, activeDraftError, activeDraftSavedAt, activeDraftDirty, modelSelectOptions, presetDropdownItems, refreshAll, syncActiveDraft, startCreateDraft, selectPreset, deletePreset, presetMeta, validateActiveDraft, saveActiveDraft, loadModelsForActive, get apiCopy() { return apiCopy; }, AcuButton, AcuFormRow, AcuIconButton, AcuInput, AcuMessage, AcuPanel, AcuTextarea, AcuPresetDropdown, AcuSelect, AcuToggle };
+        const __returned__ = { reasoningEffortOptions, customApiFormatOptions, clientPresetOptions, matchedClientPresetId, applyClientPreset, store, dialogStore, toast, formMode, activeDraft, activeDraftOriginalName, activeDraftSnapshot, activeDraftError, activeDraftSavedAt, activeDraftDirty, modelSelectOptions, presetDropdownItems, refreshAll, syncActiveDraft, startCreateDraft, selectPreset, deletePreset, presetMeta, validateActiveDraft, saveActiveDraft, loadModelsForActive, get apiCopy() { return apiCopy; }, AcuButton, AcuFormRow, AcuIconButton, AcuInput, AcuMessage, AcuPanel, AcuTextarea, AcuPresetDropdown, AcuSelect, AcuToggle };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.acu-api-config-panel__hint[data-v-048ced7d] {\r\n  color: var(--acu-text-3, #9e978e);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-api-config-panel__hint-danger[data-v-048ced7d] {\r\n  color: var(--acu-danger, #e5484d);\n}\n.acu-api-config-panel__select-row[data-v-048ced7d] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-048ced7d] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-048ced7d] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-048ced7d] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-048ced7d] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-048ced7d] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-048ced7d] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-048ced7d] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-048ced7d] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-048ced7d");
-var ApiConfigPanel_vue_vue_type_style_index_0_scoped_048ced7d_lang = null;
+injectSfcStyle("\n.acu-api-config-panel__hint[data-v-639c01df] {\r\n  color: var(--acu-text-3, #9e978e);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-api-config-panel__hint-danger[data-v-639c01df] {\r\n  color: var(--acu-danger, #e5484d);\n}\n.acu-api-config-panel__select-row[data-v-639c01df] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-639c01df] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-639c01df] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-639c01df] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-639c01df] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-639c01df] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-639c01df] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-639c01df] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-639c01df] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-639c01df");
+var ApiConfigPanel_vue_vue_type_style_index_0_scoped_639c01df_lang = null;
 
 const _hoisted_1$N = { class: "acu-api-config-panel__select-row" };
 const _hoisted_2$G = { class: "acu-api-config-panel__editor-section" };
@@ -124215,7 +124252,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 				key: 0,
 				kind: "warning"
 			}, {
-				default: withCtx(() => [..._cache[17] || (_cache[17] = [createTextVNode(
+				default: withCtx(() => [..._cache[18] || (_cache[18] = [createTextVNode(
 					" 暂无可用 API 预设，请新建并设为当前或全局默认。 ",
 					-1
 					/* CACHED */
@@ -124274,10 +124311,21 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 						_: 1
 					}),
 					createBaseVNode("div", _hoisted_2$G, [
+						createVNode($setup["AcuFormRow"], {
+							label: "接口协议",
+							hint: "决定请求变形与上游端点：OpenAI→/chat/completions；OpenAI Responses→/responses；Claude Messages→/messages；Gemini Interactions→/interactions（自动补 /v1beta）。默认兼容 OpenAI。注意：纯原生端点下「加载模型」可能失败，可手填模型名。"
+						}, {
+							default: withCtx(() => [createVNode($setup["AcuSelect"], {
+								options: $setup.customApiFormatOptions,
+								"model-value": $setup.activeDraft.customApiFormat,
+								"onUpdate:modelValue": _cache[3] || (_cache[3] = ($event) => $setup.activeDraft.customApiFormat = $event)
+							}, null, 8, ["model-value"])]),
+							_: 1
+						}),
 						createVNode($setup["AcuFormRow"], { label: "端点(基础URL)" }, {
 							default: withCtx(() => [createVNode($setup["AcuInput"], {
 								modelValue: $setup.activeDraft.url,
-								"onUpdate:modelValue": _cache[3] || (_cache[3] = ($event) => $setup.activeDraft.url = $event),
+								"onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => $setup.activeDraft.url = $event),
 								type: "text",
 								placeholder: "https://example.com/v1"
 							}, null, 8, ["modelValue"])]),
@@ -124286,7 +124334,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 						createVNode($setup["AcuFormRow"], { label: "API 密钥" }, {
 							default: withCtx(() => [createVNode($setup["AcuInput"], {
 								modelValue: $setup.activeDraft.apiKey,
-								"onUpdate:modelValue": _cache[4] || (_cache[4] = ($event) => $setup.activeDraft.apiKey = $event),
+								"onUpdate:modelValue": _cache[5] || (_cache[5] = ($event) => $setup.activeDraft.apiKey = $event),
 								type: "password",
 								autocomplete: "off"
 							}, null, 8, ["modelValue"])]),
@@ -124295,13 +124343,13 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 						createVNode($setup["AcuFormRow"], { label: "模型名" }, {
 							default: withCtx(() => [createVNode($setup["AcuInput"], {
 								modelValue: $setup.activeDraft.model,
-								"onUpdate:modelValue": _cache[5] || (_cache[5] = ($event) => $setup.activeDraft.model = $event),
+								"onUpdate:modelValue": _cache[6] || (_cache[6] = ($event) => $setup.activeDraft.model = $event),
 								type: "text"
 							}, null, 8, ["modelValue"])]),
 							_: 1
 						}),
 						createBaseVNode("div", _hoisted_3$z, [createVNode($setup["AcuButton"], { onClick: $setup.loadModelsForActive }, {
-							default: withCtx(() => [..._cache[18] || (_cache[18] = [createTextVNode(
+							default: withCtx(() => [..._cache[19] || (_cache[19] = [createTextVNode(
 								"加载模型",
 								-1
 								/* CACHED */
@@ -124322,7 +124370,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 								options: $setup.modelSelectOptions,
 								"model-value": $setup.activeDraft.model,
 								placeholder: "请选择",
-								"onUpdate:modelValue": _cache[6] || (_cache[6] = ($event) => $setup.activeDraft.model = $event)
+								"onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => $setup.activeDraft.model = $event)
 							}, null, 8, ["options", "model-value"])]),
 							_: 1
 						})) : createCommentVNode("v-if", true)
@@ -124330,7 +124378,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 					createBaseVNode("div", _hoisted_6$n, [createVNode($setup["AcuFormRow"], { label: "最大回复长度" }, {
 						default: withCtx(() => [createVNode($setup["AcuInput"], {
 							modelValue: $setup.activeDraft.max_tokens,
-							"onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => $setup.activeDraft.max_tokens = $event),
+							"onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => $setup.activeDraft.max_tokens = $event),
 							type: "number",
 							min: 1,
 							step: 1
@@ -124339,7 +124387,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 					}), createVNode($setup["AcuFormRow"], { label: "温度" }, {
 						default: withCtx(() => [createVNode($setup["AcuInput"], {
 							modelValue: $setup.activeDraft.temperature,
-							"onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => $setup.activeDraft.temperature = $event),
+							"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.activeDraft.temperature = $event),
 							type: "number",
 							min: 0,
 							max: 2,
@@ -124355,25 +124403,25 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 							options: $setup.reasoningEffortOptions,
 							"model-value": $setup.activeDraft.reasoningEffort,
 							placeholder: "请选择",
-							"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.activeDraft.reasoningEffort = $event)
+							"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.activeDraft.reasoningEffort = $event)
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
 					createVNode($setup["AcuToggle"], {
 						modelValue: $setup.activeDraft.streamingEnabled,
-						"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.activeDraft.streamingEnabled = $event),
+						"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.activeDraft.streamingEnabled = $event),
 						label: "流式输出",
 						description: "该预设开启后 AI 响应以流式方式输出（用于对话类调用）。每个 API 预设独立。"
 					}, null, 8, ["modelValue"]),
 					createVNode($setup["AcuToggle"], {
 						modelValue: $setup.activeDraft.nonPrefillSupport,
-						"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.activeDraft.nonPrefillSupport = $event),
+						"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.activeDraft.nonPrefillSupport = $event),
 						label: "非预填充支持",
 						description: "该预设开启后，所有使用本预设的调用（剧情推进/填表等）会把 assistant 消息改写为 user，并在首行加上「助手：」前缀。用于不支持 assistant 预填充的模型/接口。"
 					}, null, 8, ["modelValue"]),
 					createVNode($setup["AcuToggle"], {
 						modelValue: $setup.activeDraft.publicServiceMode,
-						"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.activeDraft.publicServiceMode = $event),
+						"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.activeDraft.publicServiceMode = $event),
 						label: "公益站兼容",
 						description: "该预设开启后限速：每分钟最多发送 3 次请求（各预设独立计数），超出时自动排队等待。用于有频率限制的公益站/共享接口。默认关闭。"
 					}, null, 8, ["modelValue"]),
@@ -124384,7 +124432,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
 								modelValue: $setup.activeDraft.bodyParams,
-								"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.activeDraft.bodyParams = $event),
+								"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.activeDraft.bodyParams = $event),
 								rows: 3,
 								placeholder: "response_format:\n  type: json_object\ntop_k: 50"
 							}, null, 8, ["modelValue"])]),
@@ -124396,14 +124444,14 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
 								modelValue: $setup.activeDraft.excludeBodyParams,
-								"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.activeDraft.excludeBodyParams = $event),
+								"onUpdate:modelValue": _cache[15] || (_cache[15] = ($event) => $setup.activeDraft.excludeBodyParams = $event),
 								rows: 2,
 								placeholder: "top_p, reasoning_effort"
 							}, null, 8, ["modelValue"])]),
 							_: 1
 						}),
 						createVNode($setup["AcuFormRow"], { label: "客户端伪装" }, {
-							hint: withCtx(() => [..._cache[19] || (_cache[19] = [createBaseVNode(
+							hint: withCtx(() => [..._cache[20] || (_cache[20] = [createBaseVNode(
 								"span",
 								{ class: "acu-api-config-panel__hint" },
 								[createTextVNode(" 选择一个客户端身份后，其特征请求头（User-Agent / HTTP-Referer / X-Title 等）会合并进下方附加请求标头：受管身份键统一替换、其余行保留。用于部分屏蔽第三方客户端的供应商。 "), createBaseVNode("span", { class: "acu-api-config-panel__hint-danger" }, "如果您不清楚这是做什么用的请不要选择。选择启用后的风险自行评估，后果自担。")],
@@ -124415,7 +124463,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 								"model-value": $setup.matchedClientPresetId,
 								disabled: $setup.activeDraft.publicServiceMode,
 								placeholder: $setup.activeDraft.publicServiceMode ? "已开启公益站兼容，不可使用客户端伪装" : "请选择",
-								"onUpdate:modelValue": _cache[15] || (_cache[15] = ($event) => $setup.applyClientPreset($event))
+								"onUpdate:modelValue": _cache[16] || (_cache[16] = ($event) => $setup.applyClientPreset($event))
 							}, null, 8, [
 								"model-value",
 								"disabled",
@@ -124429,7 +124477,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
 								modelValue: $setup.activeDraft.requestHeaders,
-								"onUpdate:modelValue": _cache[16] || (_cache[16] = ($event) => $setup.activeDraft.requestHeaders = $event),
+								"onUpdate:modelValue": _cache[17] || (_cache[17] = ($event) => $setup.activeDraft.requestHeaders = $event),
 								rows: 2,
 								placeholder: "X-Custom-Header: value"
 							}, null, 8, ["modelValue"])]),
@@ -124451,7 +124499,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 						disabled: !$setup.activeDraftDirty,
 						onClick: $setup.syncActiveDraft
 					}, {
-						default: withCtx(() => [..._cache[20] || (_cache[20] = [createTextVNode(
+						default: withCtx(() => [..._cache[21] || (_cache[21] = [createTextVNode(
 							"放弃修改",
 							-1
 							/* CACHED */
@@ -124476,7 +124524,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 				key: 2,
 				kind: "warning"
 			}, {
-				default: withCtx(() => [..._cache[21] || (_cache[21] = [createTextVNode(
+				default: withCtx(() => [..._cache[22] || (_cache[22] = [createTextVNode(
 					" 暂无可用 API 预设，请新建并设为当前或全局默认。 ",
 					-1
 					/* CACHED */
@@ -124487,7 +124535,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["title", "description"]);
 }
-var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$P, [["render", _sfc_render$P], ["__scopeId", "data-v-048ced7d"]]);
+var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$P, [["render", _sfc_render$P], ["__scopeId", "data-v-639c01df"]]);
 
 // ═══════════════════════════════════════════════════════════
 // service/settings/feature-preset-reference-service.ts — 功能级 API 预设引用
@@ -143310,7 +143358,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260827-04";
+        const stamp = "20260827-12";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

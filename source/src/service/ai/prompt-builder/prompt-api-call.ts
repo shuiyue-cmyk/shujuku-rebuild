@@ -246,7 +246,9 @@ export class RetryableAiResponseError_ACU extends Error {
     }
   }
 
-  // SSE 流式响应解析：逐行提取 data: 前缀的 JSON，拼接 choices[0].delta.content
+  // SSE 流式响应解析：逐行提取 data: 前缀的 JSON，拼接 choices[0].delta.content。
+  // 兼容 Claude Messages 原样透传的 Anthropic SSE（接口协议=claude_messages 时 TT 不归一化流）：
+  // content_block_delta(text_delta).delta.text 拼内容，message_stop 视为流结束（等价 [DONE]）。
   async function parseStreamResponse_ACU(response: any) {
     try {
       const text = await response.text();
@@ -264,7 +266,13 @@ export class RetryableAiResponseError_ACU extends Error {
         try {
           const data = JSON.parse(payload);
           const delta = data?.choices?.[0]?.delta?.content;
-          if (typeof delta === 'string') result += delta;
+          if (typeof delta === 'string') { result += delta; continue; }
+          // Anthropic SSE 分支（claude_messages 接口协议）
+          if (data?.type === 'content_block_delta' && data?.delta?.type === 'text_delta' && typeof data?.delta?.text === 'string') {
+            result += data.delta.text;
+          } else if (data?.type === 'message_stop') {
+            sawDone = true;
+          }
         } catch {
           // 忽略无法解析的 data 行（注释/空行）
         }

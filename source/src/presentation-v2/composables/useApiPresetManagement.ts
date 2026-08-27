@@ -19,6 +19,8 @@ export interface ApiPresetDraft {
   reasoningEffort: string;
   /** 公益站兼容（预设级）：限速每分钟最多 3 次请求（各预设独立计数） */
   publicServiceMode: boolean;
+  /** 接口协议（预设级）：openai_compat / openai_responses / claude_messages / gemini_interactions */
+  customApiFormat: string;
 }
 
 /** 连接模式（酒馆主 API / 酒馆预设已剥离，恒为自定义 API） */
@@ -40,6 +42,7 @@ export function createEmptyApiPresetDraft(): ApiPresetDraft {
     streamingEnabled: false,
     reasoningEffort: 'medium',
     publicServiceMode: false,
+    customApiFormat: 'openai_compat',
   };
 }
 
@@ -59,6 +62,7 @@ export function apiPresetDraftFromPreset(preset: AcuV2ApiPreset): ApiPresetDraft
     streamingEnabled: preset.apiConfig.streamingEnabled === true,
     reasoningEffort: preset.apiConfig.reasoningEffort || 'medium',
     publicServiceMode: preset.publicServiceMode === true,
+    customApiFormat: preset.apiConfig.customApiFormat || 'openai_compat',
   };
 }
 
@@ -79,6 +83,9 @@ export function apiPresetFromDraft(draft: ApiPresetDraft): AcuV2ApiPreset {
       reasoningEffort: (['low', 'medium', 'high', 'max', 'xhigh'] as const).includes(draft.reasoningEffort as any)
         ? (draft.reasoningEffort as 'low' | 'medium' | 'high' | 'max' | 'xhigh')
         : 'medium',
+      customApiFormat: (['openai_compat', 'openai_responses', 'claude_messages', 'gemini_interactions'] as const).includes(draft.customApiFormat as any)
+        ? (draft.customApiFormat as 'openai_compat' | 'openai_responses' | 'claude_messages' | 'gemini_interactions')
+        : 'openai_compat',
     },
     nonPrefillSupport: draft.nonPrefillSupport === true,
     publicServiceMode: draft.publicServiceMode === true,
