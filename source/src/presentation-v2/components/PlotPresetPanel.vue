@@ -64,12 +64,13 @@
       v-if="showApiPreset"
       label="剧情推进 API 预设"
       hint="默认使用当前的API，选择后仅影响剧情推进功能。"
+      :style="plotStale ? { background: 'rgba(255, 213, 79, 0.22)', borderRadius: '6px', padding: '6px' } : undefined"
     >
       <AcuSelect
         :options="pageApiSelectOptions"
         :model-value="store.pageApiPresetName"
         :placeholder="followActiveApiLabel"
-        @update:model-value="store.setPageApiPreset($event)"
+        @update:model-value="(v) => { store.setPageApiPreset(v); markPlotConfirmed(); }"
       />
     </AcuFormRow>
 
@@ -110,6 +111,7 @@ import { computed, onMounted, watch } from "vue";
 import { useChatChangedTick } from "../composables/useChatChangedListener";
 import { useDevOptions } from "../composables/useDevOptions";
 import { useApiPresetSelectOptions } from "../composables/useApiPresetSelectOptions";
+import { useApiPresetStaleness } from "../composables/useApiPresetStaleness";
 import { usePlotPresetManagement } from "../composables/usePlotPresetManagement";
 import { useUiCloseGuard } from "../composables/useUiCloseGuard";
 import { plotCopy } from "../copy/plot-copy";
@@ -146,6 +148,8 @@ const {
   followActiveApiLabel,
   apiPresetSelectOptions: pageApiSelectOptions,
 } = useApiPresetSelectOptions();
+// [防呆] 预设在别处被修改后此处标黄，手动重选一次即确认
+const { isStale: plotStale, markConfirmed: markPlotConfirmed } = useApiPresetStaleness("plot-page");
 const management = usePlotPresetManagement();
 const devOptions = useDevOptions();
 

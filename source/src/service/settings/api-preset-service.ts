@@ -8,6 +8,7 @@
 
 import { settings_ACU, currentChatFileIdentifier_ACU } from '../runtime/state-manager';
 import { saveSettings_ACU, type SaveSettingsResult_ACU } from './settings-service';
+import { bumpApiPresetRevision_ACU } from './api-preset-staleness';
 import { logWarn_ACU } from '../../shared/utils';
 
 // ═══ 类型 ═══
@@ -312,6 +313,9 @@ function finalizeSave_ACU(snapshot: Record<string, unknown>): ApiPresetWriteResu
       message: saveResult.warning || saveResult.error || '保存失败，已回滚。',
     };
   }
+  // [防呆] 任一预设写入/绑定变化成功落盘后递增全局修订号，
+  // 各引用处的预设选择器据此标黄提醒用户重新确认（见 api-preset-staleness.ts）。
+  bumpApiPresetRevision_ACU('preset_write');
   return { ok: true, code: 'ok', changed: true, saveResult };
 }
 

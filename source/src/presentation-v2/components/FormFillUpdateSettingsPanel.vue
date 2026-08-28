@@ -8,12 +8,13 @@
         <AcuFormRow
           label="填表 API 预设"
           hint="默认使用当前 API，选择后仅影响填表功能。"
+          :style="tableFillStale ? { background: 'rgba(255, 213, 79, 0.22)', borderRadius: '6px', padding: '6px' } : undefined"
         >
           <AcuSelect
             :options="tableApiPresetOptions"
             :model-value="settings.tableApiPreset.value"
             :placeholder="followActiveApiLabel"
-            @update:model-value="settings.setTableApiPreset($event)"
+            @update:model-value="(v) => { settings.setTableApiPreset(v); markTableFillConfirmed(); }"
           />
         </AcuFormRow>
 
@@ -75,6 +76,7 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { useChatChangedTick } from "../composables/useChatChangedListener";
 import { useApiPresetSelectOptions } from "../composables/useApiPresetSelectOptions";
+import { useApiPresetStaleness } from "../composables/useApiPresetStaleness";
 import {
   useFormFillSettings,
   type NumberSettingKey,
@@ -104,6 +106,8 @@ const {
   followActiveApiLabel,
   apiPresetSelectOptions: tableApiPresetOptions,
 } = useApiPresetSelectOptions();
+// [防呆] 预设在别处被修改后此处标黄，手动重选一次即确认
+const { isStale: tableFillStale, markConfirmed: markTableFillConfirmed } = useApiPresetStaleness("table-fill");
 const advancedExpanded = ref(false);
 
 const updateEveryOptions: AcuSelectOption[] = [

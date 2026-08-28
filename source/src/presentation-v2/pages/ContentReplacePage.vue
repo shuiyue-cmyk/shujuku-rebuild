@@ -15,12 +15,13 @@
         <AcuFormRow
           label="API 预设"
           hint="默认使用当前 API，选择后仅影响正文替换。"
+          :style="contentReplaceStale ? { background: 'rgba(255, 213, 79, 0.22)', borderRadius: '6px', padding: '6px' } : undefined"
         >
           <AcuSelect
             :options="apiOptions"
             :model-value="store.apiPreset"
             :placeholder="followActiveApiLabel"
-            @update:model-value="store.setString('apiPreset', $event)"
+            @update:model-value="(v) => { store.setString('apiPreset', v); markContentReplaceConfirmed(); }"
           />
         </AcuFormRow>
 
@@ -311,6 +312,7 @@ import AcuTextarea from "../components/_lib/AcuTextarea.vue";
 import ContentReplacePresetDrawer from "../components/ContentReplacePresetDrawer.vue";
 import ContentReplacePromptDrawer from "../components/ContentReplacePromptDrawer.vue";
 import { useApiPresetSelectOptions } from "../composables/useApiPresetSelectOptions";
+import { useApiPresetStaleness } from "../composables/useApiPresetStaleness";
 import { useChatChangedTick } from "../composables/useChatChangedListener";
 import { useUiCloseGuard } from "../composables/useUiCloseGuard";
 import { contentReplaceCopy } from "../copy/content-replace-copy";
@@ -328,6 +330,8 @@ const {
   followActiveApiLabel,
   apiPresetSelectOptions: apiOptions,
 } = useApiPresetSelectOptions();
+// [防呆] 预设在别处被修改后此处标黄，手动重选一次即确认
+const { isStale: contentReplaceStale, markConfirmed: markContentReplaceConfirmed } = useApiPresetStaleness("content-replace");
 const presetDrawerOpen = ref(false);
 const promptDrawerOpen = ref(false);
 const editingPresetName = ref("");

@@ -7,7 +7,11 @@
       暂无可用 API 预设，请新建并设为当前或全局默认。
     </AcuMessage>
 
-    <AcuFormRow label="当前 API 预设" hint="星标表示新聊天默认使用的预设。">
+    <AcuFormRow
+      label="当前 API 预设"
+      hint="星标表示新聊天默认使用的预设。"
+      :style="mainPresetStale ? { background: 'rgba(255, 213, 79, 0.22)', borderRadius: '6px', padding: '6px' } : undefined"
+    >
       <div class="acu-api-config-panel__select-row">
         <AcuPresetDropdown
           :items="presetDropdownItems"
@@ -238,6 +242,7 @@ import {
   stripManagedClientHeaders_ACU,
   hasManagedClientKeys_ACU,
 } from "../composables/client-header-presets";
+import { useApiPresetStaleness } from "../composables/useApiPresetStaleness";
 
 // ─── 思考强度选项（每个 API 预设独立） ───
 const reasoningEffortOptions: AcuSelectOption[] = [
@@ -281,6 +286,8 @@ function applyClientPreset(id: string | number | null): void {
 const store = useApiPresetStore();
 const dialogStore = useDialogStore();
 const toast = useToastStore();
+// [防呆] 预设定义在别处被修改后此处标黄，手动重选一次即确认
+const { isStale: mainPresetStale, markConfirmed: markMainPresetConfirmed } = useApiPresetStaleness("main-api-preset");
 const formMode = ref<"empty" | "edit" | "create">("empty");
 const activeDraft = reactive<ApiPresetDraft>(createEmptyApiPresetDraft());
 const activeDraftOriginalName = ref("");
@@ -364,6 +371,7 @@ async function selectPreset(name: string): Promise<void> {
     if (!confirmed) return;
   }
   store.setActivePresetForCurrentChat(name);
+  markMainPresetConfirmed();
 }
 
 async function deletePreset(name: string): Promise<void> {
