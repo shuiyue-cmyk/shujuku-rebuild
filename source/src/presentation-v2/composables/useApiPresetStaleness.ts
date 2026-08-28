@@ -2,6 +2,7 @@
 // 核心机制见 service/settings/api-preset-staleness.ts。
 // 用法：const { isStale, markConfirmed } = useApiPresetStaleness('<选择器key>')；
 // isStale 为 true 时给预设选择器标淡黄底，用户手动重选后在 @update 处调 markConfirmed()。
+// 回显规则：从未确认过 + 全局修订号>0（发生过变更）→ 直接标黄（不搞首次沉默）。
 
 import { ref, onMounted, onBeforeUnmount } from 'vue';
 import {

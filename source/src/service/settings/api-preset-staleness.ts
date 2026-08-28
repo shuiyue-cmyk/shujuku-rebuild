@@ -55,13 +55,16 @@ export function confirmApiPresetStaleness_ACU(key: string): void {
 
 /**
  * 计算某选择器当前是否处于「预设已变化未确认」状态：
- * - 从未确认过：视为已确认（首次出现不惊扰；之后任何变化都会触发黄底）
- * - 已确认且 ≠ 当前修订号：stale
+ * - 从未确认过：全局修订号 > 0（发生过任何预设变更）即 stale——否则防呆对
+ *   「从未手动选过的选择器」永远沉默，恰好吞掉最需要提醒的场景（用户实测反馈）。
+ *   全新安装修订号 = 0，不误报。
+ * - 已确认且 ≠ 当前修订号：stale（确认后又有变化）
  */
 export function isApiPresetStale_ACU(key: string): boolean {
   const confirmed = getConfirmedApiPresetRevision_ACU(key);
-  if (confirmed === null) return false;
-  return confirmed !== readRevision();
+  const current = readRevision();
+  if (confirmed === null) return current > 0;
+  return confirmed !== current;
 }
 
 /** 订阅修订号变化（返回取消订阅函数）；回调里重算 isStale 即可保持响应式 */

@@ -61182,14 +61182,17 @@ function confirmApiPresetStaleness_ACU(key) {
 }
 /**
  * 计算某选择器当前是否处于「预设已变化未确认」状态：
- * - 从未确认过：视为已确认（首次出现不惊扰；之后任何变化都会触发黄底）
- * - 已确认且 ≠ 当前修订号：stale
+ * - 从未确认过：全局修订号 > 0（发生过任何预设变更）即 stale——否则防呆对
+ *   「从未手动选过的选择器」永远沉默，恰好吞掉最需要提醒的场景（用户实测反馈）。
+ *   全新安装修订号 = 0，不误报。
+ * - 已确认且 ≠ 当前修订号：stale（确认后又有变化）
  */
 function isApiPresetStale_ACU(key) {
     const confirmed = getConfirmedApiPresetRevision_ACU(key);
+    const current = readRevision();
     if (confirmed === null)
-        return false;
-    return confirmed !== readRevision();
+        return current > 0;
+    return confirmed !== current;
 }
 /** 订阅修订号变化（返回取消订阅函数）；回调里重算 isStale 即可保持响应式 */
 function onApiPresetRevisionChanged_ACU(listener) {
@@ -124119,26 +124122,6 @@ function hasManagedClientKeys_ACU(currentHeaders) {
         .some((l) => l.trim() && MANAGED_KEYS_ACU.has(headerKeyOf(l)));
 }
 
-// presentation-v2/composables/useApiPresetStaleness.ts — API 预设变更防呆（Vue 响应式封装）
-// 核心机制见 service/settings/api-preset-staleness.ts。
-// 用法：const { isStale, markConfirmed } = useApiPresetStaleness('<选择器key>')；
-// isStale 为 true 时给预设选择器标淡黄底，用户手动重选后在 @update 处调 markConfirmed()。
-function useApiPresetStaleness(key) {
-    const isStale = ref(isApiPresetStale_ACU(key));
-    let unsubscribe = null;
-    const recompute = () => { isStale.value = isApiPresetStale_ACU(key); };
-    onMounted(() => {
-        recompute();
-        unsubscribe = onApiPresetRevisionChanged_ACU(recompute);
-    });
-    onBeforeUnmount(() => { unsubscribe?.(); unsubscribe = null; });
-    const markConfirmed = () => {
-        confirmApiPresetStaleness_ACU(key);
-        recompute();
-    };
-    return { isStale, markConfirmed };
-}
-
 // ─── 思考强度选项（每个 API 预设独立） ───
 var _sfc_main$P = /*@__PURE__*/ defineComponent({
     __name: 'ApiConfigPanel',
@@ -124185,8 +124168,6 @@ var _sfc_main$P = /*@__PURE__*/ defineComponent({
         const store = useApiPresetStore();
         const dialogStore = useDialogStore();
         const toast = useToastStore();
-        // [防呆] 预设定义在别处被修改后此处标黄，手动重选一次即确认
-        const { isStale: mainPresetStale, markConfirmed: markMainPresetConfirmed } = useApiPresetStaleness("main-api-preset");
         const formMode = ref("empty");
         const activeDraft = reactive(createEmptyApiPresetDraft());
         const activeDraftOriginalName = ref("");
@@ -124257,7 +124238,6 @@ var _sfc_main$P = /*@__PURE__*/ defineComponent({
                     return;
             }
             store.setActivePresetForCurrentChat(name);
-            markMainPresetConfirmed();
         }
         async function deletePreset(name) {
             const confirmed = await dialogStore.confirm({
@@ -124324,14 +124304,14 @@ var _sfc_main$P = /*@__PURE__*/ defineComponent({
             });
         }
         watch(() => store.activePresetName, () => syncActiveDraft(), { flush: "sync" });
-        const __returned__ = { reasoningEffortOptions, customApiFormatOptions, clientPresetOptions, matchedClientPresetId, applyClientPreset, store, dialogStore, toast, mainPresetStale, markMainPresetConfirmed, formMode, activeDraft, activeDraftOriginalName, activeDraftSnapshot, activeDraftError, activeDraftSavedAt, activeDraftDirty, modelSelectOptions, presetDropdownItems, refreshAll, syncActiveDraft, startCreateDraft, selectPreset, deletePreset, presetMeta, validateActiveDraft, saveActiveDraft, loadModelsForActive, get apiCopy() { return apiCopy; }, AcuButton, AcuFormRow, AcuIconButton, AcuInput, AcuMessage, AcuPanel, AcuTextarea, AcuPresetDropdown, AcuSelect, AcuToggle };
+        const __returned__ = { reasoningEffortOptions, customApiFormatOptions, clientPresetOptions, matchedClientPresetId, applyClientPreset, store, dialogStore, toast, formMode, activeDraft, activeDraftOriginalName, activeDraftSnapshot, activeDraftError, activeDraftSavedAt, activeDraftDirty, modelSelectOptions, presetDropdownItems, refreshAll, syncActiveDraft, startCreateDraft, selectPreset, deletePreset, presetMeta, validateActiveDraft, saveActiveDraft, loadModelsForActive, get apiCopy() { return apiCopy; }, AcuButton, AcuFormRow, AcuIconButton, AcuInput, AcuMessage, AcuPanel, AcuTextarea, AcuPresetDropdown, AcuSelect, AcuToggle };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.acu-api-config-panel__hint[data-v-163d7a65] {\r\n  color: var(--acu-text-3, #9e978e);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-api-config-panel__hint-danger[data-v-163d7a65] {\r\n  color: var(--acu-danger, #e5484d);\n}\n.acu-api-config-panel__select-row[data-v-163d7a65] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-163d7a65] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-163d7a65] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-163d7a65] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-163d7a65] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-163d7a65] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-163d7a65] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-163d7a65] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-163d7a65] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-163d7a65");
-var ApiConfigPanel_vue_vue_type_style_index_0_scoped_163d7a65_lang = null;
+injectSfcStyle("\n.acu-api-config-panel__hint[data-v-09e26eef] {\r\n  color: var(--acu-text-3, #9e978e);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-api-config-panel__hint-danger[data-v-09e26eef] {\r\n  color: var(--acu-danger, #e5484d);\n}\n.acu-api-config-panel__select-row[data-v-09e26eef] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-09e26eef] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-09e26eef] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-09e26eef] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-09e26eef] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-09e26eef] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-09e26eef] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-09e26eef] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-09e26eef] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-09e26eef");
+var ApiConfigPanel_vue_vue_type_style_index_0_scoped_09e26eef_lang = null;
 
 const _hoisted_1$N = { class: "acu-api-config-panel__select-row" };
 const _hoisted_2$G = { class: "acu-api-config-panel__editor-section" };
@@ -124366,12 +124346,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 			})) : createCommentVNode("v-if", true),
 			createVNode($setup["AcuFormRow"], {
 				label: "当前 API 预设",
-				hint: "星标表示新聊天默认使用的预设。",
-				style: normalizeStyle($setup.mainPresetStale ? {
-					background: "rgba(255, 213, 79, 0.22)",
-					borderRadius: "6px",
-					padding: "6px"
-				} : undefined)
+				hint: "星标表示新聊天默认使用的预设。"
 			}, {
 				default: withCtx(() => [createBaseVNode("div", _hoisted_1$N, [
 					createVNode($setup["AcuPresetDropdown"], {
@@ -124402,7 +124377,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 					}, null, 8, ["disabled"])
 				])]),
 				_: 1
-			}, 8, ["style"]),
+			}),
 			$setup.formMode !== "empty" ? (openBlock(), createElementBlock(
 				"form",
 				{
@@ -124645,7 +124620,7 @@ function _sfc_render$P(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["title", "description"]);
 }
-var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$P, [["render", _sfc_render$P], ["__scopeId", "data-v-163d7a65"]]);
+var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$P, [["render", _sfc_render$P], ["__scopeId", "data-v-09e26eef"]]);
 
 // ═══════════════════════════════════════════════════════════
 // service/settings/feature-preset-reference-service.ts — 功能级 API 预设引用
@@ -125187,6 +125162,27 @@ function useApiPresetSelectOptions() {
         followActiveApiLabel,
         apiPresetSelectOptions,
     };
+}
+
+// presentation-v2/composables/useApiPresetStaleness.ts — API 预设变更防呆（Vue 响应式封装）
+// 核心机制见 service/settings/api-preset-staleness.ts。
+// 用法：const { isStale, markConfirmed } = useApiPresetStaleness('<选择器key>')；
+// isStale 为 true 时给预设选择器标淡黄底，用户手动重选后在 @update 处调 markConfirmed()。
+// 回显规则：从未确认过 + 全局修订号>0（发生过变更）→ 直接标黄（不搞首次沉默）。
+function useApiPresetStaleness(key) {
+    const isStale = ref(isApiPresetStale_ACU(key));
+    let unsubscribe = null;
+    const recompute = () => { isStale.value = isApiPresetStale_ACU(key); };
+    onMounted(() => {
+        recompute();
+        unsubscribe = onApiPresetRevisionChanged_ACU(recompute);
+    });
+    onBeforeUnmount(() => { unsubscribe?.(); unsubscribe = null; });
+    const markConfirmed = () => {
+        confirmApiPresetStaleness_ACU(key);
+        recompute();
+    };
+    return { isStale, markConfirmed };
 }
 
 const NUMBER_FIELD_META = [
