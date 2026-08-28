@@ -136375,6 +136375,8 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
         const emit = __emit;
         const agentControl = props.agentControl;
         const advancedOpen = ref(false);
+        // [防呆] 预设在别处被修改后此处标黄，手动重选（决策/技能化任一）即确认
+        const { isStale: agentStale, markConfirmed: markAgentConfirmed } = useApiPresetStaleness("agent-wb-control");
         const modeOptions = [
             { value: 'disabled', label: plotCopy.agentControl.modes.disabled },
             { value: 'passive', label: plotCopy.agentControl.modes.passive },
@@ -136400,14 +136402,14 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
             if (await agentControl.clearSkillMeta())
                 emit('current-worldbook-changed');
         }
-        const __returned__ = { props, emit, agentControl, advancedOpen, modeOptions, statusVariant, statusText, onModeChange, runRestore, runSkillify, runClearSkillMeta, get plotCopy() { return plotCopy; }, AcuBadge, AcuButton, WorldbookAgentAdvancedPanel, AcuFormRow, AcuSegmentedControl, AcuSelect };
+        const __returned__ = { props, emit, agentControl, advancedOpen, agentStale, markAgentConfirmed, modeOptions, statusVariant, statusText, onModeChange, runRestore, runSkillify, runClearSkillMeta, get plotCopy() { return plotCopy; }, AcuBadge, AcuButton, WorldbookAgentAdvancedPanel, AcuFormRow, AcuSegmentedControl, AcuSelect };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.acu-v2-agent-wb-control[data-v-d7a31c7e] { display: flex; flex-direction: column; gap: 10px; min-width: 0; max-width: 100%; box-sizing: border-box; padding: 10px; border-radius: var(--acu-radius-sm); background: var(--acu-bg-2);\n}\n.acu-v2-agent-wb-control__head[data-v-d7a31c7e] { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; min-width: 0; max-width: 100%;\n}\n.acu-v2-agent-wb-control__title[data-v-d7a31c7e] { font-size: var(--acu-font-size-body-lg, 13px); font-weight: 600; color: var(--acu-text-1);\n}\n.acu-v2-agent-wb-control__desc[data-v-d7a31c7e] { margin: 3px 0 0; font-size: var(--acu-font-size-caption, 11px); color: var(--acu-text-3); line-height: 1.5;\n}\n.acu-v2-agent-wb-control__body[data-v-d7a31c7e] { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-width: 0; max-width: 100%;\n}\n.acu-v2-agent-wb-control__config-source[data-v-d7a31c7e] { flex: 1 1 100%; min-width: 0; margin: 0; font-size: var(--acu-font-size-caption, 11px); color: var(--acu-text-3); line-height: 1.5; overflow-wrap: anywhere;\n}\n.acu-v2-agent-wb-control__api-selects[data-v-d7a31c7e] { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; flex: 1 1 380px; min-width: 0; max-width: 100%;\n}\n.acu-v2-agent-wb-control__actions[data-v-d7a31c7e] { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; max-width: 100%;\n}\n@media (max-width: 720px) {\n.acu-v2-agent-wb-control__api-selects[data-v-d7a31c7e] { flex-basis: 100%; grid-template-columns: minmax(0, 1fr);\n}\n}\n@media (max-width: 480px) {\n.acu-v2-agent-wb-control__actions[data-v-d7a31c7e] { width: 100%;\n}\n.acu-v2-agent-wb-control__actions[data-v-d7a31c7e] .acu-btn { flex: 1 1 100%;\n}\n}\r\n", "src/presentation-v2/components/WorldbookAgentControlBar.vue#style-0-d7a31c7e");
-var WorldbookAgentControlBar_vue_vue_type_style_index_0_scoped_d7a31c7e_lang = null;
+injectSfcStyle("\n.acu-v2-agent-wb-control[data-v-d2378d88] { display: flex; flex-direction: column; gap: 10px; min-width: 0; max-width: 100%; box-sizing: border-box; padding: 10px; border-radius: var(--acu-radius-sm); background: var(--acu-bg-2);\n}\n.acu-v2-agent-wb-control__head[data-v-d2378d88] { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; min-width: 0; max-width: 100%;\n}\n.acu-v2-agent-wb-control__title[data-v-d2378d88] { font-size: var(--acu-font-size-body-lg, 13px); font-weight: 600; color: var(--acu-text-1);\n}\n.acu-v2-agent-wb-control__desc[data-v-d2378d88] { margin: 3px 0 0; font-size: var(--acu-font-size-caption, 11px); color: var(--acu-text-3); line-height: 1.5;\n}\n.acu-v2-agent-wb-control__body[data-v-d2378d88] { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; min-width: 0; max-width: 100%;\n}\n.acu-v2-agent-wb-control__config-source[data-v-d2378d88] { flex: 1 1 100%; min-width: 0; margin: 0; font-size: var(--acu-font-size-caption, 11px); color: var(--acu-text-3); line-height: 1.5; overflow-wrap: anywhere;\n}\n.acu-v2-agent-wb-control__api-selects[data-v-d2378d88] { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; flex: 1 1 380px; min-width: 0; max-width: 100%;\n}\n.acu-v2-agent-wb-control__actions[data-v-d2378d88] { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; max-width: 100%;\n}\n@media (max-width: 720px) {\n.acu-v2-agent-wb-control__api-selects[data-v-d2378d88] { flex-basis: 100%; grid-template-columns: minmax(0, 1fr);\n}\n}\n@media (max-width: 480px) {\n.acu-v2-agent-wb-control__actions[data-v-d2378d88] { width: 100%;\n}\n.acu-v2-agent-wb-control__actions[data-v-d2378d88] .acu-btn { flex: 1 1 100%;\n}\n}\r\n", "src/presentation-v2/components/WorldbookAgentControlBar.vue#style-0-d2378d88");
+var WorldbookAgentControlBar_vue_vue_type_style_index_0_scoped_d2378d88_lang = null;
 
 const _hoisted_1$l = { class: "acu-v2-agent-wb-control" };
 const _hoisted_2$j = { class: "acu-v2-agent-wb-control__head" };
@@ -136456,43 +136458,65 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 			}, null, 8, ["model-value"]),
 			createBaseVNode("div", _hoisted_7$a, [createVNode($setup["AcuFormRow"], {
 				label: $setup.plotCopy.agentControl.apiPresets.decisionLabel,
-				hint: $setup.plotCopy.agentControl.apiPresets.decisionHint
+				hint: $setup.plotCopy.agentControl.apiPresets.decisionHint,
+				style: normalizeStyle($setup.agentStale ? {
+					background: "rgba(255, 213, 79, 0.22)",
+					borderRadius: "6px",
+					padding: "6px"
+				} : undefined)
 			}, {
 				default: withCtx(() => [createVNode($setup["AcuSelect"], {
 					options: $setup.agentControl.apiPresetOptions.value,
 					"model-value": $setup.agentControl.agentApiPreset.value,
 					placeholder: $setup.plotCopy.agentControl.apiPresets.followCurrentLabel,
 					size: "sm",
-					"onUpdate:modelValue": $setup.agentControl.setAgentApiPreset
+					"onUpdate:modelValue": _cache[0] || (_cache[0] = (v) => {
+						$setup.agentControl.setAgentApiPreset(v);
+						$setup.markAgentConfirmed();
+					})
 				}, null, 8, [
 					"options",
 					"model-value",
-					"placeholder",
-					"onUpdate:modelValue"
+					"placeholder"
 				])]),
 				_: 1
-			}, 8, ["label", "hint"]), createVNode($setup["AcuFormRow"], {
+			}, 8, [
+				"label",
+				"hint",
+				"style"
+			]), createVNode($setup["AcuFormRow"], {
 				label: $setup.plotCopy.agentControl.apiPresets.skillLabel,
-				hint: $setup.plotCopy.agentControl.apiPresets.skillHint
+				hint: $setup.plotCopy.agentControl.apiPresets.skillHint,
+				style: normalizeStyle($setup.agentStale ? {
+					background: "rgba(255, 213, 79, 0.22)",
+					borderRadius: "6px",
+					padding: "6px"
+				} : undefined)
 			}, {
 				default: withCtx(() => [createVNode($setup["AcuSelect"], {
 					options: $setup.agentControl.apiPresetOptions.value,
 					"model-value": $setup.agentControl.agentSkillApiPreset.value,
 					placeholder: $setup.plotCopy.agentControl.apiPresets.followCurrentLabel,
 					size: "sm",
-					"onUpdate:modelValue": $setup.agentControl.setAgentSkillApiPreset
+					"onUpdate:modelValue": _cache[1] || (_cache[1] = (v) => {
+						$setup.agentControl.setAgentSkillApiPreset(v);
+						$setup.markAgentConfirmed();
+					})
 				}, null, 8, [
 					"options",
 					"model-value",
-					"placeholder",
-					"onUpdate:modelValue"
+					"placeholder"
 				])]),
 				_: 1
-			}, 8, ["label", "hint"])]),
+			}, 8, [
+				"label",
+				"hint",
+				"style"
+			])]),
 			createBaseVNode("div", _hoisted_8$9, [
 				createVNode($setup["AcuButton"], {
 					size: "sm",
-					onClick: _cache[0] || (_cache[0] = ($event) => $setup.advancedOpen = true)
+					onClick: _cache[2] || (_cache[2] = ($event) => $setup.advancedOpen = true)
 				}, {
 					default: withCtx(() => [createTextVNode(
 						toDisplayString($setup.plotCopy.agentControl.advanced.button),
@@ -136547,13 +136571,13 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 		createVNode($setup["WorldbookAgentAdvancedPanel"], {
 			open: $setup.advancedOpen,
 			"agent-control": $setup.agentControl,
-			onClose: _cache[1] || (_cache[1] = ($event) => $setup.advancedOpen = false),
-			onCurrentWorldbookChanged: _cache[2] || (_cache[2] = ($event) => $setup.emit("current-worldbook-changed")),
-			onGlobalTemplateSaved: _cache[3] || (_cache[3] = ($event) => $setup.emit("global-template-saved"))
+			onClose: _cache[3] || (_cache[3] = ($event) => $setup.advancedOpen = false),
+			onCurrentWorldbookChanged: _cache[4] || (_cache[4] = ($event) => $setup.emit("current-worldbook-changed")),
+			onGlobalTemplateSaved: _cache[5] || (_cache[5] = ($event) => $setup.emit("global-template-saved"))
 		}, null, 8, ["open", "agent-control"])
 	]);
 }
-var WorldbookAgentControlBar = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-d7a31c7e"]]);
+var WorldbookAgentControlBar = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-d2378d88"]]);
 
 function getEntryLabel_ACU(entry) {
     return buildWorldbookEntryDisplayLabel_ACU(String(entry?.comment || entry?.name || ''), entry?.uid);
@@ -143494,7 +143518,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260828-06";
+        const stamp = "20260828-07";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

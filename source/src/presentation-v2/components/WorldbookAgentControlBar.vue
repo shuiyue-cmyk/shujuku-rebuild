@@ -22,25 +22,27 @@
         <AcuFormRow
           :label="plotCopy.agentControl.apiPresets.decisionLabel"
           :hint="plotCopy.agentControl.apiPresets.decisionHint"
+          :style="agentStale ? { background: 'rgba(255, 213, 79, 0.22)', borderRadius: '6px', padding: '6px' } : undefined"
         >
           <AcuSelect
             :options="agentControl.apiPresetOptions.value"
             :model-value="agentControl.agentApiPreset.value"
             :placeholder="plotCopy.agentControl.apiPresets.followCurrentLabel"
             size="sm"
-            @update:model-value="agentControl.setAgentApiPreset"
+            @update:model-value="(v) => { agentControl.setAgentApiPreset(v); markAgentConfirmed(); }"
           />
         </AcuFormRow>
         <AcuFormRow
           :label="plotCopy.agentControl.apiPresets.skillLabel"
           :hint="plotCopy.agentControl.apiPresets.skillHint"
+          :style="agentStale ? { background: 'rgba(255, 213, 79, 0.22)', borderRadius: '6px', padding: '6px' } : undefined"
         >
           <AcuSelect
             :options="agentControl.apiPresetOptions.value"
             :model-value="agentControl.agentSkillApiPreset.value"
             :placeholder="plotCopy.agentControl.apiPresets.followCurrentLabel"
             size="sm"
-            @update:model-value="agentControl.setAgentSkillApiPreset"
+            @update:model-value="(v) => { agentControl.setAgentSkillApiPreset(v); markAgentConfirmed(); }"
           />
         </AcuFormRow>
       </div>
@@ -74,6 +76,7 @@
 import { computed, ref } from 'vue';
 import type { AgentWorldbookControlMode_ACU } from '../../shared/models/agent-worldbook-model';
 import { usePlotWorldbookAgentControl } from '../composables/usePlotWorldbookAgentControl';
+import { useApiPresetStaleness } from '../composables/useApiPresetStaleness';
 import { plotCopy } from '../copy/plot-copy';
 import AcuBadge from './_lib/AcuBadge.vue';
 import AcuButton from './_lib/AcuButton.vue';
@@ -95,6 +98,8 @@ const emit = defineEmits<{
 
 const agentControl = props.agentControl;
 const advancedOpen = ref(false);
+// [防呆] 预设在别处被修改后此处标黄，手动重选（决策/技能化任一）即确认
+const { isStale: agentStale, markConfirmed: markAgentConfirmed } = useApiPresetStaleness("agent-wb-control");
 
 const modeOptions: AcuSegmentedOption[] = [
   { value: 'disabled', label: plotCopy.agentControl.modes.disabled },
