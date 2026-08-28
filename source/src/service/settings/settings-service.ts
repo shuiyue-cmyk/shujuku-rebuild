@@ -35,6 +35,10 @@ export type SaveSettingsResult_ACU = {
 };
 
 let settingsStorageReadyForSave_ACU = false;
+/** 对外只读：设置是否已完成可靠加载（静默迁移等启动期任务以此为门控） */
+export function isSettingsStorageReadyForSave_ACU(): boolean {
+  return settingsStorageReadyForSave_ACU;
+}
 export const _set_settingsStorageReadyForSave_ACU = (val: boolean) => {
   settingsStorageReadyForSave_ACU = val;
   // [M5] 存储就绪翻转点：补存此前被门控拒绝的挂起保存，避免静默丢失

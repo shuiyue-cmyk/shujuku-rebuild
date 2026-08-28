@@ -84751,6 +84751,10 @@ catch (_) { }
 // 属于 service 层（业务编排），不是纯 data 层。
 // ═══════════════════════════════════════════════════════════════
 let settingsStorageReadyForSave_ACU = false;
+/** 对外只读：设置是否已完成可靠加载（静默迁移等启动期任务以此为门控） */
+function isSettingsStorageReadyForSave_ACU() {
+    return settingsStorageReadyForSave_ACU;
+}
 const _set_settingsStorageReadyForSave_ACU = (val) => {
     settingsStorageReadyForSave_ACU = val;
     // [M5] 存储就绪翻转点：补存此前被门控拒绝的挂起保存，避免静默丢失
@@ -97230,6 +97234,756 @@ function __resetChatMutationSchedulerForTests_ACU() {
     pendingAfterRun_ACU = false;
 }
 
+const EMPTY_LIST = Object.freeze([]);
+const HOST_CHAT_VIEW_CACHE = new WeakMap();
+const HOST_STABLE_CHAT_ID_CACHE = new WeakMap();
+const TAURI_HISTORY_PAGE_SIZE = 200;
+const TAURI_STATE_NAMESPACE = 'bs-biotracker';
+const TAURI_STATE_KEY = 'chat-state-v1';
+const TAURI_STATE_SAVE_DELAY_MS = 250;
+const TAURI_STATE_SAVE_QUEUE = new Map();
+const TAURI_STATE_KNOWN_MISSING_IDS = new Set();
+const TAURI_STATE_LOAD_INFLIGHT = new Map();
+// 已经确认过存档内容（读到了资料，或确认过没有存档）的聊天。
+// 在确认之前绝不允许用空状态回写 sidecar，详见 shouldSkipBlankHostChatStateSave。
+const TAURI_STATE_HYDRATED_IDS = new Set();
+const TAURI_HANDLE_WAIT_TIMEOUT_MS = 3000;
+const TAURI_HANDLE_WAIT_INTERVAL_MS = 100;
+const HOST_EVENT_TYPE_KEYS = Object.freeze({
+    appReady: 'APP_READY',
+    chatChanged: 'CHAT_CHANGED',
+    chatCreated: 'CHAT_CREATED',
+    chatDeleted: 'CHAT_DELETED',
+    groupChatCreated: 'GROUP_CHAT_CREATED',
+    groupChatDeleted: 'GROUP_CHAT_DELETED',
+});
+function getHostKind() {
+    if (globalThis.__TAURITAVERN__)
+        return 'tauritavern';
+    if (globalThis.Luker?.getContext)
+        return 'luker';
+    return 'sillytavern';
+}
+function getHostContext() {
+    try {
+        return globalThis.Luker?.getContext?.() || globalThis.SillyTavern?.getContext?.() || null;
+    }
+    catch (error) {
+        console.warn('[BS BioTracker] unable to read host context', error);
+        return null;
+    }
+}
+async function getHostAgentRunBarrier(ctx, message) {
+    if (getHostKind() !== 'tauritavern')
+        return { state: 'not_applicable', runId: '' };
+    const runId = String(message?.extra?.tauritavern?.agent?.runId || '').trim();
+    if (!runId)
+        return { state: 'not_applicable', runId: '' };
+    const ready = globalThis.__TAURITAVERN__?.ready || globalThis.__TAURITAVERN_MAIN_READY__;
+    if (ready && typeof ready.then === 'function')
+        await ready;
+    const agentApi = getTauriTavernApi()?.agent;
+    if (typeof agentApi?.readEvents !== 'function')
+        return { state: 'pending', runId };
+    try {
+        const result = await agentApi.readEvents({ runId, limit: 500 });
+        const events = Array.isArray(result?.events) ? result.events : [];
+        const types = new Set(events.map((event) => String(event?.type || '')));
+        if (types.has('run_completed'))
+            return { state: 'completed', runId };
+        if (types.has('run_cancelled') || types.has('run_failed'))
+            return { state: 'aborted', runId };
+        return { state: 'pending', runId };
+    }
+    catch (error) {
+        console.warn('[BS BioTracker] unable to read TauriTavern agent run events', error);
+        return { state: 'pending', runId };
+    }
+}
+function subscribeHostEvent(ctx, eventName, handler) {
+    const eventSource = ctx?.eventSource;
+    const eventTypeKey = HOST_EVENT_TYPE_KEYS[eventName];
+    const eventType = eventTypeKey ? ctx?.event_types?.[eventTypeKey] : null;
+    if (!eventSource || !eventType || typeof eventSource.on !== 'function' || typeof handler !== 'function')
+        return null;
+    const safeHandler = (...args) => {
+        try {
+            const result = handler(...args);
+            if (result && typeof result.catch === 'function') {
+                result.catch((error) => console.error(`[BS BioTracker] host event ${eventName} failed`, error));
+            }
+        }
+        catch (error) {
+            console.error(`[BS BioTracker] host event ${eventName} failed`, error);
+        }
+    };
+    eventSource.on(eventType, safeHandler);
+    let active = true;
+    return () => {
+        if (!active)
+            return;
+        active = false;
+        if (typeof eventSource.off === 'function')
+            eventSource.off(eventType, safeHandler);
+    };
+}
+function replaceHostEventSubscription(ctx, eventName, previousUnsubscribe, handler) {
+    if (typeof previousUnsubscribe === 'function')
+        previousUnsubscribe();
+    return subscribeHostEvent(ctx, eventName, handler);
+}
+function getHostChat(ctx) {
+    const cached = ctx && typeof ctx === 'object' ? HOST_CHAT_VIEW_CACHE.get(ctx) : null;
+    if (cached?.chatId === getHostChatId(ctx) && Array.isArray(cached.messages))
+        return cached.messages;
+    return Array.isArray(ctx?.chat) ? ctx.chat : EMPTY_LIST;
+}
+function hasAbsoluteHostChatView(ctx) {
+    const cached = ctx && typeof ctx === 'object' ? HOST_CHAT_VIEW_CACHE.get(ctx) : null;
+    return Boolean(cached?.chatId === getHostChatId(ctx) && cached.absolute === true);
+}
+function assignHistoryPage(target, page) {
+    const startIndex = Math.max(0, Number(page?.startIndex) || 0);
+    const messages = Array.isArray(page?.messages) ? page.messages : EMPTY_LIST;
+    for (let index = 0; index < messages.length; index += 1) {
+        target[startIndex + index] = messages[index];
+    }
+}
+async function refreshHostChatView(ctx, options = {}, retriesLeft = 2) {
+    if (getHostKind() !== 'tauritavern')
+        return getHostChat(ctx);
+    const ready = globalThis.__TAURITAVERN__?.ready || globalThis.__TAURITAVERN_MAIN_READY__;
+    if (ready && typeof ready.then === 'function')
+        await ready;
+    const api = getTauriTavernApi()?.chat;
+    if (!api?.current?.windowInfo || !api?.current?.handle)
+        return getHostChat(ctx);
+    const info = await api.current.windowInfo();
+    const totalCount = Math.max(0, Number(info?.totalCount) || 0);
+    const contextSize = Math.max(2, Number(options.contextSize) || 12);
+    const resumeIndexes = Array.isArray(options.resumeIndexes) ? options.resumeIndexes : [options.afterIndex];
+    const afterIndex = resumeIndexes.reduce((latest, value) => {
+        const index = Number(value);
+        return Number.isInteger(index) && index >= 0 && index <= totalCount && index > latest ? index : latest;
+    }, 0);
+    const requiredStartIndex = Math.max(0, afterIndex - contextSize);
+    const minimumTailSize = Math.max(contextSize, totalCount - requiredStartIndex);
+    const handle = api.current.handle();
+    const startChatId = getHostChatId(ctx);
+    let page = await handle.history.tail({ limit: Math.min(TAURI_HISTORY_PAGE_SIZE, Math.max(1, minimumTailSize)) });
+    const messages = new Array(totalCount);
+    assignHistoryPage(messages, page);
+    while (page?.hasMoreBefore && Number(page.startIndex) > requiredStartIndex) {
+        // 翻页是异步的，期间宿主可能被切到另一个聊天：继续翻只会把两个聊天的楼层混在一起
+        page = await handle.history.before(page, { limit: TAURI_HISTORY_PAGE_SIZE });
+        assignHistoryPage(messages, page);
+        if (getHostChatId(ctx) !== startChatId)
+            break;
+    }
+    // 中途切换聊天 → 本轮结果作废，不写缓存；重试有限次，避免用户连续切聊天时无限递归
+    if (getHostChatId(ctx) !== startChatId) {
+        if (retriesLeft > 0)
+            return refreshHostChatView(ctx, options, retriesLeft - 1);
+        return getHostChat(ctx);
+    }
+    HOST_CHAT_VIEW_CACHE.set(ctx, {
+        absolute: true,
+        chatId: startChatId,
+        messages,
+        loadedStartIndex: Math.max(0, Number(page?.startIndex) || 0),
+        totalCount,
+    });
+    return messages;
+}
+function getHostCharacters(ctx) {
+    return Array.isArray(ctx?.characters) ? ctx.characters : EMPTY_LIST;
+}
+function getHostChatId(ctx) {
+    const fallbackId = getFallbackHostChatId(ctx);
+    if (getHostKind() === 'tauritavern') {
+        const cached = ctx && typeof ctx === 'object' ? HOST_STABLE_CHAT_ID_CACHE.get(ctx) : null;
+        if (cached?.fallbackId === fallbackId && cached.stableId)
+            return cached.stableId;
+    }
+    return fallbackId;
+}
+function getFallbackHostChatId(ctx) {
+    try {
+        const currentChatId = ctx?.getCurrentChatId?.();
+        if (currentChatId !== undefined && currentChatId !== null && String(currentChatId)) {
+            return String(currentChatId);
+        }
+    }
+    catch (error) {
+        console.warn('[BS BioTracker] unable to read current chat id', error);
+    }
+    if (ctx?.chatId !== undefined && ctx?.chatId !== null && String(ctx.chatId))
+        return String(ctx.chatId);
+    return `${ctx?.characterId ?? 'char'}:${ctx?.groupId ?? 'solo'}`;
+}
+async function resolveHostChatId(ctx) {
+    const fallbackId = getFallbackHostChatId(ctx);
+    if (getHostKind() !== 'tauritavern')
+        return fallbackId;
+    const cached = ctx && typeof ctx === 'object' ? HOST_STABLE_CHAT_ID_CACHE.get(ctx) : null;
+    if (cached?.fallbackId === fallbackId && cached.stableId)
+        return cached.stableId;
+    const ready = globalThis.__TAURITAVERN__?.ready || globalThis.__TAURITAVERN_MAIN_READY__;
+    if (ready && typeof ready.then === 'function')
+        await ready;
+    const handle = getCurrentTauriChatHandle();
+    if (typeof handle?.stableId !== 'function')
+        return fallbackId;
+    try {
+        const stableId = String(await handle.stableId() || '').trim();
+        if (!stableId)
+            return fallbackId;
+        if (ctx && typeof ctx === 'object')
+            HOST_STABLE_CHAT_ID_CACHE.set(ctx, { fallbackId, stableId });
+        return stableId;
+    }
+    catch (error) {
+        console.warn('[BS BioTracker] unable to resolve TauriTavern stable chat id', error);
+        return fallbackId;
+    }
+}
+function getHostExtensionSettings(ctx) {
+    if (!ctx || typeof ctx !== 'object')
+        return null;
+    if (!ctx.extensionSettings || typeof ctx.extensionSettings !== 'object')
+        ctx.extensionSettings = {};
+    return ctx.extensionSettings;
+}
+function saveHostSettings(ctx) {
+    try {
+        ctx?.saveSettingsDebounced?.();
+    }
+    catch (error) {
+        console.warn('[BS BioTracker] unable to save host settings', error);
+    }
+}
+function getHostChatCompletionSettings(ctx = null) {
+    const runtime = ctx || getHostContext();
+    const settings = runtime?.chatCompletionSettings;
+    return settings && typeof settings === 'object' ? settings : null;
+}
+function canLoadHostWorldInfo(ctx) {
+    return typeof ctx?.loadWorldInfo === 'function';
+}
+async function loadHostWorldInfo(ctx, name) {
+    if (!canLoadHostWorldInfo(ctx))
+        return null;
+    return ctx.loadWorldInfo(String(name || ''));
+}
+async function getHostWorldBook(name, scope = 'global') {
+    const worldBookApi = globalThis.ST_API?.worldBook;
+    if (typeof worldBookApi?.get !== 'function')
+        return null;
+    const result = await worldBookApi.get({ name: String(name || ''), scope: String(scope || 'global') });
+    return result?.worldBook || null;
+}
+async function getHostWorldInfoPrompt(ctx, chat, maxContext, includeNames = true) {
+    if (typeof ctx?.getWorldInfoPrompt !== 'function')
+        return null;
+    return ctx.getWorldInfoPrompt(chat, maxContext, includeNames);
+}
+function getHostPresetManager(ctx = null, apiId = 'openai') {
+    const runtime = ctx || getHostContext();
+    if (typeof runtime?.getPresetManager !== 'function')
+        return null;
+    return runtime.getPresetManager(apiId);
+}
+async function listHostPresets() {
+    const presetApi = globalThis.ST_API?.preset;
+    return typeof presetApi?.list === 'function' ? presetApi.list() : null;
+}
+async function getHostPreset(name, ctx = null) {
+    const presetName = String(name || '').trim();
+    if (!presetName)
+        return null;
+    const presetApi = globalThis.ST_API?.preset;
+    if (typeof presetApi?.get === 'function') {
+        const result = await presetApi.get({ name: presetName });
+        if (result?.preset && typeof result.preset === 'object')
+            return result.preset;
+    }
+    if (globalThis.openai_settings && typeof globalThis.openai_settings === 'object') {
+        const preset = globalThis.openai_settings[presetName];
+        if (preset && typeof preset === 'object')
+            return preset;
+    }
+    const settings = getHostChatCompletionSettings(ctx);
+    if (settings?.[presetName] && typeof settings[presetName] === 'object')
+        return settings[presetName];
+    if (settings?.presets?.[presetName] && typeof settings.presets[presetName] === 'object')
+        return settings.presets[presetName];
+    return null;
+}
+async function registerHostExtensionMenuItem(options) {
+    const uiApi = globalThis.ST_API?.ui;
+    if (typeof uiApi?.registerExtensionsMenuItem !== 'function')
+        return false;
+    await uiApi.registerExtensionsMenuItem(options);
+    return true;
+}
+function getTauriTavernApi() {
+    const api = globalThis.__TAURITAVERN__?.api;
+    return api && typeof api === 'object' ? api : null;
+}
+function cloneHostValue(value) {
+    if (typeof globalThis.structuredClone === 'function')
+        return globalThis.structuredClone(value);
+    return JSON.parse(JSON.stringify(value));
+}
+function getCurrentTauriChatHandle() {
+    const api = getTauriTavernApi()?.chat;
+    return typeof api?.current?.handle === 'function' ? api.current.handle() : null;
+}
+/**
+ * 保守判空：只有确认不含任何用户资料才算空。
+ * 判错方向要偏「非空」——把真资料误判为空会导致存档被洗掉，反之只是多写一次。
+ * 不复用 state.js 的 isChatStateEffectivelyEmpty，因为 state.js 依赖本模块，反向 import 会成环。
+ */
+function isHostChatStateBlank(chatState) {
+    if (!chatState || typeof chatState !== 'object')
+        return true;
+    const characters = chatState.characters;
+    if (characters && typeof characters === 'object' && Object.keys(characters).length > 0)
+        return false;
+    if (Array.isArray(chatState.skillCatalog) && chatState.skillCatalog.length > 0)
+        return false;
+    if (Array.isArray(chatState.snapshots) && chatState.snapshots.length > 0)
+        return false;
+    return true;
+}
+/**
+ * 防止空状态覆盖既有存档。
+ *
+ * TT／Luker 上 chatStates 不进全局设置，per-chat sidecar 是唯一真源，每次重开都靠 hydrate 读回来。
+ * 一旦 hydrate 没成功（store 未就绪、宿主抛 Failed to resolve active character id 等），
+ * 内存里就是一份刚建出来的空状态；而 getChatState 归一化时会顺手 saveSettings，
+ * 把这份空状态按 handle 写进该聊天的 sidecar，真正的注册资料就此被洗掉。
+ *
+ * 因此：没确认过这个聊天存了什么之前，空状态一律不写。
+ * 确认过之后（读到资料，或确认没有存档）才放行，使用者主动「清除」仍能正常落盘。
+ */
+function shouldSkipBlankHostChatStateSave(chatId, chatState) {
+    if (!isHostChatStateBlank(chatState))
+        return false;
+    return !TAURI_STATE_HYDRATED_IDS.has(chatId);
+}
+/**
+ * 是否已经确认过当前聊天的存档内容。
+ * 原生宿主不依赖 sidecar，永远视为已确认；TT／Luker 未确认時代表这次载入没有定论，
+ * 呼叫端应该稍后重试，而不是把面板当成「没有注册角色」。
+ */
+function isHostChatStateConfirmed(ctx) {
+    const hostKind = getHostKind();
+    if (hostKind !== 'tauritavern' && hostKind !== 'luker')
+        return true;
+    return TAURI_STATE_HYDRATED_IDS.has(getHostChatId(ctx));
+}
+/**
+ * 等待当前聊天的 store 句柄就绪。
+ * 重开存档时 TT 主体可能已经 ready，但该聊天的 handle 还没挂上；
+ * 原本直接当成「没有存档」返回，面板就会显示成未注册。这里给一段有限等待。
+ */
+/**
+ * 先确认 sidecar 是否存在，避免直接 getJson 触发宿主的 not-found 弹窗。
+ *
+ * TauriTavern 把 store 读取 miss 当成后端错误：新聊天第一次探测时，
+ * 使用者会看到一个红色的「后端错误 Failed to get chat store json …」，
+ * 虽然不影响功能，但很吓人。后端其实提供了 list_character_chat_store_keys，
+ * 只是前端包装的方法名未知，因此这里做特性探测：
+ * 探得到就先列 key 再决定要不要读；探不到就回退成原本的直接读取。
+ *
+ * @returns {Promise<boolean|null>} true/false 为确定结果，null 表示无从检查
+ */
+async function tauriChatStoreHasKey(handle, namespace, key) {
+    const store = handle?.store;
+    if (!store)
+        return null;
+    const lister = [store.listKeys, store.list, store.keys, store.listJsonKeys]
+        .find((candidate) => typeof candidate === 'function');
+    if (!lister)
+        return null;
+    try {
+        const result = await lister.call(store, { namespace });
+        const keys = Array.isArray(result)
+            ? result
+            : (Array.isArray(result?.keys) ? result.keys : null);
+        if (!keys)
+            return null;
+        return keys.some((entry) => String(entry?.key ?? entry) === key);
+    }
+    catch {
+        // 列举本身失败就当作无从检查，交回原本的读取路径
+        return null;
+    }
+}
+async function waitForTauriChatStoreHandle(timeoutMs = TAURI_HANDLE_WAIT_TIMEOUT_MS) {
+    let handle = getCurrentTauriChatHandle();
+    if (typeof handle?.store?.getJson === 'function')
+        return handle;
+    const deadline = Date.now() + Math.max(0, Number(timeoutMs) || 0);
+    while (Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, TAURI_HANDLE_WAIT_INTERVAL_MS));
+        handle = getCurrentTauriChatHandle();
+        if (typeof handle?.store?.getJson === 'function')
+            return handle;
+    }
+    return null;
+}
+async function loadHostChatState(ctx = null) {
+    const hostKind = getHostKind();
+    if (hostKind === 'luker') {
+        const runtime = ctx || getHostContext();
+        if (typeof runtime?.getChatState !== 'function')
+            return null;
+        try {
+            const stored = await runtime.getChatState(TAURI_STATE_NAMESPACE);
+            // 读到了（无论有没有资料）就算确认过内容，之后才允许写空
+            TAURI_STATE_HYDRATED_IDS.add(getHostChatId(ctx));
+            if (stored?.version === 1 && stored.chatState && typeof stored.chatState === 'object')
+                return cloneHostValue(stored.chatState);
+        }
+        catch (error) {
+            // 读取失败＝内容未知，保持未确认状态，避免拿空的覆盖掉
+            console.warn('[BS BioTracker] unable to load Luker chat state', error);
+        }
+        return null;
+    }
+    if (hostKind !== 'tauritavern')
+        return null;
+    const ready = globalThis.__TAURITAVERN__?.ready || globalThis.__TAURITAVERN_MAIN_READY__;
+    if (ready && typeof ready.then === 'function')
+        await ready;
+    // 句柄还没挂上时不当成「没有存档」：等一小段时间，超时则维持未确认让呼叫端重试
+    const handle = await waitForTauriChatStoreHandle();
+    if (!handle)
+        return null;
+    // TT surfaces every backend store miss as an error toast, so remember chats
+    // without stored state and skip repeat probes until our own save creates one.
+    const chatId = await resolveHostChatId(ctx);
+    if (TAURI_STATE_KNOWN_MISSING_IDS.has(chatId)) {
+        TAURI_STATE_HYDRATED_IDS.add(chatId);
+        return null;
+    }
+    const inflight = TAURI_STATE_LOAD_INFLIGHT.get(chatId);
+    if (inflight)
+        return inflight;
+    const loadPromise = (async () => {
+        // 能事先确认不存在时就不要读，省下宿主那个吓人的 not-found 错误弹窗
+        const exists = await tauriChatStoreHasKey(handle, TAURI_STATE_NAMESPACE, TAURI_STATE_KEY);
+        if (exists === false) {
+            TAURI_STATE_KNOWN_MISSING_IDS.add(chatId);
+            TAURI_STATE_HYDRATED_IDS.add(chatId);
+            return null;
+        }
+        try {
+            const stored = await handle.store.getJson({ namespace: TAURI_STATE_NAMESPACE, key: TAURI_STATE_KEY });
+            // 读到了（无论有没有资料）就算确认过内容，之后才允许写空
+            TAURI_STATE_HYDRATED_IDS.add(chatId);
+            if (stored?.version === 1 && stored.chatState && typeof stored.chatState === 'object') {
+                return cloneHostValue(stored.chatState);
+            }
+        }
+        catch (error) {
+            if (/not found/i.test(String(error?.message || error))) {
+                // 确认这个聊天没有存档，写空无害
+                TAURI_STATE_KNOWN_MISSING_IDS.add(chatId);
+                TAURI_STATE_HYDRATED_IDS.add(chatId);
+            }
+            else {
+                // 其它错误＝内容未知（store 未就绪、宿主报错等），保持未确认，避免拿空的覆盖掉
+                console.warn('[BS BioTracker] unable to load TauriTavern chat state', error);
+            }
+        }
+        return null;
+    })();
+    TAURI_STATE_LOAD_INFLIGHT.set(chatId, loadPromise);
+    try {
+        return await loadPromise;
+    }
+    finally {
+        TAURI_STATE_LOAD_INFLIGHT.delete(chatId);
+    }
+}
+function scheduleHostChatStateSave(ctx, chatState) {
+    const hostKind = getHostKind();
+    // [迁移契约] 返回值：true=已入队/明确无需保存；false=句柄缺失等静默 no-op（调用方据此不打完成标）
+    if (!chatState || typeof chatState !== 'object')
+        return false;
+    if (hostKind === 'luker') {
+        if (typeof ctx?.updateChatState !== 'function')
+            return false;
+        const chatId = getHostChatId(ctx);
+        if (shouldSkipBlankHostChatStateSave(chatId, chatState))
+            return true;
+        const previous = TAURI_STATE_SAVE_QUEUE.get(chatId);
+        if (previous?.timer)
+            clearTimeout(previous.timer);
+        const payload = { version: 1, chatState: cloneHostValue(chatState) };
+        const timer = setTimeout(async () => {
+            const queued = TAURI_STATE_SAVE_QUEUE.get(chatId);
+            if (!queued || queued.timer !== timer)
+                return;
+            TAURI_STATE_SAVE_QUEUE.delete(chatId);
+            try {
+                await queued.ctx.updateChatState(TAURI_STATE_NAMESPACE, () => queued.payload);
+            }
+            catch (error) {
+                console.warn('[BS BioTracker] unable to save Luker chat state', error);
+            }
+        }, TAURI_STATE_SAVE_DELAY_MS);
+        TAURI_STATE_SAVE_QUEUE.set(chatId, { ctx, payload, timer });
+        return true;
+    }
+    if (hostKind !== 'tauritavern')
+        return false;
+    const handle = getCurrentTauriChatHandle();
+    if (typeof handle?.store?.setJson !== 'function')
+        return false;
+    const chatId = getHostChatId(ctx);
+    if (shouldSkipBlankHostChatStateSave(chatId, chatState))
+        return true;
+    TAURI_STATE_KNOWN_MISSING_IDS.delete(chatId);
+    const previous = TAURI_STATE_SAVE_QUEUE.get(chatId);
+    if (previous?.timer)
+        clearTimeout(previous.timer);
+    const payload = { version: 1, chatState: cloneHostValue(chatState) };
+    const timer = setTimeout(async () => {
+        const queued = TAURI_STATE_SAVE_QUEUE.get(chatId);
+        if (!queued || queued.timer !== timer)
+            return;
+        TAURI_STATE_SAVE_QUEUE.delete(chatId);
+        try {
+            await queued.handle.store.setJson({
+                namespace: TAURI_STATE_NAMESPACE,
+                key: TAURI_STATE_KEY,
+                value: queued.payload,
+            });
+        }
+        catch (error) {
+            console.warn('[BS BioTracker] unable to save TauriTavern chat state', error);
+        }
+    }, TAURI_STATE_SAVE_DELAY_MS);
+    TAURI_STATE_SAVE_QUEUE.set(chatId, { handle, payload, timer });
+    return true;
+}
+
+/**
+ * service/biotracker/silent-migration.ts — 内置生理追踪数据一次性静默迁移
+ *
+ * 背景：数据库已剥离内置 biotracker，存量用户的数据留在 settings_ACU.bs_biotracker
+ * （chatStates: chatKey → chatState）。本模块把它转写成上游 st_bs_biotracker 可读的
+ * 形态，让用户平移到上游 tracker。仅运行一次（全局/按聊天双重打标），全程静默（仅 logDebug）。
+ *
+ * 口径（用户拍板 2026-08-26）：
+ * - 目标端两栖：TT/Luker 写上游 per-chat sidecar（bs-biotracker/chat-state-v1，句柄仅当前聊天可达
+ *   → 「打开即迁」：当前聊天迁一次并按聊天打永久标）；SillyTavern 网页端写
+ *   extensionSettings.bs_biotracker.chatStates（启动时全量一次）。
+ * - 完整度：按 (聊天×角色) 逐角色序列化体积比，严格大于才用我们的，平局/更小一律用上游；
+ *   chatState 其他顶层字段同口径逐项比。
+ * - 范围：整个 chatState（characters / skillCatalog / snapshots / 重填进度等）。
+ */
+const DONE_FLAG_KEY = 'acu-bs-silent-migration-done';
+const CHAT_DONE_PREFIX = 'acu-bs-silent-migration-chat:';
+function isGlobalDone() {
+    try {
+        return localStorage.getItem(DONE_FLAG_KEY) === '1';
+    }
+    catch {
+        return false;
+    }
+}
+function markGlobalDone() {
+    try {
+        localStorage.setItem(DONE_FLAG_KEY, '1');
+    }
+    catch { }
+}
+function isChatDone(chatKey) {
+    try {
+        return localStorage.getItem(CHAT_DONE_PREFIX + chatKey) === '1';
+    }
+    catch {
+        return false;
+    }
+}
+function markChatDone(chatKey) {
+    try {
+        localStorage.setItem(CHAT_DONE_PREFIX + chatKey, '1');
+    }
+    catch { }
+}
+/** 序列化体积：完整度的比较口径（undefined/null 记 0） */
+function serializeSize(value) {
+    if (value === undefined || value === null)
+        return 0;
+    try {
+        const text = JSON.stringify(value);
+        return typeof text === 'string' ? text.length : 0;
+    }
+    catch {
+        return 0;
+    }
+}
+function isPlainRecord(value) {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+/** 数据是否有迁移价值：完全没有角色/技能/快照的空壳不迁移，也不覆盖上游 */
+function hasMeaningfulData(chatState) {
+    if (!isPlainRecord(chatState))
+        return false;
+    if (isPlainRecord(chatState.characters) && Object.keys(chatState.characters).length > 0)
+        return true;
+    if (Array.isArray(chatState.skillCatalog) && chatState.skillCatalog.length > 0)
+        return true;
+    if (Array.isArray(chatState.snapshots) && chatState.snapshots.length > 0)
+        return true;
+    return false;
+}
+/**
+ * 合并单个 chatState：完整度规则逐项取舍。
+ * - characters：按角色名逐个比体积，严格大于才用我们的，平局/更小用上游；两侧并集
+ * - 其余顶层字段：我们的体积严格大于上游才用我们的（上游缺失=0，我们的非空即胜出）
+ * - 仅一侧存在：取存在的一侧
+ */
+function mergeChatState(ours, upstream) {
+    if (!isPlainRecord(ours))
+        return isPlainRecord(upstream) ? upstream : {};
+    if (!isPlainRecord(upstream))
+        return ours;
+    const merged = { ...upstream };
+    const ourCharacters = isPlainRecord(ours.characters) ? ours.characters : {};
+    const upstreamCharacters = isPlainRecord(upstream.characters) ? upstream.characters : {};
+    const mergedCharacters = { ...upstreamCharacters };
+    for (const [name, ourChar] of Object.entries(ourCharacters)) {
+        // 严格大于才用我们的；平局/更小用上游。上游缺失时体积为 0，我们的非空数据自然胜出（保数据优先）
+        if (serializeSize(ourChar) > serializeSize(upstreamCharacters[name])) {
+            mergedCharacters[name] = ourChar;
+        }
+    }
+    merged.characters = mergedCharacters;
+    for (const [key, ourValue] of Object.entries(ours)) {
+        if (key === 'characters')
+            continue;
+        if (serializeSize(ourValue) > serializeSize(upstream[key])) {
+            merged[key] = ourValue;
+        }
+    }
+    return merged;
+}
+/** TT/Luker：迁移当前聊天（打开即迁，按聊天键打永久标） */
+async function migrateCurrentChatInHostedKind() {
+    const ctx = getHostContext();
+    // [加载门控] 用显式的 settings 可靠加载信号，而不是 chatStates 形状代理——
+    // IDB 加载窗口内适配层可能已把空 chatStates 物化出来，形状判断会误标完成。
+    if (!isSettingsStorageReadyForSave_ACU()) {
+        logDebug_ACU('[生物追踪迁移] 设置尚未完成可靠加载，本轮跳过（不打标）。');
+        return;
+    }
+    const chatKey = await resolveHostChatId(ctx);
+    if (!chatKey)
+        return;
+    if (isChatDone(chatKey))
+        return;
+    // [加载门控] 已由显式 settings 可靠加载信号把关；此处不再用 chatStates 形状代理
+    const legacyRoot = settings_ACU?.bs_biotracker;
+    const chatStates = isPlainRecord(legacyRoot?.chatStates) ? legacyRoot.chatStates : null;
+    if (!chatStates)
+        return;
+    const ours = chatStates[chatKey];
+    if (!hasMeaningfulData(ours)) {
+        // 存量已可靠加载且该聊天确无内置数据：打标避免每次切换都空转
+        markChatDone(chatKey);
+        logDebug_ACU(`[生物追踪迁移] 聊天 ${chatKey} 无存量内置数据，标记完成（不触碰上游存档）。`);
+        return;
+    }
+    const upstream = await loadHostChatState(ctx);
+    // [防竞态②] 读取确认门：null 混淆「确认无存档」与「读取失败/未知」。未确认时不写回，
+    // 避免上游存档还没读到（TT 启动 handle 未挂/超时）就被我们的数据整包覆盖。
+    if (!isHostChatStateConfirmed(ctx)) {
+        logDebug_ACU(`[生物追踪迁移] 聊天 ${chatKey} 上游 sidecar 读取未确认，本轮不写回（下次触发重试）。`);
+        return;
+    }
+    // [防竞态③] await 期间聊天可能已切换：复核 chatKey 未变才写（load/save 都按当前 handle 解析）
+    const currentChatKey = await resolveHostChatId(ctx);
+    if (currentChatKey !== chatKey) {
+        logDebug_ACU(`[生物追踪迁移] 迁移期间聊天已切换（${chatKey} → ${currentChatKey}），本轮放弃。`);
+        return;
+    }
+    const merged = mergeChatState(ours, isPlainRecord(upstream) ? upstream : null);
+    const queued = scheduleHostChatStateSave(ctx, merged);
+    // schedule 返回 false = handle 缺失等静默 no-op：不打标，下次触发重试
+    if (!queued) {
+        logDebug_ACU(`[生物追踪迁移] 聊天 ${chatKey} 写入未入队（宿主句柄未就绪），本次不打标。`);
+        return;
+    }
+    markChatDone(chatKey);
+    logDebug_ACU(`[生物追踪迁移] 聊天 ${chatKey} 已静默合并写入上游 sidecar（characters=${Object.keys(merged.characters ?? {}).length}）。`);
+}
+/** SillyTavern 网页端：extensionSettings 全量一次性迁移 */
+function migrateExtensionSettingsFull() {
+    // [加载门控] 同 TT 分支：settings 未可靠加载不打标，等下次触发
+    if (!isSettingsStorageReadyForSave_ACU()) {
+        logDebug_ACU('[生物追踪迁移] 设置尚未完成可靠加载，本轮跳过（不打标）。');
+        return;
+    }
+    const ctx = getHostContext();
+    const extensionSettings = getHostExtensionSettings(ctx);
+    if (!extensionSettings) {
+        logDebug_ACU('[生物追踪迁移] 宿主 extensionSettings 不可用，本轮跳过（不打完成标）。');
+        return;
+    }
+    const legacyRoot = settings_ACU?.bs_biotracker;
+    const chatStates = isPlainRecord(legacyRoot?.chatStates) ? legacyRoot.chatStates : null;
+    if (!chatStates || Object.keys(chatStates).length === 0) {
+        // settings 已可靠加载且确无存量数据：打完成标（此后不再重试）
+        markGlobalDone();
+        logDebug_ACU('[生物追踪迁移] 无存量内置追踪数据，标记全局完成。');
+        return;
+    }
+    const upstreamRoot = isPlainRecord(extensionSettings.bs_biotracker)
+        ? extensionSettings.bs_biotracker
+        : {};
+    const upstreamChatStates = isPlainRecord(upstreamRoot.chatStates) ? upstreamRoot.chatStates : {};
+    let mergedChats = 0;
+    for (const [chatKey, ours] of Object.entries(chatStates)) {
+        if (!hasMeaningfulData(ours))
+            continue;
+        const upstream = isPlainRecord(upstreamChatStates[chatKey]) ? upstreamChatStates[chatKey] : null;
+        upstreamChatStates[chatKey] = mergeChatState(ours, upstream);
+        mergedChats += 1;
+    }
+    upstreamRoot.chatStates = upstreamChatStates;
+    extensionSettings.bs_biotracker = upstreamRoot;
+    saveHostSettings(ctx);
+    markGlobalDone();
+    logDebug_ACU(`[生物追踪迁移] extensionSettings 全量静默迁移完成：合并 ${mergedChats} 个聊天的追踪数据。`);
+}
+/**
+ * 静默迁移入口：启动时调用一次；TT/Luker 下每次聊天切换也会调用（打开即迁，
+ * 已迁移过的聊天按标记直接跳过）。全程吞错，绝不影响主流程。
+ */
+async function runLegacyBiotrackerSilentMigration_ACU() {
+    try {
+        const kind = getHostKind();
+        if (kind === 'tauritavern' || kind === 'luker') {
+            // TT/Luker 走「打开即迁」：per-chat 标记控制每个聊天只迁一次
+            await migrateCurrentChatInHostedKind();
+            return;
+        }
+        if (isGlobalDone())
+            return;
+        migrateExtensionSettingsFull();
+    }
+    catch (error) {
+        logDebug_ACU('[生物追踪迁移] 静默迁移异常（已忽略，不影响主流程）:', error);
+    }
+}
+
 /**
  * service/plot/plot-orchestrator.ts — 剧情推进编排逻辑（service 层：纯业务决策）
  * 从 presentation/bootstrap/init.ts 的 GENERATION_AFTER_COMMANDS 回调提取。
@@ -99274,6 +100028,8 @@ async function handleChatChangedEvent_ACU(chatFileName) {
         // [中止] 楼层变更（删楼/ROLL/切聊天）时中止所有在飞的依赖楼层的 API 调用
         //（表格填表/生理追踪等），避免用旧上下文的结果写入当前状态。
         abortOnChatMutation_ACU();
+        // [静默迁移] 打开即迁：TT/Luker sidecar 仅当前聊天可达，切到哪个聊天就迁哪个（按聊天打标只跑一次）
+        void runLegacyBiotrackerSilentMigration_ACU();
         const hasValidChatFileName_ACU = isValidChatFileName_ACU(chatFileName);
         if (!hasValidChatFileName_ACU && !hasActiveChatMessages_ACU()) {
             clearRuntimeForNoActiveChat_ACU(chatFileName);
@@ -99311,6 +100067,8 @@ function mainInitialize_ACU() {
         logDebug_ACU('AutoCardUpdater Initialization successful! Core APIs loaded.');
         showToastr_ACU('success', '数据库已加载！', '数据库');
         loadSettings_ACU();
+        // [静默迁移] 内置生理追踪存量数据 → 上游 tracker 可读形态（一次性，按聊天打标）
+        void runLegacyBiotrackerSilentMigration_ACU();
         if (SillyTavern_API_ACU &&
             SillyTavern_API_ACU.eventSource &&
             typeof SillyTavern_API_ACU.eventSource.on === 'function' &&

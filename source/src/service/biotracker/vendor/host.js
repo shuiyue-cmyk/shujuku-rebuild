@@ -446,11 +446,12 @@ export async function loadHostChatState(ctx = null) {
 
 export function scheduleHostChatStateSave(ctx, chatState) {
   const hostKind = getHostKind();
-  if (!chatState || typeof chatState !== 'object') return;
+  // [迁移契约] 返回值：true=已入队/明确无需保存；false=句柄缺失等静默 no-op（调用方据此不打完成标）
+  if (!chatState || typeof chatState !== 'object') return false;
   if (hostKind === 'luker') {
-    if (typeof ctx?.updateChatState !== 'function') return;
+    if (typeof ctx?.updateChatState !== 'function') return false;
     const chatId = getHostChatId(ctx);
-    if (shouldSkipBlankHostChatStateSave(chatId, chatState)) return;
+    if (shouldSkipBlankHostChatStateSave(chatId, chatState)) return true;
     const previous = TAURI_STATE_SAVE_QUEUE.get(chatId);
     if (previous?.timer) clearTimeout(previous.timer);
     const payload = { version: 1, chatState: cloneHostValue(chatState) };
@@ -465,13 +466,13 @@ export function scheduleHostChatStateSave(ctx, chatState) {
       }
     }, TAURI_STATE_SAVE_DELAY_MS);
     TAURI_STATE_SAVE_QUEUE.set(chatId, { ctx, payload, timer });
-    return;
+    return true;
   }
-  if (hostKind !== 'tauritavern') return;
+  if (hostKind !== 'tauritavern') return false;
   const handle = getCurrentTauriChatHandle();
-  if (typeof handle?.store?.setJson !== 'function') return;
+  if (typeof handle?.store?.setJson !== 'function') return false;
   const chatId = getHostChatId(ctx);
-  if (shouldSkipBlankHostChatStateSave(chatId, chatState)) return;
+  if (shouldSkipBlankHostChatStateSave(chatId, chatState)) return true;
   TAURI_STATE_KNOWN_MISSING_IDS.delete(chatId);
   const previous = TAURI_STATE_SAVE_QUEUE.get(chatId);
   if (previous?.timer) clearTimeout(previous.timer);
@@ -491,4 +492,5 @@ export function scheduleHostChatStateSave(ctx, chatState) {
     }
   }, TAURI_STATE_SAVE_DELAY_MS);
   TAURI_STATE_SAVE_QUEUE.set(chatId, { handle, payload, timer });
+  return true;
 }

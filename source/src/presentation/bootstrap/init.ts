@@ -58,6 +58,7 @@ import {
   getRuntimeLifecycleEpoch_ACU,
   hydrateStorageProviderFromSnapshot_ACU
 } from '../../service/table/table-storage-strategy';
+import { runLegacyBiotrackerSilentMigration_ACU } from '../../service/biotracker/silent-migration';
 import {
   createCanonicalSnapshotEnvelope_ACU
 } from '../../service/table/canonical-snapshot-envelope';
@@ -406,6 +407,9 @@ async function handleChatChangedEvent_ACU(chatFileName: string): Promise<void> {
     //（表格填表/生理追踪等），避免用旧上下文的结果写入当前状态。
     abortOnChatMutation_ACU();
 
+    // [静默迁移] 打开即迁：TT/Luker sidecar 仅当前聊天可达，切到哪个聊天就迁哪个（按聊天打标只跑一次）
+    void runLegacyBiotrackerSilentMigration_ACU();
+
     const hasValidChatFileName_ACU = isValidChatFileName_ACU(chatFileName);
     if (!hasValidChatFileName_ACU && !hasActiveChatMessages_ACU()) {
       clearRuntimeForNoActiveChat_ACU(chatFileName);
@@ -451,6 +455,8 @@ export   function mainInitialize_ACU() {
       showToastr_ACU('success', '数据库已加载！', '数据库');
 
       loadSettings_ACU();
+      // [静默迁移] 内置生理追踪存量数据 → 上游 tracker 可读形态（一次性，按聊天打标）
+      void runLegacyBiotrackerSilentMigration_ACU();
       if (
         SillyTavern_API_ACU &&
         SillyTavern_API_ACU.eventSource &&
