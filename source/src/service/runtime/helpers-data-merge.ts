@@ -20,7 +20,7 @@ import { loadTableStateFromFramesV2_ACU } from '../table/storage-frame-v2-replay
 import { persistTableMutationLogV2_ACU } from '../table/storage-frame-v2-persist';
 import { migrateLegacyStorageToV2OnLoad_ACU } from '../table/storage-v2-migration';
 import { runTableWriteTransaction_ACU } from '../table/table-write-transaction';
-import { normalizeCanonicalTableRows_ACU } from '../../shared/canonical-row-normalizer';
+import { normalizeCanonicalTableRows_ACU, restoreLegacyRowIdentity_ACU } from '../../shared/canonical-row-normalizer';
 import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../../shared/stable-row-id-allocator';
 import { getSheetColumnProjection_ACU } from '../../shared/ddl-utils';
 import { canonicalizeDisplayName_ACU } from '../../shared/sheet-identity';
@@ -30,10 +30,15 @@ import { showUiSurfaceToast_ACU } from '../../shared/ui-surface-registry';
 
 /**
  * Legacy entry point retained for callers that need in-place normalization.
- * Empty canonical row_id values mean deletion; they must not be fabricated
- * from array positions because that would create a false row identity.
+ *
+ * 契约（见 canonical-row-normalizer.ts）：normalizeCanonicalTableRows_ACU 按现行
+ * 协议把"空 row_id"当作删除语义，而 xing～spv7.9 时代的数据行按物理位置寻址、
+ * row_id 列为 null/缺失——历史读路径必须先经 restoreLegacyRowIdentity_ACU 修复
+ * 行身份（只给无身份的行补 ID，已有 row_id 的行保持不变，幂等），否则旧数据的
+ * 全部真实行会在规范化时被当作删除剥掉。
  */
 export function migrateContentNullToRowId(data: Record<string, any> | null): Record<string, any> | null {
+    restoreLegacyRowIdentity_ACU(data);
     normalizeCanonicalTableRows_ACU(data);
     return data;
 }
@@ -48,6 +53,15 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
       if (!canonicalName || !guideData || typeof guideData !== 'object') return false;
       return Object.keys(guideData).some(key => key.startsWith('sheet_')
           && canonicalizeDisplayName_ACU(guideData[key]?.name) === canonicalName);
+  }
+
+  /**
+   * 表中是否存在真实数据行（表头之外的行）。
+   * 全版本兼容读取契约：带真实行的表在任何读路径上都不允许被静默丢弃，
+   * 无论它是否匹配当前模板/指导表（guide 过滤只允许拦截无行的占位表）。
+   */
+  function sheetHasRealRows_ACU(sheet: any): boolean {
+      return Array.isArray(sheet?.content) && sheet.content.length > 1;
   }
 
   /**
@@ -82,18 +96,23 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
       });
       const quarantinedSheetKeys: string[] = [];
       const warnings: string[] = [];
+      const consumedHistoricalKeys = new Set<string>();
       guideKeys.forEach(k => {
           if (!k || !k.startsWith('sheet_')) return;
           try {
               const guideSheet = guided[k];
               const canonicalName = canonicalizeDisplayName_ACU(guideSheet?.name);
               const historicalKeys = canonicalName ? (historicalKeysByCanonicalName.get(canonicalName) || []) : [];
-              if (historicalKeys.length > 1) {
+              // key 同一性优先于名字匹配：历史数据与 guide 使用同一 sheetKey 时，
+              // 即使显示名被改过也必须继承，否则改名会导致数据被静默丢弃。
+              const directKeyMatch = (mergedData[k] && typeof mergedData[k] === 'object') ? k : null;
+              if (!directKeyMatch && historicalKeys.length > 1) {
                   logWarn_ACU(`[Merge] 指导表「${guideSheet?.name || k}」匹配多个历史 Sheet (${historicalKeys.join(', ')})，拒绝自动继承。`);
               }
-              const historicalKey = historicalKeys.length === 1 ? historicalKeys[0] : null;
+              const historicalKey = directKeyMatch ?? (historicalKeys.length === 1 ? historicalKeys[0] : null);
               const hist = historicalKey ? mergedData[historicalKey] : undefined;
               if (hist && typeof hist === 'object') {
+                  consumedHistoricalKeys.add(historicalKey);
                   const next = JSON.parse(JSON.stringify(hist));
                   next.uid = k;
 
@@ -169,6 +188,24 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
               quarantinedSheetKeys.push(k);
           }
       });
+
+      // ── 全版本兼容携带：未被任何 guide 表消费的历史表不允许静默丢弃 ──
+      // structuralAuthority='data'（V2 checkpoint 权威）：checkpoint 中存在即有效，全部携带；
+      // structuralAuthority='guide'（legacy-v1）：仅携带含真实数据行的表——无行的旧模板
+      // 占位表继续按"切换模板后不复活"的既有语义丢弃。
+      Object.keys(mergedData).forEach(historicalKey => {
+          if (!historicalKey.startsWith('sheet_')) return;
+          const sheet = mergedData[historicalKey];
+          if (!sheet || typeof sheet !== 'object') return;
+          if (consumedHistoricalKeys.has(historicalKey)) return;
+          if (guided[historicalKey]) return; // key 已被消费或被 guide 占用（direct key match 已优先消费，此分支仅防御）
+          const shouldCarry = options.structuralAuthority === 'data' || sheetHasRealRows_ACU(sheet);
+          if (!shouldCarry) return;
+          guided[historicalKey] = JSON.parse(JSON.stringify(sheet));
+          const msg = `[Merge] 表「${String(sheet.name || historicalKey)}」(${historicalKey}) 不在当前模板/指导表中，已按全版本兼容模式保留（数据行不丢弃）。`;
+          logWarn_ACU(msg);
+          warnings.push(msg);
+      });
       return { data: guided, quarantinedSheetKeys, warnings };
   }
 
@@ -231,8 +268,9 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
               const updateGroupKeys = Array.isArray(tagData.updateGroupKeys) ? tagData.updateGroupKeys : [];
 
               Object.keys(independentData).forEach(storedSheetKey => {
-                  // [新增] 只处理当前模板/指导表中存在的表格
-                  if (!isSheetAllowedByGuide_ACU(storedSheetKey, independentData[storedSheetKey], hasSheetGuide ? sheetGuideData : null, templateSheetKeySet)) {
+                  // [全版本兼容] guide 过滤只拦截无真实行的占位表；带行数据的表永不静默丢弃
+                  if (!isSheetAllowedByGuide_ACU(storedSheetKey, independentData[storedSheetKey], hasSheetGuide ? sheetGuideData : null, templateSheetKeySet)
+                      && !sheetHasRealRows_ACU(independentData[storedSheetKey])) {
                       logDebug_ACU(`[Merge] Skipping sheet [${storedSheetKey}] - not in current template/guide`);
                       return;
                   }
@@ -282,8 +320,9 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
                   const updateGroupKeys = readUpdateGroupKeys_ACU(message);
 
                   Object.keys(independentData).forEach(storedSheetKey => {
-                      // [新增] 只处理当前模板/指导表中存在的表格
-                      if (!isSheetAllowedByGuide_ACU(storedSheetKey, independentData[storedSheetKey], hasSheetGuide ? sheetGuideData : null, templateSheetKeySet)) {
+                      // [全版本兼容] guide 过滤只拦截无真实行的占位表；带行数据的表永不静默丢弃
+                      if (!isSheetAllowedByGuide_ACU(storedSheetKey, independentData[storedSheetKey], hasSheetGuide ? sheetGuideData : null, templateSheetKeySet)
+                          && !sheetHasRealRows_ACU(independentData[storedSheetKey])) {
                           logDebug_ACU(`[Merge] Skipping sheet [${storedSheetKey}] (legacy) - not in current template/guide`);
                           return;
                       }
@@ -314,8 +353,9 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
               if (legacyStdData) {
                   const standardData: any = legacyStdData;
                   Object.keys(standardData).forEach(k => {
-                      // [新增] 只处理当前模板/指导表中存在的表格
-                      if (!isSheetAllowedByGuide_ACU(k, standardData[k], hasSheetGuide ? sheetGuideData : null, templateSheetKeySet)) {
+                      // [全版本兼容] guide 过滤只拦截无真实行的占位表；带行数据的表永不静默丢弃
+                      if (!isSheetAllowedByGuide_ACU(k, standardData[k], hasSheetGuide ? sheetGuideData : null, templateSheetKeySet)
+                          && !sheetHasRealRows_ACU(standardData[k])) {
                           return;
                       }
                       if (k.startsWith('sheet_') && !foundSheets[k] && standardData[k].name && !isSummaryOrOutlineTable_ACU(standardData[k].name)) {
@@ -331,8 +371,9 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
               if (legacySumData) {
                   const summaryData: any = legacySumData;
                   Object.keys(summaryData).forEach(k => {
-                      // [新增] 只处理当前模板/指导表中存在的表格
-                      if (!isSheetAllowedByGuide_ACU(k, summaryData[k], hasSheetGuide ? sheetGuideData : null, templateSheetKeySet)) {
+                      // [全版本兼容] guide 过滤只拦截无真实行的占位表；带行数据的表永不静默丢弃
+                      if (!isSheetAllowedByGuide_ACU(k, summaryData[k], hasSheetGuide ? sheetGuideData : null, templateSheetKeySet)
+                          && !sheetHasRealRows_ACU(summaryData[k])) {
                           return;
                       }
                       if (k.startsWith('sheet_') && !foundSheets[k] && summaryData[k].name && isSummaryOrOutlineTable_ACU(summaryData[k].name)) {
@@ -356,7 +397,8 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
           for (const { index: deltaIndex, tagData: deltaTagData } of pendingDeltas) {
               const incrementalData = deltaTagData.incrementalData || {};
               for (const [sheetKey, delta] of Object.entries(incrementalData)) {
-                  if (!templateSheetKeySet.has(sheetKey)) continue;
+                  // [全版本兼容] 按 base 表存在性判定（兼容携带的非模板表也要正常叠加 delta），
+                  // 不再按 templateSheetKeySet 过滤——base 收集阶段已完成宽容过滤。
                   if (!mergedData[sheetKey]) {
                       logWarn_ACU(`[表格重建] delta 楼层 #${deltaIndex} 引用了 sheetKey=${sheetKey}，但 base 中不存在该表，跳过`);
                       continue;

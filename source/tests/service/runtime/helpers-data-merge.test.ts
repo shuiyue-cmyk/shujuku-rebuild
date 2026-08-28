@@ -165,7 +165,7 @@ describe('migrateContentNullToRowId', () => {
     expect(result!.sheet_0.content[0][0]).toBe('row_id');
   });
 
-  it('删除 row_id 为 null 的数据行，而不根据数组位置伪造行号', () => {
+  it('row_id 为 null 的历史数据行补发稳定身份而不删行（全版本兼容读取）', () => {
     const data = {
       sheet_0: {
         name: '测试表',
@@ -177,7 +177,14 @@ describe('migrateContentNullToRowId', () => {
       },
     };
     const result = migrateContentNullToRowId(data);
-    expect(result!.sheet_0.content).toEqual([['row_id', '名称'], ['2', '药水']]);
+    const content = result!.sheet_0.content;
+    expect(content[0]).toEqual(['row_id', '名称']);
+    expect(content).toHaveLength(3);
+    // 旧协议按物理位置寻址、无行身份：读取时补发稳定 ID，业务数据一格不丢
+    expect(String(content[1][0] ?? '').trim()).not.toBe('');
+    expect(content[1][1]).toBe('铁剑');
+    expect(content[2]).toEqual(['2', '药水']);
+    expect(content[1][0]).not.toBe(content[2][0]);
   });
 
   it('多张表同时迁移', () => {
@@ -195,7 +202,11 @@ describe('migrateContentNullToRowId', () => {
     expect(result!.sheet_0.content[0][0]).toBe('row_id');
     expect(result!.sheet_0.content[1][0]).toBe('1');
     expect(result!.sheet_1.content[0][0]).toBe('row_id');
-    expect(result!.sheet_1.content).toEqual([['row_id', 'col2'], ['2', 'val2']]);
+    expect(result!.sheet_1.content).toHaveLength(3);
+    expect(result!.sheet_1.content[1]).toEqual(['2', 'val2']);
+    // 空身份行补发稳定 ID 保留，不删行
+    expect(result!.sheet_1.content[2][1]).toBe('val3');
+    expect(String(result!.sheet_1.content[2][0] ?? '').trim()).not.toBe('');
   });
 
   // ═══════════════════════════════════════════════════════════════
@@ -218,7 +229,7 @@ describe('migrateContentNullToRowId', () => {
     expect(result!.sheet_0.content[2][0]).toBe('2');
   });
 
-  it('表头非 null 也非 "row_id" 时不处理', () => {
+  it('表头为历史身份别名（id）时归一为 row_id 并保留行', () => {
     const data = {
       sheet_0: {
         name: '测试表',
@@ -229,13 +240,14 @@ describe('migrateContentNullToRowId', () => {
       },
     };
     const result = migrateContentNullToRowId(data);
-    expect(result!.sheet_0.content[0][0]).toBe('id');
+    expect(result!.sheet_0.content[0][0]).toBe('row_id');
+    expect(result!.sheet_0.content[1]).toEqual(['1', '铁剑']);
   });
 
   // ═══════════════════════════════════════════════════════════════
   // seedRows 迁移
   // ═══════════════════════════════════════════════════════════════
-  it('删除 seedRows 中 row_id 为 null 的行', () => {
+  it('seedRows 中 row_id 为 null 的行补发稳定身份而不删行', () => {
     const data = {
       sheet_0: {
         name: '测试表',
@@ -247,7 +259,10 @@ describe('migrateContentNullToRowId', () => {
       },
     };
     const result = migrateContentNullToRowId(data);
-    expect(result!.sheet_0.seedRows).toEqual([['2', '种子数据2']]);
+    expect(result!.sheet_0.seedRows).toHaveLength(2);
+    expect(result!.sheet_0.seedRows[0][1]).toBe('种子数据1');
+    expect(String(result!.sheet_0.seedRows[0][0] ?? '').trim()).not.toBe('');
+    expect(result!.sheet_0.seedRows[1]).toEqual(['2', '种子数据2']);
   });
 
   it('seedRows 不存在时不报错', () => {
@@ -341,7 +356,7 @@ describe('migrateContentNullToRowId', () => {
     expect(result!.sheet_0.content.length).toBe(1);
   });
 
-  it('数据行第一列非 null 时保留原值，并删除空 row_id 行', () => {
+  it('数据行第一列非 null 时保留原值，空 row_id 行补发身份保留', () => {
     const data = {
       sheet_0: {
         name: '测试表',
@@ -354,10 +369,12 @@ describe('migrateContentNullToRowId', () => {
     };
     const result = migrateContentNullToRowId(data);
     expect(result!.sheet_0.content[1][0]).toBe('已有值');
-    expect(result!.sheet_0.content).toHaveLength(2);
+    expect(result!.sheet_0.content).toHaveLength(3);
+    expect(result!.sheet_0.content[2][1]).toBe('药水');
+    expect(String(result!.sheet_0.content[2][0] ?? '').trim()).not.toBe('');
   });
 
-  it('表头已是 row_id 时仍删除空 row_id 行', () => {
+  it('表头已是 row_id 时空 row_id 行补发身份保留（不当作删除）', () => {
     const data = {
       sheet_0: {
         name: '已迁移表',
@@ -367,7 +384,13 @@ describe('migrateContentNullToRowId', () => {
 
     const result = migrateContentNullToRowId(data);
 
-    expect(result!.sheet_0.content).toEqual([['row_id', '数值'], ['0', 0], ['2', 30]]);
+    const content = result!.sheet_0.content;
+    expect(content[0]).toEqual(['row_id', '数值']);
+    expect(content).toHaveLength(4);
+    expect(content[1][1]).toBe(15);
+    expect(String(content[1][0] ?? '').trim()).not.toBe('');
+    expect(content[2]).toEqual(['0', 0]);
+    expect(content[3]).toEqual(['2', 30]);
   });
 });
 
@@ -455,8 +478,8 @@ describe('mergeAllIndependentTables_ACU', () => {
   });
 
 
-  // ═══ 模板过滤 ═══
-  it('不在当前模板中的表格被过滤', async () => {
+  // ═══ 模板过滤（全版本兼容：只拦无行占位表，带行表永不丢） ═══
+  it('不在当前模板但含真实行的表格被兼容保留', async () => {
     vi.mocked(getTemplateSheetKeys_ACU).mockReturnValue(['sheet_0']); // 只有 sheet_0 在模板中
     const mockChat = [
       { is_user: false, mes: 'AI回复' },
@@ -465,7 +488,7 @@ describe('mergeAllIndependentTables_ACU', () => {
     vi.mocked(readIsolatedTagData_ACU).mockReturnValue({
       independentData: {
         sheet_0: { name: '背包物品表', content: [['row_id', '物品名称'], ['1', '铁剑']] },
-        sheet_1: { name: '旧表', content: [['row_id', '数据'], ['1', '旧数据']] }, // 不在模板中
+        sheet_1: { name: '旧表', content: [['row_id', '数据'], ['1', '旧数据']] }, // 不在模板中，但有真实行
       },
       modifiedKeys: ['sheet_0', 'sheet_1'],
       updateGroupKeys: [],
@@ -474,7 +497,29 @@ describe('mergeAllIndependentTables_ACU', () => {
     const result = await mergeAllIndependentTables_ACU();
     expect(result).not.toBeNull();
     expect(result!.sheet_0).toBeDefined();
-    expect(result!.sheet_1).toBeUndefined(); // sheet_1 被过滤
+    expect(result!.sheet_1).toBeDefined(); // 带真实行：兼容保留，不静默丢弃
+    expect(result!.sheet_1.content).toEqual([['row_id', '数据'], ['1', '旧数据']]);
+  });
+
+  it('不在当前模板且无真实行的占位表仍被过滤（旧表不复活）', async () => {
+    vi.mocked(getTemplateSheetKeys_ACU).mockReturnValue(['sheet_0']);
+    const mockChat = [
+      { is_user: false, mes: 'AI回复' },
+    ];
+    vi.mocked(getChatArray_ACU).mockReturnValue(mockChat);
+    vi.mocked(readIsolatedTagData_ACU).mockReturnValue({
+      independentData: {
+        sheet_0: { name: '背包物品表', content: [['row_id', '物品名称'], ['1', '铁剑']] },
+        sheet_1: { name: '旧表', content: [['row_id', '数据']] }, // 不在模板中且仅表头
+      },
+      modifiedKeys: ['sheet_0', 'sheet_1'],
+      updateGroupKeys: [],
+    });
+
+    const result = await mergeAllIndependentTables_ACU();
+    expect(result).not.toBeNull();
+    expect(result!.sheet_0).toBeDefined();
+    expect(result!.sheet_1).toBeUndefined(); // 无行占位表：按既有语义过滤
   });
 
   // ═══ 最新数据优先（从后往前遍历） ═══
@@ -682,7 +727,7 @@ describe('mergeAllIndependentTables_ACU', () => {
     expect(result!.sheet_0.updateConfig.uiSentinel).toBe(-1);
   });
 
-  it('V2 回放表与指导表显示名不同，不继承旧数据', async () => {
+  it('V2 回放表与指导表同 key 不同名：按 key 继承数据，名字/元数据取 guide', async () => {
     vi.mocked(getChatArray_ACU).mockReturnValue([{ is_user: false, mes: 'AI回复' }] as any);
     vi.mocked(resolveTableStorageStrategy_ACU).mockReturnValue({ mode: 'v2' } as any);
     vi.mocked(loadTableStateFromFramesV2_ACU).mockResolvedValue({
@@ -730,15 +775,17 @@ describe('mergeAllIndependentTables_ACU', () => {
     const result = await mergeAllIndependentTables_ACU();
 
     expect(result).not.toBeNull();
+    // key 同一性优先于名字匹配：同 key 改名不允许丢数据（authority=data 保留历史结构）
     expect(result!.sheet_test.name).toBe('新表名');
     expect(result!.sheet_test.sourceData).toEqual({ note: '新说明' });
     expect(result!.sheet_test.updateConfig).toEqual({ uiSentinel: -1 });
     expect(result!.sheet_test.exportConfig).toEqual({ enabled: true });
     expect(result!.sheet_test.orderNo).toBe(1);
-    expect(result!.sheet_test.content[0]).toEqual(['row_id', '新列', '新增列']);
-    expect(result!.sheet_test.content[1]).toBeUndefined();
+    expect(result!.sheet_test.content).toEqual([['row_id', '旧列'], ['1', '旧值']]);
     expect(result!.sheet_test.seedRows).toEqual([['seed', '模板种子']]);
-    expect(result!.sheet_removed).toBeUndefined();
+    // 不匹配任何 guide 表但含真实行：兼容携带，不静默丢弃
+    expect(result!.sheet_removed).toBeDefined();
+    expect(result!.sheet_removed.content).toEqual([['row_id', '旧列'], ['1', '旧值']]);
   });
 
   it('V2 canonical 回放与 guide 表头一致时：保留历史行，不 padding 短行，仅叠加非结构元数据', async () => {
@@ -880,7 +927,7 @@ describe('mergeAllIndependentTables_ACU', () => {
     });
   });
 
-  it('V2 回放表与指导表显示名不同，只保留指导表空壳', async () => {
+  it('V2 回放表与指导表 key/名字均不匹配：兼容携带原表 + 指导表空壳并存', async () => {
     vi.mocked(getChatArray_ACU).mockReturnValue([{ is_user: false, mes: 'AI回复' }] as any);
     vi.mocked(resolveTableStorageStrategy_ACU).mockReturnValue({ mode: 'v2' } as any);
     vi.mocked(loadTableStateFromFramesV2_ACU).mockResolvedValue({
@@ -895,7 +942,12 @@ describe('mergeAllIndependentTables_ACU', () => {
 
     const result = await mergeAllIndependentTables_ACU();
 
-    expect(result?.sheet_legacy).toBeUndefined();
+    // checkpoint 权威（authority=data）：表在即有效，兼容携带，不静默丢弃
+    expect(result?.sheet_legacy).toMatchObject({
+      uid: 'sheet_legacy',
+      name: '旧表',
+      content: [['row_id', '值'], ['1', '旧数据']],
+    });
     expect(result?.sheet_new).toMatchObject({
       uid: 'sheet_new',
       name: '新表',
@@ -920,8 +972,9 @@ describe('mergeAllIndependentTables_ACU', () => {
 
     const result = await mergeAllIndependentTables_ACU();
 
-    expect(result?.sheet_legacy_a).toBeUndefined();
-    expect(result?.sheet_legacy_b).toBeUndefined();
+    // 拒绝自动继承（无法判定哪张是正身），但两张历史表按原 key 兼容携带，不丢数据
+    expect(result?.sheet_legacy_a?.content).toEqual([['row_id', '物品名称'], ['1', '铁剑']]);
+    expect(result?.sheet_legacy_b?.content).toEqual([['row_id', '物品名称'], ['2', '药水']]);
     expect(result?.sheet_new?.content).toEqual([['row_id', '物品名称']]);
     expect(logWarn_ACU).toHaveBeenCalledWith(expect.stringContaining('匹配多个历史 Sheet'));
   });

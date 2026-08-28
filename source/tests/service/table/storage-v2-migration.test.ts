@@ -297,6 +297,55 @@ describe('migrateLegacyStorageToV2OnLoad_ACU', () => {
     expect(mockChatRef.value[0].TavernDB_ACU_IndependentData.sheet_0.name).toBe('背包');
   });
 
+  it('破坏保险闸：合并结果 0 行而旧存储源含真实行时拒绝迁移且零写入', async () => {
+    // 合并结果只有表头（例如模板/指导表不匹配导致丢行），但楼层旧字段里有真实行
+    const emptyMerged = { sheet_0: sheet('背包', [['row_id', '名称']]) } as any;
+    mockChatRef.value = [
+      {
+        is_user: false,
+        TavernDB_ACU_IndependentData: { sheet_0: sheet('背包', [['row_id', '名称'], ['1', '铁剑']]) },
+        TavernDB_ACU_ModifiedKeys: ['sheet_0'],
+      },
+      { is_user: true },
+      { is_user: false, mes: 'latest ai' },
+    ];
+
+    const result = await migrateLegacyStorageToV2OnLoad_ACU({
+      data: emptyMerged,
+      isolationKey: '',
+      isolationConfig: { enabled: false, code: '' },
+    });
+
+    expect(result.migrated).toBe(false);
+    expect(result.error).toContain('拒绝迁移');
+    expect(mockSaveChatToHost).not.toHaveBeenCalled();
+    // 旧字段原件必须原样保留
+    expect(mockChatRef.value[0].TavernDB_ACU_IndependentData.sheet_0.content).toEqual([['row_id', '名称'], ['1', '铁剑']]);
+  });
+
+  it('破坏保险闸：合并结果 0 行且旧存储源也无真实行时放行迁移（全空聊天合法）', async () => {
+    const emptyMerged = { sheet_0: sheet('背包', [['row_id', '名称']]) } as any;
+    mockChatRef.value = [
+      {
+        is_user: false,
+        TavernDB_ACU_IndependentData: { sheet_0: sheet('背包', [['row_id', '名称']]) },
+        TavernDB_ACU_ModifiedKeys: ['sheet_0'],
+      },
+      { is_user: true },
+      { is_user: false, mes: 'latest ai' },
+    ];
+
+    const result = await migrateLegacyStorageToV2OnLoad_ACU({
+      data: emptyMerged,
+      isolationKey: '',
+      isolationConfig: { enabled: false, code: '' },
+    });
+
+    expect(result.migrated).toBe(true);
+    expect(mockSaveChatToHost).toHaveBeenCalledTimes(1);
+    expect(mockChatRef.value[0].TavernDB_ACU_IndependentData).toBeUndefined();
+  });
+
   it('legacy 数据含 canonical 后重复 row_id 时重映射后迁移，并保留全部行', async () => {
     const data = {
       sheet_0: sheet('背包', [['row_id', '名称'], ['1', '铁剑'], [' 1 ', '冒名副本']]),

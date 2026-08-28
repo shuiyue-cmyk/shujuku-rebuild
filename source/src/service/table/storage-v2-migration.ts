@@ -1,76 +1,21 @@
-import {
-  getChatArray_ACU,
-  saveChatToHostStrict_ACU
-} from '../../data/gateways/chat-gateway';
-import type {
-  IsolationConfig_ACU
-} from '../../data/models/chat-message-data';
-import {
-  cloneIsolatedData_ACU,
-  isLegacyMatchForIsolation_ACU,
-  readIsolatedTagData_ACU,
-  readLegacyIndependentData_ACU,
-  readLegacyStandardData_ACU,
-  readLegacySummaryData_ACU,
-  readModifiedKeys_ACU,
-  readUpdateGroupKeys_ACU
-} from '../../data/repositories/chat-message-data-repo';
-import {
-  currentChatFileIdentifier_ACU,
-  getCurrentIsolationKey_ACU
-} from '../runtime/state-manager';
-import type {
-  TableDataObject_ACU
-} from '../../shared/models/table-data';
-import {
-  validateMigrationProvenanceV1_ACU
-} from '../../shared/canonical-checkpoint-validator';
-import {
-  resolveHistoricalSheetKeyMigrations_ACU
-} from '../../shared/sql-read-resolver';
-import {
-  logDebug_ACU
-} from '../../shared/utils';
-import {
-  hasV2TableHistoryEvidence_ACU,
-  isV2TagData_ACU,
-  resolveTableStorageStrategy_ACU
-} from './storage-strategy-resolver';
-import type {
-  TableCheckpointScheduleSummaryV2_ACU,
-  TableMigrationAuditBackupV1_ACU,
-  TableMigrationProvenanceV1_ACU,
-  TableStorageFrameV2_ACU
-} from './storage-frame-v2-types';
-import {
-  commitMixedStorageDecision_ACU
-} from './mixed-storage-commit';
-import {
-  evaluateMixedStorageDecision_ACU,
-  type MixedStorageDecision_ACU
-} from './mixed-storage-decision';
-import {
-  registerMixedStorageDecision_ACU
-} from './mixed-storage-decision-registry';
-import {
-  collectV2SheetKeyEvidenceStatically_ACU,
-  type V2StaticSheetEvidence_ACU
-} from './mixed-storage-evidence';
-import {
-  buildCanonicalFullCheckpoint_ACU
-} from './canonical-checkpoint-builder';
-import {
-  auditTableDataForUpgrade_ACU,
-  getTableDataFingerprint_ACU,
-  type UpgradeAuditResult_ACU
-} from './table-data-upgrade-audit';
-import {
-  repairTableDataFromAudit_ACU,
-  type RepairResult_ACU
-} from './table-data-repair';
-import {
-  loadTableStateFromFramesV2Detailed_ACU
-} from './storage-frame-v2-replay';
+import { getChatArray_ACU, saveChatToHostStrict_ACU } from '../../data/gateways/chat-gateway';
+import type { IsolationConfig_ACU } from '../../data/models/chat-message-data';
+import { cloneIsolatedData_ACU, isLegacyMatchForIsolation_ACU, readIsolatedTagData_ACU, readLegacyIndependentData_ACU, readLegacyStandardData_ACU, readLegacySummaryData_ACU, readModifiedKeys_ACU, readUpdateGroupKeys_ACU, writeMessageIdentity_ACU } from '../../data/repositories/chat-message-data-repo';
+import { currentChatFileIdentifier_ACU, getCurrentIsolationKey_ACU } from '../runtime/state-manager';
+import type { TableDataObject_ACU } from '../../shared/models/table-data';
+import { validateMigrationProvenanceV1_ACU } from '../../shared/canonical-checkpoint-validator';
+import { resolveHistoricalSheetKeyMigrations_ACU } from '../../shared/sql-read-resolver';
+import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
+import { hasV2TableHistoryEvidence_ACU, isV2TagData_ACU, resolveTableStorageStrategy_ACU } from './storage-strategy-resolver';
+import type { TableCheckpointScheduleSummaryV2_ACU, TableMigrationAuditBackupV1_ACU, TableMigrationProvenanceV1_ACU, TableStorageFrameV2_ACU } from './storage-frame-v2-types';
+import { commitMixedStorageDecision_ACU } from './mixed-storage-commit';
+import { evaluateMixedStorageDecision_ACU, type MixedStorageDecision_ACU } from './mixed-storage-decision';
+import { registerMixedStorageDecision_ACU } from './mixed-storage-decision-registry';
+import { collectV2SheetKeyEvidenceStatically_ACU, type V2StaticSheetEvidence_ACU } from './mixed-storage-evidence';
+import { buildCanonicalFullCheckpoint_ACU } from './canonical-checkpoint-builder';
+import { auditTableDataForUpgrade_ACU, getTableDataFingerprint_ACU, type UpgradeAuditResult_ACU } from './table-data-upgrade-audit';
+import { repairTableDataFromAudit_ACU, type RepairResult_ACU } from './table-data-repair';
+import { loadTableStateFromFramesV2Detailed_ACU } from './storage-frame-v2-replay';
 
 export interface LegacyToV2MigrationOptions_ACU {
   data: Record<string, any> | null;
@@ -96,6 +41,38 @@ function deepClone_ACU<T>(value: T): T {
 function sheetKeysOfData_ACU(data: Record<string, any> | null | undefined): string[] {
   if (!data || typeof data !== 'object') return [];
   return Object.keys(data).filter(key => key.startsWith('sheet_') && Boolean((data as any)[key]));
+}
+
+function countRealDataRows_ACU(data: Record<string, any> | null | undefined): number {
+  let rows = 0;
+  for (const sheetKey of sheetKeysOfData_ACU(data)) {
+    const content = (data as any)?.[sheetKey]?.content;
+    if (Array.isArray(content) && content.length > 1) rows += content.length - 1;
+  }
+  return rows;
+}
+
+/**
+ * 迁移破坏保险闸的旧源扫描：检查聊天中将被 cleanupLegacyFieldsAfterV2Write_ACU
+ * 删除的旧存储源（隔离槽 V1 数据 + 顶层旧字段）里是否存在任何真实数据行。
+ * 扫描范围与 cleanup 的删除范围使用同一隔离匹配语义，保护的正是将被删除的内容。
+ */
+function legacySourcesContainRealRows_ACU(chat: any[], isolationKey: string, isolationConfig: IsolationConfig_ACU): boolean {
+  for (const message of chat) {
+    if (!message || message.is_user) continue;
+    const tagData = readIsolatedTagData_ACU(message, isolationKey);
+    if (tagData && !isV2TagData_ACU(tagData)) {
+      if (countRealDataRows_ACU(tagData.independentData) > 0) return true;
+      const incrementalData = (tagData as any).incrementalData;
+      if (incrementalData && typeof incrementalData === 'object' && Object.keys(incrementalData).length > 0) return true;
+    }
+    if (isLegacyMatchForIsolation_ACU(message, isolationConfig)) {
+      if (countRealDataRows_ACU(readLegacyIndependentData_ACU(message)) > 0) return true;
+      if (countRealDataRows_ACU(readLegacyStandardData_ACU(message) as any) > 0) return true;
+      if (countRealDataRows_ACU(readLegacySummaryData_ACU(message) as any) > 0) return true;
+    }
+  }
+  return false;
 }
 
 function countAiFloor_ACU(chat: any[], messageIndex: number): number {
@@ -525,6 +502,18 @@ export async function migrateLegacyStorageToV2OnLoad_ACU(
     return { migrated: false, error: 'legacy migration requires non-empty merged table data' };
   }
 
+  // ── 破坏性迁移保险闸 ──
+  // 迁移成功后会删除各楼层旧存储字段原件（cleanupLegacyFieldsAfterV2Write_ACU），而
+  // migrationAuditBackup 只备份合并结果。若合并结果一行数据都没有、但旧存储源中存在
+  // 真实行，说明合并读取存在丢行（如模板/指导表不匹配），此时执行迁移会造成不可逆
+  // 数据丢失——拒绝迁移，读路径自动走直读降级，数据保持原样可用。
+  if (countRealDataRows_ACU(options.data) === 0
+    && legacySourcesContainRealRows_ACU(chat, options.isolationKey, options.isolationConfig)) {
+    const error = '合并结果不含任何数据行，但聊天旧存储中存在真实行数据；为防止破坏性迁移丢失原始数据，已拒绝迁移。';
+    logWarn_ACU(`[V2 Migration] ${error}`);
+    return { migrated: false, error };
+  }
+
   const strategy = resolveTableStorageStrategy_ACU(chat, options.isolationKey, options.isolationConfig);
   if (strategy.mode !== 'legacy-v1') {
     return { migrated: false };
@@ -711,18 +700,12 @@ export async function migrateLegacyStorageToV2OnLoad_ACU(
     return { migrated: false, error: scopeChangeError };
   }
 
-  // 回滚副本只需浅拷贝数组：candidateChat 是唯一深克隆的工作副本（:634），
-  // 从克隆到提交之间所有改写都只落在 candidateChat 上，原 chat 消息对象从未被触碰；
-  // 失败时按原对象身份逐条还原比再深克隆一份更省且更安全（不产生身份漂移）。
-  const originalChat = chat.slice();
-  // 逐条替换：超长聊天下 splice(0, len, ...arr) 的 spread 展开会触及引擎参数栈上限。
-  chat.splice(0, chat.length);
-  for (let i = 0; i < candidateChat.length; i += 1) chat.push(candidateChat[i]);
+  const originalChat = deepClone_ACU(chat);
+  chat.splice(0, chat.length, ...candidateChat);
   try {
     await saveChatToHostStrict_ACU();
   } catch (error) {
-    chat.splice(0, chat.length);
-    for (let i = 0; i < originalChat.length; i += 1) chat.push(originalChat[i]);
+    chat.splice(0, chat.length, ...originalChat);
     return { migrated: false, error: `legacy migration save failed: ${error instanceof Error ? error.message : String(error)}` };
   }
   logDebug_ACU(`[V2 Migration] legacy-v1 migrated to V2 checkpoint: messageIndex=${target.index}, skipUpdateFloors=${skipUpdateFloors}, isolationKey=[${options.isolationKey || '无标签'}], sheets=${sheetKeys.length}`);
