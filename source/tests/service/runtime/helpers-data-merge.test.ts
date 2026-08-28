@@ -699,6 +699,92 @@ describe('mergeAllIndependentTables_ACU', () => {
     expect(logWarn_ACU).toHaveBeenCalledWith(expect.stringContaining('已降级为直读旧格式'));
   });
 
+  // ═══ legacy-v1 guide 结构权：结构冲突降级（读永远宽容） ═══
+  function mockLegacyChatWithGuide(legacyData: any, guideShells: any) {
+    vi.mocked(getChatArray_ACU).mockReturnValue([{ is_user: false, mes: 'AI回复' }] as any);
+    vi.mocked(resolveTableStorageStrategy_ACU).mockReturnValue({ mode: 'legacy-v1' } as any);
+    vi.mocked(readIsolatedTagData_ACU).mockReturnValue(null);
+    vi.mocked(isLegacyMatchForIsolation_ACU).mockReturnValue(true);
+    vi.mocked(readLegacyIndependentData_ACU).mockReturnValue(legacyData);
+    vi.mocked(getChatSheetGuideDataForIsolationKey_ACU).mockReturnValue(guideShells);
+    vi.mocked(materializeDataFromSheetGuide_ACU).mockReturnValue(JSON.parse(JSON.stringify(guideShells)));
+    // 迁移声称成功但无候选数据 → 走直读合并结果（覆盖 guide 结构权合并路径）
+    vi.mocked(migrateLegacyStorageToV2OnLoad_ACU).mockResolvedValueOnce({ migrated: true } as any);
+  }
+
+  it('legacy-v1 历史行宽超过 guide 表头：降级保留历史结构，不 throw、不隔离丢表（原事故场景）', async () => {
+    mockLegacyChatWithGuide({
+      sheet_bag: {
+        uid: 'sheet_bag',
+        name: '背包物品表',
+        sourceData: { ddl: 'create table 背包物品表 (row_id text, 物品名称 text, 数量 int);' },
+        content: [['row_id', '物品名称', '数量'], ['1', '铁剑', '3'], ['2', '药水', '5']],
+      },
+    }, {
+      sheet_bag: {
+        uid: 'sheet_bag',
+        name: '背包物品表',
+        sourceData: { note: '新说明', ddl: 'create table 背包物品表 (row_id text, 物品名称 text);' },
+        content: [['row_id', '物品名称']],
+      },
+    });
+
+    const result = await mergeAllIndependentTables_ACU();
+
+    expect(result).not.toBeNull();
+    // 3 列历史结构完整保留：不截断、不 padding、行数据一格不丢
+    expect(result!.sheet_bag.content).toEqual([['row_id', '物品名称', '数量'], ['1', '铁剑', '3'], ['2', '药水', '5']]);
+    // ddl 属于结构，跟随历史数据；非结构元数据（note）仍从 guide 叠加
+    expect(result!.sheet_bag.sourceData.ddl).toContain('数量 int');
+    expect(result!.sheet_bag.sourceData.note).toBe('新说明');
+    expect(logWarn_ACU).toHaveBeenCalledWith(expect.stringContaining('已降级保留历史结构'));
+    expect(logError_ACU).not.toHaveBeenCalledWith(expect.stringContaining('合并失败'), expect.anything());
+  });
+
+  it('legacy-v1 guide 表头缺 row_id 首列且有历史数据：降级保留历史结构，不 throw、不隔离丢表', async () => {
+    mockLegacyChatWithGuide({
+      sheet_bag: {
+        uid: 'sheet_bag',
+        name: '背包物品表',
+        content: [['row_id', '物品名称'], ['1', '铁剑']],
+      },
+    }, {
+      sheet_bag: {
+        uid: 'sheet_bag',
+        name: '背包物品表',
+        content: [['物品名称', '数量']], // 非法：首列不是 row_id
+      },
+    });
+
+    const result = await mergeAllIndependentTables_ACU();
+
+    expect(result).not.toBeNull();
+    expect(result!.sheet_bag.content).toEqual([['row_id', '物品名称'], ['1', '铁剑']]);
+    expect(logWarn_ACU).toHaveBeenCalledWith(expect.stringContaining('已降级保留历史结构'));
+  });
+
+  it('legacy-v1 历史行短于 guide 表头：padding 语义不回归（guide 结构权正常路径）', async () => {
+    mockLegacyChatWithGuide({
+      sheet_bag: {
+        uid: 'sheet_bag',
+        name: '背包物品表',
+        content: [['row_id', '物品名称'], ['1', '铁剑']],
+      },
+    }, {
+      sheet_bag: {
+        uid: 'sheet_bag',
+        name: '背包物品表',
+        content: [['row_id', '物品名称', '数量']],
+      },
+    });
+
+    const result = await mergeAllIndependentTables_ACU();
+
+    expect(result).not.toBeNull();
+    // guide 表头生效，短行补 null 到 guide 宽度
+    expect(result!.sheet_bag.content).toEqual([['row_id', '物品名称', '数量'], ['1', '铁剑', null]]);
+  });
+
   // ═══ updateConfig 兼容迁移 ═══
   it('旧版 updateConfig 中的 0 被迁移为 -1', async () => {
     const mockChat = [

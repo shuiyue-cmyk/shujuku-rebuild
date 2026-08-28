@@ -5,6 +5,7 @@ import { currentChatFileIdentifier_ACU, getCurrentIsolationKey_ACU } from '../ru
 import type { TableDataObject_ACU } from '../../shared/models/table-data';
 import { validateMigrationProvenanceV1_ACU } from '../../shared/canonical-checkpoint-validator';
 import { resolveHistoricalSheetKeyMigrations_ACU } from '../../shared/sql-read-resolver';
+import { canonicalizeDisplayName_ACU } from '../../shared/sheet-identity';
 import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
 import { hasV2TableHistoryEvidence_ACU, isV2TagData_ACU, resolveTableStorageStrategy_ACU } from './storage-strategy-resolver';
 import type { TableCheckpointScheduleSummaryV2_ACU, TableMigrationAuditBackupV1_ACU, TableMigrationProvenanceV1_ACU, TableStorageFrameV2_ACU } from './storage-frame-v2-types';
@@ -53,26 +54,67 @@ function countRealDataRows_ACU(data: Record<string, any> | null | undefined): nu
 }
 
 /**
- * 迁移破坏保险闸的旧源扫描：检查聊天中将被 cleanupLegacyFieldsAfterV2Write_ACU
- * 删除的旧存储源（隔离槽 V1 数据 + 顶层旧字段）里是否存在任何真实数据行。
- * 扫描范围与 cleanup 的删除范围使用同一隔离匹配语义，保护的正是将被删除的内容。
+ * 迁移破坏保险闸的旧源扫描：收集聊天中将被 cleanupLegacyFieldsAfterV2Write_ACU
+ * 删除的旧存储源（隔离槽 V1 数据 + 顶层旧字段）里所有带真实数据行的表
+ * （sheetKey → 规范化显示名）。扫描范围与 cleanup 的删除范围使用同一隔离匹配语义，
+ * 保护的正是将被删除的内容。
  */
-function legacySourcesContainRealRows_ACU(chat: any[], isolationKey: string, isolationConfig: IsolationConfig_ACU): boolean {
+function collectLegacyRowBearingSheets_ACU(chat: any[], isolationKey: string, isolationConfig: IsolationConfig_ACU): Map<string, string> {
+  const rowBearing = new Map<string, string>();
+  const collect = (data: Record<string, any> | null | undefined): void => {
+    for (const sheetKey of sheetKeysOfData_ACU(data)) {
+      const sheet = (data as any)[sheetKey];
+      const content = sheet?.content;
+      if (!Array.isArray(content) || content.length <= 1) continue;
+      if (!rowBearing.has(sheetKey)) rowBearing.set(sheetKey, canonicalizeDisplayName_ACU(sheet?.name));
+    }
+  };
   for (const message of chat) {
     if (!message || message.is_user) continue;
     const tagData = readIsolatedTagData_ACU(message, isolationKey);
     if (tagData && !isV2TagData_ACU(tagData)) {
-      if (countRealDataRows_ACU(tagData.independentData) > 0) return true;
+      collect(tagData.independentData);
+      // 增量 delta 的存在同样是"该表有真实数据活动"的证据（旧闸门语义保留）：
+      // delta 无表名可取，登记 key、名字留空，比对退化为按 key 匹配。
       const incrementalData = (tagData as any).incrementalData;
-      if (incrementalData && typeof incrementalData === 'object' && Object.keys(incrementalData).length > 0) return true;
+      if (incrementalData && typeof incrementalData === 'object') {
+        for (const sheetKey of Object.keys(incrementalData)) {
+          if (!sheetKey.startsWith('sheet_') || !incrementalData[sheetKey]) continue;
+          if (!rowBearing.has(sheetKey)) rowBearing.set(sheetKey, '');
+        }
+      }
     }
     if (isLegacyMatchForIsolation_ACU(message, isolationConfig)) {
-      if (countRealDataRows_ACU(readLegacyIndependentData_ACU(message)) > 0) return true;
-      if (countRealDataRows_ACU(readLegacyStandardData_ACU(message) as any) > 0) return true;
-      if (countRealDataRows_ACU(readLegacySummaryData_ACU(message) as any) > 0) return true;
+      collect(readLegacyIndependentData_ACU(message));
+      collect(readLegacyStandardData_ACU(message) as any);
+      collect(readLegacySummaryData_ACU(message) as any);
     }
   }
-  return false;
+  return rowBearing;
+}
+
+/**
+ * 迁移破坏保险闸的逐表比对：旧源中每一张带真实行的表，都必须能在合并结果中按
+ * sheetKey 或规范化显示名找到对应（合并可能把历史 key 重映射进 guide key，故双通道）。
+ * 返回缺失表的可读描述列表；非空即说明合并读取丢了整表，迁移必须拒绝。
+ */
+function findLegacyRowBearingSheetsMissingFromMerged_ACU(
+  mergedData: Record<string, any> | null,
+  legacyRowBearingSheets: Map<string, string>,
+): string[] {
+  const mergedKeys = new Set(sheetKeysOfData_ACU(mergedData));
+  const mergedNames = new Set<string>();
+  for (const sheetKey of mergedKeys) {
+    const name = canonicalizeDisplayName_ACU((mergedData as any)?.[sheetKey]?.name);
+    if (name) mergedNames.add(name);
+  }
+  const missing: string[] = [];
+  for (const [sheetKey, canonicalName] of legacyRowBearingSheets) {
+    if (mergedKeys.has(sheetKey)) continue;
+    if (canonicalName && mergedNames.has(canonicalName)) continue;
+    missing.push(`${canonicalName || '(无名)'}(${sheetKey})`);
+  }
+  return missing;
 }
 
 function countAiFloor_ACU(chat: any[], messageIndex: number): number {
@@ -504,11 +546,19 @@ export async function migrateLegacyStorageToV2OnLoad_ACU(
 
   // ── 破坏性迁移保险闸 ──
   // 迁移成功后会删除各楼层旧存储字段原件（cleanupLegacyFieldsAfterV2Write_ACU），而
-  // migrationAuditBackup 只备份合并结果。若合并结果一行数据都没有、但旧存储源中存在
-  // 真实行，说明合并读取存在丢行（如模板/指导表不匹配），此时执行迁移会造成不可逆
-  // 数据丢失——拒绝迁移，读路径自动走直读降级，数据保持原样可用。
-  if (countRealDataRows_ACU(options.data) === 0
-    && legacySourcesContainRealRows_ACU(chat, options.isolationKey, options.isolationConfig)) {
+  // migrationAuditBackup 只备份合并结果。合并读取若丢表/丢行（如结构冲突被隔离、
+  // 模板/指导表不匹配），执行迁移会造成不可逆数据丢失——拒绝迁移，读路径自动走
+  // 直读降级，数据保持原样可用。两层闸门：
+  // 1) 逐表存在性：旧源中每张带真实行的表必须在合并结果中有对应（key 或规范名）；
+  // 2) 总行数兜底：合并结果一行都没有而旧源有行（表在但行被剥光的场景）。
+  const legacyRowBearingSheets = collectLegacyRowBearingSheets_ACU(chat, options.isolationKey, options.isolationConfig);
+  const missingSheets = findLegacyRowBearingSheetsMissingFromMerged_ACU(options.data, legacyRowBearingSheets);
+  if (missingSheets.length > 0) {
+    const error = `合并结果缺失旧存储中带真实行数据的表：${missingSheets.join('、')}；为防止破坏性迁移丢失原始数据，已拒绝迁移。`;
+    logWarn_ACU(`[V2 Migration] ${error}`);
+    return { migrated: false, error };
+  }
+  if (countRealDataRows_ACU(options.data) === 0 && legacyRowBearingSheets.size > 0) {
     const error = '合并结果不含任何数据行，但聊天旧存储中存在真实行数据；为防止破坏性迁移丢失原始数据，已拒绝迁移。';
     logWarn_ACU(`[V2 Migration] ${error}`);
     return { migrated: false, error };

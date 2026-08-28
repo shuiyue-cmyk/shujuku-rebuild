@@ -346,6 +346,68 @@ describe('migrateLegacyStorageToV2OnLoad_ACU', () => {
     expect(mockChatRef.value[0].TavernDB_ACU_IndependentData).toBeUndefined();
   });
 
+  it('破坏保险闸（逐表）：合并结果缺失旧源中一张带真实行的表时拒绝迁移且零写入（部分丢表场景）', async () => {
+    // 原事故场景：合并把 4 张带行数据的表隔离丢掉，剩余表仍有行 → 旧的"总 0 行"闸放行。
+    // 逐表闸必须按 key/规范名比对每张带真实行的旧表在合并结果中的存在性。
+    const partialMerged = {
+      sheet_notes: sheet('纪要表', [['row_id', '纪要'], ['1', '第一章']]),
+    } as any;
+    mockChatRef.value = [
+      {
+        is_user: false,
+        TavernDB_ACU_IndependentData: {
+          sheet_notes: sheet('纪要表', [['row_id', '纪要'], ['1', '第一章']]),
+          sheet_bag: sheet('背包物品表', [['row_id', '名称', '数量'], ['1', '铁剑', '3']]),
+        },
+        TavernDB_ACU_ModifiedKeys: ['sheet_notes', 'sheet_bag'],
+      },
+      { is_user: true },
+      { is_user: false, mes: 'latest ai' },
+    ];
+
+    const result = await migrateLegacyStorageToV2OnLoad_ACU({
+      data: partialMerged,
+      isolationKey: '',
+      isolationConfig: { enabled: false, code: '' },
+    });
+
+    expect(result.migrated).toBe(false);
+    expect(result.error).toContain('缺失');
+    expect(result.error).toContain('背包物品表');
+    expect(mockSaveChatToHost).not.toHaveBeenCalled();
+    expect(mockChatRef.value[0].TavernDB_ACU_IndependentData.sheet_bag.content).toEqual([['row_id', '名称', '数量'], ['1', '铁剑', '3']]);
+  });
+
+  it('破坏保险闸（逐表）：旧表按规范名重映射进新 key 时放行迁移（key 迁移不误拦）', async () => {
+    // 合并把历史 key sheet_old 的数据迁入 guide key sheet_new，名字相同 → 规范名通道匹配。
+    // 另有一张同 key 表 sheet_notes 保证迁移证据链（provenance）成立，本用例只验证闸门不误拦。
+    const remappedMerged = {
+      sheet_new: sheet('背包物品表', [['row_id', '名称'], ['1', '铁剑']]),
+      sheet_notes: sheet('纪要表', [['row_id', '纪要'], ['1', '第一章']]),
+    } as any;
+    mockChatRef.value = [
+      {
+        is_user: false,
+        TavernDB_ACU_IndependentData: {
+          sheet_old: sheet('背包物品表', [['row_id', '名称'], ['1', '铁剑']]),
+          sheet_notes: sheet('纪要表', [['row_id', '纪要'], ['1', '第一章']]),
+        },
+        TavernDB_ACU_ModifiedKeys: ['sheet_old', 'sheet_notes'],
+      },
+      { is_user: true },
+      { is_user: false, mes: 'latest ai' },
+    ];
+
+    const result = await migrateLegacyStorageToV2OnLoad_ACU({
+      data: remappedMerged,
+      isolationKey: '',
+      isolationConfig: { enabled: false, code: '' },
+    });
+
+    expect(result.migrated).toBe(true);
+    expect(mockSaveChatToHost).toHaveBeenCalledTimes(1);
+  });
+
   it('legacy 数据含 canonical 后重复 row_id 时重映射后迁移，并保留全部行', async () => {
     const data = {
       sheet_0: sheet('背包', [['row_id', '名称'], ['1', '铁剑'], [' 1 ', '冒名副本']]),

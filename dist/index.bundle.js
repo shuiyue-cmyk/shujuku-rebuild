@@ -48420,32 +48420,71 @@ $CONTENT
         return rows;
     }
     /**
-     * 迁移破坏保险闸的旧源扫描：检查聊天中将被 cleanupLegacyFieldsAfterV2Write_ACU
-     * 删除的旧存储源（隔离槽 V1 数据 + 顶层旧字段）里是否存在任何真实数据行。
-     * 扫描范围与 cleanup 的删除范围使用同一隔离匹配语义，保护的正是将被删除的内容。
+     * 迁移破坏保险闸的旧源扫描：收集聊天中将被 cleanupLegacyFieldsAfterV2Write_ACU
+     * 删除的旧存储源（隔离槽 V1 数据 + 顶层旧字段）里所有带真实数据行的表
+     * （sheetKey → 规范化显示名）。扫描范围与 cleanup 的删除范围使用同一隔离匹配语义，
+     * 保护的正是将被删除的内容。
      */
-    function legacySourcesContainRealRows_ACU(chat, isolationKey, isolationConfig) {
+    function collectLegacyRowBearingSheets_ACU(chat, isolationKey, isolationConfig) {
+        const rowBearing = new Map();
+        const collect = (data) => {
+            for (const sheetKey of sheetKeysOfData_ACU(data)) {
+                const sheet = data[sheetKey];
+                const content = sheet?.content;
+                if (!Array.isArray(content) || content.length <= 1)
+                    continue;
+                if (!rowBearing.has(sheetKey))
+                    rowBearing.set(sheetKey, canonicalizeDisplayName_ACU(sheet?.name));
+            }
+        };
         for (const message of chat) {
             if (!message || message.is_user)
                 continue;
             const tagData = readIsolatedTagData_ACU(message, isolationKey);
             if (tagData && !isV2TagData_ACU(tagData)) {
-                if (countRealDataRows_ACU(tagData.independentData) > 0)
-                    return true;
+                collect(tagData.independentData);
+                // 增量 delta 的存在同样是"该表有真实数据活动"的证据（旧闸门语义保留）：
+                // delta 无表名可取，登记 key、名字留空，比对退化为按 key 匹配。
                 const incrementalData = tagData.incrementalData;
-                if (incrementalData && typeof incrementalData === 'object' && Object.keys(incrementalData).length > 0)
-                    return true;
+                if (incrementalData && typeof incrementalData === 'object') {
+                    for (const sheetKey of Object.keys(incrementalData)) {
+                        if (!sheetKey.startsWith('sheet_') || !incrementalData[sheetKey])
+                            continue;
+                        if (!rowBearing.has(sheetKey))
+                            rowBearing.set(sheetKey, '');
+                    }
+                }
             }
             if (isLegacyMatchForIsolation_ACU(message, isolationConfig)) {
-                if (countRealDataRows_ACU(readLegacyIndependentData_ACU(message)) > 0)
-                    return true;
-                if (countRealDataRows_ACU(readLegacyStandardData_ACU(message)) > 0)
-                    return true;
-                if (countRealDataRows_ACU(readLegacySummaryData_ACU(message)) > 0)
-                    return true;
+                collect(readLegacyIndependentData_ACU(message));
+                collect(readLegacyStandardData_ACU(message));
+                collect(readLegacySummaryData_ACU(message));
             }
         }
-        return false;
+        return rowBearing;
+    }
+    /**
+     * 迁移破坏保险闸的逐表比对：旧源中每一张带真实行的表，都必须能在合并结果中按
+     * sheetKey 或规范化显示名找到对应（合并可能把历史 key 重映射进 guide key，故双通道）。
+     * 返回缺失表的可读描述列表；非空即说明合并读取丢了整表，迁移必须拒绝。
+     */
+    function findLegacyRowBearingSheetsMissingFromMerged_ACU(mergedData, legacyRowBearingSheets) {
+        const mergedKeys = new Set(sheetKeysOfData_ACU(mergedData));
+        const mergedNames = new Set();
+        for (const sheetKey of mergedKeys) {
+            const name = canonicalizeDisplayName_ACU(mergedData?.[sheetKey]?.name);
+            if (name)
+                mergedNames.add(name);
+        }
+        const missing = [];
+        for (const [sheetKey, canonicalName] of legacyRowBearingSheets) {
+            if (mergedKeys.has(sheetKey))
+                continue;
+            if (canonicalName && mergedNames.has(canonicalName))
+                continue;
+            missing.push(`${canonicalName || '(无名)'}(${sheetKey})`);
+        }
+        return missing;
     }
     function countAiFloor_ACU(chat, messageIndex) {
         let count = 0;
@@ -48822,11 +48861,19 @@ $CONTENT
         }
         // ── 破坏性迁移保险闸 ──
         // 迁移成功后会删除各楼层旧存储字段原件（cleanupLegacyFieldsAfterV2Write_ACU），而
-        // migrationAuditBackup 只备份合并结果。若合并结果一行数据都没有、但旧存储源中存在
-        // 真实行，说明合并读取存在丢行（如模板/指导表不匹配），此时执行迁移会造成不可逆
-        // 数据丢失——拒绝迁移，读路径自动走直读降级，数据保持原样可用。
-        if (countRealDataRows_ACU(options.data) === 0
-            && legacySourcesContainRealRows_ACU(chat, options.isolationKey, options.isolationConfig)) {
+        // migrationAuditBackup 只备份合并结果。合并读取若丢表/丢行（如结构冲突被隔离、
+        // 模板/指导表不匹配），执行迁移会造成不可逆数据丢失——拒绝迁移，读路径自动走
+        // 直读降级，数据保持原样可用。两层闸门：
+        // 1) 逐表存在性：旧源中每张带真实行的表必须在合并结果中有对应（key 或规范名）；
+        // 2) 总行数兜底：合并结果一行都没有而旧源有行（表在但行被剥光的场景）。
+        const legacyRowBearingSheets = collectLegacyRowBearingSheets_ACU(chat, options.isolationKey, options.isolationConfig);
+        const missingSheets = findLegacyRowBearingSheetsMissingFromMerged_ACU(options.data, legacyRowBearingSheets);
+        if (missingSheets.length > 0) {
+            const error = `合并结果缺失旧存储中带真实行数据的表：${missingSheets.join('、')}；为防止破坏性迁移丢失原始数据，已拒绝迁移。`;
+            logWarn_ACU(`[V2 Migration] ${error}`);
+            return { migrated: false, error };
+        }
+        if (countRealDataRows_ACU(options.data) === 0 && legacyRowBearingSheets.size > 0) {
             const error = '合并结果不含任何数据行，但聊天旧存储中存在真实行数据；为防止破坏性迁移丢失原始数据，已拒绝迁移。';
             logWarn_ACU(`[V2 Migration] ${error}`);
             return { migrated: false, error };
@@ -54237,6 +54284,9 @@ $CONTENT
         guideKeys.forEach(k => {
             if (!k || !k.startsWith('sheet_'))
                 return;
+            // 本轮消费的历史 key：catch 兜底需要把它释放回"未消费"集合，
+            // 让末尾的兼容携带循环按原 key 保留历史数据（隔离只丢 guide 表壳，不丢数据）。
+            let consumedKeyThisGuide = null;
             try {
                 const guideSheet = guided[k];
                 const canonicalName = canonicalizeDisplayName_ACU(guideSheet?.name);
@@ -54251,6 +54301,7 @@ $CONTENT
                 const hist = historicalKey ? mergedData[historicalKey] : undefined;
                 if (hist && typeof hist === 'object') {
                     consumedHistoricalKeys.add(historicalKey);
+                    consumedKeyThisGuide = historicalKey;
                     const next = JSON.parse(JSON.stringify(hist));
                     next.uid = k;
                     const guideHeader = (guideSheet && Array.isArray(guideSheet.content) && Array.isArray(guideSheet.content[0]))
@@ -54279,41 +54330,57 @@ $CONTENT
                         guided[k] = next;
                     }
                     else {
-                        // ── legacy-v1：guide 持结构权（旧行为，含 padding）──
-                        if (guideSheet?.name)
-                            next.name = guideSheet.name;
-                        if (guideSheet?.sourceData)
-                            next.sourceData = JSON.parse(JSON.stringify(guideSheet.sourceData));
-                        if (guideSheet?.updateConfig)
-                            next.updateConfig = JSON.parse(JSON.stringify(guideSheet.updateConfig));
-                        if (guideSheet?.exportConfig)
-                            next.exportConfig = JSON.parse(JSON.stringify(guideSheet.exportConfig));
-                        if (guideHeader && String(guideHeader[0] ?? '') !== 'row_id') {
-                            throw new Error(`Sheet Guide 表头缺少 row_id 首列：${String(guideSheet.uid || guideSheet.name || k)}`);
+                        // ── legacy-v1：guide 持结构权（含 padding），结构冲突时降级为历史结构权 ──
+                        // 全版本兼容读取契约：guide 表头非法（缺 row_id 首列）或历史行比 guide 表头宽
+                        // （旧模板列更多，截断丢格、padding 无意义）时，不 throw、不隔离——该表退回与
+                        // V2 分支一致的"保留历史结构 + 叠加 guide 非结构元数据"处理，数据行原样保留。
+                        const guideHeaderValid = !guideHeader || String(guideHeader[0] ?? '') === 'row_id';
+                        const hasOverwideRow = !!guideHeader && Array.isArray(next.content)
+                            && next.content.slice(1).some((row) => Array.isArray(row) && row.length > guideHeader.length);
+                        if (!guideHeaderValid || hasOverwideRow) {
+                            if (!Array.isArray(next.content) || next.content.length === 0) {
+                                next.content = [histHeader || ['row_id']];
+                            }
+                            applyGuideMetadataToSheet_ACU(next, guideSheet, { inheritDdl: false });
+                            if (Array.isArray(guideSheet?.seedRows))
+                                next.seedRows = JSON.parse(JSON.stringify(guideSheet.seedRows));
+                            const reason = !guideHeaderValid
+                                ? `Sheet Guide 表头缺少 row_id 首列`
+                                : `历史行宽度（最大 ${Math.max(...next.content.slice(1).map((row) => Array.isArray(row) ? row.length : 0))} 列）超过 Sheet Guide 表头（${guideHeader.length} 列）`;
+                            const msg = `[Merge] 表「${String(next.name || guideSheet?.name || k)}」(${k}) ${reason}，`
+                                + `已降级保留历史结构（数据行不截断、不丢弃）。如需变更列结构，请通过模板提交完成迁移。`;
+                            logWarn_ACU(msg);
+                            warnings.push(msg);
+                            guided[k] = next;
                         }
-                        if (!Array.isArray(next.content))
-                            next.content = guideHeader ? [guideHeader] : [['row_id']];
-                        if (guideHeader) {
-                            next.content[0] = guideHeader;
-                            const targetLen = guideHeader.length;
-                            for (let r = 1; r < next.content.length; r++) {
-                                const row = next.content[r];
-                                if (!Array.isArray(row))
-                                    continue;
-                                if (row.length < targetLen) {
+                        else {
+                            if (guideSheet?.name)
+                                next.name = guideSheet.name;
+                            if (guideSheet?.sourceData)
+                                next.sourceData = JSON.parse(JSON.stringify(guideSheet.sourceData));
+                            if (guideSheet?.updateConfig)
+                                next.updateConfig = JSON.parse(JSON.stringify(guideSheet.updateConfig));
+                            if (guideSheet?.exportConfig)
+                                next.exportConfig = JSON.parse(JSON.stringify(guideSheet.exportConfig));
+                            if (!Array.isArray(next.content))
+                                next.content = guideHeader ? [guideHeader] : [['row_id']];
+                            if (guideHeader) {
+                                next.content[0] = guideHeader;
+                                const targetLen = guideHeader.length;
+                                for (let r = 1; r < next.content.length; r++) {
+                                    const row = next.content[r];
+                                    if (!Array.isArray(row))
+                                        continue;
                                     while (row.length < targetLen)
                                         row.push(null);
                                 }
-                                else if (row.length > targetLen) {
-                                    throw new Error(`历史表「${String(guideSheet?.name || k)}」行宽度超过 Sheet Guide 表头，拒绝截断数据。`);
-                                }
                             }
+                            if (Number.isFinite(guideSheet?.[TABLE_ORDER_FIELD_ACU]))
+                                next[TABLE_ORDER_FIELD_ACU] = Math.trunc(guideSheet[TABLE_ORDER_FIELD_ACU]);
+                            if (Array.isArray(guideSheet?.seedRows))
+                                next.seedRows = JSON.parse(JSON.stringify(guideSheet.seedRows));
+                            guided[k] = next;
                         }
-                        if (Number.isFinite(guideSheet?.[TABLE_ORDER_FIELD_ACU]))
-                            next[TABLE_ORDER_FIELD_ACU] = Math.trunc(guideSheet[TABLE_ORDER_FIELD_ACU]);
-                        if (Array.isArray(guideSheet?.seedRows))
-                            next.seedRows = JSON.parse(JSON.stringify(guideSheet.seedRows));
-                        guided[k] = next;
                     }
                 }
                 else {
@@ -54333,7 +54400,11 @@ $CONTENT
                 }
             }
             catch (e) {
-                logError_ACU(`[Merge] 表「${k}」合并失败，已隔离：`, e);
+                // 读宽容契约：guide 合并失败只隔离 guide 表壳，不允许连带丢历史数据。
+                // 释放本轮已消费的历史 key，末尾的兼容携带循环会按原 key 原样保留该表。
+                if (consumedKeyThisGuide)
+                    consumedHistoricalKeys.delete(consumedKeyThisGuide);
+                logError_ACU(`[Merge] 表「${k}」合并失败，已隔离 guide 表壳（历史数据按全版本兼容模式原样保留）：`, e);
                 delete guided[k];
                 quarantinedSheetKeys.push(k);
             }
@@ -54597,7 +54668,11 @@ $CONTENT
         // 2) 对指导表中缺失的表：使用指导表结构作为初始值（seedRows 仅保留字段，不默认展开到 content）
         // 3) 对于存在历史数据的表：以历史数据为主，但表名/表头/参数/顺序以指导表为准；不把 seedRows 合并进真实数据行
         if (hasSheetGuide) {
-            mergedData = mergeSheetGuideStructureIntoData_ACU(mergedData, sheetGuideData).data;
+            const guideMergeResult = mergeSheetGuideStructureIntoData_ACU(mergedData, sheetGuideData);
+            mergedData = guideMergeResult.data;
+            // 与 V2 分支一致：隔离表键与结构 warning 透出给加载路径报告，不再静默丢弃。
+            lastMergeQuarantinedSheetKeys = guideMergeResult.quarantinedSheetKeys;
+            lastMergeWarnings = guideMergeResult.warnings;
         }
         // [修复] 合并结果按"用户手动顺序/模板顺序"重排，避免合并过程导致的随机乱序
         const orderedKeys = getSortedSheetKeys_ACU(mergedData);

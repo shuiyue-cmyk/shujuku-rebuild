@@ -1,36 +1,180 @@
 // init.ts — 初始化编排（presentation 层：负责事件绑定、UI 初始化、模块串联）
 // 从 05_core_tail.js 迁入
 
-import { cancelPendingChatMutationRefresh_ACU, scheduleChatMutationRefresh_ACU } from './chat-mutation-scheduler';
-import { showToastr_ACU } from '../theme/toast';
-import { attemptToLoadCoreApis_ACU } from '../triggers/settings-ui-sync/settings-ui-connect';
-import { ensureInitialSeedCheckpoint_ACU, handleChatCompletionReady_ACU, loadPresetAndCleanCharacterData_ACU } from '../../service/runtime/helpers-remaining';
-import { SillyTavern_API_ACU } from '../../shared/host-api';
-import { consumeGenerationContextForEnded_ACU, currentChatFileIdentifier_ACU, discardLatestGenerationContext_ACU, generationGate_ACU, getCurrentIsolationKey_ACU, markUserSendIntent_ACU, isProcessing_Plot_ACU, isQuietLikeGeneration_ACU, isRecentUserSendIntent_ACU, recordGenerationContext_ACU, recordLastUserSend_ACU, settings_ACU, shouldProcessAutoTableUpdateForGenerationEnded_ACU, shouldProcessPlotForGeneration_ACU, shouldProcessSummaryVectorIndexForGeneration_ACU, _set_allChatMessages_ACU, _set_currentChatFileIdentifier_ACU, _set_currentJsonTableData_ACU, _set_independentTableStates_ACU, _set_isProcessing_Plot_ACU, _set_lastTotalAiMessages_ACU} from '../../service/runtime/state-manager';
-import { applyTemplateScopeForCurrentChat_ACU, loadSettings_ACU } from '../../service/settings/settings-service';
-import { resetScriptStateForNewChat_ACU } from '../../service/worldbook/injection-engine';
-import { resetPlotAgentWorldbookSessionSnapshot_ACU } from '../../service/agent/agent-worldbook-takeover';
-import { reloadStorageProvider, disposeStorageProvider, getRuntimeLifecycleEpoch_ACU, hydrateStorageProviderFromSnapshot_ACU } from '../../service/table/table-storage-strategy';
-import { createCanonicalSnapshotEnvelope_ACU } from '../../service/table/canonical-snapshot-envelope';
-import { isSqliteMode } from '../../service/table/storage-mode';
-import { ensureNoActiveProvisionalBridgeForCurrentScope_ACU } from '../../service/table/manual-catch-up-provisional-bridge';
-import { loadAllChatMessages_ACU } from '../../service/worldbook/pipeline';
-import { refreshMergedDataAndNotifyWithUI_ACU } from '../components/pipeline-ui-helpers';
-import { cleanChatName_ACU, logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
-import { shouldSkipPlotIntercept_ACU } from '../../service/plot/plot-logic';
-import { orchestrateTavernHelperHook_ACU, orchestrateAfterCommandsStrategy1_ACU, orchestrateAfterCommandsStrategy2_ACU } from '../../service/plot/plot-orchestrator';
-import { getSendTextareaValue_ACU, setSendTextareaValue_ACU } from '../../shared/host-input';
-import { handleNewMessageDebounced_ACU } from '../triggers/settings-ui-sync/settings-ui-connect';
-import { runOptimizationLogicWithUI_ACU } from '../components/plot-planning-ui';
-import { processSummaryVectorIndexBeforeGenerationWithUI_ACU, rebuildCurrentSummaryVectorIndexWithUI_ACU, shouldRebuildSummaryVectorIndexWithUI_ACU } from '../components/summary-vector-index-ui';
-import { preloadSummaryVectorIndexCacheForCurrentChat_ACU } from '../../service/vector/summary-vector-index-cache-service';
-import { restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU } from '../../service/vector/summary-vector-index-flush-queue';
-import { topLevelWindow_ACU } from '../../shared/env';
-import { getUiSurface_ACU, showUiSurfaceToast_ACU } from '../../shared/ui-surface-registry';
-import { logAutoFillSkip_ACU } from '../../shared/trigger-diagnostics';
-import { bindContinuationInternalAiGenerationStarted_ACU, consumeContinuationInternalAiGenerationEnded_ACU } from '../../service/continuation/internal-ai-events';
-import { getContinuationHostGenerationBridge_ACU } from '../../service/continuation/host-generation-bridge-registry';
-import { getContinuationRuntime_ACU } from '../../service/continuation/continuation-runtime';
+
+import {
+  cancelPendingChatMutationRefresh_ACU,
+  scheduleChatMutationRefresh_ACU
+} from './chat-mutation-scheduler';
+import {
+  showToastr_ACU
+} from '../theme/toast';
+import {
+  attemptToLoadCoreApis_ACU
+} from '../triggers/settings-ui-sync/settings-ui-connect';
+import {
+  ensureInitialSeedCheckpoint_ACU,
+  handleChatCompletionReady_ACU,
+  loadPresetAndCleanCharacterData_ACU
+} from '../../service/runtime/helpers-remaining';
+import {
+  SillyTavern_API_ACU
+} from '../../shared/host-api';
+import {
+  currentChatFileIdentifier_ACU,
+  discardLatestGenerationContext_ACU,
+  generationGate_ACU,
+  getCurrentIsolationKey_ACU,
+  markUserSendIntent_ACU,
+  isProcessing_Plot_ACU,
+  isQuietLikeGeneration_ACU,
+  isRecentUserSendIntent_ACU,
+  recordGenerationContext_ACU,
+  recordLastUserSend_ACU,
+  shouldProcessAutoTableUpdateForGenerationEnded_ACU,
+  shouldProcessPlotForGeneration_ACU,
+  shouldProcessSummaryVectorIndexForGeneration_ACU,
+  _set_allChatMessages_ACU,
+  _set_currentChatFileIdentifier_ACU,
+  _set_currentJsonTableData_ACU,
+  _set_independentTableStates_ACU,
+  _set_isProcessing_Plot_ACU,
+  _set_lastTotalAiMessages_ACU,
+  abortOnChatMutation_ACU
+} from '../../service/runtime/state-manager';
+import {
+  applyTemplateScopeForCurrentChat_ACU,
+  loadSettings_ACU
+} from '../../service/settings/settings-service';
+import {
+  resetScriptStateForNewChat_ACU
+} from '../../service/worldbook/injection-engine';
+import {
+  resetPlotAgentWorldbookSessionSnapshot_ACU
+} from '../../service/agent/agent-worldbook-takeover';
+import {
+  reloadStorageProvider,
+  disposeStorageProvider,
+  getRuntimeLifecycleEpoch_ACU,
+  hydrateStorageProviderFromSnapshot_ACU
+} from '../../service/table/table-storage-strategy';
+import { runLegacyBiotrackerSilentMigration_ACU } from '../../service/biotracker/silent-migration';
+import {
+  createCanonicalSnapshotEnvelope_ACU
+} from '../../service/table/canonical-snapshot-envelope';
+import {
+  isSqliteMode
+} from '../../service/table/storage-mode';
+import {
+  ensureNoActiveProvisionalBridgeForCurrentScope_ACU
+} from '../../service/table/manual-catch-up-provisional-bridge';
+import {
+  loadAllChatMessages_ACU
+} from '../../service/worldbook/pipeline';
+import {
+  emitMessageUpdated_ACU
+} from '../../data/gateways/chat-gateway';
+import {
+  refreshMergedDataAndNotifyWithUI_ACU
+} from '../components/pipeline-ui-helpers';
+import {
+  cleanChatName_ACU,
+  logDebug_ACU,
+  logError_ACU,
+  logWarn_ACU
+} from '../../shared/utils';
+import {
+  orchestrateAfterCommandsStrategy1_ACU,
+  orchestrateAfterCommandsStrategy2_ACU
+} from '../../service/plot/plot-orchestrator';
+import {
+  getSendTextareaValue_ACU,
+  setSendTextareaValue_ACU
+} from '../../shared/host-input';
+import {
+  handleNewMessageDebounced_ACU
+} from '../triggers/settings-ui-sync/settings-ui-connect';
+import {
+  runOptimizationLogicWithUI_ACU
+} from '../components/plot-planning-ui';
+import {
+  processSummaryVectorIndexBeforeGenerationWithUI_ACU,
+  rebuildCurrentSummaryVectorIndexWithUI_ACU,
+  shouldRebuildSummaryVectorIndexWithUI_ACU
+} from '../components/summary-vector-index-ui';
+import {
+  preloadSummaryVectorIndexCacheForCurrentChat_ACU
+} from '../../service/vector/summary-vector-index-cache-service';
+import {
+  restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU
+} from '../../service/vector/summary-vector-index-flush-queue';
+import {
+  topLevelWindow_ACU
+} from '../../shared/env';
+import {
+  logAutoFillSkip_ACU
+} from '../../shared/trigger-diagnostics';
+
+// ═══ [H2/M4] 启动期重建链互斥守卫 ═══
+// 背景：启动时可能存在两条并发的重建链——chatId 可用路径的 setTimeout(initWithChatId, 1000)
+// 与 CHAT_CHANGED 的 1200ms 延迟链，二者执行同一套 loadAllChatMessages / merged refresh /
+// snapshot hydrate；同名聊天连续两次 CHAT_CHANGED 也会排出两个定时器并发执行，产生竞态。
+// 机制（参照 chat-mutation-scheduler.ts 的 generation+running 范式）：
+// - 排程延迟链时递增 initChainGeneration_ACU 并捕获当次代次号；
+// - 回调触发时先比对代次号（不等 ⇒ 已被更晚排程的链取代，放弃），再抢 running 标志
+//   （被占 ⇒ 放弃，由更晚排程的那条链负责本轮重建）。
+let initChainGeneration_ACU = 0;
+let initChainRunning_ACU = false;
+
+function scheduleInitChainRun_ACU(delayMs: number, label: string, body: () => Promise<void>): void {
+  initChainGeneration_ACU += 1;
+  const scheduledGeneration = initChainGeneration_ACU;
+  logDebug_ACU(`[InitChain] 排程「${label}」（代次 ${scheduledGeneration}，延迟 ${delayMs}ms）。`);
+  setTimeout(() => { void runInitChainRound_ACU(scheduledGeneration, label, body); }, delayMs);
+}
+
+async function runInitChainRound_ACU(scheduledGeneration: number, label: string, body: () => Promise<void>): Promise<void> {
+  // ① 代次比对：期间又有新链排程（或旧链被新事件取代），本轮视为过期
+  if (scheduledGeneration !== initChainGeneration_ACU) {
+    logDebug_ACU(`[InitChain] 「${label}」代次过期（${scheduledGeneration} ≠ 当前 ${initChainGeneration_ACU}），放弃本轮启动重建。`);
+    return;
+  }
+  // ② 抢 running 标志：被占则放弃（更晚排程的链到达时会以最新代次执行）
+  if (initChainRunning_ACU) {
+    logWarn_ACU(`[InitChain] 「${label}」到达时已有重建链在执行，放弃本轮并发请求。`);
+    return;
+  }
+  initChainRunning_ACU = true;
+  try {
+    await body();
+  } catch (bodyError) {
+    // 兜底：任何走守卫入口的链不允许产生未处理 rejection；CHAT_CHANGED 链内部有自己的
+    // catch（含轻量恢复），走到这里的通常是 initWithChatId 链。
+    await recoverDelayedRebuildFailure_ACU(`[InitChain] 「${label}」重建链`, bodyError);
+  } finally {
+    initChainRunning_ACU = false;
+  }
+}
+
+// [M3] 最近一轮延迟重建中 merged refresh 是否已成功过；异常恢复时避免对同一轮重复刷新
+let lastDelayedRebuildRefreshOk_ACU = false;
+
+function describeError_ACU(error: unknown): string {
+  return error instanceof Error ? (error.stack || error.message) : String(error);
+}
+
+/** [M3] 延迟重建/事件处理失败后的兜底：logError 并尽力补调一次已有的轻量恢复（merged refresh）。 */
+async function recoverDelayedRebuildFailure_ACU(scope: string, error: unknown): Promise<void> {
+  logError_ACU(`${scope} 失败: ${describeError_ACU(error)}`);
+  if (lastDelayedRebuildRefreshOk_ACU) return; // 本轮刷新已成功过，无需补救
+  try {
+    logWarn_ACU(`${scope} 异常后尝试一次轻量恢复（refreshMergedDataAndNotifyWithUI）...`);
+    await refreshMergedDataAndNotifyWithUI_ACU();
+    lastDelayedRebuildRefreshOk_ACU = true;
+  } catch (recoverError) {
+    logError_ACU(`${scope} 轻量恢复失败（仅记录，不再重试）: ${describeError_ACU(recoverError)}`);
+  }
+}
 
 // [从 state-manager.ts 搬入 presentation 层] 安装发送意图捕捉钩子（DOM 事件绑定）
 async function ensureInitialSeedCheckpointBeforeGeneration_ACU(reason: string, { allowPendingFirstUserMessage = true } = {}) {
@@ -60,6 +204,8 @@ function notifyRuntimeTableCleared_ACU(): void {
   } catch (_) {}
 }
 
+// [L9] 此处字段集与 service/worldbook/injection-engine-state.ts resetScriptStateForNewChat_ACU（无效聊天名分支）的手写清空保持同步；
+// 差异：本 presentation 层版本额外 disposeStorageProvider()，clearRuntimeForNoActiveChat_ACU 还会 notifyRuntimeTableCleared_ACU()。字段变动需两边同步。
 function clearDerivedRuntimeState_ACU(): void {
   disposeStorageProvider();
   _set_currentJsonTableData_ACU(null);
@@ -83,25 +229,29 @@ function clearRuntimeForNoActiveChat_ACU(chatFileName: unknown): void {
   logDebug_ACU(`ACU: No active chat after CHAT_CHANGED (${String(chatFileName)}), runtime table state cleared.`);
 }
 
+// [M1] 发送意图钩子改按「当前已绑定元素实例」记录（沿用 __ACU_sendIntentHooksInstalled 结构，
+// send/enter 字段由布尔改为当前绑定的元素引用）：宿主 DOM 重建后 #send_but/#send_textarea 是新
+// 元素实例，必须按实例比对才能感知并重绑。
+const SEND_INTENT_HOOK_MAX_SELF_RETRY_ACU = 10; // [L5] 元素缺失时自重排重试上限
+
 function installSendIntentCaptureHooks_ACU() {
   try {
     const parentDoc = (window.parent || window).document;
     const doc = parentDoc || document;
 
-    if (!(window as any).__ACU_sendIntentHooksInstalled) {
-      (window as any).__ACU_sendIntentHooksInstalled = { send: false, enter: false };
-    }
+    const hooksState = (window as any).__ACU_sendIntentHooksInstalled
+      || ((window as any).__ACU_sendIntentHooksInstalled = { send: null, enter: null });
 
     const sendBtn = doc.getElementById('send_but');
-    if (sendBtn && !(window as any).__ACU_sendIntentHooksInstalled.send) {
+    if (sendBtn && hooksState.send !== sendBtn) {
       sendBtn.addEventListener('click', () => markUserSendIntent_ACU(), true);
       sendBtn.addEventListener('pointerup', () => markUserSendIntent_ACU(), true);
       sendBtn.addEventListener('touchend', () => markUserSendIntent_ACU(), true);
-      (window as any).__ACU_sendIntentHooksInstalled.send = true;
+      hooksState.send = sendBtn;
     }
 
     const ta = doc.getElementById('send_textarea');
-    if (ta && !(window as any).__ACU_sendIntentHooksInstalled.enter) {
+    if (ta && hooksState.enter !== ta) {
       ta.addEventListener('keydown', (e: Event) => {
         try {
           const key = (e as KeyboardEvent).key || (e as KeyboardEvent).code;
@@ -110,11 +260,24 @@ function installSendIntentCaptureHooks_ACU() {
           }
         } catch (err) {}
       }, true);
-      (window as any).__ACU_sendIntentHooksInstalled.enter = true;
+      hooksState.enter = ta;
     }
 
-    if ((!sendBtn || !ta) && !(window as any).__ACU_sendIntentHooksRetryScheduled) {
+    if (sendBtn && ta) {
+      (window as any).__ACU_sendIntentHooksRetryCount = 0; // 绑定齐全，复位自重试计数
+      return;
+    }
+
+    // [L5] 元素缺失时自重排重试，加上限防止无限循环；超限放弃自动重试，
+    // 但 CHAT_CHANGED 重装路径仍会显式调用本函数按元素实例比对补绑。
+    const retryCount = Number((window as any).__ACU_sendIntentHooksRetryCount) || 0;
+    if (retryCount >= SEND_INTENT_HOOK_MAX_SELF_RETRY_ACU) {
+      logWarn_ACU(`[触发门控] 发送意图钩子自重试已达上限（${SEND_INTENT_HOOK_MAX_SELF_RETRY_ACU} 次；缺 send_but=${!sendBtn}, 缺 send_textarea=${!ta}），停止自动重试，等待 CHAT_CHANGED 重装路径补绑。`);
+      return;
+    }
+    if (!(window as any).__ACU_sendIntentHooksRetryScheduled) {
       (window as any).__ACU_sendIntentHooksRetryScheduled = true;
+      (window as any).__ACU_sendIntentHooksRetryCount = retryCount + 1;
       setTimeout(() => {
         (window as any).__ACU_sendIntentHooksRetryScheduled = false;
         installSendIntentCaptureHooks_ACU();
@@ -125,17 +288,175 @@ function installSendIntentCaptureHooks_ACU() {
   }
 }
 
+/**
+ * [H2/M3] CHAT_CHANGED 延迟重建链执行体（原 1200ms setTimeout 体迁入）：
+ * 持久化消息读取 → 模板应用 → merged refresh → SQLite snapshot hydrate → 向量索引预热/队列恢复。
+ * 整体包一层 try/catch：缓存已清后的任何 await 抛错都记录并尽力轻量恢复，不产生未处理 rejection。
+ */
+async function runChatChangedDelayedRebuild_ACU(chatFileName: string): Promise<void> {
+  try {
+    lastDelayedRebuildRefreshOk_ACU = false; // [M3]
+    const scheduledChatIdentifier_ACU = cleanChatName_ACU(chatFileName);
+
+    if (scheduledChatIdentifier_ACU && currentChatFileIdentifier_ACU !== scheduledChatIdentifier_ACU) {
+      logDebug_ACU(`ACU: Skip delayed chat refresh because active chat already changed to "${currentChatFileIdentifier_ACU || '未知'}".`);
+      return;
+    }
+
+    if (!hasActiveChatMessages_ACU()) {
+      clearRuntimeForNoActiveChat_ACU(chatFileName);
+      return;
+    }
+
+    // 先重新读取当前聊天持久化消息，再应用 chat_metadata 中的聊天模板快照。
+    // 此处是“持久化 → 派生缓存”的唯一重建入口，不能依赖切换前遗留的 TABLE_TEMPLATE/currentJsonTableData。
+    await loadAllChatMessages_ACU();
+    applyTemplateScopeForCurrentChat_ACU();
+
+    // 阶段 D：合并刷新（一轮 V2 replay，产出 canonical）与 provider hydrate 收敛。
+    // 先执行 merged refresh 拿到最终 canonical 数据，SQLite 模式下用 envelope
+    // hydrate provider（零 replay）；refresh 失败/degraded/身份漂移时回退冷
+    // reloadStorageProvider（保持既有两轮链路的完整语义与 fallback 状态机）。
+    // UI 通知由 refreshMergedDataAndNotifyWithUI_ACU 内部完成。
+    const refreshResult = await refreshMergedDataAndNotifyWithUI_ACU();
+    lastDelayedRebuildRefreshOk_ACU = true; // [M3] 本轮合并刷新已成功
+    if (isSqliteMode()) {
+      const envelope = refreshResult
+        && !refreshResult.degraded
+        && refreshResult.mergedData
+        ? createCanonicalSnapshotEnvelope_ACU({
+            data: refreshResult.mergedData,
+            chatIdentity: String(currentChatFileIdentifier_ACU || ''),
+            isolationKey: getCurrentIsolationKey_ACU(),
+            storageMode: 'sqlite',
+            lifecycleEpoch: getRuntimeLifecycleEpoch_ACU(),
+            source: 'merged_refresh',
+          })
+        : null;
+      if (envelope) {
+        logDebug_ACU('[SQLite] CHAT_CHANGED: 用 canonical snapshot hydrate 内存数据库...');
+        const hydrated = await hydrateStorageProviderFromSnapshot_ACU(envelope);
+        if (hydrated.ok) {
+          logDebug_ACU('[SQLite] CHAT_CHANGED: snapshot hydrate 完成');
+        } else if (hydrated.failureCode === 'stale_load_discarded') {
+          logDebug_ACU(`[SQLite] CHAT_CHANGED: snapshot 身份漂移（${hydrated.failureCode}），回退冷 reload。`);
+          try {
+            await reloadStorageProvider();
+          } catch (e: any) {
+            logError_ACU(`[SQLite] CHAT_CHANGED: 冷 reload 失败: ${e?.message}`);
+          }
+        } else {
+          // provider_fallback（SQLite hydrate 失败已自动回退 native）或
+          // provider_load_failed：保持 hydrate 返回的 fallback 状态机。
+          logError_ACU(`[SQLite] CHAT_CHANGED: snapshot hydrate 失败: ${hydrated.failureCode || 'unknown'}${hydrated.error ? `: ${hydrated.error}` : ''}`);
+        }
+      } else {
+        logDebug_ACU('[SQLite] CHAT_CHANGED: merged refresh 未产出可用 canonical（degraded/空数据），回退冷 reload。');
+        try {
+          await reloadStorageProvider();
+        } catch (e: any) {
+          logError_ACU(`[SQLite] CHAT_CHANGED: 数据库重建失败: ${e?.message}`);
+        }
+      }
+    }
+
+    // [交火向量索引] 聊天数据刷新完成后，预热当前聊天对应的外置分片缓存。
+    // 注意：必须放在 refreshMergedDataAndNotifyWithUI_ACU 之后，否则可能读取到旧聊天的 manifest。
+    const vectorCacheResult = await preloadSummaryVectorIndexCacheForCurrentChat_ACU();
+    logDebug_ACU(`[交火向量索引] CHAT_CHANGED 缓存预热结果：success=${vectorCacheResult.success}, skipped=${vectorCacheResult.skipped === true}, reason=${vectorCacheResult.reason || 'none'}, chunks=${vectorCacheResult.chunkCount}, indexId=${vectorCacheResult.indexId || 'none'}`);
+    if (shouldRebuildSummaryVectorIndexWithUI_ACU(vectorCacheResult.reason)) {
+      try {
+        await rebuildCurrentSummaryVectorIndexWithUI_ACU();
+      } catch (rebuildError) {
+        logWarn_ACU('[交火向量索引] 失效索引已删除，但普通重建路径执行失败:', rebuildError);
+      }
+    }
+    const shouldRestoreFlushQueue = !String(vectorCacheResult.reason || '').startsWith('external_files_missing_state_clear');
+    if (!shouldRestoreFlushQueue) {
+      logWarn_ACU(
+        `[交火向量索引] CHAT_CHANGED 跳过 flush 队列恢复：missing-file 状态清理未完成或已进入重建恢复，reason=${vectorCacheResult.reason || 'unknown'}`,
+      );
+    }
+    if (shouldRestoreFlushQueue) try {
+      const restoredFlushCount = await restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU();
+      if (restoredFlushCount > 0) {
+        logDebug_ACU(`[交火向量索引] CHAT_CHANGED 已恢复防抖归档队列：count=${restoredFlushCount}`);
+      }
+    } catch (restoreFlushError) {
+      logWarn_ACU('[交火向量索引] CHAT_CHANGED 恢复防抖归档队列失败:', restoreFlushError);
+    }
+
+    logDebug_ACU('ACU: Chat data reload and UI refresh triggered after chat change (Delayed).');
+  } catch (error) {
+    // [M3] 同步段已清派生缓存，此处任何失败都要兜底恢复，避免停留空白态
+    await recoverDelayedRebuildFailure_ACU('CHAT_CHANGED 延迟重建', error);
+  }
+}
+
+/**
+ * [H2/M3] CHAT_CHANGED 处理体（原内联匿名回调迁出）：
+ * - 同步段：中止在飞调用 → 无活动聊天早退 → 立即清派生缓存 → 重置脚本状态 → 重装意图钩子 → 加载预设；
+ * - 延迟段：经 scheduleInitChainRun_ACU 互斥守卫入口排程（代次号 + running 标志，参照 chat-mutation-scheduler）。
+ * 整体 try/catch 兜底，确保不再产生未处理 rejection。
+ */
+async function handleChatChangedEvent_ACU(chatFileName: string): Promise<void> {
+  try {
+    logDebug_ACU(`ACU CHAT_CHANGED event: ${chatFileName}`);
+
+    // [中止] 楼层变更（删楼/ROLL/切聊天）时中止所有在飞的依赖楼层的 API 调用
+    //（表格填表/生理追踪等），避免用旧上下文的结果写入当前状态。
+    abortOnChatMutation_ACU();
+
+    // [静默迁移] 打开即迁：TT/Luker sidecar 仅当前聊天可达，切到哪个聊天就迁哪个（按聊天打标只跑一次）
+    void runLegacyBiotrackerSilentMigration_ACU();
+
+    const hasValidChatFileName_ACU = isValidChatFileName_ACU(chatFileName);
+    if (!hasValidChatFileName_ACU && !hasActiveChatMessages_ACU()) {
+      clearRuntimeForNoActiveChat_ACU(chatFileName);
+      return;
+    }
+
+    // [修复] 换卡/换聊天时立即丢弃所有派生缓存。
+    // 后续延迟阶段只从当前聊天持久化 metadata / 消息日志重建，避免旧表和旧模板在窗口期继续显示。
+    if (hasValidChatFileName_ACU) {
+      clearDerivedRuntimeState_ACU();
+      notifyRuntimeTableCleared_ACU();
+      cancelPendingChatMutationRefresh_ACU();
+      if (isSqliteMode()) logDebug_ACU('[SQLite] CHAT_CHANGED: 立即销毁旧数据库实例');
+    }
+
+    await resetScriptStateForNewChat_ACU(chatFileName);
+
+    // [触发门控] generationGate 重置已搬到 service 层的 resetScriptStateForNewChat_ACU 中
+
+    // [触发门控] 每次切换聊天都尝试安装一次 capture 钩子（防止 DOM 重新渲染导致丢失）
+    installSendIntentCaptureHooks_ACU();
+
+    // [剧情推进] 切换聊天时加载预设
+    await loadPresetAndCleanCharacterData_ACU();
+
+    // [新增] 切换角色卡（聊天）时，强制从新聊天记录的本地数据读取最新的表格并刷新UI
+    logDebug_ACU('ACU: Chat changed, forcing reload of table data from new chat history.');
+
+    // [H2/M4] 排程 1200ms 延迟重建链：排程即递增代次号；同名聊天连续两次事件时，
+    // 后排程者的代次更新，先到的定时器因代次不等被放弃，两个定时器不会并发重建。
+    scheduleInitChainRun_ACU(1200, 'CHAT_CHANGED', () => runChatChangedDelayedRebuild_ACU(chatFileName));
+  } catch (error) {
+    // [M3] 同步段在清缓存后任一 await 抛错：logError + 尽力一次轻量恢复
+    await recoverDelayedRebuildFailure_ACU('CHAT_CHANGED 处理', error);
+  }
+}
+
 export   function mainInitialize_ACU() {
 
-    console.log('ACU_INIT_DEBUG: mainInitialize_ACU called.');
+    logDebug_ACU('ACU_INIT_DEBUG: mainInitialize_ACU called.');
     if (attemptToLoadCoreApis_ACU()) {
       logDebug_ACU('AutoCardUpdater Initialization successful! Core APIs loaded.');
-      showToastr_ACU('success', '数据库自动更新脚本已加载！', '脚本启动');
+      showToastr_ACU('success', '数据库已加载！', '数据库');
 
       loadSettings_ACU();
-      // Register the bridge before generation events are subscribed. Runtime
-      // migration remains page-owned so no chat persistence is touched at startup.
-      getContinuationRuntime_ACU();
+      // [静默迁移] 内置生理追踪存量数据 → 上游 tracker 可读形态（一次性，按聊天打标）
+      void runLegacyBiotrackerSilentMigration_ACU();
       if (
         SillyTavern_API_ACU &&
         SillyTavern_API_ACU.eventSource &&
@@ -164,198 +485,13 @@ export   function mainInitialize_ACU() {
           }
         }
         
-        SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.CHAT_CHANGED, async (chatFileName: string) => {
-          logDebug_ACU(`ACU CHAT_CHANGED event: ${chatFileName}`);
-
-          const hasValidChatFileName_ACU = isValidChatFileName_ACU(chatFileName);
-          if (!hasValidChatFileName_ACU && !hasActiveChatMessages_ACU()) {
-            clearRuntimeForNoActiveChat_ACU(chatFileName);
-            return;
-          }
-
-          // [修复] 换卡/换聊天时立即丢弃所有派生缓存。
-          // 后续延迟阶段只从当前聊天持久化 metadata / 消息日志重建，避免旧表和旧模板在窗口期继续显示。
-          if (hasValidChatFileName_ACU) {
-            clearDerivedRuntimeState_ACU();
-            notifyRuntimeTableCleared_ACU();
-            cancelPendingChatMutationRefresh_ACU();
-            if (isSqliteMode()) logDebug_ACU('[SQLite] CHAT_CHANGED: 立即销毁旧数据库实例');
-          }
-
-          await resetScriptStateForNewChat_ACU(chatFileName);
-
-          // [触发门控] generationGate 重置已搬到 service 层的 resetScriptStateForNewChat_ACU 中
-
-          // [触发门控] 每次切换聊天都尝试安装一次 capture 钩子（防止 DOM 重新渲染导致丢失）          installSendIntentCaptureHooks_ACU();
-
-          await loadPresetAndCleanCharacterData_ACU();
-
-          // [剧情推进] TavernHelper钩子：拦截直接的JS调用
-          if (!(window as any).original_TavernHelper_generate_ACU) {
-            if ((window as any).TavernHelper && typeof (window as any).TavernHelper.generate === 'function') {
-              (window as any).original_TavernHelper_generate_ACU = (window as any).TavernHelper.generate;
-              (window as any).TavernHelper.generate = async function (...args: any[]) {
-                const options = args[0] || {};
-
-                // quiet/automatic_trigger 直接透传
-                if (isQuietLikeGeneration_ACU('tavernhelper', { quiet_prompt: options.quiet_prompt }) || options.automatic_trigger) {
-                  return (window as any).original_TavernHelper_generate_ACU.apply(this, args);
-                }
-
-                const userInputForInitialSeed = String(options.user_input || options.prompt || getSendTextareaValue_ACU() || '').trim();
-                if (userInputForInitialSeed) {
-                  await ensureInitialSeedCheckpointBeforeGeneration_ACU('tavernhelper_generate_before_ai', { allowPendingFirstUserMessage: true });
-                }
-
-                if (shouldProcessSummaryVectorIndexForGeneration_ACU('tavernhelper', { quiet_prompt: options.quiet_prompt, automatic_trigger: options.automatic_trigger }, false)) {
-                  const userInput = String(options.user_input || options.prompt || getSendTextareaValue_ACU() || '').trim();
-                  try {
-                    const summaryVectorResult = await processSummaryVectorIndexBeforeGenerationWithUI_ACU({ userInput, source: 'tavernhelper' });
-                    logDebug_ACU(`[交火模式纪要索引] TavernHelper.generate 发送前处理完成：success=${summaryVectorResult.success}, skipped=${summaryVectorResult.skipped === true}, reason=${summaryVectorResult.reason || 'none'}, keywords=${summaryVectorResult.keywordCount ?? 0}, injected=${summaryVectorResult.injectedCount ?? 0}`);
-                  } catch (error) {
-                    // T5：发送前注入失败不得中断宿主生成（与 GENERATION_AFTER_COMMANDS 的降级一致）。
-                    logWarn_ACU('[交火模式纪要索引] TavernHelper.generate 发送前注入失败，继续原始生成:', error);
-                  }
-                }
-
-                // [重构] 调用 service 层编排函数，传入 UI 规划回调
-                const result = await orchestrateTavernHelperHook_ACU(options, runOptimizationLogicWithUI_ACU);
-
-                switch (result.action) {
-                  case 'planned': {
-                    // UI 操作：写回 options
-                    if (result.writeBack) {
-                      if (result.writeBack.target === 'injects') {
-                        options.injects[0].content = result.writeBack.value;
-                      } else if (result.writeBack.target === 'prompt') {
-                        options.prompt = result.writeBack.value;
-                      } else {
-                        options.user_input = result.writeBack.value;
-                      }
-                    }
-                    options._qrf_processed_by_hook = true;
-                    break;
-                  }
-                  // 'passthrough', 'skipped', 'aborted' — 不做额外操作，直接透传
-                }
-
-                return await (window as any).original_TavernHelper_generate_ACU.apply(this, args);
-              };
-              logDebug_ACU('[剧情推进] TavernHelper.generate hook registered.');
-            }
-          }
-          
-          // [新增] 切换角色卡（聊天）时，强制从新聊天记录的本地数据读取最新的表格并刷新UI
-          logDebug_ACU('ACU: Chat changed, forcing reload of table data from new chat history.');
-          const scheduledChatIdentifier_ACU = cleanChatName_ACU(chatFileName);
-
-          // 稍作延迟以确保SillyTavern已完全加载新聊天的消息列表
-          setTimeout(async () => {
-           // C5 加载失败可见化：三层兼容读取全部失败的真损坏数据才会走到这里的
-           // catch——不再静默空表，弹可操作的错误提示。
-           try {
-             if (scheduledChatIdentifier_ACU && currentChatFileIdentifier_ACU !== scheduledChatIdentifier_ACU) {
-                 logDebug_ACU(`ACU: Skip delayed chat refresh because active chat already changed to "${currentChatFileIdentifier_ACU || '未知'}".`);
-                 return;
-             }
-
-             if (!hasActiveChatMessages_ACU()) {
-                 clearRuntimeForNoActiveChat_ACU(chatFileName);
-                 return;
-             }
-
-             // 先重新读取当前聊天持久化消息，再应用 chat_metadata 中的聊天模板快照。
-             // 此处是“持久化 → 派生缓存”的唯一重建入口，不能依赖切换前遗留的 TABLE_TEMPLATE/currentJsonTableData。
-             await loadAllChatMessages_ACU();
-             applyTemplateScopeForCurrentChat_ACU();
-
-            // 阶段 D：合并刷新（一轮 V2 replay，产出 canonical）与 provider hydrate 收敛。
-            // 先执行 merged refresh 拿到最终 canonical 数据，SQLite 模式下用 envelope
-            // hydrate provider（零 replay）；refresh 失败/degraded/身份漂移时回退冷
-            // reloadStorageProvider（保持既有两轮链路的完整语义与 fallback 状态机）。
-            // UI 通知由 refreshMergedDataAndNotifyWithUI_ACU 内部完成。
-            const refreshResult = await refreshMergedDataAndNotifyWithUI_ACU();
-            if (isSqliteMode()) {
-                const envelope = refreshResult
-                    && !refreshResult.degraded
-                    && refreshResult.mergedData
-                    ? createCanonicalSnapshotEnvelope_ACU({
-                        data: refreshResult.mergedData,
-                        chatIdentity: String(currentChatFileIdentifier_ACU || ''),
-                        isolationKey: getCurrentIsolationKey_ACU(),
-                        storageMode: 'sqlite',
-                        lifecycleEpoch: getRuntimeLifecycleEpoch_ACU(),
-                        source: 'merged_refresh',
-                    })
-                    : null;
-                if (envelope) {
-                    logDebug_ACU('[SQLite] CHAT_CHANGED: 用 canonical snapshot hydrate 内存数据库...');
-                    const hydrated = await hydrateStorageProviderFromSnapshot_ACU(envelope);
-                    if (hydrated.ok) {
-                        logDebug_ACU('[SQLite] CHAT_CHANGED: snapshot hydrate 完成');
-                    } else if (hydrated.failureCode === 'stale_load_discarded') {
-                        logDebug_ACU(`[SQLite] CHAT_CHANGED: snapshot 身份漂移（${hydrated.failureCode}），回退冷 reload。`);
-                        try {
-                            await reloadStorageProvider();
-                        } catch (e: any) {
-                            logError_ACU(`[SQLite] CHAT_CHANGED: 冷 reload 失败: ${e?.message}`);
-                        }
-                    } else {
-                        // provider_fallback（SQLite hydrate 失败已自动回退 native）或
-                        // provider_load_failed：保持 hydrate 返回的 fallback 状态机。
-                        logError_ACU(`[SQLite] CHAT_CHANGED: snapshot hydrate 失败: ${hydrated.failureCode || 'unknown'}${hydrated.error ? `: ${hydrated.error}` : ''}`);
-                    }
-                } else {
-                    logDebug_ACU('[SQLite] CHAT_CHANGED: merged refresh 未产出可用 canonical（degraded/空数据），回退冷 reload。');
-                    try {
-                        await reloadStorageProvider();
-                    } catch (e: any) {
-                        logError_ACU(`[SQLite] CHAT_CHANGED: 数据库重建失败: ${e?.message}`);
-                    }
-                }
-            }
-
-            // [交火向量索引] 聊天数据刷新完成后，预热当前聊天对应的外置分片缓存。
-            // 注意：必须放在 refreshMergedDataAndNotifyWithUI_ACU 之后，否则可能读取到旧聊天的 manifest。
-            const vectorCacheResult = await preloadSummaryVectorIndexCacheForCurrentChat_ACU();
-            logDebug_ACU(`[交火向量索引] CHAT_CHANGED 缓存预热结果：success=${vectorCacheResult.success}, skipped=${vectorCacheResult.skipped === true}, reason=${vectorCacheResult.reason || 'none'}, chunks=${vectorCacheResult.chunkCount}, indexId=${vectorCacheResult.indexId || 'none'}`);
-            if (shouldRebuildSummaryVectorIndexWithUI_ACU(vectorCacheResult.reason)) {
-                try {
-                    await rebuildCurrentSummaryVectorIndexWithUI_ACU();
-                } catch (rebuildError) {
-                    logWarn_ACU('[交火向量索引] 失效索引已删除，但普通重建路径执行失败:', rebuildError);
-                }
-            }
-            const shouldRestoreFlushQueue = !String(vectorCacheResult.reason || '').startsWith('external_files_missing_state_clear');
-            if (!shouldRestoreFlushQueue) {
-                logWarn_ACU(
-                    `[交火向量索引] CHAT_CHANGED 跳过 flush 队列恢复：missing-file 状态清理未完成或已进入重建恢复，reason=${vectorCacheResult.reason || 'unknown'}`,
-                );
-            }
-            if (shouldRestoreFlushQueue) try {
-                const restoredFlushCount = await restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU();
-                if (restoredFlushCount > 0) {
-                    logDebug_ACU(`[交火向量索引] CHAT_CHANGED 已恢复防抖归档队列：count=${restoredFlushCount}`);
-                }
-            } catch (restoreFlushError) {
-                logWarn_ACU('[交火向量索引] CHAT_CHANGED 恢复防抖归档队列失败:', restoreFlushError);
-            }
-            
-            logDebug_ACU('ACU: Chat data reload and UI refresh triggered after chat change (Delayed).');
-           } catch (chatChangedError) {
-             const message = chatChangedError instanceof Error ? chatChangedError.message : String(chatChangedError);
-             logError_ACU('ACU: CHAT_CHANGED 延迟刷新失败（已尝试全部兼容读取层）:', chatChangedError);
-             showUiSurfaceToast_ACU({
-               kind: 'error',
-               text: `表格数据加载失败：${message}`,
-               action: {
-                 label: '打开数据管理',
-                 onClick: async () => { await getUiSurface_ACU()?.openSettings?.(); },
-               },
-             });
-           }
-         }, 1200); // 增加延迟到1200ms，给SillyTavern更多的DOM渲染和上下文切换时间
-        });
+        // [L4] 与其余注册一致的 eventTypes 存在性守卫（eventSource/eventTypes 整体缺失已有外层守卫）。
+        // [H2/M3] 处理体抽至模块级 handleChatChangedEvent_ACU：整体 try/catch，延迟链走互斥守卫入口。
+        if (SillyTavern_API_ACU.eventTypes.CHAT_CHANGED) {
+          SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.CHAT_CHANGED, (chatFileName: string) => {
+            void handleChatChangedEvent_ACU(chatFileName);
+          });
+        }
 
         // [触发门控] 记录“用户真实发送”的消息ID，用于剧情推进触发判定
         if (SillyTavern_API_ACU.eventTypes.MESSAGE_SENT) {
@@ -373,44 +509,20 @@ export   function mainInitialize_ACU() {
         if (SillyTavern_API_ACU.eventTypes.GENERATION_STARTED) {
           SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.GENERATION_STARTED, (type: any, params: any, dryRun: any) => {
             try {
-              const context = recordGenerationContext_ACU(type, params, dryRun);
-              bindContinuationInternalAiGenerationStarted_ACU(context.seq);
-              // 宿主的 GENERATION_STARTED 通常在发送点击返回后的微任务里才送达，同步配对必然错过；
-              // 对非 quiet/非 dryRun/非自动触发的生成开放宽松认领（spv8.9.2 状态法），桥内部只在
-              // 存在未绑定序列号的等待轮时才会认领。
-              const allowLooseStart = !dryRun && !isQuietLikeGeneration_ACU(type, params) && !params?.automatic_trigger;
-              getContinuationHostGenerationBridge_ACU()?.onGenerationStarted(context.seq, allowLooseStart);
+              recordGenerationContext_ACU(type, params, dryRun);
             } catch (e) {}
           });
         }
         if (SillyTavern_API_ACU.eventTypes.GENERATION_STOPPED) {
           SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.GENERATION_STOPPED, () => {
             try {
-              const discarded = discardLatestGenerationContext_ACU();
-              // 被中止的生成不会再有 GENERATION_ENDED；通知桥把等待中的续写轮转为可重试，避免卡死。
-              void getContinuationHostGenerationBridge_ACU()?.onGenerationStopped(discarded?.seq);
+              discardLatestGenerationContext_ACU();
             } catch (e) {}
           });
         }
         if (SillyTavern_API_ACU.eventTypes.GENERATION_ENDED) {
             const onGenerationEnded = (message_id: any) => {
                 logDebug_ACU(`ACU GENERATION_ENDED event for message_id: ${message_id}`);
-                const generationContext = consumeGenerationContextForEnded_ACU();
-                const internalRequest = consumeContinuationInternalAiGenerationEnded_ACU(generationContext?.seq);
-                if (internalRequest) {
-                  logDebug_ACU(`ACU 忽略 continuation 内部 ${internalRequest.source} GENERATION_ENDED: ${internalRequest.requestId}`);
-                  return;
-                }
-                const continuationBridge = getContinuationHostGenerationBridge_ACU();
-                // 宽松认领只对"会产生正文楼层"的生成开放：quiet/dryRun/自动触发生成不许认领，
-                // 否则会误杀等待中的续写轮。判定复用自动填表的生成门控。
-                const allowLooseContinuationClaim = shouldProcessAutoTableUpdateForGenerationEnded_ACU(generationContext);
-                if (continuationBridge?.claimsGenerationEnded(generationContext?.seq, allowLooseContinuationClaim)) {
-                  // The bridge owns this exact host generation and performs its own
-                  // bounded materialization/identity checks before any cursor change.
-                  void continuationBridge.onGenerationEnded(message_id, generationContext?.seq, allowLooseContinuationClaim);
-                  return;
-                }
                 // [触发修复] 原子捕获完整意图快照：事件参数只作为锚点，不承诺是 AI 数组下标。
                 // makeFirst 可能早于宿主把本轮 AI 回复追加进 chat，因此必须记录捕获时边界，
                 // 由 resolveGeneratedAiMessageIndex_ACU 在防抖回调中按唯一候选规则解析。
@@ -430,7 +542,7 @@ export   function mainInitialize_ACU() {
                       generationSeq: generationGate_ACU.generationSeq > 0 ? generationGate_ACU.generationSeq : undefined,
                   }
                   : undefined;
-                if (shouldProcessAutoTableUpdateForGenerationEnded_ACU(generationContext)) {
+                if (shouldProcessAutoTableUpdateForGenerationEnded_ACU()) {
                   handleNewMessageDebounced_ACU('GENERATION_ENDED', autoFillIntent);
                 } else {
                   logDebug_ACU('ACU: Skip auto table update due to quiet/background generation.');
@@ -445,6 +557,9 @@ export   function mainInitialize_ACU() {
                     lastGenerationType: generationGate_ACU.lastGeneration?.type,
                   });
                 }
+
+                // [剧情推进] 保存Plot到消息和循环检测
+                // savePlotToLatestMessage_ACU(); // Moved to runOptimizationLogic_ACU
             };
             if (typeof SillyTavern_API_ACU.eventSource.makeFirst === 'function') {
               SillyTavern_API_ACU.eventSource.makeFirst(SillyTavern_API_ACU.eventTypes.GENERATION_ENDED, onGenerationEnded);
@@ -484,18 +599,6 @@ export   function mainInitialize_ACU() {
             if (!shouldProcessPlot) return;
             if (type === 'regenerate' || isProcessing_Plot_ACU) return;
 
-            // [去重] 若同一文本刚被 TavernHelper.generate 钩子处理过，跳过
-            try {
-              const lastMsgText = (SillyTavern_API_ACU.chat?.length && (SillyTavern_API_ACU.chat as any)[SillyTavern_API_ACU.chat.length - 1]?.is_user)
-                ? ((SillyTavern_API_ACU.chat as any)[SillyTavern_API_ACU.chat.length - 1].mes || '')
-                : '';
-              const boxText = String(getSendTextareaValue_ACU() || '');
-              if (shouldSkipPlotIntercept_ACU(String(lastMsgText)) || shouldSkipPlotIntercept_ACU(boxText)) {
-                logDebug_ACU('[剧情推进] Skip GENERATION_AFTER_COMMANDS due to recent TavernHelper.generate interception.');
-                return;
-              }
-            } catch (e) {}
-
             const chat = SillyTavern_API_ACU.chat;
             if (!chat || chat.length === 0) return;
 
@@ -534,7 +637,8 @@ export   function mainInitialize_ACU() {
                   // 写回 params 和消息对象
                   params.prompt = s1.finalMessage;
                   lastMessage.mes = s1.finalMessage;
-                  SillyTavern_API_ACU.eventSource.emit(SillyTavern_API_ACU.eventTypes.MESSAGE_UPDATED, lastMessageIndex);
+                  // [L6] 裸 emit 改走 chat-gateway 的统一出口（含 eventTypes 缺失降级与空值防御）
+                  emitMessageUpdated_ACU(lastMessageIndex);
                   if (getSendTextareaValue_ACU() === s1.originalMessage) setSendTextareaValue_ACU('');
                   break;
 
@@ -601,6 +705,7 @@ export   function mainInitialize_ACU() {
       // 这确保了无论脚本何时加载，都能正确初始化。
       // [修复] 添加轮询重试机制：如果 chatId 暂时不可用，持续轮询直到可用
       const initWithChatId = async (chatId: string) => {
+          lastDelayedRebuildRefreshOk_ACU = false; // [M3]
           logDebug_ACU(`ACU: Initializing with current chat on load: ${chatId}`);
           await resetScriptStateForNewChat_ACU(chatId);
           await loadPresetAndCleanCharacterData_ACU();
@@ -621,6 +726,7 @@ export   function mainInitialize_ACU() {
           // 老卡（有聊天历史）从聊天记录合并数据建表；新卡（无数据）由 refresh
           // 走 guide/模板基底，hydrate 失败或 degraded 时回退冷 reload。
           const refreshResult = await refreshMergedDataAndNotifyWithUI_ACU();
+          lastDelayedRebuildRefreshOk_ACU = true; // [M3]
           if (isSqliteMode()) {
               const envelope = refreshResult
                   && !refreshResult.degraded
@@ -660,29 +766,9 @@ export   function mainInitialize_ACU() {
           }
       };
 
-      // C5 加载失败可见化：初始加载与 CHAT_CHANGED 同级兜底，不允许静默空表。
-      const initWithChatIdSafely = async (chatId: string) => {
-          try {
-              await initWithChatId(chatId);
-          } catch (initError) {
-              const message = initError instanceof Error ? initError.message : String(initError);
-              logError_ACU('ACU: 初始加载表格数据失败（已尝试全部兼容读取层）:', initError);
-              showUiSurfaceToast_ACU({
-                  kind: 'error',
-                  text: `表格数据加载失败：${message}`,
-                  action: {
-                      label: '打开数据管理',
-                      onClick: async () => { await getUiSurface_ACU()?.openSettings?.(); },
-                  },
-              });
-          }
-      };
-
       if (SillyTavern_API_ACU && SillyTavern_API_ACU.chatId) {
-          // chatId 已可用，延迟初始化
-          setTimeout(async () => {
-              await initWithChatIdSafely(SillyTavern_API_ACU!.chatId);
-          }, 1000);
+          // chatId 已可用，延迟初始化。[H2/M4] 与 CHAT_CHANGED 延迟链共用同一互斥守卫入口
+          scheduleInitChainRun_ACU(1000, 'initWithChatId', () => initWithChatId(SillyTavern_API_ACU!.chatId));
       } else {
           // chatId 暂时不可用，启动轮询重试（每200ms检查一次，最多等15秒）
           logWarn_ACU('ACU: chatId not available on initial load. Starting polling...');
@@ -694,7 +780,7 @@ export   function mainInitialize_ACU() {
               if (chatId) {
                   clearInterval(pollTimer);
                   logDebug_ACU(`ACU: chatId became available after ${pollCount * 200}ms polling: ${chatId}`);
-                  await initWithChatIdSafely(chatId);
+                  scheduleInitChainRun_ACU(0, 'chatId-polling', () => initWithChatId(chatId));
               } else if (pollCount >= maxPolls) {
                   clearInterval(pollTimer);
                   logWarn_ACU(`ACU: chatId still not available after ${maxPolls * 200}ms polling. Waiting for CHAT_CHANGED event.`);
@@ -703,6 +789,6 @@ export   function mainInitialize_ACU() {
       }
     } else {
       logError_ACU('ACU: Failed to initialize. Core APIs not available on DOM ready.');
-      console.error('数据库自动更新脚本初始化失败：核心API加载失败。');
+      console.error('数据库初始化失败：核心API加载失败。');
     }
   }
