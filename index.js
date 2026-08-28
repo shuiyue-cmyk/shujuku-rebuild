@@ -37370,19 +37370,23 @@ function purgeTransitionDataReplacePayloads_ACU(frame, sheetKeys) {
  * payload，不再要求 cutoff artifact 仍存在，也不把删除操作变成新的准入门禁。
  */
 function purgeSpv79TransitionCheckpointSheetKeys_ACU(tagData, sheetKeys) {
-    const checkpoint = tagData?.spv79TransitionCheckpoint;
-    if (!isObjectRecord_ACU$4(checkpoint))
-        return false;
     let changed = false;
-    if (deleteSheetKeysFromRecord_ACU(checkpoint.data, sheetKeys))
-        changed = true;
-    if (deleteSheetKeysFromRecord_ACU(checkpoint.scheduleSummary, sheetKeys))
-        changed = true;
-    if (purgeTransitionDataReplacePayloads_ACU(tagData.storageFrame, sheetKeys))
-        changed = true;
-    if (changed && !hasSheetKeyInRecord_ACU(checkpoint.data)) {
-        delete tagData.spv79TransitionCheckpoint;
-        changed = true;
+    for (const slotKey of ['spv79TransitionCheckpoint', 'compatTransitionCheckpoint']) {
+        const checkpoint = tagData?.[slotKey];
+        if (!isObjectRecord_ACU$4(checkpoint))
+            continue;
+        let slotChanged = false;
+        if (deleteSheetKeysFromRecord_ACU(checkpoint.data, sheetKeys))
+            slotChanged = true;
+        if (deleteSheetKeysFromRecord_ACU(checkpoint.scheduleSummary, sheetKeys))
+            slotChanged = true;
+        if (purgeTransitionDataReplacePayloads_ACU(tagData.storageFrame, sheetKeys))
+            slotChanged = true;
+        if (slotChanged && !hasSheetKeyInRecord_ACU(checkpoint.data)) {
+            delete tagData[slotKey];
+        }
+        if (slotChanged)
+            changed = true;
     }
     return changed;
 }
@@ -41034,6 +41038,14 @@ function repairTableDataFromAudit_ACU(audit, _options = {}) {
     };
 }
 
+/**
+ * service/table/compat-transition-checkpoint.ts — 过渡回放根（spv79 专用 + 通用兼容）
+ *
+ * 由 spv79-transition-checkpoint.ts 迁入并泛化：
+ * - spv79TransitionCheckpoint：仅覆盖 duplicate_row_id 的旧版私有过渡根（读取兼容保留）。
+ * - compatTransitionCheckpoint：通用兼容过渡根，覆盖 spv7.9 语义全集的固化结果。
+ * 两者同时存在时取 cutoff 更新者作为回放基座（findLatestTransitionCheckpoint_ACU）。
+ */
 function hasValidScheduleSummary_ACU(value) {
     return value === undefined || (!!value && typeof value === 'object' && !Array.isArray(value)
         && Object.values(value).every(summary => !!summary
@@ -41045,14 +41057,10 @@ function hasValidScheduleSummary_ACU(value) {
                 || (Number.isFinite(summary.lastChangedAiFloor)
                     && Number(summary.lastChangedAiFloor) >= 0))));
 }
-function isCheckpoint_ACU(value) {
-    if (!value || typeof value !== 'object' || Array.isArray(value))
-        return false;
-    const checkpoint = value;
+function hasValidCutoffAndCommonFields_ACU(checkpoint) {
     const cutoff = checkpoint.cutoff;
     const canonicalData = validateCanonicalCheckpointData_ACU(checkpoint.data);
-    return checkpoint.kind === 'spv79_duplicate_row_id_transition'
-        && checkpoint.version === 1
+    return checkpoint.version === 1
         && Number.isFinite(checkpoint.createdAt) && Number(checkpoint.createdAt) >= 0
         && canonicalData.valid
         && !!cutoff
@@ -41060,6 +41068,22 @@ function isCheckpoint_ACU(value) {
         && Number.isInteger(cutoff.seq) && Number(cutoff.seq) >= 0
         && Number.isInteger(cutoff.operationIndex) && Number(cutoff.operationIndex) >= -1
         && hasValidScheduleSummary_ACU(checkpoint.scheduleSummary);
+}
+function isCheckpoint_ACU(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return false;
+    const checkpoint = value;
+    return checkpoint.kind === 'spv79_duplicate_row_id_transition'
+        && hasValidCutoffAndCommonFields_ACU(checkpoint);
+}
+function isCompatCheckpoint_ACU(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return false;
+    const checkpoint = value;
+    return checkpoint.kind === 'compat_replay_transition'
+        && Array.isArray(checkpoint.tolerances)
+        && checkpoint.tolerances.every(item => typeof item === 'string')
+        && hasValidCutoffAndCommonFields_ACU(checkpoint);
 }
 function findLatestSpv79TransitionCheckpoint_ACU(chat, isolationKey, maxMessageIndex) {
     if (!Array.isArray(chat))
@@ -41080,6 +41104,55 @@ function findLatestSpv79TransitionCheckpoint_ACU(chat, isolationKey, maxMessageI
             latest = { messageIndex, aiFloor, checkpoint };
     }
     return latest;
+}
+function findLatestCompatTransitionCheckpoint_ACU(chat, isolationKey, maxMessageIndex) {
+    if (!Array.isArray(chat))
+        return null;
+    const upperBound = maxMessageIndex === undefined
+        ? chat.length - 1
+        : Math.min(chat.length - 1, Math.max(-1, Math.floor(maxMessageIndex)));
+    let aiFloor = 0;
+    let latest = null;
+    for (let messageIndex = 0; messageIndex <= upperBound; messageIndex += 1) {
+        const message = chat[messageIndex];
+        if (!message || message.is_user)
+            continue;
+        aiFloor += 1;
+        const tagData = readIsolatedTagData_ACU(message, isolationKey);
+        const checkpoint = tagData?.compatTransitionCheckpoint;
+        if (isCompatCheckpoint_ACU(checkpoint))
+            latest = { messageIndex, aiFloor, checkpoint };
+    }
+    return latest;
+}
+/** cutoff 字典序比较：left 在 right 之前（更旧）返回负数，相等返回 0。 */
+function compareTransitionCutoffs_ACU(left, right) {
+    if (left.messageIndex !== right.messageIndex)
+        return left.messageIndex - right.messageIndex;
+    if (left.seq !== right.seq)
+        return left.seq - right.seq;
+    return left.operationIndex - right.operationIndex;
+}
+/**
+ * 统一过渡根查找：两代槽位同时存在时取 cutoff 更新者；cutoff 全等时取
+ * createdAt 更新者；再平局取 compat（更泛化的一代）。
+ */
+function findLatestTransitionCheckpoint_ACU(chat, isolationKey, maxMessageIndex) {
+    const spv79 = findLatestSpv79TransitionCheckpoint_ACU(chat, isolationKey, maxMessageIndex);
+    const compat = findLatestCompatTransitionCheckpoint_ACU(chat, isolationKey, maxMessageIndex);
+    if (!spv79 && !compat)
+        return null;
+    if (!compat)
+        return { ...spv79, source: 'spv79' };
+    if (!spv79)
+        return { ...compat, source: 'compat' };
+    const cutoffOrder = compareTransitionCutoffs_ACU(spv79.checkpoint.cutoff, compat.checkpoint.cutoff);
+    if (cutoffOrder !== 0) {
+        return cutoffOrder > 0 ? { ...spv79, source: 'spv79' } : { ...compat, source: 'compat' };
+    }
+    if (spv79.checkpoint.createdAt > compat.checkpoint.createdAt)
+        return { ...spv79, source: 'spv79' };
+    return { ...compat, source: 'compat' };
 }
 /**
  * Frame-level artifacts (full/per-sheet checkpoints and timelines) have no
@@ -41134,6 +41207,119 @@ function reindexSpv79TransitionState_ACU(source) {
         }
     });
     return data;
+}
+
+function isSheetLike_ACU(value) {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+function collectRowIds_ACU$1(content) {
+    const ids = new Set();
+    for (let index = 1; index < content.length; index += 1) {
+        const row = content[index];
+        if (!Array.isArray(row))
+            continue;
+        const id = String(row[0] ?? '').trim();
+        if (id)
+            ids.add(id);
+    }
+    return ids;
+}
+/**
+ * 从同 canonical 名的候选 key 中选出保留者（确定性）：
+ * 1. preferredKeys（当前模板/指导表侧 key）命中者优先；
+ * 2. 等于按显示名生成的新版稳定 key 候选者次之；
+ * 3. 否则按 key 字典序取首位。
+ */
+function pickWinnerKey_ACU(keys, canonicalName, sheets, preferredKeys) {
+    const sorted = [...keys].sort();
+    const preferred = sorted.find(key => preferredKeys.has(key));
+    if (preferred)
+        return preferred;
+    const stableCandidate = sorted.find(key => {
+        const sheet = sheets.get(key);
+        return buildStableSheetKeyCandidate_ACU(sheet?.name ?? canonicalName) === key;
+    });
+    if (stableCandidate)
+        return stableCandidate;
+    return sorted[0];
+}
+/**
+ * 归并 state 中 canonical 显示名相同但 sheetKey 不同的表。
+ *
+ * 原地修改 state（回放路径持有的都是内存副本），返回 remap 记录。
+ * 对没有冲突的数据是纯 no-op（changed=false），可在回放的任意状态
+ * 变化点重复调用。
+ */
+function mergeLegacySheetIdentities_ACU(state, preferredKeysArg) {
+    const remaps = [];
+    const preferredKeys = new Set(preferredKeysArg || []);
+    const sheets = new Map();
+    const groups = new Map();
+    for (const sheetKey of Object.keys(state)) {
+        if (!sheetKey.startsWith('sheet_'))
+            continue;
+        const sheet = state[sheetKey];
+        if (!isSheetLike_ACU(sheet))
+            continue;
+        const canonicalName = canonicalizeDisplayName_ACU(sheet.name);
+        if (!canonicalName)
+            continue;
+        sheets.set(sheetKey, sheet);
+        const group = groups.get(canonicalName) || [];
+        group.push(sheetKey);
+        groups.set(canonicalName, group);
+    }
+    for (const [canonicalName, keys] of groups) {
+        if (keys.length < 2)
+            continue;
+        const winnerKey = pickWinnerKey_ACU(keys, canonicalName, sheets, preferredKeys);
+        const winner = sheets.get(winnerKey);
+        for (const loserKey of keys) {
+            if (loserKey === winnerKey)
+                continue;
+            const loser = sheets.get(loserKey);
+            let overriddenRows = 0;
+            let appendedRows = 0;
+            const winnerHasContent = Array.isArray(winner.content) && winner.content.length > 0;
+            const loserHasContent = Array.isArray(loser.content) && loser.content.length > 0;
+            if (!winnerHasContent && loserHasContent) {
+                // winner 侧无可用 content（如 header 丢失）：整体采纳 loser 的 content。
+                winner.content = loser.content;
+                appendedRows = loser.content.length > 0 ? loser.content.length - 1 : 0;
+            }
+            else if (winnerHasContent && loserHasContent) {
+                const winnerIds = collectRowIds_ACU$1(winner.content);
+                for (let index = 1; index < loser.content.length; index += 1) {
+                    const row = loser.content[index];
+                    if (!Array.isArray(row))
+                        continue;
+                    const rowId = String(row[0] ?? '').trim();
+                    if (rowId && winnerIds.has(rowId)) {
+                        // 同 row_id：winner（当前/模板侧，写入更晚）胜出。
+                        overriddenRows += 1;
+                        continue;
+                    }
+                    winner.content.push(row);
+                    if (rowId)
+                        winnerIds.add(rowId);
+                    appendedRows += 1;
+                }
+            }
+            const winnerSeedRows = winner.seedRows;
+            const loserSeedRows = loser.seedRows;
+            if ((!Array.isArray(winnerSeedRows) || winnerSeedRows.length === 0)
+                && Array.isArray(loserSeedRows) && loserSeedRows.length > 0) {
+                winner.seedRows = loserSeedRows;
+            }
+            if (winner.sourceData === undefined && loser.sourceData !== undefined) {
+                winner.sourceData = loser.sourceData;
+            }
+            delete state[loserKey];
+            sheets.delete(loserKey);
+            remaps.push({ fromKey: loserKey, toKey: winnerKey, canonicalName, overriddenRows, appendedRows });
+        }
+    }
+    return { changed: remaps.length > 0, remaps };
 }
 
 class ReadWriteLock_ACU {
@@ -41572,6 +41758,35 @@ function buildInflightReplayKey_ACU(chat, isolationKey, options) {
 function hasStructuralReplayCompatibilityRepairs_ACU(repairs) {
     return Boolean(repairs?.some(repair => repair.severity !== 'provisional'));
 }
+function createLegacyToleranceReport_ACU() {
+    return {
+        outOfOrderSeqSorted: 0,
+        legacyMetaUpdateDdlApplied: 0,
+        unknownOperationKindsSkipped: [],
+        lenientRowUpserts: 0,
+        legacyDslRowIdAllocations: 0,
+        identityRemaps: [],
+    };
+}
+/** 报告 → 命中容忍项代码列表（去重），用于日志与 compat 过渡根的 tolerances 字段。 */
+function summarizeLegacyToleranceReport_ACU(report) {
+    const codes = [];
+    if (report.outOfOrderSeqSorted > 0)
+        codes.push(`out_of_order_seq:${report.outOfOrderSeqSorted}`);
+    if (report.legacyMetaUpdateDdlApplied > 0)
+        codes.push(`legacy_meta_update_ddl:${report.legacyMetaUpdateDdlApplied}`);
+    if (report.unknownOperationKindsSkipped.length > 0) {
+        codes.push(`unknown_operation_kind_skipped:${report.unknownOperationKindsSkipped.length}`);
+    }
+    if (report.lenientRowUpserts > 0)
+        codes.push(`lenient_row_upsert:${report.lenientRowUpserts}`);
+    if (report.legacyDslRowIdAllocations > 0)
+        codes.push(`legacy_dsl_row_id:${report.legacyDslRowIdAllocations}`);
+    if (report.identityRemaps.length > 0)
+        codes.push(`sheet_identity_remap:${report.identityRemaps.length}`);
+    codes.push('legacy_duplicate_row_ids');
+    return codes;
+}
 /**
  * 阶段 I：只读 replay 被 AbortSignal 取消时抛出的专用错误。
  *
@@ -41714,7 +41929,7 @@ function deriveSheetLifecycleFromFramesV2_ACU(chatArg, isolationKey, options = {
     const statusBySheetKey = {};
     let sawIndeterminateFrame = false;
     const lifecycleFullCheckpoint = [...frameRefs].reverse().find(ref => ref.frame.checkpoint?.kind === 'full');
-    const lifecycleTransitionCandidate = findLatestSpv79TransitionCheckpoint_ACU(chat, isolationKey, options.maxMessageIndex);
+    const lifecycleTransitionCandidate = findLatestTransitionCheckpoint_ACU(chat, isolationKey, options.maxMessageIndex);
     const transitionRef = lifecycleTransitionCandidate && (!lifecycleFullCheckpoint || lifecycleFullCheckpoint.messageIndex <= lifecycleTransitionCandidate.checkpoint.cutoff.messageIndex)
         ? lifecycleTransitionCandidate : null;
     // 私有过渡根的语义是硬截断，而不是又一种可与旧 full checkpoint 合并的补丁。
@@ -42056,15 +42271,9 @@ function replayCheckpointSchedule_ACU(checkpoint, fallbackAiFloor) {
     }
     replayEventForState_ACU(checkpoint.event, fallbackAiFloor);
 }
-/**
- * 以 next 整体替换 state 内容。
- * 契约：调用方传入的 next 必须是本地私有副本（deepClone / SQLite 导出 / repair 克隆），
- * 本函数直接采纳、不再深拷贝——此前 Object.assign(state, deepClone(next)) 的第二次克隆
- * 是每 patch 双份全量深拷贝中的纯冗余（已核实全部调用点的 next 均为私有新对象）。
- */
 function replaceState_ACU(state, next) {
     Object.keys(state).forEach(key => delete state[key]);
-    Object.assign(state, next);
+    Object.assign(state, deepClone_ACU$3(next));
 }
 /**
  * Repairs ordering metadata of a legacy timeline shard for this replay only.
@@ -42683,7 +42892,7 @@ function assertMetaUpdateDoesNotChangeDdl_ACU(patch) {
         throw new Error('[V2 Replay] legacy meta_update.sourceData.ddl 无法安全回放；该结构变更需要迁移为 sheet_schema_migrate 或 sheet_replace。');
     }
 }
-function applyTablePatchLegacyDuplicateRowIds_ACU(state, patch) {
+function applyTablePatchLegacyDuplicateRowIds_ACU(state, patch, toleranceReport) {
     if (patch.kind === 'sheet_replace') {
         state[patch.sheetKey] = deepClone_ACU$3(patch.sheet);
         return;
@@ -42707,6 +42916,8 @@ function applyTablePatchLegacyDuplicateRowIds_ACU(state, patch) {
             sheet.content[rowIndex] = row;
         else
             sheet.content.push(row);
+        if (toleranceReport)
+            toleranceReport.lenientRowUpserts += 1;
         return;
     }
     if (patch.kind === 'row_delete') {
@@ -42714,7 +42925,18 @@ function applyTablePatchLegacyDuplicateRowIds_ACU(state, patch) {
         sheet.content = sheet.content.filter((row, index) => index === 0 || !Array.isArray(row) || String(row[0] ?? '').trim() !== rowId);
         return;
     }
-    assertMetaUpdateDoesNotChangeDdl_ACU(patch);
+    if (toleranceReport) {
+        const sourceData = patch.meta?.sourceData;
+        if (sourceData && typeof sourceData === 'object' && !Array.isArray(sourceData)
+            && Object.prototype.hasOwnProperty.call(sourceData, 'ddl')) {
+            // spv7.9 语义：meta_update.sourceData（含 ddl）按 Object.assign 合并应用。
+            toleranceReport.legacyMetaUpdateDdlApplied += 1;
+            logWarn_ACU(`[V2 Compat Replay] legacy meta_update.sourceData.ddl 按 spv7.9 语义应用：sheetKey=${patch.sheetKey}。`);
+        }
+    }
+    else {
+        assertMetaUpdateDoesNotChangeDdl_ACU(patch);
+    }
     const meta = deepClone_ACU$3(patch.meta || {});
     if (meta.name !== undefined)
         sheet.name = meta.name;
@@ -42919,34 +43141,36 @@ function materializeSeedRowsForDslReplay_ACU(sheet) {
     // 与实时 DSL 路径保持同一身份契约：只有明确的 seedRows 新行能在物化时补 row_id。
     sheet.content = [headerRow, ...ensureStableRowIdsForSeedRows_ACU(seedRows)];
 }
-function applyTableEditDslOperationV2_ACU(state, text) {
+function applyTableEditDslOperationV2_ACU(state, text, toleranceReport) {
     const sheetKeys = resolveDslReplaySheetKeys_ACU(state);
     const commands = extractTableEditDslCommands_ACU(text);
     for (const commandLine of commands) {
         const match = commandLine.match(/^(insertRow|deleteRow|updateRow)\s*\((.*)\)$/);
-        if (!match) {
-            // 物理索引寻址系 DSL 既定语义，跳过行为不变；此处仅补留痕，避免静默丢失。
-            logWarn_ACU(`[V2 Replay] table_edit_dsl 命令无法识别，已跳过：${commandLine.slice(0, 120)}`);
+        if (!match)
             continue;
-        }
         const command = match[1];
         const args = parseDslArgs_ACU(match[2]);
-        if (!args) {
-            logWarn_ACU(`[V2 Replay] table_edit_dsl 参数解析失败，已跳过：${commandLine.slice(0, 120)}`);
+        if (!args)
             continue;
-        }
         const tableIndex = Number(args[0]);
         const sheetKey = sheetKeys[tableIndex];
         const sheet = sheetKey ? state[sheetKey] : null;
-        if (!sheet || !Array.isArray(sheet.content)) {
-            logWarn_ACU(`[V2 Replay] table_edit_dsl 物理表索引越界或表内容缺失，已跳过：tableIndex=${tableIndex}, sheetKey=${sheetKey || '未知'}, command=${command}, 原文=${commandLine.slice(0, 120)}`);
+        if (!sheet || !Array.isArray(sheet.content))
             continue;
-        }
         materializeSeedRowsForDslReplay_ACU(sheet);
         if (command === 'insertRow') {
             const data = args[1] || {};
             const headers = Array.isArray(sheet.content[0]) ? sheet.content[0].slice(1) : [];
-            const row = [allocateStableRowId_ACU(createStableRowIdReservation_ACU(sheet.content.slice(1)))];
+            let firstCell;
+            if (toleranceReport) {
+                // spv7.9 行号算法：row_id = 当前物理行数（含表头），与旧版可见状态一致。
+                firstCell = String(sheet.content.length);
+                toleranceReport.legacyDslRowIdAllocations += 1;
+            }
+            else {
+                firstCell = allocateStableRowId_ACU(createStableRowIdReservation_ACU(sheet.content.slice(1)));
+            }
+            const row = [firstCell];
             headers.forEach((_, colIndex) => row.push(data[colIndex] ?? data[String(colIndex)] ?? ''));
             sheet.content.push(row);
         }
@@ -42975,6 +43199,11 @@ async function applyTableOperationV2_ACU(state, operation, runtime, supplemental
 }
 async function applyTableOperationV2Core_ACU(state, operation, runtime, supplementalTemplate, options = {}, metrics, context) {
     if (!operation || typeof operation !== 'object' || typeof operation.kind !== 'string') {
+        if (options.legacyTolerances) {
+            options.legacyTolerances.unknownOperationKindsSkipped.push('missing_kind');
+            logWarn_ACU('[V2 Compat Replay] 跳过缺少有效 kind 的 operation（spv7.9 兼容语义）。');
+            return;
+        }
         throw new Error('[V2 Replay] operation 缺少有效 kind。');
     }
     const ownedRuntime = !runtime && (operation.kind === 'sql_batch' || operation.kind === 'sql_sheet_batch')
@@ -43042,14 +43271,14 @@ async function applyTableOperationV2Core_ACU(state, operation, runtime, suppleme
             return;
         }
         if (operation.kind === 'row_upsert' || operation.kind === 'row_delete' || operation.kind === 'meta_update') {
-            if (operation.kind === 'meta_update') {
+            if (operation.kind === 'meta_update' && !options.legacyTolerances) {
                 assertMetaUpdateDoesNotChangeDdl_ACU(operation);
             }
             if (effectiveRuntime)
                 await materializeSqlRuntimeToState_ACU(effectiveRuntime, state, { ...options, metrics });
             const candidate = buildReplayCandidate_ACU(effectiveRuntime, state, options);
             if (options.legacyDuplicateRowIds)
-                applyTablePatchLegacyDuplicateRowIds_ACU(candidate, operation);
+                applyTablePatchLegacyDuplicateRowIds_ACU(candidate, operation, options.legacyTolerances);
             else
                 applyTablePatchV2_ACU(candidate, operation);
             if (options.legacyDuplicateRowIds) {
@@ -43064,13 +43293,19 @@ async function applyTableOperationV2Core_ACU(state, operation, runtime, suppleme
             if (effectiveRuntime)
                 await materializeSqlRuntimeToState_ACU(effectiveRuntime, state, { ...options, metrics });
             const candidate = buildReplayCandidate_ACU(effectiveRuntime, state, options);
-            applyTableEditDslOperationV2_ACU(candidate, operation.text);
+            applyTableEditDslOperationV2_ACU(candidate, operation.text, options.legacyTolerances);
             if (options.legacyDuplicateRowIds) {
                 // SPv7.9 过渡回放逐项保留旧状态，不做历史 normalize。
             }
             else
                 normalizeHistoricalReplayState_ACU(candidate, 'table_edit_dsl');
             replaceState_ACU(state, candidate);
+            return;
+        }
+        if (options.legacyTolerances) {
+            // spv7.9 读取器行为：未知 operation kind 跳过并告警，不使整条历史不可读。
+            options.legacyTolerances.unknownOperationKindsSkipped.push(String(operation.kind));
+            logWarn_ACU(`[V2 Compat Replay] 跳过未知 operation kind: ${String(operation.kind)}（spv7.9 兼容语义）。`);
             return;
         }
         throw new Error(`[V2 Replay] 不支持的 operation kind: ${operation.kind}`);
@@ -43087,7 +43322,7 @@ function collectScheduleSummaryFromFramesV2_ACU(chatArg, isolationKey, options =
     const frameRefs = getV2FrameRefs_ACU(chat, isolationKey)
         .filter(ref => options.maxMessageIndex === undefined || ref.messageIndex <= options.maxMessageIndex);
     const checkpointRef = [...frameRefs].reverse().find(ref => ref.frame.checkpoint?.kind === 'full');
-    const transitionCandidate = findLatestSpv79TransitionCheckpoint_ACU(chat, isolationKey, options.maxMessageIndex);
+    const transitionCandidate = findLatestTransitionCheckpoint_ACU(chat, isolationKey, options.maxMessageIndex);
     const transitionRef = transitionCandidate && (!checkpointRef || checkpointRef.messageIndex <= transitionCandidate.checkpoint.cutoff.messageIndex)
         ? transitionCandidate : null;
     const summary = transitionRef
@@ -43141,7 +43376,7 @@ async function loadTableStateFromFramesV2DetailedCore_ACU(chatArg, isolationKeyA
     const frameRefs = getV2FrameRefs_ACU(chat, isolationKey)
         .filter(ref => options.maxMessageIndex === undefined || ref.messageIndex <= options.maxMessageIndex);
     const checkpointRef = [...frameRefs].reverse().find(ref => ref.frame.checkpoint?.kind === 'full');
-    const transitionCandidate = findLatestSpv79TransitionCheckpoint_ACU(chat, isolationKey, options.maxMessageIndex);
+    const transitionCandidate = findLatestTransitionCheckpoint_ACU(chat, isolationKey, options.maxMessageIndex);
     const transitionRef = transitionCandidate && (!checkpointRef || checkpointRef.messageIndex <= transitionCandidate.checkpoint.cutoff.messageIndex)
         ? transitionCandidate : null;
     const hasUnanchoredArtifacts = hasUnanchoredReplayArtifacts_ACU(frameRefs);
@@ -43151,7 +43386,7 @@ async function loadTableStateFromFramesV2DetailedCore_ACU(chatArg, isolationKeyA
     let replacementAnchorCursor = null;
     if (transitionRef) {
         state = cloneSpv79TransitionData_ACU(transitionRef.checkpoint);
-        baseKind = 'spv79_transition_checkpoint';
+        baseKind = transitionRef.source === 'compat' ? 'compat_transition_checkpoint' : 'spv79_transition_checkpoint';
         replayStartMessageIndex = transitionRef.messageIndex;
     }
     else if (!checkpointRef?.frame.checkpoint) {
@@ -43441,6 +43676,81 @@ async function loadTableStateFromFramesV2DetailedCore_ACU(chatArg, isolationKeyA
         disposeSqlReplayRuntime_ACU(runtime);
     }
 }
+/** Tier-1 兼容结果的 schedule 尽力应用：失败只告警，不阻塞数据可用。 */
+function applyScheduleSummaryBestEffort_ACU(chat, isolationKey, maxMessageIndex) {
+    try {
+        const summary = collectScheduleSummaryFromFramesV2_ACU(chat, isolationKey, { maxMessageIndex });
+        for (const [sheetKey, state] of Object.entries(summary)) {
+            if (state.lastFilledAiFloor === undefined)
+                continue;
+            if (!independentTableStates_ACU[sheetKey])
+                independentTableStates_ACU[sheetKey] = {};
+            independentTableStates_ACU[sheetKey].lastUpdatedAiFloor = state.lastFilledAiFloor;
+        }
+    }
+    catch (error) {
+        logWarn_ACU(`[V2 Compat Replay] 兼容读取后 schedule 汇总应用失败（不影响表格数据可用）：`
+            + `${error instanceof Error ? error.message : String(error)}`);
+    }
+}
+/**
+ * C3 自动降级链：严格回放抛出任何回放语义错误（用户取消除外）时，运行
+ * Tier-1 兼容回放。成功 → 本次调用直接返回兼容结果（数据立即可用），
+ * 宿主当前聊天则异步触发过渡根固化；Tier-1 也失败 → 原错误继续抛出
+ * （进入加载失败可见化流程）。
+ */
+async function recoverWithLegacyTolerantReplay_ACU(chat, isolationKey, options, originalError) {
+    if (originalError instanceof V2ReplayAbortedError_ACU)
+        throw originalError;
+    // compatibilityMode:'disabled' 的调用方全部是写路径校验探针（persist 候选校验、
+    // 收敛/边界升级、恢复候选、追平锚点预检等），它们依赖"严格回放失败=候选不可
+    // 提交"的失败信号。Tier-1 宽容回放也是一种兼容修复，纳入同一开关豁免，
+    // 保证写门闸的失败信号不被降级链吞掉（读永远宽容，写才严格）。
+    if (options.compatibilityMode === 'disabled')
+        throw originalError;
+    const originalMessage = originalError instanceof Error ? originalError.message : String(originalError);
+    let tolerant;
+    try {
+        tolerant = await replayWithLegacyTolerances_ACU(chat, isolationKey, {
+            maxMessageIndex: options.maxMessageIndex,
+        });
+    }
+    catch (tolerantError) {
+        logError_ACU(`[V2 Compat Replay] Tier-1 兼容回放也失败，保留原始错误。兼容回放错误：`
+            + `${tolerantError instanceof Error ? tolerantError.message : String(tolerantError)}`);
+        throw originalError;
+    }
+    const toleranceSummary = summarizeLegacyToleranceReport_ACU(tolerant.toleranceReport);
+    logWarn_ACU(`[V2 Compat Replay] 严格回放失败，已按 spv7.9 兼容语义读出可用数据。`
+        + `原错误=${originalMessage}；容忍项=${toleranceSummary.join(', ')}。`);
+    if (options.updateRuntimeState !== false) {
+        applyScheduleSummaryBestEffort_ACU(chat, isolationKey, options.maxMessageIndex);
+    }
+    // 只有宿主当前聊天允许后台固化（候选回放、bounded 验证、导入诊断保持纯函数性质）。
+    if (chat === getChatArray_ACU()) {
+        scheduleCompatTransitionFixation_ACU(chat, isolationKey);
+    }
+    // 返回前尽力把行身份归一为新版契约（与固化根使用同一 reindex 纯函数）：
+    // 成功则首次加载与固化后的后续加载看到完全一致的 row_id；失败则原样返回
+    // 兼容结果（仍可用，只是该历史无法固化）。
+    let resultData = tolerant.data;
+    try {
+        const reindexed = reindexSpv79TransitionState_ACU(tolerant.data);
+        const normalization = normalizeCanonicalTableRows_ACU(reindexed);
+        if (normalization.errors.length === 0 && normalization.removedRows.length === 0) {
+            resultData = reindexed;
+        }
+    }
+    catch (reindexError) {
+        logWarn_ACU(`[V2 Compat Replay] 兼容结果行身份重编号失败，按原始兼容结果返回：`
+            + `${reindexError instanceof Error ? reindexError.message : String(reindexError)}`);
+    }
+    return {
+        data: resultData,
+        baseKind: 'compat_tolerant_replay',
+        metrics: createReplayMetrics_ACU(),
+    };
+}
 async function loadTableStateFromFramesV2Detailed_ACU(chatArg, isolationKeyArg, options = {}) {
     const chat = chatArg || getChatArray_ACU();
     const isolationKey = isolationKeyArg ?? getCurrentIsolationKey_ACU();
@@ -43528,10 +43838,6 @@ async function loadTableStateFromFramesV2Detailed_ACU(chatArg, isolationKeyArg, 
             }
         }
     }
-    // 候选回放、bounded 验证和导入诊断必须保持纯函数性质；只有宿主当前聊天的
-    // 首次真实加载才允许把 duplicate_row_id 升级为持久化过渡根。
-    const mayCreateTransition = chat === getChatArray_ACU()
-        && findLatestSpv79TransitionCheckpoint_ACU(chat, isolationKey) === null;
     const performanceSpan = startRuntimePerformanceSpan_ACU('v2-replay', {
         runId: options.performanceRunId,
         parentSpanId: options.performanceParentSpanId,
@@ -43544,7 +43850,7 @@ async function loadTableStateFromFramesV2Detailed_ACU(chatArg, isolationKeyArg, 
     try {
         // 阶段 G2：in-flight 启动方。若 key 存在（且此前未被并发方占用），把 core 调用
         // 包成共享 promise 存入 Map，让同 key 的并发调用等待同一结果；settle 后清理。
-        // 共享 promise 必须包含 duplicate_row_id 恢复逻辑（等待方不应拿到原始失败），
+        // 共享 promise 必须包含 Tier-1 兼容恢复逻辑（等待方不应拿到原始失败），
         // 因此把「core 调用 + 恢复」整体包入，任何路径 settle 后删除。
         const inflightStarted = inflightKey
             ? (() => {
@@ -43553,12 +43859,7 @@ async function loadTableStateFromFramesV2Detailed_ACU(chatArg, isolationKeyArg, 
                         return await loadTableStateFromFramesV2DetailedCore_ACU(chatArg, isolationKeyArg, options);
                     }
                     catch (error) {
-                        const message = error instanceof Error ? error.message : String(error);
-                        if (mayCreateTransition && message.includes('duplicate_row_id')) {
-                            await createSpv79TransitionCheckpointForDuplicateRowId_ACU(chat, isolationKey);
-                            return await loadTableStateFromFramesV2DetailedCore_ACU(chat, isolationKey, options);
-                        }
-                        throw error;
+                        return await recoverWithLegacyTolerantReplay_ACU(chat, isolationKey, options, error);
                     }
                     finally {
                         inflightV2Replays_ACU.delete(inflightKey);
@@ -43622,19 +43923,17 @@ async function loadTableStateFromFramesV2Detailed_ACU(chatArg, isolationKeyArg, 
         return result;
     }
     catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        // duplicate_row_id 恢复已在共享 promise 内处理（启动方与等待方一致拿到恢复结果）。
+        // Tier-1 兼容恢复已在共享 promise 内处理（启动方与等待方一致拿到恢复结果）。
         // 非 in-flight 路径（inflightKey 为 null）的恢复仍由外层处理：保持与既有语义一致。
-        if (!inflightKey && mayCreateTransition && message.includes('duplicate_row_id')) {
+        if (!inflightKey) {
             try {
-                await createSpv79TransitionCheckpointForDuplicateRowId_ACU(chat, isolationKey);
-                const recovered = await loadTableStateFromFramesV2DetailedCore_ACU(chat, isolationKey, options);
-                performanceSpan.end({ success: recovered !== null, baseKind: recovered?.baseKind || 'none', recoveredFromDuplicateRowId: true });
+                const recovered = await recoverWithLegacyTolerantReplay_ACU(chat, isolationKey, options, error);
+                performanceSpan.end({ success: true, baseKind: recovered.baseKind, recoveredWithLegacyTolerances: true });
                 return recovered;
             }
-            catch (transitionError) {
-                performanceSpan.end({ success: false, recoveredFromDuplicateRowId: false });
-                throw transitionError;
+            catch (finalError) {
+                performanceSpan.end({ success: false, recoveredWithLegacyTolerances: false });
+                throw finalError;
             }
         }
         performanceSpan.end({ success: false });
@@ -43744,12 +44043,42 @@ async function loadTableStateFromFramesV2_ACU(chatArg, isolationKeyArg, options 
     return result?.data ?? null;
 }
 /**
- * SPv7.9 的一次性恢复回放。它只在严格 replay 明确报出 duplicate_row_id 后由
- * 过渡写入服务调用；不会修改 storageFrame，也不会成为新写入路径。
+ * Tier-1 兼容回放的帧内日志排序：spv7.9 按 seq 排序回放（稳定排序，
+ * seq 相等/缺失时保持物理顺序），与严格路径的"物理顺序重建临时 seq"不同。
+ * 仅当全部 entry 都带整数 seq 时按 seq 排序；否则退回严格路径的物理顺序修复。
  */
-async function replaySpv79DuplicateRowIdHistory_ACU(chatArg, isolationKey) {
+function getLegacyTolerantOrderedEntries_ACU(frame, report) {
+    const rawEntries = frame.logEntries;
+    if (rawEntries === undefined)
+        return [];
+    const list = Array.isArray(rawEntries)
+        ? rawEntries
+        : (rawEntries && typeof rawEntries === 'object' ? [rawEntries] : null);
+    if (!list)
+        throw new Error('logEntries 必须是数组或旧版单条日志对象');
+    const allHaveSeq = list.every(entry => Number.isInteger(entry?.seq) && entry.seq >= 0);
+    if (!allHaveSeq)
+        return getReplayOrderedFrameLogEntries_ACU(frame, { warnOnRepair: false });
+    const sorted = [...list].sort((left, right) => left.seq - right.seq);
+    if (sorted.some((entry, index) => entry !== list[index])) {
+        report.outOfOrderSeqSorted += 1;
+        logWarn_ACU(`[V2 Compat Replay] 帧内 logEntries seq 乱序，已按 spv7.9 语义排序回放：entries=${list.length}。`);
+    }
+    return sorted;
+}
+/**
+ * Tier-1 通用宽容回放器：以 spv7.9 读取器语义全集重建可见状态。
+ *
+ * 容忍集合一次性全开（行为 = spv7.9 读取器）：重复 row_id、乱序/重复 seq、
+ * legacy meta_update（含 sourceData.ddl）、未知 operation kind 跳过、宽松
+ * row_upsert、旧 DSL 行号算法、两代 sheetKey 身份归并。不修改 storageFrame，
+ * 也不会成为新写入路径；返回结果供直接使用与（可选的）过渡根固化。
+ */
+async function replayWithLegacyTolerances_ACU(chatArg, isolationKey, options = {}) {
     const chat = Array.isArray(chatArg) ? chatArg : [];
-    const frameRefs = getV2FrameRefs_ACU(chat, isolationKey);
+    const toleranceReport = createLegacyToleranceReport_ACU();
+    const frameRefs = getV2FrameRefs_ACU(chat, isolationKey)
+        .filter(ref => options.maxMessageIndex === undefined || ref.messageIndex <= options.maxMessageIndex);
     if (frameRefs.length === 0)
         throw new Error('SPv7.9 兼容回放缺少 V2 storage frame。');
     const baseIndex = findLastFullCheckpointFrameIndex_ACU(frameRefs);
@@ -43759,7 +44088,37 @@ async function replaySpv79DuplicateRowIdHistory_ACU(chatArg, isolationKey) {
     const checkpoint = baseRef.frame.checkpoint;
     if (!checkpoint || checkpoint.kind !== 'full')
         throw new Error('SPv7.9 兼容回放基底不是有效 full checkpoint。');
+    // 基底结构校验：data 必须是承载表数据的 plain object（含 sheet_* 或 mate）。
+    // 垃圾基底（字符串/数组/空对象等）若不拦截，后续 merge/normalize 对非对象
+    // state 全部静默 no-op，会让 Tier-1"成功"返回不可用状态，绕过上游阻塞防线。
+    const baseData = checkpoint.data;
+    const baseDataIsPlainObject = !!baseData && typeof baseData === 'object' && !Array.isArray(baseData);
+    const baseDataHasTableShape = baseDataIsPlainObject
+        && Object.keys(baseData).some(key => key.startsWith('sheet_') || key === 'mate');
+    if (!baseDataHasTableShape)
+        throw new Error('SPv7.9 兼容回放基底 full checkpoint data 结构非法（非表数据对象）。');
+    // 身份归并 hint：当前模板/指导表侧的 key 优先保留。
+    let headerOnlyTemplate = null;
+    try {
+        headerOnlyTemplate = resolveHeaderOnlyTemplateSnapshot_ACU(chat, isolationKey);
+    }
+    catch (_) {
+        headerOnlyTemplate = null;
+    }
+    const preferredKeys = headerOnlyTemplate
+        ? Object.keys(headerOnlyTemplate).filter(key => key.startsWith('sheet_'))
+        : null;
     const state = deepClone_ACU$3(checkpoint.data);
+    const mergeIdentities = (stage) => {
+        const merge = mergeLegacySheetIdentities_ACU(state, preferredKeys);
+        if (merge.remaps.length === 0)
+            return;
+        toleranceReport.identityRemaps.push(...merge.remaps);
+        logWarn_ACU(`[V2 Compat Replay] 两代 sheetKey 身份归并（${stage}）：`
+            + merge.remaps.map(remap => `${remap.fromKey}→${remap.toKey}（覆盖 ${remap.overriddenRows} 行、并入 ${remap.appendedRows} 行）`).join('；')
+            + '。原 storage frame 未修改。');
+    };
+    mergeIdentities('base');
     let cutoff = { messageIndex: baseRef.messageIndex, seq: 0, operationIndex: -1 };
     for (let frameIndex = baseIndex; frameIndex < frameRefs.length; frameIndex += 1) {
         const ref = frameRefs[frameIndex];
@@ -43768,7 +44127,8 @@ async function replaySpv79DuplicateRowIdHistory_ACU(chatArg, isolationKey) {
         for (const sheetCheckpoint of checkpoints.filter(item => item.timeline === undefined)) {
             state[sheetCheckpoint.sheetKey] = deepClone_ACU$3(sheetCheckpoint.data);
         }
-        const entries = getReplayOrderedFrameLogEntries_ACU(ref.frame);
+        mergeIdentities(`sheet checkpoints@${ref.messageIndex}`);
+        const entries = getLegacyTolerantOrderedEntries_ACU(ref.frame, toleranceReport);
         const pendingTimelineCheckpoints = checkpoints.filter(item => item.timeline !== undefined);
         const applyDueTimelineCheckpoints = (nextSeq) => {
             const due = pendingTimelineCheckpoints.filter(item => item.timeline.afterSeq < nextSeq);
@@ -43779,18 +44139,25 @@ async function replaySpv79DuplicateRowIdHistory_ACU(chatArg, isolationKey) {
                     state[sheetCheckpoint.sheetKey] = deepClone_ACU$3(sheetCheckpoint.data);
                 pendingTimelineCheckpoints.splice(pendingTimelineCheckpoints.indexOf(sheetCheckpoint), 1);
             }
+            if (due.length > 0)
+                mergeIdentities(`timeline checkpoints@${nextSeq}`);
         };
         for (const entry of entries) {
             applyDueTimelineCheckpoints(entry.seq);
             if (Array.isArray(entry.operations) && entry.operations.length > 0) {
                 for (const [operationIndex, operation] of entry.operations.entries()) {
-                    await applyTableOperationV2Core_ACU(state, operation, undefined, undefined, { legacyDuplicateRowIds: true });
+                    // SQL 段物化前必须先归并身份，否则物理表名解析会因两代 key 同名冲突抛错。
+                    mergeIdentities(`operation@${ref.messageIndex}/${entry.seq}/${operationIndex}`);
+                    await applyTableOperationV2Core_ACU(state, operation, undefined, headerOnlyTemplate ?? undefined, {
+                        legacyDuplicateRowIds: true,
+                        legacyTolerances: toleranceReport,
+                    });
                     cutoff = { messageIndex: ref.messageIndex, seq: entry.seq, operationIndex };
                 }
             }
             else {
                 for (const [operationIndex, patch] of (entry.patches || []).entries()) {
-                    applyTablePatchLegacyDuplicateRowIds_ACU(state, patch);
+                    applyTablePatchLegacyDuplicateRowIds_ACU(state, patch, toleranceReport);
                     cutoff = { messageIndex: ref.messageIndex, seq: entry.seq, operationIndex };
                 }
                 if (!entry.patches?.length)
@@ -43799,11 +44166,25 @@ async function replaySpv79DuplicateRowIdHistory_ACU(chatArg, isolationKey) {
         }
         applyDueTimelineCheckpoints(Number.POSITIVE_INFINITY);
     }
-    return { data: state, cutoff };
+    mergeIdentities('final');
+    return { data: state, cutoff, toleranceReport };
 }
-async function createSpv79TransitionCheckpointForDuplicateRowId_ACU(chat, isolationKey) {
-    if (findLatestSpv79TransitionCheckpoint_ACU(chat, isolationKey))
-        return;
+/**
+ * SPv7.9 的一次性恢复回放（兼容导出）。现在是 Tier-1 通用宽容回放器的
+ * 薄包装：行为是其超集，仅丢弃 toleranceReport。
+ */
+async function replaySpv79DuplicateRowIdHistory_ACU(chatArg, isolationKey) {
+    const result = await replayWithLegacyTolerances_ACU(chatArg, isolationKey);
+    return { data: result.data, cutoff: result.cutoff };
+}
+/**
+ * 把 Tier-1 兼容回放结果固化为通用兼容过渡根 compatTransitionCheckpoint。
+ *
+ * 固化是尽力而为的后台优化：canonical 校验不过、缺少可写楼层、已有更新
+ * 过渡根时**放弃固化并返回 false，不抛错**——本次兼容读取结果的可用性
+ * 与固化是否成功完全解耦。固化成功后，后续加载从该根起算走严格快路径。
+ */
+async function createCompatTransitionCheckpointFromTolerantReplay_ACU(chat, isolationKey) {
     const targetMessageIndex = (() => {
         for (let index = chat.length - 1; index >= 0; index -= 1) {
             if (chat[index] && !chat[index].is_user)
@@ -43811,18 +44192,35 @@ async function createSpv79TransitionCheckpointForDuplicateRowId_ACU(chat, isolat
         }
         return -1;
     })();
-    if (targetMessageIndex < 0)
-        throw new Error('SPv7.9 过渡 checkpoint 缺少可写入的 AI 楼层。');
-    const legacyReplay = await replaySpv79DuplicateRowIdHistory_ACU(chat, isolationKey);
-    const data = reindexSpv79TransitionState_ACU(legacyReplay.data);
+    if (targetMessageIndex < 0) {
+        logWarn_ACU('[V2 Compat Replay] 放弃固化兼容过渡根：缺少可写入的 AI 楼层。数据仍按兼容读取结果可用。');
+        return false;
+    }
+    const tolerant = await replayWithLegacyTolerances_ACU(chat, isolationKey);
+    const existing = findLatestTransitionCheckpoint_ACU(chat, isolationKey);
+    if (existing && compareTransitionCutoffs_ACU(existing.checkpoint.cutoff, tolerant.cutoff) >= 0) {
+        // 已有过渡根覆盖了同样或更新的历史，无需重复固化。
+        return false;
+    }
+    const data = reindexSpv79TransitionState_ACU(tolerant.data);
     const normalization = normalizeCanonicalTableRows_ACU(data);
     const issues = [...normalization.errors, ...normalization.removedRows];
     if (issues.length > 0) {
-        throw new Error(`[V2 Replay] SPv7.9 过渡重编号结果不满足 canonical 行身份契约：${formatCanonicalRowIssues_ACU(issues)}`);
+        logWarn_ACU(`[V2 Compat Replay] 放弃固化兼容过渡根：重编号结果不满足 canonical 行身份契约：`
+            + `${formatCanonicalRowIssues_ACU(issues)}。数据仍按兼容读取结果可用，下次加载将继续走兼容回放。`);
+        return false;
     }
+    let scheduleSummary;
+    try {
+        scheduleSummary = collectScheduleSummaryFromFramesV2_ACU(chat, isolationKey);
+    }
+    catch (_) {
+        scheduleSummary = undefined;
+    }
+    const tolerances = summarizeLegacyToleranceReport_ACU(tolerant.toleranceReport);
     await runTableWriteTransaction_ACU({
         source: 'system_cleanup',
-        reason: 'createSpv79TransitionCheckpointForDuplicateRowId',
+        reason: 'createCompatTransitionCheckpointFromTolerantReplay',
         isolationKey,
         writeSet: [{ kind: 'all' }],
         maintenanceMode: 'exclusive',
@@ -43830,8 +44228,9 @@ async function createSpv79TransitionCheckpointForDuplicateRowId_ACU(chat, isolat
     }, async (ctx) => ctx.runCommit(async () => {
         const target = chat[targetMessageIndex];
         if (!target || target.is_user)
-            throw new Error('SPv7.9 过渡 checkpoint 的目标 AI 楼层在提交前已变化。');
-        if (findLatestSpv79TransitionCheckpoint_ACU(chat, isolationKey))
+            throw new Error('兼容过渡 checkpoint 的目标 AI 楼层在提交前已变化。');
+        const latest = findLatestTransitionCheckpoint_ACU(chat, isolationKey);
+        if (latest && compareTransitionCutoffs_ACU(latest.checkpoint.cutoff, tolerant.cutoff) >= 0)
             return;
         const hadIsolatedData = Object.prototype.hasOwnProperty.call(target, 'TavernDB_ACU_IsolatedData');
         const previousIsolatedData = target.TavernDB_ACU_IsolatedData;
@@ -43844,13 +44243,14 @@ async function createSpv79TransitionCheckpointForDuplicateRowId_ACU(chat, isolat
             const tagData = isolatedData[isolationKey] && typeof isolatedData[isolationKey] === 'object' && !Array.isArray(isolatedData[isolationKey])
                 ? isolatedData[isolationKey]
                 : {};
-            tagData.spv79TransitionCheckpoint = {
+            tagData.compatTransitionCheckpoint = {
                 version: 1,
-                kind: 'spv79_duplicate_row_id_transition',
+                kind: 'compat_replay_transition',
                 createdAt: Date.now(),
                 data: deepClone_ACU$3(data),
-                cutoff: legacyReplay.cutoff,
-                scheduleSummary: collectScheduleSummaryFromFramesV2_ACU(chat, isolationKey),
+                cutoff: tolerant.cutoff,
+                ...(scheduleSummary === undefined ? {} : { scheduleSummary }),
+                tolerances,
             };
             isolatedData[isolationKey] = tagData;
             target.TavernDB_ACU_IsolatedData = isolatedData;
@@ -43872,6 +44272,33 @@ async function createSpv79TransitionCheckpointForDuplicateRowId_ACU(chat, isolat
             throw error;
         }
     }));
+    logWarn_ACU(`[V2 Compat Replay] 已把兼容读取结果固化为过渡根：cutoff=${JSON.stringify(tolerant.cutoff)}, tolerances=${tolerances.join(', ')}。后续加载将走严格快路径。`);
+    return true;
+}
+/** 后台固化的 in-flight 去重（isolationKey 维度）。固化失败只告警，不影响已返回的数据。 */
+const pendingCompatTransitionFixations_ACU = new Map();
+function scheduleCompatTransitionFixation_ACU(chat, isolationKey) {
+    if (pendingCompatTransitionFixations_ACU.has(isolationKey))
+        return;
+    const task = (async () => {
+        try {
+            await createCompatTransitionCheckpointFromTolerantReplay_ACU(chat, isolationKey);
+        }
+        catch (error) {
+            logWarn_ACU(`[V2 Compat Replay] 兼容过渡根固化失败（不影响当前数据使用，下次加载重试）：`
+                + `${error instanceof Error ? error.message : String(error)}`);
+        }
+        finally {
+            pendingCompatTransitionFixations_ACU.delete(isolationKey);
+        }
+    })();
+    pendingCompatTransitionFixations_ACU.set(isolationKey, task);
+}
+/** 测试辅助：等待所有后台固化任务完成（生产代码不调用）。 */
+async function flushPendingCompatTransitionFixations_ACU() {
+    while (pendingCompatTransitionFixations_ACU.size > 0) {
+        await Promise.all([...pendingCompatTransitionFixations_ACU.values()]);
+    }
 }
 async function validateCurrentChatTableRecovery_ACU(options = {}) {
     const chat = options.chat || getChatArray_ACU();
@@ -44975,7 +45402,7 @@ function hasAnyV2Checkpoint_ACU(chat, isolationKey, maxMessageIndex = chat.lengt
         const tagData = readIsolatedTagData_ACU(message, isolationKey);
         return isV2TagData_ACU(tagData) && tagData.storageFrame.checkpoint?.kind === 'full';
     });
-    return hasFullCheckpoint || findLatestSpv79TransitionCheckpoint_ACU(chat, isolationKey, maxMessageIndex) !== null;
+    return hasFullCheckpoint || findLatestTransitionCheckpoint_ACU(chat, isolationKey, maxMessageIndex) !== null;
 }
 function hasAnyV2Frame_ACU(chat, isolationKey, maxMessageIndex = chat.length - 1) {
     return chat.slice(0, Math.max(0, maxMessageIndex + 1)).some(message => {
@@ -50396,13 +50823,21 @@ async function collectMixedStorageEvidence_ACU(options) {
     if (anchor) {
         try {
             const detailed = await loadTableStateFromFramesV2Detailed_ACU(chat, options.isolationKey, { updateRuntimeState: false });
-            replay = detailed ? {
-                status: 'success',
-                fingerprint: getTableDataFingerprint_ACU(detailed.data),
-                data: clone_ACU$6(detailed.data),
-                ...(detailed.requiresCheckpointConvergence ? { requiresCheckpointConvergence: true } : {}),
-                ...(detailed.compatibilityRepairs?.length ? { compatibilityRepairs: clone_ACU$6(detailed.compatibilityRepairs) } : {}),
-            } : { status: 'unavailable', fingerprint: null };
+            // Tier-1 宽容回放（compat_tolerant_replay 基）只保障读可用性，不构成
+            // "V2 严格可读=可信权威"的写决策证据：宽容数据可能含重复 row_id 与身份
+            // 归并副作用，喂给 fingerprint/merge candidate 会产生错误等价判定。此处
+            // 按 T8 矩阵既有语义归类为 failed，让 legacy 权威重建/阻塞分支照常工作。
+            if (detailed && detailed.baseKind === 'compat_tolerant_replay') {
+                replay = { status: 'failed', fingerprint: null, error: 'V2 帧仅可经兼容宽容回放读出（严格回放失败），不作为混合存储写决策的可信证据' };
+            }
+            else
+                replay = detailed ? {
+                    status: 'success',
+                    fingerprint: getTableDataFingerprint_ACU(detailed.data),
+                    data: clone_ACU$6(detailed.data),
+                    ...(detailed.requiresCheckpointConvergence ? { requiresCheckpointConvergence: true } : {}),
+                    ...(detailed.compatibilityRepairs?.length ? { compatibilityRepairs: clone_ACU$6(detailed.compatibilityRepairs) } : {}),
+                } : { status: 'unavailable', fingerprint: null };
         }
         catch (error) {
             replay = { status: 'failed', fingerprint: null, error: error instanceof Error ? error.message : String(error) };
@@ -51294,6 +51729,82 @@ function sheetKeysOfData_ACU(data) {
         return [];
     return Object.keys(data).filter(key => key.startsWith('sheet_') && Boolean(data[key]));
 }
+function countRealDataRows_ACU(data) {
+    let rows = 0;
+    for (const sheetKey of sheetKeysOfData_ACU(data)) {
+        const content = data?.[sheetKey]?.content;
+        if (Array.isArray(content) && content.length > 1)
+            rows += content.length - 1;
+    }
+    return rows;
+}
+/**
+ * 迁移破坏保险闸的旧源扫描：收集聊天中将被 cleanupLegacyFieldsAfterV2Write_ACU
+ * 删除的旧存储源（隔离槽 V1 数据 + 顶层旧字段）里所有带真实数据行的表
+ * （sheetKey → 规范化显示名）。扫描范围与 cleanup 的删除范围使用同一隔离匹配语义，
+ * 保护的正是将被删除的内容。
+ */
+function collectLegacyRowBearingSheets_ACU(chat, isolationKey, isolationConfig) {
+    const rowBearing = new Map();
+    const collect = (data) => {
+        for (const sheetKey of sheetKeysOfData_ACU(data)) {
+            const sheet = data[sheetKey];
+            const content = sheet?.content;
+            if (!Array.isArray(content) || content.length <= 1)
+                continue;
+            if (!rowBearing.has(sheetKey))
+                rowBearing.set(sheetKey, canonicalizeDisplayName_ACU(sheet?.name));
+        }
+    };
+    for (const message of chat) {
+        if (!message || message.is_user)
+            continue;
+        const tagData = readIsolatedTagData_ACU(message, isolationKey);
+        if (tagData && !isV2TagData_ACU(tagData)) {
+            collect(tagData.independentData);
+            // 增量 delta 的存在同样是"该表有真实数据活动"的证据（旧闸门语义保留）：
+            // delta 无表名可取，登记 key、名字留空，比对退化为按 key 匹配。
+            const incrementalData = tagData.incrementalData;
+            if (incrementalData && typeof incrementalData === 'object') {
+                for (const sheetKey of Object.keys(incrementalData)) {
+                    if (!sheetKey.startsWith('sheet_') || !incrementalData[sheetKey])
+                        continue;
+                    if (!rowBearing.has(sheetKey))
+                        rowBearing.set(sheetKey, '');
+                }
+            }
+        }
+        if (isLegacyMatchForIsolation_ACU(message, isolationConfig)) {
+            collect(readLegacyIndependentData_ACU(message));
+            collect(readLegacyStandardData_ACU(message));
+            collect(readLegacySummaryData_ACU(message));
+        }
+    }
+    return rowBearing;
+}
+/**
+ * 迁移破坏保险闸的逐表比对：旧源中每一张带真实行的表，都必须能在合并结果中按
+ * sheetKey 或规范化显示名找到对应（合并可能把历史 key 重映射进 guide key，故双通道）。
+ * 返回缺失表的可读描述列表；非空即说明合并读取丢了整表，迁移必须拒绝。
+ */
+function findLegacyRowBearingSheetsMissingFromMerged_ACU(mergedData, legacyRowBearingSheets) {
+    const mergedKeys = new Set(sheetKeysOfData_ACU(mergedData));
+    const mergedNames = new Set();
+    for (const sheetKey of mergedKeys) {
+        const name = canonicalizeDisplayName_ACU(mergedData?.[sheetKey]?.name);
+        if (name)
+            mergedNames.add(name);
+    }
+    const missing = [];
+    for (const [sheetKey, canonicalName] of legacyRowBearingSheets) {
+        if (mergedKeys.has(sheetKey))
+            continue;
+        if (canonicalName && mergedNames.has(canonicalName))
+            continue;
+        missing.push(`${canonicalName || '(无名)'}(${sheetKey})`);
+    }
+    return missing;
+}
 function countAiFloor_ACU(chat, messageIndex) {
     let count = 0;
     for (let i = 0; i <= messageIndex && i < chat.length; i += 1) {
@@ -51667,6 +52178,25 @@ async function migrateLegacyStorageToV2OnLoad_ACU(options) {
     if (sheetKeys.length === 0) {
         return { migrated: false, error: 'legacy migration requires non-empty merged table data' };
     }
+    // ── 破坏性迁移保险闸 ──
+    // 迁移成功后会删除各楼层旧存储字段原件（cleanupLegacyFieldsAfterV2Write_ACU），而
+    // migrationAuditBackup 只备份合并结果。合并读取若丢表/丢行（如结构冲突被隔离、
+    // 模板/指导表不匹配），执行迁移会造成不可逆数据丢失——拒绝迁移，读路径自动走
+    // 直读降级，数据保持原样可用。两层闸门：
+    // 1) 逐表存在性：旧源中每张带真实行的表必须在合并结果中有对应（key 或规范名）；
+    // 2) 总行数兜底：合并结果一行都没有而旧源有行（表在但行被剥光的场景）。
+    const legacyRowBearingSheets = collectLegacyRowBearingSheets_ACU(chat, options.isolationKey, options.isolationConfig);
+    const missingSheets = findLegacyRowBearingSheetsMissingFromMerged_ACU(options.data, legacyRowBearingSheets);
+    if (missingSheets.length > 0) {
+        const error = `合并结果缺失旧存储中带真实行数据的表：${missingSheets.join('、')}；为防止破坏性迁移丢失原始数据，已拒绝迁移。`;
+        logWarn_ACU(`[V2 Migration] ${error}`);
+        return { migrated: false, error };
+    }
+    if (countRealDataRows_ACU(options.data) === 0 && legacyRowBearingSheets.size > 0) {
+        const error = '合并结果不含任何数据行，但聊天旧存储中存在真实行数据；为防止破坏性迁移丢失原始数据，已拒绝迁移。';
+        logWarn_ACU(`[V2 Migration] ${error}`);
+        return { migrated: false, error };
+    }
     const strategy = resolveTableStorageStrategy_ACU(chat, options.isolationKey, options.isolationConfig);
     if (strategy.mode !== 'legacy-v1') {
         return { migrated: false };
@@ -51840,21 +52370,13 @@ async function migrateLegacyStorageToV2OnLoad_ACU(options) {
     if (scopeChangeError) {
         return { migrated: false, error: scopeChangeError };
     }
-    // 回滚副本只需浅拷贝数组：candidateChat 是唯一深克隆的工作副本（:634），
-    // 从克隆到提交之间所有改写都只落在 candidateChat 上，原 chat 消息对象从未被触碰；
-    // 失败时按原对象身份逐条还原比再深克隆一份更省且更安全（不产生身份漂移）。
-    const originalChat = chat.slice();
-    // 逐条替换：超长聊天下 splice(0, len, ...arr) 的 spread 展开会触及引擎参数栈上限。
-    chat.splice(0, chat.length);
-    for (let i = 0; i < candidateChat.length; i += 1)
-        chat.push(candidateChat[i]);
+    const originalChat = deepClone_ACU(chat);
+    chat.splice(0, chat.length, ...candidateChat);
     try {
         await saveChatToHostStrict_ACU();
     }
     catch (error) {
-        chat.splice(0, chat.length);
-        for (let i = 0; i < originalChat.length; i += 1)
-            chat.push(originalChat[i]);
+        chat.splice(0, chat.length, ...originalChat);
         return { migrated: false, error: `legacy migration save failed: ${error instanceof Error ? error.message : String(error)}` };
     }
     logDebug_ACU(`[V2 Migration] legacy-v1 migrated to V2 checkpoint: messageIndex=${target.index}, skipUpdateFloors=${skipUpdateFloors}, isolationKey=[${options.isolationKey || '无标签'}], sheets=${sheetKeys.length}`);
@@ -51961,16 +52483,59 @@ function applyGuideMetadataToSheet_ACU(targetSheet, guideSheet, options) {
     return { changed };
 }
 
+let registeredUiSurface_ACU = null;
+function registerUiSurface_ACU(handlers) {
+    registeredUiSurface_ACU = handlers;
+}
+function getUiSurface_ACU() {
+    return registeredUiSurface_ACU;
+}
+/**
+ * 统一 toast 入口：优先走已注册 UI surface 的 showToast；未注册或抛错时
+ * 回退宿主 toastr；两者都不可用时静默（调用方自行负责日志）。绝不抛错。
+ */
+function showUiSurfaceToast_ACU(payload) {
+    try {
+        const handler = registeredUiSurface_ACU?.showToast;
+        if (handler) {
+            handler(payload);
+            return;
+        }
+    }
+    catch (_) {
+        // 已注册 handler 抛错时继续尝试宿主 toastr。
+    }
+    try {
+        const toastr = topLevelWindow_ACU?.toastr;
+        if (toastr && typeof toastr[payload.kind] === 'function') {
+            toastr[payload.kind](payload.text, undefined, payload.action
+                ? { onclick: () => { void payload.action.onClick(); } }
+                : undefined);
+        }
+    }
+    catch (_) {
+        // 宿主 toastr 不可用：静默，不让提示通道反过来破坏调用方流程。
+    }
+}
+function resetUiSurfaceRegistryForTests_ACU() {
+    registeredUiSurface_ACU = null;
+}
+
 /**
  * service/runtime/helpers-data-merge.ts — 数据合并/格式化/首楼初始化/阈值
  * 从 helpers-remaining.ts 拆出
  */
 /**
  * Legacy entry point retained for callers that need in-place normalization.
- * Empty canonical row_id values mean deletion; they must not be fabricated
- * from array positions because that would create a false row identity.
+ *
+ * 契约（见 canonical-row-normalizer.ts）：normalizeCanonicalTableRows_ACU 按现行
+ * 协议把"空 row_id"当作删除语义，而 xing～spv7.9 时代的数据行按物理位置寻址、
+ * row_id 列为 null/缺失——历史读路径必须先经 restoreLegacyRowIdentity_ACU 修复
+ * 行身份（只给无身份的行补 ID，已有 row_id 的行保持不变，幂等），否则旧数据的
+ * 全部真实行会在规范化时被当作删除剥掉。
  */
 function migrateContentNullToRowId(data) {
+    restoreLegacyRowIdentity_ACU(data);
     normalizeCanonicalTableRows_ACU(data);
     return data;
 }
@@ -51985,6 +52550,14 @@ function isSheetAllowedByGuide_ACU(sheetKey, sheet, guideData, allowedKeys) {
         return false;
     return Object.keys(guideData).some(key => key.startsWith('sheet_')
         && canonicalizeDisplayName_ACU(guideData[key]?.name) === canonicalName);
+}
+/**
+ * 表中是否存在真实数据行（表头之外的行）。
+ * 全版本兼容读取契约：带真实行的表在任何读路径上都不允许被静默丢弃，
+ * 无论它是否匹配当前模板/指导表（guide 过滤只允许拦截无行的占位表）。
+ */
+function sheetHasRealRows_ACU(sheet) {
+    return Array.isArray(sheet?.content) && sheet.content.length > 1;
 }
 /**
  * 将 Sheet Guide 的结构/元数据叠加到合并数据上。
@@ -52016,19 +52589,28 @@ function mergeSheetGuideStructureIntoData_ACU(mergedData, sheetGuideData, option
     });
     const quarantinedSheetKeys = [];
     const warnings = [];
+    const consumedHistoricalKeys = new Set();
     guideKeys.forEach(k => {
         if (!k || !k.startsWith('sheet_'))
             return;
+        // 本轮消费的历史 key：catch 兜底需要把它释放回"未消费"集合，
+        // 让末尾的兼容携带循环按原 key 保留历史数据（隔离只丢 guide 表壳，不丢数据）。
+        let consumedKeyThisGuide = null;
         try {
             const guideSheet = guided[k];
             const canonicalName = canonicalizeDisplayName_ACU(guideSheet?.name);
             const historicalKeys = canonicalName ? (historicalKeysByCanonicalName.get(canonicalName) || []) : [];
-            if (historicalKeys.length > 1) {
+            // key 同一性优先于名字匹配：历史数据与 guide 使用同一 sheetKey 时，
+            // 即使显示名被改过也必须继承，否则改名会导致数据被静默丢弃。
+            const directKeyMatch = (mergedData[k] && typeof mergedData[k] === 'object') ? k : null;
+            if (!directKeyMatch && historicalKeys.length > 1) {
                 logWarn_ACU(`[Merge] 指导表「${guideSheet?.name || k}」匹配多个历史 Sheet (${historicalKeys.join(', ')})，拒绝自动继承。`);
             }
-            const historicalKey = historicalKeys.length === 1 ? historicalKeys[0] : null;
+            const historicalKey = directKeyMatch ?? (historicalKeys.length === 1 ? historicalKeys[0] : null);
             const hist = historicalKey ? mergedData[historicalKey] : undefined;
             if (hist && typeof hist === 'object') {
+                consumedHistoricalKeys.add(historicalKey);
+                consumedKeyThisGuide = historicalKey;
                 const next = JSON.parse(JSON.stringify(hist));
                 next.uid = k;
                 const guideHeader = (guideSheet && Array.isArray(guideSheet.content) && Array.isArray(guideSheet.content[0]))
@@ -52057,41 +52639,57 @@ function mergeSheetGuideStructureIntoData_ACU(mergedData, sheetGuideData, option
                     guided[k] = next;
                 }
                 else {
-                    // ── legacy-v1：guide 持结构权（旧行为，含 padding）──
-                    if (guideSheet?.name)
-                        next.name = guideSheet.name;
-                    if (guideSheet?.sourceData)
-                        next.sourceData = JSON.parse(JSON.stringify(guideSheet.sourceData));
-                    if (guideSheet?.updateConfig)
-                        next.updateConfig = JSON.parse(JSON.stringify(guideSheet.updateConfig));
-                    if (guideSheet?.exportConfig)
-                        next.exportConfig = JSON.parse(JSON.stringify(guideSheet.exportConfig));
-                    if (guideHeader && String(guideHeader[0] ?? '') !== 'row_id') {
-                        throw new Error(`Sheet Guide 表头缺少 row_id 首列：${String(guideSheet.uid || guideSheet.name || k)}`);
+                    // ── legacy-v1：guide 持结构权（含 padding），结构冲突时降级为历史结构权 ──
+                    // 全版本兼容读取契约：guide 表头非法（缺 row_id 首列）或历史行比 guide 表头宽
+                    // （旧模板列更多，截断丢格、padding 无意义）时，不 throw、不隔离——该表退回与
+                    // V2 分支一致的"保留历史结构 + 叠加 guide 非结构元数据"处理，数据行原样保留。
+                    const guideHeaderValid = !guideHeader || String(guideHeader[0] ?? '') === 'row_id';
+                    const hasOverwideRow = !!guideHeader && Array.isArray(next.content)
+                        && next.content.slice(1).some((row) => Array.isArray(row) && row.length > guideHeader.length);
+                    if (!guideHeaderValid || hasOverwideRow) {
+                        if (!Array.isArray(next.content) || next.content.length === 0) {
+                            next.content = [histHeader || ['row_id']];
+                        }
+                        applyGuideMetadataToSheet_ACU(next, guideSheet, { inheritDdl: false });
+                        if (Array.isArray(guideSheet?.seedRows))
+                            next.seedRows = JSON.parse(JSON.stringify(guideSheet.seedRows));
+                        const reason = !guideHeaderValid
+                            ? `Sheet Guide 表头缺少 row_id 首列`
+                            : `历史行宽度（最大 ${Math.max(...next.content.slice(1).map((row) => Array.isArray(row) ? row.length : 0))} 列）超过 Sheet Guide 表头（${guideHeader.length} 列）`;
+                        const msg = `[Merge] 表「${String(next.name || guideSheet?.name || k)}」(${k}) ${reason}，`
+                            + `已降级保留历史结构（数据行不截断、不丢弃）。如需变更列结构，请通过模板提交完成迁移。`;
+                        logWarn_ACU(msg);
+                        warnings.push(msg);
+                        guided[k] = next;
                     }
-                    if (!Array.isArray(next.content))
-                        next.content = guideHeader ? [guideHeader] : [['row_id']];
-                    if (guideHeader) {
-                        next.content[0] = guideHeader;
-                        const targetLen = guideHeader.length;
-                        for (let r = 1; r < next.content.length; r++) {
-                            const row = next.content[r];
-                            if (!Array.isArray(row))
-                                continue;
-                            if (row.length < targetLen) {
+                    else {
+                        if (guideSheet?.name)
+                            next.name = guideSheet.name;
+                        if (guideSheet?.sourceData)
+                            next.sourceData = JSON.parse(JSON.stringify(guideSheet.sourceData));
+                        if (guideSheet?.updateConfig)
+                            next.updateConfig = JSON.parse(JSON.stringify(guideSheet.updateConfig));
+                        if (guideSheet?.exportConfig)
+                            next.exportConfig = JSON.parse(JSON.stringify(guideSheet.exportConfig));
+                        if (!Array.isArray(next.content))
+                            next.content = guideHeader ? [guideHeader] : [['row_id']];
+                        if (guideHeader) {
+                            next.content[0] = guideHeader;
+                            const targetLen = guideHeader.length;
+                            for (let r = 1; r < next.content.length; r++) {
+                                const row = next.content[r];
+                                if (!Array.isArray(row))
+                                    continue;
                                 while (row.length < targetLen)
                                     row.push(null);
                             }
-                            else if (row.length > targetLen) {
-                                throw new Error(`历史表「${String(guideSheet?.name || k)}」行宽度超过 Sheet Guide 表头，拒绝截断数据。`);
-                            }
                         }
+                        if (Number.isFinite(guideSheet?.[TABLE_ORDER_FIELD_ACU]))
+                            next[TABLE_ORDER_FIELD_ACU] = Math.trunc(guideSheet[TABLE_ORDER_FIELD_ACU]);
+                        if (Array.isArray(guideSheet?.seedRows))
+                            next.seedRows = JSON.parse(JSON.stringify(guideSheet.seedRows));
+                        guided[k] = next;
                     }
-                    if (Number.isFinite(guideSheet?.[TABLE_ORDER_FIELD_ACU]))
-                        next[TABLE_ORDER_FIELD_ACU] = Math.trunc(guideSheet[TABLE_ORDER_FIELD_ACU]);
-                    if (Array.isArray(guideSheet?.seedRows))
-                        next.seedRows = JSON.parse(JSON.stringify(guideSheet.seedRows));
-                    guided[k] = next;
                 }
             }
             else {
@@ -52111,10 +52709,36 @@ function mergeSheetGuideStructureIntoData_ACU(mergedData, sheetGuideData, option
             }
         }
         catch (e) {
-            logError_ACU(`[Merge] 表「${k}」合并失败，已隔离：`, e);
+            // 读宽容契约：guide 合并失败只隔离 guide 表壳，不允许连带丢历史数据。
+            // 释放本轮已消费的历史 key，末尾的兼容携带循环会按原 key 原样保留该表。
+            if (consumedKeyThisGuide)
+                consumedHistoricalKeys.delete(consumedKeyThisGuide);
+            logError_ACU(`[Merge] 表「${k}」合并失败，已隔离 guide 表壳（历史数据按全版本兼容模式原样保留）：`, e);
             delete guided[k];
             quarantinedSheetKeys.push(k);
         }
+    });
+    // ── 全版本兼容携带：未被任何 guide 表消费的历史表不允许静默丢弃 ──
+    // structuralAuthority='data'（V2 checkpoint 权威）：checkpoint 中存在即有效，全部携带；
+    // structuralAuthority='guide'（legacy-v1）：仅携带含真实数据行的表——无行的旧模板
+    // 占位表继续按"切换模板后不复活"的既有语义丢弃。
+    Object.keys(mergedData).forEach(historicalKey => {
+        if (!historicalKey.startsWith('sheet_'))
+            return;
+        const sheet = mergedData[historicalKey];
+        if (!sheet || typeof sheet !== 'object')
+            return;
+        if (consumedHistoricalKeys.has(historicalKey))
+            return;
+        if (guided[historicalKey])
+            return; // key 已被消费或被 guide 占用（direct key match 已优先消费，此分支仅防御）
+        const shouldCarry = options.structuralAuthority === 'data' || sheetHasRealRows_ACU(sheet);
+        if (!shouldCarry)
+            return;
+        guided[historicalKey] = JSON.parse(JSON.stringify(sheet));
+        const msg = `[Merge] 表「${String(sheet.name || historicalKey)}」(${historicalKey}) 不在当前模板/指导表中，已按全版本兼容模式保留（数据行不丢弃）。`;
+        logWarn_ACU(msg);
+        warnings.push(msg);
     });
     return { data: guided, quarantinedSheetKeys, warnings };
 }
@@ -52149,18 +52773,7 @@ async function mergeAllIndependentTablesLegacyV1_ACU() {
     const foundSheets = {};
     // 收集 delta 楼层的增量数据（逆序收集，后续正序叠加）
     const pendingDeltas = [];
-    // AI 楼层前缀计数表：aiFloorPrefixByIndex[k] = chat[0..k] 中非用户消息数。
-    // 一次遍历预计算，替代循环内 chat.slice(0, i+1).filter(...).length 的 O(n²) 重复扫描。
-    const aiFloorPrefixByIndex = new Array(chat.length);
-    let aiFloorRunningCount = 0;
-    for (let k = 0; k < chat.length; k++) {
-        if (!chat[k].is_user)
-            aiFloorRunningCount += 1;
-        aiFloorPrefixByIndex[k] = aiFloorRunningCount;
-    }
     for (let i = chat.length - 1; i >= 0; i--) {
-        if (chat.length > 500 && i % 200 === 0)
-            await new Promise(r => setTimeout(r, 0));
         const message = chat[i];
         if (message.is_user)
             continue;
@@ -52181,8 +52794,9 @@ async function mergeAllIndependentTablesLegacyV1_ACU() {
             const modifiedKeys = Array.isArray(tagData.modifiedKeys) ? tagData.modifiedKeys : [];
             const updateGroupKeys = Array.isArray(tagData.updateGroupKeys) ? tagData.updateGroupKeys : [];
             Object.keys(independentData).forEach(storedSheetKey => {
-                // [新增] 只处理当前模板/指导表中存在的表格
-                if (!isSheetAllowedByGuide_ACU(storedSheetKey, independentData[storedSheetKey], hasSheetGuide ? sheetGuideData : null, templateSheetKeySet)) {
+                // [全版本兼容] guide 过滤只拦截无真实行的占位表；带行数据的表永不静默丢弃
+                if (!isSheetAllowedByGuide_ACU(storedSheetKey, independentData[storedSheetKey], hasSheetGuide ? sheetGuideData : null, templateSheetKeySet)
+                    && !sheetHasRealRows_ACU(independentData[storedSheetKey])) {
                     logDebug_ACU(`[Merge] Skipping sheet [${storedSheetKey}] - not in current template/guide`);
                     return;
                 }
@@ -52210,7 +52824,7 @@ async function mergeAllIndependentTablesLegacyV1_ACU() {
                         if (!independentTableStates_ACU[storedSheetKey]) {
                             independentTableStates_ACU[storedSheetKey] = {};
                         }
-                        const currentAiFloor = aiFloorPrefixByIndex[i];
+                        const currentAiFloor = chat.slice(0, i + 1).filter(m => !m.is_user).length;
                         independentTableStates_ACU[storedSheetKey].lastUpdatedAiFloor = currentAiFloor;
                     }
                 }
@@ -52228,8 +52842,9 @@ async function mergeAllIndependentTablesLegacyV1_ACU() {
                 const modifiedKeys = readModifiedKeys_ACU(message);
                 const updateGroupKeys = readUpdateGroupKeys_ACU(message);
                 Object.keys(independentData).forEach(storedSheetKey => {
-                    // [新增] 只处理当前模板/指导表中存在的表格
-                    if (!isSheetAllowedByGuide_ACU(storedSheetKey, independentData[storedSheetKey], hasSheetGuide ? sheetGuideData : null, templateSheetKeySet)) {
+                    // [全版本兼容] guide 过滤只拦截无真实行的占位表；带行数据的表永不静默丢弃
+                    if (!isSheetAllowedByGuide_ACU(storedSheetKey, independentData[storedSheetKey], hasSheetGuide ? sheetGuideData : null, templateSheetKeySet)
+                        && !sheetHasRealRows_ACU(independentData[storedSheetKey])) {
                         logDebug_ACU(`[Merge] Skipping sheet [${storedSheetKey}] (legacy) - not in current template/guide`);
                         return;
                     }
@@ -52249,7 +52864,7 @@ async function mergeAllIndependentTablesLegacyV1_ACU() {
                         if (wasUpdated) {
                             if (!independentTableStates_ACU[storedSheetKey])
                                 independentTableStates_ACU[storedSheetKey] = {};
-                            const currentAiFloor = aiFloorPrefixByIndex[i];
+                            const currentAiFloor = chat.slice(0, i + 1).filter(m => !m.is_user).length;
                             independentTableStates_ACU[storedSheetKey].lastUpdatedAiFloor = currentAiFloor;
                         }
                     }
@@ -52260,8 +52875,9 @@ async function mergeAllIndependentTablesLegacyV1_ACU() {
             if (legacyStdData) {
                 const standardData = legacyStdData;
                 Object.keys(standardData).forEach(k => {
-                    // [新增] 只处理当前模板/指导表中存在的表格
-                    if (!isSheetAllowedByGuide_ACU(k, standardData[k], hasSheetGuide ? sheetGuideData : null, templateSheetKeySet)) {
+                    // [全版本兼容] guide 过滤只拦截无真实行的占位表；带行数据的表永不静默丢弃
+                    if (!isSheetAllowedByGuide_ACU(k, standardData[k], hasSheetGuide ? sheetGuideData : null, templateSheetKeySet)
+                        && !sheetHasRealRows_ACU(standardData[k])) {
                         return;
                     }
                     if (k.startsWith('sheet_') && !foundSheets[k] && standardData[k].name && !isSummaryOrOutlineTable_ACU(standardData[k].name)) {
@@ -52269,7 +52885,7 @@ async function mergeAllIndependentTablesLegacyV1_ACU() {
                         foundSheets[k] = true;
                         if (!independentTableStates_ACU[k])
                             independentTableStates_ACU[k] = {};
-                        const currentAiFloor = aiFloorPrefixByIndex[i];
+                        const currentAiFloor = chat.slice(0, i + 1).filter(m => !m.is_user).length;
                         independentTableStates_ACU[k].lastUpdatedAiFloor = currentAiFloor;
                     }
                 });
@@ -52278,8 +52894,9 @@ async function mergeAllIndependentTablesLegacyV1_ACU() {
             if (legacySumData) {
                 const summaryData = legacySumData;
                 Object.keys(summaryData).forEach(k => {
-                    // [新增] 只处理当前模板/指导表中存在的表格
-                    if (!isSheetAllowedByGuide_ACU(k, summaryData[k], hasSheetGuide ? sheetGuideData : null, templateSheetKeySet)) {
+                    // [全版本兼容] guide 过滤只拦截无真实行的占位表；带行数据的表永不静默丢弃
+                    if (!isSheetAllowedByGuide_ACU(k, summaryData[k], hasSheetGuide ? sheetGuideData : null, templateSheetKeySet)
+                        && !sheetHasRealRows_ACU(summaryData[k])) {
                         return;
                     }
                     if (k.startsWith('sheet_') && !foundSheets[k] && summaryData[k].name && isSummaryOrOutlineTable_ACU(summaryData[k].name)) {
@@ -52287,7 +52904,7 @@ async function mergeAllIndependentTablesLegacyV1_ACU() {
                         foundSheets[k] = true;
                         if (!independentTableStates_ACU[k])
                             independentTableStates_ACU[k] = {};
-                        const currentAiFloor = aiFloorPrefixByIndex[i];
+                        const currentAiFloor = chat.slice(0, i + 1).filter(m => !m.is_user).length;
                         independentTableStates_ACU[k].lastUpdatedAiFloor = currentAiFloor;
                     }
                 });
@@ -52299,14 +52916,11 @@ async function mergeAllIndependentTablesLegacyV1_ACU() {
         // pendingDeltas 是逆序收集的，需要反转为正序（从旧到新）
         pendingDeltas.reverse();
         logDebug_ACU(`[表格重建] 正序叠加 ${pendingDeltas.length} 个 delta 楼层到 base 上`);
-        for (let _di = 0; _di < pendingDeltas.length; _di++) {
-            if (pendingDeltas.length > 20 && _di % 10 === 0)
-                await new Promise(r => setTimeout(r, 0));
-            const { index: deltaIndex, tagData: deltaTagData } = pendingDeltas[_di];
+        for (const { index: deltaIndex, tagData: deltaTagData } of pendingDeltas) {
             const incrementalData = deltaTagData.incrementalData || {};
             for (const [sheetKey, delta] of Object.entries(incrementalData)) {
-                if (!templateSheetKeySet.has(sheetKey))
-                    continue;
+                // [全版本兼容] 按 base 表存在性判定（兼容携带的非模板表也要正常叠加 delta），
+                // 不再按 templateSheetKeySet 过滤——base 收集阶段已完成宽容过滤。
                 if (!mergedData[sheetKey]) {
                     logWarn_ACU(`[表格重建] delta 楼层 #${deltaIndex} 引用了 sheetKey=${sheetKey}，但 base 中不存在该表，跳过`);
                     continue;
@@ -52317,7 +52931,7 @@ async function mergeAllIndependentTablesLegacyV1_ACU() {
                     if (!independentTableStates_ACU[sheetKey]) {
                         independentTableStates_ACU[sheetKey] = {};
                     }
-                    const currentAiFloor = aiFloorPrefixByIndex[deltaIndex];
+                    const currentAiFloor = chat.slice(0, deltaIndex + 1).filter((m) => !m.is_user).length;
                     independentTableStates_ACU[sheetKey].lastUpdatedAiFloor = currentAiFloor;
                 }
                 catch (e) {
@@ -52363,7 +52977,11 @@ async function mergeAllIndependentTablesLegacyV1_ACU() {
     // 2) 对指导表中缺失的表：使用指导表结构作为初始值（seedRows 仅保留字段，不默认展开到 content）
     // 3) 对于存在历史数据的表：以历史数据为主，但表名/表头/参数/顺序以指导表为准；不把 seedRows 合并进真实数据行
     if (hasSheetGuide) {
-        mergedData = mergeSheetGuideStructureIntoData_ACU(mergedData, sheetGuideData).data;
+        const guideMergeResult = mergeSheetGuideStructureIntoData_ACU(mergedData, sheetGuideData);
+        mergedData = guideMergeResult.data;
+        // 与 V2 分支一致：隔离表键与结构 warning 透出给加载路径报告，不再静默丢弃。
+        lastMergeQuarantinedSheetKeys = guideMergeResult.quarantinedSheetKeys;
+        lastMergeWarnings = guideMergeResult.warnings;
     }
     // [修复] 合并结果按"用户手动顺序/模板顺序"重排，避免合并过程导致的随机乱序
     const orderedKeys = getSortedSheetKeys_ACU(mergedData);
@@ -52390,6 +53008,27 @@ function consumeLastMergeWarnings_ACU() {
     const warnings = lastMergeWarnings;
     lastMergeWarnings = [];
     return warnings;
+}
+/** 每个「聊天标识+隔离键」只弹一次直读降级提示，避免每次合并都打扰用户。 */
+const notifiedLegacyDirectReadFallbacks_ACU = new Set();
+function notifyLegacyDirectReadFallbackOnce_ACU(isolationKey, reason) {
+    const chatIdentity = (() => {
+        try {
+            const chat = getChatArray_ACU();
+            return Array.isArray(chat) ? `len:${chat.length}:${String(chat[0]?.send_date ?? '')}` : 'no-chat';
+        }
+        catch (_) {
+            return 'no-chat';
+        }
+    })();
+    const key = `${chatIdentity}|${isolationKey}`;
+    if (notifiedLegacyDirectReadFallbacks_ACU.has(key))
+        return;
+    notifiedLegacyDirectReadFallbacks_ACU.add(key);
+    showUiSurfaceToast_ACU({
+        kind: 'warning',
+        text: `旧格式表格数据已按兼容模式直读（数据可用）。自动升级暂未完成：${reason}`,
+    });
 }
 async function mergeAllIndependentTables_ACU() {
     const chat = getChatArray_ACU();
@@ -52431,29 +53070,42 @@ async function mergeAllIndependentTables_ACU() {
     }
     if (strategy.mode === 'legacy-v1') {
         const mergedLegacyData = await mergeAllIndependentTablesLegacyV1_ACU();
-        const migrationResult = await migrateLegacyStorageToV2OnLoad_ACU({
-            data: mergedLegacyData,
-            isolationKey: currentIsolationKey,
-            isolationConfig: {
+        try {
+            const migrationResult = await migrateLegacyStorageToV2OnLoad_ACU({
+                data: mergedLegacyData,
+                isolationKey: currentIsolationKey,
+                isolationConfig: {
+                    enabled: settings_ACU.dataIsolationEnabled,
+                    code: settings_ACU.dataIsolationCode,
+                },
+                skipUpdateFloors: settings_ACU.skipUpdateFloors,
+            });
+            if (!migrationResult.migrated) {
+                throw new Error(`旧存储迁移到 V2 失败: ${migrationResult.error || '未执行迁移'}`);
+            }
+            if (!migrationResult.data) {
+                throw new Error('旧存储迁移到 V2 失败: 迁移成功结果缺少修复后的表格数据。');
+            }
+            const postStrategy = resolveTableStorageStrategy_ACU(chat, currentIsolationKey, {
                 enabled: settings_ACU.dataIsolationEnabled,
                 code: settings_ACU.dataIsolationCode,
-            },
-            skipUpdateFloors: settings_ACU.skipUpdateFloors,
-        });
-        if (!migrationResult.migrated) {
-            throw new Error(`旧存储迁移到 V2 失败: ${migrationResult.error || '未执行迁移'}`);
+            });
+            if (postStrategy.mode !== 'v2') {
+                throw new Error(`旧存储迁移后二次校验失败：当前模式=${postStrategy.mode}${postStrategy.mode === 'legacy-v1' ? `，reason=${postStrategy.reason}` : ''}`);
+            }
+            return migrateContentNullToRowId(migrationResult.data);
         }
-        if (!migrationResult.data) {
-            throw new Error('旧存储迁移到 V2 失败: 迁移成功结果缺少修复后的表格数据。');
+        catch (migrationError) {
+            // C4 读取不阻塞：迁移失败（audit 不可修、mixed 阻断、provenance 非法等）
+            // 时不再 throw——降级为 xing/7.9 之前的直读合并结果，数据照常可用。
+            // 迁移待决已由 migrateLegacyStorageToV2OnLoad_ACU 内部登记（mixed 场景走
+            // registerMixedStorageDecision_ACU 通道）；写入门闸
+            // ensureLegacyStorageMigratedBeforeWrite_ACU 维持严格，写仍要求迁移成功。
+            const message = migrationError instanceof Error ? migrationError.message : String(migrationError);
+            logWarn_ACU(`[TableStorage] 旧存储迁移失败，已降级为直读旧格式（数据可用，写入前仍需完成迁移）：${message}`);
+            notifyLegacyDirectReadFallbackOnce_ACU(currentIsolationKey, message);
+            return migrateContentNullToRowId(mergedLegacyData);
         }
-        const postStrategy = resolveTableStorageStrategy_ACU(chat, currentIsolationKey, {
-            enabled: settings_ACU.dataIsolationEnabled,
-            code: settings_ACU.dataIsolationCode,
-        });
-        if (postStrategy.mode !== 'v2') {
-            throw new Error(`旧存储迁移后二次校验失败：当前模式=${postStrategy.mode}${postStrategy.mode === 'legacy-v1' ? `，reason=${postStrategy.reason}` : ''}`);
-        }
-        return migrateContentNullToRowId(migrationResult.data);
     }
     return migrateContentNullToRowId(await mergeAllIndependentTablesLegacyV1_ACU());
 }
@@ -52809,8 +53461,6 @@ function parseReadableToJson_ACU(text) {
                         newRow.push('');
                 }
                 else if (newRow.length > originalHeaderRow.length) {
-                    // 截断是有意设计（对齐原表头列数），但需留痕：静默截断会掩盖 AI 输出格式异常。
-                    logWarn_ACU(`[表格重建] Markdown 数据行列数(${newRow.length})超过表头列数(${originalHeaderRow.length})，已按表头截断多余列：sheetKey=${sheetKey}, 数据行#${i}`);
                     newRow.splice(originalHeaderRow.length);
                 }
                 newContent.push(newRow);
@@ -78708,12 +79358,13 @@ async function ensureV2BoundaryCheckpointForRetainedBufferCore_ACU(chat, boundar
                 && typeof isolatedData === 'object'
                 && !Array.isArray(isolatedData)
                 && Object.values(isolatedData).some(tagData => isV2TagData_ACU(tagData));
-            const hasSpv79TransitionCheckpoint = isolatedData
+            const hasTransitionCheckpoint = isolatedData
                 && typeof isolatedData === 'object'
                 && !Array.isArray(isolatedData)
                 && Object.values(isolatedData).some(tagData => (!!tagData && typeof tagData === 'object'
-                    && tagData.spv79TransitionCheckpoint?.kind === 'spv79_duplicate_row_id_transition'));
-            if (messageIndex === anchorIndex || hasV2Frame || hasSpv79TransitionCheckpoint) {
+                    && (tagData.spv79TransitionCheckpoint?.kind === 'spv79_duplicate_row_id_transition'
+                        || tagData.compatTransitionCheckpoint?.kind === 'compat_replay_transition')));
+            if (messageIndex === anchorIndex || hasV2Frame || hasTransitionCheckpoint) {
                 snapshots.set(messageIndex, messageFieldSnapshot_ACU(message));
             }
         });
@@ -78932,7 +79583,8 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(chat, boundaryAnchorInde
             continue;
         for (const [isolationKey, tagData] of Object.entries(isolatedData)) {
             if (tagData && typeof tagData === 'object'
-                && tagData.spv79TransitionCheckpoint?.kind === 'spv79_duplicate_row_id_transition') {
+                && (tagData.spv79TransitionCheckpoint?.kind === 'spv79_duplicate_row_id_transition'
+                    || tagData.compatTransitionCheckpoint?.kind === 'compat_replay_transition')) {
                 isolationKeys.add(isolationKey);
             }
         }
@@ -78941,7 +79593,7 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(chat, boundaryAnchorInde
         const strategy = resolveTableStorageStrategy_ACU(chat, isolationKey, isolationConfig);
         if (strategy.mode !== 'v2')
             continue;
-        const transitionRef = findLatestSpv79TransitionCheckpoint_ACU(chat, isolationKey);
+        const transitionRef = findLatestTransitionCheckpoint_ACU(chat, isolationKey);
         if (transitionRef && boundaryAnchorIndex < transitionRef.messageIndex) {
             // 私有根已经是完整 canonical 状态，且位于本轮保留边界之后；旧历史即使被
             // purge 也不能再反向决定该根是否有效。此轮无需为该隔离域另写更早的 full，
@@ -78975,6 +79627,7 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(chat, boundaryAnchorInde
                 ?.TavernDB_ACU_IsolatedData?.[isolationKey];
             if (candidateTransitionTagData && typeof candidateTransitionTagData === 'object') {
                 delete candidateTransitionTagData.spv79TransitionCheckpoint;
+                delete candidateTransitionTagData.compatTransitionCheckpoint;
             }
             const strictReplay = await loadTableStateFromFramesV2Detailed_ACU(candidateChat, isolationKey, {
                 maxMessageIndex: boundaryAnchorIndex,
@@ -78985,7 +79638,7 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(chat, boundaryAnchorInde
                 || strictReplay.requiresCheckpointConvergence
                 || strictReplay.compatibilityRepairs?.length
                 || getTableDataFingerprint_ACU(strictReplay.data) !== getTableDataFingerprint_ACU(transitionReplay.data)) {
-                const error = new Error(`边界 checkpoint 收敛失败：已有 compaction full 无法严格替代 SPv7.9 过渡根（isolationKey=[${isolationKey || '无标签'}]）。`);
+                const error = new Error(`边界 checkpoint 收敛失败：已有 compaction full 无法严格替代过渡根（isolationKey=[${isolationKey || '无标签'}]）。`);
                 error.failedIsolationKey = isolationKey;
                 throw error;
             }
@@ -78993,9 +79646,10 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(chat, boundaryAnchorInde
             const transitionTagData = transitionMessage?.TavernDB_ACU_IsolatedData?.[isolationKey];
             if (transitionTagData && typeof transitionTagData === 'object') {
                 delete transitionTagData.spv79TransitionCheckpoint;
+                delete transitionTagData.compatTransitionCheckpoint;
             }
             changed = true;
-            logDebug_ACU(`[V2 Compaction] 已验证既有边界 full 并移除 isolationKey=[${isolationKey || '无标签'}] 的 SPv7.9 过渡根。`);
+            logDebug_ACU(`[V2 Compaction] 已验证既有边界 full 并移除 isolationKey=[${isolationKey || '无标签'}] 的过渡根。`);
             continue;
         }
         let replay;
@@ -79103,6 +79757,7 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(chat, boundaryAnchorInde
                     ?.TavernDB_ACU_IsolatedData?.[isolationKey];
                 if (candidateTransitionTagData && typeof candidateTransitionTagData === 'object') {
                     delete candidateTransitionTagData.spv79TransitionCheckpoint;
+                    delete candidateTransitionTagData.compatTransitionCheckpoint;
                 }
             }
             const strictReplay = await loadTableStateFromFramesV2Detailed_ACU(candidateChat, isolationKey, {
@@ -79129,6 +79784,7 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(chat, boundaryAnchorInde
             const transitionTagData = transitionMessage?.TavernDB_ACU_IsolatedData?.[isolationKey];
             if (transitionTagData && typeof transitionTagData === 'object') {
                 delete transitionTagData.spv79TransitionCheckpoint;
+                delete transitionTagData.compatTransitionCheckpoint;
             }
         }
         changed = true;
@@ -92009,7 +92665,7 @@ async function buildBatchMergeBase_ACU(batchNumber, options = {}, replayEvidence
                 // 与真实基底的同 row_id 冲突，把损坏继续放大。
                 return {
                     data: null,
-                    error: `历史表格数据回放失败，已中止填表以避免写出冲突增量：${v2ReplayResult.failed}`,
+                    error: `历史表格数据回放失败（已自动尝试全部兼容读取层仍失败），已中止填表以避免写出冲突增量。请在数据管理中导出原始数据后执行 V2 恢复：${v2ReplayResult.failed}`,
                 };
             }
             // 有历史边界时不能让 SQLite latest runtime 越过 maxMessageIndex；
@@ -92031,7 +92687,7 @@ async function buildBatchMergeBase_ACU(batchNumber, options = {}, replayEvidence
         if (v2ReplayResult.failed) {
             return {
                 data: null,
-                error: `历史表格数据回放失败，已中止填表以避免写出冲突增量：${v2ReplayResult.failed}`,
+                error: `历史表格数据回放失败（已自动尝试全部兼容读取层仍失败），已中止填表以避免写出冲突增量。请在数据管理中导出原始数据后执行 V2 恢复：${v2ReplayResult.failed}`,
             };
         }
         // 指定了历史边界时，若当前聊天是 V2 但边界前没有可重放 checkpoint，不能退回“最新运行时快照”，
@@ -96428,17 +97084,6 @@ async function handleNewMessageDebounced_ACU(eventType = 'unknown_acu', intent) 
 /**
  * presentation/triggers/settings-ui-sync/index.ts
  */
-
-let registeredUiSurface_ACU = null;
-function registerUiSurface_ACU(handlers) {
-    registeredUiSurface_ACU = handlers;
-}
-function getUiSurface_ACU() {
-    return registeredUiSurface_ACU;
-}
-function resetUiSurfaceRegistryForTests_ACU() {
-    registeredUiSurface_ACU = null;
-}
 
 /**
  * presentation/components/template-preset-ui.ts — 模板预设 UI 函数（纯 DOM 操作）
@@ -144276,7 +144921,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260828-07";
+        const stamp = "20260828-11";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -155911,12 +156556,54 @@ function getHostJQuery() {
  *
  * 注册"打开新 UI"菜单按钮；点击时惰性挂载 Vue 应用。
  */
+/**
+ * showToast 实现：V2 shell 已挂载且打开时走 Pinia toast-store（可携带
+ * "打开数据管理"等 action）；否则回退宿主 toastr；再不可用只记日志。
+ * 绝不抛错——toast 通道不允许反向破坏调用方（加载/合并）流程。
+ */
+function showAcuV2Toast_ACU(payload) {
+    try {
+        const pinia = getAcuV2PiniaForBridge();
+        if (pinia) {
+            const shell = useRootShellStore(pinia);
+            if (shell.isOpen) {
+                useToastStore(pinia).notify(payload.kind, payload.text, {
+                    muteable: false,
+                    ...(payload.action ? {
+                        action: {
+                            label: payload.action.label,
+                            onClick: payload.action.onClick,
+                        },
+                    } : {}),
+                });
+                return;
+            }
+        }
+    }
+    catch (error) {
+        logWarn_ACU('[ACU-V2] toast-store 通道不可用，回退宿主 toastr:', error);
+    }
+    try {
+        const toastr = topLevelWindow_ACU?.toastr;
+        if (toastr && typeof toastr[payload.kind] === 'function') {
+            toastr[payload.kind](payload.text, undefined, payload.action
+                ? { onclick: () => { void payload.action.onClick(); } }
+                : undefined);
+            return;
+        }
+    }
+    catch (_) {
+        // 宿主 toastr 不可用时落到下方日志。
+    }
+    logWarn_ACU(`[ACU toast:${payload.kind}] ${payload.text}`);
+}
 function bootstrapAcuV2() {
     registerUiSurface_ACU({
         openSettings: openAcuV2Shell_ACU,
         openVisualizer: () => openVisualizerSurface_ACU({ source: 'external-api' }),
         refreshVisualizer: requestVisualizerExternalRefresh_ACU,
         isVisualizerActive: isVisualizerSurfaceActive_ACU,
+        showToast: showAcuV2Toast_ACU,
     });
     installAutoCardUpdaterV2Api_ACU();
     registerAcuV2MenuButton();
