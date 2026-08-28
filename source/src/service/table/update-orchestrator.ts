@@ -960,7 +960,7 @@ export async function buildBatchMergeBase_ACU(
                 // 与真实基底的同 row_id 冲突，把损坏继续放大。
                 return {
                     data: null,
-                    error: `历史表格数据回放失败，已中止填表以避免写出冲突增量：${v2ReplayResult.failed}`,
+                    error: `历史表格数据回放失败（已自动尝试全部兼容读取层仍失败），已中止填表以避免写出冲突增量。请在数据管理中导出原始数据后执行 V2 恢复：${v2ReplayResult.failed}`,
                 };
             }
             // 有历史边界时不能让 SQLite latest runtime 越过 maxMessageIndex；
@@ -983,7 +983,7 @@ export async function buildBatchMergeBase_ACU(
         if (v2ReplayResult.failed) {
             return {
                 data: null,
-                error: `历史表格数据回放失败，已中止填表以避免写出冲突增量：${v2ReplayResult.failed}`,
+                error: `历史表格数据回放失败（已自动尝试全部兼容读取层仍失败），已中止填表以避免写出冲突增量。请在数据管理中导出原始数据后执行 V2 恢复：${v2ReplayResult.failed}`,
             };
         }
 

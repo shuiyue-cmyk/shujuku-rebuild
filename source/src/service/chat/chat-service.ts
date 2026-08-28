@@ -19,126 +19,33 @@ export {
 } from '../../data/gateways/chat-gateway';
 export { purgeCurrentChatDatabaseState_ACU, type ChatDatabasePurgeResult_ACU } from './chat-database-purge';
 
-import {
-  getChatArray_ACU,
-  saveChatToHost_ACU,
-  saveChatToHostStrict_ACU,
-  setChatMessages_ACU,
-  emitMessageUpdated_ACU
-} from '../../data/gateways/chat-gateway';
-import {
-  logDebug_ACU,
-  logError_ACU,
-  logWarn_ACU,
-  isSummaryOrOutlineTable_ACU
-} from '../../shared/utils';
-import {
-  getLastOptimizationBase_ACU,
-  setLastOptimizationBase_ACU
-} from '../optimization/content-optimization';
-import {
-  settings_ACU,
-  currentChatFileIdentifier_ACU,
-  currentJsonTableData_ACU,
-  getCurrentIsolationKey_ACU
-} from '../runtime/state-manager';
-import {
-  sanitizeSheetForStorage_ACU
-} from '../template/chat-scope';
-import {
-  clearTableFieldsForIsolation_ACU,
-  collectSqlTargetTableNamesFromStorageFrameV2_ACU,
-  purgeManualRefillIncrementalSheetKeysFromMessage_ACU,
-  purgeSheetKeysFromMessage_ACU,
-  purgeSheetKeysFromMessageForIsolation_ACU,
-  readIsolatedDataContainer_ACU,
-  readIsolatedTagData_ACU,
-  writeMessageIdentity_ACU
-} from '../../data/repositories/chat-message-data-repo';
-import {
-  MAX_CHECKPOINT_RISK_DETAILS_ACU,
-  scanTargetKeysResidue_ACU
-} from '../../data/repositories/target-keys-diagnostics';
-import {
-  LEGACY_CHAT_TABLE_HEADER_GUIDE_FIELD_ACU
-} from '../../data/storage/chat-history';
-import {
-  peekChatScopedConfigContainer_ACU,
-  peekChatSheetGuideContainer_ACU,
-  setChatScopedConfigContainer_ACU,
-  setChatSheetGuideContainer_ACU
-} from '../../data/storage/chat-history';
-import {
-  normalizeSummaryVectorIsolationKey_ACU
-} from '../../shared/summary-vector-index-scope';
-import {
-  runTableUpdateCommit_ACU
-} from '../table/table-update-commit';
-import {
-  getLatestAiMessageIndexFromChat_ACU,
-  resolveTableHistoryStateFromChat_ACU
-} from '../table/table-history';
-import {
-  cleanupUnreachableSummaryVectorIndexFiles_ACU,
-  deleteSummaryVectorIndexExternal_ACU
-} from '../vector/summary-vector-index-storage-service';
-import {
-  assignSummaryVectorIndexStateToTagData_ACU,
-  readSummaryVectorIndexStateFromTagData_ACU
-} from '../vector/summary-vector-index-state-service';
-import type {
-  ChatSummaryVectorIndexManifest_ACU,
-  ChatSummaryVectorIndexState_ACU,
-  SummaryVectorIndexSafeGcScopeHint_ACU
-} from '../vector/summary-vector-index-types';
-import {
-  isV2TagData_ACU,
-  resolveTableStorageStrategy_ACU
-} from '../table/storage-strategy-resolver';
-import {
-  collectScheduleSummaryFromFramesV2_ACU,
-  deriveSheetLifecycleFromFramesV2_ACU,
-  loadTableStateFromFramesV2Detailed_ACU
-} from '../table/storage-frame-v2-replay';
-import {
-  assertSingleActiveFullCheckpointV2_ACU,
-  frameHasSuffixReplayArtifact_ACU
-} from '../table/storage-frame-v2-persist';
-import {
-  runTableWriteTransaction_ACU
-} from '../table/table-write-transaction';
-import {
-  findLatestSpv79TransitionCheckpoint_ACU
-} from '../table/spv79-transition-checkpoint';
-import {
-  hasActiveProvisionalBridgeAnywhere_ACU,
-  recoverProvisionalBridgeSession_ACU
-} from '../table/manual-catch-up-provisional-bridge';
-import type {
-  TableMutationLogEntryV2_ACU,
-  TableMutationOperationV2_ACU,
-  TableSheetCheckpointV2_ACU,
-  TableStorageFrameV2_ACU,
-  TableV2RecoveryBackup_ACU
-} from '../table/storage-frame-v2-types';
-import type {
-  Sheet_ACU,
-  TableDataObject_ACU
-} from '../../shared/models/table-data';
-import {
-  validateCanonicalCheckpoint_ACU
-} from '../../shared/canonical-checkpoint-validator';
-import {
-  buildCanonicalFullCheckpoint_ACU,
-  buildCanonicalSheetCheckpoint_ACU
-} from '../table/canonical-checkpoint-builder';
-import {
-  getTableDataFingerprint_ACU
-} from '../table/table-data-upgrade-audit';
-import {
-  purgeCurrentChatDatabaseState_ACU,
-  type ChatDatabasePurgeResult_ACU
-} from './chat-database-purge';
+import { getChatArray_ACU, saveChatToHost_ACU, saveChatToHostStrict_ACU, setChatMessages_ACU, emitMessageUpdated_ACU } from '../../data/gateways/chat-gateway';
+import { logDebug_ACU, logError_ACU, logWarn_ACU, isSummaryOrOutlineTable_ACU } from '../../shared/utils';
+import { getLastOptimizationBase_ACU, setLastOptimizationBase_ACU } from '../optimization/content-optimization';
+import { settings_ACU, currentChatFileIdentifier_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU } from '../runtime/state-manager';
+import { sanitizeSheetForStorage_ACU } from '../template/chat-scope';
+import { MESSAGE_TABLE_FIELDS_ACU, clearTableFieldsForIsolation_ACU, collectSqlTargetTableNamesFromStorageFrameV2_ACU, purgeManualRefillIncrementalSheetKeysFromMessage_ACU, purgeSheetKeysFromMessage_ACU, purgeSheetKeysFromMessageForIsolation_ACU, readIsolatedDataContainer_ACU, readIsolatedTagData_ACU, writeMessageIdentity_ACU } from '../../data/repositories/chat-message-data-repo';
+import { MAX_CHECKPOINT_RISK_DETAILS_ACU, scanTargetKeysResidue_ACU } from '../../data/repositories/target-keys-diagnostics';
+import { LEGACY_CHAT_TABLE_HEADER_GUIDE_FIELD_ACU } from '../../data/storage/chat-history';
+import { peekChatScopedConfigContainer_ACU, peekChatSheetGuideContainer_ACU, setChatScopedConfigContainer_ACU, setChatSheetGuideContainer_ACU } from '../../data/storage/chat-history';
+import { normalizeSummaryVectorIsolationKey_ACU } from '../../shared/summary-vector-index-scope';
+import { runTableUpdateCommit_ACU } from '../table/table-update-commit';
+import { getLatestAiMessageIndexFromChat_ACU, resolveTableHistoryStateFromChat_ACU } from '../table/table-history';
+import { cleanupUnreachableSummaryVectorIndexFiles_ACU, deleteSummaryVectorIndexExternal_ACU } from '../vector/summary-vector-index-storage-service';
+import { assignSummaryVectorIndexStateToTagData_ACU, readSummaryVectorIndexStateFromTagData_ACU } from '../vector/summary-vector-index-state-service';
+import type { ChatSummaryVectorIndexManifest_ACU, ChatSummaryVectorIndexState_ACU, SummaryVectorIndexSafeGcScopeHint_ACU } from '../vector/summary-vector-index-types';
+import { isV2TagData_ACU, resolveTableStorageStrategy_ACU } from '../table/storage-strategy-resolver';
+import { collectScheduleSummaryFromFramesV2_ACU, deriveSheetLifecycleFromFramesV2_ACU, loadTableStateFromFramesV2Detailed_ACU } from '../table/storage-frame-v2-replay';
+import { assertSingleActiveFullCheckpointV2_ACU, frameHasSuffixReplayArtifact_ACU } from '../table/storage-frame-v2-persist';
+import { runTableWriteTransaction_ACU } from '../table/table-write-transaction';
+import { findLatestTransitionCheckpoint_ACU } from '../table/compat-transition-checkpoint';
+import { hasActiveProvisionalBridgeAnywhere_ACU, recoverProvisionalBridgeSession_ACU } from '../table/manual-catch-up-provisional-bridge';
+import type { TableMutationLogEntryV2_ACU, TableMutationOperationV2_ACU, TableSheetCheckpointV2_ACU, TableStorageFrameV2_ACU, TableV2RecoveryBackup_ACU } from '../table/storage-frame-v2-types';
+import type { Sheet_ACU, TableDataObject_ACU } from '../../shared/models/table-data';
+import { validateCanonicalCheckpoint_ACU } from '../../shared/canonical-checkpoint-validator';
+import { buildCanonicalFullCheckpoint_ACU, buildCanonicalSheetCheckpoint_ACU } from '../table/canonical-checkpoint-builder';
+import { getTableDataFingerprint_ACU } from '../table/table-data-upgrade-audit';
+import { purgeCurrentChatDatabaseState_ACU, type ChatDatabasePurgeResult_ACU } from './chat-database-purge';
 
 // ─── 业务逻辑函数（从 presentation 层搬迁） ───
 
@@ -621,14 +528,15 @@ async function ensureV2BoundaryCheckpointForRetainedBufferCore_ACU(
                 && typeof isolatedData === 'object'
                 && !Array.isArray(isolatedData)
                 && Object.values(isolatedData).some(tagData => isV2TagData_ACU(tagData));
-            const hasSpv79TransitionCheckpoint = isolatedData
+            const hasTransitionCheckpoint = isolatedData
                 && typeof isolatedData === 'object'
                 && !Array.isArray(isolatedData)
                 && Object.values(isolatedData).some(tagData => (
                     !!tagData && typeof tagData === 'object'
-                    && (tagData as any).spv79TransitionCheckpoint?.kind === 'spv79_duplicate_row_id_transition'
+                    && ((tagData as any).spv79TransitionCheckpoint?.kind === 'spv79_duplicate_row_id_transition'
+                        || (tagData as any).compatTransitionCheckpoint?.kind === 'compat_replay_transition')
                 ));
-            if (messageIndex === anchorIndex || hasV2Frame || hasSpv79TransitionCheckpoint) {
+            if (messageIndex === anchorIndex || hasV2Frame || hasTransitionCheckpoint) {
                 snapshots.set(messageIndex, messageFieldSnapshot_ACU(message));
             }
         });
@@ -872,7 +780,8 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(
         if (!isolatedData || typeof isolatedData !== 'object' || Array.isArray(isolatedData)) continue;
         for (const [isolationKey, tagData] of Object.entries(isolatedData)) {
             if (tagData && typeof tagData === 'object'
-                && (tagData as any).spv79TransitionCheckpoint?.kind === 'spv79_duplicate_row_id_transition') {
+                && ((tagData as any).spv79TransitionCheckpoint?.kind === 'spv79_duplicate_row_id_transition'
+                    || (tagData as any).compatTransitionCheckpoint?.kind === 'compat_replay_transition')) {
                 isolationKeys.add(isolationKey);
             }
         }
@@ -881,7 +790,7 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(
         const strategy = resolveTableStorageStrategy_ACU(chat, isolationKey, isolationConfig);
         if (strategy.mode !== 'v2') continue;
 
-        const transitionRef = findLatestSpv79TransitionCheckpoint_ACU(chat, isolationKey);
+        const transitionRef = findLatestTransitionCheckpoint_ACU(chat, isolationKey);
         if (transitionRef && boundaryAnchorIndex < transitionRef.messageIndex) {
             // 私有根已经是完整 canonical 状态，且位于本轮保留边界之后；旧历史即使被
             // purge 也不能再反向决定该根是否有效。此轮无需为该隔离域另写更早的 full，
@@ -916,6 +825,7 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(
                 ?.TavernDB_ACU_IsolatedData?.[isolationKey];
             if (candidateTransitionTagData && typeof candidateTransitionTagData === 'object') {
                 delete candidateTransitionTagData.spv79TransitionCheckpoint;
+                delete candidateTransitionTagData.compatTransitionCheckpoint;
             }
             const strictReplay = await loadTableStateFromFramesV2Detailed_ACU(candidateChat, isolationKey, {
                 maxMessageIndex: boundaryAnchorIndex,
@@ -926,7 +836,7 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(
                 || strictReplay.requiresCheckpointConvergence
                 || strictReplay.compatibilityRepairs?.length
                 || getTableDataFingerprint_ACU(strictReplay.data) !== getTableDataFingerprint_ACU(transitionReplay.data)) {
-                const error = new Error(`边界 checkpoint 收敛失败：已有 compaction full 无法严格替代 SPv7.9 过渡根（isolationKey=[${isolationKey || '无标签'}]）。`) as Error & { failedIsolationKey?: string };
+                const error = new Error(`边界 checkpoint 收敛失败：已有 compaction full 无法严格替代过渡根（isolationKey=[${isolationKey || '无标签'}]）。`) as Error & { failedIsolationKey?: string };
                 error.failedIsolationKey = isolationKey;
                 throw error;
             }
@@ -934,9 +844,10 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(
             const transitionTagData = transitionMessage?.TavernDB_ACU_IsolatedData?.[isolationKey];
             if (transitionTagData && typeof transitionTagData === 'object') {
                 delete transitionTagData.spv79TransitionCheckpoint;
+                delete transitionTagData.compatTransitionCheckpoint;
             }
             changed = true;
-            logDebug_ACU(`[V2 Compaction] 已验证既有边界 full 并移除 isolationKey=[${isolationKey || '无标签'}] 的 SPv7.9 过渡根。`);
+            logDebug_ACU(`[V2 Compaction] 已验证既有边界 full 并移除 isolationKey=[${isolationKey || '无标签'}] 的过渡根。`);
             continue;
         }
 
@@ -1053,6 +964,7 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(
                     ?.TavernDB_ACU_IsolatedData?.[isolationKey];
                 if (candidateTransitionTagData && typeof candidateTransitionTagData === 'object') {
                     delete candidateTransitionTagData.spv79TransitionCheckpoint;
+                    delete candidateTransitionTagData.compatTransitionCheckpoint;
                 }
             }
             const strictReplay = await loadTableStateFromFramesV2Detailed_ACU(candidateChat, isolationKey, {
@@ -1080,6 +992,7 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(
             const transitionTagData = transitionMessage?.TavernDB_ACU_IsolatedData?.[isolationKey];
             if (transitionTagData && typeof transitionTagData === 'object') {
                 delete transitionTagData.spv79TransitionCheckpoint;
+                delete transitionTagData.compatTransitionCheckpoint;
             }
         }
         changed = true;

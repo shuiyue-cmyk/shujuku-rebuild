@@ -6,7 +6,7 @@
  */
 
 import type { Sheet_ACU } from '../../shared/models/table-data';
-import type { MixedStorageDecisionBackupV1_ACU, Spv79TransitionCheckpointV1_ACU, TableMigrationAuditBackupV1_ACU, TableStorageFrameV2_ACU, TableV2RecoveryBackup_ACU } from '../../service/table/storage-frame-v2-types';
+import type { CompatTransitionCheckpointV1_ACU, MixedStorageDecisionBackupV1_ACU, Spv79TransitionCheckpointV1_ACU, TableMigrationAuditBackupV1_ACU, TableStorageFrameV2_ACU, TableV2RecoveryBackup_ACU } from '../../service/table/storage-frame-v2-types';
 import type {
     ChatSummaryVectorIndexManifest_ACU,
     ChatSummaryVectorIndexState_ACU,
@@ -29,6 +29,8 @@ export interface IsolationTagData_ACU {
     mixedStorageDecisionBackup?: MixedStorageDecisionBackupV1_ACU;
     /** SPv7.9 duplicate row_id 的新版私有过渡回放根。 */
     spv79TransitionCheckpoint?: Spv79TransitionCheckpointV1_ACU;
+    /** 通用兼容过渡回放根（spv7.9 语义全集的固化结果）。与 spv79 槽共存时取 cutoff 更新者。 */
+    compatTransitionCheckpoint?: CompatTransitionCheckpointV1_ACU;
     /** 旧版/兼容向量记忆状态。保留字段是为了不破坏已有聊天记录。 */
     vectorMemoryState?: any;
     /** 交火模式纪要向量索引轻量状态。新外置模式下不应保存完整 vector 数组。 */

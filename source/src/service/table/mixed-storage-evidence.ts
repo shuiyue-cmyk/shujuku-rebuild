@@ -343,7 +343,13 @@ export async function collectMixedStorageEvidence_ACU(
   if (anchor) {
     try {
       const detailed = await loadTableStateFromFramesV2Detailed_ACU(chat, options.isolationKey, { updateRuntimeState: false });
-      replay = detailed ? {
+      // Tier-1 宽容回放（compat_tolerant_replay 基）只保障读可用性，不构成
+      // "V2 严格可读=可信权威"的写决策证据：宽容数据可能含重复 row_id 与身份
+      // 归并副作用，喂给 fingerprint/merge candidate 会产生错误等价判定。此处
+      // 按 T8 矩阵既有语义归类为 failed，让 legacy 权威重建/阻塞分支照常工作。
+      if (detailed && detailed.baseKind === 'compat_tolerant_replay') {
+        replay = { status: 'failed', fingerprint: null, error: 'V2 帧仅可经兼容宽容回放读出（严格回放失败），不作为混合存储写决策的可信证据' };
+      } else replay = detailed ? {
         status: 'success',
         fingerprint: getTableDataFingerprint_ACU(detailed.data),
         data: clone_ACU(detailed.data),

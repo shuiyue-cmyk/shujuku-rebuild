@@ -600,15 +600,18 @@ function purgeTransitionDataReplacePayloads_ACU(frame: any, sheetKeys: Set<strin
  * payload，不再要求 cutoff artifact 仍存在，也不把删除操作变成新的准入门禁。
  */
 function purgeSpv79TransitionCheckpointSheetKeys_ACU(tagData: any, sheetKeys: Set<string>): boolean {
-    const checkpoint = tagData?.spv79TransitionCheckpoint;
-    if (!isObjectRecord_ACU(checkpoint)) return false;
     let changed = false;
-    if (deleteSheetKeysFromRecord_ACU(checkpoint.data, sheetKeys)) changed = true;
-    if (deleteSheetKeysFromRecord_ACU(checkpoint.scheduleSummary, sheetKeys)) changed = true;
-    if (purgeTransitionDataReplacePayloads_ACU(tagData.storageFrame, sheetKeys)) changed = true;
-    if (changed && !hasSheetKeyInRecord_ACU(checkpoint.data)) {
-        delete tagData.spv79TransitionCheckpoint;
-        changed = true;
+    for (const slotKey of ['spv79TransitionCheckpoint', 'compatTransitionCheckpoint'] as const) {
+        const checkpoint = tagData?.[slotKey];
+        if (!isObjectRecord_ACU(checkpoint)) continue;
+        let slotChanged = false;
+        if (deleteSheetKeysFromRecord_ACU(checkpoint.data, sheetKeys)) slotChanged = true;
+        if (deleteSheetKeysFromRecord_ACU(checkpoint.scheduleSummary, sheetKeys)) slotChanged = true;
+        if (purgeTransitionDataReplacePayloads_ACU(tagData.storageFrame, sheetKeys)) slotChanged = true;
+        if (slotChanged && !hasSheetKeyInRecord_ACU(checkpoint.data)) {
+            delete tagData[slotKey];
+        }
+        if (slotChanged) changed = true;
     }
     return changed;
 }

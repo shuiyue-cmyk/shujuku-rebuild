@@ -13,7 +13,7 @@ vi.mock('../../../src/shared/utils', async () => {
   return { ...actual, logWarn_ACU: mockLogWarn };
 });
 
-import { applyTableOperationV2_ACU, applyTablePatchV2_ACU, collectScheduleSummaryFromFramesV2_ACU, deriveSheetLifecycleFromFramesV2_ACU, loadTableStateFromFramesV2_ACU, loadTableStateFromFramesV2Detailed_ACU, loadTableStatesAtBoundariesFromFramesV2Detailed_ACU, V2ReplayAbortedError_ACU } from '../../../src/service/table/storage-frame-v2-replay';
+import { applyTableOperationV2_ACU, applyTablePatchV2_ACU, collectScheduleSummaryFromFramesV2_ACU, deriveSheetLifecycleFromFramesV2_ACU, flushPendingCompatTransitionFixations_ACU, loadTableStateFromFramesV2_ACU, loadTableStateFromFramesV2Detailed_ACU, loadTableStatesAtBoundariesFromFramesV2Detailed_ACU, V2ReplayAbortedError_ACU } from '../../../src/service/table/storage-frame-v2-replay';
 import { buildSheetSchemaMigrationOperation_ACU, buildSheetSchemaMigrationOperationV2_ACU } from '../../../src/service/table/table-schema-migration';
 import { applySqlEditsToTableDataSnapshot_ACU } from '../../../src/service/table/sql-table-service';
 import { _set_independentTableStates_ACU, independentTableStates_ACU } from '../../../src/service/runtime/state-manager';
@@ -1323,7 +1323,7 @@ describe('loadTableStateFromFramesV2_ACU', () => {
     ]);
   });
 
-  it('row_upsert 的空 row_id 删除目标行，身份不一致的 row_upsert 拒绝回放', async () => {
+  it('row_upsert 的空 row_id 删除目标行，身份不一致的 row_upsert 经兼容降级按 rowId 归一后仍可读', async () => {
     const makeChat = (cells: any[]) => [{
       is_user: false,
       TavernDB_ACU_IsolatedData: {
@@ -1352,7 +1352,9 @@ describe('loadTableStateFromFramesV2_ACU', () => {
     const removed = await loadTableStateFromFramesV2_ACU(makeChat([' ', '不会保留']), '');
     expect(removed?.sheet_0.content).toEqual([['row_id', 'name']]);
 
-    await expect(loadTableStateFromFramesV2_ACU(makeChat(['2', '冲突身份']), '')).rejects.toThrow(/row_id|身份|rowId/i);
+    // 严格路径拒绝身份漂移，但读取降级链按 spv7.9 宽松语义以 rowId 为准归一（读永不 fail-closed）。
+    const tolerated = await loadTableStateFromFramesV2_ACU(makeChat(['2', '冲突身份']), '');
+    expect(tolerated?.sheet_0.content).toEqual([['row_id', 'name'], ['1', '冲突身份']]);
   });
 
   it('row_upsert 在身份、行宽或既有重复身份无效时不修改 state', () => {
@@ -1900,9 +1902,25 @@ describe('loadTableStateFromFramesV2_ACU', () => {
     conflictingOperation.tableName = 'inventory';
     conflictingOperation.statements = ["INSERT INTO inventory (row_id, name) VALUES (2, '不得误写到其他 Sheet')"];
 
-    await expect(loadTableStateFromFramesV2Detailed_ACU(chatWithConflictingHistoricalTableName, '', {
+    // 读取主路径不再 fail-closed：降级链按 spv7.9 历史表名别名语义回放，
+    // 这条增量落到占用该历史表名的 sheet_0（忠实还原写入时代的可见结果）。
+    const conflictTolerated = await loadTableStateFromFramesV2Detailed_ACU(chatWithConflictingHistoricalTableName, '', {
       updateRuntimeState: false,
-    })).rejects.toThrow(/sql_sheet_batch 历史表名与其他 Sheet 冲突.*sheetKey=sheet_global.*tableName=inventory/);
+    });
+    expect(conflictTolerated?.baseKind).toBe('compat_tolerant_replay');
+    expect(conflictTolerated?.data.sheet_0.content).toEqual([
+      ['row_id', 'name'],
+      ['1', '铁剑'],
+      ['2', '不得误写到其他 Sheet'],
+    ]);
+    // 写路径校验探针（compatibilityMode:'disabled'）不进入降级链：无临时补锚时
+    // sheet_global 不在 state 中，严格路径经历史别名回退解析（既有行为），
+    // 结果绝不带 compat_tolerant_replay 基。
+    const disabledProbe = await loadTableStateFromFramesV2Detailed_ACU(chatWithConflictingHistoricalTableName, '', {
+      updateRuntimeState: false,
+      compatibilityMode: 'disabled',
+    });
+    expect(disabledProbe?.baseKind).toBe('full_checkpoint');
 
     const chatAfterDataReplace = structuredClone(chat) as any[];
     const entry = chatAfterDataReplace[messageIndex].TavernDB_ACU_IsolatedData[''].storageFrame.logEntries[0];
@@ -2044,7 +2062,7 @@ describe('loadTableStateFromFramesV2_ACU', () => {
     expect(again).toEqual(result);
   });
 
-  it('不可无损修复的历史重复 checkpoint 输出脱敏审计原因，不误报为可修复', async () => {
+  it('不可无损修复的历史重复 checkpoint 输出脱敏审计原因，读取降级链仍按兼容语义读出数据', async () => {
     const checkpointData = makeCheckpointData();
     checkpointData.sheet_0.content.push([' 1 ', '不会进入诊断的业务值', '不可确定的额外列']);
     const chat = [{
@@ -2061,14 +2079,24 @@ describe('loadTableStateFromFramesV2_ACU', () => {
       },
     }];
 
-    await expect(loadTableStateFromFramesV2_ACU(chat, '', { updateRuntimeState: false }))
-      .rejects.toThrow(/gate=audit_gate.*upgrade_overflow_cells:1.*upgrade_overflow_cells@sheet_0#2/);
+    // 读取主路径不再 fail-closed：严格路径的 audit gate 失败后，降级链按
+    // spv7.9 兼容语义读出数据（行身份重编号），越界尾格保留。
+    const result = await loadTableStateFromFramesV2_ACU(chat, '', { updateRuntimeState: false });
+    expect(result?.sheet_0.content).toEqual([
+      ['row_id', 'name'],
+      ['1', '铁剑'],
+      ['2', '不会进入诊断的业务值', '不可确定的额外列'],
+    ]);
+    // 严格路径的脱敏审计诊断仍然输出（可定位、不含业务值）。
     const diagnostic = mockLogWarn.mock.calls.map(([message]) => String(message)).find(message => message.includes('gate=audit_gate'));
     expect(diagnostic).toContain('upgrade_duplicate_row_id:1');
     expect(diagnostic).toContain('upgrade_overflow_cells:1');
     expect(diagnostic).toContain('导出原始 frame 后在数据管理执行 V2 恢复');
     expect(diagnostic).not.toContain('不会进入诊断的业务值');
     expect(diagnostic).not.toContain('不可确定的额外列');
+    // 写路径校验探针（compatibilityMode:'disabled'）维持严格失败信号。
+    await expect(loadTableStateFromFramesV2_ACU(chat, '', { updateRuntimeState: false, compatibilityMode: 'disabled' }))
+      .rejects.toThrow(/gate=audit_gate.*upgrade_overflow_cells:1.*upgrade_overflow_cells@sheet_0#2/);
   });
 
 
@@ -4044,7 +4072,7 @@ describe('loadTableStateFromFramesV2_ACU', () => {
   });
 
 
-  it('legacy meta_update 携带 sourceData.ddl 时明确拒绝，并且不推进 entry tracking 或提交 state', async () => {
+  it('legacy meta_update 携带 sourceData.ddl 时严格路径拒绝，读取降级链按 spv7.9 语义应用且不改写原 checkpoint', async () => {
     const previousIndependentStates = independentTableStates_ACU;
     _set_independentTableStates_ACU({});
     const checkpointData = makeCheckpointData();
@@ -4070,9 +4098,12 @@ describe('loadTableStateFromFramesV2_ACU', () => {
     }];
 
     try {
-      await expect(loadTableStateFromFramesV2_ACU(chat, '')).rejects.toThrow('迁移为 sheet_schema_migrate 或 sheet_replace');
+      // 读取降级链（Tier-1）按 spv7.9 语义 Object.assign 应用 legacy ddl，数据可读。
+      const result = await loadTableStateFromFramesV2_ACU(chat, '');
+      expect(result?.sheet_0.sourceData.ddl).toBe('CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, name TEXT, unsafe TEXT);');
+      expect(result?.sheet_0.content).toEqual([['row_id', 'name'], ['1', '铁剑']]);
+      // 原始 checkpoint 对象不被回放修改（回放全程在深拷贝副本上进行）。
       expect(checkpointData.sheet_0.sourceData.ddl).toBe('CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, name TEXT);');
-      expect(independentTableStates_ACU.sheet_0).toBeUndefined();
     } finally {
       _set_independentTableStates_ACU(previousIndependentStates);
     }
@@ -4177,7 +4208,7 @@ describe('loadTableStateFromFramesV2_ACU', () => {
     expect(replayed?.sheet_0.content[1][2]).toBeNull();
   });
 
-  it('未知或畸形 operation fail closed，且不返回伪成功 state', async () => {
+  it('未知或畸形 operation 严格路径拒绝，读取降级链按 spv7.9 语义跳过并保留已知历史', async () => {
     const previousIndependentStates = independentTableStates_ACU;
     _set_independentTableStates_ACU({});
     const checkpointData = makeCheckpointData();
@@ -4200,11 +4231,15 @@ describe('loadTableStateFromFramesV2_ACU', () => {
     }];
 
     try {
-      await expect(loadTableStateFromFramesV2_ACU(makeChat({ kind: 'future_unknown_operation' }), '')).rejects.toThrow('不支持的 operation kind');
-      await expect(loadTableStateFromFramesV2_ACU(makeChat(null), '')).rejects.toThrow('缺少有效 kind');
-      await expect(loadTableStateFromFramesV2_ACU(makeChat({}), '')).rejects.toThrow('缺少有效 kind');
+      // 读取降级链（Tier-1）按 spv7.9 语义跳过未知/畸形 operation，checkpoint 历史照常可读。
+      for (const operation of [{ kind: 'future_unknown_operation' }, null, {}]) {
+        const result = await loadTableStateFromFramesV2_ACU(makeChat(operation), '');
+        expect(result?.sheet_0.content).toEqual([['row_id', 'name'], ['1', '铁剑']]);
+      }
+      expect(mockLogWarn).toHaveBeenCalledWith(expect.stringContaining('跳过未知 operation kind: future_unknown_operation'));
+      expect(mockLogWarn).toHaveBeenCalledWith(expect.stringContaining('跳过缺少有效 kind 的 operation'));
+      // 原始 checkpoint 对象不被回放修改。
       expect(checkpointData.sheet_0.content).toEqual([['row_id', 'name'], ['1', '铁剑']]);
-      expect(independentTableStates_ACU.sheet_0).toBeUndefined();
     } finally {
       _set_independentTableStates_ACU(previousIndependentStates);
     }
@@ -4780,7 +4815,7 @@ describe('SPv7.9 duplicate row_id transition checkpoint', () => {
     });
   });
 
-  it('宿主真实加载遇到 duplicate_row_id 后接 SQL 时仍写入私有根，不改写原 storageFrame', async () => {
+  it('宿主真实加载遇到 duplicate_row_id 后接 SQL 时首次即返回兼容结果，异步固化通用过渡根且不改写原 storageFrame', async () => {
     const checkpointData = makeCheckpointData();
     checkpointData.sheet_0.content = [['row_id', 'name'], ['1', '原始行']];
     const duplicateSheet = structuredClone(checkpointData.sheet_0);
@@ -4813,24 +4848,34 @@ describe('SPv7.9 duplicate row_id transition checkpoint', () => {
 
       const replay = await loadTableStateFromFramesV2Detailed_ACU(chat, '', { updateRuntimeState: false });
 
-      expect(replay?.baseKind).toBe('spv79_transition_checkpoint');
+      // 首次加载即返回兼容结果（重编号后与将来固化根一致），固化异步进行。
+      expect(replay?.baseKind).toBe('compat_tolerant_replay');
       expect(replay?.data.sheet_0.content).toEqual([
         ['row_id', 'name'],
         ['1', 'SQL 后缀'],
         ['2', 'SQL 后缀'],
       ]);
+
+      await flushPendingCompatTransitionFixations_ACU();
       expect(chat[0].TavernDB_ACU_IsolatedData[''].storageFrame).toEqual(storageFrameBefore);
-      expect(chat[0].TavernDB_ACU_IsolatedData[''].spv79TransitionCheckpoint).toEqual(expect.objectContaining({
-        kind: 'spv79_duplicate_row_id_transition',
+      expect(chat[0].TavernDB_ACU_IsolatedData[''].spv79TransitionCheckpoint).toBeUndefined();
+      expect(chat[0].TavernDB_ACU_IsolatedData[''].compatTransitionCheckpoint).toEqual(expect.objectContaining({
+        kind: 'compat_replay_transition',
         cutoff: { messageIndex: 0, seq: 1, operationIndex: 1 },
+        tolerances: expect.arrayContaining(['legacy_duplicate_row_ids']),
       }));
       expect(saveChat).toHaveBeenCalledTimes(1);
+
+      // 固化后二次加载走过渡根严格快路径，数据与首次返回完全一致。
+      const second = await loadTableStateFromFramesV2Detailed_ACU(chat, '', { updateRuntimeState: false });
+      expect(second?.baseKind).toBe('compat_transition_checkpoint');
+      expect(second?.data.sheet_0.content).toEqual(replay?.data.sheet_0.content);
     } finally {
       _set_SillyTavern_API_ACU(previousHostApi);
     }
   });
 
-  it('旧重复行 SQL 回放保留 SQL INSERT/DELETE/params 语义，随后非 SQL operation 仍在重编号前执行', async () => {
+  it('旧重复行 SQL 回放保留 SQL INSERT/DELETE/params 语义，固化后通用过渡根 cutoff 覆盖全部 operation', async () => {
     const checkpointData = makeCheckpointData();
     const duplicateSheet = structuredClone(checkpointData.sheet_0);
     duplicateSheet.content.push(['1', '重复行']);
@@ -4863,12 +4908,15 @@ describe('SPv7.9 duplicate row_id transition checkpoint', () => {
 
       const replay = await loadTableStateFromFramesV2Detailed_ACU(chat, '', { updateRuntimeState: false });
 
-      expect(replay?.baseKind).toBe('spv79_transition_checkpoint');
+      expect(replay?.baseKind).toBe('compat_tolerant_replay');
       expect(replay?.data.sheet_0.content).toEqual([
         ['row_id', 'name'],
         ['1', '非 SQL 后缀'],
       ]);
-      expect(chat[0].TavernDB_ACU_IsolatedData[''].spv79TransitionCheckpoint?.cutoff).toEqual({
+
+      await flushPendingCompatTransitionFixations_ACU();
+      expect(chat[0].TavernDB_ACU_IsolatedData[''].spv79TransitionCheckpoint).toBeUndefined();
+      expect(chat[0].TavernDB_ACU_IsolatedData[''].compatTransitionCheckpoint?.cutoff).toEqual({
         messageIndex: 0, seq: 1, operationIndex: 4,
       });
     } finally {

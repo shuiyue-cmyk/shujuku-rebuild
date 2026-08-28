@@ -153,6 +153,29 @@ export interface Spv79TransitionCheckpointV1_ACU {
   scheduleSummary?: Record<string, TableCheckpointScheduleSummaryV2_ACU>;
 }
 
+/**
+ * 通用兼容过渡根：严格回放失败、Tier-1 宽容回放成功后，把兼容结果固化为
+ * 新的回放基座（下次加载走严格快路径）。是 spv79TransitionCheckpoint 的
+ * 泛化：不限于 duplicate_row_id，覆盖 spv7.9 语义全集（乱序 seq、legacy
+ * meta_update ddl、未知 operation kind、宽松 row_upsert、旧 DSL 行号、
+ * 两代 sheetKey 身份归并）。
+ */
+export interface CompatTransitionCheckpointV1_ACU {
+  version: 1;
+  kind: 'compat_replay_transition';
+  createdAt: number;
+  data: TableDataObject_ACU;
+  /** 该快照已经吸收的最后一个旧历史 operation。 */
+  cutoff: {
+    messageIndex: number;
+    seq: number;
+    operationIndex: number;
+  };
+  scheduleSummary?: Record<string, TableCheckpointScheduleSummaryV2_ACU>;
+  /** 固化时命中的容忍项摘要（provenance，用于日志与事故复盘）。 */
+  tolerances: string[];
+}
+
 export interface TableCheckpointV2_ACU {
   kind: 'full';
   createdAt: number;

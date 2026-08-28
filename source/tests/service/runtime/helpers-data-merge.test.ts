@@ -637,7 +637,7 @@ describe('mergeAllIndependentTables_ACU', () => {
     expect(result).toEqual(repairedData);
   });
 
-  it('legacy-v1 迁移声称成功但未返回候选数据时拒绝继续', async () => {
+  it('legacy-v1 迁移声称成功但未返回候选数据时降级为直读旧数据，不再 throw', async () => {
     vi.mocked(getChatArray_ACU).mockReturnValue([{ is_user: false, mes: 'AI回复' }] as any);
     vi.mocked(resolveTableStorageStrategy_ACU).mockReturnValue({ mode: 'legacy-v1' } as any);
     vi.mocked(readIsolatedTagData_ACU).mockReturnValue(null);
@@ -647,7 +647,11 @@ describe('mergeAllIndependentTables_ACU', () => {
     });
     vi.mocked(migrateLegacyStorageToV2OnLoad_ACU).mockResolvedValueOnce({ migrated: true } as any);
 
-    await expect(mergeAllIndependentTables_ACU()).rejects.toThrow('迁移成功结果缺少修复后的表格数据');
+    // C4 读取不阻塞：迁移结果异常时降级为 xing 时代直读合并数据，数据照常可用。
+    const result = await mergeAllIndependentTables_ACU();
+    expect(result).not.toBeNull();
+    expect(result!.sheet_0.content).toEqual([['row_id', '物品名称'], ['1', '旧数据']]);
+    expect(logWarn_ACU).toHaveBeenCalledWith(expect.stringContaining('已降级为直读旧格式'));
   });
 
   // ═══ updateConfig 兼容迁移 ═══

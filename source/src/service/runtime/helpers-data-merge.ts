@@ -2,106 +2,31 @@
  * service/runtime/helpers-data-merge.ts — 数据合并/格式化/首楼初始化/阈值
  * 从 helpers-remaining.ts 拆出
  */
-import {
-  deriveTemplatePresetNameForImport_ACU
-} from '../../shared/template-preset-utils';
-import {
-  TABLE_ORDER_FIELD_ACU
-} from '../../shared/constants';
-import {
-  currentJsonTableData_ACU,
-  getCurrentIsolationKey_ACU,
-  independentTableStates_ACU,
-  settings_ACU,
-  suppressWorldbookInjectionInGreeting_ACU,
-  _set_suppressWorldbookInjectionInGreeting_ACU,
-  _set_currentJsonTableData_ACU
-} from './state-manager';
-import {
-  isSqliteMode
-} from '../table/storage-mode';
-import {
-  getChatArray_ACU
-} from '../../data/gateways/chat-gateway';
-import {
-  applyTemplateScopeForCurrentChat_ACU
-} from '../settings/settings-service';
-import {
-  buildChatSheetGuideDataFromTemplateObj_ACU,
-  ensureStableRowIdsForSheetContent_ACU,
-  getChatSheetGuideDataForIsolationKey_ACU,
-  getSortedSheetKeys_ACU,
-  materializeDataFromSheetGuide_ACU,
-  reorderDataBySheetKeys_ACU,
-  sanitizeTemplateSnapshotForChat_ACU,
-  setChatSheetGuideDataForIsolationKey_ACU
-} from '../template/chat-scope';
-import {
-  deleteAllGeneratedEntries_ACU
-} from '../worldbook/pipeline';
-import {
-  ensureSheetOrderNumbers_ACU,
-  isSummaryOrOutlineTable_ACU,
-  logDebug_ACU,
-  logError_ACU,
-  logWarn_ACU,
-  parseTableTemplateJson_ACU
-} from '../../shared/utils';
-import {
-  getTemplateSheetKeys_ACU
-} from '../template/chat-scope';
-import {
-  upsertTemplatePreset_ACU
-} from '../template/template-preset-service';
-import {
-  readIsolatedTagData_ACU,
-  readLegacyIndependentData_ACU,
-  readLegacyStandardData_ACU,
-  readLegacySummaryData_ACU,
-  readModifiedKeys_ACU,
-  readUpdateGroupKeys_ACU,
-  isLegacyMatchForIsolation_ACU
-} from '../../data/repositories/chat-message-data-repo';
-import {
-  applyTableDelta_ACU,
-  isDeltaTagData_ACU
-} from '../table/table-delta';
-import {
-  isV2TagData_ACU,
-  resolveTableStorageStrategy_ACU
-} from '../table/storage-strategy-resolver';
-import {
-  loadTableStateFromFramesV2_ACU
-} from '../table/storage-frame-v2-replay';
-import {
-  persistTableMutationLogV2_ACU
-} from '../table/storage-frame-v2-persist';
-import {
-  migrateLegacyStorageToV2OnLoad_ACU
-} from '../table/storage-v2-migration';
-import {
-  runTableWriteTransaction_ACU
-} from '../table/table-write-transaction';
-import {
-  normalizeCanonicalTableRows_ACU
-} from '../../shared/canonical-row-normalizer';
-import {
-  allocateStableRowId_ACU,
-  createStableRowIdReservation_ACU
-} from '../../shared/stable-row-id-allocator';
-import {
-  getSheetColumnProjection_ACU
-} from '../../shared/ddl-utils';
-import {
-  canonicalizeDisplayName_ACU
-} from '../../shared/sheet-identity';
-import {
-  applyGuideMetadataToSheet_ACU,
-  isSameSheetHeader_ACU
-} from '../template/guide-metadata-overlay';
-import {
-  repairLegacyAutoMergedRowTails_ACU
-} from '../../shared/canonical-row-normalizer';
+import { deriveTemplatePresetNameForImport_ACU } from '../../shared/template-preset-utils';
+import { TABLE_ORDER_FIELD_ACU } from '../../shared/constants';
+import { currentJsonTableData_ACU, getCurrentIsolationKey_ACU, independentTableStates_ACU, settings_ACU, suppressWorldbookInjectionInGreeting_ACU, _set_suppressWorldbookInjectionInGreeting_ACU, _set_currentJsonTableData_ACU } from './state-manager';
+import { isSqliteMode } from '../table/storage-mode';
+import { getChatArray_ACU, saveChatToHost_ACU } from '../../data/gateways/chat-gateway';
+import { applyTemplateScopeForCurrentChat_ACU, saveSettings_ACU } from '../settings/settings-service';
+import { buildChatSheetGuideDataFromTemplateObj_ACU, ensureStableRowIdsForSheetContent_ACU, getChatSheetGuideDataForIsolationKey_ACU, getSortedSheetKeys_ACU, materializeDataFromSheetGuide_ACU, reorderDataBySheetKeys_ACU, sanitizeTemplateSnapshotForChat_ACU, setChatSheetGuideDataForIsolationKey_ACU } from '../template/chat-scope';
+import { deleteAllGeneratedEntries_ACU } from '../worldbook/pipeline';
+import { ensureSheetOrderNumbers_ACU, isSummaryOrOutlineTable_ACU, logDebug_ACU, logError_ACU, logWarn_ACU, parseTableTemplateJson_ACU } from '../../shared/utils';
+import { getTemplateSheetKeys_ACU } from '../template/chat-scope';
+import { upsertTemplatePreset_ACU } from '../template/template-preset-service';
+import { readIsolatedTagData_ACU, readLegacyIndependentData_ACU, readLegacyStandardData_ACU, readLegacySummaryData_ACU, readModifiedKeys_ACU, readUpdateGroupKeys_ACU, readMessageIdentity_ACU, isLegacyMatchForIsolation_ACU } from '../../data/repositories/chat-message-data-repo';
+import { applyTableDelta_ACU, isDeltaTagData_ACU, isCheckpointTagData_ACU } from '../table/table-delta';
+import { isV2TagData_ACU, resolveTableStorageStrategy_ACU } from '../table/storage-strategy-resolver';
+import { loadTableStateFromFramesV2_ACU } from '../table/storage-frame-v2-replay';
+import { persistTableMutationLogV2_ACU } from '../table/storage-frame-v2-persist';
+import { migrateLegacyStorageToV2OnLoad_ACU } from '../table/storage-v2-migration';
+import { runTableWriteTransaction_ACU } from '../table/table-write-transaction';
+import { normalizeCanonicalTableRows_ACU } from '../../shared/canonical-row-normalizer';
+import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../../shared/stable-row-id-allocator';
+import { getSheetColumnProjection_ACU } from '../../shared/ddl-utils';
+import { canonicalizeDisplayName_ACU } from '../../shared/sheet-identity';
+import { applyGuideMetadataToSheet_ACU, isSameSheetHeader_ACU } from '../template/guide-metadata-overlay';
+import { repairLegacyAutoMergedRowTails_ACU } from '../../shared/canonical-row-normalizer';
+import { showUiSurfaceToast_ACU } from '../../shared/ui-surface-registry';
 
 /**
  * Legacy entry point retained for callers that need in-place normalization.
@@ -283,17 +208,7 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
       // 收集 delta 楼层的增量数据（逆序收集，后续正序叠加）
       const pendingDeltas: { index: number; tagData: any }[] = [];
 
-      // AI 楼层前缀计数表：aiFloorPrefixByIndex[k] = chat[0..k] 中非用户消息数。
-      // 一次遍历预计算，替代循环内 chat.slice(0, i+1).filter(...).length 的 O(n²) 重复扫描。
-      const aiFloorPrefixByIndex: number[] = new Array(chat.length);
-      let aiFloorRunningCount = 0;
-      for (let k = 0; k < chat.length; k++) {
-          if (!chat[k].is_user) aiFloorRunningCount += 1;
-          aiFloorPrefixByIndex[k] = aiFloorRunningCount;
-      }
-
       for (let i = chat.length - 1; i >= 0; i--) {
-          if (chat.length > 500 && i % 200 === 0) await new Promise<void>(r => setTimeout(r, 0));
           const message = chat[i];
           if (message.is_user) continue;
 
@@ -346,7 +261,7 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
                           if (!independentTableStates_ACU[storedSheetKey]) {
                               independentTableStates_ACU[storedSheetKey] = {};
                           }
-                          const currentAiFloor = aiFloorPrefixByIndex[i];
+                          const currentAiFloor = chat.slice(0, i + 1).filter(m => !m.is_user).length;
                           independentTableStates_ACU[storedSheetKey].lastUpdatedAiFloor = currentAiFloor;
                       }
                   }
@@ -387,7 +302,7 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
 
                           if (wasUpdated) {
                               if (!independentTableStates_ACU[storedSheetKey]) independentTableStates_ACU[storedSheetKey] = {};
-                              const currentAiFloor = aiFloorPrefixByIndex[i];
+                              const currentAiFloor = chat.slice(0, i + 1).filter(m => !m.is_user).length;
                               independentTableStates_ACU[storedSheetKey].lastUpdatedAiFloor = currentAiFloor;
                           }
                       }
@@ -407,7 +322,7 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
                           mergedData[k] = JSON.parse(JSON.stringify(standardData[k]));
                           foundSheets[k] = true;
                           if (!independentTableStates_ACU[k]) independentTableStates_ACU[k] = {};
-                          const currentAiFloor = aiFloorPrefixByIndex[i];
+                          const currentAiFloor = chat.slice(0, i + 1).filter(m => !m.is_user).length;
                           independentTableStates_ACU[k].lastUpdatedAiFloor = currentAiFloor;
                       }
                   });
@@ -424,7 +339,7 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
                           mergedData[k] = JSON.parse(JSON.stringify(summaryData[k]));
                           foundSheets[k] = true;
                           if (!independentTableStates_ACU[k]) independentTableStates_ACU[k] = {};
-                          const currentAiFloor = aiFloorPrefixByIndex[i];
+                          const currentAiFloor = chat.slice(0, i + 1).filter(m => !m.is_user).length;
                           independentTableStates_ACU[k].lastUpdatedAiFloor = currentAiFloor;
                       }
                   });
@@ -438,9 +353,7 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
           pendingDeltas.reverse();
           logDebug_ACU(`[表格重建] 正序叠加 ${pendingDeltas.length} 个 delta 楼层到 base 上`);
 
-          for (let _di = 0; _di < pendingDeltas.length; _di++) {
-              if (pendingDeltas.length > 20 && _di % 10 === 0) await new Promise<void>(r => setTimeout(r, 0));
-              const { index: deltaIndex, tagData: deltaTagData } = pendingDeltas[_di];
+          for (const { index: deltaIndex, tagData: deltaTagData } of pendingDeltas) {
               const incrementalData = deltaTagData.incrementalData || {};
               for (const [sheetKey, delta] of Object.entries(incrementalData)) {
                   if (!templateSheetKeySet.has(sheetKey)) continue;
@@ -454,7 +367,7 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
                       if (!independentTableStates_ACU[sheetKey]) {
                           independentTableStates_ACU[sheetKey] = {};
                       }
-                      const currentAiFloor = aiFloorPrefixByIndex[deltaIndex];
+                      const currentAiFloor = chat.slice(0, deltaIndex + 1).filter((m: any) => !m.is_user).length;
                       independentTableStates_ACU[sheetKey].lastUpdatedAiFloor = currentAiFloor;
                   } catch (e) {
                       logError_ACU(`[表格重建] 应用 delta 失败: sheetKey=${sheetKey}, 楼层=#${deltaIndex}`, e);
@@ -535,6 +448,27 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
   }
 
 
+  /** 每个「聊天标识+隔离键」只弹一次直读降级提示，避免每次合并都打扰用户。 */
+  const notifiedLegacyDirectReadFallbacks_ACU = new Set<string>();
+
+  function notifyLegacyDirectReadFallbackOnce_ACU(isolationKey: string, reason: string): void {
+      const chatIdentity = (() => {
+          try {
+              const chat = getChatArray_ACU();
+              return Array.isArray(chat) ? `len:${chat.length}:${String(chat[0]?.send_date ?? '')}` : 'no-chat';
+          } catch (_) {
+              return 'no-chat';
+          }
+      })();
+      const key = `${chatIdentity}|${isolationKey}`;
+      if (notifiedLegacyDirectReadFallbacks_ACU.has(key)) return;
+      notifiedLegacyDirectReadFallbacks_ACU.add(key);
+      showUiSurfaceToast_ACU({
+          kind: 'warning',
+          text: `旧格式表格数据已按兼容模式直读（数据可用）。自动升级暂未完成：${reason}`,
+      });
+  }
+
   export async function mergeAllIndependentTables_ACU() {
       const chat = getChatArray_ACU();
       if (!chat || chat.length === 0) {
@@ -579,29 +513,41 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
 
       if (strategy.mode === 'legacy-v1') {
           const mergedLegacyData = await mergeAllIndependentTablesLegacyV1_ACU();
-          const migrationResult = await migrateLegacyStorageToV2OnLoad_ACU({
-              data: mergedLegacyData,
-              isolationKey: currentIsolationKey,
-              isolationConfig: {
+          try {
+              const migrationResult = await migrateLegacyStorageToV2OnLoad_ACU({
+                  data: mergedLegacyData,
+                  isolationKey: currentIsolationKey,
+                  isolationConfig: {
+                      enabled: settings_ACU.dataIsolationEnabled,
+                      code: settings_ACU.dataIsolationCode,
+                  },
+                  skipUpdateFloors: settings_ACU.skipUpdateFloors,
+              });
+              if (!migrationResult.migrated) {
+                  throw new Error(`旧存储迁移到 V2 失败: ${migrationResult.error || '未执行迁移'}`);
+              }
+              if (!migrationResult.data) {
+                  throw new Error('旧存储迁移到 V2 失败: 迁移成功结果缺少修复后的表格数据。');
+              }
+              const postStrategy = resolveTableStorageStrategy_ACU(chat, currentIsolationKey, {
                   enabled: settings_ACU.dataIsolationEnabled,
                   code: settings_ACU.dataIsolationCode,
-              },
-              skipUpdateFloors: settings_ACU.skipUpdateFloors,
-          });
-          if (!migrationResult.migrated) {
-              throw new Error(`旧存储迁移到 V2 失败: ${migrationResult.error || '未执行迁移'}`);
+              });
+              if (postStrategy.mode !== 'v2') {
+                  throw new Error(`旧存储迁移后二次校验失败：当前模式=${postStrategy.mode}${postStrategy.mode === 'legacy-v1' ? `，reason=${postStrategy.reason}` : ''}`);
+              }
+              return migrateContentNullToRowId(migrationResult.data);
+          } catch (migrationError) {
+              // C4 读取不阻塞：迁移失败（audit 不可修、mixed 阻断、provenance 非法等）
+              // 时不再 throw——降级为 xing/7.9 之前的直读合并结果，数据照常可用。
+              // 迁移待决已由 migrateLegacyStorageToV2OnLoad_ACU 内部登记（mixed 场景走
+              // registerMixedStorageDecision_ACU 通道）；写入门闸
+              // ensureLegacyStorageMigratedBeforeWrite_ACU 维持严格，写仍要求迁移成功。
+              const message = migrationError instanceof Error ? migrationError.message : String(migrationError);
+              logWarn_ACU(`[TableStorage] 旧存储迁移失败，已降级为直读旧格式（数据可用，写入前仍需完成迁移）：${message}`);
+              notifyLegacyDirectReadFallbackOnce_ACU(currentIsolationKey, message);
+              return migrateContentNullToRowId(mergedLegacyData);
           }
-          if (!migrationResult.data) {
-              throw new Error('旧存储迁移到 V2 失败: 迁移成功结果缺少修复后的表格数据。');
-          }
-          const postStrategy = resolveTableStorageStrategy_ACU(chat, currentIsolationKey, {
-              enabled: settings_ACU.dataIsolationEnabled,
-              code: settings_ACU.dataIsolationCode,
-          });
-          if (postStrategy.mode !== 'v2') {
-              throw new Error(`旧存储迁移后二次校验失败：当前模式=${postStrategy.mode}${postStrategy.mode === 'legacy-v1' ? `，reason=${postStrategy.reason}` : ''}`);
-          }
-          return migrateContentNullToRowId(migrationResult.data);
       }
 
       return migrateContentNullToRowId(await mergeAllIndependentTablesLegacyV1_ACU());
@@ -980,8 +926,6 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
                 if (newRow.length < originalHeaderRow.length) {
                      while(newRow.length < originalHeaderRow.length) newRow.push('');
                 } else if (newRow.length > originalHeaderRow.length) {
-                    // 截断是有意设计（对齐原表头列数），但需留痕：静默截断会掩盖 AI 输出格式异常。
-                    logWarn_ACU(`[表格重建] Markdown 数据行列数(${newRow.length})超过表头列数(${originalHeaderRow.length})，已按表头截断多余列：sheetKey=${sheetKey}, 数据行#${i}`);
                     newRow.splice(originalHeaderRow.length);
                 }
                 newContent.push(newRow);
