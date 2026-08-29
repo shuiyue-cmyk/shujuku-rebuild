@@ -98,58 +98,168 @@ describe('createEmbeddings_ACU 错误结构化分类（T3）', () => {
     }
   });
 
-  it('413 → limited-retryable', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(413, errorBody(null, 'payload too large'))));
-
-    await expect(createEmbeddings_ACU({
-      endpoint: 'https://embedding.test/v1',
-      apiKey: 'sk-1',
-      model: 'm',
-      input: ['x'],
-    })).rejects.toMatchObject({ kind: 'limited-retryable', httpStatus: 413 });
-  });
-
-  it('408 / 429 → retryable，并解析 Retry-After 头', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(429, errorBody('rate_limit', 'slow down'), { 'Retry-After': '5' })));
-
-    await expect(createEmbeddings_ACU({
-      endpoint: 'https://embedding.test/v1',
-      apiKey: 'sk-1',
-      model: 'm',
-      input: ['x'],
-    })).rejects.toMatchObject({ kind: 'retryable', httpStatus: 429, retryAfterMs: 5000 });
-
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(408, errorBody(null, 'timeout'))));
-    await expect(createEmbeddings_ACU({
-      endpoint: 'https://embedding.test/v1',
-      apiKey: 'sk-1',
-      model: 'm',
-      input: ['x'],
-    })).rejects.toMatchObject({ kind: 'retryable', httpStatus: 408 });
-  });
-
-  it('5xx → retryable', async () => {
-    for (const status of [500, 502, 503]) {
-      vi.stubGlobal('fetch', vi.fn(async () => jsonResponse(status, errorBody(null, 'server error'))));
-
-      await expect(createEmbeddings_ACU({
+  it('413 → limited-retryable（自动重试一次）', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn(async () => jsonResponse(413, errorBody(null, 'payload too large')));
+      vi.stubGlobal('fetch', fetchMock);
+      const promise = createEmbeddings_ACU({
         endpoint: 'https://embedding.test/v1',
         apiKey: 'sk-1',
         model: 'm',
         input: ['x'],
-      })).rejects.toMatchObject({ kind: 'retryable', httpStatus: status });
+      });
+      const assertion = expect(promise).rejects.toMatchObject({ kind: 'limited-retryable', httpStatus: 413 });
+      await vi.runAllTimersAsync();
+      await assertion;
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
     }
   });
 
-  it('网络异常（fetch reject）→ 仍是裸 Error，向后', async () => {
-    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
+  // P4：retryable 类失败在网关内自动快速重试一次（尊重 Retry-After，上限 5s），
+  // 重试等待用假定时器推进，避免测试真实阻塞。
+  async function expectWithRetryTimers(promise: Promise<unknown>, matcher: Record<string, unknown>): Promise<void> {
+    const assertion = expect(promise).rejects.toMatchObject(matcher);
+    await vi.runAllTimersAsync();
+    await assertion;
+  }
+
+  it('408 / 429 → retryable，自动重试一次后仍失败则抛出，并解析 Retry-After 头', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetch429 = vi.fn(async () => jsonResponse(429, errorBody('rate_limit', 'slow down'), { 'Retry-After': '5' }));
+      vi.stubGlobal('fetch', fetch429);
+      await expectWithRetryTimers(createEmbeddings_ACU({
+        endpoint: 'https://embedding.test/v1',
+        apiKey: 'sk-1',
+        model: 'm',
+        input: ['x'],
+      }), { kind: 'retryable', httpStatus: 429, retryAfterMs: 5000 });
+      expect(fetch429).toHaveBeenCalledTimes(2);
+
+      const fetch408 = vi.fn(async () => jsonResponse(408, errorBody(null, 'timeout')));
+      vi.stubGlobal('fetch', fetch408);
+      await expectWithRetryTimers(createEmbeddings_ACU({
+        endpoint: 'https://embedding.test/v1',
+        apiKey: 'sk-1',
+        model: 'm',
+        input: ['x'],
+      }), { kind: 'retryable', httpStatus: 408 });
+      expect(fetch408).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('5xx → retryable（自动重试一次）', async () => {
+    vi.useFakeTimers();
+    try {
+      for (const status of [500, 502, 503]) {
+        const fetchMock = vi.fn(async () => jsonResponse(status, errorBody(null, 'server error')));
+        vi.stubGlobal('fetch', fetchMock);
+        await expectWithRetryTimers(createEmbeddings_ACU({
+          endpoint: 'https://embedding.test/v1',
+          apiKey: 'sk-1',
+          model: 'm',
+          input: ['x'],
+        }), { kind: 'retryable', httpStatus: status });
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('网络异常（fetch reject）→ 归类为 retryable 结构化错误，消息保留原因', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn(async () => { throw new TypeError('Failed to fetch'); });
+      vi.stubGlobal('fetch', fetchMock);
+      const promise = createEmbeddings_ACU({
+        endpoint: 'https://embedding.test/v1',
+        apiKey: 'sk-1',
+        model: 'm',
+        input: ['x'],
+      });
+      const assertion = expect(promise).rejects.toThrow('Failed to fetch');
+      await vi.runAllTimersAsync();
+      await assertion;
+      await expect(promise.catch((error) => error)).resolves.toMatchObject({
+        name: 'VectorEmbeddingError_ACU',
+        kind: 'retryable',
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('P4：请求超时（AbortController 触发）→ retryable，且消息标注超时', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn((_url: unknown, init: any) => new Promise<Response>((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => {
+          reject(Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' }));
+        });
+      }));
+      vi.stubGlobal('fetch', fetchMock);
+      const promise = createEmbeddings_ACU({
+        endpoint: 'https://embedding.test/v1',
+        apiKey: 'sk-1',
+        model: 'm',
+        input: ['x'],
+      });
+      const assertion = expect(promise).rejects.toMatchObject({
+        name: 'VectorEmbeddingError_ACU',
+        kind: 'retryable',
+      });
+      await vi.runAllTimersAsync();
+      await assertion;
+      await expect(promise.catch((error) => error.message)).resolves.toContain('超时');
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('P4：retryable 失败一次后重试成功，返回正常结果', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn()
+        .mockResolvedValueOnce(jsonResponse(500, errorBody(null, 'server error')))
+        .mockResolvedValueOnce(jsonResponse(200, { data: [{ index: 0, embedding: [0.1, 0.2] }] }));
+      vi.stubGlobal('fetch', fetchMock);
+      const promise = createEmbeddings_ACU({
+        endpoint: 'https://embedding.test/v1',
+        apiKey: 'sk-1',
+        model: 'm',
+        input: ['x'],
+      });
+      await vi.runAllTimersAsync();
+      await expect(promise).resolves.toEqual([{ index: 0, embedding: [0.1, 0.2] }]);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('P4：200 但响应体不是 JSON → provider-contract（terminal，不重试）', async () => {
+    const fetchMock = vi.fn(async () => new Response('<html>gateway error</html>', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
 
     await expect(createEmbeddings_ACU({
       endpoint: 'https://embedding.test/v1',
       apiKey: 'sk-1',
       model: 'm',
       input: ['x'],
-    })).rejects.toThrow('Failed to fetch');
+    })).rejects.toMatchObject({
+      name: 'VectorEmbeddingError_ACU',
+      kind: 'provider-contract',
+      httpStatus: 200,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('响应中无可用向量（空/非法维度）→ provider-contract', async () => {

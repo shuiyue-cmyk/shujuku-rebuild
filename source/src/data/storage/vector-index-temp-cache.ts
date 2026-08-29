@@ -4,6 +4,14 @@ const DB_NAME_ACU = 'TavernDB_ACU_VectorTempCache';
 const DB_VERSION_ACU = 1;
 const STORE_NAME_ACU = 'shards';
 
+/**
+ * P7：临时缓存字节预算。超出预算时按 lastAccessAt 从最旧开始淘汰（LRU），
+ * 防止跨聊天累积导致 IndexedDB 无界增长。缓存 miss 只意味着回源外置权威文件。
+ */
+const VECTOR_TEMP_CACHE_MAX_BYTES_ACU = 64 * 1024 * 1024;
+const VECTOR_TEMP_CACHE_TRIM_THROTTLE_MS_ACU = 60_000;
+let lastTempCacheTrimAt_ACU = 0;
+
 interface CachedShardRecord_ACU {
     key: string;
     indexId: string;
@@ -94,8 +102,53 @@ export async function putVectorIndexCachedShard_ACU(
             createdAt: now,
         };
         await runStore_ACU<IDBValidKey>('readwrite', (store) => store.put(record));
+        if (Date.now() - lastTempCacheTrimAt_ACU >= VECTOR_TEMP_CACHE_TRIM_THROTTLE_MS_ACU) {
+            lastTempCacheTrimAt_ACU = Date.now();
+            void trimVectorIndexTempCacheToBudget_ACU().catch((): undefined => undefined);
+        }
     } catch {
         // 临时缓存失败不应影响权威外置文件链路。
+    }
+}
+
+/**
+ * 按 lastAccessAt 从最旧开始淘汰，直到总字节数回到预算内。
+ * 实现为两趟 cursor：第一趟只读统计总量，第二趟按时间升序删除到位，
+ * 避免在单个 readwrite 事务里长时间持锁。
+ */
+export async function trimVectorIndexTempCacheToBudget_ACU(
+    maxBytes: number = VECTOR_TEMP_CACHE_MAX_BYTES_ACU,
+): Promise<void> {
+    try {
+        const { bytes } = await estimateVectorIndexTempCache_ACU();
+        if (bytes <= maxBytes) return;
+        let bytesToFree = bytes - maxBytes;
+        const db = await openDb_ACU();
+        await new Promise<void>((resolve, reject) => {
+            const tx = db.transaction(STORE_NAME_ACU, 'readwrite');
+            const store = tx.objectStore(STORE_NAME_ACU);
+            const request = store.index('lastAccessAt').openCursor();
+            request.onsuccess = () => {
+                const cursor = request.result;
+                if (cursor && bytesToFree > 0) {
+                    const record = cursor.value as CachedShardRecord_ACU;
+                    bytesToFree -= Math.max(0, Number(record.byteSize) || 0);
+                    cursor.delete();
+                    cursor.continue();
+                }
+            };
+            request.onerror = () => reject(request.error || new Error('向量临时缓存 LRU 淘汰失败'));
+            tx.oncomplete = () => {
+                db.close();
+                resolve();
+            };
+            tx.onerror = () => {
+                db.close();
+                reject(tx.error || new Error('向量临时缓存 LRU 淘汰事务失败'));
+            };
+        });
+    } catch {
+        // 淘汰失败不影响读写链路，下次 put 会再次尝试。
     }
 }
 

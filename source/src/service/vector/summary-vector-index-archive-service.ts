@@ -2,43 +2,23 @@ import {
     readIsolatedTagData_ACU,
     writeMessageIdentity_ACU,
 } from '../../data/repositories/chat-message-data-repo';
-import {
-  commitVectorMetadataPatch_ACU
-} from './summary-vector-index-chat-commit';
+import { commitVectorMetadataPatch_ACU } from './summary-vector-index-chat-commit';
 import type {
     ChatSummaryVectorIndexChunk_ACU,
     ChatSummaryVectorIndexRow_ACU,
     ChatSummaryVectorIndexState_ACU,
 } from '../../data/models/chat-message-data';
-import type {
-  SummaryVectorIndexExternalFileRef_ACU
-} from './summary-vector-index-types';
+import type { SummaryVectorIndexExternalFileRef_ACU } from './summary-vector-index-types';
 import {
     assertSummaryVectorFlushGenerationCurrent_ACU,
     SummaryVectorFlushGenerationInvalidatedError_ACU,
 } from '../../data/storage/vector-index-hot-cache';
-import {
-  createEmbeddings_ACU,
-  isVectorEmbeddingError_ACU
-} from '../../data/gateways/vector-embedding-gateway';
-import type {
-  VectorEmbeddingResult_ACU
-} from '../../data/gateways/vector-embedding-gateway';
-import {
-  buildVectorIndexSingleSnapshotV2FilePath_ACU
-} from '../../data/storage/vector-index-st-files-storage';
-import {
-  currentChatFileIdentifier_ACU,
-  currentJsonTableData_ACU,
-  getCurrentIsolationKey_ACU,
-  settings_ACU
-} from '../runtime/state-manager';
-import {
-  getChatArray_ACU
-} from '../chat/chat-service';
-import {
-  getLatestAiMessageIndexFromChat_ACU
-} from '../table/table-history';
+import { createEmbeddings_ACU, isVectorEmbeddingError_ACU, VectorEmbeddingError_ACU } from '../../data/gateways/vector-embedding-gateway';
+import type { VectorEmbeddingResult_ACU } from '../../data/gateways/vector-embedding-gateway';
+import { buildVectorIndexSingleSnapshotV2FilePath_ACU } from '../../data/storage/vector-index-st-files-storage';
+import { currentChatFileIdentifier_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU, settings_ACU } from '../runtime/state-manager';
+import { getChatArray_ACU } from '../chat/chat-service';
+import { getLatestAiMessageIndexFromChat_ACU } from '../table/table-history';
 import {
     persistRemoteMemorySnapshotAnchorIfNeeded_ACU,
     resolveRemoteMemorySnapshotAnchor_ACU,
@@ -60,16 +40,8 @@ import {
     finalizeSummaryVectorIndexSnapshotPublication_ACU,
     persistSummaryVectorIndexSnapshot_ACU,
 } from './summary-vector-index-storage-service';
-import {
-  hashUserInput_ACU,
-  isSummaryOrOutlineTable_ACU,
-  logDebug_ACU,
-  logWarn_ACU
-} from '../../shared/utils';
-import {
-  normalizeSummaryVectorIndexScope_ACU,
-  serializeSummaryVectorIndexScope_ACU
-} from '../../shared/summary-vector-index-scope';
+import { hashUserInput_ACU, isSummaryOrOutlineTable_ACU, logDebug_ACU, logWarn_ACU } from '../../shared/utils';
+import { normalizeSummaryVectorIndexScope_ACU, serializeSummaryVectorIndexScope_ACU } from '../../shared/summary-vector-index-scope';
 
 type SummaryVectorIndexArchiveMode_ACU = 'append' | 'sync';
 
@@ -571,7 +543,9 @@ function buildExistingReusableRows_ACU(
     const existingChunks = Array.isArray(existingState?.chunks) ? existingState!.chunks : [];
     const existingChunksByRowKey = new Map<string, ChatSummaryVectorIndexChunk_ACU[]>();
     existingChunks.forEach((chunk) => {
-        if (!chunk?.rowKey || !chunk?.chunkId || !Array.isArray(chunk.vector) || chunk.vector.length === 0) return;
+        if (!chunk?.rowKey || !chunk?.chunkId
+            || (!Array.isArray(chunk.vector) && !((chunk.vector as any) instanceof Float32Array))
+            || chunk.vector.length === 0) return;
         const list = existingChunksByRowKey.get(chunk.rowKey) || [];
         list.push({ ...chunk });
         existingChunksByRowKey.set(chunk.rowKey, list);
@@ -658,6 +632,20 @@ async function buildChunksWithEmbeddings_ACU(
             embeddingMap.set(item.index, item.embedding);
         }
     });
+
+    // P5：完整性校验——响应缺失任意一条向量即整批失败（retryable），禁止部分落盘。
+    // 静默跳过缺失 chunk 会把缺行索引标记为 success 写入快照，召回不全且无告警。
+    const missingIndexes = chunkSources
+        .map((_source, index) => index)
+        .filter((index) => !embeddingMap.has(index));
+    if (missingIndexes.length > 0) {
+        throw new VectorEmbeddingError_ACU({
+            kind: 'retryable',
+            message: `Embedding 响应缺失 ${missingIndexes.length}/${chunkSources.length} 条向量（首个缺失批内序号 ${missingIndexes[0]}），为避免索引缺行已中止本批归档。`,
+            endpoint: options.embeddingEndpoint,
+            model: options.embeddingModel,
+        });
+    }
 
     const chunks: ChatSummaryVectorIndexChunk_ACU[] = [];
     const rowChunkIds = new Map<string, string[]>();
@@ -845,7 +833,9 @@ async function writeSummaryVectorIndexCheckpoint_ACU(options: {
     const validRowKeys = new Set(nextRows.map((row) => row.rowKey));
     const validChunkIds = new Set(nextRows.flatMap((row) => row.chunkIds));
     const nextChunks = Array.from(nextChunksById.values())
-        .filter((chunk) => validRowKeys.has(chunk.rowKey) && validChunkIds.has(chunk.chunkId) && Array.isArray(chunk.vector) && chunk.vector.length > 0)
+        .filter((chunk) => validRowKeys.has(chunk.rowKey) && validChunkIds.has(chunk.chunkId)
+            && (Array.isArray(chunk.vector) || (chunk.vector as any) instanceof Float32Array)
+            && chunk.vector.length > 0)
         .map((chunk, index) => ({ ...chunk, sequence: index }));
     const nextState = buildLayerStateWithRows_ACU(previousState, nextRows, nextChunks, {
         snapshotMessageId: options.snapshotMessageId,

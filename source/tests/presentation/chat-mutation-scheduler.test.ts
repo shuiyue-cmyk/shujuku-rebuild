@@ -8,6 +8,8 @@ const h = vi.hoisted(() => ({
   findTable: vi.fn(),
   buildScope: vi.fn(),
   markDirty: vi.fn(),
+  enqueueFlush: vi.fn(),
+  latestState: null as any,
   timer: { value: null as any },
 }));
 
@@ -33,7 +35,16 @@ vi.mock('../../src/service/vector/summary-vector-index-archive-service', () => (
 vi.mock('../../src/service/vector/summary-vector-index-realign-state', () => ({
   markSummaryVectorIndexDirtyForRealign_ACU: h.markDirty,
 }));
-vi.mock('../../src/shared/utils', () => ({ logDebug_ACU: vi.fn(), logError_ACU: vi.fn() }));
+vi.mock('../../src/service/vector/summary-vector-index-flush-queue', () => ({
+  enqueueSummaryVectorIndexFlush_ACU: (...args: any[]) => h.enqueueFlush(...args),
+}));
+vi.mock('../../src/service/vector/summary-vector-index-state-service', () => ({
+  getLatestSummaryVectorIndexSnapshotState_ACU: () => h.latestState,
+}));
+vi.mock('../../src/data/repositories/profile-repo', () => ({
+  globalMeta_ACU: { summaryVectorIndexModeGlobal: true },
+}));
+vi.mock('../../src/shared/utils', () => ({ logDebug_ACU: vi.fn(), logError_ACU: vi.fn(), logWarn_ACU: vi.fn() }));
 
 import {
   scheduleChatMutationRefresh_ACU,
@@ -52,6 +63,8 @@ beforeEach(() => {
   h.findTable.mockReturnValue({ summaryKey: 'summary-1' });
   h.buildScope.mockReturnValue('scope-1');
   h.markDirty.mockResolvedValue(undefined);
+  h.enqueueFlush.mockResolvedValue({ queued: true, scopeKey: 'scope-1' });
+  h.latestState = null;
 });
 
 afterEach(() => {
@@ -113,6 +126,24 @@ describe('chat mutation scheduler', () => {
     await vi.runAllTicks();
     expect(h.markDirty).toHaveBeenCalledTimes(1);
     expect(h.markDirty).toHaveBeenCalledWith('scope-1', 'chat_modified_deleted');
+  });
+
+  it('P2：已有索引时 mark dirty 后立即入队重新归档', async () => {
+    h.latestState = { summaryVectorIndexState: { manifest: { indexId: 'idx' } } };
+    scheduleChatMutationRefresh_ACU('chat_modified_deleted');
+    await vi.advanceTimersByTimeAsync(1200);
+    await vi.runAllTicks();
+    expect(h.markDirty).toHaveBeenCalledWith('scope-1', 'chat_modified_deleted');
+    expect(h.enqueueFlush).toHaveBeenCalledWith(expect.objectContaining({ reason: 'chat_modified_deleted', mode: 'sync' }));
+  });
+
+  it('P2：尚无索引的聊天只标记 dirty，不入队（避免凭空首次建索引扣费）', async () => {
+    h.latestState = null;
+    scheduleChatMutationRefresh_ACU('chat_modified_swiped');
+    await vi.advanceTimersByTimeAsync(1200);
+    await vi.runAllTicks();
+    expect(h.markDirty).toHaveBeenCalledTimes(1);
+    expect(h.enqueueFlush).not.toHaveBeenCalled();
   });
 
   it('聊天切换取消待执行调度', async () => {

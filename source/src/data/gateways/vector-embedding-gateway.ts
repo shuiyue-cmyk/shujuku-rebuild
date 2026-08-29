@@ -1,7 +1,6 @@
-import { assertSafeHttpEndpoint_ACU } from '../../shared/utils';
-
 export type VectorEmbeddingErrorKind_ACU =
     | 'credential' | 'request' | 'provider-contract' | 'retryable' | 'limited-retryable';
+
 export interface VectorEmbeddingRequest_ACU {
     endpoint: string;
     apiKey?: string;
@@ -141,17 +140,75 @@ async function throwEmbeddingHttpErrorAsync_ACU(
     });
 }
 
-// [M5] Embedding fetch 防悬挂超时。目标运行环境（现代 WebView/Tauri）AbortSignal.timeout 可用性存疑，
-// 用手动 AbortController+setTimeout 兜底；AbortController 不可用时退化为无超时（与旧行为一致）。
-// 取 120s：本网关除 query 单条外还承载归档构建的批量 chunk 嵌入（summary-vector-index-archive-service），
-// 30s 可能误杀原本能完成的大批量请求；120s 对悬挂仍是有效上界。
-const EMBEDDING_FETCH_TIMEOUT_MS_ACU = 120000;
+/** 请求超时：查询与归档批次共用。超时/网络中断归类为 retryable，交给上层有限重试。 */
+const VECTOR_EMBEDDING_TIMEOUT_MS_ACU = 45_000;
+/** 网关内 retryable 类失败的最大请求次数（1 次原始 + 1 次快速重试）。 */
+const VECTOR_EMBEDDING_MAX_ATTEMPTS_ACU = 2;
+/** 重试前等待 Retry-After 的上界：查询路径在发送前同步阻塞，不允许长等待。 */
+const VECTOR_EMBEDDING_RETRY_WAIT_MAX_MS_ACU = 5_000;
 
-function createFetchAbortTimer_ACU(timeoutMs: number): { signal: AbortSignal; cleanup: () => void } | null {
-    if (typeof AbortController !== 'function') return null;
+async function fetchEmbeddingWithTimeout_ACU(
+    endpoint: string,
+    init: RequestInit,
+    model: string,
+): Promise<Response> {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
-    return { signal: controller.signal, cleanup: () => clearTimeout(timer) };
+    const timer = setTimeout(() => controller.abort(), VECTOR_EMBEDDING_TIMEOUT_MS_ACU);
+    try {
+        return await fetch(endpoint, { ...init, signal: controller.signal });
+    } catch (error: any) {
+        const isAbort = error?.name === 'AbortError';
+        throw new VectorEmbeddingError_ACU({
+            kind: 'retryable',
+            message: isAbort
+                ? `Embedding 请求超时（${VECTOR_EMBEDDING_TIMEOUT_MS_ACU}ms），已中断。`
+                : `Embedding 请求网络失败：${error?.message || String(error || '未知错误')}`,
+            endpoint,
+            model,
+        });
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+async function requestEmbeddingsOnce_ACU(
+    endpoint: string,
+    model: string,
+    input: string[],
+    headers: Record<string, string>,
+): Promise<VectorEmbeddingResult_ACU[]> {
+    const response = await fetchEmbeddingWithTimeout_ACU(endpoint, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ model, input }),
+    }, model);
+    if (!response.ok) {
+        await throwEmbeddingHttpErrorAsync_ACU(response, endpoint, model);
+    }
+    const rawBody = await response.text().catch((): string => '');
+    let payload: any;
+    try {
+        payload = JSON.parse(rawBody);
+    } catch (_error) {
+        throw new VectorEmbeddingError_ACU({
+            kind: 'provider-contract',
+            message: `Embedding 响应不是合法 JSON（前 200 字符：${rawBody.slice(0, 200)}）。`,
+            httpStatus: response.status,
+            endpoint,
+            model,
+        });
+    }
+    const normalized = normalizeEmbeddingResponse_ACU(payload);
+    if (normalized.length === 0) {
+        throw new VectorEmbeddingError_ACU({
+            kind: 'provider-contract',
+            message: 'Embedding 响应中没有可用向量。',
+            httpStatus: response.status,
+            endpoint,
+            model,
+        });
+    }
+    return normalized;
 }
 
 export async function createEmbeddings_ACU(request: VectorEmbeddingRequest_ACU): Promise<VectorEmbeddingResult_ACU[]> {
@@ -172,34 +229,26 @@ export async function createEmbeddings_ACU(request: VectorEmbeddingRequest_ACU):
     if (apiKey) {
         headers.Authorization = `Bearer ${apiKey}`;
     }
-    assertSafeHttpEndpoint_ACU(endpoint);
-    // [M5] 挂超时：超时 abort 让 fetch 抛 AbortError 向上传播（运行时 T5 路径已有降级处理）。
-    const abortTimer = createFetchAbortTimer_ACU(EMBEDDING_FETCH_TIMEOUT_MS_ACU);
-    let response: Response;
-    try {
-        response = await fetch(endpoint, {
-            method: 'POST',
-            headers,
-            body: JSON.stringify({ model, input }),
-            redirect: 'error',
-            ...(abortTimer ? { signal: abortTimer.signal } : {}),
-        });
-    } finally {
-        abortTimer?.cleanup();
+    // 网关内只对 retryable / limited-retryable 做一次快速重试（尊重 Retry-After，
+    // 上限 5s）；credential / request / provider-contract 重试不可能成功，直接抛出。
+    // 任务级的多次退避重试由 flush 队列负责，这里不叠加长循环。
+    let lastError: unknown = null;
+    for (let attempt = 1; attempt <= VECTOR_EMBEDDING_MAX_ATTEMPTS_ACU; attempt += 1) {
+        try {
+            return await requestEmbeddingsOnce_ACU(endpoint, model, input, headers);
+        } catch (error) {
+            lastError = error;
+            const retryable = isVectorEmbeddingError_ACU(error)
+                && (error.kind === 'retryable' || error.kind === 'limited-retryable');
+            if (!retryable || attempt >= VECTOR_EMBEDDING_MAX_ATTEMPTS_ACU) {
+                throw error;
+            }
+            const waitMs = Math.min(
+                Math.max(0, Number((error as VectorEmbeddingError_ACU).retryAfterMs ?? 1000) || 1000),
+                VECTOR_EMBEDDING_RETRY_WAIT_MAX_MS_ACU,
+            );
+            await new Promise((resolve) => setTimeout(resolve, waitMs));
+        }
     }
-    if (!response.ok) {
-        await throwEmbeddingHttpErrorAsync_ACU(response, endpoint, model);
-    }
-    const payload = await response.json();
-    const normalized = normalizeEmbeddingResponse_ACU(payload);
-    if (normalized.length === 0) {
-        throw new VectorEmbeddingError_ACU({
-            kind: 'provider-contract',
-            message: 'Embedding 响应中没有可用向量。',
-            httpStatus: response.status,
-            endpoint,
-            model,
-        });
-    }
-    return normalized;
+    throw lastError instanceof Error ? lastError : new Error(String(lastError || 'Embedding 请求失败'));
 }

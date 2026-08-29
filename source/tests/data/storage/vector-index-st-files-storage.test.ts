@@ -4,6 +4,7 @@ import {
   buildVectorIndexSingleSnapshotV2FilePath_ACU,
   buildVectorIndexSingleSnapshotV2ScopeToken_ACU,
   buildVectorIndexStableDirectory_ACU,
+  decodeVectorIndexScopeFromPath_ACU,
   extractVectorIndexContentPackScopeTokenFromPath_ACU,
   isVectorIndexContentPackPathV2_ACU,
   registerVectorIndexFiles_ACU,
@@ -286,4 +287,42 @@ describe('T0a writeGeneration 紧凑化', () => {
     expect(syntheticPath.length).toBe(240);
   });
 
+});
+
+describe('P7 scopeToken 路径反解（decodeVectorIndexScopeFromPath_ACU）', () => {
+  it('token 含 base64url 下划线（base64 `/` 替换而来）的 snapshot 路径正确反解', () => {
+    // 该 chatKey 的 token 确定含 `_`（base64 `/` 替换而来），
+    // 验证"首个下划线切分"会失配的场景被逐分割点解码正确处理。
+    const scope = { chatKey: '聊天10o号', isolationKey: 'profile-a', sourceTableKey: '纪要表' };
+    expect(buildVectorIndexSingleSnapshotV2ScopeToken_ACU(scope)).toContain('_');
+    const path = buildVectorIndexSingleSnapshotV2FilePath_ACU({
+      ...scope,
+      indexId: 'snap_abc123',
+      writeGeneration: 'wg_0001',
+    });
+    expect(decodeVectorIndexScopeFromPath_ACU(path)).toEqual(scope);
+  });
+
+  it('v2pack 路径正确反解 scope', () => {
+    const scope = { chatKey: '中文聊天甲', isolationKey: 'profile-a', sourceTableKey: 'sheet_summary' };
+    const path = buildVectorIndexContentPackPathV2_ACU({ ...scope, packKey: 'pack_abcdef1234567890' });
+    expect(decodeVectorIndexScopeFromPath_ACU(path)).toEqual(scope);
+  });
+
+  it('ASCII scope 的 snapshot 路径正确反解', () => {
+    const scope = { chatKey: 'chat-main', isolationKey: 'default', sourceTableKey: 'summary' };
+    const path = buildVectorIndexSingleSnapshotV2FilePath_ACU({
+      ...scope,
+      indexId: 'snap_one',
+      writeGeneration: 'write_one',
+    });
+    expect(decodeVectorIndexScopeFromPath_ACU(path)).toEqual(scope);
+  });
+
+  it('legacy 路径 / 非法输入返回 null', () => {
+    expect(decodeVectorIndexScopeFromPath_ACU('TavernDB_ACU_vector_chat_iso_table_snapshot')).toBeNull();
+    expect(decodeVectorIndexScopeFromPath_ACU('TavernDB_ACU_vector_v2_notatoken_snap_x_wg_snapshot')).toBeNull();
+    expect(decodeVectorIndexScopeFromPath_ACU('')).toBeNull();
+    expect(decodeVectorIndexScopeFromPath_ACU('unrelated_file.json')).toBeNull();
+  });
 });

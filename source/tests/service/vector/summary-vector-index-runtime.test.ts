@@ -107,8 +107,16 @@ vi.mock('../../../src/service/vector/summary-vector-index-cache-service', () => 
 vi.mock('../../../src/service/vector/summary-vector-index-flush-queue', () => ({
   enqueueSummaryVectorIndexFlush_ACU: (...a: any[]) => h.enqueueFlush(...a),
 }));
+// P3：runtime 去重签名使用 currentChatFileIdentifier_ACU，mock 掉 state-manager
+// 避免加载真实的重量级运行时状态模块。
+vi.mock('../../../src/service/runtime/state-manager', () => ({
+  currentChatFileIdentifier_ACU: 'chat-a',
+}));
 
-import { processSummaryVectorIndexBeforeGeneration_ACU } from '../../../src/service/vector/summary-vector-index-runtime';
+import {
+  processSummaryVectorIndexBeforeGeneration_ACU,
+  resetSummaryVectorIndexRuntimeDedupeState_ACU,
+} from '../../../src/service/vector/summary-vector-index-runtime';
 
 
 function row_ACU(key: string, order: number, summary: string): any {
@@ -180,6 +188,7 @@ function setFixture_ACU(overrides: Record<string, any> = {}): void {
 describe('processSummaryVectorIndexBeforeGeneration_ACU hybrid retrieval', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetSummaryVectorIndexRuntimeDedupeState_ACU();
     h.chat = [{ is_user: true, mes: 'latest user' } as any];
     h.entries = [];
     h.callAI.mockResolvedValue('<keywords>secret relic</keywords>');
@@ -299,6 +308,18 @@ describe('processSummaryVectorIndexBeforeGeneration_ACU hybrid retrieval', () =>
     expect(h.enqueueFlush).not.toHaveBeenCalled();
   });
 
+  it('P3：同一次发送经两个钩子（source 不同）触发时，8s 窗口内第二次被去重', async () => {
+    const first = await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'find secret relic', source: 'tavernhelper' });
+    expect(first.success).toBe(true);
+    expect(first.skipped).not.toBe(true);
+    const callsAfterFirst = h.createEmbeddings.mock.calls.length;
+
+    const second = await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'find secret relic', source: 'generation_after_commands' });
+    expect(second).toMatchObject({ success: true, skipped: true, reason: 'deduped' });
+    // 完整链路（embedding 请求）没有第二次执行。
+    expect(h.createEmbeddings.mock.calls.length).toBe(callsAfterFirst);
+  });
+
   it('rerank 失败时回退到原候选排序并继续写入世界书', async () => {
     h.config.rerankEndpoint = 'https://rerank.test';
     h.config.rerankModel = 'rerank-model';
@@ -377,6 +398,7 @@ describe('processSummaryVectorIndexBeforeGeneration_ACU hybrid retrieval', () =>
 describe('processSummaryVectorIndexBeforeGeneration_ACU missing snapshot recovery', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetSummaryVectorIndexRuntimeDedupeState_ACU();
     h.chat = [{ is_user: false, mes: 'assistant' } as any];
     h.rows = [row_ACU('r1', 1, 'summary')];
     h.chunks = [];
@@ -471,6 +493,7 @@ function realignBlob_ACU(manifest: any): any {
 describe('processSummaryVectorIndexBeforeGeneration_ACU invalid snapshot recovery', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetSummaryVectorIndexRuntimeDedupeState_ACU();
     h.chat = [{ is_user: false, mes: 'assistant' } as any];
     h.rows = [row_ACU('r1', 1, 'summary')];
     h.chunks = [];

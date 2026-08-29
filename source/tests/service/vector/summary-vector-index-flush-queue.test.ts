@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   archive: vi.fn(),
   logIdentityEvent: vi.fn(),
   runScopeMutation: vi.fn(),
+  retentionGc: vi.fn(),
 }));
 
 vi.mock('../../../src/service/runtime/state-manager', () => ({
@@ -50,6 +51,9 @@ vi.mock('../../../src/service/vector/summary-vector-index-archive-service', () =
 }));
 vi.mock('../../../src/service/vector/summary-vector-index-storage-service', () => ({
   logSummaryVectorIndexIdentityEvent_ACU: (...args: any[]) => h.logIdentityEvent(...args),
+}));
+vi.mock('../../../src/service/vector/summary-vector-index-chat-deletion-gc', () => ({
+  runScopedRetentionGcAfterFlush_ACU: (...args: any[]) => h.retentionGc(...args),
 }));
 vi.mock('../../../src/service/vector/vector-memory-config', () => ({
   getEffectiveSummaryVectorIndexConfig_ACU: () => ({
@@ -92,6 +96,7 @@ describe('summary-vector-index flush queue scope', () => {
     h.invalidate.mockImplementation(async (input: any) => ({ ...task(input.scopeKey), ...input, status: 'invalidated', generation: 1 }));
     h.archive.mockResolvedValue({ success: true, skipped: false, errors: [] });
     h.runScopeMutation.mockImplementation(async (_scopeKey: string, operation: () => Promise<any>) => operation());
+    h.retentionGc.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -451,6 +456,92 @@ describe('summary-vector-index flush queue scope', () => {
     });
     expect(h.archive).not.toHaveBeenCalled();
     expect(cooldownUpserts.at(-1)).toMatchObject({ scopeKey: scopeB, status: 'failed_terminal' });
+  });
+
+  it('P1：claim 后 retryable 失败自动重排定时器，到期后重新执行 flush', async () => {
+    const scope = buildSummaryVectorIndexFlushScopeKey_ACU('chat-a', 'iso-a', 'summary-a');
+    h.task = task(scope);
+    const capturedUpserts: any[] = [];
+    // 模拟 hot-cache 层语义：claim（status→flushing）时 attemptCount 自增，
+    // 其余 upsert 保留 attemptCount 并同步 h.task 供下一次 get 读取。
+    h.upsert.mockImplementation(async (input: any) => {
+      const previousAttempts = Number(h.task?.attemptCount) || 0;
+      const next = {
+        ...h.task,
+        ...input,
+        attemptCount: input.status === 'flushing' ? previousAttempts + 1 : previousAttempts,
+        updatedAt: Date.now(),
+      };
+      capturedUpserts.push(next);
+      h.task = next;
+      return next;
+    });
+    h.archive
+      .mockResolvedValueOnce({ success: false, skipped: false, reason: 'embedding_request_failed', retryability: 'retryable', errors: ['HTTP 500'] })
+      .mockResolvedValueOnce({ success: true, skipped: false, errors: [] });
+
+    await expect(flushSummaryVectorIndexTaskNow_ACU(scope)).resolves.toMatchObject({
+      success: false,
+      reason: 'embedding_request_failed',
+    });
+    const failureRecord = capturedUpserts.find((record) => record.status === 'failed_retryable');
+    expect(failureRecord).toBeTruthy();
+    // attemptCount=1 → 退避 2.5s；定时器到期后自动重试并成功。
+    expect(h.archive).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(h.archive).toHaveBeenCalledTimes(2);
+    expect(h.markReadyIfGenerationMatches).toHaveBeenCalled();
+  });
+
+  it('P1：attemptCount 达上限的 retryable 失败升级为 failed_terminal，不再重排', async () => {
+    const scope = buildSummaryVectorIndexFlushScopeKey_ACU('chat-a', 'iso-a', 'summary-a');
+    h.task = task(scope, { attemptCount: 4 });
+    const capturedUpserts: any[] = [];
+    h.upsert.mockImplementation(async (input: any) => {
+      const previousAttempts = Number(h.task?.attemptCount) || 0;
+      const next = {
+        ...h.task,
+        ...input,
+        attemptCount: input.status === 'flushing' ? previousAttempts + 1 : previousAttempts,
+        updatedAt: Date.now(),
+      };
+      capturedUpserts.push(next);
+      h.task = next;
+      return next;
+    });
+    h.archive.mockResolvedValue({ success: false, skipped: false, reason: 'embedding_request_failed', retryability: 'retryable', errors: ['HTTP 500'] });
+
+    await expect(flushSummaryVectorIndexTaskNow_ACU(scope)).resolves.toMatchObject({ success: false });
+    const finalRecord = capturedUpserts.at(-1);
+    expect(finalRecord).toMatchObject({ status: 'failed_terminal' });
+    expect(String(finalRecord.lastError || '')).toContain('自动重试上限');
+    // failed_terminal 不重排：推进任意时间不再触发 archive。
+    expect(h.archive).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(h.archive).toHaveBeenCalledTimes(1);
+  });
+
+  it('P1：claim 前失败（上下文不匹配）不自动重排，避免无 attemptCount 上限的循环', async () => {
+    const scope = buildSummaryVectorIndexFlushScopeKey_ACU('chat-a', 'iso-a', 'summary-a');
+    h.chatKey = 'chat-b';
+    h.task = task(scope);
+
+    await expect(flushSummaryVectorIndexTaskNow_ACU(scope)).resolves.toMatchObject({ reason: 'flush_scope_mismatch' });
+    expect(h.archive).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    expect(h.archive).not.toHaveBeenCalled();
+  });
+
+  it('P7：flush 成功后触发按 scope 的 retention GC', async () => {
+    const scope = buildSummaryVectorIndexFlushScopeKey_ACU('chat-a', 'iso-a', 'summary-a');
+    h.task = task(scope);
+
+    await expect(flushSummaryVectorIndexTaskNow_ACU(scope)).resolves.toMatchObject({ success: true });
+    expect(h.retentionGc).toHaveBeenCalledWith(expect.objectContaining({
+      chatKey: 'chat-a',
+      isolationKey: 'iso-a',
+      sourceTableKey: 'summary-a',
+    }));
   });
 
   it('T4：手动重建成功清除 cooldown 后，同凭据后续 flush 恢复正常', async () => {

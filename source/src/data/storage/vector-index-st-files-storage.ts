@@ -220,6 +220,57 @@ export function isVectorIndexContentPackPathV2_ACU(path: string): boolean {
  * 从 pack 路径提取 scope token。非 pack 路径返回 null。
  * scopeToken 是 base64url 编码，只含 [A-Za-z0-9_-]，可用首个下划线之前的部分提取。
  */
+export interface VectorIndexDecodedScope_ACU {
+    chatKey: string;
+    isolationKey: string;
+    sourceTableKey: string;
+}
+
+/**
+ * 尝试把 base64url token 解码回 [chatKey, isolationKey, sourceTableKey] 三元组。
+ * 解码失败或形状不符（非长度 3 的字符串数组）返回 null。
+ */
+function tryDecodeVectorIndexScopeToken_ACU(token: string): VectorIndexDecodedScope_ACU | null {
+    if (!token || /[^A-Za-z0-9_-]/.test(token)) return null;
+    const base64 = token.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+    try {
+        const binary = atob(padded);
+        const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+        const json = new TextDecoder().decode(bytes);
+        const parsed = JSON.parse(json);
+        if (Array.isArray(parsed) && parsed.length === 3 && parsed.every((item) => typeof item === 'string')) {
+            return { chatKey: parsed[0], isolationKey: parsed[1], sourceTableKey: parsed[2] };
+        }
+    } catch (_error) {
+        // 候选分割点不是完整 token 时解码/JSON 解析必然失败，继续尝试下一个。
+    }
+    return null;
+}
+
+/**
+ * 从 V2 快照 / v2pack 对象路径反解 canonical scope。
+ * 注意：scopeToken 的 base64url 字母表包含 `_`（来自 base64 的 `/` 替换），
+ * 不能用"首个下划线"切分；这里逐个 `_` 候选分割点（含全串）尝试解码，
+ * 只有 JSON 三元组解析成功才算命中。截断的 base64 无法解析出完整 JSON
+ * 数组，因此不存在提前误命中的可能。
+ */
+export function decodeVectorIndexScopeFromPath_ACU(path: string): VectorIndexDecodedScope_ACU | null {
+    const normalized = String(path || '');
+    const prefixes = [VECTOR_INDEX_CONTENT_PACK_PATH_V2_PREFIX_ACU, 'TavernDB_ACU_vector_v2_'];
+    for (const prefix of prefixes) {
+        if (!normalized.startsWith(prefix)) continue;
+        const remainder = normalized.slice(prefix.length);
+        for (let index = 0; index <= remainder.length; index += 1) {
+            if (index < remainder.length && remainder[index] !== '_') continue;
+            const decoded = tryDecodeVectorIndexScopeToken_ACU(remainder.slice(0, index));
+            if (decoded) return decoded;
+        }
+        return null;
+    }
+    return null;
+}
+
 export function extractVectorIndexContentPackScopeTokenFromPath_ACU(path: string): string | null {
     const normalized = String(path || '');
     if (!isVectorIndexContentPackPathV2_ACU(normalized)) return null;

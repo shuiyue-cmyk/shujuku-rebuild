@@ -952,8 +952,12 @@ export async function cleanupUnreachableSummaryVectorIndexFiles_ACU(options: Sum
                 blockedByReachability.push(path);
                 continue;
             }
-            const scopeTokenFromPath = String(path.slice('TavernDB_ACU_vector_v2pack_'.length).split('_')[0] || '');
-            const candidatePackScopes = eligibleScopes.filter((scope) => scopeTokenFromPath === buildVectorIndexSingleSnapshotV2ScopeToken_ACU(scope));
+            // scopeToken 的 base64url 字母表含 `_`（base64 的 `/` 替换而来），
+            // split('_')[0] 会截断此类 token 导致永远失配（CJK 聊天名大概率命中）。
+            // 改为用候选 scope 构造完整 token 做前缀匹配。
+            const candidatePackScopes = eligibleScopes.filter((scope) => path.startsWith(
+                `TavernDB_ACU_vector_v2pack_${buildVectorIndexSingleSnapshotV2ScopeToken_ACU(scope)}_`,
+            ));
             if (candidatePackScopes.length === 0) {
                 retainedPaths.push(path);
                 blockedByReachability.push(path);
@@ -968,10 +972,9 @@ export async function cleanupUnreachableSummaryVectorIndexFiles_ACU(options: Sum
             }
             const packLoaded = await readVectorIndexJsonFile_ACU<SummaryVectorIndexContentPackBlob_ACU>(path);
             const packData = packLoaded.ok ? packLoaded.data : null;
-            const packKeyFromPath = scopeTokenFromPath
-                ? path.slice(`TavernDB_ACU_vector_v2pack_${scopeTokenFromPath}_`.length)
-                : '';
             const scope = candidatePackScopes[0];
+            const matchedScopeToken = buildVectorIndexSingleSnapshotV2ScopeToken_ACU(scope);
+            const packKeyFromPath = path.slice(`TavernDB_ACU_vector_v2pack_${matchedScopeToken}_`.length);
             const packMatches = !!packData
                 && packData.schema === SUMMARY_VECTOR_INDEX_CONTENT_PACK_SCHEMA_ACU
                 && Number(packData.version) === SUMMARY_VECTOR_INDEX_CONTENT_PACK_VERSION_ACU

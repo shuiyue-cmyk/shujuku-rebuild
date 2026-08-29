@@ -1,5 +1,7 @@
 import { getHostRequestHeaders_ACU } from './ai-gateway';
-import { assertSafeHttpEndpoint_ACU } from '../../shared/utils';
+
+/** Rerank 请求超时上界；超时抛错由调用方回退到 embedding 排序。 */
+const VECTOR_RERANK_TIMEOUT_MS_ACU = 30_000;
 
 export interface VectorRerankResult_ACU {
     index: number;
@@ -36,7 +38,7 @@ function normalizeRerankItem_ACU(item: any, fallbackIndex: number): VectorRerank
     }
 
     const rawIndex = item.index ?? item.document_index ?? item.documentIndex;
-    const rawScore = item.relevance_score ?? item.relevanceScore ?? item.score;
+    const rawScore = item.relevance_score ?? item.relevanceScore ?? item.score ?? item.rerank_score;
     const index = Number.isFinite(Number(rawIndex)) ? Math.floor(Number(rawIndex)) : fallbackIndex;
     const relevanceScore = Number(rawScore);
 
@@ -90,18 +92,36 @@ export async function createRerankScores_ACU(request: VectorRerankRequest_ACU): 
     const payload: Record<string, any> = { model, query, documents };
     if (instruction) payload.instruction = instruction;
 
-    assertSafeHttpEndpoint_ACU(endpoint);
-    const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: buildRerankHeaders_ACU(request.apiKey),
-        body: JSON.stringify(payload),
-        redirect: 'error',
-    });
-
-    if (!response.ok) {
-        throw new Error(`Rerank 请求失败: ${response.status} ${await response.text()}`);
+    // 超时可中断：rerank 在发送前同步链路上，挂起的上游不允许无限阻塞生成。
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), VECTOR_RERANK_TIMEOUT_MS_ACU);
+    let response: Response;
+    try {
+        response = await fetch(endpoint, {
+            method: 'POST',
+            headers: buildRerankHeaders_ACU(request.apiKey),
+            body: JSON.stringify(payload),
+            signal: controller.signal,
+        });
+    } catch (error: any) {
+        throw new Error(error?.name === 'AbortError'
+            ? `Rerank 请求超时（${VECTOR_RERANK_TIMEOUT_MS_ACU}ms），已中断。`
+            : `Rerank 请求网络失败：${error?.message || String(error || '未知错误')}`);
+    } finally {
+        clearTimeout(timer);
     }
 
-    const responsePayload = await response.json();
+    if (!response.ok) {
+        const detail = await response.text().catch(() => response.statusText);
+        throw new Error(`Rerank 请求失败: ${response.status} ${detail}`);
+    }
+
+    const rawBody = await response.text().catch((): string => '');
+    let responsePayload: any;
+    try {
+        responsePayload = JSON.parse(rawBody);
+    } catch (_error) {
+        throw new Error(`Rerank 响应不是合法 JSON（前 200 字符：${rawBody.slice(0, 200)}）。`);
+    }
     return extractRerankResults_ACU(responsePayload);
 }

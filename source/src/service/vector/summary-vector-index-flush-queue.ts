@@ -1,11 +1,5 @@
-import {
-  currentChatFileIdentifier_ACU,
-  getCurrentIsolationKey_ACU
-} from '../runtime/state-manager';
-import {
-  logDebug_ACU,
-  logWarn_ACU
-} from '../../shared/utils';
+import { currentChatFileIdentifier_ACU, getCurrentIsolationKey_ACU } from '../runtime/state-manager';
+import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
 import {
     deleteSummaryVectorFlushTask_ACU,
     deleteSummaryVectorFlushTaskStrict_ACU,
@@ -27,24 +21,30 @@ import {
     runSummaryVectorIndexArchiveScopeMutationExclusive_ACU,
     type SummaryVectorIndexArchiveResult_ACU,
 } from './summary-vector-index-archive-service';
-import {
-  clearSummaryVectorIndexDirtyForRealign_ACU
-} from './summary-vector-index-realign-state';
-import {
-  logSummaryVectorIndexIdentityEvent_ACU
-} from './summary-vector-index-storage-service';
-import {
-  normalizeSummaryVectorIndexScope_ACU
-} from '../../shared/summary-vector-index-scope';
-import {
-  getEffectiveSummaryVectorIndexConfig_ACU
-} from './vector-memory-config';
-import {
-  hashUserInput_ACU
-} from '../../shared/utils';
+import { clearSummaryVectorIndexDirtyForRealign_ACU } from './summary-vector-index-realign-state';
+import { runScopedRetentionGcAfterFlush_ACU } from './summary-vector-index-chat-deletion-gc';
+import { logSummaryVectorIndexIdentityEvent_ACU } from './summary-vector-index-storage-service';
+import { normalizeSummaryVectorIndexScope_ACU } from '../../shared/summary-vector-index-scope';
+import { getEffectiveSummaryVectorIndexConfig_ACU } from './vector-memory-config';
+import { hashUserInput_ACU } from '../../shared/utils';
 
 const SUMMARY_VECTOR_INDEX_FLUSH_DEBOUNCE_MS_ACU = 2500;
 const SUMMARY_VECTOR_INDEX_FLUSHING_STALE_MS_ACU = 60_000;
+/**
+ * P1：claim 后可重试失败的自动重排上限与退避上界。
+ * attemptCount 在 claim（status→flushing）时由 hot-cache 层自增，因此只有真正
+ * 走到归档执行的失败才会消耗尝试次数；claim 前失败（上下文不匹配等）不重排，
+ * 由 CHAT_CHANGED restore 兜底，避免 attemptCount 不增导致的无限重试循环。
+ */
+const SUMMARY_VECTOR_INDEX_FLUSH_MAX_ATTEMPTS_ACU = 5;
+const SUMMARY_VECTOR_INDEX_FLUSH_RETRY_BACKOFF_MAX_MS_ACU = 5 * 60_000;
+
+/** attemptCount=1 → 2.5s，2 → 5s，3 → 10s…上限 5 分钟。 */
+function computeFlushRetryBackoffMs_ACU(attemptCount: number): number {
+    const attempts = Math.max(1, Math.floor(Number(attemptCount) || 1));
+    const backoff = SUMMARY_VECTOR_INDEX_FLUSH_DEBOUNCE_MS_ACU * Math.pow(2, attempts - 1);
+    return Math.min(backoff, SUMMARY_VECTOR_INDEX_FLUSH_RETRY_BACKOFF_MAX_MS_ACU);
+}
 /** T4：credential cooldown 默认时长（毫秒）。403/401 后同凭据在其他 scope 也停止重试。 */
 const SUMMARY_VECTOR_INDEX_CREDENTIAL_COOLDOWN_MS_ACU = 30 * 60_000;
 const summaryVectorFlushTimers_ACU = new Map<string, ReturnType<typeof setTimeout>>();
@@ -147,8 +147,26 @@ function clearFlushTimer_ACU(scopeKey: string): void {
     summaryVectorFlushTimers_ACU.delete(scopeKey);
 }
 
-async function markFlushTaskFailure_ACU(task: SummaryVectorIndexFlushTaskRecord_ACU, error: string, terminal = false): Promise<void> {
-    await upsertSummaryVectorFlushTask_ACU({
+async function markFlushTaskFailure_ACU(
+    task: SummaryVectorIndexFlushTaskRecord_ACU,
+    error: string,
+    terminal = false,
+    options: { scheduleRetry?: boolean } = {},
+): Promise<void> {
+    // P1：claim 后失败（attemptCount 已自增）达到上限时升级为 terminal，
+    // 防止确定性失败（如坏文本导致 provider 持续缺向量）无限扣费。
+    const attemptCount = Math.max(0, Number(task.attemptCount) || 0);
+    const attemptsExhausted = !terminal
+        && options.scheduleRetry === true
+        && attemptCount >= SUMMARY_VECTOR_INDEX_FLUSH_MAX_ATTEMPTS_ACU;
+    const finalTerminal = terminal || attemptsExhausted;
+    const finalError = attemptsExhausted
+        ? `${error}（已连续失败 ${attemptCount} 次，达到自动重试上限，可通过“立即重建”手动恢复）`
+        : error;
+    const retryDelayMs = finalTerminal
+        ? SUMMARY_VECTOR_INDEX_FLUSH_DEBOUNCE_MS_ACU
+        : computeFlushRetryBackoffMs_ACU(attemptCount);
+    const updated = await upsertSummaryVectorFlushTask_ACU({
         scopeKey: task.scopeKey,
         chatKey: task.chatKey,
         isolationKey: task.isolationKey,
@@ -156,15 +174,25 @@ async function markFlushTaskFailure_ACU(task: SummaryVectorIndexFlushTaskRecord_
         targetMessageIndex: task.targetMessageIndex,
         generation: task.generation,
         mode: task.mode,
-        status: terminal ? 'failed_terminal' : 'failed_retryable',
+        status: finalTerminal ? 'failed_terminal' : 'failed_retryable',
         requestedAt: task.requestedAt,
-        debounceUntil: Date.now() + SUMMARY_VECTOR_INDEX_FLUSH_DEBOUNCE_MS_ACU,
-        lastError: error,
+        debounceUntil: Date.now() + retryDelayMs,
+        lastError: finalError,
     });
-    logSummaryVectorIndexIdentityEvent_ACU(terminal ? 'warn' : 'debug', 'flush', terminal ? 'failed_terminal' : 'failed_retryable', {
+    logSummaryVectorIndexIdentityEvent_ACU(finalTerminal ? 'warn' : 'debug', 'flush', finalTerminal ? 'failed_terminal' : 'failed_retryable', {
         scopeFingerprint: task.scopeKey,
-        error,
+        error: finalError,
     });
+    // P1：只有 claim 后失败才自动重排定时器。upsert 可能因新代次入队而返回更高
+    // generation 的记录，此时不重排（新代次已有自己的定时器/接力）。
+    if (!finalTerminal
+        && options.scheduleRetry === true
+        && updated
+        && updated.generation === task.generation
+        && updated.status === 'failed_retryable') {
+        scheduleFlushTaskTimer_ACU(updated);
+        logDebug_ACU(`[交火向量索引] flush 失败已自动重排：scope=${task.scopeKey}, attempt=${attemptCount}, delayMs=${retryDelayMs}`);
+    }
 }
 
 
@@ -421,6 +449,15 @@ export async function flushSummaryVectorIndexTaskNow_ACU(scopeKey: string): Prom
             if (completed && shouldClearSummaryVectorIndexDirtyAfterFlush_ACU(result)) {
                 clearSummaryVectorIndexDirtyForRealign_ACU(task.scopeKey);
             }
+            // P7：归档成功后按 scope 节流回收无楼层引用且过 grace 的旧代快照，
+            // 防止活跃聊天的外置存档随归档次数无界增长。fire-and-forget，失败不影响 flush 结果。
+            void runScopedRetentionGcAfterFlush_ACU({
+                chatKey: task.chatKey,
+                isolationKey: task.isolationKey,
+                sourceTableKey: task.sourceTableKey,
+            }).catch((error: any) => {
+                logWarn_ACU('[交火向量索引] retention GC 执行失败（不影响归档结果）:', error?.message || error);
+            });
             logDebug_ACU(`[交火向量索引] 防抖 flush 完成：scope=${task.scopeKey}, skipped=${result.skipped}, reason=${result.reason || ''}`);
             return { success: true, skipped: result.skipped, reason: result.reason, result };
         }
@@ -436,13 +473,13 @@ export async function flushSummaryVectorIndexTaskNow_ACU(scopeKey: string): Prom
             || result.reason === 'summary_vector_index_config_invalid'
             || result.reason === 'target_message_invalid'
             || result.reason === 'target_message_not_found';
-        await markFlushTaskFailure_ACU(task, error, isTerminalFailure);
+        await markFlushTaskFailure_ACU(task, error, isTerminalFailure, { scheduleRetry: true });
         logWarn_ACU('[交火向量索引] 防抖 flush 失败:', error);
         return { success: false, reason: result.reason, result, error };
     } catch (error) {
         const message = normalizeErrorMessage_ACU(error);
         if (error instanceof SummaryVectorFlushGenerationInvalidatedError_ACU) return { success: true, skipped: true, reason: 'flush_scope_invalidated' };
-        await markFlushTaskFailure_ACU(task, message, false);
+        await markFlushTaskFailure_ACU(task, message, false, { scheduleRetry: true });
         logWarn_ACU('[交火向量索引] 防抖 flush 异常:', message);
         return { success: false, reason: 'flush_exception', error: message };
     } finally {

@@ -1,50 +1,23 @@
-import {
-  createEmbeddings_ACU
-} from '../../data/gateways/vector-embedding-gateway';
-import {
-  readIsolatedTagData_ACU
-} from '../../data/repositories/chat-message-data-repo';
-import {
-  commitVectorMetadataPatch_ACU
-} from './summary-vector-index-chat-commit';
-import {
-  loadVectorIndexRegistry_ACU,
-  readVectorIndexJsonFile_ACU
-} from '../../data/storage/vector-index-st-files-storage';
-import {
-  logDebug_ACU,
-  logWarn_ACU
-} from '../../shared/utils';
-import {
-  normalizeSummaryVectorIndexScope_ACU,
-  normalizeSummaryVectorIsolationKey_ACU
-} from '../../shared/summary-vector-index-scope';
-import {
-  getChatArray_ACU
-} from '../chat/chat-service';
-import {
-  callAIWithPreset_ACU
-} from '../ai/api-call';
-import {
-  getCurrentWorldbookConfig_ACU
-} from '../settings/settings-readers';
-import {
-  globalMeta_ACU
-} from '../../data/repositories/profile-repo';
-import {
-  getInjectionTargetLorebook_ACU,
-  getIsolationPrefix_ACU
-} from '../worldbook/injection-engine';
+import { createEmbeddings_ACU } from '../../data/gateways/vector-embedding-gateway';
+import { createRerankScores_ACU } from '../../data/gateways/vector-rerank-gateway';
+import { currentChatFileIdentifier_ACU } from '../runtime/state-manager';
+import { readIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
+import { commitVectorMetadataPatch_ACU } from './summary-vector-index-chat-commit';
+import { loadVectorIndexRegistry_ACU, readVectorIndexJsonFile_ACU } from '../../data/storage/vector-index-st-files-storage';
+import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
+import { normalizeSummaryVectorIndexScope_ACU, normalizeSummaryVectorIsolationKey_ACU } from '../../shared/summary-vector-index-scope';
+import { getChatArray_ACU } from '../chat/chat-service';
+import { callAIWithPreset_ACU } from '../ai/api-call';
+import { getCurrentWorldbookConfig_ACU } from '../settings/settings-readers';
+import { globalMeta_ACU } from '../../data/repositories/profile-repo';
+import { getInjectionTargetLorebook_ACU, getIsolationPrefix_ACU } from '../worldbook/injection-engine';
 import {
     createLorebookEntries_ACU,
     getLorebookEntries_ACU,
     isWorldbookApiAvailable_ACU,
     setLorebookEntries_ACU,
 } from '../worldbook/worldbook-service';
-import {
-  getEffectiveSummaryVectorIndexConfig_ACU,
-  validateSummaryVectorIndexConfig_ACU
-} from './vector-memory-config';
+import { getEffectiveSummaryVectorIndexConfig_ACU, validateSummaryVectorIndexConfig_ACU } from './vector-memory-config';
 import {
     getLatestSummaryVectorIndexSnapshotState_ACU,
 } from './summary-vector-index-state-service';
@@ -77,7 +50,6 @@ import {
     findSummaryTable_ACU,
     type SummaryVectorArchivePreparedRow_ACU,
 } from './summary-vector-index-archive-service';
-import { assertSafeHttpEndpoint_ACU } from '../../shared/utils';
 
 interface SummaryVectorIndexRuntimeOptions_ACU {
     userInput?: string;
@@ -112,6 +84,12 @@ type SummaryIndexSelectedCandidate_ACU =
 let lastRuntimeSignature_ACU = '';
 let lastRuntimeAt_ACU = 0;
 const SUMMARY_VECTOR_INDEX_RUNTIME_DEDUPE_MS_ACU = 8000;
+
+/** 重置去重窗口状态（测试隔离用；生产路径依赖签名中的 chatKey 自然区分聊天）。 */
+export function resetSummaryVectorIndexRuntimeDedupeState_ACU(): void {
+    lastRuntimeSignature_ACU = '';
+    lastRuntimeAt_ACU = 0;
+}
 
 function normalizeText_ACU(value: any): string {
     return String(value ?? '').trim();
@@ -203,8 +181,8 @@ async function generateKeywords_ACU(config: any, userInput: string): Promise<str
 
 // T10：query 向量模长预计算。与 cosineSimilarity_ACU 内部的 leftNorm 算法逐位一致，
 // 外提后循环内不再重复累加 query 的平方和。
-function computeVectorNorm_ACU(vector: number[]): number {
-    if (!Array.isArray(vector) || vector.length <= 0) return 0;
+function computeVectorNorm_ACU(vector: number[] | Float32Array): number {
+    if ((!Array.isArray(vector) && !(vector instanceof Float32Array)) || vector.length <= 0) return 0;
     let norm = 0;
     for (const value of vector) {
         const num = Number(value) || 0;
@@ -216,8 +194,10 @@ function computeVectorNorm_ACU(vector: number[]): number {
 // T10：cosine 相似度，query 模长由调用方预计算传入（循环内只算点积与候选模长）。
 // T2：维度不一致直接返回 0，不再截断后照常打分——截断会把混维向量静默当成相似，
 // 产生错误召回且难以察觉。维度一致的路径与改动前逐项等价。
-function cosineSimilarity_ACU(left: number[], right: number[], leftNorm: number): number {
-    if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length || left.length <= 0) return 0;
+function cosineSimilarity_ACU(left: number[] | Float32Array, right: number[] | Float32Array, leftNorm: number): number {
+    if ((!Array.isArray(left) && !(left instanceof Float32Array))
+        || (!Array.isArray(right) && !(right instanceof Float32Array))
+        || left.length !== right.length || left.length <= 0) return 0;
     const length = left.length;
     let dot = 0;
     let rightNorm = 0;
@@ -231,55 +211,24 @@ function cosineSimilarity_ACU(left: number[], right: number[], leftNorm: number)
     return dot / (leftNorm * Math.sqrt(rightNorm));
 }
 
-// [M5] Rerank fetch 防悬挂超时。目标运行环境（现代 WebView/Tauri）AbortSignal.timeout 可用性存疑，
-// 用手动 AbortController+setTimeout 兜底；AbortController 不可用时退化为无超时（与旧行为一致）。
-const RERANK_FETCH_TIMEOUT_MS_ACU = 30000;
-
-function createFetchAbortTimer_ACU(timeoutMs: number): { signal: AbortSignal; cleanup: () => void } | null {
-    if (typeof AbortController !== 'function') return null;
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), Math.max(1, timeoutMs));
-    return { signal: controller.signal, cleanup: () => clearTimeout(timer) };
-}
-
+// P4：统一走 vector-rerank-gateway 网关（超时可中断、宿主请求头、安全 JSON 解析），
+// 消除此前内联 fetch 与网关的双实现漂移。失败时保留既有语义：回退 embedding 排序。
 async function rerankCandidates_ACU(config: any, query: string, candidates: RankedSummaryCandidate_ACU[]): Promise<RankedSummaryCandidate_ACU[]> {
     const endpoint = normalizeText_ACU(config.rerankEndpoint);
     const model = normalizeText_ACU(config.rerankModel);
     if (!endpoint || !model || candidates.length === 0) return candidates;
     try {
-        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-        const apiKey = normalizeText_ACU(config.rerankApiKey);
-        if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
-        const instruction = normalizeText_ACU(config.rerankInstruction);
-        const body: Record<string, any> = {
+        const results = await createRerankScores_ACU({
+            endpoint,
             model,
+            apiKey: normalizeText_ACU(config.rerankApiKey) || undefined,
             query,
             documents: candidates.map((candidate) => candidate.chunk.text),
-        };
-        if (instruction) body.instruction = instruction;
-        assertSafeHttpEndpoint_ACU(endpoint);
-        // [M5] 挂 30s 超时：超时 abort 让 fetch 抛 AbortError，由下方既有 catch 记日志并回退 Embedding 排序。
-        const abortTimer = createFetchAbortTimer_ACU(RERANK_FETCH_TIMEOUT_MS_ACU);
-        let response: Response;
-        try {
-            response = await fetch(endpoint, {
-                method: 'POST',
-                headers,
-                body: JSON.stringify(body),
-                redirect: 'error',
-                ...(abortTimer ? { signal: abortTimer.signal } : {}),
-            });
-        } finally {
-            abortTimer?.cleanup();
-        }
-        if (!response.ok) throw new Error(await response.text().catch(() => response.statusText));
-        const payload = await response.json();
-        const results = Array.isArray(payload?.results) ? payload.results : Array.isArray(payload?.data) ? payload.data : [];
+            instruction: normalizeText_ACU(config.rerankInstruction) || undefined,
+        });
         const byIndex = new Map<number, number>();
-        results.forEach((item: any, fallbackIndex: number) => {
-            const index = Number.isInteger(item?.index) ? Number(item.index) : Number.isInteger(item?.document_index) ? Number(item.document_index) : fallbackIndex;
-            const score = Number(item?.relevance_score ?? item?.score ?? item?.rerank_score);
-            if (Number.isFinite(index) && Number.isFinite(score)) byIndex.set(index, score);
+        results.forEach((item) => {
+            if (item.index >= 0 && item.index < candidates.length) byIndex.set(item.index, item.relevanceScore);
         });
         return candidates
             .map((candidate, index) => ({ ...candidate, rerankScore: byIndex.get(index) ?? candidate.score }))
@@ -329,8 +278,7 @@ async function upsertOriginalSummaryIndexEntry_ACU(content: string): Promise<voi
     const comment = `${getIsolationPrefix_ACU()}TavernDB-ACU-CustomExport-纪要索引`;
     const entries = await getLorebookEntries_ACU(targetLorebook);
     const existing = entries.find((entry: any) => entry?.comment === comment);
-    // 0TK 占用模式恒开启：新条目默认不启用（不占用上下文）
-    const enabled = existing?.enabled ?? false;
+    const enabled = existing?.enabled ?? (worldbookConfig?.zeroTkOccupyMode !== true);
     const nextEntry = {
         ...(existing || {}),
         comment,
@@ -632,15 +580,12 @@ async function tryRealignSummaryVectorIndexPointerFromDisk_ACU(params: {
 
 // T5：query embedding 失败时的降级路径 —— 仅注入最近固定行，不依赖向量检索。
 // 仅在 recentFixedRows 非空时调用；调用方负责确认 recentFixedRows.length > 0。
-async function injectRecentFixedRowsOnly_ACU(recentFixedRows: ChatSummaryVectorIndexRow_ACU[], signature: string): Promise<SummaryVectorIndexRuntimeResult_ACU> {
+async function injectRecentFixedRowsOnly_ACU(recentFixedRows: ChatSummaryVectorIndexRow_ACU[]): Promise<SummaryVectorIndexRuntimeResult_ACU> {
     const selected = recentFixedRows
         .map((row): SummaryIndexSelectedCandidate_ACU => ({ kind: 'recent_fixed', row }))
         .sort((left, right) => (Number(left.row.rowOrder) || 0) - (Number(right.row.rowOrder) || 0));
     const content = buildSummaryIndexOverwriteContent_ACU(selected);
     await upsertOriginalSummaryIndexEntry_ACU(content);
-    // [M2] 降级注入同样以 upsert 成功为收尾：登记签名后 8s 窗口内才允许 dedupe。
-    lastRuntimeSignature_ACU = signature;
-    lastRuntimeAt_ACU = Date.now();
     return {
         success: true,
         reason: 'query_embedding_failed_recent_fixed_only',
@@ -665,12 +610,17 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
     }
     const userInput = normalizeText_ACU(options.userInput);
     if (!userInput) return { success: false, skipped: true, reason: 'empty_user_input' };
-    const signature = `${options.source || 'unknown'}:${userInput}`;
+    // P3：去重签名不含 source——同一次发送会经由 TavernHelper 包装与
+    // GENERATION_AFTER_COMMANDS 两个钩子各触发一次，source 不同导致签名不同、
+    // 完整链路（关键词 AI + embedding + rerank + 世界书写回）跑两遍。
+    // 加入 chatKey 防止切换聊天后相同文本被跨聊天误去重。
+    const signature = `${String(currentChatFileIdentifier_ACU || '')}:${userInput}`;
     if (signature === lastRuntimeSignature_ACU && Date.now() - lastRuntimeAt_ACU <= SUMMARY_VECTOR_INDEX_RUNTIME_DEDUPE_MS_ACU) {
+        logDebug_ACU(`[交火模式纪要索引] 8s 窗口内重复触发已去重：source=${options.source || 'unknown'}`);
         return { success: true, skipped: true, reason: 'deduped' };
     }
-    // [M2] 签名登记移到成功收尾（upsert 完成处）：失败轮次不再谎报 success:'deduped'，
-    // 8s 窗口内的下一次调用可以正常重试。
+    lastRuntimeSignature_ACU = signature;
+    lastRuntimeAt_ACU = Date.now();
 
     const config = getEffectiveSummaryVectorIndexConfig_ACU();
     const validation = validateSummaryVectorIndexConfig_ACU(config);
@@ -808,7 +758,7 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
     // 否则保持原行为（空向量返回 empty_query_embedding；异常穿透给上层 init.ts 的 try/catch 兜底）。
     let keywords: string[] = [];
     let queryText = '';
-    let queryVector: number[] = [];
+    let queryVector: number[] | Float32Array = [];
     try {
         keywords = await generateKeywords_ACU(config, userInput);
         queryText = [userInput, keywords.join('，')].filter(Boolean).join('\n关键词：');
@@ -822,14 +772,14 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
         if (queryVector.length === 0) {
             if (recentFixedRows.length > 0) {
                 logWarn_ACU('[交火模式纪要索引] query embedding 返回空向量，降级为仅注入最近固定行:', userInput);
-                return await injectRecentFixedRowsOnly_ACU(recentFixedRows, signature);
+                return await injectRecentFixedRowsOnly_ACU(recentFixedRows);
             }
             return { success: false, skipped: true, reason: 'empty_query_embedding' };
         }
     } catch (error) {
         if (recentFixedRows.length > 0) {
             logWarn_ACU('[交火模式纪要索引] query embedding 失败，降级为仅注入最近固定行，继续原始生成:', error);
-            return await injectRecentFixedRowsOnly_ACU(recentFixedRows, signature);
+            return await injectRecentFixedRowsOnly_ACU(recentFixedRows);
         }
         throw error;
     }
@@ -851,7 +801,7 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
     const denseCandidates = searchableCandidates
         .map((candidate): RankedSummaryCandidate_ACU | null => {
             const chunk = candidate.chunk;
-            if (!Array.isArray(chunk.vector) || chunk.vector.length === 0) return null;
+            if ((!Array.isArray(chunk.vector) && !((chunk.vector as any) instanceof Float32Array)) || chunk.vector.length === 0) return null;
             const score = cosineSimilarity_ACU(queryVector, chunk.vector, queryNorm);
             if (score < config.summaryIndexMinScore) return null;
             return { ...candidate, score, denseScore: score };
@@ -907,9 +857,6 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
 
     const content = buildSummaryIndexOverwriteContent_ACU(selected);
     await upsertOriginalSummaryIndexEntry_ACU(content);
-    // [M2] 成功收尾处登记 dedupe 签名：upsert 失败抛错时不登记，8s 窗口内的重试不被吞掉。
-    lastRuntimeSignature_ACU = signature;
-    lastRuntimeAt_ACU = Date.now();
     logDebug_ACU(
         `[交火模式纪要索引] 已覆盖原概要索引条目：${selected.length} 条（其中固定注入 ${recentFixedRows.length} 条，排序选取 ${selected.length - recentFixedRows.length} 条），关键词 ${keywords.length} 个，输出顺序按纪要表原 rowOrder。`,
     );

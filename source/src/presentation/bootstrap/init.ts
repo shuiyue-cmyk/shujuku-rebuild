@@ -109,6 +109,10 @@ import {
   restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU
 } from '../../service/vector/summary-vector-index-flush-queue';
 import {
+  cleanupSummaryVectorIndexForDeletedChat_ACU,
+  sweepOrphanSummaryVectorIndexFiles_ACU,
+} from '../../service/vector/summary-vector-index-chat-deletion-gc';
+import {
   topLevelWindow_ACU
 } from '../../shared/env';
 import {
@@ -492,6 +496,35 @@ export   function mainInitialize_ACU() {
             void handleChatChangedEvent_ACU(chatFileName);
           });
         }
+
+        // P7：聊天被删除时清理其向量外置存档 / IDB 缓存 / flush 任务。
+        // 延迟 5s 执行：等宿主完成删除后的状态收敛（characters[].chats、当前聊天切换）再枚举校验。
+        const handleChatDeletedForVectorCleanup_ACU = (deletedChatName: unknown): void => {
+          const name = String(deletedChatName || '').trim();
+          if (!name) return;
+          setTimeout(() => {
+            void cleanupSummaryVectorIndexForDeletedChat_ACU(name).catch((error: any) => {
+              logWarn_ACU('[交火向量索引] 聊天删除清理失败（将由孤儿清扫兜底）:', error?.message || error);
+            });
+          }, 5000);
+        };
+        if (SillyTavern_API_ACU.eventTypes.CHAT_DELETED) {
+          SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.CHAT_DELETED, handleChatDeletedForVectorCleanup_ACU);
+          logDebug_ACU('[交火向量索引] 已注册 CHAT_DELETED 向量清理监听');
+        }
+        // GROUP_CHAT_DELETED 在本地 eventTypes 类型声明快照中缺失（运行时存在），用索引访问。
+        const groupChatDeletedEventType = (SillyTavern_API_ACU.eventTypes as Record<string, string>)['GROUP_CHAT_DELETED'];
+        if (groupChatDeletedEventType) {
+          SillyTavern_API_ACU.eventSource.on(groupChatDeletedEventType, handleChatDeletedForVectorCleanup_ACU);
+          logDebug_ACU('[交火向量索引] 已注册 GROUP_CHAT_DELETED 向量清理监听');
+        }
+        // P7：启动 60s 后执行孤儿清扫（内部 localStorage 节流 24h），
+        // 兜住插件未加载期间被删除的聊天遗留的向量存档。
+        setTimeout(() => {
+          void sweepOrphanSummaryVectorIndexFiles_ACU().catch((error: any) => {
+            logWarn_ACU('[交火向量索引] 孤儿清扫失败:', error?.message || error);
+          });
+        }, 60_000);
 
         // [触发门控] 记录“用户真实发送”的消息ID，用于剧情推进触发判定
         if (SillyTavern_API_ACU.eventTypes.MESSAGE_SENT) {

@@ -14,8 +14,11 @@ import { isSqliteMode } from '../../service/table/storage-mode';
 import { refreshMergedDataAndNotifyWithUI_ACU } from '../components/pipeline-ui-helpers';
 import { findSummaryTable_ACU, buildSummaryVectorIndexArchiveScopeKey_ACU } from '../../service/vector/summary-vector-index-archive-service';
 import { markSummaryVectorIndexDirtyForRealign_ACU } from '../../service/vector/summary-vector-index-realign-state';
+import { enqueueSummaryVectorIndexFlush_ACU } from '../../service/vector/summary-vector-index-flush-queue';
+import { getLatestSummaryVectorIndexSnapshotState_ACU } from '../../service/vector/summary-vector-index-state-service';
+import { globalMeta_ACU } from '../../data/repositories/profile-repo';
 import { currentChatFileIdentifier_ACU, getCurrentIsolationKey_ACU } from '../../service/runtime/state-manager';
-import { logDebug_ACU, logError_ACU } from '../../shared/utils';
+import { logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
 
 /** 连续事件停止后多久执行一轮；旧行为是 500ms。 */
 export const TRAILING_DELAY_MS_ACU = 1200;
@@ -100,7 +103,22 @@ async function runMutationRound_ACU(): Promise<void> {
         sourceTableKey: summaryTable.summaryKey,
       });
       markSummaryVectorIndexDirtyForRealign_ACU(scopeKey, realignDirtyReason);
-      logDebug_ACU(`[交火向量索引] ${realignDirtyReason}: 已标记 scope=${scopeKey} 下一次归档后执行懒对齐。`);
+      // P2：dirty 标记必须有消费端。楼层删除/滑动后，当向量功能开启且该 scope 已建过
+      // 索引时，直接入队重新归档（flush 成功后由队列清除 dirty）。未建过索引的聊天
+      // 不入队，避免凭空发起首次建索引产生意外 embedding 费用。
+      const vectorModeEnabled = globalMeta_ACU?.summaryVectorIndexModeGlobal === true;
+      const hasExistingIndex = !!getLatestSummaryVectorIndexSnapshotState_ACU()?.summaryVectorIndexState;
+      if (vectorModeEnabled && hasExistingIndex) {
+        void enqueueSummaryVectorIndexFlush_ACU({ reason: realignDirtyReason, mode: 'sync' })
+          .then((queued) => {
+            logDebug_ACU(`[交火向量索引] ${realignDirtyReason}: 已入队重新归档对齐，scope=${scopeKey}, queued=${queued.queued}, reason=${queued.reason || ''}`);
+          })
+          .catch((e: any) => {
+            logWarn_ACU(`[交火向量索引] ${realignDirtyReason}: 重新归档入队失败（dirty 标记保留，等待下次归档）: ${e?.message || e}`);
+          });
+      } else {
+        logDebug_ACU(`[交火向量索引] ${realignDirtyReason}: 已标记 scope=${scopeKey} dirty（向量功能未启用或尚无索引，不入队归档）。`);
+      }
     }
   } finally {
     running_ACU = false;
