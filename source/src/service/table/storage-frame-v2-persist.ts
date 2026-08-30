@@ -21,6 +21,7 @@ import { getTableDataFingerprint_ACU } from './table-data-upgrade-audit';
 import { parseDDLColumnInfos_ACU } from '../../shared/ddl-utils';
 import { validateCanonicalCheckpoint_ACU } from '../../shared/canonical-checkpoint-validator';
 import { findLatestTransitionCheckpoint_ACU } from './compat-transition-checkpoint';
+import { reconcileRevealedSheetWithTemplate_ACU } from '../template/chat-template-reconciler';
 
 export interface TableCheckpointGenerationConfig_ACU {
   maxEntriesAfterCheckpoint: number;
@@ -136,6 +137,11 @@ export interface CommitCurrentFloorTemplateChangesOptions_ACU {
   syncTemplateScope?: boolean;
   templateSource?: any;
   presetName?: string;
+  /**
+   * 休眠溯源（S3-4）：本次提交中被 hide 的表在休眠前所属的活跃预设名。
+   * 写入各 hide checkpoint 的可选 hideSourcePresetName 字段，供休眠清单展示「来源模板」。
+   */
+  hideSourcePresetName?: string;
   source?: string;
   reason?: string;
   /** Correlates one template reconciliation across planning and atomic persistence logs. */
@@ -818,6 +824,39 @@ export function assertSingleActiveFullCheckpointV2_ACU(
     return `#${index}(${checkpoint?.reason ?? 'unknown'})`;
   }).join('、');
   return `V2 ${context} 违反单根不变量：同一隔离键下存在 ${indices.length} 个 full checkpoint（${detail}），回放只认最后一个，多余基线会使之前增量失效。`;
+}
+
+/**
+ * S2-4：初始化（reason:'init'）full checkpoint 的统一写入口。
+ *
+ * 之前 template-state-reset 在调用方手工拼装 storageFrame 直接赋给消息，
+ * frame 协议散落且没有单根断言。此入口把「frame 拼装 + 单根不变量校验」收敛到
+ * persist 层：写入后若同一隔离键下存在多个 full checkpoint，立即抛错（调用方
+ * 的事务快照回滚会撤销本次赋值），不允许半写状态落盘。
+ *
+ * 注意：只负责写 frame，不改 TavernDB_ACU_Identity、不保存聊天——这些仍由
+ * 调用方在其事务语义内完成。目标楼同一消息上其他隔离键的数据原样保留。
+ */
+export function writeInitFullCheckpointFrameV2_ACU(options: {
+  chat: any[];
+  targetIndex: number;
+  isolationKey: string;
+  checkpoint: TableCheckpointV2_ACU;
+}): void {
+  const { chat, targetIndex, isolationKey, checkpoint } = options;
+  const target = Array.isArray(chat) ? chat[targetIndex] : undefined;
+  if (!target || target.is_user) {
+    throw new Error(`初始化 checkpoint 写入目标无效：楼层 #${targetIndex} 不存在或不是 AI 楼层。`);
+  }
+  if (checkpoint?.kind !== 'full' || checkpoint.reason !== 'init') {
+    throw new Error(`初始化 checkpoint 写入口只接受 reason:'init' 的 full checkpoint（收到 kind=${checkpoint?.kind}, reason=${(checkpoint as any)?.reason}）。`);
+  }
+  target.TavernDB_ACU_IsolatedData = {
+    ...(target.TavernDB_ACU_IsolatedData || {}),
+    [isolationKey]: { _acu_storage_version: 2, storageFrame: { version: 2, checkpoint, logEntries: [] } },
+  };
+  const violation = assertSingleActiveFullCheckpointV2_ACU(chat, isolationKey, 'init_reset');
+  if (violation) throw new Error(violation);
 }
 
 function findLatestFullCheckpoint_ACU(
@@ -3889,13 +3928,26 @@ export async function commitCurrentFloorTemplateChanges_ACU(
       if (existingCheckpoint && Number(existingCheckpoint.createdAt) > createdAt) {
         throw new Error(`V2 sheet checkpoint cannot replace a newer checkpoint: sheetKey=${sheetKey}, existingCreatedAt=${existingCheckpoint.createdAt}, requestedCreatedAt=${createdAt}.`);
       }
+      // reveal 后列级再协调（S1-4）：恢复的是"离开时最新状态"，休眠期间模板可能已演进
+      // （加列/减列/改名）。落盘前把恢复数据 rebase 到当前模板列集——匹配列继承数据、
+      // 新列按契约填充、模板缺失列进尾部隐藏列（列级休眠，数据不删）。
+      // not_found 回退时 revealData 就是模板结构本身（同一对象引用），无需再协调。
+      const revealTemplateStructure = revealSheets.get(sheetKey) ?? introductionSheets.get(sheetKey);
+      let effectiveRevealData = revealData;
+      if (revealTemplateStructure && revealTemplateStructure !== revealData) {
+        const rebase = reconcileRevealedSheetWithTemplate_ACU(revealData, revealTemplateStructure, sheetKey, storageMode);
+        effectiveRevealData = rebase.sheet;
+        // 与其他 targetSheetData 同一关卡：协调结果必须能构造合法 hydrate 映射。
+        if (storageMode === 'sqlite') createSheetInsertPlan(effectiveRevealData);
+        logDebug_ACU(`[V2 Persist] reveal_rebase: requestId=${options.requestId || 'unknown'}, sheetKey=${sheetKey}, inherited=${rebase.audit.inheritedColumns.length}, added=${rebase.audit.addedColumns.length}, hidden=${rebase.audit.hiddenColumns.length}, changed=${rebase.changed}。`);
+      }
       const scheduleSummary = scheduleSummaryBySheet[sheetKey];
       checkpoints.push({
         kind: 'sheet_full',
         createdAt,
         reason: 'schema_change',
         sheetKey,
-        data: revealData,
+        data: effectiveRevealData,
         ...(scheduleSummary ? { scheduleSummary: deepClone_ACU(scheduleSummary) } : {}),
         event: { filledSheetKeys: [], changedSheetKeys: [sheetKey] },
         timeline: {
@@ -3970,6 +4022,9 @@ export async function commitCurrentFloorTemplateChanges_ACU(
         throw new Error(`V2 sheet checkpoint cannot replace a newer checkpoint: sheetKey=${sheetKey}, existingCreatedAt=${existingCheckpoint.createdAt}, requestedCreatedAt=${createdAt}.`);
       }
       const scheduleSummary = scheduleSummaryBySheet[sheetKey];
+      const hideSourcePresetName = typeof options.hideSourcePresetName === 'string' && options.hideSourcePresetName.trim().length > 0
+        ? options.hideSourcePresetName
+        : undefined;
       checkpoints.push({
         kind: 'sheet_full',
         createdAt,
@@ -3977,6 +4032,9 @@ export async function commitCurrentFloorTemplateChanges_ACU(
         sheetKey,
         data: hideSource.sheetData,
         ...(scheduleSummary ? { scheduleSummary: deepClone_ACU(scheduleSummary) } : {}),
+        // S3-4 休眠溯源：记录休眠前活跃的预设名，供生命周期投影展示「来源模板」。
+        // 可选附加字段，checkpoint 校验与回放对未知字段宽容，历史数据缺失时展示层回退「未记录」。
+        ...(hideSourcePresetName ? { hideSourcePresetName } : {}),
         event: { filledSheetKeys: [], changedSheetKeys: [sheetKey] },
         timeline: {
           kind: 'sheet_hide' as const,

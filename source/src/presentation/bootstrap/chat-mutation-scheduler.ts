@@ -9,6 +9,7 @@
  * 回滚开关：TRAILING_DELAY_MS 设 500、MAX_WAIT_MS 设 0 即退化为旧的裸 500ms 防抖行为。
  */
 import { chatMutationDebounceTimer_ACU, _set_chatMutationDebounceTimer_ACU } from '../../service/runtime/state-manager';
+import { recoverLostCheckpointsAfterMessageDeletion_ACU } from '../../service/chat/checkpoint-delete-guard';
 import { reloadStorageProvider } from '../../service/table/table-storage-strategy';
 import { isSqliteMode } from '../../service/table/storage-mode';
 import { refreshMergedDataAndNotifyWithUI_ACU } from '../components/pipeline-ui-helpers';
@@ -76,6 +77,17 @@ async function runMutationRound_ACU(): Promise<void> {
   firstRequestAt_ACU = 0;
 
   try {
+    // S0-4：删楼轮次先做 checkpoint 前移恢复，再进入冷回放——被删楼层携带的
+    // 回放根 / 休眠表 checkpoint 若不先嫁接到幸存楼层，冷回放会把丢失固化。
+    // 失败隔离：恢复失败（守卫内部已回滚）不阻断后续冷回放。
+    if (latestReason_ACU === 'chat_modified_deleted') {
+      try {
+        await recoverLostCheckpointsAfterMessageDeletion_ACU();
+      } catch (e: any) {
+        logError_ACU(`[聊天变更] 删楼 checkpoint 前移恢复失败: ${e?.message}`);
+      }
+    }
+
     // 与旧实现保持一致的执行顺序；每步独立隔离，失败不中断后续步骤
     if (isSqliteMode()) {
       try {

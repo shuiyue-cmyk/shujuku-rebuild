@@ -291,6 +291,9 @@ export function useDataManagement() {
         persistChatScope: false,
       });
       if (!applied) throw new Error('模板结构无效，无法应用到当前全局模板。');
+      if (typeof applied === 'object' && 'saved' in applied && applied.saved === false) {
+        throw new Error((applied as any).error || '模板已解析，但应用到当前全局模板失败（当前聊天协调提交被拒绝）。');
+      }
       refresh();
       message.value = null;
       toast.success('合并配置已导入：提示词、合并设置和全局模板已更新。', { muteable: false });
@@ -604,6 +607,9 @@ export function useDataManagement() {
           persistChatScope: false,
         });
         if (!applied) throw new Error('默认模板应用失败。');
+        if (typeof applied === 'object' && 'saved' in applied && applied.saved === false) {
+          throw new Error((applied as any).error || '默认模板应用失败（当前聊天协调提交被拒绝）。');
+        }
       } else if (cleanup.clearTemplateSnapshots) {
         applyTemplateScopeForCurrentChat_ACU();
       }
@@ -727,16 +733,14 @@ export function useDataManagement() {
   /**
    * 应用硬清空（purge）结果到 UI（C 方案接线 purge 的收尾）。
    *
-   * 与 applyRangeDeletionOutcome 的收尾刻意不同：
-   * - 不调用 loadOrCreateJsonTableFromChatHistory_ACU / reloadStorageProvider（C2）：
-   *   purgeCurrentChatDatabaseState_ACU 内部已在严格保存与 post-condition 通过后调用
-   *   clearTableRuntimeWithoutReload_ACU 把运行时置为空态，并明令绝不加载聊天/模板/Guide；
-   *   此处若再 reload 会把刚清空的状态从模板/guide 重新物化回来，且 saved=true 会让用户误以为成功。
+   * 与 applyRangeDeletionOutcome 的收尾差异：
+   * - 不调用 loadOrCreateJsonTableFromChatHistory_ACU / reloadStorageProvider：
+   *   purgeCurrentChatDatabaseState_ACU 内部已在严格保存后回落为当前全局模板的
+   *   header-only 空结构（S1-1，pristine：不写 frame，首次填表才建根），此处只需刷新展示。
    * - 不调用 cleanupWorldbookEntriesAfterDataDeletion_ACU（C3）：purge 内部已做
    *   cleanupDatabaseGeneratedWorldbookEntries_ACU，结果进入 result.cleanupWarnings。
-   * - 不调用 refreshMergedDataAndNotify_ACU（V1 验证结论）：该函数会 loadAllChatMessages_ACU +
-   *   mergeAllIndependentTables_ACU，并在无历史数据时从指导表/模板重建 currentJsonTableData_ACU
-   *   （pipeline.ts:617-629），等价于重新物化。因此只调 refresh() 做 settings/isolation/count 级刷新。
+   * - 调用 refreshMergedDataAndNotify_ACU 让各面板显示回落后的模板空结构（S1-1 语义下
+   *   "从模板重建空结构"是期望行为，不再是需要防御的重新物化）。
    * - 表格页面（FormFill/Dashboard）的显示由 getCurrentTableDisplayData_ACU 纯读取回退到
    *   当前全局模板（stripSeedRows），页面 mount/既有 refresh tick 即可展示，无需重新物化 runtime。
    */
@@ -746,6 +750,7 @@ export function useDataManagement() {
       toast.error(result.error || '硬清空失败，详情见运行日志。', { muteable: false });
       return;
     }
+    await refreshMergedDataAndNotify_ACU();
     refresh();
     if (result.cleanupWarnings?.length) {
       toast.warning(`本地数据已全部硬清空（${result.clearedMessageCount} 条消息）。警告：${result.cleanupWarnings[0]}`, { muteable: false, durationMs: 6000 });

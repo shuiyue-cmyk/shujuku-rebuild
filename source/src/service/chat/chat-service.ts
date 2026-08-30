@@ -270,6 +270,11 @@ function collectIsolationKeysWithV2Frames_ACU(chat: any[], options: { maxMessage
     return [...keys];
 }
 
+/** 边界 full 判定：compaction（保留层清理前滚）与 periodic（S3-2 距离触发前滚）共享同一套单根滚动语义。 */
+function isV2BoundaryCheckpointReason_ACU(reason: unknown): reason is 'compaction' | 'periodic' {
+    return reason === 'compaction' || reason === 'periodic';
+}
+
 function hasV2CompactionCheckpointAtIndex_ACU(chat: any[], isolationKey: string, messageIndex: number): boolean {
     if (!Array.isArray(chat) || messageIndex < 0 || messageIndex >= chat.length) return false;
     const msg = chat[messageIndex];
@@ -277,7 +282,7 @@ function hasV2CompactionCheckpointAtIndex_ACU(chat: any[], isolationKey: string,
     const tagData = readIsolatedTagData_ACU(msg, isolationKey);
     return isV2TagData_ACU(tagData)
         && tagData.storageFrame.checkpoint?.kind === 'full'
-        && tagData.storageFrame.checkpoint.reason === 'compaction';
+        && isV2BoundaryCheckpointReason_ACU(tagData.storageFrame.checkpoint.reason);
 }
 
 function resolveLatestCompactionTrigger_ACU(
@@ -294,7 +299,7 @@ function resolveLatestCompactionTrigger_ACU(
         for (const tagData of Object.values(isolatedData)) {
             if (!isV2TagData_ACU(tagData)) continue;
             const checkpoint = tagData.storageFrame.checkpoint;
-            if (checkpoint?.kind !== 'full' || checkpoint.reason !== 'compaction') continue;
+            if (checkpoint?.kind !== 'full' || !isV2BoundaryCheckpointReason_ACU(checkpoint.reason)) continue;
             if (!latest || messageIndex > latest.anchorIndex) latest = { anchorIndex: messageIndex, checkpoint };
         }
     }
@@ -391,6 +396,97 @@ function resolveRetainedCheckpointBoundary_ACU(chat: any[], retainCount: number)
         retainedEndIndex,
         checkpointBufferStartIndex,
         checkpointBufferEndIndex,
+        anchorIndex,
+    };
+}
+
+/**
+ * periodic 前滚步长（S3-2）：根滚动到尾部缓冲线后，每再累积这么多 AI 楼层就触发下一次前滚。
+ * 与 cleanup compaction 的缓冲节流（RETAIN_RECENT_CHECKPOINT_BUFFER_LAYERS_ACU）保持同一节奏。
+ */
+const PERIODIC_V2_FULL_CHECKPOINT_ROLL_STEP_AI_LAYERS_ACU = 20;
+
+/**
+ * S3-2 periodic full checkpoint 冗余：当最陈旧隔离键的 replay 根距聊天尾部过远时，
+ * 把单根前滚到尾部缓冲线（reason:'periodic'），消除"根远离尾部 + 超长增量链"的单点。
+ *
+ * 与 cleanup compaction 的关系：
+ * - 复用同一套 core（写锚点 full → 无损降级其余 full → 单根断言），不引入第二基线；
+ * - 尾部缓冲取 max(20, retainCount)，保证 periodic 锚点永不越过 cleanup 的未来锚点线
+ *   （tail − retainCount），否则 hasAdvancedAnchor 会永久阻塞清理滚动；
+ * - 本解析器不清除任何楼层：indicesToPurge 仅表示"锚点前已被新根覆盖的数据帧"，
+ *   供 core 准入与诊断，购物式清理仍由 cleanup 流程独立负责。
+ */
+function resolvePeriodicCheckpointBoundary_ACU(chat: any[], retainCount: number): RetainedCheckpointBoundary_ACU {
+    const aiMessageIndices: number[] = [];
+    const dataMessageIndices: number[] = [];
+    for (let i = 0; i < chat.length; i++) {
+        const msg = chat[i];
+        if (msg && !msg.is_user) {
+            aiMessageIndices.push(i);
+        }
+        if (messageHasLocalLayerData_ACU(msg)) {
+            dataMessageIndices.push(i);
+        }
+    }
+
+    const bufferLayers = Math.max(RETAIN_RECENT_CHECKPOINT_BUFFER_LAYERS_ACU, Math.max(0, retainCount));
+    const stepLayers = PERIODIC_V2_FULL_CHECKPOINT_ROLL_STEP_AI_LAYERS_ACU;
+    const noRotate: RetainedCheckpointBoundary_ACU = {
+        shouldCompact: false,
+        shouldRotateCheckpoint: false,
+        aiMessageIndices,
+        dataMessageIndices,
+        effectiveRetainCount: bufferLayers + stepLayers,
+        bufferLayers,
+        cutoffIndex: 0,
+        indicesToPurge: [],
+        retainedDataIndices: dataMessageIndices.slice(),
+        checkpointBufferIndices: [],
+    };
+
+    // 最陈旧根：每个 V2 隔离键取最后一个 full checkpoint 的位置；退化历史（有帧无 full）
+    // 取该键首个 V2 帧位置——此时 periodic 写入同时修复该键的根缺失。
+    let stalestRootIndex: number | undefined;
+    for (const isolationKey of collectIsolationKeysWithV2Frames_ACU(chat)) {
+        const fullRefs = collectV2FullCheckpointRefsForIsolation_ACU(chat, isolationKey);
+        let rootIndex: number | undefined = fullRefs.length > 0
+            ? fullRefs[fullRefs.length - 1].messageIndex
+            : undefined;
+        if (rootIndex === undefined) {
+            for (let i = 0; i < chat.length; i++) {
+                const tagData = readIsolatedTagData_ACU(chat[i], isolationKey);
+                if (isV2TagData_ACU(tagData)) {
+                    rootIndex = i;
+                    break;
+                }
+            }
+        }
+        if (rootIndex === undefined) continue;
+        if (stalestRootIndex === undefined || rootIndex < stalestRootIndex) {
+            stalestRootIndex = rootIndex;
+        }
+    }
+    if (stalestRootIndex === undefined) return noRotate;
+
+    const aiTotal = aiMessageIndices.length;
+    const rootAiOrdinal = countAiFloorAtMessage_ACU(chat, stalestRootIndex);
+    const distanceLayers = aiTotal - rootAiOrdinal;
+    const anchorAiOrdinal = aiTotal - bufferLayers;
+    if (distanceLayers < bufferLayers + stepLayers || anchorAiOrdinal < 1) return noRotate;
+
+    const anchorIndex = aiMessageIndices[anchorAiOrdinal - 1];
+    // 只进不退：锚点必须严格晚于最陈旧根，否则前滚没有意义。
+    if (anchorIndex === undefined || anchorIndex <= stalestRootIndex) return noRotate;
+
+    const indicesToPurge = dataMessageIndices.filter(index => index < anchorIndex);
+    if (indicesToPurge.length === 0) return noRotate;
+
+    return {
+        ...noRotate,
+        shouldRotateCheckpoint: true,
+        indicesToPurge,
+        retainedDataIndices: dataMessageIndices.filter(index => index >= anchorIndex),
         anchorIndex,
     };
 }
@@ -514,6 +610,7 @@ async function ensureV2BoundaryCheckpointForRetainedBufferCore_ACU(
     chat: any[],
     boundary: RetainedCheckpointBoundary_ACU,
     options: BoundaryCheckpointEnsureOptions_ACU = {},
+    checkpointReason: 'compaction' | 'periodic' = 'compaction',
 ): Promise<BoundaryCheckpointEnsureResult_ACU> {
     if (!boundary.shouldRotateCheckpoint || boundary.indicesToPurge.length === 0) {
         return { success: true, changed: false, skipped: true };
@@ -541,13 +638,13 @@ async function ensureV2BoundaryCheckpointForRetainedBufferCore_ACU(
             }
         });
         try {
-            const changed = await writeV2BoundaryCheckpointBeforePurge_ACU(chat, anchorIndex);
+            const changed = await writeV2BoundaryCheckpointBeforePurge_ACU(chat, anchorIndex, checkpointReason);
             const downgradedCount = downgradeCoveredV2FullCheckpointsAfterAnchor_ACU(chat, anchorIndex);
             const obsoleteInitDowngradedCount = downgradeObsoleteInitialV2FullCheckpointsBeforeCompaction_ACU(chat, anchorIndex);
             // 单根不变量：降级后同一隔离键必须至多一个 full checkpoint，
             // 否则写新边界基线前就把历史搞成多根，回放只认最后一个，之前增量全部失效。
             for (const isolationKey of collectIsolationKeysWithV2Frames_ACU(chat)) {
-                const invariantViolation = assertSingleActiveFullCheckpointV2_ACU(chat, isolationKey, 'compaction_boundary');
+                const invariantViolation = assertSingleActiveFullCheckpointV2_ACU(chat, isolationKey, `${checkpointReason}_boundary`);
                 if (invariantViolation) {
                     throw new Error(invariantViolation);
                 }
@@ -582,13 +679,20 @@ async function ensureV2BoundaryCheckpointForRetainedBufferCore_ACU(
 
 export function shouldRotateV2BoundaryCheckpointForRetainedBuffer_ACU(): boolean {
     const retainCount = settings_ACU.retainRecentLayers || 0;
-    if (retainCount <= 0) return false;
 
     const chat = getChatArray_ACU();
     if (!chat || !Array.isArray(chat) || chat.length === 0) return false;
 
-    const boundary = resolveRetainedCheckpointBoundary_ACU(chat, retainCount);
-    return boundary.shouldRotateCheckpoint && boundary.indicesToPurge.length > 0 && boundary.anchorIndex !== undefined;
+    if (retainCount > 0) {
+        const boundary = resolveRetainedCheckpointBoundary_ACU(chat, retainCount);
+        if (boundary.shouldRotateCheckpoint && boundary.indicesToPurge.length > 0 && boundary.anchorIndex !== undefined) {
+            return true;
+        }
+    }
+
+    // S3-2：cleanup 边界不滚动时，检查 periodic 前滚是否到期（含 retain=0 清理禁用场景）。
+    const periodicBoundary = resolvePeriodicCheckpointBoundary_ACU(chat, retainCount);
+    return periodicBoundary.shouldRotateCheckpoint && periodicBoundary.anchorIndex !== undefined;
 }
 
 export async function ensureV2BoundaryCheckpointForRetainedBuffer_ACU(
@@ -618,10 +722,6 @@ export async function ensureV2BoundaryCheckpointForRetainedBuffer_ACU(
         maintenanceMode: 'exclusive',
     }, async () => {
         const retainCount = settings_ACU.retainRecentLayers || 0;
-        if (retainCount <= 0) {
-            logDebug_ACU('[V2 Compaction] retainRecentLayers 为 0 或未设置，跳过边界 checkpoint 建立。');
-            return { success: true, changed: false, skipped: true };
-        }
 
         const chat = getChatArray_ACU();
         if (!chat || !Array.isArray(chat) || chat.length === 0) {
@@ -629,11 +729,24 @@ export async function ensureV2BoundaryCheckpointForRetainedBuffer_ACU(
             return { success: true, changed: false, skipped: true };
         }
 
-        const boundary = resolveRetainedCheckpointBoundary_ACU(chat, retainCount);
-        if (!boundary.shouldRotateCheckpoint) {
-            logDebug_ACU(`[V2 Compaction] AI 楼层总数(${boundary.aiMessageIndices.length}) < 滚动触发层数(${boundary.effectiveRetainCount}=保留${retainCount}+缓冲${RETAIN_RECENT_CHECKPOINT_BUFFER_LAYERS_ACU})，无需建立边界 checkpoint。`);
+        // 保留层清理边界优先：cleanup 可滚动时按原语义写 reason:'compaction'。
+        if (retainCount > 0) {
+            const boundary = resolveRetainedCheckpointBoundary_ACU(chat, retainCount);
+            if (boundary.shouldRotateCheckpoint) {
+                return ensureV2BoundaryCheckpointForRetainedBufferCore_ACU(chat, boundary, options, 'compaction');
+            }
+            logDebug_ACU(`[V2 Compaction] AI 楼层总数(${boundary.aiMessageIndices.length}) < 滚动触发层数(${boundary.effectiveRetainCount}=保留${retainCount}+缓冲${RETAIN_RECENT_CHECKPOINT_BUFFER_LAYERS_ACU})，检查 periodic 前滚。`);
         }
-        return ensureV2BoundaryCheckpointForRetainedBufferCore_ACU(chat, boundary, options);
+
+        // S3-2 periodic 前滚：cleanup 不滚动（含 retain=0 清理禁用）时，若 replay 根距
+        // 尾部超过缓冲+步长阈值，则把单根前滚到尾部缓冲线并写 reason:'periodic' full。
+        const periodicBoundary = resolvePeriodicCheckpointBoundary_ACU(chat, retainCount);
+        if (periodicBoundary.shouldRotateCheckpoint) {
+            logDebug_ACU(`[V2 Compaction] periodic 前滚触发：锚点楼层 #${periodicBoundary.anchorIndex}，尾部缓冲 ${periodicBoundary.bufferLayers} 层。`);
+            return ensureV2BoundaryCheckpointForRetainedBufferCore_ACU(chat, periodicBoundary, options, 'periodic');
+        }
+
+        return { success: true, changed: false, skipped: true };
     });
 }
 
@@ -752,6 +865,7 @@ function relocateLatestSummaryVectorPointerToBoundary_ACU(
 async function writeV2BoundaryCheckpointBeforePurge_ACU(
     chat: any[],
     boundaryAnchorIndex: number,
+    checkpointReason: 'compaction' | 'periodic' = 'compaction',
 ): Promise<boolean> {
     if (boundaryAnchorIndex < 0 || !chat[boundaryAnchorIndex] || chat[boundaryAnchorIndex].is_user) {
         throw new Error(`边界 checkpoint 写入失败：boundaryAnchorIndex=${boundaryAnchorIndex} 不是有效 AI 楼层。`);
@@ -876,7 +990,7 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(
         const checkpoint = {
             kind: 'full' as const,
             createdAt: Date.now(),
-            reason: 'compaction' as const,
+            reason: checkpointReason,
             data,
             scheduleSummary: collectScheduleSummaryFromFramesV2_ACU(chat, isolationKey, { maxMessageIndex: boundaryAnchorIndex }),
             compactionProvenance,
@@ -884,7 +998,7 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(
         const validation = validateCanonicalCheckpoint_ACU(checkpoint, {
             messageIndex: boundaryAnchorIndex,
             isolationKey,
-            reason: 'compaction',
+            reason: checkpointReason,
         });
         if (!validation.valid) {
             const issueSummary = validation.issues
@@ -916,10 +1030,10 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(
             }
             const built = buildCanonicalSheetCheckpoint_ACU({
                 createdAt: Date.now(),
-                reason: 'compaction',
+                reason: checkpointReason,
                 sheetKey: hiddenSheetKey,
                 data: JSON.parse(JSON.stringify(restoreData)),
-                context: { messageIndex: boundaryAnchorIndex, isolationKey, reason: 'compaction' },
+                context: { messageIndex: boundaryAnchorIndex, isolationKey, reason: checkpointReason },
             });
             if (!built.checkpoint) {
                 const error = new Error(
@@ -996,7 +1110,7 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(
             }
         }
         changed = true;
-        logDebug_ACU(`[V2 Compaction] 已在 AI 保留边界楼层 #${boundaryAnchorIndex} 写入 isolationKey=[${isolationKey || '无标签'}] 的 full checkpoint。`);
+        logDebug_ACU(`[V2 Compaction] 已在 AI 保留边界楼层 #${boundaryAnchorIndex} 写入 isolationKey=[${isolationKey || '无标签'}] 的 full checkpoint（reason=${checkpointReason}）。`);
     }
 
     return changed;

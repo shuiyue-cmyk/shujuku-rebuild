@@ -36,6 +36,27 @@ export function getLastMessageIndex_ACU(): number {
     return Math.max(0, getChatLength_ACU() - 1);
 }
 
+/** 插件保存成功后的监听回调（如删楼守卫的保管库同步）。 */
+const postChatSaveListeners_ACU: Array<() => void> = [];
+
+/**
+ * 注册插件聊天保存成功后的回调。
+ * 回调同步执行，异常被吞掉并记录，不影响保存契约本身。
+ */
+export function registerPostChatSaveListener_ACU(listener: () => void): void {
+    postChatSaveListeners_ACU.push(listener);
+}
+
+function notifyPostChatSaveListeners_ACU(): void {
+    for (const listener of postChatSaveListeners_ACU) {
+        try {
+            listener();
+        } catch (error: any) {
+            logWarn_ACU('[ChatGateway] post-save 监听回调异常:', error?.message || error);
+        }
+    }
+}
+
 /**
  * 触发聊天保存到宿主平台
  * 内置存在性检查，saveChat 不可用时静默跳过
@@ -46,6 +67,7 @@ export async function saveChatToHost_ACU(): Promise<void> {
         return;
     }
     await SillyTavern_API_ACU.saveChat();
+    notifyPostChatSaveListeners_ACU();
 }
 
 /**
@@ -57,6 +79,7 @@ export async function saveChatToHostStrict_ACU(): Promise<void> {
         throw new Error('宿主 saveChat 不可用，无法提交破坏性聊天数据变更。');
     }
     await SillyTavern_API_ACU.saveChat();
+    notifyPostChatSaveListeners_ACU();
 }
 
 // ═══ 宿主动作 ═══

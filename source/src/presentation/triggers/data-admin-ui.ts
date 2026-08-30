@@ -150,8 +150,11 @@ import {
                     save: true,
                     persistChatScope: false,
                 });
-                if (!appliedTemplate) {
-                    throw new Error('合并配置中的表格模板已解析，但应用到全局模板失败。');
+                if (!appliedTemplate || (typeof appliedTemplate === 'object' && 'saved' in appliedTemplate && (appliedTemplate as any).saved === false)) {
+                    const reason = appliedTemplate && typeof appliedTemplate === 'object' && 'error' in appliedTemplate && typeof (appliedTemplate as any).error === 'string'
+                        ? (appliedTemplate as any).error
+                        : '';
+                    throw new Error(reason || '合并配置中的表格模板已解析，但应用到全局模板失败。');
                 }
 
                 showToastr_ACU('success', '表格模板已成功导入！模板已更新，但不会影响当前聊天记录的本地数据。');
@@ -200,7 +203,7 @@ import {
       }
 
       if (outcome.path === 'purge') {
-          applyPurgeResultToUi_ACU(outcome.result);
+          await applyPurgeResultToUi_ACU(outcome.result);
           return;
       }
 
@@ -227,19 +230,19 @@ import {
   /**
    * 硬清空（purge）结果落 UI（legacy 入口共用）。
    *
-   * 与 range 删除的收尾刻意不同（C 方案 C2/C3）：
-   * purgeCurrentChatDatabaseState_ACU 内部已在严格保存与 post-condition 通过后调用
-   * clearTableRuntimeWithoutReload_ACU 置为空态，并明令绝不加载聊天/模板/Guide；
-   * 此处不再调用 loadOrCreateJsonTableFromChatHistory_ACU / reloadStorageProvider /
-   * refreshMergedDataAndNotifyWithUI_ACU，否则会把刚清空的状态从模板/guide 重新物化回来；
-   * 世界书条目清理也由 purge 内部完成（cleanupDatabaseGeneratedWorldbookEntries_ACU），
-   * 结果进入 result.cleanupWarnings。
+   * 与 range 删除的收尾差异：
+   * purgeCurrentChatDatabaseState_ACU 内部已在严格保存后回落为当前全局模板的
+   * header-only 空结构（S1-1，pristine：不写 frame，首次填表才建根），此处不再
+   * loadOrCreate / reloadStorageProvider，只调 refreshMergedDataAndNotifyWithUI_ACU
+   * 让面板展示回落后的模板空结构；世界书条目清理由 purge 内部完成
+   * （cleanupDatabaseGeneratedWorldbookEntries_ACU），结果进入 result.cleanupWarnings。
    */
-  export function applyPurgeResultToUi_ACU(result: { saved: boolean; clearedMessageCount: number; removedMetadata: string[]; cleanupWarnings?: string[]; error?: string }): void {
+  export async function applyPurgeResultToUi_ACU(result: { saved: boolean; clearedMessageCount: number; removedMetadata: string[]; cleanupWarnings?: string[]; error?: string }): Promise<void> {
       if (!result.saved) {
           showToastr_ACU('error', result.error || '硬清空失败，详情见运行日志。', { timeOut: 10000 });
           return;
       }
+      await refreshMergedDataAndNotifyWithUI_ACU();
       if (typeof updateCardUpdateStatusDisplay_ACU === 'function') {
           updateCardUpdateStatusDisplay_ACU();
       }

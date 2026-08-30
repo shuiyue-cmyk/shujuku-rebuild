@@ -1491,6 +1491,7 @@ describe('useVisualizerSave', () => {
         cols: expect.any(Set),
         cells: expect.any(Set),
       }),
+      expect.anything(),
     );
     expect(serviceMock.setSpecialIndexLockEnabled_ACU).toHaveBeenCalledWith('sheet_test_vz2', false);
     expect(store.pendingLockChanges).toEqual([]);
@@ -1805,7 +1806,7 @@ it('仅修改表格锁时保存锁草稿，不创建 V2 行级 operation log', a
     expect(serviceMock.persistTableMutationLogBatchV2_ACU).not.toHaveBeenCalled();
     expect(serviceMock.saveTableLocksForSheet_ACU).toHaveBeenCalledWith('sheet_test_vz2', expect.objectContaining({
       rows: new Set([0]),
-    }));
+    }), expect.anything());
     expect(store.lockDirty).toBe(false);
     expect(store.dirty).toBe(false);
     expect(store.lastSavedTarget).toBe('data');

@@ -93,6 +93,34 @@ describe('template-preset-api 结果契约', () => {
     expect(mocks.refreshUi).toHaveBeenCalledOnce();
   });
 
+  it('switchTemplatePreset 全局切换协调失败时透传 blockers（S1-3，供调用方确认重试）', async () => {
+    mocks.applyPreset.mockResolvedValueOnce({
+      saved: false,
+      error: '删除表「旧表」需要显式确认',
+      blockers: ['删除表「旧表」需要显式确认'],
+    });
+
+    const result = await createApi().switchTemplatePreset('preset-a', { scope: 'global' });
+
+    expect(result).toEqual({
+      success: false,
+      scope: 'global',
+      message: '删除表「旧表」需要显式确认',
+      error: '删除表「旧表」需要显式确认',
+      blockers: ['删除表「旧表」需要显式确认'],
+    });
+    expect(mocks.refreshUi).not.toHaveBeenCalled();
+  });
+
+  it('switchTemplatePreset 转发 destructiveChangeConfirmed 到服务层（S1-3）', async () => {
+    await createApi().switchTemplatePreset('preset-a', { scope: 'global', destructiveChangeConfirmed: true });
+
+    expect(mocks.applyPreset).toHaveBeenCalledWith('preset-a', expect.objectContaining({
+      updateGlobal: true,
+      destructiveChangeConfirmed: true,
+    }));
+  });
+
   it('switchTemplatePreset 完全成功时返回 runtimeReady=true 且无 warning', async () => {
     const result = await createApi().switchTemplatePreset('preset-a', { scope: 'chat' });
 

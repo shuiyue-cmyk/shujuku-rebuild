@@ -13,6 +13,7 @@ const { mockSettings, mockSaveSettings } = vi.hoisted(() => {
 vi.mock('../../../src/service/runtime/state-manager', () => ({
   settings_ACU: mockSettings,
   currentChatFileIdentifier_ACU: 'test-chat',
+  currentJsonTableData_ACU: null,
   getCurrentIsolationKey_ACU: () => 'iso-key',
 }));
 
@@ -28,6 +29,7 @@ vi.mock('../../../src/service/settings/settings-service', () => ({
 
 import {
   getTableLocksForSheet_ACU,
+  getTableLockIdentitiesForSheet_ACU,
   saveTableLocksForSheet_ACU,
   deleteTableLocksForSheet_ACU,
   toggleRowLock_ACU,
@@ -50,6 +52,14 @@ beforeEach(() => {
 
 // scopeKey = "test-chat::iso-key"
 
+/** 身份锁测试用内容：content[0] 为表头（首列 row_id），数据行首列为 row_id。 */
+const lockContent = (): any[][] => ([
+  ['row_id', '物品名', '数量', '备注'],
+  ['r1', '剑', '1', ''],
+  ['r2', '盾', '2', ''],
+  ['r3', '药水', '5', ''],
+]);
+
 describe('getTableLocksForSheet_ACU', () => {
   it('无锁定数据返回空 Set', () => {
     const locks = getTableLocksForSheet_ACU('sheet_0');
@@ -58,7 +68,7 @@ describe('getTableLocksForSheet_ACU', () => {
     expect(locks.cells).toBeInstanceOf(Set);
     expect(locks.rows.size).toBe(0);
   });
-  it('有锁定数据返回对应 Set', () => {
+  it('legacy 桶且无内容上下文：按旧格式原样返回（向后兼容）', () => {
     mockSettings.tableUpdateLocks = {
       'test-chat::iso-key': {
         sheet_0: { rows: [1, 2], cols: ['物品名'], cells: [] },
@@ -69,10 +79,88 @@ describe('getTableLocksForSheet_ACU', () => {
     expect(locks.rows.has(2)).toBe(true);
     expect(locks.cols.has('物品名')).toBe(true);
   });
+
+  it('legacy 桶且有内容上下文：迁移为 v2 身份桶并持久化，index 视图不变', () => {
+    mockSettings.tableUpdateLocks = {
+      'test-chat::iso-key': {
+        sheet_0: { rows: [0, 2], cols: [1], cells: ['1:0'] },
+      },
+    };
+    const locks = getTableLocksForSheet_ACU('sheet_0', lockContent());
+    expect(locks.rows).toEqual(new Set([0, 2]));
+    expect(locks.cols).toEqual(new Set([1]));
+    expect(locks.cells).toEqual(new Set(['1:0']));
+    const stored = mockSettings.tableUpdateLocks['test-chat::iso-key'].sheet_0;
+    expect(stored.v).toBe(2);
+    expect(stored.rowIds).toEqual(['r1', 'r3']);
+    expect(stored.colNames).toEqual(['数量']);
+    expect(stored.cells).toEqual([['r2', '物品名']]);
+    expect(mockSaveSettings).toHaveBeenCalled();
+  });
+
+  it('v2 身份锁在插行后仍指向原目标行（锁不随位置漂移）', () => {
+    // 锁定 r3（当前索引 2）
+    toggleRowLock_ACU('sheet_0', 2, lockContent());
+    // 在最前面插入一行后 r3 的索引变为 3
+    const shifted = [
+      ['row_id', '物品名', '数量', '备注'],
+      ['r0', '新物品', '9', ''],
+      ['r1', '剑', '1', ''],
+      ['r2', '盾', '2', ''],
+      ['r3', '药水', '5', ''],
+    ];
+    const locks = getTableLocksForSheet_ACU('sheet_0', shifted);
+    expect(locks.rows).toEqual(new Set([3]));
+  });
+
+  it('v2 身份锁指向的行已不在当前内容中时不出现在 index 视图', () => {
+    toggleRowLock_ACU('sheet_0', 0, lockContent()); // 锁定 r1
+    const withoutR1 = [
+      ['row_id', '物品名', '数量', '备注'],
+      ['r2', '盾', '2', ''],
+    ];
+    const locks = getTableLocksForSheet_ACU('sheet_0', withoutR1);
+    expect(locks.rows.size).toBe(0);
+  });
+});
+
+describe('getTableLockIdentitiesForSheet_ACU', () => {
+  it('返回身份键集合', () => {
+    toggleRowLock_ACU('sheet_0', 1, lockContent());
+    toggleColLock_ACU('sheet_0', 0, lockContent());
+    toggleCellLock_ACU('sheet_0', 2, 1, lockContent());
+    const identities = getTableLockIdentitiesForSheet_ACU('sheet_0', lockContent());
+    expect(identities.hasAny).toBe(true);
+    expect(identities.rowIds).toEqual(new Set(['r2']));
+    expect(identities.colNames).toEqual(new Set(['物品名']));
+    expect(identities.cellPairs).toEqual([['r3', '数量']]);
+  });
+
+  it('无锁返回 hasAny=false', () => {
+    const identities = getTableLockIdentitiesForSheet_ACU('sheet_0', lockContent());
+    expect(identities.hasAny).toBe(false);
+  });
+
+  it('legacy 桶且无内容上下文时按无锁处理', () => {
+    mockSettings.tableUpdateLocks = {
+      'test-chat::iso-key': { sheet_0: { rows: [1], cols: [], cells: [] } },
+    };
+    const identities = getTableLockIdentitiesForSheet_ACU('sheet_0');
+    expect(identities.hasAny).toBe(false);
+  });
 });
 
 describe('saveTableLocksForSheet_ACU', () => {
-  it('保存锁定数据', () => {
+  it('有内容上下文时按 v2 身份格式保存', () => {
+    const lockState = { rows: new Set([1]), cols: new Set([2]), cells: new Set(['0:0']) };
+    saveTableLocksForSheet_ACU('sheet_0', lockState, lockContent());
+    const saved = mockSettings.tableUpdateLocks['test-chat::iso-key']?.sheet_0;
+    expect(saved.v).toBe(2);
+    expect(saved.rowIds).toEqual(['r2']);
+    expect(saved.colNames).toEqual(['备注']);
+    expect(saved.cells).toEqual([['r1', '物品名']]);
+  });
+  it('无内容上下文时按旧格式保存（等待下次可解析时机迁移）', () => {
     const lockState = { rows: new Set([1]), cols: new Set(), cells: new Set() };
     saveTableLocksForSheet_ACU('sheet_0', lockState);
     const saved = mockSettings.tableUpdateLocks['test-chat::iso-key']?.sheet_0;
@@ -111,44 +199,55 @@ describe('deleteTableLocksForSheet_ACU', () => {
 });
 
 describe('toggleRowLock_ACU', () => {
-  it('锁定行后可查询到', () => {
-    toggleRowLock_ACU('sheet_0', 1);
+  it('锁定行后按 row_id 存储，index 视图可查到', () => {
+    toggleRowLock_ACU('sheet_0', 1, lockContent());
     const saved = mockSettings.tableUpdateLocks['test-chat::iso-key']?.sheet_0;
-    expect(saved.rows).toContain(1);
+    expect(saved.rowIds).toContain('r2');
+    expect(getTableLocksForSheet_ACU('sheet_0', lockContent()).rows.has(1)).toBe(true);
   });
   it('再次 toggle 解锁', () => {
-    toggleRowLock_ACU('sheet_0', 1); // 锁定
-    toggleRowLock_ACU('sheet_0', 1); // 解锁
+    toggleRowLock_ACU('sheet_0', 1, lockContent()); // 锁定
+    toggleRowLock_ACU('sheet_0', 1, lockContent()); // 解锁
     const saved = mockSettings.tableUpdateLocks['test-chat::iso-key']?.sheet_0;
-    expect(saved.rows).not.toContain(1);
+    expect(saved.rowIds).not.toContain('r2');
+  });
+  it('无内容上下文时为 no-op（不产生无法解析的锁）', () => {
+    toggleRowLock_ACU('sheet_0', 1);
+    expect(mockSettings.tableUpdateLocks['test-chat::iso-key']?.sheet_0).toBeUndefined();
+  });
+  it('行下标越界时为 no-op', () => {
+    toggleRowLock_ACU('sheet_0', 99, lockContent());
+    expect(mockSettings.tableUpdateLocks['test-chat::iso-key']?.sheet_0).toBeUndefined();
   });
 });
 
 describe('toggleColLock_ACU', () => {
-  it('锁定列后可查询到', () => {
-    toggleColLock_ACU('sheet_0', 2);
+  it('锁定列后按列名存储，index 视图可查到', () => {
+    toggleColLock_ACU('sheet_0', 2, lockContent());
     const saved = mockSettings.tableUpdateLocks['test-chat::iso-key']?.sheet_0;
-    expect(saved.cols).toContain(2);
+    expect(saved.colNames).toContain('备注');
+    expect(getTableLocksForSheet_ACU('sheet_0', lockContent()).cols.has(2)).toBe(true);
   });
   it('再次 toggle 解锁', () => {
-    toggleColLock_ACU('sheet_0', 2);
-    toggleColLock_ACU('sheet_0', 2);
+    toggleColLock_ACU('sheet_0', 2, lockContent());
+    toggleColLock_ACU('sheet_0', 2, lockContent());
     const saved = mockSettings.tableUpdateLocks['test-chat::iso-key']?.sheet_0;
-    expect(saved.cols).not.toContain(2);
+    expect(saved.colNames).not.toContain('备注');
   });
 });
 
 describe('toggleCellLock_ACU', () => {
-  it('锁定单元格后可查询到', () => {
-    toggleCellLock_ACU('sheet_0', 1, 2);
+  it('锁定单元格后按 [row_id, 列名] 存储，index 视图可查到', () => {
+    toggleCellLock_ACU('sheet_0', 1, 2, lockContent());
     const saved = mockSettings.tableUpdateLocks['test-chat::iso-key']?.sheet_0;
-    expect(saved.cells).toContain('1:2');
+    expect(saved.cells).toEqual([['r2', '备注']]);
+    expect(getTableLocksForSheet_ACU('sheet_0', lockContent()).cells.has('1:2')).toBe(true);
   });
   it('再次 toggle 解锁', () => {
-    toggleCellLock_ACU('sheet_0', 1, 2);
-    toggleCellLock_ACU('sheet_0', 1, 2);
+    toggleCellLock_ACU('sheet_0', 1, 2, lockContent());
+    toggleCellLock_ACU('sheet_0', 1, 2, lockContent());
     const saved = mockSettings.tableUpdateLocks['test-chat::iso-key']?.sheet_0;
-    expect(saved.cells).not.toContain('1:2');
+    expect(saved.cells).toEqual([]);
   });
 });
 

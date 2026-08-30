@@ -6,7 +6,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { type App, createApp, defineComponent, h } from 'vue';
 
-const mockSetMode = vi.fn(async () => undefined);
+const mockSetMode = vi.fn(async () => true);
 const mockRestore = vi.fn(async () => false);
 const mockSkillifyAll = vi.fn(async () => false);
 const mockClearSkillMeta = vi.fn(async () => false);
@@ -82,5 +82,18 @@ describe('WorldbookAgentControlBar', () => {
 
     expect(mockSetMode).toHaveBeenCalledWith('agent');
     expect(currentWorldbookChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('setMode 配置写入失败时不通知父级刷新，避免失败后多余的全量刷新', async () => {
+    const { el, currentWorldbookChanged } = await mountControlBar();
+    mockSetMode.mockResolvedValueOnce(false);
+    const buttons = Array.from(el.querySelectorAll<HTMLButtonElement>('.acu-segmented__item'));
+
+    buttons[2].click();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(mockSetMode).toHaveBeenCalledWith('agent');
+    expect(currentWorldbookChanged).not.toHaveBeenCalled();
   });
 });

@@ -4992,6 +4992,41 @@ describe('deriveSheetLifecycleFromFramesV2_ACU', () => {
     expect(projection.statusBySheetKey.sheet_a.restoreSourceData?.content).toEqual(sheet.content);
   });
 
+  it('hidden 休眠溯源（S3-4）：hide checkpoint 的 createdAt 与 hideSourcePresetName 附带进 lifecycle 条目', () => {
+    const sheet = makeSheet('sheet_a', [['1', '离开数据']]);
+    const chat = makeChat([{
+      frame: {
+        perSheetCheckpoints: {
+          sheet_a: {
+            kind: 'sheet_full', createdAt: 1717000000000, reason: 'schema_change', sheetKey: 'sheet_a', data: sheet,
+            hideSourcePresetName: '旧预设',
+            timeline: { kind: 'sheet_hide', activateAtMessageIndex: 0, afterSeq: 0 },
+          },
+        },
+      },
+    }]);
+    const projection = deriveSheetLifecycleFromFramesV2_ACU(chat, ISOLATION);
+    expect(projection.statusBySheetKey.sheet_a.lastTimelineCreatedAt).toBe(1717000000000);
+    expect(projection.statusBySheetKey.sheet_a.hideSourcePresetName).toBe('旧预设');
+  });
+
+  it('hidden 休眠溯源（S3-4）：历史 hide checkpoint 无 hideSourcePresetName 时字段不填充', () => {
+    const sheet = makeSheet('sheet_a', [['1', '离开数据']]);
+    const chat = makeChat([{
+      frame: {
+        perSheetCheckpoints: {
+          sheet_a: {
+            kind: 'sheet_full', createdAt: 2, reason: 'schema_change', sheetKey: 'sheet_a', data: sheet,
+            timeline: { kind: 'sheet_hide', activateAtMessageIndex: 0, afterSeq: 0 },
+          },
+        },
+      },
+    }]);
+    const projection = deriveSheetLifecycleFromFramesV2_ACU(chat, ISOLATION);
+    expect(projection.statusBySheetKey.sheet_a.lastTimelineCreatedAt).toBe(2);
+    expect(projection.statusBySheetKey.sheet_a.hideSourcePresetName).toBeUndefined();
+  });
+
   it('hide 后 reveal：按 afterSeq 归并，最后状态为 active（恢复离开数据）', () => {
     const sheet = makeSheet('sheet_a', [['1', '离开数据']]);
     const chat = makeChat([{
@@ -5147,6 +5182,34 @@ describe('deriveSheetLifecycleFromFramesV2_ACU', () => {
     expect(projection.activeSheetKeys).toEqual(['sheet_kept']);
     expect(projection.hiddenSheetKeys).toEqual(['sheet_hidden']);
     expect(projection.statusBySheetKey.sheet_hidden.restoreSourceData?.content).toEqual(hidden.content);
+    // 休眠溯源（S3-4）：基底前回收的 hide 证据同样附带 createdAt。
+    expect(projection.statusBySheetKey.sheet_hidden.lastTimelineCreatedAt).toBe(2);
+  });
+
+  it('full checkpoint 起算点：基底之前的 hide 证据附带 hideSourcePresetName（S3-4）', () => {
+    const hidden = makeSheet('sheet_hidden', [['1', '离开数据']]);
+    const kept = makeSheet('sheet_kept', [['1', 'x']]);
+    const chat = makeChat([
+      {
+        frame: {
+          perSheetCheckpoints: {
+            sheet_hidden: {
+              kind: 'sheet_full', createdAt: 2, reason: 'schema_change', sheetKey: 'sheet_hidden', data: hidden,
+              hideSourcePresetName: '基底前预设',
+              timeline: { kind: 'sheet_hide', activateAtMessageIndex: 0, afterSeq: 0 },
+            },
+          },
+        },
+      },
+      {
+        frame: {
+          checkpoint: { kind: 'full', createdAt: 5, reason: 'schema_change', data: { sheet_kept: kept } },
+        },
+      },
+    ]);
+    const projection = deriveSheetLifecycleFromFramesV2_ACU(chat, ISOLATION);
+    expect(projection.hiddenSheetKeys).toEqual(['sheet_hidden']);
+    expect(projection.statusBySheetKey.sheet_hidden.hideSourcePresetName).toBe('基底前预设');
   });
 
   it('阶段 A 观测：sql_sheet_batch 回放上报纯数值 replay metrics', async () => {

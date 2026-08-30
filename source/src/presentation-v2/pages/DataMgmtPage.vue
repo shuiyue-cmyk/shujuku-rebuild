@@ -284,6 +284,8 @@
       </div>
 
       <div class="acu-v2-data-mgmt-page__panel-stack">
+        <DormantDataPanel />
+
         <AcuPanel
           :title="dataMgmtCopy.panels.cleanup.title"
           :description="dataMgmtCopy.panels.cleanup.description"
@@ -409,6 +411,7 @@ import AcuInput from "../components/_lib/AcuInput.vue";
 import AcuMessage from "../components/_lib/AcuMessage.vue";
 import AcuPanel from "../components/_lib/AcuPanel.vue";
 import AcuPanelGrid from "../components/_lib/AcuPanelGrid.vue";
+import DormantDataPanel from "../components/DormantDataPanel.vue";
 import { useChatChangedTick } from "../composables/useChatChangedListener";
 import { useSqliteRuntimeDiagnostic } from "../composables/useSqliteRuntimeDiagnostic";
 import {

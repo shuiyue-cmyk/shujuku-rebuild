@@ -9,13 +9,18 @@ import { createApp, nextTick, ref } from 'vue';
 async function mountPanel(opts: {
   runtimeAvailable?: boolean;
   runtimeDiffers?: boolean;
+  chatOverridden?: boolean;
+  snapshotDiffers?: boolean;
 } = {}) {
   vi.resetModules();
   document.body.innerHTML = '<div id="app"></div>';
 
   const tplExportTemplate = vi.fn(() => {});
+  const tplFollowGlobalTemplate = vi.fn(async () => {});
   const runtimeTemplateAvailable = ref(opts.runtimeAvailable ?? true);
   const runtimeDiffersFromLibrary = ref(opts.runtimeDiffers ?? false);
+  const isChatOverridden = ref(opts.chatOverridden ?? false);
+  const chatSnapshotDiffersFromLibrary = ref(opts.snapshotDiffers ?? false);
 
   vi.doMock('../../../src/presentation-v2/composables/useChatChangedListener', () => ({
     useChatChangedTick: () => ref(0),
@@ -31,7 +36,7 @@ async function mountPanel(opts: {
       selectedGlobalPresetValue: ref('global:global-A'),
       selectedChatPreset: ref('global:global-A'),
       selectedChatPresetLabel: ref('global-A（全局预设）'),
-      isChatOverridden: ref(false),
+      isChatOverridden,
       chatPresetItems: ref([
         { value: 'global:', label: '默认预设（全局）', meta: '2 张表' },
         { value: 'runtime:current', label: '当前生效模板（内存）', meta: '2 张表' },
@@ -45,12 +50,14 @@ async function mountPanel(opts: {
       ),
       runtimeDiffersFromLibrary,
       runtimeTemplateAvailable,
+      chatSnapshotDiffersFromLibrary,
       refresh: vi.fn(),
       selectGlobalPreset: vi.fn(async () => {}),
       selectChatPreset: vi.fn(async () => {}),
       restoreArchivedChatTemplate: vi.fn(async () => {}),
       importPresetForCurrentChat: vi.fn(async () => {}),
       exportTemplate: tplExportTemplate,
+      followGlobalTemplate: tplFollowGlobalTemplate,
     }),
   }));
   vi.doMock('../../../src/presentation-v2/composables/useTablePresetManagement', () => ({
@@ -81,7 +88,7 @@ async function mountPanel(opts: {
   const app = createApp(TableTemplatePresetPanel);
   app.mount('#app');
   await nextTick();
-  return { app, tplExportTemplate, runtimeDiffersFromLibrary };
+  return { app, tplExportTemplate, tplFollowGlobalTemplate, runtimeDiffersFromLibrary, isChatOverridden, chatSnapshotDiffersFromLibrary };
 }
 
 beforeEach(() => {
@@ -117,6 +124,33 @@ describe('TableTemplatePresetPanel · runtime 导出与差异提示', () => {
     runtimeDiffersFromLibrary.value = true;
     await nextTick();
     expect(statusLine.textContent).toContain('当前生效模板与预设库内容不同');
+    app.unmount();
+  });
+
+  it('chatSnapshotDiffersFromLibrary 为真时状态行显示快照偏离提示（S3-8）', async () => {
+    const { app, chatSnapshotDiffersFromLibrary } = await mountPanel({ snapshotDiffers: false });
+    const statusLine = document.querySelector<HTMLElement>('.acu-table-template-panel__status-line')!;
+    expect(statusLine).not.toBeNull();
+    expect(statusLine.textContent).not.toContain('聊天快照内容已偏离库中同名预设');
+
+    chatSnapshotDiffersFromLibrary.value = true;
+    await nextTick();
+    expect(statusLine.textContent).toContain('聊天快照内容已偏离库中同名预设');
+    app.unmount();
+  });
+
+  it('跟随全局按钮仅在聊天覆盖时显示，点击调用 followGlobalTemplate（S1-2）', async () => {
+    const { app, tplFollowGlobalTemplate, isChatOverridden } = await mountPanel({ chatOverridden: true });
+    const findBtn = () => Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find(btn => btn.title === '跟随全局（清除聊天覆盖）');
+    const followBtn = findBtn();
+    expect(followBtn).toBeDefined();
+    followBtn!.click();
+    await nextTick();
+    expect(tplFollowGlobalTemplate).toHaveBeenCalledOnce();
+
+    isChatOverridden.value = false;
+    await nextTick();
+    expect(findBtn()).toBeUndefined();
     app.unmount();
   });
 

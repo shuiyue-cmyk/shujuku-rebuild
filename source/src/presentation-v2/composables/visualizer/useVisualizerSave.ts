@@ -189,14 +189,15 @@ function buildOrderedData(
   return orderedData;
 }
 
-function saveLockDrafts(drafts: Record<string, VisualizerLockDraft>): void {
+function saveLockDrafts(drafts: Record<string, VisualizerLockDraft>, tempData: Record<string, any> | null): void {
   Object.entries(drafts || {}).forEach(([sheetKey, draft]) => {
     if (!sheetKey) return;
+    // 草稿索引指向编辑器工作副本：以它为上下文把索引解析为身份键（row_id/列名）后存储。
     saveTableLocksForSheet_ACU(sheetKey, {
       rows: new Set(draft.rows || []),
       cols: new Set(draft.cols || []),
       cells: new Set(draft.cells || []),
-    });
+    }, tempData?.[sheetKey]?.content);
     setSpecialIndexLockEnabled_ACU(sheetKey, draft.specialIndexLocked !== false);
   });
 }
@@ -373,6 +374,11 @@ async function saveGlobalTemplateSnapshot(
     persistChatScope: false,
   });
   if (!applied) throw new Error('模板快照应用失败。');
+  // S1-3：inherit_global 聊天下全局切换经协调器，失败（含破坏性 blockers）时
+  // 全局预设名/生效模板未变，抛错让保存流程按失败收尾。
+  if (typeof applied === 'object' && 'saved' in applied && applied.saved === false) {
+    throw new Error(typeof (applied as any).error === 'string' && (applied as any).error ? (applied as any).error : '模板快照应用失败。');
+  }
   return { status: 'saved', presetName: finalGlobalPresetName };
 }
 
@@ -538,7 +544,7 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
           }
         }
       }
-      if (hasLockChanges) saveLockDrafts(visualizer.tableLockDrafts);
+      if (hasLockChanges) saveLockDrafts(visualizer.tableLockDrafts, visualizer.tempData);
       try {
         // 阶段 E：行数据保存路径复用 applyVisualizerPendingDataOps_ACU 已完成的
         // post-save canonical replay 结果，避免 merged refresh 内部再整链 replay 一次
@@ -668,7 +674,7 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
         let lockSaveFailed = false;
         if (options.hasPendingLocks) {
           try {
-            saveLockDrafts(visualizer.tableLockDrafts);
+            saveLockDrafts(visualizer.tableLockDrafts, visualizer.tempData);
           } catch (error) {
             lockSaveFailed = true;
             logWarn_ACU('[ACU-V2 Visualizer] mate-only commit saved but lock drafts failed:', error);
@@ -734,7 +740,7 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
         if (!changes.mateChanged) {
           // 无 mate 变更时，保持原语义：锁优先，其余提示无变化
           if (visualizer.pendingLockChanges.length > 0 || visualizer.lockDirty) {
-            saveLockDrafts(visualizer.tableLockDrafts);
+            saveLockDrafts(visualizer.tableLockDrafts, visualizer.tempData);
             visualizer.markSaved('template-chat');
             toastStore.success('表格锁定设置已保存。', { muteable: false });
             return true;
@@ -1026,6 +1032,8 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
           syncTemplateScope: true,
           templateSource: templateScopeSource,
           presetName: resolveActiveTemplatePresetName_ACU({ fallbackToGlobal: true, isolationKey: guideIsolationKey }),
+          // 休眠溯源（S3-4）：结构编辑在当前模板内进行，被 hide 的表的来源模板即当前活跃预设。
+          hideSourcePresetName: resolveActiveTemplatePresetName_ACU({ fallbackToGlobal: true, isolationKey: guideIsolationKey }) || undefined,
           source: 'visualizer_v2_save',
           reason: 'visualizer_v2_schema_change',
           baseRevision,
@@ -1061,7 +1069,7 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
       let lockSaveFailed = false;
       const hasPendingLocks = visualizer.lockDirty || visualizer.pendingLockChanges.length > 0;
       if (hasPendingLocks) try {
-        saveLockDrafts(visualizer.tableLockDrafts);
+        saveLockDrafts(visualizer.tableLockDrafts, visualizer.tempData);
       } catch (error) {
         lockSaveFailed = true;
         logWarn_ACU('[ACU-V2 Visualizer] template commit saved but lock drafts failed:', error);
@@ -1129,7 +1137,7 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
       });
       const globalTemplateResult = await saveGlobalTemplateSnapshot(orderedData, interactions);
       if (globalTemplateResult.status === 'cancelled') return false;
-      saveLockDrafts(visualizer.tableLockDrafts);
+      saveLockDrafts(visualizer.tableLockDrafts, visualizer.tempData);
       if (isSqliteMode()) await reloadStorageProvider();
       await refreshMergedDataAndNotify_ACU();
       visualizer.recordGlobalTemplateSaved();

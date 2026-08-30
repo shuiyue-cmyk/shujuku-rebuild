@@ -70,10 +70,11 @@ function createDefaultSheet(key: string, name: string): Record<string, any> {
   return sheet;
 }
 
-function buildLockDrafts(orderedKeys: string[]): Record<string, VisualizerLockDraft> {
+function buildLockDrafts(orderedKeys: string[], data: Record<string, any>): Record<string, VisualizerLockDraft> {
   const drafts: Record<string, VisualizerLockDraft> = {};
   orderedKeys.forEach(key => {
-    const locks = getTableLocksForSheet_ACU(key);
+    // 身份锁按载入快照的 content 解析为索引草稿。
+    const locks = getTableLocksForSheet_ACU(key, data?.[key]?.content);
     drafts[key] = {
       rows: Array.from(locks.rows || []).map(Number).filter(Number.isFinite),
       cols: Array.from(locks.cols || []).map(Number).filter(Number.isFinite),
@@ -122,7 +123,7 @@ export function useVisualizerData() {
 
       const orderedKeys = buildOrderedKeys(data);
       visualizer.loadSnapshot(data, orderedKeys);
-      visualizer.loadLockDrafts(buildLockDrafts(orderedKeys));
+      visualizer.loadLockDrafts(buildLockDrafts(orderedKeys, data));
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : '数据库编辑器载入失败。';

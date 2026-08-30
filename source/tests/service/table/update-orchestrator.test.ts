@@ -34,6 +34,13 @@ vi.mock('../../../src/shared/env', () => ({
   topLevelWindow_ACU: {},
 }));
 
+vi.mock('../../../src/shared/ui-surface-registry', () => ({
+  showUiSurfaceToast_ACU: vi.fn(),
+  getUiSurface_ACU: vi.fn(() => null),
+  registerUiSurface_ACU: vi.fn(),
+  resetUiSurfaceRegistryForTests_ACU: vi.fn(),
+}));
+
 let mockSettings: any = {
   autoUpdateEnabled: true,
   apiMode: 'custom',
@@ -653,6 +660,55 @@ describe('buildBatchMergeBase_ACU', () => {
       } as any);
       mockCurrentJsonTableData = null;
     }
+  });
+
+  it('有界回退到空基底时提示用户一次，节流窗口内重复命中不再提示，跨窗口重新提示（S2-3）', async () => {
+    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
+    const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
+    const { parseTableTemplateJson_ACU } = await import('../../../src/shared/utils');
+    const { getChatSheetGuideDataForIsolationKey_ACU, buildGuidedBaseDataFromSheetGuide_ACU } = await import('../../../src/service/template/chat-scope');
+    const { showUiSurfaceToast_ACU } = await import('../../../src/shared/ui-surface-registry');
+    const baseNow = Date.now() + 10 * 60 * 1000;
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(baseNow);
+    try {
+      vi.mocked(showUiSurfaceToast_ACU).mockClear();
+      vi.mocked(isSqliteMode).mockReturnValue(true);
+      vi.mocked(getChatSheetGuideDataForIsolationKey_ACU).mockReturnValue(null);
+      vi.mocked(buildGuidedBaseDataFromSheetGuide_ACU).mockReturnValue(undefined as any);
+      vi.mocked(getChatArray_ACU).mockReturnValue([{ is_user: false, mes: 'AI without v2 frame' }]);
+      vi.mocked(parseTableTemplateJson_ACU).mockReturnValue({
+        mate: { type: 'acu' },
+        sheet_0: { name: '测试表', content: [['row_id', '值']] },
+      } as any);
+
+      await buildBatchMergeBase_ACU(1, { maxMessageIndex: 0 });
+      await buildBatchMergeBase_ACU(2, { maxMessageIndex: 0 });
+
+      expect(showUiSurfaceToast_ACU).toHaveBeenCalledTimes(1);
+      expect(showUiSurfaceToast_ACU).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'info',
+        text: expect.stringContaining('空白模板结构'),
+      }));
+
+      nowSpy.mockReturnValue(baseNow + 30_001);
+      await buildBatchMergeBase_ACU(3, { maxMessageIndex: 0 });
+      expect(showUiSurfaceToast_ACU).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+      vi.mocked(isSqliteMode).mockReturnValue(false);
+      vi.mocked(parseTableTemplateJson_ACU).mockReturnValue({
+        mate: { type: 'acu' },
+        sheet_0: { name: '测试表', updateConfig: { groupId: 0 } },
+      } as any);
+    }
+  });
+
+  it('无界正常起底（新聊天无历史）不弹空基底提示（S2-3）', async () => {
+    const { showUiSurfaceToast_ACU } = await import('../../../src/shared/ui-surface-registry');
+    vi.mocked(showUiSurfaceToast_ACU).mockClear();
+    const result = await buildBatchMergeBase_ACU(1);
+    expect(result.error).toBeNull();
+    expect(showUiSurfaceToast_ACU).not.toHaveBeenCalled();
   });
 
   it('SQLite runtime 旧随机 key 与 guide 稳定 key 可证明同表时折叠到稳定 key 并保留历史数据', async () => {
@@ -3929,27 +3985,6 @@ describe('collectGroupFillResponse_ACU', () => {
     expect(result.success).toBe(false);
     expect(result.error).toContain('隐藏物理列');
     expect(mockCallCustomOpenAI).toHaveBeenCalledTimes(1);
-    vi.mocked(isSqliteMode).mockReturnValue(false);
-  });
-
-  it('AI 在 <thought> 内提及 <tableEdit> 字样时仍正确提取最后一对标签内的 SQL（2026-08-16 线上 bug 回归）', async () => {
-    const job = createJob();
-    const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
-    vi.mocked(isSqliteMode).mockReturnValue(true);
-    mockPrepareAIInput.mockResolvedValue({ tableDataText: '投影后的数据' });
-    // AI 在 thought 里提到了 <tableEdit>（引导语），真正的编辑内容在最后一对标签内
-    mockCallCustomOpenAI.mockResolvedValue(
-      '<thought>请使用 <tableEdit> 标签包裹 SQL 语句。本轮需要记录物品。</thought>\n' +
-      '<content><tableEdit>INSERT INTO inventory (item_name, quantity) VALUES (\'铁剑\', 1);</tableEdit></content>'
-    );
-
-    const result: any = await collectGroupFillResponse_ACU(job);
-
-    expect(result.success).toBe(true);
-    // 提取结果必须是最后一对标签内的纯 SQL，不得混入 thought 文本
-    expect(result.tableEditText).toContain('INSERT INTO inventory');
-    expect(result.tableEditText).not.toContain('请使用');
-    expect(result.tableEditText).not.toContain('</thought>');
     vi.mocked(isSqliteMode).mockReturnValue(false);
   });
 

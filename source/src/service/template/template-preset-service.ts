@@ -559,6 +559,24 @@ export function persistTemplateScopeSelectionState_ACU(presetName: string, { sou
 
 // ═══ 模板应用（纯业务逻辑，不做 UI 刷新） ═══
 
+/**
+ * 协调提交固定写 chat_override 快照；"跟随全局"类语义要求提交成功后把 scope
+ * 翻回 inherit_global。刻意不走 persistTemplateScopeSelectionState_ACU 的
+ * inherit_global 分支——那条路会顺带清除协调刚写入的聊天指导表。
+ * saveChatToHost 失败只降级为警告：容器已在内存更新，将随下次保存落盘。
+ */
+async function flipCurrentChatScopeToInheritGlobal_ACU(reason: string): Promise<void> {
+    setCurrentChatTemplateScopeState_ACU({ mode: 'inherit_global' }, {
+        isolationKey: normalizeTemplateScopeIsolationKey_ACU(getCurrentIsolationKey_ACU()),
+        reason,
+    });
+    try {
+        await saveChatToHost_ACU();
+    } catch (error) {
+        logWarn_ACU('[TemplateScope] scope 翻转 inherit_global 后保存聊天失败（容器已在内存更新，将随下次保存落盘）:', error);
+    }
+}
+
 export async function applyTemplateSnapshotToScope_ACU(templateSource: any, { scope = 'global', source = 'ui', presetName = '', save = true, persistChatScope = null as boolean | null, registerChatPresetEntry = null as boolean | null, destructiveChangeConfirmed = false, signal = undefined as AbortSignal | undefined } = {}) {
     const normalizedScope = normalizeTemplateOperationScope_ACU(scope);
     const snapshot = sanitizeTemplateSnapshotForChat_ACU(templateSource);
@@ -577,9 +595,39 @@ export async function applyTemplateSnapshotToScope_ACU(templateSource: any, { sc
     const updateGlobal = normalizedScope === 'global';
     const effectivePersistChatScope = persistChatScope === null ? !updateGlobal : !!persistChatScope;
     void registerChatPresetEntry;
+
+    // ═══ S1-3：全局切换若影响当前聊天生效模板，强制走协调器 ═══
+    // 当前聊天无 chat scope 状态（inherit_global 生效中）且聊天非空时，全局模板
+    // 就是当前聊天的生效模板；直接替换 TABLE_TEMPLATE 会绕过 hide checkpoint、
+    // 列级隐藏与破坏性确认，导致运行时结构与 V2 历史脱节。此处先经协调器提交
+    // 当前聊天，失败（含 blockers）则原样返回且不碰任何全局状态（fail-closed）；
+    // 空聊天或存在 chat_override/preset_link 的聊天不受全局切换影响，走轻路径。
+    let reconciledForGlobalSwitch: any = null;
+    if (updateGlobal) {
+        const chatForGlobalSwitch = getChatArray_ACU();
+        const globalAffectsCurrentChat = Array.isArray(chatForGlobalSwitch)
+            && chatForGlobalSwitch.length > 0
+            && !getCurrentChatTemplateScopeState_ACU();
+        if (globalAffectsCurrentChat) {
+            reconciledForGlobalSwitch = await applyChatTemplateSnapshotWithReconciliation_ACU(snapshot.templateObj, {
+                source,
+                presetName: normalizedPresetName,
+                destructiveChangeConfirmed,
+                signal,
+            });
+            if (!reconciledForGlobalSwitch || reconciledForGlobalSwitch.saved !== true) {
+                return reconciledForGlobalSwitch || false;
+            }
+        }
+    }
+
     _set_TABLE_TEMPLATE_ACU(snapshot.templateStr);
     if (updateGlobal) {
         saveCurrentProfileTemplate_ACU(TABLE_TEMPLATE_ACU, settings_ACU);
+    }
+    if (reconciledForGlobalSwitch) {
+        // 协调提交写了 chat_override；全局切换语义下当前聊天仍应跟随全局。
+        await flipCurrentChatScopeToInheritGlobal_ACU('template_scope_global_switch_reconcile');
     }
 
     const guideData = buildChatSheetGuideDataFromTemplateObj_ACU(snapshot.templateObj, { stripSeedRows: false });
@@ -598,10 +646,18 @@ export async function applyTemplateSnapshotToScope_ACU(templateSource: any, { sc
     try { await refreshMergedDataAndNotify_ACU(); } catch (e) {}
     notifyTemplateRuntimeCommitted_ACU();
     return {
+        saved: true as const,
         scope: normalizedScope,
         presetName: normalizedPresetName,
         templateStr: snapshot.templateStr,
         templateObj: snapshot.templateObj,
+        ...(reconciledForGlobalSwitch ? {
+            reconciledCurrentChat: true,
+            ...('runtimeReady' in reconciledForGlobalSwitch ? { runtimeReady: reconciledForGlobalSwitch.runtimeReady } : {}),
+            ...(typeof reconciledForGlobalSwitch.postCommitWarning === 'string' && reconciledForGlobalSwitch.postCommitWarning
+                ? { postCommitWarning: reconciledForGlobalSwitch.postCommitWarning }
+                : {}),
+        } : {}),
     };
 }
 
@@ -974,6 +1030,9 @@ async function applyChatTemplateSnapshotWithReconciliationInternal_ACU(templateD
             syncTemplateScope: true,
             templateSource: plan.candidateData,
             presetName: normalizeTemplatePresetSelectionValue_ACU(presetName),
+            // 休眠溯源（S3-4）：此刻 scope 尚未被本次提交改写，取到的是切换前的活跃预设名，
+            // 即本次被 hide 的表在休眠前所属的模板。
+            hideSourcePresetName: resolveActiveTemplatePresetName_ACU({ fallbackToGlobal: true, isolationKey }) || undefined,
             source,
             reason: 'chat_template_reconciliation',
             baseRevision: commitBaseRevision,
@@ -1120,10 +1179,56 @@ export async function applyTemplatePresetToCurrent_ACU(presetName: string, { sou
         presetName: name,
         save,
         persistChatScope: _persistChatScope,
+        destructiveChangeConfirmed,
+        signal,
     });
     if (!applied) return false;
 
+    // S1-3：全局切换经协调器失败时（saved:false，含 blockers/error），原样透传给
+    // 调用方做破坏性确认重试或错误展示，不得伪装成成功。
+    if (typeof applied === 'object' && 'saved' in applied && applied.saved === false) return applied;
+
     return { ...applied, isDefault: isDefaultPreset };
+}
+
+/**
+ * 跟随全局：清除当前聊天的模板覆盖，让当前聊天回到 inherit_global（S1-2）。
+ *
+ * 语义：先经协调器把当前聊天切到当前全局模板（保留休眠/隐藏语义、破坏性确认、
+ * V2 原子提交），提交成功后再把 scope 翻成 {mode:'inherit_global'}。协调提交
+ * 固定写 chat_override 快照，因此翻转必须在提交之后单独执行；刻意不走
+ * persistTemplateScopeSelectionState_ACU 的 inherit_global 分支——那条路会顺带
+ * 清除协调刚写入的聊天指导表。
+ */
+export async function followGlobalTemplateForCurrentChat_ACU({
+    source = 'follow_global',
+    destructiveChangeConfirmed = false,
+    signal = undefined as AbortSignal | undefined,
+} = {}) {
+    const isolationKey = normalizeTemplateScopeIsolationKey_ACU(getCurrentIsolationKey_ACU());
+    const globalPresetName = normalizeTemplatePresetSelectionValue_ACU(
+        getCurrentTemplatePresetName_ACU(settings_ACU, { requireExisting: false }),
+    );
+    const scopeState = getCurrentChatTemplateScopeState_ACU({ isolationKey });
+    if (!scopeState) {
+        return { saved: true, alreadyFollowing: true, mode: 'inherit_global' as const, presetName: globalPresetName };
+    }
+    const globalSnapshot = getGlobalTemplateSnapshotForCurrentProfile_ACU();
+    if (!globalSnapshot?.templateStr || !globalSnapshot?.templateObj) {
+        return { saved: false, error: '无法解析当前全局模板，已取消跟随全局。' };
+    }
+    const result = await applyChatTemplateSnapshotWithReconciliation_ACU(globalSnapshot.templateObj, {
+        source,
+        presetName: globalPresetName,
+        destructiveChangeConfirmed,
+        signal,
+    });
+    if (!result || result.saved !== true) return result;
+
+    await flipCurrentChatScopeToInheritGlobal_ACU('template_scope_follow_global');
+    applyTemplateScopeForCurrentChat_ACU();
+    notifyTemplateRuntimeCommitted_ACU();
+    return { ...result, mode: 'inherit_global' as const, presetName: globalPresetName };
 }
 
 /**

@@ -69,7 +69,8 @@ import {
   normalizeExtractRules_ACU
 } from '../../../shared/utils';
 import {
-  applyContextTagFilters_ACU
+  applyContextTagFilters_ACU,
+  getTableLockIdentitiesForSheet_ACU
 } from '../../runtime/helpers-remaining';
 import {
   isSqliteMode
@@ -337,6 +338,9 @@ function resolvePromptRowWindow_ACU(
                 flightModeEnabled: flightMode.enabled,
                 ...(selectedPromptName as { authoredTableName?: string; runtimeTableName?: string }),
             });
+            // 锁定信息软约束：硬保护由执行后差异回滚兜底，此处提示模型避开锁定目标，
+            // 减少被回滚浪费的输出。
+            tableDataText += buildSqlLockPromptNote_ACU(sheetKey, rawTable?.content);
             continue;
         }
 
@@ -664,6 +668,33 @@ function resolvePromptTableNameForSheet_ACU(
         }
         return { runtimeTableName: runtimeName };
     };
+}
+
+/**
+ * SQL 模式锁定信息的提示词软约束注释。
+ * 无锁或内容不可解析时返回空串；有锁时输出一段 `--` 注释，
+ * 用 AI 可见的定位方式（row_id / 列显示名）列出禁改目标。
+ */
+function buildSqlLockPromptNote_ACU(sheetKey: string, content: any[][] | null | undefined): string {
+    try {
+        if (!Array.isArray(content) || !Array.isArray(content[0])) return '';
+        const identities = getTableLockIdentitiesForSheet_ACU(sheetKey, content);
+        if (!identities.hasAny) return '';
+        const parts: string[] = [];
+        if (identities.rowIds.size > 0) {
+            parts.push(`锁定行（禁止 UPDATE/DELETE）：row_id ∈ [${[...identities.rowIds].join(', ')}]`);
+        }
+        if (identities.colNames.size > 0) {
+            parts.push(`锁定列（禁止修改该列任何值）：${[...identities.colNames].map(name => `「${name}」`).join('、')}`);
+        }
+        if (identities.cellPairs.length > 0) {
+            parts.push(`锁定单元格（禁止修改）：${identities.cellPairs.map(([rowId, colName]) => `(row_id=${rowId}, 列「${colName}」)`).join('、')}`);
+        }
+        return `-- [锁定] 用户已锁定以下目标，请勿在 SQL 中修改它们（违规修改会被系统自动回滚）：\n${parts.map(part => `--   ${part}`).join('\n')}\n`;
+    } catch (e) {
+        // 软约束注入失败不能阻断填表 prompt 构建。
+        return '';
+    }
 }
 
 /**

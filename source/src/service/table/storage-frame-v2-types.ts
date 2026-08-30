@@ -252,6 +252,11 @@ export interface TableSheetCheckpointV2_ACU {
   event?: TableMutationEventV2_ACU;
   manualRefillProgress?: ManualRefillProgressV2_ACU;
   baseRevision?: string | null;
+  /**
+   * 休眠溯源（S3-4）：仅 timeline.kind === 'sheet_hide' 的 checkpoint 可携带，
+   * 记录休眠前活跃的模板预设名。展示性可选字段，回放与校验不依赖它。
+   */
+  hideSourcePresetName?: string;
   timeline?: TableSheetIntroductionTimelineV2_ACU | TableSheetRebaseTimelineV2_ACU | TableSheetRevealTimelineV2_ACU | TableSheetHideTimelineV2_ACU;
 }
 
@@ -590,6 +595,16 @@ export interface TableSheetLifecycleEntryV2_ACU {
   lastTimelineMessageIndex?: number;
   /** 最后一条可见性 timeline 事件的 afterSeq（frame 内排序）。 */
   lastTimelineAfterSeq?: number;
+  /**
+   * 最后一条 hide timeline checkpoint 的 createdAt（毫秒时间戳；S3-4 休眠时间展示）。
+   * 仅 hide 归并时从 checkpoint.createdAt 附带；历史 checkpoint 缺失时不填充。
+   */
+  lastTimelineCreatedAt?: number;
+  /**
+   * 休眠前活跃的模板预设名（S3-4 来源模板展示）。仅 hide 归并时从 hide checkpoint 的
+   * 可选 hideSourcePresetName 字段附带；该字段自 S3-4 起由提交层前向记录，历史数据无此信息。
+   */
+  hideSourcePresetName?: string;
   /** 最近一次可见（introduction / rebase / reveal）后、hide 前的可信数据快照；仅 hidden 时存在。 */
   restoreSourceData?: Sheet_ACU;
 }

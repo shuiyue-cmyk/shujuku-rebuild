@@ -82,7 +82,7 @@ vi.mock('../../src/service/runtime/helpers-remaining', () => ({
   applySummaryIndexSequenceToTable_ACU: vi.fn(),
   formatSummaryIndexCode_ACU: vi.fn(),
   getSummaryIndexColumnIndex_ACU: vi.fn(() => -1),
-  getTableLocksForSheet_ACU: vi.fn(() => ({})),
+  getTableLocksForSheet_ACU: vi.fn(() => ({ rows: new Set(), cols: new Set(), cells: new Set() })),
   isSpecialIndexLockEnabled_ACU: vi.fn(() => false),
 }));
 

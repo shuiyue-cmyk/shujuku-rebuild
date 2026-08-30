@@ -68,6 +68,10 @@ vi.mock('../../src/service/template/chat-scope', () => ({
   buildChatSheetGuideDataFromData_ACU: (data: any) => clone(data),
   getChatSheetGuideDataForIsolationKey_ACU: () => h.guide,
   getCurrentChatTemplateScopeState_ACU: () => h.scopeTemplate || null,
+  // S3-4 休眠溯源：协调提交前会解析切换前活跃预设名（resolveActiveTemplatePresetName_ACU），
+  // 该解析依赖以下两个 chat-scope 导出。
+  migrateLegacyTemplateScopeForCurrentChat_ACU: () => null,
+  normalizeTemplateScopeMode_ACU: (mode: string) => (['chat_override', 'preset_link'].includes(mode) ? mode : 'inherit_global'),
   setChatSheetGuideDataForIsolationKey_ACU: (_key: string, guideData: any, options: any) => {
     h.guide = clone(guideData);
     if (options?.syncTemplateScope) h.scopeTemplate = { templateStr: JSON.stringify(options.templateSource), presetName: options.presetName || '' };

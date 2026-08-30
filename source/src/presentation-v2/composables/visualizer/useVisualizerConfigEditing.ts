@@ -7,6 +7,7 @@ import {
   updateDDLColumnComment,
 } from '../../../shared/ddl-utils';
 import { isSummaryOrOutlineTable_ACU } from '../../../shared/utils';
+import { canonicalizeDisplayName_ACU } from '../../../shared/sheet-identity';
 import { settings_ACU } from '../../../service/runtime/state-manager';
 import {
   applySummaryIndexSequenceToTable_ACU,
@@ -202,6 +203,28 @@ export function useVisualizerConfigEditing() {
     withSheet(sheet => {
       const previousName = stringValue(sheet.name).trim();
       sheet.name = nextName;
+      // 表身份靠规范化显示名 + tableAliases 匹配（S1-5）：改名时自动把旧名累积进
+      // 别名链，后续切模板（含切回仍用原名的模板）能按别名认回同一张表，数据继承。
+      // 规则与协调器 accumulateTableAliases_ACU 一致：canonical 去重、剔除新当前名
+      // （当前名本身参与精确匹配，自指别名无意义）、结果为空则删字段。
+      const previousCanonical = canonicalizeDisplayName_ACU(previousName);
+      const nextCanonical = canonicalizeDisplayName_ACU(nextName);
+      if (previousCanonical && previousCanonical !== nextCanonical) {
+        if (!sheet.sourceData || typeof sheet.sourceData !== 'object' || Array.isArray(sheet.sourceData)) {
+          sheet.sourceData = {};
+        }
+        const existingAliases = Array.isArray(sheet.sourceData.tableAliases) ? sheet.sourceData.tableAliases : [];
+        const seen = new Set<string>();
+        const merged = [...existingAliases.map((alias: unknown) => String(alias ?? '').trim()), previousName]
+          .filter(alias => {
+            const canonical = canonicalizeDisplayName_ACU(alias);
+            if (!canonical || canonical === nextCanonical || seen.has(canonical)) return false;
+            seen.add(canonical);
+            return true;
+          });
+        if (merged.length > 0) sheet.sourceData.tableAliases = merged;
+        else delete sheet.sourceData.tableAliases;
+      }
       const config = ensureEditableExportConfig(sheet);
       if (!config.entryName || config.entryName === previousName) config.entryName = nextName;
       if (!config.extraIndexEntryName || config.extraIndexEntryName === `${previousName}-索引`) {

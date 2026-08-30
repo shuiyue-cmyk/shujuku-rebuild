@@ -1938,6 +1938,155 @@ describe('ensureV2BoundaryCheckpointForRetainedBuffer_ACU', () => {
     expect(afterFingerprint).toBe(beforeFingerprint);
   });
 
+  // ═══ S3-2 periodic full checkpoint 前滚 ═══
+
+  const createPeriodicFrame = (withInitRoot: boolean) => ({
+    is_user: false,
+    TavernDB_ACU_IsolatedData: {
+      '': {
+        storageFrame: {
+          version: 2,
+          ...(withInitRoot
+            ? {
+                checkpoint: {
+                  kind: 'full', createdAt: 1, reason: 'init',
+                  data: { sheet_0: { name: '物品表', content: [['row_id', '物品名'], ['1', '剑']] } },
+                },
+              }
+            : {}),
+          logEntries: [],
+        },
+        _acu_storage_version: 2,
+      },
+    },
+  });
+
+  it('retain=0（清理禁用）且根距尾部 ≥ 40 层时触发 periodic 前滚：写 reason=periodic 根、无损降级旧根、不清除任何楼层', async () => {
+    mockSettings.retainRecentLayers = 0;
+    const chat = Array.from({ length: 45 }, (_, index) => createPeriodicFrame(index === 0));
+    mockGetChatArray.mockReturnValue(chat);
+
+    expect(shouldRotateV2BoundaryCheckpointForRetainedBuffer_ACU()).toBe(true);
+    const result = await ensureV2BoundaryCheckpointForRetainedBuffer_ACU({ reason: 'auto_update', save: true });
+
+    // 锚点 = 倒数第 21 个 AI 楼层（尾部缓冲 20 层）：45 层全 AI → index 24。
+    expect(result).toEqual(expect.objectContaining({ success: true, changed: true, anchorIndex: 24 }));
+    expect(chat[24].TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint).toEqual(expect.objectContaining({
+      kind: 'full',
+      reason: 'periodic',
+      compactionProvenance: { version: 1, triggeredAtAiCount: 45, retainCount: 0, bufferLayers: 20 },
+    }));
+    // 旧 init 根被无损降级为 data_replace fallback entry，单根不变量保持。
+    const formerRoot = chat[0].TavernDB_ACU_IsolatedData[''].storageFrame;
+    expect(formerRoot.checkpoint).toBeUndefined();
+    expect(formerRoot.logEntries[0].operations[0]).toMatchObject({ kind: 'data_replace', reason: 'checkpoint_fallback' });
+    expect(assertSingleActiveFullCheckpointV2_ACU(chat, '', 'test:s3-2')).toBeNull();
+    // periodic 只前滚基线，不清除任何楼层。
+    expect(chat).toHaveLength(45);
+    expect(mockSaveChatToHostStrict).toHaveBeenCalledTimes(1);
+  });
+
+  it('retain=0 且根距尾部不足 40 层时不触发 periodic；无 V2 帧的聊天同样不触发', async () => {
+    mockSettings.retainRecentLayers = 0;
+    const chat = Array.from({ length: 39 }, (_, index) => createPeriodicFrame(index === 0));
+    mockGetChatArray.mockReturnValue(chat);
+
+    expect(shouldRotateV2BoundaryCheckpointForRetainedBuffer_ACU()).toBe(false);
+    const result = await ensureV2BoundaryCheckpointForRetainedBuffer_ACU({ reason: 'auto_update', save: true });
+    expect(result).toEqual(expect.objectContaining({ success: true, changed: false, skipped: true }));
+    expect(chat[0].TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint).toEqual(expect.objectContaining({ kind: 'full', reason: 'init' }));
+    expect(mockSaveChatToHostStrict).not.toHaveBeenCalled();
+
+    // 无任何 V2 帧：没有可前滚的根，不触发。
+    mockGetChatArray.mockReturnValue(Array.from({ length: 60 }, () => ({ is_user: false })));
+    expect(shouldRotateV2BoundaryCheckpointForRetainedBuffer_ACU()).toBe(false);
+  });
+
+  it('periodic 前滚后自节流：距新根不足 40 层不再触发，到期后再次前滚并降级上一个 periodic 根', async () => {
+    mockSettings.retainRecentLayers = 0;
+    const chat = Array.from({ length: 45 }, (_, index) => createPeriodicFrame(index === 0));
+    mockGetChatArray.mockReturnValue(chat);
+
+    const first = await ensureV2BoundaryCheckpointForRetainedBuffer_ACU({ reason: 'auto_update', save: true });
+    expect(first).toEqual(expect.objectContaining({ success: true, changed: true, anchorIndex: 24 }));
+
+    // 新根在第 25 个 AI 楼层；到 64 层时距离 39 < 40，不触发。
+    while (chat.length < 64) chat.push(createPeriodicFrame(false));
+    expect(shouldRotateV2BoundaryCheckpointForRetainedBuffer_ACU()).toBe(false);
+
+    // 65 层时距离 40，再次前滚到倒数第 21 层（index 44），上一个 periodic 根被降级。
+    chat.push(createPeriodicFrame(false));
+    expect(shouldRotateV2BoundaryCheckpointForRetainedBuffer_ACU()).toBe(true);
+    const second = await ensureV2BoundaryCheckpointForRetainedBuffer_ACU({ reason: 'auto_update', save: true });
+    expect(second).toEqual(expect.objectContaining({ success: true, changed: true, anchorIndex: 44 }));
+    expect(chat[44].TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint).toEqual(expect.objectContaining({
+      kind: 'full',
+      reason: 'periodic',
+      compactionProvenance: { version: 1, triggeredAtAiCount: 65, retainCount: 0, bufferLayers: 20 },
+    }));
+    const formerPeriodicRoot = chat[24].TavernDB_ACU_IsolatedData[''].storageFrame;
+    expect(formerPeriodicRoot.checkpoint).toBeUndefined();
+    expect(formerPeriodicRoot.logEntries[0].operations[0]).toMatchObject({ kind: 'data_replace', reason: 'checkpoint_fallback' });
+    expect(assertSingleActiveFullCheckpointV2_ACU(chat, '', 'test:s3-2-rethrottle')).toBeNull();
+  });
+
+  it('periodic 前滚在混合 user/AI 楼层下按 AI 序数取锚点，并把隐藏表 hide checkpoint 迁移到锚点 perSheetCheckpoints', async () => {
+    mockSettings.retainRecentLayers = 0;
+    const hiddenSheet = {
+      uid: 'sheet_hidden',
+      name: '历史隐藏表',
+      content: [['row_id', '值'], ['1', '隐藏前数据']],
+      sourceData: {},
+      updateConfig: {},
+      exportConfig: {},
+    };
+    mockDeriveSheetLifecycleFromFramesV2.mockReturnValue({
+      statusBySheetKey: {
+        sheet_hidden: { status: 'hidden', restoreSourceData: hiddenSheet },
+      },
+      activeSheetKeys: [],
+      hiddenSheetKeys: ['sheet_hidden'],
+      indeterminateSheetKeys: [],
+      neverSeenSheetKeys: [],
+    } as any);
+    // 90 条消息交替 user/AI：AI 楼层位于奇数 index，共 45 层；根在首个 AI 楼层（index 1）。
+    const chat = Array.from({ length: 90 }, (_, index) => (
+      index % 2 === 0
+        ? { is_user: true }
+        : createPeriodicFrame(index === 1)
+    ));
+    mockGetChatArray.mockReturnValue(chat);
+
+    const result = await ensureV2BoundaryCheckpointForRetainedBuffer_ACU({ reason: 'auto_update', save: true });
+
+    // 锚点 = 第 25 个 AI 楼层 = chat index 49。
+    expect(result).toEqual(expect.objectContaining({ success: true, changed: true, anchorIndex: 49 }));
+    const boundaryFrame = chat[49].TavernDB_ACU_IsolatedData[''].storageFrame;
+    expect(boundaryFrame.checkpoint).toEqual(expect.objectContaining({ kind: 'full', reason: 'periodic' }));
+    expect(boundaryFrame.perSheetCheckpoints.sheet_hidden).toMatchObject({
+      kind: 'sheet_full',
+      reason: 'periodic',
+      sheetKey: 'sheet_hidden',
+      data: { name: '历史隐藏表', content: [['row_id', '值'], ['1', '隐藏前数据']] },
+      timeline: { kind: 'sheet_hide', activateAtMessageIndex: 49, afterSeq: 0 },
+    });
+    expect(assertSingleActiveFullCheckpointV2_ACU(chat, '', 'test:s3-2-hidden')).toBeNull();
+  });
+
+  it('retain>0 且 cleanup 可滚动时优先 compaction，periodic 不抢跑', async () => {
+    mockSettings.retainRecentLayers = 10;
+    const chat = Array.from({ length: 50 }, (_, index) => createPeriodicFrame(index === 0));
+    mockGetChatArray.mockReturnValue(chat);
+
+    const result = await ensureV2BoundaryCheckpointForRetainedBuffer_ACU({ reason: 'auto_update', save: true });
+
+    expect(result).toEqual(expect.objectContaining({ success: true, changed: true, anchorIndex: 40 }));
+    expect(chat[40].TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint).toEqual(expect.objectContaining({
+      kind: 'full',
+      reason: 'compaction',
+    }));
+  });
+
 });
 
 

@@ -384,6 +384,27 @@ describe('parseAndApplyTableEdits_ACU — DSL 分支', () => {
     expect(content.length).toBe(2); // 表头 + 剩余1行
   });
 
+  it('行锁阻止 deleteRow：锁定行保留（与 SQL 模式回滚语义一致）', async () => {
+    const { getTableLocksForSheet_ACU } = await import('../../../src/service/runtime/helpers-remaining');
+    vi.mocked(getTableLocksForSheet_ACU).mockReturnValueOnce({ rows: new Set([1]), cols: new Set(), cells: new Set() } as any);
+    const before = JSON.parse(JSON.stringify(mockCurrentJsonTableData.sheet_0.content));
+
+    parseAndApplyTableEdits_ACU('<tableEdit>deleteRow(0, 1)</tableEdit>', 'standard');
+
+    expect(mockCurrentJsonTableData.sheet_0.content).toEqual(before);
+    // 查锁时必须传入工作副本 content，身份锁才能按当前副本解析索引
+    expect(vi.mocked(getTableLocksForSheet_ACU)).toHaveBeenCalledWith('sheet_0', mockCurrentJsonTableData.sheet_0.content);
+  });
+
+  it('行锁阻止 updateRow：锁定行的值不变', async () => {
+    const { getTableLocksForSheet_ACU } = await import('../../../src/service/runtime/helpers-remaining');
+    vi.mocked(getTableLocksForSheet_ACU).mockReturnValueOnce({ rows: new Set([1]), cols: new Set(), cells: new Set() } as any);
+
+    parseAndApplyTableEdits_ACU('<tableEdit>updateRow(0, 1, {"1": "99"})</tableEdit>', 'standard');
+
+    expect(mockCurrentJsonTableData.sheet_0.content[2][2]).not.toBe('99');
+  });
+
   it('updateRow 指令正确更新行', () => {
     const aiResponse = '<tableEdit>updateRow(0, 1, {"1": "10"})</tableEdit>';
     const result = parseAndApplyTableEdits_ACU(aiResponse, 'standard');

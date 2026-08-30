@@ -18,8 +18,6 @@ import { proceedWithCardUpdate_ACU } from '../../triggers/update-process';
 import { refreshMergedDataAndNotifyWithUI_ACU } from '../../components/pipeline-ui-helpers';
 import { showToastr_ACU } from '../../theme/toast';
 import { getCurrentWorldbookConfig_ACU } from '../../../service/settings/settings-readers';
-import { hasPendingSettingsSave_ACU, flushPendingSettingsSave_ACU } from '../../../service/settings/settings-service';
-import { saveChatToHost_ACU } from '../../../data/gateways/chat-gateway';
 import { enqueueSummaryVectorIndexFlush_ACU } from '../../../service/vector/summary-vector-index-flush-queue';
 import { importTableJsonThroughCommit_ACU } from '../../../service/table/table-import-service';
 import type { ApiGroupContext } from './callback-api';
@@ -35,32 +33,7 @@ export function createCoreDataApi(ctx: ApiGroupContext): Record<string, Function
     return {
         // 导出当前表格数据
         exportTableAsJson: function() {
-            // [M3] 返回深拷贝：此前直接返回活引用，调用方改写导出对象会穿透修改
-            // 运行时 currentJsonTableData_ACU。该 API 为手动/第三方低频调用，深拷贝开销可接受。
-            return currentJsonTableData_ACU ? JSON.parse(JSON.stringify(currentJsonTableData_ACU)) : {};
-        },
-
-        // 查询是否存在尚未落盘的挂起保存（第三方脚本在执行重建/恢复类操作前探测用）
-        hasPendingSaves: function(): boolean {
-            try {
-                return hasPendingSettingsSave_ACU();
-            } catch (error) {
-                logWarn_ACU('hasPendingSaves failed:', error);
-                return false;
-            }
-        },
-
-        // 冲刷挂起保存：立即补存被门控挂起的设置，并把当前表格运行态强制保存到宿主聊天
-        flushPendingSaves: async function(): Promise<boolean> {
-            try {
-                const pendingResult = flushPendingSettingsSave_ACU();
-                await saveChatToHost_ACU();
-                logDebug_ACU(`[数据API] flushPendingSaves 完成：挂起设置保存=${pendingResult ? (pendingResult.saved ? '已落盘' : pendingResult.code) : '无'}，表格运行态已 saveChat。`);
-                return true;
-            } catch (error) {
-                logError_ACU('flushPendingSaves failed:', error);
-                return false;
-            }
+            return currentJsonTableData_ACU || {};
         },
 
         // 导入并覆盖当前表格数据；默认外部导入会持久化，传 { persist:false } / { mode:'restore' } 时仅恢复运行时。
@@ -98,7 +71,7 @@ export function createCoreDataApi(ctx: ApiGroupContext): Record<string, Function
                         }
                     } else {
                         logDebug_ACU('[importTableAsJson] 已按运行时恢复模式导入表格数据，未写入聊天持久化。');
-                        (topLevelWindow_ACU as any).AutoCardUpdaterAPI?._notifyTableUpdate?.();
+                        (topLevelWindow_ACU as any).AutoCardUpdaterAPI?._notifyTableUpdate?.({ persisted: false });
                     }
 
                     return true;

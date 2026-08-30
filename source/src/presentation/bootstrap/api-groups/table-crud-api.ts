@@ -21,6 +21,7 @@ import { getLatestTableAppendMessageIndexFromChat_ACU } from '../../../service/t
 import { enqueueSummaryVectorIndexFlush_ACU } from '../../../service/vector/summary-vector-index-flush-queue';
 import { getCurrentWorldbookConfig_ACU } from '../../../service/settings/settings-readers';
 import { runSqliteRuntimeMutationCommit_ACU, runTableUpdateCommit_ACU } from '../../../service/table/table-update-commit';
+import { getTableLockIdentitiesForSheet_ACU } from '../../../service/runtime/helpers-table-lock';
 import { ensureStorageProviderReady_ACU, getActiveStorageProvider } from '../../../service/table/table-storage-strategy';
 import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../../../shared/stable-row-id-allocator';
 
@@ -30,6 +31,35 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
  */
 function getEnglishTableName(tableData: Record<string, any>, sheetKey: string): string {
     return getPhysicalTableNameForSheet_ACU(tableData, sheetKey);
+}
+
+/**
+ * CRUD 开放 API 与 AI 填表/SQL 差异回滚共用同一套身份锁判定（S2-2）：
+ * 锁不再只防 AI，也防外部脚本。返回冲突描述；null 表示无锁冲突。
+ * - update：目标行被行锁锁定、目标列被列锁锁定、或目标格被单元格锁锁定时拒绝；
+ * - delete：目标行被行锁锁定或含任一锁定单元格时拒绝（与 SQL 模式回滚语义一致）。
+ */
+function findTableLockViolationForCrud_ACU(
+    sheetKey: string,
+    content: any[][],
+    check: { rowIndex: number; colNames?: readonly string[] | null; kind: 'update' | 'delete' },
+): string | null {
+    const identities = getTableLockIdentitiesForSheet_ACU(sheetKey, content);
+    if (!identities.hasAny) return null;
+    const rowId = String(content?.[check.rowIndex]?.[0] ?? '').trim();
+    if (!rowId) return null; // 目标行尚不存在（updateRow 扩容路径），无锁可判
+    if (identities.rowIds.has(rowId)) return `行（row_id=${rowId}）已被行锁锁定`;
+    if (check.kind === 'delete') {
+        const lockedCell = identities.cellPairs.find(([cellRowId]) => cellRowId === rowId);
+        return lockedCell ? `行（row_id=${rowId}）含锁定单元格「${lockedCell[1]}」，不可删除` : null;
+    }
+    for (const colName of check.colNames || []) {
+        if (identities.colNames.has(colName)) return `列「${colName}」已被列锁锁定`;
+        if (identities.cellPairs.some(([cellRowId, cellColName]) => cellRowId === rowId && cellColName === colName)) {
+            return `单元格（row_id=${rowId}，列「${colName}」）已被锁定`;
+        }
+    }
+    return null;
 }
 
 /**
@@ -468,12 +498,14 @@ async function finalizeTableEditAfterCommit_ACU(
     options: TableCrudMutationOptions_ACU,
 ): Promise<void> {
     let didNotifyThroughRefresh = false;
-    await refreshMergedDataAndNotifyWithUI_ACU({ skipNotify: options.skipNotify });
+    // S2-1：skipChatSave 提交只改运行时未写聊天帧，通知回调时以 persisted=false 明示未落盘
+    const notifyMeta = { persisted: !options.skipChatSave };
+    await refreshMergedDataAndNotifyWithUI_ACU({ skipNotify: options.skipNotify, notifyMeta });
     didNotifyThroughRefresh = !options.skipNotify;
     logDebug_ACU(`${methodName}: Worldbook refreshed after saving [${tableName}]`);
     await syncSummaryVectorIndexAfterTableEdit_ACU(tableName, methodName, tableLatestFloorIndex, options.skipChatSave);
     if (!options.skipNotify && !didNotifyThroughRefresh) {
-        (topLevelWindow_ACU as any).AutoCardUpdaterAPI._notifyTableUpdate();
+        (topLevelWindow_ACU as any).AutoCardUpdaterAPI._notifyTableUpdate(notifyMeta);
     } else if (options.skipNotify) {
         logDebug_ACU(`${methodName}: Skip table update notification for [${tableName}] because this edit is marked as silent.`);
     }
@@ -542,6 +574,16 @@ export function createTableCrudApi(ctx: ApiGroupContext): Record<string, Functio
 
                 if (normalizedRowIndex < 1 || normalizedRowIndex >= targetSheet.content.length) {
                     logError_ACU(`updateCell: Row index ${normalizedRowIndex} out of bounds in table "${tableName}".`);
+                    return false;
+                }
+
+                const cellLockViolation = findTableLockViolationForCrud_ACU(targetSheetKey, targetSheet.content, {
+                    rowIndex: normalizedRowIndex,
+                    colNames: [chineseColName],
+                    kind: 'update',
+                });
+                if (cellLockViolation) {
+                    logWarn_ACU(`updateCell: 表 "${tableName}" ${cellLockViolation}，写入已拒绝。`);
                     return false;
                 }
 
@@ -658,6 +700,21 @@ export function createTableCrudApi(ctx: ApiGroupContext): Record<string, Functio
                 }
 
                 const { sheet: targetSheet, sheetKey: targetSheetKey, englishTableName } = target;
+
+                const updateRowColNames: string[] = [];
+                for (const colName in normalizedData) {
+                    if (colName === 'isImportMode') continue;
+                    updateRowColNames.push(resolveColumnForSheet(englishTableName, targetSheetKey, colName).chineseColName);
+                }
+                const rowLockViolation = findTableLockViolationForCrud_ACU(targetSheetKey, targetSheet.content, {
+                    rowIndex: normalizedRowIndex,
+                    colNames: updateRowColNames,
+                    kind: 'update',
+                });
+                if (rowLockViolation) {
+                    logWarn_ACU(`updateRow: 表 "${tableName}" ${rowLockViolation}，写入已拒绝。`);
+                    return false;
+                }
 
                 if (isSqliteMode()) {
                         // SQLite 模式：统一交给公共提交模型执行运行时 SQL 和持久化。
@@ -951,6 +1008,15 @@ export function createTableCrudApi(ctx: ApiGroupContext): Record<string, Functio
 
                 if (normalizedRowIndex >= targetSheet.content.length) {
                     logError_ACU(`deleteRow: Row index ${normalizedRowIndex} out of bounds.`);
+                    return false;
+                }
+
+                const deleteLockViolation = findTableLockViolationForCrud_ACU(targetSheetKey, targetSheet.content, {
+                    rowIndex: normalizedRowIndex,
+                    kind: 'delete',
+                });
+                if (deleteLockViolation) {
+                    logWarn_ACU(`deleteRow: 表 "${tableName}" ${deleteLockViolation}，删除已拒绝。`);
                     return false;
                 }
 

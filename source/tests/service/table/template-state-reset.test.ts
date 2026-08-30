@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   canonicalRowErrors: [] as string[],
   physicalNameError: null as Error | null,
   settings: { dataIsolationEnabled: false, dataIsolationCode: '', storageMode: 'native' } as any,
+  writeInitFrame: vi.fn(),
 }));
 
 vi.mock('../../../src/data/gateways/chat-gateway', () => ({
@@ -56,6 +57,11 @@ vi.mock('../../../src/service/template/chat-scope', () => ({
   setChatSheetGuideDataForIsolationKey_ACU: mocks.setGuide,
 }));
 vi.mock('../../../src/shared/utils', () => ({ logWarn_ACU: vi.fn() }));
+// S2-4：init frame 写入已收敛到 persist 层入口；此处 mock 忠实复刻其 frame 拼装行为，
+// 入口自身的单根断言与参数校验在 storage-frame-v2-persist.test.ts 中直接单测。
+vi.mock('../../../src/service/table/storage-frame-v2-persist', () => ({
+  writeInitFullCheckpointFrameV2_ACU: mocks.writeInitFrame,
+}));
 
 import { resetCurrentChatTableStateFromTemplate_ACU } from '../../../src/service/table/template-state-reset';
 
@@ -70,6 +76,12 @@ beforeEach(() => {
   mocks.guide = { version: 1, tags: { '': { data: { sheet_old: {} } } } };
   mocks.saveStrict.mockResolvedValue(undefined);
   mocks.setGuide.mockImplementation((_key: string, guide: any) => { mocks.guide = { version: 1, tags: { '': { data: guide } } }; mocks.scope = { version: 1, template: { '': { mode: 'chat_override' } } }; return true; });
+  mocks.writeInitFrame.mockImplementation(({ chat, targetIndex, isolationKey, checkpoint }: any) => {
+    chat[targetIndex].TavernDB_ACU_IsolatedData = {
+      ...(chat[targetIndex].TavernDB_ACU_IsolatedData || {}),
+      [isolationKey]: { _acu_storage_version: 2, storageFrame: { version: 2, checkpoint, logEntries: [] } },
+    };
+  });
 });
 
 describe('resetCurrentChatTableStateFromTemplate_ACU', () => {
@@ -228,6 +240,31 @@ describe('resetCurrentChatTableStateFromTemplate_ACU', () => {
     expect(mocks.chat[0].TavernDB_ACU_IsolatedData).toEqual(oldFrame);
     expect(mocks.setGuide).not.toHaveBeenCalled();
     expect(mocks.saveStrict).not.toHaveBeenCalled();
+  });
+
+  it('init frame 经 persist 统一入口写入，且入口抛出单根违例时回滚聊天状态并拒绝保存', async () => {
+    const oldFrame = JSON.parse(JSON.stringify(mocks.chat[0].TavernDB_ACU_IsolatedData));
+    const oldScope = JSON.parse(JSON.stringify(mocks.scope));
+    const oldGuide = JSON.parse(JSON.stringify(mocks.guide));
+    mocks.writeInitFrame.mockImplementationOnce(() => {
+      throw new Error('V2 init_reset 违反单根不变量：同一隔离键下存在 2 个 full checkpoint');
+    });
+
+    const result = await resetCurrentChatTableStateFromTemplate_ACU({
+      sheet_random: { uid: 'sheet_random', name: 'Role', content: [['row_id', 'name'], ['r-1', '助手']] },
+    });
+
+    expect(result).toMatchObject({ saved: false, error: expect.stringContaining('单根不变量') });
+    expect(mocks.writeInitFrame).toHaveBeenCalledWith(expect.objectContaining({
+      targetIndex: 0,
+      isolationKey: '',
+      checkpoint: expect.objectContaining({ kind: 'full', reason: 'init' }),
+    }));
+    expect(mocks.chat[0].TavernDB_ACU_IsolatedData).toEqual(oldFrame);
+    expect(mocks.scope).toEqual(oldScope);
+    expect(mocks.guide).toEqual(oldGuide);
+    expect(mocks.saveStrict).not.toHaveBeenCalled();
+    expect(mocks.setRuntime).not.toHaveBeenCalled();
   });
 
   it('重键后别名注册表发现歧义时在写入前拒绝初始化', async () => {

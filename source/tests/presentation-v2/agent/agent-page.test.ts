@@ -1,6 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
+import { createPinia } from 'pinia';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createApp, defineComponent } from 'vue';
 
@@ -68,6 +69,7 @@ describe('AgentPage', () => {
     const el = document.createElement('div');
     document.body.appendChild(el);
     const app = createApp(Page);
+    app.use(createPinia());
     app.mount(el);
     await Promise.resolve();
 

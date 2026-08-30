@@ -24,6 +24,7 @@ const {
   mockGetWorldbookContentForPlot,
   mockGetAgentControlledWorldbookEntriesForFinalPrompt,
   mockIsWorldbookTakeoverActive,
+  mockEnsureHydrated,
 } = vi.hoisted(() => {
   const mockPendingFinalGenerationGreenlightsRef = { value: [] as any[] };
   return {
@@ -48,6 +49,7 @@ const {
     mockGetWorldbookContentForPlot: vi.fn(),
     mockGetAgentControlledWorldbookEntriesForFinalPrompt: vi.fn(),
     mockIsWorldbookTakeoverActive: vi.fn(() => false),
+    mockEnsureHydrated: vi.fn(async () => undefined),
   };
 });
 
@@ -89,6 +91,7 @@ vi.mock('../../../src/service/runtime/plot-runtime', () => ({
 
 vi.mock('../../../src/service/agent/agent-worldbook-takeover', () => ({
   isWorldbookTakeoverActive_ACU: mockIsWorldbookTakeoverActive,
+  ensurePlotAgentWorldbookSnapshotHydrated_ACU: mockEnsureHydrated,
 }));
 
 vi.mock('../../../src/service/runtime/helpers-context-tags', () => ({
@@ -320,6 +323,31 @@ describe('handleChatCompletionReady_ACU', () => {
       { role: 'user', content: '当前输入' },
     ]);
     expect(mockLogDebug).toHaveBeenCalledWith('[提示词模板] 已过滤酒馆原生正文世界书绿灯片段，数量:', 1);
+  });
+
+  it('冷启动初判未接管时会先水合快照再复判，复判接管活跃则执行过滤', async () => {
+    mockEnsureHydrated.mockClear();
+    // 初判（内存快照为空）返回 false，水合后复判返回 true。
+    mockIsWorldbookTakeoverActive.mockReturnValueOnce(false).mockReturnValue(true);
+    mockPendingFinalGenerationGreenlightsRef.value = [];
+    mockGetAgentControlledWorldbookEntriesForFinalPrompt.mockResolvedValue([
+      { bookName: '世界书', uid: 'blocked-cold-start', comment: '冷启动条目', content: '冷启动时必须过滤的原生内容' },
+    ]);
+
+    const data = {
+      messages: [
+        { role: 'system', content: '系统提示\n\n# 冷启动条目\n冷启动时必须过滤的原生内容\n\n其他系统提示' },
+        { role: 'user', content: '当前输入' },
+      ],
+    };
+
+    await handleChatCompletionReady_ACU(data);
+
+    expect(mockEnsureHydrated).toHaveBeenCalledTimes(1);
+    expect(data.messages).toEqual([
+      { role: 'system', content: '系统提示\n\n其他系统提示' },
+      { role: 'user', content: '当前输入' },
+    ]);
   });
 
   it('Agent 接管启用但本轮正文蓝灯为空时会过滤全部受控原生 skill 条目', async () => {

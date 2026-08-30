@@ -41,7 +41,7 @@ export function createTemplatePresetApi(ctx: ApiGroupContext): Record<string, Fu
 
         switchTemplatePreset: async function(presetName: any, options: any = {}) {
             try {
-                const { scope = 'global' } = options || {};
+                const { scope = 'global', destructiveChangeConfirmed = false } = options || {};
                 const normalizedScope = normalizeTemplateOperationScope_ACU(scope);
                 const name = normalizeTemplatePresetSelectionValue_ACU(presetName);
                 const displayName = name || '默认预设';
@@ -50,6 +50,9 @@ export function createTemplatePresetApi(ctx: ApiGroupContext): Record<string, Fu
                     updateGlobal: normalizedScope === 'global',
                     save: true,
                     persistChatScope: normalizedScope === 'chat',
+                    // S1-3：全局切换影响 inherit_global 聊天时经协调器，可能返回
+                    // 破坏性 blockers；调用方确认后带 destructiveChangeConfirmed 重试。
+                    destructiveChangeConfirmed: destructiveChangeConfirmed === true,
                 });
                 const saved = !!result && (!(typeof result === 'object' && 'saved' in result) || result.saved !== false);
                 if (saved) {
@@ -74,11 +77,15 @@ export function createTemplatePresetApi(ctx: ApiGroupContext): Record<string, Fu
                 const error = typeof result === 'object' && result && 'error' in result && typeof result.error === 'string'
                     ? result.error
                     : '';
+                const blockers = typeof result === 'object' && result && 'blockers' in result && Array.isArray((result as any).blockers)
+                    ? (result as any).blockers
+                    : null;
                 return {
                     success: false,
                     scope: normalizedScope,
                     message: error || `${normalizedScope === 'global' ? '全局模板预设' : '当前聊天模板预设'}切换失败：${displayName}`,
                     ...(error ? { error } : {}),
+                    ...(blockers && blockers.length > 0 ? { blockers } : {}),
                 };
             } catch (e) {
                 logError_ACU('switchTemplatePreset failed:', e);

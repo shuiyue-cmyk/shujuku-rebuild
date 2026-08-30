@@ -87,6 +87,46 @@ function encodeRuntimeRevisionSnapshot_ACU(snapshot: unknown): string {
   return `runtime-v1:${JSON.stringify(snapshot)}`;
 }
 
+interface ParsedRuntimeRevisionSnapshot_ACU {
+  scopeKey: string;
+  all: boolean;
+  global: number;
+  allRevision: number;
+  sheets: Record<string, number>;
+}
+
+/**
+ * 解析 captureRuntimeRevisionSnapshotForScope_ACU 产出的版本快照。
+ * 非 runtime-v1 格式（哨兵字符串、旧调用方传入的任意值）返回 null——
+ * 调用方对不可解析的基线不做冲突校验，保持向后兼容。
+ */
+function parseRuntimeRevisionSnapshot_ACU(revision: string | null | undefined): ParsedRuntimeRevisionSnapshot_ACU | null {
+  if (typeof revision !== 'string' || !revision.startsWith('runtime-v1:')) return null;
+  try {
+    const parsed = JSON.parse(revision.slice('runtime-v1:'.length));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const sheets: Record<string, number> = {};
+    if (parsed.sheets && typeof parsed.sheets === 'object' && !Array.isArray(parsed.sheets)) {
+      for (const [sheetKey, value] of Object.entries(parsed.sheets)) {
+        const revisionValue = Number(value);
+        if (Number.isFinite(revisionValue)) sheets[sheetKey] = revisionValue;
+      }
+    }
+    const globalValue = Number(parsed.global);
+    const allRevisionValue = Number(parsed.allRevision);
+    if (!Number.isFinite(globalValue) || !Number.isFinite(allRevisionValue)) return null;
+    return {
+      scopeKey: String(parsed.scopeKey || ''),
+      all: parsed.all === true,
+      global: globalValue,
+      allRevision: allRevisionValue,
+      sheets,
+    };
+  } catch {
+    return null;
+  }
+}
+
 
 function captureRuntimeRevisionSnapshotForScope_ACU(scopeKey: string, writeSet: TableWriteConflictUnitV2_ACU[]): string {
   const state = getRuntimeRevisionState_ACU(scopeKey);
@@ -385,6 +425,9 @@ export async function runTableWriteTransaction_ACU<T>(
   const transactionId = generateTransactionId_ACU();
   const runtimeScopeKey = getRuntimeScopeKey_ACU({ chatKey, isolationKey });
   const baseRevision = options.baseRevision ?? captureRuntimeRevisionSnapshotForScope_ACU(runtimeScopeKey, writeSet);
+  // 事务内多次 runCommit 会推进自身版本；每次成功提交后刷新有效基线，
+  // 使后续 assertFresh 只检测外部并发写入而不被自己的 bump 误判。
+  let effectiveBaseRevision = baseRevision;
 
   try {
     const ctx: TableWriteTransactionContext_ACU = {
@@ -395,7 +438,51 @@ export async function runTableWriteTransaction_ACU<T>(
       baseRevision,
       writeSet,
       assertFresh: (reason?: string): void => {
-        void reason;
+        const base = parseRuntimeRevisionSnapshot_ACU(effectiveBaseRevision);
+        // 不可解析的基线（哨兵字符串/旧调用方）没有可比对的版本信息，跳过校验。
+        if (!base) return;
+        const label = reason || 'unspecified';
+        if (base.scopeKey && base.scopeKey !== runtimeScopeKey) {
+          throw new Error(
+            `runtime revision conflict: ${label}: 基线快照属于其他聊天作用域（base=${base.scopeKey}, current=${runtimeScopeKey}），已拒绝陈旧提交。`,
+          );
+        }
+        const state = getRuntimeRevisionState_ACU(runtimeScopeKey);
+        if (writeSet.some(unit => unit.kind === 'all')) {
+          // all 写入会覆盖全部表：基线也是 all 捕获时，任何期间写入（global 变化）都构成冲突。
+          if (base.all && base.global !== state.global) {
+            throw new Error(
+              `runtime revision conflict: ${label}: 全表基线已过期（base global=${base.global}, current global=${state.global}），请重新读取当前表格后重试。`,
+            );
+          }
+          // 基线是具体表捕获：只校验基线覆盖到的表；其余表无基线信息，无从校验。
+          if (!base.all) {
+            for (const [sheetKey, sheetRevision] of Object.entries(base.sheets)) {
+              const baseEffective = Math.max(sheetRevision, base.allRevision);
+              const currentEffective = Math.max(state.sheets.get(sheetKey) || 0, state.allRevision);
+              if (baseEffective !== currentEffective) {
+                throw new Error(
+                  `runtime revision conflict: ${label}: sheetKey=${sheetKey} 基线已过期（base=${baseEffective}, current=${currentEffective}），请重新读取当前表格后重试。`,
+                );
+              }
+            }
+          }
+          return;
+        }
+        for (const unit of writeSet) {
+          const sheetKey = getConflictSheetKey_ACU(unit);
+          if (!sheetKey) continue;
+          // 基线未覆盖该表（例如模板路径用 all 捕获、提交时才确定具体表）：
+          // 无逐表版本可比，保持放行——这是模板切回场景的既有语义（误杀修复）。
+          if (!(sheetKey in base.sheets)) continue;
+          const baseEffective = Math.max(base.sheets[sheetKey], base.allRevision);
+          const currentEffective = Math.max(state.sheets.get(sheetKey) || 0, state.allRevision);
+          if (baseEffective !== currentEffective) {
+            throw new Error(
+              `runtime revision conflict: ${label}: sheetKey=${sheetKey} 基线已过期（base=${baseEffective}, current=${currentEffective}），请重新读取当前表格后重试。`,
+            );
+          }
+        }
       },
       runCommit: async <R>(commitTask: () => Promise<R> | R, revisionWriteSet?: TableWriteConflictUnitV2_ACU[] | ((result: R) => TableWriteConflictUnitV2_ACU[] | undefined)): Promise<R> => {
         const releaseCommit = await acquireWrite_ACU(buildTableCommitScopeKey_ACU({ chatKey, isolationKey }));
@@ -403,6 +490,7 @@ export async function runTableWriteTransaction_ACU<T>(
           const result = await commitTask();
           const resolvedRevisionWriteSet = typeof revisionWriteSet === 'function' ? revisionWriteSet(result) : revisionWriteSet;
           bumpRuntimeRevision_ACU(runtimeScopeKey, normalizeRevisionBumpWriteSet_ACU(resolvedRevisionWriteSet, writeSet));
+          effectiveBaseRevision = captureRuntimeRevisionSnapshotForScope_ACU(runtimeScopeKey, writeSet);
           return result;
         } finally {
           releaseCommit();

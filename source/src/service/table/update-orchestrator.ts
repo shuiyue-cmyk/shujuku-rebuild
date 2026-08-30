@@ -4,94 +4,24 @@
  * service 层不驱动 UI，只返回结果/状态，presentation 层根据返回值自行决定 UI 操作。
  */
 
-import {
-  currentChatFileIdentifier_ACU,
-  isAutoUpdatingCard_ACU,
-  pendingFinalGenerationGreenlights_ACU,
-  wasStoppedByUser_ACU,
-  _set_isAutoUpdatingCard_ACU,
-  _set_manualExtraHint_ACU,
-  _set_wasStoppedByUser_ACU
-} from '../runtime/state-manager';
-import {
-  readIsolatedTagData_ACU
-} from '../../data/repositories/chat-message-data-repo';
-import {
-  callCustomOpenAI_ACU,
-  RetryableAiResponseError_ACU
-} from '../ai/prompt-builder';
-import {
-  clearManualRefillSheetDataInRange_ACU,
-  commitManualRefillSheetSnapshotInRangeAtomic_ACU,
-  ensureManualCatchUpAnchorBeforeTarget_ACU,
-  ensureV2BoundaryCheckpointForRetainedBuffer_ACU,
-  establishManualRefillTemplateRoot_ACU,
-  getChatArray_ACU,
-  shouldRotateV2BoundaryCheckpointForRetainedBuffer_ACU
-} from '../chat/chat-service';
-import {
-  coreApisAreReady_ACU,
-  currentJsonTableData_ACU,
-  getCurrentIsolationKey_ACU,
-  settings_ACU,
-  _set_currentJsonTableData_ACU
-} from '../runtime/state-manager';
-import {
-  checkAutoMergeTrigger_ACU,
-  prepareAutoMergeBatches_ACU,
-  executeAutoMergeBatch_ACU,
-  finalizeAutoMerge_ACU
-} from '../summary/merge-logic';
-import {
-  ensureStableRowIdsForSheetContent_ACU,
-  filterSheetKeysByTemplateScope_ACU,
-  getChatSheetGuideDataForIsolationKey_ACU,
-  getCurrentChatTemplateScopeState_ACU,
-  getEffectiveSeedRowsForSheet_ACU,
-  getGlobalTemplateSnapshotForCurrentProfile_ACU,
-  resolveTemplateScope_ACU,
-  sanitizeTemplateSnapshotForChat_ACU,
-  shouldUseInitialSeedRows_ACU
-} from '../template/chat-scope';
-import type {
-  TemplateScope_ACU
-} from '../template/chat-scope';
-import {
-  loadAllChatMessages_ACU,
-  updateReadableLorebookEntry_ACU
-} from '../worldbook/pipeline';
-import {
-  enqueueSummaryVectorIndexFlush_ACU
-} from '../vector/summary-vector-index-flush-queue';
-import {
-  getCurrentWorldbookConfig_ACU
-} from '../settings/settings-readers';
-import {
-  getLatestV2FullCheckpointMessageIndex_ACU,
-  resolveTableHistoryStateFromChat_ACU
-} from './table-history';
-import {
-  planManualCatchUpWaves_ACU,
-  type ManualCatchUpPlan_ACU
-} from './manual-fill-planner';
-import type {
-  ManualRefillProgressV2_ACU
-} from './storage-frame-v2-types';
-import type {
-  SqlTableApplyScope_ACU
-} from '../../shared/table-storage-provider';
-import type {
-  TableDataObject_ACU
-} from '../../shared/models/table-data';
-import {
-  rebindSheetKeysThroughTableAliases_ACU,
-  resolveHistoricalSheetKeyMigrations_ACU,
-  SheetTableAliasResolutionError_ACU
-} from '../../shared/sql-read-resolver';
-import {
-  recoverProvisionalBridgeSession_ACU,
-  hasActiveProvisionalBridgeAnywhere_ACU
-} from './manual-catch-up-provisional-bridge';
+import { currentChatFileIdentifier_ACU, isAutoUpdatingCard_ACU, pendingFinalGenerationGreenlights_ACU, wasStoppedByUser_ACU, _set_isAutoUpdatingCard_ACU, _set_manualExtraHint_ACU, _set_wasStoppedByUser_ACU } from '../runtime/state-manager';
+import { readIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
+import { callCustomOpenAI_ACU, RetryableAiResponseError_ACU } from '../ai/prompt-builder';
+import { clearManualRefillSheetDataInRange_ACU, commitManualRefillSheetSnapshotInRangeAtomic_ACU, ensureManualCatchUpAnchorBeforeTarget_ACU, ensureV2BoundaryCheckpointForRetainedBuffer_ACU, establishManualRefillTemplateRoot_ACU, getChatArray_ACU, shouldRotateV2BoundaryCheckpointForRetainedBuffer_ACU } from '../chat/chat-service';
+import { coreApisAreReady_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU, settings_ACU, _set_currentJsonTableData_ACU } from '../runtime/state-manager';
+import { checkAutoMergeTrigger_ACU, prepareAutoMergeBatches_ACU, executeAutoMergeBatch_ACU, finalizeAutoMerge_ACU } from '../summary/merge-logic';
+import { ensureStableRowIdsForSheetContent_ACU, filterSheetKeysByTemplateScope_ACU, getChatSheetGuideDataForIsolationKey_ACU, getCurrentChatTemplateScopeState_ACU, getEffectiveSeedRowsForSheet_ACU, getGlobalTemplateSnapshotForCurrentProfile_ACU, resolveTemplateScope_ACU, sanitizeTemplateSnapshotForChat_ACU, shouldUseInitialSeedRows_ACU } from '../template/chat-scope';
+import type { TemplateScope_ACU } from '../template/chat-scope';
+import { loadAllChatMessages_ACU, updateReadableLorebookEntry_ACU } from '../worldbook/pipeline';
+import { enqueueSummaryVectorIndexFlush_ACU } from '../vector/summary-vector-index-flush-queue';
+import { getCurrentWorldbookConfig_ACU } from '../settings/settings-readers';
+import { getLatestV2FullCheckpointMessageIndex_ACU, resolveTableHistoryStateFromChat_ACU } from './table-history';
+import { planManualCatchUpWaves_ACU, type ManualCatchUpPlan_ACU } from './manual-fill-planner';
+import type { ManualRefillProgressV2_ACU } from './storage-frame-v2-types';
+import type { SqlTableApplyScope_ACU } from '../../shared/table-storage-provider';
+import type { TableDataObject_ACU } from '../../shared/models/table-data';
+import { rebindSheetKeysThroughTableAliases_ACU, resolveHistoricalSheetKeyMigrations_ACU, SheetTableAliasResolutionError_ACU } from '../../shared/sql-read-resolver';
+import { recoverProvisionalBridgeSession_ACU, hasActiveProvisionalBridgeAnywhere_ACU } from './manual-catch-up-provisional-bridge';
 import {
   commitStagedSheetsAtFullBoundaryAtomic_ACU,
   planTableFillBoundaryStaging_ACU,
@@ -100,29 +30,14 @@ import {
   type TableFillBoundaryStagingPlan_ACU,
   type TableFillStagingRunContext_ACU,
 } from './table-fill-boundary-staging';
-import {
-  getTableDataFingerprint_ACU
-} from './table-data-upgrade-audit';
+import { getTableDataFingerprint_ACU } from './table-data-upgrade-audit';
 
-import {
-  isSummaryOrOutlineTable_ACU,
-  logDebug_ACU,
-  logError_ACU,
-  logWarn_ACU,
-  parseTableTemplateJson_ACU
-} from '../../shared/utils';
-import {
-  startRuntimePerformanceSpan_ACU
-} from '../../shared/runtime-performance';
-import {
-  createLorebookReadContext_ACU,
-  type LorebookReadContext_ACU
-} from '../worldbook/read-context';
+import { isSummaryOrOutlineTable_ACU, logDebug_ACU, logError_ACU, logWarn_ACU, parseTableTemplateJson_ACU } from '../../shared/utils';
+import { startRuntimePerformanceSpan_ACU } from '../../shared/runtime-performance';
+import { showUiSurfaceToast_ACU } from '../../shared/ui-surface-registry';
+import { createLorebookReadContext_ACU, type LorebookReadContext_ACU } from '../worldbook/read-context';
 
-import {
-  applyTableDelta_ACU,
-  isDeltaTagData_ACU
-} from './table-delta';
+import { applyTableDelta_ACU, isDeltaTagData_ACU } from './table-delta';
 /**
  * 表名标准化：trim 后空串视为无效键
  */
@@ -143,81 +58,25 @@ function resolveTableApiPresetOverride_ACU(tableName: any): string {
     const preset = overrides[normalizedName];
     return (typeof preset === 'string' && preset.trim()) ? preset.trim() : '';
 }
-import {
-  checkIfFirstTimeInit_ACU,
-  ensureLegacyStorageMigratedBeforeWrite_ACU
-} from './table-service';
-import {
-  assertSingleActiveFullCheckpointV2_ACU,
-  assertWriteTargetNotBeforeReplayRoot_ACU,
-  hasAnyV2Checkpoint_ACU
-} from './storage-frame-v2-persist';
-import {
-  parseAndApplyTableEditsToData_ACU,
-  prepareAIInput_ACU
-} from '../ai/prompt-builder';
-import {
-  isSqlContent
-} from '../ai/prompt-builder/table-edit-parser';
-import {
-  buildGuidedBaseDataFromSheetGuide_ACU,
-  getSortedSheetKeys_ACU
-} from '../template/chat-scope';
-import {
-  isSqliteMode
-} from './storage-mode';
-import type {
-  TableMutationOperationV2_ACU
-} from './storage-frame-v2-types';
-import {
-  applySqlEditsToTableDataSnapshot_ACU,
-  assertNoHiddenPhysicalColumnMutations_ACU,
-  buildSqlSheetBatchOperations_ACU,
-  captureSqlTableApplyScope_ACU,
-  extractTableNamesFromStatements,
-  mapSqlTableNamesToSheetKeys_ACU,
-  normalizeSqlStatementsForRuntimeLog_ACU,
-  rebindSqlMutationIdentifiers_ACU,
-  splitSqlStatements,
-  SqlRowIdMaterializationError_ACU,
-  SqlRuntimeSchemaInvalidError_ACU,
-  SqlRuntimeSchemaStaleError_ACU,
-  SqlRuntimeSnapshotError_ACU
-} from './sql-table-service';
-import {
-  hasStructuralReplayCompatibilityRepairs_ACU,
-  hasUnanchoredReplayArtifactsForChatV2_ACU,
-  loadTableStateFromFramesV2Detailed_ACU
-} from './storage-frame-v2-replay';
-import {
-  ensureStorageProviderReady_ACU,
-  getStorageProvider,
-  reloadStorageProvider
-} from './table-storage-strategy';
-import {
-  applySpecialIndexSequenceToSummaryTables_ACU
-} from '../runtime/helpers-remaining';
-import {
-  isSameSheetHeader_ACU
-} from '../template/guide-metadata-overlay';
-import {
-  captureTableRuntimeRevisionForWriteSet_ACU
-} from './table-write-transaction';
-import {
-  runTableUpdateCommit_ACU,
-  type TableUpdateCommitErrorCategory_ACU
-} from './table-update-commit';
-import {
-  resolveTableStorageStrategy_ACU
-} from './storage-strategy-resolver';
-import {
-  getHiddenChronicleRowIdsAfterBigSummaryInsert_ACU
-} from '../flight-mode/flight-mode-hidden-rows';
-import {
-  getCurrentFlightModeState_ACU,
-  stageFlightModeHiddenRowIds_ACU
-} from '../flight-mode/flight-mode-state';
-
+import { checkIfFirstTimeInit_ACU, ensureLegacyStorageMigratedBeforeWrite_ACU } from './table-service';
+import { assertSingleActiveFullCheckpointV2_ACU, assertWriteTargetNotBeforeReplayRoot_ACU, hasAnyV2Checkpoint_ACU } from './storage-frame-v2-persist';
+import { parseAndApplyTableEditsToData_ACU, prepareAIInput_ACU } from '../ai/prompt-builder';
+import { extractStrictJsonTableFillResponse_ACU } from '../ai/prompt-builder/strict-json-table-fill';
+import { isSqlContent } from '../ai/prompt-builder/table-edit-parser';
+import { buildGuidedBaseDataFromSheetGuide_ACU, getSortedSheetKeys_ACU } from '../template/chat-scope';
+import { isSqliteMode } from './storage-mode';
+import type { TableMutationOperationV2_ACU } from './storage-frame-v2-types';
+import { applySqlEditsToTableDataSnapshot_ACU, assertNoHiddenPhysicalColumnMutations_ACU, buildSqlSheetBatchOperations_ACU, captureSqlTableApplyScope_ACU, extractTableNamesFromStatements, mapSqlTableNamesToSheetKeys_ACU, normalizeSqlStatementsForRuntimeLog_ACU, rebindSqlMutationIdentifiers_ACU, splitSqlStatements, SqlRowIdMaterializationError_ACU, SqlRuntimeSchemaInvalidError_ACU, SqlRuntimeSchemaStaleError_ACU, SqlRuntimeSnapshotError_ACU } from './sql-table-service';
+import { hasStructuralReplayCompatibilityRepairs_ACU, hasUnanchoredReplayArtifactsForChatV2_ACU, loadTableStateFromFramesV2Detailed_ACU } from './storage-frame-v2-replay';
+import { ensureStorageProviderReady_ACU, getStorageProvider, reloadStorageProvider } from './table-storage-strategy';
+import { applySpecialIndexSequenceToSummaryTables_ACU } from '../runtime/helpers-remaining';
+import { isSameSheetHeader_ACU } from '../template/guide-metadata-overlay';
+import { captureTableRuntimeRevisionForWriteSet_ACU } from './table-write-transaction';
+import { runTableUpdateCommit_ACU, type TableUpdateCommitErrorCategory_ACU } from './table-update-commit';
+import { commitPreparedV2Recovery_ACU, prepareV2Recovery_ACU } from './table-v2-recovery-service';
+import { isV2TagData_ACU, resolveTableStorageStrategy_ACU } from './storage-strategy-resolver';
+import { getHiddenChronicleRowIdsAfterBigSummaryInsert_ACU } from '../flight-mode/flight-mode-hidden-rows';
+import { getCurrentFlightModeState_ACU, stageFlightModeHiddenRowIds_ACU } from '../flight-mode/flight-mode-state';
 
 // ============================================================
 // 类型定义：返回值 + 进度事件（service 层不驱动 UI）
@@ -806,6 +665,33 @@ function buildSheetReplaceOperationsFromData_ACU(
     return operations;
 }
 
+/**
+ * 对 afterData 中给定持久化范围内的总结/大纲表应用自动编号，返回内容实际变化的表键。
+ *
+ * 编号只作用于本次会被持久化的表（scopeKeys）：编号变更必须随 afterData 一起落盘，
+ * 否则 persist 的 replay === afterData 校验会失败或编号静默丢失。调用方须对返回的
+ * 表键追加 sheet_replace 操作——sql_sheet_batch 回放不应用编号，必须由 replace 覆盖
+ * 才能保证回放结果与 afterData 一致（回放零语义改动）。
+ */
+function applyAutoNumberingWithinScope_ACU(afterData: Record<string, any>, scopeKeys: readonly string[]): string[] {
+    if (!afterData || typeof afterData !== 'object' || !Array.isArray(scopeKeys) || scopeKeys.length === 0) return [];
+    const view: Record<string, any> = {};
+    const before = new Map<string, string>();
+    for (const sheetKey of scopeKeys) {
+        if (typeof sheetKey !== 'string' || !sheetKey.startsWith('sheet_')) continue;
+        const sheet = afterData[sheetKey];
+        if (!sheet || typeof sheet !== 'object') continue;
+        view[sheetKey] = sheet;
+        before.set(sheetKey, JSON.stringify(sheet.content ?? null));
+    }
+    applySpecialIndexSequenceToSummaryTables_ACU(view);
+    const renumbered: string[] = [];
+    for (const [sheetKey, snapshot] of before) {
+        if (JSON.stringify(view[sheetKey]?.content ?? null) !== snapshot) renumbered.push(sheetKey);
+    }
+    return renumbered;
+}
+
 function getTouchedSheetKeysFromSqlText_ACU(sqlText: string, tableData: Record<string, any>): string[] {
     const statements = normalizeSqlStatementsForRuntimeLog_ACU(sqlText);
     if (statements.length === 0) return [];
@@ -932,6 +818,27 @@ async function loadV2ReplayMergeBase_ACU(
 }
 
 
+/** 空基底退化提示的节流窗口：同一次手动补齐会按批次多次命中，30 秒内只提示一次。 */
+const EMPTY_BASE_FALLBACK_TOAST_THROTTLE_MS_ACU = 30_000;
+let lastEmptyBaseFallbackToastAt_ACU = 0;
+
+/**
+ * S2-3：有界填表在目标楼层前找不到任何可回放表格基底时，会从空指导表/模板结构起底填表。
+ * 该退化语义上是安全的（避免把边界后的未来状态喂给本批次），但必须让用户知道
+ * 「本次填表不含任何历史数据」，否则会误以为历史数据参与了填表。提示绝不抛错，且做节流去重。
+ */
+function notifyBoundedEmptyBaseFallback_ACU(batchNumber: number): void {
+    try {
+        const now = Date.now();
+        if (now - lastEmptyBaseFallbackToastAt_ACU < EMPTY_BASE_FALLBACK_TOAST_THROTTLE_MS_ACU) return;
+        lastEmptyBaseFallbackToastAt_ACU = now;
+        showUiSurfaceToast_ACU({
+            kind: 'info',
+            text: `目标楼层之前没有可用的表格历史基底，本次填表（批次 ${batchNumber} 起）将从空白模板结构开始，不包含任何历史表格数据。`,
+        });
+    } catch (_) {}
+}
+
 function buildGuideOrTemplateMergeBase_ACU(batchNumber: number): { data: Record<string, any> | null; error: string | null } {
     const batchIsoKey = getCurrentIsolationKey_ACU();
     const sheetGuideForBatch = getChatSheetGuideDataForIsolationKey_ACU(batchIsoKey);
@@ -968,6 +875,7 @@ export async function buildBatchMergeBase_ACU(
             // 否则会把目标范围之后的未来表格状态带回 prompt。只有非 SQLite 且未命中 V2 replay
             // 的旧路径才允许沿用 runtime fallback，以保留连续 bucket 的既有行为。
             if (isSqliteMode() || v2ReplayResult.attempted) {
+                notifyBoundedEmptyBaseFallback_ACU(batchNumber);
                 return buildGuideOrTemplateMergeBase_ACU(batchNumber);
             }
         }
@@ -990,6 +898,7 @@ export async function buildBatchMergeBase_ACU(
         // 指定了历史边界时，若当前聊天是 V2 但边界前没有可重放 checkpoint，不能退回“最新运行时快照”，
         // 否则会把目标楼之后的表格数据喂给本批次；此时应按空指导表/模板从零开始。
         if (!isSqliteMode() && v2ReplayResult.attempted && hasBoundedScope) {
+            notifyBoundedEmptyBaseFallback_ACU(batchNumber);
             return buildGuideOrTemplateMergeBase_ACU(batchNumber);
         }
 
@@ -1158,25 +1067,24 @@ export async function collectGroupFillResponse_ACU(
             if (aiResponse && minReplyLength > 0 && aiResponse.length < minReplyLength) {
                 throw new ModelOutputRetryError_ACU(`AI回复过短 (${aiResponse.length} 字符)，低于阈值 (${minReplyLength} 字符)`);
             }
-            // 提取 <tableEdit> 内容：取「最后一对」标签（lastPairOnly 语义）。
-            // 裸正则取第一对会在 AI 于 <thought> 内提到 "<tableEdit>" 字样时匹配到假标签，
-            // 把 thought 文本混入 tableEditText → isSqlContent 判定失败 → SQL 全被当作指令跳过（2026-08-16 线上问题）。
-            const lowerResponse = (aiResponse || '').toLowerCase();
-            // 取「最后一个完整标签对」：从最后一个 </tableEdit> 闭标签向前找配对的开标签，
-            // 避免结尾散文里无闭合的 "<tableEdit>" 字样让 closeIdx=-1 误抛重试（反向陷阱）
-            const lastCloseIdx = lowerResponse.lastIndexOf('</tableedit>');
-            let foundTagPair = false;
+            let normalizedAiResponse = aiResponse;
             let tableEditText = '';
-            if (lastCloseIdx !== -1) {
-                const openIdx = lowerResponse.lastIndexOf('<tableedit>', lastCloseIdx);
-                if (openIdx !== -1) {
-                    foundTagPair = true;
-                    tableEditText = (aiResponse || '').substring(openIdx + '<tableEdit>'.length, lastCloseIdx).replace(/^\uFEFF/, '').trim();
+            if (settings_ACU.strictJsonTableFillEnabled === true) {
+                const extracted = extractStrictJsonTableFillResponse_ACU(aiResponse, {
+                    sqlite: isSqliteMode(),
+                    tableData: job.baseSnapshot,
+                    targetSheetKeys: job.targetSheetKeys,
+                });
+                if (!extracted.ok) {
+                    throw new ModelOutputRetryError_ACU(extracted.retryHint || extracted.error || '严格 JSON 填表响应格式无效');
                 }
-            }
-            // 找不到完整标签对才报错；找到但内容为空是合法语义（AI 判断本轮无需更新）
-            if (!foundTagPair) {
-                throw new ModelOutputRetryError_ACU('AI响应中未找到完整有效的 <tableEdit> 标签');
+                normalizedAiResponse = extracted.normalizedResponse || aiResponse;
+                tableEditText = (extracted.tableEditText || '').trim();
+            } else {
+                if (!aiResponse || !aiResponse.includes('<tableEdit>') || !aiResponse.includes('</tableEdit>')) {
+                    throw new ModelOutputRetryError_ACU('AI响应中未找到完整有效的 <tableEdit> 标签');
+                }
+                tableEditText = (aiResponse.match(/<tableEdit>([\s\S]*?)<\/tableEdit>/i)?.[1] || '').trim();
             }
             if (isSqliteMode() && tableEditText && isSqlContent(tableEditText)) {
                 try {
@@ -1191,7 +1099,7 @@ export async function collectGroupFillResponse_ACU(
                 }
             }
 
-            return { job, success: true, attempt, aiResponse, tableEditText };
+            return { job, success: true, attempt, aiResponse: normalizedAiResponse, tableEditText };
         } catch (error: any) {
             lastErrorMessage = error?.message || '未知错误';
             lastErrorCategory = error instanceof ModelOutputRetryError_ACU
@@ -1661,6 +1569,8 @@ async function applyUnifiedGroupFillResponsesCore_ACU(
                 ? allRuntimeSheetKeys
                 : scopedKeys([...new Set([...modifiedKeys, ...initializedKeys])].sort());
             const keysToTrack = scopedKeys([...new Set([...modifiedKeys, ...initializedKeys])].sort());
+            // 自动编号（live SQL 填表出口）：作用于本次持久化范围内启用锁的总结/大纲表。
+            const renumberedSheetKeys = applyAutoNumberingWithinScope_ACU(runtimeData, keysToSave);
             // 与快照路径同理：缺少 full checkpoint 锚点时本次写入是初始
             // checkpoint，只接受 afterData，不能附带 sql_sheet_batch operations；但若已存在
             // 可由模板临时基线回放的 orphan artifacts，则必须保留本次 operations，供 persist
@@ -1691,6 +1601,9 @@ async function applyUnifiedGroupFillResponsesCore_ACU(
                     }
                     operations.push(...operationBuild.operations);
                 }
+                // sql_sheet_batch 回放不应用自动编号：对编号实际变化的表追加 sheet_replace
+                // 覆盖，保证回放结果与 afterData（含编号）逐字节一致。
+                operations.push(...buildSheetReplaceOperationsFromData_ACU(runtimeData, renumberedSheetKeys, 'system'));
             } else {
                 logDebug_ACU(
                     `[V2 Fill] 目标楼层 #${options.saveTargetIndex} 前无承载目标表的 full checkpoint，`
@@ -1985,7 +1898,7 @@ async function processGroupedRuntimeChunkCore_ACU(
         performanceRunId?: string;
         performanceParentSpanId?: string;
     } = {}
-): Promise<{ success: boolean; failedGroups: string[]; error?: string; aborted?: boolean; committedBucketCount: number; diagnosticCode?: ManualUpdateResult['diagnosticCode']; skippedGroups?: string[] }> {
+): Promise<{ success: boolean; failedGroups: string[]; error?: string; aborted?: boolean; committedBucketCount: number; diagnosticCode?: ManualUpdateResult['diagnosticCode'] }> {
     if (!Array.isArray(groups) || groups.length === 0) {
         return { success: true, failedGroups: [], committedBucketCount: 0 };
     }
@@ -2025,9 +1938,6 @@ async function processGroupedRuntimeChunkCore_ACU(
     });
     const templateForLookup = executionScope.sqlApplyScope?.templateData || parseTableTemplateJson_ACU({ stripSeedRows: true });
     const failedGroups = new Set<string>();
-    // 前沿中断后剩余未尝试 bucket 的所属组：不进 failedGroups（它们并未失败），
-    // 单独随结果返回，供调度层归因「N 组未尝试」（不改变 success 判定）。
-    const skippedGroups = new Set<string>();
     let firstError: string | undefined;
     // 模板只起指导作用：只有模板声明的表参与填表。
     // 范围未知时不过滤，避免把所有表判成不参与导致数据写不进去。
@@ -2126,10 +2036,6 @@ async function processGroupedRuntimeChunkCore_ACU(
         const maxBucketRetries = Math.max(1, Number(settings_ACU.tableMaxRetries) || 3);
         let retryUnifiedError: string | null = null;
         let bucketSucceeded = false;
-        // 回卷全局快照前留存的运行时快照（attempt 内赋值，bucket 失败分支用于对称还原）。
-        // null 哨兵：尚未走到快照留存点就早失败（基底边界不一致/空基底/别名重绑抛错）时
-        // 不还原，避免把真实运行时抹成空对象。
-        let preRollbackRuntimeSnapshot: Record<string, any> | null = null;
         // 阶段 G1：bucket 重试循环外持有 request-scoped replay evidence。
         // 同 bucket 的各次 attempt 共享同一 boundary（mergeBaseMaxMessageIndex），
         // 因此重试可复用首次冷 replay 结果；bucket 提交写入新 chat entry 后
@@ -2190,9 +2096,6 @@ async function processGroupedRuntimeChunkCore_ACU(
                 firstError = firstError || (error instanceof Error ? error.message : String(error));
                 break;
             }
-            // 回卷全局快照前先留存当前运行时：bucket 失败时在失败分支对称还原，
-            // 避免「提交前失败」后 UI 停留在合并基底旧态（同 applyUnified 失败路径回写快照的做法）。
-            preRollbackRuntimeSnapshot = JSON.parse(JSON.stringify(currentJsonTableData_ACU || {}));
             _set_currentJsonTableData_ACU(mergedBatchData);
             const baseSnapshot = JSON.parse(JSON.stringify(mergedBatchData));
             const bucketSheetKeys = [...new Set(bucket.plannedJobs.flatMap(job => job.group.sheetKeys || []))].sort();
@@ -2452,19 +2355,6 @@ async function processGroupedRuntimeChunkCore_ACU(
         }
         if (!bucketSucceeded) {
             // 连续前沿模型不允许跨过失败 bucket 继续提交，否则会制造无法自动追平的内部空洞。
-            // 剩余未尝试 bucket 的所属组不进 failedGroups（并未尝试、非失败）：
-            // 记入 skippedGroups 随结果返回，供调度层归因「N 组未尝试」。
-            for (let remainingIndex = bucketIndex + 1; remainingIndex < orderedBuckets.length; remainingIndex++) {
-                orderedBuckets[remainingIndex].plannedJobs.forEach(job => {
-                    if (!failedGroups.has(job.group.key)) skippedGroups.add(job.group.key);
-                });
-            }
-            // 对称还原回卷前的全局运行时快照：所有非 abort 失败都汇入此分支，
-            // 还原后 UI 不再停留在线 :2186 回卷出的旧态（外层兜底刷新仍保留）。
-            // null 哨兵 = 尚未执行过回卷就失败，无需还原。
-            if (preRollbackRuntimeSnapshot !== null) {
-                _set_currentJsonTableData_ACU(preRollbackRuntimeSnapshot);
-            }
             break;
         }
     }
@@ -2473,7 +2363,7 @@ async function processGroupedRuntimeChunkCore_ACU(
         return { success: false, failedGroups: [...failedGroups], error: '手动更新已终止。', aborted: true, committedBucketCount };
     }
     return failedGroups.size > 0
-        ? { success: false, failedGroups: [...failedGroups], error: firstError || '统一提交失败。', committedBucketCount, skippedGroups: [...skippedGroups] }
+        ? { success: false, failedGroups: [...failedGroups], error: firstError || '统一提交失败。', committedBucketCount }
         : { success: true, failedGroups: [], committedBucketCount };
 }
 
@@ -2528,7 +2418,7 @@ export async function executeAutoFillStagingGroups_ACU(
             requiresBoundaryStaging: boolean;
         };
     } = {},
-): Promise<{ success: boolean; failedGroups: string[]; error?: string; aborted?: boolean; committedBucketCount: number; skippedGroups?: string[] }> {
+): Promise<{ success: boolean; failedGroups: string[]; error?: string; aborted?: boolean; committedBucketCount: number }> {
     const boundary = options.boundary;
     const originalFullIndex = boundary?.fullCheckpointIndices?.length === 1 ? boundary.fullCheckpointIndices[0] : null;
     const normalizedGroups = Array.isArray(groups) ? groups : [];
@@ -2545,8 +2435,6 @@ export async function executeAutoFillStagingGroups_ACU(
     }
 
     const failedGroups = new Set<string>();
-    // 透传内部 chunk 的未尝试组清单（前沿中断归因），随结果返回给调度层。
-    const skippedGroups = new Set<string>();
     let firstError: string | undefined;
     let committedBucketCount = 0;
     let boundaryCommitted = false;
@@ -2632,8 +2520,6 @@ export async function executeAutoFillStagingGroups_ACU(
         const segments = splitMessageIndicesAtBoundary_ACU(groupIndices, originalFullIndex);
         const preSegments = segments.filter(segment => segment.indices.length > 0 && segment.indices[0] < originalFullIndex);
         const postSegments = segments.filter(segment => segment.indices.length > 0 && segment.indices[0] >= originalFullIndex);
-        // 组级失败标志：与手动追平路径的跨根 staging 分支同款守卫。
-        let groupFailed = false;
 
         for (const preSegment of preSegments) {
             if (options.abortController?.signal.aborted) {
@@ -2655,11 +2541,9 @@ export async function executeAutoFillStagingGroups_ACU(
                 performanceParentSpanId: options.performanceParentSpanId,
             });
             committedBucketCount += preResult.committedBucketCount;
-            preResult.skippedGroups?.forEach(key => skippedGroups.add(key));
             if (!preResult.success) {
                 failedGroups.add(group.key);
                 firstError = firstError || preResult.error || '边界前 staging 提交失败。';
-                groupFailed = true;
                 break;
             }
             // 累积 staging 快照：bucket 提交后 runtime 已更新为目标表最新 AI 结果。
@@ -2673,9 +2557,7 @@ export async function executeAutoFillStagingGroups_ACU(
         }
 
         // 首个 post 段提交前收敛 staging：边界前累计快照原子折叠回原根；零 staging 则丢弃。
-        // pre 段已失败时不得继续 settle 或写入 post 段（与手动路径一致）：该组整体失败，
-        // 已累计的部分 staging 只保留在内存中等待丢弃，绝不在此处被原子持久化。
-        if (!groupFailed && postSegments.length > 0) {
+        if (postSegments.length > 0) {
             if (options.abortController?.signal.aborted) {
                 return { success: false, failedGroups: [...failedGroups, ...normalizedGroups.map(g => g.key)], error: '自动填表已终止。', aborted: true, committedBucketCount };
             }
@@ -2687,7 +2569,7 @@ export async function executeAutoFillStagingGroups_ACU(
             }
         }
 
-        for (const postSegment of groupFailed ? [] : postSegments) {
+        for (const postSegment of postSegments) {
             if (options.abortController?.signal.aborted) {
                 return { success: false, failedGroups: [...failedGroups, ...normalizedGroups.map(g => g.key)], error: '自动填表已终止。', aborted: true, committedBucketCount };
             }
@@ -2706,7 +2588,6 @@ export async function executeAutoFillStagingGroups_ACU(
                 performanceParentSpanId: options.performanceParentSpanId,
             });
             committedBucketCount += postResult.committedBucketCount;
-            postResult.skippedGroups?.forEach(key => skippedGroups.add(key));
             if (!postResult.success) {
                 failedGroups.add(group.key);
                 firstError = firstError || postResult.error || '边界后持久化提交失败。';
@@ -2716,11 +2597,7 @@ export async function executeAutoFillStagingGroups_ACU(
     }
 
     // 所有组都只有 pre-boundary 段（未触发循环内汇合）：正常收尾时仍须把 staging 汇合回原根。
-    // 有组失败时不得收尾汇合：staging 快照为全组共享，settle 会连带失败组的撕裂数据落盘，
-    // 绕过本函数头「失败只丢弃内存 staging、零持久化改写」契约。
-    // 注意：这是自动路径独有的语义——手动追平路径（:4772 附近）失败也会 settle（有
-    // failManualRefillSession 兜底丢弃），两处刻意不同步，勿互相「对齐」。
-    if (failedGroups.size === 0 && !boundaryCommitted && stagingRun && stagingRun.stagedBucketCount > 0) {
+    if (!boundaryCommitted && stagingRun && stagingRun.stagedBucketCount > 0) {
         const settleResult = await settleStagingBoundary();
         if (!settleResult.ok) {
             normalizedGroups.forEach(g => failedGroups.add(g.key));
@@ -2729,7 +2606,7 @@ export async function executeAutoFillStagingGroups_ACU(
     }
 
     return failedGroups.size > 0
-        ? { success: false, failedGroups: [...failedGroups], error: firstError || '跨根 staging 执行失败。', committedBucketCount, skippedGroups: [...skippedGroups] }
+        ? { success: false, failedGroups: [...failedGroups], error: firstError || '跨根 staging 执行失败。', committedBucketCount }
         : { success: true, failedGroups: [], committedBucketCount };
 }
 
@@ -2919,9 +2796,10 @@ export async function executeCardUpdateCore_ACU(
                             return { success: false, error: sanitizeRetryFeedback_ACU(operationBuild.error), errorCategory: 'model' as const };
                         }
                         const operations = operationBuild.operations;
-                        applySpecialIndexSequenceToSummaryTables_ACU(runtimeData);
 
                         if (isImportMode) {
+                            // import 不写聊天帧、无回放操作，编号可全量应用（无漂移风险）。
+                            applySpecialIndexSequenceToSummaryTables_ACU(runtimeData);
                             emitProgress({ phase: 'chunk_done' });
                             logDebug_ACU('Import mode: skipping save to chat history for this chunk.');
                             return {
@@ -2974,6 +2852,10 @@ export async function executeCardUpdateCore_ACU(
                                 return keysToTrackAsUpdated.includes(sheetKey);
                             })
                             : fillAttemptKeys;
+                        // 自动编号（卡级 SQL 出口）：只作用于本次持久化范围内的表，并对编号
+                        // 变化的表追加 sheet_replace，消除既有的 live/回放编号漂移。
+                        const renumberedSheetKeys = applyAutoNumberingWithinScope_ACU(runtimeData, keysToActuallySave);
+                        operations.push(...buildSheetReplaceOperationsFromData_ACU(runtimeData, renumberedSheetKeys, 'system'));
                         const revisionWriteSet = parsedKeys.map(sheetKey => ({ kind: 'sheet' as const, sheetKey }));
 
                         return {
@@ -4220,6 +4102,60 @@ export async function orchestrateManualCatchUp_ACU(
 }
 
 /**
+ * 手动重填锚点健康检查 + 自动收敛（无 UI，仅后台日志）。
+ *
+ * 两类死锁形态同族处理：
+ * - 多根：同一隔离键存在 >=2 个 full checkpoint，回放只认最后一个，之前增量全部失效；
+ * - 零根有帧：存在 V2 storage frame 但没有任何 full/transition checkpoint 锚点，
+ *   persist 层会 fail-closed 拒绝隐式 migration checkpoint（先烧完 AI 费用才撞墙）。
+ *
+ * 命中任一形态时调用 V2 恢复服务：requiresConfirmation=false 的恢复计划（冗余根收敛、
+ * recoveryBackup 重建、full 修复候选）自动 prepare+commit，成功后重跑健康检查；
+ * 计划缺失、需人工确认（无锚点 data_replace 提升无法证明不截断数据）或提交失败
+ * 则维持阻断并返回原始违规描述。
+ */
+async function ensureManualRefillAnchorHealth_ACU(
+    liveChat: any[],
+    isolationKey: string,
+    options: { checkZeroRoot: boolean },
+): Promise<{ blockedError: string | null; healed: boolean }> {
+    const healthViolation = (chat: any[]): string | null => {
+        const multiRoot = assertSingleActiveFullCheckpointV2_ACU(chat, isolationKey, 'orchestrateManualUpdate:anchor_preflight');
+        if (multiRoot) return multiRoot;
+        // 零根检测只针对增量重填：clearBeforeUpdate 路径清理后会自行补写单表快照/模板
+        // 临时根（零根是其合法中间态），增量路径则会在 persist 层撞隐式 migration 拒绝。
+        if (!options.checkZeroRoot) return null;
+        const hasFrames = chat.some(message => message && !message.is_user && isV2TagData_ACU(readIsolatedTagData_ACU(message, isolationKey)));
+        if (hasFrames && !hasAnyV2Checkpoint_ACU(chat, isolationKey)) {
+            return 'V2 orchestrateManualUpdate:anchor_preflight 检测到零根状态：该隔离键存在 V2 storage frame 但没有任何 full checkpoint 锚点，persist 层将拒绝隐式 migration checkpoint。';
+        }
+        return null;
+    };
+    const initialViolation = healthViolation(liveChat);
+    if (!initialViolation) return { blockedError: null, healed: false };
+    logWarn_ACU('[ManualUpdate] 锚点预检发现异常，尝试自动收敛：', initialViolation);
+    try {
+        const summary = await prepareV2Recovery_ACU({ chat: liveChat, isolationKey });
+        if (!summary.planId || summary.requiresConfirmation) {
+            logWarn_ACU('[ManualUpdate] 锚点自动收敛不可行（无恢复计划或需人工确认）：', summary.status, summary.message);
+            return { blockedError: `手动重填被锚点预检阻断：${initialViolation}`, healed: false };
+        }
+        const commitResult = await commitPreparedV2Recovery_ACU(summary.planId);
+        if (commitResult.status !== 'committed') {
+            logWarn_ACU('[ManualUpdate] 锚点自动收敛提交失败：', commitResult.error || commitResult.status);
+            return { blockedError: `手动重填被锚点预检阻断：${initialViolation}`, healed: false };
+        }
+        logWarn_ACU('[ManualUpdate] 锚点自动收敛完成：', summary.message);
+    } catch (error) {
+        logWarn_ACU('[ManualUpdate] 锚点自动收敛异常：', error);
+        return { blockedError: `手动重填被锚点预检阻断：${initialViolation}`, healed: false };
+    }
+    const postViolation = healthViolation(getChatArray_ACU());
+    if (postViolation) return { blockedError: `手动重填被锚点预检阻断（自动收敛后仍未通过）：${postViolation}`, healed: false };
+    return { blockedError: null, healed: true };
+}
+
+/**
  * 手动更新编排（纯业务逻辑）
  * 从 handleManualUpdate_ACU 提取。不驱动 UI，只返回结果。
  * presentation 层负责：收集 manualSelection、设置 manualExtraHint、刷新 UI、显示 toast、弹出确认框。
@@ -4312,7 +4248,7 @@ export async function orchestrateManualUpdate_ACU(
             return { success: false, error: 'API未就绪。' };
         }
 
-        const apiIsConfigured = !!(settings_ACU.apiConfig.url && settings_ACU.apiConfig.model);
+        const apiIsConfigured = (settings_ACU.apiMode === 'custom' && (settings_ACU.apiConfig.useMainApi || (settings_ACU.apiConfig.url && settings_ACU.apiConfig.model))) || (settings_ACU.apiMode === 'tavern' && settings_ACU.tavernProfile);
         if (!apiIsConfigured) {
             return { success: false, error: 'API未配置，无法更新数据库。' };
         }
@@ -4340,17 +4276,22 @@ export async function orchestrateManualUpdate_ACU(
             return { success: false, error: '未选择需要更新的表格。' };
         }
 
-        // 锚点预检：同一隔离键下必须至多一个 full checkpoint，否则手动重填会把
-        // 增量写到错误的回放根上（回放只认最后一个 full，之前增量全部失效）。
-        // 在首次 AI 调用（processBatch）前阻断，避免先付完 AI 费用才撞 persist 层 fail-fast。
+        // 锚点预检（健康检查 + 自动收敛）：多根 / 零根有帧两类死锁形态在首次 AI 调用
+        // （processBatch）前先尝试用 V2 恢复服务自动收敛（requiresConfirmation=false 才
+        // 自动执行）；无法自愈才阻断，避免先付完 AI 费用才撞 persist 层 fail-fast。
         const preflightIsolationKey = getCurrentIsolationKey_ACU();
-        const preflightViolation = assertSingleActiveFullCheckpointV2_ACU(
-            liveChat,
-            preflightIsolationKey,
-            'orchestrateManualUpdate:anchor_preflight',
-        );
-        if (preflightViolation) {
-            return { success: false, error: `手动重填被锚点预检阻断：${preflightViolation}` };
+        const anchorHealth = await ensureManualRefillAnchorHealth_ACU(liveChat, preflightIsolationKey, {
+            checkZeroRoot: options.clearBeforeUpdate !== true,
+        });
+        if (anchorHealth.blockedError) {
+            return { success: false, error: anchorHealth.blockedError };
+        }
+        if (anchorHealth.healed) {
+            // 自动收敛可能改变回放输出（如 recoveryBackup 重建根），重填基线必须基于收敛后状态。
+            await refreshData();
+            if (!currentJsonTableData_ACU) {
+                return { success: false, error: '锚点自动收敛后数据库未能重新加载。' };
+            }
         }
 
         const uiThreshold = settings_ACU.autoUpdateThreshold || 3;
@@ -4502,58 +4443,6 @@ export async function orchestrateManualUpdate_ACU(
                     logWarn_ACU('[Manual Refill] runtime 在清理前一刻变化，已阻止破坏性重填（快照未匹配）。');
                     return { success: false, error: '表格运行时在确认期间发生变化，已取消本次手动填表，请确认后重试。' };
                 }
-            }
-
-            // A方案保护：检测范围内是否存在导入检查点（reason==='import'）且与本次重填目标表重叠，
-            // 若存在则阻断本次重填，避免“导入后手动填表覆盖导入”静默丢失。
-            const importOverlap = (() => {
-                const targetSet = new Set(targetKeys);
-                for (const idx of contextScopeIndices) {
-                    const msg: any = (liveChat as any)[idx];
-                    if (!msg || msg.is_user) continue;
-                    const tagData: any = readIsolatedTagData_ACU(msg, currentIsolationKey);
-                    if (!tagData?.storageFrame) continue;
-                    const frame: any = tagData.storageFrame;
-                    if (frame.checkpoint && frame.checkpoint.reason === 'import') {
-                        const cpData = frame.checkpoint.data;
-                        if (cpData && typeof cpData === 'object' && !Array.isArray(cpData)) {
-                            for (const k of Object.keys(cpData)) {
-                                if (k.startsWith('sheet_') && targetSet.has(k)) return true;
-                            }
-                        }
-                    }
-                    if (Array.isArray(frame.logEntries)) {
-                        for (const entry of frame.logEntries) {
-                            if (!entry || typeof entry !== 'object') continue;
-                            const ops: any = (entry as any).operations;
-                            if (Array.isArray(ops)) {
-                                for (const op of ops) {
-                                    if (op && op.kind === 'data_replace' && (op as any).reason === 'import' && op.data && typeof op.data === 'object' && !Array.isArray(op.data)) {
-                                        for (const k of Object.keys(op.data)) {
-                                            if (k.startsWith('sheet_') && targetSet.has(k)) return true;
-                                        }
-                                    }
-                                }
-                            }
-                            // 历史兼容：极老聊天可能用 patches 承载 data_replace import（现 V2 不再产新），一并扫描闭环
-                            const patches: any = (entry as any).patches;
-                            if (Array.isArray(patches)) {
-                                for (const patch of patches) {
-                                    if (patch && patch.kind === 'data_replace' && (patch as any).reason === 'import' && patch.data && typeof patch.data === 'object' && !Array.isArray(patch.data)) {
-                                        for (const k of Object.keys(patch.data)) {
-                                            if (k.startsWith('sheet_') && targetSet.has(k)) return true;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                return false;
-            })();
-            if (importOverlap) {
-                logWarn_ACU('[Manual Refill] 检测到重填范围内存在导入检查点（reason=import）且与目标表重叠，已阻断本次重填以避免覆盖导入。');
-                return { success: false, error: '检测到本次重填范围内存在“导入检查点”（通过导入/恢复写入的权威快照），为避免覆盖导入，已阻止本次手动填表。如需重填该范围，请先确认是否需要保留导入数据，或选择不含导入楼层的范围/表。' };
             }
 
             try {

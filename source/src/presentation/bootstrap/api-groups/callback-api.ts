@@ -4,7 +4,7 @@
  */
 
 import { currentJsonTableData_ACU } from '../../../service/runtime/state-manager';
-import { logDebug_ACU, logError_ACU, logWarn_ACU } from '../../../shared/utils';
+import { logDebug_ACU, logError_ACU } from '../../../shared/utils';
 
 export interface ApiGroupContext {
     /** 表格更新回调列表 */
@@ -15,13 +15,24 @@ export interface ApiGroupContext {
     getApi: () => any;
 }
 
+/**
+ * 表格更新通知元信息（S2-1 契约收紧）。
+ * persisted=false 表示本次更新仅改写了内存运行时（如 skipChatSave 提交、运行时恢复导入），
+ * 尚未写入聊天消息的 V2 存储帧——重开聊天/冷回放后这些改动会丢失。
+ */
+export interface TableUpdateNotifyMeta_ACU {
+    persisted: boolean;
+}
+
 let isNotifyingTableUpdate_ACU = false;
 let hasPendingTableUpdateNotification_ACU = false;
+// 合并窗口内只要出现过一次未落盘通知，跟发就按未落盘告知（宁可保守，不虚报已落盘）。
+let pendingNotificationHasUnpersisted_ACU = false;
 
-function notifyTableUpdateCallbacksOnce_ACU(ctx: ApiGroupContext): void {
+function notifyTableUpdateCallbacksOnce_ACU(ctx: ApiGroupContext, meta: TableUpdateNotifyMeta_ACU): void {
     const callbacksSnapshot = [...ctx.tableUpdateCallbacks];
     const callbackCount = callbacksSnapshot.length;
-    logDebug_ACU(`Notifying ${callbackCount} callbacks about table update.`);
+    logDebug_ACU(`Notifying ${callbackCount} callbacks about table update (persisted=${meta.persisted}).`);
 
     if (callbackCount === 0) return;
 
@@ -29,8 +40,8 @@ function notifyTableUpdateCallbacksOnce_ACU(ctx: ApiGroupContext): void {
     const dataToSend = currentJsonTableData_ACU || {};
     callbacksSnapshot.forEach((callback, callbackIndex) => {
         try {
-            // 将最新的数据作为参数传给回调
-            callback(dataToSend);
+            // 将最新的数据与元信息作为参数传给回调；旧回调只声明一个参数时第二参数被自然忽略。
+            callback(dataToSend, meta);
         } catch (e) {
             logError_ACU('[回调管理] Error executing a table update callback:', {
                 callbackIndex,
@@ -42,9 +53,10 @@ function notifyTableUpdateCallbacksOnce_ACU(ctx: ApiGroupContext): void {
     });
 }
 
-function notifyTableUpdateCallbacksSafely_ACU(ctx: ApiGroupContext): void {
+function notifyTableUpdateCallbacksSafely_ACU(ctx: ApiGroupContext, meta: TableUpdateNotifyMeta_ACU): void {
     if (isNotifyingTableUpdate_ACU) {
         hasPendingTableUpdateNotification_ACU = true;
+        if (!meta.persisted) pendingNotificationHasUnpersisted_ACU = true;
         logDebug_ACU('[回调管理] Table update notification is already running; queued one coalesced follow-up notification.');
         return;
     }
@@ -52,19 +64,14 @@ function notifyTableUpdateCallbacksSafely_ACU(ctx: ApiGroupContext): void {
     isNotifyingTableUpdate_ACU = true;
     try {
         hasPendingTableUpdateNotification_ACU = false;
-        notifyTableUpdateCallbacksOnce_ACU(ctx);
+        pendingNotificationHasUnpersisted_ACU = false;
+        notifyTableUpdateCallbacksOnce_ACU(ctx, meta);
 
-        // [M2] 排空改为 while 循环：第二段通知执行期间回调同步触发的新 pending
-        // 也会被继续消费，不再被丢弃。防重入标志逻辑保持不变（异步触发仍走排队合并）。
-        // 上限保护：回调在通知期间持续同步回推 notify 时终止排空，避免死循环卡死主线程。
-        let drainRounds = 0;
-        while (hasPendingTableUpdateNotification_ACU) {
+        if (hasPendingTableUpdateNotification_ACU) {
             hasPendingTableUpdateNotification_ACU = false;
-            if (++drainRounds > 10) {
-                logWarn_ACU('[回调管理] 表格更新通知连续重入超过 10 轮，终止本轮排空（疑似回调内同步回推 notify）。');
-                break;
-            }
-            notifyTableUpdateCallbacksOnce_ACU(ctx);
+            const followUpMeta: TableUpdateNotifyMeta_ACU = { persisted: !pendingNotificationHasUnpersisted_ACU };
+            pendingNotificationHasUnpersisted_ACU = false;
+            notifyTableUpdateCallbacksOnce_ACU(ctx, followUpMeta);
         }
     } finally {
         isNotifyingTableUpdate_ACU = false;
@@ -88,9 +95,9 @@ export function createCallbackApi(ctx: ApiGroupContext): Record<string, Function
                 logDebug_ACU('A table update callback has been unregistered.');
             }
         },
-        // 内部使用：通知更新
-        _notifyTableUpdate: function() {
-            notifyTableUpdateCallbacksSafely_ACU(ctx);
+        // 内部使用：通知更新；meta.persisted=false 表示本次更新未写入聊天持久化（默认按已落盘处理）
+        _notifyTableUpdate: function(meta?: Partial<TableUpdateNotifyMeta_ACU>) {
+            notifyTableUpdateCallbacksSafely_ACU(ctx, { persisted: meta?.persisted !== false });
         },
         // 注册"填表开始"回调
         registerTableFillStartCallback: function(callback: Function) {

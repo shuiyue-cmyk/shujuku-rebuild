@@ -20,6 +20,9 @@
       <AcuBadge v-if="templates.runtimeDiffersFromLibrary.value" variant="warning">
         当前生效模板与预设库内容不同
       </AcuBadge>
+      <AcuBadge v-if="templates.chatSnapshotDiffersFromLibrary.value" variant="warning">
+        聊天快照内容已偏离库中同名预设
+      </AcuBadge>
     </AcuText>
 
     <div class="acu-table-template-panel__preset-row">
@@ -52,6 +55,13 @@
         title="恢复历史模板归档"
         :disabled="templates.busy.value || management.busy.value || templates.chatArchiveItems.value.length === 0"
         @click="templates.restoreArchivedChatTemplate"
+      />
+      <AcuIconButton
+        v-if="templates.isChatOverridden.value"
+        icon="fa-solid fa-link-slash"
+        title="跟随全局（清除聊天覆盖）"
+        :disabled="templates.busy.value || management.busy.value"
+        @click="templates.followGlobalTemplate"
       />
       <AcuIconButton
         icon="fa-solid fa-gear"

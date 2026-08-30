@@ -273,6 +273,15 @@ async function mountDataMgmtPage(chatFileIdentifier = 'chat-data', initialMixedD
     scanV2IsolationDiagnostics_ACU: scanV2IsolationDiagnostics,
     commitPreparedV2Recovery_ACU: commitV2Recovery,
   }));
+  // S3-4 休眠数据面板：页面测试只验证面板挂载与布局，清单/唤醒行为由
+  // dormant-data-service 单测与 use-dormant-data 测试直接覆盖。
+  vi.doMock('../../../src/service/template/dormant-data-service', () => ({
+    listDormantTables_ACU: vi.fn(() => ({ ok: true, entries: [] })),
+    listDormantColumns_ACU: vi.fn(() => ({ ok: true, entries: [] })),
+    auditDormantDataIntegrity_ACU: vi.fn(() => ({ ok: true, issues: [], hiddenCount: 0 })),
+    wakeDormantTable_ACU: vi.fn(async () => ({ saved: true })),
+    wakeDormantColumn_ACU: vi.fn(async () => ({ saved: true })),
+  }));
 
   const mount = await import('../../../src/presentation-v2/bootstrap/mount');
   await mount.openAcuV2App();
@@ -374,7 +383,7 @@ describe('DataMgmtPage', () => {
     const { mount } = await mountDataMgmtPage();
 
     const panels = document.querySelectorAll('.acu-v2-data-mgmt-page .acu-panel');
-    expect(panels.length).toBe(2);
+    expect(panels.length).toBe(3);
     panels.forEach(panel => {
       expect(panel.querySelector('.acu-panel__description-region .acu-info-banner')).not.toBeNull();
       expect(panel.querySelector('.acu-panel__header .acu-info-banner')).toBeNull();
@@ -395,7 +404,8 @@ describe('DataMgmtPage', () => {
       .map(title => title.textContent?.trim() || '');
 
     expect(leftTitles).toEqual(['备份与恢复']);
-    expect(rightTitles).toEqual(['删除与清理']);
+    // S3-4：右列在删除清理面板上方新增常驻「休眠数据」面板。
+    expect(rightTitles).toEqual(['休眠数据', '删除与清理']);
 
     mount.__resetAcuV2MountForTests();
   });

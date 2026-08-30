@@ -11,6 +11,9 @@ async function importManagement() {
   const applyTemplatePresetToCurrent = vi.fn(async () => ({ presetName: '', isDefault: true }));
   const openVisualizerSurface = vi.fn(async () => true);
   const ensureTemplateRecoveryOrDeleteCurrentIsolationData = vi.fn(async () => ({ success: true, dataWasReset: false }));
+  let activeTemplateMode = 'inherit_global';
+  const promptFollowGlobalAfterSetDefault = vi.fn(async () => true);
+  const runFollowGlobalTemplateFlow = vi.fn(async () => true);
   let runtimeSnapshot: any = { templateStr: '{"sheet_a":{"name":"运行时"}}', templateObj: { sheet_a: { name: '运行时' } } };
   const resolveTemplateForExport = vi.fn((scope: string, name?: string) => ({
     jsonData: { sheet_a: { name: scope === 'runtime' ? '运行时' : name || 'global-A' } },
@@ -21,6 +24,7 @@ async function importManagement() {
     applyTemplatePresetToCurrent_ACU: applyTemplatePresetToCurrent,
     deleteTemplatePreset_ACU: deleteTemplatePreset,
     ensureUniqueTemplatePresetName_ACU: (name: string) => name,
+    getActiveTemplatePresetMeta_ACU: () => ({ presetName: 'global-A', scope: activeTemplateMode === 'chat_override' ? 'chat' : 'global', mode: activeTemplateMode }),
     getDefaultTemplateSnapshot_ACU: () => ({ templateStr: '{"mate":{"type":"chatSheets"},"sheet_a":{"name":"A","content":[],"sourceData":{}}}' }),
     getRuntimeTemplateSnapshot_ACU: () => runtimeSnapshot,
     getTemplatePreset_ACU: () => ({ templateStr: '{}' }),
@@ -50,6 +54,10 @@ async function importManagement() {
   vi.doMock('../../../src/presentation-v2/surfaces/visualizer/open-visualizer-surface', () => ({
     openVisualizerSurface_ACU: openVisualizerSurface,
   }));
+  vi.doMock('../../../src/presentation-v2/composables/templateFollowGlobalFlow', () => ({
+    promptFollowGlobalAfterSetDefault_ACU: promptFollowGlobalAfterSetDefault,
+    runFollowGlobalTemplateFlow_ACU: runFollowGlobalTemplateFlow,
+  }));
 
   const { createPinia, setActivePinia } = await import('pinia');
   setActivePinia(createPinia());
@@ -61,7 +69,10 @@ async function importManagement() {
     openVisualizerSurface,
     resolveTemplateForExport,
     ensureTemplateRecoveryOrDeleteCurrentIsolationData,
+    promptFollowGlobalAfterSetDefault,
+    runFollowGlobalTemplateFlow,
     setRuntimeSnapshot: (value: any) => { runtimeSnapshot = value; },
+    setActiveTemplateMode: (mode: string) => { activeTemplateMode = mode; },
   };
 }
 
@@ -199,6 +210,18 @@ describe('useTablePresetManagement', () => {
     expect(applyTemplatePresetToCurrent).not.toHaveBeenCalled();
   });
 
+  it('setAsDefault 时当前聊天有覆盖 → 触发清覆盖确认；无覆盖 → 不触发', async () => {
+    const { management, setActiveTemplateMode, promptFollowGlobalAfterSetDefault } = await importManagement();
+
+    await management.setAsDefault('global-B');
+    expect(promptFollowGlobalAfterSetDefault).not.toHaveBeenCalled();
+
+    setActiveTemplateMode('chat_override');
+    await management.setAsDefault('global-B');
+    expect(promptFollowGlobalAfterSetDefault).toHaveBeenCalledOnce();
+    expect(promptFollowGlobalAfterSetDefault).toHaveBeenCalledWith(expect.objectContaining({ newDefaultName: 'global-B' }));
+  });
+
   it('editPreset 出现破坏性 blockers 时经确认后重试', async () => {
     const { management, applyTemplatePresetToCurrent } = await importManagement();
     const { useDialogStore } = await import('../../../src/presentation-v2/stores/dialog-store');
@@ -213,5 +236,41 @@ describe('useTablePresetManagement', () => {
 
     expect(applyTemplatePresetToCurrent).toHaveBeenNthCalledWith(1, 'global-B', expect.objectContaining({ destructiveChangeConfirmed: false }));
     expect(applyTemplatePresetToCurrent).toHaveBeenNthCalledWith(2, 'global-B', expect.objectContaining({ destructiveChangeConfirmed: true }));
+  });
+
+  it('setAsDefault 全局切换出现破坏性 blockers 时经确认后重试（S1-3）', async () => {
+    const { management, applyTemplatePresetToCurrent } = await importManagement();
+    const { useDialogStore } = await import('../../../src/presentation-v2/stores/dialog-store');
+    applyTemplatePresetToCurrent
+      .mockResolvedValueOnce({ saved: false, blockers: ['删除列「HP」需要显式确认。'], error: '删除列「HP」需要显式确认。' })
+      .mockResolvedValueOnce({ saved: true });
+
+    const pending = management.setAsDefault('global-B');
+    await new Promise(r => setTimeout(r, 0));
+    useDialogStore().submitActive();
+    await pending;
+
+    expect(applyTemplatePresetToCurrent).toHaveBeenNthCalledWith(1, 'global-B', expect.objectContaining({
+      updateGlobal: true,
+      destructiveChangeConfirmed: false,
+    }));
+    expect(applyTemplatePresetToCurrent).toHaveBeenNthCalledWith(2, 'global-B', expect.objectContaining({
+      updateGlobal: true,
+      destructiveChangeConfirmed: true,
+    }));
+    const { useToastStore } = await import('../../../src/presentation-v2/stores/toast-store');
+    expect(useToastStore().items.at(-1)).toMatchObject({ kind: 'success', text: '「global-B」已设为全局默认。' });
+  });
+
+  it('setAsDefault 协调失败（saved:false）时显示真实错误且不误报成功（S1-3）', async () => {
+    const { management, applyTemplatePresetToCurrent, promptFollowGlobalAfterSetDefault } = await importManagement();
+    applyTemplatePresetToCurrent.mockResolvedValueOnce({ saved: false, error: '目标聊天已切换，已取消模板提交。' });
+
+    await management.setAsDefault('global-B');
+
+    const { useToastStore } = await import('../../../src/presentation-v2/stores/toast-store');
+    expect(useToastStore().items.at(-1)).toMatchObject({ kind: 'error', text: '目标聊天已切换，已取消模板提交。' });
+    expect(useToastStore().items.some(item => item.kind === 'success')).toBe(false);
+    expect(promptFollowGlobalAfterSetDefault).not.toHaveBeenCalled();
   });
 });

@@ -60,6 +60,7 @@ import {
   resolveAgentWorldbookScopeBookNames_ACU,
   writeAgentWorldbookStateToWorldbook_ACU,
 } from './agent-worldbook-config-meta';
+import { runExclusiveAgentWorldbookOperation_ACU } from './agent-worldbook-operation-lock';
 
 export interface AgentWorldbookTakeoverEntryUpdate_ACU {
   bookName: string;
@@ -486,6 +487,7 @@ export function getPlotAgentWorldbookSnapshot_ACU(): AgentWorldbookControlSnapsh
 
 export function setPlotAgentWorldbookSnapshot_ACU(snapshot: AgentWorldbookControlSnapshot_ACU): void {
   setAgentWorldbookSnapshotState_ACU(snapshot);
+  plotAgentWorldbookSnapshotHydrated_ACU = true;
 }
 
 /**
@@ -495,6 +497,33 @@ export function setPlotAgentWorldbookSnapshot_ACU(snapshot: AgentWorldbookContro
 export function resetPlotAgentWorldbookSessionSnapshot_ACU(): void {
   setAgentWorldbookSnapshotState_ACU(buildInactiveSnapshot_ACU());
   preTakeoverSnapshotResolutionPromisesBySignature_ACU.clear();
+  plotAgentWorldbookSnapshotHydrated_ACU = false;
+  plotAgentWorldbookSnapshotHydrationPromise_ACU = null;
+}
+
+/** 内存快照是否已从持久账本（或权威操作结果）填充过；页面刷新/会话切换后为 false。 */
+let plotAgentWorldbookSnapshotHydrated_ACU = false;
+let plotAgentWorldbookSnapshotHydrationPromise_ACU: Promise<void> | null = null;
+
+/**
+ * 确保内存快照至少水合过一次持久账本。
+ * 供生成前的接管激活判定使用：页面刷新后内存快照为空，若不回读持久态，
+ * 接管活跃期间的最终提示词过滤会在冷启动首轮被跳过。
+ * 读取失败只记录警告并保持未水合（下轮重试），不阻断本轮生成。
+ */
+export async function ensurePlotAgentWorldbookSnapshotHydrated_ACU(): Promise<void> {
+  if (plotAgentWorldbookSnapshotHydrated_ACU) return;
+  if (!plotAgentWorldbookSnapshotHydrationPromise_ACU) {
+    plotAgentWorldbookSnapshotHydrationPromise_ACU = refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU()
+      .then((): void => undefined)
+      .catch(error => {
+        logWarn_ACU('[Agent世界书] 冷启动水合接管快照失败，本轮按未接管处理，下轮将重试。', error);
+      })
+      .finally(() => {
+        plotAgentWorldbookSnapshotHydrationPromise_ACU = null;
+      });
+  }
+  await plotAgentWorldbookSnapshotHydrationPromise_ACU;
 }
 
 export interface PreTakeoverWorldbookSnapshotResolution_ACU {
@@ -513,6 +542,8 @@ async function readAndMaybeCachePlotAgentWorldbookSnapshot_ACU(
 ): Promise<AgentWorldbookControlSnapshot_ACU> {
   const snapshot = await readPlotAgentWorldbookSnapshotFromStateOrLegacy_ACU(resolvedBookNames, selectionSignature, { readContext, onStaleBookNames: options.onStaleBookNames });
   setAgentWorldbookSnapshotStateIfRevision_ACU(initialRevision, snapshot);
+  // CAS 失败也视为已水合：说明并发方已写入更新的权威快照。
+  plotAgentWorldbookSnapshotHydrated_ACU = true;
   return snapshot;
 }
 
@@ -530,6 +561,7 @@ async function refreshPlotAgentWorldbookSnapshotWithStale_ACU(
     { readContext, onStaleBookNames: (stale) => { staleBookNames = stale; }, backfillMissingMeta: false },
   );
   setAgentWorldbookSnapshotStateIfRevision_ACU(initialRevision, snapshot);
+  plotAgentWorldbookSnapshotHydrated_ACU = true;
   return { snapshot, staleBookNames };
 }
 
@@ -1035,10 +1067,22 @@ async function collectRecoveredPendingSnapshotUpdates_ACU(
   return recovered;
 }
 
-export async function writeFinalGenerationGreenlights_ACU(greenlights: unknown): Promise<boolean> {
-  const snapshot = getPlotAgentWorldbookSnapshot_ACU();
-  const snapshotUidSetByBook = buildSnapshotUidSetByBook_ACU(snapshot);
-  if (snapshotUidSetByBook.size === 0) return false;
+export function writeFinalGenerationGreenlights_ACU(greenlights: unknown): Promise<boolean> {
+  return runExclusiveAgentWorldbookOperation_ACU(() => writeFinalGenerationGreenlightsExclusive_ACU(greenlights));
+}
+
+async function writeFinalGenerationGreenlightsExclusive_ACU(greenlights: unknown): Promise<boolean> {
+  let snapshot = getPlotAgentWorldbookSnapshot_ACU();
+  let snapshotUidSetByBook = buildSnapshotUidSetByBook_ACU(snapshot);
+  if (snapshotUidSetByBook.size === 0) {
+    // 内存快照可能因刷新页面/会话切换被清空，回退到持久账本快照重建后再判定。
+    // 刻意不用完整 refresh：其 comment 扫描与 merge 会把账本写入失败场景下的
+    // pending 条目调和成 applied 并污染内存缓存，破坏"账本未确认不消费绿灯"的恢复不变量。
+    const selectionSignature = buildWorldbookSelectionSignature_ACU(await resolveTakeoverBookNames_ACU());
+    snapshot = await readPlotAgentWorldbookStateSnapshotOnly_ACU(selectionSignature);
+    snapshotUidSetByBook = buildSnapshotUidSetByBook_ACU(snapshot);
+    if (snapshotUidSetByBook.size === 0) return false;
+  }
 
   const normalizedGreenlights = normalizeAgentWorldbookRefs_ACU(greenlights);
   const allowedKeySet = buildAllowedFinalGreenlightKeySet_ACU(normalizedGreenlights, snapshotUidSetByBook);
@@ -1114,7 +1158,13 @@ export interface ClearFinalGenerationGreenlightsResult_ACU {
  * - 读取权限/宿主契约/写入失败 → failed（失败关闭，由调用方阻断 AI）。
  * 不自动修改 manualSelection 或角色绑定，只记录安全诊断。
  */
-export async function clearFinalGenerationGreenlights_ACU(
+export function clearFinalGenerationGreenlights_ACU(
+  readContext?: StrictLorebookReadContext_ACU,
+): Promise<ClearFinalGenerationGreenlightsResult_ACU> {
+  return runExclusiveAgentWorldbookOperation_ACU(() => clearFinalGenerationGreenlightsExclusive_ACU(readContext));
+}
+
+async function clearFinalGenerationGreenlightsExclusive_ACU(
   readContext?: StrictLorebookReadContext_ACU,
 ): Promise<ClearFinalGenerationGreenlightsResult_ACU> {
   function buildFailedError(
@@ -1212,7 +1262,11 @@ export async function clearFinalGenerationGreenlights_ACU(
   };
 }
 
-export async function takeoverWorldbookGreenlights_ACU(): Promise<AgentWorldbookTakeoverResult_ACU> {
+export function takeoverWorldbookGreenlights_ACU(): Promise<AgentWorldbookTakeoverResult_ACU> {
+  return runExclusiveAgentWorldbookOperation_ACU(() => takeoverWorldbookGreenlightsExclusive_ACU());
+}
+
+async function takeoverWorldbookGreenlightsExclusive_ACU(): Promise<AgentWorldbookTakeoverResult_ACU> {
   const availability = await resolveAgentWorldbookFilterAvailability_ACU();
   const resolvedBookNames = availability.bookNames;
   const selectionSignature = buildWorldbookSelectionSignature_ACU(resolvedBookNames);
@@ -1353,7 +1407,13 @@ export async function takeoverWorldbookGreenlights_ACU(): Promise<AgentWorldbook
   };
 }
 
-export async function restoreWorldbookGreenlights_ACU(options: {
+export function restoreWorldbookGreenlights_ACU(options: {
+  cleanupMode?: 'full' | 'restore_only';
+} = {}): Promise<AgentWorldbookRestoreResult_ACU> {
+  return runExclusiveAgentWorldbookOperation_ACU(() => restoreWorldbookGreenlightsExclusive_ACU(options));
+}
+
+async function restoreWorldbookGreenlightsExclusive_ACU(options: {
   cleanupMode?: 'full' | 'restore_only';
 } = {}): Promise<AgentWorldbookRestoreResult_ACU> {
   const cleanupMode = options.cleanupMode || 'full';

@@ -36,6 +36,7 @@ import {
   normalizeEditablePromptSegments_ACU,
 } from './agent-prompt-template';
 import { saveSettings_ACU } from '../settings/settings-service';
+import { runExclusiveAgentWorldbookOperation_ACU } from './agent-worldbook-operation-lock';
 
 export const AGENT_WORLDBOOK_CONFIG_COMMENT_ACU = 'TavernDB-ACU-AgentWorldbookConfig';
 
@@ -810,7 +811,15 @@ export async function writeAgentWorldbookStateToWorldbook_ACU(patch: {
   }
 }
 
-export async function writeAgentWorldbookControlToWorldbook_ACU(
+export function writeAgentWorldbookControlToWorldbook_ACU(
+  controlPatch: Partial<AgentWorldbookControl_ACU>,
+): Promise<AgentWorldbookControlWriteResult_ACU> {
+  // UI 配置写（含 scope 变更引发的条目恢复）与接管/恢复/绿灯操作互斥；
+  // 内层 writeAgentWorldbookStateToWorldbook_ACU 不加锁，供 takeover 持锁期间调用。
+  return runExclusiveAgentWorldbookOperation_ACU(() => writeAgentWorldbookControlToWorldbookExclusive_ACU(controlPatch));
+}
+
+async function writeAgentWorldbookControlToWorldbookExclusive_ACU(
   controlPatch: Partial<AgentWorldbookControl_ACU>,
 ): Promise<AgentWorldbookControlWriteResult_ACU> {
   const result = await writeAgentWorldbookStateToWorldbook_ACU({ control: controlPatch });

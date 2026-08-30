@@ -38,6 +38,7 @@ async function mountAdvancedToolsSqlPanel(opts: {
     currentJsonTableData_ACU: {},
     currentChatFileIdentifier_ACU: 'chat-sql',
     coreApisAreReady_ACU: true,
+    isAutoUpdatingCard_ACU: false,
     getCurrentIsolationKey_ACU: () => '',
   }));
   vi.doMock('../../../src/service/table/storage-mode', () => ({

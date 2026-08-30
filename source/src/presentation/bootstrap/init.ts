@@ -59,6 +59,9 @@ import {
   hydrateStorageProviderFromSnapshot_ACU
 } from '../../service/table/table-storage-strategy';
 import { runLegacyBiotrackerSilentMigration_ACU } from '../../service/biotracker/silent-migration';
+import { captureCheckpointVaultForCurrentChat_ACU, installCheckpointDeleteGuard_ACU } from '../../service/chat/checkpoint-delete-guard';
+import { auditDormantDataIntegrity_ACU } from '../../service/template/dormant-data-service';
+import { getUiSurface_ACU, showUiSurfaceToast_ACU } from '../../shared/ui-surface-registry';
 import {
   createCanonicalSnapshotEnvelope_ACU
 } from '../../service/table/canonical-snapshot-envelope';
@@ -191,6 +194,31 @@ async function ensureInitialSeedCheckpointBeforeGeneration_ACU(reason: string, {
   } catch (error) {
     logWarn_ACU(`[InitialSeed] ${reason} 初始化 checkpoint 失败，继续生成流程:`, error);
     return false;
+  }
+}
+
+/** S3-3：休眠数据完整性自检（只读），发现问题经 ui-surface 警告并可跳转数据管理页。 */
+function runDormantIntegrityAuditQuietly_ACU(stage: string): void {
+  try {
+    const audit = auditDormantDataIntegrity_ACU();
+    if (!audit.ok) {
+      logWarn_ACU(`[休眠自检] ${stage} 审计不可用：${audit.error || '未知错误'}`);
+      return;
+    }
+    if (audit.issues.length === 0) return;
+    for (const issue of audit.issues) {
+      logWarn_ACU(`[休眠自检] ${stage} 发现问题（${issue.kind}）：${issue.message}`);
+    }
+    showUiSurfaceToast_ACU({
+      kind: 'warning',
+      text: `检测到 ${audit.issues.length} 项休眠数据完整性问题（涉及恢复来源缺失或损坏），相关表暂时无法唤醒。详情见数据管理页的「休眠数据」面板。`,
+      action: {
+        label: '打开数据管理',
+        onClick: async () => { await getUiSurface_ACU()?.openSettings?.(); },
+      },
+    });
+  } catch (e: any) {
+    logWarn_ACU(`[休眠自检] ${stage} 审计执行失败: ${e?.message}`);
   }
 }
 
@@ -760,6 +788,17 @@ export   function mainInitialize_ACU() {
           // 走 guide/模板基底，hydrate 失败或 degraded 时回退冷 reload。
           const refreshResult = await refreshMergedDataAndNotifyWithUI_ACU();
           lastDelayedRebuildRefreshOk_ACU = true; // [M3]
+
+          // S0-4：初始加载完成后捕获 checkpoint 保管库（删楼恢复的影子基线）。
+          try {
+              captureCheckpointVaultForCurrentChat_ACU();
+          } catch (e: any) {
+              logWarn_ACU(`[删楼守卫] initWithChatId 保管库捕获失败: ${e?.message}`);
+          }
+
+          // S3-3：初始加载完成后做休眠完整性自检（只读，发现孤儿即警告）。
+          runDormantIntegrityAuditQuietly_ACU('initWithChatId');
+
           if (isSqliteMode()) {
               const envelope = refreshResult
                   && !refreshResult.degraded

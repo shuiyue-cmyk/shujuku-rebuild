@@ -264,6 +264,41 @@ describe('useVisualizerConfigEditing', () => {
     expect(JSON.stringify({ content: store.currentSheet.content, locks: store.tableLockDrafts, dirty: store.dirty })).toBe(before);
   });
 
+  it('重命名表自动把旧名累积进 tableAliases 并标记 dirty（S1-5）', async () => {
+    const store = await loadSheet();
+    const { useVisualizerConfigEditing } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerConfigEditing');
+    const config = useVisualizerConfigEditing();
+
+    config.renameSheet('我的背包表');
+
+    expect(store.tempData.sheet_a.name).toBe('我的背包表');
+    expect(store.tempData.sheet_a.sourceData.tableAliases).toEqual(['背包表']);
+    expect(store.dirty).toBe(true);
+  });
+
+  it('往返改名后别名链只保留非当前名：A→B→A 得到 [B]', async () => {
+    const store = await loadSheet();
+    const { useVisualizerConfigEditing } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerConfigEditing');
+    const config = useVisualizerConfigEditing();
+
+    config.renameSheet('我的背包表');
+    config.renameSheet('背包表');
+
+    expect(store.tempData.sheet_a.name).toBe('背包表');
+    // '背包表' 回到当前名（被剔除），'我的背包表' 作为历史名保留。
+    expect(store.tempData.sheet_a.sourceData.tableAliases).toEqual(['我的背包表']);
+  });
+
+  it('canonical 等价改名（仅空白差异）不写入自指别名', async () => {
+    const store = await loadSheet();
+    const { useVisualizerConfigEditing } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerConfigEditing');
+    const config = useVisualizerConfigEditing();
+
+    config.renameSheet(' 背包表 ');
+
+    expect(store.tempData.sheet_a.sourceData.tableAliases).toBeUndefined();
+  });
+
   it('saving 或 committed 状态下拒绝配置和特殊索引锁编辑且不改变草稿', async () => {
     const store = await loadSheet();
     const { useVisualizerConfigEditing } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerConfigEditing');

@@ -304,8 +304,7 @@ const contextFields: ContextFieldMeta[] = visibleContextFieldKeys.map((key) => (
 }));
 
 async function onExecutionModeChange(value: string): Promise<void> {
-  await agentControl.setAgentPlotExecutionMode(value as AgentPlotExecutionModeSetting_ACU);
-  emit('current-worldbook-changed');
+  if (await agentControl.setAgentPlotExecutionMode(value as AgentPlotExecutionModeSetting_ACU)) emit('current-worldbook-changed');
 }
 
 async function onContextChange(key: AgentContextSettingKey_ACU, value: string | number): Promise<void> {

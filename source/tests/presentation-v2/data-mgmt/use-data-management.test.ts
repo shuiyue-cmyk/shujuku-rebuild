@@ -89,7 +89,7 @@ describe('useDataManagement', () => {
     expect(d.commit).toHaveBeenCalledWith('plan-1', { confirmOrphanDataReplace: true });
   });
 
-  it('purge 成功时不调用 reload/持久化/世界书刷新，只走本页 refresh 与 toast', async () => {
+  it('purge 成功时不在 UI 层 reload（回落由 purge 服务内部完成），只刷新合并视图与 toast', async () => {
     const d = await loadFlow();
     d.deleteScoped.mockResolvedValueOnce({
       path: 'purge',
@@ -102,10 +102,11 @@ describe('useDataManagement', () => {
 
     await d.flow.deleteLocalData('all');
 
-    // 硬清空契约：禁止任何可能重新物化 runtime/provider/世界书的调用。
+    // S1-1：runtime 回落由 purge 服务内部完成，UI 层不再 loadOrCreate/reloadProvider；
+    // 世界书清理也由 purge 内部完成。UI 层只刷新合并视图让面板展示模板空结构。
     expect(d.loadOrCreate).not.toHaveBeenCalled();
     expect(d.reloadProvider).not.toHaveBeenCalled();
-    expect(d.refreshMerged).not.toHaveBeenCalled();
+    expect(d.refreshMerged).toHaveBeenCalledOnce();
     expect(d.cleanupWorldbook).not.toHaveBeenCalled();
     expect(d.deleteGenerated).not.toHaveBeenCalled();
     // 本页 refresh 与成功 toast 保留。
@@ -134,7 +135,7 @@ describe('useDataManagement', () => {
     expect(d.cleanupWorldbook).not.toHaveBeenCalled();
   });
 
-  it('purge 带 cleanupWarnings 时只展示 warning，不触发任何重载', async () => {
+  it('purge 带 cleanupWarnings 时展示 warning，仍刷新合并视图但不在 UI 层重载', async () => {
     const d = await loadFlow();
     d.deleteScoped.mockResolvedValueOnce({
       path: 'purge',
@@ -151,7 +152,7 @@ describe('useDataManagement', () => {
     expect(d.toastWarning).toHaveBeenCalled();
     expect(d.loadOrCreate).not.toHaveBeenCalled();
     expect(d.reloadProvider).not.toHaveBeenCalled();
-    expect(d.refreshMerged).not.toHaveBeenCalled();
+    expect(d.refreshMerged).toHaveBeenCalledOnce();
     expect(d.cleanupWorldbook).not.toHaveBeenCalled();
   });
 

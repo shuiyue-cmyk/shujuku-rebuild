@@ -3783,6 +3783,50 @@ describe('commitCurrentFloorTemplateChanges_ACU', () => {
     expect(mocks.loadReplayDetailed).toHaveBeenCalledTimes(1);
   });
 
+  it('[S3-4] hide checkpoint 前向记录 hideSourcePresetName（休眠溯源）', async () => {
+    const sheetToHide = { ...sheetA, uid: 'sheet_a', name: '表A', content: [['row_id', 'value'], ['1', 'active-data']] };
+    const message = seedFrame({ logEntries: [] });
+    mocks.loadReplayDetailed.mockResolvedValue({
+      baseKind: 'full_checkpoint',
+      data: { sheet_a: sheetToHide, mate: { type: 'acu', version: 1 } },
+    });
+
+    const result = await commitCurrentFloorTemplateChanges_ACU({
+      isolationKey: '',
+      sheetChanges: [{ kind: 'hide', sheetKey: 'sheet_a', sheetData: sheetToHide }],
+      guideData: { sheet_a: { name: '表A' } },
+      hideSourcePresetName: '切换前预设',
+      createdAt: 30,
+    });
+
+    expect(result.saved).toBe(true);
+    const hidden = message.TavernDB_ACU_IsolatedData[''].storageFrame.perSheetCheckpoints.sheet_a;
+    expect(hidden?.timeline?.kind).toBe('sheet_hide');
+    expect(hidden?.hideSourcePresetName).toBe('切换前预设');
+  });
+
+  it('[S3-4] 未提供 hideSourcePresetName（或空白）时 hide checkpoint 不写该字段', async () => {
+    const sheetToHide = { ...sheetA, uid: 'sheet_a', name: '表A', content: [['row_id', 'value'], ['1', 'active-data']] };
+    const message = seedFrame({ logEntries: [] });
+    mocks.loadReplayDetailed.mockResolvedValue({
+      baseKind: 'full_checkpoint',
+      data: { sheet_a: sheetToHide, mate: { type: 'acu', version: 1 } },
+    });
+
+    const result = await commitCurrentFloorTemplateChanges_ACU({
+      isolationKey: '',
+      sheetChanges: [{ kind: 'hide', sheetKey: 'sheet_a', sheetData: sheetToHide }],
+      guideData: { sheet_a: { name: '表A' } },
+      hideSourcePresetName: '   ',
+      createdAt: 30,
+    });
+
+    expect(result.saved).toBe(true);
+    const hidden = message.TavernDB_ACU_IsolatedData[''].storageFrame.perSheetCheckpoints.sheet_a;
+    expect(hidden?.timeline?.kind).toBe('sheet_hide');
+    expect('hideSourcePresetName' in (hidden || {})).toBe(false);
+  });
+
   it('[阶段7] 显式 reveal 恢复 hide 前最后可信数据，不被 caller 模板空壳覆盖', async () => {
     const hiddenData = { ...sheetB, uid: 'sheet_hidden', name: '主角装备表', content: [['row_id', 'value'], ['1', '历史数据行'], ['2', '另一行']] };
     const message = seedFrame({
@@ -3838,6 +3882,41 @@ describe('commitCurrentFloorTemplateChanges_ACU', () => {
     const revived = message.TavernDB_ACU_IsolatedData[''].storageFrame.perSheetCheckpoints.sheet_hidden;
     expect(revived?.timeline?.kind).toBe('sheet_reveal');
     expect(revived?.data?.content).toEqual([['row_id', 'value'], ['1', '历史数据行']]);
+  });
+
+  it('reveal 后列级再协调（S1-4）：休眠期模板演进时补新列、模板缺失列进入列级休眠', async () => {
+    // hide 时表结构为 [title, legacy]；休眠期间模板演进为 [title, priority]。
+    const hiddenData = { ...sheetB, uid: 'sheet_hidden', name: '主角装备表', sourceData: {}, content: [['row_id', 'title', 'legacy'], ['1', '找线索', '旧值']] };
+    const message = seedFrame({
+      logEntries: [],
+      perSheetCheckpoints: {
+        sheet_hidden: {
+          kind: 'sheet_full', createdAt: 10, reason: 'schema_change', sheetKey: 'sheet_hidden',
+          data: hiddenData,
+          timeline: { kind: 'sheet_hide', activateAtMessageIndex: 0, afterSeq: 1 },
+        },
+      },
+    });
+    const activeData = message.TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint.data;
+    mocks.loadReplayDetailed
+      .mockResolvedValueOnce({ baseKind: 'full_checkpoint', data: activeData })
+      .mockResolvedValue({ baseKind: 'full_checkpoint', data: activeData });
+
+    const shellData = { ...sheetB, uid: 'sheet_hidden', name: '主角装备表', sourceData: {}, content: [['row_id', 'title', 'priority']] };
+    const result = await commitCurrentFloorTemplateChanges_ACU({
+      isolationKey: '',
+      sheetChanges: [{ kind: 'reveal', sheetKey: 'sheet_hidden', sheetData: shellData }],
+      guideData: { sheet_hidden: { name: '主角装备表' } },
+      createdAt: 30,
+    });
+
+    expect(result.saved).toBe(true);
+    const revived = message.TavernDB_ACU_IsolatedData[''].storageFrame.perSheetCheckpoints.sheet_hidden;
+    expect(revived?.timeline?.kind).toBe('sheet_reveal');
+    // 匹配列（title）继承数据；模板新增列（priority，nullable）null 填充；
+    // 模板缺失列（legacy）保留为尾部隐藏列，数据不删。
+    expect(revived?.data?.content).toEqual([['row_id', 'title', 'priority', 'legacy'], ['1', '找线索', null, '旧值']]);
+    expect(revived?.data?.sourceData?.hiddenPhysicalColumns).toHaveLength(1);
   });
 
 
@@ -4713,6 +4792,65 @@ describe('collectV2FullCheckpointIndices_ACU / assertSingleActiveFullCheckpointV
     mocks.chat.splice(0, mocks.chat.length, legacyTag, badLogEntries);
     expect(collectV2FullCheckpointIndices_ACU(mocks.chat, '')).toEqual([]);
     expect(assertSingleActiveFullCheckpointV2_ACU(mocks.chat, '', 'test')).toBeNull();
+  });
+});
+
+describe('writeInitFullCheckpointFrameV2_ACU（S2-4 init 写协议统一入口）', () => {
+  let writeInitFullCheckpointFrameV2_ACU: typeof import('../../../src/service/table/storage-frame-v2-persist')['writeInitFullCheckpointFrameV2_ACU'];
+  beforeAll(async () => {
+    ({ writeInitFullCheckpointFrameV2_ACU } = await import('../../../src/service/table/storage-frame-v2-persist'));
+  });
+
+  function makeInitCheckpoint(reason: string = 'init'): any {
+    return { kind: 'full', createdAt: 1, reason, data: { mate: { type: 'acu' }, sheet_a: { uid: 'sheet_a', name: 'A', content: [['row_id', 'v']] } } };
+  }
+
+  it('正常写入：frame 形状正确，同楼其他隔离键数据原样保留', () => {
+    const chat = [
+      { is_user: true, mes: 'user' },
+      { is_user: false, mes: 'ai', TavernDB_ACU_IsolatedData: { other_key: { legacy: true } } },
+    ];
+    const checkpoint = makeInitCheckpoint();
+
+    writeInitFullCheckpointFrameV2_ACU({ chat, targetIndex: 1, isolationKey: '', checkpoint });
+
+    expect(chat[1].TavernDB_ACU_IsolatedData).toEqual({
+      other_key: { legacy: true },
+      '': { _acu_storage_version: 2, storageFrame: { version: 2, checkpoint, logEntries: [] } },
+    });
+  });
+
+  it('目标楼不存在或是 user 楼时抛错且不写入', () => {
+    const chat = [{ is_user: true, mes: 'user' }];
+    expect(() => writeInitFullCheckpointFrameV2_ACU({ chat, targetIndex: 0, isolationKey: '', checkpoint: makeInitCheckpoint() }))
+      .toThrow(/不是 AI 楼层/);
+    expect(() => writeInitFullCheckpointFrameV2_ACU({ chat, targetIndex: 5, isolationKey: '', checkpoint: makeInitCheckpoint() }))
+      .toThrow(/不存在或不是 AI 楼层/);
+    expect((chat[0] as any).TavernDB_ACU_IsolatedData).toBeUndefined();
+  });
+
+  it('非 init reason 或非 full kind 时拒绝', () => {
+    const chat = [{ is_user: false, mes: 'ai' }];
+    expect(() => writeInitFullCheckpointFrameV2_ACU({ chat, targetIndex: 0, isolationKey: '', checkpoint: makeInitCheckpoint('manual') }))
+      .toThrow(/只接受 reason:'init'/);
+    const notFull = { ...makeInitCheckpoint(), kind: 'delta' };
+    expect(() => writeInitFullCheckpointFrameV2_ACU({ chat, targetIndex: 0, isolationKey: '', checkpoint: notFull }))
+      .toThrow(/只接受 reason:'init'/);
+  });
+
+  it('写入后同隔离键存在多个 full checkpoint 时抛单根违例', () => {
+    const existingFull = {
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': { _acu_storage_version: 2, storageFrame: { version: 2, checkpoint: makeInitCheckpoint('compaction' as any), logEntries: [] } },
+      },
+    };
+    // 既有 full 的 reason 与 init 无关，只要 kind=full 就计入单根统计
+    (existingFull.TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint as any).reason = 'compaction';
+    const chat = [existingFull, { is_user: false, mes: 'ai-2' }];
+
+    expect(() => writeInitFullCheckpointFrameV2_ACU({ chat, targetIndex: 1, isolationKey: '', checkpoint: makeInitCheckpoint() }))
+      .toThrow(/单根不变量.*2 个 full checkpoint/);
   });
 });
 

@@ -28,11 +28,13 @@ vi.mock('../../src/shared/host-api', () => ({
 
 let mockCurrentJsonTableData: any = null;
 let mockSettings: any = { dataIsolationEnabled: false, dataIsolationCode: '' };
+let mockIsAutoUpdatingCard = false;
 
 vi.mock('../../src/service/runtime/state-manager', () => ({
   currentChatFileIdentifier_ACU: 'chat-a',
   get currentJsonTableData_ACU() { return mockCurrentJsonTableData; },
   get settings_ACU() { return mockSettings; },
+  get isAutoUpdatingCard_ACU() { return mockIsAutoUpdatingCard; },
   getCurrentIsolationKey_ACU: vi.fn(() => ''),
   _set_currentJsonTableData_ACU: vi.fn((data: any) => { mockCurrentJsonTableData = data; }),
 }));
@@ -391,6 +393,86 @@ describe('createTableCrudApi — SQLite 模式', () => {
     api = createTableCrudApi(mockCtx);
   });
 
+  // ─── AI 填表期间外部写入互斥 ───
+  describe('isAutoUpdatingCard 填表互斥', () => {
+    afterEach(() => {
+      mockIsAutoUpdatingCard = false;
+    });
+
+    it('填表进行中 updateCell 被拒绝：不执行 SQL、不落盘、返回 false', async () => {
+      mockIsAutoUpdatingCard = true;
+      const result = await api.updateCell('背包物品表', 1, '数量', '10');
+      expect(result).toBe(false);
+      expect(mockExecuteRuntimeMutation).not.toHaveBeenCalled();
+      expect(mockPersistTablesToChatMessage).not.toHaveBeenCalled();
+    });
+
+    it('填表结束后同一调用恢复可用', async () => {
+      mockIsAutoUpdatingCard = true;
+      expect(await api.updateCell('背包物品表', 1, '数量', '10')).toBe(false);
+      mockIsAutoUpdatingCard = false;
+      expect(await api.updateCell('背包物品表', 1, '数量', '10')).toBe(true);
+      expect(mockExecuteRuntimeMutation).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // ─── 表格锁对开放 API 生效（S2-2）───
+  describe('表格锁对 CRUD API 生效', () => {
+    // scopeKey = 'chat-a::'（currentChatFileIdentifier='chat-a'，isolationKey=''）
+    function setLocks(bucket: any) {
+      mockSettings.tableUpdateLocks = { 'chat-a::': { sheet_0: bucket } };
+    }
+
+    afterEach(() => {
+      delete mockSettings.tableUpdateLocks;
+    });
+
+    it('行锁拒绝 updateCell / updateRow / deleteRow，不影响其他行', async () => {
+      setLocks({ v: 2, rowIds: ['1'], colNames: [], cells: [] });
+      expect(await api.updateCell('背包物品表', 1, '数量', '10')).toBe(false);
+      expect(await api.updateRow('背包物品表', 1, { '数量': '10' })).toBe(false);
+      expect(await api.deleteRow('背包物品表', 1)).toBe(false);
+      expect(mockExecuteRuntimeMutation).not.toHaveBeenCalled();
+      // 未锁定的第 2 行不受影响
+      expect(await api.updateCell('背包物品表', 2, '数量', '9')).toBe(true);
+      expect(mockExecuteRuntimeMutation).toHaveBeenCalledTimes(1);
+    });
+
+    it('列锁拒绝对该列的 updateCell 与含该列的 updateRow，其他列可写', async () => {
+      setLocks({ v: 2, rowIds: [], colNames: ['数量'], cells: [] });
+      expect(await api.updateCell('背包物品表', 1, '数量', '10')).toBe(false);
+      expect(await api.updateRow('背包物品表', 1, { '物品名': '长剑', '数量': '10' })).toBe(false);
+      expect(mockExecuteRuntimeMutation).not.toHaveBeenCalled();
+      expect(await api.updateCell('背包物品表', 1, '物品名', '长剑')).toBe(true);
+    });
+
+    it('单元格锁只拒绝对应格；含锁定格的行不可删除', async () => {
+      setLocks({ v: 2, rowIds: [], colNames: [], cells: [['1', '数量']] });
+      expect(await api.updateCell('背包物品表', 1, '数量', '10')).toBe(false);
+      expect(await api.deleteRow('背包物品表', 1)).toBe(false);
+      expect(mockExecuteRuntimeMutation).not.toHaveBeenCalled();
+      expect(await api.updateCell('背包物品表', 1, '物品名', '长剑')).toBe(true);
+      expect(await api.updateCell('背包物品表', 2, '数量', '9')).toBe(true);
+    });
+
+    it('legacy 索引锁自动按内容迁移后同样生效', async () => {
+      // rows:[0] 指向第一条数据行（row_id=1）
+      setLocks({ rows: [0], cols: [], cells: [] });
+      expect(await api.updateCell('背包物品表', 1, '数量', '10')).toBe(false);
+      expect(mockExecuteRuntimeMutation).not.toHaveBeenCalled();
+      // 迁移后升级为 v2 身份桶
+      expect(mockSettings.tableUpdateLocks['chat-a::'].sheet_0.v).toBe(2);
+      expect(mockSettings.tableUpdateLocks['chat-a::'].sheet_0.rowIds).toEqual(['1']);
+    });
+
+    it('锁不阻止 insertRow', async () => {
+      setLocks({ v: 2, rowIds: ['1'], colNames: ['数量'], cells: [] });
+      const newIndex = await api.insertRow('背包物品表', { '物品名': '盾牌', '数量': '1' });
+      expect(newIndex).not.toBe(-1);
+      expect(mockExecuteRuntimeMutation).toHaveBeenCalled();
+    });
+  });
+
   // ─── updateCell ───
   describe('updateCell', () => {
     it('生成正确的 UPDATE SQL（列名为字符串）', async () => {
@@ -588,6 +670,28 @@ describe('createTableCrudApi — SQLite 模式', () => {
         'INSERT INTO `beibaowupinbiao` (`item_name`, `quantity`) VALUES (?, ?);',
         ['盾牌', '1'],
       );
+    });
+
+    it('默认提交的通知契约：notifyMeta.persisted=true（S2-1）', async () => {
+      const { refreshMergedDataAndNotifyWithUI_ACU } = await import('../../src/presentation/components/pipeline-ui-helpers');
+      vi.mocked(refreshMergedDataAndNotifyWithUI_ACU).mockClear();
+
+      await api.insertRow('背包物品表', { '物品名': '盾牌' });
+
+      expect(refreshMergedDataAndNotifyWithUI_ACU).toHaveBeenCalledWith(expect.objectContaining({
+        notifyMeta: { persisted: true },
+      }));
+    });
+
+    it('skipChatSave 提交的通知契约：notifyMeta.persisted=false（S2-1）', async () => {
+      const { refreshMergedDataAndNotifyWithUI_ACU } = await import('../../src/presentation/components/pipeline-ui-helpers');
+      vi.mocked(refreshMergedDataAndNotifyWithUI_ACU).mockClear();
+
+      await api.insertRow({ tableName: '背包物品表', data: { '物品名': '盾牌' }, skipChatSave: true });
+
+      expect(refreshMergedDataAndNotifyWithUI_ACU).toHaveBeenCalledWith(expect.objectContaining({
+        notifyMeta: { persisted: false },
+      }));
     });
 
     it('跳过 row_id 列（自增）', async () => {

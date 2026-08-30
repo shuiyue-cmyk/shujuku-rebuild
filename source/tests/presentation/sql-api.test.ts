@@ -102,6 +102,7 @@ vi.mock('../../src/service/table/table-service', () => ({
 vi.mock('../../src/service/runtime/state-manager', () => ({
   currentChatFileIdentifier_ACU: 'chat-a',
   get currentJsonTableData_ACU() { return mockCurrentJsonTableData; },
+  isAutoUpdatingCard_ACU: false,
   getCurrentIsolationKey_ACU: vi.fn(() => 'iso-a'),
   _set_currentJsonTableData_ACU: vi.fn(),
 }));

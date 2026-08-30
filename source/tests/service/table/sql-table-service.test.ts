@@ -33,11 +33,20 @@ vi.mock('../../../src/shared/utils', () => ({
   }),
 }));
 
-// mock state-manager
+// mock state-manager（settings/身份导出供 helpers-table-lock 的锁定差异回滚链使用）
 let mockCurrentJsonTableData: any = null;
+const mockLockSettings = vi.hoisted(() => ({ value: { tableUpdateLocks: {}, specialIndexLocks: {} } as any }));
 vi.mock('../../../src/service/runtime/state-manager', () => ({
   get currentJsonTableData_ACU() { return mockCurrentJsonTableData; },
   _set_currentJsonTableData_ACU: vi.fn((v: any) => { mockCurrentJsonTableData = v; }),
+  get settings_ACU() { return mockLockSettings.value; },
+  currentChatFileIdentifier_ACU: 'test-chat',
+  getCurrentIsolationKey_ACU: () => 'iso-key',
+}));
+
+// mock settings-service（helpers-table-lock 的持久化依赖）
+vi.mock('../../../src/service/settings/settings-service', () => ({
+  saveSettings_ACU: vi.fn(),
 }));
 
 // mock table-service
@@ -433,6 +442,7 @@ describe('applySqlEditsToTableDataSnapshot_ACU', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockCurrentJsonTableData = null;
+    mockLockSettings.value = { tableUpdateLocks: {}, specialIndexLocks: {} };
   });
 
   it('基于显式快照应用 SQL，返回 workingData 且不污染输入快照与全局状态', async () => {
@@ -544,7 +554,7 @@ describe('applySqlEditsToTableDataSnapshot_ACU', () => {
     }]);
   });
 
-  it('拒绝 INSERT SELECT，避免将不可确定的 row_id 写入 V2 日志', async () => {
+  it('拒绝 INSERT SELECT（3d1bd60 未合入：保持显式列清单 fail-closed）', async () => {
     const inputSnapshot = JSON.parse(JSON.stringify(snapshotTableData));
     inputSnapshot.sheet_1 = {
       uid: 'quest_log',
@@ -564,7 +574,7 @@ describe('applySqlEditsToTableDataSnapshot_ACU', () => {
     );
 
     expect(result.success).toBe(false);
-    expect(result.error).toContain('不支持 INSERT SELECT');
+    expect(result.error).toContain('必须显式列出业务列');
     expect(inputSnapshot.sheet_0.content).toEqual([['row_id', 'item_name', 'quantity'], ['1', '铁剑', '3']]);
   });
 
@@ -663,6 +673,109 @@ describe('applySqlEditsToTableDataSnapshot_ACU', () => {
     expect((result.operations?.[0] as any).statements).toEqual([
       "INSERT INTO beibaowupinbiao (row_id, item_name, quantity) VALUES (4, '药水', 5), (5, '卷轴', 2)",
     ]);
+  });
+
+  describe('锁定差异回滚（S0-2）', () => {
+    const LOCK_SCOPE_KEY = 'test-chat::iso-key';
+
+    beforeEach(() => {
+      mockLockSettings.value = { tableUpdateLocks: {}, specialIndexLocks: {} };
+    });
+
+    it('锁定行被 UPDATE：workingData 恢复前像，补偿语句进入 operations，revertedByLocks 上报', async () => {
+      mockLockSettings.value.tableUpdateLocks = {
+        [LOCK_SCOPE_KEY]: { sheet_0: { v: 2, rowIds: ['1'], colNames: [], cells: [] } },
+      };
+      const inputSnapshot = JSON.parse(JSON.stringify(snapshotTableData));
+      const result = await applySqlEditsToTableDataSnapshot_ACU(
+        'UPDATE inventory SET quantity = 99 WHERE row_id = 1;',
+        inputSnapshot,
+        'auto_standard',
+        { targetSheetKeys: ['sheet_0'], requireSheetScopedOperations: true, allowSingleTargetFallback: true },
+      );
+
+      expect(result.success).toBe(true);
+      // 锁定行的修改已回滚
+      expect(result.workingData?.sheet_0.content[1]).toEqual(['1', '铁剑', '3']);
+      expect(result.revertedByLocks).toEqual([
+        { sheetKey: 'sheet_0', tableName: '背包物品表', kind: 'cell_restored', rowId: '1', colName: 'quantity' },
+      ]);
+      // 补偿语句必须与原始语句一起持久化（冷回放重放 SQL 时才能得到同样结果）
+      const statements = (result.operations?.[0] as any).statements as string[];
+      expect(statements).toHaveLength(2);
+      expect(statements[0]).toContain('SET quantity = 99');
+      expect(statements[1]).toBe(`UPDATE "beibaowupinbiao" SET "quantity" = '3' WHERE "row_id" = '1';`);
+    });
+
+    it('锁定行被 DELETE：整行恢复', async () => {
+      mockLockSettings.value.tableUpdateLocks = {
+        [LOCK_SCOPE_KEY]: { sheet_0: { v: 2, rowIds: ['1'], colNames: [], cells: [] } },
+      };
+      const inputSnapshot = JSON.parse(JSON.stringify(snapshotTableData));
+      const result = await applySqlEditsToTableDataSnapshot_ACU(
+        'DELETE FROM inventory WHERE row_id = 1;',
+        inputSnapshot,
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.workingData?.sheet_0.content.slice(1)).toEqual([['1', '铁剑', '3']]);
+      expect(result.revertedByLocks).toEqual([
+        { sheetKey: 'sheet_0', tableName: '背包物品表', kind: 'row_restored', rowId: '1' },
+      ]);
+    });
+
+    it('锁定列被 UPDATE：仅该列回滚，其他列修改保留', async () => {
+      mockLockSettings.value.tableUpdateLocks = {
+        [LOCK_SCOPE_KEY]: { sheet_0: { v: 2, rowIds: [], colNames: ['quantity'], cells: [] } },
+      };
+      const inputSnapshot = JSON.parse(JSON.stringify(snapshotTableData));
+      const result = await applySqlEditsToTableDataSnapshot_ACU(
+        "UPDATE inventory SET quantity = 99, item_name = '圣剑' WHERE row_id = 1;",
+        inputSnapshot,
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.workingData?.sheet_0.content[1]).toEqual(['1', '圣剑', '3']);
+      expect(result.revertedByLocks).toEqual([
+        { sheetKey: 'sheet_0', tableName: '背包物品表', kind: 'cell_restored', rowId: '1', colName: 'quantity' },
+      ]);
+    });
+
+    it('legacy 索引锁自动迁移后同样生效', async () => {
+      // 旧格式：rows:[0] 指向第一条数据行（row_id=1）
+      mockLockSettings.value.tableUpdateLocks = {
+        [LOCK_SCOPE_KEY]: { sheet_0: { rows: [0], cols: [], cells: [] } },
+      };
+      const inputSnapshot = JSON.parse(JSON.stringify(snapshotTableData));
+      const result = await applySqlEditsToTableDataSnapshot_ACU(
+        'UPDATE inventory SET quantity = 99 WHERE row_id = 1;',
+        inputSnapshot,
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.workingData?.sheet_0.content[1]).toEqual(['1', '铁剑', '3']);
+      // 迁移后存储升级为 v2 身份桶
+      expect(mockLockSettings.value.tableUpdateLocks[LOCK_SCOPE_KEY].sheet_0.v).toBe(2);
+      expect(mockLockSettings.value.tableUpdateLocks[LOCK_SCOPE_KEY].sheet_0.rowIds).toEqual(['1']);
+    });
+
+    it('锁不阻止对未锁定目标的修改与新增行', async () => {
+      mockLockSettings.value.tableUpdateLocks = {
+        [LOCK_SCOPE_KEY]: { sheet_0: { v: 2, rowIds: ['1'], colNames: [], cells: [] } },
+      };
+      const inputSnapshot = JSON.parse(JSON.stringify(snapshotTableData));
+      const result = await applySqlEditsToTableDataSnapshot_ACU(
+        "INSERT INTO inventory (item_name, quantity) VALUES ('药水', 5);",
+        inputSnapshot,
+      );
+
+      expect(result.success).toBe(true);
+      expect(result.revertedByLocks).toBeUndefined();
+      expect(result.workingData?.sheet_0.content.slice(1)).toEqual([
+        ['1', '铁剑', '3'],
+        ['2', '药水', '5'],
+      ]);
+    });
   });
 
   it('静默忽略 AI 显式 row_id，并按系统保留序列重新分配', () => {
@@ -827,12 +940,12 @@ describe('applySqlEditsToTableDataSnapshot_ACU', () => {
     )).toThrow('非法标识符');
   });
 
-  it('INSERT SELECT / 无显式列清单保持 fail-closed', () => {
+  it('INSERT SELECT / 无显式列清单保持 fail-closed（3d1bd60 未合入：走显式列清单错误路径）', () => {
     const inputSnapshot = JSON.parse(JSON.stringify(snapshotTableData));
     expect(() => materializeSystemRowIdsForSqlInserts_ACU(
       ['INSERT INTO beibaowupinbiao SELECT * FROM other'],
       inputSnapshot,
-    )).toThrow('不支持 INSERT SELECT');
+    )).toThrow('必须显式列出业务列');
     expect(() => materializeSystemRowIdsForSqlInserts_ACU(
       ['INSERT INTO beibaowupinbiao VALUES (1, \'药水\', 5)'],
       inputSnapshot,

@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   restoreMetadata: vi.fn(), clearRuntime: vi.fn(), deleteVector: vi.fn(), deleteEntries: vi.fn(),
   clearHotCache: vi.fn(), clearFlushTasks: vi.fn(), safeGc: vi.fn(),
   getEntries: vi.fn(), getTarget: vi.fn(), worldbookAvailable: vi.fn(),
+  loadOrCreate: vi.fn(), reloadProvider: vi.fn(), sqliteMode: vi.fn(), notifyTemplate: vi.fn(),
 }));
 
 vi.mock('../../../src/data/gateways/chat-gateway', () => ({
@@ -40,7 +41,13 @@ vi.mock('../../../src/data/storage/chat-history', () => ({
 vi.mock('../../../src/service/table/table-write-transaction', () => ({
   runTableWriteTransaction_ACU: (options: any, task: any) => mocks.transaction(options, task),
 }));
-vi.mock('../../../src/service/table/table-storage-strategy', () => ({ clearTableRuntimeWithoutReload_ACU: mocks.clearRuntime }));
+vi.mock('../../../src/service/table/table-storage-strategy', () => ({
+  clearTableRuntimeWithoutReload_ACU: mocks.clearRuntime,
+  reloadStorageProvider: mocks.reloadProvider,
+}));
+vi.mock('../../../src/service/table/table-service', () => ({ loadOrCreateJsonTableFromChatHistory_ACU: mocks.loadOrCreate }));
+vi.mock('../../../src/service/table/storage-mode', () => ({ isSqliteMode: mocks.sqliteMode }));
+vi.mock('../../../src/shared/template-runtime-change', () => ({ notifyTemplateRuntimeCommitted_ACU: mocks.notifyTemplate }));
 vi.mock('../../../src/service/vector/summary-vector-index-storage-service', () => ({
   deleteSummaryVectorIndexExternal_ACU: mocks.deleteVector,
   cleanupUnreachableSummaryVectorIndexFiles_ACU: mocks.safeGc,
@@ -64,6 +71,8 @@ beforeEach(() => {
   mocks.deleteVector.mockResolvedValue(undefined); mocks.worldbookAvailable.mockReturnValue(false);
   mocks.getTarget.mockResolvedValue(null); mocks.getEntries.mockResolvedValue([]);
   mocks.clearHotCache.mockResolvedValue(undefined); mocks.clearFlushTasks.mockResolvedValue(undefined); mocks.safeGc.mockResolvedValue({ failedDeletes: [] });
+  mocks.loadOrCreate.mockResolvedValue({ loaded: true, source: 'initialized' });
+  mocks.reloadProvider.mockResolvedValue(undefined); mocks.sqliteMode.mockReturnValue(false);
 });
 
 describe('purgeCurrentChatDatabaseState_ACU', () => {
@@ -112,5 +121,52 @@ describe('purgeCurrentChatDatabaseState_ACU', () => {
     expect(mocks.clearHotCache).toHaveBeenCalledWith(scope);
     expect(mocks.clearFlushTasks).toHaveBeenCalledWith(scope);
     expect(mocks.safeGc).toHaveBeenCalledWith({ scopeHints: [scope] });
+  });
+
+  it('purge 成功后回落全局模板：先清 runtime 再 loadOrCreate，native 模式不 reloadStorageProvider，并广播模板变更', async () => {
+    mocks.chat = [{ TavernDB_ACU_Data: { sheet_0: {} } }];
+    const result = await purgeCurrentChatDatabaseState_ACU();
+    expect(result.saved).toBe(true);
+    expect(mocks.clearRuntime).toHaveBeenCalledOnce();
+    expect(mocks.loadOrCreate).toHaveBeenCalledOnce();
+    expect(mocks.loadOrCreate.mock.invocationCallOrder[0]).toBeGreaterThan(mocks.clearRuntime.mock.invocationCallOrder[0]);
+    expect(mocks.reloadProvider).not.toHaveBeenCalled();
+    expect(result.cleanupWarnings || []).toEqual([]);
+    expect(mocks.notifyTemplate).toHaveBeenCalledOnce();
+  });
+
+  it('SQLite 模式下回落时额外 reloadStorageProvider', async () => {
+    mocks.chat = [{ TavernDB_ACU_Data: { sheet_0: {} } }];
+    mocks.sqliteMode.mockReturnValue(true);
+    const result = await purgeCurrentChatDatabaseState_ACU();
+    expect(result.saved).toBe(true);
+    expect(mocks.loadOrCreate).toHaveBeenCalledOnce();
+    expect(mocks.reloadProvider).toHaveBeenCalledOnce();
+  });
+
+  it('回落重建失败降级为 cleanupWarnings，不推翻已成功的 purge，也不广播模板变更', async () => {
+    mocks.chat = [{ TavernDB_ACU_Data: { sheet_0: {} } }];
+    mocks.loadOrCreate.mockRejectedValueOnce(new Error('template broken'));
+    const result = await purgeCurrentChatDatabaseState_ACU();
+    expect(result.saved).toBe(true);
+    expect(result.cleanupWarnings?.join(' ')).toContain('template broken');
+    expect(mocks.notifyTemplate).not.toHaveBeenCalled();
+  });
+
+  it('loadOrCreate 返回 loaded:false 时同样降级为 warning', async () => {
+    mocks.chat = [{ TavernDB_ACU_Data: { sheet_0: {} } }];
+    mocks.loadOrCreate.mockResolvedValueOnce({ loaded: false, source: 'initialized', error: 'no template' });
+    const result = await purgeCurrentChatDatabaseState_ACU();
+    expect(result.saved).toBe(true);
+    expect(result.cleanupWarnings?.join(' ')).toContain('no template');
+  });
+
+  it('purge 失败（严格保存回滚）时不触发回落重建', async () => {
+    mocks.chat = [{ mes: '正文', TavernDB_ACU_Data: { sheet_0: {} } }];
+    mocks.saveStrict.mockRejectedValueOnce(new Error('host down')).mockResolvedValueOnce(undefined);
+    const result = await purgeCurrentChatDatabaseState_ACU();
+    expect(result.saved).toBe(false);
+    expect(mocks.loadOrCreate).not.toHaveBeenCalled();
+    expect(mocks.reloadProvider).not.toHaveBeenCalled();
   });
 });

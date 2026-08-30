@@ -254,9 +254,10 @@ export function getSheetColumnProjection_ACU(sheet: Sheet_ACU): {
   }
   if (hiddenCanonical.includes('row_id')) throw new Error('row_id 不允许隐藏。');
   // DDL 与 content[0] 列数不一致时无法按下标推出物理列名，只能退化为按表头名判定隐藏。
-  // 这不是错误：模板范围投影会在「模板列少于运行时列」时构造这种形态。
+  // 这不是错误：模板范围投影会在「模板列少于运行时列」时构造这种形态；
+  // native 模式（无 DDL）的隐藏列本就以表头名为身份（S0-3），属契约行为，静默处理。
   const canMapByIndex = ddlColumns.length === headers.length;
-  if (hidden.length > 0 && !canMapByIndex) {
+  if (hidden.length > 0 && !canMapByIndex && ddlColumns.length > 0) {
     logWarn_ACU('[SheetProjection] DDL 与 content[0] 列数不一致，隐藏列按表头名匹配。');
   }
   const physicalNames = canMapByIndex

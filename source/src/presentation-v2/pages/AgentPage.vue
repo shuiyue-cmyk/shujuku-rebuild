@@ -31,6 +31,8 @@
           :groups="entries.groups.value"
           :filter="entryFilter"
           :loading="entries.status.value === 'loading'"
+          :status="entries.status.value"
+          :error="entries.error.value"
           :empty-text="entryEmptyText"
           :show-entry-toggle="false"
           @toggle-skillify="(bookName: string, uid: number, checked: boolean) => entries.toggleSkillifyEntry(bookName, uid, checked)"
@@ -93,6 +95,7 @@ type WorldbookSkillDraft = { description: string; triggerWhen: string };
 
 const worldbook = useWorldbookSelector();
 const agentControl = usePlotWorldbookAgentControl();
+const toast = useToastStore();
 const entries = useAgentWorldbookEntries({
   onSkillMetaChanged: agentControl.syncAgentWorldbookTakeoverAfterSkillChange,
 });
@@ -167,6 +170,7 @@ const currentScopeLabel = computed(() => {
 
 async function refreshEntries(): Promise<void> {
   const names = await entries.loadEntries();
+  if (names === null) return; // 本次加载已被更新的调用取代，状态归新调用管
   entryEmptyText.value = names.length === 0
     ? (agentControl.worldbookScope.value.source === 'manual' ? '尚未选择 Agent 世界书。' : '未解析到角色卡世界书。')
     : '当前 Agent 世界书范围内无可 Skill 化的条目。';
@@ -191,12 +195,22 @@ async function onSkillifySelected(): Promise<void> {
 }
 
 async function onSaveSkill(bookName: string, uid: number, draft: WorldbookSkillDraft): Promise<void> {
-  await entries.saveEntrySkillMeta(bookName, uid, draft, 'manual');
+  try {
+    await entries.saveEntrySkillMeta(bookName, uid, draft, 'manual');
+  } catch (cause: any) {
+    toast.error(`保存 Skill 失败：${cause?.message || '未知错误'}`, { muteable: false });
+    return;
+  }
   await refreshEntries();
 }
 
 async function onDeleteSkill(bookName: string, uid: number): Promise<void> {
-  await entries.deleteEntrySkillMeta(bookName, uid);
+  try {
+    await entries.deleteEntrySkillMeta(bookName, uid);
+  } catch (cause: any) {
+    toast.error(`删除 Skill 失败：${cause?.message || '未知错误'}`, { muteable: false });
+    return;
+  }
   await refreshEntries();
 }
 

@@ -106,6 +106,7 @@ import {
   AGENT_WORLDBOOK_SNAPSHOT_COMMENT_ACU,
   buildWorldbookSelectionSignature_ACU,
   clearFinalGenerationGreenlights_ACU,
+  ensurePlotAgentWorldbookSnapshotHydrated_ACU,
   getPlotAgentWorldbookSnapshot_ACU,
   readFinalGenerationGreenlights_ACU,
   resolvePreTakeoverWorldbookSnapshot_ACU,
@@ -665,7 +666,32 @@ describe('agent worldbook takeover native trigger suppression', () => {
 
     expect(resolved.snapshot).toBe(persistedSnapshot);
     expect(resolved.expectedSignature).toBe(selectionSignature);
-    expect(getPlotAgentWorldbookSnapshot_ACU()).toBe(persistedSnapshot);
+    // getter 返回缓存的隔离副本（防外部原地修改污染缓存），断言内容而非对象身份。
+    expect(getPlotAgentWorldbookSnapshot_ACU()).toStrictEqual(persistedSnapshot);
+  });
+
+  it('ensure 水合：reset 后首次调用读取持久账本填充内存，已水合后不再重复读取', async () => {
+    const selectionSignature = buildWorldbookSelectionSignature_ACU(['角色A世界书']);
+    const persistedSnapshot = {
+      active: true,
+      selectionSignature,
+      createdAt: 10,
+      books: {
+        角色A世界书: [{ uid: 1, previousEnabled: true, previousKeys: ['钥匙A'], previousType: 'selective' }],
+      },
+    };
+    mockStateSnapshot.current = persistedSnapshot;
+    resetPlotAgentWorldbookSessionSnapshot_ACU();
+    expect(getPlotAgentWorldbookSnapshot_ACU().active).toBe(false);
+
+    await ensurePlotAgentWorldbookSnapshotHydrated_ACU();
+
+    expect(getPlotAgentWorldbookSnapshot_ACU()).toStrictEqual(persistedSnapshot);
+    const readsAfterFirstEnsure = mockReadAgentWorldbookState.mock.calls.length;
+    expect(readsAfterFirstEnsure).toBeGreaterThan(0);
+
+    await ensurePlotAgentWorldbookSnapshotHydrated_ACU();
+    expect(mockReadAgentWorldbookState.mock.calls.length).toBe(readsAfterFirstEnsure);
   });
 
   it('并发 pre_takeover hydration 共享同一次持久化读取', async () => {
@@ -739,7 +765,8 @@ describe('agent worldbook takeover native trigger suppression', () => {
     });
 
     await expect(hydrationPromise).resolves.toBe(originalSnapshot);
-    expect(getPlotAgentWorldbookSnapshot_ACU()).toBe(newerSnapshot);
+    // getter 返回缓存的隔离副本，断言内容而非对象身份。
+    expect(getPlotAgentWorldbookSnapshot_ACU()).toStrictEqual(newerSnapshot);
   });
 
 

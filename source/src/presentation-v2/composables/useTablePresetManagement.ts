@@ -14,6 +14,7 @@ import {
   applyTemplatePresetToCurrent_ACU,
   deleteTemplatePreset_ACU,
   ensureUniqueTemplatePresetName_ACU,
+  getActiveTemplatePresetMeta_ACU,
   getDefaultTemplateSnapshot_ACU,
   getRuntimeTemplateSnapshot_ACU,
   getTemplatePreset_ACU,
@@ -35,6 +36,7 @@ import { safeJsonParse_ACU } from '../../shared/json-helpers';
 import { openVisualizerSurface_ACU } from '../surfaces/visualizer/open-visualizer-surface';
 import { ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU } from './useTemplateRecoveryGuard';
 import { buildChatSheetGuideDataFromTemplateObj_ACU } from '../../service/template/chat-scope';
+import { promptFollowGlobalAfterSetDefault_ACU } from './templateFollowGlobalFlow';
 
 export type TablePresetDrawerView = 'closed' | 'manage';
 
@@ -143,6 +145,48 @@ export function useTablePresetManagement() {
     }
   }
 
+  /**
+   * 带破坏性确认与单次 stale 重试的预设应用（editPreset / setAsDefault /
+   * deletePreset 默认回退共用）。updateGlobal:true 时（S1-3）全局切换会经协调器，
+   * 与 chat 路径一样可能返回破坏性 blockers。
+   */
+  async function applyPresetWithDestructiveConfirmAndRetry(
+    presetName: string,
+    options: { source: string; updateGlobal: boolean; persistChatScope: boolean },
+  ): Promise<any> {
+    const applyWithSingleStaleRetry = async (destructiveChangeConfirmed: boolean): Promise<any> => {
+      const buildOptions = () => ({
+        source: options.source,
+        updateGlobal: options.updateGlobal,
+        save: true,
+        persistChatScope: options.persistChatScope,
+        destructiveChangeConfirmed,
+        signal: templateOperationController.signal,
+      });
+      const firstAttempt = await applyTemplatePresetToCurrent_ACU(presetName, buildOptions());
+      if (!isStaleRevisionConflict(firstAttempt)) return firstAttempt;
+      if (templateOperationController.signal.aborted) return firstAttempt;
+      return applyTemplatePresetToCurrent_ACU(presetName, buildOptions());
+    };
+    const firstResult = await applyWithSingleStaleRetry(false);
+    if (!firstResult || firstResult.saved !== false || !Array.isArray(firstResult.blockers) || firstResult.blockers.length === 0) {
+      return firstResult;
+    }
+    const destructiveBlockers = firstResult.blockers.filter((blocker: unknown) => (
+      typeof blocker === 'string' && /删除(?:表|列).+需要显式确认/.test(blocker)
+    ));
+    if (destructiveBlockers.length === 0) return firstResult;
+    const confirmed = await dialogStore.confirm({
+      title: '确认破坏性模板变更',
+      message: `此模板变更会删除现有表或列：\n${destructiveBlockers.join('\n')}`,
+      dangerMessage: '确认后将按 V2 原子提交执行。删除的数据只能通过聊天备份或 checkpoint 恢复。',
+      confirmLabel: '确认删除并继续',
+      cancelLabel: '取消',
+      confirmVariant: 'danger',
+    });
+    return confirmed ? applyWithSingleStaleRetry(true) : firstResult;
+  }
+
   /** 打开可视化表格编辑器；编辑当前生效的模板。 */
   async function openVisualizer(): Promise<void> {
     await run(async () => {
@@ -172,44 +216,11 @@ export function useTablePresetManagement() {
       );
       const guard = await ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU(guideData, 'switch-template');
       if (!guard.success) return;
-      const applyWithSingleStaleRetry = async (destructiveChangeConfirmed: boolean): Promise<any> => {
-        const firstAttempt = await applyTemplatePresetToCurrent_ACU(normalized, {
-          source: 'v2_table_drawer_edit',
-          updateGlobal: false,
-          save: true,
-          persistChatScope: true,
-          destructiveChangeConfirmed,
-          signal: templateOperationController.signal,
-        });
-        if (!isStaleRevisionConflict(firstAttempt)) return firstAttempt;
-        if (templateOperationController.signal.aborted) return firstAttempt;
-        return applyTemplatePresetToCurrent_ACU(normalized, {
-          source: 'v2_table_drawer_edit',
-          updateGlobal: false,
-          save: true,
-          persistChatScope: true,
-          destructiveChangeConfirmed,
-          signal: templateOperationController.signal,
-        });
-      };
-      const firstResult = await applyWithSingleStaleRetry(false);
-      let result = firstResult;
-      if (firstResult && firstResult.saved === false && Array.isArray(firstResult.blockers) && firstResult.blockers.length > 0) {
-        const destructiveBlockers = firstResult.blockers.filter((blocker: unknown) => (
-          typeof blocker === 'string' && /删除(?:表|列).+需要显式确认/.test(blocker)
-        ));
-        if (destructiveBlockers.length > 0) {
-          const confirmed = await dialogStore.confirm({
-            title: '确认破坏性模板变更',
-            message: `此模板变更会删除现有表或列：\n${destructiveBlockers.join('\n')}`,
-            dangerMessage: '确认后将按 V2 原子提交执行。删除的数据只能通过聊天备份或 checkpoint 恢复。',
-            confirmLabel: '确认删除并继续',
-            cancelLabel: '取消',
-            confirmVariant: 'danger',
-          });
-          if (confirmed) result = await applyWithSingleStaleRetry(true);
-        }
-      }
+      const result = await applyPresetWithDestructiveConfirmAndRetry(normalized, {
+        source: 'v2_table_drawer_edit',
+        updateGlobal: false,
+        persistChatScope: true,
+      });
       const applyError = getTemplateApplyError_ACU(result, '切换到目标预设失败。');
       if (applyError) throw new Error(applyError);
       const warning = getTemplateApplyWarning_ACU(result);
@@ -230,14 +241,27 @@ export function useTablePresetManagement() {
     }
     const normalized = normalizeTemplatePresetSelectionValue_ACU(name);
     await run(async () => {
-      const result = await applyTemplatePresetToCurrent_ACU(normalized, {
+      // S1-3：当前聊天 inherit_global 时设默认会经协调器切换生效模板，
+      // 破坏性 blockers 需确认重试；失败则全局默认不变（fail-closed）。
+      const result = await applyPresetWithDestructiveConfirmAndRetry(normalized, {
         source: 'v2_table_drawer_set_default',
         updateGlobal: true,
-        save: true,
         persistChatScope: false,
       });
-      if (!result) throw new Error('设为全局默认失败。');
+      const applyError = getTemplateApplyError_ACU(result, '设为全局默认失败。');
+      if (applyError) throw new Error(applyError);
+      const applyWarning = getTemplateApplyWarning_ACU(result);
+      if (applyWarning) toast.warning(applyWarning, { muteable: false, durationMs: 6000 });
       toast.success(`「${normalized || '默认预设'}」已设为全局默认。`);
+      // S1-2：当前聊天存在覆盖时，新全局默认不会生效——确认后清覆盖跟随全局。
+      if (getActiveTemplatePresetMeta_ACU().mode === 'chat_override') {
+        await promptFollowGlobalAfterSetDefault_ACU({
+          dialogStore,
+          toast,
+          signal: templateOperationController.signal,
+          newDefaultName: normalized,
+        });
+      }
     });
   }
 
@@ -262,10 +286,11 @@ export function useTablePresetManagement() {
       const wasGlobalDefault = defaultPresetName.value === normalized;
       const wasActive = normalizeTemplatePresetSelectionValue_ACU(resolveActiveTemplatePresetName_ACU({ fallbackToGlobal: true })) === normalized;
       if (wasGlobalDefault) {
-        const globalResult = await applyTemplatePresetToCurrent_ACU('', {
+        // S1-3：回退到内置默认模板同样经协调器（inherit_global 聊天生效模板会变），
+        // 破坏性 blockers 需确认重试；失败则中止删除（fail-closed）。
+        const globalResult = await applyPresetWithDestructiveConfirmAndRetry('', {
           source: 'v2_table_drawer_delete_default_fallback',
           updateGlobal: true,
-          save: true,
           persistChatScope: false,
         });
         const globalError = getTemplateApplyError_ACU(globalResult, '全局默认回退失败，未删除预设。');

@@ -241,24 +241,25 @@ export function usePlotWorldbookAgentControl() {
     return result;
   }
 
-  async function setMode(next: AgentWorldbookControlMode_ACU): Promise<void> {
+  /** 返回值表示模式配置是否写入成功；接管/恢复的部分失败不影响返回 true（模式已变，调用方仍需刷新），由 toast 告警。 */
+  async function setMode(next: AgentWorldbookControlMode_ACU): Promise<boolean> {
     const saved = await writeControlPatch({ mode: next, enabled: next !== 'disabled' });
-    if (!saved) return;
+    if (!saved) return false;
     if (next === 'agent') {
       try {
         const takeoverResult = await takeoverWorldbookGreenlights_ACU();
         snapshot.value = await refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU();
         if (takeoverResult.failed > 0 || snapshot.value.active !== true) {
           toast.warning(`Agent 世界书已切换为接管模式，但物理接管未完全完成：${takeoverResult.reason || 'unknown'}`, { muteable: false });
-          return;
+          return true;
         }
       } catch (error: any) {
         snapshot.value = await refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU();
         toast.warning(`Agent 世界书已切换为接管模式，但物理接管失败：${error?.message || '未知错误'}`, { muteable: false });
-        return;
+        return true;
       }
       toast.info(plotCopy.agentControl.modeChanged.agent, { muteable: false });
-      return;
+      return true;
     }
     if (next === 'disabled') {
       try {
@@ -269,21 +270,22 @@ export function usePlotWorldbookAgentControl() {
         if (restoreResult.skipped > 0 || restoreResult.failed > 0) {
           const message = plotCopy.agentControl.restore.reasons[restoreResult.reason || ''] || `Agent 世界书已关闭，但恢复受控条目未完全完成：${restoreResult.reason || 'unknown'}`;
           toast.warning(message, { muteable: false });
-          return;
+          return true;
         }
         toast.info(plotCopy.agentControl.modeChanged.disabled, { muteable: false });
-        return;
+        return true;
       } catch (error: any) {
         snapshot.value = await refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU();
         toast.warning(`Agent 世界书已关闭，但恢复受控条目失败：${error?.message || '未知错误'}`, { muteable: false });
-        return;
+        return true;
       }
     }
     toast.info(plotCopy.agentControl.modeChanged[next], { muteable: false });
+    return true;
   }
 
-  async function setAgentPlotExecutionMode(next: AgentPlotExecutionMode_ACU): Promise<void> {
-    await writeControlPatch({ agentPlotExecutionMode: next === 'concurrent' ? 'concurrent' : 'sequential' });
+  async function setAgentPlotExecutionMode(next: AgentPlotExecutionMode_ACU): Promise<boolean> {
+    return Boolean(await writeControlPatch({ agentPlotExecutionMode: next === 'concurrent' ? 'concurrent' : 'sequential' }));
   }
 
   async function setAgentApiPreset(next: string): Promise<void> {

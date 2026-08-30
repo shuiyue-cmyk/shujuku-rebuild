@@ -161,6 +161,7 @@ async function mountFormFillPage(
       runtimeTemplateItem: ref(null),
       runtimeDiffersFromLibrary: ref(false),
       runtimeTemplateAvailable: ref(false),
+      chatSnapshotDiffersFromLibrary: ref(false),
       refresh: vi.fn(),
       selectGlobalPreset: vi.fn(async () => {}),
       selectChatPreset: vi.fn(async () => {}),

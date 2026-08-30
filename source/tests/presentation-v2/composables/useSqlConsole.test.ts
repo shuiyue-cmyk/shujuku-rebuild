@@ -37,6 +37,7 @@ function mockSqlConsoleDeps(opts: {
     settings_ACU: { toastMuteEnabled: false },
     currentJsonTableData_ACU: { mate: { type: 'acu', version: 1 }, sheet_0: { name: 'T', content: [['row_id'], ['1']] } },
     currentChatFileIdentifier_ACU: 'chat-a',
+    isAutoUpdatingCard_ACU: false,
     getCurrentIsolationKey_ACU: vi.fn(() => 'iso-a'),
     _set_currentJsonTableData_ACU: vi.fn(),
   }));

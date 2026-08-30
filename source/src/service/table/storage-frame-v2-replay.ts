@@ -607,6 +607,7 @@ export function deriveSheetLifecycleFromFramesV2_ACU(
       };
       if (kind === 'sheet_hide' && checkpoint.data && typeof checkpoint.data === 'object' && !Array.isArray(checkpoint.data)) {
         entry.restoreSourceData = deepClone_ACU(checkpoint.data);
+        attachHideProvenance_ACU(entry, checkpoint);
       }
       statusBySheetKey[sheetKey] = entry;
     }
@@ -630,6 +631,25 @@ export function deriveSheetLifecycleFromFramesV2_ACU(
   return { statusBySheetKey, activeSheetKeys, hiddenSheetKeys, indeterminateSheetKeys, neverSeenSheetKeys };
 }
 
+
+/**
+ * 从 hide checkpoint 上附带休眠溯源信息（S3-4 休眠可见性）：
+ * createdAt（休眠时间）与可选的 hideSourcePresetName（休眠前活跃预设名，S3-4 起前向记录）。
+ * 两者均为展示性字段，缺失时不填充、不报错——历史 checkpoint 天然没有它们。
+ */
+function attachHideProvenance_ACU(
+  entry: TableSheetLifecycleEntryV2_ACU,
+  checkpoint: TableSheetCheckpointV2_ACU,
+): void {
+  const createdAt = (checkpoint as any).createdAt;
+  if (typeof createdAt === 'number' && Number.isFinite(createdAt)) {
+    entry.lastTimelineCreatedAt = createdAt;
+  }
+  const sourcePresetName = (checkpoint as any).hideSourcePresetName;
+  if (typeof sourcePresetName === 'string' && sourcePresetName.trim().length > 0) {
+    entry.hideSourcePresetName = sourcePresetName;
+  }
+}
 
 /** replay 的回放基底：最后一个 full checkpoint 所在帧在 frameRefs 中的下标（无则 -1）。 */
 function findLastFullCheckpointFrameIndex_ACU(frameRefs: V2FrameRef_ACU[]): number {
@@ -679,6 +699,7 @@ function collectHiddenLifecycleEntriesBeforeBase_ACU(
       };
       if (checkpoint.data && typeof checkpoint.data === 'object' && !Array.isArray(checkpoint.data)) {
         entry.restoreSourceData = deepClone_ACU(checkpoint.data);
+        attachHideProvenance_ACU(entry, checkpoint);
       }
       statusBySheetKey[sheetKey] = entry;
     }

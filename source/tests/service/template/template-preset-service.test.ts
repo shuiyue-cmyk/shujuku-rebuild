@@ -163,12 +163,13 @@ import {
   applyTemplateSnapshotToScope_ACU,
   applyTemplatePresetToCurrent_ACU,
   applyChatTemplateSnapshotWithReconciliation_ACU,
+  followGlobalTemplateForCurrentChat_ACU,
   getRuntimeTemplateSnapshot_ACU,
   resolveTemplateForExport_ACU,
 } from '../../../src/service/template/template-preset-service';
 
 import { saveSettings_ACU } from '../../../src/service/settings/settings-service';
-import { getCurrentChatTemplateScopeState_ACU, sanitizeTemplateSnapshotForChat_ACU, getGlobalTemplateSnapshotForCurrentProfile_ACU, activateChatTemplatePresetSelection_ACU, normalizeTemplateScopeMode_ACU } from '../../../src/service/template/chat-scope';
+import { getCurrentChatTemplateScopeState_ACU, sanitizeTemplateSnapshotForChat_ACU, getGlobalTemplateSnapshotForCurrentProfile_ACU, activateChatTemplatePresetSelection_ACU, normalizeTemplateScopeMode_ACU, setCurrentChatTemplateScopeState_ACU, clearChatSheetGuideDataForIsolationKey_ACU } from '../../../src/service/template/chat-scope';
 import { getCurrentTemplatePresetName_ACU } from '../../../src/shared/template-preset-utils';
 import { ensureSheetOrderNumbers_ACU, logWarn_ACU, parseTableTemplateJson_ACU } from '../../../src/shared/utils';
 import { detectDisplayNameTranslationHazards_ACU, TemplateImportValidationError_ACU, validateImportedTemplateObject_ACU } from '../../../src/service/template/template-import-validator';
@@ -177,6 +178,7 @@ import { reconcileChatTemplate_ACU } from '../../../src/service/template/chat-te
 import { getCurrentStorageMode, isSqliteMode } from '../../../src/service/table/storage-mode';
 import { didSqliteFallbackAfterReload_ACU, reloadStorageProvider } from '../../../src/service/table/table-storage-strategy';
 import { getActiveChatStorageIdentity_ACU } from '../../../src/data/storage/chat-history';
+import { saveChatToHost_ACU } from '../../../src/data/gateways/chat-gateway';
 import { refreshMergedDataAndNotify_ACU } from '../../../src/service/worldbook/pipeline';
 import {
   subscribeTemplateRuntimeChanges_ACU,
@@ -769,13 +771,19 @@ describe('persistTemplateScopeSelectionState_ACU', () => {
 
 // ═══ applyTemplateSnapshotToScope_ACU ═══
 describe('applyTemplateSnapshotToScope_ACU', () => {
-  it('有效快照应用成功', async () => {
+  it('有效快照应用成功（当前聊天有 chat_override 时走轻路径，不触发协调）', async () => {
+    vi.mocked(getCurrentChatTemplateScopeState_ACU).mockReturnValue({ mode: 'chat_override', templateStr: '{"sheet_x":{}}' } as any);
     vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockReturnValueOnce({
       templateStr: '{"sheet_0":{}}',
       templateObj: { sheet_0: {} },
     } as any);
     const result = await applyTemplateSnapshotToScope_ACU('{"sheet_0":{}}', { scope: 'global' });
     expect(result).toBeTruthy();
+    expect((result as any).saved).toBe(true);
+    // 全局切换不影响 chat_override 聊天的生效模板：不得触发协调提交
+    expect(reconcileChatTemplate_ACU).not.toHaveBeenCalled();
+    expect(commitCurrentFloorTemplateScopeOnly_ACU).not.toHaveBeenCalled();
+    expect(commitCurrentFloorTemplateChanges_ACU).not.toHaveBeenCalled();
   });
   it('无效快照返回 false', async () => {
     vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockReturnValueOnce(null);
@@ -783,7 +791,8 @@ describe('applyTemplateSnapshotToScope_ACU', () => {
     expect(result).toBe(false);
   });
 
-  it('全局模板实际应用成功后才发布运行时变更', async () => {
+  it('全局模板实际应用成功后才发布运行时变更（空聊天走轻路径）', async () => {
+    mockChatState.current = [];
     const received = vi.fn();
     const unsubscribe = subscribeTemplateRuntimeChanges_ACU(received);
     vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockReturnValueOnce({
@@ -794,21 +803,122 @@ describe('applyTemplateSnapshotToScope_ACU', () => {
     try {
       await expect(applyTemplateSnapshotToScope_ACU('{"sheet_0":{}}', { scope: 'global' })).resolves.toBeTruthy();
       expect(received).toHaveBeenCalledOnce();
+      // 空聊天不受全局切换影响：不触发协调
+      expect(reconcileChatTemplate_ACU).not.toHaveBeenCalled();
     } finally {
       unsubscribe();
     }
   });
 });
 
+// ═══ S1-3：全局切换影响 inherit_global 聊天时强制走协调器 ═══
+describe('applyTemplateSnapshotToScope_ACU S1-3 全局切换协调', () => {
+  const candidate = {
+    mate: { type: 'chatSheets', version: 1 },
+    sheet_0: { uid: 'sheet_0', name: '表', content: [['row_id']], sourceData: {}, updateConfig: {}, exportConfig: {} },
+  };
+
+  function mockSuccessfulReconciliation() {
+    vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockReturnValue({
+      templateStr: JSON.stringify(candidate),
+      templateObj: candidate,
+    } as any);
+    vi.mocked(loadTableStateFromFramesV2_ACU).mockResolvedValue(candidate as any);
+    vi.mocked(reconcileChatTemplate_ACU).mockResolvedValue({
+      candidateData: candidate, sheetChanges: [], deletedSheetKeys: [], blockers: [], audit: [],
+    } as any);
+    vi.mocked(commitCurrentFloorTemplateScopeOnly_ACU).mockResolvedValue({ saved: true, mode: 'scope_only' } as any);
+  }
+
+  it('inherit_global + 非空聊天：先协调提交当前聊天，成功后落全局并把 scope 翻回 inherit_global', async () => {
+    mockSuccessfulReconciliation();
+
+    const result: any = await applyTemplateSnapshotToScope_ACU(candidate, {
+      scope: 'global',
+      source: 'ui_global_select',
+      presetName: '预设A',
+    });
+
+    expect(result).toMatchObject({ saved: true, scope: 'global', reconciledCurrentChat: true });
+    // 协调提交确实发生（scope-only 或结构提交其一）
+    expect(commitCurrentFloorTemplateScopeOnly_ACU).toHaveBeenCalled();
+    // 提交成功后 scope 翻回 inherit_global（不清指导表，不走 persistTemplateScopeSelectionState 的 inherit_global 分支）
+    expect(setCurrentChatTemplateScopeState_ACU).toHaveBeenCalledWith(
+      { mode: 'inherit_global' },
+      expect.objectContaining({ reason: 'template_scope_global_switch_reconcile' }),
+    );
+    expect(clearChatSheetGuideDataForIsolationKey_ACU).not.toHaveBeenCalled();
+    // 全局状态照常落盘
+    const { saveCurrentProfileTemplate_ACU } = await import('../../../src/data/repositories/profile-repo');
+    expect(saveCurrentProfileTemplate_ACU).toHaveBeenCalled();
+    expect(saveChatToHost_ACU).toHaveBeenCalled();
+    vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockRestore();
+  });
+
+  it('协调被 blockers 拒绝时返回 saved:false 且不碰任何全局状态（fail-closed）', async () => {
+    vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockReturnValue({
+      templateStr: JSON.stringify(candidate),
+      templateObj: candidate,
+    } as any);
+    vi.mocked(loadTableStateFromFramesV2_ACU).mockResolvedValue(candidate as any);
+    vi.mocked(reconcileChatTemplate_ACU).mockResolvedValue({
+      candidateData: candidate, sheetChanges: [], deletedSheetKeys: [],
+      blockers: ['删除表「旧表」需要显式确认'], audit: [],
+    } as any);
+
+    const result: any = await applyTemplateSnapshotToScope_ACU(candidate, {
+      scope: 'global',
+      source: 'ui_global_select',
+      presetName: '预设A',
+    });
+
+    expect(result).toMatchObject({ saved: false });
+    expect(result.blockers).toEqual(['删除表「旧表」需要显式确认']);
+    const { saveCurrentProfileTemplate_ACU } = await import('../../../src/data/repositories/profile-repo');
+    const { persistCurrentTemplatePresetName_ACU } = await import('../../../src/service/settings/settings-service');
+    const { _set_TABLE_TEMPLATE_ACU } = await import('../../../src/shared/defaults-json.js');
+    expect(saveCurrentProfileTemplate_ACU).not.toHaveBeenCalled();
+    expect(persistCurrentTemplatePresetName_ACU).not.toHaveBeenCalled();
+    expect(_set_TABLE_TEMPLATE_ACU).not.toHaveBeenCalled();
+    expect(setCurrentChatTemplateScopeState_ACU).not.toHaveBeenCalledWith(
+      { mode: 'inherit_global' },
+      expect.anything(),
+    );
+    vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockRestore();
+  });
+
+  it('applyTemplatePresetToCurrent_ACU updateGlobal:true 透传协调失败（saved:false + blockers）', async () => {
+    upsertTemplatePreset_ACU('预设A', JSON.stringify(candidate));
+    vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockReturnValue({
+      templateStr: JSON.stringify(candidate),
+      templateObj: candidate,
+    } as any);
+    vi.mocked(loadTableStateFromFramesV2_ACU).mockResolvedValue(candidate as any);
+    vi.mocked(reconcileChatTemplate_ACU).mockResolvedValue({
+      candidateData: candidate, sheetChanges: [], deletedSheetKeys: [],
+      blockers: ['删除列「HP」需要显式确认'], audit: [],
+    } as any);
+
+    const result: any = await applyTemplatePresetToCurrent_ACU('预设A', { updateGlobal: true });
+
+    expect(result).toMatchObject({ saved: false });
+    expect(result.blockers).toEqual(['删除列「HP」需要显式确认']);
+    expect(result.isDefault).toBeUndefined();
+    vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockRestore();
+  });
+});
+
 // ═══ applyTemplatePresetToCurrent_ACU ═══
 describe('applyTemplatePresetToCurrent_ACU', () => {
-  it('默认预设应用成功', async () => {
+  it('默认预设应用成功（空聊天走轻路径）', async () => {
+    mockChatState.current = [];
     vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockReturnValue({
       templateStr: '{"sheet_0":{}}',
       templateObj: { sheet_0: {} },
     } as any);
     const result = await applyTemplatePresetToCurrent_ACU('', { updateGlobal: true });
     expect(result).toBeTruthy();
+    expect(reconcileChatTemplate_ACU).not.toHaveBeenCalled();
     vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockRestore();
   });
   it('不存在的预设返回 false', async () => {
@@ -1331,6 +1441,81 @@ describe('applyChatTemplateSnapshotWithReconciliation_ACU', () => {
     expect(result).toMatchObject({ saved: false, error: expect.stringContaining('聊天元数据尚未就绪') });
     expect(loadTableStateFromFramesV2_ACU).not.toHaveBeenCalled();
     expect(commitCurrentFloorTemplateChanges_ACU).not.toHaveBeenCalled();
+  });
+});
+
+// ═══ followGlobalTemplateForCurrentChat_ACU（S1-2 跟随全局） ═══
+describe('followGlobalTemplateForCurrentChat_ACU', () => {
+  const globalTemplate = { mate: { type: 'chatSheets', version: 1 }, sheet_live: { uid: 'sheet_live', name: '背包', content: [['row_id', '名称']], sourceData: {}, updateConfig: {}, exportConfig: {} } };
+  const overrideState = { mode: 'chat_override', presetName: '聊天预设', templateStr: '{"sheet_x":{}}' };
+
+  function mockSuccessfulReconciliation() {
+    vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockReturnValue({ templateObj: globalTemplate, templateStr: JSON.stringify(globalTemplate) } as any);
+    vi.mocked(loadTableStateFromFramesV2_ACU).mockResolvedValue({ mate: globalTemplate.mate, sheet_live: globalTemplate.sheet_live } as any);
+    vi.mocked(reconcileChatTemplate_ACU).mockResolvedValue({ candidateData: globalTemplate, sheetChanges: [{ kind: 'operations', sheetKey: 'sheet_live', targetSheetData: globalTemplate.sheet_live, operations: [] }], deletedSheetKeys: [], blockers: [], audit: [] } as any);
+    vi.mocked(commitCurrentFloorTemplateChanges_ACU).mockResolvedValue({ saved: true, mode: 'v2_commit' } as any);
+  }
+
+  it('无聊天覆盖时短路 alreadyFollowing，不走协调也不翻 scope', async () => {
+    vi.mocked(getCurrentChatTemplateScopeState_ACU).mockReturnValue(null);
+    vi.mocked(getCurrentTemplatePresetName_ACU).mockReturnValue('全局A');
+
+    const result = await followGlobalTemplateForCurrentChat_ACU();
+
+    expect(result).toMatchObject({ saved: true, alreadyFollowing: true, mode: 'inherit_global', presetName: '全局A' });
+    expect(reconcileChatTemplate_ACU).not.toHaveBeenCalled();
+    expect(setCurrentChatTemplateScopeState_ACU).not.toHaveBeenCalled();
+  });
+
+  it('全局快照缺失时拒绝且不协调', async () => {
+    vi.mocked(getCurrentChatTemplateScopeState_ACU).mockReturnValue(overrideState as any);
+    vi.mocked(getGlobalTemplateSnapshotForCurrentProfile_ACU).mockReturnValue(null as any);
+
+    const result = await followGlobalTemplateForCurrentChat_ACU();
+
+    expect(result).toMatchObject({ saved: false, error: expect.stringContaining('无法解析当前全局模板') });
+    expect(reconcileChatTemplate_ACU).not.toHaveBeenCalled();
+    expect(setCurrentChatTemplateScopeState_ACU).not.toHaveBeenCalled();
+  });
+
+  it('协调提交成功后把 scope 翻成 inherit_global、保存聊天并广播', async () => {
+    vi.mocked(getCurrentChatTemplateScopeState_ACU).mockReturnValue(overrideState as any);
+    vi.mocked(getGlobalTemplateSnapshotForCurrentProfile_ACU).mockReturnValue({ templateObj: globalTemplate, templateStr: JSON.stringify(globalTemplate) } as any);
+    vi.mocked(getCurrentTemplatePresetName_ACU).mockReturnValue('全局A');
+    mockSuccessfulReconciliation();
+    const received = vi.fn();
+    const unsubscribe = subscribeTemplateRuntimeChanges_ACU(received);
+
+    let result: any;
+    try {
+      result = await followGlobalTemplateForCurrentChat_ACU({ source: 'test_follow' });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(result).toMatchObject({ saved: true, mode: 'inherit_global', presetName: '全局A' });
+    expect(setCurrentChatTemplateScopeState_ACU).toHaveBeenCalledWith(
+      { mode: 'inherit_global' },
+      expect.objectContaining({ reason: 'template_scope_follow_global' }),
+    );
+    // 不得走 persistTemplateScopeSelectionState 的 inherit_global 分支清掉协调刚写的指导表。
+    expect(clearChatSheetGuideDataForIsolationKey_ACU).not.toHaveBeenCalled();
+    expect(saveChatToHost_ACU).toHaveBeenCalled();
+    expect(received).toHaveBeenCalled();
+  });
+
+  it('协调返回 blockers 时不翻 scope、透传结果', async () => {
+    vi.mocked(getCurrentChatTemplateScopeState_ACU).mockReturnValue(overrideState as any);
+    vi.mocked(getGlobalTemplateSnapshotForCurrentProfile_ACU).mockReturnValue({ templateObj: globalTemplate, templateStr: JSON.stringify(globalTemplate) } as any);
+    vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockReturnValue({ templateObj: globalTemplate, templateStr: JSON.stringify(globalTemplate) } as any);
+    vi.mocked(loadTableStateFromFramesV2_ACU).mockResolvedValue({ mate: globalTemplate.mate, sheet_live: globalTemplate.sheet_live } as any);
+    vi.mocked(reconcileChatTemplate_ACU).mockResolvedValue({ candidateData: globalTemplate, sheetChanges: [], deletedSheetKeys: [], blockers: ['删除表「任务」需要显式确认'], audit: [] } as any);
+
+    const result = await followGlobalTemplateForCurrentChat_ACU();
+
+    expect(result).toMatchObject({ saved: false, blockers: ['删除表「任务」需要显式确认'] });
+    expect(setCurrentChatTemplateScopeState_ACU).not.toHaveBeenCalled();
+    expect(saveChatToHost_ACU).not.toHaveBeenCalled();
   });
 });
 

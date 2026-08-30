@@ -2,8 +2,10 @@
  * service/chat/chat-database-purge.ts — 当前聊天级原子硬清空
  *
  * 职责：清除当前聊天在数据库中的全部本地持久化痕迹（消息字段、chatMetadata
- * scope/Guide 容器、旧版表头清单镜像），成功后保持运行时真正空状态，绝不自动
- * 重建模板/Guide/初始化锚点。
+ * scope/Guide 容器、旧版表头清单镜像）。成功后运行时回落为当前全局模板的
+ * header-only 空结构（S1-1：pristine 语义——重建的是空结构不是旧数据，
+ * 不写任何 checkpoint/frame/锚点，首次填表提交才建回放根），避免清空后
+ * UI 显示"无可用表格"且填表判定失效。
  *
  * 与 deleteLocalDataInChatCore_ACU('all', range) 的区别：
  * - 旧 API 按 AI 楼层遍历，且全范围删除会保留每个隔离域最早的 init header-only
@@ -52,7 +54,10 @@ import {
     clearSummaryVectorFlushTasksByScope_ACU,
     deleteSummaryVectorHotCacheByScope_ACU,
 } from '../../data/storage/vector-index-hot-cache';
-import { clearTableRuntimeWithoutReload_ACU } from '../table/table-storage-strategy';
+import { clearTableRuntimeWithoutReload_ACU, reloadStorageProvider } from '../table/table-storage-strategy';
+import { loadOrCreateJsonTableFromChatHistory_ACU } from '../table/table-service';
+import { isSqliteMode } from '../table/storage-mode';
+import { notifyTemplateRuntimeCommitted_ACU } from '../../shared/template-runtime-change';
 import type { ChatSummaryVectorIndexManifest_ACU, SummaryVectorIndexSafeGcScopeHint_ACU } from '../vector/summary-vector-index-types';
 import { getImportStablePrefix_ACU } from '../../shared/constants';
 import {
@@ -155,7 +160,7 @@ function restoreFirstMessageScope_ACU(snapshot: FirstMessageScopeSnapshot_ACU): 
     }
 }
 
-/** 当前聊天在清理前后的身份标识（用于事务内自证归属，替代空实现 assertFresh）。 */
+/** 当前聊天在清理前后的身份标识（事务内自证归属；与 assertFresh 的版本校验互为双保险，覆盖聊天切换这一版本快照不感知的维度）。 */
 function captureChatIdentity_ACU(): string {
     return getActiveChatStorageIdentity_ACU(getChatArray_ACU());
 }
@@ -339,8 +344,8 @@ function isImportProtectedComment_ACU(comment: unknown, importPrefix: string): b
  *    清理前聊天身份标识；
  * 2. 清空全部消息字段与 chat[0] scope/Guide 镜像（chatMetadata 容器经
  *    setChatScopedConfigContainer_ACU / setChatSheetGuideContainer_ACU 同步清空）；
- * 3. 清理前/后复核聊天身份标识一致（assertFresh 为空实现，必须自证归属），
- *    不一致则回滚并中止；
+ * 3. 清理前/后复核聊天身份标识一致（assertFresh 校验的是表版本，不感知聊天
+ *    切换，purge 必须自证归属），不一致则回滚并中止；
  * 4. 残留扫描：仍存在任一本地字段/镜像则拒绝严格保存（fail-closed）；
  * 5. saveChatToHostStrict_ACU 严格保存；失败按快照回滚并返回 error；
  * 6. 保存成功后复核残留为空；再清理外置向量资源与数据库派生世界书条目，
@@ -349,7 +354,48 @@ function isImportProtectedComment_ACU(comment: unknown, importPrefix: string): b
  * 不调用 collectInitialCheckpointSlotsForFullDeletion_ACU，不保留任何
  * init/boundary frame；保留 qrf_plot* 与受 import stable prefix 保护的条目。
  */
+/**
+ * purge 成功后的回落：runtime 从当前全局模板重建 header-only 空结构（S1-1）。
+ *
+ * - 必须在 purge 独占事务之外执行：loadOrCreate/reloadStorageProvider 链路
+ *   自带事务与 Guide 保存，事务内调用会嵌套死锁。
+ * - loadOrCreateJsonTableFromChatHistory_ACU 内部先 applyTemplateScopeForCurrentChat
+ *   （scope override 已被清除 → 回落全局模板，名称/内存对齐），聊天无表数据时
+ *   从模板初始化 header-only 结构到内存（不写聊天记录，pristine 保持）。
+ * - 失败降级为警告，不推翻已成功的 purge。
+ */
+async function rebuildEmptyRuntimeFromGlobalTemplateAfterPurge_ACU(): Promise<string[]> {
+    try {
+        const loadResult = await loadOrCreateJsonTableFromChatHistory_ACU();
+        if (isSqliteMode()) {
+            await reloadStorageProvider();
+        }
+        if (!loadResult.loaded) {
+            return [`硬清空已完成，但回落全局模板空结构失败：${loadResult.error || '模板初始化未完成'}。`];
+        }
+        logDebug_ACU('[硬清空] 运行时已回落为当前全局模板的 header-only 空结构（pristine）。');
+        // S1-2：回落即模板运行时变更，广播给模板面板刷新名称/徽标/下拉（回落失败不广播）。
+        notifyTemplateRuntimeCommitted_ACU();
+        return [];
+    } catch (error: any) {
+        const message = error?.message || String(error || '未知错误');
+        logWarn_ACU(`[硬清空] 回落全局模板空结构失败：${message}`, error);
+        return [`硬清空已完成，但回落全局模板空结构失败：${message}。`];
+    }
+}
+
 export async function purgeCurrentChatDatabaseState_ACU(): Promise<ChatDatabasePurgeResult_ACU> {
+    const result = await purgeCurrentChatDatabaseStateCore_ACU();
+    if (!result.saved) return result;
+    const rebuildWarnings = await rebuildEmptyRuntimeFromGlobalTemplateAfterPurge_ACU();
+    if (rebuildWarnings.length === 0) return result;
+    return {
+        ...result,
+        cleanupWarnings: [...(result.cleanupWarnings || []), ...rebuildWarnings],
+    };
+}
+
+async function purgeCurrentChatDatabaseStateCore_ACU(): Promise<ChatDatabasePurgeResult_ACU> {
     const emptyResult: ChatDatabasePurgeResult_ACU = { saved: false, clearedMessageCount: 0, removedMetadata: [], error: '当前聊天记录为空。' };
     const chat = getChatArray_ACU();
     if (!Array.isArray(chat) || chat.length === 0) {
@@ -464,8 +510,10 @@ export async function purgeCurrentChatDatabaseState_ACU(): Promise<ChatDatabaseP
             };
         }
 
-        // 严格保存与 post-condition 均已成立，才允许将当前运行时置为真正空态。
-        // 此入口绝不加载聊天、模板或 Guide，避免删除后被立即重新物化。
+        // 严格保存与 post-condition 均已成立，才允许将当前运行时置为空态。
+        // 事务内不做任何重建（reload 链路自带事务，嵌套会死锁）；事务结束后由
+        // rebuildEmptyRuntimeFromGlobalTemplateAfterPurge_ACU 回落为当前全局模板的
+        // header-only 空结构（S1-1，pristine：重建的是空结构不是旧数据）。
         clearTableRuntimeWithoutReload_ACU();
 
         // ── 派生资源清理（保存成功后；失败仅警告） ──

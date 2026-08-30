@@ -934,7 +934,14 @@ import {
         : [];
       _set_pendingFinalGenerationGreenlights_ACU(finalGenerationGreenlights);
       if (agentDecision.active === true) {
-        await writeFinalGenerationGreenlights_ACU(finalGenerationGreenlights);
+        const written = await writeFinalGenerationGreenlights_ACU(finalGenerationGreenlights);
+        if (!written && finalGenerationGreenlights.length > 0) {
+          // 写入未生效时放行条目在世界书里仍是禁用态，原生注入不会包含它们；
+          // 生成不阻断（缺内容比漏内容安全），但必须可观测。
+          logWarn_ACU('[剧情推进] Agent 正文绿灯写入未生效，放行条目可能缺失于正文提示词。', {
+            greenlights: finalGenerationGreenlights.map(ref => `${ref?.bookName ?? ''}#${ref?.uid ?? ''}`),
+          });
+        }
       }
     }
 

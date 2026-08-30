@@ -383,6 +383,7 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
                         break;
                     }
                     materializeSeedRowsIfNeeded_ACU(table);
+                    const sheetKey = sheetKeysForIndexing[tableIndex];
                     const isSummaryTable = isSummaryOrOutlineTable_ACU(table.name);
 
                     if (isSummaryTable) {
@@ -409,6 +410,13 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
                         }
                     }
                     if (table && table.content && table.content.length > rowIndex + 1) {
+                        // 行锁与 SQL 模式差异回滚语义对齐：锁定行不可被删除。
+                        // 传入工作副本 content：身份锁按当前副本解析，插行/删行后不错位。
+                        const deleteLockState = sheetKey ? getTableLocksForSheet_ACU(sheetKey, table.content) : { rows: new Set(), cols: new Set(), cells: new Set() };
+                        if (deleteLockState.rows.has(rowIndex)) {
+                            logDebug_ACU(`[锁定] 行锁定阻止 deleteRow (tableIndex: ${tableIndex}, rowIndex: ${rowIndex})`);
+                            break;
+                        }
                         table.content.splice(rowIndex + 1, 1);
                         logDebug_ACU(`Applied deleteRow to table ${tableIndex} (${table.name}) at index ${rowIndex}`);
                         appliedEdits++;
@@ -451,7 +459,8 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
                         }
                     }
                     if (table && table.content && table.content.length > rowIndex + 1 && typeof data === 'object') {
-                        const lockState = sheetKey ? getTableLocksForSheet_ACU(sheetKey) : { rows: new Set(), cols: new Set(), cells: new Set() };
+                        // 传入工作副本 content：身份锁按当前副本解析索引，前序 insertRow/deleteRow 不会造成锁错位。
+                        const lockState = sheetKey ? getTableLocksForSheet_ACU(sheetKey, table.content) : { rows: new Set(), cols: new Set(), cells: new Set() };
                         if (lockState.rows.has(rowIndex)) {
                             logDebug_ACU(`[锁定] 行锁定阻止 updateRow (tableIndex: ${tableIndex}, rowIndex: ${rowIndex})`);
                             break;

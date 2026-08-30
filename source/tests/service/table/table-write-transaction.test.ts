@@ -200,7 +200,7 @@ describe('table-write-transaction', () => {
     expect(receivedWorkingData).toBeNull();
   });
 
-  it('提交时同表运行时版本已变化仍允许提交（兼容第三方外部修改）', async () => {
+  it('提交时同表运行时版本已变化则 assertFresh 抛出 runtime revision conflict（丢更新防护）', async () => {
     const staleRevision = captureTableRuntimeRevisionForWriteSet_ACU(sheetWrite('sheet_0'));
 
     await runTableWriteTransaction_ACU({ source: 'manual_crud', reason: 'first commit', writeSet: sheetWrite('sheet_0') }, async (ctx) => {
@@ -208,13 +208,108 @@ describe('table-write-transaction', () => {
     });
 
     const commits: string[] = [];
-    await runTableWriteTransaction_ACU({
+    await expect(runTableWriteTransaction_ACU({
       source: 'manual_crud',
       reason: 'stale commit',
       writeSet: sheetWrite('sheet_0'),
       baseRevision: staleRevision,
     }, async (ctx) => {
       await ctx.runCommit(async () => {
+        ctx.assertFresh?.('test:before_persist');
+        commits.push('commit');
+        return 'ok';
+      });
+    })).rejects.toThrow(/runtime revision conflict/i);
+
+    expect(commits).toEqual([]);
+  });
+
+  it('全局写入后旧 all 基线的 all 提交被 assertFresh 拒绝', async () => {
+    const staleRevision = captureTableRuntimeRevisionForWriteSet_ACU([{ kind: 'all' }]);
+
+    await runTableWriteTransaction_ACU({ source: 'import', reason: 'global commit', writeSet: [{ kind: 'all' }] }, async (ctx) => {
+      await ctx.runCommit(async () => 'ok');
+    });
+
+    const commits: string[] = [];
+    await expect(runTableWriteTransaction_ACU({
+      source: 'import',
+      reason: 'stale global commit',
+      writeSet: [{ kind: 'all' }],
+      baseRevision: staleRevision,
+    }, async (ctx) => {
+      await ctx.runCommit(async () => {
+        ctx.assertFresh?.('test:before_persist');
+        commits.push('commit');
+        return 'ok';
+      });
+    })).rejects.toThrow(/runtime revision conflict/i);
+
+    expect(commits).toEqual([]);
+  });
+
+  it('基线新鲜时 assertFresh 放行；期间同表写入后再断言则抛冲突', async () => {
+    const baseRevision = captureTableRuntimeRevisionForWriteSet_ACU(sheetWrite('sheet_0'));
+
+    await runTableWriteTransaction_ACU({
+      source: 'group_fill',
+      reason: 'fresh commit',
+      writeSet: sheetWrite('sheet_0'),
+      baseRevision,
+    }, async (ctx) => {
+      ctx.assertFresh?.('test:fresh');
+      await ctx.runCommit(async () => 'ok');
+    });
+
+    await expect(runTableWriteTransaction_ACU({
+      source: 'group_fill',
+      reason: 'stale after concurrent write',
+      writeSet: sheetWrite('sheet_0'),
+      baseRevision,
+    }, async (ctx) => {
+      ctx.assertFresh?.('test:stale');
+    })).rejects.toThrow(/runtime revision conflict/i);
+  });
+
+  it('同一事务多次 runCommit 后 assertFresh 不被自身 bump 误判', async () => {
+    const baseRevision = captureTableRuntimeRevisionForWriteSet_ACU(sheetWrite('sheet_0'));
+    const events: string[] = [];
+
+    await runTableWriteTransaction_ACU({
+      source: 'group_fill',
+      reason: 'multi commit',
+      writeSet: sheetWrite('sheet_0'),
+      baseRevision,
+    }, async (ctx) => {
+      await ctx.runCommit(async () => {
+        ctx.assertFresh?.('test:first_commit');
+        events.push('first');
+        return 'ok';
+      });
+      await ctx.runCommit(async () => {
+        ctx.assertFresh?.('test:second_commit');
+        events.push('second');
+        return 'ok';
+      });
+    });
+
+    expect(events).toEqual(['first', 'second']);
+  });
+
+  it('不可解析的哨兵 baseRevision 不做冲突校验（向后兼容）', async () => {
+    await runTableWriteTransaction_ACU({ source: 'manual_crud', reason: 'bump sheet_0', writeSet: sheetWrite('sheet_0') }, async (ctx) => {
+      await ctx.runCommit(async () => 'ok');
+    });
+
+    const commits: string[] = [];
+    await runTableWriteTransaction_ACU({
+      source: 'manual_crud',
+      reason: 'sentinel base',
+      writeSet: sheetWrite('sheet_0'),
+      baseRevision: 'runtime-v1:test',
+    }, async (ctx) => {
+      await ctx.runCommit(async () => {
+        ctx.assertFresh?.('test:sentinel');
         commits.push('commit');
         return 'ok';
       });
@@ -223,27 +318,17 @@ describe('table-write-transaction', () => {
     expect(commits).toEqual(['commit']);
   });
 
-  it('全局写入后旧 all revision 提交仍被允许', async () => {
-    const staleRevision = captureTableRuntimeRevisionForWriteSet_ACU([{ kind: 'all' }]);
+  it('跨聊天作用域的基线快照被 assertFresh 拒绝', async () => {
+    const otherScopeRevision = captureTableRuntimeRevisionForWriteSet_ACU(sheetWrite('sheet_0'), { chatKey: 'chat-b' });
 
-    await runTableWriteTransaction_ACU({ source: 'import', reason: 'global commit', writeSet: [{ kind: 'all' }] }, async (ctx) => {
-      await ctx.runCommit(async () => 'ok');
-    });
-
-    const commits: string[] = [];
-    await runTableWriteTransaction_ACU({
-      source: 'import',
-      reason: 'stale global commit',
-      writeSet: [{ kind: 'all' }],
-      baseRevision: staleRevision,
+    await expect(runTableWriteTransaction_ACU({
+      source: 'manual_crud',
+      reason: 'cross scope base',
+      writeSet: sheetWrite('sheet_0'),
+      baseRevision: otherScopeRevision,
     }, async (ctx) => {
-      await ctx.runCommit(async () => {
-        commits.push('commit');
-        return 'ok';
-      });
-    });
-
-    expect(commits).toEqual(['commit']);
+      ctx.assertFresh?.('test:cross_scope');
+    })).rejects.toThrow(/runtime revision conflict/i);
   });
 
   it('不同表版本未变化时允许基于旧快照提交', async () => {

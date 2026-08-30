@@ -5,6 +5,7 @@ import { allocateStableSheetKeys_ACU, assertNoPhysicalTableNameCollision_ACU } f
 import { normalizeCanonicalTableRows_ACU } from '../../shared/canonical-row-normalizer';
 import { buildSheetTableAliasMap_ACU } from '../../shared/sql-read-resolver';
 import { buildCanonicalFullCheckpoint_ACU } from './canonical-checkpoint-builder';
+import { writeInitFullCheckpointFrameV2_ACU } from './storage-frame-v2-persist';
 import { hydrateTableDataStrict_ACU } from './sqlite-template-validation';
 import { getCurrentStorageMode } from './storage-mode';
 import { runTableWriteTransaction_ACU } from './table-write-transaction';
@@ -141,11 +142,9 @@ export async function resetCurrentChatTableStateFromTemplate_ACU(
           context: { messageIndex: targetIndex, aiFloor: chat.slice(0, targetIndex + 1).filter(message => message && !message.is_user).length, isolationKey },
         });
         if (!checkpoint.checkpoint) throw new Error(checkpoint.error);
+        // S2-4：frame 拼装 + 单根断言收敛到 persist 层统一入口，违例抛错走下方快照回滚
+        writeInitFullCheckpointFrameV2_ACU({ chat, targetIndex, isolationKey, checkpoint: checkpoint.checkpoint });
         const target = chat[targetIndex];
-        target.TavernDB_ACU_IsolatedData = {
-          ...(target.TavernDB_ACU_IsolatedData || {}),
-          [isolationKey]: { _acu_storage_version: 2, storageFrame: { version: 2, checkpoint: checkpoint.checkpoint, logEntries: [] } },
-        };
         if (settings_ACU.dataIsolationEnabled) target.TavernDB_ACU_Identity = settings_ACU.dataIsolationCode;
         const guideUpdated = setChatSheetGuideDataForIsolationKey_ACU(isolationKey, guideData, {
           reason: options.reason || 'game_init', syncTemplateScope: true, templateSource: prepared,

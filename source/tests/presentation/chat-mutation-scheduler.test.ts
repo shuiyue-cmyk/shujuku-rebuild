@@ -9,6 +9,7 @@ const h = vi.hoisted(() => ({
   buildScope: vi.fn(),
   markDirty: vi.fn(),
   enqueueFlush: vi.fn(),
+  recoverDeleted: vi.fn(),
   latestState: null as any,
   timer: { value: null as any },
 }));
@@ -21,6 +22,9 @@ vi.mock('../../src/service/runtime/state-manager', () => ({
 }));
 vi.mock('../../src/service/table/table-storage-strategy', () => ({
   reloadStorageProvider: h.reload,
+}));
+vi.mock('../../src/service/chat/checkpoint-delete-guard', () => ({
+  recoverLostCheckpointsAfterMessageDeletion_ACU: h.recoverDeleted,
 }));
 vi.mock('../../src/service/table/storage-mode', () => ({
   isSqliteMode: h.isSqlite,
@@ -64,6 +68,7 @@ beforeEach(() => {
   h.buildScope.mockReturnValue('scope-1');
   h.markDirty.mockResolvedValue(undefined);
   h.enqueueFlush.mockResolvedValue({ queued: true, scopeKey: 'scope-1' });
+  h.recoverDeleted.mockResolvedValue({ recovered: false, graftedCount: 0 });
   h.latestState = null;
 });
 
@@ -160,5 +165,34 @@ describe('chat mutation scheduler', () => {
     await vi.runAllTicks();
     expect(h.reload).toHaveBeenCalledTimes(1);
     expect(h.refreshUI).toHaveBeenCalledTimes(1);
+  });
+
+  it('S0-4：删楼轮次在冷回放之前先执行 checkpoint 前移恢复', async () => {
+    h.isSqlite.mockReturnValue(true);
+    const order: string[] = [];
+    h.recoverDeleted.mockImplementation(async () => { order.push('recover'); return { recovered: true, graftedCount: 1 }; });
+    h.reload.mockImplementation(async () => { order.push('reload'); });
+    h.refreshUI.mockImplementation(async () => { order.push('refresh'); return { ok: true }; });
+
+    scheduleChatMutationRefresh_ACU('chat_modified_deleted');
+    await vi.advanceTimersByTimeAsync(1200);
+    await vi.runAllTicks();
+
+    expect(h.recoverDeleted).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(['recover', 'reload', 'refresh']);
+  });
+
+  it('S0-4：滑动轮次不执行删楼恢复；恢复失败不阻断冷回放', async () => {
+    scheduleChatMutationRefresh_ACU('chat_modified_swiped');
+    await vi.advanceTimersByTimeAsync(1200);
+    await vi.runAllTicks();
+    expect(h.recoverDeleted).not.toHaveBeenCalled();
+
+    h.recoverDeleted.mockRejectedValueOnce(new Error('recover boom'));
+    scheduleChatMutationRefresh_ACU('chat_modified_deleted');
+    await vi.advanceTimersByTimeAsync(1200);
+    await vi.runAllTicks();
+    expect(h.recoverDeleted).toHaveBeenCalledTimes(1);
+    expect(h.refreshUI).toHaveBeenCalledTimes(2);
   });
 });

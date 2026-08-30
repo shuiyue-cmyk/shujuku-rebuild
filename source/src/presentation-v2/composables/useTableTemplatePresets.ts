@@ -1,9 +1,4 @@
-import {
-  computed,
-  getCurrentScope,
-  onScopeDispose,
-  ref
-} from 'vue';
+import { computed, getCurrentScope, onScopeDispose, ref } from 'vue';
 import {
   applyTemplateSnapshotToScope_ACU,
   applyTemplatePresetToCurrent_ACU,
@@ -25,31 +20,17 @@ import {
   getCurrentChatTemplateScopeState_ACU,
   listChatTemplateArchiveEntries_ACU,
   sanitizeChatSheetsObject_ACU,
+  sanitizeTemplateSnapshotForChat_ACU,
 } from '../../service/template/chat-scope';
-
-import {
-  settings_ACU
-} from '../../service/runtime/state-manager';
-import {
-  safeJsonParse_ACU
-} from '../../shared/json-helpers';
-import {
-  getCurrentTemplatePresetName_ACU,
-  normalizeTemplatePresetSelectionValue_ACU,
-  sanitizeFilenameComponent_ACU
-} from '../../shared/template-preset-utils';
-import {
-  deriveTemplatePresetNameForImport_ACU
-} from '../../shared/template-preset-utils';
-import {
-  useDialogStore
-} from '../stores/dialog-store';
-import {
-  useToastStore
-} from '../stores/toast-store';
-import {
-  ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU
-} from './useTemplateRecoveryGuard';
+import { deleteLocalDataInChatCore_ACU } from '../../service/chat/chat-service';
+import { settings_ACU } from '../../service/runtime/state-manager';
+import { safeJsonParse_ACU } from '../../shared/json-helpers';
+import { getCurrentTemplatePresetName_ACU, normalizeTemplatePresetSelectionValue_ACU, sanitizeFilenameComponent_ACU } from '../../shared/template-preset-utils';
+import { deriveTemplatePresetNameForImport_ACU } from '../../shared/template-preset-utils';
+import { useDialogStore } from '../stores/dialog-store';
+import { useToastStore } from '../stores/toast-store';
+import { ensureTemplateRecoveryOrDeleteCurrentIsolationData_ACU } from './useTemplateRecoveryGuard';
+import { promptFollowGlobalAfterSetDefault_ACU, runFollowGlobalTemplateFlow_ACU } from './templateFollowGlobalFlow';
 
 export type TemplateScope = 'global' | 'chat' | 'runtime';
 
@@ -164,6 +145,33 @@ function formatTemplateOperationError(error: unknown): string {
   return text;
 }
 
+/**
+ * S3-8 名称/内容指纹：判断当前聊天快照内容是否偏离库中同名预设。
+ *
+ * 可比性关键：chat scope 的 templateStr 写入时经过 sanitizeTemplateSnapshotForChat_ACU，
+ * 而库 preset 的 templateStr 是保存时的原始串——两侧都先 sanitize 同构化后再比较，
+ * 否则序列化差异会造成恒误报。任一侧解析失败时宁可不标记也不误报。
+ */
+function computeChatSnapshotDiff(
+  snapshotTemplateStr: unknown,
+  presetName: string,
+): { differs: boolean; reason: 'diverged' | 'library_preset_missing' | null } {
+  const chatSanitized = sanitizeTemplateSnapshotForChat_ACU(snapshotTemplateStr || null);
+  if (!chatSanitized?.templateStr) return { differs: false, reason: null };
+  let librarySanitized: { templateStr?: string } | null;
+  if (presetName) {
+    const libraryStr = getTemplatePreset_ACU(presetName)?.templateStr;
+    if (!libraryStr) return { differs: true, reason: 'library_preset_missing' };
+    librarySanitized = sanitizeTemplateSnapshotForChat_ACU(libraryStr);
+  } else {
+    librarySanitized = getDefaultTemplateSnapshot_ACU();
+  }
+  if (!librarySanitized?.templateStr) return { differs: false, reason: null };
+  return chatSanitized.templateStr === librarySanitized.templateStr
+    ? { differs: false, reason: null }
+    : { differs: true, reason: 'diverged' };
+}
+
 function resolveGuideDataForPresetSelection(selection: { kind: ChatPresetSelectionKind; name: string }): Record<string, any> | null {
   const normalized = normalizeTemplatePresetSelectionValue_ACU(selection.name);
   const chatScopeState = selection.kind === 'snapshot' ? getCurrentChatTemplateScopeState_ACU() : null;
@@ -197,6 +205,8 @@ export function useTableTemplatePresets() {
   const runtimeTemplateItem = ref<PresetItem | null>(null);
   const runtimeDiffersFromLibrary = ref(false);
   const runtimeTemplateAvailable = ref(false);
+  /** S3-8：当前聊天快照内容是否偏离库中同名预设（仅 chat_override 模式下可能为 true）。 */
+  const chatSnapshotDiffersFromLibrary = ref(false);
 
   const isChatOverridden = computed(() => activeTemplateScope.value === 'chat');
 
@@ -222,6 +232,7 @@ export function useTableTemplatePresets() {
       seen.add(value);
       items.push({ value, label: `${normalized}（全局预设）`, meta: formatSheetCountMeta(getTemplatePreset_ACU(normalized)?.templateStr) });
     }
+    chatSnapshotDiffersFromLibrary.value = false;
     if (activeMeta.mode === 'chat_override') {
       const currentScope = getCurrentChatTemplateScopeState_ACU();
       // 空 presetName 是当前聊天选择“默认模板”的有效标识，不能用 || 回退旧全局预设。
@@ -231,10 +242,16 @@ export function useTableTemplatePresets() {
       const value = encodeChatPresetValue('snapshot', normalized);
       if (!seen.has(value)) {
         seen.add(value);
+        // S3-8：快照内容偏离库中同名预设时在标签处明示，避免同名不同内容的静默混淆。
+        const diff = computeChatSnapshotDiff(currentScope?.templateStr, normalized);
+        chatSnapshotDiffersFromLibrary.value = diff.differs;
+        const divergenceSuffix = diff.reason === 'diverged' ? '（内容已偏离库预设）' : '';
+        const metaParts = [formatSheetCountMeta(currentScope?.templateStr)].filter(Boolean) as string[];
+        if (diff.reason === 'library_preset_missing') metaParts.push('库中已无同名预设');
         items.push({
           value,
-          label: `${normalized || '默认预设'}（当前聊天快照）`,
-          meta: formatSheetCountMeta(currentScope?.templateStr),
+          label: `${normalized || '默认预设'}（当前聊天快照）${divergenceSuffix}`,
+          meta: metaParts.length > 0 ? metaParts.join(' · ') : undefined,
         });
       }
     }
@@ -333,13 +350,44 @@ export function useTableTemplatePresets() {
     const decoded = decodeChatPresetValue(name);
     const normalized = normalizeTemplatePresetSelectionValue_ACU(decoded.name);
     await run(async () => {
-      const result = await applyTemplatePresetToCurrent_ACU(normalized, {
+      // S1-3：当前聊天 inherit_global 时全局切换会经协调器提交，可能返回破坏性
+      // blockers（需确认重试）或 saved:false（fail-closed，全局未变）。
+      const result = await applyChatTemplateWithDestructiveConfirmation(destructiveChangeConfirmed => applyTemplatePresetToCurrent_ACU(normalized, {
         source: 'v2_table_global_select',
         updateGlobal: true,
         save: true,
         persistChatScope: false,
-      });
+        destructiveChangeConfirmed,
+        signal: templateOperationController.signal,
+      }));
       if (!result) throw new Error('全局模板预设切换失败。');
+      if (typeof result === 'object' && result.saved === false) {
+        throw new Error(typeof result.error === 'string' && result.error ? result.error : '全局模板预设切换失败。');
+      }
+      if (typeof result === 'object' && typeof result.postCommitWarning === 'string' && result.postCommitWarning) {
+        toast.warning(result.postCommitWarning, { muteable: false, durationMs: 6000 });
+      }
+      message.value = null;
+      // S1-2：当前聊天存在覆盖时，新全局默认不会生效——确认后清覆盖跟随全局。
+      if (getActiveTemplatePresetMeta_ACU().mode === 'chat_override') {
+        await promptFollowGlobalAfterSetDefault_ACU({
+          dialogStore,
+          toast,
+          signal: templateOperationController.signal,
+          newDefaultName: normalized,
+        });
+      }
+    });
+  }
+
+  /** 跟随全局（清除聊天覆盖）：协调到当前全局模板并把 scope 置回 inherit_global（S1-2）。 */
+  async function followGlobalTemplate(): Promise<void> {
+    await run(async () => {
+      await runFollowGlobalTemplateFlow_ACU({
+        dialogStore,
+        toast,
+        signal: templateOperationController.signal,
+      });
       message.value = null;
     });
   }
@@ -485,8 +533,12 @@ export function useTableTemplatePresets() {
         updateGlobal: true,
         save: true,
         persistChatScope: false,
+        signal: templateOperationController.signal,
       });
       if (!result) throw new Error('另存后切换全局模板预设失败。');
+      if (typeof result === 'object' && result.saved === false) {
+        throw new Error(typeof result.error === 'string' && result.error ? result.error : '另存后切换全局模板预设失败。');
+      }
       message.value = null;
       toast.success(`已另存为全局模板预设「${finalName}」。`);
     });
@@ -522,8 +574,12 @@ export function useTableTemplatePresets() {
           updateGlobal: true,
           save: true,
           persistChatScope: false,
+          signal: templateOperationController.signal,
         });
         if (!result) throw new Error('重命名后切换全局模板预设失败。');
+        if (typeof result === 'object' && result.saved === false) {
+          throw new Error(typeof result.error === 'string' && result.error ? result.error : '重命名后切换全局模板预设失败。');
+        }
       }
       message.value = null;
     });
@@ -624,9 +680,11 @@ export function useTableTemplatePresets() {
     runtimeTemplateItem,
     runtimeDiffersFromLibrary,
     runtimeTemplateAvailable,
+    chatSnapshotDiffersFromLibrary,
     refresh,
     selectGlobalPreset,
     selectChatPreset,
+    followGlobalTemplate,
     restoreArchivedChatTemplate,
     saveGlobalAs,
     renameGlobalPreset,

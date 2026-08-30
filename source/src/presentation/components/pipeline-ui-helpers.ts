@@ -20,15 +20,15 @@ import { loadTemplatePresetSelect_ACU } from './template-preset-ui';
 const FRONTEND_READBACK_WAIT_MS_ACU = 800;
 
 export async function refreshMergedDataAndNotifyWithUI_ACU(
-    { skipNotify = false }: { skipNotify?: boolean } = {},
+    { skipNotify = false, notifyMeta }: { skipNotify?: boolean; notifyMeta?: { persisted?: boolean } } = {},
 ) {
     const result = await refreshMergedDataAndNotify_ACU();
 
-    // 1. 通知前端 (iframe context)
+    // 1. 通知前端 (iframe context)；notifyMeta.persisted=false 表示本次更新未写入聊天持久化（S2-1）
     let didNotifyFrontend = false;
     try {
         if (!skipNotify && (topLevelWindow_ACU as any).AutoCardUpdaterAPI) {
-            (topLevelWindow_ACU as any).AutoCardUpdaterAPI._notifyTableUpdate();
+            (topLevelWindow_ACU as any).AutoCardUpdaterAPI._notifyTableUpdate(notifyMeta);
             didNotifyFrontend = true;
             logDebug_ACU('Notified frontend to refresh UI after data merge.');
         } else if (skipNotify) {

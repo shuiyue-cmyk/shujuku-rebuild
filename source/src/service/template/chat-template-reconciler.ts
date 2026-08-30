@@ -114,6 +114,13 @@ export async function reconcileChatTemplate_ACU(input: ChatTemplateReconcileInpu
   const matchedKeys = new Set<string>();
   const rebaseKeys = new Set<string>();
   const revealKeys = new Set<string>();
+  // 被任一模板表按当前名精确匹配占用的 baseline key：别名认回必须跳过这些表，
+  // 否则「模板同时含新旧两个名字」会因迭代顺序产生歧义匹配或误报重复。
+  const nameClaimedBaselineKeys = new Set<string>();
+  for (const [canonicalName] of templateByName) {
+    const claimed = baselineByName.get(canonicalName);
+    if (claimed) nameClaimedBaselineKeys.add(claimed.key);
+  }
   for (const [canonicalName, templateEntry] of templateByName) {
     const matchedByName = baselineByName.get(canonicalName);
     const occupiedByKey = baselineData[templateEntry.key] as Sheet_ACU | undefined;
@@ -123,7 +130,7 @@ export async function reconcileChatTemplate_ACU(input: ChatTemplateReconcileInpu
     }
     let previous = matchedByName;
     if (!previous) {
-      const aliasMatches = findExplicitTableAliasMatches_ACU(templateEntry.sheet, baselineData);
+      const aliasMatches = findExplicitTableAliasMatches_ACU(templateEntry.sheet, baselineData, nameClaimedBaselineKeys);
       if (aliasMatches.length > 1) {
         blockers.push(`表「${templateEntry.sheet.name || templateEntry.key}」的显式历史别名同时匹配多张当前聊天表，无法唯一协调。`);
         continue;
@@ -186,9 +193,13 @@ export async function reconcileChatTemplate_ACU(input: ChatTemplateReconcileInpu
     }
     matchedKeys.add(previous.key);
     try {
-      const reconciled = input.storageMode === 'native'
-        ? reconcileMatchedSheetNative_ACU(previous.sheet, templateEntry.sheet, previous.key, templateEntry.key)
-        : reconcileMatchedSheet_ACU(previous.sheet, templateEntry.sheet, previous.key, templateEntry.key);
+      const reconciled = reconcileMatchedSheet_ACU(
+        previous.sheet,
+        templateEntry.sheet,
+        previous.key,
+        templateEntry.key,
+        input.storageMode === 'native' ? 'native' : 'sqlite',
+      );
       candidateData[previous.key] = reconciled.sheet;
       if (reconciled.changed) rebaseKeys.add(previous.key);
       audit.push(reconciled.audit);
@@ -253,17 +264,22 @@ export async function reconcileChatTemplate_ACU(input: ChatTemplateReconcileInpu
         ]);
       }
     }
+  }
 
-    for (const [key, sheet] of listSheets_ACU(candidateData)) {
-      try {
-        getSheetColumnProjection_ACU(sheet);
-      } catch (error: any) {
-        return emptyPlan_ACU(baselineData, audit, [
-          `完整 replay candidate 列投影预检失败: ${key}: ${error?.message || String(error)}`,
-        ]);
-      }
+  // 列投影预检双模式执行（S0-3）：native 的 hiddenPhysicalColumns 以表头名为身份，
+  // 与 SQLite 的 physical 名一样必须能被 getSheetColumnProjection_ACU 解析。
+  // 非法隐藏集在协调期变 blocker（fail-closed），而不是留到运行时投影抛错。
+  for (const [key, sheet] of listSheets_ACU(candidateData)) {
+    try {
+      getSheetColumnProjection_ACU(sheet);
+    } catch (error: any) {
+      return emptyPlan_ACU(baselineData, audit, [
+        `完整 replay candidate 列投影预检失败: ${key}: ${error?.message || String(error)}`,
+      ]);
     }
+  }
 
+  if (input.storageMode !== 'native') {
     try {
       // 运行时协调路径：与 template-state-reset.ts（initGameSession）同为运行时注入/协调，
       // 非法显式 DDL 允许降级为 fallback schema（:242 已存在 native 门禁，此处只作用于 sqlite）。
@@ -356,15 +372,30 @@ function getExplicitTableAliases_ACU(sheet: Sheet_ACU): string[] {
   return raw.map(value => String(value ?? '').trim()).filter(Boolean);
 }
 
-function findExplicitTableAliasMatches_ACU(template: Sheet_ACU, baselineData: TableDataObject_ACU): SheetEntry_ACU[] {
-  const aliases = new Set(getExplicitTableAliases_ACU(template).map(canonicalizeDisplayName_ACU).filter(Boolean));
-  if (aliases.size === 0) return [];
+/**
+ * 双向显式身份交集匹配（S1-5）：模板身份集（当前名 + 声明别名）与 baseline 身份集
+ * （当前名 + 累积别名）有交集即认回。覆盖两个方向：
+ * - 模板改名并声明旧名别名（既有语义，矩阵③b）；
+ * - 用户在可视化编辑器改了聊天表名（renameSheet 自动累积旧名别名），模板仍用原名。
+ * 仍是显式声明驱动：任何一侧都没有记录过的名字不猜。
+ *
+ * excludedBaselineKeys：已被其他模板表按当前名精确匹配占用的 baseline 表不参与
+ * 别名认回——模板同时含新旧两个名字时，旧名表应走 introduction 而不是歧义匹配。
+ * （名↔名交集在这里不可能命中：精确名匹配已在调用方先行查找并落空。）
+ */
+function findExplicitTableAliasMatches_ACU(template: Sheet_ACU, baselineData: TableDataObject_ACU, excludedBaselineKeys: ReadonlySet<string>): SheetEntry_ACU[] {
+  const identities = new Set([
+    canonicalizeDisplayName_ACU(template.name),
+    ...getExplicitTableAliases_ACU(template).map(canonicalizeDisplayName_ACU),
+  ].filter(Boolean));
+  if (identities.size === 0) return [];
   return listSheets_ACU(baselineData)
     .map(([key, sheet]) => ({ key, sheet }))
+    .filter(entry => !excludedBaselineKeys.has(entry.key))
     .filter(entry => {
-      const identities = [entry.sheet.name, ...getExplicitTableAliases_ACU(entry.sheet)]
+      const baselineIdentities = [entry.sheet.name, ...getExplicitTableAliases_ACU(entry.sheet)]
         .map(canonicalizeDisplayName_ACU);
-      return identities.some(identity => aliases.has(identity));
+      return baselineIdentities.some(identity => identities.has(identity));
     });
 }
 
@@ -489,180 +520,106 @@ function validateBaselineSheetRows_ACU(sheet: Sheet_ACU): void {
 }
 
 /**
- * 原生模式只按 JSON 表头协调数据，不读取 DDL、物理列、SQL DEFAULT 或 SQLite 隐藏列元数据。
- * 模板目标表头就是可见目标结构：同名列继承，新增列填 null，模板未包含的旧列不进入候选。
+ * reveal 恢复数据与当前模板结构的列级再协调（S1-4）。
+ *
+ * reveal 的数据由 persist 层从历史恢复（"离开时最新状态"），协调层只产出模板结构壳；
+ * 若休眠期间模板演进（加列/减列/改名），恢复数据的列集会落后于当前模板。本函数在
+ * checkpoint 落盘前把恢复数据 rebase 到模板列集上：匹配列继承数据、模板新增列按契约
+ * 填充（sqlite 按 DDL DEFAULT/NOT NULL，native 恒 null）、模板缺失列进入尾部隐藏列
+ * （列级休眠，数据不删）。语义与 matched 表切模板的列级协调完全一致
+ * （同一实现 reconcileMatchedSheet_ACU，双模式同一契约）。
+ *
+ * fail-loud：恢复数据行畸形（row_id 空/重复/行宽不一致）、DDL 无法回退或解析、
+ * 协调结果投影不合法时直接抛错，由 persist 层事务回滚兜底，绝不落盘半协调数据。
  */
-function reconcileMatchedSheetNative_ACU(before: Sheet_ACU, template: Sheet_ACU, sheetKey: string, templateSheetKey: string): {
-  sheet: Sheet_ACU;
-  changed: boolean;
-  audit: ChatTemplateReconcileAudit_ACU;
-  meta?: Record<string, any>;
-} {
-  const beforeHeaders = headers_ACU(before);
-  const targetHeaders = headers_ACU(template);
-  const beforeEntries = beforeHeaders.slice(1).map((header, index) => ({
-    canonical: canonicalizeDisplayName_ACU(header), header, index: index + 1,
-  }));
-  const targetEntries = targetHeaders.slice(1).map((header, index) => ({
-    canonical: canonicalizeDisplayName_ACU(header), header, index: index + 1,
-  }));
-  const beforeByCanonical = new Map(beforeEntries.map(entry => [entry.canonical, entry]));
-  const targetByCanonical = new Map(targetEntries.map(entry => [entry.canonical, entry]));
-  if (beforeByCanonical.size !== beforeEntries.length || targetByCanonical.size !== targetEntries.length
-    || beforeEntries.some(entry => !entry.canonical) || targetEntries.some(entry => !entry.canonical)) {
-    throw new Error('存在空列或规范化重复列。');
+export function reconcileRevealedSheetWithTemplate_ACU(
+  restoredSheet: Sheet_ACU,
+  templateSheet: Sheet_ACU,
+  sheetKey: string,
+  contract: 'native' | 'sqlite',
+): { sheet: Sheet_ACU; audit: ChatTemplateReconcileAudit_ACU; changed: boolean } {
+  const restored = clone_ACU(restoredSheet);
+  const template = clone_ACU(templateSheet);
+  try {
+    validateBaselineSheetRows_ACU(restored);
+  } catch (error: any) {
+    throw new Error(`reveal 恢复数据不合法（${sheetKey}）：${error?.message || String(error)}`);
   }
-
-  const inheritedColumns: string[] = [];
-  const addedColumns: string[] = [];
-  const sourceByTargetCanonical = new Map<string, typeof beforeEntries[number]>();
-  for (const target of targetEntries) {
-    const source = beforeByCanonical.get(target.canonical);
-    if (source) {
-      sourceByTargetCanonical.set(target.canonical, source);
-      inheritedColumns.push(target.header);
-    } else {
-      addedColumns.push(target.header);
+  if (contract === 'sqlite') {
+    // 旧历史 hide checkpoint 可能没有持久化 DDL（运行时依赖 fallback）。
+    // 与顶层协调器对 baseline/template 的处理一致：仅补缺失/全空白 DDL，绝不覆盖非空 DDL。
+    for (const [label, sheet] of [['reveal 恢复数据', restored], ['reveal 目标模板结构', template]] as const) {
+      const fallback = applyMissingDdlFallback_ACU({ [sheetKey]: sheet } as unknown as TableDataObject_ACU, label);
+      if (fallback.blockers.length > 0) throw new Error(fallback.blockers.join('；'));
     }
   }
-  const deletedColumns = beforeEntries
-    .filter(entry => !targetByCanonical.has(entry.canonical))
-    .map(entry => entry.header);
-
-  const migratedRows: Array<Array<string | null>> = before.content.slice(1).map(beforeRow => {
-    const row: Array<string | null> = [beforeRow[0] ?? null];
-    for (const target of targetEntries) {
-      const source = sourceByTargetCanonical.get(target.canonical);
-      row.push(source ? (beforeRow[source.index] ?? null) : null);
+  const reconciled = reconcileMatchedSheet_ACU(restored, template, sheetKey, sheetKey, contract);
+  // 协调结果必须能被投影层解析（隐藏集合法）；sqlite 下 DDL 与表头必须严格一致。
+  getSheetColumnProjection_ACU(reconciled.sheet);
+  if (contract === 'sqlite') {
+    const validation = validateDDLTextAgainstHeaders_ACU(String(reconciled.sheet.sourceData?.ddl || ''), headers_ACU(reconciled.sheet));
+    if (!validation.valid) {
+      throw new Error(`reveal 再协调结果 DDL 校验失败（${sheetKey}）：${validation.message}`);
     }
-    return row;
-  });
-  const templateRows = Array.isArray(template.content) ? template.content.slice(1) : [];
-  const adoptedRows = migratedRows.length === 0 && templateRows.length > 0
-    ? adoptTemplateRowsForMatchedSheet_ACU(templateRows, targetEntries.length, 0)
-    : migratedRows;
-
-  const sheet = clone_ACU(template);
-  sheet.uid = before.uid;
-  sheet.content = [targetHeaders, ...adoptedRows];
-  delete sheet.seedRows;
-  if (sheet.sourceData && typeof sheet.sourceData === 'object') {
-    delete sheet.sourceData.hiddenPhysicalColumns;
-    delete sheet.sourceData.columnAliases;
   }
-  accumulateTableAliases_ACU(sheet, before, template);
-  validateBaselineSheetRows_ACU(sheet);
-  const meta = buildPersistentMetadataUpdate_ACU(before, sheet);
-  const beforeProjection = clone_ACU(before); delete beforeProjection.seedRows;
-  const changed = JSON.stringify(beforeProjection) !== JSON.stringify(sheet);
-  return {
-    sheet,
-    changed,
-    meta,
-    audit: {
-      sheetKey,
-      resolvedSheetKey: sheetKey,
-      match: 'matched',
-      baselineSheetKey: sheetKey,
-      templateSheetKey,
-      baselineName: before.name,
-      templateName: template.name,
-      canonicalName: canonicalizeDisplayName_ACU(before.name),
-      inheritedColumns,
-      addedColumns,
-      deletedColumns,
-      hiddenColumns: [],
-      physicalColumnMappings: [],
-      fills: addedColumns.map(header => ({ physicalName: header, kind: 'null', literal: null as null })),
-      affectedRowCount: before.content.length - 1,
-      metadataChanged: !!meta,
-      metadataChangedFields: meta ? Object.keys(meta) : [],
-      destructiveChangeConfirmed: false,
-      operations: [],
-    },
-  };
+  return { sheet: reconciled.sheet, audit: reconciled.audit, changed: reconciled.changed };
 }
 
-function reconcileMatchedSheet_ACU(before: Sheet_ACU, template: Sheet_ACU, sheetKey: string, templateSheetKey: string): {
+/**
+ * matched 表的统一列级协调（S0-3+S3-1：单函数双契约）。
+ *
+ * 列身份（canonical 显示名）、匹配链（canonical → 同 key physical 复用 → columnAliases）、
+ * 列级休眠（未匹配旧列保留为尾部隐藏列，数据不删；零数据表同走休眠，S1-6，
+ * 撞名旧列因零单元格而无损丢弃、audit 记 deletedColumns）、行迁移、别名累积与
+ * audit 双模式共享；存储差异收敛为四个契约分支：
+ * - 列条目构造：sqlite 从 DDL 取 physical 列名；native 的 physical 就是表头字符串，
+ *   不解析、不校验 DDL（native 路径不得解析或 hydrate SQLite DDL）。
+ * - 同 key physical 复用匹配：仅 sqlite（native 无独立于表头的物理身份可复用）。
+ * - 新列填充：sqlite 按 DDL DEFAULT/NOT NULL 决定；native 恒 null。
+ * - 物化收尾：sqlite 重建含保留列的 DDL 并沁用旧物理名；native 不生成 DDL
+ *   （保留模板 sourceData.ddl 原值），hiddenPhysicalColumns 以表头名落地——
+ *   投影层（getSheetColumnProjection_ACU）在无匹配 DDL 时按表头名解析隐藏列。
+ *
+ * 隐藏列尾部不变式：迁移后 content 头恒为 [...目标表头, ...隐藏表头]。
+ * DSL 填表的可见列索引与物理列索引的一致性依赖此不变式（双模式同一契约）。
+ */
+function reconcileMatchedSheet_ACU(before: Sheet_ACU, template: Sheet_ACU, sheetKey: string, templateSheetKey: string, contract: 'native' | 'sqlite'): {
   sheet: Sheet_ACU;
   changed: boolean;
   audit: ChatTemplateReconcileAudit_ACU;
   meta?: Record<string, any>;
 } {
+  const sqlite = contract === 'sqlite';
   const beforeHeaders = headers_ACU(before);
   const targetHeaders = headers_ACU(template);
-  const beforeColumns = parseDDLColumnInfos_ACU(String(before.sourceData?.ddl || ''));
-  const targetColumns = parseDDLColumnInfos_ACU(String(template.sourceData?.ddl || ''));
-  if (beforeColumns.length !== beforeHeaders.length || targetColumns.length !== targetHeaders.length) throw new Error('DDL 与表头列数不一致。');
+  const beforeColumns = sqlite ? parseDDLColumnInfos_ACU(String(before.sourceData?.ddl || '')) : [];
+  const targetColumns = sqlite ? parseDDLColumnInfos_ACU(String(template.sourceData?.ddl || '')) : [];
+  if (sqlite && (beforeColumns.length !== beforeHeaders.length || targetColumns.length !== targetHeaders.length)) throw new Error('DDL 与表头列数不一致。');
   const beforeEntries = beforeHeaders.slice(1).map((name, index) => ({
-    canonical: canonicalizeDisplayName_ACU(name), index: index + 1, physical: beforeColumns[index + 1].sqlName, header: name,
+    canonical: canonicalizeDisplayName_ACU(name), index: index + 1, physical: sqlite ? beforeColumns[index + 1].sqlName : name, header: name,
   }));
   const targetEntries = targetHeaders.slice(1).map((name, index) => ({
-    canonical: canonicalizeDisplayName_ACU(name), index: index + 1, physical: targetColumns[index + 1].sqlName, header: name, column: targetColumns[index + 1],
+    canonical: canonicalizeDisplayName_ACU(name), index: index + 1, physical: sqlite ? targetColumns[index + 1].sqlName : name, header: name, column: sqlite ? targetColumns[index + 1] : null,
   }));
   const beforeByCanonical = new Map(beforeEntries.map(column => [column.canonical, column]));
   const targetByCanonical = new Map(targetEntries.map(column => [column.canonical, column]));
-  if (beforeByCanonical.size !== beforeHeaders.length - 1 || targetByCanonical.size !== targetHeaders.length - 1) throw new Error(`表「${before.name || sheetKey}」(${sheetKey}) → 模板表「${template.name || templateSheetKey}」(${templateSheetKey}) 存在空列或规范化重复列。`);
+  if (beforeByCanonical.size !== beforeHeaders.length - 1 || targetByCanonical.size !== targetHeaders.length - 1
+    || (!sqlite && (beforeEntries.some(entry => !entry.canonical) || targetEntries.some(entry => !entry.canonical)))) {
+    throw new Error(`表「${before.name || sheetKey}」(${sheetKey}) → 模板表「${template.name || templateSheetKey}」(${templateSheetKey}) 存在空列或规范化重复列。`);
+  }
   const beforeByPhysical = new Map(beforeEntries.map(column => [column.physical.toLowerCase(), column]));
   const targetByPhysical = new Map(targetEntries.map(column => [column.physical.toLowerCase(), column]));
-  if (beforeByPhysical.size !== beforeEntries.length || targetByPhysical.size !== targetEntries.length) throw new Error(`表「${before.name || sheetKey}」(${sheetKey}) → 模板表「${template.name || templateSheetKey}」(${templateSheetKey}) DDL 存在重复 physical column。`);
+  if (beforeByPhysical.size !== beforeEntries.length || targetByPhysical.size !== targetEntries.length) throw new Error(`表「${before.name || sheetKey}」(${sheetKey}) → 模板表「${template.name || templateSheetKey}」(${templateSheetKey}) ${sqlite ? 'DDL 存在重复 physical column' : '存在大小写不敏感的重复表头'}。`);
 
-  // === 零数据覆盖语义（计划 3.1）===
-  // 逐表判定：before.content.length > 1 才认为有数据行。该表无任何单元格时，
-  // “继承/隐藏/重解释”全部退化为空操作，却可能因隐藏列与目标可见列撞 physical 名
-  // 而误阻断（计划 2.3）。此时按覆盖处理：不继承、不隐藏、不做 reuse 判定，
-  // 结构与元数据整体取模板，仅保留既有 sheet key / uid（计划 3.2）。
+  // === 零数据表语义（S1-6：统一走列级休眠，撞名列无损丢弃）===
+  // 逐表判定：before.content.length > 1 才认为有数据行。零数据表不再走整表覆盖特例
+  //（原计划 3.1/3.2 的覆盖语义已删除）：sheet key 在 introduction 时按表名派生，
+  // 与模板作者键几乎恒不相等，key 无法区分「用户结构演化」与「预设替换」；而覆盖
+  // 会把用户刚建好还没填数据的自定义列静默丢弃。统一休眠后，零数据表与有数据表
+  // 语义一致：未匹配旧列进尾部隐藏列，模板再含该列时唤醒。覆盖特例原本要防的
+  // 两个问题由下述机制承接：2.3 撞名阻断 → 零数据撞名列无损丢弃（见 hiddenEntries
+  // 撞名分流）；幽灵隐藏项投影残留 → 零数据容错读取 + live 过滤（见 previousHidden）。
   const hasBaselineRows = before.content.length > 1;
-  if (!hasBaselineRows) {
-    const sheet = clone_ACU(template);
-    sheet.uid = before.uid;
-    // 模板自带数据行是模板结构的一部分，按目标可见列落地并补齐稳定 row_id。
-    const templateRows = Array.isArray(template.content) ? template.content.slice(1) : [];
-    const adoptedRows = templateRows.length > 0
-      ? adoptTemplateRowsForMatchedSheet_ACU(templateRows, targetEntries.length, 0)
-      : [];
-    sheet.content = [targetHeaders, ...adoptedRows];
-    sheet.sourceData = clone_ACU(template.sourceData);
-    // 旧表无行 ⇒ 所有旧列均无单元格，丢弃无损；不把旧隐藏列/旧别名带进新结构，
-    // 避免残留投影指向不存在的 physical column，或跨 key 把无关列误认为同一列。
-    // 模板自身声明的 hiddenPhysicalColumns / columnAliases 保留（属于新结构）。
-    delete sheet.seedRows;
-    // 表级别名仍累积（覆盖后表名取模板，后续切换仍需按历史表名认回）。
-    accumulateTableAliases_ACU(sheet, before, template);
-    validateBaselineSheetRows_ACU(sheet);
-    const meta = buildPersistentMetadataUpdate_ACU(before, sheet);
-    const beforeProjection = clone_ACU(before); delete beforeProjection.seedRows;
-    const changed = JSON.stringify(beforeProjection) !== JSON.stringify(sheet);
-    // audit 如实记录：旧列全部丢弃（零数据无单元格，无损但必须可审计），
-    // 新增列为模板全部可见列，无隐藏列、无填充、无行受影响。
-    const deletedColumns = beforeEntries.map(column => column.header);
-    return {
-      sheet,
-      changed,
-      meta,
-      audit: {
-        sheetKey,
-        resolvedSheetKey: sheetKey,
-        match: 'matched',
-        baselineSheetKey: sheetKey,
-        templateSheetKey,
-        baselineName: before.name,
-        templateName: template.name,
-        canonicalName: canonicalizeDisplayName_ACU(before.name),
-        inheritedColumns: [],
-        addedColumns: targetEntries.map(column => column.header),
-        deletedColumns,
-        hiddenColumns: [],
-        physicalColumnMappings: [],
-        fills: [],
-        affectedRowCount: 0,
-        metadataChanged: !!meta,
-        metadataChangedFields: meta ? Object.keys(meta) : [],
-        destructiveChangeConfirmed: false,
-        operations: [],
-      },
-    };
-  }
 
   const matchedBeforeCanonical = new Set<string>();
   const matchedTargetCanonical = new Set<string>();
@@ -681,7 +638,8 @@ function reconcileMatchedSheet_ACU(before: Sheet_ACU, template: Sheet_ACU, sheet
 
   // 同一稳定 Sheet key 下，physical column 才是持久化数据身份；表头只是可变显示名。
   // 不同 key 的导入模板仍禁止依赖 physical 同名推断，以免把无关字段重新解释为旧数据。
-  if (sheetKey === templateSheetKey) {
+  // native 无独立于表头的物理身份（physical=表头），canonical 匹配已覆盖，跳过。
+  if (sqlite && sheetKey === templateSheetKey) {
     for (const target of targetEntries) {
       if (matchedTargetCanonical.has(target.canonical)) continue;
       const source = beforeByPhysical.get(target.physical.toLowerCase());
@@ -719,40 +677,80 @@ function reconcileMatchedSheet_ACU(before: Sheet_ACU, template: Sheet_ACU, sheet
     }
   }
 
-  const hiddenEntries = beforeEntries.filter(column => !matchedBeforeCanonical.has(column.canonical));
-  const hiddenColumns = hiddenEntries.map(column => column.header);
+  // native 反向别名匹配：native 的 physical 随显示名变化（physical=表头），改名后
+  // 别名链累积在旧列的当前表头键下，正向索引（按目标表头查）必然落空，需反查——
+  // 旧列自身的 columnAliases 中包含目标显示名时认回同一列。仍是显式声明驱动：
+  // 必须唯一命中一个未匹配旧列，否则不继承。sqlite 不需要此分支：物理列名跨改名
+  // 稳定，正向键恒命中。
+  if (!sqlite) {
+    const beforeAliasMap = (before.sourceData as Record<string, any> | undefined)?.columnAliases;
+    for (const target of targetEntries) {
+      if (matchedTargetCanonical.has(target.canonical)) continue;
+      if (!beforeAliasMap || typeof beforeAliasMap !== 'object' || Array.isArray(beforeAliasMap)) break;
+      const candidates = beforeEntries.filter(entry => {
+        if (matchedBeforeCanonical.has(entry.canonical)) return false;
+        const aliases = beforeAliasMap[entry.physical];
+        if (!Array.isArray(aliases)) return false;
+        return aliases.some(alias => canonicalizeDisplayName_ACU(alias) === target.canonical);
+      });
+      if (candidates.length !== 1) continue;
+      const source = candidates[0];
+      matchedBeforeCanonical.add(source.canonical);
+      matchedTargetCanonical.add(target.canonical);
+      targetSourceByCanonical.set(target.canonical, source);
+      inheritedColumns.push(target.header);
+      if (source.physical !== target.physical) {
+        mappings.push({ fromPhysicalName: source.physical, toPhysicalName: target.physical });
+      }
+    }
+  }
+
+  let hiddenEntries = beforeEntries.filter(column => !matchedBeforeCanonical.has(column.canonical));
   const addedColumns = targetEntries.filter(column => !matchedTargetCanonical.has(column.canonical)).map(column => column.header);
   const hiddenPhysicalNames = new Set(hiddenEntries.map(column => column.physical.toLowerCase()));
   const reusedPhysicalNames = targetEntries
     .filter(column => !matchedTargetCanonical.has(column.canonical) && hiddenPhysicalNames.has(column.physical.toLowerCase()))
     .map(column => column.physical);
+  const droppedColumns: string[] = [];
   if (reusedPhysicalNames.length > 0) {
-    // 真实原因：隐藏旧列与目标可见列产生重复列名 DDL，SQLite 建表必然失败。
-    // 列出 key 对、冲突 physical 名、两侧显示名与 baseline 行数，便于定位。
-    const conflictDetails = reusedPhysicalNames.map(physical => {
-      const hidden = hiddenEntries.find(entry => entry.physical.toLowerCase() === physical.toLowerCase());
-      const target = targetEntries.find(entry => entry.physical.toLowerCase() === physical.toLowerCase());
-      return `physical=${physical}（隐藏列「${hidden?.header}」→ 目标列「${target?.header}」）`;
-    }).join('；');
-    throw new Error(`表「${before.name || sheetKey}」(${sheetKey}) → 模板表「${template.name || templateSheetKey}」(${templateSheetKey})：隐藏列与目标可见列存在同名 physical column，产出重复列名 DDL，SQLite 建表会失败。冲突：${conflictDetails}。baseline 行数=${before.content.length - 1}。`);
+    if (hasBaselineRows) {
+      // 真实原因（sqlite）：隐藏旧列与目标可见列产生重复列名 DDL，SQLite 建表必然失败。
+      // native 下 physical=表头，canonical 相等即匹配，此冲突理论上不可达，仍 fail-loud 兜底。
+      // 列出 key 对、冲突 physical 名、两侧显示名与 baseline 行数，便于定位。
+      const conflictDetails = reusedPhysicalNames.map(physical => {
+        const hidden = hiddenEntries.find(entry => entry.physical.toLowerCase() === physical.toLowerCase());
+        const target = targetEntries.find(entry => entry.physical.toLowerCase() === physical.toLowerCase());
+        return `physical=${physical}（休眠列「${hidden?.header}」→ 目标列「${target?.header}」）`;
+      }).join('；');
+      throw new Error(`表「${before.name || sheetKey}」(${sheetKey}) → 模板表「${template.name || templateSheetKey}」(${templateSheetKey})：休眠列与目标可见列存在同名 physical column${sqlite ? '，产出重复列名 DDL，SQLite 建表会失败' : ''}。冲突：${conflictDetails}。baseline 行数=${before.content.length - 1}。`);
+    }
+    // 零数据表的撞名分流（S1-6，承接计划 2.3）：旧表无任何单元格，丢弃撞名旧列
+    // 不损失数据；保留则必然产出重复列名 DDL 而阻断切换。audit 以 deletedColumns
+    // 如实记录，非撞名的未匹配旧列仍进休眠。
+    const collidingPhysical = new Set(reusedPhysicalNames.map(name => name.toLowerCase()));
+    droppedColumns.push(...hiddenEntries.filter(entry => collidingPhysical.has(entry.physical.toLowerCase())).map(entry => entry.header));
+    hiddenEntries = hiddenEntries.filter(entry => !collidingPhysical.has(entry.physical.toLowerCase()));
   }
-  // 新列填充决策（替代 fills 静态契约）：可解析 literal DEFAULT → 该值；NOT NULL 无 DEFAULT → 空串；nullable → null。
+  const hiddenColumns = hiddenEntries.map(column => column.header);
+  // 新列填充决策（替代 fills 静态契约）：
+  // sqlite——可解析 literal DEFAULT → 该值；NOT NULL 无 DEFAULT → 空串；nullable → null。
+  // native——无 DDL 契约，恒 null。
   const fillAudit: Array<{ physicalName: string; kind: string; literal: unknown }> = [];
   const fillByTargetCanonical = new Map<string, string | null>();
   for (const target of targetEntries) {
     if (matchedTargetCanonical.has(target.canonical)) continue;
-    const literal = parseDDLSafeDefaultLiteral_ACU(target.column.defaultExpression);
-    let value: string | null;
-    let kind: string;
-    if (literal) { value = literalToCellValue_ACU(literal); kind = 'literal_default'; }
-    else if (target.column.isNotNull) { value = ''; kind = 'empty_not_null'; }
-    else { value = null; kind = 'null'; }
+    let value: string | null = null;
+    let kind = 'null';
+    if (sqlite) {
+      const literal = parseDDLSafeDefaultLiteral_ACU(target.column!.defaultExpression);
+      if (literal) { value = literalToCellValue_ACU(literal); kind = 'literal_default'; }
+      else if (target.column!.isNotNull) { value = ''; kind = 'empty_not_null'; }
+    }
     fillByTargetCanonical.set(target.canonical, value);
     fillAudit.push({ physicalName: target.physical, kind, literal: value });
   }
   const sheet = clone_ACU(template);
   sheet.uid = before.uid;
-  const retainedHiddenColumns = hiddenEntries.map(entry => beforeColumns[entry.index]);
   const retainedHiddenHeaders = hiddenEntries.map(entry => entry.header);
   // 迁移后数据行（纯 JS 直通，替代契约驱动迁移）：匹配列原值直通，新列取填充值，隐藏列原值保留。
   const migratedRows: Array<Array<string | null>> = [];
@@ -779,33 +777,55 @@ function reconcileMatchedSheet_ACU(before: Sheet_ACU, template: Sheet_ACU, sheet
     ? adoptTemplateRowsForMatchedSheet_ACU(templateRows, targetEntries.length, retainedHiddenHeaders.length)
     : migratedRows;
   sheet.content = [nextHeaders, ...adoptedRows];
-  sheet.sourceData = clone_ACU(template.sourceData);
-  // 列身份由 canonical 显示名决定，物理列名一旦确立就不再随模板 DDL 文本变动。
-  // 若采用模板的物理名，同一显示名会在切模板时被改名（如 last_round_time → prev_scene_time），
-  // 而历史 log 里的 SQL 仍按旧物理名书写，回放时必然撞 "has no column named ..."。
-  const effectiveTargetColumns = targetColumns.map((column, index) => {
-    if (index === 0) return column;
-    const target = targetEntries[index - 1];
-    const source = target ? targetSourceByCanonical.get(target.canonical) : undefined;
-    if (!source || source.physical === column.sqlName) return column;
-    return renamePhysicalColumn_ACU(column, source.physical);
-  });
-  sheet.sourceData.ddl = buildRetainedColumnDDL_ACU(before, template, effectiveTargetColumns, targetHeaders, retainedHiddenColumns, retainedHiddenHeaders);
-  const activePhysical = new Set(effectiveTargetColumns.map(column => column.sqlName.toLowerCase()));
-  const previousHidden = getSheetColumnProjection_ACU(before).hiddenPhysicalColumns;
-  const candidatePhysical = new Map([...effectiveTargetColumns, ...retainedHiddenColumns].map(column => [column.sqlName.toLowerCase(), column.sqlName]));
-  const hiddenPhysicalColumns = [...previousHidden, ...retainedHiddenColumns.map(column => column.sqlName)]
+  sheet.sourceData = clone_ACU(template.sourceData || ({} as Sheet_ACU['sourceData']));
+  // 物化收尾契约分支：sqlite 重建 DDL 并沁用旧物理名；native 不生成/不解析 DDL，
+  // 保留模板 sourceData.ddl 原值（结构变更后旧 DDL 与新表头列数必然不一致，
+  // 投影层会退回按表头名解析隐藏列——这正是 native 隐藏集的身份契约）。
+  let activePhysicalNames: string[];
+  let retainedHiddenPhysicalNames: string[];
+  if (sqlite) {
+    const retainedHiddenColumns = hiddenEntries.map(entry => beforeColumns[entry.index]);
+    // 列身份由 canonical 显示名决定，物理列名一旦确立就不再随模板 DDL 文本变动。
+    // 若采用模板的物理名，同一显示名会在切模板时被改名（如 last_round_time → prev_scene_time），
+    // 而历史 log 里的 SQL 仍按旧物理名书写，回放时必然撞 "has no column named ..."。
+    const effectiveTargetColumns = targetColumns.map((column, index) => {
+      if (index === 0) return column;
+      const target = targetEntries[index - 1];
+      const source = target ? targetSourceByCanonical.get(target.canonical) : undefined;
+      if (!source || source.physical === column.sqlName) return column;
+      return renamePhysicalColumn_ACU(column, source.physical);
+    });
+    sheet.sourceData.ddl = buildRetainedColumnDDL_ACU(before, template, effectiveTargetColumns, targetHeaders, retainedHiddenColumns, retainedHiddenHeaders);
+    activePhysicalNames = effectiveTargetColumns.map(column => column.sqlName);
+    retainedHiddenPhysicalNames = retainedHiddenColumns.map(column => column.sqlName);
+  } else {
+    activePhysicalNames = [...targetHeaders];
+    retainedHiddenPhysicalNames = retainedHiddenHeaders;
+  }
+  const activePhysical = new Set(activePhysicalNames.map(name => name.toLowerCase()));
+  // 有数据表：投影 fail-loud 校验 baseline 隐藏集一致性（幽灵项属数据损坏，必须暴露）。
+  // 零数据表：容错读取（S1-6）——幽灵隐藏项不指向任何单元格，丢弃无损；
+  // 下方 candidatePhysical live 过滤会把不在候选结构中的项清掉，不残留幽灵投影。
+  const previousHidden = hasBaselineRows
+    ? getSheetColumnProjection_ACU(before).hiddenPhysicalColumns
+    : (Array.isArray(before.sourceData?.hiddenPhysicalColumns) ? before.sourceData.hiddenPhysicalColumns : [])
+      .map(value => String(value ?? '').trim())
+      .filter(Boolean);
+  const candidatePhysical = new Map([...activePhysicalNames, ...retainedHiddenPhysicalNames].map(name => [name.toLowerCase(), name]));
+  const hiddenPhysicalColumns = [...previousHidden, ...retainedHiddenPhysicalNames]
     .filter(name => !activePhysical.has(name.toLowerCase()) && candidatePhysical.has(name.toLowerCase()))
     .filter((name, index, values) => values.findIndex(value => value.toLowerCase() === name.toLowerCase()) === index)
     .map(name => candidatePhysical.get(name.toLowerCase())!);
   if (previousHidden.length > 0 || hiddenPhysicalColumns.length > 0) sheet.sourceData.hiddenPhysicalColumns = hiddenPhysicalColumns;
   else delete sheet.sourceData.hiddenPhysicalColumns;
   // 记下本次发生的显示名变更，使后续切换仍能顺着别名链认回同一列。
+  // 键取该列改名后的存活 physical：sqlite 物理列名跨改名稳定（沁用旧名），
+  // native 的 physical 就是新表头（旧表头键已死，挂在其下的别名会被 live 过滤丢弃）。
   const renamedColumns = targetEntries
     .map(target => {
       const source = targetSourceByCanonical.get(target.canonical);
       if (!source || source.canonical === target.canonical) return null;
-      const physicalName = source.physical;
+      const physicalName = sqlite ? source.physical : target.physical;
       return { physicalName, previousHeader: source.header, nextHeader: target.header };
     })
     .filter((entry): entry is { physicalName: string; previousHeader: string; nextHeader: string } => !!entry);
@@ -814,7 +834,7 @@ function reconcileMatchedSheet_ACU(before: Sheet_ACU, template: Sheet_ACU, sheet
     before,
     template,
     renamedColumns,
-    new Set([...effectiveTargetColumns, ...retainedHiddenColumns].map(column => column.sqlName.toLowerCase())),
+    new Set(candidatePhysical.keys()),
   );
   accumulateTableAliases_ACU(sheet, before, template);
   delete sheet.seedRows;
@@ -822,7 +842,7 @@ function reconcileMatchedSheet_ACU(before: Sheet_ACU, template: Sheet_ACU, sheet
   const beforeProjection = clone_ACU(before); delete beforeProjection.seedRows;
   const changed = JSON.stringify(beforeProjection) !== JSON.stringify(sheet);
   return { sheet, changed, meta, audit: { sheetKey, resolvedSheetKey: sheetKey, match: 'matched', baselineSheetKey: sheetKey, templateSheetKey, baselineName: before.name,
-    templateName: template.name, canonicalName: canonicalizeDisplayName_ACU(before.name), inheritedColumns, addedColumns, deletedColumns: [], hiddenColumns,
+    templateName: template.name, canonicalName: canonicalizeDisplayName_ACU(before.name), inheritedColumns, addedColumns, deletedColumns: droppedColumns, hiddenColumns,
     physicalColumnMappings: mappings, fills: fillAudit,
     affectedRowCount: before.content.length - 1, metadataChanged: !!meta, metadataChangedFields: meta ? Object.keys(meta) : [], destructiveChangeConfirmed: false, operations: [] } };
 }
