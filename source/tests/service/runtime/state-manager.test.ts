@@ -16,6 +16,8 @@ vi.mock('../../../src/data/gateways/chat-gateway', () => ({
 
 vi.mock('../../../src/shared/defaults-json.js', () => ({
   DEFAULT_CHAR_CARD_PROMPT_ACU: '',
+  DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU: '',
+  DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU: '',
   DEFAULT_PLOT_SETTINGS_ACU: {},
 }));
 
@@ -30,6 +32,7 @@ import {
   NEW_MESSAGE_DEBOUNCE_DELAY_ACU,
   USER_SEND_TRIGGER_TTL_MS_ACU,
   generationGate_ACU,
+  loopState_ACU,
   planningGuard_ACU,
   markUserSendIntent_ACU,
   isRecentUserSendIntent_ACU,
@@ -77,6 +80,15 @@ beforeEach(() => {
   generationGate_ACU.lastGeneration = null;
   generationGate_ACU.generationSeq = 0;
   generationGate_ACU.activeGenerations = [];
+  // 重置 loopState
+  loopState_ACU.isLooping = false;
+  loopState_ACU.isRetrying = false;
+  loopState_ACU.timerId = null;
+  loopState_ACU.retryCount = 0;
+  loopState_ACU.startTime = 0;
+  loopState_ACU.totalDuration = 0;
+  loopState_ACU.tickInterval = null;
+  loopState_ACU.awaitingReply = false;
   // 重置 planningGuard
   planningGuard_ACU.inProgress = false;
   planningGuard_ACU.ignoreNextGenerationEndedCount = 0;

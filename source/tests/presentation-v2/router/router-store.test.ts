@@ -42,11 +42,11 @@ afterEach(() => {
 });
 
 describe('router-store · pageRegistry 基线', () => {
-  it('注册表恰好 12 项，分布于 5 分组（生理追踪已剥离）', async () => {
+  it('注册表恰好 13 项，分布于 5 分组（生理追踪已剥离）', async () => {
     const m = await freshImport();
     m.pinia.setActivePinia(m.pinia.createPinia());
     const r = m.router.useRouterStore();
-    expect(r.pageRegistry.length).toBe(12);
+    expect(r.pageRegistry.length).toBe(13);
     const byGroup = r.pageRegistry.reduce<Record<string, number>>((acc, p) => {
       acc[p.group] = (acc[p.group] || 0) + 1;
       return acc;
@@ -54,7 +54,7 @@ describe('router-store · pageRegistry 基线', () => {
     expect(byGroup).toEqual({
       overview: 2,
       config: 5,
-      feature: 2,
+      feature: 3,
       tool: 2,
       developer: 1,
     });
@@ -73,6 +73,7 @@ describe('router-store · pageRegistry 基线', () => {
       ['plot', '剧情推进', 'config'],
       ['agent', 'Agent', 'config'],
       ['api', 'API', 'config'],
+      ['continuation', '智能续写', 'feature'],
       ['vector-index', '交火模式', 'feature'],
       ['content-replace', '正文替换', 'feature'],
       ['data-mgmt', '数据管理', 'tool'],
@@ -216,12 +217,13 @@ describe('router-store · 高手模式可见性', () => {
     const r = m.router.useRouterStore();
     expect(r.visiblePagesByGroup.overview.length).toBe(1);
     expect(r.visiblePagesByGroup.config.length).toBe(5);
-    expect(r.visiblePagesByGroup.feature.length).toBe(0); // 交火/正文替换默认关闭；生理追踪已移到开发者组
+    expect(r.visiblePagesByGroup.feature.length).toBe(1); // 智能续写默认可见；交火/正文替换默认关闭
+    expect(r.visiblePagesByGroup.feature.map((p: any) => p.id)).toEqual(['continuation']);
     expect(r.visiblePagesByGroup.tool.length).toBe(2); // 数据管理 + 高级工具
     expect(r.visiblePagesByGroup.developer.length).toBe(0); // 默认 developerOptionsEnabled=false（开发者页 + 生理追踪均隐藏）
   });
 
-  it('交火模式、正文替换都关闭时功能分组为空', async () => {
+  it('交火模式、正文替换都关闭时功能分组只剩智能续写', async () => {
     persistAdvancedMode();
     const m = await freshImport();
     const state = await import('../../../src/service/runtime/state-manager');
@@ -236,7 +238,7 @@ describe('router-store · 高手模式可见性', () => {
     m.pinia.setActivePinia(m.pinia.createPinia());
     const r = m.router.useRouterStore();
 
-    expect(r.visiblePagesByGroup.feature.map((p: any) => p.id)).toEqual([]); // 生理追踪已移到开发者组
+    expect(r.visiblePagesByGroup.feature.map((p: any) => p.id)).toEqual(['continuation']);
     expect(r.visiblePages.map(p => p.id)).not.toContain('vector-index');
     expect(r.visiblePages.map(p => p.id)).not.toContain('content-replace');
   });
