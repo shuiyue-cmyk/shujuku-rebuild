@@ -49,6 +49,8 @@ interface VersionCheckState_ACU {
   lastCheckAt?: number;
   latestVersion?: string;
   lastNotifiedVersion?: string;
+  /** 上次检查时的本地版本：本地版本变了（用户刚更新过扩展）则节流作废立即重查。 */
+  localVersion?: string;
 }
 
 function defaultReadState_ACU(): VersionCheckState_ACU | null {
@@ -104,9 +106,15 @@ export async function checkDatabaseUpdateOnStartup_ACU(overrides: Partial<Versio
   const deps: VersionCheckDeps_ACU = { ...defaultDeps_ACU, ...overrides };
   try {
     const local = deps.localVersion();
-    if (!local || local === 'unknown') return;
+    if (!local || local === 'unknown') {
+      logDebug_ACU('[版本校验] 本地构建版本缺失，跳过校验（静默）。');
+      return;
+    }
     const state = deps.readState() ?? {};
-    if (state.lastCheckAt && deps.now() - state.lastCheckAt < VERSION_CHECK_INTERVAL_MS_ACU) {
+    // 用户刚更新过扩展（本地版本变化）→ 节流缓存作废，必须立即重查：
+    // 否则旧缓存的 latestVersion=旧本地版本 会在 1h 窗口内掩盖刚发布的新版。
+    const localChanged = state.localVersion !== local;
+    if (!localChanged && state.lastCheckAt && deps.now() - state.lastCheckAt < VERSION_CHECK_INTERVAL_MS_ACU) {
       // 节流窗口内：复用缓存的远端版本，仍可提示未通知过的新版。
       if (state.latestVersion) {
         const cached = compareVersions_ACU(state.latestVersion, local);
@@ -114,6 +122,8 @@ export async function checkDatabaseUpdateOnStartup_ACU(overrides: Partial<Versio
           // 先记账再提示：notify 抛错也不会导致下次重启重复弹窗。
           deps.writeState({ ...state, lastNotifiedVersion: state.latestVersion });
           deps.notify(state.latestVersion, local);
+        } else {
+          logDebug_ACU(`[版本校验] 节流窗口内，缓存最新 v${state.latestVersion}，本地 v${local}，${cached === 1 ? '已提示过' : '无需更新'}，不打扰。`);
         }
       }
       return;
@@ -121,14 +131,17 @@ export async function checkDatabaseUpdateOnStartup_ACU(overrides: Partial<Versio
     const latest = await deps.fetchLatest();
     if (!latest) {
       // 网络/解析失败：只推进节流时间戳，不留任何用户可见痕迹。
-      deps.writeState({ ...state, lastCheckAt: deps.now() });
+      deps.writeState({ ...state, lastCheckAt: deps.now(), localVersion: local });
+      logDebug_ACU('[版本校验] 远端版本获取失败（网络/解析），静默跳过。');
       return;
     }
     const order = compareVersions_ACU(latest, local);
-    deps.writeState({ ...state, lastCheckAt: deps.now(), latestVersion: latest });
+    deps.writeState({ ...state, lastCheckAt: deps.now(), latestVersion: latest, localVersion: local });
     if (order === 1 && state.lastNotifiedVersion !== latest) {
-      deps.writeState({ ...state, lastCheckAt: deps.now(), latestVersion: latest, lastNotifiedVersion: latest });
+      deps.writeState({ ...state, lastCheckAt: deps.now(), latestVersion: latest, lastNotifiedVersion: latest, localVersion: local });
       deps.notify(latest, local);
+    } else {
+      logDebug_ACU(`[版本校验] 最新 v${latest}，本地 v${local}，${order === 1 ? '该版本已提示过' : '已是最新'}，不打扰。`);
     }
   } catch (error) {
     // 校验链的任何异常都静默：启动体验优先，用户只应看到"已加载"。

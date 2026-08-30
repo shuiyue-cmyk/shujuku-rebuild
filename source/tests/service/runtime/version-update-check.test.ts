@@ -78,12 +78,26 @@ describe('checkDatabaseUpdateOnStartup_ACU', () => {
 
   it('节流窗口内不重新请求，但缓存的新版本仍未通知过时照常提示', async () => {
     // 上次检查刚发生（now - lastCheckAt < 1h），latestVersion 已缓存且未提示。
+    // localVersion 与当前本地一致（未更新扩展）→ 节流生效。
     const { deps } = makeDeps_ACU({
-      readState: vi.fn(() => ({ lastCheckAt: 1_000_000 - 60_000, latestVersion: '9.5.0' })),
+      readState: vi.fn(() => ({ lastCheckAt: 1_000_000 - 60_000, latestVersion: '9.5.0', localVersion: '9.0.0' })),
     });
     await checkDatabaseUpdateOnStartup_ACU(deps);
     expect(deps.fetchLatest).not.toHaveBeenCalled();
     expect(deps.notify).toHaveBeenCalledWith('9.5.0', '9.0.0');
+  });
+
+  it('本地版本变化（用户刚更新过扩展）时节流作废立即重查', async () => {
+    // 旧缓存：lastCheckAt 在窗口内、latestVersion 还等于旧本地版本——
+    // 若不放行，刚发布的更新会被节流缓存掩盖（用户实测场景）。
+    const { deps } = makeDeps_ACU({
+      fetchLatest: vi.fn(async () => '9.2.0'),
+      readState: vi.fn(() => ({ lastCheckAt: 1_000_000 - 60_000, latestVersion: '9.0.0', localVersion: '9.0.0' })),
+      localVersion: vi.fn(() => '9.0.1'),
+    });
+    await checkDatabaseUpdateOnStartup_ACU(deps);
+    expect(deps.fetchLatest).toHaveBeenCalled();
+    expect(deps.notify).toHaveBeenCalledWith('9.2.0', '9.0.1');
   });
 
   it('本地版本缺失（unknown/空）时完全静默', async () => {    const { deps } = makeDeps_ACU({ localVersion: vi.fn(() => 'unknown') });
@@ -108,7 +122,7 @@ describe('checkDatabaseUpdateOnStartup_ACU', () => {
 
   it('节流窗口内提示缓存新版时，lastNotifiedVersion 同步落库（防重启重复弹）', async () => {
     const { deps, state } = makeDeps_ACU({
-      readState: vi.fn(() => ({ lastCheckAt: 1_000_000 - 60_000, latestVersion: '9.5.0' })),
+      readState: vi.fn(() => ({ lastCheckAt: 1_000_000 - 60_000, latestVersion: '9.5.0', localVersion: '9.0.0' })),
     });
     await checkDatabaseUpdateOnStartup_ACU(deps);
     expect(deps.notify).toHaveBeenCalledTimes(1);
