@@ -890,7 +890,7 @@ async function writeSummaryVectorIndexCheckpoint_ACU(options: {
                 options.expectedFlushGeneration,
             );
         }
-        await commitVectorMetadataPatch_ACU(message, tagIsolationKey, {
+        const committed = await commitVectorMetadataPatch_ACU(message, tagIsolationKey, {
             summaryVectorIndexState: patchState.summaryVectorIndexState,
             summaryVectorIndexManifest: patchState.summaryVectorIndexManifest,
         }, {
@@ -905,6 +905,7 @@ async function writeSummaryVectorIndexCheckpoint_ACU(options: {
                 });
             },
         });
+        if (!committed) assertVectorMetadataPointerSettled_ACU(message, tagIsolationKey, patchState.summaryVectorIndexManifest);
         await finalizeSummaryVectorIndexSnapshotPublication_ACU(uploadedFiles);
     } catch (error) {
         abortSummaryVectorIndexSnapshotPublication_ACU(uploadedFiles);
@@ -915,6 +916,21 @@ async function writeSummaryVectorIndexCheckpoint_ACU(options: {
             });
         }
         throw error;
+    }
+}
+
+/**
+ * commit 返回 false 时区分幂等重放与真失败：changed=false 的合法场景是
+ * 指针现值已等于本次发布值（patchIsolatedTagMetadata 的 patchedValuesEqual 短路）。
+ * 读回核对 manifest 指针，与发布值不一致=指针未落盘，必须中止 finalize——
+ * 否则快照已上传、注册表无指针，下轮判无索引又全量重建（假成功分裂）。
+ */
+function assertVectorMetadataPointerSettled_ACU(message: any, isolationKey: string, expectedManifest: unknown): void {
+    const settledTag = readIsolatedTagData_ACU(message, isolationKey);
+    const settledManifest = settledTag?.summaryVectorIndexManifest ?? null;
+    const expected = expectedManifest ?? null;
+    if (JSON.stringify(settledManifest) !== JSON.stringify(expected)) {
+        throw new Error('[纪要向量索引] metadata 指针提交未生效（changed=false 且读回 manifest 与发布值不一致），中止发布以防快照与注册表分裂。');
     }
 }
 
@@ -1079,7 +1095,7 @@ export async function migrateLegacySummaryVectorIndexToContentAddressed_ACU(opti
 
     try {
         // CAS：expected indexId 必须仍为旧 manifest 的 indexId；CAS 冲突不得覆盖较新的 pointer。
-        await commitVectorMetadataPatch_ACU(message, tagIsolationKey, {
+        const committed = await commitVectorMetadataPatch_ACU(message, tagIsolationKey, {
             summaryVectorIndexState: persisted.state,
             summaryVectorIndexManifest: persisted.manifest,
         }, {
@@ -1091,6 +1107,7 @@ export async function migrateLegacySummaryVectorIndexToContentAddressed_ACU(opti
                 });
             },
         });
+        if (!committed) assertVectorMetadataPointerSettled_ACU(message, tagIsolationKey, persisted.manifest);
         await finalizeSummaryVectorIndexSnapshotPublication_ACU(persisted.uploadedFiles);
     } catch (error) {
         abortSummaryVectorIndexSnapshotPublication_ACU(persisted.uploadedFiles);

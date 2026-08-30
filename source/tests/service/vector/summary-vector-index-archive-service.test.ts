@@ -123,7 +123,8 @@ vi.mock('../../../src/data/repositories/chat-message-data-repo', () => ({
     if (!message || typeof message.TavernDB_ACU_IsolatedData !== 'object' || Array.isArray(message.TavernDB_ACU_IsolatedData)) return null;
     return message.TavernDB_ACU_IsolatedData;
   },
-  patchIsolatedTagMetadata_ACU: (message: any, isolationKey: string, patch: Record<string, any>, options?: { expectedIndexId?: string }) => {
+  // 包 vi.fn 以便用例 mockImplementationOnce 造 changed=false 场景（默认实现与真实守卫行为一致：'' 槽照写）。
+  patchIsolatedTagMetadata_ACU: vi.fn((message: any, isolationKey: string, patch: Record<string, any>, options?: { expectedIndexId?: string }) => {
     if (!message) return { changed: false, tagData: null };
     const container = message.TavernDB_ACU_IsolatedData && typeof message.TavernDB_ACU_IsolatedData === 'object'
       ? message.TavernDB_ACU_IsolatedData
@@ -145,7 +146,7 @@ vi.mock('../../../src/data/repositories/chat-message-data-repo', () => ({
     }
     message.TavernDB_ACU_IsolatedData = { ...container, [isolationKey]: next };
     return { changed: true, tagData: next };
-  },
+  }),
   writeIsolatedTagData_ACU: (...args: any[]) => mockWriteIsolatedTagData(...args),
   writeMessageIdentity_ACU: vi.fn((message: any, isolationConfig: any) => {
     if (!message) return;
@@ -160,6 +161,7 @@ import {
   flushPendingVectorIndexArchives_ACU,
   migrateLegacySummaryVectorIndexToContentAddressed_ACU,
 } from '../../../src/service/vector/summary-vector-index-archive-service';
+import { patchIsolatedTagMetadata_ACU } from '../../../src/data/repositories/chat-message-data-repo';
 
 describe('summary-vector-index-archive-service pending 归档', () => {
   beforeEach(() => {
@@ -324,6 +326,64 @@ describe('summary-vector-index-archive-service pending 归档', () => {
     ]);
     expect(mockSaveChatToHostStrict.mock.invocationCallOrder[0])
       .toBeLessThan(mockFinalizeSummaryVectorIndexSnapshotPublication.mock.invocationCallOrder[0]);
+  });
+
+  it('commit 返回 false 且指针读回与发布 manifest 不一致时中止发布（防假成功分裂）', async () => {
+    // 捕获本轮发布的 manifest，供读回核对构造「指针未落盘」的不一致态。
+    const basePersist = mockPersistSummaryVectorIndexSnapshot.getMockImplementation()!;
+    let published: any;
+    mockPersistSummaryVectorIndexSnapshot.mockImplementation(async (options: any) => {
+      const persisted = await basePersist(options);
+      published = persisted;
+      return persisted;
+    });
+    // commit 层拿 changed=false → 返回 false；读回指针恒为别人的 manifest → 真失败。
+    // 持续式（非 Once）：链路中存在第三方 read 调用，Once 队列会错位；末尾恢复无实现默认。
+    vi.mocked(patchIsolatedTagMetadata_ACU).mockImplementationOnce(() => ({ changed: false, tagData: null }));
+    mockReadIsolatedTagData.mockImplementation(() => ({ summaryVectorIndexManifest: { indexId: 'someone-else' } }));
+    let result: any;
+    try {
+      result = await archiveSummaryVectorIndexNow_ACU({ targetMessageIndex: 0, force: true });
+    } finally {
+      // 恢复 hoisted 默认实现（读消息容器）——clearAllMocks 不清 implementation，恢复错会让后续用例连环挂。
+      mockReadIsolatedTagData.mockImplementation((message: any, isolationKey: string) => message?.TavernDB_ACU_IsolatedData?.[isolationKey || ''] || null);
+    }
+
+    expect(result).toMatchObject({ success: false, reason: 'summary_vector_index_archive_failed' });
+    expect(mockFinalizeSummaryVectorIndexSnapshotPublication).not.toHaveBeenCalled();
+    expect(mockAbortSummaryVectorIndexSnapshotPublication).toHaveBeenCalledWith([
+      expect.objectContaining({ path: 'v2-path-idx-1' }),
+    ]);
+  });
+
+  it('commit 返回 false 但指针读回与发布 manifest 一致（幂等重放）时照常 finalize', async () => {
+    const basePersist = mockPersistSummaryVectorIndexSnapshot.getMockImplementation()!;
+    let published: any;
+    mockPersistSummaryVectorIndexSnapshot.mockImplementation(async (options: any) => {
+      const persisted = await basePersist(options);
+      published = persisted;
+      return persisted;
+    });
+    // changed=false 的合法场景：指针现值已等于本次发布值（patchedValuesEqual 短路）——
+    // 读回核对必须放行 finalize，否则同内容重复归档被误判失败。
+    vi.mocked(patchIsolatedTagMetadata_ACU).mockImplementationOnce(() => ({ changed: false, tagData: null }));
+
+    // 持续式（非 Once）：链路中除 existing 判定与 helper 读回外还有第三方 read 调用，
+    // Once 队列会被消耗错位；恒返回「盘上即发布值」才是幂等语义本身。末尾恢复无实现默认。
+    mockReadIsolatedTagData.mockImplementation(() => ({ summaryVectorIndexManifest: published?.manifest ?? null }));
+    let result: any;
+    try {
+      result = await archiveSummaryVectorIndexNow_ACU({ targetMessageIndex: 0, force: true });
+    } finally {
+      // 恢复 hoisted 默认实现（读消息容器）——clearAllMocks 不清 implementation，恢复错会让后续用例连环挂。
+      mockReadIsolatedTagData.mockImplementation((message: any, isolationKey: string) => message?.TavernDB_ACU_IsolatedData?.[isolationKey || ''] || null);
+    }
+
+    expect(result.success).toBe(true);
+    expect(mockFinalizeSummaryVectorIndexSnapshotPublication).toHaveBeenCalledWith([
+      expect.objectContaining({ path: 'v2-path-idx-1' }),
+    ]);
+    expect(mockAbortSummaryVectorIndexSnapshotPublication).not.toHaveBeenCalled();
   });
 
   it('flush generation 在 durable publish 前失效时回滚 pending 快照且不保存聊天 pointer', async () => {
