@@ -1,6 +1,7 @@
 import type { TableDataObject_ACU } from '../../shared/models/table-data';
 import type { TableMutationSourceV2_ACU, TableWriteConflictUnitV2_ACU } from './storage-frame-v2-types';
 import { currentChatFileIdentifier_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU } from '../runtime/state-manager';
+import { deepClone_ACU } from '../../shared/utils';
 
 type ReleaseLock_ACU = () => void;
 type LockMode_ACU = 'read' | 'write';
@@ -202,10 +203,6 @@ async function acquireWrite_ACU(scopeKey: string): Promise<ReleaseLock_ACU> {
 function normalizeScopePart_ACU(value: string | null | undefined, fallback: string): string {
   const normalized = String(value || fallback).trim();
   return normalized || fallback;
-}
-
-function deepClone_ACU<T>(value: T): T {
-  return value == null ? value : JSON.parse(JSON.stringify(value));
 }
 
 export function buildTableMaintenanceScopeKey_ACU(parts: {

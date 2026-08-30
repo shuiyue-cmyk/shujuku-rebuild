@@ -6,7 +6,7 @@ import type { TableDataObject_ACU } from '../../shared/models/table-data';
 import { validateMigrationProvenanceV1_ACU } from '../../shared/canonical-checkpoint-validator';
 import { resolveHistoricalSheetKeyMigrations_ACU } from '../../shared/sql-read-resolver';
 import { canonicalizeDisplayName_ACU } from '../../shared/sheet-identity';
-import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
+import { deepClone_ACU, logDebug_ACU, logWarn_ACU } from '../../shared/utils';
 import { hasV2TableHistoryEvidence_ACU, isV2TagData_ACU, resolveTableStorageStrategy_ACU } from './storage-strategy-resolver';
 import type { MixedStorageDecisionBackupV1_ACU, TableCheckpointScheduleSummaryV2_ACU, TableMigrationAuditBackupV1_ACU, TableMigrationProvenanceV1_ACU, TableStorageFrameV2_ACU } from './storage-frame-v2-types';
 import { commitMixedStorageDecision_ACU } from './mixed-storage-commit';
@@ -39,10 +39,6 @@ export interface LegacyToV2MigrationResult_ACU {
 }
 
 type LegacyScheduleSummary_ACU = Record<string, TableCheckpointScheduleSummaryV2_ACU>;
-
-function deepClone_ACU<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value));
-}
 
 function sheetKeysOfData_ACU(data: Record<string, any> | null | undefined): string[] {
   if (!data || typeof data !== 'object') return [];

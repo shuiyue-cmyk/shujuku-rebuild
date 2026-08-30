@@ -55,6 +55,15 @@ export function escapeRegExp_ACU(string: string): string {
 }
 
 /**
+ * JSON 序列化深拷贝（表格/检查点数据形状专用）。
+ * null/undefined 原样返回：纯 JSON 往返对 undefined 会因 JSON.stringify 产出 undefined
+ * 而在 JSON.parse 处抛 SyntaxError，短路口径让调用方无需自守卫。
+ */
+export function deepClone_ACU<T>(value: T): T {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+/**
  * 生成用户输入文本的哈希值（FNV-1a 变体）
  */
 export function hashUserInput_ACU(text: string): string {

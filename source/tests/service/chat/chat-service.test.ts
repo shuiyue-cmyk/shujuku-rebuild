@@ -60,6 +60,7 @@ vi.mock('../../../src/shared/utils', () => ({
   logWarn_ACU: vi.fn(),
   isSummaryOrOutlineTable_ACU: vi.fn((name: string) => name.includes('纪要') || name.includes('总结')),
   cloneScopedConfigData_ACU: (v: any, f: any = null) => (v === undefined ? f : JSON.parse(JSON.stringify(v))),
+  deepClone_ACU: <T>(value: T): T => (value == null ? value : JSON.parse(JSON.stringify(value))),
 }));
 
 vi.mock('../../../src/service/optimization/content-optimization', () => ({

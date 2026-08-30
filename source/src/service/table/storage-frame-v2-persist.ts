@@ -4,7 +4,7 @@ import { cloneIsolatedData_ACU, collectSqlTargetTableNamesFromStorageFrameV2_ACU
 import { getActiveChatStorageIdentity_ACU, peekChatScopedConfigContainer_ACU, peekChatSheetGuideContainer_ACU, setChatScopedConfigContainer_ACU, setChatSheetGuideContainer_ACU } from '../../data/storage/chat-history';
 import type { Sheet_ACU, TableDataObject_ACU } from '../../shared/models/table-data';
 import type { StorageMode } from '../../shared/table-storage-provider';
-import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
+import { deepClone_ACU, logDebug_ACU, logWarn_ACU } from '../../shared/utils';
 import { startRuntimePerformanceSpan_ACU } from '../../shared/runtime-performance';
 import { getCurrentIsolationKey_ACU, settings_ACU } from '../runtime/state-manager';
 import { normalizeGuideData_ACU, setChatSheetGuideDataForIsolationKey_ACU } from '../template/chat-scope';
@@ -297,10 +297,6 @@ export function resolveCheckpointGenerationConfig_ACU(): TableCheckpointGenerati
     cumulativeOperationRatio: cumulativeOperationRatioPercent / 100,
     singleOperationRatio: singleOperationRatioPercent / 100,
   };
-}
-
-function deepClone_ACU<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value));
 }
 
 function generateEntryId_ACU(): string {

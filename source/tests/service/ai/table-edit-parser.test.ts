@@ -25,6 +25,7 @@ vi.mock('../../../src/shared/utils', () => ({
   logDebug_ACU: vi.fn(),
   logWarn_ACU: vi.fn(),
   logError_ACU: vi.fn(),
+  deepClone_ACU: <T>(value: T): T => (value == null ? value : JSON.parse(JSON.stringify(value))),
   isSummaryOrOutlineTable_ACU: vi.fn(() => false),
 }));
 

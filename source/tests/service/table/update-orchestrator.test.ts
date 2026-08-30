@@ -17,6 +17,7 @@ vi.mock('../../../src/shared/utils', () => ({
   logDebug_ACU: vi.fn(),
   logWarn_ACU: vi.fn(),
   logError_ACU: vi.fn(),
+  deepClone_ACU: <T>(value: T): T => (value == null ? value : JSON.parse(JSON.stringify(value))),
   hashUserInput_ACU: vi.fn((text: string) => text ? 'mock-ddl-digest' : ''),
   isSummaryOrOutlineTable_ACU: vi.fn(() => false),
   stripSeedRowsFromTemplate_ACU: vi.fn((data: any) => {

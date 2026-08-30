@@ -31,7 +31,7 @@ import { isV2TagData_ACU } from '../table/storage-strategy-resolver';
 import { assertSingleActiveFullCheckpointV2_ACU } from '../table/storage-frame-v2-persist';
 import { runTableWriteTransaction_ACU } from '../table/table-write-transaction';
 import { currentChatFileIdentifier_ACU, getCurrentIsolationKey_ACU } from '../runtime/state-manager';
-import { logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
+import { deepClone_ACU, logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
 import type {
     TableCheckpointV2_ACU,
     TableSheetCheckpointV2_ACU,
@@ -63,10 +63,6 @@ export interface CheckpointDeleteRecoveryResult_ACU {
 
 let vault_ACU: CheckpointVaultState_ACU | null = null;
 let installed_ACU = false;
-
-function deepClone_ACU<T>(value: T): T {
-    return JSON.parse(JSON.stringify(value)) as T;
-}
 
 function hasEntries_ACU(record: Record<string, unknown> | null | undefined): boolean {
     return !!record && typeof record === 'object' && !Array.isArray(record) && Object.keys(record).length > 0;

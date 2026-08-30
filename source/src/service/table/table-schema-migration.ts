@@ -1,6 +1,7 @@
 import type { Sheet_ACU, TableDataObject_ACU } from '../../shared/models/table-data';
 import { normalizeDDLForSchemaDescriptor_ACU, parseDDLColumnInfos_ACU, parseDDLTableConstraints_ACU, parseDDLTableName, parseDDLTableSuffix_ACU, parseDDLSafeDefaultLiteral_ACU, validateDDLTextAgainstHeaders_ACU } from '../../shared/ddl-utils';
 import { hydrateTableDataStrict_ACU } from './sqlite-template-validation';
+import { deepClone_ACU } from '../../shared/utils';
 import type {
   TableSchemaColumnChangeV2_ACU,
   TableSchemaColumnDescriptorV2_ACU,
@@ -12,10 +13,6 @@ import type {
   TableSheetSchemaDescriptorV2_ACU,
   TableSheetSchemaMigrateOperationV2_ACU,
 } from './storage-frame-v2-types';
-
-function deepClone_ACU<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value));
-}
 
 const P1_COLUMN_CONSTRAINT_TOKENS_ACU = new Set(['AS', 'CHECK', 'COLLATE', 'CONSTRAINT', 'DEFAULT', 'FOREIGN', 'GENERATED', 'NOT', 'PRIMARY', 'REFERENCES', 'UNIQUE']);
 

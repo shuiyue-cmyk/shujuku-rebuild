@@ -13,10 +13,7 @@ import type {
   TableMutationEventV2_ACU,
   TableSheetCheckpointV2_ACU,
 } from './storage-frame-v2-types';
-
-function deepClone_ACU<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value));
-}
+import { deepClone_ACU } from '../../shared/utils';
 
 export interface CanonicalCheckpointBuildFailure_ACU {
   checkpoint?: undefined;

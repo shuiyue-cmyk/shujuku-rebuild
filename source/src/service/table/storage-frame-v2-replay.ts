@@ -1,7 +1,7 @@
 import { getChatArray_ACU, saveChatToHostStrict_ACU } from '../../data/gateways/chat-gateway';
 import { getCurrentIsolationKey_ACU, independentTableStates_ACU, settings_ACU } from '../runtime/state-manager';
 import type { TableDataObject_ACU, Sheet_ACU, Mate_ACU } from '../../shared/models/table-data';
-import { logError_ACU, logWarn_ACU, stripSeedRowsFromTemplate_ACU } from '../../shared/utils';
+import { deepClone_ACU, logError_ACU, logWarn_ACU, stripSeedRowsFromTemplate_ACU } from '../../shared/utils';
 import { startRuntimePerformanceSpan_ACU } from '../../shared/runtime-performance';
 import { SqliteEngine } from '../../data/sqlite/sqlite-engine';
 import { SyncBridge } from '../../data/sqlite/sync-bridge';
@@ -422,10 +422,6 @@ function operationInvalidatesReplayAliasContext_ACU(
 /** 阶段 B1：legacy patch 是否改变表/列身份证据（与 operation 矩阵同源）。 */
 function patchInvalidatesReplayAliasContext_ACU(patch: Pick<TablePatchV2_ACU, 'kind'>): boolean {
   return patch.kind === 'sheet_replace' || patch.kind === 'meta_update';
-}
-
-function deepClone_ACU<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value));
 }
 
 function isReplayableV2TagData_ACU(tagData: unknown): tagData is { storageFrame: TableStorageFrameV2_ACU } {

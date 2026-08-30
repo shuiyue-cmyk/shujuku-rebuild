@@ -48,6 +48,7 @@ vi.mock('../../src/data/storage/chat-history', () => ({
 }));
 vi.mock('../../src/shared/utils', () => ({
   cloneScopedConfigData_ACU: (v, f = null) => v === undefined ? f : JSON.parse(JSON.stringify(v)),
+  deepClone_ACU: (v) => v == null ? v : JSON.parse(JSON.stringify(v)),
   logDebug_ACU: vi.fn(), logWarn_ACU: vi.fn(), logError_ACU: vi.fn(),
   isSummaryOrOutlineTable_ACU: () => false, parseTableTemplateJson_ACU: vi.fn(),
 }));

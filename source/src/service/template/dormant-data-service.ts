@@ -18,7 +18,7 @@ import { deriveSheetLifecycleFromFramesV2_ACU } from '../table/storage-frame-v2-
 import type { Sheet_ACU } from '../../shared/models/table-data';
 import { getSheetColumnProjection_ACU } from '../../shared/ddl-utils';
 import { buildStableSheetKeyCandidate_ACU, canonicalizeDisplayName_ACU } from '../../shared/sheet-identity';
-import { logWarn_ACU } from '../../shared/utils';
+import { deepClone_ACU, logWarn_ACU } from '../../shared/utils';
 import {
   applyChatTemplateSnapshotWithReconciliation_ACU,
   getRuntimeTemplateSnapshot_ACU,
@@ -86,11 +86,6 @@ export interface DormantIntegrityAuditResult_ACU {
   /** 本次审计覆盖的 hidden 表数量（诊断展示用）。 */
   hiddenCount: number;
   error?: string;
-}
-
-/** V2 边界内数据均为纯 JSON（与 storage-frame-v2-persist 同语义的克隆）。 */
-function deepClone_ACU<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value));
 }
 
 /** 从休眠快照统计数据行数/列数；结构异常时返回 0 而不抛错（仅展示用途）。 */

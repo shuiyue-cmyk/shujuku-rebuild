@@ -26,6 +26,7 @@ vi.mock('../../../src/service/table/storage-frame-v2-replay', () => ({
 
 vi.mock('../../../src/shared/utils', () => ({
   logWarn_ACU: vi.fn(),
+  deepClone_ACU: <T>(value: T): T => (value == null ? value : JSON.parse(JSON.stringify(value))),
 }));
 
 vi.mock('../../../src/service/template/template-preset-service', () => ({
