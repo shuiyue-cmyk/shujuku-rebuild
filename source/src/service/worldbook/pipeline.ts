@@ -531,7 +531,13 @@ export   async function updateReadableLorebookEntry_ACU(createIfNeeded = false, 
                 }
             }
         } catch(error) {
-            logError_ACU('Failed to get or update readable lorebook entry:', error);
+            // not-found 属于目标世界书重命名/切换期间的瞬态形态：注入本身可跳过（下次
+            // 触发会按新解析结果重建条目），只记 warn；其余失败仍按 error 上报。
+            if (classifyLorebookReadError_ACU(error) === 'lorebook_not_found') {
+                logWarn_ACU('Readable lorebook entry update skipped: target lorebook not found (likely renamed or switching).', error);
+            } else {
+                logError_ACU('Failed to get or update readable lorebook entry:', error);
+            }
         }
     }
   }

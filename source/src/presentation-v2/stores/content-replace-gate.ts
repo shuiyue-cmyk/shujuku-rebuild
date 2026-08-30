@@ -1,10 +1,3 @@
-/**
- * content-replace-gate — 正文替换功能的启用开关
- *
- * 旧版通过“智能续写最大重试次数 == 49”做隐藏解锁；智能续写已删除，
- * 这里收敛为纯用户开关：contentOptimizationSettings.enabled 直接由
- * enabledPreference 决定，不再依赖任何其他设置。
- */
 import { settings_ACU } from '../../service/runtime/state-manager';
 
 function ensureContentReplaceSettings(): Record<string, any> {
@@ -14,11 +7,14 @@ function ensureContentReplaceSettings(): Record<string, any> {
   return settings_ACU.contentOptimizationSettings as Record<string, any>;
 }
 
+/**
+ * 读取用户的启用偏好。未通过 v2 开关登记过偏好时回退到 legacy enabled 值：
+ * 旧 UI 的启用复选框（以及隐藏彩蛋时代的解锁启用）只写 enabled 不写偏好字段，
+ * 功能转正后这些用户的已启用状态必须被尊重，不能被同步逻辑静默复位。
+ */
 function readUserEnabledPreference(cfg: Record<string, any>): boolean {
-  if (cfg.enabledSwitchTouched === true) return cfg.enabledPreference === true;
-  // 迁移兼容：旧版本设置里没有 enabledSwitchTouched，但正文替换可能已开启。
-  // 保留既有 enabled 状态，避免升级后被静默关闭；用户一旦操作开关即接管语义。
-  return cfg.enabled === true;
+  if (cfg.enabledSwitchTouched !== true) return cfg.enabled === true;
+  return cfg.enabledPreference === true;
 }
 
 export function isContentReplaceEnabledBySettings(): boolean {

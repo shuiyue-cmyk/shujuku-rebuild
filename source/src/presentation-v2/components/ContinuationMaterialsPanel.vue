@@ -1,0 +1,370 @@
+<template>
+  <div class="acu-v2-continuation-materials">
+    <div class="acu-v2-continuation-materials__tabs">
+      <button
+        v-for="tab in TABS"
+        :key="tab.id"
+        type="button"
+        class="acu-v2-continuation-materials__tab"
+        :class="{ 'acu-v2-continuation-materials__tab--active': activeTab === tab.id }"
+        @click="activeTab = tab.id"
+      >{{ tab.label }}</button>
+      <div class="acu-v2-continuation-materials__tab-actions">
+        <AcuButton :loading="busy" @click="reload">刷新</AcuButton>
+        <AcuButton variant="danger" :loading="busy" @click="requestClear">一键清空</AcuButton>
+      </div>
+    </div>
+
+    <p v-if="clearPending" class="acu-v2-continuation-materials__confirm">
+      清空会删除当前续写任务、主 Agent 的会话记录与本地资料快照（伏笔、信息差、长期约束、故事总纲）。
+      小说正文楼层不受影响，清空后可以从当前剧情重新开始规划。
+      <span class="acu-v2-continuation-materials__confirm-actions">
+        <AcuButton variant="danger" :loading="busy" @click="confirmClear">确认清空</AcuButton>
+        <AcuButton @click="clearPending = false">取消</AcuButton>
+      </span>
+    </p>
+
+    <!-- 阶段大纲：当前阶段可编辑，历史阶段只读折叠 -->
+    <template v-if="activeTab === 'outline'">
+      <p v-if="!task" class="acu-v2-continuation-materials__empty">还没有续写任务，也就没有阶段大纲。</p>
+      <template v-else>
+        <div v-if="activeRevision" class="acu-v2-continuation-materials__editor">
+          <p class="acu-v2-continuation-materials__meta">
+            当前：第 {{ activeStage?.stageNumber }} 阶段 · revision {{ activeRevision.revision }} · 已完成 {{ activeStage?.completedTurns ?? 0 }} 轮。
+            已完成轮次与正在执行的轮次不可删除或替换，总轮数必须留在阶段规模范围内。
+          </p>
+          <AcuTextarea :model-value="outlineDraft" :rows="16" @update:model-value="onOutlineInput" />
+          <p v-if="outlineError" class="acu-v2-continuation-materials__error">{{ outlineError }}</p>
+          <div class="acu-v2-continuation-materials__actions">
+            <AcuButton :disabled="!outlineDirty" @click="syncOutlineDraft">放弃修改</AcuButton>
+            <AcuButton variant="primary" :loading="busy" :disabled="!outlineDirty" @click="saveOutline">保存大纲</AcuButton>
+          </div>
+        </div>
+        <p v-else class="acu-v2-continuation-materials__empty">当前没有已冻结的阶段大纲可编辑。</p>
+
+        <details
+          v-for="stage in task.stages"
+          :key="stage.stageId"
+          class="acu-v2-continuation-materials__block"
+          :class="{ 'acu-v2-continuation-materials__block--current': stage.stageId === activeStage?.stageId }"
+        >
+          <summary>
+            第 {{ stage.stageNumber }} 阶段 · {{ stage.status }} · {{ stage.completedTurns }} / {{ stageTotalTurns(stage) }} 轮
+            <span v-if="stage.stageId === activeStage?.stageId" class="acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--primary">当前阶段</span>
+          </summary>
+          <div v-for="revision in stage.revisions" :key="revision.revision">
+            <p class="acu-v2-continuation-materials__meta">
+              revision {{ revision.revision }} · {{ revision.reason }} · {{ revision.frozen ? '已冻结' : '待确认' }} · {{ revision.outline.title }}
+            </p>
+            <ol class="acu-v2-continuation-materials__list">
+              <li v-for="node in revision.outline.nodes" :key="node.id">
+                <strong>{{ node.title }}</strong>：{{ node.goal }}
+                <ol>
+                  <li
+                    v-for="(turn, turnIndex) in node.turns"
+                    :key="turn.id"
+                    :class="{ 'acu-v2-continuation-materials__turn--done': stage.stageId === activeStage?.stageId && revision.revision === stage.activeRevision && turnPosition(revision, node.id, turnIndex) <= stage.completedTurns }"
+                  >{{ turn.goal }}</li>
+                </ol>
+              </li>
+            </ol>
+          </div>
+        </details>
+      </template>
+    </template>
+
+    <!-- 本地资料：伏笔 / 信息差 / 长期约束 分类型结构化展示，各自独立 JSON 编辑与保存 -->
+    <template v-else-if="activeTab === 'modules'">
+      <p class="acu-v2-continuation-materials__meta">
+        本地资料由子代理结算写入，也可以在这里分模块手动修正。保存走与子代理相同的结构校验并推进修订号；
+        每个模块独立保存，只提交本模块数据，不影响其他模块（含未保存的草稿）。
+      </p>
+      <p v-if="materials.snapshot.value" class="acu-v2-continuation-materials__meta">
+        结算水位：楼层 {{ materials.snapshot.value.settledThroughIndex }} ·
+        伏笔 {{ materials.snapshot.value.hooks.length }} 条 ·
+        信息差 {{ materials.snapshot.value.infoGap.length }} 条 ·
+        长期约束 {{ materials.snapshot.value.constraints.length }} 条 ·
+        修订号 {{ materials.snapshot.value.revisions.hooks }}/{{ materials.snapshot.value.revisions.infoGap }}/{{ materials.snapshot.value.revisions.constraints }}
+      </p>
+      <p v-if="materials.loadError.value" class="acu-v2-continuation-materials__error">{{ materials.loadError.value }}</p>
+
+      <!-- 伏笔账本 -->
+      <details class="acu-v2-continuation-materials__block" open>
+        <summary>伏笔账本 · {{ materials.snapshot.value?.hooks.length ?? 0 }} 条<span v-if="materials.modules.hooks.dirty" class="acu-v2-continuation-materials__badge">未保存</span></summary>
+        <p v-if="!materials.snapshot.value?.hooks.length" class="acu-v2-continuation-materials__empty">还没有伏笔条目。</p>
+        <div v-else class="acu-v2-continuation-materials__cards">
+          <div
+            v-for="hook in materials.snapshot.value.hooks"
+            :key="hook.id"
+            class="acu-v2-continuation-materials__card"
+            :class="{ 'acu-v2-continuation-materials__card--retired': hook.retired }"
+          >
+            <p class="acu-v2-continuation-materials__card-head">
+              <strong>{{ hook.id }}</strong>
+              <span class="acu-v2-continuation-materials__badge">{{ HOOK_STATUS_LABELS[hook.status] ?? hook.status }}</span>
+              <span class="acu-v2-continuation-materials__badge">{{ HOOK_IMPORTANCE_LABELS[hook.importance] ?? hook.importance }}</span>
+              <span v-if="hook.retired" class="acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--muted">已退休{{ hook.retiredReason ? `：${hook.retiredReason}` : '' }}</span>
+            </p>
+            <p class="acu-v2-continuation-materials__card-body">{{ hook.summary }}</p>
+            <p class="acu-v2-continuation-materials__card-meta">植入楼层 {{ hook.plantedIndex }} · 最近更新楼层 {{ hook.updatedIndex }}<template v-if="hook.plannedPayoff"> · 计划回收：{{ hook.plannedPayoff }}</template></p>
+          </div>
+        </div>
+        <details class="acu-v2-continuation-materials__json">
+          <summary>编辑原始 JSON</summary>
+          <AcuTextarea :model-value="materials.modules.hooks.draft" :rows="12" @update:model-value="value => materials.updateDraft('hooks', value)" />
+          <p v-if="materials.modules.hooks.error" class="acu-v2-continuation-materials__error">{{ materials.modules.hooks.error }}</p>
+          <div class="acu-v2-continuation-materials__actions">
+            <AcuButton :disabled="!materials.modules.hooks.dirty" @click="materials.discard('hooks')">放弃修改</AcuButton>
+            <AcuButton variant="primary" :loading="materials.modules.hooks.saving" :disabled="!materials.modules.hooks.dirty" @click="materials.save('hooks')">保存伏笔账本</AcuButton>
+          </div>
+        </details>
+      </details>
+
+      <!-- 认知与信息差 -->
+      <details class="acu-v2-continuation-materials__block" open>
+        <summary>认知与信息差 · {{ materials.snapshot.value?.infoGap.length ?? 0 }} 条<span v-if="materials.modules.infoGap.dirty" class="acu-v2-continuation-materials__badge">未保存</span></summary>
+        <p v-if="!materials.snapshot.value?.infoGap.length" class="acu-v2-continuation-materials__empty">还没有信息差条目。</p>
+        <div v-else class="acu-v2-continuation-materials__cards">
+          <div
+            v-for="gap in materials.snapshot.value.infoGap"
+            :key="gap.id"
+            class="acu-v2-continuation-materials__card"
+            :class="{ 'acu-v2-continuation-materials__card--retired': gap.retired }"
+          >
+            <p class="acu-v2-continuation-materials__card-head">
+              <strong>{{ gap.id }}</strong>
+              <span>{{ gap.topic }}</span>
+              <span class="acu-v2-continuation-materials__badge">{{ REVEAL_STATUS_LABELS[gap.revealStatus] ?? gap.revealStatus }}</span>
+              <span v-if="gap.revealIndex !== null" class="acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--muted">揭示楼层 {{ gap.revealIndex }}</span>
+              <span v-if="gap.retired" class="acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--muted">已退休{{ gap.retiredReason ? `：${gap.retiredReason}` : '' }}</span>
+            </p>
+            <p class="acu-v2-continuation-materials__card-body">客观事实：{{ gap.objectiveFact }}</p>
+            <p class="acu-v2-continuation-materials__card-meta">读者已知：{{ gap.readerKnown || '（未记录）' }}</p>
+            <p v-for="knowledge in gap.characterKnowledge" :key="knowledge.name" class="acu-v2-continuation-materials__card-meta">
+              {{ knowledge.name }} 知道：{{ knowledge.knows }}
+            </p>
+          </div>
+        </div>
+        <details class="acu-v2-continuation-materials__json">
+          <summary>编辑原始 JSON</summary>
+          <AcuTextarea :model-value="materials.modules.infoGap.draft" :rows="12" @update:model-value="value => materials.updateDraft('infoGap', value)" />
+          <p v-if="materials.modules.infoGap.error" class="acu-v2-continuation-materials__error">{{ materials.modules.infoGap.error }}</p>
+          <div class="acu-v2-continuation-materials__actions">
+            <AcuButton :disabled="!materials.modules.infoGap.dirty" @click="materials.discard('infoGap')">放弃修改</AcuButton>
+            <AcuButton variant="primary" :loading="materials.modules.infoGap.saving" :disabled="!materials.modules.infoGap.dirty" @click="materials.save('infoGap')">保存信息差</AcuButton>
+          </div>
+        </details>
+      </details>
+
+      <!-- 长期约束 -->
+      <details class="acu-v2-continuation-materials__block" open>
+        <summary>长期约束 · {{ materials.snapshot.value?.constraints.length ?? 0 }} 条<span v-if="materials.modules.constraints.dirty" class="acu-v2-continuation-materials__badge">未保存</span></summary>
+        <p v-if="!materials.snapshot.value?.constraints.length" class="acu-v2-continuation-materials__empty">还没有长期约束。</p>
+        <div v-else class="acu-v2-continuation-materials__cards">
+          <div v-for="constraint in materials.snapshot.value.constraints" :key="constraint.id" class="acu-v2-continuation-materials__card">
+            <p class="acu-v2-continuation-materials__card-head"><strong>{{ constraint.id }}</strong></p>
+            <p class="acu-v2-continuation-materials__card-body">{{ constraint.text }}</p>
+            <p class="acu-v2-continuation-materials__card-meta">登记楼层 {{ constraint.createdIndex }}<template v-if="constraint.reason"> · 缘由：{{ constraint.reason }}</template></p>
+          </div>
+        </div>
+        <details class="acu-v2-continuation-materials__json">
+          <summary>编辑原始 JSON</summary>
+          <AcuTextarea :model-value="materials.modules.constraints.draft" :rows="10" @update:model-value="value => materials.updateDraft('constraints', value)" />
+          <p v-if="materials.modules.constraints.error" class="acu-v2-continuation-materials__error">{{ materials.modules.constraints.error }}</p>
+          <div class="acu-v2-continuation-materials__actions">
+            <AcuButton :disabled="!materials.modules.constraints.dirty" @click="materials.discard('constraints')">放弃修改</AcuButton>
+            <AcuButton variant="primary" :loading="materials.modules.constraints.saving" :disabled="!materials.modules.constraints.dirty" @click="materials.save('constraints')">保存长期约束</AcuButton>
+          </div>
+        </details>
+      </details>
+    </template>
+
+    <!-- 故事总纲：结构化展示 + JSON 编辑 -->
+    <template v-else>
+      <p class="acu-v2-continuation-materials__meta">
+        故事总纲由 arc-architect 子代理维护：全书方向一条 + 若干卷台阶。也可以在这里手动修正，保存走同一套结构校验并推进修订号。
+      </p>
+      <p v-if="materials.snapshot.value" class="acu-v2-continuation-materials__meta">
+        总纲 {{ materials.snapshot.value.storyArc.length }} 条 · 修订号 {{ materials.snapshot.value.revisions.storyArc }}
+      </p>
+      <p v-if="materials.loadError.value" class="acu-v2-continuation-materials__error">{{ materials.loadError.value }}</p>
+      <p v-if="!materials.snapshot.value?.storyArc.length" class="acu-v2-continuation-materials__empty">
+        还没有故事总纲。开始规划后主 Agent 会先派工 arc-architect 立总纲。
+      </p>
+      <div v-else class="acu-v2-continuation-materials__cards">
+        <div
+          v-for="arc in materials.snapshot.value.storyArc"
+          :key="arc.id"
+          class="acu-v2-continuation-materials__card"
+          :class="{ 'acu-v2-continuation-materials__card--retired': arc.retired }"
+        >
+          <p class="acu-v2-continuation-materials__card-head">
+            <strong>{{ arc.id }}</strong>
+            <span class="acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--primary">{{ arc.scope === 'story' ? '全书方向' : '卷台阶' }}</span>
+            <span class="acu-v2-continuation-materials__badge">{{ ARC_STATUS_LABELS[arc.status] ?? arc.status }}</span>
+            <span>{{ arc.title }}</span>
+            <span v-if="arc.retired" class="acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--muted">已退休{{ arc.retiredReason ? `：${arc.retiredReason}` : '' }}</span>
+          </p>
+          <p class="acu-v2-continuation-materials__card-body">方向：{{ arc.direction }}</p>
+          <p v-if="arc.escalation" class="acu-v2-continuation-materials__card-body">冲突高度：{{ arc.escalation }}</p>
+          <p v-if="arc.withheld" class="acu-v2-continuation-materials__card-meta">禁翻底牌：{{ arc.withheld }}</p>
+          <p class="acu-v2-continuation-materials__card-meta">
+            已承载阶段：{{ arc.stageNumbers.length ? arc.stageNumbers.join('、') : '（尚未承载）' }}
+          </p>
+        </div>
+      </div>
+      <details class="acu-v2-continuation-materials__json">
+        <summary>编辑原始 JSON</summary>
+        <AcuTextarea :model-value="materials.modules.storyArc.draft" :rows="14" @update:model-value="value => materials.updateDraft('storyArc', value)" />
+        <p v-if="materials.modules.storyArc.error" class="acu-v2-continuation-materials__error">{{ materials.modules.storyArc.error }}</p>
+        <div class="acu-v2-continuation-materials__actions">
+          <AcuButton :disabled="!materials.modules.storyArc.dirty" @click="materials.discard('storyArc')">放弃修改</AcuButton>
+          <AcuButton variant="primary" :loading="materials.modules.storyArc.saving" :disabled="!materials.modules.storyArc.dirty" @click="materials.save('storyArc')">保存故事总纲</AcuButton>
+        </div>
+      </details>
+    </template>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { onMounted, ref, watch } from 'vue';
+import AcuButton from './_lib/AcuButton.vue';
+import AcuTextarea from './_lib/AcuTextarea.vue';
+import { useContinuationMaterials } from '../composables/useContinuationMaterials';
+import type { ContinuationStage_ACU, ContinuationTask_ACU, StageOutline_ACU, StageRevision_ACU } from '../../service/continuation/model'; // arch-ok: 仅类型导入，用于 props 标注，编译后无运行时依赖
+
+const props = defineProps<{
+  task: ContinuationTask_ACU | null;
+  activeStage: ContinuationStage_ACU | null;
+  activeRevision: StageRevision_ACU | null;
+  busy: boolean;
+}>();
+
+const emit = defineEmits<{
+  (event: 'save-outline', outline: StageOutline_ACU): void;
+  (event: 'clear'): void;
+}>();
+
+const TABS = [
+  { id: 'outline', label: '阶段大纲' },
+  { id: 'modules', label: '本地资料' },
+  { id: 'storyArc', label: '故事总纲' },
+] as const;
+
+type TabId = typeof TABS[number]['id'];
+
+const HOOK_STATUS_LABELS: Record<string, string> = {
+  planted: '已埋设', reinforced: '已强化', misled: '已误导', partially_paid: '部分回收', paid: '已回收', abandoned: '已放弃',
+};
+const HOOK_IMPORTANCE_LABELS: Record<string, string> = { high: '重要度：高', mid: '重要度：中', low: '重要度：低' };
+const REVEAL_STATUS_LABELS: Record<string, string> = { unrevealed: '未揭示', partial: '部分揭示', revealed: '已揭示' };
+const ARC_STATUS_LABELS: Record<string, string> = { planned: '计划中', active: '进行中', done: '已完成' };
+
+const activeTab = ref<TabId>('outline');
+const materials = useContinuationMaterials();
+const outlineDraft = ref('');
+const outlineError = ref('');
+const outlineDirty = ref(false);
+const clearPending = ref(false);
+
+function stageTotalTurns(stage: ContinuationStage_ACU): number {
+  return stage.revisions.find(item => item.revision === stage.activeRevision)?.outline.totalTurns ?? 0;
+}
+
+/** 某个节点内第 turnIndex 轮在整个阶段里的全局轮号（从 1 起），用于已完成轮次的置灰标记。 */
+function turnPosition(revision: StageRevision_ACU, nodeId: string, turnIndex: number): number {
+  let position = 0;
+  for (const node of revision.outline.nodes) {
+    if (node.id === nodeId) return position + turnIndex + 1;
+    position += node.turns.length;
+  }
+  return position + turnIndex + 1;
+}
+
+function syncOutlineDraft(): void {
+  outlineDraft.value = props.activeRevision ? JSON.stringify(props.activeRevision.outline, null, 2) : '';
+  outlineError.value = '';
+  outlineDirty.value = false;
+}
+
+function onOutlineInput(value: string): void {
+  outlineDraft.value = value;
+  outlineDirty.value = true;
+}
+
+function saveOutline(): void {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(outlineDraft.value);
+  } catch (error) {
+    outlineError.value = error instanceof Error ? `大纲 JSON 无法解析：${error.message}` : '大纲 JSON 无法解析';
+    return;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    outlineError.value = '大纲必须是 JSON 对象';
+    return;
+  }
+  outlineError.value = '';
+  emit('save-outline', parsed as StageOutline_ACU);
+}
+
+function reload(): void {
+  materials.reload();
+  syncOutlineDraft();
+}
+
+function requestClear(): void {
+  clearPending.value = true;
+}
+
+function confirmClear(): void {
+  clearPending.value = false;
+  emit('clear');
+}
+
+onMounted(reload);
+
+/** 权威大纲变更（Agent 改写、保存成功）后重置草稿；用户正在编辑时不覆盖他的输入。 */
+watch(() => `${props.activeStage?.stageId ?? ''}:${props.activeRevision?.revision ?? ''}`, () => {
+  if (!outlineDirty.value) syncOutlineDraft();
+}, { immediate: true });
+
+defineExpose({ reload });
+</script>
+
+<style scoped>
+.acu-v2-continuation-materials { display: grid; gap: 12px; }
+.acu-v2-continuation-materials__tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.acu-v2-continuation-materials__tab { padding: 5px 12px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 22%, transparent); border-radius: 999px; background: transparent; color: var(--acu-text-2); cursor: pointer; font: inherit; font-size: var(--acu-font-size-body, 12px); }
+.acu-v2-continuation-materials__tab--active { border-color: color-mix(in srgb, var(--acu-primary, #5b8def) 55%, transparent); background: color-mix(in srgb, var(--acu-primary, #5b8def) 14%, transparent); color: var(--acu-text-1); }
+.acu-v2-continuation-materials__tab-actions { display: flex; gap: 6px; margin-left: auto; }
+.acu-v2-continuation-materials__confirm { margin: 0; padding: 10px; border: 1px solid color-mix(in srgb, var(--acu-danger, #d65b5b) 40%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--acu-danger, #d65b5b) 7%, transparent); color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px); }
+.acu-v2-continuation-materials__confirm-actions { display: inline-flex; gap: 6px; margin-left: 8px; vertical-align: middle; }
+.acu-v2-continuation-materials__editor { display: grid; gap: 8px; }
+.acu-v2-continuation-materials__empty { margin: 0; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px); }
+.acu-v2-continuation-materials__meta { margin: 0; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap; }
+.acu-v2-continuation-materials__error { margin: 0; color: var(--acu-danger, #d65b5b); white-space: pre-wrap; font-size: var(--acu-font-size-body, 12px); }
+.acu-v2-continuation-materials__actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.acu-v2-continuation-materials__block { padding: 10px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 20%, transparent); border-radius: 6px; display: grid; gap: 8px; }
+.acu-v2-continuation-materials__block > summary { cursor: pointer; color: var(--acu-text-1); }
+.acu-v2-continuation-materials__block--current { border-color: color-mix(in srgb, var(--acu-primary, #5b8def) 45%, transparent); }
+.acu-v2-continuation-materials__list { display: flex; flex-direction: column; gap: 6px; padding-left: 22px; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px); }
+.acu-v2-continuation-materials__turn--done { color: var(--acu-text-3); text-decoration: line-through; }
+.acu-v2-continuation-materials__cards { display: grid; gap: 8px; }
+.acu-v2-continuation-materials__card { padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 16%, transparent); border-radius: 6px; display: grid; gap: 4px; }
+.acu-v2-continuation-materials__card--retired { opacity: 0.55; }
+.acu-v2-continuation-materials__card-head { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--acu-text-1); font-size: var(--acu-font-size-body, 12px); }
+.acu-v2-continuation-materials__card-body { margin: 0; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap; }
+.acu-v2-continuation-materials__card-meta { margin: 0; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap; }
+.acu-v2-continuation-materials__badge { padding: 1px 8px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 30%, transparent); color: var(--acu-text-2); font-size: 11px; }
+.acu-v2-continuation-materials__badge--primary { border-color: color-mix(in srgb, var(--acu-primary, #5b8def) 55%, transparent); color: var(--acu-text-1); background: color-mix(in srgb, var(--acu-primary, #5b8def) 12%, transparent); }
+.acu-v2-continuation-materials__badge--muted { opacity: 0.8; }
+.acu-v2-continuation-materials__json { display: grid; gap: 8px; }
+.acu-v2-continuation-materials__json > summary { cursor: pointer; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px); }
+
+/* 手机窄屏：刷新/清空按钮换到独立一行靠右，避免和页签挤成两行半。 */
+@media (max-width: 640px) {
+  .acu-v2-continuation-materials__tab-actions { margin-left: 0; width: 100%; justify-content: flex-end; }
+  .acu-v2-continuation-materials__confirm-actions { display: flex; margin: 8px 0 0; }
+}
+</style>

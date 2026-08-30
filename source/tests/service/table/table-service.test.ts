@@ -133,6 +133,7 @@ vi.mock('../../../src/service/worldbook/pipeline', () => ({
 vi.mock('../../../src/service/runtime/helpers-remaining', () => ({
   mergeAllIndependentTables_ACU: mockMergeAllIndependentTables,
   mergeAllIndependentTablesLegacyV1_ACU: mockMergeAllIndependentTables,
+  consumeLastMergeSourceInventory_ACU: vi.fn(() => new Map<string, string>()),
 }));
 
 vi.mock('../../../src/data/repositories/chat-message-data-repo', () => ({

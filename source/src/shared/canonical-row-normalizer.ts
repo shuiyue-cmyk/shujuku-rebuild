@@ -15,7 +15,12 @@ export interface CanonicalRowNormalizationResult_ACU {
 export interface LegacyRowIdentityRepair_ACU {
   sheetKey: string;
   rowIndex: number;
-  code: 'assigned_row_id' | 'header_identity_alias' | 'header_identity_inserted';
+  code: 'assigned_row_id' | 'header_identity_alias' | 'header_identity_inserted' | 'row_identity_cell_inserted' | 'row_tail_padded';
+}
+
+export interface LegacyOrphanColumnRepairResult_ACU {
+  changedSheetKeys: string[];
+  warnings: string[];
 }
 
 export interface LegacyRowIdentityResult_ACU {
@@ -37,6 +42,24 @@ const LEGACY_ROW_ID_HEADER_ALIASES_ACU = new Set(['id', 'rowid', 'row-id', 'row_
 function isLegacyRowIdHeaderAlias_ACU(value: unknown): boolean {
   if (typeof value !== 'string') return false;
   return LEGACY_ROW_ID_HEADER_ALIASES_ACU.has(value.trim().toLowerCase());
+}
+
+/**
+ * xing～spv7.9 时代的表头首格形态并不统一：`row_id` 别名、`null`、`undefined`、
+ * 空串都出现过（undefined 经 JSON 持久化后还会变成 null）。这些都表示"这里就是
+ * 身份列的位置"，必须原位改名而不是再插一列——否则会产生孤儿空列，行值相对
+ * 表头整体左移一列（2025-12 真实事故形态）。
+ */
+function isIdentityPlaceholderHeaderCell_ACU(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  if (typeof value === 'string' && value.trim() === '') return true;
+  return isLegacyRowIdHeaderAlias_ACU(value);
+}
+
+/** 稳定 row_id 是正整数字符串（见 stable-row-id-allocator）；xing 行号同为纯数字。 */
+function looksLikeRowIdValue_ACU(value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  return /^\d+$/.test(String(value).trim());
 }
 
 export function isEmptyCanonicalRowId_ACU(value: unknown): boolean {
@@ -73,6 +96,70 @@ export function repairLegacyAutoMergedRowTails_ACU(data: Record<string, any> | n
     if (changed) changedSheetKeys.push(sheetKey);
   });
   return changedSheetKeys;
+}
+
+/**
+ * 读取期复位历史"孤儿身份列"错位（2025-12 真实事故形态，见
+ * restoreLegacyRowIdentity_ACU 注释）：xing 表头首格 undefined/空串被旧身份判定
+ * 误插 `row_id` 后固化为 `["row_id", null, 业务列…]` —— 表头多出一个空标签孤儿列，
+ * 行值相对标签整体左移一列。
+ *
+ * 触发指纹：header[0]==='row_id' 且 header[1] 为空占位（null/undefined/空串）。
+ * 逐行判定（content 与 seedRows 同规则）：
+ * - row[1] 非空且尾格为空 → pop()（错位老行：值从第 1 列起占位，尾部是补进来的 null）；
+ * - row[1] 为空 → splice(1,1)（迁移后按错误表头对齐的新行：孤儿列位置本来就是空格）；
+ * - 两者皆非空 → 无法无损判定，整表放弃复位并记 warning（该列可能是真实数据列）。
+ * 守恒契约：只删除可证明为合成的空格/孤儿标签，不删除任何业务值。幂等：复位后
+ * 表头不再命中指纹。
+ */
+export function repairLegacyOrphanIdentityColumn_ACU(data: Record<string, any> | null | undefined): LegacyOrphanColumnRepairResult_ACU {
+  const result: LegacyOrphanColumnRepairResult_ACU = { changedSheetKeys: [], warnings: [] };
+  if (!data || typeof data !== 'object') return result;
+
+  Object.entries(data).forEach(([sheetKey, sheet]) => {
+    if (!sheetKey.startsWith('sheet_') || !sheet || typeof sheet !== 'object') return;
+    const content = (sheet as any).content;
+    if (!Array.isArray(content) || content.length === 0 || !Array.isArray(content[0])) return;
+    const header = content[0] as unknown[];
+    if (header.length < 2 || header[0] !== 'row_id') return;
+    const orphanCell = header[1];
+    const orphanCellIsPlaceholder = orphanCell === null || orphanCell === undefined
+      || (typeof orphanCell === 'string' && orphanCell.trim() === '');
+    if (!orphanCellIsPlaceholder) return;
+
+    const collectRows = (rows: unknown): unknown[][] =>
+      (Array.isArray(rows) ? rows : []).filter((row): row is unknown[] => Array.isArray(row));
+    const dataRows = collectRows(content.slice(1));
+    const seedRows = collectRows((sheet as any).seedRows);
+    const allRows = [...dataRows, ...seedRows];
+
+    const isEmptyCell = (value: unknown): boolean => value === null || value === undefined
+      || (typeof value === 'string' && value.trim() === '');
+    // 只有与（错误）表头等宽的行需要删一格；行宽 = 表头-1 的未 padding 老行在
+    // 删除孤儿列后天然对齐，保持原样。其余宽度是别的缺陷，留给规范校验报告。
+    const fullWidthRows = allRows.filter(row => row.length === header.length);
+    // 判定歧义行：row[1] 与尾格都有值时既不能 pop 也不能 splice，说明这一列
+    // 可能承载了真实数据——整表放弃，宁可保留错位也不冒删业务值的险。
+    const ambiguousRow = fullWidthRows.find(row => !isEmptyCell(row[1]) && !isEmptyCell(row[row.length - 1]));
+    if (ambiguousRow) {
+      result.warnings.push(
+        `[孤儿列复位] 表「${String((sheet as any).name || sheetKey)}」(${sheetKey}) 命中孤儿身份列指纹，`
+        + `但存在第 1 列与尾格均非空的行，无法无损判定，已放弃复位（数据保持原样）。`,
+      );
+      return;
+    }
+
+    fullWidthRows.forEach(row => {
+      if (!isEmptyCell(row[1])) {
+        row.pop();
+      } else {
+        row.splice(1, 1);
+      }
+    });
+    header.splice(1, 1);
+    result.changedSheetKeys.push(sheetKey);
+  });
+  return result;
 }
 
 function normalizeRows_ACU(
@@ -192,16 +279,34 @@ export function restoreLegacyRowIdentity_ACU(data: Record<string, any> | null | 
 
     // An absent identity column is not a defect in legacy data; the concept did
     // not exist. Insert one so every business cell keeps its column position.
-    const hasIdentityColumn = header.length > 0 && (header[0] === null || isLegacyRowIdHeaderAlias_ACU(header[0]));
+    // "Absent" means the first header cell holds a real business label; any
+    // identity placeholder spelling (null/undefined/blank/alias) is renamed in
+    // place instead — inserting there would create an orphan empty column and
+    // shift every business value one column left of its label.
+    const hasIdentityColumn = header.length > 0 && isIdentityPlaceholderHeaderCell_ACU(header[0]);
+
+    // 行级宽度感知：表头有身份列而行宽 = 表头-1 的行缺一格。row[0] 是纯数字
+    // （xing 行号/稳定 row_id 格式）→ 身份格在，缺的是尾格；row[0] 是业务值
+    // → 缺的是身份格，行首插 null 保住每个业务格的列位置。
+    const rowIsMissingIdentityCell = (row: unknown[]): boolean =>
+      hasIdentityColumn
+      && row.length === header.length - 1
+      && !isEmptyCanonicalRowId_ACU(row[0])
+      && !looksLikeRowIdValue_ACU(row[0]);
+    const rowIsMissingTailCell = (row: unknown[]): boolean =>
+      hasIdentityColumn
+      && row.length === header.length - 1
+      && !rowIsMissingIdentityCell(row);
 
     // Count the baseline with the same column semantics used after the repair:
-    // when there is no identity column yet, column 0 already holds business
-    // data, so skipping it here would understate the baseline and make a
-    // faithful repair look like it invented cells.
-    const businessColumnOffsetBefore = hasIdentityColumn ? 1 : 0;
+    // when a row has no identity cell yet (absent identity column, or a
+    // width-deficient row whose first cell is business data), column 0 already
+    // holds business data, so skipping it here would understate the baseline
+    // and make a faithful repair look like it invented cells.
     result.conservation.rowCountBefore += dataRows.length + seedRows.length;
     [...dataRows, ...seedRows].forEach(row => {
-      result.conservation.businessCellCountBefore += countBusinessCells_ACU(row, businessColumnOffsetBefore);
+      const offset = (!hasIdentityColumn || rowIsMissingIdentityCell(row)) ? 0 : 1;
+      result.conservation.businessCellCountBefore += countBusinessCells_ACU(row, offset);
     });
 
     if (!hasIdentityColumn) {
@@ -215,9 +320,28 @@ export function restoreLegacyRowIdentity_ACU(data: Record<string, any> | null | 
         });
       }
       result.repairs.push({ sheetKey, rowIndex: 0, code: 'header_identity_inserted' });
-    } else if (header[0] !== 'row_id') {
-      header[0] = 'row_id';
-      result.repairs.push({ sheetKey, rowIndex: 0, code: 'header_identity_alias' });
+    } else {
+      if (header[0] !== 'row_id') {
+        header[0] = 'row_id';
+        result.repairs.push({ sheetKey, rowIndex: 0, code: 'header_identity_alias' });
+      }
+      const repairRowWidth = (row: unknown[], rowIndex: number): void => {
+        if (rowIsMissingIdentityCell(row)) {
+          row.unshift(null);
+          result.repairs.push({ sheetKey, rowIndex, code: 'row_identity_cell_inserted' });
+        } else if (rowIsMissingTailCell(row)) {
+          row.push(null);
+          result.repairs.push({ sheetKey, rowIndex, code: 'row_tail_padded' });
+        }
+      };
+      content.slice(1).forEach((row: unknown, offset: number) => {
+        if (Array.isArray(row)) repairRowWidth(row, offset + 1);
+      });
+      if (Array.isArray((sheet as any).seedRows)) {
+        ((sheet as any).seedRows as unknown[]).forEach((row, offset) => {
+          if (Array.isArray(row)) repairRowWidth(row, offset);
+        });
+      }
     }
 
     // Reserve across content and seedRows together: they share one identity

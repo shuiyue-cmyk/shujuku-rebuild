@@ -22,6 +22,7 @@ import {
 } from '../../shared/host-api';
 import {
   currentChatFileIdentifier_ACU,
+  consumeGenerationContextForEnded_ACU,
   discardLatestGenerationContext_ACU,
   generationGate_ACU,
   getCurrentIsolationKey_ACU,
@@ -121,6 +122,9 @@ import {
 import {
   logAutoFillSkip_ACU
 } from '../../shared/trigger-diagnostics';
+import { bindContinuationInternalAiGenerationStarted_ACU, consumeContinuationInternalAiGenerationEnded_ACU } from '../../service/continuation/internal-ai-events';
+import { getContinuationHostGenerationBridge_ACU } from '../../service/continuation/host-generation-bridge-registry';
+import { getContinuationRuntime_ACU } from '../../service/continuation/continuation-runtime';
 
 // ═══ [H2/M4] 启动期重建链互斥守卫 ═══
 // 背景：启动时可能存在两条并发的重建链——chatId 可用路径的 setTimeout(initWithChatId, 1000)
@@ -489,6 +493,11 @@ export   function mainInitialize_ACU() {
       loadSettings_ACU();
       // [静默迁移] 内置生理追踪存量数据 → 上游 tracker 可读形态（一次性，按聊天打标）
       void runLegacyBiotrackerSilentMigration_ACU();
+      // S0-4：注册插件保存后的 checkpoint 保管库同步（删楼恢复的影子基线）。
+      installCheckpointDeleteGuard_ACU();
+      // Register the bridge before generation events are subscribed. Runtime
+      // migration remains page-owned so no chat persistence is touched at startup.
+      getContinuationRuntime_ACU();
       if (
         SillyTavern_API_ACU &&
         SillyTavern_API_ACU.eventSource &&
@@ -570,20 +579,45 @@ export   function mainInitialize_ACU() {
         if (SillyTavern_API_ACU.eventTypes.GENERATION_STARTED) {
           SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.GENERATION_STARTED, (type: any, params: any, dryRun: any) => {
             try {
-              recordGenerationContext_ACU(type, params, dryRun);
+              const context = recordGenerationContext_ACU(type, params, dryRun);
+              bindContinuationInternalAiGenerationStarted_ACU(context.seq);
+              // 宿主的 GENERATION_STARTED 通常在发送点击返回后的微任务里才送达，同步配对必然错过；
+              // 对非 quiet/非 dryRun/非自动触发的生成开放宽松认领（spv8.9.2 状态法），桥内部只在
+              // 存在未绑定序列号的等待轮时才会认领。
+              const allowLooseStart = !dryRun && !isQuietLikeGeneration_ACU(type, params) && !params?.automatic_trigger;
+              getContinuationHostGenerationBridge_ACU()?.onGenerationStarted(context.seq, allowLooseStart);
             } catch (e) {}
           });
         }
         if (SillyTavern_API_ACU.eventTypes.GENERATION_STOPPED) {
           SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.GENERATION_STOPPED, () => {
             try {
-              discardLatestGenerationContext_ACU();
+              const discarded = discardLatestGenerationContext_ACU();
+              // 被中止的生成不会再有 GENERATION_ENDED；通知桥把等待中的续写轮转为可重试，避免卡死。
+              void getContinuationHostGenerationBridge_ACU()?.onGenerationStopped(discarded?.seq);
             } catch (e) {}
           });
         }
         if (SillyTavern_API_ACU.eventTypes.GENERATION_ENDED) {
             const onGenerationEnded = (message_id: any) => {
                 logDebug_ACU(`ACU GENERATION_ENDED event for message_id: ${message_id}`);
+                const generationContext = consumeGenerationContextForEnded_ACU();
+                const internalRequest = consumeContinuationInternalAiGenerationEnded_ACU(generationContext?.seq);
+                if (internalRequest) {
+                  logDebug_ACU(`ACU 忽略 continuation 内部 ${internalRequest.source} GENERATION_ENDED: ${internalRequest.requestId}`);
+                  return;
+                }
+                const continuationBridge = getContinuationHostGenerationBridge_ACU();
+                // 宽松认领只对"会产生正文楼层"的生成开放：quiet/dryRun/自动触发生成不许认领，
+                // 否则会误杀等待中的续写轮。判定复用自动填表的生成门控。
+                const allowLooseContinuationClaim = shouldProcessAutoTableUpdateForGenerationEnded_ACU(generationContext);
+                if (continuationBridge?.claimsGenerationEnded(generationContext?.seq, allowLooseContinuationClaim)) {
+                  // 桥只负责续写轮次的归属确认/循环标签校验/自动续下一轮，不再短路后续管线：
+                  // 填表与正文优化由下方常规意图派发按各自的判定独立触发（解耦，见 spv 讨论）。
+                  // 桥因标签缺失删楼重试时，常规管线的楼层解析（唯一候选 + 有界物化等待）与
+                  // evaluateNewMessageAction 的 resolved_message_not_ai 防御会自然跳过该楼。
+                  void continuationBridge.onGenerationEnded(message_id, generationContext?.seq, allowLooseContinuationClaim);
+                }
                 // [触发修复] 原子捕获完整意图快照：事件参数只作为锚点，不承诺是 AI 数组下标。
                 // makeFirst 可能早于宿主把本轮 AI 回复追加进 chat，因此必须记录捕获时边界，
                 // 由 resolveGeneratedAiMessageIndex_ACU 在防抖回调中按唯一候选规则解析。
@@ -603,7 +637,7 @@ export   function mainInitialize_ACU() {
                       generationSeq: generationGate_ACU.generationSeq > 0 ? generationGate_ACU.generationSeq : undefined,
                   }
                   : undefined;
-                if (shouldProcessAutoTableUpdateForGenerationEnded_ACU()) {
+                if (shouldProcessAutoTableUpdateForGenerationEnded_ACU(generationContext)) {
                   handleNewMessageDebounced_ACU('GENERATION_ENDED', autoFillIntent);
                 } else {
                   logDebug_ACU('ACU: Skip auto table update due to quiet/background generation.');

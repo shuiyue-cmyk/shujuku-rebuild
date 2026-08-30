@@ -226,9 +226,35 @@ export class RetryableAiResponseError_ACU extends Error {
 
   // ═══ 响应处理（streamingEnabled 开启时走 SSE 流解析，否则 JSON 解析） ═══
 
-  async function parseNonStreamResponse_ACU(response: any) {
+  /** 一次 AI 调用的 token 用量。cachedTokens 是命中厂商 prompt 缓存的输入 token 数（含在 promptTokens 内）。 */
+  export interface AiUsageMetadata_ACU {
+    promptTokens: number;
+    completionTokens: number;
+    cachedTokens: number;
+  }
+
+  /**
+   * 从 OpenAI 兼容响应的 usage 字段提取统一的用量结构。
+   * @param raw 响应里的 usage 对象（chat completions 形态）
+   * @returns 统一用量；raw 不含任何有效计数时返回 null
+   */
+  export function extractAiUsageMetadata_ACU(raw: any): AiUsageMetadata_ACU | null {
+    if (!raw || typeof raw !== 'object') return null;
+    const toCount = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0);
+    const promptTokens = toCount(raw.prompt_tokens);
+    const completionTokens = toCount(raw.completion_tokens);
+    const cachedTokens = toCount(raw.prompt_tokens_details?.cached_tokens);
+    if (!promptTokens && !completionTokens && !cachedTokens) return null;
+    return { promptTokens, completionTokens, cachedTokens };
+  }
+
+  async function parseNonStreamResponse_ACU(response: any, onUsage?: (usage: AiUsageMetadata_ACU) => void) {
     try {
         const data = await response.json();
+        const usage = extractAiUsageMetadata_ACU(data?.usage);
+        if (usage && onUsage) {
+          try { onUsage(usage); } catch { /* 用量回调异常不允许影响响应主流程。 */ }
+        }
         if (data?.choices?.[0]?.message?.content) {
             return data.choices[0].message.content;
         }
@@ -249,11 +275,13 @@ export class RetryableAiResponseError_ACU extends Error {
   // SSE 流式响应解析：逐行提取 data: 前缀的 JSON，拼接 choices[0].delta.content。
   // 兼容 Claude Messages 原样透传的 Anthropic SSE（接口协议=claude_messages 时 TT 不归一化流）：
   // content_block_delta(text_delta).delta.text 拼内容，message_stop 视为流结束（等价 [DONE]）。
-  async function parseStreamResponse_ACU(response: any) {
+  // usage 出现在流末尾的独立 chunk（choices 为空数组），需开启 stream_options.include_usage 才会下发。
+  async function parseStreamResponse_ACU(response: any, onUsage?: (usage: AiUsageMetadata_ACU) => void) {
     try {
       const text = await response.text();
       let result = '';
       let sawDone = false;
+      let capturedUsage: AiUsageMetadata_ACU | null = null;
       for (const line of text.split('\n')) {
         const trimmed = line.trim();
         if (!trimmed.startsWith('data:')) continue;
@@ -266,7 +294,9 @@ export class RetryableAiResponseError_ACU extends Error {
         try {
           const data = JSON.parse(payload);
           const delta = data?.choices?.[0]?.delta?.content;
-          if (typeof delta === 'string') { result += delta; continue; }
+          if (typeof delta === 'string') { result += delta; }
+          const usage = extractAiUsageMetadata_ACU(data?.usage);
+          if (usage) capturedUsage = usage;
           // Anthropic SSE 分支（claude_messages 接口协议）
           if (data?.type === 'content_block_delta' && data?.delta?.type === 'text_delta' && typeof data?.delta?.text === 'string') {
             result += data.delta.text;
@@ -276,6 +306,9 @@ export class RetryableAiResponseError_ACU extends Error {
         } catch {
           // 忽略无法解析的 data 行（注释/空行）
         }
+      }
+      if (capturedUsage && onUsage) {
+        try { onUsage(capturedUsage); } catch { /* 用量回调异常不允许影响响应主流程。 */ }
       }
       if (!sawDone) {
         // [M1] 流式响应未收到 [DONE]：按截断处理，丢弃部分内容返回 null。
@@ -300,12 +333,12 @@ export class RetryableAiResponseError_ACU extends Error {
    * 预设级流式开关可能与全局不同，若按全局判断会把 SSE 当 JSON（或反之）解析失败。
    * requestWantsStream 缺省时回退全局 settings_ACU.streamingEnabled（兼容旧调用方）。
    */
-  export async function handleApiResponse_ACU(response: any, requestWantsStream?: boolean) {
+  export async function handleApiResponse_ACU(response: any, requestWantsStream?: boolean, onUsage?: (usage: AiUsageMetadata_ACU) => void) {
     const wantsStream = requestWantsStream !== undefined
       ? requestWantsStream === true
       : settings_ACU.streamingEnabled === true;
     if (wantsStream) {
-      return await parseStreamResponse_ACU(response);
+      return await parseStreamResponse_ACU(response, onUsage);
     }
-    return await parseNonStreamResponse_ACU(response);
+    return await parseNonStreamResponse_ACU(response, onUsage);
   }

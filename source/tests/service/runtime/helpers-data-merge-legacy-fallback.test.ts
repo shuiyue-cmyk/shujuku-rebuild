@@ -2,7 +2,7 @@
  * tests/service/runtime/helpers-data-merge-legacy-fallback.test.ts
  *
  * C4 Legacy V1（xing 时代）读取不阻塞：迁移到 V2 失败时降级为直读合并结果，
- * 数据照常可用、不 throw；弹一次非阻塞 warning toast（按聊天+隔离键去重）。
+ * 数据照常可用、不 throw；全程静默（仅 logWarn 后台日志，不弹任何 toast）。
  * 写入门闸（ensureLegacyStorageMigratedBeforeWrite_ACU）独立于读路径，维持严格。
  */
 import { beforeEach, describe, it, expect, vi } from 'vitest';
@@ -148,7 +148,7 @@ describe('legacy-v1 迁移失败降级为直读（C4）', () => {
     primeLegacyData();
   });
 
-  it('迁移 throw（如 audit 阻断）时不再上抛：返回直读合并数据并 logWarn + warning toast', async () => {
+  it('迁移 throw（如 audit 阻断）时不再上抛：返回直读合并数据并 logWarn，全程不弹 toast', async () => {
     vi.mocked(getChatArray_ACU).mockReturnValue(makeLegacyChat('fallback-throw'));
     vi.mocked(migrateLegacyStorageToV2OnLoad_ACU).mockRejectedValueOnce(new Error('audit gate 阻断：upgrade_overflow_cells'));
 
@@ -157,11 +157,7 @@ describe('legacy-v1 迁移失败降级为直读（C4）', () => {
     expect(result).not.toBeNull();
     expect(result!.sheet_0.content).toEqual([['row_id', '物品名称'], ['1', '旧格式数据']]);
     expect(logWarn_ACU).toHaveBeenCalledWith(expect.stringContaining('已降级为直读旧格式'));
-    expect(showUiSurfaceToast_ACU).toHaveBeenCalledTimes(1);
-    expect(showUiSurfaceToast_ACU).toHaveBeenCalledWith(expect.objectContaining({
-      kind: 'warning',
-      text: expect.stringContaining('兼容模式直读'),
-    }));
+    expect(showUiSurfaceToast_ACU).not.toHaveBeenCalled();
   });
 
   it('迁移返回 migrated:false 时同样降级直读，不 throw', async () => {
@@ -175,17 +171,18 @@ describe('legacy-v1 迁移失败降级为直读（C4）', () => {
     expect(logWarn_ACU).toHaveBeenCalledWith(expect.stringContaining('mixed 存储阻断'));
   });
 
-  it('同一聊天+隔离键重复失败只弹一次 toast；不同聊天再次提示', async () => {
+  it('重复失败也保持静默：多个聊天多次失败均不弹 toast，数据始终可读', async () => {
     vi.mocked(getChatArray_ACU).mockReturnValue(makeLegacyChat('dedupe-chat-a'));
     vi.mocked(migrateLegacyStorageToV2OnLoad_ACU).mockRejectedValue(new Error('持续失败'));
 
     await mergeAllIndependentTables_ACU();
     await mergeAllIndependentTables_ACU();
-    expect(showUiSurfaceToast_ACU).toHaveBeenCalledTimes(1);
 
     vi.mocked(getChatArray_ACU).mockReturnValue(makeLegacyChat('dedupe-chat-b'));
-    await mergeAllIndependentTables_ACU();
-    expect(showUiSurfaceToast_ACU).toHaveBeenCalledTimes(2);
+    const result = await mergeAllIndependentTables_ACU();
+
+    expect(showUiSurfaceToast_ACU).not.toHaveBeenCalled();
+    expect(result!.sheet_0.content).toEqual([['row_id', '物品名称'], ['1', '旧格式数据']]);
   });
 
   it('迁移成功路径不受影响：仍返回修复候选数据且不弹降级 toast', async () => {

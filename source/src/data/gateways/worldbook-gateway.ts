@@ -40,21 +40,30 @@ export function normalizeLorebookNameForMatch_ACU(value: unknown): string {
         .trim();
 }
 
-function getLorebookListItemName_ACU(item: unknown): string {
-    if (item && typeof item === 'object') return String((item as any).name ?? '').trim();
-    return String(item ?? '').trim();
+function getLorebookListItemRawName_ACU(item: unknown): string {
+    if (item && typeof item === 'object') return String((item as any).name ?? '');
+    return String(item ?? '');
 }
 
 /**
  * 将配置/绑定中的名称解析为宿主列表里的真实名称。
- * 多个名称归一化后冲突时拒绝猜测，避免读写到错误世界书。
+ *
+ * 必须返回宿主列表中的原始名称（不 trim、不归一化）：宿主按原始名索引世界书，
+ * 名称带首尾空格或不可见字符时，返回 trim 结果会导致后续宿主调用 not-found。
+ * trim/归一化只用于构造匹配键。多个名称在同一匹配通道冲突时拒绝猜测，
+ * 避免读写到错误世界书。
  */
 export function resolveLorebookNameFromList_ACU(requestedName: unknown, bookList: unknown): string | null {
-    const requested = String(requestedName ?? '').trim();
+    const requestedRaw = String(requestedName ?? '');
+    const requested = requestedRaw.trim();
     if (!requested || !Array.isArray(bookList)) return null;
-    const availableNames = bookList.map(getLorebookListItemName_ACU).filter(Boolean);
-    const exactMatch = availableNames.find(name => name === requested);
-    if (exactMatch) return exactMatch;
+    const availableNames = bookList.map(getLorebookListItemRawName_ACU).filter(name => name.trim());
+    // 字节级精确命中：请求本身就是宿主列表里的原始名
+    if (availableNames.includes(requestedRaw)) return requestedRaw;
+    // trim 精确命中：返回宿主原始名；trim 后同名的多本书属于歧义，拒绝猜测
+    const trimmedMatches = availableNames.filter(name => name.trim() === requested);
+    if (trimmedMatches.length === 1) return trimmedMatches[0];
+    if (trimmedMatches.length > 1) return null;
 
     const matchKey = normalizeLorebookNameForMatch_ACU(requested);
     if (!matchKey) return null;

@@ -48,6 +48,7 @@ export {
     mergeAllIndependentTablesLegacyV1_ACU,
     consumeLastMergeQuarantinedSheetKeys_ACU,
     consumeLastMergeWarnings_ACU,
+    consumeLastMergeSourceInventory_ACU,
     formatJsonToReadable_ACU,
     shouldSuppressWorldbookInjection_ACU,
     maybeLiftWorldbookSuppression_ACU,

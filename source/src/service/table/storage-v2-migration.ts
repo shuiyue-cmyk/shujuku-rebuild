@@ -8,10 +8,9 @@ import { resolveHistoricalSheetKeyMigrations_ACU } from '../../shared/sql-read-r
 import { canonicalizeDisplayName_ACU } from '../../shared/sheet-identity';
 import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
 import { hasV2TableHistoryEvidence_ACU, isV2TagData_ACU, resolveTableStorageStrategy_ACU } from './storage-strategy-resolver';
-import type { TableCheckpointScheduleSummaryV2_ACU, TableMigrationAuditBackupV1_ACU, TableMigrationProvenanceV1_ACU, TableStorageFrameV2_ACU } from './storage-frame-v2-types';
+import type { MixedStorageDecisionBackupV1_ACU, TableCheckpointScheduleSummaryV2_ACU, TableMigrationAuditBackupV1_ACU, TableMigrationProvenanceV1_ACU, TableStorageFrameV2_ACU } from './storage-frame-v2-types';
 import { commitMixedStorageDecision_ACU } from './mixed-storage-commit';
 import { evaluateMixedStorageDecision_ACU, type MixedStorageDecision_ACU } from './mixed-storage-decision';
-import { registerMixedStorageDecision_ACU } from './mixed-storage-decision-registry';
 import { collectV2SheetKeyEvidenceStatically_ACU, type V2StaticSheetEvidence_ACU } from './mixed-storage-evidence';
 import { buildCanonicalFullCheckpoint_ACU } from './canonical-checkpoint-builder';
 import { auditTableDataForUpgrade_ACU, getTableDataFingerprint_ACU, type UpgradeAuditResult_ACU } from './table-data-upgrade-audit';
@@ -23,6 +22,12 @@ export interface LegacyToV2MigrationOptions_ACU {
   isolationKey: string;
   isolationConfig: IsolationConfig_ACU;
   skipUpdateFloors?: number;
+  /**
+   * 合并读取点登记的源带行表清单（sheetKey → 规范化显示名，来自
+   * consumeLastMergeSourceInventory_ACU）。提供时保险闸直接消费该清单，
+   * 与合并读取严格同源；缺省时回退为独立扫描（保持 API 兼容）。
+   */
+  sourceInventory?: Map<string, string> | null;
 }
 
 export interface LegacyToV2MigrationResult_ACU {
@@ -551,7 +556,11 @@ export async function migrateLegacyStorageToV2OnLoad_ACU(
   // 直读降级，数据保持原样可用。两层闸门：
   // 1) 逐表存在性：旧源中每张带真实行的表必须在合并结果中有对应（key 或规范名）；
   // 2) 总行数兜底：合并结果一行都没有而旧源有行（表在但行被剥光的场景）。
-  const legacyRowBearingSheets = collectLegacyRowBearingSheets_ACU(chat, options.isolationKey, options.isolationConfig);
+  // 清单来源优先用合并读取点登记的 sourceInventory（与合并严格同源，杜绝独立扫描
+  // 与合并读取语义漂移造成的缺表误报）；未提供时回退独立扫描。
+  const legacyRowBearingSheets = options.sourceInventory instanceof Map
+    ? options.sourceInventory
+    : collectLegacyRowBearingSheets_ACU(chat, options.isolationKey, options.isolationConfig);
   const missingSheets = findLegacyRowBearingSheetsMissingFromMerged_ACU(options.data, legacyRowBearingSheets);
   if (missingSheets.length > 0) {
     const error = `合并结果缺失旧存储中带真实行数据的表：${missingSheets.join('、')}；为防止破坏性迁移丢失原始数据，已拒绝迁移。`;
@@ -597,6 +606,7 @@ export async function migrateLegacyStorageToV2OnLoad_ACU(
   let mixedDecision: MixedStorageDecision_ACU | undefined;
   let keyMigrations = new Map<string, string>();
   let canRebuild = false;
+  let selfHealedMixedConflict = false;
   let supersededV2Frames: NonNullable<TableMigrationAuditBackupV1_ACU['supersededV2Frames']> = [];
   const hasV2History = chat.some(message => !message?.is_user
     && hasV2TableHistoryEvidence_ACU(readIsolatedTagData_ACU(message, options.isolationKey)));
@@ -627,12 +637,97 @@ export async function migrateLegacyStorageToV2OnLoad_ACU(
       canRebuild = !canSupersede && staticEvidence !== null
         && canRebuildFromLegacyWhenV2Unreadable_ACU(mixedDecision, staticEvidence, candidateData, audit, repair);
       if (!canSupersede && !canRebuild) {
-        registerMixedStorageDecision_ACU(mixedDecision, options.isolationConfig, staticEvidence?.sheetKeys.length);
-        return {
-          migrated: false,
-          mixedDecision,
-          error: `mixed legacy-v1 and V2 data detected: ${mixedDecision.kind}; automatic migration remains blocked`,
-        };
+        // ── 混合存储静默自愈（方向感知）──
+        // 旧行为：登记 conflict 决策并阻断迁移。决策 UI 入口已隐藏，写闸依赖迁移成功，
+        // 结果是"老前端 API 改数据 → V1V2 混合报错"的写路径死锁。
+        // 新契约：按证据判定权威方向后静默处置，仅后台日志，无任何 UI。
+        // audit unrecoverable / requiresConfirmation 的硬阻断在上方维持不变。
+        //
+        // 方向一（V2 更新）：V2 严格可读，且 V2 anchor 写在全部 legacy 源之后、或
+        // provenance 完整证明 V2 继承自 legacy——legacy 是残留旧件，用 legacy 覆盖会
+        // 回滚用户数据。处置：保 V2 为权威，legacy 原件备份进 anchor tagData 的
+        // mixedStorageDecisionBackup 后清理残留字段。
+        const provenance = mixedDecision.evidence.v2.provenance;
+        const provenanceVerified = provenance.present
+          && provenance.validation?.valid === true
+          && provenance.targetMatchesAnchor === true
+          && provenance.isolationKeyMatches === true
+          && provenance.sourceEvidenceMatches === true
+          && provenance.legacyFingerprintMatchesCandidate === true;
+        const anchorIndex = mixedDecision.evidence.v2.anchor.messageIndex;
+        const v2IsNewerDirection = replayUsable && anchorIndex !== null
+          && (provenanceVerified || latestLegacySourceIndex === undefined || anchorIndex > latestLegacySourceIndex);
+        if (v2IsNewerDirection) {
+          const keepV2Chat = deepClone_ACU(chat);
+          const anchorMessage = keepV2Chat[anchorIndex!];
+          const anchorIsolated = cloneIsolatedData_ACU(anchorMessage) as Record<string, any>;
+          const anchorTagData = readIsolatedTagData_ACU(anchorMessage, options.isolationKey) as any;
+          anchorIsolated[options.isolationKey] = {
+            ...anchorTagData,
+            mixedStorageDecisionBackup: {
+              version: 1,
+              createdAt: Date.now(),
+              action: 'keep_v2',
+              legacyData: deepClone_ACU(audit.sourceData),
+              legacyFingerprint: mixedDecision.legacyFingerprint,
+              v2Fingerprint: mixedDecision.v2Fingerprint,
+              sourceMessageIndices: [...mixedDecision.evidence.legacy.sourceMessageIndices],
+              sourceAiFloors: [...mixedDecision.evidence.legacy.sourceAiFloors],
+              decisionId: mixedDecision.decisionId,
+              decisionKind: mixedDecision.kind,
+            } satisfies MixedStorageDecisionBackupV1_ACU,
+          };
+          anchorMessage.TavernDB_ACU_IsolatedData = anchorIsolated;
+          cleanupLegacyFieldsAfterV2Write_ACU(keepV2Chat, options.isolationKey, options.isolationConfig);
+          const keepV2ScopeError = getLegacyMigrationScopeChangeError_ACU(scopeSnapshot);
+          if (keepV2ScopeError) return { migrated: false, mixedDecision, error: keepV2ScopeError };
+          const chatBeforeKeepV2 = deepClone_ACU(chat);
+          chat.splice(0, chat.length, ...keepV2Chat);
+          try {
+            await saveChatToHostStrict_ACU();
+          } catch (error) {
+            chat.splice(0, chat.length, ...chatBeforeKeepV2);
+            return { migrated: false, mixedDecision, error: `mixed self-heal (keep_v2) save failed: ${error instanceof Error ? error.message : String(error)}` };
+          }
+          logWarn_ACU(
+            `[V2 Migration] 混合存储（${mixedDecision.kind}）静默自愈：V2 anchor（#${anchorIndex}）`
+            + `${provenanceVerified ? '带完整迁移 provenance' : '晚于全部 legacy 源'}，判定 V2 为权威；`
+            + 'legacy 残留原件已备份至 anchor tagData 的 mixedStorageDecisionBackup 并从各楼层清除。',
+          );
+          return { migrated: true, messageIndex: anchorIndex!, data: (mixedDecision.evidence.v2.replay.data || candidateData) as TableDataObject_ACU, mixedDecision };
+        }
+        // 方向二（legacy 更新或方向不可判定）：采纳当前合并结果（legacy repair 候选）
+        // 为权威重写迁移根。V2 侧严格可读时，把 legacy 候选缺失的表（key 与规范名双通道
+        // 判重，避免同名双表冲突）补进候选，V2-only 数据不离开活动数据；V2 全部原帧随后
+        // 由 supersede 主链深拷贝进 migrationAuditBackup.supersededV2Frames 归档兜底。
+        const replayedV2Data = replayUsable
+          ? mixedDecision.evidence.v2.replay.data as Record<string, any> | null
+          : null;
+        const backfilledSheetKeys: string[] = [];
+        if (replayedV2Data && typeof replayedV2Data === 'object') {
+          const candidateNames = new Set(
+            sheetKeysOfData_ACU(candidateData)
+              .map(key => canonicalizeDisplayName_ACU((candidateData as any)[key]?.name))
+              .filter(Boolean),
+          );
+          for (const sheetKey of Object.keys(replayedV2Data)) {
+            if (!sheetKey.startsWith('sheet_') || !replayedV2Data[sheetKey]) continue;
+            if ((candidateData as any)[sheetKey]) continue;
+            const v2Name = canonicalizeDisplayName_ACU(replayedV2Data[sheetKey]?.name);
+            if (v2Name && candidateNames.has(v2Name)) continue;
+            (candidateData as any)[sheetKey] = deepClone_ACU(replayedV2Data[sheetKey]);
+            if (v2Name) candidateNames.add(v2Name);
+            backfilledSheetKeys.push(sheetKey);
+          }
+        }
+        selfHealedMixedConflict = true;
+        logWarn_ACU(
+          `[V2 Migration] 混合存储（${mixedDecision.kind}）静默自愈：判定 legacy 侧为最近权威（或方向不可判定），`
+          + `采纳当前合并结果重写迁移根；V2 侧${replayedV2Data
+            ? `严格可读，已把 legacy 候选缺失的 ${backfilledSheetKeys.length} 张表补进候选${backfilledSheetKeys.length > 0 ? `（${backfilledSheetKeys.join('、')}）` : ''}`
+            : '不可严格读出，原帧整体进入迁移归档'}；`
+          + '全部被替代 V2 帧已深拷贝归档至 migrationAuditBackup.supersededV2Frames。',
+        );
       }
       supersededV2Frames = collectSupersededV2Frames_ACU(chat, options.isolationKey);
       if (canRebuild) {
@@ -760,9 +855,9 @@ export async function migrateLegacyStorageToV2OnLoad_ACU(
   }
   logDebug_ACU(`[V2 Migration] legacy-v1 migrated to V2 checkpoint: messageIndex=${target.index}, skipUpdateFloors=${skipUpdateFloors}, isolationKey=[${options.isolationKey || '无标签'}], sheets=${sheetKeys.length}`);
 
-  // T6 收口后置校验：重建路径成功且宿主已持久化后，验证新 checkpoint 可被正常 replay。
-  // 失败时宿主已落盘、backup 已保留，不得谎称已回滚（committed-postcondition 语义）。
-  if (canRebuild) {
+  // T6 收口后置校验：重建/静默自愈路径成功且宿主已持久化后，验证新 checkpoint 可被正常
+  // replay。失败时宿主已落盘、backup 已保留，不得谎称已回滚（committed-postcondition 语义）。
+  if (canRebuild || selfHealedMixedConflict) {
     const verifyReplay = await loadTableStateFromFramesV2Detailed_ACU(chat, options.isolationKey, {
       updateRuntimeState: false,
     });

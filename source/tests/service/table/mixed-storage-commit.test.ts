@@ -125,6 +125,31 @@ describe('mixed-storage-commit', () => {
     expect(chatRef.value[0].TavernDB_ACU_Data).toBeUndefined();
   });
 
+  it('commit_merge_candidate 写新根后同事务降级旧 anchor full checkpoint（单根不变量）', async () => {
+    const legacy = { sheet_0: sheet([['1', '药水'], ['2', '卷轴']]) } as any;
+    const v2Data = { sheet_0: sheet([['1', '药水']]) } as any;
+    chatRef.value = buildChat(legacy, v2Data, false, true);
+    const decision = await decisionFor(chatRef.value, legacy);
+
+    const result = await commitMixedStorageDecision_ACU({ decision, action: 'commit_merge_candidate', isolationConfig: { enabled: false, code: '' } });
+
+    expect(result.status).toBe('committed');
+    // 新 migration 根在 #2；旧 anchor（#1）的 full checkpoint 必须已降级，否则形成多根
+    const fullCheckpointIndices = chatRef.value
+      .map((message: any, index: number) => message?.TavernDB_ACU_IsolatedData?.['']?.storageFrame?.checkpoint?.kind === 'full' ? index : -1)
+      .filter((index: number) => index !== -1);
+    expect(fullCheckpointIndices).toEqual([2]);
+    // 降级无损：旧 checkpoint.data 保留为 seq ≤ 0 的 data_replace fallback entry
+    const downgradedFrame = chatRef.value[1].TavernDB_ACU_IsolatedData[''].storageFrame;
+    expect(downgradedFrame.checkpoint).toBeUndefined();
+    expect(downgradedFrame.logEntries).toHaveLength(1);
+    const fallbackEntry = downgradedFrame.logEntries[0];
+    expect(fallbackEntry.seq).toBeLessThanOrEqual(0);
+    expect(fallbackEntry.operations).toEqual([
+      { kind: 'data_replace', data: v2Data, reason: 'checkpoint_fallback' },
+    ]);
+  });
+
   it('宿主保存失败时恢复 live chat', async () => {
     const legacy = { sheet_0: sheet([['1', '药水']]) } as any;
     chatRef.value = buildChat(legacy, structuredClone(legacy));

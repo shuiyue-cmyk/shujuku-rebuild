@@ -2,74 +2,25 @@
  * service/worldbook/injection-engine-custom.ts — 自定义表格导出
  * 从 injection-engine.ts 拆出
  */
-import {
-  getCurrentWorldbookConfig_ACU
-} from '../settings/settings-readers';
-import {
-  settings_ACU
-} from '../runtime/state-manager';
-import {
-  isWorldbookApiAvailable_ACU,
-  getLorebookEntries_ACU,
-  setLorebookEntries_ACU,
-  createLorebookEntries_ACU,
-  deleteLorebookEntries_ACU
-} from '../../data/gateways/worldbook-gateway';
-import {
-  saveSettings_ACU
-} from '../settings/settings-service';
-import {
-  getSortedSheetKeys_ACU
-} from '../template/chat-scope';
-import {
-  logDebug_ACU,
-  logError_ACU,
-  logWarn_ACU
-} from '../../shared/utils';
-import {
-  getImportBatchPrefix_ACU
-} from '../../shared/constants';
-import {
-  DEFAULT_ENTRY_PLACEMENT_ACU,
-  DEFAULT_EXTRA_INDEX_PLACEMENT_ACU,
-  ensureExportConfigDefaults_ACU,
-  normalizePlacementConfig_ACU,
-  applyPlacementToEntry_ACU
-} from './injection-engine-config';
-import {
-  buildUsedOrderSet_ACU,
-  allocOrder_ACU,
-  allocConsecutiveOrderBlock_ACU
-} from './injection-engine-order';
-import {
-  getInjectionTargetLorebook_ACU,
-  getIsolationPrefix_ACU
-} from './injection-engine-state';
-import {
-  splitKeywordsByComma_ACU
-} from './injection-engine-entries';
-import {
-  getLatestSummaryVectorIndexSnapshotState_ACU
-} from '../vector/summary-vector-index-state-service';
-import {
-  getEffectiveSummaryVectorIndexConfig_ACU
-} from '../vector/vector-memory-config';
-import {
-  isSqliteMode
-} from '../table/storage-mode';
-import {
-  buildExternalCustomTableExportComment_ACU,
-  type ExternalCustomTableExportMarker_ACU
-} from './worldbook-placeholder-classification';
-import {
-  getSheetColumnProjection_ACU
-} from '../../shared/ddl-utils';
-import {
-  getCurrentFlightModeState_ACU
-} from '../flight-mode/flight-mode-state';
-import {
-  projectFlightModeHiddenChronicleRows_ACU
-} from '../flight-mode/flight-mode-hidden-rows';
+import { getCurrentWorldbookConfig_ACU } from '../settings/settings-readers';
+import { settings_ACU } from '../runtime/state-manager';
+import { isWorldbookApiAvailable_ACU, getLorebookEntries_ACU, setLorebookEntries_ACU, createLorebookEntries_ACU, deleteLorebookEntries_ACU } from '../../data/gateways/worldbook-gateway';
+import { saveSettings_ACU } from '../settings/settings-service';
+import { getSortedSheetKeys_ACU } from '../template/chat-scope';
+import { logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
+import { classifyLorebookReadError_ACU } from '../../shared/lorebook-read-error';
+import { getImportBatchPrefix_ACU } from '../../shared/constants';
+import { DEFAULT_ENTRY_PLACEMENT_ACU, DEFAULT_EXTRA_INDEX_PLACEMENT_ACU, ensureExportConfigDefaults_ACU, normalizePlacementConfig_ACU, applyPlacementToEntry_ACU } from './injection-engine-config';
+import { buildUsedOrderSet_ACU, allocOrder_ACU, allocConsecutiveOrderBlock_ACU } from './injection-engine-order';
+import { getInjectionTargetLorebook_ACU, getIsolationPrefix_ACU } from './injection-engine-state';
+import { splitKeywordsByComma_ACU } from './injection-engine-entries';
+import { getLatestSummaryVectorIndexSnapshotState_ACU } from '../vector/summary-vector-index-state-service';
+import { getEffectiveSummaryVectorIndexConfig_ACU } from '../vector/vector-memory-config';
+import { isSqliteMode } from '../table/storage-mode';
+import { buildExternalCustomTableExportComment_ACU, type ExternalCustomTableExportMarker_ACU } from './worldbook-placeholder-classification';
+import { getSheetColumnProjection_ACU } from '../../shared/ddl-utils';
+import { getCurrentFlightModeState_ACU } from '../flight-mode/flight-mode-state';
+import { projectFlightModeHiddenChronicleRows_ACU } from '../flight-mode/flight-mode-hidden-rows';
 
   // [新增] 处理自定义表格导出逻辑
   // [修复] 当 mergedData 为空/null 时，仍需执行"清理旧自定义导出条目"逻辑，
@@ -791,6 +742,12 @@ import {
           }
 
       } catch (error) {
-          logError_ACU('Failed to update custom table export entries:', error);
+          // not-found 属于目标世界书重命名/切换期间的瞬态形态：导出条目下次触发会重建，
+          // 只记 warn；其余失败仍按 error 上报。
+          if (classifyLorebookReadError_ACU(error) === 'lorebook_not_found') {
+              logWarn_ACU('Custom table export skipped: target lorebook not found (likely renamed or switching).', error);
+          } else {
+              logError_ACU('Failed to update custom table export entries:', error);
+          }
       }
   }

@@ -64,6 +64,18 @@ describe('世界书名称匹配', () => {
   it('归一化后出现重名时拒绝猜测', () => {
     expect(resolveLorebookNameFromList_ACU('ＡＢＣ', ['ABC', 'ＡＢＣ\u200B'])).toBeNull();
   });
+
+  it('宿主书名带首尾空格时返回原始名（trim 仅用于匹配键），不得返回 trim 结果', () => {
+    // 回归：resolver 返回 trim 后的名字会让后续宿主调用按不存在的名字索引 → not-found。
+    expect(resolveLorebookNameFromList_ACU('剧情书', [' 剧情书 '])).toBe(' 剧情书 ');
+    expect(resolveLorebookNameFromList_ACU(' 剧情书 ', [' 剧情书 '])).toBe(' 剧情书 ');
+    expect(resolveLorebookNameFromList_ACU('剧情书', [{ name: '剧情书\u3000' }])).toBe('剧情书\u3000');
+  });
+
+  it('trim 后同名的多本书属于歧义，拒绝猜测；字节级精确命中优先生效', () => {
+    expect(resolveLorebookNameFromList_ACU('剧情书', ['剧情书 ', ' 剧情书'])).toBeNull();
+    expect(resolveLorebookNameFromList_ACU('剧情书 ', ['剧情书 ', ' 剧情书'])).toBe('剧情书 ');
+  });
 });
 
 describe('isLorebookNotFoundError_ACU', () => {

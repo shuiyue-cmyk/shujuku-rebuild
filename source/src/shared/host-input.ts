@@ -1,32 +1,35 @@
 import { jQuery_API_ACU } from './host-api';
-import { logWarn_ACU } from './utils';
 
 /** 宿主发送框操作，不属于任何 V1 popup。 */
 export function getSendTextareaValue_ACU(): string {
     try {
         return String(jQuery_API_ACU?.('#send_textarea').val() || '');
-    } catch (e) {
-        logWarn_ACU('[HostInput] 读取 #send_textarea 值失败（宿主输入框可能暂不可用）:', e);
+    } catch {
         return '';
     }
 }
 
-export function setSendTextareaValue_ACU(text: string): void {
+/** Writes the host textarea and reports availability instead of silently claiming success. */
+export function setSendTextareaValue_ACU(text: string): boolean {
     try {
         const $textarea = jQuery_API_ACU?.('#send_textarea');
+        if (!$textarea || typeof $textarea.val !== 'function' || typeof $textarea.trigger !== 'function') return false;
         $textarea?.val(text);
         $textarea?.trigger('input');
-    } catch (e) {
-        // 宿主输入框在页面切换期间可能暂时不存在。
-        logWarn_ACU('[HostInput] 写入 #send_textarea 失败（宿主输入框可能暂不可用）:', e);
+        return true;
+    } catch {
+        return false;
     }
 }
 
-export function clickSendButton_ACU(): void {
+/** Clicks the host send button and reports availability instead of swallowing it. */
+export function clickSendButton_ACU(): boolean {
     try {
-        jQuery_API_ACU?.('#send_but').click();
-    } catch (e) {
-        // 宿主发送按钮在页面切换期间可能暂时不存在。
-        logWarn_ACU('[HostInput] 点击 #send_but 失败（宿主发送按钮可能暂不可用）:', e);
+        const $button = jQuery_API_ACU?.('#send_but');
+        if (!$button || typeof $button.click !== 'function') return false;
+        $button.click();
+        return true;
+    } catch {
+        return false;
     }
 }

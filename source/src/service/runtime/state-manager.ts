@@ -18,7 +18,7 @@
 
 // ═══ 业务状态 + 门控逻辑（保留在本文件） ═══
 
-import { DEFAULT_CHAR_CARD_PROMPT_ACU, DEFAULT_PLOT_SETTINGS_ACU } from '../../shared/defaults-json.js';
+import { DEFAULT_CHAR_CARD_PROMPT_ACU, DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU, DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU, DEFAULT_PLOT_SETTINGS_ACU } from '../../shared/defaults-json.js';
 import { DEFAULT_AUTO_UPDATE_FREQUENCY_ACU, DEFAULT_AUTO_UPDATE_THRESHOLD_ACU, DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU } from '../../shared/defaults';
 import { getChatArray_ACU } from '../../data/gateways/chat-gateway';
 import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
@@ -37,6 +37,17 @@ export const AI_MATERIALIZATION_RETRY_DELAY_MS_ACU = 100;
 
 export let pendingBaseStatePlacement_ACU = false;
 export let suppressWorldbookInjectionInGreeting_ACU = false;
+
+export const loopState_ACU = {
+  isLooping: false,
+  isRetrying: false,
+  timerId: null as ReturnType<typeof setTimeout> | null,
+  retryCount: 0,
+  startTime: 0,
+  totalDuration: 0,
+  tickInterval: null as ReturnType<typeof setInterval> | null,
+  awaitingReply: false,
+};
 
 export const planningGuard_ACU = {
   inProgress: false,
@@ -172,12 +183,18 @@ export function shouldProcessSummaryVectorIndexForGeneration_ACU(type: any, para
  * 事件 API 没有 generation id，因此按完成顺序（栈）配对；配合 makeFirst，避免其他插件在
  * 同一 ended 回调里新开 quiet 生成后覆盖当前正文生成的判定。
  */
-export function shouldProcessAutoTableUpdateForGenerationEnded_ACU() {
+export function consumeGenerationContextForEnded_ACU(): GenerationContext_ACU | null {
   removeExpiredGenerationContexts_ACU();
   const activeContext = generationGate_ACU.activeGenerations.pop();
   // lastGeneration 仅保留给旧调用方。已有受追踪生成全部消费后，不能重复使用最后一个
   // quiet 上下文，否则下一次无关 GENERATION_ENDED 会被持续误拦截。
-  const g = activeContext || (generationGate_ACU.generationSeq === 0 ? generationGate_ACU.lastGeneration : null);
+  return activeContext || (generationGate_ACU.generationSeq === 0 ? generationGate_ACU.lastGeneration : null);
+}
+
+export function shouldProcessAutoTableUpdateForGenerationEnded_ACU(context?: GenerationContext_ACU | null) {
+  // f425367：认领分支不再短路 return——续写桥只管归属确认/标签校验/自动续轮，
+  // 填表与正文优化按各自时机独立触发；调用方可显式传入已消费的 context 复用判定。
+  const g = context === undefined ? consumeGenerationContextForEnded_ACU() : context;
   if (!g) return true;
   if (g.dryRun) return false;
   if (isQuietLikeGeneration_ACU(g.type, g.params)) return false;
@@ -204,12 +221,15 @@ export let settings_ACU: any = {
     tableApiPreset: '',
     plotApiPreset: '',
     discardUnauthorizedTableEditsEnabled: true,
+    strictJsonTableFillEnabled: false,
     // [剧情推进] 按剧情任务ID保存的任务级 API 预设覆盖（key=taskId, value=presetName）
     // 不保存入聊天记录或剧情推进预设，只写进插件全局设置。
     plotTaskApiPresetOverridesById: {} as Record<string, string>,
     // [新增] 按表格名称保存的表级 API 预设覆盖（key=标准化表名, value=presetName）
     tableApiPresetOverridesByName: {} as Record<string, string>,
     charCardPrompt: DEFAULT_CHAR_CARD_PROMPT_ACU,
+    strictJsonCharCardPrompt: DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU,
+    strictJsonSqlCharCardPrompt: DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU,
     // [AI 改表助手] 可编辑提示词卡片段（空数组 = 使用默认硬编码提示词）
     templateAssistantPromptSegments: [] as any[],
     autoUpdateThreshold: DEFAULT_AUTO_UPDATE_THRESHOLD_ACU,
@@ -226,6 +246,7 @@ export let settings_ACU: any = {
     tableTemplateDefaultsRefreshVersion: '',
     tableFillPromptForceDefaultVersion: '',
     templateAssistantPromptForceDefaultVersion: '',
+    strictJsonTableFillForceDisableVersion: '',
     tableContextExtractTags: '',
     tableContextExtractRules: [],
     tableContextExcludeTags: '',
@@ -244,6 +265,7 @@ export let settings_ACU: any = {
     specialIndexLocks: {},
     importWorldbookTarget: '',
     importPromptExcludeImportedWorldbookEntries: true,
+    zeroTkOccupyModeDefault: false,
     dataIsolationEnabled: false,
     dataIsolationCode: '',
     dataIsolationHistory: [],

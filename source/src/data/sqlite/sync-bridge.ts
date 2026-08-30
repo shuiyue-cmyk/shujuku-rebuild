@@ -12,12 +12,11 @@ import { SqliteEngine } from './sqlite-engine';
 import { buildRuntimeFallbackDDL_ACU, createSheetInsertPlan, generateInserts, resultToContent, parseDDLTableName, parseDDLColumnNames, buildColumnNameMap, resolveEffectiveDDL } from './schema-mapper';
 import type { TableDataObject_ACU, Sheet_ACU, Mate_ACU } from '../../shared/models/table-data';
 import { hashUserInput_ACU, logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
-import { formatCanonicalRowIssues_ACU, normalizeCanonicalTableRows_ACU, repairLegacyAutoMergedRowTails_ACU } from '../../shared/canonical-row-normalizer';
+import { formatCanonicalRowIssues_ACU, normalizeCanonicalTableRows_ACU, repairLegacyAutoMergedRowTails_ACU, repairLegacyOrphanIdentityColumn_ACU } from '../../shared/canonical-row-normalizer';
 import { validateCanonicalCheckpointSheet_ACU } from '../../shared/canonical-checkpoint-validator';
 import { resolvePhysicalTableNames_ACU } from '../../shared/sheet-identity';
 import { downgradeRowIdPrimaryKeyForLegacyReplay_ACU } from '../../shared/ddl-utils';
 import { isSqlActiveTemplateSheet_ACU } from '../../shared/sql-active-template';
-import { safeJsonParse_ACU } from '../../shared/json-helpers';
 
 /** 同步桥的元数据表名（内部使用，对用户和 AI 不可见） */
 const META_TABLE_NAME = '_acu_sheet_meta';
@@ -122,6 +121,14 @@ export class SyncBridge {
     const workingData = options.strict ? JSON.parse(JSON.stringify(data)) as TableDataObject_ACU : data;
     // 仅兼容历史版本错误追加的精确尾标记，其他宽度异常仍由后续 strict 校验拒绝。
     repairLegacyAutoMergedRowTails_ACU(workingData);
+    // 孤儿身份列错位（表头 ["row_id", 空占位, …]）与 auto_merged 同点复位：
+    // hydrate 前归位列对齐，防止空标签列进入物理表结构。歧义表按原样进入
+    // 后续 strict 校验，由校验决定接受或拒绝。
+    const orphanRepair = repairLegacyOrphanIdentityColumn_ACU(workingData);
+    if (orphanRepair.changedSheetKeys.length > 0) {
+      logWarn_ACU(`[SyncBridge] 已复位孤儿身份列错位：${orphanRepair.changedSheetKeys.join('、')}`);
+    }
+    orphanRepair.warnings.forEach(warning => logWarn_ACU(warning));
     if (!legacyDuplicateRowIds) {
       const normalization = normalizeCanonicalTableRows_ACU(workingData);
       const canonicalIssues = [...normalization.errors, ...normalization.removedRows];
@@ -357,10 +364,6 @@ export class SyncBridge {
 
   /** 从 SQLite 导出单张表为 Sheet_ACU */
   private _exportSheet(tableName: string, meta: SheetMeta): Sheet_ACU {
-    // 表名合法性校验（与 sqlite-engine 一致），防止注入/异常表名进入 SQL
-    if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(String(tableName || ''))) {
-      throw new Error(`[SyncBridge] 拒绝导出非法表名: ${String(tableName || '').slice(0, 80)}`);
-    }
     // 查询所有数据
     const queryResult = this.engine.query(`SELECT * FROM ${tableName};`);
 
@@ -411,9 +414,9 @@ export class SyncBridge {
           uid: String(at(row, 'uid')),
           name: String(at(row, 'name')),
           orderNo: Number(at(row, 'order_no')) || 0,
-          sourceData: safeJsonParse_ACU(String(at(row, 'source_data_json')), {}),
-          updateConfig: safeJsonParse_ACU(String(at(row, 'update_config_json')), {}),
-          exportConfig: safeJsonParse_ACU(String(at(row, 'export_config_json')), {}),
+          sourceData: safeJsonParse(at(row, 'source_data_json')),
+          updateConfig: safeJsonParse(at(row, 'update_config_json')),
+          exportConfig: safeJsonParse(at(row, 'export_config_json')),
           physicalTableName: storedPhysical != null && String(storedPhysical).trim()
             ? String(storedPhysical)
             : undefined,
@@ -505,4 +508,14 @@ function formatSqliteLoadFailure_ACU(errorMessage: string): string {
     ? `${operation[1].replace(/\s+/g, ' ').toUpperCase()} ${operation[2]}`
     : 'SQLite 语句';
   return `SQLite 写入失败：第 ${statementIndex} 条语句失败（${statementSummary}）：${sqliteError.trim()}`;
+}
+
+/** 安全的 JSON 解析 */
+function safeJsonParse(val: SqlJsValueType): any {
+  if (val === null || val === undefined) return {};
+  try {
+    return JSON.parse(String(val));
+  } catch (_) {
+    return {};
+  }
 }

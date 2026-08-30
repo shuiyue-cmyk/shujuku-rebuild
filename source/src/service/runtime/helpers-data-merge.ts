@@ -25,8 +25,7 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
 import { getSheetColumnProjection_ACU } from '../../shared/ddl-utils';
 import { canonicalizeDisplayName_ACU } from '../../shared/sheet-identity';
 import { applyGuideMetadataToSheet_ACU, isSameSheetHeader_ACU } from '../template/guide-metadata-overlay';
-import { repairLegacyAutoMergedRowTails_ACU } from '../../shared/canonical-row-normalizer';
-import { showUiSurfaceToast_ACU } from '../../shared/ui-surface-registry';
+import { repairLegacyAutoMergedRowTails_ACU, repairLegacyOrphanIdentityColumn_ACU } from '../../shared/canonical-row-normalizer';
 
 /**
  * Legacy entry point retained for callers that need in-place normalization.
@@ -232,6 +231,9 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
   }
 
   export async function mergeAllIndependentTablesLegacyV1_ACU() {
+      // 源带行表清单：每次合并从零开始登记，登记发生在读取点的任何过滤之前，
+      // 使迁移保险闸消费的清单与合并实际读到的源严格同源（消除独立扫描的语义漂移）。
+      lastMergeSourceInventory = new Map<string, string>();
       const chat = getChatArray_ACU();
       if (!chat || chat.length === 0) {
           logDebug_ACU('Cannot merge data: Chat history is empty.');
@@ -276,6 +278,10 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
           if (tagData) {
               // delta 楼层：收集增量数据，稍后正序叠加
               if (isDeltaTagData_ACU(tagData)) {
+                  // 清单登记：delta 槽的增量 key 与（畸形混合形态下可能存在的）independentData
+                  // 带行表都会被 cleanup 删除，闸门必须看到它们。
+                  registerMergeSourceDeltaKeys_ACU(tagData.incrementalData);
+                  registerMergeSourceSheets_ACU(tagData.independentData);
                   if (tagData.incrementalData && Object.keys(tagData.incrementalData).length > 0) {
                       pendingDeltas.push({ index: i, tagData });
                   }
@@ -284,6 +290,7 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
 
               // checkpoint / legacy 楼层：使用现有的 first-write-wins 逻辑
               const independentData = tagData.independentData || {};
+              registerMergeSourceSheets_ACU(independentData);
               // 防御历史畸形 tracking 值：契约要求 string[]，但早期坏数据可能写入
               // `{}` 等 truthy 非数组；直接 `|| []` 无法兜底，会在下方 `.includes` 抛错。
               const modifiedKeys = Array.isArray(tagData.modifiedKeys) ? tagData.modifiedKeys : [];
@@ -338,6 +345,7 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
               const legacyIndepData = readLegacyIndependentData_ACU(message);
               if (legacyIndepData) {
                   const independentData = legacyIndepData;
+                  registerMergeSourceSheets_ACU(independentData);
                   const modifiedKeys = readModifiedKeys_ACU(message);
                   const updateGroupKeys = readUpdateGroupKeys_ACU(message);
 
@@ -371,40 +379,56 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
               }
 
               // 检查旧版标准表/总结表格式
+              // [全版本兼容·错字段宽容] Data 字段按约定只放标准表、SummaryData 只放总结表，
+              // 但历史版本存在写错字段的形态（总结表落进 Data / 标准表落进 SummaryData）。
+              // 带真实行的表无论落在哪个字段都不允许静默丢弃：字段判定不满足但有行时
+              // 仍按 first-write-wins 收取并记 warning。
               const legacyStdData = readLegacyStandardData_ACU(message);
               if (legacyStdData) {
                   const standardData: any = legacyStdData;
+                  registerMergeSourceSheets_ACU(standardData);
                   Object.keys(standardData).forEach(k => {
+                      if (!k.startsWith('sheet_') || !standardData[k] || typeof standardData[k] !== 'object') return;
                       // [全版本兼容] guide 过滤只拦截无真实行的占位表；带行数据的表永不静默丢弃
                       if (!isSheetAllowedByGuide_ACU(k, standardData[k], hasSheetGuide ? sheetGuideData : null, templateSheetKeySet)
                           && !sheetHasRealRows_ACU(standardData[k])) {
                           return;
                       }
-                      if (k.startsWith('sheet_') && !foundSheets[k] && standardData[k].name && !isSummaryOrOutlineTable_ACU(standardData[k].name)) {
-                          mergedData[k] = JSON.parse(JSON.stringify(standardData[k]));
-                          foundSheets[k] = true;
-                          if (!independentTableStates_ACU[k]) independentTableStates_ACU[k] = {};
-                          const currentAiFloor = chat.slice(0, i + 1).filter(m => !m.is_user).length;
-                          independentTableStates_ACU[k].lastUpdatedAiFloor = currentAiFloor;
+                      if (foundSheets[k]) return;
+                      const matchesExpectedField = Boolean(standardData[k].name) && !isSummaryOrOutlineTable_ACU(standardData[k].name);
+                      if (!matchesExpectedField) {
+                          if (!sheetHasRealRows_ACU(standardData[k])) return;
+                          logWarn_ACU(`[Merge] 表「${String(standardData[k].name || k)}」(${k}) 落在旧版标准表字段但不满足字段约定，含真实数据行，已按错字段宽容模式收取。`);
                       }
+                      mergedData[k] = JSON.parse(JSON.stringify(standardData[k]));
+                      foundSheets[k] = true;
+                      if (!independentTableStates_ACU[k]) independentTableStates_ACU[k] = {};
+                      const currentAiFloor = chat.slice(0, i + 1).filter(m => !m.is_user).length;
+                      independentTableStates_ACU[k].lastUpdatedAiFloor = currentAiFloor;
                   });
               }
               const legacySumData = readLegacySummaryData_ACU(message);
               if (legacySumData) {
                   const summaryData: any = legacySumData;
+                  registerMergeSourceSheets_ACU(summaryData);
                   Object.keys(summaryData).forEach(k => {
+                      if (!k.startsWith('sheet_') || !summaryData[k] || typeof summaryData[k] !== 'object') return;
                       // [全版本兼容] guide 过滤只拦截无真实行的占位表；带行数据的表永不静默丢弃
                       if (!isSheetAllowedByGuide_ACU(k, summaryData[k], hasSheetGuide ? sheetGuideData : null, templateSheetKeySet)
                           && !sheetHasRealRows_ACU(summaryData[k])) {
                           return;
                       }
-                      if (k.startsWith('sheet_') && !foundSheets[k] && summaryData[k].name && isSummaryOrOutlineTable_ACU(summaryData[k].name)) {
-                          mergedData[k] = JSON.parse(JSON.stringify(summaryData[k]));
-                          foundSheets[k] = true;
-                          if (!independentTableStates_ACU[k]) independentTableStates_ACU[k] = {};
-                          const currentAiFloor = chat.slice(0, i + 1).filter(m => !m.is_user).length;
-                          independentTableStates_ACU[k].lastUpdatedAiFloor = currentAiFloor;
+                      if (foundSheets[k]) return;
+                      const matchesExpectedField = Boolean(summaryData[k].name) && isSummaryOrOutlineTable_ACU(summaryData[k].name);
+                      if (!matchesExpectedField) {
+                          if (!sheetHasRealRows_ACU(summaryData[k])) return;
+                          logWarn_ACU(`[Merge] 表「${String(summaryData[k].name || k)}」(${k}) 落在旧版总结表字段但不满足字段约定，含真实数据行，已按错字段宽容模式收取。`);
                       }
+                      mergedData[k] = JSON.parse(JSON.stringify(summaryData[k]));
+                      foundSheets[k] = true;
+                      if (!independentTableStates_ACU[k]) independentTableStates_ACU[k] = {};
+                      const currentAiFloor = chat.slice(0, i + 1).filter(m => !m.is_user).length;
+                      independentTableStates_ACU[k].lastUpdatedAiFloor = currentAiFloor;
                   });
               }
           }
@@ -473,6 +497,21 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
           uc.uiSentinel = -1;
       });
 
+      // [修复顺序] 与 V2 分支一致：历史 auto_merged 越界尾列与孤儿身份列错位必须在
+      // guide 结构比较/padding 之前复位，否则宽度差会被误判为结构不一致，甚至在
+      // padding 时把错位形态进一步固化（2025-12 事故的成因正是在此点之后 padding）。
+      {
+          const autoMergedRepaired = repairLegacyAutoMergedRowTails_ACU(mergedData);
+          if (autoMergedRepaired.length > 0) {
+              logDebug_ACU(`[数据修复] (legacy) 已移除历史 auto_merged 越界尾列：${autoMergedRepaired.join('、')}`);
+          }
+          const orphanRepair = repairLegacyOrphanIdentityColumn_ACU(mergedData);
+          if (orphanRepair.changedSheetKeys.length > 0) {
+              logWarn_ACU(`[数据修复] (legacy) 已复位孤儿身份列错位（列对齐已恢复，数据无损）：${orphanRepair.changedSheetKeys.join('、')}`);
+          }
+          orphanRepair.warnings.forEach(warning => logWarn_ACU(warning));
+      }
+
       // [新增] 若存在"空白指导表"，则：
       // 1) 过滤掉不在指导表里的表（UI/填表只以指导表为准，避免旧表复活）
       // 2) 对指导表中缺失的表：使用指导表结构作为初始值（seedRows 仅保留字段，不默认展开到 content）
@@ -515,27 +554,44 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
       return warnings;
   }
 
+  // ── 源带行表清单（sheetKey → 规范化显示名）──
+  // legacy 合并在每个原始读取点、任何过滤之前登记"源里实际存在真实数据行的表"。
+  // 迁移破坏保险闸消费该清单做逐表比对：清单与合并读取同源，闸门不再独立扫描，
+  // 从根上消除"闸门收了合并根本不读的字段"导致的缺表误报。
+  let lastMergeSourceInventory: Map<string, string> = new Map();
 
-  /** 每个「聊天标识+隔离键」只弹一次直读降级提示，避免每次合并都打扰用户。 */
-  const notifiedLegacyDirectReadFallbacks_ACU = new Set<string>();
-
-  function notifyLegacyDirectReadFallbackOnce_ACU(isolationKey: string, reason: string): void {
-      const chatIdentity = (() => {
-          try {
-              const chat = getChatArray_ACU();
-              return Array.isArray(chat) ? `len:${chat.length}:${String(chat[0]?.send_date ?? '')}` : 'no-chat';
-          } catch (_) {
-              return 'no-chat';
+  /** 在过滤之前登记一个源数据容器中所有带真实行的表（first-write 保留已有名）。 */
+  function registerMergeSourceSheets_ACU(data: Record<string, any> | null | undefined): void {
+      if (!data || typeof data !== 'object') return;
+      Object.keys(data).forEach(sheetKey => {
+          if (!sheetKey.startsWith('sheet_')) return;
+          const sheet = data[sheetKey];
+          if (!sheet || typeof sheet !== 'object' || !sheetHasRealRows_ACU(sheet)) return;
+          const name = canonicalizeDisplayName_ACU(sheet.name);
+          if (!lastMergeSourceInventory.has(sheetKey) || (name && !lastMergeSourceInventory.get(sheetKey))) {
+              lastMergeSourceInventory.set(sheetKey, name);
           }
-      })();
-      const key = `${chatIdentity}|${isolationKey}`;
-      if (notifiedLegacyDirectReadFallbacks_ACU.has(key)) return;
-      notifiedLegacyDirectReadFallbacks_ACU.add(key);
-      showUiSurfaceToast_ACU({
-          kind: 'warning',
-          text: `旧格式表格数据已按兼容模式直读（数据可用）。自动升级暂未完成：${reason}`,
       });
   }
+
+  /** 登记 delta 槽的增量 sheetKey（无表名可取，名留空，比对退化为按 key 匹配）。 */
+  function registerMergeSourceDeltaKeys_ACU(incrementalData: Record<string, any> | null | undefined): void {
+      if (!incrementalData || typeof incrementalData !== 'object') return;
+      Object.keys(incrementalData).forEach(sheetKey => {
+          if (!sheetKey.startsWith('sheet_') || !incrementalData[sheetKey]) return;
+          if (!lastMergeSourceInventory.has(sheetKey)) lastMergeSourceInventory.set(sheetKey, '');
+      });
+  }
+
+  /**
+   * 读取并清空上一次 legacy 合并登记的源带行表清单（供迁移保险闸逐表比对）。
+   */
+  export function consumeLastMergeSourceInventory_ACU(): Map<string, string> {
+      const inventory = lastMergeSourceInventory;
+      lastMergeSourceInventory = new Map();
+      return inventory;
+  }
+
 
   export async function mergeAllIndependentTables_ACU() {
       const chat = getChatArray_ACU();
@@ -556,13 +612,20 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
           }) as Record<string, any> | null;
           // [修复顺序] 历史 auto_merged 越界尾列（行宽 = 表头 + 1 且尾格为 'auto_merged'）
           // 必须在 guide 结构比较之前剥离，否则 +1 宽度差会被误判为结构不一致。
-          if (mergedData) {
-              const repaired = repairLegacyAutoMergedRowTails_ACU(mergedData);
-              if (repaired.length > 0) {
-                  logDebug_ACU(`[数据修复] 已移除历史 auto_merged 越界尾列：${repaired.join('、')}`);
-              }
-          }
-          const sheetGuideData = getChatSheetGuideDataForIsolationKey_ACU(currentIsolationKey);
+        if (mergedData) {
+            const repaired = repairLegacyAutoMergedRowTails_ACU(mergedData);
+            if (repaired.length > 0) {
+                logDebug_ACU(`[数据修复] 已移除历史 auto_merged 越界尾列：${repaired.join('、')}`);
+            }
+            // 孤儿身份列错位（表头 ["row_id", 空占位, …]）同样必须在 guide 结构比较之前
+            // 复位：已固化进 checkpoint 的错位形态在此无损归位，宽度差不再误导 padding。
+            const orphanRepair = repairLegacyOrphanIdentityColumn_ACU(mergedData);
+            if (orphanRepair.changedSheetKeys.length > 0) {
+                logWarn_ACU(`[数据修复] 已复位孤儿身份列错位（列对齐已恢复，数据无损）：${orphanRepair.changedSheetKeys.join('、')}`);
+            }
+            orphanRepair.warnings.forEach(warning => logWarn_ACU(warning));
+        }
+        const sheetGuideData = getChatSheetGuideDataForIsolationKey_ACU(currentIsolationKey);
           if (mergedData && hasUsableSheetGuide_ACU(sheetGuideData)) {
               const mergeResult = mergeSheetGuideStructureIntoData_ACU(mergedData, sheetGuideData, {
                   structuralAuthority: 'data',
@@ -581,6 +644,7 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
 
       if (strategy.mode === 'legacy-v1') {
           const mergedLegacyData = await mergeAllIndependentTablesLegacyV1_ACU();
+          const sourceInventory = consumeLastMergeSourceInventory_ACU();
           try {
               const migrationResult = await migrateLegacyStorageToV2OnLoad_ACU({
                   data: mergedLegacyData,
@@ -590,6 +654,7 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
                       code: settings_ACU.dataIsolationCode,
                   },
                   skipUpdateFloors: settings_ACU.skipUpdateFloors,
+                  sourceInventory,
               });
               if (!migrationResult.migrated) {
                   throw new Error(`旧存储迁移到 V2 失败: ${migrationResult.error || '未执行迁移'}`);
@@ -613,7 +678,6 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
               // ensureLegacyStorageMigratedBeforeWrite_ACU 维持严格，写仍要求迁移成功。
               const message = migrationError instanceof Error ? migrationError.message : String(migrationError);
               logWarn_ACU(`[TableStorage] 旧存储迁移失败，已降级为直读旧格式（数据可用，写入前仍需完成迁移）：${message}`);
-              notifyLegacyDirectReadFallbackOnce_ACU(currentIsolationKey, message);
               return migrateContentNullToRowId(mergedLegacyData);
           }
       }

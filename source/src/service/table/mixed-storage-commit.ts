@@ -3,6 +3,7 @@ import type { IsolationConfig_ACU } from '../../data/models/chat-message-data';
 import { cloneIsolatedData_ACU, isLegacyMatchForIsolation_ACU, readIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
 import { validateMigrationProvenanceV1_ACU } from '../../shared/canonical-checkpoint-validator';
 import type { MixedStorageDecisionBackupV1_ACU } from './storage-frame-v2-types';
+import type { TableDataObject_ACU } from '../../shared/models/table-data';
 import { currentChatFileIdentifier_ACU, getCurrentIsolationKey_ACU } from '../runtime/state-manager';
 import { isV2TagData_ACU } from './storage-strategy-resolver';
 import { buildCanonicalFullCheckpoint_ACU } from './canonical-checkpoint-builder';
@@ -51,6 +52,64 @@ function latestSafeAiTarget_ACU(chat: any[], isolationKey: string): number | nul
   return null;
 }
 function aiFloor_ACU(chat: any[], index: number): number { return chat.slice(0, index + 1).filter(message => message && !message.is_user).length; }
+
+/**
+ * 写入新 migration 根后，同一隔离键下其余 full checkpoint（原 V2 anchor 及更早的根）
+ * 必须同事务降级，否则形成多根：回放只认最后一个 full，之前增量全部失效，且后续
+ * 手动重填会被锚点预检阻断。降级语义对齐 chat-service 的 checkpoint fallback：
+ * checkpoint.data（含 perSheetCheckpoints 覆盖）转为 seq ≤ 0 的 data_replace fallback
+ * logEntry 前置到原帧，随后删除 checkpoint——数学上不改变回放输出（降级帧位于新根
+ * 之前，回放从新根起步）且原数据无损保留在帧内。
+ */
+function downgradeOtherFullCheckpoints_ACU(chat: any[], isolationKey: string, keepIndex: number): number {
+  let downgraded = 0;
+  for (let index = 0; index < chat.length; index += 1) {
+    if (index === keepIndex) continue;
+    const message = chat[index];
+    if (!message || message.is_user) continue;
+    const tagData = readIsolatedTagData_ACU(message, isolationKey) as any;
+    if (!isV2TagData_ACU(tagData)) continue;
+    const frame = tagData.storageFrame;
+    const checkpoint = frame.checkpoint;
+    if (checkpoint?.kind !== 'full') continue;
+    const existingEntries = Array.isArray(frame.logEntries) ? frame.logEntries : [];
+    const finiteSeqs = existingEntries.map((entry: any) => Number(entry?.seq)).filter(Number.isFinite);
+    const seq = Math.min(0, (finiteSeqs.length > 0 ? Math.min(...finiteSeqs) : 1) - 1);
+    const fallbackData = clone_ACU(checkpoint.data || {}) as Record<string, any>;
+    const sheetCheckpoints = frame.perSheetCheckpoints;
+    if (sheetCheckpoints && typeof sheetCheckpoints === 'object' && !Array.isArray(sheetCheckpoints)) {
+      for (const [sheetKey, sheetCheckpoint] of Object.entries<any>(sheetCheckpoints)) {
+        if (
+          !sheetKey.startsWith('sheet_')
+          || !sheetCheckpoint
+          || sheetCheckpoint.kind !== 'sheet_full'
+          || sheetCheckpoint.sheetKey !== sheetKey
+          || !sheetCheckpoint.data
+          || typeof sheetCheckpoint.data !== 'object'
+          || Array.isArray(sheetCheckpoint.data)
+        ) continue;
+        fallbackData[sheetKey] = clone_ACU(sheetCheckpoint.data);
+      }
+    }
+    const sheetKeys = Object.keys(fallbackData).filter(key => key.startsWith('sheet_'));
+    frame.logEntries = [{
+      seq,
+      entryId: `downgraded-checkpoint-${index}-${checkpoint.createdAt || Date.now()}`,
+      createdAt: checkpoint.createdAt || Date.now(),
+      source: 'system',
+      targetMessageIndex: index,
+      aiFloor: aiFloor_ACU(chat, index),
+      filledSheetKeys: sheetKeys,
+      changedSheetKeys: sheetKeys,
+      groupKeys: [],
+      operations: [{ kind: 'data_replace', data: fallbackData as TableDataObject_ACU, reason: 'checkpoint_fallback' }],
+      writeSet: [{ kind: 'all' }],
+    }, ...existingEntries];
+    delete frame.checkpoint;
+    downgraded += 1;
+  }
+  return downgraded;
+}
 
 function stableJson_ACU(value: unknown): string {
   return JSON.stringify(value, (_key, item) => {
@@ -186,6 +245,7 @@ export async function commitMixedStorageDecision_ACU(options: MixedStorageCommit
       storageFrame: { version: 2, headRevision: `checkpoint:mixed-merge:${createdAt.toString(36)}`, checkpoint: checkpoint.checkpoint, logEntries: [] },
     };
     target.TavernDB_ACU_IsolatedData = isolated;
+    downgradeOtherFullCheckpoints_ACU(candidateChat, isolationKey, targetIndex);
   }
   if (action === 'keep_v2') {
     const target = candidateChat[backupTargetIndex!];
