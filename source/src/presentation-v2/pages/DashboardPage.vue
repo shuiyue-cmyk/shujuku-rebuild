@@ -91,6 +91,7 @@ import { useTemplateRuntimeChangeTick } from "../composables/useTemplateRuntimeC
 import { useDashboardPage } from "../composables/useDashboardPage";
 import {
   FEATURE_GATE_CONTENT_REPLACE,
+  FEATURE_GATE_CONTINUATION,
   FEATURE_GATE_PLOT,
   FEATURE_GATE_VECTOR_INDEX,
 } from "../router/page-registry";
@@ -124,6 +125,12 @@ function syncFeaturePageGates(): void {
     dashboard.contentReplaceGateEnabled.value,
   );
   routerStore.syncFeatureGate(FEATURE_GATE_PLOT, plotStore.enabled === true);
+  routerStore.syncFeatureGate(
+    FEATURE_GATE_CONTINUATION,
+    dashboard.advancedToggles.value.some(
+      (item) => item.key === "continuationPageEnabled" && item.value,
+    ),
+  );
   routerStore.syncFeatureGate(
     FEATURE_GATE_VECTOR_INDEX,
     dashboard.advancedToggles.value.some(

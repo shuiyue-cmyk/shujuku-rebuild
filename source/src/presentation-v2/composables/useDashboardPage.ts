@@ -870,6 +870,12 @@ export function useDashboardPage(): DashboardPageState {
         description: dashboardCopy.toggles.plot.description,
         value: settings_ACU.plotSettings?.enabled === true,
       },
+      {
+        key: "continuationPageEnabled",
+        label: dashboardCopy.toggles.continuation.label,
+        description: dashboardCopy.toggles.continuation.description,
+        value: settings_ACU.continuationPageEnabled !== false,
+      },
     ];
     items.push({
       key: "contentReplaceEnabled",
@@ -989,6 +995,9 @@ export function useDashboardPage(): DashboardPageState {
       saveSettings_ACU();
     } else if (key === "summaryVectorIndexModeEnabled") {
       setSummaryVectorIndexMode_ACU(!!value);
+    } else if (key === "continuationPageEnabled") {
+      settings_ACU[key] = !!value;
+      saveSettings_ACU();
     } else if (key === "developerOptionsEnabled") {
       setDeveloperOptionsEnabled(!!value);
     } else if (key === "contentReplaceEnabled") {

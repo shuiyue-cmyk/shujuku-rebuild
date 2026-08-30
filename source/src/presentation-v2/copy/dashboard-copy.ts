@@ -205,6 +205,10 @@ export const dashboardCopy = {
       description:
         "默认开启。详情前往对应页面；默认仅召回记忆，进阶版含剧情规划。仅推荐在测试或自由发挥时关闭。",
     },
+    continuation: {
+      label: "智能续写",
+      description: "手动功能。代替你自动发送提示词，AI 根据内容持续续写。",
+    },
     contentReplace: {
       label: "正文替换",
       description:
