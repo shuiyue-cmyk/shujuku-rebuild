@@ -25,6 +25,7 @@ function projectMessage_ACU(message: AgentConversationMessage_ACU): AgentSession
   if (message.kind === 'turn') return { kind: 'run_started', title: message.digest || '新的一轮', detail: message.text };
   if (message.kind === 'handoff') return { kind: 'handoff', title: message.digest || '早期会话交接报告', detail: message.text };
   if (message.kind === 'tool') return { kind: 'delegation', title: message.digest || '运行时结果', detail: message.text };
+  if (message.kind === 'runtime') return { kind: 'delegation', title: message.digest || '运行时快照', detail: message.text };
   return { kind: 'main_action', title: message.digest || '主 Agent 输出', detail: message.text };
 }
 

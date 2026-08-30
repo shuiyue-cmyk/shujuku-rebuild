@@ -8,6 +8,7 @@ import {
   buildEmptyAgentConversation_ACU,
   clearAgentConversationField_ACU,
   lastAnnouncedTurnKey_ACU,
+  lastRuntimeSnapshotText_ACU,
   readAgentConversation_ACU,
   readAgentConversationTimeline_ACU,
   renderAgentConversationMessages_ACU,
@@ -248,12 +249,20 @@ describe('会话追加与渲染', () => {
     expect(next.messages[0].text).toContain('已截断');
   });
 
+  it('运行时快照不截断，目录正文必须完整到达模型', () => {
+    const long = '目录'.repeat(AGENT_CONVERSATION_TEXT_LIMIT_ACU);
+    const next = appendAgentConversation_ACU(buildEmptyAgentConversation_ACU(), [{ kind: 'runtime', text: long, digest: '运行时快照', turnKey: 't1' }]);
+    expect(next.messages[0].text).toBe(long);
+    expect(next.messages[0].text).not.toContain('已截断');
+  });
+
   it('渲染时只有主 Agent 自己的输出是 assistant，其余带来源前缀走 user', () => {
     const snapshot = appendAgentConversation_ACU(buildEmptyAgentConversation_ACU(), [
       { kind: 'user', text: '别揭穿', digest: '', turnKey: 't1' },
       { kind: 'turn', text: '开始新的一轮', digest: '', turnKey: 't1' },
       { kind: 'agent', text: '{"action":"finalize"}', digest: '', turnKey: 't1' },
       { kind: 'tool', text: '派工成功', digest: '', turnKey: 't1' },
+      { kind: 'runtime', text: '【本回合运行时数据】\n预算充足', digest: '运行时快照', turnKey: 't1' },
       { kind: 'handoff', text: '早期浓缩', digest: '', turnKey: '' },
     ]);
     expect(renderAgentConversationMessages_ACU(snapshot)).toEqual([
@@ -261,20 +270,25 @@ describe('会话追加与渲染', () => {
       { role: 'user', content: '【新的一轮】\n开始新的一轮' },
       { role: 'assistant', content: '{"action":"finalize"}' },
       { role: 'user', content: '【工具结果】\n派工成功' },
+      { role: 'user', content: '【运行时快照】\n【本回合运行时数据】\n预算充足' },
       { role: 'user', content: '【早期会话交接报告】\n早期浓缩' },
     ]);
   });
 
-  it('同一 readKey 被重读后，旧工具结果投影成过期占位，只保留最新一条全文', () => {
-    const snapshot = appendAgentConversation_ACU(buildEmptyAgentConversation_ACU(), [
+  it('追加同一 readKey 的新快照后，既有渲染前缀保持逐字不变', () => {
+    const before = appendAgentConversation_ACU(buildEmptyAgentConversation_ACU(), [
       { kind: 'tool', text: '旧版角色表内容', digest: '', turnKey: 't1', readKey: '$TABLE:角色表' },
       { kind: 'agent', text: '中间输出', digest: '', turnKey: 't1' },
+    ]);
+    const renderedBefore = renderAgentConversationMessages_ACU(before);
+    const after = appendAgentConversation_ACU(before, [
       { kind: 'tool', text: '新版角色表内容', digest: '', turnKey: 't2', readKey: '$TABLE:角色表' },
     ]);
-    const rendered = renderAgentConversationMessages_ACU(snapshot);
-    expect(rendered[0].content).toContain('已过期');
-    expect(rendered[0].content).not.toContain('旧版角色表内容');
-    expect(rendered[2].content).toContain('新版角色表内容');
+    const renderedAfter = renderAgentConversationMessages_ACU(after);
+
+    expect(renderedAfter.slice(0, renderedBefore.length)).toEqual(renderedBefore);
+    expect(renderedBefore[0].content).toBe('【工具结果】\n旧版角色表内容');
+    expect(renderedAfter[2].content).toBe('【工具结果】\n新版角色表内容');
   });
 
   it('最后一次换轮通告的游标可被查出，没有通告时为空串', () => {
@@ -285,5 +299,15 @@ describe('会话追加与渲染', () => {
       { kind: 'agent', text: '输出', digest: '', turnKey: 't2' },
     ]);
     expect(lastAnnouncedTurnKey_ACU(snapshot)).toBe('t2');
+  });
+
+  it('最近一条运行时快照取投影视图里最后出现的正文，没有则为空串', () => {
+    expect(lastRuntimeSnapshotText_ACU(buildEmptyAgentConversation_ACU())).toBe('');
+    const snapshot = appendAgentConversation_ACU(buildEmptyAgentConversation_ACU(), [
+      { kind: 'runtime', text: '旧快照', digest: '运行时快照', turnKey: 't1' },
+      { kind: 'agent', text: '输出', digest: '', turnKey: 't1' },
+      { kind: 'runtime', text: '新快照', digest: '运行时快照', turnKey: 't1' },
+    ]);
+    expect(lastRuntimeSnapshotText_ACU(snapshot)).toBe('新快照');
   });
 });

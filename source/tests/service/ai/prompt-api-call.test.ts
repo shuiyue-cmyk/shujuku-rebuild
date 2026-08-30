@@ -140,6 +140,7 @@ vi.mock('../../../src/service/ai/api-call', () => ({
 
 import {
   callCustomOpenAI_ACU,
+  extractAiUsageMetadata_ACU,
   handleApiResponse_ACU,
   RetryableAiResponseError_ACU,
 } from '../../../src/service/ai/prompt-builder/prompt-api-call';
@@ -579,5 +580,103 @@ describe('handleApiResponse_ACU 响应解析', () => {
       json: async () => ({ choices: [{ message: { content: '普通响应' } }] }),
     });
     expect(result).toBe('普通响应');
+  });
+});
+
+describe('usage 提取与合并（上游 bb20a45f 移植）', () => {
+  it('非流式模式：usage 与 usageMetadata 按已报告字段合并，usageMetadata 后覆盖', async () => {
+    mockSettings.streamingEnabled = false;
+    const onUsage = vi.fn();
+    const result = await handleApiResponse_ACU({
+      json: async () => ({
+        choices: [{ message: { content: '回复' } }],
+        usage: {
+          prompt_tokens: 10,
+          completion_tokens: 4,
+          prompt_tokens_details: { cached_tokens: 3 },
+          cache_creation_input_tokens: 6,
+        },
+        usageMetadata: { promptTokenCount: 12, candidatesTokenCount: 5, cachedContentTokenCount: 0 },
+      }),
+    }, null, onUsage);
+
+    expect(result).toBe('回复');
+    expect(onUsage).toHaveBeenCalledOnce();
+    expect(onUsage).toHaveBeenCalledWith({ promptTokens: 12, completionTokens: 5, cachedTokens: 0, cacheWriteTokens: 6 });
+  });
+
+  it('流式模式：多个 usage 片段只覆盖后续已定义字段，结束后仅回调一次', async () => {
+    mockSettings.streamingEnabled = true;
+    const onUsage = vi.fn();
+    // 本库流式为 text() 整读形态（上游为 body.getReader 增量），SSE 片段拼接为整段文本验证同一 usage 合并语义。
+    // 第二参传 undefined（非 null）才能落回 settings 判定流式开关；本库语义 null=明确非流式。
+    const result = await handleApiResponse_ACU({
+      text: async () =>
+        [
+          'data: {"choices":[{"delta":{"content":"你"}}],"usage":{"prompt_tokens":100,"prompt_tokens_details":{"cached_tokens":80}}}',
+          'data: {"choices":[{"delta":{"content":"好"}}],"usageMetadata":{"candidatesTokenCount":8}}',
+          'data: {"choices":[],"usage":{"prompt_tokens_details":{"cached_tokens":0},"cache_creation_input_tokens":12}}',
+          'data: [DONE]',
+          '',
+        ].join('\n'),
+    }, undefined, onUsage);
+
+    expect(result).toBe('你好');
+    expect(onUsage).toHaveBeenCalledOnce();
+    expect(onUsage).toHaveBeenCalledWith({
+      promptTokens: 100,
+      completionTokens: 8,
+      cachedTokens: 0,
+      cacheWriteTokens: 12,
+    });
+  });
+
+  it('字段缺失保持 undefined，明确报告 0 保持 0', () => {
+    expect(extractAiUsageMetadata_ACU({ prompt_tokens: 10, completion_tokens: 5 })).toEqual({ promptTokens: 10, completionTokens: 5 });
+    expect(extractAiUsageMetadata_ACU({
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      prompt_tokens_details: { cached_tokens: 0 },
+      cache_creation_input_tokens: 0,
+    })).toEqual({ promptTokens: 0, completionTokens: 0, cachedTokens: 0, cacheWriteTokens: 0 });
+  });
+
+  it('按优先级选择首个合法整数，首选明确 0 不被后备非零值覆盖', () => {
+    expect(extractAiUsageMetadata_ACU({
+      prompt_tokens: 0,
+      input_tokens: 99,
+      completion_tokens: -1,
+      output_tokens: 2.5,
+      candidatesTokenCount: 4,
+      prompt_tokens_details: { cached_tokens: 'invalid' },
+      input_tokens_details: { cached_tokens: 6 },
+      cache_creation_input_tokens: 3,
+    })).toEqual({ promptTokens: 0, completionTokens: 4, cachedTokens: 6, cacheWriteTokens: 3 });
+  });
+
+  it('兼容 Anthropic、DeepSeek 与 Gemini usage 字段', () => {
+    expect(extractAiUsageMetadata_ACU({
+      input_tokens: 12,
+      output_tokens: 5,
+      cache_read_input_tokens: 8,
+      cache_creation_input_tokens: 2,
+    })).toEqual({ promptTokens: 12, completionTokens: 5, cachedTokens: 8, cacheWriteTokens: 2 });
+    expect(extractAiUsageMetadata_ACU({
+      prompt_tokens: 20,
+      completion_tokens: 7,
+      prompt_cache_hit_tokens: 16,
+      cache_write_input_tokens: 4,
+    })).toEqual({ promptTokens: 20, completionTokens: 7, cachedTokens: 16, cacheWriteTokens: 4 });
+    expect(extractAiUsageMetadata_ACU({
+      promptTokenCount: 9,
+      candidatesTokenCount: 3,
+      cachedContentTokenCount: 5,
+      cache_write_tokens: 1,
+    })).toEqual({ promptTokens: 9, completionTokens: 3, cachedTokens: 5, cacheWriteTokens: 1 });
+  });
+
+  it('非法输入或只有未映射的 cache miss 字段时返回 null', () => {
+    expect(extractAiUsageMetadata_ACU({ prompt_tokens: -1, completion_tokens: 'x', input_tokens: 1.5, output_tokens: Infinity })).toBeNull();
+    expect(extractAiUsageMetadata_ACU({ prompt_cache_miss_tokens: 42 })).toBeNull();
   });
 });

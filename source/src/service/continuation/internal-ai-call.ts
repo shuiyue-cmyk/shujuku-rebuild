@@ -28,7 +28,7 @@ export interface ContinuationInternalAiCallOptions_ACU {
 
 /**
  * fnv-1a 32 位哈希（十六进制）。缓存 key 只需要稳定与低碰撞，不需要密码学强度；
- * chatIdentity 可能含中文与路径分隔符，哈希后得到纯 [0-9a-f] 串，满足请求体注入通道的字符白名单。
+ * 输入可能含中文与路径分隔符，哈希后得到纯 [0-9a-f] 串，满足请求体注入通道的字符白名单。
  */
 function fnv1aHex_ACU(input: string): string {
   let hash = 0x811c9dc5;
@@ -39,22 +39,47 @@ function fnv1aHex_ACU(input: string): string {
   return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
+const PROMPT_CACHE_KEY_NAMESPACE_ACU = 'acu-cont-v2';
+const PROMPT_CACHE_KEY_MAX_LENGTH_ACU = 64;
+
 /**
- * 组装本次调用的 prompt_cache_key。只含稳定因子（聊天身份哈希 + 调用方 scope），
- * 不含任何随迭代/轮次变化的内容——key 每轮都变会让跨轮缓存命中归零。
+ * 组装本次调用的 prompt_cache_key。只含版本、聊天身份、调用 scope 与模型路由四类稳定因子；
+ * 不含任何随请求、迭代或轮次变化的内容，也不暴露原始聊天身份、scope、模型或 URL。
  */
-function buildPromptCacheKey_ACU(identity: ContinuationInternalAiRequestIdentity_ACU, scope: string): string {
-  const safeScope = scope.replace(/[^A-Za-z0-9_-]/g, '-');
-  return `acu-cont-${fnv1aHex_ACU(identity.chatIdentity)}-${safeScope}`;
+function buildPromptCacheKey_ACU(
+  identity: ContinuationInternalAiRequestIdentity_ACU,
+  scope: string,
+  preset: ContinuationResolvedApiPreset_ACU,
+): string {
+  const chatHash = fnv1aHex_ACU(identity.chatIdentity);
+  const scopeHash = fnv1aHex_ACU(scope);
+  const routeHash = fnv1aHex_ACU(JSON.stringify([
+    preset.apiMode,
+    preset.apiConfig.model,
+    preset.apiConfig.url,
+  ]));
+  const key = `${PROMPT_CACHE_KEY_NAMESPACE_ACU}-${chatHash}-${scopeHash}-${routeHash}`;
+  if (key.length > PROMPT_CACHE_KEY_MAX_LENGTH_ACU || !/^[A-Za-z0-9_-]+$/.test(key)) {
+    throw new Error('内部 AI 缓存路由键不符合长度或字符约束。');
+  }
+  return key;
 }
 
 /**
- * 把一次调用的用量渲染成会话流条目里的紧凑标签，如「输入 15.0k · ⚡缓存 14.2k · 输出 0.8k」。
- * ⚡ 是缓存命中数（含在输入内）；恒常显示，命中为 0 时用户能直接看到未命中。
+ * 把一次调用的用量渲染成会话流条目里的紧凑标签。
+ * 基础字段恒常显示；未报告与明确报告 0 保持不同语义。缓存写入仅在厂商报告时追加。
  */
 export function formatAgentUsageLabel_ACU(usage: AiUsageMetadata_ACU): string {
-  const compact = (value: number): string => (value < 1000 ? String(value) : `${(value / 1000).toFixed(1)}k`);
-  return `输入 ${compact(usage.promptTokens)} · ⚡缓存 ${compact(usage.cachedTokens)} · 输出 ${compact(usage.completionTokens)}`;
+  const compact = (value: number | undefined): string => (
+    value === undefined ? '未报告' : value < 1000 ? String(value) : `${(value / 1000).toFixed(1)}k`
+  );
+  const parts = [
+    `输入 ${compact(usage.promptTokens)}`,
+    `缓存读取 ${compact(usage.cachedTokens)}`,
+    `输出 ${compact(usage.completionTokens)}`,
+  ];
+  if (usage.cacheWriteTokens !== undefined) parts.push(`缓存写入 ${compact(usage.cacheWriteTokens)}`);
+  return parts.join(' · ');
 }
 
 /**
@@ -81,7 +106,9 @@ export async function callContinuationInternalAi_ACU(
         afterMainApiCall: () => endContinuationInternalAiMainApiInvocation_ACU(identity.requestId),
         ...(cacheEnabled && options?.onUsage ? { onUsage: options.onUsage } : {}),
       },
-      cacheEnabled ? { promptCacheKey: buildPromptCacheKey_ACU(identity, options?.cacheScope || identity.source) } : undefined,
+      cacheEnabled
+        ? { promptCacheKey: buildPromptCacheKey_ACU(identity, options?.cacheScope || identity.source, preset) }
+        : undefined,
     );
   } finally {
     // A bound host lifecycle remains registered until its matching ended event.

@@ -98,7 +98,10 @@ export interface AgentSubagentRunResult_ACU {
   expandedReads: string[];
   /** 渲染读集材料那一刻的模块修订号。主循环用它做写入并发校验，不依赖子代理自报。 */
   readRevisions: AgentModuleRevisions_ACU;
-  /** 本次派工全部 AI 调用的累计 token 用量；网关不回传 usage 时为 null。 */
+  /**
+   * 本次派工全部 AI 调用的累计 token 用量；完全没有 usage 回调时为 null。
+   * 任一次已观测调用未报告某字段时，该累计字段保持 undefined。
+   */
   usage: AiUsageMetadata_ACU | null;
 }
 
@@ -267,8 +270,11 @@ export class AgentSubagentRuntime_ACU {
     let protocolRejections = 0;
     let attempt = 0;
     let lastReason = '';
-    // 本次派工的累计用量。派工间并发（Promise.all）但每次 run 各持有自己的局部累计，无共享状态。
+    // 本次派工的累计用量。只有每次已观测调用都报告某字段时，该字段才具备可求和的完整性。
     let usageTotal: AiUsageMetadata_ACU | null = null;
+    const addCompleteCount = (current: number | undefined, incoming: number | undefined): number | undefined => (
+      current !== undefined && incoming !== undefined ? current + incoming : undefined
+    );
     const callOptions: ContinuationInternalAiCallOptions_ACU = {
       promptCacheEnabled: input.settings.promptCacheEnabled,
       // 每个子代理的提示词前缀不同，独立缓存命名空间避免互相挤占路由。
@@ -276,11 +282,17 @@ export class AgentSubagentRuntime_ACU {
       onUsage: usage => {
         usageTotal = usageTotal
           ? {
-            promptTokens: usageTotal.promptTokens + usage.promptTokens,
-            completionTokens: usageTotal.completionTokens + usage.completionTokens,
-            cachedTokens: usageTotal.cachedTokens + usage.cachedTokens,
+            promptTokens: addCompleteCount(usageTotal.promptTokens, usage.promptTokens),
+            completionTokens: addCompleteCount(usageTotal.completionTokens, usage.completionTokens),
+            cachedTokens: addCompleteCount(usageTotal.cachedTokens, usage.cachedTokens),
+            cacheWriteTokens: addCompleteCount(usageTotal.cacheWriteTokens, usage.cacheWriteTokens),
           }
-          : { ...usage };
+          : {
+            promptTokens: usage.promptTokens,
+            completionTokens: usage.completionTokens,
+            cachedTokens: usage.cachedTokens,
+            cacheWriteTokens: usage.cacheWriteTokens,
+          };
       },
     };
     // 调用总数上界 = 首轮 + 工具轮 + 协议重试 + 工具轮用尽后的最后通牒轮。到界仍未交付即失败。

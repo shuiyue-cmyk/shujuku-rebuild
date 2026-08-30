@@ -99,7 +99,7 @@ export function getDefaultPlotContextExcludeRules_ACU() {
   );
 }
 
-function removeLastMatchedBoundary_ACU(
+function removeAllMatchedBoundaries_ACU(
   text: string,
   startBoundary: string,
   endBoundary: string,
@@ -112,17 +112,52 @@ function removeLastMatchedBoundary_ACU(
   const lowerSource = source.toLowerCase();
   const lowerStart = start.toLowerCase();
   const lowerEnd = end.toLowerCase();
+  const openStartIndexes: number[] = [];
+  const matchedRanges: Array<{ start: number; end: number }> = [];
+  let searchIndex = 0;
 
-  const endIdx = lowerSource.lastIndexOf(lowerEnd);
-  if (endIdx === -1) return source;
+  while (searchIndex < lowerSource.length) {
+    const nextStartIdx = lowerSource.indexOf(lowerStart, searchIndex);
+    const nextEndIdx = lowerSource.indexOf(lowerEnd, searchIndex);
+    if (nextStartIdx === -1 && nextEndIdx === -1) break;
 
-  const startIdx = lowerSource.lastIndexOf(lowerStart, Math.max(0, endIdx - 1));
-  if (startIdx === -1) return source;
+    const isStartBoundary = nextStartIdx !== -1
+      && (nextEndIdx === -1 || nextStartIdx <= nextEndIdx);
+    if (isStartBoundary) {
+      openStartIndexes.push(nextStartIdx);
+      searchIndex = nextStartIdx + lowerStart.length;
+      continue;
+    }
 
-  const removeTo = endIdx + end.length;
-  if (removeTo <= startIdx) return source;
+    if (openStartIndexes.length > 0) {
+      const matchedStartIdx = openStartIndexes.pop()!;
+      const matchedEndIdx = nextEndIdx + lowerEnd.length;
+      if (matchedEndIdx > matchedStartIdx) {
+        matchedRanges.push({ start: matchedStartIdx, end: matchedEndIdx });
+      }
+    }
+    searchIndex = nextEndIdx + lowerEnd.length;
+  }
 
-  return source.slice(0, startIdx) + source.slice(removeTo);
+  if (matchedRanges.length === 0) return source;
+
+  matchedRanges.sort((left, right) => left.start - right.start || left.end - right.end);
+  const mergedRanges: Array<{ start: number; end: number }> = [];
+  matchedRanges.forEach((range) => {
+    const previousRange = mergedRanges[mergedRanges.length - 1];
+    if (!previousRange || range.start > previousRange.end) {
+      mergedRanges.push({ ...range });
+      return;
+    }
+    previousRange.end = Math.max(previousRange.end, range.end);
+  });
+
+  let result = source;
+  for (let rangeIndex = mergedRanges.length - 1; rangeIndex >= 0; rangeIndex--) {
+    const range = mergedRanges[rangeIndex];
+    result = result.slice(0, range.start) + result.slice(range.end);
+  }
+  return result;
 }
 
 export function applyExcludeRulesToText_ACU(
@@ -134,7 +169,7 @@ export function applyExcludeRulesToText_ACU(
   if (!result || rules.length === 0) return result;
 
   rules.forEach((rule) => {
-    result = removeLastMatchedBoundary_ACU(result, rule.start, rule.end);
+    result = removeAllMatchedBoundaries_ACU(result, rule.start, rule.end);
   });
 
   return result.replace(/\n{3,}/g, "\n\n").trim();

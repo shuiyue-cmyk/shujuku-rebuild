@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { buildDefaultContinuationSettings_ACU } from '../../../src/service/continuation/defaults';
+import {
+  V19_DEFAULT_MAIN_AGENT_HISTORY_GUIDE_ACU,
+  V19_DEFAULT_MAIN_AGENT_LAYOUT_ANSWER_ACU,
+  V19_DEFAULT_MAIN_AGENT_RUNTIME_SEGMENT_ACU,
+  currentDefaultMainAgentHistoryGuide_ACU,
+  currentDefaultMainAgentLayoutAnswer_ACU,
+} from '../../../src/service/continuation/agent/agent-defaults';
 import { ContinuationValidationError_ACU, type ContinuationEnvelope_ACU } from '../../../src/service/continuation/model';
 import {
   FirstFloorContinuationStore_ACU,
@@ -187,7 +194,165 @@ describe('FirstFloorContinuationStore_ACU', () => {
     expect(() => new FirstFloorContinuationStore_ACU().read()).toThrow(ContinuationValidationError_ACU);
   });
 
-  it('提示词版本落后时整体强刷，存量信封因此拿到总纲子代理提示词组', () => {
+  it('V17 仅定向更新已知会话快照规则，并保留其余提示词与段字段', () => {
+    const v17 = buildEnvelope_ACU() as any;
+    v17.settings.promptForceDefaultVersion = 'spv2.5-continuation-story-layers-v17';
+    const historyIndex = v17.settings.agentPrompts.main.findIndex((segment: any) =>
+      String(segment.content).includes('【以下是你自己的会话记录】'),
+    );
+    expect(historyIndex).toBeGreaterThanOrEqual(0);
+    v17.settings.agentPrompts.main[historyIndex] = {
+      ...v17.settings.agentPrompts.main[historyIndex],
+      content: '【以下是你自己的会话记录】\n用户对你说过的话、你历次迭代实际输出过的动作、运行时回灌给你的工具结果、派工结果与拒绝原因，按真实发生顺序排列，跨轮次持续累积。已经调阅到的资料就在这里，不要重复调阅；已经完成的工作不要重做，被拒过的写法不要重犯，用户的最新指令优先于你此前的计划。',
+      enabled: false,
+      deletable: true,
+    };
+    v17.settings.agentPrompts.main.splice(historyIndex + 1, 0, {
+      role: 'assistant',
+      content: '用户定制的附加提示词段',
+      enabled: false,
+      deletable: true,
+    });
+    const expectedPrompts = JSON.parse(JSON.stringify(v17.settings.agentPrompts));
+    expectedPrompts.main[historyIndex].content = currentDefaultMainAgentHistoryGuide_ACU();
+    const expectedOutlinePrompt = JSON.parse(JSON.stringify(v17.settings.outlinePrompt));
+    _set_SillyTavern_API_ACU({ chat: [{ _qrf_continuation: v17 }], chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn() } as any);
+
+    const loaded = new FirstFloorContinuationStore_ACU().read()!;
+
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv2.8-continuation-runtime-snapshot-v20');
+    expect(loaded.settings.agentPrompts).toEqual(expectedPrompts);
+    expect(loaded.settings.outlinePrompt).toEqual(expectedOutlinePrompt);
+  });
+
+  it('V17 自定义提示词未包含已知旧句时逐字保留，只推进契约版本', () => {
+    const customized = buildEnvelope_ACU() as any;
+    customized.settings.promptForceDefaultVersion = 'spv2.5-continuation-story-layers-v17';
+    const historyIndex = customized.settings.agentPrompts.main.findIndex((segment: any) =>
+      String(segment.content).includes('【以下是你自己的会话记录】'),
+    );
+    expect(historyIndex).toBeGreaterThanOrEqual(0);
+    customized.settings.agentPrompts.main[historyIndex] = {
+      role: 'system',
+      content: '【自定义会话规则】只采用我明确标记为当前版本的资料。',
+      enabled: false,
+      deletable: true,
+      pinned: false,
+    };
+    const expectedPrompts = JSON.parse(JSON.stringify(customized.settings.agentPrompts));
+    const expectedOutlinePrompt = JSON.parse(JSON.stringify(customized.settings.outlinePrompt));
+    _set_SillyTavern_API_ACU({ chat: [{ _qrf_continuation: customized }], chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn() } as any);
+
+    const loaded = new FirstFloorContinuationStore_ACU().read()!;
+
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv2.8-continuation-runtime-snapshot-v20');
+    expect(loaded.settings.agentPrompts).toEqual(expectedPrompts);
+    expect(loaded.settings.outlinePrompt).toEqual(expectedOutlinePrompt);
+  });
+
+  it('V18 默认主 Agent 的非根 system 段迁移为 user，并删除未改写的运行时骨架段', () => {
+    const v18 = buildEnvelope_ACU() as any;
+    v18.settings.promptForceDefaultVersion = 'spv2.6-continuation-append-only-history-v18';
+    const historyIndex = v18.settings.agentPrompts.main.findIndex((segment: any) =>
+      String(segment.content).startsWith('【以下是你自己的会话记录】'),
+    );
+    const layoutIndex = v18.settings.agentPrompts.main.findIndex((segment: any) =>
+      String(segment.content).startsWith('我收到的上下文分三层：'),
+    );
+    const anchorIndex = v18.settings.agentPrompts.main.findIndex((segment: any) =>
+      String(segment.content) === '$HISTORY_ANCHOR',
+    );
+    v18.settings.agentPrompts.main[historyIndex] = {
+      ...v18.settings.agentPrompts.main[historyIndex],
+      content: V19_DEFAULT_MAIN_AGENT_HISTORY_GUIDE_ACU,
+    };
+    v18.settings.agentPrompts.main[layoutIndex] = {
+      ...v18.settings.agentPrompts.main[layoutIndex],
+      content: V19_DEFAULT_MAIN_AGENT_LAYOUT_ANSWER_ACU,
+    };
+    v18.settings.agentPrompts.main.splice(anchorIndex + 1, 0, {
+      role: 'system',
+      content: V19_DEFAULT_MAIN_AGENT_RUNTIME_SEGMENT_ACU,
+      enabled: true,
+      deletable: false,
+      pinned: true,
+    });
+    const migratedHeadings = ['【文本协议规范】', '【子代理使用规则】', '【模式边界】', '【已经发生的小说正文】', '【以下是你自己的会话记录】', '$HISTORY_ANCHOR', '【本回合运行时数据】'];
+    v18.settings.agentPrompts.main = v18.settings.agentPrompts.main.map((segment: any) => (
+      migratedHeadings.some(heading => String(segment.content).startsWith(heading))
+        ? { ...segment, role: 'system' }
+        : segment
+    ));
+    _set_SillyTavern_API_ACU({ chat: [{ _qrf_continuation: v18 }], chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn() } as any);
+
+    const loaded = new FirstFloorContinuationStore_ACU().read()!;
+
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv2.8-continuation-runtime-snapshot-v20');
+    expect(loaded.settings.agentPrompts.main.some(segment => segment.content === V19_DEFAULT_MAIN_AGENT_RUNTIME_SEGMENT_ACU)).toBe(false);
+    expect(loaded.settings.agentPrompts.main.filter(segment => segment.role === 'system')).toHaveLength(1);
+    expect(loaded.settings.agentPrompts.main[0].role).toBe('system');
+    expect(loaded.settings.agentPrompts.main.find(segment => String(segment.content).startsWith('【以下是你自己的会话记录】'))?.content).toBe(currentDefaultMainAgentHistoryGuide_ACU());
+    expect(loaded.settings.agentPrompts.main.find(segment => String(segment.content).startsWith('我收到的上下文分三层：'))?.content).toBe(currentDefaultMainAgentLayoutAnswer_ACU());
+  });
+
+  it('V18 用户自定义的 system 段不会被缓存兼容迁移改写', () => {
+    const v18 = buildEnvelope_ACU() as any;
+    v18.settings.promptForceDefaultVersion = 'spv2.6-continuation-append-only-history-v18';
+    const anchorIndex = v18.settings.agentPrompts.main.findIndex((segment: any) =>
+      String(segment.content) === '$HISTORY_ANCHOR',
+    );
+    v18.settings.agentPrompts.main.splice(anchorIndex + 1, 0, {
+      role: 'system',
+      content: '【本回合运行时数据】\n这是用户定制的运行时提示词。',
+      enabled: true,
+      deletable: false,
+      pinned: true,
+    });
+    _set_SillyTavern_API_ACU({ chat: [{ _qrf_continuation: v18 }], chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn() } as any);
+
+    const loaded = new FirstFloorContinuationStore_ACU().read()!;
+    const runtimeIndex = loaded.settings.agentPrompts.main.findIndex(segment =>
+      String(segment.content).startsWith('【本回合运行时数据】'),
+    );
+
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv2.8-continuation-runtime-snapshot-v20');
+    expect(loaded.settings.agentPrompts.main[runtimeIndex]).toMatchObject({
+      role: 'system',
+      content: '【本回合运行时数据】\n这是用户定制的运行时提示词。',
+    });
+  });
+
+  it('V19 未改写的运行时骨架段删除，排布问答与历史导语定向更新到 V20', () => {
+    const v19 = buildEnvelope_ACU() as any;
+    v19.settings.promptForceDefaultVersion = 'spv2.7-continuation-single-system-prefix-v19';
+    const historyIndex = v19.settings.agentPrompts.main.findIndex((segment: any) =>
+      String(segment.content).startsWith('【以下是你自己的会话记录】'),
+    );
+    const layoutIndex = v19.settings.agentPrompts.main.findIndex((segment: any) =>
+      String(segment.content).startsWith('我收到的上下文分三层：'),
+    );
+    const anchorIndex = v19.settings.agentPrompts.main.findIndex((segment: any) =>
+      String(segment.content) === '$HISTORY_ANCHOR',
+    );
+    v19.settings.agentPrompts.main[historyIndex].content = V19_DEFAULT_MAIN_AGENT_HISTORY_GUIDE_ACU;
+    v19.settings.agentPrompts.main[layoutIndex].content = V19_DEFAULT_MAIN_AGENT_LAYOUT_ANSWER_ACU;
+    v19.settings.agentPrompts.main.splice(anchorIndex + 1, 0, {
+      role: 'user',
+      content: V19_DEFAULT_MAIN_AGENT_RUNTIME_SEGMENT_ACU,
+      enabled: true,
+      deletable: false,
+      pinned: true,
+    });
+    _set_SillyTavern_API_ACU({ chat: [{ _qrf_continuation: v19 }], chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn() } as any);
+
+    const loaded = new FirstFloorContinuationStore_ACU().read()!;
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv2.8-continuation-runtime-snapshot-v20');
+    expect(loaded.settings.agentPrompts.main.some(segment => segment.content === V19_DEFAULT_MAIN_AGENT_RUNTIME_SEGMENT_ACU)).toBe(false);
+    expect(loaded.settings.agentPrompts.main.find(segment => String(segment.content).startsWith('【以下是你自己的会话记录】'))?.content).toBe(currentDefaultMainAgentHistoryGuide_ACU());
+    expect(loaded.settings.agentPrompts.main.find(segment => String(segment.content).startsWith('我收到的上下文分三层：'))?.content).toBe(currentDefaultMainAgentLayoutAnswer_ACU());
+  });
+
+  it('V16 及更早提示词版本仍整体强刷，存量信封因此拿到总纲子代理提示词组', () => {
     const stale = buildEnvelope_ACU() as any;
     stale.settings.promptForceDefaultVersion = 'spv2.2-continuation-v13';
     stale.settings.agentPrompts = { ...stale.settings.agentPrompts, main: [{ role: 'user', content: '用户改过的旧提示词', enabled: true, deletable: true }] };
@@ -195,7 +360,7 @@ describe('FirstFloorContinuationStore_ACU', () => {
     _set_SillyTavern_API_ACU({ chat: [{ _qrf_continuation: stale }], chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn() } as any);
 
     const loaded = new FirstFloorContinuationStore_ACU().read()!;
-    expect(loaded.settings.promptForceDefaultVersion).toBe('spv2.5-continuation-story-layers-v17');
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv2.8-continuation-runtime-snapshot-v20');
     expect(loaded.settings.agentPrompts.arcArchitect[0].content).toContain('故事总纲子代理');
     expect(loaded.settings.outlinePrompt.some(segment => segment.content.includes('<stage_tempo>'))).toBe(true);
     expect(loaded.settings.agentPrompts.main[0].content).not.toBe('用户改过的旧提示词');

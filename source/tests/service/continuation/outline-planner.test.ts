@@ -34,6 +34,11 @@ function settings_ACU(retries = 3) {
   return { ...buildDefaultContinuationSettings_ACU(), apiPresetMode: 'fixed' as const, fixedApiPresetName: 'preset-a', internalAiRetryLimit: retries, outlinePrompt: [{ role: 'user', content: '$ORIGIN_INSTRUCTION $VALIDATION_ERRORS' }] };
 }
 
+function lastMessageContent_ACU(callInternalAi: { mock: { calls: unknown[][] } }, callIndex: number): string {
+  const messages = callInternalAi.mock.calls[callIndex][0] as Array<{ content: string }>;
+  return messages[messages.length - 1].content;
+}
+
 function request_ACU(settings = settings_ACU(), overrides: Record<string, unknown> = {}) {
   let counter = 0;
   return {
@@ -85,7 +90,10 @@ describe('ContinuationOutlinePlanner_ACU', () => {
     const result = await planner.plan(request_ACU(settings_ACU(1), { resolvers: { $ORIGIN_INSTRUCTION: () => '继续' } }));
     expect(result.attempts).toBe(2);
     expect(callInternalAi).toHaveBeenCalledTimes(2);
-    const retryContent = callInternalAi.mock.calls[1][0][0].content as string;
+    const first = callInternalAi.mock.calls[0][0] as Array<{ role: string; content: string }>;
+    const second = callInternalAi.mock.calls[1][0] as Array<{ role: string; content: string }>;
+    expect(second.slice(0, first.length)).toEqual(first);
+    const retryContent = lastMessageContent_ACU(callInternalAi, 1);
     expect(retryContent).toContain('CONTINUATION_OUTLINE_JSON_INVALID@outline_parse');
     expect(retryContent).toContain('<node>');
   });
@@ -93,7 +101,7 @@ describe('ContinuationOutlinePlanner_ACU', () => {
   it('retries range violations with the validation error rather than accepting a short outline', async () => {
     const { planner, callInternalAi } = createPlanner_ACU([tagOutline_ACU(2), tagOutline_ACU(6)]);
     await expect(planner.plan(request_ACU(settings_ACU(1)))).resolves.toMatchObject({ attempts: 2, outline: { totalTurns: 6 } });
-    const retryContent = callInternalAi.mock.calls[1][0][0].content as string;
+    const retryContent = lastMessageContent_ACU(callInternalAi, 1);
     expect(retryContent).toContain('CONTINUATION_OUTLINE_TOTAL_TURNS_OUT_OF_RANGE@outline_validate');
     // 回灌必须带具体数字（min/max/actual），否则模型只能瞎猜再撞一次墙。
     expect(retryContent).toContain('"min":6');
@@ -128,7 +136,7 @@ describe('ContinuationOutlinePlanner_ACU', () => {
     const { planner, callInternalAi } = createPlanner_ACU([allPressure, tagOutline_ACU(6)]);
     const result = await planner.plan(request_ACU(settings_ACU(1)));
     expect(result.attempts).toBe(2);
-    const retryContent = callInternalAi.mock.calls[1][0][0].content as string;
+    const retryContent = lastMessageContent_ACU(callInternalAi, 1);
     expect(retryContent).toContain('CONTINUATION_OUTLINE_PACING_INVALID@outline_validate');
     expect(retryContent).toContain('第1轮=pressure');
   });
@@ -174,7 +182,7 @@ describe('ContinuationOutlinePlanner_ACU', () => {
 
     expect(result.attempts).toBe(2);
     expect(callInternalAi.mock.calls[0][0][0].content as string).toContain('只能选 aftermath 或 mixed');
-    const retryContent = callInternalAi.mock.calls[1][0][0].content as string;
+    const retryContent = lastMessageContent_ACU(callInternalAi, 1);
     expect(retryContent).toContain('CONTINUATION_OUTLINE_PACING_INVALID@outline_validate');
     expect(retryContent).toContain('consecutive_surge_stages');
   });
@@ -244,7 +252,7 @@ describe('ContinuationOutlinePlanner_ACU', () => {
       replanConstraints: { previousOutline: previous, completedTurns: 2, expectedRemainingTurns: 4 },
     }));
     expect(result.attempts).toBe(2);
-    expect(callInternalAi.mock.calls[1][0][0].content).toContain('CONTINUATION_OUTLINE_TOTAL_TURNS_OUT_OF_RANGE@outline_validate');
+    expect(lastMessageContent_ACU(callInternalAi, 1)).toContain('CONTINUATION_OUTLINE_TOTAL_TURNS_OUT_OF_RANGE@outline_validate');
     expect(result.outline.totalTurns).toBe(6);
   });
 

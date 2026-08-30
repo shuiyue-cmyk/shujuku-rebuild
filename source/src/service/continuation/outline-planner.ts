@@ -156,6 +156,15 @@ export class ContinuationOutlinePlanner_ACU {
     const retries = normalizeContinuationInternalAiRetryLimit_ACU(request.settings.internalAiRetryLimit);
     const pacingContext: StageOutlinePacingContext_ACU = request.pacingContext ?? { previousTempo: null, leadingPressureStreak: 0 };
     let lastError: ContinuationError_ACU | null = null;
+    const resolvers = { ...request.resolvers };
+    // $TURN_RANGE 由 planner 权威注入：只有这里同时知道范围与重规划约束。
+    resolvers.$TURN_RANGE = () => renderContinuationTurnRange_ACU(range, request.replanConstraints);
+    resolvers.$STAGE_WORD_BUDGET = () => renderContinuationStageWordBudget_ACU(range, request.replanConstraints);
+    resolvers.$PACING_CONTEXT = () => renderContinuationPacingContext_ACU(pacingContext, request.settings.maxConsecutivePressureTurns);
+    // 校验错误不再写回骨架占位符：重试只追加 transcript，前缀保持字节级稳定以便命中缓存。
+    const rendered = await renderContinuationPrompt_ACU(request.settings.outlinePrompt, resolvers, request.reason === 'manual_replan' ? 'replan' : 'outline_prompt');
+    const transcript: Array<{ role: string; content: string }> = [];
+    let lastRaw = '';
 
     for (let attempt = 0; attempt <= retries; attempt += 1) {
       try {
@@ -164,17 +173,11 @@ export class ContinuationOutlinePlanner_ACU {
         if (!isCurrent(identity)) {
           throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'outline_call', '阶段大纲内部请求已失效', false));
         }
-        const resolvers = { ...request.resolvers };
-        // $TURN_RANGE 由 planner 权威注入：只有这里同时知道范围与重规划约束。
-        resolvers.$TURN_RANGE = () => renderContinuationTurnRange_ACU(range, request.replanConstraints);
-        resolvers.$STAGE_WORD_BUDGET = () => renderContinuationStageWordBudget_ACU(range, request.replanConstraints);
-        resolvers.$PACING_CONTEXT = () => renderContinuationPacingContext_ACU(pacingContext, request.settings.maxConsecutivePressureTurns);
-        if (attempt > 0 && lastError) resolvers.$VALIDATION_ERRORS = () => compactValidationError_ACU(lastError!);
-        const rendered = await renderContinuationPrompt_ACU(request.settings.outlinePrompt, resolvers, request.reason === 'manual_replan' ? 'replan' : 'outline_prompt');
-        const raw = await this.dependencies.callInternalAi(rendered.messages, preset, identity, undefined, {
+        const raw = await this.dependencies.callInternalAi([...rendered.messages, ...transcript], preset, identity, undefined, {
           promptCacheEnabled: request.settings.promptCacheEnabled,
           cacheScope: 'outline',
         });
+        lastRaw = String(raw ?? '');
         if (!isCurrent(identity)) {
           throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'outline_call', '阶段大纲内部结果已失效', false));
         }
@@ -201,11 +204,18 @@ export class ContinuationOutlinePlanner_ACU {
       } catch (error) {
         lastError = toPlannerError_ACU(error);
         if (!isRetryableOutlineError_ACU(lastError)) throw error;
-        // 传输错误（502/网络抖动）按设置延时后再打，不再瞬间连打；
-        // 大纲结构校验失败仍立即重试——那是模型输出问题，等待只会拖慢自愈。
-        if (lastError.code === 'CONTINUATION_INTERNAL_AI_REQUEST_FAILED' && attempt < retries) {
-          const wait = this.dependencies.wait ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)));
-          await wait(Math.max(0, request.settings.retryDelaySeconds) * 1000);
+        // 传输错误（502/网络抖动）按设置延时后再打同一前缀，不伪造 assistant 消息。
+        // 大纲结构校验失败把原文和错误追加到 transcript，前缀保持不变。
+        if (lastError.code === 'CONTINUATION_INTERNAL_AI_REQUEST_FAILED') {
+          if (attempt < retries) {
+            const wait = this.dependencies.wait ?? (ms => new Promise<void>(resolve => setTimeout(resolve, ms)));
+            await wait(Math.max(0, request.settings.retryDelaySeconds) * 1000);
+          }
+          continue;
+        }
+        if (attempt < retries) {
+          transcript.push({ role: 'assistant', content: lastRaw.trim() || '(空输出)' });
+          transcript.push({ role: 'user', content: `上次输出未通过校验，请按下列错误修正后重新输出完整标签。\n${compactValidationError_ACU(lastError)}` });
         }
       }
     }

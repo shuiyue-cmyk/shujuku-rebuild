@@ -226,32 +226,90 @@ export class RetryableAiResponseError_ACU extends Error {
 
   // ═══ 响应处理（streamingEnabled 开启时走 SSE 流解析，否则 JSON 解析） ═══
 
-  /** 一次 AI 调用的 token 用量。cachedTokens 是命中厂商 prompt 缓存的输入 token 数（含在 promptTokens 内）。 */
+  /**
+   * 一次 AI 调用实际报告的 token 用量。
+   * 字段缺失表示提供商未报告，明确的 0 表示提供商报告该项为 0。
+   */
   export interface AiUsageMetadata_ACU {
-    promptTokens: number;
-    completionTokens: number;
-    cachedTokens: number;
+    promptTokens?: number;
+    completionTokens?: number;
+    /** 命中厂商 prompt 缓存的输入 token 数，通常包含在 promptTokens 内。 */
+    cachedTokens?: number;
+    /** 厂商报告的缓存写入 token 数。 */
+    cacheWriteTokens?: number;
+  }
+
+  function toUsageCount_ACU(value: unknown): number | undefined {
+    return typeof value === 'number' && Number.isFinite(value) && Number.isInteger(value) && value >= 0
+      ? value
+      : undefined;
+  }
+
+  function firstUsageCount_ACU(...values: unknown[]): number | undefined {
+    for (const value of values) {
+      const count = toUsageCount_ACU(value);
+      if (count !== undefined) return count;
+    }
+    return undefined;
+  }
+
+  /** 后出现的已定义字段覆盖先前值；缺失字段不得擦除已经报告的计数。 */
+  function mergeAiUsageMetadata_ACU(
+    current: AiUsageMetadata_ACU | null,
+    incoming: AiUsageMetadata_ACU | null,
+  ): AiUsageMetadata_ACU | null {
+    if (!incoming) return current;
+    const merged: AiUsageMetadata_ACU = current ? { ...current } : {};
+    if (incoming.promptTokens !== undefined) merged.promptTokens = incoming.promptTokens;
+    if (incoming.completionTokens !== undefined) merged.completionTokens = incoming.completionTokens;
+    if (incoming.cachedTokens !== undefined) merged.cachedTokens = incoming.cachedTokens;
+    if (incoming.cacheWriteTokens !== undefined) merged.cacheWriteTokens = incoming.cacheWriteTokens;
+    return merged;
+  }
+
+  /** 同一响应中先合并 usage，再由 usageMetadata 的已定义字段覆盖。 */
+  function extractResponseUsageMetadata_ACU(raw: any): AiUsageMetadata_ACU | null {
+    return mergeAiUsageMetadata_ACU(
+      extractAiUsageMetadata_ACU(raw?.usage),
+      extractAiUsageMetadata_ACU(raw?.usageMetadata),
+    );
   }
 
   /**
-   * 从 OpenAI 兼容响应的 usage 字段提取统一的用量结构。
-   * @param raw 响应里的 usage 对象（chat completions 形态）
+   * 从 OpenAI、Anthropic、DeepSeek 或 Gemini 兼容 usage 对象提取统一用量。
+   * 只接受非负有限整数；字段缺失或非法时保持未报告，显式 0 会被保留。
+   * @param raw 响应里的 usage 或 usageMetadata 对象
    * @returns 统一用量；raw 不含任何有效计数时返回 null
    */
   export function extractAiUsageMetadata_ACU(raw: any): AiUsageMetadata_ACU | null {
     if (!raw || typeof raw !== 'object') return null;
-    const toCount = (value: unknown): number => (typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0);
-    const promptTokens = toCount(raw.prompt_tokens);
-    const completionTokens = toCount(raw.completion_tokens);
-    const cachedTokens = toCount(raw.prompt_tokens_details?.cached_tokens);
-    if (!promptTokens && !completionTokens && !cachedTokens) return null;
-    return { promptTokens, completionTokens, cachedTokens };
+    const promptTokens = firstUsageCount_ACU(raw.prompt_tokens, raw.input_tokens, raw.promptTokenCount);
+    const completionTokens = firstUsageCount_ACU(raw.completion_tokens, raw.output_tokens, raw.candidatesTokenCount);
+    const cachedTokens = firstUsageCount_ACU(
+      raw.prompt_tokens_details?.cached_tokens,
+      raw.input_tokens_details?.cached_tokens,
+      raw.cache_read_input_tokens,
+      raw.prompt_cache_hit_tokens,
+      raw.cachedContentTokenCount,
+    );
+    const cacheWriteTokens = firstUsageCount_ACU(
+      raw.cache_creation_input_tokens,
+      raw.cache_write_input_tokens,
+      raw.cache_write_tokens,
+    );
+
+    const usage: AiUsageMetadata_ACU = {};
+    if (promptTokens !== undefined) usage.promptTokens = promptTokens;
+    if (completionTokens !== undefined) usage.completionTokens = completionTokens;
+    if (cachedTokens !== undefined) usage.cachedTokens = cachedTokens;
+    if (cacheWriteTokens !== undefined) usage.cacheWriteTokens = cacheWriteTokens;
+    return Object.keys(usage).length ? usage : null;
   }
 
   async function parseNonStreamResponse_ACU(response: any, onUsage?: (usage: AiUsageMetadata_ACU) => void) {
     try {
         const data = await response.json();
-        const usage = extractAiUsageMetadata_ACU(data?.usage);
+        const usage = extractResponseUsageMetadata_ACU(data);
         if (usage && onUsage) {
           try { onUsage(usage); } catch { /* 用量回调异常不允许影响响应主流程。 */ }
         }
@@ -295,8 +353,8 @@ export class RetryableAiResponseError_ACU extends Error {
           const data = JSON.parse(payload);
           const delta = data?.choices?.[0]?.delta?.content;
           if (typeof delta === 'string') { result += delta; }
-          const usage = extractAiUsageMetadata_ACU(data?.usage);
-          if (usage) capturedUsage = usage;
+          const usage = extractResponseUsageMetadata_ACU(data);
+          capturedUsage = mergeAiUsageMetadata_ACU(capturedUsage, usage);
           // Anthropic SSE 分支（claude_messages 接口协议）
           if (data?.type === 'content_block_delta' && data?.delta?.type === 'text_delta' && typeof data?.delta?.text === 'string') {
             result += data.delta.text;

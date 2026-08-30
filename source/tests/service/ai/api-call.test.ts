@@ -3,6 +3,7 @@
  * AI 调用编排 单元测试
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { parse } from 'yaml';
 
 const { mockSettings, mockIsGenerateRawAvailable, mockGenerateRaw, mockSendConnectionManager, mockGetHeaders, mockHandleApiResponse, mockRateLimitSlot } = vi.hoisted(() => ({
   mockSettings: {
@@ -252,6 +253,76 @@ describe('buildCustomApiRequestBody_ACU', () => {
     );
     expect(body.custom_include_body).toBe('stop:\n  - </json>\nparallel_tool_calls: false');
     expect(body).not.toHaveProperty('parallel_tool_calls');
+  });
+
+  it('overrides.responseFormat 作为结构化对象注入 custom_include_body', () => {
+    const responseFormat = {
+      type: 'json_schema',
+      json_schema: { name: 'table_edit_ops_response', strict: true, schema: { type: 'object' } },
+    };
+    const body = buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://api.example.com', model: 'gpt-4' },
+      { responseFormat },
+    );
+    expect(parse(body.custom_include_body)).toEqual({ response_format: responseFormat });
+    // response_format 只走 custom_include_body 合并，不直接挂在请求体顶层。
+    expect(body).not.toHaveProperty('response_format');
+  });
+
+  it('overrides.responseFormat 与 YAML mapping 共存时按对象语义合并', () => {
+    const responseFormat = { type: 'json_schema', json_schema: { name: 'x', strict: true, schema: {} } };
+    const body = buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://api.example.com', model: 'gpt-4', bodyParams: 'temperature: 0.3' },
+      { responseFormat },
+    );
+    expect(parse(body.custom_include_body)).toEqual({ temperature: 0.3, response_format: responseFormat });
+  });
+
+  it('bodyParams 为 JSON 对象时仍注入插件字段，并保留用户 stream_options 子字段', () => {
+    mockSettings.streamingEnabled = true;
+    const body = buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://api.example.com', model: 'gpt-4', bodyParams: '{"stop":["</json>"],"stream_options":{"trace":true}}' },
+      { promptCacheKey: 'cache-key', includeStreamUsage: true },
+    );
+    expect(parse(body.custom_include_body)).toEqual({
+      stop: ['</json>'],
+      stream_options: { trace: true, include_usage: true },
+      prompt_cache_key: 'cache-key',
+    });
+  });
+
+  it('YAML sequence 按 SillyTavern 顺序浅合并对象项，忽略非对象项', () => {
+    const body = buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://api.example.com', model: 'gpt-4', bodyParams: '- {temperature: 0.2, metadata: {source: first}}\n- ignored\n- {temperature: 0.4, top_p: 0.6}' },
+      { promptCacheKey: 'cache-key' },
+    );
+    expect(parse(body.custom_include_body)).toEqual({
+      temperature: 0.4,
+      metadata: { source: 'first' },
+      top_p: 0.6,
+      prompt_cache_key: 'cache-key',
+    });
+  });
+
+  it('非法 YAML 或标量根节点保留用户原文并跳过插件字段', () => {
+    const invalid = 'metadata: [';
+    const invalidBody = buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://api.example.com', model: 'gpt-4', bodyParams: invalid },
+      { promptCacheKey: 'cache-key' },
+    );
+    const scalar = 'plain scalar';
+    const scalarBody = buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://api.example.com', model: 'gpt-4', bodyParams: scalar },
+      { promptCacheKey: 'cache-key' },
+    );
+    expect(invalidBody.custom_include_body).toBe(invalid);
+    expect(scalarBody.custom_include_body).toBe(scalar);
   });
 
   it('excludeBodyParams 透传，且与预设显式配置冲突的字段被自动移除', async () => {
@@ -580,5 +651,39 @@ describe('callAIWithResolvedPreset_ACU 基础路径', () => {
     mockHandleApiResponse.mockResolvedValue('   ');
     const result = await callAIWithResolvedPreset_ACU([{ role: 'user', content: '你好' }], resolved);
     expect(result).toBeNull();
+  });
+
+  it('将合成缓存键、usage 订阅与用户 stream_options 合并后发送给宿主', async () => {
+    mockSettings.streamingEnabled = true;
+    mockHandleApiResponse.mockResolvedValue('宿主边界回复');
+    mockFetch.mockResolvedValue({ ok: true });
+    const onUsage = vi.fn();
+
+    await expect(callAIWithResolvedPreset_ACU(
+      [{ role: 'user', content: '合成宿主边界验证' }],
+      {
+        apiMode: 'custom',
+        apiConfig: {
+          url: 'https://resolved.example', apiKey: '', model: 'resolved-model', useMainApi: false,
+          max_tokens: 222, temperature: 0,
+          bodyParams: '{"metadata":{"source":"synthetic"},"stream_options":{"trace":true}}',
+          excludeBodyParams: '', requestHeaders: '',
+        },
+        tavernProfile: '',
+      },
+      undefined,
+      { onUsage },
+      { promptCacheKey: 'acu-cont-v2-12345678-abcdef01-deadbeef' },
+    )).resolves.toBe('宿主边界回复');
+
+    expect(mockFetch).toHaveBeenCalledWith('/api/backends/chat-completions/generate', expect.objectContaining({
+      method: 'POST', body: expect.any(String),
+    }));
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(parse(body.custom_include_body)).toEqual({
+      metadata: { source: 'synthetic' },
+      stream_options: { trace: true, include_usage: true },
+      prompt_cache_key: 'acu-cont-v2-12345678-abcdef01-deadbeef',
+    });
   });
 });

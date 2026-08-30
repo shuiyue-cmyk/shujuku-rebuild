@@ -61,12 +61,32 @@ const DEFAULT_OUTLINE_PROMPT_ACU: readonly ContinuationPromptSegment_ACU[] = [
 ];
 
 /**
- * 提示词强刷版本谱系（二轮审查 V4-h 清理）：判定只看「!== 当前 V17」，历史版本号不参与比较，
- * 故仅保留现役常量；历史谱系（v2/v1.5-v7/v1.6-v8 agent 提示词/v1.7-v9 大纲标签化/
+ * 提示词强刷版本谱系（二轮审查 V4-h 清理 + 续写缓存链移植）：V17→V18→V19→V20 为定向迁移链，
+ * 读信封时按当前档位逐级只替换已知默认句，保留用户定制提示词；低于 V17 的历史版本号不参与比较，
+ * 一律整体刷新为默认。历史谱系（v2/v1.5-v7/v1.6-v8 agent 提示词/v1.7-v9 大纲标签化/
  * v1.8-v10 会话化/v1.9-v11 工具化/v2.0-v12 精简轮次/v2.1-v13 派工强制/v2.2-v14 总纲节奏/
  * v2.3-v15 tempo 形态/v2.4-v16 缓存前缀）折叠于此注释，防止误当缺失档位复活。
  */
 export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V17_ACU = 'spv2.5-continuation-story-layers-v17';
+/**
+ * Append-only 会话契约版本：同址重读不再动态投影旧工具消息，最新快照关系由新消息自身说明。
+ * 从 V17 升级时只定向替换已知默认句，保留用户定制提示词；更老版本继续整体刷新。
+ */
+export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V18_ACU = 'spv2.6-continuation-append-only-history-v18';
+/**
+ * System-message cache compatibility version: OpenAI-compatible Codex gateways
+ * can lift every system message into the provider instruction prefix. The main
+ * Agent therefore retains only a static root system message; all later context
+ * remains ordered user/assistant conversation content.
+ */
+export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V19_ACU = 'spv2.7-continuation-single-system-prefix-v19';
+/**
+ * Append-only runtime snapshot version: the main Agent no longer re-renders
+ * 【本回合运行时数据】as a skeleton tail segment. Changing catalogs and
+ * $BUDGET are appended as conversation snapshots so Codex-compatible
+ * gateways see a strict prefix extension between iterations.
+ */
+export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V20_ACU = 'spv2.8-continuation-runtime-snapshot-v20';
 
 /**
  * 连续高压轮上限的默认值。8 轮约等于 8000 字全程没有喘息——这才是病态；
@@ -123,7 +143,7 @@ export function buildDefaultContinuationSettings_ACU(): ContinuationSettings_ACU
     agentApiPresets: buildDefaultContinuationAgentApiPresets_ACU(),
     outlinePrompt: buildDefaultContinuationOutlinePrompt_ACU(),
     agentPrompts: buildDefaultContinuationAgentPrompts_ACU(),
-    promptForceDefaultVersion: CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V17_ACU,
+    promptForceDefaultVersion: CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V20_ACU,
   };
 }
 

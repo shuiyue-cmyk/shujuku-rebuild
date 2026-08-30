@@ -110,6 +110,35 @@ describe('applyExcludeRulesToText_ACU', () => {
     });
     expect(result).toBe('前缀后缀');
   });
+  it('同一标签的多个并列块全部删除', () => {
+    const text = '前缀<a>内容一</a>中间<a>内容二</a>后缀';
+    const result = applyExcludeRulesToText_ACU(text, {
+      excludeRules: [{ start: '<a', end: '</a>' }],
+    });
+    expect(result).toBe('前缀中间后缀');
+  });
+  it('同一标签嵌套时删除完整外层范围', () => {
+    const text = '前缀<a>外层<a>内层</a>尾部</a>后缀';
+    const result = applyExcludeRulesToText_ACU(text, {
+      excludeRules: [{ start: '<a', end: '</a>' }],
+    });
+    expect(result).toBe('前缀后缀');
+  });
+  it('重复标签大小写混合时全部删除', () => {
+    const text = '前缀<A>内容一</a>中间<a>内容二</A>后缀';
+    const result = applyExcludeRulesToText_ACU(text, {
+      excludeRules: [{ start: '<a', end: '</a>' }],
+    });
+    expect(result).toBe('前缀中间后缀');
+  });
+  it('保留未配对边界并只删除完整配对', () => {
+    const text = '孤立结束</a>前缀<a>完整内容</a>后缀<a>孤立开始';
+    const result = applyExcludeRulesToText_ACU(text, {
+      excludeRules: [{ start: '<a', end: '</a>' }],
+    });
+    expect(result).toBe('孤立结束</a>前缀后缀<a>孤立开始');
+  });
+
 });
 
 describe('applyContextTagFilters_ACU', () => {

@@ -235,8 +235,10 @@ describe('主 Agent 会话记录', () => {
     await h.planner.plan(h.request);
 
     const kinds = h.conversation().messages.map(message => message.kind);
-    expect(kinds).toEqual(['turn', 'agent', 'tool', 'agent']);
-    const [announcement, firstAction, toolResult] = h.conversation().messages;
+    expect(kinds).toEqual(['turn', 'runtime', 'agent', 'tool', 'runtime', 'agent']);
+    const [announcement, firstSnapshot, firstAction, toolResult] = h.conversation().messages;
+    expect(firstSnapshot.kind).toBe('runtime');
+    expect(firstSnapshot.text).toContain('本轮预算状态');
     expect(announcement.text).toContain('开始新的一轮规划：第 2 阶段 · 第 2/6 轮');
     expect(firstAction.digest).toBe('派工 1 项');
     expect(firstAction.text).toContain('mainline-planner');
@@ -268,7 +270,7 @@ describe('主 Agent 会话记录', () => {
     const userIndex = findIndex_ACU(first, '这一轮别急着揭穿守门人');
     expect(first[userIndex].role).toBe('user');
     expect(first[userIndex].content.startsWith('【用户】')).toBe(true);
-    // 运行时证据整体在会话记录之后（每迭代必变的部分放尾部保前缀稳定），用户消息在会话内部按发生顺序排在换轮通告之前。
+    // 运行时快照追加在会话尾部，用户消息仍按发生顺序排在换轮通告之前。
     expect(userIndex).toBeLessThan(findIndex_ACU(first, '本轮预算状态'));
     expect(userIndex).toBeLessThan(findIndex_ACU(first, '开始新的一轮规划'));
   });
@@ -388,8 +390,31 @@ describe('主 Agent read/search 工具批次', () => {
     expect(toolMessages[0].readKey).toBe('$HOOKS_LEDGER');
     expect(toolMessages[0].text).toContain('伏笔账本');
     expect(toolMessages[1].text).toContain('不再重注');
+    expect(toolMessages.every(message => !message.text.includes('最新快照'))).toBe(true);
     // 第二次迭代读到第一次的调阅内容。
     expect(h.mainCalls[1].some(message => message.content.includes('伏笔账本'))).toBe(true);
+  });
+
+  it('资料变化后重读同一地址时，只在新工具消息自身标记最新快照', async () => {
+    const h = harness_ACU({
+      mainReplies: [
+        '{"action":"read","reads":["$OUTLINE_WINDOW"]}',
+        '{"action":"edit_outline","thought":"更新轮次目标","edits":[{"op":"set_turn_goal","turnId":"turn-2","goal":"守门人先露破绽"}]}',
+        '{"action":"read","reads":["$OUTLINE_WINDOW"]}',
+        '{"action":"finalize","instruction":"按最新快照写"}',
+      ],
+      applyOutlineEdits: () => ({ summary: '已按工具编辑改写大纲（1 处）' }),
+    });
+
+    const result = await h.planner.plan(h.request);
+    expect(result.instruction).toBe('按最新快照写');
+
+    const reads = h.conversation().messages.filter(
+      message => message.kind === 'tool' && message.readKey === '$OUTLINE_WINDOW',
+    );
+    expect(reads).toHaveLength(2);
+    expect(reads[0].text).not.toContain('最新快照');
+    expect(reads[1].text).toContain('最新快照');
   });
 
   it('工具批次超过 maxReads 上限时回灌用尽提示，不再执行读取', async () => {
@@ -439,7 +464,7 @@ describe('预算渲染', () => {
 });
 
 describe('主 Agent 提示词装配', () => {
-  it('小说正文在前、自己的会话记录在锚点位置、每迭代必变的运行时证据殿后，预填充收尾', async () => {
+  it('小说正文在前、自己的会话记录在锚点位置、运行时快照落在历史里、预填充收尾', async () => {
     const h = harness_ACU({ mainReplies: ['{"action":"finalize","instruction":"本轮指导"}'] });
     await h.planner.plan(h.request);
 
@@ -450,11 +475,28 @@ describe('主 Agent 提示词装配', () => {
     expect(messages[0].role).toBe('system');
     expect(storyIndex).toBeGreaterThan(0);
     expect(historyIndex).toBeGreaterThan(storyIndex);
-    // 运行时证据（$BUDGET 等）每次迭代都变，放在会话记录之后，前缀（规则组+目录+历史）才能在迭代间字节级稳定。
+    // 运行时快照是会话消息：排在历史通告之后、预填充之前，骨架本身不再重算这段。
     expect(runtimeIndex).toBeGreaterThan(historyIndex);
+    expect(messages[runtimeIndex].content.startsWith('【运行时快照】')).toBe(true);
     expect(lastMessage_ACU(messages).role).toBe('assistant');
     expect(lastMessage_ACU(messages).content.endsWith('"thought": "')).toBe(true);
     expect(messages.some(message => message.content.includes('$HISTORY_ANCHOR'))).toBe(false);
+  });
+
+  it('相邻迭代只追加不改写已发出的前缀', async () => {
+    const h = harness_ACU({
+      mainReplies: [
+        '{"action":"read","reads":["$OUTLINE_WINDOW"]}',
+        '{"action":"finalize","instruction":"本轮指导"}',
+      ],
+    });
+    await h.planner.plan(h.request);
+    expect(h.mainCalls.length).toBeGreaterThanOrEqual(2);
+    const first = h.mainCalls[0];
+    const second = h.mainCalls[1];
+    const firstPrefix = first.slice(0, -1);
+    expect(second.slice(0, firstPrefix.length)).toEqual(firstPrefix);
+    expect(second.filter(message => message.content.includes('【本回合运行时数据】')).length).toBeGreaterThanOrEqual(2);
   });
 
   it('运行时证据带上未结算区间、子代理目录与资料模块目录', async () => {

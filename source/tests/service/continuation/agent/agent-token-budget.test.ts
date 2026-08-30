@@ -58,6 +58,7 @@ describe('交接报告', () => {
       { kind: 'agent', text: '{}', digest: '派工 2 项', turnKey: 'turn-1' },
       { kind: 'agent', text: '{}', digest: '交付写作指导', turnKey: 'turn-1' },
       { kind: 'tool', text: '结果正文', digest: 'mainline-planner成功', turnKey: 'turn-1' },
+      { kind: 'runtime', text: '【本回合运行时数据】', digest: '运行时快照', turnKey: 'turn-1' },
     ]);
     const report = buildAgentHandoffReport_ACU(snapshot.messages);
 
@@ -67,6 +68,7 @@ describe('交接报告', () => {
     expect(report).toContain('用户要求：别 揭穿 守门人');
     expect(report).toContain('我的动作：派工 2 项 → 交付写作指导');
     expect(report).toContain('运行时结果：mainline-planner成功');
+    expect(report).toContain('运行时快照：运行时快照');
     expect(buildAgentHandoffReport_ACU([])).toBe('');
   });
 });

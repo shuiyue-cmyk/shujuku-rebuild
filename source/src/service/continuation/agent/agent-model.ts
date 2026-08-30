@@ -27,10 +27,11 @@ export const AGENT_CONVERSATION_SEGMENT_SCHEMA_VERSION_ACU = 2 as const;
  * - user：人类在 Agent 会话里的输入（初始要求、中途插话、重规划说明）
  * - agent：主 Agent 某次迭代的原始输出（含 thought 与动作 JSON）
  * - tool：运行时回灌给主 Agent 的结果或拒绝原因
+ * - runtime：目录与状态快照（只在内容相对上一条快照变化时追加，不替换旧快照）
  * - turn：新轮次开始通告（相当于人类下发新任务）
  * - handoff：token 预算压缩时生成的交接报告
  */
-export const AGENT_CONVERSATION_MESSAGE_KINDS_ACU = ['user', 'agent', 'tool', 'turn', 'handoff'] as const;
+export const AGENT_CONVERSATION_MESSAGE_KINDS_ACU = ['user', 'agent', 'tool', 'runtime', 'turn', 'handoff'] as const;
 export type AgentConversationMessageKind_ACU = typeof AGENT_CONVERSATION_MESSAGE_KINDS_ACU[number];
 
 /** 单条会话消息。digest 是短标签，供 UI 标题与交接报告使用，避免二次解析 text。 */
@@ -42,7 +43,7 @@ export interface AgentConversationMessage_ACU {
   /** 产生该消息时的大纲游标指纹（stageId#revision#turnId），用于按轮分组与压缩。 */
   turnKey: string;
   at: number;
-  /** 工具消息专用：本条承载的读取地址（如 $STORY_RANGE:12-15）。同地址重读时旧条目在渲染层投影为过期占位。 */
+  /** 工具消息专用：本条承载的读取地址（如 $STORY_RANGE:12-15），用于本轮读取去重、重读识别与压缩元数据。 */
   readKey?: string;
 }
 

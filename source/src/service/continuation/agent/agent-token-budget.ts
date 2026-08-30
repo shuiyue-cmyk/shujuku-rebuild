@@ -189,10 +189,12 @@ export function buildAgentHandoffReport_ACU(messages: readonly AgentConversation
     const announcements = group.filter(message => message.kind === 'turn').map(message => quote_ACU(message.digest || message.text));
     const actions = group.filter(message => message.kind === 'agent').map(message => message.digest || '（未标注动作）');
     const results = group.filter(message => message.kind === 'tool').map(message => message.digest).filter(Boolean);
+    const snapshots = group.filter(message => message.kind === 'runtime').map(message => message.digest).filter(Boolean);
     if (announcements.length) lines.push(`  轮次：${announcements.join('；')}`);
     if (instructions.length) lines.push(`  用户要求：${instructions.join('；')}`);
     if (actions.length) lines.push(`  我的动作：${actions.join(' → ')}`);
     if (results.length) lines.push(`  运行时结果：${results.join('；')}`);
+    if (snapshots.length) lines.push(`  运行时快照：${snapshots.join('；')}`);
     if (!lines.length) continue;
     sections.push(`- ${group[0].turnKey || '未编号轮次'}\n${lines.join('\n')}`);
   }

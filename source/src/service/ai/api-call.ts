@@ -1,6 +1,7 @@
 // service/ai/api-call.ts — AI 调用编排（剧情推进用）
 // 从 04_shared_helpers.js 迁入
 
+import { parse as parseYaml_ACU } from 'yaml';
 import { handleApiResponse_ACU, extractAiUsageMetadata_ACU, type AiUsageMetadata_ACU } from './prompt-builder';
 export type { AiUsageMetadata_ACU };
 import { settings_ACU } from '../runtime/state-manager';
@@ -9,6 +10,84 @@ import { assertSafeHttpEndpoint_ACU, logDebug_ACU, logWarn_ACU } from '../../sha
 import { resolveApiConfigByPreset_ACU } from '../settings/api-preset-service';
 import { acquirePresetRateLimitSlot_ACU } from './preset-rate-limiter';
 import { isDebugLogEnabled } from '../../shared/log-buffer';
+
+type CustomIncludeBodyRootType_ACU = 'empty' | 'mapping' | 'sequence' | 'scalar' | 'invalid';
+
+export interface CustomIncludeBodyDiagnostic_ACU {
+  reason: 'none' | 'parse_error' | 'unsupported_root' | 'stream_options_replaced';
+  rootType: CustomIncludeBodyRootType_ACU;
+}
+
+function isRecord_ACU(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function copyRecordWithoutPrototype_ACU(value: Record<string, unknown>): Record<string, unknown> {
+  const copy = Object.create(null) as Record<string, unknown>;
+  for (const key of Object.keys(value)) copy[key] = value[key];
+  return copy;
+}
+
+/**
+ * 组合 SillyTavern 的 custom_include_body。JSON 是合法 YAML；输出 JSON 可避免把对象字段
+ * 再拼成不合法的混合 YAML，同时与宿主 yaml.parse 后的浅合并语义保持一致。
+ */
+export function composeCustomIncludeBody_ACU(
+  userBodyParams: string,
+  pluginFields: Record<string, unknown>,
+): { value: string; diagnostic: CustomIncludeBodyDiagnostic_ACU } {
+  const pluginKeys = Object.keys(pluginFields);
+  if (pluginKeys.length === 0) {
+    return { value: userBodyParams, diagnostic: { reason: 'none', rootType: userBodyParams.trim() ? 'scalar' : 'empty' } };
+  }
+
+  const trimmed = userBodyParams.trim();
+  if (!trimmed) {
+    return {
+      value: JSON.stringify(copyRecordWithoutPrototype_ACU(pluginFields)),
+      diagnostic: { reason: 'none', rootType: 'empty' },
+    };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = parseYaml_ACU(userBodyParams);
+  } catch {
+    return { value: userBodyParams, diagnostic: { reason: 'parse_error', rootType: 'invalid' } };
+  }
+
+  const merged = Object.create(null) as Record<string, unknown>;
+  let rootType: CustomIncludeBodyRootType_ACU;
+  if (Array.isArray(parsed)) {
+    rootType = 'sequence';
+    for (const item of parsed) {
+      if (!isRecord_ACU(item)) continue;
+      for (const key of Object.keys(item)) merged[key] = item[key];
+    }
+  } else if (isRecord_ACU(parsed)) {
+    rootType = 'mapping';
+    for (const key of Object.keys(parsed)) merged[key] = parsed[key];
+  } else {
+    return { value: userBodyParams, diagnostic: { reason: 'unsupported_root', rootType: 'scalar' } };
+  }
+
+  let diagnostic: CustomIncludeBodyDiagnostic_ACU = { reason: 'none', rootType };
+  for (const key of pluginKeys) {
+    if (key === 'stream_options' && isRecord_ACU(pluginFields[key])) {
+      const current = merged[key];
+      if (current !== undefined && !isRecord_ACU(current)) {
+        diagnostic = { reason: 'stream_options_replaced', rootType };
+      }
+      merged[key] = {
+        ...(isRecord_ACU(current) ? copyRecordWithoutPrototype_ACU(current) : {}),
+        ...copyRecordWithoutPrototype_ACU(pluginFields[key]),
+      };
+      continue;
+    }
+    merged[key] = pluginFields[key];
+  }
+  return { value: JSON.stringify(merged), diagnostic };
+}
 
 function normalizeExcludeBodyParamsForSillyTavern_ACU(raw: any): string {
   if (typeof raw !== 'string') return '';
@@ -80,35 +159,33 @@ export function buildCustomApiRequestBody_ACU(
     ? opts.nonPrefillSupport === true
     : settings_ACU.nonPrefillSupport === true;
 
-  // 追加缓存/用量/严格JSON相关字段走 custom_include_body（宿主会把这段 YAML 合并进上游请求体）。
-  // 用户自配的 bodyParams 可能是 JSON 流式写法（{ 或 [ 开头），逐行追加键会产生非法 YAML，
-  // 此时跳过注入，绝不破坏用户既有配置。
+  // 插件字段与用户 bodyParams 先按 SillyTavern 的 YAML 解析规则结构化组合，再作为
+  // custom_include_body 交给宿主合并。无法安全解析时保留用户原文并跳过插件字段。
   const requestWantsStream = effectiveApiConfig.streamingEnabled !== undefined
     ? effectiveApiConfig.streamingEnabled === true
     : settings_ACU.streamingEnabled === true;
   const userBodyParams = String(effectiveApiConfig.bodyParams || '');
-  const extraIncludeLines: string[] = [];
-  // 注入上游请求体的 prompt_cache_key（OpenAI 兼容缓存路由）。仅允许 [A-Za-z0-9_-]，防止破坏 YAML 注入通道。
+  const pluginFields = Object.create(null) as Record<string, unknown>;
+  // 注入上游请求体的 prompt_cache_key（OpenAI 兼容缓存路由）。仅允许 [A-Za-z0-9_-]，防止破坏注入通道。
   if (opts.promptCacheKey && /^[A-Za-z0-9_-]+$/.test(opts.promptCacheKey)) {
-    extraIncludeLines.push(`prompt_cache_key: ${opts.promptCacheKey}`);
+    pluginFields.prompt_cache_key = opts.promptCacheKey;
   }
   // 流式请求时注入 stream_options.include_usage，让流末尾下发 usage 统计 chunk。非流式请求忽略。
   if (opts.includeStreamUsage && requestWantsStream) {
-    extraIncludeLines.push('stream_options: {"include_usage": true}');
+    pluginFields.stream_options = { include_usage: true };
   }
   // 注入上游请求体的 response_format（如严格 JSON 填表的 json_schema）。
-  // JSON 是 YAML 的子集，序列化为单行后走 custom_include_body 合并进上游请求体；
+  // JSON 是 YAML 的子集，结构化组合后走 custom_include_body 合并进上游请求体；
   // 后端不支持时用户可通过 excludeBodyParams 填 response_format 剔除。
   if (opts.responseFormat && typeof opts.responseFormat === 'object') {
-    extraIncludeLines.push(`response_format: ${JSON.stringify(opts.responseFormat)}`);
+    pluginFields.response_format = opts.responseFormat;
   }
-  const userBodyIsFlowStyle = /^[{[]/.test(userBodyParams.trim());
-  if (extraIncludeLines.length && userBodyIsFlowStyle) {
-    logDebug_ACU('[buildCustomApiRequestBody] bodyParams 为 JSON 流式写法，跳过 prompt_cache_key/stream_options 注入');
+  const composedIncludeBody = composeCustomIncludeBody_ACU(userBodyParams, pluginFields);
+  if (composedIncludeBody.diagnostic.reason === 'parse_error' || composedIncludeBody.diagnostic.reason === 'unsupported_root') {
+    logWarn_ACU('[buildCustomApiRequestBody] 跳过插件请求体字段', composedIncludeBody.diagnostic);
+  } else if (composedIncludeBody.diagnostic.reason === 'stream_options_replaced') {
+    logWarn_ACU('[buildCustomApiRequestBody] 用户 stream_options 不是对象，已由插件对象替换', composedIncludeBody.diagnostic);
   }
-  const includeBody = extraIncludeLines.length && !userBodyIsFlowStyle
-    ? [userBodyParams.trim(), ...extraIncludeLines].filter(Boolean).join('\n')
-    : userBodyParams;
 
   const body: Record<string, any> = {
     // 统一将 messages 的 role 归一为小写（system / user / assistant）。
@@ -169,7 +246,7 @@ export function buildCustomApiRequestBody_ACU(
     proxy_password: '',
     custom_url: effectiveApiConfig.url,
     custom_include_headers: headers,
-    custom_include_body: includeBody,
+    custom_include_body: composedIncludeBody.value,
     custom_exclude_body: sanitizeExcludeBodyForPresetFields_ACU(effectiveApiConfig.excludeBodyParams, effectiveApiConfig),
   };
 
