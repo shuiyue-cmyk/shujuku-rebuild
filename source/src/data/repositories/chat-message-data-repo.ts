@@ -1518,7 +1518,10 @@ export function patchIsolatedTagMetadata_ACU(
     patch: Partial<Pick<IsolationTagData_ACU, 'summaryVectorIndexState' | 'summaryVectorIndexManifest'>>,
     options?: { expectedIndexId?: string },
 ): { changed: boolean; tagData: IsolationTagData_ACU | null } {
-    if (!msg || !isolationKey) return { changed: false, tagData: null };
+    // isolationKey==null 才拒绝：'' 是数据隔离关闭时的合法默认槽（getCurrentIsolationKey_ACU 缺省），
+    // 旧 !isolationKey 守卫会把默认槽的全部向量指针写入/删除静默 no-op——
+    // 指针永不落盘导致每轮楼层更新全量重嵌重建，删除路径恒报「没有可删除的索引」（见 readIsolatedTagData 同文件 '' 直读口径）。
+    if (!msg || isolationKey == null) return { changed: false, tagData: null };
     if (!isObjectRecord_ACU(patch)) {
         const error = new Error(
             `[metadata-patch] patch 必须是对象：${ISOLATED_TAG_METADATA_PATCH_FORBIDDEN_ACU} isolationKey=${String(isolationKey)}`,

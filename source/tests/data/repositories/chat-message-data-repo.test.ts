@@ -1876,9 +1876,16 @@ describe('patchIsolatedTagMetadata_ACU', () => {
     _acu_storage_mode: 'checkpoint',
   });
 
-  it('null msg / 空 isolationKey 返回 no-op', () => {
+  it('null msg 返回 no-op；空 isolationKey 是合法默认槽，照常写入', () => {
     expect(patchIsolatedTagMetadata_ACU(null, 'k', {})).toEqual({ changed: false, tagData: null });
-    expect(patchIsolatedTagMetadata_ACU({}, '', {})).toEqual({ changed: false, tagData: null });
+    // '' 是数据隔离关闭时的默认槽（getCurrentIsolationKey_ACU 缺省）：读侧 readIsolatedTagData 对 '' 直读，
+    // 写侧若 no-op 则向量指针永不落盘——每轮楼层更新全量重建 + 删除报「没有可删除的索引」的根因。
+    const msg: any = {};
+    const result = patchIsolatedTagMetadata_ACU(msg, '', {
+      summaryVectorIndexState: validState('idx-default-slot'),
+    });
+    expect(result.changed).toBe(true);
+    expect(msg.TavernDB_ACU_IsolatedData[''].summaryVectorIndexState.indexId).toBe('idx-default-slot');
   });
 
   it('无槽新消息：纯 metadata 写入成功，tracking 字段不存在且绝不为 {}', () => {
