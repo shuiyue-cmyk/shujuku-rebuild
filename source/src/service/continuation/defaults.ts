@@ -60,57 +60,11 @@ const DEFAULT_OUTLINE_PROMPT_ACU: readonly ContinuationPromptSegment_ACU[] = [
   },
 ];
 
-export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_ACU = 'spv1.0-continuation-prompt-pseudo-role-v2';
-export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V7_ACU = 'spv1.5-continuation-prompt-pseudo-role-v7';
-/** Agent 续写链路上线版本。旧版本一律强制刷新为 Agent 提示词组。 */
-export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V8_ACU = 'spv1.6-continuation-agent-prompt-v8';
-/** 大纲标签化版本：大纲提示词改为标签口径并移除 JSON 预填充。旧版本一律强制刷新。 */
-export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V9_ACU = 'spv1.7-continuation-outline-tags-v9';
 /**
- * Agent 会话化版本：正文改由 $STORY_TEXT 独立摘取，$HISTORY_ANCHOR 承载主 Agent 自己的会话，
- * $TOOL_RESULTS 退役。旧提示词描述的上下文排布与运行时不再一致，必须强制刷新。
- */
-export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V10_ACU = 'spv1.8-continuation-agent-conversation-v10';
-/**
- * Agent 工具化版本：固定资料注入改为目录+状态骨架，主/子代理获得 read/search 工具与 token 门禁，
- * needMore 与读写授权退役。旧提示词描述的协议与运行时不再一致，必须强制刷新。
- */
-export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V11_ACU = 'spv1.9-continuation-agent-tools-v11';
-/**
- * 精简轮次版本：大纲轮承载量硬约束（单轮 1000-1500 字）、finalize 紧凑字段化骨架、
- * 长期约束改增量登记（add/retire）。旧提示词描述的约束协议与运行时不再一致，必须强制刷新。
- */
-export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V12_ACU = 'spv2.0-continuation-lean-turns-v12';
-/**
- * 伏笔派工强制化版本：主 Agent 获得 read/search 后出现「主会话直接安排伏笔、跳过派工」的退化，
- * 默认提示词改为结算先行（未结算历史必须先派 hook-cognition-maintainer）与策划派工强制
- * （每轮至少派 mainline-planner、伏笔操作必须来自 beat-planner 建议）。旧提示词缺少这些
- * 约束会让伏笔账本停止更新，必须强制刷新。
- */
-export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V13_ACU = 'spv2.1-continuation-hook-delegation-v13';
-/**
- * 故事总纲与节奏控制版本：新增 $STORY_ARC 总纲模块与 arc-architect 子代理，大纲轮次带 pacing
- * 标签并受配比硬校验，大纲提示词补上阶段容量锚与节奏配比条款。旧提示词既缺新提示词组，
- * 也仍带着「每个节点都必须升级障碍」这类把日常轮结构性排除掉的条款，必须强制刷新。
- */
-export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V14_ACU = 'spv2.2-continuation-story-arc-pacing-v14';
-/**
- * 阶段节奏形态版本：V14 的节奏规则（每阶段固定低压占比 + 连续高压不超过 3 轮）在数学上只有
- * 锯齿解，读者感知到的是每三四轮一次的固定喘息，而且所有阶段同构。改为阶段级 tempo 形态
- * 决定疏密、跨阶段连续高压上限兜底。旧提示词写死了「连续高压不超过三轮」，必须强制刷新。
- */
-export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V15_ACU = 'spv2.3-continuation-stage-tempo-v15';
-/**
- * 缓存前缀布局版本：主 Agent 提示词把每次迭代必变的【本回合运行时数据】段（$BUDGET 等）
- * 从会话历史锚点之前移到之后，让「规则组 + 正文目录 + 会话历史」成为字节级稳定的前缀，
- * 命中厂商的 prompt 缓存。旧提示词的段排布会让缓存在运行时数据段处断开，必须强制刷新。
- */
-export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V16_ACU = 'spv2.4-continuation-cache-prefix-v16';
-/**
- * 三层正文注入版本：正文改为 $STORY_OVERVIEW（事件概览，纪要召回精化）+ $STORY_TAIL（尾部
- * 全文楼层）+ $STORY_CATALOG（纯楼层索引）三正交占位符；世界书目录改 token 标注并新增
- * $WORLDBOOK_HITS 命中提示；子代理按角色矩阵固定注入；$CHRONICLES / $HISTORY_RECENT /
- * $RECENT_STORY / 阶段纪要链全部退役。旧提示词描述的上下文排布与运行时不再一致，必须强制刷新。
+ * 提示词强刷版本谱系（二轮审查 V4-h 清理）：判定只看「!== 当前 V17」，历史版本号不参与比较，
+ * 故仅保留现役常量；历史谱系（v2/v1.5-v7/v1.6-v8 agent 提示词/v1.7-v9 大纲标签化/
+ * v1.8-v10 会话化/v1.9-v11 工具化/v2.0-v12 精简轮次/v2.1-v13 派工强制/v2.2-v14 总纲节奏/
+ * v2.3-v15 tempo 形态/v2.4-v16 缓存前缀）折叠于此注释，防止误当缺失档位复活。
  */
 export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V17_ACU = 'spv2.5-continuation-story-layers-v17';
 

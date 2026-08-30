@@ -362,4 +362,17 @@ export function _set_isAutoUpdatingCard_ACU(v: any) { isAutoUpdatingCard_ACU = v
 export function _set_manualExtraHint_ACU(v: any) { manualExtraHint_ACU = v; }
 export function _set_wasStoppedByUser_ACU(v: any) { wasStoppedByUser_ACU = v; }
 export function _set_autoFillDebounceTimer_ACU(v: any) { autoFillDebounceTimer_ACU = v; }
+/**
+ * 作废在途的自动填表防抖定时器。
+ * 背景：定时器只在同类事件（下一次 handleNewMessageDebounced）里被 clearTimeout 覆盖，
+ * CHAT_CHANGED 链不清它——切聊天后 500ms 窗口内到期的旧定时器会在新聊天上跑填表，
+ * 且旧事件缺 message_id 时没有 intent 可校验，只能落到「末楼 - 1」兜底。CHAT_CHANGED
+ * 同步段必须显式清一次。
+ */
+export function clearAutoFillDebounce_ACU(): void {
+  if (autoFillDebounceTimer_ACU !== null && autoFillDebounceTimer_ACU !== undefined) {
+    try { clearTimeout(autoFillDebounceTimer_ACU); } catch { /* 宿主计时器句柄异常时忽略 */ }
+    _set_autoFillDebounceTimer_ACU(null);
+  }
+}
 export function _set_chatMutationDebounceTimer_ACU(v: any) { chatMutationDebounceTimer_ACU = v; }

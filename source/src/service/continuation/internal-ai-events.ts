@@ -53,10 +53,6 @@ export function settleContinuationInternalAiRequest_ACU(requestId: string): void
   else record.expiresAt = Date.now() + INTERNAL_REQUEST_TTL_MS_ACU;
 }
 
-export function cancelContinuationInternalAiRequest_ACU(requestId: string): void {
-  requestsById_ACU.delete(requestId);
-}
-
 export function bindContinuationInternalAiGenerationStarted_ACU(generationSeq: number): ContinuationInternalAiRequestIdentity_ACU | null {
   purgeExpiredRequests_ACU();
   const candidates = [...requestsById_ACU.values()].filter(record => record.mainApiInvocationActive && record.generationSeq === null);

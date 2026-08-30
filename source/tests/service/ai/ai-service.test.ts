@@ -23,10 +23,15 @@ vi.mock('../../../src/data/gateways/ai-gateway', () => ({
   getHostRequestHeaders_ACU: mockGetHostRequestHeaders,
 }));
 
-vi.mock('../../../src/shared/utils', () => ({
-  logDebug_ACU: mockLogDebug,
-  assertSafeHttpEndpoint_ACU: vi.fn(),
-}));
+// log 打点 mock 防噪；assertSafeHttpEndpoint_ACU 保留真身——
+// fetchAvailableModels_ACU 直接用传入 apiUrl 过 SSRF 守卫（V4-b：vi.fn() mock 曾让守卫永不生效）。
+vi.mock('../../../src/shared/utils', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/shared/utils')>();
+  return {
+    ...actual,
+    logDebug_ACU: mockLogDebug,
+  };
+});
 
 import { fetchAvailableModels_ACU } from '../../../src/service/ai/ai-service';
 
@@ -45,6 +50,27 @@ describe('fetchAvailableModels_ACU', () => {
     expect(result.error).toContain('请输入API基础URL');
   });
 
+  it('SSRF 守卫真实生效：远程 http:// 端点被拒绝且不发起 fetch', async () => {
+    const result = await fetchAvailableModels_ACU('http://api.test', 'key');
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('仅允许 localhost');
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('SSRF 守卫真实生效：https 私网 IPv4 被拒绝且不发起 fetch', async () => {
+    const result = await fetchAvailableModels_ACU('https://10.0.0.5/v1', 'key');
+    expect(result.success).toBe(false);
+    expect(result.success === false && result.error).toBeTruthy();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('SSRF 守卫真实生效：协议相对 URL 被拒绝', async () => {
+    const result = await fetchAvailableModels_ACU('//api.test/v1', 'key');
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('协议相对');
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it('正常返回模型列表（models 数组格式）', async () => {
     mockFetch.mockResolvedValue({
       ok: true,
@@ -53,7 +79,7 @@ describe('fetchAvailableModels_ACU', () => {
       }),
     });
 
-    const result = await fetchAvailableModels_ACU('http://api.test', 'key123');
+    const result = await fetchAvailableModels_ACU('https://api.test', 'key123');
     expect(result.success).toBe(true);
     expect(result.models).toEqual(['gpt-4', 'gpt-3.5-turbo']);
   });
@@ -66,7 +92,7 @@ describe('fetchAvailableModels_ACU', () => {
       }),
     });
 
-    const result = await fetchAvailableModels_ACU('http://api.test', '');
+    const result = await fetchAvailableModels_ACU('https://api.test', '');
     expect(result.success).toBe(true);
     expect(result.models).toEqual(['claude-3', 'claude-2']);
   });
@@ -77,7 +103,7 @@ describe('fetchAvailableModels_ACU', () => {
       json: async () => ['model-a', 'model-b'],
     });
 
-    const result = await fetchAvailableModels_ACU('http://api.test', 'key');
+    const result = await fetchAvailableModels_ACU('https://api.test', 'key');
     expect(result.success).toBe(true);
     expect(result.models).toEqual(['model-a', 'model-b']);
   });
@@ -88,7 +114,7 @@ describe('fetchAvailableModels_ACU', () => {
       json: async () => ({ models: [] }),
     });
 
-    const result = await fetchAvailableModels_ACU('http://api.test', 'key');
+    const result = await fetchAvailableModels_ACU('https://api.test', 'key');
     expect(result.success).toBe(false);
     expect(result.error).toContain('列表为空');
   });
@@ -99,7 +125,7 @@ describe('fetchAvailableModels_ACU', () => {
       json: async () => ({ unexpected: 'format' }),
     });
 
-    const result = await fetchAvailableModels_ACU('http://api.test', 'key');
+    const result = await fetchAvailableModels_ACU('https://api.test', 'key');
     expect(result.success).toBe(false);
     expect(result.error).toContain('未能解析');
   });
@@ -112,7 +138,7 @@ describe('fetchAvailableModels_ACU', () => {
       text: async () => JSON.stringify({ error: 'Invalid API key' }),
     });
 
-    const result = await fetchAvailableModels_ACU('http://api.test', 'bad_key');
+    const result = await fetchAvailableModels_ACU('https://api.test', 'bad_key');
     expect(result.success).toBe(false);
     expect(result.error).toContain('401');
     expect(result.error).toContain('Invalid API key');
@@ -126,7 +152,7 @@ describe('fetchAvailableModels_ACU', () => {
       text: async () => 'Server crashed',
     });
 
-    const result = await fetchAvailableModels_ACU('http://api.test', 'key');
+    const result = await fetchAvailableModels_ACU('https://api.test', 'key');
     expect(result.success).toBe(false);
     expect(result.error).toContain('500');
     expect(result.error).toContain('Server crashed');
@@ -138,7 +164,7 @@ describe('fetchAvailableModels_ACU', () => {
       json: async () => ({ models: [{ id: 'test-model' }] }),
     });
 
-    await fetchAvailableModels_ACU('http://api.test', 'my_key');
+    await fetchAvailableModels_ACU('https://api.test', 'my_key');
 
     expect(mockFetch).toHaveBeenCalledWith(
       '/api/backends/chat-completions/status',
@@ -154,7 +180,7 @@ describe('fetchAvailableModels_ACU', () => {
     // 验证 body 中包含 apiUrl 和 apiKey
     const callArgs = mockFetch.mock.calls[0][1];
     const body = JSON.parse(callArgs.body);
-    expect(body.custom_url).toBe('http://api.test');
+    expect(body.custom_url).toBe('https://api.test');
     expect(body.custom_include_headers).toContain('my_key');
   });
 
@@ -164,7 +190,7 @@ describe('fetchAvailableModels_ACU', () => {
       json: async () => ({ models: [{ id: 'test-model' }] }),
     });
 
-    await fetchAvailableModels_ACU('http://api.test', '');
+    await fetchAvailableModels_ACU('https://api.test', '');
 
     const callArgs = mockFetch.mock.calls[0][1];
     const body = JSON.parse(callArgs.body);
@@ -185,7 +211,7 @@ describe('fetchAvailableModels_ACU', () => {
       }),
     });
 
-    const result = await fetchAvailableModels_ACU('http://api.test', 'key');
+    const result = await fetchAvailableModels_ACU('https://api.test', 'key');
     expect(result.success).toBe(true);
     expect(result.models).toEqual(['valid-model', 'another-valid']);
   });

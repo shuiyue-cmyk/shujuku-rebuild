@@ -184,13 +184,19 @@ export async function listAllHostChatNames_ACU(): Promise<Set<string> | null> {
     try {
         const groups = (globalThis as any).SillyTavern?.getContext?.()?.groups
             ?? (SillyTavern_API_ACU as any)?.groups;
-        if (Array.isArray(groups)) {
-            for (const group of groups) {
-                const groupChats = Array.isArray(group?.chats) ? group.chats : [];
-                for (const chatId of groupChats) {
-                    const normalized = cleanChatName_ACU(String(chatId || ''));
-                    if (normalized) names.add(normalized);
-                }
+        // fail-safe 契约：群组列表不可用（老宿主 / 派生 context 缺 groups 字段）时
+        // 枚举必然残缺，必须返回 null 让调用方跳过删除；否则存活群组聊天会被误判为
+        // 孤儿，其向量外置文件会被聊天删除 GC 误删。
+        // 注意：groups 是数组但为空属合法「无群组聊天」，仍应返回完整枚举结果。
+        if (!Array.isArray(groups)) {
+            logWarn_ACU('[ChatGateway] groups 列表不可用，无法枚举群组聊天');
+            return null;
+        }
+        for (const group of groups) {
+            const groupChats = Array.isArray(group?.chats) ? group.chats : [];
+            for (const chatId of groupChats) {
+                const normalized = cleanChatName_ACU(String(chatId || ''));
+                if (normalized) names.add(normalized);
             }
         }
     } catch (error: any) {

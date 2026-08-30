@@ -41,7 +41,8 @@ import {
   _set_independentTableStates_ACU,
   _set_isProcessing_Plot_ACU,
   _set_lastTotalAiMessages_ACU,
-  abortOnChatMutation_ACU
+  abortOnChatMutation_ACU,
+  clearAutoFillDebounce_ACU
 } from '../../service/runtime/state-manager';
 import {
   applyTemplateScopeForCurrentChat_ACU,
@@ -452,6 +453,11 @@ async function handleChatChangedEvent_ACU(chatFileName: string): Promise<void> {
     // [中止] 楼层变更（删楼/ROLL/切聊天）时中止所有在飞的依赖楼层的 API 调用
     //（表格填表/生理追踪等），避免用旧上下文的结果写入当前状态。
     abortOnChatMutation_ACU();
+
+    // [跨聊填表守卫] 清掉上一聊天遗留的自动填表防抖定时器（500ms 窗口）。
+    // 它原本只被下一次同类事件覆盖清除，CHAT_CHANGED 链不碰它：切聊天后到期的旧定时器
+    // 会在新聊天上跑填表（旧事件缺整数 message_id 时没有 intent 可复检，落到末楼-1 兜底）。
+    clearAutoFillDebounce_ACU();
 
     // [静默迁移] 打开即迁：TT/Luker sidecar 仅当前聊天可达，切到哪个聊天就迁哪个（按聊天打标只跑一次）
     void runLegacyBiotrackerSilentMigration_ACU();

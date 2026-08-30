@@ -225,6 +225,7 @@ function createRuntime_ACU(): ContinuationRuntime_ACU {
       return buildResolvers_ACU(context.task, stage, revision, worldbook, context.envelope.settings);
     },
     hasLiveHostClaim: chatIdentity => bridgeRef?.hasLiveClaim(chatIdentity) ?? false,
+    invalidateHostClaim: chatIdentity => { bridgeRef?.invalidateStartedByChat(chatIdentity); },
     buildFallbackSettings: buildInitialContinuationSettings_ACU,
     onSettingsReplaced: writeGlobalContinuationSettings_ACU,
   });

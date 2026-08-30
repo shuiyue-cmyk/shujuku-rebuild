@@ -150,6 +150,28 @@ describe('mixed-storage-commit', () => {
     ]);
   });
 
+  it('降级导入 full checkpoint 时保留 import 语义（手动重填守卫仍能识别）', async () => {
+    const legacy = { sheet_0: sheet([['1', '药水'], ['2', '卷轴']]) } as any;
+    const v2Data = { sheet_0: sheet([['1', '药水']]) } as any;
+    chatRef.value = buildChat(legacy, v2Data, false, true);
+    // 旧 anchor 是用户显式导入的权威快照（checkpoint.reason === 'import'）。
+    chatRef.value[1].TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint.reason = 'import';
+    const decision = await decisionFor(chatRef.value, legacy);
+
+    const result = await commitMixedStorageDecision_ACU({ decision, action: 'commit_merge_candidate', isolationConfig: { enabled: false, code: '' } });
+
+    expect(result.status).toBe('committed');
+    const downgradedFrame = chatRef.value[1].TavernDB_ACU_IsolatedData[''].storageFrame;
+    expect(downgradedFrame.checkpoint).toBeUndefined();
+    const fallbackEntry = downgradedFrame.logEntries[0];
+    // 降级不得洗掉导入标记：op.reason 与 entry.source 都必须保持 import，
+    // 否则 update-orchestrator 的 importOverlap 守卫看不到，破坏性重填会覆盖导入。
+    expect(fallbackEntry.source).toBe('import');
+    expect(fallbackEntry.operations).toEqual([
+      { kind: 'data_replace', data: v2Data, reason: 'import' },
+    ]);
+  });
+
   it('宿主保存失败时恢复 live chat', async () => {
     const legacy = { sheet_0: sheet([['1', '药水']]) } as any;
     chatRef.value = buildChat(legacy, structuredClone(legacy));

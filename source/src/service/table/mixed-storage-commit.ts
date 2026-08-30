@@ -92,17 +92,22 @@ function downgradeOtherFullCheckpoints_ACU(chat: any[], isolationKey: string, ke
       }
     }
     const sheetKeys = Object.keys(fallbackData).filter(key => key.startsWith('sheet_'));
+    // 导入语义必须随降级一起保留：reason==='import' 的 full 根是用户显式导入的权威快照，
+    // 手动重填的 importOverlap 守卫与 chat-message-data-repo 的范围清理守卫都据此保护它。
+    // 降级若一律改写成 checkpoint_fallback + source:'system'，删除 checkpoint 后这一帧在两个
+    // 守卫眼里都退化成普通历史增量，破坏性重填会静默覆盖导入数据（V2-b 高危）。
+    const isImportCheckpoint = checkpoint.reason === 'import';
     frame.logEntries = [{
       seq,
       entryId: `downgraded-checkpoint-${index}-${checkpoint.createdAt || Date.now()}`,
       createdAt: checkpoint.createdAt || Date.now(),
-      source: 'system',
+      source: isImportCheckpoint ? 'import' : 'system',
       targetMessageIndex: index,
       aiFloor: aiFloor_ACU(chat, index),
       filledSheetKeys: sheetKeys,
       changedSheetKeys: sheetKeys,
       groupKeys: [],
-      operations: [{ kind: 'data_replace', data: fallbackData as TableDataObject_ACU, reason: 'checkpoint_fallback' }],
+      operations: [{ kind: 'data_replace', data: fallbackData as TableDataObject_ACU, reason: isImportCheckpoint ? 'import' : 'checkpoint_fallback' }],
       writeSet: [{ kind: 'all' }],
     }, ...existingEntries];
     delete frame.checkpoint;

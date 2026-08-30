@@ -270,6 +270,30 @@ describe('commitStagedSheetsAtFullBoundaryAtomic_ACU 边界汇合（计划 5.4�
     expect(result.error).toContain('原 full 根不匹配');
   });
 
+  it('staging 属于另一份聊天时 fail-closed：丢弃汇合并零落盘', async () => {
+    mocks.chat.push(...buildV2ChatWithFormalFull());
+    const isolationKey = mocks.isolationKey;
+    const before = JSON.parse(JSON.stringify(mocks.chat));
+
+    // run 期间切聊：staging 计划冻结的 chatKey 仍是旧聊天，当前标识已变化。
+    const result = await commitStagedSheetsAtFullBoundaryAtomic_ACU('run-cross-chat', {
+      originalFullIndex: 6,
+      stagedSnapshot: { mate: { type: 'acu' }, sheet_a: sheet('表A', [['row_id', '值'], ['3', 'a3']]) },
+      targetSheetKeys: ['sheet_a'],
+      chatKey: 'another-chat',
+      isolationKey,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.diagnosticCode).toBe('staging_chat_scope_mismatch');
+    // 断言锚定守卫消息的稳定语义（staging 与当前聊天不一致），不锚定具体措辞变体。
+    expect(result.error).toContain('聊天不一致');
+    // 旧聊天 staging 不得折叠进当前聊天：帧未改写，宿主零保存。
+    expect(JSON.stringify(mocks.chat)).toEqual(JSON.stringify(before));
+    expect(mocks.saveChatStrict).not.toHaveBeenCalled();
+  });
+
   it('strict save 失败时原位回滚 chat，不留下已修改的原根', async () => {
     mocks.chat.push(...buildV2ChatWithFormalFull());
     const isolationKey = mocks.isolationKey;

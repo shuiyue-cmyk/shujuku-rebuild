@@ -538,9 +538,9 @@ async function readAndMaybeCachePlotAgentWorldbookSnapshot_ACU(
   selectionSignature: string,
   initialRevision: number,
   readContext?: StrictLorebookReadContext_ACU,
-  options: { onStaleBookNames?: (staleBookNames: string[]) => void } = {},
+  options: { onStaleBookNames?: (staleBookNames: string[]) => void; assumeOperationLock?: boolean } = {},
 ): Promise<AgentWorldbookControlSnapshot_ACU> {
-  const snapshot = await readPlotAgentWorldbookSnapshotFromStateOrLegacy_ACU(resolvedBookNames, selectionSignature, { readContext, onStaleBookNames: options.onStaleBookNames });
+  const snapshot = await readPlotAgentWorldbookSnapshotFromStateOrLegacy_ACU(resolvedBookNames, selectionSignature, { readContext, onStaleBookNames: options.onStaleBookNames, assumeOperationLock: options.assumeOperationLock });
   setAgentWorldbookSnapshotStateIfRevision_ACU(initialRevision, snapshot);
   // CAS 失败也视为已水合：说明并发方已写入更新的权威快照。
   plotAgentWorldbookSnapshotHydrated_ACU = true;
@@ -550,6 +550,7 @@ async function readAndMaybeCachePlotAgentWorldbookSnapshot_ACU(
 /** 内部：带 stale 收集的刷新，供清绿灯预检使用（公共 refresh 保持原签名不变）。 */
 async function refreshPlotAgentWorldbookSnapshotWithStale_ACU(
   readContext?: StrictLorebookReadContext_ACU,
+  assumeOperationLock = false,
 ): Promise<{ snapshot: AgentWorldbookControlSnapshot_ACU; staleBookNames: string[] }> {
   const initialRevision = getAgentWorldbookSnapshotRevision_ACU();
   const resolvedBookNames = await resolveTakeoverBookNames_ACU(readContext);
@@ -558,7 +559,7 @@ async function refreshPlotAgentWorldbookSnapshotWithStale_ACU(
   const snapshot = await readPlotAgentWorldbookSnapshotFromStateOrLegacy_ACU(
     resolvedBookNames,
     selectionSignature,
-    { readContext, onStaleBookNames: (stale) => { staleBookNames = stale; }, backfillMissingMeta: false },
+    { readContext, onStaleBookNames: (stale) => { staleBookNames = stale; }, backfillMissingMeta: false, assumeOperationLock },
   );
   setAgentWorldbookSnapshotStateIfRevision_ACU(initialRevision, snapshot);
   plotAgentWorldbookSnapshotHydrated_ACU = true;
@@ -631,7 +632,7 @@ async function backfillMissingTakeoverMeta_ACU(snapshot: AgentWorldbookControlSn
 async function readPlotAgentWorldbookSnapshotFromStateOrLegacy_ACU(
   resolvedBookNames: string[],
   selectionSignature: string,
-  options: { backfillMissingMeta?: boolean; readContext?: StrictLorebookReadContext_ACU; onStaleBookNames?: (staleBookNames: string[]) => void } = {},
+  options: { backfillMissingMeta?: boolean; readContext?: StrictLorebookReadContext_ACU; onStaleBookNames?: (staleBookNames: string[]) => void; assumeOperationLock?: boolean } = {},
 ): Promise<AgentWorldbookControlSnapshot_ACU> {
   const state = await readAgentWorldbookStateFromWorldbooks_ACU(options.readContext);
   const rawActiveStateSnapshot = state.snapshot.active === true && state.snapshot.selectionSignature === selectionSignature
@@ -702,7 +703,14 @@ async function readPlotAgentWorldbookSnapshotFromStateOrLegacy_ACU(
     };
     if (!activeStateSnapshot || hasSnapshotEntriesAbsentFrom_ACU(activeStateSnapshot.books, snapshotBooks)) {
       try {
-        const writeResult = await writeAgentWorldbookStateToWorldbook_ACU({ snapshot: mergedSnapshot });
+        // 冷启动水合/页面刷新读账本时，这里是一次 config-meta 读-改-写：不与
+        // agent-worldbook-operation-lock 串行就会被锁内接管/恢复的后写覆盖（或反向覆盖它们），
+        // 账本与条目状态互相分裂。锁不可重入，因此从锁内入口（takeover / clearFinal /
+        // restore）到达此处时必须直接写，由外层入口保证串行。
+        const writeState = () => writeAgentWorldbookStateToWorldbook_ACU({ snapshot: mergedSnapshot });
+        const writeResult = options.assumeOperationLock
+          ? await writeState()
+          : await runExclusiveAgentWorldbookOperation_ACU(writeState);
         if (!writeResult.updated) {
           logWarn_ACU('[Agent世界书] 迁移接管快照到独立状态条目未落盘，将继续保留条目 meta 作为恢复依据。');
           return activeStateSnapshot || buildInactiveSnapshot_ACU(selectionSignature);
@@ -1200,7 +1208,8 @@ async function clearFinalGenerationGreenlightsExclusive_ACU(
   let snapshot: Awaited<ReturnType<typeof refreshPlotAgentWorldbookSnapshotWithStale_ACU>>['snapshot'];
   let staleFromRefresh: string[] = [];
   try {
-    const refreshed = await refreshPlotAgentWorldbookSnapshotWithStale_ACU(readContext);
+    // 本函数由 clearFinalGenerationGreenlights_ACU 在 operation-lock 内调用：水合写不得再次入锁。
+    const refreshed = await refreshPlotAgentWorldbookSnapshotWithStale_ACU(readContext, true);
     snapshot = refreshed.snapshot;
     staleFromRefresh = refreshed.staleBookNames;
   } catch (error) {
@@ -1287,10 +1296,13 @@ async function takeoverWorldbookGreenlightsExclusive_ACU(): Promise<AgentWorldbo
     };
   }
 
+  // 已在 takeover 独占锁内：账本迁移写沿用外层串行保证，禁止重入锁。
   const existingSnapshot = await readAndMaybeCachePlotAgentWorldbookSnapshot_ACU(
     resolvedBookNames,
     selectionSignature,
     getAgentWorldbookSnapshotRevision_ACU(),
+    undefined,
+    { assumeOperationLock: true },
   );
   const { snapshotBooks, updates } = await collectTakeoverCandidates_ACU(resolvedBookNames);
   const totalCandidates = updates.length || Object.values(snapshotBooks || {}).reduce((sum, entries) => sum + (Array.isArray(entries) ? entries.length : 0), 0);
@@ -1419,10 +1431,11 @@ async function restoreWorldbookGreenlightsExclusive_ACU(options: {
   const cleanupMode = options.cleanupMode || 'full';
   const resolvedBookNames = await resolveTakeoverBookNames_ACU();
   const selectionSignature = buildWorldbookSelectionSignature_ACU(resolvedBookNames);
+  // restore 已在 operation-lock 内，读账本时的迁移写不得再次入锁（锁不可重入）。
   const worldbookSnapshot = await readPlotAgentWorldbookSnapshotFromStateOrLegacy_ACU(
     resolvedBookNames,
     selectionSignature,
-    { backfillMissingMeta: false },
+    { backfillMissingMeta: false, assumeOperationLock: true },
   );
   const legacySnapshot = getLegacyPlotAgentWorldbookSnapshot_ACU();
   const stateSnapshot = await readPlotAgentWorldbookStateSnapshotOnly_ACU(selectionSignature);

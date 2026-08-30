@@ -35,6 +35,29 @@ function normalizeError_ACU(error: any): string {
     return String(error?.message || error || '未知错误');
 }
 
+/** V1-h：外置文件 fetch 统一超时上界。 */
+const VECTOR_INDEX_FETCH_TIMEOUT_MS_ACU = 30_000;
+
+/**
+ * V1-h：所有外置文件请求必须可超时中断。采用 setTimeout+AbortController 模式
+ * （与 vector-rerank-gateway 既有实践一致；AbortSignal.timeout 依赖较新宿主 API，
+ * 本插件目标环境不保证可用）。错误信息区分超时与网络失败。
+ */
+async function fetchWithTimeout_ACU(input: string, init: RequestInit, label: string): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), VECTOR_INDEX_FETCH_TIMEOUT_MS_ACU);
+    try {
+        return await fetch(input, { ...init, signal: controller.signal });
+    } catch (error: any) {
+        if (error?.name === 'AbortError') {
+            throw new Error(`${label}超时（${VECTOR_INDEX_FETCH_TIMEOUT_MS_ACU}ms），已中断`);
+        }
+        throw new Error(`${label}网络失败：${normalizeError_ACU(error)}`);
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
 const VECTOR_INDEX_OBJECT_PATH_MAX_LENGTH_ACU = 240;
 
 function normalizeFileNamePart_ACU(value: string): string {
@@ -375,14 +398,14 @@ export async function uploadVectorIndexJsonFile_ACU(params: {
         const json = JSON.stringify(params.data);
         const checksum = await sha256Text_ACU(json);
         const base64Data = await encodeBase64_ACU(json);
-        const response = await fetch('/api/files/upload', {
+        const response = await fetchWithTimeout_ACU('/api/files/upload', {
             method: 'POST',
             headers: getRequestHeaders_ACU(),
             body: JSON.stringify({
                 name: params.path,
                 data: base64Data,
             }),
-        });
+        }, '上传交火向量文件');
         if (!response.ok) {
             const detail = await response.text().catch(() => response.statusText);
             return { ok: false, error: `上传失败 ${response.status}: ${detail}` };
@@ -408,15 +431,27 @@ export async function uploadVectorIndexJsonFile_ACU(params: {
     }
 }
 
-export async function readVectorIndexJsonFile_ACU<T = any>(path: string): Promise<{ ok: boolean; data?: T; error?: string; status?: number }> {
+export async function readVectorIndexJsonFile_ACU<T = any>(path: string): Promise<{ ok: boolean; data?: T; error?: string; status?: number; corrupted?: boolean }> {
     try {
-        const response = await fetch(getUserFileUrl_ACU(path));
+        const response = await fetchWithTimeout_ACU(getUserFileUrl_ACU(path), { method: 'GET' }, '读取交火向量文件');
         if (!response.ok) {
-            return { ok: false, status: response.status, error: `读取失败 ${response.status}: ${response.statusText}` };
+            // V1-d：404 是唯一能证明「文件不存在」的响应；其余状态码（5xx/403 等）
+            // 只能证明「读取失败」，标记 corrupted 供上层区分，不得被当成空文件吞掉。
+            return {
+                ok: false,
+                status: response.status,
+                corrupted: response.status !== 404,
+                error: `读取失败 ${response.status}: ${response.statusText}`,
+            };
         }
         return { ok: true, data: await response.json() as T };
-    } catch (error) {
-        return { ok: false, error: normalizeError_ACU(error) };
+    } catch (error: any) {
+        // V1-d：JSON 解析异常/超时/网络失败同样标记 corrupted——读取结果无法证明文件不存在。
+        // 注意 response.json() 抛错发生在 fetchWithTimeout 之外，这里按错误形态细分。
+        const message = error?.name === 'SyntaxError'
+            ? `JSON 解析失败：${normalizeError_ACU(error)}`
+            : normalizeError_ACU(error);
+        return { ok: false, corrupted: true, error: message };
     }
 }
 
@@ -463,7 +498,7 @@ function buildDeleteRequestCandidates_ACU(path: string): VectorIndexFileDeleteRe
 
 async function vectorIndexFileExists_ACU(path: string): Promise<boolean> {
     try {
-        const response = await fetch(getUserFileUrl_ACU(path), { method: 'GET' });
+        const response = await fetchWithTimeout_ACU(getUserFileUrl_ACU(path), { method: 'GET' }, '探测交火向量文件存在性');
         if (response.status === 404) return false;
         return response.ok;
     } catch (_) {
@@ -481,11 +516,11 @@ export async function deleteVectorIndexFile_ACU(path: string): Promise<VectorInd
     let notFoundSeen = false;
     for (const candidate of buildDeleteRequestCandidates_ACU(normalizedPath)) {
         try {
-            const response = await fetch('/api/files/delete', {
+            const response = await fetchWithTimeout_ACU('/api/files/delete', {
                 method: 'POST',
                 headers: getRequestHeaders_ACU(),
                 body: JSON.stringify(candidate.body),
-            });
+            }, '删除交火向量文件');
             if (response.ok) {
                 preferredDeletePrefixLabel_ACU = candidate.label;
                 return { ok: true, path: normalizedPath };
@@ -513,13 +548,23 @@ export async function deleteVectorIndexFile_ACU(path: string): Promise<VectorInd
 
 export async function loadVectorIndexRegistry_ACU(): Promise<SummaryVectorIndexRegistryFile_ACU> {
     const loaded = await readVectorIndexJsonFile_ACU<SummaryVectorIndexRegistryFile_ACU>(SUMMARY_VECTOR_INDEX_REGISTRY_PATH_ACU);
-    if (!loaded.ok || !loaded.data || typeof loaded.data !== 'object') {
-        return { version: 1, updatedAt: new Date().toISOString(), files: [] };
+    if (!loaded.ok) {
+        // V1-d：只有明确 404 才能证明 registry 不存在（真空库 → 返回空 store）。
+        // 其余失败（损坏/非 404/超时/网络）一律抛错中断 load→merge→save，
+        // 防止半截损坏的 registry 被空 store 覆盖写造成不可逆缩库。
+        if (loaded.status === 404 && !loaded.corrupted) {
+            return { version: 1, updatedAt: new Date().toISOString(), files: [] };
+        }
+        throw new Error(`[交火向量索引] registry 读取失败且无法证明文件不存在，中断合并写入: ${loaded.error || '未知错误'}`);
+    }
+    if (!loaded.data || typeof loaded.data !== 'object' || !Array.isArray(loaded.data.files)) {
+        // 能解析但不是合法 registry（缺 files 数组）同样是损坏证据，不能当成空库。
+        throw new Error('[交火向量索引] registry 内容不符合 schema（缺 files 数组），中断合并写入防止缩库');
     }
     return {
         version: 1,
         updatedAt: String(loaded.data.updatedAt || new Date().toISOString()),
-        files: Array.isArray(loaded.data.files) ? loaded.data.files : [],
+        files: loaded.data.files,
     };
 }
 

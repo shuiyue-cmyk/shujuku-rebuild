@@ -174,7 +174,7 @@ export interface ManualUpdateResult {
     /** terminal manualRefillProgress 是否已严格保存。 */
     terminalProgressSaved?: boolean;
     /** 面向 UI/恢复诊断的稳定失败分类；不得依赖错误文案解析。 */
-    diagnosticCode?: 'anchor_preflight_blocked' | 'replay_anchor_missing' | 'replay_missing_selected_sheet' | 'replay_requires_checkpoint_convergence' | 'replay_data_mismatch' | 'replay_failed' | 'catch_up_migration_failed' | 'catch_up_migration_reload_failed' | 'catch_up_migration_changed_topology' | 'catch_up_runtime_changed_after_confirmation' | 'provisional_bridge_required' | 'provisional_baseline_unreconstructable' | 'provisional_bridge_conflict' | 'bridge_finalize_failed' | 'bridge_replay_mismatch' | 'provisional_recovery_required' | 'stale_bucket_after_boundary_checkpoint' | 'staging_plan_failed' | 'boundary_commit_failed';
+    diagnosticCode?: 'anchor_preflight_blocked' | 'replay_anchor_missing' | 'replay_missing_selected_sheet' | 'replay_requires_checkpoint_convergence' | 'replay_data_mismatch' | 'replay_failed' | 'catch_up_migration_failed' | 'catch_up_migration_reload_failed' | 'catch_up_migration_changed_topology' | 'catch_up_runtime_changed_after_confirmation' | 'provisional_bridge_required' | 'provisional_baseline_unreconstructable' | 'provisional_bridge_conflict' | 'bridge_finalize_failed' | 'bridge_replay_mismatch' | 'provisional_recovery_required' | 'stale_bucket_after_boundary_checkpoint' | 'staging_plan_failed' | 'boundary_commit_failed' | 'staging_chat_scope_mismatch';
     catchUpPlan?: ManualCatchUpPlan_ACU;
 }
 
@@ -4445,34 +4445,55 @@ export async function orchestrateManualUpdate_ACU(
                 }
             }
 
-            // A方案保护：检测范围内是否存在导入检查点（reason==='import'）且与本次重填目标表重叠，
-            // 若存在则阻断本次重填，避免“导入后手动填表覆盖导入”静默丢失。
+            // A方案保护：检测范围内是否存在导入写入的权威数据（reason==='import' 的 checkpoint、
+            // reason==='import' 的 perSheetCheckpoints、或 data_replace 带 reason:'import' /
+            // 归属 entry.source==='import'），且与本次重填目标表重叠，若存在则阻断本次重填，
+            // 避免“导入后手动填表覆盖导入”静默丢失。
+            // 生产导入的真实形状是 logEntries 上的 operations[{kind:'data_replace',reason:'import'}]
+            // （table-import-service.ts / table-checkpoint-transfer.ts）；checkpoint.reason==='import'
+            // 分支保留给历史数据与 mixed-storage-commit 降级前的整库根。entry 级 source 复检覆盖
+            // 降级链上 op 标记被规范化、但帧归属仍是 import 的情形。
             const importOverlap = (() => {
                 const targetSet = new Set(targetKeys);
+                const overlapsTarget = (data: any): boolean => {
+                    if (!data || typeof data !== 'object' || Array.isArray(data)) return false;
+                    for (const k of Object.keys(data)) {
+                        if (k.startsWith('sheet_') && targetSet.has(k)) return true;
+                    }
+                    return false;
+                };
                 for (const idx of contextScopeIndices) {
                     const msg: any = (liveChat as any)[idx];
                     if (!msg || msg.is_user) continue;
                     const tagData: any = readIsolatedTagData_ACU(msg, currentIsolationKey);
                     if (!tagData?.storageFrame) continue;
                     const frame: any = tagData.storageFrame;
-                    if (frame.checkpoint && frame.checkpoint.reason === 'import') {
-                        const cpData = frame.checkpoint.data;
-                        if (cpData && typeof cpData === 'object' && !Array.isArray(cpData)) {
-                            for (const k of Object.keys(cpData)) {
-                                if (k.startsWith('sheet_') && targetSet.has(k)) return true;
+                    if (frame.checkpoint && frame.checkpoint.reason === 'import' && overlapsTarget(frame.checkpoint.data)) {
+                        return true;
+                    }
+                    // 防御分支：TableSheetCheckpointV2_ACU.reason 类型允许 'import'（现生产写入点
+                    // 仅产生 schema_change/integrity_repair/manual，但历史或外部构造的数据可能携带）。
+                    // 单表 checkpoint 的数据挂在同名 sheetKey 下，键命中目标集即数据重叠。
+                    const perSheet = frame.perSheetCheckpoints;
+                    if (perSheet && typeof perSheet === 'object' && !Array.isArray(perSheet)) {
+                        for (const sheetKey of Object.keys(perSheet)) {
+                            if (sheetKey.startsWith('sheet_') && targetSet.has(sheetKey)
+                                && perSheet[sheetKey] && (perSheet[sheetKey] as any).reason === 'import') {
+                                return true;
                             }
                         }
                     }
                     if (Array.isArray(frame.logEntries)) {
                         for (const entry of frame.logEntries) {
                             if (!entry || typeof entry !== 'object') continue;
+                            const entryIsImportSource = (entry as any).source === 'import';
                             const ops: any = (entry as any).operations;
                             if (Array.isArray(ops)) {
                                 for (const op of ops) {
-                                    if (op && op.kind === 'data_replace' && (op as any).reason === 'import' && op.data && typeof op.data === 'object' && !Array.isArray(op.data)) {
-                                        for (const k of Object.keys(op.data)) {
-                                            if (k.startsWith('sheet_') && targetSet.has(k)) return true;
-                                        }
+                                    if (op && op.kind === 'data_replace'
+                                        && ((op as any).reason === 'import' || entryIsImportSource)
+                                        && overlapsTarget(op.data)) {
+                                        return true;
                                     }
                                 }
                             }
@@ -4480,10 +4501,10 @@ export async function orchestrateManualUpdate_ACU(
                             const patches: any = (entry as any).patches;
                             if (Array.isArray(patches)) {
                                 for (const patch of patches) {
-                                    if (patch && patch.kind === 'data_replace' && (patch as any).reason === 'import' && patch.data && typeof patch.data === 'object' && !Array.isArray(patch.data)) {
-                                        for (const k of Object.keys(patch.data)) {
-                                            if (k.startsWith('sheet_') && targetSet.has(k)) return true;
-                                        }
+                                    if (patch && patch.kind === 'data_replace'
+                                        && ((patch as any).reason === 'import' || entryIsImportSource)
+                                        && overlapsTarget(patch.data)) {
+                                        return true;
                                     }
                                 }
                             }
@@ -4504,8 +4525,9 @@ export async function orchestrateManualUpdate_ACU(
             } catch (error: any) {
                 logError_ACU('[Manual Refill] 清理本次范围内选中表旧数据失败:', error);
                 const failureError = error?.message || '手动重填清理本次范围内选中表旧数据失败。';
-                // 清理已部分发生且不可逆：不回滚、不恢复已删数据，直接失败返回。
-                return { success: false, error: failureError };
+                // 清理已部分发生且不可逆：不回滚、不恢复已删数据，但必须按聊天记录里的已提交
+                // 事实重新对齐运行时快照（:4192 契约），否则 SQLite runtime 停在清理中间态。
+                return await failManualRefillSession(failureError);
             }
             logDebug_ACU(`[Manual Refill] 已清理 AI 楼层 ${contextScopeIndices.join('、')} 上选中表的 checkpoint 与增量；将在全部重填成功后提交完整单表 checkpoint。`);
 
@@ -4540,7 +4562,9 @@ export async function orchestrateManualUpdate_ACU(
             } catch (error: any) {
                 logError_ACU('[Manual Refill] 清理后刷新运行时快照失败:', error);
                 const failureError = error?.message || '手动重填清理后刷新运行时快照失败。';
-                return { success: false, error: failureError };
+                // 清理已经开始（refillCleanupStarted=true）：此处失败同样必须走
+                // failManualRefillSession 重对齐 runtime，裸 return 会把 runtime 留在清理中间态。
+                return await failManualRefillSession(failureError);
             }
 
         }

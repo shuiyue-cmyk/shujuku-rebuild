@@ -2,7 +2,7 @@
  * tests/data/gateways/chat-gateway.test.ts
  * 聊天数组访问网关 单元测试
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const { mockSillyTavern, mockLogDebug, mockLogWarn } = vi.hoisted(() => ({
   mockSillyTavern: {} as any,
@@ -17,6 +17,13 @@ vi.mock('../../../src/shared/host-api', () => ({
 vi.mock('../../../src/shared/utils', () => ({
   logDebug_ACU: mockLogDebug,
   logWarn_ACU: mockLogWarn,
+  // 真实实现的最小复刻（去路径前缀 + 去 .jsonl/.json 后缀），
+  // 供 listAllHostChatNames_ACU 归一化聊天名使用。
+  cleanChatName_ACU: (fileName: string) => {
+    if (!fileName || typeof fileName !== 'string') return 'unknown_chat_source';
+    const parts = fileName.split(/[\\/]/);
+    return parts[parts.length - 1].replace(/\.jsonl$/, '').replace(/\.json$/, '');
+  },
 }));
 
 import {
@@ -29,6 +36,7 @@ import {
   deleteLastMessage_ACU,
   setChatMessages_ACU,
   emitMessageUpdated_ACU,
+  listAllHostChatNames_ACU,
 } from '../../../src/data/gateways/chat-gateway';
 
 beforeEach(() => {
@@ -159,5 +167,91 @@ describe('emitMessageUpdated_ACU', () => {
     mockSillyTavern.eventSource = { emit };
     emitMessageUpdated_ACU(3);
     expect(emit).toHaveBeenCalledWith('MESSAGE_UPDATED', 3);
+  });
+});
+
+// ═══ listAllHostChatNames_ACU（孤儿判定的存活枚举，fail-safe 契约）═══
+describe('listAllHostChatNames_ACU', () => {
+  function stubHost(options: {
+    characters?: any[] | null;
+    contextGroups?: any;
+    chatsByAvatar?: Record<string, string[]>;
+    chatsHttpStatus?: number;
+  }) {
+    const { characters, contextGroups, chatsByAvatar = {}, chatsHttpStatus = 200 } = options;
+    if (characters !== null) mockSillyTavern.characters = characters;
+    vi.stubGlobal('SillyTavern', {
+      getContext: () => (contextGroups === undefined ? {} : { groups: contextGroups }),
+    });
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init: any) => {
+      const avatar = JSON.parse(init.body).avatar_url;
+      if (url === '/api/characters/chats') {
+        return {
+          ok: chatsHttpStatus === 200,
+          status: chatsHttpStatus,
+          json: async () => (chatsByAvatar[avatar] || []).map(fileName => ({ file_name: fileName })),
+        };
+      }
+      return { ok: false, status: 404, json: async () => ({}) };
+    }));
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('characters 列表不可用时返回 null（不得当成空集合）', async () => {
+    stubHost({ characters: null });
+    expect(await listAllHostChatNames_ACU()).toBeNull();
+  });
+
+  it('groups 与角色聊天都可用时枚举两者', async () => {
+    stubHost({
+      characters: [{ avatar: 'aria.png' }],
+      contextGroups: [{ chats: ['group-live.jsonl'] }, { chats: null }],
+      chatsByAvatar: { 'aria.png': ['role-chat.jsonl'] },
+    });
+    const names = await listAllHostChatNames_ACU();
+    expect(names).not.toBeNull();
+    expect([...(names as Set<string>)].sort()).toEqual(['group-live', 'role-chat']);
+  });
+
+  it('groups 字段缺失（老宿主 / 派生 context）时返回 null，不能只交角色枚举', async () => {
+    // 回归：曾经只判 Array.isArray(groups) 而无 else，群组不可用时仍返回非 null 的
+    // 残缺集合 → 聊天删除 GC 把存活群组聊天判为孤儿并误删其向量外置文件。
+    stubHost({
+      characters: [{ avatar: 'aria.png' }],
+      contextGroups: undefined,
+      chatsByAvatar: { 'aria.png': ['role-chat.jsonl'] },
+    });
+    expect(await listAllHostChatNames_ACU()).toBeNull();
+  });
+
+  it('getContext 抛异常时返回 null', async () => {
+    stubHost({ characters: [{ avatar: 'aria.png' }], contextGroups: undefined });
+    vi.stubGlobal('SillyTavern', {
+      getContext: () => { throw new Error('context 不可用'); },
+    });
+    expect(await listAllHostChatNames_ACU()).toBeNull();
+  });
+
+  it('groups 是空数组属合法「无群组」，仍返回角色枚举（不误伤）', async () => {
+    stubHost({
+      characters: [{ avatar: 'aria.png' }],
+      contextGroups: [],
+      chatsByAvatar: { 'aria.png': ['role-chat.jsonl'] },
+    });
+    const names = await listAllHostChatNames_ACU();
+    expect(names).not.toBeNull();
+    expect([...(names as Set<string>)]).toEqual(['role-chat']);
+  });
+
+  it('角色聊天列表请求失败时返回 null', async () => {
+    stubHost({
+      characters: [{ avatar: 'aria.png' }],
+      contextGroups: [],
+      chatsHttpStatus: 500,
+    });
+    expect(await listAllHostChatNames_ACU()).toBeNull();
   });
 });

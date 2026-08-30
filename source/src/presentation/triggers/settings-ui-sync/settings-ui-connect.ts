@@ -269,6 +269,11 @@ import {
     logDebug_ACU(
       `New message event (${eventType}) detected for ACU, debouncing for ${NEW_MESSAGE_DEBOUNCE_DELAY_ACU}ms...`,
     );
+    // [跨聊填表守卫] 排程时点记录身份基线：intent 缺失（宿主给的 message_id 不是整数）时
+    // 原先整段 chatKey/isolationKey 复检被跳过，500ms 窗口内切了聊天也会照跑填表。
+    // 这里以排程时点的聊天/隔离为基线，无论有没有 intent 都在回调里复检一次。
+    const scheduledChatKey_ACU = intent?.chatKey ?? currentChatFileIdentifier_ACU;
+    const scheduledIsolationKey_ACU = intent?.isolationKey ?? getCurrentIsolationKey_ACU();
     clearTimeout(autoFillDebounceTimer_ACU);
     _set_autoFillDebounceTimer_ACU(setTimeout(async () => {
       const performanceSpan = startRuntimePerformanceSpan_ACU('new-message-pipeline', {
@@ -291,30 +296,31 @@ import {
       }
 
       // [触发修复] chatKey / isolationKey 校验：防抖期间切聊天或切隔离必须立即丢弃，不污染新会话。
-      if (intent) {
-        if (currentChatFileIdentifier_ACU !== intent.chatKey) {
+      // 复检不再以 intent 存在为前提：无 intent 时按排程时点基线比对，同样丢弃跨聊填表。
+      {
+        if (currentChatFileIdentifier_ACU !== scheduledChatKey_ACU) {
           logAutoFillSkip_ACU('chat_changed', {
             eventType,
-            eventMessageId: intent.eventMessageId,
-            messageId: intent.eventMessageId,
-            chatKey: intent.chatKey,
-            isolationKey: intent.isolationKey,
-            capturedChatLength: intent.capturedChatLength,
-            capturedAiFloorCount: intent.capturedAiFloorCount,
+            eventMessageId: intent?.eventMessageId,
+            messageId: intent?.eventMessageId,
+            chatKey: scheduledChatKey_ACU,
+            isolationKey: scheduledIsolationKey_ACU,
+            capturedChatLength: intent?.capturedChatLength,
+            capturedAiFloorCount: intent?.capturedAiFloorCount,
           });
           return;
         }
         const liveIsolationKey = getCurrentIsolationKey_ACU();
-        if (liveIsolationKey !== intent.isolationKey) {
+        if (liveIsolationKey !== scheduledIsolationKey_ACU) {
           logAutoFillSkip_ACU('chat_changed', {
             eventType,
-            eventMessageId: intent.eventMessageId,
-            messageId: intent.eventMessageId,
-            chatKey: intent.chatKey,
-            isolationKey: intent.isolationKey,
+            eventMessageId: intent?.eventMessageId,
+            messageId: intent?.eventMessageId,
+            chatKey: scheduledChatKey_ACU,
+            isolationKey: scheduledIsolationKey_ACU,
             liveIsolationKey,
-            capturedChatLength: intent.capturedChatLength,
-            capturedAiFloorCount: intent.capturedAiFloorCount,
+            capturedChatLength: intent?.capturedChatLength,
+            capturedAiFloorCount: intent?.capturedAiFloorCount,
           });
           return;
         }

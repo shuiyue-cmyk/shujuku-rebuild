@@ -59,6 +59,32 @@ export interface SnapshotSqlApplyResult_ACU extends ApplyEditsResult {
   revertedByLocks?: LockRevertItem_ACU[];
 }
 
+/**
+ * JSON 视图同步诊断（V2-d）。
+ *
+ * _syncToJson 内部吞掉导出异常：SQLite 已提交但共享 JSON 视图停在写入前，
+ * 上层若只看 success 会按"视图已刷新"继续消费陈旧数据。这里只追加可观测标记，
+ * 不改变 success 语义（SQLite 仍是权威），上层可据此选择重新加载运行时。
+ */
+export interface JsonViewSyncDiagnostics_ACU {
+  /** true = 本次提交后共享 JSON 视图未能刷新（陈旧）。 */
+  dataStale?: boolean;
+  /** 面向日志与上层提示的陈旧视图警告。 */
+  warning?: string;
+}
+
+const JSON_VIEW_STALE_WARNING_ACU = 'SQLite 写入已提交，但共享 JSON 视图同步失败：视图可能停留在写入前状态，请按需重新加载运行时数据。';
+
+/** _syncToJson 返回 null 时的统一诊断：记一次 warn 并产出可并入返回值的标记。 */
+function jsonViewSyncDiagnostics_ACU(
+  context: string,
+  syncedView: TableDataObject_ACU | null,
+): JsonViewSyncDiagnostics_ACU {
+  if (syncedView) return {};
+  logWarn_ACU(`[SqlTableService] ${context}: ${JSON_VIEW_STALE_WARNING_ACU}`);
+  return { dataStale: true, warning: JSON_VIEW_STALE_WARNING_ACU };
+}
+
 export interface SqlSheetBatchBuildResult_ACU {
   operations: TableMutationOperationV2_ACU[];
   classifiedSheetKeys: string[];
@@ -1505,7 +1531,7 @@ export class SqlTableService implements ITableStorageProvider {
     return this.applyEditsBatch([sqlStatements], _updateMode);
   }
 
-  applyEditsBatch(sqlTexts: string[], _updateMode?: string, paramsList?: (string | number | null)[][]): ApplyEditsResult {
+  applyEditsBatch(sqlTexts: string[], _updateMode?: string, paramsList?: (string | number | null)[][]): ApplyEditsResult & JsonViewSyncDiagnostics_ACU {
     this._ensureInitialized();
     this._ensureTablesFromTemplate();
 
@@ -1533,7 +1559,7 @@ export class SqlTableService implements ITableStorageProvider {
 
     try {
       const result = this.engine.runBatch(statements, statementParams);
-      this._syncToJson();
+      const syncedView = this._syncToJson();
 
       const modifiedTables = extractTableNamesFromStatements(statements);
       const modifiedKeys = this._tableNamesToSheetKeys(modifiedTables);
@@ -1544,6 +1570,7 @@ export class SqlTableService implements ITableStorageProvider {
         success: true,
         modifiedKeys,
         appliedEdits: userStatements.length,
+        ...jsonViewSyncDiagnostics_ACU('applyEditsBatch', syncedView),
       };
     } catch (e: any) {
       const errMsg = e?.message || String(e);
@@ -1588,6 +1615,9 @@ export class SqlTableService implements ITableStorageProvider {
     // runtimeData 自身构建预留，此处无新增预留。
     const reseedPlan: { inserts: string[]; rowIdsByTable: Map<string, Set<string>> } = { inserts: [], rowIdsByTable: new Map<string, Set<string>>() };
     const runtimeData = this._exportCurrentDataStrict();
+    // 锁定前像：必须在任何 mutation 之前取，且不能被 rebind/物化写入的 row_id 预留污染，
+    // 因此克隆一份冻结快照作为差异比对基准（与快照路径 applySqlEditsToTableDataSnapshot 同一契约）。
+    const lockBeforeData = JSON.parse(JSON.stringify(runtimeData)) as TableDataObject_ACU;
     let materializedStatements: string[];
     try {
       materializedStatements = materializeSystemRowIdsForSqlInserts_ACU(
@@ -1611,16 +1641,41 @@ export class SqlTableService implements ITableStorageProvider {
     }
 
     const statements = [...reseedPlan.inserts, ...materializedStatements.filter(Boolean)];
+    // 运行时 AI 写路径的锁定强制执行必须在 COMMIT 前完成：finalize 回调运行于
+    // runBatchWithFinalize 已开启的事务内，补偿语句与用户语句原子提交/原子回滚。
+    let lockEnforcementStatements: string[] = [];
     try {
       const result = this.engine.runBatchWithFinalize(
         statements,
         statements.map((): undefined => undefined),
-        () => this._exportCurrentDataStrict(),
+        () => {
+          const interimData = this._exportCurrentDataStrict();
+          const modifiedKeysForLocks = this._tableNamesToSheetKeys(extractTableNamesFromStatements(statements));
+          const lockEnforcement = enforceTableLocksAfterSqlApply_ACU(
+            this.engine,
+            this.syncBridge,
+            lockBeforeData,
+            interimData,
+            modifiedKeysForLocks,
+            { runStatementsIndividually: true },
+          );
+          lockEnforcementStatements = lockEnforcement.statements;
+          return lockEnforcement.workingData;
+        },
       );
       const tableData = result.finalizeResult!;
       _set_currentJsonTableData_ACU(tableData);
       const modifiedTables = extractTableNamesFromStatements(statements);
       const modifiedKeys = this._tableNamesToSheetKeys(modifiedTables);
+      if (lockEnforcementStatements.length > 0 && materializedSqlTexts.length > 0) {
+        // 补偿语句必须进持久化语句集：storage frame V2 冷回放重放同一批 SQL，
+        // 缺补偿会让回放结果与运行时（锁定目标已恢复）永久分叉。
+        // 追加到最后一个分组末尾，保持「全部用户语句 → 补偿」的全局执行顺序。
+        const lastIndex = materializedSqlTexts.length - 1;
+        materializedSqlTexts[lastIndex] = [materializedSqlTexts[lastIndex], ...lockEnforcementStatements]
+          .filter(Boolean)
+          .join(';\n');
+      }
       logDebug_ACU(`[SqlTableService] 系统 row_id 批量执行成功: ${statements.length} 条语句, ${result.totalChanges} 行受影响`);
       return {
         success: true,
@@ -1660,7 +1715,7 @@ export class SqlTableService implements ITableStorageProvider {
    * 执行 SQL 变更语句（INSERT/UPDATE/DELETE）
    * 执行后自动同步到 JSON 视图
    */
-  executeMutation(sql: string, params?: (string | number | null)[]): SqlMutationResult {
+  executeMutation(sql: string, params?: (string | number | null)[]): SqlMutationResult & JsonViewSyncDiagnostics_ACU {
     this._ensureInitialized();
     this._ensureTablesFromTemplate();
     try {
@@ -1671,12 +1726,16 @@ export class SqlTableService implements ITableStorageProvider {
         (currentJsonTableData_ACU || { mate: DEFAULT_MATE_ACU }) as TableDataObject_ACU,
       )[0];
       const result = this.engine.run(runtimeSql, params);
-      this._syncToJson();
-      return { changes: result.changes, errors: [] };
+      const syncedView = this._syncToJson();
+      return { changes: result.changes, errors: [], ...jsonViewSyncDiagnostics_ACU('executeMutation', syncedView) };
     } catch (e: any) {
       // 同步 JSON 视图避免 SQLite/JSON 状态分裂
-      this._syncToJson();
-      return { changes: 0, errors: [e?.message || String(e)] };
+      const syncedView = this._syncToJson();
+      return {
+        changes: 0,
+        errors: [e?.message || String(e)],
+        ...jsonViewSyncDiagnostics_ACU('executeMutation（语句失败后的视图同步同样未成功）', syncedView),
+      };
     }
   }
 
@@ -2133,6 +2192,10 @@ export class SqlTableService implements ITableStorageProvider {
  * SQL 执行后的锁定差异回滚：对比执行前后快照，锁定目标被改则生成补偿 SQL，
  * 在同一引擎会话内执行并返回补偿语句（调用方必须把它们追加进持久化语句集，
  * 否则 storage frame V2 冷回放重放原始 SQL 时锁定目标会再次被改）。
+ *
+ * options.runStatementsIndividually：调用方已经开启事务（live 统一提交在
+ * runBatchWithFinalize 的 COMMIT 前调用本函数）时必须置 true —— 再开一层
+ * BEGIN 会直接报错，而 runBatch 的失败路径还会 ROLLBACK 掉外层事务。
  */
 function enforceTableLocksAfterSqlApply_ACU(
   engine: SqliteEngine,
@@ -2140,6 +2203,7 @@ function enforceTableLocksAfterSqlApply_ACU(
   beforeData: TableDataObject_ACU,
   interimData: TableDataObject_ACU,
   modifiedKeys: readonly string[],
+  options: { runStatementsIndividually?: boolean } = {},
 ): { workingData: TableDataObject_ACU; statements: string[]; reverted: LockRevertItem_ACU[] } {
   const allStatements: string[] = [];
   const allReverted: LockRevertItem_ACU[] = [];
@@ -2184,7 +2248,12 @@ function enforceTableLocksAfterSqlApply_ACU(
   if (allStatements.length === 0) {
     return { workingData: interimData, statements: [], reverted: [] };
   }
-  engine.runBatch(allStatements);
+  if (options.runStatementsIndividually) {
+    // 调用方事务内联执行：补偿语句必须与用户语句同生共死（COMMIT 前生效，失败一起回滚）。
+    allStatements.forEach(statement => { engine.run(statement); });
+  } else {
+    engine.runBatch(allStatements);
+  }
   const workingData = syncBridge.exportToTableData(resolveSnapshotMate_ACU(beforeData), { strict: true });
   logWarn_ACU(`[SqlTableService] ${formatLockRevertSummary_ACU(allReverted)}`);
   return { workingData, statements: allStatements, reverted: allReverted };

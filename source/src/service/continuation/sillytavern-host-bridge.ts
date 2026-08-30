@@ -1,5 +1,6 @@
 import { getActiveChatStorageIdentity_ACU } from '../../data/storage/chat-history';
 import { SillyTavern_API_ACU } from '../../shared/host-api';
+import { clearAutoFillDebounce_ACU } from '../runtime/state-manager';
 import type { ContinuationOrchestrator_ACU } from './continuation-orchestrator';
 import { ContinuationHostGenerationBridge_ACU } from './host-generation-bridge';
 import { SillyTavernHostTurnAdapter_ACU } from './host-turn-adapter';
@@ -18,7 +19,6 @@ export function createSillyTavernContinuationHostBridge_ACU(
     runtime: {
       getChatIdentity,
       getChat,
-      getGenerationSequence: () => 0,
       readPendingHostTurn: () => orchestrator.readPendingHostTurn(),
       readAutoContinueState: () => orchestrator.readAutoContinueState(),
       continueTask: () => orchestrator.continueTask(),
@@ -37,5 +37,7 @@ export function createSillyTavernContinuationHostBridge_ACU(
     wait: ms => new Promise(resolve => setTimeout(resolve, ms)),
     materializationRetries: 3,
     materializationRetryDelayMs: 100,
+    // 删楼重试与自动填表防抖的互斥：见 host-generation-bridge 的 [双写互斥] 注释。
+    invalidatePendingAutoFill: () => clearAutoFillDebounce_ACU(),
   });
 }

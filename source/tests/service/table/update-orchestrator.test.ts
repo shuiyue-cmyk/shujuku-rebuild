@@ -1994,8 +1994,10 @@ describe('orchestrateManualUpdate_ACU', () => {
     expect(mockPurgeSheetKeysFromChatHistoryHard).not.toHaveBeenCalled();
   });
 
-  it('重填范围内存在与目标表重叠的导入检查点时阻断重填（A方案第二层守卫）', async () => {
+  it('重填范围内存在与目标表重叠的导入增量（生产形状 data_replace reason=import）时阻断重填', async () => {
     const { getChatArray_ACU, clearManualRefillSheetDataInRange_ACU } = await import('../../../src/service/chat/chat-service');
+    // 生产导入的真实形状：table-import-service / table-checkpoint-transfer 写入
+    // logEntries.operations[{kind:'data_replace', reason:'import'}]，checkpoint.reason 从不写 import。
     vi.mocked(getChatArray_ACU).mockReturnValue([
       { is_user: true },
       {
@@ -2006,8 +2008,19 @@ describe('orchestrateManualUpdate_ACU', () => {
             _acu_storage_version: 2,
             storageFrame: {
               version: 2,
-              checkpoint: { reason: 'import', data: { sheet_0: { content: [['row_id'], ['imported']] } } },
-              logEntries: [],
+              checkpoint: { kind: 'full', reason: 'migration', data: { sheet_0: { content: [['row_id'], ['base']] } } },
+              logEntries: [{
+                seq: 1,
+                entryId: 'import-data-replace',
+                createdAt: 1,
+                source: 'import',
+                targetMessageIndex: 1,
+                aiFloor: 1,
+                filledSheetKeys: ['sheet_0'],
+                changedSheetKeys: ['sheet_0'],
+                groupKeys: [],
+                operations: [{ kind: 'data_replace', reason: 'import', data: { sheet_0: { content: [['row_id'], ['imported']] } } }],
+              }],
             },
           },
         },
@@ -2025,6 +2038,156 @@ describe('orchestrateManualUpdate_ACU', () => {
     expect(clearManualRefillSheetDataInRange_ACU).not.toHaveBeenCalled();
   });
 
+  it('重填范围内存在与目标表重叠的导入整库根（历史 checkpoint 形态）时仍阻断重填', async () => {
+    const { getChatArray_ACU, clearManualRefillSheetDataInRange_ACU } = await import('../../../src/service/chat/chat-service');
+    // 防御分支覆盖：现生产导入不写 checkpoint.reason='import'，但历史聊天与
+    // mixed-storage-commit 降级前的导入整库根仍是这一形态，checkpoint 扫描分支必须保留。
+    vi.mocked(getChatArray_ACU).mockReturnValue([
+      { is_user: true },
+      {
+        is_user: false,
+        mes: 'AI回复1',
+        TavernDB_ACU_IsolatedData: {
+          '': {
+            _acu_storage_version: 2,
+            storageFrame: {
+              version: 2,
+              checkpoint: { kind: 'full', reason: 'import', data: { sheet_0: { content: [['row_id'], ['imported']] } } },
+              logEntries: [],
+            },
+          },
+        },
+      },
+    ]);
+    mockCurrentJsonTableData = {
+      sheet_0: { name: '测试表A', updateConfig: {} },
+    };
+    mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
+
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('导入检查点');
+    expect(clearManualRefillSheetDataInRange_ACU).not.toHaveBeenCalled();
+  });
+
+  it('重填范围内存在 reason=import 的单表 checkpoint（perSheetCheckpoints 形态）时仍阻断重填', async () => {
+    const { getChatArray_ACU, clearManualRefillSheetDataInRange_ACU } = await import('../../../src/service/chat/chat-service');
+    // 防御分支覆盖：TableSheetCheckpointV2_ACU.reason 类型允许 'import'，生产写入点现不产生
+    // 该形态，但历史/外部构造数据可能携带；守卫必须按 sheetKey 直接判重叠后阻断。
+    vi.mocked(getChatArray_ACU).mockReturnValue([
+      { is_user: true },
+      {
+        is_user: false,
+        mes: 'AI回复1',
+        TavernDB_ACU_IsolatedData: {
+          '': {
+            _acu_storage_version: 2,
+            storageFrame: {
+              version: 2,
+              logEntries: [],
+              perSheetCheckpoints: {
+                sheet_0: { kind: 'sheet_full', createdAt: 1, reason: 'import', sheetKey: 'sheet_0', data: { content: [['row_id'], ['imported']] } },
+              },
+            },
+          },
+        },
+      },
+    ]);
+    mockCurrentJsonTableData = {
+      sheet_0: { name: '测试表A', updateConfig: {} },
+    };
+    mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
+
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('导入检查点');
+    expect(clearManualRefillSheetDataInRange_ACU).not.toHaveBeenCalled();
+  });
+
+  it('导入根被 mixed-storage-commit 降级为 fallback 增量后仍阻断重填（降级形状）', async () => {
+    const { getChatArray_ACU, clearManualRefillSheetDataInRange_ACU } = await import('../../../src/service/chat/chat-service');
+    // mixed-storage-commit.downgradeOtherFullCheckpoints_ACU 的新形状：checkpoint 已被删除，
+    // 导入语义保留在 operations[].reason 与 entry.source 上，守卫必须仍然看得见。
+    vi.mocked(getChatArray_ACU).mockReturnValue([
+      { is_user: true },
+      {
+        is_user: false,
+        mes: 'AI回复1',
+        TavernDB_ACU_IsolatedData: {
+          '': {
+            _acu_storage_version: 2,
+            storageFrame: {
+              version: 2,
+              logEntries: [{
+                seq: -1,
+                entryId: 'downgraded-checkpoint-1-1',
+                createdAt: 1,
+                source: 'import',
+                targetMessageIndex: 1,
+                aiFloor: 1,
+                filledSheetKeys: ['sheet_0'],
+                changedSheetKeys: ['sheet_0'],
+                groupKeys: [],
+                operations: [{ kind: 'data_replace', reason: 'import', data: { sheet_0: { content: [['row_id'], ['imported']] } } }],
+                writeSet: [{ kind: 'all' }],
+              }],
+            },
+          },
+        },
+      },
+    ]);
+    mockCurrentJsonTableData = {
+      sheet_0: { name: '测试表A', updateConfig: {} },
+    };
+    mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
+
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('导入检查点');
+    expect(clearManualRefillSheetDataInRange_ACU).not.toHaveBeenCalled();
+  });
+
+  it('降级帧 op.reason 被规范化为 checkpoint_fallback 时按 entry 级 source=import 识别导入', async () => {
+    const { getChatArray_ACU, clearManualRefillSheetDataInRange_ACU } = await import('../../../src/service/chat/chat-service');
+    vi.mocked(getChatArray_ACU).mockReturnValue([
+      { is_user: true },
+      {
+        is_user: false,
+        mes: 'AI回复1',
+        TavernDB_ACU_IsolatedData: {
+          '': {
+            _acu_storage_version: 2,
+            storageFrame: {
+              version: 2,
+              logEntries: [{
+                seq: -1,
+                entryId: 'downgraded-checkpoint-1-1',
+                createdAt: 1,
+                source: 'import',
+                targetMessageIndex: 1,
+                aiFloor: 1,
+                filledSheetKeys: ['sheet_0'],
+                changedSheetKeys: ['sheet_0'],
+                groupKeys: [],
+                operations: [{ kind: 'data_replace', reason: 'checkpoint_fallback', data: { sheet_0: { content: [['row_id'], ['imported']] } } }],
+                writeSet: [{ kind: 'all' }],
+              }],
+            },
+          },
+        },
+      },
+    ]);
+    mockCurrentJsonTableData = {
+      sheet_0: { name: '测试表A', updateConfig: {} },
+    };
+    mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
+
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('导入检查点');
+    expect(clearManualRefillSheetDataInRange_ACU).not.toHaveBeenCalled();
+  });
+
   it('导入检查点仅覆盖范围外表时不误伤手动重填', async () => {
     const { getChatArray_ACU, clearManualRefillSheetDataInRange_ACU } = await import('../../../src/service/chat/chat-service');
     vi.mocked(getChatArray_ACU).mockReturnValue([
@@ -2037,8 +2200,58 @@ describe('orchestrateManualUpdate_ACU', () => {
             _acu_storage_version: 2,
             storageFrame: {
               version: 2,
-              checkpoint: { reason: 'import', data: { sheet_7: { content: [['row_id'], ['imported']] } } },
-              logEntries: [],
+              logEntries: [{
+                seq: 1,
+                entryId: 'import-data-replace-other-sheet',
+                createdAt: 1,
+                source: 'import',
+                targetMessageIndex: 1,
+                aiFloor: 1,
+                filledSheetKeys: ['sheet_7'],
+                changedSheetKeys: ['sheet_7'],
+                groupKeys: [],
+                operations: [{ kind: 'data_replace', reason: 'import', data: { sheet_7: { content: [['row_id'], ['imported']] } } }],
+              }],
+            },
+          },
+        },
+      },
+    ]);
+    mockCurrentJsonTableData = {
+      sheet_0: { name: '测试表A', updateConfig: {} },
+    };
+    mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
+
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    expect(result.success, result.error).toBe(true);
+    expect(clearManualRefillSheetDataInRange_ACU).toHaveBeenCalledTimes(1);
+  });
+
+  it('普通 checkpoint_fallback 降级帧（source=system）不被误判为导入，重填照常执行', async () => {
+    const { getChatArray_ACU, clearManualRefillSheetDataInRange_ACU } = await import('../../../src/service/chat/chat-service');
+    vi.mocked(getChatArray_ACU).mockReturnValue([
+      { is_user: true },
+      {
+        is_user: false,
+        mes: 'AI回复1',
+        TavernDB_ACU_IsolatedData: {
+          '': {
+            _acu_storage_version: 2,
+            storageFrame: {
+              version: 2,
+              logEntries: [{
+                seq: -1,
+                entryId: 'downgraded-checkpoint-1-1',
+                createdAt: 1,
+                source: 'system',
+                targetMessageIndex: 1,
+                aiFloor: 1,
+                filledSheetKeys: ['sheet_0'],
+                changedSheetKeys: ['sheet_0'],
+                groupKeys: [],
+                operations: [{ kind: 'data_replace', reason: 'checkpoint_fallback', data: { sheet_0: { content: [['row_id'], ['old']] } } }],
+                writeSet: [{ kind: 'all' }],
+              }],
             },
           },
         },

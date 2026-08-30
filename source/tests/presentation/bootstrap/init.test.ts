@@ -5,8 +5,32 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 const m = vi.hoisted(() => ({
   chatChanged: undefined as undefined | ((name: string) => Promise<void>),
   chatMutationHandler: undefined as undefined | ((data: any) => Promise<void>),
+  chatDeletedHandler: undefined as undefined | (() => void),
+  messageSentHandler: undefined as undefined | ((messageId: any) => void),
+  generationStartedHandler: undefined as undefined | ((type: any, params: any, dryRun: any) => void),
+  generationStoppedHandler: undefined as undefined | (() => void),
+  generationEndedHandler: undefined as undefined | ((...args: any[]) => void),
+  afterCommandsHandler: undefined as undefined | ((type: any, params: any, dryRun: any) => void),
+  settingsReadyHandler: undefined as undefined | (() => void),
   currentChatKey: '',
-  api: { chat: [] as any[], chatId: '', eventTypes: { CHAT_CHANGED: 'chat', MESSAGE_DELETED: 'deleted', MESSAGE_SWIPED: 'swiped' }, eventSource: { on: vi.fn(), makeFirst: vi.fn(), makeLast: vi.fn(), emit: vi.fn() } } as any,
+  api: {
+    chat: [] as any[],
+    chatId: '',
+    // 桥接线全集：init.ts 逐个 if (eventTypes.X) 注册，mock 缺一个对应分支就整段不可达（V4-e）。
+    eventTypes: {
+      CHAT_CHANGED: 'chat',
+      CHAT_DELETED: 'chatdeleted',
+      MESSAGE_DELETED: 'deleted',
+      MESSAGE_SWIPED: 'swiped',
+      MESSAGE_SENT: 'messagesent',
+      CHAT_COMPLETION_SETTINGS_READY: 'settingsready',
+      GENERATION_STARTED: 'genstarted',
+      GENERATION_STOPPED: 'genstopped',
+      GENERATION_ENDED: 'genended',
+      GENERATION_AFTER_COMMANDS: 'aftercommands',
+    },
+    eventSource: { on: vi.fn(), makeFirst: vi.fn(), makeLast: vi.fn(), emit: vi.fn() },
+  } as any,
   gate: { lastUserMessageId: 7 as any, lastUserMessageText: 'stale', lastUserMessageAt: 1, lastUserSendIntentAt: 2, lastGeneration: { stale: true } as any, generationSeq: 0, activeGenerations: [] as any[] },
   resetTakeover: vi.fn(), dispose: vi.fn(), setData: vi.fn(), setTables: vi.fn(), setMessages: vi.fn(), setTotal: vi.fn(), setChat: vi.fn(),
   setChatMutationTimer: vi.fn(),
@@ -17,6 +41,7 @@ const m = vi.hoisted(() => ({
   shouldProcessSummary: vi.fn(),
   captureVault: vi.fn(),
   dormantAudit: vi.fn(),
+  clearAutoFillDebounce: vi.fn(),
 }));
 
 vi.mock('../../../src/shared/host-api', () => ({ SillyTavern_API_ACU: m.api }));
@@ -27,7 +52,7 @@ vi.mock('../../../src/service/runtime/helpers-remaining', () => ({ ensureInitial
 vi.mock('../../../src/service/runtime/state-manager', () => ({
   chatMutationDebounceTimer_ACU: null, _set_chatMutationDebounceTimer_ACU: m.setChatMutationTimer, generationGate_ACU: m.gate,
   get currentChatFileIdentifier_ACU() { return m.currentChatKey; }, currentJsonTableData_ACU: null, discardLatestGenerationContext_ACU: vi.fn(), markUserSendIntent_ACU: vi.fn(), isProcessing_Plot_ACU: false, isQuietLikeGeneration_ACU: vi.fn(), isRecentUserSendIntent_ACU: vi.fn(), recordGenerationContext_ACU: vi.fn(), recordLastUserSend_ACU: vi.fn(), settings_ACU: { plotSettings: {} }, shouldProcessAutoTableUpdateForGenerationEnded_ACU: vi.fn(), shouldProcessPlotForGeneration_ACU: vi.fn(), shouldProcessSummaryVectorIndexForGeneration_ACU: (...args: any[]) => m.shouldProcessSummary(...args),
-  _set_allChatMessages_ACU: m.setMessages, _set_currentChatFileIdentifier_ACU: (value: string) => { m.currentChatKey = value; m.setChat(value); }, _set_currentJsonTableData_ACU: m.setData, _set_independentTableStates_ACU: m.setTables, _set_isProcessing_Plot_ACU: vi.fn(), _set_lastTotalAiMessages_ACU: m.setTotal, abortOnChatMutation_ACU: vi.fn(), getChatMutationAbortSignal_ACU: () => null,
+  _set_allChatMessages_ACU: m.setMessages, _set_currentChatFileIdentifier_ACU: (value: string) => { m.currentChatKey = value; m.setChat(value); }, _set_currentJsonTableData_ACU: m.setData, _set_independentTableStates_ACU: m.setTables, _set_isProcessing_Plot_ACU: vi.fn(), _set_lastTotalAiMessages_ACU: m.setTotal, abortOnChatMutation_ACU: vi.fn(), clearAutoFillDebounce_ACU: (...args: any[]) => m.clearAutoFillDebounce(...args), getChatMutationAbortSignal_ACU: () => null,
 }));
 vi.mock('../../../src/service/settings/settings-service', () => ({ applyTemplateScopeForCurrentChat_ACU: vi.fn(), loadSettings_ACU: vi.fn() }));
 vi.mock('../../../src/service/worldbook/injection-engine', () => ({ resetScriptStateForNewChat_ACU: m.resetScript }));
@@ -55,6 +80,19 @@ beforeAll(async () => {
   m.api.eventSource.on.mockImplementation((event: string, callback: any) => {
     if (event === 'chat') m.chatChanged = callback;
     if (event === 'deleted' || event === 'swiped') m.chatMutationHandler = callback;
+    if (event === 'chatdeleted') m.chatDeletedHandler = callback;
+    if (event === 'messagesent') m.messageSentHandler = callback;
+    if (event === 'genstarted') m.generationStartedHandler = callback;
+    if (event === 'genstopped') m.generationStoppedHandler = callback;
+    if (event === 'genended') m.generationEndedHandler = callback;
+    if (event === 'aftercommands') m.afterCommandsHandler = callback;
+    if (event === 'settingsready') m.settingsReadyHandler = callback;
+  });
+  m.api.eventSource.makeFirst.mockImplementation((event: string, callback: any) => {
+    if (event === 'genended') m.generationEndedHandler = callback;
+  });
+  m.api.eventSource.makeLast.mockImplementation((event: string, callback: any) => {
+    if (event === 'settingsready') m.settingsReadyHandler = callback;
   });
   const { mainInitialize_ACU } = await import('../../../src/presentation/bootstrap/init');
   mainInitialize_ACU();
@@ -161,6 +199,16 @@ describe('mainInitialize_ACU CHAT_CHANGED S0-4/S3-3 收尾', () => {
 });
 
 describe('mainInitialize_ACU 聊天变更防抖', () => {
+  it('CHAT_CHANGED 同步作废在途的自动填表防抖定时器', async () => {
+    m.api.chat = [{ mes: 'active' }];
+
+    await m.chatChanged!('chat-a');
+
+    // 旧定时器只在下一次同类事件里被覆盖清除；切聊天链必须自己清，
+    // 否则 500ms 窗口后会在刚打开的新聊天上按「末楼 - 1」兜底跑填表。
+    expect(m.clearAutoFillDebounce).toHaveBeenCalledOnce();
+  });
+
   it('删除或滑动事件仅设置聊天变更 timer，并在 trailing 窗口后执行一轮', async () => {
     vi.useFakeTimers();
     expect(m.chatMutationHandler).toBeTypeOf('function');
@@ -175,6 +223,22 @@ describe('mainInitialize_ACU 聊天变更防抖', () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(m.refresh).toHaveBeenCalledOnce();
     vi.useRealTimers();
+  });
+});
+
+describe('mainInitialize_ACU 宿主事件桥接线注册', () => {
+  // V4-e：mock eventTypes 此前只有 3 个事件，init.ts 的 GENERATION_*/MESSAGE_SENT/
+  // CHAT_DELETED/SETTINGS_READY 接线分支在测试里整段不可达——回归零感知。
+  it('全部宿主事件 handler 均完成注册（含 GENERATION 三态与 MESSAGE_SENT）', () => {
+    expect(m.chatChanged).toBeTypeOf('function');
+    expect(m.chatMutationHandler).toBeTypeOf('function');
+    expect(m.chatDeletedHandler).toBeTypeOf('function');
+    expect(m.messageSentHandler).toBeTypeOf('function');
+    expect(m.generationStartedHandler).toBeTypeOf('function');
+    expect(m.generationStoppedHandler).toBeTypeOf('function');
+    expect(m.generationEndedHandler).toBeTypeOf('function');
+    expect(m.afterCommandsHandler).toBeTypeOf('function');
+    expect(m.settingsReadyHandler).toBeTypeOf('function');
   });
 });
 

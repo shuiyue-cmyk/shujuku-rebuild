@@ -4419,3 +4419,187 @@ describe('establishManualRefillTemplateRoot_ACU', () => {
     expect(fallbackRunId).toBe(expectedRunId);
   });
 });
+
+// ═══ 外置向量文件删除时序：聊天保存成功后才物理删除（保存失败宁可泄漏不误删）═══
+describe('向量外置文件删除必须晚于聊天保存', () => {
+  function makeVectorManifest(indexId: string): any {
+    return { indexId, files: [{ path: `${indexId}.snapshot`, role: 'snapshot' }] };
+  }
+
+  function makeMessageWithVectorManifest(manifest: any): any {
+    return {
+      is_user: false,
+      mes: 'AI目标层',
+      TavernDB_ACU_Data: { sheet_1: { name: '纪要表', content: [['row_id'], ['old']] } },
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          independentData: { sheet_1: { name: '纪要表' } },
+          modifiedKeys: ['sheet_1'],
+          updateGroupKeys: ['sheet_1'],
+          storageFrame: {
+            version: 2,
+            checkpoint: {
+              kind: 'full',
+              reason: 'manual',
+              data: { sheet_1: { name: '纪要表', content: [['row_id'], ['old']] } },
+            },
+            manualRefillProgress: {
+              kind: 'manual_refill',
+              status: 'in_progress',
+              selectedSheetKeys: ['sheet_1'],
+              completedSheetMessageIndexByKey: { sheet_1: 0 },
+            },
+            logEntries: [{
+              seq: 1,
+              operations: [{ kind: 'row_upsert', sheetKey: 'sheet_1', rowId: 'r1', cells: ['x'] }],
+              filledSheetKeys: ['sheet_1'],
+              changedSheetKeys: ['sheet_1'],
+              groupKeys: ['sheet_1'],
+              writeSet: [{ kind: 'sheet', sheetKey: 'sheet_1' }],
+            }],
+          },
+          summaryVectorIndexManifest: manifest,
+          summaryVectorIndexState: { manifest },
+        },
+      },
+    };
+  }
+
+  // 目标表被清、同层其他表仍在 → tagData 容器存活，向量 manifest 才会被真正剥离并排队删除。
+  function makeMessageWithVectorManifestAndKeptSheet(manifest: any): any {
+    return {
+      is_user: false,
+      mes: 'AI目标层',
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          independentData: {
+            sheet_0: { name: '物品表' },
+            sheet_1: { name: '纪要表' },
+          },
+          modifiedKeys: ['sheet_0', 'sheet_1'],
+          updateGroupKeys: ['sheet_0', 'sheet_1'],
+          storageFrame: {
+            version: 2,
+            checkpoint: {
+              kind: 'full',
+              reason: 'manual',
+              data: {
+                sheet_0: { name: '物品表', content: [['row_id'], ['keep']] },
+                sheet_1: { name: '纪要表', content: [['row_id'], ['old']] },
+              },
+            },
+            logEntries: [{
+              seq: 1,
+              operations: [{ kind: 'row_upsert', sheetKey: 'sheet_1', rowId: 'r1', cells: ['x'] }],
+              filledSheetKeys: ['sheet_0', 'sheet_1'],
+              changedSheetKeys: ['sheet_0', 'sheet_1'],
+              groupKeys: ['sheet_0', 'sheet_1'],
+              writeSet: [{ kind: 'sheet', sheetKey: 'sheet_0' }, { kind: 'sheet', sheetKey: 'sheet_1' }],
+            }],
+          },
+          summaryVectorIndexManifest: manifest,
+          summaryVectorIndexState: { manifest },
+        },
+      },
+    };
+  }
+
+  it('deleteLocalDataInChat：宿主保存失败时不删除外置向量文件', async () => {
+    const manifest = makeVectorManifest('idx-local-delete-save-fail');
+    const chat = [makeMessageWithVectorManifest(manifest)];
+    mockGetChatArray.mockReturnValue(chat);
+    mockSaveChatToHost.mockRejectedValueOnce(new Error('save failed'));
+
+    await expect(deleteLocalDataInChatCore_ACU('all')).rejects.toThrow('save failed');
+
+    expect(mockSaveChatToHost).toHaveBeenCalledTimes(1);
+    expect(mockDeleteSummaryVectorIndexExternal).not.toHaveBeenCalled();
+  });
+
+  it('deleteLocalDataInChat：保存成功后才删除，且顺序在 save 之后', async () => {
+    const manifest = makeVectorManifest('idx-local-delete-save-ok');
+    const chat = [makeMessageWithVectorManifest(manifest)];
+    mockGetChatArray.mockReturnValue(chat);
+
+    const count = await deleteLocalDataInChatCore_ACU('all');
+
+    expect(count).toBe(1);
+    expect(mockSaveChatToHost).toHaveBeenCalledTimes(1);
+    expect(mockDeleteSummaryVectorIndexExternal).toHaveBeenCalledWith(manifest);
+    expect(mockSaveChatToHost.mock.invocationCallOrder[0]).toBeLessThan(
+      mockDeleteSummaryVectorIndexExternal.mock.invocationCallOrder[0],
+    );
+    expect(chat[0].TavernDB_ACU_IsolatedData).toBeUndefined();
+  });
+
+  it('clearTableDataAtFloors：宿主保存失败时不删除外置向量文件', async () => {
+    const manifest = makeVectorManifest('idx-clear-floors-save-fail');
+    const chat = [makeMessageWithVectorManifestAndKeptSheet(manifest)];
+    mockGetChatArray.mockReturnValue(chat);
+    mockSaveChatToHost.mockRejectedValueOnce(new Error('save failed'));
+
+    await expect(clearTableDataAtFloors_ACU([0], ['sheet_1'])).rejects.toThrow('save failed');
+
+    expect(mockSaveChatToHost).toHaveBeenCalledTimes(1);
+    expect(mockDeleteSummaryVectorIndexExternal).not.toHaveBeenCalled();
+    expect(chat[0].TavernDB_ACU_IsolatedData[''].summaryVectorIndexManifest).toBeUndefined();
+  });
+
+  it('clearTableDataAtFloors：保存成功后才删除外置向量文件', async () => {
+    const manifest = makeVectorManifest('idx-clear-floors-save-ok');
+    const chat = [makeMessageWithVectorManifestAndKeptSheet(manifest)];
+    mockGetChatArray.mockReturnValue(chat);
+
+    const count = await clearTableDataAtFloors_ACU([0], ['sheet_1']);
+
+    expect(count).toBe(1);
+    expect(mockDeleteSummaryVectorIndexExternal).toHaveBeenCalledWith(manifest);
+    expect(mockSaveChatToHost.mock.invocationCallOrder[0]).toBeLessThan(
+      mockDeleteSummaryVectorIndexExternal.mock.invocationCallOrder[0],
+    );
+    const tagData = chat[0].TavernDB_ACU_IsolatedData[''];
+    expect(tagData.summaryVectorIndexManifest).toBeUndefined();
+    expect(tagData.summaryVectorIndexState).toBeUndefined();
+  });
+
+  it('clearManualRefillIncrementalDataInRange：宿主保存失败时不删除外置向量文件', async () => {
+    const manifest = makeVectorManifest('idx-refill-incremental-save-fail');
+    const chat = [makeMessageWithVectorManifest(manifest)];
+    mockGetChatArray.mockReturnValue(chat);
+    mockSaveChatToHost.mockRejectedValueOnce(new Error('save failed'));
+
+    await expect(clearManualRefillIncrementalDataInRange_ACU([0], ['sheet_1'])).rejects.toThrow('save failed');
+
+    expect(mockSaveChatToHost).toHaveBeenCalledTimes(1);
+    expect(mockDeleteSummaryVectorIndexExternal).not.toHaveBeenCalled();
+    expect(chat[0].TavernDB_ACU_IsolatedData[''].summaryVectorIndexManifest).toBeUndefined();
+  });
+
+  it('clearManualRefillIncrementalDataInRange：保存成功后才删除外置向量文件', async () => {
+    const manifest = makeVectorManifest('idx-refill-incremental-save-ok');
+    const chat = [makeMessageWithVectorManifest(manifest)];
+    mockGetChatArray.mockReturnValue(chat);
+
+    const count = await clearManualRefillIncrementalDataInRange_ACU([0], ['sheet_1']);
+
+    expect(count).toBeGreaterThan(0);
+    expect(mockDeleteSummaryVectorIndexExternal).toHaveBeenCalledWith(manifest);
+    expect(mockSaveChatToHost.mock.invocationCallOrder[0]).toBeLessThan(
+      mockDeleteSummaryVectorIndexExternal.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('外置文件物理删除失败仅告警，不影响已提交的聊天清理', async () => {
+    const manifest = makeVectorManifest('idx-local-delete-cleanup-fail');
+    const chat = [makeMessageWithVectorManifest(manifest)];
+    mockGetChatArray.mockReturnValue(chat);
+    mockDeleteSummaryVectorIndexExternal.mockRejectedValueOnce(new Error('external cleanup failed'));
+
+    const count = await deleteLocalDataInChatCore_ACU('all');
+
+    expect(count).toBe(1);
+    expect(mockDeleteSummaryVectorIndexExternal).toHaveBeenCalledTimes(1);
+  });
+});

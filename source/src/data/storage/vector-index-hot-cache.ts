@@ -100,6 +100,9 @@ function buildRecordKey_ACU(indexId: string, chunkId: string, chunkKey: string):
     return `${normalizeKeyPart_ACU(indexId)}::${normalizeKeyPart_ACU(chunkId)}::${normalizeKeyPart_ACU(chunkKey)}`;
 }
 
+/** V1-g：open 挂起兜底超时。versionchange 死锁时 Promise 不允许永久 pending。 */
+const IDB_OPEN_TIMEOUT_MS_ACU = 10_000;
+
 function openDb_ACU(): Promise<IDBDatabase> {
     return new Promise((resolve, reject) => {
         if (!isIdbAvailable_ACU()) {
@@ -107,6 +110,21 @@ function openDb_ACU(): Promise<IDBDatabase> {
             return;
         }
         const request = indexedDB.open(DB_NAME_ACU, DB_VERSION_ACU);
+        let settled = false;
+        const settle = (): boolean => {
+            if (settled) return false;
+            settled = true;
+            clearTimeout(openTimer);
+            return true;
+        };
+        const openTimer = setTimeout(() => {
+            if (!settle()) return;
+            reject(new Error(`打开交火向量热缓存超时（${IDB_OPEN_TIMEOUT_MS_ACU}ms）：升级可能被 versionchange 永久挂起`));
+        }, IDB_OPEN_TIMEOUT_MS_ACU);
+        request.onblocked = () => {
+            if (!settle()) return;
+            reject(new Error('IndexedDB 升级被其他标签页阻塞'));
+        };
         request.onupgradeneeded = () => {
             const db = request.result;
             if (!db.objectStoreNames.contains(STORE_NAME_ACU)) {
@@ -124,8 +142,14 @@ function openDb_ACU(): Promise<IDBDatabase> {
                 taskStore.createIndex('updatedAt', 'updatedAt', { unique: false });
             }
         };
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error || new Error('打开交火向量热缓存失败'));
+        request.onsuccess = () => {
+            if (!settle()) return;
+            resolve(request.result);
+        };
+        request.onerror = () => {
+            if (!settle()) return;
+            reject(request.error || new Error('打开交火向量热缓存失败'));
+        };
     });
 }
 
@@ -404,6 +428,12 @@ export async function getSummaryVectorHotCacheChunks_ACU(options: VectorIndexHot
                 tx.onerror = () => { db.close(); reject(tx.error || new Error('读取交火向量热缓存事务失败（单文件快照）')); };
             });
             if (records.length === 0) return null;
+            // V1-b：单文件快照分支没有 chunkRefs 可对照（内容寻址分支按 refs.length 校验），
+            // 改用 manifest.chunkCount 作为期望 chunk 数：写入端每个 chunk 恰好落一条记录，
+            // 数量不符意味着 IDB 淘汰/损坏/写入跳过，返回 null 回源外置权威文件。
+            // chunkCount 缺失或为 0 的旧 manifest 无法校验，维持原行为。
+            const expectedChunkCount_ACU = Math.max(0, Math.floor(Number(manifest.chunkCount) || 0));
+            if (expectedChunkCount_ACU > 0 && records.length !== expectedChunkCount_ACU) return null;
             return records
                 .map((record) => cloneChunk_ACU(record.chunk))
                 .sort((left, right) => left.sequence - right.sequence || left.chunkId.localeCompare(right.chunkId));
@@ -999,6 +1029,9 @@ export async function markSummaryVectorFlushTaskReadyIfGenerationMatchesStrict_A
                 store.put({
                     ...current,
                     status: 'ready',
+                    // V1-a：flush 成功即本轮代次终结，attemptCount 必须归零。
+                    // 保留旧值会让跨代累计 claim 次数虚高，在 5 次上限处被误判为 terminal。
+                    attemptCount: 0,
                     lastSuccessAt: now,
                     updatedAt: now,
                 });

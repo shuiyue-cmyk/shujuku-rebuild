@@ -487,8 +487,11 @@ describe('summary-vector-index-storage-service 安全 GC', () => {
     expect(h.remove).not.toHaveBeenCalled();
 
     // 模拟 strict save 失败：archive 已恢复内存 pointer，并调用 abort 清除 pending 标记。
+    // V1-i：abort 现在还会注销 prepared registry 条目并 best-effort 删除外置文件。
     h.snapshot.value = null;
-    abortSummaryVectorIndexSnapshotPublication_ACU(persisted.uploadedFiles);
+    await abortSummaryVectorIndexSnapshotPublication_ACU(persisted.uploadedFiles);
+    expect(h.unregister).toHaveBeenCalledWith([file.path]);
+    expect(h.remove).toHaveBeenCalledWith(file.path);
     const afterStrictSaveFailure = await cleanupUnreachableSummaryVectorIndexFiles_ACU({
       scopeHints: [{ chatKey: 'chat-a', isolationKey: 'iso-a', sourceTableKey: 'summary' }],
     });

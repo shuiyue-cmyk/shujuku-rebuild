@@ -1905,6 +1905,9 @@ async function deleteLocalDataInChatCoreInner_ACU(
     }
 
     let deletedCount = 0;
+    // 外置向量文件删除必须等聊天保存成功后再执行：保存失败时聊天仍指向这些文件，
+    // 提前删除会留下悬空指针、检索永久失败。宁可泄漏，不可误删。
+    const vectorManifestsToDeleteAfterCommit: any[] = [];
     const targetIdentity = settings_ACU.dataIsolationEnabled ? settings_ACU.dataIsolationCode : null;
     const currentIsolationKey = getCurrentIsolationKey_ACU();
 
@@ -1980,13 +1983,13 @@ async function deleteLocalDataInChatCoreInner_ACU(
                 if (mode === 'all') {
                     const isolatedData = msg.TavernDB_ACU_IsolatedData;
                     for (const key of Object.keys(isolatedData)) {
-                        await deleteVectorIndexManifestFromTagData_ACU(isolatedData[key]);
+                        await deleteVectorIndexManifestFromTagData_ACU(isolatedData[key], { deleteExternal: false, onManifest: manifest => vectorManifestsToDeleteAfterCommit.push(manifest) });
                     }
                     delete msg.TavernDB_ACU_IsolatedData;
                     modified = true;
                 } else {
                     if (msg.TavernDB_ACU_IsolatedData[currentIsolationKey]) {
-                        await deleteVectorIndexManifestFromTagData_ACU(msg.TavernDB_ACU_IsolatedData[currentIsolationKey]);
+                        await deleteVectorIndexManifestFromTagData_ACU(msg.TavernDB_ACU_IsolatedData[currentIsolationKey], { deleteExternal: false, onManifest: manifest => vectorManifestsToDeleteAfterCommit.push(manifest) });
                         delete msg.TavernDB_ACU_IsolatedData[currentIsolationKey];
                         if (Object.keys(msg.TavernDB_ACU_IsolatedData).length === 0) {
                             delete msg.TavernDB_ACU_IsolatedData;
@@ -2036,6 +2039,8 @@ async function deleteLocalDataInChatCoreInner_ACU(
 
     if (deletedCount > 0) {
         await saveChatToHost_ACU();
+        // 聊天引用已提交后才物理删除外置向量文件；保存抛错时不执行，引用保持原样。
+        await cleanupVectorIndexManifestsAfterCommit_ACU(vectorManifestsToDeleteAfterCommit);
     }
 
     return deletedCount;
@@ -2227,6 +2232,8 @@ async function clearTableDataAtFloorsCore_ACU(targetMessageIndices: number[], ta
         : true;
 
     let clearedCount = 0;
+    // 外置向量文件删除推迟到聊天保存成功后：保存失败时引用仍在，删除会造成悬空指针。
+    const vectorManifestsToDeleteAfterCommit: any[] = [];
 
     for (const idx of targetMessageIndices) {
         if (idx < 0 || idx >= chat.length) continue;
@@ -2239,8 +2246,9 @@ async function clearTableDataAtFloorsCore_ACU(targetMessageIndices: number[], ta
             : clearTableFieldsForIsolation_ACU(msg, isolationKey, isolationConfig);
         if (clearsSummaryOrOutline) {
             const tagData = readIsolatedTagData_ACU(msg, isolationKey);
-            if (await deleteVectorIndexManifestFromTagData_ACU(tagData)) {
-                logDebug_ACU(`[清空楼层] 已删除消息索引 ${idx} 上的交火向量索引外置文件引用。`);
+            // 只剥离 tagData 上的引用并收集 manifest，聊天保存成功后才物理删除外置文件。
+            if (await deleteVectorIndexManifestFromTagData_ACU(tagData, { deleteExternal: false, onManifest: manifest => vectorManifestsToDeleteAfterCommit.push(manifest) })) {
+                logDebug_ACU(`[清空楼层] 已标记消息索引 ${idx} 上的交火向量索引外置文件引用待删除。`);
             }
         }
         if (changed) {
@@ -2251,6 +2259,8 @@ async function clearTableDataAtFloorsCore_ACU(targetMessageIndices: number[], ta
 
     if (clearedCount > 0) {
         await saveChatToHost_ACU();
+        // 聊天引用已提交后才物理删除外置向量文件；保存抛错时不执行，宁可泄漏不误删。
+        await cleanupVectorIndexManifestsAfterCommit_ACU(vectorManifestsToDeleteAfterCommit);
         logDebug_ACU(`[清空楼层] 共清空 ${clearedCount} 条消息的表格数据，聊天已保存。`);
     }
 
@@ -2296,6 +2306,8 @@ async function clearManualRefillIncrementalDataInRangeCore_ACU(targetMessageIndi
     }
     const clearsSummaryOrOutline = tableListContainsSummaryOrOutline_ACU(targetSheetKeys);
     let clearedCount = 0;
+    // 外置向量文件删除推迟到聊天保存成功后：保存失败时引用仍在，删除会造成悬空指针。
+    const vectorManifestsToDeleteAfterCommit: any[] = [];
 
     for (const idx of targetMessageIndices) {
         if (idx < 0 || idx >= chat.length) continue;
@@ -2308,8 +2320,9 @@ async function clearManualRefillIncrementalDataInRangeCore_ACU(targetMessageIndi
             const tagData = isolatedData && typeof isolatedData === 'object' && !Array.isArray(isolatedData)
                 ? isolatedData[isolationKey]
                 : null;
-            if (await deleteVectorIndexManifestFromTagData_ACU(tagData)) {
-                logDebug_ACU(`[手动重填预清理] 已删除消息索引 ${idx} 上的交火向量索引外置文件引用。`);
+            // 只剥离 tagData 上的引用并收集 manifest，聊天保存成功后才物理删除外置文件。
+            if (await deleteVectorIndexManifestFromTagData_ACU(tagData, { deleteExternal: false, onManifest: manifest => vectorManifestsToDeleteAfterCommit.push(manifest) })) {
+                logDebug_ACU(`[手动重填预清理] 已标记消息索引 ${idx} 上的交火向量索引外置文件引用待删除。`);
             }
         }
         if (changed) {
@@ -2364,6 +2377,8 @@ async function clearManualRefillIncrementalDataInRangeCore_ACU(targetMessageIndi
     }
     if (clearedCount > 0) {
         await saveChatToHost_ACU();
+        // 聊天引用已提交后才物理删除外置向量文件；保存抛错时不执行，宁可泄漏不误删。
+        await cleanupVectorIndexManifestsAfterCommit_ACU(vectorManifestsToDeleteAfterCommit);
         logDebug_ACU(`[手动重填预清理] 共清理 ${clearedCount} 条消息的选中表增量数据，聊天已保存。`);
     }
 

@@ -1,4 +1,5 @@
 import { getCurrentCharacterWorldbookBinding_ACU } from '../../data/gateways/character-gateway';
+import { getActiveWorldbookNamesForFill_ACU } from '../../data/gateways/worldbook-gateway';
 import { getIsolationPrefix_ACU, getInjectionTargetLorebook_ACU } from '../worldbook/injection-engine-state';
 import { buildCombinedWorldbookContentByStrategy_ACU, getLorebookEntriesByNames_ACU } from '../worldbook/pipeline';
 import { getCurrentWorldbookConfig_ACU } from '../settings/settings-readers';
@@ -39,7 +40,7 @@ function isGeneratedEntryComment_ACU(comment: string): boolean {
     || comment.startsWith('重要人物条目');
 }
 
-/** 解析当前生效的世界书名单（手动选择或角色绑定）。同时供 Agent 世界书读取工具使用。 */
+/** 解析当前生效的世界书名单（手动选择 / 正文接收 / 角色绑定）。同时供 Agent 世界书读取工具使用。 */
 export async function resolveRelevantBookNames_ACU(): Promise<string[]> {
   const config = getCurrentWorldbookConfig_ACU();
   if (config?.source === 'manual') {
@@ -49,6 +50,12 @@ export async function resolveRelevantBookNames_ACU(): Promise<string[]> {
     return [...new Set(manualSelection
       .map((name: unknown) => String(name ?? '').trim())
       .filter(Boolean))];
+  }
+  // 'active'（正文接收）必须与填表/注入管线同源：激活全局书 + 角色卡绑定书。
+  // 少了这条分支，配置为「正文接收」的聊天在续写侧会降级成角色绑定书，续写背景与
+  // 填表、注入取到不同的世界书集，续写看到的设定比正文实际接收的少（见 pipeline 的 active 分支）。
+  if (config?.source === 'active') {
+    return await getActiveWorldbookNamesForFill_ACU();
   }
   return (await getCurrentCharacterWorldbookBinding_ACU()).orderedNames;
 }

@@ -292,6 +292,19 @@ export async function commitStagedSheetsAtFullBoundaryAtomic_ACU(
   }, async () => {
     const chat = getChatArray_ACU();
 
+    // 0. 聊天标识复检：staging 计划属于哪一份聊天，就只能汇合回那一份聊天。
+    //    run 期间切聊（CHAT_CHANGED）会让 live chat / 回放根整体换掉，此时把旧聊天的
+    //    staging 快照折叠进新聊天楼层，会产出一张“新聊天里从未出现过”的表内容。
+    //    与 §3.2「零猜测恢复」一致：不匹配即丢弃 staging 并 fail-closed。
+    const liveChatKey = String(currentChatFileIdentifier_ACU || '');
+    if (chatKey !== liveChatKey) {
+      return {
+        ok: false,
+        error: `boundary commit 拒绝执行：staging 所属聊天与当前聊天不一致（staging=${chatKey || '无标识'}, current=${liveChatKey || '无标识'}），已丢弃本次 staging 汇合。`,
+        diagnosticCode: 'staging_chat_scope_mismatch',
+      };
+    }
+
     // 1. 复检唯一 full 根：同一 isolationKey 下只允许一个 full checkpoint。
     const fullIndices: number[] = [];
     for (let index = 0; index < chat.length; index += 1) {
@@ -413,6 +426,14 @@ export async function commitStagedSheetsAtFullBoundaryAtomic_ACU(
     }
 
     // 6. strict save：失败只撤销 candidate（不恢复已删除数据），原位回滚 chat。
+    //    候选 replay 校验是异步边界，切聊可能落在它之后、落盘之前，故写盘前再次复检聊天标识。
+    if (chatKey !== String(currentChatFileIdentifier_ACU || '')) {
+      return {
+        ok: false,
+        error: `boundary commit 拒绝执行：候选校验期间当前聊天标识已变化（staging=${chatKey || '无标识'}, current=${String(currentChatFileIdentifier_ACU || '') || '无标识'}），已丢弃本次 staging 汇合。`,
+        diagnosticCode: 'staging_chat_scope_mismatch',
+      };
+    }
     const before = JSON.parse(JSON.stringify(chat));
     try {
       chat.length = 0;

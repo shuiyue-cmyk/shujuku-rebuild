@@ -27,6 +27,9 @@ function isIdbAvailable_ACU(): boolean {
     return typeof indexedDB !== 'undefined';
 }
 
+/** V1-g：open 挂起兜底超时。versionchange 死锁时 Promise 不允许永久 pending。 */
+const IDB_OPEN_TIMEOUT_MS_ACU = 10_000;
+
 function openDb_ACU(): Promise<IDBDatabase> {
     return new Promise((resolve, reject) => {
         if (!isIdbAvailable_ACU()) {
@@ -34,6 +37,21 @@ function openDb_ACU(): Promise<IDBDatabase> {
             return;
         }
         const request = indexedDB.open(DB_NAME_ACU, DB_VERSION_ACU);
+        let settled = false;
+        const settle = (): boolean => {
+            if (settled) return false;
+            settled = true;
+            clearTimeout(openTimer);
+            return true;
+        };
+        const openTimer = setTimeout(() => {
+            if (!settle()) return;
+            reject(new Error(`打开向量临时缓存超时（${IDB_OPEN_TIMEOUT_MS_ACU}ms）：升级可能被 versionchange 永久挂起`));
+        }, IDB_OPEN_TIMEOUT_MS_ACU);
+        request.onblocked = () => {
+            if (!settle()) return;
+            reject(new Error('IndexedDB 升级被其他标签页阻塞'));
+        };
         request.onupgradeneeded = () => {
             const db = request.result;
             if (!db.objectStoreNames.contains(STORE_NAME_ACU)) {
@@ -42,8 +60,14 @@ function openDb_ACU(): Promise<IDBDatabase> {
                 store.createIndex('lastAccessAt', 'lastAccessAt', { unique: false });
             }
         };
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error || new Error('打开向量临时缓存失败'));
+        request.onsuccess = () => {
+            if (!settle()) return;
+            resolve(request.result);
+        };
+        request.onerror = () => {
+            if (!settle()) return;
+            reject(request.error || new Error('打开向量临时缓存失败'));
+        };
     });
 }
 

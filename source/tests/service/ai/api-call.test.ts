@@ -4,7 +4,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockSettings, mockIsGenerateRawAvailable, mockGenerateRaw, mockSendConnectionManager, mockGetHeaders, mockHandleApiResponse } = vi.hoisted(() => ({
+const { mockSettings, mockIsGenerateRawAvailable, mockGenerateRaw, mockSendConnectionManager, mockGetHeaders, mockHandleApiResponse, mockRateLimitSlot } = vi.hoisted(() => ({
   mockSettings: {
     apiMode: 'custom',
     apiConfig: { url: 'https://api.example.com', model: 'gpt-4', apiKey: 'sk-test', max_tokens: 4096 },
@@ -18,10 +18,12 @@ const { mockSettings, mockIsGenerateRawAvailable, mockGenerateRaw, mockSendConne
   mockSendConnectionManager: vi.fn(),
   mockGetHeaders: vi.fn(() => ({ 'X-Custom': 'test' })),
   mockHandleApiResponse: vi.fn(),
+  mockRateLimitSlot: vi.fn(async () => {}),
 }));
 
 vi.mock('../../../src/service/ai/prompt-builder', () => ({
   handleApiResponse_ACU: mockHandleApiResponse,
+  extractAiUsageMetadata_ACU: vi.fn(() => null),
 }));
 
 vi.mock('../../../src/service/runtime/state-manager', () => ({
@@ -35,11 +37,20 @@ vi.mock('../../../src/data/gateways/ai-gateway', () => ({
   getHostRequestHeaders_ACU: mockGetHeaders,
 }));
 
-vi.mock('../../../src/shared/utils', () => ({
-  logDebug_ACU: vi.fn(),
-  logWarn_ACU: vi.fn(),
-  assertSafeHttpEndpoint_ACU: vi.fn(),
+vi.mock('../../../src/service/ai/preset-rate-limiter', () => ({
+  acquirePresetRateLimitSlot_ACU: mockRateLimitSlot,
 }));
+
+// log 打点 mock 掉防噪；assertSafeHttpEndpoint_ACU 保留真身——
+// 调用编排必须真实通过 SSRF 守卫（V4-b：此前 vi.fn() mock 让守卫在测试里永不生效）。
+vi.mock('../../../src/shared/utils', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/shared/utils')>();
+  return {
+    ...actual,
+    logDebug_ACU: vi.fn(),
+    logWarn_ACU: vi.fn(),
+  };
+});
 
 // mock fetch
 const mockFetch = vi.fn();
@@ -49,6 +60,7 @@ import {
   callApiWithPlotPreset_ACU,
   getApiConfigByPreset_ACU,
   callAIWithPreset_ACU,
+  callAIWithResolvedPreset_ACU,
   callCustomOpenAI_ACU_Direct,
   buildCustomApiRequestBody_ACU,
 } from '../../../src/service/ai/api-call';
@@ -466,5 +478,107 @@ describe('callAIWithPreset_ACU 参数透传', () => {
     await callAIWithPreset_ACU([{ role: 'user', content: '你好' }]);
     const fetchBody = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(fetchBody.max_tokens).toBe(0);
+  });
+});
+
+// ═══ callAIWithResolvedPreset_ACU 传输超时（V3-c：租约不能被挂死的 transport 无限占用）═══
+describe('callAIWithResolvedPreset_ACU 传输超时', () => {
+  const resolved = {
+    apiMode: 'custom',
+    apiConfig: { url: 'https://api.example.com', model: 'gpt-4', max_tokens: 4096 },
+    tavernProfile: 'default',
+  };
+
+  it('外部 signal 在场时将取消并入超时控制器（fetch 收到的是合并后的 signal）', async () => {
+    const controller = new AbortController();
+    mockFetch.mockResolvedValue({ ok: true });
+    mockHandleApiResponse.mockResolvedValue('正文');
+    const result = await callAIWithResolvedPreset_ACU([{ role: 'user', content: '你好' }], resolved, controller.signal);
+    expect(result).toBe('正文');
+    const passed = mockFetch.mock.calls[0][1].signal;
+    expect(passed).toBeTruthy();
+    expect(passed).not.toBe(controller.signal);
+    expect(passed.aborted).toBe(false);
+  });
+
+  it('外部 abort 立即中断挂起的 fetch 并按取消上报', async () => {
+    const controller = new AbortController();
+    mockFetch.mockImplementation((_url: string, init: any) => new Promise((_resolve, reject) => {
+      init.signal.addEventListener('abort', () => {
+        const err = new Error('aborted');
+        err.name = 'AbortError';
+        reject(err);
+      });
+    }));
+    const pending = callAIWithResolvedPreset_ACU([{ role: 'user', content: '你好' }], resolved, controller.signal);
+    await Promise.resolve();
+    controller.abort();
+    await expect(pending).rejects.toThrow('请求已取消');
+  });
+
+  it('transport 挂死时按 120s 超时兜底中断，错误文案区分超时', async () => {
+    vi.useFakeTimers();
+    try {
+      mockFetch.mockImplementation((_url: string, init: any) => new Promise((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => {
+          const err = new Error('aborted');
+          err.name = 'AbortError';
+          reject(err);
+        });
+      }));
+      const pending = callAIWithResolvedPreset_ACU([{ role: 'user', content: '你好' }], resolved);
+      const guarded = pending.catch((error: Error) => error);
+      await vi.advanceTimersByTimeAsync(120_000);
+      const failure = await guarded;
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toContain('内部 AI 请求超时');
+      expect((failure as Error).message).toContain('120');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// ═══ callAIWithResolvedPreset_ACU 基础路径（V4-a：限流/配置校验/错误路径此前零覆盖）═══
+describe('callAIWithResolvedPreset_ACU 基础路径', () => {
+  const resolved = {
+    apiMode: 'custom',
+    apiConfig: { url: 'https://api.example.com', model: 'gpt-4', max_tokens: 4096 },
+    tavernProfile: 'default',
+  };
+
+  it('空消息数组直接拒绝，不触达限流与 fetch', async () => {
+    await expect(callAIWithResolvedPreset_ACU([], resolved)).rejects.toThrow('内部 AI 消息必须是非空数组');
+    expect(mockRateLimitSlot).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('URL 或模型未配置时按自定义路径拒绝', async () => {
+    const broken = { ...resolved, apiConfig: { model: 'gpt-4' } };
+    await expect(callAIWithResolvedPreset_ACU([{ role: 'user', content: '你好' }], broken)).rejects.toThrow('自定义 API 的 URL 或模型未配置');
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it('publicServiceMode 预设先过限流闸再发请求（以预设名计数）', async () => {
+    mockFetch.mockResolvedValue({ ok: true });
+    mockHandleApiResponse.mockResolvedValue('正文');
+    const publicService = { ...resolved, presetName: '公益站A', publicServiceMode: true };
+    const result = await callAIWithResolvedPreset_ACU([{ role: 'user', content: '你好' }], publicService);
+    expect(result).toBe('正文');
+    expect(mockRateLimitSlot).toHaveBeenCalledWith('公益站A', expect.anything());
+    // 无 publicServiceMode 的调用不占限流闸
+    expect(mockRateLimitSlot).toHaveBeenCalledTimes(1);
+  });
+
+  it('非 2xx 响应抛出带状态码的受控错误', async () => {
+    mockFetch.mockResolvedValue({ ok: false, status: 500, text: async () => 'backend down' });
+    await expect(callAIWithResolvedPreset_ACU([{ role: 'user', content: '你好' }], resolved)).rejects.toThrow('API 请求失败: 500 backend down');
+  });
+
+  it('响应解析出空白内容时返回 null 而非空串', async () => {
+    mockFetch.mockResolvedValue({ ok: true });
+    mockHandleApiResponse.mockResolvedValue('   ');
+    const result = await callAIWithResolvedPreset_ACU([{ role: 'user', content: '你好' }], resolved);
+    expect(result).toBeNull();
   });
 });

@@ -198,10 +198,26 @@ export async function finalizeSummaryVectorIndexSnapshotPublication_ACU(files: S
     }
 }
 
-/** 已确认聊天 pointer 未持久化且已恢复运行时状态时调用，使对象回到可由安全 GC 处置的 registry 候选集。 */
-export function abortSummaryVectorIndexSnapshotPublication_ACU(files: SummaryVectorIndexExternalFileRef_ACU[]): void {
-    files.forEach((file) => {
-        if (file?.path) pendingSummaryVectorIndexPublicationPaths_ACU.delete(file.path);
+/**
+ * 已确认聊天 pointer 未持久化且已恢复运行时状态时调用。
+ * V1-i：仅清内存 pending 会让 registry 里的 prepared 条目永久滞留——GC 对 prepared
+ * pack 无条件 retain，外置对象随代次泄漏。abort 即发布终止，finalized 永不会来，
+ * 故复用回滚链路：删除外置文件、注销已删对象的 registry 条目；删除失败的对象以
+ * 不带 publicationState 的孤儿形态显式登记，交由后续安全 GC 处置（可见垃圾优于隐形垃圾）。
+ * 内部全捕获，绝不向 abort 调用方抛出（调用点在 catch 分支中，随后会 rethrow 原错误）。
+ */
+export async function abortSummaryVectorIndexSnapshotPublication_ACU(files: SummaryVectorIndexExternalFileRef_ACU[]): Promise<void> {
+    const abortableFiles = (Array.isArray(files) ? files : []).filter((file) => !!String(file?.path || '').trim());
+    abortableFiles.forEach((file) => {
+        pendingSummaryVectorIndexPublicationPaths_ACU.delete(file.path);
+    });
+    if (abortableFiles.length === 0) return;
+    const rollback = await rollbackUploadedFiles_ACU(abortableFiles);
+    logSummaryVectorIndexIdentityEvent_ACU('debug', 'publish', 'publication_aborted', {
+        path: abortableFiles[0].path,
+        error: `deleted=${rollback.deletedPaths.length}; failed=${rollback.failedPaths.map((failure) => `${failure.path}:${failure.error}`).join('|') || 'none'}`
+            + `${rollback.unregisterError ? `; unregister=${rollback.unregisterError}` : ''}`
+            + `${rollback.orphanRegistrationError ? `; orphanRegistry=${rollback.orphanRegistrationError}` : ''}`,
     });
 }
 

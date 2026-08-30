@@ -18,6 +18,7 @@ import {
 } from './agent-placeholder-resolver';
 import { buildEmptyAgentWorldbookSnapshot_ACU } from './agent-worldbook-read';
 import { currentJsonTableData_ACU } from '../../runtime/state-manager';
+import { escapeRegExp_ACU } from '../../../shared/utils';
 
 /** 单行片段上限：匹配词居中开窗。 */
 const SEARCH_LINE_SNIPPET_LIMIT_ACU = 300;
@@ -41,10 +42,6 @@ interface AgentSearchHit_ACU {
   label: string;
   address: string;
   snippet: string;
-}
-
-function escapeRegex_ACU(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /** 匹配词居中开窗截断单行，沿用奶龙code createMatchLineSnippet 的思路。 */
@@ -197,7 +194,7 @@ export function runAgentSearch_ACU(call: AgentSearchCall_ACU, context: AgentReso
   }
   let regex: RegExp;
   try {
-    regex = call.isRegex ? new RegExp(call.query, 'i') : new RegExp(escapeRegex_ACU(call.query), 'i');
+    regex = call.isRegex ? new RegExp(call.query, 'i') : new RegExp(escapeRegExp_ACU(call.query), 'i');
   } catch (error) {
     return `搜索正则「${call.query}」编译失败：${error instanceof Error ? error.message : String(error)}。请修正正则，或去掉 isRegex 按字面关键词搜索。`;
   }

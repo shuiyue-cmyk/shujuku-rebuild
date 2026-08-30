@@ -332,6 +332,37 @@ function assertNotAborted_ACU(signal?: AbortSignal | null): void {
 }
 
 /**
+ * 内部 AI（续写规划 / 主 Agent / 子代理）单次请求的传输超时兜底。
+ * 背景：本入口跑在续写租约内，transport hang（后端代理挂起、半开连接）时 fetch 永不返回
+ * → 租约被无限占用 → 一切续写操作以 CONTINUATION_OPERATION_BUSY 死锁，只能手动 stop。
+ * 取值宽松（120s）：续写正文是全链路最长的一次生成，短超时会误杀正常的慢响应；
+ * 它只兜「永远等不到结果」的挂死，不兜「慢但有结果」。对照 vector-rerank-gateway 的 30s 兜底。
+ */
+const INTERNAL_AI_FETCH_TIMEOUT_MS_ACU = 120_000;
+
+/**
+ * 把外部取消信号并入超时控制器：外部 abort 或超时到期都会中断 fetch。
+ * 手写转发而非 AbortSignal.any：目标库为 ES2020（类型面里没有 AbortSignal.any），
+ * 且旧内核缺少该静态方法时不能把续写链路搭进去。
+ * @returns 解绑函数（请求结束后必须调用）：续写链路按聊天复用一个 signal，
+ *          不解绑会让监听器随轮数线性堆积。
+ */
+function attachTimeoutAndExternalAbort_ACU(controller: AbortController, external?: AbortSignal | null): () => void {
+  if (!external) return () => {};
+  if (external.aborted) {
+    controller.abort();
+    return () => {};
+  }
+  // 测试与降级宿主可能传入伪 signal（无事件监听面）：缺 addEventListener 时只保留超时兜底。
+  if (typeof (external as any).addEventListener !== 'function') return () => {};
+  const onExternalAbort = () => controller.abort();
+  (external as any).addEventListener('abort', onExternalAbort, { once: true });
+  return () => {
+    try { (external as any).removeEventListener?.('abort', onExternalAbort); } catch { /* 解绑失败不影响结果 */ }
+  };
+}
+
+/**
  * 使用调用方已解析的预设配置发起一次内部 AI 请求（智能续写专用入口）。
  * 必须不再次查预设：固定预设的 fail-closed 决策不能与后续回退竞争。
  * 本库已剥离酒馆主 API（tavern / useMainApi 通路），恒走自定义 chat-completions 路径。
@@ -371,19 +402,51 @@ export async function callAIWithResolvedPreset_ACU(
     if (resolved.publicServiceMode) {
         await acquirePresetRateLimitSlot_ACU(resolved.presetName || '_current_config', { signal });
     }
-    const response = await fetch('/api/backends/chat-completions/generate', {
-        method: 'POST',
-        headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: signal || undefined,
-    });
-    if (!response.ok) {
-        const errTxt = await response.text();
-        throw new Error(`API 请求失败: ${response.status} ${errTxt}`);
+    // 超时可中断：本调用在续写租约内，挂起的 transport 不允许无限占用租约（见常量注释）。
+    // 计时器覆盖到响应体读完为止——流式路径的悬挂发生在 body 读取阶段，只包 fetch 兜不住。
+    const timeoutController = new AbortController();
+    const timeoutTimer = setTimeout(() => timeoutController.abort(), INTERNAL_AI_FETCH_TIMEOUT_MS_ACU);
+    const detachExternalAbort = attachTimeoutAndExternalAbort_ACU(timeoutController, signal);
+    try {
+      let response: Response;
+      try {
+        response = await fetch('/api/backends/chat-completions/generate', {
+            method: 'POST',
+            headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+            signal: timeoutController.signal,
+        });
+      } catch (error: any) {
+        if (signal?.aborted) {
+            const cancelled = new Error('请求已取消');
+            (cancelled as any).name = 'AbortError';
+            throw cancelled;
+        }
+        if (error?.name === 'AbortError') {
+            throw new Error(`内部 AI 请求超时（${INTERNAL_AI_FETCH_TIMEOUT_MS_ACU / 1000}s 无响应），已中断。`);
+        }
+        throw error;
+      }
+      try {
+        if (!response.ok) {
+            const errTxt = await response.text();
+            throw new Error(`API 请求失败: ${response.status} ${errTxt}`);
+        }
+        assertNotAborted_ACU(signal);
+        const requestWantsStream = (body as any)?.stream === true;
+        const content = await handleApiResponse_ACU(response, requestWantsStream, lifecycle?.onUsage);
+        return typeof content === 'string' && content.trim() ? content.trim() : null;
+      } catch (error: any) {
+        // 响应体读取阶段被超时计时器掐断：报超时而不是底层网络错文；外部取消仍按取消上报。
+        if (error?.name === 'AbortError' && !signal?.aborted && timeoutController.signal.aborted) {
+            throw new Error(`内部 AI 请求超时（${INTERNAL_AI_FETCH_TIMEOUT_MS_ACU / 1000}s），已中断。`);
+        }
+        throw error;
+      }
+    } finally {
+      // fetch 抛错路径同样要清理：计时器与外部监听器残留会随轮数堆积（此前 fetch 段无 finally）。
+      clearTimeout(timeoutTimer);
+      detachExternalAbort();
     }
-    assertNotAborted_ACU(signal);
-    const requestWantsStream = (body as any)?.stream === true;
-    const content = await handleApiResponse_ACU(response, requestWantsStream, lifecycle?.onUsage);
-    return typeof content === 'string' && content.trim() ? content.trim() : null;
 }
 

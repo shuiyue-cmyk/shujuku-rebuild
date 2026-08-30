@@ -47,6 +47,12 @@ export interface ContinuationOrchestratorDependencies_ACU {
   createOutlineResolvers: (context: ContinuationPlanningContext_ACU) => Partial<Record<ContinuationPromptPlaceholder_ACU, () => string | Promise<string | null | undefined> | null | undefined>>;
   /** 桥内存中是否持有该聊天的活认领。缺省视为无认领（测试注入场景）。 */
   hasLiveHostClaim?: (chatIdentity: string) => boolean;
+  /**
+   * 作废该聊天在桥内存里的生成开始认领。停止 / 放弃 / 清空之后不会再有归属它的
+   * GENERATION_ENDED，桥里的陈旧条目会让该聊天的续写链永久 BUSY（见
+   * host-generation-bridge.invalidateStartedByChat）。缺省不做任何事（测试注入场景）。
+   */
+  invalidateHostClaim?: (chatIdentity: string) => void;
   /** 把消息追加进主 Agent 的持久会话记录。缺省用楼层锚定存储。 */
   appendAgentConversation?: (appends: readonly AgentConversationAppend_ACU[]) => Promise<boolean>;
   /** 清除楼层上的资料快照字段。缺省用楼层锚定存储。 */
@@ -573,6 +579,8 @@ export class ContinuationOrchestrator_ACU {
     const task = this.requireTask_ACU(this.requireEnvelope_ACU(this.dependencies.store.readPersisted()));
     const guard = guardForTask_ACU(chatIdentity, task);
     this.invalidateLease_ACU(chatIdentity);
+    // 停止后不会再有归属本轮的 GENERATION_ENDED：桥里的认领必须一起作废。
+    this.invalidateHostClaim_ACU(chatIdentity);
     return this.withLease_ACU(async () => {
       let stopped: ContinuationEnvelope_ACU | null = null;
       await this.dependencies.store.updatePersistedAtomically(current => {
@@ -738,6 +746,8 @@ export class ContinuationOrchestrator_ACU {
     const chatIdentity = this.requireChatIdentity_ACU();
     const existing = this.dependencies.store.readPersisted()?.activeTask ?? null;
     this.invalidateLease_ACU(chatIdentity);
+    // 清空后重建任务时，残留的桥认领会把宽松认领永久挡在外面——必须一起作废。
+    this.invalidateHostClaim_ACU(chatIdentity);
     const envelope = await this.withLease_ACU(async () => {
       let result: ContinuationEnvelope_ACU | null = null;
       await this.dependencies.store.updatePersistedAtomically(current => {
@@ -1000,6 +1010,8 @@ export class ContinuationOrchestrator_ACU {
     const sourceTask = this.requireTask_ACU(this.requireEnvelope_ACU(this.dependencies.store.readPersisted()));
     const sourceGuard = guardForTask_ACU(chatIdentity, sourceTask);
     this.invalidateLease_ACU(chatIdentity);
+    // 被放弃的轮次不会再有归属它的生成结束：清掉桥认领，新任务才能正常宽松认领。
+    this.invalidateHostClaim_ACU(chatIdentity);
     await this.withLease_ACU(async () => {
       await this.dependencies.store.updatePersistedAtomically(current => {
         const envelope = this.requireEnvelope_ACU(current);
@@ -1155,6 +1167,20 @@ export class ContinuationOrchestrator_ACU {
 
   private isLeaseCurrent_ACU(chatIdentity: string, lease: Lease_ACU): boolean {
     return this.dependencies.getChatIdentity() === chatIdentity && (epochsByChat_ACU.get(chatIdentity) ?? 0) === lease.epoch && leasesByChat_ACU.get(chatIdentity) === lease;
+  }
+
+  /**
+   * 作废桥内存里该聊天的生成开始认领（停止 / 放弃 / 清空三个出口）。
+   * 与 invalidateLease_ACU 分开：租约作废只挡得住本进程内的续写操作，桥的 startedByChat
+   * 认领要等 GENERATION_ENDED / GENERATION_STOPPED 才删，而这三个出口之后再不会有归属它的结束事件。
+   */
+  private invalidateHostClaim_ACU(chatIdentity: string): void {
+    try {
+      this.dependencies.invalidateHostClaim?.(chatIdentity);
+    } catch {
+      // 桥清理失败不阻断停止/清空：残留认领最坏是再次 BUSY（刷新页面可解），
+      // 但让停止本身抛错会让用户连「停止」都点不动。
+    }
   }
 
   private assertLeaseCurrent_ACU(chatIdentity: string, lease: Lease_ACU): void {

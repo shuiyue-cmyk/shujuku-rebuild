@@ -305,8 +305,51 @@ describe('subscribe / unsubscribe', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// _resetForTesting
+// 敏感键脱敏（二轮审查 V4-g：此前 0 覆盖）
 // ═══════════════════════════════════════════════════════════════
+describe('敏感键脱敏', () => {
+  it('对象整键脱敏：裸键与复合后缀键（embeddingApiKey 等）均打码', () => {
+    const out = formatArgs(['[ACU]', {
+      apiKey: 'sk-abcdefghijklmn012345678',
+      embeddingApiKey: 'embed-secret-value',
+      rerankApiKey: 'rerank-secret-value',
+      accessToken: 'tok-abc',
+      password: 'p@ss',
+      username: 'visible',
+      keyboardLayout: 'not-masked-should-stay',
+      authority: 'should-stay',
+    }]);
+    expect(out).toContain('"apiKey":"***"');
+    expect(out).toContain('"embeddingApiKey":"***"');
+    expect(out).toContain('"rerankApiKey":"***"');
+    expect(out).toContain('"accessToken":"***"');
+    expect(out).toContain('"password":"***"');
+    expect(out).toContain('"username":"visible"');
+    // 非敏感复合词不得误伤：keyboardLayout 不以敏感后缀结尾；authority 尾缀是裸 auth 之外的词。
+    expect(out).toContain('"keyboardLayout":"not-masked-should-stay"');
+    expect(out).toContain('"authority":"should-stay"');
+  });
+
+  it('字符串内联 JSON 形态脱敏：复合键 "embeddingApiKey":"x" 被打码', () => {
+    const out = formatArgs(['config={"embeddingApiKey":"leak-me","model":"m1"}']);
+    expect(out).toContain('"embeddingApiKey":"***"');
+    expect(out).not.toContain('leak-me');
+    expect(out).toContain('"model":"m1"');
+  });
+
+  it('裸形态脱敏：embeddingApiKey=xxx / apiKey=xxx 值打码，tokenizer 不误伤', () => {
+    const out = formatArgs(['请求 embeddingApiKey=supersecret apiKey=topsecret tokenizer=ok']);
+    expect(out).not.toContain('supersecret');
+    expect(out).not.toContain('topsecret');
+    expect(out).toContain('tokenizer=ok');
+  });
+
+  it('Bearer 头与 sk- 密钥串脱敏', () => {
+    const out = formatArgs(['Authorization: Bearer abc.def.ghi 与 sk-abcdefghijklmnopqrstuvwx']);
+    expect(out).not.toContain('abc.def.ghi');
+    expect(out).toContain('sk-***');
+  });
+});
 describe('_resetForTesting', () => {
   it('重置所有状态', () => {
     pushLog('debug', ['[ACU]', '[SQL] test']);

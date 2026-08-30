@@ -1079,6 +1079,14 @@ export class ContinuationAgentTurnPlanner_ACU {
     }
 
     if (snapshotChanged) {
+      // 落盘守卫与信封写同强度：子代理在途期间用户可能已停止任务（signal abort / 租约作废），
+      // 此时楼层扩展字段绝不能照常写入——信封写有 withLease + assertLeaseCurrent，
+      // 而 agent-module-store 的写只校验目标楼层存在，守卫必须在这一层补上。
+      const leaseProbe = request.createInternalRequestIdentity(0);
+      if (request.signal?.aborted || !request.isInternalRequestCurrent(leaseProbe)) {
+        // 内存快照仍返回：调用方（plan）随后会因同一判定抛 STALE，不影响最终结果。
+        return nextSnapshot;
+      }
       context.moduleSnapshot = nextSnapshot;
       context.settledThroughIndex = nextSnapshot.settledThroughIndex;
       await this.persistSnapshot_ACU(chat, nextSnapshot);

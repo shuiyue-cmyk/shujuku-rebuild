@@ -140,10 +140,10 @@ function normalizeLogArg_ACU(arg: any): string {
     return arg
       .replace(/(Authorization\s*:\s*Bearer\s+)([^\s"',}\n]+)/gi, '$1***')
       .replace(/(Bearer\s+)(sk-[A-Za-z0-9-_]+)/g, '$1***')
-      .replace(/\"(api[_-]?key|apikey|authorization|token|password|secret|auth|bearer|accessToken|access_token)\"\s*:\s*\"[^\"]*\"/gi, '\"$1\":\"***\"')
-      // [L4] 裸形态脱敏：apiKey=xxx / token: xxx（键与值均不带引号的日志形态）。
+      .replace(/\"([A-Za-z0-9_-]*(?:api[_-]?key|apikey|authorization|token|password|secret|auth|bearer|accessToken|access_token))\"\s*:\s*\"[^\"]*\"/gi, '\"$1\":\"***\"')
+      // [L4] 裸形态脱敏：apiKey=xxx / token: xxx / embeddingApiKey=xxx（键与值均不带引号的日志形态）。
       // 值若以 bearer 开头（如 Authorization: Bearer xxx）交由上方既有规则处理，避免双重掩码。
-      .replace(/\b(api[_-]?key|apikey|authorization|token|password|secret|auth|bearer|accessToken|access_token)\b(\s*[:=]\s*)(?!["']|bearer\b)[^\s"',;}\n]+/gi, '$1$2***')
+      .replace(/\b([A-Za-z0-9_]*(?:api[_-]?key|apikey|authorization|token|password|secret|auth|bearer|accessToken|access_token))\b(\s*[:=]\s*)(?!["']|bearer\b)[^\s"',;}\n]+/gi, '$1$2***')
       // [L4] 无前缀独立出现的 sk- 开头密钥串（长度阈值避免误伤普通词）
       .replace(/\bsk-[A-Za-z0-9_-]{16,}/g, 'sk-***');
   }

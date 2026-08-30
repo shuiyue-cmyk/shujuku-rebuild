@@ -7,7 +7,10 @@ import {
   decodeVectorIndexScopeFromPath_ACU,
   extractVectorIndexContentPackScopeTokenFromPath_ACU,
   isVectorIndexContentPackPathV2_ACU,
+  loadVectorIndexRegistry_ACU,
+  readVectorIndexJsonFile_ACU,
   registerVectorIndexFiles_ACU,
+  unregisterVectorIndexFiles_ACU,
 } from '../../../src/data/storage/vector-index-st-files-storage';
 
 import { buildVectorIndexSnapshotWriteGeneration_ACU } from '../../../src/service/vector/summary-vector-index-storage-service';
@@ -324,5 +327,32 @@ describe('P7 scopeToken 路径反解（decodeVectorIndexScopeFromPath_ACU）', (
     expect(decodeVectorIndexScopeFromPath_ACU('TavernDB_ACU_vector_v2_notatoken_snap_x_wg_snapshot')).toBeNull();
     expect(decodeVectorIndexScopeFromPath_ACU('')).toBeNull();
     expect(decodeVectorIndexScopeFromPath_ACU('unrelated_file.json')).toBeNull();
+  });
+});
+
+describe('V1-d registry 损坏守卫', () => {
+  it('registry JSON 解析异常：read 标记 corrupted，loadVectorIndexRegistry 抛错而非返回空 store', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"version":1,"files":[{"path":trunc', { status: 200 })));
+    const loaded = await readVectorIndexJsonFile_ACU('any.json');
+    expect(loaded.ok).toBe(false);
+    expect(loaded.corrupted).toBe(true);
+    await expect(loadVectorIndexRegistry_ACU()).rejects.toThrow(/registry/);
+  });
+
+  it('非 404 读取失败抛错；明确 404 仍返回空 registry（真空库语义保留）', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 503, statusText: 'Service Unavailable' })));
+    await expect(loadVectorIndexRegistry_ACU()).rejects.toThrow(/registry 读取失败/);
+    const notFound = vi.fn(async () => ({ ok: false, status: 404, statusText: 'Not Found' }));
+    vi.stubGlobal('fetch', notFound);
+    await expect(loadVectorIndexRegistry_ACU()).resolves.toMatchObject({ files: [] });
+    expect(notFound).toHaveBeenCalledTimes(1);
+  });
+
+  it('registry 内容缺 files 数组（可解析但 schema 损坏）时 unregister 中断，不发上传请求', async () => {
+    const fetchMock = vi.fn(async () => new Response('null', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(unregisterVectorIndexFiles_ACU(['some/registered/path'])).rejects.toThrow(/registry/);
+    // 只发生一次 registry 读取；load→merge→save 在 load 处中断，绝不以空 store 覆盖写。
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

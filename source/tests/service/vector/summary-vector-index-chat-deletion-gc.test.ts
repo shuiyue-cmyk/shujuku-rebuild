@@ -161,6 +161,25 @@ describe('sweepOrphanSummaryVectorIndexFiles_ACU 孤儿清扫', () => {
     expect(h.deleteHotCacheByScope).toHaveBeenCalledWith({ chatKey: 'orphan-chat', isolationKey: '', sourceTableKey: '' });
   });
 
+  it('群组枚举不可用时即使 registry 存在群组聊天 scope 也不得判孤儿（fail-safe）', async () => {
+    // 回归 F1：网关在 groups 字段缺失时曾返回"只有角色聊天"的残缺枚举，
+    // 存活群组聊天会被孤儿清扫误判并删除其向量外置文件。
+    h.aliveChatNames = null;
+    h.registryFiles = [registryFile('path-group-live')];
+    h.decodeScope.mockImplementation((path: string) => (
+      path === 'path-group-live'
+        ? { chatKey: 'group-live-chat', isolationKey: 'default', sourceTableKey: 'summary' }
+        : null
+    ));
+
+    const result = await sweepOrphanSummaryVectorIndexFiles_ACU();
+
+    expect(result).toMatchObject({ performed: false, reason: 'chat_enumeration_unavailable' });
+    expect(h.safeGc).not.toHaveBeenCalled();
+    expect(h.deleteHotCacheByScope).not.toHaveBeenCalled();
+    expect(h.clearFlushTasksByScope).not.toHaveBeenCalled();
+  });
+
   it('24 小时节流：连续两次调用第二次跳过', async () => {
     // 节流依赖 localStorage；node 环境无此对象时源码 fail-open（不节流），
     // 这里 stub 内存实现验证节流路径本身。

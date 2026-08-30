@@ -8,7 +8,6 @@ import type { ContinuationHostTurnAdapter_ACU } from './host-turn-adapter';
 export interface ContinuationHostTurnRuntime_ACU {
   getChatIdentity(): string;
   getChat(): any[];
-  getGenerationSequence(): number;
   readPendingHostTurn(): { settings: { loopTags: string; retryDelaySeconds?: number }; pending: { identity: TurnAttemptIdentity_ACU; capture: ContinuationHostGenerationCapture_ACU; status: 'awaiting_generation' | 'retry_ready' | 'exhausted' } } | null;
   readAutoContinueState(): { eligible: boolean; delaySeconds: number };
   continueTask(): Promise<{ preparedTurn?: ContinuationPreparedTurnInstruction_ACU }>;
@@ -30,6 +29,11 @@ export interface ContinuationHostGenerationBridgeDependencies_ACU {
   wait(ms: number): Promise<void>;
   materializationRetries: number;
   materializationRetryDelayMs: number;
+  /**
+   * 作废在途的自动填表防抖（删楼重试分支的互斥钩子，见 onGenerationEnded）。
+   * 缺省不做任何事（测试注入场景）。
+   */
+  invalidatePendingAutoFill?: () => void;
 }
 
 type StartedHostGeneration_ACU = { identity: TurnAttemptIdentity_ACU; sequence: number; bind: Promise<void> };
@@ -56,6 +60,19 @@ export class ContinuationHostGenerationBridge_ACU {
   hasLiveClaim(chatIdentity: string): boolean {
     if (this.sendingIdentity?.chatIdentity === chatIdentity) return true;
     return this.startedByChat.has(chatIdentity);
+  }
+
+  /**
+   * 作废该聊天在桥内存里的生成开始认领。
+   * 背景：startedByChat 只在生成结束/中止的正常出口删除。用户停止任务、放弃任务或一键清空之后
+   * 不会再有归属它的 GENERATION_ENDED，条目永久残留：回到该聊天时宽松 STARTED 被存在性判定永久
+   * 拒绝、宽松 ENDED 又被陈旧序列号拒绝——该聊天的续写链永久 BUSY 到刷新页面为止。
+   * 因此 orchestrator 的三个作废出口（stopTask / abandonAndCreate / clearContinuationData）必须显式清一次。
+   * @param chatIdentity 要清理认领的聊天身份
+   * @returns 是否确实删除了一条认领（供测试与日志断言）
+   */
+  invalidateStartedByChat(chatIdentity: string): boolean {
+    return this.startedByChat.delete(chatIdentity);
   }
 
   async send(prepared: ContinuationPreparedTurnInstruction_ACU): Promise<boolean> {
@@ -169,6 +186,13 @@ export class ContinuationHostGenerationBridge_ACU {
           await this.dependencies.runtime.pauseForHostResultFailure(claimedIdentity);
           return;
         }
+        // [双写互斥] 坏标签楼即将被删除重发：本轮宿主正文对应的自动填表防抖（GENERATION_ENDED
+        // 派发，500ms 窗口）此刻仍指向那栋将被删掉的楼，若让它到期就会对已删楼层跑一次填表，
+        // 重发的第二次 ENDED 再填一次 → 双写。删楼确认后同步作废这条 pending debounce；
+        // 重发成功后的第二次 ENDED 会正常派发填表，因此不会漏填。
+        // 放在删除确认之后：上面任一回退分支（非末楼 / 删除失败 / 长度不符）都不会删楼，
+        // 也就不该顺手吞掉与本轮无关的填表。
+        try { this.dependencies.invalidatePendingAutoFill?.(); } catch { /* 填表作废失败不阻断重试链 */ }
         await this.dependencies.runtime.rejectHostTurnForMissingTags({ identity: claimedIdentity, messageIndex });
         const afterReject = this.dependencies.runtime.readPendingHostTurn();
         if (afterReject?.pending.status === 'retry_ready' && afterReject.pending.identity.attemptId === claimedIdentity.attemptId) {
@@ -200,9 +224,20 @@ export class ContinuationHostGenerationBridge_ACU {
     const chatIdentity = runtime.getChatIdentity();
     const started = this.startedByChat.get(chatIdentity) ?? null;
     const snapshot = runtime.readPendingHostTurn();
-    if (!snapshot || snapshot.pending.status !== 'awaiting_generation') return;
+    if (!snapshot || snapshot.pending.status !== 'awaiting_generation') {
+      // 没有任何等待轮能归属这条认领（轮次已被其他路径推进/清空），而中止之后也不会再有
+      // GENERATION_ENDED：条目留在 Map 里就是永久残留——回到该聊天时宽松 STARTED 被存在性
+      // 判定挡下、宽松 ENDED 被陈旧序列号挡下，续写链死锁到刷新。必须就地清掉。
+      if (started) this.startedByChat.delete(chatIdentity);
+      return;
+    }
     const boundSequence = snapshot.pending.capture.generationSeq ?? started?.sequence ?? null;
-    if (boundSequence !== null && sequence !== undefined && boundSequence !== sequence) return;
+    if (boundSequence !== null && sequence !== undefined && boundSequence !== sequence) {
+      // 中止事件属于别的生成：只有当它正好是本条认领的那次生成时才清理（那次生成已经死了，
+      // 不会再有 ENDED）；等待轮真正绑定的生成仍在飞时保留认领，不能误删。
+      if (started && sequence === started.sequence) this.startedByChat.delete(chatIdentity);
+      return;
+    }
     this.startedByChat.delete(chatIdentity);
     if (started) {
       try { await started.bind; } catch { /* 绑定失败不阻碍中止转换 */ }

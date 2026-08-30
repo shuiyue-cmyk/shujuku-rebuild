@@ -123,5 +123,14 @@ export async function createRerankScores_ACU(request: VectorRerankRequest_ACU): 
     } catch (_error) {
         throw new Error(`Rerank 响应不是合法 JSON（前 200 字符：${rawBody.slice(0, 200)}）。`);
     }
-    return extractRerankResults_ACU(responsePayload);
+    const results = extractRerankResults_ACU(responsePayload);
+    // V1-f：provider 可能按 top_n 截断返回。部分打分若直接交给调用方，
+    // 未命中候选会拿 embedding score 与 rerankScore 混排（runtime 混排点），
+    // 产生系统性错序且难以察觉。条数或覆盖度不足即显式抛错，
+    // 让调用方整批回退 embedding 排序（回退路径保持全量同尺度）。
+    const coveredIndexes = new Set(results.map((item) => item.index));
+    if (results.length !== documents.length || coveredIndexes.size !== documents.length) {
+        throw new Error(`Rerank 返回条数不完整：期望 ${documents.length} 条，实际 ${results.length} 条（可能被供应商 top_n 截断），回退整批 embedding 排序。`);
+    }
+    return results;
 }
