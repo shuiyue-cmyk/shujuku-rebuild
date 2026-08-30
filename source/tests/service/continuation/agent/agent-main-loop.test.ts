@@ -934,7 +934,7 @@ describe('派工与写集落盘', () => {
     expect(h.mainCalls[1].map(message => message.content).join('\n')).toContain('同一波次并发上限为 1 个');
   });
 
-  it('跟随当前活动 API 时同波次强制串行，预算文本同步宣告上限为 1', async () => {
+  it('跟随当前活动 API 时同波次恢复并发（本库主 API 已剥离，无归因串行约束），预算文本宣告上限为 maxConcurrent', async () => {
     const h = harness_ACU({
       apiPresetMode: 'current',
       budget: { maxConcurrent: 3 },
@@ -942,13 +942,14 @@ describe('派工与写集落盘', () => {
         '{"action":"delegate","delegations":[{"agentName":"mainline-planner","prompt":"主线","reads":["$OUTLINE_WINDOW"]},{"agentName":"beat-planner","prompt":"节拍","reads":["$OUTLINE_WINDOW"]}]}',
         '{"action":"finalize","instruction":"指导"}',
       ],
-      subReplies: ['{"summary":"主线","recommendation":"推进"}'],
+      subReplies: ['{"summary":"主线","recommendation":"推进"}', '{"summary":"节拍","recommendation":"三拍"}'],
     });
     await h.planner.plan(h.request);
 
-    expect(h.subCalls).toHaveLength(1);
-    expect(h.mainCalls[0][findIndex_ACU(h.mainCalls[0], '本轮预算状态')].content).toContain('同一波次最多 1 个子代理');
-    expect(h.mainCalls[1].map(message => message.content).join('\n')).toContain('当前跟随活动 API，同一波次只能派工 1 个子代理');
+    // 所有渠道（含 current）均经 callAIWithResolvedPreset_ACU 直连自定义 chat-completions、各自独立请求，
+    // 不再有「current 走主 API 归因不支持并发」的串行限制 → 两个派工同波次都执行。
+    expect(h.subCalls).toHaveLength(2);
+    expect(h.mainCalls[0][findIndex_ACU(h.mainCalls[0], '本轮预算状态')].content).toContain('同一波次最多 3 个子代理');
   });
 
   it('全局跟随当前 API 但子代理角色全部固定渠道时，波次恢复并发且按角色解析渠道', async () => {

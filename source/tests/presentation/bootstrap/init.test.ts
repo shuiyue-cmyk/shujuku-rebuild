@@ -15,6 +15,8 @@ const m = vi.hoisted(() => ({
   processBeforeGen: vi.fn(),
   orchestrate: vi.fn(),
   shouldProcessSummary: vi.fn(),
+  captureVault: vi.fn(),
+  dormantAudit: vi.fn(),
 }));
 
 vi.mock('../../../src/shared/host-api', () => ({ SillyTavern_API_ACU: m.api }));
@@ -44,6 +46,8 @@ vi.mock('../../../src/presentation/components/summary-vector-index-ui', () => ({
 vi.mock('../../../src/service/vector/summary-vector-index-cache-service', () => ({ preloadSummaryVectorIndexCacheForCurrentChat_ACU: (...args: any[]) => m.preload(...args) }));
 vi.mock('../../../src/service/vector/summary-vector-index-flush-queue', () => ({ restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU: (...args: any[]) => m.restoreFlush(...args) }));
 vi.mock('../../../src/service/vector/summary-vector-index-realign-state', () => ({ markSummaryVectorIndexDirtyForRealign_ACU: vi.fn() }));
+vi.mock('../../../src/service/chat/checkpoint-delete-guard', () => ({ captureCheckpointVaultForCurrentChat_ACU: (...args: any[]) => m.captureVault(...args), installCheckpointDeleteGuard_ACU: vi.fn() }));
+vi.mock('../../../src/service/template/dormant-data-service', () => ({ auditDormantDataIntegrity_ACU: (...args: any[]) => m.dormantAudit(...args) }));
 
 beforeAll(async () => {
   document.body.innerHTML = '<button id="send_but"></button><textarea id="send_textarea"></textarea>';
@@ -68,6 +72,7 @@ beforeEach(() => {
   m.shouldRebuild.mockReturnValue(false);
   m.rebuild.mockResolvedValue(undefined);
   m.restoreFlush.mockResolvedValue(0);
+  m.dormantAudit.mockReturnValue({ ok: true, issues: [] });
   m.processBeforeGen.mockResolvedValue({ success: true, skipped: true, reason: 'no_index_state' });
   m.orchestrate.mockResolvedValue({ action: 'passthrough' });
   m.shouldProcessSummary.mockReturnValue(false);
@@ -136,6 +141,21 @@ describe('mainInitialize_ACU CHAT_CHANGED 向量 flush 恢复编排', () => {
 
     expect(m.rebuild).not.toHaveBeenCalled();
     expect(m.restoreFlush).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+});
+
+describe('mainInitialize_ACU CHAT_CHANGED S0-4/S3-3 收尾', () => {
+  it('延迟重建完成后捕获 checkpoint 保管库并做休眠自检', async () => {
+    vi.useFakeTimers();
+    m.api.chat = [{ mes: 'active' }];
+    m.resetScript.mockImplementation(async (chatKey: string) => { m.currentChatKey = chatKey; });
+
+    await m.chatChanged!('chat-a');
+    await vi.advanceTimersByTimeAsync(1200);
+
+    expect(m.captureVault).toHaveBeenCalled();
+    expect(m.dormantAudit).toHaveBeenCalled();
     vi.useRealTimers();
   });
 });

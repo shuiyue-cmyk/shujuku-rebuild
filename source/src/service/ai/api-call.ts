@@ -338,7 +338,7 @@ function assertNotAborted_ACU(signal?: AbortSignal | null): void {
  */
 export async function callAIWithResolvedPreset_ACU(
     messages: any[],
-    resolved: { apiMode: string; apiConfig: any; tavernProfile: string },
+    resolved: { apiMode: string; apiConfig: any; tavernProfile: string; presetName?: string; nonPrefillSupport?: boolean; publicServiceMode?: boolean },
     signal?: AbortSignal | null,
     lifecycle?: ResolvedPresetCallLifecycle_ACU,
     extras?: ResolvedPresetCallExtras_ACU,
@@ -361,10 +361,16 @@ export async function callAIWithResolvedPreset_ACU(
     const body = buildCustomApiRequestBody_ACU(messages, apiConfig, {
         maxTokens,
         stripModelPrefix: false,
+        // 预设级非预填充透传（与 callAIWithPreset_ACU 对齐）；缺省时 build 内回退全局设置。
+        nonPrefillSupport: resolved.nonPrefillSupport,
         promptCacheKey: extras?.promptCacheKey,
         // usage 回调在场时才请求流式 usage chunk：不改变没有订阅方时的请求体。
         includeStreamUsage: !!lifecycle?.onUsage,
     });
+    // 公益站兼容（预设级）：该预设限速每分钟最多 3 次请求（各预设独立计数）
+    if (resolved.publicServiceMode) {
+        await acquirePresetRateLimitSlot_ACU(resolved.presetName || '_current_config', { signal });
+    }
     const response = await fetch('/api/backends/chat-completions/generate', {
         method: 'POST',
         headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },

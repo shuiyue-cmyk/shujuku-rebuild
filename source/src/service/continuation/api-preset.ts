@@ -14,6 +14,10 @@ export interface ContinuationResolvedApiPreset_ACU {
   apiMode: ApiPresetApiMode_ACU;
   apiConfig: ApiPresetApiConfig_ACU;
   tavernProfile: string;
+  /** 预设级非预填充支持（本库定制透传）。可选：缺省时消费端回退全局设置。 */
+  nonPrefillSupport?: boolean;
+  /** 预设级公益站限速（本库定制透传）。仅固定预设显式开启时为 true。 */
+  publicServiceMode?: boolean;
 }
 
 type ApiPresetResolution_ACU = Omit<ContinuationResolvedApiPreset_ACU, 'presetName' | 'source' | 'reason'> & { resolved: boolean };
@@ -41,13 +45,13 @@ export function resolveContinuationApiPreset_ACU(settings: Pick<ContinuationSett
     if (!presetName) failPreset_ACU(phase, 'empty');
     const resolved = dependencies.resolvePreset(presetName);
     if (!resolved.resolved) failPreset_ACU(phase, 'missing');
-    return { presetName, source: 'fixed', reason: 'fixed_preset', apiMode: resolved.apiMode, apiConfig: resolved.apiConfig, tavernProfile: resolved.tavernProfile };
+    return { presetName, source: 'fixed', reason: 'fixed_preset', apiMode: resolved.apiMode, apiConfig: resolved.apiConfig, tavernProfile: resolved.tavernProfile, nonPrefillSupport: resolved.nonPrefillSupport, publicServiceMode: resolved.publicServiceMode };
   }
   if (settings.apiPresetMode !== 'current') {
     throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_CONFIG_MISSING', phase, '智能续写 API 预设模式非法', false));
   }
   const resolved = dependencies.resolvePreset('');
-  return { presetName: '', source: 'current', reason: 'current_configuration', apiMode: resolved.apiMode, apiConfig: resolved.apiConfig, tavernProfile: resolved.tavernProfile };
+  return { presetName: '', source: 'current', reason: 'current_configuration', apiMode: resolved.apiMode, apiConfig: resolved.apiConfig, tavernProfile: resolved.tavernProfile, nonPrefillSupport: resolved.nonPrefillSupport, publicServiceMode: resolved.publicServiceMode };
 }
 
 type AgentApiPresetSettings_ACU = Pick<ContinuationSettings_ACU, 'apiPresetMode' | 'fixedApiPresetName'> & Partial<Pick<ContinuationSettings_ACU, 'agentApiPresets'>>;

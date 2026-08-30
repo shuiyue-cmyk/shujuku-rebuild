@@ -98,13 +98,20 @@ export function extractTag(args: any[]): string {
 }
 
 const LOG_SENSITIVE_KEYS = /^(api[_-]?key|apikey|key|token|authorization|auth|password|proxy[_-]?password|secret|bearer|accessToken|access_token)$/i;
+// 复合键后缀：embeddingApiKey / rerankApiKey / proxyPassword 等以敏感词结尾但带前缀，锚定式漏网。
+// 只匹配明确敏感词结尾（不含裸 key/auth，避免误伤 keyboard/authority 之类）。
+const LOG_SENSITIVE_SUFFIX = /(api[_-]?key|apikey|token|authorization|password|secret|bearer)$/i;
+
+function isSensitiveLogKey(key: string): boolean {
+  return LOG_SENSITIVE_KEYS.test(key) || LOG_SENSITIVE_SUFFIX.test(key);
+}
 
 function maskSensitiveInLogValue(value: any, depth = 0, seen = new WeakSet()): any {
   if (typeof value === 'string') {
     return value
       .replace(/(Authorization\s*:\s*Bearer\s+)([^\s"',}\n]+)/gi, '$1***')
       .replace(/(Bearer\s+)(sk-[A-Za-z0-9-_]+)/g, '$1***')
-      .replace(/("(?:api[_-]?key|apikey|authorization|token|password|secret)"\s*:\s*")([^"]+)(")/gi, '$1***$3');
+      .replace(/("[A-Za-z0-9_-]*(?:api[_-]?key|apikey|authorization|token|password|secret)"\s*:\s*")([^"]+)(")/gi, '$1***$3');
   }
   if (depth > 6 || value === null || value === undefined) return depth > 6 ? '[Truncated]' : value;
   if (typeof value === 'object') {
@@ -118,7 +125,7 @@ function maskSensitiveInLogValue(value: any, depth = 0, seen = new WeakSet()): a
   if (typeof value === 'object') {
     const out: Record<string, any> = {};
     for (const [k, v] of Object.entries(value)) {
-      if (LOG_SENSITIVE_KEYS.test(k)) out[k] = '***';
+      if (isSensitiveLogKey(k)) out[k] = '***';
       else out[k] = maskSensitiveInLogValue(v, depth + 1, seen);
     }
     return out;

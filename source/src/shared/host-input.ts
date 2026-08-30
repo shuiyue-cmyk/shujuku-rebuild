@@ -13,7 +13,8 @@ export function getSendTextareaValue_ACU(): string {
 export function setSendTextareaValue_ACU(text: string): boolean {
     try {
         const $textarea = jQuery_API_ACU?.('#send_textarea');
-        if (!$textarea || typeof $textarea.val !== 'function' || typeof $textarea.trigger !== 'function') return false;
+        // jQuery 空集上 .val/.trigger 依然存在且调用为 no-op——必须判 length，否则假成功。
+        if (!$textarea || $textarea.length === 0 || typeof $textarea.val !== 'function' || typeof $textarea.trigger !== 'function') return false;
         $textarea?.val(text);
         $textarea?.trigger('input');
         return true;
@@ -26,7 +27,7 @@ export function setSendTextareaValue_ACU(text: string): boolean {
 export function clickSendButton_ACU(): boolean {
     try {
         const $button = jQuery_API_ACU?.('#send_but');
-        if (!$button || typeof $button.click !== 'function') return false;
+        if (!$button || $button.length === 0 || typeof $button.click !== 'function') return false;
         $button.click();
         return true;
     } catch {

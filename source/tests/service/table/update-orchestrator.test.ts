@@ -1994,6 +1994,66 @@ describe('orchestrateManualUpdate_ACU', () => {
     expect(mockPurgeSheetKeysFromChatHistoryHard).not.toHaveBeenCalled();
   });
 
+  it('重填范围内存在与目标表重叠的导入检查点时阻断重填（A方案第二层守卫）', async () => {
+    const { getChatArray_ACU, clearManualRefillSheetDataInRange_ACU } = await import('../../../src/service/chat/chat-service');
+    vi.mocked(getChatArray_ACU).mockReturnValue([
+      { is_user: true },
+      {
+        is_user: false,
+        mes: 'AI回复1',
+        TavernDB_ACU_IsolatedData: {
+          '': {
+            _acu_storage_version: 2,
+            storageFrame: {
+              version: 2,
+              checkpoint: { reason: 'import', data: { sheet_0: { content: [['row_id'], ['imported']] } } },
+              logEntries: [],
+            },
+          },
+        },
+      },
+    ]);
+    mockCurrentJsonTableData = {
+      sheet_0: { name: '测试表A', updateConfig: {} },
+    };
+    mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
+
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('导入检查点');
+    // 阻断必须发生在破坏性清理之前：选中表历史不得被清。
+    expect(clearManualRefillSheetDataInRange_ACU).not.toHaveBeenCalled();
+  });
+
+  it('导入检查点仅覆盖范围外表时不误伤手动重填', async () => {
+    const { getChatArray_ACU, clearManualRefillSheetDataInRange_ACU } = await import('../../../src/service/chat/chat-service');
+    vi.mocked(getChatArray_ACU).mockReturnValue([
+      { is_user: true },
+      {
+        is_user: false,
+        mes: 'AI回复1',
+        TavernDB_ACU_IsolatedData: {
+          '': {
+            _acu_storage_version: 2,
+            storageFrame: {
+              version: 2,
+              checkpoint: { reason: 'import', data: { sheet_7: { content: [['row_id'], ['imported']] } } },
+              logEntries: [],
+            },
+          },
+        },
+      },
+    ]);
+    mockCurrentJsonTableData = {
+      sheet_0: { name: '测试表A', updateConfig: {} },
+    };
+    mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
+
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    expect(result.success, result.error).toBe(true);
+    expect(clearManualRefillSheetDataInRange_ACU).toHaveBeenCalledTimes(1);
+  });
+
   it('手动重填清理后刷新运行时快照，使基底反映清理结果', async () => {
     const { getChatArray_ACU, clearManualRefillIncrementalDataInRange_ACU, clearManualRefillSheetDataInRange_ACU } = await import('../../../src/service/chat/chat-service');
     const { isSqliteMode } = await import('../../../src/service/table/storage-mode');

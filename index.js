@@ -2128,12 +2128,18 @@ function extractTag(args) {
     return UNCATEGORIZED_TAG;
 }
 const LOG_SENSITIVE_KEYS = /^(api[_-]?key|apikey|key|token|authorization|auth|password|proxy[_-]?password|secret|bearer|accessToken|access_token)$/i;
+// 复合键后缀：embeddingApiKey / rerankApiKey / proxyPassword 等以敏感词结尾但带前缀，锚定式漏网。
+// 只匹配明确敏感词结尾（不含裸 key/auth，避免误伤 keyboard/authority 之类）。
+const LOG_SENSITIVE_SUFFIX = /(api[_-]?key|apikey|token|authorization|password|secret|bearer)$/i;
+function isSensitiveLogKey(key) {
+    return LOG_SENSITIVE_KEYS.test(key) || LOG_SENSITIVE_SUFFIX.test(key);
+}
 function maskSensitiveInLogValue(value, depth = 0, seen = new WeakSet()) {
     if (typeof value === 'string') {
         return value
             .replace(/(Authorization\s*:\s*Bearer\s+)([^\s"',}\n]+)/gi, '$1***')
             .replace(/(Bearer\s+)(sk-[A-Za-z0-9-_]+)/g, '$1***')
-            .replace(/("(?:api[_-]?key|apikey|authorization|token|password|secret)"\s*:\s*")([^"]+)(")/gi, '$1***$3');
+            .replace(/("[A-Za-z0-9_-]*(?:api[_-]?key|apikey|authorization|token|password|secret)"\s*:\s*")([^"]+)(")/gi, '$1***$3');
     }
     if (depth > 6 || value === null || value === undefined)
         return depth > 6 ? '[Truncated]' : value;
@@ -2150,7 +2156,7 @@ function maskSensitiveInLogValue(value, depth = 0, seen = new WeakSet()) {
     if (typeof value === 'object') {
         const out = {};
         for (const [k, v] of Object.entries(value)) {
-            if (LOG_SENSITIVE_KEYS.test(k))
+            if (isSensitiveLogKey(k))
                 out[k] = '***';
             else
                 out[k] = maskSensitiveInLogValue(v, depth + 1, seen);
@@ -64380,10 +64386,16 @@ async function callAIWithResolvedPreset_ACU(messages, resolved, signal, lifecycl
     const body = buildCustomApiRequestBody_ACU(messages, apiConfig, {
         maxTokens,
         stripModelPrefix: false,
+        // 预设级非预填充透传（与 callAIWithPreset_ACU 对齐）；缺省时 build 内回退全局设置。
+        nonPrefillSupport: resolved.nonPrefillSupport,
         promptCacheKey: extras?.promptCacheKey,
         // usage 回调在场时才请求流式 usage chunk：不改变没有订阅方时的请求体。
         includeStreamUsage: !!lifecycle?.onUsage,
     });
+    // 公益站兼容（预设级）：该预设限速每分钟最多 3 次请求（各预设独立计数）
+    if (resolved.publicServiceMode) {
+        await acquirePresetRateLimitSlot_ACU(resolved.presetName || '_current_config', { signal });
+    }
     const response = await fetch('/api/backends/chat-completions/generate', {
         method: 'POST',
         headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
@@ -98794,6 +98806,63 @@ async function orchestrateManualUpdate_ACU(targetKeys, processBatch, refreshData
                     return { success: false, error: '表格运行时在确认期间发生变化，已取消本次手动填表，请确认后重试。' };
                 }
             }
+            // A方案保护：检测范围内是否存在导入检查点（reason==='import'）且与本次重填目标表重叠，
+            // 若存在则阻断本次重填，避免“导入后手动填表覆盖导入”静默丢失。
+            const importOverlap = (() => {
+                const targetSet = new Set(targetKeys);
+                for (const idx of contextScopeIndices) {
+                    const msg = liveChat[idx];
+                    if (!msg || msg.is_user)
+                        continue;
+                    const tagData = readIsolatedTagData_ACU(msg, currentIsolationKey);
+                    if (!tagData?.storageFrame)
+                        continue;
+                    const frame = tagData.storageFrame;
+                    if (frame.checkpoint && frame.checkpoint.reason === 'import') {
+                        const cpData = frame.checkpoint.data;
+                        if (cpData && typeof cpData === 'object' && !Array.isArray(cpData)) {
+                            for (const k of Object.keys(cpData)) {
+                                if (k.startsWith('sheet_') && targetSet.has(k))
+                                    return true;
+                            }
+                        }
+                    }
+                    if (Array.isArray(frame.logEntries)) {
+                        for (const entry of frame.logEntries) {
+                            if (!entry || typeof entry !== 'object')
+                                continue;
+                            const ops = entry.operations;
+                            if (Array.isArray(ops)) {
+                                for (const op of ops) {
+                                    if (op && op.kind === 'data_replace' && op.reason === 'import' && op.data && typeof op.data === 'object' && !Array.isArray(op.data)) {
+                                        for (const k of Object.keys(op.data)) {
+                                            if (k.startsWith('sheet_') && targetSet.has(k))
+                                                return true;
+                                        }
+                                    }
+                                }
+                            }
+                            // 历史兼容：极老聊天可能用 patches 承载 data_replace import（现 V2 不再产新），一并扫描闭环
+                            const patches = entry.patches;
+                            if (Array.isArray(patches)) {
+                                for (const patch of patches) {
+                                    if (patch && patch.kind === 'data_replace' && patch.reason === 'import' && patch.data && typeof patch.data === 'object' && !Array.isArray(patch.data)) {
+                                        for (const k of Object.keys(patch.data)) {
+                                            if (k.startsWith('sheet_') && targetSet.has(k))
+                                                return true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                return false;
+            })();
+            if (importOverlap) {
+                logWarn_ACU('[Manual Refill] 检测到重填范围内存在导入检查点（reason=import）且与目标表重叠，已阻断本次重填以避免覆盖导入。');
+                return { success: false, error: '检测到本次重填范围内存在“导入检查点”（通过导入/恢复写入的权威快照），为避免覆盖导入，已阻止本次手动填表。如需重填该范围，请先确认是否需要保留导入数据，或选择不含导入楼层的范围/表。' };
+            }
             try {
                 // 破坏性清理不可逆：一旦开始，后续任何失败都不回滚、不恢复已删数据。
                 refillCleanupStarted = true;
@@ -102257,7 +102326,8 @@ function getSendTextareaValue_ACU() {
 function setSendTextareaValue_ACU(text) {
     try {
         const $textarea = jQuery_API_ACU?.('#send_textarea');
-        if (!$textarea || typeof $textarea.val !== 'function' || typeof $textarea.trigger !== 'function')
+        // jQuery 空集上 .val/.trigger 依然存在且调用为 no-op——必须判 length，否则假成功。
+        if (!$textarea || $textarea.length === 0 || typeof $textarea.val !== 'function' || typeof $textarea.trigger !== 'function')
             return false;
         $textarea?.val(text);
         $textarea?.trigger('input');
@@ -102271,7 +102341,7 @@ function setSendTextareaValue_ACU(text) {
 function clickSendButton_ACU() {
     try {
         const $button = jQuery_API_ACU?.('#send_but');
-        if (!$button || typeof $button.click !== 'function')
+        if (!$button || $button.length === 0 || typeof $button.click !== 'function')
             return false;
         $button.click();
         return true;
@@ -105933,13 +106003,13 @@ function resolveContinuationApiPreset_ACU(settings, phase, dependencies = defaul
         const resolved = dependencies.resolvePreset(presetName);
         if (!resolved.resolved)
             failPreset_ACU(phase, 'missing');
-        return { presetName, source: 'fixed', reason: 'fixed_preset', apiMode: resolved.apiMode, apiConfig: resolved.apiConfig, tavernProfile: resolved.tavernProfile };
+        return { presetName, source: 'fixed', reason: 'fixed_preset', apiMode: resolved.apiMode, apiConfig: resolved.apiConfig, tavernProfile: resolved.tavernProfile, nonPrefillSupport: resolved.nonPrefillSupport, publicServiceMode: resolved.publicServiceMode };
     }
     if (settings.apiPresetMode !== 'current') {
         throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_CONFIG_MISSING', phase, '智能续写 API 预设模式非法', false));
     }
     const resolved = dependencies.resolvePreset('');
-    return { presetName: '', source: 'current', reason: 'current_configuration', apiMode: resolved.apiMode, apiConfig: resolved.apiConfig, tavernProfile: resolved.tavernProfile };
+    return { presetName: '', source: 'current', reason: 'current_configuration', apiMode: resolved.apiMode, apiConfig: resolved.apiConfig, tavernProfile: resolved.tavernProfile, nonPrefillSupport: resolved.nonPrefillSupport, publicServiceMode: resolved.publicServiceMode };
 }
 /**
  * 计算某个角色的生效渠道模式：inherit 回落到全局 apiPresetMode。
@@ -111510,18 +111580,16 @@ function renderAgentToolResults_ACU(outcomes) {
     })
         .join('\n\n');
 }
-/** 参与波次并发判定的四个派工子代理渠道角色。 */
-const SUBAGENT_PRESET_ROLES_ACU = ['maintainer', 'mainlinePlanner', 'beatPlanner', 'reviewer'];
 /**
  * 计算同波次实际可用的并发上限。
  * @param settings 续写设置
  * @param budget 预算配置
- * @returns 并发上限；任一子代理角色的生效渠道为「跟随当前活动 API」时为 1，
- *          因为主 API 的归因机制不支持并发内部请求
+ * @returns 并发上限。本库已剥离酒馆主 API（generateRaw/tavern 通路），所有渠道（含「跟随当前活动 API」）
+ *          均经 callAIWithResolvedPreset_ACU 直连自定义 chat-completions、各自独立请求，不存在主 API
+ *          归因不支持并发的约束，故直接取预算上限。
  */
 function resolveWaveLimit_ACU(settings, budget) {
-    const hasCurrentChannel = SUBAGENT_PRESET_ROLES_ACU.some(role => effectiveAgentApiPresetMode_ACU(settings, role) === 'current');
-    return hasCurrentChannel ? 1 : Math.max(1, budget.maxConcurrent);
+    return Math.max(1, budget.maxConcurrent);
 }
 function describePlannerOutcome_ACU(summary, recommendation, mustPreserve, risks) {
     return [
@@ -112131,11 +112199,7 @@ class ContinuationAgentTurnPlanner_ACU {
                 continue;
             }
             if (accepted.length >= waveLimit) {
-                const hasCurrentChannel = SUBAGENT_PRESET_ROLES_ACU.some(role => effectiveAgentApiPresetMode_ACU(request.settings, role) === 'current');
-                const why = waveLimit === 1 && hasCurrentChannel
-                    ? '当前跟随活动 API，同一波次只能派工 1 个子代理'
-                    : `同一波次并发上限为 ${waveLimit} 个`;
-                rejectImmediately(delegation.agentName, `${why}，本次未执行，可在下一次迭代重派`);
+                rejectImmediately(delegation.agentName, `同一波次并发上限为 ${waveLimit} 个，本次未执行，可在下一次迭代重派`);
                 continue;
             }
             accepted.push(delegation);
@@ -113181,6 +113245,15 @@ async function runChatChangedDelayedRebuild_ACU(chatFileName) {
             catch (restoreFlushError) {
                 logWarn_ACU('[交火向量索引] CHAT_CHANGED 恢复防抖归档队列失败:', restoreFlushError);
             }
+        // S0-4：聊天切换加载完成后捕获 checkpoint 保管库（删楼恢复的影子基线）。
+        try {
+            captureCheckpointVaultForCurrentChat_ACU();
+        }
+        catch (vaultError) {
+            logWarn_ACU(`[删楼守卫] CHAT_CHANGED 保管库捕获失败: ${vaultError?.message}`);
+        }
+        // S3-3：加载完成后做休眠完整性自检（只读，发现孤儿即警告）。
+        runDormantIntegrityAuditQuietly_ACU('CHAT_CHANGED');
         logDebug_ACU('ACU: Chat data reload and UI refresh triggered after chat change (Delayed).');
     }
     catch (error) {
@@ -160879,7 +160952,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260830-13";
+        const stamp = "20260830-17";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {

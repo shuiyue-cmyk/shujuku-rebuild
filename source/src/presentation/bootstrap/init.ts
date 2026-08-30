@@ -422,6 +422,16 @@ async function runChatChangedDelayedRebuild_ACU(chatFileName: string): Promise<v
       logWarn_ACU('[交火向量索引] CHAT_CHANGED 恢复防抖归档队列失败:', restoreFlushError);
     }
 
+    // S0-4：聊天切换加载完成后捕获 checkpoint 保管库（删楼恢复的影子基线）。
+    try {
+      captureCheckpointVaultForCurrentChat_ACU();
+    } catch (vaultError: any) {
+      logWarn_ACU(`[删楼守卫] CHAT_CHANGED 保管库捕获失败: ${vaultError?.message}`);
+    }
+
+    // S3-3：加载完成后做休眠完整性自检（只读，发现孤儿即警告）。
+    runDormantIntegrityAuditQuietly_ACU('CHAT_CHANGED');
+
     logDebug_ACU('ACU: Chat data reload and UI refresh triggered after chat change (Delayed).');
   } catch (error) {
     // [M3] 同步段已清派生缓存，此处任何失败都要兜底恢复，避免停留空白态

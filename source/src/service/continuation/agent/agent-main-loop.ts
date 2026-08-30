@@ -16,7 +16,7 @@
 import { getChatArray_ACU } from '../../../data/gateways/chat-gateway';
 import { normalizeContinuationInternalAiRetryLimit_ACU } from '../defaults';
 import { callContinuationInternalAi_ACU, callContinuationInternalAiWithRetry_ACU, formatAgentUsageLabel_ACU, type AiUsageMetadata_ACU, type ContinuationInternalAiCallOptions_ACU } from '../internal-ai-call';
-import { effectiveAgentApiPresetMode_ACU, resolveContinuationAgentApiPreset_ACU, type ContinuationApiPresetDependencies_ACU, type ContinuationResolvedApiPreset_ACU } from '../api-preset';
+import { resolveContinuationAgentApiPreset_ACU, type ContinuationApiPresetDependencies_ACU, type ContinuationResolvedApiPreset_ACU } from '../api-preset';
 import { renderContinuationPrompt_ACU } from '../prompt-template';
 import {
   ContinuationValidationError_ACU,
@@ -261,19 +261,16 @@ export function renderAgentToolResults_ACU(outcomes: readonly AgentDelegationOut
     .join('\n\n');
 }
 
-/** 参与波次并发判定的四个派工子代理渠道角色。 */
-const SUBAGENT_PRESET_ROLES_ACU = ['maintainer', 'mainlinePlanner', 'beatPlanner', 'reviewer'] as const;
-
 /**
  * 计算同波次实际可用的并发上限。
  * @param settings 续写设置
  * @param budget 预算配置
- * @returns 并发上限；任一子代理角色的生效渠道为「跟随当前活动 API」时为 1，
- *          因为主 API 的归因机制不支持并发内部请求
+ * @returns 并发上限。本库已剥离酒馆主 API（generateRaw/tavern 通路），所有渠道（含「跟随当前活动 API」）
+ *          均经 callAIWithResolvedPreset_ACU 直连自定义 chat-completions、各自独立请求，不存在主 API
+ *          归因不支持并发的约束，故直接取预算上限。
  */
 function resolveWaveLimit_ACU(settings: ContinuationSettings_ACU, budget: AgentRunBudget_ACU): number {
-  const hasCurrentChannel = SUBAGENT_PRESET_ROLES_ACU.some(role => effectiveAgentApiPresetMode_ACU(settings, role) === 'current');
-  return hasCurrentChannel ? 1 : Math.max(1, budget.maxConcurrent);
+  return Math.max(1, budget.maxConcurrent);
 }
 
 function describePlannerOutcome_ACU(summary: string, recommendation: string, mustPreserve: readonly string[], risks: readonly string[]): string {
@@ -952,11 +949,7 @@ export class ContinuationAgentTurnPlanner_ACU {
         continue;
       }
       if (accepted.length >= waveLimit) {
-        const hasCurrentChannel = SUBAGENT_PRESET_ROLES_ACU.some(role => effectiveAgentApiPresetMode_ACU(request.settings, role) === 'current');
-        const why = waveLimit === 1 && hasCurrentChannel
-          ? '当前跟随活动 API，同一波次只能派工 1 个子代理'
-          : `同一波次并发上限为 ${waveLimit} 个`;
-        rejectImmediately(delegation.agentName, `${why}，本次未执行，可在下一次迭代重派`);
+        rejectImmediately(delegation.agentName, `同一波次并发上限为 ${waveLimit} 个，本次未执行，可在下一次迭代重派`);
         continue;
       }
       accepted.push(delegation);
