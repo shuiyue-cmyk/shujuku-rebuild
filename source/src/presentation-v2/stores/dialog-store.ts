@@ -1,4 +1,5 @@
 import { defineStore } from "pinia";
+import { acuClearInterval, acuSetInterval, type AcuTimerHandle } from "../bootstrap/host-env";
 
 export type AcuDialogVariant = "default" | "primary" | "danger";
 export type AcuDialogKind = "confirm" | "prompt" | "choice" | "multiselect";
@@ -36,6 +37,8 @@ export interface AcuDialogRequest {
     variant?: "neutral" | "accent" | "warning" | "success" | "danger";
   };
   requireNonEmpty?: boolean;
+  /** 确认按钮倒计时秒数：激活后倒数归零前 submitActive 被硬性拒绝，取消不受影响。 */
+  confirmCountdownSeconds?: number;
   resolve: (value: string | boolean | string[] | null) => void;
 }
 
@@ -46,6 +49,7 @@ export interface ConfirmDialogOptions {
     confirmLabel?: string;
     cancelLabel?: string;
     confirmVariant?: AcuDialogVariant;
+    confirmCountdownSeconds?: number;
 }
 
 export interface PromptDialogOptions {
@@ -85,15 +89,27 @@ function makeDialogId(): string {
   return `dialog-${nextDialogId++}`;
 }
 
+// 倒计时定时器放模块级：store state 只存剩余秒数（可序列化），句柄不进 state。
+let confirmCountdownTimer: AcuTimerHandle | null = null;
+
+function clearConfirmCountdownTimer(): void {
+  if (confirmCountdownTimer !== null) {
+    acuClearInterval(confirmCountdownTimer);
+    confirmCountdownTimer = null;
+  }
+}
+
 export const useDialogStore = defineStore("acu-v2-dialog", {
   state: () => ({
     active: null as AcuDialogRequest | null,
     queue: [] as AcuDialogRequest[],
     inputValue: "",
     checkedValues: {} as Record<string, boolean>,
+    confirmCountdownRemaining: 0,
   }),
   getters: {
     confirmDisabled(state): boolean {
+      if (state.confirmCountdownRemaining > 0) return true;
       if (state.active?.kind === "prompt") {
         if (state.active.requireNonEmpty === false) return false;
         return !String(state.inputValue || "").trim();
@@ -117,6 +133,7 @@ export const useDialogStore = defineStore("acu-v2-dialog", {
         cancelLabel: options.cancelLabel || "取消",
         confirmVariant: options.confirmVariant || "primary",
         requireNonEmpty: false,
+        confirmCountdownSeconds: options.confirmCountdownSeconds,
         resolve: () => {},
       }).then((value) => value === true);
     },
@@ -181,6 +198,8 @@ export const useDialogStore = defineStore("acu-v2-dialog", {
     submitActive(value?: string): void {
       const dialog = this.active;
       if (!dialog) return;
+      // 倒计时未归零时硬性拒绝提交（UI 禁用只是表现层，这里是真正的 guard）。
+      if (this.confirmCountdownRemaining > 0) return;
       if (dialog.kind === "prompt") {
         const next = String(this.inputValue || "").trim();
         if (dialog.requireNonEmpty !== false && !next) return;
@@ -224,6 +243,8 @@ export const useDialogStore = defineStore("acu-v2-dialog", {
       this.queue = [];
       this.inputValue = "";
       this.checkedValues = {};
+      clearConfirmCountdownTimer();
+      this.confirmCountdownRemaining = 0;
     },
     enqueue(request: AcuDialogRequest): Promise<string | boolean | string[] | null> {
       return new Promise((resolve) => {
@@ -244,6 +265,19 @@ export const useDialogStore = defineStore("acu-v2-dialog", {
         );
       } else {
         this.checkedValues = {};
+      }
+      clearConfirmCountdownTimer();
+      const countdown = Math.max(0, Math.floor(request?.confirmCountdownSeconds || 0));
+      this.confirmCountdownRemaining = countdown;
+      if (countdown > 0) {
+        confirmCountdownTimer = acuSetInterval(() => {
+          if (this.confirmCountdownRemaining > 1) {
+            this.confirmCountdownRemaining -= 1;
+            return;
+          }
+          this.confirmCountdownRemaining = 0;
+          clearConfirmCountdownTimer();
+        }, 1000);
       }
     },
   },

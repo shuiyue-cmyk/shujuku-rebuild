@@ -11,6 +11,15 @@ export function acuClearTimeout(handle: AcuTimerHandle | null | undefined): void
   getAcuHostWindow().clearTimeout(handle);
 }
 
+export function acuSetInterval(callback: () => void, delayMs: number): AcuTimerHandle {
+  return getAcuHostWindow().setInterval(callback, delayMs);
+}
+
+export function acuClearInterval(handle: AcuTimerHandle | null | undefined): void {
+  if (handle === null || handle === undefined) return;
+  getAcuHostWindow().clearInterval(handle);
+}
+
 export function acuRequestAnimationFrame(callback: FrameRequestCallback): AcuTimerHandle {
   const win = getAcuHostWindow();
   if (typeof win.requestAnimationFrame === 'function') {
