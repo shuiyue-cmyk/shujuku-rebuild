@@ -72,6 +72,8 @@ vi.mock('../../../src/service/vector/summary-vector-index-cache-service', () => 
 vi.mock('../../../src/service/vector/summary-vector-index-flush-queue', () => ({ restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU: (...args: any[]) => m.restoreFlush(...args) }));
 vi.mock('../../../src/service/vector/summary-vector-index-realign-state', () => ({ markSummaryVectorIndexDirtyForRealign_ACU: vi.fn() }));
 vi.mock('../../../src/service/chat/checkpoint-delete-guard', () => ({ captureCheckpointVaultForCurrentChat_ACU: (...args: any[]) => m.captureVault(...args), installCheckpointDeleteGuard_ACU: vi.fn() }));
+// 启动版本校验走真实网络（raw.githubusercontent），测试必须掐掉。
+vi.mock('../../../src/service/runtime/version-update-check', () => ({ checkDatabaseUpdateOnStartup_ACU: vi.fn(async () => {}) }));
 vi.mock('../../../src/service/template/dormant-data-service', () => ({ auditDormantDataIntegrity_ACU: (...args: any[]) => m.dormantAudit(...args) }));
 
 beforeAll(async () => {

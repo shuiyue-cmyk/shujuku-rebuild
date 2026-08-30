@@ -61,6 +61,7 @@ import {
   hydrateStorageProviderFromSnapshot_ACU
 } from '../../service/table/table-storage-strategy';
 import { runLegacyBiotrackerSilentMigration_ACU } from '../../service/biotracker/silent-migration';
+import { checkDatabaseUpdateOnStartup_ACU } from '../../service/runtime/version-update-check';
 import { captureCheckpointVaultForCurrentChat_ACU, installCheckpointDeleteGuard_ACU } from '../../service/chat/checkpoint-delete-guard';
 import { auditDormantDataIntegrity_ACU } from '../../service/template/dormant-data-service';
 import { getUiSurface_ACU, showUiSurfaceToast_ACU } from '../../shared/ui-surface-registry';
@@ -509,6 +510,15 @@ export   function mainInitialize_ACU() {
       loadSettings_ACU();
       // [静默迁移] 内置生理追踪存量数据 → 上游 tracker 可读形态（一次性，按聊天打标）
       void runLegacyBiotrackerSilentMigration_ACU();
+      // [版本校验] 启动后延迟对照仓库最新 manifest：有新版才提示，网络失败静默（不打扰"已加载"）。
+      // notify 由表现层注入，service 层不反向依赖 toast。
+      setTimeout(() => {
+        void checkDatabaseUpdateOnStartup_ACU({
+          notify: (latestVersion, localVersion) => {
+            showToastr_ACU('warning', `发现数据库新版本 v${latestVersion}（当前 v${localVersion}），可在扩展面板更新。`, '数据库更新', { timeOut: 12000, extendedTimeOut: 6000 });
+          },
+        });
+      }, 3000);
       // S0-4：注册插件保存后的 checkpoint 保管库同步（删楼恢复的影子基线）。
       installCheckpointDeleteGuard_ACU();
       // Register the bridge before generation events are subscribed. Runtime
