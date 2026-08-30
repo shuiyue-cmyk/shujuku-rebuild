@@ -76908,7 +76908,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.0.1" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.0.2" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -109948,7 +109948,7 @@ const defaultDeps_ACU = {
     now: () => Date.now(),
     readState: defaultReadState_ACU,
     writeState: defaultWriteState_ACU,
-    localVersion: () => String("9.0.1" || ''),
+    localVersion: () => String("9.0.2" || ''),
 };
 /**
  * 启动版本校验入口：fire-and-forget，任何异常都不外溢（调用方 void 即可）。
@@ -109958,10 +109958,15 @@ async function checkDatabaseUpdateOnStartup_ACU(overrides = {}) {
     const deps = { ...defaultDeps_ACU, ...overrides };
     try {
         const local = deps.localVersion();
-        if (!local || local === 'unknown')
+        if (!local || local === 'unknown') {
+            logDebug_ACU('[版本校验] 本地构建版本缺失，跳过校验（静默）。');
             return;
+        }
         const state = deps.readState() ?? {};
-        if (state.lastCheckAt && deps.now() - state.lastCheckAt < VERSION_CHECK_INTERVAL_MS_ACU) {
+        // 用户刚更新过扩展（本地版本变化）→ 节流缓存作废，必须立即重查：
+        // 否则旧缓存的 latestVersion=旧本地版本 会在 1h 窗口内掩盖刚发布的新版。
+        const localChanged = state.localVersion !== local;
+        if (!localChanged && state.lastCheckAt && deps.now() - state.lastCheckAt < VERSION_CHECK_INTERVAL_MS_ACU) {
             // 节流窗口内：复用缓存的远端版本，仍可提示未通知过的新版。
             if (state.latestVersion) {
                 const cached = compareVersions_ACU(state.latestVersion, local);
@@ -109970,20 +109975,27 @@ async function checkDatabaseUpdateOnStartup_ACU(overrides = {}) {
                     deps.writeState({ ...state, lastNotifiedVersion: state.latestVersion });
                     deps.notify(state.latestVersion, local);
                 }
+                else {
+                    logDebug_ACU(`[版本校验] 节流窗口内，缓存最新 v${state.latestVersion}，本地 v${local}，${cached === 1 ? '已提示过' : '无需更新'}，不打扰。`);
+                }
             }
             return;
         }
         const latest = await deps.fetchLatest();
         if (!latest) {
             // 网络/解析失败：只推进节流时间戳，不留任何用户可见痕迹。
-            deps.writeState({ ...state, lastCheckAt: deps.now() });
+            deps.writeState({ ...state, lastCheckAt: deps.now(), localVersion: local });
+            logDebug_ACU('[版本校验] 远端版本获取失败（网络/解析），静默跳过。');
             return;
         }
         const order = compareVersions_ACU(latest, local);
-        deps.writeState({ ...state, lastCheckAt: deps.now(), latestVersion: latest });
+        deps.writeState({ ...state, lastCheckAt: deps.now(), latestVersion: latest, localVersion: local });
         if (order === 1 && state.lastNotifiedVersion !== latest) {
-            deps.writeState({ ...state, lastCheckAt: deps.now(), latestVersion: latest, lastNotifiedVersion: latest });
+            deps.writeState({ ...state, lastCheckAt: deps.now(), latestVersion: latest, lastNotifiedVersion: latest, localVersion: local });
             deps.notify(latest, local);
+        }
+        else {
+            logDebug_ACU(`[版本校验] 最新 v${latest}，本地 v${local}，${order === 1 ? '该版本已提示过' : '已是最新'}，不打扰。`);
         }
     }
     catch (error) {
@@ -169460,7 +169472,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.0.1";
+        const v = "9.0.2";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {
