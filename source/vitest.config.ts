@@ -55,10 +55,11 @@ export default defineConfig({
     include: ['tests/**/*.test.ts'],
     globals: true,
     testTimeout: 15000,
-    // 全量套件已超过 5000 个用例。默认并行 worker 会同时启动多份 Vite/Vue/jsdom/SQLite
-    // 运行时，峰值内存远高于单个测试本身。生产门禁优先稳定完成，而不是榨干本机资源。
-    maxWorkers: 1,
-    fileParallelism: false,
+    // 历史定规为单线程（多运行时峰值内存互踩）。2026-08-31 本机 24 核/32GB 实测：
+    // 8 并行 × 2 连跑 6907 全绿零偶发，114s（单线程 537s 的 4.7 倍提速）；默认 8，
+    // ACU_VITEST_WORKERS 可临时上调/回退（10 并行仅再省 ~4s，收益递减）。
+    maxWorkers: Math.max(1, Number(process.env.ACU_VITEST_WORKERS || 8)),
+    fileParallelism: Number(process.env.ACU_VITEST_WORKERS || 8) > 1,
     maxConcurrency: 1,
     typecheck: {
       tsconfig: './tsconfig.json',
