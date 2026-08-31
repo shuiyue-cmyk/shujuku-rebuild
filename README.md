@@ -1,6 +1,8 @@
 # 幻想·数据库
 
-SillyTavern / TauriTavern 数据库插件「幻想·数据库」的干净重构版（v9.0.0）。
+TauriTavern 数据库插件「幻想·数据库」的干净重构版。
+
+> **⚠️ 支持范围变更公告**：自本版起，本插件**仅适配 TauriTavern（TT）**，不再为 SillyTavern（ST 酒馆）提供适配、更新支持或兼容性保证。ST 用户请继续使用上游 [`AlbusKen/shujuku`](https://github.com/AlbusKen/shujuku)。在 ST 上安装本版可能出现功能异常，问题反馈将不予处理。
 
 > 持续更新中，详见提交历史：https://github.com/shuiyue-cmyk/shujuku-rebuild/commits/master
 
@@ -18,7 +20,7 @@ SillyTavern / TauriTavern 数据库插件「幻想·数据库」的干净重构�
 
 ## 安装
 
-在 SillyTavern / TauriTavern 的扩展面板粘贴本仓库地址安装：
+在 TauriTavern 的扩展面板粘贴本仓库地址安装：
 
 ```
 https://github.com/shuiyue-cmyk/shujuku-rebuild
