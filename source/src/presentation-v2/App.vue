@@ -114,6 +114,7 @@
       <div
         v-if="isMobileNavRendered"
         class="acu-v2-app__mobile-nav-layer"
+        data-tt-mobile-surface="backdrop"
         :class="{ 'is-closing': isMobileNavClosing }"
         @click.self="closeMobileNav"
       >
@@ -393,10 +394,21 @@ function clearMobileNavCloseTimer(): void {
 
 <style scoped>
 :global(#acu-app-v2) {
+  /* TT Layout ABI（TauriTavern dev docs/API/Layout.md §1.1）：
+     native-safe 绑到宿主 --tt-inset-*（Android 原生注入 / iOS env 兜底）；bottom 额外并入
+     surface-local --tt-ime-bottom（宿主把键盘 inset 注入到 fullscreen-window surface root，即本元素）。
+     宿主变量不存在（原版 SillyTavern / 桌面浏览器）时回退 0px，桌面零影响。 */
+  --acu-native-safe-top: max(var(--tt-inset-top, 0px), 0px);
+  --acu-native-safe-right: max(var(--tt-inset-right, 0px), 0px);
+  --acu-native-safe-bottom: max(var(--tt-inset-bottom, 0px), var(--tt-ime-bottom, 0px), 0px);
+  --acu-native-safe-left: max(var(--tt-inset-left, 0px), 0px);
   --acu-safe-top: max(env(safe-area-inset-top, 0px), var(--acu-native-safe-top, 0px));
   --acu-safe-right: max(env(safe-area-inset-right, 0px), var(--acu-native-safe-right, 0px));
   --acu-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--acu-native-safe-bottom, 0px));
   --acu-safe-left: max(env(safe-area-inset-left, 0px), var(--acu-native-safe-left, 0px));
+  /* TT 移动端 geometry firewall 会把 fullscreen-window root 强制 position:fixed（产生层叠上下文）；
+     预置与 shell 同级的 z-index 保持整体层级不回退。非定位元素（桌面/原版 ST）该声明被忽略。 */
+  z-index: 9000;
   box-sizing: border-box;
   color: var(--acu-text-1);
   font-family: var(--acu-font-ui);

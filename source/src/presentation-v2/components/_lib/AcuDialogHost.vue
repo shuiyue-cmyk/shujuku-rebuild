@@ -3,6 +3,7 @@
     <div
       v-if="renderedDialog"
       class="acu-dialog-layer"
+      data-tt-mobile-surface="backdrop"
       :class="{ 'is-closing': isClosing }"
       role="presentation"
       @click.self="dialog.cancelActive"

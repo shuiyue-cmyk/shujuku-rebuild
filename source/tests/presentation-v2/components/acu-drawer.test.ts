@@ -70,6 +70,8 @@ describe('AcuDrawer', () => {
 
     const layer = document.querySelector('.acu-v2-drawer-layer') as HTMLElement | null;
     expect(layer).not.toBeNull();
+    // TT Layout ABI：抽屉遮罩层声明为 backdrop
+    expect(layer!.getAttribute('data-tt-mobile-surface')).toBe('backdrop');
     expect(document.querySelector('.acu-v2-drawer')!.textContent).toContain('测试抽屉');
 
     (document.querySelector('.inside-drawer') as HTMLButtonElement).click();

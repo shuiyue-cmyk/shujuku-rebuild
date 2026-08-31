@@ -62,6 +62,23 @@ describe('summary vector index UI recovery', () => {
   });
 
 
+  it('重建失败为跨源被拒时，错误 toast 带出 CORS 处置建议（V1 用户可见路径）', async () => {
+    h.rebuild.mockResolvedValue({
+      success: false,
+      skipped: false,
+      errors: ['Embedding 请求失败（retryable）: Embedding 请求网络失败（Failed to fetch）：API 提供商未允许跨源访问（CORS）：请求被浏览器拦下，未拿到任何响应。请为该 embedding/rerank 服务配置允许跨源访问（Access-Control-Allow-Origin），或改用支持 CORS 的中转地址。'],
+    });
+
+    await processSummaryVectorIndexBeforeGenerationWithUI_ACU({ userInput: '继续', source: 'test' });
+
+    const errorToast = h.toast.mock.calls.find(call => call[0] === 'error');
+    expect(errorToast).toBeDefined();
+    expect(String(errorToast![1])).toContain('交火索引快照未完成');
+    expect(String(errorToast![1])).toContain('API 提供商未允许跨源访问（CORS）');
+    expect(String(errorToast![1])).toContain('或改用支持 CORS 的中转地址');
+  });
+
+
   it('身份无效快照已安全删除时同样触发一次普通重建', async () => {
     h.process.mockResolvedValue({ success: false, skipped: true, reason: 'external_vector_identity_invalid_rebuild_required' });
 

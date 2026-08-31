@@ -70,4 +70,16 @@ describe('custom confirm', () => {
     await expect(promise).resolves.toBe(true);
     expect(topLevelWindowMock_ACU.document.getElementById('acu-test-custom-confirm-overlay')).toBeNull();
   });
+
+  it('遮罩与弹窗按 TT Layout ABI 声明 surface 类型', () => {
+    void showCustomConfirm_ACU('TT 打标', '校验 data-tt-mobile-surface');
+
+    const overlay = topLevelWindowMock_ACU.document.getElementById('acu-test-custom-confirm-overlay') as HTMLElement;
+    const dialog = topLevelWindowMock_ACU.document.getElementById('acu-test-custom-confirm') as HTMLElement;
+    expect(overlay).toBeTruthy();
+    expect(dialog).toBeTruthy();
+    // full-bleed 遮罩 = backdrop；居中确认框 = free-window（宿主不钳制其 top/left）
+    expect(overlay.getAttribute('data-tt-mobile-surface')).toBe('backdrop');
+    expect(dialog.getAttribute('data-tt-mobile-surface')).toBe('free-window');
+  });
 });

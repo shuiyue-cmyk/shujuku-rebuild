@@ -78,6 +78,8 @@ function mergeNewEntryPatch_ACU(entry: any, patch: Record<string, any>): any {
  */
 export function buildTavernHelperCompat_ACU(rawTH: any, getStApi: GetStApi_ACU): TavernHelperCompatResult_ACU {
     const native: NativeStBackend_ACU = createNativeStBackend_ACU(getStApi);
+    // 装配期一次性判定：resolve() 的挂载/删除决策与 capabilities 告警表同源，必须一致。
+    // 前提是装配点在 ctx 就绪之后（entry-extension waitForAcuHostReady → mainInitialize 链已保证）。
     const nativeUsable = native.isUsable();
     const capabilities: HostCapabilityMap_ACU = {};
 

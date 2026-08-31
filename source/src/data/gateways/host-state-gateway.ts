@@ -109,7 +109,12 @@ export function getCurrentCharacterFallback_ACU(win?: any): any | null {
 /**
  * 获取当前角色描述文本
  * 在 getCurrentCharacterFallback_ACU 基础上提取描述字段，
- * 并额外尝试 stContext.name2_description 作为最终 fallback。
+ * 并额外尝试宿主角色卡字段作为最终 fallback。
+ *
+ * fallback 顺序（TT-only 定案）：
+ *   1. stContext.getCharacterCardFields().description — TT dev st-context.js:238 实证存在，
+ *      宏替换后的当前角色描述，裸环境下唯一有效来源；
+ *   2. stContext.name2_description — 旧 ST 扁平 API 字段，保留给 ST 兼容环境。
  * @param win 可选，指定查找的 window 对象
  * @returns 角色描述字符串，不可用时返回 ''
  */
@@ -120,10 +125,17 @@ export function getCharDescription_ACU(win?: any): string {
             return character.description || character.data.description;
         }
 
-        // 最终 fallback：stContext.name2_description
+        // 最终 fallback：原生角色卡字段 → 旧版扁平 name2_description
         const w = win || topLevelWindow_ACU || window;
         const stContext = (w as any)?.SillyTavern?.getContext?.();
-        return stContext?.name2_description || '';
+        let cardDescription = '';
+        try {
+            cardDescription = stContext?.getCharacterCardFields?.()?.description || '';
+        } catch {
+            // 宿主卡面字段读取异常不得吞掉下面的 name2_description 降级
+            cardDescription = '';
+        }
+        return cardDescription || stContext?.name2_description || '';
     } catch {
         return '';
     }

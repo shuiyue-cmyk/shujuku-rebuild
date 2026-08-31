@@ -1,4 +1,5 @@
 import { getHostRequestHeaders_ACU } from './ai-gateway';
+import { isCrossOriginFetchRejection_ACU, VECTOR_CROSS_ORIGIN_FAILURE_HINT_ACU } from '../../shared/vector-cross-origin-error';
 
 /** Rerank 请求超时上界；超时抛错由调用方回退到 embedding 排序。 */
 const VECTOR_RERANK_TIMEOUT_MS_ACU = 30_000;
@@ -104,9 +105,13 @@ export async function createRerankScores_ACU(request: VectorRerankRequest_ACU): 
             signal: controller.signal,
         });
     } catch (error: any) {
+        const rawReason = error?.message || String(error || '未知错误');
+        // 既有分类点：跨源被拒与真断网在浏览器侧同形（不透明 TypeError），归类为 CORS 并给出处置建议。
         throw new Error(error?.name === 'AbortError'
             ? `Rerank 请求超时（${VECTOR_RERANK_TIMEOUT_MS_ACU}ms），已中断。`
-            : `Rerank 请求网络失败：${error?.message || String(error || '未知错误')}`);
+            : isCrossOriginFetchRejection_ACU(error)
+                ? `Rerank 请求网络失败（${rawReason}）：${VECTOR_CROSS_ORIGIN_FAILURE_HINT_ACU}`
+                : `Rerank 请求网络失败：${rawReason}`);
     } finally {
         clearTimeout(timer);
     }

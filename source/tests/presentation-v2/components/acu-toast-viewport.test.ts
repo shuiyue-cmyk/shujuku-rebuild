@@ -75,6 +75,8 @@ describe("AcuToastViewport", () => {
     expect(viewport).not.toBeNull();
     expect(list).not.toBeNull();
     expect(viewport!.getAttribute("role")).toBe("status");
+    // TT Layout ABI：全屏 toast 定位层声明为 backdrop（宿主不收其 safe-area）
+    expect(viewport!.getAttribute("data-tt-mobile-surface")).toBe("backdrop");
     expect(getComputedStyle(viewport!).zIndex).toBe("9410");
     expect(Number(getComputedStyle(viewport!).zIndex)).toBeGreaterThan(9300);
     expect(viewport!.style.zIndex).toBe("9410");

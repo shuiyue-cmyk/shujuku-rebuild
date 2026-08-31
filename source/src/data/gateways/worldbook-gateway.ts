@@ -10,7 +10,9 @@
 import { TavernHelper_API_ACU, SillyTavern_API_ACU } from '../../shared/host-api';
 import { getCharLorebooks_ACU, getCurrentCharacterWorldbookBinding_ACU } from './character-gateway';
 import { logWarn_ACU } from '../../shared/utils';
+import { isExtensionMode } from '../../shared/runtime-env';
 import { classifyLorebookReadError_ACU } from '../../shared/lorebook-read-error';
+import { nativeToOldEntry_ACU } from '../../shared/host-compat/entry-format';
 
 // ═══ 可用性检查 ═══
 
@@ -278,13 +280,23 @@ export async function deleteLorebookEntries_ACU(bookName: string, uids: any[]): 
  * @returns 世界书名称数组，不可用时返回 []
  */
 export async function listLorebooks_ACU(): Promise<string[]> {
-    // 优先尝试 TavernHelper
+    // 优先尝试 TavernHelper（无酒馆助手时由 host-compat 适配器提供原生实现）
     if (TavernHelper_API_ACU && typeof TavernHelper_API_ACU.getLorebooks === 'function') {
         return await TavernHelper_API_ACU.getLorebooks();
     }
     // 降级到 SillyTavern_API
     if (SillyTavern_API_ACU && typeof SillyTavern_API_ACU.getWorldBooks === 'function') {
         return await SillyTavern_API_ACU.getWorldBooks();
+    }
+    // 第三级：TT/ST 原生 context.getWorldInfoNames()（st-context.js 直接返回 string[] 快照）。
+    // 油猴模式下 SillyTavern_API_ACU 是酒馆助手扁平 API，无此方法时自然跳过。
+    try {
+        const nativeNames = (SillyTavern_API_ACU as any)?.getWorldInfoNames?.();
+        if (Array.isArray(nativeNames)) {
+            return nativeNames.map((name: unknown) => String(name));
+        }
+    } catch (error) {
+        logWarn_ACU('[WorldbookGateway] 原生 getWorldInfoNames 调用失败，世界书列表降级为空');
     }
     logWarn_ACU('[WorldbookGateway] listLorebooks 不可用，返回空数组');
     return [];
@@ -303,6 +315,45 @@ export async function getWorldBooks_ACU(): Promise<string[]> {
     return [];
 }
 
+/**
+ * 无酒馆助手时的原生条目读取：经 SillyTavern context.loadWorldInfo 逐本读整本书，
+ * 返回 {name, entries} 形状（entries 为旧版扁平条目，与 TavernHelper.getLorebookEntries 一致）。
+ *
+ * getWorldBooks_ACU 在 TT 裸环境恒为 []（getContext 不导出 getWorldBooks），且返回的是
+ * string[] 名称列表而非 {name, entries}，不能作为条目来源；本函数补上真正的读取通道。
+ * loadWorldInfo 不可用或单本读取失败时跳过该书，不影响其它书。
+ */
+export async function getWorldBooksWithEntriesViaNative_ACU(bookNames: string[]): Promise<Array<{ name: string; entries: any[] }>> {
+    const loadWorldInfo = (SillyTavern_API_ACU as any)?.loadWorldInfo;
+    if (typeof loadWorldInfo !== 'function') {
+        logWarn_ACU('[WorldbookGateway] 原生 loadWorldInfo 不可用，世界书条目无可用来源');
+        return [];
+    }
+    // 宿主书名不得 trim（:50-57 契约）：带首尾空格的真实书名 trim 后 loadWorldInfo 必 not-found 静默丢书
+    const names = (Array.isArray(bookNames) ? bookNames : [])
+        .map(name => String(name ?? ''))
+        .filter(name => name !== '');
+    const books: Array<{ name: string; entries: any[] }> = [];
+    for (const name of [...new Set(names)]) {
+        try {
+            const data = await loadWorldInfo(name);
+            const entriesDict = data?.entries;
+            if (!entriesDict || typeof entriesDict !== 'object') continue;
+            books.push({
+                name,
+                entries: Object.keys(entriesDict).map(uid => nativeToOldEntry_ACU({ uid, ...entriesDict[uid] })),
+            });
+        } catch (error) {
+            logWarn_ACU('[WorldbookGateway] 原生 loadWorldInfo 读取单本世界书失败，跳过该书。', {
+                phase: 'native_load_worldbook',
+                bookName: name,
+                error: { category: 'read_failed' },
+            });
+        }
+    }
+    return books;
+}
+
 // ═══ 角色绑定世界书 ═══
 
 /**
@@ -315,6 +366,9 @@ export async function getWorldBooks_ACU(): Promise<string[]> {
  * selected_world_info + world_info.globalSelect +
  * 页面 #world_info 多选框 + TavernHelper.getLorebookSettings。
  * 填表「正文接收」来源（active）用；正文生成时这些书会被注入，角色卡绑定关系读不到。
+ *
+ * 注意：这四条全局探测只对 ST 时代环境（window 上确有这些全局）有效；
+ * TT 裸环境下它们是 ES module 导出，只能经 getActiveGlobalWorldbookNamesAsync_ACU 的动态 import 读到。
  * @returns 去重后的激活世界书名称数组
  */
 export function getActiveGlobalWorldbookNames_ACU(): string[] {
@@ -340,12 +394,106 @@ export function getActiveGlobalWorldbookNames_ACU(): string[] {
   return [...new Set(names.filter(Boolean))];
 }
 
+// ═══ 激活世界书：宿主 ES module 通道（TT/ST 裸环境） ═══
+
+/**
+ * 宿主 world-info 模块 URL。
+ * 用变量说明符而非字面量：rollup/vite 无法静态分析，保留为运行时原生 dynamic import，
+ * 避免打包器把酒馆宿主模块当成本地依赖去解析（构建期必然找不到该路径）。
+ */
+const WORLD_INFO_MODULE_URL_ACU = '/scripts/' + 'world-info.js';
+
+/** 已解析的宿主 world-info 模块命名空间；模块内 selected_world_info 是 live binding，缓存模块本身即可读到最新值 */
+let worldInfoModulePromise_ACU: Promise<any> | null = null;
+
+/**
+ * 动态 import 宿主 world-info 模块（带缓存）。
+ * 失败时清空缓存，让宿主尚未加载完的早期调用有机会重试。
+ *
+ * 只在插件模式（宿主主窗口）下尝试：油猴模式跑在酒馆助手创建的 iframe 里，
+ * 同一 URL 在 iframe realm 会加载出「第二个」world-info 实例（selected_world_info 恒为空，
+ * 且会把 script.js/power-user.js 整条宿主模块图在 iframe 里重新执行一遍），既读不到真值又有副作用。
+ * 油猴模式下 window 全局链与 TavernHelper 通道仍然有效，这里直接返回 null 走既有降级。
+ */
+export function loadHostWorldInfoModule_ACU(): Promise<any> {
+  if (!isExtensionMode()) return Promise.resolve(null);
+  if (!worldInfoModulePromise_ACU) {
+    const loadModule = async (): Promise<any> => {
+      try {
+        // 变量说明符 + @vite-ignore：保留运行时原生 dynamic import，不让打包器静态解析宿主模块
+        return (await import(/* @vite-ignore */ WORLD_INFO_MODULE_URL_ACU)) ?? null;
+      } catch (error) {
+        worldInfoModulePromise_ACU = null;
+        logWarn_ACU('[WorldbookGateway] 动态 import 宿主 world-info 模块失败，激活世界书宿主模块通道降级为空', error);
+        return null;
+      }
+    };
+    worldInfoModulePromise_ACU = loadModule();
+  }
+  return worldInfoModulePromise_ACU;
+}
+
+/** 供测试与宿主热重载后重新探测使用 */
+export function resetHostWorldInfoModuleCache_ACU(): void {
+  worldInfoModulePromise_ACU = null;
+}
+
+/**
+ * 从宿主 world-info 模块命名空间读取激活世界书名。
+ * 两条来源（dev world-info.js 实证）：
+ * - selected_world_info（:71-72 export let，UI 勾选的当前真值，live binding）
+ * - getWorldInfoSettings().world_info.globalSelect（:890 导出，保存设置时同步的持久化副本）
+ */
+export function collectActiveWorldbookNamesFromModule_ACU(mod: any): string[] {
+  const names: string[] = [];
+  const push = (list: unknown): void => {
+    if (!Array.isArray(list)) return;
+    for (const item of list) {
+      const name = String(item ?? '').trim();
+      if (name && !names.includes(name)) names.push(name);
+    }
+  };
+  if (!mod) return names;
+  try { push(mod.selected_world_info); } catch { /* ignore */ }
+  try { push(mod.getWorldInfoSettings?.()?.world_info?.globalSelect); } catch { /* ignore */ }
+  return names;
+}
+
+/**
+ * 异步版激活世界书探测：同步全局链 + 宿主 world-info 模块链。
+ * TT dev 的 getContext() 不导出 world_info / selected_world_info（全是 ES module export），
+ * 裸环境下四条死全局必然落空，只有动态 import 能读到当前激活书。
+ * 油猴/旧 ST 时代环境全局可见时，模块通道只会补充去重后的同名结果，不改变既有行为。
+ * @param loadModule 模块提供者，默认走运行时动态 import；测试与非标准宿主可注入替代实现
+ */
+export async function getActiveGlobalWorldbookNamesAsync_ACU(
+  loadModule: () => Promise<any> = loadHostWorldInfoModule_ACU,
+): Promise<string[]> {
+  const names = getActiveGlobalWorldbookNames_ACU();
+  const push = (list: unknown): void => {
+    if (!Array.isArray(list)) return;
+    for (const item of list) {
+      const name = String(item ?? '').trim();
+      if (name && !names.includes(name)) names.push(name);
+    }
+  };
+  try {
+    push(collectActiveWorldbookNamesFromModule_ACU(await loadModule()));
+  } catch { /* 宿主模块不可用时保留全局链结果 */ }
+  return names;
+}
+
 /**
  * 获取「正文实际能接收到的」世界书名称全集：激活全局书 + 角色卡绑定书（primary+additional）。
  * 填表「正文接收」来源的书列表真源（UI 与运行时共用）。
+ * @param worldInfoModuleLoader 激活书宿主模块提供者注入点，默认走运行时动态 import
  */
-export async function getActiveWorldbookNamesForFill_ACU(): Promise<string[]> {
-  const names = getActiveGlobalWorldbookNames_ACU();
+export async function getActiveWorldbookNamesForFill_ACU(
+  worldInfoModuleLoader?: () => Promise<any>,
+): Promise<string[]> {
+  const names = await getActiveGlobalWorldbookNamesAsync_ACU(
+    worldInfoModuleLoader ?? loadHostWorldInfoModule_ACU,
+  );
   for (const fn of [(globalThis as any).getLorebookSettings, (globalThis as any).TavernHelper?.getLorebookSettings] as Array<(() => any) | undefined>) {
     if (typeof fn !== 'function') continue;
     try {

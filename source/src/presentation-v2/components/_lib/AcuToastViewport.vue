@@ -3,6 +3,7 @@
     <div
       v-if="renderedItems.length"
       class="acu-toast-viewport"
+      data-tt-mobile-surface="backdrop"
       role="status"
       aria-label="通知"
       :style="{ zIndex: 9410 }"

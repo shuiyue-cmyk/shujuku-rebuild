@@ -455,6 +455,7 @@
     <div
       v-if="isMobileNavRendered"
       class="acu-visualizer-surface__mobile-nav-layer"
+      data-tt-mobile-surface="backdrop"
       :class="{ 'is-closing': isMobileNavClosing }"
       @click.self="closeMobileNav"
     >

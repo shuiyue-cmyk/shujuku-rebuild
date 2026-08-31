@@ -4,15 +4,20 @@
  * 在无酒馆助手（TavernHelper）的插件独立运行模式下，用 SillyTavern.getContext()
  * 暴露的原生接口实现代码库依赖的旧版扁平 API 面。
  *
- * 能力来源（以 SillyTavern 1.13.x st-context.js 为准）：
+ * 能力来源（以 SillyTavern 1.13.x / TauriTavern dev st-context.js 为准）：
  * - 世界书读写：ctx.loadWorldInfo / ctx.saveWorldInfo
+ * - 世界书名称列表：ctx.getWorldInfoNames()（st-context.js 直接返回 string[]）
  * - 聊天与角色：ctx.chat / ctx.characters / ctx.characterId
  * - Slash 命令：ctx.executeSlashCommandsWithOptions
- * - 世界书名称列表与角色附加书（charLore）不在 context 中，
+ * - 角色附加书（charLore）不在 context 中，
  *   经 POST /api/settings/get 获取（带 TTL 缓存）。
+ *   settings 形状为 { world_info_settings: { world_info: { charLore } } }
+ *   （script.js saveSettingsNow 写 world_info_settings: getWorldInfoSettings()，
+ *    而 getWorldInfoSettings() 返回 { world_info, world_info_depth, ... }）。
  *
- * generateRaw 在原生 context 中不存在，本后端不提供（保持"方法缺失"语义，
- * 让调用方既有的可用性检查与降级路径自然生效）。
+ * generateRaw 虽在 TT dev 的 getContext() 中存在（st-context.js:211），但本库已剥离酒馆主 API
+ * 直连路径、AI 调用统一走自定义端点（见 data/gateways/ai-gateway.ts），因此本后端刻意不挂载它，
+ * 保持"方法缺失"语义，让调用方既有的可用性检查与降级路径自然生效。
  */
 
 import { logDebug_ACU, logWarn_ACU } from '../utils';
@@ -96,7 +101,7 @@ export function createNativeStBackend_ACU(getStApi: GetStApi_ACU): NativeStBacke
             let charLore: Array<{ name: string; extraBooks: string[] }> = [];
             try {
                 const parsed = typeof payload?.settings === 'string' ? JSON.parse(payload.settings) : payload?.settings;
-                const rawCharLore = parsed?.world_info?.charLore;
+                const rawCharLore = parsed?.world_info_settings?.world_info?.charLore;
                 if (Array.isArray(rawCharLore)) {
                     charLore = rawCharLore
                         .filter((item: any) => item && typeof item.name === 'string')
@@ -106,7 +111,7 @@ export function createNativeStBackend_ACU(getStApi: GetStApi_ACU): NativeStBacke
                         }));
                 }
             } catch (e) {
-                logWarn_ACU('[NativeStBackend] 解析 settings.world_info.charLore 失败，附加世界书降级为空', e);
+                logWarn_ACU('[NativeStBackend] 解析 settings.world_info_settings.world_info.charLore 失败，附加世界书降级为空', e);
             }
             settingsSnapshot = { worldNames, charLore };
             settingsSnapshotAt = now;
@@ -207,6 +212,19 @@ export function createNativeStBackend_ACU(getStApi: GetStApi_ACU): NativeStBacke
     // ═══ 世界书列表与角色绑定 ═══
 
     async function getLorebooks(): Promise<string[]> {
+        // 优先原生 context.getWorldInfoNames()（st-context.js 直接暴露 world_names 快照，
+        // 返回 string[]，无网络往返）；不可用时才降级到 /api/settings/get 快照。
+        const api = ctx();
+        if (api && typeof api.getWorldInfoNames === 'function') {
+            try {
+                const names = api.getWorldInfoNames();
+                if (Array.isArray(names)) {
+                    return names.map((n: unknown) => String(n));
+                }
+            } catch (e) {
+                logWarn_ACU('[NativeStBackend] getWorldInfoNames 调用失败，降级 /api/settings/get 世界书列表', e);
+            }
+        }
         const snapshot = await fetchSettingsSnapshot();
         return snapshot?.worldNames ?? [];
     }
@@ -216,6 +234,8 @@ export function createNativeStBackend_ACU(getStApi: GetStApi_ACU): NativeStBacke
         const characters = api?.characters;
         if (!Array.isArray(characters)) return null;
         if (!characterName || characterName === 'current') {
+            // dev getContext 只导出 characterId（st-context.js:129 `characterId: this_chid`）；
+            // this_chid 仅作 ST 时代扁平环境的次级兜底。
             const chid = api?.characterId ?? api?.this_chid;
             if (chid === undefined || chid === null || chid === '') return null;
             return characters[Number(chid)] ?? null;

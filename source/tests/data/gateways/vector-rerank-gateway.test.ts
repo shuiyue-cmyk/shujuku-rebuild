@@ -58,3 +58,60 @@ describe('V1-f Rerank 返回条数守卫', () => {
         })).rejects.toThrow('Rerank 返回条数不完整');
     });
 });
+
+describe('跨源（CORS）失败归类', () => {
+    it('提供商未放行跨源（TypeError: Failed to fetch）→ 归类为 CORS 并给出可行动提示', async () => {
+        vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
+
+        const message = await createRerankScores_ACU({
+            endpoint: 'https://rerank.test/v1/rerank',
+            model: 'rerank-m',
+            query: '查询',
+            documents: ['doc-a'],
+        }).then(() => '', (error) => String(error?.message));
+
+        expect(message).toContain('API 提供商未允许跨源访问（CORS）');
+        expect(message).toContain('Access-Control-Allow-Origin');
+        expect(message).toContain('中转地址');
+        // 原始错误保留：真断网与跨源被拒同形，排查时不能丢。
+        expect(message).toContain('Failed to fetch');
+    });
+
+    it('非跨源形态的网络失败不贴 CORS 标签', async () => {
+        vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('socket hang up'); }));
+
+        const message = await createRerankScores_ACU({
+            endpoint: 'https://rerank.test/v1/rerank',
+            model: 'rerank-m',
+            query: '查询',
+            documents: ['doc-a'],
+        }).then(() => '', (error) => String(error?.message));
+
+        expect(message).toBe('Rerank 请求网络失败：socket hang up');
+        expect(message).not.toContain('CORS');
+    });
+
+    it('超时（AbortError）不被误归类为跨源失败', async () => {
+        vi.useFakeTimers();
+        try {
+            vi.stubGlobal('fetch', vi.fn((_url: unknown, init: any) => new Promise<Response>((_resolve, reject) => {
+                init.signal.addEventListener('abort', () => {
+                    reject(Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' }));
+                });
+            })));
+            const promise = createRerankScores_ACU({
+                endpoint: 'https://rerank.test/v1/rerank',
+                model: 'rerank-m',
+                query: '查询',
+                documents: ['doc-a'],
+            });
+            const messagePromise = promise.then(() => '', (error) => String(error?.message));
+            await vi.runAllTimersAsync();
+            const message = await messagePromise;
+            expect(message).toContain('超时');
+            expect(message).not.toContain('CORS');
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+});

@@ -5459,6 +5459,386 @@ function summarizeStrictLorebookReadError_ACU$1(error) {
 }
 
 /**
+ * shared/host-compat/entry-format.ts — 世界书条目三种格式的双向转换
+ *
+ * 三种格式：
+ * - 旧版扁平格式（LorebookEntry）：酒馆助手旧版 getLorebookEntries 系列 API 使用，
+ *   也是本代码库全部消费者约定的格式（见 @types/function/lorebook_entry.d.ts）。
+ * - 新版嵌套格式（WorldbookEntry）：酒馆助手新版 getWorldbook 系列 API 使用，
+ *   strategy/position/recursion/effect 为嵌套子对象（见 @types/function/worldbook.d.ts）。
+ * - SillyTavern 原生格式：loadWorldInfo/saveWorldInfo 的 entries 字典条目，
+ *   使用数字枚举 position/selectiveLogic/role（见 SillyTavern world-info.js）。
+ *
+ * 转换原则：读取方向输出完整的旧版扁平条目（未知字段给默认值）；
+ * 写入方向仅映射 patch 中实际存在的字段，不注入未指定的默认值。
+ */
+// ═══ 映射常量表 ═══
+/** 新版嵌套 position.type（非 at_depth 部分）与旧版扁平 position 同名直映 */
+const NEW_POSITION_PASSTHROUGH_ACU = new Set([
+    'before_character_definition',
+    'after_character_definition',
+    'before_example_messages',
+    'after_example_messages',
+    'before_author_note',
+    'after_author_note',
+]);
+/** ST 原生 position 数字 → 旧版扁平 position 字符串（at_depth 需再结合 role） */
+const NATIVE_POSITION_TO_OLD_ACU = {
+    0: 'before_character_definition',
+    1: 'after_character_definition',
+    2: 'before_author_note',
+    3: 'after_author_note',
+    // 4 = atDepth，需结合 role 处理
+    5: 'before_example_messages',
+    6: 'after_example_messages',
+};
+const OLD_POSITION_TO_NATIVE_ACU = {
+    before_character_definition: 0,
+    after_character_definition: 1,
+    before_author_note: 2,
+    after_author_note: 3,
+    before_example_messages: 5,
+    after_example_messages: 6,
+    at_depth_as_system: 4,
+    at_depth_as_user: 4,
+    at_depth_as_assistant: 4,
+};
+/** ST 原生 role 数字（extension_prompt_roles: SYSTEM=0, USER=1, ASSISTANT=2） */
+const NATIVE_ROLE_TO_NAME_ACU = {
+    0: 'system',
+    1: 'user',
+    2: 'assistant',
+};
+const ROLE_NAME_TO_NATIVE_ACU = {
+    system: 0,
+    user: 1,
+    assistant: 2,
+};
+/** ST 原生 selectiveLogic 数字（world_info_logic: AND_ANY=0, NOT_ALL=1, NOT_ANY=2, AND_ALL=3） */
+const NATIVE_LOGIC_TO_OLD_ACU = {
+    0: 'and_any',
+    1: 'not_all',
+    2: 'not_any',
+    3: 'and_all',
+};
+const OLD_LOGIC_TO_NATIVE_ACU = {
+    and_any: 0,
+    not_all: 1,
+    not_any: 2,
+    and_all: 3,
+};
+// ═══ 工具函数 ═══
+/** 新版 API 的 keys 可能含 RegExp 对象；旧格式与 ST 原生均要求字符串（/…/flags 形式即 ST 的正则字符串约定） */
+function stringifyKeys_ACU(keys) {
+    if (!Array.isArray(keys))
+        return [];
+    return keys.map(k => (k instanceof RegExp ? String(k) : String(k ?? '')));
+}
+function numberOrNull_ACU(value) {
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+/** ST 原生 null → 旧版 'same_as_global' */
+function nativeOptionalToOld_ACU(value) {
+    return value === null || value === undefined ? 'same_as_global' : value;
+}
+/** 旧版 'same_as_global' → ST 原生 null */
+function oldOptionalToNative_ACU(value) {
+    return value === 'same_as_global' ? null : value;
+}
+// ═══ 新版嵌套 ↔ 旧版扁平 ═══
+/**
+ * 新版嵌套 WorldbookEntry → 旧版扁平 LorebookEntry。
+ * 输出完整旧格式：新格式没有的字段（case_sensitive/group 等）给旧版语义默认值。
+ * @param entry 新版嵌套条目
+ * @param index 条目在书内的序号，用作 display_index（新格式无此字段）
+ */
+function newToOldEntry_ACU(entry, index) {
+    const strategy = entry?.strategy ?? {};
+    const position = entry?.position ?? {};
+    const recursion = entry?.recursion ?? {};
+    const effect = entry?.effect ?? {};
+    const keysSecondary = strategy?.keys_secondary ?? {};
+    let oldPosition;
+    let oldDepth;
+    if (position?.type === 'at_depth') {
+        const role = typeof position.role === 'string' && position.role in ROLE_NAME_TO_NATIVE_ACU ? position.role : 'system';
+        oldPosition = `at_depth_as_${role}`;
+        oldDepth = numberOrNull_ACU(position.depth);
+    }
+    else {
+        oldPosition = NEW_POSITION_PASSTHROUGH_ACU.has(position?.type)
+            ? position.type
+            : 'before_character_definition';
+        oldDepth = null;
+    }
+    const delayUntil = recursion?.delay_until;
+    return {
+        uid: Number(entry?.uid ?? 0),
+        display_index: index,
+        comment: typeof entry?.name === 'string' ? entry.name : '',
+        enabled: entry?.enabled !== false,
+        type: strategy?.type === 'constant' || strategy?.type === 'vectorized' ? strategy.type : 'selective',
+        position: oldPosition,
+        depth: oldDepth,
+        order: typeof position?.order === 'number' ? position.order : 100,
+        probability: typeof entry?.probability === 'number' ? entry.probability : 100,
+        keys: stringifyKeys_ACU(strategy?.keys),
+        logic: typeof keysSecondary?.logic === 'string' && keysSecondary.logic in OLD_LOGIC_TO_NATIVE_ACU
+            ? keysSecondary.logic
+            : 'and_any',
+        filters: stringifyKeys_ACU(keysSecondary?.keys),
+        scan_depth: typeof strategy?.scan_depth === 'number' ? strategy.scan_depth : 'same_as_global',
+        case_sensitive: 'same_as_global',
+        match_whole_words: 'same_as_global',
+        use_group_scoring: 'same_as_global',
+        automation_id: null,
+        exclude_recursion: recursion?.prevent_incoming === true,
+        prevent_recursion: recursion?.prevent_outgoing === true,
+        delay_until_recursion: typeof delayUntil === 'number' ? delayUntil : false,
+        content: typeof entry?.content === 'string' ? entry.content : '',
+        group: '',
+        group_prioritized: false,
+        group_weight: 100,
+        sticky: numberOrNull_ACU(effect?.sticky),
+        cooldown: numberOrNull_ACU(effect?.cooldown),
+        delay: numberOrNull_ACU(effect?.delay),
+    };
+}
+/**
+ * 旧版扁平 partial → 新版嵌套 partial（PartialDeep<WorldbookEntry>）。
+ * 仅映射 patch 中实际存在的字段；新格式无对应物的字段
+ * （display_index/case_sensitive/match_whole_words/use_group_scoring/automation_id/group*）静默丢弃。
+ */
+function oldPatchToNewPatch_ACU(patch) {
+    const out = {};
+    const strategy = {};
+    const position = {};
+    const recursion = {};
+    const effect = {};
+    if ('uid' in patch)
+        out.uid = patch.uid;
+    if ('comment' in patch)
+        out.name = patch.comment;
+    if ('enabled' in patch)
+        out.enabled = patch.enabled;
+    if ('content' in patch)
+        out.content = patch.content;
+    if ('probability' in patch)
+        out.probability = patch.probability;
+    if ('type' in patch)
+        strategy.type = patch.type;
+    if ('keys' in patch)
+        strategy.keys = patch.keys;
+    if ('scan_depth' in patch)
+        strategy.scan_depth = patch.scan_depth;
+    if ('logic' in patch || 'filters' in patch) {
+        const keysSecondary = {};
+        if ('logic' in patch)
+            keysSecondary.logic = patch.logic;
+        if ('filters' in patch)
+            keysSecondary.keys = patch.filters;
+        strategy.keys_secondary = keysSecondary;
+    }
+    if ('position' in patch && typeof patch.position === 'string') {
+        if (patch.position.startsWith('at_depth_as_')) {
+            position.type = 'at_depth';
+            position.role = patch.position.slice('at_depth_as_'.length);
+        }
+        else {
+            position.type = patch.position;
+        }
+    }
+    if ('depth' in patch && patch.depth !== null && patch.depth !== undefined)
+        position.depth = patch.depth;
+    if ('order' in patch)
+        position.order = patch.order;
+    if ('exclude_recursion' in patch)
+        recursion.prevent_incoming = patch.exclude_recursion;
+    if ('prevent_recursion' in patch)
+        recursion.prevent_outgoing = patch.prevent_recursion;
+    if ('delay_until_recursion' in patch) {
+        const v = patch.delay_until_recursion;
+        recursion.delay_until = v === false ? null : v === true ? 1 : v;
+    }
+    if ('sticky' in patch)
+        effect.sticky = patch.sticky;
+    if ('cooldown' in patch)
+        effect.cooldown = patch.cooldown;
+    if ('delay' in patch)
+        effect.delay = patch.delay;
+    if (Object.keys(strategy).length > 0)
+        out.strategy = strategy;
+    if (Object.keys(position).length > 0)
+        out.position = position;
+    if (Object.keys(recursion).length > 0)
+        out.recursion = recursion;
+    if (Object.keys(effect).length > 0)
+        out.effect = effect;
+    return out;
+}
+// ═══ ST 原生 ↔ 旧版扁平 ═══
+/**
+ * ST 原生 world info 条目 → 旧版扁平 LorebookEntry。
+ */
+function nativeToOldEntry_ACU(entry) {
+    const nativePosition = typeof entry?.position === 'number' ? entry.position : 0;
+    let oldPosition;
+    let oldDepth;
+    if (nativePosition === 4) {
+        const roleName = NATIVE_ROLE_TO_NAME_ACU[Number(entry?.role ?? 0)] ?? 'system';
+        oldPosition = `at_depth_as_${roleName}`;
+        oldDepth = numberOrNull_ACU(entry?.depth);
+    }
+    else {
+        oldPosition = NATIVE_POSITION_TO_OLD_ACU[nativePosition] ?? 'before_character_definition';
+        oldDepth = null;
+    }
+    const delayUntil = entry?.delayUntilRecursion;
+    return {
+        uid: Number(entry?.uid ?? 0),
+        display_index: typeof entry?.displayIndex === 'number' ? entry.displayIndex : Number(entry?.uid ?? 0),
+        comment: typeof entry?.comment === 'string' ? entry.comment : '',
+        enabled: entry?.disable !== true,
+        type: entry?.constant === true ? 'constant' : entry?.vectorized === true ? 'vectorized' : 'selective',
+        position: oldPosition,
+        depth: oldDepth,
+        order: typeof entry?.order === 'number' ? entry.order : 100,
+        probability: typeof entry?.probability === 'number' ? entry.probability : 100,
+        keys: stringifyKeys_ACU(entry?.key),
+        logic: NATIVE_LOGIC_TO_OLD_ACU[Number(entry?.selectiveLogic ?? 0)] ?? 'and_any',
+        filters: stringifyKeys_ACU(entry?.keysecondary),
+        scan_depth: nativeOptionalToOld_ACU(entry?.scanDepth),
+        case_sensitive: nativeOptionalToOld_ACU(entry?.caseSensitive),
+        match_whole_words: nativeOptionalToOld_ACU(entry?.matchWholeWords),
+        use_group_scoring: nativeOptionalToOld_ACU(entry?.useGroupScoring),
+        automation_id: entry?.automationId ? String(entry.automationId) : null,
+        exclude_recursion: entry?.excludeRecursion === true,
+        prevent_recursion: entry?.preventRecursion === true,
+        delay_until_recursion: typeof delayUntil === 'number' && delayUntil > 0 ? delayUntil : false,
+        content: typeof entry?.content === 'string' ? entry.content : '',
+        group: typeof entry?.group === 'string' ? entry.group : '',
+        group_prioritized: entry?.groupOverride === true,
+        group_weight: typeof entry?.groupWeight === 'number' ? entry.groupWeight : 100,
+        sticky: numberOrNull_ACU(entry?.sticky),
+        cooldown: numberOrNull_ACU(entry?.cooldown),
+        delay: numberOrNull_ACU(entry?.delay),
+    };
+}
+/**
+ * 旧版扁平 partial → ST 原生条目字段 patch。
+ * 仅映射 patch 中实际存在的字段。
+ */
+function oldPatchToNativePatch_ACU(patch) {
+    const out = {};
+    if ('comment' in patch)
+        out.comment = patch.comment;
+    if ('enabled' in patch)
+        out.disable = patch.enabled === false;
+    if ('content' in patch)
+        out.content = patch.content;
+    if ('probability' in patch)
+        out.probability = patch.probability;
+    if ('keys' in patch)
+        out.key = stringifyKeys_ACU(patch.keys);
+    if ('filters' in patch)
+        out.keysecondary = stringifyKeys_ACU(patch.filters);
+    if ('logic' in patch && patch.logic in OLD_LOGIC_TO_NATIVE_ACU)
+        out.selectiveLogic = OLD_LOGIC_TO_NATIVE_ACU[patch.logic];
+    if ('order' in patch)
+        out.order = patch.order;
+    if ('group' in patch)
+        out.group = patch.group;
+    if ('group_prioritized' in patch)
+        out.groupOverride = patch.group_prioritized;
+    if ('group_weight' in patch)
+        out.groupWeight = patch.group_weight;
+    if ('automation_id' in patch)
+        out.automationId = patch.automation_id ?? '';
+    if ('exclude_recursion' in patch)
+        out.excludeRecursion = patch.exclude_recursion;
+    if ('prevent_recursion' in patch)
+        out.preventRecursion = patch.prevent_recursion;
+    if ('delay_until_recursion' in patch) {
+        const v = patch.delay_until_recursion;
+        out.delayUntilRecursion = v === false ? 0 : v === true ? 1 : v;
+    }
+    if ('scan_depth' in patch)
+        out.scanDepth = oldOptionalToNative_ACU(patch.scan_depth);
+    if ('case_sensitive' in patch)
+        out.caseSensitive = oldOptionalToNative_ACU(patch.case_sensitive);
+    if ('match_whole_words' in patch)
+        out.matchWholeWords = oldOptionalToNative_ACU(patch.match_whole_words);
+    if ('use_group_scoring' in patch)
+        out.useGroupScoring = oldOptionalToNative_ACU(patch.use_group_scoring);
+    if ('sticky' in patch)
+        out.sticky = patch.sticky;
+    if ('cooldown' in patch)
+        out.cooldown = patch.cooldown;
+    if ('delay' in patch)
+        out.delay = patch.delay;
+    if ('display_index' in patch)
+        out.displayIndex = patch.display_index;
+    if ('type' in patch) {
+        out.constant = patch.type === 'constant';
+        out.vectorized = patch.type === 'vectorized';
+        out.selective = patch.type === 'selective';
+    }
+    if ('position' in patch && typeof patch.position === 'string' && patch.position in OLD_POSITION_TO_NATIVE_ACU) {
+        out.position = OLD_POSITION_TO_NATIVE_ACU[patch.position];
+        if (patch.position.startsWith('at_depth_as_')) {
+            out.role = ROLE_NAME_TO_NATIVE_ACU[patch.position.slice('at_depth_as_'.length)] ?? 0;
+        }
+    }
+    if ('depth' in patch && patch.depth !== null && patch.depth !== undefined)
+        out.depth = patch.depth;
+    return out;
+}
+/**
+ * ST 原生新条目默认值（与 SillyTavern world-info.js newWorldInfoEntryTemplate 对齐）。
+ * 用于原生后端 createLorebookEntries 时补全未指定字段。
+ */
+function buildNativeEntryDefaults_ACU() {
+    return {
+        key: [],
+        keysecondary: [],
+        comment: '',
+        content: '',
+        constant: false,
+        vectorized: false,
+        selective: true,
+        selectiveLogic: 0,
+        addMemo: true,
+        order: 100,
+        position: 0,
+        disable: false,
+        excludeRecursion: false,
+        preventRecursion: false,
+        matchPersonaDescription: false,
+        matchCharacterDescription: false,
+        matchCharacterPersonality: false,
+        matchCharacterDepthPrompt: false,
+        matchScenario: false,
+        matchCreatorNotes: false,
+        delayUntilRecursion: 0,
+        probability: 100,
+        useProbability: true,
+        depth: 4,
+        group: '',
+        groupOverride: false,
+        groupWeight: 100,
+        scanDepth: null,
+        caseSensitive: null,
+        matchWholeWords: null,
+        useGroupScoring: null,
+        automationId: '',
+        role: 0,
+        sticky: null,
+        cooldown: null,
+        delay: null,
+    };
+}
+
+/**
  * data/gateways/worldbook-gateway.ts — 世界书 CRUD 操作网关
  *
  * 封装 TavernHelper_API_ACU / SillyTavern_API_ACU 的世界书相关方法。
@@ -5729,13 +6109,24 @@ async function deleteLorebookEntries_ACU(bookName, uids) {
  * @returns 世界书名称数组，不可用时返回 []
  */
 async function listLorebooks_ACU() {
-    // 优先尝试 TavernHelper
+    // 优先尝试 TavernHelper（无酒馆助手时由 host-compat 适配器提供原生实现）
     if (TavernHelper_API_ACU && typeof TavernHelper_API_ACU.getLorebooks === 'function') {
         return await TavernHelper_API_ACU.getLorebooks();
     }
     // 降级到 SillyTavern_API
     if (SillyTavern_API_ACU && typeof SillyTavern_API_ACU.getWorldBooks === 'function') {
         return await SillyTavern_API_ACU.getWorldBooks();
+    }
+    // 第三级：TT/ST 原生 context.getWorldInfoNames()（st-context.js 直接返回 string[] 快照）。
+    // 油猴模式下 SillyTavern_API_ACU 是酒馆助手扁平 API，无此方法时自然跳过。
+    try {
+        const nativeNames = SillyTavern_API_ACU?.getWorldInfoNames?.();
+        if (Array.isArray(nativeNames)) {
+            return nativeNames.map((name) => String(name));
+        }
+    }
+    catch (error) {
+        logWarn_ACU('[WorldbookGateway] 原生 getWorldInfoNames 调用失败，世界书列表降级为空');
     }
     logWarn_ACU('[WorldbookGateway] listLorebooks 不可用，返回空数组');
     return [];
@@ -5752,6 +6143,46 @@ async function getWorldBooks_ACU$1() {
     logWarn_ACU('[WorldbookGateway] getWorldBooks 不可用，返回空数组');
     return [];
 }
+/**
+ * 无酒馆助手时的原生条目读取：经 SillyTavern context.loadWorldInfo 逐本读整本书，
+ * 返回 {name, entries} 形状（entries 为旧版扁平条目，与 TavernHelper.getLorebookEntries 一致）。
+ *
+ * getWorldBooks_ACU 在 TT 裸环境恒为 []（getContext 不导出 getWorldBooks），且返回的是
+ * string[] 名称列表而非 {name, entries}，不能作为条目来源；本函数补上真正的读取通道。
+ * loadWorldInfo 不可用或单本读取失败时跳过该书，不影响其它书。
+ */
+async function getWorldBooksWithEntriesViaNative_ACU(bookNames) {
+    const loadWorldInfo = SillyTavern_API_ACU?.loadWorldInfo;
+    if (typeof loadWorldInfo !== 'function') {
+        logWarn_ACU('[WorldbookGateway] 原生 loadWorldInfo 不可用，世界书条目无可用来源');
+        return [];
+    }
+    // 宿主书名不得 trim（:50-57 契约）：带首尾空格的真实书名 trim 后 loadWorldInfo 必 not-found 静默丢书
+    const names = (Array.isArray(bookNames) ? bookNames : [])
+        .map(name => String(name ?? ''))
+        .filter(name => name !== '');
+    const books = [];
+    for (const name of [...new Set(names)]) {
+        try {
+            const data = await loadWorldInfo(name);
+            const entriesDict = data?.entries;
+            if (!entriesDict || typeof entriesDict !== 'object')
+                continue;
+            books.push({
+                name,
+                entries: Object.keys(entriesDict).map(uid => nativeToOldEntry_ACU({ uid, ...entriesDict[uid] })),
+            });
+        }
+        catch (error) {
+            logWarn_ACU('[WorldbookGateway] 原生 loadWorldInfo 读取单本世界书失败，跳过该书。', {
+                phase: 'native_load_worldbook',
+                bookName: name,
+                error: { category: 'read_failed' },
+            });
+        }
+    }
+    return books;
+}
 // ═══ 角色绑定世界书 ═══
 /**
  * 获取当前角色的主绑定世界书名称
@@ -5763,6 +6194,9 @@ async function getWorldBooks_ACU$1() {
  * selected_world_info + world_info.globalSelect +
  * 页面 #world_info 多选框 + TavernHelper.getLorebookSettings。
  * 填表「正文接收」来源（active）用；正文生成时这些书会被注入，角色卡绑定关系读不到。
+ *
+ * 注意：这四条全局探测只对 ST 时代环境（window 上确有这些全局）有效；
+ * TT 裸环境下它们是 ES module 导出，只能经 getActiveGlobalWorldbookNamesAsync_ACU 的动态 import 读到。
  * @returns 去重后的激活世界书名称数组
  */
 function getActiveGlobalWorldbookNames_ACU() {
@@ -5802,12 +6236,107 @@ function getActiveGlobalWorldbookNames_ACU() {
     catch { /* ignore */ }
     return [...new Set(names.filter(Boolean))];
 }
+// ═══ 激活世界书：宿主 ES module 通道（TT/ST 裸环境） ═══
+/**
+ * 宿主 world-info 模块 URL。
+ * 用变量说明符而非字面量：rollup/vite 无法静态分析，保留为运行时原生 dynamic import，
+ * 避免打包器把酒馆宿主模块当成本地依赖去解析（构建期必然找不到该路径）。
+ */
+const WORLD_INFO_MODULE_URL_ACU = '/scripts/' + 'world-info.js';
+/** 已解析的宿主 world-info 模块命名空间；模块内 selected_world_info 是 live binding，缓存模块本身即可读到最新值 */
+let worldInfoModulePromise_ACU = null;
+/**
+ * 动态 import 宿主 world-info 模块（带缓存）。
+ * 失败时清空缓存，让宿主尚未加载完的早期调用有机会重试。
+ *
+ * 只在插件模式（宿主主窗口）下尝试：油猴模式跑在酒馆助手创建的 iframe 里，
+ * 同一 URL 在 iframe realm 会加载出「第二个」world-info 实例（selected_world_info 恒为空，
+ * 且会把 script.js/power-user.js 整条宿主模块图在 iframe 里重新执行一遍），既读不到真值又有副作用。
+ * 油猴模式下 window 全局链与 TavernHelper 通道仍然有效，这里直接返回 null 走既有降级。
+ */
+function loadHostWorldInfoModule_ACU() {
+    if (!isExtensionMode())
+        return Promise.resolve(null);
+    if (!worldInfoModulePromise_ACU) {
+        const loadModule = async () => {
+            try {
+                // 变量说明符 + @vite-ignore：保留运行时原生 dynamic import，不让打包器静态解析宿主模块
+                return (await import(/* @vite-ignore */ WORLD_INFO_MODULE_URL_ACU)) ?? null;
+            }
+            catch (error) {
+                worldInfoModulePromise_ACU = null;
+                logWarn_ACU('[WorldbookGateway] 动态 import 宿主 world-info 模块失败，激活世界书宿主模块通道降级为空', error);
+                return null;
+            }
+        };
+        worldInfoModulePromise_ACU = loadModule();
+    }
+    return worldInfoModulePromise_ACU;
+}
+/** 供测试与宿主热重载后重新探测使用 */
+function resetHostWorldInfoModuleCache_ACU() {
+    worldInfoModulePromise_ACU = null;
+}
+/**
+ * 从宿主 world-info 模块命名空间读取激活世界书名。
+ * 两条来源（dev world-info.js 实证）：
+ * - selected_world_info（:71-72 export let，UI 勾选的当前真值，live binding）
+ * - getWorldInfoSettings().world_info.globalSelect（:890 导出，保存设置时同步的持久化副本）
+ */
+function collectActiveWorldbookNamesFromModule_ACU(mod) {
+    const names = [];
+    const push = (list) => {
+        if (!Array.isArray(list))
+            return;
+        for (const item of list) {
+            const name = String(item ?? '').trim();
+            if (name && !names.includes(name))
+                names.push(name);
+        }
+    };
+    if (!mod)
+        return names;
+    try {
+        push(mod.selected_world_info);
+    }
+    catch { /* ignore */ }
+    try {
+        push(mod.getWorldInfoSettings?.()?.world_info?.globalSelect);
+    }
+    catch { /* ignore */ }
+    return names;
+}
+/**
+ * 异步版激活世界书探测：同步全局链 + 宿主 world-info 模块链。
+ * TT dev 的 getContext() 不导出 world_info / selected_world_info（全是 ES module export），
+ * 裸环境下四条死全局必然落空，只有动态 import 能读到当前激活书。
+ * 油猴/旧 ST 时代环境全局可见时，模块通道只会补充去重后的同名结果，不改变既有行为。
+ * @param loadModule 模块提供者，默认走运行时动态 import；测试与非标准宿主可注入替代实现
+ */
+async function getActiveGlobalWorldbookNamesAsync_ACU(loadModule = loadHostWorldInfoModule_ACU) {
+    const names = getActiveGlobalWorldbookNames_ACU();
+    const push = (list) => {
+        if (!Array.isArray(list))
+            return;
+        for (const item of list) {
+            const name = String(item ?? '').trim();
+            if (name && !names.includes(name))
+                names.push(name);
+        }
+    };
+    try {
+        push(collectActiveWorldbookNamesFromModule_ACU(await loadModule()));
+    }
+    catch { /* 宿主模块不可用时保留全局链结果 */ }
+    return names;
+}
 /**
  * 获取「正文实际能接收到的」世界书名称全集：激活全局书 + 角色卡绑定书（primary+additional）。
  * 填表「正文接收」来源的书列表真源（UI 与运行时共用）。
+ * @param worldInfoModuleLoader 激活书宿主模块提供者注入点，默认走运行时动态 import
  */
-async function getActiveWorldbookNamesForFill_ACU() {
-    const names = getActiveGlobalWorldbookNames_ACU();
+async function getActiveWorldbookNamesForFill_ACU(worldInfoModuleLoader) {
+    const names = await getActiveGlobalWorldbookNamesAsync_ACU(worldInfoModuleLoader ?? loadHostWorldInfoModule_ACU);
     for (const fn of [globalThis.getLorebookSettings, globalThis.TavernHelper?.getLorebookSettings]) {
         if (typeof fn !== 'function')
             continue;
@@ -59118,7 +59647,12 @@ function getCurrentCharacterFallback_ACU(win) {
 /**
  * 获取当前角色描述文本
  * 在 getCurrentCharacterFallback_ACU 基础上提取描述字段，
- * 并额外尝试 stContext.name2_description 作为最终 fallback。
+ * 并额外尝试宿主角色卡字段作为最终 fallback。
+ *
+ * fallback 顺序（TT-only 定案）：
+ *   1. stContext.getCharacterCardFields().description — TT dev st-context.js:238 实证存在，
+ *      宏替换后的当前角色描述，裸环境下唯一有效来源；
+ *   2. stContext.name2_description — 旧 ST 扁平 API 字段，保留给 ST 兼容环境。
  * @param win 可选，指定查找的 window 对象
  * @returns 角色描述字符串，不可用时返回 ''
  */
@@ -59128,10 +59662,18 @@ function getCharDescription_ACU(win) {
         if (character?.description || character?.data?.description) {
             return character.description || character.data.description;
         }
-        // 最终 fallback：stContext.name2_description
+        // 最终 fallback：原生角色卡字段 → 旧版扁平 name2_description
         const w = win || topLevelWindow_ACU || window;
         const stContext = w?.SillyTavern?.getContext?.();
-        return stContext?.name2_description || '';
+        let cardDescription = '';
+        try {
+            cardDescription = stContext?.getCharacterCardFields?.()?.description || '';
+        }
+        catch {
+            // 宿主卡面字段读取异常不得吞掉下面的 name2_description 降级
+            cardDescription = '';
+        }
+        return cardDescription || stContext?.name2_description || '';
     }
     catch {
         return '';
@@ -76932,7 +77474,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.0.3" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.0.4" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -81523,7 +82065,9 @@ async function getLorebookEntriesByNames_ACU(bookNames = []) {
         // listLorebooks_ACU 失败时降级为不过滤，让下方原有的 try-catch 兜底
     }
     if (!canUseTavernHelper) {
-        fallbackBooks = await getWorldBooks_ACU$1();
+        // 无酒馆助手时不能再用 gwGetWorldBooks_ACU()：它返回 string[] 名称列表（TT 裸环境
+        // 甚至恒为 []），而下方按 {name, entries} 消费。改为经原生 loadWorldInfo 取真实条目。
+        fallbackBooks = await getWorldBooksWithEntriesViaNative_ACU(readTargets.map(target => target.hostName));
     }
     for (const target of readTargets) {
         const { requestedName } = target;
@@ -89718,6 +90262,14 @@ async function replaceChatMessage_ACU(messageIndex, newContent, options = {}) {
             await saveChatToHost_ACU();
             logDebug_ACU('[正文优化] 聊天已保存');
             emitMessageUpdated_ACU(messageIndex);
+            // [TT 登记] 不接线宿主 reloadCurrentChat 强制重绘：TauriTavern dev 的
+            // reloadCurrentChat（st-context.js:136 导出 → script.js:2229 reloadCurrentChatUnsafe）
+            // 语义是 clearChat({clearData:true}) 后 getChat()/getGroupChat() 从磁盘整表重载，
+            // 三个分支收尾均 emit CHAT_CHANGED（script.js:9141 / :2242 / group-chats.js:372）。
+            // 本库 init.ts handleChatChangedEvent_ACU 会把该事件按「会话切换」处理：
+            // 中止在飞填表/依赖楼层调用、清派生缓存、1200ms 后整库重建，且 clearChat 会
+            // cancelDebouncedChatSave() 吞掉他链挂起的防抖保存——重入风险远大于气泡不刷新的收益。
+            // 已知限制：降级路径数据已落盘 + 已发 MESSAGE_UPDATED，但气泡视图在切聊天前不刷新。
         }
         logDebug_ACU(`[正文优化] 消息 ${messageIndex} 已更新完成`);
         return true;
@@ -97107,8 +97659,8 @@ function showCustomConfirm_ACU(title, message, options = {}) {
     // 将 \n 转为 <br>，HTML 转义防止 XSS
     const safeMessage = escapeHtml_ACU(message).replace(/\n/g, '<br>');
     const html = `
-    <div class="acu-window-overlay" id="${confirmId}-overlay" style="z-index: 100000;">
-      <div id="${confirmId}" style="
+    <div class="acu-window-overlay" id="${confirmId}-overlay" data-tt-mobile-surface="backdrop" style="z-index: 100000;">
+      <div id="${confirmId}" data-tt-mobile-surface="free-window" style="
         position: fixed;
         top: ${isNarrowScreen ? 'max(calc(env(safe-area-inset-top, 0px) + 72px), 12svh)' : '50%'};
         left: 50%;
@@ -98275,18 +98827,558 @@ function refreshApiPresetSelectors_ACU() {
  */
 
 /**
+ * shared/host-compat/native-st-backend.ts — SillyTavern 原生后端
+ *
+ * 在无酒馆助手（TavernHelper）的插件独立运行模式下，用 SillyTavern.getContext()
+ * 暴露的原生接口实现代码库依赖的旧版扁平 API 面。
+ *
+ * 能力来源（以 SillyTavern 1.13.x / TauriTavern dev st-context.js 为准）：
+ * - 世界书读写：ctx.loadWorldInfo / ctx.saveWorldInfo
+ * - 世界书名称列表：ctx.getWorldInfoNames()（st-context.js 直接返回 string[]）
+ * - 聊天与角色：ctx.chat / ctx.characters / ctx.characterId
+ * - Slash 命令：ctx.executeSlashCommandsWithOptions
+ * - 角色附加书（charLore）不在 context 中，
+ *   经 POST /api/settings/get 获取（带 TTL 缓存）。
+ *   settings 形状为 { world_info_settings: { world_info: { charLore } } }
+ *   （script.js saveSettingsNow 写 world_info_settings: getWorldInfoSettings()，
+ *    而 getWorldInfoSettings() 返回 { world_info, world_info_depth, ... }）。
+ *
+ * generateRaw 虽在 TT dev 的 getContext() 中存在（st-context.js:211），但本库已剥离酒馆主 API
+ * 直连路径、AI 调用统一走自定义端点（见 data/gateways/ai-gateway.ts），因此本后端刻意不挂载它，
+ * 保持"方法缺失"语义，让调用方既有的可用性检查与降级路径自然生效。
+ */
+const SETTINGS_SNAPSHOT_TTL_MS_ACU = 8000;
+function createNativeStBackend_ACU(getStApi) {
+    let settingsSnapshot = null;
+    let settingsSnapshotAt = 0;
+    function ctx() {
+        try {
+            return getStApi() ?? null;
+        }
+        catch {
+            return null;
+        }
+    }
+    function invalidateSettingsSnapshot() {
+        settingsSnapshot = null;
+        settingsSnapshotAt = 0;
+    }
+    async function fetchSettingsSnapshot() {
+        const now = Date.now();
+        if (settingsSnapshot && now - settingsSnapshotAt < SETTINGS_SNAPSHOT_TTL_MS_ACU) {
+            return settingsSnapshot;
+        }
+        const api = ctx();
+        try {
+            const headers = typeof api?.getRequestHeaders === 'function'
+                ? api.getRequestHeaders()
+                : { 'Content-Type': 'application/json' };
+            const res = await fetch('/api/settings/get', {
+                method: 'POST',
+                headers: { ...headers, 'Content-Type': 'application/json' },
+                body: '{}',
+            });
+            if (!res.ok) {
+                logWarn_ACU(`[NativeStBackend] /api/settings/get 返回 ${res.status}，世界书列表暂不可用`);
+                return null;
+            }
+            const payload = await res.json();
+            const worldNames = Array.isArray(payload?.world_names)
+                ? payload.world_names.map((n) => String(n))
+                : [];
+            let charLore = [];
+            try {
+                const parsed = typeof payload?.settings === 'string' ? JSON.parse(payload.settings) : payload?.settings;
+                const rawCharLore = parsed?.world_info_settings?.world_info?.charLore;
+                if (Array.isArray(rawCharLore)) {
+                    charLore = rawCharLore
+                        .filter((item) => item && typeof item.name === 'string')
+                        .map((item) => ({
+                        name: item.name,
+                        extraBooks: Array.isArray(item.extraBooks) ? item.extraBooks.map((b) => String(b)) : [],
+                    }));
+                }
+            }
+            catch (e) {
+                logWarn_ACU('[NativeStBackend] 解析 settings.world_info_settings.world_info.charLore 失败，附加世界书降级为空', e);
+            }
+            settingsSnapshot = { worldNames, charLore };
+            settingsSnapshotAt = now;
+            return settingsSnapshot;
+        }
+        catch (e) {
+            logWarn_ACU('[NativeStBackend] 获取 /api/settings/get 失败', e);
+            return null;
+        }
+    }
+    // ═══ 世界书条目 CRUD ═══
+    async function loadBookOrThrow(bookName) {
+        const api = ctx();
+        if (!api || typeof api.loadWorldInfo !== 'function') {
+            throw new Error('SillyTavern loadWorldInfo 接口不可用');
+        }
+        const data = await api.loadWorldInfo(bookName);
+        // 不存在时的文案必须匹配 classifyLorebookReadError_ACU 的中文 not-found 正则
+        if (!data || typeof data !== 'object' || !data.entries) {
+            throw new Error(`世界书 "${bookName}" 不存在`);
+        }
+        return data;
+    }
+    async function saveBook(bookName, data) {
+        const api = ctx();
+        if (!api || typeof api.saveWorldInfo !== 'function') {
+            throw new Error('SillyTavern saveWorldInfo 接口不可用');
+        }
+        await api.saveWorldInfo(bookName, data, true);
+    }
+    function entriesDictToOldArray(data) {
+        const dict = data?.entries ?? {};
+        return Object.keys(dict).map(uid => nativeToOldEntry_ACU(dict[uid]));
+    }
+    async function getLorebookEntries(bookName) {
+        const data = await loadBookOrThrow(bookName);
+        return entriesDictToOldArray(data);
+    }
+    async function setLorebookEntries(bookName, entries) {
+        if (!Array.isArray(entries) || entries.length === 0)
+            return;
+        const data = await loadBookOrThrow(bookName);
+        let changed = false;
+        for (const patch of entries) {
+            const uid = patch?.uid;
+            if (uid === null || uid === undefined || !data.entries[uid]) {
+                logWarn_ACU(`[NativeStBackend] setLorebookEntries: 世界书 "${bookName}" 中不存在 uid=${String(uid)} 的条目，已跳过`);
+                continue;
+            }
+            Object.assign(data.entries[uid], oldPatchToNativePatch_ACU(patch));
+            changed = true;
+        }
+        if (changed)
+            await saveBook(bookName, data);
+    }
+    async function createLorebookEntries(bookName, entries) {
+        const data = await loadBookOrThrow(bookName);
+        const existingUids = Object.keys(data.entries).map(Number).filter(Number.isFinite);
+        let nextUid = existingUids.length > 0 ? Math.max(...existingUids) + 1 : 0;
+        const newUids = [];
+        for (const patch of Array.isArray(entries) ? entries : []) {
+            const uid = nextUid++;
+            data.entries[uid] = {
+                uid,
+                ...buildNativeEntryDefaults_ACU(),
+                ...oldPatchToNativePatch_ACU(patch ?? {}),
+                displayIndex: uid,
+            };
+            newUids.push(uid);
+        }
+        if (newUids.length > 0)
+            await saveBook(bookName, data);
+        return { entries: entriesDictToOldArray(data), new_uids: newUids };
+    }
+    async function deleteLorebookEntries(bookName, uids) {
+        const data = await loadBookOrThrow(bookName);
+        let deleteOccurred = false;
+        for (const uid of Array.isArray(uids) ? uids : []) {
+            if (data.entries[uid]) {
+                delete data.entries[uid];
+                deleteOccurred = true;
+            }
+        }
+        if (deleteOccurred)
+            await saveBook(bookName, data);
+        return { entries: entriesDictToOldArray(data), delete_occurred: deleteOccurred };
+    }
+    // ═══ 世界书列表与角色绑定 ═══
+    async function getLorebooks() {
+        // 优先原生 context.getWorldInfoNames()（st-context.js 直接暴露 world_names 快照，
+        // 返回 string[]，无网络往返）；不可用时才降级到 /api/settings/get 快照。
+        const api = ctx();
+        if (api && typeof api.getWorldInfoNames === 'function') {
+            try {
+                const names = api.getWorldInfoNames();
+                if (Array.isArray(names)) {
+                    return names.map((n) => String(n));
+                }
+            }
+            catch (e) {
+                logWarn_ACU('[NativeStBackend] getWorldInfoNames 调用失败，降级 /api/settings/get 世界书列表', e);
+            }
+        }
+        const snapshot = await fetchSettingsSnapshot();
+        return snapshot?.worldNames ?? [];
+    }
+    function resolveCharacter(characterName) {
+        const api = ctx();
+        const characters = api?.characters;
+        if (!Array.isArray(characters))
+            return null;
+        if (!characterName || characterName === 'current') {
+            // dev getContext 只导出 characterId（st-context.js:129 `characterId: this_chid`）；
+            // this_chid 仅作 ST 时代扁平环境的次级兜底。
+            const chid = api?.characterId ?? api?.this_chid;
+            if (chid === undefined || chid === null || chid === '')
+                return null;
+            return characters[Number(chid)] ?? null;
+        }
+        return characters.find((c) => c?.name === characterName || c?.avatar === characterName) ?? null;
+    }
+    async function getCharWorldbookNames(characterName) {
+        const character = resolveCharacter(characterName);
+        if (!character)
+            return { primary: null, additional: [] };
+        const primary = typeof character?.data?.extensions?.world === 'string' && character.data.extensions.world
+            ? character.data.extensions.world
+            : null;
+        let additional = [];
+        const avatar = typeof character?.avatar === 'string' ? character.avatar : '';
+        if (avatar) {
+            const avatarBase = avatar.replace(/\.[^.]+$/, '');
+            const snapshot = await fetchSettingsSnapshot();
+            const loreEntry = snapshot?.charLore?.find(item => item.name === avatarBase);
+            additional = loreEntry?.extraBooks ?? [];
+        }
+        return { primary, additional };
+    }
+    async function getCharLorebooks(options = {}) {
+        const binding = await getCharWorldbookNames(options.name ?? 'current');
+        const type = options.type ?? 'all';
+        if (type === 'primary')
+            return { primary: binding.primary, additional: [] };
+        if (type === 'additional')
+            return { primary: null, additional: binding.additional };
+        return binding;
+    }
+    async function getCurrentCharPrimaryLorebook() {
+        return (await getCharWorldbookNames('current')).primary;
+    }
+    // ═══ 聊天消息 ═══
+    function getChatArray() {
+        const api = ctx();
+        return Array.isArray(api?.chat) ? api.chat : [];
+    }
+    function getLastMessageId() {
+        return getChatArray().length - 1;
+    }
+    function mapChatMessage(msg, index, includeSwipes) {
+        const isUser = msg?.is_user === true;
+        const isSystem = msg?.is_system === true;
+        const swipeId = typeof msg?.swipe_id === 'number' ? msg.swipe_id : 0;
+        const base = {
+            message_id: index,
+            name: typeof msg?.name === 'string' ? msg.name : '',
+            role: isUser ? 'user' : isSystem ? 'system' : 'assistant',
+            is_user: isUser,
+            is_system: isSystem,
+            is_hidden: isSystem,
+            message: typeof msg?.mes === 'string' ? msg.mes : '',
+            data: (Array.isArray(msg?.variables) ? msg.variables[swipeId] : msg?.variables) ?? {},
+            extra: msg?.extra ?? {},
+        };
+        if (includeSwipes) {
+            base.swipe_id = swipeId;
+            base.swipes = Array.isArray(msg?.swipes) ? msg.swipes : [base.message];
+            base.swipes_data = Array.isArray(msg?.variables) ? msg.variables : [];
+            base.swipes_info = Array.isArray(msg?.swipe_info) ? msg.swipe_info : [];
+        }
+        return base;
+    }
+    function parseRange(range, lastId) {
+        if (range === undefined || range === null || range === '')
+            return [0, lastId];
+        const normalize = (value) => (value < 0 ? lastId + 1 + value : value);
+        if (typeof range === 'number') {
+            const idx = normalize(range);
+            return [idx, idx];
+        }
+        const text = String(range).replace(/\{\{lastMessageId\}\}/gi, String(lastId)).trim();
+        // 允许负数端点：匹配 "a-b"（a、b 可带负号）
+        const rangeMatch = text.match(/^(-?\d+)\s*-\s*(-?\d+)$/);
+        if (rangeMatch) {
+            return [normalize(Number(rangeMatch[1])), normalize(Number(rangeMatch[2]))];
+        }
+        const single = Number(text);
+        if (Number.isFinite(single)) {
+            const idx = normalize(single);
+            return [idx, idx];
+        }
+        return null;
+    }
+    async function getChatMessages(range, options = {}) {
+        const chatArray = getChatArray();
+        const lastId = chatArray.length - 1;
+        if (lastId < 0)
+            return [];
+        const parsed = parseRange(range, lastId);
+        if (!parsed) {
+            logWarn_ACU(`[NativeStBackend] getChatMessages: 无法解析 range "${String(range)}"，返回空数组`);
+            return [];
+        }
+        const [start, end] = parsed;
+        const from = Math.max(0, Math.min(start, end));
+        const to = Math.min(lastId, Math.max(start, end));
+        const includeSwipes = options.include_swipes === true;
+        const result = [];
+        for (let i = from; i <= to; i++) {
+            const mapped = mapChatMessage(chatArray[i], i, includeSwipes);
+            if (options.role && options.role !== 'all' && mapped.role !== options.role)
+                continue;
+            if (options.hide_state === 'hidden' && !mapped.is_hidden)
+                continue;
+            if (options.hide_state === 'unhidden' && mapped.is_hidden)
+                continue;
+            result.push(mapped);
+        }
+        return result;
+    }
+    // ═══ 其他 ═══
+    async function triggerSlash(command) {
+        const api = ctx();
+        if (!api || typeof api.executeSlashCommandsWithOptions !== 'function') {
+            throw new Error('SillyTavern executeSlashCommandsWithOptions 接口不可用');
+        }
+        const result = await api.executeSlashCommandsWithOptions(command);
+        return typeof result?.pipe === 'string' ? result.pipe : '';
+    }
+    function getCharData(target = 'current') {
+        return resolveCharacter(target);
+    }
+    function isUsable() {
+        const api = ctx();
+        return !!(api
+            && typeof api.loadWorldInfo === 'function'
+            && typeof api.saveWorldInfo === 'function'
+            && typeof api.executeSlashCommandsWithOptions === 'function');
+    }
+    logDebug_ACU('[NativeStBackend] 原生 SillyTavern 后端已创建');
+    return {
+        getLorebooks,
+        getLorebookEntries,
+        setLorebookEntries,
+        createLorebookEntries,
+        deleteLorebookEntries,
+        getCharWorldbookNames,
+        getCharLorebooks,
+        getCurrentCharPrimaryLorebook,
+        getChatMessages,
+        getLastMessageId,
+        triggerSlash,
+        getCharData,
+        isUsable,
+        invalidateSettingsSnapshot,
+    };
+}
+
+/**
+ * shared/host-compat/tavern-helper-compat.ts — TavernHelper 兼容适配器
+ *
+ * 对外暴露代码库消费的旧版扁平方法面（getLorebookEntries 等 13 个方法），
+ * 内部逐方法按三级择优解析后端：
+ * - passthrough：宿主对象上存在同名函数（旧版酒馆助手 iframe 全量 API，
+ *   或新旧共用名如 getChatMessages/triggerSlash），直接透传——油猴模式行为零变化。
+ * - mapped：宿主对象只有新版改名 API（getWorldbook/replaceWorldbook 系），
+ *   包装参数与条目格式转换后调用。
+ * - native：宿主完全没有酒馆助手，落到 SillyTavern 原生后端。
+ *
+ * generateRaw 没有原生等价实现：两级不中则不挂载该方法，
+ * 保持"方法缺失"语义，让 isGenerateRawAvailable_ACU 等既有检查自然生效。
+ */
+/** 最近一次构建的能力表，供初始化失败分支输出诊断 */
+let lastCapabilities_ACU = null;
+function getLastHostCapabilities_ACU() {
+    return lastCapabilities_ACU;
+}
+/** 生成人类可读的能力诊断文本（缺失项排前） */
+function formatHostCapabilities_ACU(capabilities) {
+    if (!capabilities)
+        return '（能力表尚未生成）';
+    const missing = Object.entries(capabilities).filter(([, backend]) => backend === 'missing').map(([name]) => name);
+    const resolved = Object.entries(capabilities)
+        .filter(([, backend]) => backend !== 'missing')
+        .map(([name, backend]) => `${name}=${backend}`);
+    const parts = [];
+    if (missing.length > 0)
+        parts.push(`缺失: ${missing.join(', ')}`);
+    if (resolved.length > 0)
+        parts.push(`已解析: ${resolved.join(', ')}`);
+    return parts.join('；') || '（空能力表）';
+}
+function hasFn_ACU(obj, name) {
+    return !!obj && typeof obj[name] === 'function';
+}
+/** 把新版嵌套 partial patch 合并进新版完整条目（保持未指定字段不变） */
+function mergeNewEntryPatch_ACU(entry, patch) {
+    const merged = { ...entry };
+    for (const [key, value] of Object.entries(patch)) {
+        if (key === 'strategy' || key === 'position' || key === 'recursion' || key === 'effect') {
+            const sub = { ...(entry?.[key] ?? {}), ...value };
+            if (key === 'strategy' && value?.keys_secondary) {
+                sub.keys_secondary = { ...(entry?.strategy?.keys_secondary ?? {}), ...value.keys_secondary };
+            }
+            merged[key] = sub;
+        }
+        else {
+            merged[key] = value;
+        }
+    }
+    return merged;
+}
+/**
+ * 构建 TavernHelper 兼容适配器。
+ * @param rawTH 宿主环境探测到的原始 TavernHelper 对象（可能为 undefined）
+ * @param getStApi 返回 SillyTavern context 的闭包（原生后端使用）
+ */
+function buildTavernHelperCompat_ACU(rawTH, getStApi) {
+    const native = createNativeStBackend_ACU(getStApi);
+    // 装配期一次性判定：resolve() 的挂载/删除决策与 capabilities 告警表同源，必须一致。
+    // 前提是装配点在 ctx 就绪之后（entry-extension waitForAcuHostReady → mainInitialize 链已保证）。
+    const nativeUsable = native.isUsable();
+    const capabilities = {};
+    // 先透传原始对象的全部属性（未在下方显式适配的方法保持原样）
+    const api = { ...(rawTH && typeof rawTH === 'object' ? rawTH : {}) };
+    /** 按 passthrough → mapped → native 择优挂载一个方法 */
+    function resolve(name, mappedImpl, nativeImpl) {
+        if (hasFn_ACU(rawTH, name)) {
+            api[name] = rawTH[name].bind(rawTH);
+            capabilities[name] = 'passthrough';
+            return;
+        }
+        if (mappedImpl) {
+            const impl = mappedImpl();
+            if (impl) {
+                api[name] = impl;
+                capabilities[name] = 'mapped';
+                return;
+            }
+        }
+        if (nativeImpl && nativeUsable) {
+            api[name] = nativeImpl;
+            capabilities[name] = 'native';
+            return;
+        }
+        capabilities[name] = 'missing';
+        delete api[name];
+    }
+    // ═══ 世界书条目 CRUD ═══
+    resolve('getLorebookEntries', () => hasFn_ACU(rawTH, 'getWorldbook')
+        ? async (bookName) => {
+            const worldbook = await rawTH.getWorldbook(bookName);
+            return (Array.isArray(worldbook) ? worldbook : []).map((entry, index) => newToOldEntry_ACU(entry, index));
+        }
+        : null, (bookName) => native.getLorebookEntries(bookName));
+    resolve('setLorebookEntries', () => hasFn_ACU(rawTH, 'updateWorldbookWith')
+        ? async (bookName, entries) => {
+            if (!Array.isArray(entries) || entries.length === 0)
+                return;
+            const patchByUid = new Map();
+            for (const patch of entries) {
+                if (patch && patch.uid !== undefined && patch.uid !== null) {
+                    patchByUid.set(Number(patch.uid), oldPatchToNewPatch_ACU(patch));
+                }
+            }
+            await rawTH.updateWorldbookWith(bookName, (worldbook) => worldbook.map(entry => {
+                const patch = patchByUid.get(Number(entry?.uid));
+                return patch ? mergeNewEntryPatch_ACU(entry, patch) : entry;
+            }));
+        }
+        : null, (bookName, entries) => native.setLorebookEntries(bookName, entries));
+    resolve('createLorebookEntries', () => hasFn_ACU(rawTH, 'createWorldbookEntries')
+        ? async (bookName, entries) => {
+            const payload = (Array.isArray(entries) ? entries : []).map(patch => oldPatchToNewPatch_ACU(patch ?? {}));
+            const result = await rawTH.createWorldbookEntries(bookName, payload);
+            const worldbook = Array.isArray(result?.worldbook) ? result.worldbook : [];
+            const newEntries = Array.isArray(result?.new_entries) ? result.new_entries : [];
+            return {
+                entries: worldbook.map((entry, index) => newToOldEntry_ACU(entry, index)),
+                new_uids: newEntries.map((entry) => Number(entry?.uid)).filter(Number.isFinite),
+            };
+        }
+        : null, (bookName, entries) => native.createLorebookEntries(bookName, entries));
+    resolve('deleteLorebookEntries', () => hasFn_ACU(rawTH, 'deleteWorldbookEntries')
+        ? async (bookName, uids) => {
+            const uidSet = new Set((Array.isArray(uids) ? uids : []).map(Number));
+            const result = await rawTH.deleteWorldbookEntries(bookName, (entry) => uidSet.has(Number(entry?.uid)));
+            const worldbook = Array.isArray(result?.worldbook) ? result.worldbook : [];
+            const deleted = Array.isArray(result?.deleted_entries) ? result.deleted_entries : [];
+            return {
+                entries: worldbook.map((entry, index) => newToOldEntry_ACU(entry, index)),
+                delete_occurred: deleted.length > 0,
+            };
+        }
+        : null, (bookName, uids) => native.deleteLorebookEntries(bookName, uids));
+    // ═══ 世界书列表与角色绑定 ═══
+    resolve('getLorebooks', () => hasFn_ACU(rawTH, 'getWorldbookNames')
+        ? () => rawTH.getWorldbookNames()
+        : null, () => native.getLorebooks());
+    resolve('getCurrentCharPrimaryLorebook', () => hasFn_ACU(rawTH, 'getCharWorldbookNames')
+        ? async () => {
+            const binding = await rawTH.getCharWorldbookNames('current');
+            return typeof binding?.primary === 'string' && binding.primary ? binding.primary : null;
+        }
+        : null, () => native.getCurrentCharPrimaryLorebook());
+    resolve('getCharLorebooks', () => hasFn_ACU(rawTH, 'getCharWorldbookNames')
+        ? async (options = {}) => {
+            const binding = await rawTH.getCharWorldbookNames(options?.name ?? 'current');
+            const primary = typeof binding?.primary === 'string' && binding.primary ? binding.primary : null;
+            const additional = Array.isArray(binding?.additional) ? binding.additional : [];
+            const type = options?.type ?? 'all';
+            if (type === 'primary')
+                return { primary, additional: [] };
+            if (type === 'additional')
+                return { primary: null, additional };
+            return { primary, additional };
+        }
+        : null, (options) => native.getCharLorebooks(options));
+    resolve('getCharWorldbookNames', 
+    // 宿主只有旧版 getCharLorebooks 时反向映射为新版签名
+    () => hasFn_ACU(rawTH, 'getCharLorebooks')
+        ? async (characterName) => {
+            const options = characterName && characterName !== 'current' ? { name: characterName, type: 'all' } : { type: 'all' };
+            const binding = await rawTH.getCharLorebooks(options);
+            return {
+                primary: typeof binding?.primary === 'string' && binding.primary ? binding.primary : null,
+                additional: Array.isArray(binding?.additional) ? binding.additional : [],
+            };
+        }
+        : null, (characterName) => native.getCharWorldbookNames(characterName));
+    // ═══ 聊天 / Slash / 角色数据（新旧酒馆助手同名，直接透传或原生兜底） ═══
+    resolve('getChatMessages', null, (range, options) => native.getChatMessages(range, options));
+    resolve('getLastMessageId', null, () => native.getLastMessageId());
+    resolve('triggerSlash', null, (command) => native.triggerSlash(command));
+    resolve('getCharData', null, (target) => native.getCharData(target));
+    // generateRaw：原生 context 无等价实现，仅透传，缺失时保持缺失语义
+    resolve('generateRaw', null, null);
+    lastCapabilities_ACU = capabilities;
+    logDebug_ACU(`[HostCompat] TavernHelper 兼容适配器已构建：${formatHostCapabilities_ACU(capabilities)}`);
+    return { api, capabilities };
+}
+
+/**
  * service/ai/ai-service.ts — AI 调用服务
  *
  * 中转 data/gateways/ai-gateway 的所有方法。
  * presentation 层通过本模块发起 AI 请求，不再直接调用 gateway。
  * 后续可在此层统一添加日志、埋点、请求限流等增值逻辑。
  */
+/** 接口协议四值白名单（与 api-call.ts 请求体 custom_api_format 契约同源）。 */
+const CUSTOM_API_FORMAT_WHITELIST_ACU = ['openai_compat', 'openai_responses', 'claude_messages', 'gemini_interactions'];
+/**
+ * status 探活的 custom_api_format 归一：缺省/非法一律降级 ''。
+ * TT 后端 `CustomApiFormat::parse` 把 '' 视为 openai_compat（与不传字段等价），
+ * 但对非法值 fail fast（ValidationError），故脏配置必须在客户端降级为空，不能让探活整体失败。
+ */
+function normalizeStatusCustomApiFormat_ACU(value) {
+    const raw = String(value ?? '').trim();
+    return CUSTOM_API_FORMAT_WHITELIST_ACU.includes(raw) ? raw : '';
+}
 /**
  * 从自定义 API 端点获取可用模型列表
  * 纯业务逻辑：发送 HTTP 请求、解析响应、返回模型列表
  * 不涉及 UI（toast、状态显示由 presentation 层负责）
+ * @param customApiFormat 接口协议（预设级，四值白名单）；缺省/非法降级 ''，
+ *                        TT 后端据此把模型列表来源切到对应协议（claude_messages→Claude、
+ *                        gemini_interactions→Makersuite），不传则恒按 openai_compat 探活。
  */
-async function fetchAvailableModels_ACU(apiUrl, apiKey) {
+async function fetchAvailableModels_ACU(apiUrl, apiKey, customApiFormat) {
     if (!apiUrl) {
         return { success: false, error: '请输入API基础URL。' };
     }
@@ -98303,6 +99395,9 @@ async function fetchAvailableModels_ACU(apiUrl, apiKey) {
         "reverse_proxy": apiUrl,
         "proxy_password": "",
         "chat_completion_source": "custom",
+        // 接口协议（预设级）：TT status 路由按 custom_api_format 解析模型列表来源
+        // （resolve_status_model_list_source，仅 source==Custom 生效），不改 base/密钥解析。
+        "custom_api_format": normalizeStatusCustomApiFormat_ACU(customApiFormat),
         "custom_url": apiUrl,
         "custom_include_headers": sanitizedKey ? `Authorization: Bearer ${sanitizedKey}` : ""
     };
@@ -98353,7 +99448,7 @@ function showOptimizationOverlay_ACU(message = '正在优化正文...') {
     // 移除已存在的遮罩
     hideOptimizationOverlay_ACU();
     const overlayHtml = `
-      <div id="acu-optimization-overlay" style="
+      <div id="acu-optimization-overlay" data-tt-mobile-surface="backdrop" style="
         position: fixed;
         top: 0;
         left: 0;
@@ -98465,7 +99560,7 @@ function showOptimizationDiffDialogForLoop_ACU(messageIndex, result, callback) {
     const applyButtonText = isLastLoop ? '应用并完成' : '应用并继续';
     const originalContent = getOriginalContent_ACU(messageIndex) || result.optimizedContent;
     const dialogHtml = `
-      <div class="acu-optimization-dialog acu-dialog-classic" style="
+      <div class="acu-optimization-dialog acu-dialog-classic" data-tt-mobile-surface="free-window" style="
         position: fixed;
         top: 10px;
         left: 50%;
@@ -98558,7 +99653,7 @@ function showOptimizationDiffDialogForLoop_ACU(messageIndex, result, callback) {
           ">${applyButtonText}</button>
         </div>
       </div>
-      <div id="acu-opt-backdrop" style="
+      <div id="acu-opt-backdrop" data-tt-mobile-surface="backdrop" style="
         position: fixed;
         top: 0; left: 0; right: 0; bottom: 0;
         background: rgba(0, 0, 0, 0.6);
@@ -98733,7 +99828,7 @@ async function reoptimizeMessage_ACU(messageIndex) {
  */
 function showReoptimizationDialog_ACU(messageIndex, result, originalContent) {
     const dialogHtml = `
-      <div class="acu-optimization-dialog acu-dialog-classic" style="
+      <div class="acu-optimization-dialog acu-dialog-classic" data-tt-mobile-surface="free-window" style="
         position: fixed;
         top: 10px;
         left: 50%;
@@ -98812,7 +99907,7 @@ function showReoptimizationDialog_ACU(messageIndex, result, originalContent) {
           ">应用优化</button>
         </div>
       </div>
-      <div id="acu-opt-backdrop" style="
+      <div id="acu-opt-backdrop" data-tt-mobile-surface="backdrop" style="
         position: fixed;
         top: 0; left: 0; right: 0; bottom: 0;
         background: rgba(0, 0, 0, 0.6);
@@ -99695,6 +100790,32 @@ async function commitVectorMetadataPatchesBatch_ACU(entries, options) {
     }
 }
 
+/**
+ * shared/vector-cross-origin-error.ts — 向量服务（embedding / rerank）跨源失败归类
+ *
+ * 依赖零、只读的小叶子模块：两个 gateway 共用同一份识别规则与文案，
+ * 避免 gateway 互相 import 带来的 mock 连锁（gateway 模块在测试里常被整体 vi.mock）。
+ */
+/**
+ * 跨源（CORS）失败的可行动提示。向量服务由前端直连第三方 endpoint（不走 TT 后端代理），
+ * 提供商没开跨源访问是这类失败最常见、且用户唯一能自己修的成因。
+ */
+const VECTOR_CROSS_ORIGIN_FAILURE_HINT_ACU = 'API 提供商未允许跨源访问（CORS）：请求被浏览器拦下，未拿到任何响应。'
+    + '请为该 embedding/rerank 服务配置允许跨源访问（Access-Control-Allow-Origin），或改用支持 CORS 的中转地址。';
+/**
+ * 跨源被拒时 fetch 抛的是不透明 TypeError，没有任何 HTTP 状态可读
+ * （Chromium/WebView2「Failed to fetch」、WebKit「Load failed」、Gecko「NetworkError when attempting to fetch resource」）。
+ * 该形态与真断网同形、无法区分，因此只用于改写用户可见文案（归类为 CORS + 给出处置建议），
+ * 不改既有错误分类：仍按原 kind 走有限重试/退避，避免把瞬时断网误判成终态而要求手动重建。
+ */
+const CROSS_ORIGIN_FETCH_REJECTION_PATTERN_ACU = /failed to fetch|load failed|networkerror when attempting to fetch|network request failed|err_network|err_failed|err_connection/i;
+function isCrossOriginFetchRejection_ACU(error) {
+    if (error?.name === 'AbortError')
+        return false;
+    const message = String(error?.message ?? error ?? '');
+    return CROSS_ORIGIN_FETCH_REJECTION_PATTERN_ACU.test(message);
+}
+
 class VectorEmbeddingError_ACU extends Error {
     constructor(options) {
         super(options.message);
@@ -99811,11 +100932,16 @@ async function fetchEmbeddingWithTimeout_ACU(endpoint, init, model) {
     }
     catch (error) {
         const isAbort = error?.name === 'AbortError';
+        const rawReason = error?.message || String(error || '未知错误');
         throw new VectorEmbeddingError_ACU({
             kind: 'retryable',
             message: isAbort
                 ? `Embedding 请求超时（${VECTOR_EMBEDDING_TIMEOUT_MS_ACU}ms），已中断。`
-                : `Embedding 请求网络失败：${error?.message || String(error || '未知错误')}`,
+                : isCrossOriginFetchRejection_ACU(error)
+                    // 既有分类点：跨源被拒（不透明 TypeError、无 HTTP 状态）→ 归类为 CORS 并给出可行动建议；
+                    // 识别规则与文案见 shared/vector-cross-origin-error.ts。kind 语义不动，仍按 retryable 有限重试。
+                    ? `Embedding 请求网络失败（${rawReason}）：${VECTOR_CROSS_ORIGIN_FAILURE_HINT_ACU}`
+                    : `Embedding 请求网络失败：${rawReason}`,
             endpoint,
             model,
         });
@@ -107718,7 +108844,10 @@ async function fetchModelsAndConnect_ACU() {
     showToastr_ACU('info', '正在检查自定义API端点状态...');
     try {
         // [重构] 调用 service 层获取模型列表
-        const result = await fetchAvailableModels_ACU(apiUrl, apiKey);
+        // 契约：fetchAvailableModels_ACU(apiUrl, apiKey, customApiFormat?)，第三参默认 ''。
+        // 不传协议时 ai-service 无法按 custom_api_format 分流，模型列表探测与正式调用会走不同通道。
+        const customApiFormat = String(settings_ACU.apiConfig?.customApiFormat || '');
+        const result = await fetchAvailableModels_ACU(apiUrl, apiKey, customApiFormat);
         if (!result.success) {
             throw new Error(result.error || '未知错误');
         }
@@ -107834,7 +108963,13 @@ function attemptToLoadCoreApis_ACU() {
     // TavernHelper/jQuery/toastr 同理：优先 iframe 自身，fallback 到 parent
     const iframeTH = typeof window.TavernHelper !== 'undefined' ? window.TavernHelper : undefined;
     const parentTH = typeof hostWin.TavernHelper !== 'undefined' ? hostWin.TavernHelper : undefined;
-    _set_TavernHelper_API_ACU(iframeTH || parentTH);
+    const rawTH = iframeTH || parentTH;
+    // [装配] 三级后端兼容适配器：逐方法按 passthrough（旧版酒馆助手全量 API）→
+    // mapped（新版改名 API）→ native（SillyTavern 原生 context）择优解析。
+    // rawTH 为 undefined（TT 裸环境无酒馆助手）时仍然构建，全库 TavernHelper_API_ACU
+    // 调用点因此获得原生降级；原生后端也不可用时逐方法保持"缺失"语义，与旧行为一致。
+    const hostCompat = buildTavernHelperCompat_ACU(rawTH, () => hostWin.SillyTavern?.getContext?.());
+    _set_TavernHelper_API_ACU(hostCompat.api);
     const iframe$ = typeof window.$ !== 'undefined' ? window.$ : undefined;
     const parent$ = typeof hostWin.$ !== 'undefined' ? hostWin.$ : undefined;
     _set_jQuery_API_ACU(iframe$ || parent$);
@@ -107849,8 +108984,8 @@ function attemptToLoadCoreApis_ACU() {
         logWarn_ACU('toastr_API_ACU is MISSING.');
     if (coreApisAreReady_ACU) {
         logDebug_ACU('Core APIs successfully loaded for AutoCardUpdater.');
-        if (!TavernHelper_API_ACU) {
-            logWarn_ACU('[CoreAPI] 未检测到酒馆助手（TavernHelper）：扩展以零依赖模式运行，AI 主 API 调用与世界书读写相关功能将降级。');
+        if (!rawTH) {
+            logWarn_ACU(`[CoreAPI] 未检测到酒馆助手（TavernHelper）：扩展以零依赖模式运行，AI 主 API 调用相关功能将降级；世界书读写按能力表降级到 SillyTavern 原生后端。${formatHostCapabilities_ACU(hostCompat.capabilities)}`);
         }
     }
     else {
@@ -110365,9 +111500,13 @@ async function createRerankScores_ACU(request) {
         });
     }
     catch (error) {
+        const rawReason = error?.message || String(error || '未知错误');
+        // 既有分类点：跨源被拒与真断网在浏览器侧同形（不透明 TypeError），归类为 CORS 并给出处置建议。
         throw new Error(error?.name === 'AbortError'
             ? `Rerank 请求超时（${VECTOR_RERANK_TIMEOUT_MS_ACU}ms），已中断。`
-            : `Rerank 请求网络失败：${error?.message || String(error || '未知错误')}`);
+            : isCrossOriginFetchRejection_ACU(error)
+                ? `Rerank 请求网络失败（${rawReason}）：${VECTOR_CROSS_ORIGIN_FAILURE_HINT_ACU}`
+                : `Rerank 请求网络失败：${rawReason}`);
     }
     finally {
         clearTimeout(timer);
@@ -143202,6 +144341,51 @@ const PiniaVuePlugin = function (_Vue) {
 };
 
 /**
+ * shared/tt-mobile-surface.ts — TauriTavern Layout ABI（data-tt-mobile-surface）打标工具
+ *
+ * 契约来源（TauriTavern dev 分支）：
+ * - ExtensionDEV.md §5「移动端布局适配」：推荐接入 = 硬 ABI `data-tt-mobile-surface` + `--tt-inset-*`
+ * - docs/API/Layout.md §1.2：surface taxonomy 稳定枚举（backdrop / fullscreen-window /
+ *   free-window / viewport-host / edge-window / none）
+ * - src/tauri/main/bootstrap.js：installTauriMobileCompat 仅在 android/iphone/ipad/ipod UA 下安装
+ *   （overlay classifier / geometry firewall / IME surface controller 都只在移动端 TT 生效），
+ *   因此本模块写入的属性在桌面 TT / 原版 SillyTavern 中是纯惰性数据，零影响。
+ *
+ * 宿主语义速记：
+ * - fullscreen-window：全屏交互面板根。宿主 geometry firewall 会把该元素钳制到 safe-area，
+ *   Android IME 焦点进入该子树时把 --tt-ime-bottom 注入到该元素（surface-local）。
+ * - backdrop：full-bleed 遮罩，不收 safe-area（宿主对其无几何规则）。
+ * - free-window：可拖拽小窗/悬浮窗，宿主不长期钳制 top/left。
+ *
+ * 文档明确要求框架型扩展「显式写入 data-tt-mobile-surface，不要赌宿主 classifier 扫到结构」，
+ * 本库所有 fixed 浮层因此显式打标。
+ */
+/** 宿主识别的属性名（layout-kit.js SURFACE_ATTR 同值）。 */
+const TT_MOBILE_SURFACE_ATTR_ACU = 'data-tt-mobile-surface';
+/** 宿主 taxonomy 稳定枚举（docs/API/Layout.md §1.2，与 layout-kit.js SURFACE 一一对应）。 */
+const TT_MOBILE_SURFACE_ACU = {
+    Backdrop: 'backdrop',
+    FullscreenWindow: 'fullscreen-window',
+    FreeWindow: 'free-window',
+    ViewportHost: 'viewport-host',
+    EdgeWindow: 'edge-window',
+    None: 'none',
+};
+const VALID_SURFACES_ACU = new Set(Object.values(TT_MOBILE_SURFACE_ACU));
+/**
+ * 给元素打 surface 标；element 为空或 surface 不在宿主枚举内时静默跳过（不打脏属性）。
+ * @returns 是否实际写入了属性
+ */
+function applyTtMobileSurface_ACU(element, surface) {
+    if (!element)
+        return false;
+    if (!VALID_SURFACES_ACU.has(surface))
+        return false;
+    element.setAttribute(TT_MOBILE_SURFACE_ATTR_ACU, surface);
+    return true;
+}
+
+/**
  * sfc-style-runtime — 运行时 SFC 样式注入器
  *
  * unplugin-vue 把 SFC `<style>` 块拆成虚拟模块（id 形如
@@ -143851,8 +145035,8 @@ var _sfc_main$17 = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-dialog-layer[data-v-2a6a0bee] {\r\n  position: fixed;\r\n  inset: 0;\r\n  z-index: 9600;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  padding:\r\n    calc(var(--acu-dialog-edge-gap, 18px) + var(--acu-safe-top, 0px))\r\n    calc(var(--acu-dialog-edge-gap, 18px) + var(--acu-safe-right, 0px))\r\n    calc(var(--acu-dialog-edge-gap, 18px) + var(--acu-safe-bottom, 0px))\r\n    calc(var(--acu-dialog-edge-gap, 18px) + var(--acu-safe-left, 0px));\r\n  background: rgba(0, 0, 0, 0.52);\r\n  pointer-events: auto;\r\n  animation: acu-dialog-layer-in-2a6a0bee 0.16s ease-out both;\n}\n.acu-dialog-layer.is-closing[data-v-2a6a0bee] {\r\n  pointer-events: none;\r\n  animation: acu-dialog-layer-out-2a6a0bee 0.16s ease-in both;\n}\n.acu-dialog[data-v-2a6a0bee] {\r\n  width: min(var(--acu-dialog-width, 440px), 100%);\r\n  max-height: min(var(--acu-dialog-max-height, 560px), calc(100vh - var(--acu-dialog-edge-gap, 18px) - var(--acu-dialog-edge-gap, 18px) - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px)));\r\n  max-height: min(var(--acu-dialog-max-height, 560px), calc(100dvh - var(--acu-dialog-edge-gap, 18px) - var(--acu-dialog-edge-gap, 18px) - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px)));\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--acu-page-gap, 14px);\r\n  padding: var(--acu-panel-padding, 16px);\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\r\n  color: var(--acu-text-1);\r\n  box-shadow: var(--acu-shadow);\r\n  overflow: auto;\r\n  animation: acu-dialog-panel-in-2a6a0bee 0.16s ease-out both;\n}\n.acu-dialog__header[data-v-2a6a0bee] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: var(--acu-panel-gap, 12px);\n}\n.acu-dialog__header h2[data-v-2a6a0bee] {\r\n  min-width: 0;\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-panel-title, 15px);\r\n  line-height: 1.35;\r\n  font-weight: 700;\n}\n.acu-dialog__message[data-v-2a6a0bee] {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\r\n  white-space: pre-wrap;\n}\n.acu-dialog__danger-message[data-v-2a6a0bee] {\r\n  margin: 0;\r\n  padding: var(--acu-space-2, 8px) var(--acu-space-250, 10px);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-danger) 10%, transparent);\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-weight: 700;\r\n  line-height: 1.55;\r\n  white-space: pre-wrap;\n}\n.acu-dialog__field[data-v-2a6a0bee] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--acu-space-150, 6px);\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.4;\n}\n.acu-dialog__checklist[data-v-2a6a0bee] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--acu-space-250, 10px);\r\n  min-width: 0;\r\n  padding: var(--acu-space-250, 10px);\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-bg-2) 74%, transparent);\n}\n.acu-dialog__checklist[data-v-2a6a0bee] .acu-checkbox {\r\n  width: 100%;\n}\n.acu-dialog__check-option[data-v-2a6a0bee] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--acu-space-050, 2px);\r\n  min-width: 0;\n}\n.acu-dialog__check-label[data-v-2a6a0bee] {\r\n  color: var(--acu-text-1);\r\n  font-weight: 600;\n}\n.acu-dialog__check-description[data-v-2a6a0bee] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.45;\n}\n.acu-dialog__actions[data-v-2a6a0bee] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: var(--acu-space-2, 8px);\r\n  flex-wrap: wrap;\r\n  padding-top: var(--acu-space-050, 2px);\n}\n.acu-dialog__actions--stacked[data-v-2a6a0bee] .acu-btn {\r\n  flex: 1 1 var(--acu-dialog-choice-min-width, 128px);\n}\n.acu-dialog-layer.is-closing .acu-dialog[data-v-2a6a0bee] {\r\n  animation: acu-dialog-panel-out-2a6a0bee 0.16s ease-in both;\n}\n@keyframes acu-dialog-layer-in-2a6a0bee {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes acu-dialog-layer-out-2a6a0bee {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes acu-dialog-panel-in-2a6a0bee {\nfrom {\r\n    opacity: 0;\r\n    transform: translateY(6px);\n}\nto {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\n}\n@keyframes acu-dialog-panel-out-2a6a0bee {\nfrom {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\nto {\r\n    opacity: 0;\r\n    transform: translateY(6px);\n}\n}\n@media (max-width: 520px) {\n.acu-dialog-layer[data-v-2a6a0bee] {\r\n    align-items: flex-end;\r\n    padding:\r\n      calc(var(--acu-dialog-edge-gap-compact, 12px) + var(--acu-safe-top, 0px))\r\n      calc(var(--acu-dialog-edge-gap-compact, 12px) + var(--acu-safe-right, 0px))\r\n      calc(var(--acu-dialog-edge-gap-compact, 12px) + var(--acu-safe-bottom, 0px))\r\n      calc(var(--acu-dialog-edge-gap-compact, 12px) + var(--acu-safe-left, 0px));\n}\n.acu-dialog[data-v-2a6a0bee] {\r\n    width: 100%;\r\n    max-height: calc(100vh - var(--acu-dialog-edge-gap-compact, 12px) - var(--acu-dialog-edge-gap-compact, 12px) - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\r\n    max-height: calc(100dvh - var(--acu-dialog-edge-gap-compact, 12px) - var(--acu-dialog-edge-gap-compact, 12px) - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\n}\n.acu-dialog__actions[data-v-2a6a0bee],\r\n  .acu-dialog__actions--stacked[data-v-2a6a0bee] {\r\n    display: grid;\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/components/_lib/AcuDialogHost.vue#style-0-2a6a0bee");
-var AcuDialogHost_vue_vue_type_style_index_0_scoped_2a6a0bee_lang = null;
+injectSfcStyle("\n.acu-dialog-layer[data-v-87804e78] {\r\n  position: fixed;\r\n  inset: 0;\r\n  z-index: 9600;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  padding:\r\n    calc(var(--acu-dialog-edge-gap, 18px) + var(--acu-safe-top, 0px))\r\n    calc(var(--acu-dialog-edge-gap, 18px) + var(--acu-safe-right, 0px))\r\n    calc(var(--acu-dialog-edge-gap, 18px) + var(--acu-safe-bottom, 0px))\r\n    calc(var(--acu-dialog-edge-gap, 18px) + var(--acu-safe-left, 0px));\r\n  background: rgba(0, 0, 0, 0.52);\r\n  pointer-events: auto;\r\n  animation: acu-dialog-layer-in-87804e78 0.16s ease-out both;\n}\n.acu-dialog-layer.is-closing[data-v-87804e78] {\r\n  pointer-events: none;\r\n  animation: acu-dialog-layer-out-87804e78 0.16s ease-in both;\n}\n.acu-dialog[data-v-87804e78] {\r\n  width: min(var(--acu-dialog-width, 440px), 100%);\r\n  max-height: min(var(--acu-dialog-max-height, 560px), calc(100vh - var(--acu-dialog-edge-gap, 18px) - var(--acu-dialog-edge-gap, 18px) - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px)));\r\n  max-height: min(var(--acu-dialog-max-height, 560px), calc(100dvh - var(--acu-dialog-edge-gap, 18px) - var(--acu-dialog-edge-gap, 18px) - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px)));\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--acu-page-gap, 14px);\r\n  padding: var(--acu-panel-padding, 16px);\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\r\n  color: var(--acu-text-1);\r\n  box-shadow: var(--acu-shadow);\r\n  overflow: auto;\r\n  animation: acu-dialog-panel-in-87804e78 0.16s ease-out both;\n}\n.acu-dialog__header[data-v-87804e78] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: var(--acu-panel-gap, 12px);\n}\n.acu-dialog__header h2[data-v-87804e78] {\r\n  min-width: 0;\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-panel-title, 15px);\r\n  line-height: 1.35;\r\n  font-weight: 700;\n}\n.acu-dialog__message[data-v-87804e78] {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\r\n  white-space: pre-wrap;\n}\n.acu-dialog__danger-message[data-v-87804e78] {\r\n  margin: 0;\r\n  padding: var(--acu-space-2, 8px) var(--acu-space-250, 10px);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-danger) 10%, transparent);\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-weight: 700;\r\n  line-height: 1.55;\r\n  white-space: pre-wrap;\n}\n.acu-dialog__field[data-v-87804e78] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--acu-space-150, 6px);\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.4;\n}\n.acu-dialog__checklist[data-v-87804e78] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--acu-space-250, 10px);\r\n  min-width: 0;\r\n  padding: var(--acu-space-250, 10px);\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-bg-2) 74%, transparent);\n}\n.acu-dialog__checklist[data-v-87804e78] .acu-checkbox {\r\n  width: 100%;\n}\n.acu-dialog__check-option[data-v-87804e78] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--acu-space-050, 2px);\r\n  min-width: 0;\n}\n.acu-dialog__check-label[data-v-87804e78] {\r\n  color: var(--acu-text-1);\r\n  font-weight: 600;\n}\n.acu-dialog__check-description[data-v-87804e78] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.45;\n}\n.acu-dialog__actions[data-v-87804e78] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: var(--acu-space-2, 8px);\r\n  flex-wrap: wrap;\r\n  padding-top: var(--acu-space-050, 2px);\n}\n.acu-dialog__actions--stacked[data-v-87804e78] .acu-btn {\r\n  flex: 1 1 var(--acu-dialog-choice-min-width, 128px);\n}\n.acu-dialog-layer.is-closing .acu-dialog[data-v-87804e78] {\r\n  animation: acu-dialog-panel-out-87804e78 0.16s ease-in both;\n}\n@keyframes acu-dialog-layer-in-87804e78 {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes acu-dialog-layer-out-87804e78 {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes acu-dialog-panel-in-87804e78 {\nfrom {\r\n    opacity: 0;\r\n    transform: translateY(6px);\n}\nto {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\n}\n@keyframes acu-dialog-panel-out-87804e78 {\nfrom {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\nto {\r\n    opacity: 0;\r\n    transform: translateY(6px);\n}\n}\n@media (max-width: 520px) {\n.acu-dialog-layer[data-v-87804e78] {\r\n    align-items: flex-end;\r\n    padding:\r\n      calc(var(--acu-dialog-edge-gap-compact, 12px) + var(--acu-safe-top, 0px))\r\n      calc(var(--acu-dialog-edge-gap-compact, 12px) + var(--acu-safe-right, 0px))\r\n      calc(var(--acu-dialog-edge-gap-compact, 12px) + var(--acu-safe-bottom, 0px))\r\n      calc(var(--acu-dialog-edge-gap-compact, 12px) + var(--acu-safe-left, 0px));\n}\n.acu-dialog[data-v-87804e78] {\r\n    width: 100%;\r\n    max-height: calc(100vh - var(--acu-dialog-edge-gap-compact, 12px) - var(--acu-dialog-edge-gap-compact, 12px) - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\r\n    max-height: calc(100dvh - var(--acu-dialog-edge-gap-compact, 12px) - var(--acu-dialog-edge-gap-compact, 12px) - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\n}\n.acu-dialog__actions[data-v-87804e78],\r\n  .acu-dialog__actions--stacked[data-v-87804e78] {\r\n    display: grid;\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/components/_lib/AcuDialogHost.vue#style-0-87804e78");
+var AcuDialogHost_vue_vue_type_style_index_0_scoped_87804e78_lang = null;
 
 const _hoisted_1$13 = { class: "acu-dialog__header" };
 const _hoisted_2$U = { class: "acu-dialog__message" };
@@ -143883,6 +145067,7 @@ function _sfc_render$17(_ctx, _cache, $props, $setup, $data, $options) {
 		{
 			key: 0,
 			class: normalizeClass(["acu-dialog-layer", { "is-closing": $setup.isClosing }]),
+			"data-tt-mobile-surface": "backdrop",
 			role: "presentation",
 			onClick: _cache[4] || (_cache[4] = withModifiers((...args) => $setup.dialog.cancelActive && $setup.dialog.cancelActive(...args), ["self"]))
 		},
@@ -144038,7 +145223,7 @@ function _sfc_render$17(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	)) : createCommentVNode("v-if", true)], 8, ["to"])) : createCommentVNode("v-if", true);
 }
-var AcuDialogHost = /* @__PURE__ */ _export_sfc(_sfc_main$17, [["render", _sfc_render$17], ["__scopeId", "data-v-2a6a0bee"]]);
+var AcuDialogHost = /* @__PURE__ */ _export_sfc(_sfc_main$17, [["render", _sfc_render$17], ["__scopeId", "data-v-87804e78"]]);
 
 var _sfc_main$16 = /*@__PURE__*/ defineComponent({
     __name: 'AcuFileButton',
@@ -144486,12 +145671,13 @@ var _sfc_main$13 = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-toast-viewport[data-v-9146b9ef] {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  z-index: 9410;\r\n  box-sizing: border-box;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  min-height: 100%;\r\n  min-height: 100vh;\r\n  min-height: 100dvh;\r\n  overflow: hidden;\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-ui);\r\n  font-size: var(--acu-font-size-body);\r\n  pointer-events: none;\n}\n.acu-toast-viewport[data-v-9146b9ef],\r\n.acu-toast-viewport[data-v-9146b9ef] * {\r\n  box-sizing: border-box;\n}\n.acu-toast-viewport__list[data-v-9146b9ef] {\r\n  position: absolute;\r\n  top: calc(var(--acu-toast-top, 62px) + var(--acu-safe-top, 0px));\r\n  right: calc(var(--acu-toast-edge-gap, 18px) + var(--acu-safe-right, 0px));\r\n  bottom: auto;\r\n  width: min(var(--acu-toast-width, 360px), calc(100% - var(--acu-toast-edge-gap, 18px) - var(--acu-toast-edge-gap, 18px) - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\r\n  max-height: calc(100% - var(--acu-toast-top, 62px) - var(--acu-toast-edge-gap, 18px) - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--acu-space-2, 8px);\r\n  margin: 0;\r\n  padding: 0;\r\n  overflow: visible;\r\n  list-style: none;\n}\n.acu-v2-toast[data-v-9146b9ef] {\r\n  --acu-toast-tone: var(--acu-accent);\r\n  position: relative;\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: var(--acu-control-height-sm, 26px) minmax(0, 1fr) auto auto;\r\n  align-items: center;\r\n  gap: var(--acu-space-2, 8px);\r\n  padding: var(--acu-space-250, 10px) var(--acu-space-3, 12px);\r\n  overflow: hidden;\r\n  border: 1px solid color-mix(in srgb, var(--acu-toast-tone) 22%, var(--acu-border-2));\r\n  border-radius: var(--acu-radius-md);\r\n  background:\r\n    linear-gradient(\r\n      90deg,\r\n      color-mix(in srgb, var(--acu-toast-tone) 7%, transparent),\r\n      transparent 48%\r\n    ),\r\n    color-mix(in srgb, var(--acu-bg-1) 97%, var(--acu-text-1) 3%);\r\n  box-shadow:\r\n    0 18px 46px rgba(0, 0, 0, 0.18),\r\n    0 4px 16px rgba(0, 0, 0, 0.12),\r\n    inset 0 1px 0 color-mix(in srgb, var(--acu-text-1) 8%, transparent);\r\n  color: var(--acu-text-1);\r\n  pointer-events: auto;\r\n  animation: acu-toast-in-9146b9ef 0.16s ease-out both;\n}\n.acu-v2-toast--success[data-v-9146b9ef] {\r\n  --acu-toast-tone: var(--acu-success);\n}\n.acu-v2-toast--warning[data-v-9146b9ef] {\r\n  --acu-toast-tone: var(--acu-warning);\n}\n.acu-v2-toast--error[data-v-9146b9ef] {\r\n  --acu-toast-tone: var(--acu-danger);\n}\n.acu-v2-toast.is-closing[data-v-9146b9ef] {\r\n  pointer-events: none;\r\n  animation: acu-toast-out-9146b9ef 0.16s ease-in both;\n}\n.acu-v2-toast__icon[data-v-9146b9ef] {\r\n  --acu-icon-color: var(--acu-toast-tone);\r\n  min-width: 0;\r\n  width: var(--acu-control-height-sm, 26px);\r\n  height: var(--acu-control-height-sm, 26px);\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-toast-tone) 13%, transparent);\r\n  color: var(--acu-toast-tone);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1;\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-toast-tone) 18%, transparent);\n}\n.acu-v2-toast__text[data-v-9146b9ef] {\r\n  min-width: 0;\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.45;\r\n  overflow-wrap: anywhere;\n}\n.acu-v2-toast__action[data-v-9146b9ef] {\r\n  white-space: nowrap;\n}\n.acu-v2-toast__dismiss[data-v-9146b9ef] {\r\n  flex: 0 0 auto;\n}\n@keyframes acu-toast-in-9146b9ef {\nfrom {\r\n    opacity: 0;\r\n    transform: translateY(-6px);\n}\nto {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\n}\n@keyframes acu-toast-out-9146b9ef {\nfrom {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\nto {\r\n    opacity: 0;\r\n    transform: translateY(-6px);\n}\n}\n@media (max-width: 640px) {\n.acu-toast-viewport__list[data-v-9146b9ef] {\r\n    top: calc(var(--acu-toast-top-compact, 58px) + var(--acu-safe-top, 0px));\r\n    right: auto;\r\n    bottom: auto;\r\n    left: calc(50% + (var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)) / 2);\r\n    width: clamp(var(--acu-menu-min-width, 240px), 70vw, calc(100% - var(--acu-toast-edge-gap-compact, 12px) - var(--acu-toast-edge-gap-compact, 12px) - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\r\n    max-height: calc(100% - var(--acu-toast-top-compact, 58px) - var(--acu-toast-edge-gap-compact, 12px) - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\r\n    transform: translateX(-50%);\n}\n.acu-v2-toast[data-v-9146b9ef] {\r\n    grid-template-columns: var(--acu-icon-button-size-sm, 22px) minmax(0, 1fr) auto;\r\n    gap: var(--acu-space-175, 7px);\r\n    padding: var(--acu-space-2, 8px) var(--acu-space-225, 9px);\n}\n.acu-v2-toast__icon[data-v-9146b9ef] {\r\n    width: var(--acu-icon-button-size-sm, 22px);\r\n    height: var(--acu-icon-button-size-sm, 22px);\r\n    font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-toast__text[data-v-9146b9ef] {\r\n    font-size: var(--acu-font-size-caption, 11px);\r\n    line-height: 1.4;\n}\n.acu-v2-toast__action[data-v-9146b9ef] {\r\n    grid-column: 2 / 4;\r\n    justify-self: start;\n}\n}\r\n", "src/presentation-v2/components/_lib/AcuToastViewport.vue#style-0-9146b9ef");
-var AcuToastViewport_vue_vue_type_style_index_0_scoped_9146b9ef_lang = null;
+injectSfcStyle("\n.acu-toast-viewport[data-v-8a90e872] {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  z-index: 9410;\r\n  box-sizing: border-box;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  min-height: 100%;\r\n  min-height: 100vh;\r\n  min-height: 100dvh;\r\n  overflow: hidden;\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-ui);\r\n  font-size: var(--acu-font-size-body);\r\n  pointer-events: none;\n}\n.acu-toast-viewport[data-v-8a90e872],\r\n.acu-toast-viewport[data-v-8a90e872] * {\r\n  box-sizing: border-box;\n}\n.acu-toast-viewport__list[data-v-8a90e872] {\r\n  position: absolute;\r\n  top: calc(var(--acu-toast-top, 62px) + var(--acu-safe-top, 0px));\r\n  right: calc(var(--acu-toast-edge-gap, 18px) + var(--acu-safe-right, 0px));\r\n  bottom: auto;\r\n  width: min(var(--acu-toast-width, 360px), calc(100% - var(--acu-toast-edge-gap, 18px) - var(--acu-toast-edge-gap, 18px) - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\r\n  max-height: calc(100% - var(--acu-toast-top, 62px) - var(--acu-toast-edge-gap, 18px) - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--acu-space-2, 8px);\r\n  margin: 0;\r\n  padding: 0;\r\n  overflow: visible;\r\n  list-style: none;\n}\n.acu-v2-toast[data-v-8a90e872] {\r\n  --acu-toast-tone: var(--acu-accent);\r\n  position: relative;\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: var(--acu-control-height-sm, 26px) minmax(0, 1fr) auto auto;\r\n  align-items: center;\r\n  gap: var(--acu-space-2, 8px);\r\n  padding: var(--acu-space-250, 10px) var(--acu-space-3, 12px);\r\n  overflow: hidden;\r\n  border: 1px solid color-mix(in srgb, var(--acu-toast-tone) 22%, var(--acu-border-2));\r\n  border-radius: var(--acu-radius-md);\r\n  background:\r\n    linear-gradient(\r\n      90deg,\r\n      color-mix(in srgb, var(--acu-toast-tone) 7%, transparent),\r\n      transparent 48%\r\n    ),\r\n    color-mix(in srgb, var(--acu-bg-1) 97%, var(--acu-text-1) 3%);\r\n  box-shadow:\r\n    0 18px 46px rgba(0, 0, 0, 0.18),\r\n    0 4px 16px rgba(0, 0, 0, 0.12),\r\n    inset 0 1px 0 color-mix(in srgb, var(--acu-text-1) 8%, transparent);\r\n  color: var(--acu-text-1);\r\n  pointer-events: auto;\r\n  animation: acu-toast-in-8a90e872 0.16s ease-out both;\n}\n.acu-v2-toast--success[data-v-8a90e872] {\r\n  --acu-toast-tone: var(--acu-success);\n}\n.acu-v2-toast--warning[data-v-8a90e872] {\r\n  --acu-toast-tone: var(--acu-warning);\n}\n.acu-v2-toast--error[data-v-8a90e872] {\r\n  --acu-toast-tone: var(--acu-danger);\n}\n.acu-v2-toast.is-closing[data-v-8a90e872] {\r\n  pointer-events: none;\r\n  animation: acu-toast-out-8a90e872 0.16s ease-in both;\n}\n.acu-v2-toast__icon[data-v-8a90e872] {\r\n  --acu-icon-color: var(--acu-toast-tone);\r\n  min-width: 0;\r\n  width: var(--acu-control-height-sm, 26px);\r\n  height: var(--acu-control-height-sm, 26px);\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-toast-tone) 13%, transparent);\r\n  color: var(--acu-toast-tone);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1;\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-toast-tone) 18%, transparent);\n}\n.acu-v2-toast__text[data-v-8a90e872] {\r\n  min-width: 0;\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.45;\r\n  overflow-wrap: anywhere;\n}\n.acu-v2-toast__action[data-v-8a90e872] {\r\n  white-space: nowrap;\n}\n.acu-v2-toast__dismiss[data-v-8a90e872] {\r\n  flex: 0 0 auto;\n}\n@keyframes acu-toast-in-8a90e872 {\nfrom {\r\n    opacity: 0;\r\n    transform: translateY(-6px);\n}\nto {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\n}\n@keyframes acu-toast-out-8a90e872 {\nfrom {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\nto {\r\n    opacity: 0;\r\n    transform: translateY(-6px);\n}\n}\n@media (max-width: 640px) {\n.acu-toast-viewport__list[data-v-8a90e872] {\r\n    top: calc(var(--acu-toast-top-compact, 58px) + var(--acu-safe-top, 0px));\r\n    right: auto;\r\n    bottom: auto;\r\n    left: calc(50% + (var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)) / 2);\r\n    width: clamp(var(--acu-menu-min-width, 240px), 70vw, calc(100% - var(--acu-toast-edge-gap-compact, 12px) - var(--acu-toast-edge-gap-compact, 12px) - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\r\n    max-height: calc(100% - var(--acu-toast-top-compact, 58px) - var(--acu-toast-edge-gap-compact, 12px) - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\r\n    transform: translateX(-50%);\n}\n.acu-v2-toast[data-v-8a90e872] {\r\n    grid-template-columns: var(--acu-icon-button-size-sm, 22px) minmax(0, 1fr) auto;\r\n    gap: var(--acu-space-175, 7px);\r\n    padding: var(--acu-space-2, 8px) var(--acu-space-225, 9px);\n}\n.acu-v2-toast__icon[data-v-8a90e872] {\r\n    width: var(--acu-icon-button-size-sm, 22px);\r\n    height: var(--acu-icon-button-size-sm, 22px);\r\n    font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-toast__text[data-v-8a90e872] {\r\n    font-size: var(--acu-font-size-caption, 11px);\r\n    line-height: 1.4;\n}\n.acu-v2-toast__action[data-v-8a90e872] {\r\n    grid-column: 2 / 4;\r\n    justify-self: start;\n}\n}\r\n", "src/presentation-v2/components/_lib/AcuToastViewport.vue#style-0-8a90e872");
+var AcuToastViewport_vue_vue_type_style_index_0_scoped_8a90e872_lang = null;
 
 const _hoisted_1$$ = {
 	key: 0,
 	class: "acu-toast-viewport",
+	"data-tt-mobile-surface": "backdrop",
 	role: "status",
 	"aria-label": "通知",
 	style: { zIndex: 9410 }
@@ -144562,7 +145748,7 @@ function _sfc_render$13(_ctx, _cache, $props, $setup, $data, $options) {
 		/* KEYED_FRAGMENT */
 	))])])) : createCommentVNode("v-if", true)], 8, ["to"])) : createCommentVNode("v-if", true);
 }
-var AcuToastViewport = /* @__PURE__ */ _export_sfc(_sfc_main$13, [["render", _sfc_render$13], ["__scopeId", "data-v-9146b9ef"]]);
+var AcuToastViewport = /* @__PURE__ */ _export_sfc(_sfc_main$13, [["render", _sfc_render$13], ["__scopeId", "data-v-8a90e872"]]);
 
 var _sfc_main$12 = /*@__PURE__*/ defineComponent({
     __name: 'AcuMobilePanelNav',
@@ -145026,10 +146212,14 @@ const useApiPresetStore = defineStore('acu-v2-api-presets', {
         deletePreset(name) {
             return this.applyWriteResult(deleteApiPreset_ACU$1(name));
         },
+        /**
+         * 模型探活（status）：customApiFormat 允许未归一化的草稿值，
+         * service 侧按四值白名单校验、非法降级 ''（等价 TT 默认 openai_compat）。
+         */
         async loadModelsForConfig(apiConfig) {
             this.modelLoadStatus = 'loading';
             this.modelLoadError = '';
-            const result = await fetchAvailableModels_ACU(String(apiConfig.url || ''), String(apiConfig.apiKey || ''));
+            const result = await fetchAvailableModels_ACU(String(apiConfig.url || ''), String(apiConfig.apiKey || ''), String(apiConfig.customApiFormat || ''));
             if (!result.success) {
                 this.modelOptions = [];
                 this.modelLoadStatus = 'error';
@@ -146288,6 +147478,9 @@ var _sfc_main$U = /*@__PURE__*/ defineComponent({
             await store.loadModelsForConfig({
                 url: activeDraft.url,
                 apiKey: activeDraft.apiKey,
+                // 探活必须带上接口协议：claude_messages / gemini_interactions 的模型列表
+                // 与 OpenAI 兼容端点不同源，漏传会让 TT 按 openai_compat 探活、拿不到模型。
+                customApiFormat: activeDraft.customApiFormat,
             });
         }
         watch(() => store.activePresetName, () => syncActiveDraft(), { flush: "sync" });
@@ -146297,8 +147490,8 @@ var _sfc_main$U = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-api-config-panel__hint[data-v-4a0617e6] {\r\n  color: var(--acu-text-3, #9e978e);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-api-config-panel__hint-danger[data-v-4a0617e6] {\r\n  color: var(--acu-danger, #e5484d);\n}\n.acu-api-config-panel__select-row[data-v-4a0617e6] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-4a0617e6] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-4a0617e6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-4a0617e6] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-4a0617e6] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-4a0617e6] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-4a0617e6] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-4a0617e6] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-4a0617e6] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-4a0617e6");
-var ApiConfigPanel_vue_vue_type_style_index_0_scoped_4a0617e6_lang = null;
+injectSfcStyle("\n.acu-api-config-panel__hint[data-v-fbb87f14] {\r\n  color: var(--acu-text-3, #9e978e);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-api-config-panel__hint-danger[data-v-fbb87f14] {\r\n  color: var(--acu-danger, #e5484d);\n}\n.acu-api-config-panel__select-row[data-v-fbb87f14] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-fbb87f14] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-fbb87f14] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-fbb87f14] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-fbb87f14] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-fbb87f14] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-fbb87f14] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-fbb87f14] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-fbb87f14] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-fbb87f14");
+var ApiConfigPanel_vue_vue_type_style_index_0_scoped_fbb87f14_lang = null;
 
 const _hoisted_1$S = { class: "acu-api-config-panel__select-row" };
 const _hoisted_2$L = { class: "acu-api-config-panel__editor-section" };
@@ -146607,7 +147800,7 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["title", "description"]);
 }
-var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$U, [["render", _sfc_render$U], ["__scopeId", "data-v-4a0617e6"]]);
+var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$U, [["render", _sfc_render$U], ["__scopeId", "data-v-fbb87f14"]]);
 
 // ═══════════════════════════════════════════════════════════
 // service/settings/feature-preset-reference-service.ts — 功能级 API 预设引用
@@ -149010,8 +150203,8 @@ var _sfc_main$Q = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-v2-drawer-layer[data-v-882382df] {\r\n  position: fixed; top: 0; right: 0; bottom: 0; left: 0; inset: 0; z-index: 9200;\r\n  width: 100%; width: 100vw; width: 100dvw;\r\n  height: 100%; height: 100vh; height: 100dvh;\r\n  display: flex; justify-content: flex-end;\r\n  padding: var(--acu-safe-top, 0px) var(--acu-safe-right, 0px) var(--acu-safe-bottom, 0px) var(--acu-safe-left, 0px);\r\n  background: rgba(0, 0, 0, 0.38);\r\n  overflow: hidden;\r\n  animation: acu-drawer-layer-in-882382df 0.18s ease-out both;\n}\n.acu-v2-drawer-layer.is-closing[data-v-882382df] {\r\n  pointer-events: none;\r\n  animation: acu-drawer-layer-out-882382df 0.15s ease-in both;\n}\n.acu-v2-drawer[data-v-882382df] {\r\n  max-width: 100%;\r\n  height: 100%; max-height: 100%;\r\n  display: flex; flex-direction: column;\r\n  background: var(--acu-bg-1);\r\n  border-left: 0;\r\n  box-shadow: var(--acu-shadow);\r\n  min-width: 0; min-height: 0;\r\n  overflow: hidden;\r\n  animation: acu-drawer-panel-in-882382df 0.18s ease-out both;\n}\n.acu-v2-drawer-layer.is-closing .acu-v2-drawer[data-v-882382df] {\r\n  animation: acu-drawer-panel-out-882382df 0.15s ease-in both;\n}\n@supports (max-height: 100dvh) {\n.acu-v2-drawer[data-v-882382df] { max-height: 100%;\n}\n}\n.acu-v2-drawer__header[data-v-882382df] {\r\n  flex: 0 0 auto;\r\n  display: flex; align-items: center; justify-content: space-between;\r\n  min-width: 0;\r\n  gap: var(--acu-panel-gap, 12px); padding: var(--acu-page-gap, 14px) var(--acu-panel-padding, 16px);\r\n  border-bottom: 0;\n}\n.acu-v2-drawer__header-left[data-v-882382df] { display: flex; align-items: center; gap: var(--acu-space-250, 10px); min-width: 0;\n}\n.acu-v2-drawer__header h3[data-v-882382df] { margin: 0; min-width: 0; font-size: var(--acu-font-size-panel-title, 15px); overflow-wrap: anywhere;\n}\n.acu-v2-drawer__body[data-v-882382df] {\r\n  flex: 1; min-height: 0;\r\n  min-width: 0; overflow-y: auto; overflow-x: hidden; padding: var(--acu-panel-padding, 16px);\r\n  display: flex; flex-direction: column; gap: var(--acu-page-gap, 14px);\n}\n@keyframes acu-drawer-layer-in-882382df {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes acu-drawer-panel-in-882382df {\nfrom { transform: translateX(100%);\n}\nto { transform: translateX(0);\n}\n}\n@keyframes acu-drawer-layer-out-882382df {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes acu-drawer-panel-out-882382df {\nfrom { transform: translateX(0);\n}\nto { transform: translateX(100%);\n}\n}\n@media (max-width: 860px) {\n.acu-v2-drawer[data-v-882382df] { width: 100vw !important; max-width: 100vw; border-left: 0;\n}\n}\r\n", "src/presentation-v2/components/_lib/AcuDrawer.vue#style-0-882382df");
-var AcuDrawer_vue_vue_type_style_index_0_scoped_882382df_lang = null;
+injectSfcStyle("\n.acu-v2-drawer-layer[data-v-802430da] {\r\n  position: fixed; top: 0; right: 0; bottom: 0; left: 0; inset: 0; z-index: 9200;\r\n  width: 100%; width: 100vw; width: 100dvw;\r\n  height: 100%; height: 100vh; height: 100dvh;\r\n  display: flex; justify-content: flex-end;\r\n  padding: var(--acu-safe-top, 0px) var(--acu-safe-right, 0px) var(--acu-safe-bottom, 0px) var(--acu-safe-left, 0px);\r\n  background: rgba(0, 0, 0, 0.38);\r\n  overflow: hidden;\r\n  animation: acu-drawer-layer-in-802430da 0.18s ease-out both;\n}\n.acu-v2-drawer-layer.is-closing[data-v-802430da] {\r\n  pointer-events: none;\r\n  animation: acu-drawer-layer-out-802430da 0.15s ease-in both;\n}\n.acu-v2-drawer[data-v-802430da] {\r\n  max-width: 100%;\r\n  height: 100%; max-height: 100%;\r\n  display: flex; flex-direction: column;\r\n  background: var(--acu-bg-1);\r\n  border-left: 0;\r\n  box-shadow: var(--acu-shadow);\r\n  min-width: 0; min-height: 0;\r\n  overflow: hidden;\r\n  animation: acu-drawer-panel-in-802430da 0.18s ease-out both;\n}\n.acu-v2-drawer-layer.is-closing .acu-v2-drawer[data-v-802430da] {\r\n  animation: acu-drawer-panel-out-802430da 0.15s ease-in both;\n}\n@supports (max-height: 100dvh) {\n.acu-v2-drawer[data-v-802430da] { max-height: 100%;\n}\n}\n.acu-v2-drawer__header[data-v-802430da] {\r\n  flex: 0 0 auto;\r\n  display: flex; align-items: center; justify-content: space-between;\r\n  min-width: 0;\r\n  gap: var(--acu-panel-gap, 12px); padding: var(--acu-page-gap, 14px) var(--acu-panel-padding, 16px);\r\n  border-bottom: 0;\n}\n.acu-v2-drawer__header-left[data-v-802430da] { display: flex; align-items: center; gap: var(--acu-space-250, 10px); min-width: 0;\n}\n.acu-v2-drawer__header h3[data-v-802430da] { margin: 0; min-width: 0; font-size: var(--acu-font-size-panel-title, 15px); overflow-wrap: anywhere;\n}\n.acu-v2-drawer__body[data-v-802430da] {\r\n  flex: 1; min-height: 0;\r\n  min-width: 0; overflow-y: auto; overflow-x: hidden; padding: var(--acu-panel-padding, 16px);\r\n  display: flex; flex-direction: column; gap: var(--acu-page-gap, 14px);\n}\n@keyframes acu-drawer-layer-in-802430da {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes acu-drawer-panel-in-802430da {\nfrom { transform: translateX(100%);\n}\nto { transform: translateX(0);\n}\n}\n@keyframes acu-drawer-layer-out-802430da {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes acu-drawer-panel-out-802430da {\nfrom { transform: translateX(0);\n}\nto { transform: translateX(100%);\n}\n}\n@media (max-width: 860px) {\n.acu-v2-drawer[data-v-802430da] { width: 100vw !important; max-width: 100vw; border-left: 0;\n}\n}\r\n", "src/presentation-v2/components/_lib/AcuDrawer.vue#style-0-802430da");
+var AcuDrawer_vue_vue_type_style_index_0_scoped_802430da_lang = null;
 
 const _hoisted_1$P = { class: "acu-v2-drawer__header" };
 const _hoisted_2$I = { class: "acu-v2-drawer__header-left" };
@@ -149022,6 +150215,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 		{
 			key: 0,
 			class: normalizeClass(["acu-v2-drawer-layer", { "is-closing": $setup.isClosing }]),
+			"data-tt-mobile-surface": "backdrop",
 			onClick: withModifiers($setup.requestClose, ["self"]),
 			onPointerdown: withModifiers($setup.requestClose, ["self"]),
 			onTouchstart: withModifiers($setup.requestClose, ["self"])
@@ -149059,7 +150253,7 @@ function _sfc_render$Q(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS, NEED_HYDRATION */
 	)) : createCommentVNode("v-if", true);
 }
-var AcuDrawer = /* @__PURE__ */ _export_sfc(_sfc_main$Q, [["render", _sfc_render$Q], ["__scopeId", "data-v-882382df"]]);
+var AcuDrawer = /* @__PURE__ */ _export_sfc(_sfc_main$Q, [["render", _sfc_render$Q], ["__scopeId", "data-v-802430da"]]);
 
 var _sfc_main$P = /*@__PURE__*/ defineComponent({
     __name: 'AcuRulePairList',
@@ -169356,7 +170550,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260831-09";
+        const stamp = "20260831-15";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -169365,7 +170559,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.0.3";
+        const v = "9.0.4";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {
@@ -179373,8 +180567,8 @@ var _sfc_main$1 = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-visualizer-surface[data-v-bdfc6d3c] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: grid;\r\n  grid-template-columns: 260px minmax(0, 1fr);\r\n  overflow: hidden;\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__sidebar[data-v-bdfc6d3c] {\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  padding: 24px 12px 16px;\r\n  overflow-y: auto;\r\n  border-right: 1px solid var(--acu-border-2);\r\n  background: var(--acu-sidebar-bg);\n}\n.acu-visualizer-surface__main[data-v-bdfc6d3c] {\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  overflow: hidden;\r\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar[data-v-bdfc6d3c] {\r\n  flex: 0 0 auto;\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\r\n  min-height: 50px;\r\n  padding: 8px 12px 8px 16px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar-context[data-v-bdfc6d3c] {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  flex: 1 1 auto;\r\n  gap: 10px;\n}\n.acu-visualizer-surface__mobile-menu[data-v-bdfc6d3c] {\r\n  display: none;\r\n  flex: 0 0 auto;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  box-shadow: none;\n}\n.acu-visualizer-surface__mobile-menu[data-v-bdfc6d3c]:hover:not(:disabled) {\r\n  background: transparent;\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__context-items[data-v-bdfc6d3c] {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  flex: 1 1 auto;\r\n  justify-content: flex-start;\r\n  gap: 16px;\n}\n.acu-visualizer-surface__context-item[data-v-bdfc6d3c] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 2px;\n}\n.acu-visualizer-surface__context-item[data-v-bdfc6d3c]:first-child {\r\n  flex: 0 1 auto;\r\n  max-width: min(560px, 42vw);\n}\n.acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item[data-v-bdfc6d3c] {\r\n  flex: 0 0 auto;\r\n  max-width: min(260px, 20vw);\n}\n.acu-visualizer-surface__context-item span[data-v-bdfc6d3c] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.2;\n}\n.acu-visualizer-surface__context-item strong[data-v-bdfc6d3c] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 600;\r\n  line-height: 1.25;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__context-item:first-child strong[data-v-bdfc6d3c] {\r\n  overflow: visible;\r\n  text-overflow: clip;\r\n  white-space: normal;\r\n  word-break: break-word;\n}\n.acu-visualizer-surface__context-badge[data-v-bdfc6d3c] {\r\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__conflict[data-v-bdfc6d3c] {\r\n  flex: 0 0 auto;\r\n  margin: 12px 16px 0;\n}\n.acu-visualizer-surface__conflict-actions[data-v-bdfc6d3c] {\r\n  display: inline-flex;\r\n  flex-wrap: wrap;\r\n  gap: 6px;\r\n  margin-left: 8px;\n}\n.acu-visualizer-surface__data-toolbar[data-v-bdfc6d3c],\r\n.acu-visualizer-surface__data-toolbar-actions[data-v-bdfc6d3c],\r\n.acu-visualizer-surface__database-toolbar[data-v-bdfc6d3c],\r\n.acu-visualizer-surface__pagination[data-v-bdfc6d3c],\r\n.acu-visualizer-surface__pagination-pages[data-v-bdfc6d3c],\r\n.acu-visualizer-surface__card-header[data-v-bdfc6d3c] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__workspace[data-v-bdfc6d3c] {\r\n  flex: 1 1 auto;\r\n  min-height: 0;\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\r\n  overflow: auto;\r\n  padding: 16px;\n}\n.acu-visualizer-surface__workspace--assistant[data-v-bdfc6d3c] {\r\n  overflow: hidden;\r\n  padding: 0;\n}\n.acu-visualizer-surface__loading[data-v-bdfc6d3c] {\r\n  min-height: 140px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  gap: 8px;\r\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__mode-tabs[data-v-bdfc6d3c] {\r\n  flex: 0 0 auto;\r\n  width: min(360px, 42vw);\n}\n.acu-visualizer-surface__close[data-v-bdfc6d3c] {\r\n  width: 30px;\r\n  height: 30px;\r\n  flex: 0 0 auto;\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  line-height: 1;\r\n  border-radius: var(--acu-radius-sm);\n}\n.acu-visualizer-surface__close[data-v-bdfc6d3c]:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__data-toolbar[data-v-bdfc6d3c] {\r\n  flex: 0 0 auto;\r\n  justify-content: space-between;\r\n  padding: 4px 0 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__data-toolbar-actions[data-v-bdfc6d3c] {\r\n  flex: 0 0 auto;\r\n  justify-content: flex-end;\n}\n.acu-visualizer-surface__pagination[data-v-bdfc6d3c] {\r\n  flex: 0 0 auto;\r\n  justify-content: center;\r\n  gap: 14px;\r\n  padding: 6px 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-visualizer-surface__pagination-pages[data-v-bdfc6d3c] {\r\n  min-width: 0;\r\n  flex-wrap: wrap;\r\n  justify-content: center;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__page-button[data-v-bdfc6d3c] {\r\n  width: 34px;\r\n  min-width: 34px;\r\n  height: 34px;\r\n  padding: 0;\r\n  border: 1px solid var(--acu-border);\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 500;\n}\n.acu-visualizer-surface__page-button[data-v-bdfc6d3c]:hover:not(:disabled) {\r\n  border-color: var(--acu-accent);\r\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__page-button--active[data-v-bdfc6d3c],\r\n.acu-visualizer-surface__page-button--active[data-v-bdfc6d3c]:hover:not(:disabled) {\r\n  border-color: var(--acu-accent);\r\n  background: var(--acu-accent);\r\n  color: var(--acu-on-accent);\n}\n.acu-visualizer-surface__page-button[data-v-bdfc6d3c]:disabled:not(\r\n    .acu-visualizer-surface__page-button--active\r\n  ) {\r\n  border-color: var(--acu-border);\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-2);\r\n  opacity: 1;\r\n  cursor: default;\n}\n.acu-visualizer-surface__page-jump[data-v-bdfc6d3c] {\r\n  flex: 0 0 64px;\r\n  width: 64px;\n}\n.acu-visualizer-surface__page-jump[data-v-bdfc6d3c] .acu-input {\r\n  min-height: 34px;\r\n  border: 1px solid var(--acu-border) !important;\r\n  background: var(--acu-bg-0) !important;\r\n  text-align: center;\r\n  font-size: var(--acu-font-size-body-lg, 13px) !important;\r\n  font-variant-numeric: tabular-nums;\n}\n.acu-visualizer-surface__data-range[data-v-bdfc6d3c] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__database-toolbar[data-v-bdfc6d3c] {\r\n  flex: 0 0 auto;\r\n  padding: 0 0 4px;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__database-toolbar h2[data-v-bdfc6d3c] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  font-weight: 700;\r\n  line-height: 1.2;\n}\n.acu-visualizer-surface__database-toolbar p[data-v-bdfc6d3c] {\r\n  margin: 5px 0 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: var(--acu-line-height-readable, 1.55);\n}\n.acu-visualizer-surface__empty[data-v-bdfc6d3c] {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1.55;\n}\n.acu-visualizer-surface__card-grid[data-v-bdfc6d3c] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));\r\n  gap: 12px;\n}\n.acu-visualizer-surface__data-card[data-v-bdfc6d3c] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  height: 100%;\r\n  padding: 16px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\n}\n.acu-visualizer-surface__card-header strong[data-v-bdfc6d3c] {\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-panel-title, 15px);\n}\n.acu-visualizer-surface__card-header span[data-v-bdfc6d3c] {\r\n  min-width: 0;\r\n  margin-right: auto;\r\n  overflow: hidden;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__card-header[data-v-bdfc6d3c] .acu-icon-btn {\r\n  background: transparent;\n}\n.acu-visualizer-surface__card-header[data-v-bdfc6d3c]\r\n  .acu-icon-btn--default:hover:not(:disabled) {\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    transparent;\n}\n.acu-visualizer-surface__card-header[data-v-bdfc6d3c] .acu-icon-btn--accent {\r\n  background: var(--acu-accent-glow);\r\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__card-header[data-v-bdfc6d3c]\r\n  .acu-icon-btn--danger:hover:not(:disabled) {\r\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\n}\n.acu-visualizer-surface__fields[data-v-bdfc6d3c] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__field-row[data-v-bdfc6d3c] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 8px;\r\n  align-items: stretch;\n}\n.acu-visualizer-surface__field-row.is-wide[data-v-bdfc6d3c] {\r\n  grid-template-columns: minmax(0, 1fr);\n}\n.acu-visualizer-surface__field[data-v-bdfc6d3c] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\r\n  padding: 2px;\r\n  border: 1px solid transparent;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\r\n  transition:\r\n    background 0.15s ease,\r\n    border-color 0.15s ease,\r\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-surface__field[data-v-bdfc6d3c] .acu-textarea {\r\n  flex: 1 1 auto;\r\n  min-height: 34px;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.45;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  overflow-wrap: break-word;\n}\n.acu-visualizer-surface__field-preview[data-v-bdfc6d3c] {\r\n  width: 100%;\r\n  min-height: 34px;\r\n  box-sizing: border-box;\r\n  padding: 8px 10px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-2);\r\n  color: var(--acu-text-1);\r\n  cursor: text;\r\n  display: block;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.45;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  overflow-wrap: break-word;\r\n  transition:\r\n    background 0.15s ease,\r\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-surface__field-preview[data-v-bdfc6d3c]:hover,\r\n.acu-visualizer-surface__field-preview[data-v-bdfc6d3c]:focus-visible {\r\n  outline: none;\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    var(--acu-bg-2);\r\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-visualizer-surface__field-preview.is-empty[data-v-bdfc6d3c] {\r\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__field-label[data-v-bdfc6d3c] {\r\n  min-width: 0;\r\n  min-height: 24px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 6px;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 600;\n}\n.acu-visualizer-surface__field-label > span[data-v-bdfc6d3c]:first-child {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__field-locks[data-v-bdfc6d3c] {\r\n  flex: 0 0 auto;\r\n  min-width: 51px;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: flex-end;\r\n  gap: 3px;\r\n  opacity: 0.44;\r\n  transition: opacity 0.15s ease;\n}\n.acu-visualizer-surface__field:hover .acu-visualizer-surface__field-locks[data-v-bdfc6d3c],\r\n.acu-visualizer-surface__field:focus-within\r\n  .acu-visualizer-surface__field-locks[data-v-bdfc6d3c],\r\n.acu-visualizer-surface__field.is-actions-active\r\n  .acu-visualizer-surface__field-locks[data-v-bdfc6d3c],\r\n.acu-visualizer-surface__field.is-locked .acu-visualizer-surface__field-locks[data-v-bdfc6d3c],\r\n.acu-visualizer-surface__field.is-special-index\r\n  .acu-visualizer-surface__field-locks[data-v-bdfc6d3c] {\r\n  opacity: 1;\n}\n.acu-visualizer-surface__field-locks[data-v-bdfc6d3c] .acu-icon-btn {\r\n  --acu-icon-btn-size: 24px;\r\n  --acu-icon-btn-font-size: 11px;\r\n  width: 24px;\r\n  height: 24px;\r\n  background: transparent !important;\n}\n.acu-visualizer-surface__field-locks[data-v-bdfc6d3c]\r\n  .acu-icon-btn--default:hover:not(:disabled) {\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    transparent;\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__field-locks[data-v-bdfc6d3c] .acu-icon-btn--accent {\r\n  color: var(--acu-warning) !important;\r\n  background: color-mix(in srgb, var(--acu-warning) 16%, transparent) !important;\n}\n.acu-visualizer-surface__field-locks[data-v-bdfc6d3c]\r\n  .acu-icon-btn--accent:hover:not(:disabled) {\r\n  color: var(--acu-warning) !important;\r\n  background: color-mix(in srgb, var(--acu-warning) 22%, transparent) !important;\n}\n.acu-visualizer-surface__field.is-locked[data-v-bdfc6d3c] {\r\n  border-color: var(--acu-border);\r\n  background: color-mix(in srgb, var(--acu-warning) 8%, transparent);\n}\n.acu-visualizer-surface__field.is-actions-active[data-v-bdfc6d3c]:not(.is-locked) {\r\n  background: color-mix(in srgb, var(--acu-accent) 6%, transparent);\n}\n.acu-visualizer-surface__footer[data-v-bdfc6d3c] {\r\n  flex: 0 0 auto;\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\r\n  padding: 12px 16px;\r\n  border-top: 1px solid var(--acu-border-2);\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__footer-actions[data-v-bdfc6d3c] {\r\n  display: flex;\r\n  gap: 8px;\r\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__footer-actions[data-v-bdfc6d3c] .acu-btn {\r\n  min-width: 132px;\n}\n.acu-visualizer-surface__mobile-nav-layer[data-v-bdfc6d3c] {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100%;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  min-height: 100vh;\r\n  min-height: 100dvh;\r\n  z-index: 9350;\r\n  display: none;\r\n  align-items: stretch;\r\n  justify-content: flex-start;\r\n  padding: var(--acu-safe-top, 0px) var(--acu-safe-right, 0px) var(--acu-safe-bottom, 0px) var(--acu-safe-left, 0px);\r\n  overflow: hidden;\r\n  background: rgba(0, 0, 0, 0.58);\r\n  pointer-events: auto;\r\n  overscroll-behavior: contain;\r\n  animation: visualizer-mobile-nav-layer-in-bdfc6d3c 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing[data-v-bdfc6d3c] {\r\n  pointer-events: auto;\r\n  animation: visualizer-mobile-nav-layer-out-bdfc6d3c 0.15s ease-in both;\n}\n.acu-visualizer-surface__mobile-nav[data-v-bdfc6d3c] {\r\n  width: 360px;\r\n  max-width: calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\r\n  height: 100%;\r\n  max-height: 100%;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  align-self: stretch;\r\n  flex: 0 1 360px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  padding: 24px 12px 16px;\r\n  overflow-y: auto;\r\n  border-right: 0;\r\n  background: var(--acu-sidebar-bg);\r\n  box-shadow: var(--acu-shadow);\r\n  pointer-events: auto;\r\n  animation: visualizer-mobile-nav-drawer-in-bdfc6d3c 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing\r\n  .acu-visualizer-surface__mobile-nav[data-v-bdfc6d3c] {\r\n  animation: visualizer-mobile-nav-drawer-out-bdfc6d3c 0.15s ease-in both;\n}\n@supports (width: min(360px, calc(100% - 24px))) {\n.acu-visualizer-surface__mobile-nav[data-v-bdfc6d3c] {\r\n    width: min(360px, calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\r\n    flex: 0 0 min(360px, calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n}\n}\n@supports (width: 100dvw) {\n.acu-visualizer-surface__mobile-nav[data-v-bdfc6d3c] {\r\n    max-width: calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\n}\n}\n@supports (height: 100dvh) {\n.acu-visualizer-surface__mobile-nav[data-v-bdfc6d3c] {\r\n    height: 100%;\r\n    max-height: 100%;\n}\n}\n@keyframes visualizer-mobile-nav-layer-in-bdfc6d3c {\nfrom {\r\n    opacity: 0;\n}\nto {\r\n    opacity: 1;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-in-bdfc6d3c {\nfrom {\r\n    transform: translateX(-100%);\n}\nto {\r\n    transform: translateX(0);\n}\n}\n@keyframes visualizer-mobile-nav-layer-out-bdfc6d3c {\nfrom {\r\n    opacity: 1;\n}\nto {\r\n    opacity: 0;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-out-bdfc6d3c {\nfrom {\r\n    transform: translateX(0);\n}\nto {\r\n    transform: translateX(-100%);\n}\n}\n@media (max-width: 1024px) {\n.acu-visualizer-surface[data-v-bdfc6d3c] {\r\n    grid-template-columns: 220px minmax(0, 1fr);\n}\n.acu-visualizer-surface__card-grid[data-v-bdfc6d3c] {\r\n    grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));\n}\n.acu-visualizer-surface__topbar[data-v-bdfc6d3c] {\r\n    flex-wrap: wrap;\n}\n.acu-visualizer-surface__mode-tabs[data-v-bdfc6d3c] {\r\n    order: 3;\r\n    width: min(420px, 100%);\n}\n}\n@media (max-width: 767px) {\n.acu-visualizer-surface[data-v-bdfc6d3c] {\r\n    grid-template-columns: 1fr;\r\n    grid-template-rows: minmax(0, 1fr);\n}\n.acu-visualizer-surface__sidebar[data-v-bdfc6d3c] {\r\n    display: none;\n}\n.acu-visualizer-surface__topbar[data-v-bdfc6d3c] {\r\n    display: grid;\r\n    grid-template-columns: minmax(0, 1fr) auto;\r\n    gap: 8px;\r\n    min-height: 0;\r\n    padding: 8px;\n}\n.acu-visualizer-surface__topbar-context[data-v-bdfc6d3c] {\r\n    grid-column: 1;\r\n    display: grid;\r\n    grid-template-columns: auto minmax(0, 1fr) auto;\r\n    align-items: center;\r\n    gap: 8px;\r\n    min-width: 0;\n}\n.acu-visualizer-surface__mobile-menu[data-v-bdfc6d3c] {\r\n    display: inline-flex;\n}\n.acu-visualizer-surface__context-items[data-v-bdfc6d3c] {\r\n    display: grid;\r\n    grid-template-columns: repeat(2, minmax(0, 1fr));\r\n    gap: 8px;\n}\n.acu-visualizer-surface__context-item[data-v-bdfc6d3c]:first-child,\r\n  .acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item[data-v-bdfc6d3c] {\r\n    max-width: none;\n}\n.acu-visualizer-surface__mobile-nav-layer[data-v-bdfc6d3c] {\r\n    display: flex;\n}\n.acu-visualizer-surface__close[data-v-bdfc6d3c] {\r\n    grid-column: 2;\r\n    grid-row: 1;\r\n    align-self: center;\n}\n.acu-visualizer-surface__mode-tabs[data-v-bdfc6d3c] {\r\n    grid-column: 1 / -1;\r\n    width: 100%;\n}\n.acu-visualizer-surface__workspace[data-v-bdfc6d3c] {\r\n    padding: 10px;\n}\n.acu-visualizer-surface__data-toolbar[data-v-bdfc6d3c],\r\n  .acu-visualizer-surface__database-toolbar[data-v-bdfc6d3c] {\r\n    align-items: stretch;\r\n    flex-direction: column;\n}\n.acu-visualizer-surface__data-toolbar[data-v-bdfc6d3c] .acu-btn,\r\n  .acu-visualizer-surface__database-toolbar[data-v-bdfc6d3c] .acu-btn {\r\n    width: 100%;\n}\n.acu-visualizer-surface__data-toolbar-actions[data-v-bdfc6d3c] {\r\n    align-items: stretch;\r\n    flex-direction: column;\n}\n.acu-visualizer-surface__pagination[data-v-bdfc6d3c] {\r\n    align-items: center;\r\n    flex-direction: row;\r\n    flex-wrap: wrap;\r\n    gap: 6px;\r\n    padding: 2px 0 6px;\n}\n.acu-visualizer-surface__pagination-pages[data-v-bdfc6d3c] {\r\n    flex: 0 1 auto;\r\n    align-items: center;\r\n    flex-direction: row;\r\n    flex-wrap: wrap;\r\n    gap: 5px;\n}\n.acu-visualizer-surface__page-button[data-v-bdfc6d3c] {\r\n    width: 36px;\r\n    min-width: 36px;\r\n    height: 34px;\r\n    flex: 0 0 36px;\n}\n.acu-visualizer-surface__page-jump[data-v-bdfc6d3c] {\r\n    flex: 0 0 54px;\r\n    width: 54px;\n}\n.acu-visualizer-surface__footer[data-v-bdfc6d3c] {\r\n    display: grid;\r\n    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);\r\n    align-items: center;\r\n    gap: 8px;\r\n    padding: 8px;\n}\n.acu-visualizer-surface__footer > span[data-v-bdfc6d3c] {\r\n    min-width: 0;\r\n    overflow: hidden;\r\n    text-overflow: ellipsis;\r\n    white-space: nowrap;\n}\n.acu-visualizer-surface__footer-actions[data-v-bdfc6d3c] {\r\n    display: grid;\r\n    grid-template-columns: repeat(2, minmax(0, 1fr));\r\n    gap: 6px;\n}\n.acu-visualizer-surface__footer-actions[data-v-bdfc6d3c] .acu-btn {\r\n    min-width: 0;\r\n    width: 100%;\n}\n}\n@media (max-width: 480px) {\n.acu-visualizer-surface__card-grid[data-v-bdfc6d3c] {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__fields[data-v-bdfc6d3c] {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__mode-tabs[data-v-bdfc6d3c] {\r\n    width: 100%;\n}\n.acu-visualizer-surface__conflict-actions[data-v-bdfc6d3c] {\r\n    display: flex;\r\n    margin: 8px 0 0;\n}\n.acu-visualizer-surface__footer[data-v-bdfc6d3c] {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__footer > span[data-v-bdfc6d3c] {\r\n    display: none;\n}\n}\r\n", "src/presentation-v2/surfaces/visualizer/VisualizerSurface.vue#style-0-bdfc6d3c");
-var VisualizerSurface_vue_vue_type_style_index_0_scoped_bdfc6d3c_lang = null;
+injectSfcStyle("\n.acu-visualizer-surface[data-v-548becb1] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: grid;\r\n  grid-template-columns: 260px minmax(0, 1fr);\r\n  overflow: hidden;\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__sidebar[data-v-548becb1] {\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  padding: 24px 12px 16px;\r\n  overflow-y: auto;\r\n  border-right: 1px solid var(--acu-border-2);\r\n  background: var(--acu-sidebar-bg);\n}\n.acu-visualizer-surface__main[data-v-548becb1] {\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  overflow: hidden;\r\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar[data-v-548becb1] {\r\n  flex: 0 0 auto;\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\r\n  min-height: 50px;\r\n  padding: 8px 12px 8px 16px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar-context[data-v-548becb1] {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  flex: 1 1 auto;\r\n  gap: 10px;\n}\n.acu-visualizer-surface__mobile-menu[data-v-548becb1] {\r\n  display: none;\r\n  flex: 0 0 auto;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  box-shadow: none;\n}\n.acu-visualizer-surface__mobile-menu[data-v-548becb1]:hover:not(:disabled) {\r\n  background: transparent;\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__context-items[data-v-548becb1] {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  flex: 1 1 auto;\r\n  justify-content: flex-start;\r\n  gap: 16px;\n}\n.acu-visualizer-surface__context-item[data-v-548becb1] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 2px;\n}\n.acu-visualizer-surface__context-item[data-v-548becb1]:first-child {\r\n  flex: 0 1 auto;\r\n  max-width: min(560px, 42vw);\n}\n.acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item[data-v-548becb1] {\r\n  flex: 0 0 auto;\r\n  max-width: min(260px, 20vw);\n}\n.acu-visualizer-surface__context-item span[data-v-548becb1] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.2;\n}\n.acu-visualizer-surface__context-item strong[data-v-548becb1] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 600;\r\n  line-height: 1.25;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__context-item:first-child strong[data-v-548becb1] {\r\n  overflow: visible;\r\n  text-overflow: clip;\r\n  white-space: normal;\r\n  word-break: break-word;\n}\n.acu-visualizer-surface__context-badge[data-v-548becb1] {\r\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__conflict[data-v-548becb1] {\r\n  flex: 0 0 auto;\r\n  margin: 12px 16px 0;\n}\n.acu-visualizer-surface__conflict-actions[data-v-548becb1] {\r\n  display: inline-flex;\r\n  flex-wrap: wrap;\r\n  gap: 6px;\r\n  margin-left: 8px;\n}\n.acu-visualizer-surface__data-toolbar[data-v-548becb1],\r\n.acu-visualizer-surface__data-toolbar-actions[data-v-548becb1],\r\n.acu-visualizer-surface__database-toolbar[data-v-548becb1],\r\n.acu-visualizer-surface__pagination[data-v-548becb1],\r\n.acu-visualizer-surface__pagination-pages[data-v-548becb1],\r\n.acu-visualizer-surface__card-header[data-v-548becb1] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__workspace[data-v-548becb1] {\r\n  flex: 1 1 auto;\r\n  min-height: 0;\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\r\n  overflow: auto;\r\n  padding: 16px;\n}\n.acu-visualizer-surface__workspace--assistant[data-v-548becb1] {\r\n  overflow: hidden;\r\n  padding: 0;\n}\n.acu-visualizer-surface__loading[data-v-548becb1] {\r\n  min-height: 140px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  gap: 8px;\r\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__mode-tabs[data-v-548becb1] {\r\n  flex: 0 0 auto;\r\n  width: min(360px, 42vw);\n}\n.acu-visualizer-surface__close[data-v-548becb1] {\r\n  width: 30px;\r\n  height: 30px;\r\n  flex: 0 0 auto;\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  line-height: 1;\r\n  border-radius: var(--acu-radius-sm);\n}\n.acu-visualizer-surface__close[data-v-548becb1]:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__data-toolbar[data-v-548becb1] {\r\n  flex: 0 0 auto;\r\n  justify-content: space-between;\r\n  padding: 4px 0 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__data-toolbar-actions[data-v-548becb1] {\r\n  flex: 0 0 auto;\r\n  justify-content: flex-end;\n}\n.acu-visualizer-surface__pagination[data-v-548becb1] {\r\n  flex: 0 0 auto;\r\n  justify-content: center;\r\n  gap: 14px;\r\n  padding: 6px 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-visualizer-surface__pagination-pages[data-v-548becb1] {\r\n  min-width: 0;\r\n  flex-wrap: wrap;\r\n  justify-content: center;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__page-button[data-v-548becb1] {\r\n  width: 34px;\r\n  min-width: 34px;\r\n  height: 34px;\r\n  padding: 0;\r\n  border: 1px solid var(--acu-border);\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 500;\n}\n.acu-visualizer-surface__page-button[data-v-548becb1]:hover:not(:disabled) {\r\n  border-color: var(--acu-accent);\r\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__page-button--active[data-v-548becb1],\r\n.acu-visualizer-surface__page-button--active[data-v-548becb1]:hover:not(:disabled) {\r\n  border-color: var(--acu-accent);\r\n  background: var(--acu-accent);\r\n  color: var(--acu-on-accent);\n}\n.acu-visualizer-surface__page-button[data-v-548becb1]:disabled:not(\r\n    .acu-visualizer-surface__page-button--active\r\n  ) {\r\n  border-color: var(--acu-border);\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-2);\r\n  opacity: 1;\r\n  cursor: default;\n}\n.acu-visualizer-surface__page-jump[data-v-548becb1] {\r\n  flex: 0 0 64px;\r\n  width: 64px;\n}\n.acu-visualizer-surface__page-jump[data-v-548becb1] .acu-input {\r\n  min-height: 34px;\r\n  border: 1px solid var(--acu-border) !important;\r\n  background: var(--acu-bg-0) !important;\r\n  text-align: center;\r\n  font-size: var(--acu-font-size-body-lg, 13px) !important;\r\n  font-variant-numeric: tabular-nums;\n}\n.acu-visualizer-surface__data-range[data-v-548becb1] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__database-toolbar[data-v-548becb1] {\r\n  flex: 0 0 auto;\r\n  padding: 0 0 4px;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__database-toolbar h2[data-v-548becb1] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  font-weight: 700;\r\n  line-height: 1.2;\n}\n.acu-visualizer-surface__database-toolbar p[data-v-548becb1] {\r\n  margin: 5px 0 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: var(--acu-line-height-readable, 1.55);\n}\n.acu-visualizer-surface__empty[data-v-548becb1] {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1.55;\n}\n.acu-visualizer-surface__card-grid[data-v-548becb1] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));\r\n  gap: 12px;\n}\n.acu-visualizer-surface__data-card[data-v-548becb1] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  height: 100%;\r\n  padding: 16px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\n}\n.acu-visualizer-surface__card-header strong[data-v-548becb1] {\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-panel-title, 15px);\n}\n.acu-visualizer-surface__card-header span[data-v-548becb1] {\r\n  min-width: 0;\r\n  margin-right: auto;\r\n  overflow: hidden;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__card-header[data-v-548becb1] .acu-icon-btn {\r\n  background: transparent;\n}\n.acu-visualizer-surface__card-header[data-v-548becb1]\r\n  .acu-icon-btn--default:hover:not(:disabled) {\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    transparent;\n}\n.acu-visualizer-surface__card-header[data-v-548becb1] .acu-icon-btn--accent {\r\n  background: var(--acu-accent-glow);\r\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__card-header[data-v-548becb1]\r\n  .acu-icon-btn--danger:hover:not(:disabled) {\r\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\n}\n.acu-visualizer-surface__fields[data-v-548becb1] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__field-row[data-v-548becb1] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 8px;\r\n  align-items: stretch;\n}\n.acu-visualizer-surface__field-row.is-wide[data-v-548becb1] {\r\n  grid-template-columns: minmax(0, 1fr);\n}\n.acu-visualizer-surface__field[data-v-548becb1] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\r\n  padding: 2px;\r\n  border: 1px solid transparent;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\r\n  transition:\r\n    background 0.15s ease,\r\n    border-color 0.15s ease,\r\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-surface__field[data-v-548becb1] .acu-textarea {\r\n  flex: 1 1 auto;\r\n  min-height: 34px;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.45;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  overflow-wrap: break-word;\n}\n.acu-visualizer-surface__field-preview[data-v-548becb1] {\r\n  width: 100%;\r\n  min-height: 34px;\r\n  box-sizing: border-box;\r\n  padding: 8px 10px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-2);\r\n  color: var(--acu-text-1);\r\n  cursor: text;\r\n  display: block;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.45;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  overflow-wrap: break-word;\r\n  transition:\r\n    background 0.15s ease,\r\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-surface__field-preview[data-v-548becb1]:hover,\r\n.acu-visualizer-surface__field-preview[data-v-548becb1]:focus-visible {\r\n  outline: none;\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    var(--acu-bg-2);\r\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-visualizer-surface__field-preview.is-empty[data-v-548becb1] {\r\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__field-label[data-v-548becb1] {\r\n  min-width: 0;\r\n  min-height: 24px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 6px;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 600;\n}\n.acu-visualizer-surface__field-label > span[data-v-548becb1]:first-child {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__field-locks[data-v-548becb1] {\r\n  flex: 0 0 auto;\r\n  min-width: 51px;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: flex-end;\r\n  gap: 3px;\r\n  opacity: 0.44;\r\n  transition: opacity 0.15s ease;\n}\n.acu-visualizer-surface__field:hover .acu-visualizer-surface__field-locks[data-v-548becb1],\r\n.acu-visualizer-surface__field:focus-within\r\n  .acu-visualizer-surface__field-locks[data-v-548becb1],\r\n.acu-visualizer-surface__field.is-actions-active\r\n  .acu-visualizer-surface__field-locks[data-v-548becb1],\r\n.acu-visualizer-surface__field.is-locked .acu-visualizer-surface__field-locks[data-v-548becb1],\r\n.acu-visualizer-surface__field.is-special-index\r\n  .acu-visualizer-surface__field-locks[data-v-548becb1] {\r\n  opacity: 1;\n}\n.acu-visualizer-surface__field-locks[data-v-548becb1] .acu-icon-btn {\r\n  --acu-icon-btn-size: 24px;\r\n  --acu-icon-btn-font-size: 11px;\r\n  width: 24px;\r\n  height: 24px;\r\n  background: transparent !important;\n}\n.acu-visualizer-surface__field-locks[data-v-548becb1]\r\n  .acu-icon-btn--default:hover:not(:disabled) {\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    transparent;\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__field-locks[data-v-548becb1] .acu-icon-btn--accent {\r\n  color: var(--acu-warning) !important;\r\n  background: color-mix(in srgb, var(--acu-warning) 16%, transparent) !important;\n}\n.acu-visualizer-surface__field-locks[data-v-548becb1]\r\n  .acu-icon-btn--accent:hover:not(:disabled) {\r\n  color: var(--acu-warning) !important;\r\n  background: color-mix(in srgb, var(--acu-warning) 22%, transparent) !important;\n}\n.acu-visualizer-surface__field.is-locked[data-v-548becb1] {\r\n  border-color: var(--acu-border);\r\n  background: color-mix(in srgb, var(--acu-warning) 8%, transparent);\n}\n.acu-visualizer-surface__field.is-actions-active[data-v-548becb1]:not(.is-locked) {\r\n  background: color-mix(in srgb, var(--acu-accent) 6%, transparent);\n}\n.acu-visualizer-surface__footer[data-v-548becb1] {\r\n  flex: 0 0 auto;\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\r\n  padding: 12px 16px;\r\n  border-top: 1px solid var(--acu-border-2);\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__footer-actions[data-v-548becb1] {\r\n  display: flex;\r\n  gap: 8px;\r\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__footer-actions[data-v-548becb1] .acu-btn {\r\n  min-width: 132px;\n}\n.acu-visualizer-surface__mobile-nav-layer[data-v-548becb1] {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100%;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  min-height: 100vh;\r\n  min-height: 100dvh;\r\n  z-index: 9350;\r\n  display: none;\r\n  align-items: stretch;\r\n  justify-content: flex-start;\r\n  padding: var(--acu-safe-top, 0px) var(--acu-safe-right, 0px) var(--acu-safe-bottom, 0px) var(--acu-safe-left, 0px);\r\n  overflow: hidden;\r\n  background: rgba(0, 0, 0, 0.58);\r\n  pointer-events: auto;\r\n  overscroll-behavior: contain;\r\n  animation: visualizer-mobile-nav-layer-in-548becb1 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing[data-v-548becb1] {\r\n  pointer-events: auto;\r\n  animation: visualizer-mobile-nav-layer-out-548becb1 0.15s ease-in both;\n}\n.acu-visualizer-surface__mobile-nav[data-v-548becb1] {\r\n  width: 360px;\r\n  max-width: calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\r\n  height: 100%;\r\n  max-height: 100%;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  align-self: stretch;\r\n  flex: 0 1 360px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  padding: 24px 12px 16px;\r\n  overflow-y: auto;\r\n  border-right: 0;\r\n  background: var(--acu-sidebar-bg);\r\n  box-shadow: var(--acu-shadow);\r\n  pointer-events: auto;\r\n  animation: visualizer-mobile-nav-drawer-in-548becb1 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing\r\n  .acu-visualizer-surface__mobile-nav[data-v-548becb1] {\r\n  animation: visualizer-mobile-nav-drawer-out-548becb1 0.15s ease-in both;\n}\n@supports (width: min(360px, calc(100% - 24px))) {\n.acu-visualizer-surface__mobile-nav[data-v-548becb1] {\r\n    width: min(360px, calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\r\n    flex: 0 0 min(360px, calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n}\n}\n@supports (width: 100dvw) {\n.acu-visualizer-surface__mobile-nav[data-v-548becb1] {\r\n    max-width: calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\n}\n}\n@supports (height: 100dvh) {\n.acu-visualizer-surface__mobile-nav[data-v-548becb1] {\r\n    height: 100%;\r\n    max-height: 100%;\n}\n}\n@keyframes visualizer-mobile-nav-layer-in-548becb1 {\nfrom {\r\n    opacity: 0;\n}\nto {\r\n    opacity: 1;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-in-548becb1 {\nfrom {\r\n    transform: translateX(-100%);\n}\nto {\r\n    transform: translateX(0);\n}\n}\n@keyframes visualizer-mobile-nav-layer-out-548becb1 {\nfrom {\r\n    opacity: 1;\n}\nto {\r\n    opacity: 0;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-out-548becb1 {\nfrom {\r\n    transform: translateX(0);\n}\nto {\r\n    transform: translateX(-100%);\n}\n}\n@media (max-width: 1024px) {\n.acu-visualizer-surface[data-v-548becb1] {\r\n    grid-template-columns: 220px minmax(0, 1fr);\n}\n.acu-visualizer-surface__card-grid[data-v-548becb1] {\r\n    grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));\n}\n.acu-visualizer-surface__topbar[data-v-548becb1] {\r\n    flex-wrap: wrap;\n}\n.acu-visualizer-surface__mode-tabs[data-v-548becb1] {\r\n    order: 3;\r\n    width: min(420px, 100%);\n}\n}\n@media (max-width: 767px) {\n.acu-visualizer-surface[data-v-548becb1] {\r\n    grid-template-columns: 1fr;\r\n    grid-template-rows: minmax(0, 1fr);\n}\n.acu-visualizer-surface__sidebar[data-v-548becb1] {\r\n    display: none;\n}\n.acu-visualizer-surface__topbar[data-v-548becb1] {\r\n    display: grid;\r\n    grid-template-columns: minmax(0, 1fr) auto;\r\n    gap: 8px;\r\n    min-height: 0;\r\n    padding: 8px;\n}\n.acu-visualizer-surface__topbar-context[data-v-548becb1] {\r\n    grid-column: 1;\r\n    display: grid;\r\n    grid-template-columns: auto minmax(0, 1fr) auto;\r\n    align-items: center;\r\n    gap: 8px;\r\n    min-width: 0;\n}\n.acu-visualizer-surface__mobile-menu[data-v-548becb1] {\r\n    display: inline-flex;\n}\n.acu-visualizer-surface__context-items[data-v-548becb1] {\r\n    display: grid;\r\n    grid-template-columns: repeat(2, minmax(0, 1fr));\r\n    gap: 8px;\n}\n.acu-visualizer-surface__context-item[data-v-548becb1]:first-child,\r\n  .acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item[data-v-548becb1] {\r\n    max-width: none;\n}\n.acu-visualizer-surface__mobile-nav-layer[data-v-548becb1] {\r\n    display: flex;\n}\n.acu-visualizer-surface__close[data-v-548becb1] {\r\n    grid-column: 2;\r\n    grid-row: 1;\r\n    align-self: center;\n}\n.acu-visualizer-surface__mode-tabs[data-v-548becb1] {\r\n    grid-column: 1 / -1;\r\n    width: 100%;\n}\n.acu-visualizer-surface__workspace[data-v-548becb1] {\r\n    padding: 10px;\n}\n.acu-visualizer-surface__data-toolbar[data-v-548becb1],\r\n  .acu-visualizer-surface__database-toolbar[data-v-548becb1] {\r\n    align-items: stretch;\r\n    flex-direction: column;\n}\n.acu-visualizer-surface__data-toolbar[data-v-548becb1] .acu-btn,\r\n  .acu-visualizer-surface__database-toolbar[data-v-548becb1] .acu-btn {\r\n    width: 100%;\n}\n.acu-visualizer-surface__data-toolbar-actions[data-v-548becb1] {\r\n    align-items: stretch;\r\n    flex-direction: column;\n}\n.acu-visualizer-surface__pagination[data-v-548becb1] {\r\n    align-items: center;\r\n    flex-direction: row;\r\n    flex-wrap: wrap;\r\n    gap: 6px;\r\n    padding: 2px 0 6px;\n}\n.acu-visualizer-surface__pagination-pages[data-v-548becb1] {\r\n    flex: 0 1 auto;\r\n    align-items: center;\r\n    flex-direction: row;\r\n    flex-wrap: wrap;\r\n    gap: 5px;\n}\n.acu-visualizer-surface__page-button[data-v-548becb1] {\r\n    width: 36px;\r\n    min-width: 36px;\r\n    height: 34px;\r\n    flex: 0 0 36px;\n}\n.acu-visualizer-surface__page-jump[data-v-548becb1] {\r\n    flex: 0 0 54px;\r\n    width: 54px;\n}\n.acu-visualizer-surface__footer[data-v-548becb1] {\r\n    display: grid;\r\n    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);\r\n    align-items: center;\r\n    gap: 8px;\r\n    padding: 8px;\n}\n.acu-visualizer-surface__footer > span[data-v-548becb1] {\r\n    min-width: 0;\r\n    overflow: hidden;\r\n    text-overflow: ellipsis;\r\n    white-space: nowrap;\n}\n.acu-visualizer-surface__footer-actions[data-v-548becb1] {\r\n    display: grid;\r\n    grid-template-columns: repeat(2, minmax(0, 1fr));\r\n    gap: 6px;\n}\n.acu-visualizer-surface__footer-actions[data-v-548becb1] .acu-btn {\r\n    min-width: 0;\r\n    width: 100%;\n}\n}\n@media (max-width: 480px) {\n.acu-visualizer-surface__card-grid[data-v-548becb1] {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__fields[data-v-548becb1] {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__mode-tabs[data-v-548becb1] {\r\n    width: 100%;\n}\n.acu-visualizer-surface__conflict-actions[data-v-548becb1] {\r\n    display: flex;\r\n    margin: 8px 0 0;\n}\n.acu-visualizer-surface__footer[data-v-548becb1] {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__footer > span[data-v-548becb1] {\r\n    display: none;\n}\n}\r\n", "src/presentation-v2/surfaces/visualizer/VisualizerSurface.vue#style-0-548becb1");
+var VisualizerSurface_vue_vue_type_style_index_0_scoped_548becb1_lang = null;
 
 const _hoisted_1$1 = {
 	class: "acu-visualizer-surface__sidebar",
@@ -179963,6 +181157,7 @@ function _sfc_render$1(_ctx, _cache, $props, $setup, $data, $options) {
 				{
 					key: 0,
 					class: normalizeClass(["acu-visualizer-surface__mobile-nav-layer", { "is-closing": $setup.isMobileNavClosing }]),
+					"data-tt-mobile-surface": "backdrop",
 					onClick: withModifiers($setup.closeMobileNav, ["self"])
 				},
 				[createBaseVNode("aside", {
@@ -179996,7 +181191,7 @@ function _sfc_render$1(_ctx, _cache, $props, $setup, $data, $options) {
 		/* NEED_HYDRATION */
 	);
 }
-var VisualizerSurface = /* @__PURE__ */ _export_sfc(_sfc_main$1, [["render", _sfc_render$1], ["__scopeId", "data-v-bdfc6d3c"]]);
+var VisualizerSurface = /* @__PURE__ */ _export_sfc(_sfc_main$1, [["render", _sfc_render$1], ["__scopeId", "data-v-548becb1"]]);
 
 /**
  * appearance-store — 新 UI 外观偏好。
@@ -180275,8 +181470,8 @@ var _sfc_main = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n#acu-app-v2 {\r\n  --acu-safe-top: max(env(safe-area-inset-top, 0px), var(--acu-native-safe-top, 0px));\r\n  --acu-safe-right: max(env(safe-area-inset-right, 0px), var(--acu-native-safe-right, 0px));\r\n  --acu-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--acu-native-safe-bottom, 0px));\r\n  --acu-safe-left: max(env(safe-area-inset-left, 0px), var(--acu-native-safe-left, 0px));\r\n  box-sizing: border-box;\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-ui);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n#acu-app-v2,#acu-app-v2 * {\r\n  box-sizing: border-box;\n}\n#acu-app-v2 button {\r\n  appearance: none;\r\n  -webkit-appearance: none;\r\n  -webkit-tap-highlight-color: transparent;\n}\n#acu-app-v2 button:focus:not(:focus-visible) {\r\n  outline: none;\r\n  box-shadow: none;\n}\n.acu-v2-app[data-v-34c8b839] {\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-ui);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-app__shell[data-v-34c8b839] {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  z-index: 9000;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100%;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  padding: var(--acu-safe-top) var(--acu-safe-right) var(--acu-safe-bottom) var(--acu-safe-left);\r\n  overflow: hidden;\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-ui);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-app__header[data-v-34c8b839] {\r\n  position: relative;\r\n  z-index: 40;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  min-height: var(--acu-shell-header-height, 50px);\r\n  padding:\r\n    var(--acu-space-2, 8px)\r\n    var(--acu-space-3, 12px)\r\n    var(--acu-space-2, 8px)\r\n    var(--acu-space-5, 20px);\r\n  background: var(--acu-bg-0);\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  flex: 0 0 auto;\n}\n.acu-v2-app__header-left[data-v-34c8b839] {\r\n  display: flex;\r\n  align-items: center;\r\n  min-width: 0;\r\n  gap: var(--acu-space-2, 8px);\r\n  flex: 1 1 auto;\n}\n.acu-v2-app__menu[data-v-34c8b839] {\r\n  display: none;\r\n  flex: 0 0 auto;\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  box-shadow: none;\n}\n.acu-v2-app__menu[data-v-34c8b839]:hover:not(:disabled) {\r\n  background: transparent;\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__page-title[data-v-34c8b839] {\r\n  min-width: 0;\r\n  margin: 0;\r\n  overflow: hidden;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  font-weight: 700;\r\n  line-height: 1.2;\r\n  letter-spacing: 0;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-app__close[data-v-34c8b839] {\r\n  width: var(--acu-shell-header-action-size, 30px);\r\n  height: var(--acu-shell-header-action-size, 30px);\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  line-height: 1;\r\n  cursor: pointer;\r\n  border-radius: var(--acu-radius-sm);\n}\n.acu-v2-app__close[data-v-34c8b839]:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__body[data-v-34c8b839] {\r\n  flex: 1 1 auto;\r\n  display: flex;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  overflow: hidden;\n}\n.acu-v2-app__content[data-v-34c8b839] {\r\n  flex: 1 1 auto;\r\n  display: flex;\r\n  flex-direction: column;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  overflow: hidden;\n}\n.acu-v2-app__mobile-nav-layer[data-v-34c8b839] {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100%;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  min-height: 100vh;\r\n  min-height: 100dvh;\r\n  z-index: 9300;\r\n  display: none;\r\n  align-items: stretch;\r\n  justify-content: flex-start;\r\n  padding: var(--acu-safe-top) var(--acu-safe-right) var(--acu-safe-bottom) var(--acu-safe-left);\r\n  overflow: hidden;\r\n  background: rgba(0, 0, 0, 0.58);\r\n  pointer-events: auto;\r\n  overscroll-behavior: contain;\r\n  animation: mobile-nav-layer-in-34c8b839 0.18s ease-out both;\n}\n.acu-v2-app__mobile-nav-layer.is-closing[data-v-34c8b839] {\r\n  pointer-events: auto;\r\n  animation: mobile-nav-layer-out-34c8b839 0.15s ease-in both;\n}\n.acu-v2-app__mobile-nav[data-v-34c8b839] {\r\n  width: var(--acu-mobile-nav-width, 360px);\r\n  max-width: calc(100% - var(--acu-mobile-nav-edge-gap, 24px) - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\r\n  height: 100%;\r\n  max-height: 100%;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  align-self: stretch;\r\n  flex: 0 1 var(--acu-mobile-nav-width, 360px);\r\n  display: flex;\r\n  flex-direction: column;\r\n  background: var(--acu-sidebar-bg);\r\n  border-right: 0;\r\n  box-shadow: var(--acu-shadow);\r\n  overflow: hidden;\r\n  pointer-events: auto;\r\n  animation: mobile-nav-drawer-in-34c8b839 0.18s ease-out both;\n}\n.acu-v2-app__mobile-nav-layer.is-closing .acu-v2-app__mobile-nav[data-v-34c8b839] {\r\n  animation: mobile-nav-drawer-out-34c8b839 0.15s ease-in both;\n}\n@supports (width: min(1px, 100%)) {\n.acu-v2-app__mobile-nav[data-v-34c8b839] {\r\n    width: min(var(--acu-mobile-nav-width, 360px), calc(100% - var(--acu-mobile-nav-edge-gap, 24px) - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\r\n    flex: 0 0 min(var(--acu-mobile-nav-width, 360px), calc(100% - var(--acu-mobile-nav-edge-gap, 24px) - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n}\n}\n@supports (width: 100dvw) {\n.acu-v2-app__mobile-nav[data-v-34c8b839] {\r\n    max-width: calc(100% - var(--acu-mobile-nav-edge-gap, 24px) - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\n}\n}\n@supports (height: 100dvh) {\n.acu-v2-app__mobile-nav[data-v-34c8b839] {\r\n    height: 100%;\r\n    max-height: 100%;\n}\n}\r\n\r\n/* ── Theme switcher ── */\n.acu-v2-app__header-right[data-v-34c8b839] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--acu-space-1, 4px);\r\n  flex: 0 0 auto;\n}\n.acu-v2-app__theme-switcher[data-v-34c8b839] {\r\n  position: relative;\n}\n.acu-v2-app__theme-btn[data-v-34c8b839] {\r\n  width: var(--acu-shell-header-action-size, 30px);\r\n  height: var(--acu-shell-header-action-size, 30px);\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  cursor: pointer;\r\n  border-radius: var(--acu-radius-sm);\n}\n.acu-v2-app__theme-btn[data-v-34c8b839]:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-menu[data-v-34c8b839] {\r\n  position: absolute;\r\n  top: calc(100% + var(--acu-menu-offset, 6px));\r\n  right: 0;\r\n  z-index: 10;\r\n  margin: 0;\r\n  padding: var(--acu-menu-padding, 4px);\r\n  width: min(var(--acu-menu-width, 300px), calc(100vw - var(--acu-mobile-nav-edge-gap, 24px)));\r\n  min-width: min(var(--acu-menu-min-width, 240px), calc(100vw - var(--acu-mobile-nav-edge-gap, 24px)));\r\n  background: var(--acu-bg-1);\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  box-shadow: var(--acu-shadow);\r\n  animation: theme-menu-in-34c8b839 0.12s ease-out both;\n}\n.acu-v2-app__theme-menu.is-closing[data-v-34c8b839] {\r\n  pointer-events: none;\r\n  animation: theme-menu-out-34c8b839 0.12s ease-in both;\n}\n.acu-v2-app__appearance-section[data-v-34c8b839] {\r\n  min-width: 0;\n}\n.acu-v2-app__appearance-section + .acu-v2-app__appearance-section[data-v-34c8b839] {\r\n  margin-top: var(--acu-menu-section-gap, 8px);\r\n  padding-top: var(--acu-menu-section-gap, 8px);\r\n  border-top: 1px solid var(--acu-border);\n}\n.acu-v2-app__appearance-section-title[data-v-34c8b839] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 700;\r\n  letter-spacing: 0;\n}\n.acu-v2-app__theme-list[data-v-34c8b839] {\r\n  list-style: none;\r\n  margin: var(--acu-space-1, 4px) 0 0;\r\n  padding: 0;\n}\n.acu-v2-app__theme-option[data-v-34c8b839] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: var(--acu-space-2, 8px);\r\n  padding: var(--acu-menu-option-padding-y, 7px) var(--acu-menu-option-padding-x, 10px);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  color: var(--acu-text-2);\r\n  border-radius: var(--acu-radius-sm);\r\n  cursor: pointer;\r\n  user-select: none;\n}\n.acu-v2-app__theme-option[data-v-34c8b839]:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-option.is-active[data-v-34c8b839] {\r\n  color: var(--acu-on-accent);\r\n  background: var(--acu-accent);\r\n  font-weight: 600;\n}\n.acu-v2-app__theme-option-main[data-v-34c8b839] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--acu-space-2, 8px);\r\n  min-width: 0;\r\n  flex: 1 1 auto;\n}\n.acu-v2-app__theme-name[data-v-34c8b839] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-app__theme-tag[data-v-34c8b839] {\r\n  flex: 0 0 auto;\r\n  padding: var(--acu-space-025, 1px) var(--acu-space-125, 5px);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-accent) 12%, transparent);\r\n  color: var(--acu-accent);\r\n  font-size: var(--acu-font-size-micro, 10px);\r\n  font-weight: 600;\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tag[data-v-34c8b839] {\r\n  background: color-mix(in srgb, var(--acu-on-accent) 18%, transparent);\r\n  color: var(--acu-on-accent);\n}\n.acu-v2-app__theme-tools[data-v-34c8b839] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: var(--acu-space-1, 4px);\r\n  flex: 0 0 auto;\r\n  opacity: 0.72;\n}\n.acu-v2-app__theme-tools[data-v-34c8b839] .acu-icon-btn {\r\n  background: transparent;\r\n  color: inherit;\n}\n.acu-v2-app__theme-tools[data-v-34c8b839] .acu-icon-btn:hover:not(:disabled) {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tools[data-v-34c8b839] .acu-icon-btn:hover:not(:disabled) {\r\n  background: color-mix(in srgb, var(--acu-on-accent) 18%, transparent);\r\n  color: var(--acu-on-accent);\n}\n.acu-v2-app__theme-tools[data-v-34c8b839] .acu-icon-btn--danger:hover:not(:disabled) {\r\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\r\n  color: var(--acu-danger);\n}\n.acu-v2-app__theme-option:hover .acu-v2-app__theme-tools[data-v-34c8b839],\r\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tools[data-v-34c8b839] {\r\n  opacity: 1;\n}\n.acu-v2-app__theme-swatch[data-v-34c8b839] {\r\n  display: block;\r\n  width: var(--acu-menu-swatch-size, 18px);\r\n  height: var(--acu-menu-swatch-size, 18px);\r\n  border-radius: 999px;\r\n  flex: 0 0 var(--acu-menu-swatch-size, 18px);\r\n  background: linear-gradient(\r\n    135deg,\r\n    var(--acu-theme-swatch-bg) 0 56%,\r\n    var(--acu-theme-swatch-accent) 56% 100%\r\n  );\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-border-2) 72%, transparent);\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-swatch[data-v-34c8b839] {\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-on-accent) 62%, transparent);\n}\n.acu-v2-app__theme-menu-footer[data-v-34c8b839] {\r\n  display: flex;\r\n  justify-content: stretch;\r\n  margin-top: var(--acu-space-1, 4px);\r\n  padding:\r\n    var(--acu-menu-option-padding-y, 7px)\r\n    var(--acu-space-150, 6px)\r\n    var(--acu-space-1, 4px);\r\n  border-top: 1px solid var(--acu-border);\n}\n.acu-v2-app__theme-menu-footer[data-v-34c8b839] .acu-file-button,\r\n.acu-v2-app__theme-menu-footer[data-v-34c8b839] .acu-btn {\r\n  width: 100%;\n}\n.acu-v2-app__scale-heading[data-v-34c8b839] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: var(--acu-space-2, 8px);\r\n  margin-bottom: var(--acu-space-175, 7px);\n}\n.acu-v2-app__scale-current[data-v-34c8b839] {\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 600;\n}\n.acu-v2-app__scale-control[data-v-34c8b839] {\r\n  width: 100%;\n}\n@keyframes theme-menu-in-34c8b839 {\nfrom {\r\n    opacity: 0;\r\n    transform: translateY(-4px);\n}\nto {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\n}\n@keyframes theme-menu-out-34c8b839 {\nfrom {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\nto {\r\n    opacity: 0;\r\n    transform: translateY(-4px);\n}\n}\n@keyframes mobile-nav-layer-in-34c8b839 {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes mobile-nav-drawer-in-34c8b839 {\nfrom { transform: translateX(-100%);\n}\nto { transform: translateX(0);\n}\n}\n@keyframes mobile-nav-layer-out-34c8b839 {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes mobile-nav-drawer-out-34c8b839 {\nfrom { transform: translateX(0);\n}\nto { transform: translateX(-100%);\n}\n}\n@media (max-width: 720px) {\n.acu-v2-app__header[data-v-34c8b839] {\r\n    min-height: var(--acu-shell-header-height-compact, 48px);\r\n    padding: var(--acu-space-2, 8px) var(--acu-space-250, 10px);\n}\n.acu-v2-app__header-left[data-v-34c8b839] {\r\n    gap: var(--acu-space-150, 6px);\n}\n.acu-v2-app__menu[data-v-34c8b839] {\r\n    display: inline-flex;\n}\n.acu-v2-app__page-title[data-v-34c8b839] {\r\n    font-size: var(--acu-font-size-page-title-compact, 18px);\n}\n.acu-v2-app__desktop-sidebar[data-v-34c8b839] {\r\n    display: none;\n}\n.acu-v2-app__mobile-nav-layer[data-v-34c8b839] {\r\n    display: flex;\n}\n}\r\n", "src/presentation-v2/App.vue#style-0-34c8b839");
-var App_vue_vue_type_style_index_0_scoped_34c8b839_lang = null;
+injectSfcStyle("\n#acu-app-v2 {\r\n  /* TT Layout ABI（TauriTavern dev docs/API/Layout.md §1.1）：\r\n     native-safe 绑到宿主 --tt-inset-*（Android 原生注入 / iOS env 兜底）；bottom 额外并入\r\n     surface-local --tt-ime-bottom（宿主把键盘 inset 注入到 fullscreen-window surface root，即本元素）。\r\n     宿主变量不存在（原版 SillyTavern / 桌面浏览器）时回退 0px，桌面零影响。 */\r\n  --acu-native-safe-top: max(var(--tt-inset-top, 0px), 0px);\r\n  --acu-native-safe-right: max(var(--tt-inset-right, 0px), 0px);\r\n  --acu-native-safe-bottom: max(var(--tt-inset-bottom, 0px), var(--tt-ime-bottom, 0px), 0px);\r\n  --acu-native-safe-left: max(var(--tt-inset-left, 0px), 0px);\r\n  --acu-safe-top: max(env(safe-area-inset-top, 0px), var(--acu-native-safe-top, 0px));\r\n  --acu-safe-right: max(env(safe-area-inset-right, 0px), var(--acu-native-safe-right, 0px));\r\n  --acu-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--acu-native-safe-bottom, 0px));\r\n  --acu-safe-left: max(env(safe-area-inset-left, 0px), var(--acu-native-safe-left, 0px));\r\n  /* TT 移动端 geometry firewall 会把 fullscreen-window root 强制 position:fixed（产生层叠上下文）；\r\n     预置与 shell 同级的 z-index 保持整体层级不回退。非定位元素（桌面/原版 ST）该声明被忽略。 */\r\n  z-index: 9000;\r\n  box-sizing: border-box;\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-ui);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n#acu-app-v2,#acu-app-v2 * {\r\n  box-sizing: border-box;\n}\n#acu-app-v2 button {\r\n  appearance: none;\r\n  -webkit-appearance: none;\r\n  -webkit-tap-highlight-color: transparent;\n}\n#acu-app-v2 button:focus:not(:focus-visible) {\r\n  outline: none;\r\n  box-shadow: none;\n}\n.acu-v2-app[data-v-6b9939b9] {\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-ui);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-app__shell[data-v-6b9939b9] {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  z-index: 9000;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100%;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  padding: var(--acu-safe-top) var(--acu-safe-right) var(--acu-safe-bottom) var(--acu-safe-left);\r\n  overflow: hidden;\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-ui);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-app__header[data-v-6b9939b9] {\r\n  position: relative;\r\n  z-index: 40;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  min-height: var(--acu-shell-header-height, 50px);\r\n  padding:\r\n    var(--acu-space-2, 8px)\r\n    var(--acu-space-3, 12px)\r\n    var(--acu-space-2, 8px)\r\n    var(--acu-space-5, 20px);\r\n  background: var(--acu-bg-0);\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  flex: 0 0 auto;\n}\n.acu-v2-app__header-left[data-v-6b9939b9] {\r\n  display: flex;\r\n  align-items: center;\r\n  min-width: 0;\r\n  gap: var(--acu-space-2, 8px);\r\n  flex: 1 1 auto;\n}\n.acu-v2-app__menu[data-v-6b9939b9] {\r\n  display: none;\r\n  flex: 0 0 auto;\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  box-shadow: none;\n}\n.acu-v2-app__menu[data-v-6b9939b9]:hover:not(:disabled) {\r\n  background: transparent;\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__page-title[data-v-6b9939b9] {\r\n  min-width: 0;\r\n  margin: 0;\r\n  overflow: hidden;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  font-weight: 700;\r\n  line-height: 1.2;\r\n  letter-spacing: 0;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-app__close[data-v-6b9939b9] {\r\n  width: var(--acu-shell-header-action-size, 30px);\r\n  height: var(--acu-shell-header-action-size, 30px);\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  line-height: 1;\r\n  cursor: pointer;\r\n  border-radius: var(--acu-radius-sm);\n}\n.acu-v2-app__close[data-v-6b9939b9]:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__body[data-v-6b9939b9] {\r\n  flex: 1 1 auto;\r\n  display: flex;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  overflow: hidden;\n}\n.acu-v2-app__content[data-v-6b9939b9] {\r\n  flex: 1 1 auto;\r\n  display: flex;\r\n  flex-direction: column;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  overflow: hidden;\n}\n.acu-v2-app__mobile-nav-layer[data-v-6b9939b9] {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100%;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  min-height: 100vh;\r\n  min-height: 100dvh;\r\n  z-index: 9300;\r\n  display: none;\r\n  align-items: stretch;\r\n  justify-content: flex-start;\r\n  padding: var(--acu-safe-top) var(--acu-safe-right) var(--acu-safe-bottom) var(--acu-safe-left);\r\n  overflow: hidden;\r\n  background: rgba(0, 0, 0, 0.58);\r\n  pointer-events: auto;\r\n  overscroll-behavior: contain;\r\n  animation: mobile-nav-layer-in-6b9939b9 0.18s ease-out both;\n}\n.acu-v2-app__mobile-nav-layer.is-closing[data-v-6b9939b9] {\r\n  pointer-events: auto;\r\n  animation: mobile-nav-layer-out-6b9939b9 0.15s ease-in both;\n}\n.acu-v2-app__mobile-nav[data-v-6b9939b9] {\r\n  width: var(--acu-mobile-nav-width, 360px);\r\n  max-width: calc(100% - var(--acu-mobile-nav-edge-gap, 24px) - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\r\n  height: 100%;\r\n  max-height: 100%;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  align-self: stretch;\r\n  flex: 0 1 var(--acu-mobile-nav-width, 360px);\r\n  display: flex;\r\n  flex-direction: column;\r\n  background: var(--acu-sidebar-bg);\r\n  border-right: 0;\r\n  box-shadow: var(--acu-shadow);\r\n  overflow: hidden;\r\n  pointer-events: auto;\r\n  animation: mobile-nav-drawer-in-6b9939b9 0.18s ease-out both;\n}\n.acu-v2-app__mobile-nav-layer.is-closing .acu-v2-app__mobile-nav[data-v-6b9939b9] {\r\n  animation: mobile-nav-drawer-out-6b9939b9 0.15s ease-in both;\n}\n@supports (width: min(1px, 100%)) {\n.acu-v2-app__mobile-nav[data-v-6b9939b9] {\r\n    width: min(var(--acu-mobile-nav-width, 360px), calc(100% - var(--acu-mobile-nav-edge-gap, 24px) - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\r\n    flex: 0 0 min(var(--acu-mobile-nav-width, 360px), calc(100% - var(--acu-mobile-nav-edge-gap, 24px) - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n}\n}\n@supports (width: 100dvw) {\n.acu-v2-app__mobile-nav[data-v-6b9939b9] {\r\n    max-width: calc(100% - var(--acu-mobile-nav-edge-gap, 24px) - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\n}\n}\n@supports (height: 100dvh) {\n.acu-v2-app__mobile-nav[data-v-6b9939b9] {\r\n    height: 100%;\r\n    max-height: 100%;\n}\n}\r\n\r\n/* ── Theme switcher ── */\n.acu-v2-app__header-right[data-v-6b9939b9] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--acu-space-1, 4px);\r\n  flex: 0 0 auto;\n}\n.acu-v2-app__theme-switcher[data-v-6b9939b9] {\r\n  position: relative;\n}\n.acu-v2-app__theme-btn[data-v-6b9939b9] {\r\n  width: var(--acu-shell-header-action-size, 30px);\r\n  height: var(--acu-shell-header-action-size, 30px);\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  cursor: pointer;\r\n  border-radius: var(--acu-radius-sm);\n}\n.acu-v2-app__theme-btn[data-v-6b9939b9]:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-menu[data-v-6b9939b9] {\r\n  position: absolute;\r\n  top: calc(100% + var(--acu-menu-offset, 6px));\r\n  right: 0;\r\n  z-index: 10;\r\n  margin: 0;\r\n  padding: var(--acu-menu-padding, 4px);\r\n  width: min(var(--acu-menu-width, 300px), calc(100vw - var(--acu-mobile-nav-edge-gap, 24px)));\r\n  min-width: min(var(--acu-menu-min-width, 240px), calc(100vw - var(--acu-mobile-nav-edge-gap, 24px)));\r\n  background: var(--acu-bg-1);\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  box-shadow: var(--acu-shadow);\r\n  animation: theme-menu-in-6b9939b9 0.12s ease-out both;\n}\n.acu-v2-app__theme-menu.is-closing[data-v-6b9939b9] {\r\n  pointer-events: none;\r\n  animation: theme-menu-out-6b9939b9 0.12s ease-in both;\n}\n.acu-v2-app__appearance-section[data-v-6b9939b9] {\r\n  min-width: 0;\n}\n.acu-v2-app__appearance-section + .acu-v2-app__appearance-section[data-v-6b9939b9] {\r\n  margin-top: var(--acu-menu-section-gap, 8px);\r\n  padding-top: var(--acu-menu-section-gap, 8px);\r\n  border-top: 1px solid var(--acu-border);\n}\n.acu-v2-app__appearance-section-title[data-v-6b9939b9] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 700;\r\n  letter-spacing: 0;\n}\n.acu-v2-app__theme-list[data-v-6b9939b9] {\r\n  list-style: none;\r\n  margin: var(--acu-space-1, 4px) 0 0;\r\n  padding: 0;\n}\n.acu-v2-app__theme-option[data-v-6b9939b9] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: var(--acu-space-2, 8px);\r\n  padding: var(--acu-menu-option-padding-y, 7px) var(--acu-menu-option-padding-x, 10px);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  color: var(--acu-text-2);\r\n  border-radius: var(--acu-radius-sm);\r\n  cursor: pointer;\r\n  user-select: none;\n}\n.acu-v2-app__theme-option[data-v-6b9939b9]:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-option.is-active[data-v-6b9939b9] {\r\n  color: var(--acu-on-accent);\r\n  background: var(--acu-accent);\r\n  font-weight: 600;\n}\n.acu-v2-app__theme-option-main[data-v-6b9939b9] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: var(--acu-space-2, 8px);\r\n  min-width: 0;\r\n  flex: 1 1 auto;\n}\n.acu-v2-app__theme-name[data-v-6b9939b9] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-app__theme-tag[data-v-6b9939b9] {\r\n  flex: 0 0 auto;\r\n  padding: var(--acu-space-025, 1px) var(--acu-space-125, 5px);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-accent) 12%, transparent);\r\n  color: var(--acu-accent);\r\n  font-size: var(--acu-font-size-micro, 10px);\r\n  font-weight: 600;\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tag[data-v-6b9939b9] {\r\n  background: color-mix(in srgb, var(--acu-on-accent) 18%, transparent);\r\n  color: var(--acu-on-accent);\n}\n.acu-v2-app__theme-tools[data-v-6b9939b9] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  gap: var(--acu-space-1, 4px);\r\n  flex: 0 0 auto;\r\n  opacity: 0.72;\n}\n.acu-v2-app__theme-tools[data-v-6b9939b9] .acu-icon-btn {\r\n  background: transparent;\r\n  color: inherit;\n}\n.acu-v2-app__theme-tools[data-v-6b9939b9] .acu-icon-btn:hover:not(:disabled) {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tools[data-v-6b9939b9] .acu-icon-btn:hover:not(:disabled) {\r\n  background: color-mix(in srgb, var(--acu-on-accent) 18%, transparent);\r\n  color: var(--acu-on-accent);\n}\n.acu-v2-app__theme-tools[data-v-6b9939b9] .acu-icon-btn--danger:hover:not(:disabled) {\r\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\r\n  color: var(--acu-danger);\n}\n.acu-v2-app__theme-option:hover .acu-v2-app__theme-tools[data-v-6b9939b9],\r\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-tools[data-v-6b9939b9] {\r\n  opacity: 1;\n}\n.acu-v2-app__theme-swatch[data-v-6b9939b9] {\r\n  display: block;\r\n  width: var(--acu-menu-swatch-size, 18px);\r\n  height: var(--acu-menu-swatch-size, 18px);\r\n  border-radius: 999px;\r\n  flex: 0 0 var(--acu-menu-swatch-size, 18px);\r\n  background: linear-gradient(\r\n    135deg,\r\n    var(--acu-theme-swatch-bg) 0 56%,\r\n    var(--acu-theme-swatch-accent) 56% 100%\r\n  );\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-border-2) 72%, transparent);\n}\n.acu-v2-app__theme-option.is-active .acu-v2-app__theme-swatch[data-v-6b9939b9] {\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--acu-on-accent) 62%, transparent);\n}\n.acu-v2-app__theme-menu-footer[data-v-6b9939b9] {\r\n  display: flex;\r\n  justify-content: stretch;\r\n  margin-top: var(--acu-space-1, 4px);\r\n  padding:\r\n    var(--acu-menu-option-padding-y, 7px)\r\n    var(--acu-space-150, 6px)\r\n    var(--acu-space-1, 4px);\r\n  border-top: 1px solid var(--acu-border);\n}\n.acu-v2-app__theme-menu-footer[data-v-6b9939b9] .acu-file-button,\r\n.acu-v2-app__theme-menu-footer[data-v-6b9939b9] .acu-btn {\r\n  width: 100%;\n}\n.acu-v2-app__scale-heading[data-v-6b9939b9] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: var(--acu-space-2, 8px);\r\n  margin-bottom: var(--acu-space-175, 7px);\n}\n.acu-v2-app__scale-current[data-v-6b9939b9] {\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 600;\n}\n.acu-v2-app__scale-control[data-v-6b9939b9] {\r\n  width: 100%;\n}\n@keyframes theme-menu-in-6b9939b9 {\nfrom {\r\n    opacity: 0;\r\n    transform: translateY(-4px);\n}\nto {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\n}\n@keyframes theme-menu-out-6b9939b9 {\nfrom {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\nto {\r\n    opacity: 0;\r\n    transform: translateY(-4px);\n}\n}\n@keyframes mobile-nav-layer-in-6b9939b9 {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes mobile-nav-drawer-in-6b9939b9 {\nfrom { transform: translateX(-100%);\n}\nto { transform: translateX(0);\n}\n}\n@keyframes mobile-nav-layer-out-6b9939b9 {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes mobile-nav-drawer-out-6b9939b9 {\nfrom { transform: translateX(0);\n}\nto { transform: translateX(-100%);\n}\n}\n@media (max-width: 720px) {\n.acu-v2-app__header[data-v-6b9939b9] {\r\n    min-height: var(--acu-shell-header-height-compact, 48px);\r\n    padding: var(--acu-space-2, 8px) var(--acu-space-250, 10px);\n}\n.acu-v2-app__header-left[data-v-6b9939b9] {\r\n    gap: var(--acu-space-150, 6px);\n}\n.acu-v2-app__menu[data-v-6b9939b9] {\r\n    display: inline-flex;\n}\n.acu-v2-app__page-title[data-v-6b9939b9] {\r\n    font-size: var(--acu-font-size-page-title-compact, 18px);\n}\n.acu-v2-app__desktop-sidebar[data-v-6b9939b9] {\r\n    display: none;\n}\n.acu-v2-app__mobile-nav-layer[data-v-6b9939b9] {\r\n    display: flex;\n}\n}\r\n", "src/presentation-v2/App.vue#style-0-6b9939b9");
+var App_vue_vue_type_style_index_0_scoped_6b9939b9_lang = null;
 
 const _hoisted_1 = { class: "acu-v2-app" };
 const _hoisted_2 = { class: "acu-v2-app__shell" };
@@ -180470,6 +181665,7 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
 				{
 					key: 0,
 					class: normalizeClass(["acu-v2-app__mobile-nav-layer", { "is-closing": $setup.isMobileNavClosing }]),
+					"data-tt-mobile-surface": "backdrop",
 					onClick: withModifiers($setup.closeMobileNav, ["self"])
 				},
 				[createBaseVNode("aside", {
@@ -180494,7 +181690,7 @@ function _sfc_render(_ctx, _cache, $props, $setup, $data, $options) {
 		/* NEED_PATCH */
 	), [[vShow, $setup.rootShell.isOpen]])]);
 }
-var App = /* @__PURE__ */ _export_sfc(_sfc_main, [["render", _sfc_render], ["__scopeId", "data-v-34c8b839"]]);
+var App = /* @__PURE__ */ _export_sfc(_sfc_main, [["render", _sfc_render], ["__scopeId", "data-v-6b9939b9"]]);
 
 const THEME_STYLE_NODE_ID = 'acu-v2-theme';
 const APP_ROOT_ID = 'acu-app-v2';
@@ -180826,6 +182022,9 @@ function ensureMounted() {
     }
     root.setAttribute('data-acu-host-source', source);
     root.setAttribute('data-acu-host-width', String(hostWidth));
+    // TT Layout ABI：主挂载 root 声明为全屏交互窗口（ExtensionDEV §5 硬 ABI）。
+    // 仅移动端 TauriTavern 的 classifier/firewall/IME 路由会消费该属性；桌面/原版 ST 惰性无影响。
+    applyTtMobileSurface_ACU(root, TT_MOBILE_SURFACE_ACU.FullscreenWindow);
     if (hostWidth > 0 && hostWidth <= 240) {
         logDebug_ACU(`[ACU-V2] narrow host detected: source=${source}, width=${hostWidth}px`);
     }

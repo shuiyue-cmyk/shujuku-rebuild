@@ -403,6 +403,31 @@ describe('VectorIndexPage', () => {
     mount.__resetAcuV2MountForTests();
   });
 
+  it('立即构建失败为跨源被拒时，失败 toast 原样带出 CORS 处置建议（用户可见路径）', async () => {
+    const { mount } = await mountVectorIndexPage({
+      archiveResult: {
+        success: false,
+        skipped: false,
+        errors: ['Embedding 请求失败（retryable）: Embedding 请求网络失败（Failed to fetch）：API 提供商未允许跨源访问（CORS）：请求被浏览器拦下，未拿到任何响应。请为该 embedding/rerank 服务配置允许跨源访问（Access-Control-Allow-Origin），或改用支持 CORS 的中转地址。'],
+      },
+    });
+
+    const buildButton = Array.from(document.querySelectorAll('button'))
+      .find(b => /立即构建交火纪要索引/.test(b.textContent || '')) as HTMLButtonElement | undefined;
+    expect(buildButton).not.toBeUndefined();
+
+    buildButton!.click();
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+
+    const text = document.body.textContent || '';
+    expect(text).toContain('交火索引快照未完成');
+    expect(text).toContain('API 提供商未允许跨源访问（CORS）');
+    expect(text).toContain('或改用支持 CORS 的中转地址');
+
+    mount.__resetAcuV2MountForTests();
+  });
+
   it('非破坏迁移旧索引入口不再渲染', async () => {
     const { mount, migrateLegacy } = await mountVectorIndexPage({
       healthReport: { legacyManifestCount: 1, issues: [] },

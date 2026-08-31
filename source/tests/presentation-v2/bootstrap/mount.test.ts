@@ -68,6 +68,8 @@ describe('mount — 当前文档场景', () => {
     const root = document.getElementById(ROOT_ID);
     expect(root).not.toBeNull();
     expect(root!.parentElement).toBe(document.body);
+    // TT Layout ABI：主挂载 root 声明为 fullscreen-window（宿主仅移动端 TT 消费，桌面惰性）
+    expect(root!.getAttribute('data-tt-mobile-surface')).toBe('fullscreen-window');
 
     // 直接驱动样式运行时，验证 host document 路由（vitest 的 vite 接入会把
     // SFC 真实 <style> 块走 vite 自己的 CSS 管线，绕过 sfc-style-injector，
@@ -238,6 +240,8 @@ describe('mount — 当前文档场景', () => {
 
     const layer = document.querySelector('.acu-v2-app__mobile-nav-layer') as HTMLElement | null;
     expect(layer).not.toBeNull();
+    // 遮罩类浮层声明为 backdrop（不收宿主 safe-area 钳制）
+    expect(layer!.getAttribute('data-tt-mobile-surface')).toBe('backdrop');
     expect(menuButton!.getAttribute('aria-expanded')).toBe('true');
 
     layer!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
@@ -275,6 +279,8 @@ describe('mount — 父文档场景（iframe 模拟）', () => {
     expect(parentRoot).not.toBeNull();
     expect(parentRoot!.parentElement).toBe(parentDom.window.document.body);
     expect(parentRoot!.getAttribute('data-acu-host-source')).toBe('parent-document');
+    // 父文档挂载场景同样要打 TT surface 标（宿主 classifier 只看最外层 document）
+    expect(parentRoot!.getAttribute('data-tt-mobile-surface')).toBe('fullscreen-window');
 
     const childRoot = document.getElementById(ROOT_ID);
     expect(childRoot).toBeNull();
@@ -373,6 +379,11 @@ describe('mount — 父文档场景（iframe 模拟）', () => {
     expect(input!.ownerDocument).toBe(parentDoc);
     expect(input!).toBeInstanceOf(parentDom.window.HTMLInputElement);
     expect(input!).not.toBeInstanceOf(window.HTMLInputElement);
+
+    // 弹窗遮罩层声明为 backdrop
+    const dialogLayer = parentDoc.querySelector('.acu-dialog-layer') as HTMLElement | null;
+    expect(dialogLayer).not.toBeNull();
+    expect(dialogLayer!.getAttribute('data-tt-mobile-surface')).toBe('backdrop');
 
     mount.__resetAcuV2MountForTests();
   });

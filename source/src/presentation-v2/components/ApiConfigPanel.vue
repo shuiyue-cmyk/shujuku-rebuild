@@ -430,6 +430,9 @@ async function loadModelsForActive(): Promise<void> {
   await store.loadModelsForConfig({
     url: activeDraft.url,
     apiKey: activeDraft.apiKey,
+    // 探活必须带上接口协议：claude_messages / gemini_interactions 的模型列表
+    // 与 OpenAI 兼容端点不同源，漏传会让 TT 按 openai_compat 探活、拿不到模型。
+    customApiFormat: activeDraft.customApiFormat,
   });
 }
 

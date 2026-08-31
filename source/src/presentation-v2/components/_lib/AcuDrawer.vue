@@ -2,6 +2,7 @@
   <div
     v-if="isRendered"
     class="acu-v2-drawer-layer"
+    data-tt-mobile-surface="backdrop"
     :class="{ 'is-closing': isClosing }"
     @click.self="requestClose"
     @pointerdown.self="requestClose"

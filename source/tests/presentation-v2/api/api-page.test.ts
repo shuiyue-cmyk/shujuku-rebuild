@@ -47,13 +47,14 @@ async function mountApiPage(settings = createSettings()) {
   vi.doMock('../../../src/service/settings/settings-service', () => ({
     saveSettings_ACU: vi.fn(() => ({ saved: true, storageType: 'memory' })),
   }));
+  const fetchModels = vi.fn(async () => ({ success: true, models: ['m1'] }));
   vi.doMock('../../../src/service/ai/ai-service', () => ({
     getConnectionManagerProfiles_ACU: () => [],
-    fetchAvailableModels_ACU: vi.fn(async () => ({ success: true, models: ['m1'] })),
+    fetchAvailableModels_ACU: fetchModels,
   }));
   const mount = await import('../../../src/presentation-v2/bootstrap/mount');
   await mount.openAcuV2App();
-  return { mount, settings };
+  return { mount, settings, fetchModels };
 }
 
 beforeEach(() => {
@@ -206,6 +207,41 @@ describe('ApiPage', () => {
     expect(settings.apiPresetBindingsByChat['chat-page'].presetName).toBe('first-api');
     expect(page.textContent || '').not.toContain('已保存当前 API 预设');
     expect(document.body.textContent || '').toContain('已保存当前 API 预设');
+
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('「加载模型」按当前草稿的接口协议探活：customApiFormat 透传到 status 请求', async () => {
+    const settings = createSettings();
+    (settings.apiPresets[1].apiConfig as any).customApiFormat = 'claude_messages';
+    const { mount, fetchModels } = await mountApiPage(settings);
+
+    const page = document.querySelector('.acu-v2-api-page') as HTMLElement;
+    const loadButton = Array.from(page.querySelectorAll<HTMLButtonElement>('button'))
+      .find(btn => (btn.textContent || '').includes('加载模型')) as HTMLButtonElement;
+    expect(loadButton).toBeDefined();
+
+    loadButton.click();
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(fetchModels).toHaveBeenCalledTimes(1);
+    expect(fetchModels).toHaveBeenCalledWith('https://beta.test', '', 'claude_messages');
+
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('未设置接口协议的旧草稿探活回退 openai_compat（预设读取默认值）', async () => {
+    const { mount, fetchModels } = await mountApiPage();
+
+    const page = document.querySelector('.acu-v2-api-page') as HTMLElement;
+    const loadButton = Array.from(page.querySelectorAll<HTMLButtonElement>('button'))
+      .find(btn => (btn.textContent || '').includes('加载模型')) as HTMLButtonElement;
+    loadButton.click();
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(fetchModels).toHaveBeenCalledWith('https://beta.test', '', 'openai_compat');
 
     mount.__resetAcuV2MountForTests();
   });

@@ -1169,6 +1169,14 @@ export async function replaceChatMessage_ACU(messageIndex: number, newContent: s
             logDebug_ACU('[正文优化] 聊天已保存');
 
             emitMessageUpdated_ACU(messageIndex);
+            // [TT 登记] 不接线宿主 reloadCurrentChat 强制重绘：TauriTavern dev 的
+            // reloadCurrentChat（st-context.js:136 导出 → script.js:2229 reloadCurrentChatUnsafe）
+            // 语义是 clearChat({clearData:true}) 后 getChat()/getGroupChat() 从磁盘整表重载，
+            // 三个分支收尾均 emit CHAT_CHANGED（script.js:9141 / :2242 / group-chats.js:372）。
+            // 本库 init.ts handleChatChangedEvent_ACU 会把该事件按「会话切换」处理：
+            // 中止在飞填表/依赖楼层调用、清派生缓存、1200ms 后整库重建，且 clearChat 会
+            // cancelDebouncedChatSave() 吞掉他链挂起的防抖保存——重入风险远大于气泡不刷新的收益。
+            // 已知限制：降级路径数据已落盘 + 已发 MESSAGE_UPDATED，但气泡视图在切聊天前不刷新。
         }
 
         logDebug_ACU(`[正文优化] 消息 ${messageIndex} 已更新完成`);

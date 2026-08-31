@@ -149,11 +149,50 @@ describe('getCharDescription_ACU', () => {
     expect(getCharDescription_ACU()).toBe('嵌套描述');
   });
 
-  it('降级到 stContext.name2_description', () => {
+  it('降级到 stContext.name2_description（ST 兼容环境）', () => {
     mockGetCurrentCharData.mockReturnValue(null);
     mockTopLevelWindow.SillyTavern = {
       getContext: () => ({ name2_description: '最终降级描述' }),
     };
     expect(getCharDescription_ACU()).toBe('最终降级描述');
+  });
+
+  it('优先使用原生 getCharacterCardFields().description，压过 name2_description', () => {
+    // TT dev 的 getContext() 不导出 name2_description；卡片字段是裸环境唯一有效来源。
+    mockGetCurrentCharData.mockReturnValue(null);
+    const getCharacterCardFields = vi.fn(() => ({ description: '原生卡面描述', personality: '冷淡' }));
+    mockTopLevelWindow.SillyTavern = {
+      getContext: () => ({ getCharacterCardFields, name2_description: '旧扁平描述' }),
+    };
+    expect(getCharDescription_ACU()).toBe('原生卡面描述');
+    expect(getCharacterCardFields).toHaveBeenCalledTimes(1);
+  });
+
+  it('getCharacterCardFields 返回空描述时仍回落到 name2_description', () => {
+    mockGetCurrentCharData.mockReturnValue(null);
+    mockTopLevelWindow.SillyTavern = {
+      getContext: () => ({
+        getCharacterCardFields: () => ({ description: '' }),
+        name2_description: '旧扁平描述',
+      }),
+    };
+    expect(getCharDescription_ACU()).toBe('旧扁平描述');
+  });
+
+  it('getCharacterCardFields 抛异常时不吞掉 name2_description 降级', () => {
+    mockGetCurrentCharData.mockReturnValue(null);
+    mockTopLevelWindow.SillyTavern = {
+      getContext: () => ({
+        getCharacterCardFields: () => { throw new Error('宿主未就绪'); },
+        name2_description: '旧扁平描述',
+      }),
+    };
+    expect(getCharDescription_ACU()).toBe('旧扁平描述');
+  });
+
+  it('宿主完全没有角色卡字段接口时返回空串', () => {
+    mockGetCurrentCharData.mockReturnValue(null);
+    mockTopLevelWindow.SillyTavern = { getContext: () => ({}) };
+    expect(getCharDescription_ACU()).toBe('');
   });
 });

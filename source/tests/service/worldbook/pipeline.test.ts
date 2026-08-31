@@ -15,7 +15,7 @@ const {
   mockIsWorldbookApiAvailable,
   mockGwGetLorebookEntries, mockGwSetLorebookEntries,
   mockGwCreateLorebookEntries, mockGwDeleteLorebookEntries,
-  mockListLorebooks, mockGwGetWorldBooks, mockNormalizeLorebookEntriesForRead, mockResolveLorebookNameFromList,
+  mockListLorebooks, mockGwGetWorldBooks, mockGwGetWorldBooksWithEntriesViaNative, mockNormalizeLorebookEntriesForRead, mockResolveLorebookNameFromList,
   mockGetCharLorebooks, mockGetChatMessages, mockGetChatLength,
   mockSaveSettings,
   mockGetSortedSheetKeys, mockMaterializeDataFromSheetGuide,
@@ -66,6 +66,7 @@ const {
     mockGwDeleteLorebookEntries: vi.fn(async () => {}),
     mockListLorebooks: vi.fn(async () => []),
     mockGwGetWorldBooks: vi.fn(async () => []),
+    mockGwGetWorldBooksWithEntriesViaNative: vi.fn(async () => []),
     mockNormalizeLorebookEntriesForRead: vi.fn((entries: unknown) => Array.isArray(entries) ? entries : []),
     mockResolveLorebookNameFromList: vi.fn((requestedName: unknown, bookList: unknown) => {
       const requested = String(requestedName ?? '').normalize('NFKC').replace(/[\u200B\uFEFF]/g, '').trim();
@@ -167,6 +168,7 @@ vi.mock('../../../src/data/gateways/worldbook-gateway', () => ({
   deleteLorebookEntries_ACU: mockGwDeleteLorebookEntries,
   listLorebooks_ACU: mockListLorebooks,
   getWorldBooks_ACU: mockGwGetWorldBooks,
+  getWorldBooksWithEntriesViaNative_ACU: mockGwGetWorldBooksWithEntriesViaNative,
   normalizeLorebookEntriesForRead_ACU: mockNormalizeLorebookEntriesForRead,
   resolveLorebookNameFromList_ACU: mockResolveLorebookNameFromList,
 }));
@@ -281,6 +283,8 @@ beforeEach(() => {
   mockShouldSuppressWorldbookInjection.mockReturnValue(false);
   mockGwGetLorebookEntries.mockResolvedValue([]);
   mockListLorebooks.mockResolvedValue([]);
+  mockGwGetWorldBooks.mockResolvedValue([]);
+  mockGwGetWorldBooksWithEntriesViaNative.mockResolvedValue([]);
   mockNormalizeLorebookEntriesForRead.mockImplementation((entries: unknown) => Array.isArray(entries) ? entries : []);
   mockResolveLorebookNameFromList.mockClear();
   mockGetCharLorebooks.mockResolvedValue({ primary: null, additional: [] });
@@ -559,19 +563,22 @@ describe('getLorebookEntriesByNames_ACU', () => {
     expect(result).toEqual({});
   });
 
-  it('API 不可用时使用 fallback', async () => {
+  it('API 不可用时使用原生 loadWorldInfo 兜底', async () => {
     mockIsWorldbookApiAvailable.mockReturnValue(false);
-    mockGwGetWorldBooks.mockResolvedValue([
+    mockGwGetWorldBooksWithEntriesViaNative.mockResolvedValue([
       { name: '书A', entries: [{ uid: 1, comment: '条目1' }] },
     ]);
     const result = await getLorebookEntriesByNames_ACU(['书A']);
     expect(result['书A']).toHaveLength(1);
+    // 兜底通道必须按解析后的宿主书名取真实 {name, entries}，不再消费只含名称的 getWorldBooks
+    expect(mockGwGetWorldBooksWithEntriesViaNative).toHaveBeenCalledWith(['书A']);
+    expect(mockGwGetWorldBooks).not.toHaveBeenCalled();
   });
 
   it('fallback 路径复用 gateway 的条目归一化契约', async () => {
     mockIsWorldbookApiAvailable.mockReturnValue(false);
     const sourceEntries = [{ uid: 1, comment: 2024 }];
-    mockGwGetWorldBooks.mockResolvedValue([{ name: '书A', entries: sourceEntries }]);
+    mockGwGetWorldBooksWithEntriesViaNative.mockResolvedValue([{ name: '书A', entries: sourceEntries }]);
     mockNormalizeLorebookEntriesForRead.mockReturnValue([{ uid: 1, comment: '' }]);
 
     const result = await getLorebookEntriesByNames_ACU(['书A']);
@@ -593,13 +600,28 @@ describe('getLorebookEntriesByNames_ACU', () => {
   it('fallback 路径按 Unicode 等价名称匹配宿主真实对象', async () => {
     mockIsWorldbookApiAvailable.mockReturnValue(false);
     mockListLorebooks.mockResolvedValue(['AB\u200BC']);
-    mockGwGetWorldBooks.mockResolvedValue([
+    mockGwGetWorldBooksWithEntriesViaNative.mockResolvedValue([
       { name: 'AB\u200BC', entries: [{ uid: 1, comment: '条目1' }] },
     ]);
 
     const result = await getLorebookEntriesByNames_ACU(['ＡＢＣ']);
 
+    expect(mockGwGetWorldBooksWithEntriesViaNative).toHaveBeenCalledWith(['AB\u200BC']);
     expect(result['ＡＢＣ']).toEqual([{ uid: 1, comment: '条目1', book: 'AB\u200BC' }]);
+  });
+
+  it('fallback 路径不消费 getWorldBooks 的名称列表形状', async () => {
+    // 回归：旧实现把 gwGetWorldBooks_ACU() 的 string[] 当 {name,entries}[] 用，
+    // find(book => book.name) 永远命中不了 → 无酒馆助手时世界书条目恒为空。
+    mockIsWorldbookApiAvailable.mockReturnValue(false);
+    mockListLorebooks.mockResolvedValue(['书A']);
+    mockGwGetWorldBooks.mockResolvedValue(['书A']);
+    mockGwGetWorldBooksWithEntriesViaNative.mockResolvedValue([]);
+
+    const result = await getLorebookEntriesByNames_ACU(['书A']);
+
+    expect(mockGwGetWorldBooks).not.toHaveBeenCalled();
+    expect(result['书A']).toEqual([]);
   });
 
   it('Unicode 归一化后存在歧义时拒绝读取', async () => {

@@ -61,8 +61,8 @@ export function showCustomConfirm_ACU(
   const safeMessage = escapeHtml_ACU(message).replace(/\n/g, '<br>');
 
   const html = `
-    <div class="acu-window-overlay" id="${confirmId}-overlay" style="z-index: 100000;">
-      <div id="${confirmId}" style="
+    <div class="acu-window-overlay" id="${confirmId}-overlay" data-tt-mobile-surface="backdrop" style="z-index: 100000;">
+      <div id="${confirmId}" data-tt-mobile-surface="free-window" style="
         position: fixed;
         top: ${isNarrowScreen ? 'max(calc(env(safe-area-inset-top, 0px) + 72px), 12svh)' : '50%'};
         left: 50%;

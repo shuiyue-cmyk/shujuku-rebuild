@@ -862,6 +862,31 @@ describe('summary-vector-index-archive-service pending 归档', () => {
     expect(result.credentialFingerprint).not.toContain('test-key');
   });
 
+  it('跨源被拒（CORS）类 retryable 失败：可行动提示原样进入用户可见 errors', async () => {
+    // 网关在既有分类点把 TypeError: Failed to fetch 归类为 CORS；archive 层必须原样传导，
+    // 否则「立即构建」toast 只剩 kind，用户看不到该改哪里（errors 是 presentation 唯一读取的文案）。
+    mockIsVectorEmbeddingError.mockReturnValue(true);
+    mockCreateEmbeddings.mockRejectedValueOnce({
+      kind: 'retryable',
+      httpStatus: null,
+      providerCode: null,
+      providerMessage: null,
+      message: 'Embedding 请求网络失败（Failed to fetch）：API 提供商未允许跨源访问（CORS）：请求被浏览器拦下，未拿到任何响应。'
+        + '请为该 embedding/rerank 服务配置允许跨源访问（Access-Control-Allow-Origin），或改用支持 CORS 的中转地址。',
+    });
+
+    const result = await archiveSummaryVectorIndexNow_ACU({ targetMessageIndex: 0, force: true });
+
+    expect(result.success).toBe(false);
+    expect(result.reason).toBe('embedding_request_failed');
+    // 分类语义不变：仍按 retryable 走有限重试，不把跨源误判成终态。
+    expect(result.retryability).toBe('retryable');
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0]).toContain('Embedding 请求失败（retryable）');
+    expect(result.errors[0]).toContain('API 提供商未允许跨源访问（CORS）');
+    expect(result.errors[0]).toContain('或改用支持 CORS 的中转地址');
+  });
+
 
 
   it('T9：多批次有界并发归档时，最终 chunks 的 sequence 序与串行一致', async () => {

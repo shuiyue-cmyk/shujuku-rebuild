@@ -162,7 +162,7 @@ import {
    */
   function showReoptimizationDialog_ACU(messageIndex: number, result: any, originalContent: string) {
     const dialogHtml = `
-      <div class="acu-optimization-dialog acu-dialog-classic" style="
+      <div class="acu-optimization-dialog acu-dialog-classic" data-tt-mobile-surface="free-window" style="
         position: fixed;
         top: 10px;
         left: 50%;
@@ -241,7 +241,7 @@ import {
           ">应用优化</button>
         </div>
       </div>
-      <div id="acu-opt-backdrop" style="
+      <div id="acu-opt-backdrop" data-tt-mobile-surface="backdrop" style="
         position: fixed;
         top: 0; left: 0; right: 0; bottom: 0;
         background: rgba(0, 0, 0, 0.6);

@@ -157,10 +157,20 @@ export const useApiPresetStore = defineStore('acu-v2-api-presets', {
     deletePreset(name: string): boolean {
       return this.applyWriteResult(deleteApiPreset_ACU(name));
     },
-    async loadModelsForConfig(apiConfig: Partial<AcuV2ApiConfig>): Promise<boolean> {
+    /**
+     * 模型探活（status）：customApiFormat 允许未归一化的草稿值，
+     * service 侧按四值白名单校验、非法降级 ''（等价 TT 默认 openai_compat）。
+     */
+    async loadModelsForConfig(
+      apiConfig: Partial<Omit<AcuV2ApiConfig, 'customApiFormat'>> & { customApiFormat?: string },
+    ): Promise<boolean> {
       this.modelLoadStatus = 'loading';
       this.modelLoadError = '';
-      const result = await fetchAvailableModels_ACU(String(apiConfig.url || ''), String(apiConfig.apiKey || ''));
+      const result = await fetchAvailableModels_ACU(
+        String(apiConfig.url || ''),
+        String(apiConfig.apiKey || ''),
+        String(apiConfig.customApiFormat || ''),
+      );
       if (!result.success) {
         this.modelOptions = [];
         this.modelLoadStatus = 'error';

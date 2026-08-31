@@ -42,16 +42,17 @@ async function importStore(settings: any, chatKey = 'chat-A') {
   vi.doMock('../../../src/service/settings/settings-service', () => ({
     saveSettings_ACU: saveSettings,
   }));
+  const fetchModels = vi.fn(async () => ({ success: true, models: ['m1', 'm2'] }));
   vi.doMock('../../../src/service/ai/ai-service', () => ({
     getConnectionManagerProfiles_ACU: () => [{ id: 'profile-beta', name: 'Beta Profile' }],
-    fetchAvailableModels_ACU: vi.fn(async () => ({ success: true, models: ['m1', 'm2'] })),
+    fetchAvailableModels_ACU: fetchModels,
   }));
   const [{ setActivePinia, createPinia }, { useApiPresetStore }] = await Promise.all([
     import('pinia'),
     import('../../../src/presentation-v2/stores/api-preset-store'),
   ]);
   setActivePinia(createPinia());
-  return { store: useApiPresetStore(), saveSettings };
+  return { store: useApiPresetStore(), saveSettings, fetchModels };
 }
 
 beforeEach(() => {
@@ -206,5 +207,36 @@ describe('useApiPresetStore', () => {
     expect(settings.apiPresetBindingsByChat['chat-A'].presetName).toBe('alpha');
     expect(settings.apiConfig.url).toBe('');
     expect(settings.apiConfig.max_tokens).toBe(60000);
+  });
+
+  it('模型探活透传接口协议：loadModelsForConfig 把 customApiFormat 作为第三参交给 service', async () => {
+    const { store, fetchModels } = await importStore(createSettings());
+
+    await expect(store.loadModelsForConfig({
+      url: 'https://alpha.test',
+      apiKey: 'ka',
+      customApiFormat: 'claude_messages',
+    })).resolves.toBe(true);
+
+    expect(fetchModels).toHaveBeenCalledTimes(1);
+    expect(fetchModels).toHaveBeenCalledWith('https://alpha.test', 'ka', 'claude_messages');
+    expect(store.modelOptions).toEqual(['m1', 'm2']);
+    expect(store.modelLoadStatus).toBe('success');
+  });
+
+  it('模型探活：草稿未配置接口协议时传空串（由 service 降级为 TT 默认协议）', async () => {
+    const { store, fetchModels } = await importStore(createSettings());
+
+    await store.loadModelsForConfig({ url: 'https://alpha.test', apiKey: 'ka' });
+
+    expect(fetchModels).toHaveBeenCalledWith('https://alpha.test', 'ka', '');
+  });
+
+  it('模型探活：url/apiKey 缺失时仍以空串占位，不传 undefined', async () => {
+    const { store, fetchModels } = await importStore(createSettings());
+
+    await store.loadModelsForConfig({ customApiFormat: 'gemini_interactions' });
+
+    expect(fetchModels).toHaveBeenCalledWith('', '', 'gemini_interactions');
   });
 });

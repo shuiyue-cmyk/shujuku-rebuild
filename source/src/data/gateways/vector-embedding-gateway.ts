@@ -1,3 +1,5 @@
+import { isCrossOriginFetchRejection_ACU, VECTOR_CROSS_ORIGIN_FAILURE_HINT_ACU } from '../../shared/vector-cross-origin-error';
+
 export type VectorEmbeddingErrorKind_ACU =
     | 'credential' | 'request' | 'provider-contract' | 'retryable' | 'limited-retryable';
 
@@ -158,11 +160,16 @@ async function fetchEmbeddingWithTimeout_ACU(
         return await fetch(endpoint, { ...init, signal: controller.signal });
     } catch (error: any) {
         const isAbort = error?.name === 'AbortError';
+        const rawReason = error?.message || String(error || '未知错误');
         throw new VectorEmbeddingError_ACU({
             kind: 'retryable',
             message: isAbort
                 ? `Embedding 请求超时（${VECTOR_EMBEDDING_TIMEOUT_MS_ACU}ms），已中断。`
-                : `Embedding 请求网络失败：${error?.message || String(error || '未知错误')}`,
+                : isCrossOriginFetchRejection_ACU(error)
+                    // 既有分类点：跨源被拒（不透明 TypeError、无 HTTP 状态）→ 归类为 CORS 并给出可行动建议；
+                    // 识别规则与文案见 shared/vector-cross-origin-error.ts。kind 语义不动，仍按 retryable 有限重试。
+                    ? `Embedding 请求网络失败（${rawReason}）：${VECTOR_CROSS_ORIGIN_FAILURE_HINT_ACU}`
+                    : `Embedding 请求网络失败：${rawReason}`,
             endpoint,
             model,
         });

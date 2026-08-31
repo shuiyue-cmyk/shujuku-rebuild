@@ -19,13 +19,16 @@ import {
 
 import {
   SillyTavern_API_ACU,
-  TavernHelper_API_ACU,
   toastr_API_ACU,
   _set_SillyTavern_API_ACU,
   _set_TavernHelper_API_ACU,
   _set_jQuery_API_ACU,
   _set_toastr_API_ACU
 } from '../../../shared/host-api';
+import {
+  buildTavernHelperCompat_ACU,
+  formatHostCapabilities_ACU
+} from '../../../shared/host-compat/tavern-helper-compat';
 import {
   jQuery_API_ACU
 } from '../../dom-utils';
@@ -119,7 +122,10 @@ import {
 
     try {
         // [重构] 调用 service 层获取模型列表
-        const result = await fetchAvailableModels_ACU(apiUrl, apiKey);
+        // 契约：fetchAvailableModels_ACU(apiUrl, apiKey, customApiFormat?)，第三参默认 ''。
+        // 不传协议时 ai-service 无法按 custom_api_format 分流，模型列表探测与正式调用会走不同通道。
+        const customApiFormat = String(settings_ACU.apiConfig?.customApiFormat || '');
+        const result = await fetchAvailableModels_ACU(apiUrl, apiKey, customApiFormat);
 
         if (!result.success) {
             throw new Error(result.error || '未知错误');
@@ -238,7 +244,13 @@ import {
     // TavernHelper/jQuery/toastr 同理：优先 iframe 自身，fallback 到 parent
     const iframeTH = typeof (window as any).TavernHelper !== 'undefined' ? (window as any).TavernHelper : undefined;
     const parentTH = typeof hostWin.TavernHelper !== 'undefined' ? hostWin.TavernHelper : undefined;
-    _set_TavernHelper_API_ACU(iframeTH || parentTH);
+    const rawTH = iframeTH || parentTH;
+    // [装配] 三级后端兼容适配器：逐方法按 passthrough（旧版酒馆助手全量 API）→
+    // mapped（新版改名 API）→ native（SillyTavern 原生 context）择优解析。
+    // rawTH 为 undefined（TT 裸环境无酒馆助手）时仍然构建，全库 TavernHelper_API_ACU
+    // 调用点因此获得原生降级；原生后端也不可用时逐方法保持"缺失"语义，与旧行为一致。
+    const hostCompat = buildTavernHelperCompat_ACU(rawTH, () => hostWin.SillyTavern?.getContext?.());
+    _set_TavernHelper_API_ACU(hostCompat.api);
 
     const iframe$ = typeof (window as any).$ !== 'undefined' ? (window as any).$ : undefined;
     const parent$ = typeof hostWin.$ !== 'undefined' ? hostWin.$ : undefined;
@@ -256,8 +268,8 @@ import {
     if (!toastr_API_ACU) logWarn_ACU('toastr_API_ACU is MISSING.');
     if (coreApisAreReady_ACU) {
       logDebug_ACU('Core APIs successfully loaded for AutoCardUpdater.');
-      if (!TavernHelper_API_ACU) {
-        logWarn_ACU('[CoreAPI] 未检测到酒馆助手（TavernHelper）：扩展以零依赖模式运行，AI 主 API 调用与世界书读写相关功能将降级。');
+      if (!rawTH) {
+        logWarn_ACU(`[CoreAPI] 未检测到酒馆助手（TavernHelper）：扩展以零依赖模式运行，AI 主 API 调用相关功能将降级；世界书读写按能力表降级到 SillyTavern 原生后端。${formatHostCapabilities_ACU(hostCompat.capabilities)}`);
       }
     } else {
       logError_ACU('Failed to load one or more critical APIs for AutoCardUpdater.');

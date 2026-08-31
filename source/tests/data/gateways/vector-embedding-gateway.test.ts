@@ -196,6 +196,105 @@ describe('createEmbeddings_ACU 错误结构化分类（T3）', () => {
     }
   });
 
+  // ── 跨源（CORS）失败归类：既有分类点（网络失败 catch）上的文案细分 ──
+
+  it('跨源被拒（TypeError: Failed to fetch）→ 归类为 CORS 并给出可行动提示，kind 仍为 retryable', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
+      const promise = createEmbeddings_ACU({
+        endpoint: 'https://embedding.test/v1',
+        apiKey: 'sk-1',
+        model: 'm',
+        input: ['x'],
+      });
+      const assertion = expect(promise).rejects.toMatchObject({
+        name: 'VectorEmbeddingError_ACU',
+        kind: 'retryable',
+        httpStatus: null,
+      });
+      await vi.runAllTimersAsync();
+      await assertion;
+      const message = await promise.then(() => '', (error) => String(error.message));
+      expect(message).toContain('API 提供商未允许跨源访问（CORS）');
+      expect(message).toContain('Access-Control-Allow-Origin');
+      expect(message).toContain('中转地址');
+      // 原始错误文本必须保留，否则真断网/DNS 故障无从排查。
+      expect(message).toContain('Failed to fetch');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('跨源形态覆盖 WebKit / Gecko 文案（Load failed / NetworkError when attempting to fetch resource）', async () => {
+    vi.useFakeTimers();
+    try {
+      for (const raw of ['Load failed', 'NetworkError when attempting to fetch resource.']) {
+        vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError(raw); }));
+        const promise = createEmbeddings_ACU({
+          endpoint: 'https://embedding.test/v1',
+          apiKey: 'sk-1',
+          model: 'm',
+          input: ['x'],
+        });
+        const assertion = expect(promise.catch((error) => error.message)).resolves.toContain('跨源访问（CORS）');
+        await vi.runAllTimersAsync();
+        await assertion;
+        const message = await promise.then(() => '', (error) => String(error.message));
+        expect(message).toContain(raw);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('非跨源形态的网络失败（socket hang up）不贴 CORS 标签，避免误导排查方向', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('socket hang up'); }));
+      const promise = createEmbeddings_ACU({
+        endpoint: 'https://embedding.test/v1',
+        apiKey: 'sk-1',
+        model: 'm',
+        input: ['x'],
+      });
+      const assertion = expect(promise).rejects.toMatchObject({ kind: 'retryable' });
+      await vi.runAllTimersAsync();
+      await assertion;
+      const message = await promise.then(() => '', (error) => String(error.message));
+      expect(message).toBe('Embedding 请求网络失败：socket hang up');
+      expect(message).not.toContain('CORS');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('超时（AbortError）不被误归类为跨源失败', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn((_url: unknown, init: any) => new Promise<Response>((_resolve, reject) => {
+        init.signal.addEventListener('abort', () => {
+          reject(Object.assign(new Error('AbortError: The operation was aborted.'), { name: 'AbortError' }));
+        });
+      }));
+      vi.stubGlobal('fetch', fetchMock);
+      const promise = createEmbeddings_ACU({
+        endpoint: 'https://embedding.test/v1',
+        apiKey: 'sk-1',
+        model: 'm',
+        input: ['x'],
+      });
+      const assertion = expect(promise).rejects.toMatchObject({ kind: 'retryable' });
+      await vi.runAllTimersAsync();
+      await assertion;
+      const message = await promise.then(() => '', (error) => String(error.message));
+      expect(message).not.toContain('CORS');
+      expect(message).toContain('超时');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('P4：请求超时（AbortController 触发）→ retryable，且消息标注超时', async () => {
     vi.useFakeTimers();
     try {

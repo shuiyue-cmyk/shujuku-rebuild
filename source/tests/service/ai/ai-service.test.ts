@@ -197,6 +197,66 @@ describe('fetchAvailableModels_ACU', () => {
     expect(body.custom_include_headers).toBe('');
   });
 
+  // ── custom_api_format 透传（status 探活按接口协议切模型列表来源） ──
+
+  function lastStatusBody(): any {
+    return JSON.parse(mockFetch.mock.calls[mockFetch.mock.calls.length - 1][1].body);
+  }
+
+  it('四值白名单逐个透传：body.custom_api_format 等于入参', async () => {
+    for (const format of ['openai_compat', 'openai_responses', 'claude_messages', 'gemini_interactions']) {
+      mockFetch.mockResolvedValue({ ok: true, json: async () => ({ models: [{ id: 'm' }] }) });
+
+      await fetchAvailableModels_ACU('https://api.test', 'key', format);
+
+      expect(lastStatusBody().custom_api_format).toBe(format);
+      // 探活仍走自定义源，且 base/密钥解析不受协议字段影响。
+      expect(lastStatusBody().chat_completion_source).toBe('custom');
+      expect(lastStatusBody().custom_url).toBe('https://api.test');
+      expect(lastStatusBody().custom_include_headers).toContain('key');
+    }
+    expect(mockFetch).toHaveBeenCalledTimes(4);
+  });
+
+  it('非法 customApiFormat 降级为 ""（TT 后端对非法值 fail fast，必须客户端兜底）', async () => {
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ models: [{ id: 'm' }] }) });
+
+    await fetchAvailableModels_ACU('https://api.test', 'key', 'openai-compa');
+
+    expect(lastStatusBody().custom_api_format).toBe('');
+  });
+
+  it('缺省 / 空白 / 非字符串 customApiFormat 一律降级为 ""', async () => {
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ models: [{ id: 'm' }] }) });
+
+    await fetchAvailableModels_ACU('https://api.test', 'key');
+    expect(lastStatusBody().custom_api_format).toBe('');
+
+    await fetchAvailableModels_ACU('https://api.test', 'key', '   ');
+    expect(lastStatusBody().custom_api_format).toBe('');
+
+    await fetchAvailableModels_ACU('https://api.test', 'key', undefined as any);
+    expect(lastStatusBody().custom_api_format).toBe('');
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('白名单值两侧空白被裁剪后仍按合法值透传', async () => {
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ models: [{ id: 'm' }] }) });
+
+    await fetchAvailableModels_ACU('https://api.test', 'key', '  claude_messages  ');
+
+    expect(lastStatusBody().custom_api_format).toBe('claude_messages');
+  });
+
+  it('normalizeStatusCustomApiFormat_ACU：白名单原样、其余降级 ""', async () => {
+    const { normalizeStatusCustomApiFormat_ACU } = await import('../../../src/service/ai/ai-service');
+    expect(normalizeStatusCustomApiFormat_ACU('gemini_interactions')).toBe('gemini_interactions');
+    expect(normalizeStatusCustomApiFormat_ACU('CLAUDE_MESSAGES')).toBe('');
+    expect(normalizeStatusCustomApiFormat_ACU(null)).toBe('');
+    expect(normalizeStatusCustomApiFormat_ACU(undefined)).toBe('');
+    expect(normalizeStatusCustomApiFormat_ACU({ toString: () => 'openai_responses' })).toBe('openai_responses');
+  });
+
   it('过滤掉无效的模型 ID', async () => {
     mockFetch.mockResolvedValue({
       ok: true,

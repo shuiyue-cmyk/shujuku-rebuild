@@ -4,10 +4,15 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockTavernHelper, mockSillyTavern, mockLogWarn } = vi.hoisted(() => ({
+const { mockTavernHelper, mockSillyTavern, mockLogWarn, mockIsExtensionMode } = vi.hoisted(() => ({
   mockTavernHelper: {} as any,
   mockSillyTavern: {} as any,
   mockLogWarn: vi.fn(),
+  mockIsExtensionMode: vi.fn(() => true),
+}));
+
+vi.mock('../../../src/shared/runtime-env', () => ({
+  isExtensionMode: () => mockIsExtensionMode(),
 }));
 
 vi.mock('../../../src/shared/host-api', () => ({
@@ -30,6 +35,12 @@ import {
   deleteLorebookEntries_ACU,
   listLorebooks_ACU,
   getWorldBooks_ACU,
+  getWorldBooksWithEntriesViaNative_ACU,
+  collectActiveWorldbookNamesFromModule_ACU,
+  getActiveGlobalWorldbookNamesAsync_ACU,
+  getActiveWorldbookNamesForFill_ACU,
+  loadHostWorldInfoModule_ACU,
+  resetHostWorldInfoModuleCache_ACU,
   getCurrentCharPrimaryLorebook_ACU,
   getCharLorebooks_ACU,
 } from '../../../src/data/gateways/worldbook-gateway';
@@ -38,6 +49,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   Object.keys(mockTavernHelper).forEach(k => delete mockTavernHelper[k]);
   Object.keys(mockSillyTavern).forEach(k => delete mockSillyTavern[k]);
+  mockIsExtensionMode.mockReturnValue(true);
 });
 
 describe('isWorldbookApiAvailable_ACU', () => {
@@ -260,12 +272,170 @@ describe('listLorebooks_ACU', () => {
   it('优先使用 TavernHelper', async () => {
     mockTavernHelper.getLorebooks = vi.fn().mockResolvedValue(['book1', 'book2']);
     mockSillyTavern.getWorldBooks = vi.fn().mockResolvedValue(['book3']);
+    mockSillyTavern.getWorldInfoNames = vi.fn(() => ['book4']);
     expect(await listLorebooks_ACU()).toEqual(['book1', 'book2']);
+    expect(mockSillyTavern.getWorldInfoNames).not.toHaveBeenCalled();
   });
 
   it('TavernHelper 不可用时降级到 SillyTavern', async () => {
     mockSillyTavern.getWorldBooks = vi.fn().mockResolvedValue(['book3']);
     expect(await listLorebooks_ACU()).toEqual(['book3']);
+  });
+
+  it('第三级：TT 原生 context.getWorldInfoNames() 返回 string[] 名称列表', async () => {
+    mockSillyTavern.getWorldInfoNames = vi.fn(() => ['剧情书', '设定书']);
+    const result = await listLorebooks_ACU();
+    expect(result).toEqual(['剧情书', '设定书']);
+    expect(mockSillyTavern.getWorldInfoNames).toHaveBeenCalledTimes(1);
+  });
+
+  it('第三级返回值可被 resolveLorebookNameFromList_ACU 直接消费（含不可见字符真实名）', async () => {
+    mockSillyTavern.getWorldInfoNames = vi.fn(() => ['AB\u200BC']);
+    expect(resolveLorebookNameFromList_ACU('ABC', await listLorebooks_ACU())).toBe('AB\u200BC');
+  });
+
+  it('getWorldInfoNames 抛异常时降级为空数组并告警', async () => {
+    mockSillyTavern.getWorldInfoNames = vi.fn(() => { throw new Error('宿主未就绪'); });
+    expect(await listLorebooks_ACU()).toEqual([]);
+    expect(mockLogWarn).toHaveBeenCalledWith(expect.stringContaining('getWorldInfoNames 调用失败'));
+  });
+});
+
+describe('getWorldBooksWithEntriesViaNative_ACU', () => {
+  it('原生 loadWorldInfo 不可用时返回空列表并告警', async () => {
+    expect(await getWorldBooksWithEntriesViaNative_ACU(['书A'])).toEqual([]);
+    expect(mockLogWarn).toHaveBeenCalledWith(expect.stringContaining('loadWorldInfo 不可用'));
+  });
+
+  it('把 entries 字典转成 {name, entries} 旧版扁平条目形状', async () => {
+    const loadWorldInfo = vi.fn(async (name: string) => ({
+      entries: {
+        7: { uid: 7, comment: `${name}-名`, content: `${name}-正文`, key: ['k'], position: 4, role: 0, depth: 2 },
+      },
+    }));
+    mockSillyTavern.loadWorldInfo = loadWorldInfo;
+
+    const books = await getWorldBooksWithEntriesViaNative_ACU(['书A']);
+
+    expect(loadWorldInfo).toHaveBeenCalledWith('书A');
+    expect(books).toEqual([
+      { name: '书A', entries: [expect.objectContaining({ uid: 7, comment: '书A-名', content: '书A-正文', position: 'at_depth_as_system', depth: 2 })] },
+    ]);
+  });
+
+  it('世界书不存在（loadWorldInfo 返回 null）时跳过该书且不产空壳', async () => {
+    mockSillyTavern.loadWorldInfo = vi.fn(async () => null);
+    expect(await getWorldBooksWithEntriesViaNative_ACU(['幽灵书'])).toEqual([]);
+  });
+
+  it('单本抛错不影响其它书', async () => {
+    mockSillyTavern.loadWorldInfo = vi.fn(async (name: string) => {
+      if (name === '坏书') throw new Error('network unavailable');
+      return { entries: { 1: { uid: 1, content: 'ok' } } };
+    });
+
+    const books = await getWorldBooksWithEntriesViaNative_ACU(['坏书', '好书']);
+
+    expect(books.map(b => b.name)).toEqual(['好书']);
+    expect(mockLogWarn).toHaveBeenCalledWith(
+      expect.stringContaining('读取单本世界书失败'),
+      expect.objectContaining({ phase: 'native_load_worldbook', bookName: '坏书' }),
+    );
+  });
+
+  it('宿主书名不得 trim：带空格名按原样读取，仅空串/null 被过滤', async () => {
+    const loadWorldInfo = vi.fn(async () => ({ entries: {} }));
+    mockSillyTavern.loadWorldInfo = loadWorldInfo;
+
+    await getWorldBooksWithEntriesViaNative_ACU(['书A', ' 书A ', '', null as any]);
+
+    // 回归：trim 会让带首尾空格的真实书名 loadWorldInfo not-found 静默丢书（:50-57 宿主名契约）
+    expect(loadWorldInfo).toHaveBeenCalledTimes(2);
+    expect(loadWorldInfo).toHaveBeenCalledWith('书A');
+    expect(loadWorldInfo).toHaveBeenCalledWith(' 书A ');
+  });
+});
+
+describe('激活世界书宿主模块通道（TT 裸环境）', () => {
+  it('collectActiveWorldbookNamesFromModule_ACU 读 selected_world_info live binding 与 getWorldInfoSettings().world_info.globalSelect', () => {
+    const mod = {
+      selected_world_info: ['激活书A', ' 激活书B '],
+      getWorldInfoSettings: () => ({ world_info: { globalSelect: ['全局书C', '激活书A'] } }),
+    };
+    expect(collectActiveWorldbookNamesFromModule_ACU(mod)).toEqual(['激活书A', '激活书B', '全局书C']);
+  });
+
+  it('模块缺少 getWorldInfoSettings 或字段形状异常时安静降级', () => {
+    expect(collectActiveWorldbookNamesFromModule_ACU({ selected_world_info: 'not-an-array' })).toEqual([]);
+    expect(collectActiveWorldbookNamesFromModule_ACU({ getWorldInfoSettings: () => null })).toEqual([]);
+    expect(collectActiveWorldbookNamesFromModule_ACU({
+      getWorldInfoSettings: () => { throw new Error('宿主未就绪'); },
+      selected_world_info: ['仍然读到'],
+    })).toEqual(['仍然读到']);
+    expect(collectActiveWorldbookNamesFromModule_ACU(null)).toEqual([]);
+  });
+
+  it('getActiveGlobalWorldbookNamesAsync_ACU 合并全局链与模块链并去重', async () => {
+    (globalThis as any).selected_world_info = ['全局书A'];
+    try {
+      const names = await getActiveGlobalWorldbookNamesAsync_ACU(async () => ({
+        selected_world_info: ['模块书B', '全局书A'],
+        getWorldInfoSettings: () => ({ world_info: { globalSelect: ['模块书B'] } }),
+      }));
+      expect(names).toEqual(['全局书A', '模块书B']);
+    } finally {
+      delete (globalThis as any).selected_world_info;
+    }
+  });
+
+  it('模块加载抛错时保留全局链结果', async () => {
+    (globalThis as any).power_user = { world_info: { globalSelect: ['旧ST全局书'] } };
+    try {
+      const names = await getActiveGlobalWorldbookNamesAsync_ACU(async () => { throw new Error('import failed'); });
+      expect(names).toEqual(['旧ST全局书']);
+    } finally {
+      delete (globalThis as any).power_user;
+    }
+  });
+
+  it('非酒馆宿主下真实动态 import 失败时降级为 null 并允许重试', async () => {
+    mockIsExtensionMode.mockReturnValue(true);
+    resetHostWorldInfoModuleCache_ACU();
+    await expect(loadHostWorldInfoModule_ACU()).resolves.toBeNull();
+    // 失败不缓存：再次调用会重新尝试（仍失败，但不会把 null 永久钉死）
+    await expect(loadHostWorldInfoModule_ACU()).resolves.toBeNull();
+    resetHostWorldInfoModuleCache_ACU();
+  });
+
+  it('油猴（iframe）模式下不尝试动态 import 宿主模块，直接返回 null', async () => {
+    mockIsExtensionMode.mockReturnValue(false);
+    resetHostWorldInfoModuleCache_ACU();
+    mockLogWarn.mockClear();
+
+    await expect(loadHostWorldInfoModule_ACU()).resolves.toBeNull();
+
+    // 未发起 import ⇒ 不会在 iframe realm 里造出第二个 world-info 实例
+    expect(mockLogWarn).not.toHaveBeenCalledWith(expect.stringContaining('动态 import 宿主 world-info 模块失败'), expect.anything());
+    resetHostWorldInfoModuleCache_ACU();
+  });
+
+  it('getActiveWorldbookNamesForFill_ACU 把模块激活书与角色卡绑定书合并', async () => {
+    mockTavernHelper.getCharLorebooks = vi.fn(async () => ({ primary: '角色主书', additional: ['角色附加书'] }));
+
+    const names = await getActiveWorldbookNamesForFill_ACU(async () => ({
+      selected_world_info: ['模块激活书'],
+      getWorldInfoSettings: () => ({ world_info: { globalSelect: ['模块全局书'] } }),
+    }));
+
+    expect(names).toEqual(['模块激活书', '模块全局书', '角色主书', '角色附加书']);
+  });
+
+  it('宿主模块不可用时 getActiveWorldbookNamesForFill_ACU 仍返回角色卡绑定书', async () => {
+    mockTavernHelper.getCharLorebooks = vi.fn(async () => ({ primary: '角色主书', additional: [] }));
+
+    const names = await getActiveWorldbookNamesForFill_ACU(async () => { throw new Error('import failed'); });
+
+    expect(names).toEqual(['角色主书']);
   });
 });
 

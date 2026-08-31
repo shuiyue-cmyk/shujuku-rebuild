@@ -38,7 +38,7 @@ import {
     hideOptimizationOverlay_ACU();
     
     const overlayHtml = `
-      <div id="acu-optimization-overlay" style="
+      <div id="acu-optimization-overlay" data-tt-mobile-surface="backdrop" style="
         position: fixed;
         top: 0;
         left: 0;

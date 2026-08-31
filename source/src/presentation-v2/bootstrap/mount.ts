@@ -10,6 +10,7 @@
 import type { App as VueApp } from 'vue';
 import { createPinia, type Pinia } from 'pinia';
 import { logDebug_ACU } from '../../shared/utils';
+import { TT_MOBILE_SURFACE_ACU, applyTtMobileSurface_ACU } from '../../shared/tt-mobile-surface';
 import { setSfcStyleHost } from '../build/sfc-style-runtime';
 import App from '../App.vue';
 import { useAppearanceStore } from '../stores/appearance-store';
@@ -60,6 +61,9 @@ function ensureMounted(): MountedState {
   }
   root.setAttribute('data-acu-host-source', source);
   root.setAttribute('data-acu-host-width', String(hostWidth));
+  // TT Layout ABI：主挂载 root 声明为全屏交互窗口（ExtensionDEV §5 硬 ABI）。
+  // 仅移动端 TauriTavern 的 classifier/firewall/IME 路由会消费该属性；桌面/原版 ST 惰性无影响。
+  applyTtMobileSurface_ACU(root, TT_MOBILE_SURFACE_ACU.FullscreenWindow);
   if (hostWidth > 0 && hostWidth <= 240) {
     logDebug_ACU(`[ACU-V2] narrow host detected: source=${source}, width=${hostWidth}px`);
   }

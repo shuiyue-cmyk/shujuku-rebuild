@@ -22,7 +22,7 @@ import {
   createLorebookEntries_ACU as gwCreateLorebookEntries_ACU,
   deleteLorebookEntries_ACU as gwDeleteLorebookEntries_ACU,
   listLorebooks_ACU,
-  getWorldBooks_ACU as gwGetWorldBooks_ACU,
+  getWorldBooksWithEntriesViaNative_ACU as gwGetWorldBooksWithEntriesViaNative_ACU,
   isWorldbookApiAvailable_ACU,
   normalizeLorebookEntriesForRead_ACU,
   resolveLorebookNameFromList_ACU,
@@ -1133,7 +1133,9 @@ export   async function getLorebookEntriesByNames_ACU(bookNames: string[] = []) 
       }
 
       if (!canUseTavernHelper) {
-          fallbackBooks = await gwGetWorldBooks_ACU();
+          // 无酒馆助手时不能再用 gwGetWorldBooks_ACU()：它返回 string[] 名称列表（TT 裸环境
+          // 甚至恒为 []），而下方按 {name, entries} 消费。改为经原生 loadWorldInfo 取真实条目。
+          fallbackBooks = await gwGetWorldBooksWithEntriesViaNative_ACU(readTargets.map(target => target.hostName));
       }
 
       for (const target of readTargets) {
