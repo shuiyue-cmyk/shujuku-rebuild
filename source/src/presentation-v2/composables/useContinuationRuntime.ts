@@ -1,4 +1,5 @@
 import { computed, ref } from 'vue';
+import { isAgentSessionRunning_ACU, logAgentSession_ACU } from '../../service/continuation/agent/agent-session-log';
 import { buildInitialContinuationSettings_ACU, getContinuationRuntime_ACU } from '../../service/continuation/continuation-runtime';
 import { CONTINUATION_AGENT_PROMPT_KEYS_ACU, CONTINUATION_RECOVERABLE_STOP_REASONS_ACU, ContinuationValidationError_ACU, type ContinuationEnvelope_ACU, type ContinuationPromptSegment_ACU, type ContinuationSettings_ACU, type ContinuationTask_ACU, type StageOutline_ACU } from '../../service/continuation/model';
 import type { ContinuationOrchestratorResult_ACU } from '../../service/continuation/continuation-orchestrator';
@@ -31,7 +32,7 @@ export interface ContinuationPromptBundle_ACU {
   agentPrompts: ContinuationSettings_ACU['agentPrompts'];
 }
 
-type ContinuationActionResult_ACU = ContinuationOrchestratorResult_ACU & { preparedTurn?: ContinuationPreparedTurnInstruction_ACU };
+type ContinuationActionResult_ACU = ContinuationOrchestratorResult_ACU & { preparedTurn?: ContinuationPreparedTurnInstruction_ACU; retryHostGeneration?: boolean };
 type ContinuationRuntimeActionResult_ACU = ContinuationActionResult_ACU | ContinuationEnvelope_ACU;
 
 function errorMessage_ACU(error: unknown): string {
@@ -49,6 +50,8 @@ export function useContinuationRuntime() {
   const originInstruction = ref('');
   let initialization: Promise<void> | null = null;
   let activeAction: Promise<boolean> | null = null;
+  // 用户点停止后递增：挡住「发送已落盘、continueTask 尚未启动」这一空档把停止吞掉再开跑。
+  let stopEpoch = 0;
 
   function refresh(): void {
     try {
@@ -82,7 +85,10 @@ export function useContinuationRuntime() {
     const completion = Promise.resolve()
       .then(action)
       .then(async result => {
-      if ('preparedTurn' in result && result.preparedTurn) {
+      if ('retryHostGeneration' in result && result.retryHostGeneration) {
+        const sent = await runtime.bridge.retryHostGeneration();
+        if (!sent) toast.error('宿主重新生成不可用，智能续写已暂停。', { muteable: false });
+      } else if ('preparedTurn' in result && result.preparedTurn) {
         const sent = await runtime.bridge.send(result.preparedTurn);
         if (!sent) toast.error('宿主输入不可用，智能续写已暂停。', { muteable: false });
       }
@@ -163,6 +169,7 @@ export function useContinuationRuntime() {
   async function sendAgentMessage(text: string): Promise<boolean> {
     if (!text.trim()) return false;
     const actionBeforeMessage = activeAction;
+    const epochAtStart = stopEpoch;
     try {
       const result = await runtime.orchestrator.sendAgentMessage({ text });
       envelope.value = result.envelope;
@@ -179,6 +186,7 @@ export function useContinuationRuntime() {
         toast.error('消息已保存，但返回了无法执行的后续动作。', { muteable: false });
         return false;
       }
+      if (stopEpoch !== epochAtStart) return true;
       const started = await run_ACU(() => runtime.orchestrator.continueTask(), actionBeforeMessage !== null, true);
       if (!started) toast.error('消息已保存，但启动续写失败。', { muteable: false });
       return true;
@@ -194,18 +202,28 @@ export function useContinuationRuntime() {
   }
 
   /**
-   * 停止 Agent 循环。刻意不经 run_ACU：busy 恰好在循环运行期间为 true，
+   * 停止 Agent 循环与酒馆正文。刻意不经 run_ACU：busy 恰好在循环运行期间为 true，
    * 走 busy 闸会把停止请求静默吞掉——而那正是用户最需要停止的时刻。
-   * 并发安全由编排器保证：stopTask 先作废租约并 abort 在飞请求，再落盘手动停止态；
-   * 被中断的在途操作会以 STALE 错误收尾，由 run_ACU 的 catch 转成中性提示。
+   * 先递增 stopEpoch、落盘手动停止（清掉 awaiting pending），再打断酒馆生成：
+   * GENERATION_STOPPED 随后的 failHostTurn 会因状态已不是 running 而 STALE 忽略，
+   * 避免把手动停止改写成 retry_ready。会话 running 标记也立刻清掉，按钮才能切回发送。
    */
   async function stopTask(): Promise<void> {
+    stopEpoch += 1;
+    if (isAgentSessionRunning_ACU()) {
+      logAgentSession_ACU({ kind: 'run_failed', title: '已停止', detail: '用户停止', ok: false });
+    }
     try {
       const result = await runtime.orchestrator.stopTask();
       envelope.value = result.envelope;
     } catch (error) {
       toast.error(errorMessage_ACU(error), { muteable: false });
     } finally {
+      try {
+        runtime.bridge.stopHostGeneration();
+      } catch {
+        // 宿主 API 不可用时仍保留已落盘的停止态，避免按钮停了任务没停。
+      }
       refresh();
     }
   }

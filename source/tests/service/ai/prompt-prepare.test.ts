@@ -506,7 +506,7 @@ describe('prepareAIInput_ACU — 显式 tableData 模式', () => {
     expect(result!.tableDataText).not.toContain('全局值');
   });
 
-  it('if seed 使用本次填表消息范围内的全部 AI 上下文，不越界读取用户消息', async () => {
+  it('if seed 使用本次填表消息范围内的用户输入与 AI 上下文', async () => {
     const explicitTableData = {
       sheet_0: {
         uid: 'sheet_0',
@@ -516,17 +516,16 @@ describe('prepareAIInput_ACU — 显式 tableData 模式', () => {
       },
     };
     const messages = [
-      { is_user: true, mes: '用户关键词不应进入 seed' },
+      { is_user: true, mes: '用户关键词应进入 seed' },
       { is_user: false, mes: '范围内 AI 第一层' },
-      { is_user: true, mes: '用户补充仍不应进入 seed' },
+      { is_user: true, mes: '用户补充也应进入 seed' },
       { is_user: false, mes: '范围内 AI 第二层' },
     ];
 
     const result = await prepareAIInput_ACU(messages, 'standard', null, { tableData: explicitTableData });
 
-    expect(result?.conditionalSeedContent).toBe('范围内 AI 第一层\n范围内 AI 第二层');
-    expect(result?.conditionalSeedContent).not.toContain('用户关键词');
-    expect(result?.messagesText).toContain('用户关键词不应进入 seed');
+    expect(result?.conditionalSeedContent).toBe('用户关键词应进入 seed\n范围内 AI 第一层\n用户补充也应进入 seed\n范围内 AI 第二层');
+    expect(result?.messagesText).toContain('用户关键词应进入 seed');
   });
 
   it('if seed 复用 $1 的 extract/exclude 过滤结果，被移除的 AI 关键词不进入 seed', async () => {

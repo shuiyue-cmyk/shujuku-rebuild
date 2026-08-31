@@ -136,4 +136,18 @@ describe('callContinuationInternalAi_ACU prompt cache key', () => {
     expect(mockCallAIWithResolvedPreset_ACU).toHaveBeenCalledOnce();
     expect(mockCallAIWithResolvedPreset_ACU.mock.calls[0]?.[4]).toBeUndefined();
   });
+
+  it('关闭 prompt_cache_key 时仍把 onUsage 传给网关，会话流还能统计缓存命中', async () => {
+    const onUsage = vi.fn();
+    await callContinuationInternalAi_ACU(
+      [{ role: 'user', content: '只要用量不要 key' }],
+      preset_ACU,
+      identity_ACU(),
+      null,
+      { promptCacheEnabled: false, cacheScope: 'agent-main', onUsage },
+    );
+
+    expect(mockCallAIWithResolvedPreset_ACU.mock.calls[0]?.[3]).toEqual(expect.objectContaining({ onUsage }));
+    expect(mockCallAIWithResolvedPreset_ACU.mock.calls[0]?.[4]).toBeUndefined();
+  });
 });

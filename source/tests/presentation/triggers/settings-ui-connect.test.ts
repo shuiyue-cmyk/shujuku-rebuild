@@ -9,13 +9,17 @@ const m = vi.hoisted(() => ({
   logAutoFillSkip: vi.fn(),
   loadAllChatMessages: vi.fn(),
   triggerAutomaticUpdateIfNeeded: vi.fn(),
+  // 「终止」残留的可观测状态：setter 写入，评估入口读取处（live getter）反映同一值。
+  wasStoppedByUser: false,
+  setWasStoppedByUser: vi.fn((value: boolean) => { m.wasStoppedByUser = value; }),
 }));
 
 vi.mock('../../../src/presentation/components/plot-editors', () => ({
   autoFillDebounceTimer_ACU: m.autoFillTimer,
   _set_autoFillDebounceTimer_ACU: m.setAutoFillTimer,
   isAutoUpdatingCard_ACU: false,
-  wasStoppedByUser_ACU: false,
+  get wasStoppedByUser_ACU() { return m.wasStoppedByUser; },
+  _set_wasStoppedByUser_ACU: m.setWasStoppedByUser,
   manualExtraHint_ACU: '',
 }));
 vi.mock('../../../src/service/runtime/state-manager', () => ({
@@ -44,6 +48,7 @@ afterEach(() => {
   vi.clearAllMocks();
   m.autoFillTimer = null;
   m.chatKey = 'chat-a';
+  m.wasStoppedByUser = false;
 });
 
 describe('handleNewMessageDebounced_ACU 防抖隔离', () => {
@@ -91,5 +96,29 @@ describe('handleNewMessageDebounced_ACU 跨聊天身份复检', () => {
     expect(m.logAutoFillSkip).not.toHaveBeenCalled();
     expect(m.evaluateNewMessageAction).toHaveBeenCalledOnce();
     expect(m.triggerAutomaticUpdateIfNeeded).toHaveBeenCalledOnce();
+  });
+});
+
+// 自动填表「终止」后 wasStoppedByUser 残留 true 会让评估闸永久 user_aborted，
+// 自动填表死锁到用户手动重填一次。评估入口必须先复位，再读值传给评估闸。
+describe('handleNewMessageDebounced_ACU 终止残留复位', () => {
+  beforeEach(() => {
+    m.loadAllChatMessages.mockResolvedValue(undefined);
+    m.evaluateNewMessageAction.mockReturnValue({ action: 'update_only', reason: 'ok', lastMessageIndex: 1 });
+  });
+
+  it('上一轮残留 true 时评估入口复位，评估闸收到的是 false', async () => {
+    vi.useFakeTimers();
+    m.wasStoppedByUser = true;
+    const { handleNewMessageDebounced_ACU } = await import('../../../src/presentation/triggers/settings-ui-sync/settings-ui-connect');
+
+    const promise = handleNewMessageDebounced_ACU('GENERATION_ENDED');
+    await vi.advanceTimersByTimeAsync(500);
+    await promise;
+
+    expect(m.setWasStoppedByUser).toHaveBeenCalledWith(false);
+    expect(m.wasStoppedByUser).toBe(false);
+    // 第 4 位实参即评估闸的 userStopped 入参：残留必须已清，否则永久 user_aborted。
+    expect(m.evaluateNewMessageAction.mock.calls[0][3]).toBe(false);
   });
 });

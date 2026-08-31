@@ -1,5 +1,7 @@
+import { getChatArray_ACU } from '../../data/gateways/chat-gateway';
 import { buildDefaultContinuationSettings_ACU } from './defaults';
 import { FirstFloorContinuationStore_ACU } from './continuation-store';
+import { reconcileTaskCursorFromChat_ACU } from './stage-cursor';
 import { acceptPlannedStageRevision_ACU, ContinuationOutlinePlanner_ACU, createPlannedStageRevision_ACU, freezePlannedStageRevision_ACU, type ContinuationOutlinePlanningResult_ACU } from './outline-planner';
 import { listStageOutlineTurns_ACU, resolveContinuationTurnRange_ACU, resolveStageOutlinePacingContext_ACU, validateReplannedStageOutline_ACU, validateStageOutlinePacing_ACU } from './outline-schema';
 import { CONTINUATION_RECOVERABLE_STOP_REASONS_ACU, ContinuationValidationError_ACU, createContinuationError_ACU, type ContinuationEnvelope_ACU, type ContinuationError_ACU, type ContinuationHostGenerationCapture_ACU, type ContinuationReplanConstraints_ACU, type ContinuationRevisionReason_ACU, type ContinuationSettings_ACU, type ContinuationStage_ACU, type ContinuationTask_ACU, type ContinuationWriteGuard_ACU, type StageOutline_ACU, type StageRevision_ACU, type TurnAttemptIdentity_ACU } from './model';
@@ -33,6 +35,11 @@ export interface ReplanContinuationInput_ACU { instruction?: string; }
 export interface AcceptOutlineInput_ACU { outline?: StageOutline_ACU; }
 export interface ReplaceContinuationSettingsInput_ACU { settings: ContinuationEnvelope_ACU['settings']; }
 export interface ContinuationOrchestratorResult_ACU { envelope: ContinuationEnvelope_ACU; task: ContinuationTask_ACU; planning?: Pick<ContinuationOutlinePlanningResult_ACU, 'attempts' | 'apiPreset' | 'requiresReview'>; }
+export interface ContinuationHostTurnActionResult_ACU extends ContinuationOrchestratorResult_ACU {
+  preparedTurn?: ContinuationPreparedTurnInstruction_ACU;
+  /** 当前轮应走酒馆 regenerate/generate，而不是让 Agent 再造一条指令。 */
+  retryHostGeneration?: boolean;
+}
 export interface RecordHostTurnInput_ACU { identity: TurnAttemptIdentity_ACU; capture: ContinuationHostGenerationCapture_ACU; }
 export interface RejectHostTurnInput_ACU { identity: TurnAttemptIdentity_ACU; messageIndex: number; }
 export interface ContinuationPendingHostTurnSnapshot_ACU { settings: ContinuationEnvelope_ACU['settings']; pending: NonNullable<ContinuationTask_ACU['pendingHostTurn']>; }
@@ -201,7 +208,7 @@ function identityMatchesCurrentTurn_ACU(task: ContinuationTask_ACU, identity: Tu
   );
 }
 
-function advanceConfirmedTurn_ACU(task: ContinuationTask_ACU, now: number, timeline: (kind: ContinuationTask_ACU['timeline'][number]['kind'], at: number, fields?: Omit<ContinuationTask_ACU['timeline'][number], 'id' | 'at' | 'kind'>) => ContinuationTask_ACU['timeline'][number]): ContinuationTask_ACU {
+function advanceConfirmedTurn_ACU(task: ContinuationTask_ACU, now: number, timeline: (kind: ContinuationTask_ACU['timeline'][number]['kind'], at: number, fields?: Omit<ContinuationTask_ACU['timeline'][number], 'id' | 'at' | 'kind'>) => ContinuationTask_ACU['timeline'][number], messageIndex?: number): ContinuationTask_ACU {
   const stage = getActiveStage_ACU(task);
   const revision = getActiveRevision_ACU(stage);
   const node = revision.outline.nodes[stage.activeNodeIndex];
@@ -214,7 +221,7 @@ function advanceConfirmedTurn_ACU(task: ContinuationTask_ACU, now: number, timel
     : stage.activeTurnIndex + 1 < node.turns.length
       ? { ...stage, activeTurnIndex: stage.activeTurnIndex + 1, completedTurns }
       : { ...stage, activeNodeIndex: stage.activeNodeIndex + 1, activeTurnIndex: 0, completedTurns };
-  const entries = [...task.timeline, timeline('turn_completed', now, { stageId: stage.stageId, revision: stage.activeRevision, nodeId: node.id, turnId: turn.id })];
+  const entries = [...task.timeline, timeline('turn_completed', now, { stageId: stage.stageId, revision: stage.activeRevision, nodeId: node.id, turnId: turn.id, ...(messageIndex !== undefined ? { messageIndex } : {}) })];
   if (isFinalTurn) entries.push(timeline('stage_completed', now, { stageId: stage.stageId, revision: stage.activeRevision }));
   return { ...task, updatedAt: now, stages: task.stages.map(item => item.stageId === stage.stageId ? nextStage : item), timeline: entries };
 }
@@ -299,12 +306,13 @@ export class ContinuationOrchestrator_ACU {
     });
   }
 
-  async continueTask(): Promise<ContinuationOrchestratorResult_ACU & { preparedTurn?: ContinuationPreparedTurnInstruction_ACU }> {
+  async continueTask(): Promise<ContinuationHostTurnActionResult_ACU> {
     return this.withLease_ACU(async (chatIdentity, lease) => {
       let started: ContinuationEnvelope_ACU | null = null;
       await this.dependencies.store.updatePersistedAtomically(current => {
         const envelope = this.requireEnvelope_ACU(current);
-        const task = this.requireTask_ACU(envelope);
+        const chatLength = Array.isArray(getChatArray_ACU()) ? getChatArray_ACU().length : 0;
+        const task = reconcileTaskCursorFromChat_ACU(this.requireTask_ACU(envelope), chatLength);
         // 等待宿主结果时只有"桥内存里仍有本次生成的活认领"才是真在飞；
         // 重载或事件丢失后的滞留等待轮无法再被归属，丢弃后从当前进度重新继续。
         const staleAwaitingTurn = task.pendingHostTurn?.status === 'awaiting_generation';
@@ -319,9 +327,11 @@ export class ContinuationOrchestrator_ACU {
         if (task.stopReason !== null && !CONTINUATION_RECOVERABLE_STOP_REASONS_ACU.includes(task.stopReason)) {
           fail_ACU('CONTINUATION_TASK_STATE_INVALID', '已停止的任务不可继续');
         }
-        // exhausted 的等待轮是已作废的尝试（归属失败或重试耗尽时落下的）：用户显式继续即
-        // 从同一轮次重新出发，清掉它重新准备指令；轮次游标未 confirm 过，不会跳轮或重复计数。
-        const exhaustedTurn = task.pendingHostTurn?.status === 'exhausted';
+        const pending = task.pendingHostTurn;
+        const promoteHostRetry = pending?.status === 'retry_ready'
+          || (pending?.status === 'exhausted' && task.stopReason === 'generation_retry_exhausted');
+        // 归属失败/输入不可用留下的 exhausted 仍清掉：那些场景不能安全 regenerate。
+        const discardPending = staleAwaitingTurn || (pending?.status === 'exhausted' && !promoteHostRetry);
         // 无阶段（大纲待创建）与已完成阶段（下一阶段待继续）都可以进循环，由主 Agent 派工大纲子代理处理。
         const stage = task.activeStageId ? task.stages.find(item => item.stageId === task.activeStageId) ?? null : null;
         if (stage && stage.status !== 'completed' && (stage.status !== 'running' || !getActiveRevision_ACU(stage).frozen)) {
@@ -329,22 +339,38 @@ export class ContinuationOrchestrator_ACU {
         }
         const now = this.dependencies.now();
         if (task.deadlineAt !== null && now >= task.deadlineAt) {
-          started = this.stopEnvelope_ACU(envelope, 'duration_reached', now);
+          started = this.stopEnvelope_ACU({ ...envelope, activeTask: task }, 'duration_reached', now);
           return started;
         }
         const deadlineAt = task.deadlineAt ?? (envelope.settings.totalDurationMinutes > 0 ? now + envelope.settings.totalDurationMinutes * 60_000 : null);
-        started = { ...envelope, activeTask: { ...task, status: 'running', runStartedAt: task.runStartedAt ?? now, deadlineAt, stopReason: null, lastError: null, updatedAt: now, ...(staleAwaitingTurn || exhaustedTurn ? { pendingHostTurn: null } : {}) } };
+        started = {
+          ...envelope,
+          activeTask: {
+            ...task,
+            status: 'running',
+            runStartedAt: task.runStartedAt ?? now,
+            deadlineAt,
+            stopReason: null,
+            lastError: null,
+            updatedAt: now,
+            pendingHostTurn: promoteHostRetry && pending
+              ? { ...pending, status: 'retry_ready' }
+              : discardPending ? null : pending,
+          },
+        };
         return started;
       }, { chatIdentity });
       const task = started!.activeTask!;
       if (task.status !== 'running') return taskResult_ACU(started!);
+      if (task.pendingHostTurn?.status === 'retry_ready') {
+        return { ...taskResult_ACU(started!), retryHostGeneration: true };
+      }
       const controller = new AbortController();
       abortControllersByChat_ACU.set(chatIdentity, controller);
       try {
-        const retryAttempt = task.pendingHostTurn?.status === 'retry_ready' ? task.pendingHostTurn.identity : undefined;
         const preparedTurn = await this.dependencies.executionEngine.prepareCurrentTurnInstruction(
           () => this.isLeaseCurrent_ACU(chatIdentity, lease),
-          retryAttempt,
+          undefined,
           async instruction => (await this.applyOutlineOpWithinLease_ACU(chatIdentity, lease, instruction, 'running')).opResult,
           async edits => this.applyOutlineEditsWithinLease_ACU(chatIdentity, lease, edits, 'running'),
           controller.signal,
@@ -359,8 +385,21 @@ export class ContinuationOrchestrator_ACU {
     });
   }
 
-  async retryCurrentTurn(): Promise<ContinuationOrchestratorResult_ACU & { preparedTurn?: ContinuationPreparedTurnInstruction_ACU }> {
-    return this.continueTask();
+  async retryCurrentTurn(): Promise<ContinuationHostTurnActionResult_ACU> {
+    return this.withLease_ACU(async chatIdentity => {
+      let started: ContinuationEnvelope_ACU | null = null;
+      await this.dependencies.store.updatePersistedAtomically(current => {
+        const envelope = this.requireEnvelope_ACU(current);
+        const task = this.requireTask_ACU(envelope);
+        if (task.pendingHostTurn?.status !== 'retry_ready') {
+          fail_ACU('CONTINUATION_TASK_STATE_INVALID', '当前没有可重试的宿主正文轮次');
+        }
+        const now = this.dependencies.now();
+        started = { ...envelope, activeTask: { ...task, status: 'running', stopReason: null, lastError: null, updatedAt: now } };
+        return started;
+      }, { chatIdentity });
+      return { ...taskResult_ACU(started!), retryHostGeneration: true };
+    });
   }
 
   /** Persists the host attribution boundary before the adapter writes the host textarea. */
@@ -375,16 +414,18 @@ export class ContinuationOrchestrator_ACU {
         const envelope = this.requireEnvelope_ACU(current);
         const task = this.requireTask_ACU(envelope);
         const existing = task.pendingHostTurn;
-        if (task.status !== 'running' || !identityMatchesCurrentTurn_ACU(task, input.identity)
-          || (existing !== undefined && existing !== null && existing.status !== 'retry_ready')) {
+        const retrying = existing?.status === 'retry_ready';
+        const statusOk = task.status === 'running' || (task.status === 'paused' && retrying);
+        if (!statusOk || !identityMatchesCurrentTurn_ACU(task, input.identity) || (existing != null && !retrying)) {
           throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'host_send', '待发送正文已不属于当前轮次', false));
         }
-        const retryCount = existing?.status === 'retry_ready' ? existing.retryCount : 0;
+        const retryCount = retrying ? existing.retryCount : 0;
         const now = this.dependencies.now();
         result = {
           ...envelope,
           activeTask: {
             ...task,
+            status: 'running',
             updatedAt: now,
             pendingHostTurn: { identity: input.identity, capture: input.capture, retryCount, status: 'awaiting_generation' },
             timeline: [...task.timeline, this.timeline_ACU('turn_sent', now, { stageId: input.identity.stageId, revision: input.identity.revision, nodeId: input.identity.nodeId, turnId: input.identity.turnId, attemptId: input.identity.attemptId })],
@@ -529,7 +570,7 @@ export class ContinuationOrchestrator_ACU {
   }
 
   /** T9 calls this only after uniquely attributing a successful host generation to identity. */
-  async confirmCurrentTurn(identity: TurnAttemptIdentity_ACU): Promise<ContinuationOrchestratorResult_ACU> {
+  async confirmCurrentTurn(identity: TurnAttemptIdentity_ACU, messageIndex?: number): Promise<ContinuationOrchestratorResult_ACU> {
     const chatIdentity = this.requireChatIdentity_ACU();
     if (identity.chatIdentity !== chatIdentity) {
       throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'generation_evaluate', '正文结果所属聊天已变化', false));
@@ -551,7 +592,7 @@ export class ContinuationOrchestrator_ACU {
         const now = this.dependencies.now();
         const stage = getActiveStage_ACU(task);
         const isLastTurn = stage.completedTurns + 1 === getActiveRevision_ACU(stage).outline.totalTurns;
-        const progressed = advanceConfirmedTurn_ACU(task, now, this.timeline_ACU.bind(this));
+        const progressed = advanceConfirmedTurn_ACU(task, now, this.timeline_ACU.bind(this), messageIndex);
         const completedTurn: ContinuationTask_ACU = { ...progressed, pendingHostTurn: null };
         if (!isLastTurn) {
           // 轮边界统一落 paused：自动续写从这个可判定状态出发，页面重载后也能手动恢复。

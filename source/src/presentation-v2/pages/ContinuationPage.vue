@@ -7,7 +7,6 @@
         :running="session.running.value"
         :draft="messageDraft"
         :sending="messageSending"
-        :busy="runtime.busy.value"
         :status-text="runtime.statusText.value"
         :stage-text="stageText"
         :completed-turns="runtime.activeStage.value?.completedTurns ?? 0"
@@ -15,13 +14,9 @@
         :revision-text="runtime.activeStage.value ? `revision ${runtime.activeStage.value.activeRevision}` : ''"
         :deadline-text="deadlineText"
         :awaiting-host="runtime.isAwaitingHostResult.value"
-        :can-continue="runtime.canContinue.value"
-        :can-retry="runtime.task.value?.pendingHostTurn?.status === 'retry_ready'"
         @send="sendMessage"
         @update:draft="messageDraft = $event"
         @stop="runtime.stopTask"
-        @continue="runtime.continueTask"
-        @retry="runtime.retryCurrentTurn"
       />
     </AcuPanel>
 

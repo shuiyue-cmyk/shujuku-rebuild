@@ -911,7 +911,7 @@ describe('prepareAIInput_ACU — SQL 模式', () => {
     expect(result!.tableDataText).toContain('-- | row_id | name |');
   });
 
-  it('SQL 模式下忽略显式 tableData，优先使用运行时 DB 数据', async () => {
+  it('SQL 模式下显式 tableData 作为本批次行数据，不再被 live runtime 覆盖', async () => {
     mockCurrentJsonTableData = {
       sheet_0: {
         name: '运行时表',
@@ -936,10 +936,10 @@ describe('prepareAIInput_ACU — SQL 模式', () => {
     const result = await prepareAIInput_ACU([], 'standard', null, { tableData: explicitTableData });
 
     expect(result).not.toBeNull();
-    expect(result!.tableDataText).toContain('CREATE TABLE runtime_table');
-    expect(result!.tableDataText).toContain('运行时值');
-    expect(result!.tableDataText).not.toContain('explicit_table');
-    expect(result!.tableDataText).not.toContain('显式快照值');
+    expect(result!.tableDataText).toContain('CREATE TABLE explicit_table');
+    expect(result!.tableDataText).toContain('显式快照值');
+    expect(result!.tableDataText).not.toContain('runtime_table');
+    expect(result!.tableDataText).not.toContain('运行时值');
   });
 
   it('targetSheetKeys 过滤只输出指定表', async () => {
@@ -1043,6 +1043,46 @@ describe('prepareAIInput_ACU — SQL 模式', () => {
     expect(result!.tableDataText).not.toContain('CREATE TABLE live_table');
     expect(result!.tableDataText).not.toContain('live 值');
     // 关键：不得再次读取 provider（冻结路径直接返回）。
+    expect(mockEnsureStorageProviderReady).not.toHaveBeenCalled();
+  });
+
+  it('显式 tableData 行数据优先于 sqlApplyScope.runtimeData 冻结行', async () => {
+    const frozenRuntimeData: any = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: {
+        uid: 'inventory', name: '冻结表',
+        sourceData: { ddl: 'CREATE TABLE frozen_table (row_id INTEGER PRIMARY KEY, value TEXT);' },
+        content: [['row_id', 'value']],
+        updateConfig: {}, exportConfig: {}, orderNo: 0,
+      },
+    };
+    const bucketSnapshot: any = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: {
+        uid: 'inventory', name: '冻结表',
+        sourceData: { ddl: 'CREATE TABLE frozen_table (row_id INTEGER PRIMARY KEY, value TEXT);' },
+        content: [['row_id', 'value'], ['1', '第一批结果']],
+        updateConfig: {}, exportConfig: {}, orderNo: 0,
+      },
+    };
+    mockEnsureStorageProviderReady.mockClear();
+
+    const result = await prepareAIInput_ACU([], 'standard', null, {
+      tableData: bucketSnapshot,
+      sqlApplyScope: {
+        isolationKey: 'scope-frozen-prompt',
+        templateData: frozenRuntimeData,
+        templateDataWithRows: frozenRuntimeData,
+        activeSheetKeys: ['sheet_0'],
+        skippedSheets: [],
+        runtimeData: frozenRuntimeData,
+      } as any,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.tableDataText).toContain('CREATE TABLE frozen_table');
+    expect(result!.tableDataText).toContain('第一批结果');
+    expect(result!.tableDataText).not.toContain('该表格为空');
     expect(mockEnsureStorageProviderReady).not.toHaveBeenCalled();
   });
 

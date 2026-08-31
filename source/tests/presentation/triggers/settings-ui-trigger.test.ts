@@ -107,4 +107,13 @@ describe('triggerAutomaticUpdateIfNeeded_ACU 并发补跑', () => {
     expect(m.executePlan).toHaveBeenCalledTimes(1);
     expect(m.logSkip).toHaveBeenCalledWith('auto_update_coalesced', { inFlight: true });
   });
+
+  it('自动填表入口复位 wasStoppedByUser（e6f8ef38：残留 true 会永久 user_aborted 死锁）', async () => {
+    const { triggerAutomaticUpdateIfNeeded_ACU } = await import('../../../src/presentation/triggers/settings-ui-sync/settings-ui-trigger');
+    const { _set_wasStoppedByUser_ACU } = await import('../../../src/service/runtime/state-manager');
+    await triggerAutomaticUpdateIfNeeded_ACU();
+    await settleMicrotasks();
+    // 本文件唯一 setter 调用点=入口复位行；删源码该行此断言即红。
+    expect(_set_wasStoppedByUser_ACU).toHaveBeenCalledWith(false);
+  });
 });

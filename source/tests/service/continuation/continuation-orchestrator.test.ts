@@ -196,9 +196,33 @@ describe('ContinuationOrchestrator_ACU', () => {
     const revision = stage.revisions[0];
     const identity = { chatIdentity: 'chat-a', taskId: task.taskId, stageId: stage.stageId, revision: 1, nodeId: revision.outline.nodes[0].id, turnId: revision.outline.nodes[0].turns[0].id, attemptId: 'attempt-a' };
     await recordPendingHostTurn(orchestrator, identity);
-    await orchestrator.confirmCurrentTurn(identity);
-    expect(store.readPersisted()!.activeTask!.stages[0]).toMatchObject({ completedTurns: 1, activeNodeIndex: 0, activeTurnIndex: 1 });
+    await orchestrator.confirmCurrentTurn(identity, 3);
+    const afterConfirm = store.readPersisted()!.activeTask!;
+    expect(afterConfirm.stages[0]).toMatchObject({ completedTurns: 1, activeNodeIndex: 0, activeTurnIndex: 1 });
+    expect(afterConfirm.timeline.some(entry => entry.kind === 'turn_completed' && entry.messageIndex === 3)).toBe(true);
     await expectCode(() => orchestrator.confirmCurrentTurn(identity), 'CONTINUATION_INTERNAL_REQUEST_STALE');
+  });
+
+  it('continueTask 按仍存在的确认楼层回退硬游标，再把校正后的阶段交给 Agent', async () => {
+    const { orchestrator, store, executionEngine } = createOrchestrator();
+    await orchestrator.createTask({ originInstruction: '推进剧情' });
+    await orchestrator.continueTask();
+    const task = store.readPersisted()!.activeTask!;
+    const stage = task.stages[0];
+    const revision = stage.revisions[0];
+    const identity = { chatIdentity: 'chat-a', taskId: task.taskId, stageId: stage.stageId, revision: 1, nodeId: revision.outline.nodes[0].id, turnId: revision.outline.nodes[0].turns[0].id, attemptId: 'attempt-anchor' };
+    await recordPendingHostTurn(orchestrator, identity);
+    await orchestrator.confirmCurrentTurn(identity, 3);
+    expect(store.readPersisted()!.activeTask!.stages[0].completedTurns).toBe(1);
+
+    // 用户退楼：确认过的正文楼层（下标 3）已不在聊天里，游标必须跟着对话走。
+    const persisted = store.readPersisted()!;
+    _set_SillyTavern_API_ACU({ chat: [{ _qrf_continuation: persisted }], chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn().mockResolvedValue(undefined) } as any);
+
+    executionEngine.prepareCurrentTurnInstruction.mockClear();
+    await orchestrator.continueTask();
+    expect(store.readPersisted()!.activeTask!.stages[0].completedTurns).toBe(0);
+    expect(executionEngine.prepareCurrentTurnInstruction).toHaveBeenCalledOnce();
   });
 
   it('pauses at every confirmed turn boundary and exposes auto-continue eligibility', async () => {
@@ -301,13 +325,35 @@ describe('ContinuationOrchestrator_ACU', () => {
     await orchestrator.rejectHostTurnForMissingTags({ identity, messageIndex: 2 });
     expect(store.readPersisted()!.activeTask).toMatchObject({ status: 'paused', stopReason: 'generation_retry_exhausted', pendingHostTurn: { retryCount: 1, status: 'exhausted' }, lastError: { code: 'CONTINUATION_GENERATION_TAGS_MISSING', retryable: false } });
 
-    // 重试耗尽不再是死路：用户显式点继续等于手动追加一次重试——清空作废的等待轮，
-    // 从同一轮次重新出发（轮次未 confirm 过，游标未动，不会跳轮）。
-    await orchestrator.continueTask();
+    // 重试耗尽后点继续：再走一次酒馆 regenerate，不重跑 Agent、不跳轮。
+    const recoveredResult = await orchestrator.continueTask();
     const recovered = store.readPersisted()!.activeTask!;
-    expect(recovered).toMatchObject({ status: 'running', stopReason: null, lastError: null });
-    expect(recovered.pendingHostTurn).toBeNull();
+    expect(recovered).toMatchObject({ status: 'running', stopReason: null, lastError: null, pendingHostTurn: { status: 'retry_ready', identity } });
     expect(recovered.stages[0].completedTurns).toBe(0);
+    expect(recoveredResult.retryHostGeneration).toBe(true);
+  });
+
+  it('retryCurrentTurn 只把 retry_ready 轮交还宿主重生成，不再让 Agent 另造指令', async () => {
+    const { orchestrator, store, executionEngine } = createOrchestrator();
+    await orchestrator.createTask({ originInstruction: '推进剧情' });
+    await orchestrator.continueTask();
+    const task = store.readPersisted()!.activeTask!;
+    const stage = task.stages[0];
+    const revision = stage.revisions[0];
+    const identity = { chatIdentity: 'chat-a', taskId: task.taskId, stageId: stage.stageId, revision: 1, nodeId: revision.outline.nodes[0].id, turnId: revision.outline.nodes[0].turns[0].id, attemptId: 'attempt-retry-a' };
+
+    // 没有可重试的宿主轮时直接拒绝，避免把「重试」当成新的一轮发出去。
+    await expectCode(() => orchestrator.retryCurrentTurn(), 'CONTINUATION_TASK_STATE_INVALID');
+
+    await recordPendingHostTurn(orchestrator, identity);
+    await orchestrator.rejectHostTurnForMissingTags({ identity, messageIndex: 1 });
+    executionEngine.prepareCurrentTurnInstruction.mockClear();
+
+    const result = await orchestrator.retryCurrentTurn();
+    expect(result.retryHostGeneration).toBe(true);
+    expect(result.preparedTurn).toBeUndefined();
+    expect(executionEngine.prepareCurrentTurnInstruction).not.toHaveBeenCalled();
+    expect(store.readPersisted()!.activeTask).toMatchObject({ status: 'running', stopReason: null, lastError: null, pendingHostTurn: { status: 'retry_ready', identity } });
   });
 
   it('accounts failed generations against the retry limit and stays recoverable after exhaustion', async () => {
@@ -333,9 +379,10 @@ describe('ContinuationOrchestrator_ACU', () => {
     await orchestrator.rejectHostTurnForFailedGeneration(identity);
     expect(store.readPersisted()!.activeTask).toMatchObject({ status: 'paused', stopReason: 'generation_retry_exhausted', pendingHostTurn: { retryCount: 1, status: 'exhausted' }, lastError: { code: 'CONTINUATION_GENERATION_FAILED', retryable: false } });
 
-    // 自动链停下后，手动「继续」仍能从当前轮次恢复（衔接可恢复停止语义）。
-    await orchestrator.continueTask();
-    expect(store.readPersisted()!.activeTask).toMatchObject({ status: 'running', stopReason: null, lastError: null });
+    // 自动链停下后，手动「继续」再走一次酒馆 regenerate，不重跑 Agent。
+    const recoveredResult = await orchestrator.continueTask();
+    expect(store.readPersisted()!.activeTask).toMatchObject({ status: 'running', stopReason: null, lastError: null, pendingHostTurn: { status: 'retry_ready' } });
+    expect(recoveredResult.retryHostGeneration).toBe(true);
   });
 
   it('recovers from a host attribution failure (state_invalid) through an explicit continue', async () => {

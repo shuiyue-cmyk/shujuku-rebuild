@@ -265,21 +265,24 @@ describe('ContinuationPage', () => {
 
       typeInto(input, '第一条消息');
       await nextTick();
-      const sendButton = buttonByText(el, '发送')!;
-      sendButton.click();
+      buttonByText(el, '发送')!.click();
       await nextTick();
       await passFirstSendRpmConfirm();
       await vi.waitFor(() => { expect(sendAgentMessage).toHaveBeenCalledOnce(); });
       await nextTick();
-      expect(sendButton.disabled).toBe(true);
+      // 点发送后同一位置切成停止，避免再点一次发送叠一条。
+      expect(buttonByText(el, '发送')).toBeUndefined();
+      const stop = buttonByText(el, '停止');
+      expect(stop).not.toBeUndefined();
 
       typeInto(input, '用户随后改写的草稿');
       await nextTick();
-      sendButton.click();
+      stop!.click();
       await nextTick();
-      // 发送中：既不弹新确认框，也不重复派发。
+      // 发送中：既不弹新确认框，也不重复派发；停止走独立入口。
       expect(useDialogStore().active).toBeNull();
       expect(sendAgentMessage).toHaveBeenCalledOnce();
+      expect(stopTask).toHaveBeenCalledOnce();
 
       resolveSend(true);
       await vi.waitFor(() => { expect(input.value).toBe('用户随后改写的草稿'); });
@@ -296,7 +299,7 @@ describe('ContinuationPage', () => {
     const { app, el } = await mountPage();
     const input = chatInput(el);
 
-    expect(el.textContent).toContain('输入新指令可从当前进度开始新的运行窗口。');
+    expect(el.textContent).toContain('输入新指令后发送即可继续。');
     typeInto(input, '从当前进度继续');
     await nextTick();
     buttonByText(el, '发送')!.click();
@@ -323,7 +326,20 @@ describe('ContinuationPage', () => {
     app.unmount();
   });
 
-  it('任务存在时渲染状态条、会话流空态与继续/停止派发', async () => {
+  it('进行中按 Ctrl+Enter 不发送', async () => {
+    setTask('running');
+    const { app, el } = await mountPage();
+    const input = chatInput(el);
+    typeInto(input, '循环还在跑时不应发出');
+    await nextTick();
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', ctrlKey: true, bubbles: true }));
+    await nextTick();
+    expect(sendAgentMessage).not.toHaveBeenCalled();
+    expect(buttonByText(el, '停止')).not.toBeUndefined();
+    app.unmount();
+  });
+
+  it('任务存在时渲染状态条、会话流空态，空闲只显示发送', async () => {
     setTask();
     const { app, el } = await mountPage();
     expect(el.querySelector('.acu-v2-session-feed')).not.toBeNull();
@@ -332,27 +348,27 @@ describe('ContinuationPage', () => {
     expect(el.textContent).toContain('已完成 3 / 6 轮');
     expect(el.textContent).toContain('大纲 revision 2');
 
-    buttonByText(el, '继续当前轮次')!.click();
-    await nextTick();
-    expect(continueTask).toHaveBeenCalledOnce();
-    // paused 且会话流没有运行标志时不给停止：没有正在跑的循环可停。
-    expect(buttonByText(el, '停止生成')).toBeUndefined();
+    expect(buttonByText(el, '发送')).not.toBeUndefined();
+    expect(buttonByText(el, '停止')).toBeUndefined();
+    expect(buttonByText(el, '继续当前轮次')).toBeUndefined();
+    expect(buttonByText(el, '重试当前轮次')).toBeUndefined();
     app.unmount();
   });
 
-  it('任务状态陈旧为 paused 但会话流显示循环在跑时，仍提供停止生成', async () => {
+  it('任务状态陈旧为 paused 但会话流显示循环在跑时，仍提供停止', async () => {
     const sessionLog = await import('../../../src/service/continuation/agent/agent-session-log');
     setTask();
     const { app, el } = await mountPage();
     try {
-      expect(buttonByText(el, '停止生成')).toBeUndefined();
+      expect(buttonByText(el, '停止')).toBeUndefined();
 
       // UI 发起的循环运行期间 envelope 不刷新，task.status 停留在陈旧的 paused；
       // 会话日志的运行标志才是实时信号，停止按钮必须据它显示。
       sessionLog.beginAgentSessionRun_ACU('第 1 阶段 · 第 1/6 轮');
       await nextTick();
-      const stop = buttonByText(el, '停止生成');
+      const stop = buttonByText(el, '停止');
       expect(stop).not.toBeUndefined();
+      expect(buttonByText(el, '发送')).toBeUndefined();
       stop!.click();
       await nextTick();
       expect(stopTask).toHaveBeenCalledOnce();
@@ -362,18 +378,20 @@ describe('ContinuationPage', () => {
     }
   });
 
-  it('运行中提供停止生成，等待宿主正文时隐藏所有竞争操作并在聊天切换后刷新', async () => {
+  it('运行中与等待宿主正文时都只显示停止，并在聊天切换后刷新', async () => {
     setTask('running');
     const running = await mountPage();
-    buttonByText(running.el, '停止生成')!.click();
+    expect(buttonByText(running.el, '发送')).toBeUndefined();
+    buttonByText(running.el, '停止')!.click();
     await nextTick();
     expect(stopTask).toHaveBeenCalledOnce();
     running.app.unmount();
 
     setTask('running', true);
     const { app, el } = await mountPage();
-    expect(el.textContent).toContain('当前轮次正在等待酒馆的正文生成结束');
-    expect(buttonByText(el, '停止生成')).toBeUndefined();
+    expect(el.textContent).toContain('点「停止」会同时打断 Agent 和酒馆生成');
+    expect(buttonByText(el, '停止')).not.toBeUndefined();
+    expect(buttonByText(el, '发送')).toBeUndefined();
     expect(buttonByText(el, '继续当前轮次')).toBeUndefined();
     chatTick.value += 1;
     await nextTick();

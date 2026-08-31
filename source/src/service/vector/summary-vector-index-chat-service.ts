@@ -13,6 +13,7 @@ import {
     readVectorIndexJsonFile_ACU,
 } from '../../data/storage/vector-index-st-files-storage';
 import { getCurrentCharacterCardName_ACU } from '../../shared/template-preset-utils';
+import { normalizeSummaryVectorIsolationKey_ACU } from '../../shared/summary-vector-index-scope';
 import { isSummaryOrOutlineTable_ACU, logWarn_ACU } from '../../shared/utils';
 import { getChatArray_ACU } from '../chat/chat-service';
 import { currentChatFileIdentifier_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU } from '../runtime/state-manager';
@@ -57,9 +58,13 @@ function getUniqueSummaryVectorIndexSourceTableKeyForRecovery_ACU(): string {
 
 export async function tryRecoverSummaryVectorIndexFromExternalSnapshot_ACU(): Promise<boolean> {
     const chatKey = String(currentChatFileIdentifier_ACU || '').trim();
-    const isolationKey = String(getCurrentIsolationKey_ACU() || '').trim();
+    // 标签隔离已退役：未开启时 isolationKey 为 ''，空串是合法默认槽，不能当缺失。
+    const isolationKey = String(getCurrentIsolationKey_ACU() ?? '');
+    // 聊天槽位键与外置快照身份是两套口径：默认槽 '' 在 manifest 里存的是 canonical 'default'。
+    // 身份比较必须 canonical 对 canonical，否则 '' 槽的候选会被全部拒掉，恢复闸等于没修。
+    const canonicalIsolationKey = normalizeSummaryVectorIsolationKey_ACU(isolationKey);
     const sourceTableKey = getUniqueSummaryVectorIndexSourceTableKeyForRecovery_ACU();
-    if (!chatKey || !isolationKey || !sourceTableKey) return false;
+    if (!chatKey || !sourceTableKey) return false;
 
     const chatName = getCurrentCharacterCardName_ACU();
     const registeredFiles = await loadVectorIndexRegistry_ACU()
@@ -127,7 +132,7 @@ export async function tryRecoverSummaryVectorIndexFromExternalSnapshot_ACU(): Pr
             const blob = loaded.data;
             const manifest = blob?.manifest;
             if (!loaded.ok || !blob || blob.schema !== 'single_file_snapshot' || !manifest?.indexId || manifest.status !== 'ready') continue;
-            if (String(manifest.chatKey || '') !== chatKey || String(manifest.isolationKey || '') !== isolationKey || String(manifest.sourceTableKey || '') !== sourceTableKey) continue;
+            if (String(manifest.chatKey || '') !== chatKey || normalizeSummaryVectorIsolationKey_ACU(manifest.isolationKey) !== canonicalIsolationKey || String(manifest.sourceTableKey || '') !== sourceTableKey) continue;
             validateSingleFileSnapshotIdentity_ACU(manifest, blob, path);
             const revision = Number(manifest.storageIdentity?.revision ?? manifest.snapshot?.revision);
             if (Number.isInteger(revision) && revision >= 1) v2Candidates.push({ path, blob, manifest, revision });
@@ -157,7 +162,7 @@ export async function tryRecoverSummaryVectorIndexFromExternalSnapshot_ACU(): Pr
             const blob = loaded.data;
             const manifest = blob?.manifest;
             if (!loaded.ok || !blob || blob.schema !== 'single_file_snapshot' || !manifest?.indexId || manifest.status !== 'ready') continue;
-            if (String(manifest.chatKey || '') !== chatKey || String(manifest.isolationKey || '') !== isolationKey || String(manifest.sourceTableKey || '') !== sourceTableKey) continue;
+            if (String(manifest.chatKey || '') !== chatKey || normalizeSummaryVectorIsolationKey_ACU(manifest.isolationKey) !== canonicalIsolationKey || String(manifest.sourceTableKey || '') !== sourceTableKey) continue;
             validateSingleFileSnapshotIdentity_ACU(manifest, blob, path);
             legacyCandidates.push({ path, blob, manifest });
         } catch { /* 当前候选不可信，继续同 scope 的下一个候选。 */ }

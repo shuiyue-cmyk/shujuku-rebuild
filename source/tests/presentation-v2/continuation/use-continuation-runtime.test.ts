@@ -5,10 +5,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const harness = vi.hoisted(() => ({
   bridgeSend: vi.fn(async () => true),
+  bridgeRetryHostGeneration: vi.fn(async () => true),
   continueTask: vi.fn(),
   retryCurrentTurn: vi.fn(),
   createTask: vi.fn(),
   stopTask: vi.fn(),
+  stopHostGeneration: vi.fn(),
   replanRemaining: vi.fn(),
   acceptOutline: vi.fn(),
   abandonAndCreate: vi.fn(),
@@ -27,7 +29,7 @@ vi.mock('../../../src/service/continuation/continuation-runtime', () => ({
   // 展示兜底设置：composable 初始化即调用，mock 里给最小骨架即可（测试不断言其内容）。
   buildInitialContinuationSettings_ACU: () => ({}) as any,
   getContinuationRuntime_ACU: () => ({
-    bridge: { send: harness.bridgeSend },
+    bridge: { send: harness.bridgeSend, retryHostGeneration: harness.bridgeRetryHostGeneration, stopHostGeneration: harness.stopHostGeneration },
     orchestrator: {
       continueTask: harness.continueTask,
       retryCurrentTurn: harness.retryCurrentTurn,
@@ -61,6 +63,7 @@ beforeEach(() => {
   harness.read.mockReturnValue(envelope);
   harness.initialize.mockResolvedValue(null);
   harness.bridgeSend.mockResolvedValue(true);
+  harness.bridgeRetryHostGeneration.mockResolvedValue(true);
   harness.continueTask.mockResolvedValue(result);
   harness.createTask.mockResolvedValue(result);
   harness.stopTask.mockResolvedValue(result);
@@ -179,7 +182,7 @@ describe('useContinuationRuntime', () => {
     expect(harness.toastError).toHaveBeenCalled();
   });
 
-  it('停止不经 busy 闸：循环在跑（busy 为 true）时 stopTask 仍直达编排器并刷新状态', async () => {
+  it('停止不经 busy 闸：循环在跑（busy 为 true）时 stopTask 仍直达编排器、打断宿主生成并刷新状态', async () => {
     const { useContinuationRuntime } = await import('../../../src/presentation-v2/composables/useContinuationRuntime');
     const continuation = useContinuationRuntime();
     let release!: (value: unknown) => void;
@@ -190,11 +193,54 @@ describe('useContinuationRuntime', () => {
 
     await continuation.stopTask();
     expect(harness.stopTask).toHaveBeenCalledOnce();
+    expect(harness.stopHostGeneration).toHaveBeenCalledOnce();
     expect(harness.read).toHaveBeenCalled();
 
     release(result);
     await inflight;
     expect(continuation.busy.value).toBe(false);
+  });
+
+  it('发送落盘后、续跑前点停止：不再调用 continueTask', async () => {
+    let resolveSend!: (value: unknown) => void;
+    harness.sendAgentMessage.mockImplementationOnce(() => new Promise(resolve => { resolveSend = resolve; }));
+    const { useContinuationRuntime } = await import('../../../src/presentation-v2/composables/useContinuationRuntime');
+    const continuation = useContinuationRuntime();
+
+    const pending = continuation.sendAgentMessage('先记下这句话');
+    await continuation.stopTask();
+    resolveSend({ ...result, disposition: 'continue_now', shouldContinue: true });
+
+    await expect(pending).resolves.toBe(true);
+    expect(harness.continueTask).not.toHaveBeenCalled();
+    expect(harness.stopHostGeneration).toHaveBeenCalledOnce();
+  });
+
+  it('编排器要求宿主重生成时走 retryHostGeneration 而不是另发一条指令', async () => {
+    harness.continueTask.mockResolvedValueOnce({ ...result, retryHostGeneration: true });
+    const { useContinuationRuntime } = await import('../../../src/presentation-v2/composables/useContinuationRuntime');
+    const continuation = useContinuationRuntime();
+
+    await continuation.continueTask();
+
+    expect(harness.bridgeRetryHostGeneration).toHaveBeenCalledOnce();
+    expect(harness.bridgeSend).not.toHaveBeenCalled();
+
+    harness.retryCurrentTurn.mockResolvedValueOnce({ ...result, retryHostGeneration: true });
+    harness.bridgeRetryHostGeneration.mockResolvedValueOnce(false);
+    await continuation.retryCurrentTurn();
+    expect(harness.bridgeRetryHostGeneration).toHaveBeenCalledTimes(2);
+    expect(harness.toastError).toHaveBeenCalledWith('宿主重新生成不可用，智能续写已暂停。', { muteable: false });
+  });
+
+  it('宿主打断原语抛错时仍完成停止落盘与刷新', async () => {
+    harness.stopHostGeneration.mockImplementationOnce(() => { throw new Error('host unavailable'); });
+    const { useContinuationRuntime } = await import('../../../src/presentation-v2/composables/useContinuationRuntime');
+    const continuation = useContinuationRuntime();
+
+    await expect(continuation.stopTask()).resolves.toBeUndefined();
+    expect(harness.stopTask).toHaveBeenCalledOnce();
+    expect(harness.read).toHaveBeenCalled();
   });
 
   it('在途操作被停止中断（STALE）时弹中性提示而不是错误吐司', async () => {

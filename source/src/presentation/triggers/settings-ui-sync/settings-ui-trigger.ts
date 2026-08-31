@@ -186,6 +186,8 @@ let pendingAutoUpdatePerformanceContext_ACU: { runId?: string; parentSpanId?: st
       return;
     }
     autoUpdateTriggerInFlight_ACU = true;
+    // 新一轮自动填表开跑前清掉上一轮「终止」残留，避免 isStopped() 立刻把新任务掐死。
+    _set_wasStoppedByUser_ACU(false);
     const performanceSpan = startRuntimePerformanceSpan_ACU('auto-update-trigger', {
       ...performanceContext,
       settings: settings_ACU,

@@ -22,11 +22,9 @@
         @keydown="onKeydown"
       />
       <div class="acu-v2-continuation-chat__composer-actions">
-        <span class="acu-v2-continuation-chat__hint">Ctrl / ⌘ + Enter 发送</span>
-        <AcuButton v-if="canStop" variant="danger" :loading="busy && !running" @click="emit('stop')">停止生成</AcuButton>
-        <AcuButton v-if="canContinue" :loading="busy" @click="emit('continue')">继续当前轮次</AcuButton>
-        <AcuButton v-if="canRetry" :loading="busy" @click="emit('retry')">重试当前轮次</AcuButton>
-        <AcuButton variant="primary" :loading="sending" :disabled="!draft.trim() || sending" @click="send">发送</AcuButton>
+        <span class="acu-v2-continuation-chat__hint">{{ inFlight ? '进行中可点停止' : 'Ctrl / ⌘ + Enter 发送' }}</span>
+        <AcuButton v-if="inFlight" variant="danger" @click="emit('stop')">停止</AcuButton>
+        <AcuButton v-else variant="primary" :disabled="!draft.trim()" @click="send">发送</AcuButton>
       </div>
     </div>
   </div>
@@ -45,7 +43,6 @@ const props = defineProps<{
   running: boolean;
   draft: string;
   sending: boolean;
-  busy: boolean;
   statusText: string;
   stageText: string;
   completedTurns: number;
@@ -53,44 +50,44 @@ const props = defineProps<{
   revisionText: string;
   deadlineText: string;
   awaitingHost: boolean;
-  canContinue: boolean;
-  canRetry: boolean;
 }>();
 
 const emit = defineEmits<{
   (event: 'send', text: string): void;
   (event: 'update:draft', value: string): void;
-  (event: 'stop' | 'continue' | 'retry'): void;
+  (event: 'stop'): void;
 }>();
 
 /**
- * 只要「循环真在跑」就给停止。判定用两个信号取或：running 是会话流的实时运行标志
- * （循环自己维护，无刷新延迟）；task.status 在 UI 发起的循环期间可能是陈旧的 paused
- * （envelope 要等本次操作结束才刷新），只能作补充。等待宿主正文时停的是酒馆的生成，
- * 不属于这里的职责，保持隐藏。
+ * 发送与停止互斥：任一在途信号为真就把同一位置切成停止。
+ * sending 覆盖点发送后、会话 running 尚未置位的空档；
+ * running / task.status===running 覆盖 Agent 循环；
+ * awaitingHost 覆盖酒馆正文——此前这里故意藏停止，导致点了等于没点。
  */
-const canStop = computed(() => !props.awaitingHost && (props.running || props.task?.status === 'running'));
+const inFlight = computed(() =>
+  props.sending
+  || props.running
+  || props.awaitingHost
+  || props.task?.status === 'running');
 
 const statusTone = computed(() => {
   if (!props.task) return 'idle';
-  if (props.task.status === 'running') return 'running';
+  if (props.task.status === 'running' || props.awaitingHost) return 'running';
   if (props.task.lastError) return 'failed';
   return 'idle';
 });
 
 const placeholder = computed(() => {
   if (!props.task) return '描述你想要的续写方向，发送后主 Agent 会创建任务并开始规划...';
-  if (props.awaitingHost) return '酒馆正在生成正文；现在发送的消息会在下一轮开始时被读到...';
-  if (props.task.status === 'running') return '主 Agent 正在工作；发送消息会打断当前迭代并带着你的话重新开始...';
-  return '继续和主 Agent 对话，或直接给出下一步要求...';
+  if (props.awaitingHost) return '酒馆正在生成正文。点「停止」可打断；要接着做就打字再发送。';
+  if (props.task.status === 'running' || props.running) return '主 Agent 正在工作。点「停止」可打断；要接着做就打字再发送。';
+  return '继续和主 Agent 对话，写好后再发送...';
 });
 
 const notice = computed(() => {
-  if (props.awaitingHost) return '当前轮次正在等待酒馆的正文生成结束；现在发送的新消息会在当前正文完成后生效。';
+  if (props.awaitingHost) return '酒馆正在生成正文。点「停止」会同时打断 Agent 和酒馆生成。';
   if (props.task?.stopReason && props.task.stopReason !== 'manual') {
-    return props.canContinue
-      ? `任务已停止：${props.task.stopReason}。可点击「继续」从当前轮次重试恢复。`
-      : `任务已停止：${props.task.stopReason}。输入新指令可从当前进度开始新的运行窗口。`;
+    return `任务已停止：${props.task.stopReason}。输入新指令后发送即可继续。`;
   }
   if (props.task?.lastError) return `上一次失败：${props.task.lastError.message}`;
   return '';
@@ -102,7 +99,7 @@ function onInput(event: Event): void {
 
 function send(): void {
   const text = props.draft.trim();
-  if (!text || props.sending) return;
+  if (!text || inFlight.value) return;
   emit('send', text);
 }
 

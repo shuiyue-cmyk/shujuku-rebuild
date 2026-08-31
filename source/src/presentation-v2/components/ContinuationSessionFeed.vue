@@ -1,7 +1,7 @@
 <template>
   <div ref="feedElement" class="acu-v2-session-feed">
     <p v-if="!entries.length" class="acu-v2-session-feed__empty">
-      还没有运行记录。点击「继续当前轮次」后，主 Agent 的思考、派工、大纲操作与交付过程会实时显示在这里。
+      还没有运行记录。发送一条指令后，主 Agent 的思考、派工、大纲操作与交付过程会实时显示在这里。
     </p>
     <button v-if="hiddenCount > 0" type="button" class="acu-v2-session-feed__fold" @click="expandOlder">
       已折叠 {{ hiddenCount }} 条更早消息 · 点击展开更早的 {{ nextExpandCount }} 条

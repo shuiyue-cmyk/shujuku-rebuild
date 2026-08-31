@@ -11,7 +11,7 @@ import { SillyTavernHostTurnAdapter_ACU } from './host-turn-adapter';
  * second concurrent continuation dispatcher by importing this module.
  */
 export function createSillyTavernContinuationHostBridge_ACU(
-  orchestrator: Pick<ContinuationOrchestrator_ACU, 'readPendingHostTurn' | 'readAutoContinueState' | 'recordHostTurn' | 'bindHostTurnGeneration' | 'confirmCurrentTurn' | 'rejectHostTurnForMissingTags' | 'rejectHostTurnForFailedGeneration' | 'pauseForHostInputFailure' | 'pauseForHostResultFailure' | 'failHostTurnForStoppedGeneration' | 'retryCurrentTurn' | 'continueTask'>,
+  orchestrator: Pick<ContinuationOrchestrator_ACU, 'readPendingHostTurn' | 'readAutoContinueState' | 'recordHostTurn' | 'bindHostTurnGeneration' | 'confirmCurrentTurn' | 'rejectHostTurnForMissingTags' | 'rejectHostTurnForFailedGeneration' | 'pauseForHostInputFailure' | 'pauseForHostResultFailure' | 'failHostTurnForStoppedGeneration' | 'continueTask'>,
 ): ContinuationHostGenerationBridge_ACU {
   const getChat = (): any[] => Array.isArray(SillyTavern_API_ACU?.chat) ? SillyTavern_API_ACU.chat as any[] : [];
   const getChatIdentity = (): string => String(getActiveChatStorageIdentity_ACU(getChat()) ?? '');
@@ -22,10 +22,9 @@ export function createSillyTavernContinuationHostBridge_ACU(
       readPendingHostTurn: () => orchestrator.readPendingHostTurn(),
       readAutoContinueState: () => orchestrator.readAutoContinueState(),
       continueTask: () => orchestrator.continueTask(),
-      retryCurrentTurn: () => orchestrator.retryCurrentTurn(),
       recordHostTurn: input => orchestrator.recordHostTurn(input),
       bindHostTurnGeneration: (identity, generationSeq) => orchestrator.bindHostTurnGeneration(identity, generationSeq),
-      confirmCurrentTurn: identity => orchestrator.confirmCurrentTurn(identity),
+      confirmCurrentTurn: (identity, messageIndex) => orchestrator.confirmCurrentTurn(identity, messageIndex),
       rejectHostTurnForMissingTags: input => orchestrator.rejectHostTurnForMissingTags(input),
       rejectHostTurnForFailedGeneration: identity => orchestrator.rejectHostTurnForFailedGeneration(identity),
       pauseForHostInputFailure: identity => orchestrator.pauseForHostInputFailure(identity),
@@ -37,7 +36,7 @@ export function createSillyTavernContinuationHostBridge_ACU(
     wait: ms => new Promise(resolve => setTimeout(resolve, ms)),
     materializationRetries: 3,
     materializationRetryDelayMs: 100,
-    // 删楼重试与自动填表防抖的互斥：见 host-generation-bridge 的 [双写互斥] 注释。
+    // 坏标签楼交还宿主 regenerate 与自动填表防抖的互斥：见 host-generation-bridge 的 [双写互斥] 注释。
     invalidatePendingAutoFill: () => clearAutoFillDebounce_ACU(),
   });
 }

@@ -263,6 +263,48 @@ describe('summary-vector-index flush queue scope', () => {
     expect(h.archive).not.toHaveBeenCalled();
   });
 
+  it("默认槽（isolationKey=''）restore：legacy 空槽 task 迁移后照常调度，绝不被清除", async () => {
+    h.isolationKey = '';
+    const canonicalScope = buildSummaryVectorIndexFlushScopeKey_ACU('chat-a', 'default', 'summary-a');
+    h.list.mockResolvedValue([task('flush::chat-a', { isolationKey: '', generation: 7 })]);
+    h.reconcileLegacy.mockResolvedValueOnce({ outcome: 'migrated', task: task(canonicalScope, { isolationKey: 'default', generation: 7 }) });
+
+    await expect(restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU()).resolves.toBe(1);
+
+    expect(h.remove).not.toHaveBeenCalled();
+    expect(h.logIdentityEvent).not.toHaveBeenCalledWith('debug', 'flush', 'legacy_scope_purged', expect.anything());
+  });
+
+  it("restore 清除闸只拒绝非字符串身份：isolationKey 为空串的 task 保留（scopeKey 才是归属判据）", async () => {
+    h.isolationKey = 'iso-a';
+    const activeScope = buildSummaryVectorIndexFlushScopeKey_ACU('chat-a', 'iso-a', 'summary-a');
+    // 真值判断 !task.isolationKey 会把默认槽空串当成"身份不完整的旧版 task"直接删除，
+    // 待归档的 flush 任务因此静默丢失；清除条件必须只拒绝缺失/非字符串身份。
+    h.list.mockResolvedValue([task(activeScope, { isolationKey: '', status: 'queued' })]);
+
+    await expect(restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU()).resolves.toBe(1);
+
+    expect(h.remove).not.toHaveBeenCalled();
+    expect(h.logIdentityEvent).not.toHaveBeenCalledWith('debug', 'flush', 'legacy_scope_purged', expect.anything());
+  });
+
+  it('restore 仍清除身份字段缺失（非字符串）的旧版 task', async () => {
+    h.isolationKey = 'iso-a';
+    const activeScope = buildSummaryVectorIndexFlushScopeKey_ACU('chat-a', 'iso-a', 'summary-a');
+    h.list.mockResolvedValue([task(activeScope, { isolationKey: undefined, status: 'queued' })]);
+
+    await expect(restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU()).resolves.toBe(0);
+
+    expect(h.remove).toHaveBeenCalledTimes(1);
+    expect(h.remove).toHaveBeenCalledWith(activeScope);
+    expect(h.logIdentityEvent).toHaveBeenCalledWith(
+      'debug',
+      'flush',
+      'legacy_scope_purged',
+      expect.objectContaining({ scopeFingerprint: activeScope }),
+    );
+  });
+
   it('双 flushing legacy/canonical 冲突进入 quarantine，不执行任一 archive', async () => {
     h.isolationKey = '';
     const canonicalScope = buildSummaryVectorIndexFlushScopeKey_ACU('chat-a', 'default', 'summary-a');

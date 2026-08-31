@@ -31,6 +31,8 @@ import {
   formatOutlineTableForPlot_ACU,
   formatSummaryIndexForPlot_ACU,
   getLatestAIMessageContent_ACU,
+  getLatestUserMessageContent_ACU,
+  composeSeedMatchContent_ACU,
   getPlotFromHistory_ACU,
   getWorldbookContentForPlot_ACU,
   parseCalcTags_ACU,
@@ -209,7 +211,10 @@ import {
          // [P4] {[db...]}/{[sql...]} 值替换（SQLite 模式下，在 <if> 之前执行）
          item.content = replaceDbSqlVariables(item.content);
          // 9. 解析条件模板
-         const latestAiContentForConditional = getLatestAIMessageContent_ACU();
+         const latestAiContentForConditional = composeSeedMatchContent_ACU(
+           getLatestUserMessageContent_ACU(),
+           getLatestAIMessageContent_ACU(),
+         );
          const latestPlotContentForConditional = getPlotFromHistory_ACU();
          const contextForIf = {
            seedContent: latestAiContentForConditional,

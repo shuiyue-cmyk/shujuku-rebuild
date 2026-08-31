@@ -76,6 +76,8 @@ vi.mock('../../../src/service/runtime/template-vars', () => ({
   parseIfBlockRecursive_ACU: mockParseIfBlockRecursive,
   parseIfBlocksInContent_ACU: vi.fn(),
   getLatestAIMessageContent_ACU: mockGetLatestAIMessageContent,
+  getLatestUserMessageContent_ACU: vi.fn(() => ''),
+  composeSeedMatchContent_ACU: (userContent: string, aiContent: string) => [userContent, aiContent].filter(Boolean).join('\n'),
   replaceDbSqlVariables: vi.fn((s: string) => s),
 }));
 
@@ -174,6 +176,20 @@ describe('handleChatCompletionReady_ACU', () => {
   it('data.messages 不是数组时跳过处理', async () => {
     await handleChatCompletionReady_ACU({ messages: 'not array' });
     expect(mockParseRandomTags).not.toHaveBeenCalled();
+  });
+
+  it('seed 匹配内容组合用户+AI 输入（e6f8ef38：AI-only 会漏用户触发的 seed 条件）', async () => {
+    const { getLatestUserMessageContent_ACU } = await import('../../../src/service/runtime/template-vars');
+    vi.mocked(getLatestUserMessageContent_ACU).mockReturnValue('玩家：发动突袭');
+    mockGetLatestAIMessageContent.mockReturnValue('AI：战况推进');
+    const data = { messages: [{ content: '<seed:突袭>命中</seed>' }] };
+    await handleChatCompletionReady_ACU(data);
+    // context.seedContent 必须含用户楼内容（mock compose=user\nAI join）；调用点回退成 AI-only 即红。
+    const call = mockParseIfBlockRecursive.mock.calls.find(c => c.some(a => a && typeof a === 'object' && 'seedContent' in (a as any)));
+    expect(call).toBeTruthy();
+    const ctx = call!.find(a => a && typeof a === 'object' && 'seedContent' in (a as any)) as any;
+    expect(ctx.seedContent).toContain('玩家：发动突袭');
+    expect(ctx.seedContent).toContain('AI：战况推进');
   });
 
   it('处理字符串类型的 message.content', async () => {

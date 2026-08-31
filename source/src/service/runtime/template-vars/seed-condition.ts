@@ -17,21 +17,20 @@ import { evaluateDbCondition, evaluateSqlCondition, getDbSqlVariable } from './s
    * - 非逻辑：!战斗
    * - 组合逻辑：(战斗&主角),感情
    * @param expression - 关键词表达式
-   * @param content - 待检测的内容（最新一层的AI回复正文）
+   * @param content - 待检测的内容（最新用户输入 + 最新 AI 回复）
    * @param plotContent - 最新一层的推进数据（$6），可选
    * @returns 是否匹配
    */
   export function evaluateSeedExpression_ACU(expression: string, content: string, plotContent: string = '') {
     if (!expression || typeof expression !== 'string') return false;
-    if (!content || typeof content !== 'string') return false;
-    if (!plotContent || typeof plotContent !== 'string') {
-      plotContent = '';
-    }
+    const contentText = typeof content === 'string' ? content : '';
+    const plotText = typeof plotContent === 'string' ? plotContent : '';
+    if (!contentText && !plotText) return false;
     
     const expr = expression.trim();
     if (!expr) return false;
     
-    const combinedContent = content + '\n' + plotContent;
+    const combinedContent = contentText + '\n' + plotText;
     const lowerContent = combinedContent.toLowerCase();
     
     const checkKeyword = (keyword: string) => {

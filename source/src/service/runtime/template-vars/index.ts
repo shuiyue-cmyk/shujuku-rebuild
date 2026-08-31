@@ -23,6 +23,8 @@ export {
     parseIfBlockRecursive_ACU,
     parseIfBlocksInContent_ACU,
     getLatestAIMessageContent_ACU,
+    getLatestUserMessageContent_ACU,
+    composeSeedMatchContent_ACU,
 } from './if-block-parser';
 
 // SQL/ORM 查询模板变量

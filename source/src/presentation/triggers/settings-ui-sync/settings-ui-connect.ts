@@ -10,7 +10,8 @@ import {
   wasStoppedByUser_ACU,
   _set_autoFillDebounceTimer_ACU,
   _set_isAutoUpdatingCard_ACU,
-  _set_manualExtraHint_ACU
+  _set_manualExtraHint_ACU,
+  _set_wasStoppedByUser_ACU
 } from '../../components/plot-editors';
 import {
   showToastr_ACU
@@ -282,6 +283,8 @@ import {
       });
       const performanceContext = { runId: performanceSpan.id, parentSpanId: performanceSpan.id };
       try {
+      // 新一轮消息评估：清掉上一轮填表「终止」残留，避免永久 user_aborted。
+      _set_wasStoppedByUser_ACU(false);
       // [健全性] 如果用户已经开始对话，则解除"开场白阶段世界书注入抑制"
       try { maybeLiftWorldbookSuppression_ACU(); } catch (e) {}
 

@@ -42,6 +42,9 @@ const m = vi.hoisted(() => ({
   captureVault: vi.fn(),
   dormantAudit: vi.fn(),
   clearAutoFillDebounce: vi.fn(),
+  recordGenerationContext: vi.fn(() => ({ seq: 1 })),
+  wasStoppedByUser: false,
+  setWasStoppedByUser: vi.fn((value: boolean) => { m.wasStoppedByUser = value; }),
 }));
 
 vi.mock('../../../src/shared/host-api', () => ({ SillyTavern_API_ACU: m.api }));
@@ -51,8 +54,8 @@ vi.mock('../../../src/presentation/triggers/settings-ui-sync/settings-ui-connect
 vi.mock('../../../src/service/runtime/helpers-remaining', () => ({ ensureInitialSeedCheckpoint_ACU: vi.fn(), handleChatCompletionReady_ACU: vi.fn(), loadPresetAndCleanCharacterData_ACU: m.loadPreset }));
 vi.mock('../../../src/service/runtime/state-manager', () => ({
   chatMutationDebounceTimer_ACU: null, _set_chatMutationDebounceTimer_ACU: m.setChatMutationTimer, generationGate_ACU: m.gate,
-  get currentChatFileIdentifier_ACU() { return m.currentChatKey; }, currentJsonTableData_ACU: null, discardLatestGenerationContext_ACU: vi.fn(), markUserSendIntent_ACU: vi.fn(), isProcessing_Plot_ACU: false, isQuietLikeGeneration_ACU: vi.fn(), isRecentUserSendIntent_ACU: vi.fn(), recordGenerationContext_ACU: vi.fn(), recordLastUserSend_ACU: vi.fn(), settings_ACU: { plotSettings: {} }, shouldProcessAutoTableUpdateForGenerationEnded_ACU: vi.fn(), shouldProcessPlotForGeneration_ACU: vi.fn(), shouldProcessSummaryVectorIndexForGeneration_ACU: (...args: any[]) => m.shouldProcessSummary(...args),
-  _set_allChatMessages_ACU: m.setMessages, _set_currentChatFileIdentifier_ACU: (value: string) => { m.currentChatKey = value; m.setChat(value); }, _set_currentJsonTableData_ACU: m.setData, _set_independentTableStates_ACU: m.setTables, _set_isProcessing_Plot_ACU: vi.fn(), _set_lastTotalAiMessages_ACU: m.setTotal, abortOnChatMutation_ACU: vi.fn(), clearAutoFillDebounce_ACU: (...args: any[]) => m.clearAutoFillDebounce(...args), getChatMutationAbortSignal_ACU: () => null,
+  get currentChatFileIdentifier_ACU() { return m.currentChatKey; }, currentJsonTableData_ACU: null, discardLatestGenerationContext_ACU: vi.fn(), markUserSendIntent_ACU: vi.fn(), isProcessing_Plot_ACU: false, isQuietLikeGeneration_ACU: vi.fn(), isRecentUserSendIntent_ACU: vi.fn(), recordGenerationContext_ACU: m.recordGenerationContext, recordLastUserSend_ACU: vi.fn(), settings_ACU: { plotSettings: {} }, shouldProcessAutoTableUpdateForGenerationEnded_ACU: vi.fn(), shouldProcessPlotForGeneration_ACU: vi.fn(), shouldProcessSummaryVectorIndexForGeneration_ACU: (...args: any[]) => m.shouldProcessSummary(...args),
+  _set_allChatMessages_ACU: m.setMessages, _set_currentChatFileIdentifier_ACU: (value: string) => { m.currentChatKey = value; m.setChat(value); }, _set_currentJsonTableData_ACU: m.setData, _set_independentTableStates_ACU: m.setTables, _set_isProcessing_Plot_ACU: vi.fn(), _set_lastTotalAiMessages_ACU: m.setTotal, _set_wasStoppedByUser_ACU: m.setWasStoppedByUser, abortOnChatMutation_ACU: vi.fn(), clearAutoFillDebounce_ACU: (...args: any[]) => m.clearAutoFillDebounce(...args), getChatMutationAbortSignal_ACU: () => null,
 }));
 vi.mock('../../../src/service/settings/settings-service', () => ({ applyTemplateScopeForCurrentChat_ACU: vi.fn(), loadSettings_ACU: vi.fn(), isSettingsStorageReadyForSave_ACU: vi.fn(() => true) }));
 // 静默迁移在启动与 CHAT_CHANGED 各触发一次：走真实实现会读宿主/写 localStorage，测试必须掐掉
@@ -75,8 +78,6 @@ vi.mock('../../../src/service/vector/summary-vector-index-cache-service', () => 
 vi.mock('../../../src/service/vector/summary-vector-index-flush-queue', () => ({ restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU: (...args: any[]) => m.restoreFlush(...args) }));
 vi.mock('../../../src/service/vector/summary-vector-index-realign-state', () => ({ markSummaryVectorIndexDirtyForRealign_ACU: vi.fn() }));
 vi.mock('../../../src/service/chat/checkpoint-delete-guard', () => ({ captureCheckpointVaultForCurrentChat_ACU: (...args: any[]) => m.captureVault(...args), installCheckpointDeleteGuard_ACU: vi.fn() }));
-// 启动版本校验走真实网络（raw.githubusercontent），测试必须掐掉。
-vi.mock('../../../src/service/runtime/version-update-check', () => ({ checkDatabaseUpdateOnStartup_ACU: vi.fn(async () => {}) }));
 vi.mock('../../../src/service/template/dormant-data-service', () => ({ auditDormantDataIntegrity_ACU: (...args: any[]) => m.dormantAudit(...args) }));
 
 beforeAll(async () => {
@@ -119,6 +120,7 @@ beforeEach(() => {
   m.processBeforeGen.mockResolvedValue({ success: true, skipped: true, reason: 'no_index_state' });
   m.orchestrate.mockResolvedValue({ action: 'passthrough' });
   m.shouldProcessSummary.mockReturnValue(false);
+  m.wasStoppedByUser = false;
   Object.assign(m.gate, { lastUserMessageId: 7, lastUserMessageText: 'stale', lastUserMessageAt: 1, lastUserSendIntentAt: 2, lastGeneration: { stale: true }, generationSeq: 3, activeGenerations: [{ seq: 3 }] });
 });
 
@@ -244,6 +246,21 @@ describe('mainInitialize_ACU 宿主事件桥接线注册', () => {
     expect(m.generationEndedHandler).toBeTypeOf('function');
     expect(m.afterCommandsHandler).toBeTypeOf('function');
     expect(m.settingsReadyHandler).toBeTypeOf('function');
+  });
+});
+
+// 自动填表按「终止」后 wasStoppedByUser 残留 true，评估闸会永久 user_aborted；
+// 宿主每轮生成必须清掉上一轮残留，且必须早于本轮生成上下文记录，否则同轮仍按残留判定。
+describe('mainInitialize_ACU GENERATION_STARTED 复位终止残留', () => {
+  it('宿主开始生成时把残留 true 复位为 false', () => {
+    m.wasStoppedByUser = true;
+
+    m.generationStartedHandler!('text', {}, false);
+
+    expect(m.setWasStoppedByUser).toHaveBeenCalledWith(false);
+    expect(m.wasStoppedByUser).toBe(false);
+    expect(m.setWasStoppedByUser.mock.invocationCallOrder[0])
+      .toBeLessThan(m.recordGenerationContext.mock.invocationCallOrder[0]);
   });
 });
 

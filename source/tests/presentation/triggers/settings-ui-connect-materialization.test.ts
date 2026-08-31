@@ -95,6 +95,7 @@ vi.mock('../../../src/presentation/components/plot-editors', () => ({
   _set_autoFillDebounceTimer_ACU: m.setAutoFillTimer,
   isAutoUpdatingCard_ACU: false,
   wasStoppedByUser_ACU: false,
+  _set_wasStoppedByUser_ACU: vi.fn(),
   manualExtraHint_ACU: '',
   getCharCardPromptFromUI_ACU: vi.fn(),
   renderPromptSegments_ACU: vi.fn(),

@@ -1,15 +1,18 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const h = vi.hoisted(() => ({ jquery: vi.fn() }));
+const h = vi.hoisted(() => ({ jquery: vi.fn(), host: {} as any }));
 
 vi.mock('../../src/shared/host-api', () => ({
   get jQuery_API_ACU() { return h.jquery; },
+  get SillyTavern_API_ACU() { return h.host; },
 }));
 
 import {
+  clickRegenerateButton_ACU,
   clickSendButton_ACU,
   getSendTextareaValue_ACU,
   setSendTextareaValue_ACU,
+  triggerHostGenerate_ACU,
 } from '../../src/shared/host-input';
 
 describe('host input helpers', () => {
@@ -58,5 +61,33 @@ describe('host input helpers', () => {
     expect(getSendTextareaValue_ACU()).toBe('');
     expect(() => setSendTextareaValue_ACU('ignored')).not.toThrow();
     expect(() => clickSendButton_ACU()).not.toThrow();
+  });
+
+  it('重新生成优先点 #option_regenerate，命中空集才回落 Generate("regenerate")', () => {
+    const generate = vi.fn();
+    h.host = { generate };
+    const regenerateButton = { trigger: vi.fn(), length: 1 };
+    h.jquery.mockImplementation((selector: string) => selector === '#option_regenerate' ? regenerateButton : sendButton);
+
+    expect(clickRegenerateButton_ACU()).toBe(true);
+    expect(regenerateButton.trigger).toHaveBeenCalledWith('click');
+    expect(generate).not.toHaveBeenCalled();
+
+    // 空集（length:0）上的 trigger 是 no-op：必须识破并走宿主 Generate 回落。
+    const emptyButton = { trigger: vi.fn(), length: 0 };
+    h.jquery.mockImplementation((selector: string) => selector === '#option_regenerate' ? emptyButton : sendButton);
+    expect(clickRegenerateButton_ACU()).toBe(true);
+    expect(emptyButton.trigger).not.toHaveBeenCalled();
+    expect(generate).toHaveBeenCalledWith('regenerate');
+  });
+
+  it('Generate 不可用时报告失败，宿主 Generate 抛错也被吞掉', () => {
+    h.host = {};
+    h.jquery.mockImplementation(() => ({ trigger: vi.fn(), length: 0 }));
+    expect(triggerHostGenerate_ACU('normal')).toBe(false);
+    expect(clickRegenerateButton_ACU()).toBe(false);
+
+    h.host = { generate: vi.fn(() => { throw new Error('host busy'); }) };
+    expect(triggerHostGenerate_ACU('normal')).toBe(false);
   });
 });

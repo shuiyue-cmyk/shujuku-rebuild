@@ -19,7 +19,7 @@ vi.mock('../../../src/shared/template-preset-utils', () => ({ getCurrentCharacte
 vi.mock('../../../src/data/storage/vector-index-st-files-storage', () => ({
   buildVectorIndexSingleSnapshotFilePath_ACU: (p: any) => p.chatName ? `named-${p.sourceTableKey}` : `unnamed-${p.sourceTableKey}`,
   buildLegacyVectorIndexSingleSnapshotFilePath_ACU: (p: any) => `legacy-${p.sourceTableKey}`,
-  buildVectorIndexSingleSnapshotV2ScopeToken_ACU: (p: any) => `scope-${p.chatKey}-${p.isolationKey}-${p.sourceTableKey}`,
+  buildVectorIndexSingleSnapshotV2ScopeToken_ACU: (p: any) => `scope-${p.chatKey}-${p.isolationKey || 'default'}-${p.sourceTableKey}`,
   loadVectorIndexRegistry_ACU: async () => ({ files: h.registry }),
   readVectorIndexJsonFile_ACU: (...args: any[]) => h.reads(...args),
 }));
@@ -76,6 +76,7 @@ function blob(overrides: any = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.chatKey = 'chat-a'; h.isolationKey = 'iso-a';
   h.registry = []; h.tables = { summary: { name: '纪要表' } }; h.chat = [{ is_user: false, mesId: 'm-1' }]; h.tagData = null;
   h.reads.mockReset();
   h.validate.mockReset();
@@ -99,6 +100,44 @@ describe('summary vector external snapshot recovery', () => {
     expect(h.chat[0].TavernDB_ACU_IsolatedData['iso-a'].summaryVectorIndexState.manifest.indexId).toBe('idx-1');
     expect(h.saveStrict).toHaveBeenCalledTimes(1);
     expect(h.save).not.toHaveBeenCalled();
+  });
+
+  it("默认槽（isolationKey=''）按 canonical 'default' 身份恢复 V2 快照，指针写回 '' 槽", async () => {
+    h.isolationKey = '';
+    h.registry = [{ path: 'TavernDB_ACU_vector_v2_scope-chat-a-default-summary_idx-1_write_snapshot', publicationState: 'published' }];
+    h.reads.mockResolvedValue({ ok: true, data: blob({ isolationKey: 'default' }) });
+
+    await expect(tryRecoverSummaryVectorIndexFromExternalSnapshot_ACU()).resolves.toBe(true);
+
+    // 归档侧把空槽 canonicalize 成 'default' 后落盘，恢复必须用同一口径比对身份，
+    // 同时把指针写回原始聊天槽 ''（槽位键 != 外置存储身份，两者不得混用）。
+    expect(h.reads).toHaveBeenCalledWith('TavernDB_ACU_vector_v2_scope-chat-a-default-summary_idx-1_write_snapshot');
+    expect(h.chat[0].TavernDB_ACU_IsolatedData[''].summaryVectorIndexState.manifest.indexId).toBe('idx-1');
+    expect(h.chat[0].TavernDB_ACU_IsolatedData[''].summaryVectorIndexState.manifest.isolationKey).toBe('default');
+    expect(h.saveStrict).toHaveBeenCalledTimes(1);
+  });
+
+  it("默认槽兼容 legacy 快照：manifest 的 isolationKey 为空串同样按 'default' 身份恢复", async () => {
+    h.isolationKey = '';
+    h.reads.mockImplementation(async (path: string) => path === 'legacy-summary'
+      ? { ok: true, data: blob({ isolationKey: '' }) }
+      : { ok: false });
+
+    await expect(tryRecoverSummaryVectorIndexFromExternalSnapshot_ACU()).resolves.toBe(true);
+
+    expect(h.chat[0].TavernDB_ACU_IsolatedData[''].summaryVectorIndexState.manifest.indexId).toBe('idx-1');
+    expect(h.saveStrict).toHaveBeenCalledTimes(1);
+  });
+
+  it("开启隔离时拒绝把 canonical 'default' 快照恢复进非默认槽", async () => {
+    h.isolationKey = 'iso-a';
+    h.registry = [{ path: 'TavernDB_ACU_vector_v2_scope-chat-a-iso-a-summary_idx-1_write_snapshot', publicationState: 'published' }];
+    h.reads.mockResolvedValue({ ok: true, data: blob({ isolationKey: 'default' }) });
+
+    await expect(tryRecoverSummaryVectorIndexFromExternalSnapshot_ACU()).resolves.toBe(false);
+
+    expect(h.write).not.toHaveBeenCalled();
+    expect(h.saveStrict).not.toHaveBeenCalled();
   });
 
   it('拒绝 prepared registry orphan，并继续使用兼容 legacy 路径', async () => {

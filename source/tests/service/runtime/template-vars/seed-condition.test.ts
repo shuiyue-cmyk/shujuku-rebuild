@@ -91,6 +91,18 @@ describe('evaluateSeedExpression_ACU', () => {
   it('空内容返回 false', () => {
     expect(evaluateSeedExpression_ACU('战斗', '')).toBe(false);
   });
+  it('AI 正文为空时仍匹配 plotContent', () => {
+    expect(evaluateSeedExpression_ACU('剧情推进', '', '剧情推进数据')).toBe(true);
+  });
+  it('用户输入单独存在时（AI 正文为空）也参与匹配', () => {
+    expect(evaluateSeedExpression_ACU('潜入钟楼', '玩家输入：潜入钟楼', '')).toBe(true);
+  });
+  it('content 非字符串但 plotContent 有效时不直接 false', () => {
+    expect(evaluateSeedExpression_ACU('剧情推进', null as any, '剧情推进数据')).toBe(true);
+  });
+  it('content 与 plotContent 皆空时返回 false', () => {
+    expect(evaluateSeedExpression_ACU('战斗', null as any, undefined as any)).toBe(false);
+  });
   it('null 表达式返回 false', () => {
     expect(evaluateSeedExpression_ACU(null as any, content)).toBe(false);
   });

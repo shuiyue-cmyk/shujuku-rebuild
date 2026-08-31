@@ -1,6 +1,7 @@
 import { getChatArray_ACU, saveChatToHostStrict_ACU } from '../../data/gateways/chat-gateway';
 import { getActiveChatStorageIdentity_ACU } from '../../data/storage/chat-history';
 import { buildDefaultContinuationSettings_ACU, buildDefaultContinuationOutlinePrompt_ACU, buildDefaultContinuationAgentApiPresets_ACU, CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_DEFAULT_ACU, CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V17_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V18_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V19_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V20_ACU } from './defaults';
+import { reconcileContinuationEnvelopeCursor_ACU } from './stage-cursor';
 import { AGENT_HISTORY_READ_RULE_V17_ACU, AGENT_HISTORY_READ_RULE_V18_ACU, buildDefaultContinuationAgentPrompts_ACU, currentDefaultMainAgentHistoryGuide_ACU, currentDefaultMainAgentLayoutAnswer_ACU, isV18DefaultMainAgentNonRootSystemSegment_ACU, isV19DefaultMainAgentHistoryGuide_ACU, isV19DefaultMainAgentLayoutAnswer_ACU, isV19DefaultMainAgentRuntimeSegment_ACU } from './agent/agent-defaults';
 import {
   AGENT_HISTORY_TOKEN_BUDGET_DEFAULT_ACU,
@@ -516,7 +517,10 @@ export class FirstFloorContinuationStore_ACU {
   read(): ContinuationEnvelope_ACU | null {
     const context = captureChatContext_ACU();
     const envelope = readRawEnvelope_ACU(context.firstMessage);
-    return envelope === null ? null : derivePausedContinuationEnvelopeAfterReload_ACU(envelope);
+    return envelope === null ? null : reconcileContinuationEnvelopeCursor_ACU(
+      derivePausedContinuationEnvelopeAfterReload_ACU(envelope),
+      Array.isArray(context.chat) ? context.chat.length : 0,
+    );
   }
 
   /** Reads the validated persisted snapshot without applying reload recovery. Runtime state machines must use this. */

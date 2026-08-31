@@ -12,7 +12,7 @@
  */
 import { currentJsonTableData_ACU, pendingFinalGenerationGreenlights_ACU, settings_ACU } from './state-manager';
 import { logDebug_ACU, logError_ACU } from '../../shared/utils';
-import { parseRandomTags_ACU, replaceRandomVariables_ACU, parseCalcTags_ACU, parseMaxTags_ACU, parseMinTags_ACU, replaceCalcVariables_ACU, replaceMaxVariables_ACU, replaceMinVariables_ACU, parseIfBlockRecursive_ACU, getLatestAIMessageContent_ACU, replaceDbSqlVariables } from './template-vars';
+import { parseRandomTags_ACU, replaceRandomVariables_ACU, parseCalcTags_ACU, parseMaxTags_ACU, parseMinTags_ACU, replaceCalcVariables_ACU, replaceMaxVariables_ACU, replaceMinVariables_ACU, parseIfBlockRecursive_ACU, getLatestAIMessageContent_ACU, getLatestUserMessageContent_ACU, composeSeedMatchContent_ACU, replaceDbSqlVariables } from './template-vars';
 import { getPlotFromHistory_ACU, getWorldbookContentForPlot_ACU, getAgentControlledWorldbookEntriesForFinalPrompt_ACU } from './plot-runtime';
 import { ensurePlotAgentWorldbookSnapshotHydrated_ACU, isWorldbookTakeoverActive_ACU } from '../agent/agent-worldbook-takeover';
 
@@ -76,6 +76,8 @@ export {
     parseIfBlockRecursive_ACU,
     parseIfBlocksInContent_ACU,
     getLatestAIMessageContent_ACU,
+    getLatestUserMessageContent_ACU,
+    composeSeedMatchContent_ACU,
 } from './template-vars';
 
 // ═══ 剧情推进运行时 ═══
@@ -243,7 +245,7 @@ export {
     const lastPlotContent = getPlotFromHistory_ACU();
     logDebug_ACU('[提示词模板] $6 最新一层推进数据:', lastPlotContent ? `长度=${lastPlotContent.length}` : '(空)');
     const context = {
-      seedContent: getLatestAIMessageContent_ACU(),
+      seedContent: composeSeedMatchContent_ACU(getLatestUserMessageContent_ACU(), getLatestAIMessageContent_ACU()),
       allTablesJson: getTableDataForPrompt_ACU(),
       plotContent: lastPlotContent
     };

@@ -77,6 +77,8 @@ import {
   parseRandomTags_ACU,
   replaceRandomVariables_ACU,
   getLatestAIMessageContent_ACU,
+  getLatestUserMessageContent_ACU,
+  composeSeedMatchContent_ACU,
   replaceDbSqlVariables
 } from '../template-vars';
 import {
@@ -512,7 +514,10 @@ import {
 
     let seedContentForConditional = '';
     try {
-      seedContentForConditional = getLatestAIMessageContent_ACU();
+      seedContentForConditional = composeSeedMatchContent_ACU(
+        getLatestUserMessageContent_ACU(),
+        getLatestAIMessageContent_ACU(),
+      );
       logDebug_ACU('[剧情推进] 条件模板检测内容长度:', seedContentForConditional.length);
     } catch (e) {
       logWarn_ACU('[剧情推进] 准备条件模板检测内容时出错:', e);

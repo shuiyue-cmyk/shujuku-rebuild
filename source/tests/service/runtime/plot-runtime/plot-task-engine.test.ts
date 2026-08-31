@@ -262,6 +262,8 @@ vi.mock('../../../../src/service/runtime/template-vars', () => ({
   parseRandomTags_ACU: mockParseRandomTags,
   replaceRandomVariables_ACU: mockReplaceRandomVariables,
   getLatestAIMessageContent_ACU: mockGetLatestAIMessageContent,
+  getLatestUserMessageContent_ACU: vi.fn(() => ''),
+  composeSeedMatchContent_ACU: (userContent: string, aiContent: string) => [userContent, aiContent].filter(Boolean).join('\n'),
   replaceDbSqlVariables: vi.fn((s: string) => s),
 }));
 

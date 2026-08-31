@@ -1,6 +1,6 @@
 /**
  * service/runtime/template-vars/if-block-parser.ts
- * if 块递归解析器 + 辅助函数（getLatestAIMessageContent）
+ * if 块递归解析器 + 辅助函数（getLatestAIMessageContent / getLatestUserMessageContent / composeSeedMatchContent）
  * 从 helpers-template-vars.ts 拆出
  */
 import {
@@ -145,10 +145,10 @@ import {
           const endIndex = nearest.index + nearest.length;
           
           let ifContent, elseContent;
-          const elsePos = ifBody.indexOf('<else>');
-          if (elsePos !== -1) {
-            ifContent = ifBody.slice(0, elsePos);
-            elseContent = ifBody.slice(elsePos + 6);
+          const elseTagMatch = ifBody.match(/<else>/i);
+          if (elseTagMatch && elseTagMatch.index !== undefined) {
+            ifContent = ifBody.slice(0, elseTagMatch.index);
+            elseContent = ifBody.slice(elseTagMatch.index + elseTagMatch[0].length);
           } else {
             ifContent = ifBody;
             elseContent = '';
@@ -203,4 +203,32 @@ import {
     }
 
     return '';
+  }
+
+  /**
+   * 获取最新一条用户消息的正文。seed 必须能匹配上轮用户输入里的关键词。
+   */
+  export function getLatestUserMessageContent_ACU() {
+    const chat = getChatArray_ACU();
+    if (!chat || chat.length === 0) {
+      return '';
+    }
+
+    for (let i = chat.length - 1; i >= 0; i--) {
+      const message = chat[i];
+      if (message && message.is_user) {
+        return typeof message.mes === 'string' ? message.mes : '';
+      }
+    }
+
+    return '';
+  }
+
+  /**
+   * seed 检索文本：最新用户输入 + 最新 AI 回复。plotContent（$6）由求值函数另行拼接。
+   */
+  export function composeSeedMatchContent_ACU(userContent: string, aiContent: string) {
+    const parts = [userContent, aiContent]
+      .filter((part) => typeof part === 'string' && part);
+    return parts.join('\n');
   }

@@ -576,7 +576,8 @@ export async function restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU(): P
             restored += 1;
             continue;
         }
-        if (!task.isolationKey || task.scopeKey !== activeScopeKey) {
+        // isolationKey==='' 是未开隔离的合法默认槽；不能用真值判断当 legacy 清掉。
+        if (typeof task.isolationKey !== 'string' || task.scopeKey !== activeScopeKey) {
             clearFlushTimer_ACU(task.scopeKey);
             await deleteSummaryVectorFlushTask_ACU(task.scopeKey);
             logSummaryVectorIndexIdentityEvent_ACU('debug', 'flush', 'legacy_scope_purged', {

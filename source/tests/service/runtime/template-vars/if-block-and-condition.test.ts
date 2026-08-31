@@ -19,13 +19,14 @@ vi.mock('../../../../src/shared/utils', () => ({
 
 let mockSettings: any = {};
 let mockCurrentJsonTableData: any = null;
+let mockChat: any[] = [];
 vi.mock('../../../../src/service/runtime/state-manager', () => ({
   get settings_ACU() { return mockSettings; },
   get currentJsonTableData_ACU() { return mockCurrentJsonTableData; },
 }));
 
 vi.mock('../../../../src/data/gateways/chat-gateway', () => ({
-  getChatArray_ACU: vi.fn(() => []),
+  getChatArray_ACU: vi.fn(() => mockChat),
 }));
 
 // mock cell-utils
@@ -61,7 +62,7 @@ vi.mock('../../../../src/service/flight-mode/flight-mode-hidden-rows', async () 
   await vi.importActual('../../../../src/service/flight-mode/flight-mode-hidden-rows')
 );
 
-import { parseIfBlockRecursive_ACU } from '../../../../src/service/runtime/template-vars/if-block-parser';
+import { parseIfBlockRecursive_ACU, getLatestAIMessageContent_ACU, getLatestUserMessageContent_ACU, composeSeedMatchContent_ACU } from '../../../../src/service/runtime/template-vars/if-block-parser';
 import { evaluateCondExpression_ACU } from '../../../../src/service/runtime/template-vars/seed-condition';
 
 // ═══════════════════════════════════════════════════════════════
@@ -73,6 +74,7 @@ describe('parseIfBlockRecursive_ACU — db/sql 条件类型', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockSettings = {};
+    mockChat = [];
     mockGetCurrentFlightModeState.mockReset().mockReturnValue({ enabled: false, hiddenRowIds: [], bigSummarySheetKey: '' });
   });
 
@@ -96,6 +98,50 @@ describe('parseIfBlockRecursive_ACU — db/sql 条件类型', () => {
     const content = '<if db="inventory.count > 0">有物品<else>没有物品</if>';
     const result = parseIfBlockRecursive_ACU(content, context);
     expect(result).toBe('没有物品');
+  });
+
+  it('<ELSE> 大小写不影响分支切分', () => {
+    mockEvaluateDbCondition.mockReturnValue(false);
+    const content = '<if db="inventory.count > 0">有物品<ELSE>没有物品</if>';
+    const result = parseIfBlockRecursive_ACU(content, context);
+    expect(result).toBe('没有物品');
+  });
+
+  it('<Else> 混合大小写同样不影响分支切分', () => {
+    mockEvaluateDbCondition.mockReturnValue(false);
+    const content = '<if db="inventory.count > 0">有物品<Else>没有物品</if>';
+    const result = parseIfBlockRecursive_ACU(content, context);
+    expect(result).toBe('没有物品');
+  });
+
+  it('<if seed="..."> 用户输入与 AI 正文组合后可命中用户侧关键词', () => {
+    mockChat = [
+      { is_user: true, mes: '玩家输入：潜入钟楼' },
+      { is_user: false, mes: 'AI 正文里没有关键词' },
+    ];
+    const seedContent = composeSeedMatchContent_ACU(getLatestUserMessageContent_ACU(), getLatestAIMessageContent_ACU());
+    expect(seedContent).toBe('玩家输入：潜入钟楼\nAI 正文里没有关键词');
+    const content = '<if seed="潜入钟楼">命中用户输入<else>未命中</if>';
+    const result = parseIfBlockRecursive_ACU(content, { ...context, seedContent });
+    expect(result).toBe('命中用户输入');
+  });
+
+  it('AI 正文为空时仅用户输入也能参与 seed 匹配', () => {
+    mockChat = [
+      { is_user: false, mes: '陈旧的 AI 回复' },
+      { is_user: true, mes: '最新用户输入包含关键词：献祭仪式' },
+    ];
+    expect(getLatestAIMessageContent_ACU()).toBe('陈旧的 AI 回复');
+    const seedContent = composeSeedMatchContent_ACU(getLatestUserMessageContent_ACU(), '');
+    expect(seedContent).toBe('最新用户输入包含关键词：献祭仪式');
+    const result = parseIfBlockRecursive_ACU('<if seed="献祭仪式">命中<else>未命中</if>', { ...context, seedContent });
+    expect(result).toBe('命中');
+  });
+
+  it('getLatestUserMessageContent_ACU 无用户消息时返回空串', () => {
+    mockChat = [{ is_user: false, mes: '只有 AI' }];
+    expect(getLatestUserMessageContent_ACU()).toBe('');
+    expect(composeSeedMatchContent_ACU('', '只有 AI')).toBe('只有 AI');
   });
 
   it('<if sql="..."> 条件为 true 时输出 if 分支', () => {

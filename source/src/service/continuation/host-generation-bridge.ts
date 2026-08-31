@@ -1,4 +1,4 @@
-import { resolveGeneratedAiMessageIndex_ACU, type AutoFillIntent_ACU } from '../runtime/message-handler';
+import { countAiMessages_ACU, isAiMessage_ACU, resolveGeneratedAiMessageIndex_ACU, type AutoFillIntent_ACU } from '../runtime/message-handler';
 import { validateLoopTags_ACU } from '../loop/loop-evaluator';
 import { logAgentSession_ACU } from './agent/agent-session-log';
 import type { ContinuationPreparedTurnInstruction_ACU } from './stage-execution-engine';
@@ -10,11 +10,10 @@ export interface ContinuationHostTurnRuntime_ACU {
   getChat(): any[];
   readPendingHostTurn(): { settings: { loopTags: string; retryDelaySeconds?: number }; pending: { identity: TurnAttemptIdentity_ACU; capture: ContinuationHostGenerationCapture_ACU; status: 'awaiting_generation' | 'retry_ready' | 'exhausted' } } | null;
   readAutoContinueState(): { eligible: boolean; delaySeconds: number };
-  continueTask(): Promise<{ preparedTurn?: ContinuationPreparedTurnInstruction_ACU }>;
-  retryCurrentTurn(): Promise<{ preparedTurn?: ContinuationPreparedTurnInstruction_ACU }>;
+  continueTask(): Promise<{ preparedTurn?: ContinuationPreparedTurnInstruction_ACU; retryHostGeneration?: boolean }>;
   recordHostTurn(input: { identity: TurnAttemptIdentity_ACU; capture: ContinuationHostGenerationCapture_ACU }): Promise<unknown>;
   bindHostTurnGeneration(identity: TurnAttemptIdentity_ACU, generationSeq: number): Promise<void>;
-  confirmCurrentTurn(identity: TurnAttemptIdentity_ACU): Promise<unknown>;
+  confirmCurrentTurn(identity: TurnAttemptIdentity_ACU, messageIndex?: number): Promise<unknown>;
   rejectHostTurnForMissingTags(input: { identity: TurnAttemptIdentity_ACU; messageIndex: number }): Promise<unknown>;
   rejectHostTurnForFailedGeneration(identity: TurnAttemptIdentity_ACU): Promise<unknown>;
   pauseForHostInputFailure(identity: TurnAttemptIdentity_ACU): Promise<unknown>;
@@ -30,7 +29,7 @@ export interface ContinuationHostGenerationBridgeDependencies_ACU {
   materializationRetries: number;
   materializationRetryDelayMs: number;
   /**
-   * 作废在途的自动填表防抖（删楼重试分支的互斥钩子，见 onGenerationEnded）。
+   * 作废在途的自动填表防抖（坏标签楼交还宿主 regenerate 重生成前的互斥钩子，见 onGenerationEnded）。
    * 缺省不做任何事（测试注入场景）。
    */
   invalidatePendingAutoFill?: () => void;
@@ -55,6 +54,11 @@ export class ContinuationHostGenerationBridge_ACU {
   private readonly startedByChat = new Map<string, StartedHostGeneration_ACU>();
 
   constructor(private readonly dependencies: ContinuationHostGenerationBridgeDependencies_ACU) {}
+
+  /** 打断酒馆正在进行的正文生成。用户点停止时必须先走这里，否则正文写完仍会确认并自动续写。 */
+  stopHostGeneration(): void {
+    this.dependencies.hostInput.stopGeneration();
+  }
 
   /** 桥内存中是否持有该聊天的活认领（发送窗口内或已认领生成开始）。用于区分真在飞与重载后的滞留态。 */
   hasLiveClaim(chatIdentity: string): boolean {
@@ -156,51 +160,34 @@ export class ContinuationHostGenerationBridge_ACU {
       if (boundSequence !== null && sequence !== undefined && boundSequence !== sequence) return;
       const resolution = await this.resolveMessageIndex_ACU(eventMessageId, snapshot.pending.capture, chatIdentity);
       if (resolution.kind === 'no_reply') {
-        // 生成失败/未产出正文（典型如后端 API 报错）：没有楼层被写入，重发不会重复正文，
-        // 走与标签缺失同构的自动重试链——消耗一次重试额度，延迟后自动重发当前轮。
+        // 生成失败/未产出正文：没有新楼层，走酒馆 Generate 对已有用户楼要回复，不重跑 Agent。
         await this.dependencies.runtime.rejectHostTurnForFailedGeneration(claimedIdentity);
-        const afterReject = this.dependencies.runtime.readPendingHostTurn();
-        if (afterReject?.pending.status === 'retry_ready' && afterReject.pending.identity.attemptId === claimedIdentity.attemptId) {
-          await this.retryCurrentHostTurn_ACU(snapshot.settings.retryDelaySeconds ?? 0);
-        }
+        await this.autoRetryHostGenerationIfReady_ACU(claimedIdentity, snapshot.settings.retryDelaySeconds ?? 0);
         return;
       }
       if (resolution.kind === 'unsafe') {
-        // 归属不安全（多候选歧义/快照失效）：自动重试可能重复楼层，fail closed 交人工。
+        // 归属不安全（多候选歧义/快照失效）：自动重试可能删错楼，fail closed 交人工。
         await this.dependencies.runtime.pauseForHostResultFailure(claimedIdentity);
         return;
       }
       const messageIndex = resolution.messageIndex;
-      const message = this.dependencies.runtime.getChat()[messageIndex];
-      if (!message || !validateLoopTags_ACU(String(message.mes ?? ''), snapshot.settings.loopTags)) {
-        // The legacy evaluator's retry_delete decision applies only to the exact
-        // reply just attributed to this attempt. The host exposes only a
-        // delete-last primitive, so never risk deleting a newer user/AI floor.
-        const chatBeforeRemoval = this.dependencies.runtime.getChat();
-        if (messageIndex !== chatBeforeRemoval.length - 1 || !await this.dependencies.hostInput.removeLastMessage()) {
-          await this.dependencies.runtime.pauseForHostResultFailure(claimedIdentity);
-          return;
-        }
-        const chatAfterRemoval = this.dependencies.runtime.getChat();
-        if (chatAfterRemoval.length !== messageIndex) {
-          await this.dependencies.runtime.pauseForHostResultFailure(claimedIdentity);
-          return;
-        }
-        // [双写互斥] 坏标签楼即将被删除重发：本轮宿主正文对应的自动填表防抖（GENERATION_ENDED
-        // 派发，500ms 窗口）此刻仍指向那栋将被删掉的楼，若让它到期就会对已删楼层跑一次填表，
-        // 重发的第二次 ENDED 再填一次 → 双写。删楼确认后同步作废这条 pending debounce；
-        // 重发成功后的第二次 ENDED 会正常派发填表，因此不会漏填。
-        // 放在删除确认之后：上面任一回退分支（非末楼 / 删除失败 / 长度不符）都不会删楼，
-        // 也就不该顺手吞掉与本轮无关的填表。
-        try { this.dependencies.invalidatePendingAutoFill?.(); } catch { /* 填表作废失败不阻断重试链 */ }
-        await this.dependencies.runtime.rejectHostTurnForMissingTags({ identity: claimedIdentity, messageIndex });
-        const afterReject = this.dependencies.runtime.readPendingHostTurn();
-        if (afterReject?.pending.status === 'retry_ready' && afterReject.pending.identity.attemptId === claimedIdentity.attemptId) {
-          await this.retryCurrentHostTurn_ACU(snapshot.settings.retryDelaySeconds ?? 0);
-        }
+      const chat = this.dependencies.runtime.getChat();
+      if (messageIndex !== chat.length - 1) {
+        await this.dependencies.runtime.pauseForHostResultFailure(claimedIdentity);
         return;
       }
-      await this.dependencies.runtime.confirmCurrentTurn(claimedIdentity);
+      const message = chat[messageIndex];
+      if (!message || !validateLoopTags_ACU(String(message.mes ?? ''), snapshot.settings.loopTags)) {
+        // [双写互斥] 坏标签楼将由宿主 regenerate 删掉重生成：本轮正文对应的
+        // 自动填表防抖（GENERATION_ENDED 派发，500ms 窗口）此刻指向即将被删掉的楼，若让它到期
+        // 就会对已删楼层跑一次填表，regenerate 后的第二次 ENDED 再填一次 → 双写。作废这条
+        // pending debounce；重发成功后的第二次 ENDED 会正常派发填表，因此不会漏填。
+        try { this.dependencies.invalidatePendingAutoFill?.(); } catch { /* 填表作废失败不阻断重试链 */ }
+        await this.dependencies.runtime.rejectHostTurnForMissingTags({ identity: claimedIdentity, messageIndex });
+        await this.autoRetryHostGenerationIfReady_ACU(claimedIdentity, snapshot.settings.retryDelaySeconds ?? 0);
+        return;
+      }
+      await this.dependencies.runtime.confirmCurrentTurn(claimedIdentity, messageIndex);
     } catch {
       // A bridge failure must not leave an attributable turn indefinitely running.
       // The guarded fallback preserves a stale/persistence error when it can no
@@ -262,12 +249,13 @@ export class ContinuationHostGenerationBridge_ACU {
     if (!runtime.readAutoContinueState().eligible) return;
     try {
       const result = await runtime.continueTask();
-      if (result.preparedTurn) await this.send(result.preparedTurn);
+      if (result.retryHostGeneration) await this.retryHostGeneration();
+      else if (result.preparedTurn) await this.send(result.preparedTurn);
     } catch (error) {
       // 状态已由 orchestrator 记录（paused+lastError 或拒绝原因），自动链到此为止；
       // 但必须在会话流留痕——静默吞掉会让用户以为自动续写根本没触发。
       const message = error instanceof Error ? error.message : String(error);
-      logAgentSession_ACU({ kind: 'run_failed', title: '自动续写已暂停', detail: `${message}\n可点击「继续当前轮次」从中断处恢复。`, ok: false });
+      logAgentSession_ACU({ kind: 'run_failed', title: '自动续写已暂停', detail: `${message}\n进度已保留，输入新指令后发送即可继续。`, ok: false });
     }
   }
 
@@ -293,9 +281,41 @@ export class ContinuationHostGenerationBridge_ACU {
     return { kind: 'no_reply' };
   }
 
-  private async retryCurrentHostTurn_ACU(retryDelaySeconds: number): Promise<void> {
+  private async autoRetryHostGenerationIfReady_ACU(identity: TurnAttemptIdentity_ACU, retryDelaySeconds: number): Promise<void> {
+    const afterReject = this.dependencies.runtime.readPendingHostTurn();
+    if (afterReject?.pending.status !== 'retry_ready' || afterReject.pending.identity.attemptId !== identity.attemptId) return;
     await this.dependencies.wait(Math.max(0, retryDelaySeconds) * 1_000);
-    const result = await this.dependencies.runtime.retryCurrentTurn();
-    if (result.preparedTurn) await this.send(result.preparedTurn);
+    await this.retryHostGeneration();
+  }
+
+  /**
+   * 用酒馆自己的重新生成/生成链路重试当前轮，不再让 Agent 另造一条请求。
+   * 末楼是 AI 时走 regenerate（酒馆会删掉该楼）；末楼不是 AI 时走 generate。
+   */
+  async retryHostGeneration(): Promise<boolean> {
+    const runtime = this.dependencies.runtime;
+    const snapshot = runtime.readPendingHostTurn();
+    if (!snapshot || snapshot.pending.status !== 'retry_ready') return false;
+    if (snapshot.pending.identity.chatIdentity !== runtime.getChatIdentity()) return false;
+    const chat = runtime.getChat();
+    const lastIsAi = Array.isArray(chat) && chat.length > 0 && isAiMessage_ACU(chat[chat.length - 1]);
+    const aiCount = countAiMessages_ACU(Array.isArray(chat) ? chat : []);
+    const capture: ContinuationHostGenerationCapture_ACU = {
+      capturedAt: this.dependencies.now(),
+      capturedChatLength: lastIsAi ? Math.max(0, chat.length - 1) : (Array.isArray(chat) ? chat.length : 0),
+      capturedAiFloorCount: lastIsAi ? Math.max(0, aiCount - 1) : aiCount,
+      generationSeq: null,
+    };
+    await runtime.recordHostTurn({ identity: snapshot.pending.identity, capture });
+    this.sendingIdentity = snapshot.pending.identity;
+    try {
+      if (!this.dependencies.hostInput.retryGeneration(lastIsAi ? 'regenerate' : 'generate')) {
+        await runtime.pauseForHostInputFailure(snapshot.pending.identity);
+        return false;
+      }
+      return true;
+    } finally {
+      this.sendingIdentity = null;
+    }
   }
 }

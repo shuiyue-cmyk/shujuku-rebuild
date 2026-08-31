@@ -13,8 +13,9 @@ export type { AiUsageMetadata_ACU };
 /** 内部 AI 调用的缓存与用量选项。全部可选：不传时行为与历史版本完全一致。 */
 export interface ContinuationInternalAiCallOptions_ACU {
   /**
-   * 是否注入 prompt_cache_key 并订阅 usage 统计（对应续写设置 promptCacheEnabled）。
-   * 仅 custom（chat-completions）路径生效；tavern / 主 API 路径不受影响。
+   * 是否为 custom（chat-completions）请求注入 prompt_cache_key（对应续写设置 promptCacheEnabled）。
+   * 仅 custom 路径生效；tavern / 主 API 路径不受影响。
+   * 用量回调 onUsage 与此开关无关：关掉注入仍然统计缓存命中。
    */
   promptCacheEnabled?: boolean;
   /**
@@ -104,7 +105,7 @@ export async function callContinuationInternalAi_ACU(
       {
         beforeMainApiCall: () => beginContinuationInternalAiMainApiInvocation_ACU(identity.requestId),
         afterMainApiCall: () => endContinuationInternalAiMainApiInvocation_ACU(identity.requestId),
-        ...(cacheEnabled && options?.onUsage ? { onUsage: options.onUsage } : {}),
+        ...(options?.onUsage ? { onUsage: options.onUsage } : {}),
       },
       cacheEnabled
         ? { promptCacheKey: buildPromptCacheKey_ACU(identity, options?.cacheScope || identity.source, preset) }

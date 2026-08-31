@@ -430,6 +430,25 @@ describe('FirstFloorContinuationStore_ACU', () => {
     expect(chat[0]._qrf_continuation.activeTask.status).toBe('running');
   });
 
+  it('read() 按聊天实际长度回退阶段游标，readPersisted() 保留原始快照', () => {
+    const persisted = buildRunningEnvelope_ACU();
+    const stage = persisted.activeTask!.stages[0];
+    stage.completedTurns = 2;
+    stage.activeTurnIndex = 2;
+    persisted.activeTask!.timeline = [
+      { id: 'c1', at: 1, kind: 'turn_completed', stageId: 'stage-1', nodeId: 'node-1', turnId: 'turn-1', messageIndex: 2 },
+      { id: 'c2', at: 2, kind: 'turn_completed', stageId: 'stage-1', nodeId: 'node-1', turnId: 'turn-2', messageIndex: 4 },
+    ];
+    // 退楼到只剩 3 层：下标 4 的确认楼层已不存在，游标必须跟着对话走。
+    const chat: any[] = [{ _qrf_continuation: persisted }, {}, {}];
+    _set_SillyTavern_API_ACU({ chat, chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn() } as any);
+
+    const store = new FirstFloorContinuationStore_ACU();
+    expect(store.read()?.activeTask?.stages[0]).toMatchObject({ completedTurns: 1, activeNodeIndex: 0, activeTurnIndex: 1 });
+    expect(store.readPersisted()?.activeTask?.stages[0].completedTurns).toBe(2);
+    expect(chat[0]._qrf_continuation.activeTask.stages[0].completedTurns).toBe(2);
+  });
+
   it('rejects stale task, stage, and revision guards before writing', async () => {
     const current = buildRunningEnvelope_ACU();
     const chat: any[] = [{ _qrf_continuation: current }];
