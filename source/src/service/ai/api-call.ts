@@ -101,25 +101,22 @@ function normalizeExcludeBodyParamsForSillyTavern_ACU(raw: any): string {
 function sanitizeExcludeBodyForPresetFields_ACU(rawExclude: string, effectiveApiConfig: any): string {
   if (!rawExclude || typeof rawExclude !== 'string' || !rawExclude.trim()) return normalizeExcludeBodyParamsForSillyTavern_ACU(rawExclude);
   const rawKeys = rawExclude.split(/[,\n]/).map((s: string) => s.trim()).filter(Boolean);
-  const normalizedLower = rawKeys.map(k => k.toLowerCase());
-  const shouldKeep = (key: string): boolean => {
+  // 连带项修复（A2）：custom_exclude_body 是用户显式指令，优先于预设/全局的字段配置——
+  // 不再自动剔除冲突排除键（旧行为把用户的 stream/reasoning_effort/temperature 等排除静默删掉，
+  // 用户无从在 UI 恢复）。冲突仅告警提示，不改写用户的排除清单。
+  const conflicts = rawKeys.filter((key: string) => {
     const lower = key.toLowerCase();
-    if (lower === 'reasoning_effort' && effectiveApiConfig?.reasoningEffort) return false;
-    if (lower === 'reasoning_effort' && settings_ACU?.reasoningEffort) return false;
-    if ((lower === 'temperature' || lower === 'temp') && effectiveApiConfig?.temperature !== undefined) return false;
-    // [L6] 原先的 `lower === 'max_tokens '` / `'top_p '` 尾空格分支不可达：
-    // rawKeys 已逐项 trim，删除死分支。
-    if (lower === 'max_tokens' && (effectiveApiConfig?.max_tokens !== undefined || effectiveApiConfig?.maxTokens !== undefined)) return false;
-    if (lower === 'top_p' && (effectiveApiConfig?.top_p !== undefined || effectiveApiConfig?.topP !== undefined)) return false;
-    if (lower === 'stream' && effectiveApiConfig?.streamingEnabled !== undefined) return false;
-    return true;
-  };
-  const filtered = rawKeys.filter(shouldKeep);
-  if (filtered.length !== rawKeys.length) {
-    const removed = rawKeys.filter(k => !shouldKeep(k));
-    logWarn_ACU(`[API] 已自动移除 custom_exclude_body 中与预设显式配置冲突的字段: ${removed.join(', ')}，以保证预设配置生效。`);
+    if (lower === 'reasoning_effort' && (effectiveApiConfig?.reasoningEffort || settings_ACU?.reasoningEffort)) return true;
+    if ((lower === 'temperature' || lower === 'temp') && effectiveApiConfig?.temperature !== undefined) return true;
+    if (lower === 'max_tokens' && (effectiveApiConfig?.max_tokens !== undefined || effectiveApiConfig?.maxTokens !== undefined)) return true;
+    if (lower === 'top_p' && (effectiveApiConfig?.top_p !== undefined || effectiveApiConfig?.topP !== undefined)) return true;
+    if (lower === 'stream' && effectiveApiConfig?.streamingEnabled !== undefined) return true;
+    return false;
+  });
+  if (conflicts.length) {
+    logWarn_ACU(`[API] custom_exclude_body 与显式配置冲突，按排除优先（对应字段不会出现在请求体中）: ${conflicts.join(', ')}。如需该字段生效，请从排除参数里移除它。`);
   }
-  return normalizeExcludeBodyParamsForSillyTavern_ACU(filtered.join(', '));
+  return normalizeExcludeBodyParamsForSillyTavern_ACU(rawKeys.join(', '));
 }
 
 /**

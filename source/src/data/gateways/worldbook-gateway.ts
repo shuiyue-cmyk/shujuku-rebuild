@@ -311,7 +311,8 @@ export async function getWorldBooks_ACU(): Promise<string[]> {
  */
 /**
  * 获取「正文实际能接收到的」激活世界书名称（聊天级全局激活书，不依赖角色卡绑定）。
- * 复刻 biotracker vendor 的激活书探测：selected_world_info + world_info.globalSelect +
+ * 激活书探测口径（源自 biotracker 插件时代的探测链，vendor 已删除、语义保留）：
+ * selected_world_info + world_info.globalSelect +
  * 页面 #world_info 多选框 + TavernHelper.getLorebookSettings。
  * 填表「正文接收」来源（active）用；正文生成时这些书会被注入，角色卡绑定关系读不到。
  * @returns 去重后的激活世界书名称数组

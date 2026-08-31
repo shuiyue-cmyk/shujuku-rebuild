@@ -22,7 +22,7 @@ import { currentChatFileIdentifier_ACU, getCurrentIsolationKey_ACU, settings_ACU
 import { getCurrentCharSettings_ACU, getCurrentWorldbookConfig_ACU } from './settings-readers';
 import { reconcileApiBindingForCurrentChat_ACU } from './api-preset-service';
 import { getCurrentChatTemplateScopeState_ACU, getGlobalTemplateSnapshotForCurrentProfile_ACU, migrateLegacyTemplateScopeForCurrentChat_ACU, normalizeTemplateScopeIsolationKey_ACU, sanitizeChatSheetsObject_ACU, sanitizeTemplateSnapshotForChat_ACU } from '../template/chat-scope';
-import { safeJsonParse_ACU, safeJsonStringify_ACU } from '../../shared/json-helpers';
+import { safeJsonParse_ACU } from '../../shared/json-helpers';
 import { deepMerge_ACU, ensureSheetOrderNumbers_ACU, logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
 import { normalizeEditablePromptSegments_ACU } from '../agent/agent-prompt-template';
 
@@ -77,23 +77,6 @@ export function flushPendingSettingsSave_ACU(): SaveSettingsResult_ACU | null {
   } catch (e) {
     logWarn_ACU('[设置保存] 外部冲刷挂起保存失败:', e);
     return { saved: false, storageType: 'memory', code: 'storage_error', error: String(e) };
-  }
-}
-
-/**
- * 替换 settings_ACU 整体对象，同时保留 biotracker 运行时命名空间（bs_biotracker）。
- * biotracker 适配层在 settings 加载完成前（IndexedDB 缓存未就绪时 loadSettings 挂起重载）
- * 可能已在旧 settings_ACU 对象上惰性创建 bs_biotracker 并写入注册数据（保存被
- * settingsStorageReadyForSave_ACU 门控拒绝落盘）。若这里整体替换丢掉该命名空间：
- * 面板 ctx（bootstrap 时对旧对象的引用快照）仍显示已注册角色，而数据库页面读新对象为空。
- */
-function replaceSettingsPreservingBiotracker(next: any): void {
-  const prevBiotracker = settings_ACU?.bs_biotracker;
-  _set_settings_ACU(next);
-  if (prevBiotracker && !settings_ACU.bs_biotracker) {
-    // [M6] 移植时深拷贝：避免新旧 settings 对象共享同一 bs_biotracker 子对象引用，
-    // 否则任一侧的运行时写入都会穿透到另一侧。拷贝失败时回退原引用（保数据优先）。
-    settings_ACU.bs_biotracker = safeJsonParse_ACU(safeJsonStringify_ACU(prevBiotracker, ''), prevBiotracker) || prevBiotracker;
   }
 }
 
@@ -462,7 +445,7 @@ export   function loadSettings_ACU() {
               }
               
               // Deep merge saved settings into defaults to ensure new properties are added
-              replaceSettingsPreservingBiotracker(deepMerge_ACU(defaultSettings, savedSettings));
+              _set_settings_ACU(deepMerge_ACU(defaultSettings, savedSettings));
 
               // [剧情推进] 迁移/兜底：确保 plotWorldbookConfig 存在且结构完整
               ensurePlotSettingsObject_ACU();
@@ -520,7 +503,7 @@ export   function loadSettings_ACU() {
               
           } else {
               // No saved settings, use the defaults
-              replaceSettingsPreservingBiotracker(defaultSettings);
+              _set_settings_ACU(defaultSettings);
               // [剧情推进] 默认兜底
               if (!settings_ACU.plotSettings.plotWorldbookConfig) {
                   settings_ACU.plotSettings.plotWorldbookConfig = buildDefaultPlotWorldbookConfig_ACU();
@@ -541,7 +524,7 @@ export   function loadSettings_ACU() {
           // [H1] 加载处理异常同样视为不可信读取：先把存储中的原始串备份到旁路键再降级默认配置，
           // 防止下方 shouldPersist=true 的默认值补齐覆盖写回同一分桶键导致真实配置永久丢失。
           try { backupProfileSettingsRawBeforeDegradation_ACU?.(activeCode, 'load_exception'); } catch (backupError) { /* ignore */ }
-          replaceSettingsPreservingBiotracker(buildDefaultSettings_ACU());
+          _set_settings_ACU(buildDefaultSettings_ACU());
           settings_ACU.dataIsolationCode = activeCode;
           settings_ACU.dataIsolationEnabled = (activeCode !== '');
       }

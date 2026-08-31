@@ -161,7 +161,6 @@ const ACU_TOAST_CATEGORY_ACU = {
     MANUAL_TABLE: 'manual_table',
     MERGE_TABLE: 'merge_table',
     IMPORT: 'import',
-    BIOTRACKER: 'biotracker',
 };
 const TABLE_ORDER_FIELD_ACU = 'orderNo';
 
@@ -5760,7 +5759,8 @@ async function getWorldBooks_ACU$1() {
  */
 /**
  * 获取「正文实际能接收到的」激活世界书名称（聊天级全局激活书，不依赖角色卡绑定）。
- * 复刻 biotracker vendor 的激活书探测：selected_world_info + world_info.globalSelect +
+ * 激活书探测口径（源自 biotracker 插件时代的探测链，vendor 已删除、语义保留）：
+ * selected_world_info + world_info.globalSelect +
  * 页面 #world_info 多选框 + TavernHelper.getLorebookSettings。
  * 填表「正文接收」来源（active）用；正文生成时这些书会被注入，角色卡绑定关系读不到。
  * @returns 去重后的激活世界书名称数组
@@ -71732,31 +71732,27 @@ function sanitizeExcludeBodyForPresetFields_ACU(rawExclude, effectiveApiConfig) 
     if (!rawExclude || typeof rawExclude !== 'string' || !rawExclude.trim())
         return normalizeExcludeBodyParamsForSillyTavern_ACU(rawExclude);
     const rawKeys = rawExclude.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
-    const normalizedLower = rawKeys.map(k => k.toLowerCase());
-    const shouldKeep = (key) => {
+    // 连带项修复（A2）：custom_exclude_body 是用户显式指令，优先于预设/全局的字段配置——
+    // 不再自动剔除冲突排除键（旧行为把用户的 stream/reasoning_effort/temperature 等排除静默删掉，
+    // 用户无从在 UI 恢复）。冲突仅告警提示，不改写用户的排除清单。
+    const conflicts = rawKeys.filter((key) => {
         const lower = key.toLowerCase();
-        if (lower === 'reasoning_effort' && effectiveApiConfig?.reasoningEffort)
-            return false;
-        if (lower === 'reasoning_effort' && settings_ACU?.reasoningEffort)
-            return false;
+        if (lower === 'reasoning_effort' && (effectiveApiConfig?.reasoningEffort || settings_ACU?.reasoningEffort))
+            return true;
         if ((lower === 'temperature' || lower === 'temp') && effectiveApiConfig?.temperature !== undefined)
-            return false;
-        // [L6] 原先的 `lower === 'max_tokens '` / `'top_p '` 尾空格分支不可达：
-        // rawKeys 已逐项 trim，删除死分支。
+            return true;
         if (lower === 'max_tokens' && (effectiveApiConfig?.max_tokens !== undefined || effectiveApiConfig?.maxTokens !== undefined))
-            return false;
+            return true;
         if (lower === 'top_p' && (effectiveApiConfig?.top_p !== undefined || effectiveApiConfig?.topP !== undefined))
-            return false;
+            return true;
         if (lower === 'stream' && effectiveApiConfig?.streamingEnabled !== undefined)
-            return false;
-        return true;
-    };
-    const filtered = rawKeys.filter(shouldKeep);
-    if (filtered.length !== rawKeys.length) {
-        const removed = rawKeys.filter(k => !shouldKeep(k));
-        logWarn_ACU(`[API] 已自动移除 custom_exclude_body 中与预设显式配置冲突的字段: ${removed.join(', ')}，以保证预设配置生效。`);
+            return true;
+        return false;
+    });
+    if (conflicts.length) {
+        logWarn_ACU(`[API] custom_exclude_body 与显式配置冲突，按排除优先（对应字段不会出现在请求体中）: ${conflicts.join(', ')}。如需该字段生效，请从排除参数里移除它。`);
     }
-    return normalizeExcludeBodyParamsForSillyTavern_ACU(filtered.join(', '));
+    return normalizeExcludeBodyParamsForSillyTavern_ACU(rawKeys.join(', '));
 }
 /**
  * 构建 Chat Completions 自定义 API 请求体（支持 bodyParams / excludeBodyParams / requestHeaders）
@@ -95369,22 +95365,6 @@ function flushPendingSettingsSave_ACU() {
         return { saved: false, storageType: 'memory', code: 'storage_error', error: String(e) };
     }
 }
-/**
- * 替换 settings_ACU 整体对象，同时保留 biotracker 运行时命名空间（bs_biotracker）。
- * biotracker 适配层在 settings 加载完成前（IndexedDB 缓存未就绪时 loadSettings 挂起重载）
- * 可能已在旧 settings_ACU 对象上惰性创建 bs_biotracker 并写入注册数据（保存被
- * settingsStorageReadyForSave_ACU 门控拒绝落盘）。若这里整体替换丢掉该命名空间：
- * 面板 ctx（bootstrap 时对旧对象的引用快照）仍显示已注册角色，而数据库页面读新对象为空。
- */
-function replaceSettingsPreservingBiotracker(next) {
-    const prevBiotracker = settings_ACU?.bs_biotracker;
-    _set_settings_ACU(next);
-    if (prevBiotracker && !settings_ACU.bs_biotracker) {
-        // [M6] 移植时深拷贝：避免新旧 settings 对象共享同一 bs_biotracker 子对象引用，
-        // 否则任一侧的运行时写入都会穿透到另一侧。拷贝失败时回退原引用（保数据优先）。
-        settings_ACU.bs_biotracker = safeJsonParse_ACU(safeJsonStringify_ACU(prevBiotracker, ''), prevBiotracker) || prevBiotracker;
-    }
-}
 function scheduleSettingsReloadAfterIdbReady_ACU(reason) {
     if (settingsReloadAfterIdbScheduled_ACU)
         return;
@@ -95736,7 +95716,7 @@ function loadSettings_ACU() {
                 delete savedSettings.worldbookConfig;
             }
             // Deep merge saved settings into defaults to ensure new properties are added
-            replaceSettingsPreservingBiotracker(deepMerge_ACU(defaultSettings, savedSettings));
+            _set_settings_ACU(deepMerge_ACU(defaultSettings, savedSettings));
             // [剧情推进] 迁移/兜底：确保 plotWorldbookConfig 存在且结构完整
             ensurePlotSettingsObject_ACU();
             if (!settings_ACU.plotSettings.plotWorldbookConfig) {
@@ -95789,7 +95769,7 @@ function loadSettings_ACU() {
         }
         else {
             // No saved settings, use the defaults
-            replaceSettingsPreservingBiotracker(defaultSettings);
+            _set_settings_ACU(defaultSettings);
             // [剧情推进] 默认兜底
             if (!settings_ACU.plotSettings.plotWorldbookConfig) {
                 settings_ACU.plotSettings.plotWorldbookConfig = buildDefaultPlotWorldbookConfig_ACU();
@@ -95815,7 +95795,7 @@ function loadSettings_ACU() {
             backupProfileSettingsRawBeforeDegradation_ACU?.(activeCode, 'load_exception');
         }
         catch (backupError) { /* ignore */ }
-        replaceSettingsPreservingBiotracker(buildDefaultSettings_ACU());
+        _set_settings_ACU(buildDefaultSettings_ACU());
         settings_ACU.dataIsolationCode = activeCode;
         settings_ACU.dataIsolationEnabled = (activeCode !== '');
     }
@@ -96977,7 +96957,6 @@ function _acuShouldShowToast_ACU(type, title, message, options = {}) {
             ACU_TOAST_CATEGORY_ACU.MANUAL_TABLE,
             ACU_TOAST_CATEGORY_ACU.MERGE_TABLE,
             ACU_TOAST_CATEGORY_ACU.IMPORT,
-            ACU_TOAST_CATEGORY_ACU.BIOTRACKER,
         ]);
         if (cat && allow.has(cat))
             return true;
@@ -109118,10 +109097,14 @@ function __resetChatMutationSchedulerForTests_ACU() {
     pendingAfterRun_ACU = false;
 }
 
-const EMPTY_LIST = Object.freeze([]);
-const HOST_CHAT_VIEW_CACHE = new WeakMap();
+/**
+ * service/biotracker/host-bridge.ts — 宿主桥（silent-migration 专用精简层）
+ *
+ * 由剥离内置 biotracker 时的 vendor/host.js 抽出：仅保留一次性静默迁移
+ * （silent-migration.ts）所需的宿主读写能力与其内部依赖，行为逐字等价。
+ * 面板/追踪用的聊天视图、事件订阅、世界书/预设读取等导出已全部弃置。
+ */
 const HOST_STABLE_CHAT_ID_CACHE = new WeakMap();
-const TAURI_HISTORY_PAGE_SIZE = 200;
 const TAURI_STATE_NAMESPACE = 'bs-biotracker';
 const TAURI_STATE_KEY = 'chat-state-v1';
 const TAURI_STATE_SAVE_DELAY_MS = 250;
@@ -109133,14 +109116,6 @@ const TAURI_STATE_LOAD_INFLIGHT = new Map();
 const TAURI_STATE_HYDRATED_IDS = new Set();
 const TAURI_HANDLE_WAIT_TIMEOUT_MS = 3000;
 const TAURI_HANDLE_WAIT_INTERVAL_MS = 100;
-const HOST_EVENT_TYPE_KEYS = Object.freeze({
-    appReady: 'APP_READY',
-    chatChanged: 'CHAT_CHANGED',
-    chatCreated: 'CHAT_CREATED',
-    chatDeleted: 'CHAT_DELETED',
-    groupChatCreated: 'GROUP_CHAT_CREATED',
-    groupChatDeleted: 'GROUP_CHAT_DELETED',
-});
 function getHostKind() {
     if (globalThis.__TAURITAVERN__)
         return 'tauritavern';
@@ -109156,131 +109131,6 @@ function getHostContext() {
         console.warn('[BS BioTracker] unable to read host context', error);
         return null;
     }
-}
-async function getHostAgentRunBarrier(ctx, message) {
-    if (getHostKind() !== 'tauritavern')
-        return { state: 'not_applicable', runId: '' };
-    const runId = String(message?.extra?.tauritavern?.agent?.runId || '').trim();
-    if (!runId)
-        return { state: 'not_applicable', runId: '' };
-    const ready = globalThis.__TAURITAVERN__?.ready || globalThis.__TAURITAVERN_MAIN_READY__;
-    if (ready && typeof ready.then === 'function')
-        await ready;
-    const agentApi = getTauriTavernApi()?.agent;
-    if (typeof agentApi?.readEvents !== 'function')
-        return { state: 'pending', runId };
-    try {
-        const result = await agentApi.readEvents({ runId, limit: 500 });
-        const events = Array.isArray(result?.events) ? result.events : [];
-        const types = new Set(events.map((event) => String(event?.type || '')));
-        if (types.has('run_completed'))
-            return { state: 'completed', runId };
-        if (types.has('run_cancelled') || types.has('run_failed'))
-            return { state: 'aborted', runId };
-        return { state: 'pending', runId };
-    }
-    catch (error) {
-        console.warn('[BS BioTracker] unable to read TauriTavern agent run events', error);
-        return { state: 'pending', runId };
-    }
-}
-function subscribeHostEvent(ctx, eventName, handler) {
-    const eventSource = ctx?.eventSource;
-    const eventTypeKey = HOST_EVENT_TYPE_KEYS[eventName];
-    const eventType = eventTypeKey ? ctx?.event_types?.[eventTypeKey] : null;
-    if (!eventSource || !eventType || typeof eventSource.on !== 'function' || typeof handler !== 'function')
-        return null;
-    const safeHandler = (...args) => {
-        try {
-            const result = handler(...args);
-            if (result && typeof result.catch === 'function') {
-                result.catch((error) => console.error(`[BS BioTracker] host event ${eventName} failed`, error));
-            }
-        }
-        catch (error) {
-            console.error(`[BS BioTracker] host event ${eventName} failed`, error);
-        }
-    };
-    eventSource.on(eventType, safeHandler);
-    let active = true;
-    return () => {
-        if (!active)
-            return;
-        active = false;
-        if (typeof eventSource.off === 'function')
-            eventSource.off(eventType, safeHandler);
-    };
-}
-function replaceHostEventSubscription(ctx, eventName, previousUnsubscribe, handler) {
-    if (typeof previousUnsubscribe === 'function')
-        previousUnsubscribe();
-    return subscribeHostEvent(ctx, eventName, handler);
-}
-function getHostChat(ctx) {
-    const cached = ctx && typeof ctx === 'object' ? HOST_CHAT_VIEW_CACHE.get(ctx) : null;
-    if (cached?.chatId === getHostChatId(ctx) && Array.isArray(cached.messages))
-        return cached.messages;
-    return Array.isArray(ctx?.chat) ? ctx.chat : EMPTY_LIST;
-}
-function hasAbsoluteHostChatView(ctx) {
-    const cached = ctx && typeof ctx === 'object' ? HOST_CHAT_VIEW_CACHE.get(ctx) : null;
-    return Boolean(cached?.chatId === getHostChatId(ctx) && cached.absolute === true);
-}
-function assignHistoryPage(target, page) {
-    const startIndex = Math.max(0, Number(page?.startIndex) || 0);
-    const messages = Array.isArray(page?.messages) ? page.messages : EMPTY_LIST;
-    for (let index = 0; index < messages.length; index += 1) {
-        target[startIndex + index] = messages[index];
-    }
-}
-async function refreshHostChatView(ctx, options = {}, retriesLeft = 2) {
-    if (getHostKind() !== 'tauritavern')
-        return getHostChat(ctx);
-    const ready = globalThis.__TAURITAVERN__?.ready || globalThis.__TAURITAVERN_MAIN_READY__;
-    if (ready && typeof ready.then === 'function')
-        await ready;
-    const api = getTauriTavernApi()?.chat;
-    if (!api?.current?.windowInfo || !api?.current?.handle)
-        return getHostChat(ctx);
-    const info = await api.current.windowInfo();
-    const totalCount = Math.max(0, Number(info?.totalCount) || 0);
-    const contextSize = Math.max(2, Number(options.contextSize) || 12);
-    const resumeIndexes = Array.isArray(options.resumeIndexes) ? options.resumeIndexes : [options.afterIndex];
-    const afterIndex = resumeIndexes.reduce((latest, value) => {
-        const index = Number(value);
-        return Number.isInteger(index) && index >= 0 && index <= totalCount && index > latest ? index : latest;
-    }, 0);
-    const requiredStartIndex = Math.max(0, afterIndex - contextSize);
-    const minimumTailSize = Math.max(contextSize, totalCount - requiredStartIndex);
-    const handle = api.current.handle();
-    const startChatId = getHostChatId(ctx);
-    let page = await handle.history.tail({ limit: Math.min(TAURI_HISTORY_PAGE_SIZE, Math.max(1, minimumTailSize)) });
-    const messages = new Array(totalCount);
-    assignHistoryPage(messages, page);
-    while (page?.hasMoreBefore && Number(page.startIndex) > requiredStartIndex) {
-        // 翻页是异步的，期间宿主可能被切到另一个聊天：继续翻只会把两个聊天的楼层混在一起
-        page = await handle.history.before(page, { limit: TAURI_HISTORY_PAGE_SIZE });
-        assignHistoryPage(messages, page);
-        if (getHostChatId(ctx) !== startChatId)
-            break;
-    }
-    // 中途切换聊天 → 本轮结果作废，不写缓存；重试有限次，避免用户连续切聊天时无限递归
-    if (getHostChatId(ctx) !== startChatId) {
-        if (retriesLeft > 0)
-            return refreshHostChatView(ctx, options, retriesLeft - 1);
-        return getHostChat(ctx);
-    }
-    HOST_CHAT_VIEW_CACHE.set(ctx, {
-        absolute: true,
-        chatId: startChatId,
-        messages,
-        loadedStartIndex: Math.max(0, Number(page?.startIndex) || 0),
-        totalCount,
-    });
-    return messages;
-}
-function getHostCharacters(ctx) {
-    return Array.isArray(ctx?.characters) ? ctx.characters : EMPTY_LIST;
 }
 function getHostChatId(ctx) {
     const fallbackId = getFallbackHostChatId(ctx);
@@ -109346,70 +109196,6 @@ function saveHostSettings(ctx) {
         console.warn('[BS BioTracker] unable to save host settings', error);
     }
 }
-function getHostChatCompletionSettings(ctx = null) {
-    const runtime = ctx || getHostContext();
-    const settings = runtime?.chatCompletionSettings;
-    return settings && typeof settings === 'object' ? settings : null;
-}
-function canLoadHostWorldInfo(ctx) {
-    return typeof ctx?.loadWorldInfo === 'function';
-}
-async function loadHostWorldInfo(ctx, name) {
-    if (!canLoadHostWorldInfo(ctx))
-        return null;
-    return ctx.loadWorldInfo(String(name || ''));
-}
-async function getHostWorldBook(name, scope = 'global') {
-    const worldBookApi = globalThis.ST_API?.worldBook;
-    if (typeof worldBookApi?.get !== 'function')
-        return null;
-    const result = await worldBookApi.get({ name: String(name || ''), scope: String(scope || 'global') });
-    return result?.worldBook || null;
-}
-async function getHostWorldInfoPrompt(ctx, chat, maxContext, includeNames = true) {
-    if (typeof ctx?.getWorldInfoPrompt !== 'function')
-        return null;
-    return ctx.getWorldInfoPrompt(chat, maxContext, includeNames);
-}
-function getHostPresetManager(ctx = null, apiId = 'openai') {
-    const runtime = ctx || getHostContext();
-    if (typeof runtime?.getPresetManager !== 'function')
-        return null;
-    return runtime.getPresetManager(apiId);
-}
-async function listHostPresets() {
-    const presetApi = globalThis.ST_API?.preset;
-    return typeof presetApi?.list === 'function' ? presetApi.list() : null;
-}
-async function getHostPreset(name, ctx = null) {
-    const presetName = String(name || '').trim();
-    if (!presetName)
-        return null;
-    const presetApi = globalThis.ST_API?.preset;
-    if (typeof presetApi?.get === 'function') {
-        const result = await presetApi.get({ name: presetName });
-        if (result?.preset && typeof result.preset === 'object')
-            return result.preset;
-    }
-    if (globalThis.openai_settings && typeof globalThis.openai_settings === 'object') {
-        const preset = globalThis.openai_settings[presetName];
-        if (preset && typeof preset === 'object')
-            return preset;
-    }
-    const settings = getHostChatCompletionSettings(ctx);
-    if (settings?.[presetName] && typeof settings[presetName] === 'object')
-        return settings[presetName];
-    if (settings?.presets?.[presetName] && typeof settings.presets[presetName] === 'object')
-        return settings.presets[presetName];
-    return null;
-}
-async function registerHostExtensionMenuItem(options) {
-    const uiApi = globalThis.ST_API?.ui;
-    if (typeof uiApi?.registerExtensionsMenuItem !== 'function')
-        return false;
-    await uiApi.registerExtensionsMenuItem(options);
-    return true;
-}
 function getTauriTavernApi() {
     const api = globalThis.__TAURITAVERN__?.api;
     return api && typeof api === 'object' ? api : null;
@@ -109426,7 +109212,6 @@ function getCurrentTauriChatHandle() {
 /**
  * 保守判空：只有确认不含任何用户资料才算空。
  * 判错方向要偏「非空」——把真资料误判为空会导致存档被洗掉，反之只是多写一次。
- * 不复用 state.js 的 isChatStateEffectivelyEmpty，因为 state.js 依赖本模块，反向 import 会成环。
  */
 function isHostChatStateBlank(chatState) {
     if (!chatState || typeof chatState !== 'object')
@@ -109468,11 +109253,6 @@ function isHostChatStateConfirmed(ctx) {
     return TAURI_STATE_HYDRATED_IDS.has(getHostChatId(ctx));
 }
 /**
- * 等待当前聊天的 store 句柄就绪。
- * 重开存档时 TT 主体可能已经 ready，但该聊天的 handle 还没挂上；
- * 原本直接当成「没有存档」返回，面板就会显示成未注册。这里给一段有限等待。
- */
-/**
  * 先确认 sidecar 是否存在，避免直接 getJson 触发宿主的 not-found 弹窗。
  *
  * TauriTavern 把 store 读取 miss 当成后端错误：新聊天第一次探测时，
@@ -109481,7 +109261,7 @@ function isHostChatStateConfirmed(ctx) {
  * 只是前端包装的方法名未知，因此这里做特性探测：
  * 探得到就先列 key 再决定要不要读；探不到就回退成原本的直接读取。
  *
- * @returns {Promise<boolean|null>} true/false 为确定结果，null 表示无从检查
+ * @returns true/false 为确定结果，null 表示无从检查
  */
 async function tauriChatStoreHasKey(handle, namespace, key) {
     const store = handle?.store;
@@ -109505,6 +109285,11 @@ async function tauriChatStoreHasKey(handle, namespace, key) {
         return null;
     }
 }
+/**
+ * 等待当前聊天的 store 句柄就绪。
+ * 重开存档时 TT 主体可能已经 ready，但该聊天的 handle 还没挂上；
+ * 原本直接当成「没有存档」返回，面板就会显示成未注册。这里给一段有限等待。
+ */
 async function waitForTauriChatStoreHandle(timeoutMs = TAURI_HANDLE_WAIT_TIMEOUT_MS) {
     let handle = getCurrentTauriChatHandle();
     if (typeof handle?.store?.getJson === 'function')
@@ -144946,8 +144731,10 @@ function apiPresetDraftFromPreset(preset) {
         excludeBodyParams: preset.apiConfig.excludeBodyParams || '',
         requestHeaders: preset.apiConfig.requestHeaders || '',
         nonPrefillSupport: preset.nonPrefillSupport === true,
-        streamingEnabled: preset.apiConfig.streamingEnabled === true,
-        reasoningEffort: preset.apiConfig.reasoningEffort || 'medium',
+        // A2 修复：undefined 必须原样保留（=跟随全局）。旧版把 undefined 读成 false/'medium'
+        // 再恒写具体值，旧预设只要「打开面板并保存」一次就被固化为显式配置，永久失去全局回退。
+        streamingEnabled: typeof preset.apiConfig.streamingEnabled === 'boolean' ? preset.apiConfig.streamingEnabled : undefined,
+        reasoningEffort: typeof preset.apiConfig.reasoningEffort === 'string' && preset.apiConfig.reasoningEffort ? preset.apiConfig.reasoningEffort : undefined,
         publicServiceMode: preset.publicServiceMode === true,
         customApiFormat: preset.apiConfig.customApiFormat || 'openai_compat',
     };
@@ -144965,10 +144752,13 @@ function apiPresetFromDraft(draft) {
             bodyParams: draft.bodyParams || '',
             excludeBodyParams: draft.excludeBodyParams || '',
             requestHeaders: draft.requestHeaders || '',
-            streamingEnabled: draft.streamingEnabled === true,
-            reasoningEffort: ['low', 'medium', 'high', 'max', 'xhigh'].includes(draft.reasoningEffort)
-                ? draft.reasoningEffort
-                : 'medium',
+            // undefined = 用户未显式配置 → 整个键不写，保持「跟随全局」语义（A2 修复）。
+            ...(draft.streamingEnabled === true || draft.streamingEnabled === false
+                ? { streamingEnabled: draft.streamingEnabled }
+                : {}),
+            ...(typeof draft.reasoningEffort === 'string' && ['low', 'medium', 'high', 'max', 'xhigh'].includes(draft.reasoningEffort)
+                ? { reasoningEffort: draft.reasoningEffort }
+                : {}),
             customApiFormat: ['openai_compat', 'openai_responses', 'claude_messages', 'gemini_interactions'].includes(draft.customApiFormat)
                 ? draft.customApiFormat
                 : 'openai_compat',
@@ -146384,8 +146174,8 @@ var _sfc_main$U = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-api-config-panel__hint[data-v-09e26eef] {\r\n  color: var(--acu-text-3, #9e978e);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-api-config-panel__hint-danger[data-v-09e26eef] {\r\n  color: var(--acu-danger, #e5484d);\n}\n.acu-api-config-panel__select-row[data-v-09e26eef] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-09e26eef] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-09e26eef] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-09e26eef] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-09e26eef] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-09e26eef] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-09e26eef] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-09e26eef] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-09e26eef] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-09e26eef");
-var ApiConfigPanel_vue_vue_type_style_index_0_scoped_09e26eef_lang = null;
+injectSfcStyle("\n.acu-api-config-panel__hint[data-v-4a0617e6] {\r\n  color: var(--acu-text-3, #9e978e);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-api-config-panel__hint-danger[data-v-4a0617e6] {\r\n  color: var(--acu-danger, #e5484d);\n}\n.acu-api-config-panel__select-row[data-v-4a0617e6] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-4a0617e6] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-4a0617e6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-4a0617e6] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-4a0617e6] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-4a0617e6] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-4a0617e6] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-4a0617e6] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-4a0617e6] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-4a0617e6");
+var ApiConfigPanel_vue_vue_type_style_index_0_scoped_4a0617e6_lang = null;
 
 const _hoisted_1$S = { class: "acu-api-config-panel__select-row" };
 const _hoisted_2$L = { class: "acu-api-config-panel__editor-section" };
@@ -146560,18 +146350,18 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 					}, {
 						default: withCtx(() => [createVNode($setup["AcuSelect"], {
 							options: $setup.reasoningEffortOptions,
-							"model-value": $setup.activeDraft.reasoningEffort,
+							"model-value": $setup.activeDraft.reasoningEffort || "",
 							placeholder: "请选择",
 							"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.activeDraft.reasoningEffort = $event)
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
 					createVNode($setup["AcuToggle"], {
-						modelValue: $setup.activeDraft.streamingEnabled,
+						"model-value": $setup.activeDraft.streamingEnabled === true,
 						"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.activeDraft.streamingEnabled = $event),
 						label: "流式输出",
-						description: "该预设开启后 AI 响应以流式方式输出（用于对话类调用）。每个 API 预设独立。"
-					}, null, 8, ["modelValue"]),
+						description: "该预设开启后 AI 响应以流式方式输出（用于对话类调用）。每个 API 预设独立。未显式拨动过则跟随全局流式开关。"
+					}, null, 8, ["model-value"]),
 					createVNode($setup["AcuToggle"], {
 						modelValue: $setup.activeDraft.nonPrefillSupport,
 						"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.activeDraft.nonPrefillSupport = $event),
@@ -146694,7 +146484,7 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["title", "description"]);
 }
-var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$U, [["render", _sfc_render$U], ["__scopeId", "data-v-09e26eef"]]);
+var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$U, [["render", _sfc_render$U], ["__scopeId", "data-v-4a0617e6"]]);
 
 // ═══════════════════════════════════════════════════════════
 // service/settings/feature-preset-reference-service.ts — 功能级 API 预设引用
@@ -169458,12 +169248,11 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  * - worldbookDebug：最近一次世界书扫描（entryCount/baseScanLen/chatLen/triggeredCount/shouldUseWorker）
  * - lastApiBody：最近一次 buildCustomApiRequestBody 完整请求体（脱敏）与时间
  * - logs：log-buffer 全量日志（含 Debug 采集开启后的细粒度日志）
- * - biotracker：最近一次追踪/注册请求与响应（biotracker debug 采集数据，body 已脱敏）
  * - tables：表名 + 行数 + 脱敏 sampleRows（前 3 行各前 8 列，超长截断）
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260830-23";
+        const stamp = "20260831-01";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -169494,7 +169283,7 @@ function maskSensitiveString(str) {
         .replace(/([?&](?:api[_-]?key|token|authorization)=)([^&#\s"',}]+)/gi, '$1***')
         .replace(/("(?:api[_-]?key|apikey|authorization|token|password|secret)"\s*:\s*")([^"]+)(")/gi, '$1***$3');
 }
-/** 递归脱敏对象中的敏感字段（biotracker 请求/响应快照可能含 Authorization/key 回显） */
+/** 递归脱敏对象中的敏感字段（API 请求/响应快照可能含 Authorization/key 回显） */
 function maskSensitiveFields(value, depth = 0, seen = new WeakSet()) {
     if (typeof value === 'string')
         return maskSensitiveString(value);
@@ -169609,22 +169398,6 @@ function useDebugPanel() {
                     },
                     plotEnabled: settings_ACU?.plotSettings?.enabled === true,
                 };
-                const biotrackerDebug = {};
-                try {
-                    const req = globalThis.__bs_biotracker_debug_last_effective_request__;
-                    const resp = globalThis.__bs_biotracker_debug_last_api_response__;
-                    if (req)
-                        biotrackerDebug.lastRequest = maskSensitiveFields(req);
-                    if (resp)
-                        biotrackerDebug.lastResponse = maskSensitiveFields(resp);
-                    const trackerReq = globalThis.__bs_biotracker_debug_last_tracker_request__;
-                    const trackerResult = globalThis.__bs_biotracker_debug_last_tracker_result__;
-                    if (trackerReq)
-                        biotrackerDebug.lastTrackerRequest = maskSensitiveFields(trackerReq);
-                    if (trackerResult)
-                        biotrackerDebug.lastTrackerResult = maskSensitiveFields(trackerResult);
-                }
-                catch { }
                 const tables = {};
                 try {
                     const data = currentJsonTableData_ACU || {};
@@ -169700,7 +169473,6 @@ function useDebugPanel() {
                         tag: e.tag,
                         message: maskSensitiveString(e.message),
                     })),
-                    biotracker: biotrackerDebug,
                     tables,
                 };
                 const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -169774,22 +169546,6 @@ function useDebugPanel() {
             },
             plotEnabled: settings_ACU?.plotSettings?.enabled === true,
         };
-        const biotrackerDebug = {};
-        try {
-            const req = globalThis.__bs_biotracker_debug_last_effective_request__;
-            const resp = globalThis.__bs_biotracker_debug_last_api_response__;
-            if (req)
-                biotrackerDebug.lastRequest = maskSensitiveFields(req);
-            if (resp)
-                biotrackerDebug.lastResponse = maskSensitiveFields(resp);
-            const trackerReq = globalThis.__bs_biotracker_debug_last_tracker_request__;
-            const trackerResult = globalThis.__bs_biotracker_debug_last_tracker_result__;
-            if (trackerReq)
-                biotrackerDebug.lastTrackerRequest = maskSensitiveFields(trackerReq);
-            if (trackerResult)
-                biotrackerDebug.lastTrackerResult = maskSensitiveFields(trackerResult);
-        }
-        catch { /* biotracker debug 数据读取失败不影响导出 */ }
         const tables = {};
         try {
             const data = currentJsonTableData_ACU || {};
@@ -169856,7 +169612,6 @@ function useDebugPanel() {
                 tag: e.tag,
                 message: maskSensitiveString(e.message),
             })),
-            biotracker: biotrackerDebug,
             tables,
         };
         const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -170648,7 +170403,7 @@ const ACU_V2_PAGE_REGISTRY = Object.freeze([
     // 工具
     { id: 'data-mgmt', title: '数据管理', group: 'tool', component: markRaw(DataMgmtPage) },
     { id: 'advanced-tools', title: '高级工具', group: 'tool', component: markRaw(AdvancedToolsPage) },
-    // 生理追踪（biotracker）已从数据库剥离：页面入口移除，模块代码休眠保留
+    // 生理追踪（biotracker）合并层已彻底删除，仅存 silent-migration（存量数据一次性迁移上游）
     // 开发者（plan §D24：仪表盘"启用开发者选项"总开关 gate）
     {
         id: 'developer',

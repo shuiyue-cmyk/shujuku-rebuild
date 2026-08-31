@@ -702,8 +702,6 @@ describe("DashboardPage", () => {
       "summaryVectorIndexModeEnabled",
       "developerOptionsEnabled",
     ]);
-    // 生理追踪（内置 biotracker）为开发者调试功能：默认隐藏，开发者选项开启后才显示
-    expect(visibleToggleKeys).not.toContain("biotrackerEnabled");
 
     mount.__resetAcuV2MountForTests();
   });
@@ -792,8 +790,6 @@ describe("DashboardPage", () => {
       "summaryVectorIndexModeEnabled",
       "developerOptionsEnabled",
     ]);
-    // 生理追踪（内置 biotracker）为开发者调试功能：默认隐藏，开发者选项开启后才显示
-    expect(visibleToggleKeys).not.toContain("biotrackerEnabled");
 
     const toggle = document.querySelector(
       'button[data-acu-toggle-key="contentReplaceEnabled"]',

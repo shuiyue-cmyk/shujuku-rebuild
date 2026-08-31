@@ -239,7 +239,6 @@ function _acuShouldShowToast_ACU(type: any, title: any, message: any, options: a
       ACU_TOAST_CATEGORY_ACU.MANUAL_TABLE,
       ACU_TOAST_CATEGORY_ACU.MERGE_TABLE,
       ACU_TOAST_CATEGORY_ACU.IMPORT,
-      ACU_TOAST_CATEGORY_ACU.BIOTRACKER,
     ]);
     if (cat && allow.has(cat)) return true;
     try {

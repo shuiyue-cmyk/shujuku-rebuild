@@ -13,7 +13,7 @@ import replace from '@rollup/plugin-replace';
 import vuePlugin from 'unplugin-vue/rollup';
 import sfcStyleInjector from './src/presentation-v2/build/rollup-sfc-style-injector.js';
 import vueScriptTranspiler from './src/presentation-v2/build/rollup-vue-script-transpiler.js';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync } from 'fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { ACU_SQLITE_ENGINE, SQL_WASM_IMPORT_ID, SQL_WASM_BASE64, SQL_WASM_BASE64_GLOBAL, copySqlWasmTo } from './scripts/sql-wasm-assets.mjs';
@@ -148,28 +148,6 @@ const extensionConfig = {
         // 复制 sql.js wasm 到 dist/extension/ 与仓库根目录
         copySqlWasmTo(distExtensionDir);
         copySqlWasmTo(repoRoot);
-        // 复制生理追踪衣橱风格世界书资源（vendor loadWardrobeStyleBook 经 import.meta.url 相对路径读取）
-        mkdirSync(join(distExtensionDir, 'assets'), { recursive: true });
-        mkdirSync(join(repoRoot, 'assets'), { recursive: true });
-        copyFileSync(join(__dirname, 'assets', 'wardrobe-style-book.json'), join(distExtensionDir, 'assets', 'wardrobe-style-book.json'));
-        copyFileSync(join(__dirname, 'assets', 'wardrobe-style-book.json'), join(repoRoot, 'assets', 'wardrobe-style-book.json'));
-        // 复制 biotracker 前端面板资源（settings.html/style.css/icons；面板经 ./assets/biotracker-ui/ 相对路径加载；dist 与仓库根目录都复制，兼容两种安装形态）
-        const uiSrc = join(__dirname, 'assets', 'biotracker-ui');
-        for (const uiDist of [join(distExtensionDir, 'assets', 'biotracker-ui'), join(repoRoot, 'assets', 'biotracker-ui')]) {
-          mkdirSync(uiDist, { recursive: true });
-          for (const file of ['settings.html', 'style.css']) {
-            copyFileSync(join(uiSrc, file), join(uiDist, file));
-          }
-          // icons：home tile 图标用 CSS mask-image 引用 ./assets/icons/*.svg，漏复制会导致图标不显示
-          const iconSrcDir = join(uiSrc, 'icons');
-          if (existsSync(iconSrcDir)) {
-            const iconDistDir = join(uiDist, 'icons');
-            mkdirSync(iconDistDir, { recursive: true });
-            for (const file of readdirSync(iconSrcDir)) {
-              copyFileSync(join(iconSrcDir, file), join(iconDistDir, file));
-            }
-          }
-        }
       },
     },
   ],

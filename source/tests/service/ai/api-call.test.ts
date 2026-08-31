@@ -325,27 +325,27 @@ describe('buildCustomApiRequestBody_ACU', () => {
     expect(scalarBody.custom_include_body).toBe(scalar);
   });
 
-  it('excludeBodyParams 透传，且与预设显式配置冲突的字段被自动移除', async () => {
+  it('excludeBodyParams 与预设显式配置冲突时按排除优先（不再自动剔除，A2 连带项）', async () => {
     const body = buildCustomApiRequestBody_ACU(
       [{ role: 'user', content: 'test' }],
       { url: 'https://api.example.com', model: 'gpt-4', temperature: 1.0, excludeBodyParams: 'temperature,top_p' },
     );
     expect(body.temperature).toBe(1.0);
     expect(body.top_p).toBe(0.95);
-    // temperature 与 effectiveApiConfig.temperature 冲突，被自动移除；top_p 无冲突保留
-    expect(body.custom_exclude_body).toBe('- top_p');
+    // 用户显式排除清单原样透传（temperature 冲突仅 warn，不删键）；排除由后端在发往上游前执行。
+    expect(body.custom_exclude_body).toBe('- temperature\n- top_p');
     expect(body).toHaveProperty('max_tokens');
   });
 
-  it('bodyParams 与 excludeBodyParams 分别透传给 SillyTavern 合并与排除', async () => {
+  it('bodyParams 与 excludeBodyParams 同名时两者均原样透传，由后端定序', async () => {
     const body = buildCustomApiRequestBody_ACU(
       [{ role: 'user', content: 'test' }],
       { url: 'https://api.example.com', model: 'gpt-4', temperature: 1.0, bodyParams: 'temperature:0.3', excludeBodyParams: 'temperature' },
     );
     expect(body.temperature).toBe(1.0);
     expect(body.custom_include_body).toBe('temperature:0.3');
-    // temperature 与预设显式配置冲突，被自动移除
-    expect(body.custom_exclude_body).toBe('');
+    // 旧行为会因冲突把排除键删成空串；新行为尊重用户排除意图。
+    expect(body.custom_exclude_body).toBe('- temperature');
   });
 
 

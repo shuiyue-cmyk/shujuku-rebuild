@@ -9,7 +9,6 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:parallel": "vitest run --fileParallelism --maxWorkers=4",
-    "test:biotracker": "node --test \"tests/biotracker/*.test.mjs\"",
     "smoke": "node scripts/smoke-hosted.mjs"
   },
   "devDependencies": {

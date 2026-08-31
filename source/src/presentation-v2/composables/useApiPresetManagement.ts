@@ -13,10 +13,10 @@ export interface ApiPresetDraft {
   requestHeaders: string;
   /** 非预填充支持（预设级）：assistant 消息改写为 user +「助手：」前缀 */
   nonPrefillSupport: boolean;
-  /** 流式输出（预设级） */
-  streamingEnabled: boolean;
-  /** 思考强度（预设级）：low / medium / high / max / xhigh */
-  reasoningEffort: string;
+  /** 流式输出（预设级）：undefined=未配置（跟随全局），保存时不写键 */
+  streamingEnabled?: boolean;
+  /** 思考强度（预设级）：low / medium / high / max / xhigh；undefined=未配置（跟随全局），保存时不写键 */
+  reasoningEffort?: string;
   /** 公益站兼容（预设级）：限速每分钟最多 3 次请求（各预设独立计数） */
   publicServiceMode: boolean;
   /** 接口协议（预设级）：openai_compat / openai_responses / claude_messages / gemini_interactions */
@@ -59,8 +59,10 @@ export function apiPresetDraftFromPreset(preset: AcuV2ApiPreset): ApiPresetDraft
     excludeBodyParams: preset.apiConfig.excludeBodyParams || '',
     requestHeaders: preset.apiConfig.requestHeaders || '',
     nonPrefillSupport: preset.nonPrefillSupport === true,
-    streamingEnabled: preset.apiConfig.streamingEnabled === true,
-    reasoningEffort: preset.apiConfig.reasoningEffort || 'medium',
+    // A2 修复：undefined 必须原样保留（=跟随全局）。旧版把 undefined 读成 false/'medium'
+    // 再恒写具体值，旧预设只要「打开面板并保存」一次就被固化为显式配置，永久失去全局回退。
+    streamingEnabled: typeof preset.apiConfig.streamingEnabled === 'boolean' ? preset.apiConfig.streamingEnabled : undefined,
+    reasoningEffort: typeof preset.apiConfig.reasoningEffort === 'string' && preset.apiConfig.reasoningEffort ? preset.apiConfig.reasoningEffort : undefined,
     publicServiceMode: preset.publicServiceMode === true,
     customApiFormat: preset.apiConfig.customApiFormat || 'openai_compat',
   };
@@ -79,10 +81,13 @@ export function apiPresetFromDraft(draft: ApiPresetDraft): AcuV2ApiPreset {
       bodyParams: draft.bodyParams || '',
       excludeBodyParams: draft.excludeBodyParams || '',
       requestHeaders: draft.requestHeaders || '',
-      streamingEnabled: draft.streamingEnabled === true,
-      reasoningEffort: (['low', 'medium', 'high', 'max', 'xhigh'] as const).includes(draft.reasoningEffort as any)
-        ? (draft.reasoningEffort as 'low' | 'medium' | 'high' | 'max' | 'xhigh')
-        : 'medium',
+      // undefined = 用户未显式配置 → 整个键不写，保持「跟随全局」语义（A2 修复）。
+      ...(draft.streamingEnabled === true || draft.streamingEnabled === false
+        ? { streamingEnabled: draft.streamingEnabled }
+        : {}),
+      ...(typeof draft.reasoningEffort === 'string' && (['low', 'medium', 'high', 'max', 'xhigh'] as const).includes(draft.reasoningEffort as any)
+        ? { reasoningEffort: draft.reasoningEffort as 'low' | 'medium' | 'high' | 'max' | 'xhigh' }
+        : {}),
       customApiFormat: (['openai_compat', 'openai_responses', 'claude_messages', 'gemini_interactions'] as const).includes(draft.customApiFormat as any)
         ? (draft.customApiFormat as 'openai_compat' | 'openai_responses' | 'claude_messages' | 'gemini_interactions')
         : 'openai_compat',

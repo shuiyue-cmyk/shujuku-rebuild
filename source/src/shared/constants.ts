@@ -37,7 +37,6 @@ export const ACU_TOAST_CATEGORY_ACU = {
     MANUAL_TABLE: 'manual_table',
     MERGE_TABLE: 'merge_table',
     IMPORT: 'import',
-    BIOTRACKER: 'biotracker',
 };
 
 export const TABLE_ORDER_FIELD_ACU = 'orderNo';

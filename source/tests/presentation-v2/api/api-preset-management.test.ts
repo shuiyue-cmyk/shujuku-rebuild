@@ -96,4 +96,44 @@ describe('api preset draft helpers', () => {
     expect(draft.excludeBodyParams).toBe('');
     expect(draft.requestHeaders).toBe('');
   });
+
+  // ═══ A2 护栏：streamingEnabled / reasoningEffort 的 undefined（跟随全局）通道 ═══
+  it('旧预设未配置流式/思考强度时 draft 保持 undefined，往返保存不写键（打开即污染回归锁）', () => {
+    const legacy = {
+      name: 'legacy',
+      apiMode: 'custom',
+      apiConfig: { url: 'https://l.test', apiKey: '', model: 'l', max_tokens: 100, temperature: 1 },
+    } as any;
+
+    const draft = apiPresetDraftFromPreset(legacy);
+    expect(draft.streamingEnabled).toBeUndefined();
+    expect(draft.reasoningEffort).toBeUndefined();
+
+    // 用户没碰过这两个控件就保存：键必须缺席，api-call 的「预设优先」判定不会截胡全局回退。
+    const preset = apiPresetFromDraft(draft);
+    expect('streamingEnabled' in preset.apiConfig).toBe(false);
+    expect('reasoningEffort' in preset.apiConfig).toBe(false);
+
+    // 二次往返稳定：不再出现 false/'medium' 固化。
+    const round2 = apiPresetFromDraft(apiPresetDraftFromPreset(preset as any));
+    expect('streamingEnabled' in round2.apiConfig).toBe(false);
+    expect('reasoningEffort' in round2.apiConfig).toBe(false);
+  });
+
+  it('显式配置流式 false / 思考强度后写键并往返保留（false 不被当成未配置丢弃）', () => {
+    const draft = apiPresetDraftFromPreset({
+      name: 'explicit',
+      apiMode: 'custom',
+      apiConfig: {
+        url: 'https://e.test', apiKey: '', model: 'e', max_tokens: 100, temperature: 1,
+        streamingEnabled: false, reasoningEffort: 'xhigh',
+      },
+    } as any);
+    expect(draft.streamingEnabled).toBe(false);
+    expect(draft.reasoningEffort).toBe('xhigh');
+
+    const preset = apiPresetFromDraft(draft);
+    expect(preset.apiConfig.streamingEnabled).toBe(false);
+    expect(preset.apiConfig.reasoningEffort).toBe('xhigh');
+  });
 });

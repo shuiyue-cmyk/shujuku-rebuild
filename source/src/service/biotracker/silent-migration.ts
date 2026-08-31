@@ -26,7 +26,7 @@ import {
   resolveHostChatId,
   saveHostSettings,
   scheduleHostChatStateSave,
-} from './vendor/host.js';
+} from './host-bridge';
 
 const DONE_FLAG_KEY = 'acu-bs-silent-migration-done';
 const CHAT_DONE_PREFIX = 'acu-bs-silent-migration-chat:';

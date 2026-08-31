@@ -11,7 +11,6 @@
  * - worldbookDebug：最近一次世界书扫描（entryCount/baseScanLen/chatLen/triggeredCount/shouldUseWorker）
  * - lastApiBody：最近一次 buildCustomApiRequestBody 完整请求体（脱敏）与时间
  * - logs：log-buffer 全量日志（含 Debug 采集开启后的细粒度日志）
- * - biotracker：最近一次追踪/注册请求与响应（biotracker debug 采集数据，body 已脱敏）
  * - tables：表名 + 行数 + 脱敏 sampleRows（前 3 行各前 8 列，超长截断）
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
@@ -64,7 +63,7 @@ function maskSensitiveString(str: string): string {
     .replace(/("(?:api[_-]?key|apikey|authorization|token|password|secret)"\s*:\s*")([^"]+)(")/gi, '$1***$3');
 }
 
- /** 递归脱敏对象中的敏感字段（biotracker 请求/响应快照可能含 Authorization/key 回显） */
+ /** 递归脱敏对象中的敏感字段（API 请求/响应快照可能含 Authorization/key 回显） */
 function maskSensitiveFields(value: unknown, depth = 0, seen = new WeakSet<object>()): unknown {
   if (typeof value === 'string') return maskSensitiveString(value);
   if (depth > 6) return '[Truncated]';
@@ -176,17 +175,6 @@ export function useDebugPanel() {
           },
           plotEnabled: settings_ACU?.plotSettings?.enabled === true,
         };
-        const biotrackerDebug: Record<string, unknown> = {};
-        try {
-          const req = (globalThis as any).__bs_biotracker_debug_last_effective_request__;
-          const resp = (globalThis as any).__bs_biotracker_debug_last_api_response__;
-          if (req) biotrackerDebug.lastRequest = maskSensitiveFields(req);
-          if (resp) biotrackerDebug.lastResponse = maskSensitiveFields(resp);
-          const trackerReq = (globalThis as any).__bs_biotracker_debug_last_tracker_request__;
-          const trackerResult = (globalThis as any).__bs_biotracker_debug_last_tracker_result__;
-          if (trackerReq) biotrackerDebug.lastTrackerRequest = maskSensitiveFields(trackerReq);
-          if (trackerResult) biotrackerDebug.lastTrackerResult = maskSensitiveFields(trackerResult);
-        } catch {}
         const tables: Record<string, { rows: number; headers: string[]; sampleRows?: unknown[][] }> = {};
         try {
           const data = currentJsonTableData_ACU || {};
@@ -239,7 +227,6 @@ export function useDebugPanel() {
             tag: e.tag,
             message: maskSensitiveString(e.message),
           })),
-          biotracker: biotrackerDebug,
           tables,
         };
         const stamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -308,18 +295,6 @@ export function useDebugPanel() {
       plotEnabled: settings_ACU?.plotSettings?.enabled === true,
     };
 
-    const biotrackerDebug: Record<string, unknown> = {};
-    try {
-      const req = (globalThis as any).__bs_biotracker_debug_last_effective_request__;
-      const resp = (globalThis as any).__bs_biotracker_debug_last_api_response__;
-      if (req) biotrackerDebug.lastRequest = maskSensitiveFields(req);
-      if (resp) biotrackerDebug.lastResponse = maskSensitiveFields(resp);
-      const trackerReq = (globalThis as any).__bs_biotracker_debug_last_tracker_request__;
-      const trackerResult = (globalThis as any).__bs_biotracker_debug_last_tracker_result__;
-      if (trackerReq) biotrackerDebug.lastTrackerRequest = maskSensitiveFields(trackerReq);
-      if (trackerResult) biotrackerDebug.lastTrackerResult = maskSensitiveFields(trackerResult);
-    } catch { /* biotracker debug 数据读取失败不影响导出 */ }
-
     const tables: Record<string, { rows: number; headers: string[]; sampleRows?: unknown[][] }> = {};
     try {
       const data = currentJsonTableData_ACU || {};
@@ -366,7 +341,6 @@ export function useDebugPanel() {
         tag: e.tag,
         message: maskSensitiveString(e.message),
       })),
-      biotracker: biotrackerDebug,
       tables,
     };
 
