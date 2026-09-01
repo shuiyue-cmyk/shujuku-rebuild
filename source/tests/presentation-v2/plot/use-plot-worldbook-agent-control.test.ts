@@ -732,4 +732,95 @@ describe('usePlotWorldbookAgentControl', () => {
     expect(mockGetPromptTemplates).not.toHaveBeenCalled();
     expect(mockWriteControl).not.toHaveBeenCalled();
   });
+
+  it('retains the cursor for an unchanged scope and reuses it for the next Skillify batch', async () => {
+    mockSkillify
+      .mockResolvedValueOnce({
+        totalCandidates: 1,
+        totalMatched: 2,
+        selectedForRun: 1,
+        remaining: 1,
+        truncated: true,
+        nextCursor: { bookName: '角色A世界书', uid: 'entry-1' },
+        updated: 0,
+        skipped: 1,
+        failed: 0,
+        results: [],
+      })
+      .mockResolvedValueOnce({
+        totalCandidates: 1,
+        totalMatched: 1,
+        selectedForRun: 1,
+        remaining: 0,
+        truncated: false,
+        nextCursor: { bookName: '角色A世界书', uid: 'entry-2' },
+        updated: 0,
+        skipped: 1,
+        failed: 0,
+        results: [],
+      });
+    const c = await getComposable();
+
+    await expect(c.skillifyAll()).resolves.toBe(false);
+    expect(c.skillifyCursor.value).toEqual({ bookName: '角色A世界书', uid: 'entry-1' });
+    expect(c.skillifyBatchStats.value).toEqual({ totalMatched: 2, selectedForRun: 1, remaining: 1, truncated: true });
+
+    await c.refresh();
+    expect(c.skillifyCursor.value).toEqual({ bookName: '角色A世界书', uid: 'entry-1' });
+
+    await expect(c.skillifyAll()).resolves.toBe(false);
+    expect(mockSkillify.mock.calls[1][0]).toMatchObject({ cursor: { bookName: '角色A世界书', uid: 'entry-1' } });
+    expect(c.skillifyCursor.value).toBeUndefined();
+    expect(c.skillifyBatchStats.value).toEqual({ totalMatched: 1, selectedForRun: 1, remaining: 0, truncated: false });
+  });
+
+  it('clears the cursor and batch statistics when the selection signature changes', async () => {
+    mockSkillify.mockResolvedValueOnce({
+      totalCandidates: 1,
+      totalMatched: 2,
+      selectedForRun: 1,
+      remaining: 1,
+      truncated: true,
+      nextCursor: { bookName: '角色A世界书', uid: 'entry-1' },
+      updated: 0,
+      skipped: 1,
+      failed: 0,
+      results: [],
+    });
+    const c = await getComposable();
+
+    await c.skillifyAll();
+    mockRefreshSnapshot.mockResolvedValueOnce({ active: false, selectionSignature: 'changed-scope', createdAt: 2, books: {} });
+    await c.refresh();
+
+    expect(c.skillifyCursor.value).toBeUndefined();
+    expect(c.skillifyBatchStats.value).toBeNull();
+  });
+
+  it('drops the retained cursor when an explicitly selected-entry Skillify run finishes', async () => {
+    mockSkillify.mockResolvedValue({
+      totalCandidates: 1,
+      totalMatched: 1,
+      selectedForRun: 1,
+      remaining: 0,
+      truncated: true,
+      nextCursor: { bookName: '角色A世界书', uid: 'entry-9' },
+      updated: 0,
+      skipped: 1,
+      failed: 0,
+      results: [],
+    });
+    const c = await getComposable();
+
+    await c.skillifyAll();
+    expect(c.skillifyCursor.value).toEqual({ bookName: '角色A世界书', uid: 'entry-9' });
+
+    await c.skillifySelected([{ bookName: '角色A世界书', uid: 'entry-3' }]);
+    // 勾选条目是一次性目标：即便 service 回了 nextCursor 也不能污染整库续跑游标，否则下一批全库跑会漏掉中间段。
+    expect(c.skillifyCursor.value).toBeUndefined();
+    expect(mockSkillify.mock.calls[1][0]).toMatchObject({
+      selectedEntries: [{ bookName: '角色A世界书', uid: 'entry-3' }],
+      cursor: undefined,
+    });
+  });
 });

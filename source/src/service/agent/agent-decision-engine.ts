@@ -4,8 +4,9 @@ import { getChatArray_ACU } from '../../data/gateways/chat-gateway';
 import type { StrictLorebookReadContext_ACU } from '../worldbook/pipeline';
 import { getAgentRuntimeLorebookEntries_ACU } from './agent-worldbook-runtime-read';
 import { normalizeNonNegativeInteger_ACU, normalizePositiveInteger_ACU, logWarn_ACU, logError_ACU } from '../../shared/utils';
-import { estimateTextTk_ACU, normalizeTkBudgetNumber_ACU } from '../../shared/token-estimate';
-import { callAIWithPreset_ACU } from '../ai/api-call';
+import { normalizeTkBudgetNumber_ACU } from '../../shared/token-estimate';
+import { callAIWithPreset_ACU, isRetryableAiRequestError_ACU } from '../ai/api-call';
+import { countTextTokens_ACU } from '../ai/token-counter';
 import { normalizePlotTask_ACU } from '../plot/plot-logic';
 import { refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU } from './agent-worldbook-takeover';
 import {
@@ -18,10 +19,11 @@ import {
   renderAgentPromptSegments_ACU,
 } from './agent-prompt-template';
 import {
-  collectWorldbookSkillifyCandidates_ACU,
   getWorldbookEntryKeywordsForSkillify_ACU,
+  isWorldbookEntrySkillifyCandidate_ACU,
 } from './agent-skillify-service';
 import { resolveAgentWorldbookScopeBookNames_ACU } from './agent-worldbook-config-meta';
+import { rankAgentWorldbookCandidates_ACU, type AgentWorldbookRankingQuery_ACU } from './agent-worldbook-ranking';
 
 export interface AgentWorldbookRef_ACU {
   bookName: string;
@@ -197,12 +199,6 @@ function parseAgentDecisionResponse_ACU(responseText: string): any | null {
   }
 }
 
-function resolveWorldbookEntryTk_ACU(entry: Record<string, any>, meta: ReturnType<typeof parseWorldbookSkillMetaFromComment_ACU>, comment: string): number {
-  const metaTk = Number(meta?.tk);
-  if (Number.isFinite(metaTk) && metaTk > 0) return Math.trunc(metaTk);
-  return estimateTextTk_ACU(entry?.content || comment);
-}
-
 function hasUsableWorldbookSkillMeta_ACU(meta: ReturnType<typeof parseWorldbookSkillMetaFromComment_ACU>): boolean {
   return !!meta && (!!String(meta.description || '').trim() || !!String(meta.triggerWhen || '').trim());
 }
@@ -217,13 +213,63 @@ function buildFallbackWorldbookSummaryText_ACU(entry: Record<string, any>, comme
   return { description, triggerWhen };
 }
 
+interface AgentWorldbookDecisionCandidate_ACU {
+  bookName: string;
+  uid: string | number;
+  comment: string;
+  keys: string[];
+  description: string;
+  triggerWhen: string;
+  content: string;
+}
+
+function buildDecisionCandidate_ACU(bookName: string, entry: Record<string, any>): AgentWorldbookDecisionCandidate_ACU | null {
+  const uid = entry?.uid;
+  if (uid === null || uid === undefined || String(uid).trim() === '') return null;
+  const comment = String(entry.comment || entry.name || '');
+  const meta = parseWorldbookSkillMetaFromComment_ACU(comment);
+  const keys = getWorldbookEntryKeywordsForSkillify_ACU(entry);
+  const fallback = hasUsableWorldbookSkillMeta_ACU(meta) ? null : buildFallbackWorldbookSummaryText_ACU(entry, comment, keys);
+  return {
+    bookName,
+    uid,
+    comment,
+    keys,
+    description: meta?.description || fallback?.description || '',
+    triggerWhen: meta?.triggerWhen || fallback?.triggerWhen || '',
+    content: String(entry.content || ''),
+  };
+}
+
+/**
+ * 候选可能远多于提示词名额，所以先按与本轮输入的相关性排序再截断：
+ * 让 AI 看到的是「最可能相关的 N 条」，而不是「世界书里前 N 条」。tk 同样在入选之后才算。
+ */
+async function summarizeDecisionCandidates_ACU(
+  candidates: AgentWorldbookDecisionCandidate_ACU[],
+  limit: number,
+  query: AgentWorldbookRankingQuery_ACU,
+): Promise<AgentWorldbookSummary_ACU[]> {
+  const ranked = rankAgentWorldbookCandidates_ACU(candidates, query).slice(0, limit);
+  return Promise.all(ranked.map(async (candidate, index) => ({
+    bookName: candidate.bookName,
+    uid: candidate.uid,
+    index: index + 1,
+    comment: candidate.comment,
+    keys: candidate.keys,
+    description: candidate.description,
+    triggerWhen: candidate.triggerWhen,
+    tk: await countTextTokens_ACU(candidate.content || candidate.comment),
+  })));
+}
+
 async function collectWorldbookSummariesFromSnapshot_ACU(
   contextSettings: ReturnType<typeof normalizeAgentContextSettings_ACU>,
   readContext?: StrictLorebookReadContext_ACU,
+  rankingQuery: AgentWorldbookRankingQuery_ACU = { userInput: '', recentContext: '', taskContext: '' },
 ): Promise<{ summaries: AgentWorldbookSummary_ACU[]; allowedKeys: Set<string> }> {
   const snapshot = await refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU(readContext);
-  const summaries: AgentWorldbookSummary_ACU[] = [];
-  const allowedKeys = new Set<string>();
+  const snapshotCandidates: AgentWorldbookDecisionCandidate_ACU[] = [];
 
   for (const [bookName, snapshotEntries] of Object.entries(snapshot.books || {})) {
     const entries = await getAgentRuntimeLorebookEntries_ACU(bookName, readContext);
@@ -233,48 +279,30 @@ async function collectWorldbookSummariesFromSnapshot_ACU(
       if (uid === null || uid === undefined || String(uid).trim() === '') continue;
       const entry = (entries || []).find(item => String(item?.uid) === String(uid));
       if (!entry) continue;
-      const comment = String(entry.comment || entry.name || '');
-      const meta = parseWorldbookSkillMetaFromComment_ACU(comment);
-      const keys = getWorldbookEntryKeywordsForSkillify_ACU(entry);
-      const fallback = hasUsableWorldbookSkillMeta_ACU(meta) ? null : buildFallbackWorldbookSummaryText_ACU(entry, comment, keys);
-      allowedKeys.add(refKey_ACU(bookName, uid));
-      const index = summaries.length + 1;
-      summaries.push({
-        bookName,
-        uid,
-        index,
-        comment,
-        keys,
-        description: meta?.description || fallback?.description || '',
-        triggerWhen: meta?.triggerWhen || fallback?.triggerWhen || '',
-        tk: resolveWorldbookEntryTk_ACU(entry, meta, comment),
-      });
+      const candidate = buildDecisionCandidate_ACU(bookName, entry);
+      if (candidate) snapshotCandidates.push(candidate);
     }
   }
 
-  if (allowedKeys.size > 0) {
-    return { summaries, allowedKeys };
-  }
-
-  const bookNames = await resolveAgentWorldbookScopeBookNames_ACU();
-  const candidates = await collectWorldbookSkillifyCandidates_ACU(bookNames, { maxEntries: contextSettings.decisionWorldbookCandidateLimit });
-  for (const candidate of candidates) {
-    const meta = candidate.existingSkillMeta;
-    if (!hasUsableWorldbookSkillMeta_ACU(meta)) continue;
-    allowedKeys.add(refKey_ACU(candidate.bookName, candidate.uid));
-    const index = summaries.length + 1;
-    summaries.push({
-      bookName: candidate.bookName,
-      uid: candidate.uid,
-      index,
-      comment: candidate.comment,
-      keys: candidate.keys,
-      description: meta?.description || '',
-      triggerWhen: meta?.triggerWhen || '',
-      tk: candidate.tk,
-    });
-  }
-
+  // 快照为空（尚未接管 / 刚关闭 Agent）时退回全量运行时条目。此前这条路只收「已有可用 Skill 元数据」的条目，
+  // 结果是没跑过 Skill 化的世界书在决策提示词里直接空集，Agent 无候选可选；现在连无元数据条目一起进，
+  // 由 buildFallbackWorldbookSummaryText_ACU 给出兜底描述，再交给排序器按相关性取舍。
+  const candidates = snapshotCandidates.length > 0
+    ? snapshotCandidates
+    : await (async () => {
+      const fallbackCandidates: AgentWorldbookDecisionCandidate_ACU[] = [];
+      for (const bookName of await resolveAgentWorldbookScopeBookNames_ACU()) {
+        const entries = await getAgentRuntimeLorebookEntries_ACU(bookName, readContext);
+        for (const entry of entries) {
+          if (!isWorldbookEntrySkillifyCandidate_ACU(entry)) continue;
+          const candidate = buildDecisionCandidate_ACU(bookName, entry);
+          if (candidate) fallbackCandidates.push(candidate);
+        }
+      }
+      return fallbackCandidates;
+    })();
+  const summaries = await summarizeDecisionCandidates_ACU(candidates, contextSettings.decisionWorldbookCandidateLimit, rankingQuery);
+  const allowedKeys = new Set(summaries.map(summary => refKey_ACU(summary.bookName, summary.uid)));
   return { summaries, allowedKeys };
 }
 
@@ -663,7 +691,10 @@ async function runAgentDecisionShard_ACU(params: {
         throw new Error(`agent_decision_shard_${params.shard.index + 1}_aborted`);
       }
       failureReason = 'agent_request_error';
-      logWarn_ACU(`[Agent决策] 分片 ${params.shard.index + 1}/${params.shardCount} 第 ${attempt}/${params.maxAiAttempts} 次请求失败；候选 ${params.shard.summaries.length} 条：${String(error?.message || 'unknown')}`);
+      const retryable = isRetryableAiRequestError_ACU(error);
+      logWarn_ACU(`[Agent决策] 分片 ${params.shard.index + 1}/${params.shardCount} 第 ${attempt}/${params.maxAiAttempts} 次请求失败；${retryable ? '允许重试' : '不可重试'}；候选 ${params.shard.summaries.length} 条：${String(error?.message || 'unknown')}`);
+      // 401/403 这类配置性失败重跑只会再烧一次配额，直接跳出；AbortError 已在上面抛出，不会走到这里。
+      if (!retryable) break;
       continue;
     }
     if (!rawResponse) {
@@ -695,7 +726,21 @@ export async function runAgentDecisionForPlot_ACU(params: {
     const contextSettings = normalizeAgentContextSettings_ACU(control.contextSettings);
     const maxAiAttempts = Math.max(1, Math.min(Number.MAX_SAFE_INTEGER, Math.trunc(Number(contextSettings.agentAiMaxRetries) || 1)));
     const readContext = params.sharedContext?.worldbookReadContext as StrictLorebookReadContext_ACU | undefined;
-    const { summaries } = await collectWorldbookSummariesFromSnapshot_ACU(contextSettings, readContext);
+    // 排序查询与提示词里的上下文同源：复用同一套 AI 层格式化结果（含 seedContentForConditional 兜底），
+    // 避免出现「AI 看到的上下文」和「本地排序依据」两套口径。
+    const recentContext = formatRecentContextByAiLayers_ACU(
+      resolveAgentContextMessages_ACU(params.sharedContext, 'recentContextMessages'),
+      contextSettings.decisionRecentContextCharLimit,
+    ) || String(params.sharedContext?.seedContentForConditional || '').trim();
+    const taskContext = originalTasks.map((task, index) => {
+      const normalized = normalizePlotTask_ACU(task, { fallbackTask: task, index });
+      return `${normalized.description || ''}\n${normalized.triggerWhen || ''}`;
+    }).join('\n');
+    const { summaries } = await collectWorldbookSummariesFromSnapshot_ACU(contextSettings, readContext, {
+      userInput: params.userMessage,
+      recentContext,
+      taskContext,
+    });
     const shards = createAgentDecisionShards_ACU(
       summaries,
       contextSettings.decisionWorldbookCandidateLimit,

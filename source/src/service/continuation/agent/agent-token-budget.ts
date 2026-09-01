@@ -12,16 +12,13 @@
  * 是有损压缩，还会新增一条失败路径与额外延迟。
  */
 
-import { SillyTavern_API_ACU } from '../../../shared/host-api';
+import { countTextTokens_ACU } from '../../ai/token-counter';
 import {
   AGENT_HISTORY_EMERGENCY_FACTOR_ACU,
   type AgentConversationCompactionMark_ACU,
   type AgentConversationMessage_ACU,
   type AgentConversationSnapshot_ACU,
 } from './agent-model';
-
-/** 宿主分词器不可用时的字符→token 估算系数。中文在常见分词器下约 1 token / 1~1.5 字。 */
-const FALLBACK_CHARS_PER_TOKEN_ACU = 1.5;
 
 /** 交接报告里单条用户指令的摘录上限，避免报告本身变成新的膨胀源。 */
 const HANDOFF_QUOTE_LIMIT_ACU = 160;
@@ -50,16 +47,7 @@ export interface AgentConversationCompaction_ACU {
  * @returns token 数；宿主分词器不可用或抛错时按字符数估算，绝不把异常抛给调用方
  */
 export async function countAgentTokens_ACU(text: string): Promise<number> {
-  const content = String(text ?? '');
-  if (!content) return 0;
-  const counter = SillyTavern_API_ACU?.getTokenCountAsync;
-  if (typeof counter === 'function') {
-    try {
-      const counted = await counter.call(SillyTavern_API_ACU, content);
-      if (typeof counted === 'number' && Number.isFinite(counted) && counted >= 0) return Math.ceil(counted);
-    } catch { /* 分词器异常降级为估算：token 统计只用于预算判定，不值得中断续写。 */ }
-  }
-  return Math.ceil(content.length / FALLBACK_CHARS_PER_TOKEN_ACU);
+  return countTextTokens_ACU(text);
 }
 
 export type TokenCounter_ACU = (text: string) => Promise<number>;

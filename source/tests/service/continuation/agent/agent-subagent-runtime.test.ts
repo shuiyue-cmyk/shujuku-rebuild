@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { AgentSubagentRuntime_ACU } from '../../../../src/service/continuation/agent/agent-subagent-runtime';
+import { AgentSubagentRuntime_ACU, renderStoryArcVolumePlanInstruction_ACU } from '../../../../src/service/continuation/agent/agent-subagent-runtime';
 import { buildEmptyAgentModuleSnapshot_ACU } from '../../../../src/service/continuation/agent/agent-module-store';
 import { buildDefaultContinuationSettings_ACU } from '../../../../src/service/continuation/defaults';
 import type { AiUsageMetadata_ACU } from '../../../../src/service/continuation/internal-ai-call';
@@ -54,6 +54,20 @@ async function runWithUsageSequence_ACU(sequence: Array<AiUsageMetadata_ACU | nu
 }
 
 describe('AgentSubagentRuntime_ACU usage 累计', () => {
+  it('renders the configured story-arc volume plans without conflating them with stage size', () => {
+    const settings = buildDefaultContinuationSettings_ACU();
+    settings.stageSize = 'short';
+
+    expect(renderStoryArcVolumePlanInstruction_ACU(settings)).toContain('中线：新建或全量重构总纲时规划 10–14 卷');
+    settings.storyArcVolumePlan = 'short';
+    expect(renderStoryArcVolumePlanInstruction_ACU(settings)).toContain('短线：新建或全量重构总纲时规划 7–8 卷');
+    settings.storyArcVolumePlan = 'long';
+    expect(renderStoryArcVolumePlanInstruction_ACU(settings)).toContain('长线：新建或全量重构总纲时规划 20 卷');
+    settings.storyArcVolumePlan = 'custom';
+    settings.customStoryArcVolumeCount = 16;
+    expect(renderStoryArcVolumePlanInstruction_ACU(settings)).toContain('自定义：新建或全量重构总纲时规划 16 卷');
+  });
+
   it('所有调用均报告字段时逐字段求和，并保留明确 0', async () => {
     const result = await runWithUsageSequence_ACU([
       { promptTokens: 10, completionTokens: 2, cachedTokens: 0, cacheWriteTokens: 3 },

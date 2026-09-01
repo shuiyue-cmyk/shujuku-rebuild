@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue';
+import { computed, getCurrentScope, onScopeDispose, ref } from 'vue';
 import { isAgentSessionRunning_ACU, logAgentSession_ACU } from '../../service/continuation/agent/agent-session-log';
 import { buildInitialContinuationSettings_ACU, getContinuationRuntime_ACU } from '../../service/continuation/continuation-runtime';
 import { CONTINUATION_AGENT_PROMPT_KEYS_ACU, CONTINUATION_RECOVERABLE_STOP_REASONS_ACU, ContinuationValidationError_ACU, type ContinuationEnvelope_ACU, type ContinuationPromptSegment_ACU, type ContinuationSettings_ACU, type ContinuationTask_ACU, type StageOutline_ACU } from '../../service/continuation/model';
@@ -53,6 +53,16 @@ export function useContinuationRuntime() {
   // 用户点停止后递增：挡住「发送已落盘、continueTask 尚未启动」这一空档把停止吞掉再开跑。
   let stopEpoch = 0;
 
+  // 正文确认与自动续写由宿主事件异步触发，不会经过页面动作。订阅桥的状态提交通知，
+  // 使「等待宿主正文」在 confirmCurrentTurn 后立即从权威快照刷新。
+  const subscribeStateChanges = (runtime.bridge as { subscribeStateChanges?: (listener: () => void) => () => void }).subscribeStateChanges;
+  const unsubscribeStateChanges = typeof subscribeStateChanges === 'function'
+    ? subscribeStateChanges.call(runtime.bridge, () => refresh())
+    : null;
+  if (unsubscribeStateChanges && getCurrentScope()) {
+    onScopeDispose(unsubscribeStateChanges);
+  }
+
   function refresh(): void {
     try {
       envelope.value = runtime.read();
@@ -86,6 +96,11 @@ export function useContinuationRuntime() {
       .then(action)
       .then(async result => {
       if ('retryHostGeneration' in result && result.retryHostGeneration) {
+        // 上一轮正文中断/失败后的恢复走宿主（酒馆）自己的重发，不经过 Agent。此分支只由用户
+        // 动作到达（自动重试链走桥内部，不经 run_ACU），必须留痕并解释消息去向——
+        // 否则用户看到的是「在 Agent 输入框发消息却直接触发了主对话生成」。
+        logAgentSession_ACU({ kind: 'protocol_retry', title: '重发上一轮正文', detail: '上一轮酒馆正文未正常完成，先让酒馆直接重新生成；本次发送的消息会在正文完成后的下一轮由主 Agent 读取。' });
+        toast.info('上一轮正文未完成，已让酒馆直接重新生成；你的消息会在下一轮被主 Agent 读取。');
         const sent = await runtime.bridge.retryHostGeneration();
         if (!sent) toast.error('宿主重新生成不可用，智能续写已暂停。', { muteable: false });
       } else if ('preparedTurn' in result && result.preparedTurn) {

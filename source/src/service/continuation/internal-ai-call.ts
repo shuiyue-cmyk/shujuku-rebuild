@@ -68,7 +68,8 @@ function buildPromptCacheKey_ACU(
 
 /**
  * 把一次调用的用量渲染成会话流条目里的紧凑标签。
- * 基础字段恒常显示；未报告与明确报告 0 保持不同语义。缓存写入仅在厂商报告时追加。
+ * 输入与输出恒常显示；缓存读取和缓存写入仅在厂商报告时追加。
+ * 明确报告 0 与字段缺失保持不同语义。
  */
 export function formatAgentUsageLabel_ACU(usage: AiUsageMetadata_ACU): string {
   const compact = (value: number | undefined): string => (
@@ -76,9 +77,9 @@ export function formatAgentUsageLabel_ACU(usage: AiUsageMetadata_ACU): string {
   );
   const parts = [
     `输入 ${compact(usage.promptTokens)}`,
-    `缓存读取 ${compact(usage.cachedTokens)}`,
     `输出 ${compact(usage.completionTokens)}`,
   ];
+  if (usage.cachedTokens !== undefined) parts.splice(1, 0, `缓存读取 ${compact(usage.cachedTokens)}`);
   if (usage.cacheWriteTokens !== undefined) parts.push(`缓存写入 ${compact(usage.cacheWriteTokens)}`);
   return parts.join(' · ');
 }

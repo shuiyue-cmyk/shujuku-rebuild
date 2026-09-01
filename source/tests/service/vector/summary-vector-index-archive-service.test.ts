@@ -262,6 +262,89 @@ describe('summary-vector-index-archive-service pending 归档', () => {
     expect(secondPersistOptions.snapshotRevision).toBe(1);
   });
 
+  it('部分 Embedding 响应只补齐缺失 chunk，并按局部 index 写回原始位置', async () => {
+    mockCurrentJsonTableDataRef.value = {
+      sheet_summary: {
+        name: '纪要表',
+        content: [
+          ['row_id', '时间跨度', '地点', '概要', '编码索引'],
+          ['1', '上午', '甲地', '事件一。', 'AM-0001'],
+          ['2', '下午', '乙地', '事件二。', 'PM-0002'],
+          ['3', '晚上', '丙地', '事件三。', 'EV-0003'],
+          ['4', '深夜', '丁地', '事件四。', 'NI-0004'],
+        ],
+      },
+    };
+    // 用带计数的 mockImplementation（而不是 mockImplementationOnce）：即使补齐逻辑退化、
+    // 本用例只发起一次请求，也不会有 once 响应滞留（vi.clearAllMocks 不清 once 队列）串染后续用例。
+    let firstResponse = true;
+    mockCreateEmbeddings.mockImplementation(async () => {
+      const body = firstResponse
+        ? [{ index: 0, embedding: [10] }, { index: 2, embedding: [30] }]
+        : [{ index: 0, embedding: [20] }, { index: 1, embedding: [40] }];
+      firstResponse = false;
+      return body;
+    });
+
+    const result = await archiveSummaryVectorIndexNow_ACU({ targetMessageIndex: 0, force: true });
+
+    expect(result.success).toBe(true);
+    expect(mockCreateEmbeddings).toHaveBeenCalledTimes(2);
+    const initialInput = mockCreateEmbeddings.mock.calls[0][0].input;
+    expect(initialInput).toHaveLength(4);
+    expect(mockCreateEmbeddings.mock.calls[1][0].input).toEqual([initialInput[1], initialInput[3]]);
+    expect(mockPersistSummaryVectorIndexSnapshot).toHaveBeenCalledTimes(1);
+    expect(mockPersistSummaryVectorIndexSnapshot.mock.calls[0][0].chunks.map((chunk: any) => chunk.vector)).toEqual([
+      [10], [20], [30], [40],
+    ]);
+  });
+
+  it('完整 Embedding 响应不触发补齐请求', async () => {
+    mockCurrentJsonTableDataRef.value = {
+      sheet_summary: {
+        name: '纪要表',
+        content: [
+          ['row_id', '时间跨度', '地点', '概要', '编码索引'],
+          ['1', '上午', '甲地', '事件一。', 'AM-0001'],
+          ['2', '下午', '乙地', '事件二。', 'PM-0002'],
+        ],
+      },
+    };
+
+    const result = await archiveSummaryVectorIndexNow_ACU({ targetMessageIndex: 0, force: true });
+
+    expect(result.success).toBe(true);
+    expect(mockCreateEmbeddings).toHaveBeenCalledTimes(1);
+    expect(mockPersistSummaryVectorIndexSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it('补齐请求失败时不发布部分索引', async () => {
+    mockCurrentJsonTableDataRef.value = {
+      sheet_summary: {
+        name: '纪要表',
+        content: [
+          ['row_id', '时间跨度', '地点', '概要', '编码索引'],
+          ['1', '上午', '甲地', '事件一。', 'AM-0001'],
+          ['2', '下午', '乙地', '事件二。', 'PM-0002'],
+        ],
+      },
+    };
+    // 同上：用计数型 mockImplementation，首次返回部分响应、第二次起抛错，
+    // 不留 once 队列残留。
+    let calls = 0;
+    mockCreateEmbeddings.mockImplementation(async () => {
+      calls += 1;
+      if (calls === 1) return [{ index: 0, embedding: [10] }];
+      throw new Error('recovery request failed');
+    });
+
+    const result = await archiveSummaryVectorIndexNow_ACU({ targetMessageIndex: 0, force: true });
+
+    expect(result.success).toBe(false);
+    expect(mockCreateEmbeddings).toHaveBeenCalledTimes(2);
+    expect(mockPersistSummaryVectorIndexSnapshot).not.toHaveBeenCalled();
+  });
+
   it('清理空纪要表时沿用当前 active isolation，而不是重新推导其他 scope', async () => {
     mockCurrentJsonTableDataRef.value = {
       sheet_summary: {

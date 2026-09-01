@@ -1,12 +1,12 @@
 {
-    "display_name": "幻想·数据库",
+    "display_name": "TTonly·数据库",
     "loading_order": 200,
     "requires": [],
     "optional": [],
     "js": "index.js",
     "css": "",
     "author": "shuiyue-cmyk",
-    "version": "9.0.5",
+    "version": "9.0.6",
     "homePage": "https://github.com/shuiyue-cmyk/shujuku-rebuild",
     "auto_update": true
 }

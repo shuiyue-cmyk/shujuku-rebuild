@@ -2,6 +2,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { buildDefaultContinuationSettings_ACU } from '../../../src/service/continuation/defaults';
 import {
+  V20_DEFAULT_ARC_ARCHITECT_CONTRACT_ACU,
+  V20_DEFAULT_ARC_ARCHITECT_EPISTEMOLOGY_ACU,
+  V20_DEFAULT_ARC_ARCHITECT_PURPOSE_ACU,
+  V20_DEFAULT_ARC_ARCHITECT_SYSTEM_ACU,
+  V20_DEFAULT_ARC_ARCHITECT_TASK_ACU,
   V19_DEFAULT_MAIN_AGENT_HISTORY_GUIDE_ACU,
   V19_DEFAULT_MAIN_AGENT_LAYOUT_ANSWER_ACU,
   V19_DEFAULT_MAIN_AGENT_RUNTIME_SEGMENT_ACU,
@@ -220,7 +225,7 @@ describe('FirstFloorContinuationStore_ACU', () => {
 
     const loaded = new FirstFloorContinuationStore_ACU().read()!;
 
-    expect(loaded.settings.promptForceDefaultVersion).toBe('spv2.8-continuation-runtime-snapshot-v20');
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv3.0-continuation-story-arc-volume-plan-v22');
     expect(loaded.settings.agentPrompts).toEqual(expectedPrompts);
     expect(loaded.settings.outlinePrompt).toEqual(expectedOutlinePrompt);
   });
@@ -245,7 +250,7 @@ describe('FirstFloorContinuationStore_ACU', () => {
 
     const loaded = new FirstFloorContinuationStore_ACU().read()!;
 
-    expect(loaded.settings.promptForceDefaultVersion).toBe('spv2.8-continuation-runtime-snapshot-v20');
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv3.0-continuation-story-arc-volume-plan-v22');
     expect(loaded.settings.agentPrompts).toEqual(expectedPrompts);
     expect(loaded.settings.outlinePrompt).toEqual(expectedOutlinePrompt);
   });
@@ -287,7 +292,7 @@ describe('FirstFloorContinuationStore_ACU', () => {
 
     const loaded = new FirstFloorContinuationStore_ACU().read()!;
 
-    expect(loaded.settings.promptForceDefaultVersion).toBe('spv2.8-continuation-runtime-snapshot-v20');
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv3.0-continuation-story-arc-volume-plan-v22');
     expect(loaded.settings.agentPrompts.main.some(segment => segment.content === V19_DEFAULT_MAIN_AGENT_RUNTIME_SEGMENT_ACU)).toBe(false);
     expect(loaded.settings.agentPrompts.main.filter(segment => segment.role === 'system')).toHaveLength(1);
     expect(loaded.settings.agentPrompts.main[0].role).toBe('system');
@@ -315,7 +320,7 @@ describe('FirstFloorContinuationStore_ACU', () => {
       String(segment.content).startsWith('【本回合运行时数据】'),
     );
 
-    expect(loaded.settings.promptForceDefaultVersion).toBe('spv2.8-continuation-runtime-snapshot-v20');
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv3.0-continuation-story-arc-volume-plan-v22');
     expect(loaded.settings.agentPrompts.main[runtimeIndex]).toMatchObject({
       role: 'system',
       content: '【本回合运行时数据】\n这是用户定制的运行时提示词。',
@@ -346,10 +351,50 @@ describe('FirstFloorContinuationStore_ACU', () => {
     _set_SillyTavern_API_ACU({ chat: [{ _qrf_continuation: v19 }], chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn() } as any);
 
     const loaded = new FirstFloorContinuationStore_ACU().read()!;
-    expect(loaded.settings.promptForceDefaultVersion).toBe('spv2.8-continuation-runtime-snapshot-v20');
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv3.0-continuation-story-arc-volume-plan-v22');
     expect(loaded.settings.agentPrompts.main.some(segment => segment.content === V19_DEFAULT_MAIN_AGENT_RUNTIME_SEGMENT_ACU)).toBe(false);
     expect(loaded.settings.agentPrompts.main.find(segment => String(segment.content).startsWith('【以下是你自己的会话记录】'))?.content).toBe(currentDefaultMainAgentHistoryGuide_ACU());
     expect(loaded.settings.agentPrompts.main.find(segment => String(segment.content).startsWith('我收到的上下文分三层：'))?.content).toBe(currentDefaultMainAgentLayoutAnswer_ACU());
+  });
+
+  it('V20 只更新未改写的总纲默认段，保留用户定制段与其他角色提示词', () => {
+    const v20 = buildEnvelope_ACU() as any;
+    v20.settings.promptForceDefaultVersion = 'spv2.8-continuation-runtime-snapshot-v20';
+    const expectedMain = JSON.parse(JSON.stringify(v20.settings.agentPrompts.main));
+    const expectedArc = JSON.parse(JSON.stringify(v20.settings.agentPrompts.arcArchitect));
+    const customSegment = { role: 'user', content: '用户定制的总纲补充规则', enabled: true, deletable: true };
+    expectedArc.push(customSegment);
+    v20.settings.agentPrompts.arcArchitect[0].content = V20_DEFAULT_ARC_ARCHITECT_SYSTEM_ACU;
+    v20.settings.agentPrompts.arcArchitect[2].content = V20_DEFAULT_ARC_ARCHITECT_PURPOSE_ACU;
+    v20.settings.agentPrompts.arcArchitect[4].content = V20_DEFAULT_ARC_ARCHITECT_EPISTEMOLOGY_ACU;
+    v20.settings.agentPrompts.arcArchitect[6].content = V20_DEFAULT_ARC_ARCHITECT_CONTRACT_ACU;
+    v20.settings.agentPrompts.arcArchitect[7].content = V20_DEFAULT_ARC_ARCHITECT_TASK_ACU;
+    v20.settings.agentPrompts.arcArchitect.push(customSegment);
+    _set_SillyTavern_API_ACU({ chat: [{ _qrf_continuation: v20 }], chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn() } as any);
+
+    const loaded = new FirstFloorContinuationStore_ACU().read()!;
+
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv3.0-continuation-story-arc-volume-plan-v22');
+    expect(loaded.settings.agentPrompts.main).toEqual(expectedMain);
+    expect(loaded.settings.agentPrompts.arcArchitect).toEqual(expectedArc);
+    expect(loaded.settings.agentPrompts.arcArchitect[2].content).toContain('总纲解决六件事');
+    expect(loaded.settings.agentPrompts.arcArchitect[6].content).toContain('短线 7–8 卷');
+  });
+
+  it('migrates V21 default arc volume wording while preserving custom segments', () => {
+    const v21 = buildEnvelope_ACU() as any;
+    v21.settings.promptForceDefaultVersion = 'spv2.9-continuation-longform-story-arc-v21';
+    v21.settings.agentPrompts.arcArchitect[6].content = v21.settings.agentPrompts.arcArchitect[6].content
+      .replace('开局立总纲或全量重构时，卷数必须严格遵守本次请求末尾注入的【总纲卷数计划】：短线 7–8 卷、中线 10–14 卷、长线 20 卷，或自定义的精确卷数。资料不足时可以把远期卷标为待定方向，但不得缩减卷数；第一卷 status 设 active，其余 planned。', '开局立长篇总纲时，默认给出一条 story 条目和 6-10 条 volume 条目；只有用户明确要求短篇或素材容量明显不足时才可少于 6 卷，并在 summary 说明依据。禁止为了省事把完整长篇压成 3-5 个笼统部分。第一卷 status 设 active，其余 planned。');
+    const custom = { role: 'user', content: '用户自定义分卷规则', enabled: true, deletable: true };
+    v21.settings.agentPrompts.arcArchitect.push(custom);
+    _set_SillyTavern_API_ACU({ chat: [{ _qrf_continuation: v21 }], chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn() } as any);
+
+    const loaded = new FirstFloorContinuationStore_ACU().read()!;
+
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv3.0-continuation-story-arc-volume-plan-v22');
+    expect(loaded.settings.agentPrompts.arcArchitect[6].content).toContain('短线 7–8 卷');
+    expect(loaded.settings.agentPrompts.arcArchitect).toContainEqual(custom);
   });
 
   it('V16 及更早提示词版本仍整体强刷，存量信封因此拿到总纲子代理提示词组', () => {
@@ -360,7 +405,7 @@ describe('FirstFloorContinuationStore_ACU', () => {
     _set_SillyTavern_API_ACU({ chat: [{ _qrf_continuation: stale }], chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn() } as any);
 
     const loaded = new FirstFloorContinuationStore_ACU().read()!;
-    expect(loaded.settings.promptForceDefaultVersion).toBe('spv2.8-continuation-runtime-snapshot-v20');
+    expect(loaded.settings.promptForceDefaultVersion).toBe('spv3.0-continuation-story-arc-volume-plan-v22');
     expect(loaded.settings.agentPrompts.arcArchitect[0].content).toContain('故事总纲子代理');
     expect(loaded.settings.outlinePrompt.some(segment => segment.content.includes('<stage_tempo>'))).toBe(true);
     expect(loaded.settings.agentPrompts.main[0].content).not.toBe('用户改过的旧提示词');

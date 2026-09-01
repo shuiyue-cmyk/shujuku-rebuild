@@ -78,18 +78,15 @@ describe('getCurrentCharacterWorldbookBinding_ACU', () => {
     expect(mockTavernHelper.getCharLorebooks).not.toHaveBeenCalled();
   });
 
-  it('新 API 缺失时回退旧 API，并保留旧 API 来源标识', async () => {
+  it('统一入口缺失时不调用旧 API，而是抛 API 不可用错误', async () => {
     mockTavernHelper.getCharLorebooks = vi.fn().mockResolvedValue({
       primary: null, additional: ['书A', '书B', '书A'],
     });
 
-    await expect(getCurrentCharacterWorldbookBinding_ACU()).resolves.toEqual({
-      primary: null,
-      additional: ['书A', '书B'],
-      orderedNames: ['书A', '书B'],
-      apiSource: 'getCharLorebooks',
+    await expect(getCurrentCharacterWorldbookBinding_ACU()).rejects.toMatchObject({
+      name: 'CharacterWorldbookApiUnavailableError_ACU',
     });
-    expect(mockTavernHelper.getCharLorebooks).toHaveBeenCalledWith({ type: 'all' });
+    expect(mockTavernHelper.getCharLorebooks).not.toHaveBeenCalled();
   });
 
   it('两个 API 都不可用时记录 capability 警告并抛具名错误', async () => {

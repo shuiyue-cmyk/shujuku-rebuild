@@ -52,6 +52,17 @@
               <option value="custom">自定义</option>
             </select>
           </AcuFormRow>
+          <AcuFormRow label="故事总纲卷数">
+            <select v-model="settingsDraft.storyArcVolumePlan">
+              <option value="short">短线（7–8 卷）</option>
+              <option value="medium">中线（10–14 卷）</option>
+              <option value="long">长线（20 卷）</option>
+              <option value="custom">自定义</option>
+            </select>
+          </AcuFormRow>
+          <AcuFormRow v-if="settingsDraft.storyArcVolumePlan === 'custom'" label="自定义总纲卷数">
+            <AcuInput v-model="settingsDraft.customStoryArcVolumeCount" type="number" :min="1" :max="50" />
+          </AcuFormRow>
           <AcuFormRow v-if="settingsDraft.stageSize === 'custom'" label="最少轮次">
             <AcuInput v-model="settingsDraft.customTurnMin" type="number" :min="1" :max="50" />
           </AcuFormRow>
@@ -441,13 +452,20 @@ function normalizeSettingsDraft(): ContinuationSettings_ACU {
   const source = settingsDraft.value;
   const customTurnMin = source.stageSize === 'custom' ? requiredInteger(source.customTurnMin, '最少轮次') : null;
   const customTurnMax = source.stageSize === 'custom' ? requiredInteger(source.customTurnMax, '最多轮次') : null;
+  const customStoryArcVolumeCount = source.storyArcVolumePlan === 'custom'
+    ? requiredInteger(source.customStoryArcVolumeCount, '自定义总纲卷数')
+    : null;
   if (source.stageSize === 'custom' && (customTurnMin < 1 || customTurnMax < customTurnMin || customTurnMax > 50)) {
     throw new Error('自定义阶段轮次必须是 1 到 50 的递增整数范围');
+  }
+  if (source.storyArcVolumePlan === 'custom' && (customStoryArcVolumeCount < 1 || customStoryArcVolumeCount > 50)) {
+    throw new Error('自定义总纲卷数必须是 1 到 50 的整数');
   }
   const normalized = {
     ...cloneSettings(source),
     customTurnMin,
     customTurnMax,
+    customStoryArcVolumeCount,
     maxAutomaticStages: requiredInteger(source.maxAutomaticStages, '自动阶段上限'),
     generationRetryLimit: requiredInteger(source.generationRetryLimit, '正文重试次数'),
     internalAiRetryLimit: requiredInteger(source.internalAiRetryLimit, '内部 AI 重试次数'),

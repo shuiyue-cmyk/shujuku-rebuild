@@ -48,8 +48,8 @@ beforeEach(() => {
 });
 
 describe('formatAgentUsageLabel_ACU', () => {
-  it('字段缺失时显示未报告，且不追加未报告的缓存写入', () => {
-    expect(formatAgentUsageLabel_ACU({})).toBe('输入 未报告 · 缓存读取 未报告 · 输出 未报告');
+  it('缓存读取和写入字段缺失时不显示缓存用量', () => {
+    expect(formatAgentUsageLabel_ACU({})).toBe('输入 未报告 · 输出 未报告');
   });
 
   it('明确报告 0 时保留 0，并显示缓存写入', () => {

@@ -1023,6 +1023,56 @@ describe('agent worldbook config/state meta', () => {
     expect(mockSettings.plotSettings.agentPromptTemplates).toBe(previous);
     expect(getAgentPromptTemplateDefaults_ACU()).toEqual(previous);
   });
+
+  it('保留超过原 200 条上限的分通道条目数配置', async () => {
+    mockEntriesByBook.set('主世界书', [configEntry({
+      version: 2,
+      kind: 'agent_worldbook_state',
+      updatedAt: 1,
+      control: {
+        mode: 'agent',
+        maxEntriesPerChannel: {
+          plot: 201,
+          tableFill: 500,
+          finalGeneration: 1000,
+        },
+      },
+      snapshot: {},
+    })]);
+
+    const result = await readAgentWorldbookStateFromWorldbooks_ACU();
+
+    expect(result.control.maxEntriesPerChannel).toEqual({
+      plot: 201,
+      tableFill: 500,
+      finalGeneration: 1000,
+    });
+  });
+
+  it('分通道条目数仍守住默认值与下界', async () => {
+    mockEntriesByBook.set('主世界书', [configEntry({
+      version: 2,
+      kind: 'agent_worldbook_state',
+      updatedAt: 1,
+      control: {
+        mode: 'agent',
+        maxEntriesPerChannel: {
+          plot: 0,
+          tableFill: -4,
+          finalGeneration: 'invalid',
+        },
+      },
+      snapshot: {},
+    })]);
+
+    const result = await readAgentWorldbookStateFromWorldbooks_ACU();
+
+    expect(result.control.maxEntriesPerChannel).toEqual({
+      plot: 1,
+      tableFill: 1,
+      finalGeneration: 20,
+    });
+  });
 });
 
   it('bootstrap 严格读取：候选书全部 not-found 时隔离为 stale 并继续（不落 unknown）', async () => {

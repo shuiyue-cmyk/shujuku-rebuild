@@ -18,6 +18,38 @@ export interface CustomIncludeBodyDiagnostic_ACU {
   rootType: CustomIncludeBodyRootType_ACU;
 }
 
+/**
+ * 宿主 chat-completions 桥返回非 2xx 时的错误类型。
+ * 保留 status 的目的不是美化日志，而是让上层重试归属方能区分「瞬时失败」与「必然失败的请求」：
+ * 401/403/404 这类配置错误重试只是白烧配额，429/5xx 才值得再来一次。
+ */
+export class AgentApiHttpError_ACU extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'AgentApiHttpError_ACU';
+    this.status = status;
+  }
+}
+
+/**
+ * 只有瞬时的传输层失败值得重试；响应内容校验失败（JSON 不合法等）由调用方自己决定，不在这里放行。
+ * AbortError 一律判 false：那是用户按了停止，重试等于把刚掐断的请求再发一遍。
+ */
+export function isRetryableAiRequestError_ACU(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { name?: unknown; message?: unknown; status?: unknown };
+  const name = String(candidate.name || '');
+  const message = String(candidate.message || '');
+  const status = Number(candidate.status);
+  if (name === 'AbortError') return false;
+  if (Number.isFinite(status)) return status === 429 || (status >= 500 && status <= 599);
+  if (name === 'TimeoutError') return true;
+  if (error instanceof TypeError) return true;
+  return /(?:timeout|timed out|network(?:\s+error)?|connection reset|socket hang up)/i.test(message);
+}
+
 function isRecord_ACU(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
 }
@@ -289,7 +321,7 @@ export async function postChatCompletion_ACU(body: unknown, signal?: AbortSignal
     }
     if (!res.ok) {
         const errTxt = await res.text();
-        throw new Error(`API请求失败: ${res.status} ${errTxt}`);
+        throw new AgentApiHttpError_ACU(res.status, `API请求失败: ${res.status} ${errTxt}`);
     }
     const requestWantsStream = (body as any)?.stream === true;
     return handleApiResponse_ACU(res, requestWantsStream);

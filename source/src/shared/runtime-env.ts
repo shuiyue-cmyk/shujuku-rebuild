@@ -105,11 +105,11 @@ export function checkAndMarkInstance(): boolean {
     const hostWin = getHostWindow() as any;
     if (hostWin[ACU_INSTANCE_FLAG]) {
         if (!isPreviousInstanceDomRootAlive()) {
-            console.warn('[幻想·数据库] 检测到历史实例标记，但其 UI 根节点(#acu-app-v2)已不在文档中，判定旧实例已卸载，允许本实例接管。');
+            console.warn('[TTonly·数据库] 检测到历史实例标记，但其 UI 根节点(#acu-app-v2)已不在文档中，判定旧实例已卸载，允许本实例接管。');
             hostWin[ACU_INSTANCE_FLAG] = true;
             return false;
         }
-        console.warn('[幻想·数据库] 检测到另一个实例已在运行，跳过初始化。请勿同时安装油猴脚本和酒馆插件。');
+        console.warn('[TTonly·数据库] 检测到另一个实例已在运行，跳过初始化。请勿同时安装油猴脚本和酒馆插件。');
         return true; // 已有实例
     }
     hostWin[ACU_INSTANCE_FLAG] = true;

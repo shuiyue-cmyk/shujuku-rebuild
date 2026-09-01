@@ -5,15 +5,23 @@ const {
   mockGetLorebookEntries,
   mockGetLorebookEntriesStrict,
   mockRefreshPlotAgentWorldbookSnapshot,
+  mockResolveScopeBookNames,
 } = vi.hoisted(() => ({
   mockCallAIWithPreset: vi.fn(),
   mockGetLorebookEntries: vi.fn(),
   mockGetLorebookEntriesStrict: vi.fn(),
   mockRefreshPlotAgentWorldbookSnapshot: vi.fn(),
+  mockResolveScopeBookNames: vi.fn(async () => [] as string[]),
 }));
 
 vi.mock('../../../src/service/ai/api-call', () => ({
   callAIWithPreset_ACU: mockCallAIWithPreset,
+  isRetryableAiRequestError_ACU: (error: any) => {
+    const status = Number(error?.status);
+    if (String(error?.name || '') === 'AbortError') return false;
+    if (Number.isFinite(status)) return status === 429 || (status >= 500 && status <= 599);
+    return error instanceof TypeError || /network|timeout/i.test(String(error?.message || ''));
+  },
 }));
 
 vi.mock('../../../src/data/gateways/worldbook-gateway', () => ({
@@ -31,10 +39,11 @@ vi.mock('../../../src/service/worldbook/pipeline', () => ({
 vi.mock('../../../src/service/agent/agent-skillify-service', () => ({
   collectWorldbookSkillifyCandidates_ACU: vi.fn(async () => []),
   getWorldbookEntryKeywordsForSkillify_ACU: vi.fn((entry: any) => Array.isArray(entry?.keys) ? entry.keys : []),
+  isWorldbookEntrySkillifyCandidate_ACU: vi.fn((entry: any) => !!entry && entry.enabled !== false && String(entry.type || '').trim().toLowerCase() !== 'constant'),
 }));
 
 vi.mock('../../../src/service/agent/agent-worldbook-config-meta', () => ({
-  resolveAgentWorldbookScopeBookNames_ACU: vi.fn(async () => []),
+  resolveAgentWorldbookScopeBookNames_ACU: mockResolveScopeBookNames,
 }));
 
 import { runAgentDecisionForPlot_ACU } from '../../../src/service/agent/agent-decision-engine';
@@ -175,9 +184,9 @@ describe('runAgentDecisionForPlot_ACU', () => {
     expect(messages[0].content).toContain('"bookName": "剧情书"');
     expect(messages[0].content).toContain('"uid": 12');
     expect(messages[0].content).toContain('"index": 1');
-    expect(messages[0].content).toContain('"tk": 157');
-    expect(messages[0].content).toContain('"tokenEstimate": 157');
-    expect(messages[0].content).toContain('预计消耗 157 Token');
+    expect(messages[0].content).toContain('"tk": 167');
+    expect(messages[0].content).toContain('"tokenEstimate": 167');
+    expect(messages[0].content).toContain('预计消耗 167 Token');
     expect(messages[0].content).toContain('"description": "陈默人物 Skill 描述"');
     expect(messages[0].content).toContain('"triggerWhen": "陈默触发条件"');
     expect(messages[0].content).toContain('"unit": "Token"');
@@ -903,5 +912,130 @@ describe('runAgentDecisionForPlot_ACU', () => {
     });
 
     expect(result.plotGreenlights.task_id).toEqual([{ bookName: '剧情书', uid: 1, reason: '预算裁剪' }, { bookName: '剧情书', uid: 3, reason: '预算裁剪' }]);
+  });
+
+  it('快照为空时把没有 Skill 元数据的运行时条目也纳入决策候选', async () => {
+    mockRefreshPlotAgentWorldbookSnapshot.mockResolvedValueOnce({ active: false, selectionSignature: '', createdAt: 0, books: {} });
+    mockResolveScopeBookNames.mockResolvedValueOnce(['剧情书']);
+    mockGetLorebookEntries.mockResolvedValueOnce([
+      { uid: 1, comment: '无元数据地点', keys: ['酒馆'], content: 'A'.repeat(20), enabled: true },
+      { uid: 2, comment: '禁用条目', keys: ['废弃'], content: 'B'.repeat(20), enabled: false },
+    ]);
+    mockCallAIWithPreset.mockResolvedValue(JSON.stringify({
+      taskPlan: [{ taskId: 'task_id', run: true, effectiveStage: 1, effectiveOrder: 0 }],
+      plotGreenlights: {},
+      finalGenerationGreenlights: [{ entries: [1], reason: '兜底候选' }],
+      fallbackMode: false,
+    }));
+
+    const result = await runAgentDecisionForPlot_ACU({
+      plotSettings: { agentWorldbookControl: { enabled: true, mode: 'agent' } },
+      userMessage: '去酒馆',
+      sharedContext: {},
+      enabledTasks: [{ id: 'task id', name: '默认任务', description: '需要判断', enabled: true, promptGroup: { messages: [] } }],
+    });
+
+    expect(result.active).toBe(true);
+    const promptText = mockCallAIWithPreset.mock.calls[0][0].map((message: any) => String(message.content || '')).join('\n');
+    // 无元数据条目走兜底摘要（此前这条路径只收已有可用 Skill 元数据的条目，未 Skill 化的世界书会整批空候选）
+    expect(promptText).toContain('无元数据地点');
+    expect(promptText).toContain('关键词：酒馆');
+    // 非 Skillify 候选（禁用条目）仍被硬过滤
+    expect(promptText).not.toContain('废弃条目');
+    expect(result.finalGenerationGreenlights).toEqual([{ bookName: '剧情书', uid: 1, reason: '兜底候选' }]);
+  });
+
+  it('候选超出名额时按与本轮输入的相关性取舍，而不是按世界书原始顺序', async () => {
+    const skillMetaBlock = (description: string) => `<!-- ACU_SKILL_META_START\n${JSON.stringify({ version: 1, description, triggerWhen: '通用触发', updatedAt: 1, updatedBy: 'agent-skillify' })}\nACU_SKILL_META_END -->`;
+    mockRefreshPlotAgentWorldbookSnapshot.mockResolvedValueOnce({
+      active: true,
+      selectionSignature: 'scope',
+      createdAt: 1,
+      books: { '剧情书': [{ uid: 1 }, { uid: 2 }] },
+    });
+    mockGetLorebookEntries.mockResolvedValueOnce([
+      { uid: 1, comment: `矿洞地图\n\n${skillMetaBlock('矿洞描述')}`, keys: ['矿洞'], content: 'A'.repeat(20), enabled: true },
+      { uid: 2, comment: `酒馆传闻\n\n${skillMetaBlock('酒馆描述')}`, keys: ['酒馆'], content: 'B'.repeat(20), enabled: true },
+    ]);
+    mockCallAIWithPreset.mockResolvedValue(JSON.stringify({
+      taskPlan: [{ taskId: 'task_id', run: true, effectiveStage: 1, effectiveOrder: 0 }],
+      plotGreenlights: {},
+      finalGenerationGreenlights: [],
+      fallbackMode: false,
+    }));
+
+    await runAgentDecisionForPlot_ACU({
+      plotSettings: {
+        agentWorldbookControl: {
+          enabled: true,
+          mode: 'agent',
+          contextSettings: { decisionWorldbookCandidateLimit: 1 },
+          agentDecisionPromptSegments: [{ role: 'user', deletable: true, content: 'W={{agent.worldbookEntriesJson}}' }],
+        },
+      },
+      // 用户输入命中 uid 2 的关键词；uid 1 排在前面但无关，名额只有 1 个时必须留下 uid 2。
+      userMessage: '去酒馆喝一杯',
+      sharedContext: {},
+      enabledTasks: [{ id: 'task id', name: '默认任务', description: '需要判断', enabled: true, promptGroup: { messages: [] } }],
+    });
+
+    const promptText = mockCallAIWithPreset.mock.calls[0][0].map((message: any) => String(message.content || '')).join('\n');
+    expect(promptText).toContain('"uid": 2');
+    expect(promptText).not.toContain('"uid": 1');
+  });
+
+  it('不可重试的 HTTP 失败立即跳出分片重试环', async () => {
+    const unauthorized = Object.assign(new Error('API请求失败: 401'), { name: 'AgentApiHttpError_ACU', status: 401 });
+    mockCallAIWithPreset.mockRejectedValue(unauthorized);
+
+    const result = await runAgentDecisionForPlot_ACU({
+      plotSettings: { agentWorldbookControl: { enabled: true, mode: 'agent', contextSettings: { agentAiMaxRetries: 3 } } },
+      userMessage: '继续',
+      sharedContext: {},
+      enabledTasks: [{ id: 'task id', name: '默认任务', description: '需要判断', enabled: true, promptGroup: { messages: [] } }],
+    });
+
+    // 401 重试多少次都是同样失败，只发一次请求就回退
+    expect(mockCallAIWithPreset).toHaveBeenCalledTimes(1);
+    expect(result.active).toBe(false);
+  });
+
+  it('瞬时的 5xx 失败在重试环内继续重试', async () => {
+    const gatewayDown = Object.assign(new Error('API请求失败: 503'), { name: 'AgentApiHttpError_ACU', status: 503 });
+    mockCallAIWithPreset
+      .mockRejectedValueOnce(gatewayDown)
+      .mockResolvedValueOnce(JSON.stringify({
+        taskPlan: [{ taskId: 'task_id', run: true, effectiveStage: 1, effectiveOrder: 0 }],
+        plotGreenlights: {},
+        finalGenerationGreenlights: [],
+        fallbackMode: false,
+      }));
+
+    const result = await runAgentDecisionForPlot_ACU({
+      plotSettings: { agentWorldbookControl: { enabled: true, mode: 'agent', contextSettings: { agentAiMaxRetries: 3 } } },
+      userMessage: '继续',
+      sharedContext: {},
+      enabledTasks: [{ id: 'task id', name: '默认任务', description: '需要判断', enabled: true, promptGroup: { messages: [] } }],
+    });
+
+    expect(mockCallAIWithPreset).toHaveBeenCalledTimes(2);
+    expect(result.active).toBe(true);
+  });
+
+  it('AbortError 立即终止且不被不可重试跳出降级为普通请求失败', async () => {
+    const aborted = Object.assign(new Error('请求已取消'), { name: 'AbortError' });
+    mockCallAIWithPreset.mockRejectedValue(aborted);
+
+    const result = await runAgentDecisionForPlot_ACU({
+      plotSettings: { agentWorldbookControl: { enabled: true, mode: 'agent', contextSettings: { agentAiMaxRetries: 3 } } },
+      userMessage: '继续',
+      sharedContext: {},
+      enabledTasks: [{ id: 'task id', name: '默认任务', description: '需要判断', enabled: true, promptGroup: { messages: [] } }],
+      signal: { aborted: true } as AbortSignal,
+    });
+
+    // 用户已停止：只发一次，且回退原因保留 aborted 语义（不是 agent_request_error）
+    expect(mockCallAIWithPreset).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ active: false, fallbackReason: 'agent_decision_shard_1_aborted' });
   });
 });

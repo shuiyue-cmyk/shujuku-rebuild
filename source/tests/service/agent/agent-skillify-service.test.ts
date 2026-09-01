@@ -19,6 +19,12 @@ const { mockCallAIWithPreset, mockSettings, mockParseWorldbookSkillMeta, mockSav
 
 vi.mock('../../../src/service/ai/api-call', () => ({
   callAIWithPreset_ACU: mockCallAIWithPreset,
+  isRetryableAiRequestError_ACU: (error: any) => {
+    const status = Number(error?.status);
+    if (String(error?.name || '') === 'AbortError') return false;
+    if (Number.isFinite(status)) return status === 429 || (status >= 500 && status <= 599);
+    return error instanceof TypeError || /network|timeout/i.test(String(error?.message || ''));
+  },
 }));
 
 vi.mock('../../../src/service/runtime/state-manager', () => ({
@@ -239,7 +245,8 @@ describe('agent worldbook skillify candidate filtering', () => {
     expect(rendered).not.toContain('contentPreview');
     expect(rendered).toContain('条目正文');
     expect(rendered).toContain('灯火昏暗，吧台后藏着通往地下室的暗门。');
-    expect(rendered).toContain('描述、触发时机与 tk 数值');
+    expect(rendered).toContain('描述与触发时机');
+    expect(rendered).toContain('禁止输出或改写 tk 字段');
     expect(rendered).toContain('酒馆地点');
     expect(rendered).toContain('条目 TK: 7');
   });
@@ -263,19 +270,19 @@ describe('agent worldbook skillify candidate filtering', () => {
     expect(candidates[0].uid).toBe('a');
     expect(candidates[0]).not.toHaveProperty('contentPreview');
     expect(candidates[0].content).toBe('A'.repeat(250));
-    expect(candidates[0].tk).toBe(157);
+    expect(candidates[0].tk).toBe(167);
   });
 
-  it('uses existing skill meta tk before estimating content tk', async () => {
+  it('recomputes existing skill meta tk locally when overwrite is enabled', async () => {
     mockParseWorldbookSkillMeta.mockReturnValueOnce({ version: 1, description: '旧描述', triggerWhen: '旧触发', tk: 12, updatedAt: 1, updatedBy: 'agent-skillify' });
     mockGetLorebookEntriesByNames.mockResolvedValueOnce({
       '剧情书': [{ uid: 'a', comment: '地点A', content: 'A'.repeat(250), enabled: true, keys: ['A'] }],
     });
 
-    const candidates = await collectWorldbookSkillifyCandidates_ACU(['剧情书']);
+    const candidates = await collectWorldbookSkillifyCandidates_ACU(['剧情书'], { overwriteManual: true });
 
     expect(candidates).toHaveLength(1);
-    expect(candidates[0].tk).toBe(12);
+    expect(candidates[0].tk).toBe(167);
   });
 
   it('strips existing skill meta block from skillify summary comment', async () => {
@@ -285,7 +292,7 @@ describe('agent worldbook skillify candidate filtering', () => {
       '剧情书': [{ uid: 'a', comment: `地点A\n\n${metaBlock}`, content: 'A'.repeat(20), enabled: true, keys: ['A'] }],
     });
 
-    const candidates = await collectWorldbookSkillifyCandidates_ACU(['剧情书']);
+    const candidates = await collectWorldbookSkillifyCandidates_ACU(['剧情书'], { overwriteManual: true });
 
     expect(candidates).toHaveLength(1);
     expect(candidates[0].comment).toBe('地点A');
@@ -293,7 +300,7 @@ describe('agent worldbook skillify candidate filtering', () => {
     expect(JSON.stringify(candidates[0])).not.toContain('ACU_SKILL_META_START');
   });
 
-  it('skips entries that already have AI-generated skill meta during one-click skillify', async () => {
+  it('excludes entries that already have AI-generated skill meta before batch selection', async () => {
     mockParseWorldbookSkillMeta.mockReturnValueOnce({
       version: 1,
       description: 'AI 已生成描述',
@@ -310,11 +317,11 @@ describe('agent worldbook skillify candidate filtering', () => {
 
     expect(mockCallAIWithPreset).not.toHaveBeenCalled();
     expect(mockSaveWorldbookEntrySkillMeta).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ totalCandidates: 1, updated: 0, skipped: 1, failed: 0 });
-    expect(result.results[0]).toMatchObject({ status: 'skipped', uid: 'existing-ai', reason: '已存在 Skill 元数据' });
+    expect(result).toMatchObject({ totalCandidates: 0, totalMatched: 0, selectedForRun: 0, remaining: 0, updated: 0, skipped: 0, failed: 0 });
+    expect(result.results).toEqual([]);
   });
 
-  it('skips entries that already have manually edited skill meta during one-click skillify', async () => {
+  it('excludes entries that already have manually edited skill meta before batch selection', async () => {
     mockParseWorldbookSkillMeta.mockReturnValueOnce({
       version: 1,
       description: '用户手写描述',
@@ -331,8 +338,8 @@ describe('agent worldbook skillify candidate filtering', () => {
 
     expect(mockCallAIWithPreset).not.toHaveBeenCalled();
     expect(mockSaveWorldbookEntrySkillMeta).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ totalCandidates: 1, updated: 0, skipped: 1, failed: 0 });
-    expect(result.results[0]).toMatchObject({ status: 'skipped', uid: 'existing-manual', reason: '已存在用户手动编辑的 Skill 元数据' });
+    expect(result).toMatchObject({ totalCandidates: 0, totalMatched: 0, selectedForRun: 0, remaining: 0, updated: 0, skipped: 0, failed: 0 });
+    expect(result.results).toEqual([]);
   });
 
   it('regenerates entries whose existing skill meta has no usable description or trigger', async () => {
@@ -352,25 +359,23 @@ describe('agent worldbook skillify candidate filtering', () => {
     const result = await skillifyWorldbookEntries_ACU(['剧情书']);
 
     expect(mockCallAIWithPreset).toHaveBeenCalledTimes(1);
-    expect(mockSaveWorldbookEntrySkillMeta).toHaveBeenCalledWith('剧情书', 'empty-meta', { description: '新描述', triggerWhen: '新触发', tk: 8 }, 'agent-skillify');
+    expect(mockSaveWorldbookEntrySkillMeta).toHaveBeenCalledWith('剧情书', 'empty-meta', { description: '新描述', triggerWhen: '新触发', tk: 14 }, 'agent-skillify');
     expect(result).toMatchObject({ totalCandidates: 1, updated: 1, skipped: 0, failed: 0 });
   });
 
-  it('parses skillify response tk and falls back when tk is omitted', () => {
-    expect(parseAgentSkillifyResponse_ACU('{"description":"描述","triggerWhen":"触发","tk":88}', 12)).toEqual({
+  it('parses description and triggerWhen while ignoring AI-provided tk', () => {
+    expect(parseAgentSkillifyResponse_ACU('{"description":"描述","triggerWhen":"触发","tk":88}')).toEqual({
       description: '描述',
       triggerWhen: '触发',
-      tk: 88,
     });
 
-    expect(parseAgentSkillifyResponse_ACU('{"description":"描述","triggerWhen":"触发"}', 12)).toEqual({
+    expect(parseAgentSkillifyResponse_ACU('{"description":"描述","triggerWhen":"触发"}')).toEqual({
       description: '描述',
       triggerWhen: '触发',
-      tk: 12,
     });
   });
 
-  it('saves parsed skillify tk meta with agent-skillify updatedBy', async () => {
+  it('ignores AI-provided tk and saves the locally counted value', async () => {
     mockGetLorebookEntriesByNames.mockResolvedValueOnce({
       '剧情书': [{ uid: 'a', comment: '地点A', content: 'A'.repeat(100), enabled: true, keys: ['A'] }],
     });
@@ -382,7 +387,7 @@ describe('agent worldbook skillify candidate filtering', () => {
     expect(mockSaveWorldbookEntrySkillMeta).toHaveBeenCalledWith('剧情书', 'a', {
       description: '新描述',
       triggerWhen: '新触发',
-      tk: 64,
+      tk: 67,
     }, 'agent-skillify');
     expect(result).toMatchObject({ totalCandidates: 1, updated: 1, skipped: 0, failed: 0 });
   });
@@ -403,8 +408,40 @@ describe('agent worldbook skillify candidate filtering', () => {
 
     expect(mockCallAIWithPreset).toHaveBeenCalledTimes(11);
     expect(mockCallAIWithPreset.mock.calls[1][0]).toBe(mockCallAIWithPreset.mock.calls[0][0]);
-    expect(mockSaveWorldbookEntrySkillMeta).toHaveBeenCalledWith('剧情书', 'retry', { description: '新描述', triggerWhen: '新触发', tk: 9 }, 'agent-skillify');
+    expect(mockSaveWorldbookEntrySkillMeta).toHaveBeenCalledWith('剧情书', 'retry', { description: '新描述', triggerWhen: '新触发', tk: 14 }, 'agent-skillify');
     expect(progress).toHaveBeenCalledWith(expect.objectContaining({ phase: 'retry', attempt: 10, maxAttempts: 11, uid: 'retry' }));
+    expect(result).toMatchObject({ totalCandidates: 1, updated: 1, skipped: 0, failed: 0 });
+  });
+
+  it('does not retry non-retryable AI HTTP failures', async () => {
+    mockGetLorebookEntriesByNames.mockResolvedValueOnce({
+      '剧情书': [{ uid: 'unauthorized', comment: '受保护地点', content: '内容', enabled: true, keys: [] }],
+    });
+    const unauthorized = Object.assign(new Error('API 请求失败: 401'), { status: 401, name: 'AgentApiHttpError_ACU' });
+    mockCallAIWithPreset.mockRejectedValueOnce(unauthorized);
+
+    const result = await skillifyWorldbookEntries_ACU(['剧情书'], { maxAiRetries: 3 });
+
+    expect(mockCallAIWithPreset).toHaveBeenCalledTimes(1);
+    expect(mockSaveWorldbookEntrySkillMeta).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ totalCandidates: 1, updated: 0, skipped: 0, failed: 1 });
+    expect(result.results[0].reason).toContain('401');
+  });
+
+  it('retries rate-limited AI HTTP failures before saving', async () => {
+    mockGetLorebookEntriesByNames.mockResolvedValueOnce({
+      '剧情书': [{ uid: 'rate-limited', comment: '限流地点', content: '内容', enabled: true, keys: [] }],
+    });
+    const rateLimited = Object.assign(new Error('API 请求失败: 429'), { status: 429, name: 'AgentApiHttpError_ACU' });
+    mockCallAIWithPreset
+      .mockRejectedValueOnce(rateLimited)
+      .mockResolvedValueOnce('{"description":"新描述","triggerWhen":"新触发"}');
+    mockSaveWorldbookEntrySkillMeta.mockResolvedValueOnce({ updated: true });
+
+    const result = await skillifyWorldbookEntries_ACU(['剧情书'], { maxAiRetries: 2 });
+
+    expect(mockCallAIWithPreset).toHaveBeenCalledTimes(2);
+    expect(mockSaveWorldbookEntrySkillMeta).toHaveBeenCalledTimes(1);
     expect(result).toMatchObject({ totalCandidates: 1, updated: 1, skipped: 0, failed: 0 });
   });
 
@@ -436,7 +473,7 @@ describe('agent worldbook skillify candidate filtering', () => {
     expect(result).toMatchObject({ totalCandidates: 6, updated: 6, skipped: 0, failed: 0 });
   });
 
-  it('falls back to summary tk when saving skillify response without tk', async () => {
+  it('uses the locally counted tk when the AI response omits tk', async () => {
     mockGetLorebookEntriesByNames.mockResolvedValueOnce({
       '剧情书': [{ uid: 'a', comment: '地点A', content: 'A'.repeat(100), enabled: true, keys: ['A'] }],
     });
@@ -448,7 +485,7 @@ describe('agent worldbook skillify candidate filtering', () => {
     expect(mockSaveWorldbookEntrySkillMeta).toHaveBeenCalledWith('剧情书', 'a', {
       description: '新描述',
       triggerWhen: '新触发',
-      tk: 63,
+      tk: 67,
     }, 'agent-skillify');
     expect(result).toMatchObject({ totalCandidates: 1, updated: 0, skipped: 1, failed: 0 });
   });
@@ -509,5 +546,32 @@ describe('agent worldbook skillify candidate filtering', () => {
     expect(mockCallAIWithPreset).toHaveBeenCalledWith([
       { role: 'user', content: 'WB=剧情书;UID=wb-first' },
     ], 'worldbook-preset');
+  });
+
+  it('advances the cursor after failed entries without repeating the processed batch', async () => {
+    const entries = ['a', 'b', 'c'].map(uid => ({
+      uid,
+      comment: `地点${uid}`,
+      content: `内容${uid}`,
+      enabled: true,
+      keys: [uid],
+    }));
+    mockGetLorebookEntriesByNames.mockResolvedValue({ '剧情书': entries });
+    const unauthorized = Object.assign(new Error('API 请求失败: 401'), { status: 401, name: 'AgentApiHttpError_ACU' });
+    mockCallAIWithPreset
+      .mockRejectedValueOnce(unauthorized)
+      .mockResolvedValueOnce('{"description":"描述B","triggerWhen":"触发B"}')
+      .mockResolvedValueOnce('{"description":"描述C","triggerWhen":"触发C"}');
+
+    const first = await skillifyWorldbookEntries_ACU(['剧情书'], { maxEntries: 2, maxAiRetries: 2 });
+    const second = await skillifyWorldbookEntries_ACU(['剧情书'], { maxEntries: 2, cursor: first.nextCursor });
+
+    expect(first.results.map(result => result.uid)).toEqual(['a', 'b']);
+    expect(first).toMatchObject({ totalMatched: 3, selectedForRun: 2, remaining: 1, truncated: true, failed: 1 });
+    expect(first.nextCursor).toEqual({ bookName: '剧情书', uid: 'b' });
+    expect(second.results.map(result => result.uid)).toEqual(['c']);
+    expect(second).toMatchObject({ totalMatched: 1, selectedForRun: 1, remaining: 0, truncated: false, failed: 0 });
+    expect(second.nextCursor).toEqual({ bookName: '剧情书', uid: 'c' });
+    expect(mockCallAIWithPreset).toHaveBeenCalledTimes(3);
   });
 });

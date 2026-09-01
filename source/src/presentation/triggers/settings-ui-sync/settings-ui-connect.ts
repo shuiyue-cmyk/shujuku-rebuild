@@ -245,9 +245,11 @@ import {
     const iframeTH = typeof (window as any).TavernHelper !== 'undefined' ? (window as any).TavernHelper : undefined;
     const parentTH = typeof hostWin.TavernHelper !== 'undefined' ? hostWin.TavernHelper : undefined;
     const rawTH = iframeTH || parentTH;
-    // [装配] 三级后端兼容适配器：逐方法按 passthrough（旧版酒馆助手全量 API）→
-    // mapped（新版改名 API）→ native（SillyTavern 原生 context）择优解析。
-    // rawTH 为 undefined（TT 裸环境无酒馆助手）时仍然构建，全库 TavernHelper_API_ACU
+    // [装配] 三级后端兼容适配器：世界书后端按「组」一次性锁定——探测到酒馆助手时整组
+    // 走 passthrough（旧版酒馆助手全量 API）/mapped（新版改名 API），缺失的方法直接 missing，
+    // 绝不回落到 native；完全没有酒馆助手（TT 裸环境）时整组锁 SillyTavern 原生 context 后端。
+    // 聊天/Slash/角色数据仍逐方法按 passthrough → mapped → native 解析。
+    // rawTH 为 undefined 时仍然构建，全库 TavernHelper_API_ACU
     // 调用点因此获得原生降级；原生后端也不可用时逐方法保持"缺失"语义，与旧行为一致。
     const hostCompat = buildTavernHelperCompat_ACU(rawTH, () => hostWin.SillyTavern?.getContext?.());
     _set_TavernHelper_API_ACU(hostCompat.api);

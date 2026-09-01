@@ -138,6 +138,7 @@ beforeEach(() => {
 function setSettings(): void {
   settings.value = {
     stageSize: 'standard', customTurnMin: null, customTurnMax: null,
+    storyArcVolumePlan: 'medium', customStoryArcVolumeCount: null,
     outlinePreview: false, autoNextStage: true, maxAutomaticStages: 6,
     loopTags: '', loopDelaySeconds: 5, totalDurationMinutes: 0,
     retryDelaySeconds: 3, generationRetryLimit: 3, internalAiRetryLimit: 3,
@@ -461,6 +462,42 @@ describe('ContinuationPage', () => {
       await vi.advanceTimersByTimeAsync(900);
       expect(saveSettings).toHaveBeenCalledOnce();
       expect(saveSettings.mock.calls[0][0]).toMatchObject({ stageSize: 'short', storyWindowFloors: 20, agentHistoryTokenBudget: 120000, maxConsecutivePressureTurns: 8 });
+      app.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('故事总纲卷数：切换档位即保存，自定义档校验卷数并暴露输入框', async () => {
+    vi.useFakeTimers();
+    try {
+      setSettings();
+      setTask();
+      const { app, el } = await mountPage();
+      expect(el.textContent).toContain('故事总纲卷数');
+
+      const volumeSelect = el.querySelectorAll<HTMLSelectElement>('select')[1];
+      volumeSelect.value = 'long';
+      volumeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+      await nextTick();
+      await vi.advanceTimersByTimeAsync(900);
+      expect(saveSettings).toHaveBeenCalledOnce();
+      expect(saveSettings.mock.calls[0][0]).toMatchObject({ storyArcVolumePlan: 'long', customStoryArcVolumeCount: null });
+
+      // 切到自定义但卷数仍为空：自动保存被 normalize 拦下，错误文案出现，并渲染出卷数输入框。
+      volumeSelect.value = 'custom';
+      volumeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+      await nextTick();
+      await vi.advanceTimersByTimeAsync(900);
+      expect(saveSettings).toHaveBeenCalledOnce();
+      expect(el.textContent).toContain('自定义总纲卷数必须是 1 到 50 的整数');
+      const volumeInput = Array.from(el.querySelectorAll<HTMLInputElement>('input[type="number"]')).find(input => input.min === '1' && input.max === '50')!;
+      volumeInput.value = '16';
+      volumeInput.dispatchEvent(new Event('input', { bubbles: true }));
+      await nextTick();
+      await vi.advanceTimersByTimeAsync(900);
+      expect(saveSettings).toHaveBeenCalledTimes(2);
+      expect(saveSettings.mock.calls[1][0]).toMatchObject({ storyArcVolumePlan: 'custom', customStoryArcVolumeCount: 16 });
       app.unmount();
     } finally {
       vi.useRealTimers();

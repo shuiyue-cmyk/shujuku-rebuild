@@ -208,7 +208,7 @@ export function useDebugPanel() {
         })();
         const payload = {
           meta: {
-            plugin: '幻想·数据库',
+            plugin: 'TTonly·数据库',
             version: env.version,
             buildStamp: env.buildStamp,
             host: env.host,
@@ -322,7 +322,7 @@ export function useDebugPanel() {
 
     const payload = {
       meta: {
-        plugin: '幻想·数据库',
+        plugin: 'TTonly·数据库',
         version: env.version,
         buildStamp: env.buildStamp,
         host: env.host,

@@ -29,6 +29,31 @@ declare function waitGlobalInitialized<T>(global: LiteralUnion<'Mvu', string>): 
 type AutoCardUpdaterAgentWorldbookMode = 'disabled' | 'passive' | 'agent';
 type AutoCardUpdaterSkillMetaUpdatedBy = 'manual' | 'agent-skillify';
 type AutoCardUpdaterApiResult = Record<string, any>;
+type AutoCardUpdaterAgentSkillifyCursor = { bookName: string; uid: string | number };
+type AutoCardUpdaterAgentSkillifyOptions = {
+    runTakeover?: boolean;
+    bookNames?: string[] | string;
+    selectedEntries?: Array<{ bookName: string; uid: string | number }>;
+    presetName?: string;
+    maxConcurrency?: number;
+    maxAiRetries?: number;
+    maxEntries?: number;
+    overwriteManual?: boolean;
+    cursor?: AutoCardUpdaterAgentSkillifyCursor;
+};
+type AutoCardUpdaterAgentSkillifyRunResult = {
+    totalCandidates: number;
+    totalMatched: number;
+    selectedForRun: number;
+    remaining: number;
+    truncated: boolean;
+    nextCursor?: AutoCardUpdaterAgentSkillifyCursor;
+    updated: number;
+    skipped: number;
+    failed: number;
+    results: Array<Record<string, any>>;
+};
+type AutoCardUpdaterAgentSkillifyApiResult = AutoCardUpdaterApiResult & { skillify?: AutoCardUpdaterAgentSkillifyRunResult };
 type AutoCardUpdaterPromptSegment = {
     role: string;
     content: string;
@@ -174,8 +199,8 @@ interface AutoCardUpdaterAPI {
 
     getAgentWorldbookControl(): Promise<AutoCardUpdaterApiResult>;
     setAgentWorldbookMode(mode: AutoCardUpdaterAgentWorldbookMode, options?: { runTakeover?: boolean; restoreOnDisable?: boolean }): Promise<AutoCardUpdaterApiResult>;
-    runAgentWorldbookSkillify(options?: AutoCardUpdaterApiResult & { runTakeover?: boolean }): Promise<AutoCardUpdaterApiResult>;
-    skillifyWorldbookEntries(options?: AutoCardUpdaterApiResult & { runTakeover?: boolean; bookNames?: string[] | string; selectedEntries?: Array<{ bookName: string; uid: string | number }> }): Promise<AutoCardUpdaterApiResult>;
+    runAgentWorldbookSkillify(options?: AutoCardUpdaterAgentSkillifyOptions): Promise<AutoCardUpdaterAgentSkillifyApiResult>;
+    skillifyWorldbookEntries(options?: AutoCardUpdaterAgentSkillifyOptions): Promise<AutoCardUpdaterAgentSkillifyApiResult>;
     saveAgentWorldbookSkillMeta(bookName: any, uid: any, metaDraft: any, updatedBy?: AutoCardUpdaterSkillMetaUpdatedBy | { updatedBy?: AutoCardUpdaterSkillMetaUpdatedBy }): Promise<AutoCardUpdaterApiResult>;
     saveWorldbookEntrySkillMeta(bookName: any, uid: any, metaDraft: any, options?: AutoCardUpdaterSkillMetaUpdatedBy | { updatedBy?: AutoCardUpdaterSkillMetaUpdatedBy }): Promise<AutoCardUpdaterApiResult>;
     deleteAgentWorldbookSkillMeta(bookName: any, uid: any): Promise<AutoCardUpdaterApiResult>;

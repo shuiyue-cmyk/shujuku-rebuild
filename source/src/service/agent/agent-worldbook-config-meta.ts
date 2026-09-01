@@ -232,9 +232,9 @@ function normalizeAgentWorldbookControlForCardConfig_ACU(value: unknown, promptT
       promptTemplates.agentSkillifyPromptSegments,
     ),
     maxEntriesPerChannel: {
-      plot: normalizePositiveInt_ACU(maxEntriesPerChannel.plot, defaults.maxEntriesPerChannel.plot, 1, 200),
-      tableFill: normalizePositiveInt_ACU(maxEntriesPerChannel.tableFill, defaults.maxEntriesPerChannel.tableFill, 1, 200),
-      finalGeneration: normalizePositiveInt_ACU(maxEntriesPerChannel.finalGeneration, defaults.maxEntriesPerChannel.finalGeneration, 1, 200),
+      plot: normalizePositiveInt_ACU(maxEntriesPerChannel.plot, defaults.maxEntriesPerChannel.plot, 1),
+      tableFill: normalizePositiveInt_ACU(maxEntriesPerChannel.tableFill, defaults.maxEntriesPerChannel.tableFill, 1),
+      finalGeneration: normalizePositiveInt_ACU(maxEntriesPerChannel.finalGeneration, defaults.maxEntriesPerChannel.finalGeneration, 1),
     },
   };
 }

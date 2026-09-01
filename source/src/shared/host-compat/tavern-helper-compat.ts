@@ -2,7 +2,15 @@
  * shared/host-compat/tavern-helper-compat.ts — TavernHelper 兼容适配器
  *
  * 对外暴露代码库消费的旧版扁平方法面（getLorebookEntries 等 13 个方法），
- * 内部逐方法按三级择优解析后端：
+ * 世界书后端按「组」一次性锁定，其余方法逐方法三级择优解析：
+ * - 世界书组（getLorebookEntries/setLorebookEntries/createLorebookEntries/
+ *   deleteLorebookEntries/getLorebooks/getCharWorldbookNames，并派生
+ *   getCurrentCharPrimaryLorebook/getCharLorebooks）：装配期只选一次来源——
+ *   宿主存在酒馆助手时整组锁 passthrough/mapped（缺哪个方法哪个就 missing，
+ *   绝不回落到 native），完全没有酒馆助手时整组锁 native。读写来源必然同源，
+ *   杜绝「写走 A 后端、读走 B 后端」的分裂。
+ * - 其余方法（getChatMessages/getLastMessageId/triggerSlash/getCharData/generateRaw）
+ *   仍按 passthrough → mapped → native 逐方法解析：
  * - passthrough：宿主对象上存在同名函数（旧版酒馆助手 iframe 全量 API，
  *   或新旧共用名如 getChatMessages/triggerSlash），直接透传——油猴模式行为零变化。
  * - mapped：宿主对象只有新版改名 API（getWorldbook/replaceWorldbook 系），
@@ -71,6 +79,95 @@ function mergeNewEntryPatch_ACU(entry: any, patch: Record<string, any>): any {
     return merged;
 }
 
+interface WorldbookHostBackend_ACU {
+    getLorebookEntries?: (bookName: string) => Promise<OldFlatLorebookEntry_ACU[]>;
+    setLorebookEntries?: (bookName: string, entries: Array<Record<string, any>>) => Promise<void>;
+    createLorebookEntries?: (bookName: string, entries: Array<Record<string, any>>) => Promise<{ entries: OldFlatLorebookEntry_ACU[]; new_uids: number[] }>;
+    deleteLorebookEntries?: (bookName: string, uids: number[]) => Promise<{ entries: OldFlatLorebookEntry_ACU[]; delete_occurred: boolean }>;
+    getLorebooks?: () => Promise<string[]>;
+    getCharWorldbookNames?: (characterName?: string) => Promise<{ primary: string | null; additional: string[] }>;
+}
+
+type WorldbookBackendMethodName_ACU = keyof WorldbookHostBackend_ACU;
+
+function createRawTavernHelperWorldbookBackend_ACU(rawTH: any): {
+    backend: WorldbookHostBackend_ACU;
+    capabilities: Partial<Record<WorldbookBackendMethodName_ACU, HostCapabilityBackend_ACU>>;
+} {
+    const backend: WorldbookHostBackend_ACU = {};
+    const capabilities: Partial<Record<WorldbookBackendMethodName_ACU, HostCapabilityBackend_ACU>> = {};
+    const mount = (name: WorldbookBackendMethodName_ACU, implementation: any, capability: HostCapabilityBackend_ACU): void => {
+        backend[name] = implementation;
+        capabilities[name] = capability;
+    };
+
+    if (hasFn_ACU(rawTH, 'getLorebookEntries')) {
+        mount('getLorebookEntries', rawTH.getLorebookEntries.bind(rawTH), 'passthrough');
+    } else if (hasFn_ACU(rawTH, 'getWorldbook')) {
+        mount('getLorebookEntries', async (bookName: string): Promise<OldFlatLorebookEntry_ACU[]> => {
+            const worldbook = await rawTH.getWorldbook(bookName);
+            return (Array.isArray(worldbook) ? worldbook : []).map((entry: any, index: number) => newToOldEntry_ACU(entry, index));
+        }, 'mapped');
+    }
+
+    if (hasFn_ACU(rawTH, 'setLorebookEntries')) {
+        mount('setLorebookEntries', rawTH.setLorebookEntries.bind(rawTH), 'passthrough');
+    } else if (hasFn_ACU(rawTH, 'updateWorldbookWith')) {
+        mount('setLorebookEntries', async (bookName: string, entries: Array<Record<string, any>>): Promise<void> => {
+            if (!Array.isArray(entries) || entries.length === 0) return;
+            const patchByUid = new Map<number, Record<string, any>>();
+            for (const patch of entries) {
+                if (patch && patch.uid !== undefined && patch.uid !== null) patchByUid.set(Number(patch.uid), oldPatchToNewPatch_ACU(patch));
+            }
+            await rawTH.updateWorldbookWith(bookName, (worldbook: any[]) => worldbook.map(entry => {
+                const patch = patchByUid.get(Number(entry?.uid));
+                return patch ? mergeNewEntryPatch_ACU(entry, patch) : entry;
+            }));
+        }, 'mapped');
+    }
+
+    if (hasFn_ACU(rawTH, 'createLorebookEntries')) {
+        mount('createLorebookEntries', rawTH.createLorebookEntries.bind(rawTH), 'passthrough');
+    } else if (hasFn_ACU(rawTH, 'createWorldbookEntries')) {
+        mount('createLorebookEntries', async (bookName: string, entries: Array<Record<string, any>>) => {
+            const result = await rawTH.createWorldbookEntries(bookName, (Array.isArray(entries) ? entries : []).map((patch: any) => oldPatchToNewPatch_ACU(patch ?? {})));
+            const worldbook = Array.isArray(result?.worldbook) ? result.worldbook : [];
+            const newEntries = Array.isArray(result?.new_entries) ? result.new_entries : [];
+            return { entries: worldbook.map((entry: any, index: number) => newToOldEntry_ACU(entry, index)), new_uids: newEntries.map((entry: any) => Number(entry?.uid)).filter(Number.isFinite) };
+        }, 'mapped');
+    }
+
+    if (hasFn_ACU(rawTH, 'deleteLorebookEntries')) {
+        mount('deleteLorebookEntries', rawTH.deleteLorebookEntries.bind(rawTH), 'passthrough');
+    } else if (hasFn_ACU(rawTH, 'deleteWorldbookEntries')) {
+        mount('deleteLorebookEntries', async (bookName: string, uids: number[]) => {
+            const uidSet = new Set((Array.isArray(uids) ? uids : []).map(Number));
+            const result = await rawTH.deleteWorldbookEntries(bookName, (entry: any) => uidSet.has(Number(entry?.uid)));
+            const worldbook = Array.isArray(result?.worldbook) ? result.worldbook : [];
+            const deleted = Array.isArray(result?.deleted_entries) ? result.deleted_entries : [];
+            return { entries: worldbook.map((entry: any, index: number) => newToOldEntry_ACU(entry, index)), delete_occurred: deleted.length > 0 };
+        }, 'mapped');
+    }
+
+    if (hasFn_ACU(rawTH, 'getLorebooks')) mount('getLorebooks', rawTH.getLorebooks.bind(rawTH), 'passthrough');
+    else if (hasFn_ACU(rawTH, 'getWorldbookNames')) mount('getLorebooks', rawTH.getWorldbookNames.bind(rawTH), 'mapped');
+
+    if (hasFn_ACU(rawTH, 'getCharWorldbookNames')) {
+        mount('getCharWorldbookNames', rawTH.getCharWorldbookNames.bind(rawTH), 'passthrough');
+    } else if (hasFn_ACU(rawTH, 'getCharLorebooks')) {
+        mount('getCharWorldbookNames', async (characterName: string = 'current') => {
+            const options = characterName !== 'current' ? { name: characterName, type: 'all' as const } : { type: 'all' as const };
+            const binding = await rawTH.getCharLorebooks(options);
+            return {
+                primary: typeof binding?.primary === 'string' && binding.primary ? binding.primary : null,
+                additional: Array.isArray(binding?.additional) ? binding.additional : [],
+            };
+        }, 'mapped');
+    }
+
+    return { backend, capabilities };
+}
+
 /**
  * 构建 TavernHelper 兼容适配器。
  * @param rawTH 宿主环境探测到的原始 TavernHelper 对象（可能为 undefined）
@@ -78,8 +175,9 @@ function mergeNewEntryPatch_ACU(entry: any, patch: Record<string, any>): any {
  */
 export function buildTavernHelperCompat_ACU(rawTH: any, getStApi: GetStApi_ACU): TavernHelperCompatResult_ACU {
     const native: NativeStBackend_ACU = createNativeStBackend_ACU(getStApi);
-    // 装配期一次性判定：resolve() 的挂载/删除决策与 capabilities 告警表同源，必须一致。
-    // 前提是装配点在 ctx 就绪之后（entry-extension waitForAcuHostReady → mainInitialize 链已保证）。
+    // 装配期一次性判定：世界书组锁的后端选择与 resolve() 的挂载/删除决策、capabilities
+    // 告警表同源，全部在构建时定死，运行期不再重新探测。前提是装配点在 ctx 就绪之后
+    // （entry-extension waitForAcuHostReady → mainInitialize 链已保证）。
     const nativeUsable = native.isUsable();
     const capabilities: HostCapabilityMap_ACU = {};
 
@@ -114,127 +212,46 @@ export function buildTavernHelperCompat_ACU(rawTH: any, getStApi: GetStApi_ACU):
         delete api[name];
     }
 
-    // ═══ 世界书条目 CRUD ═══
-
-    resolve(
-        'getLorebookEntries',
-        () => hasFn_ACU(rawTH, 'getWorldbook')
-            ? async (bookName: string): Promise<OldFlatLorebookEntry_ACU[]> => {
-                const worldbook = await rawTH.getWorldbook(bookName);
-                return (Array.isArray(worldbook) ? worldbook : []).map((entry: any, index: number) => newToOldEntry_ACU(entry, index));
-            }
-            : null,
-        (bookName: string) => native.getLorebookEntries(bookName),
-    );
-
-    resolve(
-        'setLorebookEntries',
-        () => hasFn_ACU(rawTH, 'updateWorldbookWith')
-            ? async (bookName: string, entries: Array<Record<string, any>>): Promise<void> => {
-                if (!Array.isArray(entries) || entries.length === 0) return;
-                const patchByUid = new Map<number, Record<string, any>>();
-                for (const patch of entries) {
-                    if (patch && patch.uid !== undefined && patch.uid !== null) {
-                        patchByUid.set(Number(patch.uid), oldPatchToNewPatch_ACU(patch));
-                    }
-                }
-                await rawTH.updateWorldbookWith(bookName, (worldbook: any[]) =>
-                    worldbook.map(entry => {
-                        const patch = patchByUid.get(Number(entry?.uid));
-                        return patch ? mergeNewEntryPatch_ACU(entry, patch) : entry;
-                    }),
-                );
-            }
-            : null,
-        (bookName: string, entries: Array<Record<string, any>>) => native.setLorebookEntries(bookName, entries),
-    );
-
-    resolve(
-        'createLorebookEntries',
-        () => hasFn_ACU(rawTH, 'createWorldbookEntries')
-            ? async (bookName: string, entries: Array<Record<string, any>>): Promise<{ entries: OldFlatLorebookEntry_ACU[]; new_uids: number[] }> => {
-                const payload = (Array.isArray(entries) ? entries : []).map(patch => oldPatchToNewPatch_ACU(patch ?? {}));
-                const result = await rawTH.createWorldbookEntries(bookName, payload);
-                const worldbook = Array.isArray(result?.worldbook) ? result.worldbook : [];
-                const newEntries = Array.isArray(result?.new_entries) ? result.new_entries : [];
-                return {
-                    entries: worldbook.map((entry: any, index: number) => newToOldEntry_ACU(entry, index)),
-                    new_uids: newEntries.map((entry: any) => Number(entry?.uid)).filter(Number.isFinite),
-                };
-            }
-            : null,
-        (bookName: string, entries: Array<Record<string, any>>) => native.createLorebookEntries(bookName, entries),
-    );
-
-    resolve(
-        'deleteLorebookEntries',
-        () => hasFn_ACU(rawTH, 'deleteWorldbookEntries')
-            ? async (bookName: string, uids: number[]): Promise<{ entries: OldFlatLorebookEntry_ACU[]; delete_occurred: boolean }> => {
-                const uidSet = new Set((Array.isArray(uids) ? uids : []).map(Number));
-                const result = await rawTH.deleteWorldbookEntries(bookName, (entry: any) => uidSet.has(Number(entry?.uid)));
-                const worldbook = Array.isArray(result?.worldbook) ? result.worldbook : [];
-                const deleted = Array.isArray(result?.deleted_entries) ? result.deleted_entries : [];
-                return {
-                    entries: worldbook.map((entry: any, index: number) => newToOldEntry_ACU(entry, index)),
-                    delete_occurred: deleted.length > 0,
-                };
-            }
-            : null,
-        (bookName: string, uids: number[]) => native.deleteLorebookEntries(bookName, uids),
-    );
-
-    // ═══ 世界书列表与角色绑定 ═══
-
-    resolve(
-        'getLorebooks',
-        () => hasFn_ACU(rawTH, 'getWorldbookNames')
-            ? () => rawTH.getWorldbookNames()
-            : null,
-        () => native.getLorebooks(),
-    );
-
-    resolve(
-        'getCurrentCharPrimaryLorebook',
-        () => hasFn_ACU(rawTH, 'getCharWorldbookNames')
-            ? async (): Promise<string | null> => {
-                const binding = await rawTH.getCharWorldbookNames('current');
-                return typeof binding?.primary === 'string' && binding.primary ? binding.primary : null;
-            }
-            : null,
-        () => native.getCurrentCharPrimaryLorebook(),
-    );
-
-    resolve(
-        'getCharLorebooks',
-        () => hasFn_ACU(rawTH, 'getCharWorldbookNames')
-            ? async (options: { name?: string; type?: 'all' | 'primary' | 'additional' } = {}): Promise<{ primary: string | null; additional: string[] }> => {
-                const binding = await rawTH.getCharWorldbookNames(options?.name ?? 'current');
-                const primary = typeof binding?.primary === 'string' && binding.primary ? binding.primary : null;
-                const additional = Array.isArray(binding?.additional) ? binding.additional : [];
-                const type = options?.type ?? 'all';
-                if (type === 'primary') return { primary, additional: [] };
-                if (type === 'additional') return { primary: null, additional };
-                return { primary, additional };
-            }
-            : null,
-        (options?: { name?: string; type?: 'all' | 'primary' | 'additional' }) => native.getCharLorebooks(options),
-    );
-
-    resolve(
-        'getCharWorldbookNames',
-        // 宿主只有旧版 getCharLorebooks 时反向映射为新版签名
-        () => hasFn_ACU(rawTH, 'getCharLorebooks')
-            ? async (characterName: string): Promise<{ primary: string | null; additional: string[] }> => {
-                const options = characterName && characterName !== 'current' ? { name: characterName, type: 'all' as const } : { type: 'all' as const };
-                const binding = await rawTH.getCharLorebooks(options);
-                return {
-                    primary: typeof binding?.primary === 'string' && binding.primary ? binding.primary : null,
-                    additional: Array.isArray(binding?.additional) ? binding.additional : [],
-                };
-            }
-            : null,
-        (characterName?: string) => native.getCharWorldbookNames(characterName),
-    );
+    // ═══ 世界书后端组：只在初始化时选择一次来源 ═══
+    const rawWorldbook = rawTH && typeof rawTH === 'object' ? createRawTavernHelperWorldbookBackend_ACU(rawTH) : null;
+    const worldbookBackend: WorldbookHostBackend_ACU | null = rawWorldbook?.backend ?? (nativeUsable ? native : null);
+    const worldbookCapabilities = rawWorldbook?.capabilities ?? {};
+    const mountWorldbook = (name: WorldbookBackendMethodName_ACU): void => {
+        const implementation = worldbookBackend?.[name];
+        if (typeof implementation !== 'function') {
+            capabilities[name] = 'missing';
+            delete api[name];
+            return;
+        }
+        api[name] = implementation;
+        capabilities[name] = rawWorldbook ? (worldbookCapabilities[name] ?? 'missing') : 'native';
+    };
+    for (const name of ['getLorebookEntries', 'setLorebookEntries', 'createLorebookEntries', 'deleteLorebookEntries', 'getLorebooks', 'getCharWorldbookNames'] as WorldbookBackendMethodName_ACU[]) {
+        mountWorldbook(name);
+    }
+    if (typeof worldbookBackend?.getCharWorldbookNames === 'function') {
+        api.getCurrentCharPrimaryLorebook = async (): Promise<string | null> => {
+            const binding = await worldbookBackend.getCharWorldbookNames!('current');
+            return typeof binding?.primary === 'string' && binding.primary ? binding.primary : null;
+        };
+        api.getCharLorebooks = async (options: { name?: string; type?: 'all' | 'primary' | 'additional' } = {}): Promise<{ primary: string | null; additional: string[] }> => {
+            const binding = await worldbookBackend.getCharWorldbookNames!(options.name ?? 'current');
+            const primary = typeof binding?.primary === 'string' && binding.primary ? binding.primary : null;
+            const additional = Array.isArray(binding?.additional) ? binding.additional : [];
+            if ((options.type ?? 'all') === 'primary') return { primary, additional: [] };
+            if (options.type === 'additional') return { primary: null, additional };
+            return { primary, additional };
+        };
+        // 派生视图的能力位跟随 getCharWorldbookNames 的实际来源（passthrough/mapped），
+        // 硬标 mapped 会在 rawTH 直通时让诊断表失真。
+        capabilities.getCurrentCharPrimaryLorebook = rawWorldbook ? (worldbookCapabilities.getCharWorldbookNames ?? 'missing') : 'native';
+        capabilities.getCharLorebooks = rawWorldbook ? (worldbookCapabilities.getCharWorldbookNames ?? 'missing') : 'native';
+    } else {
+        capabilities.getCurrentCharPrimaryLorebook = 'missing';
+        capabilities.getCharLorebooks = 'missing';
+        delete api.getCurrentCharPrimaryLorebook;
+        delete api.getCharLorebooks;
+    }
 
     // ═══ 聊天 / Slash / 角色数据（新旧酒馆助手同名，直接透传或原生兜底） ═══
 

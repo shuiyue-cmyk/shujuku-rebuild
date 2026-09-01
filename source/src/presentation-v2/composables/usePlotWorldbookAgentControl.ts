@@ -26,7 +26,9 @@ import {
 } from '../../service/agent/agent-worldbook-takeover';
 import {
   skillifyCurrentPlotWorldbookSelection_ACU,
+  type AgentSkillifyCursor_ACU,
   type AgentSkillifyProgressEvent_ACU,
+  type AgentSkillifyRunResult_ACU,
   type AgentSkillifySelectedEntry_ACU,
 } from '../../service/agent/agent-skillify-service';
 import {
@@ -173,6 +175,8 @@ export function usePlotWorldbookAgentControl() {
   const contextSettings = ref<AgentContextSettings_ACU>(normalizeAgentContextSettings_ACU(undefined));
   const agentDecisionPromptSegments = ref<PromptSegment_ACU[]>(getDefaultAgentDecisionPromptSegments_ACU());
   const agentSkillifyPromptSegments = ref<PromptSegment_ACU[]>(getDefaultAgentSkillifyPromptSegments_ACU());
+  const skillifyCursor = ref<AgentSkillifyCursor_ACU | undefined>();
+  const skillifyBatchStats = ref<Pick<AgentSkillifyRunResult_ACU, 'totalMatched' | 'selectedForRun' | 'remaining' | 'truncated'> | null>(null);
   const globalPromptTemplates = ref(getAgentPromptTemplateDefaults_ACU());
   const isReady = ref(false);
   const initializationFailed = ref(false);
@@ -187,6 +191,27 @@ export function usePlotWorldbookAgentControl() {
     writableBookName: writableConfigBookName.value,
     reason: configReason.value,
   }));
+
+  let skillifyScopeIdentity = '';
+
+  /**
+   * 游标只在「同一批待处理数据」上有意义：配置来源、世界书范围或接管快照任一变了，
+   * 稳定候选序列就会整体重排，旧游标要么指向别的条目、要么已不在待处理范围内。
+   * 这里用可序列化的三元组做身份比较，身份变化即作废游标，避免续跑批次时静默漏条目或重复处理。
+   */
+  function buildSkillifyScopeIdentity_ACU(
+    control: AgentWorldbookControl_ACU,
+    source: AgentWorldbookConfigSource_ACU,
+    selectionSignature: string,
+  ): string {
+    const scope = cloneWorldbookScope_ACU(control.worldbookScope);
+    return JSON.stringify({ source, scope, selectionSignature: String(selectionSignature || '') });
+  }
+
+  function clearSkillifyBatchState_ACU(): void {
+    skillifyCursor.value = undefined;
+    skillifyBatchStats.value = null;
+  }
 
   function applyControlToRefs(control: AgentWorldbookControl_ACU): void {
     mode.value = control.mode;
@@ -207,6 +232,11 @@ export function usePlotWorldbookAgentControl() {
       refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU(),
     ]);
     globalPromptTemplates.value = getAgentPromptTemplateDefaults_ACU();
+    const nextScopeIdentity = buildSkillifyScopeIdentity_ACU(result.control, result.source, nextSnapshot.selectionSignature);
+    if (skillifyScopeIdentity && skillifyScopeIdentity !== nextScopeIdentity) {
+      clearSkillifyBatchState_ACU();
+    }
+    skillifyScopeIdentity = nextScopeIdentity;
     configSource.value = result.source;
     configBookName.value = result.bookName || '';
     writableConfigBookName.value = result.writableBookName || '';
@@ -509,23 +539,36 @@ export function usePlotWorldbookAgentControl() {
         if (progressToastId && toast.update(progressToastId, 'info', text, progressOptions)) return;
         progressToastId = toast.info(text, progressOptions);
       };
+      const hasExplicitSelection = Array.isArray(optionsPatch.selectedEntries);
       const result = await skillifyCurrentPlotWorldbookSelection_ACU({
         presetName: agentSkillApiPreset.value,
         overwriteManual: false,
         maxAiRetries: contextSettings.value.agentAiMaxRetries,
         maxConcurrency: maxSkillifyConcurrency.value,
+        // 显式勾选的条目是一次性目标，不该被上一批的全量游标带着走；只有整库续跑才复用游标。
+        cursor: hasExplicitSelection ? undefined : skillifyCursor.value,
         ...optionsPatch,
         onProgress: notifyProgress,
       });
+      skillifyBatchStats.value = {
+        totalMatched: result.totalMatched,
+        selectedForRun: result.selectedForRun,
+        remaining: result.remaining,
+        truncated: result.truncated,
+      };
+      skillifyCursor.value = !hasExplicitSelection && result.truncated && result.nextCursor
+        ? result.nextCursor
+        : undefined;
       if (result.totalCandidates === 0) {
         if (!progressToastId || !toast.update(progressToastId, 'warning', plotCopy.agentControl.skillify.noCandidates, { muteable: false })) {
           toast.warning(plotCopy.agentControl.skillify.noCandidates, { muteable: false });
         }
         return false;
       }
+      const batchText = `本批 ${result.selectedForRun}/${result.totalMatched}，剩余 ${result.remaining}`;
       const text = result.failed > 0
-        ? plotCopy.agentControl.skillify.partial(result.updated, result.skipped, result.failed)
-        : plotCopy.agentControl.skillify.success(result.updated, result.skipped);
+        ? `${plotCopy.agentControl.skillify.partial(result.updated, result.skipped, result.failed)}（${batchText}）`
+        : `${plotCopy.agentControl.skillify.success(result.updated, result.skipped)}（${batchText}）`;
       const toastUpdated = progressToastId && toast.update(progressToastId, result.failed > 0 ? 'warning' : 'success', text, { muteable: false });
       if (!toastUpdated) {
         if (result.failed > 0) toast.warning(text, { muteable: false });
@@ -561,6 +604,8 @@ export function usePlotWorldbookAgentControl() {
     if (!confirmed) return false;
     busy.value = 'clearSkillMeta';
     try {
+      // 清空 Skill 元数据等于把「已处理到哪」全部作废：不重置游标，下一批会从中间继续跳着处理。
+      clearSkillifyBatchState_ACU();
       const availability = await resolveAgentWorldbookFilterAvailability_ACU();
       configSource.value = availability.configSource;
       configBookName.value = availability.configBookName;
@@ -634,6 +679,8 @@ export function usePlotWorldbookAgentControl() {
     agentDecisionPromptSegments,
     agentSkillifyPromptSegments,
     globalPromptTemplates,
+    skillifyCursor,
+    skillifyBatchStats,
     isReady,
     initializationFailed,
     isAgentMode,

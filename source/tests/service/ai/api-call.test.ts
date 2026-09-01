@@ -64,6 +64,9 @@ import {
   callAIWithResolvedPreset_ACU,
   callCustomOpenAI_ACU_Direct,
   buildCustomApiRequestBody_ACU,
+  postChatCompletion_ACU,
+  AgentApiHttpError_ACU,
+  isRetryableAiRequestError_ACU,
 } from '../../../src/service/ai/api-call';
 
 beforeEach(() => {
@@ -119,6 +122,45 @@ describe('callAIWithPreset_ACU', () => {
     mockHandleApiResponse.mockResolvedValue('AI 回复');
     const result = await callAIWithPreset_ACU([{ role: 'user', content: '你好' }]);
     expect(result).toBe('AI 回复');
+  });
+
+  it('custom API non-success response preserves HTTP status for retry owners', async () => {
+    mockSettings.apiConfig = { url: 'https://api.example.com', model: 'gpt-4', apiKey: 'sk-test' };
+    mockFetch.mockResolvedValue({ ok: false, status: 429, text: () => Promise.resolve('rate limited') });
+
+    const error = await callAIWithPreset_ACU([{ role: 'user', content: '你好' }]).catch(e => e);
+
+    expect(error).toBeInstanceOf(AgentApiHttpError_ACU);
+    expect(error).toMatchObject({ name: 'AgentApiHttpError_ACU', status: 429 });
+    expect(error.message).toBe('API请求失败: 429 rate limited');
+    expect(isRetryableAiRequestError_ACU(new AgentApiHttpError_ACU(429, 'rate limited'))).toBe(true);
+    expect(isRetryableAiRequestError_ACU(new AgentApiHttpError_ACU(401, 'unauthorized'))).toBe(false);
+  });
+
+  it('postChatCompletion_ACU 是唯一的 HTTP 状态携带点，5xx 与 4xx 走同一类型', async () => {
+    mockFetch.mockResolvedValue({ ok: false, status: 503, text: () => Promise.resolve('upstream down') });
+
+    const error = await postChatCompletion_ACU({ stream: false }).catch(e => e);
+
+    expect(error).toBeInstanceOf(AgentApiHttpError_ACU);
+    expect(error.status).toBe(503);
+    expect(isRetryableAiRequestError_ACU(error)).toBe(true);
+  });
+
+  it('isRetryableAiRequestError_ACU 只放行瞬时失败，AbortError 一律立停', () => {
+    const aborted = Object.assign(new Error('The user aborted a request.'), { name: 'AbortError' });
+    expect(isRetryableAiRequestError_ACU(aborted)).toBe(false);
+    // AbortError 即便带 500 status 也不能重试：那是用户主动停止，不是服务端抖动。
+    expect(isRetryableAiRequestError_ACU(Object.assign(new Error('aborted'), { name: 'AbortError', status: 500 }))).toBe(false);
+
+    expect(isRetryableAiRequestError_ACU(Object.assign(new Error('gateway'), { status: 502 }))).toBe(true);
+    expect(isRetryableAiRequestError_ACU(Object.assign(new Error('bad request'), { status: 400 }))).toBe(false);
+    expect(isRetryableAiRequestError_ACU(Object.assign(new Error('slow'), { name: 'TimeoutError' }))).toBe(true);
+    expect(isRetryableAiRequestError_ACU(new TypeError('Failed to fetch'))).toBe(true);
+    expect(isRetryableAiRequestError_ACU(new Error('connection reset by peer'))).toBe(true);
+    expect(isRetryableAiRequestError_ACU(new Error('response is not valid JSON'))).toBe(false);
+    expect(isRetryableAiRequestError_ACU('network error')).toBe(false);
+    expect(isRetryableAiRequestError_ACU(null)).toBe(false);
   });
 
   it('指定预设名使用对应预设', async () => {

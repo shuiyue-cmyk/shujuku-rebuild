@@ -22,7 +22,7 @@ export function getCurrentCharData_ACU(target: string = 'current'): any | null {
     return TavernHelper_API_ACU.getCharData(target);
 }
 
-export type CharacterWorldbookBindingApiSource_ACU = 'getCharWorldbookNames' | 'getCharLorebooks';
+export type CharacterWorldbookBindingApiSource_ACU = 'getCharWorldbookNames';
 
 export interface CharacterWorldbookBinding_ACU {
     primary: string | null;
@@ -58,14 +58,13 @@ function normalizeCharacterWorldbookBinding_ACU(raw: unknown, apiSource: Charact
 }
 
 /**
- * 返回当前角色的规范化绑定集合。新 API 优先，旧 API 仅作为不存在新 API 的兼容分支。
+ * 返回当前角色的规范化绑定集合。
+ * 兼容层装配时已按组锁定世界书后端，getCharWorldbookNames 与派生的 getCharLorebooks
+ * 同源挂载或同源缺失，这里无需再为旧 API 保留兼容分支。
  */
 export async function getCurrentCharacterWorldbookBinding_ACU(): Promise<CharacterWorldbookBinding_ACU> {
     if (TavernHelper_API_ACU && typeof TavernHelper_API_ACU.getCharWorldbookNames === 'function') {
         return normalizeCharacterWorldbookBinding_ACU(await TavernHelper_API_ACU.getCharWorldbookNames('current'), 'getCharWorldbookNames');
-    }
-    if (TavernHelper_API_ACU && typeof TavernHelper_API_ACU.getCharLorebooks === 'function') {
-        return normalizeCharacterWorldbookBinding_ACU(await TavernHelper_API_ACU.getCharLorebooks({ type: 'all' }), 'getCharLorebooks');
     }
     logWarn_ACU('[CharacterGateway] 当前角色世界书 API 不可用。', { phase: 'character_worldbook_binding' });
     throw new CharacterWorldbookBindingError_ACU('CharacterWorldbookApiUnavailableError_ACU');

@@ -61,7 +61,7 @@ const DEFAULT_OUTLINE_PROMPT_ACU: readonly ContinuationPromptSegment_ACU[] = [
 ];
 
 /**
- * 提示词强刷版本谱系（二轮审查 V4-h 清理 + 续写缓存链移植）：V17→V18→V19→V20 为定向迁移链，
+ * 提示词强刷版本谱系（二轮审查 V4-h 清理 + 续写缓存链移植）：V17→V18→V19→V20→V21→V22 为定向迁移链，
  * 读信封时按当前档位逐级只替换已知默认句，保留用户定制提示词；低于 V17 的历史版本号不参与比较，
  * 一律整体刷新为默认。历史谱系（v2/v1.5-v7/v1.6-v8 agent 提示词/v1.7-v9 大纲标签化/
  * v1.8-v10 会话化/v1.9-v11 工具化/v2.0-v12 精简轮次/v2.1-v13 派工强制/v2.2-v14 总纲节奏/
@@ -87,6 +87,14 @@ export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V19_ACU = 'spv2.7-continu
  * gateways see a strict prefix extension between iterations.
  */
 export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V20_ACU = 'spv2.8-continuation-runtime-snapshot-v20';
+/**
+ * Long-form story-arc version: arc-architect now distributes the main conflict
+ * across 6-10 causally linked volumes with distinct escalation layers,
+ * expectation payoffs, supporting subplots, and protected endgame reserves.
+ */
+export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V21_ACU = 'spv2.9-continuation-longform-story-arc-v21';
+/** Story-arc volume plan version: migrated default prompts follow the persisted volume-count setting. */
+export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V22_ACU = 'spv3.0-continuation-story-arc-volume-plan-v22';
 
 /**
  * 连续高压轮上限的默认值。8 轮约等于 8000 字全程没有喘息——这才是病态；
@@ -119,6 +127,8 @@ export function buildDefaultContinuationSettings_ACU(): ContinuationSettings_ACU
     stageSize: 'standard',
     customTurnMin: null,
     customTurnMax: null,
+    storyArcVolumePlan: 'medium',
+    customStoryArcVolumeCount: null,
     outlinePreview: false,
     autoNextStage: true,
     maxAutomaticStages: 6,
@@ -143,7 +153,7 @@ export function buildDefaultContinuationSettings_ACU(): ContinuationSettings_ACU
     agentApiPresets: buildDefaultContinuationAgentApiPresets_ACU(),
     outlinePrompt: buildDefaultContinuationOutlinePrompt_ACU(),
     agentPrompts: buildDefaultContinuationAgentPrompts_ACU(),
-    promptForceDefaultVersion: CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V20_ACU,
+    promptForceDefaultVersion: CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V22_ACU,
   };
 }
 

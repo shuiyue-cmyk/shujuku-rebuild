@@ -628,20 +628,46 @@ async function buildChunksWithEmbeddings_ACU(
 
     const embeddingMap = new Map<number, number[]>();
     embeddings.forEach((item: VectorEmbeddingResult_ACU): void => {
-        if (Array.isArray(item.embedding) && item.embedding.length > 0) {
+        if (Number.isInteger(item.index) && item.index >= 0 && item.index < chunkSources.length
+            && Array.isArray(item.embedding) && item.embedding.length > 0) {
             embeddingMap.set(item.index, item.embedding);
         }
     });
 
-    // P5：完整性校验——响应缺失任意一条向量即整批失败（retryable），禁止部分落盘。
-    // 静默跳过缺失 chunk 会把缺行索引标记为 success 写入快照，召回不全且无告警。
-    const missingIndexes = chunkSources
+    let missingIndexes = chunkSources
         .map((_source, index) => index)
         .filter((index) => !embeddingMap.has(index));
+
+    // 首次响应已有部分有效向量时，只补齐缺失项；首次无有效向量仍按既有失败路径处理。
+    if (embeddingMap.size > 0 && missingIndexes.length > 0) {
+        const recoveryBatchSize = Math.min(embeddingMap.size, missingIndexes.length);
+        for (let start = 0; start < missingIndexes.length; start += recoveryBatchSize) {
+            const recoveryOriginalIndexes = missingIndexes.slice(start, start + recoveryBatchSize);
+            const recoveredEmbeddings = await createEmbeddings_ACU({
+                endpoint: options.embeddingEndpoint,
+                apiKey: options.embeddingApiKey,
+                model: options.embeddingModel,
+                input: recoveryOriginalIndexes.map((originalIndex) => chunkSources[originalIndex].text),
+            });
+            recoveredEmbeddings.forEach((item: VectorEmbeddingResult_ACU): void => {
+                if (!Number.isInteger(item.index) || item.index < 0 || item.index >= recoveryOriginalIndexes.length) return;
+                const originalIndex = recoveryOriginalIndexes[item.index];
+                if (!embeddingMap.has(originalIndex) && Array.isArray(item.embedding) && item.embedding.length > 0) {
+                    embeddingMap.set(originalIndex, item.embedding);
+                }
+            });
+        }
+        missingIndexes = chunkSources
+            .map((_source, index) => index)
+            .filter((index) => !embeddingMap.has(index));
+    }
+
+    // P5：完整性校验——全部原始 chunk 均取得向量前不得构造结果，确保外层不发布部分索引。
+    // 静默跳过缺失 chunk 会把缺行索引标记为 success 写入快照，召回不全且无告警。
     if (missingIndexes.length > 0) {
         throw new VectorEmbeddingError_ACU({
             kind: 'retryable',
-            message: `Embedding 响应缺失 ${missingIndexes.length}/${chunkSources.length} 条向量（首个缺失批内序号 ${missingIndexes[0]}），为避免索引缺行已中止本批归档。`,
+            message: `Embedding 响应缺失 ${missingIndexes.length}/${chunkSources.length} 条向量（首个缺失原始索引 ${missingIndexes[0]}），为避免索引缺行已中止本批归档。`,
             endpoint: options.embeddingEndpoint,
             model: options.embeddingModel,
         });

@@ -1,8 +1,8 @@
 import { getChatArray_ACU, saveChatToHostStrict_ACU } from '../../data/gateways/chat-gateway';
 import { getActiveChatStorageIdentity_ACU } from '../../data/storage/chat-history';
-import { buildDefaultContinuationSettings_ACU, buildDefaultContinuationOutlinePrompt_ACU, buildDefaultContinuationAgentApiPresets_ACU, CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_DEFAULT_ACU, CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V17_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V18_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V19_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V20_ACU } from './defaults';
+import { buildDefaultContinuationSettings_ACU, buildDefaultContinuationOutlinePrompt_ACU, buildDefaultContinuationAgentApiPresets_ACU, CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_DEFAULT_ACU, CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V17_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V18_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V19_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V20_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V21_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V22_ACU } from './defaults';
 import { reconcileContinuationEnvelopeCursor_ACU } from './stage-cursor';
-import { AGENT_HISTORY_READ_RULE_V17_ACU, AGENT_HISTORY_READ_RULE_V18_ACU, buildDefaultContinuationAgentPrompts_ACU, currentDefaultMainAgentHistoryGuide_ACU, currentDefaultMainAgentLayoutAnswer_ACU, isV18DefaultMainAgentNonRootSystemSegment_ACU, isV19DefaultMainAgentHistoryGuide_ACU, isV19DefaultMainAgentLayoutAnswer_ACU, isV19DefaultMainAgentRuntimeSegment_ACU } from './agent/agent-defaults';
+import { AGENT_HISTORY_READ_RULE_V17_ACU, AGENT_HISTORY_READ_RULE_V18_ACU, buildDefaultAgentArcArchitectPrompt_ACU, buildDefaultContinuationAgentPrompts_ACU, currentDefaultMainAgentHistoryGuide_ACU, currentDefaultMainAgentLayoutAnswer_ACU, isV18DefaultMainAgentNonRootSystemSegment_ACU, isV19DefaultMainAgentHistoryGuide_ACU, isV19DefaultMainAgentLayoutAnswer_ACU, isV19DefaultMainAgentRuntimeSegment_ACU, V20_DEFAULT_ARC_ARCHITECT_CONTRACT_ACU, V20_DEFAULT_ARC_ARCHITECT_EPISTEMOLOGY_ACU, V20_DEFAULT_ARC_ARCHITECT_PURPOSE_ACU, V20_DEFAULT_ARC_ARCHITECT_SYSTEM_ACU, V20_DEFAULT_ARC_ARCHITECT_TASK_ACU } from './agent/agent-defaults';
 import {
   AGENT_HISTORY_TOKEN_BUDGET_DEFAULT_ACU,
   AGENT_READ_FALLBACK_TOKENS_DEFAULT_ACU,
@@ -187,6 +187,50 @@ function migrateV19AgentPromptsToV20_ACU(raw: unknown): unknown {
 }
 
 /**
+ * V20 → V21 只替换总纲子代理中未改写的五个默认段。
+ * 其他角色、用户新增段与用户定制正文保持原样。
+ */
+function migrateV20AgentPromptsToV21_ACU(raw: unknown): unknown {
+  if (!isRecord_ACU(raw) || !Array.isArray(raw.arcArchitect)) return raw;
+  const current = buildDefaultAgentArcArchitectPrompt_ACU();
+  const replacements = new Map<string, string>([
+    [V20_DEFAULT_ARC_ARCHITECT_SYSTEM_ACU, current[0].content],
+    [V20_DEFAULT_ARC_ARCHITECT_PURPOSE_ACU, current[2].content],
+    [V20_DEFAULT_ARC_ARCHITECT_EPISTEMOLOGY_ACU, current[4].content],
+    [V20_DEFAULT_ARC_ARCHITECT_CONTRACT_ACU, current[6].content],
+    [V20_DEFAULT_ARC_ARCHITECT_TASK_ACU, current[7].content],
+  ]);
+  let changed = false;
+  const arcArchitect = raw.arcArchitect.map(segment => {
+    if (!isRecord_ACU(segment) || typeof segment.content !== 'string') return segment;
+    const content = replacements.get(segment.content);
+    if (content === undefined || content === segment.content) return segment;
+    changed = true;
+    return { ...segment, content };
+  });
+  return changed ? { ...raw, arcArchitect } : raw;
+}
+
+/** V21 → V22 只替换已知默认段中的卷数规则，保留用户其余提示词定制。 */
+function migrateV21AgentPromptsToV22_ACU(raw: unknown): unknown {
+  if (!isRecord_ACU(raw) || !Array.isArray(raw.arcArchitect)) return raw;
+  const replacements = new Map<string, string>([
+    ['开局立长篇总纲时，默认给出一条 story 条目和 6-10 条 volume 条目；只有用户明确要求短篇或素材容量明显不足时才可少于 6 卷，并在 summary 说明依据。禁止为了省事把完整长篇压成 3-5 个笼统部分。第一卷 status 设 active，其余 planned。', '开局立总纲或全量重构时，卷数必须严格遵守本次请求末尾注入的【总纲卷数计划】：短线 7–8 卷、中线 10–14 卷、长线 20 卷，或自定义的精确卷数。资料不足时可以把远期卷标为待定方向，但不得缩减卷数；第一卷 status 设 active，其余 planned。'],
+    ['长篇默认有 6-10 个功能不重复的卷台阶', '卷数严格符合本次【总纲卷数计划】且各卷功能不重复'],
+  ]);
+  let changed = false;
+  const arcArchitect = raw.arcArchitect.map(segment => {
+    if (!isRecord_ACU(segment) || typeof segment.content !== 'string') return segment;
+    let content = segment.content;
+    for (const [from, to] of replacements) content = content.replace(from, to);
+    if (content === segment.content) return segment;
+    changed = true;
+    return { ...segment, content };
+  });
+  return changed ? { ...raw, arcArchitect } : raw;
+}
+
+/**
  * 校验七个角色的 AI 渠道配置。
  * @param raw 持久化里的 agentApiPresets 字段
  * @returns 逐角色校验后的渠道配置
@@ -289,12 +333,18 @@ function validateSettings_ACU(raw: unknown): ContinuationSettings_ACU {
   if (Object.prototype.hasOwnProperty.call(raw, 'contextTurnCount')) delete raw.contextTurnCount;
   // Agent 运行预算开放为设置（V17）之前的信封没有该字段；补默认即无感迁移。
   if (!Object.prototype.hasOwnProperty.call(raw, 'agentRunBudget')) raw.agentRunBudget = { ...DEFAULT_AGENT_RUN_BUDGET_ACU };
-  const keys = ['stageSize', 'customTurnMin', 'customTurnMax', 'outlinePreview', 'autoNextStage', 'maxAutomaticStages', 'loopTags', 'loopDelaySeconds', 'totalDurationMinutes', 'retryDelaySeconds', 'generationRetryLimit', 'internalAiRetryLimit', 'maxConsecutivePressureTurns', 'storyWindowFloors', 'agentHistoryTokenBudget', 'storyTailFloors', 'agentReadTokenBudget', 'agentReadFallbackTokens', 'contextExtractRules', 'contextExcludeRules', 'agentRunBudget', 'apiPresetMode', 'fixedApiPresetName', 'promptCacheEnabled', 'agentApiPresets', 'outlinePrompt', 'agentPrompts'];
+  // 总纲卷数与阶段轮次是两条独立的尺度。旧信封没有卷数计划时默认采用中线档。
+  if (!Object.prototype.hasOwnProperty.call(raw, 'storyArcVolumePlan')) raw.storyArcVolumePlan = 'medium';
+  if (!Object.prototype.hasOwnProperty.call(raw, 'customStoryArcVolumeCount')) raw.customStoryArcVolumeCount = null;
+  const keys = ['stageSize', 'customTurnMin', 'customTurnMax', 'storyArcVolumePlan', 'customStoryArcVolumeCount', 'outlinePreview', 'autoNextStage', 'maxAutomaticStages', 'loopTags', 'loopDelaySeconds', 'totalDurationMinutes', 'retryDelaySeconds', 'generationRetryLimit', 'internalAiRetryLimit', 'maxConsecutivePressureTurns', 'storyWindowFloors', 'agentHistoryTokenBudget', 'storyTailFloors', 'agentReadTokenBudget', 'agentReadFallbackTokens', 'contextExtractRules', 'contextExcludeRules', 'agentRunBudget', 'apiPresetMode', 'fixedApiPresetName', 'promptCacheEnabled', 'agentApiPresets', 'outlinePrompt', 'agentPrompts'];
   requireKeys_ACU(raw, keys, 'settings', ['promptForceDefaultVersion']);
   if (!['short', 'standard', 'long', 'custom'].includes(raw.stageSize as string)) fail_ACU('CONTINUATION_ENVELOPE_INVALID', 'stageSize 非法');
   const customTurnMin = raw.customTurnMin === null ? null : requireInteger_ACU(raw.customTurnMin, 'settings.customTurnMin', 1);
   const customTurnMax = raw.customTurnMax === null ? null : requireInteger_ACU(raw.customTurnMax, 'settings.customTurnMax', 1);
   if (raw.stageSize === 'custom' && (customTurnMin === null || customTurnMax === null || customTurnMin > customTurnMax || customTurnMax > 50)) fail_ACU('CONTINUATION_ENVELOPE_INVALID', '自定义轮数范围非法');
+  if (!['short', 'medium', 'long', 'custom'].includes(raw.storyArcVolumePlan as string)) fail_ACU('CONTINUATION_ENVELOPE_INVALID', 'storyArcVolumePlan 非法');
+  const customStoryArcVolumeCount = raw.customStoryArcVolumeCount === null ? null : requireInteger_ACU(raw.customStoryArcVolumeCount, 'settings.customStoryArcVolumeCount', 1);
+  if (raw.storyArcVolumePlan === 'custom' && (customStoryArcVolumeCount === null || customStoryArcVolumeCount > 50)) fail_ACU('CONTINUATION_ENVELOPE_INVALID', '自定义总纲卷数必须在 1 到 50 之间');
   if (raw.apiPresetMode === 'follow_plot') raw.apiPresetMode = 'current';
   if (!['current', 'fixed'].includes(raw.apiPresetMode as string)) fail_ACU('CONTINUATION_ENVELOPE_INVALID', 'apiPresetMode 非法');
   
@@ -305,22 +355,36 @@ function validateSettings_ACU(raw: unknown): ContinuationSettings_ACU {
     agentPrompts = migrateV17AgentPromptsToV18_ACU(agentPrompts);
     agentPrompts = migrateV18AgentPromptsToV19_ACU(agentPrompts);
     agentPrompts = migrateV19AgentPromptsToV20_ACU(agentPrompts);
-    promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V20_ACU;
+    agentPrompts = migrateV20AgentPromptsToV21_ACU(agentPrompts);
+    agentPrompts = migrateV21AgentPromptsToV22_ACU(agentPrompts);
+    promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V22_ACU;
   } else if (promptForceDefaultVersion === CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V18_ACU) {
     agentPrompts = migrateV18AgentPromptsToV19_ACU(agentPrompts);
     agentPrompts = migrateV19AgentPromptsToV20_ACU(agentPrompts);
-    promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V20_ACU;
+    agentPrompts = migrateV20AgentPromptsToV21_ACU(agentPrompts);
+    agentPrompts = migrateV21AgentPromptsToV22_ACU(agentPrompts);
+    promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V22_ACU;
   } else if (promptForceDefaultVersion === CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V19_ACU) {
     agentPrompts = migrateV19AgentPromptsToV20_ACU(agentPrompts);
-    promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V20_ACU;
-  } else if (promptForceDefaultVersion !== CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V20_ACU) {
+    agentPrompts = migrateV20AgentPromptsToV21_ACU(agentPrompts);
+    agentPrompts = migrateV21AgentPromptsToV22_ACU(agentPrompts);
+    promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V22_ACU;
+  } else if (promptForceDefaultVersion === CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V20_ACU) {
+    agentPrompts = migrateV20AgentPromptsToV21_ACU(agentPrompts);
+    agentPrompts = migrateV21AgentPromptsToV22_ACU(agentPrompts);
+    promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V22_ACU;
+  } else if (promptForceDefaultVersion === CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V21_ACU) {
+    agentPrompts = migrateV21AgentPromptsToV22_ACU(agentPrompts);
+    promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V22_ACU;
+  } else if (promptForceDefaultVersion !== CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V22_ACU) {
     outlinePrompt = buildDefaultContinuationOutlinePrompt_ACU();
     agentPrompts = buildDefaultContinuationAgentPrompts_ACU();
-    promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V20_ACU;
+    promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V22_ACU;
   }
   
   return {
     stageSize: raw.stageSize as ContinuationSettings_ACU['stageSize'], customTurnMin, customTurnMax,
+    storyArcVolumePlan: raw.storyArcVolumePlan as ContinuationSettings_ACU['storyArcVolumePlan'], customStoryArcVolumeCount,
     outlinePreview: requireBoolean_ACU(raw.outlinePreview, 'settings.outlinePreview'), autoNextStage: requireBoolean_ACU(raw.autoNextStage, 'settings.autoNextStage'),
     maxAutomaticStages: requireInteger_ACU(raw.maxAutomaticStages, 'settings.maxAutomaticStages', 1), loopTags: requireString_ACU(raw.loopTags, 'settings.loopTags'),
     loopDelaySeconds: requireInteger_ACU(raw.loopDelaySeconds, 'settings.loopDelaySeconds', 0), totalDurationMinutes: requireInteger_ACU(raw.totalDurationMinutes, 'settings.totalDurationMinutes', 0), retryDelaySeconds: requireInteger_ACU(raw.retryDelaySeconds, 'settings.retryDelaySeconds', 0),

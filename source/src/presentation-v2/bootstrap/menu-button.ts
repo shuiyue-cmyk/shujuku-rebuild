@@ -1,7 +1,7 @@
 /**
  * menu-button — 在 host document 的 #extensionsMenu 中挂 UI v2 按钮（D15）
  *
- * 与旧菜单按钮（startup.ts 中的 幻想·数据库 旧UI）共存，互不影响。
+ * 与旧菜单按钮（startup.ts 中的 TTonly·数据库 旧UI）共存，互不影响。
  * 依赖 host document 解析（D15.1），因此也只在 host document 上注册按钮。
  */
 import { logDebug_ACU, logError_ACU } from '../../shared/utils';
@@ -62,9 +62,9 @@ function attemptInsert(retry: number): void {
     `<div class="extension_container interactable" id="${MENU_CONTAINER_ID}" tabindex="0"></div>`;
   const itemHtml =
     `<div class="list-group-item flex-container flexGap5 interactable" id="${MENU_ITEM_ID}" ` +
-    `title="打开 幻想·数据库">` +
+    `title="打开 TTonly·数据库">` +
     `<div class="fa-fw fa-solid fa-database extensionsMenuExtensionButton"></div>` +
-    `<span>幻想·数据库</span>` +
+    `<span>TTonly·数据库</span>` +
     `</div>`;
   const $container = $(containerHtml);
   const $item = $(itemHtml);

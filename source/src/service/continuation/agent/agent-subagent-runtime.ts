@@ -168,6 +168,15 @@ function selectPromptSegments_ACU(settings: ContinuationSettings_ACU, definition
   return settings.agentPrompts[definition.promptKey];
 }
 
+export function renderStoryArcVolumePlanInstruction_ACU(settings: ContinuationSettings_ACU): string {
+  const plan = settings.storyArcVolumePlan;
+  if (plan === 'short') return '【总纲卷数计划】短线：新建或全量重构总纲时规划 7–8 卷。';
+  if (plan === 'medium') return '【总纲卷数计划】中线：新建或全量重构总纲时规划 10–14 卷。';
+  if (plan === 'long') return '【总纲卷数计划】长线：新建或全量重构总纲时规划 20 卷。';
+  const count = settings.customStoryArcVolumeCount;
+  return `【总纲卷数计划】自定义：新建或全量重构总纲时规划 ${count ?? '未配置'} 卷。`;
+}
+
 function describeWriteScope_ACU(writes: readonly AgentWritableModule_ACU[]): string {
   if (!writes.length) return '你的职责不含写入。你只需返回建议或判词，不要输出 delta。';
   const labels: Record<AgentWritableModule_ACU, string> = { hooks: '$HOOKS_LEDGER 伏笔账本', infoGap: '$INFO_GAP 认知与信息差时间线', constraints: '$ACTIVE_CONSTRAINTS 长期约束', storyArc: '$STORY_ARC 故事总纲' };
@@ -306,7 +315,11 @@ export class AgentSubagentRuntime_ACU {
       }
       // 传输错误（502/网络抖动）按设置延时重试；协议/契约拒绝仍走小循环内的对话级立即重试。
       const raw = await callContinuationInternalAiWithRetry_ACU(
-        () => this.dependencies.callInternalAi([...rendered.messages, ...transcript], input.preset, identity, input.signal, callOptions),
+        () => this.dependencies.callInternalAi([
+          ...rendered.messages,
+          ...(definition.promptKey === 'arcArchitect' ? [{ role: 'user', content: renderStoryArcVolumePlanInstruction_ACU(input.settings) }] : []),
+          ...transcript,
+        ], input.preset, identity, input.signal, callOptions),
         {
           transportRetries: retries,
           retryDelaySeconds: input.settings.retryDelaySeconds,

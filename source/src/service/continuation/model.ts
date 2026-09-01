@@ -1,6 +1,7 @@
 export const CONTINUATION_SCHEMA_VERSION_ACU = 1 as const;
 
 export type ContinuationStageSize_ACU = 'short' | 'standard' | 'long' | 'custom';
+export type ContinuationStoryArcVolumePlan_ACU = 'short' | 'medium' | 'long' | 'custom';
 export type ContinuationTaskStatus_ACU = 'drafting' | 'awaiting_outline_review' | 'paused' | 'running' | 'stopping_after_inflight' | 'completed' | 'abandoned' | 'failed';
 export type ContinuationStageStatus_ACU = 'planning' | 'awaiting_review' | 'running' | 'completed' | 'abandoned' | 'failed';
 export type ContinuationRevisionReason_ACU = 'initial' | 'auto_next_stage' | 'manual_replan';
@@ -211,6 +212,10 @@ export interface ContinuationSettings_ACU {
   stageSize: ContinuationStageSize_ACU;
   customTurnMin: number | null;
   customTurnMax: number | null;
+  /** 故事总纲的卷数档位；与单阶段轮次规模无关。 */
+  storyArcVolumePlan: ContinuationStoryArcVolumePlan_ACU;
+  /** 仅 storyArcVolumePlan=custom 时生效，表示精确的总卷数。 */
+  customStoryArcVolumeCount: number | null;
   outlinePreview: boolean;
   autoNextStage: boolean;
   maxAutomaticStages: number;

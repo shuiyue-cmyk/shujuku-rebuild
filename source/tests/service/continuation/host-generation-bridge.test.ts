@@ -58,6 +58,57 @@ describe('ContinuationHostGenerationBridge_ACU', () => {
     expect(h.runtime.rejectHostTurnForMissingTags).not.toHaveBeenCalled();
   });
 
+  it('notifies state observers after confirming a claimed host reply', async () => {
+    const h = createHarness();
+    const listener = vi.fn();
+    h.bridge.subscribeStateChanges(listener);
+    h.hostInput.send.mockImplementation(() => { h.bridge.onGenerationStarted(7); return true; });
+
+    await h.bridge.send(prepared);
+    listener.mockClear();
+    h.setChat([{ is_user: true }, { is_user: false, mes: '<ok>正文', message_id: 9 }]);
+    await h.bridge.onGenerationEnded(9, 7);
+
+    expect(h.runtime.confirmCurrentTurn).toHaveBeenCalledWith(identity, 1);
+    expect(listener).toHaveBeenCalledOnce();
+  });
+
+  it('发送、坏标签自动重发与中止路径同样提交状态通知', async () => {
+    const h = createHarness({ tags: '<required>' });
+    const listener = vi.fn();
+    h.bridge.subscribeStateChanges(listener);
+    h.hostInput.send.mockImplementation(() => { h.bridge.onGenerationStarted(7); return true; });
+    h.hostInput.retryGeneration.mockImplementation(() => { h.bridge.onGenerationStarted(8); return true; });
+
+    await h.bridge.send(prepared);
+    expect(listener).toHaveBeenCalledTimes(1); // send 落盘 pendingHostTurn 后通知
+
+    h.setChat([{ is_user: true }, { is_user: false, mes: '正文', message_id: 9 }]);
+    await h.bridge.onGenerationEnded(9, 7);
+    expect(h.hostInput.retryGeneration).toHaveBeenCalledWith('regenerate');
+    expect(listener).toHaveBeenCalledTimes(3); // ENDED finally + retryHostGeneration 落盘各一次
+
+    await h.bridge.onGenerationStopped(8);
+    expect(h.runtime.failHostTurnForStoppedGeneration).toHaveBeenCalledOnce();
+    expect(listener).toHaveBeenCalledTimes(4); // 中止转入 retry_ready 后通知
+  });
+
+  it('自动续写链完成后提交状态通知', async () => {
+    const h = createHarness({ autoContinueStates: [{ eligible: true, delaySeconds: 5 }, { eligible: true, delaySeconds: 5 }] });
+    const listener = vi.fn();
+    h.bridge.subscribeStateChanges(listener);
+    h.hostInput.send.mockImplementationOnce(() => { h.bridge.onGenerationStarted(7); return true; });
+    await h.bridge.send(prepared);
+    h.setChat([{ is_user: true }, { is_user: false, mes: '<ok>正文', message_id: 9 }]);
+
+    await h.bridge.onGenerationEnded(9, 7);
+
+    expect(h.continueTask).toHaveBeenCalledOnce();
+    expect(h.hostInput.send).toHaveBeenLastCalledWith('自动续写的下一轮文本');
+    // send(1) + ENDED finally(2) + 自动续写的 send 落盘(3) + 自动续写 finally(4)
+    expect(listener).toHaveBeenCalledTimes(4);
+  });
+
   it('waits for a makeFirst-era AI floor to materialize before resolving the claimed host result', async () => {
     let setChat: (value: any[]) => void;
     const h = createHarness({ onWait: () => setChat([{ is_user: true }, { is_user: false, mes: '<ok>延迟物化', message_id: 9 }]) });
