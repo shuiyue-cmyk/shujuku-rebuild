@@ -12,6 +12,9 @@ import {
   logWarn_ACU
 } from '../../../shared/utils';
 import {
+  buildDefaultGameTemplate_ACU
+} from '../../../shared/default-game-template';
+import {
   settings_ACU
 } from '../../../service/runtime/state-manager';
 import {
@@ -290,12 +293,10 @@ export function createPlotPresetApi(ctx: ApiGroupContext): Record<string, Functi
                             logDebug_ACU('[游戏初始化] 使用传入的模板数据');
                             templateData = options.templateData;
                         } else {
-                            logDebug_ACU('[游戏初始化] 从服务器加载模板数据');
-                            const templateResponse = await fetch('/TavernDB_template_默认模板.json');
-                            if (!templateResponse.ok) {
-                                throw new Error(`HTTP ${templateResponse.status}: ${templateResponse.statusText}`);
-                            }
-                            templateData = await templateResponse.json();
+                            // 内置默认模板：从库内默认表结构（shared/table-defaults 单一来源）运行时构造；
+                            // 旧实现 fetch('/TavernDB_template_默认模板.json') 的静态资源在本库/上游/磁盘均不存在，任何宿主必 404。
+                            logDebug_ACU('[游戏初始化] 使用库内默认表结构构造内置模板');
+                            templateData = buildDefaultGameTemplate_ACU();
                         }
 
                         const templateObj = typeof templateData === 'string' ? JSON.parse(templateData) : templateData;
@@ -363,35 +364,29 @@ export function createPlotPresetApi(ctx: ApiGroupContext): Record<string, Functi
 
                 // 步骤2: 加载剧情引导预设
                 if (options.loadPreset !== false) {
-                    logDebug_ACU('[游戏初始化] 开始加载剧情引导预设...');
-                    const presetName = options.presetName || '西幻剧情引导';
-                    try {
-                        let presetData;
-
-                        if (options.presetData) {
-                            logDebug_ACU('[游戏初始化] 使用传入的预设数据');
-                            presetData = options.presetData;
-                        } else {
-                            logDebug_ACU('[游戏初始化] 从服务器加载预设数据');
-                            const presetResponse = await fetch('/西幻剧情引导.json');
-                            if (!presetResponse.ok) {
-                                throw new Error(`HTTP ${presetResponse.status}: ${presetResponse.statusText}`);
+                    // 本库不内置任何剧情引导预设：旧实现 fetch('/西幻剧情引导.json') 的静态资源在本库/上游/磁盘均不存在，
+                    // 任何宿主必 404。预设由内容方自备——只有调用方显式传入 options.presetData 才走导入链；
+                    // 未提供时记录跳过并补一句 warning，不 throw、不中断初始化。
+                    if (!options.presetData) {
+                        logDebug_ACU('[游戏初始化] 未提供 presetData，跳过剧情推进预设加载');
+                        const skipPresetWarning = '未提供 presetData，跳过剧情推进预设加载（预设由内容方自备）';
+                        result.warning = result.warning ? result.warning + '；' + skipPresetWarning : skipPresetWarning;
+                    } else {
+                        logDebug_ACU('[游戏初始化] 开始加载剧情引导预设...');
+                        try {
+                            const importResult = await ctx.getApi().importPlotPresetFromData(options.presetData, {
+                                overwrite: true,
+                                switchTo: true
+                            });
+                            if (!importResult.success) {
+                                throw new Error(importResult.message || '预设导入失败');
                             }
-                            presetData = await presetResponse.json();
+                            result.presetLoaded = true;
+                            logDebug_ACU('[游戏初始化] 剧情引导预设加载成功');
+                        } catch (presetError) {
+                            logError_ACU('[游戏初始化] 预设加载失败:', presetError);
+                            logWarn_ACU('[游戏初始化] 剧情引导预设加载失败，但继续游戏初始化');
                         }
-
-                        const importResult = await ctx.getApi().importPlotPresetFromData(presetData, {
-                            overwrite: true,
-                            switchTo: true
-                        });
-                        if (!importResult.success) {
-                            throw new Error(importResult.message || '预设导入失败');
-                        }
-                        result.presetLoaded = true;
-                        logDebug_ACU('[游戏初始化] 剧情引导预设加载成功');
-                    } catch (presetError) {
-                        logError_ACU('[游戏初始化] 预设加载失败:', presetError);
-                        logWarn_ACU('[游戏初始化] 剧情引导预设加载失败，但继续游戏初始化');
                     }
                 }
 

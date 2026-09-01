@@ -77474,7 +77474,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.0.4" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.0.5" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -124982,6 +124982,40 @@ function createTemplatePresetApi(ctx) {
     };
 }
 
+/**
+ * shared/default-game-template.ts — 第三方游戏初始化内置默认模板
+ *
+ * 单一来源：shared/table-defaults（默认 8 张表 + mate 的 DDL / 表头 / 填表提示）。
+ * 运行时全局默认模板 DEFAULT_TABLE_TEMPLATE_ACU 本身就是 buildDefaultTableTemplateString_ACU()
+ * 的产物，因此这里复用同一生成函数 buildDefaultTableTemplateObject_ACU()：
+ * 不另抄一份表结构常量，也不请求任何宿主静态资源。
+ *
+ * 输出形状 = 聊天模板快照的 templateObj（SQL 与非 SQL 模式共用同一份默认定义，SQL 模式取 sourceData.ddl）：
+ *   { sheet_xxx: { uid, name, sourceData{note,initNode,deleteNode,updateNode,insertNode,ddl},
+ *                  content: [[row_id 表头], ...数据行], updateConfig, exportConfig, orderNo }, ...,
+ *     mate: { type: 'chatSheets', version: 1, ... } }
+ * 即 resetCurrentChatTableStateFromTemplate_ACU / applyChatTemplateSnapshotWithReconciliation_ACU
+ * 直接消费的 templateData 对象形态。
+ */
+/**
+ * 构造游戏初始化用的内置默认模板。
+ * 每次调用从默认表定义现取一份深拷贝（生成函数内部逐表 clone），调用方改动不会回写默认定义。
+ *
+ * @returns templateData 形状对象（sheet_* 表 + mate）
+ * @throws 默认表结构无法产出模板对象或不含任何 Sheet 时抛错，由调用方按「模板注入失败」处理
+ */
+function buildDefaultGameTemplate_ACU() {
+    const templateObj = buildDefaultTableTemplateObject_ACU();
+    if (!templateObj || typeof templateObj !== 'object' || Array.isArray(templateObj)) {
+        throw new Error('内置默认模板不可用：默认表结构未产出模板对象。');
+    }
+    const sheetKeys = Object.keys(templateObj).filter(key => key.startsWith('sheet_'));
+    if (sheetKeys.length === 0) {
+        throw new Error('内置默认模板不可用：默认表结构不包含任何 Sheet。');
+    }
+    return templateObj;
+}
+
 // Chat metadata stores scope/guide outside message fields, so both containers are snapshotted explicitly below.
 const MESSAGE_FIELDS = ['TavernDB_ACU_IsolatedData', 'TavernDB_ACU_Data', 'TavernDB_ACU_SummaryData', 'TavernDB_ACU_IndependentData', 'TavernDB_ACU_Identity', 'TavernDB_ACU_ModifiedKeys', 'TavernDB_ACU_UpdateGroupKeys', 'TavernDB_ACU_TableHeaderGuide', '_acu_local_template_base_state_seeded'];
 function clone$6(value) { return value === undefined ? value : JSON.parse(JSON.stringify(value)); }
@@ -125385,12 +125419,10 @@ function createPlotPresetApi(ctx) {
                             templateData = options.templateData;
                         }
                         else {
-                            logDebug_ACU('[游戏初始化] 从服务器加载模板数据');
-                            const templateResponse = await fetch('/TavernDB_template_默认模板.json');
-                            if (!templateResponse.ok) {
-                                throw new Error(`HTTP ${templateResponse.status}: ${templateResponse.statusText}`);
-                            }
-                            templateData = await templateResponse.json();
+                            // 内置默认模板：从库内默认表结构（shared/table-defaults 单一来源）运行时构造；
+                            // 旧实现 fetch('/TavernDB_template_默认模板.json') 的静态资源在本库/上游/磁盘均不存在，任何宿主必 404。
+                            logDebug_ACU('[游戏初始化] 使用库内默认表结构构造内置模板');
+                            templateData = buildDefaultGameTemplate_ACU();
                         }
                         const templateObj = typeof templateData === 'string' ? JSON.parse(templateData) : templateData;
                         const templatePresetName = deriveTemplatePresetNameForImport_ACU({
@@ -125458,35 +125490,31 @@ function createPlotPresetApi(ctx) {
                 }
                 // 步骤2: 加载剧情引导预设
                 if (options.loadPreset !== false) {
-                    logDebug_ACU('[游戏初始化] 开始加载剧情引导预设...');
-                    const presetName = options.presetName || '西幻剧情引导';
-                    try {
-                        let presetData;
-                        if (options.presetData) {
-                            logDebug_ACU('[游戏初始化] 使用传入的预设数据');
-                            presetData = options.presetData;
-                        }
-                        else {
-                            logDebug_ACU('[游戏初始化] 从服务器加载预设数据');
-                            const presetResponse = await fetch('/西幻剧情引导.json');
-                            if (!presetResponse.ok) {
-                                throw new Error(`HTTP ${presetResponse.status}: ${presetResponse.statusText}`);
-                            }
-                            presetData = await presetResponse.json();
-                        }
-                        const importResult = await ctx.getApi().importPlotPresetFromData(presetData, {
-                            overwrite: true,
-                            switchTo: true
-                        });
-                        if (!importResult.success) {
-                            throw new Error(importResult.message || '预设导入失败');
-                        }
-                        result.presetLoaded = true;
-                        logDebug_ACU('[游戏初始化] 剧情引导预设加载成功');
+                    // 本库不内置任何剧情引导预设：旧实现 fetch('/西幻剧情引导.json') 的静态资源在本库/上游/磁盘均不存在，
+                    // 任何宿主必 404。预设由内容方自备——只有调用方显式传入 options.presetData 才走导入链；
+                    // 未提供时记录跳过并补一句 warning，不 throw、不中断初始化。
+                    if (!options.presetData) {
+                        logDebug_ACU('[游戏初始化] 未提供 presetData，跳过剧情推进预设加载');
+                        const skipPresetWarning = '未提供 presetData，跳过剧情推进预设加载（预设由内容方自备）';
+                        result.warning = result.warning ? result.warning + '；' + skipPresetWarning : skipPresetWarning;
                     }
-                    catch (presetError) {
-                        logError_ACU('[游戏初始化] 预设加载失败:', presetError);
-                        logWarn_ACU('[游戏初始化] 剧情引导预设加载失败，但继续游戏初始化');
+                    else {
+                        logDebug_ACU('[游戏初始化] 开始加载剧情引导预设...');
+                        try {
+                            const importResult = await ctx.getApi().importPlotPresetFromData(options.presetData, {
+                                overwrite: true,
+                                switchTo: true
+                            });
+                            if (!importResult.success) {
+                                throw new Error(importResult.message || '预设导入失败');
+                            }
+                            result.presetLoaded = true;
+                            logDebug_ACU('[游戏初始化] 剧情引导预设加载成功');
+                        }
+                        catch (presetError) {
+                            logError_ACU('[游戏初始化] 预设加载失败:', presetError);
+                            logWarn_ACU('[游戏初始化] 剧情引导预设加载失败，但继续游戏初始化');
+                        }
                     }
                 }
                 // 步骤3: 保存设置。不得在异步初始化链中刷新消息/iframe，见上方模板提交说明。
@@ -170550,7 +170578,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260831-15";
+        const stamp = "20260901-00";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -170559,7 +170587,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.0.4";
+        const v = "9.0.5";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {
