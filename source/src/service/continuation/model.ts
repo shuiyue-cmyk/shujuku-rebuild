@@ -116,14 +116,15 @@ export interface ContinuationAgentPrompts_ACU {
   mainlinePlanner: ContinuationPromptSegment_ACU[];
   beatPlanner: ContinuationPromptSegment_ACU[];
   reviewer: ContinuationPromptSegment_ACU[];
+  finalReviewer: ContinuationPromptSegment_ACU[];
 }
 
-export const CONTINUATION_AGENT_PROMPT_KEYS_ACU = ['main', 'arcArchitect', 'maintainer', 'mainlinePlanner', 'beatPlanner', 'reviewer'] as const;
+export const CONTINUATION_AGENT_PROMPT_KEYS_ACU = ['main', 'arcArchitect', 'maintainer', 'mainlinePlanner', 'beatPlanner', 'reviewer', 'finalReviewer'] as const;
 
 export type ContinuationAgentPromptKey_ACU = typeof CONTINUATION_AGENT_PROMPT_KEYS_ACU[number];
 
-/** 可独立配置 AI 渠道的七个角色：主 Agent、大纲子代理与五个派工子代理。 */
-export const CONTINUATION_AGENT_API_PRESET_ROLES_ACU = ['main', 'outline', 'arcArchitect', 'maintainer', 'mainlinePlanner', 'beatPlanner', 'reviewer'] as const;
+/** 可独立配置 AI 渠道的八个角色：主 Agent、大纲子代理、五个派工子代理与最终审查。 */
+export const CONTINUATION_AGENT_API_PRESET_ROLES_ACU = ['main', 'outline', 'arcArchitect', 'maintainer', 'mainlinePlanner', 'beatPlanner', 'reviewer', 'finalReviewer'] as const;
 
 export type ContinuationAgentApiPresetRole_ACU = typeof CONTINUATION_AGENT_API_PRESET_ROLES_ACU[number];
 
@@ -134,6 +135,13 @@ export interface ContinuationAgentApiPresetChoice_ACU {
 }
 
 export type ContinuationAgentApiPresets_ACU = Record<ContinuationAgentApiPresetRole_ACU, ContinuationAgentApiPresetChoice_ACU>;
+
+/** 发送前最终审查的独立资源与开关，不占用主 Agent 或普通子代理的读取额度。 */
+export interface ContinuationFinalReviewSettings_ACU {
+  enabled: boolean;
+  readTokenBudget: number | string;
+  maxExtraReads: number;
+}
 
 export interface ContinuationTurnRange_ACU {
   min: number;
@@ -150,6 +158,18 @@ export interface ContinuationTurnRange_ACU {
 export const STAGE_TURN_PACINGS_ACU = ['setup', 'pressure', 'turn', 'cooldown'] as const;
 export type StageTurnPacing_ACU = typeof STAGE_TURN_PACINGS_ACU[number];
 
+/** 单轮承担的叙事功能；与 pacing 分离，避免把低压误解为“没有功能”。 */
+export const STAGE_TURN_FUNCTIONS_ACU = ['daily_bond', 'daily_world', 'recovery', 'preparation', 'training', 'economy', 'side_thread', 'conflict', 'reveal', 'payoff', 'transition'] as const;
+export type StageTurnFunction_ACU = typeof STAGE_TURN_FUNCTIONS_ACU[number];
+
+/** 单轮对主线的实际增量。hold 是低压轮的合法结果，不等于无变化。 */
+export const STAGE_TURN_MAINLINE_DELTAS_ACU = ['hold', 'micro', 'step', 'milestone'] as const;
+export type StageTurnMainlineDelta_ACU = typeof STAGE_TURN_MAINLINE_DELTAS_ACU[number];
+
+/** 单轮与上一轮之间的故事时间跨度级别；题材相关时间语义由 timeAnchor 补充。 */
+export const STAGE_TURN_TIME_ADVANCES_ACU = ['continuous', 'same_day', 'overnight', 'days', 'weeks', 'months', 'years'] as const;
+export type StageTurnTimeAdvance_ACU = typeof STAGE_TURN_TIME_ADVANCES_ACU[number];
+
 /** setup 与 cooldown 合称低压轮，是节奏配比校验里被计数的那一侧。 */
 export const STAGE_TURN_DOWNTIME_PACINGS_ACU: readonly StageTurnPacing_ACU[] = ['setup', 'cooldown'];
 
@@ -165,10 +185,27 @@ export const STAGE_TURN_DOWNTIME_PACINGS_ACU: readonly StageTurnPacing_ACU[] = [
 export const STAGE_TEMPOS_ACU = ['buildup', 'mixed', 'surge', 'aftermath'] as const;
 export type StageTempo_ACU = typeof STAGE_TEMPOS_ACU[number];
 
+/** 阶段在卷级结构中的职责；它描述结构位置，StageTempo 描述能量形态。 */
+export const STAGE_ROLES_ACU = ['setup', 'development', 'escalation', 'turn', 'payoff', 'aftermath'] as const;
+export type StageRole_ACU = typeof STAGE_ROLES_ACU[number];
+
+/** 可由运行时保守补全的轮次语义字段。 */
+export const STAGE_TURN_SOFT_FIELDS_ACU = ['function', 'mainlineDelta', 'timeAdvance'] as const;
+export type StageTurnSoftField_ACU = typeof STAGE_TURN_SOFT_FIELDS_ACU[number];
+
 export interface StageTurn_ACU {
   id: string;
   goal: string;
   pacing: StageTurnPacing_ACU;
+  function?: StageTurnFunction_ACU;
+  mainlineDelta?: StageTurnMainlineDelta_ACU;
+  timeAdvance?: StageTurnTimeAdvance_ACU;
+  timeAnchor?: string;
+  /**
+   * 由运行时按 pacing 保守补全、而非模型或作者明确给出的字段。
+   * 用于 UI 标注与主 Agent 提示，避免把推断值当成原始意图。
+   */
+  inferred?: StageTurnSoftField_ACU[];
 }
 
 export interface StageNode_ACU {
@@ -183,6 +220,10 @@ export interface StageOutline_ACU {
   schemaVersion: typeof CONTINUATION_SCHEMA_VERSION_ACU;
   title: string;
   goal: string;
+  /** 阶段在当前卷中的结构职责；旧快照可缺失，由兼容读取路径保守归一化。 */
+  role?: StageRole_ACU;
+  /** 阶段预计覆盖的故事内部时间目标。 */
+  timeSpanGoal?: string;
   /** 本阶段的节奏形态。决定低压轮下限，也决定下一阶段能选什么形态。 */
   tempo: StageTempo_ACU;
   totalTurns: number;
@@ -241,6 +282,8 @@ export interface ContinuationSettings_ACU {
   agentReadTokenBudget: number | string;
   /** 临近历史预算阈值时仍放行的精读兜底额度（token）；有效值为 min(该值, 读取预算)。 */
   agentReadFallbackTokens: number;
+  /** 发送前人物情绪与合理性终审的独立设置。 */
+  finalReview: ContinuationFinalReviewSettings_ACU;
   contextExtractRules: ContinuationRulePair_ACU[];
   contextExcludeRules: ContinuationRulePair_ACU[];
   /** 主 Agent 规划循环的运行预算，六项全部可在 UI 调整。 */
@@ -329,7 +372,7 @@ export interface ContinuationPendingHostTurn_ACU {
   status: 'awaiting_generation' | 'retry_ready' | 'exhausted';
 }
 
-export type ContinuationInternalAiSource_ACU = 'outline' | 'turn_instruction' | 'agent_main' | 'agent_subagent';
+export type ContinuationInternalAiSource_ACU = 'outline' | 'turn_instruction' | 'agent_main' | 'agent_subagent' | 'handoff_summary';
 
 /**
  * Request-scoped provenance for an internal AI call. It deliberately contains

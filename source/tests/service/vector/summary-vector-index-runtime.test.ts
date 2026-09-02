@@ -27,7 +27,7 @@ const h = vi.hoisted(() => ({
   writeTagData: vi.fn(),
 }));
 
-vi.mock('../../../src/shared/utils', () => ({ logDebug_ACU: vi.fn(), logWarn_ACU: vi.fn(), assertSafeHttpEndpoint_ACU: vi.fn() }));
+vi.mock('../../../src/shared/utils', () => ({ logDebug_ACU: vi.fn(), logWarn_ACU: vi.fn(), logError_ACU: vi.fn(), assertSafeHttpEndpoint_ACU: vi.fn() }));
 vi.mock('../../../src/service/chat/chat-service', () => ({ getChatArray_ACU: () => h.chat }));
 vi.mock('../../../src/data/gateways/chat-gateway', () => ({ saveChatToHostStrict_ACU: (...a: any[]) => h.saveChatStrict(...a) }));
 vi.mock('../../../src/data/repositories/chat-message-data-repo', () => ({
@@ -68,6 +68,11 @@ vi.mock('../../../src/data/storage/vector-index-st-files-storage', () => ({
   readVectorIndexJsonFile_ACU: (...a: any[]) => h.readSnapshot(...a),
 }));
 vi.mock('../../../src/service/ai/api-call', () => ({callAIWithPreset_ACU: (...a: any[]) => h.callAI(...a) }));
+// 宿主头固定注入 CSRF 令牌：rerank 网关一旦混入宿主请求头，下方「不夹带宿主请求头」用例立即变红。
+vi.mock('../../../src/data/gateways/ai-gateway', async (importOriginal) => ({
+  ...((await importOriginal<any, { [key: string]: unknown }>()) as Record<string, unknown>),
+  getHostRequestHeaders_ACU: () => ({ 'X-CSRF-Token': 'host-csrf-secret' }),
+}));
 vi.mock('../../../src/data/gateways/vector-embedding-gateway', () => ({ createEmbeddings_ACU: (...a: any[]) => h.createEmbeddings(...a) }));
 vi.mock('../../../src/service/settings/settings-readers', () => ({ getCurrentWorldbookConfig_ACU: () => ({ zeroTkOccupyMode: false, summaryVectorIndexModeEnabled: true }) }));
 vi.mock('../../../src/data/repositories/profile-repo', () => ({ globalMeta_ACU: { summaryVectorIndexModeGlobal: true } }));
@@ -320,7 +325,7 @@ describe('processSummaryVectorIndexBeforeGeneration_ACU hybrid retrieval', () =>
     expect(h.createEmbeddings.mock.calls.length).toBe(callsAfterFirst);
   });
 
-  it('rerank 失败时回退到原候选排序并继续写入世界书', async () => {
+  it('rerank 失败时回退到原候选排序并继续写入世界书，结果标明 rerank 未应用', async () => {
     h.config.rerankEndpoint = 'https://rerank.test';
     h.config.rerankModel = 'rerank-model';
     vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('rerank down'); }));
@@ -328,8 +333,48 @@ describe('processSummaryVectorIndexBeforeGeneration_ACU hybrid retrieval', () =>
     const result = await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'secret relic', source: 'rerank-fallback' });
 
     expect(result.success).toBe(true);
+    expect(result.rerankStatus).toBe('failed');
+    expect(result.rerankError).toContain('rerank down');
     expect(fetch).toHaveBeenCalledTimes(1);
     expect(createdContent_ACU()).toContain('old sparse summary');
+  });
+
+  it('rerank 请求只带 Content-Type 与 Authorization，不夹带宿主请求头（否则跨域预检被拦、宿主 CSRF 令牌泄露、rerank 静默失效）', async () => {
+    h.config.rerankEndpoint = 'https://rerank.test/v1/rerank';
+    h.config.rerankModel = 'rerank-model';
+    h.config.rerankApiKey = 'sk-rerank';
+    // 本库网关带 V1-f 覆盖度守卫（部分打分即抛错回退），mock 按请求 documents 逐条回填评分。
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => {
+      const sent = JSON.parse(String(init.body));
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ results: sent.documents.map((_: string, index: number) => ({ index, relevance_score: 0.9 - index * 0.1 })) }),
+      };
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'secret relic', source: 'rerank-headers' });
+
+    expect(result.success).toBe(true);
+    expect(result.rerankStatus).toBe('applied');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe('https://rerank.test/v1/rerank');
+    const headers = init.headers as Record<string, string>;
+    expect(headers).toEqual({ 'Content-Type': 'application/json', Authorization: 'Bearer sk-rerank' });
+    expect(Object.keys(headers).some(key => /csrf/i.test(key))).toBe(false);
+  });
+
+  it('未配置 rerank 时不发请求，结果标明 not_configured', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'secret relic', source: 'rerank-off' });
+
+    expect(result.success).toBe(true);
+    expect(result.rerankStatus).toBe('not_configured');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('T2：chunk 向量维度与 query 不一致时 cosine 返回 0，混维 chunk 不进入 dense 候选', async () => {

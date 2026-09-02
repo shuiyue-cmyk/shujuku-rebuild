@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   setCurrentData: vi.fn(),
   currentChatKey: 'chat-a',
   currentIsolationKey: 'scope-a',
+  isAutoUpdating: false,
 }));
 
 vi.mock('../../../src/shared/utils', () => ({
@@ -18,6 +19,7 @@ vi.mock('../../../src/shared/utils', () => ({
 vi.mock('../../../src/service/runtime/state-manager', () => ({
   get currentChatFileIdentifier_ACU() { return mocks.currentChatKey; },
   currentJsonTableData_ACU: null,
+  get isAutoUpdatingCard_ACU() { return mocks.isAutoUpdating; },
   getCurrentIsolationKey_ACU: () => mocks.currentIsolationKey,
   _set_currentJsonTableData_ACU: mocks.setCurrentData,
 }));
@@ -37,6 +39,11 @@ vi.mock('../../../src/service/table/manual-catch-up-provisional-bridge', () => (
 }));
 
 import { runSqliteRuntimeMutationCommit_ACU, runTableUpdateCommit_ACU } from '../../../src/service/table/table-update-commit';
+import {
+  clearRuntimeOnlyPendingSheets_ACU,
+  readRuntimeOnlyPendingSheets_ACU,
+  registerRuntimeOnlyPendingFlusher_ACU,
+} from '../../../src/service/table/runtime-only-pending-state';
 
 function options(reason: string) {
   return {
@@ -321,6 +328,164 @@ describe('runTableUpdateCommit_ACU migration gate', () => {
       error: expect.stringContaining('sheetKey=sheet_broken, rowIndex=1 的 row_id 为空'),
     });
     expect(mocks.persist).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('runTableUpdateCommit_ACU runtime-only 未落盘登记与写回', () => {
+  const scope = { chatKey: 'chat-a', isolationKey: 'scope-a' };
+  const data: any = {
+    mate: { type: 'acu', version: 1 },
+    sheet_a: { uid: 'sheet_a', name: '表A', content: [['row_id'], ['1']] },
+    sheet_b: { uid: 'sheet_b', name: '表B', content: [['row_id'], ['1']] },
+  };
+
+  beforeEach(() => {
+    mocks.currentChatKey = 'chat-a';
+    mocks.currentIsolationKey = 'scope-a';
+    mocks.isAutoUpdating = false;
+    mocks.migration.mockReset().mockResolvedValue({ success: true, migrated: false });
+    mocks.reload.mockReset();
+    mocks.transaction.mockReset().mockImplementation(async (_options: any, task: any) => task({
+      runCommit: async (commitTask: any) => commitTask(),
+    }, null));
+    mocks.persist.mockReset().mockResolvedValue({ saved: true, messageIndex: 1 });
+    mocks.setCurrentData.mockReset();
+    clearRuntimeOnlyPendingSheets_ACU();
+    registerRuntimeOnlyPendingFlusher_ACU(null);
+  });
+
+  it('外部来源 skipChatSave 提交按写集登记待落盘表，不写聊天', async () => {
+    const result = await runTableUpdateCommit_ACU({
+      source: 'manual_crud',
+      reason: 'insertRow:sqlite',
+      writeSet: [{ kind: 'sheet', sheetKey: 'sheet_a' }],
+      revisionWriteSet: [{ kind: 'row', sheetKey: 'sheet_a', rowId: '1' }],
+      targetMessageIndex: 0,
+      targetSheetKeys: ['sheet_a'],
+      skipChatSave: true,
+    }, async () => ({ success: true, tableData: data, value: 1 }));
+
+    expect(result).toMatchObject({ success: true, saved: true });
+    expect(mocks.persist).not.toHaveBeenCalled();
+    expect(readRuntimeOnlyPendingSheets_ACU(scope)).toEqual({ all: false, sheetKeys: ['sheet_a'] });
+  });
+
+  it('kind:all 的外部 skipChatSave 写集按当前全部表登记', async () => {
+    await runTableUpdateCommit_ACU({
+      source: 'raw_sql_batch',
+      reason: 'raw_sql_batch',
+      writeSet: [{ kind: 'all' }],
+      targetMessageIndex: -1,
+      targetSheetKeys: null,
+      skipChatSave: true,
+    }, async () => ({ success: true, tableData: data }));
+
+    expect(readRuntimeOnlyPendingSheets_ACU(scope)).toEqual({ all: false, sheetKeys: ['sheet_a', 'sheet_b'] });
+  });
+
+  it('非外部来源（填表 import 候选 / 运行时恢复）的 skipChatSave 不登记', async () => {
+    await runTableUpdateCommit_ACU({
+      source: 'group_fill',
+      reason: 'executeCardUpdateCore',
+      writeSet: [{ kind: 'sheet', sheetKey: 'sheet_a' }],
+      targetMessageIndex: -1,
+      targetSheetKeys: null,
+      skipChatSave: true,
+    }, async () => ({ success: true, tableData: data }));
+    await runTableUpdateCommit_ACU({
+      source: 'import',
+      reason: 'importTableAsJson',
+      writeSet: [{ kind: 'all' }],
+      targetMessageIndex: -1,
+      targetSheetKeys: null,
+      skipChatSave: true,
+    }, async () => ({ success: true, tableData: data }));
+
+    expect(readRuntimeOnlyPendingSheets_ACU(scope)).toBeNull();
+  });
+
+  it('普通持久化提交在开启事务前先触发已注册的写回；flush 自身提交不再触发', async () => {
+    const flusher = vi.fn(async () => ({ flushed: true, sheetKeys: ['sheet_a'] }));
+    registerRuntimeOnlyPendingFlusher_ACU(flusher);
+    await runTableUpdateCommit_ACU({
+      source: 'manual_crud',
+      reason: 'insertRow:sqlite',
+      writeSet: [{ kind: 'sheet', sheetKey: 'sheet_a' }],
+      targetMessageIndex: 0,
+      targetSheetKeys: ['sheet_a'],
+      skipChatSave: true,
+    }, async () => ({ success: true, tableData: data }));
+    expect(flusher).not.toHaveBeenCalled();
+
+    const order: string[] = [];
+    flusher.mockImplementation(async (reason: string) => { order.push(`flush:${reason}`); return { flushed: true, sheetKeys: ['sheet_a'] }; });
+    mocks.transaction.mockImplementation(async (_options: any, task: any) => {
+      order.push('transaction');
+      return task({ runCommit: async (commitTask: any) => commitTask() }, null);
+    });
+
+    await runTableUpdateCommit_ACU({
+      source: 'group_fill',
+      reason: 'executeCardUpdateCore',
+      writeSet: [{ kind: 'sheet', sheetKey: 'sheet_a' }],
+      targetMessageIndex: 0,
+      targetSheetKeys: ['sheet_a'],
+    }, async () => ({ success: true, tableData: data }));
+    expect(order).toEqual(['flush:executeCardUpdateCore', 'transaction']);
+
+    flusher.mockClear();
+    await runTableUpdateCommit_ACU({
+      source: 'system',
+      reason: 'runtime_only_flush:test',
+      writeSet: [{ kind: 'sheet', sheetKey: 'sheet_a' }],
+      targetMessageIndex: 0,
+      targetSheetKeys: ['sheet_a'],
+      skipRuntimeOnlyPendingFlush: true,
+    }, async () => ({ success: true, tableData: data }));
+    expect(flusher).not.toHaveBeenCalled();
+  });
+
+  it('写回失败不阻断本次提交', async () => {
+    registerRuntimeOnlyPendingFlusher_ACU(vi.fn(async () => { throw new Error('flush exploded'); }));
+    await runTableUpdateCommit_ACU({
+      source: 'manual_crud',
+      reason: 'insertRow:sqlite',
+      writeSet: [{ kind: 'sheet', sheetKey: 'sheet_a' }],
+      targetMessageIndex: 0,
+      targetSheetKeys: ['sheet_a'],
+      skipChatSave: true,
+    }, async () => ({ success: true, tableData: data }));
+
+    const result = await runTableUpdateCommit_ACU({
+      source: 'manual_crud',
+      reason: 'updateRow:sqlite',
+      writeSet: [{ kind: 'sheet', sheetKey: 'sheet_a' }],
+      targetMessageIndex: 0,
+      targetSheetKeys: ['sheet_a'],
+    }, async () => ({ success: true, tableData: data, value: true }));
+    expect(result.success).toBe(true);
+    expect(mocks.persist).toHaveBeenCalledTimes(1);
+  });
+
+  it('填表进行中依旧拒绝外部写入：runtime-only 闸门不绕过本库外部写闸门', async () => {
+    mocks.isAutoUpdating = true;
+    const result = await runTableUpdateCommit_ACU({
+      source: 'manual_crud',
+      reason: 'insertRow:sqlite',
+      writeSet: [{ kind: 'sheet', sheetKey: 'sheet_a' }],
+      targetMessageIndex: 0,
+      targetSheetKeys: ['sheet_a'],
+      skipChatSave: true,
+    }, async () => ({ success: true, tableData: data }));
+
+    expect(result.success).toBe(false);
+    expect(result.errorCategory).toBe('precondition');
+    expect(result.error).toContain('已拒绝外部表格写入');
+    // 被闸门拒绝的写入不得留下待落盘登记
+    expect(readRuntimeOnlyPendingSheets_ACU(scope)).toBeNull();
+    // 复位：不得把填表标志泄漏给后续 describe。
+    mocks.isAutoUpdating = false;
   });
 });
 

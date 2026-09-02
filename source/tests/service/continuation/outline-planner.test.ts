@@ -9,15 +9,25 @@ function pacingAt_ACU(index: number): 'setup' | 'pressure' {
 }
 
 function buildOutline_ACU(totalTurns = 6): StageOutline_ACU {
-  return { schemaVersion: 1, title: '阶段标题', goal: '阶段目标', tempo: 'mixed', totalTurns, nodes: [{ id: 'node-1', title: '节点', goal: '节点目标', suggestedTurns: totalTurns, turns: Array.from({ length: totalTurns }, (_, index) => ({ id: `turn-${index + 1}`, goal: `目标 ${index + 1}`, pacing: pacingAt_ACU(index) })) }] };
+  return { schemaVersion: 1, title: '阶段标题', goal: '阶段目标', tempo: 'mixed', role: 'development', totalTurns, nodes: [{ id: 'node-1', title: '节点', goal: '节点目标', suggestedTurns: totalTurns, turns: Array.from({ length: totalTurns }, (_, index) => ({
+    id: `turn-${index + 1}`,
+    goal: `目标 ${index + 1}`,
+    pacing: pacingAt_ACU(index),
+    function: pacingAt_ACU(index) === 'setup' ? 'transition' as const : 'conflict' as const,
+    mainlineDelta: pacingAt_ACU(index) === 'setup' ? 'hold' as const : 'step' as const,
+    timeAdvance: pacingAt_ACU(index) === 'setup' ? 'same_day' as const : 'continuous' as const,
+  })) }] };
 }
 
 function tagTurns_ACU(turnCount: number, label: string, offset = 0): string {
-  return Array.from({ length: turnCount }, (_, index) => `<turn pacing="${pacingAt_ACU(offset + index)}">${label} ${index + 1}</turn>`).join('\n');
+  return Array.from({ length: turnCount }, (_, index) => {
+    const pacing = pacingAt_ACU(offset + index);
+    return `<turn pacing="${pacing}" function="${pacing === 'setup' ? 'transition' : 'conflict'}" mainline="${pacing === 'setup' ? 'hold' : 'step'}" time="${pacing === 'setup' ? 'same_day' : 'continuous'}">${label} ${index + 1}</turn>`;
+  }).join('\n');
 }
 
 function tagOutline_ACU(turnCount = 6, title = '阶段标题'): string {
-  return `<stage_title>${title}</stage_title>\n<stage_goal>阶段目标</stage_goal>\n<node>\n<node_title>节点</node_title>\n<node_goal>节点目标</node_goal>\n${tagTurns_ACU(turnCount, '目标')}\n</node>`;
+  return `<stage_title>${title}</stage_title>\n<stage_goal>阶段目标</stage_goal>\n<stage_tempo>mixed</stage_tempo>\n<stage_role>development</stage_role>\n<node>\n<node_title>节点</node_title>\n<node_goal>节点目标</node_goal>\n${tagTurns_ACU(turnCount, '目标')}\n</node>`;
 }
 
 function createPlanner_ACU(outputs: Array<string | Error>, resolveApiPresetOverride?: () => any) {
@@ -85,6 +95,55 @@ describe('ContinuationOutlinePlanner_ACU', () => {
     expect(result.outline.totalTurns).toBe(6);
   });
 
+  it('缺标记时只发起增量修补轮，合并 <fix> 后通过，不整份重来', async () => {
+    const draft = `<stage_title>阶段标题</stage_title>\n<stage_goal>阶段目标</stage_goal>\n<stage_tempo>mixed</stage_tempo>\n<node>\n<node_title>节点</node_title>\n<node_goal>节点目标</node_goal>\n<turn pacing="setup">两人第一次一起做晚饭</turn>\n${tagTurns_ACU(5, '目标', 1)}\n</node>`;
+    const fixes = '<think>补属性</think>\n<fix node="1" turn="1" function="关系日常" mainline="不推进" time="overnight"/>\n<fix stage role="development"/>';
+    const { planner, callInternalAi } = createPlanner_ACU([draft, fixes]);
+    const result = await planner.plan(request_ACU(settings_ACU(0)));
+    expect(callInternalAi).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ attempts: 1, repairRounds: 1, inferredFields: 0 });
+    expect(result.outline.role).toBe('development');
+    expect(result.outline.nodes[0].turns[0]).toEqual({ id: 'turn-fresh-2', goal: '两人第一次一起做晚饭', pacing: 'setup', function: 'daily_bond', mainlineDelta: 'hold', timeAdvance: 'overnight' });
+    const repairRequest = lastMessageContent_ACU(callInternalAi, 1);
+    expect(repairRequest).toContain('节点1 第1轮（「两人第一次一起做晚饭」）');
+    expect(repairRequest).toContain('缺 function');
+    expect(repairRequest).toContain('缺 mainline');
+    expect(repairRequest).toContain('缺 role');
+    expect(repairRequest).toContain('<fix node="1" turn="1"');
+    expect(repairRequest).not.toContain('重新输出完整标签');
+  });
+
+  it('修补轮用尽后接受软字段默认并标记 inferred，pacing 仍缺则整份重来', async () => {
+    const softDraft = `<stage_tempo>mixed</stage_tempo><stage_role>development</stage_role><node><node_goal>节点目标</node_goal><turn pacing="setup">日常</turn>${tagTurns_ACU(5, '目标', 1)}</node>`;
+    // 修补回复既无 <fix> 也无整份大纲：不再追问，直接接受默认，省下一次注定无用的调用。
+    const { planner, callInternalAi } = createPlanner_ACU([softDraft, '我不知道怎么补']);
+    const result = await planner.plan(request_ACU(settings_ACU(0)));
+    expect(callInternalAi).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ attempts: 1, repairRounds: 1, inferredFields: 3 });
+    expect(result.outline.nodes[0].turns[0]).toMatchObject({ function: 'transition', mainlineDelta: 'hold', timeAdvance: 'same_day', inferred: ['function', 'mainlineDelta', 'timeAdvance'] });
+    // 漏写的阶段标题/目标由节点信息兜底，不作为结构错误。
+    expect(result.outline.title).toBe('未命名阶段');
+    expect(result.outline.goal).toBe('节点目标');
+
+    const hardDraft = `<stage_tempo>mixed</stage_tempo><stage_role>development</stage_role><node><node_goal>节点目标</node_goal><turn>没写节奏</turn>${tagTurns_ACU(5, '目标', 1)}</node>`;
+    const second = createPlanner_ACU([hardDraft, '不会', tagOutline_ACU(6)]);
+    const recovered = await second.planner.plan(request_ACU(settings_ACU(1)));
+    expect(recovered.attempts).toBe(2);
+    expect(second.callInternalAi).toHaveBeenCalledTimes(3);
+    const retry = lastMessageContent_ACU(second.callInternalAi, 2);
+    expect(retry).toContain('pacing');
+    expect(retry).toContain('<turn pacing="setup" function="daily_bond"');
+  });
+
+  it('修补轮里模型重发整份大纲时按新输出继续', async () => {
+    const draft = `<stage_tempo>mixed</stage_tempo><node><node_goal>节点目标</node_goal><turn pacing="setup">日常</turn>${tagTurns_ACU(5, '目标', 1)}</node>`;
+    const { planner, callInternalAi } = createPlanner_ACU([draft, tagOutline_ACU(6)]);
+    const result = await planner.plan(request_ACU(settings_ACU(0)));
+    expect(callInternalAi).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ attempts: 1, repairRounds: 1, inferredFields: 0 });
+    expect(result.outline.title).toBe('阶段标题');
+  });
+
   it('retries untagged output and feeds back a compact error with the reason message', async () => {
     const { planner, callInternalAi } = createPlanner_ACU(['这段返回没有任何标签', tagOutline_ACU(6)]);
     const result = await planner.plan(request_ACU(settings_ACU(1), { resolvers: { $ORIGIN_INSTRUCTION: () => '继续' } }));
@@ -132,7 +191,7 @@ describe('ContinuationOutlinePlanner_ACU', () => {
   });
 
   it('把节奏配比违规当作可重试的校验错误回灌，模型改标签后通过', async () => {
-    const allPressure = `<stage_title>阶段标题</stage_title>\n<stage_goal>阶段目标</stage_goal>\n<node>\n<node_title>节点</node_title>\n<node_goal>节点目标</node_goal>\n${Array.from({ length: 6 }, (_, index) => `<turn pacing="pressure">目标 ${index + 1}</turn>`).join('\n')}\n</node>`;
+    const allPressure = `<stage_title>阶段标题</stage_title>\n<stage_goal>阶段目标</stage_goal>\n<stage_tempo>mixed</stage_tempo>\n<stage_role>development</stage_role>\n<node>\n<node_title>节点</node_title>\n<node_goal>节点目标</node_goal>\n${Array.from({ length: 6 }, (_, index) => `<turn pacing="pressure" function="conflict" mainline="step" time="continuous">目标 ${index + 1}</turn>`).join('\n')}\n</node>`;
     const { planner, callInternalAi } = createPlanner_ACU([allPressure, tagOutline_ACU(6)]);
     const result = await planner.plan(request_ACU(settings_ACU(1)));
     expect(result.attempts).toBe(2);
@@ -176,7 +235,7 @@ describe('ContinuationOutlinePlanner_ACU', () => {
 
   it('上一阶段是 surge 时，$PACING_CONTEXT 明说本阶段不能再选 surge，模型照选会被打回', async () => {
     const pacingSettings = { ...settings_ACU(1), outlinePrompt: [{ role: 'user' as const, content: '节奏状态：$PACING_CONTEXT $VALIDATION_ERRORS' }] };
-    const surgeAgain = `<stage_title>阶段标题</stage_title>\n<stage_goal>阶段目标</stage_goal>\n<stage_tempo>surge</stage_tempo>\n<node>\n<node_title>节点</node_title>\n<node_goal>节点目标</node_goal>\n${Array.from({ length: 6 }, (_, index) => `<turn pacing="pressure">目标 ${index + 1}</turn>`).join('\n')}\n</node>`;
+    const surgeAgain = `<stage_title>阶段标题</stage_title>\n<stage_goal>阶段目标</stage_goal>\n<stage_tempo>surge</stage_tempo>\n<stage_role>escalation</stage_role>\n<node>\n<node_title>节点</node_title>\n<node_goal>节点目标</node_goal>\n${Array.from({ length: 6 }, (_, index) => `<turn pacing="pressure" function="conflict" mainline="step" time="continuous">目标 ${index + 1}</turn>`).join('\n')}\n</node>`;
     const { planner, callInternalAi } = createPlanner_ACU([surgeAgain, tagOutline_ACU(6)]);
     const result = await planner.plan(request_ACU(pacingSettings, { pacingContext: { previousTempo: 'surge', leadingPressureStreak: 9 } }));
 
@@ -188,7 +247,7 @@ describe('ContinuationOutlinePlanner_ACU', () => {
   });
 
   it('高压型阶段整段无低压也放行，形态原样落进大纲', async () => {
-    const surge = `<stage_title>决战</stage_title>\n<stage_goal>一口气打到底</stage_goal>\n<stage_tempo>surge</stage_tempo>\n<node>\n<node_title>节点</node_title>\n<node_goal>节点目标</node_goal>\n${Array.from({ length: 8 }, (_, index) => `<turn pacing="pressure">目标 ${index + 1}</turn>`).join('\n')}\n</node>`;
+    const surge = `<stage_title>决战</stage_title>\n<stage_goal>一口气打到底</stage_goal>\n<stage_tempo>surge</stage_tempo>\n<stage_role>escalation</stage_role>\n<node>\n<node_title>节点</node_title>\n<node_goal>节点目标</node_goal>\n${Array.from({ length: 8 }, (_, index) => `<turn pacing="pressure" function="conflict" mainline="step" time="continuous">目标 ${index + 1}</turn>`).join('\n')}\n</node>`;
     const { planner } = createPlanner_ACU([surge]);
     const result = await planner.plan(request_ACU(settings_ACU(0), { pacingContext: { previousTempo: 'buildup', leadingPressureStreak: 6 } }));
     expect(result.outline.tempo).toBe('surge');
@@ -233,7 +292,10 @@ describe('ContinuationOutlinePlanner_ACU', () => {
     }));
     // 前缀逐字保留：原 node/turn id 与 goal 不变，截断处 suggestedTurns 重算。
     expect(result.outline.nodes[0]).toMatchObject({ id: 'node-1', suggestedTurns: 2 });
-    expect(result.outline.nodes[0].turns).toEqual([{ id: 'turn-1', goal: '目标 1', pacing: 'setup' }, { id: 'turn-2', goal: '目标 2', pacing: 'pressure' }]);
+    expect(result.outline.nodes[0].turns).toEqual([
+      { id: 'turn-1', goal: '目标 1', pacing: 'setup', function: 'transition', mainlineDelta: 'hold', timeAdvance: 'same_day', timeAnchor: undefined },
+      { id: 'turn-2', goal: '目标 2', pacing: 'pressure', function: 'conflict', mainlineDelta: 'step', timeAdvance: 'continuous', timeAnchor: undefined },
+    ]);
     // 剩余额度放宽：旧额度 4 轮，模型给了 5 轮，拼接后 7 轮仍在 standard 范围内。
     expect(result.outline.totalTurns).toBe(7);
     expect(result.outline.nodes[1]).toMatchObject({ title: '改写节点', suggestedTurns: 5 });
@@ -244,7 +306,7 @@ describe('ContinuationOutlinePlanner_ACU', () => {
   it('still rejects a replan whose spliced total leaves the stage range', async () => {
     const previous = buildOutline_ACU(6);
     const { planner, callInternalAi } = createPlanner_ACU([
-      '<node><node_goal>目标</node_goal><turn pacing="setup">仅一轮</turn></node>',
+      '<node><node_goal>目标</node_goal><turn pacing="setup" function="transition" mainline="hold" time="same_day">仅一轮</turn></node>',
       `<node><node_title>补足</node_title><node_goal>目标</node_goal>${tagTurns_ACU(4, '补足轮')}</node>`,
     ]);
     const result = await planner.plan(request_ACU(settings_ACU(1), {

@@ -72,6 +72,9 @@ import {
   isSqliteMode
 } from '../../service/table/storage-mode';
 import {
+  flushRuntimeOnlyPendingChanges_ACU
+} from '../../service/table/runtime-only-pending-flush';
+import {
   ensureNoActiveProvisionalBridgeForCurrentScope_ACU
 } from '../../service/table/manual-catch-up-provisional-bridge';
 import {
@@ -192,6 +195,13 @@ async function recoverDelayedRebuildFailure_ACU(scope: string, error: unknown): 
 // [从 state-manager.ts 搬入 presentation 层] 安装发送意图捕捉钩子（DOM 事件绑定）
 async function ensureInitialSeedCheckpointBeforeGeneration_ACU(reason: string, { allowPendingFirstUserMessage = true } = {}) {
   try {
+    // 开局脚本可能只把行写进了运行时（skipChatSave/isImportMode）。seed checkpoint 建立后会
+    // 从聊天重载运行时，这些行会被直接丢弃；先写回聊天，聊天有数据时 seed 自然跳过。
+    try {
+      await flushRuntimeOnlyPendingChanges_ACU(reason);
+    } catch (flushError) {
+      logWarn_ACU(`[InitialSeed] ${reason} 写回运行时未落盘变更失败，继续初始化 checkpoint:`, flushError);
+    }
     const result = await ensureInitialSeedCheckpoint_ACU({ reason, allowPendingFirstUserMessage });
     if ((result as any)?.success && isSqliteMode()) {
       await reloadStorageProvider();
@@ -478,7 +488,7 @@ async function handleChatChangedEvent_ACU(chatFileName: string): Promise<void> {
       if (isSqliteMode()) logDebug_ACU('[SQLite] CHAT_CHANGED: 立即销毁旧数据库实例');
     }
 
-    await resetScriptStateForNewChat_ACU(chatFileName);
+    await resetScriptStateForNewChat_ACU(chatFileName, { reason: 'chat_changed' });
 
     // [触发门控] generationGate 重置已搬到 service 层的 resetScriptStateForNewChat_ACU 中
 
@@ -603,8 +613,13 @@ export   function mainInitialize_ACU() {
               // 宿主的 GENERATION_STARTED 通常在发送点击返回后的微任务里才送达，同步配对必然错过；
               // 对非 quiet/非 dryRun/非自动触发的生成开放宽松认领（spv8.9.2 状态法），桥内部只在
               // 存在未绑定序列号的等待轮时才会认领。
-              const allowLooseStart = !dryRun && !isQuietLikeGeneration_ACU(type, params) && !params?.automatic_trigger;
-              getContinuationHostGenerationBridge_ACU()?.onGenerationStarted(context.seq, allowLooseStart);
+              const quietLike = isQuietLikeGeneration_ACU(type, params);
+              getContinuationHostGenerationBridge_ACU()?.onGenerationStarted(context.seq, {
+                allowOrdinaryLooseClaim: !dryRun && !quietLike && !params?.automatic_trigger,
+                automaticTrigger: Boolean(params?.automatic_trigger),
+                quietLike,
+                dryRun: Boolean(dryRun),
+              });
             } catch (e) {}
           });
         }
@@ -627,15 +642,23 @@ export   function mainInitialize_ACU() {
                   return;
                 }
                 const continuationBridge = getContinuationHostGenerationBridge_ACU();
-                // 宽松认领只对"会产生正文楼层"的生成开放：quiet/dryRun/自动触发生成不许认领，
-                // 否则会误杀等待中的续写轮。判定复用自动填表的生成门控。
-                const allowLooseContinuationClaim = shouldProcessAutoTableUpdateForGenerationEnded_ACU(generationContext);
-                if (continuationBridge?.claimsGenerationEnded(generationContext?.seq, allowLooseContinuationClaim)) {
+                // 认领事件按"会不会产生正文楼层"分类：quiet/dryRun/自动触发的生成不许走普通宽松认领，
+                // 否则会误杀等待中的续写轮。分类结果直接交给桥，桥再据此决定普通认领与
+                // 「自己发起的那一次交火重试」认领（见 host-generation-bridge 的 localRetryClaim）。
+                const quietLike = generationContext ? isQuietLikeGeneration_ACU(generationContext.type, generationContext.params) : false;
+                const automaticTrigger = Boolean(generationContext?.params?.automatic_trigger);
+                const continuationEventContext = {
+                  allowOrdinaryLooseClaim: !generationContext || (!generationContext.dryRun && !quietLike && !automaticTrigger),
+                  automaticTrigger,
+                  quietLike,
+                  dryRun: Boolean(generationContext?.dryRun),
+                };
+                if (continuationBridge?.claimsGenerationEnded(generationContext?.seq, continuationEventContext)) {
                   // 桥只负责续写轮次的归属确认/循环标签校验/自动续下一轮，不再短路后续管线：
                   // 填表与正文优化由下方常规意图派发按各自的判定独立触发（解耦，见 spv 讨论）。
                   // 桥因标签缺失删楼重试时，常规管线的楼层解析（唯一候选 + 有界物化等待）与
                   // evaluateNewMessageAction 的 resolved_message_not_ai 防御会自然跳过该楼。
-                  void continuationBridge.onGenerationEnded(message_id, generationContext?.seq, allowLooseContinuationClaim);
+                  void continuationBridge.onGenerationEnded(message_id, generationContext?.seq, continuationEventContext);
                 }
                 // [触发修复] 原子捕获完整意图快照：事件参数只作为锚点，不承诺是 AI 数组下标。
                 // makeFirst 可能早于宿主把本轮 AI 回复追加进 chat，因此必须记录捕获时边界，
@@ -821,7 +844,7 @@ export   function mainInitialize_ACU() {
       const initWithChatId = async (chatId: string) => {
           lastDelayedRebuildRefreshOk_ACU = false; // [M3]
           logDebug_ACU(`ACU: Initializing with current chat on load: ${chatId}`);
-          await resetScriptStateForNewChat_ACU(chatId);
+          await resetScriptStateForNewChat_ACU(chatId, { reason: 'startup_restore' });
           await loadPresetAndCleanCharacterData_ACU();
           
           // 再次强制刷新数据和UI，确保初始加载时表格显示正确

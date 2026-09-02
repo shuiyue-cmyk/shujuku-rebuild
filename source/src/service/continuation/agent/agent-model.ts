@@ -6,7 +6,15 @@
  */
 
 import type { ContinuationAgentExecutionContext_ACU } from '../stage-execution-engine';
-import type { ContinuationInternalAiRequestIdentity_ACU, ContinuationPromptSegment_ACU, ContinuationSettings_ACU, StageTurnPacing_ACU } from '../model';
+import type {
+  ContinuationInternalAiRequestIdentity_ACU,
+  ContinuationPromptSegment_ACU,
+  ContinuationSettings_ACU,
+  StageTurnFunction_ACU,
+  StageTurnMainlineDelta_ACU,
+  StageTurnPacing_ACU,
+  StageTurnTimeAdvance_ACU,
+} from '../model';
 
 /** 楼层锚定快照挂在消息对象上的独立字段名，与首楼 `_qrf_continuation` 并列、互不干扰。 */
 export const AGENT_MODULE_FIELD_ACU = '_qrf_continuation_agent';
@@ -62,11 +70,54 @@ export interface AgentConversationSnapshot_ACU {
  * 非破坏压缩标记。存在楼层记录里而不进消息段：拼接时取 compactedThroughId 最大的标记，
  * id ≤ 该值的消息被投影掉、report 合成为最前的交接消息。删掉承载楼层即自动撤销压缩。
  */
-export interface AgentConversationCompactionMark_ACU {
+export interface AgentConversationCompactionMarkV1_ACU {
+  /** V1 历史标记没有 schemaVersion；仅在下一次成功压缩时升级。 */
+  schemaVersion?: undefined;
   compactedThroughId: number;
   report: string;
   at: number;
 }
+
+/** V2 handoff 的结构化连续性状态；报告正文由该状态确定性渲染。 */
+export interface AgentHandoffSummaryStateV2_ACU {
+  currentGoal: string;
+  effectiveConstraints: string[];
+  decisions: string[];
+  completedItems: string[];
+  pendingItems: string[];
+  blockers: string[];
+  continuityFacts: string[];
+  readKeys: string[];
+  recentTurns: string[];
+}
+
+export interface AgentConversationCompactionMetricsV2_ACU {
+  sourceFromId: number;
+  sourceThroughId: number;
+  beforeTokens: number;
+  afterTokens: number;
+  fixedPromptTokens: number;
+  reportTokens: number;
+  targetTokens: number;
+  triggerTokens: number;
+  droppedMessages: number;
+  droppedTurns: number;
+  degraded: boolean;
+  degradationReason?: string;
+}
+
+export interface AgentConversationCompactionMarkV2_ACU {
+  schemaVersion: 2;
+  compactedThroughId: number;
+  report: string;
+  summaryState: AgentHandoffSummaryStateV2_ACU;
+  at: number;
+  metrics: AgentConversationCompactionMetricsV2_ACU;
+}
+
+export type AgentConversationCompactionMark_ACU =
+  | AgentConversationCompactionMarkV1_ACU
+  | AgentConversationCompactionMarkV2_ACU;
 
 /** 单楼层的会话段记录。segment 是该楼层期间产生的消息增量；compaction 是可选的压缩标记。 */
 export interface AgentConversationFloorRecord_ACU {
@@ -176,6 +227,10 @@ export type AgentStoryArcScope_ACU = typeof AGENT_STORY_ARC_SCOPES_ACU[number];
 export const AGENT_STORY_ARC_STATUSES_ACU = ['planned', 'active', 'done'] as const;
 export type AgentStoryArcStatus_ACU = typeof AGENT_STORY_ARC_STATUSES_ACU[number];
 
+/** 卷在全书长程结构中的职责；与阶段职责同词但作用域独立。 */
+export const AGENT_VOLUME_NARRATIVE_ROLES_ACU = ['setup', 'development', 'escalation', 'turn', 'payoff', 'aftermath'] as const;
+export type AgentVolumeNarrativeRole_ACU = typeof AGENT_VOLUME_NARRATIVE_ROLES_ACU[number];
+
 /**
  * 一条故事总纲。它是跨阶段的方向锚：阶段大纲只规划 6-10 轮，没有它每个阶段都会
  * 倾向一次性用光手上的料。withheld 是「本层禁止提前翻的底牌」，stageNumbers 是
@@ -194,6 +249,46 @@ export interface AgentStoryArcEntry_ACU {
   status: AgentStoryArcStatus_ACU;
   /** 已由哪些阶段承载，作为进度锚。 */
   stageNumbers: number[];
+  /** 卷完成时引用的真实完成阶段；未完成卷为 null。 */
+  completionStageNumber: number | null;
+  /** 卷末实际达到的状态；未完成卷为空字符串。 */
+  completionState: string;
+  /** 在所有既有卷完成后追加本卷时，由既有结果推出的依据。 */
+  continuationRationale: string;
+  /** 本卷在全书结构中的职责；旧快照可缺失。 */
+  narrativeRole?: AgentVolumeNarrativeRole_ACU;
+  /** 本卷预计承载的阶段数量范围；容量锚，不是机械完成条件。 */
+  targetStageRange?: { min: number; max: number };
+  /** 本卷预计覆盖的故事内部时间。 */
+  targetTimeSpan?: string;
+  /** 本卷主线最多推进到的边界，防止提前打穿后续卷。 */
+  progressCeiling?: string;
+  /** 跨阶段持续经营的关系、利益、认知或生活副线。 */
+  sustainingThreads?: string[];
+  /** 本卷应兑现的既有期待或承诺。 */
+  payoffTargets?: string[];
+  /** 阶段容量偏离目标范围时的完成说明；不得与续卷依据混用。 */
+  completionRationale?: string;
+  retired: boolean;
+  retiredReason: string;
+}
+
+export const AGENT_CHRONOLOGY_PRECISIONS_ACU = ['exact', 'approximate', 'unknown'] as const;
+export type AgentChronologyPrecision_ACU = typeof AGENT_CHRONOLOGY_PRECISIONS_ACU[number];
+
+/** 已发生正文结算出的故事年代学记录；大纲时间计划不得写入。 */
+export interface AgentChronologyEntry_ACU {
+  id: string;
+  /** 该次转换后可用于正文定位的相对时间锚。 */
+  anchor: string;
+  /** 自故事起点累计经过时间；无法可靠量化时明确写 unknown。 */
+  elapsed: string;
+  precision: AgentChronologyPrecision_ACU;
+  /** 从上一锚点到本锚点实际发生的时间转换。 */
+  transition: string;
+  /** 支撑该事实的真实正文楼层；不得引用大纲或运行时 timeline。 */
+  evidenceIndexes: number[];
+  updatedIndex: number;
   retired: boolean;
   retiredReason: string;
 }
@@ -203,6 +298,7 @@ export interface AgentModuleRevisions_ACU {
   infoGap: number;
   constraints: number;
   storyArc: number;
+  chronology: number;
 }
 
 /** 楼层锚定的全量快照。读取=从尾向前找最近的合法快照，删楼即自动回退。 */
@@ -215,15 +311,19 @@ export interface AgentModuleSnapshot_ACU {
   infoGap: AgentInfoGapEntry_ACU[];
   constraints: AgentConstraintEntry_ACU[];
   storyArc: AgentStoryArcEntry_ACU[];
+  chronology: AgentChronologyEntry_ACU[];
 }
 
-export const AGENT_WRITABLE_MODULES_ACU = ['hooks', 'infoGap', 'constraints', 'storyArc'] as const;
+export const AGENT_WRITABLE_MODULES_ACU = ['hooks', 'infoGap', 'constraints', 'storyArc', 'chronology'] as const;
 export type AgentWritableModule_ACU = typeof AGENT_WRITABLE_MODULES_ACU[number];
 
 export const AGENT_SUBAGENT_NAMES_ACU = ['arc-architect', 'hook-cognition-maintainer', 'mainline-planner', 'beat-planner', 'continuity-reviewer'] as const;
 export type AgentSubagentName_ACU = typeof AGENT_SUBAGENT_NAMES_ACU[number];
 
 export type AgentSubagentKind_ACU = 'arc' | 'maintain' | 'plan' | 'review';
+
+/** 最终审查是 finalize 前由运行时受控触发的内部代理，不进入主 Agent 可委派名称集合。 */
+export const AGENT_FINAL_REVIEWER_NAME_ACU = 'final-reviewer';
 
 /**
  * 大纲子代理的目录名。它不走通用子代理运行时：主循环拦截对它的派工，
@@ -304,18 +404,31 @@ export interface AgentBlockAction_ACU {
  * 模型只表达意图；已完成轮次与当前轮的保护由校验层强制。
  */
 export type AgentOutlineEditOp_ACU =
-  | { op: 'set_turn_goal'; turnId: string; goal: string }
-  | { op: 'insert_turn'; nodeId: string; afterTurnId: string | null; goal: string; pacing?: StageTurnPacing_ACU }
+  | {
+      op: 'set_turn_goal';
+      turnId: string;
+      goal: string;
+      pacing?: StageTurnPacing_ACU;
+      function?: StageTurnFunction_ACU;
+      mainlineDelta?: StageTurnMainlineDelta_ACU;
+      timeAdvance?: StageTurnTimeAdvance_ACU;
+      timeAnchor?: string | null;
+    }
+  | {
+      op: 'insert_turn';
+      nodeId: string;
+      afterTurnId: string | null;
+      goal: string;
+      pacing?: StageTurnPacing_ACU;
+      function?: StageTurnFunction_ACU;
+      mainlineDelta?: StageTurnMainlineDelta_ACU;
+      timeAdvance?: StageTurnTimeAdvance_ACU;
+      timeAnchor?: string | null;
+    }
   | { op: 'remove_turn'; turnId: string }
   | { op: 'set_node_goal'; nodeId: string; goal: string };
 
-export interface AgentOutlineEditAction_ACU {
-  kind: 'edit_outline';
-  thought: string;
-  edits: AgentOutlineEditOp_ACU[];
-}
-
-export type AgentMainAction_ACU = AgentFinalizeAction_ACU | AgentDelegateAction_ACU | AgentOutlineEditAction_ACU | AgentBlockAction_ACU | AgentToolsAction_ACU;
+export type AgentMainAction_ACU = AgentFinalizeAction_ACU | AgentDelegateAction_ACU | AgentBlockAction_ACU | AgentToolsAction_ACU;
 
 /** 运行时硬边界。预留最后一轮让主 Agent 有机会正常交付而不是被突然掐断。 */
 export interface AgentRunBudget_ACU {
@@ -356,6 +469,7 @@ export interface AgentModuleDelta_ACU {
   infoGapPatches: AgentInfoGapPatch_ACU[];
   storyArc: AgentStoryArcDeltaItem_ACU[];
   storyArcPatches: AgentStoryArcPatch_ACU[];
+  chronology: AgentChronologyDeltaItem_ACU[];
   constraintProposals: string[];
 }
 
@@ -368,6 +482,16 @@ export interface AgentStoryArcPatch_ACU {
   withheld?: string;
   status?: AgentStoryArcStatus_ACU;
   stageNumbers?: number[];
+  completionStageNumber?: number | null;
+  completionState?: string;
+  continuationRationale?: string;
+  narrativeRole?: AgentVolumeNarrativeRole_ACU;
+  targetStageRange?: { min: number; max: number };
+  targetTimeSpan?: string;
+  progressCeiling?: string;
+  sustainingThreads?: string[];
+  payoffTargets?: string[];
+  completionRationale?: string;
 }
 
 export interface AgentStoryArcDeltaItem_ACU {
@@ -379,7 +503,19 @@ export interface AgentStoryArcDeltaItem_ACU {
   escalation: string;
   withheld: string;
   status: AgentStoryArcStatus_ACU;
+  /** upsert 时模型是否明确写了 status；省略时对既有条目保留原状态，而不是回落成 planned。 */
+  statusProvided?: boolean;
   stageNumbers: number[];
+  completionStageNumber: number | null;
+  completionState: string;
+  continuationRationale: string;
+  narrativeRole?: AgentVolumeNarrativeRole_ACU;
+  targetStageRange?: { min: number; max: number };
+  targetTimeSpan?: string;
+  progressCeiling?: string;
+  sustainingThreads?: string[];
+  payoffTargets?: string[];
+  completionRationale?: string;
   reason: string;
 }
 
@@ -426,6 +562,17 @@ export interface AgentInfoGapDeltaItem_ACU {
   reason: string;
 }
 
+export interface AgentChronologyDeltaItem_ACU {
+  action: 'upsert' | 'retire';
+  id: string;
+  anchor: string;
+  elapsed: string;
+  precision: AgentChronologyPrecision_ACU;
+  transition: string;
+  evidenceIndexes: number[];
+  reason: string;
+}
+
 /** 子代理维护类的完整输出。资料不足时不再用 needMore 申请重跑，而是在小循环里直接输出 read 工具调用。 */
 export interface AgentMaintainerOutput_ACU {
   summary: string;
@@ -450,6 +597,17 @@ export interface AgentReviewerOutput_ACU {
   fixes: string[];
 }
 
+/** 发送前最终审查的完整输出；只读反馈由 #p5 状态机回灌主 Agent。 */
+export interface AgentFinalReviewerOutput_ACU {
+  verdict: AgentReviewVerdict_ACU;
+  summary: string;
+  emotionFindings: string[];
+  worldFindings: string[];
+  logicFindings: string[];
+  requiredFixes: string[];
+  preserve: string[];
+}
+
 /** 主 Agent 循环最终交付给宿主装配器的结果，字段形状与旧生成器保持一致。 */
 export interface ContinuationAgentTurnPlanResult_ACU {
   instruction: string;
@@ -466,8 +624,6 @@ export interface ContinuationAgentTurnPlanRequest_ACU {
   isInternalRequestCurrent: (identity: ContinuationInternalAiRequestIdentity_ACU) => boolean;
   /** 大纲操作回调，由编排器在租约内执行。正文重试轮不注入，此时大纲派工被拒绝回灌。 */
   applyOutline?: (instruction: string) => Promise<AgentOutlineOpResult_ACU>;
-  /** 大纲句级编辑回调，由编排器在租约内执行。正文重试轮不注入。 */
-  applyOutlineEdits?: (edits: AgentOutlineEditOp_ACU[]) => Promise<{ summary: string }>;
   signal?: AbortSignal | null;
 }
 

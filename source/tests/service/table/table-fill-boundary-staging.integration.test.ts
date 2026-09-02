@@ -75,6 +75,21 @@ vi.mock('../../../src/data/storage/chat-history', async importOriginal => {
   };
 });
 
+// 真实 replay 仍走真实现，只在每次边界批量 replay 完成后回调钩子：
+// 用于模拟「候选校验期间用户切聊」这一异步边界。
+const replayHooks = vi.hoisted(() => ({ afterBoundaryReplay: null as null | (() => void) }));
+vi.mock('../../../src/service/table/storage-frame-v2-replay', async importOriginal => {
+  const actual = await importOriginal<typeof import('../../../src/service/table/storage-frame-v2-replay')>();
+  return {
+    ...actual,
+    loadTableStatesAtBoundariesFromFramesV2Detailed_ACU: vi.fn(async (...args: any[]) => {
+      const result = await (actual as any).loadTableStatesAtBoundariesFromFramesV2Detailed_ACU(...args);
+      replayHooks.afterBoundaryReplay?.();
+      return result;
+    }),
+  };
+});
+
 import { buildCanonicalFullCheckpoint_ACU } from '../../../src/service/table/canonical-checkpoint-builder';
 import { commitStagedSheetsAtFullBoundaryAtomic_ACU } from '../../../src/service/table/table-fill-boundary-staging';
 import { loadTableStateFromFramesV2Detailed_ACU } from '../../../src/service/table/storage-frame-v2-replay';
@@ -170,6 +185,7 @@ describe('commitStagedSheetsAtFullBoundaryAtomic_ACU 边界汇合（计划 5.4�
     mocks.settings.dataIsolationCode = '';
     mocks.chatIdentifier = 'boundary-staging-test-chat';
     mocks.isolationKey = '';
+    replayHooks.afterBoundaryReplay = null;
   });
 
   it('把 staging 累计快照原子折叠为原 full frame 上的 sheet_rebase', async () => {
@@ -286,9 +302,9 @@ describe('commitStagedSheetsAtFullBoundaryAtomic_ACU 边界汇合（计划 5.4�
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.diagnosticCode).toBe('staging_chat_scope_mismatch');
-    // 断言锚定守卫消息的稳定语义（staging 与当前聊天不一致），不锚定具体措辞变体。
-    expect(result.error).toContain('聊天不一致');
+    expect(result.diagnosticCode).toBe('staging_scope_changed');
+    // 断言锚定守卫消息的稳定语义（作用域标识已切换），不锚定具体措辞变体。
+    expect(result.error).toContain('已切换');
     // 旧聊天 staging 不得折叠进当前聊天：帧未改写，宿主零保存。
     expect(JSON.stringify(mocks.chat)).toEqual(JSON.stringify(before));
     expect(mocks.saveChatStrict).not.toHaveBeenCalled();
@@ -310,11 +326,181 @@ describe('commitStagedSheetsAtFullBoundaryAtomic_ACU 边界汇合（计划 5.4�
 
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.diagnosticCode).toBe('boundary_commit_failed');
+    expect(result.diagnosticCode).toBe('boundary_strict_save_failed');
     expect(result.error).toContain('严格保存失败');
     // chat 原位回滚：原 full frame 未被修改。
     expect(JSON.stringify(mocks.chat)).toEqual(JSON.stringify(before));
     const originalTag = mocks.chat[6]?.TavernDB_ACU_IsolatedData?.[isolationKey];
     expect(originalTag?.storageFrame?.perSheetCheckpoints?.sheet_a).toBeUndefined();
+  });
+
+  it('候选校验期间才切聊时，落盘前二次复检同样 fail-closed（本库 T18 双重复检）', async () => {
+    mocks.chat.push(...buildV2ChatWithFormalFull());
+    const before = JSON.parse(JSON.stringify(mocks.chat));
+    // live replay 完成后切换聊天标识：事务入口的复检已经放行，只有落盘前的二次复检拦得住。
+    replayHooks.afterBoundaryReplay = () => { mocks.chatIdentifier = 'switched-mid-replay'; };
+
+    const result = await commitStagedSheetsAtFullBoundaryAtomic_ACU('run-mid-replay-switch', {
+      originalFullIndex: 6,
+      stagedSnapshot: { sheet_a: sheet('表A', [['row_id', '值'], ['3', 'a3']]) },
+      targetSheetKeys: ['sheet_a'],
+      chatKey: 'boundary-staging-test-chat',
+      isolationKey: mocks.isolationKey,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.diagnosticCode).toBe('staging_chat_scope_mismatch');
+    expect(result.error).toContain('已切换');
+    // 二次复检必须在任何改写之前：live chat 逐字节不变，宿主零保存。
+    expect(JSON.stringify(mocks.chat)).toEqual(JSON.stringify(before));
+    expect(mocks.saveChatStrict).not.toHaveBeenCalled();
+  });
+
+  function buildChatWithNonTargetSuffix(options: {
+    fullIndex: number;
+    suffixIndex: number;
+    headIndex: number;
+    targetSuffix?: boolean;
+  }): { chat: any[]; sheetA120: any; sheetB100: any; sheetBStaged: any } {
+    const mate = { type: 'acu' };
+    const sheetA100 = sheet('表A', [['row_id', '值'], ['1', 'a-at-full']]);
+    const sheetB100 = sheet('表B', [['row_id', '值'], ['1', 'b-at-full']]);
+    const sheetA120 = sheet('表A', [['row_id', '值'], ['1', 'a-at-suffix']]);
+    const sheetBStaged = sheet('表B', [['row_id', '值'], ['1', 'b-at-full'], ['2', 'b-staged']]);
+    const sheetBSuffix = sheet('表B', [['row_id', '值'], ['1', 'b-at-suffix']]);
+    const fullCheckpointResult = buildCanonicalFullCheckpoint_ACU({
+      createdAt: 1000,
+      reason: 'manual',
+      data: { mate, sheet_a: sheetA100, sheet_b: sheetB100 },
+      event: { filledSheetKeys: ['sheet_a', 'sheet_b'], changedSheetKeys: ['sheet_a', 'sheet_b'], groupKeys: [] },
+      context: { messageIndex: options.fullIndex, aiFloor: 1, isolationKey: mocks.isolationKey, reason: 'manual' },
+    });
+    if (!fullCheckpointResult.checkpoint) throw new Error(`构造 full checkpoint 失败：${fullCheckpointResult.error}`);
+    const chat: any[] = [];
+    for (let index = 0; index <= options.headIndex; index += 1) {
+      if (index === options.fullIndex) {
+        chat.push({
+          is_user: false,
+          TavernDB_ACU_IsolatedData: {
+            [mocks.isolationKey]: {
+              _acu_storage_version: 2,
+              storageFrame: {
+                version: 2,
+                checkpoint: fullCheckpointResult.checkpoint,
+                headRevision: 'formal-root',
+                logEntries: [],
+              },
+            },
+          },
+        });
+        continue;
+      }
+      if (index === options.suffixIndex) {
+        const operations = options.targetSuffix
+          ? [{ kind: 'sheet_replace', sheetKey: 'sheet_b', sheet: sheetBSuffix, reason: 'manual_crud' as const }]
+          : [{ kind: 'sheet_replace', sheetKey: 'sheet_a', sheet: sheetA120, reason: 'manual_crud' as const }];
+        chat.push({
+          is_user: false,
+          TavernDB_ACU_IsolatedData: {
+            [mocks.isolationKey]: {
+              _acu_storage_version: 2,
+              storageFrame: {
+                version: 2,
+                logEntries: [{
+                  seq: 1,
+                  entryId: 'suffix-edit',
+                  createdAt: 2000,
+                  source: 'manual_crud',
+                  targetMessageIndex: options.suffixIndex,
+                  aiFloor: 2,
+                  filledSheetKeys: [],
+                  changedSheetKeys: [options.targetSuffix ? 'sheet_b' : 'sheet_a'],
+                  operations,
+                }],
+              },
+            },
+          },
+        });
+        continue;
+      }
+      chat.push({ is_user: index % 2 === 1, mes: `m${index}` });
+    }
+    return { chat, sheetA120, sheetB100, sheetBStaged };
+  }
+
+  it('full=100/A@120/head=122：只重填 B 时保留 A 的 checkpoint 后合法增量', async () => {
+    const fixture = buildChatWithNonTargetSuffix({ fullIndex: 100, suffixIndex: 120, headIndex: 122 });
+    mocks.chat.push(...fixture.chat);
+
+    const result = await commitStagedSheetsAtFullBoundaryAtomic_ACU('run-100-120-122', {
+      originalFullIndex: 100,
+      stagedSnapshot: { sheet_b: fixture.sheetBStaged },
+      targetSheetKeys: ['sheet_b'],
+      chatKey: mocks.chatIdentifier,
+      isolationKey: mocks.isolationKey,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.verifiedHeadSnapshot.sheet_a.content).toEqual(fixture.sheetA120.content);
+    expect(result.verifiedHeadSnapshot.sheet_b.content).toEqual(fixture.sheetBStaged.content);
+
+    const replayHead = await loadTableStateFromFramesV2Detailed_ACU(mocks.chat, mocks.isolationKey, {
+      maxMessageIndex: 122,
+      updateRuntimeState: false,
+      compatibilityMode: 'disabled',
+    });
+    expect(JSON.stringify(replayHead?.data?.sheet_a?.content)).toEqual(JSON.stringify(fixture.sheetA120.content));
+    expect(JSON.stringify(replayHead?.data?.sheet_b?.content)).toEqual(JSON.stringify(fixture.sheetBStaged.content));
+
+    const fullFrames = mocks.chat.filter((message: any) => message?.TavernDB_ACU_IsolatedData?.[mocks.isolationKey]?.storageFrame?.checkpoint?.kind === 'full');
+    expect(fullFrames).toHaveLength(1);
+    expect(mocks.chat[100].TavernDB_ACU_IsolatedData[mocks.isolationKey].storageFrame.logEntries).toEqual([]);
+    expect(mocks.chat[120].TavernDB_ACU_IsolatedData[mocks.isolationKey].storageFrame.logEntries).toHaveLength(1);
+  });
+
+  it('目标表 checkpoint 后存在 suffix log 时，head 校验允许 suffix 继续生效', async () => {
+    const fixture = buildChatWithNonTargetSuffix({ fullIndex: 6, suffixIndex: 8, headIndex: 10, targetSuffix: true });
+    mocks.chat.push(...fixture.chat);
+    const stagedB = sheet('表B', [['row_id', '值'], ['1', 'b-rebased']]);
+
+    const result = await commitStagedSheetsAtFullBoundaryAtomic_ACU('run-target-suffix', {
+      originalFullIndex: 6,
+      stagedSnapshot: { sheet_b: stagedB },
+      targetSheetKeys: ['sheet_b'],
+      chatKey: mocks.chatIdentifier,
+      isolationKey: mocks.isolationKey,
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const replayHead = await loadTableStateFromFramesV2Detailed_ACU(mocks.chat, mocks.isolationKey, {
+      maxMessageIndex: 10,
+      updateRuntimeState: false,
+      compatibilityMode: 'disabled',
+    });
+    expect(JSON.stringify(replayHead?.data?.sheet_b?.content)).not.toEqual(JSON.stringify(stagedB.content));
+    expect(replayHead?.data?.sheet_b?.content?.[1]?.[1]).toBe('b-at-suffix');
+  });
+
+  it('stagedSnapshot 混入非目标表时只折叠目标表，非目标 sheet_rebase 不得出现在原根上', async () => {
+    mocks.chat.push(...buildV2ChatWithFormalFull());
+
+    const result = await commitStagedSheetsAtFullBoundaryAtomic_ACU('run-nontarget-in-overlay', {
+      originalFullIndex: 6,
+      stagedSnapshot: {
+        sheet_a: sheet('表A', [['row_id', '值'], ['1', 'a1'], ['2', 'a2'], ['9', 'a9']]),
+        sheet_b: sheet('表B', [['row_id', '值'], ['1', 'must-not-be-persisted']]),
+      },
+      targetSheetKeys: ['sheet_a'],
+      chatKey: mocks.chatIdentifier,
+      isolationKey: mocks.isolationKey,
+    });
+
+    expect(result.ok).toBe(true);
+    const frame = mocks.chat[6]?.TavernDB_ACU_IsolatedData?.[mocks.isolationKey]?.storageFrame;
+    expect(frame?.perSheetCheckpoints?.sheet_a?.timeline?.kind).toBe('sheet_rebase');
+    expect(frame?.perSheetCheckpoints?.sheet_b).toBeUndefined();
   });
 });

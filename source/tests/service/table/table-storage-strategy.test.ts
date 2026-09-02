@@ -604,6 +604,19 @@ describe('table-storage-strategy', () => {
       })!;
     }
 
+    it('接受 boundary_commit_head 来源的 verified head envelope 并 hydrate 活跃 provider', async () => {
+      await initStorageProvider();
+      const envelope = buildEnvelope({ source: 'boundary_commit_head' });
+      const replayCallsBefore = mockLoadOrCreateJsonTableFromChatHistory.mock.calls.length;
+
+      const result = await hydrateStorageProviderFromSnapshot_ACU(envelope);
+
+      expect(result).toMatchObject({ ok: true, degraded: false });
+      expect(mockLoadOrCreateJsonTableFromChatHistory.mock.calls.length).toBe(replayCallsBefore);
+      expect(getActiveStorageProvider()!.loadFromData).toHaveBeenCalledOnce();
+      expect(getActiveStorageProvider()!.getCurrentData()).toEqual(envelope.data);
+    });
+
     it('同一 canonical 输入经 hydrate 后 provider 持有相同数据（不触发聊天 replay）', async () => {
       await initStorageProvider();
       const createdCount = allCreatedProviders.length;

@@ -439,6 +439,11 @@ export function didSqliteFallbackAfterReload_ACU(_expectedModeBeforeReload: Stor
 // 内部工具函数
 // ═══════════════════════════════════════════════════════════════
 
+/** 创建不发布到活跃 runtime 的 SQLite provider，仅供单次填表 run 的隔离 staging 使用。 */
+export function createDetachedSqlTableService_ACU(): SqlTableService {
+  return new SqlTableService({ isolatedRuntime: true });
+}
+
 /** 根据模式创建 Provider 实例（原生模式已移除，恒为 SQLite） */
 function createProvider(_mode: StorageMode): ITableStorageProvider {
   return new SqlTableService();

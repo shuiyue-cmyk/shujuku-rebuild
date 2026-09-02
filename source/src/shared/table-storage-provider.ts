@@ -207,6 +207,13 @@ export interface ITableStorageProvider {
   getCurrentData(): TableDataObject_ACU | null;
 
   /**
+   * 严格导出 live 引擎当前内容，绝不回落到可能陈旧的共享 JSON 视图。
+   * 引擎未就绪 / 导出失败时返回 null，由调用方决定回落策略（填表基底回落到聊天回放）。
+   * 仅 SQLite provider 实现。
+   */
+  exportLiveRuntimeDataStrict_ACU?(): TableDataObject_ACU | null;
+
+  /**
    * 在公共提交模型内替换完整运行时数据。
    * 注意：只负责运行时更新，不负责持久化聊天记录。
    */

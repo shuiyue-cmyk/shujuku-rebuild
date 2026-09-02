@@ -34,6 +34,7 @@ import {
 } from '../../data/gateways/chat-gateway';
 import {
   loadSettings_ACU,
+  resetPlotWorldbookSelectionForChatChange_ACU,
   saveSettings_ACU
 } from '../settings/settings-service';
 import {
@@ -89,7 +90,12 @@ import {
       }
   }
 
-  export async function resetScriptStateForNewChat_ACU(chatFileName: string) {
+  export type ScriptStateResetReason_ACU = 'chat_changed' | 'startup_restore';
+
+  export async function resetScriptStateForNewChat_ACU(
+    chatFileName: string,
+    { reason = 'startup_restore' }: { reason?: ScriptStateResetReason_ACU } = {},
+  ) {
     // 修复：当增量更新失败时，chatFileName 可能会暂时变为 null。
     // 之前的逻辑会清除数据库状态，导致"初始化失败"的错误。
     // 新逻辑：如果收到的 chatFileName 无效，则记录一个警告并忽略此事件，
@@ -127,6 +133,10 @@ import {
     // [FIX] Reload all settings to ensure template is not stale for new chats.
     // MUST be called AFTER setting currentChatFileIdentifier_ACU so it loads the correct character settings.
     loadSettings_ACU();
+
+    if (reason === 'chat_changed') {
+      resetPlotWorldbookSelectionForChatChange_ACU();
+    }
 
     // 当前角色卡绑定在后续读取时重新解析；这里只清除上一会话的内存快照。
     // 不得删除或重写旧世界书中的持久 Agent state。

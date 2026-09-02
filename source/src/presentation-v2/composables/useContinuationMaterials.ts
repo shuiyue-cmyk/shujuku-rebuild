@@ -1,14 +1,16 @@
 import { reactive, ref } from 'vue';
 import {
   readAgentModuleSnapshot_ACU,
+  readAgentModuleSnapshotDiagnostics_ACU,
   replaceAgentModuleSnapshotByUser_ACU,
+  type AgentModuleSnapshotReadDiagnostics_ACU,
 } from '../../service/continuation/agent/agent-module-store';
 import { ContinuationValidationError_ACU } from '../../service/continuation/model';
 import type { AgentModuleSnapshot_ACU } from '../../service/continuation/agent/agent-model';
 import { useToastStore } from '../stores/toast-store';
 
-/** 用户可分模块编辑的四项资料。schemaVersion / settledThroughIndex 等运行时字段不进草稿。 */
-export const CONTINUATION_MATERIAL_MODULES_ACU = ['hooks', 'infoGap', 'constraints', 'storyArc'] as const;
+/** 用户可分模块编辑的五项资料。schemaVersion / settledThroughIndex 等运行时字段不进草稿。 */
+export const CONTINUATION_MATERIAL_MODULES_ACU = ['hooks', 'infoGap', 'constraints', 'storyArc', 'chronology'] as const;
 export type ContinuationMaterialModule_ACU = typeof CONTINUATION_MATERIAL_MODULES_ACU[number];
 
 export const CONTINUATION_MATERIAL_MODULE_LABELS_ACU: Record<ContinuationMaterialModule_ACU, string> = {
@@ -16,6 +18,7 @@ export const CONTINUATION_MATERIAL_MODULE_LABELS_ACU: Record<ContinuationMateria
   infoGap: '认知与信息差',
   constraints: '长期约束',
   storyArc: '故事总纲',
+  chronology: '故事年代学账本',
 };
 
 interface ModuleDraftState_ACU {
@@ -52,11 +55,14 @@ export function useContinuationMaterials() {
   const toast = useToastStore();
   const snapshot = ref<AgentModuleSnapshot_ACU | null>(null);
   const loadError = ref('');
+  /** 最近一次读取的来源诊断：采用了哪一楼、是否宽容抢救、有哪些损坏楼层。 */
+  const diagnostics = ref<AgentModuleSnapshotReadDiagnostics_ACU>({ candidates: [], adoptedIndex: null, salvaged: false });
   const modules = reactive<Record<ContinuationMaterialModule_ACU, ModuleDraftState_ACU>>({
     hooks: emptyModuleState_ACU(),
     infoGap: emptyModuleState_ACU(),
     constraints: emptyModuleState_ACU(),
     storyArc: emptyModuleState_ACU(),
+    chronology: emptyModuleState_ACU(),
   });
 
   function resetModule(module: ContinuationMaterialModule_ACU, current: AgentModuleSnapshot_ACU): void {
@@ -67,6 +73,7 @@ export function useContinuationMaterials() {
     try {
       const current = readAgentModuleSnapshot_ACU();
       snapshot.value = current;
+      diagnostics.value = readAgentModuleSnapshotDiagnostics_ACU();
       for (const module of CONTINUATION_MATERIAL_MODULES_ACU) resetModule(module, current);
       loadError.value = '';
     } catch (caught) {
@@ -116,5 +123,5 @@ export function useContinuationMaterials() {
     }
   }
 
-  return { snapshot, loadError, modules, reload, save, discard, updateDraft };
+  return { snapshot, loadError, diagnostics, modules, reload, save, discard, updateDraft };
 }

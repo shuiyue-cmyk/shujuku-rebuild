@@ -2438,7 +2438,7 @@ function hashUserInput_ACU(text) {
 /**
  * 非负整数归一化（fallback 默认 0）
  */
-function normalizeNonNegativeInteger_ACU$1(value, fallbackValue = 0) {
+function normalizeNonNegativeInteger_ACU$2(value, fallbackValue = 0) {
     const num = Number(value);
     if (Number.isFinite(num) && num >= 0)
         return Math.floor(num);
@@ -2448,7 +2448,7 @@ function normalizeNonNegativeInteger_ACU$1(value, fallbackValue = 0) {
 /**
  * 正整数归一化（fallback 默认 1）
  */
-function normalizePositiveInteger_ACU$1(value, fallbackValue = 1) {
+function normalizePositiveInteger_ACU$2(value, fallbackValue = 1) {
     const num = Number(value);
     if (Number.isFinite(num) && num > 0)
         return Math.floor(num);
@@ -2925,8 +2925,8 @@ var utils = /*#__PURE__*/Object.freeze({
     logWarn_ACU: logWarn_ACU,
     normalizeExcludeRules_ACU: normalizeExcludeRules_ACU,
     normalizeExtractRules_ACU: normalizeExtractRules_ACU,
-    normalizeNonNegativeInteger_ACU: normalizeNonNegativeInteger_ACU$1,
-    normalizePositiveInteger_ACU: normalizePositiveInteger_ACU$1,
+    normalizeNonNegativeInteger_ACU: normalizeNonNegativeInteger_ACU$2,
+    normalizePositiveInteger_ACU: normalizePositiveInteger_ACU$2,
     parseTableTemplateJson_ACU: parseTableTemplateJson_ACU,
     stripSeedRowsFromTemplate_ACU: stripSeedRowsFromTemplate_ACU
 });
@@ -35606,7 +35606,7 @@ function validateCanonicalCheckpointData_ACU(data, context = {}) {
     }
     return result;
 }
-function isNonNegativeInteger_ACU(value) {
+function isNonNegativeInteger_ACU$1(value) {
     return Number.isInteger(value) && Number(value) >= 0;
 }
 function isPositiveInteger_ACU(value) {
@@ -35629,7 +35629,7 @@ function validateMigrationProvenanceV1_ACU(provenance) {
     const sourceIndices = provenance.legacySourceMessageIndices;
     if (!Array.isArray(sourceIndices)
         || sourceIndices.length === 0
-        || !sourceIndices.every(isNonNegativeInteger_ACU)
+        || !sourceIndices.every(isNonNegativeInteger_ACU$1)
         || sourceIndices.some((index, position) => position > 0 && index <= sourceIndices[position - 1])) {
         issues.push('invalid_source_indices');
     }
@@ -35642,10 +35642,10 @@ function validateMigrationProvenanceV1_ACU(provenance) {
     }
     const lastChangedBySheet = provenance.legacyLastChangedAiFloorBySheet;
     if (!isRecord_ACU$c(lastChangedBySheet)
-        || Object.keys(lastChangedBySheet).some(sheetKey => !sheetKey.startsWith('sheet_') || !isNonNegativeInteger_ACU(lastChangedBySheet[sheetKey]))) {
+        || Object.keys(lastChangedBySheet).some(sheetKey => !sheetKey.startsWith('sheet_') || !isNonNegativeInteger_ACU$1(lastChangedBySheet[sheetKey]))) {
         issues.push('invalid_last_changed_floor_by_sheet');
     }
-    if (!isNonNegativeInteger_ACU(provenance.targetMessageIndex))
+    if (!isNonNegativeInteger_ACU$1(provenance.targetMessageIndex))
         issues.push('invalid_target_message_index');
     if (!isPositiveInteger_ACU(provenance.targetAiFloor))
         issues.push('invalid_target_ai_floor');
@@ -42347,8 +42347,8 @@ function getRuntimeRevisionState_ACU(scopeKey) {
 }
 function getRuntimeScopeKey_ACU(parts) {
     return [
-        normalizeScopePart_ACU$1(parts.chatKey, 'current-chat'),
-        normalizeScopePart_ACU$1(parts.isolationKey, 'default'),
+        normalizeScopePart_ACU$2(parts.chatKey, 'current-chat'),
+        normalizeScopePart_ACU$2(parts.isolationKey, 'default'),
         'runtime',
     ].join('::');
 }
@@ -42433,8 +42433,8 @@ function bumpRuntimeRevision_ACU(scopeKey, writeSet) {
     return `runtime:${revision}`;
 }
 function invalidateTableRuntimeRevision_ACU(parts = {}) {
-    const chatKey = normalizeScopePart_ACU$1(parts.chatKey ?? currentChatFileIdentifier_ACU, 'current-chat');
-    const isolationKey = normalizeScopePart_ACU$1(parts.isolationKey ?? getCurrentIsolationKey_ACU(), 'default');
+    const chatKey = normalizeScopePart_ACU$2(parts.chatKey ?? currentChatFileIdentifier_ACU, 'current-chat');
+    const isolationKey = normalizeScopePart_ACU$2(parts.isolationKey ?? getCurrentIsolationKey_ACU(), 'default');
     const scopeKey = getRuntimeScopeKey_ACU({ chatKey, isolationKey });
     return bumpRuntimeRevision_ACU(scopeKey, [{ kind: 'all' }]);
 }
@@ -42452,35 +42452,35 @@ async function acquireRead_ACU(scopeKey) {
 async function acquireWrite_ACU(scopeKey) {
     return getLock_ACU(scopeKey).acquireWrite();
 }
-function normalizeScopePart_ACU$1(value, fallback) {
+function normalizeScopePart_ACU$2(value, fallback) {
     const normalized = String(value || fallback).trim();
     return normalized || fallback;
 }
 function buildTableMaintenanceScopeKey_ACU(parts) {
     return [
-        normalizeScopePart_ACU$1(parts.chatKey, 'current-chat'),
-        normalizeScopePart_ACU$1(parts.isolationKey, 'default'),
+        normalizeScopePart_ACU$2(parts.chatKey, 'current-chat'),
+        normalizeScopePart_ACU$2(parts.isolationKey, 'default'),
         'maintenance',
     ].join('::');
 }
 function buildTableSheetMutationScopeKey_ACU(parts) {
     return [
-        normalizeScopePart_ACU$1(parts.chatKey, 'current-chat'),
-        normalizeScopePart_ACU$1(parts.isolationKey, 'default'),
+        normalizeScopePart_ACU$2(parts.chatKey, 'current-chat'),
+        normalizeScopePart_ACU$2(parts.isolationKey, 'default'),
         'sheet',
         parts.sheetKey || '*',
     ].join('::');
 }
 function buildTableCommitScopeKey_ACU(parts) {
     return [
-        normalizeScopePart_ACU$1(parts.chatKey, 'current-chat'),
-        normalizeScopePart_ACU$1(parts.isolationKey, 'default'),
+        normalizeScopePart_ACU$2(parts.chatKey, 'current-chat'),
+        normalizeScopePart_ACU$2(parts.isolationKey, 'default'),
         'commit',
     ].join('::');
 }
 function captureTableRuntimeRevisionForWriteSet_ACU(writeSet, parts = {}) {
-    const chatKey = normalizeScopePart_ACU$1(parts.chatKey ?? currentChatFileIdentifier_ACU, 'current-chat');
-    const isolationKey = normalizeScopePart_ACU$1(parts.isolationKey ?? getCurrentIsolationKey_ACU(), 'default');
+    const chatKey = normalizeScopePart_ACU$2(parts.chatKey ?? currentChatFileIdentifier_ACU, 'current-chat');
+    const isolationKey = normalizeScopePart_ACU$2(parts.isolationKey ?? getCurrentIsolationKey_ACU(), 'default');
     return captureRuntimeRevisionSnapshotForScope_ACU(getRuntimeScopeKey_ACU({ chatKey, isolationKey }), normalizeTableWriteSet_ACU(writeSet));
 }
 function resolveTableWriteTargetMessageIndex_ACU(chat, requestedTargetMessageIndex) {
@@ -42606,8 +42606,8 @@ async function acquireTransactionLocks_ACU(options) {
     }
 }
 async function runTableWriteTransaction_ACU(options, task) {
-    const chatKey = normalizeScopePart_ACU$1(options.chatKey ?? currentChatFileIdentifier_ACU, 'current-chat');
-    const isolationKey = normalizeScopePart_ACU$1(options.isolationKey ?? getCurrentIsolationKey_ACU(), 'default');
+    const chatKey = normalizeScopePart_ACU$2(options.chatKey ?? currentChatFileIdentifier_ACU, 'current-chat');
+    const isolationKey = normalizeScopePart_ACU$2(options.isolationKey ?? getCurrentIsolationKey_ACU(), 'default');
     const writeSet = normalizeTableWriteSet_ACU(options.writeSet);
     const maintenanceMode = options.maintenanceMode || 'shared';
     const releases = await acquireTransactionLocks_ACU({ chatKey, isolationKey, writeSet, maintenanceMode });
@@ -47455,14 +47455,14 @@ function isFiniteNonNegativeInteger_ACU(value) {
  * 必须与"scoped kind 缺 sheetKey"（真结构畸形）区分开。
  */
 const HISTORY_GLOBAL_ARTIFACT_KINDS_ACU = new Set(['sql_batch', 'table_edit_dsl']);
-function isStringArray_ACU(value) {
+function isStringArray_ACU$1(value) {
     return Array.isArray(value) && value.every(item => typeof item === 'string');
 }
 function eventIsValidForIntroductionHistory_ACU(value) {
     return value === undefined || (isObjectRecord_ACU$2(value)
-        && isStringArray_ACU(value.filledSheetKeys)
-        && isStringArray_ACU(value.changedSheetKeys)
-        && (value.groupKeys === undefined || isStringArray_ACU(value.groupKeys))
+        && isStringArray_ACU$1(value.filledSheetKeys)
+        && isStringArray_ACU$1(value.changedSheetKeys)
+        && (value.groupKeys === undefined || isStringArray_ACU$1(value.groupKeys))
         && (value.requestId === undefined || typeof value.requestId === 'string')
         && (value.batchId === undefined || typeof value.batchId === 'string')
         && (value.error === undefined || typeof value.error === 'string'));
@@ -47479,7 +47479,7 @@ function manualRefillProgressIsValidForIntroductionHistory_ACU(value) {
     if (!isObjectRecord_ACU$2(value) || value.kind !== 'manual_refill')
         return false;
     const legacyStatus = value.status === 'in_progress' || value.status === 'complete';
-    const commonFieldsAreValid = isStringArray_ACU(value.selectedSheetKeys)
+    const commonFieldsAreValid = isStringArray_ACU$1(value.selectedSheetKeys)
         && Array.isArray(value.contextMessageIndices) && value.contextMessageIndices.every(Number.isInteger)
         && ['originalStartMessageIndex', 'targetMessageIndex', 'batchSize', 'completedUntilMessageIndex', 'updatedAt']
             .every(key => isFiniteNonNegativeNumber_ACU(value[key]))
@@ -47521,7 +47521,7 @@ function schemaDescriptorIsValidForIntroductionHistory_ACU(value, version) {
         || value.descriptorVersion !== version
         || !['uid', 'tableName', 'ddl', 'normalizedSql', 'tableSuffix'].every(key => typeof value[key] === 'string')
         || !Array.isArray(value.headers) || !value.headers.every(header => header === null || typeof header === 'string')
-        || !isStringArray_ACU(value.tableConstraints)
+        || !isStringArray_ACU$1(value.tableConstraints)
         || !Array.isArray(value.columns))
         return false;
     return value.columns.every(column => isObjectRecord_ACU$2(column)
@@ -47607,7 +47607,7 @@ function operationContainsOrCannotDisproveSheet_ACU(operation, sheetKey) {
             return !isObjectRecord_ACU$2(operation.data) || recordContainsSheet_ACU(operation.data, sheetKey);
         case 'sql_sheet_batch':
             return typeof operation.sheetKey !== 'string'
-                || !isStringArray_ACU(operation.statements)
+                || !isStringArray_ACU$1(operation.statements)
                 || (operation.params !== undefined && (!Array.isArray(operation.params)
                     || !operation.params.every(params => Array.isArray(params)
                         && params.every(value => value === null || typeof value === 'string' || typeof value === 'number'))))
@@ -56764,12 +56764,39 @@ function buildSqlSheetBatchOperations_ACU(statements, tableData, options = {}) {
     };
 }
 class SqlTableService {
-    constructor() {
+    constructor(options) {
         this.mode = 'sqlite';
         this._initialized = false;
+        this.isolatedJsonView_ACU = null;
+        this.isolatedRuntime_ACU = options?.isolatedRuntime === true;
         this.engine = new SqliteEngine();
         this.syncBridge = new SyncBridge(this.engine);
-        this.nameMapperOwner_ACU = createNameMapperOwnerToken_ACU('sql-table-service');
+        this.nameMapperOwner_ACU = createNameMapperOwnerToken_ACU(this.isolatedRuntime_ACU ? 'sql-table-service-isolated' : 'sql-table-service');
+    }
+    /** 本实例的 canonical JSON 视图：共享 runtime 读全局，隔离 runtime 读私有副本。 */
+    _readCanonicalView_ACU() {
+        return this.isolatedRuntime_ACU ? this.isolatedJsonView_ACU : currentJsonTableData_ACU;
+    }
+    /** 发布本实例的 canonical JSON 视图；隔离 runtime 只写私有副本。 */
+    _publishCanonicalView_ACU(data) {
+        if (this.isolatedRuntime_ACU) {
+            this.isolatedJsonView_ACU = data;
+            return;
+        }
+        _set_currentJsonTableData_ACU(data);
+    }
+    /** 发布中英文名映射。隔离 runtime 不占用全局映射所有权，直接视为成功。 */
+    _tryPublishNameMapper_ACU(data) {
+        if (this.isolatedRuntime_ACU)
+            return true;
+        if (!data)
+            return this._buildNameMapper({ mate: DEFAULT_MATE_ACU });
+        return this._buildNameMapper(data);
+    }
+    _releaseNameMapperIfShared_ACU() {
+        if (this.isolatedRuntime_ACU)
+            return;
+        releaseGlobalNameMapperForOwner_ACU(this.nameMapperOwner_ACU);
     }
     isReady() {
         return this._initialized && this.engine.isReady;
@@ -56780,7 +56807,7 @@ class SqlTableService {
      * 否则会出现「owner 是本实例、内容却由无所有权入口改写」的脱节。
      */
     refreshNameMapperForData_ACU(data) {
-        return this._buildNameMapper(data);
+        return this._tryPublishNameMapper_ACU(data);
     }
     createRuntimeSnapshot() {
         if (!this._initialized || !this.engine.isReady)
@@ -56791,8 +56818,8 @@ class SqlTableService {
         if (!(snapshot instanceof Uint8Array))
             throw new Error('SQLite 运行时快照无效，无法恢复。');
         // 失败时要撤回本实例写入的共享 canonical 视图，避免半成功状态污染其他读者。
-        const previousJsonView = currentJsonTableData_ACU;
-        releaseGlobalNameMapperForOwner_ACU(this.nameMapperOwner_ACU);
+        const previousJsonView = this._readCanonicalView_ACU();
+        this._releaseNameMapperIfShared_ACU();
         await this.engine.loadFromBinary(snapshot);
         this._existingTableSet = undefined;
         // 映射必须基于「刚从恢复后 engine 成功导出」的视图构建。
@@ -56804,7 +56831,7 @@ class SqlTableService {
             this._initialized = false;
             throw new Error('sqlite_snapshot_restore_failed: 快照恢复后无法导出 canonical 视图。');
         }
-        if (!this._buildNameMapper(restoredView)) {
+        if (!this._tryPublishNameMapper_ACU(restoredView)) {
             this._initialized = false;
             this._revertOwnJsonView_ACU(restoredView, previousJsonView);
             throw new Error('name_mapper_publish_rejected: 快照恢复后未能发布中英文名映射。');
@@ -56882,8 +56909,8 @@ class SqlTableService {
                 if (runtimeSeedData) {
                     this.syncBridge.loadFromTableData(runtimeSeedData, { strict: true, allowRuntimeDdlFallback: true });
                     this._validateRuntimeSchema_ACU(runtimeSeedData);
-                    _set_currentJsonTableData_ACU(runtimeSeedData);
-                    if (!this._buildNameMapper(runtimeSeedData)) {
+                    this._publishCanonicalView_ACU(runtimeSeedData);
+                    if (!this._tryPublishNameMapper_ACU(runtimeSeedData)) {
                         throw new Error('name_mapper_publish_rejected: 未能发布当前 runtime 的中英文名映射。');
                     }
                     this._initialized = true;
@@ -56907,8 +56934,8 @@ class SqlTableService {
             }
             this.syncBridge.loadFromTableData(mergedData, { strict: true, allowRuntimeDdlFallback: true });
             this._validateRuntimeSchema_ACU(mergedData);
-            _set_currentJsonTableData_ACU(mergedData);
-            if (!this._buildNameMapper(mergedData)) {
+            this._publishCanonicalView_ACU(mergedData);
+            if (!this._tryPublishNameMapper_ACU(mergedData)) {
                 throw new Error('name_mapper_publish_rejected: 未能发布当前 runtime 的中英文名映射。');
             }
             this._initialized = true;
@@ -56934,19 +56961,19 @@ class SqlTableService {
     }
     async replaceAllData(data) {
         // 替换失败不得把本实例数据永久留在共享 canonical 视图里。
-        const previousJsonView = currentJsonTableData_ACU;
+        const previousJsonView = this._readCanonicalView_ACU();
         let ownJsonView = null;
         try {
             const cloned = JSON.parse(JSON.stringify(data || {}));
-            releaseGlobalNameMapperForOwner_ACU(this.nameMapperOwner_ACU);
+            this._releaseNameMapperIfShared_ACU();
             this.engine.dispose();
             this.engine = new SqliteEngine();
             this.syncBridge = new SyncBridge(this.engine);
             await this.engine.init();
             this.syncBridge.loadFromTableData(cloned, { strict: true });
-            _set_currentJsonTableData_ACU(cloned);
+            this._publishCanonicalView_ACU(cloned);
             ownJsonView = cloned;
-            if (!this._buildNameMapper(cloned)) {
+            if (!this._tryPublishNameMapper_ACU(cloned)) {
                 throw new Error('name_mapper_publish_rejected: 未能发布替换后 runtime 的中英文名映射。');
             }
             this._initialized = true;
@@ -56961,7 +56988,7 @@ class SqlTableService {
             this._initialized = false;
             this._existingTableSet = undefined;
             this._revertOwnJsonView_ACU(ownJsonView, previousJsonView);
-            releaseGlobalNameMapperForOwner_ACU(this.nameMapperOwner_ACU);
+            this._releaseNameMapperIfShared_ACU();
             logError_ACU(`[SqlTableService] 运行时全量替换失败: ${message}`);
             return { success: false, modifiedKeys: [], appliedEdits: 0, error: message };
         }
@@ -56972,8 +56999,8 @@ class SqlTableService {
         this.syncBridge = new SyncBridge(this.engine);
         this._initialized = false;
         this._existingTableSet = undefined;
-        _set_currentJsonTableData_ACU(null);
-        releaseGlobalNameMapperForOwner_ACU(this.nameMapperOwner_ACU);
+        this._publishCanonicalView_ACU(null);
+        this._releaseNameMapperIfShared_ACU();
     }
     /**
      * 获取当前运行时的完整表格数据
@@ -56981,17 +57008,37 @@ class SqlTableService {
      */
     getCurrentData() {
         if (!this._initialized || !this.engine.isReady) {
-            return currentJsonTableData_ACU;
+            return this._readCanonicalView_ACU();
         }
         try {
-            const mate = currentJsonTableData_ACU?.mate || { type: 'acu', version: 1, updateConfigUiSentinel: 0, globalInjectionConfig: { readableEntryPlacement: { position: '', depth: 0, order: 0 }, wrapperPlacement: { position: '', depth: 0, order: 0 } } };
+            const mate = this._readCanonicalView_ACU()?.mate || { type: 'acu', version: 1, updateConfigUiSentinel: 0, globalInjectionConfig: { readableEntryPlacement: { position: '', depth: 0, order: 0 }, wrapperPlacement: { position: '', depth: 0, order: 0 } } };
             const exportedData = this.syncBridge.exportToTableData(mate);
-            _set_currentJsonTableData_ACU(exportedData);
+            this._publishCanonicalView_ACU(exportedData);
             return exportedData;
         }
         catch (e) {
             logError_ACU(`[SqlTableService] getCurrentData 失败: ${e?.message}`);
-            return currentJsonTableData_ACU;
+            return this._readCanonicalView_ACU();
+        }
+    }
+    /**
+     * 严格导出 live SQLite 当前内容；引擎未就绪或导出失败时返回 null。
+     *
+     * getCurrentData 的兜底路径按既有 dataStale 契约回落到共享 JSON 视图，那份视图可能
+     * 停留在写入前状态。填表基底与 runtime-only 物化都必须读真实引擎内容，宁可让调用方
+     * 回落到聊天回放，也不能把陈旧视图当成 live runtime 写回聊天。
+     */
+    exportLiveRuntimeDataStrict_ACU() {
+        if (!this._initialized || !this.engine.isReady) {
+            logWarn_ACU(`[SqlTableService] exportLiveRuntimeDataStrict: ${JSON_VIEW_STALE_WARNING_ACU}`);
+            return null;
+        }
+        try {
+            return this.syncBridge.exportToTableData(this._readCanonicalView_ACU()?.mate || DEFAULT_MATE_ACU);
+        }
+        catch (e) {
+            logWarn_ACU(`[SqlTableService] exportLiveRuntimeDataStrict 失败: ${e?.message || String(e)}`);
+            return null;
         }
     }
     /**
@@ -57013,7 +57060,7 @@ class SqlTableService {
         const userParams = [];
         (Array.isArray(sqlTexts) ? sqlTexts : []).forEach((sqlText, index) => {
             const normalizedStatements = normalizeSqlStatementsForRuntimeLog_ACU(sqlText);
-            const runtimeStatements = rebindSqlMutationIdentifiers_ACU(normalizedStatements, (currentJsonTableData_ACU || { mate: DEFAULT_MATE_ACU }));
+            const runtimeStatements = rebindSqlMutationIdentifiers_ACU(normalizedStatements, (this._readCanonicalView_ACU() || { mate: DEFAULT_MATE_ACU }));
             runtimeStatements.forEach(statement => {
                 userStatements.push(statement);
                 userParams.push(runtimeStatements.length === 1 ? paramsList?.[index] : undefined);
@@ -57053,7 +57100,7 @@ class SqlTableService {
         this._ensureTablesFromTemplate(scope);
         const normalizedGroups = (Array.isArray(sqlTexts) ? sqlTexts : []).map(sqlText => {
             const normalizedStatements = normalizeSqlStatementsForRuntimeLog_ACU(sqlText);
-            return rebindSqlMutationIdentifiers_ACU(normalizedStatements, (scope?.runtimeData || currentJsonTableData_ACU || { mate: DEFAULT_MATE_ACU }), scope?.templateData, { requireKnownTables: Boolean(scope?.templateData), requireKnownInsertColumns: true });
+            return rebindSqlMutationIdentifiers_ACU(normalizedStatements, (scope?.runtimeData || this._readCanonicalView_ACU() || { mate: DEFAULT_MATE_ACU }), scope?.templateData, { requireKnownTables: Boolean(scope?.templateData), requireKnownInsertColumns: true });
         });
         const userStatements = normalizedGroups.flat();
         if (userStatements.length === 0) {
@@ -57103,7 +57150,7 @@ class SqlTableService {
                 return lockEnforcement.workingData;
             });
             const tableData = result.finalizeResult;
-            _set_currentJsonTableData_ACU(tableData);
+            this._publishCanonicalView_ACU(tableData);
             const modifiedTables = extractTableNamesFromStatements(statements);
             const modifiedKeys = this._tableNamesToSheetKeys(modifiedTables);
             if (lockEnforcementStatements.length > 0 && materializedSqlTexts.length > 0) {
@@ -57155,7 +57202,7 @@ class SqlTableService {
         try {
             // 对 SQL 做规范化：结构字符兼容化 + 受约束字段值规范化
             const normalizedSql = normalizeStatementValues(normalizeSqlStructure(sql));
-            const runtimeSql = rebindSqlMutationIdentifiers_ACU([normalizedSql], (currentJsonTableData_ACU || { mate: DEFAULT_MATE_ACU }))[0];
+            const runtimeSql = rebindSqlMutationIdentifiers_ACU([normalizedSql], (this._readCanonicalView_ACU() || { mate: DEFAULT_MATE_ACU }))[0];
             const result = this.engine.run(runtimeSql, params);
             const syncedView = this._syncToJson();
             return { changes: result.changes, errors: [], ...jsonViewSyncDiagnostics_ACU('executeMutation', syncedView) };
@@ -57177,7 +57224,7 @@ class SqlTableService {
         this.engine.dispose();
         // 本实例可能已被更新的 runtime 置换。只释放自己发布的映射，
         // 否则会把新 runtime 刚发布的 schema 映射清成 unbound。
-        releaseGlobalNameMapperForOwner_ACU(this.nameMapperOwner_ACU);
+        this._releaseNameMapperIfShared_ACU();
         this._initialized = false;
         this._existingTableSet = undefined;
         logDebug_ACU('[SqlTableService] SQLite 引擎已销毁');
@@ -57192,16 +57239,16 @@ class SqlTableService {
      * 合法发布了新视图，无条件写回旧值会把它们的更新覆盖掉。
      */
     _revertOwnJsonView_ACU(ownView, previousView) {
-        if (!ownView || currentJsonTableData_ACU !== ownView)
+        if (!ownView || this._readCanonicalView_ACU() !== ownView)
             return;
-        _set_currentJsonTableData_ACU(previousView);
+        this._publishCanonicalView_ACU(previousView);
     }
     /** 重置本实例的 SQLite runtime；不触碰调用方持有的 canonical JSON 快照。 */
     _resetRuntimeForLoad_ACU() {
         // 新 runtime 在成功 hydrate 前没有可证明匹配的 schema；保留旧 mapper
         // 会让并发/重载后的外部 CRUD 把展示列解析到上一份 SQLite schema。
         // 只撤销本实例发布的映射：其他实例的映射由其自身生命周期负责。
-        releaseGlobalNameMapperForOwner_ACU(this.nameMapperOwner_ACU);
+        this._releaseNameMapperIfShared_ACU();
         this.engine.dispose();
         this.engine = new SqliteEngine();
         this.syncBridge = new SyncBridge(this.engine);
@@ -57319,7 +57366,7 @@ class SqlTableService {
     }
     _exportCurrentDataStrict() {
         try {
-            const mate = currentJsonTableData_ACU?.mate || DEFAULT_MATE_ACU;
+            const mate = this._readCanonicalView_ACU()?.mate || DEFAULT_MATE_ACU;
             return this.syncBridge.exportToTableData(mate, { strict: true });
         }
         catch (error) {
@@ -57395,9 +57442,9 @@ class SqlTableService {
      */
     _syncToJson() {
         try {
-            const mate = currentJsonTableData_ACU?.mate || { type: 'acu', version: 1, updateConfigUiSentinel: 0, globalInjectionConfig: { readableEntryPlacement: { position: '', depth: 0, order: 0 }, wrapperPlacement: { position: '', depth: 0, order: 0 } } };
+            const mate = this._readCanonicalView_ACU()?.mate || { type: 'acu', version: 1, updateConfigUiSentinel: 0, globalInjectionConfig: { readableEntryPlacement: { position: '', depth: 0, order: 0 }, wrapperPlacement: { position: '', depth: 0, order: 0 } } };
             const exportedData = this.syncBridge.exportToTableData(mate);
-            _set_currentJsonTableData_ACU(exportedData);
+            this._publishCanonicalView_ACU(exportedData);
             return exportedData;
         }
         catch (e) {
@@ -57407,14 +57454,14 @@ class SqlTableService {
     }
     /** 将 SQL 表名映射为 sheetKey */
     _tableNamesToSheetKeys(tableNames) {
-        if (!currentJsonTableData_ACU)
+        const view = this._readCanonicalView_ACU();
+        if (!view)
             return [];
         const keys = [];
-        for (const [key, value] of Object.entries(currentJsonTableData_ACU)) {
+        for (const key of Object.keys(view)) {
             if (!key.startsWith('sheet_'))
                 continue;
-            const sheet = value;
-            const runtimeTableName = getPhysicalTableNameForSheet_ACU(currentJsonTableData_ACU, key);
+            const runtimeTableName = getPhysicalTableNameForSheet_ACU(view, key);
             if (tableNames.includes(runtimeTableName))
                 keys.push(key);
         }
@@ -57442,7 +57489,7 @@ class SqlTableService {
         }
         let currentData;
         try {
-            const mate = currentJsonTableData_ACU?.mate || DEFAULT_MATE_ACU;
+            const mate = this._readCanonicalView_ACU()?.mate || DEFAULT_MATE_ACU;
             currentData = this.syncBridge.exportToTableData(mate);
         }
         catch (error) {
@@ -57500,7 +57547,7 @@ class SqlTableService {
         const missingSheets = {};
         for (const key of sheetKeys) {
             // 当前聊天模板是建表结构权威；currentJsonTableData_ACU 可能是旧运行时快照，不能让旧 DDL/CHECK 覆盖模板。
-            const liveSheet = currentJsonTableData_ACU?.[key];
+            const liveSheet = this._readCanonicalView_ACU()?.[key];
             const sheet = templateData[key] || liveSheet;
             if (!sheet)
                 continue;
@@ -57513,7 +57560,7 @@ class SqlTableService {
         if (Object.keys(missingSheets).length === 0) {
             // 不能因物理表已存在就跳过映射同步：删楼回滚/模板切换可重建
             // SQLite runtime，却不会制造缺表；此时外部 CRUD 仍需当前 schema 的列映射。
-            if (!this._buildNameMapper(currentJsonTableData_ACU || templateData)) {
+            if (!this._tryPublishNameMapper_ACU(this._readCanonicalView_ACU() || templateData)) {
                 throw new Error('name_mapper_publish_rejected: 未能发布当前 schema 的中英文名映射，已阻止后续写入。');
             }
             return;
@@ -57555,15 +57602,18 @@ class SqlTableService {
         }
         this.syncBridge.loadFromTableData(partialData, { strict: true, allowRuntimeDdlFallback: true });
         // 合并新建的表到当前 JSON 视图
-        if (currentJsonTableData_ACU) {
+        const currentView = this._readCanonicalView_ACU();
+        if (currentView) {
             for (const [key, sheet] of Object.entries(missingSheets)) {
-                currentJsonTableData_ACU[key] = sheet;
+                currentView[key] = sheet;
             }
+            if (this.isolatedRuntime_ACU)
+                this.isolatedJsonView_ACU = currentView;
         }
         else {
-            _set_currentJsonTableData_ACU(templateData);
+            this._publishCanonicalView_ACU(templateData);
         }
-        if (!this._buildNameMapper(currentJsonTableData_ACU || templateData)) {
+        if (!this._tryPublishNameMapper_ACU(this._readCanonicalView_ACU() || templateData)) {
             throw new Error('name_mapper_publish_rejected: 建表后未能发布中英文名映射，已阻止后续写入。');
         }
         logDebug_ACU(`[SqlTableService] 按需建表完成，当前共 ${this.engine.getTableNames().length} 张表`);
@@ -72759,7 +72809,9 @@ async function callAIWithResolvedPreset_ACU(messages, resolved, signal, lifecycl
         catch { /* 用量回调异常不允许影响调用主流程。 */ }
     };
     const apiConfig = resolved.apiConfig || {};
-    const maxTokens = apiConfig.max_tokens ?? apiConfig.maxTokens ?? 4096;
+    const presetMaxTokens = apiConfig.max_tokens ?? apiConfig.maxTokens ?? 4096;
+    const outputTokenFloor = Number.isFinite(extras?.minOutputTokens) ? Math.max(0, Math.trunc(extras.minOutputTokens)) : 0;
+    const maxTokens = Math.max(presetMaxTokens, outputTokenFloor);
     // 酒馆主 API（tavern / useMainApi）已剥离，恒走自定义 chat-completions 路径
     if (!apiConfig.url || !apiConfig.model) {
         throw new Error('自定义 API 的 URL 或模型未配置。');
@@ -73638,13 +73690,13 @@ function normalizePlotTask_ACU(task, { index = 0, fallbackTask = null } = {}) {
         extractTags: typeof cloned.extractTags === 'string' ? cloned.extractTags : (fallback?.extractTags || ''),
         extractInjectTags: typeof cloned.extractInjectTags === 'string' ? cloned.extractInjectTags : (fallback?.extractInjectTags || ''),
         finalDirectiveTemplate: typeof cloned.finalDirectiveTemplate === 'string' ? cloned.finalDirectiveTemplate : (fallback?.finalDirectiveTemplate || ''),
-        minLength: normalizeNonNegativeInteger_ACU$1(cloned.minLength, fallback?.minLength ?? 0),
-        maxRetries: normalizePositiveInteger_ACU$1(cloned.maxRetries ?? cloned.loopSettings?.maxRetries, fallback?.maxRetries ?? DEFAULT_PLOT_SETTINGS_ACU.loopSettings?.maxRetries ?? 3),
+        minLength: normalizeNonNegativeInteger_ACU$2(cloned.minLength, fallback?.minLength ?? 0),
+        maxRetries: normalizePositiveInteger_ACU$2(cloned.maxRetries ?? cloned.loopSettings?.maxRetries, fallback?.maxRetries ?? DEFAULT_PLOT_SETTINGS_ACU.loopSettings?.maxRetries ?? 3),
         mergeStrategy: typeof cloned.mergeStrategy === 'string' && cloned.mergeStrategy.trim()
             ? cloned.mergeStrategy.trim()
             : (fallback?.mergeStrategy || 'append'),
-        stage: normalizePositiveInteger_ACU$1(cloned.stage, fallback?.stage ?? 1),
-        order: normalizeNonNegativeInteger_ACU$1(cloned.order, fallback?.order ?? index),
+        stage: normalizePositiveInteger_ACU$2(cloned.stage, fallback?.stage ?? 1),
+        order: normalizeNonNegativeInteger_ACU$2(cloned.order, fallback?.order ?? index),
         description: normalizeOptionalString_ACU(cloned.description, fallback?.description),
         triggerWhen: normalizeOptionalString_ACU(cloned.triggerWhen, fallback?.triggerWhen),
         agentControl: normalizePlotTaskAgentControl_ACU(cloned.agentControl, fallback?.agentControl),
@@ -73688,7 +73740,7 @@ function syncLegacyPlotSettingsFromTask_ACU(plotSettings, task) {
     const normalizedPromptGroup = getPlotPromptGroupFromSource_ACU(task);
     plotSettings.promptGroup = JSON.parse(JSON.stringify(normalizedPromptGroup));
     plotSettings.extractTags = typeof task.extractTags === 'string' ? task.extractTags : '';
-    plotSettings.minLength = normalizeNonNegativeInteger_ACU$1(task.minLength, 0);
+    plotSettings.minLength = normalizeNonNegativeInteger_ACU$2(task.minLength, 0);
     const legacyPromptTexts = getLegacyPromptTextsFromPromptGroup_ACU(normalizedPromptGroup);
     setPlotPromptContentByIdForSettings_ACU(plotSettings, 'mainPrompt', legacyPromptTexts.mainPrompt || '');
     setPlotPromptContentByIdForSettings_ACU(plotSettings, 'systemPrompt', legacyPromptTexts.systemPrompt || '');
@@ -75535,7 +75587,7 @@ function buildTaskWorldbookTriggerText_ACU(taskPromptGroup, plotContent, relayTa
 function sortPlotTaskResults_ACU(results) {
     return (Array.isArray(results) ? [...results] : [])
         .filter(Boolean)
-        .sort((a, b) => (normalizePositiveInteger_ACU$1(a?.stage, 1) - normalizePositiveInteger_ACU$1(b?.stage, 1)) || ((a?.order ?? 0) - (b?.order ?? 0)));
+        .sort((a, b) => (normalizePositiveInteger_ACU$2(a?.stage, 1) - normalizePositiveInteger_ACU$2(b?.stage, 1)) || ((a?.order ?? 0) - (b?.order ?? 0)));
 }
 function aggregatePlotTaskTags_ACU(taskResults) {
     const aggregated = new Map();
@@ -75775,7 +75827,7 @@ function resolveAgentContextMessages_ACU(sharedContext, key) {
     }
 }
 function collectRecentAiLayerPairs_ACU(messages, layerLimit) {
-    const limit = normalizePositiveInteger_ACU$1(layerLimit, 1);
+    const limit = normalizePositiveInteger_ACU$2(layerLimit, 1);
     const pairs = [];
     for (let i = messages.length - 1; i >= 0 && pairs.length < limit; i--) {
         const ai = messages[i];
@@ -76017,7 +76069,7 @@ function normalizeWorldbookRefs_ACU(value, allowedKeys, summaries) {
     return refs;
 }
 function applyGreenlightTkBudget_ACU(refs, summaries, maxBudget, maxEntries) {
-    const entryLimit = normalizePositiveInteger_ACU$1(maxEntries, refs.length || 1);
+    const entryLimit = normalizePositiveInteger_ACU$2(maxEntries, refs.length || 1);
     const tkLimit = normalizeTkBudgetNumber_ACU(maxBudget, 0);
     const tkByRef = new Map(summaries.map(summary => [refKey_ACU(summary.bookName, summary.uid), summary.tk]));
     const selected = [];
@@ -76067,12 +76119,12 @@ function sortEffectiveTasks_ACU(tasks) {
     return tasks
         .map((task, index) => ({ task, index }))
         .sort((left, right) => {
-        const leftStage = normalizePositiveInteger_ACU$1(left.task?.stage, 1);
-        const rightStage = normalizePositiveInteger_ACU$1(right.task?.stage, 1);
+        const leftStage = normalizePositiveInteger_ACU$2(left.task?.stage, 1);
+        const rightStage = normalizePositiveInteger_ACU$2(right.task?.stage, 1);
         if (leftStage !== rightStage)
             return leftStage - rightStage;
-        const leftOrder = normalizeNonNegativeInteger_ACU$1(left.task?.order, 0);
-        const rightOrder = normalizeNonNegativeInteger_ACU$1(right.task?.order, 0);
+        const leftOrder = normalizeNonNegativeInteger_ACU$2(left.task?.order, 0);
+        const rightOrder = normalizeNonNegativeInteger_ACU$2(right.task?.order, 0);
         if (leftOrder !== rightOrder)
             return leftOrder - rightOrder;
         return left.index - right.index;
@@ -76104,8 +76156,8 @@ function normalizeTaskPlan_ACU(rawPlan, enabledTasks, userOrderedTasks = []) {
             continue;
         }
         const run = item?.run !== false;
-        const effectiveStage = normalizePositiveInteger_ACU$1(item?.effectiveStage, sourceTask.stage || 1);
-        const effectiveOrder = normalizeNonNegativeInteger_ACU$1(item?.effectiveOrder, sourceTask.order || 0);
+        const effectiveStage = normalizePositiveInteger_ACU$2(item?.effectiveStage, sourceTask.stage || 1);
+        const effectiveOrder = normalizeNonNegativeInteger_ACU$2(item?.effectiveOrder, sourceTask.order || 0);
         plan.push({ taskId, run, effectiveStage, effectiveOrder, mode: String(item?.mode || '').trim(), reason: String(item?.reason || '').trim() });
         if (run) {
             selectedIds.add(taskId);
@@ -76132,7 +76184,7 @@ function normalizeTaskPlan_ACU(rawPlan, enabledTasks, userOrderedTasks = []) {
     return { plan, effectiveTasks: sortEffectiveTasks_ACU(effectiveTasks) };
 }
 function createAgentDecisionShards_ACU(summaries, candidateLimit, configuredConcurrency, minTkBudget, maxTkBudget) {
-    const candidates = summaries.slice(0, normalizePositiveInteger_ACU$1(candidateLimit, summaries.length || 1));
+    const candidates = summaries.slice(0, normalizePositiveInteger_ACU$2(candidateLimit, summaries.length || 1));
     if (candidates.length === 0)
         return [];
     const shardCount = Math.min(candidates.length, Math.max(1, Math.min(Number.MAX_SAFE_INTEGER, Math.trunc(Number(configuredConcurrency) || 1))));
@@ -76461,12 +76513,12 @@ function resolvePlotTaskApiPreset_ACU(task) {
 function sortPlotTasksForRuntime_ACU(tasks) {
     return (Array.isArray(tasks) ? [...tasks] : [])
         .filter(Boolean)
-        .sort((a, b) => (normalizePositiveInteger_ACU$1(a?.stage, 1) - normalizePositiveInteger_ACU$1(b?.stage, 1)) || ((a?.order ?? 0) - (b?.order ?? 0)));
+        .sort((a, b) => (normalizePositiveInteger_ACU$2(a?.stage, 1) - normalizePositiveInteger_ACU$2(b?.stage, 1)) || ((a?.order ?? 0) - (b?.order ?? 0)));
 }
 function groupPlotTasksByStage_ACU(tasks) {
     const stageGroups = [];
     sortPlotTasksForRuntime_ACU(tasks).forEach((task) => {
-        const stageNo = normalizePositiveInteger_ACU$1(task?.stage, 1);
+        const stageNo = normalizePositiveInteger_ACU$2(task?.stage, 1);
         let currentGroup = stageGroups[stageGroups.length - 1];
         if (!currentGroup || currentGroup.stage !== stageNo) {
             currentGroup = { stage: stageNo, tasks: [] };
@@ -76811,9 +76863,9 @@ function getPlotPromptGroupForWorldbookTrigger_ACU(promptGroup) {
 async function executeSinglePlotTask_ACU(task, sharedContext, runtimeOptions = {}) {
     const normalizedTask = normalizePlotTask_ACU(task, { index: task?.order ?? 0, fallbackTask: task || null });
     const taskLabel = normalizedTask.name || normalizedTask.id || '未命名任务';
-    const taskStage = normalizePositiveInteger_ACU$1(normalizedTask.stage, 1);
-    const maxRetries = normalizePositiveInteger_ACU$1(normalizedTask.maxRetries, sharedContext?.plotSettings?.loopSettings?.maxRetries ?? DEFAULT_PLOT_SETTINGS_ACU.loopSettings?.maxRetries ?? 3);
-    const minLength = normalizeNonNegativeInteger_ACU$1(normalizedTask.minLength, 0);
+    const taskStage = normalizePositiveInteger_ACU$2(normalizedTask.stage, 1);
+    const maxRetries = normalizePositiveInteger_ACU$2(normalizedTask.maxRetries, sharedContext?.plotSettings?.loopSettings?.maxRetries ?? DEFAULT_PLOT_SETTINGS_ACU.loopSettings?.maxRetries ?? 3);
+    const minLength = normalizeNonNegativeInteger_ACU$2(normalizedTask.minLength, 0);
     // 任务级世界书计算：基于当前任务实际使用的 {{tag}} 注入内容 + 本轮上下文触发，
     // 而不是固定使用整段上一轮剧情内容。
     // 标签来源与 renderPlotTaskMessages_ACU 一致：
@@ -77713,7 +77765,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.0.6" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.0.7" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -78416,7 +78468,8 @@ function isCanonicalSnapshotEnvelope_ACU(value) {
         && typeof candidate.lifecycleEpoch === 'number'
         && (candidate.source === 'merged_refresh'
             || candidate.source === 'post_save_replay'
-            || candidate.source === 'system_reload_replay')
+            || candidate.source === 'system_reload_replay'
+            || candidate.source === 'boundary_commit_head')
         && typeof candidate.fingerprint === 'string'
         && typeof candidate.createdAt === 'number';
 }
@@ -78802,6 +78855,10 @@ function didSqliteFallbackAfterReload_ACU(_expectedModeBeforeReload) {
 // ═══════════════════════════════════════════════════════════════
 // 内部工具函数
 // ═══════════════════════════════════════════════════════════════
+/** 创建不发布到活跃 runtime 的 SQLite provider，仅供单次填表 run 的隔离 staging 使用。 */
+function createDetachedSqlTableService_ACU() {
+    return new SqlTableService({ isolatedRuntime: true });
+}
 /** 根据模式创建 Provider 实例（原生模式已移除，恒为 SQLite） */
 function createProvider(_mode) {
     return new SqlTableService();
@@ -82885,7 +82942,7 @@ async function enforceCleanupOfCharacterWorldbook_ACU() {
         }
     }
 }
-async function resetScriptStateForNewChat_ACU(chatFileName) {
+async function resetScriptStateForNewChat_ACU(chatFileName, { reason = 'startup_restore' } = {}) {
     // 修复：当增量更新失败时，chatFileName 可能会暂时变为 null。
     // 之前的逻辑会清除数据库状态，导致"初始化失败"的错误。
     // 新逻辑：如果收到的 chatFileName 无效，则记录一个警告并忽略此事件，
@@ -82920,6 +82977,9 @@ async function resetScriptStateForNewChat_ACU(chatFileName) {
     // [FIX] Reload all settings to ensure template is not stale for new chats.
     // MUST be called AFTER setting currentChatFileIdentifier_ACU so it loads the correct character settings.
     loadSettings_ACU();
+    if (reason === 'chat_changed') {
+        resetPlotWorldbookSelectionForChatChange_ACU();
+    }
     // 当前角色卡绑定在后续读取时重新解析；这里只清除上一会话的内存快照。
     // 不得删除或重写旧世界书中的持久 Agent state。
     resetPlotAgentWorldbookSessionSnapshot_ACU();
@@ -83570,7 +83630,7 @@ async function updateImportantPersonsRelatedEntries_ACU(importantPersonsTable, i
     }
 }
 
-function normalizeScopePart_ACU(value, fallback) {
+function normalizeScopePart_ACU$1(value, fallback) {
     const normalized = String(value ?? '').trim();
     return normalized || fallback;
 }
@@ -83579,13 +83639,13 @@ function normalizeScopePart_ACU(value, fallback) {
  * Empty runtime isolation is the canonical default vector scope.
  */
 function normalizeSummaryVectorIsolationKey_ACU(value) {
-    return normalizeScopePart_ACU(value, 'default');
+    return normalizeScopePart_ACU$1(value, 'default');
 }
 function normalizeSummaryVectorIndexScope_ACU(parts) {
     return {
-        chatKey: normalizeScopePart_ACU(parts.chatKey, 'current-chat'),
+        chatKey: normalizeScopePart_ACU$1(parts.chatKey, 'current-chat'),
         isolationKey: normalizeSummaryVectorIsolationKey_ACU(parts.isolationKey),
-        sourceTableKey: normalizeScopePart_ACU(parts.sourceTableKey, 'summary'),
+        sourceTableKey: normalizeScopePart_ACU$1(parts.sourceTableKey, 'summary'),
     };
 }
 function serializeSummaryVectorIndexScope_ACU(parts) {
@@ -88909,6 +88969,91 @@ function scanTargetKeysResidue_ACU(msg, isolationKey, targetSheetKeys, messageIn
     return report;
 }
 
+/**
+ * service/table/runtime-only-pending-state.ts — 运行时未落盘变更登记。
+ *
+ * 开放 API 的 CRUD/SQL 写入允许 skipChatSave（skipSave / isImportMode）：只改 live runtime，
+ * 不写聊天 V2 帧。V2 是 operation log 语义，后续任何普通写入只追加自己的 operation，
+ * 不会像旧版那样把整份运行时快照带回聊天。于是这些行只存在于 runtime：
+ * 楼层帧里没有对应数据、表格状态显示未初始、填表基底（聊天回放）看不到它们，
+ * AI 把已存在的行重新 INSERT，提交时撞 live SQLite 的 UNIQUE 约束或把行数翻倍。
+ *
+ * 本模块按 (chatKey, isolationKey) 登记「哪些表有未落盘的运行时变更」；
+ * 真正的落盘由 runtime-only-pending-flush 在下一次普通持久化写入 / 填表开始前完成。
+ * 这里刻意不依赖任何 service 模块，避免与提交模型形成循环导入。
+ */
+const pendingByScope_ACU = new Map();
+let registeredFlusher_ACU = null;
+function normalizeScopePart_ACU(value, fallback) {
+    const normalized = String(value || fallback).trim();
+    return normalized || fallback;
+}
+function buildRuntimeOnlyPendingScopeKey_ACU(scope) {
+    return [
+        normalizeScopePart_ACU(scope.chatKey, 'current-chat'),
+        normalizeScopePart_ACU(scope.isolationKey, 'default'),
+    ].join('::');
+}
+/**
+ * 从写集提取受影响的表。任何 kind:'all' 或缺少 sheetKey 的单元都视为「全部表」，
+ * 宁可多登记也不能漏掉 runtime-only 变更。
+ */
+function extractPendingSheetKeysFromWriteSet_ACU(writeSet) {
+    if (!Array.isArray(writeSet) || writeSet.length === 0)
+        return { all: true, sheetKeys: [] };
+    const sheetKeys = new Set();
+    for (const unit of writeSet) {
+        if (!unit || unit.kind === 'all')
+            return { all: true, sheetKeys: [] };
+        const sheetKey = String(unit.sheetKey || '').trim();
+        if (!sheetKey.startsWith('sheet_'))
+            return { all: true, sheetKeys: [] };
+        sheetKeys.add(sheetKey);
+    }
+    return { all: false, sheetKeys: [...sheetKeys].sort() };
+}
+function markRuntimeOnlyPendingSheets_ACU(scope, pending) {
+    const scopeKey = buildRuntimeOnlyPendingScopeKey_ACU(scope);
+    const state = pendingByScope_ACU.get(scopeKey) || { all: false, sheetKeys: new Set() };
+    if (pending.all)
+        state.all = true;
+    for (const sheetKey of pending.sheetKeys) {
+        if (typeof sheetKey === 'string' && sheetKey.startsWith('sheet_'))
+            state.sheetKeys.add(sheetKey);
+    }
+    pendingByScope_ACU.set(scopeKey, state);
+}
+function readRuntimeOnlyPendingSheets_ACU(scope) {
+    const state = pendingByScope_ACU.get(buildRuntimeOnlyPendingScopeKey_ACU(scope));
+    if (!state || (!state.all && state.sheetKeys.size === 0))
+        return null;
+    return { all: state.all, sheetKeys: [...state.sheetKeys].sort() };
+}
+function hasRuntimeOnlyPendingSheets_ACU(scope) {
+    return readRuntimeOnlyPendingSheets_ACU(scope) !== null;
+}
+/** 不传 scope 时清空全部登记（测试/聊天切换收尾用）。 */
+function clearRuntimeOnlyPendingSheets_ACU(scope) {
+    if (!scope) {
+        pendingByScope_ACU.clear();
+        return;
+    }
+    pendingByScope_ACU.delete(buildRuntimeOnlyPendingScopeKey_ACU(scope));
+}
+/**
+ * 落盘器由 runtime-only-pending-flush 注册；提交模型通过本入口触发，
+ * 避免 table-update-commit ↔ flush 之间的直接循环导入。未注册时静默跳过。
+ */
+function registerRuntimeOnlyPendingFlusher_ACU(flusher) {
+    registeredFlusher_ACU = flusher;
+}
+async function runRegisteredRuntimeOnlyPendingFlush_ACU(scope, reason) {
+    if (!registeredFlusher_ACU || !hasRuntimeOnlyPendingSheets_ACU(scope)) {
+        return { flushed: false, sheetKeys: [] };
+    }
+    return registeredFlusher_ACU(reason);
+}
+
 class TableUpdateCommitError_ACU extends Error {
     constructor(message, category) {
         super(message);
@@ -88968,6 +89113,41 @@ const EXTERNAL_MUTATION_SOURCES_ACU = new Set([
     'raw_sql_mutation',
     'raw_sql_batch',
 ]);
+function resolvePendingScope_ACU(options) {
+    return {
+        chatKey: String(options.chatKey ?? currentChatFileIdentifier_ACU ?? ''),
+        isolationKey: String(options.isolationKey ?? getCurrentIsolationKey_ACU() ?? ''),
+    };
+}
+/**
+ * skipChatSave 的外部写入只改了 live runtime：登记受影响的表，等下一次普通持久化写入
+ * 或填表开始前统一物化进聊天，否则这些行永远不会进入楼层帧与填表基底。
+ */
+function markRuntimeOnlyPendingAfterSkipChatSave_ACU(options, revisionWriteSet, tableData) {
+    if (!EXTERNAL_MUTATION_SOURCES_ACU.has(options.source))
+        return;
+    const candidate = extractPendingSheetKeysFromWriteSet_ACU(revisionWriteSet ?? options.writeSet);
+    const pending = candidate.all
+        ? { all: false, sheetKeys: Object.keys(tableData || {}).filter(key => key.startsWith('sheet_')) }
+        : candidate;
+    if (!pending.all && pending.sheetKeys.length === 0)
+        return;
+    markRuntimeOnlyPendingSheets_ACU(resolvePendingScope_ACU(options), pending);
+}
+/**
+ * 普通持久化提交前先把已登记的 runtime-only 变更写回聊天；失败只记 warn，
+ * 不阻断本次提交（登记保留，下一次机会再试）。
+ */
+async function flushRuntimeOnlyPendingBeforeCommit_ACU(options) {
+    if (options.skipChatSave || options.skipRuntimeOnlyPendingFlush)
+        return;
+    try {
+        await runRegisteredRuntimeOnlyPendingFlush_ACU(resolvePendingScope_ACU(options), options.reason);
+    }
+    catch (error) {
+        logWarn_ACU(`[TableUpdateCommit] ${options.reason}: 运行时未落盘变更写回聊天失败，继续本次提交。`, error);
+    }
+}
 function assertNoActiveFillForExternalMutation_ACU(options) {
     if (!EXTERNAL_MUTATION_SOURCES_ACU.has(options.source))
         return;
@@ -89052,6 +89232,8 @@ async function runTableUpdateCommit_ACU(options, apply) {
             await reloadStorageProvider();
         }
         assertExpectedCommitScope_ACU(options, '迁移后');
+        await flushRuntimeOnlyPendingBeforeCommit_ACU(options);
+        assertExpectedCommitScope_ACU(options, '未落盘变更写回后');
         return await runTableWriteTransaction_ACU({
             source: options.source,
             reason: options.reason,
@@ -89115,6 +89297,9 @@ async function runTableUpdateCommit_ACU(options, apply) {
                             requiresRuntimeReload = true;
                             throw new TableUpdateCommitError_ACU(saveResult.error || `${options.reason}: persist failed`, 'infrastructure');
                         }
+                    }
+                    else {
+                        markRuntimeOnlyPendingAfterSkipChatSave_ACU(options, revisionWriteSet, applied.tableData);
                     }
                     _set_currentJsonTableData_ACU(cloneTableData_ACU(applied.tableData));
                     return {
@@ -92271,7 +92456,7 @@ function purgeTargetSheetKeysFromMessage_ACU(msg, targetSheetKeys, _messageIndex
     return purgeSheetKeysFromMessage_ACU(msg, targetSheetKeys);
 }
 
-function cloneJson_ACU$1(value) {
+function cloneJson_ACU$2(value) {
     if (value == null)
         return value;
     try {
@@ -92334,7 +92519,7 @@ function cloneSummaryVectorIndexState_ACU$1(state) {
     const rows = normalizeRows_ACU(state.rows);
     const chunks = normalizeChunks_ACU(state.chunks);
     const manifest = state.manifest && typeof state.manifest === 'object'
-        ? cloneJson_ACU$1(state.manifest)
+        ? cloneJson_ACU$2(state.manifest)
         : undefined;
     if (rows.length === 0 && !manifest)
         return null;
@@ -92368,14 +92553,14 @@ function assignSummaryVectorIndexStateToTagData_ACU(tagData, state, manifest) {
         nextState.backend = 'st-files';
         nextState.status = manifest.status;
         nextState.indexId = manifest.indexId;
-        nextState.manifest = cloneJson_ACU$1(manifest);
+        nextState.manifest = cloneJson_ACU$2(manifest);
         delete nextState.chunks;
-        tagData.summaryVectorIndexManifest = cloneJson_ACU$1(manifest);
+        tagData.summaryVectorIndexManifest = cloneJson_ACU$2(manifest);
     }
     else if (nextState.manifest) {
         nextState.backend = 'st-files';
         delete nextState.chunks;
-        tagData.summaryVectorIndexManifest = cloneJson_ACU$1(nextState.manifest);
+        tagData.summaryVectorIndexManifest = cloneJson_ACU$2(nextState.manifest);
     }
     else {
         tagData.summaryVectorIndexManifest = null;
@@ -92388,7 +92573,7 @@ function readSummaryVectorIndexStateFromTagData_ACU(tagData) {
     const state = cloneSummaryVectorIndexState_ACU$1(tagData.summaryVectorIndexState);
     const manifest = tagData.summaryVectorIndexManifest;
     if (state && manifest && !state.manifest) {
-        state.manifest = cloneJson_ACU$1(manifest);
+        state.manifest = cloneJson_ACU$2(manifest);
         state.backend = 'st-files';
         state.status = manifest.status;
         state.indexId = manifest.indexId;
@@ -92407,7 +92592,7 @@ function readSummaryVectorIndexStateFromTagData_ACU(tagData) {
             chunkCount: manifest.chunkCount,
             skippedRowCount: manifest.skippedRowCount,
             rows: [],
-            manifest: cloneJson_ACU$1(manifest),
+            manifest: cloneJson_ACU$2(manifest),
         };
     }
     return state;
@@ -93395,6 +93580,20 @@ function isRowIdAlias(value) {
 function label(sheet, key) {
     return `表「${String(sheet?.name ?? '') || key}」(${key})`;
 }
+/** 把一行种子数据收敛到目标宽度：超宽裁掉右侧多余单元格，不足补 null。返回是否发生改写。 */
+function normalizeSeedRowWidth_ACU(row, width) {
+    if (!Array.isArray(row) || width < 0)
+        return false;
+    if (row.length === width)
+        return false;
+    if (row.length > width) {
+        row.length = width;
+        return true;
+    }
+    while (row.length < width)
+        row.push(null);
+    return true;
+}
 function normalizeSheetGuideRowIds_ACU(guideData) {
     if (!guideData || typeof guideData !== 'object' || Array.isArray(guideData)) {
         return { guideData, changed: false, blockers: ['Sheet Guide 必须是对象。'] };
@@ -93436,34 +93635,44 @@ function normalizeSheetGuideRowIds_ACU(guideData) {
             continue;
         }
         const businessWidth = header.length;
+        const rows = Array.isArray(seedRows) ? seedRows : [];
+        let trimmedCellCount = 0;
+        let convergedRowCount = 0;
         if (header[0] === 'row_id') {
-            // Canonical header; only validate and normalize existing seed identities below.
+            // Canonical header; converge seed rows to the final header width below.
         }
         else if (isRowIdAlias(header[0])) {
             header[0] = 'row_id';
             changed = true;
         }
         else {
+            for (const row of rows) {
+                const before = row.length;
+                if (normalizeSeedRowWidth_ACU(row, businessWidth)) {
+                    changed = true;
+                    convergedRowCount += 1;
+                    if (before > businessWidth)
+                        trimmedCellCount += before - businessWidth;
+                }
+                row.unshift(null);
+                changed = true;
+            }
             header.unshift('row_id');
             changed = true;
-            for (const row of seedRows || []) {
-                if (row.length > businessWidth) {
-                    blockers.push(`${name} 的种子行宽度超过表头，无法安全插入 row_id。`);
-                    continue;
-                }
-                while (row.length < businessWidth)
-                    row.push(null);
-                row.unshift(null);
+        }
+        for (const row of rows) {
+            const before = row.length;
+            if (normalizeSeedRowWidth_ACU(row, header.length)) {
+                changed = true;
+                if (before !== header.length)
+                    convergedRowCount += 1;
+                if (before > header.length)
+                    trimmedCellCount += before - header.length;
             }
         }
-        const rows = Array.isArray(seedRows) ? seedRows : [];
-        if (rows.some(row => row.length > header.length)) {
-            blockers.push(`${name} 的种子行宽度超过规范化表头。`);
-            continue;
+        if (trimmedCellCount > 0) {
+            logWarn_ACU(`[SheetGuide] 超宽种子行已按最终表头收敛：sheetKey=${key}, headerWidth=${header.length}, convergedRows=${convergedRowCount}, removedCells=${trimmedCellCount}`);
         }
-        for (const row of rows)
-            while (row.length < header.length)
-                row.push(null);
         const reserved = createStableRowIdReservation_ACU(rows);
         const seen = new Set();
         for (const row of rows) {
@@ -95783,7 +95992,7 @@ function updateGlobalVectorMemoryConfigFields_ACU(patch) {
     return { ok: true };
 }
 function normalizeArchiveTriggerCount_ACU(value, fallbackValue) {
-    const normalized = normalizePositiveInteger_ACU$1(value, fallbackValue);
+    const normalized = normalizePositiveInteger_ACU$2(value, fallbackValue);
     return Math.max(1, normalized);
 }
 function cloneDefaultVectorMemoryConfig_ACU() {
@@ -95856,16 +96065,16 @@ function normalizeVectorMemoryConfig_ACU(rawConfig) {
     const source = rawConfig && typeof rawConfig === 'object' && !Array.isArray(rawConfig)
         ? rawConfig
         : {};
-    const archiveBatchSize = normalizePositiveInteger_ACU$1(source.archiveBatchSize, defaults.archiveBatchSize);
+    const archiveBatchSize = normalizePositiveInteger_ACU$2(source.archiveBatchSize, defaults.archiveBatchSize);
     const archiveTriggerCount = normalizeArchiveTriggerCount_ACU(source.archiveTriggerCount, defaults.archiveTriggerCount ?? archiveBatchSize);
-    const archiveMaxConcurrency = normalizePositiveInteger_ACU$1(source.archiveMaxConcurrency, defaults.archiveMaxConcurrency ?? 3);
+    const archiveMaxConcurrency = normalizePositiveInteger_ACU$2(source.archiveMaxConcurrency, defaults.archiveMaxConcurrency ?? 3);
     return {
         enabled: source.enabled === true,
-        threshold: normalizePositiveInteger_ACU$1(source.threshold, defaults.threshold),
+        threshold: normalizePositiveInteger_ACU$2(source.threshold, defaults.threshold),
         archiveTriggerCount,
         archiveBatchSize,
         archiveMaxConcurrency,
-        topK: normalizePositiveInteger_ACU$1(source.topK, defaults.topK),
+        topK: normalizePositiveInteger_ACU$2(source.topK, defaults.topK),
         minScore: normalizeMinScore_ACU(source.minScore, defaults.minScore),
         embeddingEndpoint: normalizeTextField_ACU(source.embeddingEndpoint, defaults.embeddingEndpoint),
         embeddingApiKey: normalizeTextField_ACU(source.embeddingApiKey, defaults.embeddingApiKey),
@@ -95879,25 +96088,25 @@ function normalizeVectorMemoryConfig_ACU(rawConfig) {
         entryComment: normalizeTextField_ACU(source.entryComment, defaults.entryComment) || defaults.entryComment,
         entryKey: normalizeTextField_ACU(source.entryKey, defaults.entryKey) || defaults.entryKey,
         hybridRetrievalEnabled: source.hybridRetrievalEnabled !== false,
-        bm25CandidateLimit: normalizePositiveInteger_ACU$1(source.bm25CandidateLimit, Number(defaults.bm25CandidateLimit) || Number(source.recallCandidateLimit) || defaults.recallCandidateLimit),
-        rrfK: normalizePositiveInteger_ACU$1(source.rrfK, Number(defaults.rrfK) || 60),
-        summaryIndexKeywordMinRows: normalizePositiveInteger_ACU$1(source.summaryIndexKeywordMinRows, defaults.summaryIndexKeywordMinRows || 100),
-        summaryChunkSentenceCount: normalizePositiveInteger_ACU$1(source.summaryChunkSentenceCount, defaults.summaryChunkSentenceCount),
+        bm25CandidateLimit: normalizePositiveInteger_ACU$2(source.bm25CandidateLimit, Number(defaults.bm25CandidateLimit) || Number(source.recallCandidateLimit) || defaults.recallCandidateLimit),
+        rrfK: normalizePositiveInteger_ACU$2(source.rrfK, Number(defaults.rrfK) || 60),
+        summaryIndexKeywordMinRows: normalizePositiveInteger_ACU$2(source.summaryIndexKeywordMinRows, defaults.summaryIndexKeywordMinRows || 100),
+        summaryChunkSentenceCount: normalizePositiveInteger_ACU$2(source.summaryChunkSentenceCount, defaults.summaryChunkSentenceCount),
         summaryPromptGroupId: normalizeTextField_ACU(source.summaryPromptGroupId, defaults.summaryPromptGroupId) || defaults.summaryPromptGroupId,
         archiveWithoutSummary: source.archiveWithoutSummary === true,
         summaryPromptGroup: normalizeKeywordPromptGroup_ACU(source.summaryPromptGroup, defaults.summaryPromptGroup || []),
         keywordApiPreset: normalizeTextField_ACU(source.keywordApiPreset, defaults.keywordApiPreset),
-        keywordContextPairCount: normalizePositiveInteger_ACU$1(source.keywordContextPairCount, defaults.keywordContextPairCount),
-        keywordGenerationMaxAttempts: normalizePositiveInteger_ACU$1(source.keywordGenerationMaxAttempts, defaults.keywordGenerationMaxAttempts || 3),
+        keywordContextPairCount: normalizePositiveInteger_ACU$2(source.keywordContextPairCount, defaults.keywordContextPairCount),
+        keywordGenerationMaxAttempts: normalizePositiveInteger_ACU$2(source.keywordGenerationMaxAttempts, defaults.keywordGenerationMaxAttempts || 3),
         keywordPromptGroup: normalizeKeywordPromptGroup_ACU(source.keywordPromptGroup, defaults.keywordPromptGroup),
-        recallCandidateLimit: normalizePositiveInteger_ACU$1(source.recallCandidateLimit, defaults.recallCandidateLimit),
-        recentFixedInjectCount: normalizePositiveInteger_ACU$1(source.recentFixedInjectCount, defaults.recentFixedInjectCount || 50),
+        recallCandidateLimit: normalizePositiveInteger_ACU$2(source.recallCandidateLimit, defaults.recallCandidateLimit),
+        recentFixedInjectCount: normalizePositiveInteger_ACU$2(source.recentFixedInjectCount, defaults.recentFixedInjectCount || 50),
         summaryIndexV2WriteEnabled: typeof source.summaryIndexV2WriteEnabled === 'boolean'
             ? source.summaryIndexV2WriteEnabled
             : defaults.summaryIndexV2WriteEnabled !== false,
         summaryIndexV2WriteScopeAllowlist: normalizeSummaryIndexV2WriteScopeAllowlist_ACU(source.summaryIndexV2WriteScopeAllowlist),
         summaryIndexRollingDeltaEnabled: source.summaryIndexRollingDeltaEnabled === true,
-        summaryIndexRollingDeltaFoldThreshold: normalizePositiveInteger_ACU$1(source.summaryIndexRollingDeltaFoldThreshold, defaults.summaryIndexRollingDeltaFoldThreshold || 15),
+        summaryIndexRollingDeltaFoldThreshold: normalizePositiveInteger_ACU$2(source.summaryIndexRollingDeltaFoldThreshold, defaults.summaryIndexRollingDeltaFoldThreshold || 15),
         summaryIndexContentPackWriteEnabled: typeof source.summaryIndexContentPackWriteEnabled === 'boolean'
             ? source.summaryIndexContentPackWriteEnabled
             : defaults.summaryIndexContentPackWriteEnabled === true,
@@ -96033,18 +96242,18 @@ function validateVectorMemoryConfig_ACU(configInput) {
 function getEffectiveSummaryVectorIndexConfig_ACU(configInput) {
     const config = normalizeVectorMemoryConfig_ACU(configInput ?? getCurrentVectorMemoryConfig_ACU());
     const defaults = defaultEffectiveConfigFallback_ACU;
-    const topK = normalizePositiveInteger_ACU$1(config.topK, defaults.topK);
+    const topK = normalizePositiveInteger_ACU$2(config.topK, defaults.topK);
     const minScore = normalizeMinScore_ACU(config.minScore, defaults.minScore);
-    const recallCandidateLimit = Math.max(topK, normalizePositiveInteger_ACU$1(config.recallCandidateLimit, defaults.recallCandidateLimit || topK));
-    const summaryChunkSentenceCount = normalizePositiveInteger_ACU$1(config.summaryChunkSentenceCount, defaults.summaryChunkSentenceCount || 2);
-    const summaryIndexArchiveMaxConcurrency = normalizePositiveInteger_ACU$1(config.summaryIndexArchiveMaxConcurrency, Number(defaults.summaryIndexArchiveMaxConcurrency) || 30);
+    const recallCandidateLimit = Math.max(topK, normalizePositiveInteger_ACU$2(config.recallCandidateLimit, defaults.recallCandidateLimit || topK));
+    const summaryChunkSentenceCount = normalizePositiveInteger_ACU$2(config.summaryChunkSentenceCount, defaults.summaryChunkSentenceCount || 2);
+    const summaryIndexArchiveMaxConcurrency = normalizePositiveInteger_ACU$2(config.summaryIndexArchiveMaxConcurrency, Number(defaults.summaryIndexArchiveMaxConcurrency) || 30);
     // T9：归档 embedding 批次的有界并发度（同时进行中的批次上限）。独立于 summaryIndexArchiveMaxConcurrency（批大小）。
-    const summaryIndexArchiveEmbeddingConcurrency = normalizePositiveInteger_ACU$1(config.summaryIndexArchiveEmbeddingConcurrency, Number(defaults.summaryIndexArchiveEmbeddingConcurrency) || 3);
-    const summaryIndexKeywordMinRows = normalizePositiveInteger_ACU$1(config.summaryIndexKeywordMinRows, Number(defaults.summaryIndexKeywordMinRows) || 100);
-    const recentFixedInjectCount = normalizePositiveInteger_ACU$1(config.recentFixedInjectCount, Number(defaults.recentFixedInjectCount) || 50);
-    const bm25CandidateLimit = Math.max(1, normalizePositiveInteger_ACU$1(config.bm25CandidateLimit, Number(defaults.bm25CandidateLimit) || recallCandidateLimit));
-    const rrfK = normalizePositiveInteger_ACU$1(config.rrfK, Number(defaults.rrfK) || 60);
-    const summaryIndexRollingDeltaFoldThreshold = normalizePositiveInteger_ACU$1(config.summaryIndexRollingDeltaFoldThreshold, Number(defaults.summaryIndexRollingDeltaFoldThreshold) || 15);
+    const summaryIndexArchiveEmbeddingConcurrency = normalizePositiveInteger_ACU$2(config.summaryIndexArchiveEmbeddingConcurrency, Number(defaults.summaryIndexArchiveEmbeddingConcurrency) || 3);
+    const summaryIndexKeywordMinRows = normalizePositiveInteger_ACU$2(config.summaryIndexKeywordMinRows, Number(defaults.summaryIndexKeywordMinRows) || 100);
+    const recentFixedInjectCount = normalizePositiveInteger_ACU$2(config.recentFixedInjectCount, Number(defaults.recentFixedInjectCount) || 50);
+    const bm25CandidateLimit = Math.max(1, normalizePositiveInteger_ACU$2(config.bm25CandidateLimit, Number(defaults.bm25CandidateLimit) || recallCandidateLimit));
+    const rrfK = normalizePositiveInteger_ACU$2(config.rrfK, Number(defaults.rrfK) || 60);
+    const summaryIndexRollingDeltaFoldThreshold = normalizePositiveInteger_ACU$2(config.summaryIndexRollingDeltaFoldThreshold, Number(defaults.summaryIndexRollingDeltaFoldThreshold) || 15);
     return {
         ...config,
         enabled: true,
@@ -96392,6 +96601,16 @@ function summarizeSettingsForLog_ACU(settings) {
         });
     }
     return safe;
+}
+/**
+ * 真实切换聊天时重置剧情世界书选择：跨聊天沿用上一份世界书配置既无意义也可能
+ * 指向新聊天不存在的世界书。只重置 plotWorldbookConfig，其余剧情设置原样保留；
+ * 填表侧的 characterSettings[charId].worldbookConfig 不在本函数作用域内。
+ */
+function resetPlotWorldbookSelectionForChatChange_ACU() {
+    ensurePlotSettingsObject_ACU();
+    settings_ACU.plotSettings.plotWorldbookConfig = buildDefaultPlotWorldbookConfig_ACU();
+    return saveSettings_ACU();
 }
 function saveSettings_ACU() {
     if (!settingsStorageReadyForSave_ACU) {
@@ -98681,7 +98900,7 @@ function renderPlotTaskList_ACU(plotSettings = getActivePlotEditorSettings_ACU()
         const isSelected = selectedTask?.id === task.id;
         const enabledText = task.enabled !== false ? '启用' : '停用';
         const enabledColor = task.enabled !== false ? 'var(--green)' : 'var(--red)';
-        const stageNo = normalizePositiveInteger_ACU$1(task?.stage, 1);
+        const stageNo = normalizePositiveInteger_ACU$2(task?.stage, 1);
         const itemHtml = `
               <button type="button" class="button acu-plot-task-item ${isSelected ? 'acu-plot-task-item--active' : ''}" data-task-id="${escapeHtml_ACU$1(task.id)}" style="display:flex; width:100%; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px; padding:10px 12px; text-align:left; border:${isSelected ? '1px solid var(--accent-primary)' : '1px solid var(--border_color_light)'}; background:${isSelected ? 'color-mix(in srgb, var(--accent-primary) 12%, var(--background_default))' : 'var(--background_default)'}; border-radius:8px;">
                   <span style="display:flex; flex-direction:column; gap:4px; min-width:0;">
@@ -98716,7 +98935,7 @@ function loadCurrentPlotTaskToUI_ACU(plotSettings = getActivePlotEditorSettings_
     $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-extract-tags`).val(selectedTask.extractTags || '');
     $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-extract-inject-tags`).val(selectedTask.extractInjectTags || '');
     $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-min-length`).val(selectedTask.minLength ?? 0);
-    $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-task-stage`).val(normalizePositiveInteger_ACU$1(selectedTask.stage, 1));
+    $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-task-stage`).val(normalizePositiveInteger_ACU$2(selectedTask.stage, 1));
     $popupInstance_ACU.find(`#${SCRIPT_ID_PREFIX_ACU}-plot-task-max-retries`).val(selectedTask.maxRetries ?? DEFAULT_PLOT_SETTINGS_ACU.loopSettings?.maxRetries ?? 3);
     setPlotTaskApiPresetSelectValue_ACU(selectedTask);
 }
@@ -98807,7 +99026,7 @@ function flushCurrentPlotTaskEditorState_ACU({ renderTaskList = false, persist =
 }
 function buildNewPlotTaskForUI_ACU(plotSettings = getActivePlotEditorSettings_ACU()) {
     const tasks = Array.isArray(plotSettings?.plotTasks) ? plotSettings.plotTasks : [];
-    const defaultStage = normalizePositiveInteger_ACU$1(tasks[tasks.length - 1]?.stage, 1);
+    const defaultStage = normalizePositiveInteger_ACU$2(tasks[tasks.length - 1]?.stage, 1);
     let serial = tasks.length + 1;
     let taskId = `plotTask${serial}`;
     while (tasks.some((task) => task && task.id === taskId)) {
@@ -100952,6 +101171,47 @@ async function handleFloorIncreaseDelay_ACU(totalAiMessages, lastTotalAiMessages
         setLastTotalAiMessages(totalAiMessages);
     }
     return undefined; // 不需要更新
+}
+
+/**
+ * service/table/manual-update-settings.ts — 手动填表 / 一键追平的独立参数解析
+ *
+ * 手动面板上的「手动处理最近 N 层」与「每 N 层合并为一次填表」是手动路径自己的设置，
+ * 与自动填表的 autoUpdateThreshold / updateBatchSize 独立。手动更新与追平都只从这里取值，
+ * 不再由 UI 层临时改写自动填表的全局设置来“桥接”。
+ */
+function normalizePositiveInteger_ACU$1(value, fallback) {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < 1)
+        return fallback;
+    return Math.floor(n);
+}
+function normalizeNonNegativeInteger_ACU$1(value, fallback) {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n < 0)
+        return fallback;
+    return Math.floor(n);
+}
+/** 手动面板的显示默认；未设置过时用它，而不是自动填表的批大小。 */
+const MANUAL_UPDATE_BATCH_SIZE_DEFAULT_ACU = 3;
+/**
+ * 「每 N 层合并为一次填表」：手动更新与一键追平共用。
+ * 未设置时回落 3，不回落到自动填表的 updateBatchSize。
+ */
+function resolveManualUpdateBatchSize_ACU() {
+    return settings_ACU.manualUpdateBatchSize == null
+        ? MANUAL_UPDATE_BATCH_SIZE_DEFAULT_ACU
+        : normalizePositiveInteger_ACU$1(settings_ACU.manualUpdateBatchSize, MANUAL_UPDATE_BATCH_SIZE_DEFAULT_ACU);
+}
+/**
+ * 「手动处理最近 N 层」。未设置过时沿用自动填表阈值作为初始默认（历史行为）；
+ * 用户在手动面板设置过之后只认手动值。
+ */
+function resolveManualUpdateContextDepth_ACU() {
+    const fallback = normalizeNonNegativeInteger_ACU$1(settings_ACU.autoUpdateThreshold, 3);
+    return settings_ACU.manualUpdateContextDepth == null
+        ? fallback
+        : normalizeNonNegativeInteger_ACU$1(settings_ACU.manualUpdateContextDepth, fallback);
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -103471,6 +103731,173 @@ class TableFillBoundaryPlanError_ACU extends Error {
         this.name = 'TableFillBoundaryPlanError_ACU';
     }
 }
+function createTableFillStagingRunContext_ACU(input) {
+    return {
+        runId: input.runId,
+        chatKey: input.chatKey,
+        isolationKey: input.isolationKey,
+        targetSheetKeys: Object.freeze([...input.targetSheetKeys]),
+        originalFullIndex: input.originalFullIndex,
+        originalFullFingerprint: input.originalFullFingerprint ?? null,
+        templateFingerprint: input.templateFingerprint,
+        overlay: createEmptyTargetOverlay_ACU(input.targetSheetKeys),
+    };
+}
+function createEmptyTargetOverlay_ACU(targetSheetKeys) {
+    return {
+        targetSheetKeys: Object.freeze([...targetSheetKeys]),
+        sheets: {},
+        lastTargetMessageIndex: null,
+        stagedBucketCount: 0,
+    };
+}
+function extractTargetOverlaySheets_ACU(data, targetSheetKeys) {
+    const sheets = {};
+    if (!data || typeof data !== 'object')
+        return sheets;
+    for (const sheetKey of targetSheetKeys) {
+        const sheet = data[sheetKey];
+        if (sheet && typeof sheet === 'object' && !Array.isArray(sheet)) {
+            sheets[sheetKey] = JSON.parse(JSON.stringify(sheet));
+        }
+    }
+    return sheets;
+}
+/**
+ * 纯函数：historicalBase + target overlay → bucket working view。
+ * 不写聊天、不写全局 runtime、不碰 provider。
+ */
+function assembleBucketWorkingView_ACU(historicalBase, overlay) {
+    const base = historicalBase && typeof historicalBase === 'object'
+        ? JSON.parse(JSON.stringify(historicalBase))
+        : {};
+    if (!overlay)
+        return base;
+    for (const sheetKey of overlay.targetSheetKeys) {
+        const overlaySheet = overlay.sheets[sheetKey];
+        if (overlaySheet && typeof overlaySheet === 'object') {
+            base[sheetKey] = JSON.parse(JSON.stringify(overlaySheet));
+        }
+    }
+    return base;
+}
+function mergeTargetOverlayFromBucket_ACU(overlay, data, targetMessageIndex) {
+    return {
+        targetSheetKeys: overlay.targetSheetKeys,
+        sheets: {
+            ...overlay.sheets,
+            ...extractTargetOverlaySheets_ACU(data, overlay.targetSheetKeys),
+        },
+        lastTargetMessageIndex: targetMessageIndex,
+        stagedBucketCount: overlay.stagedBucketCount + 1,
+    };
+}
+function readOriginalFullFrameFingerprint_ACU(chat, isolationKey, originalFullIndex) {
+    const message = chat[originalFullIndex];
+    if (!message)
+        return null;
+    const container = readIsolatedDataContainer_ACU(message);
+    const tagData = container?.[isolationKey];
+    if (!isV2TagData_ACU(tagData))
+        return null;
+    const frame = tagData.storageFrame;
+    if (!frame || frame.checkpoint?.kind !== 'full')
+        return null;
+    return getOriginalFullFrameFingerprint_ACU(frame);
+}
+function canonicalSheetFingerprint_ACU(sheet) {
+    return getTableDataFingerprint_ACU(sheet ?? null);
+}
+function failBoundary_ACU(diagnosticCode, error) {
+    return { ok: false, error, diagnosticCode };
+}
+function assertCandidateWriteSurface_ACU(liveChat, candidateChat, isolationKey, originalFullIndex, targetSheetKeys) {
+    if (!Array.isArray(liveChat) || !Array.isArray(candidateChat) || liveChat.length !== candidateChat.length) {
+        return 'candidate 改变了消息数量';
+    }
+    const targetSet = new Set(targetSheetKeys);
+    const hostReserved = new Set(['TavernDB_ACU_IsolatedData']);
+    for (let index = 0; index < liveChat.length; index += 1) {
+        const liveMessage = liveChat[index] || {};
+        const candidateMessage = candidateChat[index] || {};
+        const liveHost = {};
+        const candidateHost = {};
+        for (const [key, value] of Object.entries(liveMessage)) {
+            if (!hostReserved.has(key))
+                liveHost[key] = value;
+        }
+        for (const [key, value] of Object.entries(candidateMessage)) {
+            if (!hostReserved.has(key))
+                candidateHost[key] = value;
+        }
+        if (getTableDataFingerprint_ACU(liveHost) !== getTableDataFingerprint_ACU(candidateHost)) {
+            return `message[${index}] 宿主字段被改写`;
+        }
+        const liveIso = liveMessage.TavernDB_ACU_IsolatedData && typeof liveMessage.TavernDB_ACU_IsolatedData === 'object'
+            ? liveMessage.TavernDB_ACU_IsolatedData
+            : {};
+        const candidateIso = candidateMessage.TavernDB_ACU_IsolatedData && typeof candidateMessage.TavernDB_ACU_IsolatedData === 'object'
+            ? candidateMessage.TavernDB_ACU_IsolatedData
+            : {};
+        const isolationKeys = new Set([...Object.keys(liveIso), ...Object.keys(candidateIso)]);
+        for (const key of isolationKeys) {
+            if (key !== isolationKey) {
+                if (getTableDataFingerprint_ACU(liveIso[key] ?? null) !== getTableDataFingerprint_ACU(candidateIso[key] ?? null)) {
+                    return `message[${index}] 非目标 isolationKey 被改写`;
+                }
+                continue;
+            }
+            if (index !== originalFullIndex) {
+                if (getTableDataFingerprint_ACU(liveIso[key] ?? null) !== getTableDataFingerprint_ACU(candidateIso[key] ?? null)) {
+                    return `message[${index}] 目标 isolation 在非根楼层被改写`;
+                }
+                continue;
+            }
+            const liveTag = liveIso[key] && typeof liveIso[key] === 'object' ? liveIso[key] : {};
+            const candidateTag = candidateIso[key] && typeof candidateIso[key] === 'object' ? candidateIso[key] : {};
+            const liveFrame = (liveTag.storageFrame || {});
+            const candidateFrame = (candidateTag.storageFrame || {});
+            const liveTagRest = { ...liveTag, storageFrame: undefined };
+            const candidateTagRest = { ...candidateTag, storageFrame: undefined };
+            if (getTableDataFingerprint_ACU(liveTagRest) !== getTableDataFingerprint_ACU(candidateTagRest)) {
+                return 'full checkpoint 宿主 tag 元数据被改写';
+            }
+            if (getTableDataFingerprint_ACU(liveFrame.checkpoint ?? null) !== getTableDataFingerprint_ACU(candidateFrame.checkpoint ?? null)) {
+                return 'full checkpoint 本体被改写';
+            }
+            if (getTableDataFingerprint_ACU(liveFrame.logEntries ?? []) !== getTableDataFingerprint_ACU(candidateFrame.logEntries ?? [])) {
+                return 'logEntries 被改写';
+            }
+            if (getTableDataFingerprint_ACU(liveFrame.headRevision ?? null) !== getTableDataFingerprint_ACU(candidateFrame.headRevision ?? null)) {
+                return 'headRevision 被改写';
+            }
+            const liveFrameRest = { ...liveFrame };
+            const candidateFrameRest = { ...candidateFrame };
+            delete liveFrameRest.perSheetCheckpoints;
+            delete candidateFrameRest.perSheetCheckpoints;
+            delete liveFrameRest.checkpoint;
+            delete candidateFrameRest.checkpoint;
+            delete liveFrameRest.logEntries;
+            delete candidateFrameRest.logEntries;
+            delete liveFrameRest.headRevision;
+            delete candidateFrameRest.headRevision;
+            if (getTableDataFingerprint_ACU(liveFrameRest) !== getTableDataFingerprint_ACU(candidateFrameRest)) {
+                return 'storageFrame 其他元数据被改写';
+            }
+            const livePer = liveFrame.perSheetCheckpoints || {};
+            const candidatePer = candidateFrame.perSheetCheckpoints || {};
+            const perKeys = new Set([...Object.keys(livePer), ...Object.keys(candidatePer)]);
+            for (const sheetKey of perKeys) {
+                if (targetSet.has(sheetKey))
+                    continue;
+                if (getTableDataFingerprint_ACU(livePer[sheetKey] ?? null) !== getTableDataFingerprint_ACU(candidatePer[sheetKey] ?? null)) {
+                    return `非目标 perSheetCheckpoints[${sheetKey}] 被改写`;
+                }
+            }
+        }
+    }
+    return null;
+}
 function requireNonEmptyString_ACU(value, field) {
     const normalized = typeof value === 'string' ? value.trim() : '';
     if (!normalized) {
@@ -103586,42 +104013,28 @@ function splitMessageIndicesAtBoundary_ACU(messageIndices, originalFullIndex, fu
     return segments;
 }
 /**
- * 计划 5.4：跨 full checkpoint 分阶段提交的边界汇合（boundary commit）。
+ * 跨 full checkpoint 分阶段提交的边界汇合。
  *
- * 边界前 bucket 只进入 run 级隔离 staging（stage_only，不写聊天 V2 frame），
- * 到达原 full 边界时，本服务把 staging 累计的目标表快照原子折叠为原 full frame
- * 上的 sheet_rebase，恢复原正式根；边界后继续普通逐 bucket 持久化。
- *
- * 不变量（对应计划 §3.2）：
- *  - 单正式根：事务内复检唯一 full checkpoint（多根 fail-closed）；
- *  - 严格保存：saveChatToHostStrict_ACU 失败原位回滚，不删除已确认数据；
- *  - 边界汇合：selected sheets 等于 staging 累计快照，非目标表等于原正式根语义；
- *  - 零猜测恢复：runId/聊天标识/隔离键/目标表集合不匹配时 fail-closed。
+ * live/candidate 在同一 cutoff 上比较：
+ * - boundary 目标表 == target overlay；非目标表 == liveBoundary
+ * - head 非目标表 == liveHead；目标表必须由 candidate 完整 replay 得到，允许原 suffix log 继续生效
  */
 async function commitStagedSheetsAtFullBoundaryAtomic_ACU(runId, options) {
     const isolationKey = options.isolationKey ?? getCurrentIsolationKey_ACU();
     const chatKey = options.chatKey ?? currentChatFileIdentifier_ACU;
+    const targetSheetKeys = [...options.targetSheetKeys];
     return runTableWriteTransaction_ACU({
         source: 'manual_fill',
         reason: 'commitStagedSheetsAtFullBoundaryAtomic',
         isolationKey,
-        writeSet: [{ kind: 'all' }],
+        writeSet: targetSheetKeys.map(sheetKey => ({ kind: 'sheet', sheetKey })),
         maintenanceMode: 'exclusive',
     }, async () => {
-        const chat = getChatArray_ACU();
-        // 0. 聊天标识复检：staging 计划属于哪一份聊天，就只能汇合回那一份聊天。
-        //    run 期间切聊（CHAT_CHANGED）会让 live chat / 回放根整体换掉，此时把旧聊天的
-        //    staging 快照折叠进新聊天楼层，会产出一张“新聊天里从未出现过”的表内容。
-        //    与 §3.2「零猜测恢复」一致：不匹配即丢弃 staging 并 fail-closed。
-        const liveChatKey = String(currentChatFileIdentifier_ACU || '');
-        if (chatKey !== liveChatKey) {
-            return {
-                ok: false,
-                error: `boundary commit 拒绝执行：staging 所属聊天与当前聊天不一致（staging=${chatKey || '无标识'}, current=${liveChatKey || '无标识'}），已丢弃本次 staging 汇合。`,
-                diagnosticCode: 'staging_chat_scope_mismatch',
-            };
+        if (String(currentChatFileIdentifier_ACU || '') !== String(chatKey || '')
+            || String(getCurrentIsolationKey_ACU() || '') !== String(isolationKey || '')) {
+            return failBoundary_ACU('staging_scope_changed', 'boundary commit 复检失败：chatKey 或 isolationKey 已切换。');
         }
-        // 1. 复检唯一 full 根：同一 isolationKey 下只允许一个 full checkpoint。
+        const chat = getChatArray_ACU();
         const fullIndices = [];
         for (let index = 0; index < chat.length; index += 1) {
             const message = chat[index];
@@ -103636,51 +104049,72 @@ async function commitStagedSheetsAtFullBoundaryAtomic_ACU(runId, options) {
                 fullIndices.push(index);
         }
         if (fullIndices.length !== 1) {
-            return {
-                ok: false,
-                error: `boundary commit 拒绝执行：同一 isolationKey 下存在 ${fullIndices.length} 个 full checkpoint（${fullIndices.join(', ')}），必须唯一。`,
-                diagnosticCode: 'multiple_full_checkpoints',
-            };
+            return failBoundary_ACU('multiple_full_checkpoints', `boundary commit 拒绝执行：同一 isolationKey 下存在 ${fullIndices.length} 个 full checkpoint（${fullIndices.join(', ')}），必须唯一。`);
         }
         if (fullIndices[0] !== options.originalFullIndex) {
-            return {
-                ok: false,
-                error: `boundary commit 原 full 根不匹配：expected=${options.originalFullIndex}, actual=${fullIndices[0]}；拒绝汇合。`,
-                diagnosticCode: 'full_checkpoint_root_mismatch',
-            };
+            return failBoundary_ACU('full_checkpoint_root_mismatch', `boundary commit 原 full 根不匹配：expected=${options.originalFullIndex}, actual=${fullIndices[0]}；拒绝汇合。`);
         }
-        // 2. 取出原 full frame 完整备份（replay 的正式根）。
         const originalMessage = chat[options.originalFullIndex];
         if (!originalMessage) {
-            return { ok: false, error: `原 full checkpoint 楼层 ${options.originalFullIndex} 不存在，无法汇合。` };
+            return failBoundary_ACU('full_checkpoint_root_mismatch', `原 full checkpoint 楼层 ${options.originalFullIndex} 不存在，无法汇合。`);
         }
         const originalContainer = readIsolatedDataContainer_ACU(originalMessage) || {};
-        const originalTagData = isV2TagData_ACU(originalContainer[isolationKey])
-            ? JSON.parse(JSON.stringify(originalContainer[isolationKey]))
-            : { _acu_storage_version: 2, storageFrame: { version: 2, logEntries: [] } };
-        const frame = originalTagData.storageFrame;
-        if (frame.checkpoint?.kind !== 'full') {
-            return { ok: false, error: `原 full checkpoint 楼层 ${options.originalFullIndex} 的 frame 缺少正式 full 根。` };
+        if (!isV2TagData_ACU(originalContainer[isolationKey])) {
+            return failBoundary_ACU('full_checkpoint_root_mismatch', `原 full checkpoint 楼层 ${options.originalFullIndex} 缺少 V2 数据。`);
         }
-        // 3. 在原 full frame 的 perSheetCheckpoints 为 selected sheets 写 sheet_rebase。
+        const liveFrame = originalContainer[isolationKey].storageFrame;
+        if (liveFrame?.checkpoint?.kind !== 'full') {
+            return failBoundary_ACU('full_checkpoint_root_mismatch', `原 full checkpoint 楼层 ${options.originalFullIndex} 的 frame 缺少正式 full 根。`);
+        }
+        const liveFingerprint = getOriginalFullFrameFingerprint_ACU(liveFrame);
+        if (options.originalFullFingerprint && options.originalFullFingerprint !== liveFingerprint) {
+            return failBoundary_ACU('full_checkpoint_fingerprint_mismatch', `boundary commit 原 full 根指纹不匹配：runId=${runId}, index=${options.originalFullIndex}。`);
+        }
+        const overlaySheets = extractTargetOverlaySheets_ACU(options.stagedSnapshot, targetSheetKeys);
+        for (const sheetKey of targetSheetKeys) {
+            if (!overlaySheets[sheetKey]) {
+                return failBoundary_ACU('staging_target_snapshot_missing', `boundary commit 缺少 selected sheet 的 staging 快照：${sheetKey}。`);
+            }
+        }
+        const headIndex = Math.max(0, chat.length - 1);
+        let liveBoundary;
+        let liveHead;
+        try {
+            const liveStates = await loadTableStatesAtBoundariesFromFramesV2Detailed_ACU(chat, isolationKey, [options.originalFullIndex, headIndex], { updateRuntimeState: false, compatibilityMode: 'disabled' });
+            liveBoundary = liveStates.get(options.originalFullIndex);
+            liveHead = liveStates.get(headIndex);
+            if (!liveBoundary || liveBoundary.baseKind !== 'full_checkpoint' || !liveBoundary.data) {
+                return failBoundary_ACU('boundary_replay_mismatch', `boundary commit live boundary replay 未建立正式基底：boundary=${options.originalFullIndex}。`);
+            }
+            if (liveBoundary.requiresCheckpointConvergence || liveBoundary.compatibilityRepairs?.length) {
+                return failBoundary_ACU('candidate_replay_requires_repair', `boundary commit live boundary replay 依赖兼容修复：boundary=${options.originalFullIndex}。`);
+            }
+            if (!liveHead || liveHead.baseKind !== 'full_checkpoint' || !liveHead.data) {
+                return failBoundary_ACU('boundary_replay_mismatch', `boundary commit live head replay 未建立正式基底：boundary=${headIndex}。`);
+            }
+            if (liveHead.requiresCheckpointConvergence || liveHead.compatibilityRepairs?.length) {
+                return failBoundary_ACU('candidate_replay_requires_repair', `boundary commit live head replay 依赖兼容修复：boundary=${headIndex}。`);
+            }
+        }
+        catch (error) {
+            return failBoundary_ACU('boundary_replay_mismatch', `boundary commit live replay 验证异常：${error?.message || String(error)}`);
+        }
+        const originalTagData = JSON.parse(JSON.stringify(originalContainer[isolationKey]));
+        const frame = originalTagData.storageFrame;
         const maxSeq = Math.max(0, ...(frame.logEntries || []).map(entry => Number(entry.seq) || 0));
         const now = Date.now();
         const perSheetCheckpoints = { ...(frame.perSheetCheckpoints || {}) };
-        for (const sheetKey of options.targetSheetKeys) {
-            const sheetData = options.stagedSnapshot[sheetKey];
-            if (!sheetData || typeof sheetData !== 'object') {
-                return { ok: false, error: `boundary commit 缺少 selected sheet 的 staging 快照：${sheetKey}。`, diagnosticCode: 'staging_snapshot_mismatch' };
-            }
+        for (const sheetKey of targetSheetKeys) {
             const sheetCheckpointResult = buildCanonicalSheetCheckpoint_ACU({
                 createdAt: now,
                 reason: 'manual',
                 sheetKey,
-                data: sheetData,
+                data: overlaySheets[sheetKey],
                 event: { filledSheetKeys: [sheetKey], changedSheetKeys: [sheetKey], groupKeys: [] },
                 context: { messageIndex: options.originalFullIndex, isolationKey, reason: 'manual' },
             });
             if (!sheetCheckpointResult.checkpoint) {
-                return { ok: false, error: `boundary commit 无法构建 selected sheet rebase：${sheetKey}：${sheetCheckpointResult.error}`, diagnosticCode: 'staging_snapshot_mismatch' };
+                return failBoundary_ACU('staging_target_snapshot_missing', `boundary commit 无法构建 selected sheet rebase：${sheetKey}：${sheetCheckpointResult.error}`);
             }
             perSheetCheckpoints[sheetKey] = {
                 ...sheetCheckpointResult.checkpoint,
@@ -103692,59 +104126,75 @@ async function commitStagedSheetsAtFullBoundaryAtomic_ACU(runId, options) {
             };
         }
         frame.perSheetCheckpoints = perSheetCheckpoints;
-        // 4. 候选聊天：先深度克隆 live chat，再把含 rebase 的原帧工作副本写进候选原楼层。
-        //    全程不触碰 live chat（strict save 失败时原位回滚 chat）。
+        const liveChatClone = JSON.parse(JSON.stringify(chat));
         const candidateChat = JSON.parse(JSON.stringify(chat));
         const candidateOriginalMessage = candidateChat[options.originalFullIndex];
         if (!candidateOriginalMessage) {
-            return { ok: false, error: `候选聊天缺少原 full 楼层 ${options.originalFullIndex}，无法汇合。` };
+            return failBoundary_ACU('full_checkpoint_root_mismatch', `候选聊天缺少原 full 楼层 ${options.originalFullIndex}，无法汇合。`);
         }
         const candidateContainer = readIsolatedDataContainer_ACU(candidateOriginalMessage) || {};
         candidateContainer[isolationKey] = originalTagData;
         candidateOriginalMessage.TavernDB_ACU_IsolatedData = candidateContainer;
-        // 5. 候选 replay 验证：原 full 边界与聊天末端双边界。
+        const writeSurfaceError = assertCandidateWriteSurface_ACU(liveChatClone, candidateChat, isolationKey, options.originalFullIndex, targetSheetKeys);
+        if (writeSurfaceError) {
+            return failBoundary_ACU('candidate_write_surface_violation', `boundary commit 写入面越权：${writeSurfaceError}。`);
+        }
+        let candidateHeadData = null;
         try {
-            // 阶段 H：双边界一次前向捕获（同根）或回退逐次冷 replay，校验语义不变。
-            const boundaryStates = await loadTableStatesAtBoundariesFromFramesV2Detailed_ACU(candidateChat, isolationKey, [options.originalFullIndex, candidateChat.length - 1], { updateRuntimeState: false, compatibilityMode: 'disabled' });
-            for (const [boundary, verifyReplay] of boundaryStates) {
-                if (!verifyReplay || verifyReplay.baseKind !== 'full_checkpoint' || !verifyReplay.data) {
-                    return { ok: false, error: `boundary commit 候选 replay 未建立正式基底：boundary=${boundary}。`, diagnosticCode: 'boundary_replay_mismatch' };
-                }
-                if (verifyReplay.requiresCheckpointConvergence || verifyReplay.compatibilityRepairs?.length) {
-                    return { ok: false, error: `boundary commit 候选 replay 依赖兼容修复：boundary=${boundary}。`, diagnosticCode: 'boundary_replay_mismatch' };
-                }
-                // selected sheets 必须等于 staging 累计快照。
-                for (const sheetKey of options.targetSheetKeys) {
-                    const verifySheet = verifyReplay.data?.[sheetKey];
-                    const snapshotSheet = options.stagedSnapshot[sheetKey];
-                    if (JSON.stringify(verifySheet?.content) !== JSON.stringify(snapshotSheet?.content)) {
-                        return { ok: false, error: `boundary commit 后 selected sheet 回放不一致：${sheetKey}。`, diagnosticCode: 'boundary_replay_mismatch' };
+            const candidateStates = await loadTableStatesAtBoundariesFromFramesV2Detailed_ACU(candidateChat, isolationKey, [options.originalFullIndex, headIndex], { updateRuntimeState: false, compatibilityMode: 'disabled' });
+            const candidateBoundary = candidateStates.get(options.originalFullIndex);
+            const candidateHead = candidateStates.get(headIndex);
+            if (!candidateBoundary || candidateBoundary.baseKind !== 'full_checkpoint' || !candidateBoundary.data) {
+                return failBoundary_ACU('boundary_replay_mismatch', `boundary commit 候选 boundary replay 未建立正式基底：boundary=${options.originalFullIndex}。`);
+            }
+            if (candidateBoundary.requiresCheckpointConvergence || candidateBoundary.compatibilityRepairs?.length) {
+                return failBoundary_ACU('candidate_replay_requires_repair', `boundary commit 候选 boundary replay 依赖兼容修复：boundary=${options.originalFullIndex}。`);
+            }
+            if (!candidateHead || candidateHead.baseKind !== 'full_checkpoint' || !candidateHead.data) {
+                return failBoundary_ACU('boundary_replay_mismatch', `boundary commit 候选 head replay 未建立正式基底：boundary=${headIndex}。`);
+            }
+            if (candidateHead.requiresCheckpointConvergence || candidateHead.compatibilityRepairs?.length) {
+                return failBoundary_ACU('candidate_replay_requires_repair', `boundary commit 候选 head replay 依赖兼容修复：boundary=${headIndex}。`);
+            }
+            candidateHeadData = candidateHead.data;
+            const sheetKeys = new Set([
+                ...Object.keys(liveBoundary.data || {}),
+                ...Object.keys(liveHead.data || {}),
+                ...Object.keys(candidateBoundary.data || {}),
+                ...Object.keys(candidateHead.data || {}),
+                ...targetSheetKeys,
+            ].filter(key => key.startsWith('sheet_')));
+            for (const sheetKey of sheetKeys) {
+                const isTarget = targetSheetKeys.includes(sheetKey);
+                if (isTarget) {
+                    if (canonicalSheetFingerprint_ACU(candidateBoundary.data?.[sheetKey]) !== canonicalSheetFingerprint_ACU(overlaySheets[sheetKey])) {
+                        logWarn_ACU(`[TableFillBoundaryStaging] selected_sheet_boundary_mismatch: runId=${runId}, cutoff=${options.originalFullIndex}, sheetKey=${sheetKey}, overlay=${canonicalSheetFingerprint_ACU(overlaySheets[sheetKey])}, candidate=${canonicalSheetFingerprint_ACU(candidateBoundary.data?.[sheetKey])}`);
+                        return failBoundary_ACU('selected_sheet_boundary_mismatch', `boundary commit 后 selected sheet 边界回放不一致：${sheetKey}。`);
                     }
-                }
-                // 非目标表必须等于原正式根语义。
-                const originalCheckpointData = frame.checkpoint?.data || {};
-                for (const [sheetKey, sheetValue] of Object.entries(originalCheckpointData)) {
-                    if (!sheetKey.startsWith('sheet_') || options.targetSheetKeys.includes(sheetKey))
-                        continue;
-                    const verifySheet = verifyReplay.data?.[sheetKey];
-                    const originalSheet = sheetValue;
-                    if (JSON.stringify(verifySheet?.content) !== JSON.stringify(originalSheet?.content)) {
-                        return { ok: false, error: `boundary commit 后非目标表回放不一致：${sheetKey}。`, diagnosticCode: 'boundary_replay_mismatch' };
+                    if (!candidateHead.data?.[sheetKey] || typeof candidateHead.data[sheetKey] !== 'object') {
+                        return failBoundary_ACU('selected_sheet_boundary_mismatch', `boundary commit 候选 head 缺少目标表：${sheetKey}。`);
                     }
+                    continue;
+                }
+                if (canonicalSheetFingerprint_ACU(candidateBoundary.data?.[sheetKey]) !== canonicalSheetFingerprint_ACU(liveBoundary.data?.[sheetKey])) {
+                    logWarn_ACU(`[TableFillBoundaryStaging] non_target_boundary_mismatch: runId=${runId}, cutoff=${options.originalFullIndex}, sheetKey=${sheetKey}`);
+                    return failBoundary_ACU('non_target_boundary_mismatch', `boundary commit 后非目标表边界回放不一致：${sheetKey}。`);
+                }
+                if (canonicalSheetFingerprint_ACU(candidateHead.data?.[sheetKey]) !== canonicalSheetFingerprint_ACU(liveHead.data?.[sheetKey])) {
+                    logWarn_ACU(`[TableFillBoundaryStaging] non_target_head_mismatch: runId=${runId}, cutoff=${headIndex}, sheetKey=${sheetKey}`);
+                    return failBoundary_ACU('non_target_head_mismatch', `boundary commit 后非目标表 head 回放不一致：${sheetKey}。`);
                 }
             }
         }
         catch (error) {
-            return { ok: false, error: `boundary commit 候选 replay 验证异常：${error?.message || String(error)}`, diagnosticCode: 'boundary_replay_mismatch' };
+            return failBoundary_ACU('boundary_replay_mismatch', `boundary commit 候选 replay 验证异常：${error?.message || String(error)}`);
         }
-        // 6. strict save：失败只撤销 candidate（不恢复已删除数据），原位回滚 chat。
-        //    候选 replay 校验是异步边界，切聊可能落在它之后、落盘之前，故写盘前再次复检聊天标识。
-        if (chatKey !== String(currentChatFileIdentifier_ACU || '')) {
-            return {
-                ok: false,
-                error: `boundary commit 拒绝执行：候选校验期间当前聊天标识已变化（staging=${chatKey || '无标识'}, current=${String(currentChatFileIdentifier_ACU || '') || '无标识'}），已丢弃本次 staging 汇合。`,
-                diagnosticCode: 'staging_chat_scope_mismatch',
-            };
+        // 本库（T18）守卫：候选 replay 与写盘之间是异步边界，切聊 / 切隔离键可能落在它们之间。
+        //    故落盘前再次复检作用域标识（chatKey + isolationKey）：不匹配即丢弃本次汇合，
+        //    此刻尚未改写 live chat，宿主落盘零发生。
+        if (String(currentChatFileIdentifier_ACU || '') !== String(chatKey || '')
+            || String(getCurrentIsolationKey_ACU() || '') !== String(isolationKey || '')) {
+            return failBoundary_ACU('staging_chat_scope_mismatch', `boundary commit 拒绝执行：候选校验期间聊天或隔离标识已切换（staging=${String(chatKey || '') || '无标识'}, current=${String(currentChatFileIdentifier_ACU || '') || '无标识'}），已丢弃本次 staging 汇合。`);
         }
         const before = JSON.parse(JSON.stringify(chat));
         try {
@@ -103759,17 +104209,173 @@ async function commitStagedSheetsAtFullBoundaryAtomic_ACU(runId, options) {
         catch (error) {
             chat.length = 0;
             chat.push(...before);
-            return { ok: false, error: `boundary commit 严格保存失败：${error?.message || String(error)}`, diagnosticCode: 'boundary_commit_failed' };
+            return failBoundary_ACU('boundary_strict_save_failed', `boundary commit 严格保存失败：${error?.message || String(error)}`);
         }
-        logDebug_ACU(`[TableFillBoundaryStaging] 已原子汇合：runId=${runId}, originalFull=${options.originalFullIndex}, sheets=${options.targetSheetKeys.join('、')}。`);
+        logDebug_ACU(`[TableFillBoundaryStaging] 已原子汇合：runId=${runId}, originalFull=${options.originalFullIndex}, sheets=${targetSheetKeys.join('、')}。`);
         return {
             ok: true,
             boundaryCommitSummary: {
-                selectedSheetKeys: [...options.targetSheetKeys],
+                selectedSheetKeys: [...targetSheetKeys],
                 originalFullCheckpointIndex: options.originalFullIndex,
             },
+            verifiedHeadSnapshot: candidateHeadData ? JSON.parse(JSON.stringify(candidateHeadData)) : {},
         };
     });
+}
+async function publishVerifiedBoundaryHead_ACU(input) {
+    try {
+        if (String(currentChatFileIdentifier_ACU || '') !== String(input.chatKey || '')
+            || String(getCurrentIsolationKey_ACU() || '') !== String(input.isolationKey || '')) {
+            return {
+                ok: false,
+                error: 'boundary runtime 发布复检失败：chatKey 或 isolationKey 已切换。',
+                diagnosticCode: 'runtime_publish_failed',
+            };
+        }
+        const snapshot = JSON.parse(JSON.stringify(input.verifiedHeadSnapshot || {}));
+        if (isSqliteMode()) {
+            const envelope = createCanonicalSnapshotEnvelope_ACU({
+                data: snapshot,
+                chatIdentity: String(input.chatKey || ''),
+                isolationKey: String(input.isolationKey || ''),
+                storageMode: 'sqlite',
+                lifecycleEpoch: getRuntimeLifecycleEpoch_ACU(),
+                source: 'boundary_commit_head',
+            });
+            if (!envelope) {
+                return { ok: false, error: 'boundary runtime 发布失败：无法构造 verified head envelope。', diagnosticCode: 'runtime_publish_failed' };
+            }
+            const hydrated = await hydrateStorageProviderFromSnapshot_ACU(envelope);
+            if (!hydrated.ok) {
+                return {
+                    ok: false,
+                    error: `boundary runtime 发布失败：${hydrated.error || hydrated.failureCode || 'hydrate 未成功'}。持久化聊天仍是权威，请重新 hydrate。`,
+                    diagnosticCode: 'runtime_publish_failed',
+                };
+            }
+        }
+        _set_currentJsonTableData_ACU(snapshot);
+        return { ok: true };
+    }
+    catch (error) {
+        return {
+            ok: false,
+            error: `boundary runtime 发布异常：${error?.message || String(error)}。持久化聊天仍是权威，请重新 hydrate。`,
+            diagnosticCode: 'runtime_publish_failed',
+        };
+    }
+}
+
+function createTableFillStagingSession_ACU(run) {
+    let discarded = false;
+    let detachedProvider = null;
+    const assertScope = (phase) => {
+        if (discarded) {
+            return { ok: false, error: `staging session 已释放，拒绝 ${phase}。`, errorCategory: 'precondition' };
+        }
+        if (String(currentChatFileIdentifier_ACU || '') !== String(run.chatKey || '')
+            || String(getCurrentIsolationKey_ACU() || '') !== String(run.isolationKey || '')) {
+            return { ok: false, error: `staging session ${phase} 检测到聊天或隔离标识已切换。`, errorCategory: 'precondition' };
+        }
+        return null;
+    };
+    const releaseDetached = async () => {
+        if (!detachedProvider)
+            return;
+        try {
+            detachedProvider.dispose();
+        }
+        catch (error) {
+            logWarn_ACU('[TableFillStagingSession] 释放 detached SQLite 失败。', error);
+        }
+        detachedProvider = null;
+    };
+    return {
+        getTargetOverlay() {
+            return run.overlay;
+        },
+        async discard() {
+            discarded = true;
+            await releaseDetached();
+        },
+        async applyBucket(input) {
+            const scopeError = assertScope('applyBucket');
+            if (scopeError)
+                return scopeError;
+            const workingView = assembleBucketWorkingView_ACU(input.historicalBase, run.overlay);
+            try {
+                if (input.appliedTableData && typeof input.appliedTableData === 'object') {
+                    run.overlay = mergeTargetOverlayFromBucket_ACU(run.overlay, input.appliedTableData, input.saveTargetIndex);
+                    return { ok: true, overlay: run.overlay, tableData: input.appliedTableData };
+                }
+                if (isSqliteMode() && Array.isArray(input.sqlTexts) && input.sqlTexts.length > 0) {
+                    await releaseDetached();
+                    detachedProvider = createDetachedSqlTableService_ACU();
+                    const loaded = await detachedProvider.loadFromData(workingView);
+                    if (loaded.error || !detachedProvider.isReady()) {
+                        await releaseDetached();
+                        return {
+                            ok: false,
+                            error: loaded.error || 'staging detached SQLite 未能就绪。',
+                            errorCategory: 'infrastructure',
+                        };
+                    }
+                    const parseResult = detachedProvider.applyEditsWithSystemRowIds(input.sqlTexts, input.updateMode, input.sqlApplyScope);
+                    if (!parseResult?.success || !parseResult.tableData) {
+                        await releaseDetached();
+                        return {
+                            ok: false,
+                            error: parseResult?.error || 'staging SQL 执行失败。',
+                            errorCategory: 'model',
+                        };
+                    }
+                    const tableData = parseResult.tableData;
+                    run.overlay = mergeTargetOverlayFromBucket_ACU(run.overlay, tableData, input.saveTargetIndex);
+                    await releaseDetached();
+                    logDebug_ACU(`[TableFillStagingSession] SQLite bucket 已累积 overlay：runId=${run.runId}, target=${input.saveTargetIndex}, sheets=${run.targetSheetKeys.join('、')}`);
+                    return { ok: true, overlay: run.overlay, tableData };
+                }
+                let workingTableData = JSON.parse(JSON.stringify(workingView));
+                if (Array.isArray(input.dslResponses)) {
+                    for (const response of input.dslResponses) {
+                        const parseResult = parseAndApplyTableEditsToData_ACU(response.aiResponse, workingTableData, input.updateMode, false);
+                        const parseSuccess = typeof parseResult === 'object' && parseResult !== null ? parseResult.success : !!parseResult;
+                        if (!parseSuccess) {
+                            return {
+                                ok: false,
+                                error: (parseResult && typeof parseResult.error === 'string' && parseResult.error)
+                                    ? parseResult.error
+                                    : 'staging DSL 应用失败。',
+                                errorCategory: 'model',
+                            };
+                        }
+                        if (parseResult?.workingData)
+                            workingTableData = parseResult.workingData;
+                        const parsedKeys = Array.isArray(parseResult?.modifiedKeys) ? parseResult.modifiedKeys : [];
+                        const unauthorized = parsedKeys.filter(sheetKey => !run.targetSheetKeys.includes(sheetKey));
+                        if (unauthorized.length > 0) {
+                            return {
+                                ok: false,
+                                error: `staging DSL 越权修改了非目标表（${unauthorized.join(', ')}）。`,
+                                errorCategory: 'model',
+                            };
+                        }
+                    }
+                }
+                run.overlay = mergeTargetOverlayFromBucket_ACU(run.overlay, workingTableData, input.saveTargetIndex);
+                logDebug_ACU(`[TableFillStagingSession] native bucket 已累积 overlay：runId=${run.runId}, target=${input.saveTargetIndex}, sheets=${run.targetSheetKeys.join('、')}`);
+                return { ok: true, overlay: run.overlay, tableData: workingTableData };
+            }
+            catch (error) {
+                await releaseDetached();
+                return {
+                    ok: false,
+                    error: error?.message || String(error),
+                    errorCategory: 'infrastructure',
+                };
+            }
+        },
+    };
 }
 
 let registeredUiSurface_ACU = null;
@@ -103809,6 +104415,150 @@ function showUiSurfaceToast_ACU(payload) {
 function resetUiSurfaceRegistryForTests_ACU() {
     registeredUiSurface_ACU = null;
 }
+
+/**
+ * service/table/runtime-only-pending-flush.ts — 把 runtime-only 变更物化进聊天 V2 帧。
+ *
+ * 触发时机（见 runtime-only-pending-state 的问题描述）：
+ * - 任何普通（非 skipChatSave）持久化提交之前——兑现文档承诺「随后一次落盘写入即持久化」；
+ * - 任何填表构建基底之前——填表基底来自聊天回放，必须先让聊天追上 live runtime，
+ *   否则 AI 会把 runtime 里已有的行当作不存在重新 INSERT；
+ * - 首楼 seed checkpoint 建立之前——seed 会重载运行时，未落盘的行会被直接丢弃。
+ *
+ * 做法：对登记的表，以当前运行时内容写一条 source:'system' 的 sheet_replace 增量到
+ * 最新可追加的 AI 楼层；与聊天回放内容完全一致的表跳过（避免无意义的日志条目）。
+ * 不推进 runtime revision（runtime 本身没有变化），不作为填表记录（不推进调度）。
+ */
+function cloneJson_ACU$1(value) {
+    return JSON.parse(JSON.stringify(value));
+}
+function currentScope_ACU() {
+    return {
+        chatKey: String(currentChatFileIdentifier_ACU || ''),
+        isolationKey: String(getCurrentIsolationKey_ACU() || ''),
+    };
+}
+/**
+ * 读取 live runtime 的当前内容。
+ *
+ * SqlTableService.getCurrentData() 在引擎未就绪或导出失败时按既有 dataStale 契约回落到
+ * 共享 JSON 视图——那份视图可能停留在写入前状态，拿它写回聊天会把陈旧数据固化成楼层帧。
+ * 因此 SQLite 模式优先走严格导出：导出不可用就返回 null，让本次 flush 保留登记、下次再试。
+ */
+function readLiveRuntimeDataStrict_ACU(provider) {
+    const strictExport = provider.exportLiveRuntimeDataStrict_ACU;
+    if (typeof strictExport === 'function')
+        return strictExport.call(provider);
+    return provider.getCurrentData();
+}
+async function readRuntimeSnapshot_ACU() {
+    if (isSqliteMode()) {
+        const provider = await ensureStorageProviderReady_ACU();
+        const data = readLiveRuntimeDataStrict_ACU(provider);
+        return data ? cloneJson_ACU$1(data) : null;
+    }
+    return currentJsonTableData_ACU ? cloneJson_ACU$1(currentJsonTableData_ACU) : null;
+}
+function serializeSheetContent_ACU(sheet) {
+    const content = sheet?.content;
+    return JSON.stringify(Array.isArray(content) ? content : null);
+}
+/**
+ * 回放到目标楼层，找出运行时内容与聊天不一致的表。回放失败时保守地返回全部候选表：
+ * 多写一条与既有状态相同的 sheet_replace 是幂等的，漏写才会丢数据。
+ */
+async function resolveDivergedSheetKeys_ACU(chat, isolationKey, targetMessageIndex, runtimeData, candidateSheetKeys) {
+    try {
+        const replay = await loadTableStateFromFramesV2Detailed_ACU(chat, isolationKey, {
+            maxMessageIndex: targetMessageIndex,
+            updateRuntimeState: false,
+            allowTemporaryTemplateBaseline: true,
+        });
+        const replayed = replay?.data;
+        if (!replayed)
+            return candidateSheetKeys;
+        return candidateSheetKeys.filter(sheetKey => (serializeSheetContent_ACU(replayed[sheetKey]) !== serializeSheetContent_ACU(runtimeData[sheetKey])));
+    }
+    catch (error) {
+        logWarn_ACU('[RuntimeOnlyFlush] 回放比对失败，按全部登记表落盘。', error);
+        return candidateSheetKeys;
+    }
+}
+async function flushRuntimeOnlyPendingChanges_ACU(reason) {
+    const scope = currentScope_ACU();
+    const pending = readRuntimeOnlyPendingSheets_ACU(scope);
+    if (!pending)
+        return { flushed: false, sheetKeys: [] };
+    let runtimeData;
+    try {
+        runtimeData = await readRuntimeSnapshot_ACU();
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        logWarn_ACU(`[RuntimeOnlyFlush] ${reason}: 无法读取运行时快照，保留待落盘登记。`, error);
+        return { flushed: false, sheetKeys: [], error: message };
+    }
+    if (!runtimeData)
+        return { flushed: false, sheetKeys: [], error: 'runtime snapshot unavailable' };
+    const runtimeSheetKeys = Object.keys(runtimeData).filter(key => key.startsWith('sheet_'));
+    const candidateSheetKeys = pending.all
+        ? runtimeSheetKeys
+        : pending.sheetKeys.filter(sheetKey => runtimeSheetKeys.includes(sheetKey));
+    if (candidateSheetKeys.length === 0) {
+        // 登记的表已不在运行时（被删除/重载），没有可落盘的内容。
+        clearRuntimeOnlyPendingSheets_ACU(scope);
+        return { flushed: false, sheetKeys: [] };
+    }
+    const chat = getChatArray_ACU();
+    const targetMessageIndex = getLatestTableAppendMessageIndexFromChat_ACU(chat, scope.isolationKey, settings_ACU);
+    if (targetMessageIndex < 0) {
+        return { flushed: false, sheetKeys: [], error: 'no AI message to persist runtime-only changes' };
+    }
+    const divergedSheetKeys = await resolveDivergedSheetKeys_ACU(chat, scope.isolationKey, targetMessageIndex, runtimeData, candidateSheetKeys);
+    if (divergedSheetKeys.length === 0) {
+        clearRuntimeOnlyPendingSheets_ACU(scope);
+        logDebug_ACU(`[RuntimeOnlyFlush] ${reason}: 运行时与聊天回放一致，无需落盘（${candidateSheetKeys.join('、')}）。`);
+        return { flushed: false, sheetKeys: [] };
+    }
+    const operations = divergedSheetKeys.map(sheetKey => ({
+        kind: 'sheet_replace',
+        sheetKey,
+        sheet: cloneJson_ACU$1(runtimeData[sheetKey]),
+        reason: 'system',
+    }));
+    const writeSet = divergedSheetKeys.map(sheetKey => ({ kind: 'sheet', sheetKey }));
+    const commitResult = await runTableUpdateCommit_ACU({
+        source: 'system',
+        reason: `runtime_only_flush:${reason}`,
+        isolationKey: scope.isolationKey,
+        writeSet,
+        // 运行时本身没有变化，只是把它写回聊天：不推进 runtime revision，
+        // 否则会让并发填表已捕获的 baseRevision 误判为冲突。
+        revisionWriteSet: [],
+        workingDataMode: 'none',
+        initialData: runtimeData,
+        targetMessageIndex,
+        targetSheetKeys: divergedSheetKeys,
+        updateGroupKeys: null,
+        trackingSheetKeys: [],
+        trackAsUpdate: false,
+        operations,
+        skipRuntimeOnlyPendingFlush: true,
+    }, () => ({
+        success: true,
+        value: null,
+        tableData: runtimeData,
+        persist: { operations, revisionWriteSet: [] },
+    }));
+    if (!commitResult.success) {
+        logWarn_ACU(`[RuntimeOnlyFlush] ${reason}: 运行时未落盘变更写回聊天失败，保留登记待下次重试：${commitResult.error || 'unknown error'}`);
+        return { flushed: false, sheetKeys: divergedSheetKeys, error: commitResult.error };
+    }
+    clearRuntimeOnlyPendingSheets_ACU(scope);
+    logDebug_ACU(`[RuntimeOnlyFlush] ${reason}: 已把运行时未落盘变更写回 AI 楼层 #${commitResult.messageIndex ?? targetMessageIndex}：${divergedSheetKeys.join('、')}。`);
+    return { flushed: true, sheetKeys: divergedSheetKeys, messageIndex: commitResult.messageIndex ?? targetMessageIndex };
+}
+registerRuntimeOnlyPendingFlusher_ACU(flushRuntimeOnlyPendingChanges_ACU);
 
 const plans_ACU = new Map();
 function clone_ACU$3(value) { return JSON.parse(JSON.stringify(value)); }
@@ -104424,6 +105174,39 @@ function resolveTableApiPresetOverride_ACU(tableName) {
     const preset = overrides[normalizedName];
     return (typeof preset === 'string' && preset.trim()) ? preset.trim() : '';
 }
+/**
+ * 跨 full checkpoint staging 的收尾：把 run 级目标表 overlay 原子折叠回原正式根，
+ * 再把候选 replay 验证过的 head 快照发布到 runtime，最后释放 detached staging 会话。
+ * 汇合失败同样要释放会话（detached SQLite 不能泄漏），只是不发布 runtime。
+ */
+async function settleStagedBoundaryAndPublish_ACU(stagingRun, originalFullIndex, session) {
+    const commitResult = await commitStagedSheetsAtFullBoundaryAtomic_ACU(stagingRun.runId, {
+        chatKey: stagingRun.chatKey,
+        isolationKey: stagingRun.isolationKey,
+        originalFullIndex,
+        originalFullFingerprint: stagingRun.originalFullFingerprint,
+        templateFingerprint: stagingRun.templateFingerprint,
+        stagedSnapshot: stagingRun.overlay.sheets,
+        targetSheetKeys: stagingRun.targetSheetKeys,
+    });
+    if (commitResult.ok === false) {
+        await session?.discard();
+        return {
+            ok: false,
+            error: commitResult.error,
+            diagnosticCode: commitResult.diagnosticCode ?? 'boundary_commit_failed',
+        };
+    }
+    const published = await publishVerifiedBoundaryHead_ACU({
+        verifiedHeadSnapshot: commitResult.verifiedHeadSnapshot,
+        chatKey: stagingRun.chatKey,
+        isolationKey: stagingRun.isolationKey,
+    });
+    await session?.discard();
+    if (!published.ok)
+        return published;
+    return { ok: true };
+}
 function buildTemplateScopeFromData_ACU(data) {
     if (!data || typeof data !== 'object')
         return null;
@@ -104824,6 +105607,25 @@ function getTouchedSheetKeysFromSqlText_ACU(sqlText, tableData) {
 function shouldDiscardUnauthorizedTableEdits_ACU() {
     return settings_ACU.discardUnauthorizedTableEditsEnabled !== false;
 }
+/**
+ * 填表基底来自聊天回放，而 SQL 却在 live runtime 上执行。外部脚本用 skipChatSave /
+ * isImportMode 写入的行只存在于 runtime，必须在构建任何基底前先写回聊天，
+ * 否则 AI 会把这些行当作不存在重新 INSERT。失败只记 warn，不阻断填表。
+ */
+async function flushRuntimeOnlyChangesBeforeFill_ACU(reason) {
+    try {
+        const result = await flushRuntimeOnlyPendingChanges_ACU(reason);
+        if (result.flushed) {
+            logDebug_ACU(`[${reason}] 已在填表前写回运行时未落盘变更：${result.sheetKeys.join('、')}（messageIndex=${result.messageIndex}）。`);
+        }
+        else if (result.error) {
+            logWarn_ACU(`[${reason}] 填表前写回运行时未落盘变更失败，基底可能缺少前端写入的行：${result.error}`);
+        }
+    }
+    catch (error) {
+        logWarn_ACU(`[${reason}] 填表前写回运行时未落盘变更异常，基底可能缺少前端写入的行。`, error);
+    }
+}
 function formatAllowedSheetKeys_ACU(sheetKeys) {
     const normalized = [...new Set(sheetKeys.filter(key => typeof key === 'string' && key.startsWith('sheet_')))].sort();
     return normalized.length > 0 ? normalized.join(', ') : '无（当前任务未授权任何目标表）';
@@ -104949,7 +105751,7 @@ function notifyBoundedEmptyBaseFallback_ACU(batchNumber) {
         lastEmptyBaseFallbackToastAt_ACU = now;
         showUiSurfaceToast_ACU({
             kind: 'info',
-            text: `目标楼层之前没有可用的表格历史基底，本次填表（批次 ${batchNumber} 起）将从空白模板结构开始，不包含任何历史表格数据。`,
+            text: `目标楼层及其之前没有可用的表格历史基底，本次填表（批次 ${batchNumber} 起）将从空白模板结构开始，不包含任何历史表格数据。`,
         });
     }
     catch (_) { }
@@ -104966,11 +105768,76 @@ function buildGuideOrTemplateMergeBase_ACU(batchNumber) {
     logDebug_ACU(`[Batch ${batchNumber}] No chat sheet guide found, using template as merge base.`);
     return { data, error: null };
 }
+/**
+ * 解析有界填表 bucket 的基底回放边界（消息索引，含）。
+ *
+ * persist 把本 bucket 的 operations 追加到 saveTargetIndex 帧的既有内容之后，回放时它们
+ * 叠加在「≤ saveTargetIndex 的全部既有帧」之上。基底若只回放到 bucket 首楼 - 1，目标楼层上
+ * 已经存在的内容——典型是前端开局脚本通过 CRUD API 写入、落成 init full checkpoint 的行——
+ * 不会进入 prompt：AI 把这些表当成空表重新 INSERT，提交时撞 live SQLite 的 UNIQUE 约束，
+ * 或在回放中把同一批行翻倍。基底边界必须与 persist 前 replayBeforeAppend 的 boundary 一致。
+ *
+ * - 追加模式（普通自动/手动填表）：边界提升到 saveTargetIndex；
+ * - 增量替换模式（追平、跨根 post 段）：目标楼层内旧增量会被裁剪、full checkpoint 保留，
+ *   因此只把边界提升到落在 (lowerBound, saveTargetIndex] 内的 replay root；
+ * - preserveLowerBound（stage_only 与手动重填）：前者刻意从根之前起算，后者依赖临时基线
+ *   逐 bucket 累积并在末尾原子重建根，保持 lowerBound 不变。
+ */
+function resolveBucketMergeBaseMaxMessageIndex_ACU(params) {
+    const { lowerBound, saveTargetIndex } = params;
+    if (params.preserveLowerBound)
+        return lowerBound;
+    if (!Number.isInteger(saveTargetIndex) || saveTargetIndex <= lowerBound)
+        return lowerBound;
+    if (params.replaceExistingIncremental) {
+        const rootIndex = getLatestV2FullCheckpointMessageIndex_ACU(params.chat || [], params.isolationKey);
+        return rootIndex > lowerBound && rootIndex <= saveTargetIndex ? rootIndex : lowerBound;
+    }
+    return saveTargetIndex;
+}
+/**
+ * SQLite 持久化提交的 SQL 直接在 live runtime 上执行，因此 prompt 基底必须就是 live runtime
+ * 的当前快照——历史版本的 SQL 模式 prompt 一直如此读取，前端 CRUD 写入的行天然在基底里，
+ * AI 不会重复 INSERT。若改用「≤ 首楼-1 的聊天回放」作基底，目标楼层帧 / 尚未进入回放的
+ * 运行时行会从 prompt 消失，AI 对已存在的行重新 INSERT，撞 live SQLite 的 UNIQUE 约束或把行数翻倍。
+ * 逐 bucket 现取快照，多批重填第二桶起也能看到前一桶结果（不再是请求前冻结的空表）。
+ *
+ * 只对写 live runtime 的持久化 bucket 生效；stage_only 走隔离 detached provider，
+ * 仍以聊天回放为基底。runtime 不可用（含导出失败的陈旧回落）时回落到聊天回放链路。
+ */
+async function readLiveSqliteRuntimeMergeBase_ACU(batchNumber) {
+    if (!isSqliteMode())
+        return null;
+    try {
+        const provider = await ensureStorageProviderReady_ACU();
+        if (provider.mode !== 'sqlite')
+            return null;
+        // 本库 dataStale 契约：getCurrentData 在导出失败时回落共享视图，那份视图可能陈旧；
+        // 严格导出不可用时返回 null，让基底回落到聊天回放，而不是拿陈旧 runtime 去填表。
+        const strictExport = provider.exportLiveRuntimeDataStrict_ACU;
+        const liveData = typeof strictExport === 'function' ? strictExport.call(provider) : provider.getCurrentData();
+        const snapshot = cloneTableDataSnapshot_ACU(liveData);
+        if (!hasUsableRuntimeTableData_ACU(snapshot))
+            return null;
+        logDebug_ACU(`[Batch ${batchNumber}] Using live SQLite runtime snapshot as merge base (SQL executes against it).`);
+        return mergeGuideStructureIntoBaseData_ACU(snapshot);
+    }
+    catch (error) {
+        logWarn_ACU(`[Batch ${batchNumber}] live SQLite runtime 快照不可用，回落到聊天回放基底。`, error);
+        return null;
+    }
+}
 async function buildBatchMergeBase_ACU(batchNumber, options = {}, replayEvidence) {
     try {
         const hasBoundedScope = Number.isInteger(options.maxMessageIndex);
+        const replayOptions = hasBoundedScope ? { maxMessageIndex: options.maxMessageIndex } : {};
+        if (options.liveRuntimeAuthoritative) {
+            const liveRuntimeBase = await readLiveSqliteRuntimeMergeBase_ACU(batchNumber);
+            if (liveRuntimeBase)
+                return { data: liveRuntimeBase, error: null };
+        }
         if (hasBoundedScope) {
-            const v2ReplayResult = await loadV2ReplayMergeBase_ACU(batchNumber, options, replayEvidence);
+            const v2ReplayResult = await loadV2ReplayMergeBase_ACU(batchNumber, replayOptions, replayEvidence);
             if (v2ReplayResult.data)
                 return { data: v2ReplayResult.data, error: null };
             if (v2ReplayResult.failed) {
@@ -104995,7 +105862,7 @@ async function buildBatchMergeBase_ACU(batchNumber, options = {}, replayEvidence
             logDebug_ACU(`[Batch ${batchNumber}] Using SQLite runtime storage snapshot as merge base.`);
             return { data: mergeGuideStructureIntoBaseData_ACU(runtimeData), error: null };
         }
-        const v2ReplayResult = await loadV2ReplayMergeBase_ACU(batchNumber, options, replayEvidence);
+        const v2ReplayResult = await loadV2ReplayMergeBase_ACU(batchNumber, replayOptions, replayEvidence);
         if (v2ReplayResult.data)
             return { data: v2ReplayResult.data, error: null };
         if (v2ReplayResult.failed) {
@@ -105558,6 +106425,26 @@ async function applyUnifiedGroupFillResponsesCore_ACU(responses, baseSnapshot, o
             logDebug_ACU('[TemplateScope] 本次 SQL 填表的目标表全部在模板范围外，已跳过提交。');
             return { success: true, modifiedKeys: [], tableData: baseSnapshot };
         }
+        // 边界前 staging：SQL 只在 detached provider 上执行，结果收口进目标表 overlay，
+        // 不进入公共提交模型，因此聊天 V2 frame 与共享 runtime 都不被改写。
+        if (options.commitMode === 'stage_only' && options.stagingSession) {
+            const staged = await options.stagingSession.applyBucket({
+                historicalBase: baseSnapshot,
+                saveTargetIndex: options.saveTargetIndex,
+                updateMode: options.updateMode,
+                sqlTexts,
+                sqlApplyScope: capturedSqlApplyScope,
+            });
+            if (staged.ok === false) {
+                return {
+                    success: false,
+                    modifiedKeys: [],
+                    error: sanitizeRetryFeedback_ACU(staged.error, MAX_WARN_ERROR_LENGTH_ACU),
+                    errorCategory: staged.errorCategory,
+                };
+            }
+            return { success: true, modifiedKeys: [...options.stagingSession.getTargetOverlay().targetSheetKeys], tableData: staged.tableData };
+        }
         const commitResult = await runTableUpdateCommit_ACU({
             source: 'group_fill',
             reason: 'applyUnifiedGroupFillResponses:runtime_sql',
@@ -105807,6 +106694,24 @@ async function applyUnifiedGroupFillResponsesCore_ACU(responses, baseSnapshot, o
                 + `本次以初始 checkpoint 形式提交快照（tracked=${keysToTrack.join(',') || '无'}）。`);
         }
         const revisionWriteSet = modifiedKeys.map(sheetKey => ({ kind: 'sheet', sheetKey }));
+        // 边界前 staging：DSL 已在隔离副本上应用完毕，这里只把目标表收口进 overlay。
+        if (options.commitMode === 'stage_only' && options.stagingSession) {
+            const staged = await options.stagingSession.applyBucket({
+                historicalBase: baseSnapshot,
+                saveTargetIndex: options.saveTargetIndex,
+                updateMode: options.updateMode,
+                appliedTableData: workingTableData,
+            });
+            if (staged.ok === false) {
+                return {
+                    success: false,
+                    modifiedKeys,
+                    error: sanitizeRetryFeedback_ACU(staged.error, MAX_WARN_ERROR_LENGTH_ACU),
+                    errorCategory: staged.errorCategory,
+                };
+            }
+            return { success: true, modifiedKeys, tableData: staged.tableData };
+        }
         const commitResult = await runTableUpdateCommit_ACU({
             source: 'group_fill',
             reason: 'applyUnifiedGroupFillResponses:snapshot',
@@ -105932,6 +106837,10 @@ async function processGroupedRuntimeChunkCore_ACU(groups, mode, options = {}) {
         }
         await reloadStorageProvider();
     }
+    // stage_only 只写 run 级隔离 staging，不触碰聊天；普通提交路径才需要先让聊天追上 runtime。
+    if (options.commitMode !== 'stage_only') {
+        await flushRuntimeOnlyChangesBeforeFill_ACU('processGroupedRuntimeChunk');
+    }
     const executionScope = await captureFillExecutionScope_ACU({
         runId: options.performanceRunId,
         parentSpanId: options.performanceParentSpanId,
@@ -106055,14 +106964,36 @@ async function processGroupedRuntimeChunkCore_ACU(groups, mode, options = {}) {
             }
             // 基底边界必须随 bucket 推进：显式边界只作为下界，保证本 bucket 之前刚提交的
             // 增量进入 prompt 基底，同时不把本 bucket 之后尚未处理的楼层带进来。
-            const mergeBaseMaxMessageIndex = Math.max(explicitMergeBaseBounds.length === 1 ? explicitMergeBaseBounds[0] : Number.NEGATIVE_INFINITY, bucketFirstMessageIndex - 1);
-            const baseResult = await buildBatchMergeBase_ACU(bucket.batchNumber, { maxMessageIndex: mergeBaseMaxMessageIndex }, replayEvidence);
+            // 目标楼层自身已存在的帧（外部 CRUD/init checkpoint）是本次增量的回放基底，
+            // 必须纳入，否则 AI 会对已存在的行重复 INSERT。
+            const mergeBaseLowerBound = Math.max(explicitMergeBaseBounds.length === 1 ? explicitMergeBaseBounds[0] : Number.NEGATIVE_INFINITY, bucketFirstMessageIndex - 1);
+            const mergeBaseMaxMessageIndex = resolveBucketMergeBaseMaxMessageIndex_ACU({
+                lowerBound: mergeBaseLowerBound,
+                saveTargetIndex: bucket.saveTargetIndex,
+                chat: getChatArray_ACU(),
+                isolationKey: executionScope.isolationKey,
+                replaceExistingIncremental: options.replaceExistingIncremental === true,
+                preserveLowerBound: options.commitMode === 'stage_only' || options.skipWriteTargetAdmission === true,
+            });
+            if (mergeBaseMaxMessageIndex !== mergeBaseLowerBound) {
+                logDebug_ACU(`[Batch ${bucket.batchNumber}] 基底边界提升至目标楼层既有帧：${mergeBaseLowerBound} -> ${mergeBaseMaxMessageIndex}（saveTarget=${bucket.saveTargetIndex}）。`);
+            }
+            const baseResult = await buildBatchMergeBase_ACU(bucket.batchNumber, {
+                maxMessageIndex: mergeBaseMaxMessageIndex,
+                // stage_only 在 detached provider 上执行，基底必须来自聊天回放；
+                // 其余 bucket 的 SQL 直接写 live runtime，基底以 live runtime 为准。
+                liveRuntimeAuthoritative: options.commitMode !== 'stage_only',
+            }, replayEvidence);
             if (!baseResult.data) {
                 bucket.plannedJobs.forEach(job => failedGroups.add(job.group.key));
                 firstError = firstError || baseResult.error || '无法构建合并基底，操作已终止。';
                 break;
             }
-            const mergedBatchData = baseResult.data;
+            // staging 期间 bucket 基底 = 历史基底 + 目标表 overlay：后续 bucket 能看见
+            // 前序 bucket 的目标表结果，同时不会把边界后的非目标数据提前带进来。
+            const mergedBatchData = options.stagingSession
+                ? assembleBucketWorkingView_ACU(baseResult.data, options.stagingSession.getTargetOverlay())
+                : baseResult.data;
             try {
                 bucket.plannedJobs = bucket.plannedJobs.map(plannedJob => ({
                     ...plannedJob,
@@ -106077,7 +107008,11 @@ async function processGroupedRuntimeChunkCore_ACU(groups, mode, options = {}) {
                 firstError = firstError || (error instanceof Error ? error.message : String(error));
                 break;
             }
-            _set_currentJsonTableData_ACU(mergedBatchData);
+            // staging bucket 不得发布共享 runtime：整库视图仍由持久化态权威持有，
+            // 目标表的累计结果只存在于 run 级 overlay，边界汇合后才一次性发布。
+            if (!options.stagingSession) {
+                _set_currentJsonTableData_ACU(mergedBatchData);
+            }
             const baseSnapshot = JSON.parse(JSON.stringify(mergedBatchData));
             const bucketSheetKeys = [...new Set(bucket.plannedJobs.flatMap(job => job.group.sheetKeys || []))].sort();
             const baseRevision = captureTableRuntimeRevisionForWriteSet_ACU(buildWriteSetForSheetKeys_ACU(bucketSheetKeys, baseSnapshot), { chatKey: executionScope.chatKey, isolationKey: executionScope.isolationKey });
@@ -106269,6 +107204,7 @@ async function processGroupedRuntimeChunkCore_ACU(groups, mode, options = {}) {
                     sqlApplyScope: executionScope.sqlApplyScope,
                     manualCatchUpRunId: options.manualCatchUpRunId,
                     commitMode: options.commitMode,
+                    stagingSession: options.stagingSession,
                     performanceRunId: options.performanceRunId,
                     performanceParentSpanId: options.performanceParentSpanId,
                 });
@@ -106378,6 +107314,7 @@ async function executeAutoFillStagingGroups_ACU(groups, mode, options = {}) {
     let committedBucketCount = 0;
     let boundaryCommitted = false;
     let stagingRun = null;
+    let stagingSession = null;
     let boundaryPlan = null;
     // 冻结 run 级 staging scope（与手动追平同款：单 full 根复检、范围、目标表、模板指纹）。
     const isolationKey = getCurrentIsolationKey_ACU();
@@ -106415,39 +107352,35 @@ async function executeAutoFillStagingGroups_ACU(groups, mode, options = {}) {
             performanceParentSpanId: options.performanceParentSpanId,
         });
     }
-    stagingRun = {
+    stagingRun = createTableFillStagingRunContext_ACU({
         runId: boundaryPlan.scope.runId,
         chatKey: boundaryPlan.scope.chatKey,
         isolationKey: boundaryPlan.scope.isolationKey,
-        targetSheetKeys: [...boundaryPlan.scope.targetSheetKeys],
-        stagedWorkingData: null,
-        lastStagedSnapshot: null,
-        lastStagedTargetMessageIndex: null,
-        stagedBucketCount: 0,
-    };
+        targetSheetKeys: boundaryPlan.scope.targetSheetKeys,
+        originalFullIndex: boundaryPlan.scope.originalFullIndex,
+        originalFullFingerprint: readOriginalFullFrameFingerprint_ACU(getChatArray_ACU(), boundaryPlan.scope.isolationKey, originalFullIndex),
+        templateFingerprint,
+    });
+    stagingSession = createTableFillStagingSession_ACU(stagingRun);
     const settleStagingBoundary = async () => {
         if (!boundaryPlan || boundaryCommitted)
             return { ok: true };
-        if (!stagingRun || stagingRun.stagedBucketCount === 0) {
+        if (!stagingRun || stagingRun.overlay.stagedBucketCount === 0) {
             boundaryCommitted = true;
+            await stagingSession?.discard();
             return { ok: true };
         }
         const fullIndex = boundaryPlan.scope.originalFullIndex;
         if (fullIndex === null) {
             boundaryCommitted = true;
+            await stagingSession?.discard();
             return { ok: true };
         }
-        const commitResult = await commitStagedSheetsAtFullBoundaryAtomic_ACU(stagingRun.runId, {
-            chatKey: stagingRun.chatKey,
-            isolationKey: stagingRun.isolationKey,
-            originalFullIndex: fullIndex,
-            stagedSnapshot: stagingRun.lastStagedSnapshot ?? {},
-            targetSheetKeys: stagingRun.targetSheetKeys,
-        });
-        if (!commitResult.ok) {
-            return { ok: false, error: commitResult.error, diagnosticCode: commitResult.diagnosticCode ?? 'boundary_commit_failed' };
-        }
+        const settleResult = await settleStagedBoundaryAndPublish_ACU(stagingRun, fullIndex, stagingSession);
+        if (!settleResult.ok)
+            return settleResult;
         boundaryCommitted = true;
+        stagingSession = null;
         return { ok: true };
     };
     for (const group of normalizedGroups) {
@@ -106471,6 +107404,7 @@ async function executeAutoFillStagingGroups_ACU(groups, mode, options = {}) {
                 abortController: options.abortController,
                 respectGlobalStop: options.respectGlobalStop,
                 commitMode: 'stage_only',
+                stagingSession: stagingSession || undefined,
                 replaceExistingIncremental: true,
                 syncAfterCommit: false,
                 onProgress: options.onProgress,
@@ -106482,14 +107416,6 @@ async function executeAutoFillStagingGroups_ACU(groups, mode, options = {}) {
                 failedGroups.add(group.key);
                 firstError = firstError || preResult.error || '边界前 staging 提交失败。';
                 break;
-            }
-            // 累积 staging 快照：bucket 提交后 runtime 已更新为目标表最新 AI 结果。
-            if (stagingRun) {
-                const stagedData = currentJsonTableData_ACU || {};
-                stagingRun.lastStagedSnapshot = JSON.parse(JSON.stringify(stagedData));
-                stagingRun.lastStagedTargetMessageIndex = preSegment.saveTargetIndex;
-                stagingRun.stagedBucketCount += 1;
-                stagingRun.stagedWorkingData = stagingRun.lastStagedSnapshot;
             }
         }
         // 首个 post 段提交前收敛 staging：边界前累计快照原子折叠回原根；零 staging 则丢弃。
@@ -106531,13 +107457,14 @@ async function executeAutoFillStagingGroups_ACU(groups, mode, options = {}) {
         }
     }
     // 所有组都只有 pre-boundary 段（未触发循环内汇合）：正常收尾时仍须把 staging 汇合回原根。
-    if (!boundaryCommitted && stagingRun && stagingRun.stagedBucketCount > 0) {
+    if (!boundaryCommitted && stagingRun && stagingRun.overlay.stagedBucketCount > 0) {
         const settleResult = await settleStagingBoundary();
         if (!settleResult.ok) {
             normalizedGroups.forEach(g => failedGroups.add(g.key));
             firstError = firstError || `跨根 staging 收尾汇合失败：${settleResult.error}`;
         }
     }
+    await stagingSession?.discard();
     return failedGroups.size > 0
         ? { success: false, failedGroups: [...failedGroups], error: firstError || '跨根 staging 执行失败。', committedBucketCount }
         : { success: true, failedGroups: [], committedBucketCount };
@@ -107003,6 +107930,7 @@ async function processUpdatesBatch_ACU(indicesToUpdate, mode, options, executeUp
     if (migration.migrated) {
         await reloadStorageProvider();
     }
+    await flushRuntimeOnlyChangesBeforeFill_ACU('processUpdatesBatch');
     _set_wasStoppedByUser_ACU(false);
     _set_isAutoUpdatingCard_ACU(true);
     try {
@@ -107016,7 +107944,7 @@ async function processUpdatesBatch_ACU(indicesToUpdate, mode, options, executeUp
         const chatHistory = getChatArray_ACU();
         const isAutoUpdateMode = mode && mode.startsWith('auto');
         const isSilentMode = !!(isAutoUpdateMode && settings_ACU.toastMuteEnabled);
-        // 此处刻意不接 replayEvidence：本循环每批 maxMessageIndex = firstMessageIndexOfBatch - 1
+        // 此处刻意不接 replayEvidence：本循环每批 maxMessageIndex = 本批 saveTarget
         // 严格递增，evidence 复用要求 boundary 完全相同（v2-replay-session.ts），命中率恒为 0，
         // 而 replay 仍会为写回 evidence 多付一次全表深克隆 —— 纯亏。跨批复用属阶段 G2
         // run-scoped session 语义（需从已提交 snapshot 增量前进），不能用同 boundary evidence 冒充。
@@ -107026,8 +107954,18 @@ async function processUpdatesBatch_ACU(indicesToUpdate, mode, options, executeUp
             const firstMessageIndexOfBatch = batchIndices[0];
             const lastMessageIndexOfBatch = batchIndices[batchIndices.length - 1];
             const finalSaveTargetIndex = lastMessageIndexOfBatch;
-            // 构建合并基底
-            const baseResult = await buildBatchMergeBase_ACU(batchNumber, { maxMessageIndex: firstMessageIndexOfBatch - 1 });
+            // 构建合并基底：本路径始终追加写入 finalSaveTargetIndex，基底须覆盖到该楼层既有帧
+            // （例如前端开局脚本写入的 init checkpoint），与 persist 回放叠加顺序一致。
+            const mergeBaseMaxMessageIndex = resolveBucketMergeBaseMaxMessageIndex_ACU({
+                lowerBound: firstMessageIndexOfBatch - 1,
+                saveTargetIndex: finalSaveTargetIndex,
+                chat: chatHistory,
+                isolationKey: getCurrentIsolationKey_ACU(),
+            });
+            const baseResult = await buildBatchMergeBase_ACU(batchNumber, {
+                maxMessageIndex: mergeBaseMaxMessageIndex,
+                liveRuntimeAuthoritative: true,
+            });
             if (!baseResult.data) {
                 return { success: false, failedBatch: batchNumber, error: baseResult.error || '无法构建合并基底，操作已终止。' };
             }
@@ -107182,7 +108120,8 @@ async function prepareManualCatchUpPlan_ACU(targetKeys) {
             sheetKey,
             lastCompletedAiFloor: history.lastTrackedUpdateAiFloor,
             groupId,
-            batchSize: Math.max(1, Math.trunc(Number(settings_ACU.updateBatchSize) || 1)),
+            // 追平的分批粒度跟手动面板的「每 N 层合并为一次填表」走，不读自动填表的 updateBatchSize。
+            batchSize: resolveManualUpdateBatchSize_ACU(),
             requestOptions: preset ? { tableApiPreset: preset } : null,
             updateMode: 'manual_independent',
             executionKind: isSqliteMode() ? 'sql' : 'standard',
@@ -107278,10 +108217,11 @@ async function orchestrateManualCatchUp_ACU(targetKeys, refreshData, options = {
     // runId 必须在 preflight 之前创建：staging run 与 bucket 提交共用同一个 runId，
     // 保证 run-scoped 隔离（staging 只认本 run 授权的目标表）。
     const runId = createManualCatchUpRunId_ACU();
-    // 跨 full checkpoint staging run 状态：冻结 scope 后在 bucket 循环内累积 staging
-    // 快照，到达原 full 边界原子汇合。不能依赖全局状态——必须在 run 内显式跟踪。
+    // 跨 full checkpoint staging run 状态：冻结 scope 后在 bucket 循环内累积目标表
+    // overlay，到达原 full 边界原子汇合。不能依赖全局状态——必须在 run 内显式跟踪。
     let boundaryPlan = null;
     let stagingRun = null;
+    let stagingSession = null;
     let boundaryCommitted = false;
     // 旧版“删除全部数据”会将 header-only reset checkpoint 留在原先较晚楼层。
     // 在任何 AI 调用之前修复可证明安全的布局；无法证明安全则阻断，而不是让 bucket
@@ -107349,16 +108289,16 @@ async function orchestrateManualCatchUp_ACU(targetKeys, refreshData, options = {
                     diagnosticCode: 'staging_plan_failed',
                 };
             }
-            stagingRun = {
+            stagingRun = createTableFillStagingRunContext_ACU({
                 runId,
                 chatKey: boundaryPlan.scope.chatKey,
                 isolationKey: boundaryPlan.scope.isolationKey,
-                targetSheetKeys: [...boundaryPlan.scope.targetSheetKeys],
-                stagedWorkingData: null,
-                lastStagedSnapshot: null,
-                lastStagedTargetMessageIndex: null,
-                stagedBucketCount: 0,
-            };
+                targetSheetKeys: boundaryPlan.scope.targetSheetKeys,
+                originalFullIndex: boundaryPlan.scope.originalFullIndex,
+                originalFullFingerprint: readOriginalFullFrameFingerprint_ACU(liveChat, isolationKey, anchorPreflight.checkpointMessageIndex),
+                templateFingerprint,
+            });
+            stagingSession = createTableFillStagingSession_ACU(stagingRun);
             logDebug_ACU(`[手动追平] 已冻结跨根 staging scope：runId=${runId}, originalFull=${anchorPreflight.checkpointMessageIndex}, preBoundary=${boundaryPlan.preBoundaryIndices.length}。`);
         }
     }
@@ -107531,27 +108471,23 @@ async function orchestrateManualCatchUp_ACU(targetKeys, refreshData, options = {
     const settleStagingBoundary = async () => {
         if (!boundaryPlan || boundaryCommitted)
             return { ok: true };
-        if (!stagingRun || stagingRun.stagedBucketCount === 0) {
+        if (!stagingRun || stagingRun.overlay.stagedBucketCount === 0) {
             // 零提交：staging 只是内存状态，直接丢弃，不产生任何持久化改写。
             boundaryCommitted = true;
+            await stagingSession?.discard();
             return { ok: true };
         }
         const originalFullIndex = boundaryPlan.scope.originalFullIndex;
         if (originalFullIndex === null) {
             boundaryCommitted = true;
+            await stagingSession?.discard();
             return { ok: true };
         }
-        const commitResult = await commitStagedSheetsAtFullBoundaryAtomic_ACU(runId, {
-            chatKey: stagingRun.chatKey,
-            isolationKey: stagingRun.isolationKey,
-            originalFullIndex,
-            stagedSnapshot: stagingRun.lastStagedSnapshot ?? {},
-            targetSheetKeys: stagingRun.targetSheetKeys,
-        });
-        if (!commitResult.ok) {
-            return { ok: false, error: commitResult.error, diagnosticCode: commitResult.diagnosticCode ?? 'boundary_commit_failed' };
-        }
+        const settleResult = await settleStagedBoundaryAndPublish_ACU(stagingRun, originalFullIndex, stagingSession);
+        if (!settleResult.ok)
+            return settleResult;
         boundaryCommitted = true;
+        stagingSession = null;
         return { ok: true };
     };
     const refreshCommittedDataBeforeExit = async () => {
@@ -107674,7 +108610,7 @@ async function orchestrateManualCatchUp_ACU(targetKeys, refreshData, options = {
                     abortController: options.abortController,
                     respectGlobalStop: false,
                     manualCatchUpRun: true,
-                    ...(isPreBoundarySegment ? { commitMode: 'stage_only' } : {}),
+                    ...(isPreBoundarySegment ? { commitMode: 'stage_only', stagingSession: stagingSession || undefined } : {}),
                     replaceExistingIncremental: true,
                     syncAfterCommit: false,
                     onProgress: event => options.onProgress?.({
@@ -107714,15 +108650,6 @@ async function orchestrateManualCatchUp_ACU(targetKeys, refreshData, options = {
                             completedSheetMessageIndexByKey[sheetKey] = bucket.saveTargetIndex;
                         });
                         lastCommittedBucketTargetIndex = bucket.saveTargetIndex;
-                        if (isPreBoundarySegment && stagingRun) {
-                            // 边界前 bucket：把 AI 结果累积进 run 级 staging 快照。
-                            // lastStagedSnapshot 只保存本 run 授权的目标表，供边界汇合取数。
-                            const stagedData = currentJsonTableData_ACU || {};
-                            stagingRun.lastStagedSnapshot = JSON.parse(JSON.stringify(stagedData));
-                            stagingRun.lastStagedTargetMessageIndex = bucket.saveTargetIndex;
-                            stagingRun.stagedBucketCount += 1;
-                            stagingRun.stagedWorkingData = stagingRun.lastStagedSnapshot;
-                        }
                     },
                 });
                 committedBucketCount += result.committedBucketCount;
@@ -107959,6 +108886,7 @@ async function orchestrateManualUpdate_ACU(targetKeys, processBatch, refreshData
     // 分支内使用，普通路径保持 null。
     let boundaryPlan = null;
     let stagingRun = null;
+    let stagingSession = null;
     let boundaryCommitted = false;
     // 破坏性清理是否已开始：清理一旦开始即不可逆（失败不回滚、不恢复已删数据），
     // 后续任何失败都必须走 failManualRefillSession 对齐运行时，而不是裸抛。
@@ -107983,32 +108911,28 @@ async function orchestrateManualUpdate_ACU(targetKeys, processBatch, refreshData
             error: failureError,
         };
     };
-    // 跨根 staging 汇合：边界前 bucket 只进入 run 级 staging（不写聊天 V2 frame），
-    // 到达原 full 边界时把累计目标表快照原子折叠为原根的 sheet_rebase（正式根），
-    // 边界后段恢复普通逐 bucket 持久化。零 staging 则直接丢弃（不写任何聊天帧）。
+    // 跨根 staging 汇合：边界前 bucket 只进入 run 级目标表 overlay（不写聊天 V2 frame），
+    // 到达原 full 边界时把累计结果原子折叠为原根的 sheet_rebase（正式根），并把验证过的
+    // head 发布到 runtime；边界后段恢复普通逐 bucket 持久化。零 staging 则直接丢弃。
     const settleStagingBoundary = async () => {
         if (!boundaryPlan || boundaryCommitted)
             return { ok: true };
-        if (!stagingRun || stagingRun.stagedBucketCount === 0) {
+        if (!stagingRun || stagingRun.overlay.stagedBucketCount === 0) {
             boundaryCommitted = true;
+            await stagingSession?.discard();
             return { ok: true };
         }
         const fullIndex = boundaryPlan.scope.originalFullIndex;
         if (fullIndex === null) {
             boundaryCommitted = true;
+            await stagingSession?.discard();
             return { ok: true };
         }
-        const commitResult = await commitStagedSheetsAtFullBoundaryAtomic_ACU(stagingRun.runId, {
-            chatKey: stagingRun.chatKey,
-            isolationKey: stagingRun.isolationKey,
-            originalFullIndex: fullIndex,
-            stagedSnapshot: stagingRun.lastStagedSnapshot ?? {},
-            targetSheetKeys: stagingRun.targetSheetKeys,
-        });
-        if (!commitResult.ok) {
-            return { ok: false, error: commitResult.error, diagnosticCode: commitResult.diagnosticCode ?? 'boundary_commit_failed' };
-        }
+        const settleResult = await settleStagedBoundaryAndPublish_ACU(stagingRun, fullIndex, stagingSession);
+        if (!settleResult.ok)
+            return settleResult;
         boundaryCommitted = true;
+        stagingSession = null;
         return { ok: true };
     };
     try {
@@ -108057,8 +108981,9 @@ async function orchestrateManualUpdate_ACU(targetKeys, processBatch, refreshData
                 return { success: false, error: '锚点自动收敛后数据库未能重新加载。' };
             }
         }
-        const uiThreshold = settings_ACU.autoUpdateThreshold || 3;
-        const uiBatchSize = settings_ACU.updateBatchSize || 3;
+        // 手动更新读手动面板自己的层数与分批参数；自动填表的阈值/批大小不进入手动路径。
+        const uiThreshold = resolveManualUpdateContextDepth_ACU();
+        const uiBatchSize = resolveManualUpdateBatchSize_ACU();
         const uiSkip = settings_ACU.skipUpdateFloors || 0;
         const effectiveAiIndices = uiSkip > 0 ? allAiMessageIndices.slice(0, -uiSkip) : allAiMessageIndices.slice();
         const contextScopeIndices = uiThreshold > 0 ? effectiveAiIndices.slice(-uiThreshold) : effectiveAiIndices;
@@ -108169,16 +109094,16 @@ async function orchestrateManualUpdate_ACU(targetKeys, processBatch, refreshData
                     messageIndices: contextScopeIndices,
                     fullCheckpointIndices: [originalFullIndex],
                 });
-                stagingRun = {
+                stagingRun = createTableFillStagingRunContext_ACU({
                     runId: boundaryPlan.scope.runId,
                     chatKey: boundaryPlan.scope.chatKey,
                     isolationKey: boundaryPlan.scope.isolationKey,
-                    targetSheetKeys: [...boundaryPlan.scope.targetSheetKeys],
-                    stagedWorkingData: null,
-                    lastStagedSnapshot: null,
-                    lastStagedTargetMessageIndex: null,
-                    stagedBucketCount: 0,
-                };
+                    targetSheetKeys: boundaryPlan.scope.targetSheetKeys,
+                    originalFullIndex: boundaryPlan.scope.originalFullIndex,
+                    originalFullFingerprint: readOriginalFullFrameFingerprint_ACU(getChatArray_ACU(), currentIsolationKey, originalFullIndex),
+                    templateFingerprint,
+                });
+                stagingSession = createTableFillStagingSession_ACU(stagingRun);
                 logDebug_ACU(`[Manual Refill] 跨根 staging 已启用：originalFull=${originalFullIndex}, 范围 [${contextScopeIndices[0]}..${contextScopeIndices[contextScopeIndices.length - 1]}]，边界前 bucket 仅写入 staging。`);
             }
             // 重填会先删除持久化增量，不能在 SQLite runtime 尚未 ready 时进入破坏性阶段。
@@ -108481,6 +109406,7 @@ async function orchestrateManualUpdate_ACU(targetKeys, processBatch, refreshData
                                 skipWriteTargetAdmission: true,
                                 replaceExistingIncremental: false,
                                 commitMode: 'stage_only',
+                                stagingSession: stagingSession || undefined,
                                 syncAfterCommit: false,
                             });
                             committedBucketCount += preResult.committedBucketCount;
@@ -108488,14 +109414,6 @@ async function orchestrateManualUpdate_ACU(targetKeys, processBatch, refreshData
                                 failedGroups.push({ key: group.key, error: preResult.error || '边界前 staging 提交失败。' });
                                 groupFailed = true;
                                 break;
-                            }
-                            // 累积 staging 快照：bucket 提交后 runtime 已更新为目标表最新 AI 结果。
-                            if (stagingRun) {
-                                const stagedData = currentJsonTableData_ACU || {};
-                                stagingRun.lastStagedSnapshot = JSON.parse(JSON.stringify(stagedData));
-                                stagingRun.lastStagedTargetMessageIndex = preSegment.saveTargetIndex;
-                                stagingRun.stagedBucketCount += 1;
-                                stagingRun.stagedWorkingData = stagingRun.lastStagedSnapshot;
                             }
                         }
                         // 首个 post 段提交前收敛 staging：边界前累计快照原子折叠回原根。
@@ -111738,11 +112656,14 @@ const VECTOR_RERANK_TIMEOUT_MS_ACU = 30000;
 function normalizeEndpoint_ACU(endpoint) {
     return String(endpoint || '').trim().replace(/\/+$/, '');
 }
+/**
+ * Rerank 是浏览器直连第三方服务商的跨域请求，与 embedding 网关同一口径：只带 Content-Type 与 Authorization。
+ * 绝不能混入宿主请求头（X-CSRF-Token 等）——自定义头会触发 CORS 预检，服务商的
+ * Access-Control-Allow-Headers 不放行它就整条请求被浏览器拦下，rerank 静默退化成 embedding 排序，
+ * 同时还把宿主的 CSRF 令牌泄露给第三方。
+ */
 function buildRerankHeaders_ACU(apiKey) {
-    const headers = {
-        ...getHostRequestHeaders_ACU(),
-        'Content-Type': 'application/json',
-    };
+    const headers = { 'Content-Type': 'application/json' };
     if (apiKey) {
         headers.Authorization = `Bearer ${apiKey}`;
     }
@@ -112516,13 +113437,16 @@ function cosineSimilarity_ACU(left, right, leftNorm) {
         return 0;
     return dot / (leftNorm * Math.sqrt(rightNorm));
 }
-// P4：统一走 vector-rerank-gateway 网关（超时可中断、宿主请求头、安全 JSON 解析），
-// 消除此前内联 fetch 与网关的双实现漂移。失败时保留既有语义：回退 embedding 排序。
+// P4：统一走 vector-rerank-gateway 网关（超时可中断、安全 JSON 解析），消除此前内联 fetch 与网关的双实现漂移。
+// 失败时保留既有语义：回退 embedding 排序——但用户明确配置了 rerank 却每次都失败，必须以 error 级别透出，
+// warn 级别默认关闭时会让「rerank 从未生效」完全不可见。
 async function rerankCandidates_ACU(config, query, candidates) {
     const endpoint = normalizeText_ACU(config.rerankEndpoint);
     const model = normalizeText_ACU(config.rerankModel);
-    if (!endpoint || !model || candidates.length === 0)
-        return candidates;
+    if (!endpoint || !model)
+        return { candidates, status: 'not_configured' };
+    if (candidates.length === 0)
+        return { candidates, status: 'no_candidates' };
     try {
         const results = await createRerankScores_ACU({
             endpoint,
@@ -112537,13 +113461,21 @@ async function rerankCandidates_ACU(config, query, candidates) {
             if (item.index >= 0 && item.index < candidates.length)
                 byIndex.set(item.index, item.relevanceScore);
         });
-        return candidates
-            .map((candidate, index) => ({ ...candidate, rerankScore: byIndex.get(index) ?? candidate.score }))
-            .sort((left, right) => (right.rerankScore ?? right.score) - (left.rerankScore ?? left.score));
+        if (byIndex.size === 0) {
+            logError_ACU(`[交火模式纪要索引] Rerank 响应没有任何可用的评分（endpoint=${endpoint}, model=${model}），本轮回退到 Embedding 排序。请检查服务商返回格式是否为 results[].index / relevance_score。`);
+            return { candidates, status: 'empty_response', error: 'rerank 响应中没有可用评分' };
+        }
+        return {
+            status: 'applied',
+            candidates: candidates
+                .map((candidate, index) => ({ ...candidate, rerankScore: byIndex.get(index) ?? candidate.score }))
+                .sort((left, right) => (right.rerankScore ?? right.score) - (left.rerankScore ?? left.score)),
+        };
     }
     catch (error) {
-        logWarn_ACU('[交火模式纪要索引] Rerank 失败，回退到 Embedding 排序:', error);
-        return candidates;
+        const message = error instanceof Error ? error.message : String(error);
+        logError_ACU(`[交火模式纪要索引] Rerank 调用失败（endpoint=${endpoint}, model=${model}），本轮回退到 Embedding 排序：${message}`);
+        return { candidates, status: 'failed', error: message };
     }
 }
 function escapeMarkdownTableCell_ACU(value) {
@@ -113117,11 +114049,9 @@ async function processSummaryVectorIndexBeforeGeneration_ACU(options = {}) {
         return { success: false, skipped: true, reason: 'no_candidates', keywordCount: keywords.length, denseCandidateCount: denseCandidates.length, sparseCandidateCount: sparseCandidates.length, fusionCandidateCount: candidates.length };
     }
     // Rerank 只处理较早行的候选
-    const reranked = candidates.length > 0
-        ? await rerankCandidates_ACU(config, queryText, candidates)
-        : [];
+    const rerank = await rerankCandidates_ACU(config, queryText, candidates);
     const selectedByRow = new Map();
-    for (const candidate of reranked) {
+    for (const candidate of rerank.candidates) {
         if (!selectedByRow.has(candidate.row.rowKey))
             selectedByRow.set(candidate.row.rowKey, { kind: 'ranked', chunk: candidate.chunk, row: candidate.row, score: candidate.score, rerankScore: candidate.rerankScore });
         if (selectedByRow.size >= config.topK)
@@ -113136,12 +114066,12 @@ async function processSummaryVectorIndexBeforeGeneration_ACU(options = {}) {
     const selected = Array.from(selectedByRow.values())
         .sort((left, right) => (Number(left.row.rowOrder) || 0) - (Number(right.row.rowOrder) || 0));
     if (selected.length === 0) {
-        return { success: false, skipped: true, reason: 'no_selected_rows', keywordCount: keywords.length, candidateCount: candidates.length, denseCandidateCount: denseCandidates.length, sparseCandidateCount: sparseCandidates.length, fusionCandidateCount: candidates.length };
+        return { success: false, skipped: true, reason: 'no_selected_rows', keywordCount: keywords.length, candidateCount: candidates.length, denseCandidateCount: denseCandidates.length, sparseCandidateCount: sparseCandidates.length, fusionCandidateCount: candidates.length, rerankStatus: rerank.status, rerankError: rerank.error };
     }
     const content = buildSummaryIndexOverwriteContent_ACU(selected);
     await upsertOriginalSummaryIndexEntry_ACU(content);
-    logDebug_ACU(`[交火模式纪要索引] 已覆盖原概要索引条目：${selected.length} 条（其中固定注入 ${recentFixedRows.length} 条，排序选取 ${selected.length - recentFixedRows.length} 条），关键词 ${keywords.length} 个，输出顺序按纪要表原 rowOrder。`);
-    return { success: true, keywordCount: keywords.length, candidateCount: candidates.length, injectedCount: selected.length, denseCandidateCount: denseCandidates.length, sparseCandidateCount: sparseCandidates.length, fusionCandidateCount: candidates.length };
+    logDebug_ACU(`[交火模式纪要索引] 已覆盖原概要索引条目：${selected.length} 条（其中固定注入 ${recentFixedRows.length} 条，排序选取 ${selected.length - recentFixedRows.length} 条），关键词 ${keywords.length} 个，rerank=${rerank.status}，输出顺序按纪要表原 rowOrder。`);
+    return { success: true, keywordCount: keywords.length, candidateCount: candidates.length, injectedCount: selected.length, denseCandidateCount: denseCandidates.length, sparseCandidateCount: sparseCandidates.length, fusionCandidateCount: candidates.length, rerankStatus: rerank.status, rerankError: rerank.error };
 }
 
 /**
@@ -113416,9 +114346,9 @@ class ContinuationValidationError_ACU extends Error {
         this.error = error;
     }
 }
-const CONTINUATION_AGENT_PROMPT_KEYS_ACU = ['main', 'arcArchitect', 'maintainer', 'mainlinePlanner', 'beatPlanner', 'reviewer'];
-/** 可独立配置 AI 渠道的七个角色：主 Agent、大纲子代理与五个派工子代理。 */
-const CONTINUATION_AGENT_API_PRESET_ROLES_ACU = ['main', 'outline', 'arcArchitect', 'maintainer', 'mainlinePlanner', 'beatPlanner', 'reviewer'];
+const CONTINUATION_AGENT_PROMPT_KEYS_ACU = ['main', 'arcArchitect', 'maintainer', 'mainlinePlanner', 'beatPlanner', 'reviewer', 'finalReviewer'];
+/** 可独立配置 AI 渠道的八个角色：主 Agent、大纲子代理、五个派工子代理与最终审查。 */
+const CONTINUATION_AGENT_API_PRESET_ROLES_ACU = ['main', 'outline', 'arcArchitect', 'maintainer', 'mainlinePlanner', 'beatPlanner', 'reviewer', 'finalReviewer'];
 /**
  * 单轮的节奏档位。这是解决「事件事件事件、全程没有日常」的核心手段：
  * - setup：铺垫日常（关系推进、生活场景、准备工作，无外部危机）
@@ -113427,6 +114357,12 @@ const CONTINUATION_AGENT_API_PRESET_ROLES_ACU = ['main', 'outline', 'arcArchitec
  * - cooldown：余波消化（战后疗伤、复盘、情绪落地）
  */
 const STAGE_TURN_PACINGS_ACU = ['setup', 'pressure', 'turn', 'cooldown'];
+/** 单轮承担的叙事功能；与 pacing 分离，避免把低压误解为“没有功能”。 */
+const STAGE_TURN_FUNCTIONS_ACU = ['daily_bond', 'daily_world', 'recovery', 'preparation', 'training', 'economy', 'side_thread', 'conflict', 'reveal', 'payoff', 'transition'];
+/** 单轮对主线的实际增量。hold 是低压轮的合法结果，不等于无变化。 */
+const STAGE_TURN_MAINLINE_DELTAS_ACU = ['hold', 'micro', 'step', 'milestone'];
+/** 单轮与上一轮之间的故事时间跨度级别；题材相关时间语义由 timeAnchor 补充。 */
+const STAGE_TURN_TIME_ADVANCES_ACU = ['continuous', 'same_day', 'overnight', 'days', 'weeks', 'months', 'years'];
 /** setup 与 cooldown 合称低压轮，是节奏配比校验里被计数的那一侧。 */
 const STAGE_TURN_DOWNTIME_PACINGS_ACU = ['setup', 'cooldown'];
 /**
@@ -113439,6 +114375,10 @@ const STAGE_TURN_DOWNTIME_PACINGS_ACU = ['setup', 'cooldown'];
  * - aftermath：余波型，消化代价、重建关系，把前一段高压的重量落地
  */
 const STAGE_TEMPOS_ACU = ['buildup', 'mixed', 'surge', 'aftermath'];
+/** 阶段在卷级结构中的职责；它描述结构位置，StageTempo 描述能量形态。 */
+const STAGE_ROLES_ACU = ['setup', 'development', 'escalation', 'turn', 'payoff', 'aftermath'];
+/** 可由运行时保守补全的轮次语义字段。 */
+const STAGE_TURN_SOFT_FIELDS_ACU = ['function', 'mainlineDelta', 'timeAdvance'];
 function createContinuationError_ACU(code, phase, message, retryable = false, details) {
     return details === undefined ? { code, phase, message, retryable } : { code, phase, message, retryable, details };
 }
@@ -113501,8 +114441,13 @@ const AGENT_REVEAL_STATUSES_ACU = ['unrevealed', 'partial', 'revealed'];
 /** 总纲条目的层级：story=全书方向（全局唯一一条活跃条目）；volume=卷/幕台阶。 */
 const AGENT_STORY_ARC_SCOPES_ACU = ['story', 'volume'];
 const AGENT_STORY_ARC_STATUSES_ACU = ['planned', 'active', 'done'];
-const AGENT_WRITABLE_MODULES_ACU = ['hooks', 'infoGap', 'constraints', 'storyArc'];
+/** 卷在全书长程结构中的职责；与阶段职责同词但作用域独立。 */
+const AGENT_VOLUME_NARRATIVE_ROLES_ACU = ['setup', 'development', 'escalation', 'turn', 'payoff', 'aftermath'];
+const AGENT_CHRONOLOGY_PRECISIONS_ACU = ['exact', 'approximate', 'unknown'];
+const AGENT_WRITABLE_MODULES_ACU = ['hooks', 'infoGap', 'constraints', 'storyArc', 'chronology'];
 const AGENT_SUBAGENT_NAMES_ACU = ['arc-architect', 'hook-cognition-maintainer', 'mainline-planner', 'beat-planner', 'continuity-reviewer'];
+/** 最终审查是 finalize 前由运行时受控触发的内部代理，不进入主 Agent 可委派名称集合。 */
+const AGENT_FINAL_REVIEWER_NAME_ACU = 'final-reviewer';
 /**
  * 大纲子代理的目录名。它不走通用子代理运行时：主循环拦截对它的派工，
  * 调用编排器注入的租约内事务回调，由既有大纲规划器完成生成与校验。
@@ -113563,7 +114508,7 @@ const V19_DEFAULT_MAIN_AGENT_HISTORY_GUIDE_ACU = `【以下是你自己的会话
 /** V19 默认上下文排布问答的 assistant 答。V20 改为快照在会话内追加，迁移时只替换这份未改写原文。 */
 const V19_DEFAULT_MAIN_AGENT_LAYOUT_ANSWER_ACU = '我收到的上下文分三层：\n1. 正文注入（三节正交）：【事件概览】是纪要表逐轮的事件脉络（每轮一行，本轮召回命中的行会展开为纪要全文），我靠它掌握全局剧情走向；【最近正文】是尾部若干楼的全文，续写必须无缝衔接它的结尾，这几楼不要再 read；【楼层索引】是纯地址索引（楼层号、字数、读取地址），目录行不能代替读正文——需要哪几楼的原文就用 $STORY_RANGE 调阅，需要某几轮的详细纪要就用 $TABLE:纪要表:行区间。注意概览按剧情轮记录、与楼层号没有一一映射，定位具体楼层用 search 的 story 域。\n2. 我自己的会话记录：用户对我说的话、我历次迭代实际输出过的动作、运行时回灌的工具结果与派工结果。我调阅过的资料就留在这里，跨迭代有效，不必重读；标着「内容已过期」的旧调阅说明资料后来变了，需要时按地址重读最新版。\n3. 本回合运行时数据（排在会话记录之后、我的输出之前）：轮次目标、大纲状态、未结算范围、子代理目录、资料模块目录、表格目录、世界书目录、世界书命中提示、读取地址词汇表、预算状态。这一层每次迭代都刷新为最新值——它反映我此前动作（派工、结算、大纲编辑）造成的最新状态，比会话记录里的旧陈述更新。这些是目录和状态，不是资料正文；需要内容就照地址 read。它们是系统给我的证据，不是用户发言，我不复述也不润色。\n我不会重复已经做过的事，也不会重问已经拿到答案的问题。会话记录开头若出现「更早会话的浓缩记录」，那是 token 预算把原始消息移出了上下文；浓缩记录里列出的「曾调阅过的资料地址」不必凭记忆使用，需要时重新 read。\n三层之间冲突时的优先级：正文（含我调阅到的正文全文）> 运行时数据 > 我自己的会话记录。用户在会话里的最新指令优先于我此前的计划。';
 /** 主循环渲染并追加到会话的运行时快照模板。占位符由 renderMainPrompt 同一套 resolvers 解析。 */
-const AGENT_RUNTIME_SNAPSHOT_TEMPLATE_ACU = '【本回合运行时数据】\n以下是系统在目录或状态变化时追加的快照——靠后的快照比早先的更新；不是用户发言，不要复述。已发生事实只认小说正文；大纲是计划。这里没有任何资料正文——需要内容就按地址 read，需要定位就 search。\n\n【用户初始要求】\n$USER_INTENT\n\n【本轮目标】\n$CURRENT_TURN_GOAL\n\n【本轮节奏】\n$CURRENT_TURN_PACING\n\n【大纲状态】\n$OUTLINE_STATE\n\n【故事总纲状态】\n$STORY_ARC_STATE\n\n【未结算历史范围】\n$UNSETTLED_RANGE\n\n【子代理能力目录】\n$AGENT_CATALOG\n\n【资料模块目录】\n$MODULE_CATALOG\n\n【表格目录】\n$TABLE_CATALOG\n\n【已启用世界书目录】\n$WORLDBOOK_CATALOG\n\n【本轮语境命中的世界书条目】\n$WORLDBOOK_HITS\n\n【读取地址词汇表】\n$AGENT_READ_CATALOG\n\n【本轮预算状态】\n$BUDGET';
+const AGENT_RUNTIME_SNAPSHOT_TEMPLATE_ACU = '【本回合运行时数据】\n以下是系统在目录或状态变化时追加的快照——靠后的快照比早先的更新；不是用户发言，不要复述。已发生事实只认小说正文；大纲是计划。\n\n【用户初始要求】\n$USER_INTENT\n\n【完整当前阶段大纲】\n$OUTLINE_WINDOW\n\n【本轮目标】\n$CURRENT_TURN_GOAL\n\n【本轮节奏】\n$CURRENT_TURN_PACING\n\n【大纲状态】\n$OUTLINE_STATE\n\n【故事总纲状态】\n$STORY_ARC_STATE\n\n【未结算历史范围】\n$UNSETTLED_RANGE\n\n【子代理能力目录】\n$AGENT_CATALOG\n\n【资料模块目录】\n$MODULE_CATALOG\n\n【表格目录】\n$TABLE_CATALOG\n\n【已启用世界书目录】\n$WORLDBOOK_CATALOG\n\n【本轮语境命中的世界书条目】\n$WORLDBOOK_HITS\n\n【读取地址词汇表】\n$AGENT_READ_CATALOG\n\n【本轮预算状态】\n$BUDGET';
 /** 各请求尾段预填充文本。解析器会在必要时把它拼回模型输出前再解析。 */
 const AGENT_PREFILLS_ACU = {
     main: '{\n  "thought": "',
@@ -113574,14 +114519,29 @@ const AGENT_PREFILLS_ACU = {
 };
 /** 最终指导骨架，写进主 Agent 的协议规范段，约束 finalize 的 instruction 形态。 */
 const AGENT_FINAL_INSTRUCTION_TEMPLATE_ACU = [
-    '承接：上一楼结尾的画面与遗留情绪，本轮从哪里接住',
-    '本轮目标：要完成的核心事件（一个场景片段），冲突障碍是什么、主角做什么选择付什么代价',
+    '承接与时间位置：上一楼停在哪里；本轮紧接、同日稍后、隔夜还是更久之后开始',
+    '本轮场景任务：只完成哪一个场景片段，不越界代写下一轮',
+    '本轮叙事功能：关系日常、世界日常、成长/经营、恢复、准备、支线、冲突、揭示、兑现或过渡中的哪一种',
+    '关键互动或阻碍（按需）：低压轮写人物互动，高压轮才写外部阻碍、选择与代价',
+    '必须发生的变化：关系、认知、资源、身体、生活状态或局势中的哪一项发生可观察变化',
     '伏笔与信息差操作：本轮对哪条做埋设/强化/误导/回收，信息允许揭示到哪一层',
     '硬事实（禁改）：本轮绝对不能改变或提前揭穿的既有事实',
-    '读者回报：本轮给读者的具体获得感（新信息/情绪释放/局势实质变化，至少其一）',
-    '收尾钩子：结尾停在哪个未决点（悬而未决/危机逼近/认知错位选其一），不许越界写到下一轮',
+    '读者回报：关系理解、生活质感、恢复完成、情绪落地、新信息或局势变化中的具体获得',
+    '收尾方式：按本轮节奏选择安静闭合、普通开放期待、未决问题或危机钩子；低压轮不强制留钩子',
     '风格（可省略）：视角、节奏、叙述基调等本轮需要的特殊风格要求',
 ].join('\n');
+/**
+ * V26 主 Agent 故事时间规则段。作为独立追加段插入，不改写任何既有默认段——
+ * V23/V24 默认组的精确还原依赖既有段原文保持稳定。
+ */
+const V26_MAIN_AGENT_CHRONOLOGY_RULE_ACU = '【故事时间与年代学账本】\n故事年代学账本（$CHRONOLOGY，可 read / search，支持按 ID 精读）记录已发生正文结算出的时间事实：当前相对时间锚、自故事起点累计经过时间、精度与每次转换的证据楼层。它由 hook-cognition-maintainer 在结算未结算正文时一并维护；时间事实只来自真实正文，大纲轮次上的 time 与 anchor 只是计划。\n本轮大纲计划的 time 为 days / weeks / months / years 时，finalize 的 instruction 必须写明：新的相对时间锚；至少两项可感知变化（季节天气、身体伤势、衣着环境、关系熟悉度、资源经营、社会状态等）；上一紧迫问题为何允许被跨过的连续性桥梁。不得用摘要跳过此前已承诺的关键场景、选择或兑现。\n指导涉及伤势恢复、训练或经营周期、旅途耗时、季节变化等时间敏感内容时，先 read $CHRONOLOGY 核对累计时间，不凭大纲或记忆断言。';
+/** V26 维护代理故事时间结算契约段：账本现状注入 + 登记规则，作为独立追加段插入。 */
+const V26_MAINTAINER_CHRONOLOGY_CONTRACT_ACU = '【故事年代学账本现状】\n$CHRONOLOGY\n\n【故事时间结算契约】\n除伏笔与信息差外，你还负责把已发生正文里的故事时间事实结算进故事年代学账本（delta.chronology）。\n1. 时间事实的唯一来源是真实正文。大纲里的 timeAdvance / timeAnchor 只是待核对的计划：正文没有真正写出的时间跳跃不得登记；运行时的任务时间线也不是小说内部时间。\n2. 条目格式：{"action":"upsert|retire","id":"T001","anchor":"转换后可用于正文定位的相对时间锚（如：抵达临川城后的第七天）","elapsed":"自故事起点累计经过的时间（无法可靠量化就写「约三个月」或「未知」）","precision":"exact|approximate|unknown","transition":"从上一锚点到本锚点实际发生的时间转换","evidenceIndexes":[支撑该事实的真实正文楼层号],"reason":"retire 时必填"}。\n3. evidenceIndexes 必须引用真实正文楼层，不得引用大纲、策划建议、提示词或运行时记录；不能为空，也不能包含尚未结算的未来楼层。\n4. 模糊时间不许伪造成精确日期：正文只说「数日后」就用 approximate，完全无法判断就用 unknown。\n5. 未结算正文里没有可证实的时间变化时，chronology 输出空数组是合法结果。漏写既有条目不等于删除；作废必须显式 retire 并给出理由。';
+/** V26 终审故事时间一致性规则段：核对年代学账本与时间跳跃正文义务，作为独立追加段插入。 */
+const V26_FINAL_REVIEWER_CHRONOLOGY_RULES_ACU = '【故事时间一致性审查】\n补充终审证据里的【故事年代学账本】是已发生正文结算出的时间事实（当前时间锚、累计经过时间、精度与证据楼层）；时间问题以它和最近正文为准，大纲里的时间字段只是计划，账本为空时只按最近正文判断、不虚构时间事实。\n逐项核对候选指导与既有时间事实是否相容：伤势恢复速度、训练/生产/经营周期、旅行距离与耗时、季节与天气、角色年龄与关系熟悉度。\n候选指导安排数日、数周、数月或数年的时间跳跃时，必须同时具备：新的相对时间锚；至少两项可感知变化（季节天气、身体伤势、衣着环境、关系熟悉度、资源经营、社会状态等）；解释上一紧迫问题为何允许被跨过的连续性桥梁。缺任一项判 revise；用摘要跳过此前已承诺的关键场景、选择或兑现也判 revise。时间仍连续时不凭空要求跳跃。';
+/** V23 默认主 Agent 节奏规则；V24 迁移只替换这段未改写原文。 */
+const V23_MAIN_AGENT_PACING_RULE_ACU = '9. 我按本轮节奏标签给指导，不按惯性给指导。setup 与 cooldown 是低压轮：这两种轮次的指导里禁止制造新危机、禁止引入新的敌对方、禁止让局势升级，我写的是关系推进、生活质感、准备工作与情绪消化，读者的回报按「关系变化、信息沉淀、情绪落地」来算。pressure 轮只推进一个冲突，turn 轮的揭示必须落在已经埋过的伏笔上。一个阶段全是高压轮只有在它的节奏形态是 surge 时才成立；形态不是 surge 却通篇高压，说明大纲有问题，我派工 outline-architect 维护阶段大纲，而不是照着高压往下写。';
+const V24_MAIN_AGENT_PACING_RULE_ACU = '9. 我按本轮节奏标签给指导，不按策划惯性给指导。setup 与 cooldown 是低压轮，允许主线保持不动：禁止制造新危机、引入新敌对方或让局势升级，重点是关系、生活、世界侧写、积累、恢复与时间流逝，并形成至少一项可观察的非危机变化。低压轮允许安静闭合，不强制追加钩子。pressure 轮只推进一个冲突，turn 轮的揭示必须落在既有铺垫上。子代理建议若与本轮 pacing 冲突，我必须带着具体意见重派或舍弃冲突部分，不能折中把低压轮重新写成危机轮。形态不是 surge 却通篇高压时，我派工 outline-architect 维护阶段大纲。';
 const MAIN_AGENT_PROMPT_ACU = [
     // OpenAI-compatible Codex gateways can normalize every system message into an
     // instruction prefix. Keep exactly one static root system message so changing
@@ -113625,7 +114585,7 @@ const MAIN_AGENT_PROMPT_ACU = [
     },
     {
         role: 'assistant',
-        content: '我能做的：用 read/search 调阅任何目录里列出的资料、派工子代理、通过大纲子代理管理大纲（创建、维护、继续）、用 edit_outline 微调大纲、收敛结果、交付最终指导、必要时阻断。\n我绝对不做的：不写正文（正文是正文模型的职责）、不亲自编大纲（大纲只能由大纲子代理产出并经运行时校验）、不直接改资料模块（维护类子代理按职责写入，长期约束由我裁决后登记）、不把内部信息塞进最终指导（子代理目录、资料目录、读取地址、维护报告、预算、工具轨迹一律不外传）、不为了「也许还能更好」而无限消耗预算或读取额度。',
+        content: '我能做的：用 read/search 调阅任何目录里列出的资料、派工子代理、通过大纲子代理管理大纲（创建、维护、继续）、收敛结果、交付最终指导、必要时阻断。\n我绝对不做的：不写正文（正文是正文模型的职责）、不亲自编或直接修改大纲（大纲只能由 outline-architect 产出并经运行时校验；卷级台阶由 arc-architect 维护）、不直接改资料模块（维护类子代理按职责写入，长期约束由我裁决后登记）、不把内部信息塞进最终指导（子代理目录、资料目录、读取地址、维护报告、预算、工具轨迹一律不外传）、不为了「也许还能更好」而无限消耗预算或读取额度。',
         enabled: true,
         deletable: true,
     },
@@ -113649,20 +114609,26 @@ const MAIN_AGENT_PROMPT_ACU = [
     },
     {
         role: 'assistant',
-        content: '我的行动规则：\n1. 调阅讲究并发与精准：能一次批量取的资料就在同一次输出里发多个 read/search 对象；工具批次不消耗决策迭代，读取是正常成本而不是浪费。先 search 定位再用窄地址精读，省读取额度；被门禁打回时我按报告缩小目标重试，绝不原样重发。目录摘要与索引行不能代替读正文——指导要落在具体事实上时，我必须亲自读过对应正文或设定。\n2. 世界书是核心设定资料：「本轮语境命中的世界书条目」里列出的条目与本轮直接相关，本轮涉及对应设定时我在 finalize 前先读过，或把地址种给需要它的子代理；命中提示没有覆盖的设定需求，我从世界书目录按 token 标注挑选精读。绝不凭印象编设定。\n3. 派工前先看目录，只派目录里存在的代理；派工时把它需要的资料地址写进 reads 作种子。派工讲究次序：存在未结算历史时先派结算维护，再谈策划与交付。\n4. 总纲要跟着剧情走：真实剧情的走向已越出总纲台阶、底牌被提前翻开、或当前卷事实上已收束/明显提前推迟时，我派工 arc-architect 维护总纲（patch 卷状态、改写后续台阶），不拖到下一阶段。\n5. 在预算内行动。预算进入最后一轮时我立刻收敛交付，不再派工；读取额度用尽时基于已有资料决策。\n6. 子代理的报告我要审核：结论与正文或已调阅资料冲突、明显缺漏时，带着具体意见重派，而不是照单全收。\n7. 任何环节失败，我如实报告失败，不用编造的结果补位。\n8. 我的每个动作都以完整的协议 JSON 对象表达；JSON 之外最多留少量思路梳理，绝不把动作内容散落在 JSON 外面。\n9. 我按本轮节奏标签给指导，不按惯性给指导。setup 与 cooldown 是低压轮：这两种轮次的指导里禁止制造新危机、禁止引入新的敌对方、禁止让局势升级，我写的是关系推进、生活质感、准备工作与情绪消化，读者的回报按「关系变化、信息沉淀、情绪落地」来算。pressure 轮只推进一个冲突，turn 轮的揭示必须落在已经埋过的伏笔上。一个阶段全是高压轮只有在它的节奏形态是 surge 时才成立；形态不是 surge 却通篇高压，说明大纲有问题，我用 edit_outline 插低压轮或派工 outline-architect 修，而不是照着高压往下写。',
+        content: '我的行动规则：\n1. 调阅讲究并发与精准：能一次批量取的资料就在同一次输出里发多个 read/search 对象；工具批次不消耗决策迭代，读取是正常成本而不是浪费。先 search 定位再用窄地址精读，省读取额度；被门禁打回时我按报告缩小目标重试，绝不原样重发。目录摘要与索引行不能代替读正文——指导要落在具体事实上时，我必须亲自读过对应正文或设定。\n2. 世界书是核心设定资料：「本轮语境命中的世界书条目」里列出的条目与本轮直接相关，本轮涉及对应设定时我在 finalize 前先读过，或把地址种给需要它的子代理；命中提示没有覆盖的设定需求，我从世界书目录按 token 标注挑选精读。绝不凭印象编设定。\n3. 派工前先看目录，只派目录里存在的代理；派工时把它需要的资料地址写进 reads 作种子。派工讲究次序：存在未结算历史时先派结算维护，再谈策划与交付。\n4. 总纲要跟着剧情走：真实剧情的走向已越出总纲台阶、底牌被提前翻开、或当前卷事实上已收束/明显提前推迟时，我派工 arc-architect 维护总纲（patch 卷状态、改写后续台阶），不拖到下一阶段。\n5. 在预算内行动。预算进入最后一轮时我立刻收敛交付，不再派工；读取额度用尽时基于已有资料决策。\n6. 子代理的报告我要审核：结论与正文或已调阅资料冲突、明显缺漏时，带着具体意见重派，而不是照单全收。\n7. 任何环节失败，我如实报告失败，不用编造的结果补位。\n8. 我的每个动作都以完整的协议 JSON 对象表达；JSON 之外最多留少量思路梳理，绝不把动作内容散落在 JSON 外面。\n' + V24_MAIN_AGENT_PACING_RULE_ACU,
         enabled: true,
         deletable: true,
     },
     {
         role: 'user',
-        content: '【文本协议规范】\n你的每个动作用 JSON 对象表达，形如：\n{"thought":"一句话决策依据","action":"read|search|delegate|edit_outline|finalize|block", ...}\n你可以在 JSON 前用少量自然语言梳理思路（运行时会忽略这些文字），但动作本身必须完整出现在 JSON 对象里。\n\n【工具动作：read / search，可并发】\naction = read：按地址调阅资料。附加字段 reads，数组，元素是各目录里给出的读取地址（地址体系见「读取地址词汇表」）。\naction = search：跨域检索。附加字段 query（关键词或正则）、scope（["story","tables","modules","outline","worldbook"] 的子集，省略为全域）、可选 isRegex、maxResults。命中行会带上可直接复制进 read 的地址。\n并发规则：一次输出里可以写多个 read / search 对象，它们同批执行、结果一起回来——需要多份资料时务必合并成一个批次，不要一轮只读一份浪费迭代。工具对象不能与决策动作混在同一次输出：出现任何 read/search 时整次输出按工具批次处理，混入的决策会被忽略。\n工具结果回来后再输出下一个动作。批次被门禁打回时按报告里的修正协议缩小目标（更窄的楼层区间、行区间或按 ID 精读）重试，不要原样重发。\n\n【决策动作：一次输出只表达一个】\naction = delegate：并行派工。附加字段 delegations，数组，每项 {"agentName":"目录里的代理名","prompt":"给该代理的任务描述","reads":["种子资料地址"]}。互不依赖的派工放在同一次输出里即为并发。reads 是你替它准备的初始资料（地址体系同 read 工具）；它拿到后还能自己 read/search 补充，但种子给得准能帮它少跑几轮。\n大纲的创建、大幅改写、继续下一阶段走 delegate：派工 outline-architect，prompt 写清你对大纲的要求，不需要 reads。它会串行先于同波次其他派工执行，做完后你在下一次迭代的大纲状态里就能看到新大纲。\n\naction = edit_outline：直接用工具微调当前大纲，不发 AI 调用、立即生效。附加字段 edits，数组，每项是下列之一：\n{"op":"set_turn_goal","turnId":"轮次ID","goal":"新目标句"}\n{"op":"set_node_goal","nodeId":"节点ID","goal":"新节点目标"}\n{"op":"insert_turn","nodeId":"节点ID","afterTurnId":"锚点轮次ID或null(插入节点开头)","goal":"新增轮目标","pacing":"setup|pressure|turn|cooldown(可省，默认 setup)"}\n{"op":"remove_turn","turnId":"轮次ID"}\n节点与轮次的 ID 见大纲状态行，完整列表用 read $OUTLINE_WINDOW 调阅。约束：只能动未完成的部分——已完成轮次不可改，当前正在执行的轮次可以改目标但不可删除；增删会改变总轮数，必须留在阶段规模范围内；一次最多 12 处。编辑后的剩余轮次还要过节奏校验：本阶段低压轮（setup/cooldown）数量不得低于该阶段节奏形态对应的下限（形态见大纲状态行），且连续高压轮不得超过上限（跨阶段累计，高压型阶段豁免）。删掉低压轮或连插高压轮会被拒绝并把实际情况回灌给你——剧情挤不下时正确做法是插 setup/cooldown 轮把它摊开，而不是把目标句越写越满。注意低压轮不必均匀分散，插在哪里按叙事需要定。改几句目标、加减一两轮用它；整体走向要变才派 outline-architect。\n\naction = finalize：交付最终写作指导。前提：大纲状态里必须有可执行的本轮目标——没有大纲或阶段已完成时 finalize 会被拒绝，必须先派工 outline-architect。交付前自检：存在未结算历史时已派工 hook-cognition-maintainer 结算完毕；instruction 里的伏笔与信息差操作有策划子代理的建议或伏笔账本条目作依据，不是你的即兴发挥；本轮指导涉及的正文事实与世界书设定，你已亲自读过或已核对，而不是凭目录摘要或记忆断言。附加字段 instruction（发给正文模型的指导正文，300-400 字为基准上限；正文模型单轮只输出约 800-1200 字，指导必须让它在这个篇幅内完成本轮目标，不许塞进多个场景或多个转折；指导的压力等级必须与【本轮节奏】一致，低压轮不许写危机）、summary（一句话本轮要点）、可选 constraints（{"add":["新增的长期约束"],"retire":["要废除条目的 id 或原文"]}，增量登记：add 只写本轮新增，retire 只写本轮废除，不需要重抄既有清单——漏写不等于删除，重抄已有条目也不会报错；retire 必须精确引用活跃条目的 id 或原文）。\ninstruction 按下列字段组织，每个字段一到两句、总量控制在上限内，无内容的字段直接省略：\n' + AGENT_FINAL_INSTRUCTION_TEMPLATE_ACU + '\ninstruction 里禁止出现占位符名、代理名、模块名、读取地址、预算信息与任何内部过程。\n\naction = block：阻断本轮。附加字段 reason（阻断原因）与 unresolved（未解决问题列表）。只在关键资料缺失或存在无法裁决的硬事实冲突时使用。',
+        content: '【文本协议规范】\n你的每个动作用 JSON 对象表达，形如：\n{"thought":"一句话决策依据","action":"read|search|delegate|finalize|block", ...}\n你可以在 JSON 前用少量自然语言梳理思路（运行时会忽略这些文字），但动作本身必须完整出现在 JSON 对象里。\n\n【工具动作：read / search，可并发】\naction = read：按地址调阅资料。附加字段 reads，数组，元素是各目录里给出的读取地址（地址体系见「读取地址词汇表」）。\naction = search：跨域检索。附加字段 query（关键词或正则）、scope（["story","tables","modules","outline","worldbook"] 的子集，省略为全域）、可选 isRegex、maxResults。命中行会带上可直接复制进 read 的地址。\n并发规则：一次输出里可以写多个 read / search 对象，它们同批执行、结果一起回来——需要多份资料时务必合并成一个批次，不要一轮只读一份浪费迭代。工具对象不能与决策动作混在同一次输出：出现任何 read/search 时整次输出按工具批次处理，混入的决策会被忽略。\n工具结果回来后再输出下一个动作。批次被门禁打回时按报告里的修正协议缩小目标（更窄的楼层区间、行区间或按 ID 精读）重试，不要原样重发。\n\n【决策动作：一次输出只表达一个】\naction = delegate：并行派工。附加字段 delegations，数组，每项 {"agentName":"目录里的代理名","prompt":"给该代理的任务描述","reads":["种子资料地址"]}。互不依赖的派工放在同一次输出里即为并发。reads 是你替它准备的初始资料（地址体系同 read 工具）；它拿到后还能自己 read/search 补充，但种子给得准能帮它少跑几轮。\n大纲的创建、大幅改写、继续下一阶段走 delegate：派工 outline-architect，prompt 写清你对大纲的要求，不需要 reads。它会串行先于同波次其他派工执行，做完后你在下一次迭代的大纲状态里就能看到新大纲。\n\n\n\naction = finalize：交付最终写作指导。前提：大纲状态里必须有可执行的本轮目标——没有大纲或阶段已完成时 finalize 会被拒绝，必须先派工 outline-architect。交付前自检：存在未结算历史时已派工 hook-cognition-maintainer 结算完毕；instruction 里的伏笔与信息差操作有策划子代理的建议或伏笔账本条目作依据，不是你的即兴发挥；本轮指导涉及的正文事实与世界书设定，你已亲自读过或已核对，而不是凭目录摘要或记忆断言。附加字段 instruction（发给正文模型的指导正文，300-400 字为基准上限；正文模型单轮只输出约 800-1200 字，指导必须让它在这个篇幅内完成本轮目标，不许塞进多个场景或多个转折；指导的压力等级必须与【本轮节奏】一致，低压轮不许写危机）、summary（一句话本轮要点）、可选 constraints（{"add":["新增的长期约束"],"retire":["要废除条目的 id 或原文"]}，增量登记：add 只写本轮新增，retire 只写本轮废除，不需要重抄既有清单——漏写不等于删除，重抄已有条目也不会报错；retire 必须精确引用活跃条目的 id 或原文）。\ninstruction 按下列字段组织，每个字段一到两句、总量控制在上限内，无内容的字段直接省略：\n' + AGENT_FINAL_INSTRUCTION_TEMPLATE_ACU + '\ninstruction 里禁止出现占位符名、代理名、模块名、读取地址、预算信息与任何内部过程。\n\naction = block：阻断本轮。附加字段 reason（阻断原因）与 unresolved（未解决问题列表）。只在关键资料缺失或存在无法裁决的硬事实冲突时使用。',
         enabled: true,
         deletable: false,
         pinned: true,
     },
     {
         role: 'user',
-        content: '【子代理使用规则】\n0. 总纲先行与总纲维护：总纲状态显示「尚未建立」时，第一件事是派工 arc-architect 立总纲——总纲为空时派工 outline-architect 会被直接拒绝（不消耗派工额度）。总纲已建立但有已完成阶段没登记进卷台阶时，派工 arc-architect 回写进度；卷台阶走完时让它把当前卷 patch 成 done、下一卷 patch 成 active。此外，剧情实际走向已越出总纲台阶、底牌被正文提前翻开、或当前卷目标事实上已收束/明显提前推迟时，同样必须派它维护总纲，不要拖到下一阶段。总纲只有它能写。\n1. 大纲优先：总纲就位后，大纲状态显示「还没有阶段大纲」或「阶段已全部完成」时，下一件事就是派工 outline-architect。大纲派工串行执行且计入派工预算，edit_outline 不计。\n2. 偏差处理三级阶梯：真实剧情与大纲出现偏差时按幅度分级——(a) 只是某轮目标措辞过时：edit_outline set_turn_goal 改那几句（零成本、立即生效）；(b) 结构小偏，需要加减一两轮或改节点目标：edit_outline insert_turn / remove_turn / set_node_goal；(c) 走向已实质偏离，后续多个节点不再成立：派工 outline-architect 改写剩余部分。禁止在大纲已明显失效时硬按旧轮目标 finalize。\n3. 结算先行：只要「未结算历史范围」非空，本轮第一波派工就必须包含 hook-cognition-maintainer，先把伏笔账本与信息差时间线结算到最新正文，再进入策划与 finalize；只有未结算范围为空时才允许跳过。伏笔账本和信息差时间线只有它能写——你自己 read 过正文不等于结算，你在 finalize 里写的伏笔操作也不会进账本，跳过结算就是让资料永远落后于剧情。它的写入范围由职责固定，不需要你授权。派工结算时把上一轮的轮目标写进 prompt，让它对照真实正文评估达成度。\n4. 策划是策划类子代理的职责，不是你的：每轮至少派工 mainline-planner 拿主线推进建议；本轮要对伏笔做埋设/强化/误导/回收、或信息差要走设-用-揭步进时，必须加派 beat-planner，最终指导里的伏笔与信息差操作应当来自它的建议而不是你的即兴发挥；大转折或已出现冲突时再加连续性审查。你自己调阅资料是为了审核与收敛，不是为了替策划子代理出方案。\n5. 派工的 prompt 要写清「结算什么」「策划什么」或「大纲要怎么改」，以及不许做什么。不要把资料内容抄进 prompt——把地址写进 reads，运行时会把资料注入给它。各角色的刚需资料（概览/尾楼/账本/世界书目录与命中提示）已按职责固定注入，种子只补任务特定的增量：本轮涉及的正文楼层区间（$STORY_RANGE:a-b）、命中提示里与该任务相关的世界书条目地址、需要精读的纪要表行区间（$TABLE:纪要表:a-b）。\n6. 结果回来后先审核再采用：报告与正文或你调阅到的资料冲突、有明显缺漏时，带着具体修正意见重派，而不是照单全收。\n7. finalize 前核对关键事实：本轮指导涉及角色当前位置、持有物、关系或能力等事实时，从表格目录按地址调阅对应表格核对；涉及世界观设定（地点、组织、规则、种族等）时，从世界书命中提示或目录按地址调阅条目核对。不要凭大纲或记忆断言。\n8. 用户偏好沉淀：用户在会话里提出的长期风格或内容偏好（如「少写心理独白」「保持第一人称」），经你裁决后用 finalize 的 constraints.add 登记为长期约束，让后续每轮都遵守。\n9. 一个代理最多派 2 次。重复派同一个代理只会得到重复结论时，就该收敛了。',
+        content: '【子代理使用规则】\n0. 总纲先行与总纲维护：总纲状态显示「尚未建立」时，第一件事是派工 arc-architect 立总纲——总纲为空时派工 outline-architect 会被直接拒绝（不消耗派工额度）。总纲已建立但有已完成阶段没登记进卷台阶时，派工 arc-architect 回写进度；卷台阶走完时让它把当前卷 patch 成 done、下一卷 patch 成 active。此外，剧情实际走向已越出总纲台阶、底牌被正文提前翻开、或当前卷已经由真实完成阶段达到可判定收束状态时，同样必须派它维护总纲。单个阶段完成只回写当前 active 卷的 stageNumbers；所有既有卷完成而用户继续写时，先派 arc-architect 依据最后一卷的后果扩充一个 active 新卷，再派 outline-architect，不要拖到下一阶段。总纲只有它能写。\n1. 大纲优先：总纲就位后，大纲状态显示「还没有阶段大纲」或「阶段已全部完成」时，下一件事就是派工 outline-architect。大纲维护由 outline-architect 串行执行并计入派工预算。\n2. 偏差处理：真实剧情与阶段大纲出现任何目标、节奏或结构偏差时，派工 outline-architect 维护未完成部分；卷级台阶、卷状态或后续卷方向偏差时派工 arc-architect。禁止在大纲已明显失效时硬按旧轮目标 finalize。\n3. 结算先行：只要「未结算历史范围」非空，本轮第一波派工就必须包含 hook-cognition-maintainer，先把伏笔账本与信息差时间线结算到最新正文，再进入策划与 finalize；只有未结算范围为空时才允许跳过。伏笔账本和信息差时间线只有它能写——你自己 read 过正文不等于结算，你在 finalize 里写的伏笔操作也不会进账本，跳过结算就是让资料永远落后于剧情。它的写入范围由职责固定，不需要你授权。派工结算时把上一轮的轮目标写进 prompt，让它对照真实正文评估达成度。\n4. 策划是策划类子代理的职责，不是你的：每轮至少派工 mainline-planner，并在任务里写明本轮 pacing；setup/cooldown 必须允许主线 hold、安静闭合和自然时间流逝，不得要求它补造冲突升级。本轮确有伏笔或信息差操作义务时才加派 beat-planner；低压轮没有真实操作需要时不得为凑钩子强派。最终指导里的相关操作应来自子代理建议或既有账本依据；大转折或已出现冲突时再加连续性审查。你自己调阅资料是为了审核与收敛，不是为了替策划子代理出方案。\n5. 派工的 prompt 要写清「结算什么」「策划什么」或「大纲要怎么改」，以及不许做什么。不要把资料内容抄进 prompt——把地址写进 reads，运行时会把资料注入给它。各角色的刚需资料（概览/尾楼/账本/世界书目录与命中提示）已按职责固定注入，种子只补任务特定的增量：本轮涉及的正文楼层区间（$STORY_RANGE:a-b）、命中提示里与该任务相关的世界书条目地址、需要精读的纪要表行区间（$TABLE:纪要表:a-b）。\n6. 结果回来后先审核再采用：报告与正文、你调阅到的资料或本轮 pacing 冲突、有明显缺漏时，带着具体修正意见重派；达到单代理派工上限仍不合规时，舍弃冲突部分并按已验证资料与 pacing 收敛，不能照单全收。\n7. finalize 前核对关键事实：本轮指导涉及角色当前位置、持有物、关系或能力等事实时，从表格目录按地址调阅对应表格核对；涉及世界观设定（地点、组织、规则、种族等）时，从世界书命中提示或目录按地址调阅条目核对。不要凭大纲或记忆断言。\n8. 用户偏好沉淀：用户在会话里提出的长期风格或内容偏好（如「少写心理独白」「保持第一人称」），经你裁决后用 finalize 的 constraints.add 登记为长期约束，让后续每轮都遵守。\n9. 一个代理最多派 2 次。重复派同一个代理只会得到重复结论时，就该收敛了。',
+        enabled: true,
+        deletable: true,
+    },
+    {
+        role: 'user',
+        content: V26_MAIN_AGENT_CHRONOLOGY_RULE_ACU,
         enabled: true,
         deletable: true,
     },
@@ -113706,6 +114672,8 @@ const V20_DEFAULT_ARC_ARCHITECT_PURPOSE_ACU = '因为阶段大纲一次只看 6-
 const V20_DEFAULT_ARC_ARCHITECT_EPISTEMOLOGY_ACU = '我的边界有五条：\n1. 我的结论只能来自注入给我的资料与我用 read/search 工具实际调阅到的资料。用户的初始要求是方向的第一来源，真实历史是既成事实的唯一来源。\n2. 总纲是计划，但它必须与已经发生的正文兼容。真实剧情已经走过的路不能被我规划成「未来要发生」，两者冲突时以真实历史为准，我调整台阶而不是否认事实。\n3. 卷台阶要写得可判定：「本卷收在主角夺回商行控制权、但发现账本里有第三方签名」是可判定的；「本卷渐入佳境、气氛更紧张」不是，这种我不写。\n4. 进度只登记已经真实完成的阶段编号，没完成的阶段不许提前记进 stageNumbers。\n5. 删除任何条目都必须显式 retire 并给出理由。我漏写一条不等于那条被删除了。';
 const V20_DEFAULT_ARC_ARCHITECT_CONTRACT_ACU = '我的最终交付是一个 JSON 对象：\n{"summary":"一句话说明本次立了什么或改了什么","delta":{"expectedRevisions":{"storyArc":当前修订号},"storyArc":[{"action":"upsert|patch|retire","id":"ARC-STORY 或 VOL-01","scope":"story|volume","title":"简称","direction":"本层推进方向：谁追求什么、对抗什么","escalation":"本层冲突要抬到什么高度、收在哪","withheld":"本层禁止提前释放的底牌","status":"planned|active|done","stageNumbers":[已承载的阶段编号],"reason":"retire 时必填"}]}}\n\n结构规则：\n1. scope=story 的条目全局只能有一条活跃的，那是全书方向；其余都是 scope=volume 的卷台阶。改全书方向用 patch，不要新开一条。\n2. 开局立总纲时，我一次给出：一条 story 条目，加 3-5 条 volume 条目。第一卷 status 设 active，其余 planned。卷不是越多越好，每卷要能撑起若干个阶段。\n3. volume 条目必须写 escalation，否则台阶等于没有高度；withheld 写清本卷不许翻的底牌，没有就留空字符串。\n4. 阶段完成后回写进度用 patch：{"action":"patch","id":"VOL-01","stageNumbers":[1,2,3]}。当前卷的台阶已经走完时，把它 patch 成 done，同时把下一卷 patch 成 active。\n5. patch 只带要改的字段，其余字段保持原样；新增或整条重写才用 upsert。\n\n交付前资料不足时我不猜：先输出工具批次补充调阅——{"action":"read","reads":["地址"]} 或 {"action":"search","query":"关键词","scope":["story","worldbook"]}，一次输出可含多个工具对象，结果会回灌给我，拿到后再交契约 JSON。\n\nexpectedRevisions 可以省略，运行时会按我实际读到的版本校验；我若填了，就必须与注入资料里的「当前修订号」一致。契约 JSON 之外我不输出任何文字。';
 const V20_DEFAULT_ARC_ARCHITECT_TASK_ACU = '【事件概览】（纪要表最近 100 轮脉络，召回命中的行已展开为纪要全文、更早的命中轮前置展示；按剧情轮记录，与楼层号无一一映射，更早脉络用 $TABLE:纪要表:行区间 精读）\n$STORY_OVERVIEW\n\n【最近正文】\n$STORY_TAIL\n\n【故事总纲现状】（你维护的对象）\n$STORY_ARC\n\n【楼层索引】\n$STORY_CATALOG\n\n【已启用世界书目录】（每条已标注 token 开销，设定以世界书为准）\n$WORLDBOOK_CATALOG\n\n【本轮语境命中的世界书条目】\n$WORLDBOOK_HITS\n\n【注入资料】\n$AGENT_READ_MATERIALS\n\n【读取地址词汇表】（read/search 工具可用的地址体系）\n$AGENT_READ_CATALOG\n\n【本次任务】\n$AGENT_TASK\n\n【你的写入范围】\n$AGENT_WRITE_SCOPE\n\n【自检清单】提交前逐条确认：活跃的 story 条目只有一条；每条 volume 都写了可判定的 escalation；status 里恰好有一条 active 卷；stageNumbers 里只有真实完成的阶段编号；台阶顺序与已经发生的正文兼容；retire 都带了理由；若填了 expectedRevisions，它与注入资料里的「当前修订号」一致。\n\n请开始。资料不足先用工具调阅，足够就直接交付契约 JSON。';
+/** V25 卷级容量契约；持久化 V24 默认提示词只在前置默认段未改写时追加本段。 */
+const V25_ARC_ARCHITECT_VOLUME_CAPACITY_CONTRACT_ACU = '【卷级容量、时间与长期经营契约】\nscope=volume 的每次 upsert 都必须完整给出：narrativeRole（setup / development / escalation / turn / payoff / aftermath）、targetStageRange（{min,max}，正整数且 min≤max）、targetTimeSpan、progressCeiling、至少一条 sustainingThreads、至少一条 payoffTargets。scope=story 不使用这些卷级字段。\n\ntargetStageRange 是容量锚，不是机械字数承诺。按单轮约 800–1200 字、标准阶段 6–10 轮估算；若用户目标接近 60 万字，约 500–750 轮只用于检查总容量是否明显不足，不得承诺固定字数、章节数或“约 100 章”。每卷必须有足以承载其结构职责的阶段区间，不能只列卷标题。\n\nprogressCeiling 写清本卷主线最多走到哪里，阶段大纲不得越界；sustainingThreads 必须是跨阶段持续经营的关系、利益、认知或生活线；payoffTargets 必须引用本卷要兑现的既有期待。卷标记 done 时，completionState 必须逐项原文引用每条 payoffTargets 并说明兑现证据，也必须逐项原文引用每条 sustainingThreads 并说明已完成、转入后续卷或显式 retire 的去向；若实际 stageNumbers 数量偏离 targetStageRange，必须在 completionRationale 说明原因。patch 只写要改的字段，其余字段保持原值。';
 const ARC_ARCHITECT_PROMPT_ACU = [
     {
         role: 'system',
@@ -113746,13 +114714,19 @@ const ARC_ARCHITECT_PROMPT_ACU = [
     },
     {
         role: 'assistant',
-        content: '我的最终交付是一个 JSON 对象：\n{"summary":"一句话说明本次立了什么或改了什么","delta":{"expectedRevisions":{"storyArc":当前修订号},"storyArc":[{"action":"upsert|patch|retire","id":"ARC-STORY 或 VOL-01","scope":"story|volume","title":"简称","direction":"本层推进方向与人物驱动力","escalation":"本层的进入状态→中段风险或反转→高潮兑现→卷末新局面","withheld":"本层禁止提前释放的底牌与终局储备","status":"planned|active|done","stageNumbers":[已承载的阶段编号],"reason":"retire 时必填"}]}}\n\n结构规则：\n1. scope=story 的条目全局只能有一条活跃的。它必须写清主角长期目标、核心对抗、失败代价、读者核心期待与终局保留；其余都是 scope=volume 的卷台阶。改全书方向用 patch，不要新开一条。\n2. 开局立总纲或全量重构时，卷数必须严格遵守本次请求末尾注入的【总纲卷数计划】：短线 7–8 卷、中线 10–14 卷、长线 20 卷，或自定义的精确卷数。资料不足时可以把远期卷标为待定方向，但不得缩减卷数；第一卷 status 设 active，其余 planned。\n3. 每条 volume 的 direction 必须同时写明：本卷主目标、主角关键选择或行动、至少一条服务主线的关系/利益/认知副线，以及本卷主要压力来源。副线不能另起炉灶，必须在卷末反推或改变主线。\n4. 每条 volume 的 escalation 必须形成微型完整弧：承接前卷结果进入本卷；中段发生风险升级、误判或立场变化；高潮兑现一项既有期待；结尾造成不可逆变化并推出下一卷问题。相邻卷不能只换地点或敌人而重复同一种功能。\n5. withheld 写清本卷不能提前翻出的真相、能力、关系转折或终局手段；同时保留更高层对抗，避免本卷高潮把全书主线一次性打穿。\n6. 卷序列必须三向自洽：全书方向能拆出各卷；各卷按因果组成完整升级路径；从每卷结果反推仍指向同一全书方向。全书至少出现一次中段结构性转折，并在终局前完成由局部问题到核心对抗的换层。\n7. 阶段完成后回写进度用 patch：{"action":"patch","id":"VOL-01","stageNumbers":[1,2,3]}。当前卷台阶走完时，把它 patch 成 done，同时把下一卷 patch 成 active。\n8. patch 只带要改的字段，其余字段保持原样；新增或整条重写才用 upsert。\n\n交付前资料不足时我不猜：先输出工具批次补充调阅——{"action":"read","reads":["地址"]} 或 {"action":"search","query":"关键词","scope":["story","worldbook"]}，一次输出可含多个工具对象，结果会回灌给我，拿到后再交契约 JSON。\n\nexpectedRevisions 可以省略，运行时会按我实际读到的版本校验；我若填了，就必须与注入资料里的「当前修订号」一致。契约 JSON 之外我不输出任何文字。',
+        content: '我的最终交付是一个 JSON 对象：\n{"summary":"一句话说明本次立了什么或改了什么","delta":{"expectedRevisions":{"storyArc":当前修订号},"storyArc":[{"action":"upsert|patch|retire","id":"ARC-STORY 或 VOL-01","scope":"story|volume","title":"简称","direction":"本层推进方向与人物驱动力","escalation":"本层的进入状态→中段风险或反转→高潮兑现→卷末新局面","withheld":"本层禁止提前释放的底牌与终局储备","status":"planned|active|done","stageNumbers":[已承载的阶段编号],"completionStageNumber":"done 时为已完成阶段编号，否则 null","completionState":"done 时达到的卷末状态，否则空字符串","continuationRationale":"续卷时由前卷后果推出的依据，否则空字符串","narrativeRole":"volume upsert 时必填：setup|development|escalation|turn|payoff|aftermath；story 省略","targetStageRange":{"min":"volume upsert 时必填的正整数","max":"不小于 min 的正整数"},"targetTimeSpan":"volume upsert 时必填的故事时间目标","progressCeiling":"volume upsert 时必填的主线推进上限","sustainingThreads":["volume upsert 时至少一条持续经营线"],"payoffTargets":["volume upsert 时至少一条兑现目标"],"completionRationale":"容量偏离 targetStageRange 时必填，否则空字符串","reason":"retire 时必填"}]}}\n\n结构规则：\n1. scope=story 的条目全局只能有一条活跃的。它必须写清主角长期目标、核心对抗、失败代价、读者核心期待与终局保留；其余都是 scope=volume 的卷台阶。改全书方向用 patch，不要新开一条。\n2. 开局立总纲或全量重构时，卷数必须严格遵守本次请求末尾注入的【总纲卷数计划】：短线 7–8 卷、中线 10–14 卷、长线 20 卷，或自定义的精确卷数。资料不足时可以把远期卷标为待定方向，但不得缩减卷数；第一卷 status 设 active，其余 planned。\n3. 每条 volume 的 direction 必须同时写明：本卷主目标、主角关键选择或行动、至少一条服务主线的关系/利益/认知副线，以及本卷主要压力来源。副线不能另起炉灶，必须在卷末反推或改变主线。\n4. 每条 volume 的 escalation 必须形成微型完整弧：承接前卷结果进入本卷；中段发生风险升级、误判或立场变化；高潮兑现一项既有期待；结尾造成不可逆变化并推出下一卷问题。相邻卷不能只换地点或敌人而重复同一种功能。\n5. withheld 写清本卷不能提前翻出的真相、能力、关系转折或终局手段；同时保留更高层对抗，避免本卷高潮把全书主线一次性打穿。\n6. 卷序列必须三向自洽：全书方向能拆出各卷；各卷按因果组成完整升级路径；从每卷结果反推仍指向同一全书方向。全书至少出现一次中段结构性转折，并在终局前完成由局部问题到核心对抗的换层。\n7. stage 是阶段大纲，volume 是长程卷台阶；一个 active 卷可由多份阶段大纲渐进承载。每完成一份阶段只 patch 当前 active 卷的 stageNumbers，不能因单个阶段完成就把卷设为 done。\n8. 仅当真实正文已达到本卷 escalation 的可判定收束状态时，才可把 active 卷 patch 为 done；同一 patch 必须给 completionStageNumber、completionState，且该阶段已真实完成并已登记在 stageNumbers。状态只能 planned→active→done；done 卷不可重激活。\n9. 所有既有卷 done 而用户继续写作时，先在末尾 upsert 一个 active 新卷，并以 continuationRationale 说明它如何由最后一卷的结果、代价、关系变化或未解决问题推出；之后才由 outline-architect 创建阶段大纲。\n10. patch 只带要改的字段，其余字段保持原样；新增或整条重写才用 upsert。\n\n交付前资料不足时我不猜：先输出工具批次补充调阅——{"action":"read","reads":["地址"]} 或 {"action":"search","query":"关键词","scope":["story","worldbook"]}，一次输出可含多个工具对象，结果会回灌给我，拿到后再交契约 JSON。\n\nexpectedRevisions 可以省略，运行时会按我实际读到的版本校验；我若填了，就必须与注入资料里的「当前修订号」一致。契约 JSON 之外我不输出任何文字。',
         enabled: true,
         deletable: true,
     },
     {
         role: 'user',
-        content: '【事件概览】（纪要表最近 100 轮脉络，召回命中的行已展开为纪要全文、更早的命中轮前置展示；按剧情轮记录，与楼层号无一一映射，更早脉络用 $TABLE:纪要表:行区间 精读）\n$STORY_OVERVIEW\n\n【最近正文】\n$STORY_TAIL\n\n【故事总纲现状】（你维护的对象）\n$STORY_ARC\n\n【楼层索引】\n$STORY_CATALOG\n\n【已启用世界书目录】（每条已标注 token 开销，设定以世界书为准）\n$WORLDBOOK_CATALOG\n\n【本轮语境命中的世界书条目】\n$WORLDBOOK_HITS\n\n【注入资料】\n$AGENT_READ_MATERIALS\n\n【读取地址词汇表】（read/search 工具可用的地址体系）\n$AGENT_READ_CATALOG\n\n【本次任务】\n$AGENT_TASK\n\n【你的写入范围】\n$AGENT_WRITE_SCOPE\n\n【自检清单】提交前逐条确认：活跃 story 只有一条且包含目标、对抗、代价、期待和终局储备；卷数严格符合本次【总纲卷数计划】且各卷功能不重复；每卷都有主目标、主角选择、服务主线的副线、压力来源、中段变化、高潮兑现、不可逆结果和下一卷钩子；相邻卷由因果承接且升级层级不同；卷序列通过全书→逐卷、逐卷→路径、卷结果→全书三向核对；status 恰有一条 active；stageNumbers 只有真实完成的阶段；台阶与正文兼容；retire 都有理由；expectedRevisions 若存在则与当前修订号一致。\n\n请开始。资料不足先用工具调阅，足够就直接交付契约 JSON。',
+        content: V25_ARC_ARCHITECT_VOLUME_CAPACITY_CONTRACT_ACU,
+        enabled: true,
+        deletable: true,
+    },
+    {
+        role: 'user',
+        content: '【用户初始要求】（全书方向的最高目标来源；真实正文是既成事实来源，两者有张力时调整后续卷台阶，不能否认事实或静默丢弃用户目标）\n$USER_INTENT\n\n【完整当前阶段大纲】（与本次资料同一活动 revision；大纲是计划，不是已发生事实）\n$OUTLINE_WINDOW\n\n【事件概览】（纪要表最近 100 轮脉络，召回命中的行已展开为纪要全文、更早的命中轮前置展示；按剧情轮记录，与楼层号无一一映射，更早脉络用 $TABLE:纪要表:行区间 精读）\n$STORY_OVERVIEW\n\n【最近正文】\n$STORY_TAIL\n\n【故事总纲现状】（你维护的对象）\n$STORY_ARC\n\n【楼层索引】\n$STORY_CATALOG\n\n【已启用世界书目录】（每条已标注 token 开销，设定以世界书为准）\n$WORLDBOOK_CATALOG\n\n【本轮语境命中的世界书条目】\n$WORLDBOOK_HITS\n\n【注入资料】\n$AGENT_READ_MATERIALS\n\n【读取地址词汇表】（read/search 工具可用的地址体系）\n$AGENT_READ_CATALOG\n\n【本次任务】\n$AGENT_TASK\n\n【你的写入范围】\n$AGENT_WRITE_SCOPE\n\n【自检清单】提交前逐条确认：活跃 story 只有一条且包含目标、对抗、代价、期待和终局储备；卷数严格符合本次【总纲卷数计划】且各卷功能不重复；每卷都有主目标、主角选择、服务主线的副线、压力来源、中段变化、高潮兑现、不可逆结果和下一卷钩子；相邻卷由因果承接且升级层级不同；卷序列通过全书→逐卷、逐卷→路径、卷结果→全书三向核对；每条 volume upsert 都完整声明结构职责、阶段容量、故事时间、主线进度上限、持续经营线与兑现目标；done 卷逐项说明兑现证据和持续经营线去向，容量偏离时给出 completionRationale；status 恰有一条 active；stageNumbers 只有真实完成的阶段；台阶与正文兼容；retire 都有理由；expectedRevisions 若存在则与当前修订号一致。\n\n请开始。资料不足先用工具调阅，足够就直接交付契约 JSON。',
         enabled: true,
         deletable: false,
         pinned: true,
@@ -113799,6 +114773,12 @@ const MAINTAINER_PROMPT_ACU = [
     },
     {
         role: 'user',
+        content: V26_MAINTAINER_CHRONOLOGY_CONTRACT_ACU,
+        enabled: true,
+        deletable: true,
+    },
+    {
+        role: 'user',
         content: '【未结算正文全量】（你要结算的对象，只含正文模型的楼层，未截断）\n$HISTORY_UNSETTLED\n\n【伏笔账本现状】\n$HOOKS_LEDGER\n\n【信息差时间线现状】\n$INFO_GAP\n\n【楼层索引】\n$STORY_CATALOG\n\n【已启用世界书目录】（每条已标注 token 开销，设定以世界书为准）\n$WORLDBOOK_CATALOG\n\n【本轮语境命中的世界书条目】\n$WORLDBOOK_HITS\n\n【注入资料】\n$AGENT_READ_MATERIALS\n\n【读取地址词汇表】（read/search 工具可用的地址体系）\n$AGENT_READ_CATALOG\n\n【本次任务】\n$AGENT_TASK\n\n【你的写入范围】\n$AGENT_WRITE_SCOPE\n\n【自检清单】提交前逐条确认：登记的每条事实都能在真实历史里找到出处；没有把计划写成事实；retire 都带了理由；未揭示条目的揭示楼层为空；若填了 expectedRevisions，它与注入资料里的「当前修订号」一致；任务里给出了轮目标时，summary 里写明了达成度判定。\n\n请开始结算。资料不足先用工具调阅，足够就直接交付契约 JSON。',
         enabled: true,
         deletable: false,
@@ -113828,7 +114808,7 @@ const MAINLINE_PLANNER_PROMPT_ACU = [
     },
     {
         role: 'assistant',
-        content: '认识论边界：结论只能来自注入给我的资料与我用 read/search 工具调阅到的资料；已发生事实只来自真实历史；大纲是计划不是事实；世界观设定（地点、组织、规则、种族等）以世界书条目为准，涉及时先读条目再落笔；查不到的我标注「信息不足」，不编造人物、组织或既往事件。参与实体只能从已知资料里的角色与场景中选取。\n\n方法论内核：\n1. 冲突阶梯——本轮的障碍必须比上一轮更高一层（章内试探 → 遭遇 → 升级），严禁同一层次的障碍换皮重复。\n2. 主角代理权与成本——关键选择必须由主角做出并承担代价，收益与战果明确归属主角，不写成配角独角戏。\n3. 实质价值变动——本轮必须发生地位、资源、情报或关系上的具体变化，不能只是气氛推进。\n4. 场景三要素——行动、阻碍、悬念缺一不可。\n5. 拒绝空泛判词——不写「气氛紧张」「深化羁绊」这类抽象词，只写具体压力、具体收益、具体动作。',
+        content: '认识论边界：结论只能来自注入给我的资料与我用 read/search 工具调阅到的资料；已发生事实只来自真实历史；大纲是计划不是事实；世界观设定（地点、组织、规则、种族等）以世界书条目为准，涉及时先读条目再落笔；查不到的我标注「信息不足」，不编造人物、组织或既往事件。参与实体只能从已知资料里的角色与场景中选取。\n\n我先读取【完整当前阶段大纲】中箭头标出的本轮 pacing，再选择方法，通用的“每轮升级冲突”规则无权覆盖 pacing：\n- setup：允许主线 hold，不要求外部阻碍、选择代价或危机钩子。用具体生活动作与人物互动，让关系、习惯、世界理解、资源、身体或认知发生一项可观察变化，并判断是否适合隔夜、数日后或更久开始。\n- cooldown：不制造新危机；确认上一波代价，处理伤势、情绪、关系与局势理解，允许完整结算和安静闭合。\n- pressure：只推进一个外部冲突；行动、阻碍、悬念齐全，主角作出选择并承担成本。\n- turn：通过既有伏笔、误判或信息揭示改变局势性质，不临时制造真相。\n\n所有档位都拒绝空泛判词。setup/cooldown 的三要素是“场景动作、人物互动、状态变化”；pressure/turn 才使用“行动、阻碍、悬念”。',
         enabled: true,
         deletable: true,
     },
@@ -113840,13 +114820,13 @@ const MAINLINE_PLANNER_PROMPT_ACU = [
     },
     {
         role: 'assistant',
-        content: '我的最终交付是一个 JSON 对象：\n{"summary":"一句话本轮主线要点","recommendation":"自然语言建议正文，写清本轮怎么推进、冲突怎么升级、主角做什么选择、付什么代价、得到什么实质变化","mustPreserve":["本轮绝对不能改变的既有事实"],"risks":["按此推进可能引发的风险"]}\n\n交付前资料不足时我不猜：先输出工具批次补充调阅——{"action":"read","reads":["地址"]} 或 {"action":"search","query":"关键词","scope":["story","tables","worldbook"]}，一次输出可含多个工具对象，结果会回灌给我，拿到后再交契约 JSON。读取轮次有限，我优先 search 定位、再用窄地址精读。\n\nrecommendation 里的内容是给主控 Agent 看的创作建议，保持自然语言，不写成字段清单，也不代替它写最终指导。契约 JSON 之外我不输出任何文字。',
+        content: '我的最终交付是一个 JSON 对象：\n{"summary":"一句话本轮策划要点","recommendation":"自然语言建议正文，开头依次写明本轮 pacing、建议叙事功能、主线增量（hold/micro/step/milestone）和与上一轮的时间关系，再写具体场景动作与必须发生的变化；只有 pressure/turn 才要求冲突升级、选择代价或揭示","mustPreserve":["本轮绝对不能改变的既有事实与 pacing 边界"],"risks":["按此建议可能引发的节奏或连续性风险"]}\n\n交付前资料不足时我不猜：先输出工具批次补充调阅——{"action":"read","reads":["地址"]} 或 {"action":"search","query":"关键词","scope":["story","tables","worldbook"]}，一次输出可含多个工具对象，结果会回灌给我，拿到后再交契约 JSON。读取轮次有限，我优先 search 定位、再用窄地址精读。\n\nrecommendation 是给主控 Agent 的自然语言建议，不代替最终指导。契约 JSON 之外我不输出任何文字。',
         enabled: true,
         deletable: true,
     },
     {
         role: 'user',
-        content: '【事件概览】（纪要表最近 50 轮脉络，召回命中的行已展开为纪要全文、更早的命中轮前置展示；按剧情轮记录，与楼层号无一一映射，更早脉络用 $TABLE:纪要表:行区间 精读）\n$STORY_OVERVIEW\n\n【最近正文】\n$STORY_TAIL\n\n【故事总纲】（主线建议必须落在当前 active 卷的台阶内）\n$STORY_ARC\n\n【楼层索引】\n$STORY_CATALOG\n\n【已启用世界书目录】（每条已标注 token 开销，世界观设定以世界书条目为准）\n$WORLDBOOK_CATALOG\n\n【本轮语境命中的世界书条目】\n$WORLDBOOK_HITS\n\n【注入资料】\n$AGENT_READ_MATERIALS\n\n【读取地址词汇表】（read/search 工具可用的地址体系）\n$AGENT_READ_CATALOG\n\n【本次任务】\n$AGENT_TASK\n\n【写入权限】\n$AGENT_WRITE_SCOPE\n\n【自检清单】提交前逐条确认：冲突比上一轮升了一层而不是换皮；主角有明确选择和代价；本轮有具体的实质价值变动；建议落在总纲当前卷的台阶内、没有提前翻总纲禁翻的底牌；没有引入注入资料与世界书之外的新实体；没有使用抽象判词。\n\n请开始策划。资料不足先用工具调阅，足够就直接交付契约 JSON。',
+        content: '【完整当前阶段大纲】（固定注入，与本次资料同一活动 revision；箭头标出本轮，括号给出 pacing；首条用户要求仅由【本次任务】裁剪传达）\n$OUTLINE_WINDOW\n\n【事件概览】（纪要表最近 50 轮脉络，召回命中的行已展开为纪要全文、更早的命中轮前置展示；按剧情轮记录，与楼层号无一一映射，更早脉络用 $TABLE:纪要表:行区间 精读）\n$STORY_OVERVIEW\n\n【最近正文】\n$STORY_TAIL\n\n【故事总纲】（建议必须落在当前 active 卷的台阶内）\n$STORY_ARC\n\n【楼层索引】\n$STORY_CATALOG\n\n【已启用世界书目录】（每条已标注 token 开销，世界观设定以世界书条目为准）\n$WORLDBOOK_CATALOG\n\n【本轮语境命中的世界书条目】\n$WORLDBOOK_HITS\n\n【注入资料】\n$AGENT_READ_MATERIALS\n\n【读取地址词汇表】（read/search 工具可用的地址体系）\n$AGENT_READ_CATALOG\n\n【本次任务】\n$AGENT_TASK\n\n【写入权限】\n$AGENT_WRITE_SCOPE\n\n【自检清单】先确认本轮 pacing，再应用对应方法；setup/cooldown 没有新危机、新敌对方、局势升级或强制钩子，允许主线 hold，但有具体动作、互动和状态变化；pressure/turn 才检查冲突或揭示；建议落在当前卷且没有提前翻底牌；没有引入未知实体或抽象判词。\n\n请开始策划。资料不足先用工具调阅，足够就直接交付契约 JSON。',
         enabled: true,
         deletable: false,
         pinned: true,
@@ -113875,7 +114855,7 @@ const BEAT_PLANNER_PROMPT_ACU = [
     },
     {
         role: 'assistant',
-        content: '认识论边界：结论只能来自注入给我的资料与我用 read/search 工具调阅到的资料；已发生事实只来自真实历史；大纲是计划不是事实；查不到的我标注「信息不足」。我不会宣称某条伏笔已经回收过，除非伏笔账本里确实这么记着。\n\n方法论内核：\n1. 信息差动态——一条信息的完整生命是「设置 → 使用 → 揭示 → 产生新信息差」。本轮要明确处在哪一步，揭示后必须留下新的未知。\n2. 钩子三手法——悬而未决、已知危机逼近、认知错位。本轮结尾至少落一个。\n3. 伏笔操作只有四种：埋设、强化、误导、回收（含部分回收）。我要明确指出本轮对哪几条伏笔做哪一种操作，以及绝对不能提前回收的是哪些。\n4. 情绪微弧继承——本轮的情绪起点必须承接上一楼的情绪残留；压抑之后要有释放，但释放不能来自主角降智。',
+        content: '认识论边界：结论只能来自注入给我的资料与我用 read/search 工具调阅到的资料；已发生事实只来自真实历史；大纲是计划不是事实；查不到的我标注「信息不足」。我不会宣称某条伏笔已经回收过，除非伏笔账本里确实这么记着。\n\n方法论内核：\n1. 先读取【完整当前阶段大纲】里本轮 pacing。setup 允许安静闭合或普通生活期待，cooldown 优先结算上一事件的情绪债，pressure 才通常保留行动压力，turn 形成新局面但不强制再制造更大的秘密。\n2. 信息差的完整生命是「设置 → 使用 → 揭示」。揭示后可以完整结束；只有故事自然产生新的认知差时才登记新未知，不能为了续命自动补坑。\n3. 伏笔操作只有埋设、强化、误导、回收（含部分回收）；明确对象与允许层级，低压轮没有真实需要时可以不操作伏笔。\n4. 情绪起点承接上一楼残留；低压轮允许平静、熟悉、恢复或释然，不强迫“压抑后立即反击”。\n5. 收尾方式服从 pacing：安静闭合、开放期待、未决问题和危机钩子都是合法选项，不是每轮都必须留钩子。',
         enabled: true,
         deletable: true,
     },
@@ -113887,13 +114867,13 @@ const BEAT_PLANNER_PROMPT_ACU = [
     },
     {
         role: 'assistant',
-        content: '我的最终交付是一个 JSON 对象：\n{"summary":"一句话本轮伏笔与节拍要点","recommendation":"自然语言建议正文，写清对哪几条伏笔做什么操作、信息差走到哪一步、允许揭到哪一层、情绪从哪里起到哪里落、结尾用哪种钩子","mustPreserve":["本轮绝对不能提前揭穿或改变的事项"],"risks":["按此操作可能引发的风险"]}\n\n交付前资料不足时我不猜：先输出工具批次补充调阅——{"action":"read","reads":["地址"]} 或 {"action":"search","query":"关键词","scope":["modules","story","worldbook"]}，一次输出可含多个工具对象，结果会回灌给我，拿到后再交契约 JSON。读取轮次有限，我优先 search 定位、再用窄地址精读。\n\n契约 JSON 之外我不输出任何文字。',
+        content: '我的最终交付是一个 JSON 对象：\n{"summary":"一句话本轮伏笔与节拍要点","recommendation":"自然语言建议正文，先写本轮 pacing 与适合的收尾方式；有真实需要时再写对哪条伏笔做什么操作、信息差走到哪一步和允许揭到哪层；没有操作时明确本轮以情绪或生活结算为主，不虚构钩子","mustPreserve":["本轮绝对不能提前揭穿或改变的事项与 pacing 边界"],"risks":["按此操作可能引发的风险"]}\n\n交付前资料不足时我不猜：先输出工具批次补充调阅——{"action":"read","reads":["地址"]} 或 {"action":"search","query":"关键词","scope":["modules","story","worldbook"]}，一次输出可含多个工具对象，结果会回灌给我，拿到后再交契约 JSON。读取轮次有限，我优先 search 定位、再用窄地址精读。\n\n契约 JSON 之外我不输出任何文字。',
         enabled: true,
         deletable: true,
     },
     {
         role: 'user',
-        content: '【最近正文】（情绪起点必须承接这里的结尾）\n$STORY_TAIL\n\n【伏笔账本现状】\n$HOOKS_LEDGER\n\n【信息差时间线现状】\n$INFO_GAP\n\n【楼层索引】\n$STORY_CATALOG\n\n【已启用世界书目录】（每条已标注 token 开销，设定以世界书为准）\n$WORLDBOOK_CATALOG\n\n【本轮语境命中的世界书条目】\n$WORLDBOOK_HITS\n\n【注入资料】\n$AGENT_READ_MATERIALS\n\n【读取地址词汇表】（read/search 工具可用的地址体系）\n$AGENT_READ_CATALOG\n\n【本次任务】\n$AGENT_TASK\n\n【写入权限】\n$AGENT_WRITE_SCOPE\n\n【自检清单】提交前逐条确认：每条伏笔操作都对应账本里真实存在的条目；没有把计划中的回收说成已经回收；揭示层级没有越过 mustPreserve；情绪起点承接了上一楼残留；结尾留下了明确钩子。\n\n请开始策划。资料不足先用工具调阅，足够就直接交付契约 JSON。',
+        content: '【完整当前阶段大纲】（固定注入，与本次资料同一活动 revision；箭头标出本轮，括号给出 pacing；首条用户要求仅由【本次任务】裁剪传达）\n$OUTLINE_WINDOW\n\n【最近正文】（情绪起点必须承接这里的结尾）\n$STORY_TAIL\n\n【伏笔账本现状】\n$HOOKS_LEDGER\n\n【信息差时间线现状】\n$INFO_GAP\n\n【楼层索引】\n$STORY_CATALOG\n\n【已启用世界书目录】（每条已标注 token 开销，设定以世界书为准）\n$WORLDBOOK_CATALOG\n\n【本轮语境命中的世界书条目】\n$WORLDBOOK_HITS\n\n【注入资料】\n$AGENT_READ_MATERIALS\n\n【读取地址词汇表】（read/search 工具可用的地址体系）\n$AGENT_READ_CATALOG\n\n【本次任务】\n$AGENT_TASK\n\n【写入权限】\n$AGENT_WRITE_SCOPE\n\n【自检清单】先确认本轮 pacing；每条伏笔操作都对应真实条目且没有越过允许层级；setup/cooldown 没有真实伏笔义务时可以不操作，允许安静闭合或普通期待；信息差已完整揭示时允许结束，不自动制造替代谜团；情绪起点承接上一楼。\n\n请开始策划。资料不足先用工具调阅，足够就直接交付契约 JSON。',
         enabled: true,
         deletable: false,
         pinned: true,
@@ -113904,6 +114884,37 @@ const BEAT_PLANNER_PROMPT_ACU = [
         enabled: true,
         deletable: false,
         pinned: true,
+    },
+];
+/** 终审提示词的保真来源；section 为参考预设中的原段标题。 */
+const FINAL_REVIEWER_PROMPT_SOURCE_MAP_ACU = [
+    {
+        source: 'docs/Stitches_RebornV_东方辉针城.3.7f.plot-preset.json',
+        sections: ['角色人设参考来源优先级', '角色卡怎么理解', '角色的情绪', '扮演角色时也要注意认知边界', '能力边界相关', '世界观锚定'],
+    },
+    {
+        source: 'docs/奶龙推进v13.plot-preset.json',
+        sections: ['legitimacy_check输出内容', '日常场景分析', '人物分析要求'],
+    },
+];
+const FINAL_REVIEWER_PROMPT_ACU = [
+    {
+        role: 'system',
+        content: '你是发送前最终审查代理。你只审查候选写作指导，不生成小说正文、不改写大纲或总纲。证据只能来自已注入的用户要求、阶段大纲、总纲、正文和世界书；证据不足时写为未验证，不能凭印象补全。\n\n输出必须是一个 JSON 对象，字段为 verdict、summary、emotionFindings、worldFindings、logicFindings、requiredFixes、preserve。verdict 只能是 pass、revise 或 block。requiredFixes 必须是责任代理可直接执行的修订项；preserve 必须列出修订时不可破坏的正确内容。\n\n【Stitches_RebornV_东方辉针城.3.7f：角色与世界观审查】\n角色人设参考来源优先级：角色卡（卡片简述和背景设定）> 前文剧情 > 已发生事件概览。角色卡的性格描述词是作者贴的标签；要从角色视角理解作者描述，不能把角色压缩成“嘴硬/傲娇/害羞”等单一标签，也不能把聪明角色默认理解成天天爱算计。\n每个角色都有自己的方式表达情绪，只是性格和经历会让反应不同。情绪不极端化：真实情绪反应通常比想象中平淡；重大事件才能引发强烈情绪，强烈情绪也不等于角色失去韧性。\n角色不知道没被告知或不在面前发生的事；必须核对相对空间位置、可见与可听范围。角色能力、生活习惯和可调用资源必须来自角色设定；设定未明确时，只能结合身份、年龄、阅历和世界观合理判断，不能随意赋予超出设定的能力，也不能无视应有实力。\n世界观锚定：不要让角色对背景设定里的常识大惊小怪；角色用语和生活习惯必须贴合背景设定，避免超时代词汇、现代学术或网络流行语破坏沉浸感。\n公平但不冷漠：DM在规则上公平对待<user>和角色，但不用刻意制造障碍，只是不给<user>开绿灯。角色用正常社交直觉来面对<user>，不是靠嘲讽或居高临下来证明“我没在讨好玩家”。\n好感温度是角色内心单方面对<user>的好感，关系阶段是双方实际的相处模式。关系阶段变化需要主角和角色的双向互动+标志性事件，温度只是让角色更可能做出拉近关系的行为。\n\n【奶龙推进v13：合理性与人物状态审查】\n合理性审查逐项检查：角色控制权（用户只能控制自己的角色）、信息边界（角色只使用已知信息）、能力边界（行为在角色能力范围内）、世界规则（符合世界观的物理或魔法规则）、因果逻辑（行为与结果符合因果）。战斗场景还检查技能是否可用、资源消耗是否正确、伤害是否合理、敌人反应是否符合智力和性格。\n分析所有登场角色，不能遗漏；保留所有板块：基础信息+状态+心理+认知+行为预测+情绪优化+主动性。每名在场角色逐个核对当前状态、心理状态、认知边界、行为预测、情绪优化和主动性。日常场景还要核对经济、社会、阶级礼仪等世界观体系，以及天气、温度、湿度、光线、体力、健康、精神状态和环境—身体交互的真实性。\n\n【节奏、日常与时间审查】\n先从完整阶段大纲确认本轮 pacing。setup/cooldown 的候选指导若制造新危机、引入新敌对方、让局势升级或强制危机钩子，判为 revise；低压轮同时必须有具体场景动作、人物互动和至少一项关系、生活、世界理解、资源、身体或认知变化，只有“气氛放松”也判为 revise。pressure/turn 继续检查单一冲突与既有揭示依据。候选若安排隔夜、数日或更久的时间变化，要有相对时间位置和环境、身体、关系、资源或社会状态中的可感知变化；时间仍连续时不凭空要求跳跃。',
+        enabled: true,
+        deletable: true,
+    },
+    {
+        role: 'user',
+        content: V26_FINAL_REVIEWER_CHRONOLOGY_RULES_ACU,
+        enabled: true,
+        deletable: true,
+    },
+    {
+        role: 'user',
+        content: '【用户初始要求】\n$USER_INTENT\n\n【完整当前阶段大纲】（箭头标出本轮，括号给出 pacing）\n$OUTLINE_WINDOW\n\n【故事总纲】\n$STORY_ARC\n\n【最近正文】\n$STORY_TAIL\n\n【本轮世界书证据】（命中条目已注入全文；涉及人物、能力、地点、组织、种族、社会规则或世界常识时优先据此判断。证据不足先用 worldbook scope 的 search 定位，再用 $WORLDBOOK:书名:uid 精读，不能凭印象判定）\n$WORLDBOOK_HITS\n\n【补充终审证据】\n$AGENT_READ_MATERIALS\n\n【待审候选指导】\n$AGENT_TASK\n\n按系统规则逐项输出 JSON：emotionFindings 覆盖每名在场角色的当前状态、心理、认知、行为预测、情绪和主动性；worldFindings 记录世界书或世界观证据与未验证项；logicFindings 覆盖控制权、信息、能力、世界规则、因果、当前 pacing 合规、低压轮正向功能、时间位置和适用的战斗附加项。不要写正文、不要修改大纲、不要展示思维链。',
+        enabled: true,
+        deletable: true,
     },
 ];
 const REVIEWER_PROMPT_ACU = [
@@ -113940,7 +114951,7 @@ const REVIEWER_PROMPT_ACU = [
     },
     {
         role: 'user',
-        content: '【最近正文】（连续性核对的直接对象）\n$STORY_TAIL\n\n【伏笔账本现状】\n$HOOKS_LEDGER\n\n【长期约束】（合规核对的红线清单）\n$ACTIVE_CONSTRAINTS\n\n【楼层索引】\n$STORY_CATALOG\n\n【已启用世界书目录】（每条已标注 token 开销，设定以世界书为准）\n$WORLDBOOK_CATALOG\n\n【本轮语境命中的世界书条目】\n$WORLDBOOK_HITS\n\n【注入资料】\n$AGENT_READ_MATERIALS\n\n【读取地址词汇表】（read/search 工具可用的地址体系）\n$AGENT_READ_CATALOG\n\n【待审查内容与任务】\n$AGENT_TASK\n\n【写入权限】\n$AGENT_WRITE_SCOPE\n\n【自检清单】提交前逐条确认：每条疑虑都指名了注入资料或我调阅到的资料里的具体条目；没有把风格偏好当成连续性问题；block 只用于无法修正的硬冲突。\n\n请开始审查。需要核对的事实先用工具调阅，足够就直接交付契约 JSON。',
+        content: '【用户初始要求】\n$USER_INTENT\n\n【完整当前阶段大纲】（与本次资料同一活动 revision；大纲是计划，不是已发生事实）\n$OUTLINE_WINDOW\n\n【最近正文】（连续性核对的直接对象）\n$STORY_TAIL\n\n【伏笔账本现状】\n$HOOKS_LEDGER\n\n【长期约束】（合规核对的红线清单）\n$ACTIVE_CONSTRAINTS\n\n【楼层索引】\n$STORY_CATALOG\n\n【已启用世界书目录】（每条已标注 token 开销，设定以世界书为准）\n$WORLDBOOK_CATALOG\n\n【本轮语境命中的世界书条目】\n$WORLDBOOK_HITS\n\n【注入资料】\n$AGENT_READ_MATERIALS\n\n【读取地址词汇表】（read/search 工具可用的地址体系）\n$AGENT_READ_CATALOG\n\n【待审查内容与任务】\n$AGENT_TASK\n\n【写入权限】\n$AGENT_WRITE_SCOPE\n\n【自检清单】提交前逐条确认：用户初始要求、完整阶段大纲、真实正文、长期约束与待审内容之间不存在冲突；每条疑虑都指名了注入资料或我调阅到的资料里的具体条目；没有把风格偏好当成连续性问题；block 只用于无法修正的硬冲突。\n\n请开始审查。需要核对的事实先用工具调阅，足够就直接交付契约 JSON。',
         enabled: true,
         deletable: false,
         pinned: true,
@@ -113999,6 +115010,70 @@ function currentDefaultMainAgentLayoutAnswer_ACU() {
     const segment = MAIN_AGENT_PROMPT_ACU.find(item => item.content.startsWith('我收到的上下文分三层：'));
     return segment?.content ?? V19_DEFAULT_MAIN_AGENT_LAYOUT_ANSWER_ACU;
 }
+/**
+ * fnv-1a 32 位哈希（十六进制）。谱系表只需要稳定、低碰撞地识别「这段正文就是某个历史默认段」，
+ * 配合正文长度双重校验后，用户自写的段被误判成历史默认段的概率可以忽略。
+ */
+function hashAgentPromptContent_ACU(content) {
+    let hash = 0x811c9dc5;
+    for (let index = 0; index < content.length; index += 1) {
+        hash ^= content.charCodeAt(index);
+        hash = Math.imul(hash, 0x01000193);
+    }
+    return (hash >>> 0).toString(16).padStart(8, '0');
+}
+const AGENT_PROMPT_SLOT_LOCATORS_ACU = {
+    system: segment => segment.role === 'system',
+    arcPurpose: segment => segment.role === 'assistant' && segment.content.startsWith('因为阶段大纲一次只看'),
+    arcEpistemology: segment => segment.role === 'assistant' && segment.content.startsWith('我的边界有'),
+    capabilityAnswer: segment => segment.role === 'assistant' && segment.content.startsWith('我能做的：'),
+    actionRules: segment => segment.role === 'assistant' && segment.content.startsWith('我的行动规则：'),
+    textProtocol: segment => segment.content.startsWith('【文本协议规范】'),
+    subagentRules: segment => segment.content.startsWith('【子代理使用规则】'),
+    outputContract: segment => segment.role === 'assistant' && segment.content.startsWith('我的最终交付是一个 JSON 对象'),
+    task: segment => segment.content.includes('$AGENT_TASK'),
+};
+/**
+ * 在一组提示词段里按语义槽位定位段。
+ * @param segments 提示词段（通常是当前默认组）
+ * @param slot 槽位键
+ * @returns 命中的段；该组没有此槽位时返回 undefined
+ */
+function findAgentPromptSlot_ACU(segments, slot) {
+    return segments.find(AGENT_PROMPT_SLOT_LOCATORS_ACU[slot]);
+}
+/**
+ * 历史默认段谱系：V17–V26 各版默认提示词里、经现有迁移链之后仍与当前默认不同的那些段。
+ * 用户从未改写过的默认段会精确命中这里的哈希，被换成当前默认；用户改写过的段不会命中，原样保留。
+ *
+ * 维护约定：任何一次改写默认段正文，都要把旧正文的哈希与长度追加到对应角色下，
+ * 并把改写前的默认组追加进 tests/service/continuation/fixtures/continuation-prompt-history.json；
+ * 谱系回归测试会验证每一份历史默认组都能迁移成当前默认组。
+ */
+const AGENT_PROMPT_DEFAULT_LINEAGE_ACU = {
+    main: [
+        { hash: '7c50c9ea', length: 257, slot: 'capabilityAnswer', note: 'V17–V22 模式边界答（无「卷级台阶由 arc-architect 维护」）' },
+        { hash: 'b5eaeca2', length: 960, slot: 'actionRules', note: 'V17–V22 行动规则（无第 9 条节奏规则）' },
+        { hash: 'be6e00a6', length: 2646, slot: 'textProtocol', note: 'V17–V22 文本协议规范（旧 finalize 骨架；V17/V18 为 system 角色）' },
+        { hash: '0b9166c2', length: 1703, slot: 'subagentRules', note: 'V17–V22 子代理使用规则（无 pacing 派工约束；V17/V18 为 system 角色）' },
+    ],
+    arcArchitect: [
+        { hash: '23b29f8b', length: 1866, slot: 'outputContract', note: 'V22/V23 总纲输出契约（无 direction/escalation 微型弧要求）' },
+        { hash: 'fcf65a8c', length: 688, slot: 'task', note: 'V22 总纲任务段（无用户初始要求与完整阶段大纲注入）' },
+        { hash: 'bddf4a96', length: 828, slot: 'task', note: 'V23 总纲任务段（自检清单未含卷级容量项）' },
+    ],
+    maintainer: [],
+    mainlinePlanner: [
+        { hash: '11188ac7', length: 559, slot: 'task', note: 'V17–V22 主线策划任务段（无完整阶段大纲注入，看不到本轮 pacing）' },
+    ],
+    beatPlanner: [
+        { hash: '4fd1fd54', length: 452, slot: 'task', note: 'V17–V22 节拍策划任务段（无完整阶段大纲注入，看不到本轮 pacing）' },
+    ],
+    reviewer: [
+        { hash: '338b41a7', length: 452, slot: 'task', note: 'V17–V22 连续性审查任务段（无用户初始要求与完整阶段大纲注入）' },
+    ],
+    finalReviewer: [],
+};
 function buildDefaultAgentMainPrompt_ACU() {
     return cloneAgentPromptSegments_ACU(MAIN_AGENT_PROMPT_ACU);
 }
@@ -114017,9 +115092,12 @@ function buildDefaultAgentBeatPlannerPrompt_ACU() {
 function buildDefaultAgentReviewerPrompt_ACU() {
     return cloneAgentPromptSegments_ACU(REVIEWER_PROMPT_ACU);
 }
+function buildDefaultAgentFinalReviewerPrompt_ACU() {
+    return cloneAgentPromptSegments_ACU(FINAL_REVIEWER_PROMPT_ACU);
+}
 /**
- * 构造全部六组 Agent 默认提示词。
- * @returns 六组提示词的深拷贝，可安全写入 settings
+ * 构造全部七组 Agent 默认提示词。
+ * @returns 七组提示词的深拷贝，可安全写入 settings
  */
 function buildDefaultContinuationAgentPrompts_ACU() {
     return {
@@ -114029,6 +115107,7 @@ function buildDefaultContinuationAgentPrompts_ACU() {
         mainlinePlanner: buildDefaultAgentMainlinePlannerPrompt_ACU(),
         beatPlanner: buildDefaultAgentBeatPlannerPrompt_ACU(),
         reviewer: buildDefaultAgentReviewerPrompt_ACU(),
+        finalReviewer: buildDefaultAgentFinalReviewerPrompt_ACU(),
     };
 }
 
@@ -114037,16 +115116,35 @@ const CONTINUATION_TURN_RANGES_ACU = {
     standard: { min: 6, max: 10 },
     long: { min: 11, max: 20 },
 };
+/** V23 默认节奏段原文。V24 迁移只在该段完全未改写时追加长篇日常契约。 */
+const V23_DEFAULT_OUTLINE_PACING_SEGMENT_ACU = '【节奏：先定阶段形态，再排每轮松紧】\n\n第一步，用 <stage_tempo> 定这个阶段整体是什么形态。四档：\n- buildup 铺垫型：低压为主，攒关系、攒信息、攒资源，为后面的爆发蓄力。本阶段低压轮至少占一半。\n- mixed 起伏型：常规推进，松紧交替。本阶段低压轮至少占四分之一。\n- surge 高压型：决战、逃亡、连环变故这类一口气压到底的段落。允许整个阶段一轮低压都没有。\n- aftermath 余波型：消化上一段高压的代价，疗伤、复盘、关系重建、局势重新洗牌。本阶段低压轮至少占六成。\n选哪一档取决于总纲里本卷台阶推进到了哪一步，以及前面刚写完的是什么——当前节奏状态见下方的「节奏状态」段。\n\n第二步，给每个 <turn> 标 pacing 四档之一：\n- setup 铺垫日常：关系推进、生活场景、准备工作、信息沉淀。没有外部危机，价值体现在人物关系变化、读者对角色的理解加深、或为后续埋线。\n- pressure 冲突推进：危机、对抗、外部高压。主角被逼做出选择并付出代价。\n- turn 转折揭示：反转、信息揭露、伏笔回收。局势的性质在这一轮发生改变。\n- cooldown 余波消化：战后疗伤、复盘、情绪落地、关系在事件之后的重新校准。\n\n硬性要求（不满足会被系统打回重排）：\n1. 本阶段低压轮（setup + cooldown）的数量不得低于该形态对应的下限。\n2. 上一阶段是 surge 时，本阶段不能再选 surge，只能选 aftermath 或 mixed。\n3. 连续高压轮（pressure + turn）不得超过给定的上限，该计数跨阶段累计——前一阶段结尾连着三轮高压，本阶段开头就只剩上限减三轮的余量。surge 阶段豁免这一条。\n\n关键：低压轮放在哪里由你决定，不要均匀分散。\n把低压轮每隔三四轮撒一个，读者会感觉到一台节拍器，那比全程高压更假。真实的节奏是波浪：可以开头连着两轮日常把人物关系立住，然后连着四轮高压一口气推到底；也可以前面一路紧绷，最后两轮全用来收拾残局。同一份大纲里，「日常日常高压高压高压高压」和「高压高压高压高压日常日常」是完全不同的两段故事，但它们的低压轮数量一样——你要选的是哪一种叙事，而不是凑够数量。\n\n为什么需要低压轮：读者对紧张的感知是相对的。连续八轮全是危机，第八轮的危机读起来和第一轮一样甚至更钝；前面有一段安静，后面那场危机才重新有分量。同理，重大冲突之后不给余波，人物的代价就没有落点。低压轮不是浪费篇幅，它是让高压轮生效的前提。\nsetup 与 cooldown 轮同样要写具体：写清谁和谁在什么场景做什么、这一轮之后他们之间有什么变化，不要写「日常互动」「气氛缓和」这种空话。';
+/**
+ * V23 及更早默认大纲提示词里的三段原文（system 协议段、首条 assistant 确认、方法论 assistant 确认）。
+ * V24 改写了标签协议（新增 stage_role / turn 四维属性），但当初只追加了长篇契约段，没有替换这三段，
+ * 导致老用户的大纲模型仍按旧协议输出、被新校验器整份打回。迁移时按全文精确比对替换为当前默认。
+ */
+const V23_DEFAULT_OUTLINE_SYSTEM_SEGMENT_ACU = '你是专业的小说阶段规划助手。负责根据故事背景与历史进展，为下一阶段规划剧情大纲。\n输出格式：把大纲内容写入下列标签，标签外可以自由书写你的思路与分析，系统只读取标签内的内容。\n<stage_title>阶段标题</stage_title>\n<stage_goal>阶段整体目标</stage_goal>\n<stage_tempo>本阶段节奏形态，取值只能是 buildup / mixed / surge / aftermath 之一，含义见节奏条款</stage_tempo>\n<node>\n<node_title>节点标题</node_title>\n<node_goal>节点目标</node_goal>\n<turn pacing="setup">本轮剧情目标（每轮一个 turn 标签，内容为该轮要发生的具体剧情）</turn>\n</node>\n每个 <turn> 都必须带 pacing 属性，取值只能是 setup / pressure / turn / cooldown 四者之一，含义见节奏条款。\n节点数量不限，每个 <node> 内至少一个 <turn>；全部 <turn> 的总数就是本阶段的轮数，必须落在给定的阶段轮数范围内。\n不要输出 JSON，不要输出 id、编号或轮数统计字段——结构编号全部由系统自动生成。';
+const V23_DEFAULT_OUTLINE_ACK_SEGMENT_ACU = '收到。我作为小说阶段规划助手，会把阶段标题、阶段目标、阶段节奏形态、各节点与逐轮剧情目标分别写入 <stage_title>、<stage_goal>、<stage_tempo>、<node>、<node_title>、<node_goal>、<turn> 标签中，并给每个 <turn> 标注 pacing 属性；标签外只写思路分析，不输出 JSON、id 或任何编号统计字段，并保证全部 <turn> 总数落在给定的轮数范围内。';
+const V23_DEFAULT_OUTLINE_METHOD_ACK_SEGMENT_ACU = '我已深入理解小说大纲的方法论。在规划每个节点（node）和轮次（turn）的目标时，我会：\n1. 先按阶段容量算清楚这个阶段装得下多少内容，宁可把阶段目标定小写深，也不把一段旅程压进一个阶段；\n2. 先按总纲台阶与当前节奏状态定 <stage_tempo>，再按该形态的下限安排低压轮——低压轮按叙事需要成段安放，不平均分散成节拍器；\n3. 严格控制节奏分摊，前半段主做铺垫与中点反转，保留底牌，不强行完结主线；\n4. 在 pressure / turn 轮落实“行动、阻碍、悬念”三要素并让冲突线逐级升高；setup / cooldown 轮写具体的关系变化、信息沉淀与情绪落地，不写空话也不硬造危机；\n5. 设计明显的情绪曲线（压抑后必有释放），涉及伏笔的轮目标写明操作种类与对象，信息揭露写明允许揭到哪一层；\n6. 遵守实体白名单，严格从提供的上下文中调用角色与实体，绝不自创幻觉；\n7. 尊重轮承载量：每轮只装一个场景片段、至多两个节拍，绝不把正文模型 800-1200 字写不完的内容塞进一轮；\n8. 让阶段目标只承载故事总纲当前 active 卷尚未完成的一段，不触碰总纲里标注为禁止提前释放的底牌；单个阶段结束只留下跨阶段悬念，不擅自收束整卷。只有活动卷规划上下文显示卷级收束条件已被真实完成阶段满足时，才交由 arc-architect 切卷；所有既有卷完成时先扩充后续 active 卷。\n我会将这些原则落实到各个标签的内容中。';
+/** V24–V26 默认大纲提示词的上下文注入段原文；V27 迁移只在该段未改写时替换为带账本注入的新段。 */
+const V26_DEFAULT_OUTLINE_CONTEXT_SEGMENT_ACU = '初始要求：\n$ORIGIN_INSTRUCTION\n\n【故事总纲】（本阶段必须落在当前 active 卷的台阶之内；标注为禁止提前释放的底牌，本阶段一律不许翻）：\n$STORY_ARC\n\n【节奏状态】（决定本阶段能选哪些形态、开头还剩多少高压余量）：\n$PACING_CONTEXT\n\n阶段轮数范围：\n$TURN_RANGE\n\n当前任务阶段历史：\n$STAGE_HISTORY\n\n当前阶段已完成的部分（仅供衔接参考，严禁在标签中重新输出这些内容，只规划其后的剩余轮次）：\n$COMPLETED_STAGE_PART\n\n重规划补充要求：\n$REPLAN_INSTRUCTION\n\n剩余轮数参考（可按剧情需要增减，只需保证全阶段总轮数在范围内）：\n$REMAINING_TURNS\n\n相关世界书背景：\n$1\n\n【事件概览】（纪要表逐轮概览，命中召回码的轮已展开为纪要全文；概览按轮记录、与楼层无一一映射）：\n$STORY_OVERVIEW\n\n【最近正文】（尾部全文楼层，只含 AI 正文）：\n$STORY_TAIL\n\n上次校验错误：\n$VALIDATION_ERRORS\n\n请严格基于上述上下文，规划当前阶段的后续剧情大纲，并按规定标签输出。';
+/**
+ * V27 上下文注入段：大纲模型没有 read/search 工具，却被要求规划伏笔操作、揭示层级与时间锚。
+ * 把伏笔账本、信息差、年代学与长期约束固定注入，它才有事实依据，而不是凭概览记忆编。
+ */
+const V27_DEFAULT_OUTLINE_CONTEXT_SEGMENT_ACU = '初始要求：\n$ORIGIN_INSTRUCTION\n\n【故事总纲】（本阶段必须落在当前 active 卷的台阶之内；标注为禁止提前释放的底牌，本阶段一律不许翻）：\n$STORY_ARC\n\n【节奏状态】（决定本阶段能选哪些形态、开头还剩多少高压余量）：\n$PACING_CONTEXT\n\n阶段轮数范围：\n$TURN_RANGE\n\n当前任务阶段历史：\n$STAGE_HISTORY\n\n当前阶段已完成的部分（仅供衔接参考，严禁在标签中重新输出这些内容，只规划其后的剩余轮次）：\n$COMPLETED_STAGE_PART\n\n重规划补充要求：\n$REPLAN_INSTRUCTION\n\n剩余轮数参考（可按剧情需要增减，只需保证全阶段总轮数在范围内）：\n$REMAINING_TURNS\n\n【长期约束】（用户与主控登记的红线与偏好，规划必须遵守）：\n$ACTIVE_CONSTRAINTS\n\n【伏笔账本】（已进入正文的伏笔及其状态；轮目标里的埋设/强化/误导/回收只能针对这里的条目或明确的新埋设）：\n$HOOKS_LEDGER\n\n【信息差时间线】（客观事实、读者已知与各角色知晓状态；“允许揭示到哪一层”以此为基准）：\n$INFO_GAP\n\n【故事年代学账本】（已发生正文结算出的时间事实；每轮的 time 与 anchor 必须与当前时间锚相容）：\n$CHRONOLOGY\n\n相关世界书背景：\n$1\n\n【事件概览】（纪要表逐轮概览，命中召回码的轮已展开为纪要全文；概览按轮记录、与楼层无一一映射）：\n$STORY_OVERVIEW\n\n【最近正文】（尾部全文楼层，只含 AI 正文）：\n$STORY_TAIL\n\n上次校验错误：\n$VALIDATION_ERRORS\n\n请严格基于上述上下文，规划当前阶段的后续剧情大纲，并按规定标签输出。';
+/** V24 长篇日常契约：给低压轮独立的正向义务，并显式要求规划故事时间。 */
+const V24_OUTLINE_LONGFORM_PACING_CONTRACT_ACU = '【真正日常、主线停驻与故事时间】\n真正日常不是“危机暂时没发生”，而是角色在世界中持续生活。setup 轮至少承担一种独立功能：关系日常（共同生活与相处模式变化）、世界日常（饮食、职业、交通、制度、节庆或交易）、成长日常（训练、学习、劳动或恢复产生积累）、经营日常（资源、生产与消费发生变化）、支线日常（暂不引爆主线但以后会反作用于主线）、时间过渡（让一夜、数日或数周合理流逝）。\n\n战前讨论、等待下一次行动、采购武器或突然发现敌情仍是冲突链的附属间隙，不能冒充真正日常。setup 与 cooldown 允许主线保持不动：不推进核心矛盾、不揭示重大情报、不制造敌方动作，这不是失败；但必须通过具体场景动作与人物互动，让关系、生活状态、世界理解、资源积累、身体恢复或人物认知至少发生一项可观察变化。\n\n连续发生不再是默认答案。规划每轮时必须判断它与上一轮是紧接、同日稍后、隔夜、数日后还是更久；没有必须立即处理的危机时，应主动考虑让故事时间自然流逝。若 buildup 或 aftermath 阶段所有轮都挤在同一天，轮目标必须说明为何不能跨夜或跨日。发生时间跳跃时，在目标里写清新的相对时间锚，并点出环境、身体、关系、资源或社会状态中的两项可感知变化。\n\n低压轮的完成标准是“场景动作 + 人物互动 + 状态变化”，不是流水账；允许安静闭合或留下普通生活期待，不强制制造危机钩子。';
 const DEFAULT_OUTLINE_PROMPT_ACU = [
     {
         role: 'system',
-        content: '你是专业的小说阶段规划助手。负责根据故事背景与历史进展，为下一阶段规划剧情大纲。\n输出格式：把大纲内容写入下列标签，标签外可以自由书写你的思路与分析，系统只读取标签内的内容。\n<stage_title>阶段标题</stage_title>\n<stage_goal>阶段整体目标</stage_goal>\n<stage_tempo>本阶段节奏形态，取值只能是 buildup / mixed / surge / aftermath 之一，含义见节奏条款</stage_tempo>\n<node>\n<node_title>节点标题</node_title>\n<node_goal>节点目标</node_goal>\n<turn pacing="setup">本轮剧情目标（每轮一个 turn 标签，内容为该轮要发生的具体剧情）</turn>\n</node>\n每个 <turn> 都必须带 pacing 属性，取值只能是 setup / pressure / turn / cooldown 四者之一，含义见节奏条款。\n节点数量不限，每个 <node> 内至少一个 <turn>；全部 <turn> 的总数就是本阶段的轮数，必须落在给定的阶段轮数范围内。\n不要输出 JSON，不要输出 id、编号或轮数统计字段——结构编号全部由系统自动生成。',
+        content: '你是专业的小说阶段规划助手。负责根据故事背景与历史进展，为下一阶段规划剧情大纲。\n输出格式：把大纲内容写入下列标签，标签外可以自由书写你的思路与分析，系统只读取标签内的内容。\n<stage_title>阶段标题</stage_title>\n<stage_goal>阶段整体目标</stage_goal>\n<stage_tempo>本阶段节奏形态，取值只能是 buildup / mixed / surge / aftermath 之一，含义见节奏条款</stage_tempo>\n<stage_role>阶段结构职责，取值只能是 setup / development / escalation / turn / payoff / aftermath 之一</stage_role>\n<stage_time_span>可选：本阶段预计覆盖的故事内部时间</stage_time_span>\n<node>\n<node_title>节点标题</node_title>\n<node_goal>节点目标</node_goal>\n<turn pacing="setup" function="daily_bond" mainline="hold" time="days" anchor="入城后的第七天">本轮剧情目标（每轮一个 turn 标签，内容为该轮要发生的具体剧情）</turn>\n</node>\n每个 <turn> 都必须带四个核心属性：pacing 只能是 setup / pressure / turn / cooldown；function 只能是 daily_bond / daily_world / recovery / preparation / training / economy / side_thread / conflict / reveal / payoff / transition；mainline 只能是 hold / micro / step / milestone；time 只能是 continuous / same_day / overnight / days / weeks / months / years。time 为 weeks / months / years 时还必须提供非空 anchor。\n节点数量不限，每个 <node> 内至少一个 <turn>；全部 <turn> 的总数就是本阶段的轮数，必须落在给定的阶段轮数范围内。\n不要输出 JSON，不要输出 id、编号或轮数统计字段——结构编号全部由系统自动生成。',
         enabled: true,
         deletable: true,
     },
     {
         role: 'assistant',
-        content: '收到。我作为小说阶段规划助手，会把阶段标题、阶段目标、阶段节奏形态、各节点与逐轮剧情目标分别写入 <stage_title>、<stage_goal>、<stage_tempo>、<node>、<node_title>、<node_goal>、<turn> 标签中，并给每个 <turn> 标注 pacing 属性；标签外只写思路分析，不输出 JSON、id 或任何编号统计字段，并保证全部 <turn> 总数落在给定的轮数范围内。',
+        content: '收到。我会把阶段标题、目标、节奏形态、结构职责和可选时间目标分别写入 <stage_title>、<stage_goal>、<stage_tempo>、<stage_role>、<stage_time_span>，并在每个 <turn> 上完整标注 pacing、function、mainline、time 与必要的 anchor。标签外只写思路分析，不输出 JSON、id 或编号统计字段，并保证全部 <turn> 总数落在给定轮数范围内。',
         enabled: true,
         deletable: true,
     },
@@ -114058,7 +115156,13 @@ const DEFAULT_OUTLINE_PROMPT_ACU = [
     },
     {
         role: 'user',
-        content: '【节奏：先定阶段形态，再排每轮松紧】\n\n第一步，用 <stage_tempo> 定这个阶段整体是什么形态。四档：\n- buildup 铺垫型：低压为主，攒关系、攒信息、攒资源，为后面的爆发蓄力。本阶段低压轮至少占一半。\n- mixed 起伏型：常规推进，松紧交替。本阶段低压轮至少占四分之一。\n- surge 高压型：决战、逃亡、连环变故这类一口气压到底的段落。允许整个阶段一轮低压都没有。\n- aftermath 余波型：消化上一段高压的代价，疗伤、复盘、关系重建、局势重新洗牌。本阶段低压轮至少占六成。\n选哪一档取决于总纲里本卷台阶推进到了哪一步，以及前面刚写完的是什么——当前节奏状态见下方的「节奏状态」段。\n\n第二步，给每个 <turn> 标 pacing 四档之一：\n- setup 铺垫日常：关系推进、生活场景、准备工作、信息沉淀。没有外部危机，价值体现在人物关系变化、读者对角色的理解加深、或为后续埋线。\n- pressure 冲突推进：危机、对抗、外部高压。主角被逼做出选择并付出代价。\n- turn 转折揭示：反转、信息揭露、伏笔回收。局势的性质在这一轮发生改变。\n- cooldown 余波消化：战后疗伤、复盘、情绪落地、关系在事件之后的重新校准。\n\n硬性要求（不满足会被系统打回重排）：\n1. 本阶段低压轮（setup + cooldown）的数量不得低于该形态对应的下限。\n2. 上一阶段是 surge 时，本阶段不能再选 surge，只能选 aftermath 或 mixed。\n3. 连续高压轮（pressure + turn）不得超过给定的上限，该计数跨阶段累计——前一阶段结尾连着三轮高压，本阶段开头就只剩上限减三轮的余量。surge 阶段豁免这一条。\n\n关键：低压轮放在哪里由你决定，不要均匀分散。\n把低压轮每隔三四轮撒一个，读者会感觉到一台节拍器，那比全程高压更假。真实的节奏是波浪：可以开头连着两轮日常把人物关系立住，然后连着四轮高压一口气推到底；也可以前面一路紧绷，最后两轮全用来收拾残局。同一份大纲里，「日常日常高压高压高压高压」和「高压高压高压高压日常日常」是完全不同的两段故事，但它们的低压轮数量一样——你要选的是哪一种叙事，而不是凑够数量。\n\n为什么需要低压轮：读者对紧张的感知是相对的。连续八轮全是危机，第八轮的危机读起来和第一轮一样甚至更钝；前面有一段安静，后面那场危机才重新有分量。同理，重大冲突之后不给余波，人物的代价就没有落点。低压轮不是浪费篇幅，它是让高压轮生效的前提。\nsetup 与 cooldown 轮同样要写具体：写清谁和谁在什么场景做什么、这一轮之后他们之间有什么变化，不要写「日常互动」「气氛缓和」这种空话。',
+        content: V23_DEFAULT_OUTLINE_PACING_SEGMENT_ACU,
+        enabled: true,
+        deletable: true,
+    },
+    {
+        role: 'user',
+        content: V24_OUTLINE_LONGFORM_PACING_CONTRACT_ACU,
         enabled: true,
         deletable: true,
     },
@@ -114070,13 +115174,13 @@ const DEFAULT_OUTLINE_PROMPT_ACU = [
     },
     {
         role: 'assistant',
-        content: '我已深入理解小说大纲的方法论。在规划每个节点（node）和轮次（turn）的目标时，我会：\n1. 先按阶段容量算清楚这个阶段装得下多少内容，宁可把阶段目标定小写深，也不把一段旅程压进一个阶段；\n2. 先按总纲台阶与当前节奏状态定 <stage_tempo>，再按该形态的下限安排低压轮——低压轮按叙事需要成段安放，不平均分散成节拍器；\n3. 严格控制节奏分摊，前半段主做铺垫与中点反转，保留底牌，不强行完结主线；\n4. 在 pressure / turn 轮落实“行动、阻碍、悬念”三要素并让冲突线逐级升高；setup / cooldown 轮写具体的关系变化、信息沉淀与情绪落地，不写空话也不硬造危机；\n5. 设计明显的情绪曲线（压抑后必有释放），涉及伏笔的轮目标写明操作种类与对象，信息揭露写明允许揭到哪一层；\n6. 遵守实体白名单，严格从提供的上下文中调用角色与实体，绝不自创幻觉；\n7. 尊重轮承载量：每轮只装一个场景片段、至多两个节拍，绝不把正文模型 800-1200 字写不完的内容塞进一轮；\n8. 让阶段目标落在故事总纲当前推进中的那一级台阶内，不触碰总纲里标注为禁止提前释放的底牌，并在阶段末留下跨阶段悬念。\n我会将这些原则落实到各个标签的内容中。',
+        content: '我已深入理解小说大纲的方法论。在规划每个节点（node）和轮次（turn）的目标时，我会：\n1. 先按阶段容量与【活动卷规划上下文】算清楚本阶段只承载当前 active 卷尚未完成的一段，宁可把阶段目标定小写深，也不把一段旅程压进一个阶段；\n2. 先按总纲台阶与当前节奏状态定 <stage_tempo>，再按该形态的下限安排低压轮——低压轮按叙事需要成段安放，不平均分散成节拍器；\n3. 严格控制节奏分摊，前半段主做铺垫与中点反转，保留底牌，不强行完结主线；\n4. 在 pressure / turn 轮落实“行动、阻碍、悬念”三要素并让冲突线逐级升高；setup / cooldown 轮写具体的关系变化、信息沉淀与情绪落地，不写空话也不硬造危机；\n5. 设计明显的情绪曲线（压抑后必有释放），涉及伏笔的轮目标写明操作种类与对象，信息揭露写明允许揭到哪一层；\n6. 遵守实体白名单，严格从提供的上下文中调用角色与实体，绝不自创幻觉；\n7. 尊重轮承载量：每轮只装一个场景片段、至多两个节拍，绝不把正文模型 800-1200 字写不完的内容塞进一轮；\n8. 让阶段目标只承载故事总纲当前 active 卷尚未完成的一段，不触碰总纲里标注为禁止提前释放的底牌；单个阶段结束只留下跨阶段悬念，不擅自收束整卷。只有活动卷规划上下文显示卷级收束条件已被真实完成阶段满足时，才交由 arc-architect 切卷；所有既有卷完成时先扩充后续 active 卷。\n我会将这些原则落实到各个标签的内容中。',
         enabled: true,
         deletable: true,
     },
     {
         role: 'user',
-        content: '初始要求：\n$ORIGIN_INSTRUCTION\n\n【故事总纲】（本阶段必须落在当前 active 卷的台阶之内；标注为禁止提前释放的底牌，本阶段一律不许翻）：\n$STORY_ARC\n\n【节奏状态】（决定本阶段能选哪些形态、开头还剩多少高压余量）：\n$PACING_CONTEXT\n\n阶段轮数范围：\n$TURN_RANGE\n\n当前任务阶段历史：\n$STAGE_HISTORY\n\n当前阶段已完成的部分（仅供衔接参考，严禁在标签中重新输出这些内容，只规划其后的剩余轮次）：\n$COMPLETED_STAGE_PART\n\n重规划补充要求：\n$REPLAN_INSTRUCTION\n\n剩余轮数参考（可按剧情需要增减，只需保证全阶段总轮数在范围内）：\n$REMAINING_TURNS\n\n相关世界书背景：\n$1\n\n【事件概览】（纪要表逐轮概览，命中召回码的轮已展开为纪要全文；概览按轮记录、与楼层无一一映射）：\n$STORY_OVERVIEW\n\n【最近正文】（尾部全文楼层，只含 AI 正文）：\n$STORY_TAIL\n\n上次校验错误：\n$VALIDATION_ERRORS\n\n请严格基于上述上下文，规划当前阶段的后续剧情大纲，并按规定标签输出。',
+        content: V27_DEFAULT_OUTLINE_CONTEXT_SEGMENT_ACU,
         enabled: true,
         deletable: true,
     },
@@ -114116,6 +115220,27 @@ const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V20_ACU = 'spv2.8-continuation-r
 const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V21_ACU = 'spv2.9-continuation-longform-story-arc-v21';
 /** Story-arc volume plan version: migrated default prompts follow the persisted volume-count setting. */
 const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V22_ACU = 'spv3.0-continuation-story-arc-volume-plan-v22';
+/** Volume lifecycle version: default prompts now distinguish stage progress, volume completion evidence, and post-arc expansion. */
+const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V23_ACU = 'spv3.1-continuation-volume-lifecycle-v23';
+/** Pacing contract version: low-pressure turns can hold the mainline, close quietly, and advance story time. */
+const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V24_ACU = 'spv3.2-continuation-pacing-contract-v24';
+/** Volume-capacity contract version: every new volume declares capacity, time span, ceiling, sustaining threads, and payoffs. */
+const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V25_ACU = 'spv3.3-continuation-volume-capacity-v25';
+/** Chronology ledger version: maintainer settles story-time facts, main agent and final reviewer enforce time-jump obligations. */
+const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V26_ACU = 'spv3.4-continuation-chronology-v26';
+/**
+ * Outline ledger injection version: the stage-outline prompt now receives hooks, info-gap,
+ * chronology and long-term constraints; V23-era outline protocol segments are migrated precisely.
+ */
+const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V27_ACU = 'spv3.5-continuation-outline-ledgers-v27';
+/**
+ * Default-lineage repair version. Earlier targeted migrations matched stale segments against
+ * "the current default" (by index or by text), so every later default rewrite silently left older
+ * installs with stale rule segments — and the V20 arc-architect task segment was overwritten by the
+ * V25 capacity contract, leaving that sub-agent with no material or task injection at all.
+ * V28 maps every known historical default segment to its current slot and restores missing task segments.
+ */
+const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V28_ACU = 'spv3.6-continuation-default-lineage-v28';
 /**
  * 连续高压轮上限的默认值。8 轮约等于 8000 字全程没有喘息——这才是病态；
  * 更小的值会退化成固定节拍，正是这一版要消灭的东西。
@@ -114123,6 +115248,10 @@ const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V22_ACU = 'spv3.0-continuation-s
 const CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_DEFAULT_ACU = 8;
 /** 连续高压轮上限的可配置上限。再大就等于关闭这条兜底。 */
 const CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_ACU = 20;
+/** 终审独立读取预算；与主 Agent 预算隔离，按会话总结阈值折算。 */
+const CONTINUATION_FINAL_REVIEW_READ_TOKEN_BUDGET_DEFAULT_ACU = '50%';
+/** 终审允许的额外 worldbook read/search 工具轮上限。 */
+const CONTINUATION_FINAL_REVIEW_MAX_EXTRA_READS_DEFAULT_ACU = 6;
 function clonePromptSegments_ACU(segments) {
     return segments.map(segment => ({ ...segment }));
 }
@@ -114159,6 +115288,7 @@ function buildDefaultContinuationSettings_ACU() {
         storyTailFloors: AGENT_STORY_TAIL_FLOORS_DEFAULT_ACU,
         agentReadTokenBudget: AGENT_READ_TOKEN_BUDGET_DEFAULT_ACU,
         agentReadFallbackTokens: AGENT_READ_FALLBACK_TOKENS_DEFAULT_ACU,
+        finalReview: { enabled: false, readTokenBudget: CONTINUATION_FINAL_REVIEW_READ_TOKEN_BUDGET_DEFAULT_ACU, maxExtraReads: CONTINUATION_FINAL_REVIEW_MAX_EXTRA_READS_DEFAULT_ACU },
         contextExtractRules: [],
         contextExcludeRules: [],
         agentRunBudget: { ...DEFAULT_AGENT_RUN_BUDGET_ACU },
@@ -114168,7 +115298,7 @@ function buildDefaultContinuationSettings_ACU() {
         agentApiPresets: buildDefaultContinuationAgentApiPresets_ACU(),
         outlinePrompt: buildDefaultContinuationOutlinePrompt_ACU(),
         agentPrompts: buildDefaultContinuationAgentPrompts_ACU(),
-        promptForceDefaultVersion: CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V22_ACU,
+        promptForceDefaultVersion: CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V28_ACU,
     };
 }
 function normalizeOptionalInteger_ACU(value, fallback, minimum, field) {
@@ -114325,7 +115455,7 @@ function cursorFromCompletedTurns_ACU(revision, completedTurns) {
 
 const OUTLINE_KEYS_ACU = ['schemaVersion', 'title', 'goal', 'totalTurns', 'nodes'];
 /** tempo 与 pacing 同理：晚于其余字段加入，写成必填会让存量信封加载即失败。缺失回填 mixed。 */
-const OUTLINE_OPTIONAL_KEYS_ACU = ['tempo'];
+const OUTLINE_OPTIONAL_KEYS_ACU = ['tempo', 'role', 'timeSpanGoal'];
 const DEFAULT_STAGE_TEMPO_ACU = 'mixed';
 const NODE_KEYS_ACU = ['id', 'title', 'goal', 'suggestedTurns', 'turns'];
 const TURN_KEYS_ACU = ['id', 'goal'];
@@ -114333,8 +115463,19 @@ const TURN_KEYS_ACU = ['id', 'goal'];
  * pacing 晚于 turn 的其余字段加入。信封每次加载都会对所有历史 revision 重跑本校验器，
  * 写成必填会让全部存量任务加载即失败，因此它是可选键：缺失时回填 pressure。
  */
-const TURN_OPTIONAL_KEYS_ACU = ['pacing'];
+const TURN_OPTIONAL_KEYS_ACU = ['pacing', 'function', 'mainlineDelta', 'timeAdvance', 'timeAnchor', 'inferred'];
 const DEFAULT_TURN_PACING_ACU = 'pressure';
+/**
+ * 语义字段按 pacing 分档回填。回填值必须与 pacing 自洽：给 pressure 轮填 hold/transition
+ * 会让旧阶段在后续编辑时被组合规则打回，也会把“冲突轮”显示成“过渡轮”。
+ */
+const TURN_SOFT_DEFAULTS_ACU = {
+    setup: { function: 'transition', mainlineDelta: 'hold', timeAdvance: 'same_day' },
+    cooldown: { function: 'recovery', mainlineDelta: 'hold', timeAdvance: 'overnight' },
+    pressure: { function: 'conflict', mainlineDelta: 'step', timeAdvance: 'continuous' },
+    turn: { function: 'reveal', mainlineDelta: 'step', timeAdvance: 'continuous' },
+};
+const LONG_TIME_ADVANCES_ACU$1 = ['weeks', 'months', 'years'];
 /**
  * 各阶段形态的低压轮（setup + cooldown）下限占比。
  *
@@ -114386,6 +115527,20 @@ function requireText_ACU(value, path) {
     }
     return value;
 }
+function optionalText_ACU(value, path) {
+    if (value === undefined || value === null)
+        return undefined;
+    if (typeof value === 'string' && !value.trim())
+        return undefined;
+    return requireText_ACU(value, path);
+}
+function isEnumValue_ACU(value, values) {
+    return typeof value === 'string' && values.includes(value);
+}
+function goalHead_ACU(goal) {
+    const flat = typeof goal === 'string' ? goal.replace(/\s+/g, ' ').trim() : '';
+    return flat.length <= 24 ? flat : `${flat.slice(0, 24)}…`;
+}
 function requirePositiveInteger_ACU(value, path) {
     if (typeof value !== 'number' || !Number.isInteger(value)) {
         fail_ACU$3('CONTINUATION_OUTLINE_FIELD_TYPE_INVALID', 'outline_validate', `字段必须是整数：${path}`, { path });
@@ -114396,25 +115551,119 @@ function requirePositiveInteger_ACU(value, path) {
     return value;
 }
 /**
- * 读取轮次节奏档。缺失回填 pressure（迁移路径），但写错枚举值要报错而不是静默回填——
- * 静默回填会让模型永远不知道自己写错了，节奏标注就变成随机的。
+ * 解析一个软枚举字段。合法直接返回；缺失/非法时按策略处理：reject 抛错，
+ * default/collect 返回 fallback 并（collect 时）记录缺项。
  */
-function requirePacing_ACU(value, path) {
-    if (value === undefined)
-        return DEFAULT_TURN_PACING_ACU;
-    if (typeof value !== 'string' || !STAGE_TURN_PACINGS_ACU.includes(value)) {
-        fail_ACU$3('CONTINUATION_OUTLINE_FIELD_TYPE_INVALID', 'outline_validate', `节奏档必须是 ${STAGE_TURN_PACINGS_ACU.join(' / ')} 之一：${path}`, { path, actual: value });
+function resolveSoftEnum_ACU(state, strict, value, values, field, label, path, fallback, position) {
+    if (isEnumValue_ACU(value, values))
+        return { value, inferred: false };
+    const missing = value === undefined || value === null || value === '';
+    // 非严格（持久化 / 已完成前缀）路径：缺失静默回填；写了非法值仍然是数据损坏，必须报。
+    if (!strict) {
+        if (missing && fallback !== null)
+            return { value: fallback, inferred: true };
+        fail_ACU$3('CONTINUATION_OUTLINE_FIELD_TYPE_INVALID', 'outline_validate', `${label}必须是 ${values.join(' / ')} 之一：${path}`, { path, actual: value });
     }
-    return value;
+    if (state.policy === 'reject' || fallback === null) {
+        if (state.policy === 'collect' && fallback === null) {
+            // pacing / tempo 没有安全默认：先记缺项，用占位值让结构校验能继续，最终由调用方决定是否硬失败。
+            state.missing.push({ field, ...position, actual: value, defaulted: false });
+            return { value: values[0], inferred: true };
+        }
+        fail_ACU$3('CONTINUATION_OUTLINE_FIELD_TYPE_INVALID', 'outline_validate', `${label}必须是 ${values.join(' / ')} 之一：${path}`, { path, actual: value });
+    }
+    if (state.policy === 'collect')
+        state.missing.push({ field, ...position, actual: value, defaulted: true });
+    return { value: fallback, inferred: true };
 }
-function validateTurn_ACU(raw, path) {
+/**
+ * 组合规则只保留与 pacing 直接矛盾、能被机械判定的两条；不再用关键词正则猜测 goal 散文里
+ * 有没有“可观察变化”——那类规则在真实语料上误杀率太高，只会逼模型堆关键词。
+ * 矛盾组合按策略处理：严格生成时记为缺项（让模型改），其余路径降级到 pacing 默认值并标记 inferred。
+ */
+function reconcileTurnSemantics_ACU(state, strict, turn, role, position) {
+    const inferred = new Set(turn.inferred ?? []);
+    const defaults = TURN_SOFT_DEFAULTS_ACU[turn.pacing];
+    if (turn.pacing === 'setup' && turn.function === 'conflict') {
+        if (strict && state.policy === 'collect')
+            state.missing.push({ field: 'function', nodeIndex: position.nodeIndex, turnIndex: position.turnIndex, goalHead: position.goalHead, actual: 'conflict（setup 轮不能承担 conflict 功能）', defaulted: true });
+        else if (strict && state.policy === 'reject')
+            fail_ACU$3('CONTINUATION_OUTLINE_FIELD_TYPE_INVALID', 'outline_validate', `setup 轮不能承担 conflict 功能：nodes[${position.nodeIndex}].turns[${position.turnIndex}]`, { rule: 'setup_conflict' });
+        turn.function = defaults.function;
+        inferred.add('function');
+    }
+    if ((turn.pacing === 'setup' || turn.pacing === 'cooldown') && turn.mainlineDelta === 'milestone' && !(turn.function === 'payoff' && role === 'payoff')) {
+        if (strict && state.policy === 'collect')
+            state.missing.push({ field: 'mainlineDelta', nodeIndex: position.nodeIndex, turnIndex: position.turnIndex, goalHead: position.goalHead, actual: 'milestone（低压轮不能推进 milestone，除非 payoff 阶段以 payoff 功能兑现）', defaulted: true });
+        else if (strict && state.policy === 'reject')
+            fail_ACU$3('CONTINUATION_OUTLINE_FIELD_TYPE_INVALID', 'outline_validate', `低压轮不能推进 milestone：nodes[${position.nodeIndex}].turns[${position.turnIndex}]`, { rule: 'downtime_milestone' });
+        turn.mainlineDelta = 'micro';
+        inferred.add('mainlineDelta');
+    }
+    if (strict && LONG_TIME_ADVANCES_ACU$1.includes(turn.timeAdvance) && !turn.timeAnchor) {
+        // anchor 是自然语言，没有可机械补的默认值；严格生成时索要，其余路径放行。
+        if (state.policy === 'collect')
+            state.missing.push({ field: 'timeAnchor', nodeIndex: position.nodeIndex, turnIndex: position.turnIndex, goalHead: position.goalHead, actual: undefined, defaulted: true });
+        else if (state.policy === 'reject')
+            fail_ACU$3('CONTINUATION_OUTLINE_FIELD_MISSING', 'outline_validate', `较大时间跨度必须提供 timeAnchor：nodes[${position.nodeIndex}].turns[${position.turnIndex}].timeAnchor`, { rule: 'long_time_anchor' });
+    }
+    if (inferred.size)
+        turn.inferred = [...inferred];
+    else
+        delete turn.inferred;
+}
+function validateInferred_ACU(value, path) {
+    if (value === undefined)
+        return undefined;
+    if (!Array.isArray(value) || value.some(item => !isEnumValue_ACU(item, STAGE_TURN_SOFT_FIELDS_ACU))) {
+        fail_ACU$3('CONTINUATION_OUTLINE_FIELD_TYPE_INVALID', 'outline_validate', `inferred 必须是 ${STAGE_TURN_SOFT_FIELDS_ACU.join(' / ')} 的数组：${path}`, { path });
+    }
+    return value.length ? [...new Set(value)] : undefined;
+}
+function validateTurn_ACU(raw, path, strict, role, state, nodeIndex, turnIndex) {
     if (!isRecord_ACU$8(raw)) {
         fail_ACU$3('CONTINUATION_OUTLINE_FIELD_TYPE_INVALID', 'outline_validate', `字段必须是对象：${path}`, { path });
     }
     assertExactKeys_ACU(raw, TURN_KEYS_ACU, path, TURN_OPTIONAL_KEYS_ACU);
-    return { id: requireText_ACU(raw.id, `${path}.id`), goal: requireText_ACU(raw.goal, `${path}.goal`), pacing: requirePacing_ACU(raw.pacing, `${path}.pacing`) };
+    const goal = requireText_ACU(raw.goal, `${path}.goal`);
+    const position = { nodeIndex, turnIndex, goalHead: goalHead_ACU(goal) };
+    const pacing = resolveSoftEnum_ACU(state, strict, raw.pacing, STAGE_TURN_PACINGS_ACU, 'pacing', '节奏档', `${path}.pacing`, strict ? null : DEFAULT_TURN_PACING_ACU, position);
+    const defaults = TURN_SOFT_DEFAULTS_ACU[pacing.value];
+    const fn = resolveSoftEnum_ACU(state, strict, raw.function, STAGE_TURN_FUNCTIONS_ACU, 'function', '叙事功能', `${path}.function`, defaults.function, position);
+    const mainline = resolveSoftEnum_ACU(state, strict, raw.mainlineDelta, STAGE_TURN_MAINLINE_DELTAS_ACU, 'mainlineDelta', '主线增量', `${path}.mainlineDelta`, defaults.mainlineDelta, position);
+    const time = resolveSoftEnum_ACU(state, strict, raw.timeAdvance, STAGE_TURN_TIME_ADVANCES_ACU, 'timeAdvance', '时间跨度', `${path}.timeAdvance`, defaults.timeAdvance, position);
+    const persistedInferred = validateInferred_ACU(raw.inferred, `${path}.inferred`) ?? [];
+    const inferred = new Set(persistedInferred);
+    if (fn.inferred)
+        inferred.add('function');
+    else
+        inferred.delete('function');
+    if (mainline.inferred)
+        inferred.add('mainlineDelta');
+    else
+        inferred.delete('mainlineDelta');
+    if (time.inferred)
+        inferred.add('timeAdvance');
+    else
+        inferred.delete('timeAdvance');
+    const turn = {
+        id: requireText_ACU(raw.id, `${path}.id`),
+        goal,
+        pacing: pacing.value,
+        function: fn.value,
+        mainlineDelta: mainline.value,
+        timeAdvance: time.value,
+        timeAnchor: optionalText_ACU(raw.timeAnchor, `${path}.timeAnchor`),
+        ...(inferred.size ? { inferred: [...inferred] } : {}),
+    };
+    if (turn.timeAnchor === undefined)
+        delete turn.timeAnchor;
+    // pacing 本身缺失时它只是占位值，拿它去判组合矛盾没有意义，等模型补上 pacing 再判。
+    if (!pacing.inferred)
+        reconcileTurnSemantics_ACU(state, strict, turn, role, position);
+    return turn;
 }
-function validateNode_ACU(raw, index, turnIds) {
+function validateNode_ACU(raw, index, turnIds, role, state, turnOffset) {
     const path = `nodes[${index}]`;
     if (!isRecord_ACU$8(raw)) {
         fail_ACU$3('CONTINUATION_OUTLINE_FIELD_TYPE_INVALID', 'outline_validate', `字段必须是对象：${path}`, { path });
@@ -114424,7 +115673,7 @@ function validateNode_ACU(raw, index, turnIds) {
         fail_ACU$3('CONTINUATION_OUTLINE_FIELD_TYPE_INVALID', 'outline_validate', `字段必须是数组：${path}.turns`, { path: `${path}.turns` });
     }
     const suggestedTurns = requirePositiveInteger_ACU(raw.suggestedTurns, `${path}.suggestedTurns`);
-    const turns = raw.turns.map((turn, turnIndex) => validateTurn_ACU(turn, `${path}.turns[${turnIndex}]`));
+    const turns = raw.turns.map((turn, turnIndex) => validateTurn_ACU(turn, `${path}.turns[${turnIndex}]`, state.mode === 'generated' || (state.mode === 'replanned' && turnOffset + turnIndex >= state.strictFromTurn), role, state, index, turnIndex));
     if (turns.length !== suggestedTurns) {
         fail_ACU$3('CONTINUATION_OUTLINE_NODE_TURN_COUNT_MISMATCH', 'outline_validate', `节点轮次数与 suggestedTurns 不一致：${path}`, { path, expected: suggestedTurns, actual: turns.length });
     }
@@ -114452,11 +115701,16 @@ function resolveContinuationTurnRange_ACU(stageSize, customTurnMin, customTurnMa
     }
     return { min: customTurnMin, max: customTurnMax };
 }
-/**
- * Validates an untrusted model payload before any serialization or cloning.
- * The returned outline is a fresh, typed value assembled only from validated fields.
- */
-function validateStageOutline_ACU(raw, range) {
+function defaultStageRoleForTempo_ACU(tempo) {
+    if (tempo === 'buildup')
+        return 'setup';
+    if (tempo === 'surge')
+        return 'escalation';
+    if (tempo === 'aftermath')
+        return 'aftermath';
+    return 'development';
+}
+function validateStageOutlineWithState_ACU(raw, range, state) {
     if (!isRecord_ACU$8(raw)) {
         fail_ACU$3('CONTINUATION_OUTLINE_NOT_OBJECT', 'outline_validate', '阶段大纲必须是单一 JSON 对象');
     }
@@ -114476,14 +115730,20 @@ function validateStageOutline_ACU(raw, range) {
     if (raw.nodes.length === 0) {
         fail_ACU$3('CONTINUATION_OUTLINE_NODES_EMPTY', 'outline_validate', 'nodes 不能为空');
     }
+    const strictStage = state.mode !== 'persisted';
+    const stagePosition = { nodeIndex: null, turnIndex: null, goalHead: '' };
+    const tempo = resolveSoftEnum_ACU(state, strictStage, raw.tempo, STAGE_TEMPOS_ACU, 'tempo', '阶段节奏形态', 'outline.tempo', strictStage ? null : DEFAULT_STAGE_TEMPO_ACU, stagePosition);
+    const role = resolveSoftEnum_ACU(state, strictStage, raw.role, STAGE_ROLES_ACU, 'role', '阶段结构角色', 'outline.role', defaultStageRoleForTempo_ACU(tempo.value), stagePosition);
     const nodeIds = new Set();
     const turnIds = new Set();
+    let turnOffset = 0;
     const nodes = raw.nodes.map((node, index) => {
-        const validated = validateNode_ACU(node, index, turnIds);
+        const validated = validateNode_ACU(node, index, turnIds, role.value, state, turnOffset);
         if (nodeIds.has(validated.id)) {
             fail_ACU$3('CONTINUATION_OUTLINE_NODE_ID_DUPLICATE', 'outline_validate', `节点 ID 重复：${validated.id}`, { id: validated.id });
         }
         nodeIds.add(validated.id);
+        turnOffset += validated.turns.length;
         return validated;
     });
     const summedTurns = nodes.reduce((sum, node) => sum + node.suggestedTurns, 0);
@@ -114494,19 +115754,40 @@ function validateStageOutline_ACU(raw, range) {
         schemaVersion: CONTINUATION_SCHEMA_VERSION_ACU,
         title: requireText_ACU(raw.title, 'outline.title'),
         goal: requireText_ACU(raw.goal, 'outline.goal'),
-        tempo: validateStageTempo_ACU(raw.tempo),
+        role: role.value,
+        timeSpanGoal: optionalText_ACU(raw.timeSpanGoal, 'outline.timeSpanGoal'),
+        tempo: tempo.value,
         totalTurns: raw.totalTurns,
         nodes,
     };
 }
-/** 校验阶段形态。缺失回填 mixed（存量信封迁移），写错则报错——静默纠正会让模型学不会正确写法。 */
-function validateStageTempo_ACU(raw) {
-    if (raw === undefined)
-        return DEFAULT_STAGE_TEMPO_ACU;
-    if (typeof raw !== 'string' || !STAGE_TEMPOS_ACU.includes(raw)) {
-        fail_ACU$3('CONTINUATION_OUTLINE_FIELD_TYPE_INVALID', 'outline_validate', `阶段节奏形态非法：outline.tempo 只能是 ${STAGE_TEMPOS_ACU.join(' / ')}`, { path: 'outline.tempo', actual: raw });
-    }
-    return raw;
+function runValidation_ACU(raw, range, mode, policy, strictFromTurn = 0) {
+    const state = { mode, policy, strictFromTurn, missing: [] };
+    const outline = validateStageOutlineWithState_ACU(raw, range, state);
+    return { outline, missing: state.missing };
+}
+/** 兼容读取持久化大纲；缺失的新字段仅在返回值中按 pacing 分档回填并标记 inferred，不改写磁盘。 */
+function validatePersistedStageOutline_ACU(raw, range) {
+    return runValidation_ACU(raw, range, 'persisted', 'default').outline;
+}
+/** 新生成大纲的硬边界：核心标签缺失、非法枚举和非法组合都直接拒绝（保留给需要硬失败的调用方）。 */
+function validateGeneratedStageOutline_ACU(raw, range) {
+    return runValidation_ACU(raw, range, 'generated', 'reject').outline;
+}
+/**
+ * 新生成大纲的草稿校验：结构错误仍抛出；软字段缺失或非法时补默认并收集到 missing，
+ * 由生成链路决定是向模型索要修补还是接受默认值。pacing / tempo 缺失也会进 missing 且 defaulted=false。
+ */
+function validateGeneratedStageOutlineDraft_ACU(raw, range) {
+    return runValidation_ACU(raw, range, 'generated', 'collect');
+}
+/** 用户手改或运行时编辑后的大纲：结构必须合法，软字段缺失按 pacing 补默认并标记 inferred。 */
+function validateEditedStageOutline_ACU(raw, range) {
+    return runValidation_ACU(raw, range, 'generated', 'default').outline;
+}
+/** 兼容既有调用方；该名称固定表示持久化/旧快照读取路径。 */
+function validateStageOutline_ACU(raw, range) {
+    return validatePersistedStageOutline_ACU(raw, range);
 }
 function flattenTurns_ACU(outline) {
     return outline.nodes.flatMap(node => node.turns);
@@ -114612,16 +115893,21 @@ function validateStageOutlinePacing_ACU(turns, options) {
         }
     }
 }
-/** Ensures a replan preserves completed turns and allocates exactly the remaining quota. */
-function validateReplannedStageOutline_ACU(raw, range, constraints) {
+/**
+ * 重规划核心：前缀逐字保留、剩余轮数符合额度。软字段策略由调用方决定：
+ * 生成链路用 collect 收集缺项索要修补；编辑/手改路径用 default 直接补默认。
+ */
+function validateReplannedWithPolicy_ACU(raw, range, constraints, policy) {
     if (!Number.isInteger(constraints.completedTurns) || constraints.completedTurns < 0 || !Number.isInteger(constraints.expectedRemainingTurns) || constraints.expectedRemainingTurns < 0) {
         fail_ACU$3('CONTINUATION_REPLAN_CONTEXT_INVALID', 'replan', '重新规划约束必须包含非负整数');
     }
-    const previousTurns = flattenTurns_ACU(constraints.previousOutline);
+    const normalizedPrevious = validatePersistedStageOutline_ACU(constraints.previousOutline, range);
+    const previousTurns = flattenTurns_ACU(normalizedPrevious);
     if (constraints.completedTurns > previousTurns.length) {
         fail_ACU$3('CONTINUATION_REPLAN_CONTEXT_INVALID', 'replan', '已完成轮数超过旧 revision 的轮次总数', { completedTurns: constraints.completedTurns, totalTurns: previousTurns.length });
     }
-    const outline = validateStageOutline_ACU(raw, range);
+    const validation = runValidation_ACU(raw, range, 'replanned', policy, constraints.completedTurns);
+    const outline = validation.outline;
     const candidateTurns = flattenTurns_ACU(outline);
     const completedPrefix = previousTurns.slice(0, constraints.completedTurns);
     if (candidateTurns.length < completedPrefix.length) {
@@ -114630,15 +115916,23 @@ function validateReplannedStageOutline_ACU(raw, range, constraints) {
     for (let index = 0; index < completedPrefix.length; index += 1) {
         const expected = completedPrefix[index];
         const actual = candidateTurns[index];
-        if (actual.id !== expected.id || actual.goal !== expected.goal) {
-            fail_ACU$3('CONTINUATION_REPLAN_COMPLETED_PREFIX_CHANGED', 'replan', '重新规划不得修改已完成轮次', { index, expectedId: expected.id, actualId: actual.id });
+        if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+            fail_ACU$3('CONTINUATION_REPLAN_COMPLETED_PREFIX_CHANGED', 'replan', '重新规划不得修改已完成轮次及其节奏、功能或时间元数据', { index, expectedId: expected.id, actualId: actual.id });
         }
     }
     const remainingTurns = candidateTurns.length - completedPrefix.length;
     if (remainingTurns !== constraints.expectedRemainingTurns) {
         fail_ACU$3('CONTINUATION_REPLAN_REMAINING_TURNS_MISMATCH', 'replan', '重新规划结果的剩余轮数不符合额度', { expected: constraints.expectedRemainingTurns, actual: remainingTurns });
     }
-    return outline;
+    return validation;
+}
+/** Ensures a replan preserves completed turns and allocates exactly the remaining quota; soft fields default with inferred marks. */
+function validateReplannedStageOutline_ACU(raw, range, constraints) {
+    return validateReplannedWithPolicy_ACU(raw, range, constraints, 'default').outline;
+}
+/** 重规划草稿校验：结构错误抛出，软字段缺项收集到 missing 供生成链路索要修补。 */
+function validateReplannedStageOutlineDraft_ACU(raw, range, constraints) {
+    return validateReplannedWithPolicy_ACU(raw, range, constraints, 'collect');
 }
 
 const CONTINUATION_PROMPT_PLACEHOLDERS_ACU = [
@@ -114650,7 +115944,7 @@ const CONTINUATION_PROMPT_PLACEHOLDERS_ACU = [
     // 它只作为读集标识符，由解析器汇入 $AGENT_READ_MATERIALS。
     '$HISTORY_ANCHOR', '$STORY_TEXT', '$UNSETTLED_RANGE', '$AGENT_CATALOG', '$MODULE_CATALOG',
     '$TABLE_CATALOG', '$TABLE_GLOBAL', '$TABLE_CHARACTERS', '$TABLE_CHRONICLES',
-    '$HOOKS_LEDGER', '$INFO_GAP', '$ACTIVE_CONSTRAINTS', '$BUDGET', '$TOOL_RESULTS',
+    '$HOOKS_LEDGER', '$INFO_GAP', '$ACTIVE_CONSTRAINTS', '$CHRONOLOGY', '$BUDGET', '$TOOL_RESULTS',
     '$AGENT_READ_MATERIALS', '$AGENT_TASK', '$AGENT_WRITE_SCOPE', '$USER_INTENT', '$OUTLINE_WINDOW',
     // 目录+状态骨架占位符：楼层索引、大纲单行状态、已启用世界书目录、读集词汇表。
     '$STORY_CATALOG', '$OUTLINE_STATE', '$WORLDBOOK_CATALOG', '$AGENT_READ_CATALOG',
@@ -114736,6 +116030,8 @@ function restoreContinuationPromptDefault_ACU(settings, kind) {
         agentPrompts.beatPlanner = buildDefaultAgentBeatPlannerPrompt_ACU();
     if (kind === 'agent_reviewer')
         agentPrompts.reviewer = buildDefaultAgentReviewerPrompt_ACU();
+    if (kind === 'agent_final_reviewer')
+        agentPrompts.finalReviewer = buildDefaultAgentFinalReviewerPrompt_ACU();
     return { ...settings, agentPrompts };
 }
 
@@ -114844,6 +116140,7 @@ function validateAgentPrompts_ACU(raw) {
         mainlinePlanner: validateContinuationPromptSegments_ACU(raw.mainlinePlanner, 'load', 'CONTINUATION_ENVELOPE_INVALID'),
         beatPlanner: validateContinuationPromptSegments_ACU(raw.beatPlanner, 'load', 'CONTINUATION_ENVELOPE_INVALID'),
         reviewer: validateContinuationPromptSegments_ACU(raw.reviewer, 'load', 'CONTINUATION_ENVELOPE_INVALID'),
+        finalReviewer: validateContinuationPromptSegments_ACU(raw.finalReviewer, 'load', 'CONTINUATION_ENVELOPE_INVALID'),
     };
 }
 /**
@@ -114926,12 +116223,15 @@ function migrateV20AgentPromptsToV21_ACU(raw) {
     if (!isRecord_ACU$6(raw) || !Array.isArray(raw.arcArchitect))
         return raw;
     const current = buildDefaultAgentArcArchitectPrompt_ACU();
+    // 目标段一律按语义槽位定位。V25 在契约段之后插入了卷级容量段，若仍按下标取 current[7]，
+    // 拿到的是容量段而不是任务段——V20 用户的总纲任务段会被整段覆盖成没有任何占位符的契约文字。
+    const slotContent = (slot) => findAgentPromptSlot_ACU(current, slot)?.content;
     const replacements = new Map([
-        [V20_DEFAULT_ARC_ARCHITECT_SYSTEM_ACU, current[0].content],
-        [V20_DEFAULT_ARC_ARCHITECT_PURPOSE_ACU, current[2].content],
-        [V20_DEFAULT_ARC_ARCHITECT_EPISTEMOLOGY_ACU, current[4].content],
-        [V20_DEFAULT_ARC_ARCHITECT_CONTRACT_ACU, current[6].content],
-        [V20_DEFAULT_ARC_ARCHITECT_TASK_ACU, current[7].content],
+        [V20_DEFAULT_ARC_ARCHITECT_SYSTEM_ACU, slotContent('system')],
+        [V20_DEFAULT_ARC_ARCHITECT_PURPOSE_ACU, slotContent('arcPurpose')],
+        [V20_DEFAULT_ARC_ARCHITECT_EPISTEMOLOGY_ACU, slotContent('arcEpistemology')],
+        [V20_DEFAULT_ARC_ARCHITECT_CONTRACT_ACU, slotContent('outputContract')],
+        [V20_DEFAULT_ARC_ARCHITECT_TASK_ACU, slotContent('task')],
     ]);
     let changed = false;
     const arcArchitect = raw.arcArchitect.map(segment => {
@@ -114966,6 +116266,347 @@ function migrateV21AgentPromptsToV22_ACU(raw) {
         return { ...segment, content };
     });
     return changed ? { ...raw, arcArchitect } : raw;
+}
+/** V22 → V23 对齐卷生命周期契约，只替换未改写的默认规则片段。 */
+function migrateV22AgentPromptsToV23_ACU(raw) {
+    if (!isRecord_ACU$6(raw))
+        return raw;
+    const replaceDefaults = (segments, replacements) => {
+        if (!Array.isArray(segments))
+            return segments;
+        let changed = false;
+        const next = segments.map(segment => {
+            if (!isRecord_ACU$6(segment) || typeof segment.content !== 'string')
+                return segment;
+            let content = segment.content;
+            for (const [from, to] of replacements)
+                content = content.replace(from, to);
+            if (content === segment.content)
+                return segment;
+            changed = true;
+            return { ...segment, content };
+        });
+        return changed ? next : segments;
+    };
+    const arcArchitect = replaceDefaults(raw.arcArchitect, new Map([
+        ['"stageNumbers":[已承载的阶段编号],"reason":"retire 时必填"', '"stageNumbers":[已承载的阶段编号],"completionStageNumber":"done 时为已完成阶段编号，否则 null","completionState":"done 时达到的卷末状态，否则空字符串","continuationRationale":"续卷时由前卷后果推出的依据，否则空字符串","reason":"retire 时必填"'],
+        ['7. 阶段完成后回写进度用 patch：{"action":"patch","id":"VOL-01","stageNumbers":[1,2,3]}。当前卷台阶走完时，把它 patch 成 done，同时把下一卷 patch 成 active。\n8. patch 只带要改的字段，其余字段保持原样；新增或整条重写才用 upsert。', '7. stage 是阶段大纲，volume 是长程卷台阶；一个 active 卷可由多份阶段大纲渐进承载。每完成一份阶段只 patch 当前 active 卷的 stageNumbers，不能因单个阶段完成就把卷设为 done。\n8. 仅当真实正文已达到本卷 escalation 的可判定收束状态时，才可把 active 卷 patch 为 done；同一 patch 必须给 completionStageNumber、completionState，且该阶段已真实完成并已登记在 stageNumbers。状态只能 planned→active→done；done 卷不可重激活。\n9. 所有既有卷 done 而用户继续写作时，先在末尾 upsert 一个 active 新卷，并以 continuationRationale 说明它如何由最后一卷的结果、代价、关系变化或未解决问题推出；之后才由 outline-architect 创建阶段大纲。\n10. patch 只带要改的字段，其余字段保持原样；新增或整条重写才用 upsert。'],
+    ]));
+    const main = replaceDefaults(raw.main, new Map([
+        ['此外，剧情实际走向已越出总纲台阶、底牌被正文提前翻开、或当前卷目标事实上已收束/明显提前推迟时，同样必须派它维护总纲，不要拖到下一阶段。', '此外，剧情实际走向已越出总纲台阶、底牌被正文提前翻开、或当前卷已经由真实完成阶段达到可判定收束状态时，同样必须派它维护总纲。单个阶段完成只回写当前 active 卷的 stageNumbers；所有既有卷完成而用户继续写时，先派 arc-architect 依据最后一卷的后果扩充一个 active 新卷，再派 outline-architect，不要拖到下一阶段。'],
+    ]));
+    return arcArchitect === raw.arcArchitect && main === raw.main ? raw : { ...raw, arcArchitect, main };
+}
+function migrateV22OutlinePromptToV23_ACU(raw) {
+    if (!Array.isArray(raw))
+        return raw;
+    const oldRule = '8. 让阶段目标落在故事总纲当前推进中的那一级台阶内，不触碰总纲里标注为禁止提前释放的底牌，并在阶段末留下跨阶段悬念。';
+    const nextRule = '8. 让阶段目标只承载故事总纲当前 active 卷尚未完成的一段，不触碰总纲里标注为禁止提前释放的底牌；单个阶段结束只留下跨阶段悬念，不擅自收束整卷。只有活动卷规划上下文显示卷级收束条件已被真实完成阶段满足时，才交由 arc-architect 切卷；所有既有卷完成时先扩充后续 active 卷。';
+    let changed = false;
+    const outlinePrompt = raw.map(segment => {
+        if (!isRecord_ACU$6(segment) || typeof segment.content !== 'string')
+            return segment;
+        const content = segment.content.replace(oldRule, nextRule);
+        if (content === segment.content)
+            return segment;
+        changed = true;
+        return { ...segment, content };
+    });
+    return changed ? outlinePrompt : raw;
+}
+const V23_FINAL_INSTRUCTION_TEMPLATE_ACU = [
+    '承接：上一楼结尾的画面与遗留情绪，本轮从哪里接住',
+    '本轮目标：要完成的核心事件（一个场景片段），冲突障碍是什么、主角做什么选择付什么代价',
+    '伏笔与信息差操作：本轮对哪条做埋设/强化/误导/回收，信息允许揭示到哪一层',
+    '硬事实（禁改）：本轮绝对不能改变或提前揭穿的既有事实',
+    '读者回报：本轮给读者的具体获得感（新信息/情绪释放/局势实质变化，至少其一）',
+    '收尾钩子：结尾停在哪个未决点（悬而未决/危机逼近/认知错位选其一），不许越界写到下一轮',
+    '风格（可省略）：视角、节奏、叙述基调等本轮需要的特殊风格要求',
+].join('\n');
+/** V26 追加的三段年代学默认段原文；还原历史默认形态与判断“是否已迁移”都以这份清单为准。 */
+const V26_CHRONOLOGY_SEGMENT_CONTENTS_ACU = [
+    V26_MAIN_AGENT_CHRONOLOGY_RULE_ACU,
+    V26_MAINTAINER_CHRONOLOGY_CONTRACT_ACU,
+    V26_FINAL_REVIEWER_CHRONOLOGY_RULES_ACU,
+];
+/** 从当前默认组剥离 V26 追加段，还原 V25 及更早版本的默认形态（V26 只增段、不改既有段原文）。 */
+function stripV26ChronologySegments_ACU(prompts) {
+    for (const key of Object.keys(prompts)) {
+        prompts[key] = prompts[key].filter(segment => !V26_CHRONOLOGY_SEGMENT_CONTENTS_ACU.includes(segment.content));
+    }
+    return prompts;
+}
+/**
+ * 从当前 V24 默认组精确还原 V23 默认组，仅用于识别未改写的存量默认段。
+ * 迁移时只有完整段（含角色、启用状态、可删除和 pinned 元数据）与还原结果一致才替换。
+ */
+function buildV23AgentPromptsForMigration_ACU() {
+    const prompts = stripV26ChronologySegments_ACU(buildDefaultContinuationAgentPrompts_ACU());
+    // 当前默认已包含 V25 容量段；冻结 V23 形态时必须先移除，否则按索引迁移会把后续段错配。
+    prompts.arcArchitect = prompts.arcArchitect.filter(segment => segment.content !== V25_ARC_ARCHITECT_VOLUME_CAPACITY_CONTRACT_ACU);
+    const replacements = [
+        [AGENT_FINAL_INSTRUCTION_TEMPLATE_ACU, V23_FINAL_INSTRUCTION_TEMPLATE_ACU],
+        [V24_MAIN_AGENT_PACING_RULE_ACU, V23_MAIN_AGENT_PACING_RULE_ACU],
+        ['4. 策划是策划类子代理的职责，不是你的：每轮至少派工 mainline-planner，并在任务里写明本轮 pacing；setup/cooldown 必须允许主线 hold、安静闭合和自然时间流逝，不得要求它补造冲突升级。本轮确有伏笔或信息差操作义务时才加派 beat-planner；低压轮没有真实操作需要时不得为凑钩子强派。最终指导里的相关操作应来自子代理建议或既有账本依据；大转折或已出现冲突时再加连续性审查。你自己调阅资料是为了审核与收敛，不是为了替策划子代理出方案。', '4. 策划是策划类子代理的职责，不是你的：每轮至少派工 mainline-planner 拿主线推进建议；本轮要对伏笔做埋设/强化/误导/回收、或信息差要走设-用-揭步进时，必须加派 beat-planner，最终指导里的伏笔与信息差操作应当来自它的建议而不是你的即兴发挥；大转折或已出现冲突时再加连续性审查。你自己调阅资料是为了审核与收敛，不是为了替策划子代理出方案。'],
+        ['6. 结果回来后先审核再采用：报告与正文、你调阅到的资料或本轮 pacing 冲突、有明显缺漏时，带着具体修正意见重派；达到单代理派工上限仍不合规时，舍弃冲突部分并按已验证资料与 pacing 收敛，不能照单全收。', '6. 结果回来后先审核再采用：报告与正文或你调阅到的资料冲突、有明显缺漏时，带着具体修正意见重派，而不是照单全收。'],
+        ['\n\n我先读取【完整当前阶段大纲】中箭头标出的本轮 pacing，再选择方法，通用的“每轮升级冲突”规则无权覆盖 pacing：\n- setup：允许主线 hold，不要求外部阻碍、选择代价或危机钩子。用具体生活动作与人物互动，让关系、习惯、世界理解、资源、身体或认知发生一项可观察变化，并判断是否适合隔夜、数日后或更久开始。\n- cooldown：不制造新危机；确认上一波代价，处理伤势、情绪、关系与局势理解，允许完整结算和安静闭合。\n- pressure：只推进一个外部冲突；行动、阻碍、悬念齐全，主角作出选择并承担成本。\n- turn：通过既有伏笔、误判或信息揭示改变局势性质，不临时制造真相。\n\n所有档位都拒绝空泛判词。setup/cooldown 的三要素是“场景动作、人物互动、状态变化”；pressure/turn 才使用“行动、阻碍、悬念”。', '\n\n方法论内核：\n1. 冲突阶梯——本轮的障碍必须比上一轮更高一层（章内试探 → 遭遇 → 升级），严禁同一层次的障碍换皮重复。\n2. 主角代理权与成本——关键选择必须由主角做出并承担代价，收益与战果明确归属主角，不写成配角独角戏。\n3. 实质价值变动——本轮必须发生地位、资源、情报或关系上的具体变化，不能只是气氛推进。\n4. 场景三要素——行动、阻碍、悬念缺一不可。\n5. 拒绝空泛判词——不写「气氛紧张」「深化羁绊」这类抽象词，只写具体压力、具体收益、具体动作。'],
+        ['{"summary":"一句话本轮策划要点","recommendation":"自然语言建议正文，开头依次写明本轮 pacing、建议叙事功能、主线增量（hold/micro/step/milestone）和与上一轮的时间关系，再写具体场景动作与必须发生的变化；只有 pressure/turn 才要求冲突升级、选择代价或揭示","mustPreserve":["本轮绝对不能改变的既有事实与 pacing 边界"],"risks":["按此建议可能引发的节奏或连续性风险"]}', '{"summary":"一句话本轮主线要点","recommendation":"自然语言建议正文，写清本轮怎么推进、冲突怎么升级、主角做什么选择、付什么代价、得到什么实质变化","mustPreserve":["本轮绝对不能改变的既有事实"],"risks":["按此推进可能引发的风险"]}'],
+        ['recommendation 是给主控 Agent 的自然语言建议，不代替最终指导。', 'recommendation 里的内容是给主控 Agent 看的创作建议，保持自然语言，不写成字段清单，也不代替它写最终指导。'],
+        ['【完整当前阶段大纲】（固定注入，与本次资料同一活动 revision；箭头标出本轮，括号给出 pacing；首条用户要求仅由【本次任务】裁剪传达）', '【完整当前阶段大纲】（固定注入，与本次资料同一活动 revision；首条用户要求仅由【本次任务】裁剪传达）'],
+        ['【故事总纲】（建议必须落在当前 active 卷的台阶内）', '【故事总纲】（主线建议必须落在当前 active 卷的台阶内）'],
+        ['【自检清单】先确认本轮 pacing，再应用对应方法；setup/cooldown 没有新危机、新敌对方、局势升级或强制钩子，允许主线 hold，但有具体动作、互动和状态变化；pressure/turn 才检查冲突或揭示；建议落在当前卷且没有提前翻底牌；没有引入未知实体或抽象判词。', '【自检清单】提交前逐条确认：冲突比上一轮升了一层而不是换皮；主角有明确选择和代价；本轮有具体的实质价值变动；建议落在总纲当前卷的台阶内、没有提前翻总纲禁翻的底牌；没有引入注入资料与世界书之外的新实体；没有使用抽象判词。'],
+        ['\n\n方法论内核：\n1. 先读取【完整当前阶段大纲】里本轮 pacing。setup 允许安静闭合或普通生活期待，cooldown 优先结算上一事件的情绪债，pressure 才通常保留行动压力，turn 形成新局面但不强制再制造更大的秘密。\n2. 信息差的完整生命是「设置 → 使用 → 揭示」。揭示后可以完整结束；只有故事自然产生新的认知差时才登记新未知，不能为了续命自动补坑。\n3. 伏笔操作只有埋设、强化、误导、回收（含部分回收）；明确对象与允许层级，低压轮没有真实需要时可以不操作伏笔。\n4. 情绪起点承接上一楼残留；低压轮允许平静、熟悉、恢复或释然，不强迫“压抑后立即反击”。\n5. 收尾方式服从 pacing：安静闭合、开放期待、未决问题和危机钩子都是合法选项，不是每轮都必须留钩子。', '\n\n方法论内核：\n1. 信息差动态——一条信息的完整生命是「设置 → 使用 → 揭示 → 产生新信息差」。本轮要明确处在哪一步，揭示后必须留下新的未知。\n2. 钩子三手法——悬而未决、已知危机逼近、认知错位。本轮结尾至少落一个。\n3. 伏笔操作只有四种：埋设、强化、误导、回收（含部分回收）。我要明确指出本轮对哪几条伏笔做哪一种操作，以及绝对不能提前回收的是哪些。\n4. 情绪微弧继承——本轮的情绪起点必须承接上一楼的情绪残留；压抑之后要有释放，但释放不能来自主角降智。'],
+        ['{"summary":"一句话本轮伏笔与节拍要点","recommendation":"自然语言建议正文，先写本轮 pacing 与适合的收尾方式；有真实需要时再写对哪条伏笔做什么操作、信息差走到哪一步和允许揭到哪层；没有操作时明确本轮以情绪或生活结算为主，不虚构钩子","mustPreserve":["本轮绝对不能提前揭穿或改变的事项与 pacing 边界"],"risks":["按此操作可能引发的风险"]}', '{"summary":"一句话本轮伏笔与节拍要点","recommendation":"自然语言建议正文，写清对哪几条伏笔做什么操作、信息差走到哪一步、允许揭到哪一层、情绪从哪里起到哪里落、结尾用哪种钩子","mustPreserve":["本轮绝对不能提前揭穿或改变的事项"],"risks":["按此操作可能引发的风险"]}'],
+        ['【自检清单】先确认本轮 pacing；每条伏笔操作都对应真实条目且没有越过允许层级；setup/cooldown 没有真实伏笔义务时可以不操作，允许安静闭合或普通期待；信息差已完整揭示时允许结束，不自动制造替代谜团；情绪起点承接上一楼。', '【自检清单】提交前逐条确认：每条伏笔操作都对应账本里真实存在的条目；没有把计划中的回收说成已经回收；揭示层级没有越过 mustPreserve；情绪起点承接了上一楼残留；结尾留下了明确钩子。'],
+        ['\n\n【节奏、日常与时间审查】\n先从完整阶段大纲确认本轮 pacing。setup/cooldown 的候选指导若制造新危机、引入新敌对方、让局势升级或强制危机钩子，判为 revise；低压轮同时必须有具体场景动作、人物互动和至少一项关系、生活、世界理解、资源、身体或认知变化，只有“气氛放松”也判为 revise。pressure/turn 继续检查单一冲突与既有揭示依据。候选若安排隔夜、数日或更久的时间变化，要有相对时间位置和环境、身体、关系、资源或社会状态中的可感知变化；时间仍连续时不凭空要求跳跃。', ''],
+        ['【完整当前阶段大纲】（箭头标出本轮，括号给出 pacing）', '【完整当前阶段大纲】'],
+        ['logicFindings 覆盖控制权、信息、能力、世界规则、因果、当前 pacing 合规、低压轮正向功能、时间位置和适用的战斗附加项。', 'logicFindings 覆盖控制权、信息、能力、世界规则、因果和适用的战斗附加项。'],
+    ];
+    for (const segments of Object.values(prompts)) {
+        for (const segment of segments) {
+            for (const [currentText, v23Text] of replacements)
+                segment.content = segment.content.replace(currentText, v23Text);
+        }
+    }
+    return prompts;
+}
+/** V24 默认 Agent 形态：已经包含 pacing 改造，但尚未加入 V25 卷级容量段与 V26 年代学段。 */
+function buildV24AgentPromptsForMigration_ACU() {
+    const prompts = stripV26ChronologySegments_ACU(buildDefaultContinuationAgentPrompts_ACU());
+    prompts.arcArchitect = prompts.arcArchitect.filter(segment => segment.content !== V25_ARC_ARCHITECT_VOLUME_CAPACITY_CONTRACT_ACU);
+    return prompts;
+}
+function promptSegmentEquals_ACU(left, right) {
+    if (!isRecord_ACU$6(left) || !isRecord_ACU$6(right))
+        return false;
+    const leftKeys = Object.keys(left);
+    const rightKeys = Object.keys(right);
+    return leftKeys.length === rightKeys.length && leftKeys.every(key => Object.prototype.hasOwnProperty.call(right, key) && left[key] === right[key]);
+}
+/** V23 → V24 仅升级完整未改写的默认 Agent 段，保留插入段与任意用户改写。 */
+function migrateV23AgentPromptsToV24_ACU(raw) {
+    if (!isRecord_ACU$6(raw))
+        return raw;
+    const v23Defaults = buildV23AgentPromptsForMigration_ACU();
+    const v24Defaults = buildV24AgentPromptsForMigration_ACU();
+    let changed = false;
+    const next = { ...raw };
+    for (const key of Object.keys(v24Defaults)) {
+        const segments = raw[key];
+        if (!Array.isArray(segments))
+            continue;
+        const migrated = segments.map(segment => {
+            const index = v23Defaults[key].findIndex(v23Segment => promptSegmentEquals_ACU(segment, v23Segment));
+            if (index < 0)
+                return segment;
+            changed = true;
+            return v24Defaults[key][index];
+        });
+        next[key] = migrated;
+    }
+    return changed ? next : raw;
+}
+/** V24 → V25 只向仍保留默认总纲输出契约的提示词组插入卷级容量契约。 */
+function migrateV24AgentPromptsToV25_ACU(raw) {
+    if (!isRecord_ACU$6(raw) || !Array.isArray(raw.arcArchitect))
+        return raw;
+    if (raw.arcArchitect.some(segment => isRecord_ACU$6(segment) && segment.content === V25_ARC_ARCHITECT_VOLUME_CAPACITY_CONTRACT_ACU))
+        return raw;
+    const current = buildDefaultAgentArcArchitectPrompt_ACU();
+    const capacityIndex = current.findIndex(segment => segment.content === V25_ARC_ARCHITECT_VOLUME_CAPACITY_CONTRACT_ACU);
+    const capacitySegment = current[capacityIndex];
+    const previousContract = current[capacityIndex - 1];
+    if (!capacitySegment || !previousContract)
+        return raw;
+    const anchorIndex = raw.arcArchitect.findIndex(segment => promptSegmentEquals_ACU(segment, previousContract));
+    if (anchorIndex < 0)
+        return raw;
+    const insertIndex = anchorIndex + 1;
+    return {
+        ...raw,
+        arcArchitect: [
+            ...raw.arcArchitect.slice(0, insertIndex),
+            capacitySegment,
+            ...raw.arcArchitect.slice(insertIndex),
+        ],
+    };
+}
+/**
+ * V25 → V26 向 main / maintainer / finalReviewer 三组提示词插入年代学默认段。
+ * 只在目标组仍保留紧邻的默认锚段（完整段一致）且尚未包含该段时插入；
+ * 锚段被用户改写时跳过该组，不向自定义提示词注入默认内容。
+ */
+function migrateV25AgentPromptsToV26_ACU(raw) {
+    if (!isRecord_ACU$6(raw))
+        return raw;
+    const defaults = buildDefaultContinuationAgentPrompts_ACU();
+    const next = { ...raw };
+    let changed = false;
+    for (const key of ['main', 'maintainer', 'finalReviewer']) {
+        const segments = next[key];
+        if (!Array.isArray(segments))
+            continue;
+        const defaultsGroup = defaults[key];
+        const insertIndex = defaultsGroup.findIndex(segment => V26_CHRONOLOGY_SEGMENT_CONTENTS_ACU.includes(segment.content));
+        if (insertIndex <= 0)
+            continue;
+        const chronologySegment = defaultsGroup[insertIndex];
+        if (segments.some(segment => isRecord_ACU$6(segment) && segment.content === chronologySegment.content))
+            continue;
+        const anchor = defaultsGroup[insertIndex - 1];
+        const anchorIndex = segments.findIndex(segment => promptSegmentEquals_ACU(segment, anchor));
+        if (anchorIndex < 0)
+            continue;
+        next[key] = [...segments.slice(0, anchorIndex + 1), chronologySegment, ...segments.slice(anchorIndex + 1)];
+        changed = true;
+    }
+    return changed ? next : raw;
+}
+/**
+ * V23 → V24 大纲提示词迁移：
+ * 1. 在未改写的默认节奏段后追加独立长篇日常契约；
+ * 2. 把未改写的 V23 协议段（system / 首条确认 / 方法论确认）精确替换为 V24 协议——V24 引入了
+ *    stage_role 与 turn 四维属性，不换这三段，老用户的大纲模型会一直按旧协议输出。
+ * 用户改写过的段一律保留原文。
+ */
+function migrateV23OutlinePromptToV24_ACU(raw) {
+    if (!Array.isArray(raw))
+        return raw;
+    const defaults = buildDefaultContinuationOutlinePrompt_ACU();
+    const findDefault = (predicate) => defaults.find(segment => predicate(segment.content));
+    const v24System = findDefault(content => content.startsWith('你是专业的小说阶段规划助手') && content.includes('<stage_role>'));
+    const v24Ack = findDefault(content => content.startsWith('收到。') && content.includes('<stage_role>'));
+    const v24MethodAck = findDefault(content => content.startsWith('我已深入理解小说大纲的方法论'));
+    const replacements = new Map([
+        [V23_DEFAULT_OUTLINE_SYSTEM_SEGMENT_ACU, v24System],
+        [V23_DEFAULT_OUTLINE_ACK_SEGMENT_ACU, v24Ack],
+        [V23_DEFAULT_OUTLINE_METHOD_ACK_SEGMENT_ACU, v24MethodAck],
+    ]);
+    let changed = false;
+    let next = raw.map(segment => {
+        if (!isRecord_ACU$6(segment) || typeof segment.content !== 'string')
+            return segment;
+        const replacement = replacements.get(segment.content);
+        if (!replacement)
+            return segment;
+        changed = true;
+        return { ...segment, role: replacement.role, content: replacement.content };
+    });
+    if (!next.some(segment => isRecord_ACU$6(segment) && segment.content === V24_OUTLINE_LONGFORM_PACING_CONTRACT_ACU)) {
+        const index = next.findIndex(segment => isRecord_ACU$6(segment)
+            && segment.role === 'user'
+            && segment.content === V23_DEFAULT_OUTLINE_PACING_SEGMENT_ACU
+            && segment.enabled === true
+            && segment.deletable === true
+            && !Object.prototype.hasOwnProperty.call(segment, 'pinned'));
+        if (index >= 0) {
+            changed = true;
+            next = [
+                ...next.slice(0, index + 1),
+                { role: 'user', content: V24_OUTLINE_LONGFORM_PACING_CONTRACT_ACU, enabled: true, deletable: true },
+                ...next.slice(index + 1),
+            ];
+        }
+    }
+    return changed ? next : raw;
+}
+/**
+ * V27 → V28 第一步：按历史默认段谱系把仍是旧默认原文的段换成当前默认。
+ * 逐段比对哈希与长度，命中即替换正文并对齐当前默认的角色（V17/V18 的规则段还是 system）；
+ * enabled / deletable / pinned 沿用用户持久化的值。任何不在谱系里的段（含用户改写）原样保留。
+ */
+function replaceAgentPromptsByLineage_ACU(raw) {
+    const defaults = buildDefaultContinuationAgentPrompts_ACU();
+    const next = { ...raw };
+    let changed = false;
+    for (const key of Object.keys(AGENT_PROMPT_DEFAULT_LINEAGE_ACU)) {
+        const entries = AGENT_PROMPT_DEFAULT_LINEAGE_ACU[key];
+        const segments = raw[key];
+        if (!entries.length || !Array.isArray(segments))
+            continue;
+        const migrated = segments.map(segment => {
+            if (!isRecord_ACU$6(segment) || typeof segment.content !== 'string')
+                return segment;
+            const content = segment.content;
+            const entry = entries.find(item => item.length === content.length && item.hash === hashAgentPromptContent_ACU(content));
+            if (!entry)
+                return segment;
+            const target = findAgentPromptSlot_ACU(defaults[key], entry.slot);
+            if (!target || (target.content === content && target.role === segment.role))
+                return segment;
+            changed = true;
+            return { ...segment, role: target.role, content: target.content };
+        });
+        next[key] = migrated;
+    }
+    return { next, changed };
+}
+/**
+ * V27 → V28 第二步：修复已知的结构性损坏。
+ * 子代理的任务段（pinned、不可删）是运行时的数据注入契约（$AGENT_TASK / $AGENT_READ_MATERIALS / 各固定资料）。
+ * V20→V21 曾按下标误迁，把总纲任务段的正文覆盖成 V25 卷级容量契约，但保留了它 pinned / 不可删的元数据——
+ * 于是持久化里出现「不可删的槽位上写着容量契约、整组再无 $AGENT_TASK」这一无法由用户操作产生的形态
+ * （UI 不允许删除该槽位，容量契约又是可删的普通段）。只修这一签名，整组自定义的提示词一律不动。
+ */
+function repairAgentPromptTaskSegments_ACU(raw) {
+    const defaults = buildDefaultContinuationAgentPrompts_ACU();
+    const next = { ...raw };
+    let changed = false;
+    const roles = ['arcArchitect', 'maintainer', 'mainlinePlanner', 'beatPlanner', 'reviewer', 'finalReviewer'];
+    for (const key of roles) {
+        const segments = raw[key];
+        if (!Array.isArray(segments))
+            continue;
+        if (segments.some(segment => isRecord_ACU$6(segment) && typeof segment.content === 'string' && segment.content.includes('$AGENT_TASK')))
+            continue;
+        const defaultTask = findAgentPromptSlot_ACU(defaults[key], 'task');
+        if (!defaultTask)
+            continue;
+        const corruptedIndex = segments.findIndex(segment => isRecord_ACU$6(segment)
+            && segment.content === V25_ARC_ARCHITECT_VOLUME_CAPACITY_CONTRACT_ACU
+            && segment.deletable === false);
+        if (corruptedIndex < 0)
+            continue;
+        const repaired = [...segments];
+        const corrupted = repaired[corruptedIndex];
+        repaired[corruptedIndex] = { ...corrupted, role: defaultTask.role, content: defaultTask.content };
+        // 容量契约本身随误迁一起丢了，按默认形态补回到任务段之前。
+        const capacityElsewhere = repaired.some((segment, index) => index !== corruptedIndex
+            && isRecord_ACU$6(segment) && segment.content === V25_ARC_ARCHITECT_VOLUME_CAPACITY_CONTRACT_ACU);
+        const defaultCapacity = defaults[key].find(segment => segment.content === V25_ARC_ARCHITECT_VOLUME_CAPACITY_CONTRACT_ACU);
+        if (!capacityElsewhere && defaultCapacity)
+            repaired.splice(corruptedIndex, 0, { ...defaultCapacity });
+        next[key] = repaired;
+        changed = true;
+    }
+    return { next, changed };
+}
+/**
+ * V27 → V28：谱系替换 + 结构修复，再重跑 V25/V26 的幂等插段——
+ * 谱系替换把锚段对齐到当前默认后，此前因锚段不匹配而没插进去的卷级容量段与年代学段才能补上。
+ */
+function migrateV27AgentPromptsToV28_ACU(raw) {
+    if (!isRecord_ACU$6(raw))
+        return raw;
+    const lineage = replaceAgentPromptsByLineage_ACU(raw);
+    const repaired = repairAgentPromptTaskSegments_ACU(lineage.next);
+    let next = repaired.next;
+    next = migrateV24AgentPromptsToV25_ACU(next);
+    next = migrateV25AgentPromptsToV26_ACU(next);
+    return lineage.changed || repaired.changed || next !== repaired.next ? next : raw;
+}
+/** V26 → V27：只在上下文注入段未改写时换成带账本注入的新段。 */
+function migrateV26OutlinePromptToV27_ACU(raw) {
+    if (!Array.isArray(raw))
+        return raw;
+    let changed = false;
+    const next = raw.map(segment => {
+        if (!isRecord_ACU$6(segment) || segment.content !== V26_DEFAULT_OUTLINE_CONTEXT_SEGMENT_ACU)
+            return segment;
+        changed = true;
+        return { ...segment, content: V27_DEFAULT_OUTLINE_CONTEXT_SEGMENT_ACU };
+    });
+    return changed ? next : raw;
 }
 /**
  * 校验七个角色的 AI 渠道配置。
@@ -115014,6 +116655,16 @@ function validateReadTokenBudget_ACU(raw) {
     }
     fail_ACU$2('CONTINUATION_ENVELOPE_INVALID', 'settings.agentReadTokenBudget 必须是正整数或 1%-100% 百分比');
 }
+function validateFinalReviewSettings_ACU(raw) {
+    if (!isRecord_ACU$6(raw))
+        fail_ACU$2('CONTINUATION_ENVELOPE_INVALID', 'settings.finalReview 必须是对象');
+    requireKeys_ACU(raw, ['enabled', 'readTokenBudget', 'maxExtraReads'], 'settings.finalReview');
+    return {
+        enabled: requireBoolean_ACU(raw.enabled, 'settings.finalReview.enabled'),
+        readTokenBudget: validateReadTokenBudget_ACU(raw.readTokenBudget),
+        maxExtraReads: requireBoundedInteger_ACU(raw.maxExtraReads, 'settings.finalReview.maxExtraReads', 10),
+    };
+}
 /**
  * 校验 Agent 运行预算。六项各有边界：上界防止「设个大数等于关闭护栏」，
  * 下界区分「必须至少一次」（迭代/同代理/并发）与「0 即显式关闭」（派工/读取/工具轮）。
@@ -115055,6 +116706,9 @@ function validateSettings_ACU(raw) {
         delete raw.turnInstructionPrompt;
     if (!Object.prototype.hasOwnProperty.call(raw, 'agentPrompts'))
         raw.agentPrompts = buildDefaultContinuationAgentPrompts_ACU();
+    if (isRecord_ACU$6(raw.agentPrompts) && !Object.prototype.hasOwnProperty.call(raw.agentPrompts, 'finalReviewer')) {
+        raw.agentPrompts.finalReviewer = buildDefaultContinuationAgentPrompts_ACU().finalReviewer;
+    }
     // 渠道按角色拆分之前的信封没有 agentApiPresets；就地补默认（全 inherit）即无感迁移。
     if (!Object.prototype.hasOwnProperty.call(raw, 'agentApiPresets'))
         raw.agentApiPresets = buildDefaultContinuationAgentApiPresets_ACU();
@@ -115074,6 +116728,9 @@ function validateSettings_ACU(raw) {
         raw.agentReadTokenBudget = AGENT_READ_TOKEN_BUDGET_DEFAULT_ACU;
     if (!Object.prototype.hasOwnProperty.call(raw, 'agentReadFallbackTokens'))
         raw.agentReadFallbackTokens = AGENT_READ_FALLBACK_TOKENS_DEFAULT_ACU;
+    if (!Object.prototype.hasOwnProperty.call(raw, 'finalReview')) {
+        raw.finalReview = { enabled: false, readTokenBudget: CONTINUATION_FINAL_REVIEW_READ_TOKEN_BUDGET_DEFAULT_ACU, maxExtraReads: CONTINUATION_FINAL_REVIEW_MAX_EXTRA_READS_DEFAULT_ACU };
+    }
     // 节奏规则从「每阶段固定低压占比」改为「阶段形态 + 跨阶段连续高压上限」，旧键已无对应语义：
     // 直接丢掉并补新键的默认值，保留旧值反而会把用户配过的比例误当成新语义使用。
     if (Object.prototype.hasOwnProperty.call(raw, 'downtimeTurnRatio'))
@@ -115094,7 +116751,7 @@ function validateSettings_ACU(raw) {
         raw.storyArcVolumePlan = 'medium';
     if (!Object.prototype.hasOwnProperty.call(raw, 'customStoryArcVolumeCount'))
         raw.customStoryArcVolumeCount = null;
-    const keys = ['stageSize', 'customTurnMin', 'customTurnMax', 'storyArcVolumePlan', 'customStoryArcVolumeCount', 'outlinePreview', 'autoNextStage', 'maxAutomaticStages', 'loopTags', 'loopDelaySeconds', 'totalDurationMinutes', 'retryDelaySeconds', 'generationRetryLimit', 'internalAiRetryLimit', 'maxConsecutivePressureTurns', 'storyWindowFloors', 'agentHistoryTokenBudget', 'storyTailFloors', 'agentReadTokenBudget', 'agentReadFallbackTokens', 'contextExtractRules', 'contextExcludeRules', 'agentRunBudget', 'apiPresetMode', 'fixedApiPresetName', 'promptCacheEnabled', 'agentApiPresets', 'outlinePrompt', 'agentPrompts'];
+    const keys = ['stageSize', 'customTurnMin', 'customTurnMax', 'storyArcVolumePlan', 'customStoryArcVolumeCount', 'outlinePreview', 'autoNextStage', 'maxAutomaticStages', 'loopTags', 'loopDelaySeconds', 'totalDurationMinutes', 'retryDelaySeconds', 'generationRetryLimit', 'internalAiRetryLimit', 'maxConsecutivePressureTurns', 'storyWindowFloors', 'agentHistoryTokenBudget', 'storyTailFloors', 'agentReadTokenBudget', 'agentReadFallbackTokens', 'finalReview', 'contextExtractRules', 'contextExcludeRules', 'agentRunBudget', 'apiPresetMode', 'fixedApiPresetName', 'promptCacheEnabled', 'agentApiPresets', 'outlinePrompt', 'agentPrompts'];
     requireKeys_ACU(raw, keys, 'settings', ['promptForceDefaultVersion']);
     if (!['short', 'standard', 'long', 'custom'].includes(raw.stageSize))
         fail_ACU$2('CONTINUATION_ENVELOPE_INVALID', 'stageSize 非法');
@@ -115120,34 +116777,79 @@ function validateSettings_ACU(raw) {
         agentPrompts = migrateV19AgentPromptsToV20_ACU(agentPrompts);
         agentPrompts = migrateV20AgentPromptsToV21_ACU(agentPrompts);
         agentPrompts = migrateV21AgentPromptsToV22_ACU(agentPrompts);
-        promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V22_ACU;
+        agentPrompts = migrateV22AgentPromptsToV23_ACU(agentPrompts);
+        outlinePrompt = migrateV22OutlinePromptToV23_ACU(outlinePrompt);
+        promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V23_ACU;
     }
     else if (promptForceDefaultVersion === CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V18_ACU) {
         agentPrompts = migrateV18AgentPromptsToV19_ACU(agentPrompts);
         agentPrompts = migrateV19AgentPromptsToV20_ACU(agentPrompts);
         agentPrompts = migrateV20AgentPromptsToV21_ACU(agentPrompts);
         agentPrompts = migrateV21AgentPromptsToV22_ACU(agentPrompts);
-        promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V22_ACU;
+        agentPrompts = migrateV22AgentPromptsToV23_ACU(agentPrompts);
+        outlinePrompt = migrateV22OutlinePromptToV23_ACU(outlinePrompt);
+        promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V23_ACU;
     }
     else if (promptForceDefaultVersion === CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V19_ACU) {
         agentPrompts = migrateV19AgentPromptsToV20_ACU(agentPrompts);
         agentPrompts = migrateV20AgentPromptsToV21_ACU(agentPrompts);
         agentPrompts = migrateV21AgentPromptsToV22_ACU(agentPrompts);
-        promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V22_ACU;
+        agentPrompts = migrateV22AgentPromptsToV23_ACU(agentPrompts);
+        outlinePrompt = migrateV22OutlinePromptToV23_ACU(outlinePrompt);
+        promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V23_ACU;
     }
     else if (promptForceDefaultVersion === CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V20_ACU) {
         agentPrompts = migrateV20AgentPromptsToV21_ACU(agentPrompts);
         agentPrompts = migrateV21AgentPromptsToV22_ACU(agentPrompts);
-        promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V22_ACU;
+        agentPrompts = migrateV22AgentPromptsToV23_ACU(agentPrompts);
+        outlinePrompt = migrateV22OutlinePromptToV23_ACU(outlinePrompt);
+        promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V23_ACU;
     }
     else if (promptForceDefaultVersion === CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V21_ACU) {
         agentPrompts = migrateV21AgentPromptsToV22_ACU(agentPrompts);
-        promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V22_ACU;
+        agentPrompts = migrateV22AgentPromptsToV23_ACU(agentPrompts);
+        outlinePrompt = migrateV22OutlinePromptToV23_ACU(outlinePrompt);
+        promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V23_ACU;
     }
-    else if (promptForceDefaultVersion !== CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V22_ACU) {
+    else if (promptForceDefaultVersion === CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V22_ACU) {
+        agentPrompts = migrateV22AgentPromptsToV23_ACU(agentPrompts);
+        outlinePrompt = migrateV22OutlinePromptToV23_ACU(outlinePrompt);
+        promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V23_ACU;
+    }
+    else if (promptForceDefaultVersion !== CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V23_ACU
+        && promptForceDefaultVersion !== CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V24_ACU
+        && promptForceDefaultVersion !== CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V25_ACU
+        && promptForceDefaultVersion !== CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V26_ACU
+        && promptForceDefaultVersion !== CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V27_ACU
+        && promptForceDefaultVersion !== CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V28_ACU) {
         outlinePrompt = buildDefaultContinuationOutlinePrompt_ACU();
         agentPrompts = buildDefaultContinuationAgentPrompts_ACU();
-        promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V22_ACU;
+        promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V28_ACU;
+    }
+    if (promptForceDefaultVersion === CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V23_ACU) {
+        agentPrompts = migrateV23AgentPromptsToV24_ACU(agentPrompts);
+        outlinePrompt = migrateV23OutlinePromptToV24_ACU(outlinePrompt);
+        promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V24_ACU;
+    }
+    if (promptForceDefaultVersion === CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V24_ACU) {
+        agentPrompts = migrateV24AgentPromptsToV25_ACU(agentPrompts);
+        promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V25_ACU;
+    }
+    if (promptForceDefaultVersion === CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V25_ACU) {
+        agentPrompts = migrateV25AgentPromptsToV26_ACU(agentPrompts);
+        promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V26_ACU;
+    }
+    if (promptForceDefaultVersion === CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V26_ACU) {
+        // V24 当初漏换的协议段在 V26 用户身上同样存在；这一步对已是 V24 协议的段无效果，可安全重跑。
+        outlinePrompt = migrateV23OutlinePromptToV24_ACU(outlinePrompt);
+        outlinePrompt = migrateV26OutlinePromptToV27_ACU(outlinePrompt);
+        promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V27_ACU;
+    }
+    if (promptForceDefaultVersion === CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V27_ACU) {
+        // 已经带着 V27 标记的信封里可能存着被误迁的总纲提示词（任务段被覆盖成容量契约），
+        // 谱系替换与结构修复都是幂等的，对健康的 V27 默认组不产生任何改动。
+        agentPrompts = migrateV27AgentPromptsToV28_ACU(agentPrompts);
+        promptForceDefaultVersion = CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V28_ACU;
     }
     return {
         stageSize: raw.stageSize, customTurnMin, customTurnMax,
@@ -115158,6 +116860,7 @@ function validateSettings_ACU(raw) {
         generationRetryLimit: requireInteger_ACU(raw.generationRetryLimit, 'settings.generationRetryLimit', 0), internalAiRetryLimit: requireInteger_ACU(raw.internalAiRetryLimit, 'settings.internalAiRetryLimit', 0), maxConsecutivePressureTurns: requireBoundedInteger_ACU(raw.maxConsecutivePressureTurns, 'settings.maxConsecutivePressureTurns', CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_ACU),
         storyWindowFloors: requireInteger_ACU(raw.storyWindowFloors, 'settings.storyWindowFloors', 0), agentHistoryTokenBudget: requireInteger_ACU(raw.agentHistoryTokenBudget, 'settings.agentHistoryTokenBudget', 0),
         storyTailFloors: requireInteger_ACU(raw.storyTailFloors, 'settings.storyTailFloors', 0), agentReadTokenBudget: validateReadTokenBudget_ACU(raw.agentReadTokenBudget), agentReadFallbackTokens: requireInteger_ACU(raw.agentReadFallbackTokens, 'settings.agentReadFallbackTokens', 1),
+        finalReview: validateFinalReviewSettings_ACU(raw.finalReview),
         contextExtractRules: validateRules_ACU(raw.contextExtractRules, 'settings.contextExtractRules'), contextExcludeRules: validateRules_ACU(raw.contextExcludeRules, 'settings.contextExcludeRules'),
         agentRunBudget: validateAgentRunBudget_ACU(raw.agentRunBudget),
         apiPresetMode: raw.apiPresetMode, fixedApiPresetName: requireString_ACU(raw.fixedApiPresetName, 'settings.fixedApiPresetName'),
@@ -115516,6 +117219,22 @@ function stripLegacyContinuationLoopFields_ACU(source) {
 }
 
 /**
+ * 各角色单次输出的 token 下限。总纲一次要写十几卷的完整契约、大纲一次要写整阶段的逐轮标记、
+ * 维护代理一次要结算多楼正文的三本账，这三类输出随任务体量增长，4096 的通用默认经常在
+ * JSON/标签中间被切断。策划与审查输出短，保持通用默认即可。
+ * 取 8192 而不是更高：它是当前主流模型普遍接受的输出上限，再往上部分渠道会直接拒绝请求。
+ */
+const CONTINUATION_ROLE_OUTPUT_TOKEN_FLOORS_ACU = {
+    main: 4096,
+    outline: 8192,
+    arcArchitect: 8192,
+    maintainer: 8192,
+    mainlinePlanner: 4096,
+    beatPlanner: 4096,
+    reviewer: 4096,
+    finalReviewer: 4096,
+};
+/**
  * fnv-1a 32 位哈希（十六进制）。缓存 key 只需要稳定与低碰撞，不需要密码学强度；
  * 输入可能含中文与路径分隔符，哈希后得到纯 [0-9a-f] 串，满足请求体注入通道的字符白名单。
  */
@@ -115572,14 +117291,16 @@ function formatAgentUsageLabel_ACU(usage) {
 async function callContinuationInternalAi_ACU(messages, preset, identity, signal, options) {
     beginContinuationInternalAiRequest_ACU(identity);
     const cacheEnabled = options?.promptCacheEnabled === true;
+    const extras = {
+        ...(cacheEnabled ? { promptCacheKey: buildPromptCacheKey_ACU(identity, options?.cacheScope || identity.source, preset) } : {}),
+        ...(options?.minOutputTokens ? { minOutputTokens: options.minOutputTokens } : {}),
+    };
     try {
         return await callAIWithResolvedPreset_ACU(messages, preset, signal, {
             beforeMainApiCall: () => beginContinuationInternalAiMainApiInvocation_ACU(identity.requestId),
             afterMainApiCall: () => endContinuationInternalAiMainApiInvocation_ACU(identity.requestId),
             ...(options?.onUsage ? { onUsage: options.onUsage } : {}),
-        }, cacheEnabled
-            ? { promptCacheKey: buildPromptCacheKey_ACU(identity, options?.cacheScope || identity.source, preset) }
-            : undefined);
+        }, Object.keys(extras).length ? extras : undefined);
     }
     finally {
         // A bound host lifecycle remains registered until its matching ended event.
@@ -115687,6 +117408,197 @@ function resolveContinuationAgentApiPreset_ACU(settings, role, phase, dependenci
 }
 
 /**
+ * service/continuation/lenient-text.ts — 模型输出的宽容预处理
+ *
+ * 快速/推理型模型的输出常带三类噪音：把思考写进 content 的 <think> 块、
+ * 不严格的 JSON（尾逗号、单引号、无引号键、注释）、以及 Markdown 围栏。
+ * 这里只做与语义无关的归一化，不替模型补内容；解析仍由各协议自己的解析器负责。
+ */
+const REASONING_TAGS_ACU = ['think', 'thinking', 'reasoning', 'thought', 'analysis'];
+/**
+ * 剥离推理块。闭合的 <think>…</think> 整块删除；只剩未闭合的开标签时只删标签本身，
+ * 让后续解析器仍能在剩余文本里寻找标签或 JSON——推理模型常常忘记闭合却已经写出了答案。
+ * @param text 模型原文
+ * @returns 去掉推理块后的文本
+ */
+function stripReasoningBlocks_ACU(text) {
+    if (typeof text !== 'string' || !text)
+        return '';
+    let result = text;
+    for (const tag of REASONING_TAGS_ACU) {
+        result = result.replace(new RegExp(`<${tag}(?:\\s[^>]*)?>[\\s\\S]*?</${tag}\\s*>`, 'gi'), '');
+        result = result.replace(new RegExp(`</?${tag}(?:\\s[^>]*)?>`, 'gi'), '');
+    }
+    return result;
+}
+/**
+ * 把“像 JSON 但不严格”的文本整理成 JSON.parse 能接受的形态：
+ * 去注释、单引号字符串转双引号、无引号键补引号、删尾逗号。
+ * 只在字符串外做改写，字符串内容逐字保留。
+ */
+function sanitizeLooseJson_ACU(text) {
+    const out = [];
+    let index = 0;
+    const length = text.length;
+    const isIdentStart = (ch) => /[A-Za-z_$]/.test(ch);
+    const isIdent = (ch) => /[\w$]/.test(ch);
+    while (index < length) {
+        const ch = text[index];
+        // 注释
+        if (ch === '/' && text[index + 1] === '/') {
+            while (index < length && text[index] !== '\n')
+                index += 1;
+            continue;
+        }
+        if (ch === '/' && text[index + 1] === '*') {
+            const end = text.indexOf('*/', index + 2);
+            index = end < 0 ? length : end + 2;
+            continue;
+        }
+        // 字符串：双引号原样复制；单引号转双引号并处理内部转义
+        if (ch === '"' || ch === "'") {
+            const quote = ch;
+            let buffer = '"';
+            index += 1;
+            while (index < length) {
+                const current = text[index];
+                if (current === '\\') {
+                    const next = text[index + 1] ?? '';
+                    if (quote === "'" && next === "'") {
+                        buffer += "'";
+                        index += 2;
+                        continue;
+                    }
+                    buffer += current + next;
+                    index += 2;
+                    continue;
+                }
+                if (current === quote) {
+                    index += 1;
+                    break;
+                }
+                if (quote === "'" && current === '"') {
+                    buffer += '\\"';
+                    index += 1;
+                    continue;
+                }
+                if (current === '\n' || current === '\r') {
+                    buffer += current === '\n' ? '\\n' : '';
+                    index += 1;
+                    continue;
+                }
+                buffer += current;
+                index += 1;
+            }
+            out.push(`${buffer}"`);
+            continue;
+        }
+        // 无引号键：标识符后紧跟冒号
+        if (isIdentStart(ch)) {
+            let end = index;
+            while (end < length && isIdent(text[end]))
+                end += 1;
+            let probe = end;
+            while (probe < length && /\s/.test(text[probe]))
+                probe += 1;
+            const word = text.slice(index, end);
+            if (text[probe] === ':' && !['true', 'false', 'null'].includes(word)) {
+                out.push(`"${word}"`);
+                index = end;
+                continue;
+            }
+            out.push(word);
+            index = end;
+            continue;
+        }
+        // 尾逗号
+        if (ch === ',') {
+            let probe = index + 1;
+            while (probe < length && /\s/.test(text[probe]))
+                probe += 1;
+            if (text[probe] === '}' || text[probe] === ']') {
+                index += 1;
+                continue;
+            }
+        }
+        out.push(ch);
+        index += 1;
+    }
+    return out.join('');
+}
+/**
+ * 抢救被截断的 JSON：从首个 { 起扫描，记住每个“嵌套容器刚闭合”的位置作为安全切点；
+ * 到文末仍未配平时，退回最后一个安全切点，丢掉未写完的尾部元素，再补上未闭合的括号。
+ * 适用于 delta 数组这类“元素是对象”的契约——截断只损失最后一个未完成条目，前面的整条保留。
+ * @param text 可能被截断的 JSON 文本（允许前后夹杂散文）
+ * @returns 补全后的 JSON 与被切掉的字符数；已配平或无法抢救时返回 null
+ */
+function salvageTruncatedJson_ACU(text) {
+    if (typeof text !== 'string')
+        return null;
+    const start = text.indexOf('{');
+    if (start < 0)
+        return null;
+    const stack = [];
+    let inString = false;
+    let escaped = false;
+    let lastSafeCut = -1;
+    let lastSafeStack = [];
+    for (let index = start; index < text.length; index += 1) {
+        const ch = text[index];
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+        if (ch === '\\') {
+            escaped = inString;
+            continue;
+        }
+        if (ch === '"') {
+            inString = !inString;
+            continue;
+        }
+        if (inString)
+            continue;
+        if (ch === '{' || ch === '[') {
+            stack.push(ch === '{' ? '}' : ']');
+            continue;
+        }
+        if (ch === '}' || ch === ']') {
+            if (!stack.length)
+                return null;
+            stack.pop();
+            if (!stack.length)
+                return null; // 已配平，不是截断
+            lastSafeCut = index + 1;
+            lastSafeStack = [...stack];
+        }
+    }
+    if (!stack.length || lastSafeCut < 0)
+        return null;
+    let head = text.slice(start, lastSafeCut).replace(/,\s*$/, '');
+    head += lastSafeStack.slice().reverse().join('');
+    return { json: head, dropped: text.length - lastSafeCut };
+}
+/**
+ * 先按严格 JSON 解析，失败再按宽松规则整理后重试。
+ * @param text 候选 JSON 文本
+ * @returns 解析结果；两种方式都失败时返回 undefined
+ */
+function parseJsonLenient_ACU(text) {
+    try {
+        return JSON.parse(text);
+    }
+    catch { /* 严格解析失败，走宽松整理。 */ }
+    try {
+        return JSON.parse(sanitizeLooseJson_ACU(text));
+    }
+    catch {
+        return undefined;
+    }
+}
+
+/**
  * service/continuation/outline-tags.ts — 大纲标签协议
  *
  * 模型不再输出严格 JSON：阶段/节点/轮次内容用标签包裹，标签外的散文、思路、
@@ -115695,13 +117607,124 @@ function resolveContinuationAgentApiPreset_ACU(settings, role, phase, dependenci
  *
  * 标签契约（与 defaults.ts 的默认大纲提示词一一对应）：
  * <stage_title>…</stage_title> <stage_goal>…</stage_goal> <stage_tempo>mixed</stage_tempo>
- * <node><node_title>…</node_title><node_goal>…</node_goal><turn pacing="setup">…</turn>…</node>
+ * <stage_role>development</stage_role> <stage_time_span>数日</stage_time_span>
+ * <node><node_title>…</node_title><node_goal>…</node_goal>
+ * <turn pacing="setup" function="daily_bond" mainline="hold" time="days" anchor="入城后的第七天">…</turn></node>
+ *
+ * 解析层对形态宽容：turn 的语义标记除标准属性外，也接受写成子标签
+ * （<turn><pacing>setup</pacing>…</turn>）或 goal 开头的方括号前缀（[setup|daily_bond|hold|days]）；
+ * 枚举值接受大小写、常见中英文别名并归一化为标准值。归一化不了的原文保留给校验器诊断。
+ *
+ * 增量修补：校验发现缺项后，运行时只向模型索要 <fix node="1" turn="2" function="…"/> 形式的补丁，
+ * 由 applyOutlineFixes_ACU 按位置合并回草稿，而不是整份重来。
  */
+/**
+ * 枚举别名表：键为标准值，值为模型可能写出的同义写法（小写比较；中文按包含匹配）。
+ * 只收录语义无歧义的别名——“日常”只映射到 daily_bond 会误伤 daily_world，因此不收。
+ */
+const ENUM_ALIASES_ACU = {
+    pacing: {
+        setup: ['set_up', 'set-up', 'daily', 'low', 'calm', '铺垫', '日常', '低压', '平缓', '铺垫日常'],
+        pressure: ['conflict', 'high', 'push', '冲突', '高压', '推进', '冲突推进', '压力'],
+        turn: ['twist', 'reveal', 'turning', '转折', '揭示', '反转', '转折揭示'],
+        cooldown: ['cool_down', 'cool-down', 'aftermath', 'recovery', 'rest', '余波', '消化', '余波消化', '缓和', '休整'],
+    },
+    function: {
+        daily_bond: ['bond', 'relationship', 'daily-bond', 'dailybond', '关系日常', '关系', '相处', '感情日常'],
+        daily_world: ['world', 'daily-world', 'dailyworld', 'slice_of_life', '世界日常', '世界', '风土', '世界侧写', '市井'],
+        recovery: ['recover', 'heal', 'healing', 'rest', '恢复', '疗伤', '休养', '余波'],
+        preparation: ['prepare', 'prep', '准备', '筹备', '备战'],
+        training: ['train', 'practice', 'study', 'cultivation', '训练', '修炼', '学习', '成长', '练功'],
+        economy: ['economic', 'business', 'trade', 'resource', '经营', '生产', '资源', '商业', '经济'],
+        side_thread: ['side', 'sidethread', 'side-thread', 'subplot', '支线', '副线'],
+        conflict: ['fight', 'battle', 'confrontation', '冲突', '对抗', '战斗', '危机'],
+        reveal: ['revelation', 'twist', 'disclose', '揭示', '揭露', '反转', '揭秘'],
+        payoff: ['pay_off', 'pay-off', 'fulfill', '兑现', '回收', '收束', '回报'],
+        transition: ['transit', 'bridge', 'scene_change', '过渡', '转场', '衔接', '跳转'],
+    },
+    mainline: {
+        hold: ['none', 'pause', 'stay', 'no', '不推进', '停驻', '保持', '不动', '停', '维持', '暂停'],
+        micro: ['tiny', 'minor', 'small', '微', '微推进', '细微', '轻微'],
+        step: ['advance', 'progress', 'forward', 'push', '推进', '前进', '一步', '推进一步'],
+        milestone: ['major', 'big', 'climax', '里程碑', '重大', '关键节点', '阶段成果'],
+    },
+    time: {
+        continuous: ['continue', 'immediate', 'immediately', 'now', 'cont', '紧接', '连续', '紧接着', '立刻', '同时', '接续'],
+        same_day: ['sameday', 'same-day', 'today', 'later', '当天', '同日', '同一天', '稍后', '当日'],
+        overnight: ['next_day', 'nextday', 'next-day', 'tomorrow', 'night', '隔夜', '次日', '第二天', '一夜', '翌日', '过夜'],
+        days: ['day', 'few_days', 'several_days', '数日', '几天', '数天', '几日', '日后', '两三天'],
+        weeks: ['week', 'few_weeks', '数周', '几周', '一周', '两周', '半月', '数星期'],
+        months: ['month', 'few_months', '数月', '几个月', '一月', '一个月', '两月', '半年'],
+        years: ['year', 'few_years', '数年', '几年', '一年', '多年', '经年'],
+    },
+    tempo: {
+        buildup: ['build_up', 'build-up', 'setup', 'low', '铺垫', '铺垫型', '蓄力', '低压'],
+        mixed: ['mix', 'normal', 'balanced', '起伏', '起伏型', '常规', '交替'],
+        surge: ['high', 'climax', 'intense', '高压', '高压型', '决战', '爆发'],
+        aftermath: ['after', 'recovery', 'cooldown', '余波', '余波型', '消化', '善后'],
+    },
+    role: {
+        setup: ['opening', 'intro', 'introduction', '铺垫', '开局', '起始', '开篇', '建立'],
+        development: ['develop', 'progress', 'middle', '发展', '推进', '展开', '中段'],
+        escalation: ['escalate', 'rising', 'build', '升级', '升温', '加压', '激化'],
+        turn: ['twist', 'turning', 'turning_point', 'midpoint', '转折', '反转', '中点'],
+        payoff: ['climax', 'pay_off', 'resolution', '兑现', '高潮', '收束', '回收'],
+        aftermath: ['after', 'cooldown', 'epilogue', 'wrap_up', '余波', '善后', '收尾', '尾声'],
+    },
+};
+const ENUM_VALUES_ACU = {
+    pacing: STAGE_TURN_PACINGS_ACU,
+    function: STAGE_TURN_FUNCTIONS_ACU,
+    mainline: STAGE_TURN_MAINLINE_DELTAS_ACU,
+    time: STAGE_TURN_TIME_ADVANCES_ACU,
+    tempo: STAGE_TEMPOS_ACU,
+    role: STAGE_ROLES_ACU,
+};
+function compactEnumText_ACU(raw) {
+    return raw.trim().toLowerCase().replace(/[\s\-]+/g, '_').replace(/^["'“”‘’`]+|["'“”‘’`]+$/g, '').replace(/[。．.,，;；、]+$/g, '');
+}
+/**
+ * 把模型写出的枚举值归一化为标准值。
+ * 命中标准值或别名返回标准值；识别不了时返回整理过大小写与空白的原文，让校验器给出带原文的诊断。
+ * @param kind 枚举种类
+ * @param raw 模型原文
+ * @returns 标准值，或无法识别时的原文；空串返回 null
+ */
+function normalizeOutlineEnum_ACU(kind, raw) {
+    if (typeof raw !== 'string')
+        return null;
+    const compact = compactEnumText_ACU(raw);
+    if (!compact)
+        return null;
+    const values = ENUM_VALUES_ACU[kind];
+    if (values.includes(compact))
+        return compact;
+    const aliases = ENUM_ALIASES_ACU[kind];
+    for (const [canonical, list] of Object.entries(aliases)) {
+        if (list.some(alias => alias === compact))
+            return canonical;
+    }
+    // 中文别名按包含匹配：模型常写「余波消化轮」「关系日常场景」这类带修饰的词。
+    const hasCjk = /[\u3400-\u9fff]/.test(compact);
+    if (hasCjk) {
+        for (const [canonical, list] of Object.entries(aliases)) {
+            if (list.some(alias => /[\u3400-\u9fff]/.test(alias) && compact.includes(alias)))
+                return canonical;
+        }
+        if (values.some(value => compact.includes(value)))
+            return values.find(value => compact.includes(value)) ?? compact;
+    }
+    return compact;
+}
+/** 判断归一化后的值是否为该枚举的标准值。 */
+function isOutlineEnumValue_ACU(kind, value) {
+    return typeof value === 'string' && ENUM_VALUES_ACU[kind].includes(value);
+}
 function failParse_ACU(message) {
     throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_OUTLINE_JSON_INVALID', 'outline_parse', message, true));
 }
 function readTag_ACU(text, tag) {
-    const match = text.match(new RegExp(`<${tag}\\s*>([\\s\\S]*?)</${tag}\\s*>`, 'i'));
+    const match = text.match(new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)</${tag}\\s*>`, 'i'));
     return match ? match[1].trim() : '';
 }
 /**
@@ -115723,27 +117746,132 @@ function readTagEntries_ACU(text, tag) {
 function readTagList_ACU(text, tag) {
     return readTagEntries_ACU(text, tag).map(entry => entry.value);
 }
-function readTagAttribute_ACU(attributes, name) {
-    const match = attributes.match(new RegExp(`\\b${name}\\s*=\\s*["']?([^"'\\s>]+)`, 'i'));
-    return match ? match[1].trim() : '';
+/** 属性名别名：模型可能写 timeAdvance / mainlineDelta / 中文字段名。 */
+const ATTRIBUTE_ALIASES_ACU = {
+    pacing: ['pacing', 'pace', 'tempo', '节奏', '压力'],
+    function: ['function', 'func', 'fn', 'role', 'type', '功能', '叙事功能'],
+    mainline: ['mainline', 'mainlinedelta', 'mainline_delta', 'main', 'delta', '主线', '主线增量'],
+    time: ['time', 'timeadvance', 'time_advance', 'advance', 'span', '时间', '时间跨度'],
+    anchor: ['anchor', 'timeanchor', 'time_anchor', '时间锚', '锚', '锚点'],
+};
+/**
+ * 读取一个属性值，正确处理带空格的引号值：anchor="抵达临川城后 第七天" 不能在空格处截断。
+ * 匹配到的属性名按别名表对照，大小写不敏感。
+ */
+function readTagAttribute_ACU(attributes, names) {
+    if (!attributes)
+        return '';
+    const pattern = /([A-Za-z_\u3400-\u9fff][\w\-\u3400-\u9fff]*)\s*[=：:]\s*(?:"([^"]*)"|“([^”]*)”|'([^']*)'|‘([^’]*)’|([^\s"'“”‘’>]+))/g;
+    for (const match of attributes.matchAll(pattern)) {
+        const name = match[1].toLowerCase();
+        if (!names.includes(name))
+            continue;
+        const value = match[2] ?? match[3] ?? match[4] ?? match[5] ?? match[6] ?? '';
+        return value.trim();
+    }
+    return '';
 }
-/** 读取 turn 的 pacing 属性。缺失或写错都回落 pressure——标签层不报错，交给 schema 层给出统一口径的错误。 */
-function readTurnPacing_ACU(attributes) {
-    const raw = readTagAttribute_ACU(attributes, 'pacing').toLowerCase();
-    return STAGE_TURN_PACINGS_ACU.includes(raw) ? raw : 'pressure';
+function readOptionalTag_ACU(text, tag) {
+    const raw = readTag_ACU(text, tag);
+    return raw ? raw : null;
 }
-/** 读取 <stage_tempo>。写错或没写返回 null，由构建层回落——重规划时要能沿用旧大纲的形态。 */
-function readStageTempo_ACU(text) {
-    const raw = readTag_ACU(text, 'stage_tempo').toLowerCase();
-    return STAGE_TEMPOS_ACU.includes(raw) ? raw : null;
+function emptyMarkers_ACU() {
+    return { pacing: null, function: null, mainlineDelta: null, timeAdvance: null, timeAnchor: null };
+}
+function assignMarker_ACU(target, key, raw) {
+    if (raw === null || raw === '')
+        return;
+    if (target[key] !== null)
+        return;
+    if (key === 'timeAnchor') {
+        target.timeAnchor = raw.trim();
+        return;
+    }
+    const kind = key === 'mainlineDelta' ? 'mainline' : key === 'timeAdvance' ? 'time' : key;
+    target[key] = normalizeOutlineEnum_ACU(kind, raw);
+}
+/** 从 `key=value` 片段列表里读取标记；片段分隔符与键值分隔符都宽容。 */
+function assignFromPairs_ACU(target, pairs) {
+    let any = false;
+    for (const pair of pairs) {
+        const match = pair.match(/^\s*([A-Za-z_\u3400-\u9fff][\w\-\u3400-\u9fff]*)\s*[=：:]\s*(.+?)\s*$/);
+        if (!match)
+            continue;
+        const name = match[1].toLowerCase();
+        const value = match[2].replace(/^["'“”‘’]+|["'“”‘’]+$/g, '');
+        for (const [key, names] of Object.entries(ATTRIBUTE_ALIASES_ACU)) {
+            if (!names.includes(name))
+                continue;
+            assignMarker_ACU(target, key === 'mainline' ? 'mainlineDelta' : key === 'time' ? 'timeAdvance' : key === 'anchor' ? 'timeAnchor' : key, value);
+            any = true;
+        }
+    }
+    return any;
 }
 /**
- * 从模型返回原文中宽容提取大纲标签结构。标签外内容（思路、围栏、JSON）全部忽略。
+ * 解析 goal 开头的方括号前缀：[setup|daily_bond|hold|days|入城第七天] 或 [pacing=setup; time=days]。
+ * 位置式按 pacing、function、mainline、time、anchor 顺序读取。
+ * @returns 去掉前缀后的 goal 与读到的标记
+ */
+function readBracketPrefix_ACU(goal, target) {
+    const match = goal.match(/^\s*[\[【]([^\]】]{1,160})[\]】]\s*/);
+    if (!match)
+        return goal;
+    const body = match[1];
+    const pieces = body.split(/[|｜,，;；\/]/).map(piece => piece.trim()).filter(Boolean);
+    if (!pieces.length)
+        return goal;
+    const looksLikePairs = pieces.some(piece => /[=：:]/.test(piece));
+    if (looksLikePairs) {
+        if (!assignFromPairs_ACU(target, pieces))
+            return goal;
+        return goal.slice(match[0].length);
+    }
+    // 位置式：第一项必须能识别为 pacing，否则这个方括号只是正文的一部分（如【回忆】）。
+    const pacing = normalizeOutlineEnum_ACU('pacing', pieces[0]);
+    if (!isOutlineEnumValue_ACU('pacing', pacing))
+        return goal;
+    const keys = ['pacing', 'function', 'mainlineDelta', 'timeAdvance', 'timeAnchor'];
+    pieces.slice(0, keys.length).forEach((piece, index) => assignMarker_ACU(target, keys[index], piece));
+    return goal.slice(match[0].length);
+}
+/** 从 turn 正文里剥出 <pacing>…</pacing> 这类子标签形态的标记。 */
+function readChildMarkers_ACU(value, target) {
+    let rest = value;
+    for (const [key, names] of Object.entries(ATTRIBUTE_ALIASES_ACU)) {
+        for (const name of names) {
+            const pattern = new RegExp(`<${name}\\s*>([\\s\\S]*?)</${name}\\s*>`, 'i');
+            const match = rest.match(pattern);
+            if (!match)
+                continue;
+            assignMarker_ACU(target, key === 'mainline' ? 'mainlineDelta' : key === 'time' ? 'timeAdvance' : key === 'anchor' ? 'timeAnchor' : key, match[1].trim());
+            rest = rest.replace(pattern, '');
+        }
+    }
+    // 也接受 <goal>…</goal> 包裹正文的写法。
+    const goalMatch = rest.match(/<goal\s*>([\s\S]*?)<\/goal\s*>/i);
+    if (goalMatch)
+        rest = goalMatch[1];
+    return rest.trim();
+}
+function parseTurnEntry_ACU(entry) {
+    const markers = emptyMarkers_ACU();
+    assignMarker_ACU(markers, 'pacing', readTagAttribute_ACU(entry.attributes, ATTRIBUTE_ALIASES_ACU.pacing));
+    assignMarker_ACU(markers, 'function', readTagAttribute_ACU(entry.attributes, ATTRIBUTE_ALIASES_ACU.function));
+    assignMarker_ACU(markers, 'mainlineDelta', readTagAttribute_ACU(entry.attributes, ATTRIBUTE_ALIASES_ACU.mainline));
+    assignMarker_ACU(markers, 'timeAdvance', readTagAttribute_ACU(entry.attributes, ATTRIBUTE_ALIASES_ACU.time));
+    assignMarker_ACU(markers, 'timeAnchor', readTagAttribute_ACU(entry.attributes, ATTRIBUTE_ALIASES_ACU.anchor));
+    let goal = readChildMarkers_ACU(entry.value, markers);
+    goal = readBracketPrefix_ACU(goal, markers).trim();
+    return { goal, ...markers };
+}
+/**
+ * 从模型返回原文中宽容提取大纲标签结构。标签外内容（思路、围栏、JSON、推理块）全部忽略。
  * @param raw 模型返回的原始文本
  * @returns 阶段标题/目标与节点列表（节点含标题/目标与逐轮目标文本）
  */
 function parseOutlineTags_ACU(raw) {
-    const text = typeof raw === 'string' ? raw : '';
+    const text = typeof raw === 'string' ? stripReasoningBlocks_ACU(raw) : '';
     if (!text.trim())
         failParse_ACU('大纲返回为空');
     const nodeBlocks = readTagList_ACU(text, 'node');
@@ -115751,20 +117879,27 @@ function parseOutlineTags_ACU(raw) {
         failParse_ACU(`返回内容不包含任何 <node> 标签。模型返回片段：${text.trim().slice(0, 300)}`);
     }
     const nodes = nodeBlocks.map((block, index) => {
-        const turns = readTagEntries_ACU(block, 'turn').map(entry => ({ goal: entry.value, pacing: readTurnPacing_ACU(entry.attributes) }));
+        const turns = readTagEntries_ACU(block, 'turn').map(parseTurnEntry_ACU).filter(turn => turn.goal);
         if (!turns.length)
             failParse_ACU(`第 ${index + 1} 个 <node> 中没有任何非空 <turn> 标签`);
         return { title: readTag_ACU(block, 'node_title'), goal: readTag_ACU(block, 'node_goal'), turns };
     });
-    return { title: readTag_ACU(text, 'stage_title'), goal: readTag_ACU(text, 'stage_goal'), tempo: readStageTempo_ACU(text), nodes };
+    return {
+        title: readTag_ACU(text, 'stage_title'),
+        goal: readTag_ACU(text, 'stage_goal'),
+        tempo: normalizeOutlineEnum_ACU('tempo', readOptionalTag_ACU(text, 'stage_tempo')),
+        role: normalizeOutlineEnum_ACU('role', readOptionalTag_ACU(text, 'stage_role')),
+        timeSpanGoal: readOptionalTag_ACU(text, 'stage_time_span'),
+        nodes,
+    };
 }
 /**
  * 把标签解析结果构建为标准阶段大纲。全部结构字段在这里生成推导：
  * node/turn id 由 allocateId 分配，suggestedTurns=节点轮数，totalTurns=轮数总和。
  * @param parsed 标签解析结果
  * @param allocateId ID 分配器（与 edit_outline 插入轮次共用同一惯例）
- * @param fallback 重规划时沿用旧大纲的阶段标题/目标/形态（模型可不重述）
- * @returns 结构完整的 StageOutline，内容性缺失（空 goal）留给 schema 校验反馈
+ * @param fallback 重规划时沿用旧大纲的阶段标题、目标、形态与结构角色
+ * @returns 未校验的 StageOutline 载体；缺失/非法枚举会原样进入严格 schema 校验
  */
 function buildStageOutlineFromTags_ACU(parsed, allocateId, fallback) {
     const nodes = parsed.nodes.map((node, index) => ({
@@ -115772,13 +117907,31 @@ function buildStageOutlineFromTags_ACU(parsed, allocateId, fallback) {
         title: node.title || `节点${index + 1}`,
         goal: node.goal,
         suggestedTurns: node.turns.length,
-        turns: node.turns.map(turn => ({ id: allocateId('turn'), goal: turn.goal, pacing: turn.pacing })),
+        turns: node.turns.map(turn => ({
+            id: allocateId('turn'),
+            goal: turn.goal,
+            ...(turn.pacing !== null ? { pacing: turn.pacing } : {}),
+            ...(turn.function !== null ? { function: turn.function } : {}),
+            ...(turn.mainlineDelta !== null ? { mainlineDelta: turn.mainlineDelta } : {}),
+            ...(turn.timeAdvance !== null ? { timeAdvance: turn.timeAdvance } : {}),
+            ...(turn.timeAnchor !== null ? { timeAnchor: turn.timeAnchor } : {}),
+        })),
     }));
+    const tempo = parsed.tempo ?? fallback?.tempo;
+    const role = parsed.role ?? fallback?.role;
+    // 首次生成时阶段标题/目标漏写不该让整份大纲作废：标题退到首节点标题，目标退到各节点目标的拼接。
+    // 重规划（有 fallback）时留空，由拼接逻辑沿用旧大纲的标题与目标。
+    const derivedTitle = fallback ? '' : (parsed.nodes.find(node => node.title)?.title ?? '') || '未命名阶段';
+    const derivedGoal = fallback ? '' : parsed.nodes.map(node => node.goal).filter(Boolean).join('；');
     return {
         schemaVersion: CONTINUATION_SCHEMA_VERSION_ACU,
-        title: parsed.title || fallback?.title || '',
-        goal: parsed.goal || fallback?.goal || '',
-        tempo: parsed.tempo ?? fallback?.tempo ?? 'mixed',
+        title: parsed.title || fallback?.title || derivedTitle,
+        goal: parsed.goal || fallback?.goal || derivedGoal,
+        ...(tempo !== undefined ? { tempo: tempo } : {}),
+        ...(role !== undefined ? { role: role } : {}),
+        ...(parsed.timeSpanGoal !== null || fallback?.timeSpanGoal !== undefined
+            ? { timeSpanGoal: parsed.timeSpanGoal ?? fallback?.timeSpanGoal }
+            : {}),
         totalTurns: nodes.reduce((sum, node) => sum + node.suggestedTurns, 0),
         nodes,
     };
@@ -115810,12 +117963,124 @@ function spliceOutlineWithCompletedPrefix_ACU(previous, completedTurns, planned)
         schemaVersion: CONTINUATION_SCHEMA_VERSION_ACU,
         title: planned.title || previous.title,
         goal: planned.goal || previous.goal,
+        role: planned.role ?? previous.role,
+        timeSpanGoal: planned.timeSpanGoal ?? previous.timeSpanGoal,
         tempo: planned.tempo,
         totalTurns: nodes.reduce((sum, node) => sum + node.suggestedTurns, 0),
         nodes,
     };
 }
+/**
+ * 解析修补轮回复中的 <fix …/> 条目。自闭合与成对写法都接受；属性名走同一套别名表。
+ * 没有任何 <fix> 时返回空数组（由调用方决定是回灌还是放弃修补）。
+ * @param raw 修补轮模型原文
+ */
+function parseOutlineFixes_ACU(raw) {
+    const text = typeof raw === 'string' ? stripReasoningBlocks_ACU(raw) : '';
+    const fixes = [];
+    const pattern = /<fix(\s[^>]*?)?\s*\/?>/gi;
+    for (const match of text.matchAll(pattern)) {
+        const attributes = match[1] ?? '';
+        if (!attributes.trim())
+            continue;
+        const stageFlag = /(^|\s)(target\s*[=：:]\s*["'“‘]?stage|stage(\s|$|[=：:]))/i.test(attributes);
+        const node = Number.parseInt(readTagAttribute_ACU(attributes, ['node', '节点']), 10);
+        const turn = Number.parseInt(readTagAttribute_ACU(attributes, ['turn', '轮', '轮次']), 10);
+        const fix = { target: stageFlag && !(node > 0) ? 'stage' : { node, turn } };
+        if (fix.target !== 'stage' && (!(node > 0) || !(turn > 0)))
+            continue;
+        const pacing = readTagAttribute_ACU(attributes, ATTRIBUTE_ALIASES_ACU.pacing);
+        const fn = readTagAttribute_ACU(attributes, ATTRIBUTE_ALIASES_ACU.function);
+        const mainline = readTagAttribute_ACU(attributes, ATTRIBUTE_ALIASES_ACU.mainline);
+        const time = readTagAttribute_ACU(attributes, ATTRIBUTE_ALIASES_ACU.time);
+        const anchor = readTagAttribute_ACU(attributes, ATTRIBUTE_ALIASES_ACU.anchor);
+        const tempo = readTagAttribute_ACU(attributes, ['tempo', 'stage_tempo', '形态', '节奏形态']);
+        const role = readTagAttribute_ACU(attributes, ['role', 'stage_role', '职责', '结构职责']);
+        const span = readTagAttribute_ACU(attributes, ['time_span', 'timespan', 'stage_time_span', 'span', '时间目标', '时间跨度']);
+        if (fix.target === 'stage') {
+            if (tempo)
+                fix.tempo = normalizeOutlineEnum_ACU('tempo', tempo) ?? undefined;
+            if (role)
+                fix.role = normalizeOutlineEnum_ACU('role', role) ?? undefined;
+            if (span)
+                fix.timeSpanGoal = span;
+        }
+        else {
+            if (pacing)
+                fix.pacing = normalizeOutlineEnum_ACU('pacing', pacing) ?? undefined;
+            if (fn)
+                fix.function = normalizeOutlineEnum_ACU('function', fn) ?? undefined;
+            if (mainline)
+                fix.mainlineDelta = normalizeOutlineEnum_ACU('mainline', mainline) ?? undefined;
+            if (time)
+                fix.timeAdvance = normalizeOutlineEnum_ACU('time', time) ?? undefined;
+            if (anchor)
+                fix.timeAnchor = anchor;
+        }
+        fixes.push(fix);
+    }
+    return fixes;
+}
+/**
+ * 把修补合并回模型规划的大纲草稿（只作用于模型自己输出的节点，不触碰重规划前缀）。
+ * 只有归一化后是标准枚举的值才写入；识别不了的值忽略，留给下一轮校验再报。
+ * @param planned buildStageOutlineFromTags_ACU 的产物
+ * @param fixes 解析出的修补
+ * @returns 应用修补后的新草稿；无任何有效修补时返回原对象
+ */
+function applyOutlineFixes_ACU(planned, fixes) {
+    if (!fixes.length)
+        return planned;
+    const draft = { ...planned, nodes: planned.nodes.map(node => ({ ...node, turns: node.turns.map(turn => ({ ...turn })) })) };
+    let changed = false;
+    for (const fix of fixes) {
+        if (fix.target === 'stage') {
+            if (isOutlineEnumValue_ACU('tempo', fix.tempo)) {
+                draft.tempo = fix.tempo;
+                changed = true;
+            }
+            if (isOutlineEnumValue_ACU('role', fix.role)) {
+                draft.role = fix.role;
+                changed = true;
+            }
+            if (fix.timeSpanGoal?.trim()) {
+                draft.timeSpanGoal = fix.timeSpanGoal.trim();
+                changed = true;
+            }
+            continue;
+        }
+        const node = draft.nodes[fix.target.node - 1];
+        const turn = node?.turns[fix.target.turn - 1];
+        if (!turn)
+            continue;
+        if (isOutlineEnumValue_ACU('pacing', fix.pacing)) {
+            turn.pacing = fix.pacing;
+            changed = true;
+        }
+        if (isOutlineEnumValue_ACU('function', fix.function)) {
+            turn.function = fix.function;
+            changed = true;
+        }
+        if (isOutlineEnumValue_ACU('mainline', fix.mainlineDelta)) {
+            turn.mainlineDelta = fix.mainlineDelta;
+            changed = true;
+        }
+        if (isOutlineEnumValue_ACU('time', fix.timeAdvance)) {
+            turn.timeAdvance = fix.timeAdvance;
+            changed = true;
+        }
+        if (fix.timeAnchor?.trim()) {
+            turn.timeAnchor = fix.timeAnchor.trim();
+            changed = true;
+        }
+        if (changed && turn.inferred)
+            delete turn.inferred;
+    }
+    return changed ? draft : planned;
+}
 
+/** 每次整份生成之后最多追加的增量修补轮数。修补轮输出极小，不与整份重来共用重试额度。 */
+const CONTINUATION_OUTLINE_REPAIR_ROUNDS_ACU = 2;
 const defaultDependencies_ACU$3 = {
     resolveApiPreset: resolveContinuationAgentApiPreset_ACU,
     callInternalAi: callContinuationInternalAi_ACU,
@@ -115909,6 +118174,82 @@ function renderContinuationPacingContext_ACU(context, maxConsecutivePressureTurn
     }
     return lines.join('\n');
 }
+const MISSING_FIELD_LABELS_ACU = {
+    pacing: 'pacing（setup / pressure / turn / cooldown）',
+    function: 'function（daily_bond / daily_world / recovery / preparation / training / economy / side_thread / conflict / reveal / payoff / transition）',
+    mainlineDelta: 'mainline（hold / micro / step / milestone）',
+    timeAdvance: 'time（continuous / same_day / overnight / days / weeks / months / years）',
+    timeAnchor: 'anchor（time 为 weeks / months / years 时的相对时间锚，如「入城后的第七天」）',
+    tempo: 'tempo（buildup / mixed / surge / aftermath）',
+    role: 'role（setup / development / escalation / turn / payoff / aftermath）',
+};
+const FIX_ATTRIBUTE_NAMES_ACU = {
+    pacing: 'pacing',
+    function: 'function',
+    mainlineDelta: 'mainline',
+    timeAdvance: 'time',
+    timeAnchor: 'anchor',
+    tempo: 'tempo',
+    role: 'role',
+};
+/**
+ * 渲染增量修补请求：只列缺项，按模型自己输出里的节点/轮次位置引用，并给出最小回复格式。
+ * 位置换算：整份大纲里前 prefixNodeCount 个节点是重规划保留的前缀，模型看不到也不需要动。
+ * @param missing 草稿校验收集到的缺项
+ * @param prefixNodeCount 拼接进来的前缀节点数
+ * @returns 回灌给模型的修补请求文本
+ */
+function renderOutlineRepairRequest_ACU(missing, prefixNodeCount) {
+    const grouped = new Map();
+    for (const item of missing) {
+        const node = item.nodeIndex === null ? null : item.nodeIndex - prefixNodeCount + 1;
+        const turn = item.turnIndex === null ? null : item.turnIndex + 1;
+        const key = node === null ? 'stage' : `${node}:${turn}`;
+        const bucket = grouped.get(key) ?? { node, turn, goalHead: item.goalHead, fields: [] };
+        bucket.fields.push(item);
+        grouped.set(key, bucket);
+    }
+    const lines = ['你上一份大纲的结构已被接受，只有下列标记缺失或不是合法枚举值。只需补这些标记，不要重发整份大纲，不要改动任何 goal 正文：'];
+    const examples = [];
+    for (const bucket of grouped.values()) {
+        const fieldText = bucket.fields.map(item => {
+            const label = MISSING_FIELD_LABELS_ACU[item.field];
+            return item.actual === undefined ? `缺 ${label}` : `${label} 写成了「${String(item.actual)}」`;
+        }).join('；');
+        if (bucket.node === null) {
+            lines.push(`- 阶段级：${fieldText}`);
+            examples.push(`<fix stage ${bucket.fields.map(item => `${FIX_ATTRIBUTE_NAMES_ACU[item.field]}="…"`).join(' ')}/>`);
+        }
+        else {
+            lines.push(`- 节点${bucket.node} 第${bucket.turn}轮（「${bucket.goalHead}」）：${fieldText}`);
+            examples.push(`<fix node="${bucket.node}" turn="${bucket.turn}" ${bucket.fields.map(item => `${FIX_ATTRIBUTE_NAMES_ACU[item.field]}="…"`).join(' ')}/>`);
+        }
+    }
+    lines.push('回复格式，每条一行，只填标准枚举值：');
+    lines.push(...[...new Set(examples)]);
+    lines.push('例：<fix node="1" turn="2" function="daily_bond" time="overnight"/>');
+    return lines.join('\n');
+}
+/**
+ * 整份重来时的回灌：错误原因 + 一份最小合法样例。快速模型对“照这个样子写”比对规则描述更服从。
+ * @param error 上次校验错误
+ */
+function renderOutlineRetryRequest_ACU(error) {
+    return [
+        '上次输出未通过校验，请按下列错误修正后重新输出完整标签（只输出标签，不要 <think>、不要 JSON）。',
+        compactValidationError_ACU(error),
+        '每个 <turn> 的写法示例：',
+        '<turn pacing="setup" function="daily_bond" mainline="hold" time="overnight">两人在灶前分工做晚饭，她第一次把咸淡交给他决定</turn>',
+        '<turn pacing="pressure" function="conflict" mainline="step" time="continuous">守卫在城门盘查信物，主角被迫交出一半银两换取放行</turn>',
+        '阶段级标签示例：<stage_tempo>mixed</stage_tempo> <stage_role>development</stage_role>',
+    ].join('\n');
+}
+function missingFieldError_ACU(missing) {
+    const hard = missing.filter(item => !item.defaulted);
+    const first = hard[0];
+    const where = first.nodeIndex === null ? 'outline' : `nodes[${first.nodeIndex}].turns[${first.turnIndex}]`;
+    return new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_OUTLINE_FIELD_MISSING', 'outline_validate', `${MISSING_FIELD_LABELS_ACU[first.field]} 缺失或非法且无法安全补全：${where}${first.actual === undefined ? '' : `（写成了「${String(first.actual)}」）`}。每个 <turn> 都必须带合法的 pacing，阶段必须带合法的 <stage_tempo>`, false, { path: `${where}.${first.field}`, actual: first.actual, hardMissing: hard.length }));
+}
 function isRetryableOutlineError_ACU(error) {
     if (error.code === 'CONTINUATION_INTERNAL_AI_REQUEST_FAILED' || error.code === 'CONTINUATION_OUTLINE_JSON_INVALID')
         return true;
@@ -115936,30 +118277,70 @@ class ContinuationOutlinePlanner_ACU {
         const rendered = await renderContinuationPrompt_ACU(request.settings.outlinePrompt, resolvers, request.reason === 'manual_replan' ? 'replan' : 'outline_prompt');
         const transcript = [];
         let lastRaw = '';
+        let repairRounds = 0;
+        const constraints = request.replanConstraints;
+        const callModel = async (attempt, messages) => {
+            const identity = request.createInternalRequestIdentity(attempt);
+            const isCurrent = request.isInternalRequestCurrent;
+            if (!isCurrent(identity)) {
+                throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'outline_call', '阶段大纲内部请求已失效', false));
+            }
+            const raw = await this.dependencies.callInternalAi(messages, preset, identity, undefined, {
+                promptCacheEnabled: request.settings.promptCacheEnabled,
+                cacheScope: 'outline',
+                minOutputTokens: CONTINUATION_ROLE_OUTPUT_TOKEN_FLOORS_ACU.outline,
+            });
+            if (!isCurrent(identity)) {
+                throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'outline_call', '阶段大纲内部结果已失效', false));
+            }
+            return String(raw ?? '');
+        };
+        const buildFromRaw = (raw) => buildStageOutlineFromTags_ACU(parseOutlineTags_ACU(raw), request.allocateId, constraints ? {
+            title: constraints.previousOutline.title,
+            goal: constraints.previousOutline.goal,
+            tempo: constraints.previousOutline.tempo,
+            role: constraints.previousOutline.role,
+            timeSpanGoal: constraints.previousOutline.timeSpanGoal,
+        } : undefined);
+        // 重规划：模型只规划剩余轮次，已完成前缀由运行时拼回；剩余轮数额度放宽，
+        // 只要求拼接后 totalTurns 落在阶段规模范围内（校验按实际拼接结果传额度）。
+        const validateDraft = (planned) => {
+            const candidate = constraints ? spliceOutlineWithCompletedPrefix_ACU(constraints.previousOutline, constraints.completedTurns, planned) : planned;
+            const validation = constraints
+                ? validateReplannedStageOutlineDraft_ACU(candidate, range, { ...constraints, expectedRemainingTurns: candidate.totalTurns - constraints.completedTurns })
+                : validateGeneratedStageOutlineDraft_ACU(candidate, range);
+            return { validation, prefixNodeCount: candidate.nodes.length - planned.nodes.length };
+        };
         for (let attempt = 0; attempt <= retries; attempt += 1) {
             try {
-                const identity = request.createInternalRequestIdentity(attempt);
-                const isCurrent = request.isInternalRequestCurrent;
-                if (!isCurrent(identity)) {
-                    throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'outline_call', '阶段大纲内部请求已失效', false));
+                lastRaw = await callModel(attempt, [...rendered.messages, ...transcript]);
+                let planned = buildFromRaw(lastRaw);
+                let { validation, prefixNodeCount } = validateDraft(planned);
+                // 增量修补：结构已经合法、只差标记时，不整份重来，只向模型索要缺项。
+                // 修补轮对话独立于外层 transcript：修好即丢弃，整份重来时模型不需要再看这段。
+                const repairTranscript = [{ role: 'assistant', content: lastRaw.trim() || '(空输出)' }];
+                for (let round = 0; round < CONTINUATION_OUTLINE_REPAIR_ROUNDS_ACU && validation.missing.length; round += 1) {
+                    repairTranscript.push({ role: 'user', content: renderOutlineRepairRequest_ACU(validation.missing, prefixNodeCount) });
+                    repairRounds += 1;
+                    const reply = await callModel(attempt, [...rendered.messages, ...transcript, ...repairTranscript]);
+                    repairTranscript.push({ role: 'assistant', content: reply.trim() || '(空输出)' });
+                    const fixes = parseOutlineFixes_ACU(reply);
+                    if (fixes.length) {
+                        planned = applyOutlineFixes_ACU(planned, fixes);
+                    }
+                    else if (/<node(\s[^>]*)?>/i.test(reply)) {
+                        // 模型没按 <fix> 回复而是重发了整份大纲：接受它，按新输出继续。
+                        lastRaw = reply;
+                        planned = buildFromRaw(reply);
+                    }
+                    else {
+                        break;
+                    }
+                    ({ validation, prefixNodeCount } = validateDraft(planned));
                 }
-                const raw = await this.dependencies.callInternalAi([...rendered.messages, ...transcript], preset, identity, undefined, {
-                    promptCacheEnabled: request.settings.promptCacheEnabled,
-                    cacheScope: 'outline',
-                });
-                lastRaw = String(raw ?? '');
-                if (!isCurrent(identity)) {
-                    throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'outline_call', '阶段大纲内部结果已失效', false));
-                }
-                const constraints = request.replanConstraints;
-                const parsed = parseOutlineTags_ACU(raw);
-                const built = buildStageOutlineFromTags_ACU(parsed, request.allocateId, constraints ? { title: constraints.previousOutline.title, goal: constraints.previousOutline.goal, tempo: constraints.previousOutline.tempo } : undefined);
-                // 重规划：模型只规划剩余轮次，已完成前缀由运行时拼回；剩余轮数额度放宽，
-                // 只要求拼接后 totalTurns 落在阶段规模范围内（校验按实际拼接结果传额度）。
-                const candidate = constraints ? spliceOutlineWithCompletedPrefix_ACU(constraints.previousOutline, constraints.completedTurns, built) : built;
-                const outline = constraints
-                    ? validateReplannedStageOutline_ACU(candidate, range, { ...constraints, expectedRemainingTurns: candidate.totalTurns - constraints.completedTurns })
-                    : validateStageOutline_ACU(candidate, range);
+                if (validation.missing.some(item => !item.defaulted))
+                    throw missingFieldError_ACU(validation.missing);
+                const outline = validation.outline;
                 // 低压占比只作用在本次真正规划出来的轮次上：重规划时已完成前缀不可改，其中还混着
                 // 迁移回填的 pressure，把它算进占比会让重规划永远无法通过；前缀的连续高压段则由
                 // pacingContext.leadingPressureStreak 带入，那部分是真实写过的剧情，必须参与计数。
@@ -115970,7 +118351,14 @@ class ContinuationOutlinePlanner_ACU {
                     maxConsecutivePressureTurns: request.settings.maxConsecutivePressureTurns,
                     skipTurns: constraints ? constraints.completedTurns : 0,
                 });
-                return { outline, attempts: attempt + 1, apiPreset: { presetName: preset.presetName, source: preset.source, reason: preset.reason }, requiresReview: request.settings.outlinePreview };
+                return {
+                    outline,
+                    attempts: attempt + 1,
+                    repairRounds,
+                    inferredFields: validation.missing.length,
+                    apiPreset: { presetName: preset.presetName, source: preset.source, reason: preset.reason },
+                    requiresReview: request.settings.outlinePreview,
+                };
             }
             catch (error) {
                 lastError = toPlannerError_ACU(error);
@@ -115987,7 +118375,7 @@ class ContinuationOutlinePlanner_ACU {
                 }
                 if (attempt < retries) {
                     transcript.push({ role: 'assistant', content: lastRaw.trim() || '(空输出)' });
-                    transcript.push({ role: 'user', content: `上次输出未通过校验，请按下列错误修正后重新输出完整标签。\n${compactValidationError_ACU(lastError)}` });
+                    transcript.push({ role: 'user', content: renderOutlineRetryRequest_ACU(lastError) });
                 }
             }
         }
@@ -116003,9 +118391,10 @@ function acceptPlannedStageRevision_ACU(revision, settings, replanConstraints) {
         throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_REVISION_FROZEN', 'replan', '已冻结的阶段 revision 不可编辑', false));
     }
     const range = resolveContinuationTurnRange_ACU(settings.stageSize, settings.customTurnMin ?? undefined, settings.customTurnMax ?? undefined);
+    // 用户手改的预览：结构必须合法，语义标记缺失按 pacing 补默认并标记 inferred，不因少写一个属性而存不下。
     const outline = replanConstraints
         ? validateReplannedStageOutline_ACU(revision.outline, range, replanConstraints)
-        : validateStageOutline_ACU(revision.outline, range);
+        : validateEditedStageOutline_ACU(revision.outline, range);
     return freezePlannedStageRevision_ACU({ ...revision, outline });
 }
 function freezePlannedStageRevision_ACU(revision) {
@@ -116101,14 +118490,93 @@ function validateAgentConversationSnapshot_ACU(raw) {
         messages,
     };
 }
+function isNonNegativeInteger_ACU(value) {
+    return typeof value === 'number' && Number.isInteger(value) && value >= 0;
+}
+function isStringArray_ACU(value) {
+    return Array.isArray(value) && value.every(item => typeof item === 'string' && item.trim().length > 0);
+}
+function hasExactKeys_ACU(raw, required, optional = []) {
+    const allowed = new Set([...required, ...optional]);
+    return required.every(key => Object.prototype.hasOwnProperty.call(raw, key))
+        && Object.keys(raw).every(key => allowed.has(key));
+}
 function validateCompactionMark_ACU(raw) {
     if (!isRecord_ACU$5(raw))
-        return undefined;
+        return null;
     const compactedThroughId = typeof raw.compactedThroughId === 'number' && Number.isInteger(raw.compactedThroughId) && raw.compactedThroughId > 0 ? raw.compactedThroughId : 0;
     const report = typeof raw.report === 'string' ? raw.report : '';
-    if (!compactedThroughId || !report.trim())
-        return undefined;
-    return { compactedThroughId, report, at: typeof raw.at === 'number' && raw.at >= 0 ? raw.at : 0 };
+    const at = isNonNegativeInteger_ACU(raw.at) ? raw.at : -1;
+    if (!compactedThroughId || !report.trim() || at < 0)
+        return null;
+    if (!Object.prototype.hasOwnProperty.call(raw, 'schemaVersion')) {
+        // V1 是已经写入聊天记录的历史格式；兼容读取，直到下一次成功压缩才升级。
+        return { compactedThroughId, report, at };
+    }
+    if (raw.schemaVersion !== 2 || !isRecord_ACU$5(raw.summaryState) || !isRecord_ACU$5(raw.metrics))
+        return null;
+    const state = raw.summaryState;
+    const stateKeys = ['currentGoal', 'effectiveConstraints', 'decisions', 'completedItems', 'pendingItems', 'blockers', 'continuityFacts', 'readKeys', 'recentTurns'];
+    if (!hasExactKeys_ACU(state, stateKeys)
+        || typeof state.currentGoal !== 'string'
+        || !isStringArray_ACU(state.effectiveConstraints)
+        || !isStringArray_ACU(state.decisions)
+        || !isStringArray_ACU(state.completedItems)
+        || !isStringArray_ACU(state.pendingItems)
+        || !isStringArray_ACU(state.blockers)
+        || !isStringArray_ACU(state.continuityFacts)
+        || !isStringArray_ACU(state.readKeys)
+        || !isStringArray_ACU(state.recentTurns))
+        return null;
+    const metrics = raw.metrics;
+    const metricKeys = ['sourceFromId', 'sourceThroughId', 'beforeTokens', 'afterTokens', 'fixedPromptTokens', 'reportTokens', 'targetTokens', 'triggerTokens', 'droppedMessages', 'droppedTurns', 'degraded'];
+    if (!hasExactKeys_ACU(metrics, metricKeys, ['degradationReason'])
+        || !isNonNegativeInteger_ACU(metrics.sourceFromId)
+        || !isNonNegativeInteger_ACU(metrics.sourceThroughId)
+        || !isNonNegativeInteger_ACU(metrics.beforeTokens)
+        || !isNonNegativeInteger_ACU(metrics.afterTokens)
+        || !isNonNegativeInteger_ACU(metrics.fixedPromptTokens)
+        || !isNonNegativeInteger_ACU(metrics.reportTokens)
+        || !isNonNegativeInteger_ACU(metrics.targetTokens)
+        || !isNonNegativeInteger_ACU(metrics.triggerTokens)
+        || !isNonNegativeInteger_ACU(metrics.droppedMessages)
+        || !isNonNegativeInteger_ACU(metrics.droppedTurns)
+        || typeof metrics.degraded !== 'boolean'
+        || (Object.prototype.hasOwnProperty.call(metrics, 'degradationReason') && (typeof metrics.degradationReason !== 'string' || !metrics.degradationReason.trim()))
+        || metrics.sourceFromId <= 0
+        || metrics.sourceThroughId < metrics.sourceFromId)
+        return null;
+    return {
+        schemaVersion: 2,
+        compactedThroughId,
+        report,
+        summaryState: {
+            currentGoal: state.currentGoal,
+            effectiveConstraints: [...state.effectiveConstraints],
+            decisions: [...state.decisions],
+            completedItems: [...state.completedItems],
+            pendingItems: [...state.pendingItems],
+            blockers: [...state.blockers],
+            continuityFacts: [...state.continuityFacts],
+            readKeys: [...state.readKeys],
+            recentTurns: [...state.recentTurns],
+        },
+        at,
+        metrics: {
+            sourceFromId: metrics.sourceFromId,
+            sourceThroughId: metrics.sourceThroughId,
+            beforeTokens: metrics.beforeTokens,
+            afterTokens: metrics.afterTokens,
+            fixedPromptTokens: metrics.fixedPromptTokens,
+            reportTokens: metrics.reportTokens,
+            targetTokens: metrics.targetTokens,
+            triggerTokens: metrics.triggerTokens,
+            droppedMessages: metrics.droppedMessages,
+            droppedTurns: metrics.droppedTurns,
+            degraded: metrics.degraded,
+            ...(typeof metrics.degradationReason === 'string' ? { degradationReason: metrics.degradationReason } : {}),
+        },
+    };
 }
 /**
  * 校验一份 v2 楼层段记录。整体结构非法返回 null；个别消息非法只丢该条。
@@ -116128,10 +118596,48 @@ function validateAgentConversationFloorRecord_ACU(raw) {
         updatedAt: typeof raw.updatedAt === 'number' && raw.updatedAt >= 0 ? raw.updatedAt : 0,
         segment,
     };
-    const compaction = validateCompactionMark_ACU(raw.compaction);
-    if (compaction)
+    if (Object.prototype.hasOwnProperty.call(raw, 'compaction')) {
+        const compaction = validateCompactionMark_ACU(raw.compaction);
+        if (!compaction) {
+            throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_AGENT_SNAPSHOT_INVALID', 'load', 'Agent 会话压缩标记版本或字段无效', false));
+        }
         record.compaction = compaction;
+    }
     return record;
+}
+/** 读取当前生效的压缩标记；与模型投影相同，选择 compactedThroughId 最大的合法标记。 */
+function readActiveAgentConversationCompactionMark_ACU(chat) {
+    const messages = Array.isArray(chat) ? chat : getChatArray_ACU();
+    let active = null;
+    for (const message of messages) {
+        if (!message || typeof message !== 'object')
+            continue;
+        if (!Object.prototype.hasOwnProperty.call(message, AGENT_CONVERSATION_FIELD_ACU))
+            continue;
+        const raw = message[AGENT_CONVERSATION_FIELD_ACU];
+        const record = validateAgentConversationFloorRecord_ACU(raw);
+        if (record?.compaction && (!active || record.compaction.compactedThroughId > active.compactedThroughId))
+            active = record.compaction;
+    }
+    if (!active)
+        return null;
+    if (!('summaryState' in active))
+        return { ...active };
+    return {
+        ...active,
+        summaryState: {
+            ...active.summaryState,
+            effectiveConstraints: [...active.summaryState.effectiveConstraints],
+            decisions: [...active.summaryState.decisions],
+            completedItems: [...active.summaryState.completedItems],
+            pendingItems: [...active.summaryState.pendingItems],
+            blockers: [...active.summaryState.blockers],
+            continuityFacts: [...active.summaryState.continuityFacts],
+            readKeys: [...active.summaryState.readKeys],
+            recentTurns: [...active.summaryState.recentTurns],
+        },
+        metrics: { ...active.metrics },
+    };
 }
 /** 由压缩标记合成的交接消息。id 复用 compactedThroughId（该 id 的原始消息已被投影掉，不会撞号）。 */
 function buildHandoffMessage_ACU(mark) {
@@ -116145,7 +118651,6 @@ function buildHandoffMessage_ACU(mark) {
 function readAgentConversation_ACU(chat) {
     const messages = Array.isArray(chat) ? chat : getChatArray_ACU();
     let collected = [];
-    let mark = null;
     let updatedAt = 0;
     for (let index = 0; index < messages.length; index += 1) {
         const message = messages[index];
@@ -116157,8 +118662,6 @@ function readAgentConversation_ACU(chat) {
         const record = validateAgentConversationFloorRecord_ACU(raw);
         if (record) {
             collected = [...collected, ...record.segment];
-            if (record.compaction && (!mark || record.compaction.compactedThroughId > mark.compactedThroughId))
-                mark = record.compaction;
             updatedAt = Math.max(updatedAt, record.updatedAt);
             continue;
         }
@@ -116169,6 +118672,7 @@ function readAgentConversation_ACU(chat) {
             updatedAt = Math.max(updatedAt, legacy.updatedAt);
         }
     }
+    const mark = readActiveAgentConversationCompactionMark_ACU(messages);
     if (!collected.length && !mark)
         return buildEmptyAgentConversation_ACU();
     let projected = collected;
@@ -116447,12 +118951,25 @@ function buildEmptyAgentModuleSnapshot_ACU() {
         schemaVersion: AGENT_MODULE_SCHEMA_VERSION_ACU,
         settledThroughIndex: -1,
         updatedAt: 0,
-        revisions: { hooks: 0, infoGap: 0, constraints: 0, storyArc: 0 },
+        revisions: { hooks: 0, infoGap: 0, constraints: 0, storyArc: 0, chronology: 0 },
         hooks: [],
         infoGap: [],
         constraints: [],
         storyArc: [],
+        chronology: [],
     };
+}
+/** 证据楼层列表：只接受非负整数，去重后升序。是否越过结算水位由事务层校验。 */
+function normalizeEvidenceIndexes_ACU(value) {
+    if (!Array.isArray(value))
+        return null;
+    const indexes = [];
+    for (const item of value) {
+        if (typeof item !== 'number' || !Number.isInteger(item) || item < 0)
+            return null;
+        indexes.push(item);
+    }
+    return [...new Set(indexes)].sort((left, right) => left - right);
 }
 /** 阶段编号列表：只接受正整数，去重后升序。乱序或重复是模型回写进度时的常见噪音。 */
 function normalizeStageNumbers_ACU(value) {
@@ -116508,12 +119025,53 @@ function validateInfoGapEntry_ACU(raw) {
         retiredReason: readText_ACU$1(raw.retiredReason),
     };
 }
+function readOptionalStoryArcText_ACU(raw, key) {
+    if (!Object.prototype.hasOwnProperty.call(raw, key))
+        return undefined;
+    return typeof raw[key] === 'string' ? raw[key].trim() : null;
+}
+function readOptionalStoryArcTextList_ACU(raw, key) {
+    if (!Object.prototype.hasOwnProperty.call(raw, key))
+        return undefined;
+    const value = raw[key];
+    if (!Array.isArray(value))
+        return null;
+    const normalized = [];
+    for (const item of value) {
+        if (typeof item !== 'string' || !item.trim())
+            return null;
+        normalized.push(item.trim());
+    }
+    return normalized;
+}
+function readOptionalTargetStageRange_ACU(raw) {
+    if (!Object.prototype.hasOwnProperty.call(raw, 'targetStageRange'))
+        return undefined;
+    const value = raw.targetStageRange;
+    if (!isRecord_ACU$4(value))
+        return null;
+    const { min, max } = value;
+    if (!Number.isInteger(min) || min < 1 || !Number.isInteger(max) || max < 1 || min > max)
+        return null;
+    return { min: min, max: max };
+}
 function validateStoryArcEntry_ACU(raw) {
     if (!isRecord_ACU$4(raw))
         return null;
     const id = readText_ACU$1(raw.id).trim();
     const title = readText_ACU$1(raw.title).trim();
     if (!id || !title)
+        return null;
+    const narrativeRole = Object.prototype.hasOwnProperty.call(raw, 'narrativeRole')
+        ? readEnum_ACU(raw.narrativeRole, AGENT_VOLUME_NARRATIVE_ROLES_ACU, '')
+        : undefined;
+    const targetStageRange = readOptionalTargetStageRange_ACU(raw);
+    const targetTimeSpan = readOptionalStoryArcText_ACU(raw, 'targetTimeSpan');
+    const progressCeiling = readOptionalStoryArcText_ACU(raw, 'progressCeiling');
+    const sustainingThreads = readOptionalStoryArcTextList_ACU(raw, 'sustainingThreads');
+    const payoffTargets = readOptionalStoryArcTextList_ACU(raw, 'payoffTargets');
+    const completionRationale = readOptionalStoryArcText_ACU(raw, 'completionRationale');
+    if (narrativeRole === '' || targetStageRange === null || targetTimeSpan === null || progressCeiling === null || sustainingThreads === null || payoffTargets === null || completionRationale === null)
         return null;
     return {
         id,
@@ -116524,8 +119082,56 @@ function validateStoryArcEntry_ACU(raw) {
         withheld: readText_ACU$1(raw.withheld),
         status: readEnum_ACU(raw.status, AGENT_STORY_ARC_STATUSES_ACU, 'planned'),
         stageNumbers: normalizeStageNumbers_ACU(raw.stageNumbers),
+        completionStageNumber: typeof raw.completionStageNumber === 'number' && Number.isInteger(raw.completionStageNumber) && raw.completionStageNumber >= 1 ? raw.completionStageNumber : null,
+        completionState: readText_ACU$1(raw.completionState),
+        continuationRationale: readText_ACU$1(raw.continuationRationale),
+        narrativeRole: narrativeRole,
+        targetStageRange,
+        targetTimeSpan,
+        progressCeiling,
+        sustainingThreads,
+        payoffTargets,
+        completionRationale,
         retired: raw.retired === true,
         retiredReason: readText_ACU$1(raw.retiredReason),
+    };
+}
+/**
+ * 严格校验一条持久化的年代学记录。chronology 是 P3 才引入的字段：旧快照根本没有它，
+ * 因此不存在「宽容旧形态」的需要——字段一旦出现就必须结构完整，坏条目不做静默降级。
+ */
+function validateChronologyEntry_ACU(raw) {
+    if (!isRecord_ACU$4(raw))
+        return null;
+    const id = readText_ACU$1(raw.id).trim();
+    const anchor = readText_ACU$1(raw.anchor).trim();
+    const elapsed = readText_ACU$1(raw.elapsed).trim();
+    const transition = readText_ACU$1(raw.transition).trim();
+    if (!id || !anchor || !elapsed || !transition)
+        return null;
+    const precision = typeof raw.precision === 'string' && AGENT_CHRONOLOGY_PRECISIONS_ACU.includes(raw.precision) ? raw.precision : null;
+    if (!precision)
+        return null;
+    const evidenceIndexes = normalizeEvidenceIndexes_ACU(raw.evidenceIndexes);
+    if (!evidenceIndexes || !evidenceIndexes.length)
+        return null;
+    const updatedIndex = readIndex_ACU(raw.updatedIndex);
+    if (updatedIndex < 0)
+        return null;
+    const retired = raw.retired === true;
+    const retiredReason = readText_ACU$1(raw.retiredReason);
+    if (retired && !retiredReason.trim())
+        return null;
+    return {
+        id,
+        anchor,
+        elapsed,
+        precision: precision,
+        transition,
+        evidenceIndexes,
+        updatedIndex,
+        retired,
+        retiredReason,
     };
 }
 function validateConstraintEntry_ACU(raw) {
@@ -116556,6 +119162,18 @@ function validateAgentModuleSnapshot_ACU(raw) {
     // storyArc 晚于前三个模块加入，存量楼层的快照里没有这个键。写成必需会让全部历史快照
     // 被判非法、资料静默回退成空，因此这里按「有则校验、无则空数组」处理。
     const storyArc = Array.isArray(raw.storyArc) ? raw.storyArc : [];
+    const validatedStoryArc = storyArc.map(validateStoryArcEntry_ACU);
+    // 总纲条目不能像普通搜索命中一样被悄悄过滤；任一结构损坏都应让读取端回退上一份完整快照。
+    if (validatedStoryArc.some(entry => entry === null))
+        return null;
+    // chronology 同样后于早期快照加入：缺字段兼容为空账本；但字段一旦存在就必须整体合法——
+    // 时间事实被静默过滤比暂时回退旧快照更危险（后续结算会基于错误的时间线登记新事实）。
+    if (Object.prototype.hasOwnProperty.call(raw, 'chronology') && !Array.isArray(raw.chronology))
+        return null;
+    const chronology = Array.isArray(raw.chronology) ? raw.chronology : [];
+    const validatedChronology = chronology.map(validateChronologyEntry_ACU);
+    if (validatedChronology.some(entry => entry === null))
+        return null;
     return {
         schemaVersion: AGENT_MODULE_SCHEMA_VERSION_ACU,
         settledThroughIndex,
@@ -116565,33 +119183,111 @@ function validateAgentModuleSnapshot_ACU(raw) {
             infoGap: Math.max(0, readIndex_ACU(raw.revisions.infoGap)),
             constraints: Math.max(0, readIndex_ACU(raw.revisions.constraints)),
             storyArc: Math.max(0, readIndex_ACU(raw.revisions.storyArc)),
+            chronology: Math.max(0, readIndex_ACU(raw.revisions.chronology)),
         },
         hooks: raw.hooks.flatMap(item => { const entry = validateHookEntry_ACU(item); return entry ? [entry] : []; }),
         infoGap: raw.infoGap.flatMap(item => { const entry = validateInfoGapEntry_ACU(item); return entry ? [entry] : []; }),
         constraints: raw.constraints.flatMap(item => { const entry = validateConstraintEntry_ACU(item); return entry ? [entry] : []; }),
-        storyArc: storyArc.flatMap(item => { const entry = validateStoryArcEntry_ACU(item); return entry ? [entry] : []; }),
+        storyArc: validatedStoryArc,
+        chronology: validatedChronology,
     };
 }
 /**
+ * 宽容解析一份损坏的快照：丢掉单条非法记录、修正非法水位，尽量保住其余数据。
+ * 只在严格路径全程无命中时作为兜底使用——静默回退成空快照会让用户误以为数据从未写入。
+ */
+function salvageAgentModuleSnapshot_ACU(raw) {
+    if (!isRecord_ACU$4(raw))
+        return null;
+    const problems = [];
+    if (raw.schemaVersion !== AGENT_MODULE_SCHEMA_VERSION_ACU)
+        problems.push(`schemaVersion=${String(raw.schemaVersion)} 与当前 ${AGENT_MODULE_SCHEMA_VERSION_ACU} 不一致`);
+    const revisions = isRecord_ACU$4(raw.revisions) ? raw.revisions : {};
+    const pick = (list, validate, label) => {
+        if (!Array.isArray(list)) {
+            if (list !== undefined)
+                problems.push(`${label} 不是数组`);
+            return [];
+        }
+        const kept = [];
+        list.forEach((item, index) => { const entry = validate(item); if (entry)
+            kept.push(entry);
+        else
+            problems.push(`${label}[${index}] 结构非法，已丢弃`); });
+        return kept;
+    };
+    const settledThroughIndex = readIndex_ACU(raw.settledThroughIndex);
+    if (settledThroughIndex < 0)
+        problems.push(`settledThroughIndex=${String(raw.settledThroughIndex)} 非法，按 0 处理`);
+    const snapshot = {
+        schemaVersion: AGENT_MODULE_SCHEMA_VERSION_ACU,
+        settledThroughIndex: Math.max(0, settledThroughIndex),
+        updatedAt: typeof raw.updatedAt === 'number' && raw.updatedAt >= 0 ? raw.updatedAt : 0,
+        revisions: {
+            hooks: Math.max(0, readIndex_ACU(revisions.hooks)),
+            infoGap: Math.max(0, readIndex_ACU(revisions.infoGap)),
+            constraints: Math.max(0, readIndex_ACU(revisions.constraints)),
+            storyArc: Math.max(0, readIndex_ACU(revisions.storyArc)),
+            chronology: Math.max(0, readIndex_ACU(revisions.chronology)),
+        },
+        hooks: pick(raw.hooks, validateHookEntry_ACU, 'hooks'),
+        infoGap: pick(raw.infoGap, validateInfoGapEntry_ACU, 'infoGap'),
+        constraints: pick(raw.constraints, validateConstraintEntry_ACU, 'constraints'),
+        storyArc: pick(raw.storyArc, validateStoryArcEntry_ACU, 'storyArc'),
+        chronology: pick(raw.chronology, validateChronologyEntry_ACU, 'chronology'),
+    };
+    return { snapshot, problems };
+}
+let lastReadDiagnostics_ACU = { candidates: [], adoptedIndex: null, salvaged: false };
+/** 最近一次 readAgentModuleSnapshot_ACU 的诊断信息，供面板解释“为什么资料是空的/是旧的”。 */
+function readAgentModuleSnapshotDiagnostics_ACU() {
+    return lastReadDiagnostics_ACU;
+}
+/**
  * 读取当前生效的资料快照。
+ * 严格路径：从尾向前找第一个完全合法的快照。全程无命中但存在损坏快照时，不再静默返回空，
+ * 而是对最近一份做宽容抢救（丢单条坏记录）并记录诊断——数据消失必须可解释。
  * @param chat 聊天数组，缺省取当前聊天
  * @returns 最近的合法快照；全程无命中时返回 settledThroughIndex = -1 的空快照
  */
 function readAgentModuleSnapshot_ACU(chat) {
     const messages = Array.isArray(chat) ? chat : getChatArray_ACU();
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const highestIndex = messages.length - 1;
+    const clamp = (snapshot) => (
+    // 删楼后残留快照记录的水位可能指向已不存在的楼层，必须钳制，否则未结算区间会算成负数。
+    snapshot.settledThroughIndex > highestIndex ? { ...snapshot, settledThroughIndex: highestIndex } : snapshot);
+    const diagnostics = { candidates: [], adoptedIndex: null, salvaged: false };
+    let firstBroken = null;
+    for (let index = highestIndex; index >= 0; index -= 1) {
         const message = messages[index];
         if (!message || typeof message !== 'object')
             continue;
         if (!Object.prototype.hasOwnProperty.call(message, AGENT_MODULE_FIELD_ACU))
             continue;
-        const snapshot = validateAgentModuleSnapshot_ACU(message[AGENT_MODULE_FIELD_ACU]);
-        if (!snapshot)
-            continue;
-        // 删楼后残留快照记录的水位可能指向已不存在的楼层，必须钳制，否则未结算区间会算成负数。
-        const highestIndex = messages.length - 1;
-        return snapshot.settledThroughIndex > highestIndex ? { ...snapshot, settledThroughIndex: highestIndex } : snapshot;
+        const raw = message[AGENT_MODULE_FIELD_ACU];
+        const snapshot = validateAgentModuleSnapshot_ACU(raw);
+        if (snapshot) {
+            diagnostics.candidates.push({ index, valid: true, problems: [] });
+            diagnostics.adoptedIndex = index;
+            lastReadDiagnostics_ACU = diagnostics;
+            return clamp(snapshot);
+        }
+        const salvaged = salvageAgentModuleSnapshot_ACU(raw);
+        diagnostics.candidates.push({ index, valid: false, problems: salvaged?.problems ?? ['快照不是对象'] });
+        if (!firstBroken)
+            firstBroken = { index, raw };
     }
+    if (firstBroken) {
+        const salvaged = salvageAgentModuleSnapshot_ACU(firstBroken.raw);
+        if (salvaged) {
+            diagnostics.adoptedIndex = firstBroken.index;
+            diagnostics.salvaged = true;
+            lastReadDiagnostics_ACU = diagnostics;
+            console.warn(`[SP·数据库][续写资料] 楼层 ${firstBroken.index} 的资料快照未通过严格校验，已按宽容模式读取：${salvaged.problems.join('；')}`);
+            return clamp(salvaged.snapshot);
+        }
+    }
+    lastReadDiagnostics_ACU = diagnostics;
     return buildEmptyAgentModuleSnapshot_ACU();
 }
 /**
@@ -116659,16 +119355,18 @@ async function replaceAgentModuleSnapshotByUser_ACU(raw, chat) {
             infoGap: current.revisions.infoGap + 1,
             constraints: current.revisions.constraints + 1,
             storyArc: current.revisions.storyArc + 1,
+            chronology: current.revisions.chronology + 1,
         },
     };
     const validated = validateAgentModuleSnapshot_ACU(merged);
     if (!validated)
-        rejectSnapshotEdit_ACU('资料快照结构非法：hooks / infoGap / constraints 必须是数组');
+        rejectSnapshotEdit_ACU('资料快照结构非法：hooks / infoGap / constraints 必须是数组；storyArc / chronology 一旦提供必须整体结构合法（chronology 每条需要非空 id/anchor/elapsed/transition、合法 precision、非空非负整数 evidenceIndexes 与非负 updatedIndex，retire 需给理由）');
     const checks = [
         ['伏笔账本 hooks', merged.hooks, validated.hooks],
         ['信息差 infoGap', merged.infoGap, validated.infoGap],
         ['长期约束 constraints', merged.constraints, validated.constraints],
         ['故事总纲 storyArc', merged.storyArc, validated.storyArc],
+        ['故事年代学账本 chronology', merged.chronology, validated.chronology],
     ];
     for (const [label, input, accepted] of checks) {
         const inputLength = Array.isArray(input) ? input.length : 0;
@@ -116771,9 +119469,18 @@ function renderStoryArcEntry_ACU(entry) {
     const head = entry.scope === 'story' ? '全书方向' : '卷台阶';
     return [
         `- [${entry.id}] ${head}「${entry.title}」状态=${entry.status}${entry.stageNumbers.length ? ` 已承载阶段=${entry.stageNumbers.join('、')}` : ' 尚未由任何阶段承载'}${entry.retired ? ' 已废止' : ''}`,
+        entry.narrativeRole ? `  结构职责：${entry.narrativeRole}` : '',
+        entry.targetStageRange ? `  阶段容量：${entry.targetStageRange.min}–${entry.targetStageRange.max} 个阶段` : '',
+        entry.targetTimeSpan ? `  故事时间目标：${entry.targetTimeSpan}` : '',
         entry.direction ? `  方向：${entry.direction}` : '',
         entry.escalation ? `  升级目标：${entry.escalation}` : '',
+        entry.progressCeiling ? `  主线进度上限：${entry.progressCeiling}` : '',
+        entry.sustainingThreads?.length ? `  持续经营线：${entry.sustainingThreads.join('；')}` : '',
+        entry.payoffTargets?.length ? `  兑现目标：${entry.payoffTargets.join('；')}` : '',
         entry.withheld ? `  禁止提前翻的底牌：${entry.withheld}` : '',
+        entry.completionStageNumber === null ? '' : `  完成依据：第 ${entry.completionStageNumber} 阶段；卷末状态=${entry.completionState || '（未登记）'}`,
+        entry.completionRationale ? `  容量偏离说明：${entry.completionRationale}` : '',
+        entry.continuationRationale ? `  续卷依据：${entry.continuationRationale}` : '',
         entry.retired && entry.retiredReason ? `  废止原因：${entry.retiredReason}` : '',
     ].filter(Boolean).join('\n');
 }
@@ -116785,6 +119492,12 @@ function renderStoryArcEntry_ACU(entry) {
  */
 function hasActiveStoryArc_ACU(snapshot) {
     return snapshot.storyArc.some(entry => !entry.retired);
+}
+/** 判断是否存在可承载下一份阶段大纲的活动卷。全书方向本身不是阶段规划目标。 */
+function hasActiveStoryArcVolume_ACU(snapshot) {
+    return snapshot.storyArc.some(entry => (entry.scope === 'volume'
+        && !entry.retired
+        && entry.status === 'active'));
 }
 /**
  * 找出已完成但没有登记进任何活跃 volume 条目 stageNumbers 的阶段编号。
@@ -116804,17 +119517,52 @@ function findUnregisteredStageNumbers_ACU(snapshot, completedStageNumbers) {
     return [...new Set(completedStageNumbers)].filter(stageNumber => !registered.has(stageNumber)).sort((left, right) => left - right);
 }
 /**
+ * 渲染活动卷给阶段规划与审查使用的集中上下文。
+ * 阶段承载与卷收束是两层事实：stageNumbers 是卷已承载的阶段，completedStageNumbers 才是正文已完成的阶段。
+ */
+function renderAgentActiveVolumePlanningContext_ACU(snapshot, completedStageNumbers) {
+    const volumes = snapshot.storyArc.filter(entry => entry.scope === 'volume' && !entry.retired);
+    const active = volumes.filter(entry => entry.status === 'active');
+    const completed = new Set(completedStageNumbers);
+    if (!volumes.length)
+        return '【活动卷规划上下文】\n当前没有卷台阶；必须由 arc-architect 建立总纲后才能创建阶段大纲。';
+    if (!active.length) {
+        return '【活动卷规划上下文】\n所有既有卷均已完成。用户继续写作时，arc-architect 必须先根据最后一卷的结果、代价、关系变化或未解决问题在末尾追加一个 active 卷，再由 outline-architect 创建下一阶段大纲。';
+    }
+    if (active.length > 1)
+        return `【活动卷规划上下文】\n总纲状态无效：当前存在 ${active.length} 个 active 卷（${active.map(entry => entry.id).join('、')}），必须先由 arc-architect 修复。`;
+    const volume = active[0];
+    const completedCarriers = volume.stageNumbers.filter(stageNumber => completed.has(stageNumber));
+    const pendingCarriers = volume.stageNumbers.filter(stageNumber => !completed.has(stageNumber));
+    return [
+        '【活动卷规划上下文】',
+        `当前 active 卷：[${volume.id}]「${volume.title}」`,
+        `卷级结构职责：${volume.narrativeRole ?? '旧快照未标注'}`,
+        `目标阶段容量：${volume.targetStageRange ? `${volume.targetStageRange.min}–${volume.targetStageRange.max} 个阶段` : '旧快照未标注'}`,
+        `目标故事时间：${volume.targetTimeSpan || '旧快照未标注'}`,
+        `已承载阶段：${volume.stageNumbers.length ? volume.stageNumbers.join('、') : '（尚无）'}`,
+        `真实完成进度：${completedCarriers.length ? `已完成阶段 ${completedCarriers.join('、')}` : '尚未有已完成阶段'}${pendingCarriers.length ? `；已登记但尚未完成阶段 ${pendingCarriers.join('、')}` : ''}`,
+        `本阶段只承担本卷尚未完成的一段：${volume.direction}`,
+        `卷级收束条件：${volume.escalation}`,
+        `主线进度上限：${volume.progressCeiling || '旧快照未标注'}`,
+        `持续经营线：${volume.sustainingThreads?.length ? volume.sustainingThreads.join('；') : '旧快照未标注'}`,
+        `兑现目标：${volume.payoffTargets?.length ? volume.payoffTargets.join('；') : '旧快照未标注'}`,
+        `禁止提前释放：${volume.withheld || '（无额外底牌）'}`,
+    ].join('\n');
+}
+/**
  * 渲染故事总纲的热上下文。
  * @param snapshot 当前快照
+ * @param completedStageNumbers 已真实完成的阶段编号
  * @returns 自然语言文本；总纲为空时明确指出必须先派工 arc-architect
  */
-function renderAgentStoryArc_ACU(snapshot) {
+function renderAgentStoryArc_ACU(snapshot, completedStageNumbers = []) {
     const head = `当前修订号=${snapshot.revisions.storyArc}`;
     const active = snapshot.storyArc.filter(entry => !entry.retired);
     if (!active.length)
         return `${head}\n当前还没有故事总纲。总纲缺失时无法判断本阶段该走到哪一步，必须先派工 arc-architect 立总纲。`;
     const sorted = [...active].sort(compareStoryArc_ACU);
-    return truncateAgentBlock_ACU(`${head}\n${sorted.map(renderStoryArcEntry_ACU).join('\n')}`);
+    return truncateAgentBlock_ACU(`${head}\n${sorted.map(renderStoryArcEntry_ACU).join('\n')}\n\n${renderAgentActiveVolumePlanningContext_ACU(snapshot, completedStageNumbers)}`);
 }
 function renderHookFull_ACU(hook) {
     return [
@@ -116880,8 +119628,48 @@ function renderAgentConstraintsByIds_ACU(snapshot, ids) {
 /**
  * 按 ID 精读故事总纲（含已废止条目）；不传 ID 则输出全部活跃条目，支撑 `$STORY_ARC` / `$STORY_ARC:ID1,ID2`。
  */
-function renderAgentStoryArcByIds_ACU(snapshot, ids) {
-    return renderModuleEntries_ACU({ label: '故事总纲', revision: snapshot.revisions.storyArc, entries: snapshot.storyArc, render: renderStoryArcEntry_ACU }, ids);
+function renderAgentStoryArcByIds_ACU(snapshot, ids, completedStageNumbers = []) {
+    const entries = renderModuleEntries_ACU({ label: '故事总纲', revision: snapshot.revisions.storyArc, entries: snapshot.storyArc, render: renderStoryArcEntry_ACU }, ids);
+    return ids?.length ? entries : `${entries}\n\n${renderAgentActiveVolumePlanningContext_ACU(snapshot, completedStageNumbers)}`;
+}
+const CHRONOLOGY_PRECISION_LABELS_ACU = { exact: '精确', approximate: '近似', unknown: '未知' };
+function renderChronologyEntry_ACU(entry) {
+    return [
+        `- [${entry.id}] 时间锚：${entry.anchor}（精度=${CHRONOLOGY_PRECISION_LABELS_ACU[entry.precision] ?? entry.precision}${entry.retired ? '，已作废' : ''}）`,
+        `  累计经过：${entry.elapsed}`,
+        `  时间转换：${entry.transition}`,
+        `  证据楼层：${entry.evidenceIndexes.join('、')}（结算楼层=${entry.updatedIndex}）`,
+        entry.retired && entry.retiredReason ? `  作废原因：${entry.retiredReason}` : '',
+    ].filter(Boolean).join('\n');
+}
+/** 年代学记录按结算次序展示：updatedIndex 相同（同一次结算多条转换）时保持登记顺序。 */
+function sortChronology_ACU(entries) {
+    return [...entries].sort((left, right) => left.updatedIndex - right.updatedIndex);
+}
+/**
+ * 渲染故事年代学账本的热上下文。
+ * @param snapshot 当前快照
+ * @returns 自然语言文本；空账本时明确说明时间事实只能由维护代理依据真实正文结算
+ */
+function renderAgentChronology_ACU(snapshot) {
+    const head = `当前修订号=${snapshot.revisions.chronology}`;
+    const active = sortChronology_ACU(snapshot.chronology.filter(entry => !entry.retired));
+    const retiredCount = snapshot.chronology.length - active.length;
+    const retiredNote = retiredCount ? `\n另有 ${retiredCount} 条已作废记录未列出，可用 search 命中后按 ID 精读。` : '';
+    if (!active.length)
+        return `${head}\n当前没有已结算的故事时间记录。时间事实只能由结算维护代理依据真实正文登记；大纲里的时间字段是计划，不是事实。${retiredNote}`;
+    const latest = active[active.length - 1];
+    return truncateAgentBlock_ACU([
+        head,
+        `当前时间锚：${latest.anchor}（精度=${CHRONOLOGY_PRECISION_LABELS_ACU[latest.precision] ?? latest.precision}）；自故事起点累计经过：${latest.elapsed}。`,
+        ...active.map(renderChronologyEntry_ACU),
+    ].join('\n') + retiredNote);
+}
+/**
+ * 按 ID 精读故事年代学账本（含已作废条目）；不传 ID 则输出全部活跃条目，支撑 `$CHRONOLOGY` / `$CHRONOLOGY:ID1,ID2`。
+ */
+function renderAgentChronologyByIds_ACU(snapshot, ids) {
+    return renderModuleEntries_ACU({ label: '故事年代学账本', revision: snapshot.revisions.chronology, entries: sortChronology_ACU(snapshot.chronology), render: renderChronologyEntry_ACU }, ids);
 }
 
 /**
@@ -116892,7 +119680,18 @@ function renderAgentStoryArcByIds_ACU(snapshot, ids) {
  * 键为聊天身份；恢复时按任务与大纲游标严格校验，任何不匹配都作废缓存。
  * 页面重载会清空缓存——此时资料快照已持久化，从头重跑是安全降级而非错误。
  */
+/** 发送前终审在一次主 Agent 运行内的恢复状态。终审反馈正文同时追加到会话，供跨重启读取。 */
+const AGENT_FINAL_REVIEW_STATUSES_ACU = ['not_started', 'reviewing', 'feedback_ready', 'consumed'];
 const statesByChat_ACU = new Map();
+function cloneFinalReviewState_ACU(value) {
+    const status = value?.status;
+    return {
+        status: AGENT_FINAL_REVIEW_STATUSES_ACU.includes(status ?? '') ? status : 'not_started',
+        candidateFingerprint: typeof value?.candidateFingerprint === 'string' ? value.candidateFingerprint : '',
+        candidateSummary: typeof value?.candidateSummary === 'string' ? value.candidateSummary : '',
+        feedback: typeof value?.feedback === 'string' ? value.feedback : '',
+    };
+}
 /**
  * 保存运行状态。同一聊天只保留最新一份（租约保证同聊天无并发循环）。
  * @param chatIdentity 聊天身份
@@ -116910,6 +119709,7 @@ function saveAgentRunState_ACU(chatIdentity, state) {
             perAgent: { ...state.ledger.perAgent },
             outcomes: state.ledger.outcomes.map(outcome => ({ ...outcome })),
         },
+        finalReview: cloneFinalReviewState_ACU(state.finalReview),
     });
 }
 /**
@@ -116937,6 +119737,7 @@ function readAgentRunState_ACU(chatIdentity, taskId, cursorKey) {
             perAgent: { ...cached.ledger.perAgent },
             outcomes: cached.ledger.outcomes.map(outcome => ({ ...outcome })),
         },
+        finalReview: cloneFinalReviewState_ACU(cached.finalReview),
     };
 }
 /**
@@ -117142,12 +119943,29 @@ function rejectOutlineEdit_ACU(message, details) {
  */
 function applyOutlineEditOps_ACU(outline, edits, allocateId) {
     const draft = cloneOutline_ACU(outline);
+    const applyTurnMetadata = (turn, edit) => {
+        if (edit.pacing !== undefined)
+            turn.pacing = edit.pacing;
+        if (edit.function !== undefined)
+            turn.function = edit.function;
+        if (edit.mainlineDelta !== undefined)
+            turn.mainlineDelta = edit.mainlineDelta;
+        if (edit.timeAdvance !== undefined)
+            turn.timeAdvance = edit.timeAdvance;
+        if (edit.timeAnchor === null) {
+            delete turn.timeAnchor;
+        }
+        else if (edit.timeAnchor !== undefined) {
+            turn.timeAnchor = edit.timeAnchor;
+        }
+    };
     for (const edit of edits) {
         if (edit.op === 'set_turn_goal') {
             const turn = draft.nodes.flatMap(node => node.turns).find(item => item.id === edit.turnId);
             if (!turn)
                 rejectOutlineEdit_ACU(`set_turn_goal 找不到轮次：${edit.turnId}`, { turnId: edit.turnId });
             turn.goal = edit.goal;
+            applyTurnMetadata(turn, edit);
             continue;
         }
         if (edit.op === 'set_node_goal') {
@@ -117161,9 +119979,17 @@ function applyOutlineEditOps_ACU(outline, edits, allocateId) {
             const node = draft.nodes.find(item => item.id === edit.nodeId);
             if (!node)
                 rejectOutlineEdit_ACU(`insert_turn 找不到节点：${edit.nodeId}`, { nodeId: edit.nodeId });
-            // 未指定节奏时按 setup 落值：插入轮多半是为了给挤在一起的剧情腾地方，
-            // 默认落在低压侧才不会让 edit_outline 变成悄悄推高压力的通道。
-            const newTurn = { id: allocateId('turn'), goal: edit.goal, pacing: edit.pacing ?? 'setup' };
+            // 旧编辑协议只提供 goal/pacing；新增语义字段使用保守默认，避免构造缺字段的新 revision。
+            // UI 会展示这些默认值并提醒用户确认；严格校验仍负责拒绝与 pacing 不相容的组合。
+            const newTurn = {
+                id: allocateId('turn'),
+                goal: edit.goal,
+                pacing: edit.pacing ?? 'setup',
+                function: edit.function ?? 'transition',
+                mainlineDelta: edit.mainlineDelta ?? 'hold',
+                timeAdvance: edit.timeAdvance ?? 'continuous',
+                ...(edit.timeAnchor ? { timeAnchor: edit.timeAnchor } : {}),
+            };
             if (edit.afterTurnId === null) {
                 node.turns.unshift(newTurn);
                 continue;
@@ -117409,7 +120235,7 @@ class ContinuationOrchestrator_ACU {
             const controller = new AbortController();
             abortControllersByChat_ACU.set(chatIdentity, controller);
             try {
-                const preparedTurn = await this.dependencies.executionEngine.prepareCurrentTurnInstruction(() => this.isLeaseCurrent_ACU(chatIdentity, lease), undefined, async (instruction) => (await this.applyOutlineOpWithinLease_ACU(chatIdentity, lease, instruction, 'running')).opResult, async (edits) => this.applyOutlineEditsWithinLease_ACU(chatIdentity, lease, edits, 'running'), controller.signal);
+                const preparedTurn = await this.dependencies.executionEngine.prepareCurrentTurnInstruction(() => this.isLeaseCurrent_ACU(chatIdentity, lease), undefined, async (instruction) => (await this.applyOutlineOpWithinLease_ACU(chatIdentity, lease, instruction, 'running')).opResult, controller.signal);
                 return { ...taskResult_ACU(this.dependencies.store.readPersisted() ?? started), preparedTurn };
             }
             catch (error) {
@@ -117623,7 +120449,12 @@ class ContinuationOrchestrator_ACU {
                 const stage = getActiveStage_ACU(task);
                 const isLastTurn = stage.completedTurns + 1 === getActiveRevision_ACU(stage).outline.totalTurns;
                 const progressed = advanceConfirmedTurn_ACU(task, now, this.timeline_ACU.bind(this), messageIndex);
-                const completedTurn = { ...progressed, pendingHostTurn: null };
+                const completedTurn = {
+                    ...progressed,
+                    pendingHostTurn: null,
+                    lastError: null,
+                    stopReason: null,
+                };
                 if (!isLastTurn) {
                     // 轮边界统一落 paused：自动续写从这个可判定状态出发，页面重载后也能手动恢复。
                     advanced = { ...envelope, activeTask: { ...completedTurn, status: 'paused', updatedAt: now } };
@@ -117871,10 +120702,10 @@ class ContinuationOrchestrator_ACU {
         fail_ACU$1('CONTINUATION_TASK_STATE_INVALID', '当前阶段状态不允许大纲操作');
     }
     /**
-     * 大纲句级编辑事务：主 Agent 通过工具直接增删改未完成部分的句子，不发大纲 AI 调用。
+     * 大纲句级编辑事务：供 UI 等可信租约内入口直接增删改未完成部分的句子。
      * 结构一致性由运行时收尾（重算 suggestedTurns/totalTurns），完成前缀与当前轮由校验强制保护，
      * 编辑结果生成下一个 revision 并立即冻结。校验失败抛 CONTINUATION_AGENT_WRITE_REJECTED，
-     * 由主循环拒绝回灌而不是中止本轮。
+     * 主 Agent 文本协议不调用本事务；大纲问题由它委派 outline-architect 处理。
      */
     async applyOutlineEditsWithinLease_ACU(chatIdentity, _lease, edits, endStatus) {
         const envelope = this.requireEnvelope_ACU(this.dependencies.store.readPersisted());
@@ -118304,11 +121135,10 @@ class StageExecutionEngine_ACU {
      * @param isLeaseCurrent 租约有效性检查
      * @param existingAttempt 正文重试轮的既有身份；提供时禁止大纲操作且游标必须原样
      * @param applyOutline 大纲操作回调，由编排器在租约内执行
-     * @param applyOutlineEdits 大纲句级编辑回调，由编排器在租约内执行
      * @param signal 中断信号；用户停止或插话时用于真正取消在途的内部 AI 请求
      * @returns 最终身份与写作指导
      */
-    async prepareCurrentTurnInstruction(isLeaseCurrent = () => true, existingAttempt, applyOutline, applyOutlineEdits, signal) {
+    async prepareCurrentTurnInstruction(isLeaseCurrent = () => true, existingAttempt, applyOutline, signal) {
         const chatIdentity = this.dependencies.getChatIdentity();
         const initial = currentAgentContext_ACU(this.dependencies.readEnvelope());
         const taskId = initial.task.taskId;
@@ -118343,7 +121173,6 @@ class StageExecutionEngine_ACU {
             },
             isInternalRequestCurrent: isCurrent,
             applyOutline: existingAttempt ? undefined : applyOutline,
-            applyOutlineEdits: existingAttempt ? undefined : applyOutlineEdits,
             signal,
         });
         // 循环结束后按最终游标铸造身份：finalize 已由循环保证游标存在，这里的严格快照是最后防线。
@@ -118378,6 +121207,15 @@ class StageExecutionEngine_ACU {
  * 因此定义里没有 allowedReads/allowedWrites；写入范围由职责（kind）固定推得。
  * 子代理的完整系统提示词不暴露给主 Agent，避免主 Agent 被无关细节淹没。
  */
+/**
+ * 终审只允许由 finalize 前的受控运行时入口调用，绝不能出现在主 Agent 的 delegate 目录中。
+ */
+const AGENT_FINAL_REVIEWER_DEFINITION_ACU = {
+    name: AGENT_FINAL_REVIEWER_NAME_ACU,
+    kind: 'review',
+    description: '发送前最终审查：核对人物情绪、世界书证据和逻辑边界，只读不写',
+    promptKey: 'finalReviewer',
+};
 const AGENT_SUBAGENT_DEFINITIONS_ACU = [
     {
         name: 'arc-architect',
@@ -118389,22 +121227,22 @@ const AGENT_SUBAGENT_DEFINITIONS_ACU = [
     {
         name: 'hook-cognition-maintainer',
         kind: 'maintain',
-        description: '结算已经发生的正文：维护伏笔账本与认知信息差时间线，只登记真实历史里已实际发生的变化',
-        triggers: ['存在尚未结算的真实历史', '新正文出现异常线索、秘密、反常细节', '已有伏笔被再次触碰', '某个角色的知晓状态发生变化'],
+        description: '结算已经发生的正文：维护伏笔账本、认知信息差时间线与故事年代学账本，只登记真实历史里已实际发生的变化',
+        triggers: ['存在尚未结算的真实历史', '新正文出现异常线索、秘密、反常细节', '已有伏笔被再次触碰', '某个角色的知晓状态发生变化', '正文实际发生了跨夜、数日或更久的时间流逝'],
         promptKey: 'maintainer',
     },
     {
         name: 'mainline-planner',
         kind: 'plan',
-        description: '策划本轮主线推进：给出冲突阶梯、主角代理权与实质价值变动的自然语言建议，不写正文、不改资料',
-        triggers: ['每轮都需要主线推进建议', '轮次目标涉及主线冲突升级或价值转移'],
+        description: '按本轮 pacing 策划场景：pressure/turn 给冲突阶梯、主角选择与实质价值变动；setup/cooldown 给具体生活动作、人物互动与非危机变化，允许主线 hold。输出叙事功能、主线增量与时间关系建议，不写正文、不改资料',
+        triggers: ['每轮都需要本轮场景策划建议（派工时写明 pacing）', 'pressure/turn 轮需要冲突升级或价值转移方案', 'setup/cooldown 轮需要具体的日常、恢复或经营内容而非空泛判词'],
         promptKey: 'mainlinePlanner',
     },
     {
         name: 'beat-planner',
         kind: 'plan',
-        description: '策划本轮伏笔操作与情绪节拍：给出埋设、强化、误导、回收的具体手法与情绪微弧建议，不写正文、不改资料',
-        triggers: ['本轮计划操作伏笔', '本轮需要信息差的设用揭新循环', '情绪节拍需要承接上轮残留'],
+        description: '策划本轮伏笔操作与情绪节拍：给出埋设、强化、误导、回收的具体手法、信息差走到哪一步与收尾方式建议；低压轮允许无操作、安静闭合，不写正文、不改资料',
+        triggers: ['本轮计划操作伏笔', '本轮信息差需要设置、使用或揭示（揭示后允许结束，不强制补新谜团）', '情绪节拍需要承接上轮残留'],
         promptKey: 'beatPlanner',
     },
     {
@@ -118418,7 +121256,7 @@ const AGENT_SUBAGENT_DEFINITIONS_ACU = [
 const AGENT_MODULE_DEFINITIONS_ACU = [
     {
         token: '$STORY_ARC',
-        description: '故事总纲：全书方向（唯一一条）与卷级台阶。每条写明本层推进方向、要抬到的高度与收束点、禁止提前翻的底牌，以及已由哪些阶段承载',
+        description: '故事总纲：全书方向（唯一一条）与卷级台阶。卷台阶包含结构职责、阶段容量、故事时间、主线进度上限、持续经营线、兑现目标、收束状态与真实阶段进度',
         triggers: ['排新阶段大纲前确认本阶段该落在哪一级台阶上', '判断某张底牌本阶段能不能翻', '一个阶段完成后回写进度'],
         writableBy: ['arc-architect'],
     },
@@ -118440,6 +121278,12 @@ const AGENT_MODULE_DEFINITIONS_ACU = [
         triggers: ['本轮动作可能越过既定红线', '需要确认哪些底牌本轮不能翻'],
         writableBy: [],
     },
+    {
+        token: '$CHRONOLOGY',
+        description: '故事年代学账本：已发生正文结算出的故事时间事实——当前相对时间锚、自故事起点累计经过时间、精度（exact/approximate/unknown）、每次时间转换及其正文证据楼层。大纲里的时间字段是计划，不在此账本内',
+        triggers: ['规划或审查跨夜、数日、数周及更久的时间跳跃', '核对伤势恢复、训练/生产周期、旅行耗时、季节天气与关系熟悉度是否与累计时间相容', '最终指导需要给出可靠的相对时间锚'],
+        writableBy: ['hook-cognition-maintainer'],
+    },
 ];
 /** 子代理目录里的类型中文名。 */
 const KIND_DISPLAY_LABELS_ACU = {
@@ -118451,7 +121295,7 @@ const KIND_DISPLAY_LABELS_ACU = {
 /** 按职责固定的写入说明，进子代理目录的「写入」行。 */
 const KIND_WRITE_LABELS_ACU = {
     arc: '$STORY_ARC（职责固定；不碰伏笔、信息差与约束）',
-    maintain: '$HOOKS_LEDGER、$INFO_GAP（职责固定；约束只能提议，由主 Agent 裁决登记）',
+    maintain: '$HOOKS_LEDGER、$INFO_GAP、$CHRONOLOGY（职责固定；约束只能提议，由主 Agent 裁决登记）',
     plan: '无（只返回建议）',
     review: '无（只返回判词）',
 };
@@ -118512,6 +121356,7 @@ function renderAgentReadCatalog_ACU() {
         '- $HOOKS_LEDGER / $HOOKS_LEDGER:ID,ID：伏笔账本全部活跃条目，或按 ID 精读（含已退休条目）。',
         '- $INFO_GAP / $INFO_GAP:ID,ID：认知与信息差时间线全部活跃条目，或按 ID 精读。',
         '- $ACTIVE_CONSTRAINTS / $ACTIVE_CONSTRAINTS:ID,ID：长期约束全部条目，或按 ID 精读。',
+        '- $CHRONOLOGY / $CHRONOLOGY:ID,ID：故事年代学账本（已发生正文结算出的时间锚、累计经过时间与转换证据），或按 ID 精读（含已作废条目）。',
         '- $WORLDBOOK:书名:uid,uid：已启用世界书条目全文。地址从世界书目录复制，条目行尾标注了 token 数便于估算预算。',
         '- $STORY_CATALOG / $STORY_OVERVIEW / $STORY_TAIL / $OUTLINE_WINDOW / $HISTORY_UNSETTLED：楼层索引、事件概览、尾部正文全文、完整大纲窗口、未结算正文全量。',
         '- 早期剧情的详细纪要在纪要表里：$TABLE:纪要表:起始行-结束行 按行区间精读（行号见事件概览与表格目录）。',
@@ -118526,6 +121371,113 @@ function renderAgentReadCatalog_ACU() {
  */
 function findAgentSubagentDefinition_ACU(name) {
     return AGENT_SUBAGENT_DEFINITIONS_ACU.find(definition => definition.name === name) ?? null;
+}
+
+const fields_ACU = ['effectiveConstraints', 'decisions', 'completedItems', 'pendingItems', 'blockers', 'continuityFacts', 'readKeys', 'recentTurns'];
+function cleanText_ACU(value) {
+    return typeof value === 'string' ? value.trim() : '';
+}
+function cleanList_ACU(value) {
+    return Array.isArray(value) ? [...new Set(value.map(cleanText_ACU).filter(Boolean))] : [];
+}
+function isSummaryState_ACU(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return false;
+    const raw = value;
+    const keys = ['currentGoal', 'effectiveConstraints', 'decisions', 'completedItems', 'pendingItems', 'blockers', 'continuityFacts', 'readKeys', 'recentTurns'];
+    return keys.every(key => Object.prototype.hasOwnProperty.call(raw, key))
+        && Object.keys(raw).every(key => keys.includes(key))
+        && typeof raw.currentGoal === 'string'
+        && keys.slice(1).every(key => Array.isArray(raw[key]) && raw[key].every(item => typeof item === 'string'));
+}
+function parseSemanticSummary_ACU(raw) {
+    try {
+        const parsed = JSON.parse(String(raw ?? '').trim());
+        return isSummaryState_ACU(parsed) ? parsed : null;
+    }
+    catch {
+        return null;
+    }
+}
+/** 构造只产出结构化交接状态的语义 adapter；调用方负责提供已隔离的内部 AI 通道。 */
+function createAgentHandoffSemanticSummaryAdapter_ACU(call) {
+    return {
+        async summarize(input) {
+            const source = JSON.stringify({ previous: input.previous, messages: input.messages });
+            const request = (repair) => [
+                {
+                    role: 'system',
+                    content: '你只负责把输入会话事实压缩成 JSON。不得调用工具、不得计划、不得写小说。输出必须是单个 JSON 对象，字段恰好为 currentGoal、effectiveConstraints、decisions、completedItems、pendingItems、blockers、continuityFacts、readKeys、recentTurns；currentGoal 是字符串，其余字段都是字符串数组。不得编造读取地址或轮次指纹。',
+                },
+                { role: 'user', content: repair ? `上一次输出不符合 JSON 契约。只输出符合契约的 JSON，不要解释。\n来源：${source}` : `来源：${source}` },
+            ];
+            const first = parseSemanticSummary_ACU(await call(request(false)));
+            if (first)
+                return first;
+            const repaired = parseSemanticSummary_ACU(await call(request(true)));
+            if (repaired)
+                return repaired;
+            throw new Error('HANDOFF_SEMANTIC_SUMMARY_INVALID');
+        },
+    };
+}
+function buildDeterministicState_ACU(previous, messages) {
+    const state = previous ? {
+        currentGoal: previous.currentGoal,
+        effectiveConstraints: [...previous.effectiveConstraints], decisions: [...previous.decisions], completedItems: [...previous.completedItems],
+        pendingItems: [...previous.pendingItems], blockers: [...previous.blockers], continuityFacts: [...previous.continuityFacts],
+        readKeys: [...previous.readKeys], recentTurns: [...previous.recentTurns],
+    } : { currentGoal: '', effectiveConstraints: [], decisions: [], completedItems: [], pendingItems: [], blockers: [], continuityFacts: [], readKeys: [], recentTurns: [] };
+    for (const message of messages) {
+        if (message.kind === 'user')
+            state.effectiveConstraints.push(message.text);
+        else if (message.kind === 'agent')
+            state.decisions.push(message.digest || message.text);
+        else if (message.kind === 'tool' || message.kind === 'runtime')
+            state.continuityFacts.push(message.digest || message.text);
+        else if (message.kind === 'turn') {
+            state.currentGoal = message.digest || message.text;
+            state.recentTurns.push(message.turnKey || message.digest || message.text);
+        }
+        if (message.readKey)
+            state.readKeys.push(message.readKey);
+    }
+    for (const field of fields_ACU)
+        state[field] = cleanList_ACU(state[field]).slice(-8);
+    state.currentGoal = cleanText_ACU(state.currentGoal);
+    return state;
+}
+function renderAgentHandoffReport_ACU(state, degradationReason) {
+    const sections = [['当前目标', state.currentGoal ? [state.currentGoal] : []], ['有效约束', state.effectiveConstraints], ['已执行决策', state.decisions], ['已完成', state.completedItems], ['待办', state.pendingItems], ['阻塞', state.blockers], ['连续性事实', state.continuityFacts], ['资料地址', state.readKeys], ['近期轮次', state.recentTurns]];
+    const body = sections.filter(([, items]) => items.length).map(([title, items]) => `【${title}】\n${items.map(item => `- ${item}`).join('\n')}`).join('\n');
+    return `${degradationReason ? `【摘要降级】${degradationReason}\n` : ''}【更早会话交接】\n${body || '没有可保留的早期事项。'}`;
+}
+async function summarizeAgentHandoff_ACU(input) {
+    let state = buildDeterministicState_ACU(input.previous, input.messages);
+    let degraded = !input.semanticAdapter;
+    let degradationReason = degraded ? 'deterministic_adapter' : undefined;
+    if (input.semanticAdapter) {
+        try {
+            const allowedReadKeys = state.readKeys;
+            const proposed = await input.semanticAdapter.summarize({ previous: input.previous, messages: input.messages, allowedReadKeys });
+            state = { ...state, currentGoal: cleanText_ACU(proposed.currentGoal) || state.currentGoal, ...Object.fromEntries(fields_ACU.map(field => [field, field === 'readKeys' || field === 'recentTurns' ? state[field] : cleanList_ACU(proposed[field]).length ? cleanList_ACU(proposed[field]) : state[field]])) };
+        }
+        catch {
+            degraded = true;
+            degradationReason = 'semantic_summary_failed';
+        }
+    }
+    let report = renderAgentHandoffReport_ACU(state, degradationReason);
+    for (const field of [...fields_ACU].reverse()) {
+        while ((await input.countTokens(report)) > input.maxTokens && state[field].length) {
+            state = { ...state, [field]: state[field].slice(1) };
+            report = renderAgentHandoffReport_ACU(state, degradationReason);
+        }
+    }
+    const reportTokens = await input.countTokens(report);
+    if (reportTokens > input.maxTokens)
+        throw new Error('HANDOFF_SUMMARY_BUDGET_EXCEEDED');
+    return { state, report, reportTokens, degraded, ...(degradationReason ? { degradationReason } : {}) };
 }
 
 /**
@@ -118751,6 +121703,118 @@ async function compactAgentConversation_ACU(snapshot, budgetTokens, count = coun
     };
 }
 
+const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
+async function measure_ACU(snapshot, fixed, count) {
+    let total = fixed;
+    for (const message of renderAgentConversationMessages_ACU(snapshot))
+        total += await count(message.content);
+    return total;
+}
+function groups_ACU(messages) {
+    const result = [];
+    for (const message of messages.filter(item => item.kind !== 'handoff')) {
+        const previous = result[result.length - 1];
+        if (previous?.[0]?.turnKey === message.turnKey)
+            previous.push(message);
+        else
+            result.push([message]);
+    }
+    return result;
+}
+async function planAgentHistoryCompaction_ACU(input) {
+    const unchanged = (status, beforeTokens, targetTokens) => ({ status, snapshot: input.snapshot, mark: null, beforeTokens, afterTokens: beforeTokens, targetTokens, droppedMessages: 0, droppedTurns: 0 });
+    const trigger = Math.floor(input.triggerTokens);
+    if (!Number.isFinite(trigger) || trigger <= 0)
+        return unchanged('not_needed', 0, 0);
+    const reserve = clamp(Math.floor(trigger * 0.2), 8000, 24000);
+    const targetTokens = trigger - reserve;
+    const beforeTokens = await measure_ACU(input.snapshot, input.fixedPromptTokens, input.countTokens);
+    if (beforeTokens <= trigger)
+        return unchanged('not_needed', beforeTokens, targetTokens);
+    const grouped = groups_ACU(input.snapshot.messages);
+    if (grouped.length < 2)
+        return unchanged('incompressible', beforeTokens, targetTokens);
+    const maxHandoffTokens = clamp(Math.floor(trigger * 0.08), 2000, 8000);
+    let droppedTurns = 1;
+    let kept = grouped.slice(1).flat();
+    while (droppedTurns < grouped.length - 1) {
+        const candidate = grouped.slice(droppedTurns).flat();
+        const candidateSnapshot = { ...input.snapshot, messages: candidate };
+        if ((await measure_ACU(candidateSnapshot, input.fixedPromptTokens, input.countTokens)) + maxHandoffTokens <= targetTokens) {
+            kept = candidate;
+            break;
+        }
+        droppedTurns += 1;
+        kept = grouped.slice(droppedTurns).flat();
+    }
+    const dropped = grouped.slice(0, droppedTurns).flat();
+    const compactedThroughId = dropped.reduce((max, item) => Math.max(max, item.id), 0);
+    if (compactedThroughId <= (input.activeMark?.compactedThroughId ?? 0))
+        return unchanged('no_progress', beforeTokens, targetTokens);
+    const previous = input.activeMark && 'summaryState' in input.activeMark
+        ? input.activeMark.summaryState
+        : input.activeMark
+            ? { currentGoal: '', effectiveConstraints: [], decisions: [], completedItems: [], pendingItems: [], blockers: [], continuityFacts: [input.activeMark.report], readKeys: [], recentTurns: [] }
+            : null;
+    let summary;
+    try {
+        summary = await summarizeAgentHandoff_ACU({
+            previous,
+            messages: dropped,
+            maxTokens: maxHandoffTokens,
+            countTokens: input.countTokens,
+            ...(input.semanticAdapter ? { semanticAdapter: input.semanticAdapter } : {}),
+        });
+    }
+    catch {
+        return unchanged('summary_failed', beforeTokens, targetTokens);
+    }
+    const at = Date.now();
+    const handoff = {
+        id: compactedThroughId,
+        kind: 'handoff',
+        text: summary.report,
+        digest: `交接报告（浓缩 ${droppedTurns} 个轮次）`,
+        turnKey: '',
+        at,
+    };
+    const candidateSnapshot = { ...input.snapshot, messages: [handoff, ...kept] };
+    const afterTokens = await measure_ACU(candidateSnapshot, input.fixedPromptTokens, input.countTokens);
+    if (afterTokens >= beforeTokens)
+        return unchanged('no_progress', beforeTokens, targetTokens);
+    const mark = {
+        schemaVersion: 2,
+        compactedThroughId,
+        report: summary.report,
+        summaryState: summary.state,
+        at,
+        metrics: {
+            sourceFromId: dropped[0].id,
+            sourceThroughId: compactedThroughId,
+            beforeTokens,
+            afterTokens,
+            fixedPromptTokens: input.fixedPromptTokens,
+            reportTokens: summary.reportTokens,
+            targetTokens,
+            triggerTokens: trigger,
+            droppedMessages: dropped.length,
+            droppedTurns,
+            degraded: summary.degraded,
+            ...(summary.degradationReason ? { degradationReason: summary.degradationReason } : {}),
+        },
+    };
+    return {
+        status: afterTokens <= targetTokens ? 'compacted' : 'compacted_above_target',
+        snapshot: candidateSnapshot,
+        mark,
+        beforeTokens,
+        afterTokens,
+        targetTokens,
+        droppedMessages: dropped.length,
+        droppedTurns,
+    };
+}
+
 /**
  * service/continuation/agent/agent-tables.ts — 表格系统的只读投影
  *
@@ -118890,6 +121954,8 @@ function collectTouchedModules_ACU(delta) {
         touched.push('infoGap');
     if (delta.storyArc.length || delta.storyArcPatches.length)
         touched.push('storyArc');
+    if (delta.chronology.length)
+        touched.push('chronology');
     return touched;
 }
 function assertWritePermission_ACU(delta, allowedWrites) {
@@ -119054,6 +122120,194 @@ function assertSingleActiveStoryScope_ACU(entries) {
         reject_ACU(`全书方向（scope=story）只能有一条活跃条目，当前会变成 ${active.length} 条：${active.map(entry => entry.id).join('、')}。修订全书方向请 patch 既有条目，或在同一份写集里先 retire 旧条目`, { ids: active.map(entry => entry.id) });
     }
 }
+function hasVolumeContractField_ACU(entry) {
+    return entry.narrativeRole !== undefined
+        || entry.targetStageRange !== undefined
+        || entry.targetTimeSpan !== undefined
+        || entry.progressCeiling !== undefined
+        || entry.sustainingThreads !== undefined
+        || entry.payoffTargets !== undefined
+        || entry.completionRationale !== undefined;
+}
+function assertCompleteVolumeContract_ACU(volume, context) {
+    if (!volume.narrativeRole)
+        reject_ACU(`卷台阶 ${volume.id} 缺少 narrativeRole`, { id: volume.id, context });
+    if (!volume.targetStageRange)
+        reject_ACU(`卷台阶 ${volume.id} 缺少 targetStageRange`, { id: volume.id, context });
+    if (!Number.isInteger(volume.targetStageRange.min) || !Number.isInteger(volume.targetStageRange.max)
+        || volume.targetStageRange.min < 1 || volume.targetStageRange.max < volume.targetStageRange.min) {
+        reject_ACU(`卷台阶 ${volume.id} 的 targetStageRange 必须是 min≥1 且 max≥min 的整数范围`, { id: volume.id, context, targetStageRange: volume.targetStageRange });
+    }
+    if (!volume.targetTimeSpan?.trim())
+        reject_ACU(`卷台阶 ${volume.id} 缺少 targetTimeSpan`, { id: volume.id, context });
+    if (!volume.progressCeiling?.trim())
+        reject_ACU(`卷台阶 ${volume.id} 缺少 progressCeiling`, { id: volume.id, context });
+    if (!volume.sustainingThreads?.length)
+        reject_ACU(`卷台阶 ${volume.id} 至少需要一条 sustainingThreads`, { id: volume.id, context });
+    if (volume.sustainingThreads.some(thread => !thread.trim()))
+        reject_ACU(`卷台阶 ${volume.id} 的 sustainingThreads 不得包含空项`, { id: volume.id, context });
+    if (!volume.payoffTargets?.length)
+        reject_ACU(`卷台阶 ${volume.id} 至少需要一条 payoffTargets`, { id: volume.id, context });
+    if (volume.payoffTargets.some(target => !target.trim()))
+        reject_ACU(`卷台阶 ${volume.id} 的 payoffTargets 不得包含空项`, { id: volume.id, context });
+}
+function assertVolumeCompletionContract_ACU(volume) {
+    if (!volume.targetStageRange)
+        return;
+    assertCompleteVolumeContract_ACU(volume, 'done');
+    const stageCount = volume.stageNumbers.length;
+    const withinTarget = stageCount >= volume.targetStageRange.min && stageCount <= volume.targetStageRange.max;
+    if (!withinTarget && !volume.completionRationale?.trim()) {
+        reject_ACU(`卷台阶 ${volume.id} 实际承载 ${stageCount} 个阶段，偏离目标 ${volume.targetStageRange.min}–${volume.targetStageRange.max} 时必须给出 completionRationale`, { id: volume.id, stageCount, targetStageRange: volume.targetStageRange });
+    }
+    for (const target of volume.payoffTargets ?? []) {
+        if (!volume.completionState.includes(target)) {
+            reject_ACU(`卷台阶 ${volume.id} 的 completionState 必须逐项说明 payoffTargets 的兑现证据：${target}`, { id: volume.id, target });
+        }
+    }
+    for (const thread of volume.sustainingThreads ?? []) {
+        if (!volume.completionState.includes(thread)) {
+            reject_ACU(`卷台阶 ${volume.id} 的 completionState 必须逐项说明 sustainingThreads 的完成、转入后续卷或 retire 去向：${thread}`, { id: volume.id, thread });
+        }
+    }
+}
+function assertStoryArcContractShape_ACU(entries) {
+    for (const entry of entries) {
+        if (entry.retired || !hasVolumeContractField_ACU(entry))
+            continue;
+        if (entry.scope !== 'volume') {
+            reject_ACU(`全书方向 ${entry.id} 不得携带卷级容量字段`, { id: entry.id, scope: entry.scope });
+        }
+        assertCompleteVolumeContract_ACU(entry, 'new');
+    }
+}
+/** 验证卷台阶的生命周期；阶段完成与卷完成是两层事实，不能互相替代。 */
+function assertVolumeLifecycle_ACU(previous, next, completedStageNumbers) {
+    const volumes = next.filter(entry => entry.scope === 'volume' && !entry.retired);
+    if (!volumes.length)
+        return;
+    const previousById = new Map(previous.filter(entry => entry.scope === 'volume' && !entry.retired).map(entry => [entry.id, entry]));
+    const previouslyActive = previous.filter(entry => entry.scope === 'volume' && !entry.retired && entry.status === 'active');
+    for (const volume of volumes) {
+        const prior = previousById.get(volume.id);
+        if (!prior)
+            continue;
+        const newlyRegistered = volume.stageNumbers.filter(stageNumber => !prior.stageNumbers.includes(stageNumber));
+        if (newlyRegistered.length && prior.status !== 'active') {
+            reject_ACU(`阶段进度只能登记到当前 active 卷，卷 ${volume.id} 在改写前状态为 ${prior.status}`, { id: volume.id, priorStatus: prior.status, stageNumbers: newlyRegistered });
+        }
+        for (const stageNumber of newlyRegistered) {
+            if (!completedStageNumbers.has(stageNumber)) {
+                reject_ACU(`卷台阶 ${volume.id} 只能登记真实完成的阶段`, { id: volume.id, stageNumber });
+            }
+        }
+        if (prior.status === 'done' && volume.status !== 'done') {
+            reject_ACU(`已完成卷 ${volume.id} 不可重新激活`, { id: volume.id, from: prior.status, to: volume.status });
+        }
+        const order = { planned: 0, active: 1, done: 2 };
+        if (order[volume.status] < order[prior.status]) {
+            reject_ACU(`卷台阶 ${volume.id} 状态只能 planned → active → done 单向推进`, { id: volume.id, from: prior.status, to: volume.status });
+        }
+        if (order[volume.status] > order[prior.status] + 1) {
+            reject_ACU(`卷台阶 ${volume.id} 不可跳过 active 直接从 ${prior.status} 变为 ${volume.status}`, { id: volume.id, from: prior.status, to: volume.status });
+        }
+    }
+    if (previouslyActive.length > 1) {
+        reject_ACU(`写入前存在 ${previouslyActive.length} 个 active 卷，无法判定阶段承载归属`, { activeIds: previouslyActive.map(volume => volume.id) });
+    }
+    for (const volume of volumes) {
+        if (previousById.has(volume.id))
+            continue;
+        assertCompleteVolumeContract_ACU(volume, 'new');
+        if (volume.status === 'done') {
+            reject_ACU(`新卷 ${volume.id} 不可直接登记为 done`, { id: volume.id });
+        }
+        for (const stageNumber of volume.stageNumbers) {
+            if (!completedStageNumbers.has(stageNumber)) {
+                reject_ACU(`新卷 ${volume.id} 只能登记真实完成的阶段`, { id: volume.id, stageNumber });
+            }
+        }
+    }
+    for (const volume of volumes) {
+        const prior = previous.find(entry => entry.id === volume.id);
+        if (volume.status !== 'done')
+            continue;
+        if (volume.completionStageNumber === null) {
+            reject_ACU(`卷台阶 ${volume.id} 标记 done 时必须提供 completionStageNumber`, { id: volume.id });
+        }
+        if (!volume.stageNumbers.includes(volume.completionStageNumber)) {
+            reject_ACU(`卷台阶 ${volume.id} 的完成阶段必须已登记进 stageNumbers`, { id: volume.id, completionStageNumber: volume.completionStageNumber });
+        }
+        if (!completedStageNumbers.has(volume.completionStageNumber)) {
+            reject_ACU(`卷台阶 ${volume.id} 的完成阶段尚未真实完成`, { id: volume.id, completionStageNumber: volume.completionStageNumber });
+        }
+        if (!volume.completionState.trim()) {
+            reject_ACU(`卷台阶 ${volume.id} 标记 done 时必须说明已达到的卷末状态`, { id: volume.id });
+        }
+        assertVolumeCompletionContract_ACU(volume);
+    }
+    const unfinished = volumes.filter(volume => volume.status !== 'done');
+    const active = volumes.filter(volume => volume.status === 'active');
+    if (unfinished.length && active.length !== 1) {
+        reject_ACU(`存在未完成卷时必须恰有一个 active 卷，当前为 ${active.length} 个`, { activeIds: active.map(volume => volume.id) });
+    }
+    const previousVolumes = previous.filter(entry => entry.scope === 'volume' && !entry.retired);
+    if (previousVolumes.length && previousVolumes.every(volume => volume.status === 'done')) {
+        for (const volume of active) {
+            if (!volume.continuationRationale.trim()) {
+                reject_ACU(`在既有卷全部完成后追加或激活卷 ${volume.id} 时必须说明续卷依据`, { id: volume.id });
+            }
+        }
+    }
+}
+/**
+ * 应用年代学写集。核心防线有三条：
+ * 1. 时间事实必须有真实正文证据，且证据不得越过本次结算水位——未来楼层不是已发生事实。
+ * 2. retire 必须命中既有条目并给理由；漏写不等于删除。
+ * 3. 任一条目失败即整份 delta 拒绝，不做部分登记。
+ */
+function applyChronologyDelta_ACU(existing, items, settledIndex) {
+    const byId = new Map(existing.map(entry => [entry.id, entry]));
+    for (const item of items) {
+        if (!item.id.trim())
+            reject_ACU('年代学条目缺少 id');
+        if (item.action === 'retire') {
+            const current = byId.get(item.id);
+            if (!current)
+                reject_ACU(`retire 的年代学条目不存在：${item.id}`, { id: item.id });
+            if (!item.reason.trim())
+                reject_ACU(`retire 年代学条目 ${item.id} 必须给出理由`, { id: item.id });
+            byId.set(item.id, { ...current, retired: true, retiredReason: item.reason.trim(), updatedIndex: settledIndex });
+            continue;
+        }
+        if (!item.anchor.trim())
+            reject_ACU(`年代学条目 ${item.id} 的 anchor 不能为空`, { id: item.id });
+        if (!item.elapsed.trim())
+            reject_ACU(`年代学条目 ${item.id} 的 elapsed 不能为空；无法可靠量化就明确写「未知」或「约……」`, { id: item.id });
+        if (!item.transition.trim())
+            reject_ACU(`年代学条目 ${item.id} 的 transition 不能为空`, { id: item.id });
+        const evidenceIndexes = normalizeEvidenceIndexes_ACU(item.evidenceIndexes);
+        if (!evidenceIndexes || !evidenceIndexes.length) {
+            reject_ACU(`年代学条目 ${item.id} 的 evidenceIndexes 必须是非空的非负整数楼层数组`, { id: item.id, evidenceIndexes: item.evidenceIndexes });
+        }
+        const future = evidenceIndexes.filter(index => index > settledIndex);
+        if (future.length) {
+            reject_ACU(`年代学条目 ${item.id} 引用了尚未结算的未来楼层：${future.join('、')}（本次结算水位=${settledIndex}）。时间事实只能引用已发生的真实正文`, { id: item.id, future, settledIndex });
+        }
+        byId.set(item.id, {
+            id: item.id,
+            anchor: item.anchor.trim(),
+            elapsed: item.elapsed.trim(),
+            precision: item.precision,
+            transition: item.transition.trim(),
+            evidenceIndexes,
+            updatedIndex: settledIndex,
+            retired: false,
+            retiredReason: '',
+        });
+    }
+    return [...byId.values()];
+}
 function applyStoryArcDelta_ACU(existing, items) {
     const byId = new Map(existing.map(entry => [entry.id, entry]));
     for (const item of items) {
@@ -119068,31 +122322,49 @@ function applyStoryArcDelta_ACU(existing, items) {
             byId.set(item.id, { ...current, retired: true, retiredReason: item.reason.trim() });
             continue;
         }
-        if (!item.title.trim())
+        const previous = byId.get(item.id);
+        // 对既有条目重复 upsert 时，省略或留空的字段沿用原值：主 Agent 常按惯性每轮派总纲“更新”，
+        // 若把省略当成清空，几轮下来 escalation / withheld 会被抹掉、active 卷会被打回 planned。
+        const title = item.title.trim() || previous?.title || '';
+        const direction = item.direction.trim() || previous?.direction || '';
+        const escalation = item.escalation.trim() || previous?.escalation || '';
+        const withheld = item.withheld.trim() || previous?.withheld || '';
+        const status = item.statusProvided || !previous ? item.status : previous.status;
+        if (!title)
             reject_ACU(`总纲条目 ${item.id} 的 title 不能为空`, { id: item.id });
         // direction 是这个模块存在的意义：没有方向的条目只是一个标题，对大纲毫无约束力。
-        if (!item.direction.trim())
+        if (!direction)
             reject_ACU(`总纲条目 ${item.id} 的 direction 不能为空，必须写清谁追求什么、对抗什么`, { id: item.id });
-        if (item.scope === 'volume' && !item.escalation.trim()) {
+        if (item.scope === 'volume' && !escalation) {
             reject_ACU(`卷台阶 ${item.id} 必须写 escalation：本卷冲突抬到什么高度、收在哪`, { id: item.id });
         }
-        const previous = byId.get(item.id);
         byId.set(item.id, {
             id: item.id,
             scope: item.scope,
-            title: item.title.trim(),
-            direction: item.direction.trim(),
-            escalation: item.escalation,
-            withheld: item.withheld,
-            status: item.status,
+            title,
+            direction,
+            escalation,
+            withheld,
+            status,
             // 进度锚只增不减：upsert 不携带 stageNumbers 时保留既有记录，避免改一次方向就把承载历史抹平。
             stageNumbers: item.stageNumbers.length ? normalizeStageNumbers_ACU(item.stageNumbers) : (previous ? previous.stageNumbers : []),
+            completionStageNumber: item.completionStageNumber ?? (previous?.completionStageNumber ?? null),
+            completionState: item.completionState || previous?.completionState || '',
+            continuationRationale: item.continuationRationale || previous?.continuationRationale || '',
+            narrativeRole: item.narrativeRole ?? previous?.narrativeRole,
+            targetStageRange: item.targetStageRange ?? previous?.targetStageRange,
+            targetTimeSpan: item.targetTimeSpan ?? previous?.targetTimeSpan,
+            progressCeiling: item.progressCeiling ?? previous?.progressCeiling,
+            sustainingThreads: item.sustainingThreads ?? previous?.sustainingThreads,
+            payoffTargets: item.payoffTargets ?? previous?.payoffTargets,
+            completionRationale: item.completionRationale ?? previous?.completionRationale,
             retired: false,
             retiredReason: '',
         });
     }
     const next = [...byId.values()];
     assertSingleActiveStoryScope_ACU(next);
+    assertStoryArcContractShape_ACU(next);
     return next;
 }
 function applyStoryArcPatches_ACU(entries, patches) {
@@ -119111,6 +122383,16 @@ function applyStoryArcPatches_ACU(entries, patches) {
             withheld: patch.withheld ?? current.withheld,
             status: patch.status ?? current.status,
             stageNumbers: patch.stageNumbers ? normalizeStageNumbers_ACU(patch.stageNumbers) : current.stageNumbers,
+            completionStageNumber: Object.prototype.hasOwnProperty.call(patch, 'completionStageNumber') ? patch.completionStageNumber : current.completionStageNumber,
+            completionState: patch.completionState ?? current.completionState,
+            continuationRationale: patch.continuationRationale ?? current.continuationRationale,
+            narrativeRole: patch.narrativeRole ?? current.narrativeRole,
+            targetStageRange: patch.targetStageRange ?? current.targetStageRange,
+            targetTimeSpan: patch.targetTimeSpan ?? current.targetTimeSpan,
+            progressCeiling: patch.progressCeiling ?? current.progressCeiling,
+            sustainingThreads: patch.sustainingThreads ?? current.sustainingThreads,
+            payoffTargets: patch.payoffTargets ?? current.payoffTargets,
+            completionRationale: patch.completionRationale ?? current.completionRationale,
         };
         if (!merged.title.trim())
             reject_ACU(`总纲条目 ${patch.id} patch 后 title 为空`, { id: patch.id });
@@ -119118,7 +122400,9 @@ function applyStoryArcPatches_ACU(entries, patches) {
             reject_ACU(`总纲条目 ${patch.id} patch 后 direction 为空`, { id: patch.id });
         byId.set(patch.id, merged);
     }
-    return [...byId.values()];
+    const next = [...byId.values()];
+    assertStoryArcContractShape_ACU(next);
+    return next;
 }
 /**
  * 把一份子代理写集事务应用到快照上。
@@ -119128,7 +122412,7 @@ function applyStoryArcPatches_ACU(entries, patches) {
  * @param settledIndex 本次结算的水位楼层，用于记录条目变动楼层
  * @returns 应用后的新快照，被写入模块的 revision 各自 +1
  */
-function applyAgentModuleDelta_ACU(snapshot, delta, allowedWrites, settledIndex) {
+function applyAgentModuleDelta_ACU(snapshot, delta, allowedWrites, settledIndex, completedStageNumbers = []) {
     assertWritePermission_ACU(delta, allowedWrites);
     assertExpectedRevisions_ACU(delta, snapshot);
     const touched = collectTouchedModules_ACU(delta);
@@ -119137,6 +122421,7 @@ function applyAgentModuleDelta_ACU(snapshot, delta, allowedWrites, settledIndex)
     const hooksTouched = delta.hooks.length > 0 || delta.hookPatches.length > 0;
     const infoGapTouched = delta.infoGap.length > 0 || delta.infoGapPatches.length > 0;
     const storyArcTouched = delta.storyArc.length > 0 || delta.storyArcPatches.length > 0;
+    const chronologyTouched = delta.chronology.length > 0;
     let hooks = delta.hooks.length ? applyHookDelta_ACU(snapshot.hooks, delta.hooks, settledIndex) : snapshot.hooks;
     if (delta.hookPatches.length)
         hooks = applyHookPatches_ACU(hooks, delta.hookPatches, settledIndex);
@@ -119148,16 +122433,21 @@ function applyAgentModuleDelta_ACU(snapshot, delta, allowedWrites, settledIndex)
         storyArc = applyStoryArcPatches_ACU(storyArc, delta.storyArcPatches);
         assertSingleActiveStoryScope_ACU(storyArc);
     }
+    if (storyArcTouched)
+        assertVolumeLifecycle_ACU(snapshot.storyArc, storyArc, new Set(completedStageNumbers));
+    const chronology = chronologyTouched ? applyChronologyDelta_ACU(snapshot.chronology, delta.chronology, settledIndex) : snapshot.chronology;
     return {
         ...snapshot,
         hooks,
         infoGap,
         storyArc,
+        chronology,
         revisions: {
             hooks: snapshot.revisions.hooks + (hooksTouched ? 1 : 0),
             infoGap: snapshot.revisions.infoGap + (infoGapTouched ? 1 : 0),
             constraints: snapshot.revisions.constraints,
             storyArc: snapshot.revisions.storyArc + (storyArcTouched ? 1 : 0),
+            chronology: snapshot.revisions.chronology + (chronologyTouched ? 1 : 0),
         },
     };
 }
@@ -119304,6 +122594,20 @@ function extractJsonObjects_ACU(text) {
 function stripMarkdownFences_ACU(text) {
     return text.replace(/```[a-zA-Z]*\n?/g, '').trim();
 }
+/** 统一的原文预处理：剥推理块。围栏由花括号扫描天然跳过，不在这里处理。 */
+function normalizeModelText_ACU(raw) {
+    return typeof raw === 'string' ? stripReasoningBlocks_ACU(raw) : '';
+}
+/** 在候选文本里按优先级提取全部可解析的顶层对象（严格失败时走宽松 JSON）。 */
+function parseObjectsFrom_ACU(candidate) {
+    const records = [];
+    for (const extracted of extractJsonObjects_ACU(candidate)) {
+        const parsed = parseJsonLenient_ACU(extracted);
+        if (isRecord_ACU$3(parsed))
+            records.push(parsed);
+    }
+    return records;
+}
 /**
  * 解析一份 Agent 协议载荷。对返回形态宽容：模型可以完整重输 JSON、只续写预填充、
  * 或在 JSON 前后写自然语言——运行时按判别键从全文中挑出正确的动作对象。
@@ -119313,7 +122617,7 @@ function stripMarkdownFences_ACU(text) {
  * @returns 解析出的对象
  */
 function parseAgentJsonPayload_ACU(raw, prefill = '', requiredKeys = []) {
-    const text = typeof raw === 'string' ? raw : '';
+    const text = normalizeModelText_ACU(raw);
     if (!text.trim())
         failProtocol_ACU('内部 AI 返回为空');
     // 剥掉围栏后以 { 开头视为完整重输，原文优先；否则视为续写预填充，拼接候选优先。
@@ -119321,16 +122625,7 @@ function parseAgentJsonPayload_ACU(raw, prefill = '', requiredKeys = []) {
     const candidates = looksComplete || !prefill ? [text, `${prefill}${text}`] : [`${prefill}${text}`, text];
     let firstParsed = null;
     for (const candidate of candidates) {
-        for (const extracted of extractJsonObjects_ACU(candidate)) {
-            let parsed;
-            try {
-                parsed = JSON.parse(extracted);
-            }
-            catch {
-                continue;
-            }
-            if (!isRecord_ACU$3(parsed))
-                continue;
+        for (const parsed of parseObjectsFrom_ACU(candidate)) {
             if (!requiredKeys.length || requiredKeys.some(key => key in parsed))
                 return parsed;
             if (!firstParsed)
@@ -119340,6 +122635,49 @@ function parseAgentJsonPayload_ACU(raw, prefill = '', requiredKeys = []) {
     // 没有对象命中判别键时退回首个可解析对象，让上层契约校验给出准确的字段级报错。
     if (firstParsed)
         return firstParsed;
+    failProtocol_ACU(`返回内容不包含可解析的 JSON 对象。模型返回片段：${text.trim().slice(0, 300)}`);
+}
+/**
+ * 契约载荷的草稿解析：完整 JSON 直接返回；配平失败时尝试抢救截断的 JSON——保留已写完的
+ * 条目、丢掉未完成的尾部，并标记 truncated，让调用方向模型索要“剩余条目”而不是整份重来。
+ * @param raw 模型返回的原始文本
+ * @param prefill 尾段预填充
+ * @param requiredKeys 契约对象判别键
+ */
+function parseAgentJsonPayloadDraft_ACU(raw, prefill = '', requiredKeys = []) {
+    const text = normalizeModelText_ACU(raw);
+    if (!text.trim())
+        failProtocol_ACU('内部 AI 返回为空');
+    const looksComplete = stripMarkdownFences_ACU(text).startsWith('{');
+    const candidates = looksComplete || !prefill ? [text, `${prefill}${text}`] : [`${prefill}${text}`, text];
+    let firstParsed = null;
+    for (const candidate of candidates) {
+        const stripped = stripMarkdownFences_ACU(candidate);
+        const start = stripped.indexOf('{');
+        if (start < 0)
+            continue;
+        // 逐个候选判定：首个 { 能配平就按完整对象解析；配不平才视为截断去抢救。
+        // 决不能对已经完整的原文再去试“预填充 + 原文”的拼接——预填充以未闭合引号结尾，拼上完整 JSON
+        // 后必然配不平，会被当成截断抢救出一份没有 delta 的假载荷，让子代理“成功”却什么都没写。
+        if (balancedObjectFrom_ACU(stripped, start)) {
+            for (const parsed of parseObjectsFrom_ACU(stripped)) {
+                if (!requiredKeys.length || requiredKeys.some(key => key in parsed))
+                    return { payload: parsed, truncated: false };
+                if (!firstParsed)
+                    firstParsed = parsed;
+            }
+            continue;
+        }
+        const salvaged = salvageTruncatedJson_ACU(stripped);
+        if (!salvaged)
+            continue;
+        const parsed = parseJsonLenient_ACU(salvaged.json);
+        if (isRecord_ACU$3(parsed) && (!requiredKeys.length || requiredKeys.some(key => key in parsed))) {
+            return { payload: parsed, truncated: true };
+        }
+    }
+    if (firstParsed)
+        return { payload: firstParsed, truncated: false };
     failProtocol_ACU(`返回内容不包含可解析的 JSON 对象。模型返回片段：${text.trim().slice(0, 300)}`);
 }
 function parseDelegations_ACU(value) {
@@ -119414,21 +122752,13 @@ function parseAgentToolCall_ACU(payload) {
 const AGENT_TOOL_BATCH_LIMIT_ACU = JSON_OBJECT_SCAN_LIMIT_ACU;
 /** 按 parseAgentJsonPayload 的候选优先级提取全部带 action 键的顶层对象。 */
 function collectActionObjects_ACU(raw, prefill) {
-    const text = typeof raw === 'string' ? raw : '';
+    const text = normalizeModelText_ACU(raw);
     if (!text.trim())
-        failProtocol_ACU('内部 AI 返回为空');
+        failProtocol_ACU('内部 AI 返回为空（或只有推理文字，没有任何动作 JSON）');
     const looksComplete = stripMarkdownFences_ACU(text).startsWith('{');
     const candidates = looksComplete || !prefill ? [text, `${prefill}${text}`] : [`${prefill}${text}`, text];
     for (const candidate of candidates) {
-        const records = [];
-        for (const extracted of extractJsonObjects_ACU(candidate)) {
-            try {
-                const parsed = JSON.parse(extracted);
-                if (isRecord_ACU$3(parsed) && 'action' in parsed)
-                    records.push(parsed);
-            }
-            catch { /* 无法解析的碎片直接跳过，由后续候选或报错兜底。 */ }
-        }
+        const records = parseObjectsFrom_ACU(candidate).filter(parsed => 'action' in parsed);
         if (records.length)
             return { records };
     }
@@ -119460,78 +122790,20 @@ function parseAgentMainOutput_ACU(raw, prefill, allowDelegate) {
  * @returns 工具调用列表；输出里没有任何 read / search 对象时返回 null（应按契约解析）
  */
 function parseAgentSubagentToolCalls_ACU(raw, prefill) {
-    const text = typeof raw === 'string' ? raw : '';
+    const text = normalizeModelText_ACU(raw);
     if (!text.trim())
         return null;
     const looksComplete = stripMarkdownFences_ACU(text).startsWith('{');
     const candidates = looksComplete || !prefill ? [text, `${prefill}${text}`] : [`${prefill}${text}`, text];
     for (const candidate of candidates) {
-        const toolRecords = [];
-        let sawAnyRecord = false;
-        for (const extracted of extractJsonObjects_ACU(candidate)) {
-            try {
-                const parsed = JSON.parse(extracted);
-                if (!isRecord_ACU$3(parsed))
-                    continue;
-                sawAnyRecord = true;
-                const action = readText_ACU(parsed.action);
-                if (action === 'read' || action === 'search')
-                    toolRecords.push(parsed);
-            }
-            catch { /* 跳过碎片 */ }
-        }
+        const records = parseObjectsFrom_ACU(candidate);
+        const toolRecords = records.filter(parsed => { const action = readText_ACU(parsed.action); return action === 'read' || action === 'search'; });
         if (toolRecords.length)
             return toolRecords.slice(0, AGENT_TOOL_BATCH_LIMIT_ACU).map(parseAgentToolCall_ACU);
-        if (sawAnyRecord)
+        if (records.length)
             return null;
     }
     return null;
-}
-/** 单次 edit_outline 动作里最多允许的编辑操作数。 */
-const OUTLINE_EDIT_LIMIT_ACU = 12;
-function parseOutlineEdits_ACU(value) {
-    if (!Array.isArray(value) || !value.length)
-        failProtocol_ACU('edit_outline 动作必须提供非空的 edits 数组');
-    if (value.length > OUTLINE_EDIT_LIMIT_ACU)
-        failProtocol_ACU(`一次 edit_outline 最多 ${OUTLINE_EDIT_LIMIT_ACU} 处编辑；更大的改动请派工 outline-architect`);
-    return value.map((raw, index) => {
-        if (!isRecord_ACU$3(raw))
-            failProtocol_ACU(`edits[${index}] 必须是对象`);
-        const op = readText_ACU(raw.op);
-        if (op === 'set_turn_goal') {
-            const turnId = readText_ACU(raw.turnId);
-            const goal = readText_ACU(raw.goal);
-            if (!turnId || !goal)
-                failProtocol_ACU(`edits[${index}] set_turn_goal 需要 turnId 与非空 goal`);
-            return { op, turnId, goal };
-        }
-        if (op === 'insert_turn') {
-            const nodeId = readText_ACU(raw.nodeId);
-            const goal = readText_ACU(raw.goal);
-            const afterTurnId = readText_ACU(raw.afterTurnId) || null;
-            if (!nodeId || !goal)
-                failProtocol_ACU(`edits[${index}] insert_turn 需要 nodeId 与非空 goal`);
-            const pacing = readText_ACU(raw.pacing);
-            if (pacing && !STAGE_TURN_PACINGS_ACU.includes(pacing)) {
-                failProtocol_ACU(`edits[${index}] insert_turn 的 pacing 必须是 ${STAGE_TURN_PACINGS_ACU.join(' / ')} 之一，实际收到：${pacing}`);
-            }
-            return pacing ? { op, nodeId, afterTurnId, goal, pacing: pacing } : { op, nodeId, afterTurnId, goal };
-        }
-        if (op === 'remove_turn') {
-            const turnId = readText_ACU(raw.turnId);
-            if (!turnId)
-                failProtocol_ACU(`edits[${index}] remove_turn 需要 turnId`);
-            return { op, turnId };
-        }
-        if (op === 'set_node_goal') {
-            const nodeId = readText_ACU(raw.nodeId);
-            const goal = readText_ACU(raw.goal);
-            if (!nodeId || !goal)
-                failProtocol_ACU(`edits[${index}] set_node_goal 需要 nodeId 与非空 goal`);
-            return { op, nodeId, goal };
-        }
-        failProtocol_ACU(`edits[${index}].op 必须是 set_turn_goal / insert_turn / remove_turn / set_node_goal 之一，实际收到：${op || '(空)'}`);
-    });
 }
 /**
  * 解析主 Agent 的一次协议动作。
@@ -119546,9 +122818,6 @@ function parseAgentMainAction_ACU(payload, allowDelegate) {
         if (!allowDelegate)
             failProtocol_ACU('本轮为预算最后一轮，已禁用 delegate，必须输出 finalize 或 block');
         return { kind: 'delegate', thought, delegations: parseDelegations_ACU(payload.delegations) };
-    }
-    if (action === 'edit_outline') {
-        return { kind: 'edit_outline', thought, edits: parseOutlineEdits_ACU(payload.edits) };
     }
     if (action === 'finalize') {
         const instruction = readText_ACU(payload.instruction);
@@ -119574,7 +122843,7 @@ function parseAgentMainAction_ACU(payload, allowDelegate) {
     if (action === 'read' || action === 'search') {
         return { kind: 'tools', thought, calls: [parseAgentToolCall_ACU(payload)] };
     }
-    failProtocol_ACU(`action 必须是 read / search / delegate / edit_outline / finalize / block 之一，实际收到：${action || '(空)'}`);
+    failProtocol_ACU(`action 必须是 read / search / delegate / finalize / block 之一；大纲调整请派工 outline-architect，实际收到：${action || '(空)'}`);
 }
 function parseCharacterKnowledge_ACU(value) {
     const knowledge = Array.isArray(value) ? value : [];
@@ -119641,14 +122910,28 @@ function parseInfoGapPatch_ACU(raw, index) {
         failProtocol_ACU(`delta.infoGap[${index}] 的 patch 至少要带一个要修改的字段`);
     return patch;
 }
-function parseHookItems_ACU(value) {
+/**
+ * 逐条解析时的收集包装：给了 sink 就把单条协议错误记下并跳过该条，没给就按原样抛出。
+ * 数组本身不是数组这类结构错误不在此范围，始终抛出。
+ */
+function collectItem_ACU(sink, module, index, raw, parse) {
+    try {
+        parse();
+    }
+    catch (error) {
+        if (!sink || !(error instanceof ContinuationValidationError_ACU) || error.error.code !== 'CONTINUATION_AGENT_PROTOCOL_INVALID')
+            throw error;
+        sink.push({ module, index, id: isRecord_ACU$3(raw) ? readText_ACU(raw.id) : '', reason: error.error.message });
+    }
+}
+function parseHookItems_ACU(value, rejected) {
     if (value === undefined || value === null)
         return { items: [], patches: [] };
     if (!Array.isArray(value))
         failProtocol_ACU('delta.hooks 必须是数组');
     const items = [];
     const patches = [];
-    value.forEach((raw, index) => {
+    value.forEach((raw, index) => collectItem_ACU(rejected, 'hooks', index, raw, () => {
         if (!isRecord_ACU$3(raw))
             failProtocol_ACU(`delta.hooks[${index}] 必须是对象`);
         const action = readText_ACU(raw.action);
@@ -119670,17 +122953,17 @@ function parseHookItems_ACU(value) {
             plannedPayoff: readText_ACU(raw.plannedPayoff),
             reason: readText_ACU(raw.reason),
         });
-    });
+    }));
     return { items, patches };
 }
-function parseInfoGapItems_ACU(value) {
+function parseInfoGapItems_ACU(value, rejected) {
     if (value === undefined || value === null)
         return { items: [], patches: [] };
     if (!Array.isArray(value))
         failProtocol_ACU('delta.infoGap 必须是数组');
     const items = [];
     const patches = [];
-    value.forEach((raw, index) => {
+    value.forEach((raw, index) => collectItem_ACU(rejected, 'infoGap', index, raw, () => {
         if (!isRecord_ACU$3(raw))
             failProtocol_ACU(`delta.infoGap[${index}] 必须是对象`);
         const action = readText_ACU(raw.action);
@@ -119702,7 +122985,7 @@ function parseInfoGapItems_ACU(value) {
             revealIndex: typeof raw.revealIndex === 'number' && Number.isInteger(raw.revealIndex) && raw.revealIndex >= 0 ? raw.revealIndex : null,
             reason: readText_ACU(raw.reason),
         });
-    });
+    }));
     return { items, patches };
 }
 function parseStageNumbers_ACU(value, path) {
@@ -119713,6 +122996,33 @@ function parseStageNumbers_ACU(value, path) {
             failProtocol_ACU(`${path} 的元素必须是从 1 起的整数阶段编号，实际收到：${JSON.stringify(item)}`);
         return item;
     });
+}
+function parseTargetStageRange_ACU(value, path) {
+    if (!isRecord_ACU$3(value))
+        failProtocol_ACU(`${path} 必须是包含 min / max 的对象`);
+    const { min, max } = value;
+    if (!Number.isInteger(min) || min < 1 || !Number.isInteger(max) || max < 1) {
+        failProtocol_ACU(`${path}.min / max 必须是从 1 起的整数`);
+    }
+    if (min > max)
+        failProtocol_ACU(`${path}.min 不能大于 max`);
+    return { min: min, max: max };
+}
+function parseStoryArcTextList_ACU(value, path) {
+    if (!Array.isArray(value))
+        failProtocol_ACU(`${path} 必须是字符串数组`);
+    return value.map((item, index) => {
+        if (typeof item !== 'string' || !item.trim())
+            failProtocol_ACU(`${path}[${index}] 必须是非空字符串`);
+        return item.trim();
+    });
+}
+function parseNarrativeRole_ACU(value, path) {
+    const role = readText_ACU(value);
+    if (!AGENT_VOLUME_NARRATIVE_ROLES_ACU.includes(role)) {
+        failProtocol_ACU(`${path} 必须是 ${AGENT_VOLUME_NARRATIVE_ROLES_ACU.join(' / ')}，实际收到：${role || '(空)'}`);
+    }
+    return role;
 }
 function parseStoryArcPatch_ACU(raw, index) {
     const id = readText_ACU(raw.id);
@@ -119735,18 +123045,44 @@ function parseStoryArcPatch_ACU(raw, index) {
     }
     if (Object.prototype.hasOwnProperty.call(raw, 'stageNumbers'))
         patch.stageNumbers = parseStageNumbers_ACU(raw.stageNumbers, `delta.storyArc[${index}].stageNumbers`);
+    if (Object.prototype.hasOwnProperty.call(raw, 'completionStageNumber')) {
+        const value = raw.completionStageNumber;
+        if (value !== null && (!Number.isInteger(value) || value < 1)) {
+            failProtocol_ACU(`delta.storyArc[${index}].completionStageNumber 必须是从 1 起的整数或 null`);
+        }
+        patch.completionStageNumber = value;
+    }
+    if (typeof raw.completionState === 'string')
+        patch.completionState = raw.completionState.trim();
+    if (typeof raw.continuationRationale === 'string')
+        patch.continuationRationale = raw.continuationRationale.trim();
+    if (Object.prototype.hasOwnProperty.call(raw, 'narrativeRole'))
+        patch.narrativeRole = parseNarrativeRole_ACU(raw.narrativeRole, `delta.storyArc[${index}].narrativeRole`);
+    if (Object.prototype.hasOwnProperty.call(raw, 'targetStageRange'))
+        patch.targetStageRange = parseTargetStageRange_ACU(raw.targetStageRange, `delta.storyArc[${index}].targetStageRange`);
+    for (const key of ['targetTimeSpan', 'progressCeiling', 'completionRationale']) {
+        if (Object.prototype.hasOwnProperty.call(raw, key)) {
+            if (typeof raw[key] !== 'string')
+                failProtocol_ACU(`delta.storyArc[${index}].${key} 必须是字符串`);
+            patch[key] = raw[key].trim();
+        }
+    }
+    if (Object.prototype.hasOwnProperty.call(raw, 'sustainingThreads'))
+        patch.sustainingThreads = parseStoryArcTextList_ACU(raw.sustainingThreads, `delta.storyArc[${index}].sustainingThreads`);
+    if (Object.prototype.hasOwnProperty.call(raw, 'payoffTargets'))
+        patch.payoffTargets = parseStoryArcTextList_ACU(raw.payoffTargets, `delta.storyArc[${index}].payoffTargets`);
     if (Object.keys(patch).length === 1)
         failProtocol_ACU(`delta.storyArc[${index}] 的 patch 至少要带一个要修改的字段`);
     return patch;
 }
-function parseStoryArcItems_ACU(value) {
+function parseStoryArcItems_ACU(value, rejected) {
     if (value === undefined || value === null)
         return { items: [], patches: [] };
     if (!Array.isArray(value))
         failProtocol_ACU('delta.storyArc 必须是数组');
     const items = [];
     const patches = [];
-    value.forEach((raw, index) => {
+    value.forEach((raw, index) => collectItem_ACU(rejected, 'storyArc', index, raw, () => {
         if (!isRecord_ACU$3(raw))
             failProtocol_ACU(`delta.storyArc[${index}] 必须是对象`);
         const action = readText_ACU(raw.action);
@@ -119774,17 +123110,99 @@ function parseStoryArcItems_ACU(value) {
             escalation: readText_ACU(raw.escalation),
             withheld: readText_ACU(raw.withheld),
             status: (status || 'planned'),
+            statusProvided: !!status,
             stageNumbers: raw.stageNumbers === undefined ? [] : parseStageNumbers_ACU(raw.stageNumbers, `delta.storyArc[${index}].stageNumbers`),
+            completionStageNumber: raw.completionStageNumber === undefined || raw.completionStageNumber === null ? null : (typeof raw.completionStageNumber === 'number' && Number.isInteger(raw.completionStageNumber) && raw.completionStageNumber >= 1 ? raw.completionStageNumber : failProtocol_ACU(`delta.storyArc[${index}].completionStageNumber 必须是从 1 起的整数或 null`)),
+            completionState: readText_ACU(raw.completionState),
+            continuationRationale: readText_ACU(raw.continuationRationale),
+            narrativeRole: raw.narrativeRole === undefined ? undefined : parseNarrativeRole_ACU(raw.narrativeRole, `delta.storyArc[${index}].narrativeRole`),
+            targetStageRange: raw.targetStageRange === undefined ? undefined : parseTargetStageRange_ACU(raw.targetStageRange, `delta.storyArc[${index}].targetStageRange`),
+            targetTimeSpan: raw.targetTimeSpan === undefined
+                ? undefined
+                : (typeof raw.targetTimeSpan === 'string'
+                    ? raw.targetTimeSpan.trim()
+                    : failProtocol_ACU(`delta.storyArc[${index}].targetTimeSpan 必须是字符串`)),
+            progressCeiling: raw.progressCeiling === undefined
+                ? undefined
+                : (typeof raw.progressCeiling === 'string'
+                    ? raw.progressCeiling.trim()
+                    : failProtocol_ACU(`delta.storyArc[${index}].progressCeiling 必须是字符串`)),
+            sustainingThreads: raw.sustainingThreads === undefined ? undefined : parseStoryArcTextList_ACU(raw.sustainingThreads, `delta.storyArc[${index}].sustainingThreads`),
+            payoffTargets: raw.payoffTargets === undefined ? undefined : parseStoryArcTextList_ACU(raw.payoffTargets, `delta.storyArc[${index}].payoffTargets`),
+            completionRationale: raw.completionRationale === undefined
+                ? undefined
+                : (typeof raw.completionRationale === 'string'
+                    ? raw.completionRationale.trim()
+                    : failProtocol_ACU(`delta.storyArc[${index}].completionRationale 必须是字符串`)),
             reason: readText_ACU(raw.reason),
         });
-    });
+    }));
     return { items, patches };
+}
+/**
+ * 解析年代学写集。时间事实的登记契约是硬边界：非法 action、非法 precision、非空必填
+ * 文本缺失、证据数组为空或含非整数楼层都必须拒绝——把坏时间记录静默降级会污染后续
+ * 每一次时间一致性审查的基准。
+ */
+function parseChronologyItems_ACU(value, rejected) {
+    if (value === undefined || value === null)
+        return [];
+    if (!Array.isArray(value))
+        failProtocol_ACU('delta.chronology 必须是数组');
+    const items = [];
+    value.forEach((raw, index) => collectItem_ACU(rejected, 'chronology', index, raw, () => {
+        if (!isRecord_ACU$3(raw))
+            failProtocol_ACU(`delta.chronology[${index}] 必须是对象`);
+        const action = readText_ACU(raw.action);
+        if (action !== 'upsert' && action !== 'retire')
+            failProtocol_ACU(`delta.chronology[${index}].action 必须是 upsert / retire，实际收到：${action || '(空)'}`);
+        const id = readText_ACU(raw.id);
+        if (!id)
+            failProtocol_ACU(`delta.chronology[${index}] 需要非空 id`);
+        if (action === 'retire') {
+            items.push({ action, id, anchor: readText_ACU(raw.anchor), elapsed: readText_ACU(raw.elapsed), precision: 'unknown', transition: readText_ACU(raw.transition), evidenceIndexes: [], reason: readText_ACU(raw.reason) });
+            return;
+        }
+        const anchor = readText_ACU(raw.anchor);
+        const elapsed = readText_ACU(raw.elapsed);
+        const transition = readText_ACU(raw.transition);
+        if (!anchor)
+            failProtocol_ACU(`delta.chronology[${index}].anchor 不能为空：必须给出可用于正文定位的相对时间锚`);
+        if (!elapsed)
+            failProtocol_ACU(`delta.chronology[${index}].elapsed 不能为空：无法可靠量化时明确写「未知」或「约……」`);
+        if (!transition)
+            failProtocol_ACU(`delta.chronology[${index}].transition 不能为空：写清从上一锚点到本锚点实际发生的时间转换`);
+        const precision = readText_ACU(raw.precision);
+        if (!AGENT_CHRONOLOGY_PRECISIONS_ACU.includes(precision)) {
+            failProtocol_ACU(`delta.chronology[${index}].precision 必须是 ${AGENT_CHRONOLOGY_PRECISIONS_ACU.join(' / ')}，实际收到：${precision || '(空)'}`);
+        }
+        if (!Array.isArray(raw.evidenceIndexes) || !raw.evidenceIndexes.length) {
+            failProtocol_ACU(`delta.chronology[${index}].evidenceIndexes 必须是非空数组：每条时间事实都要引用真实正文楼层`);
+        }
+        const evidenceIndexes = raw.evidenceIndexes.map(item => {
+            if (typeof item !== 'number' || !Number.isInteger(item) || item < 0) {
+                failProtocol_ACU(`delta.chronology[${index}].evidenceIndexes 的元素必须是非负整数楼层号，实际收到：${JSON.stringify(item)}`);
+            }
+            return item;
+        });
+        items.push({
+            action,
+            id,
+            anchor,
+            elapsed,
+            precision: precision,
+            transition,
+            evidenceIndexes: [...new Set(evidenceIndexes)].sort((left, right) => left - right),
+            reason: readText_ACU(raw.reason),
+        });
+    }));
+    return items;
 }
 function parseExpectedRevisions_ACU(value) {
     if (!isRecord_ACU$3(value))
         return {};
     const result = {};
-    for (const key of ['hooks', 'infoGap', 'constraints', 'storyArc']) {
+    for (const key of ['hooks', 'infoGap', 'constraints', 'storyArc', 'chronology']) {
         const raw = value[key];
         if (typeof raw === 'number' && Number.isInteger(raw) && raw >= 0)
             result[key] = raw;
@@ -119797,23 +123215,132 @@ function parseExpectedRevisions_ACU(value) {
  * @returns 摘要 + 写集事务 + 追加读取请求
  */
 function parseAgentMaintainerOutput_ACU(payload) {
+    const draft = parseAgentMaintainerOutputDraft_ACU(payload);
+    if (draft.rejected.length)
+        failProtocol_ACU(draft.rejected[0].reason, { rejected: draft.rejected.length });
+    return draft.output;
+}
+/**
+ * 维护/总纲契约的草稿解析：合法条目收进 output，单条非法的记进 rejected 而不是整份拒绝，
+ * 让运行时只向模型索要需要修正的那几条。数组结构本身非法仍然抛出。
+ * @param payload 已解析的 JSON 载荷
+ */
+/**
+ * 把模型常写的错位形状归一化到 delta.storyArc：顶层 storyArc / volumes、delta.volumes、
+ * 以 id 为键的对象。这些以前会被静默忽略成“0 条写入”，让一份写满卷台阶的输出白白作废。
+ */
+function normalizeStoryArcShape_ACU(payload, rawDelta) {
+    const candidates = [rawDelta.storyArc, rawDelta.volumes, rawDelta.story_arc, payload.storyArc, payload.volumes, payload.story_arc];
+    const merged = [];
+    let sawAlternative = false;
+    candidates.forEach((candidate, index) => {
+        if (Array.isArray(candidate)) {
+            if (index > 0 && candidate.length)
+                sawAlternative = true;
+            merged.push(...candidate);
+        }
+        else if (isRecord_ACU$3(candidate) && Object.keys(candidate).length) {
+            sawAlternative = true;
+            merged.push(...Object.entries(candidate).map(([id, value]) => (isRecord_ACU$3(value) ? { id, action: 'upsert', ...value } : value)));
+        }
+    });
+    // 只有标准位置且为空/缺失时保持原值，让“未提供”与“提供了空数组”的语义与其他模块一致。
+    if (!sawAlternative && !merged.length)
+        return rawDelta.storyArc;
+    return merged;
+}
+function parseAgentMaintainerOutputDraft_ACU(payload) {
     const rawDelta = isRecord_ACU$3(payload.delta) ? payload.delta : {};
-    const hooks = parseHookItems_ACU(rawDelta.hooks);
-    const infoGap = parseInfoGapItems_ACU(rawDelta.infoGap);
-    const storyArc = parseStoryArcItems_ACU(rawDelta.storyArc);
+    const rejected = [];
+    const hooks = parseHookItems_ACU(rawDelta.hooks, rejected);
+    const infoGap = parseInfoGapItems_ACU(rawDelta.infoGap, rejected);
+    const storyArc = parseStoryArcItems_ACU(normalizeStoryArcShape_ACU(payload, rawDelta), rejected);
+    const chronology = parseChronologyItems_ACU(rawDelta.chronology, rejected);
     return {
-        summary: readText_ACU(payload.summary),
+        output: {
+            summary: readText_ACU(payload.summary),
+            delta: {
+                expectedRevisions: parseExpectedRevisions_ACU(rawDelta.expectedRevisions ?? payload.expectedRevisions),
+                hooks: hooks.items,
+                hookPatches: hooks.patches,
+                infoGap: infoGap.items,
+                infoGapPatches: infoGap.patches,
+                storyArc: storyArc.items,
+                storyArcPatches: storyArc.patches,
+                chronology,
+                constraintProposals: readTextList_ACU(rawDelta.constraintProposals),
+            },
+        },
+        rejected,
+    };
+}
+/**
+ * 按 (模块, id) 把后一份契约草稿合并进前一份：同 id 后者覆盖，新 id 追加，约束提议取并集，
+ * 摘要与 expectedRevisions 以首次非空为准。用于截断续写与条目修补的多轮累积。
+ * @param base 已累积的输出
+ * @param incoming 本轮新收到的输出
+ */
+function mergeAgentMaintainerOutputs_ACU(base, incoming) {
+    const mergeById = (left, right) => {
+        const byId = new Map();
+        const order = [];
+        let anonymous = 0;
+        for (const item of [...left, ...right]) {
+            const key = item.id.trim() || `__anonymous_${anonymous++}`;
+            if (!byId.has(key))
+                order.push(key);
+            byId.set(key, item);
+        }
+        return order.map(key => byId.get(key));
+    };
+    const revisions = { ...incoming.delta.expectedRevisions, ...base.delta.expectedRevisions };
+    return {
+        summary: base.summary || incoming.summary,
         delta: {
-            expectedRevisions: parseExpectedRevisions_ACU(rawDelta.expectedRevisions ?? payload.expectedRevisions),
-            hooks: hooks.items,
-            hookPatches: hooks.patches,
-            infoGap: infoGap.items,
-            infoGapPatches: infoGap.patches,
-            storyArc: storyArc.items,
-            storyArcPatches: storyArc.patches,
-            constraintProposals: readTextList_ACU(rawDelta.constraintProposals),
+            expectedRevisions: revisions,
+            hooks: mergeById(base.delta.hooks, incoming.delta.hooks),
+            hookPatches: mergeById(base.delta.hookPatches, incoming.delta.hookPatches),
+            infoGap: mergeById(base.delta.infoGap, incoming.delta.infoGap),
+            infoGapPatches: mergeById(base.delta.infoGapPatches, incoming.delta.infoGapPatches),
+            storyArc: mergeById(base.delta.storyArc, incoming.delta.storyArc),
+            storyArcPatches: mergeById(base.delta.storyArcPatches, incoming.delta.storyArcPatches),
+            chronology: mergeById(base.delta.chronology, incoming.delta.chronology),
+            constraintProposals: [...new Set([...base.delta.constraintProposals, ...incoming.delta.constraintProposals])],
         },
     };
+}
+/**
+ * 渲染截断/条目修补的续写请求：告诉模型哪些条目已收下（不要重发）、哪些条目要修正、
+ * 以及输出是否在中途被截断需要从下一条继续。回复只需含剩余/修正条目。
+ */
+function renderAgentContractContinuationRequest_ACU(accepted, rejected, truncated) {
+    const acceptedIds = [];
+    for (const [label, list] of [
+        ['伏笔', [...accepted.delta.hooks, ...accepted.delta.hookPatches]],
+        ['信息差', [...accepted.delta.infoGap, ...accepted.delta.infoGapPatches]],
+        ['总纲', [...accepted.delta.storyArc, ...accepted.delta.storyArcPatches]],
+        ['年代学', accepted.delta.chronology],
+    ]) {
+        const ids = list.map(item => item.id).filter(Boolean);
+        if (ids.length)
+            acceptedIds.push(`${label}：${ids.join('、')}`);
+    }
+    const lines = [];
+    if (truncated) {
+        lines.push('你上一次的输出在 JSON 中途被截断。截断前已写完整的条目已经收下，不要重发它们；请从被截断的那一条开始，只输出剩余条目。');
+    }
+    else {
+        lines.push('你上一次的输出大部分已收下，只有下列条目不符合契约，请只重发这些条目（修正后），其余不要重发。');
+    }
+    if (acceptedIds.length)
+        lines.push(`已收下的条目：${acceptedIds.join('；')}。`);
+    if (rejected.length) {
+        lines.push('需要修正的条目：');
+        for (const item of rejected)
+            lines.push(`- ${item.module}[${item.index}]${item.id ? `（id=${item.id}）` : ''}：${item.reason}`);
+    }
+    lines.push('回复格式与原契约相同，只是 delta 里各数组只放剩余或修正的条目；summary 可省略；所有条目都写完时 delta 各数组为空即可。');
+    return lines.join('\n');
 }
 /**
  * 解析策划类子代理的输出。外层字段结构化，创作内容保持自然语言。
@@ -119845,6 +123372,22 @@ function parseAgentReviewerOutput_ACU(payload) {
         verdict: verdict,
         reason: readText_ACU(payload.reason),
         fixes: readTextList_ACU(payload.fixes),
+    };
+}
+/** 解析发送前最终审查的结构化只读反馈。 */
+function parseAgentFinalReviewerOutput_ACU(payload) {
+    const verdict = readText_ACU(payload.verdict);
+    if (!AGENT_REVIEW_VERDICTS_ACU.includes(verdict)) {
+        failProtocol_ACU(`最终审查的 verdict 必须是 pass / revise / block，实际收到：${verdict || '(空)'}；资料不足时应先输出 read / search 工具调用`);
+    }
+    return {
+        verdict: verdict,
+        summary: readText_ACU(payload.summary),
+        emotionFindings: readTextList_ACU(payload.emotionFindings),
+        worldFindings: readTextList_ACU(payload.worldFindings),
+        logicFindings: readTextList_ACU(payload.logicFindings),
+        requiredFixes: readTextList_ACU(payload.requiredFixes),
+        preserve: readTextList_ACU(payload.preserve),
     };
 }
 /** 把协议错误压成可回喂给模型的紧凑单行原因串。 */
@@ -120122,6 +123665,7 @@ const READ_TOKEN_TITLES_ACU = {
     $HOOKS_LEDGER: '伏笔账本',
     $INFO_GAP: '认知与信息差时间线',
     $ACTIVE_CONSTRAINTS: '长期约束',
+    $CHRONOLOGY: '故事年代学账本',
     $TABLE_GLOBAL: '全局数据表',
     $TABLE_CHARACTERS: '角色表',
     $TABLE_CHRONICLES: '纪要表',
@@ -120391,10 +123935,10 @@ function buildAgentWorldbookScanText_ACU(context) {
 }
 /** 四档节奏标签的语义与写作指导。低压轮的约束写成禁令，否则模型会习惯性地往每一轮里塞冲突。 */
 const TURN_PACING_GUIDANCE_ACU = {
-    setup: '铺垫日常轮：写关系推进、生活质感、准备工作与信息沉淀。本轮禁止制造新危机、禁止引入新敌对方、禁止让局势升级——读者的回报来自角色之间发生了什么，而不是又出了什么事。',
+    setup: '铺垫日常轮：允许主线 hold，通过具体生活动作与人物互动，让关系、习惯、世界理解、资源、身体或认知发生可观察变化；没有必须立即处理的危机时，可隔夜、数日后或更久开始。本轮禁止制造新危机、引入新敌对方或让局势升级，允许安静闭合或留下普通生活期待。',
     pressure: '冲突推进轮：外部压力上升，危机、对抗或追逼向前推进一步。本轮只推进一个冲突，不要同时开新战线。',
     turn: '转折揭示轮：反转、信息揭露或伏笔回收。揭示要落在已经埋过的东西上，不要临时造一个真相。',
-    cooldown: '余波消化轮：写战后疗伤、复盘、情绪落地与关系变化。本轮禁止制造新危机，让上一波冲突的代价被真正看见。',
+    cooldown: '余波消化轮：允许主线 hold，完整处理上一波的伤势、代价、情绪与关系变化；可让恢复所需的一夜或数日自然流逝。本轮禁止制造新危机，让后果被真正看见，并允许安静闭合。',
 };
 /**
  * 渲染某一轮的节奏指导。
@@ -120406,12 +123950,86 @@ function renderAgentTurnPacingGuidance_ACU(pacing) {
         return '本轮节奏：尚无可执行的大纲轮次，节奏待大纲创建或继续后确定。';
     return `本轮节奏：${pacing}。${TURN_PACING_GUIDANCE_ACU[pacing]}`;
 }
+const TURN_FUNCTION_LABELS_ACU = {
+    daily_bond: '关系日常',
+    daily_world: '世界日常',
+    recovery: '恢复余波',
+    preparation: '准备',
+    training: '训练/成长',
+    economy: '经营',
+    side_thread: '支线',
+    conflict: '冲突',
+    reveal: '揭示',
+    payoff: '兑现',
+    transition: '过渡',
+};
+const TURN_MAINLINE_LABELS_ACU = {
+    hold: '主线停驻',
+    micro: '主线微推进',
+    step: '主线前进一步',
+    milestone: '主线里程碑',
+};
+const TURN_TIME_LABELS_ACU = {
+    continuous: '紧接上一轮',
+    same_day: '同日稍后',
+    overnight: '隔夜',
+    days: '数日后',
+    weeks: '数周后',
+    months: '数月后',
+    years: '数年后',
+};
+const LONG_TIME_ADVANCES_ACU = new Set(['days', 'weeks', 'months', 'years']);
+/**
+ * 渲染本轮的完整四维标记与由此触发的义务：pacing 指导 + 叙事功能 / 主线增量 / 时间关系 / 时间锚。
+ * 时间跨度较大时把 V26 的时间跳跃义务直接写在这里，主 Agent 不必再去大纲窗口的箭头行比对。
+ * 系统补全的字段单独点名，避免把推断值当成作者意图。
+ * @param turn 当前轮次；无可执行轮次时传 null
+ */
+function renderAgentTurnGuidance_ACU(turn) {
+    if (!turn)
+        return renderAgentTurnPacingGuidance_ACU(null);
+    const lines = [renderAgentTurnPacingGuidance_ACU(turn.pacing)];
+    const marks = [];
+    if (turn.function)
+        marks.push(`叙事功能=${turn.function}（${TURN_FUNCTION_LABELS_ACU[turn.function]}）`);
+    if (turn.mainlineDelta)
+        marks.push(`主线增量=${turn.mainlineDelta}（${TURN_MAINLINE_LABELS_ACU[turn.mainlineDelta]}）`);
+    if (turn.timeAdvance)
+        marks.push(`时间关系=${turn.timeAdvance}（${TURN_TIME_LABELS_ACU[turn.timeAdvance]}）`);
+    if (turn.timeAnchor)
+        marks.push(`时间锚=${turn.timeAnchor}`);
+    if (marks.length)
+        lines.push(`本轮标记：${marks.join('；')}。`);
+    if (turn.inferred?.length) {
+        lines.push(`注意：${turn.inferred.join('、')} 是系统按节奏档保守补全的推断值，不是大纲作者的明确意图；与正文实际情况冲突时以正文为准。`);
+    }
+    if (turn.timeAdvance && LONG_TIME_ADVANCES_ACU.has(turn.timeAdvance)) {
+        lines.push('时间跳跃义务：本轮计划跨越较长故事时间，finalize 的 instruction 必须写明新的相对时间锚、至少两项可感知变化（季节天气、身体伤势、衣着环境、关系熟悉度、资源经营、社会状态等），以及上一紧迫问题为何允许被跨过的连续性桥梁；不得用摘要跳过此前已承诺的关键场景。先 read $CHRONOLOGY 核对累计时间。');
+    }
+    if (turn.mainlineDelta === 'hold') {
+        lines.push('本轮主线允许停驻：不推进核心矛盾、不揭示重大情报、不制造敌方动作，但必须有一项可观察的非危机变化。');
+    }
+    return lines.join('\n');
+}
 /**
  * 渲染当前大纲窗口：本阶段目标、当前节点与本节点全部轮次目标。
  * 大纲缺失或当前阶段已完成时如实说明状态，并指出必须先派工大纲子代理。
  * @param context 解析上下文
  * @returns 自然语言文本
  */
+function renderTurnSemanticMeta_ACU(turn) {
+    const parts = [
+        `pacing=${turn.pacing}`,
+        `function=${turn.function ?? '未标注'}`,
+        `mainline=${turn.mainlineDelta ?? '未标注'}`,
+        `time=${turn.timeAdvance ?? '未标注'}`,
+    ];
+    if (turn.timeAnchor)
+        parts.push(`anchor=${turn.timeAnchor}`);
+    if (turn.inferred?.length)
+        parts.push(`系统补全=${turn.inferred.join(',')}`);
+    return parts.join('｜');
+}
 function renderAgentOutlineWindow_ACU(context) {
     const { execution } = context;
     if (!execution.stage) {
@@ -120423,18 +124041,20 @@ function renderAgentOutlineWindow_ACU(context) {
     if (!execution.revision || !execution.node || !execution.turn) {
         return `第 ${execution.stage.stageNumber} 阶段的大纲当前不可执行（可能等待用户确认或游标无效）。本轮无法交付写作指导。`;
     }
-    // 轮次/节点都带 [ID] 前缀：edit_outline 协议按 nodeId/turnId 定位，模型必须能从渲染里拿到编辑目标。
+    // 轮次与节点都带 [ID] 前缀：便于主 Agent 在委派 outline-architect 时精确引用待维护目标。
     const turns = execution.node.turns
-        .map((turn, index) => `${index + 1}. [${turn.id}]（${turn.pacing}）${turn.goal}${turn.id === execution.turn.id ? '  ← 本轮' : ''}`)
+        .map((turn, index) => `${index + 1}. [${turn.id}]（${renderTurnSemanticMeta_ACU(turn)}）${turn.goal}${turn.id === execution.turn.id ? '  ← 本轮' : ''}`)
         .join('\n');
     return [
         `阶段 ${execution.stage.stageNumber}：${execution.revision.outline.title}`,
         `阶段目标：${execution.revision.outline.goal}`,
         `阶段节奏形态：${describeStageTempo_ACU(execution.revision.outline.tempo)}——它决定本阶段低压轮的下限，也决定下一阶段不能选什么形态。`,
+        `阶段结构职责：${execution.revision.outline.role ?? '旧快照未标注'}`,
+        `阶段时间目标：${execution.revision.outline.timeSpanGoal ?? '未设定'}`,
         `当前节点：[${execution.node.id}] ${execution.node.title}`,
         `节点目标：${execution.node.goal}`,
         `阶段内轮次进度：第 ${execution.turnNumber} / ${execution.revision.outline.totalTurns} 轮`,
-        '本节点逐轮目标（括号内是节奏标签）：',
+        '本节点逐轮目标（括号内依次给出 pacing、function、mainline、time 与可选 anchor）：',
         turns,
         renderAgentTurnPacingGuidance_ACU(execution.turn.pacing),
         '注意：大纲是计划，不是已经发生的事实。',
@@ -120456,7 +124076,7 @@ function renderAgentOutlineState_ACU(context) {
     if (!execution.revision || !execution.node || !execution.turn) {
         return `大纲状态：第 ${execution.stage.stageNumber} 阶段的大纲当前不可执行（可能等待确认或游标无效）。`;
     }
-    return `大纲状态：第 ${execution.stage.stageNumber} 阶段「${execution.revision.outline.title}」（节奏形态 ${describeStageTempo_ACU(execution.revision.outline.tempo)}），第 ${execution.turnNumber}/${execution.revision.outline.totalTurns} 轮，当前节点 [${execution.node.id}]，本轮轮次 [${execution.turn.id}]，本轮节奏 ${execution.turn.pacing}。完整大纲窗口用 read $OUTLINE_WINDOW 调阅。`;
+    return `大纲状态：第 ${execution.stage.stageNumber} 阶段「${execution.revision.outline.title}」（节奏形态 ${describeStageTempo_ACU(execution.revision.outline.tempo)}，结构职责 ${execution.revision.outline.role ?? '未标注'}），第 ${execution.turnNumber}/${execution.revision.outline.totalTurns} 轮，当前节点 [${execution.node.id}]，本轮轮次 [${execution.turn.id}]，${renderTurnSemanticMeta_ACU(execution.turn)}。完整大纲窗口用 read $OUTLINE_WINDOW 调阅。`;
 }
 const ROW_RANGE_PATTERN_ACU = /^(\d+)-(\d+)$/;
 function parseRowRange_ACU(raw) {
@@ -120524,7 +124144,10 @@ function resolveAgentReadToken_ACU(token, context) {
     }
     const storyArcIds = splitIdSuffix_ACU(normalized, '$STORY_ARC');
     if (storyArcIds !== null) {
-        return { title: storyArcIds.length ? `故事总纲条目 ${storyArcIds.join('、')}` : '故事总纲（全部活跃条目）', text: renderAgentStoryArcByIds_ACU(context.moduleSnapshot, storyArcIds.length ? storyArcIds : undefined) };
+        const completedStageNumbers = context.execution.task.stages
+            .filter(stage => stage.status === 'completed')
+            .map(stage => stage.stageNumber);
+        return { title: storyArcIds.length ? `故事总纲条目 ${storyArcIds.join('、')}` : '故事总纲（全部活跃条目）', text: renderAgentStoryArcByIds_ACU(context.moduleSnapshot, storyArcIds.length ? storyArcIds : undefined, completedStageNumbers) };
     }
     const hookIds = splitIdSuffix_ACU(normalized, '$HOOKS_LEDGER');
     if (hookIds !== null) {
@@ -120538,6 +124161,12 @@ function resolveAgentReadToken_ACU(token, context) {
     if (constraintIds !== null) {
         return { title: constraintIds.length ? `长期约束条目 ${constraintIds.join('、')}` : '长期约束（全部条目）', text: renderAgentConstraintsByIds_ACU(context.moduleSnapshot, constraintIds.length ? constraintIds : undefined) };
     }
+    const chronologyIds = splitIdSuffix_ACU(normalized, '$CHRONOLOGY');
+    if (chronologyIds !== null) {
+        return chronologyIds.length
+            ? { title: `故事年代学条目 ${chronologyIds.join('、')}`, text: renderAgentChronologyByIds_ACU(context.moduleSnapshot, chronologyIds) }
+            : { title: '故事年代学账本（已发生正文结算出的时间事实）', text: renderAgentChronology_ACU(context.moduleSnapshot) };
+    }
     const title = READ_TOKEN_TITLES_ACU[normalized] ?? normalized;
     switch (normalized) {
         case '$STORY_TEXT': return { title, text: renderAgentStoryText_ACU(context) };
@@ -120547,7 +124176,7 @@ function resolveAgentReadToken_ACU(token, context) {
         case '$HISTORY_UNSETTLED': return { title, text: renderAgentUnsettledHistory_ACU(context) };
         case '$OUTLINE_WINDOW': return { title, text: renderAgentOutlineWindow_ACU(context) };
         case '$CURRENT_TURN_GOAL': return { title, text: context.execution.turn?.goal || '（尚无可执行的大纲轮次，本轮目标待大纲创建或继续后确定）' };
-        case '$CURRENT_TURN_PACING': return { title, text: renderAgentTurnPacingGuidance_ACU(context.execution.turn?.pacing ?? null) };
+        case '$CURRENT_TURN_PACING': return { title, text: renderAgentTurnGuidance_ACU(context.execution.turn ?? null) };
         case '$USER_INTENT': return { title, text: context.originInstruction || '（用户未提供初始要求）' };
         case '$TABLE_GLOBAL': return { title, text: renderAgentTableByAliases_ACU('global', context.tableData) };
         case '$TABLE_CHARACTERS': return { title, text: renderAgentTableByAliases_ACU('characters', context.tableData) };
@@ -120656,7 +124285,20 @@ function collectModuleLines_ACU(context) {
         lines.push({
             label: `故事总纲 [${entry.id}]${entry.retired ? '（已废止）' : ''}`,
             address: `$STORY_ARC:${entry.id}`,
-            text: [entry.title, entry.direction, entry.escalation, entry.withheld, entry.retiredReason].filter(Boolean).join('｜'),
+            text: [
+                entry.title,
+                entry.narrativeRole,
+                entry.targetStageRange ? `targetStageRange=${entry.targetStageRange.min}-${entry.targetStageRange.max}` : '',
+                entry.targetTimeSpan,
+                entry.direction,
+                entry.escalation,
+                entry.progressCeiling,
+                ...(entry.sustainingThreads ?? []),
+                ...(entry.payoffTargets ?? []),
+                entry.withheld,
+                entry.completionRationale,
+                entry.retiredReason,
+            ].filter(Boolean).join('｜'),
         });
     }
     for (const hook of snapshot.hooks) {
@@ -120680,6 +124322,20 @@ function collectModuleLines_ACU(context) {
             text: [constraint.text, constraint.reason].filter(Boolean).join('｜'),
         });
     }
+    for (const entry of snapshot.chronology) {
+        lines.push({
+            label: `故事年代学 [${entry.id}]${entry.retired ? '（已作废）' : ''}`,
+            address: `$CHRONOLOGY:${entry.id}`,
+            text: [
+                entry.anchor,
+                entry.elapsed,
+                `precision=${entry.precision}`,
+                entry.transition,
+                entry.evidenceIndexes.length ? `证据楼层=${entry.evidenceIndexes.join('、')}` : '',
+                entry.retiredReason,
+            ].filter(Boolean).join('｜'),
+        });
+    }
     return lines;
 }
 function collectOutlineLines_ACU(context) {
@@ -120689,12 +124345,14 @@ function collectOutlineLines_ACU(context) {
     const lines = [{
             label: '大纲 阶段标题',
             address: '$OUTLINE_WINDOW',
-            text: `${revision.outline.title}｜${revision.outline.goal}`,
+            text: `${revision.outline.title}｜${revision.outline.goal}｜tempo=${revision.outline.tempo}｜role=${revision.outline.role ?? '未标注'}｜timeSpan=${revision.outline.timeSpanGoal ?? '未设定'}`,
         }];
     for (const node of revision.outline.nodes) {
         lines.push({ label: `大纲 节点[${node.id}]`, address: '$OUTLINE_WINDOW', text: `${node.title}｜${node.goal}` });
         for (const turn of node.turns) {
-            lines.push({ label: `大纲 轮次[${turn.id}]（${turn.pacing}）`, address: '$OUTLINE_WINDOW', text: turn.goal });
+            const metadata = `pacing=${turn.pacing}｜function=${turn.function ?? '未标注'}｜mainline=${turn.mainlineDelta ?? '未标注'}｜time=${turn.timeAdvance ?? '未标注'}${turn.timeAnchor ? `｜anchor=${turn.timeAnchor}` : ''}`;
+            // 搜索器匹配 text 而不是 label；元数据必须进入正文，不能只做不可检索的展示装饰。
+            lines.push({ label: `大纲 轮次[${turn.id}]`, address: '$OUTLINE_WINDOW', text: `${metadata}｜${turn.goal}` });
         }
     }
     return lines;
@@ -120883,6 +124541,80 @@ async function gateAgentReadBatch_ACU(items, state, config, contextTokens, count
     return { allowed: true, batchTokens, itemTokens, report: '' };
 }
 
+function unique_ACU(values) {
+    return [...new Set(values.map(value => value.trim()).filter(Boolean))];
+}
+function extractAgentFinalReviewWorldbookSeeds_ACU(text) {
+    const matches = String(text ?? '').match(/[\p{Script=Han}]{2,12}|[A-Za-z][A-Za-z0-9_-]{2,}/gu) ?? [];
+    const candidates = [];
+    for (const match of matches) {
+        candidates.push(match);
+        if (!/^[\p{Script=Han}]+$/u.test(match))
+            continue;
+        for (let index = 0; index < match.length - 1; index += 1) {
+            candidates.push(match.slice(index, index + 2));
+        }
+    }
+    return unique_ACU(candidates).slice(0, 48);
+}
+function selectWorldbookEntries_ACU(entries, seeds) {
+    const haystack = seeds.join('\n').toLowerCase();
+    return entries.filter(entry => entry.constant || [entry.title, ...entry.keys].some(term => term && haystack.includes(term.toLowerCase())));
+}
+function renderFullWorldbookEvidence_ACU(entries) {
+    if (!entries.length)
+        return '';
+    return entries.map(entry => `### ${entry.title}（${entry.bookName}#${entry.uid}）\n${entry.content}`).join('\n\n');
+}
+function selectFinalReviewWorldbookEntries_ACU(context, seeds) {
+    const snapshot = context.worldbook;
+    if (!snapshot?.available)
+        return [];
+    const hits = selectWorldbookEntries_ACU(snapshot.entries, seeds);
+    return hits;
+}
+function buildAgentFinalReviewEvidence_ACU(input) {
+    const { resolveContext: context } = input;
+    const outline = renderAgentOutlineWindow_ACU(context);
+    const storyArc = resolveAgentReadToken_ACU('$STORY_ARC', context).text;
+    const tail = renderAgentStoryTail_ACU(context);
+    const constraints = resolveAgentReadToken_ACU('$ACTIVE_CONSTRAINTS', context).text;
+    const chronology = resolveAgentReadToken_ACU('$CHRONOLOGY', context).text;
+    const seedSource = [context.originInstruction, input.currentUserInput, input.candidateInstruction, outline, tail].join('\n');
+    const worldbookSeeds = extractAgentFinalReviewWorldbookSeeds_ACU(seedSource);
+    const worldbookEntries = selectFinalReviewWorldbookEntries_ACU(context, worldbookSeeds);
+    const worldbookEvidence = context.worldbook?.available
+        ? (renderFullWorldbookEvidence_ACU(worldbookEntries) || '没有命中或常开世界书条目。不要凭印象判定世界观冲突；先用 worldbook scope 的 search 定位，再用 $WORLDBOOK:书名:uid 精读全文。')
+        : '世界书当前不可用；涉及人物、能力、地点、组织、种族、社会规则或世界常识的结论必须标注未验证，并可用 worldbook scope 的 search 补查。';
+    const supplementalMaterials = [
+        `### 本轮用户输入\n${input.currentUserInput || '（本轮没有额外用户输入）'}`,
+        `### 长期约束\n${constraints}`,
+        `### 故事年代学账本（已发生正文结算出的时间事实；大纲时间字段只是计划）\n${chronology}`,
+        `### 本轮策划结果摘要\n${input.planningSummary || '（未提供策划结果摘要）'}`,
+        `### 世界书检索种子\n${worldbookSeeds.length ? worldbookSeeds.join('、') : '（未提取到有效检索种子）'}`,
+        `### 已启用世界书目录\n${renderAgentWorldbookCatalog_ACU(context.worldbook ?? { available: false, entries: [] })}`,
+    ].join('\n\n');
+    return {
+        supplementalMaterials,
+        worldbookEvidence,
+        worldbookSeeds,
+        fixedReadKeys: unique_ACU([
+            '$USER_INTENT', '$OUTLINE_WINDOW', '$STORY_ARC', '$STORY_TAIL', '$ACTIVE_CONSTRAINTS', '$CHRONOLOGY',
+            ...worldbookEntries.map(entry => `$WORLDBOOK:${entry.bookName}:${entry.uid}`),
+        ]),
+        gateItems: [
+            { label: '用户初始要求', text: context.originInstruction || '（用户未提供初始要求）' },
+            { label: '本轮用户输入', text: input.currentUserInput || '（本轮没有额外用户输入）' },
+            { label: '候选写作指导', text: input.candidateInstruction },
+            { label: '完整当前阶段大纲', text: outline },
+            { label: '故事总纲', text: storyArc },
+            { label: '最近正文', text: tail },
+            { label: '长期约束、故事年代学账本、策划摘要、检索种子与世界书目录', text: supplementalMaterials },
+            { label: '命中世界书条目全文', text: worldbookEvidence },
+        ],
+    };
+}
+
 /**
  * service/continuation/agent/agent-subagent-runtime.ts — 子代理运行时
  *
@@ -120911,6 +124643,7 @@ const AGENT_SUBAGENT_OVERVIEW_ROWS_ACU = {
 const defaultDependencies_ACU$1 = {
     callInternalAi: callContinuationInternalAi_ACU,
     resolveApiPreset: resolveContinuationApiPreset_ACU,
+    resolveAgentApiPreset: resolveContinuationAgentApiPreset_ACU,
 };
 const PROMPT_KEY_PREFILLS_ACU = {
     arcArchitect: AGENT_PREFILLS_ACU.arc,
@@ -120926,10 +124659,15 @@ const KIND_PAYLOAD_KEYS_ACU = {
     plan: ['recommendation', 'summary'],
     review: ['verdict'],
 };
+/**
+ * 契约类子代理（总纲/维护）在一次派工里最多追加的续写/修补轮数。
+ * 输出被截断或个别条目非法时，只索要剩余或修正条目，不整份重来；这两轮不占协议重试额度。
+ */
+const AGENT_CONTRACT_CONTINUATION_ROUNDS_ACU = 2;
 /** 维护类子代理固定作用的模块。写入范围由职责决定，不再经派工写集协商。 */
 const KIND_FIXED_WRITES_ACU = {
     arc: ['storyArc'],
-    maintain: ['hooks', 'infoGap'],
+    maintain: ['hooks', 'infoGap', 'chronology'],
     plan: [],
     review: [],
 };
@@ -120944,20 +124682,31 @@ function selectPromptSegments_ACU(settings, definition) {
 }
 function renderStoryArcVolumePlanInstruction_ACU(settings) {
     const plan = settings.storyArcVolumePlan;
+    const capacity = '每个新 volume 必须声明 narrativeRole、targetStageRange、targetTimeSpan、progressCeiling、至少一条 sustainingThreads 和至少一条 payoffTargets。targetStageRange 是解释性容量锚：按单轮约 800–1200 字、标准阶段 6–10 轮校准；60 万字仅对应约 500–750 轮的数量级检查，不承诺固定字数或章节数。';
     if (plan === 'short')
-        return '【总纲卷数计划】短线：新建或全量重构总纲时规划 7–8 卷。';
+        return `【总纲卷数计划】短线：新建或全量重构总纲时规划 7–8 卷。${capacity}`;
     if (plan === 'medium')
-        return '【总纲卷数计划】中线：新建或全量重构总纲时规划 10–14 卷。';
+        return `【总纲卷数计划】中线：新建或全量重构总纲时规划 10–14 卷。${capacity}`;
     if (plan === 'long')
-        return '【总纲卷数计划】长线：新建或全量重构总纲时规划 20 卷。';
+        return `【总纲卷数计划】长线：新建或全量重构总纲时规划 20 卷。${capacity}`;
     const count = settings.customStoryArcVolumeCount;
-    return `【总纲卷数计划】自定义：新建或全量重构总纲时规划 ${count ?? '未配置'} 卷。`;
+    return `【总纲卷数计划】自定义：新建或全量重构总纲时规划 ${count ?? '未配置'} 卷。${capacity}`;
 }
 function describeWriteScope_ACU(writes) {
     if (!writes.length)
         return '你的职责不含写入。你只需返回建议或判词，不要输出 delta。';
-    const labels = { hooks: '$HOOKS_LEDGER 伏笔账本', infoGap: '$INFO_GAP 认知与信息差时间线', constraints: '$ACTIVE_CONSTRAINTS 长期约束', storyArc: '$STORY_ARC 故事总纲' };
+    const labels = { hooks: '$HOOKS_LEDGER 伏笔账本', infoGap: '$INFO_GAP 认知与信息差时间线', constraints: '$ACTIVE_CONSTRAINTS 长期约束', storyArc: '$STORY_ARC 故事总纲', chronology: '$CHRONOLOGY 故事年代学账本' };
     return `你的职责固定写入：${writes.map(item => labels[item]).join('、')}。职责之外的模块一律不许出现在 delta 里。`;
+}
+/**
+ * 把一条运行时消息插到尾部预填充之前。渲染后的消息序列若以 assistant 预填充收尾，
+ * 追加内容必须放在它前面，否则预填充不再是最后一条消息、失去续写引导作用。
+ */
+function insertBeforeTrailingPrefill_ACU(messages, extra) {
+    const last = messages[messages.length - 1];
+    if (last && last.role === 'assistant')
+        return [...messages.slice(0, -1), extra, last];
+    return [...messages, extra];
 }
 /** 把一个读地址解析成材料条目。text 已带分节标题，可直接拼接注入。 */
 function resolveMaterial_ACU(token, context) {
@@ -121013,6 +124762,8 @@ class AgentSubagentRuntime_ACU {
             $AGENT_READ_MATERIALS: () => materials,
             $AGENT_TASK: () => input.delegation.prompt,
             $AGENT_WRITE_SCOPE: () => describeWriteScope_ACU(writes),
+            $USER_INTENT: () => input.resolveContext.originInstruction || '（用户未提供初始要求）',
+            $OUTLINE_WINDOW: () => renderAgentOutlineWindow_ACU(input.resolveContext),
             // 资料目录与固定注入：默认提示词按角色矩阵引用；未引用的占位符不产生开销（惰性渲染）。
             $AGENT_READ_CATALOG: () => renderAgentReadCatalog_ACU(),
             $STORY_CATALOG: () => renderAgentStoryCatalog_ACU(input.resolveContext),
@@ -121026,8 +124777,14 @@ class AgentSubagentRuntime_ACU {
             $INFO_GAP: () => resolveAgentReadToken_ACU('$INFO_GAP', input.resolveContext).text,
             $ACTIVE_CONSTRAINTS: () => resolveAgentReadToken_ACU('$ACTIVE_CONSTRAINTS', input.resolveContext).text,
             $STORY_ARC: () => resolveAgentReadToken_ACU('$STORY_ARC', input.resolveContext).text,
+            $CHRONOLOGY: () => resolveAgentReadToken_ACU('$CHRONOLOGY', input.resolveContext).text,
         }, 'agent_delegate');
         const prefill = PROMPT_KEY_PREFILLS_ACU[definition.promptKey];
+        // 总纲卷数计划是随设置变化的运行时指令，不进提示词模板；但它必须落在尾部预填充之前——
+        // 追加在预填充之后会让对话以一条 user 消息收尾，预填充失效，模型会另起一段回复而不是续写 JSON。
+        const baseMessages = definition.promptKey === 'arcArchitect'
+            ? insertBeforeTrailingPrefill_ACU(rendered.messages, { role: 'user', content: renderStoryArcVolumePlanInstruction_ACU(input.settings) })
+            : rendered.messages;
         const retries = normalizeContinuationInternalAiRetryLimit_ACU(input.settings.internalAiRetryLimit);
         const maxToolRounds = Math.max(0, input.budget.maxExtraReads);
         // 小循环的追加消息：子代理自己的输出（assistant）与工具结果/纠正提示（user）。
@@ -121044,6 +124801,7 @@ class AgentSubagentRuntime_ACU {
             promptCacheEnabled: input.settings.promptCacheEnabled,
             // 每个子代理的提示词前缀不同，独立缓存命名空间避免互相挤占路由。
             cacheScope: `sub-${definition.name}`,
+            minOutputTokens: CONTINUATION_ROLE_OUTPUT_TOKEN_FLOORS_ACU[definition.promptKey],
             onUsage: usage => {
                 usageTotal = usageTotal
                     ? {
@@ -121060,8 +124818,35 @@ class AgentSubagentRuntime_ACU {
                     };
             },
         };
-        // 调用总数上界 = 首轮 + 工具轮 + 协议重试 + 工具轮用尽后的最后通牒轮。到界仍未交付即失败。
-        const maxCalls = 1 + maxToolRounds + retries + 1;
+        // 调用总数上界 = 首轮 + 工具轮 + 协议重试 + 工具轮用尽后的最后通牒轮 + 契约续写/修补轮。到界仍未交付即失败。
+        const contractKind = definition.kind === 'arc' || definition.kind === 'maintain';
+        const maxContinuations = contractKind ? AGENT_CONTRACT_CONTINUATION_ROUNDS_ACU : 0;
+        const maxCalls = 1 + maxToolRounds + retries + 1 + maxContinuations;
+        // 契约草稿累积：截断或单条非法时不整份重来，先收下合法条目，再只向模型索要剩余/修正条目。
+        let accumulated = null;
+        let continuationsUsed = 0;
+        // 跨轮未清偿的被拒条目：模型在续写里没有重发修正版就不能算完成，否则条目会被静默丢掉。
+        let outstanding = [];
+        const acceptedKeys = (output) => new Set([
+            ...[...output.delta.hooks, ...output.delta.hookPatches].map(item => `hooks:${item.id}`),
+            ...[...output.delta.infoGap, ...output.delta.infoGapPatches].map(item => `infoGap:${item.id}`),
+            ...[...output.delta.storyArc, ...output.delta.storyArcPatches].map(item => `storyArc:${item.id}`),
+            ...output.delta.chronology.map(item => `chronology:${item.id}`),
+        ]);
+        const deliverContract = (output) => ({
+            agentName: definition.name,
+            kind: definition.kind,
+            writes,
+            arc: definition.kind === 'arc' ? output : null,
+            maintainer: definition.kind === 'maintain' ? output : null,
+            planner: null,
+            reviewer: null,
+            iterations: 1 + toolRoundsUsed,
+            attempts: attempt,
+            expandedReads: [...expandedReads],
+            readRevisions,
+            usage: usageTotal,
+        });
         for (let call = 0; call < maxCalls; call += 1) {
             const identity = input.createIdentity(definition.name, attempt);
             attempt += 1;
@@ -121069,11 +124854,7 @@ class AgentSubagentRuntime_ACU {
                 throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_delegate', '子代理请求已失效', false));
             }
             // 传输错误（502/网络抖动）按设置延时重试；协议/契约拒绝仍走小循环内的对话级立即重试。
-            const raw = await callContinuationInternalAiWithRetry_ACU(() => this.dependencies.callInternalAi([
-                ...rendered.messages,
-                ...(definition.promptKey === 'arcArchitect' ? [{ role: 'user', content: renderStoryArcVolumePlanInstruction_ACU(input.settings) }] : []),
-                ...transcript,
-            ], input.preset, identity, input.signal, callOptions), {
+            const raw = await callContinuationInternalAiWithRetry_ACU(() => this.dependencies.callInternalAi([...baseMessages, ...transcript], input.preset, identity, input.signal, callOptions), {
                 transportRetries: retries,
                 retryDelaySeconds: input.settings.retryDelaySeconds,
                 isCurrent: () => input.isCurrent(identity) && !input.signal?.aborted,
@@ -121095,13 +124876,45 @@ class AgentSubagentRuntime_ACU {
                 continue;
             }
             try {
+                if (contractKind) {
+                    const draft = parseAgentJsonPayloadDraft_ACU(raw, prefill, KIND_PAYLOAD_KEYS_ACU[definition.kind]);
+                    const parsed = parseAgentMaintainerOutputDraft_ACU(draft.payload);
+                    accumulated = accumulated ? mergeAgentMaintainerOutputs_ACU(accumulated, parsed.output) : parsed.output;
+                    // 上一轮被拒的条目：本轮重发了合法版本即清偿；没有 id 的条目无法匹配，本轮过后不再追讨。
+                    const nowAccepted = acceptedKeys(parsed.output);
+                    outstanding = outstanding.filter(item => item.id && !nowAccepted.has(`${item.module}:${item.id}`));
+                    const pending = [...outstanding, ...parsed.rejected];
+                    outstanding = pending;
+                    // 总纲尚未建立时，一份没有任何 storyArc 写入的“成功”输出等于什么都没做——模型常把卷台阶写进 summary。
+                    // 这种空写入不能交回主 Agent 白耗它的派工上限，先在这里索要真正的条目。
+                    const emptyArcBootstrap = definition.kind === 'arc'
+                        && !hasActiveStoryArc_ACU(input.resolveContext.moduleSnapshot)
+                        && !accumulated.delta.storyArc.length
+                        && !accumulated.delta.storyArcPatches.length;
+                    if (emptyArcBootstrap && !pending.length && !draft.truncated) {
+                        pending.push({ module: 'storyArc', index: 0, id: '', reason: '总纲尚未建立，但 delta.storyArc 为空。summary 里的文字不会写入任何东西：必须在 delta.storyArc 里给出 1 条 scope=story 的 upsert 与按【总纲卷数计划】数量的 scope=volume upsert，每条都带 id / title / direction / escalation / withheld / status 与卷级契约字段' });
+                    }
+                    if (!draft.truncated && !pending.length)
+                        return deliverContract(accumulated);
+                    if (continuationsUsed >= maxContinuations) {
+                        if (pending.length) {
+                            throw subagentFailed_ACU(`${definition.name} 仍有 ${pending.length} 条条目不符合契约（续写/修补 ${continuationsUsed} 轮后）`, false, { agentName: definition.name, lastReason: pending[0].reason, rejected: pending });
+                        }
+                        // 只剩截断：已收下的条目本身都完整，接受它们，未写出的部分留给下一轮派工。
+                        return deliverContract(accumulated);
+                    }
+                    continuationsUsed += 1;
+                    transcript.push({ role: 'assistant', content: rawText || '(空输出)' });
+                    transcript.push({ role: 'user', content: renderAgentContractContinuationRequest_ACU(accumulated, pending, draft.truncated) });
+                    continue;
+                }
                 const payload = parseAgentJsonPayload_ACU(raw, prefill, KIND_PAYLOAD_KEYS_ACU[definition.kind]);
                 return {
                     agentName: definition.name,
                     kind: definition.kind,
                     writes,
-                    arc: definition.kind === 'arc' ? parseAgentMaintainerOutput_ACU(payload) : null,
-                    maintainer: definition.kind === 'maintain' ? parseAgentMaintainerOutput_ACU(payload) : null,
+                    arc: null,
+                    maintainer: null,
                     planner: definition.kind === 'plan' ? parseAgentPlannerOutput_ACU(payload) : null,
                     reviewer: definition.kind === 'review' ? parseAgentReviewerOutput_ACU(payload) : null,
                     iterations: 1 + toolRoundsUsed,
@@ -121112,6 +124925,8 @@ class AgentSubagentRuntime_ACU {
                 };
             }
             catch (error) {
+                if (error instanceof ContinuationValidationError_ACU && error.error.code === 'CONTINUATION_AGENT_SUBAGENT_FAILED')
+                    throw error;
                 lastReason = compactAgentProtocolError_ACU(error);
                 protocolRejections += 1;
                 if (protocolRejections > retries) {
@@ -121123,6 +124938,123 @@ class AgentSubagentRuntime_ACU {
             }
         }
         throw subagentFailed_ACU(`${definition.name} 在 ${maxCalls} 次调用内没有交付契约输出`, false, { agentName: definition.name, lastReason, toolRoundsUsed });
+    }
+    /**
+     * 运行一次发送前最终审查。它不接受普通 delegation，且固定证据与补充读取共用 finalReview 独立门禁。
+     */
+    async runFinalReview(input) {
+        const evidence = buildAgentFinalReviewEvidence_ACU(input);
+        const gate = {
+            state: createAgentReadGateState_ACU(),
+            config: {
+                historyTokenBudget: input.settings.agentHistoryTokenBudget,
+                readTokenBudget: input.settings.finalReview.readTokenBudget,
+                fallbackTokens: input.settings.agentReadFallbackTokens,
+            },
+            granted: new Set(),
+        };
+        const fixedDecision = await gateAgentReadBatch_ACU(evidence.gateItems, gate.state, gate.config, 0);
+        if (!fixedDecision.allowed) {
+            throw subagentFailed_ACU('终审固定证据超出独立读取预算，终审未执行。', false, {
+                reason: fixedDecision.reason,
+                report: fixedDecision.report,
+                batchTokens: fixedDecision.batchTokens,
+            });
+        }
+        gate.state.grantedTokens += fixedDecision.batchTokens;
+        for (const key of evidence.fixedReadKeys)
+            gate.granted.add(key);
+        const rendered = await renderContinuationPrompt_ACU(input.settings.agentPrompts.finalReviewer, {
+            $USER_INTENT: () => input.resolveContext.originInstruction || '（用户未提供初始要求）',
+            $OUTLINE_WINDOW: () => renderAgentOutlineWindow_ACU(input.resolveContext),
+            $STORY_ARC: () => resolveAgentReadToken_ACU('$STORY_ARC', input.resolveContext).text,
+            $CHRONOLOGY: () => resolveAgentReadToken_ACU('$CHRONOLOGY', input.resolveContext).text,
+            $STORY_TAIL: () => renderAgentStoryTail_ACU(input.resolveContext),
+            $WORLDBOOK_HITS: () => evidence.worldbookEvidence,
+            $AGENT_READ_MATERIALS: () => evidence.supplementalMaterials,
+            $AGENT_TASK: () => input.candidateInstruction,
+        }, 'agent_delegate');
+        const resolveAgentPreset = this.dependencies.resolveAgentApiPreset ?? resolveContinuationAgentApiPreset_ACU;
+        const preset = resolveAgentPreset(input.settings, 'finalReviewer', 'agent_delegate');
+        const readRevisions = { ...input.resolveContext.moduleSnapshot.revisions };
+        const prefill = AGENT_PREFILLS_ACU.reviewer;
+        const retries = normalizeContinuationInternalAiRetryLimit_ACU(input.settings.internalAiRetryLimit);
+        const maxToolRounds = Math.max(0, input.settings.finalReview.maxExtraReads);
+        const transcript = [];
+        const expandedReads = [];
+        let toolRoundsUsed = 0;
+        let protocolRejections = 0;
+        let attempt = 0;
+        let lastReason = '';
+        let usageTotal = null;
+        const addCompleteCount = (current, incoming) => (current !== undefined && incoming !== undefined ? current + incoming : undefined);
+        const callOptions = {
+            promptCacheEnabled: false,
+            cacheScope: 'final-reviewer',
+            minOutputTokens: CONTINUATION_ROLE_OUTPUT_TOKEN_FLOORS_ACU.finalReviewer,
+            onUsage: usage => {
+                usageTotal = usageTotal
+                    ? {
+                        promptTokens: addCompleteCount(usageTotal.promptTokens, usage.promptTokens),
+                        completionTokens: addCompleteCount(usageTotal.completionTokens, usage.completionTokens),
+                        cachedTokens: addCompleteCount(usageTotal.cachedTokens, usage.cachedTokens),
+                        cacheWriteTokens: addCompleteCount(usageTotal.cacheWriteTokens, usage.cacheWriteTokens),
+                    }
+                    : { ...usage };
+            },
+        };
+        const maxCalls = 1 + maxToolRounds + retries + 1;
+        for (let call = 0; call < maxCalls; call += 1) {
+            const identity = input.createIdentity(AGENT_FINAL_REVIEWER_NAME_ACU, attempt);
+            attempt += 1;
+            if (!input.isCurrent(identity)) {
+                throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_delegate', '终审请求已失效', false));
+            }
+            const raw = await callContinuationInternalAiWithRetry_ACU(() => this.dependencies.callInternalAi([...rendered.messages, ...transcript], preset, identity, input.signal, callOptions), {
+                transportRetries: retries,
+                retryDelaySeconds: input.settings.retryDelaySeconds,
+                isCurrent: () => input.isCurrent(identity) && !input.signal?.aborted,
+            });
+            if (!input.isCurrent(identity)) {
+                throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_delegate', '终审结果已失效', false));
+            }
+            const rawText = String(raw ?? '').trim();
+            const toolCalls = parseAgentSubagentToolCalls_ACU(raw, prefill);
+            if (toolCalls) {
+                transcript.push({ role: 'assistant', content: rawText || '(空输出)' });
+                if (toolRoundsUsed >= maxToolRounds) {
+                    transcript.push({ role: 'user', content: `read/search 轮次已用尽（上限 ${maxToolRounds} 轮）。请依据已有证据输出终审 JSON；无法证实的内容写为未验证，不许臆测。` });
+                    continue;
+                }
+                toolRoundsUsed += 1;
+                transcript.push({ role: 'user', content: await this.executeToolCalls_ACU(toolCalls, input.resolveContext, gate, expandedReads) });
+                continue;
+            }
+            try {
+                const payload = parseAgentJsonPayload_ACU(raw, prefill, ['verdict', 'summary', 'emotionFindings', 'worldFindings', 'logicFindings', 'requiredFixes', 'preserve']);
+                return {
+                    output: parseAgentFinalReviewerOutput_ACU(payload),
+                    evidence,
+                    iterations: 1 + toolRoundsUsed,
+                    attempts: attempt,
+                    toolRounds: toolRoundsUsed,
+                    readTokens: gate.state.grantedTokens,
+                    expandedReads: [...expandedReads],
+                    readRevisions,
+                    usage: usageTotal,
+                };
+            }
+            catch (error) {
+                lastReason = compactAgentProtocolError_ACU(error);
+                protocolRejections += 1;
+                if (protocolRejections > retries) {
+                    throw subagentFailed_ACU(`最终审查连续 ${retries + 1} 次返回不符合契约`, false, { lastReason });
+                }
+                transcript.push({ role: 'assistant', content: rawText || '(空输出)' });
+                transcript.push({ role: 'user', content: `你上一次的输出没有被采纳。原因：${lastReason}\n请修正后重新输出符合终审契约的 JSON 对象。` });
+            }
+        }
+        throw subagentFailed_ACU(`最终审查在 ${maxCalls} 次调用内没有交付契约输出`, false, { lastReason, toolRoundsUsed });
     }
     /**
      * 执行子代理的一个工具批次并渲染结果文本。
@@ -121333,6 +125265,7 @@ const defaultDependencies_ACU = {
     readModuleSnapshot: readAgentModuleSnapshot_ACU,
     writeModuleSnapshot: writeAgentModuleSnapshot_ACU,
     readConversation: readAgentConversation_ACU,
+    readCompactionMark: readActiveAgentConversationCompactionMark_ACU,
     appendConversationMessages: appendPreparedAgentConversationMessages_ACU,
     writeCompactionMark: writeAgentConversationCompactionMark_ACU,
     loadWorldbook: loadAgentWorldbookSnapshot_ACU,
@@ -121340,6 +125273,56 @@ const defaultDependencies_ACU = {
 };
 function failLoop_ACU(code, message, details) {
     throw new ContinuationValidationError_ACU(createContinuationError_ACU(code, 'agent_loop', message, false, details));
+}
+const ARC_MAINTENANCE_TRIGGER_PATTERN_ACU = /(偏离|越出|偏差|脱节|底牌|提前(翻|释放|揭)|收束|完结|收尾|done|续卷|扩充|新卷|追加.*卷|切卷|台阶|patch|回写|登记|进度)/i;
+const ARC_EVIDENCE_PATTERN_ACU = /(楼层\s*\d+|第\s*\d+\s*楼|\$STORY_RANGE:\d+|第\s*\d+\s*阶段|阶段\s*\d+|stage\s*\d+|VOL-\d+)/i;
+/**
+ * arc-architect 派工门禁。总纲一旦建立，每轮都派它“更新总纲”只会让卷台阶被反复重写、派工额度被白白吃掉。
+ * 结构性事件（总纲为空、没有 active 卷、已完成阶段未登记、当前阶段刚完成）直接放行；
+ * 其余维护必须在 prompt 里写明触发事由并引用依据（楼层 / 阶段 / 卷号），否则拒绝且不消耗派工额度。
+ * @param context 解析上下文
+ * @param prompt 主 Agent 给 arc-architect 的任务描述
+ */
+function evaluateArcArchitectDispatch_ACU(context, prompt) {
+    if (!hasActiveStoryArc_ACU(context.moduleSnapshot))
+        return { allowed: true, reason: '' };
+    if (!hasActiveStoryArcVolume_ACU(context.moduleSnapshot))
+        return { allowed: true, reason: '' };
+    const completed = context.execution.task.stages.filter(stage => stage.status === 'completed').map(stage => stage.stageNumber);
+    if (findUnregisteredStageNumbers_ACU(context.moduleSnapshot, completed).length)
+        return { allowed: true, reason: '' };
+    if (context.execution.stage?.status === 'completed')
+        return { allowed: true, reason: '' };
+    const text = String(prompt ?? '');
+    if (ARC_MAINTENANCE_TRIGGER_PATTERN_ACU.test(text) && ARC_EVIDENCE_PATTERN_ACU.test(text))
+        return { allowed: true, reason: '' };
+    return {
+        allowed: false,
+        reason: '总纲已建立、没有待登记的已完成阶段、当前阶段仍在进行，本轮没有需要维护总纲的结构事件，arc-architect 未执行（不消耗派工额度）。只有剧情越出台阶、底牌被正文提前翻开、当前卷已可判定收束或需要追加新卷时才派它，并在 prompt 里写明事由与依据（如「楼层 12-14 主角提前翻出身世，VOL-01 的 withheld 需要更新」）。常规轮次请直接进入结算与策划。',
+    };
+}
+/**
+ * 主 Agent 输出被协议层拒绝时的回灌文本：错误原因 + 按当前状态给出的最可能合法动作样例。
+ * 快速模型对“照这个样子写”远比对“请修正”服从；样例按状态选择，避免把不合时宜的动作推给它。
+ */
+function renderMainProtocolRejection_ACU(reason, execution, allowDelegate) {
+    const lines = [
+        `你上一次的输出没有被采纳。原因：${reason}`,
+        '只输出一个 JSON 对象（可在前面写少量思路，但不要 <think> 块、不要 Markdown 围栏），格式必须是下面之一：',
+    ];
+    const hasTurn = !!execution.turn;
+    if (!hasTurn && allowDelegate) {
+        lines.push('{"thought":"先建立大纲","action":"delegate","delegations":[{"agentName":"outline-architect","prompt":"按总纲当前 active 卷规划本阶段","reads":[]}]}');
+    }
+    lines.push('{"thought":"需要核对正文","action":"read","reads":["$STORY_TAIL","$HOOKS_LEDGER"]}');
+    if (allowDelegate) {
+        lines.push('{"thought":"先结算再策划","action":"delegate","delegations":[{"agentName":"hook-cognition-maintainer","prompt":"结算未结算正文，对照上一轮目标评估达成度","reads":[]},{"agentName":"mainline-planner","prompt":"本轮 pacing=setup，允许主线 hold","reads":[]}]}');
+    }
+    if (hasTurn) {
+        lines.push('{"thought":"证据已足够","action":"finalize","instruction":"承接：……\\n本轮场景任务：……\\n必须发生的变化：……","summary":"一句话要点"}');
+    }
+    lines.push('{"thought":"关键资料缺失","action":"block","reason":"……","unresolved":["……"]}');
+    return lines.join('\n');
 }
 /**
  * 生成本次运行的会话标题。
@@ -121366,8 +125349,6 @@ function describeAgentActionLabel_ACU(action) {
         return `调用 ${action.calls.length} 个 read/search 工具`;
     if (action.kind === 'delegate')
         return `派工 ${action.delegations.length} 项`;
-    if (action.kind === 'edit_outline')
-        return `工具编辑大纲 ${action.edits.length} 处`;
     if (action.kind === 'finalize')
         return '交付写作指导';
     return '阻断本轮';
@@ -121393,7 +125374,7 @@ function buildAgentTurnAnnouncement_ACU(context) {
  * @param tool 可选的 read/search 用量（批次数、已放行 token、累计预算 M）
  * @returns 自然语言文本；进入最后一轮时明确禁止继续派工
  */
-function renderAgentBudget_ACU(budget, iteration, ledger, waveLimit, tool) {
+function renderAgentBudget_ACU(budget, iteration, ledger, waveLimit, tool, lifecycle) {
     const isFinal = iteration >= budget.maxIterations;
     const lines = [
         `迭代：第 ${iteration} / ${budget.maxIterations} 次（read/search 工具批次不计入迭代，放心读取）`,
@@ -121405,9 +125386,17 @@ function renderAgentBudget_ACU(budget, iteration, ledger, waveLimit, tool) {
         lines.push(`read/search：已用 ${tool.batchesUsed} / ${budget.maxReads} 个工具批次，累计放行约 ${tool.grantedTokens} / ${tool.maxReadTokens} tokens`);
         lines.push('读取预算分配建议：大头留给世界书设定与正文回溯（各约 1/3），剩余用于表格与账本核对。世界书目录与命中提示里每条都标注了 token 开销，按需取用；预算就是给你花的，宁可多读一条设定，也不要闭眼编设定。');
     }
-    lines.push(isFinal
-        ? 'FINAL_ITERATION：本轮已是最后一次迭代，delegate 已被禁用。请基于现有证据输出 finalize；关键信息确实缺失时输出 block，不许伪造。'
-        : '预算充足，可以继续派工。读取与派工都是每轮的正常开销，不算浪费；证据与建议都齐了就立刻 finalize，不要为「或许还能更好」反复加派。');
+    if (lifecycle?.convergenceOnly) {
+        lines.push('CONVERGENCE_ONLY：必要的大纲维护已完成，本次只允许输出 finalize 或 block；不得继续派工。');
+    }
+    else if (lifecycle?.outlineMaintenanceReserveAvailable) {
+        lines.push('FINAL_MAINTENANCE_RESERVE：当前没有可执行大纲。仅可委派一次 outline-architect 创建、继续或维护阶段大纲；其他代理仍被禁用。维护完成后必须 finalize 或 block。');
+    }
+    else {
+        lines.push(isFinal
+            ? 'FINAL_ITERATION：本轮已是最后一次迭代，delegate 已被禁用。请基于现有证据输出 finalize；关键信息确实缺失时输出 block，不许伪造。'
+            : '预算充足，可以继续派工。读取与派工每轮的正常开销，不算浪费；证据与建议都齐了就立刻 finalize，不要为「或许还能更好」反复加派。');
+    }
     return lines.join('\n');
 }
 /**
@@ -121446,6 +125435,66 @@ function describePlannerOutcome_ACU(summary, recommendation, mustPreserve, risks
         risks.length ? `风险：${risks.join('；')}` : '',
         summary && !recommendation ? `摘要：${summary}` : '',
     ].filter(Boolean).join('\n');
+}
+function fingerprintFinalReviewCandidate_ACU(instruction) {
+    let hash = 2166136261;
+    for (let index = 0; index < instruction.length; index += 1) {
+        hash ^= instruction.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+    }
+    return `${instruction.length}:${(hash >>> 0).toString(16)}`;
+}
+function renderFinalReviewFeedback_ACU(status, candidateFingerprint, candidateSummary, detail) {
+    const title = status === 'completed' ? '【发送前终审反馈】' : '【发送前终审未完成】';
+    return [
+        title,
+        `候选标识：${candidateFingerprint}`,
+        `候选摘要：${candidateSummary}`,
+        detail,
+        '这是一次性终审的最终回灌。请据此修订指导、派责任代理维护权威计划，或 block；本轮后续 finalize 不会再次触发终审。',
+    ].join('\n');
+}
+const FINAL_REVIEW_STATE_DIGEST_ACU = '发送前终审状态';
+function normalizeFinalReviewState_ACU(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value))
+        return null;
+    const raw = value;
+    const status = raw.status;
+    if (typeof status !== 'string' || !AGENT_FINAL_REVIEW_STATUSES_ACU.includes(status))
+        return null;
+    if (typeof raw.candidateFingerprint !== 'string' || typeof raw.candidateSummary !== 'string' || typeof raw.feedback !== 'string')
+        return null;
+    return {
+        status: status,
+        candidateFingerprint: raw.candidateFingerprint,
+        candidateSummary: raw.candidateSummary,
+        feedback: raw.feedback,
+    };
+}
+function renderFinalReviewStateRecord_ACU(taskId, state) {
+    return `【发送前终审状态】\n${JSON.stringify({ schemaVersion: 1, taskId, ...state })}`;
+}
+function readFinalReviewStateFromConversation_ACU(snapshot, taskId, turnKey) {
+    for (let index = snapshot.messages.length - 1; index >= 0; index -= 1) {
+        const message = snapshot.messages[index];
+        if (!message || message.turnKey !== turnKey || message.digest !== FINAL_REVIEW_STATE_DIGEST_ACU)
+            continue;
+        const separator = message.text.indexOf('\n');
+        if (separator < 0)
+            continue;
+        try {
+            const raw = JSON.parse(message.text.slice(separator + 1));
+            if (!raw || typeof raw !== 'object' || Array.isArray(raw) || raw.taskId !== taskId)
+                continue;
+            const state = normalizeFinalReviewState_ACU(raw);
+            if (state)
+                return state;
+        }
+        catch {
+            // 损坏的历史状态记录不能阻断新轮次；继续寻找更早的合法记录。
+        }
+    }
+    return null;
 }
 /** 主 Agent 轮次规划器。替代 V7 的一次性指令生成器，对外只暴露 plan 一个入口。 */
 class ContinuationAgentTurnPlanner_ACU {
@@ -121502,6 +125551,11 @@ class ContinuationAgentTurnPlanner_ACU {
         const identitySeed = request.createInternalRequestIdentity(0);
         const cursorKeyOf = () => {
             const execution = request.readContext();
+            const moduleSnapshot = context.moduleSnapshot;
+            return `${execution.stage?.stageId ?? 'pre-outline'}#${execution.revision?.revision ?? 0}#${execution.turn?.id ?? ''}#arc:${moduleSnapshot.revisions.storyArc}#settled:${moduleSnapshot.settledThroughIndex}`;
+        };
+        const conversationTurnKeyOf = () => {
+            const execution = request.readContext();
             return `${execution.stage?.stageId ?? 'pre-outline'}#${execution.revision?.revision ?? 0}#${execution.turn?.id ?? ''}`;
         };
         // 中断恢复：上次运行在同任务同游标下失败时，带着已获得的证据从中断迭代继续，
@@ -121510,6 +125564,11 @@ class ContinuationAgentTurnPlanner_ACU {
         const ledger = resumedState
             ? { delegationsUsed: resumedState.ledger.delegationsUsed, perAgent: new Map(Object.entries(resumedState.ledger.perAgent)), outcomes: resumedState.ledger.outcomes }
             : { delegationsUsed: 0, perAgent: new Map(), outcomes: [] };
+        let ledgerCursorKey = cursorKeyOf();
+        let finalReview = { status: 'not_started', candidateFingerprint: '', candidateSummary: '', feedback: '' };
+        let postReviewDecisionAvailable = false;
+        let outlineMaintenanceReserveUsed = false;
+        let maintenanceConvergenceAvailable = false;
         // 上次迭代耗尽后恢复时收敛到最后一次迭代：派工被禁用，主 Agent 必须基于已有证据交付或阻断。
         const iterationStart = resumedState ? Math.min(Math.max(1, resumedState.nextIteration), budget.maxIterations) : 1;
         const persistRunState = (nextIteration) => saveAgentRunState_ACU(identitySeed.chatIdentity, {
@@ -121517,11 +125576,20 @@ class ContinuationAgentTurnPlanner_ACU {
             cursorKey: cursorKeyOf(),
             nextIteration,
             ledger: { delegationsUsed: ledger.delegationsUsed, perAgent: Object.fromEntries(ledger.perAgent), outcomes: ledger.outcomes },
+            finalReview,
         });
         let totalAttempts = 0;
         let terminalLogged = false;
         let lastConstraintRejection = '';
         let currentIteration = iterationStart;
+        const resetLedgerForAuthorityChange = () => {
+            const currentCursorKey = cursorKeyOf();
+            if (currentCursorKey === ledgerCursorKey)
+                return;
+            ledger.delegationsUsed = 0;
+            ledger.perAgent.clear();
+            ledgerCursorKey = currentCursorKey;
+        };
         beginAgentSessionRun_ACU(describeRunLabel_ACU(context), resumedState
             ? `从中断点恢复：继续第 ${iterationStart} 次迭代，已保留 ${ledger.outcomes.length} 条已完成结果`
             : context.execution.turn?.goal ?? '本轮目标待大纲确定', resumedState !== null);
@@ -121539,13 +125607,55 @@ class ContinuationAgentTurnPlanner_ACU {
         };
         // 会话在 beginAgentSessionRun_ACU 之后打开：压缩/阈值通知按时间顺序
         // 落在本次运行的分隔条之后，用户能看出它属于哪一次运行。
-        const session = await this.openConversation_ACU(chat, request, cursorKeyOf(), counter, measureOverhead);
+        const handoffSemanticAdapter = createAgentHandoffSemanticSummaryAdapter_ACU(async (messages) => {
+            const base = request.createInternalRequestIdentity(0);
+            if (!request.isInternalRequestCurrent(base))
+                throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_loop', '交接摘要请求已失效', false));
+            const identity = {
+                ...base,
+                requestId: `${base.requestId || base.attemptId || 'turn'}-handoff-summary`,
+                source: 'handoff_summary',
+            };
+            return this.dependencies.callInternalAi(messages, preset, identity, request.signal, { promptCacheEnabled: false, cacheScope: 'handoff-summary' });
+        });
+        const session = await this.openConversation_ACU(chat, request, conversationTurnKeyOf(), counter, measureOverhead, handoffSemanticAdapter);
+        if (request.settings.finalReview.enabled) {
+            finalReview = resumedState?.finalReview ?? readFinalReviewStateFromConversation_ACU(session.snapshot(), identitySeed.taskId, session.turnKey) ?? finalReview;
+            postReviewDecisionAvailable = finalReview.status === 'feedback_ready';
+        }
+        else {
+            finalReview = { ...finalReview, status: 'consumed' };
+        }
+        const recordFinalReviewState = async () => {
+            if (!request.settings.finalReview.enabled)
+                return;
+            session.record([{
+                    kind: 'runtime',
+                    text: renderFinalReviewStateRecord_ACU(identitySeed.taskId, finalReview),
+                    digest: FINAL_REVIEW_STATE_DIGEST_ACU,
+                    turnKey: session.turnKey,
+                }]);
+            await session.flush();
+        };
         /** 门禁的 H：主 Agent 当前实际读取的完整上下文（骨架开销 + 实时会话历史）。 */
         const measureContextTokens = async () => (await measureOverhead()) + await measureAgentPromptTokens_ACU(session.history(), counter);
         // 换轮通告只在游标真的变了时追加：同一轮内的中断恢复不重复通告，否则模型会以为又开了一轮。
         if (session.turnKey && lastAnnouncedTurnKey_ACU(session.snapshot()) !== session.turnKey) {
             session.record([{ kind: 'turn', text: buildAgentTurnAnnouncement_ACU(context), digest: describeRunLabel_ACU(context), turnKey: session.turnKey }]);
             await session.flush();
+        }
+        // 缓存写入 reviewing 后进程若中断，不能重复付费审查。改为可诊断的反馈，让主 Agent 明确裁决。
+        if (request.settings.finalReview.enabled && finalReview.status === 'reviewing') {
+            finalReview = {
+                ...finalReview,
+                status: 'feedback_ready',
+                feedback: renderFinalReviewFeedback_ACU('interrupted', finalReview.candidateFingerprint, finalReview.candidateSummary, '终审请求在拿到可用结论前中断，未将其视为通过。请依据现有资料修订、补证或 block。'),
+            };
+            session.record([{ kind: 'tool', text: finalReview.feedback, digest: '发送前终审中断', turnKey: session.turnKey }]);
+            await session.flush();
+            await recordFinalReviewState();
+            persistRunState(iterationStart);
+            postReviewDecisionAvailable = true;
         }
         /** 把本次动作新产生的运行时结论作为工具消息追加进会话，让下一次迭代按真实 role 读到它。 */
         const commitOutcomes = async (before) => {
@@ -121566,7 +125676,7 @@ class ContinuationAgentTurnPlanner_ACU {
             const totalCallLimit = budget.maxIterations + budget.maxReads + 4;
             let totalCalls = 0;
             let iteration = iterationStart;
-            while (iteration <= budget.maxIterations) {
+            while (iteration <= budget.maxIterations || postReviewDecisionAvailable || maintenanceConvergenceAvailable) {
                 if (request.signal?.aborted) {
                     throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_loop', '本轮规划已被用户中断', false));
                 }
@@ -121576,11 +125686,20 @@ class ContinuationAgentTurnPlanner_ACU {
                 }
                 // 大纲操作会改变游标，每次迭代都从权威状态重读执行上下文。
                 context.execution = request.readContext();
+                resetLedgerForAuthorityChange();
                 currentIteration = iteration;
                 persistRunState(iteration);
-                const allowDelegate = iteration < budget.maxIterations && ledger.delegationsUsed < budget.maxDelegations;
-                await this.ensureRuntimeSnapshot_ACU(request, session, context, ledger, budget, iteration, toolUsage, gateConfig);
-                const round = await this.callMainAgent(request, preset, session, context, ledger, budget, iteration, allowDelegate, toolUsage, gateConfig);
+                const noExecutableOutline = !context.execution.turn;
+                const outlineMaintenanceReserveAvailable = !maintenanceConvergenceAvailable
+                    && !outlineMaintenanceReserveUsed
+                    && noExecutableOutline
+                    && !!request.applyOutline
+                    && (iteration >= budget.maxIterations || ledger.delegationsUsed >= budget.maxDelegations);
+                const allowDelegate = !maintenanceConvergenceAvailable
+                    && ((iteration < budget.maxIterations && ledger.delegationsUsed < budget.maxDelegations) || outlineMaintenanceReserveAvailable);
+                const lifecycle = { outlineMaintenanceReserveAvailable, convergenceOnly: maintenanceConvergenceAvailable };
+                await this.ensureRuntimeSnapshot_ACU(request, session, context, ledger, budget, iteration, toolUsage, gateConfig, lifecycle);
+                const round = await this.callMainAgent(request, preset, session, counter, context, ledger, budget, iteration, allowDelegate, toolUsage, gateConfig, lifecycle);
                 totalAttempts += round.attempts;
                 const action = round.action;
                 logAgentSession_ACU({
@@ -121589,22 +125708,92 @@ class ContinuationAgentTurnPlanner_ACU {
                     detail: action.thought,
                 });
                 const outcomesBefore = ledger.outcomes.length;
+                if (maintenanceConvergenceAvailable && action.kind !== 'finalize' && action.kind !== 'block') {
+                    failLoop_ACU('CONTINUATION_AGENT_PROTOCOL_INVALID', '必要大纲维护完成后只允许 finalize 或 block，不能继续读取或派工。', { action: action.kind });
+                }
+                if (postReviewDecisionAvailable && action.kind !== 'tools') {
+                    logAgentSession_ACU({
+                        kind: 'thought',
+                        title: `迭代 ${iteration} · 终审反馈后的主 Agent 动作`,
+                        detail: `协议动作：${action.kind}`,
+                    });
+                    finalReview = { ...finalReview, status: 'consumed' };
+                    postReviewDecisionAvailable = false;
+                    await recordFinalReviewState();
+                    persistRunState(iteration);
+                }
                 if (action.kind === 'tools') {
                     // 不推进 iteration：工具批次不占决策迭代额度。
                     await this.runToolBatch_ACU(action.calls, session, context, toolUsage, gateConfig, budget, counter, measureContextTokens, iteration);
                     continue;
                 }
-                if (action.kind === 'edit_outline') {
-                    await this.runOutlineEdits(action.edits, request, context, ledger);
-                    // 大纲可能已变化：记录既有读取地址后清空放行集合，允许重读并只在新消息标记最新快照。
-                    for (const key of toolUsage.granted)
-                        toolUsage.invalidated.add(key);
-                    toolUsage.granted.clear();
-                    await commitOutcomes(outcomesBefore);
-                    iteration += 1;
-                    continue;
-                }
                 if (action.kind === 'finalize') {
+                    if (request.settings.finalReview.enabled && finalReview.status !== 'consumed') {
+                        const candidateFingerprint = fingerprintFinalReviewCandidate_ACU(action.instruction);
+                        const candidateSummary = action.instruction.slice(0, 500);
+                        finalReview = { status: 'reviewing', candidateFingerprint, candidateSummary, feedback: '' };
+                        persistRunState(iteration);
+                        await recordFinalReviewState();
+                        try {
+                            const review = await this.dependencies.subagentRuntime.runFinalReview({
+                                settings: request.settings,
+                                resolveContext: context,
+                                candidateInstruction: action.instruction,
+                                currentUserInput: context.originInstruction,
+                                planningSummary: action.summary,
+                                createIdentity: (_agentName, attempt) => ({ ...request.createInternalRequestIdentity(attempt), source: 'agent_subagent' }),
+                                isCurrent: identity => request.isInternalRequestCurrent(identity),
+                                signal: request.signal,
+                            });
+                            const output = review.output;
+                            finalReview = {
+                                status: 'feedback_ready',
+                                candidateFingerprint,
+                                candidateSummary,
+                                feedback: renderFinalReviewFeedback_ACU('completed', candidateFingerprint, candidateSummary, [
+                                    `判词：${output.verdict}`,
+                                    output.summary ? `摘要：${output.summary}` : '',
+                                    output.emotionFindings.length ? `人物情绪：${output.emotionFindings.join('；')}` : '',
+                                    output.worldFindings.length ? `世界书与世界观：${output.worldFindings.join('；')}` : '',
+                                    output.logicFindings.length ? `逻辑边界：${output.logicFindings.join('；')}` : '',
+                                    output.requiredFixes.length ? `必须修正：${output.requiredFixes.join('；')}` : '',
+                                    output.preserve.length ? `必须保留：${output.preserve.join('；')}` : '',
+                                ].filter(Boolean).join('\n')),
+                            };
+                            const initialWorldbookEntryIds = review.evidence.fixedReadKeys
+                                .filter(key => key.startsWith('$WORLDBOOK:'))
+                                .map(key => key.slice('$WORLDBOOK:'.length));
+                            const supplementalSearches = review.expandedReads.filter(label => label.startsWith('search ')).length;
+                            const supplementalReads = review.expandedReads.length - supplementalSearches;
+                            logAgentSession_ACU({
+                                kind: 'thought',
+                                title: `迭代 ${iteration} · 发送前终审遥测`,
+                                detail: [`判词：${output.verdict}`, `初始世界书命中：${initialWorldbookEntryIds.length}${initialWorldbookEntryIds.length ? ` 条（${initialWorldbookEntryIds.join('、')}）` : ' 条'}`, `补充调阅：read ${supplementalReads} 次，search ${supplementalSearches} 次`, `独立读取：${review.readTokens} tokens`, `工具轮：${review.toolRounds}`, `模型用量：${review.usage ? formatAgentUsageLabel_ACU(review.usage) : '未报告'}`].join('\n'),
+                            });
+                        }
+                        catch (error) {
+                            if (error instanceof ContinuationValidationError_ACU && error.error.code === 'CONTINUATION_INTERNAL_REQUEST_STALE') {
+                                throw error;
+                            }
+                            const reason = error instanceof ContinuationValidationError_ACU ? error.error.message : error instanceof Error ? error.message : String(error);
+                            finalReview = {
+                                status: 'feedback_ready',
+                                candidateFingerprint,
+                                candidateSummary,
+                                feedback: renderFinalReviewFeedback_ACU('failed', candidateFingerprint, candidateSummary, `终审调用失败：${reason}`),
+                            };
+                        }
+                        session.record([
+                            { kind: 'tool', text: finalReview.feedback, digest: '发送前终审反馈', turnKey: session.turnKey },
+                            { kind: 'runtime', text: renderFinalReviewStateRecord_ACU(identitySeed.taskId, finalReview), digest: FINAL_REVIEW_STATE_DIGEST_ACU, turnKey: session.turnKey },
+                        ]);
+                        await session.flush();
+                        persistRunState(iteration);
+                        postReviewDecisionAvailable = true;
+                        logAgentSession_ACU({ kind: 'thought', title: `迭代 ${iteration} · 发送前终审完成`, detail: finalReview.feedback });
+                        iteration += 1;
+                        continue;
+                    }
                     if (action.constraints) {
                         // 约束登记校验失败不终止本轮：把拒绝原因（含活跃约束清单回显）回灌，让主 Agent
                         // 在剩余迭代内修正登记，与大纲工具编辑、子代理写集失败的处理同构。只有非校验类异常才上抛。
@@ -121647,7 +125836,12 @@ class ContinuationAgentTurnPlanner_ACU {
                     await session.flush();
                     failLoop_ACU('CONTINUATION_AGENT_BLOCKED', `主 Agent 阻断本轮：${action.reason}`, { unresolved: action.unresolved });
                 }
-                snapshot = await this.runDelegations(action, request, context, ledger, budget, chat, snapshot, apiDependencies);
+                const delegationResult = await this.runDelegations(action, request, context, ledger, budget, chat, snapshot, apiDependencies, outlineMaintenanceReserveAvailable);
+                snapshot = delegationResult.snapshot;
+                if (delegationResult.usedOutlineMaintenanceReserve) {
+                    outlineMaintenanceReserveUsed = true;
+                    maintenanceConvergenceAvailable = true;
+                }
                 // 派工可能结算模块或改写大纲：记录既有读取地址后允许重读最新版。
                 for (const key of toolUsage.granted)
                     toolUsage.invalidated.add(key);
@@ -121681,7 +125875,7 @@ class ContinuationAgentTurnPlanner_ACU {
      * @param measureOverhead 测量会话之外的上下文开销（即将发送的提示词实测值，记忆化）
      * @returns 会话句柄
      */
-    async openConversation_ACU(chat, request, turnKey, counter, measureOverhead) {
+    async openConversation_ACU(chat, request, turnKey, counter, measureOverhead, semanticAdapter) {
         let snapshot = this.dependencies.readConversation(chat);
         // 分段存储下落盘只追加新消息。打开时拼出来的所有消息都已持久，
         // 包括压缩标记合成的 handoff（其 id 等于被浓缩的最大消息 id，不会超过此水位）。
@@ -121712,23 +125906,51 @@ class ContinuationAgentTurnPlanner_ACU {
             });
         }
         if (timing.action === 'compact') {
-            const compaction = await compactAgentConversation_ACU(snapshot, budgetTokens, counter, overheadTokens);
-            if (compaction.changed && compaction.mark) {
-                snapshot = compaction.snapshot;
-                // 非破坏压缩：原始消息仍留在各楼的段里，末楼只落一个标记；删掉承载楼即自动撤销压缩。
-                await this.dependencies.writeCompactionMark(chat, compaction.mark);
-                logAgentSession_ACU({
-                    kind: 'thought',
-                    title: `会话历史已压缩（压缩后上下文约 ${compaction.totalTokens} tokens）`,
-                    detail: [
-                        `实际读取的完整上下文超出阈值 ${budgetTokens}（其中提示词骨架约 ${overheadTokens} tokens），已把最早的 ${compaction.droppedTurns} 个轮次（${compaction.droppedMessages} 条消息）浓缩成交接报告。`,
-                        timing.emergency ? `本轮尚未结束，但上下文已达阈值的 ${AGENT_HISTORY_EMERGENCY_FACTOR_ACU} 倍，再不压缩这次请求会因超长直接失败，因此提前压缩。` : '',
-                        compaction.withinBudget ? '' : '压缩后仍超出阈值：提示词骨架与最近一轮的内容本身较大，最近一轮已完整保留。',
-                    ].filter(Boolean).join(''),
-                });
-                // 交接报告正文单独作为一条会话条目插进会话流：用户在界面上直接看到
-                // 「AI 的可见历史从这份交接文件开始」，而不是只看到一条统计说明。
-                logAgentSession_ACU({ kind: 'handoff', title: '早期会话交接报告（此前内容对当前 AI 不可见）', detail: compaction.mark.report });
+            const compaction = await planAgentHistoryCompaction_ACU({
+                snapshot,
+                activeMark: this.dependencies.readCompactionMark(chat),
+                triggerTokens: budgetTokens,
+                fixedPromptTokens: overheadTokens,
+                countTokens: counter,
+                semanticAdapter,
+            });
+            if (compaction.mark) {
+                const candidate = compaction.mark;
+                let committed = false;
+                try {
+                    if (await this.dependencies.writeCompactionMark(chat, candidate)) {
+                        const persisted = this.dependencies.readCompactionMark(chat);
+                        const reread = this.dependencies.readConversation(chat);
+                        committed = !!persisted
+                            && 'summaryState' in persisted
+                            && persisted.compactedThroughId === candidate.compactedThroughId
+                            && persisted.report === candidate.report
+                            && JSON.stringify(persisted.summaryState) === JSON.stringify(candidate.summaryState)
+                            && JSON.stringify(persisted.metrics) === JSON.stringify(candidate.metrics);
+                        if (committed)
+                            snapshot = reread;
+                    }
+                }
+                catch (error) {
+                    logAgentSession_ACU({ kind: 'thought', title: '会话历史压缩写入失败', detail: error instanceof Error ? error.message : String(error) });
+                }
+                if (committed) {
+                    logAgentSession_ACU({
+                        kind: 'thought',
+                        title: `会话历史已压缩（压缩后上下文约 ${compaction.afterTokens} tokens）`,
+                        detail: [
+                            `实际读取的完整上下文超出阈值 ${budgetTokens}（其中提示词骨架约 ${overheadTokens} tokens），已把最早的 ${compaction.droppedTurns} 个轮次（${compaction.droppedMessages} 条消息）浓缩成交接报告。`,
+                            timing.emergency ? `本轮尚未结束，但上下文已达阈值的 ${AGENT_HISTORY_EMERGENCY_FACTOR_ACU} 倍，再不压缩这次请求会因超长直接失败，因此提前压缩。` : '',
+                            compaction.status === 'compacted_above_target' ? '压缩后仍高于内部低水位：提示词骨架与最近一轮的内容本身较大，最近一轮已完整保留。' : '',
+                        ].filter(Boolean).join(''),
+                    });
+                    // 交接报告正文单独作为一条会话条目插进会话流：用户在界面上直接看到
+                    // 「AI 的可见历史从这份交接文件开始」，而不是只看到一条统计说明。
+                    logAgentSession_ACU({ kind: 'handoff', title: '早期会话交接报告（此前内容对当前 AI 不可见）', detail: compaction.mark.report });
+                }
+                else {
+                    logAgentSession_ACU({ kind: 'thought', title: '会话历史压缩未提交', detail: '压缩候选未通过持久化回读一致性确认，已保留本次运行的旧会话投影。' });
+                }
             }
         }
         return {
@@ -121744,7 +125966,7 @@ class ContinuationAgentTurnPlanner_ACU {
             turnKey,
         };
     }
-    async callMainAgent(request, preset, session, context, ledger, budget, iteration, allowDelegate, toolUsage, gateConfig) {
+    async callMainAgent(request, preset, session, counter, context, ledger, budget, iteration, allowDelegate, toolUsage, gateConfig, lifecycle) {
         const retries = normalizeContinuationInternalAiRetryLimit_ACU(request.settings.internalAiRetryLimit);
         let lastReason = '';
         // 每次调用的用量由回调覆盖写入：协议重试时展示的是最终被采纳那次调用的用量。
@@ -121752,6 +125974,7 @@ class ContinuationAgentTurnPlanner_ACU {
         const callOptions = {
             promptCacheEnabled: request.settings.promptCacheEnabled,
             cacheScope: 'agent-main',
+            minOutputTokens: CONTINUATION_ROLE_OUTPUT_TOKEN_FLOORS_ACU.main,
             onUsage: usage => { callUsage = usage; },
         };
         for (let attempt = 0; attempt <= retries; attempt += 1) {
@@ -121760,8 +125983,13 @@ class ContinuationAgentTurnPlanner_ACU {
             if (!request.isInternalRequestCurrent(base)) {
                 throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_loop', '主 Agent 请求已失效', false));
             }
-            const rendered = await this.renderMainPrompt_ACU(request, context, ledger, budget, iteration, toolUsage, gateConfig);
+            const rendered = await this.renderMainPrompt_ACU(request, context, ledger, budget, iteration, toolUsage, gateConfig, lifecycle);
             const messages = this.spliceHistory_ACU(rendered, session.history());
+            // 最终完整请求预检：压缩候选未提交（写入失败/回读不一致）或压缩后仍超限时，
+            // 绝不能把未经确认的超长上下文发出去——那只会换来一次网关侧的截断或报错。
+            if (request.settings.agentHistoryTokenBudget > 0 && await measureAgentPromptTokens_ACU(messages, counter) > request.settings.agentHistoryTokenBudget) {
+                throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_AGENT_SNAPSHOT_INVALID', 'agent_loop', '主 Agent 最终请求超过会话 token 阈值，拒绝发送未经确认的上下文', false));
+            }
             // 缓存前缀诊断：主 Agent 相邻请求应共享大前缀，服务商缓存 0 命中时用这行定位分歧点。
             // 上游为无条件 console.info；本库改走 logDebug_ACU（调试日志开关打开时输出到控制台与日志缓冲区）。
             logDebug_ACU('[缓存诊断][agent-main]', trackAgentPromptDrift_ACU('agent-main', messages));
@@ -121794,7 +126022,7 @@ class ContinuationAgentTurnPlanner_ACU {
                 // 被拒绝的原文也要留在会话里：模型必须看到自己上一次到底写了什么才能真正修正。
                 session.record([
                     { kind: 'agent', text: rawText || '(空输出)', digest: '输出被协议层拒绝', turnKey: session.turnKey },
-                    { kind: 'tool', text: `你上一次的输出没有被采纳。原因：${lastReason}\n请修正后重新输出一个符合协议的 JSON 对象。`, digest: `协议拒绝：${lastReason}`, turnKey: session.turnKey },
+                    { kind: 'tool', text: renderMainProtocolRejection_ACU(lastReason, request.readContext(), allowDelegate), digest: `协议拒绝：${lastReason}`, turnKey: session.turnKey },
                 ]);
                 await session.flush();
                 // 会话流必须展示模型原文片段：解析被拒不等于模型没输出，用户要能看到它实际返回了什么。
@@ -121806,7 +126034,7 @@ class ContinuationAgentTurnPlanner_ACU {
     /**
      * 主 Agent 骨架与运行时快照共用同一套占位符解析，避免两边目录/预算各算各的。
      */
-    buildMainPromptResolvers_ACU(request, context, ledger, budget, iteration, toolUsage, gateConfig) {
+    buildMainPromptResolvers_ACU(request, context, ledger, budget, iteration, toolUsage, gateConfig, lifecycle) {
         return {
             $HISTORY_ANCHOR: () => HISTORY_SENTINEL_ACU,
             // 三层正文注入（轮内稳定段）：事件概览（召回行升级纪要全文）、尾部全文楼层、纯楼层索引。
@@ -121822,7 +126050,7 @@ class ContinuationAgentTurnPlanner_ACU {
             $CURRENT_TURN_GOAL: () => context.execution.turn?.goal || '（尚无可执行的大纲轮次，需先创建或继续大纲）',
             $UNSETTLED_RANGE: () => this.renderUnsettledRange_ACU(context),
             $STORY_ARC_STATE: () => this.renderStoryArcState_ACU(context),
-            $CURRENT_TURN_PACING: () => renderAgentTurnPacingGuidance_ACU(context.execution.turn?.pacing ?? null),
+            $CURRENT_TURN_PACING: () => renderAgentTurnGuidance_ACU(context.execution.turn ?? null),
             $AGENT_CATALOG: () => renderAgentSubagentCatalog_ACU(),
             $MODULE_CATALOG: () => renderAgentModuleCatalog_ACU(),
             $AGENT_READ_CATALOG: () => renderAgentReadCatalog_ACU(),
@@ -121831,7 +126059,7 @@ class ContinuationAgentTurnPlanner_ACU {
                 batchesUsed: toolUsage.batchesUsed,
                 grantedTokens: toolUsage.gateState.grantedTokens,
                 maxReadTokens: resolveAgentReadBudget_ACU(gateConfig).effectiveMaxReadTokens,
-            }),
+            }, lifecycle),
             // 以下占位符默认提示词已不再使用（正文全文改目录、大纲改状态行、结果改走会话消息、
             // 约束改 read 按需调阅）；保留解析以兼容旧的自定义提示词。
             $STORY_TEXT: () => renderAgentStoryText_ACU(context),
@@ -121844,45 +126072,21 @@ class ContinuationAgentTurnPlanner_ACU {
      * 渲染主 Agent 的提示词消息序列（历史锚点仍是哨兵，尚未拼入会话历史）。
      * 每次迭代的实际请求与运行开始时的上下文开销测量共用此路径，保证量到的就是发出去的。
      */
-    async renderMainPrompt_ACU(request, context, ledger, budget, iteration, toolUsage, gateConfig) {
-        const rendered = await renderContinuationPrompt_ACU(request.settings.agentPrompts.main, this.buildMainPromptResolvers_ACU(request, context, ledger, budget, iteration, toolUsage, gateConfig), 'agent_loop');
+    async renderMainPrompt_ACU(request, context, ledger, budget, iteration, toolUsage, gateConfig, lifecycle) {
+        const rendered = await renderContinuationPrompt_ACU(request.settings.agentPrompts.main, this.buildMainPromptResolvers_ACU(request, context, ledger, budget, iteration, toolUsage, gateConfig, lifecycle), 'agent_loop');
         return rendered.messages;
     }
     /**
      * 把当前目录与预算渲染成一条运行时快照。内容相对上一条快照未变则不追加，
      * 保证会话只在尾部增长，已发出的前缀字节级不变。
      */
-    async ensureRuntimeSnapshot_ACU(request, session, context, ledger, budget, iteration, toolUsage, gateConfig) {
-        const rendered = await renderContinuationPrompt_ACU([{ role: 'user', content: AGENT_RUNTIME_SNAPSHOT_TEMPLATE_ACU, enabled: true, deletable: false, pinned: true }], this.buildMainPromptResolvers_ACU(request, context, ledger, budget, iteration, toolUsage, gateConfig), 'agent_loop');
+    async ensureRuntimeSnapshot_ACU(request, session, context, ledger, budget, iteration, toolUsage, gateConfig, lifecycle) {
+        const rendered = await renderContinuationPrompt_ACU([{ role: 'user', content: AGENT_RUNTIME_SNAPSHOT_TEMPLATE_ACU, enabled: true, deletable: false, pinned: true }], this.buildMainPromptResolvers_ACU(request, context, ledger, budget, iteration, toolUsage, gateConfig, lifecycle), 'agent_loop');
         const text = rendered.messages[0]?.content?.trim() ?? '';
         if (!text || text === lastRuntimeSnapshotText_ACU(session.snapshot()))
             return;
         session.record([{ kind: 'runtime', text, digest: '运行时快照', turnKey: session.turnKey }]);
         await session.flush();
-    }
-    /**
-     * 执行大纲句级编辑工具。校验失败拒绝回灌，让主 Agent 自己修正而不是中止本轮；
-     * 只有非校验类异常才上抛终止。
-     */
-    async runOutlineEdits(edits, request, context, ledger) {
-        const label = 'outline-edit(工具)';
-        if (!request.applyOutlineEdits) {
-            ledger.outcomes.push({ agentName: label, ok: false, summary: '', detail: '', rejectedReason: '正文重试轮次不允许修改大纲，请基于现有大纲交付或阻断' });
-            logAgentSession_ACU({ kind: 'outline_op', agentName: label, title: '工具编辑被拒绝', detail: '正文重试轮次不允许修改大纲', ok: false });
-            return;
-        }
-        try {
-            const result = await request.applyOutlineEdits(edits);
-            ledger.outcomes.push({ agentName: label, ok: true, summary: result.summary, detail: result.summary, rejectedReason: '' });
-            logAgentSession_ACU({ kind: 'outline_op', agentName: label, title: '工具编辑大纲完成', detail: result.summary });
-            context.execution = request.readContext();
-        }
-        catch (error) {
-            if (!(error instanceof ContinuationValidationError_ACU) || error.error.code !== 'CONTINUATION_AGENT_WRITE_REJECTED')
-                throw error;
-            ledger.outcomes.push({ agentName: label, ok: false, summary: '', detail: '', rejectedReason: error.error.message });
-            logAgentSession_ACU({ kind: 'outline_op', agentName: label, title: '工具编辑被拒绝', detail: error.error.message, ok: false });
-        }
     }
     /**
      * 执行一个 read/search 工具并发批次。
@@ -121894,7 +126098,7 @@ class ContinuationAgentTurnPlanner_ACU {
      */
     async runToolBatch_ACU(calls, session, context, toolUsage, gateConfig, budget, counter, measureContextTokens, iteration) {
         if (toolUsage.batchesUsed >= budget.maxReads) {
-            const text = `read/search 工具批次已用尽（上限 ${budget.maxReads} 个批次）。请基于已有资料输出决策动作（delegate / edit_outline / finalize / block），不要再调用工具。`;
+            const text = `read/search 工具批次已用尽（上限 ${budget.maxReads} 个批次）。请基于已有资料输出决策动作（delegate / finalize / block）；大纲调整请委派 outline-architect 或 arc-architect。`;
             session.record([{ kind: 'tool', text, digest: '工具批次已用尽', turnKey: session.turnKey }]);
             logAgentSession_ACU({ kind: 'tool_read', title: `迭代 ${iteration} · 工具批次已用尽`, detail: text, ok: false });
             await session.flush();
@@ -121989,8 +126193,8 @@ class ContinuationAgentTurnPlanner_ACU {
         const unregistered = findUnregisteredStageNumbers_ACU(context.moduleSnapshot, completed);
         const head = `故事总纲：已建立（修订号 ${context.moduleSnapshot.revisions.storyArc}），完整内容用 read $STORY_ARC 调阅。`;
         if (!unregistered.length)
-            return `${head}已完成阶段的进度均已登记。`;
-        return `${head}第 ${unregistered.join('、')} 阶段已完成但没有登记进任何卷台阶的 stageNumbers，卷进度因此判断不了「本卷该收了没」。请派工 arc-architect 回写进度，必要时让它把走完的卷 patch 成 done、下一卷 patch 成 active。`;
+            return `${head}已完成阶段的进度均已登记，本轮不需要派工 arc-architect；只有剧情越出台阶、底牌被提前翻开或当前卷可判定收束时才派，并写明依据楼层。`;
+        return `${head}第 ${unregistered.join('、')} 阶段已完成但没有登记进任何卷台阶的 stageNumbers，卷进度因此判断不了「本卷该收了没」。请派工 arc-architect 仅向当前 active 卷回写这些阶段；只有真实正文达到 escalation 的可判定收束状态时，才以完成阶段编号和卷末状态把该卷 patch 成 done 并激活下一卷。所有既有卷都完成而用户继续写时，先根据最后一卷的后果追加带续卷依据的 active 新卷。`;
     }
     spliceHistory_ACU(messages, history) {
         const result = [];
@@ -122008,10 +126212,11 @@ class ContinuationAgentTurnPlanner_ACU {
             return [...history.map(item => ({ ...item })), ...result];
         return result;
     }
-    async runDelegations(action, request, context, ledger, budget, chat, snapshot, apiDependencies) {
+    async runDelegations(action, request, context, ledger, budget, chat, snapshot, apiDependencies, outlineMaintenanceReserveAvailable = false) {
         const waveLimit = resolveWaveLimit_ACU(request.settings, budget);
         const outlineDelegations = action.delegations.filter(item => item.agentName === AGENT_OUTLINE_AGENT_NAME_ACU);
         const normalDelegations = action.delegations.filter(item => item.agentName !== AGENT_OUTLINE_AGENT_NAME_ACU);
+        let usedOutlineMaintenanceReserve = false;
         // 未通过预算/波次校验的派工立即记失败条目：这些拒绝是即时判定，没有 running 阶段。
         const rejectImmediately = (agentName, reason) => {
             ledger.outcomes.push({ agentName, ok: false, summary: '', detail: '', rejectedReason: reason });
@@ -122026,11 +126231,12 @@ class ContinuationAgentTurnPlanner_ACU {
         // 大纲操作先于同波次其他派工串行执行：它改变游标，后续派工与下一次迭代都要看到新大纲。
         for (const delegation of outlineDelegations) {
             const used = ledger.perAgent.get(delegation.agentName) ?? 0;
-            if (ledger.delegationsUsed >= budget.maxDelegations) {
+            const useReserve = outlineMaintenanceReserveAvailable && !usedOutlineMaintenanceReserve;
+            if (ledger.delegationsUsed >= budget.maxDelegations && !useReserve) {
                 rejectImmediately(delegation.agentName, `派工总数已达上限 ${budget.maxDelegations} 次`);
                 continue;
             }
-            if (used >= budget.maxSameAgent) {
+            if (used >= budget.maxSameAgent && !useReserve) {
                 rejectImmediately(delegation.agentName, `同一代理最多派工 ${budget.maxSameAgent} 次`);
                 continue;
             }
@@ -122044,8 +126250,17 @@ class ContinuationAgentTurnPlanner_ACU {
                 rejectImmediately(delegation.agentName, '故事总纲还是空的，阶段大纲没有可依据的方向与卷台阶。请先派工 arc-architect 立总纲（全书方向一条 + 卷台阶若干），拿到总纲后再派工排阶段大纲。本次未消耗派工额度。');
                 continue;
             }
-            ledger.delegationsUsed += 1;
-            ledger.perAgent.set(delegation.agentName, used + 1);
+            if (!hasActiveStoryArcVolume_ACU(context.moduleSnapshot)) {
+                rejectImmediately(delegation.agentName, '故事总纲的既有卷已全部完成，当前没有可承载下一阶段的 active 卷。请先派工 arc-architect 根据最后一卷的结果、代价、关系变化或未解决问题追加后续卷并设为 active，再派工 outline-architect。本次未消耗派工额度。');
+                continue;
+            }
+            if (useReserve) {
+                usedOutlineMaintenanceReserve = true;
+            }
+            else {
+                ledger.delegationsUsed += 1;
+                ledger.perAgent.set(delegation.agentName, used + 1);
+            }
             const entryId = logAgentSession_ACU({ kind: 'outline_op', agentName: delegation.agentName, title: '大纲操作执行中', detail: delegation.prompt, status: 'running' });
             let result;
             try {
@@ -122072,6 +126287,10 @@ class ContinuationAgentTurnPlanner_ACU {
         }
         const accepted = [];
         for (const delegation of normalDelegations) {
+            if (outlineMaintenanceReserveAvailable) {
+                rejectImmediately(delegation.agentName, '末轮保留容量只允许 outline-architect 恢复可执行大纲；普通子代理本次未执行。');
+                continue;
+            }
             const used = ledger.perAgent.get(delegation.agentName) ?? 0;
             if (ledger.delegationsUsed + accepted.length >= budget.maxDelegations) {
                 rejectImmediately(delegation.agentName, `派工总数已达上限 ${budget.maxDelegations} 次`);
@@ -122084,6 +126303,13 @@ class ContinuationAgentTurnPlanner_ACU {
             if (accepted.length >= waveLimit) {
                 rejectImmediately(delegation.agentName, `同一波次并发上限为 ${waveLimit} 个，本次未执行，可在下一次迭代重派`);
                 continue;
+            }
+            if (delegation.agentName === 'arc-architect') {
+                const gate = evaluateArcArchitectDispatch_ACU(context, delegation.prompt);
+                if (!gate.allowed) {
+                    rejectImmediately(delegation.agentName, gate.reason);
+                    continue;
+                }
             }
             accepted.push(delegation);
         }
@@ -122153,7 +126379,7 @@ class ContinuationAgentTurnPlanner_ACU {
                         ok: true,
                         summary: result.maintainer.summary,
                         detail: [
-                            `已结算：伏笔 ${result.maintainer.delta.hooks.length} 条、信息差 ${result.maintainer.delta.infoGap.length} 条`,
+                            `已结算：伏笔 ${result.maintainer.delta.hooks.length} 条、信息差 ${result.maintainer.delta.infoGap.length} 条、故事时间 ${result.maintainer.delta.chronology.length} 条`,
                             proposals.length ? `约束提议（需你裁决后登记）：${proposals.join('；')}` : '',
                             result.expandedReads.length ? `补充读取：${result.expandedReads.join('、')}` : '',
                         ].filter(Boolean).join('\n'),
@@ -122168,7 +126394,10 @@ class ContinuationAgentTurnPlanner_ACU {
             if (result.arc) {
                 try {
                     const delta = mergeAgentDeltaRevisions_ACU(result.arc.delta, result.readRevisions);
-                    const applied = applyAgentModuleDelta_ACU(nextSnapshot, delta, result.writes, chat.length - 1);
+                    const completedStageNumbers = context.execution.task.stages
+                        .filter(stage => stage.status === 'completed')
+                        .map(stage => stage.stageNumber);
+                    const applied = applyAgentModuleDelta_ACU(nextSnapshot, delta, result.writes, chat.length - 1, completedStageNumbers);
                     // 与结算分支的区别：只换快照，不推进 settledThroughIndex。
                     // 立总纲不等于把未结算正文结算掉，推水位会让伏笔账本永久落后于剧情。
                     if (applied !== nextSnapshot) {
@@ -122220,13 +126449,13 @@ class ContinuationAgentTurnPlanner_ACU {
             const leaseProbe = request.createInternalRequestIdentity(0);
             if (request.signal?.aborted || !request.isInternalRequestCurrent(leaseProbe)) {
                 // 内存快照仍返回：调用方（plan）随后会因同一判定抛 STALE，不影响最终结果。
-                return nextSnapshot;
+                return { snapshot: nextSnapshot, usedOutlineMaintenanceReserve };
             }
             context.moduleSnapshot = nextSnapshot;
             context.settledThroughIndex = nextSnapshot.settledThroughIndex;
             await this.persistSnapshot_ACU(chat, nextSnapshot);
         }
-        return nextSnapshot;
+        return { snapshot: nextSnapshot, usedOutlineMaintenanceReserve };
     }
     async persistSnapshot_ACU(chat, snapshot) {
         const targetIndex = chat.length - 1;
@@ -122234,6 +126463,15 @@ class ContinuationAgentTurnPlanner_ACU {
             throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_AGENT_SNAPSHOT_INVALID', 'agent_persist', '当前聊天没有可承载资料快照的楼层', false));
         }
         await this.dependencies.writeModuleSnapshot(chat, targetIndex, snapshot);
+        // 快照跟着楼层走：该楼被删除、重新生成或 swipe 时资料会随之回退。写到哪一楼必须让用户看得见，
+        // 否则“资料突然清零”只能靠猜。
+        const active = (list) => list.filter(item => !item.retired).length;
+        logAgentSession_ACU({
+            kind: 'thought',
+            title: `资料快照已写入楼层 ${targetIndex}`,
+            detail: `伏笔 ${active(snapshot.hooks)} 条 · 信息差 ${active(snapshot.infoGap)} 条 · 总纲 ${active(snapshot.storyArc)} 条 · 年代学 ${active(snapshot.chronology)} 条 · 长期约束 ${snapshot.constraints.length} 条 · 结算水位 ${Math.min(Math.max(snapshot.settledThroughIndex, 0), targetIndex)}。该楼层若被删除、重新生成或 swipe，资料会回退到更早楼层的快照。`,
+            ok: true,
+        });
     }
 }
 
@@ -122302,6 +126540,11 @@ function evaluateLoopGenerationResult_ACU(chat, loopSettings, planningGuard) {
     return { action: 'retry_delete', reason: 'Tags validation failed' };
 }
 
+function normalizeGenerationEventContext_ACU(input) {
+    if (typeof input === 'boolean')
+        return { allowOrdinaryLooseClaim: input, automaticTrigger: false, quietLike: false, dryRun: false };
+    return input ?? { allowOrdinaryLooseClaim: false, automaticTrigger: false, quietLike: false, dryRun: false };
+}
 /**
  * The only bridge that may couple a prepared continuation turn to host input
  * and GENERATION_* events.
@@ -122320,6 +126563,7 @@ class ContinuationHostGenerationBridge_ACU {
         this.sendingIdentity = null;
         this.startedByChat = new Map();
         this.stateListeners = new Set();
+        this.localRetryClaim = null;
     }
     /** 订阅桥驱动的持久化状态变更；页面无需猜测宿主事件何时完成。 */
     subscribeStateChanges(listener) {
@@ -122388,7 +126632,8 @@ class ContinuationHostGenerationBridge_ACU {
      * 序列号的等待轮时认领——宿主事件通常在发送返回后的微任务里才送达，没有这条路径
      * 生成开始永远配对不上（spv8.9.2 时代的状态法没有这个问题）。
      */
-    onGenerationStarted(sequence, allowLoose = false) {
+    onGenerationStarted(sequence, contextInput = undefined) {
+        const context = normalizeGenerationEventContext_ACU(contextInput);
         const runtime = this.dependencies.runtime;
         const identity = this.sendingIdentity;
         if (identity && identity.chatIdentity === runtime.getChatIdentity()) {
@@ -122396,9 +126641,12 @@ class ContinuationHostGenerationBridge_ACU {
             if (!pending || pending.pending.identity.attemptId !== identity.attemptId || pending.pending.capture.generationSeq !== null)
                 return false;
             this.startedByChat.set(identity.chatIdentity, { identity, sequence, bind: runtime.bindHostTurnGeneration(identity, sequence) });
+            if (this.localRetryClaim?.identity.attemptId === identity.attemptId)
+                this.localRetryClaim = null;
             return true;
         }
-        if (!allowLoose)
+        const localRetryClaim = this.getMatchingLocalRetryClaim_ACU(context, sequence);
+        if (!context.allowOrdinaryLooseClaim && !localRetryClaim)
             return false;
         const chatIdentity = runtime.getChatIdentity();
         if (this.startedByChat.has(chatIdentity))
@@ -122407,7 +126655,11 @@ class ContinuationHostGenerationBridge_ACU {
         if (!snapshot || snapshot.pending.status !== 'awaiting_generation' || snapshot.pending.capture.generationSeq !== null)
             return false;
         const pendingIdentity = snapshot.pending.identity;
+        if (localRetryClaim && pendingIdentity.attemptId !== localRetryClaim.identity.attemptId)
+            return false;
         this.startedByChat.set(chatIdentity, { identity: pendingIdentity, sequence, bind: runtime.bindHostTurnGeneration(pendingIdentity, sequence) });
+        if (localRetryClaim)
+            this.localRetryClaim = null;
         return true;
     }
     /**
@@ -122415,25 +126667,35 @@ class ContinuationHostGenerationBridge_ACU {
      * 宽松路径（allowLoose）参考 spv8.9.2 的状态法：只要当前聊天有等待中的宿主轮
      * 且序列号不冲突（未绑定或一致）就认领，归属由唯一候选解析器兜底。
      */
-    claimsGenerationEnded(sequence, allowLoose = false) {
+    claimsGenerationEnded(sequence, contextInput = undefined) {
+        const context = normalizeGenerationEventContext_ACU(contextInput);
         const runtime = this.dependencies.runtime;
         const started = this.startedByChat.get(runtime.getChatIdentity());
         if (started && sequence !== undefined && started.sequence === sequence)
             return true;
-        if (!allowLoose)
+        const localRetryClaim = this.getMatchingLocalRetryClaim_ACU(context, sequence);
+        if (!context.allowOrdinaryLooseClaim && !localRetryClaim)
             return false;
         const snapshot = runtime.readPendingHostTurn();
         if (!snapshot || snapshot.pending.status !== 'awaiting_generation')
             return false;
+        if (localRetryClaim && snapshot.pending.identity.attemptId !== localRetryClaim.identity.attemptId)
+            return false;
         const boundSequence = snapshot.pending.capture.generationSeq ?? started?.sequence ?? null;
         return boundSequence === null || sequence === undefined || boundSequence === sequence;
     }
-    async onGenerationEnded(eventMessageId, sequence, allowLoose = false) {
-        if (!this.claimsGenerationEnded(sequence, allowLoose))
+    async onGenerationEnded(eventMessageId, sequence, contextInput = undefined) {
+        const context = normalizeGenerationEventContext_ACU(contextInput);
+        const endedOnlyLocalRetryClaim = this.getMatchingLocalRetryClaim_ACU(context, sequence);
+        if (!this.claimsGenerationEnded(sequence, context))
             return;
         const chatIdentity = this.dependencies.runtime.getChatIdentity();
         const started = this.startedByChat.get(chatIdentity) ?? null;
         this.startedByChat.delete(chatIdentity);
+        if (endedOnlyLocalRetryClaim) {
+            endedOnlyLocalRetryClaim.consumed = true;
+            this.localRetryClaim = null;
+        }
         // 宽松路径没有 started 记录：身份以持久化等待轮为准。
         const claimedIdentity = started?.identity ?? this.dependencies.runtime.readPendingHostTurn()?.pending.identity;
         if (!claimedIdentity)
@@ -122524,6 +126786,8 @@ class ContinuationHostGenerationBridge_ACU {
             return;
         }
         this.startedByChat.delete(chatIdentity);
+        if (this.localRetryClaim?.identity.attemptId === snapshot.pending.identity.attemptId)
+            this.localRetryClaim = null;
         if (started) {
             try {
                 await started.bind;
@@ -122598,7 +126862,36 @@ class ContinuationHostGenerationBridge_ACU {
         if (afterReject?.pending.status !== 'retry_ready' || afterReject.pending.identity.attemptId !== identity.attemptId)
             return;
         await this.dependencies.wait(Math.max(0, retryDelaySeconds) * 1000);
+        const beforeRetry = this.dependencies.runtime.readPendingHostTurn();
+        if (beforeRetry?.pending.status !== 'retry_ready' || beforeRetry.pending.identity.attemptId !== identity.attemptId)
+            return;
+        const action = await this.dependencies.runtime.retryCurrentTurn();
+        if (!action.retryHostGeneration)
+            return;
         await this.retryHostGeneration();
+    }
+    /**
+     * 桥自己发起的交火重试认领。自动触发的宿主生成默认不许认领续写轮（否则会误杀
+     * 别的生成产生的楼层），但 regenerate 的 GENERATION_STARTED 通常在调用返回后的
+     * 微任务里才到，严格层配不上——这条一次性认领让桥认回自己发起的那一次，
+     * 且只认自己发起的那个 attemptId。命中即消耗，TTL 兜住「宿主根本没起来」的残claim。
+     */
+    getMatchingLocalRetryClaim_ACU(context, sequence) {
+        const claim = this.localRetryClaim;
+        if (!claim || claim.consumed || !context.automaticTrigger || context.quietLike || context.dryRun)
+            return null;
+        if (this.dependencies.now() - claim.createdAt > ContinuationHostGenerationBridge_ACU.LOCAL_RETRY_CLAIM_TTL_MS) {
+            this.localRetryClaim = null;
+            return null;
+        }
+        if (claim.identity.chatIdentity !== this.dependencies.runtime.getChatIdentity())
+            return null;
+        if (claim.sequence !== null && sequence !== undefined && claim.sequence !== sequence)
+            return null;
+        const snapshot = this.dependencies.runtime.readPendingHostTurn();
+        if (!snapshot || snapshot.pending.status !== 'awaiting_generation' || snapshot.pending.identity.attemptId !== claim.identity.attemptId)
+            return null;
+        return claim;
     }
     /**
      * 用酒馆自己的重新生成/生成链路重试当前轮，不再让 Agent 另造一条请求。
@@ -122621,10 +126914,13 @@ class ContinuationHostGenerationBridge_ACU {
             generationSeq: null,
         };
         await runtime.recordHostTurn({ identity: snapshot.pending.identity, capture });
+        const mode = lastIsAi ? 'regenerate' : 'generate';
+        this.localRetryClaim = { identity: snapshot.pending.identity, mode, createdAt: this.dependencies.now(), sequence: null, consumed: false };
         this.sendingIdentity = snapshot.pending.identity;
         this.notifyStateChanges_ACU();
         try {
-            if (!this.dependencies.hostInput.retryGeneration(lastIsAi ? 'regenerate' : 'generate')) {
+            if (!this.dependencies.hostInput.retryGeneration(mode)) {
+                this.localRetryClaim = null;
                 await runtime.pauseForHostInputFailure(snapshot.pending.identity);
                 return false;
             }
@@ -122635,6 +126931,7 @@ class ContinuationHostGenerationBridge_ACU {
         }
     }
 }
+ContinuationHostGenerationBridge_ACU.LOCAL_RETRY_CLAIM_TTL_MS = 60000;
 
 class SillyTavernHostTurnAdapter_ACU {
     send(instruction) {
@@ -122678,6 +126975,7 @@ function createSillyTavernContinuationHostBridge_ACU(orchestrator) {
             getChatIdentity,
             getChat,
             readPendingHostTurn: () => orchestrator.readPendingHostTurn(),
+            retryCurrentTurn: () => orchestrator.retryCurrentTurn(),
             readAutoContinueState: () => orchestrator.readAutoContinueState(),
             continueTask: () => orchestrator.continueTask(),
             recordHostTurn: input => orchestrator.recordHostTurn(input),
@@ -122708,6 +127006,10 @@ function allocateContinuationId_ACU(prefix) {
 }
 /** 阶段历史里保留逐轮目标的阶段数（从最新往前数）。更早的阶段只保留节点级摘要。 */
 const STAGE_HISTORY_DETAILED_STAGES_ACU = 2;
+function serializeStageTurnMeta_ACU(turn) {
+    const anchor = turn.timeAnchor ? `，anchor=${turn.timeAnchor}` : '';
+    return `pacing=${turn.pacing}，function=${turn.function ?? '未标注'}，mainline=${turn.mainlineDelta ?? '未标注'}，time=${turn.timeAdvance ?? '未标注'}${anchor}`;
+}
 /**
  * 渲染阶段历史。
  *
@@ -122727,12 +127029,18 @@ function serializeStageHistory_ACU(task) {
         const head = `## 第 ${stage.stageNumber} 阶段（${stage.status}，已完成 ${stage.completedTurns}/${revision?.outline.totalTurns ?? 0} 轮）`;
         if (!revision)
             return `${head}\n（该阶段没有可读的大纲。）`;
-        const lines = [head, `标题：${revision.outline.title}`, `目标：${revision.outline.goal}`];
+        const lines = [
+            head,
+            `标题：${revision.outline.title}`,
+            `目标：${revision.outline.goal}`,
+            `结构职责：${revision.outline.role ?? '未标注'}`,
+            `时间目标：${revision.outline.timeSpanGoal ?? '未设定'}`,
+        ];
         for (const node of revision.outline.nodes) {
             lines.push(`- 节点「${node.title}」：${node.goal}`);
             if (index >= detailedFrom)
                 for (const turn of node.turns)
-                    lines.push(`  · ${turn.goal}`);
+                    lines.push(`  · [${serializeStageTurnMeta_ACU(turn)}] ${turn.goal}`);
         }
         if (index < detailedFrom)
             lines.push('（该阶段较早，已省略逐轮目标；其事实已进入纪要。）');
@@ -122757,7 +127065,7 @@ function completedPrefix_ACU(stage, revision) {
         const lines = [`节点「${node.title}」：${node.goal}`];
         for (const turn of turns) {
             turnNumber += 1;
-            lines.push(`已完成第 ${turnNumber} 轮：${turn.goal}`);
+            lines.push(`已完成第 ${turnNumber} 轮：[${serializeStageTurnMeta_ACU(turn)}] ${turn.goal}`);
         }
         parts.push(lines.join('\n'));
     }
@@ -122782,7 +127090,12 @@ function buildResolvers_ACU(task, stage, revision, worldbook, settings, current)
         $CURRENT_NODE: () => current ? `${current.node.title}\n${current.node.goal}` : '',
         $CURRENT_TURN_GOAL: () => current?.turn.goal ?? '',
         // 总纲是大纲的方向约束：阶段目标必须落在当前 active 卷的台阶内，否则每个阶段都会各自为政。
-        $STORY_ARC: () => renderAgentStoryArc_ACU(readAgentModuleSnapshot_ACU(getChatArray_ACU())),
+        $STORY_ARC: () => renderAgentStoryArc_ACU(readAgentModuleSnapshot_ACU(getChatArray_ACU()), task.stages.filter(item => item.status === 'completed').map(item => item.stageNumber)),
+        // 大纲模型没有 read/search 工具：伏笔操作、揭示层级、时间锚与红线只能靠固定注入拿到事实依据。
+        $HOOKS_LEDGER: () => renderAgentHooksByIds_ACU(readAgentModuleSnapshot_ACU(getChatArray_ACU())),
+        $INFO_GAP: () => renderAgentInfoGapByIds_ACU(readAgentModuleSnapshot_ACU(getChatArray_ACU())),
+        $CHRONOLOGY: () => renderAgentChronology_ACU(readAgentModuleSnapshot_ACU(getChatArray_ACU())),
+        $ACTIVE_CONSTRAINTS: () => renderAgentConstraints_ACU(readAgentModuleSnapshot_ACU(getChatArray_ACU())),
         $TURN_NUMBER: () => current ? String(current.turnNumber) : '',
         $NODE_TURN_NUMBER: () => current ? String(current.nodeTurnNumber) : '',
     };
@@ -123000,6 +127313,14 @@ async function recoverDelayedRebuildFailure_ACU(scope, error) {
 // [从 state-manager.ts 搬入 presentation 层] 安装发送意图捕捉钩子（DOM 事件绑定）
 async function ensureInitialSeedCheckpointBeforeGeneration_ACU(reason, { allowPendingFirstUserMessage = true } = {}) {
     try {
+        // 开局脚本可能只把行写进了运行时（skipChatSave/isImportMode）。seed checkpoint 建立后会
+        // 从聊天重载运行时，这些行会被直接丢弃；先写回聊天，聊天有数据时 seed 自然跳过。
+        try {
+            await flushRuntimeOnlyPendingChanges_ACU(reason);
+        }
+        catch (flushError) {
+            logWarn_ACU(`[InitialSeed] ${reason} 写回运行时未落盘变更失败，继续初始化 checkpoint:`, flushError);
+        }
         const result = await ensureInitialSeedCheckpoint_ACU({ reason, allowPendingFirstUserMessage });
         if (result?.success && isSqliteMode()) {
             await reloadStorageProvider();
@@ -123272,7 +127593,7 @@ async function handleChatChangedEvent_ACU(chatFileName) {
             if (isSqliteMode())
                 logDebug_ACU('[SQLite] CHAT_CHANGED: 立即销毁旧数据库实例');
         }
-        await resetScriptStateForNewChat_ACU(chatFileName);
+        await resetScriptStateForNewChat_ACU(chatFileName, { reason: 'chat_changed' });
         // [触发门控] generationGate 重置已搬到 service 层的 resetScriptStateForNewChat_ACU 中
         // [触发门控] 每次切换聊天都尝试安装一次 capture 钩子（防止 DOM 重新渲染导致丢失）
         installSendIntentCaptureHooks_ACU();
@@ -123379,8 +127700,13 @@ function mainInitialize_ACU() {
                         // 宿主的 GENERATION_STARTED 通常在发送点击返回后的微任务里才送达，同步配对必然错过；
                         // 对非 quiet/非 dryRun/非自动触发的生成开放宽松认领（spv8.9.2 状态法），桥内部只在
                         // 存在未绑定序列号的等待轮时才会认领。
-                        const allowLooseStart = !dryRun && !isQuietLikeGeneration_ACU(type, params) && !params?.automatic_trigger;
-                        getContinuationHostGenerationBridge_ACU()?.onGenerationStarted(context.seq, allowLooseStart);
+                        const quietLike = isQuietLikeGeneration_ACU(type, params);
+                        getContinuationHostGenerationBridge_ACU()?.onGenerationStarted(context.seq, {
+                            allowOrdinaryLooseClaim: !dryRun && !quietLike && !params?.automatic_trigger,
+                            automaticTrigger: Boolean(params?.automatic_trigger),
+                            quietLike,
+                            dryRun: Boolean(dryRun),
+                        });
                     }
                     catch (e) { }
                 });
@@ -123405,15 +127731,23 @@ function mainInitialize_ACU() {
                         return;
                     }
                     const continuationBridge = getContinuationHostGenerationBridge_ACU();
-                    // 宽松认领只对"会产生正文楼层"的生成开放：quiet/dryRun/自动触发生成不许认领，
-                    // 否则会误杀等待中的续写轮。判定复用自动填表的生成门控。
-                    const allowLooseContinuationClaim = shouldProcessAutoTableUpdateForGenerationEnded_ACU(generationContext);
-                    if (continuationBridge?.claimsGenerationEnded(generationContext?.seq, allowLooseContinuationClaim)) {
+                    // 认领事件按"会不会产生正文楼层"分类：quiet/dryRun/自动触发的生成不许走普通宽松认领，
+                    // 否则会误杀等待中的续写轮。分类结果直接交给桥，桥再据此决定普通认领与
+                    // 「自己发起的那一次交火重试」认领（见 host-generation-bridge 的 localRetryClaim）。
+                    const quietLike = generationContext ? isQuietLikeGeneration_ACU(generationContext.type, generationContext.params) : false;
+                    const automaticTrigger = Boolean(generationContext?.params?.automatic_trigger);
+                    const continuationEventContext = {
+                        allowOrdinaryLooseClaim: !generationContext || (!generationContext.dryRun && !quietLike && !automaticTrigger),
+                        automaticTrigger,
+                        quietLike,
+                        dryRun: Boolean(generationContext?.dryRun),
+                    };
+                    if (continuationBridge?.claimsGenerationEnded(generationContext?.seq, continuationEventContext)) {
                         // 桥只负责续写轮次的归属确认/循环标签校验/自动续下一轮，不再短路后续管线：
                         // 填表与正文优化由下方常规意图派发按各自的判定独立触发（解耦，见 spv 讨论）。
                         // 桥因标签缺失删楼重试时，常规管线的楼层解析（唯一候选 + 有界物化等待）与
                         // evaluateNewMessageAction 的 resolved_message_not_ai 防御会自然跳过该楼。
-                        void continuationBridge.onGenerationEnded(message_id, generationContext?.seq, allowLooseContinuationClaim);
+                        void continuationBridge.onGenerationEnded(message_id, generationContext?.seq, continuationEventContext);
                     }
                     // [触发修复] 原子捕获完整意图快照：事件参数只作为锚点，不承诺是 AI 数组下标。
                     // makeFirst 可能早于宿主把本轮 AI 回复追加进 chat，因此必须记录捕获时边界，
@@ -123612,7 +127946,7 @@ function mainInitialize_ACU() {
         const initWithChatId = async (chatId) => {
             lastDelayedRebuildRefreshOk_ACU = false; // [M3]
             logDebug_ACU(`ACU: Initializing with current chat on load: ${chatId}`);
-            await resetScriptStateForNewChat_ACU(chatId);
+            await resetScriptStateForNewChat_ACU(chatId, { reason: 'startup_restore' });
             await loadPresetAndCleanCharacterData_ACU();
             // 再次强制刷新数据和UI，确保初始加载时表格显示正确
             await loadAllChatMessages_ACU();
@@ -126123,8 +130457,8 @@ function normalizeUpdateNumber_ACU(key, value) {
         ? 100
         : (key === 'autoUpdateThreshold' || key === 'autoUpdateTokenThreshold' || key === 'skipUpdateFloors' || key === 'retainRecentLayers' ? 0 : 1);
     const normalized = min > 0
-        ? normalizePositiveInteger_ACU$1(value, fallback)
-        : normalizeNonNegativeInteger_ACU$1(value, fallback);
+        ? normalizePositiveInteger_ACU$2(value, fallback)
+        : normalizeNonNegativeInteger_ACU$2(value, fallback);
     return Math.max(min, normalized);
 }
 /** 更新自动更新数值字段（批量原子写） */
@@ -148897,8 +153231,8 @@ function normalizeNumber(key, value) {
     const meta = NUMBER_FIELD_META.find((item) => item.key === key);
     const fallback = FALLBACKS[key];
     const normalized = (meta?.min ?? 0) > 0
-        ? normalizePositiveInteger_ACU$1(value, fallback)
-        : normalizeNonNegativeInteger_ACU$1(value, fallback);
+        ? normalizePositiveInteger_ACU$2(value, fallback)
+        : normalizeNonNegativeInteger_ACU$2(value, fallback);
     return Math.max(meta?.min ?? 0, normalized);
 }
 function normalizeRules(rules, legacy = "", kind) {
@@ -149317,14 +153651,18 @@ var _sfc_main$T = /*@__PURE__*/ defineComponent({
     setup(__props, { expose: __expose }) {
         __expose();
         const props = __props;
+        // 裁切只在高度动画进行中需要（useAcuHeightTransition 会在 beforeEnter/beforeLeave 临时设 hidden）。
+        // 静止状态必须放开 overflow，否则 body 里的浮层（AcuSelect 下拉菜单等）会被折叠容器切掉。
+        // 指定了 bodyMaxHeight 的组是滚动容器，保持 overflow-y: auto。
         const bodyStyle = computed(() => ({
             maxHeight: props.bodyMaxHeight || undefined,
-            overflowY: props.bodyMaxHeight ? 'auto' : 'hidden',
+            overflowY: props.bodyMaxHeight ? 'auto' : 'visible',
+            overflowX: props.bodyMaxHeight ? 'hidden' : 'visible',
         }));
         const heightTransition = useAcuHeightTransition({
             restoreOverflow(el) {
-                el.style.overflowY = props.bodyMaxHeight ? 'auto' : 'hidden';
-                el.style.overflowX = 'hidden';
+                el.style.overflowY = props.bodyMaxHeight ? 'auto' : 'visible';
+                el.style.overflowX = props.bodyMaxHeight ? 'hidden' : 'visible';
             },
         });
         function beforeEnter(el) {
@@ -149360,8 +153698,8 @@ var _sfc_main$T = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-disclosure-group[data-v-621985bb] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 0;\r\n  overflow: hidden;\r\n  border-radius: var(--acu-radius-md);\r\n  background: transparent;\n}\n.acu-disclosure-group__header[data-v-621985bb] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  width: 100%;\r\n  min-height: 34px;\r\n  appearance: none;\r\n  border: 0;\r\n  border-radius: 0;\r\n  padding: 7px 10px;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font: inherit;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.35;\r\n  text-align: left;\r\n  cursor: pointer;\r\n  user-select: none;\r\n  transition: background-color 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-disclosure-group__header[data-v-621985bb]:hover {\r\n  background: var(--acu-hover-overlay);\n}\n.acu-disclosure-group__header[data-v-621985bb]:focus-visible {\r\n  outline: none;\r\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-disclosure-group__chevron[data-v-621985bb] {\r\n  flex: 0 0 10px;\r\n  width: 10px;\r\n  font-size: var(--acu-font-size-micro, 10px);\r\n  --acu-icon-color: var(--acu-text-3);\r\n  color: var(--acu-text-3);\r\n  transition: transform 0.15s ease;\n}\n.acu-disclosure-group__chevron--open[data-v-621985bb] {\r\n  transform: rotate(90deg);\n}\n.acu-disclosure-group__label[data-v-621985bb] {\r\n  flex: 1;\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  font-weight: 500;\r\n  color: var(--acu-text-2);\n}\n.acu-disclosure-group__meta[data-v-621985bb] {\r\n  flex-shrink: 0;\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  color: var(--acu-text-3);\r\n  font-variant-numeric: tabular-nums;\r\n  white-space: nowrap;\n}\n.acu-disclosure-group__body[data-v-621985bb] {\r\n  box-sizing: border-box;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 18%, transparent);\r\n  padding: 8px;\r\n  opacity: 1;\r\n  transform: translateY(0);\r\n  overflow-x: hidden;\n}\r\n", "src/presentation-v2/components/_lib/AcuDisclosureGroup.vue#style-0-621985bb");
-var AcuDisclosureGroup_vue_vue_type_style_index_0_scoped_621985bb_lang = null;
+injectSfcStyle("\n.acu-disclosure-group[data-v-9860e3e9] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 0;\r\n  /* 根节点不裁切：折叠动画的裁切由 body 的内联 overflow 承担，静止时下拉菜单等浮层需要溢出到组外。 */\n  overflow: visible;\n  border-radius: var(--acu-radius-md);\r\n  background: transparent;\n}\n.acu-disclosure-group__header[data-v-9860e3e9] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  width: 100%;\r\n  min-height: 34px;\r\n  appearance: none;\r\n  border: 0;\r\n  /* 头部自己收圆角：根节点已不再用 overflow: hidden 帮它裁掉悬停底色。 */\n  border-radius: var(--acu-radius-md);\n  padding: 7px 10px;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font: inherit;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.35;\r\n  text-align: left;\r\n  cursor: pointer;\r\n  user-select: none;\r\n  transition: background-color 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-disclosure-group__header[data-v-9860e3e9]:hover {\r\n  background: var(--acu-hover-overlay);\n}\n.acu-disclosure-group--expanded .acu-disclosure-group__header[data-v-9860e3e9] {\n  border-bottom-left-radius: 0;\n  border-bottom-right-radius: 0;\n}\n.acu-disclosure-group__header[data-v-9860e3e9]:focus-visible {\r\n  outline: none;\r\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-disclosure-group__chevron[data-v-9860e3e9] {\r\n  flex: 0 0 10px;\r\n  width: 10px;\r\n  font-size: var(--acu-font-size-micro, 10px);\r\n  --acu-icon-color: var(--acu-text-3);\r\n  color: var(--acu-text-3);\r\n  transition: transform 0.15s ease;\n}\n.acu-disclosure-group__chevron--open[data-v-9860e3e9] {\r\n  transform: rotate(90deg);\n}\n.acu-disclosure-group__label[data-v-9860e3e9] {\r\n  flex: 1;\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  font-weight: 500;\r\n  color: var(--acu-text-2);\n}\n.acu-disclosure-group__meta[data-v-9860e3e9] {\r\n  flex-shrink: 0;\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  color: var(--acu-text-3);\r\n  font-variant-numeric: tabular-nums;\r\n  white-space: nowrap;\n}\n.acu-disclosure-group__body[data-v-9860e3e9] {\r\n  box-sizing: border-box;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 6px;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 18%, transparent);\r\n  padding: 8px;\r\n  opacity: 1;\r\n  transform: translateY(0);\n}\r\n", "src/presentation-v2/components/_lib/AcuDisclosureGroup.vue#style-0-9860e3e9");
+var AcuDisclosureGroup_vue_vue_type_style_index_0_scoped_9860e3e9_lang = null;
 
 const _hoisted_1$R = ["aria-expanded", "aria-controls"];
 const _hoisted_2$K = [
@@ -149443,7 +153781,7 @@ function _sfc_render$T(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	);
 }
-var AcuDisclosureGroup = /* @__PURE__ */ _export_sfc(_sfc_main$T, [["render", _sfc_render$T], ["__scopeId", "data-v-621985bb"]]);
+var AcuDisclosureGroup = /* @__PURE__ */ _export_sfc(_sfc_main$T, [["render", _sfc_render$T], ["__scopeId", "data-v-9860e3e9"]]);
 
 var _sfc_main$S = /*@__PURE__*/ defineComponent({
     __name: 'FormFillUpdateSettingsPanel',
@@ -156075,8 +160413,8 @@ function useDashboardPage() {
             };
         }));
         const totalAi = aiMessageCount.value;
-        const globalFrequency = normalizePositiveInteger_ACU$1(settings_ACU.autoUpdateFrequency, 1);
-        const globalSkip = normalizeNonNegativeInteger_ACU$1(settings_ACU.skipUpdateFloors, 0);
+        const globalFrequency = normalizePositiveInteger_ACU$2(settings_ACU.autoUpdateFrequency, 1);
+        const globalSkip = normalizeNonNegativeInteger_ACU$2(settings_ACU.skipUpdateFloors, 0);
         return sheetKeys.value.map((key) => {
             const table = displayData[key] || {};
             const config = table.updateConfig || {};
@@ -156757,37 +161095,10 @@ function normalizePositiveInteger(value, fallback) {
         return fallback;
     return Math.floor(n);
 }
-function resolveManualContextDepth() {
-    const fallback = normalizeNonNegativeInteger(settings_ACU.autoUpdateThreshold, 3);
-    return settings_ACU.manualUpdateContextDepth == null
-        ? fallback
-        : normalizeNonNegativeInteger(settings_ACU.manualUpdateContextDepth, fallback);
-}
-function resolveManualBatchSize() {
-    const fallback = 3;
-    return settings_ACU.manualUpdateBatchSize == null
-        ? fallback
-        : normalizePositiveInteger(settings_ACU.manualUpdateBatchSize, fallback);
-}
-function applyManualSettingsForOrchestrator() {
-    const previousAutoUpdateThreshold = settings_ACU.autoUpdateThreshold;
-    const previousUpdateBatchSize = settings_ACU.updateBatchSize;
-    // orchestrateManualUpdate_ACU still reads the legacy automatic settings.
-    // Keep the temporary bridge local to this UI action so the independent
-    // manual fields do not persist back into automatic update configuration.
-    settings_ACU.autoUpdateThreshold = manualDepthForOrchestrator_ACU(settings_ACU.manualUpdateContextDepth, previousAutoUpdateThreshold);
-    settings_ACU.updateBatchSize = normalizePositiveInteger(settings_ACU.manualUpdateBatchSize, normalizePositiveInteger(previousUpdateBatchSize, 3));
-    return () => {
-        settings_ACU.autoUpdateThreshold = previousAutoUpdateThreshold;
-        settings_ACU.updateBatchSize = previousUpdateBatchSize;
-    };
-}
-function manualDepthForOrchestrator_ACU(manualDepth, fallbackDepth) {
-    const fallback = normalizeNonNegativeInteger(fallbackDepth, 3);
-    return manualDepth == null
-        ? fallback
-        : normalizeNonNegativeInteger(manualDepth, fallback);
-}
+// 手动面板的层数/分批参数由 service 层统一解析：手动更新与一键追平都读同一处，
+// 不再在 UI 侧临时改写自动填表的全局设置来“桥接”。
+const resolveManualContextDepth = resolveManualUpdateContextDepth_ACU;
+const resolveManualBatchSize = resolveManualUpdateBatchSize_ACU;
 function resolveManualRefillRangeSummary_ACU(manualDepth) {
     const chat = getChatArray_ACU();
     if (!Array.isArray(chat) || chat.length === 0)
@@ -157102,19 +161413,12 @@ function useManualUpdate() {
                 }
             };
             const runProcessBatch = (indices, mode, options) => processUpdatesBatch_ACU(indices, mode, options, (messagesToUse, saveTargetIndex, updateMode, isSilentMode, targetSheetKeys, requestOptions, progressContext) => executeCardUpdateCore_ACU(messagesToUse, saveTargetIndex, false, updateMode, isSilentMode, targetSheetKeys, requestOptions, new AbortController(), progressContext, handleProgress));
-            const restoreAutoUpdateSettings = applyManualSettingsForOrchestrator();
-            let result;
-            try {
-                result = await orchestrateManualUpdate_ACU(targetManualTableKeys, runProcessBatch, async () => { await refreshMergedDataAndNotify_ACU(); }, {
-                    clearBeforeUpdate,
-                    onProgress: handleProgress,
-                    // 把确认前快照传给 service 层：orchestrator 在破坏性清理前会再次校验 runtime。
-                    executionSnapshot: { sheetKeys: snapshotRuntimeKeys },
-                });
-            }
-            finally {
-                restoreAutoUpdateSettings();
-            }
+            const result = await orchestrateManualUpdate_ACU(targetManualTableKeys, runProcessBatch, async () => { await refreshMergedDataAndNotify_ACU(); }, {
+                clearBeforeUpdate,
+                onProgress: handleProgress,
+                // 把确认前快照传给 service 层：orchestrator 在破坏性清理前会再次校验 runtime。
+                executionSnapshot: { sheetKeys: snapshotRuntimeKeys },
+            });
             finishToast(result.success ? (result.checkpointWarning ? 'warning' : 'success') : (abortRequested || result.error?.includes('终止') ? 'warning' : 'error'), result.success
                 ? `${result.autoMergeTriggered
                     ? `手动填表完成;自动合并总结${result.autoMergeSuccess ? '已完成' : '未完成'}。`
@@ -161702,8 +166006,8 @@ const _hoisted_15$9 = {
 const _hoisted_16$8 = { class: "acu-v2-session-feed__badge" };
 const _hoisted_17$7 = { class: "acu-v2-session-feed__title" };
 const _hoisted_18$7 = { class: "acu-v2-session-feed__time" };
-const _hoisted_19$6 = ["onClick"];
-const _hoisted_20$5 = {
+const _hoisted_19$7 = ["onClick"];
+const _hoisted_20$6 = {
 	key: 1,
 	class: "acu-v2-session-feed__detail"
 };
@@ -161861,10 +166165,10 @@ function _sfc_render$o(_ctx, _cache, $props, $setup, $data, $options) {
 										key: 0,
 										class: "acu-v2-session-feed__preview",
 										onClick: ($event) => $setup.toggle(entry)
-									}, toDisplayString(entry.detail), 9, _hoisted_19$6)) : createCommentVNode("v-if", true),
+									}, toDisplayString(entry.detail), 9, _hoisted_19$7)) : createCommentVNode("v-if", true),
 									entry.detail && $setup.isExpanded(entry) ? (openBlock(), createElementBlock(
 										"p",
-										_hoisted_20$5,
+										_hoisted_20$6,
 										toDisplayString(entry.detail),
 										1
 										/* TEXT */
@@ -162092,13 +166396,14 @@ function _sfc_render$n(_ctx, _cache, $props, $setup, $data, $options) {
 }
 var ContinuationChat = /* @__PURE__ */ _export_sfc(_sfc_main$n, [["render", _sfc_render$n], ["__scopeId", "data-v-e97ab1a7"]]);
 
-/** 用户可分模块编辑的四项资料。schemaVersion / settledThroughIndex 等运行时字段不进草稿。 */
-const CONTINUATION_MATERIAL_MODULES_ACU = ['hooks', 'infoGap', 'constraints', 'storyArc'];
+/** 用户可分模块编辑的五项资料。schemaVersion / settledThroughIndex 等运行时字段不进草稿。 */
+const CONTINUATION_MATERIAL_MODULES_ACU = ['hooks', 'infoGap', 'constraints', 'storyArc', 'chronology'];
 const CONTINUATION_MATERIAL_MODULE_LABELS_ACU = {
     hooks: '伏笔账本',
     infoGap: '认知与信息差',
     constraints: '长期约束',
     storyArc: '故事总纲',
+    chronology: '故事年代学账本',
 };
 function errorMessage_ACU$1(error) {
     if (error instanceof ContinuationValidationError_ACU)
@@ -162125,11 +166430,14 @@ function useContinuationMaterials() {
     const toast = useToastStore();
     const snapshot = ref(null);
     const loadError = ref('');
+    /** 最近一次读取的来源诊断：采用了哪一楼、是否宽容抢救、有哪些损坏楼层。 */
+    const diagnostics = ref({ candidates: [], adoptedIndex: null, salvaged: false });
     const modules = reactive({
         hooks: emptyModuleState_ACU(),
         infoGap: emptyModuleState_ACU(),
         constraints: emptyModuleState_ACU(),
         storyArc: emptyModuleState_ACU(),
+        chronology: emptyModuleState_ACU(),
     });
     function resetModule(module, current) {
         modules[module] = { draft: moduleDraftText_ACU(current, module), dirty: false, error: '', saving: false };
@@ -162138,6 +166446,7 @@ function useContinuationMaterials() {
         try {
             const current = readAgentModuleSnapshot_ACU();
             snapshot.value = current;
+            diagnostics.value = readAgentModuleSnapshotDiagnostics_ACU();
             for (const module of CONTINUATION_MATERIAL_MODULES_ACU)
                 resetModule(module, current);
             loadError.value = '';
@@ -162192,7 +166501,7 @@ function useContinuationMaterials() {
             state.saving = false;
         }
     }
-    return { snapshot, loadError, modules, reload, save, discard, updateDraft };
+    return { snapshot, loadError, diagnostics, modules, reload, save, discard, updateDraft };
 }
 
 var _sfc_main$m = /*@__PURE__*/ defineComponent({
@@ -162217,13 +166526,34 @@ var _sfc_main$m = /*@__PURE__*/ defineComponent({
         };
         const HOOK_IMPORTANCE_LABELS = { high: '重要度：高', mid: '重要度：中', low: '重要度：低' };
         const REVEAL_STATUS_LABELS = { unrevealed: '未揭示', partial: '部分揭示', revealed: '已揭示' };
+        const CHRONOLOGY_PRECISION_LABELS = { exact: '精确', approximate: '近似', unknown: '未知' };
         const ARC_STATUS_LABELS = { planned: '计划中', active: '进行中', done: '已完成' };
+        const TEMPO_LABELS = { buildup: '铺垫型', mixed: '起伏型', surge: '高压型', aftermath: '余波型' };
+        const ROLE_LABELS = { setup: '建立', development: '发展', escalation: '升级', turn: '转折', payoff: '兑现', aftermath: '余波' };
+        const PACING_LABELS = { setup: '铺垫', pressure: '施压', turn: '转折', cooldown: '缓冲' };
+        const FUNCTION_LABELS = { daily_bond: '关系日常', daily_world: '世界日常', recovery: '恢复', preparation: '准备', training: '训练', economy: '经营', side_thread: '支线', conflict: '冲突', reveal: '揭示', payoff: '兑现', transition: '过渡' };
+        const MAINLINE_LABELS = { hold: '停驻', micro: '微增量', step: '推进', milestone: '里程碑' };
+        const TIME_LABELS = { continuous: '连续', same_day: '同日稍后', overnight: '隔夜', days: '数日', weeks: '数周', months: '数月', years: '数年' };
+        const INFERRED_FIELD_LABELS = { function: '功能', mainlineDelta: '主线', timeAdvance: '时间' };
         const activeTab = ref('outline');
         const materials = useContinuationMaterials();
         const outlineDraft = ref('');
         const outlineError = ref('');
         const outlineDirty = ref(false);
         const clearPending = ref(false);
+        const activeVolume = computed(() => materials.snapshot.value?.storyArc.find(entry => entry.scope === 'volume' && !entry.retired && entry.status === 'active') ?? null);
+        const historyStages = computed(() => (props.task?.stages ?? []).filter(stage => stage.stageId !== props.activeStage?.stageId));
+        function displayRevision(stage) {
+            return stage.revisions.find(revision => revision.revision === stage.activeRevision)
+                ?? stage.revisions.reduce((latest, revision) => !latest || revision.revision > latest.revision ? revision : latest, null);
+        }
+        function olderRevisions(stage) {
+            const displayed = displayRevision(stage);
+            return stage.revisions.filter(revision => revision.revision !== displayed?.revision).sort((left, right) => right.revision - left.revision);
+        }
+        function remainingTurns(stage, revision) {
+            return Math.max(0, revision.outline.totalTurns - stage.completedTurns);
+        }
         function stageTotalTurns(stage) {
             return stage.revisions.find(item => item.revision === stage.activeRevision)?.outline.totalTurns ?? 0;
         }
@@ -162236,6 +166566,19 @@ var _sfc_main$m = /*@__PURE__*/ defineComponent({
                 position += node.turns.length;
             }
             return position + turnIndex + 1;
+        }
+        function turnState(revision, nodeIndex, turnIndex) {
+            const stage = props.activeStage;
+            if (!stage || revision.revision !== props.activeRevision?.revision)
+                return 'planned';
+            const node = revision.outline.nodes[nodeIndex];
+            if (!node)
+                return 'planned';
+            if (turnPosition(revision, node.id, turnIndex) <= stage.completedTurns)
+                return 'done';
+            if (nodeIndex === stage.activeNodeIndex && turnIndex === stage.activeTurnIndex)
+                return 'current';
+            return 'planned';
         }
         function syncOutlineDraft() {
             outlineDraft.value = props.activeRevision ? JSON.stringify(props.activeRevision.outline, null, 2) : '';
@@ -162280,14 +166623,14 @@ var _sfc_main$m = /*@__PURE__*/ defineComponent({
                 syncOutlineDraft();
         }, { immediate: true });
         __expose({ reload });
-        const __returned__ = { props, emit, TABS, HOOK_STATUS_LABELS, HOOK_IMPORTANCE_LABELS, REVEAL_STATUS_LABELS, ARC_STATUS_LABELS, activeTab, materials, outlineDraft, outlineError, outlineDirty, clearPending, stageTotalTurns, turnPosition, syncOutlineDraft, onOutlineInput, saveOutline, reload, requestClear, confirmClear, AcuButton, AcuTextarea };
+        const __returned__ = { props, emit, TABS, HOOK_STATUS_LABELS, HOOK_IMPORTANCE_LABELS, REVEAL_STATUS_LABELS, CHRONOLOGY_PRECISION_LABELS, ARC_STATUS_LABELS, TEMPO_LABELS, ROLE_LABELS, PACING_LABELS, FUNCTION_LABELS, MAINLINE_LABELS, TIME_LABELS, INFERRED_FIELD_LABELS, activeTab, materials, outlineDraft, outlineError, outlineDirty, clearPending, activeVolume, historyStages, displayRevision, olderRevisions, remainingTurns, stageTotalTurns, turnPosition, turnState, syncOutlineDraft, onOutlineInput, saveOutline, reload, requestClear, confirmClear, AcuButton, AcuTextarea };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.acu-v2-continuation-materials[data-v-22775fd8] { display: grid; gap: 12px;\n}\n.acu-v2-continuation-materials__tabs[data-v-22775fd8] { display: flex; flex-wrap: wrap; align-items: center; gap: 6px;\n}\n.acu-v2-continuation-materials__tab[data-v-22775fd8] { padding: 5px 12px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 22%, transparent); border-radius: 999px; background: transparent; color: var(--acu-text-2); cursor: pointer; font: inherit; font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__tab--active[data-v-22775fd8] { border-color: color-mix(in srgb, var(--acu-primary, #5b8def) 55%, transparent); background: color-mix(in srgb, var(--acu-primary, #5b8def) 14%, transparent); color: var(--acu-text-1);\n}\n.acu-v2-continuation-materials__tab-actions[data-v-22775fd8] { display: flex; gap: 6px; margin-left: auto;\n}\n.acu-v2-continuation-materials__confirm[data-v-22775fd8] { margin: 0; padding: 10px; border: 1px solid color-mix(in srgb, var(--acu-danger, #d65b5b) 40%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--acu-danger, #d65b5b) 7%, transparent); color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__confirm-actions[data-v-22775fd8] { display: inline-flex; gap: 6px; margin-left: 8px; vertical-align: middle;\n}\n.acu-v2-continuation-materials__editor[data-v-22775fd8] { display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__empty[data-v-22775fd8] { margin: 0; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__meta[data-v-22775fd8] { margin: 0; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap;\n}\n.acu-v2-continuation-materials__error[data-v-22775fd8] { margin: 0; color: var(--acu-danger, #d65b5b); white-space: pre-wrap; font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__actions[data-v-22775fd8] { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px;\n}\n.acu-v2-continuation-materials__block[data-v-22775fd8] { padding: 10px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 20%, transparent); border-radius: 6px; display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__block > summary[data-v-22775fd8] { cursor: pointer; color: var(--acu-text-1);\n}\n.acu-v2-continuation-materials__block--current[data-v-22775fd8] { border-color: color-mix(in srgb, var(--acu-primary, #5b8def) 45%, transparent);\n}\n.acu-v2-continuation-materials__list[data-v-22775fd8] { display: flex; flex-direction: column; gap: 6px; padding-left: 22px; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__turn--done[data-v-22775fd8] { color: var(--acu-text-3); text-decoration: line-through;\n}\n.acu-v2-continuation-materials__cards[data-v-22775fd8] { display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__card[data-v-22775fd8] { padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 16%, transparent); border-radius: 6px; display: grid; gap: 4px;\n}\n.acu-v2-continuation-materials__card--retired[data-v-22775fd8] { opacity: 0.55;\n}\n.acu-v2-continuation-materials__card-head[data-v-22775fd8] { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--acu-text-1); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__card-body[data-v-22775fd8] { margin: 0; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap;\n}\n.acu-v2-continuation-materials__card-meta[data-v-22775fd8] { margin: 0; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap;\n}\n.acu-v2-continuation-materials__badge[data-v-22775fd8] { padding: 1px 8px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 30%, transparent); color: var(--acu-text-2); font-size: 11px;\n}\n.acu-v2-continuation-materials__badge--primary[data-v-22775fd8] { border-color: color-mix(in srgb, var(--acu-primary, #5b8def) 55%, transparent); color: var(--acu-text-1); background: color-mix(in srgb, var(--acu-primary, #5b8def) 12%, transparent);\n}\n.acu-v2-continuation-materials__badge--muted[data-v-22775fd8] { opacity: 0.8;\n}\n.acu-v2-continuation-materials__json[data-v-22775fd8] { display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__json > summary[data-v-22775fd8] { cursor: pointer; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\r\n\r\n/* 手机窄屏：刷新/清空按钮换到独立一行靠右，避免和页签挤成两行半。 */\n@media (max-width: 640px) {\n.acu-v2-continuation-materials__tab-actions[data-v-22775fd8] { margin-left: 0; width: 100%; justify-content: flex-end;\n}\n.acu-v2-continuation-materials__confirm-actions[data-v-22775fd8] { display: flex; margin: 8px 0 0;\n}\n}\r\n", "src/presentation-v2/components/ContinuationMaterialsPanel.vue#style-0-22775fd8");
-var ContinuationMaterialsPanel_vue_vue_type_style_index_0_scoped_22775fd8_lang = null;
+injectSfcStyle("\n.acu-v2-continuation-materials[data-v-fc2d1491] { display: grid; gap: 12px;\n}\n.acu-v2-continuation-materials__tabs[data-v-fc2d1491] { display: flex; flex-wrap: wrap; align-items: center; gap: 6px;\n}\n.acu-v2-continuation-materials__tab[data-v-fc2d1491] { padding: 5px 12px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 22%, transparent); border-radius: 999px; background: transparent; color: var(--acu-text-2); cursor: pointer; font: inherit; font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__tab--active[data-v-fc2d1491] { border-color: color-mix(in srgb, var(--acu-primary, #5b8def) 55%, transparent); background: color-mix(in srgb, var(--acu-primary, #5b8def) 14%, transparent); color: var(--acu-text-1);\n}\n.acu-v2-continuation-materials__tab-actions[data-v-fc2d1491] { display: flex; gap: 6px; margin-left: auto;\n}\n.acu-v2-continuation-materials__confirm[data-v-fc2d1491] { margin: 0; padding: 10px; border: 1px solid color-mix(in srgb, var(--acu-danger, #d65b5b) 40%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--acu-danger, #d65b5b) 7%, transparent); color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__confirm-actions[data-v-fc2d1491] { display: inline-flex; gap: 6px; margin-left: 8px; vertical-align: middle;\n}\n.acu-v2-continuation-materials__outline[data-v-fc2d1491] { display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__empty[data-v-fc2d1491] { margin: 0; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__meta[data-v-fc2d1491] { margin: 0; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap;\n}\n.acu-v2-continuation-materials__error[data-v-fc2d1491] { margin: 0; color: var(--acu-danger, #d65b5b); white-space: pre-wrap; font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__actions[data-v-fc2d1491] { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px;\n}\n.acu-v2-continuation-materials__block[data-v-fc2d1491] { padding: 10px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 20%, transparent); border-radius: 6px; display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__block > summary[data-v-fc2d1491] { cursor: pointer; color: var(--acu-text-1);\n}\n.acu-v2-continuation-materials__block--current[data-v-fc2d1491] { border-color: color-mix(in srgb, var(--acu-primary, #5b8def) 45%, transparent);\n}\n.acu-v2-continuation-materials__list[data-v-fc2d1491] { display: flex; flex-direction: column; gap: 6px; padding-left: 22px; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__outline-summary[data-v-fc2d1491], .acu-v2-continuation-materials__outline-node[data-v-fc2d1491] { padding: 10px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 16%, transparent); border-radius: 6px; display: grid; gap: 5px;\n}\n.acu-v2-continuation-materials__outline-heading[data-v-fc2d1491] { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--acu-text-1); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__outline-nodes[data-v-fc2d1491] { display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__turns[data-v-fc2d1491] { display: grid; gap: 5px; margin: 0; padding-left: 22px; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__turns > li[data-v-fc2d1491] { display: flex; flex-wrap: wrap; align-items: center; gap: 6px;\n}\n.acu-v2-continuation-materials__turn--done[data-v-fc2d1491] { color: var(--acu-text-3);\n}\n.acu-v2-continuation-materials__turn--current[data-v-fc2d1491] { padding: 5px 7px; margin-left: -7px; border-radius: 4px; background: color-mix(in srgb, var(--acu-primary, #5b8def) 14%, transparent); color: var(--acu-text-1);\n}\n.acu-v2-continuation-materials__turn--planned[data-v-fc2d1491] { color: var(--acu-text-2);\n}\n.acu-v2-continuation-materials__cards[data-v-fc2d1491] { display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__card[data-v-fc2d1491] { padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 16%, transparent); border-radius: 6px; display: grid; gap: 4px;\n}\n.acu-v2-continuation-materials__card--retired[data-v-fc2d1491] { opacity: 0.55;\n}\n.acu-v2-continuation-materials__card-head[data-v-fc2d1491] { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--acu-text-1); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__card-body[data-v-fc2d1491] { margin: 0; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap;\n}\n.acu-v2-continuation-materials__card-meta[data-v-fc2d1491] { margin: 0; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap;\n}\n.acu-v2-continuation-materials__badge[data-v-fc2d1491] { padding: 1px 8px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 30%, transparent); color: var(--acu-text-2); font-size: 11px;\n}\n.acu-v2-continuation-materials__badge--primary[data-v-fc2d1491] { border-color: color-mix(in srgb, var(--acu-primary, #5b8def) 55%, transparent); color: var(--acu-text-1); background: color-mix(in srgb, var(--acu-primary, #5b8def) 12%, transparent);\n}\n.acu-v2-continuation-materials__badge--muted[data-v-fc2d1491] { opacity: 0.8;\n}\n.acu-v2-continuation-materials__json[data-v-fc2d1491] { display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__json > summary[data-v-fc2d1491] { cursor: pointer; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__history[data-v-fc2d1491] { display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__history-revision[data-v-fc2d1491] { padding: 8px; border-left: 2px solid color-mix(in srgb, var(--acu-text-3) 28%, transparent);\n}\r\n\r\n/* 手机窄屏：刷新/清空按钮换到独立一行靠右，避免和页签挤成两行半。 */\n@media (max-width: 640px) {\n.acu-v2-continuation-materials__tab-actions[data-v-fc2d1491] { margin-left: 0; width: 100%; justify-content: flex-end;\n}\n.acu-v2-continuation-materials__confirm-actions[data-v-fc2d1491] { display: flex; margin: 8px 0 0;\n}\n}\r\n", "src/presentation-v2/components/ContinuationMaterialsPanel.vue#style-0-fc2d1491");
+var ContinuationMaterialsPanel_vue_vue_type_style_index_0_scoped_fc2d1491_lang = null;
 
 const _hoisted_1$m = { class: "acu-v2-continuation-materials" };
 const _hoisted_2$k = { class: "acu-v2-continuation-materials__tabs" };
@@ -162304,161 +166647,238 @@ const _hoisted_7$b = {
 };
 const _hoisted_8$b = {
 	key: 0,
-	class: "acu-v2-continuation-materials__editor"
+	class: "acu-v2-continuation-materials__outline"
 };
 const _hoisted_9$a = { class: "acu-v2-continuation-materials__meta" };
-const _hoisted_10$a = {
-	key: 0,
-	class: "acu-v2-continuation-materials__error"
-};
-const _hoisted_11$a = { class: "acu-v2-continuation-materials__actions" };
-const _hoisted_12$a = {
-	key: 1,
-	class: "acu-v2-continuation-materials__empty"
-};
-const _hoisted_13$8 = {
-	key: 0,
-	class: "acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--primary"
-};
-const _hoisted_14$8 = { class: "acu-v2-continuation-materials__meta" };
-const _hoisted_15$8 = { class: "acu-v2-continuation-materials__list" };
-const _hoisted_16$7 = {
-	key: 0,
-	class: "acu-v2-continuation-materials__meta"
-};
-const _hoisted_17$6 = {
-	key: 1,
-	class: "acu-v2-continuation-materials__error"
-};
-const _hoisted_18$6 = {
-	class: "acu-v2-continuation-materials__block",
-	open: ""
-};
-const _hoisted_19$5 = {
-	key: 0,
-	class: "acu-v2-continuation-materials__badge"
-};
-const _hoisted_20$4 = {
-	key: 0,
-	class: "acu-v2-continuation-materials__empty"
-};
-const _hoisted_21$4 = {
-	key: 1,
-	class: "acu-v2-continuation-materials__cards"
-};
-const _hoisted_22$3 = { class: "acu-v2-continuation-materials__card-head" };
-const _hoisted_23$3 = { class: "acu-v2-continuation-materials__badge" };
-const _hoisted_24$3 = { class: "acu-v2-continuation-materials__badge" };
-const _hoisted_25$3 = {
-	key: 0,
-	class: "acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--muted"
-};
-const _hoisted_26$3 = { class: "acu-v2-continuation-materials__card-body" };
-const _hoisted_27$3 = { class: "acu-v2-continuation-materials__card-meta" };
-const _hoisted_28$2 = { class: "acu-v2-continuation-materials__json" };
+const _hoisted_10$a = { class: "acu-v2-continuation-materials__outline-summary" };
+const _hoisted_11$a = { class: "acu-v2-continuation-materials__outline-heading" };
+const _hoisted_12$a = { class: "acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--primary" };
+const _hoisted_13$8 = { class: "acu-v2-continuation-materials__badge" };
+const _hoisted_14$8 = { class: "acu-v2-continuation-materials__badge" };
+const _hoisted_15$8 = { class: "acu-v2-continuation-materials__badge" };
+const _hoisted_16$7 = { class: "acu-v2-continuation-materials__card-body" };
+const _hoisted_17$6 = { class: "acu-v2-continuation-materials__card-meta" };
+const _hoisted_18$6 = { class: "acu-v2-continuation-materials__card-meta" };
+const _hoisted_19$6 = { class: "acu-v2-continuation-materials__card-meta" };
+const _hoisted_20$5 = { class: "acu-v2-continuation-materials__outline-nodes" };
+const _hoisted_21$4 = { class: "acu-v2-continuation-materials__card-head" };
+const _hoisted_22$3 = { class: "acu-v2-continuation-materials__badge" };
+const _hoisted_23$3 = { class: "acu-v2-continuation-materials__card-body" };
+const _hoisted_24$3 = { class: "acu-v2-continuation-materials__turns" };
+const _hoisted_25$3 = { class: "acu-v2-continuation-materials__badge" };
+const _hoisted_26$3 = { class: "acu-v2-continuation-materials__badge" };
+const _hoisted_27$3 = { class: "acu-v2-continuation-materials__badge" };
+const _hoisted_28$2 = { class: "acu-v2-continuation-materials__badge" };
 const _hoisted_29$2 = {
 	key: 0,
+	class: "acu-v2-continuation-materials__badge",
+	title: "这些字段由系统按节奏档保守补全，不是大纲模型或作者明确给出的；可在原始 JSON 里修正"
+};
+const _hoisted_30$2 = {
+	key: 1,
+	class: "acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--primary"
+};
+const _hoisted_31$2 = { class: "acu-v2-continuation-materials__json" };
+const _hoisted_32$2 = {
+	key: 0,
 	class: "acu-v2-continuation-materials__error"
 };
-const _hoisted_30$2 = { class: "acu-v2-continuation-materials__actions" };
-const _hoisted_31$1 = {
-	class: "acu-v2-continuation-materials__block",
-	open: ""
-};
-const _hoisted_32$1 = {
-	key: 0,
-	class: "acu-v2-continuation-materials__badge"
-};
-const _hoisted_33$1 = {
-	key: 0,
+const _hoisted_33$2 = { class: "acu-v2-continuation-materials__actions" };
+const _hoisted_34$2 = {
+	key: 1,
 	class: "acu-v2-continuation-materials__empty"
 };
-const _hoisted_34$1 = {
-	key: 1,
-	class: "acu-v2-continuation-materials__cards"
-};
-const _hoisted_35 = { class: "acu-v2-continuation-materials__card-head" };
-const _hoisted_36 = { class: "acu-v2-continuation-materials__badge" };
-const _hoisted_37 = {
+const _hoisted_35 = {
 	key: 0,
-	class: "acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--muted"
+	class: "acu-v2-continuation-materials__outline-summary"
 };
-const _hoisted_38 = {
-	key: 1,
-	class: "acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--muted"
-};
-const _hoisted_39 = { class: "acu-v2-continuation-materials__card-body" };
-const _hoisted_40 = { class: "acu-v2-continuation-materials__card-meta" };
-const _hoisted_41 = { class: "acu-v2-continuation-materials__json" };
+const _hoisted_36 = { class: "acu-v2-continuation-materials__outline-heading" };
+const _hoisted_37 = { class: "acu-v2-continuation-materials__badge" };
+const _hoisted_38 = { class: "acu-v2-continuation-materials__badge" };
+const _hoisted_39 = { class: "acu-v2-continuation-materials__badge" };
+const _hoisted_40 = { class: "acu-v2-continuation-materials__card-body" };
+const _hoisted_41 = { class: "acu-v2-continuation-materials__list" };
 const _hoisted_42 = {
-	key: 0,
-	class: "acu-v2-continuation-materials__error"
-};
-const _hoisted_43 = { class: "acu-v2-continuation-materials__actions" };
-const _hoisted_44 = {
-	class: "acu-v2-continuation-materials__block",
-	open: ""
-};
-const _hoisted_45 = {
-	key: 0,
-	class: "acu-v2-continuation-materials__badge"
-};
-const _hoisted_46 = {
-	key: 0,
+	key: 1,
 	class: "acu-v2-continuation-materials__empty"
 };
-const _hoisted_47 = {
-	key: 1,
-	class: "acu-v2-continuation-materials__cards"
-};
-const _hoisted_48 = { class: "acu-v2-continuation-materials__card-head" };
-const _hoisted_49 = { class: "acu-v2-continuation-materials__card-body" };
-const _hoisted_50 = { class: "acu-v2-continuation-materials__card-meta" };
-const _hoisted_51 = { class: "acu-v2-continuation-materials__json" };
-const _hoisted_52 = {
+const _hoisted_43 = {
 	key: 0,
-	class: "acu-v2-continuation-materials__error"
+	class: "acu-v2-continuation-materials__history"
 };
-const _hoisted_53 = { class: "acu-v2-continuation-materials__actions" };
-const _hoisted_54 = {
+const _hoisted_44 = { class: "acu-v2-continuation-materials__list" };
+const _hoisted_45 = {
 	key: 0,
 	class: "acu-v2-continuation-materials__meta"
 };
-const _hoisted_55 = {
+const _hoisted_46 = {
 	key: 1,
+	class: "acu-v2-continuation-materials__meta"
+};
+const _hoisted_47 = {
+	key: 2,
 	class: "acu-v2-continuation-materials__error"
 };
-const _hoisted_56 = {
-	key: 2,
+const _hoisted_48 = {
+	class: "acu-v2-continuation-materials__block",
+	open: ""
+};
+const _hoisted_49 = {
+	key: 0,
+	class: "acu-v2-continuation-materials__badge"
+};
+const _hoisted_50 = {
+	key: 0,
 	class: "acu-v2-continuation-materials__empty"
 };
-const _hoisted_57 = {
-	key: 3,
+const _hoisted_51 = {
+	key: 1,
 	class: "acu-v2-continuation-materials__cards"
 };
-const _hoisted_58 = { class: "acu-v2-continuation-materials__card-head" };
-const _hoisted_59 = { class: "acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--primary" };
-const _hoisted_60 = { class: "acu-v2-continuation-materials__badge" };
-const _hoisted_61 = {
+const _hoisted_52 = { class: "acu-v2-continuation-materials__card-head" };
+const _hoisted_53 = { class: "acu-v2-continuation-materials__badge" };
+const _hoisted_54 = { class: "acu-v2-continuation-materials__badge" };
+const _hoisted_55 = {
 	key: 0,
 	class: "acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--muted"
 };
-const _hoisted_62 = { class: "acu-v2-continuation-materials__card-body" };
+const _hoisted_56 = { class: "acu-v2-continuation-materials__card-body" };
+const _hoisted_57 = { class: "acu-v2-continuation-materials__card-meta" };
+const _hoisted_58 = { class: "acu-v2-continuation-materials__json" };
+const _hoisted_59 = {
+	key: 0,
+	class: "acu-v2-continuation-materials__error"
+};
+const _hoisted_60 = { class: "acu-v2-continuation-materials__actions" };
+const _hoisted_61 = {
+	class: "acu-v2-continuation-materials__block",
+	open: ""
+};
+const _hoisted_62 = {
+	key: 0,
+	class: "acu-v2-continuation-materials__badge"
+};
 const _hoisted_63 = {
 	key: 0,
-	class: "acu-v2-continuation-materials__card-body"
+	class: "acu-v2-continuation-materials__empty"
 };
 const _hoisted_64 = {
 	key: 1,
-	class: "acu-v2-continuation-materials__card-meta"
+	class: "acu-v2-continuation-materials__cards"
 };
-const _hoisted_65 = { class: "acu-v2-continuation-materials__card-meta" };
-const _hoisted_66 = { class: "acu-v2-continuation-materials__json" };
+const _hoisted_65 = { class: "acu-v2-continuation-materials__card-head" };
+const _hoisted_66 = { class: "acu-v2-continuation-materials__badge" };
 const _hoisted_67 = {
+	key: 0,
+	class: "acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--muted"
+};
+const _hoisted_68 = {
+	key: 1,
+	class: "acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--muted"
+};
+const _hoisted_69 = { class: "acu-v2-continuation-materials__card-body" };
+const _hoisted_70 = { class: "acu-v2-continuation-materials__card-meta" };
+const _hoisted_71 = { class: "acu-v2-continuation-materials__json" };
+const _hoisted_72 = {
 	key: 0,
 	class: "acu-v2-continuation-materials__error"
 };
-const _hoisted_68 = { class: "acu-v2-continuation-materials__actions" };
+const _hoisted_73 = { class: "acu-v2-continuation-materials__actions" };
+const _hoisted_74 = {
+	class: "acu-v2-continuation-materials__block",
+	open: ""
+};
+const _hoisted_75 = {
+	key: 0,
+	class: "acu-v2-continuation-materials__badge"
+};
+const _hoisted_76 = {
+	key: 0,
+	class: "acu-v2-continuation-materials__empty"
+};
+const _hoisted_77 = {
+	key: 1,
+	class: "acu-v2-continuation-materials__cards"
+};
+const _hoisted_78 = { class: "acu-v2-continuation-materials__card-head" };
+const _hoisted_79 = { class: "acu-v2-continuation-materials__card-body" };
+const _hoisted_80 = { class: "acu-v2-continuation-materials__card-meta" };
+const _hoisted_81 = { class: "acu-v2-continuation-materials__json" };
+const _hoisted_82 = {
+	key: 0,
+	class: "acu-v2-continuation-materials__error"
+};
+const _hoisted_83 = { class: "acu-v2-continuation-materials__actions" };
+const _hoisted_84 = {
+	class: "acu-v2-continuation-materials__block",
+	open: ""
+};
+const _hoisted_85 = {
+	key: 0,
+	class: "acu-v2-continuation-materials__badge"
+};
+const _hoisted_86 = {
+	key: 0,
+	class: "acu-v2-continuation-materials__empty"
+};
+const _hoisted_87 = {
+	key: 1,
+	class: "acu-v2-continuation-materials__cards"
+};
+const _hoisted_88 = { class: "acu-v2-continuation-materials__card-head" };
+const _hoisted_89 = { class: "acu-v2-continuation-materials__badge" };
+const _hoisted_90 = {
+	key: 0,
+	class: "acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--muted"
+};
+const _hoisted_91 = { class: "acu-v2-continuation-materials__card-body" };
+const _hoisted_92 = { class: "acu-v2-continuation-materials__card-body" };
+const _hoisted_93 = { class: "acu-v2-continuation-materials__card-meta" };
+const _hoisted_94 = { class: "acu-v2-continuation-materials__json" };
+const _hoisted_95 = {
+	key: 0,
+	class: "acu-v2-continuation-materials__error"
+};
+const _hoisted_96 = { class: "acu-v2-continuation-materials__actions" };
+const _hoisted_97 = {
+	key: 0,
+	class: "acu-v2-continuation-materials__meta"
+};
+const _hoisted_98 = {
+	key: 1,
+	class: "acu-v2-continuation-materials__error"
+};
+const _hoisted_99 = {
+	key: 2,
+	class: "acu-v2-continuation-materials__empty"
+};
+const _hoisted_100 = {
+	key: 3,
+	class: "acu-v2-continuation-materials__cards"
+};
+const _hoisted_101 = { class: "acu-v2-continuation-materials__card-head" };
+const _hoisted_102 = { class: "acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--primary" };
+const _hoisted_103 = { class: "acu-v2-continuation-materials__badge" };
+const _hoisted_104 = {
+	key: 0,
+	class: "acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--muted"
+};
+const _hoisted_105 = { class: "acu-v2-continuation-materials__card-body" };
+const _hoisted_106 = {
+	key: 0,
+	class: "acu-v2-continuation-materials__card-body"
+};
+const _hoisted_107 = {
+	key: 1,
+	class: "acu-v2-continuation-materials__card-meta"
+};
+const _hoisted_108 = { class: "acu-v2-continuation-materials__card-meta" };
+const _hoisted_109 = { class: "acu-v2-continuation-materials__json" };
+const _hoisted_110 = {
+	key: 0,
+	class: "acu-v2-continuation-materials__error"
+};
+const _hoisted_111 = { class: "acu-v2-continuation-materials__actions" };
 function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", _hoisted_1$m, [
 		createBaseVNode("div", _hoisted_2$k, [(openBlock(), createElementBlock(
@@ -162478,7 +166898,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 			loading: $props.busy,
 			onClick: $setup.reload
 		}, {
-			default: withCtx(() => [..._cache[13] || (_cache[13] = [createTextVNode(
+			default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
 				"刷新",
 				-1
 				/* CACHED */
@@ -162489,14 +166909,14 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 			loading: $props.busy,
 			onClick: $setup.requestClear
 		}, {
-			default: withCtx(() => [..._cache[14] || (_cache[14] = [createTextVNode(
+			default: withCtx(() => [..._cache[17] || (_cache[17] = [createTextVNode(
 				"一键清空",
 				-1
 				/* CACHED */
 			)])]),
 			_: 1
 		}, 8, ["loading"])])]),
-		$setup.clearPending ? (openBlock(), createElementBlock("p", _hoisted_5$e, [_cache[17] || (_cache[17] = createTextVNode(
+		$setup.clearPending ? (openBlock(), createElementBlock("p", _hoisted_5$e, [_cache[20] || (_cache[20] = createTextVNode(
 			" 清空会删除当前续写任务、主 Agent 的会话记录与本地资料快照（伏笔、信息差、长期约束、故事总纲）。 小说正文楼层不受影响，清空后可以从当前剧情重新开始规划。 ",
 			-1
 			/* CACHED */
@@ -162505,14 +166925,14 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 			loading: $props.busy,
 			onClick: $setup.confirmClear
 		}, {
-			default: withCtx(() => [..._cache[15] || (_cache[15] = [createTextVNode(
+			default: withCtx(() => [..._cache[18] || (_cache[18] = [createTextVNode(
 				"确认清空",
 				-1
 				/* CACHED */
 			)])]),
 			_: 1
 		}, 8, ["loading"]), createVNode($setup["AcuButton"], { onClick: _cache[0] || (_cache[0] = ($event) => $setup.clearPending = false) }, {
-			default: withCtx(() => [..._cache[16] || (_cache[16] = [createTextVNode(
+			default: withCtx(() => [..._cache[19] || (_cache[19] = [createTextVNode(
 				"取消",
 				-1
 				/* CACHED */
@@ -162526,7 +166946,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 			[!$props.task ? (openBlock(), createElementBlock("p", _hoisted_7$b, "还没有续写任务，也就没有阶段大纲。")) : (openBlock(), createElementBlock(
 				Fragment,
 				{ key: 1 },
-				[$props.activeRevision ? (openBlock(), createElementBlock("div", _hoisted_8$b, [
+				[$props.activeRevision && $props.activeStage ? (openBlock(), createElementBlock("div", _hoisted_8$b, [
 					createBaseVNode(
 						"p",
 						_hoisted_9$a,
@@ -162534,101 +166954,375 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 						1
 						/* TEXT */
 					),
-					createVNode($setup["AcuTextarea"], {
-						"model-value": $setup.outlineDraft,
-						rows: 16,
-						"onUpdate:modelValue": $setup.onOutlineInput
-					}, null, 8, ["model-value"]),
-					$setup.outlineError ? (openBlock(), createElementBlock(
-						"p",
-						_hoisted_10$a,
-						toDisplayString($setup.outlineError),
-						1
-						/* TEXT */
-					)) : createCommentVNode("v-if", true),
-					createBaseVNode("div", _hoisted_11$a, [createVNode($setup["AcuButton"], {
-						disabled: !$setup.outlineDirty,
-						onClick: $setup.syncOutlineDraft
-					}, {
-						default: withCtx(() => [..._cache[18] || (_cache[18] = [createTextVNode(
-							"放弃修改",
-							-1
-							/* CACHED */
-						)])]),
-						_: 1
-					}, 8, ["disabled"]), createVNode($setup["AcuButton"], {
-						variant: "primary",
-						loading: $props.busy,
-						disabled: !$setup.outlineDirty,
-						onClick: $setup.saveOutline
-					}, {
-						default: withCtx(() => [..._cache[19] || (_cache[19] = [createTextVNode(
-							"保存大纲",
-							-1
-							/* CACHED */
-						)])]),
-						_: 1
-					}, 8, ["loading", "disabled"])])
-				])) : (openBlock(), createElementBlock("p", _hoisted_12$a, "当前没有已冻结的阶段大纲可编辑。")), (openBlock(true), createElementBlock(
-					Fragment,
-					null,
-					renderList($props.task.stages, (stage) => {
-						return openBlock(), createElementBlock(
-							"details",
-							{
-								key: stage.stageId,
-								class: normalizeClass(["acu-v2-continuation-materials__block", { "acu-v2-continuation-materials__block--current": stage.stageId === $props.activeStage?.stageId }])
-							},
-							[createBaseVNode("summary", null, [createTextVNode(
-								" 第 " + toDisplayString(stage.stageNumber) + " 阶段 · " + toDisplayString(stage.status) + " · " + toDisplayString(stage.completedTurns) + " / " + toDisplayString($setup.stageTotalTurns(stage)) + " 轮 ",
+					createBaseVNode("section", _hoisted_10$a, [
+						createBaseVNode("p", _hoisted_11$a, [
+							createBaseVNode(
+								"strong",
+								null,
+								"第 " + toDisplayString($props.activeStage.stageNumber) + " 阶段：" + toDisplayString($props.activeRevision.outline.title),
 								1
 								/* TEXT */
-							), stage.stageId === $props.activeStage?.stageId ? (openBlock(), createElementBlock("span", _hoisted_13$8, "当前阶段")) : createCommentVNode("v-if", true)]), (openBlock(true), createElementBlock(
+							),
+							createBaseVNode(
+								"span",
+								_hoisted_12$a,
+								toDisplayString($setup.TEMPO_LABELS[$props.activeRevision.outline.tempo] ?? $props.activeRevision.outline.tempo),
+								1
+								/* TEXT */
+							),
+							createBaseVNode(
+								"span",
+								_hoisted_13$8,
+								"职责：" + toDisplayString($setup.ROLE_LABELS[$props.activeRevision.outline.role ?? ""] ?? $props.activeRevision.outline.role ?? "未标注"),
+								1
+								/* TEXT */
+							),
+							createBaseVNode(
+								"span",
+								_hoisted_14$8,
+								"revision " + toDisplayString($props.activeRevision.revision),
+								1
+								/* TEXT */
+							),
+							createBaseVNode(
+								"span",
+								_hoisted_15$8,
+								toDisplayString($props.activeRevision.frozen ? "已冻结" : "待确认"),
+								1
+								/* TEXT */
+							)
+						]),
+						createBaseVNode(
+							"p",
+							_hoisted_16$7,
+							"阶段目标：" + toDisplayString($props.activeRevision.outline.goal),
+							1
+							/* TEXT */
+						),
+						createBaseVNode(
+							"p",
+							_hoisted_17$6,
+							"故事时间目标：" + toDisplayString($props.activeRevision.outline.timeSpanGoal ?? "未设定"),
+							1
+							/* TEXT */
+						),
+						createBaseVNode(
+							"p",
+							_hoisted_18$6,
+							"完成 " + toDisplayString($props.activeStage.completedTurns) + " / " + toDisplayString($props.activeRevision.outline.totalTurns) + " 轮 · 剩余 " + toDisplayString($setup.remainingTurns($props.activeStage, $props.activeRevision)) + " 轮",
+							1
+							/* TEXT */
+						),
+						createBaseVNode(
+							"p",
+							_hoisted_19$6,
+							" 所属 active 卷：" + toDisplayString($setup.activeVolume ? `[${$setup.activeVolume.id}]「${$setup.activeVolume.title}」` : "未识别（故事总纲尚未加载或当前没有 active 卷）"),
+							1
+							/* TEXT */
+						)
+					]),
+					createBaseVNode("div", _hoisted_20$5, [(openBlock(true), createElementBlock(
+						Fragment,
+						null,
+						renderList($props.activeRevision.outline.nodes, (node, nodeIndex) => {
+							return openBlock(), createElementBlock("section", {
+								key: node.id,
+								class: "acu-v2-continuation-materials__outline-node"
+							}, [
+								createBaseVNode("p", _hoisted_21$4, [createBaseVNode(
+									"strong",
+									null,
+									toDisplayString(node.title),
+									1
+									/* TEXT */
+								), createBaseVNode(
+									"span",
+									_hoisted_22$3,
+									toDisplayString(node.turns.length) + " 轮",
+									1
+									/* TEXT */
+								)]),
+								createBaseVNode(
+									"p",
+									_hoisted_23$3,
+									"节点目标：" + toDisplayString(node.goal),
+									1
+									/* TEXT */
+								),
+								createBaseVNode("ol", _hoisted_24$3, [(openBlock(true), createElementBlock(
+									Fragment,
+									null,
+									renderList(node.turns, (turn, turnIndex) => {
+										return openBlock(), createElementBlock(
+											"li",
+											{
+												key: turn.id,
+												class: normalizeClass(`acu-v2-continuation-materials__turn--${$setup.turnState($props.activeRevision, nodeIndex, turnIndex)}`)
+											},
+											[
+												createBaseVNode(
+													"span",
+													null,
+													"第 " + toDisplayString($setup.turnPosition($props.activeRevision, node.id, turnIndex)) + " 轮 · " + toDisplayString(turn.goal),
+													1
+													/* TEXT */
+												),
+												createBaseVNode(
+													"span",
+													_hoisted_25$3,
+													toDisplayString($setup.PACING_LABELS[turn.pacing] ?? turn.pacing),
+													1
+													/* TEXT */
+												),
+												createBaseVNode(
+													"span",
+													_hoisted_26$3,
+													"功能：" + toDisplayString($setup.FUNCTION_LABELS[turn.function ?? ""] ?? turn.function ?? "未标注"),
+													1
+													/* TEXT */
+												),
+												createBaseVNode(
+													"span",
+													_hoisted_27$3,
+													"主线：" + toDisplayString($setup.MAINLINE_LABELS[turn.mainlineDelta ?? ""] ?? turn.mainlineDelta ?? "未标注"),
+													1
+													/* TEXT */
+												),
+												createBaseVNode("span", _hoisted_28$2, [createTextVNode(
+													"时间：" + toDisplayString($setup.TIME_LABELS[turn.timeAdvance ?? ""] ?? turn.timeAdvance ?? "未标注"),
+													1
+													/* TEXT */
+												), turn.timeAnchor ? (openBlock(), createElementBlock(
+													Fragment,
+													{ key: 0 },
+													[createTextVNode(
+														" · " + toDisplayString(turn.timeAnchor),
+														1
+														/* TEXT */
+													)],
+													64
+													/* STABLE_FRAGMENT */
+												)) : createCommentVNode("v-if", true)]),
+												turn.inferred?.length ? (openBlock(), createElementBlock(
+													"span",
+													_hoisted_29$2,
+													"系统补全：" + toDisplayString(turn.inferred.map((field) => $setup.INFERRED_FIELD_LABELS[field] ?? field).join("、")),
+													1
+													/* TEXT */
+												)) : createCommentVNode("v-if", true),
+												$setup.turnState($props.activeRevision, nodeIndex, turnIndex) === "current" ? (openBlock(), createElementBlock("span", _hoisted_30$2, "当前执行")) : createCommentVNode("v-if", true)
+											],
+											2
+											/* CLASS */
+										);
+									}),
+									128
+									/* KEYED_FRAGMENT */
+								))])
+							]);
+						}),
+						128
+						/* KEYED_FRAGMENT */
+					))]),
+					createBaseVNode("details", _hoisted_31$2, [
+						_cache[23] || (_cache[23] = createBaseVNode(
+							"summary",
+							null,
+							"编辑原始 JSON",
+							-1
+							/* CACHED */
+						)),
+						_cache[24] || (_cache[24] = createBaseVNode(
+							"p",
+							{ class: "acu-v2-continuation-materials__card-meta" },
+							"修改轮次目标时请同步核对 pacing、function、mainlineDelta、timeAdvance 与 timeAnchor；缺少的语义字段保存时会按 pacing 补默认并标注「系统补全」，标注为 inferred 的字段改成明确值后标注自动消失。",
+							-1
+							/* CACHED */
+						)),
+						createVNode($setup["AcuTextarea"], {
+							"model-value": $setup.outlineDraft,
+							rows: 16,
+							"onUpdate:modelValue": $setup.onOutlineInput
+						}, null, 8, ["model-value"]),
+						$setup.outlineError ? (openBlock(), createElementBlock(
+							"p",
+							_hoisted_32$2,
+							toDisplayString($setup.outlineError),
+							1
+							/* TEXT */
+						)) : createCommentVNode("v-if", true),
+						createBaseVNode("div", _hoisted_33$2, [createVNode($setup["AcuButton"], {
+							disabled: !$setup.outlineDirty,
+							onClick: $setup.syncOutlineDraft
+						}, {
+							default: withCtx(() => [..._cache[21] || (_cache[21] = [createTextVNode(
+								"放弃修改",
+								-1
+								/* CACHED */
+							)])]),
+							_: 1
+						}, 8, ["disabled"]), createVNode($setup["AcuButton"], {
+							variant: "primary",
+							loading: $props.busy,
+							disabled: !$setup.outlineDirty,
+							onClick: $setup.saveOutline
+						}, {
+							default: withCtx(() => [..._cache[22] || (_cache[22] = [createTextVNode(
+								"保存大纲",
+								-1
+								/* CACHED */
+							)])]),
+							_: 1
+						}, 8, ["loading", "disabled"])])
+					])
+				])) : (openBlock(), createElementBlock("p", _hoisted_34$2, "当前没有已冻结的阶段大纲可编辑。")), (openBlock(true), createElementBlock(
+					Fragment,
+					null,
+					renderList($setup.historyStages, (stage) => {
+						return openBlock(), createElementBlock("details", {
+							key: stage.stageId,
+							class: "acu-v2-continuation-materials__block",
+							open: ""
+						}, [
+							createBaseVNode(
+								"summary",
+								null,
+								"第 " + toDisplayString(stage.stageNumber) + " 阶段 · " + toDisplayString(stage.status) + " · " + toDisplayString(stage.completedTurns) + " / " + toDisplayString($setup.stageTotalTurns(stage)) + " 轮",
+								1
+								/* TEXT */
+							),
+							(openBlock(true), createElementBlock(
 								Fragment,
 								null,
-								renderList(stage.revisions, (revision) => {
-									return openBlock(), createElementBlock("div", { key: revision.revision }, [createBaseVNode(
-										"p",
-										_hoisted_14$8,
-										" revision " + toDisplayString(revision.revision) + " · " + toDisplayString(revision.reason) + " · " + toDisplayString(revision.frozen ? "已冻结" : "待确认") + " · " + toDisplayString(revision.outline.title),
-										1
-										/* TEXT */
-									), createBaseVNode("ol", _hoisted_15$8, [(openBlock(true), createElementBlock(
+								renderList([$setup.displayRevision(stage)], (revision) => {
+									return openBlock(), createElementBlock(
 										Fragment,
-										null,
-										renderList(revision.outline.nodes, (node) => {
-											return openBlock(), createElementBlock("li", { key: node.id }, [
+										{ key: revision?.revision ?? "no-revision" },
+										[revision ? (openBlock(), createElementBlock("section", _hoisted_35, [
+											createBaseVNode("p", _hoisted_36, [
 												createBaseVNode(
 													"strong",
 													null,
-													toDisplayString(node.title),
+													toDisplayString(revision.outline.title),
 													1
 													/* TEXT */
 												),
-												createTextVNode(
-													"：" + toDisplayString(node.goal) + " ",
+												createBaseVNode(
+													"span",
+													_hoisted_37,
+													"revision " + toDisplayString(revision.revision),
 													1
 													/* TEXT */
 												),
-												createBaseVNode("ol", null, [(openBlock(true), createElementBlock(
-													Fragment,
-													null,
-													renderList(node.turns, (turn, turnIndex) => {
-														return openBlock(), createElementBlock(
-															"li",
-															{
-																key: turn.id,
-																class: normalizeClass({ "acu-v2-continuation-materials__turn--done": stage.stageId === $props.activeStage?.stageId && revision.revision === stage.activeRevision && $setup.turnPosition(revision, node.id, turnIndex) <= stage.completedTurns })
-															},
-															toDisplayString(turn.goal),
-															3
-															/* TEXT, CLASS */
-														);
-													}),
-													128
-													/* KEYED_FRAGMENT */
-												))])
-											]);
+												createBaseVNode(
+													"span",
+													_hoisted_38,
+													toDisplayString(revision.frozen ? "已冻结" : "待确认"),
+													1
+													/* TEXT */
+												),
+												createBaseVNode(
+													"span",
+													_hoisted_39,
+													"职责：" + toDisplayString($setup.ROLE_LABELS[revision.outline.role ?? ""] ?? revision.outline.role ?? "未标注"),
+													1
+													/* TEXT */
+												)
+											]),
+											createBaseVNode(
+												"p",
+												_hoisted_40,
+												"阶段目标：" + toDisplayString(revision.outline.goal),
+												1
+												/* TEXT */
+											),
+											createBaseVNode("ol", _hoisted_41, [(openBlock(true), createElementBlock(
+												Fragment,
+												null,
+												renderList(revision.outline.nodes, (node) => {
+													return openBlock(), createElementBlock("li", { key: node.id }, [
+														createBaseVNode(
+															"strong",
+															null,
+															toDisplayString(node.title),
+															1
+															/* TEXT */
+														),
+														createTextVNode(
+															"：" + toDisplayString(node.goal),
+															1
+															/* TEXT */
+														),
+														createBaseVNode("ol", null, [(openBlock(true), createElementBlock(
+															Fragment,
+															null,
+															renderList(node.turns, (turn) => {
+																return openBlock(), createElementBlock("li", { key: turn.id }, [createTextVNode(
+																	toDisplayString(turn.goal) + " · " + toDisplayString($setup.PACING_LABELS[turn.pacing] ?? turn.pacing) + " · " + toDisplayString($setup.FUNCTION_LABELS[turn.function ?? ""] ?? turn.function ?? "未标注") + " · 主线 " + toDisplayString($setup.MAINLINE_LABELS[turn.mainlineDelta ?? ""] ?? turn.mainlineDelta ?? "未标注") + " · " + toDisplayString($setup.TIME_LABELS[turn.timeAdvance ?? ""] ?? turn.timeAdvance ?? "未标注"),
+																	1
+																	/* TEXT */
+																), turn.timeAnchor ? (openBlock(), createElementBlock(
+																	Fragment,
+																	{ key: 0 },
+																	[createTextVNode(
+																		"（" + toDisplayString(turn.timeAnchor) + "）",
+																		1
+																		/* TEXT */
+																	)],
+																	64
+																	/* STABLE_FRAGMENT */
+																)) : createCommentVNode("v-if", true)]);
+															}),
+															128
+															/* KEYED_FRAGMENT */
+														))])
+													]);
+												}),
+												128
+												/* KEYED_FRAGMENT */
+											))])
+										])) : (openBlock(), createElementBlock("p", _hoisted_42, "该阶段没有可展示的 revision。"))],
+										64
+										/* STABLE_FRAGMENT */
+									);
+								}),
+								128
+								/* KEYED_FRAGMENT */
+							)),
+							$setup.olderRevisions(stage).length ? (openBlock(), createElementBlock("details", _hoisted_43, [createBaseVNode(
+								"summary",
+								null,
+								"旧 revision（" + toDisplayString($setup.olderRevisions(stage).length) + "）",
+								1
+								/* TEXT */
+							), (openBlock(true), createElementBlock(
+								Fragment,
+								null,
+								renderList($setup.olderRevisions(stage), (revision) => {
+									return openBlock(), createElementBlock("details", {
+										key: revision.revision,
+										class: "acu-v2-continuation-materials__history-revision"
+									}, [createBaseVNode(
+										"summary",
+										null,
+										"revision " + toDisplayString(revision.revision) + " · " + toDisplayString(revision.reason) + " · " + toDisplayString(revision.outline.title),
+										1
+										/* TEXT */
+									), createBaseVNode("ol", _hoisted_44, [(openBlock(true), createElementBlock(
+										Fragment,
+										null,
+										renderList(revision.outline.nodes, (node) => {
+											return openBlock(), createElementBlock("li", { key: node.id }, [createBaseVNode(
+												"strong",
+												null,
+												toDisplayString(node.title),
+												1
+												/* TEXT */
+											), createTextVNode(
+												"：" + toDisplayString(node.goal),
+												1
+												/* TEXT */
+											)]);
 										}),
 										128
 										/* KEYED_FRAGMENT */
@@ -162636,10 +167330,8 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 								}),
 								128
 								/* KEYED_FRAGMENT */
-							))],
-							2
-							/* CLASS */
-						);
+							))])) : createCommentVNode("v-if", true)
+						]);
 					}),
 					128
 					/* KEYED_FRAGMENT */
@@ -162654,7 +167346,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 			{ key: 2 },
 			[
 				createCommentVNode(" 本地资料：伏笔 / 信息差 / 长期约束 分类型结构化展示，各自独立 JSON 编辑与保存 "),
-				_cache[29] || (_cache[29] = createBaseVNode(
+				_cache[38] || (_cache[38] = createBaseVNode(
 					"p",
 					{ class: "acu-v2-continuation-materials__meta" },
 					" 本地资料由子代理结算写入，也可以在这里分模块手动修正。保存走与子代理相同的结构校验并推进修订号； 每个模块独立保存，只提交本模块数据，不影响其他模块（含未保存的草稿）。 ",
@@ -162663,26 +167355,82 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 				)),
 				$setup.materials.snapshot.value ? (openBlock(), createElementBlock(
 					"p",
-					_hoisted_16$7,
-					" 结算水位：楼层 " + toDisplayString($setup.materials.snapshot.value.settledThroughIndex) + " · 伏笔 " + toDisplayString($setup.materials.snapshot.value.hooks.length) + " 条 · 信息差 " + toDisplayString($setup.materials.snapshot.value.infoGap.length) + " 条 · 长期约束 " + toDisplayString($setup.materials.snapshot.value.constraints.length) + " 条 · 修订号 " + toDisplayString($setup.materials.snapshot.value.revisions.hooks) + "/" + toDisplayString($setup.materials.snapshot.value.revisions.infoGap) + "/" + toDisplayString($setup.materials.snapshot.value.revisions.constraints),
+					_hoisted_45,
+					" 结算水位：楼层 " + toDisplayString($setup.materials.snapshot.value.settledThroughIndex) + " · 伏笔 " + toDisplayString($setup.materials.snapshot.value.hooks.length) + " 条 · 信息差 " + toDisplayString($setup.materials.snapshot.value.infoGap.length) + " 条 · 长期约束 " + toDisplayString($setup.materials.snapshot.value.constraints.length) + " 条 · 故事时间 " + toDisplayString($setup.materials.snapshot.value.chronology.length) + " 条 · 修订号 " + toDisplayString($setup.materials.snapshot.value.revisions.hooks) + "/" + toDisplayString($setup.materials.snapshot.value.revisions.infoGap) + "/" + toDisplayString($setup.materials.snapshot.value.revisions.constraints) + "/" + toDisplayString($setup.materials.snapshot.value.revisions.chronology),
 					1
 					/* TEXT */
 				)) : createCommentVNode("v-if", true),
+				$setup.materials.snapshot.value ? (openBlock(), createElementBlock("p", _hoisted_46, [$setup.materials.diagnostics.value.adoptedIndex === null ? (openBlock(), createElementBlock(
+					Fragment,
+					{ key: 0 },
+					[createTextVNode(" 当前聊天没有任何楼层带有资料快照。快照由子代理结算后写到当时的末楼，并跟着该楼层走：该楼被删除、重新生成或 swipe 时，资料会回退到更早楼层的快照；若此前只写过一次，就会回到空。 ")],
+					64
+					/* STABLE_FRAGMENT */
+				)) : (openBlock(), createElementBlock(
+					Fragment,
+					{ key: 1 },
+					[
+						createTextVNode(
+							" 资料来源：楼层 " + toDisplayString($setup.materials.diagnostics.value.adoptedIndex),
+							1
+							/* TEXT */
+						),
+						$setup.materials.diagnostics.value.salvaged ? (openBlock(), createElementBlock(
+							Fragment,
+							{ key: 0 },
+							[createTextVNode("（该楼快照未通过严格校验，已按宽容模式读取，损坏记录已丢弃）")],
+							64
+							/* STABLE_FRAGMENT */
+						)) : createCommentVNode("v-if", true),
+						_cache[25] || (_cache[25] = createTextVNode(
+							"。 ",
+							-1
+							/* CACHED */
+						)),
+						$setup.materials.diagnostics.value.candidates.some((item) => !item.valid) ? (openBlock(), createElementBlock(
+							Fragment,
+							{ key: 1 },
+							[createTextVNode(
+								" 另有 " + toDisplayString($setup.materials.diagnostics.value.candidates.filter((item) => !item.valid).length) + " 个楼层的快照结构损坏被跳过： ",
+								1
+								/* TEXT */
+							), (openBlock(true), createElementBlock(
+								Fragment,
+								null,
+								renderList($setup.materials.diagnostics.value.candidates.filter((entry) => !entry.valid), (item) => {
+									return openBlock(), createElementBlock(
+										"span",
+										{ key: item.index },
+										"楼层 " + toDisplayString(item.index) + "（" + toDisplayString(item.problems.slice(0, 3).join("；")) + "）；",
+										1
+										/* TEXT */
+									);
+								}),
+								128
+								/* KEYED_FRAGMENT */
+							))],
+							64
+							/* STABLE_FRAGMENT */
+						)) : createCommentVNode("v-if", true)
+					],
+					64
+					/* STABLE_FRAGMENT */
+				))])) : createCommentVNode("v-if", true),
 				$setup.materials.loadError.value ? (openBlock(), createElementBlock(
 					"p",
-					_hoisted_17$6,
+					_hoisted_47,
 					toDisplayString($setup.materials.loadError.value),
 					1
 					/* TEXT */
 				)) : createCommentVNode("v-if", true),
 				createCommentVNode(" 伏笔账本 "),
-				createBaseVNode("details", _hoisted_18$6, [
+				createBaseVNode("details", _hoisted_48, [
 					createBaseVNode("summary", null, [createTextVNode(
 						"伏笔账本 · " + toDisplayString($setup.materials.snapshot.value?.hooks.length ?? 0) + " 条",
 						1
 						/* TEXT */
-					), $setup.materials.modules.hooks.dirty ? (openBlock(), createElementBlock("span", _hoisted_19$5, "未保存")) : createCommentVNode("v-if", true)]),
-					!$setup.materials.snapshot.value?.hooks.length ? (openBlock(), createElementBlock("p", _hoisted_20$4, "还没有伏笔条目。")) : (openBlock(), createElementBlock("div", _hoisted_21$4, [(openBlock(true), createElementBlock(
+					), $setup.materials.modules.hooks.dirty ? (openBlock(), createElementBlock("span", _hoisted_49, "未保存")) : createCommentVNode("v-if", true)]),
+					!$setup.materials.snapshot.value?.hooks.length ? (openBlock(), createElementBlock("p", _hoisted_50, "还没有伏笔条目。")) : (openBlock(), createElementBlock("div", _hoisted_51, [(openBlock(true), createElementBlock(
 						Fragment,
 						null,
 						renderList($setup.materials.snapshot.value.hooks, (hook) => {
@@ -162693,7 +167441,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 									class: normalizeClass(["acu-v2-continuation-materials__card", { "acu-v2-continuation-materials__card--retired": hook.retired }])
 								},
 								[
-									createBaseVNode("p", _hoisted_22$3, [
+									createBaseVNode("p", _hoisted_52, [
 										createBaseVNode(
 											"strong",
 											null,
@@ -162703,21 +167451,21 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 										),
 										createBaseVNode(
 											"span",
-											_hoisted_23$3,
+											_hoisted_53,
 											toDisplayString($setup.HOOK_STATUS_LABELS[hook.status] ?? hook.status),
 											1
 											/* TEXT */
 										),
 										createBaseVNode(
 											"span",
-											_hoisted_24$3,
+											_hoisted_54,
 											toDisplayString($setup.HOOK_IMPORTANCE_LABELS[hook.importance] ?? hook.importance),
 											1
 											/* TEXT */
 										),
 										hook.retired ? (openBlock(), createElementBlock(
 											"span",
-											_hoisted_25$3,
+											_hoisted_55,
 											"已退休" + toDisplayString(hook.retiredReason ? `：${hook.retiredReason}` : ""),
 											1
 											/* TEXT */
@@ -162725,12 +167473,12 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 									]),
 									createBaseVNode(
 										"p",
-										_hoisted_26$3,
+										_hoisted_56,
 										toDisplayString(hook.summary),
 										1
 										/* TEXT */
 									),
-									createBaseVNode("p", _hoisted_27$3, [createTextVNode(
+									createBaseVNode("p", _hoisted_57, [createTextVNode(
 										"植入楼层 " + toDisplayString(hook.plantedIndex) + " · 最近更新楼层 " + toDisplayString(hook.updatedIndex),
 										1
 										/* TEXT */
@@ -162753,8 +167501,8 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 						128
 						/* KEYED_FRAGMENT */
 					))])),
-					createBaseVNode("details", _hoisted_28$2, [
-						_cache[22] || (_cache[22] = createBaseVNode(
+					createBaseVNode("details", _hoisted_58, [
+						_cache[28] || (_cache[28] = createBaseVNode(
 							"summary",
 							null,
 							"编辑原始 JSON",
@@ -162768,16 +167516,16 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 						}, null, 8, ["model-value"]),
 						$setup.materials.modules.hooks.error ? (openBlock(), createElementBlock(
 							"p",
-							_hoisted_29$2,
+							_hoisted_59,
 							toDisplayString($setup.materials.modules.hooks.error),
 							1
 							/* TEXT */
 						)) : createCommentVNode("v-if", true),
-						createBaseVNode("div", _hoisted_30$2, [createVNode($setup["AcuButton"], {
+						createBaseVNode("div", _hoisted_60, [createVNode($setup["AcuButton"], {
 							disabled: !$setup.materials.modules.hooks.dirty,
 							onClick: _cache[2] || (_cache[2] = ($event) => $setup.materials.discard("hooks"))
 						}, {
-							default: withCtx(() => [..._cache[20] || (_cache[20] = [createTextVNode(
+							default: withCtx(() => [..._cache[26] || (_cache[26] = [createTextVNode(
 								"放弃修改",
 								-1
 								/* CACHED */
@@ -162789,7 +167537,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 							disabled: !$setup.materials.modules.hooks.dirty,
 							onClick: _cache[3] || (_cache[3] = ($event) => $setup.materials.save("hooks"))
 						}, {
-							default: withCtx(() => [..._cache[21] || (_cache[21] = [createTextVNode(
+							default: withCtx(() => [..._cache[27] || (_cache[27] = [createTextVNode(
 								"保存伏笔账本",
 								-1
 								/* CACHED */
@@ -162799,13 +167547,13 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 					])
 				]),
 				createCommentVNode(" 认知与信息差 "),
-				createBaseVNode("details", _hoisted_31$1, [
+				createBaseVNode("details", _hoisted_61, [
 					createBaseVNode("summary", null, [createTextVNode(
 						"认知与信息差 · " + toDisplayString($setup.materials.snapshot.value?.infoGap.length ?? 0) + " 条",
 						1
 						/* TEXT */
-					), $setup.materials.modules.infoGap.dirty ? (openBlock(), createElementBlock("span", _hoisted_32$1, "未保存")) : createCommentVNode("v-if", true)]),
-					!$setup.materials.snapshot.value?.infoGap.length ? (openBlock(), createElementBlock("p", _hoisted_33$1, "还没有信息差条目。")) : (openBlock(), createElementBlock("div", _hoisted_34$1, [(openBlock(true), createElementBlock(
+					), $setup.materials.modules.infoGap.dirty ? (openBlock(), createElementBlock("span", _hoisted_62, "未保存")) : createCommentVNode("v-if", true)]),
+					!$setup.materials.snapshot.value?.infoGap.length ? (openBlock(), createElementBlock("p", _hoisted_63, "还没有信息差条目。")) : (openBlock(), createElementBlock("div", _hoisted_64, [(openBlock(true), createElementBlock(
 						Fragment,
 						null,
 						renderList($setup.materials.snapshot.value.infoGap, (gap) => {
@@ -162816,7 +167564,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 									class: normalizeClass(["acu-v2-continuation-materials__card", { "acu-v2-continuation-materials__card--retired": gap.retired }])
 								},
 								[
-									createBaseVNode("p", _hoisted_35, [
+									createBaseVNode("p", _hoisted_65, [
 										createBaseVNode(
 											"strong",
 											null,
@@ -162833,21 +167581,21 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 										),
 										createBaseVNode(
 											"span",
-											_hoisted_36,
+											_hoisted_66,
 											toDisplayString($setup.REVEAL_STATUS_LABELS[gap.revealStatus] ?? gap.revealStatus),
 											1
 											/* TEXT */
 										),
 										gap.revealIndex !== null ? (openBlock(), createElementBlock(
 											"span",
-											_hoisted_37,
+											_hoisted_67,
 											"揭示楼层 " + toDisplayString(gap.revealIndex),
 											1
 											/* TEXT */
 										)) : createCommentVNode("v-if", true),
 										gap.retired ? (openBlock(), createElementBlock(
 											"span",
-											_hoisted_38,
+											_hoisted_68,
 											"已退休" + toDisplayString(gap.retiredReason ? `：${gap.retiredReason}` : ""),
 											1
 											/* TEXT */
@@ -162855,14 +167603,14 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 									]),
 									createBaseVNode(
 										"p",
-										_hoisted_39,
+										_hoisted_69,
 										"客观事实：" + toDisplayString(gap.objectiveFact),
 										1
 										/* TEXT */
 									),
 									createBaseVNode(
 										"p",
-										_hoisted_40,
+										_hoisted_70,
 										"读者已知：" + toDisplayString(gap.readerKnown || "（未记录）"),
 										1
 										/* TEXT */
@@ -162893,8 +167641,8 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 						128
 						/* KEYED_FRAGMENT */
 					))])),
-					createBaseVNode("details", _hoisted_41, [
-						_cache[25] || (_cache[25] = createBaseVNode(
+					createBaseVNode("details", _hoisted_71, [
+						_cache[31] || (_cache[31] = createBaseVNode(
 							"summary",
 							null,
 							"编辑原始 JSON",
@@ -162908,16 +167656,16 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 						}, null, 8, ["model-value"]),
 						$setup.materials.modules.infoGap.error ? (openBlock(), createElementBlock(
 							"p",
-							_hoisted_42,
+							_hoisted_72,
 							toDisplayString($setup.materials.modules.infoGap.error),
 							1
 							/* TEXT */
 						)) : createCommentVNode("v-if", true),
-						createBaseVNode("div", _hoisted_43, [createVNode($setup["AcuButton"], {
+						createBaseVNode("div", _hoisted_73, [createVNode($setup["AcuButton"], {
 							disabled: !$setup.materials.modules.infoGap.dirty,
 							onClick: _cache[5] || (_cache[5] = ($event) => $setup.materials.discard("infoGap"))
 						}, {
-							default: withCtx(() => [..._cache[23] || (_cache[23] = [createTextVNode(
+							default: withCtx(() => [..._cache[29] || (_cache[29] = [createTextVNode(
 								"放弃修改",
 								-1
 								/* CACHED */
@@ -162929,7 +167677,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 							disabled: !$setup.materials.modules.infoGap.dirty,
 							onClick: _cache[6] || (_cache[6] = ($event) => $setup.materials.save("infoGap"))
 						}, {
-							default: withCtx(() => [..._cache[24] || (_cache[24] = [createTextVNode(
+							default: withCtx(() => [..._cache[30] || (_cache[30] = [createTextVNode(
 								"保存信息差",
 								-1
 								/* CACHED */
@@ -162939,13 +167687,13 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 					])
 				]),
 				createCommentVNode(" 长期约束 "),
-				createBaseVNode("details", _hoisted_44, [
+				createBaseVNode("details", _hoisted_74, [
 					createBaseVNode("summary", null, [createTextVNode(
 						"长期约束 · " + toDisplayString($setup.materials.snapshot.value?.constraints.length ?? 0) + " 条",
 						1
 						/* TEXT */
-					), $setup.materials.modules.constraints.dirty ? (openBlock(), createElementBlock("span", _hoisted_45, "未保存")) : createCommentVNode("v-if", true)]),
-					!$setup.materials.snapshot.value?.constraints.length ? (openBlock(), createElementBlock("p", _hoisted_46, "还没有长期约束。")) : (openBlock(), createElementBlock("div", _hoisted_47, [(openBlock(true), createElementBlock(
+					), $setup.materials.modules.constraints.dirty ? (openBlock(), createElementBlock("span", _hoisted_75, "未保存")) : createCommentVNode("v-if", true)]),
+					!$setup.materials.snapshot.value?.constraints.length ? (openBlock(), createElementBlock("p", _hoisted_76, "还没有长期约束。")) : (openBlock(), createElementBlock("div", _hoisted_77, [(openBlock(true), createElementBlock(
 						Fragment,
 						null,
 						renderList($setup.materials.snapshot.value.constraints, (constraint) => {
@@ -162953,7 +167701,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 								key: constraint.id,
 								class: "acu-v2-continuation-materials__card"
 							}, [
-								createBaseVNode("p", _hoisted_48, [createBaseVNode(
+								createBaseVNode("p", _hoisted_78, [createBaseVNode(
 									"strong",
 									null,
 									toDisplayString(constraint.id),
@@ -162962,12 +167710,12 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 								)]),
 								createBaseVNode(
 									"p",
-									_hoisted_49,
+									_hoisted_79,
 									toDisplayString(constraint.text),
 									1
 									/* TEXT */
 								),
-								createBaseVNode("p", _hoisted_50, [createTextVNode(
+								createBaseVNode("p", _hoisted_80, [createTextVNode(
 									"登记楼层 " + toDisplayString(constraint.createdIndex),
 									1
 									/* TEXT */
@@ -162987,8 +167735,8 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 						128
 						/* KEYED_FRAGMENT */
 					))])),
-					createBaseVNode("details", _hoisted_51, [
-						_cache[28] || (_cache[28] = createBaseVNode(
+					createBaseVNode("details", _hoisted_81, [
+						_cache[34] || (_cache[34] = createBaseVNode(
 							"summary",
 							null,
 							"编辑原始 JSON",
@@ -163002,16 +167750,16 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 						}, null, 8, ["model-value"]),
 						$setup.materials.modules.constraints.error ? (openBlock(), createElementBlock(
 							"p",
-							_hoisted_52,
+							_hoisted_82,
 							toDisplayString($setup.materials.modules.constraints.error),
 							1
 							/* TEXT */
 						)) : createCommentVNode("v-if", true),
-						createBaseVNode("div", _hoisted_53, [createVNode($setup["AcuButton"], {
+						createBaseVNode("div", _hoisted_83, [createVNode($setup["AcuButton"], {
 							disabled: !$setup.materials.modules.constraints.dirty,
 							onClick: _cache[8] || (_cache[8] = ($event) => $setup.materials.discard("constraints"))
 						}, {
-							default: withCtx(() => [..._cache[26] || (_cache[26] = [createTextVNode(
+							default: withCtx(() => [..._cache[32] || (_cache[32] = [createTextVNode(
 								"放弃修改",
 								-1
 								/* CACHED */
@@ -163023,8 +167771,130 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 							disabled: !$setup.materials.modules.constraints.dirty,
 							onClick: _cache[9] || (_cache[9] = ($event) => $setup.materials.save("constraints"))
 						}, {
-							default: withCtx(() => [..._cache[27] || (_cache[27] = [createTextVNode(
+							default: withCtx(() => [..._cache[33] || (_cache[33] = [createTextVNode(
 								"保存长期约束",
+								-1
+								/* CACHED */
+							)])]),
+							_: 1
+						}, 8, ["loading", "disabled"])])
+					])
+				]),
+				createCommentVNode(" 故事年代学账本 "),
+				createBaseVNode("details", _hoisted_84, [
+					createBaseVNode("summary", null, [createTextVNode(
+						"故事年代学账本 · " + toDisplayString($setup.materials.snapshot.value?.chronology.length ?? 0) + " 条",
+						1
+						/* TEXT */
+					), $setup.materials.modules.chronology.dirty ? (openBlock(), createElementBlock("span", _hoisted_85, "未保存")) : createCommentVNode("v-if", true)]),
+					!$setup.materials.snapshot.value?.chronology.length ? (openBlock(), createElementBlock("p", _hoisted_86, "还没有已结算的故事时间记录。时间事实由结算维护代理依据真实正文登记；大纲里的时间字段是计划。")) : (openBlock(), createElementBlock("div", _hoisted_87, [(openBlock(true), createElementBlock(
+						Fragment,
+						null,
+						renderList($setup.materials.snapshot.value.chronology, (entry) => {
+							return openBlock(), createElementBlock(
+								"div",
+								{
+									key: entry.id,
+									class: normalizeClass(["acu-v2-continuation-materials__card", { "acu-v2-continuation-materials__card--retired": entry.retired }])
+								},
+								[
+									createBaseVNode("p", _hoisted_88, [
+										createBaseVNode(
+											"strong",
+											null,
+											toDisplayString(entry.id),
+											1
+											/* TEXT */
+										),
+										createBaseVNode(
+											"span",
+											null,
+											toDisplayString(entry.anchor),
+											1
+											/* TEXT */
+										),
+										createBaseVNode(
+											"span",
+											_hoisted_89,
+											toDisplayString($setup.CHRONOLOGY_PRECISION_LABELS[entry.precision] ?? entry.precision),
+											1
+											/* TEXT */
+										),
+										entry.retired ? (openBlock(), createElementBlock(
+											"span",
+											_hoisted_90,
+											"已作废" + toDisplayString(entry.retiredReason ? `：${entry.retiredReason}` : ""),
+											1
+											/* TEXT */
+										)) : createCommentVNode("v-if", true)
+									]),
+									createBaseVNode(
+										"p",
+										_hoisted_91,
+										"累计经过：" + toDisplayString(entry.elapsed),
+										1
+										/* TEXT */
+									),
+									createBaseVNode(
+										"p",
+										_hoisted_92,
+										"时间转换：" + toDisplayString(entry.transition),
+										1
+										/* TEXT */
+									),
+									createBaseVNode(
+										"p",
+										_hoisted_93,
+										"证据楼层 " + toDisplayString(entry.evidenceIndexes.join("、")) + " · 结算楼层 " + toDisplayString(entry.updatedIndex),
+										1
+										/* TEXT */
+									)
+								],
+								2
+								/* CLASS */
+							);
+						}),
+						128
+						/* KEYED_FRAGMENT */
+					))])),
+					createBaseVNode("details", _hoisted_94, [
+						_cache[37] || (_cache[37] = createBaseVNode(
+							"summary",
+							null,
+							"编辑原始 JSON",
+							-1
+							/* CACHED */
+						)),
+						createVNode($setup["AcuTextarea"], {
+							"model-value": $setup.materials.modules.chronology.draft,
+							rows: 10,
+							"onUpdate:modelValue": _cache[10] || (_cache[10] = (value) => $setup.materials.updateDraft("chronology", value))
+						}, null, 8, ["model-value"]),
+						$setup.materials.modules.chronology.error ? (openBlock(), createElementBlock(
+							"p",
+							_hoisted_95,
+							toDisplayString($setup.materials.modules.chronology.error),
+							1
+							/* TEXT */
+						)) : createCommentVNode("v-if", true),
+						createBaseVNode("div", _hoisted_96, [createVNode($setup["AcuButton"], {
+							disabled: !$setup.materials.modules.chronology.dirty,
+							onClick: _cache[11] || (_cache[11] = ($event) => $setup.materials.discard("chronology"))
+						}, {
+							default: withCtx(() => [..._cache[35] || (_cache[35] = [createTextVNode(
+								"放弃修改",
+								-1
+								/* CACHED */
+							)])]),
+							_: 1
+						}, 8, ["disabled"]), createVNode($setup["AcuButton"], {
+							variant: "primary",
+							loading: $setup.materials.modules.chronology.saving,
+							disabled: !$setup.materials.modules.chronology.dirty,
+							onClick: _cache[12] || (_cache[12] = ($event) => $setup.materials.save("chronology"))
+						}, {
+							default: withCtx(() => [..._cache[36] || (_cache[36] = [createTextVNode(
+								"保存年代学账本",
 								-1
 								/* CACHED */
 							)])]),
@@ -163040,7 +167910,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 			{ key: 3 },
 			[
 				createCommentVNode(" 故事总纲：结构化展示 + JSON 编辑 "),
-				_cache[33] || (_cache[33] = createBaseVNode(
+				_cache[42] || (_cache[42] = createBaseVNode(
 					"p",
 					{ class: "acu-v2-continuation-materials__meta" },
 					" 故事总纲由 arc-architect 子代理维护：全书方向一条 + 若干卷台阶。也可以在这里手动修正，保存走同一套结构校验并推进修订号。 ",
@@ -163049,19 +167919,19 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 				)),
 				$setup.materials.snapshot.value ? (openBlock(), createElementBlock(
 					"p",
-					_hoisted_54,
+					_hoisted_97,
 					" 总纲 " + toDisplayString($setup.materials.snapshot.value.storyArc.length) + " 条 · 修订号 " + toDisplayString($setup.materials.snapshot.value.revisions.storyArc),
 					1
 					/* TEXT */
 				)) : createCommentVNode("v-if", true),
 				$setup.materials.loadError.value ? (openBlock(), createElementBlock(
 					"p",
-					_hoisted_55,
+					_hoisted_98,
 					toDisplayString($setup.materials.loadError.value),
 					1
 					/* TEXT */
 				)) : createCommentVNode("v-if", true),
-				!$setup.materials.snapshot.value?.storyArc.length ? (openBlock(), createElementBlock("p", _hoisted_56, " 还没有故事总纲。开始规划后主 Agent 会先派工 arc-architect 立总纲。 ")) : (openBlock(), createElementBlock("div", _hoisted_57, [(openBlock(true), createElementBlock(
+				!$setup.materials.snapshot.value?.storyArc.length ? (openBlock(), createElementBlock("p", _hoisted_99, " 还没有故事总纲。开始规划后主 Agent 会先派工 arc-architect 立总纲。 ")) : (openBlock(), createElementBlock("div", _hoisted_100, [(openBlock(true), createElementBlock(
 					Fragment,
 					null,
 					renderList($setup.materials.snapshot.value.storyArc, (arc) => {
@@ -163072,7 +167942,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 								class: normalizeClass(["acu-v2-continuation-materials__card", { "acu-v2-continuation-materials__card--retired": arc.retired }])
 							},
 							[
-								createBaseVNode("p", _hoisted_58, [
+								createBaseVNode("p", _hoisted_101, [
 									createBaseVNode(
 										"strong",
 										null,
@@ -163082,14 +167952,14 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 									),
 									createBaseVNode(
 										"span",
-										_hoisted_59,
+										_hoisted_102,
 										toDisplayString(arc.scope === "story" ? "全书方向" : "卷台阶"),
 										1
 										/* TEXT */
 									),
 									createBaseVNode(
 										"span",
-										_hoisted_60,
+										_hoisted_103,
 										toDisplayString($setup.ARC_STATUS_LABELS[arc.status] ?? arc.status),
 										1
 										/* TEXT */
@@ -163103,7 +167973,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 									),
 									arc.retired ? (openBlock(), createElementBlock(
 										"span",
-										_hoisted_61,
+										_hoisted_104,
 										"已退休" + toDisplayString(arc.retiredReason ? `：${arc.retiredReason}` : ""),
 										1
 										/* TEXT */
@@ -163111,28 +167981,28 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 								]),
 								createBaseVNode(
 									"p",
-									_hoisted_62,
+									_hoisted_105,
 									"方向：" + toDisplayString(arc.direction),
 									1
 									/* TEXT */
 								),
 								arc.escalation ? (openBlock(), createElementBlock(
 									"p",
-									_hoisted_63,
+									_hoisted_106,
 									"冲突高度：" + toDisplayString(arc.escalation),
 									1
 									/* TEXT */
 								)) : createCommentVNode("v-if", true),
 								arc.withheld ? (openBlock(), createElementBlock(
 									"p",
-									_hoisted_64,
+									_hoisted_107,
 									"禁翻底牌：" + toDisplayString(arc.withheld),
 									1
 									/* TEXT */
 								)) : createCommentVNode("v-if", true),
 								createBaseVNode(
 									"p",
-									_hoisted_65,
+									_hoisted_108,
 									" 已承载阶段：" + toDisplayString(arc.stageNumbers.length ? arc.stageNumbers.join("、") : "（尚未承载）"),
 									1
 									/* TEXT */
@@ -163145,8 +168015,8 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 					128
 					/* KEYED_FRAGMENT */
 				))])),
-				createBaseVNode("details", _hoisted_66, [
-					_cache[32] || (_cache[32] = createBaseVNode(
+				createBaseVNode("details", _hoisted_109, [
+					_cache[41] || (_cache[41] = createBaseVNode(
 						"summary",
 						null,
 						"编辑原始 JSON",
@@ -163156,20 +168026,20 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 					createVNode($setup["AcuTextarea"], {
 						"model-value": $setup.materials.modules.storyArc.draft,
 						rows: 14,
-						"onUpdate:modelValue": _cache[10] || (_cache[10] = (value) => $setup.materials.updateDraft("storyArc", value))
+						"onUpdate:modelValue": _cache[13] || (_cache[13] = (value) => $setup.materials.updateDraft("storyArc", value))
 					}, null, 8, ["model-value"]),
 					$setup.materials.modules.storyArc.error ? (openBlock(), createElementBlock(
 						"p",
-						_hoisted_67,
+						_hoisted_110,
 						toDisplayString($setup.materials.modules.storyArc.error),
 						1
 						/* TEXT */
 					)) : createCommentVNode("v-if", true),
-					createBaseVNode("div", _hoisted_68, [createVNode($setup["AcuButton"], {
+					createBaseVNode("div", _hoisted_111, [createVNode($setup["AcuButton"], {
 						disabled: !$setup.materials.modules.storyArc.dirty,
-						onClick: _cache[11] || (_cache[11] = ($event) => $setup.materials.discard("storyArc"))
+						onClick: _cache[14] || (_cache[14] = ($event) => $setup.materials.discard("storyArc"))
 					}, {
-						default: withCtx(() => [..._cache[30] || (_cache[30] = [createTextVNode(
+						default: withCtx(() => [..._cache[39] || (_cache[39] = [createTextVNode(
 							"放弃修改",
 							-1
 							/* CACHED */
@@ -163179,9 +168049,9 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 						variant: "primary",
 						loading: $setup.materials.modules.storyArc.saving,
 						disabled: !$setup.materials.modules.storyArc.dirty,
-						onClick: _cache[12] || (_cache[12] = ($event) => $setup.materials.save("storyArc"))
+						onClick: _cache[15] || (_cache[15] = ($event) => $setup.materials.save("storyArc"))
 					}, {
-						default: withCtx(() => [..._cache[31] || (_cache[31] = [createTextVNode(
+						default: withCtx(() => [..._cache[40] || (_cache[40] = [createTextVNode(
 							"保存故事总纲",
 							-1
 							/* CACHED */
@@ -163195,7 +168065,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 		))
 	]);
 }
-var ContinuationMaterialsPanel = /* @__PURE__ */ _export_sfc(_sfc_main$m, [["render", _sfc_render$m], ["__scopeId", "data-v-22775fd8"]]);
+var ContinuationMaterialsPanel = /* @__PURE__ */ _export_sfc(_sfc_main$m, [["render", _sfc_render$m], ["__scopeId", "data-v-fc2d1491"]]);
 
 /** 连续高压轮上限的可配置上界。页面是 .vue，不能直接 import 服务层常量，由本组合式函数中转。 */
 const CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_UI_ACU = CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_ACU;
@@ -163658,7 +168528,6 @@ function useContinuationSession() {
 }
 
 const INHERIT_CHANNEL_VALUE = '__inherit__';
-/** 取出指定提示词组的数组。大纲组在设置根层，六组 Agent 提示词在 agentPrompts 下。 */
 var _sfc_main$l = /*@__PURE__*/ defineComponent({
     __name: 'ContinuationPage',
     setup(__props, { expose: __expose }) {
@@ -163730,7 +168599,48 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
             { role: 'mainlinePlanner', label: '主线推进策划' },
             { role: 'beatPlanner', label: '伏笔与节拍策划' },
             { role: 'reviewer', label: '连续性审查' },
+            { role: 'finalReviewer', label: '发送前终审' },
         ];
+        const expandedGroups = reactive({});
+        function isGroupExpanded(key) {
+            return expandedGroups[key] === true;
+        }
+        function toggleGroup(key) {
+            expandedGroups[key] = !isGroupExpanded(key);
+        }
+        /** 折叠态下的一行摘要：让用户不展开也能看到关键取值。 */
+        const runGroupMeta = computed(() => {
+            const s = settingsDraft.value;
+            if (!s)
+                return '';
+            return `阶段上限 ${s.maxAutomaticStages} · 正文重试 ${s.generationRetryLimit} 次`;
+        });
+        const contextGroupMeta = computed(() => {
+            const s = settingsDraft.value;
+            if (!s)
+                return '';
+            return `窗口 ${s.storyWindowFloors} 楼 · 总结阈值 ${s.agentHistoryTokenBudget}`;
+        });
+        const budgetGroupMeta = computed(() => {
+            const s = settingsDraft.value;
+            if (!s)
+                return '';
+            return `迭代 ${s.agentRunBudget.maxIterations} · 派工 ${s.agentRunBudget.maxDelegations} · 并发 ${s.agentRunBudget.maxConcurrent}`;
+        });
+        const finalReviewGroupMeta = computed(() => (settingsDraft.value?.finalReview.enabled ? '已开启' : '已关闭'));
+        const channelGroupMeta = computed(() => {
+            const presets = settingsDraft.value?.agentApiPresets;
+            if (!presets)
+                return '';
+            const customized = agentChannelRoles.filter(channel => presets[channel.role]?.mode !== 'inherit').length;
+            return customized ? `${customized} 个单独指定` : '全部跟随默认';
+        });
+        const rulesGroupMeta = computed(() => {
+            const s = settingsDraft.value;
+            if (!s)
+                return '';
+            return `提取 ${s.contextExtractRules.length} · 排除 ${s.contextExcludeRules.length}`;
+        });
         const agentChannelOptions = computed(() => [
             { value: INHERIT_CHANNEL_VALUE, label: '跟随全局默认' },
             ...continuationApiPresetOptions.value,
@@ -163770,6 +168680,7 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
                 contextExtractRules: settings.contextExtractRules.map(rule => ({ ...rule })),
                 contextExcludeRules: settings.contextExcludeRules.map(rule => ({ ...rule })),
                 agentRunBudget: { ...settings.agentRunBudget },
+                finalReview: { ...settings.finalReview },
                 agentApiPresets: {
                     main: { ...settings.agentApiPresets.main },
                     outline: { ...settings.agentApiPresets.outline },
@@ -163778,6 +168689,7 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
                     mainlinePlanner: { ...settings.agentApiPresets.mainlinePlanner },
                     beatPlanner: { ...settings.agentApiPresets.beatPlanner },
                     reviewer: { ...settings.agentApiPresets.reviewer },
+                    finalReviewer: { ...settings.agentApiPresets.finalReviewer },
                 },
                 outlinePrompt: settings.outlinePrompt.map(segment => ({ ...segment })),
                 agentPrompts: {
@@ -163787,6 +168699,7 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
                     mainlinePlanner: settings.agentPrompts.mainlinePlanner.map(segment => ({ ...segment })),
                     beatPlanner: settings.agentPrompts.beatPlanner.map(segment => ({ ...segment })),
                     reviewer: settings.agentPrompts.reviewer.map(segment => ({ ...segment })),
+                    finalReviewer: settings.agentPrompts.finalReviewer.map(segment => ({ ...segment })),
                 },
             };
         }
@@ -163920,6 +168833,11 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
                 agentHistoryTokenBudget: requiredInteger(source.agentHistoryTokenBudget, '会话自动总结阈值'),
                 agentReadTokenBudget: normalizedReadBudget(source.agentReadTokenBudget),
                 agentReadFallbackTokens: requiredInteger(source.agentReadFallbackTokens, '精读兜底额度'),
+                finalReview: {
+                    enabled: source.finalReview.enabled,
+                    readTokenBudget: normalizedReadBudget(source.finalReview.readTokenBudget),
+                    maxExtraReads: requiredRangeInteger(source.finalReview.maxExtraReads, '终审额外读取轮数', 0, 10),
+                },
                 agentRunBudget: {
                     maxIterations: requiredRangeInteger(source.agentRunBudget.maxIterations, '主 Agent 迭代上限', 1, 30),
                     maxDelegations: requiredRangeInteger(source.agentRunBudget.maxDelegations, '派工总数上限', 0, 20),
@@ -163997,6 +168915,25 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
                 scheduleSettingsSave();
             }
         }
+        const promptGroups = [
+            { key: 'outlinePrompt', kind: 'outline', title: '大纲子代理（outline-architect）提示词', restoreLabel: '恢复大纲提示词默认值' },
+            { key: 'main', kind: 'agent_main', title: '主 Agent 提示词', restoreLabel: '恢复主 Agent 默认值', note: '$HISTORY_ANCHOR 段标记会话记录的插入位置，本身不发送；删掉它会让会话记录退回到序列最前面。' },
+            { key: 'arcArchitect', kind: 'agent_arc', title: '故事总纲子代理（arc-architect）提示词', restoreLabel: '恢复总纲子代理默认值' },
+            { key: 'maintainer', kind: 'agent_maintainer', title: '伏笔与认知维护子代理提示词', restoreLabel: '恢复维护子代理默认值', note: '该代理不接收用户目标或阶段大纲，避免计划污染事实结算。' },
+            { key: 'mainlinePlanner', kind: 'agent_mainline', title: '主线推进策划子代理提示词', restoreLabel: '恢复主线策划默认值' },
+            { key: 'beatPlanner', kind: 'agent_beat', title: '伏笔与节拍策划子代理提示词', restoreLabel: '恢复节拍策划默认值' },
+            { key: 'reviewer', kind: 'agent_reviewer', title: '连续性审查子代理提示词', restoreLabel: '恢复审查子代理默认值' },
+            { key: 'finalReviewer', kind: 'agent_final_reviewer', title: '发送前终审子代理提示词', restoreLabel: '恢复终审子代理默认值', note: '仅在「启用发送前世界书终审」开启时才会被调用。' },
+        ];
+        /** 折叠态摘要：启用段数 / 总段数。 */
+        function promptGroupMeta(key) {
+            const prompts = promptList(key);
+            if (!prompts)
+                return '';
+            const enabled = prompts.filter(segment => segment.enabled !== false).length;
+            return `${enabled}/${prompts.length} 段启用`;
+        }
+        /** 取出指定提示词组的数组。大纲组在设置根层，其余 Agent 提示词在 agentPrompts 下。 */
         function promptList(key) {
             if (!settingsDraft.value)
                 return null;
@@ -164125,14 +169062,14 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
             scheduleSettingsSave();
         }, { deep: true });
         watch(() => `${runtime.activeStage.value?.stageId ?? ''}:${runtime.activeRevision.value?.revision ?? ''}`, syncOutlineDraft, { immediate: true });
-        const __returned__ = { runtime, dialog, session, apiStore, followActiveApiLabel, continuationApiPresetOptions, settingsDraft, outlineDraft, messageDraft, messageSending, outlineDraftError, settingsError, settingsNotice, materialsPanel, clock, get countdownTimer() { return countdownTimer; }, set countdownTimer(v) { countdownTimer = v; }, stageText, deadlineText, continuationApiPresetValue, applyContinuationApiPreset, continuationRoleOptions, maxConsecutivePressureTurnsMax, INHERIT_CHANNEL_VALUE, agentChannelRoles, agentChannelOptions, agentChannelValue, applyAgentChannel, saveSettingsImmediately, cloneSettings, syncOutlineDraft, parseOutlineDraft, acceptOutlineDraft, confirmFirstSendRpmWarning, sendMessage, saveOutline, clearData, requiredInteger, requiredBoundedInteger, requiredRangeInteger, normalizedReadBudget, normalizeSettingsDraft, presetExists, get lastPersistedSettingsJson() { return lastPersistedSettingsJson; }, set lastPersistedSettingsJson(v) { lastPersistedSettingsJson = v; }, get settingsSaveTimer() { return settingsSaveTimer; }, set settingsSaveTimer(v) { settingsSaveTimer = v; }, scheduleSettingsSave, saveSettingsNow, promptList, addPrompt, deletePrompt, movePrompt, updatePrompt, restorePrompt, promptImportInput, promptIoError, promptIoNotice, exportPrompts, onImportPromptsFile, refreshAll, AcuButton, AcuCheckbox, AcuFormRow, AcuInput, AcuPanel, AcuPanelGrid, AcuPromptSegments, AcuRulePairList, AcuSelect, AcuTextarea, ContinuationChat, ContinuationMaterialsPanel };
+        const __returned__ = { runtime, dialog, session, apiStore, followActiveApiLabel, continuationApiPresetOptions, settingsDraft, outlineDraft, messageDraft, messageSending, outlineDraftError, settingsError, settingsNotice, materialsPanel, clock, get countdownTimer() { return countdownTimer; }, set countdownTimer(v) { countdownTimer = v; }, stageText, deadlineText, continuationApiPresetValue, applyContinuationApiPreset, continuationRoleOptions, maxConsecutivePressureTurnsMax, INHERIT_CHANNEL_VALUE, agentChannelRoles, expandedGroups, isGroupExpanded, toggleGroup, runGroupMeta, contextGroupMeta, budgetGroupMeta, finalReviewGroupMeta, channelGroupMeta, rulesGroupMeta, agentChannelOptions, agentChannelValue, applyAgentChannel, saveSettingsImmediately, cloneSettings, syncOutlineDraft, parseOutlineDraft, acceptOutlineDraft, confirmFirstSendRpmWarning, sendMessage, saveOutline, clearData, requiredInteger, requiredBoundedInteger, requiredRangeInteger, normalizedReadBudget, normalizeSettingsDraft, presetExists, get lastPersistedSettingsJson() { return lastPersistedSettingsJson; }, set lastPersistedSettingsJson(v) { lastPersistedSettingsJson = v; }, get settingsSaveTimer() { return settingsSaveTimer; }, set settingsSaveTimer(v) { settingsSaveTimer = v; }, scheduleSettingsSave, saveSettingsNow, promptGroups, promptGroupMeta, promptList, addPrompt, deletePrompt, movePrompt, updatePrompt, restorePrompt, promptImportInput, promptIoError, promptIoNotice, exportPrompts, onImportPromptsFile, refreshAll, AcuButton, AcuCheckbox, AcuDisclosureGroup, AcuFormRow, AcuInput, AcuPanel, AcuPanelGrid, AcuPromptSegments, AcuRulePairList, AcuSelect, AcuTextarea, ContinuationChat, ContinuationMaterialsPanel };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.acu-v2-continuation-page[data-v-fae15067] { min-height: 100%; padding: 20px; display: grid; gap: 18px;\n}\n.acu-v2-continuation-page__layout[data-v-fae15067] { align-items: start;\n}\n.acu-v2-continuation-page__actions[data-v-fae15067] { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 12px;\n}\n.acu-v2-continuation-page__actions--start[data-v-fae15067] { justify-content: flex-start; margin-top: 0; margin-bottom: 12px;\n}\n.acu-v2-continuation-page__file-input[data-v-fae15067] { display: none;\n}\n.acu-v2-continuation-page__error[data-v-fae15067] { color: var(--acu-danger, #d65b5b); white-space: pre-wrap;\n}\n.acu-v2-continuation-page__meta[data-v-fae15067] { color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap;\n}\n.acu-v2-continuation-page__settings-grid[data-v-fae15067] { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px;\n}\n.acu-v2-continuation-page__settings-grid label[data-v-fae15067] { display: grid; gap: 5px; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-page__settings-grid select[data-v-fae15067] { min-height: 30px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 30%, transparent); border-radius: 4px; background: var(--acu-bg-2); color: var(--acu-text-1);\n}\n.acu-v2-continuation-page__toggles[data-v-fae15067] { display: flex; flex-wrap: wrap; gap: 14px; margin: 14px 0;\n}\n@media (max-width: 860px) {\n.acu-v2-continuation-page[data-v-fae15067] { padding: 14px;\n}\n}\n@media (max-width: 640px) {\n.acu-v2-continuation-page[data-v-fae15067] { padding: 10px; gap: 12px;\n}\n.acu-v2-continuation-page__settings-grid[data-v-fae15067] { grid-template-columns: 1fr;\n}\n.acu-v2-continuation-page__actions[data-v-fae15067] > * { flex: 1 1 auto;\n}\n}\r\n", "src/presentation-v2/pages/ContinuationPage.vue#style-0-fae15067");
-var ContinuationPage_vue_vue_type_style_index_0_scoped_fae15067_lang = null;
+injectSfcStyle("\n.acu-v2-continuation-page[data-v-8c8183d6] { min-height: 100%; padding: 20px; display: grid; gap: 18px;\n}\n.acu-v2-continuation-page__layout[data-v-8c8183d6] { align-items: start;\n}\n.acu-v2-continuation-page__actions[data-v-8c8183d6] { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 12px;\n}\n.acu-v2-continuation-page__actions--start[data-v-8c8183d6] { justify-content: flex-start; margin-top: 0; margin-bottom: 12px;\n}\n.acu-v2-continuation-page__file-input[data-v-8c8183d6] { display: none;\n}\n.acu-v2-continuation-page__error[data-v-8c8183d6] { color: var(--acu-danger, #d65b5b); white-space: pre-wrap;\n}\n.acu-v2-continuation-page__meta[data-v-8c8183d6] { color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap;\n}\n.acu-v2-continuation-page__settings-grid[data-v-8c8183d6] { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start;\n}\n.acu-v2-continuation-page__settings-grid label[data-v-8c8183d6] { display: grid; gap: 5px; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-page__settings-grid select[data-v-8c8183d6] { min-height: 30px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 30%, transparent); border-radius: 4px; background: var(--acu-bg-2); color: var(--acu-text-1);\n}\n.acu-v2-continuation-page__toggles[data-v-8c8183d6] { display: flex; flex-wrap: wrap; gap: 14px; margin: 14px 0;\n}\n.acu-v2-continuation-page__groups[data-v-8c8183d6] { display: flex; flex-direction: column; gap: 8px; margin-top: 4px;\n}\n.acu-v2-continuation-page__group[data-v-8c8183d6] {\r\n  border: 1px solid var(--acu-border, color-mix(in srgb, var(--acu-text-3) 18%, transparent));\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-bg-2) 72%, transparent);\n}\n.acu-v2-continuation-page__group[data-v-8c8183d6] .acu-disclosure-group__header { border-radius: var(--acu-radius-sm);\n}\n.acu-v2-continuation-page__group[data-v-8c8183d6] .acu-disclosure-group__body { gap: 12px; padding: 12px;\n}\n.acu-v2-continuation-page__group[data-v-8c8183d6] .acu-disclosure-group__meta { max-width: 55%; overflow: hidden; text-overflow: ellipsis;\n}\n.acu-v2-continuation-page__group .acu-v2-continuation-page__actions[data-v-8c8183d6] { margin-top: 0;\n}\n.acu-v2-continuation-page__subheading[data-v-8c8183d6] { margin: 4px 0 0; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px); font-weight: 600;\n}\n.acu-v2-continuation-page__subheading[data-v-8c8183d6]:first-child { margin-top: 0;\n}\n@media (max-width: 860px) {\n.acu-v2-continuation-page[data-v-8c8183d6] { padding: 14px;\n}\n}\n@media (max-width: 640px) {\n.acu-v2-continuation-page[data-v-8c8183d6] { padding: 10px; gap: 12px;\n}\n.acu-v2-continuation-page__settings-grid[data-v-8c8183d6] { grid-template-columns: 1fr;\n}\n.acu-v2-continuation-page__actions[data-v-8c8183d6] > * { flex: 1 1 auto;\n}\n.acu-v2-continuation-page__group[data-v-8c8183d6] .acu-disclosure-group__meta { display: none;\n}\n}\r\n", "src/presentation-v2/pages/ContinuationPage.vue#style-0-8c8183d6");
+var ContinuationPage_vue_vue_type_style_index_0_scoped_8c8183d6_lang = null;
 
 const _hoisted_1$l = { class: "acu-v2-continuation-page" };
 const _hoisted_2$j = {
@@ -164142,31 +169079,36 @@ const _hoisted_2$j = {
 const _hoisted_3$g = { class: "acu-v2-continuation-page__actions" };
 const _hoisted_4$e = { class: "acu-v2-continuation-page__settings-grid" };
 const _hoisted_5$d = { class: "acu-v2-continuation-page__toggles" };
-const _hoisted_6$c = {
+const _hoisted_6$c = { class: "acu-v2-continuation-page__groups" };
+const _hoisted_7$a = { class: "acu-v2-continuation-page__settings-grid" };
+const _hoisted_8$a = { class: "acu-v2-continuation-page__settings-grid" };
+const _hoisted_9$9 = { class: "acu-v2-continuation-page__settings-grid" };
+const _hoisted_10$9 = { class: "acu-v2-continuation-page__settings-grid" };
+const _hoisted_11$9 = { class: "acu-v2-continuation-page__settings-grid" };
+const _hoisted_12$9 = {
 	key: 0,
 	class: "acu-v2-continuation-page__error"
 };
-const _hoisted_7$a = {
+const _hoisted_13$7 = {
 	key: 1,
 	class: "acu-v2-continuation-page__meta"
 };
-const _hoisted_8$a = { class: "acu-v2-continuation-page__actions acu-v2-continuation-page__actions--start" };
-const _hoisted_9$9 = {
+const _hoisted_14$7 = { class: "acu-v2-continuation-page__actions acu-v2-continuation-page__actions--start" };
+const _hoisted_15$7 = {
 	key: 0,
 	class: "acu-v2-continuation-page__error"
 };
-const _hoisted_10$9 = {
+const _hoisted_16$6 = {
 	key: 1,
 	class: "acu-v2-continuation-page__meta"
 };
-const _hoisted_11$9 = { class: "acu-v2-continuation-page__actions" };
-const _hoisted_12$9 = { class: "acu-v2-continuation-page__actions" };
-const _hoisted_13$7 = { class: "acu-v2-continuation-page__actions" };
-const _hoisted_14$7 = { class: "acu-v2-continuation-page__actions" };
-const _hoisted_15$7 = { class: "acu-v2-continuation-page__actions" };
-const _hoisted_16$6 = { class: "acu-v2-continuation-page__actions" };
-const _hoisted_17$5 = { class: "acu-v2-continuation-page__actions" };
-const _hoisted_18$5 = {
+const _hoisted_17$5 = { class: "acu-v2-continuation-page__groups" };
+const _hoisted_18$5 = { class: "acu-v2-continuation-page__actions" };
+const _hoisted_19$5 = {
+	key: 0,
+	class: "acu-v2-continuation-page__meta"
+};
+const _hoisted_20$4 = {
 	key: 2,
 	class: "acu-v2-continuation-page__error"
 };
@@ -164232,7 +169174,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 					loading: $setup.runtime.busy.value,
 					onClick: $setup.acceptOutlineDraft
 				}, {
-					default: withCtx(() => [..._cache[66] || (_cache[66] = [createTextVNode(
+					default: withCtx(() => [..._cache[41] || (_cache[41] = [createTextVNode(
 						"确认大纲并继续",
 						-1
 						/* CACHED */
@@ -164266,15 +169208,18 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 			}), $setup.settingsDraft ? (openBlock(), createBlock($setup["AcuPanel"], {
 				key: 0,
 				title: "续写设置",
-				description: "修改后自动保存；任务运行中也可以改，改动会在本轮空档落盘、下一轮开始时生效。"
+				description: "修改后自动保存；任务运行中也可以改，改动会在本轮空档落盘、下一轮开始时生效。常用项直接可见，其余参数按主题折叠，默认值已能满足大多数场景。"
 			}, {
 				default: withCtx(() => [
 					createBaseVNode("div", _hoisted_4$e, [
-						createVNode($setup["AcuFormRow"], { label: "阶段规模" }, {
+						createVNode($setup["AcuFormRow"], {
+							label: "阶段规模",
+							hint: "一个阶段规划多少轮正文；轮数越多，单个大纲覆盖的剧情越长。"
+						}, {
 							default: withCtx(() => [withDirectives(createBaseVNode(
 								"select",
 								{ "onUpdate:modelValue": _cache[2] || (_cache[2] = ($event) => $setup.settingsDraft.stageSize = $event) },
-								[..._cache[67] || (_cache[67] = [
+								[..._cache[42] || (_cache[42] = [
 									createBaseVNode(
 										"option",
 										{ value: "short" },
@@ -164309,11 +169254,14 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 							), [[vModelSelect, $setup.settingsDraft.stageSize]])]),
 							_: 1
 						}),
-						createVNode($setup["AcuFormRow"], { label: "故事总纲卷数" }, {
+						createVNode($setup["AcuFormRow"], {
+							label: "故事总纲卷数",
+							hint: "故事总纲预计分多少卷推进，影响总纲子代理的整体节奏规划。"
+						}, {
 							default: withCtx(() => [withDirectives(createBaseVNode(
 								"select",
 								{ "onUpdate:modelValue": _cache[3] || (_cache[3] = ($event) => $setup.settingsDraft.storyArcVolumePlan = $event) },
-								[..._cache[68] || (_cache[68] = [
+								[..._cache[43] || (_cache[43] = [
 									createBaseVNode(
 										"option",
 										{ value: "short" },
@@ -164350,7 +169298,8 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						}),
 						$setup.settingsDraft.storyArcVolumePlan === "custom" ? (openBlock(), createBlock($setup["AcuFormRow"], {
 							key: 0,
-							label: "自定义总纲卷数"
+							label: "自定义总纲卷数",
+							hint: "1–50 的整数。"
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuInput"], {
 								modelValue: $setup.settingsDraft.customStoryArcVolumeCount,
@@ -164363,7 +169312,8 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						})) : createCommentVNode("v-if", true),
 						$setup.settingsDraft.stageSize === "custom" ? (openBlock(), createBlock($setup["AcuFormRow"], {
 							key: 1,
-							label: "最少轮次"
+							label: "最少轮次",
+							hint: "1–50 的整数，且不能大于最多轮次。"
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuInput"], {
 								modelValue: $setup.settingsDraft.customTurnMin,
@@ -164376,7 +169326,8 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 						})) : createCommentVNode("v-if", true),
 						$setup.settingsDraft.stageSize === "custom" ? (openBlock(), createBlock($setup["AcuFormRow"], {
 							key: 2,
-							label: "最多轮次"
+							label: "最多轮次",
+							hint: "1–50 的整数。"
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuInput"], {
 								modelValue: $setup.settingsDraft.customTurnMax,
@@ -164387,183 +169338,10 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 							}, null, 8, ["modelValue"])]),
 							_: 1
 						})) : createCommentVNode("v-if", true),
-						createVNode($setup["AcuFormRow"], { label: "连续高压轮上限：跨阶段累计多少轮没有日常/余波轮就强制安排一轮，0 为不作要求。每阶段的松紧由大纲自选的节奏形态决定，这里只兜底极端情况" }, {
-							default: withCtx(() => [createVNode($setup["AcuInput"], {
-								modelValue: $setup.settingsDraft.maxConsecutivePressureTurns,
-								"onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => $setup.settingsDraft.maxConsecutivePressureTurns = $event),
-								type: "number",
-								min: 0,
-								max: $setup.maxConsecutivePressureTurnsMax
-							}, null, 8, ["modelValue", "max"])]),
-							_: 1
-						}),
-						createVNode($setup["AcuFormRow"], { label: "自动阶段上限" }, {
-							default: withCtx(() => [createVNode($setup["AcuInput"], {
-								modelValue: $setup.settingsDraft.maxAutomaticStages,
-								"onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => $setup.settingsDraft.maxAutomaticStages = $event),
-								type: "number",
-								min: 1
-							}, null, 8, ["modelValue"])]),
-							_: 1
-						}),
-						createVNode($setup["AcuFormRow"], { label: "正文重试次数" }, {
-							default: withCtx(() => [createVNode($setup["AcuInput"], {
-								modelValue: $setup.settingsDraft.generationRetryLimit,
-								"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.settingsDraft.generationRetryLimit = $event),
-								type: "number",
-								min: 0
-							}, null, 8, ["modelValue"])]),
-							_: 1
-						}),
-						createVNode($setup["AcuFormRow"], { label: "内部 AI 重试次数" }, {
-							default: withCtx(() => [createVNode($setup["AcuInput"], {
-								modelValue: $setup.settingsDraft.internalAiRetryLimit,
-								"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.settingsDraft.internalAiRetryLimit = $event),
-								type: "number",
-								min: 0
-							}, null, 8, ["modelValue"])]),
-							_: 1
-						}),
-						createVNode($setup["AcuFormRow"], { label: "轮次延迟（秒）" }, {
-							default: withCtx(() => [createVNode($setup["AcuInput"], {
-								modelValue: $setup.settingsDraft.loopDelaySeconds,
-								"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.settingsDraft.loopDelaySeconds = $event),
-								type: "number",
-								min: 0
-							}, null, 8, ["modelValue"])]),
-							_: 1
-						}),
-						createVNode($setup["AcuFormRow"], { label: "重试延迟（秒）" }, {
-							default: withCtx(() => [createVNode($setup["AcuInput"], {
-								modelValue: $setup.settingsDraft.retryDelaySeconds,
-								"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.settingsDraft.retryDelaySeconds = $event),
-								type: "number",
-								min: 0
-							}, null, 8, ["modelValue"])]),
-							_: 1
-						}),
-						createVNode($setup["AcuFormRow"], { label: "总时长（分钟，0 为不设总时长）" }, {
-							default: withCtx(() => [createVNode($setup["AcuInput"], {
-								modelValue: $setup.settingsDraft.totalDurationMinutes,
-								"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.settingsDraft.totalDurationMinutes = $event),
-								type: "number",
-								min: 0
-							}, null, 8, ["modelValue"])]),
-							_: 1
-						}),
-						createVNode($setup["AcuFormRow"], { label: "正文可读窗口楼数：只有最近这么多 AI 楼层能被 Agent 读取/搜索，更早剧情走纪要回溯（0 为不开放正文读取）" }, {
-							default: withCtx(() => [createVNode($setup["AcuInput"], {
-								modelValue: $setup.settingsDraft.storyWindowFloors,
-								"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.settingsDraft.storyWindowFloors = $event),
-								type: "number",
-								min: 0
-							}, null, 8, ["modelValue"])]),
-							_: 1
-						}),
-						createVNode($setup["AcuFormRow"], { label: "正文目录尾部全文楼数：最近几楼直接注入全文作承接锚点，其余窗口内楼层只进目录按需调阅" }, {
-							default: withCtx(() => [createVNode($setup["AcuInput"], {
-								modelValue: $setup.settingsDraft.storyTailFloors,
-								"onUpdate:modelValue": _cache[15] || (_cache[15] = ($event) => $setup.settingsDraft.storyTailFloors = $event),
-								type: "number",
-								min: 0
-							}, null, 8, ["modelValue"])]),
-							_: 1
-						}),
-						createVNode($setup["AcuFormRow"], { label: "会话自动总结阈值（token）：按主 Agent 实际读取的完整上下文统计（含提示词、工具结果与子代理报告），超过后在下一轮开始前把最早轮次浓缩成交接报告，0 为不总结" }, {
-							default: withCtx(() => [createVNode($setup["AcuInput"], {
-								modelValue: $setup.settingsDraft.agentHistoryTokenBudget,
-								"onUpdate:modelValue": _cache[16] || (_cache[16] = ($event) => $setup.settingsDraft.agentHistoryTokenBudget = $event),
-								type: "number",
-								min: 0
-							}, null, 8, ["modelValue"])]),
-							_: 1
-						}),
-						createVNode($setup["AcuFormRow"], { label: "读取预算：一次规划内 read/search 结果的累计 token 上限；填正整数，或形如 30% 的百分比（按总结阈值折算）" }, {
-							default: withCtx(() => [createVNode($setup["AcuInput"], {
-								modelValue: $setup.settingsDraft.agentReadTokenBudget,
-								"onUpdate:modelValue": _cache[17] || (_cache[17] = ($event) => $setup.settingsDraft.agentReadTokenBudget = $event),
-								type: "text"
-							}, null, 8, ["modelValue"])]),
-							_: 1
-						}),
-						createVNode($setup["AcuFormRow"], { label: "精读兜底额度（token）：上下文临近总结阈值时，仍放行不超过该大小的小额精准读取" }, {
-							default: withCtx(() => [createVNode($setup["AcuInput"], {
-								modelValue: $setup.settingsDraft.agentReadFallbackTokens,
-								"onUpdate:modelValue": _cache[18] || (_cache[18] = ($event) => $setup.settingsDraft.agentReadFallbackTokens = $event),
-								type: "number",
-								min: 1
-							}, null, 8, ["modelValue"])]),
-							_: 1
-						}),
-						createVNode($setup["AcuFormRow"], { label: "主 Agent 迭代上限：一次规划内最多做多少次决策（派工/改大纲/交付各算一次；read/search 工具批次不计入）" }, {
-							default: withCtx(() => [createVNode($setup["AcuInput"], {
-								modelValue: $setup.settingsDraft.agentRunBudget.maxIterations,
-								"onUpdate:modelValue": _cache[19] || (_cache[19] = ($event) => $setup.settingsDraft.agentRunBudget.maxIterations = $event),
-								type: "number",
-								min: 1,
-								max: 30
-							}, null, 8, ["modelValue"])]),
-							_: 1
-						}),
-						createVNode($setup["AcuFormRow"], { label: "派工总数上限：一次规划内最多派出多少个子代理任务（0 为禁止派工）" }, {
-							default: withCtx(() => [createVNode($setup["AcuInput"], {
-								modelValue: $setup.settingsDraft.agentRunBudget.maxDelegations,
-								"onUpdate:modelValue": _cache[20] || (_cache[20] = ($event) => $setup.settingsDraft.agentRunBudget.maxDelegations = $event),
-								type: "number",
-								min: 0,
-								max: 20
-							}, null, 8, ["modelValue"])]),
-							_: 1
-						}),
-						createVNode($setup["AcuFormRow"], { label: "单代理派工上限：同一个子代理在一次规划内最多被派几次" }, {
-							default: withCtx(() => [createVNode($setup["AcuInput"], {
-								modelValue: $setup.settingsDraft.agentRunBudget.maxSameAgent,
-								"onUpdate:modelValue": _cache[21] || (_cache[21] = ($event) => $setup.settingsDraft.agentRunBudget.maxSameAgent = $event),
-								type: "number",
-								min: 1,
-								max: 10
-							}, null, 8, ["modelValue"])]),
-							_: 1
-						}),
-						createVNode($setup["AcuFormRow"], { label: "并发派工上限：同一波次最多同时运行几个子代理" }, {
-							default: withCtx(() => [createVNode($setup["AcuInput"], {
-								modelValue: $setup.settingsDraft.agentRunBudget.maxConcurrent,
-								"onUpdate:modelValue": _cache[22] || (_cache[22] = ($event) => $setup.settingsDraft.agentRunBudget.maxConcurrent = $event),
-								type: "number",
-								min: 1,
-								max: 6
-							}, null, 8, ["modelValue"])]),
-							_: 1
-						}),
-						createVNode($setup["AcuFormRow"], { label: "读取批次上限：主 Agent 一次规划内 read/search 工具批次的次数上限（0 为禁止读取）" }, {
-							default: withCtx(() => [createVNode($setup["AcuInput"], {
-								modelValue: $setup.settingsDraft.agentRunBudget.maxReads,
-								"onUpdate:modelValue": _cache[23] || (_cache[23] = ($event) => $setup.settingsDraft.agentRunBudget.maxReads = $event),
-								type: "number",
-								min: 0,
-								max: 30
-							}, null, 8, ["modelValue"])]),
-							_: 1
-						}),
-						createVNode($setup["AcuFormRow"], { label: "子代理工具轮上限：子代理首轮之外还允许几轮 read/search 追加读取（0 为只靠固定注入与派工种子）" }, {
-							default: withCtx(() => [createVNode($setup["AcuInput"], {
-								modelValue: $setup.settingsDraft.agentRunBudget.maxExtraReads,
-								"onUpdate:modelValue": _cache[24] || (_cache[24] = ($event) => $setup.settingsDraft.agentRunBudget.maxExtraReads = $event),
-								type: "number",
-								min: 0,
-								max: 10
-							}, null, 8, ["modelValue"])]),
-							_: 1
-						}),
-						createVNode($setup["AcuFormRow"], { label: "循环标签" }, {
-							default: withCtx(() => [createVNode($setup["AcuInput"], {
-								modelValue: $setup.settingsDraft.loopTags,
-								"onUpdate:modelValue": _cache[25] || (_cache[25] = ($event) => $setup.settingsDraft.loopTags = $event),
-								type: "text"
-							}, null, 8, ["modelValue"])]),
-							_: 1
-						}),
-						createVNode($setup["AcuFormRow"], { label: "API 预设（全局默认）" }, {
+						createVNode($setup["AcuFormRow"], {
+							label: "API 预设（全局默认）",
+							hint: "所有 Agent 默认走这个预设；需要给某个 Agent 单独指定时，展开下方「各 Agent 渠道」。"
+						}, {
 							default: withCtx(() => [createVNode($setup["AcuSelect"], {
 								options: $setup.continuationApiPresetOptions,
 								"model-value": $setup.continuationApiPresetValue,
@@ -164576,59 +169354,412 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 							])]),
 							_: 1
 						}),
-						(openBlock(), createElementBlock(
-							Fragment,
-							null,
-							renderList($setup.agentChannelRoles, (channel) => {
-								return createVNode($setup["AcuFormRow"], {
-									key: channel.role,
-									label: `渠道 · ${channel.label}`
-								}, {
-									default: withCtx(() => [createVNode($setup["AcuSelect"], {
-										options: $setup.agentChannelOptions,
-										"model-value": $setup.agentChannelValue(channel.role),
-										"onUpdate:modelValue": (value) => $setup.applyAgentChannel(channel.role, value)
-									}, null, 8, [
-										"options",
-										"model-value",
-										"onUpdate:modelValue"
-									])]),
-									_: 2
-								}, 1032, ["label"]);
-							}),
-							64
-							/* STABLE_FRAGMENT */
-						))
+						createVNode($setup["AcuFormRow"], {
+							label: "总时长（分钟）",
+							hint: "到点后自动停止任务，0 为不限时。"
+						}, {
+							default: withCtx(() => [createVNode($setup["AcuInput"], {
+								modelValue: $setup.settingsDraft.totalDurationMinutes,
+								"onUpdate:modelValue": _cache[7] || (_cache[7] = ($event) => $setup.settingsDraft.totalDurationMinutes = $event),
+								type: "number",
+								min: 0
+							}, null, 8, ["modelValue"])]),
+							_: 1
+						})
 					]),
-					createBaseVNode("div", _hoisted_5$d, [createVNode($setup["AcuCheckbox"], {
-						modelValue: $setup.settingsDraft.outlinePreview,
-						"onUpdate:modelValue": _cache[26] || (_cache[26] = ($event) => $setup.settingsDraft.outlinePreview = $event),
-						label: "大纲产出后先预览再执行"
-					}, null, 8, ["modelValue"]), createVNode($setup["AcuCheckbox"], {
-						modelValue: $setup.settingsDraft.promptCacheEnabled,
-						"onUpdate:modelValue": _cache[27] || (_cache[27] = ($event) => $setup.settingsDraft.promptCacheEnabled = $event),
-						label: "缓存优化：为内部 AI 请求注入 prompt_cache_key 并统计缓存命中（个别网关不支持时可关闭）"
-					}, null, 8, ["modelValue"])]),
-					createVNode($setup["AcuRulePairList"], {
-						modelValue: $setup.settingsDraft.contextExtractRules,
-						"onUpdate:modelValue": _cache[28] || (_cache[28] = ($event) => $setup.settingsDraft.contextExtractRules = $event),
-						label: "上下文提取规则"
-					}, null, 8, ["modelValue"]),
-					createVNode($setup["AcuRulePairList"], {
-						modelValue: $setup.settingsDraft.contextExcludeRules,
-						"onUpdate:modelValue": _cache[29] || (_cache[29] = ($event) => $setup.settingsDraft.contextExcludeRules = $event),
-						label: "上下文排除规则"
-					}, null, 8, ["modelValue"]),
+					createBaseVNode("div", _hoisted_5$d, [
+						createVNode($setup["AcuCheckbox"], {
+							modelValue: $setup.settingsDraft.outlinePreview,
+							"onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => $setup.settingsDraft.outlinePreview = $event),
+							label: "大纲产出后先预览再执行"
+						}, null, 8, ["modelValue"]),
+						createVNode($setup["AcuCheckbox"], {
+							modelValue: $setup.settingsDraft.finalReview.enabled,
+							"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.settingsDraft.finalReview.enabled = $event),
+							label: "启用发送前世界书终审"
+						}, null, 8, ["modelValue"]),
+						createVNode($setup["AcuCheckbox"], {
+							modelValue: $setup.settingsDraft.promptCacheEnabled,
+							"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.settingsDraft.promptCacheEnabled = $event),
+							label: "缓存优化：为内部 AI 请求注入 prompt_cache_key 并统计缓存命中（个别网关不支持时可关闭）"
+						}, null, 8, ["modelValue"])
+					]),
+					createBaseVNode("div", _hoisted_6$c, [
+						createVNode($setup["AcuDisclosureGroup"], {
+							class: "acu-v2-continuation-page__group",
+							label: "运行与重试",
+							meta: $setup.runGroupMeta,
+							expanded: $setup.isGroupExpanded("run"),
+							"body-id": "acu-continuation-group-run",
+							onToggle: _cache[18] || (_cache[18] = ($event) => $setup.toggleGroup("run"))
+						}, {
+							default: withCtx(() => [createBaseVNode("div", _hoisted_7$a, [
+								createVNode($setup["AcuFormRow"], {
+									label: "自动阶段上限",
+									hint: "连续自动推进多少个阶段后暂停，等待你确认。"
+								}, {
+									default: withCtx(() => [createVNode($setup["AcuInput"], {
+										modelValue: $setup.settingsDraft.maxAutomaticStages,
+										"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.settingsDraft.maxAutomaticStages = $event),
+										type: "number",
+										min: 1
+									}, null, 8, ["modelValue"])]),
+									_: 1
+								}),
+								createVNode($setup["AcuFormRow"], {
+									label: "正文重试次数",
+									hint: "宿主生成失败、被中止或正文缺少循环标签时最多重试几次。"
+								}, {
+									default: withCtx(() => [createVNode($setup["AcuInput"], {
+										modelValue: $setup.settingsDraft.generationRetryLimit,
+										"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.settingsDraft.generationRetryLimit = $event),
+										type: "number",
+										min: 0
+									}, null, 8, ["modelValue"])]),
+									_: 1
+								}),
+								createVNode($setup["AcuFormRow"], {
+									label: "内部 AI 重试次数",
+									hint: "Agent 自身调用 API 失败时的重试次数。"
+								}, {
+									default: withCtx(() => [createVNode($setup["AcuInput"], {
+										modelValue: $setup.settingsDraft.internalAiRetryLimit,
+										"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.settingsDraft.internalAiRetryLimit = $event),
+										type: "number",
+										min: 0
+									}, null, 8, ["modelValue"])]),
+									_: 1
+								}),
+								createVNode($setup["AcuFormRow"], {
+									label: "轮次延迟（秒）",
+									hint: "每轮正文完成后等待多久再开始下一轮。"
+								}, {
+									default: withCtx(() => [createVNode($setup["AcuInput"], {
+										modelValue: $setup.settingsDraft.loopDelaySeconds,
+										"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.settingsDraft.loopDelaySeconds = $event),
+										type: "number",
+										min: 0
+									}, null, 8, ["modelValue"])]),
+									_: 1
+								}),
+								createVNode($setup["AcuFormRow"], {
+									label: "重试延迟（秒）",
+									hint: "失败后等待多久再重试；遇到 429 限流可适当调大。"
+								}, {
+									default: withCtx(() => [createVNode($setup["AcuInput"], {
+										modelValue: $setup.settingsDraft.retryDelaySeconds,
+										"onUpdate:modelValue": _cache[15] || (_cache[15] = ($event) => $setup.settingsDraft.retryDelaySeconds = $event),
+										type: "number",
+										min: 0
+									}, null, 8, ["modelValue"])]),
+									_: 1
+								}),
+								createVNode($setup["AcuFormRow"], {
+									label: "连续高压轮上限",
+									hint: "跨阶段累计多少轮没有日常/余波轮就强制安排一轮，0 为不作要求。每阶段的松紧由大纲自选的节奏形态决定，这里只兜底极端情况。"
+								}, {
+									default: withCtx(() => [createVNode($setup["AcuInput"], {
+										modelValue: $setup.settingsDraft.maxConsecutivePressureTurns,
+										"onUpdate:modelValue": _cache[16] || (_cache[16] = ($event) => $setup.settingsDraft.maxConsecutivePressureTurns = $event),
+										type: "number",
+										min: 0,
+										max: $setup.maxConsecutivePressureTurnsMax
+									}, null, 8, ["modelValue", "max"])]),
+									_: 1
+								}),
+								createVNode($setup["AcuFormRow"], {
+									label: "循环标签",
+									hint: "逗号分隔；正文中缺少任一标签就视为生成失败并重试。留空不检查。"
+								}, {
+									default: withCtx(() => [createVNode($setup["AcuInput"], {
+										modelValue: $setup.settingsDraft.loopTags,
+										"onUpdate:modelValue": _cache[17] || (_cache[17] = ($event) => $setup.settingsDraft.loopTags = $event),
+										type: "text"
+									}, null, 8, ["modelValue"])]),
+									_: 1
+								})
+							])]),
+							_: 1
+						}, 8, ["meta", "expanded"]),
+						createVNode($setup["AcuDisclosureGroup"], {
+							class: "acu-v2-continuation-page__group",
+							label: "正文读取与上下文",
+							meta: $setup.contextGroupMeta,
+							expanded: $setup.isGroupExpanded("context"),
+							"body-id": "acu-continuation-group-context",
+							onToggle: _cache[24] || (_cache[24] = ($event) => $setup.toggleGroup("context"))
+						}, {
+							default: withCtx(() => [createBaseVNode("div", _hoisted_8$a, [
+								createVNode($setup["AcuFormRow"], {
+									label: "正文可读窗口楼数",
+									hint: "只有最近这么多 AI 楼层能被 Agent 读取/搜索，更早剧情走纪要回溯；0 为不开放正文读取。"
+								}, {
+									default: withCtx(() => [createVNode($setup["AcuInput"], {
+										modelValue: $setup.settingsDraft.storyWindowFloors,
+										"onUpdate:modelValue": _cache[19] || (_cache[19] = ($event) => $setup.settingsDraft.storyWindowFloors = $event),
+										type: "number",
+										min: 0
+									}, null, 8, ["modelValue"])]),
+									_: 1
+								}),
+								createVNode($setup["AcuFormRow"], {
+									label: "正文目录尾部全文楼数",
+									hint: "最近几楼直接注入全文作承接锚点，其余窗口内楼层只进目录按需调阅。"
+								}, {
+									default: withCtx(() => [createVNode($setup["AcuInput"], {
+										modelValue: $setup.settingsDraft.storyTailFloors,
+										"onUpdate:modelValue": _cache[20] || (_cache[20] = ($event) => $setup.settingsDraft.storyTailFloors = $event),
+										type: "number",
+										min: 0
+									}, null, 8, ["modelValue"])]),
+									_: 1
+								}),
+								createVNode($setup["AcuFormRow"], {
+									label: "会话自动总结阈值（token）",
+									hint: "按主 Agent 实际读取的完整上下文统计（含提示词、工具结果与子代理报告），超过后在下一轮开始前把最早轮次浓缩成交接报告；0 为不总结。"
+								}, {
+									default: withCtx(() => [createVNode($setup["AcuInput"], {
+										modelValue: $setup.settingsDraft.agentHistoryTokenBudget,
+										"onUpdate:modelValue": _cache[21] || (_cache[21] = ($event) => $setup.settingsDraft.agentHistoryTokenBudget = $event),
+										type: "number",
+										min: 0
+									}, null, 8, ["modelValue"])]),
+									_: 1
+								}),
+								createVNode($setup["AcuFormRow"], {
+									label: "读取预算",
+									hint: "一次规划内 read/search 结果的累计 token 上限；填正整数，或形如 30% 的百分比（按总结阈值折算）。"
+								}, {
+									default: withCtx(() => [createVNode($setup["AcuInput"], {
+										modelValue: $setup.settingsDraft.agentReadTokenBudget,
+										"onUpdate:modelValue": _cache[22] || (_cache[22] = ($event) => $setup.settingsDraft.agentReadTokenBudget = $event),
+										type: "text"
+									}, null, 8, ["modelValue"])]),
+									_: 1
+								}),
+								createVNode($setup["AcuFormRow"], {
+									label: "精读兜底额度（token）",
+									hint: "上下文临近总结阈值时，仍放行不超过该大小的小额精准读取。"
+								}, {
+									default: withCtx(() => [createVNode($setup["AcuInput"], {
+										modelValue: $setup.settingsDraft.agentReadFallbackTokens,
+										"onUpdate:modelValue": _cache[23] || (_cache[23] = ($event) => $setup.settingsDraft.agentReadFallbackTokens = $event),
+										type: "number",
+										min: 1
+									}, null, 8, ["modelValue"])]),
+									_: 1
+								})
+							])]),
+							_: 1
+						}, 8, ["meta", "expanded"]),
+						createVNode($setup["AcuDisclosureGroup"], {
+							class: "acu-v2-continuation-page__group",
+							label: "Agent 运行预算",
+							meta: $setup.budgetGroupMeta,
+							expanded: $setup.isGroupExpanded("budget"),
+							"body-id": "acu-continuation-group-budget",
+							onToggle: _cache[31] || (_cache[31] = ($event) => $setup.toggleGroup("budget"))
+						}, {
+							default: withCtx(() => [createBaseVNode("div", _hoisted_9$9, [
+								createVNode($setup["AcuFormRow"], {
+									label: "主 Agent 迭代上限",
+									hint: "一次规划内最多做多少次决策（派工/改大纲/交付各算一次；read/search 工具批次不计入）。范围 1–30。"
+								}, {
+									default: withCtx(() => [createVNode($setup["AcuInput"], {
+										modelValue: $setup.settingsDraft.agentRunBudget.maxIterations,
+										"onUpdate:modelValue": _cache[25] || (_cache[25] = ($event) => $setup.settingsDraft.agentRunBudget.maxIterations = $event),
+										type: "number",
+										min: 1,
+										max: 30
+									}, null, 8, ["modelValue"])]),
+									_: 1
+								}),
+								createVNode($setup["AcuFormRow"], {
+									label: "派工总数上限",
+									hint: "一次规划内最多派出多少个子代理任务，0 为禁止派工。范围 0–20。"
+								}, {
+									default: withCtx(() => [createVNode($setup["AcuInput"], {
+										modelValue: $setup.settingsDraft.agentRunBudget.maxDelegations,
+										"onUpdate:modelValue": _cache[26] || (_cache[26] = ($event) => $setup.settingsDraft.agentRunBudget.maxDelegations = $event),
+										type: "number",
+										min: 0,
+										max: 20
+									}, null, 8, ["modelValue"])]),
+									_: 1
+								}),
+								createVNode($setup["AcuFormRow"], {
+									label: "单代理派工上限",
+									hint: "同一个子代理在一次规划内最多被派几次。范围 1–10。"
+								}, {
+									default: withCtx(() => [createVNode($setup["AcuInput"], {
+										modelValue: $setup.settingsDraft.agentRunBudget.maxSameAgent,
+										"onUpdate:modelValue": _cache[27] || (_cache[27] = ($event) => $setup.settingsDraft.agentRunBudget.maxSameAgent = $event),
+										type: "number",
+										min: 1,
+										max: 10
+									}, null, 8, ["modelValue"])]),
+									_: 1
+								}),
+								createVNode($setup["AcuFormRow"], {
+									label: "并发派工上限",
+									hint: "同一波次最多同时运行几个子代理；API 限流严格时调小。范围 1–6。"
+								}, {
+									default: withCtx(() => [createVNode($setup["AcuInput"], {
+										modelValue: $setup.settingsDraft.agentRunBudget.maxConcurrent,
+										"onUpdate:modelValue": _cache[28] || (_cache[28] = ($event) => $setup.settingsDraft.agentRunBudget.maxConcurrent = $event),
+										type: "number",
+										min: 1,
+										max: 6
+									}, null, 8, ["modelValue"])]),
+									_: 1
+								}),
+								createVNode($setup["AcuFormRow"], {
+									label: "读取批次上限",
+									hint: "主 Agent 一次规划内 read/search 工具批次的次数上限，0 为禁止读取。范围 0–30。"
+								}, {
+									default: withCtx(() => [createVNode($setup["AcuInput"], {
+										modelValue: $setup.settingsDraft.agentRunBudget.maxReads,
+										"onUpdate:modelValue": _cache[29] || (_cache[29] = ($event) => $setup.settingsDraft.agentRunBudget.maxReads = $event),
+										type: "number",
+										min: 0,
+										max: 30
+									}, null, 8, ["modelValue"])]),
+									_: 1
+								}),
+								createVNode($setup["AcuFormRow"], {
+									label: "子代理工具轮上限",
+									hint: "子代理首轮之外还允许几轮 read/search 追加读取，0 为只靠固定注入与派工种子。范围 0–10。"
+								}, {
+									default: withCtx(() => [createVNode($setup["AcuInput"], {
+										modelValue: $setup.settingsDraft.agentRunBudget.maxExtraReads,
+										"onUpdate:modelValue": _cache[30] || (_cache[30] = ($event) => $setup.settingsDraft.agentRunBudget.maxExtraReads = $event),
+										type: "number",
+										min: 0,
+										max: 10
+									}, null, 8, ["modelValue"])]),
+									_: 1
+								})
+							])]),
+							_: 1
+						}, 8, ["meta", "expanded"]),
+						createVNode($setup["AcuDisclosureGroup"], {
+							class: "acu-v2-continuation-page__group",
+							label: "发送前终审",
+							meta: $setup.finalReviewGroupMeta,
+							expanded: $setup.isGroupExpanded("finalReview"),
+							"body-id": "acu-continuation-group-final-review",
+							onToggle: _cache[34] || (_cache[34] = ($event) => $setup.toggleGroup("finalReview"))
+						}, {
+							default: withCtx(() => [createBaseVNode("div", _hoisted_10$9, [createVNode($setup["AcuFormRow"], {
+								label: "终审读取预算",
+								hint: "发送前终审独立可用的 read/search token 上限；填正整数，或形如 50% 的百分比（按总结阈值折算）。"
+							}, {
+								default: withCtx(() => [createVNode($setup["AcuInput"], {
+									modelValue: $setup.settingsDraft.finalReview.readTokenBudget,
+									"onUpdate:modelValue": _cache[32] || (_cache[32] = ($event) => $setup.settingsDraft.finalReview.readTokenBudget = $event),
+									type: "text"
+								}, null, 8, ["modelValue"])]),
+								_: 1
+							}), createVNode($setup["AcuFormRow"], {
+								label: "终审额外读取轮数",
+								hint: "终审首轮之外允许追加 read/search 的次数，0 为只使用固定证据。范围 0–10。"
+							}, {
+								default: withCtx(() => [createVNode($setup["AcuInput"], {
+									modelValue: $setup.settingsDraft.finalReview.maxExtraReads,
+									"onUpdate:modelValue": _cache[33] || (_cache[33] = ($event) => $setup.settingsDraft.finalReview.maxExtraReads = $event),
+									type: "number",
+									min: 0,
+									max: 10
+								}, null, 8, ["modelValue"])]),
+								_: 1
+							})]), _cache[44] || (_cache[44] = createBaseVNode(
+								"p",
+								{ class: "acu-v2-continuation-page__meta" },
+								"终审默认关闭；开启后会额外调用 final-reviewer，优先依据本轮命中的世界书条目，并使用独立读取预算与工具轮，不占用主 Agent 的读取额度。关闭时不装配终审证据、不额外读取世界书，也不会发起终审调用。",
+								-1
+								/* CACHED */
+							))]),
+							_: 1
+						}, 8, ["meta", "expanded"]),
+						createVNode($setup["AcuDisclosureGroup"], {
+							class: "acu-v2-continuation-page__group",
+							label: "各 Agent 渠道",
+							meta: $setup.channelGroupMeta,
+							expanded: $setup.isGroupExpanded("channels"),
+							"body-id": "acu-continuation-group-channels",
+							onToggle: _cache[35] || (_cache[35] = ($event) => $setup.toggleGroup("channels"))
+						}, {
+							default: withCtx(() => [_cache[45] || (_cache[45] = createBaseVNode(
+								"p",
+								{ class: "acu-v2-continuation-page__meta" },
+								"给不同 Agent 分配不同 API 预设：例如主 Agent 用强模型，审查类子代理用便宜快速的模型。「跟随全局默认」即使用上方的 API 预设。",
+								-1
+								/* CACHED */
+							)), createBaseVNode("div", _hoisted_11$9, [(openBlock(), createElementBlock(
+								Fragment,
+								null,
+								renderList($setup.agentChannelRoles, (channel) => {
+									return createVNode($setup["AcuFormRow"], {
+										key: channel.role,
+										label: channel.label
+									}, {
+										default: withCtx(() => [createVNode($setup["AcuSelect"], {
+											options: $setup.agentChannelOptions,
+											"model-value": $setup.agentChannelValue(channel.role),
+											"onUpdate:modelValue": (value) => $setup.applyAgentChannel(channel.role, value)
+										}, null, 8, [
+											"options",
+											"model-value",
+											"onUpdate:modelValue"
+										])]),
+										_: 2
+									}, 1032, ["label"]);
+								}),
+								64
+								/* STABLE_FRAGMENT */
+							))])]),
+							_: 1
+						}, 8, ["meta", "expanded"]),
+						createVNode($setup["AcuDisclosureGroup"], {
+							class: "acu-v2-continuation-page__group",
+							label: "上下文提取与排除规则",
+							meta: $setup.rulesGroupMeta,
+							expanded: $setup.isGroupExpanded("rules"),
+							"body-id": "acu-continuation-group-rules",
+							onToggle: _cache[38] || (_cache[38] = ($event) => $setup.toggleGroup("rules"))
+						}, {
+							default: withCtx(() => [
+								_cache[46] || (_cache[46] = createBaseVNode(
+									"p",
+									{ class: "acu-v2-continuation-page__meta" },
+									"提取规则只保留正文中匹配「起始–结束」标记之间的内容；排除规则则把匹配段落剔除。两者都为空时使用完整正文。",
+									-1
+									/* CACHED */
+								)),
+								createVNode($setup["AcuRulePairList"], {
+									modelValue: $setup.settingsDraft.contextExtractRules,
+									"onUpdate:modelValue": _cache[36] || (_cache[36] = ($event) => $setup.settingsDraft.contextExtractRules = $event),
+									label: "上下文提取规则"
+								}, null, 8, ["modelValue"]),
+								createVNode($setup["AcuRulePairList"], {
+									modelValue: $setup.settingsDraft.contextExcludeRules,
+									"onUpdate:modelValue": _cache[37] || (_cache[37] = ($event) => $setup.settingsDraft.contextExcludeRules = $event),
+									label: "上下文排除规则"
+								}, null, 8, ["modelValue"])
+							]),
+							_: 1
+						}, 8, ["meta", "expanded"])
+					]),
 					$setup.settingsError ? (openBlock(), createElementBlock(
 						"p",
-						_hoisted_6$c,
+						_hoisted_12$9,
 						toDisplayString($setup.settingsError),
 						1
 						/* TEXT */
 					)) : createCommentVNode("v-if", true),
 					$setup.settingsNotice ? (openBlock(), createElementBlock(
 						"p",
-						_hoisted_7$a,
+						_hoisted_13$7,
 						toDisplayString($setup.settingsNotice),
 						1
 						/* TEXT */
@@ -164644,17 +169775,17 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 			description: "仅启用段参与内部调用；占位符会按实际出现按需解析。修改后自动保存。"
 		}, {
 			default: withCtx(() => [
-				createBaseVNode("div", _hoisted_8$a, [
+				createBaseVNode("div", _hoisted_14$7, [
 					createVNode($setup["AcuButton"], { onClick: $setup.exportPrompts }, {
-						default: withCtx(() => [..._cache[69] || (_cache[69] = [createTextVNode(
+						default: withCtx(() => [..._cache[47] || (_cache[47] = [createTextVNode(
 							"导出提示词 JSON",
 							-1
 							/* CACHED */
 						)])]),
 						_: 1
 					}),
-					createVNode($setup["AcuButton"], { onClick: _cache[30] || (_cache[30] = ($event) => $setup.promptImportInput?.click()) }, {
-						default: withCtx(() => [..._cache[70] || (_cache[70] = [createTextVNode(
+					createVNode($setup["AcuButton"], { onClick: _cache[39] || (_cache[39] = ($event) => $setup.promptImportInput?.click()) }, {
+						default: withCtx(() => [..._cache[48] || (_cache[48] = [createTextVNode(
 							"导入提示词 JSON",
 							-1
 							/* CACHED */
@@ -164677,224 +169808,133 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 				]),
 				$setup.promptIoError ? (openBlock(), createElementBlock(
 					"p",
-					_hoisted_9$9,
+					_hoisted_15$7,
 					toDisplayString($setup.promptIoError),
 					1
 					/* TEXT */
 				)) : createCommentVNode("v-if", true),
 				$setup.promptIoNotice ? (openBlock(), createElementBlock(
 					"p",
-					_hoisted_10$9,
+					_hoisted_16$6,
 					toDisplayString($setup.promptIoNotice),
 					1
 					/* TEXT */
 				)) : createCommentVNode("v-if", true),
-				_cache[78] || (_cache[78] = createBaseVNode(
-					"h3",
+				createBaseVNode("div", _hoisted_17$5, [(openBlock(), createElementBlock(
+					Fragment,
 					null,
-					"大纲子代理（outline-architect）提示词",
-					-1
-					/* CACHED */
-				)),
-				createVNode($setup["AcuPromptSegments"], {
-					segments: $setup.settingsDraft.outlinePrompt,
-					"role-options": $setup.continuationRoleOptions,
-					"show-slot": false,
-					"show-enabled": true,
-					"allow-move": true,
-					onAdd: _cache[31] || (_cache[31] = (position) => $setup.addPrompt("outlinePrompt", position)),
-					onDelete: _cache[32] || (_cache[32] = (index) => $setup.deletePrompt("outlinePrompt", index)),
-					onMove: _cache[33] || (_cache[33] = (index, delta) => $setup.movePrompt("outlinePrompt", index, delta)),
-					onUpdate: _cache[34] || (_cache[34] = (index, patch) => $setup.updatePrompt("outlinePrompt", index, patch))
-				}, null, 8, ["segments"]),
-				createBaseVNode("div", _hoisted_11$9, [createVNode($setup["AcuButton"], { onClick: _cache[35] || (_cache[35] = ($event) => $setup.restorePrompt("outline")) }, {
-					default: withCtx(() => [..._cache[71] || (_cache[71] = [createTextVNode(
-						"恢复大纲提示词默认值",
-						-1
-						/* CACHED */
-					)])]),
+					renderList($setup.promptGroups, (group) => {
+						return createVNode($setup["AcuDisclosureGroup"], {
+							key: group.key,
+							class: "acu-v2-continuation-page__group",
+							label: group.title,
+							meta: $setup.promptGroupMeta(group.key),
+							expanded: $setup.isGroupExpanded(`prompt:${group.key}`),
+							"body-id": `acu-continuation-prompt-${group.key}`,
+							onToggle: ($event) => $setup.toggleGroup(`prompt:${group.key}`)
+						}, {
+							default: withCtx(() => [
+								createVNode($setup["AcuPromptSegments"], {
+									segments: $setup.promptList(group.key) ?? [],
+									"role-options": $setup.continuationRoleOptions,
+									"show-slot": false,
+									"show-enabled": true,
+									"allow-move": true,
+									onAdd: (position) => $setup.addPrompt(group.key, position),
+									onDelete: (index) => $setup.deletePrompt(group.key, index),
+									onMove: (index, delta) => $setup.movePrompt(group.key, index, delta),
+									onUpdate: (index, patch) => $setup.updatePrompt(group.key, index, patch)
+								}, null, 8, [
+									"segments",
+									"onAdd",
+									"onDelete",
+									"onMove",
+									"onUpdate"
+								]),
+								createBaseVNode("div", _hoisted_18$5, [createVNode($setup["AcuButton"], { onClick: ($event) => $setup.restorePrompt(group.kind) }, {
+									default: withCtx(() => [createTextVNode(
+										toDisplayString(group.restoreLabel),
+										1
+										/* TEXT */
+									)]),
+									_: 2
+								}, 1032, ["onClick"])]),
+								group.note ? (openBlock(), createElementBlock(
+									"p",
+									_hoisted_19$5,
+									toDisplayString(group.note),
+									1
+									/* TEXT */
+								)) : createCommentVNode("v-if", true)
+							]),
+							_: 2
+						}, 1032, [
+							"label",
+							"meta",
+							"expanded",
+							"body-id",
+							"onToggle"
+						]);
+					}),
+					64
+					/* STABLE_FRAGMENT */
+				)), createVNode($setup["AcuDisclosureGroup"], {
+					class: "acu-v2-continuation-page__group",
+					label: "占位符速查",
+					meta: "参考",
+					expanded: $setup.isGroupExpanded("prompt:reference"),
+					"body-id": "acu-continuation-prompt-reference",
+					onToggle: _cache[40] || (_cache[40] = ($event) => $setup.toggleGroup("prompt:reference"))
+				}, {
+					default: withCtx(() => [..._cache[49] || (_cache[49] = [
+						createBaseVNode(
+							"h4",
+							{ class: "acu-v2-continuation-page__subheading" },
+							"大纲子代理",
+							-1
+							/* CACHED */
+						),
+						createBaseVNode(
+							"p",
+							{ class: "acu-v2-continuation-page__meta" },
+							"大纲可用占位符：$ORIGIN_INSTRUCTION、$1、$STORY_OVERVIEW（事件概览：纪要表概览全量 + 召回 AM 码展开纪要）、$STORY_TAIL（尾部楼层全文）、$STAGE_HISTORY、$COMPLETED_STAGE_PART、$REPLAN_INSTRUCTION、$TURN_RANGE、$REMAINING_TURNS、$STORY_ARC（故事总纲）、$STAGE_WORD_BUDGET（本阶段字数容量）、$PACING_CONTEXT（跨阶段节奏状态：上一阶段形态与已连续高压轮数）、$VALIDATION_ERRORS。",
+							-1
+							/* CACHED */
+						),
+						createBaseVNode(
+							"h4",
+							{ class: "acu-v2-continuation-page__subheading" },
+							"主 Agent",
+							-1
+							/* CACHED */
+						),
+						createBaseVNode(
+							"p",
+							{ class: "acu-v2-continuation-page__meta" },
+							"$HISTORY_ANCHOR 标记主 Agent 自己的会话记录（用户输入、它历次迭代的输出、回灌的工具结果与调阅到的资料）插入位置，该段本身不发送；删掉它会让会话记录退回到序列最前面。正文三层注入：$STORY_OVERVIEW（事件概览：纪要表概览全量，召回 AM 码展开对应纪要）、$STORY_TAIL（尾部楼层全文）、$STORY_CATALOG（楼层纯索引：楼号、字数、开头摘录、读取地址）。目录与状态占位符：$OUTLINE_STATE（大纲单行状态）、$WORLDBOOK_CATALOG（已启用世界书目录，含 token 估算）、$WORLDBOOK_HITS（本轮语境命中的世界书条目提示）、$AGENT_READ_CATALOG（read/search 地址词汇表）。其余可用占位符：$USER_INTENT、$CURRENT_TURN_GOAL、$CURRENT_TURN_PACING（本轮节奏与写作约束）、$STORY_ARC_STATE（总纲状态）、$HISTORY_UNSETTLED（未结算正文全量，仅 AI 楼层）、$AGENT_CATALOG、$MODULE_CATALOG、$TABLE_CATALOG、$BUDGET；旧版的 $OUTLINE_WINDOW、$ACTIVE_CONSTRAINTS、$TOOL_RESULTS 仍可在自定义提示词中使用。",
+							-1
+							/* CACHED */
+						),
+						createBaseVNode(
+							"h4",
+							{ class: "acu-v2-continuation-page__subheading" },
+							"各子代理",
+							-1
+							/* CACHED */
+						),
+						createBaseVNode(
+							"p",
+							{ class: "acu-v2-continuation-page__meta" },
+							"子代理可用占位符：$AGENT_READ_MATERIALS（派工种子读集解析出的资料）、$AGENT_TASK（本次派工任务）、$AGENT_WRITE_SCOPE（职责固定的写入范围）、$AGENT_READ_CATALOG（read/search 地址词汇表）、$STORY_OVERVIEW / $STORY_TAIL / $HISTORY_UNSETTLED（按角色固定注入的正文语境）、$HOOKS_LEDGER / $INFO_GAP / $ACTIVE_CONSTRAINTS / $STORY_ARC（本地资料）、$STORY_CATALOG、$TABLE_CATALOG、$WORLDBOOK_CATALOG、$WORLDBOOK_HITS（各资料目录与命中提示）。固定注入差异：主 Agent、总纲代理、两类策划代理、连续性审查与终审固定获得 $OUTLINE_WINDOW；主 Agent、总纲代理、连续性审查与终审固定获得 $USER_INTENT；大纲代理对应使用 $ORIGIN_INSTRUCTION；伏笔与认知维护代理不接收用户目标或阶段大纲，避免计划污染事实结算。",
+							-1
+							/* CACHED */
+						)
+					])]),
 					_: 1
-				})]),
-				_cache[79] || (_cache[79] = createBaseVNode(
-					"p",
-					{ class: "acu-v2-continuation-page__meta" },
-					"大纲可用占位符：$ORIGIN_INSTRUCTION、$1、$STORY_OVERVIEW（事件概览：纪要表概览全量 + 召回 AM 码展开纪要）、$STORY_TAIL（尾部楼层全文）、$STAGE_HISTORY、$COMPLETED_STAGE_PART、$REPLAN_INSTRUCTION、$TURN_RANGE、$REMAINING_TURNS、$STORY_ARC（故事总纲）、$STAGE_WORD_BUDGET（本阶段字数容量）、$PACING_CONTEXT（跨阶段节奏状态：上一阶段形态与已连续高压轮数）、$VALIDATION_ERRORS。",
-					-1
-					/* CACHED */
-				)),
-				_cache[80] || (_cache[80] = createBaseVNode(
-					"h3",
-					null,
-					"主 Agent 提示词",
-					-1
-					/* CACHED */
-				)),
-				createVNode($setup["AcuPromptSegments"], {
-					segments: $setup.settingsDraft.agentPrompts.main,
-					"role-options": $setup.continuationRoleOptions,
-					"show-slot": false,
-					"show-enabled": true,
-					"allow-move": true,
-					onAdd: _cache[36] || (_cache[36] = (position) => $setup.addPrompt("main", position)),
-					onDelete: _cache[37] || (_cache[37] = (index) => $setup.deletePrompt("main", index)),
-					onMove: _cache[38] || (_cache[38] = (index, delta) => $setup.movePrompt("main", index, delta)),
-					onUpdate: _cache[39] || (_cache[39] = (index, patch) => $setup.updatePrompt("main", index, patch))
-				}, null, 8, ["segments"]),
-				createBaseVNode("div", _hoisted_12$9, [createVNode($setup["AcuButton"], { onClick: _cache[40] || (_cache[40] = ($event) => $setup.restorePrompt("agent_main")) }, {
-					default: withCtx(() => [..._cache[72] || (_cache[72] = [createTextVNode(
-						"恢复主 Agent 默认值",
-						-1
-						/* CACHED */
-					)])]),
-					_: 1
-				})]),
-				_cache[81] || (_cache[81] = createBaseVNode(
-					"p",
-					{ class: "acu-v2-continuation-page__meta" },
-					"$HISTORY_ANCHOR 标记主 Agent 自己的会话记录（用户输入、它历次迭代的输出、回灌的工具结果与调阅到的资料）插入位置，该段本身不发送；删掉它会让会话记录退回到序列最前面。正文三层注入：$STORY_OVERVIEW（事件概览：纪要表概览全量，召回 AM 码展开对应纪要）、$STORY_TAIL（尾部楼层全文）、$STORY_CATALOG（楼层纯索引：楼号、字数、开头摘录、读取地址）。目录与状态占位符：$OUTLINE_STATE（大纲单行状态）、$WORLDBOOK_CATALOG（已启用世界书目录，含 token 估算）、$WORLDBOOK_HITS（本轮语境命中的世界书条目提示）、$AGENT_READ_CATALOG（read/search 地址词汇表）。其余可用占位符：$USER_INTENT、$CURRENT_TURN_GOAL、$CURRENT_TURN_PACING（本轮节奏与写作约束）、$STORY_ARC_STATE（总纲状态）、$HISTORY_UNSETTLED（未结算正文全量，仅 AI 楼层）、$AGENT_CATALOG、$MODULE_CATALOG、$TABLE_CATALOG、$BUDGET；旧版的 $OUTLINE_WINDOW、$ACTIVE_CONSTRAINTS、$TOOL_RESULTS 仍可在自定义提示词中使用。",
-					-1
-					/* CACHED */
-				)),
-				_cache[82] || (_cache[82] = createBaseVNode(
-					"h3",
-					null,
-					"故事总纲子代理（arc-architect）提示词",
-					-1
-					/* CACHED */
-				)),
-				createVNode($setup["AcuPromptSegments"], {
-					segments: $setup.settingsDraft.agentPrompts.arcArchitect,
-					"role-options": $setup.continuationRoleOptions,
-					"show-slot": false,
-					"show-enabled": true,
-					"allow-move": true,
-					onAdd: _cache[41] || (_cache[41] = (position) => $setup.addPrompt("arcArchitect", position)),
-					onDelete: _cache[42] || (_cache[42] = (index) => $setup.deletePrompt("arcArchitect", index)),
-					onMove: _cache[43] || (_cache[43] = (index, delta) => $setup.movePrompt("arcArchitect", index, delta)),
-					onUpdate: _cache[44] || (_cache[44] = (index, patch) => $setup.updatePrompt("arcArchitect", index, patch))
-				}, null, 8, ["segments"]),
-				createBaseVNode("div", _hoisted_13$7, [createVNode($setup["AcuButton"], { onClick: _cache[45] || (_cache[45] = ($event) => $setup.restorePrompt("agent_arc")) }, {
-					default: withCtx(() => [..._cache[73] || (_cache[73] = [createTextVNode(
-						"恢复总纲子代理默认值",
-						-1
-						/* CACHED */
-					)])]),
-					_: 1
-				})]),
-				_cache[83] || (_cache[83] = createBaseVNode(
-					"h3",
-					null,
-					"伏笔与认知维护子代理提示词",
-					-1
-					/* CACHED */
-				)),
-				createVNode($setup["AcuPromptSegments"], {
-					segments: $setup.settingsDraft.agentPrompts.maintainer,
-					"role-options": $setup.continuationRoleOptions,
-					"show-slot": false,
-					"show-enabled": true,
-					"allow-move": true,
-					onAdd: _cache[46] || (_cache[46] = (position) => $setup.addPrompt("maintainer", position)),
-					onDelete: _cache[47] || (_cache[47] = (index) => $setup.deletePrompt("maintainer", index)),
-					onMove: _cache[48] || (_cache[48] = (index, delta) => $setup.movePrompt("maintainer", index, delta)),
-					onUpdate: _cache[49] || (_cache[49] = (index, patch) => $setup.updatePrompt("maintainer", index, patch))
-				}, null, 8, ["segments"]),
-				createBaseVNode("div", _hoisted_14$7, [createVNode($setup["AcuButton"], { onClick: _cache[50] || (_cache[50] = ($event) => $setup.restorePrompt("agent_maintainer")) }, {
-					default: withCtx(() => [..._cache[74] || (_cache[74] = [createTextVNode(
-						"恢复维护子代理默认值",
-						-1
-						/* CACHED */
-					)])]),
-					_: 1
-				})]),
-				_cache[84] || (_cache[84] = createBaseVNode(
-					"h3",
-					null,
-					"主线推进策划子代理提示词",
-					-1
-					/* CACHED */
-				)),
-				createVNode($setup["AcuPromptSegments"], {
-					segments: $setup.settingsDraft.agentPrompts.mainlinePlanner,
-					"role-options": $setup.continuationRoleOptions,
-					"show-slot": false,
-					"show-enabled": true,
-					"allow-move": true,
-					onAdd: _cache[51] || (_cache[51] = (position) => $setup.addPrompt("mainlinePlanner", position)),
-					onDelete: _cache[52] || (_cache[52] = (index) => $setup.deletePrompt("mainlinePlanner", index)),
-					onMove: _cache[53] || (_cache[53] = (index, delta) => $setup.movePrompt("mainlinePlanner", index, delta)),
-					onUpdate: _cache[54] || (_cache[54] = (index, patch) => $setup.updatePrompt("mainlinePlanner", index, patch))
-				}, null, 8, ["segments"]),
-				createBaseVNode("div", _hoisted_15$7, [createVNode($setup["AcuButton"], { onClick: _cache[55] || (_cache[55] = ($event) => $setup.restorePrompt("agent_mainline")) }, {
-					default: withCtx(() => [..._cache[75] || (_cache[75] = [createTextVNode(
-						"恢复主线策划默认值",
-						-1
-						/* CACHED */
-					)])]),
-					_: 1
-				})]),
-				_cache[85] || (_cache[85] = createBaseVNode(
-					"h3",
-					null,
-					"伏笔与节拍策划子代理提示词",
-					-1
-					/* CACHED */
-				)),
-				createVNode($setup["AcuPromptSegments"], {
-					segments: $setup.settingsDraft.agentPrompts.beatPlanner,
-					"role-options": $setup.continuationRoleOptions,
-					"show-slot": false,
-					"show-enabled": true,
-					"allow-move": true,
-					onAdd: _cache[56] || (_cache[56] = (position) => $setup.addPrompt("beatPlanner", position)),
-					onDelete: _cache[57] || (_cache[57] = (index) => $setup.deletePrompt("beatPlanner", index)),
-					onMove: _cache[58] || (_cache[58] = (index, delta) => $setup.movePrompt("beatPlanner", index, delta)),
-					onUpdate: _cache[59] || (_cache[59] = (index, patch) => $setup.updatePrompt("beatPlanner", index, patch))
-				}, null, 8, ["segments"]),
-				createBaseVNode("div", _hoisted_16$6, [createVNode($setup["AcuButton"], { onClick: _cache[60] || (_cache[60] = ($event) => $setup.restorePrompt("agent_beat")) }, {
-					default: withCtx(() => [..._cache[76] || (_cache[76] = [createTextVNode(
-						"恢复节拍策划默认值",
-						-1
-						/* CACHED */
-					)])]),
-					_: 1
-				})]),
-				_cache[86] || (_cache[86] = createBaseVNode(
-					"h3",
-					null,
-					"连续性审查子代理提示词",
-					-1
-					/* CACHED */
-				)),
-				createVNode($setup["AcuPromptSegments"], {
-					segments: $setup.settingsDraft.agentPrompts.reviewer,
-					"role-options": $setup.continuationRoleOptions,
-					"show-slot": false,
-					"show-enabled": true,
-					"allow-move": true,
-					onAdd: _cache[61] || (_cache[61] = (position) => $setup.addPrompt("reviewer", position)),
-					onDelete: _cache[62] || (_cache[62] = (index) => $setup.deletePrompt("reviewer", index)),
-					onMove: _cache[63] || (_cache[63] = (index, delta) => $setup.movePrompt("reviewer", index, delta)),
-					onUpdate: _cache[64] || (_cache[64] = (index, patch) => $setup.updatePrompt("reviewer", index, patch))
-				}, null, 8, ["segments"]),
-				createBaseVNode("div", _hoisted_17$5, [createVNode($setup["AcuButton"], { onClick: _cache[65] || (_cache[65] = ($event) => $setup.restorePrompt("agent_reviewer")) }, {
-					default: withCtx(() => [..._cache[77] || (_cache[77] = [createTextVNode(
-						"恢复审查子代理默认值",
-						-1
-						/* CACHED */
-					)])]),
-					_: 1
-				})]),
-				_cache[87] || (_cache[87] = createBaseVNode(
-					"p",
-					{ class: "acu-v2-continuation-page__meta" },
-					"子代理可用占位符：$AGENT_READ_MATERIALS（派工种子读集解析出的资料）、$AGENT_TASK（本次派工任务）、$AGENT_WRITE_SCOPE（职责固定的写入范围）、$AGENT_READ_CATALOG（read/search 地址词汇表）、$STORY_OVERVIEW / $STORY_TAIL / $HISTORY_UNSETTLED（按角色固定注入的正文语境）、$HOOKS_LEDGER / $INFO_GAP / $ACTIVE_CONSTRAINTS / $STORY_ARC（本地资料）、$STORY_CATALOG、$TABLE_CATALOG、$WORLDBOOK_CATALOG、$WORLDBOOK_HITS（各资料目录与命中提示）。",
-					-1
-					/* CACHED */
-				)),
+				}, 8, ["expanded"])]),
 				$setup.settingsError ? (openBlock(), createElementBlock(
 					"p",
-					_hoisted_18$5,
+					_hoisted_20$4,
 					toDisplayString($setup.settingsError),
 					1
 					/* TEXT */
@@ -164904,7 +169944,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 		})) : createCommentVNode("v-if", true)
 	]);
 }
-var ContinuationPage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-fae15067"]]);
+var ContinuationPage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-8c8183d6"]]);
 
 var _sfc_main$k = /*@__PURE__*/ defineComponent({
     __name: 'AcuStatsList',
@@ -168475,13 +173515,13 @@ const _hoisted_29$1 = {
 	"aria-labelledby": "acu-cleanup-auto-title"
 };
 const _hoisted_30$1 = { class: "acu-v2-data-mgmt-page__form-stack" };
-const _hoisted_31 = {
+const _hoisted_31$1 = {
 	class: "acu-v2-data-mgmt-page__cleanup-section",
 	"aria-labelledby": "acu-cleanup-manual-title"
 };
-const _hoisted_32 = { class: "acu-v2-data-mgmt-page__meta" };
-const _hoisted_33 = { class: "acu-v2-data-mgmt-page__form-grid" };
-const _hoisted_34 = { class: "acu-v2-data-mgmt-page__command-grid acu-v2-data-mgmt-page__command-grid--cleanup" };
+const _hoisted_32$1 = { class: "acu-v2-data-mgmt-page__meta" };
+const _hoisted_33$1 = { class: "acu-v2-data-mgmt-page__form-grid" };
+const _hoisted_34$1 = { class: "acu-v2-data-mgmt-page__command-grid acu-v2-data-mgmt-page__command-grid--cleanup" };
 function _sfc_render$g(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("section", _hoisted_1$g, [$setup.flow.message.value ? (openBlock(), createBlock($setup["AcuMessage"], {
 		key: 0,
@@ -169073,7 +174113,7 @@ function _sfc_render$g(_ctx, _cache, $props, $setup, $data, $options) {
 					}, null, 8, ["disabled", "model-value"])]),
 					_: 1
 				})])]),
-				createBaseVNode("section", _hoisted_31, [
+				createBaseVNode("section", _hoisted_31$1, [
 					_cache[34] || (_cache[34] = createBaseVNode(
 						"h3",
 						{
@@ -169086,12 +174126,12 @@ function _sfc_render$g(_ctx, _cache, $props, $setup, $data, $options) {
 					)),
 					createBaseVNode(
 						"p",
-						_hoisted_32,
+						_hoisted_32$1,
 						" 当前聊天 " + toDisplayString($setup.flow.aiMessageCount.value) + " 个 AI 楼层 · 将处理：" + toDisplayString($setup.flow.rangeLabel.value),
 						1
 						/* TEXT */
 					),
-					createBaseVNode("div", _hoisted_33, [createVNode($setup["AcuFormRow"], {
+					createBaseVNode("div", _hoisted_33$1, [createVNode($setup["AcuFormRow"], {
 						label: "起始楼层",
 						hint: "从第N个楼层 AI 回复开始，留空为第 1 层。"
 					}, {
@@ -169125,7 +174165,7 @@ function _sfc_render$g(_ctx, _cache, $props, $setup, $data, $options) {
 					-1
 					/* CACHED */
 				)),
-				createBaseVNode("div", _hoisted_34, [
+				createBaseVNode("div", _hoisted_34$1, [
 					$setup.SHOW_LEGACY_DATA_MGMT_UI ? (openBlock(), createBlock($setup["AcuButton"], {
 						key: 0,
 						block: "",
@@ -170845,6 +175885,502 @@ function useSqlConsole() {
     };
 }
 
+const RETRY_LATER = '稍等片刻后重试一次，很多问题是服务商偶发抖动。';
+const SEE_PREVIOUS_LOG = '查看紧邻的上一条日志，通常会给出更具体的原因（HTTP 状态码、解析失败的内容等）。';
+const EXPORT_LOGS = '如果反复出现，点日志面板的「导出」把日志连同复现步骤反馈给作者。';
+const RULES = [
+    // ─── 主动中止 ───
+    {
+        id: 'aborted',
+        test: /request aborted|aborterror|the user aborted|已中止|已取消|用户取消|用户中止|abort signal|signal is aborted/,
+        summary: '请求被主动中止（通常是你点了停止、切换了聊天，或关闭了面板）。',
+        steps: [
+            '如果是你主动停止的，这条记录可以忽略。',
+            '如果没有手动停止却出现中止，检查网络是否在请求途中断开，然后重试。',
+        ],
+    },
+    // ─── 浏览器存储 ───
+    {
+        id: 'storage-quota',
+        test: /quotaexceeded|exceeded the quota|storage.*full|out of storage|存储空间不足|localstorage/,
+        summary: '浏览器本地存储空间不足，设置或缓存写不进去。',
+        steps: [
+            '到「数据管理」页清理不再需要的历史数据或导入缓存。',
+            '清理宿主里其他扩展占用的存储空间。',
+            'TauriTavern 的本地存储随应用目录存放，确认所在磁盘还有剩余空间。',
+        ],
+    },
+    // ─── 启动 / 宿主 ───
+    {
+        id: 'startup',
+        test: /等待 ?sillytavern|core apis not available|getcontext\(\)|not ready after|jquery|#extensionsmenu|failed to initialize\. core|插件启动|插件无法启动|host doc|failed to load one or more critical apis/,
+        summary: '插件初始化失败：没有等到宿主（TauriTavern）核心接口就绪。',
+        steps: [
+            '重启 TauriTavern，或在扩展面板里停用再启用本插件后重新加载。',
+            '确认 TauriTavern 版本不过旧，并在扩展面板里启用了本插件。',
+            '同时安装了很多扩展时加载会变慢，等宿主加载完成后再打开插件；TauriTavern 没有浏览器控制台，请到「高级工具」→「运行日志」与 Debug 一键采集里查看本插件侧的报错。',
+        ],
+    },
+    {
+        id: 'ui-not-ready',
+        test: /ui元素未初始化|cannot find .*dom|popup dom|ui surface is not registered|界面未初始化/,
+        summary: '界面还没加载完成就触发了操作。',
+        steps: [
+            '关闭并重新打开插件面板。',
+            '仍出现时刷新页面。',
+        ],
+    },
+    // ─── 宿主侧 API 配置（多为旧版本 / 其他脚本留下的历史报错） ───
+    {
+        id: 'tavern-profile',
+        test: /未选择酒馆连接预设|无法找到id为|没有配置api|没有选择预设|连接预设.*(不存在|无效|失败)|connection profile/,
+        summary: '所选的宿主「连接预设」不可用：被删除、改名，或里面没有配置 API。',
+        steps: [
+            '打开宿主的「API 连接」→「连接配置」，确认该预设存在且已经绑定 API 与预设。',
+            '回到本插件「API」页重新选择一次连接预设并保存。',
+            '也可以改用「自定义 API」，直接填写地址、密钥和模型。',
+        ],
+    },
+    {
+        id: 'tavern-helper-missing',
+        test: /tavernhelper\.generateraw|未检测到酒馆助手|主api生成不可用|connectionmanagerrequestservice 不可用|请检查酒馆版本|js-slash-runner/,
+        summary: '可选增强层「酒馆助手（TavernHelper）」缺失，依赖宿主主 API 的功能会降级。',
+        steps: [
+            '本插件运行时零依赖酒馆助手：绝大多数功能不受影响，可先忽略这条。',
+            '确实需要该能力时，在 TauriTavern 的扩展面板里安装并启用「酒馆助手（JS-Slash-Runner）」，并把宿主更新到较新版本。',
+            '到「API」页改用「自定义 API」渠道，不依赖宿主主 API。',
+        ],
+    },
+    {
+        id: 'api-config-incomplete',
+        test: /url或模型未配置|缺少 ?embedding ?endpoint|缺少 ?embedding ?model|rerank endpoint 为空|rerank model 为空|api.*(未配置|未填写)|endpoint.*(为空|missing)|未配置api/,
+        summary: 'API 配置不完整：接口地址、密钥或模型名有一项没填。',
+        steps: [
+            '到「API」页补全该预设的接口地址、API Key 和模型名，然后保存预设。',
+            '向量相关报错请到「交火模式」页检查 Embedding / Rerank 的地址与模型。',
+            '确认对应功能（填表 / 剧情推进 / 续写）选择的是这个已补全的预设。',
+        ],
+    },
+    // ─── HTTP 状态码 ───
+    {
+        id: 'http-401',
+        test: /\b401\b|unauthorized|invalid[ _-]?api[ _-]?key|incorrect api key|invalid x-api-key|authentication[ _-]?error|invalid_api_key|no auth credentials|令牌无效|密钥无效|api key 无效/,
+        summary: 'API 拒绝了请求：密钥无效、填错或已过期（401）。',
+        steps: [
+            '到「API」页打开当前使用的预设，检查 API Key 是否完整、有没有多余空格。',
+            '确认这个 Key 对应的服务商与接口地址一致（比如 OpenAI 的 Key 不能填到 Claude 地址）。',
+            '如果是中转站，登录站点确认 Key 仍然有效、余额充足。',
+        ],
+    },
+    {
+        id: 'http-403',
+        test: /\b403\b|forbidden|permission[ _-]?denied|not allowed to|access denied|无权访问|权限不足/,
+        summary: '服务商拒绝访问（403）：Key 没有权限，或请求来源被限制。',
+        steps: [
+            '确认该 Key 有权使用所选模型（部分模型需要单独开通）。',
+            '一些服务商会拒绝来自网页端的直连请求：改用允许客户端直连的服务商，或在本地挂一层反向代理转发该地址。',
+            '如果是中转站，联系站方确认账号是否被限制。',
+        ],
+    },
+    {
+        id: 'http-404',
+        test: /\b404\b|not[ _]found.*(model|endpoint|route)|model.*(not found|does not exist|not exist)|no such model|unknown model|invalid model|模型不存在|找不到模型/,
+        summary: '接口地址或模型名不存在（404）。',
+        steps: [
+            '到「API」页检查接口地址是否完整，不同服务商对结尾是否带 /v1 要求不同，按服务商文档填写。',
+            '点击「拉取模型列表」重新选择模型，避免手写模型名拼错。',
+            '确认服务商仍然提供该模型，旧模型可能已下线。',
+        ],
+    },
+    {
+        id: 'http-429',
+        test: /\b429\b|rate[ _-]?limit|too many requests|quota|insufficient (balance|funds)|exceeded your current|resource[ _-]?exhausted|请求过于频繁|限流|额度不足|余额不足|欠费|配额/,
+        summary: '请求过于频繁被限流，或账户额度 / 余额已用完（429）。',
+        steps: [
+            '先等 1–2 分钟再重试；短时间内连续重试只会让限流更久。',
+            '登录服务商后台确认余额与额度是否充足。',
+            '在对应功能的设置里调大「重试延迟」/「轮次延迟」，或调小并发数、批处理大小。',
+            '智能续写会连续发起大量请求，请使用支持高 RPM 的 API，不要用公益站。',
+        ],
+    },
+    {
+        id: 'http-5xx',
+        test: /\b(500|502|503|504|529)\b|bad gateway|service unavailable|gateway time-?out|internal server error|overloaded|server error|服务器错误|服务不可用|上游.*(错误|超时)/,
+        summary: '服务商服务器出错或过载（5xx），不是本地配置问题。',
+        steps: [
+            RETRY_LATER,
+            '持续出现时换一个模型或换一条 API 渠道。',
+            '如果用的是中转站，查看站方公告确认是否在维护。',
+        ],
+    },
+    {
+        id: 'context-length',
+        test: /context[ _-]?length|maximum context|context window|too many tokens|tokens? (exceed|limit|too long)|prompt is too long|input is too long|max_tokens.*(exceed|invalid)|超出.*(上下文|长度)|上下文.*(超限|过长)|token.*超/,
+        summary: '发送给模型的内容太长，超出了模型的上下文上限。',
+        steps: [
+            '填表：到「填表规则」把「批处理大小」/「上下文楼层数」调小一些。',
+            '智能续写：调小「正文可读窗口楼数」「会话自动总结阈值」与各项读取预算。',
+            '换用上下文更大的模型，或精简过长的自定义提示词与世界书条目。',
+        ],
+    },
+    {
+        id: 'http-400',
+        test: /\b400\b|bad request|invalid_request_error|unsupported parameter|invalid parameter|unrecognized request argument|unknown parameter|参数错误|请求参数无效/,
+        summary: '服务商认为请求内容有问题（400）：通常是模型名或某个参数不被支持。',
+        steps: [
+            '到「API」页确认模型名拼写正确，最好通过「拉取模型列表」选择。',
+            '如果调整过 temperature / top_p 等高级参数或开启了「严格 JSON」，先恢复默认再试。',
+            '换一个模型试试：部分模型不支持 system 角色或某些字段。',
+        ],
+    },
+    // ─── 网络 ───
+    {
+        id: 'network-cors',
+        test: /\bcors\b|cross-origin|access-control-allow-origin|preflight/,
+        summary: '浏览器跨域被拦截（CORS）：该服务商不允许网页直接调用。',
+        steps: [
+            '该接口不允许跨域直连：换一条支持浏览器 / 客户端直连的服务商地址，或在本地挂一层反向代理为其补上 CORS 头。',
+            '或者使用支持浏览器直连的中转服务。',
+        ],
+    },
+    {
+        id: 'network',
+        test: /failed to fetch|networkerror|network error|net::err|econnrefused|econnreset|enotfound|etimedout|getaddrinfo|socket hang up|fetch failed|timed? ?out|timeout|无法连接|连接被拒绝|网络错误|请求超时|超时/,
+        summary: '网络连不上目标服务，或者等待响应超时。',
+        steps: [
+            '检查本机网络、代理 / VPN 是否正常；把接口地址复制到浏览器地址栏，确认能打开。',
+            '超时多半是模型响应太慢：稍后重试，或换用响应更快的模型。',
+            'TauriTavern 跑在本机，报错时确认这台机器本身能访问该 API 地址（代理 / VPN / 防火墙都要看）。',
+        ],
+    },
+    // ─── 内容审查 ───
+    {
+        id: 'content-filter',
+        test: /content[ _-]?filter|content_policy|safety (setting|filter|system)|blocked by|flagged|prohibited_content|recitation|内容审查|违规内容|敏感内容|安全策略/,
+        summary: '内容被服务商的安全审查拦截，模型拒绝或截断了输出。',
+        steps: [
+            '换用审查宽松的模型或渠道，官方渠道对成人 / 暴力内容通常很严格。',
+            '调整提示词或世界书里触发审查的表述。',
+            '如果是填表被拦截，可先手动填表跳过这一层。',
+        ],
+    },
+    // ─── 模板变量 / 表达式 ───
+    {
+        id: 'template-vars',
+        test: /\[条件模板\]|\[db\.(expr|rand|calc|max|min)\]|\[orm\]|模板变量|evaluatecondexpression|表达式执行失败|随机数生成失败/,
+        summary: '世界书 / 提示词里的模板变量表达式（{{db.xxx}} 或条件模板）解析失败。',
+        steps: [
+            '打开对应的世界书条目或提示词，检查日志里给出的表达式写法：括号、引号是否配对，表名列名是否正确。',
+            '对照插件自带的语法参考（syntax-reference）核对函数名与参数。',
+            '先把表达式替换成一个最简单的例子确认能跑通，再逐步加复杂度。',
+        ],
+    },
+    // ─── 表格结构 ───
+    {
+        id: 'column-not-found',
+        test: /column .* not found|no such column|column mapping is unavailable|absent from canonical headers|cannot find .* column|column index .* out of bounds|找不到.*列|列.*不存在|列名.*无效/,
+        summary: '找不到指定的列：列名与当前表头不一致。',
+        steps: [
+            '到「高级工具」→ SQL 控制台点「查看表结构」，核对准确的列名。',
+            '提示词或模板中的列名要与表格表头完全一致（包含空格、括号）。',
+            '如果刚改过模板，打开表格编辑器重新保存一次，让结构同步到数据库。',
+        ],
+    },
+    {
+        id: 'table-not-found',
+        test: /table "[^"]*" not found|no such table|has no content|表格?\s*[「"“]?[^\s」"”]{0,40}[」"”]?\s*(不存在|未找到)|找不到表|表不存在/,
+        summary: '找不到指定的表格（或表格是空的）。',
+        steps: [
+            '检查表名是否拼写正确；中文表名和英文表名不能混用。',
+            '确认当前聊天已经加载了表格模板（在「填表规则」页能看到表格列表）。',
+            '到「高级工具」→ SQL 控制台点「查看所有表」，用列出的表名重试。',
+        ],
+    },
+    {
+        id: 'row-out-of-bounds',
+        test: /row index .* out of bounds|row_id not found|cannot (modify|delete) header row|行号.*越界|行.*不存在|找不到.*行/,
+        summary: '行号越界，或找不到对应的行。',
+        steps: [
+            '行号从 1 开始计数，0 是表头不能修改或删除。',
+            '打开表格编辑器确认目标行确实存在。',
+            '如果是 AI 生成的编辑指令，多为模型幻觉，重试即可。',
+        ],
+    },
+    // ─── SQLite ───
+    {
+        id: 'sqlite-init',
+        test: /sql\.js|wasm|sqlite.*(初始化|init|加载|load).*(失败|fail|异常)|sqlite runtime unavailable|fallback 到原生|回退.*原生|sqlite mode expected|exported no table data|sqlite provider|sqlite 不可用/,
+        summary: 'SQLite 引擎加载失败，已自动回退到原生（JSON）存储模式。',
+        steps: [
+            '重启 TauriTavern 后重试。',
+            '检查网络代理 / 安全软件是否拦截了 .wasm 文件的加载。',
+            '重新安装本插件以确保文件完整。回退期间表格仍可用，只是 SQL 相关功能受限。',
+        ],
+    },
+    {
+        id: 'sql-constraint',
+        test: /unique constraint|constraint failed|not null constraint|foreign key constraint|datatype mismatch|主键冲突|唯一约束/,
+        summary: 'SQL 写入违反了表约束（重复主键 / 空值 / 类型不匹配）。',
+        steps: [
+            '插入的行与已有行 row_id 重复：改用 UPDATE，或让系统自动分配 row_id。',
+            '如果是 AI 生成的语句，重试一次让模型重新生成。',
+            '手写 SQL 时确认列类型与填入值一致。',
+        ],
+    },
+    {
+        id: 'sql-syntax',
+        test: /syntax error|near "|sql.*(执行失败|failed|error)|sqlite_error|execute failed|批量执行失败|快照 sql/,
+        summary: 'SQL 语句执行失败：语法有误，或引用了不存在的表 / 列。',
+        steps: [
+            '如果是你在 SQL 控制台手写的语句，检查拼写、引号是否配对、语句末尾的分号。',
+            '如果是 AI 生成的语句，多为模型输出错误，重试即可。',
+            '用「查看所有表」「查看表结构」核对表名与列名。',
+        ],
+    },
+    // ─── 表格数据状态 ───
+    {
+        id: 'table-data-not-loaded',
+        test: /tabledata is not loaded|currentjsontabledata_acu is (null|not (loaded|available))|chat history is empty|表格数据.*(未加载|不可用)|聊天记录为空|获取聊天记录失败|save aborted/,
+        summary: '表格数据尚未加载，或当前聊天里还没有消息。',
+        steps: [
+            '确认当前聊天里至少有一条 AI 回复；全新的聊天需要先发一条消息。',
+            '切换一次聊天或刷新页面，让表格重新加载。',
+            '如果反复出现，到「数据管理」页检查当前聊天的表格状态。',
+        ],
+    },
+    {
+        id: 'table-persist-model',
+        test: /table persistence requires|direct unsafe writes/,
+        summary: '有脚本尝试绕过安全写入通道直接改表，被插件拒绝。',
+        steps: [
+            '这通常来自第三方脚本或旧版角色卡脚本；本插件数据未受影响。',
+            '请脚本作者改用本插件公开的表格 API（updateCell / updateRow / executeSql 等）。',
+        ],
+    },
+    // ─── 设置持久化 ───
+    {
+        id: 'settings-persist',
+        test: /failed to (save|persist|load).*settings|settings.*(save|load|persist).*fail|保存.*(设置|预设|配置|阈值|次数|频率|大小|并发|楼层|保留数).*失败|设置.*(保存|读取).*失败|failed to load or parse settings/,
+        summary: '设置保存或读取失败。',
+        steps: [
+            '刷新页面后重新修改并保存一次。',
+            '如果读取失败已回落到默认值，到「数据管理」页用之前导出的配置恢复。',
+            '检查本机磁盘与宿主本地存储是否已满。',
+        ],
+    },
+    // ─── JSON / 解析 ───
+    {
+        id: 'json-import',
+        // 第二组限定「文件导入」语境：TemplateAssistant 这类 AI 草稿解析失败不算导入问题。
+        test: haystack => /json|parse|解析|unexpected token|unexpected end/.test(haystack)
+            && /导入|import|\[模板|模板文件|template (file|json)|预设|preset|主题|theme|合并配置/.test(haystack),
+        summary: '导入的文件不是合法 JSON，或结构与本插件要求的不一致。',
+        steps: [
+            '确认导入的是本插件「导出」功能生成的 JSON 文件，而不是别的插件或手改过的文件。',
+            '用记事本打开文件，检查是否被截断、开头结尾的大括号是否完整。',
+            '如果是从聊天 / 网页复制的内容，先粘贴到编辑器里检查再另存为 .json。',
+        ],
+    },
+    {
+        id: 'json-ai-output',
+        test: /json.*(解析|parse|sanitiz)|parse.*json|unexpected token|unexpected end of json|is not valid json|sanitization|loose row object|failed to parse (command|or apply)|解析\/应用失败|解析失败|解析出错|解析异常/,
+        summary: 'AI 输出的 JSON / 指令格式不正确，插件解析不了。',
+        steps: [
+            '这通常是模型偶发抖动，直接重试一次。',
+            '频繁出现时换用指令遵循更好的模型（更大参数、或官方渠道）。',
+            '填表可到「填表规则」开启「严格 JSON」或降低 temperature；检查自定义提示词是否要求了额外的输出格式。',
+        ],
+    },
+    {
+        id: 'empty-response',
+        test: /未返回预期的文本响应|返回无效响应|unknown response format|failed to parse response|empty response|响应为空|返回为空|空响应|返回内容为空|已返回 null/,
+        summary: 'AI 返回了空内容或无法识别的格式。',
+        steps: [
+            RETRY_LATER,
+            '可能触发了服务商的内容审查（部分模型被拦截时会静默返回空），换个模型或调整内容再试。',
+            '如果开启了流式输出，到「API」页关闭该预设的流式后再试。',
+        ],
+    },
+    // ─── 向量 / 存储 / 检查点 ───
+    {
+        id: 'vector',
+        test: /embedding|rerank|向量|vector/,
+        summary: '交火模式（向量索引）相关操作失败。',
+        steps: [
+            '到「交火模式」页检查 Embedding / Rerank 的接口地址、密钥和模型名，确认服务商支持该接口。',
+            SEE_PREVIOUS_LOG,
+            '可先暂时关闭交火模式，不影响填表等基础功能。',
+        ],
+    },
+    {
+        id: 'storage-mode-switch',
+        test: /存储模式.*(切换|回滚)|storage mode (switch|rollback)/,
+        summary: '存储模式切换失败，已尝试回滚到切换前的状态。',
+        steps: [
+            '确认当前没有正在进行的填表或续写任务，等它们结束后再切换。',
+            '刷新页面后再试一次。',
+            '切换前建议先到「数据管理」页导出一份数据备份。',
+        ],
+    },
+    {
+        id: 'checkpoint-replay',
+        test: /checkpoint|v2 replay|replay|snapshot hydrate|数据库重建|回放|增量更新流程失败|merge base|compaction|staging|provisional|临时根/,
+        summary: '表格历史回放 / 检查点处理失败，当前显示的数据可能不是最新。',
+        steps: [
+            '先刷新页面，或切出去再切回这个聊天，让插件重新加载。',
+            '到「数据管理」页导出一份数据备份，避免后续操作覆盖。',
+            '使用「数据管理」里的诊断 / 恢复工具修复；仍不行请导出日志反馈。',
+        ],
+    },
+    // ─── 世界书 ───
+    {
+        id: 'worldbook',
+        test: /world ?book|lorebook|世界书|worldbook/,
+        summary: '世界书读取或写入失败。',
+        steps: [
+            '确认当前角色已绑定世界书，且目标世界书没有被删除或重命名。',
+            '打开宿主自带的世界书面板，确认该世界书能正常打开。',
+            '如果刚改过绑定，到对应功能页重新选择一次目标世界书。',
+        ],
+    },
+    // ─── 外部脚本调用 ───
+    {
+        id: 'deprecated-api',
+        test: /已弃用|deprecated/,
+        summary: '有其他脚本调用了本插件已弃用的接口。',
+        steps: [
+            '不影响本插件正常运行，可以忽略。',
+            '如果是你自己写的脚本，按日志提示改用新接口；如果是角色卡或第三方扩展，联系其作者更新。',
+        ],
+    },
+    {
+        id: 'invalid-params',
+        test: /must be (an? )?(array|object|non-empty|integer)|is required\.?|invalid (params|input|rowindex|preset name|context settings)|received invalid input|参数无效|参数不合法/,
+        summary: '外部脚本调用本插件接口时传入的参数不合法。',
+        steps: [
+            '这类调用通常来自角色卡脚本或其他扩展，本插件数据不受影响。',
+            '如果是你写的脚本，按提示修正参数类型（例如 rowIndex 必须是从 1 开始的整数）。',
+            '否则联系脚本作者处理。',
+        ],
+    },
+    {
+        id: 'preset-not-found',
+        test: /preset .* not found|预设.*(不存在|未找到|找不到)|无法找到.*预设|找不到.*预设/,
+        summary: '找不到指定名称的预设。',
+        steps: [
+            '检查预设名是否拼写正确，注意大小写和空格。',
+            '到对应功能页（API / 填表规则 / 剧情推进）确认该预设仍然存在，可能已被删除或改名。',
+            '重新选择一次预设并保存。',
+        ],
+    },
+    {
+        id: 'callback',
+        test: /callback/,
+        summary: '第三方脚本注册到本插件的回调函数执行出错。',
+        steps: [
+            '错误来自其他脚本内部，不影响本插件的填表结果。',
+            '联系该脚本 / 角色卡作者排查。',
+        ],
+    },
+    // ─── 按功能模块兜底 ───
+    {
+        id: 'template',
+        test: /模板|template/,
+        summary: '表格模板处理失败。',
+        steps: [
+            '确认导入的是本插件导出的模板 JSON，且每张表都有表头行。',
+            '到「填表规则」页重新选择模板，或恢复默认模板后再导入自定义模板。',
+            SEE_PREVIOUS_LOG,
+        ],
+    },
+    {
+        id: 'content-optimization',
+        test: /正文优化|正文替换|content replace|reoptimize|重新优化/,
+        summary: '正文替换 / 重新优化执行失败。',
+        steps: [
+            SEE_PREVIOUS_LOG,
+            '到「正文替换」页确认规则与所选 API 预设是否正常。',
+            '可先临时关闭该功能验证问题是否消失。',
+        ],
+    },
+    {
+        id: 'plot',
+        test: /剧情推进|plot/,
+        summary: '剧情推进任务执行失败。',
+        steps: [
+            '到「剧情推进」页检查所选 API 预设与世界书配置。',
+            '如果刚编辑过任务提示词，检查占位符（$ 开头）是否拼写正确。',
+            SEE_PREVIOUS_LOG,
+        ],
+    },
+    {
+        id: 'import',
+        test: /外部导入|import|导入/,
+        summary: '外部导入流程失败。',
+        steps: [
+            '确认导入文件为 UTF-8 编码，且分块大小设置不要过大。',
+            '导入前确认已选择目标世界书。',
+            '到「外部导入」页先「清空导入缓存」再重试。',
+        ],
+    },
+    {
+        id: 'fill',
+        test: /manual (refill|update)|重填|填表|update process|\bbatch\b|merge|合并|fillfirstlayer|数据加载|triggerupdate|manualupdate/,
+        summary: '填表 / 数据合并流程失败。',
+        steps: [
+            SEE_PREVIOUS_LOG,
+            '到「填表规则」把批处理大小调小后重试。',
+            '可到「填表工作台」使用手动填表 / 重填。',
+        ],
+    },
+    {
+        id: 'continuation',
+        test: /continuation|续写|agent/,
+        summary: 'Agent / 智能续写相关操作出错。',
+        steps: [
+            '智能续写：查看「智能续写」页会话流里的错误提示，并展开「各 Agent 渠道」确认每个渠道的 API 预设仍然存在。',
+            '如果是超预算 / 超时，调大对应的预算或延迟；实在卡住可「一键清空」后重新开始任务。',
+            'Agent 世界书：到「Agent」页确认接管模式与目标世界书配置。',
+        ],
+    },
+    {
+        id: 'export',
+        test: /导出|export/,
+        summary: '导出失败。',
+        steps: [
+            '确认宿主的保存对话框没有被取消；文件通常落在系统默认的下载目录，先去那里看一眼。',
+            '刷新页面后重试；仍失败请导出日志反馈。',
+        ],
+    },
+    // ─── 通用兜底 ───
+    {
+        id: 'generic',
+        test: () => true,
+        summary: '插件内部操作失败。',
+        steps: [
+            '先重试一次；如果和 API 相关，稍等片刻再试。',
+            '刷新页面后再做一次同样的操作。',
+            EXPORT_LOGS,
+        ],
+    },
+];
+/**
+ * 为一条日志匹配处理建议。只对 error 级日志给建议；warn / debug 返回 null。
+ */
+function resolveLogErrorHint(entry) {
+    if (entry.level !== 'error')
+        return null;
+    const haystack = `${entry.tag} ${entry.message}`.toLowerCase();
+    for (const rule of RULES) {
+        const matched = typeof rule.test === 'function' ? rule.test(haystack) : rule.test.test(haystack);
+        if (matched)
+            return { id: rule.id, summary: rule.summary, steps: rule.steps };
+    }
+    return null;
+}
+/** 供测试与调试使用：规则 ID 列表（按匹配优先级排序）。 */
+const LOG_ERROR_HINT_RULE_IDS = RULES.map(rule => rule.id);
+
 /**
  * useLogViewer — 运行日志页业务流编排
  *
@@ -171118,7 +176654,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260901-11";
+        const stamp = "20260902-09";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -171127,7 +176663,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.0.6";
+        const v = "9.0.7";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {
@@ -171520,7 +177056,7 @@ const advancedToolsCopy = {
         },
         logs: {
             title: "运行日志",
-            description: "查看数据库运行日志。筛选仅影响显示和导出。未看到日志请开启采集后重试。",
+            description: "查看数据库运行日志。筛选仅影响显示和导出。未看到日志请开启采集后重试。每条报错下方都附有处理建议，点「怎么处理」可展开具体步骤。",
         },
         debug: {
             title: "Debug 问题上报",
@@ -171537,6 +177073,21 @@ var _sfc_main$c = /*@__PURE__*/ defineComponent({
         const logFlow = useLogViewer();
         const debugFlow = useDebugPanel();
         const logListRef = ref(null);
+        /** 日志条目不可变，按 id 缓存匹配结果，避免每次列表刷新都对全部条目重跑规则。 */
+        const hintCache = new Map();
+        function hintFor(entry) {
+            if (entry.level !== 'error')
+                return null;
+            let hint = hintCache.get(entry.id);
+            if (hint === undefined) {
+                hint = resolveLogErrorHint(entry);
+                // 缓冲区上限 50000 条，缓存略大于它即可；超出时整体清掉，避免长期运行后无限增长。
+                if (hintCache.size > 100000)
+                    hintCache.clear();
+                hintCache.set(entry.id, hint);
+            }
+            return hint;
+        }
         const panelNavItems = [
             { id: 'advanced-tools-sql-panel', label: advancedToolsCopy.nav.sql },
             { id: 'advanced-tools-log-panel', label: advancedToolsCopy.nav.logs },
@@ -171583,14 +177134,14 @@ var _sfc_main$c = /*@__PURE__*/ defineComponent({
         }
         onMounted(sqlFlow.refresh);
         watch(() => logFlow.visibleLogs.value.length, scrollLogListToTop, { flush: 'post' });
-        const __returned__ = { sqlFlow, logFlow, debugFlow, logListRef, panelNavItems, onSqlEditorKeydown, formatTime, formatSqlCell, logLevelVariant, setLogLevelFilter, scrollLogListToTop, AcuBadge, AcuButton, AcuFormRow, AcuInput, AcuMessage, AcuMobilePanelNav, AcuPanel, AcuPanelGrid, AcuSelect, AcuTextarea, AcuToggle, get advancedToolsCopy() { return advancedToolsCopy; } };
+        const __returned__ = { sqlFlow, logFlow, debugFlow, logListRef, hintCache, hintFor, panelNavItems, onSqlEditorKeydown, formatTime, formatSqlCell, logLevelVariant, setLogLevelFilter, scrollLogListToTop, AcuBadge, AcuButton, AcuFormRow, AcuInput, AcuMessage, AcuMobilePanelNav, AcuPanel, AcuPanelGrid, AcuSelect, AcuTextarea, AcuToggle, get advancedToolsCopy() { return advancedToolsCopy; } };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.acu-v2-advanced-tools-page[data-v-c2a4104e] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-advanced-tools-page__sql-panel[data-v-c2a4104e],\r\n.acu-v2-advanced-tools-page__log-panel[data-v-c2a4104e],\r\n.acu-v2-advanced-tools-page__debug-panel[data-v-c2a4104e] {\r\n  min-width: 0;\n}\n.acu-v2-advanced-tools-page__debug-actions[data-v-c2a4104e] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__quick-actions[data-v-c2a4104e],\r\n.acu-v2-advanced-tools-page__log-actions[data-v-c2a4104e] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-textarea[data-v-c2a4104e] {\r\n  font-family: var(--acu-font-mono);\r\n  min-height: 210px;\r\n  white-space: pre;\n}\n.acu-v2-advanced-tools-page__sql-actions[data-v-c2a4104e] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\r\n  justify-content: flex-end;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-advanced-tools-page__sql-status[data-v-c2a4104e] {\r\n  margin-left: auto;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.5;\n}\n.acu-v2-advanced-tools-page__sql-status--success[data-v-c2a4104e] {\r\n  color: var(--acu-success);\n}\n.acu-v2-advanced-tools-page__sql-status--warning[data-v-c2a4104e] {\r\n  color: var(--acu-warning);\n}\n.acu-v2-advanced-tools-page__sql-status--error[data-v-c2a4104e] {\r\n  color: var(--acu-danger);\n}\n.acu-v2-advanced-tools-page__sql-result-section[data-v-c2a4104e],\r\n.acu-v2-advanced-tools-page__sql-history-section[data-v-c2a4104e] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-v2-advanced-tools-page__sql-history-section[data-v-c2a4104e] {\r\n  padding-top: 12px;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n}\n.acu-v2-advanced-tools-page__section-title[data-v-c2a4104e] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 600;\r\n  line-height: 1.35;\n}\n.acu-v2-advanced-tools-page__empty[data-v-c2a4104e] {\r\n  min-height: 96px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: center;\r\n  border: 0;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__empty--compact[data-v-c2a4104e] {\r\n  min-height: 72px;\n}\n.acu-v2-advanced-tools-page__empty--log[data-v-c2a4104e] {\r\n  min-height: 180px;\r\n  border: 0;\n}\n.acu-v2-advanced-tools-page__sql-table-wrap[data-v-c2a4104e] {\r\n  max-height: 330px;\r\n  overflow: auto;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-result-table[data-v-c2a4104e] {\r\n  width: 100%;\r\n  border-collapse: collapse;\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-advanced-tools-page__sql-result-table th[data-v-c2a4104e],\r\n.acu-v2-advanced-tools-page__sql-result-table td[data-v-c2a4104e] {\r\n  max-width: 300px;\r\n  padding: 7px 10px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  text-align: left;\r\n  white-space: nowrap;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\n}\n.acu-v2-advanced-tools-page__sql-result-table th[data-v-c2a4104e] {\r\n  position: sticky;\r\n  top: 0;\r\n  z-index: 1;\r\n  background: var(--acu-bg-1);\r\n  color: var(--acu-text-1);\r\n  font-weight: 600;\n}\n.acu-v2-advanced-tools-page__sql-result-table tbody tr[data-v-c2a4104e]:nth-child(even) {\r\n  background: color-mix(in srgb, var(--acu-text-3) 5%, transparent);\n}\n.acu-v2-advanced-tools-page__cell-null[data-v-c2a4104e],\r\n.acu-v2-advanced-tools-page__empty-cell[data-v-c2a4104e] {\r\n  color: var(--acu-text-3);\r\n  font-style: italic;\n}\n.acu-v2-advanced-tools-page__sql-result-meta[data-v-c2a4104e] {\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: right;\n}\n.acu-v2-advanced-tools-page__sql-error[data-v-c2a4104e] {\r\n  margin: 0;\r\n  min-height: 96px;\r\n  padding: 12px;\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-danger) 8%, transparent);\r\n  color: var(--acu-danger);\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__filter-grid[data-v-c2a4104e] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 12px;\r\n  align-items: stretch;\n}\n.acu-v2-advanced-tools-page__keyword-row[data-v-c2a4104e] {\r\n  grid-column: 1 / -1;\n}\n.acu-v2-advanced-tools-page__log-control-row[data-v-c2a4104e] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  min-width: 0;\n}\n.acu-v2-advanced-tools-page__log-control-main[data-v-c2a4104e] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 10px 14px;\r\n  align-items: center;\r\n  justify-content: space-between;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-c2a4104e] {\r\n  width: max-content;\r\n  max-width: 100%;\r\n  display: grid;\r\n  grid-template-columns: max-content max-content;\r\n  gap: 10px 18px;\r\n  align-items: center;\r\n  justify-content: flex-start;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-c2a4104e] .acu-toggle {\r\n  width: max-content;\r\n  max-width: none;\r\n  min-width: max-content;\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-c2a4104e] .acu-toggle__label {\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__hint[data-v-c2a4104e] {\r\n  max-width: 100%;\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\r\n  overflow-wrap: anywhere;\n}\n.acu-v2-advanced-tools-page__sql-history-list[data-v-c2a4104e],\r\n.acu-v2-advanced-tools-page__log-list[data-v-c2a4104e] {\r\n  overflow: auto;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-list[data-v-c2a4104e] {\r\n  max-height: 230px;\n}\n.acu-v2-advanced-tools-page__log-list[data-v-c2a4104e] {\r\n  min-height: 360px;\r\n  max-height: 58vh;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-c2a4104e],\r\n.acu-v2-advanced-tools-page__log-row[data-v-c2a4104e] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 8px;\r\n  align-items: baseline;\r\n  padding: 7px 10px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-c2a4104e] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: stretch;\r\n  gap: 6px;\r\n  padding-block: 9px;\r\n  border: 0;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  background: transparent;\r\n  color: inherit;\r\n  cursor: pointer;\r\n  font: inherit;\r\n  text-align: left;\r\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-advanced-tools-page__log-row[data-v-c2a4104e] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: stretch;\r\n  gap: 6px;\r\n  padding-block: 9px;\n}\n.acu-v2-advanced-tools-page__log-meta[data-v-c2a4104e] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 6px 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-history-meta[data-v-c2a4104e] {\r\n  flex-wrap: nowrap;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-c2a4104e]:last-child,\r\n.acu-v2-advanced-tools-page__log-row[data-v-c2a4104e]:last-child {\r\n  border-bottom: 0;\n}\n.acu-v2-advanced-tools-page__sql-history-item--failure[data-v-c2a4104e],\r\n.acu-v2-advanced-tools-page__log-row--error[data-v-c2a4104e] {\r\n  background: color-mix(in srgb, var(--acu-danger) 7%, transparent);\n}\n.acu-v2-advanced-tools-page__log-row--warn[data-v-c2a4104e] {\r\n  background: color-mix(in srgb, var(--acu-warning) 6%, transparent);\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-c2a4104e]:hover {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-c2a4104e]:focus-visible {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\r\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\r\n  outline: none;\n}\n.acu-v2-advanced-tools-page__log-time[data-v-c2a4104e],\r\n.acu-v2-advanced-tools-page__log-tag[data-v-c2a4104e],\r\n.acu-v2-advanced-tools-page__log-message[data-v-c2a4104e] {\r\n  min-width: 0;\r\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-advanced-tools-page__log-time[data-v-c2a4104e] {\r\n  color: var(--acu-text-3);\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__log-tag[data-v-c2a4104e] {\r\n  flex: 1 1 180px;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  color: var(--acu-text-2);\n}\n.acu-v2-advanced-tools-page__log-message[data-v-c2a4104e] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__log-body[data-v-c2a4104e] {\r\n  display: block;\r\n  width: 100%;\n}\n@media (max-width: 1080px) {\n.acu-v2-advanced-tools-page[data-v-c2a4104e] {\r\n    padding: 14px;\n}\n.acu-v2-advanced-tools-page__sql-actions[data-v-c2a4104e] {\r\n    justify-content: stretch;\n}\n.acu-v2-advanced-tools-page__sql-status[data-v-c2a4104e] {\r\n    width: 100%;\r\n    margin-left: 0;\r\n    text-align: right;\n}\n.acu-v2-advanced-tools-page__filter-grid[data-v-c2a4104e] {\r\n    grid-template-columns: 1fr;\n}\n.acu-v2-advanced-tools-page__log-control-main[data-v-c2a4104e] {\r\n    align-items: stretch;\r\n    flex-direction: column;\r\n    justify-content: flex-start;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-c2a4104e] {\r\n    align-self: flex-start;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-c2a4104e],\r\n  .acu-v2-advanced-tools-page__log-row[data-v-c2a4104e] {\r\n    padding-inline: 9px;\n}\n}\r\n", "src/presentation-v2/pages/AdvancedToolsPage.vue#style-0-c2a4104e");
-var AdvancedToolsPage_vue_vue_type_style_index_0_scoped_c2a4104e_lang = null;
+injectSfcStyle("\n.acu-v2-advanced-tools-page[data-v-2f070065] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-advanced-tools-page__sql-panel[data-v-2f070065],\r\n.acu-v2-advanced-tools-page__log-panel[data-v-2f070065],\r\n.acu-v2-advanced-tools-page__debug-panel[data-v-2f070065] {\r\n  min-width: 0;\n}\n.acu-v2-advanced-tools-page__debug-actions[data-v-2f070065] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__quick-actions[data-v-2f070065],\r\n.acu-v2-advanced-tools-page__log-actions[data-v-2f070065] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-textarea[data-v-2f070065] {\r\n  font-family: var(--acu-font-mono);\r\n  min-height: 210px;\r\n  white-space: pre;\n}\n.acu-v2-advanced-tools-page__sql-actions[data-v-2f070065] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\r\n  justify-content: flex-end;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-advanced-tools-page__sql-status[data-v-2f070065] {\r\n  margin-left: auto;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.5;\n}\n.acu-v2-advanced-tools-page__sql-status--success[data-v-2f070065] {\r\n  color: var(--acu-success);\n}\n.acu-v2-advanced-tools-page__sql-status--warning[data-v-2f070065] {\r\n  color: var(--acu-warning);\n}\n.acu-v2-advanced-tools-page__sql-status--error[data-v-2f070065] {\r\n  color: var(--acu-danger);\n}\n.acu-v2-advanced-tools-page__sql-result-section[data-v-2f070065],\r\n.acu-v2-advanced-tools-page__sql-history-section[data-v-2f070065] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-v2-advanced-tools-page__sql-history-section[data-v-2f070065] {\r\n  padding-top: 12px;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n}\n.acu-v2-advanced-tools-page__section-title[data-v-2f070065] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 600;\r\n  line-height: 1.35;\n}\n.acu-v2-advanced-tools-page__empty[data-v-2f070065] {\r\n  min-height: 96px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: center;\r\n  border: 0;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__empty--compact[data-v-2f070065] {\r\n  min-height: 72px;\n}\n.acu-v2-advanced-tools-page__empty--log[data-v-2f070065] {\r\n  min-height: 180px;\r\n  border: 0;\n}\n.acu-v2-advanced-tools-page__sql-table-wrap[data-v-2f070065] {\r\n  max-height: 330px;\r\n  overflow: auto;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-result-table[data-v-2f070065] {\r\n  width: 100%;\r\n  border-collapse: collapse;\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-advanced-tools-page__sql-result-table th[data-v-2f070065],\r\n.acu-v2-advanced-tools-page__sql-result-table td[data-v-2f070065] {\r\n  max-width: 300px;\r\n  padding: 7px 10px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  text-align: left;\r\n  white-space: nowrap;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\n}\n.acu-v2-advanced-tools-page__sql-result-table th[data-v-2f070065] {\r\n  position: sticky;\r\n  top: 0;\r\n  z-index: 1;\r\n  background: var(--acu-bg-1);\r\n  color: var(--acu-text-1);\r\n  font-weight: 600;\n}\n.acu-v2-advanced-tools-page__sql-result-table tbody tr[data-v-2f070065]:nth-child(even) {\r\n  background: color-mix(in srgb, var(--acu-text-3) 5%, transparent);\n}\n.acu-v2-advanced-tools-page__cell-null[data-v-2f070065],\r\n.acu-v2-advanced-tools-page__empty-cell[data-v-2f070065] {\r\n  color: var(--acu-text-3);\r\n  font-style: italic;\n}\n.acu-v2-advanced-tools-page__sql-result-meta[data-v-2f070065] {\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: right;\n}\n.acu-v2-advanced-tools-page__sql-error[data-v-2f070065] {\r\n  margin: 0;\r\n  min-height: 96px;\r\n  padding: 12px;\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-danger) 8%, transparent);\r\n  color: var(--acu-danger);\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__filter-grid[data-v-2f070065] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 12px;\r\n  align-items: stretch;\n}\n.acu-v2-advanced-tools-page__keyword-row[data-v-2f070065] {\r\n  grid-column: 1 / -1;\n}\n.acu-v2-advanced-tools-page__log-control-row[data-v-2f070065] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  min-width: 0;\n}\n.acu-v2-advanced-tools-page__log-control-main[data-v-2f070065] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 10px 14px;\r\n  align-items: center;\r\n  justify-content: space-between;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-2f070065] {\r\n  width: max-content;\r\n  max-width: 100%;\r\n  display: grid;\r\n  grid-template-columns: max-content max-content;\r\n  gap: 10px 18px;\r\n  align-items: center;\r\n  justify-content: flex-start;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-2f070065] .acu-toggle {\r\n  width: max-content;\r\n  max-width: none;\r\n  min-width: max-content;\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-2f070065] .acu-toggle__label {\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__hint[data-v-2f070065] {\r\n  max-width: 100%;\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\r\n  overflow-wrap: anywhere;\n}\n.acu-v2-advanced-tools-page__sql-history-list[data-v-2f070065],\r\n.acu-v2-advanced-tools-page__log-list[data-v-2f070065] {\r\n  overflow: auto;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-list[data-v-2f070065] {\r\n  max-height: 230px;\n}\n.acu-v2-advanced-tools-page__log-list[data-v-2f070065] {\r\n  min-height: 360px;\r\n  max-height: 58vh;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-2f070065],\r\n.acu-v2-advanced-tools-page__log-row[data-v-2f070065] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 8px;\r\n  align-items: baseline;\r\n  padding: 7px 10px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-2f070065] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: stretch;\r\n  gap: 6px;\r\n  padding-block: 9px;\r\n  border: 0;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  background: transparent;\r\n  color: inherit;\r\n  cursor: pointer;\r\n  font: inherit;\r\n  text-align: left;\r\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-advanced-tools-page__log-row[data-v-2f070065] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: stretch;\r\n  gap: 6px;\r\n  padding-block: 9px;\n}\n.acu-v2-advanced-tools-page__log-meta[data-v-2f070065] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 6px 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-history-meta[data-v-2f070065] {\r\n  flex-wrap: nowrap;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-2f070065]:last-child,\r\n.acu-v2-advanced-tools-page__log-row[data-v-2f070065]:last-child {\r\n  border-bottom: 0;\n}\n.acu-v2-advanced-tools-page__sql-history-item--failure[data-v-2f070065],\r\n.acu-v2-advanced-tools-page__log-row--error[data-v-2f070065] {\r\n  background: color-mix(in srgb, var(--acu-danger) 7%, transparent);\n}\n.acu-v2-advanced-tools-page__log-row--warn[data-v-2f070065] {\r\n  background: color-mix(in srgb, var(--acu-warning) 6%, transparent);\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-2f070065]:hover {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-2f070065]:focus-visible {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\r\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\r\n  outline: none;\n}\n.acu-v2-advanced-tools-page__log-time[data-v-2f070065],\r\n.acu-v2-advanced-tools-page__log-tag[data-v-2f070065],\r\n.acu-v2-advanced-tools-page__log-message[data-v-2f070065] {\r\n  min-width: 0;\r\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-advanced-tools-page__log-time[data-v-2f070065] {\r\n  color: var(--acu-text-3);\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__log-tag[data-v-2f070065] {\r\n  flex: 1 1 180px;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  color: var(--acu-text-2);\n}\n.acu-v2-advanced-tools-page__log-message[data-v-2f070065] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__log-body[data-v-2f070065] {\r\n  display: block;\r\n  width: 100%;\n}\n.acu-v2-advanced-tools-page__log-hint[data-v-2f070065] {\r\n  min-width: 0;\r\n  margin-top: 2px;\r\n  border-left: 2px solid color-mix(in srgb, var(--acu-warning) 70%, transparent);\r\n  border-radius: 0 var(--acu-radius-sm) var(--acu-radius-sm) 0;\r\n  background: color-mix(in srgb, var(--acu-warning) 6%, var(--acu-bg-1));\r\n  font-family: var(--acu-font-sans, inherit);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__log-hint-summary[data-v-2f070065] {\r\n  display: flex;\r\n  align-items: baseline;\r\n  gap: 6px;\r\n  padding: 6px 10px;\r\n  color: var(--acu-text-2);\r\n  cursor: pointer;\r\n  list-style: none;\r\n  user-select: none;\n}\n.acu-v2-advanced-tools-page__log-hint-summary[data-v-2f070065]::-webkit-details-marker {\r\n  display: none;\n}\n.acu-v2-advanced-tools-page__log-hint-summary[data-v-2f070065]:hover {\r\n  background: var(--acu-hover-overlay);\n}\n.acu-v2-advanced-tools-page__log-hint-summary[data-v-2f070065]:focus-visible {\r\n  outline: none;\r\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-v2-advanced-tools-page__log-hint-icon[data-v-2f070065] {\r\n  flex: 0 0 auto;\r\n  color: var(--acu-warning);\r\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-advanced-tools-page__log-hint-text[data-v-2f070065] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  overflow-wrap: anywhere;\n}\n.acu-v2-advanced-tools-page__log-hint-toggle[data-v-2f070065] {\r\n  flex: 0 0 auto;\r\n  color: var(--acu-accent);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__log-hint-toggle[data-v-2f070065]::after {\r\n  content: ' ▾';\n}\n.acu-v2-advanced-tools-page__log-hint[open] .acu-v2-advanced-tools-page__log-hint-toggle[data-v-2f070065]::after {\r\n  content: ' ▴';\n}\n.acu-v2-advanced-tools-page__log-hint-steps[data-v-2f070065] {\r\n  margin: 0;\r\n  padding: 2px 10px 8px 30px;\r\n  color: var(--acu-text-2);\n}\n.acu-v2-advanced-tools-page__log-hint-steps li[data-v-2f070065] {\r\n  margin: 2px 0;\r\n  overflow-wrap: anywhere;\n}\n@media (max-width: 1080px) {\n.acu-v2-advanced-tools-page[data-v-2f070065] {\r\n    padding: 14px;\n}\n.acu-v2-advanced-tools-page__sql-actions[data-v-2f070065] {\r\n    justify-content: stretch;\n}\n.acu-v2-advanced-tools-page__sql-status[data-v-2f070065] {\r\n    width: 100%;\r\n    margin-left: 0;\r\n    text-align: right;\n}\n.acu-v2-advanced-tools-page__filter-grid[data-v-2f070065] {\r\n    grid-template-columns: 1fr;\n}\n.acu-v2-advanced-tools-page__log-control-main[data-v-2f070065] {\r\n    align-items: stretch;\r\n    flex-direction: column;\r\n    justify-content: flex-start;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-2f070065] {\r\n    align-self: flex-start;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-2f070065],\r\n  .acu-v2-advanced-tools-page__log-row[data-v-2f070065] {\r\n    padding-inline: 9px;\n}\n}\r\n", "src/presentation-v2/pages/AdvancedToolsPage.vue#style-0-2f070065");
+var AdvancedToolsPage_vue_vue_type_style_index_0_scoped_2f070065_lang = null;
 
 const _hoisted_1$c = { class: "acu-v2-advanced-tools-page" };
 const _hoisted_2$b = {
@@ -171650,7 +177201,11 @@ const _hoisted_26$1 = { class: "acu-v2-advanced-tools-page__log-meta" };
 const _hoisted_27$1 = { class: "acu-v2-advanced-tools-page__log-time" };
 const _hoisted_28 = { class: "acu-v2-advanced-tools-page__log-tag" };
 const _hoisted_29 = { class: "acu-v2-advanced-tools-page__log-message acu-v2-advanced-tools-page__log-body" };
-const _hoisted_30 = { class: "acu-v2-advanced-tools-page__debug-actions" };
+const _hoisted_30 = ["data-hint-id"];
+const _hoisted_31 = { class: "acu-v2-advanced-tools-page__log-hint-summary" };
+const _hoisted_32 = { class: "acu-v2-advanced-tools-page__log-hint-text" };
+const _hoisted_33 = { class: "acu-v2-advanced-tools-page__log-hint-steps" };
+const _hoisted_34 = { class: "acu-v2-advanced-tools-page__debug-actions" };
 function _sfc_render$c(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("section", _hoisted_1$c, [createVNode($setup["AcuMobilePanelNav"], { items: $setup.panelNavItems }), createVNode($setup["AcuPanelGrid"], {
 		class: "acu-v2-advanced-tools-page__tools-grid",
@@ -172019,36 +177574,83 @@ function _sfc_render$c(_ctx, _cache, $props, $setup, $data, $options) {
 										key: entry.id,
 										class: normalizeClass(["acu-v2-advanced-tools-page__log-row", `acu-v2-advanced-tools-page__log-row--${entry.level}`])
 									},
-									[createBaseVNode("div", _hoisted_26$1, [
+									[
+										createBaseVNode("div", _hoisted_26$1, [
+											createBaseVNode(
+												"span",
+												_hoisted_27$1,
+												toDisplayString($setup.formatTime(entry.timestamp)),
+												1
+												/* TEXT */
+											),
+											createVNode($setup["AcuBadge"], { variant: $setup.logLevelVariant(entry.level) }, {
+												default: withCtx(() => [createTextVNode(
+													toDisplayString(entry.level.toUpperCase()),
+													1
+													/* TEXT */
+												)]),
+												_: 2
+											}, 1032, ["variant"]),
+											createBaseVNode(
+												"span",
+												_hoisted_28,
+												toDisplayString(entry.tag),
+												1
+												/* TEXT */
+											)
+										]),
 										createBaseVNode(
-											"span",
-											_hoisted_27$1,
-											toDisplayString($setup.formatTime(entry.timestamp)),
+											"code",
+											_hoisted_29,
+											toDisplayString(entry.message),
 											1
 											/* TEXT */
 										),
-										createVNode($setup["AcuBadge"], { variant: $setup.logLevelVariant(entry.level) }, {
-											default: withCtx(() => [createTextVNode(
-												toDisplayString(entry.level.toUpperCase()),
+										$setup.hintFor(entry) ? (openBlock(), createElementBlock("details", {
+											key: 0,
+											class: "acu-v2-advanced-tools-page__log-hint",
+											"data-hint-id": $setup.hintFor(entry).id
+										}, [createBaseVNode("summary", _hoisted_31, [
+											_cache[14] || (_cache[14] = createBaseVNode(
+												"i",
+												{
+													class: "fa-solid fa-lightbulb acu-v2-advanced-tools-page__log-hint-icon",
+													"aria-hidden": "true"
+												},
+												null,
+												-1
+												/* CACHED */
+											)),
+											createBaseVNode(
+												"span",
+												_hoisted_32,
+												toDisplayString($setup.hintFor(entry).summary),
 												1
 												/* TEXT */
-											)]),
-											_: 2
-										}, 1032, ["variant"]),
-										createBaseVNode(
-											"span",
-											_hoisted_28,
-											toDisplayString(entry.tag),
-											1
-											/* TEXT */
-										)
-									]), createBaseVNode(
-										"code",
-										_hoisted_29,
-										toDisplayString(entry.message),
-										1
-										/* TEXT */
-									)],
+											),
+											_cache[15] || (_cache[15] = createBaseVNode(
+												"span",
+												{ class: "acu-v2-advanced-tools-page__log-hint-toggle" },
+												"怎么处理",
+												-1
+												/* CACHED */
+											))
+										]), createBaseVNode("ol", _hoisted_33, [(openBlock(true), createElementBlock(
+											Fragment,
+											null,
+											renderList($setup.hintFor(entry).steps, (step, stepIndex) => {
+												return openBlock(), createElementBlock(
+													"li",
+													{ key: stepIndex },
+													toDisplayString(step),
+													1
+													/* TEXT */
+												);
+											}),
+											128
+											/* KEYED_FRAGMENT */
+										))])], 8, _hoisted_30)) : createCommentVNode("v-if", true)
+									],
 									2
 									/* CLASS */
 								);
@@ -172086,7 +177688,7 @@ function _sfc_render$c(_ctx, _cache, $props, $setup, $data, $options) {
 					)]),
 					_: 1
 				})) : createCommentVNode("v-if", true)]),
-				default: withCtx(() => [createBaseVNode("div", _hoisted_30, [createVNode($setup["AcuButton"], {
+				default: withCtx(() => [createBaseVNode("div", _hoisted_34, [createVNode($setup["AcuButton"], {
 					variant: $setup.debugFlow.active.value ? "danger" : "primary",
 					onClick: $setup.debugFlow.toggleDebug
 				}, {
@@ -172106,7 +177708,7 @@ function _sfc_render$c(_ctx, _cache, $props, $setup, $data, $options) {
 					disabled: !$setup.debugFlow.active.value,
 					onClick: $setup.debugFlow.exportDebugData
 				}, {
-					default: withCtx(() => [..._cache[14] || (_cache[14] = [createBaseVNode(
+					default: withCtx(() => [..._cache[16] || (_cache[16] = [createBaseVNode(
 						"i",
 						{ class: "fa-solid fa-download" },
 						null,
@@ -172118,7 +177720,7 @@ function _sfc_render$c(_ctx, _cache, $props, $setup, $data, $options) {
 						/* CACHED */
 					)])]),
 					_: 1
-				}, 8, ["disabled", "onClick"])]), _cache[15] || (_cache[15] = createBaseVNode(
+				}, 8, ["disabled", "onClick"])]), _cache[17] || (_cache[17] = createBaseVNode(
 					"p",
 					{ class: "acu-v2-advanced-tools-page__hint" },
 					" 使用步骤：① 点「开始 Debug」（自动开启全部采集并清空旧日志）→ ② 复现问题 → ③ 点「导出 Debug 数据」生成 .json 文件 → ④ 把文件交给开发者即可定位问题。 排查完成后记得「停止 Debug」。 ",
@@ -172131,7 +177733,7 @@ function _sfc_render$c(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	})]);
 }
-var AdvancedToolsPage = /* @__PURE__ */ _export_sfc(_sfc_main$c, [["render", _sfc_render$c], ["__scopeId", "data-v-c2a4104e"]]);
+var AdvancedToolsPage = /* @__PURE__ */ _export_sfc(_sfc_main$c, [["render", _sfc_render$c], ["__scopeId", "data-v-2f070065"]]);
 
 const developerCopy = {
     panels: {

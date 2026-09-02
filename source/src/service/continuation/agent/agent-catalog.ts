@@ -7,7 +7,7 @@
  * 子代理的完整系统提示词不暴露给主 Agent，避免主 Agent 被无关细节淹没。
  */
 
-import { AGENT_OUTLINE_AGENT_NAME_ACU, type AgentSubagentKind_ACU, type AgentSubagentName_ACU } from './agent-model';
+import { AGENT_FINAL_REVIEWER_NAME_ACU, AGENT_OUTLINE_AGENT_NAME_ACU, type AgentSubagentKind_ACU, type AgentSubagentName_ACU } from './agent-model';
 
 export interface AgentSubagentDefinition_ACU {
   name: AgentSubagentName_ACU;
@@ -24,6 +24,16 @@ export interface AgentModuleDefinition_ACU {
   writableBy: AgentSubagentName_ACU[];
 }
 
+/**
+ * 终审只允许由 finalize 前的受控运行时入口调用，绝不能出现在主 Agent 的 delegate 目录中。
+ */
+export const AGENT_FINAL_REVIEWER_DEFINITION_ACU = {
+  name: AGENT_FINAL_REVIEWER_NAME_ACU,
+  kind: 'review' as const,
+  description: '发送前最终审查：核对人物情绪、世界书证据和逻辑边界，只读不写',
+  promptKey: 'finalReviewer' as const,
+};
+
 export const AGENT_SUBAGENT_DEFINITIONS_ACU: readonly AgentSubagentDefinition_ACU[] = [
   {
     name: 'arc-architect',
@@ -35,22 +45,22 @@ export const AGENT_SUBAGENT_DEFINITIONS_ACU: readonly AgentSubagentDefinition_AC
   {
     name: 'hook-cognition-maintainer',
     kind: 'maintain',
-    description: '结算已经发生的正文：维护伏笔账本与认知信息差时间线，只登记真实历史里已实际发生的变化',
-    triggers: ['存在尚未结算的真实历史', '新正文出现异常线索、秘密、反常细节', '已有伏笔被再次触碰', '某个角色的知晓状态发生变化'],
+    description: '结算已经发生的正文：维护伏笔账本、认知信息差时间线与故事年代学账本，只登记真实历史里已实际发生的变化',
+    triggers: ['存在尚未结算的真实历史', '新正文出现异常线索、秘密、反常细节', '已有伏笔被再次触碰', '某个角色的知晓状态发生变化', '正文实际发生了跨夜、数日或更久的时间流逝'],
     promptKey: 'maintainer',
   },
   {
     name: 'mainline-planner',
     kind: 'plan',
-    description: '策划本轮主线推进：给出冲突阶梯、主角代理权与实质价值变动的自然语言建议，不写正文、不改资料',
-    triggers: ['每轮都需要主线推进建议', '轮次目标涉及主线冲突升级或价值转移'],
+    description: '按本轮 pacing 策划场景：pressure/turn 给冲突阶梯、主角选择与实质价值变动；setup/cooldown 给具体生活动作、人物互动与非危机变化，允许主线 hold。输出叙事功能、主线增量与时间关系建议，不写正文、不改资料',
+    triggers: ['每轮都需要本轮场景策划建议（派工时写明 pacing）', 'pressure/turn 轮需要冲突升级或价值转移方案', 'setup/cooldown 轮需要具体的日常、恢复或经营内容而非空泛判词'],
     promptKey: 'mainlinePlanner',
   },
   {
     name: 'beat-planner',
     kind: 'plan',
-    description: '策划本轮伏笔操作与情绪节拍：给出埋设、强化、误导、回收的具体手法与情绪微弧建议，不写正文、不改资料',
-    triggers: ['本轮计划操作伏笔', '本轮需要信息差的设用揭新循环', '情绪节拍需要承接上轮残留'],
+    description: '策划本轮伏笔操作与情绪节拍：给出埋设、强化、误导、回收的具体手法、信息差走到哪一步与收尾方式建议；低压轮允许无操作、安静闭合，不写正文、不改资料',
+    triggers: ['本轮计划操作伏笔', '本轮信息差需要设置、使用或揭示（揭示后允许结束，不强制补新谜团）', '情绪节拍需要承接上轮残留'],
     promptKey: 'beatPlanner',
   },
   {
@@ -65,7 +75,7 @@ export const AGENT_SUBAGENT_DEFINITIONS_ACU: readonly AgentSubagentDefinition_AC
 export const AGENT_MODULE_DEFINITIONS_ACU: readonly AgentModuleDefinition_ACU[] = [
   {
     token: '$STORY_ARC',
-    description: '故事总纲：全书方向（唯一一条）与卷级台阶。每条写明本层推进方向、要抬到的高度与收束点、禁止提前翻的底牌，以及已由哪些阶段承载',
+    description: '故事总纲：全书方向（唯一一条）与卷级台阶。卷台阶包含结构职责、阶段容量、故事时间、主线进度上限、持续经营线、兑现目标、收束状态与真实阶段进度',
     triggers: ['排新阶段大纲前确认本阶段该落在哪一级台阶上', '判断某张底牌本阶段能不能翻', '一个阶段完成后回写进度'],
     writableBy: ['arc-architect'],
   },
@@ -87,6 +97,12 @@ export const AGENT_MODULE_DEFINITIONS_ACU: readonly AgentModuleDefinition_ACU[] 
     triggers: ['本轮动作可能越过既定红线', '需要确认哪些底牌本轮不能翻'],
     writableBy: [],
   },
+  {
+    token: '$CHRONOLOGY',
+    description: '故事年代学账本：已发生正文结算出的故事时间事实——当前相对时间锚、自故事起点累计经过时间、精度（exact/approximate/unknown）、每次时间转换及其正文证据楼层。大纲里的时间字段是计划，不在此账本内',
+    triggers: ['规划或审查跨夜、数日、数周及更久的时间跳跃', '核对伤势恢复、训练/生产周期、旅行耗时、季节天气与关系熟悉度是否与累计时间相容', '最终指导需要给出可靠的相对时间锚'],
+    writableBy: ['hook-cognition-maintainer'],
+  },
 ];
 
 /** 子代理目录里的类型中文名。 */
@@ -100,7 +116,7 @@ const KIND_DISPLAY_LABELS_ACU: Record<AgentSubagentKind_ACU, string> = {
 /** 按职责固定的写入说明，进子代理目录的「写入」行。 */
 const KIND_WRITE_LABELS_ACU: Record<AgentSubagentKind_ACU, string> = {
   arc: '$STORY_ARC（职责固定；不碰伏笔、信息差与约束）',
-  maintain: '$HOOKS_LEDGER、$INFO_GAP（职责固定；约束只能提议，由主 Agent 裁决登记）',
+  maintain: '$HOOKS_LEDGER、$INFO_GAP、$CHRONOLOGY（职责固定；约束只能提议，由主 Agent 裁决登记）',
   plan: '无（只返回建议）',
   review: '无（只返回判词）',
 };
@@ -165,6 +181,7 @@ export function renderAgentReadCatalog_ACU(): string {
     '- $HOOKS_LEDGER / $HOOKS_LEDGER:ID,ID：伏笔账本全部活跃条目，或按 ID 精读（含已退休条目）。',
     '- $INFO_GAP / $INFO_GAP:ID,ID：认知与信息差时间线全部活跃条目，或按 ID 精读。',
     '- $ACTIVE_CONSTRAINTS / $ACTIVE_CONSTRAINTS:ID,ID：长期约束全部条目，或按 ID 精读。',
+    '- $CHRONOLOGY / $CHRONOLOGY:ID,ID：故事年代学账本（已发生正文结算出的时间锚、累计经过时间与转换证据），或按 ID 精读（含已作废条目）。',
     '- $WORLDBOOK:书名:uid,uid：已启用世界书条目全文。地址从世界书目录复制，条目行尾标注了 token 数便于估算预算。',
     '- $STORY_CATALOG / $STORY_OVERVIEW / $STORY_TAIL / $OUTLINE_WINDOW / $HISTORY_UNSETTLED：楼层索引、事件概览、尾部正文全文、完整大纲窗口、未结算正文全量。',
     '- 早期剧情的详细纪要在纪要表里：$TABLE:纪要表:起始行-结束行 按行区间精读（行号见事件概览与表格目录）。',

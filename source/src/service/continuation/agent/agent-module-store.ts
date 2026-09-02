@@ -10,6 +10,7 @@ import { getChatArray_ACU, saveChatToHostStrict_ACU } from '../../../data/gatewa
 import { ContinuationValidationError_ACU, createContinuationError_ACU } from '../model';
 import {
   AGENT_BLOCK_CHAR_LIMIT_ACU,
+  AGENT_CHRONOLOGY_PRECISIONS_ACU,
   AGENT_HOOK_IMPORTANCES_ACU,
   AGENT_HOOK_STATUSES_ACU,
   AGENT_HOT_HOOK_LIMIT_ACU,
@@ -18,6 +19,8 @@ import {
   AGENT_REVEAL_STATUSES_ACU,
   AGENT_STORY_ARC_SCOPES_ACU,
   AGENT_STORY_ARC_STATUSES_ACU,
+  AGENT_VOLUME_NARRATIVE_ROLES_ACU,
+  type AgentChronologyEntry_ACU,
   type AgentConstraintEntry_ACU,
   type AgentHookEntry_ACU,
   type AgentInfoGapEntry_ACU,
@@ -48,12 +51,24 @@ export function buildEmptyAgentModuleSnapshot_ACU(): AgentModuleSnapshot_ACU {
     schemaVersion: AGENT_MODULE_SCHEMA_VERSION_ACU,
     settledThroughIndex: -1,
     updatedAt: 0,
-    revisions: { hooks: 0, infoGap: 0, constraints: 0, storyArc: 0 },
+    revisions: { hooks: 0, infoGap: 0, constraints: 0, storyArc: 0, chronology: 0 },
     hooks: [],
     infoGap: [],
     constraints: [],
     storyArc: [],
+    chronology: [],
   };
+}
+
+/** 证据楼层列表：只接受非负整数，去重后升序。是否越过结算水位由事务层校验。 */
+export function normalizeEvidenceIndexes_ACU(value: unknown): number[] | null {
+  if (!Array.isArray(value)) return null;
+  const indexes: number[] = [];
+  for (const item of value) {
+    if (typeof item !== 'number' || !Number.isInteger(item) || item < 0) return null;
+    indexes.push(item);
+  }
+  return [...new Set(indexes)].sort((left, right) => left - right);
 }
 
 /** 阶段编号列表：只接受正整数，去重后升序。乱序或重复是模型回写进度时的常见噪音。 */
@@ -107,11 +122,47 @@ function validateInfoGapEntry_ACU(raw: unknown): AgentInfoGapEntry_ACU | null {
   };
 }
 
+function readOptionalStoryArcText_ACU(raw: Record<string, unknown>, key: string): string | undefined | null {
+  if (!Object.prototype.hasOwnProperty.call(raw, key)) return undefined;
+  return typeof raw[key] === 'string' ? raw[key].trim() : null;
+}
+
+function readOptionalStoryArcTextList_ACU(raw: Record<string, unknown>, key: string): string[] | undefined | null {
+  if (!Object.prototype.hasOwnProperty.call(raw, key)) return undefined;
+  const value = raw[key];
+  if (!Array.isArray(value)) return null;
+  const normalized: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string' || !item.trim()) return null;
+    normalized.push(item.trim());
+  }
+  return normalized;
+}
+
+function readOptionalTargetStageRange_ACU(raw: Record<string, unknown>): { min: number; max: number } | undefined | null {
+  if (!Object.prototype.hasOwnProperty.call(raw, 'targetStageRange')) return undefined;
+  const value = raw.targetStageRange;
+  if (!isRecord_ACU(value)) return null;
+  const { min, max } = value;
+  if (!Number.isInteger(min) || (min as number) < 1 || !Number.isInteger(max) || (max as number) < 1 || (min as number) > (max as number)) return null;
+  return { min: min as number, max: max as number };
+}
+
 function validateStoryArcEntry_ACU(raw: unknown): AgentStoryArcEntry_ACU | null {
   if (!isRecord_ACU(raw)) return null;
   const id = readText_ACU(raw.id).trim();
   const title = readText_ACU(raw.title).trim();
   if (!id || !title) return null;
+  const narrativeRole = Object.prototype.hasOwnProperty.call(raw, 'narrativeRole')
+    ? readEnum_ACU(raw.narrativeRole, AGENT_VOLUME_NARRATIVE_ROLES_ACU, '')
+    : undefined;
+  const targetStageRange = readOptionalTargetStageRange_ACU(raw);
+  const targetTimeSpan = readOptionalStoryArcText_ACU(raw, 'targetTimeSpan');
+  const progressCeiling = readOptionalStoryArcText_ACU(raw, 'progressCeiling');
+  const sustainingThreads = readOptionalStoryArcTextList_ACU(raw, 'sustainingThreads');
+  const payoffTargets = readOptionalStoryArcTextList_ACU(raw, 'payoffTargets');
+  const completionRationale = readOptionalStoryArcText_ACU(raw, 'completionRationale');
+  if (narrativeRole === '' || targetStageRange === null || targetTimeSpan === null || progressCeiling === null || sustainingThreads === null || payoffTargets === null || completionRationale === null) return null;
   return {
     id,
     scope: readEnum_ACU(raw.scope, AGENT_STORY_ARC_SCOPES_ACU, 'volume') as AgentStoryArcEntry_ACU['scope'],
@@ -121,8 +172,51 @@ function validateStoryArcEntry_ACU(raw: unknown): AgentStoryArcEntry_ACU | null 
     withheld: readText_ACU(raw.withheld),
     status: readEnum_ACU(raw.status, AGENT_STORY_ARC_STATUSES_ACU, 'planned') as AgentStoryArcEntry_ACU['status'],
     stageNumbers: normalizeStageNumbers_ACU(raw.stageNumbers),
+    completionStageNumber: typeof raw.completionStageNumber === 'number' && Number.isInteger(raw.completionStageNumber) && raw.completionStageNumber >= 1 ? raw.completionStageNumber : null,
+    completionState: readText_ACU(raw.completionState),
+    continuationRationale: readText_ACU(raw.continuationRationale),
+    narrativeRole: narrativeRole as AgentStoryArcEntry_ACU['narrativeRole'],
+    targetStageRange,
+    targetTimeSpan,
+    progressCeiling,
+    sustainingThreads,
+    payoffTargets,
+    completionRationale,
     retired: raw.retired === true,
     retiredReason: readText_ACU(raw.retiredReason),
+  };
+}
+
+/**
+ * 严格校验一条持久化的年代学记录。chronology 是 P3 才引入的字段：旧快照根本没有它，
+ * 因此不存在「宽容旧形态」的需要——字段一旦出现就必须结构完整，坏条目不做静默降级。
+ */
+function validateChronologyEntry_ACU(raw: unknown): AgentChronologyEntry_ACU | null {
+  if (!isRecord_ACU(raw)) return null;
+  const id = readText_ACU(raw.id).trim();
+  const anchor = readText_ACU(raw.anchor).trim();
+  const elapsed = readText_ACU(raw.elapsed).trim();
+  const transition = readText_ACU(raw.transition).trim();
+  if (!id || !anchor || !elapsed || !transition) return null;
+  const precision = typeof raw.precision === 'string' && (AGENT_CHRONOLOGY_PRECISIONS_ACU as readonly string[]).includes(raw.precision) ? raw.precision : null;
+  if (!precision) return null;
+  const evidenceIndexes = normalizeEvidenceIndexes_ACU(raw.evidenceIndexes);
+  if (!evidenceIndexes || !evidenceIndexes.length) return null;
+  const updatedIndex = readIndex_ACU(raw.updatedIndex);
+  if (updatedIndex < 0) return null;
+  const retired = raw.retired === true;
+  const retiredReason = readText_ACU(raw.retiredReason);
+  if (retired && !retiredReason.trim()) return null;
+  return {
+    id,
+    anchor,
+    elapsed,
+    precision: precision as AgentChronologyEntry_ACU['precision'],
+    transition,
+    evidenceIndexes,
+    updatedIndex,
+    retired,
+    retiredReason,
   };
 }
 
@@ -148,6 +242,15 @@ export function validateAgentModuleSnapshot_ACU(raw: unknown): AgentModuleSnapsh
   // storyArc 晚于前三个模块加入，存量楼层的快照里没有这个键。写成必需会让全部历史快照
   // 被判非法、资料静默回退成空，因此这里按「有则校验、无则空数组」处理。
   const storyArc = Array.isArray(raw.storyArc) ? raw.storyArc : [];
+  const validatedStoryArc = storyArc.map(validateStoryArcEntry_ACU);
+  // 总纲条目不能像普通搜索命中一样被悄悄过滤；任一结构损坏都应让读取端回退上一份完整快照。
+  if (validatedStoryArc.some(entry => entry === null)) return null;
+  // chronology 同样后于早期快照加入：缺字段兼容为空账本；但字段一旦存在就必须整体合法——
+  // 时间事实被静默过滤比暂时回退旧快照更危险（后续结算会基于错误的时间线登记新事实）。
+  if (Object.prototype.hasOwnProperty.call(raw, 'chronology') && !Array.isArray(raw.chronology)) return null;
+  const chronology = Array.isArray(raw.chronology) ? raw.chronology : [];
+  const validatedChronology = chronology.map(validateChronologyEntry_ACU);
+  if (validatedChronology.some(entry => entry === null)) return null;
   return {
     schemaVersion: AGENT_MODULE_SCHEMA_VERSION_ACU,
     settledThroughIndex,
@@ -157,31 +260,113 @@ export function validateAgentModuleSnapshot_ACU(raw: unknown): AgentModuleSnapsh
       infoGap: Math.max(0, readIndex_ACU(raw.revisions.infoGap)),
       constraints: Math.max(0, readIndex_ACU(raw.revisions.constraints)),
       storyArc: Math.max(0, readIndex_ACU(raw.revisions.storyArc)),
+      chronology: Math.max(0, readIndex_ACU(raw.revisions.chronology)),
     },
     hooks: raw.hooks.flatMap(item => { const entry = validateHookEntry_ACU(item); return entry ? [entry] : []; }),
     infoGap: raw.infoGap.flatMap(item => { const entry = validateInfoGapEntry_ACU(item); return entry ? [entry] : []; }),
     constraints: raw.constraints.flatMap(item => { const entry = validateConstraintEntry_ACU(item); return entry ? [entry] : []; }),
-    storyArc: storyArc.flatMap(item => { const entry = validateStoryArcEntry_ACU(item); return entry ? [entry] : []; }),
+    storyArc: validatedStoryArc as AgentStoryArcEntry_ACU[],
+    chronology: validatedChronology as AgentChronologyEntry_ACU[],
   };
 }
 
 /**
+ * 宽容解析一份损坏的快照：丢掉单条非法记录、修正非法水位，尽量保住其余数据。
+ * 只在严格路径全程无命中时作为兜底使用——静默回退成空快照会让用户误以为数据从未写入。
+ */
+function salvageAgentModuleSnapshot_ACU(raw: unknown): { snapshot: AgentModuleSnapshot_ACU; problems: string[] } | null {
+  if (!isRecord_ACU(raw)) return null;
+  const problems: string[] = [];
+  if (raw.schemaVersion !== AGENT_MODULE_SCHEMA_VERSION_ACU) problems.push(`schemaVersion=${String(raw.schemaVersion)} 与当前 ${AGENT_MODULE_SCHEMA_VERSION_ACU} 不一致`);
+  const revisions = isRecord_ACU(raw.revisions) ? raw.revisions : {};
+  const pick = <T>(list: unknown, validate: (item: unknown) => T | null, label: string): T[] => {
+    if (!Array.isArray(list)) { if (list !== undefined) problems.push(`${label} 不是数组`); return []; }
+    const kept: T[] = [];
+    list.forEach((item, index) => { const entry = validate(item); if (entry) kept.push(entry); else problems.push(`${label}[${index}] 结构非法，已丢弃`); });
+    return kept;
+  };
+  const settledThroughIndex = readIndex_ACU(raw.settledThroughIndex);
+  if (settledThroughIndex < 0) problems.push(`settledThroughIndex=${String(raw.settledThroughIndex)} 非法，按 0 处理`);
+  const snapshot: AgentModuleSnapshot_ACU = {
+    schemaVersion: AGENT_MODULE_SCHEMA_VERSION_ACU,
+    settledThroughIndex: Math.max(0, settledThroughIndex),
+    updatedAt: typeof raw.updatedAt === 'number' && raw.updatedAt >= 0 ? raw.updatedAt : 0,
+    revisions: {
+      hooks: Math.max(0, readIndex_ACU(revisions.hooks)),
+      infoGap: Math.max(0, readIndex_ACU(revisions.infoGap)),
+      constraints: Math.max(0, readIndex_ACU(revisions.constraints)),
+      storyArc: Math.max(0, readIndex_ACU(revisions.storyArc)),
+      chronology: Math.max(0, readIndex_ACU(revisions.chronology)),
+    },
+    hooks: pick(raw.hooks, validateHookEntry_ACU, 'hooks'),
+    infoGap: pick(raw.infoGap, validateInfoGapEntry_ACU, 'infoGap'),
+    constraints: pick(raw.constraints, validateConstraintEntry_ACU, 'constraints'),
+    storyArc: pick(raw.storyArc, validateStoryArcEntry_ACU, 'storyArc'),
+    chronology: pick(raw.chronology, validateChronologyEntry_ACU, 'chronology'),
+  };
+  return { snapshot, problems };
+}
+
+/** 一次读取的诊断：哪些楼层带有快照字段、是否通过严格校验、最终采用了哪一楼。 */
+export interface AgentModuleSnapshotReadDiagnostics_ACU {
+  /** 带快照字段的楼层（从末楼往前）。 */
+  candidates: Array<{ index: number; valid: boolean; problems: string[] }>;
+  /** 最终采用的楼层；无任何快照时为 null。 */
+  adoptedIndex: number | null;
+  /** 采用的是否为宽容抢救结果。 */
+  salvaged: boolean;
+}
+
+let lastReadDiagnostics_ACU: AgentModuleSnapshotReadDiagnostics_ACU = { candidates: [], adoptedIndex: null, salvaged: false };
+
+/** 最近一次 readAgentModuleSnapshot_ACU 的诊断信息，供面板解释“为什么资料是空的/是旧的”。 */
+export function readAgentModuleSnapshotDiagnostics_ACU(): AgentModuleSnapshotReadDiagnostics_ACU {
+  return lastReadDiagnostics_ACU;
+}
+
+/**
  * 读取当前生效的资料快照。
+ * 严格路径：从尾向前找第一个完全合法的快照。全程无命中但存在损坏快照时，不再静默返回空，
+ * 而是对最近一份做宽容抢救（丢单条坏记录）并记录诊断——数据消失必须可解释。
  * @param chat 聊天数组，缺省取当前聊天
  * @returns 最近的合法快照；全程无命中时返回 settledThroughIndex = -1 的空快照
  */
 export function readAgentModuleSnapshot_ACU(chat?: any[]): AgentModuleSnapshot_ACU {
   const messages = Array.isArray(chat) ? chat : getChatArray_ACU();
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
+  const highestIndex = messages.length - 1;
+  const clamp = (snapshot: AgentModuleSnapshot_ACU): AgentModuleSnapshot_ACU => (
+    // 删楼后残留快照记录的水位可能指向已不存在的楼层，必须钳制，否则未结算区间会算成负数。
+    snapshot.settledThroughIndex > highestIndex ? { ...snapshot, settledThroughIndex: highestIndex } : snapshot
+  );
+  const diagnostics: AgentModuleSnapshotReadDiagnostics_ACU = { candidates: [], adoptedIndex: null, salvaged: false };
+  let firstBroken: { index: number; raw: unknown } | null = null;
+  for (let index = highestIndex; index >= 0; index -= 1) {
     const message = messages[index];
     if (!message || typeof message !== 'object') continue;
     if (!Object.prototype.hasOwnProperty.call(message, AGENT_MODULE_FIELD_ACU)) continue;
-    const snapshot = validateAgentModuleSnapshot_ACU((message as Record<string, unknown>)[AGENT_MODULE_FIELD_ACU]);
-    if (!snapshot) continue;
-    // 删楼后残留快照记录的水位可能指向已不存在的楼层，必须钳制，否则未结算区间会算成负数。
-    const highestIndex = messages.length - 1;
-    return snapshot.settledThroughIndex > highestIndex ? { ...snapshot, settledThroughIndex: highestIndex } : snapshot;
+    const raw = (message as Record<string, unknown>)[AGENT_MODULE_FIELD_ACU];
+    const snapshot = validateAgentModuleSnapshot_ACU(raw);
+    if (snapshot) {
+      diagnostics.candidates.push({ index, valid: true, problems: [] });
+      diagnostics.adoptedIndex = index;
+      lastReadDiagnostics_ACU = diagnostics;
+      return clamp(snapshot);
+    }
+    const salvaged = salvageAgentModuleSnapshot_ACU(raw);
+    diagnostics.candidates.push({ index, valid: false, problems: salvaged?.problems ?? ['快照不是对象'] });
+    if (!firstBroken) firstBroken = { index, raw };
   }
+  if (firstBroken) {
+    const salvaged = salvageAgentModuleSnapshot_ACU(firstBroken.raw);
+    if (salvaged) {
+      diagnostics.adoptedIndex = firstBroken.index;
+      diagnostics.salvaged = true;
+      lastReadDiagnostics_ACU = diagnostics;
+      console.warn(`[SP·数据库][续写资料] 楼层 ${firstBroken.index} 的资料快照未通过严格校验，已按宽容模式读取：${salvaged.problems.join('；')}`);
+      return clamp(salvaged.snapshot);
+    }
+  }
+  lastReadDiagnostics_ACU = diagnostics;
   return buildEmptyAgentModuleSnapshot_ACU();
 }
 
@@ -247,15 +432,17 @@ export async function replaceAgentModuleSnapshotByUser_ACU(raw: unknown, chat?: 
       infoGap: current.revisions.infoGap + 1,
       constraints: current.revisions.constraints + 1,
       storyArc: current.revisions.storyArc + 1,
+      chronology: current.revisions.chronology + 1,
     },
   };
   const validated = validateAgentModuleSnapshot_ACU(merged);
-  if (!validated) rejectSnapshotEdit_ACU('资料快照结构非法：hooks / infoGap / constraints 必须是数组');
+  if (!validated) rejectSnapshotEdit_ACU('资料快照结构非法：hooks / infoGap / constraints 必须是数组；storyArc / chronology 一旦提供必须整体结构合法（chronology 每条需要非空 id/anchor/elapsed/transition、合法 precision、非空非负整数 evidenceIndexes 与非负 updatedIndex，retire 需给理由）');
   const checks: Array<[string, unknown, readonly unknown[]]> = [
     ['伏笔账本 hooks', merged.hooks, validated.hooks],
     ['信息差 infoGap', merged.infoGap, validated.infoGap],
     ['长期约束 constraints', merged.constraints, validated.constraints],
     ['故事总纲 storyArc', merged.storyArc, validated.storyArc],
+    ['故事年代学账本 chronology', merged.chronology, validated.chronology],
   ];
   for (const [label, input, accepted] of checks) {
     const inputLength = Array.isArray(input) ? input.length : 0;
@@ -359,9 +546,18 @@ function renderStoryArcEntry_ACU(entry: AgentStoryArcEntry_ACU): string {
   const head = entry.scope === 'story' ? '全书方向' : '卷台阶';
   return [
     `- [${entry.id}] ${head}「${entry.title}」状态=${entry.status}${entry.stageNumbers.length ? ` 已承载阶段=${entry.stageNumbers.join('、')}` : ' 尚未由任何阶段承载'}${entry.retired ? ' 已废止' : ''}`,
+    entry.narrativeRole ? `  结构职责：${entry.narrativeRole}` : '',
+    entry.targetStageRange ? `  阶段容量：${entry.targetStageRange.min}–${entry.targetStageRange.max} 个阶段` : '',
+    entry.targetTimeSpan ? `  故事时间目标：${entry.targetTimeSpan}` : '',
     entry.direction ? `  方向：${entry.direction}` : '',
     entry.escalation ? `  升级目标：${entry.escalation}` : '',
+    entry.progressCeiling ? `  主线进度上限：${entry.progressCeiling}` : '',
+    entry.sustainingThreads?.length ? `  持续经营线：${entry.sustainingThreads.join('；')}` : '',
+    entry.payoffTargets?.length ? `  兑现目标：${entry.payoffTargets.join('；')}` : '',
     entry.withheld ? `  禁止提前翻的底牌：${entry.withheld}` : '',
+    entry.completionStageNumber === null ? '' : `  完成依据：第 ${entry.completionStageNumber} 阶段；卷末状态=${entry.completionState || '（未登记）'}`,
+    entry.completionRationale ? `  容量偏离说明：${entry.completionRationale}` : '',
+    entry.continuationRationale ? `  续卷依据：${entry.continuationRationale}` : '',
     entry.retired && entry.retiredReason ? `  废止原因：${entry.retiredReason}` : '',
   ].filter(Boolean).join('\n');
 }
@@ -374,6 +570,15 @@ function renderStoryArcEntry_ACU(entry: AgentStoryArcEntry_ACU): string {
  */
 export function hasActiveStoryArc_ACU(snapshot: AgentModuleSnapshot_ACU): boolean {
   return snapshot.storyArc.some(entry => !entry.retired);
+}
+
+/** 判断是否存在可承载下一份阶段大纲的活动卷。全书方向本身不是阶段规划目标。 */
+export function hasActiveStoryArcVolume_ACU(snapshot: AgentModuleSnapshot_ACU): boolean {
+  return snapshot.storyArc.some(entry => (
+    entry.scope === 'volume'
+    && !entry.retired
+    && entry.status === 'active'
+  ));
 }
 
 /**
@@ -393,16 +598,50 @@ export function findUnregisteredStageNumbers_ACU(snapshot: AgentModuleSnapshot_A
 }
 
 /**
+ * 渲染活动卷给阶段规划与审查使用的集中上下文。
+ * 阶段承载与卷收束是两层事实：stageNumbers 是卷已承载的阶段，completedStageNumbers 才是正文已完成的阶段。
+ */
+export function renderAgentActiveVolumePlanningContext_ACU(snapshot: AgentModuleSnapshot_ACU, completedStageNumbers: readonly number[]): string {
+  const volumes = snapshot.storyArc.filter(entry => entry.scope === 'volume' && !entry.retired);
+  const active = volumes.filter(entry => entry.status === 'active');
+  const completed = new Set(completedStageNumbers);
+  if (!volumes.length) return '【活动卷规划上下文】\n当前没有卷台阶；必须由 arc-architect 建立总纲后才能创建阶段大纲。';
+  if (!active.length) {
+    return '【活动卷规划上下文】\n所有既有卷均已完成。用户继续写作时，arc-architect 必须先根据最后一卷的结果、代价、关系变化或未解决问题在末尾追加一个 active 卷，再由 outline-architect 创建下一阶段大纲。';
+  }
+  if (active.length > 1) return `【活动卷规划上下文】\n总纲状态无效：当前存在 ${active.length} 个 active 卷（${active.map(entry => entry.id).join('、')}），必须先由 arc-architect 修复。`;
+  const volume = active[0];
+  const completedCarriers = volume.stageNumbers.filter(stageNumber => completed.has(stageNumber));
+  const pendingCarriers = volume.stageNumbers.filter(stageNumber => !completed.has(stageNumber));
+  return [
+    '【活动卷规划上下文】',
+    `当前 active 卷：[${volume.id}]「${volume.title}」`,
+    `卷级结构职责：${volume.narrativeRole ?? '旧快照未标注'}`,
+    `目标阶段容量：${volume.targetStageRange ? `${volume.targetStageRange.min}–${volume.targetStageRange.max} 个阶段` : '旧快照未标注'}`,
+    `目标故事时间：${volume.targetTimeSpan || '旧快照未标注'}`,
+    `已承载阶段：${volume.stageNumbers.length ? volume.stageNumbers.join('、') : '（尚无）'}`,
+    `真实完成进度：${completedCarriers.length ? `已完成阶段 ${completedCarriers.join('、')}` : '尚未有已完成阶段'}${pendingCarriers.length ? `；已登记但尚未完成阶段 ${pendingCarriers.join('、')}` : ''}`,
+    `本阶段只承担本卷尚未完成的一段：${volume.direction}`,
+    `卷级收束条件：${volume.escalation}`,
+    `主线进度上限：${volume.progressCeiling || '旧快照未标注'}`,
+    `持续经营线：${volume.sustainingThreads?.length ? volume.sustainingThreads.join('；') : '旧快照未标注'}`,
+    `兑现目标：${volume.payoffTargets?.length ? volume.payoffTargets.join('；') : '旧快照未标注'}`,
+    `禁止提前释放：${volume.withheld || '（无额外底牌）'}`,
+  ].join('\n');
+}
+
+/**
  * 渲染故事总纲的热上下文。
  * @param snapshot 当前快照
+ * @param completedStageNumbers 已真实完成的阶段编号
  * @returns 自然语言文本；总纲为空时明确指出必须先派工 arc-architect
  */
-export function renderAgentStoryArc_ACU(snapshot: AgentModuleSnapshot_ACU): string {
+export function renderAgentStoryArc_ACU(snapshot: AgentModuleSnapshot_ACU, completedStageNumbers: readonly number[] = []): string {
   const head = `当前修订号=${snapshot.revisions.storyArc}`;
   const active = snapshot.storyArc.filter(entry => !entry.retired);
   if (!active.length) return `${head}\n当前还没有故事总纲。总纲缺失时无法判断本阶段该走到哪一步，必须先派工 arc-architect 立总纲。`;
   const sorted = [...active].sort(compareStoryArc_ACU);
-  return truncateAgentBlock_ACU(`${head}\n${sorted.map(renderStoryArcEntry_ACU).join('\n')}`);
+  return truncateAgentBlock_ACU(`${head}\n${sorted.map(renderStoryArcEntry_ACU).join('\n')}\n\n${renderAgentActiveVolumePlanningContext_ACU(snapshot, completedStageNumbers)}`);
 }
 
 function renderHookFull_ACU(hook: AgentHookEntry_ACU): string {
@@ -484,6 +723,50 @@ export function renderAgentConstraintsByIds_ACU(snapshot: AgentModuleSnapshot_AC
 /**
  * 按 ID 精读故事总纲（含已废止条目）；不传 ID 则输出全部活跃条目，支撑 `$STORY_ARC` / `$STORY_ARC:ID1,ID2`。
  */
-export function renderAgentStoryArcByIds_ACU(snapshot: AgentModuleSnapshot_ACU, ids?: readonly string[]): string {
-  return renderModuleEntries_ACU({ label: '故事总纲', revision: snapshot.revisions.storyArc, entries: snapshot.storyArc, render: renderStoryArcEntry_ACU }, ids);
+export function renderAgentStoryArcByIds_ACU(snapshot: AgentModuleSnapshot_ACU, ids?: readonly string[], completedStageNumbers: readonly number[] = []): string {
+  const entries = renderModuleEntries_ACU({ label: '故事总纲', revision: snapshot.revisions.storyArc, entries: snapshot.storyArc, render: renderStoryArcEntry_ACU }, ids);
+  return ids?.length ? entries : `${entries}\n\n${renderAgentActiveVolumePlanningContext_ACU(snapshot, completedStageNumbers)}`;
+}
+
+const CHRONOLOGY_PRECISION_LABELS_ACU: Record<string, string> = { exact: '精确', approximate: '近似', unknown: '未知' };
+
+function renderChronologyEntry_ACU(entry: AgentChronologyEntry_ACU): string {
+  return [
+    `- [${entry.id}] 时间锚：${entry.anchor}（精度=${CHRONOLOGY_PRECISION_LABELS_ACU[entry.precision] ?? entry.precision}${entry.retired ? '，已作废' : ''}）`,
+    `  累计经过：${entry.elapsed}`,
+    `  时间转换：${entry.transition}`,
+    `  证据楼层：${entry.evidenceIndexes.join('、')}（结算楼层=${entry.updatedIndex}）`,
+    entry.retired && entry.retiredReason ? `  作废原因：${entry.retiredReason}` : '',
+  ].filter(Boolean).join('\n');
+}
+
+/** 年代学记录按结算次序展示：updatedIndex 相同（同一次结算多条转换）时保持登记顺序。 */
+function sortChronology_ACU(entries: readonly AgentChronologyEntry_ACU[]): AgentChronologyEntry_ACU[] {
+  return [...entries].sort((left, right) => left.updatedIndex - right.updatedIndex);
+}
+
+/**
+ * 渲染故事年代学账本的热上下文。
+ * @param snapshot 当前快照
+ * @returns 自然语言文本；空账本时明确说明时间事实只能由维护代理依据真实正文结算
+ */
+export function renderAgentChronology_ACU(snapshot: AgentModuleSnapshot_ACU): string {
+  const head = `当前修订号=${snapshot.revisions.chronology}`;
+  const active = sortChronology_ACU(snapshot.chronology.filter(entry => !entry.retired));
+  const retiredCount = snapshot.chronology.length - active.length;
+  const retiredNote = retiredCount ? `\n另有 ${retiredCount} 条已作废记录未列出，可用 search 命中后按 ID 精读。` : '';
+  if (!active.length) return `${head}\n当前没有已结算的故事时间记录。时间事实只能由结算维护代理依据真实正文登记；大纲里的时间字段是计划，不是事实。${retiredNote}`;
+  const latest = active[active.length - 1];
+  return truncateAgentBlock_ACU([
+    head,
+    `当前时间锚：${latest.anchor}（精度=${CHRONOLOGY_PRECISION_LABELS_ACU[latest.precision] ?? latest.precision}）；自故事起点累计经过：${latest.elapsed}。`,
+    ...active.map(renderChronologyEntry_ACU),
+  ].join('\n') + retiredNote);
+}
+
+/**
+ * 按 ID 精读故事年代学账本（含已作废条目）；不传 ID 则输出全部活跃条目，支撑 `$CHRONOLOGY` / `$CHRONOLOGY:ID1,ID2`。
+ */
+export function renderAgentChronologyByIds_ACU(snapshot: AgentModuleSnapshot_ACU, ids?: readonly string[]): string {
+  return renderModuleEntries_ACU({ label: '故事年代学账本', revision: snapshot.revisions.chronology, entries: sortChronology_ACU(snapshot.chronology), render: renderChronologyEntry_ACU }, ids);
 }

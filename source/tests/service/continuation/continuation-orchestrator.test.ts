@@ -9,7 +9,22 @@ import { _set_SillyTavern_API_ACU } from '../../../src/shared/host-api';
 /** 每三轮一个低压轮，满足默认 0.3 的低压占比与连续高压上限，避免固定件本身就违反节奏规则。 */
 const pacingAt = (index: number) => (index % 3 === 0 ? 'setup' : 'pressure') as 'setup' | 'pressure';
 
-const outline = { schemaVersion: 1 as const, title: '阶段', goal: '目标', totalTurns: 6, nodes: [{ id: 'node-1', title: '节点', goal: '节点目标', suggestedTurns: 6, turns: Array.from({ length: 6 }, (_, index) => ({ id: `turn-${index + 1}`, goal: `轮次 ${index + 1}`, pacing: pacingAt(index) })) }] };
+const outline = {
+  schemaVersion: 1 as const,
+  title: '阶段',
+  goal: '目标',
+  tempo: 'mixed' as const,
+  role: 'development' as const,
+  totalTurns: 6,
+  nodes: [{ id: 'node-1', title: '节点', goal: '节点目标', suggestedTurns: 6, turns: Array.from({ length: 6 }, (_, index) => ({
+    id: `turn-${index + 1}`,
+    goal: `轮次 ${index + 1}`,
+    pacing: pacingAt(index),
+    function: pacingAt(index) === 'setup' ? 'transition' as const : 'conflict' as const,
+    mainlineDelta: pacingAt(index) === 'setup' ? 'hold' as const : 'step' as const,
+    timeAdvance: pacingAt(index) === 'setup' ? 'same_day' as const : 'continuous' as const,
+  })) }],
+};
 
 /**
  * 执行引擎桩：模拟主 Agent 的大纲行为——没有可执行大纲（无阶段或阶段已完成）时
@@ -247,9 +262,17 @@ describe('ContinuationOrchestrator_ACU', () => {
     const revision = stage.revisions[0];
     const identity = { chatIdentity: 'chat-a', taskId: task.taskId, stageId: stage.stageId, revision: 1, nodeId: revision.outline.nodes[0].id, turnId: revision.outline.nodes[0].turns[0].id, attemptId: 'attempt-a' };
     await recordPendingHostTurn(orchestrator, identity);
+    const staleFailure = store.readPersisted()!;
+    staleFailure.activeTask = {
+      ...staleFailure.activeTask!,
+      stopReason: 'state_invalid',
+      lastError: { code: 'CONTINUATION_TASK_STATE_INVALID', message: '历史宿主归属失败', phase: 'generation_evaluate', retryable: true },
+    };
+    await store.replaceAtomically(staleFailure, { chatIdentity: 'chat-a' });
     expect(orchestrator.readAutoContinueState().eligible).toBe(false);
 
     await orchestrator.confirmCurrentTurn(identity);
+    expect(store.readPersisted()!.activeTask).toMatchObject({ pendingHostTurn: null, stopReason: null, lastError: null });
     expect(orchestrator.readAutoContinueState().eligible).toBe(true);
     await orchestrator.stopTask();
     expect(orchestrator.readAutoContinueState().eligible).toBe(false);
@@ -481,7 +504,7 @@ describe('ContinuationOrchestrator_ACU', () => {
     expect(planner).toHaveBeenCalledTimes(1);
 
     const result = await (orchestrator as any).applyOutlineEditsWithinLease_ACU('chat-a', {} as any, [
-      { op: 'set_turn_goal', turnId: 'turn-2', goal: '守门人先露出破绽' },
+      { op: 'set_turn_goal', turnId: 'turn-2', goal: '守门人先露出破绽', function: 'reveal', mainlineDelta: 'step', timeAdvance: 'same_day' },
       { op: 'insert_turn', nodeId: 'node-1', afterTurnId: 'turn-3', goal: '巡查队提前到场' },
     ], 'running');
     expect(result.summary).toContain('2 处');
@@ -495,7 +518,9 @@ describe('ContinuationOrchestrator_ACU', () => {
     const turns = revision.outline.nodes.flatMap(node => node.turns);
     expect(turns).toHaveLength(7);
     expect(turns[1].goal).toBe('守门人先露出破绽');
+    expect(turns[1]).toMatchObject({ function: 'reveal', mainlineDelta: 'step', timeAdvance: 'same_day' });
     expect(turns[3].goal).toBe('巡查队提前到场');
+    expect(turns[3]).toMatchObject({ pacing: 'setup', function: 'transition', mainlineDelta: 'hold', timeAdvance: 'continuous' });
     expect(revision.outline.totalTurns).toBe(7);
     expect(revision.outline.nodes[0].suggestedTurns).toBe(7);
   });
@@ -531,13 +556,13 @@ describe('ContinuationOrchestrator_ACU', () => {
     // 删掉一轮低压再补一轮高压，6 轮里只剩 1 轮低压，跌破下限。
     await expectCode(() => (orchestrator as any).applyOutlineEditsWithinLease_ACU('chat-a', {} as any, [
       { op: 'remove_turn', turnId: 'turn-4' },
-      { op: 'insert_turn', nodeId: 'node-1', afterTurnId: 'turn-5', goal: '补一场冲突', pacing: 'pressure' },
+      { op: 'insert_turn', nodeId: 'node-1', afterTurnId: 'turn-5', goal: '补一场冲突', pacing: 'pressure', function: 'conflict', mainlineDelta: 'step', timeAdvance: 'continuous' },
     ], 'running'), 'CONTINUATION_AGENT_WRITE_REJECTED');
     expect(store.readPersisted()!.activeTask!.stages[0].activeRevision).toBe(1);
 
     // 只插一轮 pressure：低压轮数量没变，仍满足下限，因此放行——阶段内不存在「每几轮必须有一轮低压」的要求。
     await (orchestrator as any).applyOutlineEditsWithinLease_ACU('chat-a', {} as any, [
-      { op: 'insert_turn', nodeId: 'node-1', afterTurnId: 'turn-2', goal: '再加一场追杀', pacing: 'pressure' },
+      { op: 'insert_turn', nodeId: 'node-1', afterTurnId: 'turn-2', goal: '再加一场追杀', pacing: 'pressure', function: 'conflict', mainlineDelta: 'step', timeAdvance: 'continuous' },
     ], 'running');
     const denser = store.readPersisted()!.activeTask!.stages[0].revisions.find(item => item.revision === 2)!;
     expect(denser.outline.nodes[0].turns.map(turn => turn.pacing)).toEqual(['setup', 'pressure', 'pressure', 'pressure', 'setup', 'pressure', 'pressure']);
@@ -548,6 +573,7 @@ describe('ContinuationOrchestrator_ACU', () => {
     ], 'running');
     const revision = store.readPersisted()!.activeTask!.stages[0].revisions.find(item => item.revision === 3)!;
     expect(revision.outline.nodes[0].turns[2].pacing).toBe('setup');
+    expect(revision.outline.nodes[0].turns[2]).toMatchObject({ function: 'transition', mainlineDelta: 'hold', timeAdvance: 'continuous' });
   });
 
   it('规划时把跨阶段节奏上下文交给 planner：上一阶段形态与尾部连续高压段都被带上', async () => {

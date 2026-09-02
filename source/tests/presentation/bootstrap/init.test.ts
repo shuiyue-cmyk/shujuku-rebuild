@@ -42,7 +42,12 @@ const m = vi.hoisted(() => ({
   captureVault: vi.fn(),
   dormantAudit: vi.fn(),
   clearAutoFillDebounce: vi.fn(),
+  runtimeOnlyFlush: vi.fn(async () => ({ flushed: false, sheetKeys: [] })),
+  ensureSeedCheckpoint: vi.fn(async () => false),
   recordGenerationContext: vi.fn(() => ({ seq: 1 })),
+  consumeGenerationContext: vi.fn(() => ({ seq: 3, type: 'normal', params: {}, dryRun: false, at: 1 })),
+  continuationBridge: undefined as undefined | { onGenerationStarted: any; claimsGenerationEnded: any; onGenerationEnded: any },
+  handleNewMessage: vi.fn(),
   wasStoppedByUser: false,
   setWasStoppedByUser: vi.fn((value: boolean) => { m.wasStoppedByUser = value; }),
 }));
@@ -50,11 +55,12 @@ const m = vi.hoisted(() => ({
 vi.mock('../../../src/shared/host-api', () => ({ SillyTavern_API_ACU: m.api }));
 vi.mock('../../../src/shared/env', () => ({ topLevelWindow_ACU: { AutoCardUpdaterAPI: { _notifyTableUpdate: m.notify } } }));
 vi.mock('../../../src/presentation/theme/toast', () => ({ showToastr_ACU: vi.fn() }));
-vi.mock('../../../src/presentation/triggers/settings-ui-sync/settings-ui-connect', () => ({ attemptToLoadCoreApis_ACU: vi.fn(() => true), handleNewMessageDebounced_ACU: vi.fn() }));
-vi.mock('../../../src/service/runtime/helpers-remaining', () => ({ ensureInitialSeedCheckpoint_ACU: vi.fn(), handleChatCompletionReady_ACU: vi.fn(), loadPresetAndCleanCharacterData_ACU: m.loadPreset }));
+vi.mock('../../../src/presentation/triggers/settings-ui-sync/settings-ui-connect', () => ({ attemptToLoadCoreApis_ACU: vi.fn(() => true), handleNewMessageDebounced_ACU: (...args: any[]) => m.handleNewMessage(...args) }));
+vi.mock('../../../src/service/runtime/helpers-remaining', () => ({ ensureInitialSeedCheckpoint_ACU: (...args: any[]) => m.ensureSeedCheckpoint(...args), handleChatCompletionReady_ACU: vi.fn(), loadPresetAndCleanCharacterData_ACU: m.loadPreset }));
+vi.mock('../../../src/service/table/runtime-only-pending-flush', () => ({ flushRuntimeOnlyPendingChanges_ACU: (...args: any[]) => m.runtimeOnlyFlush(...args) }));
 vi.mock('../../../src/service/runtime/state-manager', () => ({
   chatMutationDebounceTimer_ACU: null, _set_chatMutationDebounceTimer_ACU: m.setChatMutationTimer, generationGate_ACU: m.gate,
-  get currentChatFileIdentifier_ACU() { return m.currentChatKey; }, currentJsonTableData_ACU: null, discardLatestGenerationContext_ACU: vi.fn(), markUserSendIntent_ACU: vi.fn(), isProcessing_Plot_ACU: false, isQuietLikeGeneration_ACU: vi.fn(), isRecentUserSendIntent_ACU: vi.fn(), recordGenerationContext_ACU: m.recordGenerationContext, recordLastUserSend_ACU: vi.fn(), settings_ACU: { plotSettings: {} }, shouldProcessAutoTableUpdateForGenerationEnded_ACU: vi.fn(), shouldProcessPlotForGeneration_ACU: vi.fn(), shouldProcessSummaryVectorIndexForGeneration_ACU: (...args: any[]) => m.shouldProcessSummary(...args),
+  get currentChatFileIdentifier_ACU() { return m.currentChatKey; }, currentJsonTableData_ACU: null, consumeGenerationContextForEnded_ACU: (...args: any[]) => m.consumeGenerationContext(...args), discardLatestGenerationContext_ACU: vi.fn(), getCurrentIsolationKey_ACU: vi.fn(() => ''), markUserSendIntent_ACU: vi.fn(), isProcessing_Plot_ACU: false, isQuietLikeGeneration_ACU: vi.fn(), isRecentUserSendIntent_ACU: vi.fn(), recordGenerationContext_ACU: m.recordGenerationContext, recordLastUserSend_ACU: vi.fn(), settings_ACU: { plotSettings: {} }, shouldProcessAutoTableUpdateForGenerationEnded_ACU: vi.fn(), shouldProcessPlotForGeneration_ACU: vi.fn(), shouldProcessSummaryVectorIndexForGeneration_ACU: (...args: any[]) => m.shouldProcessSummary(...args),
   _set_allChatMessages_ACU: m.setMessages, _set_currentChatFileIdentifier_ACU: (value: string) => { m.currentChatKey = value; m.setChat(value); }, _set_currentJsonTableData_ACU: m.setData, _set_independentTableStates_ACU: m.setTables, _set_isProcessing_Plot_ACU: vi.fn(), _set_lastTotalAiMessages_ACU: m.setTotal, _set_wasStoppedByUser_ACU: m.setWasStoppedByUser, abortOnChatMutation_ACU: vi.fn(), clearAutoFillDebounce_ACU: (...args: any[]) => m.clearAutoFillDebounce(...args), getChatMutationAbortSignal_ACU: () => null,
 }));
 vi.mock('../../../src/service/settings/settings-service', () => ({ applyTemplateScopeForCurrentChat_ACU: vi.fn(), loadSettings_ACU: vi.fn(), isSettingsStorageReadyForSave_ACU: vi.fn(() => true) }));
@@ -62,6 +68,15 @@ vi.mock('../../../src/service/settings/settings-service', () => ({ applyTemplate
 // （否则只剩 try/catch 吞错，migration 分支实际不可观测）。
 vi.mock('../../../src/service/biotracker/silent-migration', () => ({ runLegacyBiotrackerSilentMigration_ACU: vi.fn(async () => {}) }));
 vi.mock('../../../src/service/worldbook/injection-engine', () => ({ resetScriptStateForNewChat_ACU: m.resetScript }));
+// 续写宿主生成桥注册表：默认无注册实例（get 返回 undefined，init.ts 的 ?. 全部短路），
+// 需要观测事件分类的用例把 m.continuationBridge 换成带 spy 的对象即可。
+// register 必须返回可用的注销闭包——continuation-runtime 创建真实桥时会拿它做 dispose。
+vi.mock('../../../src/service/continuation/host-generation-bridge-registry', () => ({
+  registerContinuationHostGenerationBridge_ACU: vi.fn(() => () => undefined),
+  getContinuationHostGenerationBridge_ACU: () => m.continuationBridge,
+  resetContinuationHostGenerationBridgeForTests_ACU: vi.fn(),
+}));
+vi.mock('../../../src/service/continuation/internal-ai-events', () => ({ bindContinuationInternalAiGenerationStarted_ACU: vi.fn(), consumeContinuationInternalAiGenerationEnded_ACU: vi.fn(() => null) }));
 vi.mock('../../../src/service/agent/agent-worldbook-takeover', () => ({ resetPlotAgentWorldbookSessionSnapshot_ACU: m.resetTakeover }));
 vi.mock('../../../src/service/table/table-storage-strategy', () => ({ reloadStorageProvider: vi.fn(), disposeStorageProvider: m.dispose }));
 vi.mock('../../../src/service/table/storage-mode', () => ({ isSqliteMode: vi.fn(() => false) }));
@@ -121,6 +136,11 @@ beforeEach(() => {
   m.orchestrate.mockResolvedValue({ action: 'passthrough' });
   m.shouldProcessSummary.mockReturnValue(false);
   m.wasStoppedByUser = false;
+  // 事件桥与生成上下文消费口每轮回到「无注册桥 / 无上下文」的默认形态，
+  // 避免续写事件用例的 mock 实现泄漏到后面的用例。
+  m.continuationBridge = undefined;
+  m.consumeGenerationContext.mockReturnValue(undefined);
+  m.recordGenerationContext.mockReturnValue({ seq: 1 });
   Object.assign(m.gate, { lastUserMessageId: 7, lastUserMessageText: 'stale', lastUserMessageAt: 1, lastUserSendIntentAt: 2, lastGeneration: { stale: true }, generationSeq: 3, activeGenerations: [{ seq: 3 }] });
 });
 
@@ -150,7 +170,7 @@ describe('mainInitialize_ACU CHAT_CHANGED 无活动聊天早退', () => {
 
     expect(m.resetTakeover).not.toHaveBeenCalled();
     expect(m.dispose).not.toHaveBeenCalled();
-    expect(m.resetScript).toHaveBeenCalledWith('');
+    expect(m.resetScript).toHaveBeenCalledWith('', { reason: 'chat_changed' });
     expect(m.loadPreset).toHaveBeenCalledOnce();
   });
 });
@@ -251,6 +271,42 @@ describe('mainInitialize_ACU 宿主事件桥接线注册', () => {
 
 // 自动填表按「终止」后 wasStoppedByUser 残留 true，评估闸会永久 user_aborted；
 // 宿主每轮生成必须清掉上一轮残留，且必须早于本轮生成上下文记录，否则同轮仍按残留判定。
+// 开局脚本可能只把行写进运行时（skipChatSave / isImportMode）。seed checkpoint 建立后会
+// 从聊天重载运行时，未落盘的行会被直接丢弃，因此 seed 之前必须先物化回聊天。
+describe('mainInitialize_ACU seed 前物化 runtime-only 未落盘变更', () => {
+  async function armSeedGate() {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    vi.mocked(sm.isRecentUserSendIntent_ACU).mockReturnValue(true);
+    vi.mocked(sm.isQuietLikeGeneration_ACU).mockReturnValue(false);
+    vi.mocked(sm.shouldProcessPlotForGeneration_ACU).mockReturnValue(false);
+  }
+
+  it('GENERATION_AFTER_COMMANDS 在建立 seed checkpoint 之前先写回运行时未落盘变更', async () => {
+    expect(m.afterCommandsHandler).toBeTypeOf('function');
+    await armSeedGate();
+    m.runtimeOnlyFlush.mockResolvedValue({ flushed: true, sheetKeys: ['sheet_a'] });
+    m.ensureSeedCheckpoint.mockResolvedValue(false);
+
+    await m.afterCommandsHandler!('text', {}, false);
+
+    expect(m.runtimeOnlyFlush).toHaveBeenCalledWith('generation_after_commands_before_ai');
+    expect(m.ensureSeedCheckpoint).toHaveBeenCalledTimes(1);
+    expect(m.runtimeOnlyFlush.mock.invocationCallOrder[0])
+      .toBeLessThan(m.ensureSeedCheckpoint.mock.invocationCallOrder[0]);
+  });
+
+  it('写回异常只记警告，不阻断 seed checkpoint 初始化', async () => {
+    await armSeedGate();
+    m.runtimeOnlyFlush.mockRejectedValue(new Error('flush exploded'));
+    m.ensureSeedCheckpoint.mockResolvedValue(false);
+
+    await m.afterCommandsHandler!('text', {}, false);
+
+    expect(m.runtimeOnlyFlush).toHaveBeenCalledTimes(1);
+    expect(m.ensureSeedCheckpoint).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('mainInitialize_ACU GENERATION_STARTED 复位终止残留', () => {
   it('宿主开始生成时把残留 true 复位为 false', () => {
     m.wasStoppedByUser = true;
@@ -261,6 +317,82 @@ describe('mainInitialize_ACU GENERATION_STARTED 复位终止残留', () => {
     expect(m.wasStoppedByUser).toBe(false);
     expect(m.setWasStoppedByUser.mock.invocationCallOrder[0])
       .toBeLessThan(m.recordGenerationContext.mock.invocationCallOrder[0]);
+  });
+});
+
+// 3cfddd：桥的认领开关由单一 allowLoose 布尔升级为事件分类上下文。init.ts 必须把
+// quiet / dryRun / 自动触发三项如实上报——桥据此把「普通宽松认领」与「桥自己发起的
+// 交火重试认领」分开，自动触发的生成不再有权认领别人的续写轮。
+describe('mainInitialize_ACU 续写宿主生成事件上下文', () => {
+  function bridge_ACU(claims = true) {
+    const bridge = {
+      onGenerationStarted: vi.fn(() => true),
+      claimsGenerationEnded: vi.fn(() => claims),
+      onGenerationEnded: vi.fn(),
+    };
+    m.continuationBridge = bridge;
+    return bridge;
+  }
+
+  it('普通生成按完整上下文认领，且桥认领不短路常规填表派发', async () => {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    vi.mocked(sm.isQuietLikeGeneration_ACU).mockReturnValue(false);
+    vi.mocked(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).mockReturnValue(true);
+    m.recordGenerationContext.mockReturnValue({ seq: 3 } as any);
+    m.consumeGenerationContext.mockReturnValue({ seq: 3, type: 'normal', params: {}, dryRun: false, at: 1 });
+    const bridge = bridge_ACU();
+
+    m.generationStartedHandler!('normal', {}, false);
+    m.generationEndedHandler!(42);
+
+    const context = { allowOrdinaryLooseClaim: true, automaticTrigger: false, quietLike: false, dryRun: false };
+    expect(bridge.onGenerationStarted).toHaveBeenCalledWith(3, context);
+    expect(bridge.claimsGenerationEnded).toHaveBeenCalledWith(3, context);
+    expect(bridge.onGenerationEnded).toHaveBeenCalledWith(42, 3, context);
+    // 常规管线照常收到一次完整意图快照（门控不再被桥读两次）。
+    expect(m.handleNewMessage).toHaveBeenCalledTimes(1);
+    expect(m.handleNewMessage).toHaveBeenCalledWith('GENERATION_ENDED', expect.objectContaining({ eventMessageId: 42 }));
+  });
+
+  it('桥未认领本次生成结束时只走常规填表，不把正文交给桥', async () => {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    vi.mocked(sm.isQuietLikeGeneration_ACU).mockReturnValue(false);
+    vi.mocked(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).mockReturnValue(true);
+    m.consumeGenerationContext.mockReturnValue({ seq: 3, type: 'normal', params: {}, dryRun: false, at: 1 });
+    const bridge = bridge_ACU(false);
+
+    m.generationEndedHandler!(42);
+
+    expect(bridge.claimsGenerationEnded).toHaveBeenCalledWith(3, { allowOrdinaryLooseClaim: true, automaticTrigger: false, quietLike: false, dryRun: false });
+    expect(bridge.onGenerationEnded).not.toHaveBeenCalled();
+    expect(m.handleNewMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('quiet、dryRun 与自动触发的生成不开放普通宽松认领，但分类标记如实上报', async () => {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    vi.mocked(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).mockReturnValue(true);
+    const bridge = bridge_ACU(false);
+
+    vi.mocked(sm.isQuietLikeGeneration_ACU).mockReturnValueOnce(true);
+    m.generationStartedHandler!('quiet', {}, false);
+    vi.mocked(sm.isQuietLikeGeneration_ACU).mockReturnValueOnce(false);
+    m.generationStartedHandler!('normal', {}, true);
+    vi.mocked(sm.isQuietLikeGeneration_ACU).mockReturnValueOnce(false);
+    m.generationStartedHandler!('normal', { automatic_trigger: true }, false);
+
+    // 这三类生成都不是用户点发送产生的，普通宽松认领会把别人的生成错认成续写轮。
+    expect(bridge.onGenerationStarted).toHaveBeenCalledTimes(3);
+    for (const call of bridge.onGenerationStarted.mock.calls) expect(call[1].allowOrdinaryLooseClaim).toBe(false);
+    expect(bridge.onGenerationStarted.mock.calls.map(call => call[1])).toEqual([
+      { allowOrdinaryLooseClaim: false, automaticTrigger: false, quietLike: true, dryRun: false },
+      { allowOrdinaryLooseClaim: false, automaticTrigger: false, quietLike: false, dryRun: true },
+      { allowOrdinaryLooseClaim: false, automaticTrigger: true, quietLike: false, dryRun: false },
+    ]);
+
+    m.consumeGenerationContext.mockReturnValue({ seq: 3, type: 'normal', params: { automatic_trigger: true }, dryRun: false, at: 1 });
+    vi.mocked(sm.isQuietLikeGeneration_ACU).mockReturnValue(false);
+    m.generationEndedHandler!(42);
+    expect(bridge.claimsGenerationEnded).toHaveBeenLastCalledWith(3, { allowOrdinaryLooseClaim: false, automaticTrigger: true, quietLike: false, dryRun: false });
   });
 });
 

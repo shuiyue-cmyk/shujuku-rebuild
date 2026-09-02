@@ -6,7 +6,7 @@
  * 不需要扩展提示词渲染器的固定 token 表。
  */
 
-import type { StageTurnPacing_ACU } from '../model';
+import type { StageTurn_ACU, StageTurnPacing_ACU } from '../model';
 import { describeStageTempo_ACU } from '../outline-schema';
 import type { ContinuationAgentExecutionContext_ACU } from '../stage-execution-engine';
 import {
@@ -15,6 +15,8 @@ import {
   type AgentModuleSnapshot_ACU,
 } from './agent-model';
 import {
+  renderAgentChronology_ACU,
+  renderAgentChronologyByIds_ACU,
   renderAgentConstraintsByIds_ACU,
   renderAgentHooksByIds_ACU,
   renderAgentInfoGapByIds_ACU,
@@ -48,6 +50,7 @@ const READ_TOKEN_TITLES_ACU: Record<string, string> = {
   $HOOKS_LEDGER: '伏笔账本',
   $INFO_GAP: '认知与信息差时间线',
   $ACTIVE_CONSTRAINTS: '长期约束',
+  $CHRONOLOGY: '故事年代学账本',
   $TABLE_GLOBAL: '全局数据表',
   $TABLE_CHARACTERS: '角色表',
   $TABLE_CHRONICLES: '纪要表',
@@ -378,10 +381,10 @@ export function buildAgentWorldbookScanText_ACU(context: AgentResolveContext_ACU
 
 /** 四档节奏标签的语义与写作指导。低压轮的约束写成禁令，否则模型会习惯性地往每一轮里塞冲突。 */
 const TURN_PACING_GUIDANCE_ACU: Record<StageTurnPacing_ACU, string> = {
-  setup: '铺垫日常轮：写关系推进、生活质感、准备工作与信息沉淀。本轮禁止制造新危机、禁止引入新敌对方、禁止让局势升级——读者的回报来自角色之间发生了什么，而不是又出了什么事。',
+  setup: '铺垫日常轮：允许主线 hold，通过具体生活动作与人物互动，让关系、习惯、世界理解、资源、身体或认知发生可观察变化；没有必须立即处理的危机时，可隔夜、数日后或更久开始。本轮禁止制造新危机、引入新敌对方或让局势升级，允许安静闭合或留下普通生活期待。',
   pressure: '冲突推进轮：外部压力上升，危机、对抗或追逼向前推进一步。本轮只推进一个冲突，不要同时开新战线。',
   turn: '转折揭示轮：反转、信息揭露或伏笔回收。揭示要落在已经埋过的东西上，不要临时造一个真相。',
-  cooldown: '余波消化轮：写战后疗伤、复盘、情绪落地与关系变化。本轮禁止制造新危机，让上一波冲突的代价被真正看见。',
+  cooldown: '余波消化轮：允许主线 hold，完整处理上一波的伤势、代价、情绪与关系变化；可让恢复所需的一夜或数日自然流逝。本轮禁止制造新危机，让后果被真正看见，并允许安静闭合。',
 };
 
 /**
@@ -394,12 +397,84 @@ export function renderAgentTurnPacingGuidance_ACU(pacing: StageTurnPacing_ACU | 
   return `本轮节奏：${pacing}。${TURN_PACING_GUIDANCE_ACU[pacing]}`;
 }
 
+const TURN_FUNCTION_LABELS_ACU: Record<NonNullable<StageTurn_ACU['function']>, string> = {
+  daily_bond: '关系日常',
+  daily_world: '世界日常',
+  recovery: '恢复余波',
+  preparation: '准备',
+  training: '训练/成长',
+  economy: '经营',
+  side_thread: '支线',
+  conflict: '冲突',
+  reveal: '揭示',
+  payoff: '兑现',
+  transition: '过渡',
+};
+
+const TURN_MAINLINE_LABELS_ACU: Record<NonNullable<StageTurn_ACU['mainlineDelta']>, string> = {
+  hold: '主线停驻',
+  micro: '主线微推进',
+  step: '主线前进一步',
+  milestone: '主线里程碑',
+};
+
+const TURN_TIME_LABELS_ACU: Record<NonNullable<StageTurn_ACU['timeAdvance']>, string> = {
+  continuous: '紧接上一轮',
+  same_day: '同日稍后',
+  overnight: '隔夜',
+  days: '数日后',
+  weeks: '数周后',
+  months: '数月后',
+  years: '数年后',
+};
+
+const LONG_TIME_ADVANCES_ACU: ReadonlySet<string> = new Set(['days', 'weeks', 'months', 'years']);
+
+/**
+ * 渲染本轮的完整四维标记与由此触发的义务：pacing 指导 + 叙事功能 / 主线增量 / 时间关系 / 时间锚。
+ * 时间跨度较大时把 V26 的时间跳跃义务直接写在这里，主 Agent 不必再去大纲窗口的箭头行比对。
+ * 系统补全的字段单独点名，避免把推断值当成作者意图。
+ * @param turn 当前轮次；无可执行轮次时传 null
+ */
+export function renderAgentTurnGuidance_ACU(turn: StageTurn_ACU | null): string {
+  if (!turn) return renderAgentTurnPacingGuidance_ACU(null);
+  const lines = [renderAgentTurnPacingGuidance_ACU(turn.pacing)];
+  const marks: string[] = [];
+  if (turn.function) marks.push(`叙事功能=${turn.function}（${TURN_FUNCTION_LABELS_ACU[turn.function]}）`);
+  if (turn.mainlineDelta) marks.push(`主线增量=${turn.mainlineDelta}（${TURN_MAINLINE_LABELS_ACU[turn.mainlineDelta]}）`);
+  if (turn.timeAdvance) marks.push(`时间关系=${turn.timeAdvance}（${TURN_TIME_LABELS_ACU[turn.timeAdvance]}）`);
+  if (turn.timeAnchor) marks.push(`时间锚=${turn.timeAnchor}`);
+  if (marks.length) lines.push(`本轮标记：${marks.join('；')}。`);
+  if (turn.inferred?.length) {
+    lines.push(`注意：${turn.inferred.join('、')} 是系统按节奏档保守补全的推断值，不是大纲作者的明确意图；与正文实际情况冲突时以正文为准。`);
+  }
+  if (turn.timeAdvance && LONG_TIME_ADVANCES_ACU.has(turn.timeAdvance)) {
+    lines.push('时间跳跃义务：本轮计划跨越较长故事时间，finalize 的 instruction 必须写明新的相对时间锚、至少两项可感知变化（季节天气、身体伤势、衣着环境、关系熟悉度、资源经营、社会状态等），以及上一紧迫问题为何允许被跨过的连续性桥梁；不得用摘要跳过此前已承诺的关键场景。先 read $CHRONOLOGY 核对累计时间。');
+  }
+  if (turn.mainlineDelta === 'hold') {
+    lines.push('本轮主线允许停驻：不推进核心矛盾、不揭示重大情报、不制造敌方动作，但必须有一项可观察的非危机变化。');
+  }
+  return lines.join('\n');
+}
+
 /**
  * 渲染当前大纲窗口：本阶段目标、当前节点与本节点全部轮次目标。
  * 大纲缺失或当前阶段已完成时如实说明状态，并指出必须先派工大纲子代理。
  * @param context 解析上下文
  * @returns 自然语言文本
  */
+function renderTurnSemanticMeta_ACU(turn: StageTurn_ACU): string {
+  const parts = [
+    `pacing=${turn.pacing}`,
+    `function=${turn.function ?? '未标注'}`,
+    `mainline=${turn.mainlineDelta ?? '未标注'}`,
+    `time=${turn.timeAdvance ?? '未标注'}`,
+  ];
+  if (turn.timeAnchor) parts.push(`anchor=${turn.timeAnchor}`);
+  if (turn.inferred?.length) parts.push(`系统补全=${turn.inferred.join(',')}`);
+  return parts.join('｜');
+}
+
 export function renderAgentOutlineWindow_ACU(context: AgentResolveContext_ACU): string {
   const { execution } = context;
   if (!execution.stage) {
@@ -411,18 +486,20 @@ export function renderAgentOutlineWindow_ACU(context: AgentResolveContext_ACU): 
   if (!execution.revision || !execution.node || !execution.turn) {
     return `第 ${execution.stage.stageNumber} 阶段的大纲当前不可执行（可能等待用户确认或游标无效）。本轮无法交付写作指导。`;
   }
-  // 轮次/节点都带 [ID] 前缀：edit_outline 协议按 nodeId/turnId 定位，模型必须能从渲染里拿到编辑目标。
+  // 轮次与节点都带 [ID] 前缀：便于主 Agent 在委派 outline-architect 时精确引用待维护目标。
   const turns = execution.node.turns
-    .map((turn, index) => `${index + 1}. [${turn.id}]（${turn.pacing}）${turn.goal}${turn.id === execution.turn!.id ? '  ← 本轮' : ''}`)
+    .map((turn, index) => `${index + 1}. [${turn.id}]（${renderTurnSemanticMeta_ACU(turn)}）${turn.goal}${turn.id === execution.turn!.id ? '  ← 本轮' : ''}`)
     .join('\n');
   return [
     `阶段 ${execution.stage.stageNumber}：${execution.revision.outline.title}`,
     `阶段目标：${execution.revision.outline.goal}`,
     `阶段节奏形态：${describeStageTempo_ACU(execution.revision.outline.tempo)}——它决定本阶段低压轮的下限，也决定下一阶段不能选什么形态。`,
+    `阶段结构职责：${execution.revision.outline.role ?? '旧快照未标注'}`,
+    `阶段时间目标：${execution.revision.outline.timeSpanGoal ?? '未设定'}`,
     `当前节点：[${execution.node.id}] ${execution.node.title}`,
     `节点目标：${execution.node.goal}`,
     `阶段内轮次进度：第 ${execution.turnNumber} / ${execution.revision.outline.totalTurns} 轮`,
-    '本节点逐轮目标（括号内是节奏标签）：',
+    '本节点逐轮目标（括号内依次给出 pacing、function、mainline、time 与可选 anchor）：',
     turns,
     renderAgentTurnPacingGuidance_ACU(execution.turn.pacing),
     '注意：大纲是计划，不是已经发生的事实。',
@@ -444,7 +521,7 @@ export function renderAgentOutlineState_ACU(context: AgentResolveContext_ACU): s
   if (!execution.revision || !execution.node || !execution.turn) {
     return `大纲状态：第 ${execution.stage.stageNumber} 阶段的大纲当前不可执行（可能等待确认或游标无效）。`;
   }
-  return `大纲状态：第 ${execution.stage.stageNumber} 阶段「${execution.revision.outline.title}」（节奏形态 ${describeStageTempo_ACU(execution.revision.outline.tempo)}），第 ${execution.turnNumber}/${execution.revision.outline.totalTurns} 轮，当前节点 [${execution.node.id}]，本轮轮次 [${execution.turn.id}]，本轮节奏 ${execution.turn.pacing}。完整大纲窗口用 read $OUTLINE_WINDOW 调阅。`;
+  return `大纲状态：第 ${execution.stage.stageNumber} 阶段「${execution.revision.outline.title}」（节奏形态 ${describeStageTempo_ACU(execution.revision.outline.tempo)}，结构职责 ${execution.revision.outline.role ?? '未标注'}），第 ${execution.turnNumber}/${execution.revision.outline.totalTurns} 轮，当前节点 [${execution.node.id}]，本轮轮次 [${execution.turn.id}]，${renderTurnSemanticMeta_ACU(execution.turn)}。完整大纲窗口用 read $OUTLINE_WINDOW 调阅。`;
 }
 
 const ROW_RANGE_PATTERN_ACU = /^(\d+)-(\d+)$/;
@@ -514,7 +591,10 @@ export function resolveAgentReadToken_ACU(token: string, context: AgentResolveCo
 
   const storyArcIds = splitIdSuffix_ACU(normalized, '$STORY_ARC');
   if (storyArcIds !== null) {
-    return { title: storyArcIds.length ? `故事总纲条目 ${storyArcIds.join('、')}` : '故事总纲（全部活跃条目）', text: renderAgentStoryArcByIds_ACU(context.moduleSnapshot, storyArcIds.length ? storyArcIds : undefined) };
+    const completedStageNumbers = context.execution.task.stages
+      .filter(stage => stage.status === 'completed')
+      .map(stage => stage.stageNumber);
+    return { title: storyArcIds.length ? `故事总纲条目 ${storyArcIds.join('、')}` : '故事总纲（全部活跃条目）', text: renderAgentStoryArcByIds_ACU(context.moduleSnapshot, storyArcIds.length ? storyArcIds : undefined, completedStageNumbers) };
   }
   const hookIds = splitIdSuffix_ACU(normalized, '$HOOKS_LEDGER');
   if (hookIds !== null) {
@@ -528,6 +608,12 @@ export function resolveAgentReadToken_ACU(token: string, context: AgentResolveCo
   if (constraintIds !== null) {
     return { title: constraintIds.length ? `长期约束条目 ${constraintIds.join('、')}` : '长期约束（全部条目）', text: renderAgentConstraintsByIds_ACU(context.moduleSnapshot, constraintIds.length ? constraintIds : undefined) };
   }
+  const chronologyIds = splitIdSuffix_ACU(normalized, '$CHRONOLOGY');
+  if (chronologyIds !== null) {
+    return chronologyIds.length
+      ? { title: `故事年代学条目 ${chronologyIds.join('、')}`, text: renderAgentChronologyByIds_ACU(context.moduleSnapshot, chronologyIds) }
+      : { title: '故事年代学账本（已发生正文结算出的时间事实）', text: renderAgentChronology_ACU(context.moduleSnapshot) };
+  }
 
   const title = READ_TOKEN_TITLES_ACU[normalized] ?? normalized;
   switch (normalized) {
@@ -538,7 +624,7 @@ export function resolveAgentReadToken_ACU(token: string, context: AgentResolveCo
     case '$HISTORY_UNSETTLED': return { title, text: renderAgentUnsettledHistory_ACU(context) };
     case '$OUTLINE_WINDOW': return { title, text: renderAgentOutlineWindow_ACU(context) };
     case '$CURRENT_TURN_GOAL': return { title, text: context.execution.turn?.goal || '（尚无可执行的大纲轮次，本轮目标待大纲创建或继续后确定）' };
-    case '$CURRENT_TURN_PACING': return { title, text: renderAgentTurnPacingGuidance_ACU(context.execution.turn?.pacing ?? null) };
+    case '$CURRENT_TURN_PACING': return { title, text: renderAgentTurnGuidance_ACU(context.execution.turn ?? null) };
     case '$USER_INTENT': return { title, text: context.originInstruction || '（用户未提供初始要求）' };
     case '$TABLE_GLOBAL': return { title, text: renderAgentTableByAliases_ACU('global', context.tableData) };
     case '$TABLE_CHARACTERS': return { title, text: renderAgentTableByAliases_ACU('characters', context.tableData) };

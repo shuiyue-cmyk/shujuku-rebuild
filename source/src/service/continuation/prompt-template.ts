@@ -13,6 +13,7 @@ import {
   buildDefaultAgentMainlinePlannerPrompt_ACU,
   buildDefaultAgentMaintainerPrompt_ACU,
   buildDefaultAgentReviewerPrompt_ACU,
+  buildDefaultAgentFinalReviewerPrompt_ACU,
 } from './agent/agent-defaults';
 
 export const CONTINUATION_PROMPT_PLACEHOLDERS_ACU = [
@@ -24,7 +25,7 @@ export const CONTINUATION_PROMPT_PLACEHOLDERS_ACU = [
   // 它只作为读集标识符，由解析器汇入 $AGENT_READ_MATERIALS。
   '$HISTORY_ANCHOR', '$STORY_TEXT', '$UNSETTLED_RANGE', '$AGENT_CATALOG', '$MODULE_CATALOG',
   '$TABLE_CATALOG', '$TABLE_GLOBAL', '$TABLE_CHARACTERS', '$TABLE_CHRONICLES',
-  '$HOOKS_LEDGER', '$INFO_GAP', '$ACTIVE_CONSTRAINTS', '$BUDGET', '$TOOL_RESULTS',
+  '$HOOKS_LEDGER', '$INFO_GAP', '$ACTIVE_CONSTRAINTS', '$CHRONOLOGY', '$BUDGET', '$TOOL_RESULTS',
   '$AGENT_READ_MATERIALS', '$AGENT_TASK', '$AGENT_WRITE_SCOPE', '$USER_INTENT', '$OUTLINE_WINDOW',
   // 目录+状态骨架占位符：楼层索引、大纲单行状态、已启用世界书目录、读集词汇表。
   '$STORY_CATALOG', '$OUTLINE_STATE', '$WORLDBOOK_CATALOG', '$AGENT_READ_CATALOG',
@@ -44,7 +45,7 @@ const PLACEHOLDER_ALTERNATION_ACU = [...CONTINUATION_PROMPT_PLACEHOLDERS_ACU]
   .sort((left, right) => right.length - left.length)
   .map(token => token.replace(/[$]/g, '\\$'))
   .join('|');
-export type ContinuationPromptKind_ACU = 'outline' | 'agent_main' | 'agent_arc' | 'agent_maintainer' | 'agent_mainline' | 'agent_beat' | 'agent_reviewer';
+export type ContinuationPromptKind_ACU = 'outline' | 'agent_main' | 'agent_arc' | 'agent_maintainer' | 'agent_mainline' | 'agent_beat' | 'agent_reviewer' | 'agent_final_reviewer';
 type PlaceholderResolver_ACU = () => string | Promise<string | null | undefined> | null | undefined;
 
 function failPrompt_ACU(code: 'CONTINUATION_ENVELOPE_INVALID' | 'CONTINUATION_PROMPT_INVALID' | 'CONTINUATION_PROMPT_EMPTY', phase: ContinuationErrorPhase_ACU, message: string, details?: Record<string, unknown>): never {
@@ -100,5 +101,6 @@ export function restoreContinuationPromptDefault_ACU(settings: ContinuationSetti
   if (kind === 'agent_mainline') agentPrompts.mainlinePlanner = buildDefaultAgentMainlinePlannerPrompt_ACU();
   if (kind === 'agent_beat') agentPrompts.beatPlanner = buildDefaultAgentBeatPlannerPrompt_ACU();
   if (kind === 'agent_reviewer') agentPrompts.reviewer = buildDefaultAgentReviewerPrompt_ACU();
+  if (kind === 'agent_final_reviewer') agentPrompts.finalReviewer = buildDefaultAgentFinalReviewerPrompt_ACU();
   return { ...settings, agentPrompts };
 }

@@ -300,6 +300,17 @@ function summarizeSettingsForLog_ACU(settings: any): Record<string, any> {
   return safe;
 }
 
+/**
+ * 真实切换聊天时重置剧情世界书选择：跨聊天沿用上一份世界书配置既无意义也可能
+ * 指向新聊天不存在的世界书。只重置 plotWorldbookConfig，其余剧情设置原样保留；
+ * 填表侧的 characterSettings[charId].worldbookConfig 不在本函数作用域内。
+ */
+export function resetPlotWorldbookSelectionForChatChange_ACU(): SaveSettingsResult_ACU {
+  ensurePlotSettingsObject_ACU();
+  settings_ACU.plotSettings.plotWorldbookConfig = buildDefaultPlotWorldbookConfig_ACU();
+  return saveSettings_ACU();
+}
+
 export function saveSettings_ACU(): SaveSettingsResult_ACU {
   if (!settingsStorageReadyForSave_ACU) {
       // [M5] 记录挂起保存：存储就绪翻转点会补存一次，避免门控拒绝导致静默丢失。

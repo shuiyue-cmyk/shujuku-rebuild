@@ -424,6 +424,11 @@ export interface ResolvedPresetCallLifecycle_ACU {
 export interface ResolvedPresetCallExtras_ACU {
     /** OpenAI 兼容缓存路由 key。稳定的 key 让同一会话的请求落到同一缓存命名空间。 */
     promptCacheKey?: string;
+    /**
+     * 本次调用的最大输出 token 下限：预设里的 max_tokens 小于它时抬到该值，大于时沿用预设。
+     * 只作用于请求体的 max_tokens 参数，不做产出长度检查。用于总纲、大纲这类输出体量随任务增长的调用。
+     */
+    minOutputTokens?: number;
 }
 
 /**
@@ -490,7 +495,9 @@ export async function callAIWithResolvedPreset_ACU(
         try { lifecycle.onUsage(usage); } catch { /* 用量回调异常不允许影响调用主流程。 */ }
     };
     const apiConfig = resolved.apiConfig || {};
-    const maxTokens = apiConfig.max_tokens ?? apiConfig.maxTokens ?? 4096;
+    const presetMaxTokens = apiConfig.max_tokens ?? apiConfig.maxTokens ?? 4096;
+    const outputTokenFloor = Number.isFinite(extras?.minOutputTokens) ? Math.max(0, Math.trunc(extras!.minOutputTokens!)) : 0;
+    const maxTokens = Math.max(presetMaxTokens, outputTokenFloor);
     // 酒馆主 API（tavern / useMainApi）已剥离，恒走自定义 chat-completions 路径
     if (!apiConfig.url || !apiConfig.model) {
         throw new Error('自定义 API 的 URL 或模型未配置。');
