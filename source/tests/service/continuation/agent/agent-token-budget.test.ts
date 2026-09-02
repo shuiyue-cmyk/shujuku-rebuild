@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { appendAgentConversation_ACU, buildEmptyAgentConversation_ACU } from '../../../../src/service/continuation/agent/agent-conversation-store';
 import {
   buildAgentHandoffReport_ACU,
-  compactAgentConversation_ACU,
   countAgentTokens_ACU,
   createAgentTokenCounter_ACU,
   measureAgentConversationTokens_ACU,
@@ -74,49 +73,6 @@ describe('交接报告', () => {
 });
 
 describe('会话压缩', () => {
-  it('预算不限或未超预算时原样返回同一引用', async () => {
-    const snapshot = threeTurns();
-    expect((await compactAgentConversation_ACU(snapshot, 0, countByChar)).snapshot).toBe(snapshot);
-    expect((await compactAgentConversation_ACU(snapshot, 100_000, countByChar))).toMatchObject({ changed: false, withinBudget: true });
-    expect(await compactAgentConversation_ACU(buildEmptyAgentConversation_ACU(), 10, countByChar)).toMatchObject({ changed: false });
-  });
-
-  it('超预算时从最早的轮次开始整轮丢弃，浓缩成开头的交接报告', async () => {
-    const compaction = await compactAgentConversation_ACU(threeTurns(), 120, countByChar);
-
-    expect(compaction.changed).toBe(true);
-    expect(compaction.droppedTurns).toBe(1);
-    expect(compaction.droppedMessages).toBe(4);
-    const messages = compaction.snapshot.messages;
-    expect(messages[0].kind).toBe('handoff');
-    expect(messages[0].text).toContain('第 1 轮');
-    expect(messages.some(message => message.text.includes('A'.repeat(60)))).toBe(false);
-    // 后两轮完整保留，且 id 不与交接报告撞号。
-    expect(messages.slice(1).map(message => message.turnKey)).toEqual(['turn-2', 'turn-2', 'turn-3', 'turn-3']);
-    expect(new Set(messages.map(message => message.id)).size).toBe(messages.length);
-  });
-
-  it('最近一轮永远完整保留：单轮本身超预算时如实标注未落进预算', async () => {
-    const single = build([
-      { kind: 'turn', text: '开始新的一轮规划：第 1 轮', digest: '第 1 轮', turnKey: 'turn-1' },
-      { kind: 'agent', text: 'E'.repeat(500), digest: '交付写作指导', turnKey: 'turn-1' },
-    ]);
-    const compaction = await compactAgentConversation_ACU(single, 50, countByChar);
-    expect(compaction).toMatchObject({ changed: false, withinBudget: false });
-    expect(compaction.snapshot).toBe(single);
-
-    // 多轮但仅剩最后一轮时仍然超预算：报告已生成，withinBudget 如实为 false。
-    const twoTurns = build([
-      { kind: 'turn', text: '第 1 轮', digest: '第 1 轮', turnKey: 'turn-1' },
-      { kind: 'agent', text: 'F'.repeat(200), digest: '交付写作指导', turnKey: 'turn-1' },
-      { kind: 'turn', text: '第 2 轮', digest: '第 2 轮', turnKey: 'turn-2' },
-      { kind: 'agent', text: 'G'.repeat(300), digest: '交付写作指导', turnKey: 'turn-2' },
-    ]);
-    const second = await compactAgentConversation_ACU(twoTurns, 100, countByChar);
-    expect(second).toMatchObject({ changed: true, droppedTurns: 1, withinBudget: false });
-    expect(second.snapshot.messages[0].kind).toBe('handoff');
-  });
-
   it('记忆化计数器对同一段文本只问宿主一次', async () => {
     const raw = vi.fn(countByChar);
     const counter = createAgentTokenCounter_ACU(raw);
@@ -179,34 +135,5 @@ describe('上下文开销计入', () => {
     expect(triggered.totalTokens).toBe(conversationTokens + 100);
     // 会话为空时无可压缩：开销再大也只能 skip，压缩改变不了任何东西。
     expect(await resolveAgentCompactionTiming_ACU(buildEmptyAgentConversation_ACU(), 10, false, countByChar, 999)).toMatchObject({ action: 'skip' });
-  });
-
-  it('压缩以「会话 + 开销」整体回到预算内为目标', async () => {
-    const snapshot = threeTurns();
-    const conversationTokens = await measureAgentConversationTokens_ACU(snapshot, countByChar);
-    const budget = conversationTokens + 50;
-    // 不带开销时未超预算，原样返回；同一预算带上开销后必须真的开始丢轮次。
-    expect((await compactAgentConversation_ACU(snapshot, budget, countByChar)).changed).toBe(false);
-    const compaction = await compactAgentConversation_ACU(snapshot, budget, countByChar, 100);
-    expect(compaction.changed).toBe(true);
-    expect(compaction.snapshot.messages[0].kind).toBe('handoff');
-    // 报告的总量口径与判定一致：包含开销本身。
-    expect(compaction.totalTokens).toBeGreaterThanOrEqual(100);
-  });
-});
-
-describe('会话压缩（续）', () => {
-  it('反复压缩不丢失早期信息：上一次的交接报告被继承进新报告', async () => {
-    const first = await compactAgentConversation_ACU(threeTurns(), 120, countByChar);
-    const grown = appendAgentConversation_ACU(first.snapshot, [
-      { kind: 'turn', text: '开始新的一轮规划：第 4 轮', digest: '第 4 轮', turnKey: 'turn-4' },
-      { kind: 'agent', text: 'H'.repeat(80), digest: '交付写作指导', turnKey: 'turn-4' },
-    ]);
-    const second = await compactAgentConversation_ACU(grown, 100, countByChar);
-
-    expect(second.changed).toBe(true);
-    expect(second.snapshot.messages[0].kind).toBe('handoff');
-    expect(second.snapshot.messages[0].text).toContain('第 1 轮');
-    expect(second.snapshot.messages[0].text).toContain('第 2 轮');
   });
 });

@@ -1207,6 +1207,38 @@ describe('runPlotTasksRuntime_ACU', () => {
     expect(mockSavePlotToLatestMessage).toHaveBeenCalledWith(true);
   });
 
+  it('条件模板检测内容组合用户+AI 输入（composeSeedMatchContent：AI-only 会漏用户触发的 seed 条件）', async () => {
+    const { getLatestUserMessageContent_ACU } = await import('../../../../src/service/runtime/template-vars');
+    vi.mocked(getLatestUserMessageContent_ACU).mockReturnValue('玩家：发动突袭');
+    mockGetLatestAIMessageContent.mockReturnValue('AI：战况推进');
+    try {
+      await runPlotTasksRuntime_ACU({
+        tasks: [
+          {
+            id: 'task-seed',
+            name: '任务S',
+            stage: 1,
+            order: 1,
+            maxRetries: 1,
+            promptGroup: [{ role: 'user', content: '<seed:突袭>推进剧情</seed>' }],
+          },
+        ],
+      }, '当前输入');
+
+      // renderPlotTaskContentWithIsolatedVariables_ACU 拿到的 seedContentForConditional 就是
+      // 下游 parseIfBlockRecursive 的 context.seedContent（mock compose=user\nAI join）；
+      // buildPlotSharedContext_ACU 里回退成 AI-only（少传用户实参）即红。
+      const call = mockRenderPlotTaskContentWithIsolatedVariables.mock.calls
+        .find(c => c[1] && typeof c[1] === 'object' && 'seedContentForConditional' in (c[1] as any));
+      expect(call).toBeTruthy();
+      const sharedContext = call![1] as any;
+      expect(sharedContext.seedContentForConditional).toContain('玩家：发动突袭');
+      expect(sharedContext.seedContentForConditional).toContain('AI：战况推进');
+    } finally {
+      vi.mocked(getLatestUserMessageContent_ACU).mockReturnValue('');
+    }
+  });
+
 
   it('严格世界书读取失败时在 API 调用前阻断任务', async () => {
     mockGetLorebookEntriesStrict.mockResolvedValue({

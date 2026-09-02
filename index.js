@@ -75695,12 +75695,6 @@ function buildFinalPlotInjectionMessage_ACU(finalSystemDirectiveContent, taskRes
     return [baseDirective, rawFallbackText].filter(Boolean).join('\n');
 }
 
-function estimateTextTk_ACU(value) {
-    const text = String(value ?? '').trim();
-    if (!text)
-        return 0;
-    return Math.max(1, Math.ceil(text.length / 1.6));
-}
 function normalizeTkBudgetNumber_ACU(value, fallback = 0) {
     const raw = Number(value);
     const base = Number.isFinite(raw) ? Math.trunc(raw) : fallback;
@@ -77765,7 +77759,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.0.7" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.0.8" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -121633,74 +121627,6 @@ function buildAgentHandoffReport_ACU(messages) {
     const readKeys = [...new Set(messages.filter(message => message.kind === 'tool' && message.readKey).map(message => message.readKey))];
     const readsLine = readKeys.length ? `\n曾调阅过的资料地址（内容已移出上下文，需要时用 read 重新调阅）：${readKeys.join('、')}` : '';
     return [...inherited, `${head}\n${sections.join('\n')}${readsLine}`].join('\n\n');
-}
-/**
- * 按 token 预算压缩会话。
- *
- * 压缩是非破坏的：不重建消息序列，只产出一个 compaction 标记（截止消息 id + 交接报告）。
- * 调用方把标记写进末楼，拼接层负责投影；本函数同时返回投影后的会话视图供本次运行继续使用。
- * @param snapshot 当前会话视图
- * @param budgetTokens 预算上限；<= 0 视为不限
- * @param count token 统计函数，缺省用 countAgentTokens_ACU
- * @param overheadTokens 会话之外的上下文开销；压缩目标是让「会话 + 开销」整体回到预算内
- * @returns 压缩结果；changed 为 false 时 snapshot 与入参同一引用、mark 为 null
- */
-async function compactAgentConversation_ACU(snapshot, budgetTokens, count = countAgentTokens_ACU, overheadTokens = 0) {
-    const unchanged = (totalTokens, withinBudget) => ({ snapshot, mark: null, changed: false, droppedMessages: 0, droppedTurns: 0, totalTokens, withinBudget });
-    if (!Number.isFinite(budgetTokens) || budgetTokens <= 0)
-        return unchanged(0, true);
-    if (!snapshot.messages.length)
-        return unchanged(overheadTokens, overheadTokens <= budgetTokens);
-    const sizes = await measureMessages_ACU(snapshot.messages, count);
-    const total = overheadTokens + sizes.reduce((sum, size) => sum + size, 0);
-    if (total <= budgetTokens)
-        return unchanged(total, true);
-    const groups = groupByTurn_ACU(snapshot.messages);
-    const groupSizes = (() => {
-        let cursor = 0;
-        return groups.map(group => {
-            const size = group.reduce((sum, _message, offset) => sum + sizes[cursor + offset], 0);
-            cursor += group.length;
-            return size;
-        });
-    })();
-    let firstKept = 0;
-    let remaining = total;
-    // 最近一轮永远完整保留：宁可超预算也不能让主 Agent 丢失当前轮的上下文。
-    while (firstKept < groups.length - 1 && remaining > budgetTokens) {
-        remaining -= groupSizes[firstKept];
-        firstKept += 1;
-    }
-    if (firstKept === 0)
-        return unchanged(total, false);
-    const dropped = groups.slice(0, firstKept).flat();
-    const kept = groups.slice(firstKept).flat();
-    const report = buildAgentHandoffReport_ACU(dropped);
-    // 截止 id 取被丢弃消息的最大 id。消息 id 按追加顺序单调递增（合成交接消息的 id 恒小于
-    // 其后消息），因此「丢弃视图前缀」等价于「丢弃 id ≤ 截止值」。
-    const compactedThroughId = dropped.reduce((max, message) => Math.max(max, message.id), 0);
-    if (!report || compactedThroughId <= 0)
-        return unchanged(total, false);
-    const mark = { compactedThroughId, report, at: Date.now() };
-    const handoffMessage = {
-        id: compactedThroughId,
-        kind: 'handoff',
-        text: report,
-        digest: `交接报告（浓缩 ${firstKept} 个轮次）`,
-        turnKey: '',
-        at: mark.at,
-    };
-    const next = { ...snapshot, messages: [handoffMessage, ...kept] };
-    const reportTokens = await count(report);
-    return {
-        snapshot: next,
-        mark,
-        changed: true,
-        droppedMessages: dropped.length,
-        droppedTurns: firstKept,
-        totalTokens: remaining + reportTokens,
-        withinBudget: remaining + reportTokens <= budgetTokens,
-    };
 }
 
 const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
@@ -176654,7 +176580,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260902-09";
+        const stamp = "20260902-10";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -176663,7 +176589,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.0.7";
+        const v = "9.0.8";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {

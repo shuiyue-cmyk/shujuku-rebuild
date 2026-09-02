@@ -260,4 +260,35 @@ describe('performContentOptimization_ACU', () => {
     const result = await performContentOptimization_ACU('内容', {});
     expect(result.success).toBe(false);
   });
+
+  it('seed 匹配内容组合用户+AI 输入（composeSeedMatchContent：AI-only 会漏用户触发的 seed 条件）', async () => {
+    const helpers = await import('../../../src/service/runtime/helpers-remaining');
+    const { callAIWithPreset_ACU } = await import('../../../src/service/ai/api-call');
+    const { applyOptimizations_ACU } = await import('../../../src/shared/text-optimization');
+    vi.mocked(callAIWithPreset_ACU).mockResolvedValue(JSON.stringify({
+      optimizations: [{ type: 'replace', original: '旧文本', optimized: '新文本', plan: '优化计划' }],
+      summary: '优化总结',
+    }));
+    vi.mocked(applyOptimizations_ACU).mockReturnValue('优化后的内容');
+    vi.mocked(helpers.getLatestUserMessageContent_ACU).mockReturnValue('玩家：发动突袭');
+    vi.mocked(helpers.getLatestAIMessageContent_ACU).mockReturnValue('AI：战况推进');
+    // 提示词必须非空，否则 messages.forEach 不执行，条件模板分支根本走不到。
+    mockSettings.contentOptimizationSettings = {
+      maxOptimizations: 10, loopCount: 1, retryCount: 1,
+      promptGroup: [{ role: 'user', content: '<seed:突袭>请优化正文</seed>' }],
+    };
+
+    const { performContentOptimization_ACU } = await import('../../../src/service/optimization/content-optimization');
+    const result = await performContentOptimization_ACU('原始内容', { currentLoop: 1 });
+    expect(result.success).toBe(true);
+
+    // context.seedContent 必须含用户楼内容（mock compose=user\nAI join）；
+    // 调用点回退成 AI-only（content-optimization.ts 的 composeSeedMatchContent_ACU 少传实参）即红。
+    const call = vi.mocked(helpers.parseIfBlockRecursive_ACU).mock.calls
+      .find(c => c.some(a => a && typeof a === 'object' && 'seedContent' in (a as any)));
+    expect(call).toBeTruthy();
+    const ctx = call!.find(a => a && typeof a === 'object' && 'seedContent' in (a as any)) as any;
+    expect(ctx.seedContent).toContain('玩家：发动突袭');
+    expect(ctx.seedContent).toContain('AI：战况推进');
+  });
 });
