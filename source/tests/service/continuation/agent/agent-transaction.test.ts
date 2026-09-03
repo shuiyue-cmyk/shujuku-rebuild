@@ -8,7 +8,7 @@ function baseSnapshot_ACU(): AgentModuleSnapshot_ACU {
   return {
     ...buildEmptyAgentModuleSnapshot_ACU(),
     settledThroughIndex: 5,
-    revisions: { hooks: 2, infoGap: 3, constraints: 1, storyArc: 4, chronology: 5 },
+    revisions: { hooks: 2, infoGap: 3, constraints: 1, storyArc: 4, chronology: 5, webRefs: 2 },
     hooks: [{ id: 'H1', summary: '断裂的封印', status: 'planted', importance: 'high', plantedIndex: 2, updatedIndex: 2, plannedPayoff: '第三阶段回收', retired: false, retiredReason: '' }],
     infoGap: [{ id: 'E1', topic: '守门人身份', objectiveFact: '内应', readerKnown: '行为反常', characterKnowledge: [], revealStatus: 'unrevealed', revealIndex: null, retired: false, retiredReason: '' }],
     constraints: [{ id: 'C01-1', text: '不得提前揭穿幕后', reason: '既有裁决', createdIndex: 3 }],
@@ -138,12 +138,12 @@ describe('Agent 总纲写集事务', () => {
 
   it('patch 回写阶段进度只改给定字段，且只给 storyArc 升版本、不动结算水位', () => {
     const seeded = applyAgentModuleDelta_ACU(baseSnapshot_ACU(), delta_ACU({ storyArc: [storyArcItem_ACU({ stageNumbers: [1] })] }), ['storyArc'], 6, [1]);
-    expect(seeded.revisions).toEqual({ hooks: 2, infoGap: 3, constraints: 1, storyArc: 5, chronology: 5 });
+    expect(seeded.revisions).toEqual({ hooks: 2, infoGap: 3, constraints: 1, storyArc: 5, chronology: 5, webRefs: 2 });
 
     const patched = applyAgentModuleDelta_ACU(seeded, delta_ACU({ storyArcPatches: [{ id: 'VOL-01', stageNumbers: [3, 2, 2] }] }), ['storyArc'], 9, [2, 3]);
     expect(patched.storyArc[0].stageNumbers).toEqual([2, 3]);
     expect(patched.storyArc[0].direction).toBe(seeded.storyArc[0].direction);
-    expect(patched.revisions).toEqual({ hooks: 2, infoGap: 3, constraints: 1, storyArc: 6, chronology: 5 });
+    expect(patched.revisions).toEqual({ hooks: 2, infoGap: 3, constraints: 1, storyArc: 6, chronology: 5, webRefs: 2 });
     expect(patched.settledThroughIndex).toBe(seeded.settledThroughIndex);
   });
 
@@ -282,7 +282,7 @@ describe('Agent 写集事务', () => {
     expect(applied.hooks[0].plantedIndex).toBe(2);
     expect(applied.hooks[0].status).toBe('reinforced');
     expect(applied.hooks[0].updatedIndex).toBe(6);
-    expect(applied.revisions).toEqual({ hooks: 3, infoGap: 3, constraints: 1, storyArc: 4, chronology: 5 });
+    expect(applied.revisions).toEqual({ hooks: 3, infoGap: 3, constraints: 1, storyArc: 4, chronology: 5, webRefs: 2 });
   });
 
   it('retire 必须命中既有条目并给出理由', () => {
@@ -363,7 +363,7 @@ describe('Agent 年代学写集事务', () => {
 
     expect(applied.chronology).toHaveLength(2);
     expect(applied.chronology.find(entry => entry.id === 'T2')).toMatchObject({ anchor: '入城后的第七天', evidenceIndexes: [4, 5], updatedIndex: 6, retired: false });
-    expect(applied.revisions).toEqual({ hooks: 2, infoGap: 3, constraints: 1, storyArc: 4, chronology: 6 });
+    expect(applied.revisions).toEqual({ hooks: 2, infoGap: 3, constraints: 1, storyArc: 4, chronology: 6, webRefs: 2 });
   });
 
   it('证据楼层去重升序，未来楼层或空证据拒绝且无部分提交', () => {

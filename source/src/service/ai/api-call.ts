@@ -7,7 +7,7 @@ export type { AiUsageMetadata_ACU };
 import { settings_ACU } from '../runtime/state-manager';
 import { getHostRequestHeaders_ACU } from '../../data/gateways/ai-gateway';
 import { assertSafeHttpEndpoint_ACU, logDebug_ACU, logWarn_ACU } from '../../shared/utils';
-import { resolveApiConfigByPreset_ACU } from '../settings/api-preset-service';
+import { resolveApiConfigByPreset_ACU, normalizePromptPostProcessing_ACU } from '../settings/api-preset-service';
 import { acquirePresetRateLimitSlot_ACU } from './preset-rate-limiter';
 import { isDebugLogEnabled } from '../../shared/log-buffer';
 
@@ -216,6 +216,10 @@ export function buildCustomApiRequestBody_ACU(
     logWarn_ACU('[buildCustomApiRequestBody] 用户 stream_options 不是对象，已由插件对象替换', composedIncludeBody.diagnostic);
   }
 
+  // 提示词后处理（预设级可配）：缺省 strict 与历史写死行为一致；显式「未选择」（''）
+  // 时请求体省略该键，后端原样透传消息，保留提示词组中部 system 段的角色。
+  const promptPostProcessing_ACU = normalizePromptPostProcessing_ACU(effectiveApiConfig.promptPostProcessing);
+
   const body: Record<string, any> = {
     // 统一将 messages 的 role 归一为小写（system / user / assistant）。
     //
@@ -270,7 +274,8 @@ export function buildCustomApiRequestBody_ACU(
     })(),
     enable_web_search: false,
     request_images: false,
-    custom_prompt_post_processing: 'strict',
+    // 提示词后处理：'strict' 等合法值透传；显式 '' 时省略该键（后端按 none 原样透传）。
+    ...(promptPostProcessing_ACU ? { custom_prompt_post_processing: promptPostProcessing_ACU } : {}),
     reverse_proxy: effectiveApiConfig.url,
     proxy_password: '',
     custom_url: effectiveApiConfig.url,

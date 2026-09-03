@@ -102,6 +102,37 @@ describe('useApiPresetStore', () => {
     expect(store.currentConfigReady).toBe(true);
   });
 
+  it('同名异协议 / 异后处理预设不再误判为当前配置（仅差一个比较键即不匹配）', async () => {
+    const base = () => {
+      const settings = createSettings();
+      settings.defaultApiPresetName = '';
+      settings.apiPresetBindingsByChat = {};
+      settings.apiMode = 'custom';
+      return settings;
+    };
+
+    // 仅接口协议不同（alpha 归一后为 openai_compat）：不得匹配。
+    const diffFormat = base();
+    diffFormat.apiConfig = { url: 'https://alpha.test', apiKey: 'ka', model: 'ma', useMainApi: false, max_tokens: 1000, temperature: 0.7, customApiFormat: 'claude_messages' };
+    const { store: storeFormat } = await importStore(diffFormat);
+    storeFormat.refreshFromSettings();
+    expect(storeFormat.activePresetName).toBe('');
+
+    // 仅提示词后处理不同（alpha 归一后为 strict，当前显式未选择）：不得匹配。
+    const diffPost = base();
+    diffPost.apiConfig = { url: 'https://alpha.test', apiKey: 'ka', model: 'ma', useMainApi: false, max_tokens: 1000, temperature: 0.7, promptPostProcessing: '' };
+    const { store: storePost } = await importStore(diffPost);
+    storePost.refreshFromSettings();
+    expect(storePost.activePresetName).toBe('');
+
+    // 负向控制的反面：两键一致时仍能匹配（归一化后 openai_compat + strict）。
+    const sameKeys = base();
+    sameKeys.apiConfig = { url: 'https://alpha.test', apiKey: 'ka', model: 'ma', useMainApi: false, max_tokens: 1000, temperature: 0.7, customApiFormat: 'openai_compat', promptPostProcessing: 'strict' };
+    const { store: storeSame } = await importStore(sameKeys);
+    storeSame.refreshFromSettings();
+    expect(storeSame.activePresetName).toBe('alpha');
+  });
+
   it('设置当前聊天活动 API 时同步旧当前配置', async () => {
     const settings = createSettings();
     const { store, saveSettings } = await importStore(settings);

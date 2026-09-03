@@ -28,6 +28,45 @@ export function normalizeCustomApiFormat_ACU(value: unknown): CustomApiFormat_AC
   return (CUSTOM_API_FORMATS_ACU as readonly string[]).includes(raw) ? (raw as CustomApiFormat_ACU) : 'openai_compat';
 }
 
+/**
+ * 提示词后处理（随请求体 custom_prompt_post_processing 透传给 TT 后端）。
+ * '' = 未选择：请求体省略该字段，后端原样透传消息，可保留提示词组中部 system 段的角色；
+ * 缺省/非法值统一归一为 'strict'（默认严格，与历史写死 strict 的行为保持兼容）。
+ * 白名单校验仿 custom_api_format：非法值降级 strict（TT 对非法值 fail-fast，必须在客户端兜底）。
+ */
+export type ApiPromptPostProcessingValue_ACU =
+  | ''
+  | 'merge'
+  | 'semi'
+  | 'strict'
+  | 'single'
+  | 'merge_tools'
+  | 'semi_tools'
+  | 'strict_tools';
+
+export const API_PROMPT_POST_PROCESSING_VALUES_ACU: readonly ApiPromptPostProcessingValue_ACU[] = [
+  '',
+  'merge',
+  'semi',
+  'strict',
+  'single',
+  'merge_tools',
+  'semi_tools',
+  'strict_tools',
+];
+
+export const API_PROMPT_POST_PROCESSING_DEFAULT_ACU: ApiPromptPostProcessingValue_ACU = 'strict';
+
+export function normalizePromptPostProcessing_ACU(value: unknown): ApiPromptPostProcessingValue_ACU {
+  // 显式空串 = 用户选择「未选择」，保留；缺失/非字符串/非法值 → 默认严格。
+  if (typeof value !== 'string') return API_PROMPT_POST_PROCESSING_DEFAULT_ACU;
+  const normalized = value.trim();
+  if (normalized === '') return '';
+  return (API_PROMPT_POST_PROCESSING_VALUES_ACU as readonly string[]).includes(normalized)
+    ? (normalized as ApiPromptPostProcessingValue_ACU)
+    : API_PROMPT_POST_PROCESSING_DEFAULT_ACU;
+}
+
 export interface ApiPresetApiConfig_ACU {
   url: string;
   apiKey: string;
@@ -44,6 +83,8 @@ export interface ApiPresetApiConfig_ACU {
   reasoningEffort?: ReasoningEffort_ACU;
   /** 接口协议（预设级）：openai_compat（默认）/ openai_responses / claude_messages / gemini_interactions；随请求体 custom_api_format 透传给 TT 后端分流 */
   customApiFormat: CustomApiFormat_ACU;
+  /** 提示词后处理（预设级）：strict（默认）/ merge / semi / single / *_tools；显式 '' = 未选择，请求体省略该字段 */
+  promptPostProcessing: ApiPromptPostProcessingValue_ACU;
 }
 
 export interface ApiPreset_ACU {
@@ -104,11 +145,12 @@ export function normalizeApiConfig_ACU(value: any): ApiPresetApiConfig_ACU {
     excludeBodyParams: typeof source.excludeBodyParams === 'string' ? source.excludeBodyParams : '',
     requestHeaders: typeof source.requestHeaders === 'string' ? source.requestHeaders : '',
     customApiFormat: normalizeCustomApiFormat_ACU(source.customApiFormat),
+    promptPostProcessing: normalizePromptPostProcessing_ACU(source.promptPostProcessing),
     ...(streamingEnabled !== undefined ? { streamingEnabled } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
     ...Object.fromEntries(
       Object.entries(source).filter(([key]) =>
-        !['url', 'apiKey', 'model', 'useMainApi', 'max_tokens', 'maxTokens', 'temperature', 'bodyParams', 'excludeBodyParams', 'requestHeaders', 'streamingEnabled', 'reasoningEffort', 'customApiFormat'].includes(key)
+        !['url', 'apiKey', 'model', 'useMainApi', 'max_tokens', 'maxTokens', 'temperature', 'bodyParams', 'excludeBodyParams', 'requestHeaders', 'streamingEnabled', 'reasoningEffort', 'customApiFormat', 'promptPostProcessing'].includes(key)
       )
     ),
   };

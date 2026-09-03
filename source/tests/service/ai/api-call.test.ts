@@ -227,6 +227,40 @@ describe('buildCustomApiRequestBody_ACU', () => {
     expect(invalidBody.custom_api_format).toBe('openai_compat');
   });
 
+  it('promptPostProcessing 缺省时默认 strict（向后兼容旧版写死 strict 的行为）', () => {
+    const body = buildCustomApiRequestBody_ACU(
+      [{ role: 'system', content: '中部 system' }, { role: 'user', content: 'test' }],
+      { url: 'https://api.example.com', model: 'gpt-4' },
+    );
+    expect(body.custom_prompt_post_processing).toBe('strict');
+  });
+
+  it('promptPostProcessing 显式空串（未选择）时省略该字段（后端原样透传消息）', () => {
+    const body = buildCustomApiRequestBody_ACU(
+      [{ role: 'system', content: '中部 system' }, { role: 'user', content: 'test' }],
+      { url: 'https://api.example.com', model: 'gpt-4', promptPostProcessing: '' },
+    );
+    expect(body).not.toHaveProperty('custom_prompt_post_processing');
+  });
+
+  it('promptPostProcessing 合法值原样透传', () => {
+    for (const value of ['merge', 'semi', 'strict', 'single', 'merge_tools', 'semi_tools', 'strict_tools']) {
+      const body = buildCustomApiRequestBody_ACU(
+        [{ role: 'user', content: 'test' }],
+        { url: 'https://api.example.com', model: 'gpt-4', promptPostProcessing: value },
+      );
+      expect(body.custom_prompt_post_processing).toBe(value);
+    }
+  });
+
+  it('promptPostProcessing 非法值降级 strict（不让 TT 后端 fail-fast）', () => {
+    const body = buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://api.example.com', model: 'gpt-4', promptPostProcessing: 'fake-mode' },
+    );
+    expect(body.custom_prompt_post_processing).toBe('strict');
+  });
+
   it('maxTokens 驼峰别名生效', () => {
     const body = buildCustomApiRequestBody_ACU(
       [{ role: 'user', content: 'test' }],

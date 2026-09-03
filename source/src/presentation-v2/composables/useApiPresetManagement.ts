@@ -1,4 +1,8 @@
 import type { AcuV2ApiMode, AcuV2ApiPreset } from '../stores/api-preset-store';
+import {
+  API_PROMPT_POST_PROCESSING_DEFAULT_ACU,
+  normalizePromptPostProcessing_ACU,
+} from '../../service/settings/api-preset-service';
 
 export interface ApiPresetDraft {
   name: string;
@@ -21,6 +25,12 @@ export interface ApiPresetDraft {
   publicServiceMode: boolean;
   /** 接口协议（预设级）：openai_compat / openai_responses / claude_messages / gemini_interactions */
   customApiFormat: string;
+  /**
+   * 提示词后处理（预设级）：strict（默认）/ merge / semi / single / *_tools；
+   * 显式 '' = 未选择（请求体省略该字段）。旧预设缺失时归一为 strict（与运行时发送一致），
+   * 草稿若回显「未选择」，用户直接保存会把行为静默改成透传，故缺失必须回 strict。
+   */
+  promptPostProcessing: string;
 }
 
 /** 连接模式（酒馆主 API / 酒馆预设已剥离，恒为自定义 API） */
@@ -43,6 +53,7 @@ export function createEmptyApiPresetDraft(): ApiPresetDraft {
     reasoningEffort: 'medium',
     publicServiceMode: false,
     customApiFormat: 'openai_compat',
+    promptPostProcessing: API_PROMPT_POST_PROCESSING_DEFAULT_ACU,
   };
 }
 
@@ -65,6 +76,8 @@ export function apiPresetDraftFromPreset(preset: AcuV2ApiPreset): ApiPresetDraft
     reasoningEffort: typeof preset.apiConfig.reasoningEffort === 'string' && preset.apiConfig.reasoningEffort ? preset.apiConfig.reasoningEffort : undefined,
     publicServiceMode: preset.publicServiceMode === true,
     customApiFormat: preset.apiConfig.customApiFormat || 'openai_compat',
+    // 与请求体共用同一归一化：缺失 → strict；显式 ''（未选择）保留；非法 → strict。
+    promptPostProcessing: normalizePromptPostProcessing_ACU(preset.apiConfig.promptPostProcessing),
   };
 }
 
@@ -91,6 +104,8 @@ export function apiPresetFromDraft(draft: ApiPresetDraft): AcuV2ApiPreset {
       customApiFormat: (['openai_compat', 'openai_responses', 'claude_messages', 'gemini_interactions'] as const).includes(draft.customApiFormat as any)
         ? (draft.customApiFormat as 'openai_compat' | 'openai_responses' | 'claude_messages' | 'gemini_interactions')
         : 'openai_compat',
+      // 白名单校验仿 customApiFormat：显式 ''（未选择）保留，非法值降级 strict，不写入预设。
+      promptPostProcessing: normalizePromptPostProcessing_ACU(draft.promptPostProcessing),
     },
     nonPrefillSupport: draft.nonPrefillSupport === true,
     publicServiceMode: draft.publicServiceMode === true,

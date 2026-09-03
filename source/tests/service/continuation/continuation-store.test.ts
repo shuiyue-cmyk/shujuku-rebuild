@@ -196,8 +196,42 @@ describe('FirstFloorContinuationStore_ACU', () => {
       beatPlanner: { mode: 'inherit', presetName: '' },
       reviewer: { mode: 'inherit', presetName: '' },
       finalReviewer: { mode: 'inherit', presetName: '' },
+      webResearcher: { mode: 'inherit', presetName: '' },
     });
     expect(loaded.settings).toMatchObject({ apiPresetMode: 'fixed', fixedApiPresetName: 'p1' });
+  });
+
+  it('为 webResearch 之前的存量信封补默认（功能关闭），新提示词组与渠道角色一并补齐', () => {
+    const legacy = buildEnvelope_ACU() as any;
+    delete legacy.settings.webResearch;
+    delete legacy.settings.agentPrompts.webResearcher;
+    delete legacy.settings.agentApiPresets.webResearcher;
+    const chat: any[] = [{ _qrf_continuation: legacy }];
+    _set_SillyTavern_API_ACU({ chat, chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn() } as any);
+
+    const loaded = new FirstFloorContinuationStore_ACU().read()!;
+    expect(loaded.settings.webResearch).toEqual(buildDefaultContinuationSettings_ACU().webResearch);
+    expect(loaded.settings.webResearch.enabled).toBe(false);
+    expect(loaded.settings.agentPrompts.webResearcher).toEqual(buildDefaultContinuationSettings_ACU().agentPrompts.webResearcher);
+    expect(loaded.settings.agentApiPresets.webResearcher).toEqual({ mode: 'inherit', presetName: '' });
+  });
+
+  it('负向控制：webResearch 非法值拒绝整份信封，修正后可加载', () => {
+    const bad = buildEnvelope_ACU() as any;
+    bad.settings.webResearch.searchProvider = 'bing';
+    _set_SillyTavern_API_ACU({ chat: [{ _qrf_continuation: bad }], chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn() } as any);
+    expect(() => new FirstFloorContinuationStore_ACU().read()).toThrow(ContinuationValidationError_ACU);
+
+    const fixed = buildEnvelope_ACU() as any;
+    fixed.settings.webResearch.searchProvider = 'searxng';
+    fixed.settings.webResearch.maxPages = 30;
+    _set_SillyTavern_API_ACU({ chat: [{ _qrf_continuation: fixed }], chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn() } as any);
+    expect(new FirstFloorContinuationStore_ACU().read()!.settings.webResearch.maxPages).toBe(30);
+
+    const outOfRange = buildEnvelope_ACU() as any;
+    outOfRange.settings.webResearch.maxPages = 31;
+    _set_SillyTavern_API_ACU({ chat: [{ _qrf_continuation: outOfRange }], chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn() } as any);
+    expect(() => new FirstFloorContinuationStore_ACU().read()).toThrow(ContinuationValidationError_ACU);
   });
 
   it('丢弃语义已作废的 downtimeTurnRatio 并补上连续高压轮上限，越界值仍被拒绝', () => {

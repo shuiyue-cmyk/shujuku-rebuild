@@ -498,11 +498,12 @@ describe('预算渲染', () => {
     expect(renderAgentBudget_ACU(budget_ACU, 1, ledger as any, 3)).toContain('预算充足');
   });
 
-  it('传入工具用量时同步报出批次与累计放行 token', () => {
+  it('传入工具用量时同步报出批次、单批次上限与累计遥测', () => {
     const ledger = { delegationsUsed: 0, perAgent: new Map(), outcomes: [] };
     const text = renderAgentBudget_ACU(budget_ACU, 1, ledger as any, 3, { batchesUsed: 2, grantedTokens: 1200, maxReadTokens: 36000 });
     expect(text).toContain('已用 2 / 8 个工具批次');
-    expect(text).toContain('1200 / 36000 tokens');
+    expect(text).toContain('单批次上限约 36000 tokens');
+    expect(text).toContain('本次累计已读取约 1200 tokens');
   });
 });
 

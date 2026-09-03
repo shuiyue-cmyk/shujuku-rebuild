@@ -77,7 +77,10 @@ function findPresetMatchingCurrentConfig(presets: AcuV2ApiPreset[]): AcuV2ApiPre
       preset.apiConfig.temperature === current.apiConfig.temperature &&
       preset.apiConfig.bodyParams === current.apiConfig.bodyParams &&
       preset.apiConfig.excludeBodyParams === current.apiConfig.excludeBodyParams &&
-      preset.apiConfig.requestHeaders === current.apiConfig.requestHeaders
+      preset.apiConfig.requestHeaders === current.apiConfig.requestHeaders &&
+      // 同名异协议/异后处理预设不得误判为同一：两字段都参与匹配（缺失由归一化补为默认值后比较）。
+      preset.apiConfig.promptPostProcessing === current.apiConfig.promptPostProcessing &&
+      preset.apiConfig.customApiFormat === current.apiConfig.customApiFormat
     );
   }) ?? null;
 }

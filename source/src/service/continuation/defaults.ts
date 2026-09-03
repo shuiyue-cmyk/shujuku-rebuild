@@ -1,4 +1,4 @@
-import { CONTINUATION_AGENT_API_PRESET_ROLES_ACU, ContinuationValidationError_ACU, createContinuationError_ACU, type ContinuationAgentApiPresets_ACU, type ContinuationPromptSegment_ACU, type ContinuationSettings_ACU, type ContinuationStageSize_ACU, type ContinuationTurnRange_ACU } from './model';
+import { CONTINUATION_AGENT_API_PRESET_ROLES_ACU, ContinuationValidationError_ACU, createContinuationError_ACU, type ContinuationAgentApiPresets_ACU, type ContinuationPromptSegment_ACU, type ContinuationSettings_ACU, type ContinuationStageSize_ACU, type ContinuationTurnRange_ACU, type ContinuationWebResearchSettings_ACU } from './model';
 import { buildDefaultContinuationAgentPrompts_ACU } from './agent/agent-defaults';
 import {
   AGENT_HISTORY_TOKEN_BUDGET_DEFAULT_ACU,
@@ -161,6 +161,31 @@ export const CONTINUATION_FINAL_REVIEW_READ_TOKEN_BUDGET_DEFAULT_ACU = '50%';
 /** 终审允许的额外 worldbook read/search 工具轮上限。 */
 export const CONTINUATION_FINAL_REVIEW_MAX_EXTRA_READS_DEFAULT_ACU = 6;
 
+/** 网页检索子代理单次派工的工具轮上限：搜 + 读 + 补搜的典型路径需要 6–8 轮。 */
+export const CONTINUATION_WEB_RESEARCH_MAX_TOOL_ROUNDS_DEFAULT_ACU = 8;
+/** 单次派工最多精读的页面数。每页原文都会随资料快照落进楼层，多了会撑大聊天文件。 */
+export const CONTINUATION_WEB_RESEARCH_MAX_PAGES_DEFAULT_ACU = 8;
+/** 单页存入资料库的原文字数上限。 */
+export const CONTINUATION_WEB_RESEARCH_PAGE_CHAR_LIMIT_DEFAULT_ACU = 4000;
+
+/**
+ * 网页检索默认设置：TT 语境。
+ * 功能默认关闭；搜索引擎默认 SearXNG（TT 唯一可行的通用搜索通道，需用户自建或选用公共实例
+ * 并填写实例地址）；百度百科默认关闭（需酒馆服务器转发，TT 未提供对应路由）。
+ */
+export function buildDefaultContinuationWebResearchSettings_ACU(): ContinuationWebResearchSettings_ACU {
+  return {
+    enabled: false,
+    sources: { moegirl: true, wikipediaZh: true, wikipediaEn: false, baidu: false },
+    searchProvider: 'searxng',
+    searxngBaseUrl: '',
+    maxToolRounds: CONTINUATION_WEB_RESEARCH_MAX_TOOL_ROUNDS_DEFAULT_ACU,
+    maxPages: CONTINUATION_WEB_RESEARCH_MAX_PAGES_DEFAULT_ACU,
+    pageCharLimit: CONTINUATION_WEB_RESEARCH_PAGE_CHAR_LIMIT_DEFAULT_ACU,
+    blockedDomains: '',
+  };
+}
+
 function clonePromptSegments_ACU(segments: readonly ContinuationPromptSegment_ACU[]): ContinuationPromptSegment_ACU[] {
   return segments.map(segment => ({ ...segment }));
 }
@@ -201,6 +226,7 @@ export function buildDefaultContinuationSettings_ACU(): ContinuationSettings_ACU
     agentReadTokenBudget: AGENT_READ_TOKEN_BUDGET_DEFAULT_ACU,
     agentReadFallbackTokens: AGENT_READ_FALLBACK_TOKENS_DEFAULT_ACU,
     finalReview: { enabled: false, readTokenBudget: CONTINUATION_FINAL_REVIEW_READ_TOKEN_BUDGET_DEFAULT_ACU, maxExtraReads: CONTINUATION_FINAL_REVIEW_MAX_EXTRA_READS_DEFAULT_ACU },
+    webResearch: buildDefaultContinuationWebResearchSettings_ACU(),
     contextExtractRules: [],
     contextExcludeRules: [],
     agentRunBudget: { ...DEFAULT_AGENT_RUN_BUDGET_ACU },

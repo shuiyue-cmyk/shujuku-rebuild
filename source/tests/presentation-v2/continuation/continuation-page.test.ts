@@ -10,6 +10,7 @@ import { useDialogStore } from '../../../src/presentation-v2/stores/dialog-store
 
 const mountedApps = new Set<{ unmount: () => void }>();
 const chatTick = ref(0);
+const chatMutationTick = ref(0);
 const task = ref<any>(null);
 const activeStage = ref<any>(null);
 const activeRevision = ref<any>(null);
@@ -57,6 +58,7 @@ vi.mock('../../../src/presentation-v2/composables/useContinuationMaterials', () 
 }));
 vi.mock('../../../src/presentation-v2/composables/useChatChangedListener', () => ({
   useChatChangedTick: () => chatTick,
+  useChatMutationTick: () => chatMutationTick,
 }));
 
 function setTask(status = 'paused', pending = false): void {
@@ -166,6 +168,7 @@ beforeEach(() => {
   originInstruction.value = '';
   statusText.value = '尚未创建任务';
   chatTick.value = 0;
+  chatMutationTick.value = 0;
   vi.clearAllMocks();
   sendAgentMessage.mockResolvedValue(true);
 });
@@ -180,6 +183,7 @@ function setSettings(): void {
     storyWindowFloors: 20, storyTailFloors: 2, agentHistoryTokenBudget: 120000, maxConsecutivePressureTurns: 8,
     agentReadTokenBudget: '30%', agentReadFallbackTokens: 6000,
     finalReview: { enabled: false, readTokenBudget: '50%', maxExtraReads: 6 },
+    webResearch: { enabled: false, sources: { moegirl: true, wikipediaZh: true, wikipediaEn: false, baidu: false }, searchProvider: 'searxng', searxngBaseUrl: '', maxToolRounds: 8, maxPages: 8, pageCharLimit: 4000, blockedDomains: '' },
     agentRunBudget: { maxIterations: 8, maxDelegations: 6, maxSameAgent: 2, maxConcurrent: 3, maxReads: 8, maxExtraReads: 3 },
     contextExtractRules: [], contextExcludeRules: [],
     apiPresetMode: 'current', fixedApiPresetName: '', promptCacheEnabled: true,
@@ -192,6 +196,7 @@ function setSettings(): void {
       beatPlanner: { mode: 'inherit', presetName: '' },
       reviewer: { mode: 'inherit', presetName: '' },
       finalReviewer: { mode: 'inherit', presetName: '' },
+      webResearcher: { mode: 'inherit', presetName: '' },
     },
     outlinePrompt: [{ role: 'system', content: '规划', enabled: true, deletable: true }],
     agentPrompts: {
@@ -202,6 +207,7 @@ function setSettings(): void {
       beatPlanner: [{ role: 'system', content: '节拍', enabled: true, deletable: true }],
       reviewer: [{ role: 'system', content: '审查', enabled: true, deletable: true }],
       finalReviewer: [{ role: 'system', content: '终审', enabled: true, deletable: true }],
+      webResearcher: [{ role: 'system', content: '检索', enabled: true, deletable: true }],
     },
   };
 }
@@ -438,6 +444,54 @@ describe('ContinuationPage', () => {
     app.unmount();
   });
 
+  it('楼层被删除后会话流按现存楼层重灌、任务状态刷新，且不丢运行标记', async () => {
+    const sessionLog = await import('../../../src/service/continuation/agent/agent-session-log');
+    const hostApi = await import('../../../src/shared/host-api');
+    const { AGENT_CONVERSATION_FIELD_ACU, AGENT_CONVERSATION_SEGMENT_SCHEMA_VERSION_ACU } = await import('../../../src/service/continuation/agent/agent-model');
+    const segment = (id: number, kind: string, text: string) => ({
+      schemaVersion: AGENT_CONVERSATION_SEGMENT_SCHEMA_VERSION_ACU, updatedAt: 0,
+      segment: [{ id, kind, text, digest: '', turnKey: `k${id}`, at: 0 }],
+    });
+    // 第 2 楼承载第 1 轮的规划，第 4 楼承载第 2 轮的规划；用户随后删掉第 3、4 楼。
+    const chat: any[] = [
+      { mes: '开场' },
+      { mes: '指令一', is_user: true },
+      { mes: '正文一', [AGENT_CONVERSATION_FIELD_ACU]: segment(1, 'agent', '第一轮的规划') },
+      { mes: '指令二', is_user: true },
+      { mes: '正文二', [AGENT_CONVERSATION_FIELD_ACU]: segment(2, 'agent', '被删楼层上的规划') },
+    ];
+    hostApi._set_SillyTavern_API_ACU({ chat, chatId: 'chat-a', getCurrentChatId: () => 'chat-a' } as any);
+    setTask();
+    const { app, el } = await mountPage();
+    try {
+      // 挂载时从楼层回灌：两轮规划都在；随后 Agent 开始跑并实时追加记录。
+      expect(el.textContent).toContain('第一轮的规划');
+      expect(el.textContent).toContain('被删楼层上的规划');
+      sessionLog.beginAgentSessionRun_ACU('第 1 阶段 · 第 3 轮');
+      sessionLog.logAgentSession_ACU({ kind: 'thought', title: '只存在于内存里的思考' });
+      await nextTick();
+      expect(buttonByText(el, '停止')).not.toBeUndefined();
+
+      chat.splice(3, 2);
+      chatMutationTick.value += 1;
+      await nextTick();
+
+      // 会话流跟着楼层回退：被删楼层上的记录消失，内存里的记录也被现存楼层的持久记录取代，并给出说明。
+      expect(el.textContent).toContain('第一轮的规划');
+      expect(el.textContent).not.toContain('被删楼层上的规划');
+      expect(el.textContent).not.toContain('只存在于内存里的思考');
+      expect(el.textContent).toContain('楼层已变化，会话已按现存楼层重新加载');
+      // 任务进度按现存楼层重读；运行标记保留，停止按钮不能因为重灌而消失。
+      expect(refresh).toHaveBeenCalledOnce();
+      expect(sessionLog.isAgentSessionRunning_ACU()).toBe(true);
+      expect(buttonByText(el, '停止')).not.toBeUndefined();
+    } finally {
+      app.unmount();
+      sessionLog.resetAgentSessionLogForTests_ACU();
+      hostApi._set_SillyTavern_API_ACU(undefined);
+    }
+  });
+
   it('资料面板结构化展示当前大纲，保留 JSON 草稿保护、保存与清空确认', async () => {
     setTask();
     const { app, el } = await mountPage();
@@ -514,10 +568,10 @@ describe('ContinuationPage', () => {
       expect(el.textContent).toContain('伪 Role 提示词');
       expect(el.textContent).toContain('正文可读窗口楼数');
       expect(el.textContent).toContain('会话自动总结阈值');
-      expect(el.textContent).toContain('读取预算');
-      expect(el.textContent).toContain('精读兜底额度');
+      expect(el.textContent).toContain('单批次读取上限');
+      expect(el.textContent).toContain('临近总结时的精读额度');
       expect(el.textContent).toContain('连续高压轮上限');
-      expect(el.textContent).toContain('终审读取预算');
+      expect(el.textContent).toContain('终审单批次读取上限');
       expect(el.textContent).toContain('关闭时不装配终审证据');
       expect(el.textContent).toContain('不会发起终审调用');
       expect(el.textContent).toContain('发送前终审子代理提示词');
@@ -537,8 +591,9 @@ describe('ContinuationPage', () => {
       expect(saveSettings.mock.calls[0][0]).toMatchObject({
         stageSize: 'short', storyWindowFloors: 20, agentHistoryTokenBudget: 120000, maxConsecutivePressureTurns: 8,
         finalReview: { enabled: false, readTokenBudget: '50%', maxExtraReads: 6 },
-        agentApiPresets: { finalReviewer: { mode: 'inherit', presetName: '' } },
-        agentPrompts: { finalReviewer: [{ content: '终审' }] },
+        webResearch: { enabled: false, searchProvider: 'searxng', searxngBaseUrl: '', maxToolRounds: 8, maxPages: 8, pageCharLimit: 4000, blockedDomains: '' },
+        agentApiPresets: { finalReviewer: { mode: 'inherit', presetName: '' }, webResearcher: { mode: 'inherit', presetName: '' } },
+        agentPrompts: { finalReviewer: [{ content: '终审' }], webResearcher: [{ content: '检索' }] },
       });
       app.unmount();
     } finally {
@@ -590,8 +645,8 @@ describe('ContinuationPage', () => {
     const groups = Array.from(el.querySelectorAll<HTMLElement>('.acu-v2-continuation-page__group'));
     const labels = groups.map(group => group.querySelector('.acu-disclosure-group__label')?.textContent?.trim());
     expect(labels).toEqual(expect.arrayContaining([
-      '运行与重试', '正文读取与上下文', 'Agent 运行预算', '发送前终审', '各 Agent 渠道', '上下文提取与排除规则',
-      '主 Agent 提示词', '发送前终审子代理提示词', '占位符速查',
+      '运行与重试', '正文读取与上下文', 'Agent 运行预算', '发送前终审', '网页检索', '各 Agent 渠道', '上下文提取与排除规则',
+      '主 Agent 提示词', '发送前终审子代理提示词', '网页检索子代理（web-researcher）提示词', '占位符速查',
     ]));
     // 默认全部收起。
     for (const group of groups) {
@@ -643,6 +698,59 @@ describe('ContinuationPage', () => {
       await nextTick();
       expect(el.textContent).not.toContain('将在本轮空档自动保存');
       app.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('网页检索 TT 通道守卫：不可行通道保存即拦并提示，修正为 SearXNG+实例地址后放行', async () => {
+    vi.useFakeTimers();
+    try {
+      const triggerSave = async (el: Element) => {
+        const stageSizeSelect = el.querySelector<HTMLSelectElement>('select')!;
+        stageSizeSelect.value = stageSizeSelect.value === 'short' ? 'standard' : 'short';
+        stageSizeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+        await nextTick();
+        await vi.advanceTimersByTimeAsync(900);
+      };
+
+      // 回退：启用后仍选 DuckDuckGo（需酒馆转发，TT 无路由）→ 保存被拦。
+      setSettings();
+      setTask();
+      settings.value.webResearch.enabled = true;
+      settings.value.webResearch.searchProvider = 'duckduckgo';
+      const first = await mountPage();
+      await triggerSave(first.el);
+      expect(saveSettings).not.toHaveBeenCalled();
+      expect(first.el.textContent).toContain('TT 无法出网');
+      first.app.unmount();
+
+      // 回退：百度百科勾选（需酒馆转发，TT 无路由）→ 保存被拦。
+      setSettings();
+      setTask();
+      settings.value.webResearch.enabled = true;
+      settings.value.webResearch.searchProvider = 'searxng';
+      settings.value.webResearch.searxngBaseUrl = 'https://searx.example.org';
+      settings.value.webResearch.sources.baidu = true;
+      const second = await mountPage();
+      await triggerSave(second.el);
+      expect(saveSettings).not.toHaveBeenCalled();
+      expect(second.el.textContent).toContain('百度百科需要酒馆服务器转发');
+      second.app.unmount();
+
+      // 恢复：SearXNG + 实例地址 → 放行落盘。
+      setSettings();
+      setTask();
+      settings.value.webResearch.enabled = true;
+      settings.value.webResearch.searchProvider = 'searxng';
+      settings.value.webResearch.searxngBaseUrl = 'https://searx.example.org';
+      const third = await mountPage();
+      await triggerSave(third.el);
+      expect(saveSettings).toHaveBeenCalledOnce();
+      expect(saveSettings.mock.calls[0][0]).toMatchObject({
+        webResearch: { enabled: true, searchProvider: 'searxng', searxngBaseUrl: 'https://searx.example.org' },
+      });
+      third.app.unmount();
     } finally {
       vi.useRealTimers();
     }

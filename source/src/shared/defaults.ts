@@ -175,6 +175,21 @@ export const AUTO_UPDATE_FLOOR_INCREASE_DELAY_ACU = 2000;
 
 // --- 一次性默认值刷新版本标记 ---
 export const VECTOR_MEMORY_DEFAULTS_REFRESH_VERSION_ACU = 'spv3.6.3-keyword-prompt-content-based-refresh';
+/**
+ * 召回参数一次性强制覆盖（spv9.2）：把召回相关的阈值/TopK/最低分/候选上限/固定写入
+ * 与 rerank 每批条数统一刷成新默认值。API 地址、密钥、模型、提示词、命名空间不在覆盖范围内。
+ * marker 写入后用户再改会被永久保留（只洗一次）。
+ */
+export const VECTOR_MEMORY_RECALL_PARAMS_FORCE_OVERRIDE_VERSION_ACU = 'spv9.2-recall-params-force-override';
+export const VECTOR_MEMORY_RECALL_PARAM_KEYS_ACU = [
+  'summaryIndexKeywordMinRows',
+  'topK',
+  'minScore',
+  'recallCandidateLimit',
+  'bm25CandidateLimit',
+  'recentFixedInjectCount',
+  'rerankBatchSize',
+] as const;
 export const TABLE_TEMPLATE_DEFAULTS_REFRESH_VERSION_ACU = 'spv2.1.3-table-template-ddl-relaxed-force-default';
 // V2 writer 一次性强制开启迁移：无论用户此前是否显式关闭，
 // 迁移执行一次后写入 marker，之后用户仍可再次手动关闭并被永久保留。
@@ -195,7 +210,8 @@ export const defaultVectorMemoryConfig_ACU = {
   summaryIndexArchiveMaxConcurrency: 30,
   summaryIndexArchiveEmbeddingConcurrency: 3,
   topK: 200,
-  minScore: 0.45,
+  // spv9.2 召回新默认：旧默认 0.45 配合新召回参数会过滤掉大量相关行，一次性覆盖时统一刷成 0.35。
+  minScore: 0.35,
   embeddingEndpoint: '',
   embeddingApiKey: '',
   embeddingModel: '',
@@ -203,6 +219,8 @@ export const defaultVectorMemoryConfig_ACU = {
   rerankApiKey: '',
   rerankModel: '',
   rerankInstruction: '请根据当前用户输入及关键词，判断每个候选纪要条目的相关性，并将最相关的条目按相关性从高到低降序排列。优先选择能够直接回答、延续或补全当前用户输入意图的条目。',
+  // 每批送往 rerank 的 documents 条数（spv9.2 召回新默认，随一次性覆盖刷入存量配置）。
+  rerankBatchSize: 300,
   vectorNamespace: 'chat',
   entryComment: 'TavernDB-ACU-VectorMemory',
   entryKey: 'TavernDB-ACU-VectorMemory-Key',

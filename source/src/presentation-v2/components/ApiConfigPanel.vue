@@ -155,6 +155,17 @@
             placeholder="top_p, reasoning_effort"
           />
         </AcuFormRow>
+        <AcuFormRow
+          label="提示词后处理"
+          hint="随请求体 custom_prompt_post_processing 透传。默认严格（与旧版本行为一致）；未选择=省略该字段、后端原样透传消息，可保留提示词组中部 system 段的角色。严格等模式会把中部 system 消息改写为 user。"
+        >
+          <AcuSelect
+            :options="promptPostProcessingOptions"
+            :model-value="activeDraft.promptPostProcessing"
+            placeholder="未选择"
+            @update:model-value="setPromptPostProcessing"
+          />
+        </AcuFormRow>
         <AcuFormRow label="客户端伪装">
           <AcuSelect
             :options="clientPresetOptions"
@@ -256,6 +267,23 @@ const customApiFormatOptions: AcuSelectOption[] = [
   { value: "claude_messages", label: "兼容 Claude Messages" },
   { value: "gemini_interactions", label: "兼容 Gemini Interactions" },
 ];
+
+// ─── 提示词后处理选项（custom_prompt_post_processing 八值契约；'' 为「未选择」，默认 'strict'） ───
+const promptPostProcessingOptions: AcuSelectOption[] = [
+  { value: "", label: "未选择" },
+  { value: "merge_tools", label: "合并相同角色连续的发言（含工具）", group: "With Tools" },
+  { value: "semi_tools", label: "半严格（强制对话角色交替）（含工具）", group: "With Tools" },
+  { value: "strict_tools", label: "严格（强制对话角色交替、用户最先）（含工具）", group: "With Tools" },
+  { value: "merge", label: "合并相同角色连续的发言", group: "No Tools" },
+  { value: "semi", label: "半严格（强制对话角色交替）", group: "No Tools" },
+  { value: "strict", label: "严格（强制对话角色交替、用户最先）", group: "No Tools" },
+  { value: "single", label: "单一用户消息（无工具）" },
+];
+
+function setPromptPostProcessing(value: string): void {
+  activeDraft.promptPostProcessing = value;
+  activeDraftSavedAt.value = null;
+}
 
 // ─── 客户端伪装预设（附加请求标头的可选填充） ───
 const clientPresetOptions: AcuSelectOption[] = [

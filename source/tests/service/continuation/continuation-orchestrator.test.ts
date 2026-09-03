@@ -408,6 +408,36 @@ describe('ContinuationOrchestrator_ACU', () => {
     expect(recoveredResult.retryHostGeneration).toBe(true);
   });
 
+  it('drops a retry-ready host turn and re-plans with the agent when the user deleted the floors it was sent against', async () => {
+    // 首楼之外再放一层用户楼：等待轮是对着它发出的（capture 记录发送前只有首楼一层 AI）。
+    const chat: any[] = [{ mes: '开场' }, { mes: '主 Agent 的指令', is_user: true }];
+    _set_SillyTavern_API_ACU({ chat, chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn().mockResolvedValue(undefined) } as any);
+    const { orchestrator, store, executionEngine } = createOrchestrator();
+    await orchestrator.createTask({ originInstruction: '推进剧情' });
+    await orchestrator.continueTask();
+    const task = store.readPersisted()!.activeTask!;
+    const stage = task.stages[0];
+    const revision = stage.revisions[0];
+    const identity = { chatIdentity: 'chat-a', taskId: task.taskId, stageId: stage.stageId, revision: 1, nodeId: revision.outline.nodes[0].id, turnId: revision.outline.nodes[0].turns[0].id, attemptId: 'attempt-host-a' };
+    await orchestrator.recordHostTurn({ identity, capture: { capturedAt: 1_000, capturedChatLength: 1, capturedAiFloorCount: 1, generationSeq: 1 } });
+    await orchestrator.failHostTurnForStoppedGeneration(identity);
+    expect(store.readPersisted()!.activeTask!.pendingHostTurn).toMatchObject({ status: 'retry_ready' });
+
+    // 指令楼还在：继续走宿主 generate，不重跑 Agent。
+    executionEngine.prepareCurrentTurnInstruction.mockClear();
+    expect((await orchestrator.continueTask()).retryHostGeneration).toBe(true);
+    expect(executionEngine.prepareCurrentTurnInstruction).not.toHaveBeenCalled();
+    await orchestrator.stopTask();
+
+    // 用户把承载指令的用户楼删掉：末楼变成上一轮正文，regenerate 会误删它——等待轮必须作废，回到 Agent 重新规划。
+    chat.splice(1, 1);
+    const replanned = await orchestrator.continueTask();
+    expect(replanned.retryHostGeneration).toBeUndefined();
+    expect(replanned.preparedTurn).toBeDefined();
+    expect(executionEngine.prepareCurrentTurnInstruction).toHaveBeenCalledOnce();
+    expect(store.readPersisted()!.activeTask!.pendingHostTurn).toBeNull();
+  });
+
   it('recovers from a host attribution failure (state_invalid) through an explicit continue', async () => {
     const { orchestrator, store } = createOrchestrator();
     await orchestrator.createTask({ originInstruction: '推进剧情' });
@@ -768,6 +798,15 @@ describe('ContinuationOrchestrator_ACU', () => {
 
     resolvePlan!({ outline, attempts: 1, requiresReview: false, apiPreset: { presetName: 'preset-a', source: 'fixed', reason: 'fixed_preset' } });
     await expect(running).resolves.toMatchObject({ task: { status: 'running' } });
+  });
+
+  it('sendAgentMessage 持久化失败的错误里带出底层原因（楼层/宿主可区分）', async () => {
+    const { orchestrator } = createOrchestrator({ conversation: vi.fn(async () => { throw new Error('会话写入失败'); }) });
+    await orchestrator.createTask({ originInstruction: '推进剧情' });
+    const error = await orchestrator.sendAgentMessage({ text: '这条消息必须先保存' }).catch(error => error);
+    expect(error).toBeInstanceOf(ContinuationValidationError_ACU);
+    expect((error as ContinuationValidationError_ACU).error.code).toBe('CONTINUATION_PERSIST_FAILED');
+    expect((error as ContinuationValidationError_ACU).error.message).toContain('会话写入失败');
   });
 
   it('sendAgentMessage 在有 live host claim 的等待宿主正文时只排队，不打断酒馆生成', async () => {
