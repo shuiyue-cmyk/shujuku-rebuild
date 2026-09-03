@@ -72222,7 +72222,7 @@ function normalizeApiConfig_ACU(value) {
     else
         streamingEnabled = undefined;
     const rawReasoning = String(source.reasoningEffort ?? '').trim().toLowerCase();
-    const reasoningEffort = ['low', 'medium', 'high', 'max', 'xhigh'].includes(rawReasoning)
+    const reasoningEffort = ['low', 'medium', 'high', 'xhigh', 'max', 'false', 'auto'].includes(rawReasoning)
         ? rawReasoning
         : undefined;
     // [修复] 保留源对象中所有非白名单字段（如 topP/top_p/frequency_penalty），
@@ -72877,11 +72877,16 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
             : 'openai_compat',
         group_names: [],
         include_reasoning: false,
-        // 思考强度（预设级优先）：仅允许 low/medium/high/max/xhigh，非法值回退 medium
-        reasoning_effort: (() => {
+        // 思考强度（预设级优先）：low/medium/high/xhigh/max 原样透传；'false' 传布尔 false 关闭思考；
+        // 'auto' 则省略该参数由服务端自定；非法值回退 medium
+        ...((() => {
             const raw = String(effectiveApiConfig.reasoningEffort || settings_ACU.reasoningEffort || 'medium').trim().toLowerCase();
-            return ['low', 'medium', 'high', 'max', 'xhigh'].includes(raw) ? raw : 'medium';
-        })(),
+            if (raw === 'auto')
+                return {};
+            if (raw === 'false')
+                return { reasoning_effort: false };
+            return { reasoning_effort: ['low', 'medium', 'high', 'xhigh', 'max'].includes(raw) ? raw : 'medium' };
+        })()),
         enable_web_search: false,
         request_images: false,
         // 提示词后处理：'strict' 等合法值透传；显式 '' 时省略该键（后端按 none 原样透传）。
@@ -72893,7 +72898,7 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
         custom_include_body: composedIncludeBody.value,
         custom_exclude_body: sanitizeExcludeBodyForPresetFields_ACU(effectiveApiConfig.excludeBodyParams, effectiveApiConfig),
     };
-    logDebug_ACU(`[API] 构建请求体: model=${model}, reasoning_effort=${body.reasoning_effort}, stream=${body.stream}, temperature=${body.temperature}, max_tokens=${body.max_tokens}, exclude=${body.custom_exclude_body ? '有' : '无'}`);
+    logDebug_ACU(`[API] 构建请求体: model=${model}, reasoning_effort=${'reasoning_effort' in body ? String(body.reasoning_effort) : '(auto 省略)'}, stream=${body.stream}, temperature=${body.temperature}, max_tokens=${body.max_tokens}, exclude=${body.custom_exclude_body ? '有' : '无'}`);
     if (isDebugLogEnabled()) {
         try {
             const toStore = JSON.parse(JSON.stringify(body));
@@ -78029,7 +78034,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.1.3" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.1.4" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -135281,7 +135286,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260903-13";
+        const stamp = "20260903-14";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -152754,7 +152759,7 @@ function apiPresetFromDraft(draft) {
             ...(draft.streamingEnabled === true || draft.streamingEnabled === false
                 ? { streamingEnabled: draft.streamingEnabled }
                 : {}),
-            ...(typeof draft.reasoningEffort === 'string' && ['low', 'medium', 'high', 'max', 'xhigh'].includes(draft.reasoningEffort)
+            ...(typeof draft.reasoningEffort === 'string' && ['low', 'medium', 'high', 'xhigh', 'max', 'false', 'auto'].includes(draft.reasoningEffort)
                 ? { reasoningEffort: draft.reasoningEffort }
                 : {}),
             customApiFormat: ['openai_compat', 'openai_responses', 'claude_messages', 'gemini_interactions'].includes(draft.customApiFormat)
@@ -154022,7 +154027,7 @@ function hasManagedClientKeys_ACU(currentHeaders) {
         .some((l) => l.trim() && MANAGED_KEYS_ACU.has(headerKeyOf(l)));
 }
 
-// ─── 思考强度选项（每个 API 预设独立） ───
+// ─── 思考强度选项（每个 API 预设独立；Auto 档不传输 reasoning_effort 参数） ───
 var _sfc_main$U = /*@__PURE__*/ defineComponent({
     __name: 'ApiConfigPanel',
     setup(__props, { expose: __expose }) {
@@ -154031,8 +154036,10 @@ var _sfc_main$U = /*@__PURE__*/ defineComponent({
             { value: "low", label: "Low" },
             { value: "medium", label: "Medium" },
             { value: "high", label: "High" },
-            { value: "max", label: "Max" },
             { value: "xhigh", label: "XHigh" },
+            { value: "max", label: "Max" },
+            { value: "false", label: "False（关闭思考）" },
+            { value: "auto", label: "Auto（自动）" },
         ];
         // ─── 接口协议选项（对齐 TT 主 API 四个「自定义」选项，custom_api_format 契约） ───
         const customApiFormatOptions = [
@@ -154228,8 +154235,8 @@ var _sfc_main$U = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-api-config-panel__hint[data-v-c16284b5] {\r\n  color: var(--acu-text-3, #9e978e);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-api-config-panel__hint-danger[data-v-c16284b5] {\r\n  color: var(--acu-danger, #e5484d);\n}\n.acu-api-config-panel__select-row[data-v-c16284b5] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-c16284b5] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-c16284b5] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-c16284b5] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-c16284b5] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-c16284b5] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-c16284b5] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-c16284b5] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-c16284b5] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-c16284b5");
-var ApiConfigPanel_vue_vue_type_style_index_0_scoped_c16284b5_lang = null;
+injectSfcStyle("\n.acu-api-config-panel__hint[data-v-7858ec2b] {\r\n  color: var(--acu-text-3, #9e978e);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-api-config-panel__hint-danger[data-v-7858ec2b] {\r\n  color: var(--acu-danger, #e5484d);\n}\n.acu-api-config-panel__select-row[data-v-7858ec2b] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-7858ec2b] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-7858ec2b] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-7858ec2b] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-7858ec2b] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-7858ec2b] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-7858ec2b] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-7858ec2b] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-7858ec2b] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-7858ec2b");
+var ApiConfigPanel_vue_vue_type_style_index_0_scoped_7858ec2b_lang = null;
 
 const _hoisted_1$S = { class: "acu-api-config-panel__select-row" };
 const _hoisted_2$L = { class: "acu-api-config-panel__editor-section" };
@@ -154400,7 +154407,7 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 					})]),
 					createVNode($setup["AcuFormRow"], {
 						label: "思考强度",
-						hint: "reasoning_effort，随预设保存。每个 API 预设独立。偏小尺寸的模型拉高思考强度有助于保证输出内容正确性"
+						hint: "reasoning_effort，随预设保存。每个 API 预设独立。偏小尺寸的模型拉高思考强度有助于保证输出内容正确性。选 Auto 时不传输思考强度参数，由服务端自动决定"
 					}, {
 						default: withCtx(() => [createVNode($setup["AcuSelect"], {
 							options: $setup.reasoningEffortOptions,
@@ -154550,7 +154557,7 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["title", "description"]);
 }
-var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$U, [["render", _sfc_render$U], ["__scopeId", "data-v-c16284b5"]]);
+var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$U, [["render", _sfc_render$U], ["__scopeId", "data-v-7858ec2b"]]);
 
 // ═══════════════════════════════════════════════════════════
 // service/settings/feature-preset-reference-service.ts — 功能级 API 预设引用
@@ -179132,7 +179139,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260903-13";
+        const stamp = "20260903-14";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -179141,7 +179148,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.1.3";
+        const v = "9.1.4";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {

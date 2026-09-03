@@ -261,6 +261,40 @@ describe('buildCustomApiRequestBody_ACU', () => {
     expect(body.custom_prompt_post_processing).toBe('strict');
   });
 
+  it('reasoning_effort 五档原样透传（xhigh 位于 high 与 max 之间）', () => {
+    for (const value of ['low', 'medium', 'high', 'xhigh', 'max']) {
+      const body = buildCustomApiRequestBody_ACU(
+        [{ role: 'user', content: 'test' }],
+        { url: 'https://api.example.com', model: 'gpt-4', reasoningEffort: value },
+      );
+      expect(body.reasoning_effort).toBe(value);
+    }
+  });
+
+  it('reasoningEffort=false 传布尔 false 关闭思考', () => {
+    const body = buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://api.example.com', model: 'gpt-4', reasoningEffort: 'false' },
+    );
+    expect(body.reasoning_effort).toBe(false);
+  });
+
+  it('reasoningEffort=auto 时省略 reasoning_effort 参数', () => {
+    const body = buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://api.example.com', model: 'gpt-4', reasoningEffort: 'auto' },
+    );
+    expect(body).not.toHaveProperty('reasoning_effort');
+  });
+
+  it('reasoningEffort 非法值回退 medium', () => {
+    const body = buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://api.example.com', model: 'gpt-4', reasoningEffort: 'ultra' },
+    );
+    expect(body.reasoning_effort).toBe('medium');
+  });
+
   it('maxTokens 驼峰别名生效', () => {
     const body = buildCustomApiRequestBody_ACU(
       [{ role: 'user', content: 'test' }],

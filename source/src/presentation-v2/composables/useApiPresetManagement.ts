@@ -19,7 +19,7 @@ export interface ApiPresetDraft {
   nonPrefillSupport: boolean;
   /** 流式输出（预设级）：undefined=未配置（跟随全局），保存时不写键 */
   streamingEnabled?: boolean;
-  /** 思考强度（预设级）：low / medium / high / max / xhigh；undefined=未配置（跟随全局），保存时不写键 */
+  /** 思考强度（预设级）：low / medium / high / xhigh / max / false / auto；undefined=未配置（跟随全局），保存时不写键 */
   reasoningEffort?: string;
   /** 公益站兼容（预设级）：限速每分钟最多 3 次请求（各预设独立计数） */
   publicServiceMode: boolean;
@@ -98,8 +98,8 @@ export function apiPresetFromDraft(draft: ApiPresetDraft): AcuV2ApiPreset {
       ...(draft.streamingEnabled === true || draft.streamingEnabled === false
         ? { streamingEnabled: draft.streamingEnabled }
         : {}),
-      ...(typeof draft.reasoningEffort === 'string' && (['low', 'medium', 'high', 'max', 'xhigh'] as const).includes(draft.reasoningEffort as any)
-        ? { reasoningEffort: draft.reasoningEffort as 'low' | 'medium' | 'high' | 'max' | 'xhigh' }
+      ...(typeof draft.reasoningEffort === 'string' && (['low', 'medium', 'high', 'xhigh', 'max', 'false', 'auto'] as const).includes(draft.reasoningEffort as any)
+        ? { reasoningEffort: draft.reasoningEffort as 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'false' | 'auto' }
         : {}),
       customApiFormat: (['openai_compat', 'openai_responses', 'claude_messages', 'gemini_interactions'] as const).includes(draft.customApiFormat as any)
         ? (draft.customApiFormat as 'openai_compat' | 'openai_responses' | 'claude_messages' | 'gemini_interactions')

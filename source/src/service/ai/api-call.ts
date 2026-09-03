@@ -267,11 +267,14 @@ export function buildCustomApiRequestBody_ACU(
       : 'openai_compat',
     group_names: [],
     include_reasoning: false,
-    // 思考强度（预设级优先）：仅允许 low/medium/high/max/xhigh，非法值回退 medium
-    reasoning_effort: ((): string => {
+    // 思考强度（预设级优先）：low/medium/high/xhigh/max 原样透传；'false' 传布尔 false 关闭思考；
+    // 'auto' 则省略该参数由服务端自定；非法值回退 medium
+    ...(((): Record<string, unknown> => {
       const raw = String(effectiveApiConfig.reasoningEffort || settings_ACU.reasoningEffort || 'medium').trim().toLowerCase();
-      return ['low', 'medium', 'high', 'max', 'xhigh'].includes(raw) ? raw : 'medium';
-    })(),
+      if (raw === 'auto') return {};
+      if (raw === 'false') return { reasoning_effort: false };
+      return { reasoning_effort: ['low', 'medium', 'high', 'xhigh', 'max'].includes(raw) ? raw : 'medium' };
+    })()),
     enable_web_search: false,
     request_images: false,
     // 提示词后处理：'strict' 等合法值透传；显式 '' 时省略该键（后端按 none 原样透传）。
@@ -284,7 +287,7 @@ export function buildCustomApiRequestBody_ACU(
     custom_exclude_body: sanitizeExcludeBodyForPresetFields_ACU(effectiveApiConfig.excludeBodyParams, effectiveApiConfig),
   };
 
-  logDebug_ACU(`[API] 构建请求体: model=${model}, reasoning_effort=${body.reasoning_effort}, stream=${body.stream}, temperature=${body.temperature}, max_tokens=${body.max_tokens}, exclude=${body.custom_exclude_body ? '有' : '无'}`);
+  logDebug_ACU(`[API] 构建请求体: model=${model}, reasoning_effort=${'reasoning_effort' in body ? String(body.reasoning_effort) : '(auto 省略)'}, stream=${body.stream}, temperature=${body.temperature}, max_tokens=${body.max_tokens}, exclude=${body.custom_exclude_body ? '有' : '无'}`);
   if (isDebugLogEnabled()) {
     try {
       const toStore: any = JSON.parse(JSON.stringify(body));

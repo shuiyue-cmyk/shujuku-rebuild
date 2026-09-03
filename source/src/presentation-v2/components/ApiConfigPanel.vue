@@ -114,7 +114,7 @@
         </AcuFormRow>
       </div>
 
-      <AcuFormRow label="思考强度" hint="reasoning_effort，随预设保存。每个 API 预设独立。偏小尺寸的模型拉高思考强度有助于保证输出内容正确性">
+      <AcuFormRow label="思考强度" hint="reasoning_effort，随预设保存。每个 API 预设独立。偏小尺寸的模型拉高思考强度有助于保证输出内容正确性。选 Auto 时不传输思考强度参数，由服务端自动决定">
         <AcuSelect
           :options="reasoningEffortOptions"
           :model-value="activeDraft.reasoningEffort || ''"
@@ -251,13 +251,15 @@ import {
   hasManagedClientKeys_ACU,
 } from "../composables/client-header-presets";
 
-// ─── 思考强度选项（每个 API 预设独立） ───
+// ─── 思考强度选项（每个 API 预设独立；Auto 档不传输 reasoning_effort 参数） ───
 const reasoningEffortOptions: AcuSelectOption[] = [
   { value: "low", label: "Low" },
   { value: "medium", label: "Medium" },
   { value: "high", label: "High" },
-  { value: "max", label: "Max" },
   { value: "xhigh", label: "XHigh" },
+  { value: "max", label: "Max" },
+  { value: "false", label: "False（关闭思考）" },
+  { value: "auto", label: "Auto（自动）" },
 ];
 
 // ─── 接口协议选项（对齐 TT 主 API 四个「自定义」选项，custom_api_format 契约） ───

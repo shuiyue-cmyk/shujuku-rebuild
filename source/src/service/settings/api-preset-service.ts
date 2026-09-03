@@ -15,8 +15,8 @@ import { logWarn_ACU } from '../../shared/utils';
 
 export type ApiPresetApiMode_ACU = 'custom';
 
-/** 思考强度等级（reasoning_effort） */
-export type ReasoningEffort_ACU = 'low' | 'medium' | 'high' | 'max' | 'xhigh';
+/** 思考强度等级（reasoning_effort）：'false' 传 false 关闭思考，'auto' 则请求体省略该参数由服务端自定 */
+export type ReasoningEffort_ACU = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'false' | 'auto';
 
 /** 接口协议（预设级）：对齐 TauriTavern 主 API 的四个「自定义」选项（custom_api_format 四值契约） */
 export type CustomApiFormat_ACU = 'openai_compat' | 'openai_responses' | 'claude_messages' | 'gemini_interactions';
@@ -129,7 +129,7 @@ export function normalizeApiConfig_ACU(value: any): ApiPresetApiConfig_ACU {
   else if (rawStreaming === false || (typeof rawStreaming === 'string' && rawStreaming.trim().toLowerCase() === 'false')) streamingEnabled = false;
   else streamingEnabled = undefined;
   const rawReasoning = String(source.reasoningEffort ?? '').trim().toLowerCase();
-  const reasoningEffort = (['low', 'medium', 'high', 'max', 'xhigh'] as const).includes(rawReasoning as any)
+  const reasoningEffort = (['low', 'medium', 'high', 'xhigh', 'max', 'false', 'auto'] as const).includes(rawReasoning as any)
     ? (rawReasoning as ReasoningEffort_ACU)
     : undefined;
   // [修复] 保留源对象中所有非白名单字段（如 topP/top_p/frequency_penalty），

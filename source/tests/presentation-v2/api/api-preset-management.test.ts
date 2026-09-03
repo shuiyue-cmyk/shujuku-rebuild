@@ -137,6 +137,21 @@ describe('api preset draft helpers', () => {
     expect(preset.apiConfig.reasoningEffort).toBe('xhigh');
   });
 
+  it('思考强度 false / auto 往返保留（字符串档位不被当成未配置丢弃）', () => {
+    for (const value of ['false', 'auto']) {
+      const draft = apiPresetDraftFromPreset({
+        name: 'effort-modes',
+        apiMode: 'custom',
+        apiConfig: {
+          url: 'https://e.test', apiKey: '', model: 'e', max_tokens: 100, temperature: 1,
+          reasoningEffort: value,
+        },
+      } as any);
+      expect(draft.reasoningEffort).toBe(value);
+      expect(apiPresetFromDraft(draft).apiConfig.reasoningEffort).toBe(value);
+    }
+  });
+
   // ═══ 提示词后处理 / 接口协议：与请求体共用归一化 ═══
   it('旧预设缺失 promptPostProcessing / customApiFormat 时草稿归一为运行时默认值，而不是「未选择」', () => {
     const draft = apiPresetDraftFromPreset({
