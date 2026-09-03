@@ -212,15 +212,15 @@ export class SqliteEngine {
         values: results[0].values,
       };
     } catch (e: any) {
+      // 去重：query 失败只 throw，由顶层调用链统一记日志（update-orchestrator），
+      // 底层不再记 error，避免同一次失败刷多条 ERROR。
       if (options.suppressErrorLog !== true) {
         const message = e?.message || String(e);
         // “no such table” 属于预期时序：新开卡/首次填表前，模板 SELECT 会先于建表执行
         // （建表仅在写操作触发，见 sql-table-service.ts executeMutation）。
-        // 这类情况降级为 debug，避免刷 ERROR 噪音；语法错误、no such column 等仍按 ERROR 上报。
+        // 这类情况降级为 debug，避免刷噪音。
         if (/no such table/i.test(message)) {
           logDebug_ACU('[SQLite引擎] query 命中未建表（预期时序）:', sql.substring(0, 200), '| 错误:', message);
-        } else {
-          logError_ACU('[SQLite引擎] query 执行失败:', sql.substring(0, 200), '| 错误:', message);
         }
       }
       throw e;
@@ -240,7 +240,7 @@ export class SqliteEngine {
       this.db!.run(sql, params);
       return { changes: this.db!.getRowsModified() };
     } catch (e: any) {
-      logError_ACU('[SQLite引擎] run 执行失败:', sql.substring(0, 200), '| 错误:', e?.message || String(e));
+      // 去重：run 失败只 throw，由顶层调用链统一记日志，底层不再记 error。
       throw e;
     }
   }

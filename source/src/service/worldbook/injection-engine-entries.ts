@@ -230,7 +230,7 @@ function projectWorldbookTable_ACU(table: any): { headers: string[]; rows: any[]
         const headers = projectedSummary.headers;
         const keywordColumnIndex = headers.indexOf('编码索引');
         if (keywordColumnIndex === -1) {
-            logError_ACU('Cannot find "编码索引" column in 总结表. Cannot process summary entries.');
+            logError_ACU('Cannot find "编码索引" column in 总结表. Cannot process summary entries.', { table: summaryTable?.name || '总结表', lorebook: primaryLorebookName, isolationPrefix: isoPrefix });
             return;
         }
 
@@ -342,7 +342,7 @@ function projectWorldbookTable_ACU(table: any): { headers: string[]; rows: any[]
         const headers = projectedPersons.headers;
         const nameColumnIndex = headers.indexOf('姓名') !== -1 ? headers.indexOf('姓名') : headers.indexOf('角色名');
         if (nameColumnIndex === -1) {
-            logError_ACU('Cannot find "姓名" or "角色名" column in 重要人物表. Cannot process person entries.');
+            logError_ACU('Cannot find "姓名" or "角色名" column in 重要人物表. Cannot process person entries.', { table: importantPersonsTable?.name || '重要人物表', lorebook: primaryLorebookName, isolationPrefix: isoPrefix });
             return;
         }
 

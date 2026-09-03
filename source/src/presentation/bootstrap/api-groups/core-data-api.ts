@@ -66,7 +66,7 @@ export function createCoreDataApi(ctx: ApiGroupContext): Record<string, Function
                                     logDebug_ACU(`[importTableAsJson] 交火向量索引防抖归档已入队: queued=${queueResult.queued}, reason=${queueResult.reason || 'ok'}`);
                                 }
                             } catch (syncError) {
-                                logError_ACU('[importTableAsJson] 交火向量索引防抖归档入队异常（表格导入已完成）:', syncError);
+                                logWarn_ACU('[importTableAsJson] 交火向量索引防抖归档入队异常（表格导入已完成）:', syncError);
                             }
                         }
                     } else {

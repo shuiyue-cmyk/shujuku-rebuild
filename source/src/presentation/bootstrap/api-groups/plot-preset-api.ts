@@ -73,7 +73,7 @@ export function createPlotPresetApi(ctx: ApiGroupContext): Record<string, Functi
         switchPlotPreset: function(presetName: any) {
             try {
                 if (presetName === undefined || presetName === null) {
-                    logError_ACU('switchPlotPreset: Invalid preset name provided.');
+                    logWarn_ACU('switchPlotPreset: Invalid preset name provided.');
                     return false;
                 }
 
@@ -83,7 +83,7 @@ export function createPlotPresetApi(ctx: ApiGroupContext): Record<string, Functi
                 });
 
                 if (!result) {
-                    logError_ACU(`switchPlotPreset: Preset "${presetName}" not found.`);
+                    logWarn_ACU(`switchPlotPreset: Preset "${presetName}" not found.`);
                     return false;
                 }
 
@@ -99,7 +99,7 @@ export function createPlotPresetApi(ctx: ApiGroupContext): Record<string, Functi
         injectPlotPresetToCurrentChat: function(presetName: any) {
             try {
                 if (presetName === undefined || presetName === null) {
-                    logError_ACU('injectPlotPresetToCurrentChat: Invalid preset name provided.');
+                    logWarn_ACU('injectPlotPresetToCurrentChat: Invalid preset name provided.');
                     return false;
                 }
 
@@ -109,7 +109,7 @@ export function createPlotPresetApi(ctx: ApiGroupContext): Record<string, Functi
                 });
 
                 if (!result) {
-                    logError_ACU(`injectPlotPresetToCurrentChat: Preset "${presetName}" not found.`);
+                    logWarn_ACU(`injectPlotPresetToCurrentChat: Preset "${presetName}" not found.`);
                     return false;
                 }
 

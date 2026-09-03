@@ -3,7 +3,7 @@
  * 设置与配置 API — 设置面板 + 更新配置参数 + 手动更新表选择 + API 预设管理
  */
 
-import { logDebug_ACU, logError_ACU } from '../../../shared/utils';
+import { logDebug_ACU, logError_ACU, logWarn_ACU } from '../../../shared/utils';
 import { getUiSurface_ACU } from '../../../shared/ui-surface-registry';
 import { settings_ACU, currentJsonTableData_ACU } from '../../../service/runtime/state-manager';
 import { getSortedSheetKeys_ACU } from '../../../service/template/chat-scope';
@@ -255,7 +255,7 @@ export function createSettingsConfigApi(_ctx: ApiGroupContext): Record<string, F
         getApiPresets: function(): any[] {
             try {
                 // 已弃用：公开 API 不再返回预设内容，请使用 callAI 受限代理接口发起 AI 请求。
-                logError_ACU('getApiPresets: 已弃用，公开 API 不再暴露预设内容，请使用 callAI');
+                logWarn_ACU('getApiPresets: 已弃用，公开 API 不再暴露预设内容，请使用 callAI');
                 return [];
             } catch (e) {
                 logError_ACU('getApiPresets failed:', e);
@@ -266,7 +266,7 @@ export function createSettingsConfigApi(_ctx: ApiGroupContext): Record<string, F
         getTableApiPreset: function(): string {
             try {
                 // 已弃用：公开 API 不再暴露内部预设选择状态，请使用 callAI 受限代理接口并在 options 中指定 presetName。
-                logError_ACU('getTableApiPreset: 已弃用，公开 API 不再暴露内部配置状态');
+                logWarn_ACU('getTableApiPreset: 已弃用，公开 API 不再暴露内部配置状态');
                 return '';
             } catch (e) {
                 logError_ACU('getTableApiPreset failed:', e);
@@ -277,7 +277,7 @@ export function createSettingsConfigApi(_ctx: ApiGroupContext): Record<string, F
         setTableApiPreset: function(presetName: string): boolean {
             try {
                 // 已弃用：公开 API 不再允许外部切换内部预设选择，请使用 callAI 受限代理接口并在 options 中指定 presetName。
-                logError_ACU('setTableApiPreset: 已弃用，公开 API 不再允许外部修改内部配置');
+                logWarn_ACU('setTableApiPreset: 已弃用，公开 API 不再允许外部修改内部配置');
                 return false;
             } catch (e) {
                 logError_ACU('setTableApiPreset failed:', e);
@@ -288,7 +288,7 @@ export function createSettingsConfigApi(_ctx: ApiGroupContext): Record<string, F
         getPlotApiPreset: function(): string {
             try {
                 // 已弃用：公开 API 不再暴露内部预设选择状态，请使用 callAI 受限代理接口并在 options 中指定 presetName。
-                logError_ACU('getPlotApiPreset: 已弃用，公开 API 不再暴露内部配置状态');
+                logWarn_ACU('getPlotApiPreset: 已弃用，公开 API 不再暴露内部配置状态');
                 return '';
             } catch (e) {
                 logError_ACU('getPlotApiPreset failed:', e);
@@ -299,7 +299,7 @@ export function createSettingsConfigApi(_ctx: ApiGroupContext): Record<string, F
         setPlotApiPreset: function(presetName: string): boolean {
             try {
                 // 已弃用：公开 API 不再允许外部切换内部预设选择，请使用 callAI 受限代理接口并在 options 中指定 presetName。
-                logError_ACU('setPlotApiPreset: 已弃用，公开 API 不再允许外部修改内部配置');
+                logWarn_ACU('setPlotApiPreset: 已弃用，公开 API 不再允许外部修改内部配置');
                 return false;
             } catch (e) {
                 logError_ACU('setPlotApiPreset failed:', e);
@@ -310,7 +310,7 @@ export function createSettingsConfigApi(_ctx: ApiGroupContext): Record<string, F
         saveApiPreset: function(presetData: any): boolean {
             try {
                 // 已弃用：公开 API 不再允许外部保存完整 API 预设（含 apiKey/settings/tavernProfile），请通过插件内部 UI 管理预设，通过 callAI 受限代理接口发起请求。
-                logError_ACU('saveApiPreset: 已弃用，公开 API 不再允许外部保存 API 预设，请使用内部 UI 管理预设');
+                logWarn_ACU('saveApiPreset: 已弃用，公开 API 不再允许外部保存 API 预设，请使用内部 UI 管理预设');
                 return false;
             } catch (e) {
                 logError_ACU('saveApiPreset failed:', e);
@@ -321,7 +321,7 @@ export function createSettingsConfigApi(_ctx: ApiGroupContext): Record<string, F
         loadApiPreset: function(presetName: string): boolean {
             try {
                 // 已弃用：公开 API 不再允许外部加载完整 API 预设（含 apiKey/settings/tavernProfile），请通过插件内部 UI 管理预设。
-                logError_ACU('loadApiPreset: 已弃用，公开 API 不再允许外部加载 API 预设');
+                logWarn_ACU('loadApiPreset: 已弃用，公开 API 不再允许外部加载 API 预设');
                 return false;
             } catch (e) {
                 logError_ACU('loadApiPreset failed:', e);

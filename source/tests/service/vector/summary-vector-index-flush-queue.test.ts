@@ -357,6 +357,18 @@ describe('summary-vector-index flush queue scope', () => {
     expect(h.remove).not.toHaveBeenCalled();
   });
 
+  it('定时器触发前已切聊则跳票：不执行 archive，任务保留待切回重排', async () => {
+    const scope = buildSummaryVectorIndexFlushScopeKey_ACU('chat-a', 'iso-a', 'summary-a');
+    h.task = task(scope, { generation: 0, debounceUntil: Date.now() + 100 });
+
+    await enqueueSummaryVectorIndexFlush_ACU({ debounceMs: 100, isolationKey: 'iso-a', sourceTableKey: 'summary-a' });
+    h.chatKey = 'chat-b';
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(h.archive).not.toHaveBeenCalled();
+    expect(h.remove).not.toHaveBeenCalled();
+  });
+
   it('旧 runner 成功收尾不会覆盖新 generation 的任务或墓碑', async () => {
     const scope = buildSummaryVectorIndexFlushScopeKey_ACU('chat-a', 'iso-a', 'summary-a');
     h.task = task(scope, { generation: 0 });

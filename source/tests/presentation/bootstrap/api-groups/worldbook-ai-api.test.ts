@@ -11,6 +11,14 @@ const { mockCallAIWithPreset, mockSettings } = vi.hoisted(() => ({
 
 vi.mock('../../../../src/service/ai/api-call', () => ({
   callAIWithPreset_ACU: mockCallAIWithPreset,
+  // 与真实 isRetryableAiRequestError_ACU 同语义，供单发重试包装的 catch 路径使用。
+  isRetryableAiRequestError_ACU: (error: any) => {
+    const status = Number(error?.status);
+    if (String(error?.name || '') === 'AbortError') return false;
+    if (Number.isFinite(status)) return status === 408 || status === 429 || (status >= 500 && status <= 599);
+    if (String(error?.name || '') === 'TimeoutError') return true;
+    return error instanceof TypeError || /(?:timeout|timed out|network(?:\s+error)?|connection reset|socket hang up)/i.test(String(error?.message || ''));
+  },
 }));
 vi.mock('../../../../src/service/runtime/state-manager', () => ({
   settings_ACU: mockSettings,
@@ -79,5 +87,21 @@ describe('callAI 委托与输入边界', () => {
     mockCallAIWithPreset.mockRejectedValue(new Error('upstream failure'));
     const api = createWorldbookAiApi({} as any);
     await expect(api.callAI([{ role: 'user', content: 'hello' }])).resolves.toBeNull();
+  });
+
+  it('瞬时 503 重试后成功（同调用形状逐字一致）', async () => {
+    mockCallAIWithPreset
+      .mockRejectedValueOnce(Object.assign(new Error('API请求失败: 503'), { status: 503 }))
+      .mockResolvedValueOnce('recovered');
+    const api = createWorldbookAiApi({} as any);
+    await expect(api.callAI([{ role: 'user', content: 'hello' }])).resolves.toBe('recovered');
+    expect(mockCallAIWithPreset).toHaveBeenCalledTimes(2);
+  }, 15000);
+
+  it('AbortError 立停不重试，返回 null', async () => {
+    mockCallAIWithPreset.mockRejectedValue(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+    const api = createWorldbookAiApi({} as any);
+    await expect(api.callAI([{ role: 'user', content: 'hello' }])).resolves.toBeNull();
+    expect(mockCallAIWithPreset).toHaveBeenCalledTimes(1);
   });
 });

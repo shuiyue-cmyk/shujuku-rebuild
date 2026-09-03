@@ -339,6 +339,45 @@ describe('processSummaryVectorIndexBeforeGeneration_ACU hybrid retrieval', () =>
     expect(createdContent_ACU()).toContain('old sparse summary');
   });
 
+  it('rerank 空评分回退走 warn（含 endpoint/model），异常回退仍走 error（257 不动）', async () => {
+    const utils = await import('../../../src/shared/utils');
+    const logWarn = utils.logWarn_ACU as unknown as ReturnType<typeof vi.fn>;
+    const logError = utils.logError_ACU as unknown as ReturnType<typeof vi.fn>;
+
+    h.config.rerankEndpoint = 'https://rerank.test';
+    h.config.rerankModel = 'rerank-model';
+    // 网关 V1-f 覆盖度守卫要求条数对齐：返回与 documents 等长、但 index 全越界的评分，
+    // 才能穿透到 runtime 空评分支（empty_response），条数不足会先抛错走 failed 分支。
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init: RequestInit) => {
+      const sent = JSON.parse(String(init.body));
+      return {
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ results: sent.documents.map((_: string, index: number) => ({ index: 1000 + index, relevance_score: 0.9 })) }),
+      };
+    }));
+
+    const emptyResult = await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'secret relic empty', source: 'rerank-empty' });
+
+    expect(emptyResult.success).toBe(true);
+    expect(emptyResult.rerankStatus).toBe('empty_response');
+    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining('没有任何可用的评分'));
+    expect(logWarn).toHaveBeenCalledWith(expect.stringContaining('https://rerank.test'));
+    const errorTextsOnEmpty = logError.mock.calls.map(args => String(args[0] ?? '')).join('\n');
+    expect(errorTextsOnEmpty).not.toContain('没有任何可用的评分');
+
+    logWarn.mockClear();
+    logError.mockClear();
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('rerank down'); }));
+
+    const failedResult = await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'secret relic down', source: 'rerank-failed-level' });
+
+    expect(failedResult.rerankStatus).toBe('failed');
+    expect(logError).toHaveBeenCalledWith(expect.stringContaining('Rerank 调用失败'));
+    const warnTextsOnFailed = logWarn.mock.calls.map(args => String(args[0] ?? '')).join('\n');
+    expect(warnTextsOnFailed).not.toContain('Rerank 调用失败');
+  });
+
   it('rerank 请求只带 Content-Type 与 Authorization，不夹带宿主请求头（否则跨域预检被拦、宿主 CSRF 令牌泄露、rerank 静默失效）', async () => {
     h.config.rerankEndpoint = 'https://rerank.test/v1/rerank';
     h.config.rerankModel = 'rerank-model';

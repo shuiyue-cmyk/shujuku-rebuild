@@ -2606,7 +2606,9 @@ function tryParseQuotedTemplate_ACU(cleanTemplate, parseFn) {
     }
     return null;
 }
-function parseTableTemplateJson_ACU({ stripSeedRows = false } = {}) {
+let templateParseFailureCount_ACU = 0;
+const TEMPLATE_PARSE_LOG_SAMPLE_EVERY_ACU = 10;
+function parseTableTemplateJson_ACU({ stripSeedRows = false, templateId = 'builtin-default', chatId = 'unknown' } = {}) {
     try {
         let cleanTemplate = TABLE_TEMPLATE_ACU.trim();
         const parseTemplateJson = (str) => safeJsonParseWithJsoncComments_ACU(str, null);
@@ -2627,7 +2629,16 @@ function parseTableTemplateJson_ACU({ stripSeedRows = false } = {}) {
             }
         }
         if (!obj) {
-            logError_ACU('[模板解析] 所有解析方案均失败，模板长度:', cleanTemplate.length, '首字符:', JSON.stringify(cleanTemplate[0]));
+            // 采样：首次与每 N 次记 error（含 templateId/chat 标识），其余降级为 debug，避免坏模板每轮刷屏。
+            templateParseFailureCount_ACU++;
+            const templateFailureOccurrences = templateParseFailureCount_ACU;
+            const shouldSampleTemplateFailure = templateFailureOccurrences === 1 || templateFailureOccurrences % TEMPLATE_PARSE_LOG_SAMPLE_EVERY_ACU === 0;
+            if (shouldSampleTemplateFailure) {
+                logError_ACU('[模板解析] 所有解析方案均失败，模板长度:', cleanTemplate.length, '首字符:', JSON.stringify(cleanTemplate[0]), 'templateId:', templateId, 'chat:', chatId, '累计失败:', templateFailureOccurrences);
+            }
+            else {
+                logDebug_ACU('[模板解析] 解析失败（采样抑制） templateId:', templateId, 'chat:', chatId, '累计失败:', templateFailureOccurrences);
+            }
             return null;
         }
         return stripSeedRows ? stripSeedRowsFromTemplate_ACU(obj) : obj;
@@ -7562,16 +7573,15 @@ class SqliteEngine {
             };
         }
         catch (e) {
+            // 去重：query 失败只 throw，由顶层调用链统一记日志（update-orchestrator），
+            // 底层不再记 error，避免同一次失败刷多条 ERROR。
             if (options.suppressErrorLog !== true) {
                 const message = e?.message || String(e);
                 // “no such table” 属于预期时序：新开卡/首次填表前，模板 SELECT 会先于建表执行
                 // （建表仅在写操作触发，见 sql-table-service.ts executeMutation）。
-                // 这类情况降级为 debug，避免刷 ERROR 噪音；语法错误、no such column 等仍按 ERROR 上报。
+                // 这类情况降级为 debug，避免刷噪音。
                 if (/no such table/i.test(message)) {
                     logDebug_ACU('[SQLite引擎] query 命中未建表（预期时序）:', sql.substring(0, 200), '| 错误:', message);
-                }
-                else {
-                    logError_ACU('[SQLite引擎] query 执行失败:', sql.substring(0, 200), '| 错误:', message);
                 }
             }
             throw e;
@@ -7591,7 +7601,7 @@ class SqliteEngine {
             return { changes: this.db.getRowsModified() };
         }
         catch (e) {
-            logError_ACU('[SQLite引擎] run 执行失败:', sql.substring(0, 200), '| 错误:', e?.message || String(e));
+            // 去重：run 失败只 throw，由顶层调用链统一记日志，底层不再记 error。
             throw e;
         }
     }
@@ -35916,10 +35926,12 @@ class SyncBridge {
             catch (e) {
                 const errorMessage = e?.message || String(e);
                 const message = `[SyncBridge] 加载表 ${key} (${sheet.name}) 失败: ${formatSqliteLoadFailure_ACU(errorMessage)}`;
-                logError_ACU(message);
+                logError_ACU(message, e);
                 if (options.strict) {
                     throw new Error(message);
                 }
+                // 非 strict 不再静默吞表：跳过明细写入 warnings 通道，调用方可观测。
+                options.warnings?.push(message);
             }
         }
     }
@@ -35954,6 +35966,10 @@ class SyncBridge {
             if (!meta) {
                 if (options.strict)
                     throw new Error(`[SyncBridge] 用户表 ${tableName} 缺少可识别的元数据。`);
+                // 非 strict 不再静默丢表：跳过明细写入 warnings 通道并记一条 warn。
+                const skipMessage = `[SyncBridge] 导出跳过用户表 ${tableName}：缺少可识别的元数据。`;
+                options.warnings?.push(skipMessage);
+                logWarn_ACU(skipMessage);
                 continue;
             }
             try {
@@ -35964,7 +35980,9 @@ class SyncBridge {
                 if (options.strict) {
                     throw new Error(`[SyncBridge] 导出表 ${tableName} 失败: ${e?.message || String(e)}`);
                 }
-                logError_ACU(`[SyncBridge] 导出表 ${tableName} 失败:`, e?.message || e);
+                const failureMessage = `[SyncBridge] 导出表 ${tableName} 失败: ${e?.message || String(e)}`;
+                options.warnings?.push(failureMessage);
+                logError_ACU(`[SyncBridge] 导出表 ${tableName} 失败:`, e);
             }
         }
         if (!legacyDuplicateRowIds) {
@@ -57255,7 +57273,7 @@ class SqlTableService {
             return exportedData;
         }
         catch (e) {
-            logError_ACU(`[SqlTableService] getCurrentData 失败: ${e?.message}`);
+            logError_ACU('[SqlTableService] getCurrentData 失败:', e);
             return this._readCanonicalView_ACU();
         }
     }
@@ -57325,8 +57343,7 @@ class SqlTableService {
             };
         }
         catch (e) {
-            const errMsg = e?.message || String(e);
-            logError_ACU(`[SqlTableService] SQL 批量执行失败: ${errMsg}`);
+            // 去重：只 throw，由顶层调用链统一记日志，底层不再记 error。
             throw e;
         }
     }
@@ -57410,7 +57427,7 @@ class SqlTableService {
             };
         }
         catch (e) {
-            logError_ACU(`[SqlTableService] 系统 row_id 批量执行失败: ${e?.message || String(e)}`);
+            // 去重：只 throw，由顶层调用链统一记日志，底层不再记 error。
             throw e;
         }
     }
@@ -57681,12 +57698,17 @@ class SqlTableService {
     _syncToJson() {
         try {
             const mate = this._readCanonicalView_ACU()?.mate || { type: 'acu', version: 1, updateConfigUiSentinel: 0, globalInjectionConfig: { readableEntryPlacement: { position: '', depth: 0, order: 0 }, wrapperPlacement: { position: '', depth: 0, order: 0 } } };
-            const exportedData = this.syncBridge.exportToTableData(mate);
+            // 收集非 strict 导出跳过明细：部分表被跳过时聚合成一条 warn，避免静默丢表。
+            const exportWarnings = [];
+            const exportedData = this.syncBridge.exportToTableData(mate, { warnings: exportWarnings });
+            if (exportWarnings.length > 0) {
+                logWarn_ACU(`[SqlTableService] syncToJson 部分表被跳过（${exportWarnings.length}）：${exportWarnings.join('；')}`);
+            }
             this._publishCanonicalView_ACU(exportedData);
             return exportedData;
         }
         catch (e) {
-            logError_ACU(`[SqlTableService] syncToJson 失败: ${e?.message}`);
+            logError_ACU('[SqlTableService] syncToJson 失败:', e);
             return null;
         }
     }
@@ -68066,6 +68088,11 @@ async function skillifySingleEntry_ACU(summary, options, control, progressState)
             }
         }
         catch (error) {
+            // 与 agent-decision-engine 同约定，Abort 先行：用户「停止」触发的 Abort 直接以
+            // aborted 码终止整批，不当成普通失败 break→failed，更不重试。
+            if (options?.signal?.aborted || error?.name === 'AbortError') {
+                throw new Error(`agent_skillify_entry_aborted:${summary.bookName}:${String(summary.uid)}`);
+            }
             lastReason = `AI 调用异常：${error instanceof Error ? error.message : String(error)}`;
             retryable = isRetryableAiRequestError_ACU(error);
         }
@@ -71381,6 +71408,7 @@ function parseAndApplyTableEditsToData_ACU(aiResponse, tableData, updateMode = '
     const sheetKeysForIndexing = getSortedSheetKeys_ACU(tableData);
     const sheets = sheetKeysForIndexing.map(key => tableData[key]);
     let appliedEdits = 0;
+    let failedEdits = 0;
     const editCountsByTable = {};
     // 指令解析函数
     const parseTableEditCommandLine_ACU = (rawLine) => {
@@ -71514,6 +71542,7 @@ function parseAndApplyTableEditsToData_ACU(aiResponse, tableData, updateMode = '
         const parsed = parseTableEditCommandLine_ACU(line);
         if (!parsed) {
             logWarn_ACU(`Skipping malformed or truncated command line: "${line}"`);
+            failedEdits++;
             return;
         }
         const { command, args } = parsed;
@@ -71690,6 +71719,7 @@ function parseAndApplyTableEditsToData_ACU(aiResponse, tableData, updateMode = '
             }
         }
         catch (e) {
+            failedEdits++;
             logError_ACU(`Failed to parse or apply command: "${line}"`, e);
         }
     });
@@ -71712,7 +71742,15 @@ function parseAndApplyTableEditsToData_ACU(aiResponse, tableData, updateMode = '
                 modifiedSheetKeys.push(sheetKey);
         }
     });
-    return { success: true, modifiedKeys: modifiedSheetKeys, appliedEdits };
+    const totalCommands = finalCommandLines.length;
+    const success = appliedEdits > 0;
+    return {
+        success,
+        modifiedKeys: modifiedSheetKeys,
+        appliedEdits,
+        failedEdits,
+        error: success ? '' : `解析或应用失败：${totalCommands} 条指令中成功 0 条，失败 ${failedEdits} 条。`,
+    };
 }
 function parseAndApplyTableEdits_ACU(aiResponse, updateMode = 'standard', isImportMode = false) {
     if (!currentJsonTableData_ACU) {
@@ -72681,7 +72719,7 @@ function withOpencodeSessionHeader_ACU(headersText, url) {
 /**
  * 宿主 chat-completions 桥返回非 2xx 时的错误类型。
  * 保留 status 的目的不是美化日志，而是让上层重试归属方能区分「瞬时失败」与「必然失败的请求」：
- * 401/403/404 这类配置错误重试只是白烧配额，429/5xx 才值得再来一次。
+ * 401/403/404 这类配置错误重试只是白烧配额，408/429/5xx 才值得再来一次。
  */
 class AgentApiHttpError_ACU extends Error {
     constructor(status, message) {
@@ -72704,7 +72742,7 @@ function isRetryableAiRequestError_ACU(error) {
     if (name === 'AbortError')
         return false;
     if (Number.isFinite(status))
-        return status === 429 || (status >= 500 && status <= 599);
+        return status === 408 || status === 429 || (status >= 500 && status <= 599);
     if (name === 'TimeoutError')
         return true;
     if (error instanceof TypeError)
@@ -73176,7 +73214,11 @@ async function callAIWithResolvedPreset_ACU(messages, resolved, signal, lifecycl
                 throw cancelled;
             }
             if (error?.name === 'AbortError') {
-                throw new Error(`内部 AI 请求超时（${INTERNAL_AI_FETCH_TIMEOUT_MS_ACU / 1000}s 无响应），已中断。`);
+                // 超时计时器掐断的 fetch：挂 TimeoutError 名，使 isRetryable 按名判为可重试。
+                // 不依赖中文文案正则；外部取消已在上方按 AbortError 先行返回，走不到这里。
+                const timeout = new Error(`内部 AI 请求超时（${INTERNAL_AI_FETCH_TIMEOUT_MS_ACU / 1000}s 无响应），已中断。`);
+                timeout.name = 'TimeoutError';
+                throw timeout;
             }
             throw error;
         }
@@ -73192,8 +73234,11 @@ async function callAIWithResolvedPreset_ACU(messages, resolved, signal, lifecycl
         }
         catch (error) {
             // 响应体读取阶段被超时计时器掐断：报超时而不是底层网络错文；外部取消仍按取消上报。
+            // 同上：挂 TimeoutError 名，走 isRetryable 的按名放行分支。
             if (error?.name === 'AbortError' && !signal?.aborted && timeoutController.signal.aborted) {
-                throw new Error(`内部 AI 请求超时（${INTERNAL_AI_FETCH_TIMEOUT_MS_ACU / 1000}s），已中断。`);
+                const timeout = new Error(`内部 AI 请求超时（${INTERNAL_AI_FETCH_TIMEOUT_MS_ACU / 1000}s），已中断。`);
+                timeout.name = 'TimeoutError';
+                throw timeout;
             }
             throw error;
         }
@@ -76700,7 +76745,7 @@ async function runAgentDecisionForPlot_ACU(params) {
         if (successfulShards.length === 0) {
             const firstFailure = settled.find((result) => result.status === 'rejected');
             const reason = String(firstFailure?.reason?.message || 'agent_decision_error').split(':').pop() || 'agent_decision_error';
-            logError_ACU(`[Agent决策] 全部分片决策失败（共 ${shards.length} 片），已回退原剧情推进逻辑。失败原因: ${reason}`, {
+            logWarn_ACU(`[Agent决策] 全部分片决策失败（共 ${shards.length} 片），已回退原逻辑（原剧情推进逻辑）。失败原因: ${reason}`, {
                 phase: 'agent_decision_all_failed',
                 shardCount: shards.length,
             });
@@ -78084,7 +78129,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.1.5" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.1.6" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -78510,14 +78555,14 @@ async function persistTablesToChatMessageWithLockOption_ACU(options = {}) {
     const { targetMessageIndex = -1, targetSheetKeys = null, updateGroupKeys = null, trackingSheetKeys, filledSheetKeys: explicitFilledSheetKeys, tableData: explicitTableData, trackAsUpdate = true, source, requestId, batchId, operations, revisionWriteSet, forceCheckpoint, checkpointReason, manualRefillProgress, replaceExistingIncremental, assumeCommitLock, strictSave, manualCatchUpRunId, performanceRunId, performanceParentSpanId, transactionContext, } = options;
     const effectiveTableData = explicitTableData !== undefined ? explicitTableData : currentJsonTableData_ACU;
     if (!effectiveTableData) {
-        logError_ACU('Save aborted: currentJsonTableData_ACU is null.');
+        logWarn_ACU('Save aborted: currentJsonTableData_ACU is null.');
         return { saved: false, error: 'currentJsonTableData is null' };
     }
     const currentIsolationKey = getCurrentIsolationKey_ACU();
     const persistCore = async () => {
         const chat = getChatArray_ACU();
         if (!chat || chat.length === 0) {
-            logError_ACU('Save failed: Chat history is empty.');
+            logWarn_ACU('Save failed: Chat history is empty.');
             return { saved: false, error: 'chat history is empty' };
         }
         let strategy = resolveTableStorageStrategy_ACU(chat, currentIsolationKey, {
@@ -79856,6 +79901,16 @@ function createDbProxy() {
     });
 }
 /**
+ * 模板表达式失败聚合：按站点计数后记一条 warn，避免同一坏表达式每轮刷屏。
+ * 错误对象原样传递，堆栈仍可通过 normalizeLogArg 取到。
+ */
+const templateExprFailureCounts_ACU = new Map();
+function warnTemplateExprFailure_ACU(site, detail, error) {
+    const count = (templateExprFailureCounts_ACU.get(site) || 0) + 1;
+    templateExprFailureCounts_ACU.set(site, count);
+    logWarn_ACU(`[${site}] 执行失败（累计 ${count} 次）: ${detail}`, error);
+}
+/**
  * db.expr("SQL表达式") — 执行任意 SQL 表达式并返回结果
  * 支持中文表名/列名翻译、子查询、算术运算
  * 示例：
@@ -79889,7 +79944,7 @@ function execExpr(expression) {
         return String(val);
     }
     catch (e) {
-        logError_ACU(`[db.expr] 表达式执行失败: ${expression} → ${e?.message}`);
+        warnTemplateExprFailure_ACU('db.expr', `${expression} → ${e?.message}`, e);
         return null;
     }
 }
@@ -79921,7 +79976,7 @@ function execRand(min, max) {
         return Number(result.values[0][0]) || lo;
     }
     catch (e) {
-        logError_ACU(`[db.rand] 随机数生成失败: ${min}-${max} → ${e?.message}`);
+        warnTemplateExprFailure_ACU('db.rand', `${min}-${max} → ${e?.message}`, e);
         return 0;
     }
 }
@@ -79968,7 +80023,7 @@ function execCalc(expression) {
         return val;
     }
     catch (e) {
-        logError_ACU(`[db.calc] 表达式执行失败: ${expression} → ${e?.message}`);
+        warnTemplateExprFailure_ACU('db.calc', `${expression} → ${e?.message}`, e);
         return null;
     }
 }
@@ -80002,7 +80057,7 @@ function execMax(...values) {
         return Math.max(...nums);
     }
     catch (e) {
-        logError_ACU(`[db.max] 执行失败: ${e?.message}`);
+        warnTemplateExprFailure_ACU('db.max', `${e?.message}`, e);
         return null;
     }
 }
@@ -80030,7 +80085,7 @@ function execMin(...values) {
         return Math.min(...nums);
     }
     catch (e) {
-        logError_ACU(`[db.min] 执行失败: ${e?.message}`);
+        warnTemplateExprFailure_ACU('db.min', `${e?.message}`, e);
         return null;
     }
 }
@@ -80062,7 +80117,7 @@ function evaluateOrmExpression(expr) {
         return formatResult(result);
     }
     catch (e) {
-        logError_ACU(`[ORM] 表达式执行失败: ${expr} → ${e?.message}`);
+        warnTemplateExprFailure_ACU('ORM', `${expr} → ${e?.message}`, e);
         return '';
     }
 }
@@ -80125,7 +80180,7 @@ function evaluateRawSqlExpression(expr, options = {}) {
             logDebug_ACU(`[SQL] 查询命中未建表（预期时序）: ${expr} → ${message}`);
         }
         else {
-            logError_ACU(`[SQL] 表达式执行失败: ${expr} → ${message}`);
+            warnTemplateExprFailure_ACU('SQL', `${expr} → ${message}`, e);
         }
         return '';
     }
@@ -82456,7 +82511,7 @@ async function loadAllChatMessages_ACU() {
         }
     }
     catch (error) {
-        logError_ACU('ACU获取聊天记录失败: ' + error.message);
+        logError_ACU('ACU获取聊天记录失败:', { chatId: currentChatFileIdentifier_ACU, scope: 'loadAllChatMessages', error });
         _set_allChatMessages_ACU([]);
     }
 }
@@ -83740,7 +83795,7 @@ async function updateSummaryTableEntries_ACU(summaryTable, isImport = false, tar
         const headers = projectedSummary.headers;
         const keywordColumnIndex = headers.indexOf('编码索引');
         if (keywordColumnIndex === -1) {
-            logError_ACU('Cannot find "编码索引" column in 总结表. Cannot process summary entries.');
+            logError_ACU('Cannot find "编码索引" column in 总结表. Cannot process summary entries.', { table: summaryTable?.name || '总结表', lorebook: primaryLorebookName, isolationPrefix: isoPrefix });
             return;
         }
         const entriesToCreate = [];
@@ -83835,7 +83890,7 @@ async function updateImportantPersonsRelatedEntries_ACU(importantPersonsTable, i
         const headers = projectedPersons.headers;
         const nameColumnIndex = headers.indexOf('姓名') !== -1 ? headers.indexOf('姓名') : headers.indexOf('角色名');
         if (nameColumnIndex === -1) {
-            logError_ACU('Cannot find "姓名" or "角色名" column in 重要人物表. Cannot process person entries.');
+            logError_ACU('Cannot find "姓名" or "角色名" column in 重要人物表. Cannot process person entries.', { table: importantPersonsTable?.name || '重要人物表', lorebook: primaryLorebookName, isolationPrefix: isoPrefix });
             return;
         }
         const personEntriesToCreate = [];
@@ -89915,7 +89970,14 @@ async function runTableUpdateCommit_ACU(options, apply) {
         const errorCategory = error instanceof TableUpdateCommitError_ACU
             ? error.category
             : 'infrastructure';
-        logError_ACU(`[TableUpdateCommit] ${options.reason} failed:`, error);
+        // 级别统一：仅 infrastructure 记 error；precondition/model 为预期内的拒绝/模型问题，
+        // 记 warn 并附统一可操作指引（等填表完成 / 切回当前聊天重做），避免刷 ERROR 噪音。
+        if (errorCategory === 'infrastructure') {
+            logError_ACU(`[TableUpdateCommit] ${options.reason} failed:`, error);
+        }
+        else {
+            logWarn_ACU(`[TableUpdateCommit] ${options.reason} 已跳过（${errorCategory}）：${message} 统一指引：外部写入请等待 AI 填表完成后重试；范围校验失败请切回当前聊天重新执行填表。`, error);
+        }
         return {
             success: false,
             error: message,
@@ -100492,7 +100554,10 @@ async function fetchAvailableModels_ACU(apiUrl, apiKey, customApiFormat) {
         assertSafeHttpEndpoint_ACU(apiUrl);
     }
     catch (e) {
-        return { success: false, error: String(e?.message || '端点地址不安全。') };
+        const reason = String(e?.message || '端点地址不安全。');
+        // 协议非法分支：SSRF 守卫的协议相关拒绝追加可操作提示（其余拒绝保持原文）。
+        const protocolHint = /协议|仅支持 http/i.test(reason) ? '请使用完整的 http(s):// 地址（不支持协议相对 URL 与非 http(s) 协议）。' : '';
+        return { success: false, error: protocolHint ? `${reason} ${protocolHint}` : reason };
     }
     const statusUrl = `/api/backends/chat-completions/status`;
     const sanitizedKey = String(apiKey || '').replace(/[\r\n\0]+/g, '');
@@ -100514,13 +100579,22 @@ async function fetchAvailableModels_ACU(apiUrl, apiKey, customApiFormat) {
     });
     if (!response.ok) {
         const errorText = await response.text();
-        let errorMessage = `API端点状态检查失败: ${response.status} ${response.statusText}.`;
+        const status = response.status;
+        let errorMessage = `API端点状态检查失败: ${status} ${response.statusText}.`;
         try {
             const errorJson = JSON.parse(errorText);
             errorMessage += ` 详情: ${errorJson.error || errorJson.message || errorText}`;
         }
         catch (e) {
             errorMessage += ` 详情: ${errorText}`;
+        }
+        // status 可操作映射：文案保留 {status} 数字与关键词形状，供 log-error-hints
+        //（http-401 / http-404 等规则按状态码与关键短语匹配）直接复用。
+        if (status === 401) {
+            errorMessage += ' 请检查 API Key 是否正确、完整且未过期（401 unauthorized：API Key 无效）。';
+        }
+        else if (status === 404) {
+            errorMessage += ' 请检查接口地址是否完整、模型名是否存在（404 not found：模型不存在或地址错误，可点「拉取模型列表」重选）。';
         }
         return { success: false, error: errorMessage };
     }
@@ -102083,11 +102157,11 @@ async function fetchEmbeddingWithTimeout_ACU(endpoint, init, model) {
         throw new VectorEmbeddingError_ACU({
             kind: 'retryable',
             message: isAbort
-                ? `Embedding 请求超时（${VECTOR_EMBEDDING_TIMEOUT_MS_ACU}ms），已中断。`
+                ? `Embedding 请求超时（${VECTOR_EMBEDDING_TIMEOUT_MS_ACU}ms，已中断）：目标服务响应过慢或网络不通。请稍后重试；持续超时请检查本机网络/代理，或换用响应更快的 embedding 服务。网关内将自动快速重试一次。`
                 : isCrossOriginFetchRejection_ACU(error)
                     // 既有分类点：跨源被拒（不透明 TypeError、无 HTTP 状态）→ 归类为 CORS 并给出可行动建议；
                     // 识别规则与文案见 shared/vector-cross-origin-error.ts。kind 语义不动，仍按 retryable 有限重试。
-                    ? `Embedding 请求网络失败（${rawReason}）：${VECTOR_CROSS_ORIGIN_FAILURE_HINT_ACU}`
+                    ? `Embedding 请求网络失败（${rawReason}）：${VECTOR_CROSS_ORIGIN_FAILURE_HINT_ACU}网关内将自动快速重试一次；若持续失败，请按上述建议处理后到「交火模式」页点「立即重建」手动恢复。`
                     : `Embedding 请求网络失败：${rawReason}`,
             endpoint,
             model,
@@ -102243,6 +102317,20 @@ function scheduleDebouncedVectorIndexPersist_ACU(scopeKey) {
         clearTimeout(existing);
     const timer = setTimeout(() => {
         vectorIndexPersistTimers_ACU.delete(scopeKey);
+        // 与 flush 队列同理的 timer 触发前 chatKey 快检：scopeKey 为 [chatKey, isolationKey,
+        // sourceTableKey] JSON 串行；无当前聊天或已切聊时跳票并报告（pending 保留，执行体仍以 pending 为准）。
+        const liveChatKey = String(currentChatFileIdentifier_ACU || '').trim();
+        let scopedChatKey = '';
+        try {
+            const parsed = JSON.parse(scopeKey);
+            if (Array.isArray(parsed))
+                scopedChatKey = String(parsed[0] || '').trim();
+        }
+        catch { /* 解析失败走原路径，不因快检阻断归档 */ }
+        if (!liveChatKey || (scopedChatKey && liveChatKey !== scopedChatKey)) {
+            logDebug_ACU(`[纪要向量索引] 防抖归档跳票：scope=${scopeKey}, live=${liveChatKey || '(空)'}`);
+            return;
+        }
         void persistPendingVectorIndexArchive_ACU(scopeKey);
     }, VECTOR_INDEX_PERSIST_DEBOUNCE_MS_ACU);
     vectorIndexPersistTimers_ACU.set(scopeKey, timer);
@@ -103844,6 +103932,13 @@ function scheduleFlushTaskTimer_ACU(task) {
     const timer = setTimeout(() => {
         logDebug_ACU(`[交火向量索引] 防抖定时器触发：scope=${task.scopeKey}, 开始执行 flush`);
         summaryVectorFlushTimers_ACU.delete(task.scopeKey);
+        // timer 触发前 chatKey 快检（低成本）：无当前聊天或已切聊时直接跳票并报告，
+        // task 保留原状态，切回后由 restore 重排；执行体内的完整 scope 复检保持不变。
+        const liveChatKey = String(currentChatFileIdentifier_ACU || '').trim();
+        if (!liveChatKey || liveChatKey !== String(task.chatKey || '').trim()) {
+            logDebug_ACU(`[交火向量索引] 防抖定时器跳票：scope=${task.scopeKey}, task=${String(task.chatKey || '')}, live=${liveChatKey || '(空)'}`);
+            return;
+        }
         void flushSummaryVectorIndexTaskNow_ACU(task.scopeKey);
     }, delay);
     summaryVectorFlushTimers_ACU.set(task.scopeKey, timer);
@@ -111076,6 +111171,9 @@ async function handleNewMessageDebounced_ACU(eventType = 'unknown_acu', intent) 
                     break;
             }
         }
+        catch (error) {
+            logWarn_ACU('[ACU] new-message pipeline failed:', error);
+        }
         finally {
             performanceSpan.end({ messageCount: getChatArray_ACU()?.length || 0 });
         }
@@ -114151,7 +114249,7 @@ async function rerankCandidates_ACU(config, query, candidates) {
                 byIndex.set(item.index, item.relevanceScore);
         });
         if (byIndex.size === 0) {
-            logError_ACU(`[交火模式纪要索引] Rerank 响应没有任何可用的评分（endpoint=${endpoint}, model=${model}），本轮回退到 Embedding 排序。请检查服务商返回格式是否为 results[].index / relevance_score。`);
+            logWarn_ACU(`[交火模式纪要索引] Rerank 响应没有任何可用的评分（endpoint=${endpoint}, model=${model}），本轮回退到 Embedding 排序。请检查服务商返回格式是否为 results[].index / relevance_score。`);
             return { candidates, status: 'empty_response', error: 'rerank 响应中没有可用评分' };
         }
         return {
@@ -129364,6 +129462,34 @@ function installSendIntentCaptureHooks_ACU() {
     }
 }
 /**
+ * [mid-run 复检] 延迟重建链长 await 之间的低成本复检：排程时捕获的聊天身份/存储 epoch
+ * 与当前值比对，不等 ⇒ 期间发生了切聊（或旧实例被 dispose），调用方 early return，避免脏写。
+ * epoch 来源与阶段 D 共用 getRuntimeLifecycleEpoch_ACU（dispose 时 +1，本链自身的 reload/hydrate
+ * 不推进 epoch，故无自误杀）；单测 mock 未提供该导出时读取走 try/catch 降级为仅比对聊天身份。
+ */
+function shouldAbortDelayedRebuildMidRun_ACU(scheduledChatIdentifier, scheduledEpoch, stage) {
+    if (scheduledChatIdentifier && currentChatFileIdentifier_ACU !== scheduledChatIdentifier) {
+        logDebug_ACU(`ACU: Skip delayed chat rebuild mid-run at ${stage} because active chat already changed to "${currentChatFileIdentifier_ACU || '未知'}".`);
+        return true;
+    }
+    if (scheduledEpoch !== undefined) {
+        // epoch 读取包 try/catch：单测 mock 未提供该导出时 vitest 对其求值（连 typeof）都会抛错，
+        // 此时降级为仅比对聊天身份；生产环境该 getter 恒为同步数值返回，不会进 catch。
+        let currentEpoch_ACU;
+        try {
+            currentEpoch_ACU = getRuntimeLifecycleEpoch_ACU();
+        }
+        catch {
+            currentEpoch_ACU = undefined;
+        }
+        if (currentEpoch_ACU !== undefined && currentEpoch_ACU !== scheduledEpoch) {
+            logDebug_ACU(`ACU: Skip delayed chat rebuild mid-run at ${stage} because storage lifecycle epoch changed (chat switch/dispose during rebuild).`);
+            return true;
+        }
+    }
+    return false;
+}
+/**
  * [H2/M3] CHAT_CHANGED 延迟重建链执行体（原 1200ms setTimeout 体迁入）：
  * 持久化消息读取 → 模板应用 → merged refresh → SQLite snapshot hydrate → 向量索引预热/队列恢复。
  * 整体包一层 try/catch：缓存已清后的任何 await 抛错都记录并尽力轻量恢复，不产生未处理 rejection。
@@ -129372,6 +129498,14 @@ async function runChatChangedDelayedRebuild_ACU(chatFileName) {
     try {
         lastDelayedRebuildRefreshOk_ACU = false; // [M3]
         const scheduledChatIdentifier_ACU = cleanChatName_ACU(chatFileName);
+        // epoch 读取包 try/catch：单测 mock 未提供该导出（vitest 对其求值即抛错），降级为仅比对聊天身份
+        let scheduledLifecycleEpoch_ACU;
+        try {
+            scheduledLifecycleEpoch_ACU = getRuntimeLifecycleEpoch_ACU();
+        }
+        catch {
+            scheduledLifecycleEpoch_ACU = undefined;
+        }
         if (scheduledChatIdentifier_ACU && currentChatFileIdentifier_ACU !== scheduledChatIdentifier_ACU) {
             logDebug_ACU(`ACU: Skip delayed chat refresh because active chat already changed to "${currentChatFileIdentifier_ACU || '未知'}".`);
             return;
@@ -129384,6 +129518,8 @@ async function runChatChangedDelayedRebuild_ACU(chatFileName) {
         // 此处是“持久化 → 派生缓存”的唯一重建入口，不能依赖切换前遗留的 TABLE_TEMPLATE/currentJsonTableData。
         await loadAllChatMessages_ACU();
         applyTemplateScopeForCurrentChat_ACU();
+        if (shouldAbortDelayedRebuildMidRun_ACU(scheduledChatIdentifier_ACU, scheduledLifecycleEpoch_ACU, 'loadAllChatMessages 后'))
+            return;
         // 阶段 D：合并刷新（一轮 V2 replay，产出 canonical）与 provider hydrate 收敛。
         // 先执行 merged refresh 拿到最终 canonical 数据，SQLite 模式下用 envelope
         // hydrate provider（零 replay）；refresh 失败/degraded/身份漂移时回退冷
@@ -129391,6 +129527,8 @@ async function runChatChangedDelayedRebuild_ACU(chatFileName) {
         // UI 通知由 refreshMergedDataAndNotifyWithUI_ACU 内部完成。
         const refreshResult = await refreshMergedDataAndNotifyWithUI_ACU();
         lastDelayedRebuildRefreshOk_ACU = true; // [M3] 本轮合并刷新已成功
+        if (shouldAbortDelayedRebuildMidRun_ACU(scheduledChatIdentifier_ACU, scheduledLifecycleEpoch_ACU, 'merged refresh 后'))
+            return;
         if (isSqliteMode()) {
             const envelope = refreshResult
                 && !refreshResult.degraded
@@ -129416,7 +129554,7 @@ async function runChatChangedDelayedRebuild_ACU(chatFileName) {
                         await reloadStorageProvider();
                     }
                     catch (e) {
-                        logError_ACU(`[SQLite] CHAT_CHANGED: 冷 reload 失败: ${e?.message}`);
+                        logError_ACU('[SQLite] CHAT_CHANGED: 冷 reload 失败:', e);
                     }
                 }
                 else {
@@ -129431,14 +129569,18 @@ async function runChatChangedDelayedRebuild_ACU(chatFileName) {
                     await reloadStorageProvider();
                 }
                 catch (e) {
-                    logError_ACU(`[SQLite] CHAT_CHANGED: 数据库重建失败: ${e?.message}`);
+                    logError_ACU('[SQLite] CHAT_CHANGED: 数据库重建失败:', e);
                 }
             }
         }
+        if (shouldAbortDelayedRebuildMidRun_ACU(scheduledChatIdentifier_ACU, scheduledLifecycleEpoch_ACU, 'snapshot hydrate 后'))
+            return;
         // [交火向量索引] 聊天数据刷新完成后，预热当前聊天对应的外置分片缓存。
         // 注意：必须放在 refreshMergedDataAndNotifyWithUI_ACU 之后，否则可能读取到旧聊天的 manifest。
         const vectorCacheResult = await preloadSummaryVectorIndexCacheForCurrentChat_ACU();
         logDebug_ACU(`[交火向量索引] CHAT_CHANGED 缓存预热结果：success=${vectorCacheResult.success}, skipped=${vectorCacheResult.skipped === true}, reason=${vectorCacheResult.reason || 'none'}, chunks=${vectorCacheResult.chunkCount}, indexId=${vectorCacheResult.indexId || 'none'}`);
+        if (shouldAbortDelayedRebuildMidRun_ACU(scheduledChatIdentifier_ACU, scheduledLifecycleEpoch_ACU, '向量缓存预热后'))
+            return;
         if (shouldRebuildSummaryVectorIndexWithUI_ACU(vectorCacheResult.reason)) {
             try {
                 await rebuildCurrentSummaryVectorIndexWithUI_ACU();
@@ -129713,52 +129855,106 @@ function mainInitialize_ACU() {
             // [剧情推进] 拦截用户输入进行剧情规划
             if (SillyTavern_API_ACU.eventTypes.GENERATION_AFTER_COMMANDS) {
                 SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.GENERATION_AFTER_COMMANDS, async (type, params, dryRun) => {
-                    // 前置过滤（纯 UI/宿主层判断）
-                    if (params?._qrf_processed_by_hook)
-                        return;
-                    const shouldProcessSummaryVectorIndex = shouldProcessSummaryVectorIndexForGeneration_ACU(type, params, dryRun);
-                    const shouldProcessPlot = shouldProcessPlotForGeneration_ACU(type, params, dryRun);
-                    const shouldEnsureInitialSeed = !dryRun
-                        && type !== 'regenerate'
-                        && !params?.automatic_trigger
-                        && !isQuietLikeGeneration_ACU(type, params)
-                        && (isRecentUserSendIntent_ACU() || shouldProcessSummaryVectorIndex || shouldProcessPlot);
-                    if (shouldEnsureInitialSeed) {
-                        await ensureInitialSeedCheckpointBeforeGeneration_ACU('generation_after_commands_before_ai', { allowPendingFirstUserMessage: true });
-                    }
-                    if (!shouldProcessSummaryVectorIndex && !shouldProcessPlot)
-                        return;
-                    if (shouldProcessSummaryVectorIndex) {
-                        try {
-                            const chatForSummaryIndex = SillyTavern_API_ACU.chat;
-                            const lastUserText = (chatForSummaryIndex?.length && chatForSummaryIndex[chatForSummaryIndex.length - 1]?.is_user)
-                                ? String(chatForSummaryIndex[chatForSummaryIndex.length - 1].mes || '')
-                                : String(getSendTextareaValue_ACU() || params?.prompt || '');
-                            const summaryVectorResult = await processSummaryVectorIndexBeforeGenerationWithUI_ACU({ userInput: lastUserText, source: 'generation_after_commands' });
-                            logDebug_ACU(`[交火模式纪要索引] GENERATION_AFTER_COMMANDS 发送前处理完成：success=${summaryVectorResult.success}, skipped=${summaryVectorResult.skipped === true}, reason=${summaryVectorResult.reason || 'none'}, keywords=${summaryVectorResult.keywordCount ?? 0}, injected=${summaryVectorResult.injectedCount ?? 0}`);
+                    // [外层兜底] 回调体内多处 await（seed/策略编排）此前无外层 try，任一抛错即产生未处理 rejection；
+                    // 整包 try/catch 记 warn 后按原始生成继续，内层已有 try/catch 一律不动。
+                    try {
+                        // 前置过滤（纯 UI/宿主层判断）
+                        if (params?._qrf_processed_by_hook)
+                            return;
+                        const shouldProcessSummaryVectorIndex = shouldProcessSummaryVectorIndexForGeneration_ACU(type, params, dryRun);
+                        const shouldProcessPlot = shouldProcessPlotForGeneration_ACU(type, params, dryRun);
+                        const shouldEnsureInitialSeed = !dryRun
+                            && type !== 'regenerate'
+                            && !params?.automatic_trigger
+                            && !isQuietLikeGeneration_ACU(type, params)
+                            && (isRecentUserSendIntent_ACU() || shouldProcessSummaryVectorIndex || shouldProcessPlot);
+                        if (shouldEnsureInitialSeed) {
+                            await ensureInitialSeedCheckpointBeforeGeneration_ACU('generation_after_commands_before_ai', { allowPendingFirstUserMessage: true });
                         }
-                        catch (error) {
-                            logWarn_ACU('[交火模式纪要索引] 发送前注入失败，继续原始生成:', error);
+                        if (!shouldProcessSummaryVectorIndex && !shouldProcessPlot)
+                            return;
+                        if (shouldProcessSummaryVectorIndex) {
+                            try {
+                                const chatForSummaryIndex = SillyTavern_API_ACU.chat;
+                                const lastUserText = (chatForSummaryIndex?.length && chatForSummaryIndex[chatForSummaryIndex.length - 1]?.is_user)
+                                    ? String(chatForSummaryIndex[chatForSummaryIndex.length - 1].mes || '')
+                                    : String(getSendTextareaValue_ACU() || params?.prompt || '');
+                                const summaryVectorResult = await processSummaryVectorIndexBeforeGenerationWithUI_ACU({ userInput: lastUserText, source: 'generation_after_commands' });
+                                logDebug_ACU(`[交火模式纪要索引] GENERATION_AFTER_COMMANDS 发送前处理完成：success=${summaryVectorResult.success}, skipped=${summaryVectorResult.skipped === true}, reason=${summaryVectorResult.reason || 'none'}, keywords=${summaryVectorResult.keywordCount ?? 0}, injected=${summaryVectorResult.injectedCount ?? 0}`);
+                            }
+                            catch (error) {
+                                logWarn_ACU('[交火模式纪要索引] 发送前注入失败，继续原始生成:', error);
+                            }
                         }
-                    }
-                    if (!shouldProcessPlot)
-                        return;
-                    if (type === 'regenerate' || isProcessing_Plot_ACU)
-                        return;
-                    const chat = SillyTavern_API_ACU.chat;
-                    if (!chat || chat.length === 0)
-                        return;
-                    // ── 策略1：已有用户消息 ──
-                    const lastMessageIndex = chat.length - 1;
-                    const lastMessage = chat[lastMessageIndex];
-                    // [重构] 调用 service 层策略1编排
-                    const s1 = await orchestrateAfterCommandsStrategy1_ACU(lastMessage, lastMessageIndex, runOptimizationLogicWithUI_ACU);
-                    if (s1.action !== 'no_match') {
-                        // 策略1匹配，根据结果做 UI 操作
-                        switch (s1.action) {
+                        if (!shouldProcessPlot)
+                            return;
+                        if (type === 'regenerate' || isProcessing_Plot_ACU)
+                            return;
+                        const chat = SillyTavern_API_ACU.chat;
+                        if (!chat || chat.length === 0)
+                            return;
+                        // ── 策略1：已有用户消息 ──
+                        const lastMessageIndex = chat.length - 1;
+                        const lastMessage = chat[lastMessageIndex];
+                        // [重构] 调用 service 层策略1编排
+                        const s1 = await orchestrateAfterCommandsStrategy1_ACU(lastMessage, lastMessageIndex, runOptimizationLogicWithUI_ACU);
+                        if (s1.action !== 'no_match') {
+                            // 策略1匹配，根据结果做 UI 操作
+                            switch (s1.action) {
+                                case 'aborted':
+                                    if (s1.manual) {
+                                        // 停止生成
+                                        try {
+                                            if (SillyTavern_API_ACU && typeof SillyTavern_API_ACU.stopGeneration === 'function')
+                                                SillyTavern_API_ACU.stopGeneration();
+                                            else if (window.SillyTavern?.stopGeneration)
+                                                window.SillyTavern.stopGeneration();
+                                        }
+                                        catch (e) { }
+                                        // 删除刚创建的用户消息
+                                        try {
+                                            const chatNow = SillyTavern_API_ACU.chat;
+                                            const lastNow = chatNow?.length ? chatNow[chatNow.length - 1] : null;
+                                            if (lastNow && lastNow.is_user && String(lastNow.mes || '') === String(s1.originalMessage || '')) {
+                                                if (typeof SillyTavern_API_ACU.deleteLastMessage === 'function')
+                                                    await SillyTavern_API_ACU.deleteLastMessage();
+                                                else if (window.SillyTavern?.deleteLastMessage)
+                                                    await window.SillyTavern.deleteLastMessage();
+                                            }
+                                        }
+                                        catch (e) { }
+                                        // 恢复输入框
+                                        try {
+                                            setSendTextareaValue_ACU(s1.restoreText || '');
+                                        }
+                                        catch (e) { }
+                                    }
+                                    break;
+                                case 'planned':
+                                    // 写回 params 和消息对象
+                                    params.prompt = s1.finalMessage;
+                                    lastMessage.mes = s1.finalMessage;
+                                    // [L6] 裸 emit 改走 chat-gateway 的统一出口（含 eventTypes 缺失降级与空值防御）
+                                    emitMessageUpdated_ACU(lastMessageIndex);
+                                    if (getSendTextareaValue_ACU() === s1.originalMessage)
+                                        setSendTextareaValue_ACU('');
+                                    break;
+                                // 'skipped' — 不做额外操作
+                            }
+                            return; // 策略1匹配，不再执行策略2
+                        }
+                        // ── 策略2：输入框文本 ──
+                        // shouldProcessPlot 是本次 GENERATION_AFTER_COMMANDS 事件开始时捕获的授权。
+                        // 交火召回可能耗时超过 USER_SEND_TRIGGER_TTL_MS_ACU；这里不能再用 TTL 二次否决，
+                        // 否则会出现“交火已覆盖纪要索引，但剧情推进被跳过并直接正文生成”的断链。
+                        if (!shouldProcessPlot && !isRecentUserSendIntent_ACU())
+                            return;
+                        const textInBox = getSendTextareaValue_ACU();
+                        // [重构] 调用 service 层策略2编排
+                        const s2 = await orchestrateAfterCommandsStrategy2_ACU(String(textInBox || ''), runOptimizationLogicWithUI_ACU);
+                        switch (s2.action) {
                             case 'aborted':
-                                if (s1.manual) {
-                                    // 停止生成
+                                if (s2.manual) {
                                     try {
                                         if (SillyTavern_API_ACU && typeof SillyTavern_API_ACU.stopGeneration === 'function')
                                             SillyTavern_API_ACU.stopGeneration();
@@ -129766,69 +129962,22 @@ function mainInitialize_ACU() {
                                             window.SillyTavern.stopGeneration();
                                     }
                                     catch (e) { }
-                                    // 删除刚创建的用户消息
-                                    try {
-                                        const chatNow = SillyTavern_API_ACU.chat;
-                                        const lastNow = chatNow?.length ? chatNow[chatNow.length - 1] : null;
-                                        if (lastNow && lastNow.is_user && String(lastNow.mes || '') === String(s1.originalMessage || '')) {
-                                            if (typeof SillyTavern_API_ACU.deleteLastMessage === 'function')
-                                                await SillyTavern_API_ACU.deleteLastMessage();
-                                            else if (window.SillyTavern?.deleteLastMessage)
-                                                await window.SillyTavern.deleteLastMessage();
-                                        }
-                                    }
-                                    catch (e) { }
-                                    // 恢复输入框
-                                    try {
-                                        setSendTextareaValue_ACU(s1.restoreText || '');
-                                    }
-                                    catch (e) { }
                                 }
                                 break;
                             case 'planned':
-                                // 写回 params 和消息对象
-                                params.prompt = s1.finalMessage;
-                                lastMessage.mes = s1.finalMessage;
-                                // [L6] 裸 emit 改走 chat-gateway 的统一出口（含 eventTypes 缺失降级与空值防御）
-                                emitMessageUpdated_ACU(lastMessageIndex);
-                                if (getSendTextareaValue_ACU() === s1.originalMessage)
-                                    setSendTextareaValue_ACU('');
-                                break;
-                            // 'skipped' — 不做额外操作
-                        }
-                        return; // 策略1匹配，不再执行策略2
-                    }
-                    // ── 策略2：输入框文本 ──
-                    // shouldProcessPlot 是本次 GENERATION_AFTER_COMMANDS 事件开始时捕获的授权。
-                    // 交火召回可能耗时超过 USER_SEND_TRIGGER_TTL_MS_ACU；这里不能再用 TTL 二次否决，
-                    // 否则会出现“交火已覆盖纪要索引，但剧情推进被跳过并直接正文生成”的断链。
-                    if (!shouldProcessPlot && !isRecentUserSendIntent_ACU())
-                        return;
-                    const textInBox = getSendTextareaValue_ACU();
-                    // [重构] 调用 service 层策略2编排
-                    const s2 = await orchestrateAfterCommandsStrategy2_ACU(String(textInBox || ''), runOptimizationLogicWithUI_ACU);
-                    switch (s2.action) {
-                        case 'aborted':
-                            if (s2.manual) {
+                                setSendTextareaValue_ACU(s2.finalMessage);
                                 try {
-                                    if (SillyTavern_API_ACU && typeof SillyTavern_API_ACU.stopGeneration === 'function')
-                                        SillyTavern_API_ACU.stopGeneration();
-                                    else if (window.SillyTavern?.stopGeneration)
-                                        window.SillyTavern.stopGeneration();
+                                    params.prompt = s2.finalMessage;
                                 }
                                 catch (e) { }
-                            }
-                            break;
-                        case 'planned':
-                            setSendTextareaValue_ACU(s2.finalMessage);
-                            try {
-                                params.prompt = s2.finalMessage;
-                            }
-                            catch (e) { }
-                            break;
+                                break;
+                        }
+                        // 消费掉本次发送意图
+                        generationGate_ACU.lastUserSendIntentAt = 0;
                     }
-                    // 消费掉本次发送意图
-                    generationGate_ACU.lastUserSendIntentAt = 0;
+                    catch (afterCommandsOuterError_ACU) {
+                        logWarn_ACU('[剧情推进] GENERATION_AFTER_COMMANDS 处理失败，继续原始生成:', afterCommandsOuterError_ACU);
+                    }
                 });
             }
             const chatModificationEvents = ['MESSAGE_DELETED', 'MESSAGE_SWIPED'];
@@ -129913,7 +130062,7 @@ function mainInitialize_ACU() {
                             await reloadStorageProvider();
                         }
                         catch (e) {
-                            logError_ACU(`[SQLite] initWithChatId: 冷 reload 失败: ${e?.message}`);
+                            logError_ACU('[SQLite] initWithChatId: 冷 reload 失败:', e);
                         }
                     }
                     else {
@@ -129926,7 +130075,7 @@ function mainInitialize_ACU() {
                         await reloadStorageProvider();
                     }
                     catch (e) {
-                        logError_ACU(`[SQLite] initWithChatId: 数据库初始化失败: ${e?.message}`);
+                        logError_ACU('[SQLite] initWithChatId: 数据库初始化失败:', e);
                     }
                 }
             }
@@ -129940,7 +130089,7 @@ function mainInitialize_ACU() {
             logWarn_ACU('ACU: chatId not available on initial load. Starting polling...');
             let pollCount = 0;
             const maxPolls = 75; // 200ms × 75 = 15秒
-            const pollTimer = setInterval(async () => {
+            const pollTimer = setInterval(() => {
                 pollCount++;
                 const chatId = SillyTavern_API_ACU?.chatId;
                 if (chatId) {
@@ -130282,7 +130431,7 @@ function createCoreDataApi(ctx) {
                                 }
                             }
                             catch (syncError) {
-                                logError_ACU('[importTableAsJson] 交火向量索引防抖归档入队异常（表格导入已完成）:', syncError);
+                                logWarn_ACU('[importTableAsJson] 交火向量索引防抖归档入队异常（表格导入已完成）:', syncError);
                             }
                         }
                     }
@@ -131893,7 +132042,7 @@ function createPlotPresetApi(ctx) {
         switchPlotPreset: function (presetName) {
             try {
                 if (presetName === undefined || presetName === null) {
-                    logError_ACU('switchPlotPreset: Invalid preset name provided.');
+                    logWarn_ACU('switchPlotPreset: Invalid preset name provided.');
                     return false;
                 }
                 const result = switchCurrentChatPlotPreset_ACU(presetName, {
@@ -131901,7 +132050,7 @@ function createPlotPresetApi(ctx) {
                     save: true,
                 });
                 if (!result) {
-                    logError_ACU(`switchPlotPreset: Preset "${presetName}" not found.`);
+                    logWarn_ACU(`switchPlotPreset: Preset "${presetName}" not found.`);
                     return false;
                 }
                 logDebug_ACU(`Successfully switched current chat to plot preset: "${result.followsGlobal ? '跟随全局' : result.presetName}"`);
@@ -131916,7 +132065,7 @@ function createPlotPresetApi(ctx) {
         injectPlotPresetToCurrentChat: function (presetName) {
             try {
                 if (presetName === undefined || presetName === null) {
-                    logError_ACU('injectPlotPresetToCurrentChat: Invalid preset name provided.');
+                    logWarn_ACU('injectPlotPresetToCurrentChat: Invalid preset name provided.');
                     return false;
                 }
                 const result = switchCurrentChatPlotPreset_ACU(presetName, {
@@ -131924,7 +132073,7 @@ function createPlotPresetApi(ctx) {
                     save: true,
                 });
                 if (!result) {
-                    logError_ACU(`injectPlotPresetToCurrentChat: Preset "${presetName}" not found.`);
+                    logWarn_ACU(`injectPlotPresetToCurrentChat: Preset "${presetName}" not found.`);
                     return false;
                 }
                 logDebug_ACU(`Injected global plot preset into current chat: "${result.followsGlobal ? '跟随全局' : result.presetName}"`);
@@ -133643,63 +133792,63 @@ function createDataAdminApi(_ctx) {
         }
         catch (e) {
             logError_ACU('importTemplate failed:', e);
-            return false;
+            return dataAdminApiError_ACU(e, '模板导入失败。');
         } },
         exportTemplate: async function (options = {}) { try {
             return await exportTableTemplate_ACU(options);
         }
         catch (e) {
             logError_ACU('exportTemplate failed:', e);
-            return false;
+            return dataAdminApiError_ACU(e, '模板导出失败。');
         } },
         resetTemplate: async function (options = {}) { try {
             return await resetTableTemplate_ACU(options);
         }
         catch (e) {
             logError_ACU('resetTemplate failed:', e);
-            return false;
+            return dataAdminApiError_ACU(e, '模板重置失败。');
         } },
         resetAllDefaults: async function () { try {
             return await resetAllToDefaults_ACU();
         }
         catch (e) {
             logError_ACU('resetAllDefaults failed:', e);
-            return false;
+            return dataAdminApiError_ACU(e, '恢复默认配置失败。');
         } },
         exportJsonData: async function () { try {
             return await exportCurrentJsonData_ACU();
         }
         catch (e) {
             logError_ACU('exportJsonData failed:', e);
-            return false;
+            return dataAdminApiError_ACU(e, '表格数据导出失败。');
         } },
         importCombinedSettings: async function () { try {
             return await importCombinedSettings_ACU();
         }
         catch (e) {
             logError_ACU('importCombinedSettings failed:', e);
-            return false;
+            return dataAdminApiError_ACU(e, '组合设置导入失败。');
         } },
         exportCombinedSettings: async function () { try {
             return await exportCombinedSettings_ACU();
         }
         catch (e) {
             logError_ACU('exportCombinedSettings failed:', e);
-            return false;
+            return dataAdminApiError_ACU(e, '组合设置导出失败。');
         } },
         overrideWithTemplate: async function () { try {
             return await overrideLatestLayerWithTemplate_ACU();
         }
         catch (e) {
             logError_ACU('overrideWithTemplate failed:', e);
-            return false;
+            return dataAdminApiError_ACU(e, '模板覆盖失败。');
         } },
         migrateLegacyVectorIndex: async function () { try {
             return await migrateLegacySummaryVectorIndex_ACU();
         }
         catch (e) {
             logError_ACU('migrateLegacyVectorIndex failed:', e);
-            return false;
+            return dataAdminApiError_ACU(e, '旧版向量索引迁移失败。');
         } },
         openVisualizer: async function () {
             const surface = getUiSurface_ACU();
@@ -133776,7 +133925,7 @@ function createDataAdminApi(_ctx) {
         }
         catch (e) {
             logError_ACU('mergeSummaryNow failed:', e);
-            return false;
+            return dataAdminApiError_ACU(e, '手动合并总结失败。');
         } },
     };
 }
@@ -133987,7 +134136,7 @@ function createSettingsConfigApi(_ctx) {
         getApiPresets: function () {
             try {
                 // 已弃用：公开 API 不再返回预设内容，请使用 callAI 受限代理接口发起 AI 请求。
-                logError_ACU('getApiPresets: 已弃用，公开 API 不再暴露预设内容，请使用 callAI');
+                logWarn_ACU('getApiPresets: 已弃用，公开 API 不再暴露预设内容，请使用 callAI');
                 return [];
             }
             catch (e) {
@@ -133998,7 +134147,7 @@ function createSettingsConfigApi(_ctx) {
         getTableApiPreset: function () {
             try {
                 // 已弃用：公开 API 不再暴露内部预设选择状态，请使用 callAI 受限代理接口并在 options 中指定 presetName。
-                logError_ACU('getTableApiPreset: 已弃用，公开 API 不再暴露内部配置状态');
+                logWarn_ACU('getTableApiPreset: 已弃用，公开 API 不再暴露内部配置状态');
                 return '';
             }
             catch (e) {
@@ -134009,7 +134158,7 @@ function createSettingsConfigApi(_ctx) {
         setTableApiPreset: function (presetName) {
             try {
                 // 已弃用：公开 API 不再允许外部切换内部预设选择，请使用 callAI 受限代理接口并在 options 中指定 presetName。
-                logError_ACU('setTableApiPreset: 已弃用，公开 API 不再允许外部修改内部配置');
+                logWarn_ACU('setTableApiPreset: 已弃用，公开 API 不再允许外部修改内部配置');
                 return false;
             }
             catch (e) {
@@ -134020,7 +134169,7 @@ function createSettingsConfigApi(_ctx) {
         getPlotApiPreset: function () {
             try {
                 // 已弃用：公开 API 不再暴露内部预设选择状态，请使用 callAI 受限代理接口并在 options 中指定 presetName。
-                logError_ACU('getPlotApiPreset: 已弃用，公开 API 不再暴露内部配置状态');
+                logWarn_ACU('getPlotApiPreset: 已弃用，公开 API 不再暴露内部配置状态');
                 return '';
             }
             catch (e) {
@@ -134031,7 +134180,7 @@ function createSettingsConfigApi(_ctx) {
         setPlotApiPreset: function (presetName) {
             try {
                 // 已弃用：公开 API 不再允许外部切换内部预设选择，请使用 callAI 受限代理接口并在 options 中指定 presetName。
-                logError_ACU('setPlotApiPreset: 已弃用，公开 API 不再允许外部修改内部配置');
+                logWarn_ACU('setPlotApiPreset: 已弃用，公开 API 不再允许外部修改内部配置');
                 return false;
             }
             catch (e) {
@@ -134042,7 +134191,7 @@ function createSettingsConfigApi(_ctx) {
         saveApiPreset: function (presetData) {
             try {
                 // 已弃用：公开 API 不再允许外部保存完整 API 预设（含 apiKey/settings/tavernProfile），请通过插件内部 UI 管理预设，通过 callAI 受限代理接口发起请求。
-                logError_ACU('saveApiPreset: 已弃用，公开 API 不再允许外部保存 API 预设，请使用内部 UI 管理预设');
+                logWarn_ACU('saveApiPreset: 已弃用，公开 API 不再允许外部保存 API 预设，请使用内部 UI 管理预设');
                 return false;
             }
             catch (e) {
@@ -134053,7 +134202,7 @@ function createSettingsConfigApi(_ctx) {
         loadApiPreset: function (presetName) {
             try {
                 // 已弃用：公开 API 不再允许外部加载完整 API 预设（含 apiKey/settings/tavernProfile），请通过插件内部 UI 管理预设。
-                logError_ACU('loadApiPreset: 已弃用，公开 API 不再允许外部加载 API 预设');
+                logWarn_ACU('loadApiPreset: 已弃用，公开 API 不再允许外部加载 API 预设');
                 return false;
             }
             catch (e) {
@@ -134285,6 +134434,44 @@ function createSettingsConfigApi(_ctx) {
  * presentation/bootstrap/api-groups/worldbook-ai-api.ts
  * 世界书操作 + 正文优化 + AI 调用 API
  */
+/**
+ * 单发 AI 调用的统一重试包装（与 service/template-assistant/service.ts 内同构，
+ * 两处语义必须一致，改动时请同步：isRetryable 判定 + 指数退避 + Abort 透传）。
+ * - Abort（signal 已 abort 或 AbortError 名）：立即透传/抛出，不重试、不进退避等待。
+ * - 瞬时失败（isRetryable 为真：408/429/5xx、TimeoutError、网络层抖动）：指数退避后重试。
+ * - 终态失败（401/403/404 等）：直接抛出，由调用方按原语义处理。
+ */
+const SINGLE_SHOT_AI_MAX_ATTEMPTS_ACU$1 = 3;
+const SINGLE_SHOT_AI_RETRY_BASE_DELAY_MS_ACU$1 = 800;
+const SINGLE_SHOT_AI_RETRY_MAX_DELAY_MS_ACU$1 = 8000;
+function singleShotAiRetryDelayMs_ACU$1(failedAttempt) {
+    const shift = Math.min(Math.max(1, Math.trunc(failedAttempt) || 1), 6);
+    return Math.min(SINGLE_SHOT_AI_RETRY_BASE_DELAY_MS_ACU$1 * 2 ** (shift - 1), SINGLE_SHOT_AI_RETRY_MAX_DELAY_MS_ACU$1);
+}
+function throwSingleShotAiAborted_ACU$1() {
+    const cancelled = new Error('请求已取消');
+    cancelled.name = 'AbortError';
+    throw cancelled;
+}
+async function retrySingleShotAiCall_ACU$1(call, signal) {
+    for (let attempt = 1;; attempt += 1) {
+        if (signal?.aborted)
+            throwSingleShotAiAborted_ACU$1();
+        try {
+            return await call();
+        }
+        catch (error) {
+            // Abort 透传：外部取消或 AbortError 名一律立即停，不重试、不退避。
+            if (signal?.aborted)
+                throwSingleShotAiAborted_ACU$1();
+            if (error?.name === 'AbortError')
+                throw error;
+            if (!isRetryableAiRequestError_ACU(error) || attempt >= SINGLE_SHOT_AI_MAX_ATTEMPTS_ACU$1)
+                throw error;
+            await abortableDelay(singleShotAiRetryDelayMs_ACU$1(attempt), signal);
+        }
+    }
+}
 function createWorldbookAiApi(_ctx) {
     return {
         // 即时同步世界书注入条目
@@ -134406,8 +134593,8 @@ function createWorldbookAiApi(_ctx) {
                     logError_ACU('callAI: options 包含禁止的配置字段，已拒绝');
                     return null;
                 }
-                // 委托给 service 层统一入口
-                return await callAIWithPreset_ACU(messages, presetName, maxTokensOverride);
+                // 委托给 service 层统一入口；单发无覆盖，瞬时 5xx 等走统一重试包装。
+                return await retrySingleShotAiCall_ACU$1(() => callAIWithPreset_ACU(messages, presetName, maxTokensOverride));
             }
             catch (e) {
                 // 不打印原始错误对象以避免泄露上游响应正文
@@ -135337,7 +135524,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260903-19";
+        const stamp = "20260903-20";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -170429,14 +170616,67 @@ function useContinuationRuntime() {
     if (unsubscribeStateChanges && getCurrentScope()) {
         onScopeDispose(unsubscribeStateChanges);
     }
+    // 同消息 error toast 去重：桥状态通知与 run_ACU 失败路径可能在同一 burst 里对同一失败各弹一次。
+    // 以归一化文案为 key、4s 窗口去重；窗口外重复失败仍会再弹，不吞新证据。
+    const recentErrorToastAtByMessage_ACU = new Map();
+    const ERROR_TOAST_DEDUPE_WINDOW_MS_ACU = 4000;
+    function notifyErrorToast_ACU(text, options) {
+        const normalized = String(text || '').trim();
+        if (!normalized)
+            return null;
+        const now = Date.now();
+        const lastAt = recentErrorToastAtByMessage_ACU.get(normalized);
+        if (lastAt !== undefined && now - lastAt < ERROR_TOAST_DEDUPE_WINDOW_MS_ACU)
+            return null;
+        recentErrorToastAtByMessage_ACU.set(normalized, now);
+        if (recentErrorToastAtByMessage_ACU.size > 50) {
+            let oldestKey = null;
+            let oldestAt = Number.POSITIVE_INFINITY;
+            for (const [key, at] of recentErrorToastAtByMessage_ACU) {
+                if (at < oldestAt) {
+                    oldestAt = at;
+                    oldestKey = key;
+                }
+            }
+            if (oldestKey !== null)
+                recentErrorToastAtByMessage_ACU.delete(oldestKey);
+        }
+        return toast.error(normalized, { muteable: false, ...options });
+    }
+    // 耗尽已由编排器正确落为 paused + generation_retry_exhausted（pendingHostTurn exhausted），
+    // 但经桥/后台落盘的不再经过 run_ACU——refresh 是状态变更的唯一 funnel，在这里补强制 toast + 一键继续。
+    // 同一耗尽 episode 只通知一次（taskId + attemptId 为 key）；任务恢复/消失后 key 清零，下一次耗尽可再通知。
+    let lastExhaustionNotifiedKey_ACU = null;
+    function exhaustionKeyOf_ACU(current) {
+        if (!current || current.status !== 'paused' || current.stopReason !== 'generation_retry_exhausted')
+            return null;
+        return `${current.taskId}::${current.pendingHostTurn?.identity?.attemptId ?? ''}`;
+    }
+    function notifyExhaustionOnce_ACU(current) {
+        const key = exhaustionKeyOf_ACU(current);
+        if (key === null) {
+            lastExhaustionNotifiedKey_ACU = null;
+            return;
+        }
+        if (key === lastExhaustionNotifiedKey_ACU)
+            return;
+        lastExhaustionNotifiedKey_ACU = key;
+        // 耗尽走 episode key 去重，不经过同消息窗口去重：恢复/消失后 key 清零，
+        // 下一次耗尽是新 episode，必须再弹（同文案窗口去重会误吞它）。
+        toast.error('正文生成重试次数用尽，进度已保留，可点「继续」再试一次。', {
+            muteable: false,
+            action: { label: '继续', onClick: () => { void continueTask(); } },
+        });
+    }
     function refresh() {
         try {
             envelope.value = runtime.read();
         }
         catch (error) {
             envelope.value = null;
-            toast.error(errorMessage_ACU(error), { muteable: false });
+            notifyErrorToast_ACU(errorMessage_ACU(error), { muteable: false });
         }
+        notifyExhaustionOnce_ACU(envelope.value?.activeTask ?? null);
     }
     async function initialize() {
         if (initialization)
@@ -170445,7 +170685,7 @@ function useContinuationRuntime() {
         const currentInitialization = runtime.initialize()
             .then(() => refresh())
             .catch(error => {
-            toast.error(errorMessage_ACU(error), { muteable: false });
+            notifyErrorToast_ACU(errorMessage_ACU(error), { muteable: false });
             refresh();
         })
             .finally(() => {
@@ -170478,12 +170718,12 @@ function useContinuationRuntime() {
                 toast.info('上一轮正文未完成，已让酒馆直接重新生成；你的消息会在下一轮被主 Agent 读取。');
                 const sent = await runtime.bridge.retryHostGeneration();
                 if (!sent)
-                    toast.error('宿主重新生成不可用，智能续写已暂停。', { muteable: false });
+                    notifyErrorToast_ACU('宿主重新生成不可用，智能续写已暂停。', { muteable: false });
             }
             else if ('preparedTurn' in result && result.preparedTurn) {
                 const sent = await runtime.bridge.send(result.preparedTurn);
                 if (!sent)
-                    toast.error('宿主输入不可用，智能续写已暂停。', { muteable: false });
+                    notifyErrorToast_ACU('宿主输入不可用，智能续写已暂停。', { muteable: false });
             }
             envelope.value = 'envelope' in result ? result.envelope : result;
             refresh();
@@ -170501,7 +170741,7 @@ function useContinuationRuntime() {
                 toast.info(error.error.message);
             }
             else {
-                toast.error(errorMessage_ACU(error), { muteable: false });
+                notifyErrorToast_ACU(errorMessage_ACU(error), { muteable: false });
             }
             refresh();
             return false;
@@ -170580,7 +170820,7 @@ function useContinuationRuntime() {
                 return true;
             }
             if (result.disposition !== 'continue_now') {
-                toast.error('消息已保存，但返回了无法执行的后续动作。', { muteable: false });
+                notifyErrorToast_ACU('消息已保存，但返回了无法执行的后续动作。', { muteable: false });
                 return false;
             }
             if (stopEpoch !== epochAtStart)
@@ -170590,12 +170830,12 @@ function useContinuationRuntime() {
             if (!started) {
                 // 启动失败的原因已由编排器落成 lastError（或就是被拒的异常本身）；只说「失败」用户没法判断下一步。
                 const reason = startFailure || task.value?.lastError?.message || (busy.value ? '另一项续写操作正在执行' : '');
-                toast.error(reason ? `消息已保存，但启动续写失败：${reason}` : '消息已保存，但启动续写失败。', { muteable: false });
+                notifyErrorToast_ACU(reason ? `消息已保存，但启动续写失败：${reason}` : '消息已保存，但启动续写失败。', { muteable: false });
             }
             return true;
         }
         catch (error) {
-            toast.error(errorMessage_ACU(error), { muteable: false });
+            notifyErrorToast_ACU(errorMessage_ACU(error), { muteable: false });
             refresh();
             return false;
         }
@@ -170620,7 +170860,7 @@ function useContinuationRuntime() {
             envelope.value = result.envelope;
         }
         catch (error) {
-            toast.error(errorMessage_ACU(error), { muteable: false });
+            notifyErrorToast_ACU(errorMessage_ACU(error), { muteable: false });
         }
         finally {
             try {
@@ -170670,7 +170910,7 @@ function useContinuationRuntime() {
         catch (error) {
             if (error instanceof ContinuationValidationError_ACU && error.error.code === 'CONTINUATION_OPERATION_BUSY')
                 return 'busy';
-            toast.error(errorMessage_ACU(error), { muteable: false });
+            notifyErrorToast_ACU(errorMessage_ACU(error), { muteable: false });
             refresh();
             return 'failed';
         }
@@ -170748,7 +170988,7 @@ function useContinuationRuntime() {
             return true;
         }
         catch (error) {
-            toast.error(errorMessage_ACU(error), { muteable: false });
+            notifyErrorToast_ACU(errorMessage_ACU(error), { muteable: false });
             refresh();
             return false;
         }
@@ -179190,7 +179430,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260903-19";
+        const stamp = "20260903-20";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -179199,7 +179439,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.1.5";
+        const v = "9.1.6";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {
@@ -185848,6 +186088,44 @@ function emitTemplateAssistantRoundComplete_ACU(onRoundComplete, round, rounds, 
         });
     }
 }
+/**
+ * 单发 AI 调用的统一重试包装（与 presentation/bootstrap/api-groups/worldbook-ai-api.ts 内同构，
+ * 两处语义必须一致，改动时请同步：isRetryable 判定 + 指数退避 + Abort 透传）。
+ * - Abort（signal 已 abort 或 AbortError 名）：立即透传/抛出，不重试、不进退避等待。
+ * - 瞬时失败（isRetryable 为真：408/429/5xx、TimeoutError、网络层抖动）：指数退避后重试。
+ * - 终态失败（401/403/404 等）：直接抛出，由调用方按原语义处理。
+ */
+const SINGLE_SHOT_AI_MAX_ATTEMPTS_ACU = 3;
+const SINGLE_SHOT_AI_RETRY_BASE_DELAY_MS_ACU = 800;
+const SINGLE_SHOT_AI_RETRY_MAX_DELAY_MS_ACU = 8000;
+function singleShotAiRetryDelayMs_ACU(failedAttempt) {
+    const shift = Math.min(Math.max(1, Math.trunc(failedAttempt) || 1), 6);
+    return Math.min(SINGLE_SHOT_AI_RETRY_BASE_DELAY_MS_ACU * 2 ** (shift - 1), SINGLE_SHOT_AI_RETRY_MAX_DELAY_MS_ACU);
+}
+function throwSingleShotAiAborted_ACU() {
+    const cancelled = new Error('请求已取消');
+    cancelled.name = 'AbortError';
+    throw cancelled;
+}
+async function retrySingleShotAiCall_ACU(call, signal) {
+    for (let attempt = 1;; attempt += 1) {
+        if (signal?.aborted)
+            throwSingleShotAiAborted_ACU();
+        try {
+            return await call();
+        }
+        catch (error) {
+            // Abort 透传：外部取消或 AbortError 名一律立即停，不重试、不退避。
+            if (signal?.aborted)
+                throwSingleShotAiAborted_ACU();
+            if (error?.name === 'AbortError')
+                throw error;
+            if (!isRetryableAiRequestError_ACU(error) || attempt >= SINGLE_SHOT_AI_MAX_ATTEMPTS_ACU)
+                throw error;
+            await abortableDelay(singleShotAiRetryDelayMs_ACU(attempt), signal);
+        }
+    }
+}
 async function generateTemplateAssistantDraft_ACU(input) {
     const tempData = asObject_ACU(input?.tempData);
     const userRequest = String(input?.userRequest || '').trim();
@@ -185872,9 +186150,12 @@ async function generateTemplateAssistantDraft_ACU(input) {
             }
         }
     }
-    const aiRawText = input.guard?.signal
-        ? await callAIWithPreset_ACU(messages, effectivePreset, undefined, input.guard.signal)
-        : await callAIWithPreset_ACU(messages, effectivePreset);
+    // 单发无覆盖：瞬时 5xx 等走统一重试包装（isRetryable + 指数退避 + Abort 透传），
+    // 调用形状保持与原来一致（无 guard 时 3 参、有 guard 时 4 参透 signal）。
+    const guardSignal = input.guard?.signal ?? null;
+    const aiRawText = await retrySingleShotAiCall_ACU(() => (guardSignal
+        ? callAIWithPreset_ACU(messages, effectivePreset, undefined, guardSignal)
+        : callAIWithPreset_ACU(messages, effectivePreset)), guardSignal);
     if (!aiRawText) {
         throw new Error('AI 未返回有效内容');
     }
@@ -191185,7 +191466,7 @@ async function extensionMain() {
     }
     catch { /* 水印失败不影响功能 */ }
     if (checkAndMarkInstance()) {
-        logError_ACU('[插件启动] 检测到已有实例运行，跳过初始化。请勿同时安装油猴脚本和本扩展。');
+        logWarn_ACU('[插件启动] 检测到已有实例运行，跳过初始化。请勿同时安装油猴脚本和本扩展。');
         return;
     }
     const ready = await waitForHostApi();

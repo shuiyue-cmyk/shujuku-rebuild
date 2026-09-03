@@ -28,6 +28,14 @@ const { mockCallAIWithPreset, mockLogError, mockCompileTemplateAssistantDraft, m
 
 vi.mock('../../../src/service/ai/api-call', () => ({
   callAIWithPreset_ACU: mockCallAIWithPreset,
+  // 与真实 isRetryableAiRequestError_ACU 同语义（Abort 立停、408/429/5xx + TimeoutError 放行），供单发重试包装的 catch 路径使用。
+  isRetryableAiRequestError_ACU: (error: any) => {
+    const status = Number(error?.status);
+    if (String(error?.name || '') === 'AbortError') return false;
+    if (Number.isFinite(status)) return status === 408 || status === 429 || (status >= 500 && status <= 599);
+    if (String(error?.name || '') === 'TimeoutError') return true;
+    return error instanceof TypeError || /(?:timeout|timed out|network(?:\s+error)?|connection reset|socket hang up)/i.test(String(error?.message || ''));
+  },
 }));
 
 vi.mock('../../../src/service/runtime/state-manager', () => ({
@@ -125,6 +133,26 @@ describe('template assistant service', () => {
     await generateTemplateAssistantDraft_ACU({ tempData, currentSheetKey: 'sheet_a', sheetOrder: ['sheet_a'], userRequest: '修改当前表', tableApiPreset: 'assistant-preset', protocolVersion: 2 });
 
     expect(mockCallAIWithPreset).toHaveBeenCalledWith(expect.any(Array), 'assistant-preset');
+  });
+
+  it('瞬时 503 重试后成功（调用形状逐字一致）', async () => {
+    const tempData = buildTempData_ACU();
+    const fp = buildTemplateAssistantFingerprint_ACU(tempData);
+    mockCallAIWithPreset
+      .mockRejectedValueOnce(Object.assign(new Error('API请求失败: 503'), { status: 503 }))
+      .mockResolvedValueOnce(`<templateAssistantDraft>{"protocolVersion":2,"mode":"modify_current_template_incremental","requestId":"req-retry","baseFingerprint":"${fp}","atomic":true,"selectedSheetKey":"sheet_a","summary":"x","warnings":[],"operations":[]}</templateAssistantDraft>`);
+
+    await generateTemplateAssistantDraft_ACU({ tempData, currentSheetKey: 'sheet_a', sheetOrder: ['sheet_a'], userRequest: '修改当前表', tableApiPreset: 'assistant-preset', protocolVersion: 2 });
+
+    expect(mockCallAIWithPreset).toHaveBeenCalledTimes(2);
+  }, 15000);
+
+  it('AbortError 立停不重试直接抛出', async () => {
+    const tempData = buildTempData_ACU();
+    mockCallAIWithPreset.mockRejectedValue(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+
+    await expect(generateTemplateAssistantDraft_ACU({ tempData, currentSheetKey: 'sheet_a', sheetOrder: ['sheet_a'], userRequest: '修改当前表', tableApiPreset: 'assistant-preset', protocolVersion: 2 })).rejects.toThrow('aborted');
+    expect(mockCallAIWithPreset).toHaveBeenCalledTimes(1);
   });
 
   it('空 tableApiPreset override 时回退到既有 settings preset', async () => {

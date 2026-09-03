@@ -849,6 +849,36 @@ describe('runAgentDecisionForPlot_ACU', () => {
     expect(result.finalGenerationGreenlights).toEqual([]);
   });
 
+  it('全分片失败回退记 warn 并注明已回退原逻辑，不记 error', async () => {
+    const { isWarnLogEnabled, setWarnLogEnabled } = await import('../../../src/shared/log-buffer');
+    const prevWarnEnabled = isWarnLogEnabled();
+    setWarnLogEnabled(true);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      mockCallAIWithPreset.mockRejectedValue(new Error('provider unavailable'));
+      const originalTask = { id: 'task id', name: '默认任务', description: '需要判断', enabled: true, promptGroup: { messages: [] } };
+
+      const result = await runAgentDecisionForPlot_ACU({
+        plotSettings: { agentWorldbookControl: { enabled: true, mode: 'agent', agentDecisionConcurrency: 2, contextSettings: { agentAiMaxRetries: 1 } } },
+        userMessage: '继续',
+        sharedContext: {},
+        enabledTasks: [originalTask],
+      });
+
+      expect(result).toMatchObject({ active: false, effectiveTasks: [originalTask] });
+      const warns = warnSpy.mock.calls.map(args => args.map(String).join(' ')).join('\n');
+      expect(warns).toContain('全部分片决策失败');
+      expect(warns).toContain('已回退原逻辑');
+      const errors = errorSpy.mock.calls.map(args => args.map(String).join(' ')).join('\n');
+      expect(errors).not.toContain('全部分片决策失败');
+    } finally {
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+      setWarnLogEnabled(prevWarnEnabled);
+    }
+  });
+
   it('rejects a direct worldbook reference that belongs to another shard', async () => {
     mockRefreshPlotAgentWorldbookSnapshot.mockResolvedValueOnce({
       active: true,

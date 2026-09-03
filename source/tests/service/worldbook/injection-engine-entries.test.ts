@@ -327,7 +327,10 @@ describe('updateSummaryTableEntries_ACU', () => {
       content: [['', '其他列'], ['', '数据']],
     };
     await updateSummaryTableEntries_ACU(badTable);
-    expect(mockLogError).toHaveBeenCalledWith(expect.stringContaining('编码索引'));
+    expect(mockLogError).toHaveBeenCalledWith(
+      expect.stringContaining('编码索引'),
+      expect.objectContaining({ table: '总结表', lorebook: expect.any(String) }),
+    );
     expect(mockCreateLorebookEntries).not.toHaveBeenCalled();
   });
 
@@ -456,7 +459,10 @@ describe('updateImportantPersonsRelatedEntries_ACU', () => {
       content: [['', '其他列'], ['', '数据']],
     };
     await updateImportantPersonsRelatedEntries_ACU(badTable);
-    expect(mockLogError).toHaveBeenCalledWith(expect.stringContaining('姓名'));
+    expect(mockLogError).toHaveBeenCalledWith(
+      expect.stringContaining('姓名'),
+      expect.objectContaining({ table: '重要人物表', lorebook: expect.any(String) }),
+    );
   });
 
   it('空表格数据不创建条目', async () => {

@@ -27,6 +27,8 @@ vi.mock('../../src/service/table/table-v2-recovery-service', () => ({
 }));
 
 import { createDataAdminApi } from '../../src/presentation/bootstrap/api-groups/data-admin-api';
+import { exportTableTemplate_ACU, importTableTemplate_ACU } from '../../src/presentation/triggers/data-admin-ui';
+import { handleManualMergeSummary_ACU } from '../../src/presentation/triggers/update-trigger';
 
 describe('createDataAdminApi', () => {
   beforeEach(() => {
@@ -65,6 +67,17 @@ describe('createDataAdminApi', () => {
 
     expect(mockPrepareV2Recovery).toHaveBeenCalledTimes(1);
     expect(mockCommitV2Recovery).toHaveBeenCalledWith('plan-1', { confirmOrphanDataReplace: true });
+  });
+
+  it('模板导入/导出与合并总结失败返回可区分的 {success:false,error}（负向）', async () => {
+    vi.mocked(importTableTemplate_ACU).mockRejectedValueOnce(new Error('boom-import'));
+    vi.mocked(exportTableTemplate_ACU).mockRejectedValueOnce(new Error('boom-export'));
+    vi.mocked(handleManualMergeSummary_ACU).mockRejectedValueOnce(new Error('boom-merge'));
+    const api = createDataAdminApi({} as any);
+
+    await expect(api.importTemplate()).resolves.toMatchObject({ success: false, error: 'boom-import' });
+    await expect(api.exportTemplate()).resolves.toMatchObject({ success: false, error: 'boom-export' });
+    await expect(api.mergeSummaryNow()).resolves.toMatchObject({ success: false, error: 'boom-merge' });
   });
 
   it('V2 恢复 API 拒绝空 planId、非对象选项及非严格布尔确认', async () => {

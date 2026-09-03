@@ -156,6 +156,18 @@ describe('fetchAvailableModels_ACU', () => {
     expect(result.error).toContain('Invalid API key');
   });
 
+  it('401 文案指向查 Key、404 文案指向查地址模型', async () => {
+    mockFetch.mockResolvedValue({ ok: false, status: 401, statusText: 'Unauthorized', text: async () => 'unauthorized' });
+    const badKey = await fetchAvailableModels_ACU('https://api.test', 'bad_key');
+    expect(badKey.error).toContain('401');
+    expect(badKey.error).toMatch(/Key|密钥/i);
+
+    mockFetch.mockResolvedValue({ ok: false, status: 404, statusText: 'Not Found', text: async () => 'not found' });
+    const badAddr = await fetchAvailableModels_ACU('https://api.test', 'key');
+    expect(badAddr.error).toContain('404');
+    expect(badAddr.error).toMatch(/地址|模型/i);
+  });
+
   it('HTTP 错误时返回错误信息（纯文本错误体）', async () => {
     mockFetch.mockResolvedValue({
       ok: false,

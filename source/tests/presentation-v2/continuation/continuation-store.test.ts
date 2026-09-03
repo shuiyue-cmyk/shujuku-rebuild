@@ -2,7 +2,6 @@
  * Legacy v2 continuation store retirement boundary.
  */
 import { describe, expect, it } from 'vitest';
-import { useContinuationLoop } from '../../../src/presentation-v2/composables/useContinuationLoop';
 import { useContinuationStore } from '../../../src/presentation-v2/stores/continuation-store';
 
 describe('useContinuationStore', () => {
@@ -10,7 +9,11 @@ describe('useContinuationStore', () => {
     expect(() => useContinuationStore()).toThrow('LEGACY_CONTINUATION_STORE_RETIRED');
   });
 
-  it('fails closed and cannot restart the retired host-input loop', () => {
-    expect(() => useContinuationLoop()).toThrow('LEGACY_CONTINUATION_LOOP_RETIRED');
+  it('retired host-input loop module is physically deleted (production uses useContinuationRuntime)', async () => {
+    const { existsSync } = await import('node:fs');
+    const { dirname, resolve } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    expect(existsSync(resolve(here, '../../../src/presentation-v2/composables/useContinuationLoop.ts'))).toBe(false);
   });
 });

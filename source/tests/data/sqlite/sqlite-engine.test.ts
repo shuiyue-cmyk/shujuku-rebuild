@@ -87,13 +87,12 @@ describe('SqliteEngine', () => {
       expect(result.values).toEqual([[2, '李四']]);
     });
 
-    it('SQL 语法错误默认记录查询诊断并抛出异常', () => {
+    it('SQL 语法错误直接抛出由顶层统一记日志（底层不再记 error 去重）', () => {
       const sql = 'SELEC sensitive_default_log FROM nonexistent;';
       expect(() => engine.query(sql)).toThrow();
 
-      const logs = vi.mocked(logError_ACU).mock.calls.flat().map(value => String(value)).join('\n');
-      expect(logs).toContain('query 执行失败');
-      expect(logs).toContain('sensitive_default_log');
+      // 底层只 throw：同一次失败不在引擎层刷 ERROR，避免与顶层重复。
+      expect(logError_ACU).not.toHaveBeenCalled();
     });
 
     it('可显式抑制 SQL 查询错误日志', () => {

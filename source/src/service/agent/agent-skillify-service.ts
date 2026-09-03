@@ -273,6 +273,11 @@ async function skillifySingleEntry_ACU(
         lastReason = 'AI 返回不是有效 Skill JSON';
       }
     } catch (error) {
+      // 与 agent-decision-engine 同约定，Abort 先行：用户「停止」触发的 Abort 直接以
+      // aborted 码终止整批，不当成普通失败 break→failed，更不重试。
+      if ((options as any)?.signal?.aborted || (error as any)?.name === 'AbortError') {
+        throw new Error(`agent_skillify_entry_aborted:${summary.bookName}:${String(summary.uid)}`);
+      }
       lastReason = `AI 调用异常：${error instanceof Error ? error.message : String(error)}`;
       retryable = isRetryableAiRequestError_ACU(error);
     }

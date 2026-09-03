@@ -337,6 +337,34 @@ function installSendIntentCaptureHooks_ACU() {
 }
 
 /**
+ * [mid-run 复检] 延迟重建链长 await 之间的低成本复检：排程时捕获的聊天身份/存储 epoch
+ * 与当前值比对，不等 ⇒ 期间发生了切聊（或旧实例被 dispose），调用方 early return，避免脏写。
+ * epoch 来源与阶段 D 共用 getRuntimeLifecycleEpoch_ACU（dispose 时 +1，本链自身的 reload/hydrate
+ * 不推进 epoch，故无自误杀）；单测 mock 未提供该导出时读取走 try/catch 降级为仅比对聊天身份。
+ */
+function shouldAbortDelayedRebuildMidRun_ACU(scheduledChatIdentifier: string, scheduledEpoch: number | undefined, stage: string): boolean {
+  if (scheduledChatIdentifier && currentChatFileIdentifier_ACU !== scheduledChatIdentifier) {
+    logDebug_ACU(`ACU: Skip delayed chat rebuild mid-run at ${stage} because active chat already changed to "${currentChatFileIdentifier_ACU || '未知'}".`);
+    return true;
+  }
+  if (scheduledEpoch !== undefined) {
+    // epoch 读取包 try/catch：单测 mock 未提供该导出时 vitest 对其求值（连 typeof）都会抛错，
+    // 此时降级为仅比对聊天身份；生产环境该 getter 恒为同步数值返回，不会进 catch。
+    let currentEpoch_ACU: number | undefined;
+    try {
+      currentEpoch_ACU = getRuntimeLifecycleEpoch_ACU();
+    } catch {
+      currentEpoch_ACU = undefined;
+    }
+    if (currentEpoch_ACU !== undefined && currentEpoch_ACU !== scheduledEpoch) {
+      logDebug_ACU(`ACU: Skip delayed chat rebuild mid-run at ${stage} because storage lifecycle epoch changed (chat switch/dispose during rebuild).`);
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * [H2/M3] CHAT_CHANGED 延迟重建链执行体（原 1200ms setTimeout 体迁入）：
  * 持久化消息读取 → 模板应用 → merged refresh → SQLite snapshot hydrate → 向量索引预热/队列恢复。
  * 整体包一层 try/catch：缓存已清后的任何 await 抛错都记录并尽力轻量恢复，不产生未处理 rejection。
@@ -345,6 +373,13 @@ async function runChatChangedDelayedRebuild_ACU(chatFileName: string): Promise<v
   try {
     lastDelayedRebuildRefreshOk_ACU = false; // [M3]
     const scheduledChatIdentifier_ACU = cleanChatName_ACU(chatFileName);
+    // epoch 读取包 try/catch：单测 mock 未提供该导出（vitest 对其求值即抛错），降级为仅比对聊天身份
+    let scheduledLifecycleEpoch_ACU: number | undefined;
+    try {
+      scheduledLifecycleEpoch_ACU = getRuntimeLifecycleEpoch_ACU();
+    } catch {
+      scheduledLifecycleEpoch_ACU = undefined;
+    }
 
     if (scheduledChatIdentifier_ACU && currentChatFileIdentifier_ACU !== scheduledChatIdentifier_ACU) {
       logDebug_ACU(`ACU: Skip delayed chat refresh because active chat already changed to "${currentChatFileIdentifier_ACU || '未知'}".`);
@@ -360,6 +395,7 @@ async function runChatChangedDelayedRebuild_ACU(chatFileName: string): Promise<v
     // 此处是“持久化 → 派生缓存”的唯一重建入口，不能依赖切换前遗留的 TABLE_TEMPLATE/currentJsonTableData。
     await loadAllChatMessages_ACU();
     applyTemplateScopeForCurrentChat_ACU();
+    if (shouldAbortDelayedRebuildMidRun_ACU(scheduledChatIdentifier_ACU, scheduledLifecycleEpoch_ACU, 'loadAllChatMessages 后')) return;
 
     // 阶段 D：合并刷新（一轮 V2 replay，产出 canonical）与 provider hydrate 收敛。
     // 先执行 merged refresh 拿到最终 canonical 数据，SQLite 模式下用 envelope
@@ -368,6 +404,7 @@ async function runChatChangedDelayedRebuild_ACU(chatFileName: string): Promise<v
     // UI 通知由 refreshMergedDataAndNotifyWithUI_ACU 内部完成。
     const refreshResult = await refreshMergedDataAndNotifyWithUI_ACU();
     lastDelayedRebuildRefreshOk_ACU = true; // [M3] 本轮合并刷新已成功
+    if (shouldAbortDelayedRebuildMidRun_ACU(scheduledChatIdentifier_ACU, scheduledLifecycleEpoch_ACU, 'merged refresh 后')) return;
     if (isSqliteMode()) {
       const envelope = refreshResult
         && !refreshResult.degraded
@@ -391,7 +428,7 @@ async function runChatChangedDelayedRebuild_ACU(chatFileName: string): Promise<v
           try {
             await reloadStorageProvider();
           } catch (e: any) {
-            logError_ACU(`[SQLite] CHAT_CHANGED: 冷 reload 失败: ${e?.message}`);
+            logError_ACU('[SQLite] CHAT_CHANGED: 冷 reload 失败:', e);
           }
         } else {
           // provider_fallback（SQLite hydrate 失败已自动回退 native）或
@@ -403,15 +440,17 @@ async function runChatChangedDelayedRebuild_ACU(chatFileName: string): Promise<v
         try {
           await reloadStorageProvider();
         } catch (e: any) {
-          logError_ACU(`[SQLite] CHAT_CHANGED: 数据库重建失败: ${e?.message}`);
+          logError_ACU('[SQLite] CHAT_CHANGED: 数据库重建失败:', e);
         }
       }
     }
 
+    if (shouldAbortDelayedRebuildMidRun_ACU(scheduledChatIdentifier_ACU, scheduledLifecycleEpoch_ACU, 'snapshot hydrate 后')) return;
     // [交火向量索引] 聊天数据刷新完成后，预热当前聊天对应的外置分片缓存。
     // 注意：必须放在 refreshMergedDataAndNotifyWithUI_ACU 之后，否则可能读取到旧聊天的 manifest。
     const vectorCacheResult = await preloadSummaryVectorIndexCacheForCurrentChat_ACU();
     logDebug_ACU(`[交火向量索引] CHAT_CHANGED 缓存预热结果：success=${vectorCacheResult.success}, skipped=${vectorCacheResult.skipped === true}, reason=${vectorCacheResult.reason || 'none'}, chunks=${vectorCacheResult.chunkCount}, indexId=${vectorCacheResult.indexId || 'none'}`);
+    if (shouldAbortDelayedRebuildMidRun_ACU(scheduledChatIdentifier_ACU, scheduledLifecycleEpoch_ACU, '向量缓存预热后')) return;
     if (shouldRebuildSummaryVectorIndexWithUI_ACU(vectorCacheResult.reason)) {
       try {
         await rebuildCurrentSummaryVectorIndexWithUI_ACU();
@@ -708,6 +747,9 @@ export   function mainInitialize_ACU() {
         // [剧情推进] 拦截用户输入进行剧情规划
         if (SillyTavern_API_ACU.eventTypes.GENERATION_AFTER_COMMANDS) {
           SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.GENERATION_AFTER_COMMANDS, async (type: any, params: any, dryRun: any) => {
+            // [外层兜底] 回调体内多处 await（seed/策略编排）此前无外层 try，任一抛错即产生未处理 rejection；
+            // 整包 try/catch 记 warn 后按原始生成继续，内层已有 try/catch 一律不动。
+            try {
             // 前置过滤（纯 UI/宿主层判断）
             if (params?._qrf_processed_by_hook) return;
             const shouldProcessSummaryVectorIndex = shouldProcessSummaryVectorIndexForGeneration_ACU(type, params, dryRun);
@@ -812,6 +854,9 @@ export   function mainInitialize_ACU() {
 
             // 消费掉本次发送意图
             generationGate_ACU.lastUserSendIntentAt = 0;
+            } catch (afterCommandsOuterError_ACU) {
+              logWarn_ACU('[剧情推进] GENERATION_AFTER_COMMANDS 处理失败，继续原始生成:', afterCommandsOuterError_ACU);
+            }
           });
         }
         const chatModificationEvents = ['MESSAGE_DELETED', 'MESSAGE_SWIPED'] as const;
@@ -898,7 +943,7 @@ export   function mainInitialize_ACU() {
                       try {
                           await reloadStorageProvider();
                       } catch (e: any) {
-                          logError_ACU(`[SQLite] initWithChatId: 冷 reload 失败: ${e?.message}`);
+                          logError_ACU('[SQLite] initWithChatId: 冷 reload 失败:', e);
                       }
                   } else {
                       logError_ACU(`[SQLite] initWithChatId: snapshot hydrate 失败: ${hydrated.failureCode || 'unknown'}${hydrated.error ? `: ${hydrated.error}` : ''}`);
@@ -908,7 +953,7 @@ export   function mainInitialize_ACU() {
                   try {
                       await reloadStorageProvider();
                   } catch (e: any) {
-                      logError_ACU(`[SQLite] initWithChatId: 数据库初始化失败: ${e?.message}`);
+                      logError_ACU('[SQLite] initWithChatId: 数据库初始化失败:', e);
                   }
               }
           }
@@ -922,7 +967,7 @@ export   function mainInitialize_ACU() {
           logWarn_ACU('ACU: chatId not available on initial load. Starting polling...');
           let pollCount = 0;
           const maxPolls = 75; // 200ms × 75 = 15秒
-          const pollTimer = setInterval(async () => {
+          const pollTimer = setInterval(() => {
               pollCount++;
               const chatId = SillyTavern_API_ACU?.chatId;
               if (chatId) {

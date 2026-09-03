@@ -32,6 +32,14 @@ const {
 
 vi.mock('../../../src/service/ai/api-call', () => ({
   callAIWithPreset_ACU: mockCallAIWithPreset,
+  // 与真实 isRetryableAiRequestError_ACU 同语义，供单发重试包装的 catch 路径使用。
+  isRetryableAiRequestError_ACU: (error: any) => {
+    const status = Number(error?.status);
+    if (String(error?.name || '') === 'AbortError') return false;
+    if (Number.isFinite(status)) return status === 408 || status === 429 || (status >= 500 && status <= 599);
+    if (String(error?.name || '') === 'TimeoutError') return true;
+    return error instanceof TypeError || /(?:timeout|timed out|network(?:\s+error)?|connection reset|socket hang up)/i.test(String(error?.message || ''));
+  },
 }));
 
 // settings_ACU 为可变对象，方便测试中修改 templateAssistantPromptSegments

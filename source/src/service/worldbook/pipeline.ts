@@ -857,7 +857,7 @@ export   async function loadAllChatMessages_ACU() {
         _set_allChatMessages_ACU([]);
       }
     } catch (error) {
-      logError_ACU('ACU获取聊天记录失败: ' + error.message);
+      logError_ACU('ACU获取聊天记录失败:', { chatId: currentChatFileIdentifier_ACU, scope: 'loadAllChatMessages', error });
       _set_allChatMessages_ACU([]);
     }
   }

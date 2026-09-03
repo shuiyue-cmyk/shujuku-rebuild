@@ -430,6 +430,23 @@ describe('parseAndApplyTableEdits_ACU — DSL 分支', () => {
     expect(result).toHaveProperty('success');
   });
 
+  it('指令存在但一条都未应用成功时 success 为 false 且带错误计数（负向）', () => {
+    const aiResponse = '<tableEdit>updateRow(99, 0, {"0": "x"})</tableEdit>';
+    const result: any = parseAndApplyTableEdits_ACU(aiResponse, 'standard');
+    expect(result.success).toBe(false);
+    expect(result.appliedEdits).toBe(0);
+    expect(typeof result.failedEdits).toBe('number');
+    expect(result.error).toContain('0 条');
+  });
+
+  it('至少一条应用成功时 success 为 true（正向对照）', () => {
+    const aiResponse = '<tableEdit>insertRow(0, {"0": "盾牌", "1": "1"})</tableEdit>';
+    const result: any = parseAndApplyTableEdits_ACU(aiResponse, 'standard');
+    expect(result.success).toBe(true);
+    expect(result.appliedEdits).toBe(1);
+    expect(result.error).toBe('');
+  });
+
   it('非 SQLite 模式下 SQL 内容走 DSL 解析路径', () => {
     mockIsSqliteMode = false;
     const aiResponse = "<tableEdit>INSERT INTO inventory VALUES (2, '药水', 5);</tableEdit>";

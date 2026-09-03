@@ -164,11 +164,11 @@ async function fetchEmbeddingWithTimeout_ACU(
         throw new VectorEmbeddingError_ACU({
             kind: 'retryable',
             message: isAbort
-                ? `Embedding 请求超时（${VECTOR_EMBEDDING_TIMEOUT_MS_ACU}ms），已中断。`
+                ? `Embedding 请求超时（${VECTOR_EMBEDDING_TIMEOUT_MS_ACU}ms，已中断）：目标服务响应过慢或网络不通。请稍后重试；持续超时请检查本机网络/代理，或换用响应更快的 embedding 服务。网关内将自动快速重试一次。`
                 : isCrossOriginFetchRejection_ACU(error)
                     // 既有分类点：跨源被拒（不透明 TypeError、无 HTTP 状态）→ 归类为 CORS 并给出可行动建议；
                     // 识别规则与文案见 shared/vector-cross-origin-error.ts。kind 语义不动，仍按 retryable 有限重试。
-                    ? `Embedding 请求网络失败（${rawReason}）：${VECTOR_CROSS_ORIGIN_FAILURE_HINT_ACU}`
+                    ? `Embedding 请求网络失败（${rawReason}）：${VECTOR_CROSS_ORIGIN_FAILURE_HINT_ACU}网关内将自动快速重试一次；若持续失败，请按上述建议处理后到「交火模式」页点「立即重建」手动恢复。`
                     : `Embedding 请求网络失败：${rawReason}`,
             endpoint,
             model,

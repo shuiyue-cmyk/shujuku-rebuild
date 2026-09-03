@@ -402,7 +402,13 @@ export async function runTableUpdateCommit_ACU<T>(
     const errorCategory: TableUpdateCommitErrorCategory_ACU = error instanceof TableUpdateCommitError_ACU
       ? error.category
       : 'infrastructure';
-    logError_ACU(`[TableUpdateCommit] ${options.reason} failed:`, error);
+    // 级别统一：仅 infrastructure 记 error；precondition/model 为预期内的拒绝/模型问题，
+    // 记 warn 并附统一可操作指引（等填表完成 / 切回当前聊天重做），避免刷 ERROR 噪音。
+    if (errorCategory === 'infrastructure') {
+      logError_ACU(`[TableUpdateCommit] ${options.reason} failed:`, error);
+    } else {
+      logWarn_ACU(`[TableUpdateCommit] ${options.reason} 已跳过（${errorCategory}）：${message} 统一指引：外部写入请等待 AI 填表完成后重试；范围校验失败请切回当前聊天重新执行填表。`, error);
+    }
     return {
       success: false,
       error: message,

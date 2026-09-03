@@ -67,7 +67,7 @@ export interface CustomIncludeBodyDiagnostic_ACU {
 /**
  * 宿主 chat-completions 桥返回非 2xx 时的错误类型。
  * 保留 status 的目的不是美化日志，而是让上层重试归属方能区分「瞬时失败」与「必然失败的请求」：
- * 401/403/404 这类配置错误重试只是白烧配额，429/5xx 才值得再来一次。
+ * 401/403/404 这类配置错误重试只是白烧配额，408/429/5xx 才值得再来一次。
  */
 export class AgentApiHttpError_ACU extends Error {
   readonly status: number;
@@ -90,7 +90,7 @@ export function isRetryableAiRequestError_ACU(error: unknown): boolean {
   const message = String(candidate.message || '');
   const status = Number(candidate.status);
   if (name === 'AbortError') return false;
-  if (Number.isFinite(status)) return status === 429 || (status >= 500 && status <= 599);
+  if (Number.isFinite(status)) return status === 408 || status === 429 || (status >= 500 && status <= 599);
   if (name === 'TimeoutError') return true;
   if (error instanceof TypeError) return true;
   return /(?:timeout|timed out|network(?:\s+error)?|connection reset|socket hang up)/i.test(message);
@@ -592,7 +592,11 @@ export async function callAIWithResolvedPreset_ACU(
             throw cancelled;
         }
         if (error?.name === 'AbortError') {
-            throw new Error(`内部 AI 请求超时（${INTERNAL_AI_FETCH_TIMEOUT_MS_ACU / 1000}s 无响应），已中断。`);
+            // 超时计时器掐断的 fetch：挂 TimeoutError 名，使 isRetryable 按名判为可重试。
+            // 不依赖中文文案正则；外部取消已在上方按 AbortError 先行返回，走不到这里。
+            const timeout = new Error(`内部 AI 请求超时（${INTERNAL_AI_FETCH_TIMEOUT_MS_ACU / 1000}s 无响应），已中断。`);
+            timeout.name = 'TimeoutError';
+            throw timeout;
         }
         throw error;
       }
@@ -607,8 +611,11 @@ export async function callAIWithResolvedPreset_ACU(
         return typeof content === 'string' && content.trim() ? content.trim() : null;
       } catch (error: any) {
         // 响应体读取阶段被超时计时器掐断：报超时而不是底层网络错文；外部取消仍按取消上报。
+        // 同上：挂 TimeoutError 名，走 isRetryable 的按名放行分支。
         if (error?.name === 'AbortError' && !signal?.aborted && timeoutController.signal.aborted) {
-            throw new Error(`内部 AI 请求超时（${INTERNAL_AI_FETCH_TIMEOUT_MS_ACU / 1000}s），已中断。`);
+            const timeout = new Error(`内部 AI 请求超时（${INTERNAL_AI_FETCH_TIMEOUT_MS_ACU / 1000}s），已中断。`);
+            timeout.name = 'TimeoutError';
+            throw timeout;
         }
         throw error;
       }

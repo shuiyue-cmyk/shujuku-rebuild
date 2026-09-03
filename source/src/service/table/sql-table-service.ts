@@ -1545,7 +1545,7 @@ export class SqlTableService implements ITableStorageProvider {
       this._publishCanonicalView_ACU(exportedData);
       return exportedData;
     } catch (e: any) {
-      logError_ACU(`[SqlTableService] getCurrentData 失败: ${e?.message}`);
+      logError_ACU('[SqlTableService] getCurrentData 失败:', e);
       return this._readCanonicalView_ACU();
     }
   }
@@ -1627,8 +1627,7 @@ export class SqlTableService implements ITableStorageProvider {
         ...jsonViewSyncDiagnostics_ACU('applyEditsBatch', syncedView),
       };
     } catch (e: any) {
-      const errMsg = e?.message || String(e);
-      logError_ACU(`[SqlTableService] SQL 批量执行失败: ${errMsg}`);
+      // 去重：只 throw，由顶层调用链统一记日志，底层不再记 error。
       throw e;
     }
   }
@@ -1739,7 +1738,7 @@ export class SqlTableService implements ITableStorageProvider {
         tableData,
       };
     } catch (e: any) {
-      logError_ACU(`[SqlTableService] 系统 row_id 批量执行失败: ${e?.message || String(e)}`);
+      // 去重：只 throw，由顶层调用链统一记日志，底层不再记 error。
       throw e;
     }
   }
@@ -2011,11 +2010,16 @@ export class SqlTableService implements ITableStorageProvider {
   private _syncToJson(): TableDataObject_ACU | null {
     try {
       const mate = (this._readCanonicalView_ACU()?.mate as Mate_ACU) || { type: 'acu', version: 1, updateConfigUiSentinel: 0, globalInjectionConfig: { readableEntryPlacement: { position: '', depth: 0, order: 0 }, wrapperPlacement: { position: '', depth: 0, order: 0 } } };
-      const exportedData = this.syncBridge.exportToTableData(mate);
+      // 收集非 strict 导出跳过明细：部分表被跳过时聚合成一条 warn，避免静默丢表。
+      const exportWarnings: string[] = [];
+      const exportedData = this.syncBridge.exportToTableData(mate, { warnings: exportWarnings });
+      if (exportWarnings.length > 0) {
+        logWarn_ACU(`[SqlTableService] syncToJson 部分表被跳过（${exportWarnings.length}）：${exportWarnings.join('；')}`);
+      }
       this._publishCanonicalView_ACU(exportedData);
       return exportedData;
     } catch (e: any) {
-      logError_ACU(`[SqlTableService] syncToJson 失败: ${e?.message}`);
+      logError_ACU('[SqlTableService] syncToJson 失败:', e);
       return null;
     }
   }

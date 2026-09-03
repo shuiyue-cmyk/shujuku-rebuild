@@ -428,6 +428,17 @@ describe('agent worldbook skillify candidate filtering', () => {
     expect(result.results[0].reason).toContain('401');
   });
 
+  it('用户 Abort 先行：以 aborted 码终止整批，不落 failed', async () => {
+    mockGetLorebookEntriesByNames.mockResolvedValueOnce({
+      '剧情书': [{ uid: 'stopped', comment: '中断地点', content: '内容', enabled: true, keys: [] }],
+    });
+    mockCallAIWithPreset.mockRejectedValueOnce(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+
+    await expect(skillifyWorldbookEntries_ACU(['剧情书'], { maxAiRetries: 3 })).rejects.toThrow('agent_skillify_entry_aborted');
+    expect(mockCallAIWithPreset).toHaveBeenCalledTimes(1);
+    expect(mockSaveWorldbookEntrySkillMeta).not.toHaveBeenCalled();
+  });
+
   it('retries rate-limited AI HTTP failures before saving', async () => {
     mockGetLorebookEntriesByNames.mockResolvedValueOnce({
       '剧情书': [{ uid: 'rate-limited', comment: '限流地点', content: '内容', enabled: true, keys: [] }],

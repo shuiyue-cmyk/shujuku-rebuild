@@ -154,7 +154,7 @@ async function persistTablesToChatMessageWithLockOption_ACU(
 
   const effectiveTableData = explicitTableData !== undefined ? explicitTableData : currentJsonTableData_ACU;
   if (!effectiveTableData) {
-    logError_ACU('Save aborted: currentJsonTableData_ACU is null.');
+    logWarn_ACU('Save aborted: currentJsonTableData_ACU is null.');
     return { saved: false, error: 'currentJsonTableData is null' };
   }
 
@@ -163,7 +163,7 @@ async function persistTablesToChatMessageWithLockOption_ACU(
   const persistCore = async () => {
     const chat = getChatArray_ACU();
     if (!chat || chat.length === 0) {
-      logError_ACU('Save failed: Chat history is empty.');
+      logWarn_ACU('Save failed: Chat history is empty.');
       return { saved: false, error: 'chat history is empty' };
     }
 

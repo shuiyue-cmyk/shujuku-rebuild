@@ -243,7 +243,7 @@ async function rerankCandidates_ACU(config: any, query: string, candidates: Rank
             if (item.index >= 0 && item.index < candidates.length) byIndex.set(item.index, item.relevanceScore);
         });
         if (byIndex.size === 0) {
-            logError_ACU(`[交火模式纪要索引] Rerank 响应没有任何可用的评分（endpoint=${endpoint}, model=${model}），本轮回退到 Embedding 排序。请检查服务商返回格式是否为 results[].index / relevance_score。`);
+            logWarn_ACU(`[交火模式纪要索引] Rerank 响应没有任何可用的评分（endpoint=${endpoint}, model=${model}），本轮回退到 Embedding 排序。请检查服务商返回格式是否为 results[].index / relevance_score。`);
             return { candidates, status: 'empty_response', error: 'rerank 响应中没有可用评分' };
         }
         return {

@@ -197,6 +197,7 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
     const sheetKeysForIndexing = getSortedSheetKeys_ACU(tableData);
     const sheets = sheetKeysForIndexing.map(key => tableData[key]);
     let appliedEdits = 0;
+    let failedEdits = 0;
     const editCountsByTable: Record<string, number> = {};
 
     // 指令解析函数
@@ -313,6 +314,7 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
         const parsed = parseTableEditCommandLine_ACU(line);
         if (!parsed) {
             logWarn_ACU(`Skipping malformed or truncated command line: "${line}"`);
+            failedEdits++;
             return;
         }
         const { command, args } = parsed;
@@ -486,6 +488,7 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
                 }
             }
         } catch (e) {
+            failedEdits++;
             logError_ACU(`Failed to parse or apply command: "${line}"`, e);
         }
     });
@@ -510,7 +513,15 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
         }
     });
     
-    return { success: true, modifiedKeys: modifiedSheetKeys, appliedEdits };
+    const totalCommands = finalCommandLines.length;
+    const success = appliedEdits > 0;
+    return {
+        success,
+        modifiedKeys: modifiedSheetKeys,
+        appliedEdits,
+        failedEdits,
+        error: success ? '' : `解析或应用失败：${totalCommands} 条指令中成功 0 条，失败 ${failedEdits} 条。`,
+    };
   }
 
   export function parseAndApplyTableEdits_ACU(aiResponse: string, updateMode = 'standard', isImportMode = false) {

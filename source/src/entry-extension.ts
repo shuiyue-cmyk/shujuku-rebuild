@@ -119,7 +119,7 @@ async function extensionMain() {
     installGlobalErrorCapture();
     try { installGlobalBuildBadge_ACU(); } catch { /* 水印失败不影响功能 */ }
     if (checkAndMarkInstance()) {
-        logError_ACU('[插件启动] 检测到已有实例运行，跳过初始化。请勿同时安装油猴脚本和本扩展。');
+        logWarn_ACU('[插件启动] 检测到已有实例运行，跳过初始化。请勿同时安装油猴脚本和本扩展。');
         return;
     }
 

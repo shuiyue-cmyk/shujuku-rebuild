@@ -95,6 +95,8 @@ export class SyncBridge {
   loadFromTableData(data: TableDataObject_ACU, options: {
     strict?: boolean;
     allowRuntimeDdlFallback?: boolean;
+    /** 非 strict 跳过明细 out-param：调用方传入数组即收集本次跳过的表（strict 路径直接 throw，不写该通道）。 */
+    warnings?: string[];
   } = {}): void {
     this._loadFromTableData(data, options, false);
   }
@@ -109,7 +111,7 @@ export class SyncBridge {
 
   private _loadFromTableData(
     data: TableDataObject_ACU,
-    options: { strict?: boolean; allowRuntimeDdlFallback?: boolean },
+    options: { strict?: boolean; allowRuntimeDdlFallback?: boolean; warnings?: string[] },
     legacyDuplicateRowIds: boolean,
   ): void {
     if (!data || typeof data !== 'object') return;
@@ -176,10 +178,12 @@ export class SyncBridge {
       } catch (e: any) {
         const errorMessage = e?.message || String(e);
         const message = `[SyncBridge] 加载表 ${key} (${sheet.name}) 失败: ${formatSqliteLoadFailure_ACU(errorMessage)}`;
-        logError_ACU(message);
+        logError_ACU(message, e);
         if (options.strict) {
           throw new Error(message);
         }
+        // 非 strict 不再静默吞表：跳过明细写入 warnings 通道，调用方可观测。
+        options.warnings?.push(message);
       }
     }
   }
@@ -196,6 +200,8 @@ export class SyncBridge {
     originalMate: Mate_ACU,
     options: {
       strict?: boolean;
+      /** 非 strict 跳过明细 out-param：调用方传入数组即收集本次跳过的表（strict 路径直接 throw，不写该通道）。 */
+      warnings?: string[];
     } = {},
   ): TableDataObject_ACU {
     return this._exportToTableData(originalMate, options, false);
@@ -208,7 +214,7 @@ export class SyncBridge {
 
   private _exportToTableData(
     originalMate: Mate_ACU,
-    options: { strict?: boolean },
+    options: { strict?: boolean; warnings?: string[] },
     legacyDuplicateRowIds: boolean,
   ): TableDataObject_ACU {
     if (!this.engine.isReady) {
@@ -228,6 +234,10 @@ export class SyncBridge {
       const meta = this._findMetaByTableName(metaMap, tableName);
       if (!meta) {
         if (options.strict) throw new Error(`[SyncBridge] 用户表 ${tableName} 缺少可识别的元数据。`);
+        // 非 strict 不再静默丢表：跳过明细写入 warnings 通道并记一条 warn。
+        const skipMessage = `[SyncBridge] 导出跳过用户表 ${tableName}：缺少可识别的元数据。`;
+        options.warnings?.push(skipMessage);
+        logWarn_ACU(skipMessage);
         continue;
       }
 
@@ -238,7 +248,9 @@ export class SyncBridge {
         if (options.strict) {
           throw new Error(`[SyncBridge] 导出表 ${tableName} 失败: ${e?.message || String(e)}`);
         }
-        logError_ACU(`[SyncBridge] 导出表 ${tableName} 失败:`, e?.message || e);
+        const failureMessage = `[SyncBridge] 导出表 ${tableName} 失败: ${e?.message || String(e)}`;
+        options.warnings?.push(failureMessage);
+        logError_ACU(`[SyncBridge] 导出表 ${tableName} 失败:`, e);
       }
     }
 

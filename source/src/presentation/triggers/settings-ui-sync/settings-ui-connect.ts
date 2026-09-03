@@ -459,6 +459,8 @@ import {
               await triggerAutomaticUpdateIfNeeded_ACU(performanceContext);
               break;
       }
+      } catch (error) {
+        logWarn_ACU('[ACU] new-message pipeline failed:', error);
       } finally {
         performanceSpan.end({ messageCount: getChatArray_ACU()?.length || 0 });
       }

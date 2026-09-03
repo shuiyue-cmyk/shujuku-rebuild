@@ -146,6 +146,18 @@ function scheduleDebouncedVectorIndexPersist_ACU(scopeKey: string): void {
     if (existing) clearTimeout(existing);
     const timer = setTimeout(() => {
         vectorIndexPersistTimers_ACU.delete(scopeKey);
+        // 与 flush 队列同理的 timer 触发前 chatKey 快检：scopeKey 为 [chatKey, isolationKey,
+        // sourceTableKey] JSON 串行；无当前聊天或已切聊时跳票并报告（pending 保留，执行体仍以 pending 为准）。
+        const liveChatKey = String(currentChatFileIdentifier_ACU || '').trim();
+        let scopedChatKey = '';
+        try {
+            const parsed = JSON.parse(scopeKey);
+            if (Array.isArray(parsed)) scopedChatKey = String(parsed[0] || '').trim();
+        } catch { /* 解析失败走原路径，不因快检阻断归档 */ }
+        if (!liveChatKey || (scopedChatKey && liveChatKey !== scopedChatKey)) {
+            logDebug_ACU(`[纪要向量索引] 防抖归档跳票：scope=${scopeKey}, live=${liveChatKey || '(空)'}`);
+            return;
+        }
         void persistPendingVectorIndexArchive_ACU(scopeKey);
     }, VECTOR_INDEX_PERSIST_DEBOUNCE_MS_ACU);
     vectorIndexPersistTimers_ACU.set(scopeKey, timer);

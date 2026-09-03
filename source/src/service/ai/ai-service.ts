@@ -54,7 +54,10 @@ export async function fetchAvailableModels_ACU(apiUrl: string, apiKey: string, c
         const { assertSafeHttpEndpoint_ACU } = await import('../../shared/utils');
         assertSafeHttpEndpoint_ACU(apiUrl);
     } catch (e: any) {
-        return { success: false, error: String(e?.message || '端点地址不安全。') };
+        const reason = String(e?.message || '端点地址不安全。');
+        // 协议非法分支：SSRF 守卫的协议相关拒绝追加可操作提示（其余拒绝保持原文）。
+        const protocolHint = /协议|仅支持 http/i.test(reason) ? '请使用完整的 http(s):// 地址（不支持协议相对 URL 与非 http(s) 协议）。' : '';
+        return { success: false, error: protocolHint ? `${reason} ${protocolHint}` : reason };
     }
 
     const statusUrl = `/api/backends/chat-completions/status`;
@@ -79,12 +82,20 @@ export async function fetchAvailableModels_ACU(apiUrl: string, apiKey: string, c
 
     if (!response.ok) {
         const errorText = await response.text();
-        let errorMessage = `API端点状态检查失败: ${response.status} ${response.statusText}.`;
+        const status = response.status;
+        let errorMessage = `API端点状态检查失败: ${status} ${response.statusText}.`;
         try {
             const errorJson = JSON.parse(errorText);
             errorMessage += ` 详情: ${errorJson.error || errorJson.message || errorText}`;
         } catch (e) {
             errorMessage += ` 详情: ${errorText}`;
+        }
+        // status 可操作映射：文案保留 {status} 数字与关键词形状，供 log-error-hints
+        //（http-401 / http-404 等规则按状态码与关键短语匹配）直接复用。
+        if (status === 401) {
+            errorMessage += ' 请检查 API Key 是否正确、完整且未过期（401 unauthorized：API Key 无效）。';
+        } else if (status === 404) {
+            errorMessage += ' 请检查接口地址是否完整、模型名是否存在（404 not found：模型不存在或地址错误，可点「拉取模型列表」重选）。';
         }
         return { success: false, error: errorMessage };
     }

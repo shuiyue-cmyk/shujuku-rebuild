@@ -389,4 +389,79 @@ describe('useContinuationRuntime', () => {
     expect(await continuation.clearData()).toBe(false);
     expect(harness.toastError).toHaveBeenCalledOnce();
   });
+
+  it('耗尽经桥/后台落盘时 refresh 补强制 error toast（一键继续），同一 episode 只弹一次', async () => {
+    const exhausted = {
+      schemaVersion: 1,
+      settings: {},
+      activeTask: {
+        taskId: 'task-1',
+        status: 'paused',
+        stopReason: 'generation_retry_exhausted',
+        activeStageId: null,
+        stages: [],
+        pendingHostTurn: { identity: { attemptId: 'att-1' }, status: 'exhausted' },
+      },
+    } as any;
+    harness.read.mockReturnValue(exhausted);
+    harness.continueTask.mockResolvedValue({ envelope: exhausted });
+    const { useContinuationRuntime } = await import('../../../src/presentation-v2/composables/useContinuationRuntime');
+    const continuation = useContinuationRuntime();
+
+    continuation.refresh();
+
+    expect(continuation.canContinue.value).toBe(true);
+    expect(harness.toastError).toHaveBeenCalledTimes(1);
+    const [text, options] = harness.toastError.mock.calls[0] as [string, any];
+    expect(text).toContain('正文生成重试次数用尽');
+    expect(options).toMatchObject({ muteable: false });
+    expect(options?.action?.label).toBe('继续');
+
+    continuation.refresh();
+    expect(harness.toastError).toHaveBeenCalledTimes(1);
+
+    await options.action.onClick();
+    expect(harness.continueTask).toHaveBeenCalledOnce();
+  });
+
+  it('耗尽恢复/消失后 key 清零：下一次耗尽可再通知', async () => {
+    const exhausted = (attemptId: string) => ({
+      schemaVersion: 1,
+      settings: {},
+      activeTask: {
+        taskId: 'task-1',
+        status: 'paused',
+        stopReason: 'generation_retry_exhausted',
+        activeStageId: null,
+        stages: [],
+        pendingHostTurn: { identity: { attemptId }, status: 'exhausted' },
+      },
+    }) as any;
+    harness.read.mockReturnValue(exhausted('att-1'));
+    const { useContinuationRuntime } = await import('../../../src/presentation-v2/composables/useContinuationRuntime');
+    const continuation = useContinuationRuntime();
+
+    continuation.refresh();
+    expect(harness.toastError).toHaveBeenCalledTimes(1);
+
+    harness.read.mockReturnValue({ schemaVersion: 1, settings: {}, activeTask: null } as any);
+    continuation.refresh();
+    expect(harness.toastError).toHaveBeenCalledTimes(1);
+
+    harness.read.mockReturnValue(exhausted('att-2'));
+    continuation.refresh();
+    expect(harness.toastError).toHaveBeenCalledTimes(2);
+  });
+
+  it('同消息多 error toast 只弹一次（窗口内去重，不吞新证据）', async () => {
+    harness.read.mockImplementation(() => { throw new Error('读信封失败'); });
+    const { useContinuationRuntime } = await import('../../../src/presentation-v2/composables/useContinuationRuntime');
+    const continuation = useContinuationRuntime();
+
+    continuation.refresh();
+    continuation.refresh();
+
+    expect(harness.toastError).toHaveBeenCalledTimes(1);
+    expect(harness.toastError.mock.calls[0][0]).toContain('读信封失败');
+  });
 });

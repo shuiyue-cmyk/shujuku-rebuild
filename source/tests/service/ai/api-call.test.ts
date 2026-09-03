@@ -163,6 +163,21 @@ describe('callAIWithPreset_ACU', () => {
     expect(isRetryableAiRequestError_ACU(null)).toBe(false);
   });
 
+  it('408 Request Timeout 可重试，401/403/404 保持终态', () => {
+    expect(isRetryableAiRequestError_ACU(Object.assign(new Error('timeout'), { status: 408 }))).toBe(true);
+    expect(isRetryableAiRequestError_ACU(new AgentApiHttpError_ACU(408, 'request timeout'))).toBe(true);
+    expect(isRetryableAiRequestError_ACU(new AgentApiHttpError_ACU(401, 'unauthorized'))).toBe(false);
+    expect(isRetryableAiRequestError_ACU(new AgentApiHttpError_ACU(403, 'forbidden'))).toBe(false);
+    expect(isRetryableAiRequestError_ACU(new AgentApiHttpError_ACU(404, 'not found'))).toBe(false);
+  });
+
+  it('内部超时中文错误挂 TimeoutError 名后可重试（不依赖文案正则）', () => {
+    const timeout = Object.assign(new Error('内部AI请求超时，已中断'), { name: 'TimeoutError' });
+    expect(isRetryableAiRequestError_ACU(timeout)).toBe(true);
+    const plain = new Error('内部AI请求超时，已中断');
+    expect(isRetryableAiRequestError_ACU(plain)).toBe(false);
+  });
+
   it('指定预设名使用对应预设', async () => {
     mockSettings.apiPresets = [
       { name: '预设B', apiMode: 'custom', apiConfig: { url: 'https://b.com', model: 'gpt-4', apiKey: 'sk-test' } },

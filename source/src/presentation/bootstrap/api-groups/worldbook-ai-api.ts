@@ -4,7 +4,8 @@
  */
 
 import { logDebug_ACU, logError_ACU } from '../../../shared/utils';
-import { callAIWithPreset_ACU } from '../../../service/ai/api-call';
+import { callAIWithPreset_ACU, isRetryableAiRequestError_ACU } from '../../../service/ai/api-call';
+import { abortableDelay } from '../../../shared/abortable-delay';
 import { getChatArray_ACU } from '../../../service/chat/chat-service';
 import { currentJsonTableData_ACU } from '../../../service/runtime/state-manager';
 import { deleteAllGeneratedEntries_ACU, updateReadableLorebookEntry_ACU } from '../../../service/worldbook/pipeline';
@@ -21,6 +22,46 @@ import {
 import type { ApiGroupContext } from './callback-api';
 
 declare const SillyTavern: any;
+
+/**
+ * 单发 AI 调用的统一重试包装（与 service/template-assistant/service.ts 内同构，
+ * 两处语义必须一致，改动时请同步：isRetryable 判定 + 指数退避 + Abort 透传）。
+ * - Abort（signal 已 abort 或 AbortError 名）：立即透传/抛出，不重试、不进退避等待。
+ * - 瞬时失败（isRetryable 为真：408/429/5xx、TimeoutError、网络层抖动）：指数退避后重试。
+ * - 终态失败（401/403/404 等）：直接抛出，由调用方按原语义处理。
+ */
+const SINGLE_SHOT_AI_MAX_ATTEMPTS_ACU = 3;
+const SINGLE_SHOT_AI_RETRY_BASE_DELAY_MS_ACU = 800;
+const SINGLE_SHOT_AI_RETRY_MAX_DELAY_MS_ACU = 8000;
+
+function singleShotAiRetryDelayMs_ACU(failedAttempt: number): number {
+    const shift = Math.min(Math.max(1, Math.trunc(failedAttempt) || 1), 6);
+    return Math.min(SINGLE_SHOT_AI_RETRY_BASE_DELAY_MS_ACU * 2 ** (shift - 1), SINGLE_SHOT_AI_RETRY_MAX_DELAY_MS_ACU);
+}
+
+function throwSingleShotAiAborted_ACU(): never {
+    const cancelled = new Error('请求已取消');
+    (cancelled as any).name = 'AbortError';
+    throw cancelled;
+}
+
+async function retrySingleShotAiCall_ACU(
+    call: () => Promise<string | null>,
+    signal?: AbortSignal | null,
+): Promise<string | null> {
+    for (let attempt = 1; ; attempt += 1) {
+        if (signal?.aborted) throwSingleShotAiAborted_ACU();
+        try {
+            return await call();
+        } catch (error: any) {
+            // Abort 透传：外部取消或 AbortError 名一律立即停，不重试、不退避。
+            if (signal?.aborted) throwSingleShotAiAborted_ACU();
+            if (error?.name === 'AbortError') throw error;
+            if (!isRetryableAiRequestError_ACU(error) || attempt >= SINGLE_SHOT_AI_MAX_ATTEMPTS_ACU) throw error;
+            await abortableDelay(singleShotAiRetryDelayMs_ACU(attempt), signal);
+        }
+    }
+}
 
 export function createWorldbookAiApi(_ctx: ApiGroupContext): Record<string, Function> {
     return {
@@ -145,8 +186,10 @@ export function createWorldbookAiApi(_ctx: ApiGroupContext): Record<string, Func
                     return null;
                 }
 
-                // 委托给 service 层统一入口
-                return await callAIWithPreset_ACU(messages, presetName, maxTokensOverride);
+                // 委托给 service 层统一入口；单发无覆盖，瞬时 5xx 等走统一重试包装。
+                return await retrySingleShotAiCall_ACU(
+                    () => callAIWithPreset_ACU(messages, presetName, maxTokensOverride),
+                );
             } catch (e) {
                 // 不打印原始错误对象以避免泄露上游响应正文
                 logError_ACU('[callAI] 调用失败，已返回 null');

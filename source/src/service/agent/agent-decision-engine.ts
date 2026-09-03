@@ -3,7 +3,7 @@ import { stripAgentTakeoverMetaBlockStrict_ACU } from '../../shared/agent-worldb
 import { getChatArray_ACU } from '../../data/gateways/chat-gateway';
 import type { StrictLorebookReadContext_ACU } from '../worldbook/pipeline';
 import { getAgentRuntimeLorebookEntries_ACU } from './agent-worldbook-runtime-read';
-import { normalizeNonNegativeInteger_ACU, normalizePositiveInteger_ACU, logWarn_ACU, logError_ACU } from '../../shared/utils';
+import { normalizeNonNegativeInteger_ACU, normalizePositiveInteger_ACU, logWarn_ACU } from '../../shared/utils';
 import { normalizeTkBudgetNumber_ACU } from '../../shared/token-estimate';
 import { callAIWithPreset_ACU, isRetryableAiRequestError_ACU } from '../ai/api-call';
 import { countTextTokens_ACU } from '../ai/token-counter';
@@ -771,7 +771,7 @@ export async function runAgentDecisionForPlot_ACU(params: {
     if (successfulShards.length === 0) {
       const firstFailure = settled.find((result): result is PromiseRejectedResult => result.status === 'rejected');
       const reason = String(firstFailure?.reason?.message || 'agent_decision_error').split(':').pop() || 'agent_decision_error';
-      logError_ACU(`[Agent决策] 全部分片决策失败（共 ${shards.length} 片），已回退原剧情推进逻辑。失败原因: ${reason}`, {
+      logWarn_ACU(`[Agent决策] 全部分片决策失败（共 ${shards.length} 片），已回退原逻辑（原剧情推进逻辑）。失败原因: ${reason}`, {
         phase: 'agent_decision_all_failed',
         shardCount: shards.length,
       });

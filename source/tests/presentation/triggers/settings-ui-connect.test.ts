@@ -9,6 +9,8 @@ const m = vi.hoisted(() => ({
   logAutoFillSkip: vi.fn(),
   loadAllChatMessages: vi.fn(),
   triggerAutomaticUpdateIfNeeded: vi.fn(),
+  logWarn: vi.fn(),
+  logError: vi.fn(),
   // 「终止」残留的可观测状态：setter 写入，评估入口读取处（live getter）反映同一值。
   wasStoppedByUser: false,
   setWasStoppedByUser: vi.fn((value: boolean) => { m.wasStoppedByUser = value; }),
@@ -40,7 +42,7 @@ vi.mock('../../../src/presentation/triggers/settings-ui-sync/settings-ui-trigger
 vi.mock('../../../src/shared/trigger-diagnostics', () => ({ logAutoFillSkip_ACU: m.logAutoFillSkip }));
 vi.mock('../../../src/service/chat/chat-service', () => ({ getChatArray_ACU: () => [{ is_user: true }, { is_user: false }] }));
 vi.mock('../../../src/shared/runtime-performance', () => ({ startRuntimePerformanceSpan_ACU: () => ({ id: 'span', end: vi.fn() }) }));
-vi.mock('../../../src/shared/utils', () => ({ logDebug_ACU: vi.fn(), logWarn_ACU: vi.fn(), logError_ACU: vi.fn() }));
+vi.mock('../../../src/shared/utils', () => ({ logDebug_ACU: vi.fn(), logWarn_ACU: (...args: any[]) => m.logWarn(...args), logError_ACU: (...args: any[]) => m.logError(...args) }));
 vi.mock('../../../src/service/runtime/helpers-remaining', () => ({ maybeLiftWorldbookSuppression_ACU: vi.fn() }));
 
 afterEach(() => {
@@ -99,6 +101,40 @@ describe('handleNewMessageDebounced_ACU 跨聊天身份复检', () => {
   });
 });
 
+// setTimeout 管线任一 await 抛错必须被 catch 接住：记 warn、无未处理 rejection、span 照常结束。
+describe('handleNewMessageDebounced_ACU 管线异常兜底', () => {
+  beforeEach(() => {
+    m.loadAllChatMessages.mockResolvedValue(undefined);
+    m.evaluateNewMessageAction.mockReturnValue({ action: 'update_only', reason: 'ok', lastMessageIndex: 1 });
+  });
+
+  it('loadAllChatMessages 抛错时记 warn 且不产生未处理 rejection', async () => {
+    vi.useFakeTimers();
+    m.loadAllChatMessages.mockRejectedValueOnce(new Error('load boom'));
+    const { handleNewMessageDebounced_ACU } = await import('../../../src/presentation/triggers/settings-ui-sync/settings-ui-connect');
+
+    const promise = handleNewMessageDebounced_ACU('GENERATION_ENDED');
+    await vi.advanceTimersByTimeAsync(500);
+    await promise;
+
+    expect(m.logWarn).toHaveBeenCalledWith(expect.stringContaining('new-message pipeline'), expect.anything());
+    expect(m.triggerAutomaticUpdateIfNeeded).not.toHaveBeenCalled();
+  });
+
+  it('评估抛错时同样被接住（负向控制：无 rejection 冒泡）', async () => {
+    vi.useFakeTimers();
+    m.evaluateNewMessageAction.mockImplementationOnce(() => { throw new Error('evaluate boom'); });
+    const { handleNewMessageDebounced_ACU } = await import('../../../src/presentation/triggers/settings-ui-sync/settings-ui-connect');
+
+    const promise = handleNewMessageDebounced_ACU('GENERATION_ENDED');
+    await vi.advanceTimersByTimeAsync(500);
+    await promise;
+
+    expect(m.logWarn).toHaveBeenCalledWith(expect.stringContaining('new-message pipeline'), expect.anything());
+    expect(m.triggerAutomaticUpdateIfNeeded).not.toHaveBeenCalled();
+  });
+});
+// 自动填表死锁到用户手动重填一次。评估入口必须先复位，再读值传给评估闸。
 // 自动填表「终止」后 wasStoppedByUser 残留 true 会让评估闸永久 user_aborted，
 // 自动填表死锁到用户手动重填一次。评估入口必须先复位，再读值传给评估闸。
 describe('handleNewMessageDebounced_ACU 终止残留复位', () => {

@@ -204,6 +204,13 @@ function scheduleFlushTaskTimer_ACU(task: SummaryVectorIndexFlushTaskRecord_ACU)
     const timer = setTimeout(() => {
         logDebug_ACU(`[交火向量索引] 防抖定时器触发：scope=${task.scopeKey}, 开始执行 flush`);
         summaryVectorFlushTimers_ACU.delete(task.scopeKey);
+        // timer 触发前 chatKey 快检（低成本）：无当前聊天或已切聊时直接跳票并报告，
+        // task 保留原状态，切回后由 restore 重排；执行体内的完整 scope 复检保持不变。
+        const liveChatKey = String(currentChatFileIdentifier_ACU || '').trim();
+        if (!liveChatKey || liveChatKey !== String(task.chatKey || '').trim()) {
+            logDebug_ACU(`[交火向量索引] 防抖定时器跳票：scope=${task.scopeKey}, task=${String(task.chatKey || '')}, live=${liveChatKey || '(空)'}`);
+            return;
+        }
         void flushSummaryVectorIndexTaskNow_ACU(task.scopeKey);
     }, delay);
     summaryVectorFlushTimers_ACU.set(task.scopeKey, timer);

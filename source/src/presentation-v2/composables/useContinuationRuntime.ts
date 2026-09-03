@@ -63,13 +63,63 @@ export function useContinuationRuntime() {
     onScopeDispose(unsubscribeStateChanges);
   }
 
+  // 同消息 error toast 去重：桥状态通知与 run_ACU 失败路径可能在同一 burst 里对同一失败各弹一次。
+  // 以归一化文案为 key、4s 窗口去重；窗口外重复失败仍会再弹，不吞新证据。
+  const recentErrorToastAtByMessage_ACU = new Map<string, number>();
+  const ERROR_TOAST_DEDUPE_WINDOW_MS_ACU = 4000;
+  function notifyErrorToast_ACU(text: string, options?: { muteable?: false; action?: { label: string; onClick: () => void | Promise<void> } }): string | null {
+    const normalized = String(text || '').trim();
+    if (!normalized) return null;
+    const now = Date.now();
+    const lastAt = recentErrorToastAtByMessage_ACU.get(normalized);
+    if (lastAt !== undefined && now - lastAt < ERROR_TOAST_DEDUPE_WINDOW_MS_ACU) return null;
+    recentErrorToastAtByMessage_ACU.set(normalized, now);
+    if (recentErrorToastAtByMessage_ACU.size > 50) {
+      let oldestKey: string | null = null;
+      let oldestAt = Number.POSITIVE_INFINITY;
+      for (const [key, at] of recentErrorToastAtByMessage_ACU) {
+        if (at < oldestAt) {
+          oldestAt = at;
+          oldestKey = key;
+        }
+      }
+      if (oldestKey !== null) recentErrorToastAtByMessage_ACU.delete(oldestKey);
+    }
+    return toast.error(normalized, { muteable: false, ...options });
+  }
+
+  // 耗尽已由编排器正确落为 paused + generation_retry_exhausted（pendingHostTurn exhausted），
+  // 但经桥/后台落盘的不再经过 run_ACU——refresh 是状态变更的唯一 funnel，在这里补强制 toast + 一键继续。
+  // 同一耗尽 episode 只通知一次（taskId + attemptId 为 key）；任务恢复/消失后 key 清零，下一次耗尽可再通知。
+  let lastExhaustionNotifiedKey_ACU: string | null = null;
+  function exhaustionKeyOf_ACU(current: ContinuationTask_ACU | null): string | null {
+    if (!current || current.status !== 'paused' || current.stopReason !== 'generation_retry_exhausted') return null;
+    return `${current.taskId}::${current.pendingHostTurn?.identity?.attemptId ?? ''}`;
+  }
+  function notifyExhaustionOnce_ACU(current: ContinuationTask_ACU | null): void {
+    const key = exhaustionKeyOf_ACU(current);
+    if (key === null) {
+      lastExhaustionNotifiedKey_ACU = null;
+      return;
+    }
+    if (key === lastExhaustionNotifiedKey_ACU) return;
+    lastExhaustionNotifiedKey_ACU = key;
+    // 耗尽走 episode key 去重，不经过同消息窗口去重：恢复/消失后 key 清零，
+    // 下一次耗尽是新 episode，必须再弹（同文案窗口去重会误吞它）。
+    toast.error('正文生成重试次数用尽，进度已保留，可点「继续」再试一次。', {
+      muteable: false,
+      action: { label: '继续', onClick: () => { void continueTask(); } },
+    });
+  }
+
   function refresh(): void {
     try {
       envelope.value = runtime.read();
     } catch (error) {
       envelope.value = null;
-      toast.error(errorMessage_ACU(error), { muteable: false });
+      notifyErrorToast_ACU(errorMessage_ACU(error), { muteable: false });
     }
+    notifyExhaustionOnce_ACU(envelope.value?.activeTask ?? null);
   }
 
   async function initialize(): Promise<void> {
@@ -78,7 +128,7 @@ export function useContinuationRuntime() {
     const currentInitialization = runtime.initialize()
       .then(() => refresh())
       .catch(error => {
-        toast.error(errorMessage_ACU(error), { muteable: false });
+        notifyErrorToast_ACU(errorMessage_ACU(error), { muteable: false });
         refresh();
       })
       .finally(() => {
@@ -109,10 +159,10 @@ export function useContinuationRuntime() {
         logAgentSession_ACU({ kind: 'protocol_retry', title: '重发上一轮正文', detail: '上一轮酒馆正文未正常完成，先让酒馆直接重新生成；本次发送的消息会在正文完成后的下一轮由主 Agent 读取。' });
         toast.info('上一轮正文未完成，已让酒馆直接重新生成；你的消息会在下一轮被主 Agent 读取。');
         const sent = await runtime.bridge.retryHostGeneration();
-        if (!sent) toast.error('宿主重新生成不可用，智能续写已暂停。', { muteable: false });
+        if (!sent) notifyErrorToast_ACU('宿主重新生成不可用，智能续写已暂停。', { muteable: false });
       } else if ('preparedTurn' in result && result.preparedTurn) {
         const sent = await runtime.bridge.send(result.preparedTurn);
-        if (!sent) toast.error('宿主输入不可用，智能续写已暂停。', { muteable: false });
+        if (!sent) notifyErrorToast_ACU('宿主输入不可用，智能续写已暂停。', { muteable: false });
       }
       envelope.value = 'envelope' in result ? result.envelope : result;
       refresh();
@@ -129,7 +179,7 @@ export function useContinuationRuntime() {
       if (error instanceof ContinuationValidationError_ACU && error.error.code === 'CONTINUATION_INTERNAL_REQUEST_STALE') {
         toast.info(error.error.message);
       } else {
-        toast.error(errorMessage_ACU(error), { muteable: false });
+        notifyErrorToast_ACU(errorMessage_ACU(error), { muteable: false });
       }
       refresh();
       return false;
@@ -206,7 +256,7 @@ export function useContinuationRuntime() {
         return true;
       }
       if (result.disposition !== 'continue_now') {
-        toast.error('消息已保存，但返回了无法执行的后续动作。', { muteable: false });
+        notifyErrorToast_ACU('消息已保存，但返回了无法执行的后续动作。', { muteable: false });
         return false;
       }
       if (stopEpoch !== epochAtStart) return true;
@@ -215,11 +265,11 @@ export function useContinuationRuntime() {
       if (!started) {
         // 启动失败的原因已由编排器落成 lastError（或就是被拒的异常本身）；只说「失败」用户没法判断下一步。
         const reason = startFailure || task.value?.lastError?.message || (busy.value ? '另一项续写操作正在执行' : '');
-        toast.error(reason ? `消息已保存，但启动续写失败：${reason}` : '消息已保存，但启动续写失败。', { muteable: false });
+        notifyErrorToast_ACU(reason ? `消息已保存，但启动续写失败：${reason}` : '消息已保存，但启动续写失败。', { muteable: false });
       }
       return true;
     } catch (error) {
-      toast.error(errorMessage_ACU(error), { muteable: false });
+      notifyErrorToast_ACU(errorMessage_ACU(error), { muteable: false });
       refresh();
       return false;
     }
@@ -245,7 +295,7 @@ export function useContinuationRuntime() {
       const result = await runtime.orchestrator.stopTask();
       envelope.value = result.envelope;
     } catch (error) {
-      toast.error(errorMessage_ACU(error), { muteable: false });
+      notifyErrorToast_ACU(errorMessage_ACU(error), { muteable: false });
     } finally {
       try {
         runtime.bridge.stopHostGeneration();
@@ -295,7 +345,7 @@ export function useContinuationRuntime() {
       return 'saved';
     } catch (error) {
       if (error instanceof ContinuationValidationError_ACU && error.error.code === 'CONTINUATION_OPERATION_BUSY') return 'busy';
-      toast.error(errorMessage_ACU(error), { muteable: false });
+      notifyErrorToast_ACU(errorMessage_ACU(error), { muteable: false });
       refresh();
       return 'failed';
     } finally {
@@ -370,7 +420,7 @@ export function useContinuationRuntime() {
       toast.success('已清空续写任务、会话记录与本地资料，正文未改动。');
       return true;
     } catch (error) {
-      toast.error(errorMessage_ACU(error), { muteable: false });
+      notifyErrorToast_ACU(errorMessage_ACU(error), { muteable: false });
       refresh();
       return false;
     } finally {

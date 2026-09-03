@@ -596,6 +596,17 @@ function createDbProxy(): Record<string, any> {
 }
 
 /**
+ * 模板表达式失败聚合：按站点计数后记一条 warn，避免同一坏表达式每轮刷屏。
+ * 错误对象原样传递，堆栈仍可通过 normalizeLogArg 取到。
+ */
+const templateExprFailureCounts_ACU = new Map<string, number>();
+function warnTemplateExprFailure_ACU(site: string, detail: string, error: unknown): void {
+  const count = (templateExprFailureCounts_ACU.get(site) || 0) + 1;
+  templateExprFailureCounts_ACU.set(site, count);
+  logWarn_ACU(`[${site}] 执行失败（累计 ${count} 次）: ${detail}`, error);
+}
+
+/**
  * db.expr("SQL表达式") — 执行任意 SQL 表达式并返回结果
  * 支持中文表名/列名翻译、子查询、算术运算
  * 示例：
@@ -622,7 +633,7 @@ function execExpr(expression: string): string | number | null {
     if (typeof val === 'number') return val;
     return String(val);
   } catch (e: any) {
-    logError_ACU(`[db.expr] 表达式执行失败: ${expression} → ${e?.message}`);
+    warnTemplateExprFailure_ACU('db.expr', `${expression} → ${e?.message}`, e);
     return null;
   }
 }
@@ -648,7 +659,7 @@ function execRand(min: number, max: number): number {
     if (result.values.length === 0) return lo;
     return Number(result.values[0][0]) || lo;
   } catch (e: any) {
-    logError_ACU(`[db.rand] 随机数生成失败: ${min}-${max} → ${e?.message}`);
+    warnTemplateExprFailure_ACU('db.rand', `${min}-${max} → ${e?.message}`, e);
     return 0;
   }
 }
@@ -692,7 +703,7 @@ function execCalc(expression: string): number | null {
     }
     return val;
   } catch (e: any) {
-    logError_ACU(`[db.calc] 表达式执行失败: ${expression} → ${e?.message}`);
+    warnTemplateExprFailure_ACU('db.calc', `${expression} → ${e?.message}`, e);
     return null;
   }
 }
@@ -725,7 +736,7 @@ function execMax(...values: any[]): number | null {
     }
     return Math.max(...nums);
   } catch (e: any) {
-    logError_ACU(`[db.max] 执行失败: ${e?.message}`);
+    warnTemplateExprFailure_ACU('db.max', `${e?.message}`, e);
     return null;
   }
 }
@@ -752,7 +763,7 @@ function execMin(...values: any[]): number | null {
     }
     return Math.min(...nums);
   } catch (e: any) {
-    logError_ACU(`[db.min] 执行失败: ${e?.message}`);
+    warnTemplateExprFailure_ACU('db.min', `${e?.message}`, e);
     return null;
   }
 }
@@ -785,7 +796,7 @@ export function evaluateOrmExpression(expr: string): string {
     const result = fn(db);
     return formatResult(result);
   } catch (e: any) {
-    logError_ACU(`[ORM] 表达式执行失败: ${expr} → ${e?.message}`);
+    warnTemplateExprFailure_ACU('ORM', `${expr} → ${e?.message}`, e);
     return '';
   }
 }
@@ -860,7 +871,7 @@ export function evaluateRawSqlExpression(expr: string, options: RawSqlEvaluation
     if (/no such table/i.test(message)) {
       logDebug_ACU(`[SQL] 查询命中未建表（预期时序）: ${expr} → ${message}`);
     } else {
-      logError_ACU(`[SQL] 表达式执行失败: ${expr} → ${message}`);
+      warnTemplateExprFailure_ACU('SQL', `${expr} → ${message}`, e);
     }
     return '';
   }

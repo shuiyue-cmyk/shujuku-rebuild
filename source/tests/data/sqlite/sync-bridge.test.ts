@@ -265,6 +265,12 @@ describe('SyncBridge', () => {
       expect(engine.getTableNames()).not.toContain('required_value');
       expect(engine.query("SELECT sheet_key FROM _acu_sheet_meta WHERE sheet_key = 'sheet_invalid';").values).toEqual([]);
       expect(engine.getTableNames()).toContain(validTableName);
+
+      // 新行为：非 strict 跳过明细写入 warnings 通道
+      const warnings: string[] = [];
+      bridge.loadFromTableData(data, { warnings });
+      expect(warnings.length).toBeGreaterThan(0);
+      expect(warnings.join('')).toContain('sheet_invalid');
       expect(engine.query(`SELECT item_name FROM ${validTableName} ORDER BY row_id;`).values).toEqual([
         ['铁剑'],
         ['治疗药水'],

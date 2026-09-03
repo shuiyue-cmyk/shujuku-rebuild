@@ -39,6 +39,7 @@ vi.mock('../../../src/service/table/manual-catch-up-provisional-bridge', () => (
 }));
 
 import { runSqliteRuntimeMutationCommit_ACU, runTableUpdateCommit_ACU } from '../../../src/service/table/table-update-commit';
+import { logError_ACU, logWarn_ACU } from '../../../src/shared/utils';
 import {
   clearRuntimeOnlyPendingSheets_ACU,
   readRuntimeOnlyPendingSheets_ACU,
@@ -469,6 +470,8 @@ describe('runTableUpdateCommit_ACU runtime-only 未落盘登记与写回', () =>
   });
 
   it('填表进行中依旧拒绝外部写入：runtime-only 闸门不绕过本库外部写闸门', async () => {
+    vi.mocked(logWarn_ACU).mockClear();
+    vi.mocked(logError_ACU).mockClear();
     mocks.isAutoUpdating = true;
     const result = await runTableUpdateCommit_ACU({
       source: 'manual_crud',
@@ -482,6 +485,11 @@ describe('runTableUpdateCommit_ACU runtime-only 未落盘登记与写回', () =>
     expect(result.success).toBe(false);
     expect(result.errorCategory).toBe('precondition');
     expect(result.error).toContain('已拒绝外部表格写入');
+    // 级别控制：precondition 拒绝记 warn（带统一可操作指引），不记 error。
+    expect(vi.mocked(logWarn_ACU)).toHaveBeenCalled();
+    expect(vi.mocked(logError_ACU)).not.toHaveBeenCalled();
+    const warnText = vi.mocked(logWarn_ACU).mock.calls.flat().map((value) => String(value)).join('\n');
+    expect(warnText).toContain('切回');
     // 被闸门拒绝的写入不得留下待落盘登记
     expect(readRuntimeOnlyPendingSheets_ACU(scope)).toBeNull();
     // 复位：不得把填表标志泄漏给后续 describe。

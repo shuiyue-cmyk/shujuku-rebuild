@@ -221,6 +221,9 @@ describe('createEmbeddings_ACU 错误结构化分类（T3）', () => {
       expect(message).toContain('中转地址');
       // 原始错误文本必须保留，否则真断网/DNS 故障无从排查。
       expect(message).toContain('Failed to fetch');
+      // CORS 归类文案追加自动重试一次与手动恢复指引（网关内有限重试决策不变）。
+      expect(message).toContain('自动快速重试一次');
+      expect(message).toContain('立即重建');
     } finally {
       vi.useRealTimers();
     }
@@ -318,6 +321,8 @@ describe('createEmbeddings_ACU 错误结构化分类（T3）', () => {
       await assertion;
       await expect(promise.catch((error) => error.message)).resolves.toContain('超时');
       expect(fetchMock).toHaveBeenCalledTimes(2);
+      // 超时文案带处置指引（网关内自动快速重试一次，持续超时转手动排查）。
+      await expect(promise.catch((error) => error.message)).resolves.toContain('自动快速重试一次');
     } finally {
       vi.useRealTimers();
     }

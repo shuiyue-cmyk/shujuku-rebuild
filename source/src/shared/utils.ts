@@ -252,7 +252,10 @@ function tryParseQuotedTemplate_ACU(cleanTemplate: string, parseFn: (s: string) 
     return null;
 }
 
-export   function parseTableTemplateJson_ACU({ stripSeedRows = false } = {}) {
+let templateParseFailureCount_ACU = 0;
+const TEMPLATE_PARSE_LOG_SAMPLE_EVERY_ACU = 10;
+
+export   function parseTableTemplateJson_ACU({ stripSeedRows = false, templateId = 'builtin-default', chatId = 'unknown' }: { stripSeedRows?: boolean; templateId?: string; chatId?: string } = {}) {
       try {
           let cleanTemplate = TABLE_TEMPLATE_ACU.trim();
           const parseTemplateJson = (str: string) => safeJsonParseWithJsoncComments_ACU(str, null);
@@ -276,7 +279,15 @@ export   function parseTableTemplateJson_ACU({ stripSeedRows = false } = {}) {
           }
 
           if (!obj) {
-              logError_ACU('[模板解析] 所有解析方案均失败，模板长度:', cleanTemplate.length, '首字符:', JSON.stringify(cleanTemplate[0]));
+              // 采样：首次与每 N 次记 error（含 templateId/chat 标识），其余降级为 debug，避免坏模板每轮刷屏。
+              templateParseFailureCount_ACU++;
+              const templateFailureOccurrences = templateParseFailureCount_ACU;
+              const shouldSampleTemplateFailure = templateFailureOccurrences === 1 || templateFailureOccurrences % TEMPLATE_PARSE_LOG_SAMPLE_EVERY_ACU === 0;
+              if (shouldSampleTemplateFailure) {
+                  logError_ACU('[模板解析] 所有解析方案均失败，模板长度:', cleanTemplate.length, '首字符:', JSON.stringify(cleanTemplate[0]), 'templateId:', templateId, 'chat:', chatId, '累计失败:', templateFailureOccurrences);
+              } else {
+                  logDebug_ACU('[模板解析] 解析失败（采样抑制） templateId:', templateId, 'chat:', chatId, '累计失败:', templateFailureOccurrences);
+              }
               return null;
           }
           return stripSeedRows ? stripSeedRowsFromTemplate_ACU(obj) : obj;
