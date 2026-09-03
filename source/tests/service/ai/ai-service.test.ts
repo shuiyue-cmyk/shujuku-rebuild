@@ -84,6 +84,18 @@ describe('fetchAvailableModels_ACU', () => {
     expect(result.models).toEqual(['gpt-4', 'gpt-3.5-turbo']);
   });
 
+  it('探活 Go 端点时 custom_include_headers 带 x-opencode-session，非 Go 端点不带', async () => {
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ models: [{ id: 'm' }] }) });
+    await fetchAvailableModels_ACU('https://opencode.ai/zen/go/v1/chat/completions', 'sk-go');
+    const goBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(String(goBody.custom_include_headers)).toMatch(/^x-opencode-session: [0-9a-f-]{36}$/im);
+
+    mockFetch.mockClear();
+    await fetchAvailableModels_ACU('https://api.test', 'key123');
+    const otherBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(String(otherBody.custom_include_headers)).not.toMatch(/x-opencode-session/i);
+  });
+
   it('正常返回模型列表（data 数组格式）', async () => {
     mockFetch.mockResolvedValue({
       ok: true,

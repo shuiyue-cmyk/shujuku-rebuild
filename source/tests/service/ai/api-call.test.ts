@@ -295,6 +295,40 @@ describe('buildCustomApiRequestBody_ACU', () => {
     expect(body.reasoning_effort).toBe('medium');
   });
 
+  it('OpenCode Go 端点自动补 x-opencode-session 头，同端点会话 id 稳定', () => {
+    const cfg = { url: 'https://opencode.ai/zen/go/v1/chat/completions', model: 'mimo-v2.5', apiKey: 'sk-go' };
+    const first = buildCustomApiRequestBody_ACU([{ role: 'user', content: 'test' }], cfg);
+    const second = buildCustomApiRequestBody_ACU([{ role: 'user', content: 'test' }], { ...cfg });
+    const pick = (b: any) => String(b.custom_include_headers).split('\n').find((l: string) => /^x-opencode-session\s*:/i.test(l));
+    expect(pick(first)).toMatch(/^x-opencode-session: [0-9a-f-]{36}$/i);
+    expect(pick(second)).toBe(pick(first));
+  });
+
+  it('非 Go 端点不补 x-opencode-session 头', () => {
+    const body = buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://api.example.com', model: 'gpt-4', apiKey: 'sk-x' },
+    );
+    expect(String(body.custom_include_headers)).not.toMatch(/x-opencode-session/i);
+  });
+
+  it('同主机非 Go 路径不补 x-opencode-session 头', () => {
+    const body = buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://opencode.ai/zen/v1/chat/completions', model: 'm', apiKey: 'sk-x' },
+    );
+    expect(String(body.custom_include_headers)).not.toMatch(/x-opencode-session/i);
+  });
+
+  it('用户已显式写 x-opencode-session 时不覆盖', () => {
+    const body = buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://opencode.ai/zen/go/v1/chat/completions', model: 'm', requestHeaders: 'x-opencode-session: my-own-id' },
+    );
+    const hits = String(body.custom_include_headers).split('\n').filter((l: string) => /^x-opencode-session\s*:/i.test(l));
+    expect(hits).toEqual(['x-opencode-session: my-own-id']);
+  });
+
   it('maxTokens 驼峰别名生效', () => {
     const body = buildCustomApiRequestBody_ACU(
       [{ role: 'user', content: 'test' }],

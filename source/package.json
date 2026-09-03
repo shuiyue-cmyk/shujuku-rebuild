@@ -1,6 +1,6 @@
 {
   "name": "shujuku-rebuild",
-  "version": "9.1.4",
+  "version": "9.1.5",
   "private": true,
   "type": "module",
   "description": "TTonly·数据库（酒馆数据库）重构版 — TauriTavern 扩展：SQL 表格 / 剧情推进 / skill 化 / 可视化前端兼容。零依赖酒馆助手。",

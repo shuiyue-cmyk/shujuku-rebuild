@@ -11,6 +11,52 @@ import { resolveApiConfigByPreset_ACU, normalizePromptPostProcessing_ACU } from 
 import { acquirePresetRateLimitSlot_ACU } from './preset-rate-limiter';
 import { isDebugLogEnabled } from '../../shared/log-buffer';
 
+/**
+ * OpenCode Go 会话头（x-opencode-session）：Go 官方要求所有请求携带该头做提示缓存优化，
+ * 缺失的请求会被拒（2026-09-03 官方公告，09/06 起生效）。仅当目标端点是 Go 专属路径
+ * （opencode.ai 主机 + /zen/go/ 路径前缀，见官方 Endpoints 表）时附加，其他端点
+ * （含 Zen 余额直连等非 Go 路径、其他服务商）一律不受影响；用户已在附加请求头里
+ * 显式写了该头则尊重用户值。
+ * 会话 id 按端点 URL 稳定（进程内备忘，同端点同会话以利缓存命中），格式为 UUID。
+ */
+const OPENCODE_SESSION_IDS_ACU = new Map<string, string>();
+
+export function isOpencodeGoEndpoint_ACU(url: unknown): boolean {
+    try {
+        const parsed = new URL(String(url || ''));
+        const host = parsed.hostname.toLowerCase();
+        if (host !== 'opencode.ai' && !host.endsWith('.opencode.ai')) return false;
+        return /\/zen\/go(\/|$)/.test(parsed.pathname);
+    } catch {
+        return false;
+    }
+}
+
+function newOpencodeSessionId_ACU(): string {
+    try {
+        const randomUUID = (globalThis as any)?.crypto?.randomUUID;
+        if (typeof randomUUID === 'function') return randomUUID.call((globalThis as any).crypto);
+    } catch { /* 回退 Math.random 拼装 */ }
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+        const r = Math.floor(Math.random() * 16);
+        return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+    });
+}
+
+export function withOpencodeSessionHeader_ACU(headersText: string, url: unknown): string {
+    const base = String(headersText || '');
+    if (!isOpencodeGoEndpoint_ACU(url)) return base;
+    if (/^x-opencode-session\s*:/mi.test(base)) return base;
+    const key = String(url).trim().replace(/\/+$/, '').toLowerCase();
+    let sessionId = OPENCODE_SESSION_IDS_ACU.get(key);
+    if (!sessionId) {
+        sessionId = newOpencodeSessionId_ACU();
+        OPENCODE_SESSION_IDS_ACU.set(key, sessionId);
+    }
+    const line = `x-opencode-session: ${sessionId}`;
+    return base ? `${base}\n${line}` : line;
+}
+
 type CustomIncludeBodyRootType_ACU = 'empty' | 'mapping' | 'sequence' | 'scalar' | 'invalid';
 
 export interface CustomIncludeBodyDiagnostic_ACU {
@@ -180,6 +226,8 @@ export function buildCustomApiRequestBody_ACU(
       headers = headers ? `${headers}\n${extra}` : extra;
     }
   }
+  // OpenCode Go 端点自动补 x-opencode-session 会话头（缺失会被 Go 拒单，见本文件头注释）
+  headers = withOpencodeSessionHeader_ACU(headers, effectiveApiConfig.url);
 
   // 非预填充支持：开启后把 messages 中的 assistant 消息改写为 user，
   // 内容首行加「助手：」前缀（换行接原内容），用于不支持 assistant 预填充的接口。

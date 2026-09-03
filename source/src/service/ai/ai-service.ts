@@ -12,6 +12,7 @@ export {
 } from '../../data/gateways/ai-gateway';
 
 import { getHostRequestHeaders_ACU as _getHeaders } from '../../data/gateways/ai-gateway';
+import { withOpencodeSessionHeader_ACU } from './api-call';
 import { logDebug_ACU } from '../../shared/utils';
 
 // ============================================================
@@ -66,7 +67,8 @@ export async function fetchAvailableModels_ACU(apiUrl: string, apiKey: string, c
         // （resolve_status_model_list_source，仅 source==Custom 生效），不改 base/密钥解析。
         "custom_api_format": normalizeStatusCustomApiFormat_ACU(customApiFormat),
         "custom_url": apiUrl,
-        "custom_include_headers": sanitizedKey ? `Authorization: Bearer ${sanitizedKey}` : ""
+        // OpenCode Go 端点自动补 x-opencode-session 会话头（缺失会被 Go 拒单）
+        "custom_include_headers": withOpencodeSessionHeader_ACU(sanitizedKey ? `Authorization: Bearer ${sanitizedKey}` : "", apiUrl)
     };
 
     const response = await fetch(statusUrl, {

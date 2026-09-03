@@ -72631,6 +72631,54 @@ function saveCurrentConfigAsPreset_ACU(name) {
 // service/ai/api-call.ts — AI 调用编排（剧情推进用）
 // 从 04_shared_helpers.js 迁入
 /**
+ * OpenCode Go 会话头（x-opencode-session）：Go 官方要求所有请求携带该头做提示缓存优化，
+ * 缺失的请求会被拒（2026-09-03 官方公告，09/06 起生效）。仅当目标端点是 Go 专属路径
+ * （opencode.ai 主机 + /zen/go/ 路径前缀，见官方 Endpoints 表）时附加，其他端点
+ * （含 Zen 余额直连等非 Go 路径、其他服务商）一律不受影响；用户已在附加请求头里
+ * 显式写了该头则尊重用户值。
+ * 会话 id 按端点 URL 稳定（进程内备忘，同端点同会话以利缓存命中），格式为 UUID。
+ */
+const OPENCODE_SESSION_IDS_ACU = new Map();
+function isOpencodeGoEndpoint_ACU(url) {
+    try {
+        const parsed = new URL(String(url || ''));
+        const host = parsed.hostname.toLowerCase();
+        if (host !== 'opencode.ai' && !host.endsWith('.opencode.ai'))
+            return false;
+        return /\/zen\/go(\/|$)/.test(parsed.pathname);
+    }
+    catch {
+        return false;
+    }
+}
+function newOpencodeSessionId_ACU() {
+    try {
+        const randomUUID = globalThis?.crypto?.randomUUID;
+        if (typeof randomUUID === 'function')
+            return randomUUID.call(globalThis.crypto);
+    }
+    catch { /* 回退 Math.random 拼装 */ }
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+        const r = Math.floor(Math.random() * 16);
+        return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+    });
+}
+function withOpencodeSessionHeader_ACU(headersText, url) {
+    const base = String(headersText || '');
+    if (!isOpencodeGoEndpoint_ACU(url))
+        return base;
+    if (/^x-opencode-session\s*:/mi.test(base))
+        return base;
+    const key = String(url).trim().replace(/\/+$/, '').toLowerCase();
+    let sessionId = OPENCODE_SESSION_IDS_ACU.get(key);
+    if (!sessionId) {
+        sessionId = newOpencodeSessionId_ACU();
+        OPENCODE_SESSION_IDS_ACU.set(key, sessionId);
+    }
+    const line = `x-opencode-session: ${sessionId}`;
+    return base ? `${base}\n${line}` : line;
+}
+/**
  * 宿主 chat-completions 桥返回非 2xx 时的错误类型。
  * 保留 status 的目的不是美化日志，而是让上层重试归属方能区分「瞬时失败」与「必然失败的请求」：
  * 401/403/404 这类配置错误重试只是白烧配额，429/5xx 才值得再来一次。
@@ -72792,6 +72840,8 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
             headers = headers ? `${headers}\n${extra}` : extra;
         }
     }
+    // OpenCode Go 端点自动补 x-opencode-session 会话头（缺失会被 Go 拒单，见本文件头注释）
+    headers = withOpencodeSessionHeader_ACU(headers, effectiveApiConfig.url);
     // 非预填充支持：开启后把 messages 中的 assistant 消息改写为 user，
     // 内容首行加「助手：」前缀（换行接原内容），用于不支持 assistant 预填充的接口。
     // 优先取调用点传入的预设级值；未传入时读全局设置。
@@ -78034,7 +78084,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.1.4" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.1.5" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -100454,7 +100504,8 @@ async function fetchAvailableModels_ACU(apiUrl, apiKey, customApiFormat) {
         // （resolve_status_model_list_source，仅 source==Custom 生效），不改 base/密钥解析。
         "custom_api_format": normalizeStatusCustomApiFormat_ACU(customApiFormat),
         "custom_url": apiUrl,
-        "custom_include_headers": sanitizedKey ? `Authorization: Bearer ${sanitizedKey}` : ""
+        // OpenCode Go 端点自动补 x-opencode-session 会话头（缺失会被 Go 拒单）
+        "custom_include_headers": withOpencodeSessionHeader_ACU(sanitizedKey ? `Authorization: Bearer ${sanitizedKey}` : "", apiUrl)
     };
     const response = await fetch(statusUrl, {
         method: 'POST',
@@ -135286,7 +135337,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260903-14";
+        const stamp = "20260903-19";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -179139,7 +179190,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260903-14";
+        const stamp = "20260903-19";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -179148,7 +179199,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.1.4";
+        const v = "9.1.5";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {
