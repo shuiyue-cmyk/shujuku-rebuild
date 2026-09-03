@@ -77,6 +77,7 @@ function detectMetaChanges_ACU(
     const changes: Record<string, unknown> = {};
     let hasChange = false;
     for (const key of META_KEYS) {
+        if (base[key] === next[key]) continue;
         if (JSON.stringify(base[key]) !== JSON.stringify(next[key])) {
             changes[key] = next[key];
             hasChange = true;
@@ -86,6 +87,22 @@ function detectMetaChanges_ACU(
 }
 
 // ── 核心纯函数 ──
+
+function rowsEqual_ACU(baseRow: (string | null)[], nextRow: (string | null)[]): boolean {
+    if (baseRow.length !== nextRow.length) return false;
+    for (let i = 0; i < baseRow.length; i++) {
+        const a = baseRow[i];
+        const b = nextRow[i];
+        if ((a !== null && typeof a !== 'string') || (b !== null && typeof b !== 'string')) {
+            logWarn_ACU(`${LOG_TAG_DELTA} 行内出现非 string|null 元素，回退该行 stringify 比对`);
+            return JSON.stringify(baseRow) === JSON.stringify(nextRow);
+        }
+    }
+    for (let i = 0; i < baseRow.length; i++) {
+        if (baseRow[i] !== nextRow[i]) return false;
+    }
+    return true;
+}
 
 export interface BuildDeltaResult_ACU {
     /** 是否退化为 checkpoint（true 时 delta 无意义，应存完整快照） */
@@ -154,7 +171,7 @@ export function buildTableDelta_ACU(
         if (!baseRow) {
             // 新增行
             rowDeltas.push({ row_id: rowId, op: 'upsert', cells: nextRow });
-        } else if (JSON.stringify(baseRow) !== JSON.stringify(nextRow)) {
+        } else if (!rowsEqual_ACU(baseRow, nextRow)) {
             // 修改行
            rowDeltas.push({ row_id: rowId, op: 'upsert', cells: nextRow });
         }

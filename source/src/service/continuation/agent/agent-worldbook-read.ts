@@ -92,6 +92,7 @@ export async function loadAgentWorldbookSnapshot_ACU(): Promise<AgentWorldbookSn
     const enabledEntriesMap = getCurrentWorldbookConfig_ACU()?.enabledEntries;
 
     const entries: AgentWorldbookEntryView_ACU[] = [];
+    const pendingTokens: Array<{ index: number; bookName: string; uid: string; content: string }> = [];
     for (const bookName of bookNames) {
       for (const raw of entriesByBook[bookName] ?? []) {
         if (!isRecord_ACU(raw)) continue;
@@ -105,6 +106,7 @@ export async function loadAgentWorldbookSnapshot_ACU(): Promise<AgentWorldbookSn
         if (!isEntrySelected_ACU(bookName, uid, enabledEntriesMap)) continue;
         if (isEntryBlocked_ACU(raw)) continue;
         if (title.startsWith('TavernDB-ACU-')) continue;
+        pendingTokens.push({ index: entries.length, bookName, uid, content });
         entries.push({
           bookName,
           uid,
@@ -112,9 +114,15 @@ export async function loadAgentWorldbookSnapshot_ACU(): Promise<AgentWorldbookSn
           keys: readEntryKeys_ACU(raw),
           constant: raw.type === 'constant',
           content,
-          tokens: await countEntryTokens_ACU(bookName, uid, content),
+          tokens: 0,
         });
       }
+    }
+    const countedTokens = await Promise.all(
+      pendingTokens.map(pending => countEntryTokens_ACU(pending.bookName, pending.uid, pending.content)),
+    );
+    for (let i = 0; i < pendingTokens.length; i++) {
+      entries[pendingTokens[i].index].tokens = countedTokens[i];
     }
     return { entries, available: true };
   } catch (error) {

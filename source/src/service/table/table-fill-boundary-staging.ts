@@ -650,8 +650,9 @@ export async function commitStagedSheetsAtFullBoundaryAtomic_ACU(
     }
     frame.perSheetCheckpoints = perSheetCheckpoints;
 
-    const liveChatClone = JSON.parse(JSON.stringify(chat)) as any[];
-    const candidateChat = JSON.parse(JSON.stringify(chat)) as any[];
+    const chatSnapshotText_ACU = JSON.stringify(chat);
+    const liveChatClone = JSON.parse(chatSnapshotText_ACU) as any[];
+    const candidateChat = JSON.parse(chatSnapshotText_ACU) as any[];
     const candidateOriginalMessage = candidateChat[options.originalFullIndex];
     if (!candidateOriginalMessage) {
       return failBoundary_ACU('full_checkpoint_root_mismatch', `候选聊天缺少原 full 楼层 ${options.originalFullIndex}，无法汇合。`);
@@ -703,11 +704,22 @@ export async function commitStagedSheetsAtFullBoundaryAtomic_ACU(
         ...targetSheetKeys,
       ].filter(key => key.startsWith('sheet_')));
 
+      const sheetFingerprintCache_ACU = new Map<object, string>();
+      const fingerprintedSheet_ACU = (sheet: unknown): string => {
+        if (sheet !== null && typeof sheet === 'object') {
+          const cached = sheetFingerprintCache_ACU.get(sheet as object);
+          if (cached !== undefined) return cached;
+        }
+        const fp = canonicalSheetFingerprint_ACU(sheet);
+        if (sheet !== null && typeof sheet === 'object') sheetFingerprintCache_ACU.set(sheet as object, fp);
+        return fp;
+      };
+
       for (const sheetKey of sheetKeys) {
         const isTarget = targetSheetKeys.includes(sheetKey);
         if (isTarget) {
-          if (canonicalSheetFingerprint_ACU(candidateBoundary.data?.[sheetKey]) !== canonicalSheetFingerprint_ACU(overlaySheets[sheetKey])) {
-            logWarn_ACU(`[TableFillBoundaryStaging] selected_sheet_boundary_mismatch: runId=${runId}, cutoff=${options.originalFullIndex}, sheetKey=${sheetKey}, overlay=${canonicalSheetFingerprint_ACU(overlaySheets[sheetKey])}, candidate=${canonicalSheetFingerprint_ACU(candidateBoundary.data?.[sheetKey])}`);
+          if (fingerprintedSheet_ACU(candidateBoundary.data?.[sheetKey]) !== fingerprintedSheet_ACU(overlaySheets[sheetKey])) {
+            logWarn_ACU(`[TableFillBoundaryStaging] selected_sheet_boundary_mismatch: runId=${runId}, cutoff=${options.originalFullIndex}, sheetKey=${sheetKey}, overlay=${fingerprintedSheet_ACU(overlaySheets[sheetKey])}, candidate=${fingerprintedSheet_ACU(candidateBoundary.data?.[sheetKey])}`);
             return failBoundary_ACU('selected_sheet_boundary_mismatch', `boundary commit 后 selected sheet 边界回放不一致：${sheetKey}。`);
           }
           if (!candidateHead.data?.[sheetKey] || typeof candidateHead.data[sheetKey] !== 'object') {
@@ -715,11 +727,11 @@ export async function commitStagedSheetsAtFullBoundaryAtomic_ACU(
           }
           continue;
         }
-        if (canonicalSheetFingerprint_ACU(candidateBoundary.data?.[sheetKey]) !== canonicalSheetFingerprint_ACU(liveBoundary.data?.[sheetKey])) {
+        if (fingerprintedSheet_ACU(candidateBoundary.data?.[sheetKey]) !== fingerprintedSheet_ACU(liveBoundary.data?.[sheetKey])) {
           logWarn_ACU(`[TableFillBoundaryStaging] non_target_boundary_mismatch: runId=${runId}, cutoff=${options.originalFullIndex}, sheetKey=${sheetKey}`);
           return failBoundary_ACU('non_target_boundary_mismatch', `boundary commit 后非目标表边界回放不一致：${sheetKey}。`);
         }
-        if (canonicalSheetFingerprint_ACU(candidateHead.data?.[sheetKey]) !== canonicalSheetFingerprint_ACU(liveHead.data?.[sheetKey])) {
+        if (fingerprintedSheet_ACU(candidateHead.data?.[sheetKey]) !== fingerprintedSheet_ACU(liveHead.data?.[sheetKey])) {
           logWarn_ACU(`[TableFillBoundaryStaging] non_target_head_mismatch: runId=${runId}, cutoff=${headIndex}, sheetKey=${sheetKey}`);
           return failBoundary_ACU('non_target_head_mismatch', `boundary commit 后非目标表 head 回放不一致：${sheetKey}。`);
         }

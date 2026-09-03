@@ -48,6 +48,7 @@ import {
   type AgentFetchedPage_ACU,
 } from './agent-web-client';
 import { buildAgentFinalReviewEvidence_ACU, type AgentFinalReviewEvidence_ACU } from './agent-final-review-context';
+import { createAgentTokenCounter_ACU } from './agent-token-budget';
 import {
   buildAgentWorldbookScanText_ACU,
   renderAgentStoryCatalog_ACU,
@@ -353,9 +354,10 @@ export class AgentSubagentRuntime_ACU {
     };
 
     // 种子读集：免授权，直接解析；注入前整批记入本次派工自己的门禁账本。
+    const countTokens_ACU = createAgentTokenCounter_ACU();
     const seedTokens = [...new Set(input.delegation.reads.map(raw => String(raw ?? '').trim()).filter(Boolean))];
     const seeds = seedTokens.map(token => resolveMaterial_ACU(token, input.resolveContext));
-    const seedDecision = await gateAgentReadBatch_ACU(seeds.map(seed => ({ label: seed.label, text: seed.text })), gate.state, gate.config, 0);
+    const seedDecision = await gateAgentReadBatch_ACU(seeds.map(seed => ({ label: seed.label, text: seed.text })), gate.state, gate.config, 0, countTokens_ACU);
     if (!seedDecision.allowed) {
       rejectDelegation_ACU(
         `派工种子读集超出读取预算，整次派工未执行。请缩小 reads——正文用更窄的 $STORY_RANGE 区间、表格用 $TABLE:表名:行区间、模块按 ID 精读。\n${seedDecision.report}`,
@@ -648,7 +650,7 @@ export class AgentSubagentRuntime_ACU {
       },
       granted: new Set(),
     };
-    const fixedDecision = await gateAgentReadBatch_ACU(evidence.gateItems, gate.state, gate.config, 0);
+    const fixedDecision = await gateAgentReadBatch_ACU(evidence.gateItems, gate.state, gate.config, 0, createAgentTokenCounter_ACU());
     if (!fixedDecision.allowed) {
       throw subagentFailed_ACU('终审固定证据超出独立读取预算，终审未执行。', false, {
         reason: fixedDecision.reason,
@@ -805,7 +807,7 @@ export class AgentSubagentRuntime_ACU {
     }
     if (fresh.length) {
       const items: AgentGateItem_ACU[] = fresh.map(material => ({ label: material.label, text: material.text }));
-      const decision = await gateAgentReadBatch_ACU(items, gate.state, gate.config, 0);
+      const decision = await gateAgentReadBatch_ACU(items, gate.state, gate.config, 0, createAgentTokenCounter_ACU());
       if (decision.allowed) {
         gate.state.grantedTokens += decision.batchTokens;
         for (const material of fresh) {

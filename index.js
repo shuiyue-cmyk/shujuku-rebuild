@@ -51844,12 +51844,32 @@ function detectMetaChanges_ACU(base, next) {
     const changes = {};
     let hasChange = false;
     for (const key of META_KEYS) {
+        if (base[key] === next[key])
+            continue;
         if (JSON.stringify(base[key]) !== JSON.stringify(next[key])) {
             changes[key] = next[key];
             hasChange = true;
         }
     }
     return hasChange ? changes : undefined;
+}
+// ── 核心纯函数 ──
+function rowsEqual_ACU(baseRow, nextRow) {
+    if (baseRow.length !== nextRow.length)
+        return false;
+    for (let i = 0; i < baseRow.length; i++) {
+        const a = baseRow[i];
+        const b = nextRow[i];
+        if ((a !== null && typeof a !== 'string') || (b !== null && typeof b !== 'string')) {
+            logWarn_ACU(`${LOG_TAG_DELTA} 行内出现非 string|null 元素，回退该行 stringify 比对`);
+            return JSON.stringify(baseRow) === JSON.stringify(nextRow);
+        }
+    }
+    for (let i = 0; i < baseRow.length; i++) {
+        if (baseRow[i] !== nextRow[i])
+            return false;
+    }
+    return true;
 }
 /**
  * 对比 base 和 next 两版 Sheet_ACU，生成行级增量。
@@ -51899,7 +51919,7 @@ function buildTableDelta_ACU(base, next, sheetKey) {
             // 新增行
             rowDeltas.push({ row_id: rowId, op: 'upsert', cells: nextRow });
         }
-        else if (JSON.stringify(baseRow) !== JSON.stringify(nextRow)) {
+        else if (!rowsEqual_ACU(baseRow, nextRow)) {
             // 修改行
             rowDeltas.push({ row_id: rowId, op: 'upsert', cells: nextRow });
         }
@@ -78009,7 +78029,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.1.1" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.1.2" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -104655,8 +104675,9 @@ async function commitStagedSheetsAtFullBoundaryAtomic_ACU(runId, options) {
             };
         }
         frame.perSheetCheckpoints = perSheetCheckpoints;
-        const liveChatClone = JSON.parse(JSON.stringify(chat));
-        const candidateChat = JSON.parse(JSON.stringify(chat));
+        const chatSnapshotText_ACU = JSON.stringify(chat);
+        const liveChatClone = JSON.parse(chatSnapshotText_ACU);
+        const candidateChat = JSON.parse(chatSnapshotText_ACU);
         const candidateOriginalMessage = candidateChat[options.originalFullIndex];
         if (!candidateOriginalMessage) {
             return failBoundary_ACU('full_checkpoint_root_mismatch', `候选聊天缺少原 full 楼层 ${options.originalFullIndex}，无法汇合。`);
@@ -104693,11 +104714,23 @@ async function commitStagedSheetsAtFullBoundaryAtomic_ACU(runId, options) {
                 ...Object.keys(candidateHead.data || {}),
                 ...targetSheetKeys,
             ].filter(key => key.startsWith('sheet_')));
+            const sheetFingerprintCache_ACU = new Map();
+            const fingerprintedSheet_ACU = (sheet) => {
+                if (sheet !== null && typeof sheet === 'object') {
+                    const cached = sheetFingerprintCache_ACU.get(sheet);
+                    if (cached !== undefined)
+                        return cached;
+                }
+                const fp = canonicalSheetFingerprint_ACU(sheet);
+                if (sheet !== null && typeof sheet === 'object')
+                    sheetFingerprintCache_ACU.set(sheet, fp);
+                return fp;
+            };
             for (const sheetKey of sheetKeys) {
                 const isTarget = targetSheetKeys.includes(sheetKey);
                 if (isTarget) {
-                    if (canonicalSheetFingerprint_ACU(candidateBoundary.data?.[sheetKey]) !== canonicalSheetFingerprint_ACU(overlaySheets[sheetKey])) {
-                        logWarn_ACU(`[TableFillBoundaryStaging] selected_sheet_boundary_mismatch: runId=${runId}, cutoff=${options.originalFullIndex}, sheetKey=${sheetKey}, overlay=${canonicalSheetFingerprint_ACU(overlaySheets[sheetKey])}, candidate=${canonicalSheetFingerprint_ACU(candidateBoundary.data?.[sheetKey])}`);
+                    if (fingerprintedSheet_ACU(candidateBoundary.data?.[sheetKey]) !== fingerprintedSheet_ACU(overlaySheets[sheetKey])) {
+                        logWarn_ACU(`[TableFillBoundaryStaging] selected_sheet_boundary_mismatch: runId=${runId}, cutoff=${options.originalFullIndex}, sheetKey=${sheetKey}, overlay=${fingerprintedSheet_ACU(overlaySheets[sheetKey])}, candidate=${fingerprintedSheet_ACU(candidateBoundary.data?.[sheetKey])}`);
                         return failBoundary_ACU('selected_sheet_boundary_mismatch', `boundary commit 后 selected sheet 边界回放不一致：${sheetKey}。`);
                     }
                     if (!candidateHead.data?.[sheetKey] || typeof candidateHead.data[sheetKey] !== 'object') {
@@ -104705,11 +104738,11 @@ async function commitStagedSheetsAtFullBoundaryAtomic_ACU(runId, options) {
                     }
                     continue;
                 }
-                if (canonicalSheetFingerprint_ACU(candidateBoundary.data?.[sheetKey]) !== canonicalSheetFingerprint_ACU(liveBoundary.data?.[sheetKey])) {
+                if (fingerprintedSheet_ACU(candidateBoundary.data?.[sheetKey]) !== fingerprintedSheet_ACU(liveBoundary.data?.[sheetKey])) {
                     logWarn_ACU(`[TableFillBoundaryStaging] non_target_boundary_mismatch: runId=${runId}, cutoff=${options.originalFullIndex}, sheetKey=${sheetKey}`);
                     return failBoundary_ACU('non_target_boundary_mismatch', `boundary commit 后非目标表边界回放不一致：${sheetKey}。`);
                 }
-                if (canonicalSheetFingerprint_ACU(candidateHead.data?.[sheetKey]) !== canonicalSheetFingerprint_ACU(liveHead.data?.[sheetKey])) {
+                if (fingerprintedSheet_ACU(candidateHead.data?.[sheetKey]) !== fingerprintedSheet_ACU(liveHead.data?.[sheetKey])) {
                     logWarn_ACU(`[TableFillBoundaryStaging] non_target_head_mismatch: runId=${runId}, cutoff=${headIndex}, sheetKey=${sheetKey}`);
                     return failBoundary_ACU('non_target_head_mismatch', `boundary commit 后非目标表 head 回放不一致：${sheetKey}。`);
                 }
@@ -122460,10 +122493,7 @@ function createAgentTokenCounter_ACU(count = countAgentTokens_ACU) {
     };
 }
 async function measureMessages_ACU(messages, count) {
-    const sizes = [];
-    for (const message of messages)
-        sizes.push(await count(message.text));
-    return sizes;
+    return Promise.all(messages.map(message => count(message.text)));
 }
 /**
  * 统计整份会话的 token 数。
@@ -122483,10 +122513,8 @@ async function measureAgentConversationTokens_ACU(snapshot, count = countAgentTo
  * @returns 全部消息内容的 token 之和
  */
 async function measureAgentPromptTokens_ACU(messages, count = countAgentTokens_ACU) {
-    let total = 0;
-    for (const message of messages)
-        total += await count(message.content);
-    return total;
+    const sizes = await Promise.all(messages.map(message => count(message.content)));
+    return sizes.reduce((sum, size) => sum + size, 0);
 }
 /**
  * 判定压缩时机。
@@ -124630,6 +124658,7 @@ async function loadAgentWorldbookSnapshot_ACU() {
         const isolationPrefix = getIsolationPrefix_ACU();
         const enabledEntriesMap = getCurrentWorldbookConfig_ACU()?.enabledEntries;
         const entries = [];
+        const pendingTokens = [];
         for (const bookName of bookNames) {
             for (const raw of entriesByBook[bookName] ?? []) {
                 if (!isRecord_ACU$2(raw))
@@ -124650,6 +124679,7 @@ async function loadAgentWorldbookSnapshot_ACU() {
                     continue;
                 if (title.startsWith('TavernDB-ACU-'))
                     continue;
+                pendingTokens.push({ index: entries.length, bookName, uid, content });
                 entries.push({
                     bookName,
                     uid,
@@ -124657,9 +124687,13 @@ async function loadAgentWorldbookSnapshot_ACU() {
                     keys: readEntryKeys_ACU(raw),
                     constant: raw.type === 'constant',
                     content,
-                    tokens: await countEntryTokens_ACU(bookName, uid, content),
+                    tokens: 0,
                 });
             }
+        }
+        const countedTokens = await Promise.all(pendingTokens.map(pending => countEntryTokens_ACU(pending.bookName, pending.uid, pending.content)));
+        for (let i = 0; i < pendingTokens.length; i++) {
+            entries[pendingTokens[i].index].tokens = countedTokens[i];
         }
         return { entries, available: true };
     }
@@ -126257,9 +126291,10 @@ class AgentSubagentRuntime_ACU {
             granted: new Set(),
         };
         // 种子读集：免授权，直接解析；注入前整批记入本次派工自己的门禁账本。
+        const countTokens_ACU = createAgentTokenCounter_ACU();
         const seedTokens = [...new Set(input.delegation.reads.map(raw => String(raw ?? '').trim()).filter(Boolean))];
         const seeds = seedTokens.map(token => resolveMaterial_ACU(token, input.resolveContext));
-        const seedDecision = await gateAgentReadBatch_ACU(seeds.map(seed => ({ label: seed.label, text: seed.text })), gate.state, gate.config, 0);
+        const seedDecision = await gateAgentReadBatch_ACU(seeds.map(seed => ({ label: seed.label, text: seed.text })), gate.state, gate.config, 0, countTokens_ACU);
         if (!seedDecision.allowed) {
             rejectDelegation_ACU(`派工种子读集超出读取预算，整次派工未执行。请缩小 reads——正文用更窄的 $STORY_RANGE 区间、表格用 $TABLE:表名:行区间、模块按 ID 精读。\n${seedDecision.report}`, { agentName: definition.name, seedTokens, batchTokens: seedDecision.batchTokens });
         }
@@ -126537,7 +126572,7 @@ class AgentSubagentRuntime_ACU {
             },
             granted: new Set(),
         };
-        const fixedDecision = await gateAgentReadBatch_ACU(evidence.gateItems, gate.state, gate.config, 0);
+        const fixedDecision = await gateAgentReadBatch_ACU(evidence.gateItems, gate.state, gate.config, 0, createAgentTokenCounter_ACU());
         if (!fixedDecision.allowed) {
             throw subagentFailed_ACU('终审固定证据超出独立读取预算，终审未执行。', false, {
                 reason: fixedDecision.reason,
@@ -126690,7 +126725,7 @@ class AgentSubagentRuntime_ACU {
         }
         if (fresh.length) {
             const items = fresh.map(material => ({ label: material.label, text: material.text }));
-            const decision = await gateAgentReadBatch_ACU(items, gate.state, gate.config, 0);
+            const decision = await gateAgentReadBatch_ACU(items, gate.state, gate.config, 0, createAgentTokenCounter_ACU());
             if (decision.allowed) {
                 gate.state.grantedTokens += decision.batchTokens;
                 for (const material of fresh) {
@@ -179071,7 +179106,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.1.1";
+        const v = "9.1.2";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {

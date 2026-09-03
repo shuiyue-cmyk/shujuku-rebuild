@@ -73,9 +73,7 @@ export function createAgentTokenCounter_ACU(count: TokenCounter_ACU = countAgent
 }
 
 async function measureMessages_ACU(messages: readonly AgentConversationMessage_ACU[], count: TokenCounter_ACU): Promise<number[]> {
-  const sizes: number[] = [];
-  for (const message of messages) sizes.push(await count(message.text));
-  return sizes;
+  return Promise.all(messages.map(message => count(message.text)));
 }
 
 /**
@@ -103,9 +101,8 @@ export async function measureAgentPromptTokens_ACU(
   messages: ReadonlyArray<{ role: string; content: string }>,
   count: TokenCounter_ACU = countAgentTokens_ACU,
 ): Promise<number> {
-  let total = 0;
-  for (const message of messages) total += await count(message.content);
-  return total;
+  const sizes = await Promise.all(messages.map(message => count(message.content)));
+  return sizes.reduce((sum, size) => sum + size, 0);
 }
 
 export interface AgentCompactionTiming_ACU {
