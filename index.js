@@ -78029,7 +78029,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.1.2" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.1.3" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -135273,6 +135273,41 @@ apiRef = api;
 topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 
 /**
+ * 全局构建水印（右下角固定小字）：任何截图都能辨别设备实际运行的构建。
+ * 角标缺失 = 设备没有加载本插件代码（缓存/CDN 旧版本）；角标时间戳旧 = 加载了旧构建。
+ * 曾随 biotracker 面板实现（af269aa），biotracker 整层删除时被连带移除，此处以独立模块还回。
+ * 构建时间戳由 rollup 注入 globalThis.__ACU_BUILD_STAMP__（每次 build 唯一，免手动维护）。
+ */
+const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
+function readBuildStamp_ACU() {
+    try {
+        const stamp = "20260903-13";
+        return typeof stamp === 'string' && stamp ? stamp : 'dev';
+    }
+    catch {
+        return 'dev';
+    }
+}
+function installGlobalBuildBadge_ACU() {
+    try {
+        const doc = globalThis.document;
+        if (!doc)
+            return false;
+        if (doc.getElementById(BUILD_BADGE_ELEMENT_ID_ACU))
+            return true;
+        const badge = doc.createElement('div');
+        badge.id = BUILD_BADGE_ELEMENT_ID_ACU;
+        badge.textContent = `TTonly·${readBuildStamp_ACU()}`;
+        badge.style.cssText = 'position:fixed;bottom:2px;right:6px;z-index:2147483600;font-size:10px;line-height:1;opacity:0.55;pointer-events:none;color:#9a9a9a;mix-blend-mode:difference;user-select:none;font-family:monospace;';
+        (doc.body || doc.documentElement).appendChild(badge);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+
+/**
  * host-document — 解析"宿主"窗口与文档（D15.1）
  *
  * 酒馆助手前端可能跑在楼层 iframe 内，此时 `document.body` 是 iframe 内部，
@@ -179097,7 +179132,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260903-11";
+        const stamp = "20260903-13";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -179106,7 +179141,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.1.2";
+        const v = "9.1.3";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {
@@ -191087,6 +191122,10 @@ function installGlobalErrorCapture() {
  */
 async function extensionMain() {
     installGlobalErrorCapture();
+    try {
+        installGlobalBuildBadge_ACU();
+    }
+    catch { /* 水印失败不影响功能 */ }
     if (checkAndMarkInstance()) {
         logError_ACU('[插件启动] 检测到已有实例运行，跳过初始化。请勿同时安装油猴脚本和本扩展。');
         return;

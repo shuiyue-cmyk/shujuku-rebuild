@@ -73,6 +73,7 @@ import './presentation/triggers/settings-ui-sync';
 // 启动入口（扩展模式）
 // ═══════════════════════════════════════════════════════════════
 import { mainInitialize_ACU } from './presentation/bootstrap/init';
+import { installGlobalBuildBadge_ACU } from './presentation/bootstrap/install-build-badge';
 import { bootstrapAcuV2 } from './presentation-v2/bootstrap';
 import { logDebug_ACU, logError_ACU, logWarn_ACU } from './shared/utils';
 import { waitForAcuHostReady } from './shared/host-bridge';
@@ -116,6 +117,7 @@ function installGlobalErrorCapture(): void {
  */
 async function extensionMain() {
     installGlobalErrorCapture();
+    try { installGlobalBuildBadge_ACU(); } catch { /* 水印失败不影响功能 */ }
     if (checkAndMarkInstance()) {
         logError_ACU('[插件启动] 检测到已有实例运行，跳过初始化。请勿同时安装油猴脚本和本扩展。');
         return;
