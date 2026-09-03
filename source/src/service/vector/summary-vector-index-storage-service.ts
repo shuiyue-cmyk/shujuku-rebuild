@@ -973,6 +973,40 @@ export async function cleanupUnreachableSummaryVectorIndexFiles_ACU(options: Sum
         isolationKey: String(hint.isolationKey || ''),
         sourceTableKey: String(hint.sourceTableKey || ''),
     })).filter((scope) => scope.isolationKey && scope.sourceTableKey);
+    // hints 缺省 [] 且 eligibleScopes 可为空：空时 not_legacy 跳过全部 judge，
+    // 全部分支都只是 retained + blockedByReachability（下次 GC 重扫），且零 blob 读取、零删除。
+    // 这里早退并记一条 warn（可观测），删除语义与全量走完循环完全一致（含 pending 优先于 reachable 的计数顺序）。
+    if (eligibleScopes.length === 0) {
+        logWarn_ACU('[纪要向量索引] 安全 GC：scopeHints 为空或无有效 scope，跳过孤儿删除判定，全部保留待下次 GC 重扫');
+        const retainedPaths: string[] = [];
+        const blockedByReachability: string[] = [];
+        let reachableFileCount = 0;
+        for (const file of registry.files) {
+            const path = String(file?.path || '').trim();
+            if (!path) continue;
+            if (pendingSummaryVectorIndexPublicationPaths_ACU.has(path)) {
+                retainedPaths.push(path);
+                blockedByReachability.push(path);
+                continue;
+            }
+            if (reachablePathSet.has(path)) {
+                reachableFileCount += 1;
+                retainedPaths.push(path);
+                blockedByReachability.push(path);
+                continue;
+            }
+            retainedPaths.push(path);
+            blockedByReachability.push(path);
+        }
+        return {
+            scannedRegisteredFileCount: registry.files.length,
+            reachableFileCount,
+            deletedPaths: [],
+            retainedPaths,
+            blockedByReachability,
+            failedDeletes: [],
+        };
+    }
     const deletedPaths: string[] = [];
     const retainedPaths: string[] = [];
     const blockedByReachability: string[] = [];

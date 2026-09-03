@@ -67864,21 +67864,26 @@ const FALLBACK_CHARS_PER_TOKEN_ACU = 1.5;
 /**
  * 用宿主分词器统计文本 token 数，供 Skill 元数据的 tk 字段与预算判定共用。
  * 宿主分词器缺失或抛错时按字符数估算，绝不把异常抛给调用方：tk 只是预算参考，不值得中断整条链路。
+ * 降级分支记一条 logDebug（TT 诊断用：真机上分词器是否可用、是否漂移，只看这条日志）。
  */
 async function countTextTokens_ACU(text) {
     const content = String(text ?? '');
     if (!content)
         return 0;
     const counter = SillyTavern_API_ACU?.getTokenCountAsync;
-    if (typeof counter === 'function') {
-        try {
-            const counted = await counter.call(SillyTavern_API_ACU, content);
-            if (typeof counted === 'number' && Number.isFinite(counted) && counted >= 0)
-                return Math.ceil(counted);
-        }
-        catch {
-            // 分词器异常降级为估算：tk 只用于预算与展示，不参与正确性判定。
-        }
+    if (typeof counter !== 'function') {
+        logDebug_ACU('[TokenCounter] 宿主分词器缺失（getTokenCountAsync 不可用），按字符估算 token');
+        return Math.ceil(content.length / FALLBACK_CHARS_PER_TOKEN_ACU);
+    }
+    try {
+        const counted = await counter.call(SillyTavern_API_ACU, content);
+        if (typeof counted === 'number' && Number.isFinite(counted) && counted >= 0)
+            return Math.ceil(counted);
+        logDebug_ACU(`[TokenCounter] 宿主分词器返回非法值（${String(counted)}），按字符估算 token`);
+    }
+    catch (error) {
+        // 分词器异常降级为估算：tk 只用于预算与展示，不参与正确性判定。
+        logDebug_ACU('[TokenCounter] 宿主分词器异常，按字符估算 token', error);
     }
     return Math.ceil(content.length / FALLBACK_CHARS_PER_TOKEN_ACU);
 }
@@ -78004,7 +78009,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.0.10" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.1.1" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -86637,6 +86642,41 @@ async function cleanupUnreachableSummaryVectorIndexFiles_ACU(options = {}) {
         isolationKey: String(hint.isolationKey || ''),
         sourceTableKey: String(hint.sourceTableKey || ''),
     })).filter((scope) => scope.isolationKey && scope.sourceTableKey);
+    // hints 缺省 [] 且 eligibleScopes 可为空：空时 not_legacy 跳过全部 judge，
+    // 全部分支都只是 retained + blockedByReachability（下次 GC 重扫），且零 blob 读取、零删除。
+    // 这里早退并记一条 warn（可观测），删除语义与全量走完循环完全一致（含 pending 优先于 reachable 的计数顺序）。
+    if (eligibleScopes.length === 0) {
+        logWarn_ACU('[纪要向量索引] 安全 GC：scopeHints 为空或无有效 scope，跳过孤儿删除判定，全部保留待下次 GC 重扫');
+        const retainedPaths = [];
+        const blockedByReachability = [];
+        let reachableFileCount = 0;
+        for (const file of registry.files) {
+            const path = String(file?.path || '').trim();
+            if (!path)
+                continue;
+            if (pendingSummaryVectorIndexPublicationPaths_ACU.has(path)) {
+                retainedPaths.push(path);
+                blockedByReachability.push(path);
+                continue;
+            }
+            if (reachablePathSet.has(path)) {
+                reachableFileCount += 1;
+                retainedPaths.push(path);
+                blockedByReachability.push(path);
+                continue;
+            }
+            retainedPaths.push(path);
+            blockedByReachability.push(path);
+        }
+        return {
+            scannedRegisteredFileCount: registry.files.length,
+            reachableFileCount,
+            deletedPaths: [],
+            retainedPaths,
+            blockedByReachability,
+            failedDeletes: [],
+        };
+    }
     const deletedPaths = [];
     const retainedPaths = [];
     const blockedByReachability = [];
@@ -125617,7 +125657,8 @@ async function gateAgentReadBatch_ACU(items, state, config, contextTokens, count
  *   TT 内网页（WebView）直连）。百度百科没有 CORS 头且需要上游酒馆服务器
  *   `/api/search/visit` 转发——TT 仅提供 `/api/search/searxng`，没有该路由，故不可用。
  * - 通用搜索：仅 SearXNG，经 TT 同源路由 POST /api/search/searxng（请求体
- *   { baseUrl, query }，响应 text/html 结果页，见 TT tests/search-routes-contract.test.mjs）。
+ *   { baseUrl, query } + 可选 { preferences, categories }，响应 text/html 结果页，
+ *   见 TT tests/search-routes-contract.test.mjs）。
  *   DuckDuckGo（需 /visit 抓页）、Serper / Tavily（需上游 /api/search/<provider> 复用酒馆 key）
  *   在 TT 均无对应路由，故不可用。
  * - 任意网页抓取：需要上游 /api/search/visit，TT 未提供，webRead 只做域名策略判定后
@@ -125891,9 +125932,9 @@ class AgentWebClient_ACU {
     }
     /**
      * 通用网页搜索。TT 仅 SearXNG 可行（经同源路由 POST /api/search/searxng，
-     * 请求体 { baseUrl, query }，响应为 text/html 结果页）。
+     * 请求体 { baseUrl, query } + 可选 { preferences, categories }，响应为 text/html 结果页）。
      * @param query 检索词
-     * @param settings 网页检索设置（提供方与 SearXNG 地址）
+     * @param settings 网页检索设置（提供方、SearXNG 地址与可选透传键）
      */
     async webSearch(query, settings) {
         const trimmed = query.trim();
@@ -125901,17 +125942,26 @@ class AgentWebClient_ACU {
             return { hits: [], note: '检索词为空' };
         const provider = settings.searchProvider;
         if (provider === 'searxng')
-            return this.searchSearxng_ACU(trimmed, settings.searxngBaseUrl);
+            return this.searchSearxng_ACU(trimmed, settings.searxngBaseUrl, settings);
         return { hits: [], note: `${provider} 需要酒馆服务器「网页搜索」转发（上游 /api/search/${provider}），TT 仅提供 /api/search/searxng；请把搜索引擎切换为 SearXNG（自建或公共实例）后再搜` };
     }
-    async searchSearxng_ACU(query, baseUrl) {
+    async searchSearxng_ACU(query, baseUrl, options = {}) {
         if (!baseUrl.trim())
             return { hits: [], note: 'SearXNG 实例地址未配置（续写设置 → 网页检索 → SearXNG 实例地址，如 https://searx.example.org；可自建实例或选用公共实例）' };
         try {
+            // TT DTO 全透传（见 TT tests/search-routes-contract.test.mjs 三键断言）：
+            // preferences/categories 为 Option，有值才填，空（或全空白）不填。
+            const body = { baseUrl: baseUrl.trim(), query };
+            const preferences = options.preferences?.trim();
+            if (preferences)
+                body.preferences = preferences;
+            const categories = options.categories?.trim();
+            if (categories)
+                body.categories = categories;
             const response = await this.fetchDirect_ACU('/api/search/searxng', {
                 method: 'POST',
                 headers: { ...this.dependencies.hostHeaders(), 'Content-Type': 'application/json' },
-                body: JSON.stringify({ baseUrl: baseUrl.trim(), query }),
+                body: JSON.stringify(body),
             });
             if (!response.ok)
                 return { hits: [], note: `SearXNG 请求失败（HTTP ${response.status}）：实例地址可能填错、实例离线，或实例拒绝了该查询` };
@@ -179012,7 +179062,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260903-10";
+        const stamp = "20260903-11";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -179021,7 +179071,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.0.10";
+        const v = "9.1.1";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {
@@ -190629,88 +190679,266 @@ function __resetAcuV2MountForTests() {
  *
  * 与旧菜单按钮（startup.ts 中的 TTonly·数据库 旧UI）共存，互不影响。
  * 依赖 host document 解析（D15.1），因此也只在 host document 上注册按钮。
+ *
+ * 注入时序（TT dev 实态，见 TT src/scripts/extensions.js）：
+ * #extensionsMenu / #extensionsMenuButton 由 addExtensionsButtonAndMenu 经
+ * renderTemplateAsync('wandMenu'/'wandButton') 运行时注入（menu 挂 document.body 下，
+ * button 挂 #leftSendForm 下），门控 ensureExtensionsUiReady 由 eventSource once
+ * APP_READY 触发。因此本按钮改事件驱动，不再长轮询硬等：
+ * 1) 立即试一次（宿主已就绪时零等待）；
+ * 2) 订阅 APP_READY（SillyTavern_API_ACU.eventSource，once 优先、on 兜底）；
+ * 3) MutationObserver 观察 host document.body 等 #extensionsMenu 出现；
+ * 4) 保留短轮询兜底（事件源缺失的宿主）；
+ * 5) 主容器长期缺失时走备用入口：挂 wandButton 同宿主 #leftSendForm 旁。
+ * 任一路径成功即一次性注入（重复进入幂等）；双锚点缺失则放弃并记错。
  */
 const MENU_CONTAINER_ID = 'acu-v2-menu-container';
 const MENU_ITEM_ID = 'acu-v2-menu-item';
-const CLICK_NS = 'click.acu-v2';
-/** 等待 host document 中出现 #extensionsMenu 后注入按钮；找不到时轮询。 */
+const SEND_FORM_ID = 'leftSendForm';
+const EXTENSIONS_MENU_ID = 'extensionsMenu';
+const EXTENSIONS_MENU_BUTTON_ID = 'extensionsMenuButton';
+const BOUND_FLAG = 'acuV2Bound';
+/** 短轮询兜底：6 轮 × 2s（原 10×1s + 30×2s 长轮询已退役，事件路径覆盖正常宿主）。 */
+const FALLBACK_POLL_ROUNDS = 6;
+const FALLBACK_POLL_INTERVAL_MS = 2000;
+const MENU_CLOSE_DELAY_MS = 150;
+let menuButtonInstalled_ACU = false;
+let menuButtonInitStarted_ACU = false;
+let menuButtonObserver_ACU = null;
+/** 注册 UI v2 菜单按钮；TT 下先等 TT 内部 ABI 就绪再进事件驱动流程。 */
 function registerAcuV2MenuButton() {
     // TT 适配：TauriTavern 下先等 TT 内部 ABI 就绪（宿主异步引导，避免扩展先于 store/菜单就绪注册失败）
     if (isAcuTauriRuntime()) {
         const { ready, promise } = getAcuTauriReady();
         if (!ready && promise) {
-            promise.then(() => attemptInsert(0)).catch(() => attemptInsert(0));
+            promise.then(() => startMenuButtonInit_ACU()).catch(() => startMenuButtonInit_ACU());
         }
         else if (!ready) {
-            attemptInsert(0); // 布尔未就绪：交给 attemptInsert 轮询
+            startMenuButtonInit_ACU(); // 布尔未就绪：交给事件 + 短轮询兜底
         }
         else {
-            attemptInsert(0);
+            startMenuButtonInit_ACU();
         }
         return;
     }
-    attemptInsert(0);
+    startMenuButtonInit_ACU();
 }
-function attemptInsert(retry) {
-    const doc = getAcuHostDocument();
-    const $ = getHostJQuery();
-    if (!doc || !$) {
-        if (retry < 10) {
-            setTimeout(() => attemptInsert(retry + 1), 1000);
+/** 事件驱动入口（幂等）：立即试一次，失败则挂 APP_READY + MutationObserver + 短轮询。 */
+function startMenuButtonInit_ACU() {
+    if (menuButtonInitStarted_ACU)
+        return;
+    menuButtonInitStarted_ACU = true;
+    if (tryInsertMenuButton_ACU())
+        return;
+    subscribeAppReadyOnce_ACU();
+    watchExtensionsMenuOnce_ACU();
+    scheduleFallbackPoll_ACU(0);
+}
+/** 订阅宿主 APP_READY（TT dev extensions.js initExtensions 同款门控：once APP_READY）。 */
+function subscribeAppReadyOnce_ACU() {
+    try {
+        const api = SillyTavern_API_ACU;
+        const eventSource = api?.eventSource;
+        if (!eventSource)
+            return;
+        const appReady = api?.eventTypes?.APP_READY ?? 'app_ready';
+        const handler = () => { tryInsertMenuButton_ACU(); };
+        if (typeof eventSource.once === 'function') {
+            eventSource.once(appReady, handler);
         }
-        else {
-            logError_ACU('[ACU-V2] menu button registration aborted: host doc/jQuery not ready after 10 retries.');
+        else if (typeof eventSource.on === 'function') {
+            eventSource.on(appReady, handler);
         }
+    }
+    catch {
+        // 事件源不可用：交给 MutationObserver + 短轮询兜底。
+    }
+}
+/** 观察 host body，等 TT 运行时注入 #extensionsMenu（addExtensionsButtonAndMenu 挂 document.body）。 */
+function watchExtensionsMenuOnce_ACU() {
+    try {
+        const doc = getAcuHostDocument();
+        if (!doc?.body || menuButtonObserver_ACU)
+            return;
+        const hostWin = getAcuHostWindow();
+        const ObserverCtor = hostWin?.MutationObserver ?? (typeof MutationObserver !== 'undefined' ? MutationObserver : null);
+        if (typeof ObserverCtor !== 'function')
+            return;
+        const observer = new ObserverCtor(() => {
+            if (menuButtonInstalled_ACU) {
+                disconnectMenuButtonObserver_ACU();
+                return;
+            }
+            let menu = null;
+            try {
+                menu = getAcuHostDocument()?.getElementById(EXTENSIONS_MENU_ID);
+            }
+            catch {
+                menu = null;
+            }
+            if (menu)
+                tryInsertMenuButton_ACU();
+        });
+        menuButtonObserver_ACU = observer;
+        observer.observe(doc.body, { childList: true, subtree: true });
+    }
+    catch {
+        // 观察失败：短轮询兜底仍在。
+    }
+}
+function disconnectMenuButtonObserver_ACU() {
+    try {
+        menuButtonObserver_ACU?.disconnect();
+    }
+    catch {
+        // 忽略断开时的宿主异常。
+    }
+    menuButtonObserver_ACU = null;
+}
+/** 短轮询兜底（事件源缺失的宿主）；耗尽后走备用入口或放弃。 */
+function scheduleFallbackPoll_ACU(retry) {
+    if (menuButtonInstalled_ACU)
+        return;
+    if (retry >= FALLBACK_POLL_ROUNDS) {
+        insertFallbackOrGiveUp_ACU();
         return;
     }
-    const extensionsMenu = $('#extensionsMenu', doc);
-    if (!extensionsMenu.length) {
-        if (retry < 30) {
-            setTimeout(() => attemptInsert(retry + 1), 2000);
-        }
-        else {
-            logError_ACU('[ACU-V2] menu button registration aborted: #extensionsMenu not found after 30 retries.');
-        }
+    setTimeout(() => {
+        if (menuButtonInstalled_ACU)
+            return;
+        if (tryInsertMenuButton_ACU())
+            return;
+        scheduleFallbackPoll_ACU(retry + 1);
+    }, FALLBACK_POLL_INTERVAL_MS);
+}
+/**
+ * 单次注入尝试：主容器存在即注入（已存在则只补绑点击），成功返回 true。
+ * 失败返回 false，由事件/轮询路径重试。
+ */
+function tryInsertMenuButton_ACU() {
+    if (menuButtonInstalled_ACU)
+        return true;
+    let doc = null;
+    try {
+        doc = getAcuHostDocument();
+    }
+    catch {
+        return false;
+    }
+    if (!doc)
+        return false;
+    const existing = doc.getElementById(MENU_CONTAINER_ID);
+    if (existing) {
+        const item = existing.querySelector(`#${MENU_ITEM_ID}`) ?? existing;
+        ensureClickBound_ACU(item);
+        markMenuButtonInstalled_ACU('exists');
+        return true;
+    }
+    const menu = doc.getElementById(EXTENSIONS_MENU_ID);
+    if (!menu)
+        return false;
+    menu.appendChild(buildMenuButton_ACU(doc));
+    markMenuButtonInstalled_ACU(getAcuHostSource());
+    return true;
+}
+/**
+ * 备用入口：主容器长期缺失时，挂 wandButton 同宿主 #leftSendForm 旁
+ * （TT dev extensions.js：wandButton 模板即挂 #leftSendForm 下）。
+ * 双锚点缺失则放弃并记错。
+ */
+function insertFallbackOrGiveUp_ACU() {
+    if (menuButtonInstalled_ACU)
+        return;
+    let doc = null;
+    try {
+        doc = getAcuHostDocument();
+    }
+    catch {
+        doc = null;
+    }
+    const sendForm = doc?.getElementById(SEND_FORM_ID);
+    if (doc && sendForm?.parentNode) {
+        const button = buildMenuButton_ACU(doc);
+        sendForm.parentNode.insertBefore(button, sendForm.nextSibling);
+        markMenuButtonInstalled_ACU('fallback-leftSendForm');
+        logDebug_ACU('[ACU-V2] menu button registered beside #leftSendForm (#extensionsMenu missing, fallback entry).');
         return;
     }
-    const existingContainer = $(`#${MENU_CONTAINER_ID}`, extensionsMenu);
-    if (existingContainer.length > 0) {
-        existingContainer
-            .find(`#${MENU_ITEM_ID}`)
-            .off(CLICK_NS)
-            .on(CLICK_NS, handleClick);
+    disconnectMenuButtonObserver_ACU();
+    logError_ACU('[ACU-V2] menu button registration aborted: #extensionsMenu and #leftSendForm both missing.');
+}
+function markMenuButtonInstalled_ACU(where) {
+    menuButtonInstalled_ACU = true;
+    disconnectMenuButtonObserver_ACU();
+    logDebug_ACU(`[ACU-V2] menu button registered into ${where}`);
+}
+function buildMenuButton_ACU(doc) {
+    const container = doc.createElement('div');
+    container.className = 'extension_container interactable';
+    container.id = MENU_CONTAINER_ID;
+    container.tabIndex = 0;
+    const item = doc.createElement('div');
+    item.className = 'list-group-item flex-container flexGap5 interactable';
+    item.id = MENU_ITEM_ID;
+    item.title = '打开 TTonly·数据库';
+    item.innerHTML =
+        '<div class="fa-fw fa-solid fa-database extensionsMenuExtensionButton"></div>' +
+            '<span>TTonly·数据库</span>';
+    ensureClickBound_ACU(item);
+    container.appendChild(item);
+    return container;
+}
+function ensureClickBound_ACU(item) {
+    const el = item;
+    if (el.dataset && el.dataset[BOUND_FLAG] === '1')
         return;
+    try {
+        if (el.dataset)
+            el.dataset[BOUND_FLAG] = '1';
     }
-    const containerHtml = `<div class="extension_container interactable" id="${MENU_CONTAINER_ID}" tabindex="0"></div>`;
-    const itemHtml = `<div class="list-group-item flex-container flexGap5 interactable" id="${MENU_ITEM_ID}" ` +
-        `title="打开 TTonly·数据库">` +
-        `<div class="fa-fw fa-solid fa-database extensionsMenuExtensionButton"></div>` +
-        `<span>TTonly·数据库</span>` +
-        `</div>`;
-    const $container = $(containerHtml);
-    const $item = $(itemHtml);
-    $item.on(CLICK_NS, handleClick);
-    $container.append($item);
-    extensionsMenu.append($container);
-    logDebug_ACU(`[ACU-V2] menu button registered into ${getAcuHostSource()}`);
+    catch {
+        // dataset 不可用也继续绑（重复进入由 installed 标志拦截）。
+    }
+    item.addEventListener('click', handleClick);
 }
 async function handleClick(event) {
     event.stopPropagation();
-    const doc = getAcuHostDocument();
-    const $ = getHostJQuery();
-    if ($ && doc) {
-        const exMenuBtn = $('#extensionsMenuButton', doc);
-        const extensionsMenu = $('#extensionsMenu', doc);
-        if (exMenuBtn.length && extensionsMenu.is(':visible')) {
-            exMenuBtn.trigger('click');
-            await new Promise(resolve => setTimeout(resolve, 150));
+    let doc = null;
+    try {
+        doc = getAcuHostDocument();
+    }
+    catch {
+        doc = null;
+    }
+    if (doc) {
+        const menuButton = doc.getElementById(EXTENSIONS_MENU_BUTTON_ID);
+        const menu = doc.getElementById(EXTENSIONS_MENU_ID);
+        if (menuButton && menu && isMenuVisible_ACU(menu)) {
+            menuButton.click();
+            await new Promise(resolve => setTimeout(resolve, MENU_CLOSE_DELAY_MS));
         }
     }
     await openAcuV2App();
 }
-function getHostJQuery() {
-    const win = getAcuHostWindow();
-    return win?.jQuery || win?.$ || window.jQuery || window.$;
+/** jQuery :visible 的原生等价：只看菜单自身的 display（fadeIn/fadeOut 切的就是它）。 */
+function isMenuVisible_ACU(menu) {
+    try {
+        const view = menu.ownerDocument?.defaultView;
+        if (view && typeof view.getComputedStyle === 'function') {
+            return view.getComputedStyle(menu).display !== 'none';
+        }
+    }
+    catch {
+        // 取不到计算样式时按可见处理（宁可多关一次菜单，不阻塞开应用）。
+        return true;
+    }
+    return menu.style?.display !== 'none';
+}
+/** 仅供测试使用：重置模块级一次性状态（生产代码不调用）。 */
+function __resetAcuV2MenuButtonForTests_ACU() {
+    menuButtonInstalled_ACU = false;
+    menuButtonInitStarted_ACU = false;
+    disconnectMenuButtonObserver_ACU();
 }
 
 /**

@@ -433,6 +433,32 @@ describe('summary-vector-index-storage-service 安全 GC', () => {
     expect(h.remove).not.toHaveBeenCalled();
   });
 
+  it('scopeHints 缺省/为空/无有效 scope 时早退：零删除、零 blob 读取并 warn 可观测', async () => {
+    const legacyPath = 'TavernDB_ACU_vector_chat-a_iso-a_summary_old_snapshot';
+    const v2Path = 'TavernDB_ACU_vector_v2_scope:chat-a|iso-a|summary_snap-a_write-a_snapshot';
+    h.registry.mockResolvedValue({ files: [{ path: legacyPath }, { path: v2Path }] });
+
+    const optionSets: any[] = [{}, { scopeHints: [] }, { scopeHints: [{ chatKey: 'chat-a', isolationKey: '', sourceTableKey: '' }] }];
+    for (const options of optionSets) {
+      h.remove.mockClear();
+      h.read.mockClear();
+      h.register.mockClear();
+      h.unregister.mockClear();
+      h.logWarn.mockClear();
+      const result = await cleanupUnreachableSummaryVectorIndexFiles_ACU(options);
+      expect(result.deletedPaths).toEqual([]);
+      expect(result.failedDeletes).toEqual([]);
+      expect(result.scannedRegisteredFileCount).toBe(2);
+      expect(result.retainedPaths).toEqual(expect.arrayContaining([legacyPath, v2Path]));
+      expect(result.blockedByReachability).toEqual(expect.arrayContaining([legacyPath, v2Path]));
+      expect(h.remove).not.toHaveBeenCalled();
+      expect(h.read).not.toHaveBeenCalled();
+      expect(h.register).not.toHaveBeenCalled();
+      expect(h.unregister).not.toHaveBeenCalled();
+      expect(h.logWarn).toHaveBeenCalledWith(expect.stringContaining('scopeHints'));
+    }
+  });
+
   describe('升级前无损 token 路径（scope 指纹永远不匹配，需单独识别回收）', () => {
     const scope = { chatKey: 'chat-a', isolationKey: 'iso-a', sourceTableKey: 'summary' };
     const legacyToken = 'legacy:chat-a|iso-a|summary';

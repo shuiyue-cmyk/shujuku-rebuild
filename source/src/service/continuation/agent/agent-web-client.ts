@@ -6,7 +6,8 @@
  *   TT 内网页（WebView）直连）。百度百科没有 CORS 头且需要上游酒馆服务器
  *   `/api/search/visit` 转发——TT 仅提供 `/api/search/searxng`，没有该路由，故不可用。
  * - 通用搜索：仅 SearXNG，经 TT 同源路由 POST /api/search/searxng（请求体
- *   { baseUrl, query }，响应 text/html 结果页，见 TT tests/search-routes-contract.test.mjs）。
+ *   { baseUrl, query } + 可选 { preferences, categories }，响应 text/html 结果页，
+ *   见 TT tests/search-routes-contract.test.mjs）。
  *   DuckDuckGo（需 /visit 抓页）、Serper / Tavily（需上游 /api/search/<provider> 复用酒馆 key）
  *   在 TT 均无对应路由，故不可用。
  * - 任意网页抓取：需要上游 /api/search/visit，TT 未提供，webRead 只做域名策略判定后
@@ -56,6 +57,16 @@ export const AGENT_ENCYCLOPEDIA_SUPPORT_ACU: Record<AgentEncyclopediaSource_ACU,
   wikipedia_en: true,
   baidu: false,
 };
+
+/**
+ * SearXNG 可选透传键（TT SearxngSearchRequestDto.preferences/categories，Option+default；
+ * search-routes.js 全透传 dto，prepare_request 以 optional_text 拼参，空即不拼）。
+ * 有值才发，空不填——缺省不发时 TT 按 None 处理，与只发 { baseUrl, query } 等价。
+ */
+export interface SearxngSearchOptions_ACU {
+  preferences?: string;
+  categories?: string;
+}
 
 /** 单次出网请求超时。百科 API 通常 1–3 秒；SearXNG 经同源路由给宽一点。 */
 const WEB_REQUEST_TIMEOUT_MS_ACU = 20000;
@@ -320,25 +331,32 @@ export class AgentWebClient_ACU {
 
   /**
    * 通用网页搜索。TT 仅 SearXNG 可行（经同源路由 POST /api/search/searxng，
-   * 请求体 { baseUrl, query }，响应为 text/html 结果页）。
+   * 请求体 { baseUrl, query } + 可选 { preferences, categories }，响应为 text/html 结果页）。
    * @param query 检索词
-   * @param settings 网页检索设置（提供方与 SearXNG 地址）
+   * @param settings 网页检索设置（提供方、SearXNG 地址与可选透传键）
    */
-  async webSearch(query: string, settings: Pick<ContinuationWebResearchSettings_ACU, 'searchProvider' | 'searxngBaseUrl'>): Promise<{ hits: AgentWebSearchHit_ACU[]; note: string }> {
+  async webSearch(query: string, settings: Pick<ContinuationWebResearchSettings_ACU, 'searchProvider' | 'searxngBaseUrl'> & SearxngSearchOptions_ACU): Promise<{ hits: AgentWebSearchHit_ACU[]; note: string }> {
     const trimmed = query.trim();
     if (!trimmed) return { hits: [], note: '检索词为空' };
     const provider: ContinuationWebSearchProvider_ACU = settings.searchProvider;
-    if (provider === 'searxng') return this.searchSearxng_ACU(trimmed, settings.searxngBaseUrl);
+    if (provider === 'searxng') return this.searchSearxng_ACU(trimmed, settings.searxngBaseUrl, settings);
     return { hits: [], note: `${provider} 需要酒馆服务器「网页搜索」转发（上游 /api/search/${provider}），TT 仅提供 /api/search/searxng；请把搜索引擎切换为 SearXNG（自建或公共实例）后再搜` };
   }
 
-  private async searchSearxng_ACU(query: string, baseUrl: string): Promise<{ hits: AgentWebSearchHit_ACU[]; note: string }> {
+  private async searchSearxng_ACU(query: string, baseUrl: string, options: SearxngSearchOptions_ACU = {}): Promise<{ hits: AgentWebSearchHit_ACU[]; note: string }> {
     if (!baseUrl.trim()) return { hits: [], note: 'SearXNG 实例地址未配置（续写设置 → 网页检索 → SearXNG 实例地址，如 https://searx.example.org；可自建实例或选用公共实例）' };
     try {
+      // TT DTO 全透传（见 TT tests/search-routes-contract.test.mjs 三键断言）：
+      // preferences/categories 为 Option，有值才填，空（或全空白）不填。
+      const body: Record<string, string> = { baseUrl: baseUrl.trim(), query };
+      const preferences = options.preferences?.trim();
+      if (preferences) body.preferences = preferences;
+      const categories = options.categories?.trim();
+      if (categories) body.categories = categories;
       const response = await this.fetchDirect_ACU('/api/search/searxng', {
         method: 'POST',
         headers: { ...this.dependencies.hostHeaders(), 'Content-Type': 'application/json' },
-        body: JSON.stringify({ baseUrl: baseUrl.trim(), query }),
+        body: JSON.stringify(body),
       });
       if (!response.ok) return { hits: [], note: `SearXNG 请求失败（HTTP ${response.status}）：实例地址可能填错、实例离线，或实例拒绝了该查询` };
       return { hits: parseSearxngHtml_ACU(await response.text()), note: '' };

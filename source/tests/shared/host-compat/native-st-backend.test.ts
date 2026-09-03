@@ -143,6 +143,33 @@ describe('charLore 解析（settings.world_info_settings.world_info.charLore）'
     });
   });
 
+  it('TT DTO 形状：POST /api/settings/get 空体 → { world_names, settings: JSON 字符串 }（settings-routes.js 直传 get_sillytavern_settings）', async () => {
+    // TT dev 实态对照：
+    // - 路由：src/tauri/main/routes/settings-routes.js POST /api/settings/get → safeInvoke('get_sillytavern_settings')；
+    // - DTO：SillyTavernSettingsResponseDto { settings: String, world_names: Vec<String>, ... }；
+    // - 前端：script.js getSettings() settings = JSON.parse(data.settings)，world-info.js 取 data.world_names。
+    const charLore = [{ name: 'hero', extraBooks: ['附加书A'] }];
+    fetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        world_names: ['附加书A'],
+        settings: JSON.stringify({ world_info_settings: { world_info: { charLore } } }),
+      }),
+    });
+    const ctx = buildContext({
+      getWorldInfoNames: undefined,
+      characters: [{ name: '主角', avatar: 'hero.png', data: { extensions: { world: '主书' } } }],
+      characterId: 0,
+    });
+    const backend = createNativeStBackend_ACU(() => ctx);
+
+    // 取值路径：world_names 取顶层，charLore 取 settings 字符串反序列化后的 world_info_settings.world_info.charLore
+    expect(await backend.getCharWorldbookNames('current')).toEqual({ primary: '主书', additional: ['附加书A'] });
+    // 请求形状与 dev getSettings()/updateWorldInfoList 一致：POST + getRequestHeaders + 空 JSON 体
+    expect(fetchMock).toHaveBeenCalledWith('/api/settings/get', expect.objectContaining({ method: 'POST', body: '{}' }));
+    expect(fetchMock.mock.calls[0][1].headers['X-CSRF-Token']).toBe('csrf');
+  });
+
   it('旧错误形状 settings.world_info.charLore 不再被消费（回归守卫）', async () => {
     settingsResponse({
       world_names: [],

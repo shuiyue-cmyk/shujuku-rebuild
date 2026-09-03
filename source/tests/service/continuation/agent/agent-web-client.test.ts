@@ -142,6 +142,32 @@ describe('AgentWebClient_ACU 通用搜索与网页抓取（TT 路由实态）', 
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
+  it('SearXNG 可选键 preferences/categories 有值时全透传（TT DTO 全透传断言）', async () => {
+    const { client, fetch } = client_ACU((url, init) => {
+      expect(url).toBe('/api/search/searxng');
+      const body = JSON.parse(String(init?.body));
+      // 与 TT tests/search-routes-contract.test.mjs 的三键透传断言一致。
+      expect(body).toEqual({ baseUrl: 'http://localhost:8888', query: 'Tauri', preferences: 'lang=en', categories: 'it' });
+      return textResponse_ACU('<article class="result"><h3><a href="https://a.org/x">A</a></h3><p class="content">s</p></article>');
+    });
+    const result = await client.webSearch('Tauri', { searchProvider: 'searxng', searxngBaseUrl: 'http://localhost:8888', preferences: 'lang=en', categories: 'it' });
+    expect(result.hits).toEqual([{ title: 'A', url: 'https://a.org/x', snippet: 's' }]);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('SearXNG 可选键为空/全空白时不发送（TT prepare_request optional_text 语义）', async () => {
+    const { client, fetch } = client_ACU((url, init) => {
+      expect(url).toBe('/api/search/searxng');
+      expect(JSON.parse(String(init?.body))).toEqual({ baseUrl: 'http://localhost:8888', query: 'Tauri' });
+      return textResponse_ACU('<article class="result"><h3><a href="https://a.org/x">A</a></h3><p class="content">s</p></article>');
+    });
+    const empty = await client.webSearch('Tauri', { searchProvider: 'searxng', searxngBaseUrl: 'http://localhost:8888', preferences: '', categories: '   ' });
+    expect(empty.hits).toHaveLength(1);
+    const omitted = await client.webSearch('Tauri', { searchProvider: 'searxng', searxngBaseUrl: 'http://localhost:8888' });
+    expect(omitted.hits).toHaveLength(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
   it('SearXNG 未填地址时给出可操作提示且不出网；实例失败时说明原因', async () => {
     const { client, fetch } = client_ACU(() => textResponse_ACU(''));
     const result = await client.webSearch('q', { searchProvider: 'searxng', searxngBaseUrl: '' });
