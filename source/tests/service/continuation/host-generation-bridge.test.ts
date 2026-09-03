@@ -3,7 +3,7 @@ import { ContinuationHostGenerationBridge_ACU } from '../../../src/service/conti
 
 const identity = { chatIdentity: 'chat-a', taskId: 'task-a', stageId: 'stage-a', revision: 1, nodeId: 'node-a', turnId: 'turn-a', attemptId: 'attempt-a' };
 
-function createHarness(options: { tags?: string; chat?: any[]; send?: boolean; retry?: boolean; onWait?: () => void; autoContinueStates?: Array<{ eligible: boolean; delaySeconds: number }>; invalidatePendingAutoFill?: () => void } = {}) {
+function createHarness(options: { tags?: string; chat?: any[]; send?: boolean; retry?: boolean; minTokens?: number; tokens?: number; onWait?: () => void; autoContinueStates?: Array<{ eligible: boolean; delaySeconds: number }>; invalidatePendingAutoFill?: () => void } = {}) {
   let chat = options.chat ?? [{ is_user: true }];
   let chatIdentity = 'chat-a';
   let pending: any = null;
@@ -13,7 +13,7 @@ function createHarness(options: { tags?: string; chat?: any[]; send?: boolean; r
   const continueTask = vi.fn(async () => ({ preparedTurn: continuePreparedTurn }));
   const runtime = {
     getChatIdentity: () => chatIdentity, getChat: () => chat,
-    readPendingHostTurn: () => pending ? { settings: { loopTags: options.tags ?? '<ok>' }, pending } : null,
+    readPendingHostTurn: () => pending ? { settings: { loopTags: options.tags ?? '<ok>', minGenerationTokens: options.minTokens ?? 0 }, pending } : null,
     readAutoContinueState: vi.fn(() => autoContinueStates.length ? autoContinueStates.shift()! : { eligible: false, delaySeconds: 0 }),
     retryCurrentTurn,
     continueTask,
@@ -21,6 +21,7 @@ function createHarness(options: { tags?: string; chat?: any[]; send?: boolean; r
     bindHostTurnGeneration: vi.fn(async (_identity, generationSeq) => { pending = { ...pending, capture: { ...pending.capture, generationSeq } }; }),
     confirmCurrentTurn: vi.fn(async () => { pending = null; }),
     rejectHostTurnForMissingTags: vi.fn(async () => { pending = { ...pending, status: 'retry_ready' }; }),
+    rejectHostTurnForShortGeneration: vi.fn(async () => { pending = { ...pending, status: 'retry_ready' }; }),
     rejectHostTurnForFailedGeneration: vi.fn(async () => { pending = { ...pending, status: 'retry_ready' }; }),
     pauseForHostInputFailure: vi.fn(async () => { pending = { ...pending, status: 'exhausted' }; }),
     pauseForHostResultFailure: vi.fn(async () => { pending = { ...pending, status: 'exhausted' }; }),
@@ -40,6 +41,7 @@ function createHarness(options: { tags?: string; chat?: any[]; send?: boolean; r
     wait,
     materializationRetries: 1,
     materializationRetryDelayMs: 0,
+    countTokens: async () => options.tokens ?? 2000,
     ...(options.invalidatePendingAutoFill ? { invalidatePendingAutoFill: options.invalidatePendingAutoFill } : {}),
   });
   return { bridge, runtime, hostInput, retryCurrentTurn, continueTask, wait, setChat: (value: any[]) => { chat = value; }, setChatIdentity: (value: string) => { chatIdentity = value; } };
@@ -147,6 +149,45 @@ describe('ContinuationHostGenerationBridge_ACU', () => {
       capture: { capturedAt: 100, capturedChatLength: 1, capturedAiFloorCount: 0, generationSeq: null },
     });
     expect(h.runtime.confirmCurrentTurn).not.toHaveBeenCalled();
+  });
+
+  it('retries via host regenerate when the reply is shorter than the token threshold', async () => {
+    const invalidatePendingAutoFill = vi.fn();
+    const h = createHarness({ minTokens: 1000, tokens: 12, invalidatePendingAutoFill });
+    h.hostInput.send.mockImplementation(() => { h.bridge.onGenerationStarted(7); return true; });
+    h.hostInput.retryGeneration.mockImplementation(() => { h.bridge.onGenerationStarted(8); return true; });
+    await h.bridge.send(prepared);
+    h.setChat([{ is_user: true }, { is_user: false, mes: '<ok>短', message_id: 9 }]);
+    await h.bridge.onGenerationEnded(9, 7);
+
+    expect(h.runtime.rejectHostTurnForShortGeneration).toHaveBeenCalledWith({ identity, messageIndex: 1, tokenCount: 12, threshold: 1000 });
+    // 短楼同样会被宿主 regenerate 删掉重生成：先作废待填表防抖，避免对已删楼双写。
+    expect(invalidatePendingAutoFill).toHaveBeenCalledOnce();
+    expect(h.hostInput.removeLastMessage).not.toHaveBeenCalled();
+    expect(h.hostInput.retryGeneration).toHaveBeenCalledWith('regenerate');
+    expect(h.runtime.confirmCurrentTurn).not.toHaveBeenCalled();
+  });
+
+  it('confirms short bodies directly when the token threshold is 0 (gate off)', async () => {
+    const h = createHarness({ minTokens: 0, tokens: 5 });
+    h.hostInput.send.mockImplementation(() => { h.bridge.onGenerationStarted(7); return true; });
+    await h.bridge.send(prepared);
+    h.setChat([{ is_user: true }, { is_user: false, mes: '<ok>短', message_id: 9 }]);
+    await h.bridge.onGenerationEnded(9, 7);
+
+    expect(h.runtime.rejectHostTurnForShortGeneration).not.toHaveBeenCalled();
+    expect(h.runtime.confirmCurrentTurn).toHaveBeenCalledWith(identity, 1);
+  });
+
+  it('treats a non-integer token threshold as gate off instead of blocking confirmation', async () => {
+    const h = createHarness({ minTokens: 1.5, tokens: 5 });
+    h.hostInput.send.mockImplementation(() => { h.bridge.onGenerationStarted(7); return true; });
+    await h.bridge.send(prepared);
+    h.setChat([{ is_user: true }, { is_user: false, mes: '<ok>短', message_id: 9 }]);
+    await h.bridge.onGenerationEnded(9, 7);
+
+    expect(h.runtime.rejectHostTurnForShortGeneration).not.toHaveBeenCalled();
+    expect(h.runtime.confirmCurrentTurn).toHaveBeenCalledWith(identity, 1);
   });
 
   it('pauses without retrying when the invalid reply is no longer the host tail', async () => {

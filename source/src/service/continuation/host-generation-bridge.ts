@@ -1,5 +1,6 @@
 import { countAiMessages_ACU, resolveGeneratedAiMessageIndex_ACU, type AutoFillIntent_ACU } from '../runtime/message-handler';
 import { validateLoopTags_ACU } from '../loop/loop-evaluator';
+import { countTextTokens_ACU } from '../ai/token-counter';
 import { logAgentSession_ACU } from './agent/agent-session-log';
 import { resolveHostRetryMode_ACU } from './host-retry-mode';
 import type { ContinuationPreparedTurnInstruction_ACU } from './stage-execution-engine';
@@ -10,13 +11,14 @@ export interface ContinuationHostTurnRuntime_ACU {
   getChatIdentity(): string;
   getChat(): any[];
   retryCurrentTurn(): Promise<{ retryHostGeneration?: boolean }>;
-  readPendingHostTurn(): { settings: { loopTags: string; retryDelaySeconds?: number }; pending: { identity: TurnAttemptIdentity_ACU; capture: ContinuationHostGenerationCapture_ACU; status: 'awaiting_generation' | 'retry_ready' | 'exhausted' } } | null;
+  readPendingHostTurn(): { settings: { loopTags: string; retryDelaySeconds?: number; minGenerationTokens?: number }; pending: { identity: TurnAttemptIdentity_ACU; capture: ContinuationHostGenerationCapture_ACU; status: 'awaiting_generation' | 'retry_ready' | 'exhausted' } } | null;
   readAutoContinueState(): { eligible: boolean; delaySeconds: number };
   continueTask(): Promise<{ preparedTurn?: ContinuationPreparedTurnInstruction_ACU; retryHostGeneration?: boolean }>;
   recordHostTurn(input: { identity: TurnAttemptIdentity_ACU; capture: ContinuationHostGenerationCapture_ACU }): Promise<unknown>;
   bindHostTurnGeneration(identity: TurnAttemptIdentity_ACU, generationSeq: number): Promise<void>;
   confirmCurrentTurn(identity: TurnAttemptIdentity_ACU, messageIndex?: number): Promise<unknown>;
   rejectHostTurnForMissingTags(input: { identity: TurnAttemptIdentity_ACU; messageIndex: number }): Promise<unknown>;
+  rejectHostTurnForShortGeneration(input: { identity: TurnAttemptIdentity_ACU; messageIndex: number; tokenCount: number; threshold: number }): Promise<unknown>;
   rejectHostTurnForFailedGeneration(identity: TurnAttemptIdentity_ACU): Promise<unknown>;
   pauseForHostInputFailure(identity: TurnAttemptIdentity_ACU): Promise<unknown>;
   pauseForHostResultFailure(identity: TurnAttemptIdentity_ACU): Promise<unknown>;
@@ -49,6 +51,11 @@ export interface ContinuationHostGenerationBridgeDependencies_ACU {
   wait(ms: number): Promise<void>;
   materializationRetries: number;
   materializationRetryDelayMs: number;
+  /**
+   * 短正文判定的 token 计数器。默认用本库 countTextTokens_ACU（宿主分词器优先、
+   * 缺失时按字数估算，TT 下不出网）；测试可注入假计数器做确定性断言。
+   */
+  countTokens?: (text: string) => Promise<number>;
   /**
    * 作废在途的自动填表防抖（坏标签楼交还宿主 regenerate 重生成前的互斥钩子，见 onGenerationEnded）。
    * 缺省不做任何事（测试注入场景）。
@@ -229,7 +236,8 @@ export class ContinuationHostGenerationBridge_ACU {
         return;
       }
       const message = chat[messageIndex];
-      if (!message || !validateLoopTags_ACU(String(message.mes ?? ''), snapshot.settings.loopTags)) {
+      const body = String(message.mes ?? '');
+      if (!message || !validateLoopTags_ACU(body, snapshot.settings.loopTags)) {
         // [双写互斥] 坏标签楼将由宿主 regenerate 删掉重生成：本轮正文对应的
         // 自动填表防抖（GENERATION_ENDED 派发，500ms 窗口）此刻指向即将被删掉的楼，若让它到期
         // 就会对已删楼层跑一次填表，regenerate 后的第二次 ENDED 再填一次 → 双写。作废这条
@@ -238,6 +246,20 @@ export class ContinuationHostGenerationBridge_ACU {
         await this.dependencies.runtime.rejectHostTurnForMissingTags({ identity: claimedIdentity, messageIndex });
         await this.autoRetryHostGenerationIfReady_ACU(claimedIdentity, snapshot.settings.retryDelaySeconds ?? 0);
         return;
+      }
+      // 短正文质量门：低于阈值的正文视为截断/出错，与坏标签同构地 reject + 自动重试。
+      // 0 表示关闭（阈值缺失或非整数同样视为关闭，不阻断正常确认链）。
+      // 短楼在重试时会被宿主 regenerate 删掉重生成，故同样先作废待填表防抖，避免对已删楼双写。
+      const minTokens = Number.isInteger(snapshot.settings.minGenerationTokens) ? snapshot.settings.minGenerationTokens as number : 0;
+      if (minTokens > 0) {
+        const countTokens = this.dependencies.countTokens ?? countTextTokens_ACU;
+        const tokenCount = await countTokens(body);
+        if (tokenCount < minTokens) {
+          try { this.dependencies.invalidatePendingAutoFill?.(); } catch { /* 填表作废失败不阻断重试链 */ }
+          await this.dependencies.runtime.rejectHostTurnForShortGeneration({ identity: claimedIdentity, messageIndex, tokenCount, threshold: minTokens });
+          await this.autoRetryHostGenerationIfReady_ACU(claimedIdentity, snapshot.settings.retryDelaySeconds ?? 0);
+          return;
+        }
       }
       await this.dependencies.runtime.confirmCurrentTurn(claimedIdentity, messageIndex);
     } catch {

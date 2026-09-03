@@ -65,6 +65,7 @@ export type ContinuationErrorCode_ACU =
   | 'CONTINUATION_HOST_INPUT_UNAVAILABLE'
   | 'CONTINUATION_GENERATION_TAGS_MISSING'
   | 'CONTINUATION_GENERATION_FAILED'
+  | 'CONTINUATION_GENERATION_TOO_SHORT'
   | 'CONTINUATION_AGENT_PROTOCOL_INVALID'
   | 'CONTINUATION_AGENT_ITERATIONS_EXHAUSTED'
   | 'CONTINUATION_AGENT_BLOCKED'
@@ -303,6 +304,11 @@ export interface ContinuationSettings_ACU {
   retryDelaySeconds: number;
   generationRetryLimit: number;
   internalAiRetryLimit: number;
+  /**
+   * 宿主正文低于该 token 数视为截断/出错并自动重试。0 表示关闭该校验。
+   * TT 下计数走宿主分词器（缺失时按字数估算），与正文读取预算共用同一口径。
+   */
+  minGenerationTokens: number;
   /**
    * 连续高压轮（pressure + turn）的上限，跨阶段累计，0 表示关闭该校验。
    * 它只兜底「长时间没有任何喘息」这种病态，不规定张弛的周期——周期由阶段形态决定。

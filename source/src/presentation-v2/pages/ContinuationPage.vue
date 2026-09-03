@@ -101,8 +101,11 @@
               <AcuFormRow label="自动阶段上限" hint="连续自动推进多少个阶段后暂停，等待你确认。">
                 <AcuInput v-model="settingsDraft.maxAutomaticStages" type="number" :min="1" />
               </AcuFormRow>
-              <AcuFormRow label="正文重试次数" hint="宿主生成失败、被中止或正文缺少循环标签时最多重试几次。">
+              <AcuFormRow label="正文重试次数" hint="宿主生成失败、被中止、正文缺少循环标签或短于最低 token 数时最多重试几次。">
                 <AcuInput v-model="settingsDraft.generationRetryLimit" type="number" :min="0" />
+              </AcuFormRow>
+              <AcuFormRow label="正文最低 token 数" hint="宿主正文低于该值视为截断或出错并自动重试，0 为不检查（TT 下按宿主分词器统计，缺失时按字数估算）。">
+                <AcuInput v-model="settingsDraft.minGenerationTokens" type="number" :min="0" />
               </AcuFormRow>
               <AcuFormRow label="内部 AI 重试次数" hint="Agent 自身调用 API 失败时的重试次数。">
                 <AcuInput v-model="settingsDraft.internalAiRetryLimit" type="number" :min="0" />
@@ -670,6 +673,7 @@ function normalizeSettingsDraft(): ContinuationSettings_ACU {
     customStoryArcVolumeCount,
     maxAutomaticStages: requiredInteger(source.maxAutomaticStages, '自动阶段上限'),
     generationRetryLimit: requiredInteger(source.generationRetryLimit, '正文重试次数'),
+    minGenerationTokens: requiredInteger(source.minGenerationTokens, '正文最低 token 数'),
     internalAiRetryLimit: requiredInteger(source.internalAiRetryLimit, '内部 AI 重试次数'),
     loopDelaySeconds: requiredInteger(source.loopDelaySeconds, '轮次延迟'),
     retryDelaySeconds: requiredInteger(source.retryDelaySeconds, '重试延迟'),
@@ -704,7 +708,7 @@ function normalizeSettingsDraft(): ContinuationSettings_ACU {
       maxExtraReads: requiredRangeInteger(source.agentRunBudget.maxExtraReads, '子代理工具轮上限', 0, 10),
     },
   };
-  if (normalized.maxAutomaticStages < 1 || normalized.generationRetryLimit < 0 || normalized.internalAiRetryLimit < 0 || normalized.loopDelaySeconds < 0 || normalized.retryDelaySeconds < 0 || normalized.totalDurationMinutes < 0 || normalized.storyWindowFloors < 0 || normalized.storyTailFloors < 0 || normalized.agentHistoryTokenBudget < 0 || normalized.agentReadFallbackTokens < 1) {
+  if (normalized.maxAutomaticStages < 1 || normalized.generationRetryLimit < 0 || normalized.minGenerationTokens < 0 || normalized.internalAiRetryLimit < 0 || normalized.loopDelaySeconds < 0 || normalized.retryDelaySeconds < 0 || normalized.totalDurationMinutes < 0 || normalized.storyWindowFloors < 0 || normalized.storyTailFloors < 0 || normalized.agentHistoryTokenBudget < 0 || normalized.agentReadFallbackTokens < 1) {
     throw new Error('续写设置中的数值不能低于允许范围');
   }
   // TT 通道守卫：启用网页检索时，只允许 TT 真实可行的通道组合；不可行通道在保存时即拦下并给出可操作提示。

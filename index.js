@@ -78004,7 +78004,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.0.9" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.0.10" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -115738,6 +115738,8 @@ function buildDefaultContinuationAgentPrompts_ACU() {
     };
 }
 
+/** 宿主正文短于该 token 数视为截断或出错，触发与生成失败同构的自动重试。0 表示关闭。 */
+const CONTINUATION_MIN_GENERATION_TOKENS_DEFAULT_ACU = 1000;
 const CONTINUATION_TURN_RANGES_ACU = {
     short: { min: 3, max: 5 },
     standard: { min: 6, max: 10 },
@@ -115932,6 +115934,7 @@ function buildDefaultContinuationSettings_ACU() {
         retryDelaySeconds: 3,
         generationRetryLimit: 3,
         internalAiRetryLimit: 3,
+        minGenerationTokens: CONTINUATION_MIN_GENERATION_TOKENS_DEFAULT_ACU,
         maxConsecutivePressureTurns: CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_DEFAULT_ACU,
         storyWindowFloors: AGENT_STORY_WINDOW_DEFAULT_ACU,
         agentHistoryTokenBudget: AGENT_HISTORY_TOKEN_BUDGET_DEFAULT_ACU,
@@ -116721,7 +116724,7 @@ const STAGE_STATUSES_ACU = ['planning', 'awaiting_review', 'running', 'completed
 const REVISION_REASONS_ACU = ['initial', 'auto_next_stage', 'manual_replan'];
 const STOP_REASONS_ACU = ['manual', 'duration_reached', 'stage_limit_reached', 'outline_validation_failed', 'internal_ai_retry_exhausted', 'generation_retry_exhausted', 'host_input_unavailable', 'api_preset_missing', 'state_invalid', 'chat_changed', 'completed'];
 const ERROR_PHASES_ACU = ['load', 'persist', 'outline_prompt', 'outline_call', 'outline_parse', 'outline_validate', 'turn_prompt', 'turn_call', 'host_send', 'generation_evaluate', 'replan', 'agent_loop', 'agent_delegate', 'agent_persist'];
-const ERROR_CODES_ACU = ['CONTINUATION_CONFIG_MISSING', 'CONTINUATION_CONFIG_NOT_INTEGER', 'CONTINUATION_CONFIG_OUT_OF_RANGE', 'CONTINUATION_STAGE_SIZE_INVALID', 'CONTINUATION_CUSTOM_RANGE_INVALID', 'CONTINUATION_ENVELOPE_INVALID', 'CONTINUATION_CHAT_UNAVAILABLE', 'CONTINUATION_CHAT_CHANGED', 'CONTINUATION_WRITE_GUARD_MISMATCH', 'CONTINUATION_PERSIST_FAILED', 'CONTINUATION_PROMPT_INVALID', 'CONTINUATION_PROMPT_EMPTY', 'CONTINUATION_API_PRESET_MISSING', 'CONTINUATION_MIGRATION_INVALID', 'CONTINUATION_OUTLINE_NOT_OBJECT', 'CONTINUATION_OUTLINE_UNKNOWN_FIELD', 'CONTINUATION_OUTLINE_FIELD_MISSING', 'CONTINUATION_OUTLINE_FIELD_TYPE_INVALID', 'CONTINUATION_OUTLINE_STRING_EMPTY', 'CONTINUATION_OUTLINE_SCHEMA_VERSION_INVALID', 'CONTINUATION_OUTLINE_TOTAL_TURNS_OUT_OF_RANGE', 'CONTINUATION_OUTLINE_NODES_EMPTY', 'CONTINUATION_OUTLINE_NODE_ID_DUPLICATE', 'CONTINUATION_OUTLINE_TURN_ID_DUPLICATE', 'CONTINUATION_OUTLINE_SUGGESTED_TURNS_INVALID', 'CONTINUATION_OUTLINE_NODE_TURN_COUNT_MISMATCH', 'CONTINUATION_OUTLINE_TOTAL_TURNS_MISMATCH', 'CONTINUATION_OUTLINE_PACING_INVALID', 'CONTINUATION_REPLAN_CONTEXT_INVALID', 'CONTINUATION_REPLAN_COMPLETED_PREFIX_CHANGED', 'CONTINUATION_OUTLINE_JSON_INVALID', 'CONTINUATION_INTERNAL_AI_REQUEST_FAILED', 'CONTINUATION_OUTLINE_RETRY_EXHAUSTED', 'CONTINUATION_REVISION_FROZEN', 'CONTINUATION_TURN_INSTRUCTION_EMPTY', 'CONTINUATION_TURN_INSTRUCTION_RETRY_EXHAUSTED', 'CONTINUATION_INTERNAL_REQUEST_STALE', 'CONTINUATION_OPERATION_BUSY', 'CONTINUATION_ORIGIN_INSTRUCTION_EMPTY', 'CONTINUATION_TASK_NOT_FOUND', 'CONTINUATION_TASK_STATE_INVALID', 'CONTINUATION_HOST_INPUT_UNAVAILABLE', 'CONTINUATION_GENERATION_TAGS_MISSING', 'CONTINUATION_GENERATION_FAILED', 'CONTINUATION_AGENT_PROTOCOL_INVALID', 'CONTINUATION_AGENT_ITERATIONS_EXHAUSTED', 'CONTINUATION_AGENT_BLOCKED', 'CONTINUATION_AGENT_SUBAGENT_FAILED', 'CONTINUATION_AGENT_WRITE_REJECTED', 'CONTINUATION_AGENT_OUTLINE_REPLANNED', 'CONTINUATION_AGENT_SNAPSHOT_INVALID'];
+const ERROR_CODES_ACU = ['CONTINUATION_CONFIG_MISSING', 'CONTINUATION_CONFIG_NOT_INTEGER', 'CONTINUATION_CONFIG_OUT_OF_RANGE', 'CONTINUATION_STAGE_SIZE_INVALID', 'CONTINUATION_CUSTOM_RANGE_INVALID', 'CONTINUATION_ENVELOPE_INVALID', 'CONTINUATION_CHAT_UNAVAILABLE', 'CONTINUATION_CHAT_CHANGED', 'CONTINUATION_WRITE_GUARD_MISMATCH', 'CONTINUATION_PERSIST_FAILED', 'CONTINUATION_PROMPT_INVALID', 'CONTINUATION_PROMPT_EMPTY', 'CONTINUATION_API_PRESET_MISSING', 'CONTINUATION_MIGRATION_INVALID', 'CONTINUATION_OUTLINE_NOT_OBJECT', 'CONTINUATION_OUTLINE_UNKNOWN_FIELD', 'CONTINUATION_OUTLINE_FIELD_MISSING', 'CONTINUATION_OUTLINE_FIELD_TYPE_INVALID', 'CONTINUATION_OUTLINE_STRING_EMPTY', 'CONTINUATION_OUTLINE_SCHEMA_VERSION_INVALID', 'CONTINUATION_OUTLINE_TOTAL_TURNS_OUT_OF_RANGE', 'CONTINUATION_OUTLINE_NODES_EMPTY', 'CONTINUATION_OUTLINE_NODE_ID_DUPLICATE', 'CONTINUATION_OUTLINE_TURN_ID_DUPLICATE', 'CONTINUATION_OUTLINE_SUGGESTED_TURNS_INVALID', 'CONTINUATION_OUTLINE_NODE_TURN_COUNT_MISMATCH', 'CONTINUATION_OUTLINE_TOTAL_TURNS_MISMATCH', 'CONTINUATION_OUTLINE_PACING_INVALID', 'CONTINUATION_REPLAN_CONTEXT_INVALID', 'CONTINUATION_REPLAN_COMPLETED_PREFIX_CHANGED', 'CONTINUATION_OUTLINE_JSON_INVALID', 'CONTINUATION_INTERNAL_AI_REQUEST_FAILED', 'CONTINUATION_OUTLINE_RETRY_EXHAUSTED', 'CONTINUATION_REVISION_FROZEN', 'CONTINUATION_TURN_INSTRUCTION_EMPTY', 'CONTINUATION_TURN_INSTRUCTION_RETRY_EXHAUSTED', 'CONTINUATION_INTERNAL_REQUEST_STALE', 'CONTINUATION_OPERATION_BUSY', 'CONTINUATION_ORIGIN_INSTRUCTION_EMPTY', 'CONTINUATION_TASK_NOT_FOUND', 'CONTINUATION_TASK_STATE_INVALID', 'CONTINUATION_HOST_INPUT_UNAVAILABLE', 'CONTINUATION_GENERATION_TAGS_MISSING', 'CONTINUATION_GENERATION_FAILED', 'CONTINUATION_GENERATION_TOO_SHORT', 'CONTINUATION_AGENT_PROTOCOL_INVALID', 'CONTINUATION_AGENT_ITERATIONS_EXHAUSTED', 'CONTINUATION_AGENT_BLOCKED', 'CONTINUATION_AGENT_SUBAGENT_FAILED', 'CONTINUATION_AGENT_WRITE_REJECTED', 'CONTINUATION_AGENT_OUTLINE_REPLANNED', 'CONTINUATION_AGENT_SNAPSHOT_INVALID'];
 const TIMELINE_KINDS_ACU = ['task_created', 'outline_ready', 'turn_sent', 'turn_completed', 'turn_retry', 'stage_completed', 'paused', 'stopped', 'failed'];
 function isRecord_ACU$6(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -117440,12 +117443,16 @@ function validateSettings_ACU(raw) {
     // Agent 运行预算开放为设置（V17）之前的信封没有该字段；补默认即无感迁移。
     if (!Object.prototype.hasOwnProperty.call(raw, 'agentRunBudget'))
         raw.agentRunBudget = { ...DEFAULT_AGENT_RUN_BUDGET_ACU };
+    // 短正文质量门（V9.0.3 曾整链删除，现恢复）：旧信封没有该键时补默认 1000，
+    // 含该键的旧信封走下面的 keys/requireInteger 正常校验，不再报未知键。
+    if (!Object.prototype.hasOwnProperty.call(raw, 'minGenerationTokens'))
+        raw.minGenerationTokens = CONTINUATION_MIN_GENERATION_TOKENS_DEFAULT_ACU;
     // 总纲卷数与阶段轮次是两条独立的尺度。旧信封没有卷数计划时默认采用中线档。
     if (!Object.prototype.hasOwnProperty.call(raw, 'storyArcVolumePlan'))
         raw.storyArcVolumePlan = 'medium';
     if (!Object.prototype.hasOwnProperty.call(raw, 'customStoryArcVolumeCount'))
         raw.customStoryArcVolumeCount = null;
-    const keys = ['stageSize', 'customTurnMin', 'customTurnMax', 'storyArcVolumePlan', 'customStoryArcVolumeCount', 'outlinePreview', 'autoNextStage', 'maxAutomaticStages', 'loopTags', 'loopDelaySeconds', 'totalDurationMinutes', 'retryDelaySeconds', 'generationRetryLimit', 'internalAiRetryLimit', 'maxConsecutivePressureTurns', 'storyWindowFloors', 'agentHistoryTokenBudget', 'storyTailFloors', 'agentReadTokenBudget', 'agentReadFallbackTokens', 'finalReview', 'webResearch', 'contextExtractRules', 'contextExcludeRules', 'agentRunBudget', 'apiPresetMode', 'fixedApiPresetName', 'promptCacheEnabled', 'agentApiPresets', 'outlinePrompt', 'agentPrompts'];
+    const keys = ['stageSize', 'customTurnMin', 'customTurnMax', 'storyArcVolumePlan', 'customStoryArcVolumeCount', 'outlinePreview', 'autoNextStage', 'maxAutomaticStages', 'loopTags', 'loopDelaySeconds', 'totalDurationMinutes', 'retryDelaySeconds', 'generationRetryLimit', 'internalAiRetryLimit', 'minGenerationTokens', 'maxConsecutivePressureTurns', 'storyWindowFloors', 'agentHistoryTokenBudget', 'storyTailFloors', 'agentReadTokenBudget', 'agentReadFallbackTokens', 'finalReview', 'webResearch', 'contextExtractRules', 'contextExcludeRules', 'agentRunBudget', 'apiPresetMode', 'fixedApiPresetName', 'promptCacheEnabled', 'agentApiPresets', 'outlinePrompt', 'agentPrompts'];
     requireKeys_ACU(raw, keys, 'settings', ['promptForceDefaultVersion']);
     if (!['short', 'standard', 'long', 'custom'].includes(raw.stageSize))
         fail_ACU$2('CONTINUATION_ENVELOPE_INVALID', 'stageSize 非法');
@@ -117551,7 +117558,7 @@ function validateSettings_ACU(raw) {
         outlinePreview: requireBoolean_ACU(raw.outlinePreview, 'settings.outlinePreview'), autoNextStage: requireBoolean_ACU(raw.autoNextStage, 'settings.autoNextStage'),
         maxAutomaticStages: requireInteger_ACU(raw.maxAutomaticStages, 'settings.maxAutomaticStages', 1), loopTags: requireString_ACU(raw.loopTags, 'settings.loopTags'),
         loopDelaySeconds: requireInteger_ACU(raw.loopDelaySeconds, 'settings.loopDelaySeconds', 0), totalDurationMinutes: requireInteger_ACU(raw.totalDurationMinutes, 'settings.totalDurationMinutes', 0), retryDelaySeconds: requireInteger_ACU(raw.retryDelaySeconds, 'settings.retryDelaySeconds', 0),
-        generationRetryLimit: requireInteger_ACU(raw.generationRetryLimit, 'settings.generationRetryLimit', 0), internalAiRetryLimit: requireInteger_ACU(raw.internalAiRetryLimit, 'settings.internalAiRetryLimit', 0), maxConsecutivePressureTurns: requireBoundedInteger_ACU(raw.maxConsecutivePressureTurns, 'settings.maxConsecutivePressureTurns', CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_ACU),
+        generationRetryLimit: requireInteger_ACU(raw.generationRetryLimit, 'settings.generationRetryLimit', 0), internalAiRetryLimit: requireInteger_ACU(raw.internalAiRetryLimit, 'settings.internalAiRetryLimit', 0), minGenerationTokens: requireInteger_ACU(raw.minGenerationTokens, 'settings.minGenerationTokens', 0), maxConsecutivePressureTurns: requireBoundedInteger_ACU(raw.maxConsecutivePressureTurns, 'settings.maxConsecutivePressureTurns', CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_ACU),
         storyWindowFloors: requireInteger_ACU(raw.storyWindowFloors, 'settings.storyWindowFloors', 0), agentHistoryTokenBudget: requireInteger_ACU(raw.agentHistoryTokenBudget, 'settings.agentHistoryTokenBudget', 0),
         storyTailFloors: requireInteger_ACU(raw.storyTailFloors, 'settings.storyTailFloors', 0), agentReadTokenBudget: validateReadTokenBudget_ACU(raw.agentReadTokenBudget), agentReadFallbackTokens: requireInteger_ACU(raw.agentReadFallbackTokens, 'settings.agentReadFallbackTokens', 1),
         finalReview: validateFinalReviewSettings_ACU(raw.finalReview),
@@ -121186,6 +121193,15 @@ class ContinuationOrchestrator_ACU {
     }
     async rejectHostTurnForMissingTags(input) {
         const error = createContinuationError_ACU('CONTINUATION_GENERATION_TAGS_MISSING', 'generation_evaluate', '宿主正文缺少必需标签', true, { messageIndex: input.messageIndex });
+        return this.rejectHostTurnAttempt_ACU(input.identity, error, input.messageIndex);
+    }
+    /**
+     * 宿主正文短于最低 token 数（截断/水文）：与标签缺失同构地消耗一次重试额度并转
+     * retry_ready，由桥按重试延迟自动重发当前轮；额度耗尽落 generation_retry_exhausted
+     *（可手动继续恢复）。短楼由宿主 regenerate 删掉重生成，不会残留重复正文。
+     */
+    async rejectHostTurnForShortGeneration(input) {
+        const error = createContinuationError_ACU('CONTINUATION_GENERATION_TOO_SHORT', 'generation_evaluate', `宿主正文约 ${input.tokenCount} tokens，低于阈值 ${input.threshold}，视为截断或出错`, true, { messageIndex: input.messageIndex, tokenCount: input.tokenCount, threshold: input.threshold });
         return this.rejectHostTurnAttempt_ACU(input.identity, error, input.messageIndex);
     }
     /**
@@ -128463,7 +128479,8 @@ class ContinuationHostGenerationBridge_ACU {
                 return;
             }
             const message = chat[messageIndex];
-            if (!message || !validateLoopTags_ACU(String(message.mes ?? ''), snapshot.settings.loopTags)) {
+            const body = String(message.mes ?? '');
+            if (!message || !validateLoopTags_ACU(body, snapshot.settings.loopTags)) {
                 // [双写互斥] 坏标签楼将由宿主 regenerate 删掉重生成：本轮正文对应的
                 // 自动填表防抖（GENERATION_ENDED 派发，500ms 窗口）此刻指向即将被删掉的楼，若让它到期
                 // 就会对已删楼层跑一次填表，regenerate 后的第二次 ENDED 再填一次 → 双写。作废这条
@@ -128475,6 +128492,23 @@ class ContinuationHostGenerationBridge_ACU {
                 await this.dependencies.runtime.rejectHostTurnForMissingTags({ identity: claimedIdentity, messageIndex });
                 await this.autoRetryHostGenerationIfReady_ACU(claimedIdentity, snapshot.settings.retryDelaySeconds ?? 0);
                 return;
+            }
+            // 短正文质量门：低于阈值的正文视为截断/出错，与坏标签同构地 reject + 自动重试。
+            // 0 表示关闭（阈值缺失或非整数同样视为关闭，不阻断正常确认链）。
+            // 短楼在重试时会被宿主 regenerate 删掉重生成，故同样先作废待填表防抖，避免对已删楼双写。
+            const minTokens = Number.isInteger(snapshot.settings.minGenerationTokens) ? snapshot.settings.minGenerationTokens : 0;
+            if (minTokens > 0) {
+                const countTokens = this.dependencies.countTokens ?? countTextTokens_ACU;
+                const tokenCount = await countTokens(body);
+                if (tokenCount < minTokens) {
+                    try {
+                        this.dependencies.invalidatePendingAutoFill?.();
+                    }
+                    catch { /* 填表作废失败不阻断重试链 */ }
+                    await this.dependencies.runtime.rejectHostTurnForShortGeneration({ identity: claimedIdentity, messageIndex, tokenCount, threshold: minTokens });
+                    await this.autoRetryHostGenerationIfReady_ACU(claimedIdentity, snapshot.settings.retryDelaySeconds ?? 0);
+                    return;
+                }
             }
             await this.dependencies.runtime.confirmCurrentTurn(claimedIdentity, messageIndex);
         }
@@ -128722,6 +128756,7 @@ function createSillyTavernContinuationHostBridge_ACU(orchestrator) {
             bindHostTurnGeneration: (identity, generationSeq) => orchestrator.bindHostTurnGeneration(identity, generationSeq),
             confirmCurrentTurn: (identity, messageIndex) => orchestrator.confirmCurrentTurn(identity, messageIndex),
             rejectHostTurnForMissingTags: input => orchestrator.rejectHostTurnForMissingTags(input),
+            rejectHostTurnForShortGeneration: input => orchestrator.rejectHostTurnForShortGeneration(input),
             rejectHostTurnForFailedGeneration: identity => orchestrator.rejectHostTurnForFailedGeneration(identity),
             pauseForHostInputFailure: identity => orchestrator.pauseForHostInputFailure(identity),
             pauseForHostResultFailure: identity => orchestrator.pauseForHostResultFailure(identity),
@@ -170979,6 +171014,7 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
                 customStoryArcVolumeCount,
                 maxAutomaticStages: requiredInteger(source.maxAutomaticStages, '自动阶段上限'),
                 generationRetryLimit: requiredInteger(source.generationRetryLimit, '正文重试次数'),
+                minGenerationTokens: requiredInteger(source.minGenerationTokens, '正文最低 token 数'),
                 internalAiRetryLimit: requiredInteger(source.internalAiRetryLimit, '内部 AI 重试次数'),
                 loopDelaySeconds: requiredInteger(source.loopDelaySeconds, '轮次延迟'),
                 retryDelaySeconds: requiredInteger(source.retryDelaySeconds, '重试延迟'),
@@ -171013,7 +171049,7 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
                     maxExtraReads: requiredRangeInteger(source.agentRunBudget.maxExtraReads, '子代理工具轮上限', 0, 10),
                 },
             };
-            if (normalized.maxAutomaticStages < 1 || normalized.generationRetryLimit < 0 || normalized.internalAiRetryLimit < 0 || normalized.loopDelaySeconds < 0 || normalized.retryDelaySeconds < 0 || normalized.totalDurationMinutes < 0 || normalized.storyWindowFloors < 0 || normalized.storyTailFloors < 0 || normalized.agentHistoryTokenBudget < 0 || normalized.agentReadFallbackTokens < 1) {
+            if (normalized.maxAutomaticStages < 1 || normalized.generationRetryLimit < 0 || normalized.minGenerationTokens < 0 || normalized.internalAiRetryLimit < 0 || normalized.loopDelaySeconds < 0 || normalized.retryDelaySeconds < 0 || normalized.totalDurationMinutes < 0 || normalized.storyWindowFloors < 0 || normalized.storyTailFloors < 0 || normalized.agentHistoryTokenBudget < 0 || normalized.agentReadFallbackTokens < 1) {
                 throw new Error('续写设置中的数值不能低于允许范围');
             }
             // TT 通道守卫：启用网页检索时，只允许 TT 真实可行的通道组合；不可行通道在保存时即拦下并给出可操作提示。
@@ -171255,8 +171291,8 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-v2-continuation-page[data-v-1fde0546] { min-height: 100%; padding: 20px; display: grid; gap: 18px;\n}\n.acu-v2-continuation-page__layout[data-v-1fde0546] { align-items: start;\n}\n.acu-v2-continuation-page__actions[data-v-1fde0546] { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 12px;\n}\n.acu-v2-continuation-page__actions--start[data-v-1fde0546] { justify-content: flex-start; margin-top: 0; margin-bottom: 12px;\n}\n.acu-v2-continuation-page__file-input[data-v-1fde0546] { display: none;\n}\n.acu-v2-continuation-page__error[data-v-1fde0546] { color: var(--acu-danger, #d65b5b); white-space: pre-wrap;\n}\n.acu-v2-continuation-page__meta[data-v-1fde0546] { color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap;\n}\n.acu-v2-continuation-page__settings-grid[data-v-1fde0546] { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start;\n}\n.acu-v2-continuation-page__settings-grid label[data-v-1fde0546] { display: grid; gap: 5px; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-page__settings-grid select[data-v-1fde0546] { min-height: 30px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 30%, transparent); border-radius: 4px; background: var(--acu-bg-2); color: var(--acu-text-1);\n}\n.acu-v2-continuation-page__toggles[data-v-1fde0546] { display: flex; flex-wrap: wrap; gap: 14px; margin: 14px 0;\n}\n.acu-v2-continuation-page__groups[data-v-1fde0546] { display: flex; flex-direction: column; gap: 8px; margin-top: 4px;\n}\n.acu-v2-continuation-page__group[data-v-1fde0546] {\r\n  border: 1px solid var(--acu-border, color-mix(in srgb, var(--acu-text-3) 18%, transparent));\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-bg-2) 72%, transparent);\n}\n.acu-v2-continuation-page__group[data-v-1fde0546] .acu-disclosure-group__header { border-radius: var(--acu-radius-sm);\n}\n.acu-v2-continuation-page__group[data-v-1fde0546] .acu-disclosure-group__body { gap: 12px; padding: 12px;\n}\n.acu-v2-continuation-page__group[data-v-1fde0546] .acu-disclosure-group__meta { max-width: 55%; overflow: hidden; text-overflow: ellipsis;\n}\n.acu-v2-continuation-page__group .acu-v2-continuation-page__actions[data-v-1fde0546] { margin-top: 0;\n}\n.acu-v2-continuation-page__subheading[data-v-1fde0546] { margin: 4px 0 0; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px); font-weight: 600;\n}\n.acu-v2-continuation-page__subheading[data-v-1fde0546]:first-child { margin-top: 0;\n}\n@media (max-width: 860px) {\n.acu-v2-continuation-page[data-v-1fde0546] { padding: 14px;\n}\n}\n@media (max-width: 640px) {\n.acu-v2-continuation-page[data-v-1fde0546] { padding: 10px; gap: 12px;\n}\n.acu-v2-continuation-page__settings-grid[data-v-1fde0546] { grid-template-columns: 1fr;\n}\n.acu-v2-continuation-page__actions[data-v-1fde0546] > * { flex: 1 1 auto;\n}\n.acu-v2-continuation-page__group[data-v-1fde0546] .acu-disclosure-group__meta { display: none;\n}\n}\r\n", "src/presentation-v2/pages/ContinuationPage.vue#style-0-1fde0546");
-var ContinuationPage_vue_vue_type_style_index_0_scoped_1fde0546_lang = null;
+injectSfcStyle("\n.acu-v2-continuation-page[data-v-9029b70d] { min-height: 100%; padding: 20px; display: grid; gap: 18px;\n}\n.acu-v2-continuation-page__layout[data-v-9029b70d] { align-items: start;\n}\n.acu-v2-continuation-page__actions[data-v-9029b70d] { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 12px;\n}\n.acu-v2-continuation-page__actions--start[data-v-9029b70d] { justify-content: flex-start; margin-top: 0; margin-bottom: 12px;\n}\n.acu-v2-continuation-page__file-input[data-v-9029b70d] { display: none;\n}\n.acu-v2-continuation-page__error[data-v-9029b70d] { color: var(--acu-danger, #d65b5b); white-space: pre-wrap;\n}\n.acu-v2-continuation-page__meta[data-v-9029b70d] { color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap;\n}\n.acu-v2-continuation-page__settings-grid[data-v-9029b70d] { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start;\n}\n.acu-v2-continuation-page__settings-grid label[data-v-9029b70d] { display: grid; gap: 5px; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-page__settings-grid select[data-v-9029b70d] { min-height: 30px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 30%, transparent); border-radius: 4px; background: var(--acu-bg-2); color: var(--acu-text-1);\n}\n.acu-v2-continuation-page__toggles[data-v-9029b70d] { display: flex; flex-wrap: wrap; gap: 14px; margin: 14px 0;\n}\n.acu-v2-continuation-page__groups[data-v-9029b70d] { display: flex; flex-direction: column; gap: 8px; margin-top: 4px;\n}\n.acu-v2-continuation-page__group[data-v-9029b70d] {\r\n  border: 1px solid var(--acu-border, color-mix(in srgb, var(--acu-text-3) 18%, transparent));\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-bg-2) 72%, transparent);\n}\n.acu-v2-continuation-page__group[data-v-9029b70d] .acu-disclosure-group__header { border-radius: var(--acu-radius-sm);\n}\n.acu-v2-continuation-page__group[data-v-9029b70d] .acu-disclosure-group__body { gap: 12px; padding: 12px;\n}\n.acu-v2-continuation-page__group[data-v-9029b70d] .acu-disclosure-group__meta { max-width: 55%; overflow: hidden; text-overflow: ellipsis;\n}\n.acu-v2-continuation-page__group .acu-v2-continuation-page__actions[data-v-9029b70d] { margin-top: 0;\n}\n.acu-v2-continuation-page__subheading[data-v-9029b70d] { margin: 4px 0 0; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px); font-weight: 600;\n}\n.acu-v2-continuation-page__subheading[data-v-9029b70d]:first-child { margin-top: 0;\n}\n@media (max-width: 860px) {\n.acu-v2-continuation-page[data-v-9029b70d] { padding: 14px;\n}\n}\n@media (max-width: 640px) {\n.acu-v2-continuation-page[data-v-9029b70d] { padding: 10px; gap: 12px;\n}\n.acu-v2-continuation-page__settings-grid[data-v-9029b70d] { grid-template-columns: 1fr;\n}\n.acu-v2-continuation-page__actions[data-v-9029b70d] > * { flex: 1 1 auto;\n}\n.acu-v2-continuation-page__group[data-v-9029b70d] .acu-disclosure-group__meta { display: none;\n}\n}\r\n", "src/presentation-v2/pages/ContinuationPage.vue#style-0-9029b70d");
+var ContinuationPage_vue_vue_type_style_index_0_scoped_9029b70d_lang = null;
 
 const _hoisted_1$l = { class: "acu-v2-continuation-page" };
 const _hoisted_2$j = {
@@ -171363,7 +171399,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 					loading: $setup.runtime.busy.value,
 					onClick: $setup.acceptOutlineDraft
 				}, {
-					default: withCtx(() => [..._cache[53] || (_cache[53] = [createTextVNode(
+					default: withCtx(() => [..._cache[54] || (_cache[54] = [createTextVNode(
 						"确认大纲并继续",
 						-1
 						/* CACHED */
@@ -171408,7 +171444,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 							default: withCtx(() => [withDirectives(createBaseVNode(
 								"select",
 								{ "onUpdate:modelValue": _cache[2] || (_cache[2] = ($event) => $setup.settingsDraft.stageSize = $event) },
-								[..._cache[54] || (_cache[54] = [
+								[..._cache[55] || (_cache[55] = [
 									createBaseVNode(
 										"option",
 										{ value: "short" },
@@ -171450,7 +171486,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 							default: withCtx(() => [withDirectives(createBaseVNode(
 								"select",
 								{ "onUpdate:modelValue": _cache[3] || (_cache[3] = ($event) => $setup.settingsDraft.storyArcVolumePlan = $event) },
-								[..._cache[55] || (_cache[55] = [
+								[..._cache[56] || (_cache[56] = [
 									createBaseVNode(
 										"option",
 										{ value: "short" },
@@ -171585,7 +171621,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 							meta: $setup.runGroupMeta,
 							expanded: $setup.isGroupExpanded("run"),
 							"body-id": "acu-continuation-group-run",
-							onToggle: _cache[19] || (_cache[19] = ($event) => $setup.toggleGroup("run"))
+							onToggle: _cache[20] || (_cache[20] = ($event) => $setup.toggleGroup("run"))
 						}, {
 							default: withCtx(() => [createBaseVNode("div", _hoisted_7$a, [
 								createVNode($setup["AcuFormRow"], {
@@ -171602,11 +171638,23 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 								}),
 								createVNode($setup["AcuFormRow"], {
 									label: "正文重试次数",
-									hint: "宿主生成失败、被中止或正文缺少循环标签时最多重试几次。"
+									hint: "宿主生成失败、被中止、正文缺少循环标签或短于最低 token 数时最多重试几次。"
 								}, {
 									default: withCtx(() => [createVNode($setup["AcuInput"], {
 										modelValue: $setup.settingsDraft.generationRetryLimit,
 										"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.settingsDraft.generationRetryLimit = $event),
+										type: "number",
+										min: 0
+									}, null, 8, ["modelValue"])]),
+									_: 1
+								}),
+								createVNode($setup["AcuFormRow"], {
+									label: "正文最低 token 数",
+									hint: "宿主正文低于该值视为截断或出错并自动重试，0 为不检查（TT 下按宿主分词器统计，缺失时按字数估算）。"
+								}, {
+									default: withCtx(() => [createVNode($setup["AcuInput"], {
+										modelValue: $setup.settingsDraft.minGenerationTokens,
+										"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.settingsDraft.minGenerationTokens = $event),
 										type: "number",
 										min: 0
 									}, null, 8, ["modelValue"])]),
@@ -171618,7 +171666,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 								}, {
 									default: withCtx(() => [createVNode($setup["AcuInput"], {
 										modelValue: $setup.settingsDraft.internalAiRetryLimit,
-										"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.settingsDraft.internalAiRetryLimit = $event),
+										"onUpdate:modelValue": _cache[15] || (_cache[15] = ($event) => $setup.settingsDraft.internalAiRetryLimit = $event),
 										type: "number",
 										min: 0
 									}, null, 8, ["modelValue"])]),
@@ -171630,7 +171678,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 								}, {
 									default: withCtx(() => [createVNode($setup["AcuInput"], {
 										modelValue: $setup.settingsDraft.loopDelaySeconds,
-										"onUpdate:modelValue": _cache[15] || (_cache[15] = ($event) => $setup.settingsDraft.loopDelaySeconds = $event),
+										"onUpdate:modelValue": _cache[16] || (_cache[16] = ($event) => $setup.settingsDraft.loopDelaySeconds = $event),
 										type: "number",
 										min: 0
 									}, null, 8, ["modelValue"])]),
@@ -171642,7 +171690,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 								}, {
 									default: withCtx(() => [createVNode($setup["AcuInput"], {
 										modelValue: $setup.settingsDraft.retryDelaySeconds,
-										"onUpdate:modelValue": _cache[16] || (_cache[16] = ($event) => $setup.settingsDraft.retryDelaySeconds = $event),
+										"onUpdate:modelValue": _cache[17] || (_cache[17] = ($event) => $setup.settingsDraft.retryDelaySeconds = $event),
 										type: "number",
 										min: 0
 									}, null, 8, ["modelValue"])]),
@@ -171654,7 +171702,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 								}, {
 									default: withCtx(() => [createVNode($setup["AcuInput"], {
 										modelValue: $setup.settingsDraft.maxConsecutivePressureTurns,
-										"onUpdate:modelValue": _cache[17] || (_cache[17] = ($event) => $setup.settingsDraft.maxConsecutivePressureTurns = $event),
+										"onUpdate:modelValue": _cache[18] || (_cache[18] = ($event) => $setup.settingsDraft.maxConsecutivePressureTurns = $event),
 										type: "number",
 										min: 0,
 										max: $setup.maxConsecutivePressureTurnsMax
@@ -171667,7 +171715,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 								}, {
 									default: withCtx(() => [createVNode($setup["AcuInput"], {
 										modelValue: $setup.settingsDraft.loopTags,
-										"onUpdate:modelValue": _cache[18] || (_cache[18] = ($event) => $setup.settingsDraft.loopTags = $event),
+										"onUpdate:modelValue": _cache[19] || (_cache[19] = ($event) => $setup.settingsDraft.loopTags = $event),
 										type: "text"
 									}, null, 8, ["modelValue"])]),
 									_: 1
@@ -171681,7 +171729,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 							meta: $setup.contextGroupMeta,
 							expanded: $setup.isGroupExpanded("context"),
 							"body-id": "acu-continuation-group-context",
-							onToggle: _cache[25] || (_cache[25] = ($event) => $setup.toggleGroup("context"))
+							onToggle: _cache[26] || (_cache[26] = ($event) => $setup.toggleGroup("context"))
 						}, {
 							default: withCtx(() => [createBaseVNode("div", _hoisted_8$a, [
 								createVNode($setup["AcuFormRow"], {
@@ -171690,7 +171738,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 								}, {
 									default: withCtx(() => [createVNode($setup["AcuInput"], {
 										modelValue: $setup.settingsDraft.storyWindowFloors,
-										"onUpdate:modelValue": _cache[20] || (_cache[20] = ($event) => $setup.settingsDraft.storyWindowFloors = $event),
+										"onUpdate:modelValue": _cache[21] || (_cache[21] = ($event) => $setup.settingsDraft.storyWindowFloors = $event),
 										type: "number",
 										min: 0
 									}, null, 8, ["modelValue"])]),
@@ -171702,7 +171750,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 								}, {
 									default: withCtx(() => [createVNode($setup["AcuInput"], {
 										modelValue: $setup.settingsDraft.storyTailFloors,
-										"onUpdate:modelValue": _cache[21] || (_cache[21] = ($event) => $setup.settingsDraft.storyTailFloors = $event),
+										"onUpdate:modelValue": _cache[22] || (_cache[22] = ($event) => $setup.settingsDraft.storyTailFloors = $event),
 										type: "number",
 										min: 0
 									}, null, 8, ["modelValue"])]),
@@ -171714,7 +171762,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 								}, {
 									default: withCtx(() => [createVNode($setup["AcuInput"], {
 										modelValue: $setup.settingsDraft.agentHistoryTokenBudget,
-										"onUpdate:modelValue": _cache[22] || (_cache[22] = ($event) => $setup.settingsDraft.agentHistoryTokenBudget = $event),
+										"onUpdate:modelValue": _cache[23] || (_cache[23] = ($event) => $setup.settingsDraft.agentHistoryTokenBudget = $event),
 										type: "number",
 										min: 0
 									}, null, 8, ["modelValue"])]),
@@ -171726,7 +171774,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 								}, {
 									default: withCtx(() => [createVNode($setup["AcuInput"], {
 										modelValue: $setup.settingsDraft.agentReadTokenBudget,
-										"onUpdate:modelValue": _cache[23] || (_cache[23] = ($event) => $setup.settingsDraft.agentReadTokenBudget = $event),
+										"onUpdate:modelValue": _cache[24] || (_cache[24] = ($event) => $setup.settingsDraft.agentReadTokenBudget = $event),
 										type: "text"
 									}, null, 8, ["modelValue"])]),
 									_: 1
@@ -171737,7 +171785,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 								}, {
 									default: withCtx(() => [createVNode($setup["AcuInput"], {
 										modelValue: $setup.settingsDraft.agentReadFallbackTokens,
-										"onUpdate:modelValue": _cache[24] || (_cache[24] = ($event) => $setup.settingsDraft.agentReadFallbackTokens = $event),
+										"onUpdate:modelValue": _cache[25] || (_cache[25] = ($event) => $setup.settingsDraft.agentReadFallbackTokens = $event),
 										type: "number",
 										min: 1
 									}, null, 8, ["modelValue"])]),
@@ -171752,7 +171800,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 							meta: $setup.budgetGroupMeta,
 							expanded: $setup.isGroupExpanded("budget"),
 							"body-id": "acu-continuation-group-budget",
-							onToggle: _cache[32] || (_cache[32] = ($event) => $setup.toggleGroup("budget"))
+							onToggle: _cache[33] || (_cache[33] = ($event) => $setup.toggleGroup("budget"))
 						}, {
 							default: withCtx(() => [createBaseVNode("div", _hoisted_9$9, [
 								createVNode($setup["AcuFormRow"], {
@@ -171761,7 +171809,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 								}, {
 									default: withCtx(() => [createVNode($setup["AcuInput"], {
 										modelValue: $setup.settingsDraft.agentRunBudget.maxIterations,
-										"onUpdate:modelValue": _cache[26] || (_cache[26] = ($event) => $setup.settingsDraft.agentRunBudget.maxIterations = $event),
+										"onUpdate:modelValue": _cache[27] || (_cache[27] = ($event) => $setup.settingsDraft.agentRunBudget.maxIterations = $event),
 										type: "number",
 										min: 1,
 										max: 30
@@ -171774,7 +171822,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 								}, {
 									default: withCtx(() => [createVNode($setup["AcuInput"], {
 										modelValue: $setup.settingsDraft.agentRunBudget.maxDelegations,
-										"onUpdate:modelValue": _cache[27] || (_cache[27] = ($event) => $setup.settingsDraft.agentRunBudget.maxDelegations = $event),
+										"onUpdate:modelValue": _cache[28] || (_cache[28] = ($event) => $setup.settingsDraft.agentRunBudget.maxDelegations = $event),
 										type: "number",
 										min: 0,
 										max: 20
@@ -171787,7 +171835,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 								}, {
 									default: withCtx(() => [createVNode($setup["AcuInput"], {
 										modelValue: $setup.settingsDraft.agentRunBudget.maxSameAgent,
-										"onUpdate:modelValue": _cache[28] || (_cache[28] = ($event) => $setup.settingsDraft.agentRunBudget.maxSameAgent = $event),
+										"onUpdate:modelValue": _cache[29] || (_cache[29] = ($event) => $setup.settingsDraft.agentRunBudget.maxSameAgent = $event),
 										type: "number",
 										min: 1,
 										max: 10
@@ -171800,7 +171848,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 								}, {
 									default: withCtx(() => [createVNode($setup["AcuInput"], {
 										modelValue: $setup.settingsDraft.agentRunBudget.maxConcurrent,
-										"onUpdate:modelValue": _cache[29] || (_cache[29] = ($event) => $setup.settingsDraft.agentRunBudget.maxConcurrent = $event),
+										"onUpdate:modelValue": _cache[30] || (_cache[30] = ($event) => $setup.settingsDraft.agentRunBudget.maxConcurrent = $event),
 										type: "number",
 										min: 1,
 										max: 6
@@ -171813,7 +171861,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 								}, {
 									default: withCtx(() => [createVNode($setup["AcuInput"], {
 										modelValue: $setup.settingsDraft.agentRunBudget.maxReads,
-										"onUpdate:modelValue": _cache[30] || (_cache[30] = ($event) => $setup.settingsDraft.agentRunBudget.maxReads = $event),
+										"onUpdate:modelValue": _cache[31] || (_cache[31] = ($event) => $setup.settingsDraft.agentRunBudget.maxReads = $event),
 										type: "number",
 										min: 0,
 										max: 30
@@ -171826,7 +171874,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 								}, {
 									default: withCtx(() => [createVNode($setup["AcuInput"], {
 										modelValue: $setup.settingsDraft.agentRunBudget.maxExtraReads,
-										"onUpdate:modelValue": _cache[31] || (_cache[31] = ($event) => $setup.settingsDraft.agentRunBudget.maxExtraReads = $event),
+										"onUpdate:modelValue": _cache[32] || (_cache[32] = ($event) => $setup.settingsDraft.agentRunBudget.maxExtraReads = $event),
 										type: "number",
 										min: 0,
 										max: 10
@@ -171842,7 +171890,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 							meta: $setup.finalReviewGroupMeta,
 							expanded: $setup.isGroupExpanded("finalReview"),
 							"body-id": "acu-continuation-group-final-review",
-							onToggle: _cache[35] || (_cache[35] = ($event) => $setup.toggleGroup("finalReview"))
+							onToggle: _cache[36] || (_cache[36] = ($event) => $setup.toggleGroup("finalReview"))
 						}, {
 							default: withCtx(() => [createBaseVNode("div", _hoisted_10$9, [createVNode($setup["AcuFormRow"], {
 								label: "终审单批次读取上限",
@@ -171850,7 +171898,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 							}, {
 								default: withCtx(() => [createVNode($setup["AcuInput"], {
 									modelValue: $setup.settingsDraft.finalReview.readTokenBudget,
-									"onUpdate:modelValue": _cache[33] || (_cache[33] = ($event) => $setup.settingsDraft.finalReview.readTokenBudget = $event),
+									"onUpdate:modelValue": _cache[34] || (_cache[34] = ($event) => $setup.settingsDraft.finalReview.readTokenBudget = $event),
 									type: "text"
 								}, null, 8, ["modelValue"])]),
 								_: 1
@@ -171860,13 +171908,13 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 							}, {
 								default: withCtx(() => [createVNode($setup["AcuInput"], {
 									modelValue: $setup.settingsDraft.finalReview.maxExtraReads,
-									"onUpdate:modelValue": _cache[34] || (_cache[34] = ($event) => $setup.settingsDraft.finalReview.maxExtraReads = $event),
+									"onUpdate:modelValue": _cache[35] || (_cache[35] = ($event) => $setup.settingsDraft.finalReview.maxExtraReads = $event),
 									type: "number",
 									min: 0,
 									max: 10
 								}, null, 8, ["modelValue"])]),
 								_: 1
-							})]), _cache[56] || (_cache[56] = createBaseVNode(
+							})]), _cache[57] || (_cache[57] = createBaseVNode(
 								"p",
 								{ class: "acu-v2-continuation-page__meta" },
 								"终审默认关闭；开启后会额外调用 final-reviewer，优先依据本轮命中的世界书条目，并使用独立读取预算与工具轮，不占用主 Agent 的读取额度。关闭时不装配终审证据、不额外读取世界书，也不会发起终审调用。",
@@ -171881,10 +171929,10 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 							meta: $setup.webResearchGroupMeta,
 							expanded: $setup.isGroupExpanded("webResearch"),
 							"body-id": "acu-continuation-group-web-research",
-							onToggle: _cache[46] || (_cache[46] = ($event) => $setup.toggleGroup("webResearch"))
+							onToggle: _cache[47] || (_cache[47] = ($event) => $setup.toggleGroup("webResearch"))
 						}, {
 							default: withCtx(() => [
-								_cache[57] || (_cache[57] = createBaseVNode(
+								_cache[58] || (_cache[58] = createBaseVNode(
 									"p",
 									{ class: "acu-v2-continuation-page__meta" },
 									"开启后，新任务第一次规划前会自动派工 web-researcher，从勾选的百科查清原作人物、组织、能力与设定，按实体分条写进「百科资料库」（资料面板 → 百科资料）；之后主 Agent 也能按需再派。TT 出网通道：萌娘百科与维基百科走 TT 内网页直连 MediaWiki；通用搜索走 SearXNG（需自建或公共实例并填写实例地址）。百度百科、DuckDuckGo、Serper/Tavily 与任意网页抓取需要酒馆服务器转发，TT 当前未提供对应路由，保持关闭。",
@@ -171894,22 +171942,22 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 								createBaseVNode("div", _hoisted_11$9, [
 									createVNode($setup["AcuCheckbox"], {
 										modelValue: $setup.settingsDraft.webResearch.sources.moegirl,
-										"onUpdate:modelValue": _cache[36] || (_cache[36] = ($event) => $setup.settingsDraft.webResearch.sources.moegirl = $event),
+										"onUpdate:modelValue": _cache[37] || (_cache[37] = ($event) => $setup.settingsDraft.webResearch.sources.moegirl = $event),
 										label: "萌娘百科（直连）"
 									}, null, 8, ["modelValue"]),
 									createVNode($setup["AcuCheckbox"], {
 										modelValue: $setup.settingsDraft.webResearch.sources.wikipediaZh,
-										"onUpdate:modelValue": _cache[37] || (_cache[37] = ($event) => $setup.settingsDraft.webResearch.sources.wikipediaZh = $event),
+										"onUpdate:modelValue": _cache[38] || (_cache[38] = ($event) => $setup.settingsDraft.webResearch.sources.wikipediaZh = $event),
 										label: "中文维基百科（直连）"
 									}, null, 8, ["modelValue"]),
 									createVNode($setup["AcuCheckbox"], {
 										modelValue: $setup.settingsDraft.webResearch.sources.wikipediaEn,
-										"onUpdate:modelValue": _cache[38] || (_cache[38] = ($event) => $setup.settingsDraft.webResearch.sources.wikipediaEn = $event),
+										"onUpdate:modelValue": _cache[39] || (_cache[39] = ($event) => $setup.settingsDraft.webResearch.sources.wikipediaEn = $event),
 										label: "英文维基百科（直连）"
 									}, null, 8, ["modelValue"]),
 									createVNode($setup["AcuCheckbox"], {
 										modelValue: $setup.settingsDraft.webResearch.sources.baidu,
-										"onUpdate:modelValue": _cache[39] || (_cache[39] = ($event) => $setup.settingsDraft.webResearch.sources.baidu = $event),
+										"onUpdate:modelValue": _cache[40] || (_cache[40] = ($event) => $setup.settingsDraft.webResearch.sources.baidu = $event),
 										label: "百度百科（TT 暂不支持，请勿勾选）"
 									}, null, 8, ["modelValue"])
 								]),
@@ -171920,7 +171968,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 									}, {
 										default: withCtx(() => [createVNode($setup["AcuSelect"], {
 											modelValue: $setup.settingsDraft.webResearch.searchProvider,
-											"onUpdate:modelValue": _cache[40] || (_cache[40] = ($event) => $setup.settingsDraft.webResearch.searchProvider = $event),
+											"onUpdate:modelValue": _cache[41] || (_cache[41] = ($event) => $setup.settingsDraft.webResearch.searchProvider = $event),
 											options: $setup.webSearchProviderOptions
 										}, null, 8, ["modelValue"])]),
 										_: 1
@@ -171932,7 +171980,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 									}, {
 										default: withCtx(() => [createVNode($setup["AcuInput"], {
 											modelValue: $setup.settingsDraft.webResearch.searxngBaseUrl,
-											"onUpdate:modelValue": _cache[41] || (_cache[41] = ($event) => $setup.settingsDraft.webResearch.searxngBaseUrl = $event),
+											"onUpdate:modelValue": _cache[42] || (_cache[42] = ($event) => $setup.settingsDraft.webResearch.searxngBaseUrl = $event),
 											type: "text"
 										}, null, 8, ["modelValue"])]),
 										_: 1
@@ -171943,7 +171991,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 									}, {
 										default: withCtx(() => [createVNode($setup["AcuInput"], {
 											modelValue: $setup.settingsDraft.webResearch.maxToolRounds,
-											"onUpdate:modelValue": _cache[42] || (_cache[42] = ($event) => $setup.settingsDraft.webResearch.maxToolRounds = $event),
+											"onUpdate:modelValue": _cache[43] || (_cache[43] = ($event) => $setup.settingsDraft.webResearch.maxToolRounds = $event),
 											type: "number",
 											min: 1,
 											max: 20
@@ -171956,7 +172004,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 									}, {
 										default: withCtx(() => [createVNode($setup["AcuInput"], {
 											modelValue: $setup.settingsDraft.webResearch.maxPages,
-											"onUpdate:modelValue": _cache[43] || (_cache[43] = ($event) => $setup.settingsDraft.webResearch.maxPages = $event),
+											"onUpdate:modelValue": _cache[44] || (_cache[44] = ($event) => $setup.settingsDraft.webResearch.maxPages = $event),
 											type: "number",
 											min: 1,
 											max: 30
@@ -171969,7 +172017,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 									}, {
 										default: withCtx(() => [createVNode($setup["AcuInput"], {
 											modelValue: $setup.settingsDraft.webResearch.pageCharLimit,
-											"onUpdate:modelValue": _cache[44] || (_cache[44] = ($event) => $setup.settingsDraft.webResearch.pageCharLimit = $event),
+											"onUpdate:modelValue": _cache[45] || (_cache[45] = ($event) => $setup.settingsDraft.webResearch.pageCharLimit = $event),
 											type: "number",
 											min: 500,
 											max: 2e4
@@ -171982,7 +172030,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 									}, {
 										default: withCtx(() => [createVNode($setup["AcuTextarea"], {
 											modelValue: $setup.settingsDraft.webResearch.blockedDomains,
-											"onUpdate:modelValue": _cache[45] || (_cache[45] = ($event) => $setup.settingsDraft.webResearch.blockedDomains = $event),
+											"onUpdate:modelValue": _cache[46] || (_cache[46] = ($event) => $setup.settingsDraft.webResearch.blockedDomains = $event),
 											rows: 3
 										}, null, 8, ["modelValue"])]),
 										_: 1
@@ -171997,9 +172045,9 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 							meta: $setup.channelGroupMeta,
 							expanded: $setup.isGroupExpanded("channels"),
 							"body-id": "acu-continuation-group-channels",
-							onToggle: _cache[47] || (_cache[47] = ($event) => $setup.toggleGroup("channels"))
+							onToggle: _cache[48] || (_cache[48] = ($event) => $setup.toggleGroup("channels"))
 						}, {
-							default: withCtx(() => [_cache[58] || (_cache[58] = createBaseVNode(
+							default: withCtx(() => [_cache[59] || (_cache[59] = createBaseVNode(
 								"p",
 								{ class: "acu-v2-continuation-page__meta" },
 								"给不同 Agent 分配不同 API 预设：例如主 Agent 用强模型，审查类子代理用便宜快速的模型。「跟随全局默认」即使用上方的 API 预设。",
@@ -172036,10 +172084,10 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 							meta: $setup.rulesGroupMeta,
 							expanded: $setup.isGroupExpanded("rules"),
 							"body-id": "acu-continuation-group-rules",
-							onToggle: _cache[50] || (_cache[50] = ($event) => $setup.toggleGroup("rules"))
+							onToggle: _cache[51] || (_cache[51] = ($event) => $setup.toggleGroup("rules"))
 						}, {
 							default: withCtx(() => [
-								_cache[59] || (_cache[59] = createBaseVNode(
+								_cache[60] || (_cache[60] = createBaseVNode(
 									"p",
 									{ class: "acu-v2-continuation-page__meta" },
 									"提取规则只保留正文中匹配「起始–结束」标记之间的内容；排除规则则把匹配段落剔除。两者都为空时使用完整正文。",
@@ -172048,12 +172096,12 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 								)),
 								createVNode($setup["AcuRulePairList"], {
 									modelValue: $setup.settingsDraft.contextExtractRules,
-									"onUpdate:modelValue": _cache[48] || (_cache[48] = ($event) => $setup.settingsDraft.contextExtractRules = $event),
+									"onUpdate:modelValue": _cache[49] || (_cache[49] = ($event) => $setup.settingsDraft.contextExtractRules = $event),
 									label: "上下文提取规则"
 								}, null, 8, ["modelValue"]),
 								createVNode($setup["AcuRulePairList"], {
 									modelValue: $setup.settingsDraft.contextExcludeRules,
-									"onUpdate:modelValue": _cache[49] || (_cache[49] = ($event) => $setup.settingsDraft.contextExcludeRules = $event),
+									"onUpdate:modelValue": _cache[50] || (_cache[50] = ($event) => $setup.settingsDraft.contextExcludeRules = $event),
 									label: "上下文排除规则"
 								}, null, 8, ["modelValue"])
 							]),
@@ -172087,15 +172135,15 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 			default: withCtx(() => [
 				createBaseVNode("div", _hoisted_16$6, [
 					createVNode($setup["AcuButton"], { onClick: $setup.exportPrompts }, {
-						default: withCtx(() => [..._cache[60] || (_cache[60] = [createTextVNode(
+						default: withCtx(() => [..._cache[61] || (_cache[61] = [createTextVNode(
 							"导出提示词 JSON",
 							-1
 							/* CACHED */
 						)])]),
 						_: 1
 					}),
-					createVNode($setup["AcuButton"], { onClick: _cache[51] || (_cache[51] = ($event) => $setup.promptImportInput?.click()) }, {
-						default: withCtx(() => [..._cache[61] || (_cache[61] = [createTextVNode(
+					createVNode($setup["AcuButton"], { onClick: _cache[52] || (_cache[52] = ($event) => $setup.promptImportInput?.click()) }, {
+						default: withCtx(() => [..._cache[62] || (_cache[62] = [createTextVNode(
 							"导入提示词 JSON",
 							-1
 							/* CACHED */
@@ -172194,9 +172242,9 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 					meta: "参考",
 					expanded: $setup.isGroupExpanded("prompt:reference"),
 					"body-id": "acu-continuation-prompt-reference",
-					onToggle: _cache[52] || (_cache[52] = ($event) => $setup.toggleGroup("prompt:reference"))
+					onToggle: _cache[53] || (_cache[53] = ($event) => $setup.toggleGroup("prompt:reference"))
 				}, {
-					default: withCtx(() => [..._cache[62] || (_cache[62] = [
+					default: withCtx(() => [..._cache[63] || (_cache[63] = [
 						createBaseVNode(
 							"h4",
 							{ class: "acu-v2-continuation-page__subheading" },
@@ -172254,7 +172302,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 		})) : createCommentVNode("v-if", true)
 	]);
 }
-var ContinuationPage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-1fde0546"]]);
+var ContinuationPage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-9029b70d"]]);
 
 var _sfc_main$k = /*@__PURE__*/ defineComponent({
     __name: 'AcuStatsList',
@@ -178973,7 +179021,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.0.9";
+        const v = "9.0.10";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {

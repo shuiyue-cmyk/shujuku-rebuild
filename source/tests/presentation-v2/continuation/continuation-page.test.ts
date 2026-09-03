@@ -179,7 +179,7 @@ function setSettings(): void {
     storyArcVolumePlan: 'medium', customStoryArcVolumeCount: null,
     outlinePreview: false, autoNextStage: true, maxAutomaticStages: 6,
     loopTags: '', loopDelaySeconds: 5, totalDurationMinutes: 0,
-    retryDelaySeconds: 3, generationRetryLimit: 3, internalAiRetryLimit: 3,
+    retryDelaySeconds: 3, generationRetryLimit: 3, internalAiRetryLimit: 3, minGenerationTokens: 1000,
     storyWindowFloors: 20, storyTailFloors: 2, agentHistoryTokenBudget: 120000, maxConsecutivePressureTurns: 8,
     agentReadTokenBudget: '30%', agentReadFallbackTokens: 6000,
     finalReview: { enabled: false, readTokenBudget: '50%', maxExtraReads: 6 },
@@ -751,6 +751,43 @@ describe('ContinuationPage', () => {
         webResearch: { enabled: true, searchProvider: 'searxng', searxngBaseUrl: 'https://searx.example.org' },
       });
       third.app.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('正文最低 token 数：输入框在位且含 0=关闭说明，非法值拦保存、0 放行', async () => {
+    vi.useFakeTimers();
+    try {
+      const triggerSave = async (el: Element) => {
+        const stageSizeSelect = el.querySelector<HTMLSelectElement>('select')!;
+        stageSizeSelect.value = stageSizeSelect.value === 'short' ? 'standard' : 'short';
+        stageSizeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+        await nextTick();
+        await vi.advanceTimersByTimeAsync(900);
+      };
+
+      // 回退：负数 → 保存被拦并提示。
+      setSettings();
+      setTask();
+      settings.value.minGenerationTokens = -1;
+      const first = await mountPage();
+      expect(first.el.textContent).toContain('正文最低 token 数');
+      expect(first.el.textContent).toContain('0 为不检查');
+      await triggerSave(first.el);
+      expect(saveSettings).not.toHaveBeenCalled();
+      expect(first.el.textContent).toContain('续写设置中的数值不能低于允许范围');
+      first.app.unmount();
+
+      // 恢复：0=关闭 → 放行落盘。
+      setSettings();
+      setTask();
+      settings.value.minGenerationTokens = 0;
+      const second = await mountPage();
+      await triggerSave(second.el);
+      expect(saveSettings).toHaveBeenCalledOnce();
+      expect(saveSettings.mock.calls[0][0]).toMatchObject({ minGenerationTokens: 0 });
+      second.app.unmount();
     } finally {
       vi.useRealTimers();
     }

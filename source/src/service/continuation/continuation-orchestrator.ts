@@ -519,6 +519,22 @@ export class ContinuationOrchestrator_ACU {
   }
 
   /**
+   * 宿主正文短于最低 token 数（截断/水文）：与标签缺失同构地消耗一次重试额度并转
+   * retry_ready，由桥按重试延迟自动重发当前轮；额度耗尽落 generation_retry_exhausted
+   *（可手动继续恢复）。短楼由宿主 regenerate 删掉重生成，不会残留重复正文。
+   */
+  async rejectHostTurnForShortGeneration(input: RejectHostTurnInput_ACU & { tokenCount: number; threshold: number }): Promise<ContinuationOrchestratorResult_ACU> {
+    const error = createContinuationError_ACU(
+      'CONTINUATION_GENERATION_TOO_SHORT',
+      'generation_evaluate',
+      `宿主正文约 ${input.tokenCount} tokens，低于阈值 ${input.threshold}，视为截断或出错`,
+      true,
+      { messageIndex: input.messageIndex, tokenCount: input.tokenCount, threshold: input.threshold },
+    );
+    return this.rejectHostTurnAttempt_ACU(input.identity, error, input.messageIndex);
+  }
+
+  /**
    * 宿主生成失败或未产出正文（GENERATION_ENDED 到达但没有可归属的新 AI 楼层，典型如
    * 后端 API 报错）：与标签缺失同构地消耗一次重试额度并转 retry_ready，由桥按重试
    * 延迟自动重发当前轮；额度耗尽落 generation_retry_exhausted（可手动继续恢复）。

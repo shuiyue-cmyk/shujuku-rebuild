@@ -408,6 +408,35 @@ describe('ContinuationOrchestrator_ACU', () => {
     expect(recoveredResult.retryHostGeneration).toBe(true);
   });
 
+  it('accounts short generations against the retry limit and stays recoverable after exhaustion', async () => {
+    const { orchestrator, store } = createOrchestrator();
+    await orchestrator.createTask({ originInstruction: '推进剧情' });
+    const initial = store.readPersisted()!;
+    initial.settings = { ...initial.settings, generationRetryLimit: 1 };
+    await store.replaceAtomically(initial, { chatIdentity: 'chat-a' });
+    await orchestrator.continueTask();
+    const task = store.readPersisted()!.activeTask!;
+    const stage = task.stages[0];
+    const revision = stage.revisions[0];
+    const identity = { chatIdentity: 'chat-a', taskId: task.taskId, stageId: stage.stageId, revision: 1, nodeId: revision.outline.nodes[0].id, turnId: revision.outline.nodes[0].turns[0].id, attemptId: 'attempt-host-a' };
+
+    // 首次短正文：消耗一次重试额度，转 retry_ready（桥据此自动重发），不设停止原因。
+    await recordPendingHostTurn(orchestrator, identity);
+    await orchestrator.rejectHostTurnForShortGeneration({ identity, messageIndex: 1, tokenCount: 12, threshold: 1000 });
+    expect(store.readPersisted()!.activeTask).toMatchObject({ status: 'paused', stopReason: null, pendingHostTurn: { retryCount: 1, status: 'retry_ready' }, lastError: { code: 'CONTINUATION_GENERATION_TOO_SHORT', retryable: true, details: { messageIndex: 1, tokenCount: 12, threshold: 1000 } } });
+
+    // 额度耗尽：落 generation_retry_exhausted + exhausted。
+    await orchestrator.continueTask();
+    await recordPendingHostTurn(orchestrator, identity);
+    await orchestrator.rejectHostTurnForShortGeneration({ identity, messageIndex: 2, tokenCount: 30, threshold: 1000 });
+    expect(store.readPersisted()!.activeTask).toMatchObject({ status: 'paused', stopReason: 'generation_retry_exhausted', pendingHostTurn: { retryCount: 1, status: 'exhausted' }, lastError: { code: 'CONTINUATION_GENERATION_TOO_SHORT', retryable: false } });
+
+    // 自动链停下后，手动「继续」再走一次酒馆 regenerate，不重跑 Agent。
+    const recoveredResult = await orchestrator.continueTask();
+    expect(store.readPersisted()!.activeTask).toMatchObject({ status: 'running', stopReason: null, lastError: null, pendingHostTurn: { status: 'retry_ready' } });
+    expect(recoveredResult.retryHostGeneration).toBe(true);
+  });
+
   it('drops a retry-ready host turn and re-plans with the agent when the user deleted the floors it was sent against', async () => {
     // 首楼之外再放一层用户楼：等待轮是对着它发出的（capture 记录发送前只有首楼一层 AI）。
     const chat: any[] = [{ mes: '开场' }, { mes: '主 Agent 的指令', is_user: true }];

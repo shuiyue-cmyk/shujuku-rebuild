@@ -249,6 +249,41 @@ describe('FirstFloorContinuationStore_ACU', () => {
     expect(() => new FirstFloorContinuationStore_ACU().read()).toThrow(ContinuationValidationError_ACU);
   });
 
+  it('存量信封缺 minGenerationTokens 时补默认 1000，含键旧信封直接通过校验', () => {
+    const missing = buildEnvelope_ACU() as any;
+    delete missing.settings.minGenerationTokens;
+    _set_SillyTavern_API_ACU({ chat: [{ _qrf_continuation: missing }], chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn() } as any);
+    expect(new FirstFloorContinuationStore_ACU().read()!.settings.minGenerationTokens).toBe(1000);
+    expect(buildDefaultContinuationSettings_ACU().minGenerationTokens).toBe(1000);
+
+    // v9.0.3 整链删除期间持久化的「未知键」信封：键回归后不再报 ENVELOPE_INVALID。
+    const legacy = buildEnvelope_ACU() as any;
+    legacy.settings.minGenerationTokens = 500;
+    _set_SillyTavern_API_ACU({ chat: [{ _qrf_continuation: legacy }], chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn() } as any);
+    expect(new FirstFloorContinuationStore_ACU().read()!.settings.minGenerationTokens).toBe(500);
+  });
+
+  it('负向控制：minGenerationTokens 非法值拒绝整份信封，修正后可加载', () => {
+    for (const value of [-1, 1.5, '1000']) {
+      const bad = buildEnvelope_ACU() as any;
+      bad.settings.minGenerationTokens = value;
+      _set_SillyTavern_API_ACU({ chat: [{ _qrf_continuation: bad }], chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn() } as any);
+      expect(() => new FirstFloorContinuationStore_ACU().read()).toThrow(ContinuationValidationError_ACU);
+    }
+
+    const fixed = buildEnvelope_ACU() as any;
+    fixed.settings.minGenerationTokens = 0;
+    _set_SillyTavern_API_ACU({ chat: [{ _qrf_continuation: fixed }], chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn() } as any);
+    expect(new FirstFloorContinuationStore_ACU().read()!.settings.minGenerationTokens).toBe(0);
+  });
+
+  it('旧短失败记录的 lastError.code 可校验通过', () => {
+    const envelope = buildRunningEnvelope_ACU() as any;
+    envelope.activeTask.lastError = { code: 'CONTINUATION_GENERATION_TOO_SHORT', message: '短', phase: 'generation_evaluate', retryable: false, details: { messageIndex: 1, tokenCount: 12, threshold: 1000 } };
+    _set_SillyTavern_API_ACU({ chat: [{ _qrf_continuation: envelope }], chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn() } as any);
+    expect(new FirstFloorContinuationStore_ACU().read()!.activeTask!.lastError).toMatchObject({ code: 'CONTINUATION_GENERATION_TOO_SHORT' });
+  });
+
   it('V17 仅定向更新已知会话快照规则，并保留其余提示词与段字段', () => {
     const v17 = buildEnvelope_ACU() as any;
     v17.settings.promptForceDefaultVersion = 'spv2.5-continuation-story-layers-v17';
