@@ -627,4 +627,64 @@ describe('summary-vector-index flush queue scope', () => {
     expect(h.archive).toHaveBeenCalledTimes(1);
   });
 
+  it('在飞 flushing（running 集命中）即使超过 60s 也不判 stale：不标记失败、不双重 archive', async () => {
+    const scope = buildSummaryVectorIndexFlushScopeKey_ACU('chat-a', 'iso-a', 'summary-a');
+    // 任务已 stale（updatedAt 远超 60s），但同 scope 的 flush 正在飞行中：restore 不得误判。
+    h.task = task(scope, { status: 'queued', updatedAt: Date.now() - 120_000 });
+    h.upsert.mockImplementation(async (input: any) => {
+      // claim（→flushing）沿用旧 updatedAt，构造「在飞 + stale」并存的真实并发形态。
+      h.task = { ...h.task, ...input, updatedAt: input.status === 'flushing' ? h.task.updatedAt : Date.now() };
+      return h.task;
+    });
+    h.list.mockResolvedValue([h.task]);
+    let release!: (value: any) => void;
+    h.archive.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+
+    const runner = flushSummaryVectorIndexTaskNow_ACU(scope);
+    for (let attempt = 0; attempt < 50 && !release; attempt += 1) await Promise.resolve();
+    expect(release).toBeTypeOf('function');
+    expect(h.task.status).toBe('flushing');
+
+    await expect(restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU()).resolves.toBe(1);
+    // 未标记 failed_retryable、未重复 archive（archive 仍是挂起那一次）。
+    expect(h.upsert.mock.calls.filter((call: any[]) => call[0]?.status === 'failed_retryable')).toHaveLength(0);
+    expect(h.archive).toHaveBeenCalledTimes(1);
+
+    // restore 重挂的定时器到期时，runner 仍在飞 → 直接让位，不发起第二次 archive。
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.archive).toHaveBeenCalledTimes(1);
+
+    release({ success: true, skipped: false, errors: [] });
+    await runner;
+    expect(h.archive).toHaveBeenCalledTimes(1);
+  });
+
+  it('真超时（running 集不含）的 flushing task 仍按原语义标记 failed_retryable', async () => {
+    const scope = buildSummaryVectorIndexFlushScopeKey_ACU('chat-a', 'iso-a', 'summary-a');
+    h.task = task(scope, { status: 'flushing', updatedAt: Date.now() - 120_000 });
+    h.list.mockResolvedValue([h.task]);
+
+    await expect(restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU()).resolves.toBe(1);
+
+    expect(h.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      scopeKey: scope,
+      status: 'failed_retryable',
+      lastError: expect.stringContaining('上次 flush 在执行中断后超时'),
+    }));
+    // 重排后的定时器到期时重走 flush 入口（旧状态 claim 失败让位），不会直接 archive。
+    await vi.advanceTimersByTimeAsync(2500);
+    expect(h.archive).not.toHaveBeenCalled();
+  });
+
+  it('未超过 60s 的 flushing task 不判失败，仅重挂定时器', async () => {
+    const scope = buildSummaryVectorIndexFlushScopeKey_ACU('chat-a', 'iso-a', 'summary-a');
+    h.task = task(scope, { status: 'flushing', updatedAt: Date.now() - 1000 });
+    h.list.mockResolvedValue([h.task]);
+
+    await expect(restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU()).resolves.toBe(1);
+    expect(h.upsert).not.toHaveBeenCalled();
+    expect(h.archive).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.archive).not.toHaveBeenCalled();
+  });
 });

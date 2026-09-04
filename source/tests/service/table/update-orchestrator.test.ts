@@ -333,6 +333,24 @@ vi.mock('../../../src/service/table/table-fill-boundary-staging', async (importO
   };
 });
 
+// staging session 包装 mock：保留真实实现，仅给 discard 装 spy，用于断言失败/收尾路径的幂等释放
+// （discard 内部释放 detached SQLite provider；重复调用为 no-op）。
+const stagingDiscardSpies = vi.hoisted(() => [] as any[]);
+vi.mock('../../../src/service/table/table-fill-staging-session', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../src/service/table/table-fill-staging-session')>();
+  return {
+    ...actual,
+    createTableFillStagingSession_ACU: (run: any) => {
+      const session: any = actual.createTableFillStagingSession_ACU(run);
+      const originalDiscard = session.discard.bind(session);
+      const discardSpy = vi.fn(originalDiscard);
+      session.discard = discardSpy;
+      stagingDiscardSpies.push(discardSpy);
+      return session;
+    },
+  };
+});
+
 vi.mock('../../../src/service/settings/settings-readers', () => ({
   getCurrentWorldbookConfig_ACU: vi.fn(() => ({ summaryVectorIndexModeEnabled: true })),
 }));
@@ -1595,6 +1613,45 @@ describe('executeCardUpdateCore_ACU', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('无法准备AI输入');
+  });
+
+  it('空指令零操作提交时返回 precondition，不烧 AI 重试', async () => {
+    mockPrepareAIInput.mockResolvedValue({ tableDataText: '模拟数据' });
+    mockCallCustomOpenAI.mockResolvedValue('<tableEdit>updateRow(99, 0, {"0": "x"})</tableEdit>');
+    mockParseAndApplyTableEditsToData.mockImplementation(() => ({
+      success: false, modifiedKeys: [], appliedEdits: 0, failedEdits: 0, totalCommands: 1,
+      error: '解析或应用失败：1 条指令中成功 0 条，失败 0 条。',
+    }));
+    mockCheckIfFirstTimeInit.mockResolvedValue(false);
+
+    const result = await executeCardUpdateCore_ACU(
+      [{ is_user: false, mes: 'AI回复' }], 0, false, 'auto_standard', false,
+      ['sheet_0'], null, new AbortController()
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.errorCategory).toBe('precondition');
+    expect(result.error).toContain('零操作提交');
+    // 不烧重试：整轮只有一次模型调用。
+    expect(mockCallCustomOpenAI).toHaveBeenCalledTimes(1);
+  });
+
+  it('failedEdits>0 时仍返回 model（分类对照）', async () => {
+    mockPrepareAIInput.mockResolvedValue({ tableDataText: '模拟数据' });
+    mockCallCustomOpenAI.mockResolvedValue('<tableEdit>garbage</tableEdit>');
+    mockParseAndApplyTableEditsToData.mockImplementation(() => ({
+      success: false, modifiedKeys: [], appliedEdits: 0, failedEdits: 1, totalCommands: 1,
+      error: '解析或应用失败：1 条指令中成功 0 条，失败 1 条。',
+    }));
+    mockCheckIfFirstTimeInit.mockResolvedValue(false);
+
+    const result = await executeCardUpdateCore_ACU(
+      [{ is_user: false, mes: 'AI回复' }], 0, false, 'auto_standard', false,
+      ['sheet_0'], null, new AbortController()
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.errorCategory).toBe('model');
   });
 
   it('AI 响应无 tableEdit 标签时重试并最终失败', async () => {
@@ -3183,6 +3240,41 @@ describe('orchestrateManualUpdate_ACU', () => {
     } finally {
       vi.mocked(getOriginalFullFrameFingerprint_ACU).mockImplementation(() => 'test-fingerprint');
     }
+  });
+
+  it('跨根 staging pre 段失败时，失败路径幂等释放 staging 会话（detached 引擎不泄漏）', async () => {
+    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
+    const { parseTableTemplateJson_ACU } = await import('../../../src/shared/utils');
+    vi.mocked(parseTableTemplateJson_ACU).mockReturnValue({
+      mate: { type: 'acu' },
+      sheet_0: { name: '测试表A', updateConfig: { groupId: 0 }, content: [['row_id', '值A']] },
+    });
+    // 跨边界布局：full 根只含 sheet_other（不被目标表全量覆盖）→ 跨根 staging 启用。
+    const chat = buildPartialFullRootChatForRefill();
+    vi.mocked(getChatArray_ACU).mockReturnValue(chat);
+    mockSettings.maxConcurrentGroups = 1;
+    mockSettings.manualUpdateContextDepth = 0;
+    mockSettings.manualUpdateBatchSize = 1;
+    mockCurrentJsonTableData = {
+      sheet_0: { name: '测试表A', updateConfig: {}, content: [['row_id', '值A'], ['1', '旧A']] },
+      sheet_other: { name: '其它表', updateConfig: {}, content: [['row_id', '值'], ['1', '保留']] },
+    };
+    // pre 段 AI 调用失败：staging 会话已创建，未经 settle 收尾即走失败路径。
+    mockCallCustomOpenAI.mockRejectedValue(new Error('AI 调用失败'));
+
+    const discardSpiesBefore = stagingDiscardSpies.length;
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, {
+      clearBeforeUpdate: true,
+      executionSnapshot: { sheetKeys: ['sheet_0', 'sheet_other'] },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('AI 调用失败');
+    // 失败路径幂等释放 staging 会话：settle 零 staging 分支与 finally 至少各一次；
+    // discard 重复调用为 no-op（本测试未抛错即证明幂等），detached 引擎随之释放。
+    const newDiscardSpies = stagingDiscardSpies.slice(discardSpiesBefore);
+    expect(newDiscardSpies.length).toBe(1);
+    expect(newDiscardSpies[0].mock.calls.length).toBeGreaterThanOrEqual(1);
   });
 
   it('清理后原 full checkpoint 消失时，在任何 AI 调用前 fail-closed 并按已提交事实对齐运行时', async () => {
@@ -4933,6 +5025,51 @@ describe('applyUnifiedGroupFillResponses_ACU', () => {
       }
       return { success: false, modifiedKeys: [], appliedEdits: 0 };
     });
+  });
+
+  it('空指令零操作提交改判 precondition，不触发 AI 重试（v9.1.5 行为恢复）', async () => {
+    const baseSnapshot = {
+      sheet_0: { name: '表A', content: [['row_id', '值'], ['1', 'base-a']] },
+    };
+    const responses = [{
+      success: true, attempt: 1,
+      aiResponse: '<tableEdit>updateRow(0, 99, {"0": "x"})</tableEdit>',
+      tableEditText: 'updateRow(0, 99, {"0": "x"})',
+      job: { groupKey: 'a', groupId: 1, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_0'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false },
+    }];
+    mockParseAndApplyTableEditsToData.mockImplementationOnce(() => ({
+      success: false, modifiedKeys: [], appliedEdits: 0, failedEdits: 0, totalCommands: 1,
+      error: '解析或应用失败：1 条指令中成功 0 条，失败 0 条。',
+    }));
+
+    const result = await applyUnifiedGroupFillResponses_ACU(responses as any, baseSnapshot, { saveTargetIndex: 3, updateMode: 'auto_standard', isImportMode: false });
+
+    expect(result.success).toBe(false);
+    expect(result.errorCategory).toBe('precondition');
+    expect(result.error).toContain('零操作提交');
+    // 零操作提交：不落盘（调用方 precondition 分支直接终止本轮，不再重试 AI）。
+    expect(mockPersistTablesToChatMessage).not.toHaveBeenCalled();
+  });
+
+  it('failedEdits>0 仍是模型错误（分类对照）', async () => {
+    const baseSnapshot = {
+      sheet_0: { name: '表A', content: [['row_id', '值'], ['1', 'base-a']] },
+    };
+    const responses = [{
+      success: true, attempt: 1,
+      aiResponse: '<tableEdit>garbage</tableEdit>',
+      tableEditText: 'garbage',
+      job: { groupKey: 'a', groupId: 1, batchNumber: 1, saveTargetIndex: 3, targetSheetKeys: ['sheet_0'], updateMode: 'auto_standard', requestOptions: null, messagesForContext: [], baseSnapshot, isImportMode: false },
+    }];
+    mockParseAndApplyTableEditsToData.mockImplementationOnce(() => ({
+      success: false, modifiedKeys: [], appliedEdits: 0, failedEdits: 1, totalCommands: 1,
+      error: '解析或应用失败：1 条指令中成功 0 条，失败 1 条。',
+    }));
+
+    const result = await applyUnifiedGroupFillResponses_ACU(responses as any, baseSnapshot, { saveTargetIndex: 3, updateMode: 'auto_standard', isImportMode: false });
+
+    expect(result.success).toBe(false);
+    expect(result.errorCategory).toBe('model');
   });
 
   it('按稳定顺序基于 baseSnapshot 合并响应，仅显式保存一次并触发一次 flush', async () => {

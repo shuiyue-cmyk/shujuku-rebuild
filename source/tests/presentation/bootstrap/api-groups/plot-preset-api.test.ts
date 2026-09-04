@@ -50,6 +50,7 @@ vi.mock('../../../../src/presentation/components/settings-ui-helpers', () => ({ 
 vi.mock('../../../../src/presentation/components/pipeline-ui-helpers', () => ({ refreshPresetUIAfterSwitch_ACU: mocks.refreshPreset }));
 
 import { createPlotPresetApi } from '../../../../src/presentation/bootstrap/api-groups/plot-preset-api';
+import { logWarn_ACU } from '../../../../src/shared/utils';
 // 默认表结构单一来源：断言内置默认模板时直接比对同一份定义，不写第二份表名清单
 import { buildDefaultTableTemplateObject_ACU, optionsSheet } from '../../../../src/shared/table-defaults/index.js';
 
@@ -298,5 +299,43 @@ describe('initGameSession 剧情推进预设（本库不内置预设）', () => 
 
     expect(result).toMatchObject({ success: true, templateInjected: true, presetLoaded: false });
     expect(result.message).toBe('游戏初始化成功');
+  });
+});
+
+describe('initGameSession options.presetName 弃用提示（fix8）', () => {
+  it('presetName 非空且无 presetData 时 logWarn 一次，初始化语义不受影响', async () => {
+    const result = await createApi().initGameSession({}, {
+      templateData: { sheet_a: { uid: 'sheet_a', name: 'A', content: [['row_id']] } },
+      presetName: '旧剧情引导预设',
+    });
+
+    expect(vi.mocked(logWarn_ACU)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(logWarn_ACU)).toHaveBeenCalledWith('[游戏初始化] options.presetName 已弃用：本库不读取该参数，剧情引导预设请改用 options.presetData 传入。本次调用将忽略 presetName。');
+    // presetName 仍被忽略，初始化结果不受影响。
+    expect(result).toMatchObject({ success: true, templateInjected: true, presetLoaded: false });
+  });
+
+  it('presetName 与 presetData 同时提供时不告警，照常走导入链', async () => {
+    const api = createApi();
+    const importSpy = vi.fn(async () => ({ success: true, message: 'ok', presetName: '内容方预设' }));
+    api.importPlotPresetFromData = importSpy;
+
+    const result = await api.initGameSession({}, {
+      templateData: { sheet_a: { uid: 'sheet_a', name: 'A', content: [['row_id']] } },
+      presetName: '旧剧情引导预设',
+      presetData: { name: '内容方预设', prompts: [] },
+    });
+
+    expect(vi.mocked(logWarn_ACU)).not.toHaveBeenCalled();
+    expect(importSpy).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ success: true, presetLoaded: true });
+  });
+
+  it('无 presetName 时不告警', async () => {
+    await createApi().initGameSession({}, {
+      templateData: { sheet_a: { uid: 'sheet_a', name: 'A', content: [['row_id']] } },
+    });
+
+    expect(vi.mocked(logWarn_ACU)).not.toHaveBeenCalled();
   });
 });

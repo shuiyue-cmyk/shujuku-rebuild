@@ -436,6 +436,26 @@ export async function writeAgentModuleSnapshot_ACU(chat: any[], targetIndex: num
   const hadPrevious = Object.prototype.hasOwnProperty.call(container, AGENT_MODULE_FIELD_ACU);
   const previous = container[AGENT_MODULE_FIELD_ACU];
   const settledThroughIndex = Math.min(Math.max(snapshot.settledThroughIndex, 0), targetIndex);
+  // 乐观锁复核：在飞 turn 的快照基准是它开始时读到的楼层修订号；期间用户手动保存会把六类
+  // 修订号整体 +1（replaceAgentModuleSnapshotByUser_ACU），旧基准整份写入会静默冲掉用户内容。
+  // 落盘前重读当前生效快照，任一类「楼层比写入快照新」即放弃落盘并记日志；正常路径零影响。
+  const revisionDrifts: string[] = [];
+  const floorSnapshot = readAgentModuleSnapshot_ACU(chat);
+  const revisionPairs: Array<[string, number, number]> = [
+    ['hooks', floorSnapshot.revisions.hooks, snapshot.revisions.hooks],
+    ['infoGap', floorSnapshot.revisions.infoGap, snapshot.revisions.infoGap],
+    ['constraints', floorSnapshot.revisions.constraints, snapshot.revisions.constraints],
+    ['storyArc', floorSnapshot.revisions.storyArc, snapshot.revisions.storyArc],
+    ['chronology', floorSnapshot.revisions.chronology, snapshot.revisions.chronology],
+    ['webRefs', floorSnapshot.revisions.webRefs, snapshot.revisions.webRefs],
+  ];
+  for (const [name, floorRevision, incomingRevision] of revisionPairs) {
+    if (floorRevision > incomingRevision) revisionDrifts.push(`${name} 楼层=${floorRevision} 写入=${incomingRevision}`);
+  }
+  if (revisionDrifts.length > 0) {
+    console.warn(`[SP·数据库][续写资料] 检测到楼层快照修订号已被外部更新（疑似用户手动保存），放弃本次写入防止整份覆盖：${revisionDrifts.join('；')}（目标楼层 ${targetIndex}）`);
+    return;
+  }
   try {
     container[AGENT_MODULE_FIELD_ACU] = { ...snapshot, settledThroughIndex, updatedAt: Date.now() };
     await saveChatToHostStrict_ACU();

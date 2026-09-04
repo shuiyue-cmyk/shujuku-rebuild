@@ -313,6 +313,10 @@ async function skillifySingleEntry_ACU(
   return { status: saveResult.updated ? 'updated' : 'skipped', bookName: summary.bookName, uid: summary.uid, reason: saveResult.reason, meta: savedMeta };
 }
 
+function isAgentSkillifyAbortedSentinel_ACU(error: unknown): boolean {
+  return error instanceof Error && error.message.startsWith('agent_skillify_entry_aborted:');
+}
+
 async function runWithConcurrency_ACU<T, R>(
   items: T[],
   concurrency: number,
@@ -320,11 +324,21 @@ async function runWithConcurrency_ACU<T, R>(
 ): Promise<R[]> {
   const results: R[] = [];
   let cursor = 0;
+  // aborted 哨兵收口：任一 worker 捕获 agent_skillify_entry_aborted 哨兵后置共享标志，
+  // 其余 worker 在循环头发现标志即抛同一哨兵收尾，避免用户「停止」后兄弟 worker 继续消费剩余条目。
+  // 普通失败不置标志，保持既有并发语义。
+  let abortedSentinel: unknown = null;
   const workerCount = Math.max(1, Math.min(concurrency, items.length || 1));
   await Promise.all(Array.from({ length: workerCount }, async () => {
     while (cursor < items.length) {
+      if (abortedSentinel !== null) throw abortedSentinel;
       const index = cursor++;
-      results[index] = await worker(items[index], index);
+      try {
+        results[index] = await worker(items[index], index);
+      } catch (error) {
+        if (isAgentSkillifyAbortedSentinel_ACU(error) && abortedSentinel === null) abortedSentinel = error;
+        throw error;
+      }
     }
   }));
   return results;

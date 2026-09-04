@@ -198,7 +198,7 @@
           v-else
           variant="primary"
           size="sm"
-          :disabled="!assistant.userRequest.value.trim()"
+          :disabled="assistant.isRunning.value || !assistant.userRequest.value.trim()"
           @click="assistant.run"
         >
           <i class="fa-solid fa-paper-plane"></i>

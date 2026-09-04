@@ -4,6 +4,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { parse } from 'yaml';
+import { setDebugLogEnabled } from '../../../src/shared/log-buffer';
 
 const { mockSettings, mockIsGenerateRawAvailable, mockGenerateRaw, mockSendConnectionManager, mockGetHeaders, mockHandleApiResponse, mockRateLimitSlot } = vi.hoisted(() => ({
   mockSettings: {
@@ -844,5 +845,171 @@ describe('callAIWithResolvedPreset_ACU 基础路径', () => {
       stream_options: { trace: true, include_usage: true },
       prompt_cache_key: 'acu-cont-v2-12345678-abcdef01-deadbeef',
     });
+  });
+});
+
+describe('__ACU_DEBUG_LAST_API_BODY__ 调试快照脱敏（fix1 扩面）', () => {
+  const readDebugSnapshot = (): any => (globalThis as any).__ACU_DEBUG_LAST_API_BODY__;
+  const clearDebugSnapshot = () => {
+    delete (globalThis as any).__ACU_DEBUG_LAST_API_BODY__;
+    delete (globalThis as any).__ACU_DEBUG_LAST_API_BODY_AT__;
+  };
+
+  beforeEach(() => {
+    clearDebugSnapshot();
+  });
+
+  afterEach(() => {
+    setDebugLogEnabled(false);
+    clearDebugSnapshot();
+  });
+
+  it('头名保留、值打码：Basic / x-api-key / api-key / 自动补的 x-opencode-session；Bearer 行为不变', () => {
+    setDebugLogEnabled(true);
+    const body = buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      {
+        url: 'https://opencode.ai/zen/go/v1/chat/completions',
+        model: 'm',
+        apiKey: 'sk-bearer-real',
+        requestHeaders: ['Authorization: Basic dXNlcjpwYXNz', 'x-api-key: sk-x-real', 'api-key: sk-plain-real', 'X-Keep-Visible: yes'].join('\n'),
+      },
+    );
+
+    // 真实请求体不脱敏（调试快照之外零影响）。
+    const realHeaders = String(body.custom_include_headers);
+    expect(realHeaders).toContain('Authorization: Bearer sk-bearer-real');
+    expect(realHeaders).toContain('Authorization: Basic dXNlcjpwYXNz');
+    expect(realHeaders).toContain('x-api-key: sk-x-real');
+
+    const snapshot = readDebugSnapshot();
+    expect(snapshot).toBeTruthy();
+    const headers = String(snapshot.custom_include_headers);
+    expect(headers).toContain('Authorization: Bearer ***');
+    expect(headers).toContain('Authorization: Basic ***');
+    expect(headers).toContain('x-api-key: ***');
+    expect(headers).toContain('api-key: ***');
+    expect(headers).not.toContain('sk-bearer-real');
+    expect(headers).not.toContain('dXNlcjpwYXNz');
+    expect(headers).not.toContain('sk-x-real');
+    expect(headers).not.toContain('sk-plain-real');
+    // 自动补的会话头同样打码，头名保留。
+    const sessionLines = headers.split('\n').filter((line: string) => /x-opencode-session/i.test(line));
+    expect(sessionLines).toHaveLength(1);
+    expect(sessionLines[0]).toMatch(/^x-opencode-session: \*\*\*$/i);
+    // 非敏感头原样保留。
+    expect(headers).toContain('X-Keep-Visible: yes');
+  });
+
+  it('custom_include_body 黑名单键（api[_-]?key/token/secret）递归打码，白名单键不动', () => {
+    setDebugLogEnabled(true);
+    buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      {
+        url: 'https://api.example.com',
+        model: 'gpt-4',
+        bodyParams: JSON.stringify({
+          api_key: 'k1', 'api-key': 'k2', apiKey: 'k3', access_token: 't1', client_secret: 's1',
+          keep_me: 'visible',
+          nested: { token: 't2', deep: { apiKey: 'k4' }, list: [{ secret: 's2' }, { plain: 'ok' }] },
+        }),
+      },
+    );
+
+    const includeBody = JSON.parse(readDebugSnapshot().custom_include_body);
+    expect(includeBody.api_key).toBe('***');
+    expect(includeBody['api-key']).toBe('***');
+    expect(includeBody.apiKey).toBe('***');
+    expect(includeBody.access_token).toBe('***');
+    expect(includeBody.client_secret).toBe('***');
+    expect(includeBody.keep_me).toBe('visible');
+    expect(includeBody.nested.token).toBe('***');
+    expect(includeBody.nested.deep.apiKey).toBe('***');
+    expect(includeBody.nested.list[0].secret).toBe('***');
+    expect(includeBody.nested.list[1].plain).toBe('ok');
+  });
+
+  it('非 JSON 原文走 "key":"value" 正则兜底，无法定位时保持原样', () => {
+    setDebugLogEnabled(true);
+    const raw = 'broken json {"api_token":"leak-me","plain":"keep-me"} trailing';
+    buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://api.example.com', model: 'gpt-4', bodyParams: raw },
+    );
+
+    const stored = String(readDebugSnapshot().custom_include_body);
+    expect(stored).toContain('"api_token":"***"');
+    expect(stored).not.toContain('leak-me');
+    expect(stored).toContain('"plain":"keep-me"');
+
+    // 完全无法定位敏感键形态的原文保持原样（仅影响调试快照，不影响真实请求）。
+    const plain = 'plain text not json';
+    buildCustomApiRequestBody_ACU(
+      [{ role: 'user', content: 'test' }],
+      { url: 'https://api.example.com', model: 'gpt-4', bodyParams: plain },
+    );
+    expect(String(readDebugSnapshot().custom_include_body)).toBe(plain);
+  });
+});
+
+describe('x-opencode-session 头检测一致性（fix2）', () => {
+  const goConfig = (requestHeaders: string) => ({
+    url: 'https://opencode.ai/zen/go/v1/chat/completions',
+    model: 'mimo-v2.5',
+    apiKey: 'sk-go',
+    requestHeaders,
+  });
+  const sessionLinesOf = (headersText: string) => headersText.split('\n').filter(line => /^[ \t]*x-opencode-session\s*:/i.test(line));
+
+  it('X-Opencode-Session 大小写变体不重复补头，用户值原样保留', () => {
+    const body = buildCustomApiRequestBody_ACU([{ role: 'user', content: 'test' }], goConfig('X-Opencode-Session: user-case-id'));
+    expect(sessionLinesOf(String(body.custom_include_headers))).toEqual(['X-Opencode-Session: user-case-id']);
+  });
+
+  it('行首空白缩进的 x-opencode-session 也不重复补头', () => {
+    const body = buildCustomApiRequestBody_ACU([{ role: 'user', content: 'test' }], goConfig('X-Custom: on\n  X-Opencode-Session: indented-id'));
+    const lines = sessionLinesOf(String(body.custom_include_headers));
+    expect(lines).toEqual(['  X-Opencode-Session: indented-id']);
+    // 没有自动补出的第二条 UUID 会话头。
+    expect(lines.some(line => /x-opencode-session:\s+[0-9a-f-]{36}/i.test(line))).toBe(false);
+  });
+
+  it('既有语义保持：未写会话头时自动补一条；非 Go 端点不补', () => {
+    const auto = buildCustomApiRequestBody_ACU([{ role: 'user', content: 'test' }], { url: 'https://opencode.ai/zen/go/v1/chat/completions', model: 'm', apiKey: 'sk-go' });
+    const autoLines = sessionLinesOf(String(auto.custom_include_headers));
+    expect(autoLines).toHaveLength(1);
+    expect(autoLines[0]).toMatch(/^x-opencode-session: [0-9a-f-]{36}$/i);
+
+    const plain = buildCustomApiRequestBody_ACU([{ role: 'user', content: 'test' }], { url: 'https://api.example.com', model: 'm', apiKey: 'sk-x' });
+    expect(sessionLinesOf(String(plain.custom_include_headers))).toHaveLength(0);
+  });
+});
+
+describe('callAIWithPreset_ACU maxTokensOverride 校验（fix3）', () => {
+  it('非法覆盖值（NaN/0/负数/Infinity）按未传处理回退预设配置链，不产垃圾 max_tokens', async () => {
+    mockSettings.apiConfig = { url: 'https://api.example.com', model: 'gpt-4', apiKey: 'sk-test', max_tokens: 777 };
+    mockFetch.mockResolvedValue({ ok: true });
+    mockHandleApiResponse.mockResolvedValue('ok');
+    for (const invalid of [Number.NaN, 0, -5, Number.POSITIVE_INFINITY]) {
+      mockFetch.mockClear();
+      await callAIWithPreset_ACU([{ role: 'user', content: '你好' }], '', invalid as any);
+      const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+      expect(body.max_tokens).toBe(777);
+    }
+  });
+
+  it('合法覆盖值逐字透传；config max_tokens=0 透传契约不破', async () => {
+    mockSettings.apiConfig = { url: 'https://api.example.com', model: 'gpt-4', apiKey: 'sk-test', max_tokens: 4096 };
+    mockFetch.mockResolvedValue({ ok: true });
+    mockHandleApiResponse.mockResolvedValue('ok');
+    await callAIWithPreset_ACU([{ role: 'user', content: '你好' }], '', 555);
+    const firstBody = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(firstBody.max_tokens).toBe(555);
+
+    // config max_tokens=0 透传契约（与 buildCustomApiRequestBody 既有 :216 用例同语义）。
+    mockSettings.apiConfig = { url: 'https://api.example.com', model: 'gpt-4', apiKey: 'sk-test', max_tokens: 0 };
+    await callAIWithPreset_ACU([{ role: 'user', content: '你好' }], '');
+    const secondBody = JSON.parse(mockFetch.mock.calls[1][1].body);
+    expect(secondBody.max_tokens).toBe(0);
   });
 });

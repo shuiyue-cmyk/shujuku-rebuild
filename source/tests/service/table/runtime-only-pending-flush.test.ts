@@ -46,6 +46,7 @@ vi.mock('../../../src/service/table/table-update-commit', () => ({
 }));
 
 import { flushRuntimeOnlyPendingChanges_ACU } from '../../../src/service/table/runtime-only-pending-flush';
+import { ensureStorageProviderReady_ACU } from '../../../src/service/table/table-storage-strategy';
 import {
   clearRuntimeOnlyPendingSheets_ACU,
   markRuntimeOnlyPendingSheets_ACU,
@@ -98,16 +99,21 @@ describe('flushRuntimeOnlyPendingChanges_ACU', () => {
       trackingSheetKeys: [],
       revisionWriteSet: [],
       skipRuntimeOnlyPendingFlush: true,
-      writeSet: [{ kind: 'sheet', sheetKey: 'sheet_a' }],
+      // writeSet 覆盖全部候选表（⊇ 持锁重算后的任何分歧集），而非仅 T0 分歧表。
+      writeSet: [{ kind: 'sheet', sheetKey: 'sheet_a' }, { kind: 'sheet', sheetKey: 'sheet_b' }],
     });
-    expect(options.operations).toEqual([{
+    // 持锁重算：operations 由 apply 在持锁后以 fresh 快照重建，经 persist 覆盖生效。
+    expect(options.operations).toBeUndefined();
+    const applied = await apply({});
+    expect(applied.success).toBe(true);
+    expect(applied.persist.targetMessageIndex).toBe(2);
+    expect(applied.persist.targetSheetKeys).toEqual(['sheet_a']);
+    expect(applied.persist.operations).toEqual([{
       kind: 'sheet_replace',
       sheetKey: 'sheet_a',
       sheet: expect.objectContaining({ content: [['row_id', '值'], ['1', '前端写入']] }),
       reason: 'system',
     }]);
-    const applied = apply({});
-    expect(applied.success).toBe(true);
     expect(applied.tableData.sheet_a.content).toEqual([['row_id', '值'], ['1', '前端写入']]);
     expect(readRuntimeOnlyPendingSheets_ACU(scope())).toBeNull();
   });
@@ -154,7 +160,9 @@ describe('flushRuntimeOnlyPendingChanges_ACU', () => {
     markRuntimeOnlyPendingSheets_ACU(scope(), { all: false, sheetKeys: ['sheet_a'] });
     const result = await flushRuntimeOnlyPendingChanges_ACU('test');
     expect(result.flushed).toBe(true);
-    expect(mocks.commit.mock.calls[0][0].operations[0].sheet.content).toEqual([['row_id', '值'], ['1', 'native 行']]);
+    const [, apply] = mocks.commit.mock.calls[0];
+    const applied = await apply({});
+    expect(applied.persist.operations[0].sheet.content).toEqual([['row_id', '值'], ['1', 'native 行']]);
   });
 
   it('模块加载即向 state 注册落盘器，提交模型可通过注册入口触发', async () => {
@@ -162,5 +170,84 @@ describe('flushRuntimeOnlyPendingChanges_ACU', () => {
     const result = await runRegisteredRuntimeOnlyPendingFlush_ACU(scope(), 'insertRow');
     expect(result.flushed).toBe(true);
     expect(mocks.commit.mock.calls[0][0].reason).toBe('runtime_only_flush:insertRow');
+  });
+
+  // 真实提交契约：commit mock 内部调用 apply，使持锁重算（T1）逻辑可达。
+  function runCommitWithRealApply() {
+    mocks.commit.mockImplementation(async (_options: any, apply: any) => {
+      const applied = await apply({});
+      return applied.success
+        ? { success: true, messageIndex: 2 }
+        : { success: false, error: applied.error, errorCategory: applied.errorCategory };
+    });
+  }
+
+  it('持锁重算：第二写者在快照与抢锁之间提交时，以最新运行时重建 operations，不回滚其结果', async () => {
+    runCommitWithRealApply();
+    // T0 读快照后、抢锁前，第二写者（runtime-only 写入）把新行追加进运行时。
+    let snapshotReads = 0;
+    vi.mocked(ensureStorageProviderReady_ACU).mockImplementation(async () => {
+      snapshotReads += 1;
+      if (snapshotReads >= 2) {
+        mocks.providerData = {
+          mate: { type: 'acu' },
+          sheet_a: sheet([['row_id', '值'], ['1', '前端写入'], ['2', '第二写者']]),
+          sheet_b: sheet([['row_id', '值']]),
+        };
+      }
+      return { mode: 'sqlite', getCurrentData: () => mocks.providerData };
+    });
+    markRuntimeOnlyPendingSheets_ACU(scope(), { all: false, sheetKeys: ['sheet_a'] });
+
+    const result = await flushRuntimeOnlyPendingChanges_ACU('test');
+
+    expect(result.flushed).toBe(true);
+    expect(result.sheetKeys).toEqual(['sheet_a']);
+    // 写入内容来自持锁后的 fresh 快照（含第二写者的行），而不是 T0 旧快照。
+    const [, apply] = mocks.commit.mock.calls[0];
+    const applied = await apply({});
+    expect(applied.persist.operations[0].sheet.content).toEqual([['row_id', '值'], ['1', '前端写入'], ['2', '第二写者']]);
+    expect(applied.tableData.sheet_a.content).toEqual([['row_id', '值'], ['1', '前端写入'], ['2', '第二写者']]);
+    expect(readRuntimeOnlyPendingSheets_ACU(scope())).toBeNull();
+  });
+
+  it('持锁重算：第二写者已把内容物化进聊天时，清空登记且不再写重复帧', async () => {
+    runCommitWithRealApply();
+    let snapshotReads = 0;
+    vi.mocked(ensureStorageProviderReady_ACU).mockImplementation(async () => {
+      snapshotReads += 1;
+      if (snapshotReads >= 2) {
+        // 第二写者已把登记表内容物化：持锁后回放与运行时一致。
+        mocks.replay.mockResolvedValue({ data: { sheet_a: sheet([['row_id', '值'], ['1', '前端写入']]), sheet_b: sheet([['row_id', '值']]) } });
+      }
+      return { mode: 'sqlite', getCurrentData: () => mocks.providerData };
+    });
+    markRuntimeOnlyPendingSheets_ACU(scope(), { all: false, sheetKeys: ['sheet_a'] });
+
+    const result = await flushRuntimeOnlyPendingChanges_ACU('test');
+
+    expect(result).toEqual({ flushed: false, sheetKeys: [] });
+    expect(readRuntimeOnlyPendingSheets_ACU(scope())).toBeNull();
+  });
+
+  it('持锁重算：锁内目标楼层丢失时保留登记等待下次重试', async () => {
+    runCommitWithRealApply();
+    let snapshotReads = 0;
+    vi.mocked(ensureStorageProviderReady_ACU).mockImplementation(async () => {
+      snapshotReads += 1;
+      if (snapshotReads >= 2) {
+        // 抢锁后聊天被重建为只剩 user 楼层：无可写 AI 楼层。
+        mocks.chat.length = 0;
+        mocks.chat.push({ is_user: true, mes: 'U0' });
+      }
+      return { mode: 'sqlite', getCurrentData: () => mocks.providerData };
+    });
+    markRuntimeOnlyPendingSheets_ACU(scope(), { all: false, sheetKeys: ['sheet_a'] });
+
+    const result = await flushRuntimeOnlyPendingChanges_ACU('test');
+
+    expect(result.flushed).toBe(false);
+    expect(result.error).toContain('no AI message');
+    expect(readRuntimeOnlyPendingSheets_ACU(scope())).toEqual({ all: false, sheetKeys: ['sheet_a'] });
   });
 });

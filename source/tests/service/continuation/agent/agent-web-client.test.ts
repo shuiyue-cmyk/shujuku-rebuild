@@ -201,3 +201,34 @@ describe('AgentWebClient_ACU 通用搜索与网页抓取（TT 路由实态）', 
     expect(fetch).not.toHaveBeenCalled();
   });
 });
+
+describe('URL 策略进制变体与实体解码安全（fix4/fix5）', () => {
+  it('host 黑名单补进制变体：十进制整数 / 0x 前缀 / 不足四段点分均按 IP 直连拒绝', () => {
+    const blocked: string[] = [];
+    expect(evaluateWebUrlPolicy_ACU('http://2130706433/', blocked)).toContain('IP');
+    expect(evaluateWebUrlPolicy_ACU('http://0x7f000001/', blocked)).toContain('IP');
+    expect(evaluateWebUrlPolicy_ACU('http://0x7f.0x0.0x0.0x1/', blocked)).toContain('IP');
+    expect(evaluateWebUrlPolicy_ACU('http://1.2.3/', blocked)).toContain('IP');
+    expect(evaluateWebUrlPolicy_ACU('http://127.0.0.1/', blocked)).toContain('IP');
+  });
+
+  it('普通域名含数字标签不误拒', () => {
+    expect(evaluateWebUrlPolicy_ACU('https://bbs.3dmgame.com/thread-1', [])).toBeNull();
+    expect(evaluateWebUrlPolicy_ACU('http://a1.example2.org/x', [])).toBeNull();
+    expect(evaluateWebUrlPolicy_ACU('https://zh.moegirl.org.cn/x', [])).toBeNull();
+  });
+
+  it('越界数字实体（&#1114112; > 0x10FFFF）不再抛 RangeError，按「无法解码」移除', () => {
+    expect(() => extractReadableText_ACU('<p>A&#1114112;B</p>')).not.toThrow();
+    expect(extractReadableText_ACU('<p>A&#1114112;B</p>').text).toBe('AB');
+    // 十六进制变体同样安全。
+    expect(() => extractReadableText_ACU('<p>&#xFFFFFFFF;</p>')).not.toThrow();
+    expect(extractReadableText_ACU('<p>&#xFFFFFFFF;</p>').text).toBe('');
+  });
+
+  it('正常实体行为不变：十进制 / 十六进制 / 边界码点照常解码', () => {
+    expect(extractReadableText_ACU('<p>&#65;B</p>').text).toBe('AB');
+    expect(extractReadableText_ACU('<p>&#x1F600;表情</p>').text).toBe('😀表情');
+    expect(extractReadableText_ACU('<p>&#x10FFFF;</p>').text).toBe('\u{10FFFF}');
+  });
+});

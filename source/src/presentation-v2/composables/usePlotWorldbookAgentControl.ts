@@ -508,6 +508,8 @@ export function usePlotWorldbookAgentControl() {
   }
 
   async function runSkillifyWithOptions_ACU(optionsPatch: { selectedEntries?: AgentSkillifySelectedEntry_ACU[] } = {}): Promise<boolean> {
+    // 入口防重入：busy 置位在 refresh+confirm 之后，若已在飞直接拒绝，避免并发 skillify。
+    if (busy.value) return false;
     await refresh();
     const confirmed = await dialog.confirm(plotCopy.agentControl.skillify.confirm);
     if (!confirmed) return false;

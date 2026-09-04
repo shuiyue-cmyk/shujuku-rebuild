@@ -520,6 +520,9 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
         modifiedKeys: modifiedSheetKeys,
         appliedEdits,
         failedEdits,
+        // 全部解析后的指令数：编排层据此识别「全部被模式门静默过滤」的空指令场景
+        // （appliedEdits===0 && failedEdits===0 → 零操作提交，precondition，不烧 AI 重试）。
+        totalCommands,
         error: success ? '' : `解析或应用失败：${totalCommands} 条指令中成功 0 条，失败 ${failedEdits} 条。`,
     };
   }

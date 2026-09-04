@@ -2641,6 +2641,55 @@ describe('SqlTableService', () => {
   });
 
   // ═══════════════════════════════════════════════════════════════
+  // _syncToJson 部分视图 merge-back
+  // ═══════════════════════════════════════════════════════════════
+  describe('_syncToJson 部分视图 merge-back', () => {
+    it('warnings 指明的跳过表回填上份视图；上份无该表保持缺失并 warn', async () => {
+      const { logWarn_ACU } = await import('../../../src/shared/utils');
+      mockMergeAll.mockResolvedValue(JSON.parse(JSON.stringify(testTableData)));
+      await service.loadFromChat();
+      const bridge = (service as any).syncBridge;
+      const realExport = bridge.exportToTableData.bind(bridge);
+      const restore = () => { bridge.exportToTableData = realExport; };
+      try {
+        // 上份 canonical 视图：sheet_0 存在
+        const previous = (service as any)._readCanonicalView_ACU() as any;
+        expect(previous?.sheet_0).toBeDefined();
+
+        // 1) 导出跳过 sheet_0（warnings + skippedSheetKeys 明确指明）→ 发布前回填上份内容
+        bridge.exportToTableData = (mate: any, options: any) => {
+          const exported = realExport(mate, options);
+          delete exported.sheet_0;
+          options?.warnings?.push('[SyncBridge] 导出表 inventory 失败: boom');
+          options?.skippedSheetKeys?.push('sheet_0');
+          return exported;
+        };
+        const synced = (service as any)._syncToJson() as any;
+        expect(synced).not.toBeNull();
+        expect(synced.sheet_0).toBeDefined();
+        expect(synced.sheet_0.content).toEqual(previous.sheet_0.content);
+        expect((service as any)._readCanonicalView_ACU().sheet_0).toBeDefined();
+
+        // 2) 导出跳过 sheet_absent（上份视图无该表）→ 保持缺失 + warn（不盲回填）
+        bridge.exportToTableData = (mate: any, options: any) => {
+          const exported = realExport(mate, options);
+          options?.warnings?.push('[SyncBridge] 导出表 ghost 失败: boom');
+          options?.skippedSheetKeys?.push('sheet_absent');
+          return exported;
+        };
+        const synced2 = (service as any)._syncToJson() as any;
+        expect(synced2).not.toBeNull();
+        expect(synced2.sheet_absent).toBeUndefined();
+        expect((service as any)._readCanonicalView_ACU().sheet_absent).toBeUndefined();
+        expect(synced2.sheet_0).toBeDefined(); // 上轮回填结果保留
+        expect(logWarn_ACU).toHaveBeenCalledWith(expect.stringContaining('保持缺失'));
+      } finally {
+        restore();
+      }
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════
   // getCurrentData
   // ═══════════════════════════════════════════════════════════════
   describe('getCurrentData', () => {

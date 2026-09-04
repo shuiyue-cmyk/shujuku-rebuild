@@ -585,4 +585,45 @@ describe('agent worldbook skillify candidate filtering', () => {
     expect(second.nextCursor).toEqual({ bookName: '剧情书', uid: 'c' });
     expect(mockCallAIWithPreset).toHaveBeenCalledTimes(3);
   });
+
+  it('用户停止（abort 哨兵）收口：并发 worker 捕获哨兵后兄弟停止领取，4 条只发起 2 次 AI 调用', async () => {
+    mockGetLorebookEntriesByNames.mockResolvedValueOnce({
+      '剧情书': ['a', 'b', 'c', 'd'].map(uid => ({
+        uid,
+        comment: `地点${uid}`,
+        content: uid.repeat(20),
+        enabled: true,
+        keys: [uid],
+      })),
+    });
+    mockCallAIWithPreset.mockRejectedValue(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+
+    await expect(skillifyWorldbookEntries_ACU(['剧情书'], { maxConcurrency: 2, maxAiRetries: 3 }))
+      .rejects.toThrow('agent_skillify_entry_aborted');
+
+    // 两个并发 worker 各消费 1 条后收口，剩余 c / d 不再领取（收口前会继续跑满 4 次）。
+    expect(mockCallAIWithPreset).toHaveBeenCalledTimes(2);
+    expect(mockSaveWorldbookEntrySkillMeta).not.toHaveBeenCalled();
+  });
+
+  it('普通失败不触发收口：并发 worker 继续消费剩余条目', async () => {
+    mockGetLorebookEntriesByNames.mockResolvedValueOnce({
+      '剧情书': ['a', 'b', 'c', 'd'].map(uid => ({
+        uid,
+        comment: `地点${uid}`,
+        content: uid.repeat(20),
+        enabled: true,
+        keys: [uid],
+      })),
+    });
+    const unauthorized = Object.assign(new Error('API 请求失败: 401'), { status: 401, name: 'AgentApiHttpError_ACU' });
+    mockCallAIWithPreset
+      .mockRejectedValueOnce(unauthorized)
+      .mockResolvedValue('{"description":"新描述","triggerWhen":"新触发"}');
+
+    const result = await skillifyWorldbookEntries_ACU(['剧情书'], { maxConcurrency: 2, maxAiRetries: 3 });
+
+    expect(result).toMatchObject({ totalCandidates: 4, updated: 3, failed: 1 });
+    expect(mockCallAIWithPreset).toHaveBeenCalledTimes(4);
+  });
 });

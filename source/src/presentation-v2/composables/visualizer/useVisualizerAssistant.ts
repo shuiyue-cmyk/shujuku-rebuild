@@ -544,6 +544,8 @@ export function useVisualizerAssistant() {
   }
 
   async function run(): Promise<boolean> {
+    // 防并行门：在飞会话未结束时拒绝重复 run，避免中途覆盖共享 guardController 与会话状态。
+    if (visualizer.assistantIsRunning) return false;
     const request = String(userRequest.value || '').trim();
     if (!request) {
       visualizer.assistantErrorMessage = '请输入改表需求。';

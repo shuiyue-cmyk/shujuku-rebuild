@@ -271,10 +271,20 @@ export function createPlotPresetApi(ctx: ApiGroupContext): Record<string, Functi
         // =========================
 
         initGameSession: async function(characterData: any, options: any = {}) {
+            // fix8 登记性弃用提示（不改语义）：options.presetName 在本库已无任何读取点
+            // （剧情引导预设只能由 options.presetData 自备导入，见下方步骤2）。旧调用方
+            // 传了 presetName 又未携带 presetData 时提示一次；presetName 仍被忽略，
+            // 初始化结果不受影响。
+            if (options?.presetName && !options?.presetData) {
+                logWarn_ACU('[游戏初始化] options.presetName 已弃用：本库不读取该参数，剧情引导预设请改用 options.presetData 传入。本次调用将忽略 presetName。');
+            }
             const result: any = {
                 success: false,
                 templateInjected: false,
                 presetLoaded: false,
+                // fix8 历史行为登记（只登记不修）：protagonistInitialized / equipmentInitialized
+                // 自「主角与装备初始化职责剥离出初始化 API」起恒为 false，仅为兼容旧调用方的
+                // 字段形状保留。下游不得基于这两个字段做逻辑分支。
                 protagonistInitialized: false,
                 equipmentInitialized: false,
                 runtimeReady: true,

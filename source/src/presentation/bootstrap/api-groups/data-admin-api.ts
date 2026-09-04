@@ -17,18 +17,31 @@ function dataAdminApiError_ACU(error: unknown, fallback: string): { success: fal
     return { success: false, error: error instanceof Error ? error.message : fallback };
 }
 
+/**
+ * 数据管理类 API 失败返回值：恒为 `false`（v9.1.6 回归修复，恢复 origin/main 同形状）。
+ * 上游 API_DOCUMENTATION.md 明示这批方法为 Promise<boolean>；返回 truthy 对象
+ * `{success:false,error}` 会让第三方 `!r` 判定误判为成功。错误详情仍经
+ * logError_ACU 全量落日志，并附加 globalThis.__ACU_LAST_DATA_ADMIN_ERROR__ 供诊断。
+ */
+function recordDataAdminFailure_ACU(method: string, error: unknown): false {
+    try {
+        (globalThis as any).__ACU_LAST_DATA_ADMIN_ERROR__ = { method, error, at: Date.now() };
+    } catch {}
+    return false;
+}
+
 export function createDataAdminApi(_ctx: ApiGroupContext): Record<string, Function> {
     return {
         // 模板/数据管理
-        importTemplate: async function(options: any = {}) { try { return await importTableTemplate_ACU(options); } catch (e) { logError_ACU('importTemplate failed:', e); return dataAdminApiError_ACU(e, '模板导入失败。'); } },
-        exportTemplate: async function(options: any = {}) { try { return await exportTableTemplate_ACU(options); } catch (e) { logError_ACU('exportTemplate failed:', e); return dataAdminApiError_ACU(e, '模板导出失败。'); } },
-        resetTemplate: async function(options: any = {}) { try { return await resetTableTemplate_ACU(options); } catch (e) { logError_ACU('resetTemplate failed:', e); return dataAdminApiError_ACU(e, '模板重置失败。'); } },
-        resetAllDefaults: async function() { try { return await resetAllToDefaults_ACU(); } catch (e) { logError_ACU('resetAllDefaults failed:', e); return dataAdminApiError_ACU(e, '恢复默认配置失败。'); } },
-        exportJsonData: async function() { try { return await exportCurrentJsonData_ACU(); } catch (e) { logError_ACU('exportJsonData failed:', e); return dataAdminApiError_ACU(e, '表格数据导出失败。'); } },
-        importCombinedSettings: async function() { try { return await importCombinedSettings_ACU(); } catch (e) { logError_ACU('importCombinedSettings failed:', e); return dataAdminApiError_ACU(e, '组合设置导入失败。'); } },
-        exportCombinedSettings: async function() { try { return await exportCombinedSettings_ACU(); } catch (e) { logError_ACU('exportCombinedSettings failed:', e); return dataAdminApiError_ACU(e, '组合设置导出失败。'); } },
-        overrideWithTemplate: async function() { try { return await overrideLatestLayerWithTemplate_ACU(); } catch (e) { logError_ACU('overrideWithTemplate failed:', e); return dataAdminApiError_ACU(e, '模板覆盖失败。'); } },
-        migrateLegacyVectorIndex: async function() { try { return await migrateLegacySummaryVectorIndex_ACU(); } catch (e) { logError_ACU('migrateLegacyVectorIndex failed:', e); return dataAdminApiError_ACU(e, '旧版向量索引迁移失败。'); } },
+        importTemplate: async function(options: any = {}) { try { return await importTableTemplate_ACU(options); } catch (e) { logError_ACU('importTemplate failed:', e); return recordDataAdminFailure_ACU('importTemplate', e); } },
+        exportTemplate: async function(options: any = {}) { try { return await exportTableTemplate_ACU(options); } catch (e) { logError_ACU('exportTemplate failed:', e); return recordDataAdminFailure_ACU('exportTemplate', e); } },
+        resetTemplate: async function(options: any = {}) { try { return await resetTableTemplate_ACU(options); } catch (e) { logError_ACU('resetTemplate failed:', e); return recordDataAdminFailure_ACU('resetTemplate', e); } },
+        resetAllDefaults: async function() { try { return await resetAllToDefaults_ACU(); } catch (e) { logError_ACU('resetAllDefaults failed:', e); return recordDataAdminFailure_ACU('resetAllDefaults', e); } },
+        exportJsonData: async function() { try { return await exportCurrentJsonData_ACU(); } catch (e) { logError_ACU('exportJsonData failed:', e); return recordDataAdminFailure_ACU('exportJsonData', e); } },
+        importCombinedSettings: async function() { try { return await importCombinedSettings_ACU(); } catch (e) { logError_ACU('importCombinedSettings failed:', e); return recordDataAdminFailure_ACU('importCombinedSettings', e); } },
+        exportCombinedSettings: async function() { try { return await exportCombinedSettings_ACU(); } catch (e) { logError_ACU('exportCombinedSettings failed:', e); return recordDataAdminFailure_ACU('exportCombinedSettings', e); } },
+        overrideWithTemplate: async function() { try { return await overrideLatestLayerWithTemplate_ACU(); } catch (e) { logError_ACU('overrideWithTemplate failed:', e); return recordDataAdminFailure_ACU('overrideWithTemplate', e); } },
+        migrateLegacyVectorIndex: async function() { try { return await migrateLegacySummaryVectorIndex_ACU(); } catch (e) { logError_ACU('migrateLegacyVectorIndex failed:', e); return recordDataAdminFailure_ACU('migrateLegacyVectorIndex', e); } },
         openVisualizer: async function() {
             const surface = getUiSurface_ACU();
             if (!surface) {
@@ -54,6 +67,6 @@ export function createDataAdminApi(_ctx: ApiGroupContext): Record<string, Functi
         commitV2Recovery: async function(planId: any, options: any = {}) { try { if (typeof planId !== 'string' || !planId.trim()) return { success: false, error: 'planId 必须是非空字符串。' }; if (options === null || typeof options !== 'object' || Array.isArray(options)) return { success: false, error: 'V2 恢复确认选项必须是对象。' }; return await commitPreparedV2Recovery_ACU(planId.trim(), { confirmOrphanDataReplace: options.confirmOrphanDataReplace === true }); } catch (e) { logError_ACU('commitV2Recovery failed:', e); return dataAdminApiError_ACU(e, 'V2 恢复提交失败。'); } },
 
         // 合并总结
-        mergeSummaryNow: async function() { try { return await handleManualMergeSummary_ACU(); } catch (e) { logError_ACU('mergeSummaryNow failed:', e); return dataAdminApiError_ACU(e, '手动合并总结失败。'); } },
+        mergeSummaryNow: async function() { try { return await handleManualMergeSummary_ACU(); } catch (e) { logError_ACU('mergeSummaryNow failed:', e); return recordDataAdminFailure_ACU('mergeSummaryNow', e); } },
     };
 }

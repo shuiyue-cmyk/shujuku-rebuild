@@ -26,6 +26,9 @@ type SqlMutationOptions_ACU = {
     targetSheetKeys: string[] | null;
     updateGroupKeys: string[] | null;
     trackingSheetKeys: string[] | null | undefined;
+    // fix7 opt-in：仅调用方显式传 strictDml === true 时启用 DML 白名单（INSERT/REPLACE/UPDATE/DELETE）。
+    // 缺省为 false——既定公开面（不设白名单）行为零变化。
+    strictDml: boolean;
 };
 
 type ParsedSqlArgs_ACU = SqlMutationOptions_ACU & {
@@ -178,6 +181,8 @@ function parseSqlArgs_ACU(sqlOrOptions: any, params?: any, options?: any, method
             optionSource?.trackingSheetKeys,
             optionSource?.trackingKeys,
         ), methodName, 'trackingSheetKeys'),
+        // fix7 opt-in：只有显式 === true 才视为启用；缺省/其它值一律 false，公开面不变。
+        strictDml: optionSource?.strictDml === true,
     };
 }
 
@@ -472,6 +477,25 @@ function withInferredRawSqlTargets_ACU<T extends ParsedSqlArgs_ACU>(args: T): T 
     };
 }
 
+/**
+ * fix7 opt-in DML 白名单（仅 strictDml === true 时启用）：与 AI 填表路径
+ * （sql-table-service assertNoHiddenPhysicalColumnMutations_ACU）同一组动词白名单
+ * ——INSERT / REPLACE / UPDATE / DELETE，禁 CREATE、ALTER、DROP、事务、查询等。
+ * 既定公开面不变：默认（不传 strictDml）不做该检查，历史行为零变化。
+ * 判词取自去注释/去字符串字面量后的首个 token，字符串与注释无法伪装成语句头。
+ */
+const STRICT_DML_ALLOWED_ACTIONS_ACU: ReadonlySet<string> = new Set(['INSERT', 'REPLACE', 'UPDATE', 'DELETE']);
+
+function assertStrictDmlWhitelist_ACU(sql: string, methodName: string): void {
+    for (const statement of splitSqlStatements(String(sql || ''))) {
+        const firstToken = stripSqlCommentsAndStrings_ACU(statement).trim().split(/\s+/)[0] || '';
+        const action = firstToken.toUpperCase();
+        if (!STRICT_DML_ALLOWED_ACTIONS_ACU.has(action)) {
+            throw new Error(`${methodName}: strictDml 只允许 INSERT、REPLACE、UPDATE、DELETE 数据变更语句，收到：${firstToken || '(空)'}。`);
+        }
+    }
+}
+
 function buildRawSqlWriteSet_ACU(options: SqlMutationOptions_ACU): TableWriteConflictUnitV2_ACU[] {
     const keys = options.targetSheetKeys;
     return Array.isArray(keys) && keys.length > 0
@@ -597,6 +621,8 @@ export function createSqlApi(ctx: ApiGroupContext): Record<string, Function> {
         executeSqlMutation: async function(sqlOrOptions: any, params?: any, options?: any): Promise<PublicSqlMutationResult_ACU> {
             try {
                 const args = withInferredRawSqlTargets_ACU(parseSqlArgs_ACU(sqlOrOptions, params, options, 'executeSqlMutation'));
+                // fix7 opt-in：仅 strictDml === true 时收紧到 DML 白名单；缺省（不传）行为零变化。
+                if (args.strictDml === true) assertStrictDmlWhitelist_ACU(args.sql, 'executeSqlMutation');
                 const writeSet = buildRawSqlWriteSet_ACU(args);
                 const commitResult = await runSqliteRuntimeMutationCommit_ACU<null>({
                     source: 'raw_sql_mutation',
@@ -638,6 +664,8 @@ export function createSqlApi(ctx: ApiGroupContext): Record<string, Function> {
                 if (args.params && args.params.length > 0) {
                     throw new Error('executeSqlBatch: params are not supported for batch SQL. Use literal multi-statement SQL or executeSqlMutation for one parameterized statement.');
                 }
+                // fix7 opt-in：与运行时实际执行的语句清单同源（同 <!-- --> 清洗 + splitSqlStatements）。
+                if (args.strictDml === true) assertStrictDmlWhitelist_ACU(String(args.sql || '').replace(/<!--|-->/g, ''), 'executeSqlBatch');
                 const writeSet = buildRawSqlWriteSet_ACU(args);
                 const commitResult = await runTableUpdateCommit_ACU<PublicSqlBatchResult_ACU>({
                     source: 'raw_sql_batch',

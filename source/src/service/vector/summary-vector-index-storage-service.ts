@@ -21,6 +21,7 @@ import {
     buildVectorIndexSnapshotFilePath_ACU,
     decodeVectorIndexScopeFromPath_ACU,
     deleteVectorIndexFile_ACU,
+    isFallbackVectorIndexChecksum_ACU,
     isVectorIndexContentPackPathV2_ACU,
     loadVectorIndexRegistry_ACU,
     readVectorIndexJsonFile_ACU,
@@ -1095,7 +1096,12 @@ export async function cleanupUnreachableSummaryVectorIndexFiles_ACU(options: Sum
                 && Number(packData.version) === SUMMARY_VECTOR_INDEX_CONTENT_PACK_VERSION_ACU
                 && String(packData.packScope || '') === buildVectorIndexSingleSnapshotV2ScopeToken_ACU(scope)
                 && String(packData.packKey || '') === packKeyFromPath
-                && (!file.checksum || (await sha256Text_ACU(JSON.stringify(packData))) === file.checksum);
+                && (!file.checksum
+                    // fix6 附加式：fallback-* 弱哈希（crypto.subtle 缺席环境的退化产物）不具备
+                    // 内容寻址效力，不投删除票——跳过该判据即走保留方向（不增删其它判据），
+                    // 避免弱哈希碰撞让 GC 误删真实内容。
+                    || (!isFallbackVectorIndexChecksum_ACU(file.checksum)
+                        && (await sha256Text_ACU(JSON.stringify(packData))) === file.checksum));
             if (!packMatches) {
                 retainedPaths.push(path);
                 blockedByReachability.push(path);

@@ -96,11 +96,15 @@ async function resolveDivergedSheetKeys_ACU(
   }
 }
 
+/** 持锁重算后无可落盘内容的内部哨兵：apply 以 precondition 失败上浮，flush 层据此清空登记。 */
+const NOTHING_TO_FLUSH_ERROR_ACU = '__ACU_RUNTIME_ONLY_FLUSH_NOTHING_TO_FLUSH__';
+
 export async function flushRuntimeOnlyPendingChanges_ACU(reason: string): Promise<RuntimeOnlyPendingFlushResult_ACU> {
   const scope = currentScope_ACU();
   const pending = readRuntimeOnlyPendingSheets_ACU(scope);
   if (!pending) return { flushed: false, sheetKeys: [] };
 
+  // T0 快路径预检（锁外）：全部一致时直接清登记返回，不进提交事务。
   let runtimeData: TableDataObject_ACU | null;
   try {
     runtimeData = await readRuntimeSnapshot_ACU();
@@ -134,19 +138,17 @@ export async function flushRuntimeOnlyPendingChanges_ACU(reason: string): Promis
     return { flushed: false, sheetKeys: [] };
   }
 
-  const operations: TableMutationOperationV2_ACU[] = divergedSheetKeys.map(sheetKey => ({
-    kind: 'sheet_replace',
-    sheetKey,
-    sheet: cloneJson_ACU((runtimeData as Record<string, any>)[sheetKey]) as Sheet_ACU,
-    reason: 'system',
-  }));
-  const writeSet = divergedSheetKeys.map(sheetKey => ({ kind: 'sheet' as const, sheetKey }));
-
+  // 事务内重建（持锁后 fresh strict export）：T0 快照可能已过期——并发第二写者在
+  // 快照读取与抢锁之间提交时，旧快照会把它已提交的结果回滚掉。写入集、目标楼层与
+  // operations 一律以持锁后的最新运行时为准；T0 值仅作提交选项回退。writeSet 取全部
+  // 候选表（⊇ 持锁重算后的任何分歧集），保证重算新增的分歧表也在锁覆盖范围内。
+  let flushedSheetKeys: string[] | null = null;
+  let flushedMessageIndex: number | null = null;
   const commitResult = await runTableUpdateCommit_ACU<null>({
     source: 'system',
     reason: `runtime_only_flush:${reason}`,
     isolationKey: scope.isolationKey,
-    writeSet,
+    writeSet: candidateSheetKeys.map(sheetKey => ({ kind: 'sheet' as const, sheetKey })),
     // 运行时本身没有变化，只是把它写回聊天：不推进 runtime revision，
     // 否则会让并发填表已捕获的 baseRevision 误判为冲突。
     revisionWriteSet: [],
@@ -157,23 +159,71 @@ export async function flushRuntimeOnlyPendingChanges_ACU(reason: string): Promis
     updateGroupKeys: null,
     trackingSheetKeys: [],
     trackAsUpdate: false,
-    operations,
     skipRuntimeOnlyPendingFlush: true,
-  }, () => ({
-    success: true,
-    value: null,
-    tableData: runtimeData as TableDataObject_ACU,
-    persist: { operations, revisionWriteSet: [] },
-  }));
+  }, async () => {
+    let freshData: TableDataObject_ACU | null;
+    try {
+      freshData = await readRuntimeSnapshot_ACU();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      logWarn_ACU(`[RuntimeOnlyFlush] ${reason}: 持锁后无法读取运行时快照，保留待落盘登记。`, error);
+      return { success: false as const, error: message, errorCategory: 'infrastructure' as const };
+    }
+    if (!freshData) {
+      return { success: false as const, error: 'runtime snapshot unavailable', errorCategory: 'infrastructure' as const };
+    }
+    const freshSheetKeys = Object.keys(freshData).filter(key => key.startsWith('sheet_'));
+    const freshCandidates = pending.all
+      ? freshSheetKeys
+      : pending.sheetKeys.filter(sheetKey => freshSheetKeys.includes(sheetKey));
+    const freshChat = getChatArray_ACU();
+    const freshTargetMessageIndex = getLatestTableAppendMessageIndexFromChat_ACU(freshChat, scope.isolationKey, settings_ACU);
+    if (freshTargetMessageIndex < 0) {
+      return { success: false as const, error: 'no AI message to persist runtime-only changes', errorCategory: 'precondition' as const };
+    }
+    if (freshCandidates.length === 0) {
+      // 登记表在持锁期间已从运行时消失：无可落盘内容，与 T0 同语义（清空登记）。
+      return { success: false as const, error: NOTHING_TO_FLUSH_ERROR_ACU, errorCategory: 'precondition' as const };
+    }
+    const freshDivergedSheetKeys = await resolveDivergedSheetKeys_ACU(freshChat, scope.isolationKey, freshTargetMessageIndex, freshData, freshCandidates);
+    if (freshDivergedSheetKeys.length === 0) {
+      // 并发写者已把内容物化进聊天：与回放一致，无需落盘（清空登记）。
+      return { success: false as const, error: NOTHING_TO_FLUSH_ERROR_ACU, errorCategory: 'precondition' as const };
+    }
+    const freshOperations: TableMutationOperationV2_ACU[] = freshDivergedSheetKeys.map(sheetKey => ({
+      kind: 'sheet_replace',
+      sheetKey,
+      sheet: cloneJson_ACU((freshData as Record<string, any>)[sheetKey]) as Sheet_ACU,
+      reason: 'system',
+    }));
+    flushedSheetKeys = freshDivergedSheetKeys;
+    flushedMessageIndex = freshTargetMessageIndex;
+    return {
+      success: true as const,
+      value: null,
+      tableData: freshData,
+      persist: {
+        targetMessageIndex: freshTargetMessageIndex,
+        targetSheetKeys: freshDivergedSheetKeys,
+        operations: freshOperations,
+      },
+    };
+  });
 
   if (!commitResult.success) {
+    if (commitResult.error === NOTHING_TO_FLUSH_ERROR_ACU) {
+      clearRuntimeOnlyPendingSheets_ACU(scope);
+      logDebug_ACU(`[RuntimeOnlyFlush] ${reason}: 持锁重算后运行时与聊天回放一致，无需落盘（${candidateSheetKeys.join('、')}）。`);
+      return { flushed: false, sheetKeys: [] };
+    }
     logWarn_ACU(`[RuntimeOnlyFlush] ${reason}: 运行时未落盘变更写回聊天失败，保留登记待下次重试：${commitResult.error || 'unknown error'}`);
     return { flushed: false, sheetKeys: divergedSheetKeys, error: commitResult.error };
   }
 
   clearRuntimeOnlyPendingSheets_ACU(scope);
-  logDebug_ACU(`[RuntimeOnlyFlush] ${reason}: 已把运行时未落盘变更写回 AI 楼层 #${commitResult.messageIndex ?? targetMessageIndex}：${divergedSheetKeys.join('、')}。`);
-  return { flushed: true, sheetKeys: divergedSheetKeys, messageIndex: commitResult.messageIndex ?? targetMessageIndex };
+  const finalSheetKeys = flushedSheetKeys ?? divergedSheetKeys;
+  const finalMessageIndex = flushedMessageIndex ?? targetMessageIndex;
+  logDebug_ACU(`[RuntimeOnlyFlush] ${reason}: 已把运行时未落盘变更写回 AI 楼层 #${commitResult.messageIndex ?? finalMessageIndex}：${finalSheetKeys.join('、')}。`);
+  return { flushed: true, sheetKeys: finalSheetKeys, messageIndex: commitResult.messageIndex ?? finalMessageIndex };
 }
-
 registerRuntimeOnlyPendingFlusher_ACU(flushRuntimeOnlyPendingChanges_ACU);

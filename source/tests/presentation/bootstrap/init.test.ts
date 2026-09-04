@@ -396,3 +396,64 @@ describe('mainInitialize_ACU 续写宿主生成事件上下文', () => {
   });
 });
 
+describe('mainInitialize_ACU init 链 running 占用补跑', () => {
+  function hangFirstChainRunOnLoadMessages() {
+    let releaseA: (() => void) | null = null;
+    const gateA = new Promise<void>((resolve) => { releaseA = resolve; });
+    let loadCalls = 0;
+    m.loadMessages.mockImplementation(async () => {
+      loadCalls += 1;
+      if (loadCalls === 1) await gateA; // 链 A 挂起，占住 running
+    });
+    return { release: () => releaseA!() };
+  }
+
+  afterEach(() => {
+    m.loadMessages.mockReset();
+    m.loadMessages.mockResolvedValue(undefined);
+  });
+
+  it('重建链到达时 running 被占：登记待跑代次，运行中的链结束后补跑最新一次', async () => {
+    vi.useFakeTimers();
+    m.api.chat = [{ mes: 'active' }];
+    m.resetScript.mockImplementation(async (chatKey: string) => { m.currentChatKey = chatKey; });
+    const gate = hangFirstChainRunOnLoadMessages();
+
+    await m.chatChanged!('chat-a');            // 排程链 A（代次 1）
+    await vi.advanceTimersByTimeAsync(1200);    // A 开始执行并挂起在 loadMessages
+    expect(m.loadMessages).toHaveBeenCalledTimes(1);
+
+    await m.chatChanged!('chat-a');            // 排程链 B（代次 2）
+    await vi.advanceTimersByTimeAsync(1200);    // B 到达：running 被占 → 登记待跑（不再静默丢弃）
+    expect(m.loadMessages).toHaveBeenCalledTimes(1); // B 未执行
+
+    gate.release();
+    await vi.advanceTimersByTimeAsync(0);       // A 收尾 → finally 补跑 B（直接调用，非定时器）
+
+    expect(m.loadMessages).toHaveBeenCalledTimes(2); // B 已补跑
+    await vi.advanceTimersByTimeAsync(2400);
+    expect(m.loadMessages).toHaveBeenCalledTimes(2); // 只补一次，无第三次
+    vi.useRealTimers();
+  });
+
+  it('待跑代次被更晚排程取代时不补跑旧代次，由新链按其自身代次正常执行', async () => {
+    vi.useFakeTimers();
+    m.api.chat = [{ mes: 'active' }];
+    m.resetScript.mockImplementation(async (chatKey: string) => { m.currentChatKey = chatKey; });
+    const gate = hangFirstChainRunOnLoadMessages();
+
+    await m.chatChanged!('chat-a');
+    await vi.advanceTimersByTimeAsync(1200);    // A（代次 1）执行中挂起
+    await m.chatChanged!('chat-a');
+    await vi.advanceTimersByTimeAsync(1200);    // B（代次 2）到达 → 登记待跑
+    await m.chatChanged!('chat-a');            // C（代次 3）排程，定时器未到
+
+    gate.release();
+    await vi.advanceTimersByTimeAsync(0);       // A 收尾：待跑代次 2 ≠ 最新 3 → 不补跑
+    expect(m.loadMessages).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1200);    // C 的定时器到点 → 正常执行
+    expect(m.loadMessages).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+});

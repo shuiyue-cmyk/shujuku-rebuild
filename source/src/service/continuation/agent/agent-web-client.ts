@@ -135,6 +135,16 @@ const defaultDependencies_ACU: AgentWebClientDependencies_ACU = {
   now: () => Date.now(),
 };
 
+/**
+ * fix5 附加式守卫：&#N; / &#xN; 实体的码点超出 0..0x10FFFF（或非安全整数）时，
+ * String.fromCodePoint 会抛 RangeError 并炸掉整次派工（本函数处于搜索/百科正文
+ * 抽取链路，外层无 try/catch 兜底）。越界/非法实体按「无法解码」处理返回空串。
+ */
+function safeFromCodePoint_ACU(code: string, radix: 10 | 16): string {
+  const cp = Number.parseInt(code, radix);
+  return Number.isSafeInteger(cp) && cp >= 0 && cp <= 0x10FFFF ? String.fromCodePoint(cp) : '';
+}
+
 function decodeHtmlEntities_ACU(text: string): string {
   return text
     .replace(/&nbsp;/g, ' ')
@@ -143,8 +153,8 @@ function decodeHtmlEntities_ACU(text: string): string {
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
     .replace(/&#39;|&apos;/g, "'")
-    .replace(/&#(\d+);/g, (_match, code: string) => String.fromCodePoint(Number.parseInt(code, 10)))
-    .replace(/&#x([0-9a-f]+);/gi, (_match, code: string) => String.fromCodePoint(Number.parseInt(code, 16)));
+    .replace(/&#(\d+);/g, (_match, code: string) => safeFromCodePoint_ACU(code, 10))
+    .replace(/&#x([0-9a-f]+);/gi, (_match, code: string) => safeFromCodePoint_ACU(code, 16));
 }
 
 function stripTags_ACU(html: string): string {
@@ -220,7 +230,14 @@ export function evaluateWebUrlPolicy_ACU(rawUrl: string, blockedDomains: readonl
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return '只允许 http / https 协议';
   if (url.port && url.port !== '80' && url.port !== '443') return '不允许非标准端口';
   const host = url.hostname.toLowerCase();
-  if (/^\d+\.\d+\.\d+\.\d+$/.test(host) || host.includes(':')) return '不允许直接访问 IP 地址';
+  // fix4 直连 IP 拦截补进制变体：WHATWG URL 会把纯整数/十六进制/短点分 host 规范化为
+  // 点分四段（原正则可拦），但宿主 URL 实现不规范时可能保留原文——按字面兜底拒绝。
+  // 此类 host 均无合法公网域名用例，普通域名（含数字标签）不会命中。
+  if (
+    /^\d+(\.\d+){0,3}$/.test(host)   // 点分 1~4 段（含原四段形态）、纯十进制整数（如 http://2130706433/）与 1.2.3/1.2 等不足四段形式
+    || /^0[xX]/.test(host)           // 十六进制形态（如 0x7f000001、0x7f.0x0.0x0.0x1）
+    || host.includes(':')            // IPv6 字面量（URL.hostname 已去括号）
+  ) return '不允许直接访问 IP 地址';
   if (ALWAYS_BLOCKED_HOST_PATTERNS_ACU.some(pattern => pattern.test(host))) return '内网或本机地址被拦截';
   if (hostOrigin) {
     try {

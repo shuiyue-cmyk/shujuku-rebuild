@@ -626,6 +626,24 @@ describe('SyncBridge', () => {
         .toThrow('sheet export boom');
       querySpy.mockRestore();
     });
+
+    it('非 strict 单表导出失败时，warnings 与 skippedSheetKeys 同时携带该表 sheetKey', () => {
+      const originalData = makeTableData({ sheet_0: makeSheet() });
+      const tableName = getRuntimeTableName(originalData, 'sheet_0');
+      bridge.loadFromTableData(originalData);
+      const originalQuery = engine.query.bind(engine);
+      const querySpy = vi.spyOn(engine, 'query').mockImplementation((sql: string, params?: any, options?: any) => {
+        if (sql === `SELECT * FROM ${tableName};`) throw new Error('sheet export boom');
+        return originalQuery(sql, params, options);
+      });
+      const warnings: string[] = [];
+      const skippedSheetKeys: string[] = [];
+      const exported = bridge.exportToTableData(makeMate(), { warnings, skippedSheetKeys });
+      expect(warnings.join('')).toContain('导出表');
+      expect(skippedSheetKeys).toEqual(['sheet_0']);
+      expect(exported.sheet_0).toBeUndefined();
+      querySpy.mockRestore();
+    });
   });
 
   // ═══════════════════════════════════════════════════════════════

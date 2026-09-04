@@ -823,4 +823,34 @@ describe('usePlotWorldbookAgentControl', () => {
       cursor: undefined,
     });
   });
+
+  it('skillify 入口防重入：busy 在飞时再次调用返回 false，confirm 与 service 各仅一次', async () => {
+    let releaseSkillify!: (value: any) => void;
+    mockSkillify.mockImplementation(() => new Promise(resolve => { releaseSkillify = resolve; }));
+    const c = await getComposable();
+
+    const firstRun = c.skillifyAll();
+    await vi.waitFor(() => expect(c.busy.value).toBe('skillify'));
+
+    // busy 置位后再次调用：入口直接拒绝，不再走 refresh/confirm/service。
+    expect(await c.skillifyAll()).toBe(false);
+    expect(dialog.confirm).toHaveBeenCalledTimes(1);
+    expect(mockSkillify).toHaveBeenCalledTimes(1);
+
+    releaseSkillify({
+      totalCandidates: 1, totalMatched: 1, selectedForRun: 1, remaining: 0, truncated: false,
+      nextCursor: undefined, updated: 1, skipped: 0, failed: 0, results: [],
+    });
+    expect(await firstRun).toBe(true);
+    expect(c.busy.value).toBeNull();
+
+    // 收尾后防重入门放行
+    mockSkillify.mockImplementation(async (options: any) => {
+      options.onProgress?.({ phase: 'collecting' });
+      options.onProgress?.({ phase: 'complete', current: 1, total: 1, updated: 1, skipped: 0, failed: 0 });
+      return { totalCandidates: 1, updated: 1, skipped: 0, failed: 0 };
+    });
+    expect(await c.skillifyAll()).toBe(true);
+    expect(mockSkillify).toHaveBeenCalledTimes(2);
+  });
 });

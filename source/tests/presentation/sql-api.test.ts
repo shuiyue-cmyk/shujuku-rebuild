@@ -647,4 +647,65 @@ describe('createSqlApi', () => {
     expect(result.type).toBe('mutation');
     expect(mocks.executeMutation).toHaveBeenCalledWith('UPDATE inventory SET name = ?', ['钢剑']);
   });
+
+  it('不传 strictDml 时公开面零变化：DROP 走原语义不拒绝', async () => {
+    const result = await api.executeSqlMutation('DROP TABLE inventory');
+    expect(result.changes).toBe(1);
+    expect(mocks.executeMutation).toHaveBeenCalledTimes(1);
+    const batch = await api.executeSqlBatch('DROP TABLE t;');
+    expect(batch.success).toBe(true);
+  });
+
+  it('strictDml=true 拒绝 DDL/查询/事务语句，不触达存储 provider', async () => {
+    for (const sql of [
+      'DROP TABLE inventory',
+      'ALTER TABLE inventory ADD COLUMN c TEXT',
+      'CREATE TABLE evil (id INTEGER)',
+      'SELECT * FROM inventory',
+      'BEGIN TRANSACTION',
+    ]) {
+      const result = await api.executeSqlMutation({ sql, strictDml: true });
+      expect(result).toEqual({ changes: 0, errors: [expect.stringContaining('strictDml 只允许 INSERT、REPLACE、UPDATE、DELETE')] });
+    }
+    expect(mocks.executeMutation).not.toHaveBeenCalled();
+  });
+
+  it('strictDml=true 放行 DML：字符串字面量内的动词不参与判词，注释后的真动词照常识别', async () => {
+    const literal = await api.executeSqlMutation({ sql: "UPDATE inventory SET name = 'DELETE FROM fake' WHERE row_id = 1", strictDml: true });
+    expect(literal.changes).toBe(1);
+    expect(mocks.executeMutation).toHaveBeenCalledTimes(1);
+
+    const commented = await api.executeSqlMutation({ sql: '-- header note\nDELETE FROM inventory WHERE row_id = 2', strictDml: true });
+    expect(commented.changes).toBe(1);
+    expect(mocks.executeMutation).toHaveBeenCalledTimes(2);
+  });
+
+  it('strictDml=true 多语句任一非 DML 即整体拒绝', async () => {
+    const mixed = await api.executeSqlMutation({ sql: 'INSERT INTO inventory(row_id) VALUES (3); DROP TABLE inventory', strictDml: true });
+    expect(mixed).toEqual({ changes: 0, errors: [expect.stringContaining('DROP')] });
+    expect(mocks.executeMutation).not.toHaveBeenCalled();
+  });
+
+  it('executeSqlBatch strictDml 与运行时语句清单同源（<!-- --> 清洗后逐句校验）', async () => {
+    const ok = await api.executeSqlBatch({ sql: "INSERT INTO T VALUES (1, 'a'); UPDATE T SET name = 'b' WHERE row_id = 1;", strictDml: true });
+    expect(ok.success).toBe(true);
+
+    // ok 分支已真实触达 provider：清零后再断言拒绝分支零触达。
+    mocks.applyEditsBatch.mockClear();
+
+    const bad = await api.executeSqlBatch({ sql: "INSERT INTO T VALUES (1, 'a'); DROP TABLE t;", strictDml: true });
+    expect(bad.success).toBe(false);
+    expect(bad.errors[0]).toContain('strictDml');
+    expect(mocks.applyEditsBatch).not.toHaveBeenCalled();
+
+    const htmlCommented = await api.executeSqlBatch({ sql: '<!-- note -->DROP TABLE t;', strictDml: true });
+    expect(htmlCommented.success).toBe(false);
+    expect(mocks.applyEditsBatch).not.toHaveBeenCalled();
+  });
+
+  it('strictDml 仅认显式布尔 true：其它真值不启用白名单（公开面不变）', async () => {
+    const result = await api.executeSqlMutation({ sql: 'DROP TABLE inventory', strictDml: 'true' as any });
+    expect(result.changes).toBe(1);
+    expect(mocks.executeMutation).toHaveBeenCalledTimes(1);
+  });
 });

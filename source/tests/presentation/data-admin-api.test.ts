@@ -69,15 +69,19 @@ describe('createDataAdminApi', () => {
     expect(mockCommitV2Recovery).toHaveBeenCalledWith('plan-1', { confirmOrphanDataReplace: true });
   });
 
-  it('模板导入/导出与合并总结失败返回可区分的 {success:false,error}（负向）', async () => {
+  it('模板导入/导出与合并总结失败返回恒为 false 并留诊断旁路（负向）', async () => {
     vi.mocked(importTableTemplate_ACU).mockRejectedValueOnce(new Error('boom-import'));
     vi.mocked(exportTableTemplate_ACU).mockRejectedValueOnce(new Error('boom-export'));
     vi.mocked(handleManualMergeSummary_ACU).mockRejectedValueOnce(new Error('boom-merge'));
     const api = createDataAdminApi({} as any);
 
-    await expect(api.importTemplate()).resolves.toMatchObject({ success: false, error: 'boom-import' });
-    await expect(api.exportTemplate()).resolves.toMatchObject({ success: false, error: 'boom-export' });
-    await expect(api.mergeSummaryNow()).resolves.toMatchObject({ success: false, error: 'boom-merge' });
+    // 第三方契约：这批方法为 Promise<boolean>，失败必须可被 !r 判定捕获。
+    await expect(api.importTemplate()).resolves.toBe(false);
+    expect((globalThis as any).__ACU_LAST_DATA_ADMIN_ERROR__).toMatchObject({ method: 'importTemplate', error: expect.anything() });
+    await expect(api.exportTemplate()).resolves.toBe(false);
+    expect((globalThis as any).__ACU_LAST_DATA_ADMIN_ERROR__).toMatchObject({ method: 'exportTemplate', error: expect.anything() });
+    await expect(api.mergeSummaryNow()).resolves.toBe(false);
+    expect((globalThis as any).__ACU_LAST_DATA_ADMIN_ERROR__).toMatchObject({ method: 'mergeSummaryNow', error: expect.anything() });
   });
 
   it('V2 恢复 API 拒绝空 planId、非对象选项及非严格布尔确认', async () => {

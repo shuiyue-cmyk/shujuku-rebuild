@@ -8,6 +8,7 @@ import {
   decodeVectorIndexScopeFromPath_ACU,
   extractVectorIndexContentPackScopeTokenFromPath_ACU,
   extractVectorIndexV2ScopeTokenFromPath_ACU,
+  isFallbackVectorIndexChecksum_ACU,
   isLegacyLosslessVectorIndexV2Path_ACU,
   isVectorIndexContentPackPathV2_ACU,
   loadVectorIndexRegistry_ACU,
@@ -488,5 +489,63 @@ describe('V1-d registry 损坏守卫', () => {
     await expect(unregisterVectorIndexFiles_ACU(['some/registered/path'])).rejects.toThrow(/registry/);
     // 只发生一次 registry 读取；load→merge→save 在 load 处中断，绝不以空 store 覆盖写。
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
+describe('registry 并发串行化（register/unregister 不丢条目）', () => {
+  class FakeFileReader {
+    result: string | null = null;
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    readAsDataURL(blob: Blob): void {
+      void blob.text().then((text) => {
+        this.result = `data:application/json;base64,${Buffer.from(text, 'utf8').toString('base64')}`;
+        this.onload?.();
+      });
+    }
+  }
+
+  it('并发注册+注销串行执行，最终 registry 无丢失条目', async () => {
+    vi.stubGlobal('FileReader', FakeFileReader as any);
+    let store: any = { version: 1, updatedAt: '2026-01-01T00:00:00.000Z', files: [{
+      role: 'manifest', path: 'p1', byteSize: 1, checksum: 'c', createdAt: '', updatedAt: '', status: 'ready',
+    }] };
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: any) => {
+      if (String(url).startsWith('/user/files/')) {
+        // 放大 read-modify-write 竞态窗口：未串行化时两操作都读到同一份旧 registry。
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return { ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(store)) };
+      }
+      const body = JSON.parse(init.body);
+      store = JSON.parse(Buffer.from(body.data, 'base64').toString('utf8'));
+      return { ok: true, status: 200 };
+    }));
+
+    await Promise.all([
+      registerVectorIndexFiles_ACU([{
+        role: 'manifest', path: 'p2', byteSize: 1, checksum: 'c2', createdAt: '', updatedAt: '', status: 'ready',
+      }]),
+      unregisterVectorIndexFiles_ACU(['p1']),
+    ]);
+
+    // 两种执行顺序下终态一致：p2 必在，p1 必删（未串行化时后写者会整体覆盖前者）。
+    expect(store.files.map((file: any) => file.path).sort()).toEqual(['p2']);
+  });
+});
+
+describe('isFallbackVectorIndexChecksum_ACU 弱哈希判别（fix6）', () => {
+  it('fallback-* 前缀判 true；SHA-256 hex 与空值判 false', () => {
+    expect(isFallbackVectorIndexChecksum_ACU('fallback-12345')).toBe(true);
+    expect(isFallbackVectorIndexChecksum_ACU('fallback-0')).toBe(true);
+    expect(isFallbackVectorIndexChecksum_ACU('fallback-')).toBe(true);
+
+    const sha256Hex = sha256HexSync_ACU('内容寻址原文');
+    expect(sha256Hex).toMatch(/^[0-9a-f]{64}$/);
+    expect(isFallbackVectorIndexChecksum_ACU(sha256Hex)).toBe(false);
+    expect(isFallbackVectorIndexChecksum_ACU(sha256Base64UrlSync_ACU('x'))).toBe(false);
+
+    expect(isFallbackVectorIndexChecksum_ACU('')).toBe(false);
+    expect(isFallbackVectorIndexChecksum_ACU(null)).toBe(false);
+    expect(isFallbackVectorIndexChecksum_ACU(undefined)).toBe(false);
+    expect(isFallbackVectorIndexChecksum_ACU(42)).toBe(false);
   });
 });

@@ -436,6 +436,7 @@ describe('parseAndApplyTableEdits_ACU — DSL 分支', () => {
     expect(result.success).toBe(false);
     expect(result.appliedEdits).toBe(0);
     expect(typeof result.failedEdits).toBe('number');
+    expect(result.totalCommands).toBe(1);
     expect(result.error).toContain('0 条');
   });
 

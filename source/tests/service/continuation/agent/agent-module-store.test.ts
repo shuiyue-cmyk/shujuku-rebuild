@@ -4,6 +4,7 @@ import {
   buildEmptyAgentModuleSnapshot_ACU,
   readAgentModuleSnapshot_ACU,
   readAgentModuleSnapshotDiagnostics_ACU,
+  replaceAgentModuleSnapshotByUser_ACU,
   renderAgentActiveVolumePlanningContext_ACU,
   renderAgentChronology_ACU,
   renderAgentChronologyByIds_ACU,
@@ -314,5 +315,77 @@ describe('Agent 资料热上下文渲染', () => {
     expect(text).toContain('只知道行为反常');
     expect(text).toContain('林瑶=完全不知');
     expect(text).toContain('揭示楼层=4');
+  });
+});
+
+describe('Agent 资料快照落盘修订号复核（用户手动保存防冲）', () => {
+  it('楼层修订号高于写入快照时放弃落盘并告警，不覆盖用户内容', async () => {
+    const chat: any[] = [
+      { mes: 'a' },
+      { mes: 'b', [AGENT_MODULE_FIELD_ACU]: snapshotAt_ACU(0, { revisions: { hooks: 2, infoGap: 0, constraints: 0, storyArc: 0, chronology: 0, webRefs: 0 }, hooks: [hook_ACU('用户伏笔') as any] }) },
+    ];
+    const saveChat = vi.fn().mockResolvedValue(undefined);
+    _set_SillyTavern_API_ACU({ chat, saveChat } as any);
+    const stale = snapshotAt_ACU(0, { revisions: { hooks: 1, infoGap: 0, constraints: 0, storyArc: 0, chronology: 0, webRefs: 0 }, hooks: [hook_ACU('子代理伏笔') as any] });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let warnTexts: string[] = [];
+    try {
+      await writeAgentModuleSnapshot_ACU(chat, 1, stale);
+    } finally {
+      // mockRestore 会清空调用记录：必须在 restore 前快照。
+      warnTexts = warn.mock.calls.map(args => args.map(String).join(' '));
+      warn.mockRestore();
+    }
+
+    expect(warnTexts.some(text => text.includes('放弃本次写入防止整份覆盖'))).toBe(true);
+    expect(warnTexts.some(text => text.includes('hooks 楼层=2 写入=1'))).toBe(true);
+    expect(saveChat).not.toHaveBeenCalled();
+    // 楼层字段原样保留：用户内容不被旧基准快照整份覆盖。
+    expect(chat[1][AGENT_MODULE_FIELD_ACU].hooks[0].id).toBe('用户伏笔');
+    expect(chat[1][AGENT_MODULE_FIELD_ACU].revisions.hooks).toBe(2);
+  });
+
+  it('六类修订号逐一复核：storyArc 漂移同样拒绝，其余持平类不阻断判定', async () => {
+    const chat: any[] = [
+      { mes: 'a' },
+      { mes: 'b', [AGENT_MODULE_FIELD_ACU]: snapshotAt_ACU(0, { revisions: { hooks: 1, infoGap: 1, constraints: 0, storyArc: 3, chronology: 0, webRefs: 0 } }) },
+    ];
+    _set_SillyTavern_API_ACU({ chat, saveChat: vi.fn().mockResolvedValue(undefined) } as any);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let warnTexts: string[] = [];
+    try {
+      await writeAgentModuleSnapshot_ACU(chat, 1, snapshotAt_ACU(0, { revisions: { hooks: 2, infoGap: 1, constraints: 0, storyArc: 2, chronology: 0, webRefs: 0 } }));
+    } finally {
+      warnTexts = warn.mock.calls.map(args => args.map(String).join(' '));
+      warn.mockRestore();
+    }
+    expect(warnTexts.some(text => text.includes('storyArc 楼层=3 写入=2'))).toBe(true);
+  });
+
+  it('修订号持平或更高时照常落盘（正常路径零影响）', async () => {
+    const chat: any[] = [{ mes: 'a' }, { mes: 'b', [AGENT_MODULE_FIELD_ACU]: snapshotAt_ACU(0, { revisions: { hooks: 1, infoGap: 0, constraints: 0, storyArc: 0, chronology: 0, webRefs: 0 } }) }];
+    const saveChat = vi.fn().mockResolvedValue(undefined);
+    _set_SillyTavern_API_ACU({ chat, saveChat } as any);
+
+    await writeAgentModuleSnapshot_ACU(chat, 1, snapshotAt_ACU(0, { revisions: { hooks: 1, infoGap: 0, constraints: 0, storyArc: 0, chronology: 0, webRefs: 0 }, hooks: [hook_ACU('H1') as any] }));
+    expect(saveChat).toHaveBeenCalledOnce();
+    expect(chat[1][AGENT_MODULE_FIELD_ACU].hooks[0].id).toBe('H1');
+
+    // 楼层低于写入快照（子代理正常推进修订）同样落盘。
+    await writeAgentModuleSnapshot_ACU(chat, 1, snapshotAt_ACU(0, { revisions: { hooks: 2, infoGap: 0, constraints: 0, storyArc: 0, chronology: 0, webRefs: 0 } }));
+    expect(saveChat).toHaveBeenCalledTimes(2);
+    expect(chat[1][AGENT_MODULE_FIELD_ACU].revisions.hooks).toBe(2);
+  });
+
+  it('用户手动保存（修订号整体 +1）不受防冲影响，照常落盘', async () => {
+    const chat: any[] = [{ mes: 'a' }, { mes: 'b', [AGENT_MODULE_FIELD_ACU]: snapshotAt_ACU(0, { revisions: { hooks: 1, infoGap: 1, constraints: 1, storyArc: 1, chronology: 1, webRefs: 1 }, hooks: [hook_ACU('既有') as any] }) }];
+    const saveChat = vi.fn().mockResolvedValue(undefined);
+    _set_SillyTavern_API_ACU({ chat, saveChat } as any);
+
+    const saved = await replaceAgentModuleSnapshotByUser_ACU({ hooks: [hook_ACU('用户编辑') as any] }, chat);
+
+    expect(saved.revisions).toMatchObject({ hooks: 2, infoGap: 2, constraints: 2, storyArc: 2, chronology: 2, webRefs: 2 });
+    expect(chat[1][AGENT_MODULE_FIELD_ACU].hooks[0].id).toBe('用户编辑');
+    expect(saveChat).toHaveBeenCalledOnce();
   });
 });

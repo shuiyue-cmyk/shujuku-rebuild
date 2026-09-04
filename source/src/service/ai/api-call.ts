@@ -46,7 +46,9 @@ function newOpencodeSessionId_ACU(): string {
 export function withOpencodeSessionHeader_ACU(headersText: string, url: unknown): string {
     const base = String(headersText || '');
     if (!isOpencodeGoEndpoint_ACU(url)) return base;
-    if (/^x-opencode-session\s*:/mi.test(base)) return base;
+    // fix2 检测一致性：加 i（容忍 X-Opencode-Session 等大小写写法）并容忍行首空白（按行
+    // trim 等价），避免用户显式提供了该头却因写法差异被误判缺失、再补出第二条会话头。
+    if (/^[ \t]*x-opencode-session\s*:/im.test(base)) return base;
     const key = String(url).trim().replace(/\/+$/, '').toLowerCase();
     let sessionId = OPENCODE_SESSION_IDS_ACU.get(key);
     if (!sessionId) {
@@ -198,6 +200,48 @@ function sanitizeExcludeBodyForPresetFields_ACU(rawExclude: string, effectiveApi
 }
 
 /**
+ * fix1 调试快照头脱敏（__ACU_DEBUG_LAST_API_BODY__）：头名保留、值打码为 ***。
+ * 覆盖 Authorization: Bearer / Basic 形态、x-api-key / api-key、自动补的 x-opencode-session。
+ */
+function redactSensitiveApiHeadersForDebug_ACU(headersText: unknown): string {
+  return String(headersText ?? '')
+    .replace(/(Authorization\s*:\s*Bearer\s+)([^\s"',}\n]+)/gi, '$1***')
+    .replace(/(Authorization\s*:\s*Basic\s+)([^\s"',}\n]+)/gi, '$1***')
+    .replace(/((?:x-)?api-key\s*:\s*)([^\s"',}\n]+)/gi, '$1***')
+    .replace(/(x-opencode-session\s*:\s*)([^\s"',}\n]+)/gi, '$1***');
+}
+
+/**
+ * fix1 custom_include_body key 名黑名单（api[_-]?key / token / secret → ***）：
+ * JSON 可解析时按结构递归打码；非 JSON 原文走 "key":"value" 形态正则兜底，
+ * 无法安全定位时保持原样（仅影响调试快照，不影响真实请求）。
+ */
+function redactSensitiveIncludeBodyForDebug_ACU(includeBody: unknown): string {
+  const raw = typeof includeBody === 'string' ? includeBody : String(includeBody ?? '');
+  if (!raw) return raw;
+  const sensitiveKey = /(api[_-]?key|token|secret)/i;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object') {
+      const walk = (value: any, depth: number): any => {
+        if (depth > 32) return value;
+        if (Array.isArray(value)) return value.map((item) => walk(item, depth + 1));
+        if (value && typeof value === 'object') {
+          const out: Record<string, any> = {};
+          for (const key of Object.keys(value)) {
+            out[key] = sensitiveKey.test(key) ? '***' : walk(value[key], depth + 1);
+          }
+          return out;
+        }
+        return value;
+      };
+      return JSON.stringify(walk(parsed, 0));
+    }
+  } catch { /* 非 JSON 原文：走下方正则兜底 */ }
+  return raw.replace(/("(?:[^"\\]|\\.)*"\s*:\s*)"(?:[^"\\]|\\.)*"/g, (match, keyPortion: string) => (sensitiveKey.test(keyPortion) ? keyPortion + '"***"' : match));
+}
+
+/**
  * 构建 Chat Completions 自定义 API 请求体（支持 bodyParams / excludeBodyParams / requestHeaders）
  */
 export function buildCustomApiRequestBody_ACU(
@@ -340,7 +384,12 @@ export function buildCustomApiRequestBody_ACU(
     try {
       const toStore: any = JSON.parse(JSON.stringify(body));
       if (toStore.custom_include_headers) {
-        toStore.custom_include_headers = String(toStore.custom_include_headers).replace(/(Authorization\s*:\s*Bearer\s+)([^\s"',}\n]+)/gi, '$1***');
+        // fix1 扩面：头名保留、值打码——Basic 形态、x-api-key / api-key、自动补的 x-opencode-session 一并处理。
+        toStore.custom_include_headers = redactSensitiveApiHeadersForDebug_ACU(toStore.custom_include_headers);
+      }
+      if (toStore.custom_include_body) {
+        // fix1 扩面：key 名黑名单（api[_-]?key / token / secret → ***）。
+        toStore.custom_include_body = redactSensitiveIncludeBodyForDebug_ACU(toStore.custom_include_body);
       }
       if (toStore.proxy_password) toStore.proxy_password = '***';
       (globalThis as any).__ACU_DEBUG_LAST_API_BODY__ = toStore;
@@ -445,7 +494,13 @@ export async function callAIWithPreset_ACU(messages: any[], presetName: string =
     const apiPresetConfig = getApiConfigByPreset_ACU(presetName);
     const effectiveApiMode = apiPresetConfig.apiMode;
     const effectiveApiConfig = apiPresetConfig.apiConfig || {} as any;
-    const maxTokens = maxTokensOverride ?? effectiveApiConfig.max_tokens ?? effectiveApiConfig.maxTokens ?? 4096;
+    // fix3 附加式：maxTokensOverride 仅在「有限正数」时透传；非法值（NaN/±Infinity/≤0）
+    // 一律按未传处理回退预设配置链——此前 NaN 会直接进入请求体（JSON.stringify 产出 null），
+    // 0/负数则是上游必然拒绝的 max_tokens。合法覆盖值行为逐字不变。
+    const maxTokensOverrideSafe = typeof maxTokensOverride === 'number' && Number.isFinite(maxTokensOverride) && maxTokensOverride > 0
+        ? maxTokensOverride
+        : undefined;
+    const maxTokens = maxTokensOverrideSafe ?? effectiveApiConfig.max_tokens ?? effectiveApiConfig.maxTokens ?? 4096;
 
 
     logDebug_ACU(`[callAIWithPreset] 调用 AI，消息数=${messages.length}，预设=${presetName || '当前配置'}，模式=${effectiveApiMode}`);

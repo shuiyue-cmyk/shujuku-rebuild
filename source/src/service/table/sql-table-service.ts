@@ -1541,7 +1541,12 @@ export class SqlTableService implements ITableStorageProvider {
 
     try {
       const mate = (this._readCanonicalView_ACU()?.mate as Mate_ACU) || { type: 'acu', version: 1, updateConfigUiSentinel: 0, globalInjectionConfig: { readableEntryPlacement: { position: '', depth: 0, order: 0 }, wrapperPlacement: { position: '', depth: 0, order: 0 } } };
-      const exportedData = this.syncBridge.exportToTableData(mate);
+      // 非 strict 导出：收集跳过明细并聚合 warn，调用方可观测（不在此回填）。
+      const exportWarnings: string[] = [];
+      const exportedData = this.syncBridge.exportToTableData(mate, { warnings: exportWarnings });
+      if (exportWarnings.length > 0) {
+        logWarn_ACU(`[SqlTableService] getCurrentData 部分表被跳过（${exportWarnings.length}）：${exportWarnings.join('；')}`);
+      }
       this._publishCanonicalView_ACU(exportedData);
       return exportedData;
     } catch (e: any) {
@@ -1563,9 +1568,16 @@ export class SqlTableService implements ITableStorageProvider {
       return null;
     }
     try {
-      return this.syncBridge.exportToTableData(
+      // 非 strict 导出：收集跳过明细并聚合 warn，填表基底/物化调用方可观测。
+      const exportWarnings: string[] = [];
+      const exported = this.syncBridge.exportToTableData(
         (this._readCanonicalView_ACU()?.mate as Mate_ACU) || DEFAULT_MATE_ACU,
+        { warnings: exportWarnings },
       );
+      if (exportWarnings.length > 0) {
+        logWarn_ACU(`[SqlTableService] exportLiveRuntimeDataStrict 部分表被跳过（${exportWarnings.length}）：${exportWarnings.join('；')}`);
+      }
+      return exported;
     } catch (e: any) {
       logWarn_ACU(`[SqlTableService] exportLiveRuntimeDataStrict 失败: ${e?.message || String(e)}`);
       return null;
@@ -2012,9 +2024,26 @@ export class SqlTableService implements ITableStorageProvider {
       const mate = (this._readCanonicalView_ACU()?.mate as Mate_ACU) || { type: 'acu', version: 1, updateConfigUiSentinel: 0, globalInjectionConfig: { readableEntryPlacement: { position: '', depth: 0, order: 0 }, wrapperPlacement: { position: '', depth: 0, order: 0 } } };
       // 收集非 strict 导出跳过明细：部分表被跳过时聚合成一条 warn，避免静默丢表。
       const exportWarnings: string[] = [];
-      const exportedData = this.syncBridge.exportToTableData(mate, { warnings: exportWarnings });
+      const skippedSheetKeys: string[] = [];
+      const exportedData = this.syncBridge.exportToTableData(mate, { warnings: exportWarnings, skippedSheetKeys });
       if (exportWarnings.length > 0) {
         logWarn_ACU(`[SqlTableService] syncToJson 部分表被跳过（${exportWarnings.length}）：${exportWarnings.join('；')}`);
+      }
+      // 部分视图 merge-back：跳过的表（仅限 warnings 明确指明 sheetKey 的导出失败）
+      // 用发布前的上份 canonical 视图内容回填，避免一次导出抖动把既有表从共享视图删掉。
+      // 不按「缺失键」盲回填：真正被删除的表同样缺失，盲回填会复活已删表。
+      if (skippedSheetKeys.length > 0) {
+        const previousView = this._readCanonicalView_ACU();
+        for (const sheetKey of skippedSheetKeys) {
+          if (!sheetKey || (exportedData as Record<string, unknown>)[sheetKey]) continue;
+          const previousSheet = previousView ? (previousView as Record<string, unknown>)[sheetKey] : undefined;
+          if (!previousSheet) {
+            logWarn_ACU(`[SqlTableService] syncToJson 跳过表 ${sheetKey} 且上份视图无该表，保持缺失。`);
+            continue;
+          }
+          (exportedData as Record<string, unknown>)[sheetKey] = JSON.parse(JSON.stringify(previousSheet));
+          logWarn_ACU(`[SqlTableService] syncToJson 跳过表 ${sheetKey}，已回填上份视图内容。`);
+        }
       }
       this._publishCanonicalView_ACU(exportedData);
       return exportedData;
@@ -2060,7 +2089,12 @@ export class SqlTableService implements ITableStorageProvider {
     let currentData: TableDataObject_ACU | null;
     try {
       const mate = (this._readCanonicalView_ACU()?.mate as Mate_ACU) || DEFAULT_MATE_ACU;
-      currentData = this.syncBridge.exportToTableData(mate);
+      // 非 strict 导出：收集跳过明细并聚合 warn，schema gate 可观测部分导出。
+      const exportWarnings: string[] = [];
+      currentData = this.syncBridge.exportToTableData(mate, { warnings: exportWarnings });
+      if (exportWarnings.length > 0) {
+        logWarn_ACU(`[SqlTableService] schema 一致性导出部分表被跳过（${exportWarnings.length}）：${exportWarnings.join('；')}`);
+      }
     } catch (error: any) {
       throw new SqlRuntimeSchemaInvalidError_ACU(`无法导出当前 SQLite schema 用于一致性验证：${String(error?.message || error)}`);
     }

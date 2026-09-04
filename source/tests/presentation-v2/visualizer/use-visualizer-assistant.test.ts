@@ -1024,4 +1024,40 @@ describe('useVisualizerAssistant', () => {
     expect(assistant.canApply.value).toBe(true);
   });
 
+  it('run() 在飞防并行门：会话运行中重复 run 返回 false，runner 只跑一次；结束后恢复正常', async () => {
+    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    const { useVisualizerAssistant } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerAssistant');
+    const visualizer = useVisualizerStore();
+    visualizer.loadSnapshot({
+      mate: { type: 'chatSheets', version: 1 },
+      sheet_a: { uid: 'sheet_a', name: 'A表', orderNo: 0, content: [[null, '姓名'], [null, 'A']] },
+    }, ['sheet_a']);
+
+    let release!: () => void;
+    mockRunSession.mockImplementation(async (input: any) => {
+      await new Promise<void>(resolve => { release = resolve; });
+      return buildResult(input);
+    });
+
+    const assistant = useVisualizerAssistant();
+    assistant.userRequest.value = '生成草稿';
+    const firstRun = assistant.run();
+    for (let attempt = 0; attempt < 50 && !release; attempt += 1) await Promise.resolve();
+    expect(release).toBeTypeOf('function');
+    expect(assistant.isRunning.value).toBe(true);
+
+    // 在飞再调 run：被防并行门直接拒绝，不再消耗 runner（面板 disabled 绑定的行为面）。
+    expect(await assistant.run()).toBe(false);
+    expect(mockRunSession).toHaveBeenCalledTimes(1);
+
+    release();
+    expect(await firstRun).toBe(true);
+    expect(assistant.isRunning.value).toBe(false);
+
+    // 会话结束后防并行门放行
+    mockRunSession.mockImplementation(async (input: any) => buildResult(input));
+    assistant.userRequest.value = '再来一次';
+    expect(await assistant.run()).toBe(true);
+    expect(mockRunSession).toHaveBeenCalledTimes(2);
+  });
 });

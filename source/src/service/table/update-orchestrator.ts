@@ -1842,6 +1842,21 @@ async function applyUnifiedGroupFillResponsesCore_ACU(
             ? parseResultObject.error.trim()
             : '';
         if (!parseSuccess) {
+            // 空指令零操作提交（v9.1.5 行为恢复）：全部指令被模式门静默过滤
+            // （appliedEdits===0 && failedEdits===0，仅 tableEdit 解析器带 failedEdits 计数），
+            // 按零操作 precondition 处理，不进入 AI 重试；failedEdits>0 仍是模型问题。
+            const zeroOpRejection = parseResultObject
+                && appliedEdits === 0
+                && typeof parseResultObject.failedEdits === 'number'
+                && parseResultObject.failedEdits === 0;
+            if (zeroOpRejection) {
+                return {
+                    success: false,
+                    modifiedKeys: [],
+                    error: `统一提交失败：${formatResponseGroupReference_ACU(response)} 零操作提交（${typeof parseResultObject.totalCommands === 'number' ? parseResultObject.totalCommands : 0} 条指令均未应用且未失败）。`,
+                    errorCategory: 'precondition',
+                };
+            }
             return {
                 success: false,
                 modifiedKeys: [],
@@ -2989,6 +3004,15 @@ export async function executeCardUpdateCore_ACU(
                         const parseSuccess = !!parseResult?.success;
                         const parsedKeys: string[] = Array.isArray(parseResult?.modifiedKeys) ? parseResult.modifiedKeys : [];
                         if (!parseSuccess) {
+                            // 空指令零操作提交（防御分支）：仅当结果显式携带 failedEdits===0 且
+                            // appliedEdits===0（同 tableEdit 解析器形状）才改判 precondition；
+                            // SQL provider 结果无该形状（成功或 throw），保持 model 不变。
+                            const zeroOpRejection = parseResult
+                                && typeof parseResult.appliedEdits === 'number' && parseResult.appliedEdits === 0
+                                && typeof parseResult.failedEdits === 'number' && parseResult.failedEdits === 0;
+                            if (zeroOpRejection) {
+                                return { success: false, error: sanitizeRetryFeedback_ACU(`零操作提交：${parseResult?.error || '全部指令均未应用且未失败'}`), errorCategory: 'precondition' as const };
+                            }
                             return { success: false, error: sanitizeRetryFeedback_ACU(parseResult?.error || '解析或应用AI更新时出错'), errorCategory: 'model' as const };
                         }
 
@@ -3125,6 +3149,15 @@ export async function executeCardUpdateCore_ACU(
                     }
 
                     if (!parseSuccess) {
+                        // 空指令零操作提交（v9.1.5 行为恢复）：全部指令被模式门静默过滤
+                        // （appliedEdits===0 && failedEdits===0），按零操作 precondition 处理，
+                        // 不进入 AI 重试；failedEdits>0 仍是模型问题。
+                        const zeroOpRejection = typeof parseResult === 'object' && parseResult !== null
+                            && parseResult.appliedEdits === 0
+                            && typeof parseResult.failedEdits === 'number' && parseResult.failedEdits === 0;
+                        if (zeroOpRejection) {
+                            return { success: false, error: sanitizeRetryFeedback_ACU(`零操作提交：${parseResult?.error || '全部指令均未应用且未失败'}`), errorCategory: 'precondition' as const };
+                        }
                         return { success: false, error: sanitizeRetryFeedback_ACU(parseResult?.error || '解析或应用AI更新时出错'), errorCategory: 'model' as const };
                     }
 
@@ -5165,5 +5198,8 @@ export async function orchestrateManualUpdate_ACU(
     } finally {
         _set_manualExtraHint_ACU('');
         _set_isAutoUpdatingCard_ACU(false);
+        // 失败/异常路径 stagingSession 未走 settle 收尾：这里幂等释放（discard 内部
+        // 释放 detached SQLite provider，重复调用为 no-op），防止 detached 引擎泄漏。
+        await stagingSession?.discard();
     }
 }

@@ -202,6 +202,8 @@ export class SyncBridge {
       strict?: boolean;
       /** 非 strict 跳过明细 out-param：调用方传入数组即收集本次跳过的表（strict 路径直接 throw，不写该通道）。 */
       warnings?: string[];
+      /** 与 warnings 中「可识别 sheetKey 的单表导出失败」一一对应的 sheetKey 清单（缺元数据的跳过无法识别，不写入）。 */
+      skippedSheetKeys?: string[];
     } = {},
   ): TableDataObject_ACU {
     return this._exportToTableData(originalMate, options, false);
@@ -214,7 +216,7 @@ export class SyncBridge {
 
   private _exportToTableData(
     originalMate: Mate_ACU,
-    options: { strict?: boolean; warnings?: string[] },
+    options: { strict?: boolean; warnings?: string[]; skippedSheetKeys?: string[] },
     legacyDuplicateRowIds: boolean,
   ): TableDataObject_ACU {
     if (!this.engine.isReady) {
@@ -250,6 +252,8 @@ export class SyncBridge {
         }
         const failureMessage = `[SyncBridge] 导出表 ${tableName} 失败: ${e?.message || String(e)}`;
         options.warnings?.push(failureMessage);
+        // meta 已识别：把跳过表的 sheetKey 同步给调用方，供发布 canonical 视图前回填上份内容。
+        options.skippedSheetKeys?.push(meta.sheetKey);
         logError_ACU(`[SyncBridge] 导出表 ${tableName} 失败:`, e);
       }
     }

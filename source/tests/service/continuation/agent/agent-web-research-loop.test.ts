@@ -59,7 +59,7 @@ function fakeWebClient_ACU(log: string[]): AgentWebClient_ACU {
   } as unknown as AgentWebClient_ACU;
 }
 
-function harness_ACU(options: { mainReplies: string[]; subReplies: string[]; enabled: boolean; context?: () => any; snapshot?: AgentModuleSnapshot_ACU }) {
+function harness_ACU(options: { mainReplies: string[]; subReplies: string[]; enabled: boolean; context?: () => any; snapshot?: AgentModuleSnapshot_ACU; isCurrent?: (identity: any) => boolean }) {
   const mainReplies = [...options.mainReplies];
   const subReplies = [...options.subReplies];
   const mainCalls: Array<Array<{ role: string; content: string }>> = [];
@@ -110,7 +110,7 @@ function harness_ACU(options: { mainReplies: string[]; subReplies: string[]; ena
     settings,
     readContext: options.context ?? preOutlineContext_ACU,
     createInternalRequestIdentity: attempt => ({ taskId: 'task-1', stageId: 'stage-1', turnId: 'turn-1', attemptId: `a-${attempt}`, source: 'turn_instruction' }) as any,
-    isInternalRequestCurrent: () => true,
+    isInternalRequestCurrent: options.isCurrent ?? (() => true),
     applyOutline: async () => ({ op: 'create', requiresReview: false, stopped: null, summary: '已创建大纲' }),
   };
   return { planner, request, mainCalls, subCalls, webLog, written, presetRoles, snapshot: () => snapshot, conversation: () => conversation };
@@ -252,5 +252,41 @@ describe('开场百科检索', () => {
     expect(third).not.toContain('泥沼：土系魔术，限制敌人行动。');
     expect(h.snapshot().webRefs).toHaveLength(2);
     expect(h.snapshot().webRefs.every(ref => !Object.prototype.hasOwnProperty.call(ref, 'extract'))).toBe(true);
+  });
+
+  it('开场检索租约有效时把资料快照写入末楼（正向对照：written=1）', async () => {
+    const h = harness_ACU({
+      enabled: true,
+      mainReplies: ['{"action":"block","reason":"测试到此为止"}'],
+      subReplies: RESEARCH_REPLIES_ACU,
+      isCurrent: () => true,
+    });
+    await expect(h.planner.plan(h.request)).rejects.toBeInstanceOf(Error);
+
+    expect(h.subCalls).toHaveLength(3);
+    expect(h.written).toHaveLength(1);
+    expect(h.written[0].webRefs).toHaveLength(1);
+    expect(h.written[0].revisions.webRefs).toBe(1);
+  });
+
+  it('开场检索租约失效时不写末楼：落盘跳过（written=0），主循环随后按 STALE 终止', async () => {
+    // 子代理 identity 携带 source='agent_subagent'（在途租约有效），落盘探针与主循环走
+    // createInternalRequestIdentity（source='turn_instruction'）——模拟「用户在子代理在途
+    // 期间停止任务，租约作废」：研究照常完成并留在内存，但末楼扩展字段绝不能照常写入。
+    const h = harness_ACU({
+      enabled: true,
+      mainReplies: ['{"action":"block","reason":"测试到此为止"}'],
+      subReplies: RESEARCH_REPLIES_ACU,
+      isCurrent: (identity: any) => identity.source === 'agent_subagent',
+    });
+    await expect(h.planner.plan(h.request)).rejects.toMatchObject({ error: { code: 'CONTINUATION_INTERNAL_REQUEST_STALE' } });
+
+    // 研究本身照常完成：3 次子代理调用、出网 2 次。
+    expect(h.subCalls).toHaveLength(3);
+    expect(h.webLog).toEqual(['search:moegirl:鲁迪乌斯·格雷拉特', 'read:鲁迪乌斯·格雷拉特']);
+    // 但不落盘：末楼快照字段零写入。
+    expect(h.written).toHaveLength(0);
+    // 主 Agent 未再消耗调用。
+    expect(h.mainCalls).toHaveLength(0);
   });
 });

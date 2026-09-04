@@ -138,9 +138,11 @@ import { getContinuationRuntime_ACU } from '../../service/continuation/continuat
 // 机制（参照 chat-mutation-scheduler.ts 的 generation+running 范式）：
 // - 排程延迟链时递增 initChainGeneration_ACU 并捕获当次代次号；
 // - 回调触发时先比对代次号（不等 ⇒ 已被更晚排程的链取代，放弃），再抢 running 标志
-//   （被占 ⇒ 放弃，由更晚排程的那条链负责本轮重建）。
+//   （被占 ⇒ 登记待跑代次；运行中的链结束时若登记代次仍是最新，则补跑最新登记一次）。
 let initChainGeneration_ACU = 0;
 let initChainRunning_ACU = false;
+// running 被占时到达的轮次登记在此：运行中的链结束后，若代次仍是最新则补跑一次（只补一次）。
+let initChainPendingRerun_ACU: { generation: number; label: string; body: () => Promise<void> } | null = null;
 
 function scheduleInitChainRun_ACU(delayMs: number, label: string, body: () => Promise<void>): void {
   initChainGeneration_ACU += 1;
@@ -155,9 +157,12 @@ async function runInitChainRound_ACU(scheduledGeneration: number, label: string,
     logDebug_ACU(`[InitChain] 「${label}」代次过期（${scheduledGeneration} ≠ 当前 ${initChainGeneration_ACU}），放弃本轮启动重建。`);
     return;
   }
-  // ② 抢 running 标志：被占则放弃（更晚排程的链到达时会以最新代次执行）
+  // ② 抢 running 标志：被占则登记待跑代次（运行中的链结束后，若期间没有更晚排程的
+  // 链取代本轮，即登记代次仍是最新代次，则在 finally 中补跑最新登记一次），
+  // 避免重建事件在运行窗口内到达时被静默丢弃。
   if (initChainRunning_ACU) {
-    logWarn_ACU(`[InitChain] 「${label}」到达时已有重建链在执行，放弃本轮并发请求。`);
+    initChainPendingRerun_ACU = { generation: scheduledGeneration, label, body };
+    logWarn_ACU(`[InitChain] 「${label}」到达时已有重建链在执行，登记待跑代次 ${scheduledGeneration}，运行中的链结束后补跑。`);
     return;
   }
   initChainRunning_ACU = true;
@@ -169,6 +174,14 @@ async function runInitChainRound_ACU(scheduledGeneration: number, label: string,
     await recoverDelayedRebuildFailure_ACU(`[InitChain] 「${label}」重建链`, bodyError);
   } finally {
     initChainRunning_ACU = false;
+    // 补跑：取最新登记（多次登记只补最新一次，被更晚排程取代的旧代次由 ① 过滤），
+    // 仅当登记代次仍是当前最新代次时补跑；补跑前先清登记，防止重复补跑。
+    const pendingRerun = initChainPendingRerun_ACU;
+    initChainPendingRerun_ACU = null;
+    if (pendingRerun && pendingRerun.generation === initChainGeneration_ACU) {
+      logDebug_ACU(`[InitChain] 运行中的链已结束，补跑登记的待跑代次 ${pendingRerun.generation}「${pendingRerun.label}」（仅补一次）。`);
+      void runInitChainRound_ACU(pendingRerun.generation, pendingRerun.label, pendingRerun.body);
+    }
   }
 }
 

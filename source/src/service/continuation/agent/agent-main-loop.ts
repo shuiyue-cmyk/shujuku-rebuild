@@ -1285,6 +1285,13 @@ export class ContinuationAgentTurnPlanner_ACU {
         ok: settled.outcome.ok,
       });
       if (settled.snapshot !== snapshot) {
+        // 落盘守卫与 runParallelDelegations 的信封写同强度：子代理在途期间用户可能已停止任务
+        // （signal abort / 租约作废），此时楼层扩展字段绝不能照常写入末楼。
+        const leaseProbe = request.createInternalRequestIdentity(0);
+        if (request.signal?.aborted || !request.isInternalRequestCurrent(leaseProbe)) {
+          // 内存快照仍返回：调用方（plan）随后会因同一判定抛 STALE，不影响最终结果。
+          return settled.snapshot;
+        }
         context.moduleSnapshot = settled.snapshot;
         await this.persistSnapshot_ACU(chat, settled.snapshot);
       }

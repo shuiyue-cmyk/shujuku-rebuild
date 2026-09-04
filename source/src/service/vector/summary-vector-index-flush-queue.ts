@@ -595,7 +595,9 @@ export async function restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU(): P
             continue;
         }
         if (task.status === 'ready' || task.status === 'failed_terminal') continue;
-        if (task.status === 'flushing' && now - task.updatedAt > SUMMARY_VECTOR_INDEX_FLUSHING_STALE_MS_ACU) {
+        // stale 豁免：在飞 flush（运行集合命中）不算超时——restore 与长耗时 flush 并发时
+        // 不能把活任务误判为 failed_retryable；真正的执行中断由下次 restore 兜底。
+        if (task.status === 'flushing' && !summaryVectorFlushRunning_ACU.has(task.scopeKey) && now - task.updatedAt > SUMMARY_VECTOR_INDEX_FLUSHING_STALE_MS_ACU) {
             await markFlushTaskFailure_ACU(task, '上次 flush 在执行中断后超时，已重新排队。', false);
             const refreshed = await getSummaryVectorFlushTask_ACU(task.scopeKey);
             if (refreshed) {

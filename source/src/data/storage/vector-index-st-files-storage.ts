@@ -448,6 +448,15 @@ export async function sha256Text_ACU(text: string): Promise<string> {
     return `fallback-${Math.abs(hash)}`;
 }
 
+/**
+ * fix6：sha256Text_ACU 在 crypto.subtle 缺席环境退化为 32 位弱哈希，返回值形如
+ * 'fallback-...'。该形态 checksum 不具备内容寻址效力，不得参与删除判据（弱哈希碰撞
+ * 会让 GC 误删真实内容）；判据方（GC 谓词）见到该形态按「无法校验」处理，走保留方向。
+ */
+export function isFallbackVectorIndexChecksum_ACU(checksum: unknown): boolean {
+    return /^fallback-/.test(String(checksum ?? ''));
+}
+
 export async function uploadVectorIndexJsonFile_ACU(params: {
     path: string;
     role: SummaryVectorIndexExternalFileRole_ACU;
@@ -650,27 +659,42 @@ export async function saveVectorIndexRegistry_ACU(registry: SummaryVectorIndexRe
     }
 }
 
+// registry 是单文件 read-modify-write：并发 register/unregister 各自 load 旧快照再 save
+// 会互相覆盖（后写者丢掉先写者的条目）。进程内 promise 队列把每次变更串行化；
+// 前序失败不断链（后续变更照常基于最新文件内容执行）。
+let registryMutationQueue_ACU: Promise<unknown> = Promise.resolve();
+
+function runRegistryMutationSerialized_ACU<T>(task: () => Promise<T>): Promise<T> {
+    const result = registryMutationQueue_ACU.then(task, task);
+    registryMutationQueue_ACU = result.then((): void => undefined, (): void => undefined);
+    return result;
+}
+
 export async function registerVectorIndexFiles_ACU(files: SummaryVectorIndexExternalFileRef_ACU[]): Promise<void> {
     if (!Array.isArray(files) || files.length === 0) return;
-    const registry = await loadVectorIndexRegistry_ACU();
-    const byPath = new Map(registry.files.map((file) => [file.path, file]));
-    files.forEach((file) => {
-        // 路径不可逆后 registry 里的 scope 是 GC 唯一的身份来源；
-        // 后续 prepared → published 等状态更新若未带 scope，不能把已有的擦掉。
-        const existing = byPath.get(file.path);
-        const scope = file.scope ?? existing?.scope;
-        byPath.set(file.path, scope ? { ...file, scope } : file);
+    await runRegistryMutationSerialized_ACU(async () => {
+        const registry = await loadVectorIndexRegistry_ACU();
+        const byPath = new Map(registry.files.map((file) => [file.path, file]));
+        files.forEach((file) => {
+            // 路径不可逆后 registry 里的 scope 是 GC 唯一的身份来源；
+            // 后续 prepared → published 等状态更新若未带 scope，不能把已有的擦掉。
+            const existing = byPath.get(file.path);
+            const scope = file.scope ?? existing?.scope;
+            byPath.set(file.path, scope ? { ...file, scope } : file);
+        });
+        registry.files = Array.from(byPath.values());
+        await saveVectorIndexRegistry_ACU(registry);
     });
-    registry.files = Array.from(byPath.values());
-    await saveVectorIndexRegistry_ACU(registry);
 }
 
 export async function unregisterVectorIndexFiles_ACU(paths: string[]): Promise<void> {
     if (!Array.isArray(paths) || paths.length === 0) return;
-    const pathSet = new Set(paths);
-    const registry = await loadVectorIndexRegistry_ACU();
-    registry.files = registry.files.filter((file) => !pathSet.has(file.path));
-    await saveVectorIndexRegistry_ACU(registry);
+    await runRegistryMutationSerialized_ACU(async () => {
+        const pathSet = new Set(paths);
+        const registry = await loadVectorIndexRegistry_ACU();
+        registry.files = registry.files.filter((file) => !pathSet.has(file.path));
+        await saveVectorIndexRegistry_ACU(registry);
+    });
 }
 
 export async function deleteRegisteredVectorIndexFilesWhere_ACU(
