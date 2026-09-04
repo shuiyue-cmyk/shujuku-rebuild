@@ -30,17 +30,35 @@ function recordDataAdminFailure_ACU(method: string, error: unknown): false {
     return false;
 }
 
+/**
+ * 布尔契约成功归一（v9.1.8）：上游 API_DOCUMENTATION.md 对这批方法明示
+ * `Promise<boolean>`（importTemplate:981 / exportTemplate:995 / resetTemplate:1009 /
+ * resetAllDefaults:1017 / exportJsonData:248 / importCombinedSettings:416 /
+ * exportCombinedSettings:424 / overrideWithTemplate:1025 / mergeSummaryNow:1308），
+ * 但底层 UI 函数多为异步文件选择/confirm 流程，成功路径没有显式 return（undefined），
+ * 第三方 `if (r)` 判定会把成功误判为失败。这里在 API 层归一：`false` → `false`，
+ * 其余（true/undefined/truthy）→ `true`；不改 underlying 本身。
+ * 例外：migrateLegacyVectorIndex 的 underlying 返回 `{success,...}` 诊断对象而非布尔，
+ * 不经此归一，保持数据原样返回。
+ */
+async function dataAdminBoolContract_ACU(result: unknown): Promise<boolean> {
+    const r = await result;
+    return r !== false;
+}
+
 export function createDataAdminApi(_ctx: ApiGroupContext): Record<string, Function> {
     return {
-        // 模板/数据管理
-        importTemplate: async function(options: any = {}) { try { return await importTableTemplate_ACU(options); } catch (e) { logError_ACU('importTemplate failed:', e); return recordDataAdminFailure_ACU('importTemplate', e); } },
-        exportTemplate: async function(options: any = {}) { try { return await exportTableTemplate_ACU(options); } catch (e) { logError_ACU('exportTemplate failed:', e); return recordDataAdminFailure_ACU('exportTemplate', e); } },
-        resetTemplate: async function(options: any = {}) { try { return await resetTableTemplate_ACU(options); } catch (e) { logError_ACU('resetTemplate failed:', e); return recordDataAdminFailure_ACU('resetTemplate', e); } },
-        resetAllDefaults: async function() { try { return await resetAllToDefaults_ACU(); } catch (e) { logError_ACU('resetAllDefaults failed:', e); return recordDataAdminFailure_ACU('resetAllDefaults', e); } },
-        exportJsonData: async function() { try { return await exportCurrentJsonData_ACU(); } catch (e) { logError_ACU('exportJsonData failed:', e); return recordDataAdminFailure_ACU('exportJsonData', e); } },
-        importCombinedSettings: async function() { try { return await importCombinedSettings_ACU(); } catch (e) { logError_ACU('importCombinedSettings failed:', e); return recordDataAdminFailure_ACU('importCombinedSettings', e); } },
-        exportCombinedSettings: async function() { try { return await exportCombinedSettings_ACU(); } catch (e) { logError_ACU('exportCombinedSettings failed:', e); return recordDataAdminFailure_ACU('exportCombinedSettings', e); } },
-        overrideWithTemplate: async function() { try { return await overrideLatestLayerWithTemplate_ACU(); } catch (e) { logError_ACU('overrideWithTemplate failed:', e); return recordDataAdminFailure_ACU('overrideWithTemplate', e); } },
+        // 模板/数据管理（布尔契约：成功恒 true——含 underlying 返回 undefined 的异步文件选择流程）
+        importTemplate: async function(options: any = {}) { try { return await dataAdminBoolContract_ACU(importTableTemplate_ACU(options)); } catch (e) { logError_ACU('importTemplate failed:', e); return recordDataAdminFailure_ACU('importTemplate', e); } },
+        exportTemplate: async function(options: any = {}) { try { return await dataAdminBoolContract_ACU(exportTableTemplate_ACU(options)); } catch (e) { logError_ACU('exportTemplate failed:', e); return recordDataAdminFailure_ACU('exportTemplate', e); } },
+        resetTemplate: async function(options: any = {}) { try { return await dataAdminBoolContract_ACU(resetTableTemplate_ACU(options)); } catch (e) { logError_ACU('resetTemplate failed:', e); return recordDataAdminFailure_ACU('resetTemplate', e); } },
+        resetAllDefaults: async function() { try { return await dataAdminBoolContract_ACU(resetAllToDefaults_ACU()); } catch (e) { logError_ACU('resetAllDefaults failed:', e); return recordDataAdminFailure_ACU('resetAllDefaults', e); } },
+        exportJsonData: async function() { try { return await dataAdminBoolContract_ACU(exportCurrentJsonData_ACU()); } catch (e) { logError_ACU('exportJsonData failed:', e); return recordDataAdminFailure_ACU('exportJsonData', e); } },
+        importCombinedSettings: async function() { try { return await dataAdminBoolContract_ACU(importCombinedSettings_ACU()); } catch (e) { logError_ACU('importCombinedSettings failed:', e); return recordDataAdminFailure_ACU('importCombinedSettings', e); } },
+        exportCombinedSettings: async function() { try { return await dataAdminBoolContract_ACU(exportCombinedSettings_ACU()); } catch (e) { logError_ACU('exportCombinedSettings failed:', e); return recordDataAdminFailure_ACU('exportCombinedSettings', e); } },
+        overrideWithTemplate: async function() { try { return await dataAdminBoolContract_ACU(overrideLatestLayerWithTemplate_ACU()); } catch (e) { logError_ACU('overrideWithTemplate failed:', e); return recordDataAdminFailure_ACU('overrideWithTemplate', e); } },
+        // 例外：underlying（migrateLegacySummaryVectorIndex_ACU）返回 {success,...} 诊断对象而非布尔
+        // （API_DOCUMENTATION.md 未收录该方法），保持数据对象原样返回，不做布尔归一。
         migrateLegacyVectorIndex: async function() { try { return await migrateLegacySummaryVectorIndex_ACU(); } catch (e) { logError_ACU('migrateLegacyVectorIndex failed:', e); return recordDataAdminFailure_ACU('migrateLegacyVectorIndex', e); } },
         openVisualizer: async function() {
             const surface = getUiSurface_ACU();
@@ -66,7 +84,8 @@ export function createDataAdminApi(_ctx: ApiGroupContext): Record<string, Functi
         prepareV2Recovery: async function() { try { return prepareV2Recovery_ACU(); } catch (e) { logError_ACU('prepareV2Recovery failed:', e); return dataAdminApiError_ACU(e, 'V2 恢复诊断失败。'); } },
         commitV2Recovery: async function(planId: any, options: any = {}) { try { if (typeof planId !== 'string' || !planId.trim()) return { success: false, error: 'planId 必须是非空字符串。' }; if (options === null || typeof options !== 'object' || Array.isArray(options)) return { success: false, error: 'V2 恢复确认选项必须是对象。' }; return await commitPreparedV2Recovery_ACU(planId.trim(), { confirmOrphanDataReplace: options.confirmOrphanDataReplace === true }); } catch (e) { logError_ACU('commitV2Recovery failed:', e); return dataAdminApiError_ACU(e, 'V2 恢复提交失败。'); } },
 
-        // 合并总结
-        mergeSummaryNow: async function() { try { return await handleManualMergeSummary_ACU(); } catch (e) { logError_ACU('mergeSummaryNow failed:', e); return recordDataAdminFailure_ACU('mergeSummaryNow', e); } },
+        // 合并总结（功能已停用，underlying 恒 false → 归一后仍为 false；未来若恢复且走
+        // 异步流程返回 undefined，也会被布尔契约归一为 true，与文档 Promise<boolean> 一致）
+        mergeSummaryNow: async function() { try { return await dataAdminBoolContract_ACU(handleManualMergeSummary_ACU()); } catch (e) { logError_ACU('mergeSummaryNow failed:', e); return recordDataAdminFailure_ACU('mergeSummaryNow', e); } },
     };
 }

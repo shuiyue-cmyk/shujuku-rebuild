@@ -408,6 +408,10 @@ export function buildCustomApiRequestBody_ACU(
  * stream 参数由 streamingEnabled 开关决定（见 buildCustomApiRequestBody_ACU）；
  * 响应解析按请求实际携带的 stream 值分流（预设级开关可能与全局不同）。
  * 返回 AI 响应文本（原始，未 trim），失败抛错。
+ *
+ * 有意不设硬超时：这里是主生成出口，长生成（长回复/慢网关）合法，固定超时只会
+ * 掐断正常生成；调用方如需可中断，应自行传 signal（函数已透传 AbortSignal）。
+ * 探活专用超时见 ai-service.ts fetchAvailableModels_ACU（15s AbortController）。
  */
 export async function postChatCompletion_ACU(body: unknown, signal?: AbortSignal | null): Promise<string | null> {
     let res: Response;

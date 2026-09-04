@@ -208,7 +208,8 @@ export async function listAllHostChatNames_ACU(): Promise<Set<string> | null> {
 
 /**
  * 触发消息更新事件通知宿主平台
- * 优先使用 eventTypes.MESSAGE_UPDATED，降级使用字符串 'MESSAGE_UPDATED'
+ * 优先使用 eventTypes.MESSAGE_UPDATED，降级使用字符串 'message_updated'
+ * （TT events.js:12 `MESSAGE_UPDATED: 'message_updated'`：事件名字面量为小写）
  * @param messageIndex 更新的消息索引
  */
 export function emitMessageUpdated_ACU(messageIndex: number): void {
@@ -222,7 +223,8 @@ export function emitMessageUpdated_ACU(messageIndex: number): void {
             messageIndex
         );
     } else {
-        // 降级：直接使用字符串事件名
-        SillyTavern_API_ACU.eventSource.emit('MESSAGE_UPDATED', messageIndex);
+        // 降级：直接使用字符串事件名（必须与 TT 注册名一致的小写形式，
+        // 'MESSAGE_UPDATED' 大写形态 TT 从未注册，emit 等于空放）。
+        SillyTavern_API_ACU.eventSource.emit('message_updated', messageIndex);
     }
 }

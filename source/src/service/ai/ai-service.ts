@@ -28,6 +28,10 @@ export interface FetchModelsResult {
 /** 接口协议四值白名单（与 api-call.ts 请求体 custom_api_format 契约同源）。 */
 const CUSTOM_API_FORMAT_WHITELIST_ACU: readonly string[] = ['openai_compat', 'openai_responses', 'claude_messages', 'gemini_interactions'];
 
+/** 模型列表探活专用超时（毫秒）：status 请求是轻量探测，15 秒无响应即视为端点不可达。
+ *  仅约束本探活请求；主生成出口 postChatCompletion_ACU 不设硬超时（长生成合法，见 api-call.ts）。 */
+const MODEL_PROBE_TIMEOUT_MS_ACU = 15000;
+
 /**
  * status 探活的 custom_api_format 归一：缺省/非法一律降级 ''。
  * TT 后端 `CustomApiFormat::parse` 把 '' 视为 openai_compat（与不传字段等价），
@@ -74,11 +78,28 @@ export async function fetchAvailableModels_ACU(apiUrl: string, apiKey: string, c
         "custom_include_headers": withOpencodeSessionHeader_ACU(sanitizedKey ? `Authorization: Bearer ${sanitizedKey}` : "", apiUrl)
     };
 
-    const response = await fetch(statusUrl, {
-        method: 'POST',
-        headers: { ..._getHeaders(), 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-    });
+    // 探活专用 15s AbortController：不设超时的探活会挂在无响应端点上，UI 状态停在"正在检查"。
+    // 仅对本次 fetch 生效；响应头到达后读 body 不再受此定时约束（轻量响应，无实际影响）。
+    const controller = new AbortController();
+    const probeTimer = setTimeout(() => controller.abort(), MODEL_PROBE_TIMEOUT_MS_ACU);
+    let response: Response;
+    try {
+        response = await fetch(statusUrl, {
+            method: 'POST',
+            headers: { ..._getHeaders(), 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+            signal: controller.signal,
+        });
+    } catch (e: any) {
+        // 仅折叠探活中断为结构化失败（返回 FetchModelsResult，调用方 UI 才能正确落到错误态）；
+        // 其余网络层异常保持原有抛出行为不变。
+        if (e?.name === 'AbortError' || /abort/i.test(String(e?.message || ''))) {
+            return { success: false, error: `API 端点状态检查超时：${MODEL_PROBE_TIMEOUT_MS_ACU / 1000} 秒内无响应，请检查端点地址与网络后重试。` };
+        }
+        throw e;
+    } finally {
+        clearTimeout(probeTimer);
+    }
 
     if (!response.ok) {
         const errorText = await response.text();

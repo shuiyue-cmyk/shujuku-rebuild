@@ -77,6 +77,8 @@ import {
   parseAndApplyTableEditsToData_ACU,
   isSqlContent,
 } from '../../../src/service/ai/prompt-builder/table-edit-parser';
+// mock 后的 log 打点：无块/空块语义测试断言 warn 可观测
+import { logWarn_ACU } from '../../../src/shared/utils';
 
 // ═══════════════════════════════════════════════════════════════
 // isSqlContent
@@ -455,6 +457,50 @@ describe('parseAndApplyTableEdits_ACU — DSL 分支', () => {
     parseAndApplyTableEdits_ACU(aiResponse, 'standard');
     // 非 SQLite 模式不应调用 provider.applyEdits
     expect(mockApplyEdits).not.toHaveBeenCalled();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// 无块/空块零操作提交语义锁定（= v9.1.5 行为，v9.1.6 的 model 重试已废弃，勿回退）
+// 编排层契约：布尔 true → parseSuccess=true → 零修改提交（不烧 AI 重试，也不是
+// precondition 失败）；对象 + appliedEdits=0 + failedEdits=0 → 编排层 zeroOpRejection
+// → errorCategory 'precondition'（同样不烧重试）。两者是不同场景但同属零操作语义。
+// ═══════════════════════════════════════════════════════════════
+describe('parseAndApplyTableEdits_ACU — 无块/空块零操作提交语义', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSettings = { tableEditLastPairOnly: false };
+    mockIsSqliteMode = false;
+    mockCurrentJsonTableData = {
+      sheet_0: {
+        name: '背包物品表',
+        content: [['row_id', 'item_name', 'quantity'], ['1', '铁剑', '3']],
+        updateConfig: {},
+      },
+    };
+  });
+
+  it('无 <tableEdit> 块：返回布尔 true（零操作提交，非 model 重试），warn 可观测', () => {
+    const result = parseAndApplyTableEdits_ACU('这轮没有表格更新，直接回复玩家。', 'standard');
+    // 布尔 true：编排层 parseResultObject=null → parseSuccess=true → 零修改提交
+    expect(result).toBe(true);
+    expect(logWarn_ACU).toHaveBeenCalledWith(expect.stringContaining('No recognizable table edit block found'));
+  });
+
+  it('空 <tableEdit> 块：返回布尔 true（零操作提交），warn 级对齐无块路径（不假成功静默）', () => {
+    const result = parseAndApplyTableEdits_ACU('<tableEdit>   </tableEdit>', 'standard');
+    expect(result).toBe(true);
+    expect(logWarn_ACU).toHaveBeenCalledWith(expect.stringContaining('Empty <tableEdit> block'));
+  });
+
+  it('块内仅注释零指令：success=false + appliedEdits=0 + failedEdits=0 + totalCommands=0（编排层 zeroOpRejection → precondition）', () => {
+    const result: any = parseAndApplyTableEdits_ACU('<tableEdit>// 本轮无需更新表格\n</tableEdit>', 'standard');
+    expect(result).not.toBe(true);
+    expect(result.success).toBe(false);
+    expect(result.appliedEdits).toBe(0);
+    expect(result.failedEdits).toBe(0);
+    expect(result.totalCommands).toBe(0);
+    expect(result.modifiedKeys).toEqual([]);
   });
 });
 

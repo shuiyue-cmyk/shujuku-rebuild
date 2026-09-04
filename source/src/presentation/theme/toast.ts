@@ -261,6 +261,95 @@ function _acuShouldShowToast_ACU(type: any, title: any, message: any, options: a
   }
 }
 
+// ═══ 富文本净化（toast repair 路径专用，v9.1.8）═══
+// repairEscapedMessage 用 innerHTML 重写消息节点，message 内容此前未经过任何过滤；
+// 虽然调用方都是插件内部代码，但宿主/美化脚本注入的 toastr 替换实现可能把任意
+// 字符串送进该路径。这里按白名单净化后再注入，骰子/美化的富文本形状
+// （div/span/table + style/class）必须原样通过，输出不变（0214ca7 契约）。
+
+/** 允许保留的标签：既有富文本用例（optimization-ui 的 div/br/small/button、plot-planning 的
+ * div/span/button、骰子形状 div/span/table）+ 常规排版标签。button 必须保留，否则
+ * qrf-abort-btn / acu-opt-stop-btn 等中止按钮会被剥掉导致功能回归。 */
+const TOAST_HTML_ALLOWED_TAGS_ACU: ReadonlySet<string> = new Set([
+  'div', 'span', 'p', 'br', 'hr', 'small', 'strong', 'em', 'b', 'i', 'u', 's', 'sub', 'sup', 'code', 'pre', 'blockquote',
+  'table', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th', 'caption', 'colgroup', 'col', 'ul', 'ol', 'li',
+  'a', 'img', 'button',
+]);
+
+/** 连内容一起整个移除的危险标签（脚本/样式/外链资源/插件嵌入点）。 */
+const TOAST_HTML_REMOVE_TAGS_ACU: ReadonlySet<string> = new Set([
+  'script', 'style', 'iframe', 'object', 'embed', 'link', 'meta', 'base', 'noscript', 'template',
+  'svg', 'math', 'form', 'input', 'select', 'textarea', 'option',
+  'audio', 'video', 'source', 'track', 'applet', 'frame', 'frameset', 'dialog', 'portal', 'slot', 'title',
+]);
+
+/** 无条件保留的安全属性；on* 事件属性一律剥除。id 必须保留：repair 重写发生在
+ * onShown 之后、调用方按 id 绑定按钮（#acu-opt-stop-btn 等）之前/之后均需能找到。 */
+const TOAST_HTML_SAFE_ATTRS_ACU: ReadonlySet<string> = new Set([
+  'style', 'class', 'id', 'colspan', 'rowspan', 'width', 'height', 'align', 'valign', 'title',
+]);
+
+/** URL 白名单：http(s) 绝对地址；img 额外放行非 SVG 位图 data:image/*（SVG 可带脚本，不放行）。
+ * 归一化时剥掉所有控制符与空白，防 java\tscript: 之类混淆绕过。 */
+function _acuIsSafeToastUrl_ACU(value: string, allowDataImage: boolean): boolean {
+  const normalized = String(value ?? '')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u0020]/g, '')
+    .replace(/\s+/g, '')
+    .toLowerCase();
+  if (/^https?:/.test(normalized)) return true;
+  if (allowDataImage && /^data:image\/(png|jpe?g|gif|webp|bmp|avif);/.test(normalized)) return true;
+  return false;
+}
+
+/**
+ * 按白名单净化富文本 toast 标记：危险标签连内容移除、未知标签解包保留文本、
+ * on* 事件属性剥除、javascript:/data:(非图片) URL 的 href/src 剥除；style/class
+ * 保留（骰子/美化依赖）。非浏览器环境（无 DOMParser）返回空串（宁可不渲染富文本）。
+ */
+export function sanitizeToastHtml_ACU(raw: string): string {
+  if (typeof DOMParser === 'undefined') return '';
+  try {
+    const doc = new DOMParser().parseFromString(String(raw ?? ''), 'text/html');
+    const sanitizeElement = (el: Element): void => {
+      const tag = el.tagName.toLowerCase();
+      if (TOAST_HTML_REMOVE_TAGS_ACU.has(tag)) {
+        el.remove();
+        return;
+      }
+      if (!TOAST_HTML_ALLOWED_TAGS_ACU.has(tag)) {
+        // 未知标签：先净化子树再解包，保留其中的文本与合法标记。
+        Array.from(el.children).forEach(child => sanitizeElement(child));
+        const parent = el.parentNode;
+        if (parent) {
+          while (el.firstChild) parent.insertBefore(el.firstChild, el);
+          el.remove();
+        }
+        return;
+      }
+      for (const attr of Array.from(el.attributes)) {
+        const name = attr.name.toLowerCase();
+        if (name.startsWith('on')) { el.removeAttribute(attr.name); continue; }
+        // href/src 先于通用白名单判定：按标签 + URL 白名单决定去留
+        if (name === 'href') {
+          if (tag !== 'a' || !_acuIsSafeToastUrl_ACU(attr.value, false)) el.removeAttribute(attr.name);
+          continue;
+        }
+        if (name === 'src') {
+          if (tag !== 'img' || !_acuIsSafeToastUrl_ACU(attr.value, true)) el.removeAttribute(attr.name);
+          continue;
+        }
+        if (!TOAST_HTML_SAFE_ATTRS_ACU.has(name)) { el.removeAttribute(attr.name); continue; }
+      }
+      Array.from(el.children).forEach(child => sanitizeElement(child));
+    };
+    Array.from(doc.body.children).forEach(child => sanitizeElement(child));
+    return doc.body.innerHTML;
+  } catch (e) {
+    return '';
+  }
+}
+
 export function showToastr_ACU(type: string, message: string, titleOrOptions: any = {}, maybeOptions: any = {}): JQuery<HTMLElement> | null {
   if (!toastr_API_ACU) {
     logDebug_ACU(`Toastr (${type}): ${message}`);
@@ -292,7 +381,9 @@ export function showToastr_ACU(type: string, message: string, titleOrOptions: an
         for (const el of candidates) {
           const text = (el.textContent || '').replace(/\s+/g, ' ');
           if (!el.children.length && text.startsWith(prefix)) {
-            el.innerHTML = raw;
+            // v9.1.8：白名单净化后再注入（剥 script/iframe/on*/javascript: 等），
+            // 骰子/美化形状 div/span/table+style 经白名单原样通过，渲染输出不变。
+            el.innerHTML = sanitizeToastHtml_ACU(raw);
             break;
           }
         }

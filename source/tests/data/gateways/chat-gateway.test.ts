@@ -162,11 +162,14 @@ describe('emitMessageUpdated_ACU', () => {
     expect(emit).toHaveBeenCalledWith('MESSAGE_UPDATED_CONST', 5);
   });
 
-  it('无 eventTypes 时降级使用字符串', () => {
+  it('无 eventTypes 时降级使用小写字符串事件名（TT events.js:12 注册名）', () => {
     const emit = vi.fn();
     mockSillyTavern.eventSource = { emit };
     emitMessageUpdated_ACU(3);
-    expect(emit).toHaveBeenCalledWith('MESSAGE_UPDATED', 3);
+    // TT 事件字面量为小写 'message_updated'（events.js:12），大写 'MESSAGE_UPDATED'
+    // 从未被注册，emit 等于空放（纯一致性修复，正常路径始终走 eventTypes 常量）。
+    expect(emit).toHaveBeenCalledWith('message_updated', 3);
+    expect(emit).not.toHaveBeenCalledWith('MESSAGE_UPDATED', 3);
   });
 });
 

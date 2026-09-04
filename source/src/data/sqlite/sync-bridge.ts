@@ -231,7 +231,8 @@ export class SyncBridge {
     // 遍历所有用户表
     const tableNames = this.engine.getTableNames();
     logDebug_ACU(`[SyncBridge] 开始导出 ${tableNames.length} 张表从 SQLite`);
-    for (const tableName of tableNames) {
+    for (let tableIndex = 0; tableIndex < tableNames.length; tableIndex++) {
+      const tableName = tableNames[tableIndex];
       // 查找对应的元数据
       const meta = this._findMetaByTableName(metaMap, tableName);
       if (!meta) {
@@ -239,7 +240,11 @@ export class SyncBridge {
         // 非 strict 不再静默丢表：跳过明细写入 warnings 通道并记一条 warn。
         const skipMessage = `[SyncBridge] 导出跳过用户表 ${tableName}：缺少可识别的元数据。`;
         options.warnings?.push(skipMessage);
-        logWarn_ACU(skipMessage);
+        // meta 不可识别 → 无 sheetKey 可入 skippedSheetKeys，merge-back（sql-table-service
+        // _syncToJson）无法用上份 canonical 视图回填，该表会从共享视图消失。
+        // 三路识别（存储物理名/算法重算/DDL 别名）已在此前全部未命中，无可靠身份可回填；
+        // 升级为 error 级并携带表位置信息（索引/总数/物理表名），保证丢失可被观测。
+        logError_ACU(`[SyncBridge] 导出跳过用户表 ${tableName}（第 ${tableIndex + 1}/${tableNames.length} 张）：缺少可识别的元数据，无法反查 sheetKey 纳入 skippedSheetKeys 回填，该表将从合并视图消失。`);
         continue;
       }
 

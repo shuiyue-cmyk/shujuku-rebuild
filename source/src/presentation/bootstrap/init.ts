@@ -562,10 +562,21 @@ async function handleChatChangedEvent_ACU(chatFileName: string): Promise<void> {
   }
 }
 
+// [幂等卫兵] mainInitialize_ACU 此前无自身幂等：重复进入（首次挂载失败 release 后二次启动 /
+// 同 eventSource 二次调用）会重复注册全部事件监听（double-fire 主路径）并泄漏 chatId 轮询
+// 定时器。一次成功初始化即置位；core APIs 加载失败不置位，保留原有「失败后可重试」语义。
+// 不做全量 off 配对（大重构超范围），卫兵封死 double-fire 主路径。
+let mainInitializeDone_ACU = false;
+
 export   function mainInitialize_ACU() {
 
     logDebug_ACU('ACU_INIT_DEBUG: mainInitialize_ACU called.');
+    if (mainInitializeDone_ACU) {
+      logDebug_ACU('ACU_INIT_DEBUG: mainInitialize_ACU already done; skip re-entry (no re-registration, no duplicate toast).');
+      return;
+    }
     if (attemptToLoadCoreApis_ACU()) {
+      mainInitializeDone_ACU = true;
       logDebug_ACU('AutoCardUpdater Initialization successful! Core APIs loaded.');
       showToastr_ACU('success', '数据库已加载！', '数据库');
 

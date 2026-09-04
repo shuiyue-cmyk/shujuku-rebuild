@@ -103,6 +103,30 @@ export function clearRuntimeOnlyPendingSheets_ACU(scope?: RuntimeOnlyPendingScop
 }
 
 /**
+ * 按表集合条件化清除登记：只移除给定的 sheetKey（以及可选的 all 标记），保留同 scope
+ * 下其他并发登记；清除后若无任何残留登记才删除整个 scope 条目。
+ *
+ * 供 runtime-only-pending-flush 在提交事务内（持锁中）按「本次实际处理集」清账使用，
+ * 替代会吞掉并发写者新登记的全量 clearRuntimeOnlyPendingSheets_ACU（原 API 保持兼容）。
+ */
+export function clearRuntimeOnlyPendingSheetKeys_ACU(
+  scope: RuntimeOnlyPendingScope_ACU,
+  sheetKeys: readonly string[],
+  options?: { dropAllFlag?: boolean },
+): void {
+  const scopeKey = buildRuntimeOnlyPendingScopeKey_ACU(scope);
+  const state = pendingByScope_ACU.get(scopeKey);
+  if (!state) return;
+  for (const sheetKey of sheetKeys) {
+    if (typeof sheetKey === 'string') state.sheetKeys.delete(sheetKey);
+  }
+  if (options?.dropAllFlag) state.all = false;
+  if (!state.all && state.sheetKeys.size === 0) {
+    pendingByScope_ACU.delete(scopeKey);
+  }
+}
+
+/**
  * 落盘器由 runtime-only-pending-flush 注册；提交模型通过本入口触发，
  * 避免 table-update-commit ↔ flush 之间的直接循环导入。未注册时静默跳过。
  */

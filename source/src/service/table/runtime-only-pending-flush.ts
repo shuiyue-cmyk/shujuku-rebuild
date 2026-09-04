@@ -24,7 +24,8 @@ import { getLatestTableAppendMessageIndexFromChat_ACU } from './table-history';
 import { ensureStorageProviderReady_ACU } from './table-storage-strategy';
 import { runTableUpdateCommit_ACU } from './table-update-commit';
 import {
-  clearRuntimeOnlyPendingSheets_ACU,
+  clearRuntimeOnlyPendingSheetKeys_ACU,
+  markRuntimeOnlyPendingSheets_ACU,
   readRuntimeOnlyPendingSheets_ACU,
   registerRuntimeOnlyPendingFlusher_ACU,
   type RuntimeOnlyPendingFlushResult_ACU,
@@ -96,7 +97,7 @@ async function resolveDivergedSheetKeys_ACU(
   }
 }
 
-/** 持锁重算后无可落盘内容的内部哨兵：apply 以 precondition 失败上浮，flush 层据此清空登记。 */
+/** 持锁重算后无可落盘内容的内部哨兵：apply 以 precondition 失败上浮（登记已在持锁内条件化清空），flush 层据此确认并返回。 */
 const NOTHING_TO_FLUSH_ERROR_ACU = '__ACU_RUNTIME_ONLY_FLUSH_NOTHING_TO_FLUSH__';
 
 export async function flushRuntimeOnlyPendingChanges_ACU(reason: string): Promise<RuntimeOnlyPendingFlushResult_ACU> {
@@ -121,7 +122,8 @@ export async function flushRuntimeOnlyPendingChanges_ACU(reason: string): Promis
     : pending.sheetKeys.filter(sheetKey => runtimeSheetKeys.includes(sheetKey));
   if (candidateSheetKeys.length === 0) {
     // 登记的表已不在运行时（被删除/重载），没有可落盘的内容。
-    clearRuntimeOnlyPendingSheets_ACU(scope);
+    // 按集合清除：只撤销 T0 登记本身；快照读取窗口内并发写者新登记的表不在 T0 集合内，不受影响。
+    clearRuntimeOnlyPendingSheetKeys_ACU(scope, pending.sheetKeys, { dropAllFlag: pending.all });
     return { flushed: false, sheetKeys: [] };
   }
 
@@ -133,7 +135,9 @@ export async function flushRuntimeOnlyPendingChanges_ACU(reason: string): Promis
 
   const divergedSheetKeys = await resolveDivergedSheetKeys_ACU(chat, scope.isolationKey, targetMessageIndex, runtimeData, candidateSheetKeys);
   if (divergedSheetKeys.length === 0) {
-    clearRuntimeOnlyPendingSheets_ACU(scope);
+    // T0 候选集与回放一致，无需落盘：按集合清除 T0 候选（回放比对窗口内并发写者新登记
+    // 的表不在 T0 集合内，不受影响）；持锁后的最终确认仍由事务内重算兜底。
+    clearRuntimeOnlyPendingSheetKeys_ACU(scope, candidateSheetKeys, { dropAllFlag: pending.all });
     logDebug_ACU(`[RuntimeOnlyFlush] ${reason}: 运行时与聊天回放一致，无需落盘（${candidateSheetKeys.join('、')}）。`);
     return { flushed: false, sheetKeys: [] };
   }
@@ -144,6 +148,10 @@ export async function flushRuntimeOnlyPendingChanges_ACU(reason: string): Promis
   // 候选表（⊇ 持锁重算后的任何分歧集），保证重算新增的分歧表也在锁覆盖范围内。
   let flushedSheetKeys: string[] | null = null;
   let flushedMessageIndex: number | null = null;
+  // 持锁内清账账目：apply 成功分支在持锁中按「本次实际落盘集」清除登记；若随后的
+  // persist 失败，失败路径据此补登记（等价于「失败完全不清」，见下方失败分支）。
+  let successClearedSheetKeys: string[] | null = null;
+  let successClearedAllFlag = false;
   const commitResult = await runTableUpdateCommit_ACU<null>({
     source: 'system',
     reason: `runtime_only_flush:${reason}`,
@@ -182,12 +190,17 @@ export async function flushRuntimeOnlyPendingChanges_ACU(reason: string): Promis
       return { success: false as const, error: 'no AI message to persist runtime-only changes', errorCategory: 'precondition' as const };
     }
     if (freshCandidates.length === 0) {
-      // 登记表在持锁期间已从运行时消失：无可落盘内容，与 T0 同语义（清空登记）。
+      // 登记表在持锁期间已从运行时消失：无可落盘内容，与 T0 同语义（按 T0 登记集合清空）。
+      // 清账在持锁中执行：mark 同样只在提交锁内发生，清账与并发 mark 互斥，不存在
+      // 「放锁到清除之间」的误清窗口。
+      clearRuntimeOnlyPendingSheetKeys_ACU(scope, pending.sheetKeys, { dropAllFlag: pending.all });
       return { success: false as const, error: NOTHING_TO_FLUSH_ERROR_ACU, errorCategory: 'precondition' as const };
     }
     const freshDivergedSheetKeys = await resolveDivergedSheetKeys_ACU(freshChat, scope.isolationKey, freshTargetMessageIndex, freshData, freshCandidates);
     if (freshDivergedSheetKeys.length === 0) {
-      // 并发写者已把内容物化进聊天：与回放一致，无需落盘（清空登记）。
+      // 并发写者已把内容物化进聊天：与回放一致，无需落盘。持锁内按重算后的候选集条件化清空；
+      // 锁等待期间并发登记的新表不在 T0 候选内，不受影响。
+      clearRuntimeOnlyPendingSheetKeys_ACU(scope, freshCandidates, { dropAllFlag: pending.all });
       return { success: false as const, error: NOTHING_TO_FLUSH_ERROR_ACU, errorCategory: 'precondition' as const };
     }
     const freshOperations: TableMutationOperationV2_ACU[] = freshDivergedSheetKeys.map(sheetKey => ({
@@ -198,6 +211,11 @@ export async function flushRuntimeOnlyPendingChanges_ACU(reason: string): Promis
     }));
     flushedSheetKeys = freshDivergedSheetKeys;
     flushedMessageIndex = freshTargetMessageIndex;
+    // 成功清除在持锁中执行（apply 回调末尾，先于 persist）：只清除本次实际落盘的表集合。
+    // 放锁前后并发写者新登记的表都不在清除集内，登记保留到下一次落盘机会。
+    successClearedSheetKeys = freshDivergedSheetKeys;
+    successClearedAllFlag = pending.all;
+    clearRuntimeOnlyPendingSheetKeys_ACU(scope, freshDivergedSheetKeys, { dropAllFlag: pending.all });
     return {
       success: true as const,
       value: null,
@@ -212,15 +230,23 @@ export async function flushRuntimeOnlyPendingChanges_ACU(reason: string): Promis
 
   if (!commitResult.success) {
     if (commitResult.error === NOTHING_TO_FLUSH_ERROR_ACU) {
-      clearRuntimeOnlyPendingSheets_ACU(scope);
+      // 登记已在事务内（持锁中）按重算候选集条件化清空，这里不再重复清除。
       logDebug_ACU(`[RuntimeOnlyFlush] ${reason}: 持锁重算后运行时与聊天回放一致，无需落盘（${candidateSheetKeys.join('、')}）。`);
       return { flushed: false, sheetKeys: [] };
+    }
+    // persist 失败发生在 apply 持锁清除之后：失败路径必须等价于「完全不清」，
+    // 把本次清除过的表补登记回去。补登记是纯加法，不会吞掉并发写者新登记的表。
+    const successClearedKeysSnapshot: string[] | null = successClearedSheetKeys;
+    if (successClearedKeysSnapshot !== null && successClearedKeysSnapshot.length > 0) {
+      markRuntimeOnlyPendingSheets_ACU(scope, { all: successClearedAllFlag, sheetKeys: successClearedKeysSnapshot });
     }
     logWarn_ACU(`[RuntimeOnlyFlush] ${reason}: 运行时未落盘变更写回聊天失败，保留登记待下次重试：${commitResult.error || 'unknown error'}`);
     return { flushed: false, sheetKeys: divergedSheetKeys, error: commitResult.error };
   }
 
-  clearRuntimeOnlyPendingSheets_ACU(scope);
+  // 成功：登记清除已在事务内（持锁中）完成，放锁后不再全量清——否则放锁到清除之间的
+  // 微任务窗口里，并发写者（runTableUpdateCommit 持锁 markRuntimeOnlyPendingSheets）新
+  // 登记的 sheet 会被误清且未落盘。
   const finalSheetKeys = flushedSheetKeys ?? divergedSheetKeys;
   const finalMessageIndex = flushedMessageIndex ?? targetMessageIndex;
   logDebug_ACU(`[RuntimeOnlyFlush] ${reason}: 已把运行时未落盘变更写回 AI 楼层 #${commitResult.messageIndex ?? finalMessageIndex}：${finalSheetKeys.join('、')}。`);

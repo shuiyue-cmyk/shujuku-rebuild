@@ -644,6 +644,36 @@ describe('SyncBridge', () => {
       expect(exported.sheet_0).toBeUndefined();
       querySpy.mockRestore();
     });
+
+    it('非 strict 缺元数据孤表：身份不可识别不入 skippedSheetKeys，error 级日志携带表位置信息', () => {
+      const originalData = makeTableData({ sheet_0: makeSheet() });
+      const tableName = getRuntimeTableName(originalData, 'sheet_0');
+      bridge.loadFromTableData(originalData);
+      // 直接建一张 meta 三路识别都不命中的孤表（无 meta 行、无 physical 名、DDL 别名）
+      engine.run('CREATE TABLE orphan_table (row_id INTEGER PRIMARY KEY, value TEXT);');
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const warnings: string[] = [];
+      const skippedSheetKeys: string[] = [];
+      const exported = bridge.exportToTableData(makeMate(), { warnings, skippedSheetKeys });
+
+      // warnings 通道仍携带明细（调用方聚合一条 warn 的既有契约不变）
+      expect(warnings.join('')).toContain('orphan_table');
+      expect(warnings.join('')).toContain('缺少可识别的元数据');
+      // 身份不可识别：绝不能入 skippedSheetKeys（错误回填会拿 sheet_0 的内容填错表）
+      expect(skippedSheetKeys).toEqual([]);
+      expect(exported.sheet_0).toBeDefined();
+
+      // 日志从 warn 升级为 error 级，并携带表位置信息（索引/总数/物理表名）
+      const errText = errSpy.mock.calls.map(c => c.map(String).join(' ')).join('\n');
+      expect(errText).toContain('orphan_table');
+      const expectedOrder = [tableName, 'orphan_table'].sort();
+      const orphanPosition = expectedOrder.indexOf('orphan_table') + 1;
+      expect(errText).toContain(`第 ${orphanPosition}/${expectedOrder.length} 张`);
+      expect(errText).toContain('无法反查 sheetKey');
+      expect(errText).toContain('从合并视图消失');
+      errSpy.mockRestore();
+    });
   });
 
   // ═══════════════════════════════════════════════════════════════

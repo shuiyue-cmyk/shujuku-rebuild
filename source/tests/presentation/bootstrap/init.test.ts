@@ -457,3 +457,51 @@ describe('mainInitialize_ACU init 链 running 占用补跑', () => {
     vi.useRealTimers();
   });
 });
+
+// [幂等卫兵] mainInitialize_ACU 此前无自身幂等：重复进入（首次挂载失败 release 后二次启动 /
+// 同 eventSource 二次调用）会重复注册全部事件监听（double-fire 主路径）并泄漏 chatId 轮询
+// 定时器。修复：模块级 mainInitializeDone_ACU 卫兵，成功初始化一次即置位，重复进入 logDebug 早退。
+describe('mainInitialize_ACU 幂等卫兵', () => {
+  it('成功初始化后二次调用早退：不重复注册事件监听、不重复提示、不再尝试加载核心 API', async () => {
+    const { mainInitialize_ACU } = await import('../../../src/presentation/bootstrap/init');
+    const toast = await import('../../../src/presentation/theme/toast');
+    const connect = await import('../../../src/presentation/triggers/settings-ui-sync/settings-ui-connect');
+    const onBefore = m.api.eventSource.on.mock.calls.length;
+    const makeFirstBefore = m.api.eventSource.makeFirst.mock.calls.length;
+    const makeLastBefore = m.api.eventSource.makeLast.mock.calls.length;
+
+    mainInitialize_ACU();
+
+    // 卫兵早退先于 core API 加载尝试：不重复注册、不重复 toast、不二次加载。
+    expect(m.api.eventSource.on.mock.calls.length).toBe(onBefore);
+    expect(m.api.eventSource.makeFirst.mock.calls.length).toBe(makeFirstBefore);
+    expect(m.api.eventSource.makeLast.mock.calls.length).toBe(makeLastBefore);
+    expect(toast.showToastr_ACU).not.toHaveBeenCalled();
+    expect(connect.attemptToLoadCoreApis_ACU).not.toHaveBeenCalled();
+  });
+
+  it('负向控制：core APIs 加载失败不置位卫兵（保留重试语义），恢复后可完成初始化，之后二次调用早退', async () => {
+    vi.resetModules();
+    const connect = await import('../../../src/presentation/triggers/settings-ui-sync/settings-ui-connect');
+    vi.mocked(connect.attemptToLoadCoreApis_ACU).mockReturnValue(false);
+    const toast = await import('../../../src/presentation/theme/toast');
+    const { mainInitialize_ACU } = await import('../../../src/presentation/bootstrap/init');
+
+    // 首次进入：core APIs 加载失败 → 不注册任何监听、不提示成功（走既有失败分支）。
+    mainInitialize_ACU();
+    expect(toast.showToastr_ACU).not.toHaveBeenCalled();
+    expect(m.api.eventSource.on).not.toHaveBeenCalled();
+
+    // 恢复后重试：卫兵未在失败路径置位，初始化可以完整完成（重试语义保留）。
+    vi.mocked(connect.attemptToLoadCoreApis_ACU).mockReturnValue(true);
+    mainInitialize_ACU();
+    const registeredAfterFirstSuccess = m.api.eventSource.on.mock.calls.length;
+    expect(registeredAfterFirstSuccess).toBeGreaterThan(0);
+    expect(toast.showToastr_ACU).toHaveBeenCalledTimes(1);
+
+    // 再次调用：卫兵早退，不重复注册、不重复提示。
+    mainInitialize_ACU();
+    expect(m.api.eventSource.on.mock.calls.length).toBe(registeredAfterFirstSuccess);
+    expect(toast.showToastr_ACU).toHaveBeenCalledTimes(1);
+  });
+});

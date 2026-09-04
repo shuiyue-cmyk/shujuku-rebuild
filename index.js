@@ -4932,7 +4932,8 @@ async function listAllHostChatNames_ACU() {
 }
 /**
  * 触发消息更新事件通知宿主平台
- * 优先使用 eventTypes.MESSAGE_UPDATED，降级使用字符串 'MESSAGE_UPDATED'
+ * 优先使用 eventTypes.MESSAGE_UPDATED，降级使用字符串 'message_updated'
+ * （TT events.js:12 `MESSAGE_UPDATED: 'message_updated'`：事件名字面量为小写）
  * @param messageIndex 更新的消息索引
  */
 function emitMessageUpdated_ACU(messageIndex) {
@@ -4944,8 +4945,9 @@ function emitMessageUpdated_ACU(messageIndex) {
         SillyTavern_API_ACU.eventSource.emit(SillyTavern_API_ACU.eventTypes.MESSAGE_UPDATED, messageIndex);
     }
     else {
-        // 降级：直接使用字符串事件名
-        SillyTavern_API_ACU.eventSource.emit('MESSAGE_UPDATED', messageIndex);
+        // 降级：直接使用字符串事件名（必须与 TT 注册名一致的小写形式，
+        // 'MESSAGE_UPDATED' 大写形态 TT 从未注册，emit 等于空放）。
+        SillyTavern_API_ACU.eventSource.emit('message_updated', messageIndex);
     }
 }
 
@@ -35960,7 +35962,8 @@ class SyncBridge {
         // 遍历所有用户表
         const tableNames = this.engine.getTableNames();
         logDebug_ACU(`[SyncBridge] 开始导出 ${tableNames.length} 张表从 SQLite`);
-        for (const tableName of tableNames) {
+        for (let tableIndex = 0; tableIndex < tableNames.length; tableIndex++) {
+            const tableName = tableNames[tableIndex];
             // 查找对应的元数据
             const meta = this._findMetaByTableName(metaMap, tableName);
             if (!meta) {
@@ -35969,7 +35972,11 @@ class SyncBridge {
                 // 非 strict 不再静默丢表：跳过明细写入 warnings 通道并记一条 warn。
                 const skipMessage = `[SyncBridge] 导出跳过用户表 ${tableName}：缺少可识别的元数据。`;
                 options.warnings?.push(skipMessage);
-                logWarn_ACU(skipMessage);
+                // meta 不可识别 → 无 sheetKey 可入 skippedSheetKeys，merge-back（sql-table-service
+                // _syncToJson）无法用上份 canonical 视图回填，该表会从共享视图消失。
+                // 三路识别（存储物理名/算法重算/DDL 别名）已在此前全部未命中，无可靠身份可回填；
+                // 升级为 error 级并携带表位置信息（索引/总数/物理表名），保证丢失可被观测。
+                logError_ACU(`[SyncBridge] 导出跳过用户表 ${tableName}（第 ${tableIndex + 1}/${tableNames.length} 张）：缺少可识别的元数据，无法反查 sheetKey 纳入 skippedSheetKeys 回填，该表将从合并视图消失。`);
                 continue;
             }
             try {
@@ -71352,12 +71359,17 @@ function parseAndApplyTableEditsToData_ACU(aiResponse, tableData, updateMode = '
     let responseForParsing = aiResponse;
     const extracted = extractTableEditInner_ACU(responseForParsing, { allowNoTableEditTags: true });
     if (!extracted || !extracted.inner) {
+        // 无块 = 零操作提交语义（v9.1.5 行为，勿改回 model 重试）：返回布尔 true，
+        // 编排层按 parseSuccess=true 走零修改提交（不烧 AI 重试，也不是 precondition 失败）；
+        // logWarn 仅控制台观测。与「块存在但指令全被模式门过滤」的 precondition 分类
+        // （success=false + appliedEdits=0 + failedEdits=0 → zeroOpRejection）是两个不同场景。
         logWarn_ACU('No recognizable table edit block found (missing <tableEdit> boundary and/or incomplete <!-- --> wrapper).');
         return true;
     }
     const editsString = extracted.inner.replace(/<!--|-->/g, '').trim();
     if (!editsString) {
-        logDebug_ACU('Empty <tableEdit> block. No edits to apply.');
+        // 空块与无块同语义：零操作提交（true），不烧 AI 重试；warn 级对齐无块路径（不假成功静默）。
+        logWarn_ACU('Empty <tableEdit> block. No edits to apply.');
         return true;
     }
     // SQLite SQL 写入必须由 table-update-commit 公共提交模型执行；解析器不得直接改运行时 DB。
@@ -73123,6 +73135,10 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
  * stream 参数由 streamingEnabled 开关决定（见 buildCustomApiRequestBody_ACU）；
  * 响应解析按请求实际携带的 stream 值分流（预设级开关可能与全局不同）。
  * 返回 AI 响应文本（原始，未 trim），失败抛错。
+ *
+ * 有意不设硬超时：这里是主生成出口，长生成（长回复/慢网关）合法，固定超时只会
+ * 掐断正常生成；调用方如需可中断，应自行传 signal（函数已透传 AbortSignal）。
+ * 探活专用超时见 ai-service.ts fetchAvailableModels_ACU（15s AbortController）。
  */
 async function postChatCompletion_ACU(body, signal) {
     let res;
@@ -78241,7 +78257,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.1.7" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.1.8" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -89817,6 +89833,28 @@ function clearRuntimeOnlyPendingSheets_ACU(scope) {
     pendingByScope_ACU.delete(buildRuntimeOnlyPendingScopeKey_ACU(scope));
 }
 /**
+ * 按表集合条件化清除登记：只移除给定的 sheetKey（以及可选的 all 标记），保留同 scope
+ * 下其他并发登记；清除后若无任何残留登记才删除整个 scope 条目。
+ *
+ * 供 runtime-only-pending-flush 在提交事务内（持锁中）按「本次实际处理集」清账使用，
+ * 替代会吞掉并发写者新登记的全量 clearRuntimeOnlyPendingSheets_ACU（原 API 保持兼容）。
+ */
+function clearRuntimeOnlyPendingSheetKeys_ACU(scope, sheetKeys, options) {
+    const scopeKey = buildRuntimeOnlyPendingScopeKey_ACU(scope);
+    const state = pendingByScope_ACU.get(scopeKey);
+    if (!state)
+        return;
+    for (const sheetKey of sheetKeys) {
+        if (typeof sheetKey === 'string')
+            state.sheetKeys.delete(sheetKey);
+    }
+    if (options?.dropAllFlag)
+        state.all = false;
+    if (!state.all && state.sheetKeys.size === 0) {
+        pendingByScope_ACU.delete(scopeKey);
+    }
+}
+/**
  * 落盘器由 runtime-only-pending-flush 注册；提交模型通过本入口触发，
  * 避免 table-update-commit ↔ flush 之间的直接循环导入。未注册时静默跳过。
  */
@@ -98824,6 +98862,102 @@ function _acuShouldShowToast_ACU(type, title, message, options = {}) {
         return true;
     }
 }
+// ═══ 富文本净化（toast repair 路径专用，v9.1.8）═══
+// repairEscapedMessage 用 innerHTML 重写消息节点，message 内容此前未经过任何过滤；
+// 虽然调用方都是插件内部代码，但宿主/美化脚本注入的 toastr 替换实现可能把任意
+// 字符串送进该路径。这里按白名单净化后再注入，骰子/美化的富文本形状
+// （div/span/table + style/class）必须原样通过，输出不变（0214ca7 契约）。
+/** 允许保留的标签：既有富文本用例（optimization-ui 的 div/br/small/button、plot-planning 的
+ * div/span/button、骰子形状 div/span/table）+ 常规排版标签。button 必须保留，否则
+ * qrf-abort-btn / acu-opt-stop-btn 等中止按钮会被剥掉导致功能回归。 */
+const TOAST_HTML_ALLOWED_TAGS_ACU = new Set([
+    'div', 'span', 'p', 'br', 'hr', 'small', 'strong', 'em', 'b', 'i', 'u', 's', 'sub', 'sup', 'code', 'pre', 'blockquote',
+    'table', 'thead', 'tbody', 'tfoot', 'tr', 'td', 'th', 'caption', 'colgroup', 'col', 'ul', 'ol', 'li',
+    'a', 'img', 'button',
+]);
+/** 连内容一起整个移除的危险标签（脚本/样式/外链资源/插件嵌入点）。 */
+const TOAST_HTML_REMOVE_TAGS_ACU = new Set([
+    'script', 'style', 'iframe', 'object', 'embed', 'link', 'meta', 'base', 'noscript', 'template',
+    'svg', 'math', 'form', 'input', 'select', 'textarea', 'option',
+    'audio', 'video', 'source', 'track', 'applet', 'frame', 'frameset', 'dialog', 'portal', 'slot', 'title',
+]);
+/** 无条件保留的安全属性；on* 事件属性一律剥除。id 必须保留：repair 重写发生在
+ * onShown 之后、调用方按 id 绑定按钮（#acu-opt-stop-btn 等）之前/之后均需能找到。 */
+const TOAST_HTML_SAFE_ATTRS_ACU = new Set([
+    'style', 'class', 'id', 'colspan', 'rowspan', 'width', 'height', 'align', 'valign', 'title',
+]);
+/** URL 白名单：http(s) 绝对地址；img 额外放行非 SVG 位图 data:image/*（SVG 可带脚本，不放行）。
+ * 归一化时剥掉所有控制符与空白，防 java\tscript: 之类混淆绕过。 */
+function _acuIsSafeToastUrl_ACU(value, allowDataImage) {
+    const normalized = String(value ?? '')
+        // eslint-disable-next-line no-control-regex
+        .replace(/[\u0000-\u0020]/g, '')
+        .replace(/\s+/g, '')
+        .toLowerCase();
+    if (/^https?:/.test(normalized))
+        return true;
+    if (allowDataImage && /^data:image\/(png|jpe?g|gif|webp|bmp|avif);/.test(normalized))
+        return true;
+    return false;
+}
+/**
+ * 按白名单净化富文本 toast 标记：危险标签连内容移除、未知标签解包保留文本、
+ * on* 事件属性剥除、javascript:/data:(非图片) URL 的 href/src 剥除；style/class
+ * 保留（骰子/美化依赖）。非浏览器环境（无 DOMParser）返回空串（宁可不渲染富文本）。
+ */
+function sanitizeToastHtml_ACU(raw) {
+    if (typeof DOMParser === 'undefined')
+        return '';
+    try {
+        const doc = new DOMParser().parseFromString(String(raw ?? ''), 'text/html');
+        const sanitizeElement = (el) => {
+            const tag = el.tagName.toLowerCase();
+            if (TOAST_HTML_REMOVE_TAGS_ACU.has(tag)) {
+                el.remove();
+                return;
+            }
+            if (!TOAST_HTML_ALLOWED_TAGS_ACU.has(tag)) {
+                // 未知标签：先净化子树再解包，保留其中的文本与合法标记。
+                Array.from(el.children).forEach(child => sanitizeElement(child));
+                const parent = el.parentNode;
+                if (parent) {
+                    while (el.firstChild)
+                        parent.insertBefore(el.firstChild, el);
+                    el.remove();
+                }
+                return;
+            }
+            for (const attr of Array.from(el.attributes)) {
+                const name = attr.name.toLowerCase();
+                if (name.startsWith('on')) {
+                    el.removeAttribute(attr.name);
+                    continue;
+                }
+                // href/src 先于通用白名单判定：按标签 + URL 白名单决定去留
+                if (name === 'href') {
+                    if (tag !== 'a' || !_acuIsSafeToastUrl_ACU(attr.value, false))
+                        el.removeAttribute(attr.name);
+                    continue;
+                }
+                if (name === 'src') {
+                    if (tag !== 'img' || !_acuIsSafeToastUrl_ACU(attr.value, true))
+                        el.removeAttribute(attr.name);
+                    continue;
+                }
+                if (!TOAST_HTML_SAFE_ATTRS_ACU.has(name)) {
+                    el.removeAttribute(attr.name);
+                    continue;
+                }
+            }
+            Array.from(el.children).forEach(child => sanitizeElement(child));
+        };
+        Array.from(doc.body.children).forEach(child => sanitizeElement(child));
+        return doc.body.innerHTML;
+    }
+    catch (e) {
+        return '';
+    }
+}
 function showToastr_ACU(type, message, titleOrOptions = {}, maybeOptions = {}) {
     if (!toastr_API_ACU) {
         logDebug_ACU(`Toastr (${type}): ${message}`);
@@ -98858,7 +98992,9 @@ function showToastr_ACU(type, message, titleOrOptions = {}, maybeOptions = {}) {
                 for (const el of candidates) {
                     const text = (el.textContent || '').replace(/\s+/g, ' ');
                     if (!el.children.length && text.startsWith(prefix)) {
-                        el.innerHTML = raw;
+                        // v9.1.8：白名单净化后再注入（剥 script/iframe/on*/javascript: 等），
+                        // 骰子/美化形状 div/span/table+style 经白名单原样通过，渲染输出不变。
+                        el.innerHTML = sanitizeToastHtml_ACU(raw);
                         break;
                     }
                 }
@@ -100666,6 +100802,9 @@ function buildTavernHelperCompat_ACU(rawTH, getStApi) {
  */
 /** 接口协议四值白名单（与 api-call.ts 请求体 custom_api_format 契约同源）。 */
 const CUSTOM_API_FORMAT_WHITELIST_ACU = ['openai_compat', 'openai_responses', 'claude_messages', 'gemini_interactions'];
+/** 模型列表探活专用超时（毫秒）：status 请求是轻量探测，15 秒无响应即视为端点不可达。
+ *  仅约束本探活请求；主生成出口 postChatCompletion_ACU 不设硬超时（长生成合法，见 api-call.ts）。 */
+const MODEL_PROBE_TIMEOUT_MS_ACU = 15000;
 /**
  * status 探活的 custom_api_format 归一：缺省/非法一律降级 ''。
  * TT 后端 `CustomApiFormat::parse` 把 '' 视为 openai_compat（与不传字段等价），
@@ -100710,11 +100849,30 @@ async function fetchAvailableModels_ACU(apiUrl, apiKey, customApiFormat) {
         // OpenCode Go 端点自动补 x-opencode-session 会话头（缺失会被 Go 拒单）
         "custom_include_headers": withOpencodeSessionHeader_ACU(sanitizedKey ? `Authorization: Bearer ${sanitizedKey}` : "", apiUrl)
     };
-    const response = await fetch(statusUrl, {
-        method: 'POST',
-        headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-    });
+    // 探活专用 15s AbortController：不设超时的探活会挂在无响应端点上，UI 状态停在"正在检查"。
+    // 仅对本次 fetch 生效；响应头到达后读 body 不再受此定时约束（轻量响应，无实际影响）。
+    const controller = new AbortController();
+    const probeTimer = setTimeout(() => controller.abort(), MODEL_PROBE_TIMEOUT_MS_ACU);
+    let response;
+    try {
+        response = await fetch(statusUrl, {
+            method: 'POST',
+            headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+            signal: controller.signal,
+        });
+    }
+    catch (e) {
+        // 仅折叠探活中断为结构化失败（返回 FetchModelsResult，调用方 UI 才能正确落到错误态）；
+        // 其余网络层异常保持原有抛出行为不变。
+        if (e?.name === 'AbortError' || /abort/i.test(String(e?.message || ''))) {
+            return { success: false, error: `API 端点状态检查超时：${MODEL_PROBE_TIMEOUT_MS_ACU / 1000} 秒内无响应，请检查端点地址与网络后重试。` };
+        }
+        throw e;
+    }
+    finally {
+        clearTimeout(probeTimer);
+    }
     if (!response.ok) {
         const errorText = await response.text();
         const status = response.status;
@@ -105337,7 +105495,7 @@ async function resolveDivergedSheetKeys_ACU(chat, isolationKey, targetMessageInd
         return candidateSheetKeys;
     }
 }
-/** 持锁重算后无可落盘内容的内部哨兵：apply 以 precondition 失败上浮，flush 层据此清空登记。 */
+/** 持锁重算后无可落盘内容的内部哨兵：apply 以 precondition 失败上浮（登记已在持锁内条件化清空），flush 层据此确认并返回。 */
 const NOTHING_TO_FLUSH_ERROR_ACU = '__ACU_RUNTIME_ONLY_FLUSH_NOTHING_TO_FLUSH__';
 async function flushRuntimeOnlyPendingChanges_ACU(reason) {
     const scope = currentScope_ACU();
@@ -105362,7 +105520,8 @@ async function flushRuntimeOnlyPendingChanges_ACU(reason) {
         : pending.sheetKeys.filter(sheetKey => runtimeSheetKeys.includes(sheetKey));
     if (candidateSheetKeys.length === 0) {
         // 登记的表已不在运行时（被删除/重载），没有可落盘的内容。
-        clearRuntimeOnlyPendingSheets_ACU(scope);
+        // 按集合清除：只撤销 T0 登记本身；快照读取窗口内并发写者新登记的表不在 T0 集合内，不受影响。
+        clearRuntimeOnlyPendingSheetKeys_ACU(scope, pending.sheetKeys, { dropAllFlag: pending.all });
         return { flushed: false, sheetKeys: [] };
     }
     const chat = getChatArray_ACU();
@@ -105372,7 +105531,9 @@ async function flushRuntimeOnlyPendingChanges_ACU(reason) {
     }
     const divergedSheetKeys = await resolveDivergedSheetKeys_ACU(chat, scope.isolationKey, targetMessageIndex, runtimeData, candidateSheetKeys);
     if (divergedSheetKeys.length === 0) {
-        clearRuntimeOnlyPendingSheets_ACU(scope);
+        // T0 候选集与回放一致，无需落盘：按集合清除 T0 候选（回放比对窗口内并发写者新登记
+        // 的表不在 T0 集合内，不受影响）；持锁后的最终确认仍由事务内重算兜底。
+        clearRuntimeOnlyPendingSheetKeys_ACU(scope, candidateSheetKeys, { dropAllFlag: pending.all });
         logDebug_ACU(`[RuntimeOnlyFlush] ${reason}: 运行时与聊天回放一致，无需落盘（${candidateSheetKeys.join('、')}）。`);
         return { flushed: false, sheetKeys: [] };
     }
@@ -105382,6 +105543,10 @@ async function flushRuntimeOnlyPendingChanges_ACU(reason) {
     // 候选表（⊇ 持锁重算后的任何分歧集），保证重算新增的分歧表也在锁覆盖范围内。
     let flushedSheetKeys = null;
     let flushedMessageIndex = null;
+    // 持锁内清账账目：apply 成功分支在持锁中按「本次实际落盘集」清除登记；若随后的
+    // persist 失败，失败路径据此补登记（等价于「失败完全不清」，见下方失败分支）。
+    let successClearedSheetKeys = null;
+    let successClearedAllFlag = false;
     const commitResult = await runTableUpdateCommit_ACU({
         source: 'system',
         reason: `runtime_only_flush:${reason}`,
@@ -105421,12 +105586,17 @@ async function flushRuntimeOnlyPendingChanges_ACU(reason) {
             return { success: false, error: 'no AI message to persist runtime-only changes', errorCategory: 'precondition' };
         }
         if (freshCandidates.length === 0) {
-            // 登记表在持锁期间已从运行时消失：无可落盘内容，与 T0 同语义（清空登记）。
+            // 登记表在持锁期间已从运行时消失：无可落盘内容，与 T0 同语义（按 T0 登记集合清空）。
+            // 清账在持锁中执行：mark 同样只在提交锁内发生，清账与并发 mark 互斥，不存在
+            // 「放锁到清除之间」的误清窗口。
+            clearRuntimeOnlyPendingSheetKeys_ACU(scope, pending.sheetKeys, { dropAllFlag: pending.all });
             return { success: false, error: NOTHING_TO_FLUSH_ERROR_ACU, errorCategory: 'precondition' };
         }
         const freshDivergedSheetKeys = await resolveDivergedSheetKeys_ACU(freshChat, scope.isolationKey, freshTargetMessageIndex, freshData, freshCandidates);
         if (freshDivergedSheetKeys.length === 0) {
-            // 并发写者已把内容物化进聊天：与回放一致，无需落盘（清空登记）。
+            // 并发写者已把内容物化进聊天：与回放一致，无需落盘。持锁内按重算后的候选集条件化清空；
+            // 锁等待期间并发登记的新表不在 T0 候选内，不受影响。
+            clearRuntimeOnlyPendingSheetKeys_ACU(scope, freshCandidates, { dropAllFlag: pending.all });
             return { success: false, error: NOTHING_TO_FLUSH_ERROR_ACU, errorCategory: 'precondition' };
         }
         const freshOperations = freshDivergedSheetKeys.map(sheetKey => ({
@@ -105437,6 +105607,11 @@ async function flushRuntimeOnlyPendingChanges_ACU(reason) {
         }));
         flushedSheetKeys = freshDivergedSheetKeys;
         flushedMessageIndex = freshTargetMessageIndex;
+        // 成功清除在持锁中执行（apply 回调末尾，先于 persist）：只清除本次实际落盘的表集合。
+        // 放锁前后并发写者新登记的表都不在清除集内，登记保留到下一次落盘机会。
+        successClearedSheetKeys = freshDivergedSheetKeys;
+        successClearedAllFlag = pending.all;
+        clearRuntimeOnlyPendingSheetKeys_ACU(scope, freshDivergedSheetKeys, { dropAllFlag: pending.all });
         return {
             success: true,
             value: null,
@@ -105450,14 +105625,22 @@ async function flushRuntimeOnlyPendingChanges_ACU(reason) {
     });
     if (!commitResult.success) {
         if (commitResult.error === NOTHING_TO_FLUSH_ERROR_ACU) {
-            clearRuntimeOnlyPendingSheets_ACU(scope);
+            // 登记已在事务内（持锁中）按重算候选集条件化清空，这里不再重复清除。
             logDebug_ACU(`[RuntimeOnlyFlush] ${reason}: 持锁重算后运行时与聊天回放一致，无需落盘（${candidateSheetKeys.join('、')}）。`);
             return { flushed: false, sheetKeys: [] };
+        }
+        // persist 失败发生在 apply 持锁清除之后：失败路径必须等价于「完全不清」，
+        // 把本次清除过的表补登记回去。补登记是纯加法，不会吞掉并发写者新登记的表。
+        const successClearedKeysSnapshot = successClearedSheetKeys;
+        if (successClearedKeysSnapshot !== null && successClearedKeysSnapshot.length > 0) {
+            markRuntimeOnlyPendingSheets_ACU(scope, { all: successClearedAllFlag, sheetKeys: successClearedKeysSnapshot });
         }
         logWarn_ACU(`[RuntimeOnlyFlush] ${reason}: 运行时未落盘变更写回聊天失败，保留登记待下次重试：${commitResult.error || 'unknown error'}`);
         return { flushed: false, sheetKeys: divergedSheetKeys, error: commitResult.error };
     }
-    clearRuntimeOnlyPendingSheets_ACU(scope);
+    // 成功：登记清除已在事务内（持锁中）完成，放锁后不再全量清——否则放锁到清除之间的
+    // 微任务窗口里，并发写者（runTableUpdateCommit 持锁 markRuntimeOnlyPendingSheets）新
+    // 登记的 sheet 会被误清且未落盘。
     const finalSheetKeys = flushedSheetKeys ?? divergedSheetKeys;
     const finalMessageIndex = flushedMessageIndex ?? targetMessageIndex;
     logDebug_ACU(`[RuntimeOnlyFlush] ${reason}: 已把运行时未落盘变更写回 AI 楼层 #${commitResult.messageIndex ?? finalMessageIndex}：${finalSheetKeys.join('、')}。`);
@@ -129952,9 +130135,19 @@ async function handleChatChangedEvent_ACU(chatFileName) {
         await recoverDelayedRebuildFailure_ACU('CHAT_CHANGED 处理', error);
     }
 }
+// [幂等卫兵] mainInitialize_ACU 此前无自身幂等：重复进入（首次挂载失败 release 后二次启动 /
+// 同 eventSource 二次调用）会重复注册全部事件监听（double-fire 主路径）并泄漏 chatId 轮询
+// 定时器。一次成功初始化即置位；core APIs 加载失败不置位，保留原有「失败后可重试」语义。
+// 不做全量 off 配对（大重构超范围），卫兵封死 double-fire 主路径。
+let mainInitializeDone_ACU = false;
 function mainInitialize_ACU() {
     logDebug_ACU('ACU_INIT_DEBUG: mainInitialize_ACU called.');
+    if (mainInitializeDone_ACU) {
+        logDebug_ACU('ACU_INIT_DEBUG: mainInitialize_ACU already done; skip re-entry (no re-registration, no duplicate toast).');
+        return;
+    }
     if (attemptToLoadCoreApis_ACU()) {
+        mainInitializeDone_ACU = true;
         logDebug_ACU('AutoCardUpdater Initialization successful! Core APIs loaded.');
         showToastr_ACU('success', '数据库已加载！', '数据库');
         loadSettings_ACU();
@@ -134091,65 +134284,82 @@ function recordDataAdminFailure_ACU(method, error) {
     catch { }
     return false;
 }
+/**
+ * 布尔契约成功归一（v9.1.8）：上游 API_DOCUMENTATION.md 对这批方法明示
+ * `Promise<boolean>`（importTemplate:981 / exportTemplate:995 / resetTemplate:1009 /
+ * resetAllDefaults:1017 / exportJsonData:248 / importCombinedSettings:416 /
+ * exportCombinedSettings:424 / overrideWithTemplate:1025 / mergeSummaryNow:1308），
+ * 但底层 UI 函数多为异步文件选择/confirm 流程，成功路径没有显式 return（undefined），
+ * 第三方 `if (r)` 判定会把成功误判为失败。这里在 API 层归一：`false` → `false`，
+ * 其余（true/undefined/truthy）→ `true`；不改 underlying 本身。
+ * 例外：migrateLegacyVectorIndex 的 underlying 返回 `{success,...}` 诊断对象而非布尔，
+ * 不经此归一，保持数据原样返回。
+ */
+async function dataAdminBoolContract_ACU(result) {
+    const r = await result;
+    return r !== false;
+}
 function createDataAdminApi(_ctx) {
     return {
-        // 模板/数据管理
+        // 模板/数据管理（布尔契约：成功恒 true——含 underlying 返回 undefined 的异步文件选择流程）
         importTemplate: async function (options = {}) { try {
-            return await importTableTemplate_ACU(options);
+            return await dataAdminBoolContract_ACU(importTableTemplate_ACU(options));
         }
         catch (e) {
             logError_ACU('importTemplate failed:', e);
             return recordDataAdminFailure_ACU('importTemplate', e);
         } },
         exportTemplate: async function (options = {}) { try {
-            return await exportTableTemplate_ACU(options);
+            return await dataAdminBoolContract_ACU(exportTableTemplate_ACU(options));
         }
         catch (e) {
             logError_ACU('exportTemplate failed:', e);
             return recordDataAdminFailure_ACU('exportTemplate', e);
         } },
         resetTemplate: async function (options = {}) { try {
-            return await resetTableTemplate_ACU(options);
+            return await dataAdminBoolContract_ACU(resetTableTemplate_ACU(options));
         }
         catch (e) {
             logError_ACU('resetTemplate failed:', e);
             return recordDataAdminFailure_ACU('resetTemplate', e);
         } },
         resetAllDefaults: async function () { try {
-            return await resetAllToDefaults_ACU();
+            return await dataAdminBoolContract_ACU(resetAllToDefaults_ACU());
         }
         catch (e) {
             logError_ACU('resetAllDefaults failed:', e);
             return recordDataAdminFailure_ACU('resetAllDefaults', e);
         } },
         exportJsonData: async function () { try {
-            return await exportCurrentJsonData_ACU();
+            return await dataAdminBoolContract_ACU(exportCurrentJsonData_ACU());
         }
         catch (e) {
             logError_ACU('exportJsonData failed:', e);
             return recordDataAdminFailure_ACU('exportJsonData', e);
         } },
         importCombinedSettings: async function () { try {
-            return await importCombinedSettings_ACU();
+            return await dataAdminBoolContract_ACU(importCombinedSettings_ACU());
         }
         catch (e) {
             logError_ACU('importCombinedSettings failed:', e);
             return recordDataAdminFailure_ACU('importCombinedSettings', e);
         } },
         exportCombinedSettings: async function () { try {
-            return await exportCombinedSettings_ACU();
+            return await dataAdminBoolContract_ACU(exportCombinedSettings_ACU());
         }
         catch (e) {
             logError_ACU('exportCombinedSettings failed:', e);
             return recordDataAdminFailure_ACU('exportCombinedSettings', e);
         } },
         overrideWithTemplate: async function () { try {
-            return await overrideLatestLayerWithTemplate_ACU();
+            return await dataAdminBoolContract_ACU(overrideLatestLayerWithTemplate_ACU());
         }
         catch (e) {
             logError_ACU('overrideWithTemplate failed:', e);
             return recordDataAdminFailure_ACU('overrideWithTemplate', e);
         } },
+        // 例外：underlying（migrateLegacySummaryVectorIndex_ACU）返回 {success,...} 诊断对象而非布尔
+        // （API_DOCUMENTATION.md 未收录该方法），保持数据对象原样返回，不做布尔归一。
         migrateLegacyVectorIndex: async function () { try {
             return await migrateLegacySummaryVectorIndex_ACU();
         }
@@ -134226,9 +134436,10 @@ function createDataAdminApi(_ctx) {
             logError_ACU('commitV2Recovery failed:', e);
             return dataAdminApiError_ACU(e, 'V2 恢复提交失败。');
         } },
-        // 合并总结
+        // 合并总结（功能已停用，underlying 恒 false → 归一后仍为 false；未来若恢复且走
+        // 异步流程返回 undefined，也会被布尔契约归一为 true，与文档 Promise<boolean> 一致）
         mergeSummaryNow: async function () { try {
-            return await handleManualMergeSummary_ACU();
+            return await dataAdminBoolContract_ACU(handleManualMergeSummary_ACU());
         }
         catch (e) {
             logError_ACU('mergeSummaryNow failed:', e);
@@ -179774,7 +179985,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.1.7";
+        const v = "9.1.8";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {

@@ -108,13 +108,18 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
 
     const extracted = extractTableEditInner_ACU(responseForParsing, { allowNoTableEditTags: true });
     if (!extracted || !extracted.inner) {
+        // 无块 = 零操作提交语义（v9.1.5 行为，勿改回 model 重试）：返回布尔 true，
+        // 编排层按 parseSuccess=true 走零修改提交（不烧 AI 重试，也不是 precondition 失败）；
+        // logWarn 仅控制台观测。与「块存在但指令全被模式门过滤」的 precondition 分类
+        // （success=false + appliedEdits=0 + failedEdits=0 → zeroOpRejection）是两个不同场景。
         logWarn_ACU('No recognizable table edit block found (missing <tableEdit> boundary and/or incomplete <!-- --> wrapper).');
         return true;
     }
 
     const editsString = extracted.inner.replace(/<!--|-->/g, '').trim();
     if (!editsString) {
-        logDebug_ACU('Empty <tableEdit> block. No edits to apply.');
+        // 空块与无块同语义：零操作提交（true），不烧 AI 重试；warn 级对齐无块路径（不假成功静默）。
+        logWarn_ACU('Empty <tableEdit> block. No edits to apply.');
         return true;
     }
 

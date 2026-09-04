@@ -299,4 +299,54 @@ describe('fetchAvailableModels_ACU', () => {
     expect(result.success).toBe(true);
     expect(result.models).toEqual(['valid-model', 'another-valid']);
   });
+
+  // ═══ 探活超时（v9.1.8）：15s AbortController，探活请求必须可退出，UI 不停留在"正在检查" ═══
+  it('探活 15s 无响应时按超时收敛为结构化失败', async () => {
+    vi.useFakeTimers();
+    try {
+      // 模拟遵循 signal 的 fetch：abort 触发时以 AbortError 拒绝
+      mockFetch.mockImplementation((_url: string, init: RequestInit) => new Promise((_resolve, reject) => {
+        init.signal!.addEventListener('abort', () => {
+          const e = new Error('The operation was aborted');
+          (e as any).name = 'AbortError';
+          reject(e);
+        });
+      }));
+
+      const promise = fetchAvailableModels_ACU('https://api.test', 'key');
+      // fetch 在内部 await import(SSRF 守卫) 之后才发起：先清微任务再断言
+      await vi.advanceTimersByTimeAsync(0);
+      // 请求携带 AbortSignal 且探活定时器已挂起
+      const init = mockFetch.mock.calls[0][1] as RequestInit;
+      expect(init.signal).toBeInstanceOf(AbortSignal);
+      expect(vi.getTimerCount()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(15000);
+      const result = await promise;
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('超时');
+      expect(result.error).toContain('15');
+      // 收敛后清掉探活定时器，不留悬挂句柄
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('探活成功路径清空定时器并透传 AbortSignal', async () => {
+    vi.useFakeTimers();
+    try {
+      mockFetch.mockResolvedValue({ ok: true, json: async () => ({ models: [{ id: 'm' }] }) });
+
+      const promise = fetchAvailableModels_ACU('https://api.test', 'key');
+      // fetch 在内部 await import(SSRF 守卫) 之后才发起：先清微任务再断言
+      await vi.advanceTimersByTimeAsync(0);
+      expect((mockFetch.mock.calls[0][1] as RequestInit).signal).toBeInstanceOf(AbortSignal);
+      const result = await promise;
+      expect(result.success).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
