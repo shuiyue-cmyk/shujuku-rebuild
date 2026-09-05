@@ -313,6 +313,48 @@ export function clearChainProcessed_ACU(chain: AutoChainProcessedKind_ACU): void
     }
 }
 
+/**
+ * 按 messageId 删除某条链的已处理记录（[W5] MVU 手动重试 / 解析完成联动重跑用）。
+ * 只删记录，不改判重语义：命中规则、容量裁剪、window+localStorage 双层写入全部复用既有实现，
+ * 删除后该楼在这条链上回到「没跑过」状态，允许自动链再跑一轮。
+ * chatKey 兜底规则与 findChainProcessedEntry_ACU 一致：两侧都有值且不同 → 不删（跨聊天重号保护）。
+ * @returns 实际删除的条数（0 = 未命中，不写存储）
+ */
+export function removeChainProcessedByMessageId_ACU(
+    chain: AutoChainProcessedKind_ACU,
+    messageId: any,
+    chatKey = '',
+): number {
+    if (messageId === null || messageId === undefined || messageId === '') return 0;
+    const store = resolveProcessedStore_ACU(chain);
+    const target = String(messageId);
+    const currentChatKey = typeof chatKey === 'string' ? chatKey : '';
+
+    const entries = loadChainProcessedEntries_ACU(store.chain);
+    const kept = entries.filter((entry) => {
+        if (entry.messageId !== target) return true;
+        if (currentChatKey && entry.chatKey && currentChatKey !== entry.chatKey) return true;
+        return false;
+    });
+    const removed = entries.length - kept.length;
+    if (removed > 0) saveChainProcessedEntries_ACU(store.chain, kept);
+    return removed;
+}
+
+/**
+ * [W5] 一次清掉某楼在两条自动链（正文替换 + 自动填表）上的已处理记录，各删各的集合。
+ * 两链分键分集合，这里只是并列调用，不做跨链合并；返回各链实际删除条数供调用方记日志。
+ */
+export function removeAutoChainProcessedForMessage_ACU(
+    messageId: any,
+    chatKey = '',
+): { content_replacement: number; auto_table_fill: number } {
+    return {
+        content_replacement: removeChainProcessedByMessageId_ACU('content_replacement', messageId, chatKey),
+        auto_table_fill: removeChainProcessedByMessageId_ACU('auto_table_fill', messageId, chatKey),
+    };
+}
+
 // ─── 正文自动替换链（content_replacement）───
 
 export function trimAutoOptimizationProcessedEntries_ACU(

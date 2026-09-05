@@ -12,6 +12,8 @@ const m = vi.hoisted(() => ({
   generationEndedHandler: undefined as undefined | ((...args: any[]) => void),
   afterCommandsHandler: undefined as undefined | ((type: any, params: any, dryRun: any) => void),
   settingsReadyHandler: undefined as undefined | (() => void),
+  mvuStartedHandler: undefined as undefined | ((...args: any[]) => void),
+  mvuEndedHandler: undefined as undefined | ((...args: any[]) => void),
   currentChatKey: '',
   api: {
     chat: [] as any[],
@@ -108,6 +110,8 @@ beforeAll(async () => {
     if (event === 'genended') m.generationEndedHandler = callback;
     if (event === 'aftercommands') m.afterCommandsHandler = callback;
     if (event === 'settingsready') m.settingsReadyHandler = callback;
+    if (event === 'mag_variable_update_started') m.mvuStartedHandler = callback;
+    if (event === 'mag_variable_update_ended') m.mvuEndedHandler = callback;
   });
   m.api.eventSource.makeFirst.mockImplementation((event: string, callback: any) => {
     if (event === 'genended') m.generationEndedHandler = callback;
@@ -455,6 +459,26 @@ describe('mainInitialize_ACU init 链 running 占用补跑', () => {
     await vi.advanceTimersByTimeAsync(1200);    // C 的定时器到点 → 正常执行
     expect(m.loadMessages).toHaveBeenCalledTimes(2);
     vi.useRealTimers();
+  });
+});
+
+// [W4/W5 MVU 联动接线] MVU 的解析事件走宿主 eventSource 同一总线：启动时必须把 started/ended 接上闸门，
+// 否则闸门只能靠入场 flag 与观察窗判定，延后会不稳定；接线断在这里 = 整个联动静默失效。
+describe('mainInitialize_ACU MVU 额外模型解析事件接线', () => {
+  it('注册 mag_variable_update_started / _ended，事件入口真的写进闸门深度', async () => {
+    const gate = await import('../../../src/service/runtime/mvu-analysis-gate');
+    gate.resetMvuAnalysisGateForTest_ACU();
+
+    expect(gate.MVU_ANALYSIS_STARTED_EVENT_ACU).toBe('mag_variable_update_started');
+    expect(gate.MVU_ANALYSIS_ENDED_EVENT_ACU).toBe('mag_variable_update_ended');
+    expect(typeof m.mvuStartedHandler).toBe('function');
+    expect(typeof m.mvuEndedHandler).toBe('function');
+
+    m.mvuStartedHandler!();
+    expect(gate.getMvuAnalysisGateState_ACU().depth).toBe(1);
+    m.mvuEndedHandler!();
+    expect(gate.getMvuAnalysisGateState_ACU().depth).toBe(0);
+    gate.resetMvuAnalysisGateForTest_ACU();
   });
 });
 

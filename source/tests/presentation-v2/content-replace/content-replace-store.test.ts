@@ -113,6 +113,24 @@ describe('useContentReplaceStore', () => {
     expect(saveSettings).toHaveBeenCalled();
   });
 
+  it('[MVU联动] 闸门开关默认开；关闭时写回 settings 顶层键而不是正文替换配置', async () => {
+    const { store, settings, saveSettings } = await setupStore();
+
+    // 未落盘（undefined）→ 按默认开处理
+    expect(store.mvuGateEnabled).toBe(true);
+
+    store.setBoolean('mvuGateEnabled', false);
+    expect(store.mvuGateEnabled).toBe(false);
+    expect(settings.mvuGateEnabled).toBe(false);
+    // 不寄生在 contentOptimizationSettings 里：闸门同时管填表与正文替换两条链
+    expect(settings.contentOptimizationSettings.mvuGateEnabled).toBeUndefined();
+    expect(saveSettings).toHaveBeenCalled();
+
+    // 已落盘的 false 必须能读回来（否则刷新后开关静默回弹）
+    store.refreshFromSettings();
+    expect(store.mvuGateEnabled).toBe(false);
+  });
+
   it('保存、载入、删除正文替换提示词预设', async () => {
     const { store, settings } = await setupStore();
 

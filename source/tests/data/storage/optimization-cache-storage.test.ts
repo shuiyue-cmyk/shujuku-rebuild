@@ -28,6 +28,12 @@ import {
   loadAutoOptimizationProcessedEntries_ACU,
   trimAutoOptimizationProcessedEntries_ACU,
   clearAutoOptimizationProcessed_ACU,
+  removeChainProcessedByMessageId_ACU,
+  removeAutoChainProcessedForMessage_ACU,
+  recordAutoTableFillProcessed_ACU,
+  findAutoTableFillProcessedEntry_ACU,
+  loadAutoTableFillProcessedEntries_ACU,
+  clearAutoTableFillProcessed_ACU,
   AUTO_OPTIMIZATION_PROCESSED_LIMIT_ACU,
 } from '../../../src/data/storage/optimization-cache-storage';
 
@@ -347,5 +353,79 @@ describe('自动替换已处理集合（optimization-cache-storage）', () => {
       'ACU_LAST_OPTIMIZATION_BASE',
       expect.stringContaining('contentHash'),
     );
+  });
+});
+
+// ═══ [W5] 按 messageId 删除已处理记录（MVU 解析完成联动重跑用）═══
+describe('removeChainProcessedByMessageId_ACU / removeAutoChainProcessedForMessage_ACU', () => {
+  // 文件级 beforeEach 只清基础缓存键；两链的已处理集合键会跨用例残留（window 层不会被 localStorage.clear 带走），
+  // 删除类断言必须自带干净起点，否则测的是上一条用例的遗留集合。
+  beforeEach(() => {
+    clearAutoOptimizationProcessed_ACU();
+    clearAutoTableFillProcessed_ACU();
+  });
+
+  it('命中即删：删完该楼查不到，其它楼不受影响，且两层同步落盘', () => {
+    recordAutoOptimizationProcessed_ACU({ messageId: 11, contentHash: 'a', chatKey: 'chatA', updatedAt: 1 });
+    recordAutoOptimizationProcessed_ACU({ messageId: 12, contentHash: 'b', chatKey: 'chatA', updatedAt: 2 });
+
+    expect(removeChainProcessedByMessageId_ACU('content_replacement', 11, 'chatA')).toBe(1);
+    expect(findAutoOptimizationProcessedEntry_ACU(11, 'chatA')).toBeNull();
+    expect(findAutoOptimizationProcessedEntry_ACU(12, 'chatA')).not.toBeNull();
+    expect(loadAutoOptimizationProcessedEntries_ACU().map((entry) => entry.messageId)).toEqual(['12']);
+    // window 与 localStorage 都必须是删完后的集合（否则刷新后旧记录复活，重跑又被判重拦掉）
+    expect(mockTopLevelWindow.__ACU_CONTENT_OPTIMIZATION_PROCESSED__).toMatchObject({ entries: [{ messageId: '12' }] });
+    expect(JSON.parse(localStorageMock.peek('ACU_CONTENT_OPTIMIZATION_PROCESSED')).entries.map((e: any) => e.messageId)).toEqual(['12']);
+  });
+
+  it('两链分集合各删各的：删填表不会动正文替换的记录', () => {
+    recordAutoOptimizationProcessed_ACU({ messageId: 11, contentHash: 'a', chatKey: 'chatA', updatedAt: 1 });
+    recordAutoTableFillProcessed_ACU({ messageId: 11, chatKey: 'chatA', updatedAt: 1 });
+
+    expect(removeChainProcessedByMessageId_ACU('auto_table_fill', 11, 'chatA')).toBe(1);
+    expect(findAutoTableFillProcessedEntry_ACU(11, 'chatA')).toBeNull();
+    expect(findAutoOptimizationProcessedEntry_ACU(11, 'chatA')).not.toBeNull();
+  });
+
+  it('removeAutoChainProcessedForMessage_ACU 一次清两链并回报各链删除数', () => {
+    recordAutoOptimizationProcessed_ACU({ messageId: 11, contentHash: 'a', chatKey: 'chatA', updatedAt: 1 });
+    recordAutoTableFillProcessed_ACU({ messageId: 11, chatKey: 'chatA', updatedAt: 1 });
+    recordAutoTableFillProcessed_ACU({ messageId: 12, chatKey: 'chatA', updatedAt: 2 });
+
+    const removed = removeAutoChainProcessedForMessage_ACU(11, 'chatA');
+    expect(removed).toEqual({ content_replacement: 1, auto_table_fill: 1 });
+    expect(findAutoOptimizationProcessedEntry_ACU(11, 'chatA')).toBeNull();
+    expect(findAutoTableFillProcessedEntry_ACU(11, 'chatA')).toBeNull();
+    expect(loadAutoTableFillProcessedEntries_ACU().map((entry) => entry.messageId)).toEqual(['12']);
+  });
+
+  it('未命中 / messageId 缺失 → 返回 0 且不写存储（幂等，重复调用安全）', () => {
+    recordAutoOptimizationProcessed_ACU({ messageId: 11, contentHash: 'a', chatKey: 'chatA', updatedAt: 1 });
+    vi.clearAllMocks();
+
+    expect(removeChainProcessedByMessageId_ACU('content_replacement', 99, 'chatA')).toBe(0);
+    expect(removeChainProcessedByMessageId_ACU('content_replacement', null, 'chatA')).toBe(0);
+    expect(removeChainProcessedByMessageId_ACU('content_replacement', undefined, 'chatA')).toBe(0);
+    expect(removeChainProcessedByMessageId_ACU('content_replacement', '', 'chatA')).toBe(0);
+    expect(localStorageMock.setItem).not.toHaveBeenCalled();
+    expect(mockTopLevelWindow.__ACU_CONTENT_OPTIMIZATION_PROCESSED__).toMatchObject({ entries: [{ messageId: '11' }] });
+    expect(findAutoOptimizationProcessedEntry_ACU(11, 'chatA')).not.toBeNull();
+  });
+
+  it('chatKey 两侧都有值且不同 → 不删（跨聊天 message_id 重号保护）；任一侧为空则删', () => {
+    recordAutoOptimizationProcessed_ACU({ messageId: 11, contentHash: 'a', chatKey: 'chatA', updatedAt: 1 });
+    expect(removeChainProcessedByMessageId_ACU('content_replacement', 11, 'chatB')).toBe(0);
+    expect(findAutoOptimizationProcessedEntry_ACU(11, 'chatA')).not.toBeNull();
+
+    expect(removeChainProcessedByMessageId_ACU('content_replacement', 11, '')).toBe(1);
+    recordAutoOptimizationProcessed_ACU({ messageId: 12, contentHash: 'b', chatKey: '', updatedAt: 2 });
+    expect(removeChainProcessedByMessageId_ACU('content_replacement', 12, 'chatA')).toBe(1);
+  });
+
+  it('删空后集合读回为空数组（不残留旧 payload）', () => {
+    recordAutoOptimizationProcessed_ACU({ messageId: 11, contentHash: 'a', chatKey: 'chatA', updatedAt: 1 });
+    expect(removeChainProcessedByMessageId_ACU('content_replacement', 11, 'chatA')).toBe(1);
+    expect(loadAutoOptimizationProcessedEntries_ACU()).toEqual([]);
+    expect(removeChainProcessedByMessageId_ACU('content_replacement', 11, 'chatA')).toBe(0);
   });
 });

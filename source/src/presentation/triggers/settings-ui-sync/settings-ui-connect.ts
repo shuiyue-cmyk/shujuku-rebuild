@@ -97,6 +97,9 @@ import {
 import {
   logAutoFillSkip_ACU
 } from '../../../shared/trigger-diagnostics';
+import {
+  waitForMvuAnalysisToSettle_ACU
+} from '../../../service/runtime/mvu-analysis-gate';
 
   export async function fetchModelsAndConnect_ACU() {
     if (
@@ -301,6 +304,19 @@ import {
       _set_wasStoppedByUser_ACU(false);
       // [健全性] 如果用户已经开始对话，则解除"开场白阶段世界书注入抑制"
       try { maybeLiftWorldbookSuppression_ACU(); } catch (e) {}
+
+      // [W4 延后闸门] MVU 用「额外模型解析」时，自动填表与正文替换都要等解析结束后再跑。
+      // 消费点选在这里的理由：本函数是两条自动链的唯一入口（正文替换 executeContentOptimization_ACU
+      // 与填表 triggerAutomaticUpdateIfNeeded_ACU 都只在本函数尾部分叉），闸门放在防抖到期后、
+      // 楼层解析与两链分叉之前，一次事件只会延后一次，不会两条链各自挂起；
+      // 放在 loadAllChatMessages / chatKey 复检之前，等待期间切了聊天由既有复检自然丢弃，不新增特判。
+      // MVU 未装 / 未启用 / 开关关闭 → 同步立即放行，与闸门上线前逐字一致。
+      const mvuGate_ACU = await waitForMvuAnalysisToSettle_ACU();
+      if (mvuGate_ACU.delayed) {
+        logDebug_ACU(
+          `[MVU联动] 闸门放行（reason=${mvuGate_ACU.reason}，等待 ${mvuGate_ACU.elapsedMs}ms，挂起=${mvuGate_ACU.suspended}），继续自动填表与正文替换`,
+        );
+      }
 
       const loadSpan = startRuntimePerformanceSpan_ACU('new-message-load-chat', {
         ...performanceContext,

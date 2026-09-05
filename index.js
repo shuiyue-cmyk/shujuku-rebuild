@@ -73924,6 +73924,42 @@ function clearChainProcessed_ACU(chain) {
         logDebug_ACU('[' + store.label + '] 清空浏览器侧自动链已处理集合失败（localStorage）:', error);
     }
 }
+/**
+ * 按 messageId 删除某条链的已处理记录（[W5] MVU 手动重试 / 解析完成联动重跑用）。
+ * 只删记录，不改判重语义：命中规则、容量裁剪、window+localStorage 双层写入全部复用既有实现，
+ * 删除后该楼在这条链上回到「没跑过」状态，允许自动链再跑一轮。
+ * chatKey 兜底规则与 findChainProcessedEntry_ACU 一致：两侧都有值且不同 → 不删（跨聊天重号保护）。
+ * @returns 实际删除的条数（0 = 未命中，不写存储）
+ */
+function removeChainProcessedByMessageId_ACU(chain, messageId, chatKey = '') {
+    if (messageId === null || messageId === undefined || messageId === '')
+        return 0;
+    const store = resolveProcessedStore_ACU(chain);
+    const target = String(messageId);
+    const currentChatKey = typeof chatKey === 'string' ? chatKey : '';
+    const entries = loadChainProcessedEntries_ACU(store.chain);
+    const kept = entries.filter((entry) => {
+        if (entry.messageId !== target)
+            return true;
+        if (currentChatKey && entry.chatKey && currentChatKey !== entry.chatKey)
+            return true;
+        return false;
+    });
+    const removed = entries.length - kept.length;
+    if (removed > 0)
+        saveChainProcessedEntries_ACU(store.chain, kept);
+    return removed;
+}
+/**
+ * [W5] 一次清掉某楼在两条自动链（正文替换 + 自动填表）上的已处理记录，各删各的集合。
+ * 两链分键分集合，这里只是并列调用，不做跨链合并；返回各链实际删除条数供调用方记日志。
+ */
+function removeAutoChainProcessedForMessage_ACU(messageId, chatKey = '') {
+    return {
+        content_replacement: removeChainProcessedByMessageId_ACU('content_replacement', messageId, chatKey),
+        auto_table_fill: removeChainProcessedByMessageId_ACU('auto_table_fill', messageId, chatKey),
+    };
+}
 // ─── 正文自动替换链（content_replacement）───
 function trimAutoOptimizationProcessedEntries_ACU(entries, limit = AUTO_OPTIMIZATION_PROCESSED_LIMIT_ACU) {
     return trimChainProcessedEntries_ACU('content_replacement', entries, limit);
@@ -78794,7 +78830,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.1.10" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.2.1" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -97112,6 +97148,8 @@ let settings_ACU = {
     maxConcurrentGroups: 1,
     autoUpdateEnabled: true,
     standardizedTableFillEnabled: true,
+    // [MVU联动] 与 buildDefaultSettings_ACU 同源默认值（设置加载前的启动态也要按开处理）。
+    mvuGateEnabled: true,
     toastMuteEnabled: false,
     plotSettings: JSON.parse(JSON.stringify(DEFAULT_PLOT_SETTINGS_ACU)),
     plotPresetBindings: {},
@@ -98508,6 +98546,9 @@ function buildDefaultSettings_ACU() {
         maxConcurrentGroups: 1,
         autoUpdateEnabled: true,
         standardizedTableFillEnabled: true, // [新增] 规范填表功能
+        // [MVU联动] 等待 MVU「额外模型解析」完成后再执行自动填表与正文替换（默认开启）。
+        // 关闭 = 闸门完全旁路，行为与 v9.1.10 逐字一致；MVU 未装/未启用时无论开关如何都零开销放行。
+        mvuGateEnabled: true,
         toastMuteEnabled: false,
         // [剧情推进] 设置
         plotSettings: cloneDefaultValue_ACU(DEFAULT_PLOT_SETTINGS_ACU),
@@ -111833,6 +111874,511 @@ function evaluateNewMessageAction_ACU(liveChat, isAutoUpdating, coreApisReady, w
 }
 
 /**
+ * service/runtime/mvu-analysis-gate.ts — [W4] MVU「额外模型解析」延后闸门 + [W5] 解析完成联动重跑
+ *
+ * 需求（用户拍板）：
+ *   1. MVU 用「额外模型解析」时，本库的自动填表 + 自动正文替换要等 MVU 解析完成后再跑；
+ *   2. MVU 手动重试解析成功后，本库要再跑一轮填表 + 正文替换。
+ *
+ * 铁律：MVU 未装 / 未启用 / 开关（settings.mvuGateEnabled）关闭时，本模块对既有链路**零行为差**——
+ * 判定同步立即返回，不建定时器、不挂监听、不读缓存集合，也就不存在任何新增失败面。
+ * 本闸门位于 v9.1.10 已上线的 W1（正文替换 messageId+内容指纹判重）/ W3（填表 messageId+chatKey 判重）
+ * 的**上游**：它只推迟自动链的开跑时点，不改动任何判重语义。
+ *
+ * ── MVU 协议实据（MVU@61010da 已核查，本模块据此实现，勿再考证）──
+ * · 挂载：window.Mvu（global/index.ts:172，多实例优先；卸载时 unset）。TT 下也可能挂在 window.parent，
+ *   因此解析顺序 = 自身 window 优先 → parent 兜底（全程 try/catch，取不到就当 MVU 不在场）。
+ * · 状态：isDuringExtraAnalysis(): boolean —— 布尔非计数；置位在解析请求发起处
+ *   （invoke_extra_model.ts:184），复位在 finally（:202）；并发第二发立即 return null 且**不产 started/ended**，
+ *   所以「started 深度计数」只可能来自真实的多轮交叉，不会因并发第二发少一次 ended 而挂死。
+ * · 事件：mag_variable_update_started / mag_variable_update_ended（variable_def.ts:180/235/238），
+ *   通道 = 宿主 eventSource（与 SillyTavern_API_ACU.eventSource 同一总线，TT 下与宿主同 window）。
+ *   started/ended 只包 updateVariables 解析段（update_variables.ts:699→1472）；
+ *   ended 成功/失败/异常都会发（on_message_received.ts:73 无条件）；
+ *   早退路径（自动请求关 / 首楼 / 非 name2 / 内容<5 / 无 stat_data）连 started 都不发——
+ *   这正是「观察窗窗满无 started → 放行」必须存在的理由。
+ * · ended 时剧情正文已写入稳定（解析结果在 started 之前就已写，on_message_received.ts:56-66）→ 放行即读到最终正文。
+ * · 手动重试（button.ts:434-527）：裁旧块 + 回滚变量后 onMessageReceived(force) —— 同路径、同事件，不经 3s 节流；
+ *   「随 AI 输出」模式下按钮守卫直接 return，零事件（本模块因此不会误重跑）。
+ * · 就绪事件 global_Mvu_initialized 无需订阅：本模块每次判定都惰性读 window.Mvu，挂载/卸载自然跟随。
+ *
+ * ── 为什么观察窗 5000ms、兜底超时 240000ms ──
+ * 宿主 GENERATION_ENDED → MVU 真正 started 之间最长滞后 ≈3s（_.throttle(3000, {trailing}) + await），
+ * 所以闸门不能只等 started，必须先开 5000ms 观察窗；单轮解析内部是串行重试、无总时长上限，
+ * 所以挂起等待必须有 240s 兜底：超时强制放行 + logWarn，绝不把自动链永久挂死。
+ *
+ * ── 为什么 ended 之外还要 2s 轮询 ──
+ * 宿主 eventSource 会吞监听器异常（不能假设 ended 必达），所以等待期间每 2s 轮询一次
+ * isDuringExtraAnalysis 作第二把钥匙：已进入挂起态（started 至少见过一次 / flag 曾为 true）且此刻
+ * flag 已 false → 同样放行，并把残留的 started 深度归零，避免丢失的 ended 留下幽灵深度把下一轮永远挂在等待里。
+ *
+ * ── 自适应降窗（免交「装了 MVU 但根本不用额外解析」那部分人的每轮 5s 观察税）──
+ * 同一聊天连续 MVU_GATE_OBSERVE_MISS_LIMIT_ACU 轮观察窗窗满、从未见过一次 started
+ * （典型即「随 AI 输出」模式：零 started/ended、flag 恒 false）→ 该聊天的后续触发跳过观察窗
+ * （reason=observation_bypassed，同步放行、零定时器）。安全性：
+ *   · 判定序①（flag true → 挂起）排在降窗之前：真有解析在飞时照样等，降窗只免掉「等 started」这一段；
+ *   · 极小竞态窗（降窗放行后 MVU 才在毫秒级发起 started）→ 本库这一轮与解析并发，但该楼跑完会登记，
+ *     解析 ended 时 [W5] 联动按「已登记 → 清记录 → 重跑」补一轮权威轮，正确性靠 W5 闭环兜底，不靠观察窗；
+ *   · 一旦再见到 started，统计立即清零并恢复开窗（用户把模式切回「额外模型解析」时联动自动重新生效）；
+ *   · 切聊天重置统计（单槽按 chatKey 匹配）：新聊天先走满 3 轮观察期再降窗，不继承旧聊天的结论。
+ * 不做「读 MVU 设置项」来探测模式：角色卡 effective_settings 可以覆盖更新方式，探测误判的代价是直接抢跑；
+ * 数据驱动降窗的最坏代价只是「新聊天头 3 轮各多等 5s」，宁保守勿抢跑。
+ *
+ * ── [W5] 无死循环自证 ──
+ * 重跑只是再走一次既有自动链入口（填表 + 正文替换）。本库正文替换写回走
+ * setChatMessages(..., { refresh: 'affected' })（service/chat/chat-service.ts:1154），
+ * 宿主只在 createChatMessages 路径派发 MESSAGE_RECEIVED（ST 源码 chat_message.ts:385 / :403），
+ * refresh:'affected' 不产 MESSAGE_RECEIVED → MVU 不会被本库写回拉起重新解析 → 不会再产生新的 ended
+ * → 重跑自身不再触发第二轮重跑。第二重保险：W5 的触发判据是「收到 ended 时本楼已在 W1/W3 登记」，
+ * 而自动轮的登记发生在 ended 之后（挂起中放行的那轮还没跑完/没登记），天然区分、不会自激。
+ */
+// ═══ 协议常量 ═══
+/** MVU 解析开始事件名（variable_def.ts:180）。 */
+const MVU_ANALYSIS_STARTED_EVENT_ACU = 'mag_variable_update_started';
+/** MVU 解析结束事件名（variable_def.ts:235 / :238）。 */
+const MVU_ANALYSIS_ENDED_EVENT_ACU = 'mag_variable_update_ended';
+/** 观察窗：宿主 ENDED → MVU started 最长滞后 ≈3s（throttle trailing + await），留 5s。 */
+const MVU_GATE_OBSERVE_WINDOW_MS_ACU = 5000;
+/** 第二把钥匙：等待期间轮询 isDuringExtraAnalysis 的间隔。 */
+const MVU_GATE_POLL_INTERVAL_MS_ACU = 2000;
+/** 兜底超时：单轮解析无上限（内部串行重试），4 分钟强制放行，绝不挂死自动链。 */
+const MVU_GATE_MAX_WAIT_MS_ACU = 240000;
+/** ended 早于 flag 复位（flag 在 finally 才 false）时的短复检，避免白等一个 2s 轮询。 */
+const MVU_GATE_ENDED_SETTLE_MS_ACU = 250;
+/** [W5] 同楼重复 ended 的合并窗口。 */
+const MVU_RERUN_DEBOUNCE_MS_ACU = 3000;
+/** 自适应降窗：同一聊天连续 N 轮观察窗窗满未见 started 后跳过观察窗。 */
+const MVU_GATE_OBSERVE_MISS_LIMIT_ACU = 3;
+// ═══ 模块状态 ═══
+/** started 深度计数（支持交叉 / 连发）；ended 只减到 0，绝不负数。 */
+let mvuAnalysisDepth_ACU = 0;
+/** 当前在飞的闸门等待；非空时新的触发并入同一次等待（复用既有防抖旗标语义，不另造并发队列）。 */
+let pendingGateWait_ACU = null;
+let mvuRerunHandler_ACU = null;
+let detachMvuListeners_ACU = null;
+let mvuRerunTimer_ACU = null;
+let mvuRerunMessageId_ACU = null;
+/** 自适应降窗统计（单槽：只有当前活跃聊天有意义；切聊天即重置，见 noteObservationMiss_ACU）。 */
+const observeStats_ACU = { chatKey: '', missCount: 0 };
+// ═══ MVU 在场判定 ═══
+/**
+ * 取 MVU 实例：自身 window 优先，parent 兜底（TT 下可能挂在 window.parent），全程 try/catch。
+ * 取不到返回 null（= MVU 不在场 → 闸门零开销放行）。
+ */
+function resolveMvuInstance_ACU() {
+    try {
+        const selfWin = typeof window !== 'undefined' ? window : globalThis;
+        if (selfWin && selfWin.Mvu)
+            return selfWin.Mvu;
+        const parentWin = selfWin && typeof selfWin.parent !== 'undefined' ? selfWin.parent : null;
+        if (parentWin && parentWin !== selfWin && parentWin.Mvu)
+            return parentWin.Mvu;
+    }
+    catch (error) {
+        // 跨窗访问被拒 / 环境无 window：按不在场处理，闸门放行。
+        return null;
+    }
+    return null;
+}
+/** MVU 在场且 API 形状可用（window.Mvu + typeof isDuringExtraAnalysis === 'function'）。 */
+function isMvuAnalysisHostPresent_ACU() {
+    const mvu = resolveMvuInstance_ACU();
+    return !!mvu && typeof mvu.isDuringExtraAnalysis === 'function';
+}
+/**
+ * MVU 是否正在额外模型解析。
+ * 读不到实例 / 调用抛错 / 返回值非 true → 一律 false（fail-open，与「MVU 未装」同一放行路径）。
+ */
+function isMvuExtraAnalysisInProgress_ACU() {
+    try {
+        const mvu = resolveMvuInstance_ACU();
+        if (!mvu || typeof mvu.isDuringExtraAnalysis !== 'function')
+            return false;
+        return mvu.isDuringExtraAnalysis() === true;
+    }
+    catch (error) {
+        return false;
+    }
+}
+/** 联动开关（settings 体系，默认开）：关 = 现状逐字不变（W4 不等待、W5 不清记录不重跑）。 */
+function isMvuAnalysisGateEnabled_ACU() {
+    try {
+        return settings_ACU?.mvuGateEnabled !== false;
+    }
+    catch (error) {
+        return true;
+    }
+}
+/** 调试/测试用只读快照。 */
+function getMvuAnalysisGateState_ACU() {
+    return {
+        depth: mvuAnalysisDepth_ACU,
+        waiting: !!pendingGateWait_ACU && !pendingGateWait_ACU.settled,
+        phase: pendingGateWait_ACU && !pendingGateWait_ACU.settled ? pendingGateWait_ACU.phase : 'idle',
+        rerunScheduled: !!mvuRerunTimer_ACU,
+        observeMissCount: observeStats_ACU.missCount,
+        observeBypassed: isObservationBypassed_ACU(),
+    };
+}
+// ═══ 自适应降窗统计 ═══
+/** 本聊天是否已攒够 miss（窗满未见 started）到降窗阈值；chatKey 不匹配（切了聊天）一律不降。 */
+function isObservationBypassed_ACU() {
+    return observeStats_ACU.missCount >= MVU_GATE_OBSERVE_MISS_LIMIT_ACU
+        && observeStats_ACU.chatKey === currentObservationChatKey_ACU();
+}
+function currentObservationChatKey_ACU() {
+    try {
+        return String(currentChatFileIdentifier_ACU ?? '');
+    }
+    catch (error) {
+        return '';
+    }
+}
+/** 记一次「观察窗窗满未见 started」：换聊天先重置再 +1，恰达阈值时提示一次。 */
+function noteObservationMiss_ACU() {
+    const chatKey = currentObservationChatKey_ACU();
+    if (observeStats_ACU.chatKey !== chatKey) {
+        observeStats_ACU.chatKey = chatKey;
+        observeStats_ACU.missCount = 0;
+    }
+    observeStats_ACU.missCount += 1;
+    if (observeStats_ACU.missCount === MVU_GATE_OBSERVE_MISS_LIMIT_ACU) {
+        logDebug_ACU(`[MVU联动] 本聊天连续 ${MVU_GATE_OBSERVE_MISS_LIMIT_ACU} 轮观察窗未见额外模型解析，后续触发跳过观察窗（真解析在飞时仍由 isDuringExtraAnalysis 挂起）`);
+    }
+}
+/** 真见过解析 → 降窗统计立即作废，恢复开窗（模式切回时联动自动重新生效）。 */
+function resetObservationStats_ACU() {
+    observeStats_ACU.chatKey = '';
+    observeStats_ACU.missCount = 0;
+}
+// ═══ [W4] 闸门 ═══
+function buildGateResult(wait, reason, delayed, suspended) {
+    return {
+        reason,
+        delayed,
+        suspended,
+        elapsedMs: wait ? Math.max(0, Date.now() - wait.startedAt) : 0,
+        depth: mvuAnalysisDepth_ACU,
+    };
+}
+function releaseGateWait_ACU(wait, reason) {
+    if (wait.settled)
+        return;
+    wait.settled = true;
+    if (wait.windowTimer) {
+        clearTimeout(wait.windowTimer);
+        wait.windowTimer = null;
+    }
+    if (wait.pollTimer) {
+        clearTimeout(wait.pollTimer);
+        wait.pollTimer = null;
+    }
+    if (wait.deadlineTimer) {
+        clearTimeout(wait.deadlineTimer);
+        wait.deadlineTimer = null;
+    }
+    if (wait.settleTimer) {
+        clearTimeout(wait.settleTimer);
+        wait.settleTimer = null;
+    }
+    // 先摘旗标再 resolve：让同步链路上的下一次判定能开新窗（不并入已结束的旧等待）。
+    if (pendingGateWait_ACU === wait)
+        pendingGateWait_ACU = null;
+    if (reason === 'timeout') {
+        logWarn_ACU('[MVU联动] 等待解析超时，照常执行');
+    }
+    else {
+        logDebug_ACU(`[MVU联动] 闸门放行：reason=${reason}，等待 ${Math.max(0, Date.now() - wait.startedAt)}ms，深度=${mvuAnalysisDepth_ACU}`);
+    }
+    // 自适应降窗计数：窗满未见 started 才记 miss（挂起后放行说明解析真实存在，不记）。
+    if (reason === 'observation_window_elapsed')
+        noteObservationMiss_ACU();
+    wait.resolve(buildGateResult(wait, reason, true, wait.phase === 'suspend'));
+}
+/** 第一把钥匙（ended）的收口判定：深度归零且 flag false 才放行；轮询钥匙见 schedulePollTick。 */
+function tryReleaseSuspendedGate_ACU(wait, reason) {
+    if (wait.settled || wait.phase !== 'suspend')
+        return false;
+    if (mvuAnalysisDepth_ACU > 0)
+        return false;
+    if (isMvuExtraAnalysisInProgress_ACU())
+        return false;
+    releaseGateWait_ACU(wait, reason);
+    return true;
+}
+/** 观察窗 → 挂起态：只有真见过解析（started / flag true）才开始计 240s 兜底与轮询收口。 */
+function enterSuspendPhase_ACU(wait) {
+    if (wait.settled || wait.phase === 'suspend')
+        return;
+    wait.phase = 'suspend';
+    if (wait.windowTimer) {
+        clearTimeout(wait.windowTimer);
+        wait.windowTimer = null;
+    }
+    const remaining = MVU_GATE_MAX_WAIT_MS_ACU - (Date.now() - wait.startedAt);
+    if (remaining <= 0) {
+        releaseGateWait_ACU(wait, 'timeout');
+        return;
+    }
+    wait.deadlineTimer = setTimeout(() => releaseGateWait_ACU(wait, 'timeout'), remaining);
+    logDebug_ACU(`[MVU联动] 检测到额外模型解析在飞（深度=${mvuAnalysisDepth_ACU}），自动填表与正文替换延后执行`);
+}
+function schedulePollTick(wait, delay) {
+    if (wait.settled)
+        return;
+    wait.pollTimer = setTimeout(() => {
+        wait.pollTimer = null;
+        if (wait.settled)
+            return;
+        const inProgress = isMvuExtraAnalysisInProgress_ACU();
+        if (inProgress) {
+            // 观察窗内 flag 翻 true（started 事件丢失场景）→ 同样转入挂起态。
+            if (wait.phase === 'observe') {
+                if (mvuAnalysisDepth_ACU <= 0)
+                    mvuAnalysisDepth_ACU = 1;
+                enterSuspendPhase_ACU(wait);
+            }
+            schedulePollTick(wait, MVU_GATE_POLL_INTERVAL_MS_ACU);
+            return;
+        }
+        if (wait.phase === 'suspend') {
+            // 第二把钥匙：进入挂起态本身就意味着「started 至少见过一次」（flag true 入场或 started 事件），
+            // 此刻 flag 已 false → 解析确实结束，只是 ended 没送达（宿主 eventSource 会吞监听器异常）。
+            // 深度按 0 归位，避免丢失的 ended 把幽灵深度留给下一轮，让下一次判定永远挂起。
+            mvuAnalysisDepth_ACU = 0;
+            releaseGateWait_ACU(wait, 'poll_fallback');
+            return;
+        }
+        schedulePollTick(wait, MVU_GATE_POLL_INTERVAL_MS_ACU);
+    }, delay);
+}
+/**
+ * [W4] 自动链统一入口前的延后闸门。
+ *
+ * 判定序（与需求一致）：
+ *   ① isDuringExtraAnalysis() === true → 直接挂起等待（优先于降窗：真在飞绝不抢跑）；
+ *   ② 否则：本聊天已自适应降窗 → 同步放行、不开窗不建定时器；未降窗才开 5s 观察窗，
+ *      窗内收到 started（深度 +1，支持交叉/连发）→ 挂起等待；窗满无 started → 放行并记一次 miss；
+ *   ③ 挂起后按三把钥匙放行：ended（深度 -1，归零且 flag false）/ 2s 轮询兜底 / 240s 超时强制放行。
+ *
+ * 同一时刻只有一个在飞等待：重复触发（同一防抖轮的重复 ENDED）并入同一次等待，放行后各自继续跑，
+ * 由既有链路的楼层解析自然取最新楼判定，不做并发排队。
+ */
+function waitForMvuAnalysisToSettle_ACU() {
+    // 只释放「本次调用自己创建的」等待：异常发生在建 wait 之前时，绝不能顺手把别人在飞的等待放掉。
+    let ownWait_ACU = null;
+    try {
+        if (!isMvuAnalysisGateEnabled_ACU()) {
+            return Promise.resolve(buildGateResult(null, 'gate_disabled', false, false));
+        }
+        if (!isMvuAnalysisHostPresent_ACU()) {
+            return Promise.resolve(buildGateResult(null, 'mvu_absent', false, false));
+        }
+        if (pendingGateWait_ACU && !pendingGateWait_ACU.settled) {
+            logDebug_ACU('[MVU联动] 已有等待在飞，本次触发并入同一次等待（不另造并发队列）');
+            return pendingGateWait_ACU.promise;
+        }
+        // 注意：promise 不能在 new Promise 的执行器里自引用（TDZ），先取 resolve，再回填 wait。
+        let resolveGate_ACU = null;
+        const promise = new Promise((resolve) => { resolveGate_ACU = resolve; });
+        const wait = {
+            startedAt: Date.now(),
+            phase: 'observe',
+            settled: false,
+            promise,
+            resolve: (result) => { (resolveGate_ACU || (() => undefined))(result); },
+            windowTimer: null,
+            pollTimer: null,
+            deadlineTimer: null,
+            settleTimer: null,
+        };
+        ownWait_ACU = wait;
+        pendingGateWait_ACU = wait;
+        // ① 解析已在飞 → 直接挂起（判定序①优先于降窗）。
+        if (isMvuExtraAnalysisInProgress_ACU()) {
+            if (mvuAnalysisDepth_ACU <= 0)
+                mvuAnalysisDepth_ACU = 1;
+            enterSuspendPhase_ACU(wait);
+        }
+        else if (isObservationBypassed_ACU()) {
+            // ②降窗：本聊天连续窗满未见 started → 不开窗、不建定时器，同步放行。
+            // 竞态兜底：放行后若 MVU 才起解析，其 ended 会经 [W5]「已登记→清记录→重跑」补权威轮。
+            if (pendingGateWait_ACU === wait)
+                pendingGateWait_ACU = null;
+            return Promise.resolve(buildGateResult(null, 'observation_bypassed', false, false));
+        }
+        else {
+            // ②开窗等 started。
+            wait.windowTimer = setTimeout(() => releaseGateWait_ACU(wait, 'observation_window_elapsed'), MVU_GATE_OBSERVE_WINDOW_MS_ACU);
+        }
+        // 轮询在两个阶段都跑：观察窗内兜住 started 丢失，挂起期兜住 ended 丢失。
+        schedulePollTick(wait, MVU_GATE_POLL_INTERVAL_MS_ACU);
+        return promise;
+    }
+    catch (error) {
+        // 闸门自身异常绝不能拖累既有链路：fail-open 放行；自己创建的等待就地收口，不留悬挂定时器。
+        logWarn_ACU('[MVU联动] 闸门判定异常，照常执行:', error);
+        if (ownWait_ACU && !ownWait_ACU.settled)
+            releaseGateWait_ACU(ownWait_ACU, 'gate_error');
+        return Promise.resolve(buildGateResult(null, 'gate_error', false, false));
+    }
+}
+/** MVU started 事件入口（幂等于事件总线；深度 +1）。 */
+function notifyMvuAnalysisStarted_ACU() {
+    mvuAnalysisDepth_ACU += 1;
+    // 真见过解析 → 降窗统计立即作废，恢复开窗（模式切回时联动自动重新生效）。
+    resetObservationStats_ACU();
+    const wait = pendingGateWait_ACU;
+    if (wait && !wait.settled && wait.phase === 'observe')
+        enterSuspendPhase_ACU(wait);
+}
+/** MVU ended 事件入口：深度 -1（不低于 0）→ 收口判定；随后走 [W5] 联动重跑判定。 */
+function notifyMvuAnalysisEnded_ACU() {
+    mvuAnalysisDepth_ACU = Math.max(0, mvuAnalysisDepth_ACU - 1);
+    const wait = pendingGateWait_ACU;
+    if (wait && !wait.settled) {
+        if (!tryReleaseSuspendedGate_ACU(wait, 'analysis_ended')) {
+            // ended 早于 flag 复位（is_during_extra_analysis 在 finally 才 false）→ 250ms 后复检，
+            // 再兜不住仍有 2s 轮询与 240s 超时。
+            if (wait.phase === 'suspend' && !wait.settled && !wait.settleTimer) {
+                wait.settleTimer = setTimeout(() => {
+                    wait.settleTimer = null;
+                    tryReleaseSuspendedGate_ACU(wait, 'analysis_ended');
+                }, MVU_GATE_ENDED_SETTLE_MS_ACU);
+            }
+        }
+    }
+    scheduleMvuRerunForLatestProcessedFloor_ACU();
+}
+// ═══ [W5] 解析完成 / 手动重试联动 ═══
+/**
+ * 收到 ended 后判断要不要再跑一轮自动链。
+ *
+ * 判据 = 「本楼在 W1/W3 已处理集合里有登记」：
+ *   · 有登记 → 说明解析发生在「本库已跑完之后」（手动重试，或观察窗/降窗误判场景）→ 清该楼两集合记录 + 重跑；
+ *   · 无登记 → 自动轮还没跑完/没登记（挂起中放行的那轮）→ 不重跑。这条判据天然区分两种时序，防双跑。
+ * 3s 防抖合并同楼重复 ended；重跑走既有统一入口，因此同样过 W4 闸门（若又有解析在飞则再等）。
+ */
+function scheduleMvuRerunForLatestProcessedFloor_ACU() {
+    try {
+        if (!isMvuAnalysisGateEnabled_ACU())
+            return; // 开关关 = 现状逐字不变
+        if (!mvuRerunHandler_ACU)
+            return; // 未装配重跑入口（例如 eventSource 缺失）
+        const floor = resolveLatestAiFloor_ACU(getChatArray_ACU());
+        const messageId = floor?.messageId;
+        if (messageId === null || messageId === undefined)
+            return;
+        const chatKey = String(currentChatFileIdentifier_ACU ?? '');
+        const hasReplacement = !!findAutoOptimizationProcessedEntry_ACU(messageId, chatKey);
+        const hasTableFill = !!findAutoTableFillProcessedEntry_ACU(messageId, chatKey);
+        if (!hasReplacement && !hasTableFill) {
+            logDebug_ACU(`[MVU联动] 第 ${floor.messageIndex} 楼尚未登记自动链完成记录，本次解析结束不触发重跑`);
+            return;
+        }
+        const target = String(messageId);
+        if (mvuRerunTimer_ACU && mvuRerunMessageId_ACU === target)
+            return; // 同楼重复 ended → 合并
+        if (mvuRerunTimer_ACU)
+            clearTimeout(mvuRerunTimer_ACU);
+        mvuRerunMessageId_ACU = target;
+        mvuRerunTimer_ACU = setTimeout(() => {
+            mvuRerunTimer_ACU = null;
+            mvuRerunMessageId_ACU = null;
+            void runMvuRerun_ACU(target, chatKey, hasReplacement, hasTableFill);
+        }, MVU_RERUN_DEBOUNCE_MS_ACU);
+    }
+    catch (error) {
+        logWarn_ACU('[MVU联动] 解析完成联动重跑判定失败（跳过本次重跑，不影响既有链路）:', error);
+    }
+}
+async function runMvuRerun_ACU(messageId, chatKey, hasReplacement, hasTableFill) {
+    try {
+        // 先清记录再重跑：W3 只比 messageId，不清就永远不会再填；W1 比内容指纹，MVU 改写正文后本就不拦，
+        // 一并清除是为了让「重跑成功」重新获得一份干净的完成凭证，而不是留着上一轮的旧指纹。
+        const removed = removeAutoChainProcessedForMessage_ACU(messageId, chatKey);
+        logDebug_ACU(`[MVU联动] 解析完成联动重跑：清除 messageId=${messageId} 判重记录（正文替换 ${removed.content_replacement} 条 / 自动填表 ${removed.auto_table_fill} 条；命中 替换=${hasReplacement} 填表=${hasTableFill}）`);
+        await mvuRerunHandler_ACU?.();
+    }
+    catch (error) {
+        logWarn_ACU('[MVU联动] 解析完成联动重跑失败:', error);
+    }
+}
+// ═══ 装配 / 卸载 ═══
+/**
+ * 装配 MVU 联动：注册 started/ended 监听，并注入 [W5] 的重跑入口。
+ * 由 presentation/bootstrap/init.ts 在宿主 eventSource 就绪后调用一次；重复调用先卸后装（幂等）。
+ * @returns 注销函数
+ */
+function attachMvuAnalysisGate_ACU(options = {}) {
+    detachMvuAnalysisGateListeners_ACU();
+    mvuRerunHandler_ACU = typeof options.requestRerun === 'function' ? options.requestRerun : null;
+    const eventSource = options.eventSource;
+    if (!eventSource || typeof eventSource.on !== 'function') {
+        logDebug_ACU('[MVU联动] 宿主 eventSource 不可用：未注册解析事件监听，闸门退化为 flag + 观察窗 + 轮询判定。');
+        return () => undefined;
+    }
+    const onStarted = () => { notifyMvuAnalysisStarted_ACU(); };
+    const onEnded = () => { notifyMvuAnalysisEnded_ACU(); };
+    try {
+        eventSource.on(MVU_ANALYSIS_STARTED_EVENT_ACU, onStarted);
+        eventSource.on(MVU_ANALYSIS_ENDED_EVENT_ACU, onEnded);
+        detachMvuListeners_ACU = () => {
+            try {
+                if (typeof eventSource.off === 'function') {
+                    eventSource.off(MVU_ANALYSIS_STARTED_EVENT_ACU, onStarted);
+                    eventSource.off(MVU_ANALYSIS_ENDED_EVENT_ACU, onEnded);
+                }
+            }
+            catch (error) {
+                logDebug_ACU('[MVU联动] 注销 MVU 解析事件监听失败:', error);
+            }
+        };
+        logDebug_ACU('[MVU联动] 已注册 MVU 额外模型解析事件监听（started / ended）。');
+    }
+    catch (error) {
+        logWarn_ACU('[MVU联动] 注册 MVU 解析事件监听失败，闸门退化为 flag + 观察窗 + 轮询判定:', error);
+    }
+    return () => detachMvuAnalysisGateListeners_ACU();
+}
+/** 注销 started/ended 监听（保留已排队的等待、重跑与降窗统计，交由 resetForTest 清理）。 */
+function detachMvuAnalysisGateListeners_ACU() {
+    if (detachMvuListeners_ACU) {
+        const detach = detachMvuListeners_ACU;
+        detachMvuListeners_ACU = null;
+        detach();
+    }
+}
+/** 测试专用：清空深度、在飞等待、重跑定时器与降窗统计，并注销监听。 */
+function resetMvuAnalysisGateForTest_ACU() {
+    detachMvuAnalysisGateListeners_ACU();
+    mvuRerunHandler_ACU = null;
+    mvuAnalysisDepth_ACU = 0;
+    resetObservationStats_ACU();
+    if (mvuRerunTimer_ACU) {
+        clearTimeout(mvuRerunTimer_ACU);
+        mvuRerunTimer_ACU = null;
+    }
+    mvuRerunMessageId_ACU = null;
+    const wait = pendingGateWait_ACU;
+    if (wait) {
+        pendingGateWait_ACU = null;
+        if (!wait.settled) {
+            wait.settled = true;
+            if (wait.windowTimer)
+                clearTimeout(wait.windowTimer);
+            if (wait.pollTimer)
+                clearTimeout(wait.pollTimer);
+            if (wait.deadlineTimer)
+                clearTimeout(wait.deadlineTimer);
+            if (wait.settleTimer)
+                clearTimeout(wait.settleTimer);
+            wait.resolve(buildGateResult(wait, 'gate_error', true, wait.phase === 'suspend'));
+        }
+    }
+}
+
+/**
  * presentation/triggers/settings-ui-sync/settings-ui-connect.ts
  */
 async function fetchModelsAndConnect_ACU() {
@@ -112030,6 +112576,16 @@ async function handleNewMessageDebounced_ACU(eventType = 'unknown_acu', intent) 
                 maybeLiftWorldbookSuppression_ACU();
             }
             catch (e) { }
+            // [W4 延后闸门] MVU 用「额外模型解析」时，自动填表与正文替换都要等解析结束后再跑。
+            // 消费点选在这里的理由：本函数是两条自动链的唯一入口（正文替换 executeContentOptimization_ACU
+            // 与填表 triggerAutomaticUpdateIfNeeded_ACU 都只在本函数尾部分叉），闸门放在防抖到期后、
+            // 楼层解析与两链分叉之前，一次事件只会延后一次，不会两条链各自挂起；
+            // 放在 loadAllChatMessages / chatKey 复检之前，等待期间切了聊天由既有复检自然丢弃，不新增特判。
+            // MVU 未装 / 未启用 / 开关关闭 → 同步立即放行，与闸门上线前逐字一致。
+            const mvuGate_ACU = await waitForMvuAnalysisToSettle_ACU();
+            if (mvuGate_ACU.delayed) {
+                logDebug_ACU(`[MVU联动] 闸门放行（reason=${mvuGate_ACU.reason}，等待 ${mvuGate_ACU.elapsedMs}ms，挂起=${mvuGate_ACU.suspended}），继续自动填表与正文替换`);
+            }
             const loadSpan = startRuntimePerformanceSpan_ACU('new-message-load-chat', {
                 ...performanceContext,
                 settings: settings_ACU,
@@ -130918,6 +131474,15 @@ function mainInitialize_ACU() {
                     SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.GENERATION_ENDED, onGenerationEnded);
                 }
             }
+            // [W4/W5 MVU 联动] 额外模型解析事件接线：
+            // · started/ended 喂给延后闸门，本库自动填表 + 正文替换要等解析结束后再跑（见 service/runtime/mvu-analysis-gate）；
+            // · 解析结束时若本楼已被本库处理过（MVU 手动重试场景），清掉该楼 W1/W3 判重记录并再跑一轮——
+            //   重跑走的就是 handleNewMessageDebounced_ACU 这个统一入口，因此同样受闸门约束（又有解析在飞则再等）。
+            // 事件通道与宿主 eventSource 同一总线；MVU 未装时闸门同步放行、本接线不产生任何行为差。
+            attachMvuAnalysisGate_ACU({
+                eventSource: SillyTavern_API_ACU.eventSource,
+                requestRerun: () => { void handleNewMessageDebounced_ACU('MVU_ANALYSIS_ENDED'); },
+            });
             // [剧情推进] 拦截用户输入进行剧情规划
             if (SillyTavern_API_ACU.eventTypes.GENERATION_AFTER_COMMANDS) {
                 SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.GENERATION_AFTER_COMMANDS, async (type, params, dryRun) => {
@@ -136656,7 +137221,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260905-11";
+        const stamp = "20260905-13";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -178667,6 +179232,7 @@ const useContentReplaceStore = defineStore('acu-v2-content-replace', {
         autoApply: true,
         showDiff: true,
         parallelMode: false,
+        mvuGateEnabled: true,
         minLength: 100,
         maxOptimizations: 10,
         loopCount: 1,
@@ -178736,6 +179302,8 @@ const useContentReplaceStore = defineStore('acu-v2-content-replace', {
             this.autoApply = cfg.autoApply !== false;
             this.showDiff = cfg.showDiff !== false;
             this.parallelMode = cfg.parallelMode === true;
+            // [MVU联动] 顶层设置键，不在 contentOptimizationSettings 里；未设置过时按默认开处理。
+            this.mvuGateEnabled = settings_ACU.mvuGateEnabled !== false;
             this.minLength = cfg.minLength;
             this.maxOptimizations = cfg.maxOptimizations;
             this.loopCount = cfg.loopCount;
@@ -178760,6 +179328,8 @@ const useContentReplaceStore = defineStore('acu-v2-content-replace', {
             cfg.autoApply = this.autoApply;
             cfg.showDiff = this.showDiff;
             cfg.parallelMode = this.parallelMode;
+            // [MVU联动] 闸门同时管填表与正文替换两条链，不隶属正文替换配置，因此写回 settings 顶层键。
+            settings_ACU.mvuGateEnabled = this.mvuGateEnabled;
             cfg.minLength = normalizeInteger(this.minLength, 100, 0, 1000000);
             cfg.maxOptimizations = normalizeInteger(this.maxOptimizations, 10, 1, 100);
             cfg.loopCount = normalizeInteger(this.loopCount, 1, 1, 10);
@@ -179223,8 +179793,8 @@ var _sfc_main$d = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-v2-content-replace-page[data-v-cd4e5f5d] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-content-replace-page__mini-status span[data-v-cd4e5f5d] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.5;\n}\n.acu-v2-content-replace-page__number-grid[data-v-cd4e5f5d],\r\n.acu-v2-content-replace-page__form-grid[data-v-cd4e5f5d] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 12px;\n}\n.acu-v2-content-replace-page__choice-list[data-v-cd4e5f5d],\r\n.acu-v2-content-replace-page__rule-stack[data-v-cd4e5f5d] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-v2-content-replace-page__mini-status[data-v-cd4e5f5d] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 10px;\r\n  padding: 8px 0;\r\n  border: 0;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-content-replace-page__mini-status strong[data-v-cd4e5f5d] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-content-replace-page__status-line[data-v-cd4e5f5d] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  flex-wrap: wrap;\r\n  margin: 0 0 10px;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-content-replace-page__status-line strong[data-v-cd4e5f5d] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-content-replace-page__badge[data-v-cd4e5f5d] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  padding: 1px 8px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 500;\n}\n.acu-v2-content-replace-page__select-row[data-v-cd4e5f5d] {\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) repeat(3, max-content);\r\n  gap: 6px;\r\n  align-items: stretch;\r\n  min-width: 0;\n}\n.acu-v2-content-replace-page__actions[data-v-cd4e5f5d] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  justify-content: flex-end;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-content-replace-page__test-output[data-v-cd4e5f5d] {\r\n  margin: 0;\r\n  max-height: 280px;\r\n  overflow: auto;\r\n  padding: 10px 0;\r\n  border: 0;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.55;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\n}\n@media (max-width: 860px) {\n.acu-v2-content-replace-page[data-v-cd4e5f5d] {\r\n    padding: 14px;\n}\n.acu-v2-content-replace-page__number-grid[data-v-cd4e5f5d],\r\n  .acu-v2-content-replace-page__form-grid[data-v-cd4e5f5d] {\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/pages/ContentReplacePage.vue#style-0-cd4e5f5d");
-var ContentReplacePage_vue_vue_type_style_index_0_scoped_cd4e5f5d_lang = null;
+injectSfcStyle("\n.acu-v2-content-replace-page[data-v-cbe80bb0] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-content-replace-page__mini-status span[data-v-cbe80bb0] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.5;\n}\n.acu-v2-content-replace-page__number-grid[data-v-cbe80bb0],\r\n.acu-v2-content-replace-page__form-grid[data-v-cbe80bb0] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 12px;\n}\n.acu-v2-content-replace-page__choice-list[data-v-cbe80bb0],\r\n.acu-v2-content-replace-page__rule-stack[data-v-cbe80bb0] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-v2-content-replace-page__mini-status[data-v-cbe80bb0] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 10px;\r\n  padding: 8px 0;\r\n  border: 0;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-content-replace-page__mini-status strong[data-v-cbe80bb0] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-content-replace-page__status-line[data-v-cbe80bb0] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  flex-wrap: wrap;\r\n  margin: 0 0 10px;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-content-replace-page__status-line strong[data-v-cbe80bb0] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-content-replace-page__badge[data-v-cbe80bb0] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  padding: 1px 8px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 500;\n}\n.acu-v2-content-replace-page__select-row[data-v-cbe80bb0] {\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) repeat(3, max-content);\r\n  gap: 6px;\r\n  align-items: stretch;\r\n  min-width: 0;\n}\n.acu-v2-content-replace-page__actions[data-v-cbe80bb0] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  justify-content: flex-end;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-content-replace-page__test-output[data-v-cbe80bb0] {\r\n  margin: 0;\r\n  max-height: 280px;\r\n  overflow: auto;\r\n  padding: 10px 0;\r\n  border: 0;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.55;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\n}\n@media (max-width: 860px) {\n.acu-v2-content-replace-page[data-v-cbe80bb0] {\r\n    padding: 14px;\n}\n.acu-v2-content-replace-page__number-grid[data-v-cbe80bb0],\r\n  .acu-v2-content-replace-page__form-grid[data-v-cbe80bb0] {\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/pages/ContentReplacePage.vue#style-0-cbe80bb0");
+var ContentReplacePage_vue_vue_type_style_index_0_scoped_cbe80bb0_lang = null;
 
 const _hoisted_1$d = { class: "acu-v2-content-replace-page" };
 const _hoisted_2$c = { class: "acu-v2-content-replace-page__number-grid" };
@@ -179370,9 +179940,14 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 								"model-value": $setup.store.parallelMode,
 								label: "填表与正文替换并行执行",
 								"onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => $setup.store.setBoolean("parallelMode", $event))
+							}, null, 8, ["model-value"]),
+							createVNode($setup["AcuCheckbox"], {
+								"model-value": $setup.store.mvuGateEnabled,
+								label: "等待 MVU 额外模型解析完成后再执行填表与正文替换",
+								"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.store.setBoolean("mvuGateEnabled", $event))
 							}, null, 8, ["model-value"])
 						]),
-						createBaseVNode("div", _hoisted_4$9, [_cache[18] || (_cache[18] = createBaseVNode(
+						createBaseVNode("div", _hoisted_4$9, [_cache[19] || (_cache[19] = createBaseVNode(
 							"span",
 							null,
 							"最近可重新优化",
@@ -179390,7 +179965,7 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 							disabled: $setup.store.lastOptimizedMessageIndex < 0,
 							onClick: $setup.store.reoptimizeLatest
 						}, {
-							default: withCtx(() => [..._cache[19] || (_cache[19] = [createBaseVNode(
+							default: withCtx(() => [..._cache[20] || (_cache[20] = [createBaseVNode(
 								"i",
 								{ class: "fa-solid fa-rotate-right" },
 								null,
@@ -179425,7 +180000,7 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 					}, 8, ["variant"])]),
 					default: withCtx(() => [
 						createBaseVNode("p", _hoisted_6$8, [
-							_cache[20] || (_cache[20] = createTextVNode(
+							_cache[21] || (_cache[21] = createTextVNode(
 								" 当前提示词: ",
 								-1
 								/* CACHED */
@@ -179453,7 +180028,7 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 								"empty-text": "暂无正文替换预设",
 								placeholder: "自定义提示词",
 								"show-default-action": false,
-								"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.store.selectPreset($event))
+								"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.store.selectPreset($event))
 							}, null, 8, ["items", "model-value"]),
 							createVNode($setup["AcuIconButton"], {
 								icon: "fa-solid fa-pen",
@@ -179468,7 +180043,7 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 								disabled: !!$setup.store.busyAction,
 								onFile: $setup.store.importPresets
 							}, {
-								default: withCtx(() => [..._cache[21] || (_cache[21] = [createBaseVNode(
+								default: withCtx(() => [..._cache[22] || (_cache[22] = [createBaseVNode(
 									"i",
 									{ class: "fa-solid fa-download" },
 									null,
@@ -179480,14 +180055,14 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 							createVNode($setup["AcuIconButton"], {
 								icon: "fa-solid fa-gear",
 								title: "管理预设",
-								onClick: _cache[10] || (_cache[10] = ($event) => $setup.presetDrawerOpen = true)
+								onClick: _cache[11] || (_cache[11] = ($event) => $setup.presetDrawerOpen = true)
 							})
 						]),
 						$setup.promptGroupMissingContent ? (openBlock(), createBlock($setup["AcuMessage"], {
 							key: 0,
 							kind: "warning"
 						}, {
-							default: withCtx(() => [..._cache[22] || (_cache[22] = [createTextVNode(
+							default: withCtx(() => [..._cache[23] || (_cache[23] = [createTextVNode(
 								" 正文替换提示词缺少 $CONTENT，占位符为空时运行时无法知道要检查哪段正文；请打开编辑器载入默认提示词或补回占位符。 ",
 								-1
 								/* CACHED */
@@ -179510,7 +180085,7 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 							"model-value": $setup.store.extractTags,
 							type: "text",
 							placeholder: "例如: content,正文",
-							"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.store.setString("extractTags", String($event)))
+							"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.store.setString("extractTags", String($event)))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}), createVNode($setup["AcuFormRow"], {
@@ -179521,7 +180096,7 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 							"model-value": $setup.store.excludeTags,
 							type: "text",
 							placeholder: "例如: think,thinking",
-							"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.store.setString("excludeTags", String($event)))
+							"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.store.setString("excludeTags", String($event)))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					})]), createBaseVNode("div", _hoisted_10$5, [createVNode($setup["AcuRulePairList"], {
@@ -179555,7 +180130,7 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 								"model-value": $setup.store.testInput,
 								rows: 5,
 								placeholder: "输入模拟正文，验证提示词与返回格式。",
-								"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.store.setString("testInput", $event))
+								"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.store.setString("testInput", $event))
 							}, null, 8, ["model-value"])]),
 							_: 1
 						}),
@@ -179564,7 +180139,7 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 							loading: $setup.store.busyAction === "test",
 							onClick: $setup.store.runTest
 						}, {
-							default: withCtx(() => [..._cache[23] || (_cache[23] = [createTextVNode(
+							default: withCtx(() => [..._cache[24] || (_cache[24] = [createTextVNode(
 								" 执行优化测试 ",
 								-1
 								/* CACHED */
@@ -179588,12 +180163,12 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 			"is-open": $setup.presetDrawerOpen,
 			presets: $setup.store.promptPresets,
 			message: $setup.store.message,
-			onClose: _cache[14] || (_cache[14] = ($event) => $setup.presetDrawerOpen = false),
+			onClose: _cache[15] || (_cache[15] = ($event) => $setup.presetDrawerOpen = false),
 			onCreateFromDefault: $setup.store.createPresetFromDefault,
 			onEdit: $setup.onEditPreset,
 			onRename: $setup.onRenamePreset,
 			onDelete: $setup.onDeletePreset,
-			onExport: _cache[15] || (_cache[15] = ($event) => $setup.store.exportPresetByName($event))
+			onExport: _cache[16] || (_cache[16] = ($event) => $setup.store.exportPresetByName($event))
 		}, null, 8, [
 			"is-open",
 			"presets",
@@ -179608,8 +180183,8 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 			onClose: $setup.closePromptDrawer,
 			onSave: $setup.onSavePromptGroup,
 			onReset: $setup.onResetPromptGroup,
-			onAdd: _cache[16] || (_cache[16] = ($event) => $setup.store.addPromptSegment($event)),
-			onDelete: _cache[17] || (_cache[17] = ($event) => $setup.store.deletePromptSegment($event)),
+			onAdd: _cache[17] || (_cache[17] = ($event) => $setup.store.addPromptSegment($event)),
+			onDelete: _cache[18] || (_cache[18] = ($event) => $setup.store.deletePromptSegment($event)),
 			onUpdate: $setup.onPromptUpdate
 		}, null, 8, [
 			"is-open",
@@ -179619,7 +180194,7 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 		])
 	]);
 }
-var ContentReplacePage = /* @__PURE__ */ _export_sfc(_sfc_main$d, [["render", _sfc_render$d], ["__scopeId", "data-v-cd4e5f5d"]]);
+var ContentReplacePage = /* @__PURE__ */ _export_sfc(_sfc_main$d, [["render", _sfc_render$d], ["__scopeId", "data-v-cbe80bb0"]]);
 
 /**
  * useSqlConsole — SQL 控制台业务流编排
@@ -180565,7 +181140,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260905-11";
+        const stamp = "20260905-13";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -180574,7 +181149,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.1.10";
+        const v = "9.2.1";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {

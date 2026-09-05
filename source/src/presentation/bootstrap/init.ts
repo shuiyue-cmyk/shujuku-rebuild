@@ -130,6 +130,7 @@ import {
 import { bindContinuationInternalAiGenerationStarted_ACU, consumeContinuationInternalAiGenerationEnded_ACU } from '../../service/continuation/internal-ai-events';
 import { getContinuationHostGenerationBridge_ACU } from '../../service/continuation/host-generation-bridge-registry';
 import { getContinuationRuntime_ACU } from '../../service/continuation/continuation-runtime';
+import { attachMvuAnalysisGate_ACU } from '../../service/runtime/mvu-analysis-gate';
 
 // ═══ [H2/M4] 启动期重建链互斥守卫 ═══
 // 背景：启动时可能存在两条并发的重建链——chatId 可用路径的 setTimeout(initWithChatId, 1000)
@@ -767,6 +768,16 @@ export   function mainInitialize_ACU() {
               SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.GENERATION_ENDED, onGenerationEnded);
             }
         }
+
+        // [W4/W5 MVU 联动] 额外模型解析事件接线：
+        // · started/ended 喂给延后闸门，本库自动填表 + 正文替换要等解析结束后再跑（见 service/runtime/mvu-analysis-gate）；
+        // · 解析结束时若本楼已被本库处理过（MVU 手动重试场景），清掉该楼 W1/W3 判重记录并再跑一轮——
+        //   重跑走的就是 handleNewMessageDebounced_ACU 这个统一入口，因此同样受闸门约束（又有解析在飞则再等）。
+        // 事件通道与宿主 eventSource 同一总线；MVU 未装时闸门同步放行、本接线不产生任何行为差。
+        attachMvuAnalysisGate_ACU({
+          eventSource: SillyTavern_API_ACU.eventSource,
+          requestRerun: () => { void handleNewMessageDebounced_ACU('MVU_ANALYSIS_ENDED'); },
+        });
 
         // [剧情推进] 拦截用户输入进行剧情规划
         if (SillyTavern_API_ACU.eventTypes.GENERATION_AFTER_COMMANDS) {
