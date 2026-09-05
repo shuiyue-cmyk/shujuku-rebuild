@@ -266,6 +266,17 @@ describe('getInjectionTargetLorebook_ACU', () => {
     expect(result).toBeNull();
     expect(mockListLorebooks).not.toHaveBeenCalled();
   });
+
+  it('[TT 降级] binding API 抛错时按无注入目标返回 null 并 warn，不炸注入链', async () => {
+    mockGetCurrentWorldbookConfig.mockReturnValue({ injectionTarget: 'character' });
+    mockGetCurrentCharacterWorldbookBinding.mockRejectedValueOnce(
+      new Error('CharacterWorldbookApiUnavailableError_ACU'),
+    );
+    const result = await getInjectionTargetLorebook_ACU();
+    expect(result).toBeNull();
+    expect(mockLogWarn).toHaveBeenCalled();
+    expect(mockListLorebooks).not.toHaveBeenCalled();
+  });
 });
 
 // ═══ resetScriptStateForNewChat_ACU ═══

@@ -78257,7 +78257,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.1.8" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.1.9" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -81377,24 +81377,45 @@ function getManualPlotWorldbookNames_ACU() {
 async function resolveAgentWorldbookScopeBookNamesFromScope_ACU(scope) {
     if (scope.source === 'manual')
         return normalizeBookNameList_ACU(scope.manualSelection);
-    const binding = await getCurrentCharacterWorldbookBinding_ACU();
-    return binding.orderedNames.slice();
+    // [TT 降级] 角色世界书 API 不可用时按「无绑定」返回空集，炸链责任交回调用方可见性。
+    try {
+        const binding = await getCurrentCharacterWorldbookBinding_ACU();
+        return binding.orderedNames.slice();
+    }
+    catch (e) {
+        logWarn_ACU('[AgentWorldbook] 角色世界书绑定 API 不可用，作用域按无绑定降级为空集。', e);
+        return [];
+    }
 }
 async function resolveAgentWorldbookScopeBookNames_ACU(scope, readContext) {
     const resolvedScope = scope || (await readAgentWorldbookStateFromWorldbooks_ACU(readContext)).control.worldbookScope;
     return resolveAgentWorldbookScopeBookNamesFromScope_ACU(resolvedScope);
 }
 async function resolveAgentWorldbookBootstrapBookNames_ACU() {
-    const binding = await getCurrentCharacterWorldbookBinding_ACU();
+    // [TT 降级] 同 resolveAgentWorldbookScopeBookNamesFromScope_ACU：API 不可用按无绑定只取手动集。
+    let orderedNames = [];
+    try {
+        orderedNames = (await getCurrentCharacterWorldbookBinding_ACU()).orderedNames;
+    }
+    catch (e) {
+        logWarn_ACU('[AgentWorldbook] 角色世界书绑定 API 不可用，bootstrap 作用域按无绑定降级。', e);
+    }
     return normalizeBookNameList_ACU([
-        ...binding.orderedNames,
+        ...orderedNames,
         ...getManualPlotWorldbookNames_ACU(),
     ]);
 }
 async function resolveAgentWorldbookHostBookForScope_ACU(scope) {
-    const binding = await getCurrentCharacterWorldbookBinding_ACU();
-    if (binding.primary)
-        return binding.primary;
+    // [TT 降级] API 不可用按无绑定走手动/空 hostBook 分支。
+    let primary = null;
+    try {
+        primary = (await getCurrentCharacterWorldbookBinding_ACU()).primary;
+    }
+    catch (e) {
+        logWarn_ACU('[AgentWorldbook] 角色世界书绑定 API 不可用，hostBook 按无绑定降级。', e);
+    }
+    if (primary)
+        return primary;
     if (scope.source === 'manual')
         return scope.manualSelection[0] || '';
     return '';
@@ -83516,7 +83537,16 @@ async function getInjectionTargetLorebook_ACU() {
     const target = worldbookConfig.injectionTarget;
     let lorebookName = null;
     if (target === 'character') {
-        const binding = await getCurrentCharacterWorldbookBinding_ACU();
+        // [TT 降级] 角色世界书 API 不可用（compat 整组 missing/冷启动未装配）时按「无注入目标」
+        // 静默降级，与下方防御验证同形；gateway 的 throw 保留用于区分系统性故障（有意契约）。
+        let binding;
+        try {
+            binding = await getCurrentCharacterWorldbookBinding_ACU();
+        }
+        catch (e) {
+            logWarn_ACU('[Worldbook] 角色世界书绑定 API 不可用，注入目标按无绑定降级。', { phase: 'character_worldbook_binding' });
+            return null;
+        }
         lorebookName = binding.primary;
     }
     else {
@@ -91508,9 +91538,9 @@ async function replaceChatMessage_ACU(messageIndex, newContent, options = {}) {
             logDebug_ACU('[正文优化] 聊天已保存');
             emitMessageUpdated_ACU(messageIndex);
             // [TT 登记] 不接线宿主 reloadCurrentChat 强制重绘：TauriTavern dev 的
-            // reloadCurrentChat（st-context.js:136 导出 → script.js:2229 reloadCurrentChatUnsafe）
+            // reloadCurrentChat（st-context.js:136 导出 → script.js:2242 reloadCurrentChatUnsafe，TT dev d0801fd 实测）
             // 语义是 clearChat({clearData:true}) 后 getChat()/getGroupChat() 从磁盘整表重载，
-            // 三个分支收尾均 emit CHAT_CHANGED（script.js:9141 / :2242 / group-chats.js:372）。
+            // 三个分支收尾均 emit CHAT_CHANGED（script.js:9190 / :2255 / group-chats.js:372，d0801fd 实测）。
             // 本库 init.ts handleChatChangedEvent_ACU 会把该事件按「会话切换」处理：
             // 中止在飞填表/依赖楼层调用、清派生缓存、1200ms 后整库重建，且 clearChat 会
             // cancelDebouncedChatSave() 吞掉他链挂起的防抖保存——重入风险远大于气泡不刷新的收益。
@@ -136067,7 +136097,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260904-10";
+        const stamp = "20260905-08";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -179976,7 +180006,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260904-10";
+        const stamp = "20260905-08";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -179985,7 +180015,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.1.8";
+        const v = "9.1.9";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {

@@ -197,6 +197,16 @@ describe('agent worldbook config/state meta', () => {
     expect(getCharLorebooks_ACU).not.toHaveBeenCalled();
   });
 
+  it('[TT 降级] 角色 binding API 抛错时 scope 解析返回空集不炸链', async () => {
+    vi.mocked(getCurrentCharacterWorldbookBinding_ACU).mockRejectedValueOnce(
+      new Error('CharacterWorldbookApiUnavailableError_ACU'),
+    );
+    await expect(resolveAgentWorldbookScopeBookNames_ACU({
+      source: 'character',
+      manualSelection: [],
+    })).resolves.toEqual([]);
+  });
+
   it('Agent availability 严格读取链只消费统一 binding，不请求旧 API 的幽灵书', async () => {
     mockGetCurrentCharacterWorldbookBinding.mockResolvedValue({
       primary: '主世界书',

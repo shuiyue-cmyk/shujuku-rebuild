@@ -31,6 +31,7 @@ import {
 import type { StrictLorebookReadContext_ACU } from '../worldbook/pipeline';
 import { getAgentRuntimeLorebookEntries_ACU } from './agent-worldbook-runtime-read';
 import { settings_ACU } from '../runtime/state-manager';
+import { logWarn_ACU } from '../../shared/utils';
 import {
   normalizeAgentContextSettings_ACU,
   normalizeEditablePromptSegments_ACU,
@@ -512,8 +513,14 @@ function getManualPlotWorldbookNames_ACU(): string[] {
 async function resolveAgentWorldbookScopeBookNamesFromScope_ACU(scope: AgentWorldbookScope_ACU): Promise<string[]> {
   if (scope.source === 'manual') return normalizeBookNameList_ACU(scope.manualSelection);
 
-  const binding = await getCurrentCharacterWorldbookBinding_ACU();
-  return binding.orderedNames.slice();
+  // [TT 降级] 角色世界书 API 不可用时按「无绑定」返回空集，炸链责任交回调用方可见性。
+  try {
+    const binding = await getCurrentCharacterWorldbookBinding_ACU();
+    return binding.orderedNames.slice();
+  } catch (e) {
+    logWarn_ACU('[AgentWorldbook] 角色世界书绑定 API 不可用，作用域按无绑定降级为空集。', e);
+    return [];
+  }
 }
 
 export async function resolveAgentWorldbookScopeBookNames_ACU(scope?: AgentWorldbookScope_ACU, readContext?: StrictLorebookReadContext_ACU): Promise<string[]> {
@@ -522,16 +529,28 @@ export async function resolveAgentWorldbookScopeBookNames_ACU(scope?: AgentWorld
 }
 
 async function resolveAgentWorldbookBootstrapBookNames_ACU(): Promise<string[]> {
-  const binding = await getCurrentCharacterWorldbookBinding_ACU();
+  // [TT 降级] 同 resolveAgentWorldbookScopeBookNamesFromScope_ACU：API 不可用按无绑定只取手动集。
+  let orderedNames: string[] = [];
+  try {
+    orderedNames = (await getCurrentCharacterWorldbookBinding_ACU()).orderedNames;
+  } catch (e) {
+    logWarn_ACU('[AgentWorldbook] 角色世界书绑定 API 不可用，bootstrap 作用域按无绑定降级。', e);
+  }
   return normalizeBookNameList_ACU([
-    ...binding.orderedNames,
+    ...orderedNames,
     ...getManualPlotWorldbookNames_ACU(),
   ]);
 }
 
 async function resolveAgentWorldbookHostBookForScope_ACU(scope: AgentWorldbookScope_ACU): Promise<string> {
-  const binding = await getCurrentCharacterWorldbookBinding_ACU();
-  if (binding.primary) return binding.primary;
+  // [TT 降级] API 不可用按无绑定走手动/空 hostBook 分支。
+  let primary: string | null = null;
+  try {
+    primary = (await getCurrentCharacterWorldbookBinding_ACU()).primary;
+  } catch (e) {
+    logWarn_ACU('[AgentWorldbook] 角色世界书绑定 API 不可用，hostBook 按无绑定降级。', e);
+  }
+  if (primary) return primary;
   if (scope.source === 'manual') return scope.manualSelection[0] || '';
   return '';
 }

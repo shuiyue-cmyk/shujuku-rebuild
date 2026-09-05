@@ -182,7 +182,15 @@ import {
       const target = worldbookConfig.injectionTarget;
       let lorebookName: string | null = null;
       if (target === 'character') {
-          const binding = await getCurrentCharacterWorldbookBinding_ACU();
+          // [TT 降级] 角色世界书 API 不可用（compat 整组 missing/冷启动未装配）时按「无注入目标」
+          // 静默降级，与下方防御验证同形；gateway 的 throw 保留用于区分系统性故障（有意契约）。
+          let binding;
+          try {
+              binding = await getCurrentCharacterWorldbookBinding_ACU();
+          } catch (e) {
+              logWarn_ACU('[Worldbook] 角色世界书绑定 API 不可用，注入目标按无绑定降级。', { phase: 'character_worldbook_binding' });
+              return null;
+          }
           lorebookName = binding.primary;
       } else {
           lorebookName = target || null;
