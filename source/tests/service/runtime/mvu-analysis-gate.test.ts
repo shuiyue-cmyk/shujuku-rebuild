@@ -206,7 +206,7 @@ describe('② 解析在飞：挂起等待，ended 后放行且只放行一次', 
     expect(getMvuAnalysisGateState_ACU().depth).toBe(0);
   });
 
-  it('同一防抖轮的重复触发并入同一次等待：一次 ended 两边都放行，不另造并发队列', async () => {
+  it('同一防抖轮的重复触发并入同一次等待：ended 后创建者继续、合并方带 mergedIntoExisting 标记（消费点据此丢弃防双跑）', async () => {
     const mvu = installFakeMvu(true);
     const es = createFakeEventSource();
     attachMvuAnalysisGate_ACU({ eventSource: es });
@@ -227,6 +227,9 @@ describe('② 解析在飞：挂起等待，ended 后放行且只放行一次', 
     expect(second.resolved).toBe(1);
     expect(first.box.value!.reason).toBe('analysis_ended');
     expect(second.box.value!.reason).toBe('analysis_ended');
+    // 创建者继续跑；合并方必须被标记丢弃（正文替换非幂等，两边都跑=同楼双烧 AI）
+    expect(first.box.value!.mergedIntoExisting).toBe(false);
+    expect(second.box.value!.mergedIntoExisting).toBe(true);
   });
 
   it('放行后再来一次触发 → 重新开观察窗（旧等待不复用、不残留深度）', async () => {

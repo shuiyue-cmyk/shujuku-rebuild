@@ -211,6 +211,34 @@ describe('解析在飞：填表与正文替换一起延后，只延后一次', (
     expect(m.executeContentOptimization).not.toHaveBeenCalled();
     expect(m.triggerAutomaticUpdateIfNeeded).not.toHaveBeenCalled();
   });
+
+  it('挂起期间第二条 ENDED 起新一轮链路 → 并入后合并方被丢弃，两条链共只执行一次（防同楼双烧 AI）', async () => {
+    const mvu = installFakeMvu(true);
+    const es = createFakeEventSource();
+    attachMvuAnalysisGate_ACU({ eventSource: es });
+
+    // 第一轮：防抖到期后进闸门挂起
+    const first = handleNewMessageDebounced_ACU('GENERATION_ENDED', { ...baseIntent });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(m.loadAllChatMessages).not.toHaveBeenCalled();
+
+    // 第二轮（日志实证场景：MVU 内部重试 29s 后再发一条 ENDED，防抖早已过期=全新链路）→ 并入同一等待
+    const second = handleNewMessageDebounced_ACU('GENERATION_ENDED', { ...baseIntent });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(m.loadAllChatMessages).not.toHaveBeenCalled();
+
+    mvu.during = false;
+    es.emit(MVU_ANALYSIS_ENDED_EVENT_ACU);
+    await vi.advanceTimersByTimeAsync(0);
+    await Promise.all([first, second]);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // 只有创建者继续：聊天加载/两链各恰好一次；合并方带丢弃日志不出第二次
+    expect(m.loadAllChatMessages).toHaveBeenCalledTimes(1);
+    expect(m.executeContentOptimization).toHaveBeenCalledTimes(1);
+    expect(m.triggerAutomaticUpdateIfNeeded).toHaveBeenCalledTimes(1);
+    expect(m.logDebug).toHaveBeenCalledWith(expect.stringContaining('本轮丢弃（防同楼双跑）'));
+  });
 });
 
 describe('开关关闭：现状逐字不变', () => {

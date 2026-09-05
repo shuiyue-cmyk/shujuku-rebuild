@@ -113,6 +113,12 @@ export interface MvuGateResult_ACU {
   elapsedMs: number;
   /** 放行时的 started 深度（正常应为 0）。 */
   depth: number;
+  /**
+   * 本次调用是否「并入了别人创建的在飞等待」。合并调用方放行后必须**放弃本轮链路**：
+   * 创建者同样在放行后才做楼层解析、会按届时最新状态处理，合并方继续跑就是同楼双跑
+   * （正文替换非幂等，两次并发各自读原文各烧一次 AI——2026-09-05 日志实证）。
+   */
+  mergedIntoExisting: boolean;
 }
 
 /** 宿主 eventSource 的最小形状（TT 下与 MVU 同一总线）。 */
@@ -262,6 +268,7 @@ function buildGateResult(
     suspended,
     elapsedMs: wait ? Math.max(0, Date.now() - wait.startedAt) : 0,
     depth: mvuAnalysisDepth_ACU,
+    mergedIntoExisting: false,
   };
 }
 
@@ -346,8 +353,10 @@ function schedulePollTick(wait: MvuGateWait_ACU, delay: number): void {
  *      窗内收到 started（深度 +1，支持交叉/连发）→ 挂起等待；窗满无 started → 放行并记一次 miss；
  *   ③ 挂起后按三把钥匙放行：ended（深度 -1，归零且 flag false）/ 2s 轮询兜底 / 240s 超时强制放行。
  *
- * 同一时刻只有一个在飞等待：重复触发（同一防抖轮的重复 ENDED）并入同一次等待，放行后各自继续跑，
- * 由既有链路的楼层解析自然取最新楼判定，不做并发排队。
+ * 同一时刻只有一个在飞等待：重复触发（如 MVU 内部重试期间到达的第二条 GENERATION_ENDED，
+ * 500ms 防抖早已过期、是一轮全新链路）并入同一次等待；放行时**只有创建者继续跑**，
+ * 合并方拿到 mergedIntoExisting=true 由消费点丢弃本轮——创建者的楼层解析发生在放行之后，
+ * 自然按届时最新楼判定，合并方继续跑只会造成同楼正文替换/填表双跑各烧一次 AI。
  */
 export function waitForMvuAnalysisToSettle_ACU(): Promise<MvuGateResult_ACU> {
   // 只释放「本次调用自己创建的」等待：异常发生在建 wait 之前时，绝不能顺手把别人在飞的等待放掉。
@@ -360,8 +369,8 @@ export function waitForMvuAnalysisToSettle_ACU(): Promise<MvuGateResult_ACU> {
       return Promise.resolve(buildGateResult(null, 'mvu_absent', false, false));
     }
     if (pendingGateWait_ACU && !pendingGateWait_ACU.settled) {
-      logDebug_ACU('[MVU联动] 已有等待在飞，本次触发并入同一次等待（不另造并发队列）');
-      return pendingGateWait_ACU.promise;
+      logDebug_ACU('[MVU联动] 已有等待在飞，本次触发并入同一次等待；放行后由创建者单独继续（合并方将被丢弃，防同楼双跑）');
+      return pendingGateWait_ACU.promise.then(result => ({ ...result, mergedIntoExisting: true }));
     }
 
     // 注意：promise 不能在 new Promise 的执行器里自引用（TDZ），先取 resolve，再回填 wait。

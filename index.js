@@ -78830,7 +78830,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.2.2" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.2.3" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -112062,6 +112062,7 @@ function buildGateResult(wait, reason, delayed, suspended) {
         suspended,
         elapsedMs: wait ? Math.max(0, Date.now() - wait.startedAt) : 0,
         depth: mvuAnalysisDepth_ACU,
+        mergedIntoExisting: false,
     };
 }
 function releaseGateWait_ACU(wait, reason) {
@@ -112164,8 +112165,10 @@ function schedulePollTick(wait, delay) {
  *      窗内收到 started（深度 +1，支持交叉/连发）→ 挂起等待；窗满无 started → 放行并记一次 miss；
  *   ③ 挂起后按三把钥匙放行：ended（深度 -1，归零且 flag false）/ 2s 轮询兜底 / 240s 超时强制放行。
  *
- * 同一时刻只有一个在飞等待：重复触发（同一防抖轮的重复 ENDED）并入同一次等待，放行后各自继续跑，
- * 由既有链路的楼层解析自然取最新楼判定，不做并发排队。
+ * 同一时刻只有一个在飞等待：重复触发（如 MVU 内部重试期间到达的第二条 GENERATION_ENDED，
+ * 500ms 防抖早已过期、是一轮全新链路）并入同一次等待；放行时**只有创建者继续跑**，
+ * 合并方拿到 mergedIntoExisting=true 由消费点丢弃本轮——创建者的楼层解析发生在放行之后，
+ * 自然按届时最新楼判定，合并方继续跑只会造成同楼正文替换/填表双跑各烧一次 AI。
  */
 function waitForMvuAnalysisToSettle_ACU() {
     // 只释放「本次调用自己创建的」等待：异常发生在建 wait 之前时，绝不能顺手把别人在飞的等待放掉。
@@ -112178,8 +112181,8 @@ function waitForMvuAnalysisToSettle_ACU() {
             return Promise.resolve(buildGateResult(null, 'mvu_absent', false, false));
         }
         if (pendingGateWait_ACU && !pendingGateWait_ACU.settled) {
-            logDebug_ACU('[MVU联动] 已有等待在飞，本次触发并入同一次等待（不另造并发队列）');
-            return pendingGateWait_ACU.promise;
+            logDebug_ACU('[MVU联动] 已有等待在飞，本次触发并入同一次等待；放行后由创建者单独继续（合并方将被丢弃，防同楼双跑）');
+            return pendingGateWait_ACU.promise.then(result => ({ ...result, mergedIntoExisting: true }));
         }
         // 注意：promise 不能在 new Promise 的执行器里自引用（TDZ），先取 resolve，再回填 wait。
         let resolveGate_ACU = null;
@@ -112586,6 +112589,12 @@ async function handleNewMessageDebounced_ACU(eventType = 'unknown_acu', intent) 
             // 放在 loadAllChatMessages / chatKey 复检之前，等待期间切了聊天由既有复检自然丢弃，不新增特判。
             // MVU 未装 / 未启用 / 开关关闭 → 同步立即放行，与闸门上线前逐字一致。
             const mvuGate_ACU = await waitForMvuAnalysisToSettle_ACU();
+            if (mvuGate_ACU.mergedIntoExisting) {
+                // [防双跑] 本次触发并入了他人在飞等待：创建者放行后会按最新楼独自处理，
+                // 合并方继续跑=同楼正文替换/填表双跑各烧一次 AI（2026-09-05 日志实证），直接放弃本轮。
+                logDebug_ACU('[MVU联动] 本次触发已并入在飞等待，交由创建者继续处理，本轮丢弃（防同楼双跑）');
+                return;
+            }
             if (mvuGate_ACU.delayed) {
                 logDebug_ACU(`[MVU联动] 闸门放行（reason=${mvuGate_ACU.reason}，等待 ${mvuGate_ACU.elapsedMs}ms，挂起=${mvuGate_ACU.suspended}），继续自动填表与正文替换`);
             }
@@ -137224,7 +137233,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260905-13";
+        const stamp = "20260905-14";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -181143,7 +181152,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260905-13";
+        const stamp = "20260905-14";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -181152,7 +181161,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.2.2";
+        const v = "9.2.3";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {

@@ -312,6 +312,12 @@ import {
       // 放在 loadAllChatMessages / chatKey 复检之前，等待期间切了聊天由既有复检自然丢弃，不新增特判。
       // MVU 未装 / 未启用 / 开关关闭 → 同步立即放行，与闸门上线前逐字一致。
       const mvuGate_ACU = await waitForMvuAnalysisToSettle_ACU();
+      if (mvuGate_ACU.mergedIntoExisting) {
+        // [防双跑] 本次触发并入了他人在飞等待：创建者放行后会按最新楼独自处理，
+        // 合并方继续跑=同楼正文替换/填表双跑各烧一次 AI（2026-09-05 日志实证），直接放弃本轮。
+        logDebug_ACU('[MVU联动] 本次触发已并入在飞等待，交由创建者继续处理，本轮丢弃（防同楼双跑）');
+        return;
+      }
       if (mvuGate_ACU.delayed) {
         logDebug_ACU(
           `[MVU联动] 闸门放行（reason=${mvuGate_ACU.reason}，等待 ${mvuGate_ACU.elapsedMs}ms，挂起=${mvuGate_ACU.suspended}），继续自动填表与正文替换`,
