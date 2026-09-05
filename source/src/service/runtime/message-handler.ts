@@ -12,6 +12,7 @@ import type {
 import {
   getCurrentCharacterFallback_ACU
 } from '../host/host-state-service';
+import type { AiFloorSignatureEx_ACU } from './state-manager';
 
 export type MessageAction = 'skip' | 'update_only' | 'optimize_parallel' | 'optimize_then_update' | 'optimize_manual';
 
@@ -37,6 +38,8 @@ export interface AutoFillIntent_ACU {
     capturedAiFloorCount: number;
     /** 捕获时对应的生成序号；状态接口不可靠时为 undefined，不假造 */
     generationSeq?: number;
+    /** [配对零产出证据] GENERATION_STARTED 时刻的 AI 楼扩展签名；仅配对携带，缺席即无证据 */
+    preSignature?: AiFloorSignatureEx_ACU | null;
 }
 
 /**

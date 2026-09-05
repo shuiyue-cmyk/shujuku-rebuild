@@ -78860,7 +78860,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.2.4" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.2.5" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -97044,7 +97044,7 @@ function removeExpiredGenerationContexts_ACU(now = Date.now()) {
     const earliestValidAt = now - GENERATION_CONTEXT_TTL_MS_ACU;
     generationGate_ACU.activeGenerations = generationGate_ACU.activeGenerations.filter(context => context.at >= earliestValidAt);
 }
-function recordGenerationContext_ACU(type, params, dryRun) {
+function recordGenerationContext_ACU(type, params, dryRun, preSignature) {
     const context = {
         seq: ++generationGate_ACU.generationSeq,
         type,
@@ -97052,6 +97052,9 @@ function recordGenerationContext_ACU(type, params, dryRun) {
         dryRun,
         at: Date.now(),
     };
+    // [配对零产出证据] 仅当调用方显式传入第 4 参才落盘；旧三参调用形状逐字不变（无该键）。
+    if (preSignature !== undefined)
+        context.preSignature = preSignature;
     removeExpiredGenerationContexts_ACU(context.at);
     generationGate_ACU.activeGenerations.push(context);
     generationGate_ACU.lastGeneration = context;
@@ -102829,6 +102832,36 @@ function resolveAiFloorSignature_ACU(chat) {
     }
     const latestMessageId = resolveLatestAiFloor_ACU(list)?.messageId;
     return { aiFloorCount, latestAiMessageId: latestMessageId ?? null };
+}
+/**
+ * GENERATION_STARTED 时刻冻结的「AI 楼扩展签名」：楼数 + 最新 AI 楼 id（与
+ * resolveAiFloorSignature_ACU 严格同口径，复用 isAiFloor_ACU 谓词）+ 最新 AI 楼
+ * `mes` 经 sha256HexSync_ACU 的同步内容哈希。
+ *
+ * 用途：配对路径的「零产出证据」——查看器调真 Generate 后 stopGeneration 会先由
+ * hideStopButton 派发 ENDED（消费到查看器自己的上下文走配对放行），防抖到期时三元组
+ * 完全相同 ⇒ 本轮零产出 ⇒ 跳过自动链。swipe/同楼换内容（hash 变）、
+ * regenerate（id 变）、真生成（新楼）都会打破三元组相等而正常放行。
+ *
+ * mes 缺失 / 非字符串时 hash 为 null（含双 null 相等即「都无内容可比」仍判零产出）。
+ * 纯函数：聊天数组由调用方读一次传入。
+ */
+function resolveAiFloorSignatureEx_ACU(chat) {
+    const base = resolveAiFloorSignature_ACU(chat);
+    const list = Array.isArray(chat) ? chat : [];
+    let latestMes;
+    for (let index = list.length - 1; index >= 0; index -= 1) {
+        const message = list[index];
+        if (!isAiFloor_ACU(message))
+            continue;
+        latestMes = message?.mes;
+        break;
+    }
+    return {
+        aiFloorCount: base.aiFloorCount,
+        latestAiMessageId: base.latestAiMessageId,
+        latestContentHash: typeof latestMes === 'string' ? sha256HexSync_ACU(latestMes) : null,
+    };
 }
 /**
  * 该楼是否已经成功自动填过表（同一 messageId 的回声触发）。
@@ -112789,6 +112822,26 @@ async function handleNewMessageDebounced_ACU(eventType = 'unknown_acu', intent) 
                     return;
                 }
                 resolvedMessageIndex = resolution.messageIndex;
+            }
+            // [配对零产出收紧] 查看器 stopGeneration 先 hideStopButton 发 ENDED 后才发 STOPPED：
+            // ENDED 消费到查看器自己的 STARTED 上下文走「配对路径」放行，v9.2.4 的新楼证据检查只在无配对分支。
+            // STARTED 时刻冻结的 AI 楼三元组随 intent.preSignature 携带；防抖到期时三元组完全相同
+            // （含双 null）⇒ 本轮零产出 ⇒ 跳过自动链。无 intent / 无 preSignature（旧上下文、W5 重跑）直接放行。
+            // liveChat 取彩物化等待之后的最新值。
+            if (intent?.preSignature) {
+                const currentExSignature_ACU = resolveAiFloorSignatureEx_ACU(liveChat);
+                const startedExSignature_ACU = intent.preSignature;
+                if (currentExSignature_ACU.aiFloorCount === startedExSignature_ACU.aiFloorCount
+                    && currentExSignature_ACU.latestAiMessageId === startedExSignature_ACU.latestAiMessageId
+                    && currentExSignature_ACU.latestContentHash === startedExSignature_ACU.latestContentHash) {
+                    logDebug_ACU('[新消息] 配对生成零产出（AI 楼无变化），跳过自动链');
+                    logAutoFillSkip_ACU('paired_ended_no_new_output', {
+                        eventType,
+                        eventMessageId: intent.eventMessageId,
+                        aiFloorCount: currentExSignature_ACU.aiFloorCount,
+                    });
+                    return;
+                }
             }
             // [重构] 调用 service 层的 evaluateNewMessageAction_ACU 进行决策
             const result = evaluateNewMessageAction_ACU(liveChat, isAutoUpdatingCard_ACU, coreApisAreReady_ACU, wasStoppedByUser_ACU, settings_ACU.contentOptimizationSettings, resolvedMessageIndex);
@@ -131473,7 +131526,17 @@ function mainInitialize_ACU() {
                     try {
                         // 终止只作用于当次填表。新一轮宿主生成必须清掉残留，否则评估闸永久 user_aborted。
                         _set_wasStoppedByUser_ACU(false);
-                        const context = recordGenerationContext_ACU(type, params, dryRun);
+                        // [配对零产出证据] STARTED 时刻冻结 AI 楼扩展签名（与 ENDED 的 chatAtCapture 同源：SillyTavern_API_ACU?.chat），
+                        // 随上下文带到 ENDED 配对路径判定；读取失败传 undefined（下游按无证据放行）。
+                        // quiet/dryRun/续写桥逻辑一字不动。
+                        let preSignature;
+                        try {
+                            preSignature = resolveAiFloorSignatureEx_ACU(SillyTavern_API_ACU?.chat);
+                        }
+                        catch {
+                            preSignature = undefined;
+                        }
+                        const context = recordGenerationContext_ACU(type, params, dryRun, preSignature);
                         bindContinuationInternalAiGenerationStarted_ACU(context.seq);
                         // 宿主的 GENERATION_STARTED 通常在发送点击返回后的微任务里才送达，同步配对必然错过；
                         // 对非 quiet/非 dryRun/非自动触发的生成开放宽松认领（spv8.9.2 状态法），桥内部只在
@@ -131544,6 +131607,8 @@ function mainInitialize_ACU() {
                             capturedAiFloorCount: chatAtCapture.filter((m) => m && !m.is_user && m?.extra?.type !== 'narrator').length,
                             // generationSeq 仅在 generationGate 已产生过生成上下文时可靠；否则不假造。
                             generationSeq: generationGate_ACU.generationSeq > 0 ? generationGate_ACU.generationSeq : undefined,
+                            // [配对零产出证据] 仅配对携带 STARTED 时刻的扩展签名；无配对时为 undefined，下游直接放行。
+                            preSignature: generationContext?.preSignature ?? undefined,
                         }
                         : undefined;
                     // [152 收紧] 「新 AI 楼证据」签名：本事件时刻的 AI 楼数 + 最新 AI 楼 message_id（含 narrator，
@@ -137324,7 +137389,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260905-16";
+        const stamp = "20260905-17";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -181243,7 +181308,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260905-16";
+        const stamp = "20260905-17";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -181252,7 +181317,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.2.4";
+        const v = "9.2.5";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {

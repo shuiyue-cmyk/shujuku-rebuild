@@ -31,6 +31,7 @@ import {
   isQuietLikeGeneration_ACU,
   isRecentUserSendIntent_ACU,
   recordGenerationContext_ACU,
+  type AiFloorSignatureEx_ACU,
   recordLastUserSend_ACU,
   shouldProcessAutoTableUpdateForGenerationEnded_ACU,
   shouldProcessPlotForGeneration_ACU,
@@ -84,7 +85,7 @@ import {
   emitMessageUpdated_ACU,
   getChatArray_ACU
 } from '../../data/gateways/chat-gateway';
-import { resolveAiFloorSignature_ACU } from '../../service/table/auto-fill-echo-guard';
+import { resolveAiFloorSignature_ACU, resolveAiFloorSignatureEx_ACU } from '../../service/table/auto-fill-echo-guard';
 import {
   refreshMergedDataAndNotifyWithUI_ACU
 } from '../components/pipeline-ui-helpers';
@@ -674,7 +675,16 @@ export   function mainInitialize_ACU() {
             try {
               // 终止只作用于当次填表。新一轮宿主生成必须清掉残留，否则评估闸永久 user_aborted。
               _set_wasStoppedByUser_ACU(false);
-              const context = recordGenerationContext_ACU(type, params, dryRun);
+              // [配对零产出证据] STARTED 时刻冻结 AI 楼扩展签名（与 ENDED 的 chatAtCapture 同源：SillyTavern_API_ACU?.chat），
+              // 随上下文带到 ENDED 配对路径判定；读取失败传 undefined（下游按无证据放行）。
+              // quiet/dryRun/续写桥逻辑一字不动。
+              let preSignature: AiFloorSignatureEx_ACU | undefined;
+              try {
+                preSignature = resolveAiFloorSignatureEx_ACU(SillyTavern_API_ACU?.chat);
+              } catch {
+                preSignature = undefined;
+              }
+              const context = recordGenerationContext_ACU(type, params, dryRun, preSignature);
               bindContinuationInternalAiGenerationStarted_ACU(context.seq);
               // 宿主的 GENERATION_STARTED 通常在发送点击返回后的微任务里才送达，同步配对必然错过；
               // 对非 quiet/非 dryRun/非自动触发的生成开放宽松认领（spv8.9.2 状态法），桥内部只在
@@ -743,6 +753,8 @@ export   function mainInitialize_ACU() {
                       capturedAiFloorCount: chatAtCapture.filter((m: any) => m && !m.is_user && m?.extra?.type !== 'narrator').length,
                       // generationSeq 仅在 generationGate 已产生过生成上下文时可靠；否则不假造。
                       generationSeq: generationGate_ACU.generationSeq > 0 ? generationGate_ACU.generationSeq : undefined,
+                      // [配对零产出证据] 仅配对携带 STARTED 时刻的扩展签名；无配对时为 undefined，下游直接放行。
+                      preSignature: generationContext?.preSignature ?? undefined,
                   }
                   : undefined;
                 // [152 收紧] 「新 AI 楼证据」签名：本事件时刻的 AI 楼数 + 最新 AI 楼 message_id（含 narrator，

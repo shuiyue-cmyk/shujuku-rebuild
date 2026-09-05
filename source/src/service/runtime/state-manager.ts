@@ -69,6 +69,8 @@ export interface GenerationContext_ACU {
   params: any;
   dryRun: any;
   at: number;
+  /** [配对零产出证据] GENERATION_STARTED 时刻冻结的 AI 楼扩展签名；仅配对携带，缺席即无证据 */
+  preSignature?: AiFloorSignatureEx_ACU | null;
 }
 
 /**
@@ -80,6 +82,15 @@ export interface GenerationContext_ACU {
 export interface AiFloorSignature_ACU {
   aiFloorCount: number;
   latestAiMessageId: number | null;
+}
+
+/**
+ * [配对零产出证据] AI 楼扩展签名：AiFloorSignature_ACU（楼数 + 最新 AI 楼 id，与
+ * auto-fill-echo-guard 同口径）+ 最新 AI 楼 mes 的同步内容哈希（mes 缺失/非字符串时为 null）。
+ * 由 GENERATION_STARTED 监听器冻结并随 GenerationContext.preSignature 带到 ENDED 配对路径。
+ */
+export interface AiFloorSignatureEx_ACU extends AiFloorSignature_ACU {
+  latestContentHash: string | null;
 }
 
 export const generationGate_ACU = {
@@ -122,7 +133,7 @@ function removeExpiredGenerationContexts_ACU(now = Date.now()): void {
   generationGate_ACU.activeGenerations = generationGate_ACU.activeGenerations.filter(context => context.at >= earliestValidAt);
 }
 
-export function recordGenerationContext_ACU(type: any, params: any, dryRun: any): GenerationContext_ACU {
+export function recordGenerationContext_ACU(type: any, params: any, dryRun: any, preSignature?: AiFloorSignatureEx_ACU | null): GenerationContext_ACU {
   const context: GenerationContext_ACU = {
     seq: ++generationGate_ACU.generationSeq,
     type,
@@ -130,6 +141,8 @@ export function recordGenerationContext_ACU(type: any, params: any, dryRun: any)
     dryRun,
     at: Date.now(),
   };
+  // [配对零产出证据] 仅当调用方显式传入第 4 参才落盘；旧三参调用形状逐字不变（无该键）。
+  if (preSignature !== undefined) context.preSignature = preSignature;
   removeExpiredGenerationContexts_ACU(context.at);
   generationGate_ACU.activeGenerations.push(context);
   generationGate_ACU.lastGeneration = context;

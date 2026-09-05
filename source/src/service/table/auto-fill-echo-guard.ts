@@ -22,7 +22,8 @@ import {
     recordAutoTableFillProcessed_ACU,
 } from '../../data/storage/optimization-cache-storage';
 import { logDebug_ACU } from '../../shared/utils';
-import type { AiFloorSignature_ACU } from '../runtime/state-manager';
+import { sha256HexSync_ACU } from '../../shared/sha256-sync';
+import type { AiFloorSignature_ACU, AiFloorSignatureEx_ACU } from '../runtime/state-manager';
 
 export interface AutoFillFloor_ACU {
     messageIndex: number;
@@ -70,6 +71,36 @@ export function resolveAiFloorSignature_ACU(chat: any): AiFloorSignature_ACU {
     }
     const latestMessageId = resolveLatestAiFloor_ACU(list)?.messageId;
     return { aiFloorCount, latestAiMessageId: latestMessageId ?? null };
+}
+
+/**
+ * GENERATION_STARTED 时刻冻结的「AI 楼扩展签名」：楼数 + 最新 AI 楼 id（与
+ * resolveAiFloorSignature_ACU 严格同口径，复用 isAiFloor_ACU 谓词）+ 最新 AI 楼
+ * `mes` 经 sha256HexSync_ACU 的同步内容哈希。
+ *
+ * 用途：配对路径的「零产出证据」——查看器调真 Generate 后 stopGeneration 会先由
+ * hideStopButton 派发 ENDED（消费到查看器自己的上下文走配对放行），防抖到期时三元组
+ * 完全相同 ⇒ 本轮零产出 ⇒ 跳过自动链。swipe/同楼换内容（hash 变）、
+ * regenerate（id 变）、真生成（新楼）都会打破三元组相等而正常放行。
+ *
+ * mes 缺失 / 非字符串时 hash 为 null（含双 null 相等即「都无内容可比」仍判零产出）。
+ * 纯函数：聊天数组由调用方读一次传入。
+ */
+export function resolveAiFloorSignatureEx_ACU(chat: any): AiFloorSignatureEx_ACU {
+    const base = resolveAiFloorSignature_ACU(chat);
+    const list = Array.isArray(chat) ? chat : [];
+    let latestMes: unknown;
+    for (let index = list.length - 1; index >= 0; index -= 1) {
+        const message = list[index];
+        if (!isAiFloor_ACU(message)) continue;
+        latestMes = message?.mes;
+        break;
+    }
+    return {
+        aiFloorCount: base.aiFloorCount,
+        latestAiMessageId: base.latestAiMessageId,
+        latestContentHash: typeof latestMes === 'string' ? sha256HexSync_ACU(latestMes) : null,
+    };
 }
 
 /**

@@ -627,3 +627,49 @@ describe('mainInitialize_ACU 幂等卫兵', () => {
     expect(toast.showToastr_ACU).toHaveBeenCalledTimes(1);
   });
 });
+
+// [配对零产出证据] STARTED 冻结 ex 签名 → context → ENDED intent 的传递链。
+// 只收紧「配对但零产出」子集：quiet/dryRun/续写桥逻辑不动，W5 重跑无 intent 不受影响。
+describe('mainInitialize_ACU 配对零产出证据传递', () => {
+  it('GENERATION_STARTED 把 ex 签名当第 4 参记入生成上下文', () => {
+    m.api.chat = [
+      { is_user: false, message_id: 5, mes: 'hello' },
+      { is_user: true, message_id: 6, mes: 'hi' },
+    ];
+    m.generationStartedHandler!('normal', {}, false);
+    expect(m.recordGenerationContext).toHaveBeenCalledWith(
+      'normal', {}, false,
+      { aiFloorCount: 1, latestAiMessageId: 5, latestContentHash: expect.any(String) },
+    );
+  });
+
+  it('GENERATION_ENDED 把配对上下文的 preSignature 带进 intent', async () => {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    vi.mocked(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).mockReturnValue(true);
+    const preSignature = { aiFloorCount: 1, latestAiMessageId: 5, latestContentHash: 'deadbeef' };
+    m.consumeGenerationContext.mockReturnValue({ seq: 9, type: 'normal', params: {}, dryRun: false, at: 1, preSignature });
+    m.api.chat = [{ is_user: false, message_id: 5, mes: 'hello' }];
+
+    m.generationEndedHandler!(6);
+
+    expect(m.handleNewMessage).toHaveBeenCalledWith(
+      'GENERATION_ENDED',
+      expect.objectContaining({ eventMessageId: 6, preSignature }),
+    );
+  });
+
+  it('无配对时 intent 的 preSignature 为 undefined（下游直接放行）', async () => {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    vi.mocked(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).mockReturnValue(true);
+    m.consumeGenerationContext.mockReturnValue(null);
+    m.api.chat = [{ is_user: false, message_id: 5, mes: 'hello' }];
+
+    m.generationEndedHandler!(6);
+
+    expect(m.handleNewMessage).toHaveBeenCalledWith(
+      'GENERATION_ENDED',
+      expect.objectContaining({ eventMessageId: 6, preSignature: undefined }),
+    );
+  });
+});
+

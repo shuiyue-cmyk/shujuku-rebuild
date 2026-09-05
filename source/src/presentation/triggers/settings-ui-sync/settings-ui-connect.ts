@@ -95,6 +95,9 @@ import {
   type AutoFillIntent_ACU
 } from '../../../service/runtime/message-handler';
 import {
+  resolveAiFloorSignatureEx_ACU
+} from '../../../service/table/auto-fill-echo-guard';
+import {
   logAutoFillSkip_ACU
 } from '../../../shared/trigger-diagnostics';
 import {
@@ -432,6 +435,29 @@ import {
           return;
         }
         resolvedMessageIndex = resolution.messageIndex;
+      }
+
+      // [配对零产出收紧] 查看器 stopGeneration 先 hideStopButton 发 ENDED 后才发 STOPPED：
+      // ENDED 消费到查看器自己的 STARTED 上下文走「配对路径」放行，v9.2.4 的新楼证据检查只在无配对分支。
+      // STARTED 时刻冻结的 AI 楼三元组随 intent.preSignature 携带；防抖到期时三元组完全相同
+      // （含双 null）⇒ 本轮零产出 ⇒ 跳过自动链。无 intent / 无 preSignature（旧上下文、W5 重跑）直接放行。
+      // liveChat 取彩物化等待之后的最新值。
+      if (intent?.preSignature) {
+        const currentExSignature_ACU = resolveAiFloorSignatureEx_ACU(liveChat);
+        const startedExSignature_ACU = intent.preSignature;
+        if (
+          currentExSignature_ACU.aiFloorCount === startedExSignature_ACU.aiFloorCount
+          && currentExSignature_ACU.latestAiMessageId === startedExSignature_ACU.latestAiMessageId
+          && currentExSignature_ACU.latestContentHash === startedExSignature_ACU.latestContentHash
+        ) {
+          logDebug_ACU('[新消息] 配对生成零产出（AI 楼无变化），跳过自动链');
+          logAutoFillSkip_ACU('paired_ended_no_new_output', {
+            eventType,
+            eventMessageId: intent.eventMessageId,
+            aiFloorCount: currentExSignature_ACU.aiFloorCount,
+          });
+          return;
+        }
       }
 
       // [重构] 调用 service 层的 evaluateNewMessageAction_ACU 进行决策
