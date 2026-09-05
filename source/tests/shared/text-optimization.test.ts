@@ -9,6 +9,45 @@ vi.mock('../../src/shared/utils', () => ({
   logDebug_ACU: vi.fn(),
   logError_ACU: vi.fn(),
   logWarn_ACU: vi.fn(),
+  // 与 shared/utils 真实实现同语义：数组规则（对象/竖线字符串）+ 旧标签字符串回退
+  normalizeExcludeRules_ACU: (rulesInput: any, legacyTags = '') => {
+    const normalized: Array<{ start: string; end: string }> = [];
+    const seen = new Set<string>();
+    const pushRule = (startRaw: any, endRaw: any) => {
+      const start = String(startRaw || '').trim();
+      const end = String(endRaw || '').trim();
+      if (!start || !end) return;
+      const key = start + '\u0000' + end;
+      if (seen.has(key)) return;
+      seen.add(key);
+      normalized.push({ start, end });
+    };
+    if (Array.isArray(rulesInput)) {
+      rulesInput.forEach((rule: any) => {
+        if (!rule) return;
+        if (typeof rule === 'string') {
+          const parts = rule.split('|');
+          if (parts.length >= 2) {
+            const start = parts.shift();
+            pushRule(start, parts.join('|'));
+          }
+          return;
+        }
+        pushRule(rule.start ?? rule.begin ?? rule.open, rule.end ?? rule.close ?? rule.finish);
+      });
+    }
+    if (normalized.length === 0 && legacyTags) {
+      String(legacyTags)
+        .split(/[,\uFF0C\s]+/g)
+        .map((t: string) => t.trim())
+        .filter(Boolean)
+        .forEach((t: string) => {
+          const tag = t.replace(/[<>]/g, '');
+          pushRule('<' + tag, '</' + tag + '>');
+        });
+    }
+    return normalized;
+  },
 }));
 
 import {
@@ -19,6 +58,8 @@ import {
   trimPunctuation_ACU,
   processSingleQuotes_ACU,
   applyOptimizations_ACU,
+  filterOptimizationsByExcludeRules_ACU,
+  collectOptimizationExcludeRanges_ACU,
 } from '../../src/shared/text-optimization';
 
 // ═══════════════════════════════════════════════════════════════
@@ -254,5 +295,171 @@ describe('applyOptimizations_ACU', () => {
       { type: 'replace', original: '', optimized: '替换' },
     ]);
     expect(result).toBe('你好');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// 标签排除规则 · 写回保护（用户拍板 B 语义：命中排除段的建议不写回、不占替换数）
+// ═══════════════════════════════════════════════════════════════
+describe('排除规则写回保护（filterOptimizationsByExcludeRules_ACU + applyOptimizations_ACU）', () => {
+  const COMMENT_RULE = { start: '<!--', end: '-->' };
+  const BODY_A = '夜色漫过屋檐，她收起最后一封信。';
+  const NOTE = '<!-- 作者注：这里的伏笔保持原样，不要改动 -->';
+  const BODY_B = '雨还在下，她没有回头。';
+  const CONTENT = `${BODY_A}${NOTE}${BODY_B}`;
+
+  const makeOpt = (original: string, optimized: string) => ({
+    type: 'replace',
+    original,
+    optimized,
+    plan: '测试方案',
+  });
+
+  it('①建议原文完全落在注释段内 → 整条丢弃，不计入替换数，注释保持原样', () => {
+    const opt = makeOpt('这里的伏笔保持原样', '这里的伏笔被改写');
+    const outcome = filterOptimizationsByExcludeRules_ACU(CONTENT, [opt], {
+      excludeRules: [COMMENT_RULE],
+    });
+
+    expect(outcome.dropped).toHaveLength(1);
+    expect(outcome.dropped[0].index).toBe(1);
+    expect(outcome.dropped[0].reason).toContain('命中排除段');
+    expect(outcome.kept).toHaveLength(0);
+    // 「共 N 处改进」按 kept 统计 → 被丢弃的建议不占数
+    expect(outcome.kept.length).toBe(0);
+
+    const result = applyOptimizations_ACU(CONTENT, [opt], { excludeRules: [COMMENT_RULE] });
+    expect(result).toBe(CONTENT);
+    expect(result).toContain(NOTE);
+    expect(result).not.toContain('这里的伏笔被改写');
+  });
+
+  it('②建议原文命中正文段 → 正常应用', () => {
+    const opt = makeOpt('她收起最后一封信', '她把信折进口袋');
+    const outcome = filterOptimizationsByExcludeRules_ACU(CONTENT, [opt], {
+      excludeRules: [COMMENT_RULE],
+    });
+
+    expect(outcome.kept).toHaveLength(1);
+    expect(outcome.dropped).toHaveLength(0);
+
+    const result = applyOptimizations_ACU(CONTENT, [opt], { excludeRules: [COMMENT_RULE] });
+    expect(result).toContain('她把信折进口袋');
+    expect(result).toContain(NOTE);
+    expect(result).toContain(BODY_B);
+  });
+
+  it('③部分重叠（原文跨注释边界）→ 整条丢弃', () => {
+    const cross = '封信。<!-- 作者注';
+    expect(CONTENT.indexOf(cross)).toBeGreaterThan(-1);
+
+    const opt = makeOpt(cross, '跨界改写');
+    const outcome = filterOptimizationsByExcludeRules_ACU(CONTENT, [opt], {
+      excludeRules: [COMMENT_RULE],
+    });
+
+    expect(outcome.dropped).toHaveLength(1);
+    expect(outcome.kept).toHaveLength(0);
+    expect(applyOptimizations_ACU(CONTENT, [opt], { excludeRules: [COMMENT_RULE] })).toBe(CONTENT);
+  });
+
+  it('④excludeRules 为空 / 未配置 → 与既有行为逐字一致（回归锁）', () => {
+    const opts = [
+      makeOpt('这里的伏笔保持原样', '改写一'),
+      makeOpt('她收起最后一封信', '改写二'),
+    ];
+    const baseline = applyOptimizations_ACU(CONTENT, opts);
+
+    expect(applyOptimizations_ACU(CONTENT, opts, undefined)).toBe(baseline);
+    expect(applyOptimizations_ACU(CONTENT, opts, null)).toBe(baseline);
+    expect(applyOptimizations_ACU(CONTENT, opts, {})).toBe(baseline);
+    expect(applyOptimizations_ACU(CONTENT, opts, { excludeRules: [] })).toBe(baseline);
+    expect(applyOptimizations_ACU(CONTENT, opts, { excludeRules: [], excludeTags: '' })).toBe(baseline);
+
+    // 未配置规则时维持旧行为：注释段内的建议照样写回（这正是启用规则后要保护的场景）
+    expect(baseline).toContain('改写一');
+    expect(baseline).not.toContain('这里的伏笔保持原样');
+
+    const outcome = filterOptimizationsByExcludeRules_ACU(CONTENT, opts);
+    expect(outcome.kept).toEqual(opts);
+    expect(outcome.dropped).toEqual([]);
+    expect(outcome.ranges).toEqual([]);
+  });
+
+  it('⑤未闭合注释尾巴 → 与排除段匹配器一致：不构成排除区间，建议照常应用', () => {
+    const dangling = `${BODY_A}<!-- 尾巴没有闭合边界，改写这里`;
+    const opt = makeOpt('改写这里', '已改写');
+
+    expect(
+      collectOptimizationExcludeRanges_ACU(dangling, { excludeRules: [COMMENT_RULE] })
+    ).toEqual([]);
+
+    const outcome = filterOptimizationsByExcludeRules_ACU(dangling, [opt], {
+      excludeRules: [COMMENT_RULE],
+    });
+    expect(outcome.kept).toHaveLength(1);
+    expect(outcome.dropped).toHaveLength(0);
+    expect(applyOptimizations_ACU(dangling, [opt], { excludeRules: [COMMENT_RULE] })).toContain('已改写');
+  });
+
+  it('孤立结束边界（只有 --> 没有 <!--）同样不构成排除区间', () => {
+    const orphanEnd = `${BODY_A}--> 孤立结束边界，改写这里`;
+    const outcome = filterOptimizationsByExcludeRules_ACU(
+      orphanEnd,
+      [makeOpt('改写这里', '已改写')],
+      { excludeRules: [COMMENT_RULE] },
+    );
+    expect(outcome.ranges).toEqual([]);
+    expect(outcome.kept).toHaveLength(1);
+    expect(outcome.dropped).toHaveLength(0);
+  });
+
+  it('多段排除区间 + 混合建议：只丢命中排除段的条目，替换数等于保留条目数', () => {
+    const multi = `正文一。<!-- 注一别改 -->正文二。<!-- 注二别改 -->正文三。`;
+    const opts = [
+      makeOpt('正文一', '改写正文一'),
+      makeOpt('注一别改', '不该出现'),
+      makeOpt('正文二', '改写正文二'),
+      makeOpt('注二别改', '也不该出现'),
+    ];
+    const outcome = filterOptimizationsByExcludeRules_ACU(multi, opts, {
+      excludeRules: [COMMENT_RULE],
+    });
+
+    expect(outcome.kept).toHaveLength(2);
+    expect(outcome.dropped).toHaveLength(2);
+    expect(outcome.kept.map((item: any) => item.original)).toEqual(['正文一', '正文二']);
+
+    const result = applyOptimizations_ACU(multi, opts, { excludeRules: [COMMENT_RULE] });
+    expect(result).toContain('改写正文一');
+    expect(result).toContain('改写正文二');
+    expect(result).toContain('注一别改');
+    expect(result).toContain('注二别改');
+  });
+
+  it('旧标签字符串（excludeTags）回退同样受写回保护', () => {
+    const tagged = '正文前<plot>规划内容保持原样</plot>正文后';
+    const opt = makeOpt('规划内容保持原样', '不该被改写');
+    const outcome = filterOptimizationsByExcludeRules_ACU(tagged, [opt], {
+      excludeRules: [],
+      excludeTags: 'plot',
+    });
+
+    expect(outcome.dropped).toHaveLength(1);
+    expect(outcome.kept).toHaveLength(0);
+    expect(applyOptimizations_ACU(tagged, [opt], { excludeTags: 'plot' })).toBe(tagged);
+  });
+
+  it('非 replace 项与定位不到的建议原样放行（不新增失败统计口径）', () => {
+    const notReplace = { type: 'delete', original: '这里的伏笔保持原样', optimized: '' };
+    const unlocatable = makeOpt('这段文本根本不在原文里出现啊', '改写');
+    const outcome = filterOptimizationsByExcludeRules_ACU(
+      CONTENT,
+      [notReplace, unlocatable],
+      { excludeRules: [COMMENT_RULE] },
+    );
+
+    expect(outcome.kept).toHaveLength(2);
+    expect(outcome.dropped).toHaveLength(0);
   });
 });

@@ -2992,6 +2992,130 @@ function renderStopButton_ACU(id, label) {
 }
 
 /**
+ * shared/boundary-ranges.ts — 字面量边界段「区间计算」纯函数（零依赖、零副作用）
+ *
+ * 从 service/runtime/helpers-context-tags.ts 的排除段匹配器逐字抽出，供两条链共用同一套语义：
+ *   1) 上下文标签排除：helpers-context-tags 拿到区间后删除命中段（发送/规划上下文裁剪）；
+ *   2) 正文优化写回保护：shared/text-optimization 判断优化建议的 original 是否落在排除区间内。
+ *
+ * 语义与原实现保持逐字一致：
+ *   - indexOf 字面量匹配（不做正则、不做词边界）；
+ *   - 小写容错（`<SYSTEM>` 命中规则 `<system`）；
+ *   - 栈式逐对非贪婪配对：遇到结束边界时与最近一个未配对的开始边界配成一对；
+ *   - 未配对的孤立开始/结束边界不参与（孤立尾巴既不会被删除，也不构成排除区间）。
+ */
+/**
+ * 合并区间：先按 start 升序（start 相同按 end 升序），再合并所有相交或首尾相接的区间。
+ */
+function mergeBoundaryRanges_ACU(ranges) {
+    const sorted = [...(ranges || [])].sort((left, right) => left.start - right.start || left.end - right.end);
+    const merged = [];
+    sorted.forEach((range) => {
+        const previousRange = merged[merged.length - 1];
+        if (!previousRange || range.start > previousRange.end) {
+            merged.push({ ...range });
+            return;
+        }
+        previousRange.end = Math.max(previousRange.end, range.end);
+    });
+    return merged;
+}
+/**
+ * 收集一段文本中所有「开始边界…结束边界」配对命中的区间（含两侧边界本身）。
+ * 返回值已排序且合并；无命中时返回空数组。
+ */
+function collectMatchedBoundaryRanges_ACU(text, startBoundary, endBoundary) {
+    const source = String(text ?? "");
+    const start = String(startBoundary || "");
+    const end = String(endBoundary || "");
+    if (!source || !start || !end)
+        return [];
+    const lowerSource = source.toLowerCase();
+    const lowerStart = start.toLowerCase();
+    const lowerEnd = end.toLowerCase();
+    const openStartIndexes = [];
+    const matchedRanges = [];
+    let searchIndex = 0;
+    while (searchIndex < lowerSource.length) {
+        const nextStartIdx = lowerSource.indexOf(lowerStart, searchIndex);
+        const nextEndIdx = lowerSource.indexOf(lowerEnd, searchIndex);
+        if (nextStartIdx === -1 && nextEndIdx === -1)
+            break;
+        const isStartBoundary = nextStartIdx !== -1
+            && (nextEndIdx === -1 || nextStartIdx <= nextEndIdx);
+        if (isStartBoundary) {
+            openStartIndexes.push(nextStartIdx);
+            searchIndex = nextStartIdx + lowerStart.length;
+            continue;
+        }
+        if (openStartIndexes.length > 0) {
+            const matchedStartIdx = openStartIndexes.pop();
+            const matchedEndIdx = nextEndIdx + lowerEnd.length;
+            if (matchedEndIdx > matchedStartIdx) {
+                matchedRanges.push({ start: matchedStartIdx, end: matchedEndIdx });
+            }
+        }
+        searchIndex = nextEndIdx + lowerEnd.length;
+    }
+    if (matchedRanges.length === 0)
+        return [];
+    return mergeBoundaryRanges_ACU(matchedRanges);
+}
+/**
+ * 按多条排除规则（已归一化为 { start, end }）计算原文中的全部排除区间。
+ * 规则之间取并集（统一合并），因此调用方只需做一次重叠判断。
+ */
+function collectExcludeRanges_ACU(text, rules = []) {
+    const source = String(text ?? "");
+    if (!source || !Array.isArray(rules) || rules.length === 0)
+        return [];
+    const collected = [];
+    rules.forEach((rule) => {
+        if (!rule)
+            return;
+        collected.push(...collectMatchedBoundaryRanges_ACU(source, rule.start, rule.end));
+    });
+    if (collected.length === 0)
+        return [];
+    return mergeBoundaryRanges_ACU(collected);
+}
+/** 两个区间是否有重叠（首尾相接不算重叠）。 */
+function boundaryRangesOverlap_ACU(left, right) {
+    return left.start < right.end && right.start < left.end;
+}
+/**
+ * 在已合并的区间集合中查找与 [start, end) 重叠的第一个区间；不重叠返回 null。
+ * 完全落在区间内、跨出边界的部分重叠，都算命中。
+ */
+function findOverlappingBoundaryRange_ACU(ranges, start, end) {
+    if (!Array.isArray(ranges) || ranges.length === 0)
+        return null;
+    if (!Number.isInteger(start) || !Number.isInteger(end) || end <= start)
+        return null;
+    for (let index = 0; index < ranges.length; index++) {
+        const range = ranges[index];
+        if (boundaryRangesOverlap_ACU(range, { start, end }))
+            return range;
+    }
+    return null;
+}
+/**
+ * 从文本中删除所有命中区间（区间按从后往前 splice，避免下标漂移）。
+ * helpers-context-tags 的排除实现与任何需要「按区间裁剪」的调用方共用。
+ */
+function removeBoundaryRangesFromText_ACU(text, ranges) {
+    const source = String(text ?? "");
+    if (!source || !Array.isArray(ranges) || ranges.length === 0)
+        return source;
+    let result = source;
+    for (let rangeIndex = ranges.length - 1; rangeIndex >= 0; rangeIndex--) {
+        const range = ranges[rangeIndex];
+        result = result.slice(0, range.start) + result.slice(range.end);
+    }
+    return result;
+}
+
+/**
  * 正文优化纯逻辑函数
  *
  * 纯文本处理工具。
@@ -3167,16 +3291,90 @@ function processSingleQuotes_ACU(text) {
     });
     return result;
 }
+/** 是否真的配置了排除规则（空数组/空标签视为未配置，用于回归锁早退）。 */
+function hasExcludeRuleInput_ACU(options) {
+    if (!options || typeof options !== 'object')
+        return false;
+    if (Array.isArray(options.excludeRules) && options.excludeRules.length > 0)
+        return true;
+    return typeof options.excludeTags === 'string' && options.excludeTags.trim() !== '';
+}
+/**
+ * 计算原文中的排除区间集合（复用上下文标签的边界匹配器语义）。
+ * 未配置规则或规则在本段文本里没有命中时返回空数组。
+ */
+function collectOptimizationExcludeRanges_ACU(originalContent, options) {
+    if (!hasExcludeRuleInput_ACU(options))
+        return [];
+    const source = String(originalContent ?? '');
+    if (!source)
+        return [];
+    const rules = normalizeExcludeRules_ACU(options.excludeRules ?? [], options.excludeTags ?? '');
+    if (!Array.isArray(rules) || rules.length === 0)
+        return [];
+    return collectExcludeRanges_ACU(source, rules);
+}
+/**
+ * 用排除规则过滤优化建议：original 在原文中的命中区间与任一排除区间重叠（含完全包含与跨边界
+ * 的部分重叠）即整条丢弃；定位不到命中区间的建议保持原样放行，交给既有应用逻辑统计匹配失败。
+ */
+function filterOptimizationsByExcludeRules_ACU(originalContent, optimizations, options) {
+    const sourceList = Array.isArray(optimizations) ? optimizations : [];
+    const ranges = collectOptimizationExcludeRanges_ACU(originalContent, options);
+    if (ranges.length === 0) {
+        return { kept: sourceList.slice(), dropped: [], ranges: [] };
+    }
+    const kept = [];
+    const dropped = [];
+    const source = String(originalContent ?? '');
+    for (let i = 0; i < sourceList.length; i++) {
+        const opt = sourceList[i];
+        const isReplaceItem = !!opt && typeof opt === 'object'
+            && opt.type === 'replace' && opt.original && opt.optimized;
+        if (!isReplaceItem) {
+            kept.push(opt);
+            continue;
+        }
+        const match = findParagraphMatch_ACU(String(opt.original), source);
+        if (match.start === -1) {
+            // 定位不到 → 不能断定它落在排除段内，放行（与未启用排除规则时行为一致）
+            kept.push(opt);
+            continue;
+        }
+        const hitRange = findOverlappingBoundaryRange_ACU(ranges, match.start, match.end);
+        if (!hitRange) {
+            kept.push(opt);
+            continue;
+        }
+        const preview = String(opt.original).substring(0, 50);
+        dropped.push({
+            index: i + 1,
+            original: String(opt.original).substring(0, 100)
+                + (String(opt.original).length > 100 ? '...' : ''),
+            reason: `命中排除段 ${hitRange.start}-${hitRange.end}`,
+            range: hitRange,
+        });
+        logDebug_ACU(`[正文优化] 优化项 ${i + 1} 的原文落在排除区间 ${hitRange.start}-${hitRange.end} 内（写回保护），已丢弃: "${preview}..."`);
+    }
+    return { kept, dropped, ranges };
+}
 /**
  * 应用优化到正文
+ * @param originalContent 原始正文
+ * @param optimizations AI 返回的优化建议列表
+ * @param options 可选排除规则（正文替换页「标签排除规则」）；命中排除段的建议整条不写回
  */
-function applyOptimizations_ACU(originalContent, optimizations) {
+function applyOptimizations_ACU(originalContent, optimizations, options) {
     let result = originalContent;
     let appliedCount = 0;
     let failedCount = 0;
     const failedItems = [];
-    for (let i = 0; i < optimizations.length; i++) {
-        const opt = optimizations[i];
+    let effectiveOptimizations = Array.isArray(optimizations) ? optimizations : [];
+    if (hasExcludeRuleInput_ACU(options)) {
+        effectiveOptimizations = filterOptimizationsByExcludeRules_ACU(originalContent, effectiveOptimizations, options).kept;
+    }
+    for (let i = 0; i < effectiveOptimizations.length; i++) {
+        const opt = effectiveOptimizations[i];
         if (opt.type === 'replace' && opt.original && opt.optimized) {
             let replaced = false;
             const match = findParagraphMatch_ACU(opt.original, result);
@@ -3204,7 +3402,7 @@ function applyOptimizations_ACU(originalContent, optimizations) {
             }
         }
     }
-    logDebug_ACU(`[正文优化] 替换统计: 成功 ${appliedCount}/${optimizations.length}，失败 ${failedCount}`);
+    logDebug_ACU(`[正文优化] 替换统计: 成功 ${appliedCount}/${effectiveOptimizations.length}，失败 ${failedCount}`);
     if (failedItems.length > 0) {
         console.warn('[正文优化] 以下优化项未能应用:', failedItems);
     }
@@ -73379,16 +73577,134 @@ async function callAIWithResolvedPreset_ACU(messages, resolved, signal, lifecycl
 }
 
 /**
- * data/storage/optimization-cache-storage.ts — 正文优化基础缓存存储适配器
+ * 同步 SHA-256（FIPS 180-4），供“必须在同步调用链里得到稠密指纹”的场景使用。
+ * Web Crypto 的 subtle.digest 只有异步接口，而向量索引的 scope 指纹在十余处同步代码里被当作
+ * 路径段 / 比对键使用，把整条调用链改成 async 的收益远低于内置一份 60 行的纯实现。
+ * 输入按 UTF-8 编码；输出与 crypto.subtle.digest('SHA-256') 逐字节一致。
+ */
+const SHA256_K_ACU = new Uint32Array([
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+]);
+function rotr_ACU(value, bits) {
+    return (value >>> bits) | (value << (32 - bits));
+}
+function sha256BytesSync_ACU(input) {
+    const bitLength = input.length * 8;
+    // 填充：1 字节 0x80 + 若干 0x00 + 8 字节大端比特长度，总长为 64 的整数倍。
+    const paddedLength = (((input.length + 9) + 63) >> 6) << 6;
+    const padded = new Uint8Array(paddedLength);
+    padded.set(input);
+    padded[input.length] = 0x80;
+    const view = new DataView(padded.buffer);
+    // JS 位运算只到 32 位，长度高位单独用除法写入。
+    view.setUint32(paddedLength - 8, Math.floor(bitLength / 0x100000000), false);
+    view.setUint32(paddedLength - 4, bitLength >>> 0, false);
+    const state = new Uint32Array([
+        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+        0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+    ]);
+    const w = new Uint32Array(64);
+    for (let offset = 0; offset < paddedLength; offset += 64) {
+        for (let index = 0; index < 16; index += 1) {
+            w[index] = view.getUint32(offset + index * 4, false);
+        }
+        for (let index = 16; index < 64; index += 1) {
+            const w15 = w[index - 15];
+            const w2 = w[index - 2];
+            const s0 = rotr_ACU(w15, 7) ^ rotr_ACU(w15, 18) ^ (w15 >>> 3);
+            const s1 = rotr_ACU(w2, 17) ^ rotr_ACU(w2, 19) ^ (w2 >>> 10);
+            w[index] = (w[index - 16] + s0 + w[index - 7] + s1) >>> 0;
+        }
+        let a = state[0];
+        let b = state[1];
+        let c = state[2];
+        let d = state[3];
+        let e = state[4];
+        let f = state[5];
+        let g = state[6];
+        let h = state[7];
+        for (let index = 0; index < 64; index += 1) {
+            const bigSigma1 = rotr_ACU(e, 6) ^ rotr_ACU(e, 11) ^ rotr_ACU(e, 25);
+            const choose = (e & f) ^ (~e & g);
+            const temp1 = (h + bigSigma1 + choose + SHA256_K_ACU[index] + w[index]) >>> 0;
+            const bigSigma0 = rotr_ACU(a, 2) ^ rotr_ACU(a, 13) ^ rotr_ACU(a, 22);
+            const majority = (a & b) ^ (a & c) ^ (b & c);
+            const temp2 = (bigSigma0 + majority) >>> 0;
+            h = g;
+            g = f;
+            f = e;
+            e = (d + temp1) >>> 0;
+            d = c;
+            c = b;
+            b = a;
+            a = (temp1 + temp2) >>> 0;
+        }
+        state[0] = (state[0] + a) >>> 0;
+        state[1] = (state[1] + b) >>> 0;
+        state[2] = (state[2] + c) >>> 0;
+        state[3] = (state[3] + d) >>> 0;
+        state[4] = (state[4] + e) >>> 0;
+        state[5] = (state[5] + f) >>> 0;
+        state[6] = (state[6] + g) >>> 0;
+        state[7] = (state[7] + h) >>> 0;
+    }
+    const digest = new Uint8Array(32);
+    const digestView = new DataView(digest.buffer);
+    for (let index = 0; index < 8; index += 1) {
+        digestView.setUint32(index * 4, state[index], false);
+    }
+    return digest;
+}
+function sha256TextSync_ACU(text) {
+    return sha256BytesSync_ACU(new TextEncoder().encode(String(text ?? '')));
+}
+function sha256HexSync_ACU(text) {
+    return Array.from(sha256TextSync_ACU(text)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+/** base64url（无 padding），32 字节摘要恒为 43 字符，字母表 [A-Za-z0-9_-]。 */
+function sha256Base64UrlSync_ACU(text) {
+    const bytes = sha256TextSync_ACU(text);
+    let binary = '';
+    bytes.forEach((byte) => {
+        binary += String.fromCharCode(byte);
+    });
+    return btoa(binary)
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/g, '');
+}
+
+/**
+ * data/storage/optimization-cache-storage.ts — 正文优化浏览器侧缓存适配器
  *
- * 封装正文优化的浏览器侧缓存操作（window 对象 + localStorage 两层）。
- * 这是运行时缓存，不是持久化数据，丢失不影响功能正确性。
+ * 封装正文优化在浏览器侧的两份缓存（window 对象 + localStorage 两层）：
+ *   1. 最近一次优化的基础正文（baseContent）——供「重新优化」找回原文；
+ *   2. 自动正文替换「已处理集合」（messageId + 写回后内容指纹）——供自动链判重，
+ *      避免宿主多派发一条 GENERATION_ENDED 时同一楼再烧一次 API。容量按 updatedAt 裁剪。
+ *   3. 自动填表「已处理集合」（仅 messageId，不比对内容）——与 2 分键分集合，
+ *      避免同一条回声 ENDED 再拉一次自动填表；两条链完成时机与基准不同，不得互相污染。
+ * 这是运行时缓存，不是持久化数据，丢失不影响功能正确性（最坏退化成少一次跳过）。
  *
  * 写入顺序：window 对象 → localStorage
  * 读取优先级：window 对象 → localStorage（与原 service 层逻辑一致）
  */
 const WINDOW_CACHE_KEY = '__ACU_LAST_OPTIMIZATION_BASE__';
 const LOCAL_STORAGE_KEY = 'ACU_LAST_OPTIMIZATION_BASE';
+const PROCESSED_WINDOW_KEY = '__ACU_CONTENT_OPTIMIZATION_PROCESSED__';
+const PROCESSED_LOCAL_STORAGE_KEY = 'ACU_CONTENT_OPTIMIZATION_PROCESSED';
+const AUTO_TABLE_FILL_WINDOW_KEY = '__ACU_AUTO_TABLE_FILL_PROCESSED__';
+const AUTO_TABLE_FILL_LOCAL_STORAGE_KEY = 'ACU_AUTO_TABLE_FILL_PROCESSED';
+/** 自动正文替换「已处理集合」容量上限（按 updatedAt 裁剪，防无界增长）。 */
+const AUTO_OPTIMIZATION_PROCESSED_LIMIT_ACU = 20;
+/** 自动填表「已处理集合」容量上限（与正文替换链分集合，互不污染）。 */
+const AUTO_TABLE_FILL_PROCESSED_LIMIT_ACU = 20;
 /**
  * 将正文优化基础缓存写入浏览器侧存储（window + localStorage）
  * @param cache 要缓存的数据对象
@@ -73441,6 +73757,210 @@ function loadOptimizationBaseFromCache_ACU() {
         logDebug_ACU('[正文优化] 读取浏览器侧正文优化基础缓存失败（localStorage）:', error);
     }
     return null;
+}
+const PROCESSED_STORES = {
+    content_replacement: {
+        chain: 'content_replacement',
+        windowKey: PROCESSED_WINDOW_KEY,
+        localStorageKey: PROCESSED_LOCAL_STORAGE_KEY,
+        label: '正文自动替换',
+        requireContentHash: true,
+        limit: AUTO_OPTIMIZATION_PROCESSED_LIMIT_ACU,
+    },
+    auto_table_fill: {
+        chain: 'auto_table_fill',
+        windowKey: AUTO_TABLE_FILL_WINDOW_KEY,
+        localStorageKey: AUTO_TABLE_FILL_LOCAL_STORAGE_KEY,
+        label: '自动填表',
+        requireContentHash: false,
+        limit: AUTO_TABLE_FILL_PROCESSED_LIMIT_ACU,
+    },
+};
+function resolveProcessedStore_ACU(chain) {
+    return PROCESSED_STORES[chain] || PROCESSED_STORES.content_replacement;
+}
+/** 校验并归一化单条已处理记录；非法记录返回 null。chain 一律按所属集合覆写，避免跨链污染。 */
+function normalizeChainProcessedEntry_ACU(store, raw) {
+    if (!raw || typeof raw !== 'object')
+        return null;
+    if (raw.messageId === null || raw.messageId === undefined || raw.messageId === '')
+        return null;
+    const contentHash = typeof raw.contentHash === 'string' ? raw.contentHash : '';
+    if (store.requireContentHash && !contentHash)
+        return null;
+    return {
+        chain: store.chain,
+        messageIndex: Number.isInteger(raw.messageIndex) ? raw.messageIndex : -1,
+        messageId: String(raw.messageId),
+        contentHash,
+        chatKey: typeof raw.chatKey === 'string' ? raw.chatKey : '',
+        updatedAt: Number.isFinite(raw.updatedAt) ? Number(raw.updatedAt) : 0,
+    };
+}
+/**
+ * 裁剪已处理集合：同一 messageId 只保留最新一条，整体按 updatedAt 降序，最多保留 limit 条。
+ * 默认上限取所属链的容量（均为 20），保证 localStorage 占用有界。
+ */
+function trimChainProcessedEntries_ACU(chain, entries, limit) {
+    const store = resolveProcessedStore_ACU(chain);
+    const list = Array.isArray(entries) ? entries : [];
+    const byMessageId = new Map();
+    list.forEach((raw) => {
+        const entry = normalizeChainProcessedEntry_ACU(store, raw);
+        if (!entry)
+            return;
+        const existing = byMessageId.get(entry.messageId);
+        if (!existing || entry.updatedAt >= existing.updatedAt) {
+            byMessageId.set(entry.messageId, entry);
+        }
+    });
+    const configuredLimit = Number.isInteger(limit) && Number(limit) > 0 ? Number(limit) : store.limit;
+    return Array.from(byMessageId.values())
+        .sort((left, right) => right.updatedAt - left.updatedAt)
+        .slice(0, configuredLimit);
+}
+/** 把某条链的已处理集合写入浏览器侧存储（window + localStorage 双层）。 */
+function saveChainProcessedEntries_ACU(chain, entries) {
+    const store = resolveProcessedStore_ACU(chain);
+    const normalized = trimChainProcessedEntries_ACU(store.chain, entries);
+    const payload = { entries: normalized, updatedAt: Date.now() };
+    // 第一层：写入 window 对象（跨 iframe 可访问）
+    try {
+        const targetWindow = topLevelWindow_ACU || window;
+        targetWindow[store.windowKey] = payload;
+    }
+    catch (error) {
+        logDebug_ACU('[' + store.label + '] 写入浏览器侧自动链已处理集合失败（window）:', error);
+    }
+    // 第二层：写入 localStorage（持久化到浏览器）
+    try {
+        localStorage.setItem(store.localStorageKey, JSON.stringify(payload));
+    }
+    catch (error) {
+        logDebug_ACU('[' + store.label + '] 写入浏览器侧自动链已处理集合失败（localStorage）:', error);
+    }
+    return normalized;
+}
+/** 读取某条链的已处理集合；优先级 window 对象 → localStorage，两层都拿不到时返回空数组。 */
+function loadChainProcessedEntries_ACU(chain) {
+    const store = resolveProcessedStore_ACU(chain);
+    // 第一层：window 对象
+    try {
+        const targetWindow = topLevelWindow_ACU || window;
+        const windowCache = targetWindow[store.windowKey];
+        if (Array.isArray(windowCache?.entries) && windowCache.entries.length > 0) {
+            return trimChainProcessedEntries_ACU(store.chain, windowCache.entries);
+        }
+    }
+    catch (error) {
+        logDebug_ACU('[' + store.label + '] 读取浏览器侧自动链已处理集合失败（window）:', error);
+    }
+    // 第二层：localStorage
+    try {
+        const raw = localStorage.getItem(store.localStorageKey);
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed?.entries) && parsed.entries.length > 0) {
+                return trimChainProcessedEntries_ACU(store.chain, parsed.entries);
+            }
+        }
+    }
+    catch (error) {
+        logDebug_ACU('[' + store.label + '] 读取浏览器侧自动链已处理集合失败（localStorage）:', error);
+    }
+    return [];
+}
+/**
+ * 查找某楼在某条链上的已处理记录。
+ * chatKey 用于兜底跨聊天 message_id 重号：两侧都有值且不同 → 视为不命中（宁放行不误拦）。
+ */
+function findChainProcessedEntry_ACU(chain, messageId, chatKey = '') {
+    if (messageId === null || messageId === undefined || messageId === '')
+        return null;
+    const store = resolveProcessedStore_ACU(chain);
+    const target = String(messageId);
+    const currentChatKey = typeof chatKey === 'string' ? chatKey : '';
+    const entries = loadChainProcessedEntries_ACU(store.chain);
+    for (let i = 0; i < entries.length; i++) {
+        const entry = entries[i];
+        if (entry.messageId !== target)
+            continue;
+        if (currentChatKey && entry.chatKey && currentChatKey !== entry.chatKey)
+            continue;
+        return entry;
+    }
+    return null;
+}
+/**
+ * 登记一条「该楼在这条链上已成功完成过一次」（写入即裁剪，容量有界）。
+ * @returns 归一化后的条目；messageId 缺失（正文替换链还要求 contentHash）时返回 null 且不写入。
+ */
+function recordChainProcessed_ACU(chain, payload) {
+    const store = resolveProcessedStore_ACU(chain);
+    const entry = normalizeChainProcessedEntry_ACU(store, Object.assign({ updatedAt: Date.now() }, payload));
+    if (!entry)
+        return null;
+    const next = trimChainProcessedEntries_ACU(store.chain, [
+        entry,
+        ...loadChainProcessedEntries_ACU(store.chain),
+    ]);
+    saveChainProcessedEntries_ACU(store.chain, next);
+    return entry;
+}
+/** 清空某条链的已处理集合（调试/测试用；生产链不调用）。 */
+function clearChainProcessed_ACU(chain) {
+    const store = resolveProcessedStore_ACU(chain);
+    try {
+        const targetWindow = topLevelWindow_ACU || window;
+        delete targetWindow[store.windowKey];
+    }
+    catch (error) {
+        logDebug_ACU('[' + store.label + '] 清空浏览器侧自动链已处理集合失败（window）:', error);
+    }
+    try {
+        localStorage.removeItem(store.localStorageKey);
+    }
+    catch (error) {
+        logDebug_ACU('[' + store.label + '] 清空浏览器侧自动链已处理集合失败（localStorage）:', error);
+    }
+}
+// ─── 正文自动替换链（content_replacement）───
+function trimAutoOptimizationProcessedEntries_ACU(entries, limit = AUTO_OPTIMIZATION_PROCESSED_LIMIT_ACU) {
+    return trimChainProcessedEntries_ACU('content_replacement', entries, limit);
+}
+function saveAutoOptimizationProcessedEntries_ACU(entries) {
+    return saveChainProcessedEntries_ACU('content_replacement', entries);
+}
+function loadAutoOptimizationProcessedEntries_ACU() {
+    return loadChainProcessedEntries_ACU('content_replacement');
+}
+function findAutoOptimizationProcessedEntry_ACU(messageId, chatKey = '') {
+    return findChainProcessedEntry_ACU('content_replacement', messageId, chatKey);
+}
+function recordAutoOptimizationProcessed_ACU(payload) {
+    return recordChainProcessed_ACU('content_replacement', payload);
+}
+function clearAutoOptimizationProcessed_ACU() {
+    clearChainProcessed_ACU('content_replacement');
+}
+// ─── 自动填表链（auto_table_fill）───
+function trimAutoTableFillProcessedEntries_ACU(entries, limit = AUTO_TABLE_FILL_PROCESSED_LIMIT_ACU) {
+    return trimChainProcessedEntries_ACU('auto_table_fill', entries, limit);
+}
+function saveAutoTableFillProcessedEntries_ACU(entries) {
+    return saveChainProcessedEntries_ACU('auto_table_fill', entries);
+}
+function loadAutoTableFillProcessedEntries_ACU() {
+    return loadChainProcessedEntries_ACU('auto_table_fill');
+}
+function findAutoTableFillProcessedEntry_ACU(messageId, chatKey = '') {
+    return findChainProcessedEntry_ACU('auto_table_fill', messageId, chatKey);
+}
+function recordAutoTableFillProcessed_ACU(payload) {
+    return recordChainProcessed_ACU('auto_table_fill', payload);
+}
+function clearAutoTableFillProcessed_ACU() {
+    clearChainProcessed_ACU('auto_table_fill');
 }
 
 // --- [正文优化] 核心函数 ---
@@ -73650,11 +74170,20 @@ async function performContentOptimization_ACU(content, options = {}) {
                 throw new Error(parsed.error || '解析失败');
             }
             // 5. 应用优化到正文
-            const optimizedContent = applyOptimizations_ACU(content, parsed.optimizations);
-            logDebug_ACU(`[正文优化] 循环 ${currentLoop}/${totalLoops} 完成，共 ${parsed.optimizations.length} 个优化项`);
+            // [写回保护] 正文替换页「标签排除规则」：建议原文命中排除段的整条丢弃，既不写回也不计入替换数
+            const exclusion = filterOptimizationsByExcludeRules_ACU(content, parsed.optimizations, {
+                excludeRules: config.excludeRules,
+                excludeTags: config.excludeTags
+            });
+            if (exclusion.dropped.length > 0) {
+                logDebug_ACU(`[正文优化] 循环 ${currentLoop}/${totalLoops} 有 ${exclusion.dropped.length} 个优化项命中标签排除规则，已按写回保护丢弃（不写回、不计入替换数）`);
+            }
+            const optimizedContent = applyOptimizations_ACU(content, exclusion.kept);
+            logDebug_ACU(`[正文优化] 循环 ${currentLoop}/${totalLoops} 完成，共 ${exclusion.kept.length} 个优化项` +
+                (exclusion.dropped.length > 0 ? `（另有 ${exclusion.dropped.length} 个被排除规则丢弃）` : ''));
             return {
                 success: true,
-                optimizations: parsed.optimizations,
+                optimizations: exclusion.kept,
                 summary: parsed.summary,
                 optimizedContent: optimizedContent
             };
@@ -73977,6 +74506,57 @@ function getLastOptimizationBase_ACU() {
         return cachedBase;
     }
     return null;
+}
+// --- [自动正文替换] 已处理集合判重 ---
+// 背景：外部 MVU 插件的非静默 generate 收尾会让宿主多派发一条 GENERATION_ENDED，本库门控对
+// 无配对上下文的 ended 一律放行，于是同一楼会被自动替换链再跑一次（多烧一次 API）。
+// 这里按 messageId 记录「已成功写回」的内容指纹：同一楼内容未变 → 跳过；内容变了 → 正常执行并更新记录。
+// 只服务自动链；手动「重新优化」/测试入口不调用这两个函数，因此完全不受影响。
+/** 计算写回后消息内容的指纹（复用仓内同步 sha256，无新增依赖）。 */
+function computeAutoOptimizationContentHash_ACU(content) {
+    return sha256HexSync_ACU(typeof content === 'string' ? content : String(content ?? ''));
+}
+/**
+ * 自动链入口判重：该楼是否已经用「当前这份内容」成功自动替换过一次。
+ * @param messageId 楼层 message_id（缺失时不判重，保持既有行为）
+ * @param content 楼层当前正文
+ * @returns true = 内容未变，应跳过本次自动替换
+ */
+function shouldSkipDuplicateAutoContentOptimization_ACU(messageId, content) {
+    if (messageId === null || messageId === undefined)
+        return false;
+    if (typeof content !== 'string' || content.length === 0)
+        return false;
+    try {
+        const entry = findAutoOptimizationProcessedEntry_ACU(messageId, String(currentChatFileIdentifier_ACU ?? ''));
+        if (!entry?.contentHash)
+            return false;
+        return entry.contentHash === computeAutoOptimizationContentHash_ACU(content);
+    }
+    catch (error) {
+        // 失败姿态 fail-open：缓存/环境异常一律放行，宁可多跑一次也不静默漏掉正文替换。
+        logDebug_ACU('[正文优化] 读取自动替换已处理集合失败，按放行处理:', error);
+        return false;
+    }
+}
+/**
+ * 自动替换成功写回后登记：记录 {messageId, contentHash(写回后的消息内容), updatedAt}。
+ * @returns 登记的条目；messageId / 内容缺失时返回 null（不登记，宁放行不误拦）。
+ */
+function recordAutoContentOptimizationProcessed_ACU(payload = {}) {
+    const messageId = payload?.messageId;
+    if (messageId === null || messageId === undefined)
+        return null;
+    const content = typeof payload?.content === 'string' ? payload.content : '';
+    if (!content)
+        return null;
+    return recordAutoOptimizationProcessed_ACU({
+        messageIndex: Number.isInteger(payload?.messageIndex) ? payload.messageIndex : -1,
+        messageId,
+        contentHash: computeAutoOptimizationContentHash_ACU(content),
+        chatKey: String(currentChatFileIdentifier_ACU ?? ''),
+        updatedAt: Date.now()
+    });
 }
 /**
  * 取消正文优化
@@ -75641,57 +76221,14 @@ function getDefaultPlotContextExtractRules_ACU() {
 function getDefaultPlotContextExcludeRules_ACU() {
     return normalizeExcludeRules_ACU(DEFAULT_PLOT_SETTINGS_ACU.contextExcludeRules, DEFAULT_PLOT_SETTINGS_ACU.contextExcludeTags || "");
 }
+// 边界区间计算已抽到 shared/boundary-ranges.ts（正文优化写回保护需要同一套语义），
+// 这里只保留「按区间删除」的包装，行为与抽取前逐字一致。
 function removeAllMatchedBoundaries_ACU(text, startBoundary, endBoundary) {
     const source = String(text ?? "");
-    const start = String(startBoundary || "");
-    const end = String(endBoundary || "");
-    if (!source || !start || !end)
-        return source;
-    const lowerSource = source.toLowerCase();
-    const lowerStart = start.toLowerCase();
-    const lowerEnd = end.toLowerCase();
-    const openStartIndexes = [];
-    const matchedRanges = [];
-    let searchIndex = 0;
-    while (searchIndex < lowerSource.length) {
-        const nextStartIdx = lowerSource.indexOf(lowerStart, searchIndex);
-        const nextEndIdx = lowerSource.indexOf(lowerEnd, searchIndex);
-        if (nextStartIdx === -1 && nextEndIdx === -1)
-            break;
-        const isStartBoundary = nextStartIdx !== -1
-            && (nextEndIdx === -1 || nextStartIdx <= nextEndIdx);
-        if (isStartBoundary) {
-            openStartIndexes.push(nextStartIdx);
-            searchIndex = nextStartIdx + lowerStart.length;
-            continue;
-        }
-        if (openStartIndexes.length > 0) {
-            const matchedStartIdx = openStartIndexes.pop();
-            const matchedEndIdx = nextEndIdx + lowerEnd.length;
-            if (matchedEndIdx > matchedStartIdx) {
-                matchedRanges.push({ start: matchedStartIdx, end: matchedEndIdx });
-            }
-        }
-        searchIndex = nextEndIdx + lowerEnd.length;
-    }
+    const matchedRanges = collectMatchedBoundaryRanges_ACU(source, startBoundary, endBoundary);
     if (matchedRanges.length === 0)
         return source;
-    matchedRanges.sort((left, right) => left.start - right.start || left.end - right.end);
-    const mergedRanges = [];
-    matchedRanges.forEach((range) => {
-        const previousRange = mergedRanges[mergedRanges.length - 1];
-        if (!previousRange || range.start > previousRange.end) {
-            mergedRanges.push({ ...range });
-            return;
-        }
-        previousRange.end = Math.max(previousRange.end, range.end);
-    });
-    let result = source;
-    for (let rangeIndex = mergedRanges.length - 1; rangeIndex >= 0; rangeIndex--) {
-        const range = mergedRanges[rangeIndex];
-        result = result.slice(0, range.start) + result.slice(range.end);
-    }
-    return result;
+    return removeBoundaryRangesFromText_ACU(source, matchedRanges);
 }
 function applyExcludeRulesToText_ACU(text, { excludeRules = [], excludeTags = "" } = {}) {
     let result = String(text ?? "");
@@ -78257,7 +78794,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.1.9" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.1.10" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -84183,111 +84720,6 @@ function normalizeSummaryVectorIndexScope_ACU(parts) {
 function serializeSummaryVectorIndexScope_ACU(parts) {
     const scope = normalizeSummaryVectorIndexScope_ACU(parts);
     return JSON.stringify([scope.chatKey, scope.isolationKey, scope.sourceTableKey]);
-}
-
-/**
- * 同步 SHA-256（FIPS 180-4），供“必须在同步调用链里得到稠密指纹”的场景使用。
- * Web Crypto 的 subtle.digest 只有异步接口，而向量索引的 scope 指纹在十余处同步代码里被当作
- * 路径段 / 比对键使用，把整条调用链改成 async 的收益远低于内置一份 60 行的纯实现。
- * 输入按 UTF-8 编码；输出与 crypto.subtle.digest('SHA-256') 逐字节一致。
- */
-const SHA256_K_ACU = new Uint32Array([
-    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
-]);
-function rotr_ACU(value, bits) {
-    return (value >>> bits) | (value << (32 - bits));
-}
-function sha256BytesSync_ACU(input) {
-    const bitLength = input.length * 8;
-    // 填充：1 字节 0x80 + 若干 0x00 + 8 字节大端比特长度，总长为 64 的整数倍。
-    const paddedLength = (((input.length + 9) + 63) >> 6) << 6;
-    const padded = new Uint8Array(paddedLength);
-    padded.set(input);
-    padded[input.length] = 0x80;
-    const view = new DataView(padded.buffer);
-    // JS 位运算只到 32 位，长度高位单独用除法写入。
-    view.setUint32(paddedLength - 8, Math.floor(bitLength / 0x100000000), false);
-    view.setUint32(paddedLength - 4, bitLength >>> 0, false);
-    const state = new Uint32Array([
-        0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-        0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
-    ]);
-    const w = new Uint32Array(64);
-    for (let offset = 0; offset < paddedLength; offset += 64) {
-        for (let index = 0; index < 16; index += 1) {
-            w[index] = view.getUint32(offset + index * 4, false);
-        }
-        for (let index = 16; index < 64; index += 1) {
-            const w15 = w[index - 15];
-            const w2 = w[index - 2];
-            const s0 = rotr_ACU(w15, 7) ^ rotr_ACU(w15, 18) ^ (w15 >>> 3);
-            const s1 = rotr_ACU(w2, 17) ^ rotr_ACU(w2, 19) ^ (w2 >>> 10);
-            w[index] = (w[index - 16] + s0 + w[index - 7] + s1) >>> 0;
-        }
-        let a = state[0];
-        let b = state[1];
-        let c = state[2];
-        let d = state[3];
-        let e = state[4];
-        let f = state[5];
-        let g = state[6];
-        let h = state[7];
-        for (let index = 0; index < 64; index += 1) {
-            const bigSigma1 = rotr_ACU(e, 6) ^ rotr_ACU(e, 11) ^ rotr_ACU(e, 25);
-            const choose = (e & f) ^ (~e & g);
-            const temp1 = (h + bigSigma1 + choose + SHA256_K_ACU[index] + w[index]) >>> 0;
-            const bigSigma0 = rotr_ACU(a, 2) ^ rotr_ACU(a, 13) ^ rotr_ACU(a, 22);
-            const majority = (a & b) ^ (a & c) ^ (b & c);
-            const temp2 = (bigSigma0 + majority) >>> 0;
-            h = g;
-            g = f;
-            f = e;
-            e = (d + temp1) >>> 0;
-            d = c;
-            c = b;
-            b = a;
-            a = (temp1 + temp2) >>> 0;
-        }
-        state[0] = (state[0] + a) >>> 0;
-        state[1] = (state[1] + b) >>> 0;
-        state[2] = (state[2] + c) >>> 0;
-        state[3] = (state[3] + d) >>> 0;
-        state[4] = (state[4] + e) >>> 0;
-        state[5] = (state[5] + f) >>> 0;
-        state[6] = (state[6] + g) >>> 0;
-        state[7] = (state[7] + h) >>> 0;
-    }
-    const digest = new Uint8Array(32);
-    const digestView = new DataView(digest.buffer);
-    for (let index = 0; index < 8; index += 1) {
-        digestView.setUint32(index * 4, state[index], false);
-    }
-    return digest;
-}
-function sha256TextSync_ACU(text) {
-    return sha256BytesSync_ACU(new TextEncoder().encode(String(text ?? '')));
-}
-function sha256HexSync_ACU(text) {
-    return Array.from(sha256TextSync_ACU(text)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-/** base64url（无 padding），32 字节摘要恒为 43 字符，字母表 [A-Za-z0-9_-]。 */
-function sha256Base64UrlSync_ACU(text) {
-    const bytes = sha256TextSync_ACU(text);
-    let binary = '';
-    bytes.forEach((byte) => {
-        binary += String.fromCharCode(byte);
-    });
-    return btoa(binary)
-        .replace(/\+/g, '-')
-        .replace(/\//g, '_')
-        .replace(/=+$/g, '');
 }
 
 /**
@@ -101448,6 +101880,29 @@ function showReoptimizationDialog_ACU(messageIndex, result, originalContent) {
     });
 }
 /**
+ * 自动替换成功写回后登记「已处理」指纹，供下一次自动触发判重。
+ * 指纹取写回后聊天数组里该楼的实际正文，避免宿主二次渲染导致内容漂移而漏判。
+ * @param {number} messageIndex - 已写回的消息索引
+ * @param {string} fallbackContent - 读不到实时内容时兜底使用的写回内容
+ */
+function recordAutoProcessedAfterWriteBack_ACU(messageIndex, fallbackContent) {
+    try {
+        const liveMessage = getChatArray_ACU()?.[messageIndex];
+        const liveContent = typeof liveMessage?.mes === 'string' && liveMessage.mes ? liveMessage.mes : fallbackContent;
+        const recorded = recordAutoContentOptimizationProcessed_ACU({
+            messageIndex,
+            messageId: liveMessage?.message_id ?? null,
+            content: liveContent
+        });
+        if (recorded) {
+            logDebug_ACU(`[正文优化] 已登记第 ${messageIndex} 楼的自动替换指纹，用于后续重复触发判重`);
+        }
+    }
+    catch (error) {
+        logDebug_ACU('[正文优化] 登记自动替换已处理记录失败:', error);
+    }
+}
+/**
  * 执行正文优化流程（在GENERATION_ENDED后调用）
  * @param {number} messageIndex - AI消息索引
  * @returns {Promise<boolean>} 是否成功
@@ -101469,6 +101924,13 @@ async function executeContentOptimization_ACU(messageIndex) {
         return false;
     }
     let content = message.mes || '';
+    // [自动链判重] 宿主可能对本楼再派发一条无配对上下文的 GENERATION_ENDED（典型来源：外部 MVU
+    // 插件非静默 generate 收尾时 hideStopButton 的第二次 emit）。内容未变说明上一次自动替换已生效，
+    // 直接跳过：不调 AI、不写回，也不覆盖优化基准缓存。手动「重新优化」/测试入口不经过本函数，不受影响。
+    if (shouldSkipDuplicateAutoContentOptimization_ACU(message.message_id, content)) {
+        logDebug_ACU(`[正文优化] 第 ${messageIndex} 楼内容未变，跳过重复自动替换`);
+        return true;
+    }
     setLastOptimizationBase_ACU({
         messageIndex,
         messageId: message.message_id,
@@ -101566,7 +102028,10 @@ async function executeContentOptimization_ACU(messageIndex) {
                 }
                 return true;
             }
-            await replaceChatMessage_ACU(messageIndex, finalOptimizedContent);
+            const writtenBack = await replaceChatMessage_ACU(messageIndex, finalOptimizedContent);
+            if (writtenBack) {
+                recordAutoProcessedAfterWriteBack_ACU(messageIndex, finalOptimizedContent);
+            }
             if (config.seamlessMode) {
                 hideOptimizationOverlay_ACU();
             }
@@ -101682,7 +102147,10 @@ async function executeContentOptimizationWithConfirm_ACU(messageIndex, content, 
                 }
                 else {
                     // 所有轮次完成，应用最终结果并触发填表
-                    await replaceChatMessage_ACU(messageIndex, result.optimizedContent);
+                    const confirmWrittenBack = await replaceChatMessage_ACU(messageIndex, result.optimizedContent);
+                    if (confirmWrittenBack) {
+                        recordAutoProcessedAfterWriteBack_ACU(messageIndex, result.optimizedContent);
+                    }
                     showToastr_ACU('success', `正文优化完成，共 ${totalLoops} 轮优化，累计 ${newTotalOptimizations.length} 处改进`);
                     await triggerAutomaticUpdateIfNeeded_ACU();
                     resolve(true);
@@ -102173,6 +102641,76 @@ async function handleFloorIncreaseDelay_ACU(totalAiMessages, lastTotalAiMessages
         setLastTotalAiMessages(totalAiMessages);
     }
     return undefined; // 不需要更新
+}
+
+/**
+ * service/table/auto-fill-echo-guard.ts — 自动填表「此楼已自动填过」回声防重
+ *
+ * 背景：外部 MVU 插件的非静默 generate 收尾会让宿主对本楼多派发一条 GENERATION_ENDED，
+ * state-manager 的门控对「无配对上下文」的 ended 一律放行，于是自动填表链被再拉一次。
+ * 现有 in-flight 锁只防并发（锁未释放时合并成一次补跑），锁释放后的回声不受它约束。
+ *
+ * 与正文替换链的判重（content-optimization 的 shouldSkipDuplicateAutoContentOptimization_ACU）
+ * 刻意不同：**这里不比对楼层内容指纹**。自动填表成功后，同一楼仍可能被正文替换链改写内容，
+ * 拿内容当基准会被自家改动误判成「新内容」，反而再烧一次填表 AI；填表要防的是同一条楼层的
+ * 事件回声，所以判重键只取 messageId（外加 chatKey 兜底跨聊天重号）。
+ *
+ * 记录集合与正文替换链分键分集合（见 optimization-cache-storage 的 auto_table_fill 链），
+ * 两条链的完成时机与基准不同，绝不互相污染。
+ *
+ * 失败姿态：任何存储/环境异常一律 fail-open（放行填表），宁可多跑一次也不静默漏填。
+ */
+/**
+ * 取当前聊天里最新的 AI 楼层——自动填表触发身份就落在这一楼上。
+ * 拿不到（空聊天 / 无 AI 楼 / message_id 缺失）时返回 null，调用方据此放行。
+ */
+function resolveLatestAiFloor_ACU(chat) {
+    const list = Array.isArray(chat) ? chat : [];
+    for (let index = list.length - 1; index >= 0; index -= 1) {
+        const message = list[index];
+        if (!message || message.is_user)
+            continue;
+        return { messageIndex: index, messageId: message.message_id ?? null };
+    }
+    return null;
+}
+/**
+ * 该楼是否已经成功自动填过表（同一 messageId 的回声触发）。
+ * 填表链只看 messageId：内容被别的链改写不构成「需要重填」的信号。
+ */
+function shouldSkipDuplicateAutoTableFill_ACU(floor) {
+    const messageId = floor?.messageId;
+    if (messageId === null || messageId === undefined)
+        return false;
+    try {
+        const entry = findAutoTableFillProcessedEntry_ACU(messageId, String(currentChatFileIdentifier_ACU ?? ''));
+        return !!entry;
+    }
+    catch (error) {
+        logDebug_ACU('[自动填表] 读取自动填表已处理集合失败，按放行处理:', error);
+        return false;
+    }
+}
+/**
+ * 自动填表成功提交后登记该 messageId「已自动填表」。
+ * @returns 登记的条目；拿不到 messageId 时返回 null（不登记）。
+ */
+function recordAutoTableFillProcessedForFloor_ACU(floor) {
+    const messageId = floor?.messageId;
+    if (messageId === null || messageId === undefined)
+        return null;
+    try {
+        return recordAutoTableFillProcessed_ACU({
+            messageId,
+            messageIndex: Number.isInteger(floor?.messageIndex) ? floor.messageIndex : -1,
+            chatKey: String(currentChatFileIdentifier_ACU ?? ''),
+            updatedAt: Date.now(),
+        });
+    }
+    catch (error) {
+        logDebug_ACU('[自动填表] 登记自动填表已处理记录失败:', error);
+        return null;
+    }
 }
 
 /**
@@ -110898,6 +111436,19 @@ async function triggerAutomaticUpdateIfNeeded_ACU(performanceContext) {
         });
         return;
     }
+    // [回声防重] 外部 MVU 插件的非静默 generate 收尾会让宿主对本楼多派发一条 GENERATION_ENDED，
+    // 此时 in-flight 锁已释放，填表链会被再拉一次（多烧一轮填表 AI）。这里按 messageId 短路：
+    // 该楼已成功自动填过表 → 记日志直接返回，不构建计划、不调 AI。
+    // 只作用于自动入口；手动填表/历史补填走各自入口，不经过本函数。
+    const autoFillTargetFloor = resolveLatestAiFloor_ACU(getChatArray_ACU());
+    if (shouldSkipDuplicateAutoTableFill_ACU(autoFillTargetFloor)) {
+        logDebug_ACU(`[自动填表] 第 ${autoFillTargetFloor.messageIndex} 楼（messageId=${autoFillTargetFloor.messageId}）已完成自动填表，跳过重复自动触发`);
+        logAutoFillSkip_ACU('duplicate_auto_fill_ended', {
+            messageId: autoFillTargetFloor.messageId,
+            resolvedMessageIndex: autoFillTargetFloor.messageIndex,
+        });
+        return;
+    }
     autoUpdateTriggerInFlight_ACU = true;
     // 新一轮自动填表开跑前清掉上一轮「终止」残留，避免 isStopped() 立刻把新任务掐死。
     _set_wasStoppedByUser_ACU(false);
@@ -111027,6 +111578,14 @@ async function triggerAutomaticUpdateIfNeeded_ACU(performanceContext) {
         }
         finally {
             clearAutoUpdateToast_ACU(autoProgressToast);
+        }
+        // [回声防重] 只有「确实有活干且全部分组成功提交、且未被用户终止」才登记该楼已自动填表；
+        // 空计划（本轮无表到期）不登记，避免把「还没填过」误标成「已填完」。
+        if (result.totalGroups > 0 && result.failedGroups === 0 && !wasStoppedByUser_ACU) {
+            const recordedFloor = recordAutoTableFillProcessedForFloor_ACU(autoFillTargetFloor);
+            if (recordedFloor) {
+                logDebug_ACU(`[自动填表] 已登记第 ${recordedFloor.messageIndex} 楼的自动填表完成记录，用于回声触发判重`);
+            }
         }
         // UI：根据返回值显示结果
         if (result.failedGroups > 0) {
@@ -136097,7 +136656,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260905-08";
+        const stamp = "20260905-11";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -180006,7 +180565,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260905-08";
+        const stamp = "20260905-11";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -180015,7 +180574,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.1.9";
+        const v = "9.1.10";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {

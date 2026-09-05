@@ -86,6 +86,11 @@ import {
   handleFloorIncreaseDelay_ACU
 } from '../../../service/table/update-scheduler';
 import {
+  resolveLatestAiFloor_ACU,
+  shouldSkipDuplicateAutoTableFill_ACU,
+  recordAutoTableFillProcessedForFloor_ACU,
+} from '../../../service/table/auto-fill-echo-guard';
+import {
   executeAutoFillStagingGroups_ACU,
   processGroupedRuntimeChunk_ACU,
   type CardUpdateProgressEvent
@@ -182,6 +187,21 @@ let pendingAutoUpdatePerformanceContext_ACU: { runId?: string; parentSpanId?: st
       logDebug_ACU('ACU Auto-Trigger: trigger already in flight. Coalescing a follow-up run.');
       logAutoFillSkip_ACU('auto_update_coalesced', {
         inFlight: true,
+      });
+      return;
+    }
+    // [回声防重] 外部 MVU 插件的非静默 generate 收尾会让宿主对本楼多派发一条 GENERATION_ENDED，
+    // 此时 in-flight 锁已释放，填表链会被再拉一次（多烧一轮填表 AI）。这里按 messageId 短路：
+    // 该楼已成功自动填过表 → 记日志直接返回，不构建计划、不调 AI。
+    // 只作用于自动入口；手动填表/历史补填走各自入口，不经过本函数。
+    const autoFillTargetFloor = resolveLatestAiFloor_ACU(getChatArray_ACU());
+    if (shouldSkipDuplicateAutoTableFill_ACU(autoFillTargetFloor)) {
+      logDebug_ACU(
+        `[自动填表] 第 ${autoFillTargetFloor!.messageIndex} 楼（messageId=${autoFillTargetFloor!.messageId}）已完成自动填表，跳过重复自动触发`,
+      );
+      logAutoFillSkip_ACU('duplicate_auto_fill_ended', {
+        messageId: autoFillTargetFloor!.messageId,
+        resolvedMessageIndex: autoFillTargetFloor!.messageIndex,
       });
       return;
     }
@@ -344,6 +364,15 @@ let pendingAutoUpdatePerformanceContext_ACU: { runId?: string; parentSpanId?: st
         );
     } finally {
         clearAutoUpdateToast_ACU(autoProgressToast);
+    }
+
+    // [回声防重] 只有「确实有活干且全部分组成功提交、且未被用户终止」才登记该楼已自动填表；
+    // 空计划（本轮无表到期）不登记，避免把「还没填过」误标成「已填完」。
+    if (result.totalGroups > 0 && result.failedGroups === 0 && !wasStoppedByUser_ACU) {
+      const recordedFloor = recordAutoTableFillProcessedForFloor_ACU(autoFillTargetFloor);
+      if (recordedFloor) {
+        logDebug_ACU(`[自动填表] 已登记第 ${recordedFloor.messageIndex} 楼的自动填表完成记录，用于回声触发判重`);
+      }
     }
 
     // UI：根据返回值显示结果

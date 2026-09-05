@@ -9,6 +9,10 @@ import {
   normalizeExcludeRules_ACU,
   normalizeExtractRules_ACU,
 } from "../../shared/utils";
+import {
+  collectMatchedBoundaryRanges_ACU,
+  removeBoundaryRangesFromText_ACU,
+} from "../../shared/boundary-ranges";
 
 function extractContextTags_ACU(
   text: string,
@@ -99,65 +103,17 @@ export function getDefaultPlotContextExcludeRules_ACU() {
   );
 }
 
+// 边界区间计算已抽到 shared/boundary-ranges.ts（正文优化写回保护需要同一套语义），
+// 这里只保留「按区间删除」的包装，行为与抽取前逐字一致。
 function removeAllMatchedBoundaries_ACU(
   text: string,
   startBoundary: string,
   endBoundary: string,
 ) {
   const source = String(text ?? "");
-  const start = String(startBoundary || "");
-  const end = String(endBoundary || "");
-  if (!source || !start || !end) return source;
-
-  const lowerSource = source.toLowerCase();
-  const lowerStart = start.toLowerCase();
-  const lowerEnd = end.toLowerCase();
-  const openStartIndexes: number[] = [];
-  const matchedRanges: Array<{ start: number; end: number }> = [];
-  let searchIndex = 0;
-
-  while (searchIndex < lowerSource.length) {
-    const nextStartIdx = lowerSource.indexOf(lowerStart, searchIndex);
-    const nextEndIdx = lowerSource.indexOf(lowerEnd, searchIndex);
-    if (nextStartIdx === -1 && nextEndIdx === -1) break;
-
-    const isStartBoundary = nextStartIdx !== -1
-      && (nextEndIdx === -1 || nextStartIdx <= nextEndIdx);
-    if (isStartBoundary) {
-      openStartIndexes.push(nextStartIdx);
-      searchIndex = nextStartIdx + lowerStart.length;
-      continue;
-    }
-
-    if (openStartIndexes.length > 0) {
-      const matchedStartIdx = openStartIndexes.pop()!;
-      const matchedEndIdx = nextEndIdx + lowerEnd.length;
-      if (matchedEndIdx > matchedStartIdx) {
-        matchedRanges.push({ start: matchedStartIdx, end: matchedEndIdx });
-      }
-    }
-    searchIndex = nextEndIdx + lowerEnd.length;
-  }
-
+  const matchedRanges = collectMatchedBoundaryRanges_ACU(source, startBoundary, endBoundary);
   if (matchedRanges.length === 0) return source;
-
-  matchedRanges.sort((left, right) => left.start - right.start || left.end - right.end);
-  const mergedRanges: Array<{ start: number; end: number }> = [];
-  matchedRanges.forEach((range) => {
-    const previousRange = mergedRanges[mergedRanges.length - 1];
-    if (!previousRange || range.start > previousRange.end) {
-      mergedRanges.push({ ...range });
-      return;
-    }
-    previousRange.end = Math.max(previousRange.end, range.end);
-  });
-
-  let result = source;
-  for (let rangeIndex = mergedRanges.length - 1; rangeIndex >= 0; rangeIndex--) {
-    const range = mergedRanges[rangeIndex];
-    result = result.slice(0, range.start) + result.slice(range.end);
-  }
-  return result;
+  return removeBoundaryRangesFromText_ACU(source, matchedRanges);
 }
 
 export function applyExcludeRulesToText_ACU(

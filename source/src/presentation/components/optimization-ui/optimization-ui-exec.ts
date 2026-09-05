@@ -43,6 +43,8 @@ import {
   ensureOptimizationNotCancelled_ACU,
   performContentOptimization_ACU,
   setLastOptimizationBase_ACU,
+  shouldSkipDuplicateAutoContentOptimization_ACU,
+  recordAutoContentOptimizationProcessed_ACU,
   _set_optimizationProgressToast_ACU,
   _set_contentOptimizationAbortRequested_ACU
 } from '../../../service/optimization/content-optimization';
@@ -284,6 +286,29 @@ import {
   }
   
   /**
+   * 自动替换成功写回后登记「已处理」指纹，供下一次自动触发判重。
+   * 指纹取写回后聊天数组里该楼的实际正文，避免宿主二次渲染导致内容漂移而漏判。
+   * @param {number} messageIndex - 已写回的消息索引
+   * @param {string} fallbackContent - 读不到实时内容时兜底使用的写回内容
+   */
+  function recordAutoProcessedAfterWriteBack_ACU(messageIndex: number, fallbackContent: string) {
+    try {
+      const liveMessage = getChatArray_ACU()?.[messageIndex];
+      const liveContent = typeof liveMessage?.mes === 'string' && liveMessage.mes ? liveMessage.mes : fallbackContent;
+      const recorded = recordAutoContentOptimizationProcessed_ACU({
+        messageIndex,
+        messageId: liveMessage?.message_id ?? null,
+        content: liveContent
+      });
+      if (recorded) {
+        logDebug_ACU(`[正文优化] 已登记第 ${messageIndex} 楼的自动替换指纹，用于后续重复触发判重`);
+      }
+    } catch (error) {
+      logDebug_ACU('[正文优化] 登记自动替换已处理记录失败:', error);
+    }
+  }
+  
+  /**
    * 执行正文优化流程（在GENERATION_ENDED后调用）
    * @param {number} messageIndex - AI消息索引
    * @returns {Promise<boolean>} 是否成功
@@ -310,6 +335,15 @@ import {
     }
     
     let content = message.mes || '';
+    
+    // [自动链判重] 宿主可能对本楼再派发一条无配对上下文的 GENERATION_ENDED（典型来源：外部 MVU
+    // 插件非静默 generate 收尾时 hideStopButton 的第二次 emit）。内容未变说明上一次自动替换已生效，
+    // 直接跳过：不调 AI、不写回，也不覆盖优化基准缓存。手动「重新优化」/测试入口不经过本函数，不受影响。
+    if (shouldSkipDuplicateAutoContentOptimization_ACU(message.message_id, content)) {
+      logDebug_ACU(`[正文优化] 第 ${messageIndex} 楼内容未变，跳过重复自动替换`);
+      return true;
+    }
+    
     setLastOptimizationBase_ACU({
       messageIndex,
       messageId: message.message_id,
@@ -418,7 +452,10 @@ import {
           return true;
         }
         
-        await replaceChatMessage_ACU(messageIndex, finalOptimizedContent);
+        const writtenBack = await replaceChatMessage_ACU(messageIndex, finalOptimizedContent);
+        if (writtenBack) {
+          recordAutoProcessedAfterWriteBack_ACU(messageIndex, finalOptimizedContent);
+        }
         
         if (config.seamlessMode) {
           hideOptimizationOverlay_ACU();
@@ -544,7 +581,10 @@ import {
             resolve(nextResult);
           } else {
             // 所有轮次完成，应用最终结果并触发填表
-            await replaceChatMessage_ACU(messageIndex, result.optimizedContent);
+            const confirmWrittenBack = await replaceChatMessage_ACU(messageIndex, result.optimizedContent);
+            if (confirmWrittenBack) {
+              recordAutoProcessedAfterWriteBack_ACU(messageIndex, result.optimizedContent);
+            }
             showToastr_ACU('success', `正文优化完成，共 ${totalLoops} 轮优化，累计 ${newTotalOptimizations.length} 处改进`);
             await triggerAutomaticUpdateIfNeeded_ACU();
             resolve(true);

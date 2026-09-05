@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const m = vi.hoisted(() => ({
@@ -9,6 +10,9 @@ const m = vi.hoisted(() => ({
   preCheck: { canProceed: true, reason: '' },
 }));
 
+// 自动填表「已处理集合」的内存替身（真实实现走 window + localStorage，本文件只验接线）
+const guardStore = vi.hoisted(() => ({ fill: new Map<string, any>() }));
+
 vi.mock('../../../src/presentation/components/plot-editors', () => ({
   getCharCardPromptFromUI_ACU: vi.fn(), isAutoUpdatingCard_ACU: false,
   renderPromptSegments_ACU: vi.fn(), get wasStoppedByUser_ACU() { return m.wasStopped; },
@@ -19,6 +23,7 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({
   allChatMessages_ACU: [{ is_user: true }, { is_user: false }], coreApisAreReady_ACU: true,
   currentJsonTableData_ACU: { sheet_0: {} }, getCurrentIsolationKey_ACU: vi.fn(() => ''),
   lastTotalAiMessages_ACU: 1, settings_ACU: { autoUpdateEnabled: true, maxConcurrentGroups: 1, toastMuteEnabled: true },
+  currentChatFileIdentifier_ACU: 'test-chat',
   _set_coreApisAreReady_ACU: vi.fn(), _set_lastTotalAiMessages_ACU: vi.fn(),
   _set_manualExtraHint_ACU: vi.fn(), _set_wasStoppedByUser_ACU: vi.fn(),
 }));
@@ -41,6 +46,19 @@ vi.mock('../../../src/service/table/table-storage-strategy', () => ({ getStorage
 vi.mock('../../../src/shared/env', () => ({ topLevelWindow_ACU: {} }));
 vi.mock('../../../src/presentation/triggers/settings-ui-sync/settings-ui-config', () => ({ purgeOldLayerData_ACU: vi.fn() }));
 vi.mock('../../../src/service/table/update-orchestrator', () => ({ processGroupedRuntimeChunk_ACU: vi.fn() }));
+vi.mock('../../../src/data/storage/optimization-cache-storage', () => ({
+  saveOptimizationBaseToCache_ACU: vi.fn(),
+  loadOptimizationBaseFromCache_ACU: vi.fn(() => null),
+  findAutoOptimizationProcessedEntry_ACU: vi.fn(() => null),
+  recordAutoOptimizationProcessed_ACU: vi.fn(() => null),
+  findAutoTableFillProcessedEntry_ACU: (messageId: any) => guardStore.fill.get(String(messageId)) || null,
+  recordAutoTableFillProcessed_ACU: (payload: any) => {
+    if (payload?.messageId === null || payload?.messageId === undefined) return null;
+    const entry = { ...payload, messageId: String(payload.messageId) };
+    guardStore.fill.set(entry.messageId, entry);
+    return entry;
+  },
+}));
 
 async function settleMicrotasks() { await Promise.resolve(); await Promise.resolve(); }
 
@@ -115,5 +133,148 @@ describe('triggerAutomaticUpdateIfNeeded_ACU 并发补跑', () => {
     await settleMicrotasks();
     // 本文件唯一 setter 调用点=入口复位行；删源码该行此断言即红。
     expect(_set_wasStoppedByUser_ACU).toHaveBeenCalledWith(false);
+  });
+});
+
+// ═══ [W3] 自动填表回声防重：同一楼第二条 GENERATION_ENDED 不再拉起填表 ═══
+describe('triggerAutomaticUpdateIfNeeded_ACU 回声防重', () => {
+  const okResult = { success: true, totalGroups: 1, failedGroups: 0, errors: [] };
+
+  function twoFloorChat(aiMessageId: number | null) {
+    return [
+      { is_user: true, message_id: 10, mes: '玩家行动' },
+      { is_user: false, message_id: aiMessageId, mes: '夜色漫过屋檐。' },
+    ];
+  }
+
+  beforeEach(() => {
+    guardStore.fill.clear();
+    m.wasStopped = false;
+    m.executePlan.mockReset();
+    m.logSkip.mockReset();
+    m.buildPlan.mockReset();
+    m.preCheck = { canProceed: true, reason: '' };
+    m.getChat.mockImplementation(() => twoFloorChat(11));
+  });
+
+  it('①首轮成功提交后登记该楼；同一 messageId 的第二条回声触发直接跳过（不构建计划、不调 AI）', async () => {
+    const { triggerAutomaticUpdateIfNeeded_ACU } = await import('../../../src/presentation/triggers/settings-ui-sync/settings-ui-trigger');
+    m.executePlan.mockResolvedValue(okResult);
+
+    await triggerAutomaticUpdateIfNeeded_ACU();
+    await settleMicrotasks();
+    expect(m.executePlan).toHaveBeenCalledTimes(1);
+    expect(guardStore.fill.has('11')).toBe(true);
+
+    // 宿主对本楼再派发一条 GENERATION_ENDED（无配对上下文 → 门控放行）
+    await triggerAutomaticUpdateIfNeeded_ACU();
+    await settleMicrotasks();
+    expect(m.executePlan).toHaveBeenCalledTimes(1);
+    expect(m.buildPlan).toHaveBeenCalledTimes(1);
+    expect(m.logSkip).toHaveBeenCalledWith('duplicate_auto_fill_ended', expect.objectContaining({
+      messageId: 11,
+      resolvedMessageIndex: 1,
+    }));
+  });
+
+  it('②正文替换写回改了同一楼内容后，回声填表仍跳过（messageId 级判重不被内容联动误发）', async () => {
+    const { triggerAutomaticUpdateIfNeeded_ACU } = await import('../../../src/presentation/triggers/settings-ui-sync/settings-ui-trigger');
+    m.executePlan.mockResolvedValue(okResult);
+
+    await triggerAutomaticUpdateIfNeeded_ACU();
+    await settleMicrotasks();
+    expect(m.executePlan).toHaveBeenCalledTimes(1);
+
+    // 模拟正文自动替换把同一 messageId 的楼层内容改掉（内容基准会把它骗成「新内容」）
+    m.getChat.mockImplementation(() => [
+      { is_user: true, message_id: 10, mes: '玩家行动' },
+      { is_user: false, message_id: 11, mes: '★正文替换链改写后的新内容★' },
+    ]);
+
+    await triggerAutomaticUpdateIfNeeded_ACU();
+    await settleMicrotasks();
+    expect(m.executePlan).toHaveBeenCalledTimes(1);
+  });
+
+  it('③新 messageId（新一轮生成）正常触发，不被上一楼记录拦截', async () => {
+    const { triggerAutomaticUpdateIfNeeded_ACU } = await import('../../../src/presentation/triggers/settings-ui-sync/settings-ui-trigger');
+    m.executePlan.mockResolvedValue(okResult);
+
+    await triggerAutomaticUpdateIfNeeded_ACU();
+    await settleMicrotasks();
+    expect(guardStore.fill.has('11')).toBe(true);
+
+    m.getChat.mockImplementation(() => [
+      { is_user: true, message_id: 10 },
+      { is_user: false, message_id: 11 },
+      { is_user: true, message_id: 12 },
+      { is_user: false, message_id: 13 },
+    ]);
+    await triggerAutomaticUpdateIfNeeded_ACU();
+    await settleMicrotasks();
+
+    expect(m.executePlan).toHaveBeenCalledTimes(2);
+    expect(guardStore.fill.has('13')).toBe(true);
+  });
+
+  it('④拿不到 message_id 时判重完全失效（一律放行，保持既有行为）', async () => {
+    const { triggerAutomaticUpdateIfNeeded_ACU } = await import('../../../src/presentation/triggers/settings-ui-sync/settings-ui-trigger');
+    m.getChat.mockImplementation(() => twoFloorChat(null));
+    m.executePlan.mockResolvedValue(okResult);
+
+    await triggerAutomaticUpdateIfNeeded_ACU();
+    await settleMicrotasks();
+    await triggerAutomaticUpdateIfNeeded_ACU();
+    await settleMicrotasks();
+
+    expect(m.executePlan).toHaveBeenCalledTimes(2);
+    expect(guardStore.fill.size).toBe(0);
+  });
+
+  it('空计划（本轮无表到期）不登记：回声仍走原有 no_tables_due 判定，不会被误标成已填完', async () => {
+    const { triggerAutomaticUpdateIfNeeded_ACU } = await import('../../../src/presentation/triggers/settings-ui-sync/settings-ui-trigger');
+    m.buildPlan.mockImplementation(() => ({ tablesToUpdate: [], updateGroups: {}, boundary: { fullCheckpointIndices: [], requiresBoundaryStaging: false } }));
+
+    await triggerAutomaticUpdateIfNeeded_ACU();
+    await settleMicrotasks();
+
+    expect(m.executePlan).not.toHaveBeenCalled();
+    expect(m.logSkip).toHaveBeenCalledWith('no_tables_due', expect.anything());
+    expect(guardStore.fill.size).toBe(0);
+  });
+
+  it('部分分组失败不登记：回声保留为合法重试路径', async () => {
+    const { triggerAutomaticUpdateIfNeeded_ACU } = await import('../../../src/presentation/triggers/settings-ui-sync/settings-ui-trigger');
+    m.executePlan.mockResolvedValue({ success: false, totalGroups: 2, failedGroups: 1, errors: ['group_1 失败'] });
+
+    await triggerAutomaticUpdateIfNeeded_ACU();
+    await settleMicrotasks();
+    expect(guardStore.fill.size).toBe(0);
+
+    await triggerAutomaticUpdateIfNeeded_ACU();
+    await settleMicrotasks();
+    expect(m.executePlan).toHaveBeenCalledTimes(2);
+  });
+
+  it('用户终止本轮不登记（避免把没填完的楼层标成已填）', async () => {
+    const { triggerAutomaticUpdateIfNeeded_ACU } = await import('../../../src/presentation/triggers/settings-ui-sync/settings-ui-trigger');
+    m.executePlan.mockImplementation(async () => {
+      m.wasStopped = true;
+      return { success: true, totalGroups: 1, failedGroups: 0, errors: [] };
+    });
+
+    await triggerAutomaticUpdateIfNeeded_ACU();
+    await settleMicrotasks();
+    expect(guardStore.fill.size).toBe(0);
+  });
+
+  it('手动填表入口不挂在自动守卫链路上（守卫只在自动入口一处生效）', async () => {
+    const triggerSource = readFileSync('src/presentation/triggers/settings-ui-sync/settings-ui-trigger.ts', 'utf8');
+    const manualSource = readFileSync('src/presentation/triggers/update-process.ts', 'utf8');
+
+    // 判重调用点在自动入口里恰好一次；手动/补填实现文件完全不引用守卫
+    expect(triggerSource.match(/shouldSkipDuplicateAutoTableFill_ACU\(/g) || []).toHaveLength(1);
+    expect(manualSource).not.toContain('auto-fill-echo-guard');
+    expect(manualSource).not.toContain('shouldSkipDuplicateAutoTableFill_ACU');
   });
 });

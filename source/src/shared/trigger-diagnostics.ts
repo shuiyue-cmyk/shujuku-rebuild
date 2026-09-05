@@ -20,7 +20,9 @@ export type AutoFillSkipReason_ACU =
   | 'chat_changed'
   | 'auto_update_coalesced'
   | 'preconditions_failed'
-  | 'no_tables_due';
+  | 'no_tables_due'
+  /** 同一楼已成功自动填表后，宿主又派发了一条 GENERATION_ENDED（外部插件回声）→ 自动填表入口短路 */
+  | 'duplicate_auto_fill_ended';
 
 export interface AutoFillSkipContext_ACU {
   eventType?: string;

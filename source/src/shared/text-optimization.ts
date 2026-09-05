@@ -5,7 +5,12 @@
  * 用于正文优化功能中的段落匹配、标点处理和优化应用。
  */
 
-import { logDebug_ACU } from './utils';
+import { logDebug_ACU, normalizeExcludeRules_ACU } from './utils';
+import {
+  collectExcludeRanges_ACU,
+  findOverlappingBoundaryRange_ACU,
+  type BoundaryRange_ACU,
+} from './boundary-ranges';
 
 /**
  * 去除文本中的标点符号和空白，只保留文字和数字
@@ -210,16 +215,140 @@ export function processSingleQuotes_ACU(text: string): string {
 }
 
 /**
- * 应用优化到正文
+ * 正文替换页「标签排除规则」在写回阶段的选项。
+ * 语义（用户拍板 B 方案）= 写回保护：建议命中的原文区间与排除区间重叠时整条丢弃，
+ * 不参与写回、不计入替换统计；发送链仍按原文发送，不做发送前剥离。
+ * 未配置 / 空规则时所有入口零开销早退，行为与既有实现逐字一致。
  */
-export function applyOptimizations_ACU(originalContent: string, optimizations: any[]): string {
+export interface OptimizationExcludeOptions_ACU {
+  excludeRules?: any[];
+  excludeTags?: string;
+}
+
+export interface DroppedOptimization_ACU {
+  index: number;
+  original: string;
+  reason: string;
+  range: BoundaryRange_ACU | null;
+}
+
+export interface OptimizationExclusionOutcome_ACU {
+  /** 允许写回的优化项（保持原顺序） */
+  kept: any[];
+  /** 被排除规则丢弃的优化项及原因 */
+  dropped: DroppedOptimization_ACU[];
+  /** 原文中算出的排除区间（已合并） */
+  ranges: BoundaryRange_ACU[];
+}
+
+/** 是否真的配置了排除规则（空数组/空标签视为未配置，用于回归锁早退）。 */
+function hasExcludeRuleInput_ACU(options?: OptimizationExcludeOptions_ACU | null): boolean {
+  if (!options || typeof options !== 'object') return false;
+  if (Array.isArray(options.excludeRules) && options.excludeRules.length > 0) return true;
+  return typeof options.excludeTags === 'string' && options.excludeTags.trim() !== '';
+}
+
+/**
+ * 计算原文中的排除区间集合（复用上下文标签的边界匹配器语义）。
+ * 未配置规则或规则在本段文本里没有命中时返回空数组。
+ */
+export function collectOptimizationExcludeRanges_ACU(
+  originalContent: string,
+  options?: OptimizationExcludeOptions_ACU | null,
+): BoundaryRange_ACU[] {
+  if (!hasExcludeRuleInput_ACU(options)) return [];
+  const source = String(originalContent ?? '');
+  if (!source) return [];
+
+  const rules = normalizeExcludeRules_ACU(options!.excludeRules ?? [], options!.excludeTags ?? '');
+  if (!Array.isArray(rules) || rules.length === 0) return [];
+  return collectExcludeRanges_ACU(source, rules);
+}
+
+/**
+ * 用排除规则过滤优化建议：original 在原文中的命中区间与任一排除区间重叠（含完全包含与跨边界
+ * 的部分重叠）即整条丢弃；定位不到命中区间的建议保持原样放行，交给既有应用逻辑统计匹配失败。
+ */
+export function filterOptimizationsByExcludeRules_ACU(
+  originalContent: string,
+  optimizations: any[],
+  options?: OptimizationExcludeOptions_ACU | null,
+): OptimizationExclusionOutcome_ACU {
+  const sourceList = Array.isArray(optimizations) ? optimizations : [];
+  const ranges = collectOptimizationExcludeRanges_ACU(originalContent, options);
+  if (ranges.length === 0) {
+    return { kept: sourceList.slice(), dropped: [], ranges: [] };
+  }
+
+  const kept: any[] = [];
+  const dropped: DroppedOptimization_ACU[] = [];
+  const source = String(originalContent ?? '');
+
+  for (let i = 0; i < sourceList.length; i++) {
+    const opt = sourceList[i];
+    const isReplaceItem = !!opt && typeof opt === 'object'
+      && opt.type === 'replace' && opt.original && opt.optimized;
+    if (!isReplaceItem) {
+      kept.push(opt);
+      continue;
+    }
+
+    const match = findParagraphMatch_ACU(String(opt.original), source);
+    if (match.start === -1) {
+      // 定位不到 → 不能断定它落在排除段内，放行（与未启用排除规则时行为一致）
+      kept.push(opt);
+      continue;
+    }
+
+    const hitRange = findOverlappingBoundaryRange_ACU(ranges, match.start, match.end);
+    if (!hitRange) {
+      kept.push(opt);
+      continue;
+    }
+
+    const preview = String(opt.original).substring(0, 50);
+    dropped.push({
+      index: i + 1,
+      original: String(opt.original).substring(0, 100)
+        + (String(opt.original).length > 100 ? '...' : ''),
+      reason: `命中排除段 ${hitRange.start}-${hitRange.end}`,
+      range: hitRange,
+    });
+    logDebug_ACU(
+      `[正文优化] 优化项 ${i + 1} 的原文落在排除区间 ${hitRange.start}-${hitRange.end} 内（写回保护），已丢弃: "${preview}..."`,
+    );
+  }
+
+  return { kept, dropped, ranges };
+}
+
+/**
+ * 应用优化到正文
+ * @param originalContent 原始正文
+ * @param optimizations AI 返回的优化建议列表
+ * @param options 可选排除规则（正文替换页「标签排除规则」）；命中排除段的建议整条不写回
+ */
+export function applyOptimizations_ACU(
+  originalContent: string,
+  optimizations: any[],
+  options?: OptimizationExcludeOptions_ACU | null,
+): string {
   let result = originalContent;
   let appliedCount = 0;
   let failedCount = 0;
   const failedItems: any[] = [];
 
-  for (let i = 0; i < optimizations.length; i++) {
-    const opt = optimizations[i];
+  let effectiveOptimizations = Array.isArray(optimizations) ? optimizations : [];
+  if (hasExcludeRuleInput_ACU(options)) {
+    effectiveOptimizations = filterOptimizationsByExcludeRules_ACU(
+      originalContent,
+      effectiveOptimizations,
+      options,
+    ).kept;
+  }
+
+  for (let i = 0; i < effectiveOptimizations.length; i++) {
+    const opt = effectiveOptimizations[i];
     if (opt.type === 'replace' && opt.original && opt.optimized) {
       let replaced = false;
 
@@ -252,7 +381,7 @@ export function applyOptimizations_ACU(originalContent: string, optimizations: a
     }
   }
 
-  logDebug_ACU(`[正文优化] 替换统计: 成功 ${appliedCount}/${optimizations.length}，失败 ${failedCount}`);
+  logDebug_ACU(`[正文优化] 替换统计: 成功 ${appliedCount}/${effectiveOptimizations.length}，失败 ${failedCount}`);
 
   if (failedItems.length > 0) {
     console.warn('[正文优化] 以下优化项未能应用:', failedItems);

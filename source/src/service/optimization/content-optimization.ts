@@ -3,6 +3,7 @@ import {
 } from '../../shared/defaults-json.js';
 import {
   currentJsonTableData_ACU,
+  currentChatFileIdentifier_ACU,
   settings_ACU
 } from '../runtime/state-manager';
 import {
@@ -16,7 +17,8 @@ import {
   callAIWithPreset_ACU
 } from '../ai/api-call';
 import {
-  applyOptimizations_ACU
+  applyOptimizations_ACU,
+  filterOptimizationsByExcludeRules_ACU
 } from '../../shared/text-optimization';
 import {
   logDebug_ACU,
@@ -24,8 +26,13 @@ import {
   logWarn_ACU
 } from '../../shared/utils';
 import {
+  sha256HexSync_ACU
+} from '../../shared/sha256-sync';
+import {
   saveOptimizationBaseToCache_ACU,
-  loadOptimizationBaseFromCache_ACU
+  loadOptimizationBaseFromCache_ACU,
+  findAutoOptimizationProcessedEntry_ACU,
+  recordAutoOptimizationProcessed_ACU
 } from '../../data/storage/optimization-cache-storage';
 import {
   formatOutlineTableForPlot_ACU,
@@ -285,13 +292,22 @@ import {
          }
          
          // 5. 应用优化到正文
-         const optimizedContent = applyOptimizations_ACU(content, parsed.optimizations);
+         // [写回保护] 正文替换页「标签排除规则」：建议原文命中排除段的整条丢弃，既不写回也不计入替换数
+         const exclusion = filterOptimizationsByExcludeRules_ACU(content, parsed.optimizations, {
+           excludeRules: config.excludeRules,
+           excludeTags: config.excludeTags
+         });
+         if (exclusion.dropped.length > 0) {
+           logDebug_ACU(`[正文优化] 循环 ${currentLoop}/${totalLoops} 有 ${exclusion.dropped.length} 个优化项命中标签排除规则，已按写回保护丢弃（不写回、不计入替换数）`);
+         }
+         const optimizedContent = applyOptimizations_ACU(content, exclusion.kept);
          
-         logDebug_ACU(`[正文优化] 循环 ${currentLoop}/${totalLoops} 完成，共 ${parsed.optimizations.length} 个优化项`);
+         logDebug_ACU(`[正文优化] 循环 ${currentLoop}/${totalLoops} 完成，共 ${exclusion.kept.length} 个优化项` +
+           (exclusion.dropped.length > 0 ? `（另有 ${exclusion.dropped.length} 个被排除规则丢弃）` : ''));
          
          return {
            success: true,
-           optimizations: parsed.optimizations,
+           optimizations: exclusion.kept,
            summary: parsed.summary,
            optimizedContent: optimizedContent
          };
@@ -662,6 +678,61 @@ import {
     }
 
     return null;
+  }
+
+  // --- [自动正文替换] 已处理集合判重 ---
+  // 背景：外部 MVU 插件的非静默 generate 收尾会让宿主多派发一条 GENERATION_ENDED，本库门控对
+  // 无配对上下文的 ended 一律放行，于是同一楼会被自动替换链再跑一次（多烧一次 API）。
+  // 这里按 messageId 记录「已成功写回」的内容指纹：同一楼内容未变 → 跳过；内容变了 → 正常执行并更新记录。
+  // 只服务自动链；手动「重新优化」/测试入口不调用这两个函数，因此完全不受影响。
+
+  /** 计算写回后消息内容的指纹（复用仓内同步 sha256，无新增依赖）。 */
+  export function computeAutoOptimizationContentHash_ACU(content: any): string {
+    return sha256HexSync_ACU(typeof content === 'string' ? content : String(content ?? ''));
+  }
+
+  /**
+   * 自动链入口判重：该楼是否已经用「当前这份内容」成功自动替换过一次。
+   * @param messageId 楼层 message_id（缺失时不判重，保持既有行为）
+   * @param content 楼层当前正文
+   * @returns true = 内容未变，应跳过本次自动替换
+   */
+  export function shouldSkipDuplicateAutoContentOptimization_ACU(messageId: any, content: any): boolean {
+    if (messageId === null || messageId === undefined) return false;
+    if (typeof content !== 'string' || content.length === 0) return false;
+
+    try {
+      const entry = findAutoOptimizationProcessedEntry_ACU(
+        messageId,
+        String(currentChatFileIdentifier_ACU ?? '')
+      );
+      if (!entry?.contentHash) return false;
+
+      return entry.contentHash === computeAutoOptimizationContentHash_ACU(content);
+    } catch (error) {
+      // 失败姿态 fail-open：缓存/环境异常一律放行，宁可多跑一次也不静默漏掉正文替换。
+      logDebug_ACU('[正文优化] 读取自动替换已处理集合失败，按放行处理:', error);
+      return false;
+    }
+  }
+
+  /**
+   * 自动替换成功写回后登记：记录 {messageId, contentHash(写回后的消息内容), updatedAt}。
+   * @returns 登记的条目；messageId / 内容缺失时返回 null（不登记，宁放行不误拦）。
+   */
+  export function recordAutoContentOptimizationProcessed_ACU(payload: any = {}) {
+    const messageId = payload?.messageId;
+    if (messageId === null || messageId === undefined) return null;
+    const content = typeof payload?.content === 'string' ? payload.content : '';
+    if (!content) return null;
+
+    return recordAutoOptimizationProcessed_ACU({
+      messageIndex: Number.isInteger(payload?.messageIndex) ? payload.messageIndex : -1,
+      messageId,
+      contentHash: computeAutoOptimizationContentHash_ACU(content),
+      chatKey: String(currentChatFileIdentifier_ACU ?? ''),
+      updatedAt: Date.now()
+    });
   }
 
   /**
