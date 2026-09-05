@@ -113,22 +113,18 @@ describe('useContentReplaceStore', () => {
     expect(saveSettings).toHaveBeenCalled();
   });
 
-  it('[MVU联动] 闸门开关默认开；关闭时写回 settings 顶层键而不是正文替换配置', async () => {
+  it('[MVU联动] 闸门恒开启：store 不再持有开关，保存时不写顶层键', async () => {
     const { store, settings, saveSettings } = await setupStore();
 
-    // 未落盘（undefined）→ 按默认开处理
-    expect(store.mvuGateEnabled).toBe(true);
-
-    store.setBoolean('mvuGateEnabled', false);
-    expect(store.mvuGateEnabled).toBe(false);
-    expect(settings.mvuGateEnabled).toBe(false);
-    // 不寄生在 contentOptimizationSettings 里：闸门同时管填表与正文替换两条链
+    // 开关已删除：store 上无该字段，联动永远生效
+    expect((store as any).mvuGateEnabled).toBeUndefined();
+    expect(settings.mvuGateEnabled).toBeUndefined();
     expect(settings.contentOptimizationSettings.mvuGateEnabled).toBeUndefined();
-    expect(saveSettings).toHaveBeenCalled();
 
-    // 已落盘的 false 必须能读回来（否则刷新后开关静默回弹）
-    store.refreshFromSettings();
-    expect(store.mvuGateEnabled).toBe(false);
+    // 任意一次保存都不应写出该键
+    store.setBoolean('showDiff', false);
+    expect(saveSettings).toHaveBeenCalled();
+    expect(settings.mvuGateEnabled).toBeUndefined();
   });
 
   it('保存、载入、删除正文替换提示词预设', async () => {

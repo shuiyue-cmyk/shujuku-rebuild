@@ -97,11 +97,6 @@
             label="填表与正文替换并行执行"
             @update:model-value="store.setBoolean('parallelMode', $event)"
           />
-          <AcuCheckbox
-            :model-value="store.mvuGateEnabled"
-            label="等待 MVU 额外模型解析完成后再执行填表与正文替换"
-            @update:model-value="store.setBoolean('mvuGateEnabled', $event)"
-          />
         </div>
 
         <div class="acu-v2-content-replace-page__mini-status">

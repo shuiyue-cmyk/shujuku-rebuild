@@ -21,7 +21,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
-  settings: { mvuGateEnabled: true } as any,
+  settings: {} as any,
   chatKey: 'chat-a',
   chat: [] as any[],
   logDebug: vi.fn(),
@@ -104,7 +104,6 @@ function track(promise: Promise<MvuGateResult_ACU>) {
 beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
-  h.settings.mvuGateEnabled = true;
   h.chatKey = 'chat-a';
   h.chat = [
     { is_user: true, message_id: 10, mes: '玩家：推门而入' },
@@ -510,39 +509,8 @@ describe('⑦ [W5] 解析完成 / 手动重试联动重跑', () => {
   });
 });
 
-describe('⑧ 开关关闭：全部现状行为', () => {
-  it('mvuGateEnabled=false → 解析在飞也立即放行，不建定时器', async () => {
-    installFakeMvu(true);
-    const es = createFakeEventSource();
-    attachMvuAnalysisGate_ACU({ eventSource: es });
-    h.settings.mvuGateEnabled = false;
-
-    const waiter = track(waitForMvuAnalysisToSettle_ACU());
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(waiter.box.value!.reason).toBe('gate_disabled');
-    expect(waiter.box.value!.delayed).toBe(false);
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
-  it('mvuGateEnabled=false → ended 不清判重记录、不重跑', async () => {
-    const es = createFakeEventSource();
-    const rerun = vi.fn();
-    installFakeMvu(false);
-    attachMvuAnalysisGate_ACU({ eventSource: es, requestRerun: rerun });
-    recordAutoTableFillProcessed_ACU({ messageId: 11, messageIndex: 1, chatKey: 'chat-a' });
-    recordAutoOptimizationProcessed_ACU({ messageId: 11, messageIndex: 1, contentHash: 'x', chatKey: 'chat-a' });
-    h.settings.mvuGateEnabled = false;
-
-    es.emit(MVU_ANALYSIS_ENDED_EVENT_ACU);
-    await vi.advanceTimersByTimeAsync(MVU_RERUN_DEBOUNCE_MS_ACU + 1);
-
-    expect(rerun).not.toHaveBeenCalled();
-    expect(findAutoTableFillProcessedEntry_ACU(11, 'chat-a')).not.toBeNull();
-    expect(findAutoOptimizationProcessedEntry_ACU(11, 'chat-a')).not.toBeNull();
-  });
-
-  it('开关未落盘（undefined）按默认开处理', async () => {
+describe('⑧ 联动恒开启：无开关，缺键时闸门照常工作', () => {
+  it('设置键缺失时闸门照常等待（恒开启，无关闭路径）', async () => {
     installFakeMvu(true);
     delete h.settings.mvuGateEnabled;
     const waiter = track(waitForMvuAnalysisToSettle_ACU());

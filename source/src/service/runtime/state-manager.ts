@@ -324,8 +324,6 @@ export let settings_ACU: any = {
     maxConcurrentGroups: 1,
     autoUpdateEnabled: true,
     standardizedTableFillEnabled: true,
-    // [MVU联动] 与 buildDefaultSettings_ACU 同源默认值（设置加载前的启动态也要按开处理）。
-    mvuGateEnabled: true,
     toastMuteEnabled: false,
     plotSettings: JSON.parse(JSON.stringify(DEFAULT_PLOT_SETTINGS_ACU)),
     plotPresetBindings: {},

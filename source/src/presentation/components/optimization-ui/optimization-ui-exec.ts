@@ -61,7 +61,7 @@ import {
 // 循环 import — 运行时安全
 import {
   showOptimizationDiffDialogForLoop_ACU,
-  showOptimizationDiff_ACU
+  showOptimizationResultDialog_ACU
 } from './optimization-ui-diff';
 
   // replaceChatMessage_ACU 和 getOriginalContent_ACU 已搬迁到 service/chat/chat-service.ts
@@ -464,7 +464,9 @@ import {
         }
         
         if (config.showDiff && !config.seamlessMode) {
-          showOptimizationDiff_ACU(messageIndex, {
+          // 自动链已写回：用只读结果对话框展示对比（原文/修改方案/优化），不用 toast。
+          // 对话框是 DOM 覆盖层，不受静默提示框拦截；无感模式下保持无打扰，不弹框。
+          showOptimizationResultDialog_ACU(messageIndex, {
             optimizations: totalOptimizations,
             summary: `共 ${loopCount} 轮优化，累计 ${totalOptimizations.length} 处改进`,
             optimizedContent: finalOptimizedContent

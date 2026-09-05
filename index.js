@@ -78446,7 +78446,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.2.7" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.2.8" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -96821,8 +96821,6 @@ let settings_ACU = {
     maxConcurrentGroups: 1,
     autoUpdateEnabled: true,
     standardizedTableFillEnabled: true,
-    // [MVU联动] 与 buildDefaultSettings_ACU 同源默认值（设置加载前的启动态也要按开处理）。
-    mvuGateEnabled: true,
     toastMuteEnabled: false,
     plotSettings: JSON.parse(JSON.stringify(DEFAULT_PLOT_SETTINGS_ACU)),
     plotPresetBindings: {},
@@ -98218,9 +98216,6 @@ function buildDefaultSettings_ACU() {
         maxConcurrentGroups: 1,
         autoUpdateEnabled: true,
         standardizedTableFillEnabled: true, // [新增] 规范填表功能
-        // [MVU联动] 等待 MVU「额外模型解析」完成后再执行自动填表与正文替换（默认开启）。
-        // 关闭 = 闸门完全旁路，行为与 v9.1.10 逐字一致；MVU 未装/未启用时无论开关如何都零开销放行。
-        mvuGateEnabled: true,
         toastMuteEnabled: false,
         // [剧情推进] 设置
         plotSettings: cloneDefaultValue_ACU(DEFAULT_PLOT_SETTINGS_ACU),
@@ -101385,6 +101380,100 @@ function showOptimizationDiff_ACU(messageIndex, result) {
     });
 }
 /**
+ * 自动链只读结果对话框：内容已由自动流程写回，这里只展示对比（原文/修改方案/优化），
+ * 不提供「应用」按钮。用于 showDiff 开启 + 非无感模式的自动替换收尾；
+ * 与 showOptimizationDiff_ACU 的 toast 不同，DOM 对话框不受静默提示框拦截。
+ */
+function showOptimizationResultDialog_ACU(messageIndex, result) {
+    const optimizations = Array.isArray(result?.optimizations) ? result.optimizations : [];
+    const dialogHtml = `
+      <div class="acu-optimization-dialog acu-dialog-classic" data-tt-mobile-surface="free-window" style="
+        position: fixed;
+        top: 10px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: var(--acu-bg-0, #24221f);
+        border: 1px solid var(--acu-border, #36332e);
+        border-radius: 2px;
+        padding: 20px;
+        max-width: 800px;
+        width: calc(100% - 20px);
+        max-height: calc(90vh - 20px);
+        overflow-y: auto;
+        z-index: 100000;
+        color: var(--acu-text, #c1b9ad);
+        font-family: "Noto Serif SC", "Source Han Serif CN", "Songti SC", "STSong", "SimSun", serif;
+        box-sizing: border-box;
+      ">
+        <h3 style="margin: 0 0 8px 0; color: var(--acu-accent, #7d4940); font-size: 1.1em; letter-spacing: 1px;">正文替换完成</h3>
+        <p style="margin: 0 0 12px 0; color: var(--acu-text-dim, #8a8075);">共 ${optimizations.length} 处改进${result?.summary ? `，${escapeHtml_ACU$1(String(result.summary))}` : ''}</p>
+        <div class="optimization-list" style="margin-bottom: 16px; max-height: 400px; overflow-y: auto;">
+          ${optimizations.map((opt) => `
+            <div class="optimization-item" style="
+              background: rgba(0, 0, 0, 0.2);
+              border-radius: 1px;
+              padding: 12px;
+              margin-bottom: 8px;
+              border-left: 2px solid var(--acu-border, #36332e);
+            ">
+              <div style="color: var(--acu-text-dim, #8a8075); margin-bottom: 8px; text-decoration: line-through; opacity: 0.7;">
+                <strong>原文：</strong>${escapeHtml_ACU$1(String(opt?.original || '').substring(0, 200))}${String(opt?.original || '').length > 200 ? '...' : ''}
+              </div>
+              <div style="color: var(--acu-text, #c1b9ad); font-size: 12px; margin-bottom: 8px; padding: 8px; background: rgba(125, 73, 64, 0.1); border-radius: 1px; border-left: 2px solid var(--acu-accent, #7d4940);">
+                <strong>修改方案：</strong>${escapeHtml_ACU$1(String(opt?.plan || opt?.reason || '未说明'))}
+              </div>
+              <div style="color: #6a8a6a;">
+                <strong>优化：</strong>${escapeHtml_ACU$1(String(opt?.optimized || '').substring(0, 200))}${String(opt?.optimized || '').length > 200 ? '...' : ''}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+        <div style="display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; padding-bottom: 10px;">
+          <button id="acu-opt-result-reoptimize" style="
+            padding: 8px 16px;
+            border: 1px solid var(--acu-accent, #7d4940);
+            background: transparent;
+            color: var(--acu-accent, #7d4940);
+            border-radius: 1px;
+            cursor: pointer;
+            min-width: 100px;
+            flex-shrink: 0;
+            font-family: inherit;
+          ">🔄 重新优化</button>
+          <button id="acu-opt-result-close" style="
+            padding: 8px 16px;
+            border: none;
+            background: var(--acu-accent, #7d4940);
+            color: var(--acu-bg-0, #24221f);
+            border-radius: 1px;
+            cursor: pointer;
+            font-weight: 600;
+            min-width: 100px;
+            flex-shrink: 0;
+            font-family: inherit;
+          ">关闭</button>
+        </div>
+      </div>
+      <div id="acu-opt-backdrop" data-tt-mobile-surface="backdrop" style="
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0, 0, 0, 0.6);
+        z-index: 99999;
+      "></div>
+    `;
+    jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
+    jQuery_API_ACU('body').append(dialogHtml);
+    jQuery_API_ACU('#acu-opt-result-close, #acu-opt-backdrop').on('click', function () {
+        jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
+    });
+    jQuery_API_ACU('#acu-opt-result-reoptimize').on('click', async function () {
+        jQuery_API_ACU(this).prop('disabled', true).text('优化中...');
+        jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
+        logDebug_ACU(`[正文优化] 结果对话框点击重新优化，messageIndex=${messageIndex}`);
+        await reoptimizeMessage_ACU(messageIndex);
+    });
+}
+/**
  * HTML转义
  */
 // === 以下为 presentation 层独有的 UI 函数（DOM 操作/渲染）===
@@ -101752,7 +101841,9 @@ async function executeContentOptimization_ACU(messageIndex) {
                 hideOptimizationProgressToast_ACU();
             }
             if (config.showDiff && !config.seamlessMode) {
-                showOptimizationDiff_ACU(messageIndex, {
+                // 自动链已写回：用只读结果对话框展示对比（原文/修改方案/优化），不用 toast。
+                // 对话框是 DOM 覆盖层，不受静默提示框拦截；无感模式下保持无打扰，不弹框。
+                showOptimizationResultDialog_ACU(messageIndex, {
                     optimizations: totalOptimizations,
                     summary: `共 ${loopCount} 轮优化，累计 ${totalOptimizations.length} 处改进`,
                     optimizedContent: finalOptimizedContent
@@ -111569,8 +111660,9 @@ function evaluateNewMessageAction_ACU(liveChat, isAutoUpdating, coreApisReady, w
  *   1. MVU 用「额外模型解析」时，本库的自动填表 + 自动正文替换要等 MVU 解析完成后再跑；
  *   2. MVU 手动重试解析成功后，本库要再跑一轮填表 + 正文替换。
  *
- * 铁律：MVU 未装 / 未启用 / 开关（settings.mvuGateEnabled）关闭时，本模块对既有链路**零行为差**——
+ * 铁律：MVU 未装时，本模块对既有链路**零行为差**——
  * 判定同步立即返回，不建定时器、不挂监听、不读缓存集合，也就不存在任何新增失败面。
+ * 联动恒开启（无开关）：MVU 在场即生效。
  * 本闸门位于 v9.1.10 已上线的 W1（正文替换 messageId+内容指纹判重）/ W3（填表 messageId+chatKey 判重）
  * 的**上游**：它只推迟自动链的开跑时点，不改动任何判重语义。
  *
@@ -111687,15 +111779,6 @@ function isMvuExtraAnalysisInProgress_ACU() {
     }
     catch (error) {
         return false;
-    }
-}
-/** 联动开关（settings 体系，默认开）：关 = 现状逐字不变（W4 不等待、W5 不清记录不重跑）。 */
-function isMvuAnalysisGateEnabled_ACU() {
-    try {
-        return settings_ACU?.mvuGateEnabled !== false;
-    }
-    catch (error) {
-        return true;
     }
 }
 /** 调试/测试用只读快照。 */
@@ -111860,9 +111943,6 @@ function waitForMvuAnalysisToSettle_ACU() {
     // 只释放「本次调用自己创建的」等待：异常发生在建 wait 之前时，绝不能顺手把别人在飞的等待放掉。
     let ownWait_ACU = null;
     try {
-        if (!isMvuAnalysisGateEnabled_ACU()) {
-            return Promise.resolve(buildGateResult(null, 'gate_disabled', false, false));
-        }
         if (!isMvuAnalysisHostPresent_ACU()) {
             return Promise.resolve(buildGateResult(null, 'mvu_absent', false, false));
         }
@@ -111953,8 +112033,6 @@ function notifyMvuAnalysisEnded_ACU() {
  */
 function scheduleMvuRerunForLatestProcessedFloor_ACU() {
     try {
-        if (!isMvuAnalysisGateEnabled_ACU())
-            return; // 开关关 = 现状逐字不变
         if (!mvuRerunHandler_ACU)
             return; // 未装配重跑入口（例如 eventSource 缺失）
         const floor = resolveLatestAiFloor_ACU(getChatArray_ACU());
@@ -136963,7 +137041,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260905-20";
+        const stamp = "20260905-21";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -178986,7 +179064,6 @@ const useContentReplaceStore = defineStore('acu-v2-content-replace', {
         autoApply: true,
         showDiff: true,
         parallelMode: false,
-        mvuGateEnabled: true,
         minLength: 100,
         maxOptimizations: 10,
         loopCount: 1,
@@ -179056,8 +179133,6 @@ const useContentReplaceStore = defineStore('acu-v2-content-replace', {
             this.autoApply = cfg.autoApply !== false;
             this.showDiff = cfg.showDiff !== false;
             this.parallelMode = cfg.parallelMode === true;
-            // [MVU联动] 顶层设置键，不在 contentOptimizationSettings 里；未设置过时按默认开处理。
-            this.mvuGateEnabled = settings_ACU.mvuGateEnabled !== false;
             this.minLength = cfg.minLength;
             this.maxOptimizations = cfg.maxOptimizations;
             this.loopCount = cfg.loopCount;
@@ -179082,8 +179157,6 @@ const useContentReplaceStore = defineStore('acu-v2-content-replace', {
             cfg.autoApply = this.autoApply;
             cfg.showDiff = this.showDiff;
             cfg.parallelMode = this.parallelMode;
-            // [MVU联动] 闸门同时管填表与正文替换两条链，不隶属正文替换配置，因此写回 settings 顶层键。
-            settings_ACU.mvuGateEnabled = this.mvuGateEnabled;
             cfg.minLength = normalizeInteger(this.minLength, 100, 0, 1000000);
             cfg.maxOptimizations = normalizeInteger(this.maxOptimizations, 10, 1, 100);
             cfg.loopCount = normalizeInteger(this.loopCount, 1, 1, 10);
@@ -179547,8 +179620,8 @@ var _sfc_main$d = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-v2-content-replace-page[data-v-cbe80bb0] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-content-replace-page__mini-status span[data-v-cbe80bb0] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.5;\n}\n.acu-v2-content-replace-page__number-grid[data-v-cbe80bb0],\r\n.acu-v2-content-replace-page__form-grid[data-v-cbe80bb0] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 12px;\n}\n.acu-v2-content-replace-page__choice-list[data-v-cbe80bb0],\r\n.acu-v2-content-replace-page__rule-stack[data-v-cbe80bb0] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-v2-content-replace-page__mini-status[data-v-cbe80bb0] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 10px;\r\n  padding: 8px 0;\r\n  border: 0;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-content-replace-page__mini-status strong[data-v-cbe80bb0] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-content-replace-page__status-line[data-v-cbe80bb0] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  flex-wrap: wrap;\r\n  margin: 0 0 10px;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-content-replace-page__status-line strong[data-v-cbe80bb0] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-content-replace-page__badge[data-v-cbe80bb0] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  padding: 1px 8px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 500;\n}\n.acu-v2-content-replace-page__select-row[data-v-cbe80bb0] {\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) repeat(3, max-content);\r\n  gap: 6px;\r\n  align-items: stretch;\r\n  min-width: 0;\n}\n.acu-v2-content-replace-page__actions[data-v-cbe80bb0] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  justify-content: flex-end;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-content-replace-page__test-output[data-v-cbe80bb0] {\r\n  margin: 0;\r\n  max-height: 280px;\r\n  overflow: auto;\r\n  padding: 10px 0;\r\n  border: 0;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.55;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\n}\n@media (max-width: 860px) {\n.acu-v2-content-replace-page[data-v-cbe80bb0] {\r\n    padding: 14px;\n}\n.acu-v2-content-replace-page__number-grid[data-v-cbe80bb0],\r\n  .acu-v2-content-replace-page__form-grid[data-v-cbe80bb0] {\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/pages/ContentReplacePage.vue#style-0-cbe80bb0");
-var ContentReplacePage_vue_vue_type_style_index_0_scoped_cbe80bb0_lang = null;
+injectSfcStyle("\n.acu-v2-content-replace-page[data-v-cd4e5f5d] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-content-replace-page__mini-status span[data-v-cd4e5f5d] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.5;\n}\n.acu-v2-content-replace-page__number-grid[data-v-cd4e5f5d],\r\n.acu-v2-content-replace-page__form-grid[data-v-cd4e5f5d] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 12px;\n}\n.acu-v2-content-replace-page__choice-list[data-v-cd4e5f5d],\r\n.acu-v2-content-replace-page__rule-stack[data-v-cd4e5f5d] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-v2-content-replace-page__mini-status[data-v-cd4e5f5d] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 10px;\r\n  padding: 8px 0;\r\n  border: 0;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-content-replace-page__mini-status strong[data-v-cd4e5f5d] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-content-replace-page__status-line[data-v-cd4e5f5d] {\r\n  display: flex;\r\n  align-items: center;\r\n  gap: 8px;\r\n  flex-wrap: wrap;\r\n  margin: 0 0 10px;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-content-replace-page__status-line strong[data-v-cd4e5f5d] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-content-replace-page__badge[data-v-cd4e5f5d] {\r\n  display: inline-flex;\r\n  align-items: center;\r\n  padding: 1px 8px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 500;\n}\n.acu-v2-content-replace-page__select-row[data-v-cd4e5f5d] {\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) repeat(3, max-content);\r\n  gap: 6px;\r\n  align-items: stretch;\r\n  min-width: 0;\n}\n.acu-v2-content-replace-page__actions[data-v-cd4e5f5d] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  justify-content: flex-end;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-content-replace-page__test-output[data-v-cd4e5f5d] {\r\n  margin: 0;\r\n  max-height: 280px;\r\n  overflow: auto;\r\n  padding: 10px 0;\r\n  border: 0;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.55;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\n}\n@media (max-width: 860px) {\n.acu-v2-content-replace-page[data-v-cd4e5f5d] {\r\n    padding: 14px;\n}\n.acu-v2-content-replace-page__number-grid[data-v-cd4e5f5d],\r\n  .acu-v2-content-replace-page__form-grid[data-v-cd4e5f5d] {\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/pages/ContentReplacePage.vue#style-0-cd4e5f5d");
+var ContentReplacePage_vue_vue_type_style_index_0_scoped_cd4e5f5d_lang = null;
 
 const _hoisted_1$d = { class: "acu-v2-content-replace-page" };
 const _hoisted_2$c = { class: "acu-v2-content-replace-page__number-grid" };
@@ -179694,14 +179767,9 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 								"model-value": $setup.store.parallelMode,
 								label: "填表与正文替换并行执行",
 								"onUpdate:modelValue": _cache[8] || (_cache[8] = ($event) => $setup.store.setBoolean("parallelMode", $event))
-							}, null, 8, ["model-value"]),
-							createVNode($setup["AcuCheckbox"], {
-								"model-value": $setup.store.mvuGateEnabled,
-								label: "等待 MVU 额外模型解析完成后再执行填表与正文替换",
-								"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.store.setBoolean("mvuGateEnabled", $event))
 							}, null, 8, ["model-value"])
 						]),
-						createBaseVNode("div", _hoisted_4$9, [_cache[19] || (_cache[19] = createBaseVNode(
+						createBaseVNode("div", _hoisted_4$9, [_cache[18] || (_cache[18] = createBaseVNode(
 							"span",
 							null,
 							"最近可重新优化",
@@ -179719,7 +179787,7 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 							disabled: $setup.store.lastOptimizedMessageIndex < 0,
 							onClick: $setup.store.reoptimizeLatest
 						}, {
-							default: withCtx(() => [..._cache[20] || (_cache[20] = [createBaseVNode(
+							default: withCtx(() => [..._cache[19] || (_cache[19] = [createBaseVNode(
 								"i",
 								{ class: "fa-solid fa-rotate-right" },
 								null,
@@ -179754,7 +179822,7 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 					}, 8, ["variant"])]),
 					default: withCtx(() => [
 						createBaseVNode("p", _hoisted_6$8, [
-							_cache[21] || (_cache[21] = createTextVNode(
+							_cache[20] || (_cache[20] = createTextVNode(
 								" 当前提示词: ",
 								-1
 								/* CACHED */
@@ -179782,7 +179850,7 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 								"empty-text": "暂无正文替换预设",
 								placeholder: "自定义提示词",
 								"show-default-action": false,
-								"onUpdate:modelValue": _cache[10] || (_cache[10] = ($event) => $setup.store.selectPreset($event))
+								"onUpdate:modelValue": _cache[9] || (_cache[9] = ($event) => $setup.store.selectPreset($event))
 							}, null, 8, ["items", "model-value"]),
 							createVNode($setup["AcuIconButton"], {
 								icon: "fa-solid fa-pen",
@@ -179797,7 +179865,7 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 								disabled: !!$setup.store.busyAction,
 								onFile: $setup.store.importPresets
 							}, {
-								default: withCtx(() => [..._cache[22] || (_cache[22] = [createBaseVNode(
+								default: withCtx(() => [..._cache[21] || (_cache[21] = [createBaseVNode(
 									"i",
 									{ class: "fa-solid fa-download" },
 									null,
@@ -179809,14 +179877,14 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 							createVNode($setup["AcuIconButton"], {
 								icon: "fa-solid fa-gear",
 								title: "管理预设",
-								onClick: _cache[11] || (_cache[11] = ($event) => $setup.presetDrawerOpen = true)
+								onClick: _cache[10] || (_cache[10] = ($event) => $setup.presetDrawerOpen = true)
 							})
 						]),
 						$setup.promptGroupMissingContent ? (openBlock(), createBlock($setup["AcuMessage"], {
 							key: 0,
 							kind: "warning"
 						}, {
-							default: withCtx(() => [..._cache[23] || (_cache[23] = [createTextVNode(
+							default: withCtx(() => [..._cache[22] || (_cache[22] = [createTextVNode(
 								" 正文替换提示词缺少 $CONTENT，占位符为空时运行时无法知道要检查哪段正文；请打开编辑器载入默认提示词或补回占位符。 ",
 								-1
 								/* CACHED */
@@ -179839,7 +179907,7 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 							"model-value": $setup.store.extractTags,
 							type: "text",
 							placeholder: "例如: content,正文",
-							"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.store.setString("extractTags", String($event)))
+							"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.store.setString("extractTags", String($event)))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}), createVNode($setup["AcuFormRow"], {
@@ -179850,7 +179918,7 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 							"model-value": $setup.store.excludeTags,
 							type: "text",
 							placeholder: "例如: think,thinking",
-							"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.store.setString("excludeTags", String($event)))
+							"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.store.setString("excludeTags", String($event)))
 						}, null, 8, ["model-value"])]),
 						_: 1
 					})]), createBaseVNode("div", _hoisted_10$5, [createVNode($setup["AcuRulePairList"], {
@@ -179884,7 +179952,7 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 								"model-value": $setup.store.testInput,
 								rows: 5,
 								placeholder: "输入模拟正文，验证提示词与返回格式。",
-								"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.store.setString("testInput", $event))
+								"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.store.setString("testInput", $event))
 							}, null, 8, ["model-value"])]),
 							_: 1
 						}),
@@ -179893,7 +179961,7 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 							loading: $setup.store.busyAction === "test",
 							onClick: $setup.store.runTest
 						}, {
-							default: withCtx(() => [..._cache[24] || (_cache[24] = [createTextVNode(
+							default: withCtx(() => [..._cache[23] || (_cache[23] = [createTextVNode(
 								" 执行优化测试 ",
 								-1
 								/* CACHED */
@@ -179917,12 +179985,12 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 			"is-open": $setup.presetDrawerOpen,
 			presets: $setup.store.promptPresets,
 			message: $setup.store.message,
-			onClose: _cache[15] || (_cache[15] = ($event) => $setup.presetDrawerOpen = false),
+			onClose: _cache[14] || (_cache[14] = ($event) => $setup.presetDrawerOpen = false),
 			onCreateFromDefault: $setup.store.createPresetFromDefault,
 			onEdit: $setup.onEditPreset,
 			onRename: $setup.onRenamePreset,
 			onDelete: $setup.onDeletePreset,
-			onExport: _cache[16] || (_cache[16] = ($event) => $setup.store.exportPresetByName($event))
+			onExport: _cache[15] || (_cache[15] = ($event) => $setup.store.exportPresetByName($event))
 		}, null, 8, [
 			"is-open",
 			"presets",
@@ -179937,8 +180005,8 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 			onClose: $setup.closePromptDrawer,
 			onSave: $setup.onSavePromptGroup,
 			onReset: $setup.onResetPromptGroup,
-			onAdd: _cache[17] || (_cache[17] = ($event) => $setup.store.addPromptSegment($event)),
-			onDelete: _cache[18] || (_cache[18] = ($event) => $setup.store.deletePromptSegment($event)),
+			onAdd: _cache[16] || (_cache[16] = ($event) => $setup.store.addPromptSegment($event)),
+			onDelete: _cache[17] || (_cache[17] = ($event) => $setup.store.deletePromptSegment($event)),
 			onUpdate: $setup.onPromptUpdate
 		}, null, 8, [
 			"is-open",
@@ -179948,7 +180016,7 @@ function _sfc_render$d(_ctx, _cache, $props, $setup, $data, $options) {
 		])
 	]);
 }
-var ContentReplacePage = /* @__PURE__ */ _export_sfc(_sfc_main$d, [["render", _sfc_render$d], ["__scopeId", "data-v-cbe80bb0"]]);
+var ContentReplacePage = /* @__PURE__ */ _export_sfc(_sfc_main$d, [["render", _sfc_render$d], ["__scopeId", "data-v-cd4e5f5d"]]);
 
 /**
  * useSqlConsole — SQL 控制台业务流编排
@@ -180894,7 +180962,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260905-20";
+        const stamp = "20260905-21";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -180903,7 +180971,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.2.7";
+        const v = "9.2.8";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {

@@ -234,6 +234,104 @@ import {
   }
   
   /**
+   * 自动链只读结果对话框：内容已由自动流程写回，这里只展示对比（原文/修改方案/优化），
+   * 不提供「应用」按钮。用于 showDiff 开启 + 非无感模式的自动替换收尾；
+   * 与 showOptimizationDiff_ACU 的 toast 不同，DOM 对话框不受静默提示框拦截。
+   */
+  export function showOptimizationResultDialog_ACU(messageIndex: number, result: any) {
+    const optimizations = Array.isArray(result?.optimizations) ? result.optimizations : [];
+    const dialogHtml = `
+      <div class="acu-optimization-dialog acu-dialog-classic" data-tt-mobile-surface="free-window" style="
+        position: fixed;
+        top: 10px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: var(--acu-bg-0, #24221f);
+        border: 1px solid var(--acu-border, #36332e);
+        border-radius: 2px;
+        padding: 20px;
+        max-width: 800px;
+        width: calc(100% - 20px);
+        max-height: calc(90vh - 20px);
+        overflow-y: auto;
+        z-index: 100000;
+        color: var(--acu-text, #c1b9ad);
+        font-family: "Noto Serif SC", "Source Han Serif CN", "Songti SC", "STSong", "SimSun", serif;
+        box-sizing: border-box;
+      ">
+        <h3 style="margin: 0 0 8px 0; color: var(--acu-accent, #7d4940); font-size: 1.1em; letter-spacing: 1px;">正文替换完成</h3>
+        <p style="margin: 0 0 12px 0; color: var(--acu-text-dim, #8a8075);">共 ${optimizations.length} 处改进${result?.summary ? `，${escapeHtml_ACU(String(result.summary))}` : ''}</p>
+        <div class="optimization-list" style="margin-bottom: 16px; max-height: 400px; overflow-y: auto;">
+          ${optimizations.map((opt: any) => `
+            <div class="optimization-item" style="
+              background: rgba(0, 0, 0, 0.2);
+              border-radius: 1px;
+              padding: 12px;
+              margin-bottom: 8px;
+              border-left: 2px solid var(--acu-border, #36332e);
+            ">
+              <div style="color: var(--acu-text-dim, #8a8075); margin-bottom: 8px; text-decoration: line-through; opacity: 0.7;">
+                <strong>原文：</strong>${escapeHtml_ACU(String(opt?.original || '').substring(0, 200))}${String(opt?.original || '').length > 200 ? '...' : ''}
+              </div>
+              <div style="color: var(--acu-text, #c1b9ad); font-size: 12px; margin-bottom: 8px; padding: 8px; background: rgba(125, 73, 64, 0.1); border-radius: 1px; border-left: 2px solid var(--acu-accent, #7d4940);">
+                <strong>修改方案：</strong>${escapeHtml_ACU(String(opt?.plan || opt?.reason || '未说明'))}
+              </div>
+              <div style="color: #6a8a6a;">
+                <strong>优化：</strong>${escapeHtml_ACU(String(opt?.optimized || '').substring(0, 200))}${String(opt?.optimized || '').length > 200 ? '...' : ''}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+        <div style="display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; padding-bottom: 10px;">
+          <button id="acu-opt-result-reoptimize" style="
+            padding: 8px 16px;
+            border: 1px solid var(--acu-accent, #7d4940);
+            background: transparent;
+            color: var(--acu-accent, #7d4940);
+            border-radius: 1px;
+            cursor: pointer;
+            min-width: 100px;
+            flex-shrink: 0;
+            font-family: inherit;
+          ">🔄 重新优化</button>
+          <button id="acu-opt-result-close" style="
+            padding: 8px 16px;
+            border: none;
+            background: var(--acu-accent, #7d4940);
+            color: var(--acu-bg-0, #24221f);
+            border-radius: 1px;
+            cursor: pointer;
+            font-weight: 600;
+            min-width: 100px;
+            flex-shrink: 0;
+            font-family: inherit;
+          ">关闭</button>
+        </div>
+      </div>
+      <div id="acu-opt-backdrop" data-tt-mobile-surface="backdrop" style="
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0, 0, 0, 0.6);
+        z-index: 99999;
+      "></div>
+    `;
+
+    jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
+    jQuery_API_ACU('body').append(dialogHtml);
+
+    jQuery_API_ACU('#acu-opt-result-close, #acu-opt-backdrop').on('click', function() {
+      jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
+    });
+
+    jQuery_API_ACU('#acu-opt-result-reoptimize').on('click', async function() {
+      jQuery_API_ACU(this).prop('disabled', true).text('优化中...');
+      jQuery_API_ACU('.acu-optimization-dialog, #acu-opt-backdrop').remove();
+      logDebug_ACU(`[正文优化] 结果对话框点击重新优化，messageIndex=${messageIndex}`);
+      await reoptimizeMessage_ACU(messageIndex);
+    });
+  }
+
+  /**
    * HTML转义
    */
 

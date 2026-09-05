@@ -26,7 +26,7 @@ TauriTavern 数据库插件「TTonly·数据库」的干净重构版。
 https://github.com/shuiyue-cmyk/shujuku-rebuild
 ```
 
-安装后自动更新（`auto_update: true`），无需再通过酒馆助手导入脚本。
+后续更新走 TT 扩展面板（`auto_update: true`），开箱即用，无需额外导入脚本。
 
 ## 支持我
 

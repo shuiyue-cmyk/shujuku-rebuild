@@ -15,7 +15,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const m = vi.hoisted(() => ({
-  settings: { mvuGateEnabled: true, contentOptimizationSettings: {} } as any,
+  settings: { contentOptimizationSettings: {} } as any,
   chatKey: 'chat-a',
   evaluateNewMessageAction: vi.fn(),
   resolveGeneratedAiMessageIndex: vi.fn(),
@@ -111,7 +111,6 @@ function createFakeEventSource() {
 beforeEach(() => {
   vi.useFakeTimers();
   vi.clearAllMocks();
-  m.settings.mvuGateEnabled = true;
   m.chatKey = 'chat-a';
   m.chat = [
     { is_user: true, message_id: 0, mes: '玩家：推门而入' },
@@ -238,26 +237,6 @@ describe('解析在飞：填表与正文替换一起延后，只延后一次', (
     expect(m.executeContentOptimization).toHaveBeenCalledTimes(1);
     expect(m.triggerAutomaticUpdateIfNeeded).toHaveBeenCalledTimes(1);
     expect(m.logDebug).toHaveBeenCalledWith(expect.stringContaining('本轮丢弃（防同楼双跑）'));
-  });
-});
-
-describe('开关关闭：现状逐字不变', () => {
-  it('mvuGateEnabled=false → 解析在飞也照常立即执行，不进观察窗', async () => {
-    installFakeMvu(true);
-    const es = createFakeEventSource();
-    attachMvuAnalysisGate_ACU({ eventSource: es });
-    m.settings.mvuGateEnabled = false;
-
-    const promise = handleNewMessageDebounced_ACU('GENERATION_ENDED', { ...baseIntent });
-    await vi.advanceTimersByTimeAsync(500);
-    await promise;
-
-    expect(m.executeContentOptimization).toHaveBeenCalledTimes(1);
-    expect(m.triggerAutomaticUpdateIfNeeded).toHaveBeenCalledTimes(1);
-    // attach 期的注册日志与开关无关；这里断言的是「运行期没有任何等待/放行痕迹」。
-    expect(m.logDebug).not.toHaveBeenCalledWith(expect.stringContaining('[MVU联动] 闸门放行'));
-    expect(m.logDebug).not.toHaveBeenCalledWith(expect.stringContaining('检测到额外模型解析在飞'));
-    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

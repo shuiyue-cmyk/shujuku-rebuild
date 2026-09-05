@@ -5,8 +5,9 @@
  *   1. MVU 用「额外模型解析」时，本库的自动填表 + 自动正文替换要等 MVU 解析完成后再跑；
  *   2. MVU 手动重试解析成功后，本库要再跑一轮填表 + 正文替换。
  *
- * 铁律：MVU 未装 / 未启用 / 开关（settings.mvuGateEnabled）关闭时，本模块对既有链路**零行为差**——
+ * 铁律：MVU 未装时，本模块对既有链路**零行为差**——
  * 判定同步立即返回，不建定时器、不挂监听、不读缓存集合，也就不存在任何新增失败面。
+ * 联动恒开启（无开关）：MVU 在场即生效。
  * 本闸门位于 v9.1.10 已上线的 W1（正文替换 messageId+内容指纹判重）/ W3（填表 messageId+chatKey 判重）
  * 的**上游**：它只推迟自动链的开跑时点，不改动任何判重语义。
  *
@@ -60,7 +61,6 @@
 
 import {
   currentChatFileIdentifier_ACU,
-  settings_ACU,
 } from './state-manager';
 import { getChatArray_ACU } from '../../data/gateways/chat-gateway';
 import {
@@ -93,7 +93,6 @@ export const MVU_GATE_OBSERVE_MISS_LIMIT_ACU = 3;
 
 /** 放行原因。 */
 export type MvuGateReason_ACU =
-  | 'gate_disabled'                  // 开关关闭 → 现状逐字不变
   | 'mvu_absent'                     // MVU 不在场 → 零开销放行
   | 'observation_window_elapsed'     // 观察窗窗满仍无 started → 放行（记一次 miss）
   | 'observation_bypassed'           // 自适应降窗：本聊天连续未见 started，跳过观察窗同步放行
@@ -195,15 +194,6 @@ export function isMvuExtraAnalysisInProgress_ACU(): boolean {
     return mvu.isDuringExtraAnalysis() === true;
   } catch (error) {
     return false;
-  }
-}
-
-/** 联动开关（settings 体系，默认开）：关 = 现状逐字不变（W4 不等待、W5 不清记录不重跑）。 */
-export function isMvuAnalysisGateEnabled_ACU(): boolean {
-  try {
-    return settings_ACU?.mvuGateEnabled !== false;
-  } catch (error) {
-    return true;
   }
 }
 
@@ -362,9 +352,6 @@ export function waitForMvuAnalysisToSettle_ACU(): Promise<MvuGateResult_ACU> {
   // 只释放「本次调用自己创建的」等待：异常发生在建 wait 之前时，绝不能顺手把别人在飞的等待放掉。
   let ownWait_ACU: MvuGateWait_ACU | null = null;
   try {
-    if (!isMvuAnalysisGateEnabled_ACU()) {
-      return Promise.resolve(buildGateResult(null, 'gate_disabled', false, false));
-    }
     if (!isMvuAnalysisHostPresent_ACU()) {
       return Promise.resolve(buildGateResult(null, 'mvu_absent', false, false));
     }
@@ -454,7 +441,6 @@ export function notifyMvuAnalysisEnded_ACU(): void {
  */
 export function scheduleMvuRerunForLatestProcessedFloor_ACU(): void {
   try {
-    if (!isMvuAnalysisGateEnabled_ACU()) return;      // 开关关 = 现状逐字不变
     if (!mvuRerunHandler_ACU) return;                 // 未装配重跑入口（例如 eventSource 缺失）
     const floor = resolveLatestAiFloor_ACU(getChatArray_ACU());
     const messageId = floor?.messageId;

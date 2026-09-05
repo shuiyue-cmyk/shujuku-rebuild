@@ -931,9 +931,6 @@ export   function buildDefaultSettings_ACU() {
           maxConcurrentGroups: 1,
           autoUpdateEnabled: true,
           standardizedTableFillEnabled: true, // [新增] 规范填表功能
-          // [MVU联动] 等待 MVU「额外模型解析」完成后再执行自动填表与正文替换（默认开启）。
-          // 关闭 = 闸门完全旁路，行为与 v9.1.10 逐字一致；MVU 未装/未启用时无论开关如何都零开销放行。
-          mvuGateEnabled: true,
           toastMuteEnabled: false,
           // [剧情推进] 设置
           plotSettings: cloneDefaultValue_ACU(DEFAULT_PLOT_SETTINGS_ACU),

@@ -114,8 +114,8 @@ describe('ContentReplacePage', () => {
     expect(text).toContain('标签筛选');
     expect(text).toContain('正文替换预设');
     expect(text).toContain('手动测试');
-    // [MVU联动] 闸门开关与「填表与正文替换并行执行」同区域
-    expect(text).toContain('等待 MVU 额外模型解析完成后再执行填表与正文替换');
+    // [MVU联动] 闸门恒开启：开关已从替换模式区移除，联动永远生效
+    expect(text).not.toContain('等待 MVU 额外模型解析完成后再执行填表与正文替换');
     expect(text).toContain('默认预设');
     expect(text).not.toContain('未选择');
 

@@ -52,6 +52,7 @@ const h = vi.hoisted(() => {
     logError: vi.fn(),
     toast: vi.fn(),
     showDiff: vi.fn(),
+    showResultDialog: vi.fn(),
     showDiffDialogForLoop: vi.fn(),
     triggerAutoUpdate: vi.fn(async () => undefined),
   };
@@ -113,6 +114,7 @@ vi.mock('../../src/presentation/components/optimization-ui/optimization-ui-overl
 vi.mock('../../src/presentation/components/optimization-ui/optimization-ui-diff', () => ({
   showOptimizationDiffDialogForLoop_ACU: h.showDiffDialogForLoop,
   showOptimizationDiff_ACU: h.showDiff,
+  showOptimizationResultDialog_ACU: h.showResultDialog,
 }));
 
 import { settings_ACU } from '../../src/service/runtime/state-manager';
@@ -153,6 +155,7 @@ beforeEach(() => {
   h.logDebug.mockClear();
   h.toast.mockClear();
   h.showDiff.mockClear();
+  h.showResultDialog.mockClear();
   h.showDiffDialogForLoop.mockClear();
   h.triggerAutoUpdate.mockClear();
   useAutoApplySettings();
@@ -332,5 +335,25 @@ describe('自动正文替换入口判重（executeContentOptimization_ACU）', (
     expect(await executeContentOptimization_ACU(1)).toBe(false);
     expect(h.perform).not.toHaveBeenCalled();
     expect(h.processed.size).toBe(0);
+  });
+
+  it('自动应用 + 显示优化对比（非无感）：写回后弹只读结果对话框而非 toast', async () => {
+    (settings_ACU as any).contentOptimizationSettings.seamlessMode = false;
+    (settings_ACU as any).contentOptimizationSettings.showDiff = true;
+    h.perform.mockImplementation(async () => ({
+      success: true,
+      optimizations: [{ type: 'replace', original: '夜色漫过屋檐', optimized: '夜色漫过窗台', plan: '改写' }],
+      summary: '一处改进',
+      optimizedContent: '夜色漫过窗台，她收起最后一封信，站在阶前听雨。',
+    }));
+
+    expect(await executeContentOptimization_ACU(1)).toBe(true);
+    expect(h.replace).toHaveBeenCalledTimes(1);
+    // 只读结果对话框被调用一次，携带全部优化项；完成 toast 不再承担对比展示
+    expect(h.showResultDialog).toHaveBeenCalledTimes(1);
+    expect(h.showResultDialog).toHaveBeenCalledWith(1, expect.objectContaining({
+      optimizations: [{ type: 'replace', original: '夜色漫过屋檐', optimized: '夜色漫过窗台', plan: '改写' }],
+    }));
+    expect(h.toast).not.toHaveBeenCalledWith('success', expect.stringContaining('正文优化完成'));
   });
 });

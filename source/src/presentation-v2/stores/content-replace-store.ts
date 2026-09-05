@@ -53,8 +53,6 @@ interface ContentReplaceState {
   autoApply: boolean;
   showDiff: boolean;
   parallelMode: boolean;
-  /** [MVU联动] 等待 MVU 额外模型解析完成后再跑填表 + 正文替换（settings 顶层键，默认开）。 */
-  mvuGateEnabled: boolean;
   minLength: number;
   maxOptimizations: number;
   loopCount: number;
@@ -266,7 +264,6 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
     autoApply: true,
     showDiff: true,
     parallelMode: false,
-    mvuGateEnabled: true,
     minLength: 100,
     maxOptimizations: 10,
     loopCount: 1,
@@ -332,8 +329,6 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
       this.autoApply = cfg.autoApply !== false;
       this.showDiff = cfg.showDiff !== false;
       this.parallelMode = cfg.parallelMode === true;
-      // [MVU联动] 顶层设置键，不在 contentOptimizationSettings 里；未设置过时按默认开处理。
-      this.mvuGateEnabled = (settings_ACU as any).mvuGateEnabled !== false;
       this.minLength = cfg.minLength;
       this.maxOptimizations = cfg.maxOptimizations;
       this.loopCount = cfg.loopCount;
@@ -358,8 +353,6 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
       cfg.autoApply = this.autoApply;
       cfg.showDiff = this.showDiff;
       cfg.parallelMode = this.parallelMode;
-      // [MVU联动] 闸门同时管填表与正文替换两条链，不隶属正文替换配置，因此写回 settings 顶层键。
-      (settings_ACU as any).mvuGateEnabled = this.mvuGateEnabled;
       cfg.minLength = normalizeInteger(this.minLength, 100, 0, 1000000);
       cfg.maxOptimizations = normalizeInteger(this.maxOptimizations, 10, 1, 100);
       cfg.loopCount = normalizeInteger(this.loopCount, 1, 1, 10);
@@ -373,7 +366,7 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
       persist();
       this.refreshFromSettings();
     },
-    setBoolean(key: 'enabled' | 'seamlessMode' | 'autoApply' | 'showDiff' | 'parallelMode' | 'mvuGateEnabled', value: boolean): void {
+    setBoolean(key: 'enabled' | 'seamlessMode' | 'autoApply' | 'showDiff' | 'parallelMode', value: boolean): void {
       this[key] = !!value;
       this.saveToSettings();
     },
