@@ -278,3 +278,64 @@ describe('triggerAutomaticUpdateIfNeeded_ACU 回声防重', () => {
     expect(manualSource).not.toContain('shouldSkipDuplicateAutoTableFill_ACU');
   });
 });
+
+// ═══ [静默进度框] 「自动填表进行中」常驻 toast 不受静默提示框拦截（MANUAL_TABLE 类别在白名单）═══
+describe('triggerAutomaticUpdateIfNeeded_ACU 静默进度框', () => {
+  const okResult = { success: true, totalGroups: 1, failedGroups: 0, errors: [] };
+
+  beforeEach(() => {
+    guardStore.fill.clear();
+    m.wasStopped = false;
+    m.executePlan.mockReset();
+    m.logSkip.mockReset();
+    m.buildPlan.mockReset();
+    m.preCheck = { canProceed: true, reason: '' };
+    m.getChat.mockImplementation(() => [
+      { is_user: true, message_id: 10, mes: '玩家行动' },
+      { is_user: false, message_id: 11, mes: '夜色漫过屋檐。' },
+    ]);
+  });
+
+  afterEach(async () => {
+    // isSqliteMode/showToastr/settings 均为跨用例共享 mock，必须显式回滚默认实现
+    const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
+    vi.mocked(isSqliteMode).mockReturnValue(true);
+    const toast = await import('../../../src/presentation/theme/toast');
+    toast.showToastr_ACU.mockReset();
+    toast.showToastr_ACU.mockImplementation(undefined);
+    const state = await import('../../../src/service/runtime/state-manager');
+    (state.settings_ACU as any).toastMuteEnabled = true;
+  });
+
+  async function runGroupedFill(mute: boolean) {
+    const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
+    vi.mocked(isSqliteMode).mockReturnValue(false);   // 非 SQLite=分组并发路径（常驻进度框所在分支）
+    const state = await import('../../../src/service/runtime/state-manager');
+    (state.settings_ACU as any).toastMuteEnabled = mute;
+    const toast = await import('../../../src/presentation/theme/toast');
+    const fakeToast = { find: vi.fn(() => ({ text: vi.fn() })) };
+    toast.showToastr_ACU.mockReturnValue(fakeToast as any);
+    m.executePlan.mockResolvedValue(okResult);
+    const { triggerAutomaticUpdateIfNeeded_ACU } = await import('../../../src/presentation/triggers/settings-ui-sync/settings-ui-trigger');
+    await triggerAutomaticUpdateIfNeeded_ACU();
+    await settleMicrotasks();
+    return toast.showToastr_ACU;
+  }
+
+  it('静默开启+分组模式：仍创建常驻进度 toast（timeOut:0 + manual_table 白名单类别），填表开始即提示进行中', async () => {
+    const showToastr = await runGroupedFill(true);
+    // 首条「检测到 N 个表格需要更新」公告 + 常驻进度框；进度框必须存在且带进行中文案与终止按钮形状
+    const progressCall = showToastr.mock.calls.find((args: any[]) =>
+      args[0] === 'info' && String(args[1]).includes('自动填表正在准备') && args[2]?.timeOut === 0);
+    expect(progressCall).toBeTruthy();
+    expect(progressCall![2].acuToastCategory).toBe('manual_table'); // 静默白名单类别，toast 层不会拦截
+  });
+
+  it('静默关闭：同样创建常驻进度 toast（本改动不改变非静默路径）', async () => {
+    const showToastr = await runGroupedFill(false);
+    const progressCall = showToastr.mock.calls.find((args: any[]) =>
+      args[0] === 'info' && String(args[1]).includes('自动填表正在准备') && args[2]?.timeOut === 0);
+    expect(progressCall).toBeTruthy();
+    expect(progressCall![2].acuToastCategory).toBe('manual_table');
+  });
+});

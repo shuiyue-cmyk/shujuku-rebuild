@@ -78830,7 +78830,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.2.1" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.2.2" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -111544,7 +111544,10 @@ async function triggerAutomaticUpdateIfNeeded_ACU(performanceContext) {
         }
         const autoGroupedAbortController = new AbortController();
         let autoProgressToast = null;
-        if (useGroupedAutoUpdates && !settings_ACU.toastMuteEnabled) {
+        // 静默提示框只静音「完成/公告」类 toast；「自动填表进行中」常驻进度框（含终止按钮）
+        // 在静默开启时也显示——其 MANUAL_TABLE 类别本就在 toast 静默白名单内不会被拦截，
+        // 进度更新与 finally clearAutoUpdateToast 收口生命周期保持原样（填表结束框即消失）。
+        if (useGroupedAutoUpdates) {
             const stopButtonId = `acu-stop-auto-update-btn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
             const stopButtonHtml = renderStopButton_ACU(stopButtonId, '终止');
             const initialMessage = '自动填表正在准备，请稍候...';
@@ -181149,7 +181152,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.2.1";
+        const v = "9.2.2";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {

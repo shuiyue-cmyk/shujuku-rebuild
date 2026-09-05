@@ -283,7 +283,10 @@ let pendingAutoUpdatePerformanceContext_ACU: { runId?: string; parentSpanId?: st
 
     const autoGroupedAbortController = new AbortController();
     let autoProgressToast: any = null;
-    if (useGroupedAutoUpdates && !settings_ACU.toastMuteEnabled) {
+    // 静默提示框只静音「完成/公告」类 toast；「自动填表进行中」常驻进度框（含终止按钮）
+    // 在静默开启时也显示——其 MANUAL_TABLE 类别本就在 toast 静默白名单内不会被拦截，
+    // 进度更新与 finally clearAutoUpdateToast 收口生命周期保持原样（填表结束框即消失）。
+    if (useGroupedAutoUpdates) {
         const stopButtonId = `acu-stop-auto-update-btn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         const stopButtonHtml = renderStopButton_ACU(stopButtonId, '终止');
         const initialMessage = '自动填表正在准备，请稍候...';
