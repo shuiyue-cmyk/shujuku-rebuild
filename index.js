@@ -78446,7 +78446,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.2.6" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.2.7" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -136963,7 +136963,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260905-19";
+        const stamp = "20260905-20";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -155915,8 +155915,8 @@ var _sfc_main$U = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-api-config-panel__hint[data-v-205b07f6] {\r\n  color: var(--acu-text-3, #9e978e);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-api-config-panel__hint-danger[data-v-205b07f6] {\r\n  color: var(--acu-danger, #e5484d);\n}\n.acu-api-config-panel__select-row[data-v-205b07f6] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-205b07f6] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-205b07f6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-205b07f6] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-205b07f6] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-205b07f6] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-205b07f6] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-205b07f6] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-205b07f6] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-205b07f6");
-var ApiConfigPanel_vue_vue_type_style_index_0_scoped_205b07f6_lang = null;
+injectSfcStyle("\n.acu-api-config-panel__hint[data-v-7f369d46] {\r\n  color: var(--acu-text-3, #9e978e);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-api-config-panel__hint-danger[data-v-7f369d46] {\r\n  color: var(--acu-danger, #e5484d);\n}\n.acu-api-config-panel__select-row[data-v-7f369d46] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-7f369d46] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-7f369d46] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-7f369d46] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-7f369d46] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-7f369d46] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-7f369d46] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-7f369d46] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-7f369d46] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-7f369d46");
+var ApiConfigPanel_vue_vue_type_style_index_0_scoped_7f369d46_lang = null;
 
 const _hoisted_1$S = { class: "acu-api-config-panel__select-row" };
 const _hoisted_2$L = { class: "acu-api-config-panel__editor-section" };
@@ -156120,7 +156120,7 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 						createVNode($setup["AcuToggle"], {
 							modelValue: $setup.activeDraft.jsonFormatOutput,
 							"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.activeDraft.jsonFormatOutput = $event),
-							label: "JSON 格式化输出",
+							label: "需要时格式化输出",
 							description: "该预设开启后，需要明确返回 JSON 的调用（正文替换/Skill 化/决策/改表助手/续写 Agent 协议）会在请求体附加 response_format json_object，与 MVU 格式化输出同参。不支持该参数的后端请勿开启，或用「排除主体参数」填 response_format 剔除。"
 						}, null, 8, ["modelValue"])
 					]),
@@ -156246,7 +156246,7 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["title", "description"]);
 }
-var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$U, [["render", _sfc_render$U], ["__scopeId", "data-v-205b07f6"]]);
+var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$U, [["render", _sfc_render$U], ["__scopeId", "data-v-7f369d46"]]);
 
 // ═══════════════════════════════════════════════════════════
 // service/settings/feature-preset-reference-service.ts — 功能级 API 预设引用
@@ -180894,7 +180894,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260905-19";
+        const stamp = "20260905-20";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -180903,7 +180903,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.2.6";
+        const v = "9.2.7";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {
