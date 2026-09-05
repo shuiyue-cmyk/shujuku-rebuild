@@ -22,10 +22,19 @@ import {
     recordAutoTableFillProcessed_ACU,
 } from '../../data/storage/optimization-cache-storage';
 import { logDebug_ACU } from '../../shared/utils';
+import type { AiFloorSignature_ACU } from '../runtime/state-manager';
 
 export interface AutoFillFloor_ACU {
     messageIndex: number;
     messageId: any;
+}
+
+/**
+ * AI 楼判定的唯一口径：!is_user（含 narrator 系统楼）。
+ * resolveLatestAiFloor_ACU 与 resolveAiFloorSignature_ACU 共用，杜绝再造第二套标准。
+ */
+function isAiFloor_ACU(message: any): boolean {
+    return !!message && !message.is_user;
 }
 
 /**
@@ -36,10 +45,31 @@ export function resolveLatestAiFloor_ACU(chat: any): AutoFillFloor_ACU | null {
     const list = Array.isArray(chat) ? chat : [];
     for (let index = list.length - 1; index >= 0; index -= 1) {
         const message = list[index];
-        if (!message || message.is_user) continue;
+        if (!isAiFloor_ACU(message)) continue;
         return { messageIndex: index, messageId: message.message_id ?? null };
     }
     return null;
+}
+
+/**
+ * GENERATION_ENDED 的「新 AI 楼输出」签名：AI 楼数 + 最新 AI 楼 message_id。
+ * 与 resolveLatestAiFloor_ACU 严格同口径（AI 楼 = !is_user，含 narrator）。
+ *
+ * 用途：宿主 GENERATION_ENDED 只由 hideStopButton 派发，外部插件收尾/停止会凭空补一条；
+ * 这类事件没有配对上下文，门控此前一律放行。连续两次签名完全相同 ⇒ 期间零新 AI 楼 ⇒ 假事件，
+ * 由 state-manager.shouldProcessAutoTableUpdateForGenerationEnded_ACU 源头丢弃。
+ *
+ * 纯函数：聊天数组由调用方读一次传入（门控不反向依赖 chat-gateway）。空聊天/非数组
+ * 返回 { 0, null } 而不是 null——签名本身永远可用。
+ */
+export function resolveAiFloorSignature_ACU(chat: any): AiFloorSignature_ACU {
+    const list = Array.isArray(chat) ? chat : [];
+    let aiFloorCount = 0;
+    for (const message of list) {
+        if (isAiFloor_ACU(message)) aiFloorCount += 1;
+    }
+    const latestMessageId = resolveLatestAiFloor_ACU(list)?.messageId;
+    return { aiFloorCount, latestAiMessageId: latestMessageId ?? null };
 }
 
 /**

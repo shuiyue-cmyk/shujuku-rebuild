@@ -324,6 +324,104 @@ describe('mainInitialize_ACU GENERATION_STARTED 复位终止残留', () => {
   });
 });
 
+// [152 收紧] GENERATION_ENDED 监听器必须把「新 AI 楼证据」签名交给门控：宿主 ended 只由 hideStopButton
+// 派发，外部插件（sr 提示词查看器直接 Generate + stopGeneration、酒馆助手 generate/generateRaw、MVU 额外
+// 模型收尾）会凭空补一条无配对的 ended，此前一律放行去拉填表 + 正文替换链，W1/W3 判重拦不住「该楼未处理过 /
+// 首轮在飞」。签名由监听器读一次聊天数组派生（!is_user 口径，含 narrator），门控据此丢弃零产出假事件。
+describe('mainInitialize_ACU GENERATION_ENDED 无配对假事件收紧', () => {
+  // 本组用例会改写「内部 ended 专吞」的返回值并挂假定时器，无论断言是否命中都必须还原，
+  // 否则后面的 GENERATION_ENDED 用例会静默早退（mockReturnValue 不是 vi.clearAllMocks 能清掉的）。
+  afterEach(async () => {
+    vi.useRealTimers();
+    const internal = await import('../../../src/service/continuation/internal-ai-events');
+    vi.mocked(internal.consumeContinuationInternalAiGenerationEnded_ACU).mockReturnValue(null);
+  });
+
+  it('监听器把事件时刻的 AI 楼签名交给门控（含 narrator 口径）', async () => {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    vi.mocked(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).mockReturnValue(true);
+    m.consumeGenerationContext.mockReturnValue(null);
+    m.api.chat = [
+      { is_user: false, message_id: 5 },
+      { is_user: true, message_id: 6 },
+      { is_user: false, extra: { type: 'narrator' }, message_id: 7 },
+    ];
+
+    m.generationEndedHandler!(8);
+
+    expect(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).toHaveBeenCalledWith(null, { aiFloorCount: 2, latestAiMessageId: 7 });
+    expect(m.handleNewMessage).toHaveBeenCalledTimes(1);
+    expect(m.handleNewMessage).toHaveBeenCalledWith('GENERATION_ENDED', expect.objectContaining({ eventMessageId: 8 }));
+  });
+
+  it('无配对 + 门控判「零产出」丢弃时不再派发自动填表链（不再烧填表 / 正文替换 AI）', async () => {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    vi.mocked(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).mockReturnValue(false);
+    m.consumeGenerationContext.mockReturnValue(null);
+    m.api.chat = [{ is_user: false, message_id: 5 }];
+
+    m.generationEndedHandler!(6);
+
+    expect(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).toHaveBeenCalledTimes(1);
+    expect(m.handleNewMessage).not.toHaveBeenCalled();
+  });
+
+  it('签名按每次事件实时读取：新 AI 楼落地后交给门控的签名随之变化', async () => {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    vi.mocked(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).mockReturnValue(true);
+    m.consumeGenerationContext.mockReturnValue(null);
+    m.api.chat = [{ is_user: false, message_id: 5 }];
+    m.generationEndedHandler!(6);
+    m.api.chat = [
+      { is_user: false, message_id: 5 },
+      { is_user: true, message_id: 6 },
+      { is_user: false, message_id: 7 },
+    ];
+    m.generationEndedHandler!(8);
+
+    const forwarded = vi.mocked(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).mock.calls.map((call: any) => call[1]);
+    expect(forwarded).toEqual([
+      { aiFloorCount: 1, latestAiMessageId: 5 },
+      { aiFloorCount: 2, latestAiMessageId: 7 },
+    ]);
+  });
+
+  it('推演②：续写内部生成的 ended 仍在门控之前被专吞（不读签名、不派发）', async () => {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    const internal = await import('../../../src/service/continuation/internal-ai-events');
+    vi.mocked(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).mockReturnValue(true);
+    // 本楼属于续写链内部的交火生成：门控拿不到这次 ended，签名也就无从计算。
+    vi.mocked(internal.consumeContinuationInternalAiGenerationEnded_ACU)
+      .mockReturnValue({ source: 'continuation_bridge', requestId: 'r-1' } as any);
+
+    m.generationEndedHandler!(42);
+
+    expect(m.consumeGenerationContext).toHaveBeenCalledOnce();
+    expect(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).not.toHaveBeenCalled();
+    expect(m.handleNewMessage).not.toHaveBeenCalled();
+  });
+
+  // 推演①：W5「MVU 解析完成 → 联动重跑」走 handleNewMessageDebounced_ACU 统一入口，
+  // 不经 GENERATION_ENDED 门控，因此本次收紧不会把权威重跑轮一起丢掉。
+  it('W5 MVU 解析结束的联动重跑不查询本门控', async () => {
+    vi.useFakeTimers();
+    const sm = await import('../../../src/service/runtime/state-manager');
+    const cache = await import('../../../src/data/storage/optimization-cache-storage');
+    vi.mocked(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).mockReturnValue(true);
+    m.currentChatKey = 'chat-mvu';
+    m.api.chat = [{ is_user: false, message_id: 21 }];
+    cache.recordAutoTableFillProcessed_ACU({ messageId: 21, messageIndex: 0, chatKey: 'chat-mvu', updatedAt: 1 });
+
+    m.mvuEndedHandler!();
+    await vi.advanceTimersByTimeAsync(3000);
+
+    expect(m.handleNewMessage).toHaveBeenCalledWith('MVU_ANALYSIS_ENDED');
+    expect(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).not.toHaveBeenCalled();
+    cache.clearAutoTableFillProcessed_ACU();
+    vi.useRealTimers();
+  });
+});
+
 // 3cfddd：桥的认领开关由单一 allowLoose 布尔升级为事件分类上下文。init.ts 必须把
 // quiet / dryRun / 自动触发三项如实上报——桥据此把「普通宽松认领」与「桥自己发起的
 // 交火重试认领」分开，自动触发的生成不再有权认领别人的续写轮。

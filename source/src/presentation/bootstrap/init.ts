@@ -81,8 +81,10 @@ import {
   loadAllChatMessages_ACU
 } from '../../service/worldbook/pipeline';
 import {
-  emitMessageUpdated_ACU
+  emitMessageUpdated_ACU,
+  getChatArray_ACU
 } from '../../data/gateways/chat-gateway';
+import { resolveAiFloorSignature_ACU } from '../../service/table/auto-fill-echo-guard';
 import {
   refreshMergedDataAndNotifyWithUI_ACU
 } from '../components/pipeline-ui-helpers';
@@ -743,9 +745,14 @@ export   function mainInitialize_ACU() {
                       generationSeq: generationGate_ACU.generationSeq > 0 ? generationGate_ACU.generationSeq : undefined,
                   }
                   : undefined;
-                if (shouldProcessAutoTableUpdateForGenerationEnded_ACU(generationContext)) {
+                // [152 收紧] 「新 AI 楼证据」签名：本事件时刻的 AI 楼数 + 最新 AI 楼 message_id（含 narrator，
+                // 与 auto-fill-echo-guard 同口径）。聊天数组在这里读一次，交给门控自行决定无配对假 ended 的去留。
+                const endedFloorSignature_ACU = resolveAiFloorSignature_ACU(getChatArray_ACU());
+                if (shouldProcessAutoTableUpdateForGenerationEnded_ACU(generationContext, endedFloorSignature_ACU)) {
                   handleNewMessageDebounced_ACU('GENERATION_ENDED', autoFillIntent);
-                } else {
+                } else if (generationContext) {
+                  // 只有拿到配对上下文时「quiet/dryRun/自动触发」这条诊断才成立；
+                  // 无配对 ended 的丢弃已由门控按 unpaired_ended_no_new_output 记录，不再重复报因。
                   logDebug_ACU('ACU: Skip auto table update due to quiet/background generation.');
                   logAutoFillSkip_ACU('quiet_or_background_generation', {
                     eventType: 'GENERATION_ENDED',

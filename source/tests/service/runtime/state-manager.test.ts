@@ -6,12 +6,19 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const {
   mockGetChatArray,
+  mockLogAutoFillSkip,
 } = vi.hoisted(() => ({
   mockGetChatArray: vi.fn(() => []),
+  mockLogAutoFillSkip: vi.fn(),
 }));
 
 vi.mock('../../../src/data/gateways/chat-gateway', () => ({
   getChatArray_ACU: mockGetChatArray,
+}));
+
+// 门控收紧后要能观测「丢弃原因」，日志通道本身不参与判定。
+vi.mock('../../../src/shared/trigger-diagnostics', () => ({
+  logAutoFillSkip_ACU: mockLogAutoFillSkip,
 }));
 
 vi.mock('../../../src/shared/defaults-json.js', () => ({
@@ -80,6 +87,11 @@ beforeEach(() => {
   generationGate_ACU.lastGeneration = null;
   generationGate_ACU.generationSeq = 0;
   generationGate_ACU.activeGenerations = [];
+  // [152 收紧] AI 楼签名是门控唯一的跨轮状态，每轮回到「启动后尚未放行」形态。
+  // 清空后再断言一次：哪天有人把这个字段摘掉/改名（或换了个整对象重置），这里先红，
+  // 而不是让「无配对 + 签名相同 → 丢弃」的用例静默假绿。
+  generationGate_ACU.lastEndedFloorSignature_ACU = null;
+  expect(generationGate_ACU.lastEndedFloorSignature_ACU).toBeNull();
   // 重置 loopState
   loopState_ACU.isLooping = false;
   loopState_ACU.isRetrying = false;
@@ -322,6 +334,99 @@ describe('shouldProcessAutoTableUpdateForGenerationEnded_ACU', () => {
   it('正常生成时返回 true', () => {
     recordGenerationContext_ACU('normal', {}, false);
     expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU()).toBe(true);
+  });
+});
+
+// ═══ [152 收紧] 无配对 ENDED 必须有「新 AI 楼证据」═══
+// 宿主 GENERATION_ENDED 唯一 emit 点 = hideStopButton，外部插件（酒馆助手 generate/generateRaw、
+// sr 提示词查看器 Generate + stopGeneration、MVU 额外模型收尾）会凭空派发 ended。这些事件没有配对
+// 上下文，此前一律放行去拉填表 + 正文替换链。收紧只作用于「无配对」子集：签名与上次放行完全相同即
+// 零新 AI 楼 → 源头丢弃；配对（g 存在）路径的结论一字不动。
+describe('shouldProcessAutoTableUpdateForGenerationEnded_ACU 无配对 ENDED 的新 AI 楼证据', () => {
+  const signature = (aiFloorCount: number, latestAiMessageId: number | null) => ({ aiFloorCount, latestAiMessageId });
+  const paired = (over: any = {}) => ({ seq: 1, type: 'normal', params: {}, dryRun: false, at: Date.now(), ...over });
+
+  it('无配对 + 签名与上次放行完全相同 → 丢弃并记 unpaired_ended_no_new_output', () => {
+    generationGate_ACU.lastEndedFloorSignature_ACU = signature(2, 9);
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(null, signature(2, 9))).toBe(false);
+    expect(mockLogAutoFillSkip).toHaveBeenCalledWith('unpaired_ended_no_new_output', { aiFloorCount: 2, latestAiMessageId: 9 });
+    // 拒绝不更新签名；同楼再来假 ended 仍稳定丢弃，不是只挡一次。
+    expect(generationGate_ACU.lastEndedFloorSignature_ACU).toEqual(signature(2, 9));
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(null, signature(2, 9))).toBe(false);
+    expect(mockLogAutoFillSkip).toHaveBeenCalledTimes(2);
+  });
+
+  it('无配对 + AI 楼数增加 → 放行，并且放行时登记当次签名', () => {
+    generationGate_ACU.lastEndedFloorSignature_ACU = signature(2, 9);
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(null, signature(3, 10))).toBe(true);
+    expect(mockLogAutoFillSkip).not.toHaveBeenCalled();
+    expect(generationGate_ACU.lastEndedFloorSignature_ACU).toEqual(signature(3, 10));
+    // 真产出之后紧跟的外部回声（同楼零产出）→ 按新签名丢弃。
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(null, signature(3, 10))).toBe(false);
+  });
+
+  it('推演⑤：无配对 + 楼数相同但最新楼 message_id 变化（regenerate）→ 放行', () => {
+    generationGate_ACU.lastEndedFloorSignature_ACU = signature(2, 9);
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(null, signature(2, 12))).toBe(true);
+    expect(generationGate_ACU.lastEndedFloorSignature_ACU).toEqual(signature(2, 12));
+  });
+
+  it('推演⑥：无配对 + message_id 未变但楼数增加（群聊代打 / 开场白新楼）→ 放行', () => {
+    generationGate_ACU.lastEndedFloorSignature_ACU = signature(2, 9);
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(null, signature(3, 9))).toBe(true);
+    expect(generationGate_ACU.lastEndedFloorSignature_ACU).toEqual(signature(3, 9));
+  });
+
+  it('无配对 + 启动后首次（既有签名为 null）→ 保守放行并登记', () => {
+    expect(generationGate_ACU.lastEndedFloorSignature_ACU).toBeNull();
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(null, signature(2, 9))).toBe(true);
+    expect(mockLogAutoFillSkip).not.toHaveBeenCalled();
+    expect(generationGate_ACU.lastEndedFloorSignature_ACU).toEqual(signature(2, 9));
+  });
+
+  it('推演④：无配对 + 只有 user 楼新增（查看器 send_if_empty）→ 签名不变 → 丢弃', () => {
+    // 签名由调用方按 !is_user 口径算：user 楼不进 aiFloorCount，也不改最新 AI 楼 message_id。
+    generationGate_ACU.lastEndedFloorSignature_ACU = signature(2, 9);
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(null, signature(2, 9))).toBe(false);
+    expect(mockLogAutoFillSkip).toHaveBeenCalledTimes(1);
+  });
+
+  it('无配对 + 调用方没读聊天数组（签名 undefined/null）→ 逐字保持既有放行，且不抹掉既有签名', () => {
+    generationGate_ACU.lastEndedFloorSignature_ACU = signature(2, 9);
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(null)).toBe(true);
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(null, undefined)).toBe(true);
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(null, null)).toBe(true);
+    expect(generationGate_ACU.lastEndedFloorSignature_ACU).toEqual(signature(2, 9));
+    expect(mockLogAutoFillSkip).not.toHaveBeenCalled();
+  });
+
+  it('门控自行消费上下文的历史调用形状（省略 context）同样适用收紧规则', () => {
+    generationGate_ACU.lastEndedFloorSignature_ACU = signature(1, 3);
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(undefined, signature(1, 3))).toBe(false);
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(undefined, signature(2, 4))).toBe(true);
+  });
+
+  it('配对上下文拒绝（dryRun / quiet / quiet_prompt / automatic_trigger）语义一字不变', () => {
+    generationGate_ACU.lastEndedFloorSignature_ACU = signature(2, 9);
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(paired({ dryRun: true }), signature(2, 9))).toBe(false);
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(paired({ type: 'quiet' }), signature(2, 9))).toBe(false);
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(paired({ params: { quiet_prompt: '静默' } }), signature(2, 9))).toBe(false);
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(paired({ params: { automatic_trigger: true } }), signature(2, 9))).toBe(false);
+    // 配对拒绝不写无配对原因，也不登记签名。
+    expect(mockLogAutoFillSkip).not.toHaveBeenCalled();
+    expect(generationGate_ACU.lastEndedFloorSignature_ACU).toEqual(signature(2, 9));
+  });
+
+  it('配对普通生成即使零产出也照样放行（收紧不碰配对路径），但会登记当次签名', () => {
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(paired(), signature(2, 9))).toBe(true);
+    expect(mockLogAutoFillSkip).not.toHaveBeenCalled();
+    expect(generationGate_ACU.lastEndedFloorSignature_ACU).toEqual(signature(2, 9));
+  });
+
+  it('推演③：真实一轮（配对放行）之后，外部插件的同楼假 ended 在门控源头就被丢弃', () => {
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(paired(), signature(4, 11))).toBe(true);
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(null, signature(4, 11))).toBe(false);
+    expect(mockLogAutoFillSkip).toHaveBeenCalledWith('unpaired_ended_no_new_output', { aiFloorCount: 4, latestAiMessageId: 11 });
   });
 });
 

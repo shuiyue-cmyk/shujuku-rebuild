@@ -5149,6 +5149,36 @@ function emitMessageUpdated_ACU(messageIndex) {
     }
 }
 
+const AUTO_FILL_SKIP_WARN_REASONS_ACU = new Set([
+    'ambiguous_generated_ai_message',
+    'generated_ai_message_not_materialized',
+    'resolved_message_not_ai',
+]);
+function logAutoFillSkip_ACU(reason, context = {}) {
+    const { eventType, messageId, eventMessageId, chatKey, isolationKey, liveIsolationKey, lastGenerationType, aiFloorCount, capturedChatLength, capturedAiFloorCount, liveChatLength, liveAiFloorCount, resolvedMessageIndex, candidateIndexes, inFlight, preconditionReason, latestAiMessageId, } = context;
+    const log = AUTO_FILL_SKIP_WARN_REASONS_ACU.has(reason) ? logWarn_ACU : logDebug_ACU;
+    log('[AutoFill] Trigger skipped', {
+        reason,
+        eventType,
+        messageId,
+        eventMessageId,
+        chatKey,
+        isolationKey,
+        liveIsolationKey,
+        lastGenerationType,
+        aiFloorCount,
+        capturedChatLength,
+        capturedAiFloorCount,
+        liveChatLength,
+        liveAiFloorCount,
+        resolvedMessageIndex,
+        candidateIndexes,
+        inFlight,
+        preconditionReason,
+        latestAiMessageId,
+    });
+}
+
 /**
  * service/worldbook/injection-engine-config.ts — 放置配置常量与默认值
  * 从 injection-engine.ts 拆出
@@ -78830,7 +78860,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.2.3" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.2.4" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -96985,6 +97015,8 @@ const generationGate_ACU = {
     lastGeneration: null,
     generationSeq: 0,
     activeGenerations: [],
+    // [152 收紧] 上一次门控「放行」时的 AI 楼签名；null = 启动后尚未放行过（此时无配对 ENDED 保守放行）。
+    lastEndedFloorSignature_ACU: null,
 };
 function markUserSendIntent_ACU() {
     generationGate_ACU.lastUserSendIntentAt = Date.now();
@@ -97098,18 +97130,73 @@ function consumeGenerationContextForEnded_ACU() {
     // quiet 上下文，否则下一次无关 GENERATION_ENDED 会被持续误拦截。
     return activeContext || (generationGate_ACU.generationSeq === 0 ? generationGate_ACU.lastGeneration : null);
 }
-function shouldProcessAutoTableUpdateForGenerationEnded_ACU(context) {
+/**
+ * 两份 AI 楼签名是否完全相同（楼数与最新 AI 楼 message_id 都相等）。
+ * 任一侧拿不出签名一律判「不相同」= 没有可比证据 = 放行：收紧只发生在两侧都有签名的时候。
+ */
+function isSameAiFloorSignature_ACU(previous, current) {
+    if (!previous || !current)
+        return false;
+    return previous.aiFloorCount === current.aiFloorCount
+        && previous.latestAiMessageId === current.latestAiMessageId;
+}
+/**
+ * 门控放行后记下当次 AI 楼签名（配对放行与无配对放行都记；任何一种拒绝都不记）。
+ * 调用方没读聊天数组（签名 undefined/null）时保持既有签名，绝不抹掉已有证据。
+ * 存副本而不是持有引用：调用方可能复用同一个对象。
+ */
+function rememberEndedFloorSignature_ACU(current) {
+    if (!current)
+        return;
+    if (typeof current.aiFloorCount !== 'number' || Number.isNaN(current.aiFloorCount))
+        return;
+    generationGate_ACU.lastEndedFloorSignature_ACU = {
+        aiFloorCount: current.aiFloorCount,
+        latestAiMessageId: current.latestAiMessageId ?? null,
+    };
+}
+/** 记录「无配对 + 零产出」丢弃；诊断日志本身异常不得改变门控结论。 */
+function logUnpairedEndedWithoutNewFloor_ACU(current) {
+    try {
+        logAutoFillSkip_ACU('unpaired_ended_no_new_output', {
+            aiFloorCount: current.aiFloorCount,
+            latestAiMessageId: current.latestAiMessageId ?? null,
+        });
+    }
+    catch (error) {
+        // 日志通道异常时按已丢弃处理，不反噬判定。
+    }
+}
+/**
+ * @param context 调用方已消费的生成上下文；省略时门控自行消费（历史调用形状）。
+ * @param currentSignature [152 收紧] 本次 ended 时刻的 AI 楼签名。只在「无配对上下文」分支参与判定：
+ *                 与上次放行的签名完全相同 → 期间没有任何新 AI 楼产出 → 判定为外部插件假 ended，丢弃。
+ *                 不传（undefined/null）时行为与收紧前逐字一致。
+ */
+function shouldProcessAutoTableUpdateForGenerationEnded_ACU(context, currentSignature) {
     // f425367：认领分支不再短路 return——续写桥只管归属确认/标签校验/自动续轮，
     // 填表与正文优化按各自时机独立触发；调用方可显式传入已消费的 context 复用判定。
     const g = context === undefined ? consumeGenerationContextForEnded_ACU() : context;
-    if (!g)
+    if (!g) {
+        // [152 收紧] 宿主 GENERATION_ENDED 唯一 emit 点是 hideStopButton，外部插件（酒馆助手 generate/generateRaw、
+        // sr 提示词查看器直接 Generate + stopGeneration、MVU 额外模型收尾）都会凭空派发 ended。这类事件没有配对的
+        // 生成上下文，此前一律放行去拉自动链（填表 + 正文替换），而 W1/W3 判重拦不住「该楼未处理过 / 首轮在飞」，
+        // 于是查看器一开就白烧一轮 AI。现在要求「新 AI 楼证据」：签名与上次放行完全相同即零产出 → 源头丢弃。
+        // 签名缺失（启动后首次、调用方未读聊天数组）继续保守放行；配对上下文（g 存在）的判定路径一字不动。
+        if (currentSignature && isSameAiFloorSignature_ACU(generationGate_ACU.lastEndedFloorSignature_ACU, currentSignature)) {
+            logUnpairedEndedWithoutNewFloor_ACU(currentSignature);
+            return false;
+        }
+        rememberEndedFloorSignature_ACU(currentSignature);
         return true;
+    }
     if (g.dryRun)
         return false;
     if (isQuietLikeGeneration_ACU(g.type, g.params))
         return false;
     if (g.params?.automatic_trigger)
         return false;
+    rememberEndedFloorSignature_ACU(currentSignature);
     return true;
 }
 // ═══ 业务运行时状态 ═══
@@ -102702,6 +102789,13 @@ async function handleFloorIncreaseDelay_ACU(totalAiMessages, lastTotalAiMessages
  * 失败姿态：任何存储/环境异常一律 fail-open（放行填表），宁可多跑一次也不静默漏填。
  */
 /**
+ * AI 楼判定的唯一口径：!is_user（含 narrator 系统楼）。
+ * resolveLatestAiFloor_ACU 与 resolveAiFloorSignature_ACU 共用，杜绝再造第二套标准。
+ */
+function isAiFloor_ACU(message) {
+    return !!message && !message.is_user;
+}
+/**
  * 取当前聊天里最新的 AI 楼层——自动填表触发身份就落在这一楼上。
  * 拿不到（空聊天 / 无 AI 楼 / message_id 缺失）时返回 null，调用方据此放行。
  */
@@ -102709,11 +102803,32 @@ function resolveLatestAiFloor_ACU(chat) {
     const list = Array.isArray(chat) ? chat : [];
     for (let index = list.length - 1; index >= 0; index -= 1) {
         const message = list[index];
-        if (!message || message.is_user)
+        if (!isAiFloor_ACU(message))
             continue;
         return { messageIndex: index, messageId: message.message_id ?? null };
     }
     return null;
+}
+/**
+ * GENERATION_ENDED 的「新 AI 楼输出」签名：AI 楼数 + 最新 AI 楼 message_id。
+ * 与 resolveLatestAiFloor_ACU 严格同口径（AI 楼 = !is_user，含 narrator）。
+ *
+ * 用途：宿主 GENERATION_ENDED 只由 hideStopButton 派发，外部插件收尾/停止会凭空补一条；
+ * 这类事件没有配对上下文，门控此前一律放行。连续两次签名完全相同 ⇒ 期间零新 AI 楼 ⇒ 假事件，
+ * 由 state-manager.shouldProcessAutoTableUpdateForGenerationEnded_ACU 源头丢弃。
+ *
+ * 纯函数：聊天数组由调用方读一次传入（门控不反向依赖 chat-gateway）。空聊天/非数组
+ * 返回 { 0, null } 而不是 null——签名本身永远可用。
+ */
+function resolveAiFloorSignature_ACU(chat) {
+    const list = Array.isArray(chat) ? chat : [];
+    let aiFloorCount = 0;
+    for (const message of list) {
+        if (isAiFloor_ACU(message))
+            aiFloorCount += 1;
+    }
+    const latestMessageId = resolveLatestAiFloor_ACU(list)?.messageId;
+    return { aiFloorCount, latestAiMessageId: latestMessageId ?? null };
 }
 /**
  * 该楼是否已经成功自动填过表（同一 messageId 的回声触发）。
@@ -111365,35 +111480,6 @@ async function orchestrateManualUpdate_ACU(targetKeys, processBatch, refreshData
         // 释放 detached SQLite provider，重复调用为 no-op），防止 detached 引擎泄漏。
         await stagingSession?.discard();
     }
-}
-
-const AUTO_FILL_SKIP_WARN_REASONS_ACU = new Set([
-    'ambiguous_generated_ai_message',
-    'generated_ai_message_not_materialized',
-    'resolved_message_not_ai',
-]);
-function logAutoFillSkip_ACU(reason, context = {}) {
-    const { eventType, messageId, eventMessageId, chatKey, isolationKey, liveIsolationKey, lastGenerationType, aiFloorCount, capturedChatLength, capturedAiFloorCount, liveChatLength, liveAiFloorCount, resolvedMessageIndex, candidateIndexes, inFlight, preconditionReason, } = context;
-    const log = AUTO_FILL_SKIP_WARN_REASONS_ACU.has(reason) ? logWarn_ACU : logDebug_ACU;
-    log('[AutoFill] Trigger skipped', {
-        reason,
-        eventType,
-        messageId,
-        eventMessageId,
-        chatKey,
-        isolationKey,
-        liveIsolationKey,
-        lastGenerationType,
-        aiFloorCount,
-        capturedChatLength,
-        capturedAiFloorCount,
-        liveChatLength,
-        liveAiFloorCount,
-        resolvedMessageIndex,
-        candidateIndexes,
-        inFlight,
-        preconditionReason,
-    });
 }
 
 /**
@@ -131460,10 +131546,15 @@ function mainInitialize_ACU() {
                             generationSeq: generationGate_ACU.generationSeq > 0 ? generationGate_ACU.generationSeq : undefined,
                         }
                         : undefined;
-                    if (shouldProcessAutoTableUpdateForGenerationEnded_ACU(generationContext)) {
+                    // [152 收紧] 「新 AI 楼证据」签名：本事件时刻的 AI 楼数 + 最新 AI 楼 message_id（含 narrator，
+                    // 与 auto-fill-echo-guard 同口径）。聊天数组在这里读一次，交给门控自行决定无配对假 ended 的去留。
+                    const endedFloorSignature_ACU = resolveAiFloorSignature_ACU(getChatArray_ACU());
+                    if (shouldProcessAutoTableUpdateForGenerationEnded_ACU(generationContext, endedFloorSignature_ACU)) {
                         handleNewMessageDebounced_ACU('GENERATION_ENDED', autoFillIntent);
                     }
-                    else {
+                    else if (generationContext) {
+                        // 只有拿到配对上下文时「quiet/dryRun/自动触发」这条诊断才成立；
+                        // 无配对 ended 的丢弃已由门控按 unpaired_ended_no_new_output 记录，不再重复报因。
                         logDebug_ACU('ACU: Skip auto table update due to quiet/background generation.');
                         logAutoFillSkip_ACU('quiet_or_background_generation', {
                             eventType: 'GENERATION_ENDED',
@@ -137233,7 +137324,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260905-14";
+        const stamp = "20260905-16";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -181152,7 +181243,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260905-14";
+        const stamp = "20260905-16";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -181161,7 +181252,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.2.3";
+        const v = "9.2.4";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {

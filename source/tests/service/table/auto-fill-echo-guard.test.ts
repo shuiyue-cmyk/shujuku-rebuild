@@ -28,6 +28,7 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({
 
 import {
   resolveLatestAiFloor_ACU,
+  resolveAiFloorSignature_ACU,
   shouldSkipDuplicateAutoTableFill_ACU,
   recordAutoTableFillProcessedForFloor_ACU,
 } from '../../../src/service/table/auto-fill-echo-guard';
@@ -79,6 +80,49 @@ describe('resolveLatestAiFloor_ACU', () => {
     expect(resolveLatestAiFloor_ACU(null as any)).toBeNull();
     expect(resolveLatestAiFloor_ACU([{ is_user: true }])).toBeNull();
     expect(resolveLatestAiFloor_ACU([{ is_user: false }])).toEqual({ messageIndex: 0, messageId: null });
+  });
+});
+
+// [152 收紧] 无配对 GENERATION_ENDED 的「新 AI 楼证据」签名：门控拿它判「零产出假事件」。
+describe('resolveAiFloorSignature_ACU', () => {
+  it('AI 楼数按 !is_user 计数并含 narrator 系统楼，末楼身份与 resolveLatestAiFloor_ACU 同源', () => {
+    const chat = [
+      { is_user: false, message_id: 3 },
+      { is_user: true, message_id: 4 },
+      { is_user: false, extra: { type: 'narrator' }, message_id: 5 },
+      { is_user: false, message_id: 7 },
+    ];
+    expect(resolveAiFloorSignature_ACU(chat)).toEqual({ aiFloorCount: 3, latestAiMessageId: 7 });
+    // 同一份聊天里两套口径必须落在同一栋楼上——签名不许自带第二套 AI 楼判定。
+    expect(resolveAiFloorSignature_ACU(chat).latestAiMessageId).toBe(resolveLatestAiFloor_ACU(chat)!.messageId);
+  });
+
+  it('推演④：查看器 send_if_empty 只写 user 楼 → 签名逐字不变（可判为零产出）', () => {
+    const before = [{ is_user: false, message_id: 5 }];
+    const beforeSignature = resolveAiFloorSignature_ACU(before);
+    const after = [...before, { is_user: true, message_id: 6 }];
+    expect(resolveAiFloorSignature_ACU(after)).toEqual(beforeSignature);
+  });
+
+  it('推演⑤⑥：真实产出必然改签名（新 AI 楼缺 message_id 也算；regenerate 同楼数换 message_id）', () => {
+    const base = resolveAiFloorSignature_ACU([{ is_user: false, message_id: 5 }]);
+    // 新楼还没拿到 message_id（宿主稍后补）——楼数变化本身就是证据，签名必须与上一轮不同。
+    expect(resolveAiFloorSignature_ACU([{ is_user: false, message_id: 5 }, { is_user: false }]))
+      .not.toEqual(base);
+    expect(resolveAiFloorSignature_ACU([{ is_user: false, message_id: 5 }, { is_user: false }]))
+      .toEqual({ aiFloorCount: 2, latestAiMessageId: null });
+    // 同楼数、内容重生成 → message_id 变了就是新楼。
+    expect(resolveAiFloorSignature_ACU([{ is_user: false, message_id: 9 }])).toEqual({ aiFloorCount: 1, latestAiMessageId: 9 });
+  });
+
+  it('空聊天 / 非数组 / 全是用户楼 → { 0, null }（签名永远可用，不返回 null）', () => {
+    expect(resolveAiFloorSignature_ACU([])).toEqual({ aiFloorCount: 0, latestAiMessageId: null });
+    expect(resolveAiFloorSignature_ACU(null as any)).toEqual({ aiFloorCount: 0, latestAiMessageId: null });
+    expect(resolveAiFloorSignature_ACU([{ is_user: true, message_id: 1 }])).toEqual({ aiFloorCount: 0, latestAiMessageId: null });
+  });
+
+  it('脏数据（数组里的 null 元素）不计入楼数', () => {
+    expect(resolveAiFloorSignature_ACU([null, { is_user: false, message_id: 2 }])).toEqual({ aiFloorCount: 1, latestAiMessageId: 2 });
   });
 });
 

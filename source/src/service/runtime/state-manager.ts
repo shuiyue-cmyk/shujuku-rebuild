@@ -22,6 +22,7 @@ import { DEFAULT_CHAR_CARD_PROMPT_ACU, DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU,
 import { DEFAULT_AUTO_UPDATE_FREQUENCY_ACU, DEFAULT_AUTO_UPDATE_THRESHOLD_ACU, DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU } from '../../shared/defaults';
 import { getChatArray_ACU } from '../../data/gateways/chat-gateway';
 import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
+import { logAutoFillSkip_ACU } from '../../shared/trigger-diagnostics';
 import { getCurrentWorldbookConfig_ACU } from '../settings/settings-readers';
 import { globalMeta_ACU } from '../../data/repositories/profile-repo';
 
@@ -70,6 +71,17 @@ export interface GenerationContext_ACU {
   at: number;
 }
 
+/**
+ * [152 收紧] 「新 AI 楼证据」签名：GENERATION_ENDED 到达时聊天里 AI 楼层的规模与末楼身份。
+ * 口径与 service/table/auto-fill-echo-guard.ts resolveLatestAiFloor_ACU 完全一致
+ * （AI 楼 = !is_user，含 narrator 系统楼）；由调用方（init 的 GENERATION_ENDED 监听器）读一次
+ * 聊天数组算好后传进门控，门控自身不碰 chat-gateway，避免依赖反向。
+ */
+export interface AiFloorSignature_ACU {
+  aiFloorCount: number;
+  latestAiMessageId: number | null;
+}
+
 export const generationGate_ACU = {
   lastUserMessageId: null as number | null,
   lastUserMessageText: '',
@@ -79,6 +91,8 @@ export const generationGate_ACU = {
   lastGeneration: null as GenerationContext_ACU | null,
   generationSeq: 0,
   activeGenerations: [] as GenerationContext_ACU[],
+  // [152 收紧] 上一次门控「放行」时的 AI 楼签名；null = 启动后尚未放行过（此时无配对 ENDED 保守放行）。
+  lastEndedFloorSignature_ACU: null as AiFloorSignature_ACU | null,
 };
 
 export function markUserSendIntent_ACU() {
@@ -191,14 +205,75 @@ export function consumeGenerationContextForEnded_ACU(): GenerationContext_ACU | 
   return activeContext || (generationGate_ACU.generationSeq === 0 ? generationGate_ACU.lastGeneration : null);
 }
 
-export function shouldProcessAutoTableUpdateForGenerationEnded_ACU(context?: GenerationContext_ACU | null) {
+/**
+ * 两份 AI 楼签名是否完全相同（楼数与最新 AI 楼 message_id 都相等）。
+ * 任一侧拿不出签名一律判「不相同」= 没有可比证据 = 放行：收紧只发生在两侧都有签名的时候。
+ */
+function isSameAiFloorSignature_ACU(
+  previous: AiFloorSignature_ACU | null | undefined,
+  current: AiFloorSignature_ACU | null | undefined,
+): boolean {
+  if (!previous || !current) return false;
+  return previous.aiFloorCount === current.aiFloorCount
+    && previous.latestAiMessageId === current.latestAiMessageId;
+}
+
+/**
+ * 门控放行后记下当次 AI 楼签名（配对放行与无配对放行都记；任何一种拒绝都不记）。
+ * 调用方没读聊天数组（签名 undefined/null）时保持既有签名，绝不抹掉已有证据。
+ * 存副本而不是持有引用：调用方可能复用同一个对象。
+ */
+function rememberEndedFloorSignature_ACU(current: AiFloorSignature_ACU | null | undefined): void {
+  if (!current) return;
+  if (typeof current.aiFloorCount !== 'number' || Number.isNaN(current.aiFloorCount)) return;
+  generationGate_ACU.lastEndedFloorSignature_ACU = {
+    aiFloorCount: current.aiFloorCount,
+    latestAiMessageId: current.latestAiMessageId ?? null,
+  };
+}
+
+/** 记录「无配对 + 零产出」丢弃；诊断日志本身异常不得改变门控结论。 */
+function logUnpairedEndedWithoutNewFloor_ACU(current: AiFloorSignature_ACU): void {
+  try {
+    logAutoFillSkip_ACU('unpaired_ended_no_new_output', {
+      aiFloorCount: current.aiFloorCount,
+      latestAiMessageId: current.latestAiMessageId ?? null,
+    });
+  } catch (error) {
+    // 日志通道异常时按已丢弃处理，不反噬判定。
+  }
+}
+
+/**
+ * @param context 调用方已消费的生成上下文；省略时门控自行消费（历史调用形状）。
+ * @param currentSignature [152 收紧] 本次 ended 时刻的 AI 楼签名。只在「无配对上下文」分支参与判定：
+ *                 与上次放行的签名完全相同 → 期间没有任何新 AI 楼产出 → 判定为外部插件假 ended，丢弃。
+ *                 不传（undefined/null）时行为与收紧前逐字一致。
+ */
+export function shouldProcessAutoTableUpdateForGenerationEnded_ACU(
+  context?: GenerationContext_ACU | null,
+  currentSignature?: AiFloorSignature_ACU | null,
+) {
   // f425367：认领分支不再短路 return——续写桥只管归属确认/标签校验/自动续轮，
   // 填表与正文优化按各自时机独立触发；调用方可显式传入已消费的 context 复用判定。
   const g = context === undefined ? consumeGenerationContextForEnded_ACU() : context;
-  if (!g) return true;
+  if (!g) {
+    // [152 收紧] 宿主 GENERATION_ENDED 唯一 emit 点是 hideStopButton，外部插件（酒馆助手 generate/generateRaw、
+    // sr 提示词查看器直接 Generate + stopGeneration、MVU 额外模型收尾）都会凭空派发 ended。这类事件没有配对的
+    // 生成上下文，此前一律放行去拉自动链（填表 + 正文替换），而 W1/W3 判重拦不住「该楼未处理过 / 首轮在飞」，
+    // 于是查看器一开就白烧一轮 AI。现在要求「新 AI 楼证据」：签名与上次放行完全相同即零产出 → 源头丢弃。
+    // 签名缺失（启动后首次、调用方未读聊天数组）继续保守放行；配对上下文（g 存在）的判定路径一字不动。
+    if (currentSignature && isSameAiFloorSignature_ACU(generationGate_ACU.lastEndedFloorSignature_ACU, currentSignature)) {
+      logUnpairedEndedWithoutNewFloor_ACU(currentSignature);
+      return false;
+    }
+    rememberEndedFloorSignature_ACU(currentSignature);
+    return true;
+  }
   if (g.dryRun) return false;
   if (isQuietLikeGeneration_ACU(g.type, g.params)) return false;
   if (g.params?.automatic_trigger) return false;
+  rememberEndedFloorSignature_ACU(currentSignature);
   return true;
 }
 
