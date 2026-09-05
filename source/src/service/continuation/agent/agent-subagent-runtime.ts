@@ -441,6 +441,8 @@ export class AgentSubagentRuntime_ACU {
       // 每个子代理的提示词前缀不同，独立缓存命名空间避免互相挤占路由。
       cacheScope: `sub-${definition.name}`,
       minOutputTokens: CONTINUATION_ROLE_OUTPUT_TOKEN_FLOORS_ACU[definition.promptKey],
+      // 子代理输出按 JSON 契约解析：开关开启时附加 response_format json_object。
+      needsJsonFormat: true,
       onUsage: usage => {
         usageTotal = usageTotal
           ? {
@@ -691,6 +693,8 @@ export class AgentSubagentRuntime_ACU {
       promptCacheEnabled: false,
       cacheScope: 'final-reviewer',
       minOutputTokens: CONTINUATION_ROLE_OUTPUT_TOKEN_FLOORS_ACU.finalReviewer,
+      // 终审输出按 JSON 契约解析：开关开启时附加 response_format json_object。
+      needsJsonFormat: true,
       onUsage: usage => {
         usageTotal = usageTotal
           ? {

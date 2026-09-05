@@ -27,6 +27,8 @@ export interface ContinuationInternalAiCallOptions_ACU {
   onUsage?: (usage: AiUsageMetadata_ACU) => void;
   /** 本次调用的最大输出 token 下限；预设值更大时沿用预设。缺省不抬。 */
   minOutputTokens?: number;
+  /** 本次调用需要明确返回 JSON：透传进 extras.needsJsonFormat，仅预设开关 jsonFormatOutput 开启时生效。缺省不附加。 */
+  needsJsonFormat?: boolean;
 }
 
 /**
@@ -121,6 +123,7 @@ export async function callContinuationInternalAi_ACU(
   const extras = {
     ...(cacheEnabled ? { promptCacheKey: buildPromptCacheKey_ACU(identity, options?.cacheScope || identity.source, preset) } : {}),
     ...(options?.minOutputTokens ? { minOutputTokens: options.minOutputTokens } : {}),
+    ...(options?.needsJsonFormat === true ? { needsJsonFormat: true } : {}),
   };
   try {
     return await callAIWithResolvedPreset_ACU(

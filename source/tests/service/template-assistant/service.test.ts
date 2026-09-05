@@ -132,7 +132,7 @@ describe('template assistant service', () => {
 
     await generateTemplateAssistantDraft_ACU({ tempData, currentSheetKey: 'sheet_a', sheetOrder: ['sheet_a'], userRequest: '修改当前表', tableApiPreset: 'assistant-preset', protocolVersion: 2 });
 
-    expect(mockCallAIWithPreset).toHaveBeenCalledWith(expect.any(Array), 'assistant-preset');
+    expect(mockCallAIWithPreset).toHaveBeenCalledWith(expect.any(Array), 'assistant-preset', undefined, undefined, { needsJsonFormat: true });
   });
 
   it('瞬时 503 重试后成功（调用形状逐字一致）', async () => {
@@ -162,7 +162,7 @@ describe('template assistant service', () => {
 
     await generateTemplateAssistantDraft_ACU({ tempData, currentSheetKey: 'sheet_a', sheetOrder: ['sheet_a'], userRequest: '修改当前表', tableApiPreset: '   ', protocolVersion: 2 });
 
-    expect(mockCallAIWithPreset).toHaveBeenCalledWith(expect.any(Array), 'preset-1');
+    expect(mockCallAIWithPreset).toHaveBeenCalledWith(expect.any(Array), 'preset-1', undefined, undefined, { needsJsonFormat: true });
   });
 
   it('提取最后一个合法标签块', () => {

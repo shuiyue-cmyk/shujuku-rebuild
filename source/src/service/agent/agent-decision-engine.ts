@@ -684,7 +684,7 @@ async function runAgentDecisionShard_ACU(params: {
   for (let attempt = 1; attempt <= params.maxAiAttempts; attempt++) {
     try {
       // 中止信号透传：剧情推进「停止」可中断 agent 决策请求（与 plot-task-engine 一致）
-      rawResponse = await callAIWithPreset_ACU(messages, params.presetName, undefined, params.signal || null);
+      rawResponse = await callAIWithPreset_ACU(messages, params.presetName, undefined, params.signal || null, { needsJsonFormat: true });
     } catch (error: any) {
       // 用户「停止」触发的 AbortError：直接终止，不做无意义重试空转
       if (params.signal?.aborted || error?.name === 'AbortError') {

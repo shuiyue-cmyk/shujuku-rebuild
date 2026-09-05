@@ -556,7 +556,7 @@ describe('agent worldbook skillify candidate filtering', () => {
 
     expect(mockCallAIWithPreset).toHaveBeenCalledWith([
       { role: 'user', content: 'WB=剧情书;UID=wb-first' },
-    ], 'worldbook-preset');
+    ], 'worldbook-preset', undefined, undefined, { needsJsonFormat: true });
   });
 
   it('advances the cursor after failed entries without repeating the processed batch', async () => {

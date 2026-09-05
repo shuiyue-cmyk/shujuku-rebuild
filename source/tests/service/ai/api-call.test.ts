@@ -68,7 +68,20 @@ import {
   postChatCompletion_ACU,
   AgentApiHttpError_ACU,
   isRetryableAiRequestError_ACU,
+  JSON_OBJECT_RESPONSE_FORMAT_ACU,
 } from '../../../src/service/ai/api-call';
+
+import {
+  normalizePreset_ACU,
+  resolveApiConfigByPreset_ACU,
+} from '../../../src/service/settings/api-preset-service';
+import { resolveContinuationApiPreset_ACU } from '../../../src/service/continuation/api-preset';
+import { callContinuationInternalAi_ACU } from '../../../src/service/continuation/internal-ai-call';
+import {
+  apiPresetDraftFromPreset,
+  apiPresetFromDraft,
+  createEmptyApiPresetDraft,
+} from '../../../src/presentation-v2/composables/useApiPresetManagement';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -1011,5 +1024,182 @@ describe('callAIWithPreset_ACU maxTokensOverride 校验（fix3）', () => {
     await callAIWithPreset_ACU([{ role: 'user', content: '你好' }], '');
     const secondBody = JSON.parse(mockFetch.mock.calls[1][1].body);
     expect(secondBody.max_tokens).toBe(0);
+  });
+});
+
+// ═══ jsonFormatOutput 开关门控（与 MVU 格式化输出同参） ═══
+// 铁律：开关关闭时行为与现状逐字一致；只有「需要明确返回 JSON」的调用点才传 needsJsonFormat。
+describe('jsonFormatOutput 开关门控（与 MVU 格式化输出同参）', () => {
+  const JSON_PRESET_CONFIG = { url: 'https://json.test', model: 'm-json', apiKey: 'sk-json', max_tokens: 4096 };
+
+  function lastSentBody(): any {
+    const call = mockFetch.mock.calls.at(-1);
+    expect(call).toBeDefined();
+    return JSON.parse(String(call[1].body));
+  }
+
+  function expectNoJsonFormat(sent: any): void {
+    expect(String(sent.custom_include_body || '')).not.toContain('response_format');
+    expect(sent).not.toHaveProperty('response_format');
+  }
+
+  function primeFetchOk(value = 'AI 回复'): void {
+    mockFetch.mockResolvedValue({ ok: true });
+    mockHandleApiResponse.mockResolvedValue(value);
+  }
+
+  it('常量与 MVU 同参且冻结', () => {
+    expect(JSON_OBJECT_RESPONSE_FORMAT_ACU).toEqual({ type: 'json_object' });
+    expect(Object.isFrozen(JSON_OBJECT_RESPONSE_FORMAT_ACU)).toBe(true);
+  });
+
+  it('callAIWithPreset：开关开 + needsJson → custom_include_body 含 response_format json_object', async () => {
+    mockSettings.apiPresets = [
+      { name: 'json开', apiMode: 'custom', apiConfig: { ...JSON_PRESET_CONFIG }, jsonFormatOutput: true },
+    ];
+    primeFetchOk();
+    const result = await callAIWithPreset_ACU([{ role: 'user', content: 'hi' }], 'json开', undefined, undefined, { needsJsonFormat: true });
+    expect(result).toBe('AI 回复');
+    const sent = lastSentBody();
+    expect(parse(sent.custom_include_body)).toEqual(expect.objectContaining({ response_format: { type: 'json_object' } }));
+    expect(sent).not.toHaveProperty('response_format');
+  });
+
+  it('callAIWithPreset：开关开 + 不传 needsJson → 不附加 response_format', async () => {
+    mockSettings.apiPresets = [
+      { name: 'json开', apiMode: 'custom', apiConfig: { ...JSON_PRESET_CONFIG }, jsonFormatOutput: true },
+    ];
+    primeFetchOk();
+    await callAIWithPreset_ACU([{ role: 'user', content: 'hi' }], 'json开');
+    expectNoJsonFormat(lastSentBody());
+  });
+
+  it('callAIWithPreset：开关关 + needsJson → 不附加 response_format', async () => {
+    mockSettings.apiPresets = [
+      { name: 'json关', apiMode: 'custom', apiConfig: { ...JSON_PRESET_CONFIG }, jsonFormatOutput: false },
+    ];
+    primeFetchOk();
+    await callAIWithPreset_ACU([{ role: 'user', content: 'hi' }], 'json关', undefined, undefined, { needsJsonFormat: true });
+    expectNoJsonFormat(lastSentBody());
+  });
+
+  it('resolved：开关开 + needsJson → 附加 response_format json_object', async () => {
+    primeFetchOk('resolved 回复');
+    const result = await callAIWithResolvedPreset_ACU(
+      [{ role: 'user', content: 'hi' }],
+      { apiMode: 'custom', apiConfig: { ...JSON_PRESET_CONFIG }, tavernProfile: '', presetName: 'r-json', jsonFormatOutput: true },
+      null,
+      undefined,
+      { needsJsonFormat: true },
+    );
+    expect(result).toBe('resolved 回复');
+    const sent = lastSentBody();
+    expect(parse(sent.custom_include_body)).toEqual(expect.objectContaining({ response_format: { type: 'json_object' } }));
+    expect(sent).not.toHaveProperty('response_format');
+  });
+
+  it('resolved：开关开 + 不传 extras → 不附加', async () => {
+    primeFetchOk();
+    await callAIWithResolvedPreset_ACU(
+      [{ role: 'user', content: 'hi' }],
+      { apiMode: 'custom', apiConfig: { ...JSON_PRESET_CONFIG }, tavernProfile: '', presetName: 'r-json', jsonFormatOutput: true },
+    );
+    expectNoJsonFormat(lastSentBody());
+  });
+
+  it('resolved：开关关 + needsJson → 不附加', async () => {
+    primeFetchOk();
+    await callAIWithResolvedPreset_ACU(
+      [{ role: 'user', content: 'hi' }],
+      { apiMode: 'custom', apiConfig: { ...JSON_PRESET_CONFIG }, tavernProfile: '', presetName: 'r-plain', jsonFormatOutput: false },
+      null,
+      undefined,
+      { needsJsonFormat: true },
+    );
+    expectNoJsonFormat(lastSentBody());
+  });
+
+  it('internal-ai-call：needsJsonFormat 透传进 extras（与 minOutputTokens 同式）', async () => {
+    primeFetchOk('内部 AI 回复');
+    const preset: any = {
+      presetName: 'route-json', source: 'fixed', reason: 'fixed_preset',
+      apiMode: 'custom', apiConfig: { ...JSON_PRESET_CONFIG }, tavernProfile: '', jsonFormatOutput: true,
+    };
+    const identity: any = { source: 'agent_main', requestId: 'jsonfmt-a', chatIdentity: 'chat-a', taskId: 't', stageId: 's', revision: 1 };
+    const result = await callContinuationInternalAi_ACU(
+      [{ role: 'user', content: 'hi' }], preset, identity, null, { needsJsonFormat: true },
+    );
+    expect(result).toBe('内部 AI 回复');
+    expect(parse(lastSentBody().custom_include_body)).toEqual(expect.objectContaining({ response_format: { type: 'json_object' } }));
+  });
+
+  it('internal-ai-call：缺省 options 不附加 response_format', async () => {
+    primeFetchOk();
+    const preset: any = {
+      presetName: 'route-json', source: 'fixed', reason: 'fixed_preset',
+      apiMode: 'custom', apiConfig: { ...JSON_PRESET_CONFIG }, tavernProfile: '', jsonFormatOutput: true,
+    };
+    const identity: any = { source: 'agent_main', requestId: 'jsonfmt-b', chatIdentity: 'chat-a', taskId: 't', stageId: 's', revision: 1 };
+    await callContinuationInternalAi_ACU([{ role: 'user', content: 'hi' }], preset, identity);
+    expectNoJsonFormat(lastSentBody());
+  });
+
+  it('draft 往返：开保持开，空草稿默认关', () => {
+    expect(createEmptyApiPresetDraft().jsonFormatOutput).toBe(false);
+    const draft = apiPresetDraftFromPreset({
+      name: 'j', apiMode: 'custom',
+      apiConfig: { url: 'https://j.test', apiKey: '', model: 'm', max_tokens: 1, temperature: 1 },
+      jsonFormatOutput: true,
+    } as any);
+    expect(draft.jsonFormatOutput).toBe(true);
+    expect(apiPresetFromDraft(draft).jsonFormatOutput).toBe(true);
+  });
+
+  it('draft 往返：关与缺省保持关', () => {
+    for (const flag of [false, undefined]) {
+      const draft = apiPresetDraftFromPreset({
+        name: 'j', apiMode: 'custom',
+        apiConfig: {
+          url: 'https://j.test', apiKey: '', model: 'm', max_tokens: 1, temperature: 1,
+          ...(flag === undefined ? {} : { jsonFormatOutput: flag }),
+        },
+      } as any);
+      expect(draft.jsonFormatOutput).toBe(false);
+      expect(apiPresetFromDraft(draft).jsonFormatOutput).toBe(false);
+    }
+  });
+
+  it('归一白名单：缺省 false、真值保持、非 true 真值归一 false', () => {
+    expect(normalizePreset_ACU({ name: 'a', apiMode: 'custom', apiConfig: {} })!.jsonFormatOutput).toBe(false);
+    expect(normalizePreset_ACU({ name: 'a', apiMode: 'custom', apiConfig: {}, jsonFormatOutput: true })!.jsonFormatOutput).toBe(true);
+    for (const v of [1, 'yes', {}, []]) {
+      expect(normalizePreset_ACU({ name: 'a', apiMode: 'custom', apiConfig: {}, jsonFormatOutput: v })!.jsonFormatOutput).toBe(false);
+    }
+  });
+
+  it('resolve：预设取预设值，空名与悬挂引用回退恒 false', () => {
+    mockSettings.apiPresets = [
+      { name: 'json开', apiMode: 'custom', apiConfig: { ...JSON_PRESET_CONFIG }, jsonFormatOutput: true },
+      { name: 'json关', apiMode: 'custom', apiConfig: { ...JSON_PRESET_CONFIG } },
+    ];
+    expect(resolveApiConfigByPreset_ACU('json开').jsonFormatOutput).toBe(true);
+    expect(resolveApiConfigByPreset_ACU('json关').jsonFormatOutput).toBe(false);
+    expect(resolveApiConfigByPreset_ACU('').jsonFormatOutput).toBe(false);
+    expect(resolveApiConfigByPreset_ACU('不存在的预设').jsonFormatOutput).toBe(false);
+  });
+
+  it('continuation：fixed 渠道把 jsonFormatOutput 透传给消费端', () => {
+    mockSettings.apiPresets = [
+      { name: 'cont-json', apiMode: 'custom', apiConfig: { ...JSON_PRESET_CONFIG }, jsonFormatOutput: true },
+    ];
+    const deps: any = { resolvePreset: (name: string) => resolveApiConfigByPreset_ACU(name) };
+    const on = resolveContinuationApiPreset_ACU(
+      { apiPresetMode: 'fixed', fixedApiPresetName: 'cont-json' } as any, 'agent_loop', deps,
+    );
+    expect(on.jsonFormatOutput).toBe(true);
+    const off = resolveContinuationApiPreset_ACU(
+      { apiPresetMode: 'current', fixedApiPresetName: '' } as any, 'agent_loop', deps,
+    );
+    expect(off.jsonFormatOutput).toBe(false);
   });
 });

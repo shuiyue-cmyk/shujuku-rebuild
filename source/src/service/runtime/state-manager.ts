@@ -18,7 +18,7 @@
 
 // ═══ 业务状态 + 门控逻辑（保留在本文件） ═══
 
-import { DEFAULT_CHAR_CARD_PROMPT_ACU, DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU, DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU, DEFAULT_PLOT_SETTINGS_ACU } from '../../shared/defaults-json.js';
+import { DEFAULT_CHAR_CARD_PROMPT_ACU, DEFAULT_PLOT_SETTINGS_ACU } from '../../shared/defaults-json.js';
 import { DEFAULT_AUTO_UPDATE_FREQUENCY_ACU, DEFAULT_AUTO_UPDATE_THRESHOLD_ACU, DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU } from '../../shared/defaults';
 import { getChatArray_ACU } from '../../data/gateways/chat-gateway';
 import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
@@ -309,15 +309,12 @@ export let settings_ACU: any = {
     tableApiPreset: '',
     plotApiPreset: '',
     discardUnauthorizedTableEditsEnabled: true,
-    strictJsonTableFillEnabled: false,
     // [剧情推进] 按剧情任务ID保存的任务级 API 预设覆盖（key=taskId, value=presetName）
     // 不保存入聊天记录或剧情推进预设，只写进插件全局设置。
     plotTaskApiPresetOverridesById: {} as Record<string, string>,
     // [新增] 按表格名称保存的表级 API 预设覆盖（key=标准化表名, value=presetName）
     tableApiPresetOverridesByName: {} as Record<string, string>,
     charCardPrompt: DEFAULT_CHAR_CARD_PROMPT_ACU,
-    strictJsonCharCardPrompt: DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU,
-    strictJsonSqlCharCardPrompt: DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU,
     // [AI 改表助手] 可编辑提示词卡片段（空数组 = 使用默认硬编码提示词）
     templateAssistantPromptSegments: [] as any[],
     autoUpdateThreshold: DEFAULT_AUTO_UPDATE_THRESHOLD_ACU,
@@ -336,7 +333,6 @@ export let settings_ACU: any = {
     tableTemplateDefaultsRefreshVersion: '',
     tableFillPromptForceDefaultVersion: '',
     templateAssistantPromptForceDefaultVersion: '',
-    strictJsonTableFillForceDisableVersion: '',
     tableContextExtractTags: '',
     tableContextExtractRules: [],
     tableContextExcludeTags: '',

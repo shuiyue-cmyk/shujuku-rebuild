@@ -95,6 +95,8 @@ export interface ApiPreset_ACU {
   nonPrefillSupport?: boolean;
   /** 公益站兼容（预设级）：开启后该预设限速每分钟最多 3 次请求（各预设独立计数） */
   publicServiceMode?: boolean;
+  /** JSON 格式化输出（预设级）：开启后，需要明确返回 JSON 的调用会在请求体附加 response_format json_object */
+  jsonFormatOutput?: boolean;
 }
 
 export interface ApiPresetBinding_ACU {
@@ -166,6 +168,7 @@ export function normalizePreset_ACU(value: any): ApiPreset_ACU | null {
     apiConfig: normalizeApiConfig_ACU(value.apiConfig),
     nonPrefillSupport: value.nonPrefillSupport === true,
     publicServiceMode: value.publicServiceMode === true,
+    jsonFormatOutput: value.jsonFormatOutput === true,
   };
 }
 
@@ -256,6 +259,8 @@ export function resolveApiConfigByPreset_ACU(presetName: string): {
   nonPrefillSupport: boolean;
   /** 预设级公益站兼容（限速 3 次/分钟）；仅预设显式开启时为 true，回退路径恒 false */
   publicServiceMode: boolean;
+  /** 预设级 JSON 格式化输出；无全局 settings 对应项，回退路径恒 false（与 nonPrefillSupport 回退全局不同） */
+  jsonFormatOutput: boolean;
 } {
   ensureApiSettingsShape_ACU();
   const normalized = String(presetName || '').trim();
@@ -267,6 +272,8 @@ export function resolveApiConfigByPreset_ACU(presetName: string): {
       resolved: false,
       nonPrefillSupport: settings_ACU.nonPrefillSupport === true,
       publicServiceMode: false,
+      // 无全局 settings.jsonFormatOutput 对应项，回退恒 false（与 nonPrefillSupport 回退全局不同）。
+      jsonFormatOutput: false,
     };
   }
   const preset = findPresetByName_ACU(settings_ACU.apiPresets, normalized);
@@ -278,6 +285,7 @@ export function resolveApiConfigByPreset_ACU(presetName: string): {
       resolved: true,
       nonPrefillSupport: preset.nonPrefillSupport === true,
       publicServiceMode: preset.publicServiceMode === true,
+      jsonFormatOutput: preset.jsonFormatOutput === true,
     };
   }
   // 悬挂引用：返回当前配置但标记未解析，调用方应据此拒绝或回退，而不是静默误用。
@@ -289,6 +297,8 @@ export function resolveApiConfigByPreset_ACU(presetName: string): {
     resolved: false,
     nonPrefillSupport: settings_ACU.nonPrefillSupport === true,
     publicServiceMode: false,
+    // 无全局 settings.jsonFormatOutput 对应项，回退恒 false（与 nonPrefillSupport 回退全局不同）。
+    jsonFormatOutput: false,
   };
 }
 

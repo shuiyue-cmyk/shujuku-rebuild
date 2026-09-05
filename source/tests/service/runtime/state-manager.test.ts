@@ -23,8 +23,6 @@ vi.mock('../../../src/shared/trigger-diagnostics', () => ({
 
 vi.mock('../../../src/shared/defaults-json.js', () => ({
   DEFAULT_CHAR_CARD_PROMPT_ACU: '',
-  DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU: '',
-  DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU: '',
   DEFAULT_PLOT_SETTINGS_ACU: {},
 }));
 

@@ -246,7 +246,7 @@ import {
      for (let attempt = 1; attempt <= maxRetries; attempt++) {
        try {
         logDebug_ACU(`[正文优化] 调用AI API... (尝试 ${attempt}/${maxRetries})`);
-        responseContent = await callAIWithPreset_ACU(messages, apiPreset);
+        responseContent = await callAIWithPreset_ACU(messages, apiPreset, undefined, undefined, { needsJsonFormat: true });
          
          if (responseContent) {
            // API调用成功，跳出重试循环
@@ -326,7 +326,7 @@ import {
          
          try {
            logDebug_ACU(`[正文优化] 重新调用AI API以获取更干净的优化结果... (尝试 ${parseAttempt + 1}/${maxRetries})`);
-           parseRetryResponseContent = await callAIWithPreset_ACU(messages, apiPreset);
+           parseRetryResponseContent = await callAIWithPreset_ACU(messages, apiPreset, undefined, undefined, { needsJsonFormat: true });
            if (!parseRetryResponseContent) {
              throw new Error('重试请求未返回有效内容');
            }

@@ -264,7 +264,7 @@ async function skillifySingleEntry_ACU(
     let retryable = true;
     // AI 调用异常只作为该条目的失败原因参与重试，不允许穿透 runWithConcurrency 拖垮整批 skillify。
     try {
-      const response = await callAIWithPreset_ACU(messages, presetName);
+      const response = await callAIWithPreset_ACU(messages, presetName, undefined, undefined, { needsJsonFormat: true });
       if (!response) {
         lastReason = 'AI 未返回内容';
       } else {

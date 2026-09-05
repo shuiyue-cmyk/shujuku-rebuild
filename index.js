@@ -1371,118 +1371,6 @@ const DEFAULT_CHAR_CARD_PROMPT_ACU = DEFAULT_FILL_PROMPT_ACU;
 // --- [SQL 版默认填表提示词] ---
 // 破限版默认提示词本身即为 SQL 格式，SQL 版本与基础版本一致
 const DEFAULT_CHAR_CARD_PROMPT_SQL_ACU = DEFAULT_CHAR_CARD_PROMPT_ACU;
-// --- [严格 JSON 填表提示词派生]（3d1bd60：strict-json 填表模式默认提示词） ---
-function replaceSection_ACU(content, startMarker, endMarker, replacement) {
-    const start = content.indexOf(startMarker);
-    const end = content.indexOf(endMarker, start + startMarker.length);
-    if (start < 0 || end < 0)
-        return content;
-    return `${content.slice(0, start)}${replacement}${content.slice(end)}`;
-}
-function buildStrictJsonNativePrompt_ACU(content) {
-    let next = replaceSection_ACU(content, '## 输出格式（严格执行）', '## 关键规则', `## 输出格式（严格执行）
-
-回复内容必须是一个合法 JSON 对象，且只能包含这个 JSON 对象本身；不要输出 <thought>、<content>、<tableEdit> 或 Markdown 代码块。
-
-你必须在内部完成原本 <thought> 中要求的全部分析，但不要把思考过程写入最终回复。
-
-JSON 根对象必须使用以下结构：
-{"format":"table_edit_ops_v1","ops":[]}
-
-ops 只允许 insert、update、delete 三种操作。
-
-insert 格式：
-{"op":"insert","sheet":"表格名","row":{"字段名":"字段值"}}
-
-update 格式：
-{"op":"update","sheet":"表格名","where":{"字段名":"定位值"},"set":{"字段名":"新值"}}
-
-delete 格式：
-{"op":"delete","sheet":"表格名","where":{"字段名":"定位值"}}
-
-如果没有任何修改，输出：
-{"format":"table_edit_ops_v1","ops":[]}
-
-针对纪要表的额外规则：如果<当前表格数据>里存在纪要表，那么本轮就必须对其进行插入一条新的总结记录。
-日志与纪要语气校准：你在思考纪要时，必须区分“正常恋爱互动”与“暗黑主从文风”。你可以使用正常的交流词汇（如：提议、要求、同意、拒绝、引导、配合、安抚），但【绝对禁止】将情侣间的普通调情与互动过度解读为“权力掌控”、“剥夺反抗”、“精神支配”、“屈服”等单向压迫词汇！
-
-`);
-    next = next.replace('5. 使用insertRow添加新行，updateRow更新已有行，deleteRow删除行', '5. 使用 JSON ops 添加、更新或删除行：insert 表示添加新行，update 表示更新已有行，delete 表示删除行');
-    next = replaceSection_ACU(next, '## 格式要点', '现在开始按此格式执行填表任务。', `## JSON 格式要点
-- 必须输出合法 JSON 对象，不能在 JSON 前后添加任何说明文字
-- JSON 字符串必须使用双引号
-- sheet 必须从当前表格数据列出的表格名或 sheet 标识中复制
-- row、where、set 里的字段名必须从对应表格表头中逐字复制，禁止使用数字列号
-- update/delete 必须使用 where 定位唯一行；如果可能匹配多行，必须增加定位字段
-- 字段值内部需要出现双引号时必须按 JSON 规则转义为\\"
-- 字段值内部需要换行时必须写成\\n，不能直接输出真实换行
-- 如果一句话里含有很多引号，优先改写措辞，尽量避免在 JSON 值里直接嵌套引号
-
-`);
-    return next.replace('现在开始按此格式执行填表任务。', '现在开始按此 JSON 格式执行填表任务。');
-}
-function buildStrictJsonSqlPrompt_ACU(content) {
-    let next = replaceSection_ACU(content, '## 输出格式（严格执行）', '## 关键规则', `## 输出格式（严格执行）
-
-回复内容必须是一个合法 JSON 对象，且只能包含这个 JSON 对象本身；不要输出 <thought>、<content>、<tableEdit> 或 Markdown 代码块。
-
-你必须在内部完成原本 <thought> 中要求的全部分析，但不要把思考过程写入最终回复。
-
-JSON 根对象必须使用以下结构：
-{"format":"table_edit_sql_v1","sql":""}
-
-sql 必须是字符串，内容是按下文 DDL、Note 和 SQL 编写原则生成的完整 SQL 脚本，可包含多条 INSERT、UPDATE 或 DELETE。
-
-如果没有任何修改，输出：
-{"format":"table_edit_sql_v1","sql":""}
-
-针对纪要表的额外规则：如果<当前表格数据>里存在纪要表，那么本轮就必须对其进行插入一条新的总结记录。
-日志与纪要语气校准：你在思考纪要时，必须区分"正常恋爱互动"与"暗黑主从文风"。你可以使用正常的交流词汇（如：提议、要求、同意、拒绝、引导、配合、安抚），但【绝对禁止】将情侣间的普通调情与互动过度解读为"权力掌控"、"剥夺反抗"、"精神支配"、"屈服"等单向压迫词汇！
-
-`);
-    next = replaceSection_ACU(next, '## SQL 格式要点', '现在开始按此格式执行填表任务。', `## SQL 与 JSON 格式要点
-- 字符串值使用单引号包裹，如 '角色A'
-- 如果字符串值内部包含单引号，使用两个单引号转义，如 '秉持''谁欺负我就打谁''的信念'
-- 数值列直接写数字，不加引号
-- 每条 SQL 语句以分号结尾
-- 多条语句之间用换行分隔；写入 JSON 的 sql 字符串时，换行必须按 JSON 规则表示为\\n
-- 表名和列名使用英文（参照 CREATE TABLE 中的定义）
-- 禁止使用 BEGIN/COMMIT/ROLLBACK 等事务语句，系统会自动处理事务
-- 禁止使用 DROP TABLE / ALTER TABLE / CREATE TABLE 等结构变更语句
-- 必须输出合法 JSON 对象，不能在 JSON 前后添加任何说明文字
-- JSON 字符串必须使用双引号；sql 字符串内部如需双引号必须按 JSON 规则转义为\\"
-
-`);
-    return next.replace('现在开始按此格式执行填表任务。', '现在开始按此 JSON 格式执行填表任务。');
-}
-const DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU = DEFAULT_CHAR_CARD_PROMPT_ACU.map(segment => {
-    if (segment.mainSlot === 'A' || segment.isMain) {
-        return {
-            ...segment,
-            content: buildStrictJsonNativePrompt_ACU(segment.content)
-        };
-    }
-    if (segment.isMain2)
-        return { ...segment };
-    if (segment.role === 'assistant' && typeof segment.content === 'string' && segment.content.includes('<thought>')) {
-        return { ...segment, content: '收到，我将只返回指定 JSON 对象。' };
-    }
-    return { ...segment };
-});
-const DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU = DEFAULT_CHAR_CARD_PROMPT_SQL_ACU.map(segment => {
-    if (segment.mainSlot === 'A' || segment.isMain) {
-        return {
-            ...segment,
-            content: buildStrictJsonSqlPrompt_ACU(segment.content)
-        };
-    }
-    if (segment.isMain2)
-        return { ...segment };
-    if (segment.role === 'assistant' && typeof segment.content === 'string' && segment.content.includes('<thought>')) {
-        return { ...segment, content: '收到，我将只返回指定 JSON 对象。' };
-    }
-    return { ...segment };
-});
 const ORIGINAL_DEFAULT_TABLE_TEMPLATE_ACU = buildOriginalDefaultTableTemplateString_ACU();
 const DEFAULT_TABLE_TEMPLATE_ACU = buildDefaultTableTemplateString_ACU();
 let TABLE_TEMPLATE_ACU = DEFAULT_TABLE_TEMPLATE_ACU;
@@ -68347,7 +68235,7 @@ async function skillifySingleEntry_ACU(summary, options, control, progressState)
         let retryable = true;
         // AI 调用异常只作为该条目的失败原因参与重试，不允许穿透 runWithConcurrency 拖垮整批 skillify。
         try {
-            const response = await callAIWithPreset_ACU(messages, presetName);
+            const response = await callAIWithPreset_ACU(messages, presetName, undefined, undefined, { needsJsonFormat: true });
             if (!response) {
                 lastReason = 'AI 未返回内容';
             }
@@ -72097,323 +71985,6 @@ function isSqlContent(content) {
     return false;
 }
 
-function jsonClone(value) {
-    return JSON.parse(JSON.stringify(value));
-}
-function stripCodeFence(text) {
-    const trimmed = String(text || '').trim();
-    const fence = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-    return fence ? fence[1].trim() : trimmed;
-}
-function tryParseJsonObject(text) {
-    const cleaned = stripCodeFence(text);
-    try {
-        return JSON.parse(cleaned);
-    }
-    catch { }
-    const start = cleaned.indexOf('{');
-    const end = cleaned.lastIndexOf('}');
-    if (start >= 0 && end > start) {
-        return JSON.parse(cleaned.slice(start, end + 1));
-    }
-    throw new Error('回复不是合法 JSON 对象。');
-}
-function isPlainObject$2(value) {
-    return !!value && typeof value === 'object' && !Array.isArray(value);
-}
-function buildSheetLookup(tableData, targetSheetKeys) {
-    const sortedKeys = getSortedSheetKeys_ACU(tableData || {});
-    const allowed = Array.isArray(targetSheetKeys) && targetSheetKeys.length > 0 ? new Set(targetSheetKeys) : null;
-    const entries = sortedKeys
-        .filter((sheetKey) => !allowed || allowed.has(sheetKey))
-        .map((sheetKey, index) => ({ sheetKey, index: sortedKeys.indexOf(sheetKey), table: tableData[sheetKey] }))
-        .filter((entry) => entry.table && Array.isArray(entry.table.content));
-    return { sortedKeys, entries };
-}
-function resolveSheet(sheet, tableData, targetSheetKeys) {
-    const name = String(sheet ?? '').trim();
-    if (!name)
-        throw new Error('sheet 不能为空。');
-    const { sortedKeys, entries } = buildSheetLookup(tableData);
-    let sheetKey;
-    try {
-        [sheetKey] = rebindSheetKeysThroughTableAliases_ACU([name], null, tableData);
-    }
-    catch (error) {
-        if (error instanceof SheetTableAliasResolutionError_ACU) {
-            throw new Error(`sheet 名称无效：${error.message}`);
-        }
-        throw error;
-    }
-    if (!sheetKey)
-        throw new Error(`sheet 未匹配到可编辑表格：${name}`);
-    const entry = entries.find(candidate => candidate.sheetKey === sheetKey);
-    if (!entry)
-        throw new Error(`sheet 未匹配到可编辑表格：${name}`);
-    if (Array.isArray(targetSheetKeys) && targetSheetKeys.length > 0 && !targetSheetKeys.includes(sheetKey)) {
-        throw new Error(`sheet 越权：${name} 解析为非目标表 ${sheetKey}。`);
-    }
-    return { ...entry, index: sortedKeys.indexOf(sheetKey) };
-}
-function getHeaderMap(table) {
-    const map = new Map();
-    getSheetColumnProjection_ACU(table).visibleColumns.forEach((column) => {
-        if (column.sourceIndex === 0)
-            return;
-        const key = String(column.header ?? '').trim();
-        if (key)
-            map.set(key, column.sourceIndex - 1);
-    });
-    return map;
-}
-function normalizeValueObject(value, headerMap, label) {
-    if (!isPlainObject$2(value))
-        throw new Error(`${label} 必须是对象。`);
-    const result = {};
-    for (const [field, raw] of Object.entries(value)) {
-        if (!headerMap.has(field))
-            throw new Error(`字段名不存在：${field}`);
-        if (raw === undefined || raw === null)
-            result[field] = '';
-        else
-            result[field] = String(raw);
-    }
-    return result;
-}
-function findUniqueRowIndex(table, where, headerMap) {
-    const whereKeys = Object.keys(where);
-    if (whereKeys.length === 0)
-        throw new Error('where 必须至少包含一个字段。');
-    const rows = Array.isArray(table.content) ? table.content.slice(1) : [];
-    const matches = [];
-    rows.forEach((row, rowIndex) => {
-        const ok = whereKeys.every((field) => {
-            const col = headerMap.get(field);
-            return col !== undefined && String(row[col + 1] ?? '') === where[field];
-        });
-        if (ok)
-            matches.push(rowIndex);
-    });
-    if (matches.length === 0)
-        throw new Error('where 未匹配到任何行。');
-    if (matches.length > 1)
-        throw new Error('where 匹配到多行，请增加定位条件。');
-    return matches[0];
-}
-function valuesToColumnObject(values, headerMap) {
-    const out = {};
-    for (const [field, value] of Object.entries(values)) {
-        const idx = headerMap.get(field);
-        if (idx === undefined)
-            throw new Error(`字段名不存在：${field}`);
-        out[String(idx)] = value;
-    }
-    return out;
-}
-function assertOnlyKeys(value, allowed, label) {
-    const allowedSet = new Set(allowed);
-    for (const key of Object.keys(value)) {
-        if (!allowedSet.has(key))
-            throw new Error(`${label} 包含不允许的字段：${key}`);
-    }
-}
-function convertStrictOpsToTableEdit_ACU(ops, tableData, targetSheetKeys) {
-    if (!Array.isArray(ops))
-        throw new Error('ops 必须是数组。');
-    const lines = [];
-    const modifiedKeys = new Set();
-    for (const op of ops) {
-        if (!isPlainObject$2(op))
-            throw new Error('ops 中的每一项都必须是对象。');
-        const kind = String(op.op || '').trim();
-        const entry = resolveSheet(op.sheet, tableData, targetSheetKeys);
-        const headerMap = getHeaderMap(entry.table);
-        if (kind === 'insert') {
-            assertOnlyKeys(op, ['op', 'sheet', 'row'], 'insert');
-            const row = normalizeValueObject(op.row, headerMap, 'row');
-            lines.push(`insertRow(${entry.index}, ${JSON.stringify(valuesToColumnObject(row, headerMap))})`);
-            modifiedKeys.add(entry.sheetKey);
-        }
-        else if (kind === 'update') {
-            assertOnlyKeys(op, ['op', 'sheet', 'where', 'set'], 'update');
-            const where = normalizeValueObject(op.where, headerMap, 'where');
-            const set = normalizeValueObject(op.set, headerMap, 'set');
-            if (Object.keys(set).length === 0)
-                throw new Error('set 必须至少包含一个字段。');
-            const rowIndex = findUniqueRowIndex(entry.table, where, headerMap);
-            lines.push(`updateRow(${entry.index}, ${rowIndex}, ${JSON.stringify(valuesToColumnObject(set, headerMap))})`);
-            modifiedKeys.add(entry.sheetKey);
-        }
-        else if (kind === 'delete') {
-            assertOnlyKeys(op, ['op', 'sheet', 'where'], 'delete');
-            const where = normalizeValueObject(op.where, headerMap, 'where');
-            const rowIndex = findUniqueRowIndex(entry.table, where, headerMap);
-            lines.push(`deleteRow(${entry.index}, ${rowIndex})`);
-            modifiedKeys.add(entry.sheetKey);
-        }
-        else {
-            throw new Error(`不支持的 op：${kind}`);
-        }
-    }
-    const tableEditText = lines.join('\n');
-    return {
-        tableEditText,
-        normalizedResponse: `<tableEdit>\n${tableEditText}\n</tableEdit>`,
-        modifiedKeys: Array.from(modifiedKeys),
-    };
-}
-function extractStrictJsonTableFillResponse_ACU(text, options = {}) {
-    try {
-        const parsed = tryParseJsonObject(text);
-        if (!isPlainObject$2(parsed))
-            throw new Error('回复 JSON 根节点必须是对象。');
-        const expected = options.sqlite ? 'table_edit_sql_v1' : 'table_edit_ops_v1';
-        if (parsed.format !== expected)
-            throw new Error(`format 必须是 ${expected}。`);
-        if (expected === 'table_edit_sql_v1') {
-            if (typeof parsed.sql !== 'string')
-                throw new Error('sql 必须是字符串。');
-            const tableEditText = parsed.sql.trim();
-            return { ok: true, format: expected, rawJson: parsed, tableEditText, normalizedResponse: `<tableEdit>\n${tableEditText}\n</tableEdit>` };
-        }
-        const converted = convertStrictOpsToTableEdit_ACU(parsed.ops, options.tableData, options.targetSheetKeys);
-        return { ok: true, format: expected, rawJson: parsed, ...converted };
-    }
-    catch (error) {
-        const message = error?.message || '严格 JSON 填表响应解析失败。';
-        return { ok: false, error: message, retryHint: message };
-    }
-}
-function buildStrictJsonTableFillResponseFormat_ACU(sqlite) {
-    if (sqlite) {
-        return {
-            type: 'json_schema',
-            json_schema: {
-                name: 'table_edit_sql_response',
-                strict: true,
-                schema: {
-                    type: 'object',
-                    additionalProperties: false,
-                    required: ['format', 'sql'],
-                    properties: {
-                        format: { type: 'string', enum: ['table_edit_sql_v1'] },
-                        sql: { type: 'string' },
-                    },
-                },
-            },
-        };
-    }
-    return buildWideNativeResponseFormat();
-}
-function buildWideNativeResponseFormat() {
-    return {
-        type: 'json_schema',
-        json_schema: {
-            name: 'table_edit_ops_response',
-            strict: true,
-            schema: {
-                type: 'object',
-                additionalProperties: false,
-                required: ['format', 'ops'],
-                properties: {
-                    format: { type: 'string', enum: ['table_edit_ops_v1'] },
-                    ops: {
-                        type: 'array',
-                        items: {
-                            type: 'object',
-                            additionalProperties: true,
-                            required: ['op', 'sheet'],
-                            properties: {
-                                op: { type: 'string', enum: ['insert', 'update', 'delete'] },
-                                sheet: { type: 'string' },
-                                row: { type: 'object', additionalProperties: { type: 'string' } },
-                                where: { type: 'object', additionalProperties: { type: 'string' } },
-                                set: { type: 'object', additionalProperties: { type: 'string' } },
-                            },
-                        },
-                    },
-                },
-            },
-        },
-    };
-}
-function fieldObjectSchema(fields, minProperties = 0) {
-    const properties = {};
-    fields.forEach((field) => { properties[field] = { type: 'string' }; });
-    return { type: 'object', additionalProperties: false, minProperties, properties };
-}
-function shouldUseWideStrictJsonSchema_ACU(stats) {
-    return stats.sheetCount > 8
-        || stats.maxFieldCount > 32
-        || stats.totalFieldCount > 120
-        || stats.oneOfBranchCount > 48
-        || stats.responseFormatBytes > 24 * 1024;
-}
-function buildStrictJsonTableFillResponseFormatForData_ACU(sqlite, tableData, targetSheetKeys) {
-    if (sqlite)
-        return { responseFormat: buildStrictJsonTableFillResponseFormat_ACU(true), stats: null, wide: false };
-    const { entries } = buildSheetLookup(tableData || {}, targetSheetKeys);
-    const branches = [];
-    let totalFieldCount = 0;
-    let maxFieldCount = 0;
-    entries.forEach((entry) => {
-        const fields = Array.from(getHeaderMap(entry.table).keys());
-        totalFieldCount += fields.length;
-        maxFieldCount = Math.max(maxFieldCount, fields.length);
-        const sheetConst = String(entry.table?.name || entry.sheetKey);
-        branches.push({
-            type: 'object',
-            additionalProperties: false,
-            required: ['op', 'sheet', 'row'],
-            properties: { op: { type: 'string', enum: ['insert'] }, sheet: { type: 'string', enum: [sheetConst] }, row: fieldObjectSchema(fields, 1) },
-        });
-        branches.push({
-            type: 'object',
-            additionalProperties: false,
-            required: ['op', 'sheet', 'where', 'set'],
-            properties: { op: { type: 'string', enum: ['update'] }, sheet: { type: 'string', enum: [sheetConst] }, where: fieldObjectSchema(fields, 1), set: fieldObjectSchema(fields, 1) },
-        });
-        branches.push({
-            type: 'object',
-            additionalProperties: false,
-            required: ['op', 'sheet', 'where'],
-            properties: { op: { type: 'string', enum: ['delete'] }, sheet: { type: 'string', enum: [sheetConst] }, where: fieldObjectSchema(fields, 1) },
-        });
-    });
-    if (branches.length === 0)
-        return { responseFormat: buildWideNativeResponseFormat(), stats: { sheetCount: 0, maxFieldCount: 0, totalFieldCount: 0, oneOfBranchCount: 0, responseFormatBytes: 0 }, wide: true };
-    const strong = {
-        type: 'json_schema',
-        json_schema: {
-            name: 'table_edit_ops_response',
-            strict: true,
-            schema: {
-                type: 'object',
-                additionalProperties: false,
-                required: ['format', 'ops'],
-                properties: {
-                    format: { type: 'string', enum: ['table_edit_ops_v1'] },
-                    ops: { type: 'array', items: { oneOf: branches } },
-                },
-            },
-        },
-    };
-    const stats = {
-        sheetCount: entries.length,
-        maxFieldCount,
-        totalFieldCount,
-        oneOfBranchCount: branches.length,
-        responseFormatBytes: JSON.stringify(strong).length,
-    };
-    if (shouldUseWideStrictJsonSchema_ACU(stats))
-        return { responseFormat: buildWideNativeResponseFormat(), stats, wide: true };
-    return { responseFormat: strong, stats, wide: false };
-}
-function cloneStrictPromptSegments_ACU(value, fallback) {
-    const source = Array.isArray(value) && value.length > 0 ? value : fallback;
-    return jsonClone(source || []);
-}
-
 /**
  * service/ai/prompt-builder/index.ts
  * AI prompt-builder 入口 — re-export 所有公共 API
@@ -72589,6 +72160,7 @@ function normalizePreset_ACU(value) {
         apiConfig: normalizeApiConfig_ACU(value.apiConfig),
         nonPrefillSupport: value.nonPrefillSupport === true,
         publicServiceMode: value.publicServiceMode === true,
+        jsonFormatOutput: value.jsonFormatOutput === true,
     };
 }
 function normalizePresetList_ACU(value) {
@@ -72676,6 +72248,8 @@ function resolveApiConfigByPreset_ACU(presetName) {
             resolved: false,
             nonPrefillSupport: settings_ACU.nonPrefillSupport === true,
             publicServiceMode: false,
+            // 无全局 settings.jsonFormatOutput 对应项，回退恒 false（与 nonPrefillSupport 回退全局不同）。
+            jsonFormatOutput: false,
         };
     }
     const preset = findPresetByName_ACU(settings_ACU.apiPresets, normalized);
@@ -72687,6 +72261,7 @@ function resolveApiConfigByPreset_ACU(presetName) {
             resolved: true,
             nonPrefillSupport: preset.nonPrefillSupport === true,
             publicServiceMode: preset.publicServiceMode === true,
+            jsonFormatOutput: preset.jsonFormatOutput === true,
         };
     }
     // 悬挂引用：返回当前配置但标记未解析，调用方应据此拒绝或回退，而不是静默误用。
@@ -72698,6 +72273,8 @@ function resolveApiConfigByPreset_ACU(presetName) {
         resolved: false,
         nonPrefillSupport: settings_ACU.nonPrefillSupport === true,
         publicServiceMode: false,
+        // 无全局 settings.jsonFormatOutput 对应项，回退恒 false（与 nonPrefillSupport 回退全局不同）。
+        jsonFormatOutput: false,
     };
 }
 /** 聊天切换后 reconcile：把当前聊天绑定重新投影到 apiMode/apiConfig/tavernProfile */
@@ -73196,6 +72773,12 @@ function redactSensitiveIncludeBodyForDebug_ACU(includeBody) {
     return raw.replace(/("(?:[^"\\]|\\.)*"\s*:\s*)"(?:[^"\\]|\\.)*"/g, (match, keyPortion) => (sensitiveKey.test(keyPortion) ? keyPortion + '"***"' : match));
 }
 /**
+ * JSON 格式化输出的 response_format 参数（与 MVU 格式化输出同参：custom_include_body 里加 response_format json_object）。
+ * 仅在需要明确返回 JSON 的调用点传入 needsJsonFormat，且预设开关 jsonFormatOutput 开启时生效；
+ * 不支持该参数的后端可经 excludeBodyParams 填 response_format 剔除。开关关闭时行为与现状逐字一致。
+ */
+const JSON_OBJECT_RESPONSE_FORMAT_ACU = Object.freeze({ type: 'json_object' });
+/**
  * 构建 Chat Completions 自定义 API 请求体（支持 bodyParams / excludeBodyParams / requestHeaders）
  */
 function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) {
@@ -73242,7 +72825,7 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
     if (opts.includeStreamUsage && requestWantsStream) {
         pluginFields.stream_options = { include_usage: true };
     }
-    // 注入上游请求体的 response_format（如严格 JSON 填表的 json_schema）。
+    // 注入上游请求体的 response_format（调用方按需传入，如 json_schema 约束）。
     // JSON 是 YAML 的子集，结构化组合后走 custom_include_body 合并进上游请求体；
     // 后端不支持时用户可通过 excludeBodyParams 填 response_format 剔除。
     if (opts.responseFormat && typeof opts.responseFormat === 'object') {
@@ -73425,6 +73008,7 @@ function getApiConfigByPreset_ACU(presetName) {
         tavernProfile: resolved.tavernProfile,
         nonPrefillSupport: resolved.nonPrefillSupport,
         publicServiceMode: resolved.publicServiceMode,
+        jsonFormatOutput: resolved.jsonFormatOutput,
     };
 }
 /**
@@ -73435,7 +73019,7 @@ function getApiConfigByPreset_ACU(presetName) {
  * @param maxTokensOverride 可选的最大 token 数覆盖，仅允许公开层传入经校验的安全值
  * @returns AI 响应文本，失败返回 null
  */
-async function callAIWithPreset_ACU(messages, presetName = '', maxTokensOverride, signal) {
+async function callAIWithPreset_ACU(messages, presetName = '', maxTokensOverride, signal, options) {
     if (!Array.isArray(messages) || messages.length === 0) {
         logWarn_ACU('[callAIWithPreset] messages 必须是非空数组');
         return null;
@@ -73455,7 +73039,7 @@ async function callAIWithPreset_ACU(messages, presetName = '', maxTokensOverride
     if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
         throw new Error('自定义API的URL或模型未配置。');
     }
-    const body = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens, stripModelPrefix: false, nonPrefillSupport: apiPresetConfig.nonPrefillSupport });
+    const body = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens, stripModelPrefix: false, nonPrefillSupport: apiPresetConfig.nonPrefillSupport, ...(options?.needsJsonFormat === true && apiPresetConfig.jsonFormatOutput === true ? { responseFormat: JSON_OBJECT_RESPONSE_FORMAT_ACU } : {}) });
     // 公益站兼容（预设级）：该预设限速每分钟最多 3 次请求（各预设独立计数）
     if (apiPresetConfig.publicServiceMode) {
         await acquirePresetRateLimitSlot_ACU(presetName || '_current_config', { signal });
@@ -73543,6 +73127,8 @@ async function callAIWithResolvedPreset_ACU(messages, resolved, signal, lifecycl
         promptCacheKey: extras?.promptCacheKey,
         // usage 回调在场时才请求流式 usage chunk：不改变没有订阅方时的请求体。
         includeStreamUsage: !!lifecycle?.onUsage,
+        // JSON 格式化输出：仅调用点明确需要 JSON 且预设开关开启时附加（与 MVU 格式化输出同参）。
+        ...(extras?.needsJsonFormat === true && resolved.jsonFormatOutput === true ? { responseFormat: JSON_OBJECT_RESPONSE_FORMAT_ACU } : {}),
     });
     // 公益站兼容（预设级）：该预设限速每分钟最多 3 次请求（各预设独立计数）
     if (resolved.publicServiceMode) {
@@ -74197,7 +73783,7 @@ async function performContentOptimization_ACU(content, options = {}) {
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
             logDebug_ACU(`[正文优化] 调用AI API... (尝试 ${attempt}/${maxRetries})`);
-            responseContent = await callAIWithPreset_ACU(messages, apiPreset);
+            responseContent = await callAIWithPreset_ACU(messages, apiPreset, undefined, undefined, { needsJsonFormat: true });
             if (responseContent) {
                 // API调用成功，跳出重试循环
                 break;
@@ -74265,7 +73851,7 @@ async function performContentOptimization_ACU(content, options = {}) {
             await new Promise(resolve => setTimeout(resolve, delayMs));
             try {
                 logDebug_ACU(`[正文优化] 重新调用AI API以获取更干净的优化结果... (尝试 ${parseAttempt + 1}/${maxRetries})`);
-                parseRetryResponseContent = await callAIWithPreset_ACU(messages, apiPreset);
+                parseRetryResponseContent = await callAIWithPreset_ACU(messages, apiPreset, undefined, undefined, { needsJsonFormat: true });
                 if (!parseRetryResponseContent) {
                     throw new Error('重试请求未返回有效内容');
                 }
@@ -77403,7 +76989,7 @@ async function runAgentDecisionShard_ACU(params) {
     for (let attempt = 1; attempt <= params.maxAiAttempts; attempt++) {
         try {
             // 中止信号透传：剧情推进「停止」可中断 agent 决策请求（与 plot-task-engine 一致）
-            rawResponse = await callAIWithPreset_ACU(messages, params.presetName, undefined, params.signal || null);
+            rawResponse = await callAIWithPreset_ACU(messages, params.presetName, undefined, params.signal || null, { needsJsonFormat: true });
         }
         catch (error) {
             // 用户「停止」触发的 AbortError：直接终止，不做无意义重试空转
@@ -78860,7 +78446,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.2.5" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.2.6" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -97220,15 +96806,12 @@ let settings_ACU = {
     tableApiPreset: '',
     plotApiPreset: '',
     discardUnauthorizedTableEditsEnabled: true,
-    strictJsonTableFillEnabled: false,
     // [剧情推进] 按剧情任务ID保存的任务级 API 预设覆盖（key=taskId, value=presetName）
     // 不保存入聊天记录或剧情推进预设，只写进插件全局设置。
     plotTaskApiPresetOverridesById: {},
     // [新增] 按表格名称保存的表级 API 预设覆盖（key=标准化表名, value=presetName）
     tableApiPresetOverridesByName: {},
     charCardPrompt: DEFAULT_CHAR_CARD_PROMPT_ACU,
-    strictJsonCharCardPrompt: DEFAULT_CHAR_CARD_PROMPT_STRICT_JSON_ACU,
-    strictJsonSqlCharCardPrompt: DEFAULT_CHAR_CARD_PROMPT_SQL_STRICT_JSON_ACU,
     // [AI 改表助手] 可编辑提示词卡片段（空数组 = 使用默认硬编码提示词）
     templateAssistantPromptSegments: [],
     autoUpdateThreshold: DEFAULT_AUTO_UPDATE_THRESHOLD_ACU,
@@ -97247,7 +96830,6 @@ let settings_ACU = {
     tableTemplateDefaultsRefreshVersion: '',
     tableFillPromptForceDefaultVersion: '',
     templateAssistantPromptForceDefaultVersion: '',
-    strictJsonTableFillForceDisableVersion: '',
     tableContextExtractTags: '',
     tableContextExtractRules: [],
     tableContextExcludeTags: '',
@@ -107880,26 +107462,11 @@ async function collectGroupFillResponse_ACU(job, feedback, abortController = new
             if (aiResponse && minReplyLength > 0 && aiResponse.length < minReplyLength) {
                 throw new ModelOutputRetryError_ACU(`AI回复过短 (${aiResponse.length} 字符)，低于阈值 (${minReplyLength} 字符)`);
             }
-            let normalizedAiResponse = aiResponse;
             let tableEditText = '';
-            if (settings_ACU.strictJsonTableFillEnabled === true) {
-                const extracted = extractStrictJsonTableFillResponse_ACU(aiResponse, {
-                    sqlite: isSqliteMode(),
-                    tableData: job.baseSnapshot,
-                    targetSheetKeys: job.targetSheetKeys,
-                });
-                if (!extracted.ok) {
-                    throw new ModelOutputRetryError_ACU(extracted.retryHint || extracted.error || '严格 JSON 填表响应格式无效');
-                }
-                normalizedAiResponse = extracted.normalizedResponse || aiResponse;
-                tableEditText = (extracted.tableEditText || '').trim();
+            if (!aiResponse || !aiResponse.includes('<tableEdit>') || !aiResponse.includes('</tableEdit>')) {
+                throw new ModelOutputRetryError_ACU('AI响应中未找到完整有效的 <tableEdit> 标签');
             }
-            else {
-                if (!aiResponse || !aiResponse.includes('<tableEdit>') || !aiResponse.includes('</tableEdit>')) {
-                    throw new ModelOutputRetryError_ACU('AI响应中未找到完整有效的 <tableEdit> 标签');
-                }
-                tableEditText = (aiResponse.match(/<tableEdit>([\s\S]*?)<\/tableEdit>/i)?.[1] || '').trim();
-            }
+            tableEditText = (aiResponse.match(/<tableEdit>([\s\S]*?)<\/tableEdit>/i)?.[1] || '').trim();
             if (isSqliteMode() && tableEditText && isSqlContent(tableEditText)) {
                 try {
                     // 隐藏列保护使用请求前冻结的 live runtime schema 证据，而不是 baseSnapshot：
@@ -107910,7 +107477,7 @@ async function collectGroupFillResponse_ACU(job, feedback, abortController = new
                     throw new ModelOutputRetryError_ACU(error?.message || 'SQLite 填表 SQL 无效。');
                 }
             }
-            return { job, success: true, attempt, aiResponse: normalizedAiResponse, tableEditText };
+            return { job, success: true, attempt, aiResponse, tableEditText };
         }
         catch (error) {
             lastErrorMessage = error?.message || '未知错误';
@@ -119956,6 +119523,7 @@ async function callContinuationInternalAi_ACU(messages, preset, identity, signal
     const extras = {
         ...(cacheEnabled ? { promptCacheKey: buildPromptCacheKey_ACU(identity, options?.cacheScope || identity.source, preset) } : {}),
         ...(options?.minOutputTokens ? { minOutputTokens: options.minOutputTokens } : {}),
+        ...(options?.needsJsonFormat === true ? { needsJsonFormat: true } : {}),
     };
     try {
         return await callAIWithResolvedPreset_ACU(messages, preset, signal, {
@@ -120033,13 +119601,13 @@ function resolveContinuationApiPreset_ACU(settings, phase, dependencies = defaul
         const resolved = dependencies.resolvePreset(presetName);
         if (!resolved.resolved)
             failPreset_ACU(phase, 'missing');
-        return { presetName, source: 'fixed', reason: 'fixed_preset', apiMode: resolved.apiMode, apiConfig: resolved.apiConfig, tavernProfile: resolved.tavernProfile, nonPrefillSupport: resolved.nonPrefillSupport, publicServiceMode: resolved.publicServiceMode };
+        return { presetName, source: 'fixed', reason: 'fixed_preset', apiMode: resolved.apiMode, apiConfig: resolved.apiConfig, tavernProfile: resolved.tavernProfile, nonPrefillSupport: resolved.nonPrefillSupport, publicServiceMode: resolved.publicServiceMode, jsonFormatOutput: resolved.jsonFormatOutput };
     }
     if (settings.apiPresetMode !== 'current') {
         throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_CONFIG_MISSING', phase, '智能续写 API 预设模式非法', false));
     }
     const resolved = dependencies.resolvePreset('');
-    return { presetName: '', source: 'current', reason: 'current_configuration', apiMode: resolved.apiMode, apiConfig: resolved.apiConfig, tavernProfile: resolved.tavernProfile, nonPrefillSupport: resolved.nonPrefillSupport, publicServiceMode: resolved.publicServiceMode };
+    return { presetName: '', source: 'current', reason: 'current_configuration', apiMode: resolved.apiMode, apiConfig: resolved.apiConfig, tavernProfile: resolved.tavernProfile, nonPrefillSupport: resolved.nonPrefillSupport, publicServiceMode: resolved.publicServiceMode, jsonFormatOutput: resolved.jsonFormatOutput };
 }
 /**
  * 计算某个角色的生效渠道模式：inherit 回落到全局 apiPresetMode。
@@ -128269,6 +127837,8 @@ class AgentSubagentRuntime_ACU {
             // 每个子代理的提示词前缀不同，独立缓存命名空间避免互相挤占路由。
             cacheScope: `sub-${definition.name}`,
             minOutputTokens: CONTINUATION_ROLE_OUTPUT_TOKEN_FLOORS_ACU[definition.promptKey],
+            // 子代理输出按 JSON 契约解析：开关开启时附加 response_format json_object。
+            needsJsonFormat: true,
             onUsage: usage => {
                 usageTotal = usageTotal
                     ? {
@@ -128508,6 +128078,8 @@ class AgentSubagentRuntime_ACU {
             promptCacheEnabled: false,
             cacheScope: 'final-reviewer',
             minOutputTokens: CONTINUATION_ROLE_OUTPUT_TOKEN_FLOORS_ACU.finalReviewer,
+            // 终审输出按 JSON 契约解析：开关开启时附加 response_format json_object。
+            needsJsonFormat: true,
             onUsage: usage => {
                 usageTotal = usageTotal
                     ? {
@@ -129238,7 +128810,7 @@ class ContinuationAgentTurnPlanner_ACU {
                 requestId: `${base.requestId || base.attemptId || 'turn'}-handoff-summary`,
                 source: 'handoff_summary',
             };
-            return this.dependencies.callInternalAi(messages, preset, identity, request.signal, { promptCacheEnabled: false, cacheScope: 'handoff-summary' });
+            return this.dependencies.callInternalAi(messages, preset, identity, request.signal, { promptCacheEnabled: false, cacheScope: 'handoff-summary', needsJsonFormat: true });
         });
         const session = await this.openConversation_ACU(chat, request, conversationTurnKeyOf(), counter, measureOverhead, handoffSemanticAdapter);
         if (request.settings.finalReview.enabled) {
@@ -129604,6 +129176,8 @@ class ContinuationAgentTurnPlanner_ACU {
             promptCacheEnabled: request.settings.promptCacheEnabled,
             cacheScope: 'agent-main',
             minOutputTokens: CONTINUATION_ROLE_OUTPUT_TOKEN_FLOORS_ACU.main,
+            // 主 Agent 输出走 agent-protocol JSON 解析：开关开启时附加 response_format json_object。
+            needsJsonFormat: true,
             onUsage: usage => { callUsage = usage; },
         };
         for (let attempt = 0; attempt <= retries; attempt += 1) {
@@ -137389,7 +136963,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260905-17";
+        const stamp = "20260905-19";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -154815,6 +154389,7 @@ function createEmptyApiPresetDraft() {
         excludeBodyParams: '',
         requestHeaders: '',
         nonPrefillSupport: false,
+        jsonFormatOutput: false,
         streamingEnabled: false,
         reasoningEffort: 'medium',
         publicServiceMode: false,
@@ -154835,6 +154410,7 @@ function apiPresetDraftFromPreset(preset) {
         excludeBodyParams: preset.apiConfig.excludeBodyParams || '',
         requestHeaders: preset.apiConfig.requestHeaders || '',
         nonPrefillSupport: preset.nonPrefillSupport === true,
+        jsonFormatOutput: preset.jsonFormatOutput === true,
         // A2 修复：undefined 必须原样保留（=跟随全局）。旧版把 undefined 读成 false/'medium'
         // 再恒写具体值，旧预设只要「打开面板并保存」一次就被固化为显式配置，永久失去全局回退。
         streamingEnabled: typeof preset.apiConfig.streamingEnabled === 'boolean' ? preset.apiConfig.streamingEnabled : undefined,
@@ -154872,6 +154448,7 @@ function apiPresetFromDraft(draft) {
             promptPostProcessing: normalizePromptPostProcessing_ACU(draft.promptPostProcessing),
         },
         nonPrefillSupport: draft.nonPrefillSupport === true,
+        jsonFormatOutput: draft.jsonFormatOutput === true,
         publicServiceMode: draft.publicServiceMode === true,
     };
 }
@@ -155670,7 +155247,7 @@ const _hoisted_8$o = {
 	key: 2,
 	class: "fa-solid fa-check acu-preset-dd__check"
 };
-const _hoisted_9$j = {
+const _hoisted_9$k = {
 	key: 0,
 	class: "acu-preset-dd__empty"
 };
@@ -155741,7 +155318,7 @@ function _sfc_render$X(_ctx, _cache, $props, $setup, $data, $options) {
 			/* KEYED_FRAGMENT */
 		)), !$props.items.length ? (openBlock(), createElementBlock(
 			"li",
-			_hoisted_9$j,
+			_hoisted_9$k,
 			toDisplayString($props.emptyText),
 			1
 			/* TEXT */
@@ -156338,8 +155915,8 @@ var _sfc_main$U = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-api-config-panel__hint[data-v-7858ec2b] {\r\n  color: var(--acu-text-3, #9e978e);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-api-config-panel__hint-danger[data-v-7858ec2b] {\r\n  color: var(--acu-danger, #e5484d);\n}\n.acu-api-config-panel__select-row[data-v-7858ec2b] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-7858ec2b] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-7858ec2b] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-7858ec2b] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-7858ec2b] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-7858ec2b] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-7858ec2b] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-7858ec2b] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-7858ec2b] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-7858ec2b");
-var ApiConfigPanel_vue_vue_type_style_index_0_scoped_7858ec2b_lang = null;
+injectSfcStyle("\n.acu-api-config-panel__hint[data-v-205b07f6] {\r\n  color: var(--acu-text-3, #9e978e);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-api-config-panel__hint-danger[data-v-205b07f6] {\r\n  color: var(--acu-danger, #e5484d);\n}\n.acu-api-config-panel__select-row[data-v-205b07f6] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-205b07f6] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-205b07f6] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-205b07f6] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-205b07f6] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-205b07f6] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-205b07f6] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-205b07f6] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-205b07f6] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-205b07f6");
+var ApiConfigPanel_vue_vue_type_style_index_0_scoped_205b07f6_lang = null;
 
 const _hoisted_1$S = { class: "acu-api-config-panel__select-row" };
 const _hoisted_2$L = { class: "acu-api-config-panel__editor-section" };
@@ -156353,8 +155930,9 @@ const _hoisted_5$t = {
 	class: "acu-api-config-panel__danger"
 };
 const _hoisted_6$s = { class: "acu-api-config-panel__two-col" };
-const _hoisted_7$p = { class: "acu-api-config-panel__editor-section" };
-const _hoisted_8$n = { class: "acu-api-config-panel__actions" };
+const _hoisted_7$p = { class: "acu-api-config-panel__two-col" };
+const _hoisted_8$n = { class: "acu-api-config-panel__editor-section" };
+const _hoisted_9$j = { class: "acu-api-config-panel__actions" };
 function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createBlock($setup["AcuPanel"], {
 		title: $setup.apiCopy.panels.preset.title,
@@ -156365,7 +155943,7 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 				key: 0,
 				kind: "warning"
 			}, {
-				default: withCtx(() => [..._cache[18] || (_cache[18] = [createTextVNode(
+				default: withCtx(() => [..._cache[19] || (_cache[19] = [createTextVNode(
 					" 暂无可用 API 预设，请新建并设为当前或全局默认。 ",
 					-1
 					/* CACHED */
@@ -156462,7 +156040,7 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 							_: 1
 						}),
 						createBaseVNode("div", _hoisted_3$E, [createVNode($setup["AcuButton"], { onClick: $setup.loadModelsForActive }, {
-							default: withCtx(() => [..._cache[19] || (_cache[19] = [createTextVNode(
+							default: withCtx(() => [..._cache[20] || (_cache[20] = [createTextVNode(
 								"加载模型",
 								-1
 								/* CACHED */
@@ -156520,32 +156098,40 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 						}, null, 8, ["model-value"])]),
 						_: 1
 					}),
-					createVNode($setup["AcuToggle"], {
-						"model-value": $setup.activeDraft.streamingEnabled === true,
-						"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.activeDraft.streamingEnabled = $event),
-						label: "流式输出",
-						description: "该预设开启后 AI 响应以流式方式输出（用于对话类调用）。每个 API 预设独立。未显式拨动过则跟随全局流式开关。"
-					}, null, 8, ["model-value"]),
-					createVNode($setup["AcuToggle"], {
-						modelValue: $setup.activeDraft.nonPrefillSupport,
-						"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.activeDraft.nonPrefillSupport = $event),
-						label: "非预填充支持",
-						description: "该预设开启后，所有使用本预设的调用（剧情推进/填表等）会把 assistant 消息改写为 user，并在首行加上「助手：」前缀。用于不支持 assistant 预填充的模型/接口。"
-					}, null, 8, ["modelValue"]),
-					createVNode($setup["AcuToggle"], {
-						modelValue: $setup.activeDraft.publicServiceMode,
-						"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.activeDraft.publicServiceMode = $event),
-						label: "公益站兼容",
-						description: "该预设开启后限速：每分钟最多发送 3 次请求（各预设独立计数），超出时自动排队等待。用于有频率限制的公益站/共享接口。默认关闭。"
-					}, null, 8, ["modelValue"]),
 					createBaseVNode("div", _hoisted_7$p, [
+						createVNode($setup["AcuToggle"], {
+							"model-value": $setup.activeDraft.streamingEnabled === true,
+							"onUpdate:modelValue": _cache[11] || (_cache[11] = ($event) => $setup.activeDraft.streamingEnabled = $event),
+							label: "流式输出",
+							description: "该预设开启后 AI 响应以流式方式输出（用于对话类调用）。每个 API 预设独立。未显式拨动过则跟随全局流式开关。"
+						}, null, 8, ["model-value"]),
+						createVNode($setup["AcuToggle"], {
+							modelValue: $setup.activeDraft.nonPrefillSupport,
+							"onUpdate:modelValue": _cache[12] || (_cache[12] = ($event) => $setup.activeDraft.nonPrefillSupport = $event),
+							label: "非预填充支持",
+							description: "该预设开启后，所有使用本预设的调用（剧情推进/填表等）会把 assistant 消息改写为 user，并在首行加上「助手：」前缀。用于不支持 assistant 预填充的模型/接口。"
+						}, null, 8, ["modelValue"]),
+						createVNode($setup["AcuToggle"], {
+							modelValue: $setup.activeDraft.publicServiceMode,
+							"onUpdate:modelValue": _cache[13] || (_cache[13] = ($event) => $setup.activeDraft.publicServiceMode = $event),
+							label: "公益站兼容",
+							description: "该预设开启后限速：每分钟最多发送 3 次请求（各预设独立计数），超出时自动排队等待。用于有频率限制的公益站/共享接口。默认关闭。"
+						}, null, 8, ["modelValue"]),
+						createVNode($setup["AcuToggle"], {
+							modelValue: $setup.activeDraft.jsonFormatOutput,
+							"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.activeDraft.jsonFormatOutput = $event),
+							label: "JSON 格式化输出",
+							description: "该预设开启后，需要明确返回 JSON 的调用（正文替换/Skill 化/决策/改表助手/续写 Agent 协议）会在请求体附加 response_format json_object，与 MVU 格式化输出同参。不支持该参数的后端请勿开启，或用「排除主体参数」填 response_format 剔除。"
+						}, null, 8, ["modelValue"])
+					]),
+					createBaseVNode("div", _hoisted_8$n, [
 						createVNode($setup["AcuFormRow"], {
 							label: "附加主体参数",
 							hint: "SillyTavern custom_include_body，填写 YAML object，会合并到最终模型请求体。"
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
 								modelValue: $setup.activeDraft.bodyParams,
-								"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.activeDraft.bodyParams = $event),
+								"onUpdate:modelValue": _cache[15] || (_cache[15] = ($event) => $setup.activeDraft.bodyParams = $event),
 								rows: 3,
 								placeholder: "response_format:\n  type: json_object\ntop_k: 50"
 							}, null, 8, ["modelValue"])]),
@@ -156557,7 +156143,7 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
 								modelValue: $setup.activeDraft.excludeBodyParams,
-								"onUpdate:modelValue": _cache[15] || (_cache[15] = ($event) => $setup.activeDraft.excludeBodyParams = $event),
+								"onUpdate:modelValue": _cache[16] || (_cache[16] = ($event) => $setup.activeDraft.excludeBodyParams = $event),
 								rows: 2,
 								placeholder: "top_p, reasoning_effort"
 							}, null, 8, ["modelValue"])]),
@@ -156576,7 +156162,7 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 							_: 1
 						}),
 						createVNode($setup["AcuFormRow"], { label: "客户端伪装" }, {
-							hint: withCtx(() => [..._cache[20] || (_cache[20] = [createBaseVNode(
+							hint: withCtx(() => [..._cache[21] || (_cache[21] = [createBaseVNode(
 								"span",
 								{ class: "acu-api-config-panel__hint" },
 								[createTextVNode(" 选择一个客户端身份后，其特征请求头（User-Agent / HTTP-Referer / X-Title 等）会合并进下方附加请求标头：受管身份键统一替换、其余行保留。用于部分屏蔽第三方客户端的供应商。 "), createBaseVNode("span", { class: "acu-api-config-panel__hint-danger" }, "如果您不清楚这是做什么用的请不要选择。选择启用后的风险自行评估，后果自担。")],
@@ -156588,7 +156174,7 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 								"model-value": $setup.matchedClientPresetId,
 								disabled: $setup.activeDraft.publicServiceMode,
 								placeholder: $setup.activeDraft.publicServiceMode ? "已开启公益站兼容，不可使用客户端伪装" : "请选择",
-								"onUpdate:modelValue": _cache[16] || (_cache[16] = ($event) => $setup.applyClientPreset($event))
+								"onUpdate:modelValue": _cache[17] || (_cache[17] = ($event) => $setup.applyClientPreset($event))
 							}, null, 8, [
 								"model-value",
 								"disabled",
@@ -156602,7 +156188,7 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
 								modelValue: $setup.activeDraft.requestHeaders,
-								"onUpdate:modelValue": _cache[17] || (_cache[17] = ($event) => $setup.activeDraft.requestHeaders = $event),
+								"onUpdate:modelValue": _cache[18] || (_cache[18] = ($event) => $setup.activeDraft.requestHeaders = $event),
 								rows: 2,
 								placeholder: "X-Custom-Header: value"
 							}, null, 8, ["modelValue"])]),
@@ -156620,11 +156206,11 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 						)]),
 						_: 1
 					})) : createCommentVNode("v-if", true),
-					createBaseVNode("div", _hoisted_8$n, [createVNode($setup["AcuButton"], {
+					createBaseVNode("div", _hoisted_9$j, [createVNode($setup["AcuButton"], {
 						disabled: !$setup.activeDraftDirty,
 						onClick: $setup.syncActiveDraft
 					}, {
-						default: withCtx(() => [..._cache[21] || (_cache[21] = [createTextVNode(
+						default: withCtx(() => [..._cache[22] || (_cache[22] = [createTextVNode(
 							"放弃修改",
 							-1
 							/* CACHED */
@@ -156649,7 +156235,7 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 				key: 2,
 				kind: "warning"
 			}, {
-				default: withCtx(() => [..._cache[22] || (_cache[22] = [createTextVNode(
+				default: withCtx(() => [..._cache[23] || (_cache[23] = [createTextVNode(
 					" 暂无可用 API 预设，请新建并设为当前或全局默认。 ",
 					-1
 					/* CACHED */
@@ -156660,7 +156246,7 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["title", "description"]);
 }
-var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$U, [["render", _sfc_render$U], ["__scopeId", "data-v-7858ec2b"]]);
+var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$U, [["render", _sfc_render$U], ["__scopeId", "data-v-205b07f6"]]);
 
 // ═══════════════════════════════════════════════════════════
 // service/settings/feature-preset-reference-service.ts — 功能级 API 预设引用
@@ -181308,7 +180894,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260905-17";
+        const stamp = "20260905-19";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -181317,7 +180903,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.2.5";
+        const v = "9.2.6";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {
@@ -188032,8 +187618,8 @@ async function generateTemplateAssistantDraft_ACU(input) {
     // 调用形状保持与原来一致（无 guard 时 3 参、有 guard 时 4 参透 signal）。
     const guardSignal = input.guard?.signal ?? null;
     const aiRawText = await retrySingleShotAiCall_ACU(() => (guardSignal
-        ? callAIWithPreset_ACU(messages, effectivePreset, undefined, guardSignal)
-        : callAIWithPreset_ACU(messages, effectivePreset)), guardSignal);
+        ? callAIWithPreset_ACU(messages, effectivePreset, undefined, guardSignal, { needsJsonFormat: true })
+        : callAIWithPreset_ACU(messages, effectivePreset, undefined, undefined, { needsJsonFormat: true })), guardSignal);
     if (!aiRawText) {
         throw new Error('AI 未返回有效内容');
     }

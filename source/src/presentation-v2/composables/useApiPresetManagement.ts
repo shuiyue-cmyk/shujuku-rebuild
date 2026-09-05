@@ -23,6 +23,8 @@ export interface ApiPresetDraft {
   reasoningEffort?: string;
   /** 公益站兼容（预设级）：限速每分钟最多 3 次请求（各预设独立计数） */
   publicServiceMode: boolean;
+  /** JSON 格式化输出（预设级）：开启后，需要明确返回 JSON 的调用会在请求体附加 response_format json_object */
+  jsonFormatOutput: boolean;
   /** 接口协议（预设级）：openai_compat / openai_responses / claude_messages / gemini_interactions */
   customApiFormat: string;
   /**
@@ -49,6 +51,7 @@ export function createEmptyApiPresetDraft(): ApiPresetDraft {
     excludeBodyParams: '',
     requestHeaders: '',
     nonPrefillSupport: false,
+    jsonFormatOutput: false,
     streamingEnabled: false,
     reasoningEffort: 'medium',
     publicServiceMode: false,
@@ -70,6 +73,7 @@ export function apiPresetDraftFromPreset(preset: AcuV2ApiPreset): ApiPresetDraft
     excludeBodyParams: preset.apiConfig.excludeBodyParams || '',
     requestHeaders: preset.apiConfig.requestHeaders || '',
     nonPrefillSupport: preset.nonPrefillSupport === true,
+    jsonFormatOutput: preset.jsonFormatOutput === true,
     // A2 修复：undefined 必须原样保留（=跟随全局）。旧版把 undefined 读成 false/'medium'
     // 再恒写具体值，旧预设只要「打开面板并保存」一次就被固化为显式配置，永久失去全局回退。
     streamingEnabled: typeof preset.apiConfig.streamingEnabled === 'boolean' ? preset.apiConfig.streamingEnabled : undefined,
@@ -108,6 +112,7 @@ export function apiPresetFromDraft(draft: ApiPresetDraft): AcuV2ApiPreset {
       promptPostProcessing: normalizePromptPostProcessing_ACU(draft.promptPostProcessing),
     },
     nonPrefillSupport: draft.nonPrefillSupport === true,
+    jsonFormatOutput: draft.jsonFormatOutput === true,
     publicServiceMode: draft.publicServiceMode === true,
   };
 }

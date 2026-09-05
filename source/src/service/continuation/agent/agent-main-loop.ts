@@ -546,7 +546,7 @@ export class ContinuationAgentTurnPlanner_ACU {
         requestId: `${base.requestId || base.attemptId || 'turn'}-handoff-summary`,
         source: 'handoff_summary',
       };
-      return this.dependencies.callInternalAi(messages, preset, identity, request.signal, { promptCacheEnabled: false, cacheScope: 'handoff-summary' });
+      return this.dependencies.callInternalAi(messages, preset, identity, request.signal, { promptCacheEnabled: false, cacheScope: 'handoff-summary', needsJsonFormat: true });
     });
     const session = await this.openConversation_ACU(chat, request, conversationTurnKeyOf(), counter, measureOverhead, handoffSemanticAdapter);
     if (request.settings.finalReview.enabled) {
@@ -947,6 +947,8 @@ export class ContinuationAgentTurnPlanner_ACU {
       promptCacheEnabled: request.settings.promptCacheEnabled,
       cacheScope: 'agent-main',
       minOutputTokens: CONTINUATION_ROLE_OUTPUT_TOKEN_FLOORS_ACU.main,
+      // 主 Agent 输出走 agent-protocol JSON 解析：开关开启时附加 response_format json_object。
+      needsJsonFormat: true,
       onUsage: usage => { callUsage = usage; },
     };
 

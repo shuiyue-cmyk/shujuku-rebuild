@@ -123,6 +123,7 @@
         />
       </AcuFormRow>
 
+      <div class="acu-api-config-panel__two-col">
       <AcuToggle
         :model-value="activeDraft.streamingEnabled === true"
         @update:model-value="activeDraft.streamingEnabled = $event"
@@ -139,6 +140,12 @@
         label="公益站兼容"
         description="该预设开启后限速：每分钟最多发送 3 次请求（各预设独立计数），超出时自动排队等待。用于有频率限制的公益站/共享接口。默认关闭。"
       />
+      <AcuToggle
+        v-model="activeDraft.jsonFormatOutput"
+        label="JSON 格式化输出"
+        description="该预设开启后，需要明确返回 JSON 的调用（正文替换/Skill 化/决策/改表助手/续写 Agent 协议）会在请求体附加 response_format json_object，与 MVU 格式化输出同参。不支持该参数的后端请勿开启，或用「排除主体参数」填 response_format 剔除。"
+      />
+      </div>
 
       <div class="acu-api-config-panel__editor-section">
         <AcuFormRow label="附加主体参数" hint="SillyTavern custom_include_body，填写 YAML object，会合并到最终模型请求体。">

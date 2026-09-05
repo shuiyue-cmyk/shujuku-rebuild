@@ -242,6 +242,13 @@ function redactSensitiveIncludeBodyForDebug_ACU(includeBody: unknown): string {
 }
 
 /**
+ * JSON 格式化输出的 response_format 参数（与 MVU 格式化输出同参：custom_include_body 里加 response_format json_object）。
+ * 仅在需要明确返回 JSON 的调用点传入 needsJsonFormat，且预设开关 jsonFormatOutput 开启时生效；
+ * 不支持该参数的后端可经 excludeBodyParams 填 response_format 剔除。开关关闭时行为与现状逐字一致。
+ */
+export const JSON_OBJECT_RESPONSE_FORMAT_ACU = Object.freeze({ type: 'json_object' });
+
+/**
  * 构建 Chat Completions 自定义 API 请求体（支持 bodyParams / excludeBodyParams / requestHeaders）
  */
 export function buildCustomApiRequestBody_ACU(
@@ -295,7 +302,7 @@ export function buildCustomApiRequestBody_ACU(
   if (opts.includeStreamUsage && requestWantsStream) {
     pluginFields.stream_options = { include_usage: true };
   }
-  // 注入上游请求体的 response_format（如严格 JSON 填表的 json_schema）。
+  // 注入上游请求体的 response_format（调用方按需传入，如 json_schema 约束）。
   // JSON 是 YAML 的子集，结构化组合后走 custom_include_body 合并进上游请求体；
   // 后端不支持时用户可通过 excludeBodyParams 填 response_format 剔除。
   if (opts.responseFormat && typeof opts.responseFormat === 'object') {
@@ -478,6 +485,7 @@ export function getApiConfigByPreset_ACU(presetName: string) {
       tavernProfile: resolved.tavernProfile,
       nonPrefillSupport: resolved.nonPrefillSupport,
       publicServiceMode: resolved.publicServiceMode,
+      jsonFormatOutput: resolved.jsonFormatOutput,
     };
 }
 
@@ -489,7 +497,7 @@ export function getApiConfigByPreset_ACU(presetName: string) {
  * @param maxTokensOverride 可选的最大 token 数覆盖，仅允许公开层传入经校验的安全值
  * @returns AI 响应文本，失败返回 null
  */
-export async function callAIWithPreset_ACU(messages: any[], presetName: string = '', maxTokensOverride?: number, signal?: AbortSignal | null): Promise<string | null> {
+export async function callAIWithPreset_ACU(messages: any[], presetName: string = '', maxTokensOverride?: number, signal?: AbortSignal | null, options?: { needsJsonFormat?: boolean }): Promise<string | null> {
     if (!Array.isArray(messages) || messages.length === 0) {
         logWarn_ACU('[callAIWithPreset] messages 必须是非空数组');
         return null;
@@ -514,7 +522,7 @@ export async function callAIWithPreset_ACU(messages: any[], presetName: string =
         throw new Error('自定义API的URL或模型未配置。');
     }
 
-    const body = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens, stripModelPrefix: false, nonPrefillSupport: apiPresetConfig.nonPrefillSupport });
+    const body = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens, stripModelPrefix: false, nonPrefillSupport: apiPresetConfig.nonPrefillSupport, ...(options?.needsJsonFormat === true && apiPresetConfig.jsonFormatOutput === true ? { responseFormat: JSON_OBJECT_RESPONSE_FORMAT_ACU } : {}) });
 
     // 公益站兼容（预设级）：该预设限速每分钟最多 3 次请求（各预设独立计数）
     if (apiPresetConfig.publicServiceMode) {
@@ -544,6 +552,11 @@ export interface ResolvedPresetCallExtras_ACU {
      * 只作用于请求体的 max_tokens 参数，不做产出长度检查。用于总纲、大纲这类输出体量随任务增长的调用。
      */
     minOutputTokens?: number;
+    /**
+     * 本次调用需要明确返回 JSON：仅当解析后的预设开启 jsonFormatOutput 时，
+     * 才在请求体附加 response_format json_object（与 MVU 格式化输出同参）。开关关闭时行为与现状逐字一致。
+     */
+    needsJsonFormat?: boolean;
 }
 
 /**
@@ -595,7 +608,7 @@ function attachTimeoutAndExternalAbort_ACU(controller: AbortController, external
  */
 export async function callAIWithResolvedPreset_ACU(
     messages: any[],
-    resolved: { apiMode: string; apiConfig: any; tavernProfile: string; presetName?: string; nonPrefillSupport?: boolean; publicServiceMode?: boolean },
+    resolved: { apiMode: string; apiConfig: any; tavernProfile: string; presetName?: string; nonPrefillSupport?: boolean; publicServiceMode?: boolean; jsonFormatOutput?: boolean },
     signal?: AbortSignal | null,
     lifecycle?: ResolvedPresetCallLifecycle_ACU,
     extras?: ResolvedPresetCallExtras_ACU,
@@ -625,6 +638,8 @@ export async function callAIWithResolvedPreset_ACU(
         promptCacheKey: extras?.promptCacheKey,
         // usage 回调在场时才请求流式 usage chunk：不改变没有订阅方时的请求体。
         includeStreamUsage: !!lifecycle?.onUsage,
+        // JSON 格式化输出：仅调用点明确需要 JSON 且预设开关开启时附加（与 MVU 格式化输出同参）。
+        ...(extras?.needsJsonFormat === true && resolved.jsonFormatOutput === true ? { responseFormat: JSON_OBJECT_RESPONSE_FORMAT_ACU } : {}),
     });
     // 公益站兼容（预设级）：该预设限速每分钟最多 3 次请求（各预设独立计数）
     if (resolved.publicServiceMode) {
