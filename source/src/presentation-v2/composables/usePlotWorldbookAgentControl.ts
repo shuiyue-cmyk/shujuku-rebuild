@@ -456,8 +456,11 @@ export function usePlotWorldbookAgentControl() {
   }
 
   async function restore(): Promise<boolean> {
+    // 入口防重入：busy 置位在 confirm 之后，连点时第二轮直接拒绝，避免并发恢复。
+    if (busy.value) return false;
     const confirmed = await dialog.confirm(plotCopy.agentControl.restore.confirm);
     if (!confirmed) return false;
+    if (busy.value) return false;
     busy.value = 'restore';
     try {
       _set_pendingFinalGenerationGreenlights_ACU([]);
@@ -602,8 +605,10 @@ export function usePlotWorldbookAgentControl() {
   }
 
   async function clearSkillMeta(): Promise<boolean> {
+    if (busy.value) return false;
     const confirmed = await dialog.confirm({ ...plotCopy.agentControl.clearSkillMeta.confirm, confirmVariant: 'danger' });
     if (!confirmed) return false;
+    if (busy.value) return false;
     busy.value = 'clearSkillMeta';
     try {
       // 清空 Skill 元数据等于把「已处理到哪」全部作废：不重置游标，下一批会从中间继续跳着处理。

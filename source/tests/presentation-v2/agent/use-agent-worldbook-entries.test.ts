@@ -9,6 +9,8 @@ const mockSaveSkill = vi.fn();
 const mockDeleteSkill = vi.fn();
 const mockSnapshot = vi.fn(() => ({ active: false, books: {} }));
 const mockRefreshSnapshot = vi.fn(async () => mockSnapshot());
+const mockGetBookEntries = vi.fn();
+const mockSetBookEntries = vi.fn();
 
 const skillMetaBlock = '<!-- ACU_SKILL_META_START\n{"version":1,"description":"已有","triggerWhen":"测试","tk":0,"updatedAt":1,"updatedBy":"manual"}\nACU_SKILL_META_END -->';
 
@@ -32,6 +34,10 @@ async function getComposable(onSkillMetaChanged?: () => Promise<unknown>) {
     isWorldbookEntrySkillifyCandidate_ACU: (entry: any) => entry.enabled !== false && String(entry.type || '').trim().toLowerCase() !== 'constant'
       && !String(entry.comment || '').startsWith('internal') && !String(entry.comment || '').startsWith('database'),
   }));
+  vi.doMock('../../../src/data/gateways/worldbook-gateway', () => ({
+    getLorebookEntries_ACU: mockGetBookEntries,
+    setLorebookEntries_ACU: mockSetBookEntries,
+  }));
   const mod = await import('../../../src/presentation-v2/composables/useAgentWorldbookEntries');
   return mod.useAgentWorldbookEntries({ onSkillMetaChanged });
 }
@@ -42,6 +48,8 @@ beforeEach(() => {
   mockResolveScope.mockReset();
   mockSaveSkill.mockReset();
   mockDeleteSkill.mockReset();
+  mockGetBookEntries.mockReset();
+  mockSetBookEntries.mockReset();
   mockSnapshot.mockReturnValue({ active: false, books: {} });
   mockRefreshSnapshot.mockImplementation(async () => mockSnapshot());
 });
@@ -212,8 +220,7 @@ describe('useAgentWorldbookEntries', () => {
     expect(c.groups.value[0].entries[0]).toMatchObject({ hasSkill: true, label: '角色' });
   });
 
-  it('含 takeover meta 的条目渲染为纯净标题且不泄漏元数据', async () => {
-    mockResolveScope.mockResolvedValue(['AgentBook']);
+  it('含 takeover meta 的条目渲染为纯净标题且不泄漏元数据', async () => {    mockResolveScope.mockResolvedValue(['AgentBook']);
     mockSnapshot.mockReturnValue({ active: true, books: { AgentBook: [{ uid: 5, previousEnabled: true, previousKeys: ['钥匙'], previousType: 'selective' }] } });
     const takeoverBlock = '<!-- ACU_AGENT_WORLDBOOK_TAKEOVER_META_START\n{"version":1,"kind":"agent_worldbook_takeover","selectionSignature":"sig","createdAt":1,"previousEnabled":true}\nACU_AGENT_WORLDBOOK_TAKEOVER_META_END -->';
     mockGetEntries.mockResolvedValue({ AgentBook: [
@@ -227,5 +234,73 @@ describe('useAgentWorldbookEntries', () => {
     expect(entry.label).toBe('已接管条目');
     expect(entry.label).not.toContain('ACU_AGENT_WORLDBOOK_TAKEOVER_META');
     expect(entry.label).not.toContain('\n');
+  });
+
+  it('暴露批量编辑面（batchBusy+三个批量函数），AgentPage 世界书编辑区可直接消费', async () => {
+    const c = await getComposable();
+
+    expect(c.batchBusy.value).toBe(false);
+    expect(typeof c.batchEnableDisabledSkillEntries).toBe('function');
+    expect(typeof c.batchConvertBlueToGreenEntries).toBe('function');
+    expect(typeof c.batchCombinedBlueToGreenAndEnable).toBe('function');
+  });
+
+  it('批量启用关闭的 Skill 条目：只写回 enabled=false 的命中条目', async () => {
+    mockResolveScope.mockResolvedValue(['AgentBook']);
+    mockGetEntries.mockResolvedValue({ AgentBook: [
+      { uid: 1, comment: withSkill('关闭的'), enabled: false, type: 'selective' },
+      { uid: 2, comment: withSkill('已开的'), enabled: true, type: 'selective' },
+    ] });
+    mockGetBookEntries.mockResolvedValue([
+      { uid: 1, comment: withSkill('关闭的'), enabled: false, type: 'selective' },
+      { uid: 2, comment: withSkill('已开的'), enabled: true, type: 'selective' },
+    ]);
+    const c = await getComposable();
+    await c.loadEntries();
+
+    const changed = await c.batchEnableDisabledSkillEntries();
+
+    expect(changed).toBe(1);
+    expect(mockSetBookEntries).toHaveBeenCalledTimes(1);
+    expect(mockSetBookEntries.mock.calls[0][1]).toMatchObject([{ uid: 1, enabled: true }, { uid: 2, enabled: true }]);
+    expect(c.batchBusy.value).toBe(false);
+  });
+
+  it('蓝灯转绿灯：只改 type=constant 的 Skill 条目', async () => {
+    mockResolveScope.mockResolvedValue(['AgentBook']);
+    mockGetEntries.mockResolvedValue({ AgentBook: [
+      { uid: 3, comment: withSkill('蓝灯'), enabled: true, type: 'constant' },
+    ] });
+    mockGetBookEntries.mockResolvedValue([
+      { uid: 3, comment: withSkill('蓝灯'), enabled: true, type: 'constant' },
+    ]);
+    const c = await getComposable();
+    await c.loadEntries();
+
+    const changed = await c.batchConvertBlueToGreenEntries();
+
+    expect(changed).toBe(1);
+    expect(mockSetBookEntries).toHaveBeenCalledTimes(1);
+    expect(mockSetBookEntries.mock.calls[0][1]).toMatchObject([{ uid: 3, type: '' }]);
+    expect(c.batchBusy.value).toBe(false);
+  });
+
+  it('二合一：同轮完成转绿灯+启用', async () => {
+    mockResolveScope.mockResolvedValue(['AgentBook']);
+    mockGetEntries.mockResolvedValue({ AgentBook: [
+      { uid: 4, comment: withSkill('蓝灯且关闭'), enabled: false, type: 'constant' },
+    ] });
+    mockGetBookEntries.mockResolvedValue([
+      { uid: 4, comment: withSkill('蓝灯且关闭'), enabled: false, type: 'constant' },
+    ]);
+    const c = await getComposable();
+    await c.loadEntries();
+
+    const result = await c.batchCombinedBlueToGreenAndEnable();
+
+    expect(result).toEqual({ converted: 1, enabled: 1 });
+    expect(mockSetBookEntries).toHaveBeenCalledTimes(1);
+    expect(mockSetBookEntries.mock.calls[0][1]).toMatchObject([{ uid: 4, type: '', enabled: true }]);
+    expect(c.batchBusy.value).toBe(false);
   });
 });
