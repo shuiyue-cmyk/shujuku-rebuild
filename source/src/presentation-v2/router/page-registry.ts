@@ -59,7 +59,7 @@ export const ACU_V2_PAGE_REGISTRY: readonly AcuV2Page[] = Object.freeze([
   // 工具
   { id: 'data-mgmt', title: '数据管理', group: 'tool', component: markRaw(DataMgmtPage) },
   { id: 'advanced-tools', title: '高级工具', group: 'tool', component: markRaw(AdvancedToolsPage) },
-  // 生理追踪（biotracker）合并层已彻底删除，仅存 silent-migration（存量数据一次性迁移上游）
+  // 生理追踪（biotracker）合并层与存量静默迁移已彻底删除
 
   // 开发者（plan §D24：仪表盘"启用开发者选项"总开关 gate）
   {

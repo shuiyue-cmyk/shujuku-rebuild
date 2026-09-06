@@ -62,7 +62,6 @@ import {
   getRuntimeLifecycleEpoch_ACU,
   hydrateStorageProviderFromSnapshot_ACU
 } from '../../service/table/table-storage-strategy';
-import { runLegacyBiotrackerSilentMigration_ACU } from '../../service/biotracker/silent-migration';
 import { captureCheckpointVaultForCurrentChat_ACU, installCheckpointDeleteGuard_ACU } from '../../service/chat/checkpoint-delete-guard';
 import { auditDormantDataIntegrity_ACU } from '../../service/template/dormant-data-service';
 import { getUiSurface_ACU, showUiSurfaceToast_ACU } from '../../shared/ui-surface-registry';
@@ -526,9 +525,6 @@ async function handleChatChangedEvent_ACU(chatFileName: string): Promise<void> {
     // 会在新聊天上跑填表（旧事件缺整数 message_id 时没有 intent 可复检，落到末楼-1 兜底）。
     clearAutoFillDebounce_ACU();
 
-    // [静默迁移] 打开即迁：TT/Luker sidecar 仅当前聊天可达，切到哪个聊天就迁哪个（按聊天打标只跑一次）
-    void runLegacyBiotrackerSilentMigration_ACU();
-
     const hasValidChatFileName_ACU = isValidChatFileName_ACU(chatFileName);
     if (!hasValidChatFileName_ACU && !hasActiveChatMessages_ACU()) {
       clearRuntimeForNoActiveChat_ACU(chatFileName);
@@ -585,8 +581,6 @@ export   function mainInitialize_ACU() {
       showToastr_ACU('success', '数据库已加载！', '数据库');
 
       loadSettings_ACU();
-      // [静默迁移] 内置生理追踪存量数据 → 上游 tracker 可读形态（一次性，按聊天打标）
-      void runLegacyBiotrackerSilentMigration_ACU();
       // S0-4：注册插件保存后的 checkpoint 保管库同步（删楼恢复的影子基线）。
       installCheckpointDeleteGuard_ACU();
       // Register the bridge before generation events are subscribed. Runtime

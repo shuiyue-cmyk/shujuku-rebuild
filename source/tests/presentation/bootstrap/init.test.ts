@@ -66,9 +66,6 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({
   _set_allChatMessages_ACU: m.setMessages, _set_currentChatFileIdentifier_ACU: (value: string) => { m.currentChatKey = value; m.setChat(value); }, _set_currentJsonTableData_ACU: m.setData, _set_independentTableStates_ACU: m.setTables, _set_isProcessing_Plot_ACU: vi.fn(), _set_lastTotalAiMessages_ACU: m.setTotal, _set_wasStoppedByUser_ACU: m.setWasStoppedByUser, abortOnChatMutation_ACU: vi.fn(), clearAutoFillDebounce_ACU: (...args: any[]) => m.clearAutoFillDebounce(...args), getChatMutationAbortSignal_ACU: () => null,
 }));
 vi.mock('../../../src/service/settings/settings-service', () => ({ applyTemplateScopeForCurrentChat_ACU: vi.fn(), loadSettings_ACU: vi.fn(), isSettingsStorageReadyForSave_ACU: vi.fn(() => true) }));
-// 静默迁移在启动与 CHAT_CHANGED 各触发一次：走真实实现会读宿主/写 localStorage，测试必须掐掉
-// （否则只剩 try/catch 吞错，migration 分支实际不可观测）。
-vi.mock('../../../src/service/biotracker/silent-migration', () => ({ runLegacyBiotrackerSilentMigration_ACU: vi.fn(async () => {}) }));
 vi.mock('../../../src/service/worldbook/injection-engine', () => ({ resetScriptStateForNewChat_ACU: m.resetScript }));
 // 续写宿主生成桥注册表：默认无注册实例（get 返回 undefined，init.ts 的 ?. 全部短路），
 // 需要观测事件分类的用例把 m.continuationBridge 换成带 spy 的对象即可。
