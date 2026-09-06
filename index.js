@@ -72161,6 +72161,7 @@ function normalizePreset_ACU(value) {
         nonPrefillSupport: value.nonPrefillSupport === true,
         publicServiceMode: value.publicServiceMode === true,
         jsonFormatOutput: value.jsonFormatOutput === true,
+        enhancedThinking: value.enhancedThinking === true,
     };
 }
 function normalizePresetList_ACU(value) {
@@ -72250,6 +72251,8 @@ function resolveApiConfigByPreset_ACU(presetName) {
             publicServiceMode: false,
             // 无全局 settings.jsonFormatOutput 对应项，回退恒 false（与 nonPrefillSupport 回退全局不同）。
             jsonFormatOutput: false,
+            // 无全局 settings.enhancedThinking 对应项，回退恒 false（与 nonPrefillSupport 回退全局不同）。
+            enhancedThinking: false,
         };
     }
     const preset = findPresetByName_ACU(settings_ACU.apiPresets, normalized);
@@ -72262,6 +72265,7 @@ function resolveApiConfigByPreset_ACU(presetName) {
             nonPrefillSupport: preset.nonPrefillSupport === true,
             publicServiceMode: preset.publicServiceMode === true,
             jsonFormatOutput: preset.jsonFormatOutput === true,
+            enhancedThinking: preset.enhancedThinking === true,
         };
     }
     // 悬挂引用：返回当前配置但标记未解析，调用方应据此拒绝或回退，而不是静默误用。
@@ -72275,6 +72279,8 @@ function resolveApiConfigByPreset_ACU(presetName) {
         publicServiceMode: false,
         // 无全局 settings.jsonFormatOutput 对应项，回退恒 false（与 nonPrefillSupport 回退全局不同）。
         jsonFormatOutput: false,
+        // 无全局 settings.enhancedThinking 对应项，回退恒 false（与 nonPrefillSupport 回退全局不同）。
+        enhancedThinking: false,
     };
 }
 /** 聊天切换后 reconcile：把当前聊天绑定重新投影到 apiMode/apiConfig/tavernProfile */
@@ -72779,6 +72785,16 @@ function redactSensitiveIncludeBodyForDebug_ACU(includeBody) {
  */
 const JSON_OBJECT_RESPONSE_FORMAT_ACU = Object.freeze({ type: 'json_object' });
 /**
+ * 增强思考 system 提示词（用户指定文案，逐字固定，勿改写/翻译/增删）：
+ * 预设开关 enhancedThinking 开启后，本库所有经 buildCustomApiRequestBody_ACU 发出的
+ * API 调用在消息最开头插入一条 `{ role: 'system', content: 本常量 }`。
+ * 换行符恒为 \n（数组 join('\n') 保证跨平台一致）。
+ */
+const ENHANCED_THINKING_SYSTEM_PROMPT_ACU = [
+    'Reasoning Effort: Absolute maximum with no shortcuts permitted.',
+    'You MUST be very thorough in your thinking and comprehensively decompose the problem to resolve the root cause, rigorously stress-testing your logic against all potential paths, edge cases, and adversarial scenarios.',
+].join('\n');
+/**
  * 构建 Chat Completions 自定义 API 请求体（支持 bodyParams / excludeBodyParams / requestHeaders）
  */
 function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) {
@@ -72841,6 +72857,24 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
     // 提示词后处理（预设级可配）：缺省 strict 与历史写死行为一致；显式「未选择」（''）
     // 时请求体省略该键，后端原样透传消息，保留提示词组中部 system 段的角色。
     const promptPostProcessing_ACU = normalizePromptPostProcessing_ACU(effectiveApiConfig.promptPostProcessing);
+    // 增强思考（预设级开关 enhancedThinking）：开启后在消息最开头插入一条固定英文 system 提示，
+    // 要求模型最大限度深入思考并写出完整推演过程。插入点在本函数一切归一/分流/调试快照之前，
+    // 保证快照与真实请求一致；开关关闭时行为与现状逐字一致。
+    // 去重守卫：若 messages[0] 已是同 role（小写相等 system）同 content（逐字相等），不再插入，
+    // 防同一数组被 build 两次时的双插。
+    const effectiveMessagesForEnhancedThinking_ACU = Array.isArray(messages) ? [...messages] : messages;
+    if (opts.enhancedThinking === true && Array.isArray(effectiveMessagesForEnhancedThinking_ACU)) {
+        const firstMessageForEnhancedThinking_ACU = effectiveMessagesForEnhancedThinking_ACU[0];
+        const alreadyInsertedEnhancedThinking_ACU = !!firstMessageForEnhancedThinking_ACU
+            && typeof firstMessageForEnhancedThinking_ACU === 'object'
+            && !Array.isArray(firstMessageForEnhancedThinking_ACU)
+            && typeof firstMessageForEnhancedThinking_ACU.role === 'string'
+            && firstMessageForEnhancedThinking_ACU.role.toLowerCase() === 'system'
+            && firstMessageForEnhancedThinking_ACU.content === ENHANCED_THINKING_SYSTEM_PROMPT_ACU;
+        if (!alreadyInsertedEnhancedThinking_ACU) {
+            effectiveMessagesForEnhancedThinking_ACU.unshift({ role: 'system', content: ENHANCED_THINKING_SYSTEM_PROMPT_ACU });
+        }
+    }
     const body = {
         // 统一将 messages 的 role 归一为小写（system / user / assistant）。
         //
@@ -72857,8 +72891,8 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
         // 边界契约：仅当 role 是字符串时才归一为小写；缺失 role、非字符串 role、
         // 数组/原始值等异常消息一律原样保留，交由后端校验，绝不把缺失 role 静默
         // 改造成 "undefined" / "null"。
-        messages: Array.isArray(messages)
-            ? messages.map((m) => {
+        messages: Array.isArray(effectiveMessagesForEnhancedThinking_ACU)
+            ? effectiveMessagesForEnhancedThinking_ACU.map((m) => {
                 if (!m || typeof m !== 'object' || Array.isArray(m) || typeof m.role !== 'string')
                     return m;
                 let role = m.role.toLowerCase();
@@ -72869,7 +72903,7 @@ function buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, overrides) 
                 }
                 return { ...m, role, ...(content !== undefined ? { content } : {}) };
             })
-            : messages,
+            : effectiveMessagesForEnhancedThinking_ACU,
         model,
         max_tokens: maxTokens,
         temperature,
@@ -73009,6 +73043,7 @@ function getApiConfigByPreset_ACU(presetName) {
         nonPrefillSupport: resolved.nonPrefillSupport,
         publicServiceMode: resolved.publicServiceMode,
         jsonFormatOutput: resolved.jsonFormatOutput,
+        enhancedThinking: resolved.enhancedThinking,
     };
 }
 /**
@@ -73039,7 +73074,7 @@ async function callAIWithPreset_ACU(messages, presetName = '', maxTokensOverride
     if (!effectiveApiConfig.url || !effectiveApiConfig.model) {
         throw new Error('自定义API的URL或模型未配置。');
     }
-    const body = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens, stripModelPrefix: false, nonPrefillSupport: apiPresetConfig.nonPrefillSupport, ...(options?.needsJsonFormat === true && apiPresetConfig.jsonFormatOutput === true ? { responseFormat: JSON_OBJECT_RESPONSE_FORMAT_ACU } : {}) });
+    const body = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens, stripModelPrefix: false, nonPrefillSupport: apiPresetConfig.nonPrefillSupport, ...(options?.needsJsonFormat === true && apiPresetConfig.jsonFormatOutput === true ? { responseFormat: JSON_OBJECT_RESPONSE_FORMAT_ACU } : {}), ...(apiPresetConfig.enhancedThinking === true ? { enhancedThinking: true } : {}) });
     // 公益站兼容（预设级）：该预设限速每分钟最多 3 次请求（各预设独立计数）
     if (apiPresetConfig.publicServiceMode) {
         await acquirePresetRateLimitSlot_ACU(presetName || '_current_config', { signal });
@@ -73129,6 +73164,7 @@ async function callAIWithResolvedPreset_ACU(messages, resolved, signal, lifecycl
         includeStreamUsage: !!lifecycle?.onUsage,
         // JSON 格式化输出：仅调用点明确需要 JSON 且预设开关开启时附加（与 MVU 格式化输出同参）。
         ...(extras?.needsJsonFormat === true && resolved.jsonFormatOutput === true ? { responseFormat: JSON_OBJECT_RESPONSE_FORMAT_ACU } : {}),
+        ...(resolved.enhancedThinking === true ? { enhancedThinking: true } : {}),
     });
     // 公益站兼容（预设级）：该预设限速每分钟最多 3 次请求（各预设独立计数）
     if (resolved.publicServiceMode) {
@@ -78446,7 +78482,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.2.8" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.2.9" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -119679,13 +119715,13 @@ function resolveContinuationApiPreset_ACU(settings, phase, dependencies = defaul
         const resolved = dependencies.resolvePreset(presetName);
         if (!resolved.resolved)
             failPreset_ACU(phase, 'missing');
-        return { presetName, source: 'fixed', reason: 'fixed_preset', apiMode: resolved.apiMode, apiConfig: resolved.apiConfig, tavernProfile: resolved.tavernProfile, nonPrefillSupport: resolved.nonPrefillSupport, publicServiceMode: resolved.publicServiceMode, jsonFormatOutput: resolved.jsonFormatOutput };
+        return { presetName, source: 'fixed', reason: 'fixed_preset', apiMode: resolved.apiMode, apiConfig: resolved.apiConfig, tavernProfile: resolved.tavernProfile, nonPrefillSupport: resolved.nonPrefillSupport, publicServiceMode: resolved.publicServiceMode, jsonFormatOutput: resolved.jsonFormatOutput, enhancedThinking: resolved.enhancedThinking };
     }
     if (settings.apiPresetMode !== 'current') {
         throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_CONFIG_MISSING', phase, '智能续写 API 预设模式非法', false));
     }
     const resolved = dependencies.resolvePreset('');
-    return { presetName: '', source: 'current', reason: 'current_configuration', apiMode: resolved.apiMode, apiConfig: resolved.apiConfig, tavernProfile: resolved.tavernProfile, nonPrefillSupport: resolved.nonPrefillSupport, publicServiceMode: resolved.publicServiceMode, jsonFormatOutput: resolved.jsonFormatOutput };
+    return { presetName: '', source: 'current', reason: 'current_configuration', apiMode: resolved.apiMode, apiConfig: resolved.apiConfig, tavernProfile: resolved.tavernProfile, nonPrefillSupport: resolved.nonPrefillSupport, publicServiceMode: resolved.publicServiceMode, jsonFormatOutput: resolved.jsonFormatOutput, enhancedThinking: resolved.enhancedThinking };
 }
 /**
  * 计算某个角色的生效渠道模式：inherit 回落到全局 apiPresetMode。
@@ -137041,7 +137077,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260905-21";
+        const stamp = "20260906-08";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -154468,6 +154504,7 @@ function createEmptyApiPresetDraft() {
         requestHeaders: '',
         nonPrefillSupport: false,
         jsonFormatOutput: false,
+        enhancedThinking: false,
         streamingEnabled: false,
         reasoningEffort: 'medium',
         publicServiceMode: false,
@@ -154489,6 +154526,7 @@ function apiPresetDraftFromPreset(preset) {
         requestHeaders: preset.apiConfig.requestHeaders || '',
         nonPrefillSupport: preset.nonPrefillSupport === true,
         jsonFormatOutput: preset.jsonFormatOutput === true,
+        enhancedThinking: preset.enhancedThinking === true,
         // A2 修复：undefined 必须原样保留（=跟随全局）。旧版把 undefined 读成 false/'medium'
         // 再恒写具体值，旧预设只要「打开面板并保存」一次就被固化为显式配置，永久失去全局回退。
         streamingEnabled: typeof preset.apiConfig.streamingEnabled === 'boolean' ? preset.apiConfig.streamingEnabled : undefined,
@@ -154527,6 +154565,7 @@ function apiPresetFromDraft(draft) {
         },
         nonPrefillSupport: draft.nonPrefillSupport === true,
         jsonFormatOutput: draft.jsonFormatOutput === true,
+        enhancedThinking: draft.enhancedThinking === true,
         publicServiceMode: draft.publicServiceMode === true,
     };
 }
@@ -155993,8 +156032,8 @@ var _sfc_main$U = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-api-config-panel__hint[data-v-7f369d46] {\r\n  color: var(--acu-text-3, #9e978e);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-api-config-panel__hint-danger[data-v-7f369d46] {\r\n  color: var(--acu-danger, #e5484d);\n}\n.acu-api-config-panel__select-row[data-v-7f369d46] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-7f369d46] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-7f369d46] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-7f369d46] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-7f369d46] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-7f369d46] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-7f369d46] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-7f369d46] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-7f369d46] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-7f369d46");
-var ApiConfigPanel_vue_vue_type_style_index_0_scoped_7f369d46_lang = null;
+injectSfcStyle("\n.acu-api-config-panel__hint[data-v-1df2982b] {\r\n  color: var(--acu-text-3, #9e978e);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-api-config-panel__hint-danger[data-v-1df2982b] {\r\n  color: var(--acu-danger, #e5484d);\n}\n.acu-api-config-panel__select-row[data-v-1df2982b] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-1df2982b] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-1df2982b] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-1df2982b] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-1df2982b] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-1df2982b] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-1df2982b] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-1df2982b] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-1df2982b] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-1df2982b");
+var ApiConfigPanel_vue_vue_type_style_index_0_scoped_1df2982b_lang = null;
 
 const _hoisted_1$S = { class: "acu-api-config-panel__select-row" };
 const _hoisted_2$L = { class: "acu-api-config-panel__editor-section" };
@@ -156021,7 +156060,7 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 				key: 0,
 				kind: "warning"
 			}, {
-				default: withCtx(() => [..._cache[19] || (_cache[19] = [createTextVNode(
+				default: withCtx(() => [..._cache[20] || (_cache[20] = [createTextVNode(
 					" 暂无可用 API 预设，请新建并设为当前或全局默认。 ",
 					-1
 					/* CACHED */
@@ -156118,7 +156157,7 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 							_: 1
 						}),
 						createBaseVNode("div", _hoisted_3$E, [createVNode($setup["AcuButton"], { onClick: $setup.loadModelsForActive }, {
-							default: withCtx(() => [..._cache[20] || (_cache[20] = [createTextVNode(
+							default: withCtx(() => [..._cache[21] || (_cache[21] = [createTextVNode(
 								"加载模型",
 								-1
 								/* CACHED */
@@ -156200,6 +156239,12 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 							"onUpdate:modelValue": _cache[14] || (_cache[14] = ($event) => $setup.activeDraft.jsonFormatOutput = $event),
 							label: "需要时格式化输出",
 							description: "该预设开启后，需要明确返回 JSON 的调用（正文替换/Skill 化/决策/改表助手/续写 Agent 协议）会在请求体附加 response_format json_object，与 MVU 格式化输出同参。不支持该参数的后端请勿开启，或用「排除主体参数」填 response_format 剔除。"
+						}, null, 8, ["modelValue"]),
+						createVNode($setup["AcuToggle"], {
+							modelValue: $setup.activeDraft.enhancedThinking,
+							"onUpdate:modelValue": _cache[15] || (_cache[15] = ($event) => $setup.activeDraft.enhancedThinking = $event),
+							label: "增强思考",
+							description: "该预设开启后，所有经本库发出的 API 调用都会在消息最前面插入一条 system 提示，要求模型最大限度深入思考并写出完整推演过程；会增加输入 token 消耗。建议仅在自家流程使用的预设上开启；若该预设同时给第三方调用共用，请保持关闭。"
 						}, null, 8, ["modelValue"])
 					]),
 					createBaseVNode("div", _hoisted_8$n, [
@@ -156209,7 +156254,7 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
 								modelValue: $setup.activeDraft.bodyParams,
-								"onUpdate:modelValue": _cache[15] || (_cache[15] = ($event) => $setup.activeDraft.bodyParams = $event),
+								"onUpdate:modelValue": _cache[16] || (_cache[16] = ($event) => $setup.activeDraft.bodyParams = $event),
 								rows: 3,
 								placeholder: "response_format:\n  type: json_object\ntop_k: 50"
 							}, null, 8, ["modelValue"])]),
@@ -156221,7 +156266,7 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
 								modelValue: $setup.activeDraft.excludeBodyParams,
-								"onUpdate:modelValue": _cache[16] || (_cache[16] = ($event) => $setup.activeDraft.excludeBodyParams = $event),
+								"onUpdate:modelValue": _cache[17] || (_cache[17] = ($event) => $setup.activeDraft.excludeBodyParams = $event),
 								rows: 2,
 								placeholder: "top_p, reasoning_effort"
 							}, null, 8, ["modelValue"])]),
@@ -156240,7 +156285,7 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 							_: 1
 						}),
 						createVNode($setup["AcuFormRow"], { label: "客户端伪装" }, {
-							hint: withCtx(() => [..._cache[21] || (_cache[21] = [createBaseVNode(
+							hint: withCtx(() => [..._cache[22] || (_cache[22] = [createBaseVNode(
 								"span",
 								{ class: "acu-api-config-panel__hint" },
 								[createTextVNode(" 选择一个客户端身份后，其特征请求头（User-Agent / HTTP-Referer / X-Title 等）会合并进下方附加请求标头：受管身份键统一替换、其余行保留。用于部分屏蔽第三方客户端的供应商。 "), createBaseVNode("span", { class: "acu-api-config-panel__hint-danger" }, "如果您不清楚这是做什么用的请不要选择。选择启用后的风险自行评估，后果自担。")],
@@ -156252,7 +156297,7 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 								"model-value": $setup.matchedClientPresetId,
 								disabled: $setup.activeDraft.publicServiceMode,
 								placeholder: $setup.activeDraft.publicServiceMode ? "已开启公益站兼容，不可使用客户端伪装" : "请选择",
-								"onUpdate:modelValue": _cache[17] || (_cache[17] = ($event) => $setup.applyClientPreset($event))
+								"onUpdate:modelValue": _cache[18] || (_cache[18] = ($event) => $setup.applyClientPreset($event))
 							}, null, 8, [
 								"model-value",
 								"disabled",
@@ -156266,7 +156311,7 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 						}, {
 							default: withCtx(() => [createVNode($setup["AcuTextarea"], {
 								modelValue: $setup.activeDraft.requestHeaders,
-								"onUpdate:modelValue": _cache[18] || (_cache[18] = ($event) => $setup.activeDraft.requestHeaders = $event),
+								"onUpdate:modelValue": _cache[19] || (_cache[19] = ($event) => $setup.activeDraft.requestHeaders = $event),
 								rows: 2,
 								placeholder: "X-Custom-Header: value"
 							}, null, 8, ["modelValue"])]),
@@ -156288,7 +156333,7 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 						disabled: !$setup.activeDraftDirty,
 						onClick: $setup.syncActiveDraft
 					}, {
-						default: withCtx(() => [..._cache[22] || (_cache[22] = [createTextVNode(
+						default: withCtx(() => [..._cache[23] || (_cache[23] = [createTextVNode(
 							"放弃修改",
 							-1
 							/* CACHED */
@@ -156313,7 +156358,7 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 				key: 2,
 				kind: "warning"
 			}, {
-				default: withCtx(() => [..._cache[23] || (_cache[23] = [createTextVNode(
+				default: withCtx(() => [..._cache[24] || (_cache[24] = [createTextVNode(
 					" 暂无可用 API 预设，请新建并设为当前或全局默认。 ",
 					-1
 					/* CACHED */
@@ -156324,7 +156369,7 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["title", "description"]);
 }
-var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$U, [["render", _sfc_render$U], ["__scopeId", "data-v-7f369d46"]]);
+var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$U, [["render", _sfc_render$U], ["__scopeId", "data-v-1df2982b"]]);
 
 // ═══════════════════════════════════════════════════════════
 // service/settings/feature-preset-reference-service.ts — 功能级 API 预设引用
@@ -180962,7 +181007,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260905-21";
+        const stamp = "20260906-08";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -180971,7 +181016,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.2.8";
+        const v = "9.2.9";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {

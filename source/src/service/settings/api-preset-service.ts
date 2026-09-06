@@ -97,6 +97,8 @@ export interface ApiPreset_ACU {
   publicServiceMode?: boolean;
   /** JSON 格式化输出（预设级）：开启后，需要明确返回 JSON 的调用会在请求体附加 response_format json_object */
   jsonFormatOutput?: boolean;
+  /** 增强思考（预设级）：开启后，该预设的所有 API 调用在消息最开头插入一条固定英文 system 提示，要求模型最大限度深入思考并写出完整推演过程；默认关闭 */
+  enhancedThinking?: boolean;
 }
 
 export interface ApiPresetBinding_ACU {
@@ -169,6 +171,7 @@ export function normalizePreset_ACU(value: any): ApiPreset_ACU | null {
     nonPrefillSupport: value.nonPrefillSupport === true,
     publicServiceMode: value.publicServiceMode === true,
     jsonFormatOutput: value.jsonFormatOutput === true,
+    enhancedThinking: value.enhancedThinking === true,
   };
 }
 
@@ -261,6 +264,8 @@ export function resolveApiConfigByPreset_ACU(presetName: string): {
   publicServiceMode: boolean;
   /** 预设级 JSON 格式化输出；无全局 settings 对应项，回退路径恒 false（与 nonPrefillSupport 回退全局不同） */
   jsonFormatOutput: boolean;
+  /** 预设级增强思考；无全局 settings 对应项，回退路径恒 false（与 nonPrefillSupport 回退全局不同） */
+  enhancedThinking: boolean;
 } {
   ensureApiSettingsShape_ACU();
   const normalized = String(presetName || '').trim();
@@ -274,6 +279,8 @@ export function resolveApiConfigByPreset_ACU(presetName: string): {
       publicServiceMode: false,
       // 无全局 settings.jsonFormatOutput 对应项，回退恒 false（与 nonPrefillSupport 回退全局不同）。
       jsonFormatOutput: false,
+      // 无全局 settings.enhancedThinking 对应项，回退恒 false（与 nonPrefillSupport 回退全局不同）。
+      enhancedThinking: false,
     };
   }
   const preset = findPresetByName_ACU(settings_ACU.apiPresets, normalized);
@@ -286,6 +293,7 @@ export function resolveApiConfigByPreset_ACU(presetName: string): {
       nonPrefillSupport: preset.nonPrefillSupport === true,
       publicServiceMode: preset.publicServiceMode === true,
       jsonFormatOutput: preset.jsonFormatOutput === true,
+      enhancedThinking: preset.enhancedThinking === true,
     };
   }
   // 悬挂引用：返回当前配置但标记未解析，调用方应据此拒绝或回退，而不是静默误用。
@@ -299,6 +307,8 @@ export function resolveApiConfigByPreset_ACU(presetName: string): {
     publicServiceMode: false,
     // 无全局 settings.jsonFormatOutput 对应项，回退恒 false（与 nonPrefillSupport 回退全局不同）。
     jsonFormatOutput: false,
+    // 无全局 settings.enhancedThinking 对应项，回退恒 false（与 nonPrefillSupport 回退全局不同）。
+    enhancedThinking: false,
   };
 }
 

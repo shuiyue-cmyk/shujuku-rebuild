@@ -249,12 +249,23 @@ function redactSensitiveIncludeBodyForDebug_ACU(includeBody: unknown): string {
 export const JSON_OBJECT_RESPONSE_FORMAT_ACU = Object.freeze({ type: 'json_object' });
 
 /**
+ * 增强思考 system 提示词（用户指定文案，逐字固定，勿改写/翻译/增删）：
+ * 预设开关 enhancedThinking 开启后，本库所有经 buildCustomApiRequestBody_ACU 发出的
+ * API 调用在消息最开头插入一条 `{ role: 'system', content: 本常量 }`。
+ * 换行符恒为 \n（数组 join('\n') 保证跨平台一致）。
+ */
+export const ENHANCED_THINKING_SYSTEM_PROMPT_ACU: string = [
+  'Reasoning Effort: Absolute maximum with no shortcuts permitted.',
+  'You MUST be very thorough in your thinking and comprehensively decompose the problem to resolve the root cause, rigorously stress-testing your logic against all potential paths, edge cases, and adversarial scenarios.',
+].join('\n');
+
+/**
  * 构建 Chat Completions 自定义 API 请求体（支持 bodyParams / excludeBodyParams / requestHeaders）
  */
 export function buildCustomApiRequestBody_ACU(
   messages: any[],
   effectiveApiConfig: any,
-  overrides?: { maxTokens?: number; temperature?: number; topP?: number; stripModelPrefix?: boolean; nonPrefillSupport?: boolean; promptCacheKey?: string; includeStreamUsage?: boolean; responseFormat?: Record<string, any> }
+  overrides?: { maxTokens?: number; temperature?: number; topP?: number; stripModelPrefix?: boolean; nonPrefillSupport?: boolean; promptCacheKey?: string; includeStreamUsage?: boolean; responseFormat?: Record<string, any>; enhancedThinking?: boolean }
 ): Record<string, any> {
   const opts = overrides || {};
   if (effectiveApiConfig?.url) {
@@ -319,6 +330,25 @@ export function buildCustomApiRequestBody_ACU(
   // 时请求体省略该键，后端原样透传消息，保留提示词组中部 system 段的角色。
   const promptPostProcessing_ACU = normalizePromptPostProcessing_ACU(effectiveApiConfig.promptPostProcessing);
 
+  // 增强思考（预设级开关 enhancedThinking）：开启后在消息最开头插入一条固定英文 system 提示，
+  // 要求模型最大限度深入思考并写出完整推演过程。插入点在本函数一切归一/分流/调试快照之前，
+  // 保证快照与真实请求一致；开关关闭时行为与现状逐字一致。
+  // 去重守卫：若 messages[0] 已是同 role（小写相等 system）同 content（逐字相等），不再插入，
+  // 防同一数组被 build 两次时的双插。
+  const effectiveMessagesForEnhancedThinking_ACU = Array.isArray(messages) ? [...messages] : messages;
+  if (opts.enhancedThinking === true && Array.isArray(effectiveMessagesForEnhancedThinking_ACU)) {
+    const firstMessageForEnhancedThinking_ACU = effectiveMessagesForEnhancedThinking_ACU[0] as any;
+    const alreadyInsertedEnhancedThinking_ACU = !!firstMessageForEnhancedThinking_ACU
+      && typeof firstMessageForEnhancedThinking_ACU === 'object'
+      && !Array.isArray(firstMessageForEnhancedThinking_ACU)
+      && typeof firstMessageForEnhancedThinking_ACU.role === 'string'
+      && firstMessageForEnhancedThinking_ACU.role.toLowerCase() === 'system'
+      && firstMessageForEnhancedThinking_ACU.content === ENHANCED_THINKING_SYSTEM_PROMPT_ACU;
+    if (!alreadyInsertedEnhancedThinking_ACU) {
+      effectiveMessagesForEnhancedThinking_ACU.unshift({ role: 'system', content: ENHANCED_THINKING_SYSTEM_PROMPT_ACU });
+    }
+  }
+
   const body: Record<string, any> = {
     // 统一将 messages 的 role 归一为小写（system / user / assistant）。
     //
@@ -335,8 +365,8 @@ export function buildCustomApiRequestBody_ACU(
     // 边界契约：仅当 role 是字符串时才归一为小写；缺失 role、非字符串 role、
     // 数组/原始值等异常消息一律原样保留，交由后端校验，绝不把缺失 role 静默
     // 改造成 "undefined" / "null"。
-    messages: Array.isArray(messages)
-        ? messages.map((m) => {
+    messages: Array.isArray(effectiveMessagesForEnhancedThinking_ACU)
+        ? effectiveMessagesForEnhancedThinking_ACU.map((m) => {
               if (!m || typeof m !== 'object' || Array.isArray(m) || typeof m.role !== 'string') return m;
               let role = m.role.toLowerCase();
               let content = m.content;
@@ -346,7 +376,7 @@ export function buildCustomApiRequestBody_ACU(
               }
               return { ...m, role, ...(content !== undefined ? { content } : {}) };
           })
-        : messages,
+        : effectiveMessagesForEnhancedThinking_ACU,
     model,
     max_tokens: maxTokens,
     temperature,
@@ -486,6 +516,7 @@ export function getApiConfigByPreset_ACU(presetName: string) {
       nonPrefillSupport: resolved.nonPrefillSupport,
       publicServiceMode: resolved.publicServiceMode,
       jsonFormatOutput: resolved.jsonFormatOutput,
+      enhancedThinking: resolved.enhancedThinking,
     };
 }
 
@@ -522,7 +553,7 @@ export async function callAIWithPreset_ACU(messages: any[], presetName: string =
         throw new Error('自定义API的URL或模型未配置。');
     }
 
-    const body = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens, stripModelPrefix: false, nonPrefillSupport: apiPresetConfig.nonPrefillSupport, ...(options?.needsJsonFormat === true && apiPresetConfig.jsonFormatOutput === true ? { responseFormat: JSON_OBJECT_RESPONSE_FORMAT_ACU } : {}) });
+    const body = buildCustomApiRequestBody_ACU(messages, effectiveApiConfig, { maxTokens, stripModelPrefix: false, nonPrefillSupport: apiPresetConfig.nonPrefillSupport, ...(options?.needsJsonFormat === true && apiPresetConfig.jsonFormatOutput === true ? { responseFormat: JSON_OBJECT_RESPONSE_FORMAT_ACU } : {}), ...(apiPresetConfig.enhancedThinking === true ? { enhancedThinking: true } : {}) });
 
     // 公益站兼容（预设级）：该预设限速每分钟最多 3 次请求（各预设独立计数）
     if (apiPresetConfig.publicServiceMode) {
@@ -608,7 +639,7 @@ function attachTimeoutAndExternalAbort_ACU(controller: AbortController, external
  */
 export async function callAIWithResolvedPreset_ACU(
     messages: any[],
-    resolved: { apiMode: string; apiConfig: any; tavernProfile: string; presetName?: string; nonPrefillSupport?: boolean; publicServiceMode?: boolean; jsonFormatOutput?: boolean },
+    resolved: { apiMode: string; apiConfig: any; tavernProfile: string; presetName?: string; nonPrefillSupport?: boolean; publicServiceMode?: boolean; jsonFormatOutput?: boolean; enhancedThinking?: boolean },
     signal?: AbortSignal | null,
     lifecycle?: ResolvedPresetCallLifecycle_ACU,
     extras?: ResolvedPresetCallExtras_ACU,
@@ -640,6 +671,7 @@ export async function callAIWithResolvedPreset_ACU(
         includeStreamUsage: !!lifecycle?.onUsage,
         // JSON 格式化输出：仅调用点明确需要 JSON 且预设开关开启时附加（与 MVU 格式化输出同参）。
         ...(extras?.needsJsonFormat === true && resolved.jsonFormatOutput === true ? { responseFormat: JSON_OBJECT_RESPONSE_FORMAT_ACU } : {}),
+        ...(resolved.enhancedThinking === true ? { enhancedThinking: true } : {}),
     });
     // 公益站兼容（预设级）：该预设限速每分钟最多 3 次请求（各预设独立计数）
     if (resolved.publicServiceMode) {

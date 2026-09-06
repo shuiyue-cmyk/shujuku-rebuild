@@ -145,6 +145,11 @@
         label="需要时格式化输出"
         description="该预设开启后，需要明确返回 JSON 的调用（正文替换/Skill 化/决策/改表助手/续写 Agent 协议）会在请求体附加 response_format json_object，与 MVU 格式化输出同参。不支持该参数的后端请勿开启，或用「排除主体参数」填 response_format 剔除。"
       />
+      <AcuToggle
+        v-model="activeDraft.enhancedThinking"
+        label="增强思考"
+        description="该预设开启后，所有经本库发出的 API 调用都会在消息最前面插入一条 system 提示，要求模型最大限度深入思考并写出完整推演过程；会增加输入 token 消耗。建议仅在自家流程使用的预设上开启；若该预设同时给第三方调用共用，请保持关闭。"
+      />
       </div>
 
       <div class="acu-api-config-panel__editor-section">

@@ -20,6 +20,8 @@ export interface ContinuationResolvedApiPreset_ACU {
   publicServiceMode?: boolean;
   /** 预设级 JSON 格式化输出（本库定制透传）。可选：缺省时消费端视为关闭。 */
   jsonFormatOutput?: boolean;
+  /** 预设级增强思考（本库定制透传）。可选：缺省时消费端视为关闭。 */
+  enhancedThinking?: boolean;
 }
 
 type ApiPresetResolution_ACU = Omit<ContinuationResolvedApiPreset_ACU, 'presetName' | 'source' | 'reason'> & { resolved: boolean };
@@ -47,13 +49,13 @@ export function resolveContinuationApiPreset_ACU(settings: Pick<ContinuationSett
     if (!presetName) failPreset_ACU(phase, 'empty');
     const resolved = dependencies.resolvePreset(presetName);
     if (!resolved.resolved) failPreset_ACU(phase, 'missing');
-    return { presetName, source: 'fixed', reason: 'fixed_preset', apiMode: resolved.apiMode, apiConfig: resolved.apiConfig, tavernProfile: resolved.tavernProfile, nonPrefillSupport: resolved.nonPrefillSupport, publicServiceMode: resolved.publicServiceMode, jsonFormatOutput: resolved.jsonFormatOutput };
+    return { presetName, source: 'fixed', reason: 'fixed_preset', apiMode: resolved.apiMode, apiConfig: resolved.apiConfig, tavernProfile: resolved.tavernProfile, nonPrefillSupport: resolved.nonPrefillSupport, publicServiceMode: resolved.publicServiceMode, jsonFormatOutput: resolved.jsonFormatOutput, enhancedThinking: resolved.enhancedThinking };
   }
   if (settings.apiPresetMode !== 'current') {
     throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_CONFIG_MISSING', phase, '智能续写 API 预设模式非法', false));
   }
   const resolved = dependencies.resolvePreset('');
-  return { presetName: '', source: 'current', reason: 'current_configuration', apiMode: resolved.apiMode, apiConfig: resolved.apiConfig, tavernProfile: resolved.tavernProfile, nonPrefillSupport: resolved.nonPrefillSupport, publicServiceMode: resolved.publicServiceMode, jsonFormatOutput: resolved.jsonFormatOutput };
+  return { presetName: '', source: 'current', reason: 'current_configuration', apiMode: resolved.apiMode, apiConfig: resolved.apiConfig, tavernProfile: resolved.tavernProfile, nonPrefillSupport: resolved.nonPrefillSupport, publicServiceMode: resolved.publicServiceMode, jsonFormatOutput: resolved.jsonFormatOutput, enhancedThinking: resolved.enhancedThinking };
 }
 
 type AgentApiPresetSettings_ACU = Pick<ContinuationSettings_ACU, 'apiPresetMode' | 'fixedApiPresetName'> & Partial<Pick<ContinuationSettings_ACU, 'agentApiPresets'>>;
