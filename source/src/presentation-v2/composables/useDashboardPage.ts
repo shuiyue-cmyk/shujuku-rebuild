@@ -145,6 +145,25 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value ?? null));
 }
 
+const reportedRenderFallbackCounts = new Map<string, number>();
+
+function withRenderFallback<T>(label: string, fallback: T, build: () => T): T {
+  // 同 label 多病因时放行前 3 次：首因必留证据，持续刷屏仍压住；
+  // 成功求值即清零——瞬时抖动自愈后重 arm，长会话不衰减。
+  try {
+    const value = build();
+    reportedRenderFallbackCounts.delete(label);
+    return value;
+  } catch (error) {
+    const seen = (reportedRenderFallbackCounts.get(label) || 0) + 1;
+    reportedRenderFallbackCounts.set(label, seen);
+    if (seen <= 3) {
+      logError_ACU(`[ACU-V2] dashboard ${label} 计算异常，已降级:`, error);
+    }
+    return fallback;
+  }
+}
+
 function safeReadSnapshot(): Snapshot {
   try {
     return {
@@ -478,6 +497,21 @@ function readCurrentSqlTemplateCheck(): SqlTemplateCheck {
   return result;
 }
 
+function readCurrentSqlTemplateCheckSafe(): SqlTemplateCheck {
+  try {
+    const check = readCurrentSqlTemplateCheck();
+    reportedRenderFallbackCounts.delete("SQL 模板检查");
+    return check;
+  } catch (error) {
+    const seen = (reportedRenderFallbackCounts.get("SQL 模板检查") || 0) + 1;
+    reportedRenderFallbackCounts.set("SQL 模板检查", seen);
+    if (seen <= 3) {
+      logError_ACU("[ACU-V2] dashboard SQL 模板检查异常，已降级为空结果:", error);
+    }
+    return { total: 0, ddlCount: 0, missingDdlNames: [], invalidDdlNames: [] };
+  }
+}
+
 function formatTableNameSamples(names: string[]): string {
   const visible = names.slice(0, 3).join("、");
   return dashboardCopy.sqlHealth.tableNameSamples(visible, names.length);
@@ -498,7 +532,7 @@ function buildSqlTemplateHealthItem(
     });
   }
 
-  const check = readCurrentSqlTemplateCheck();
+  const check = readCurrentSqlTemplateCheckSafe();
 
   if (!check.total) {
     return makeHealthItem({
@@ -724,210 +758,227 @@ export function useDashboardPage(): DashboardPageState {
     return countAiMessages();
   });
 
-  const tableRows = computed<DashboardTableStatusRow[]>(() => {
-    void dataRefreshTick.value;
-    const displayData = getCurrentTableDisplayData_ACU();
-    if (!displayData) return [];
-    const chat = getChatArray_ACU();
-    const currentIsolationKey = getCurrentIsolationKey_ACU();
+  const tableRows = computed<DashboardTableStatusRow[]>(() => withRenderFallback("表格状态行",
+    [] as DashboardTableStatusRow[],
+    (): DashboardTableStatusRow[] => {
+      void dataRefreshTick.value;
+      const displayData = getCurrentTableDisplayData_ACU();
+      if (!displayData) return [];
+      const chat = getChatArray_ACU();
+      const currentIsolationKey = getCurrentIsolationKey_ACU();
 
-    // 批量解析所有表的历史状态（单次扫描 chat），避免每表各自全量逆序扫描
-    const historyStates = resolveTableHistoryStatesFromChat_ACU(
-      chat,
-      sheetKeys.value.map((key) => {
+      // 批量解析所有表的历史状态（单次扫描 chat），避免每表各自全量逆序扫描
+      const historyStates = resolveTableHistoryStatesFromChat_ACU(
+        chat,
+        sheetKeys.value.map((key) => {
+          const table = displayData[key] || {};
+          return {
+            sheetKey: key,
+            isSummaryTable: isSummaryOrOutlineTable_ACU(
+              String(table.name || ""),
+            ),
+            isolationKey: currentIsolationKey,
+            settings: settings_ACU,
+          };
+        }),
+      );
+
+      const totalAi = aiMessageCount.value;
+      const globalFrequency = normalizePositiveInteger_ACU(
+        settings_ACU.autoUpdateFrequency,
+        1,
+      );
+      const globalSkip = normalizeNonNegativeInteger_ACU(
+        settings_ACU.skipUpdateFloors,
+        0,
+      );
+
+      return sheetKeys.value.map((key) => {
         const table = displayData[key] || {};
-        return {
-          sheetKey: key,
-          isSummaryTable: isSummaryOrOutlineTable_ACU(
-            String(table.name || ""),
-          ),
-          isolationKey: currentIsolationKey,
-          settings: settings_ACU,
+        const config = table.updateConfig || {};
+        const rawFrequency = Number.isFinite(config.updateFrequency)
+          ? Math.trunc(config.updateFrequency)
+          : -1;
+        const rawSkip = Number.isFinite(config.skipFloors)
+          ? Math.trunc(config.skipFloors)
+          : -1;
+        const frequency = rawFrequency === -1 ? globalFrequency : rawFrequency;
+        const skip = Math.max(0, rawSkip === -1 ? globalSkip : rawSkip);
+        const disabled = frequency <= 0;
+        const history = historyStates.get(key) || {
+          latestAiMessageIndex: -1,
+          latestDataMessageIndex: -1,
+          lastTrackedUpdateMessageIndex: -1,
+          latestDataAiFloor: 0,
+          lastTrackedUpdateAiFloor: 0,
+          hasAnyData: false,
+          hasTrackedUpdate: false,
         };
-      }),
-    );
+        const lastFloor = history.lastTrackedUpdateAiFloor;
+        const found = history.hasTrackedUpdate;
 
-    const totalAi = aiMessageCount.value;
-    const globalFrequency = normalizePositiveInteger_ACU(
-      settings_ACU.autoUpdateFrequency,
-      1,
-    );
-    const globalSkip = normalizeNonNegativeInteger_ACU(
-      settings_ACU.skipUpdateFloors,
-      0,
-    );
+        if (disabled) {
+          return {
+            key,
+            name: String(table.name || key),
+            frequency,
+            skip,
+            unrecorded: found ? Math.max(0, totalAi - lastFloor) : 0,
+            effectiveUnrecorded: found
+              ? Math.max(0, totalAi - skip - lastFloor)
+              : Math.max(0, totalAi - skip),
+            lastUpdatedAiFloor: lastFloor,
+            nextTriggerAiFloor: null as number | null,
+            hasTrackedUpdate: found,
+            hasAnyData: history.hasAnyData,
+            frequencyLabel: dashboardCopy.tableStatus.none,
+            unrecordedLabel: found
+              ? String(Math.max(0, totalAi - lastFloor))
+              : "—",
+            lastUpdatedLabel: found
+              ? String(lastFloor)
+              : dashboardCopy.tableStatus.notInitialized,
+            nextTriggerLabel: dashboardCopy.tableStatus.none,
+            ready: false,
+            disabled: true,
+          };
+        }
 
-    return sheetKeys.value.map((key) => {
-      const table = displayData[key] || {};
-      const config = table.updateConfig || {};
-      const rawFrequency = Number.isFinite(config.updateFrequency)
-        ? Math.trunc(config.updateFrequency)
-        : -1;
-      const rawSkip = Number.isFinite(config.skipFloors)
-        ? Math.trunc(config.skipFloors)
-        : -1;
-      const frequency = rawFrequency === -1 ? globalFrequency : rawFrequency;
-      const skip = Math.max(0, rawSkip === -1 ? globalSkip : rawSkip);
-      const disabled = frequency <= 0;
-      const history = historyStates.get(key) || {
-        latestAiMessageIndex: -1,
-        latestDataMessageIndex: -1,
-        lastTrackedUpdateMessageIndex: -1,
-        latestDataAiFloor: 0,
-        lastTrackedUpdateAiFloor: 0,
-        hasAnyData: false,
-        hasTrackedUpdate: false,
-      };
-      const lastFloor = history.lastTrackedUpdateAiFloor;
-      const found = history.hasTrackedUpdate;
-
-      if (disabled) {
+        const effectiveUnrecorded = found
+          ? Math.max(0, totalAi - skip - lastFloor)
+          : 0;
+        const effectiveInitialUnrecorded = found
+          ? effectiveUnrecorded
+          : Math.max(0, totalAi - skip);
+        const nextTriggerAiFloor = found ? lastFloor + frequency + skip : null;
         return {
           key,
           name: String(table.name || key),
           frequency,
           skip,
           unrecorded: found ? Math.max(0, totalAi - lastFloor) : 0,
-          effectiveUnrecorded: found
-            ? Math.max(0, totalAi - skip - lastFloor)
-            : Math.max(0, totalAi - skip),
+          effectiveUnrecorded: effectiveInitialUnrecorded,
           lastUpdatedAiFloor: lastFloor,
-          nextTriggerAiFloor: null as number | null,
+          nextTriggerAiFloor,
           hasTrackedUpdate: found,
           hasAnyData: history.hasAnyData,
-          frequencyLabel: dashboardCopy.tableStatus.none,
-          unrecordedLabel: found
-            ? String(Math.max(0, totalAi - lastFloor))
-            : "—",
+          frequencyLabel: String(frequency),
+          unrecordedLabel: found ? String(Math.max(0, totalAi - lastFloor)) : "—",
           lastUpdatedLabel: found
             ? String(lastFloor)
             : dashboardCopy.tableStatus.notInitialized,
-          nextTriggerLabel: dashboardCopy.tableStatus.none,
-          ready: false,
-          disabled: true,
+          nextTriggerLabel: found
+            ? String(lastFloor + frequency + skip)
+            : dashboardCopy.tableStatus.pendingInitial,
+          ready: found && effectiveUnrecorded >= frequency,
+          disabled: false,
         };
-      }
-
-      const effectiveUnrecorded = found
-        ? Math.max(0, totalAi - skip - lastFloor)
-        : 0;
-      const effectiveInitialUnrecorded = found
-        ? effectiveUnrecorded
-        : Math.max(0, totalAi - skip);
-      const nextTriggerAiFloor = found ? lastFloor + frequency + skip : null;
-      return {
-        key,
-        name: String(table.name || key),
-        frequency,
-        skip,
-        unrecorded: found ? Math.max(0, totalAi - lastFloor) : 0,
-        effectiveUnrecorded: effectiveInitialUnrecorded,
-        lastUpdatedAiFloor: lastFloor,
-        nextTriggerAiFloor,
-        hasTrackedUpdate: found,
-        hasAnyData: history.hasAnyData,
-        frequencyLabel: String(frequency),
-        unrecordedLabel: found ? String(Math.max(0, totalAi - lastFloor)) : "—",
-        lastUpdatedLabel: found
-          ? String(lastFloor)
-          : dashboardCopy.tableStatus.notInitialized,
-        nextTriggerLabel: found
-          ? String(lastFloor + frequency + skip)
-          : dashboardCopy.tableStatus.pendingInitial,
-        ready: found && effectiveUnrecorded >= frequency,
-        disabled: false,
-      };
-    });
-  });
+      });
+  }));
 
   /** 基础设置 — 同一聊天里时不时开关的功能。 */
-  const basicToggles = computed<DashboardToggleItem[]>(() => {
-    void dataRefreshTick.value;
-    const flightMode = getCurrentFlightModeState_ACU();
-    const hasActiveChat = hasActiveChatContext(chatFileIdentifier.value);
-    return [
-      {
-        key: "flightMode",
-        label: dashboardCopy.toggles.flightMode.label,
-        description: dashboardCopy.toggles.flightMode.description,
-        value: flightMode.enabled,
-        disabled: !hasActiveChat,
-      },
-      {
-        key: "autoUpdateEnabled",
-        label: dashboardCopy.toggles.autoUpdate.label,
-        description: dashboardCopy.toggles.autoUpdate.description,
-        value: settings_ACU.autoUpdateEnabled !== false,
-      },
-      {
-        key: "toastMuteEnabled",
-        label: dashboardCopy.toggles.toastMute.label,
-        description: dashboardCopy.toggles.toastMute.description,
-        value: settings_ACU.toastMuteEnabled === true,
-      },
-    ];
-  });
+  const basicToggles = computed<DashboardToggleItem[]>(() => withRenderFallback("基础开关",
+    [] as DashboardToggleItem[],
+    (): DashboardToggleItem[] => {
+      void dataRefreshTick.value;
+      const flightMode = getCurrentFlightModeState_ACU();
+      const hasActiveChat = hasActiveChatContext(chatFileIdentifier.value);
+      return [
+        {
+          key: "flightMode",
+          label: dashboardCopy.toggles.flightMode.label,
+          description: dashboardCopy.toggles.flightMode.description,
+          value: flightMode.enabled,
+          disabled: !hasActiveChat,
+        },
+        {
+          key: "autoUpdateEnabled",
+          label: dashboardCopy.toggles.autoUpdate.label,
+          description: dashboardCopy.toggles.autoUpdate.description,
+          value: settings_ACU.autoUpdateEnabled !== false,
+        },
+        {
+          key: "toastMuteEnabled",
+          label: dashboardCopy.toggles.toastMute.label,
+          description: dashboardCopy.toggles.toastMute.description,
+          value: settings_ACU.toastMuteEnabled === true,
+        },
+      ];
+  }));
 
   /** 高级设置 — 配置后基本不动；动了出问题是正常的。 */
-  const advancedToggles = computed<DashboardToggleItem[]>(() => {
-    void dataRefreshTick.value;
-    const items: DashboardToggleItem[] = [
-      {
-        key: "plotEnabled",
-        label: dashboardCopy.toggles.plot.label,
-        description: dashboardCopy.toggles.plot.description,
-        value: settings_ACU.plotSettings?.enabled === true,
-      },
-      {
-        key: "continuationPageEnabled",
-        label: dashboardCopy.toggles.continuation.label,
-        description: dashboardCopy.toggles.continuation.description,
-        value: settings_ACU.continuationPageEnabled !== false,
-      },
-    ];
-    items.push({
-      key: "contentReplaceEnabled",
-      label: dashboardCopy.toggles.contentReplace.label,
-      description: dashboardCopy.toggles.contentReplace.description,
-      value: isContentReplaceEnabledBySettings(),
-    });
-    items.push(
-      {
-        key: "summaryVectorIndexModeEnabled",
-        label: dashboardCopy.toggles.vector.label,
-        description: dashboardCopy.toggles.vector.description,
-        value: settings_ACU.summaryVectorIndexModeDefault === true,
-      },
-      {
-        key: "developerOptionsEnabled",
-        label: dashboardCopy.developerToggle.label,
-        description: dashboardCopy.developerToggle.description,
-        value: developerOptionsEnabled.value,
-      },
-    );
-    return items;
-  });
+  const advancedToggles = computed<DashboardToggleItem[]>(() => withRenderFallback("高级开关",
+    [] as DashboardToggleItem[],
+    (): DashboardToggleItem[] => {
+      void dataRefreshTick.value;
+      const items: DashboardToggleItem[] = [
+        {
+          key: "plotEnabled",
+          label: dashboardCopy.toggles.plot.label,
+          description: dashboardCopy.toggles.plot.description,
+          value: settings_ACU.plotSettings?.enabled === true,
+        },
+        {
+          key: "continuationPageEnabled",
+          label: dashboardCopy.toggles.continuation.label,
+          description: dashboardCopy.toggles.continuation.description,
+          value: settings_ACU.continuationPageEnabled !== false,
+        },
+      ];
+      items.push({
+        key: "contentReplaceEnabled",
+        label: dashboardCopy.toggles.contentReplace.label,
+        description: dashboardCopy.toggles.contentReplace.description,
+        value: isContentReplaceEnabledBySettings(),
+      });
+      items.push(
+        {
+          key: "summaryVectorIndexModeEnabled",
+          label: dashboardCopy.toggles.vector.label,
+          description: dashboardCopy.toggles.vector.description,
+          value: settings_ACU.summaryVectorIndexModeDefault === true,
+        },
+        {
+          key: "developerOptionsEnabled",
+          label: dashboardCopy.developerToggle.label,
+          description: dashboardCopy.developerToggle.description,
+          value: developerOptionsEnabled.value,
+        },
+      );
+      return items;
+  }));
 
-  const healthItems = computed<DashboardHealthItem[]>(() => {
-    void dataRefreshTick.value;
-    void logRefreshTick.value;
-    const hasActiveChat = hasActiveChatContext(chatFileIdentifier.value);
-    const showDeveloperDiagnostics = developerOptionsEnabled.value === true;
-    return [
-      buildApiHealthItem(coreApisReady.value),
-      buildTableHealthItem(
-        tableRows.value,
-        hasTables.value,
-        aiMessageCount.value,
-        hasActiveChat,
-      ),
-      buildSqlTemplateHealthItem(
-        hasActiveChat,
-      ),
-      buildVectorHealthItem(),
-      buildLogHealthItem(showDeveloperDiagnostics),
-    ];
-  });
+  const healthItems = computed<DashboardHealthItem[]>(() => withRenderFallback("运行概览",
+    [
+      makeHealthItem({
+        key: "dashboard-fallback",
+        title: "运行日志",
+        badge: "暂不可用",
+        kind: "error",
+        summary: "运行概览暂不可用，已记录诊断，请去高级工具查看运行日志。",
+        action: { label: "查看运行日志", pageId: "advanced-tools" },
+      }),
+    ],
+    (): DashboardHealthItem[] => {
+      void dataRefreshTick.value;
+      void logRefreshTick.value;
+      const hasActiveChat = hasActiveChatContext(chatFileIdentifier.value);
+      const showDeveloperDiagnostics = developerOptionsEnabled.value === true;
+      return [
+        buildApiHealthItem(coreApisReady.value),
+        buildTableHealthItem(
+          tableRows.value,
+          hasTables.value,
+          aiMessageCount.value,
+          hasActiveChat,
+        ),
+        buildSqlTemplateHealthItem(
+          hasActiveChat,
+        ),
+        buildVectorHealthItem(),
+        buildLogHealthItem(showDeveloperDiagnostics),
+      ];
+  }));
 
   const contentReplaceGateEnabled = computed(() => {
     void dataRefreshTick.value;
@@ -1040,3 +1091,5 @@ export function useDashboardPage(): DashboardPageState {
     setToggle,
   };
 }
+
+

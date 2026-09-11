@@ -89,6 +89,7 @@ import ToggleRow from "../components/DashboardToggleRow.vue";
 import { useChatChangedTick } from "../composables/useChatChangedListener";
 import { useTemplateRuntimeChangeTick } from "../composables/useTemplateRuntimeChangeListener";
 import { useDashboardPage } from "../composables/useDashboardPage";
+import { logError_ACU } from "../../shared/utils";
 import {
   FEATURE_GATE_CONTENT_REPLACE,
   FEATURE_GATE_CONTINUATION,
@@ -114,9 +115,13 @@ const groupOptions = [
 ];
 
 async function refreshAll(): Promise<void> {
-  plotStore.refreshFromSettings();
-  await dashboard.refresh();
-  syncFeaturePageGates();
+  try {
+    plotStore.refreshFromSettings();
+    await dashboard.refresh();
+    syncFeaturePageGates();
+  } catch (error) {
+    logError_ACU("[ACU-V2] dashboard refreshAll 异常:", error);
+  }
 }
 
 function syncFeaturePageGates(): void {
@@ -342,3 +347,4 @@ watch(useTemplateRuntimeChangeTick(), () => {
   }
 }
 </style>
+

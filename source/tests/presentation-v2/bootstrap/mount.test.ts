@@ -90,6 +90,25 @@ describe('mount — 当前文档场景', () => {
     mount.__resetAcuV2MountForTests();
   });
 
+  it('渲染异常被 errorHandler 收进运行日志', async () => {
+    const { mount } = await freshImport();
+    await mount.openAcuV2App();
+
+    const app = mount.__getAcuV2AppForTests();
+    expect(app).not.toBeNull();
+    expect(typeof app!.config.errorHandler).toBe('function');
+
+    const { getAllLogs } = await import('../../../src/shared/log-buffer');
+    const before = getAllLogs().length;
+    app!.config.errorHandler!(new Error('boom-render'), {}, 'render');
+    const after = getAllLogs();
+    expect(after.length).toBe(before + 1);
+    expect(after[after.length - 1].level).toBe('error');
+    expect(after[after.length - 1].message).toContain('render error');
+
+    mount.__resetAcuV2MountForTests();
+  });
+
   it('打开后再关闭，根节点保留但 display 变 none', async () => {
     const { mount } = await freshImport();
     await mount.openAcuV2App();
@@ -428,3 +447,4 @@ describe('mount — 父文档场景（iframe 模拟）', () => {
     mount.__resetAcuV2MountForTests();
   });
 });
+

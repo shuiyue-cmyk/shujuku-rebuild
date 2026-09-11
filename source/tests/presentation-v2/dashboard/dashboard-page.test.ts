@@ -124,6 +124,8 @@ async function mountDashboardPage(
     failStorageSwitch?: boolean;
     historyState?: Record<string, unknown>;
     templateData?: Record<string, unknown> | null;
+    failHistory?: boolean;
+    breakLogCopy?: boolean;
   } = {},
 ) {
   vi.resetModules();
@@ -206,6 +208,7 @@ async function mountDashboardPage(
   }));
   vi.doMock("../../../src/service/table/table-history", () => ({
     resolveTableHistoryStatesFromChat_ACU: (_chat: any[], optsList: any[]) => {
+      if (options.failHistory) throw new Error("history boom");
       const map = new Map<string, any>();
       for (const opts of optsList || []) {
         map.set(opts.sheetKey, {
@@ -222,6 +225,20 @@ async function mountDashboardPage(
       return map;
     },
   }));
+  vi.doMock("../../../src/presentation-v2/copy/dashboard-copy", async () => {
+    const actual = await vi.importActual<typeof import("../../../src/presentation-v2/copy/dashboard-copy")>("../../../src/presentation-v2/copy/dashboard-copy");
+    if (!options.breakLogCopy) return actual;
+    return {
+      ...actual,
+      dashboardCopy: {
+        ...actual.dashboardCopy,
+        logs: {
+          ...actual.dashboardCopy.logs,
+          errorSummary: () => { throw new Error("copy boom"); },
+        },
+      },
+    };
+  });
   vi.doMock("../../../src/service/table/storage-mode", () => ({
     getCurrentStorageMode: () => settings.storageMode,
     isSqliteMode: () => settings.storageMode === "sqlite",
@@ -852,4 +869,35 @@ describe("DashboardPage", () => {
 
     mount.__resetAcuV2MountForTests();
   });
+
+  it("历史解析抛错时表格行降级为空且页面照常渲染", async () => {
+    const { mount, dashboard } = await mountDashboardPage(createSettings(), createTableData(), {
+      failHistory: true,
+    });
+
+    expect(dashboard.tableRows.value).toEqual([]);
+    expect(dashboard.healthItems.value.length).toBeGreaterThanOrEqual(1);
+    expect(document.querySelector(".acu-v2-dashboard-page")).not.toBeNull();
+
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it("运行概览装配抛错时给降级卡而非整页空白", async () => {
+    const { mount, dashboard } = await mountDashboardPage(createSettings(), createTableData(), {
+      breakLogCopy: true,
+    });
+    const { pushLog } = await import("../../../src/shared/log-buffer");
+
+    pushLog("error", ["[ACU]", "API请求失败: 500 bad gateway"]);
+    await Promise.resolve();
+
+    const items = dashboard.healthItems.value;
+    expect(items.length).toBe(1);
+    expect(items[0].key).toBe("dashboard-fallback");
+    const text = document.querySelector(".acu-v2-dashboard-page")?.textContent || "";
+    expect(text).toContain("运行概览暂不可用");
+
+    mount.__resetAcuV2MountForTests();
+  });
 });
+

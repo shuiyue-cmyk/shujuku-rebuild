@@ -89899,7 +89899,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.4.10" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.5.1" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -141017,7 +141017,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260910-14";
+        const stamp = "20260911-19";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -167683,6 +167683,24 @@ let deferLogRefresh = false;
 function clone$1(value) {
     return JSON.parse(JSON.stringify(value ?? null));
 }
+const reportedRenderFallbackCounts = new Map();
+function withRenderFallback(label, fallback, build) {
+    // 同 label 多病因时放行前 3 次：首因必留证据，持续刷屏仍压住；
+    // 成功求值即清零——瞬时抖动自愈后重 arm，长会话不衰减。
+    try {
+        const value = build();
+        reportedRenderFallbackCounts.delete(label);
+        return value;
+    }
+    catch (error) {
+        const seen = (reportedRenderFallbackCounts.get(label) || 0) + 1;
+        reportedRenderFallbackCounts.set(label, seen);
+        if (seen <= 3) {
+            logError_ACU(`[ACU-V2] dashboard ${label} 计算异常，已降级:`, error);
+        }
+        return fallback;
+    }
+}
 function safeReadSnapshot() {
     try {
         return {
@@ -167944,6 +167962,21 @@ function readCurrentSqlTemplateCheck() {
     }
     return result;
 }
+function readCurrentSqlTemplateCheckSafe() {
+    try {
+        const check = readCurrentSqlTemplateCheck();
+        reportedRenderFallbackCounts.delete("SQL 模板检查");
+        return check;
+    }
+    catch (error) {
+        const seen = (reportedRenderFallbackCounts.get("SQL 模板检查") || 0) + 1;
+        reportedRenderFallbackCounts.set("SQL 模板检查", seen);
+        if (seen <= 3) {
+            logError_ACU("[ACU-V2] dashboard SQL 模板检查异常，已降级为空结果:", error);
+        }
+        return { total: 0, ddlCount: 0, missingDdlNames: [], invalidDdlNames: [] };
+    }
+}
 function formatTableNameSamples(names) {
     const visible = names.slice(0, 3).join("、");
     return dashboardCopy.sqlHealth.tableNameSamples(visible, names.length);
@@ -167959,7 +167992,7 @@ function buildSqlTemplateHealthItem(hasActiveChat) {
             summary: dashboardCopy.sqlHealth.noChatSummary(),
         });
     }
-    const check = readCurrentSqlTemplateCheck();
+    const check = readCurrentSqlTemplateCheckSafe();
     if (!check.total) {
         return makeHealthItem({
             key: "sql-template",
@@ -168130,7 +168163,7 @@ function useDashboardPage() {
         void dataRefreshTick.value;
         return countAiMessages();
     });
-    const tableRows = computed(() => {
+    const tableRows = computed(() => withRenderFallback("表格状态行", [], () => {
         void dataRefreshTick.value;
         const displayData = getCurrentTableDisplayData_ACU();
         if (!displayData)
@@ -168229,9 +168262,9 @@ function useDashboardPage() {
                 disabled: false,
             };
         });
-    });
+    }));
     /** 基础设置 — 同一聊天里时不时开关的功能。 */
-    const basicToggles = computed(() => {
+    const basicToggles = computed(() => withRenderFallback("基础开关", [], () => {
         void dataRefreshTick.value;
         const flightMode = getCurrentFlightModeState_ACU();
         const hasActiveChat = hasActiveChatContext(chatFileIdentifier.value);
@@ -168256,9 +168289,9 @@ function useDashboardPage() {
                 value: settings_ACU.toastMuteEnabled === true,
             },
         ];
-    });
+    }));
     /** 高级设置 — 配置后基本不动；动了出问题是正常的。 */
-    const advancedToggles = computed(() => {
+    const advancedToggles = computed(() => withRenderFallback("高级开关", [], () => {
         void dataRefreshTick.value;
         const items = [
             {
@@ -168292,8 +168325,17 @@ function useDashboardPage() {
             value: developerOptionsEnabled.value,
         });
         return items;
-    });
-    const healthItems = computed(() => {
+    }));
+    const healthItems = computed(() => withRenderFallback("运行概览", [
+        makeHealthItem({
+            key: "dashboard-fallback",
+            title: "运行日志",
+            badge: "暂不可用",
+            kind: "error",
+            summary: "运行概览暂不可用，已记录诊断，请去高级工具查看运行日志。",
+            action: { label: "查看运行日志", pageId: "advanced-tools" },
+        }),
+    ], () => {
         void dataRefreshTick.value;
         void logRefreshTick.value;
         const hasActiveChat = hasActiveChatContext(chatFileIdentifier.value);
@@ -168305,7 +168347,7 @@ function useDashboardPage() {
             buildVectorHealthItem(),
             buildLogHealthItem(showDeveloperDiagnostics),
         ];
-    });
+    }));
     const contentReplaceGateEnabled = computed(() => {
         void dataRefreshTick.value;
         return isContentReplaceEnabledBySettings();
@@ -168431,9 +168473,14 @@ var _sfc_main$D = /*@__PURE__*/ defineComponent({
             { value: "advanced", label: dashboardCopy.groups.advanced },
         ];
         async function refreshAll() {
-            plotStore.refreshFromSettings();
-            await dashboard.refresh();
-            syncFeaturePageGates();
+            try {
+                plotStore.refreshFromSettings();
+                await dashboard.refresh();
+                syncFeaturePageGates();
+            }
+            catch (error) {
+                logError_ACU("[ACU-V2] dashboard refreshAll 异常:", error);
+            }
         }
         function syncFeaturePageGates() {
             routerStore.syncFeatureGate(FEATURE_GATE_CONTENT_REPLACE, dashboard.contentReplaceGateEnabled.value);
@@ -168512,8 +168559,8 @@ var _sfc_main$D = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-v2-dashboard-page[data-v-6d4f2d09] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-dashboard-page__toggle-list[data-v-6d4f2d09] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\r\n  margin-top: 14px;\n}\n.acu-v2-dashboard-page__health-list[data-v-6d4f2d09] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  min-width: 0;\n}\n.acu-v2-dashboard-page__health-item[data-v-6d4f2d09] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: 30px minmax(0, 1fr) max-content;\r\n  column-gap: 10px;\r\n  row-gap: 8px;\r\n  align-items: center;\r\n  padding: 10px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\r\n  transition:\r\n    border-color 0.15s ease,\r\n    background 0.15s ease;\n}\n.acu-v2-dashboard-page__health-item--error[data-v-6d4f2d09] {\r\n  border-color: color-mix(in srgb, var(--acu-danger) 38%, var(--acu-border));\n}\n.acu-v2-dashboard-page__health-icon[data-v-6d4f2d09] {\r\n  width: 30px;\r\n  height: 30px;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-2);\r\n  color: var(--acu-text-2);\n}\n.acu-v2-dashboard-page__health-item--ok .acu-v2-dashboard-page__health-icon[data-v-6d4f2d09] {\r\n  color: var(--acu-success);\r\n  background: color-mix(in srgb, var(--acu-success) 10%, transparent);\n}\n.acu-v2-dashboard-page__health-item--warning\r\n  .acu-v2-dashboard-page__health-icon[data-v-6d4f2d09] {\r\n  color: var(--acu-warning);\r\n  background: color-mix(in srgb, var(--acu-warning) 12%, transparent);\n}\n.acu-v2-dashboard-page__health-item--error .acu-v2-dashboard-page__health-icon[data-v-6d4f2d09] {\r\n  color: var(--acu-danger);\r\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\n}\n.acu-v2-dashboard-page__health-body[data-v-6d4f2d09] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\n}\n.acu-v2-dashboard-page__health-heading[data-v-6d4f2d09] {\r\n  min-width: 0;\n}\n.acu-v2-dashboard-page__health-heading strong[data-v-6d4f2d09] {\r\n  min-width: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 650;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-dashboard-page__health-body p[data-v-6d4f2d09] {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-dashboard-page__health-side[data-v-6d4f2d09] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: flex-end;\r\n  gap: 8px;\r\n  justify-self: end;\n}\n.acu-v2-dashboard-page__health-action[data-v-6d4f2d09] {\r\n  white-space: nowrap;\n}\n@media (max-width: 860px) {\n.acu-v2-dashboard-page[data-v-6d4f2d09] {\r\n    padding: 14px;\n}\n.acu-v2-dashboard-page__health-item[data-v-6d4f2d09] {\r\n    grid-template-columns: 30px minmax(0, 1fr);\r\n    align-items: center;\n}\n.acu-v2-dashboard-page__health-side[data-v-6d4f2d09] {\r\n    grid-column: 2;\r\n    align-items: flex-start;\r\n    justify-self: start;\r\n    flex-direction: row;\r\n    flex-wrap: wrap;\n}\n.acu-v2-dashboard-page__health-action[data-v-6d4f2d09] {\r\n    justify-self: start;\n}\n}\r\n", "src/presentation-v2/pages/DashboardPage.vue#style-0-6d4f2d09");
-var DashboardPage_vue_vue_type_style_index_0_scoped_6d4f2d09_lang = null;
+injectSfcStyle("\n.acu-v2-dashboard-page[data-v-1f87e105] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-dashboard-page__toggle-list[data-v-1f87e105] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\r\n  margin-top: 14px;\n}\n.acu-v2-dashboard-page__health-list[data-v-1f87e105] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  min-width: 0;\n}\n.acu-v2-dashboard-page__health-item[data-v-1f87e105] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: 30px minmax(0, 1fr) max-content;\r\n  column-gap: 10px;\r\n  row-gap: 8px;\r\n  align-items: center;\r\n  padding: 10px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\r\n  transition:\r\n    border-color 0.15s ease,\r\n    background 0.15s ease;\n}\n.acu-v2-dashboard-page__health-item--error[data-v-1f87e105] {\r\n  border-color: color-mix(in srgb, var(--acu-danger) 38%, var(--acu-border));\n}\n.acu-v2-dashboard-page__health-icon[data-v-1f87e105] {\r\n  width: 30px;\r\n  height: 30px;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-2);\r\n  color: var(--acu-text-2);\n}\n.acu-v2-dashboard-page__health-item--ok .acu-v2-dashboard-page__health-icon[data-v-1f87e105] {\r\n  color: var(--acu-success);\r\n  background: color-mix(in srgb, var(--acu-success) 10%, transparent);\n}\n.acu-v2-dashboard-page__health-item--warning\r\n  .acu-v2-dashboard-page__health-icon[data-v-1f87e105] {\r\n  color: var(--acu-warning);\r\n  background: color-mix(in srgb, var(--acu-warning) 12%, transparent);\n}\n.acu-v2-dashboard-page__health-item--error .acu-v2-dashboard-page__health-icon[data-v-1f87e105] {\r\n  color: var(--acu-danger);\r\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\n}\n.acu-v2-dashboard-page__health-body[data-v-1f87e105] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\n}\n.acu-v2-dashboard-page__health-heading[data-v-1f87e105] {\r\n  min-width: 0;\n}\n.acu-v2-dashboard-page__health-heading strong[data-v-1f87e105] {\r\n  min-width: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 650;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-dashboard-page__health-body p[data-v-1f87e105] {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-dashboard-page__health-side[data-v-1f87e105] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: flex-end;\r\n  gap: 8px;\r\n  justify-self: end;\n}\n.acu-v2-dashboard-page__health-action[data-v-1f87e105] {\r\n  white-space: nowrap;\n}\n@media (max-width: 860px) {\n.acu-v2-dashboard-page[data-v-1f87e105] {\r\n    padding: 14px;\n}\n.acu-v2-dashboard-page__health-item[data-v-1f87e105] {\r\n    grid-template-columns: 30px minmax(0, 1fr);\r\n    align-items: center;\n}\n.acu-v2-dashboard-page__health-side[data-v-1f87e105] {\r\n    grid-column: 2;\r\n    align-items: flex-start;\r\n    justify-self: start;\r\n    flex-direction: row;\r\n    flex-wrap: wrap;\n}\n.acu-v2-dashboard-page__health-action[data-v-1f87e105] {\r\n    justify-self: start;\n}\n}\r\n", "src/presentation-v2/pages/DashboardPage.vue#style-0-1f87e105");
+var DashboardPage_vue_vue_type_style_index_0_scoped_1f87e105_lang = null;
 
 const _hoisted_1$D = { class: "acu-v2-dashboard-page" };
 const _hoisted_2$x = { class: "acu-v2-dashboard-page__health-list" };
@@ -168640,7 +168687,7 @@ function _sfc_render$D(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	})]);
 }
-var DashboardPage = /* @__PURE__ */ _export_sfc(_sfc_main$D, [["render", _sfc_render$D], ["__scopeId", "data-v-6d4f2d09"]]);
+var DashboardPage = /* @__PURE__ */ _export_sfc(_sfc_main$D, [["render", _sfc_render$D], ["__scopeId", "data-v-1f87e105"]]);
 
 var _sfc_main$C = /*@__PURE__*/ defineComponent({
     __name: 'TableSelector',
@@ -185528,7 +185575,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260910-14";
+        const stamp = "20260911-19";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -185537,7 +185584,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.4.10";
+        const v = "9.5.1";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {
@@ -197125,6 +197172,24 @@ function __resetHostRendererForTests() {
 
 const ROOT_ID = 'acu-app-v2';
 let state = null;
+let renderErrorReportCount_ACU = 0;
+let renderErrorReentry_ACU = false;
+function createAcuRenderErrorHandler() {
+    return (err, _instance, info) => {
+        renderErrorReportCount_ACU += 1;
+        if (renderErrorReportCount_ACU > 20 || renderErrorReentry_ACU) {
+            console.error('[ACU-V2] render error (suppressed from log-buffer):', info, err);
+            return;
+        }
+        renderErrorReentry_ACU = true;
+        try {
+            logError_ACU(`[ACU-V2] render error (${info}):`, err);
+        }
+        finally {
+            renderErrorReentry_ACU = false;
+        }
+    };
+}
 function ensureMounted() {
     if (state)
         return state;
@@ -197164,6 +197229,9 @@ function ensureMounted() {
         onClose: () => closeAcuV2App(),
     }, doc);
     vueApp.use(pinia);
+    // 渲染异常证据链：Vue 默认只把 setup/render 抛错打到 console，用户侧是主区空白
+    // 且运行日志零记录（偶发时无从查起）。收进 log-buffer（含 Debug 导出）以便下次可查。
+    vueApp.config.errorHandler = createAcuRenderErrorHandler();
     vueApp.mount(root);
     root.removeAttribute('v-cloak');
     root.setAttribute('data-v-app', '');
@@ -197175,6 +197243,7 @@ function ensureMounted() {
 async function openAcuV2App() {
     const wasMounted = state !== null;
     const s = ensureMounted();
+    renderErrorReportCount_ACU = 0;
     s.root.style.display = '';
     const store = useRootShellStore(s.pinia);
     const wasOpen = store.isOpen;
@@ -197185,6 +197254,10 @@ async function openAcuV2App() {
 /** Bridge 层在 Vue 组件外访问现有 Pinia；不会主动创建应用。 */
 function getAcuV2PiniaForBridge() {
     return state?.pinia ?? null;
+}
+/** 仅供测试使用：读取已挂载的 Vue app（断言 errorHandler 接线）。 */
+function __getAcuV2AppForTests() {
+    return state?.vueApp ?? null;
 }
 /**
  * 关闭新 UI：保留根 DOM 与 Pinia 状态，仅隐藏容器并请求滚动重置（P0-6 修订）。

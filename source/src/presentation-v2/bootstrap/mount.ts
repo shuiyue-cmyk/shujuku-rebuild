@@ -9,7 +9,7 @@
  */
 import type { App as VueApp } from 'vue';
 import { createPinia, type Pinia } from 'pinia';
-import { logDebug_ACU } from '../../shared/utils';
+import { logDebug_ACU, logError_ACU } from '../../shared/utils';
 import { TT_MOBILE_SURFACE_ACU, applyTtMobileSurface_ACU } from '../../shared/tt-mobile-surface';
 import { setSfcStyleHost } from '../build/sfc-style-runtime';
 import App from '../App.vue';
@@ -37,6 +37,25 @@ interface MountedState {
 }
 
 let state: MountedState | null = null;
+
+let renderErrorReportCount_ACU = 0;
+let renderErrorReentry_ACU = false;
+
+function createAcuRenderErrorHandler(): (err: unknown, instance: unknown, info: string) => void {
+  return (err: unknown, _instance: unknown, info: string) => {
+    renderErrorReportCount_ACU += 1;
+    if (renderErrorReportCount_ACU > 20 || renderErrorReentry_ACU) {
+      console.error('[ACU-V2] render error (suppressed from log-buffer):', info, err);
+      return;
+    }
+    renderErrorReentry_ACU = true;
+    try {
+      logError_ACU(`[ACU-V2] render error (${info}):`, err);
+    } finally {
+      renderErrorReentry_ACU = false;
+    }
+  };
+}
 
 function ensureMounted(): MountedState {
   if (state) return state;
@@ -83,6 +102,9 @@ function ensureMounted(): MountedState {
     onClose: () => closeAcuV2App(),
   }, doc);
   vueApp.use(pinia);
+  // 渲染异常证据链：Vue 默认只把 setup/render 抛错打到 console，用户侧是主区空白
+  // 且运行日志零记录（偶发时无从查起）。收进 log-buffer（含 Debug 导出）以便下次可查。
+  vueApp.config.errorHandler = createAcuRenderErrorHandler();
   vueApp.mount(root);
   root.removeAttribute('v-cloak');
   root.setAttribute('data-v-app', '');
@@ -96,6 +118,7 @@ function ensureMounted(): MountedState {
 export async function openAcuV2App(): Promise<void> {
   const wasMounted = state !== null;
   const s = ensureMounted();
+  renderErrorReportCount_ACU = 0;
   s.root.style.display = '';
   const store = useRootShellStore(s.pinia);
   const wasOpen = store.isOpen;
@@ -106,6 +129,11 @@ export async function openAcuV2App(): Promise<void> {
 /** Bridge 层在 Vue 组件外访问现有 Pinia；不会主动创建应用。 */
 export function getAcuV2PiniaForBridge(): Pinia | null {
   return state?.pinia ?? null;
+}
+
+/** 仅供测试使用：读取已挂载的 Vue app（断言 errorHandler 接线）。 */
+export function __getAcuV2AppForTests(): VueApp | null {
+  return state?.vueApp ?? null;
 }
 
 /**
@@ -139,3 +167,5 @@ export function __resetAcuV2MountForTests(): void {
   __resetHostDocumentCacheForTests();
   __resetHostRendererForTests();
 }
+
+
