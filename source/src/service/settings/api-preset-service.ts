@@ -253,7 +253,8 @@ export function getBoundPresetNameForChat_ACU(chatKey?: string): string {
 }
 
 /** 按预设名解析运行配置；空名或悬挂引用返回可断言结果（不静默复用当前配置） */
-export function resolveApiConfigByPreset_ACU(presetName: string): {
+/** resolveApiConfigByPreset_ACU 的解析结果（memo 读写同一形状）。 */
+export interface ResolvedApiPresetConfig_ACU {
   apiMode: ApiPresetApiMode_ACU;
   apiConfig: ApiPresetApiConfig_ACU;
   tavernProfile: string;
@@ -266,8 +267,57 @@ export function resolveApiConfigByPreset_ACU(presetName: string): {
   jsonFormatOutput: boolean;
   /** 预设级增强思考；无全局 settings 对应项，回退路径恒 false（与 nonPrefillSupport 回退全局不同） */
   enhancedThinking: boolean;
-} {
-  ensureApiSettingsShape_ACU();
+}
+
+/** 预设解析 memo：命中即跳过全量归一 + 线性查找。键=settings 对象身份 + 内容指纹；写时（内容变）自然失效。 */
+const PRESET_RESOLVE_CACHE_CAP_ACU = 8;
+interface PresetResolveCacheEntry_ACU { settingsRef: unknown; fingerprint: string; result: ResolvedApiPresetConfig_ACU; }
+const presetResolveCache_ACU = new Map<string, PresetResolveCacheEntry_ACU>();
+
+function fingerprintPresetResolveInputs_ACU(normalized: string): string | null {
+  try {
+    const presets = (settings_ACU as any)?.apiPresets;
+    const list = Array.isArray(presets) ? presets : [];
+    const named = normalized ? list.find((item: any) => String(item?.name || '') === normalized) ?? null : null;
+    return JSON.stringify([
+      normalized,
+      list.length,
+      list.map((item: any) => String(item?.name || '')).join(','),
+      named,
+      (settings_ACU as any)?.apiMode,
+      (settings_ACU as any)?.tavernProfile,
+      (settings_ACU as any)?.nonPrefillSupport === true,
+      (settings_ACU as any)?.apiConfig,
+    ]);
+  } catch {
+    return null;
+  }
+}
+
+function readPresetResolveCache_ACU(normalized: string): ResolvedApiPresetConfig_ACU | null {
+  const fingerprint = fingerprintPresetResolveInputs_ACU(normalized);
+  if (fingerprint === null) return null;
+  const entry = presetResolveCache_ACU.get(normalized);
+  if (!entry || entry.settingsRef !== settings_ACU || entry.fingerprint !== fingerprint) return null;
+  return { ...entry.result };
+}
+
+function writePresetResolveCache_ACU(normalized: string, result: ResolvedApiPresetConfig_ACU): void {
+  const fingerprint = fingerprintPresetResolveInputs_ACU(normalized);
+  if (fingerprint === null) return;
+  presetResolveCache_ACU.set(normalized, { settingsRef: settings_ACU, fingerprint, result });
+  if (presetResolveCache_ACU.size > PRESET_RESOLVE_CACHE_CAP_ACU) {
+    const oldest = presetResolveCache_ACU.keys().next();
+    if (!oldest.done) presetResolveCache_ACU.delete(oldest.value);
+  }
+}
+
+/** 仅供测试：清空预设解析 memo。 */
+export function __clearPresetResolveCacheForTests_ACU(): void {
+  presetResolveCache_ACU.clear();
+}
+
+function resolveApiConfigByPresetUncached_ACU(presetName: string): ResolvedApiPresetConfig_ACU {
   const normalized = String(presetName || '').trim();
   if (!normalized) {
     return {
@@ -311,6 +361,17 @@ export function resolveApiConfigByPreset_ACU(presetName: string): {
     enhancedThinking: false,
   };
 }
+/** 公开入口：命中 memo 即跳过全量归一；未命中走完整解析并回填（命名命中/空名回退）。 */
+export function resolveApiConfigByPreset_ACU(presetName: string): ResolvedApiPresetConfig_ACU {
+  const normalized = String(presetName || '').trim();
+  const hit = readPresetResolveCache_ACU(normalized);
+  if (hit) return hit;
+  const result = resolveApiConfigByPresetUncached_ACU(presetName);
+  // 只缓存命名命中与空名回退：悬挂引用分支带告警副作用，保持每次告警不吞。
+  if (result.resolved || !normalized) writePresetResolveCache_ACU(normalized, { ...result });
+  return result;
+}
+
 
 /** 聊天切换后 reconcile：把当前聊天绑定重新投影到 apiMode/apiConfig/tavernProfile */
 export function reconcileApiBindingForCurrentChat_ACU(): { applied: boolean; presetName: string } {

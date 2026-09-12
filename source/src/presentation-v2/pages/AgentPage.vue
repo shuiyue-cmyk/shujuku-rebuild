@@ -86,7 +86,7 @@ import WorldbookEntryList from '../components/WorldbookEntryList.vue';
 import WorldbookEntryToolbar from '../components/WorldbookEntryToolbar.vue';
 import WorldbookSourcePicker from '../components/WorldbookSourcePicker.vue';
 import { useAgentWorldbookEntries } from '../composables/useAgentWorldbookEntries';
-import { useChatChangedTick } from '../composables/useChatChangedListener';
+import { watchChatChanged_ACU } from '../composables/useChatChangedListener';
 import { usePlotWorldbookAgentControl } from '../composables/usePlotWorldbookAgentControl';
 import { useWorldbookSelector } from '../composables/useWorldbookSelector';
 
@@ -218,7 +218,7 @@ async function onDeleteSkill(bookName: string, uid: number): Promise<void> {
 }
 
 onMounted(() => { void refreshAll(); });
-watch(useChatChangedTick(), () => { void refreshAll(); });
+watchChatChanged_ACU(() => { void refreshAll(); });
 </script>
 
 <style scoped>

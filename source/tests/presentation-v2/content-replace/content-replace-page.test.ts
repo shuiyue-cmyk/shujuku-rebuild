@@ -80,6 +80,7 @@ async function mountContentReplacePage() {
     const vue = await vi.importActual<typeof import('vue')>('vue');
     return {
       useChatChangedTick: () => vue.ref(0),
+      watchChatChanged_ACU: () => {},
     };
   });
 

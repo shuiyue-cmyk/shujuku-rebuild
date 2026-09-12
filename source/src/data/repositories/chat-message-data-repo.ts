@@ -60,14 +60,25 @@ export const FIRST_MESSAGE_SCOPE_GUIDE_FIELDS_ACU: readonly string[] = [
  * 将 IsolatedData 字段解析为对象（处理 string/object 两种格式）。
  * 如果字段不存在或解析失败，返回 null。
  */
+/** string 形态 IsolatedData 的解析 memo：同一消息对象 + 同一原串只解析一次，跨函数共享。键弱引用，无泄漏；原串替换即失效。 */
+const isolatedDataParseCache_ACU = new WeakMap<object, { raw: unknown; parsed: IsolatedDataContainer_ACU | null }>();
+
 function parseIsolatedDataField(msg: any): IsolatedDataContainer_ACU | null {
     const raw = msg?.TavernDB_ACU_IsolatedData;
     if (!raw) return null;
     if (typeof raw === 'string') {
+        if (msg && typeof msg === 'object') {
+            const cached = isolatedDataParseCache_ACU.get(msg);
+            if (cached && cached.raw === raw) return cached.parsed;
+        }
         const parsed = safeJsonParse_ACU(raw, null);
-        return (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
+        const result = (parsed && typeof parsed === 'object' && !Array.isArray(parsed))
             ? parsed as IsolatedDataContainer_ACU
             : null;
+        // 注意：此处缓存的是解析结果快照；调用方若原地改写该容器而不写回字段，
+        // 改写对后续读者可见（此前是每次重解析、改写丢失）。写者一律走“换字段”契约，读 profit 无此形态。
+        if (msg && typeof msg === 'object') isolatedDataParseCache_ACU.set(msg, { raw, parsed: result });
+        return result;
     }
     if (typeof raw === 'object' && !Array.isArray(raw)) {
         return raw as IsolatedDataContainer_ACU;

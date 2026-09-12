@@ -7,7 +7,7 @@
       >
         <div class="acu-v2-dashboard-page__health-list">
           <article
-            v-for="item in dashboard.healthItems.value"
+            v-for="item in [...dashboard.healthItems.value, dashboard.logHealthItem.value]"
             :key="item.key"
             class="acu-v2-dashboard-page__health-item"
             :class="`acu-v2-dashboard-page__health-item--${item.kind}`"
@@ -86,7 +86,7 @@ import AcuPanel from "../components/_lib/AcuPanel.vue";
 import AcuPanelGrid from "../components/_lib/AcuPanelGrid.vue";
 import AcuSegmentedControl from "../components/_lib/AcuSegmentedControl.vue";
 import ToggleRow from "../components/DashboardToggleRow.vue";
-import { useChatChangedTick } from "../composables/useChatChangedListener";
+import { watchChatChanged_ACU } from "../composables/useChatChangedListener";
 import { useTemplateRuntimeChangeTick } from "../composables/useTemplateRuntimeChangeListener";
 import { useDashboardPage } from "../composables/useDashboardPage";
 import { logError_ACU } from "../../shared/utils";
@@ -204,7 +204,7 @@ async function handleToggleChange(key: string, value: boolean): Promise<void> {
 onMounted(() => {
   void refreshAll();
 });
-watch(useChatChangedTick(), () => {
+watchChatChanged_ACU(() => {
   void refreshAll();
 });
 watch(useTemplateRuntimeChangeTick(), () => {

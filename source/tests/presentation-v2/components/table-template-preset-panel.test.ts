@@ -24,6 +24,7 @@ async function mountPanel(opts: {
 
   vi.doMock('../../../src/presentation-v2/composables/useChatChangedListener', () => ({
     useChatChangedTick: () => ref(0),
+    watchChatChanged_ACU: () => {},
   }));
   vi.doMock('../../../src/presentation-v2/composables/useTemplateRuntimeChangeListener', () => ({
     useTemplateRuntimeChangeTick: () => ref(0),

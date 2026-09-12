@@ -32,8 +32,39 @@ function migrateLegacyChatScopedCharSettings_ACU(charId: string): boolean {
     return true;
 }
 
+/** 角色设置指纹 memo：命中即跳过默认克隆 + deepMerge + 写回。只存指纹、永远返回 live 对象，调用方原地改配置照常生效。 */
+const charSettingsFingerprintCache_ACU = new Map<string, { settingsRef: unknown; fingerprint: string }>();
+const CHAR_SETTINGS_CACHE_CAP_ACU = 32;
+
+function fingerprintCharSettingsInputs_ACU(charId: string): string | null {
+    try {
+        const all = settings_ACU?.characterSettings;
+        const legacyKey = getLegacyChatScopeKey_ACU();
+        return JSON.stringify([
+            charId,
+            legacyKey,
+            !!(all && typeof all === 'object' && (all as any)[legacyKey]),
+            globalMeta_ACU?.summaryVectorIndexModeGlobal === true,
+            all && typeof all === 'object' ? (all as any)[charId]?.worldbookConfig ?? null : null,
+        ]);
+    } catch {
+        return null;
+    }
+}
+
 export function getCurrentCharSettings_ACU() {
     const charId = getCurrentCharacterScopeKey_ACU();
+    const charSettingsFingerprint = fingerprintCharSettingsInputs_ACU(charId);
+    const charSettingsCached = charSettingsFingerprint !== null ? charSettingsFingerprintCache_ACU.get(charId) : undefined;
+    if (
+        charSettingsCached
+        && charSettingsFingerprint !== null
+        && charSettingsCached.settingsRef === settings_ACU
+        && charSettingsCached.fingerprint === charSettingsFingerprint
+        && settings_ACU.characterSettings?.[charId]
+    ) {
+        return settings_ACU.characterSettings[charId];
+    }
     if (!settings_ACU.characterSettings) {
         settings_ACU.characterSettings = {};
     }
@@ -65,6 +96,14 @@ export function getCurrentCharSettings_ACU() {
         settings_ACU.characterSettings[charId].worldbookConfig = mergedCfg;
     } catch (e) {
         // ignore
+    }
+    const doneFingerprint = fingerprintCharSettingsInputs_ACU(charId);
+    if (doneFingerprint !== null) {
+        charSettingsFingerprintCache_ACU.set(charId, { settingsRef: settings_ACU, fingerprint: doneFingerprint });
+        if (charSettingsFingerprintCache_ACU.size > CHAR_SETTINGS_CACHE_CAP_ACU) {
+            const oldest = charSettingsFingerprintCache_ACU.keys().next();
+            if (!oldest.done) charSettingsFingerprintCache_ACU.delete(oldest.value);
+        }
     }
     return settings_ACU.characterSettings[charId];
 }

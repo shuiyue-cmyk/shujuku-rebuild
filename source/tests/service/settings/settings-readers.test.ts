@@ -40,9 +40,11 @@ vi.mock('../../../src/shared/defaults', () => ({
   },
 }));
 
+const { mockDeepMerge } = vi.hoisted(() => ({ mockDeepMerge: vi.fn((target: any, source: any) => ({ ...target, ...source })) }));
+
 vi.mock('../../../src/shared/utils', () => ({
   logDebug_ACU: vi.fn(),
-  deepMerge_ACU: vi.fn((target: any, source: any) => ({ ...target, ...source })),
+  deepMerge_ACU: (...args: any[]) => (mockDeepMerge as any)(...args),
   parseTableTemplateJson_ACU: (...args: any[]) => parseTableTemplate(...args),
 }));
 vi.mock('../../../src/service/template/chat-scope', () => ({
@@ -67,6 +69,7 @@ beforeEach(() => {
   mockSettings.hasImportTableSelection = false;
   currentTables = { sheet_b: {}, sheet_a: {} };
   parseTableTemplate.mockReset();
+  mockDeepMerge.mockClear();
   parseTableTemplate.mockReturnValue(null);
 });
 
@@ -150,6 +153,21 @@ describe('getCurrentCharSettings_ACU', () => {
       expect(second.worldbookConfig.source).toBe('manual');
     });
   });
+
+    it('同角色连续读取复用指纹 memo，不重复 deepMerge', () => {
+      getCurrentCharSettings_ACU();
+      getCurrentCharSettings_ACU();
+      expect(mockDeepMerge).toHaveBeenCalledTimes(1);
+    });
+
+    it('配置被改写后失效并重新合并', () => {
+      getCurrentCharSettings_ACU();
+      expect(mockDeepMerge).toHaveBeenCalledTimes(1);
+      mockSettings.characterSettings['test-char'].worldbookConfig.enabled = false;
+      const result = getCurrentCharSettings_ACU();
+      expect(mockDeepMerge).toHaveBeenCalledTimes(2);
+      expect(result.worldbookConfig.enabled).toBe(false);
+    });
 });
 
 describe('getCurrentWorldbookConfig_ACU', () => {

@@ -351,7 +351,7 @@ import AcuTextarea from '../components/_lib/AcuTextarea.vue';
 import ContinuationChat from '../components/ContinuationChat.vue';
 import ContinuationMaterialsPanel from '../components/ContinuationMaterialsPanel.vue';
 import { useApiPresetSelectOptions } from '../composables/useApiPresetSelectOptions';
-import { useChatChangedTick, useChatMutationTick } from '../composables/useChatChangedListener';
+import { watchChatChanged_ACU, useChatMutationTick } from '../composables/useChatChangedListener';
 import { CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_UI_ACU, useContinuationRuntime } from '../composables/useContinuationRuntime';
 import { useContinuationSession } from '../composables/useContinuationSession';
 import { useDialogStore } from '../stores/dialog-store';
@@ -929,7 +929,7 @@ onBeforeUnmount(() => {
     void saveSettingsNow();
   }
 });
-watch(useChatChangedTick(), refreshAll);
+watchChatChanged_ACU(refreshAll);
 watch(useChatMutationTick(), refreshAfterChatMutation);
 watch(runtime.settings, settings => {
   // 每次刷新信封都会产生新的 settings 引用；只有持久化内容真的变了（保存成功、切换聊天）

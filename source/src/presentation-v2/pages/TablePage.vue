@@ -170,7 +170,7 @@ import AcuToggle from '../components/_lib/AcuToggle.vue';
 import FormFillPromptDrawer from '../components/FormFillPromptDrawer.vue';
 import WorldbookSelector from '../components/WorldbookSelector.vue';
 import WorldbookEntryPickerBody from '../components/WorldbookEntryPickerBody.vue';
-import { useChatChangedTick } from '../composables/useChatChangedListener';
+import { watchChatChanged_ACU } from '../composables/useChatChangedListener';
 import { useFormFillInjectionTarget } from '../composables/useFormFillInjectionTarget';
 import {
   useFormFillSettings,
@@ -309,7 +309,7 @@ async function refreshAll(): Promise<void> {
 }
 
 onMounted(() => { void refreshAll(); });
-watch(useChatChangedTick(), () => { void refreshAll(); });
+watchChatChanged_ACU(() => { void refreshAll(); });
 useUiCloseGuard(confirmPromptClose);
 </script>
 

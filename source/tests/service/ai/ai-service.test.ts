@@ -33,13 +33,14 @@ vi.mock('../../../src/shared/utils', async (importOriginal) => {
   };
 });
 
-import { fetchAvailableModels_ACU } from '../../../src/service/ai/ai-service';
+import { fetchAvailableModels_ACU, __clearModelListCacheForTests_ACU } from '../../../src/service/ai/ai-service';
 
 // 模拟 fetch
 const mockFetch = vi.fn();
 globalThis.fetch = mockFetch;
 
 beforeEach(() => {
+  __clearModelListCacheForTests_ACU();
   vi.clearAllMocks();
 });
 
@@ -250,7 +251,7 @@ describe('fetchAvailableModels_ACU', () => {
     expect(lastStatusBody().custom_api_format).toBe('');
   });
 
-  it('缺省 / 空白 / 非字符串 customApiFormat 一律降级为 ""', async () => {
+  it('缺省 / 空白 / 非字符串 customApiFormat 一律降级为 ""（同归一键共享探活缓存）', async () => {
     mockFetch.mockResolvedValue({ ok: true, json: async () => ({ models: [{ id: 'm' }] }) });
 
     await fetchAvailableModels_ACU('https://api.test', 'key');
@@ -261,7 +262,8 @@ describe('fetchAvailableModels_ACU', () => {
 
     await fetchAvailableModels_ACU('https://api.test', 'key', undefined as any);
     expect(lastStatusBody().custom_api_format).toBe('');
-    expect(mockFetch).toHaveBeenCalledTimes(3);
+    // 同一归一键（缺省/空白/undefined 均归一为 ''）只探活一次
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
   it('白名单值两侧空白被裁剪后仍按合法值透传', async () => {
@@ -348,5 +350,35 @@ describe('fetchAvailableModels_ACU', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('同端点同密钥短窗内复用缓存，不再发起 fetch', async () => {
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ models: [{ id: 'm1' }] }) });
+    const first = await fetchAvailableModels_ACU('https://api.test', 'cache-key');
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ models: [{ id: 'm2' }] }) });
+    const second = await fetchAvailableModels_ACU('https://api.test', 'cache-key');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(second.models).toEqual(first.models);
+  });
+
+  it('换密钥即穿透缓存重新探活', async () => {
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ models: [{ id: 'm' }] }) });
+    await fetchAvailableModels_ACU('https://api.test', 'key-a');
+    await fetchAvailableModels_ACU('https://api.test', 'key-b');
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('并发同键探活合并为一次 fetch', async () => {
+    let resolveJson!: (v: any) => void;
+    mockFetch.mockReturnValue(new Promise((resolve) => {
+      resolveJson = () => resolve({ ok: true, json: async () => ({ models: [{ id: 'm' }] }) });
+    }));
+    const p1 = fetchAvailableModels_ACU('https://api.test', 'race-key');
+    const p2 = fetchAvailableModels_ACU('https://api.test', 'race-key');
+    resolveJson(null);
+    const [r1, r2] = await Promise.all([p1, p2]);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(r1.models).toEqual(['m']);
+    expect(r2.models).toEqual(['m']);
   });
 });

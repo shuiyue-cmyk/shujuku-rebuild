@@ -77,6 +77,20 @@ describe('readIsolatedTagData_ACU', () => {
     expect(result!.modifiedKeys).toEqual(['sheet_0']);
   });
 
+
+  it('同消息同原串重复读取复用解析结果', () => {
+    const msg = { TavernDB_ACU_IsolatedData: JSON.stringify({ tag1: { independentData: {} } }) };
+    expect(readIsolatedTagData_ACU(msg, 'tag1')).toBe(readIsolatedTagData_ACU(msg, 'tag1'));
+  });
+
+  it('原串替换后重新解析', () => {
+    const msg: any = { TavernDB_ACU_IsolatedData: JSON.stringify({ tag1: { a: 1 } }) };
+    const first = readIsolatedTagData_ACU(msg, 'tag1');
+    msg.TavernDB_ACU_IsolatedData = JSON.stringify({ tag1: { a: 2 } });
+    const second = readIsolatedTagData_ACU(msg, 'tag1');
+    expect(second).not.toBe(first);
+    expect((second as any).a).toBe(2);
+  });
   it('IsolatedData 为对象时直接读取', () => {
     const tagData = { independentData: { sheet_0: { name: '表' } } };
     const msg = { TavernDB_ACU_IsolatedData: { tag1: tagData } };

@@ -73,11 +73,14 @@ import {
   isRetryableAiRequestError_ACU,
   JSON_OBJECT_RESPONSE_FORMAT_ACU,
   ENHANCED_THINKING_SYSTEM_PROMPT_ACU,
+  composeCustomIncludeBody_ACU,
+  __clearComposeIncludeBodyCacheForTests_ACU,
 } from '../../../src/service/ai/api-call';
 
 import {
   normalizePreset_ACU,
   resolveApiConfigByPreset_ACU,
+  __clearPresetResolveCacheForTests_ACU,
 } from '../../../src/service/settings/api-preset-service';
 import { resolveContinuationApiPreset_ACU } from '../../../src/service/continuation/api-preset';
 import { callContinuationInternalAi_ACU } from '../../../src/service/continuation/internal-ai-call';
@@ -95,6 +98,8 @@ beforeEach(() => {
   mockSettings.plotApiPreset = '';
   mockSettings.streamingEnabled = false;
   mockSettings.apiPresets = [];
+  __clearPresetResolveCacheForTests_ACU();
+  __clearComposeIncludeBodyCacheForTests_ACU();
 });
 
 // ═══ getApiConfigByPreset_ACU ═══
@@ -122,6 +127,49 @@ describe('getApiConfigByPreset_ACU', () => {
 });
 
 // ═══ callApi_ACU ═══
+// ═══ resolveApiConfigByPreset_ACU memo ═══
+describe('resolveApiConfigByPreset_ACU memo', () => {
+  it('同名连续解析复用缓存：改包装不影响下次结果', () => {
+    mockSettings.apiPresets = [
+      { name: '备忘', apiMode: 'custom', apiConfig: { url: 'https://m.com', model: 'mm' } },
+    ];
+    const a = resolveApiConfigByPreset_ACU('备忘');
+    (a as any).injected = true;
+    const b = resolveApiConfigByPreset_ACU('备忘');
+    expect((b as any).injected).toBeUndefined();
+    expect(b.apiConfig.url).toBe('https://m.com');
+  });
+
+  it('预设内容变化即失效', () => {
+    mockSettings.apiPresets = [
+      { name: '备忘', apiMode: 'custom', apiConfig: { url: 'https://m1.com', model: 'mm' } },
+    ];
+    expect(resolveApiConfigByPreset_ACU('备忘').apiConfig.url).toBe('https://m1.com');
+    mockSettings.apiPresets = [
+      { name: '备忘', apiMode: 'custom', apiConfig: { url: 'https://m2.com', model: 'mm' } },
+    ];
+    expect(resolveApiConfigByPreset_ACU('备忘').apiConfig.url).toBe('https://m2.com');
+  });
+});
+
+// ═══ composeCustomIncludeBody_ACU memo ═══
+describe('composeCustomIncludeBody_ACU memo', () => {
+  it('同输入复用组装结果，diagnostic 每次新对象', () => {
+    const a = composeCustomIncludeBody_ACU('{"x": 1}', { prompt_cache_key: 'k' });
+    const b = composeCustomIncludeBody_ACU('{"x": 1}', { prompt_cache_key: 'k' });
+    expect(b).toEqual(a);
+    expect(b.diagnostic).not.toBe(a.diagnostic);
+    expect(JSON.parse(b.value)).toMatchObject({ x: 1, prompt_cache_key: 'k' });
+  });
+
+  it('输入变化重新组装', () => {
+    const a = composeCustomIncludeBody_ACU('{"x": 1}', { prompt_cache_key: 'k1' });
+    const b = composeCustomIncludeBody_ACU('{"x": 1}', { prompt_cache_key: 'k2' });
+    expect(JSON.parse(a.value).prompt_cache_key).toBe('k1');
+    expect(JSON.parse(b.value).prompt_cache_key).toBe('k2');
+  });
+});
+
 // ═══ callAIWithPreset_ACU ═══
 describe('callAIWithPreset_ACU', () => {
   it('空消息数组返回 null', async () => {

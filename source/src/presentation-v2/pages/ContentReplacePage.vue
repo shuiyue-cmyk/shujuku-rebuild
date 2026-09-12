@@ -318,7 +318,7 @@ import ContentReplacePresetDrawer from "../components/ContentReplacePresetDrawer
 import ContentReplacePromptDrawer from "../components/ContentReplacePromptDrawer.vue";
 import { useApiPresetSelectOptions } from "../composables/useApiPresetSelectOptions";
 import { useApiPresetStaleness } from "../composables/useApiPresetStaleness";
-import { useChatChangedTick } from "../composables/useChatChangedListener";
+import { watchChatChanged_ACU } from "../composables/useChatChangedListener";
 import { useUiCloseGuard } from "../composables/useUiCloseGuard";
 import { contentReplaceCopy } from "../copy/content-replace-copy";
 import {
@@ -491,7 +491,7 @@ function refreshAll(): void {
 }
 
 onMounted(refreshAll);
-watch(useChatChangedTick(), refreshAll);
+watchChatChanged_ACU(refreshAll);
 useUiCloseGuard(confirmPromptClose);
 </script>
 

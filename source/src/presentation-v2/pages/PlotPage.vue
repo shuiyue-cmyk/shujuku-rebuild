@@ -44,7 +44,7 @@ import WorldbookEntryPickerBody from '../components/WorldbookEntryPickerBody.vue
 import { useWorldbookSelector } from '../composables/useWorldbookSelector';
 import { usePlotWorldbookConfig } from '../composables/usePlotWorldbookConfig';
 import { usePlotWorldbookEntries } from '../composables/usePlotWorldbookEntries';
-import { useChatChangedTick } from '../composables/useChatChangedListener';
+import { watchChatChanged_ACU } from '../composables/useChatChangedListener';
 import { plotCopy } from '../copy/plot-copy';
 
 type WorldbookSource = 'character' | 'manual';
@@ -105,7 +105,7 @@ async function refreshAll(): Promise<void> {
 
 onMounted(() => { void refreshAll(); });
 
-watch(useChatChangedTick(), () => { void refreshAll(); });
+watchChatChanged_ACU(() => { void refreshAll(); });
 </script>
 
 <style scoped>

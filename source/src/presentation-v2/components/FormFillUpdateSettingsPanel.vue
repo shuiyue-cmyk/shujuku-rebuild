@@ -74,7 +74,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from "vue";
-import { useChatChangedTick } from "../composables/useChatChangedListener";
+import { watchChatChanged_ACU } from "../composables/useChatChangedListener";
 import { useApiPresetSelectOptions } from "../composables/useApiPresetSelectOptions";
 import { useApiPresetStaleness } from "../composables/useApiPresetStaleness";
 import {
@@ -197,7 +197,7 @@ function refreshAll(): void {
 }
 
 onMounted(refreshAll);
-watch(useChatChangedTick(), refreshAll);
+watchChatChanged_ACU(refreshAll);
 </script>
 
 <style scoped>

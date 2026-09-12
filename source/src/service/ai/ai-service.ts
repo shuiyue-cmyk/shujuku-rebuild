@@ -13,7 +13,7 @@ export {
 
 import { getHostRequestHeaders_ACU as _getHeaders } from '../../data/gateways/ai-gateway';
 import { withOpencodeSessionHeader_ACU } from './api-call';
-import { logDebug_ACU } from '../../shared/utils';
+import { hashUserInput_ACU, logDebug_ACU } from '../../shared/utils';
 
 // ============================================================
 // 模型列表获取
@@ -50,7 +50,61 @@ export function normalizeStatusCustomApiFormat_ACU(value: unknown): string {
  *                        TT 后端据此把模型列表来源切到对应协议（claude_messages→Claude、
  *                        gemini_interactions→Makersuite），不传则恒按 openai_compat 探活。
  */
+/** 模型列表探活缓存：成功 5 分钟，失败 30 秒负缓存；防面板连点雪崩。键含密钥指纹，换 key 即穿透。 */
+const MODEL_LIST_TTL_MS_ACU = 5 * 60 * 1000;
+const MODEL_LIST_FAIL_TTL_MS_ACU = 30 * 1000;
+const MODEL_LIST_CACHE_CAP_ACU = 50;
+interface ModelListCacheEntry_ACU { at: number; result: FetchModelsResult; }
+const modelListCache_ACU = new Map<string, ModelListCacheEntry_ACU>();
+const modelListInflight_ACU = new Map<string, Promise<FetchModelsResult>>();
+
+function modelListCacheKey_ACU(apiUrl: string, apiKey: string, customApiFormat?: string): string {
+    const url = String(apiUrl || '').trim().replace(/\/+$/, '').toLowerCase();
+    return `${url}\n${normalizeStatusCustomApiFormat_ACU(customApiFormat)}\n${hashUserInput_ACU(String(apiKey || ''))}`;
+}
+
+function cloneModelsResult_ACU(result: FetchModelsResult): FetchModelsResult {
+    return { ...result, models: result.models ? [...result.models] : undefined };
+}
+
 export async function fetchAvailableModels_ACU(apiUrl: string, apiKey: string, customApiFormat?: string): Promise<FetchModelsResult> {
+    if (!apiUrl) {
+        return { success: false, error: '请输入API基础URL。' };
+    }
+    const key = modelListCacheKey_ACU(apiUrl, apiKey, customApiFormat);
+    const now = Date.now();
+    const hit = modelListCache_ACU.get(key);
+    if (hit && now - hit.at < (hit.result.success ? MODEL_LIST_TTL_MS_ACU : MODEL_LIST_FAIL_TTL_MS_ACU)) {
+        return cloneModelsResult_ACU(hit.result);
+    }
+    const inflight = modelListInflight_ACU.get(key);
+    if (inflight) return inflight.then(cloneModelsResult_ACU);
+    const pending = fetchAvailableModelsUncached_ACU(apiUrl, apiKey, customApiFormat).then(
+        (result) => {
+            modelListCache_ACU.set(key, { at: Date.now(), result });
+            if (modelListCache_ACU.size > MODEL_LIST_CACHE_CAP_ACU) {
+                const oldest = modelListCache_ACU.keys().next();
+                if (!oldest.done) modelListCache_ACU.delete(oldest.value);
+            }
+            modelListInflight_ACU.delete(key);
+            return cloneModelsResult_ACU(result);
+        },
+        (error) => {
+            modelListInflight_ACU.delete(key);
+            throw error;
+        },
+    );
+    modelListInflight_ACU.set(key, pending);
+    return pending;
+}
+
+/** 清掉模型列表探活缓存（仅测试与端点配置大改后用；正常调用靠 TTL/密钥指纹）。 */
+export function __clearModelListCacheForTests_ACU(): void {
+    modelListCache_ACU.clear();
+    modelListInflight_ACU.clear();
+}
+
+async function fetchAvailableModelsUncached_ACU(apiUrl: string, apiKey: string, customApiFormat?: string): Promise<FetchModelsResult> {
     if (!apiUrl) {
         return { success: false, error: '请输入API基础URL。' };
     }

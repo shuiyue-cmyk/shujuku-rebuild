@@ -212,7 +212,7 @@ import AcuTextarea from "../components/_lib/AcuTextarea.vue";
 import FormFillUpdateSettingsPanel from "../components/FormFillUpdateSettingsPanel.vue";
 import TableTemplatePresetPanel from "../components/TableTemplatePresetPanel.vue";
 import TableSelector from "../components/TableSelector.vue";
-import { useChatChangedTick } from "../composables/useChatChangedListener";
+import { watchChatChanged_ACU } from "../composables/useChatChangedListener";
 import { useTemplateRuntimeChangeTick } from "../composables/useTemplateRuntimeChangeListener";
 import { useDashboardPage } from "../composables/useDashboardPage";
 import { useManualUpdate } from "../composables/useManualUpdate";
@@ -236,7 +236,7 @@ async function refreshAll(): Promise<void> {
 onMounted(() => {
   void refreshAll();
 });
-watch(useChatChangedTick(), () => {
+watchChatChanged_ACU(() => {
   void refreshAll();
 });
 watch(useTemplateRuntimeChangeTick(), () => {

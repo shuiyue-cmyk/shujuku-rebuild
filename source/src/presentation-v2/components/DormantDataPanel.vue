@@ -110,12 +110,11 @@ import { onMounted, watch } from 'vue';
 import AcuButton from './_lib/AcuButton.vue';
 import AcuMessage from './_lib/AcuMessage.vue';
 import AcuPanel from './_lib/AcuPanel.vue';
-import { useChatChangedTick } from '../composables/useChatChangedListener';
+import { watchChatChanged_ACU } from '../composables/useChatChangedListener';
 import { useDormantData } from '../composables/useDormantData';
 import type { DormantTableEntry_ACU } from '../../service/template/dormant-data-service';
 
 const dormant = useDormantData();
-const chatChangedTick = useChatChangedTick();
 
 function formatHiddenAt(entry: DormantTableEntry_ACU): string {
   if (typeof entry.hiddenAtTime === 'number' && Number.isFinite(entry.hiddenAtTime)) {
@@ -134,7 +133,7 @@ function formatSourcePreset(entry: DormantTableEntry_ACU): string {
 }
 
 onMounted(() => dormant.refresh());
-watch(chatChangedTick, () => dormant.refresh());
+watchChatChanged_ACU(() => dormant.refresh());
 </script>
 
 <style scoped>

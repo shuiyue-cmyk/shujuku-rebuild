@@ -4,7 +4,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createApp, defineComponent, h } from 'vue';
 
-import { useChatChangedListener, useChatMutationTick } from '../../../src/presentation-v2/composables/useChatChangedListener';
+import { useChatChangedListener, useChatMutationTick, watchChatChanged_ACU } from '../../../src/presentation-v2/composables/useChatChangedListener';
 import { _set_SillyTavern_API_ACU } from '../../../src/shared/host-api';
 
 function createEventSource() {
@@ -62,6 +62,25 @@ describe('useChatChangedListener · 楼层变动计数', () => {
     const app = mountListener();
     expect(eventSource.on).toHaveBeenCalledTimes(1);
     expect(eventSource.on).toHaveBeenCalledWith('chat_changed', expect.any(Function));
+    app.unmount();
+  });
+
+  it('同聊天重复 CHAT_CHANGED 只触发一次守卫回调', async () => {
+    const eventSource = createEventSource();
+    _set_SillyTavern_API_ACU({ eventSource, eventTypes: { CHAT_CHANGED: 'chat_changed' } } as any);
+    const app = mountListener();
+    const cb = vi.fn();
+    const host = defineComponent({ setup() { watchChatChanged_ACU(cb); return () => h('div'); } });
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const app2 = createApp(host);
+    app2.mount(el);
+    eventSource.emit('chat_changed', 'chat-a');
+    await vi.advanceTimersByTimeAsync(1500);
+    eventSource.emit('chat_changed', 'chat-a');
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(cb).toHaveBeenCalledTimes(1);
+    app2.unmount();
     app.unmount();
   });
 });

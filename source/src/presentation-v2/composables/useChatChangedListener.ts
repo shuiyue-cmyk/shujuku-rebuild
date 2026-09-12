@@ -14,7 +14,8 @@
  *   需要等它完成后再读取最新状态）
  * - 同时递增全局 chatChangedTick，供非 Pinia 的页面级 composable watch
  */
-import { onBeforeUnmount, ref, type Ref } from 'vue';
+import { onBeforeUnmount, ref, watch, type Ref } from 'vue';
+import { currentChatFileIdentifier_ACU } from '../../service/runtime/state-manager';
 import { SillyTavern_API_ACU } from '../../shared/host-api';
 import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
 import { useApiPresetStore } from '../stores/api-preset-store';
@@ -35,6 +36,20 @@ const CHAT_MUTATION_DEBOUNCE_MS = 300;
 /** 页面级 composable 可 watch 此 ref 来响应聊天切换。 */
 export function useChatChangedTick(): Ref<number> {
   return chatChangedTick;
+}
+
+/**
+ * 聊天切换 tick 的按页守卫版 watch：同聊天重复触发直接跳过，各页 refreshAll 不再空刷。
+ * 首次恒放行（lastKey 初始空串）；chatKey 为空（未加载聊天）时只放行一次，后续同空跳过。
+ */
+export function watchChatChanged_ACU(cb: () => void): void {
+  const lastKey = ref<string | null>(null);
+  watch(useChatChangedTick(), () => {
+    const key = String(currentChatFileIdentifier_ACU || '').trim();
+    if (lastKey.value !== null && key === lastKey.value) return;
+    lastKey.value = key;
+    cb();
+  });
 }
 
 /** 页面级 composable 可 watch 此 ref 来响应当前聊天内的楼层删除 / swipe。 */

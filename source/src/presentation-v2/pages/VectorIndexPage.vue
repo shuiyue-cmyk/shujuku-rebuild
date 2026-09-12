@@ -486,7 +486,7 @@ import AcuStatsList from "../components/_lib/AcuStatsList.vue";
 import AcuToggle from "../components/_lib/AcuToggle.vue";
 import VectorIndexPromptDrawer from "../components/VectorIndexPromptDrawer.vue";
 import { useApiPresetSelectOptions } from "../composables/useApiPresetSelectOptions";
-import { useChatChangedTick } from "../composables/useChatChangedListener";
+import { watchChatChanged_ACU } from "../composables/useChatChangedListener";
 import { useDevOptions } from "../composables/useDevOptions";
 import { useUiCloseGuard } from "../composables/useUiCloseGuard";
 import { RERANK_BATCH_SIZE_LIMITS, useVectorApiConfig } from "../composables/useVectorApiConfig";
@@ -608,7 +608,7 @@ async function onDeleteCurrentIndex(): Promise<void> {
 onMounted(() => {
   refreshAll();
 });
-watch(useChatChangedTick(), () => {
+watchChatChanged_ACU(() => {
   refreshAll();
 });
 useUiCloseGuard(confirmPromptClose);

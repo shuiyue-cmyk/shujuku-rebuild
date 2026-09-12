@@ -49,7 +49,7 @@ vi.mock('../../../src/presentation-v2/composables/useWorldbookSelector', async (
 });
 vi.mock('../../../src/presentation-v2/composables/useChatChangedListener', async () => {
   const { ref } = await import('vue');
-  return { useChatChangedTick: () => ref(0) };
+  return { useChatChangedTick: () => ref(0), watchChatChanged_ACU: () => {} };
 });
 vi.mock('../../../src/presentation-v2/components/WorldbookAgentControlBar.vue', () => ({
   default: defineComponent({

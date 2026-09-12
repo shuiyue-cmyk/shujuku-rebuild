@@ -604,6 +604,22 @@ describe("DashboardPage", () => {
     mount.__resetAcuV2MountForTests();
   });
 
+  it("日志卡独立 tick：推日志只更新 logHealthItem，不重算其余健康卡", async () => {
+    const { mount, dashboard } = await mountDashboardPage();
+    expect(dashboard.healthItems.value.length).toBe(4);
+    expect(dashboard.logHealthItem.value.kind).toBe('ok');
+    const { pushLog } = await import("../../../src/shared/log-buffer");
+    pushLog("error", ["[ACU]", "API请求失败: 500"]);
+    await Promise.resolve();
+    // 挂载页面的日志卡已更新（订阅生效），其余四卡不受影响
+    const text = document.querySelector(".acu-v2-dashboard-page")?.textContent || "";
+    expect(text).toContain("最近日志指向 API 配置或连接问题");
+    expect(document.querySelectorAll(".acu-v2-dashboard-page__health-item").length).toBe(5);
+    expect(dashboard.healthItems.value.length).toBe(4);
+
+    mount.__resetAcuV2MountForTests();
+  });
+
   it("运行日志 Warn 计数默认隐藏，仅开发者模式显示", async () => {
     const normal = await mountDashboardPage();
     let logBuffer = await import("../../../src/shared/log-buffer");
@@ -891,11 +907,11 @@ describe("DashboardPage", () => {
     pushLog("error", ["[ACU]", "API请求失败: 500 bad gateway"]);
     await Promise.resolve();
 
-    const items = dashboard.healthItems.value;
-    expect(items.length).toBe(1);
-    expect(items[0].key).toBe("dashboard-fallback");
+    // 装配错落在独立的 logHealthItem：其余四卡正常，日志卡降级
+    expect(dashboard.healthItems.value.length).toBe(4);
+    expect(dashboard.logHealthItem.value.key).toBe("dashboard-log-fallback");
     const text = document.querySelector(".acu-v2-dashboard-page")?.textContent || "";
-    expect(text).toContain("运行概览暂不可用");
+    expect(text).toContain("运行日志卡暂不可用");
 
     mount.__resetAcuV2MountForTests();
   });

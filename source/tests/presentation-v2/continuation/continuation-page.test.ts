@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
-import { createApp, nextTick, ref } from 'vue';
+import { createApp, nextTick, ref, watch } from 'vue';
 import { useDialogStore } from '../../../src/presentation-v2/stores/dialog-store';
 
 const mountedApps = new Set<{ unmount: () => void }>();
@@ -58,6 +58,7 @@ vi.mock('../../../src/presentation-v2/composables/useContinuationMaterials', () 
 }));
 vi.mock('../../../src/presentation-v2/composables/useChatChangedListener', () => ({
   useChatChangedTick: () => chatTick,
+  watchChatChanged_ACU: (cb) => { watch(chatTick, () => (cb as () => void)()); },
   useChatMutationTick: () => chatMutationTick,
 }));
 

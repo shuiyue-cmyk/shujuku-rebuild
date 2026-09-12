@@ -449,7 +449,7 @@ import AcuMessage from "../components/_lib/AcuMessage.vue";
 import AcuPanel from "../components/_lib/AcuPanel.vue";
 import AcuPanelGrid from "../components/_lib/AcuPanelGrid.vue";
 import DormantDataPanel from "../components/DormantDataPanel.vue";
-import { useChatChangedTick } from "../composables/useChatChangedListener";
+import { watchChatChanged_ACU } from "../composables/useChatChangedListener";
 import { useSqliteRuntimeDiagnostic } from "../composables/useSqliteRuntimeDiagnostic";
 import {
   useDataManagement,
@@ -750,7 +750,7 @@ function refreshAll(): void {
 }
 
 onMounted(refreshAll);
-watch(useChatChangedTick(), refreshAll);
+watchChatChanged_ACU(refreshAll);
 </script>
 
 <style scoped>

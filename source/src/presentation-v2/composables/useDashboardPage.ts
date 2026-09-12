@@ -127,6 +127,7 @@ export interface DashboardPageState {
   basicToggles: ComputedRef<DashboardToggleItem[]>;
   advancedToggles: ComputedRef<DashboardToggleItem[]>;
   healthItems: ComputedRef<DashboardHealthItem[]>;
+  logHealthItem: ComputedRef<DashboardHealthItem>;
   contentReplaceGateEnabled: ComputedRef<boolean>;
   refresh: () => Promise<void>;
   setFlightMode: (enabled: boolean, options?: { confirmTemplateScopeChange?: boolean }) => Promise<FlightModeTransitionResult_ACU>;
@@ -961,9 +962,7 @@ export function useDashboardPage(): DashboardPageState {
     ],
     (): DashboardHealthItem[] => {
       void dataRefreshTick.value;
-      void logRefreshTick.value;
       const hasActiveChat = hasActiveChatContext(chatFileIdentifier.value);
-      const showDeveloperDiagnostics = developerOptionsEnabled.value === true;
       return [
         buildApiHealthItem(coreApisReady.value),
         buildTableHealthItem(
@@ -976,9 +975,22 @@ export function useDashboardPage(): DashboardPageState {
           hasActiveChat,
         ),
         buildVectorHealthItem(),
-        buildLogHealthItem(showDeveloperDiagnostics),
       ];
   }));
+
+  const logHealthItem = computed<DashboardHealthItem>(() => withRenderFallback("运行日志卡",
+    makeHealthItem({
+      key: "dashboard-log-fallback",
+      title: "运行日志",
+      badge: "暂不可用",
+      kind: "error",
+      summary: "运行日志卡暂不可用，已记录诊断，请去高级工具查看运行日志。",
+      action: { label: "查看运行日志", pageId: "advanced-tools" },
+    }),
+    (): DashboardHealthItem => {
+      void logRefreshTick.value;
+      return buildLogHealthItem(developerOptionsEnabled.value === true);
+    }));
 
   const contentReplaceGateEnabled = computed(() => {
     void dataRefreshTick.value;
@@ -1085,6 +1097,7 @@ export function useDashboardPage(): DashboardPageState {
     basicToggles,
     advancedToggles,
     healthItems,
+    logHealthItem,
     contentReplaceGateEnabled,
     refresh,
     setFlightMode,

@@ -127,7 +127,42 @@ function copyRecordWithoutPrototype_ACU(value: Record<string, unknown>): Record<
  * 组合 SillyTavern 的 custom_include_body。JSON 是合法 YAML；输出 JSON 可避免把对象字段
  * 再拼成不合法的混合 YAML，同时与宿主 yaml.parse 后的浅合并语义保持一致。
  */
+/** custom_include_body 组装 memo：YAML 解析是组装主开销，同输入复用。键即内容，无 stale；上限 32 FIFO。 */
+const COMPOSE_INCLUDE_BODY_CACHE_CAP_ACU = 32;
+const composeIncludeBodyCache_ACU = new Map<string, { value: string; diagnostic: CustomIncludeBodyDiagnostic_ACU }>();
+
+function fingerprintIncludeBodyInputs_ACU(userBodyParams: string, pluginFields: Record<string, unknown>): string | null {
+  try {
+    return `${String(userBodyParams || '')}\n${JSON.stringify(pluginFields ?? {})}`;
+  } catch {
+    return null;
+  }
+}
+
 export function composeCustomIncludeBody_ACU(
+  userBodyParams: string,
+  pluginFields: Record<string, unknown>,
+): { value: string; diagnostic: CustomIncludeBodyDiagnostic_ACU } {
+  const key = fingerprintIncludeBodyInputs_ACU(userBodyParams, pluginFields);
+  const hit = key === null ? undefined : composeIncludeBodyCache_ACU.get(key);
+  if (hit) return { value: hit.value, diagnostic: { ...hit.diagnostic } };
+  const result = composeCustomIncludeBodyUncached_ACU(userBodyParams, pluginFields);
+  if (key !== null) {
+    composeIncludeBodyCache_ACU.set(key, result);
+    if (composeIncludeBodyCache_ACU.size > COMPOSE_INCLUDE_BODY_CACHE_CAP_ACU) {
+      const oldest = composeIncludeBodyCache_ACU.keys().next();
+      if (!oldest.done) composeIncludeBodyCache_ACU.delete(oldest.value);
+    }
+  }
+  return { value: result.value, diagnostic: { ...result.diagnostic } };
+}
+
+/** 仅供测试：清空 include_body 组装 memo。 */
+export function __clearComposeIncludeBodyCacheForTests_ACU(): void {
+  composeIncludeBodyCache_ACU.clear();
+}
+
+function composeCustomIncludeBodyUncached_ACU(
   userBodyParams: string,
   pluginFields: Record<string, unknown>,
 ): { value: string; diagnostic: CustomIncludeBodyDiagnostic_ACU } {

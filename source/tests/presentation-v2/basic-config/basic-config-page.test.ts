@@ -53,6 +53,7 @@ async function mountBasicConfigPage(settings = createSettings()) {
   vi.doMock('../../../src/presentation-v2/composables/useChatChangedListener', () => ({
     useChatChangedListener: () => {},
     useChatChangedTick: () => ref(0),
+    watchChatChanged_ACU: () => {},
   }));
   vi.doMock('../../../src/service/runtime/state-manager', () => ({
     settings_ACU: settings,
