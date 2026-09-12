@@ -263,7 +263,7 @@ describe('ApiPage', () => {
 
     const labels = Array.from(effortRow.querySelectorAll(".acu-select__item"))
       .map(item => (item.textContent || "").trim());
-    expect(labels).toEqual(["Minimal", "Low", "Medium", "High", "XHigh", "Max", "Ultra", "False（关闭思考）", "Auto（自动）"]);
+    expect(labels).toEqual(["Minimal", "Low", "Medium", "High", "XHigh", "Max", "Ultra", "Auto（自动）"]);
 
     mount.__resetAcuV2MountForTests();
   });

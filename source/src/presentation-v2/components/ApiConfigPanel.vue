@@ -272,7 +272,6 @@ const reasoningEffortOptions: AcuSelectOption[] = [
   { value: "xhigh", label: "XHigh" },
   { value: "max", label: "Max" },
   { value: "ultra", label: "Ultra" },
-  { value: "false", label: "False（关闭思考）" },
   { value: "auto", label: "Auto（自动）" },
 ];
 

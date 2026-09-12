@@ -8,6 +8,8 @@
  *   是否显示。开关 UI 在开发者一级页内；与总开关相互独立。
  * - vectorIndexAdvanced：交火模式页中的"召回参数"与"归档与分块"面板是否显示。
  * - warnLogEnabled：WARN 日志是否输出并写入运行日志，默认关闭。
+ * - apiReconfirm：API 预设变更后，其他使用 API 预设的位置是否标黄提醒二次确认。
+ *   默认打开（保持现有行为）；关闭后全库不再标黄。缺省（老版本存量）视为打开。
  *
  * 新 UI 自有持久化，物理隔离于 settings_ACU。
  */
@@ -26,6 +28,8 @@ export interface DevOptionsState {
   vectorIndexAdvanced: boolean;
   /** WARN 日志是否输出并写入运行日志。默认关闭。 */
   warnLogEnabled: boolean;
+  /** API 二次确认：预设变更后他处是否标黄。默认打开；缺省视为打开。 */
+  apiReconfirm: boolean;
 }
 
 interface PersistedShape {
@@ -33,6 +37,7 @@ interface PersistedShape {
   plotAdvanced?: unknown;
   vectorIndexAdvanced?: unknown;
   warnLogEnabled?: unknown;
+  apiReconfirm?: unknown;
 }
 
 function loadFromStorage(): DevOptionsState {
@@ -42,6 +47,7 @@ function loadFromStorage(): DevOptionsState {
     plotAdvanced: raw.plotAdvanced === true,
     vectorIndexAdvanced: raw.vectorIndexAdvanced === true,
     warnLogEnabled: raw.warnLogEnabled === true,
+    apiReconfirm: raw.apiReconfirm !== false,
   };
 }
 
@@ -51,6 +57,7 @@ function persist(state: DevOptionsState): void {
     plotAdvanced: state.plotAdvanced,
     vectorIndexAdvanced: state.vectorIndexAdvanced,
     warnLogEnabled: state.warnLogEnabled,
+    apiReconfirm: state.apiReconfirm,
   });
 }
 
@@ -78,12 +85,17 @@ export const useDevOptionsStore = defineStore('acu-v2-dev-options', {
       applyWarnLogEnabled(this.warnLogEnabled);
       persist(this.$state);
     },
+    setApiReconfirm(enabled: boolean): void {
+      this.apiReconfirm = !!enabled;
+      persist(this.$state);
+    },
     refresh(): void {
       const next = loadFromStorage();
       this.developerOptionsEnabled = next.developerOptionsEnabled;
       this.plotAdvanced = next.plotAdvanced;
       this.vectorIndexAdvanced = next.vectorIndexAdvanced;
       this.warnLogEnabled = next.warnLogEnabled;
+      this.apiReconfirm = next.apiReconfirm;
       applyWarnLogEnabled(this.warnLogEnabled);
     },
   },

@@ -90119,7 +90119,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.5.5" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.5.6" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -160210,7 +160210,6 @@ var _sfc_main$U = /*@__PURE__*/ defineComponent({
             { value: "xhigh", label: "XHigh" },
             { value: "max", label: "Max" },
             { value: "ultra", label: "Ultra" },
-            { value: "false", label: "False（关闭思考）" },
             { value: "auto", label: "Auto（自动）" },
         ];
         // ─── 接口协议选项（对齐 TT 主 API 四个「自定义」选项，custom_api_format 契约） ───
@@ -160408,8 +160407,8 @@ var _sfc_main$U = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-api-config-panel__hint[data-v-bc049595] {\r\n  color: var(--acu-text-3, #9e978e);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-api-config-panel__hint-danger[data-v-bc049595] {\r\n  color: var(--acu-danger, #e5484d);\n}\n.acu-api-config-panel__select-row[data-v-bc049595] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-bc049595] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-bc049595] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-bc049595] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-bc049595] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-bc049595] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-bc049595] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-bc049595] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-bc049595] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-bc049595");
-var ApiConfigPanel_vue_vue_type_style_index_0_scoped_bc049595_lang = null;
+injectSfcStyle("\n.acu-api-config-panel__hint[data-v-16c97c60] {\r\n  color: var(--acu-text-3, #9e978e);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: var(--acu-line-height-caption, 1.5);\n}\n.acu-api-config-panel__hint-danger[data-v-16c97c60] {\r\n  color: var(--acu-danger, #e5484d);\n}\n.acu-api-config-panel__select-row[data-v-16c97c60] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: minmax(0, 1fr) max-content max-content;\r\n  gap: 6px;\r\n  align-items: stretch;\n}\n.acu-api-config-panel__behavior[data-v-16c97c60] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  margin-top: 14px;\r\n  padding-top: 12px;\r\n  border-top: 1px solid rgba(128, 128, 128, 0.25);\n}\n.acu-api-config-panel__editor[data-v-16c97c60] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-api-config-panel__editor-section[data-v-16c97c60] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-api-config-panel__inline-action[data-v-16c97c60] {\r\n  display: flex;\r\n  align-items: center;\r\n  flex-wrap: wrap;\r\n  gap: 10px;\n}\n.acu-api-config-panel__two-col[data-v-16c97c60] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 10px;\n}\n.acu-api-config-panel__muted[data-v-16c97c60] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__danger[data-v-16c97c60] {\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-api-config-panel__actions[data-v-16c97c60] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\n}\r\n", "src/presentation-v2/components/ApiConfigPanel.vue#style-0-16c97c60");
+var ApiConfigPanel_vue_vue_type_style_index_0_scoped_16c97c60_lang = null;
 
 const _hoisted_1$S = { class: "acu-api-config-panel__select-row" };
 const _hoisted_2$L = { class: "acu-api-config-panel__editor-section" };
@@ -160745,7 +160744,7 @@ function _sfc_render$U(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	}, 8, ["title", "description"]);
 }
-var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$U, [["render", _sfc_render$U], ["__scopeId", "data-v-bc049595"]]);
+var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$U, [["render", _sfc_render$U], ["__scopeId", "data-v-16c97c60"]]);
 
 // ═══════════════════════════════════════════════════════════
 // service/settings/feature-preset-reference-service.ts — 功能级 API 预设引用
@@ -161332,15 +161331,180 @@ function useApiPresetSelectOptions() {
     };
 }
 
+/**
+ * persistence — 新 UI 自己的 localStorage 持久化层（D14 / P0-4）
+ *
+ * - 不复用旧 settings_ACU + saveSettingsAndNotify_ACU；新 UI 状态走独立 key
+ * - 单一根 key：acu_v2_ui_state，值是 JSON。各 store 通过 sectionKey 读写自己的子节
+ * - localStorage 不可用（SSR / 隐私模式）时静默降级到内存
+ *
+ * 阶段 0 仅覆盖：theme（批次 C）+ router.activePageId（批次 D）。
+ */
+let memoryFallback = {};
+let warned = false;
+function getStorage() {
+    try {
+        if (typeof window === 'undefined')
+            return null;
+        return window.localStorage ?? null;
+    }
+    catch (err) {
+        if (!warned) {
+            logWarn_ACU('[ACU-V2] localStorage unavailable; falling back to memory.', err);
+            warned = true;
+        }
+        return null;
+    }
+}
+function readAll() {
+    const storage = getStorage();
+    if (!storage)
+        return { ...memoryFallback };
+    const raw = storage.getItem(ACU_V2_STORAGE_KEY);
+    if (!raw)
+        return {};
+    try {
+        const parsed = JSON.parse(raw);
+        return parsed && typeof parsed === 'object' ? parsed : {};
+    }
+    catch {
+        return {};
+    }
+}
+function writeAll(next) {
+    const storage = getStorage();
+    if (!storage) {
+        memoryFallback = { ...next };
+        return;
+    }
+    try {
+        storage.setItem(ACU_V2_STORAGE_KEY, JSON.stringify(next));
+    }
+    catch (err) {
+        if (!warned) {
+            logWarn_ACU('[ACU-V2] localStorage write failed; falling back to memory.', err);
+            warned = true;
+        }
+        memoryFallback = { ...next };
+    }
+}
+function readSection(sectionKey) {
+    const all = readAll();
+    return all[sectionKey];
+}
+function writeSection(sectionKey, value) {
+    const all = readAll();
+    all[sectionKey] = value;
+    writeAll(all);
+}
+function __resetPersistenceForTests() {
+    memoryFallback = {};
+    warned = false;
+    const storage = getStorage();
+    if (storage) {
+        try {
+            storage.removeItem(ACU_V2_STORAGE_KEY);
+        }
+        catch {
+            /* ignore */
+        }
+    }
+}
+
+/**
+ * dev-options-store — 仪表盘"启用开发者选项"总开关 + 各开发者 gated 字段的共享 store
+ *
+ * 字段：
+ * - developerOptionsEnabled：仪表盘"高级设置"中的总开关。**仅**控制 sidebar 是否显示
+ *   "开发者"一级页（plan §D24）。不联动任何 gated 字段的真假状态。
+ * - plotAdvanced：编辑剧情推进预设抽屉中的"匹配替换"字段（sulv1-4 / zhaohui）
+ *   是否显示。开关 UI 在开发者一级页内；与总开关相互独立。
+ * - vectorIndexAdvanced：交火模式页中的"召回参数"与"归档与分块"面板是否显示。
+ * - warnLogEnabled：WARN 日志是否输出并写入运行日志，默认关闭。
+ * - apiReconfirm：API 预设变更后，其他使用 API 预设的位置是否标黄提醒二次确认。
+ *   默认打开（保持现有行为）；关闭后全库不再标黄。缺省（老版本存量）视为打开。
+ *
+ * 新 UI 自有持久化，物理隔离于 settings_ACU。
+ */
+const SECTION_KEY$4 = 'devOptions';
+function loadFromStorage$1() {
+    const raw = readSection(SECTION_KEY$4) ?? {};
+    return {
+        developerOptionsEnabled: raw.developerOptionsEnabled === true,
+        plotAdvanced: raw.plotAdvanced === true,
+        vectorIndexAdvanced: raw.vectorIndexAdvanced === true,
+        warnLogEnabled: raw.warnLogEnabled === true,
+        apiReconfirm: raw.apiReconfirm !== false,
+    };
+}
+function persist$2(state) {
+    writeSection(SECTION_KEY$4, {
+        developerOptionsEnabled: state.developerOptionsEnabled,
+        plotAdvanced: state.plotAdvanced,
+        vectorIndexAdvanced: state.vectorIndexAdvanced,
+        warnLogEnabled: state.warnLogEnabled,
+        apiReconfirm: state.apiReconfirm,
+    });
+}
+const useDevOptionsStore = defineStore('acu-v2-dev-options', {
+    state: () => {
+        const state = loadFromStorage$1();
+        setWarnLogEnabled(state.warnLogEnabled);
+        return state;
+    },
+    actions: {
+        setDeveloperOptionsEnabled(enabled) {
+            this.developerOptionsEnabled = !!enabled;
+            persist$2(this.$state);
+        },
+        setPlotAdvanced(enabled) {
+            this.plotAdvanced = !!enabled;
+            persist$2(this.$state);
+        },
+        setVectorIndexAdvanced(enabled) {
+            this.vectorIndexAdvanced = !!enabled;
+            persist$2(this.$state);
+        },
+        setWarnLogEnabled(enabled) {
+            this.warnLogEnabled = !!enabled;
+            setWarnLogEnabled(this.warnLogEnabled);
+            persist$2(this.$state);
+        },
+        setApiReconfirm(enabled) {
+            this.apiReconfirm = !!enabled;
+            persist$2(this.$state);
+        },
+        refresh() {
+            const next = loadFromStorage$1();
+            this.developerOptionsEnabled = next.developerOptionsEnabled;
+            this.plotAdvanced = next.plotAdvanced;
+            this.vectorIndexAdvanced = next.vectorIndexAdvanced;
+            this.warnLogEnabled = next.warnLogEnabled;
+            this.apiReconfirm = next.apiReconfirm;
+            setWarnLogEnabled(this.warnLogEnabled);
+        },
+    },
+});
+
 // presentation-v2/composables/useApiPresetStaleness.ts — API 预设变更防呆（Vue 响应式封装）
 // 核心机制见 service/settings/api-preset-staleness.ts。
 // 用法：const { isStale, markConfirmed } = useApiPresetStaleness('<选择器key>')；
 // isStale 为 true 时给预设选择器标淡黄底，用户手动重选后在 @update 处调 markConfirmed()。
 // 回显规则：从未确认过 + 全局修订号>0（发生过变更）→ 直接标黄（不搞首次沉默）。
 function useApiPresetStaleness(key) {
-    const isStale = ref(isApiPresetStale_ACU(key));
+    // 无 pinia 上下文（如裸挂载单测）时回退为开启＝旧行为；生产环境 pinia 恒在，走 store 真值。
+    let apiReconfirm;
+    try {
+        apiReconfirm = storeToRefs(useDevOptionsStore()).apiReconfirm;
+    }
+    catch {
+        apiReconfirm = ref(true);
+    }
+    const rawStale = ref(isApiPresetStale_ACU(key));
+    // “API 二次确认”总闸：关闭后全库不再标黄（底层修订号/确认态不动，重开即恢复显示）。
+    const isStale = computed(() => apiReconfirm.value !== false && rawStale.value);
     let unsubscribe = null;
-    const recompute = () => { isStale.value = isApiPresetStale_ACU(key); };
+    const recompute = () => { rawStale.value = isApiPresetStale_ACU(key); };
     onMounted(() => {
         recompute();
         unsubscribe = onApiPresetRevisionChanged_ACU(recompute);
@@ -162167,159 +162331,13 @@ function _sfc_render$S(_ctx, _cache, $props, $setup, $data, $options) {
 var FormFillUpdateSettingsPanel = /* @__PURE__ */ _export_sfc(_sfc_main$S, [["render", _sfc_render$S], ["__scopeId", "data-v-a368f47a"]]);
 
 /**
- * persistence — 新 UI 自己的 localStorage 持久化层（D14 / P0-4）
- *
- * - 不复用旧 settings_ACU + saveSettingsAndNotify_ACU；新 UI 状态走独立 key
- * - 单一根 key：acu_v2_ui_state，值是 JSON。各 store 通过 sectionKey 读写自己的子节
- * - localStorage 不可用（SSR / 隐私模式）时静默降级到内存
- *
- * 阶段 0 仅覆盖：theme（批次 C）+ router.activePageId（批次 D）。
- */
-let memoryFallback = {};
-let warned = false;
-function getStorage() {
-    try {
-        if (typeof window === 'undefined')
-            return null;
-        return window.localStorage ?? null;
-    }
-    catch (err) {
-        if (!warned) {
-            logWarn_ACU('[ACU-V2] localStorage unavailable; falling back to memory.', err);
-            warned = true;
-        }
-        return null;
-    }
-}
-function readAll() {
-    const storage = getStorage();
-    if (!storage)
-        return { ...memoryFallback };
-    const raw = storage.getItem(ACU_V2_STORAGE_KEY);
-    if (!raw)
-        return {};
-    try {
-        const parsed = JSON.parse(raw);
-        return parsed && typeof parsed === 'object' ? parsed : {};
-    }
-    catch {
-        return {};
-    }
-}
-function writeAll(next) {
-    const storage = getStorage();
-    if (!storage) {
-        memoryFallback = { ...next };
-        return;
-    }
-    try {
-        storage.setItem(ACU_V2_STORAGE_KEY, JSON.stringify(next));
-    }
-    catch (err) {
-        if (!warned) {
-            logWarn_ACU('[ACU-V2] localStorage write failed; falling back to memory.', err);
-            warned = true;
-        }
-        memoryFallback = { ...next };
-    }
-}
-function readSection(sectionKey) {
-    const all = readAll();
-    return all[sectionKey];
-}
-function writeSection(sectionKey, value) {
-    const all = readAll();
-    all[sectionKey] = value;
-    writeAll(all);
-}
-function __resetPersistenceForTests() {
-    memoryFallback = {};
-    warned = false;
-    const storage = getStorage();
-    if (storage) {
-        try {
-            storage.removeItem(ACU_V2_STORAGE_KEY);
-        }
-        catch {
-            /* ignore */
-        }
-    }
-}
-
-/**
- * dev-options-store — 仪表盘"启用开发者选项"总开关 + 各开发者 gated 字段的共享 store
- *
- * 字段：
- * - developerOptionsEnabled：仪表盘"高级设置"中的总开关。**仅**控制 sidebar 是否显示
- *   "开发者"一级页（plan §D24）。不联动任何 gated 字段的真假状态。
- * - plotAdvanced：编辑剧情推进预设抽屉中的"匹配替换"字段（sulv1-4 / zhaohui）
- *   是否显示。开关 UI 在开发者一级页内；与总开关相互独立。
- * - vectorIndexAdvanced：交火模式页中的"召回参数"与"归档与分块"面板是否显示。
- * - warnLogEnabled：WARN 日志是否输出并写入运行日志，默认关闭。
- *
- * 新 UI 自有持久化，物理隔离于 settings_ACU。
- */
-const SECTION_KEY$4 = 'devOptions';
-function loadFromStorage$1() {
-    const raw = readSection(SECTION_KEY$4) ?? {};
-    return {
-        developerOptionsEnabled: raw.developerOptionsEnabled === true,
-        plotAdvanced: raw.plotAdvanced === true,
-        vectorIndexAdvanced: raw.vectorIndexAdvanced === true,
-        warnLogEnabled: raw.warnLogEnabled === true,
-    };
-}
-function persist$2(state) {
-    writeSection(SECTION_KEY$4, {
-        developerOptionsEnabled: state.developerOptionsEnabled,
-        plotAdvanced: state.plotAdvanced,
-        vectorIndexAdvanced: state.vectorIndexAdvanced,
-        warnLogEnabled: state.warnLogEnabled,
-    });
-}
-const useDevOptionsStore = defineStore('acu-v2-dev-options', {
-    state: () => {
-        const state = loadFromStorage$1();
-        setWarnLogEnabled(state.warnLogEnabled);
-        return state;
-    },
-    actions: {
-        setDeveloperOptionsEnabled(enabled) {
-            this.developerOptionsEnabled = !!enabled;
-            persist$2(this.$state);
-        },
-        setPlotAdvanced(enabled) {
-            this.plotAdvanced = !!enabled;
-            persist$2(this.$state);
-        },
-        setVectorIndexAdvanced(enabled) {
-            this.vectorIndexAdvanced = !!enabled;
-            persist$2(this.$state);
-        },
-        setWarnLogEnabled(enabled) {
-            this.warnLogEnabled = !!enabled;
-            setWarnLogEnabled(this.warnLogEnabled);
-            persist$2(this.$state);
-        },
-        refresh() {
-            const next = loadFromStorage$1();
-            this.developerOptionsEnabled = next.developerOptionsEnabled;
-            this.plotAdvanced = next.plotAdvanced;
-            this.vectorIndexAdvanced = next.vectorIndexAdvanced;
-            this.warnLogEnabled = next.warnLogEnabled;
-            setWarnLogEnabled(this.warnLogEnabled);
-        },
-    },
-});
-
-/**
  * useDevOptions — 仪表盘 / 剧情推进页 / 未来开发者一级页共享的开发者选项读写入口
  *
  * `.vue` 不直接 import store；此 composable 让多页共用同一逻辑。
  */
 function useDevOptions() {
     const store = useDevOptionsStore();
-    const { developerOptionsEnabled, plotAdvanced, vectorIndexAdvanced, warnLogEnabled, } = storeToRefs(store);
+    const { developerOptionsEnabled, plotAdvanced, vectorIndexAdvanced, warnLogEnabled, apiReconfirm, } = storeToRefs(store);
     return {
         developerOptionsEnabled,
         setDeveloperOptionsEnabled: (enabled) => store.setDeveloperOptionsEnabled(enabled),
@@ -162329,6 +162347,8 @@ function useDevOptions() {
         setVectorIndexAdvanced: (enabled) => store.setVectorIndexAdvanced(enabled),
         warnLogEnabled,
         setWarnLogEnabled: (enabled) => store.setWarnLogEnabled(enabled),
+        apiReconfirm,
+        setApiReconfirm: (enabled) => store.setApiReconfirm(enabled),
         refresh: () => store.refresh(),
     };
 }
@@ -186066,7 +186086,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.5.5";
+        const v = "9.5.6";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {
@@ -187193,6 +187213,12 @@ var _sfc_main$b = /*@__PURE__*/ defineComponent({
                     description: "显示召回参数与归档分块面板。需要调整向量相关参数时开启。",
                     value: devOptions.vectorIndexAdvanced.value,
                 },
+                {
+                    key: "apiReconfirm",
+                    label: "API二次确认",
+                    description: "打开时，API 预设在别处变化后其他使用该预设的位置会标黄提醒；关闭后不再标黄。",
+                    value: devOptions.apiReconfirm.value,
+                },
             ];
         });
         const maxConcurrentGroups = computed(() => settings.numberFields.value.find((field) => field.key === "maxConcurrentGroups")?.value ?? 1);
@@ -187203,6 +187229,9 @@ var _sfc_main$b = /*@__PURE__*/ defineComponent({
             if (key === "vectorIndexAdvanced") {
                 devOptions.setVectorIndexAdvanced(value);
             }
+            if (key === "apiReconfirm") {
+                devOptions.setApiReconfirm(value);
+            }
         }
         const __returned__ = { devOptions, settings, toggles, maxConcurrentGroups, handleToggleChange, AcuFormRow, AcuInput, AcuPanel, AcuPanelGrid, ToggleRow, get developerCopy() { return developerCopy; } };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
@@ -187210,8 +187239,8 @@ var _sfc_main$b = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-v2-developer-page[data-v-5ddb747b] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-developer-page__toggle-list[data-v-5ddb747b] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n@media (max-width: 860px) {\n.acu-v2-developer-page[data-v-5ddb747b] {\r\n    padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/DeveloperPage.vue#style-0-5ddb747b");
-var DeveloperPage_vue_vue_type_style_index_0_scoped_5ddb747b_lang = null;
+injectSfcStyle("\n.acu-v2-developer-page[data-v-3d62b725] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-developer-page__toggle-list[data-v-3d62b725] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n@media (max-width: 860px) {\n.acu-v2-developer-page[data-v-3d62b725] {\r\n    padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/DeveloperPage.vue#style-0-3d62b725");
+var DeveloperPage_vue_vue_type_style_index_0_scoped_3d62b725_lang = null;
 
 const _hoisted_1$b = { class: "acu-v2-developer-page" };
 const _hoisted_2$a = { class: "acu-v2-developer-page__toggle-list" };
@@ -187257,7 +187286,7 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	})]);
 }
-var DeveloperPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$b], ["__scopeId", "data-v-5ddb747b"]]);
+var DeveloperPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$b], ["__scopeId", "data-v-3d62b725"]]);
 
 /**
  * page-registry — 一级页静态注册表（plan §4.1 + §D24）
