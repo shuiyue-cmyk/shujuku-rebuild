@@ -1,5 +1,5 @@
 import { defaultVectorMemoryConfig_ACU } from '../../shared/defaults';
-import { cleanChatName_ACU, normalizePositiveInteger_ACU } from '../../shared/utils';
+import { assertSafeHttpEndpoint_ACU, cleanChatName_ACU, normalizePositiveInteger_ACU } from '../../shared/utils';
 import { normalizeRerankBatchSize_ACU, VECTOR_RERANK_DEFAULT_BATCH_SIZE_ACU } from '../../data/gateways/vector-rerank-gateway';
 import { globalMeta_ACU, saveGlobalMeta_ACU } from '../../data/repositories/profile-repo';
 import { currentChatFileIdentifier_ACU, settings_ACU } from '../runtime/state-manager';
@@ -491,6 +491,14 @@ export function validateSummaryVectorIndexConfig_ACU(configInput?: any): VectorM
     const errors: string[] = [];
     if (!config.embeddingEndpoint) {
         errors.push('缺少 embeddingEndpoint');
+    } else {
+        // 端点安全性并入配置校验：不安全端点收敛为 config_invalid（terminal 通道），
+        // 不再漏到网关运行期抛裸 Error 被镜像链路按 retryable 白烧重试额度。
+        try {
+            assertSafeHttpEndpoint_ACU(String(config.embeddingEndpoint));
+        } catch (endpointError: any) {
+            errors.push(`embeddingEndpoint 不安全：${String(endpointError?.message || endpointError)}`);
+        }
     }
     if (!config.embeddingModel) {
         errors.push('缺少 embeddingModel');

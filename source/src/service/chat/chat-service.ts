@@ -661,7 +661,14 @@ async function ensureV2BoundaryCheckpointForRetainedBufferCore_ACU(
                 await saveChatToHostStrict_ACU();
             }
         } catch (error: any) {
-            snapshots.forEach((snapshot, messageIndex) => restoreMessageFieldSnapshot_ACU(chat[messageIndex], snapshot));
+            for (const [messageIndex, snapshot] of snapshots) {
+                // 单项还原异常不得中断其余楼层回滚：冻结子对象等个别楼层还原失败时，其余楼层必须回到保存前状态。
+                try {
+                    restoreMessageFieldSnapshot_ACU(chat[messageIndex], snapshot);
+                } catch (restoreError: any) {
+                    logWarn_ACU(`[ACU-V2] 边界回滚楼层 #${messageIndex} 异常（继续回滚其余楼层）:`, restoreError?.message || restoreError);
+                }
+            }
             return {
                 success: false,
                 changed: false,

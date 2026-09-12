@@ -89,6 +89,7 @@ import ToggleRow from "../components/DashboardToggleRow.vue";
 import { watchChatChanged_ACU } from "../composables/useChatChangedListener";
 import { useTemplateRuntimeChangeTick } from "../composables/useTemplateRuntimeChangeListener";
 import { useDashboardPage } from "../composables/useDashboardPage";
+import { settings_ACU } from "../../service/runtime/state-manager";
 import { logError_ACU } from "../../shared/utils";
 import {
   FEATURE_GATE_CONTENT_REPLACE,
@@ -130,17 +131,15 @@ function syncFeaturePageGates(): void {
     dashboard.contentReplaceGateEnabled.value,
   );
   routerStore.syncFeatureGate(FEATURE_GATE_PLOT, plotStore.enabled === true);
+  // gate 必须读 settings 权威源：advancedToggles 带渲染降级（抛错返回空表），
+  // 从它派生会把「读不到」误判成「开关关了」而隐藏功能页入口。
   routerStore.syncFeatureGate(
     FEATURE_GATE_CONTINUATION,
-    dashboard.advancedToggles.value.some(
-      (item) => item.key === "continuationPageEnabled" && item.value,
-    ),
+    settings_ACU.continuationPageEnabled !== false,
   );
   routerStore.syncFeatureGate(
     FEATURE_GATE_VECTOR_INDEX,
-    dashboard.advancedToggles.value.some(
-      (item) => item.key === "summaryVectorIndexModeEnabled" && item.value,
-    ),
+    settings_ACU.summaryVectorIndexModeDefault === true,
   );
 }
 

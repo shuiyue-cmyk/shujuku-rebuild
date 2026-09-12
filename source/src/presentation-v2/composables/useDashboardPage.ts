@@ -160,6 +160,9 @@ function withRenderFallback<T>(label: string, fallback: T, build: () => T): T {
     reportedRenderFallbackCounts.set(label, seen);
     if (seen <= 3) {
       logError_ACU(`[ACU-V2] dashboard ${label} 计算异常，已降级:`, error);
+    } else if (seen === 4) {
+      // 第 4 次起静默=证据缺口：留一条可数上限记录，读者能区分「无降级」与「已封顶」。
+      logError_ACU(`[ACU-V2] dashboard ${label} 持续计算异常（已第 ${seen} 次降级），后续同类降级不再逐条记录，恢复成功后重新计数。`, error);
     }
     return fallback;
   }

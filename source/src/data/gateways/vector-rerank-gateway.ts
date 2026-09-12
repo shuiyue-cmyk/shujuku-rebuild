@@ -126,6 +126,7 @@ async function requestRerankBatch_ACU(request: RerankBatchRequest_ACU): Promise<
     try {
         response = await fetch(request.endpoint, {
             method: 'POST',
+            redirect: 'error', // 307/308 会把 POST 原样重放到重定向目标：SSRF 守卫只校发起前 URL，禁止重定向
             headers: buildRerankHeaders_ACU(request.apiKey),
             body: JSON.stringify(payload),
             signal: controller.signal,

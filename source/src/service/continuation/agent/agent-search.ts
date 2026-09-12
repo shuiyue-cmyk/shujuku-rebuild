@@ -31,6 +31,8 @@ const SEARCH_HIT_OVERHEAD_ACU = 60;
 const SEARCH_REGEX_MAX_LENGTH_ACU = 300;
 /** 正则搜索的总时间护栏（毫秒）：跨行累计超时即停止收集，避免病态模式长占主线程。 */
 const SEARCH_REGEX_TIME_BUDGET_MS_ACU = 1500;
+/** 单行参与正则匹配的长度上限：病态模式在超长单行上的一次 exec 就能独占主线程分钟级，静态闸漏网时的硬保险。 */
+const SEARCH_REGEX_LINE_CAP_ACU = 8000;
 
 /**
  * 灾难性回溯风险启发式。长度上限拦不住 `(a+)+b` 这类短而病态的模式，而 exec 在主线程同步执行，
@@ -38,11 +40,50 @@ const SEARCH_REGEX_TIME_BUDGET_MS_ACU = 1500;
  * 保守判定：命中即拒绝执行并给出改写提示——宁可让模型换个写法，也不赌单次 exec 的耗时。
  */
 function hasReDoSRisk_ACU(pattern: string): boolean {
-  // 嵌套量词：组内已含量词，整组又被量词修饰，如 (a+)+ / (.*)+ / (ab*)*
-  if (/\([^()]*[+*]\)\s*(?:[+*]|\{\d+,\s*\})/.test(pattern)) return true;
+  // 泛化嵌套量词（star height≥2 的保守近似）：任意量词组内只要再出现 `+`/`*`/`{m,n}` 量词即拒绝。
+  // 覆盖 `(a+)+` 单层形态，也覆盖 `((a)+)+`、`(((x*)y)z*)*` 这类旧式漏检的多层嵌套。
+  const marks: boolean[] = []; // 每个未闭合组体内（含嵌套）是否已出现量词
+  let inClass = false;
+  for (let i = 0; i < pattern.length; i++) {
+    const c = pattern[i];
+    if (c === '\\') { i++; continue; }
+    if (inClass) { if (c === ']') inClass = false; continue; }
+    if (c === '[') { inClass = true; continue; }
+    if (c === '(') { marks.push(false); continue; }
+    if (c === ')') {
+      if (!marks.length) break;
+      const inner = marks.pop() as boolean;
+      const quantEnd = redosQuantifierEndAt_ACU(pattern, i + 1);
+      if (quantEnd !== null) {
+        if (inner) return true;
+        if (marks.length) marks[marks.length - 1] = true;
+        i = quantEnd - 1;
+      } else if (marks.length) {
+        marks[marks.length - 1] = marks[marks.length - 1] || inner;
+      }
+      continue;
+    }
+    if (!marks.length) continue;
+    if (c === '*' || c === '+') { marks[marks.length - 1] = true; continue; }
+    if (c === '{') {
+      const m = /^\{\d+,\d*\}/.exec(pattern.slice(i));
+      if (m) { marks[marks.length - 1] = true; i += m[0].length - 1; }
+    }
+  }
   // 相同分支的交替被量化，如 (a|a)+ / (|x)+
   if (/\(([^()|]*)\|\1\)\s*(?:[+*]|\{\d+,\s*\})/.test(pattern)) return true;
   return false;
+}
+
+/** 位置 j 起若为量词（加号、星号、花括号量词，允许可惰性修饰 ?），返回量词结束后的下标。 */
+function redosQuantifierEndAt_ACU(pattern: string, j: number): number | null {
+  const c = pattern[j];
+  if (c === '*' || c === '+') return j + 1 + (pattern[j + 1] === '?' ? 1 : 0);
+  if (c === '{') {
+    const m = /^\{\d+(,\d*)?\}\??/.exec(pattern.slice(j));
+    if (m && (!m[1] || m[1].includes(','))) return j + m[0].length;
+  }
+  return null;
 }
 
 interface AgentSearchLine_ACU {
@@ -271,7 +312,9 @@ export function runAgentSearch_ACU(call: AgentSearchCall_ACU, context: AgentReso
         truncated = true;
         break;
       }
-      const matched = regex.exec(line.text);
+      // 正则模式对超长行截断匹配（8000 字符后的内容不参与命中——防单行回溯爆炸；字面搜索不截断）。
+      const execText = call.isRegex && line.text.length > SEARCH_REGEX_LINE_CAP_ACU ? line.text.slice(0, SEARCH_REGEX_LINE_CAP_ACU) : line.text;
+      const matched = regex.exec(execText);
       if (!matched) continue;
       const snippet = createAgentMatchSnippet_ACU(line.text, matched.index, matched[0].length);
       const cost = snippet.length + line.label.length + line.address.length + SEARCH_HIT_OVERHEAD_ACU;

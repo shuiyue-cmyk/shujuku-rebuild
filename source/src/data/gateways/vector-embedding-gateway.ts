@@ -190,6 +190,7 @@ async function requestEmbeddingsOnce_ACU(
     assertSafeHttpEndpoint_ACU(endpoint);
     const response = await fetchEmbeddingWithTimeout_ACU(endpoint, {
         method: 'POST',
+        redirect: 'error', // 307/308 会把 POST 原样重放到重定向目标：SSRF 守卫只校发起前 URL，禁止重定向
         headers,
         body: JSON.stringify({ model, input }),
     }, model);

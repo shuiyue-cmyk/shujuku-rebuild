@@ -41,6 +41,7 @@ import {
     resolveSummaryVectorMirrorHead_ACU,
 } from './summary-vector-mirror-resolver';
 import {
+    discardSummaryVectorMirrorPreparedFiles_ACU,
     encodeSummaryVectorMirrorVector_ACU,
     finalizeSummaryVectorMirrorFiles_ACU,
     loadSummaryVectorMirrorManifest_ACU,
@@ -141,6 +142,8 @@ export type SummaryVectorMirrorRowRemovalSnapshot_ACU =
         embedding: SummaryVectorEmbeddingIdentity_ACU;
         rows: Array<{ rowId: string; chunks: SummaryVectorChunkRef_ACU[] }>;
         packRefs: SummaryVectorPackRef_ACU[];
+        /** 快照拍摄时源表 full checkpoint 的指纹。derived_metadata 提交不 bump 修订号，发布事务只能用内容指纹检出快照后的并发行写。 */
+        expectedBaseFingerprint: string;
     };
 
 /** 从当前 head 去掉清理范围内的 rowId，保留仍有 chunk 的行。 */
@@ -183,12 +186,16 @@ export async function snapshotSummaryVectorMirrorExcludingRows_ACU(options: {
 
     const rows = selectRetainedVectorMirrorRows_ACU(head.head, options.excludedRowIds);
     const usedPackHashes = new Set(rows.flatMap((row) => row.chunks.map((chunk) => chunk.packHash)));
+    const baseAtCapture = locateSummaryVectorMirrorBase_ACU(chat, getCurrentIsolationKey_ACU());
     return {
         kind: 'ready',
         sourceTableKey,
         embedding: { ...head.checkpoint.embedding },
         rows,
         packRefs: head.packRefs.filter((ref) => usedPackHashes.has(ref.packHash)).map((ref) => ({ ...ref })),
+        expectedBaseFingerprint: baseAtCapture?.frame.checkpoint?.kind === 'full'
+            ? getTableDataFingerprint_ACU(baseAtCapture.frame.checkpoint.data)
+            : '',
     };
 }
 
@@ -326,6 +333,16 @@ export async function publishSummaryVectorMirrorRowRemovalSnapshot_ACU(
             workingDataMode: 'none',
         }, async (ctx) => {
             ctx.assertFresh?.('vector_mirror_row_removal:before_write');
+            // 镜像 flush 走 derived_metadata 不 bump 修订号，assertFresh 看不见快照之后的行写：以快照指纹复核当前 head，失配即放弃发布（交回队列按新头重放）。
+            if (snapshot.expectedBaseFingerprint) {
+                const freshBase = locateSummaryVectorMirrorBase_ACU(chat, isolationKey);
+                const freshFingerprint = freshBase?.frame.checkpoint?.kind === 'full'
+                    ? getTableDataFingerprint_ACU(freshBase.frame.checkpoint.data)
+                    : '';
+                if (freshFingerprint !== snapshot.expectedBaseFingerprint) {
+                    throw new Error('summary_vector_mirror_publish_stale_base：快照之后源表已有新写入，剩余行发布放弃，按新头重放。');
+                }
+            }
             await ctx.runCommit(async () => {
                 for (const ref of collectSummaryVectorMirrorFrameRefs_ACU(chat, isolationKey)) {
                     if (ref.frame.summaryVectorIndexFrame) {
@@ -577,6 +594,7 @@ export async function rebuildSummaryVectorMirror_ACU(options: {
     const requiredPackHashes = [...new Set(rows.flatMap((row) => row.chunks.map((chunk) => chunk.packHash)))];
     const missingPackRefs = requiredPackHashes.filter((packHash) => !packRefsByHash.has(packHash));
     if (missingPackRefs.length > 0) {
+        await discardSummaryVectorMirrorPreparedFiles_ACU(files, '重建引用缺 pack');
         return emptyResult_ACU({
             reason: 'rebuild_repair_pack_reference_missing',
             errors: [`重建引用的 pack 缺少可达路径：${missingPackRefs.join(',')}`],
@@ -594,6 +612,7 @@ export async function rebuildSummaryVectorMirror_ACU(options: {
         if (existingHead.status === 'ok' && existingHead.checkpoint && isSummaryVectorEmbeddingIdentity_ACU(existingHead.checkpoint.embedding)) {
             embedding = { ...existingHead.checkpoint.embedding };
         } else {
+            await discardSummaryVectorMirrorPreparedFiles_ACU(files, '空重建放弃非法 embedding');
             try {
                 await stripSummaryVectorMirrorFrames_ACU(chat, isolationKey, selected.summaryKey);
                 return emptyResult_ACU({
@@ -610,17 +629,26 @@ export async function rebuildSummaryVectorMirror_ACU(options: {
         }
     }
 
-    const manifestPersist = await persistSummaryVectorMirrorManifestPrepared_ACU({
-        chatKey: scope.chatKey,
-        isolationKey: scope.isolationKey,
-        sourceTableKey: scope.sourceTableKey,
-        rows: {
-            schema: 'summary_vector_mirror_manifest',
-            version: 1,
-            sourceTableKey: selected.summaryKey,
-            rows: rows.map((row) => ({ rowId: row.rowId, chunks: row.chunks })),
-        },
-    });
+    let manifestPersist: Awaited<ReturnType<typeof persistSummaryVectorMirrorManifestPrepared_ACU>>;
+    try {
+        manifestPersist = await persistSummaryVectorMirrorManifestPrepared_ACU({
+            chatKey: scope.chatKey,
+            isolationKey: scope.isolationKey,
+            sourceTableKey: scope.sourceTableKey,
+            rows: {
+                schema: 'summary_vector_mirror_manifest',
+                version: 1,
+                sourceTableKey: selected.summaryKey,
+                rows: rows.map((row) => ({ rowId: row.rowId, chunks: row.chunks })),
+            },
+        });
+    } catch (error: any) {
+        await discardSummaryVectorMirrorPreparedFiles_ACU(files, '重建 manifest 上传失败');
+        return emptyResult_ACU({
+            reason: 'rebuild_commit_failed',
+            errors: [error?.message || String(error || '重建 manifest 上传失败')],
+        });
+    }
     files.push(manifestPersist.file);
 
     const checkpoint: SummaryVectorIndexMirrorCheckpointV2_ACU = {
@@ -687,6 +715,7 @@ export async function rebuildSummaryVectorMirror_ACU(options: {
             if (snapshot.existed) snapshot.message.TavernDB_ACU_IsolatedData = snapshot.value;
             else delete snapshot.message.TavernDB_ACU_IsolatedData;
         }
+        await discardSummaryVectorMirrorPreparedFiles_ACU(files, '重建落盘失败');
         return emptyResult_ACU({
             reason: 'rebuild_commit_failed',
             errors: [error?.message || String(error || '重建落盘失败')],

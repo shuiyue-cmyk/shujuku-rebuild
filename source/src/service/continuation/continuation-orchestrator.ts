@@ -43,7 +43,7 @@ export interface ContinuationHostTurnActionResult_ACU extends ContinuationOrches
 }
 export interface RecordHostTurnInput_ACU { identity: TurnAttemptIdentity_ACU; capture: ContinuationHostGenerationCapture_ACU; }
 export interface RejectHostTurnInput_ACU { identity: TurnAttemptIdentity_ACU; messageIndex: number; }
-export interface ContinuationPendingHostTurnSnapshot_ACU { settings: ContinuationEnvelope_ACU['settings']; pending: NonNullable<ContinuationTask_ACU['pendingHostTurn']>; /** 任务是否已被停止/失败：自动重试据此拒绝复活。 */ taskStopped: boolean; }
+export interface ContinuationPendingHostTurnSnapshot_ACU { settings: ContinuationEnvelope_ACU['settings']; pending: NonNullable<ContinuationTask_ACU['pendingHostTurn']>; /** 任务是否已被停止/失败：自动重试据此拒绝复活。 */ taskStopped: boolean; /** 任务是否已在运行（如用户点「继续」已手动接管重发）：自动重试据此让位，避免双发 regenerate。 */ taskRunning: boolean; }
 
 export interface ContinuationOrchestratorDependencies_ACU {
   store: FirstFloorContinuationStore_ACU;
@@ -509,7 +509,7 @@ export class ContinuationOrchestrator_ACU {
     // 任务被用户停止（或已带错误暂停）时，retry_ready 的待重试轮不得被自动重试复活：
     // 桥的自动重试只认 pending.status，若不带上这个位，用户在重试等待窗内点停止会被静默撤销。
     const taskStopped = task.stopReason !== null || task.status === 'failed';
-    return { settings: envelope.settings, pending: task.pendingHostTurn, taskStopped };
+    return { settings: envelope.settings, pending: task.pendingHostTurn, taskStopped, taskRunning: task.status === 'running' };
   }
 
   async pauseForHostResultFailure(identity: TurnAttemptIdentity_ACU): Promise<ContinuationOrchestratorResult_ACU> {
@@ -857,6 +857,9 @@ export class ContinuationOrchestrator_ACU {
     const chatIdentity = this.requireChatIdentity_ACU();
     this.invalidateLease_ACU(chatIdentity);
     if (replanInstruction) await this.recordUserMessage_ACU(replanInstruction, '要求重新规划大纲');
+    // 与 continueTask 同型登记控制器：否则 UI 重规划路径 planOutline_ACU 取不到 signal，「停止」无法中断这条最长 8192 token 的大纲请求。
+    const controller = new AbortController();
+    abortControllersByChat_ACU.set(chatIdentity, controller);
     return this.withLease_ACU(async (_identity, lease) => {
       const taskId = this.requireTask_ACU(this.requireEnvelope_ACU(this.dependencies.store.readPersisted())).taskId;
       try {
@@ -865,6 +868,8 @@ export class ContinuationOrchestrator_ACU {
       } catch (error) {
         await this.pauseWithError_ACU(chatIdentity, taskId, error, 'outline_call', '阶段规划失败');
         throw error;
+      } finally {
+        if (abortControllersByChat_ACU.get(chatIdentity) === controller) abortControllersByChat_ACU.delete(chatIdentity);
       }
     });
   }

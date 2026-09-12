@@ -124,7 +124,10 @@ function maskSensitiveInLogValue(value: any, depth = 0, seen = new WeakSet()): a
     return value
       .replace(/(Authorization\s*:\s*Bearer\s+)([^\s"',}\n]+)/gi, '$1***')
       .replace(/(Bearer\s+)(sk-[A-Za-z0-9-_]+)/g, '$1***')
-      .replace(/("[A-Za-z0-9_-]*(?:api[_-]?key|apikey|authorization|token|password|secret)"\s*:\s*")([^"]+)(")/gi, '$1***$3');
+      .replace(/("[A-Za-z0-9_-]*(?:api[_-]?key|apikey|authorization|token|password|secret)"\s*:\s*")([^"]+)(")/gi, '$1***$3')
+      // 与 normalizeLogArg_ACU 的 [L4] 规则对齐：Error 分支走本函数，此前缺裸 key=value 与独立 sk- 形态
+      .replace(/\b([A-Za-z0-9_]*(?:api[_-]?key|apikey|authorization|token|password|secret|auth|bearer|accessToken|access_token))\b(\s*[:=]\s*)(?!["']|bearer\b)[^\s"',;}\n]+/gi, '$1$2***')
+      .replace(/\bsk-[A-Za-z0-9_-]{16,}/g, 'sk-***');
   }
   if (depth > 6 || value === null || value === undefined) return depth > 6 ? '[Truncated]' : value;
   if (typeof value === 'object') {

@@ -131,7 +131,7 @@ import {
         // 契约：fetchAvailableModels_ACU(apiUrl, apiKey, customApiFormat?)，第三参默认 ''。
         // 不传协议时 ai-service 无法按 custom_api_format 分流，模型列表探测与正式调用会走不同通道。
         const customApiFormat = String(settings_ACU.apiConfig?.customApiFormat || '');
-        const result = await fetchAvailableModels_ACU(apiUrl, apiKey, customApiFormat);
+        const result = await fetchAvailableModels_ACU(apiUrl, apiKey, customApiFormat, { force: true }); // 测试连接是显式验证动作：不能被 5min TTL/30s 失败负缓存吞掉重试
 
         if (!result.success) {
             throw new Error(result.error || '未知错误');

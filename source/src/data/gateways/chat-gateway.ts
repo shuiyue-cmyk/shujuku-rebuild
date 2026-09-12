@@ -78,7 +78,37 @@ export async function saveChatToHostStrict_ACU(): Promise<void> {
     if (typeof SillyTavern_API_ACU?.saveChat !== 'function') {
         throw new Error('宿主 saveChat 不可用，无法提交破坏性聊天数据变更。');
     }
-    await SillyTavern_API_ACU.saveChat();
+    // TT 的 integrity 冲突未确认路径不抛错：confirm 弹窗选否 → window.location.reload() 后 promise 照常 resolve，
+    // resolve 本身不能当落盘证据。若返回时本页已开始卸载，后续 publish/GC 会把注册表写成与盘上旧数据错配的状态——直接失败。
+    // 注：读回比对不可行——getContext 暴露的是 chatMetadata（非 chat_metadata），且 integrity 是只 mint 一次、
+    // 永不轮转的 uuid，前后比对恒相等；saveChat 全路径 resolve undefined，返回值亦无信号。
+    let unloading = false;
+    const markUnloading = () => { unloading = true; };
+    const listenTargets: Array<{ addEventListener: Function; removeEventListener: Function }> = [];
+    try {
+        const g: any = globalThis as any;
+        const wins: any[] = [];
+        if (g?.window) wins.push(g.window);
+        if (g?.window?.parent && g.window.parent !== g.window) wins.push(g.window.parent);
+        for (const win of wins) {
+            if (typeof win?.addEventListener === 'function' && typeof win?.removeEventListener === 'function') {
+                listenTargets.push(win);
+            }
+        }
+    } catch { /* 取 parent 失败即只听本窗（下面 windows 为空则跳过） */ }
+    for (const win of listenTargets) {
+        try { win.addEventListener('pagehide', markUnloading); } catch { /* 忽略 */ }
+    }
+    try {
+        await SillyTavern_API_ACU.saveChat();
+    } finally {
+        for (const win of listenTargets) {
+            try { win.removeEventListener('pagehide', markUnloading); } catch { /* 忽略 */ }
+        }
+    }
+    if (unloading) {
+        throw new Error('宿主页面在保存返回时已开始卸载（疑似 integrity 冲突未确认覆盖），中止本事务的破坏性变更。');
+    }
     notifyPostChatSaveListeners_ACU();
 }
 

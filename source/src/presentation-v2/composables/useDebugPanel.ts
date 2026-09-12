@@ -68,9 +68,10 @@ function maskSensitiveString(str: string): string {
   return str
     .replace(/(Authorization\s*:\s*Bearer\s+)([^\s"',}\n]+)/gi, '$1***')
     .replace(/(Bearer\s+)(sk-[A-Za-z0-9-_]+)/g, '$1***')
-    .replace(/([?&](?:api[_-]?key|token|authorization)=)([^&#\s"',}]+)/gi, '$1***')
+    .replace(/([?&](?:api[_-]?key|apikey|key|secret|token|authorization)=)([^&#\s"',}]+)/gi, '$1***')
     .replace(/("(?:api[_-]?key|apikey|authorization|token|password|secret)"\s*:\s*")([^"]+)(")/gi, '$1***$3')
-    .replace(/(^|[\s"',{;])(x-api-key|x-opencode-session|api[_-]?key|apikey|token|password|secret)(\s*[:=]\s*)(?!["\'])([^\s"',;}\n]+)/gi, '$1$2$3***');
+    .replace(/(^|[\s"',{;])(x-api-key|x-opencode-session|api[_-]?key|apikey|token|password|secret)(\s*[:=]\s*)(?!["\'])([^\s"',;}\n]+)/gi, '$1$2$3***')
+    .replace(/\bsk-[A-Za-z0-9_-]{16,}/g, 'sk-***');
 }
 
  /** 递归脱敏对象中的敏感字段（API 请求/响应快照可能含 Authorization/key 回显） */
@@ -95,6 +96,32 @@ function maskSensitiveFields(value: unknown, depth = 0, seen = new WeakSet<objec
     return out;
   }
   return value;
+}
+
+/** 两份 Debug 导出共用的表格快照：敏感列按列名脱敏，字符串单元格过掩码规则 */
+/** 单元可见性：导出供导出路径回归测试 */
+export function buildDebugTablesForTests_ACU(): ReturnType<typeof buildDebugTables_ACU> { return buildDebugTables_ACU(); }
+
+function buildDebugTables_ACU(): Record<string, { rows: number; headers: string[]; sampleRows?: unknown[][] }> {
+  const tables: Record<string, { rows: number; headers: string[]; sampleRows?: unknown[][] }> = {};
+  const data = currentJsonTableData_ACU || {};
+  for (const [key, sheet] of Object.entries(data)) {
+    if (key === 'mate') continue;
+    const content = Array.isArray((sheet as any)?.content) ? (sheet as any).content : [];
+    const rows = Math.max(0, content.length - 1);
+    const headers = Array.isArray(content[0]) ? content[0].map(String) : [];
+    const sensitiveCols = new Set(headers.map((h: string, idx: number) => isSensitiveKey(h) ? idx : -1).filter((idx: number) => idx !== -1));
+    const sampleRows = content.slice(1, 4).map((r: any) => Array.isArray(r) ? r.slice(0, 8).map((c: any, colIdx: number) => {
+      if (sensitiveCols.has(colIdx)) return '***';
+      if (typeof c === 'string') {
+        const masked = maskSensitiveString(c);
+        return masked.length > 200 ? masked.slice(0, 200) + '…' : masked;
+      }
+      return c;
+    }) : r);
+    tables[key] = { rows, headers, ...(sampleRows.length ? { sampleRows } : {}) };
+  }
+  return tables;
 }
 
 function downloadJson(filename: string, data: unknown): void {
@@ -189,7 +216,7 @@ export function useDebugPanel() {
           nonPrefillSupportPreset: activePreset?.nonPrefillSupport,
           apiMode: settings_ACU?.apiMode || '',
           apiConfig: {
-            url: typeof cfg.url === 'string' ? cfg.url : '',
+            url: typeof cfg.url === 'string' ? maskSensitiveString(cfg.url) : '',
             model: typeof cfg.model === 'string' ? cfg.model : '',
             apiKey: maskSecret(cfg.apiKey),
             temperature: cfg.temperature,
@@ -197,26 +224,8 @@ export function useDebugPanel() {
           },
           plotEnabled: settings_ACU?.plotSettings?.enabled === true,
         };
-        const tables: Record<string, { rows: number; headers: string[]; sampleRows?: unknown[][] }> = {};
-        try {
-          const data = currentJsonTableData_ACU || {};
-          for (const [key, sheet] of Object.entries(data)) {
-            if (key === 'mate') continue;
-            const content = Array.isArray((sheet as any)?.content) ? (sheet as any).content : [];
-            const rows = Math.max(0, content.length - 1);
-            const headers = Array.isArray(content[0]) ? content[0].map(String) : [];
-            const sensitiveCols = new Set(headers.map((h: string, idx: number) => isSensitiveKey(h) ? idx : -1).filter((idx: number) => idx !== -1));
-            const sampleRows = content.slice(1, 4).map((r: any) => Array.isArray(r) ? r.slice(0, 8).map((c: any, colIdx: number) => {
-              if (sensitiveCols.has(colIdx)) return '***';
-              if (typeof c === 'string') {
-                const masked = maskSensitiveString(c);
-                return masked.length > 200 ? masked.slice(0, 200) + '…' : masked;
-              }
-              return c;
-            }) : r);
-            tables[key] = { rows, headers, ...(sampleRows.length ? { sampleRows } : {}) };
-          }
-        } catch {}
+        let tables: Record<string, { rows: number; headers: string[]; sampleRows?: unknown[][] }> = {};
+        try { tables = buildDebugTables_ACU(); } catch {}
         let settingsSnapshot: unknown = null;
         try { settingsSnapshot = maskSensitiveFields(JSON.parse(JSON.stringify(settings_ACU))); } catch { settingsSnapshot = '[Snapshot failed]'; }
         const worldbookDebug = (() => {
@@ -310,7 +319,7 @@ export function useDebugPanel() {
       nonPrefillSupportPreset: activePreset?.nonPrefillSupport,
       apiMode: settings_ACU?.apiMode || '',
       apiConfig: {
-        url: typeof cfg.url === 'string' ? cfg.url : '',
+        url: typeof cfg.url === 'string' ? maskSensitiveString(cfg.url) : '',
         model: typeof cfg.model === 'string' ? cfg.model : '',
         apiKey: maskSecret(cfg.apiKey),
         temperature: cfg.temperature,
@@ -319,18 +328,8 @@ export function useDebugPanel() {
       plotEnabled: settings_ACU?.plotSettings?.enabled === true,
     };
 
-    const tables: Record<string, { rows: number; headers: string[]; sampleRows?: unknown[][] }> = {};
-    try {
-      const data = currentJsonTableData_ACU || {};
-      for (const [key, sheet] of Object.entries(data)) {
-        if (key === 'mate') continue;
-        const content = Array.isArray((sheet as any)?.content) ? (sheet as any).content : [];
-        const rows = Math.max(0, content.length - 1);
-        const headers = Array.isArray(content[0]) ? content[0].map(String) : [];
-        const sampleRows = content.slice(1, 4).map((r: any) => Array.isArray(r) ? r.slice(0, 8).map((c: any) => typeof c === 'string' && c.length > 200 ? c.slice(0, 200) + '…' : c) : r);
-        tables[key] = { rows, headers, ...(sampleRows.length ? { sampleRows } : {}) };
-      }
-    } catch { /* 表统计失败不影响导出 */ }
+    let tables: Record<string, { rows: number; headers: string[]; sampleRows?: unknown[][] }> = {};
+    try { tables = buildDebugTables_ACU(); } catch { /* 表统计失败不影响导出 */ }
 
     let settingsSnapshot: unknown = null;
     try { settingsSnapshot = maskSensitiveFields(JSON.parse(JSON.stringify(settings_ACU))); } catch { settingsSnapshot = '[Snapshot failed]'; }

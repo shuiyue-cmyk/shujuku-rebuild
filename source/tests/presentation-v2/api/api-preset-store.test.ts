@@ -250,7 +250,7 @@ describe('useApiPresetStore', () => {
     })).resolves.toBe(true);
 
     expect(fetchModels).toHaveBeenCalledTimes(1);
-    expect(fetchModels).toHaveBeenCalledWith('https://alpha.test', 'ka', 'claude_messages');
+    expect(fetchModels).toHaveBeenCalledWith('https://alpha.test', 'ka', 'claude_messages', { force: true });
     expect(store.modelOptions).toEqual(['m1', 'm2']);
     expect(store.modelLoadStatus).toBe('success');
   });
@@ -260,7 +260,7 @@ describe('useApiPresetStore', () => {
 
     await store.loadModelsForConfig({ url: 'https://alpha.test', apiKey: 'ka' });
 
-    expect(fetchModels).toHaveBeenCalledWith('https://alpha.test', 'ka', '');
+    expect(fetchModels).toHaveBeenCalledWith('https://alpha.test', 'ka', '', { force: true });
   });
 
   it('模型探活：url/apiKey 缺失时仍以空串占位，不传 undefined', async () => {
@@ -268,6 +268,6 @@ describe('useApiPresetStore', () => {
 
     await store.loadModelsForConfig({ customApiFormat: 'gemini_interactions' });
 
-    expect(fetchModels).toHaveBeenCalledWith('', '', 'gemini_interactions');
+    expect(fetchModels).toHaveBeenCalledWith('', '', 'gemini_interactions', { force: true });
   });
 });

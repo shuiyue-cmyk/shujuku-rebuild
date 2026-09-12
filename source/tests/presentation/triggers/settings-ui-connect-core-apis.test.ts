@@ -223,13 +223,13 @@ describe('fetchModelsAndConnect_ACU 透传 customApiFormat', () => {
   it('把 settings_ACU.apiConfig.customApiFormat 作为第三参传给 fetchAvailableModels_ACU', async () => {
     await fetchModelsAndConnect_ACU();
 
-    expect(m.fetchAvailableModels).toHaveBeenCalledWith('https://api.test/v1', 'secret-key', 'claude_messages');
+    expect(m.fetchAvailableModels).toHaveBeenCalledWith('https://api.test/v1', 'secret-key', 'claude_messages', { force: true });
   });
 
   it('未配置协议时传空串（保持 service 侧默认分流）', async () => {
     m.settings.apiConfig = { ...m.settings.apiConfig, customApiFormat: undefined };
     await fetchModelsAndConnect_ACU();
 
-    expect(m.fetchAvailableModels).toHaveBeenCalledWith('https://api.test/v1', 'secret-key', '');
+    expect(m.fetchAvailableModels).toHaveBeenCalledWith('https://api.test/v1', 'secret-key', '', { force: true });
   });
 });

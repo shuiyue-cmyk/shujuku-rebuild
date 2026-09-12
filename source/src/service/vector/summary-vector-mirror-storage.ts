@@ -10,11 +10,14 @@ import {
     buildVectorIndexContentPackPathV2_ACU,
     buildVectorIndexMirrorManifestPathV2_ACU,
     buildVectorIndexSingleSnapshotV2ScopeToken_ACU,
+    deleteVectorIndexFile_ACU,
     readVectorIndexJsonFile_ACU,
     registerVectorIndexFiles_ACU,
+    unregisterVectorIndexFiles_ACU,
     sha256Text_ACU,
     uploadVectorIndexJsonFile_ACU,
 } from '../../data/storage/vector-index-st-files-storage';
+import { logWarn_ACU } from '../../shared/utils';
 import { normalizeSummaryVectorIndexScope_ACU } from '../../shared/summary-vector-index-scope';
 import type { SummaryVectorManifestRef_ACU, SummaryVectorPackRef_ACU } from '../table/storage-frame-v2-types';
 import {
@@ -83,6 +86,39 @@ export function decodeSummaryVectorMirrorVector_ACU(encoded: string): Float32Arr
 
 async function registerPrepared_ACU(file: SummaryVectorIndexExternalFileRef_ACU): Promise<void> {
     await registerVectorIndexFiles_ACU([{ ...file, publicationState: 'prepared' }]);
+}
+
+/**
+ * 失败/放弃路径显式回收未引用的 prepared 文件：GC 为护 finalize 窗口对 prepared 一律 retain，
+ * 不主动删即永久累积；删除成功后同步注销 registry，避免「文件已删、registry 仍挂着 prepared」的幽灵条目。
+ */
+export async function discardSummaryVectorMirrorPreparedFiles_ACU(
+    files: SummaryVectorIndexExternalFileRef_ACU[],
+    context: string,
+): Promise<void> {
+    const deletedPaths: string[] = [];
+    for (const file of files) {
+        if (!file?.path) continue;
+        try {
+            // delete 返回 {ok:false} 不抛错：只有 ok:true（已删或确认不存在）才能注销 registry，
+            // 否则 registry 丢跟踪、文件仍在盘上，变成 GC 永久不可见的孤儿。
+            const deleted = await deleteVectorIndexFile_ACU(file.path);
+            if (deleted?.ok) {
+                deletedPaths.push(file.path);
+            } else {
+                logWarn_ACU(`[向量镜像] ${context}：丢弃未引用 prepared 文件未成功（交由 GC 保留，需人工关注）：${file.path}`, deleted?.error || '');
+            }
+        } catch (error: any) {
+            logWarn_ACU(`[向量镜像] ${context}：丢弃未引用 prepared 文件失败（交由 GC 保留，需人工关注）：${file.path}`, error?.message || error);
+        }
+    }
+    if (deletedPaths.length > 0) {
+        try {
+            await unregisterVectorIndexFiles_ACU(deletedPaths);
+        } catch (error: any) {
+            logWarn_ACU(`[向量镜像] ${context}：registry 注销已删文件失败：${deletedPaths.join(',')}`, error?.message || error);
+        }
+    }
 }
 
 export async function finalizeSummaryVectorMirrorFiles_ACU(files: SummaryVectorIndexExternalFileRef_ACU[]): Promise<void> {

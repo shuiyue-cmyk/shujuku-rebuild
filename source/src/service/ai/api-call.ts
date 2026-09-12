@@ -505,6 +505,7 @@ export async function postChatCompletion_ACU(body: unknown, signal?: AbortSignal
     try {
         res = await fetch('/api/backends/chat-completions/generate', {
             method: 'POST',
+            redirect: 'error', // 307/308 会把 POST 原样重放到重定向目标：SSRF 守卫只校发起前 URL，禁止重定向
             headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
             signal: signal || undefined,
@@ -740,6 +741,7 @@ export async function callAIWithResolvedPreset_ACU(
       try {
         response = await fetch('/api/backends/chat-completions/generate', {
             method: 'POST',
+            redirect: 'error', // 307/308 会把 POST 原样重放到重定向目标：SSRF 守卫只校发起前 URL，禁止重定向
             headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
             signal: timeoutController.signal,

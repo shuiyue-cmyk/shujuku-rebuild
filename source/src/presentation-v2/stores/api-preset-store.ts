@@ -162,7 +162,7 @@ export const useApiPresetStore = defineStore('acu-v2-api-presets', {
     },
     /**
      * 模型探活（status）：customApiFormat 允许未归一化的草稿值，
-     * service 侧按四值白名单校验、非法降级 ''（等价 TT 默认 openai_compat）。
+     * service 侧按五值白名单校验、非法降级 ''（等价 TT 默认 openai_compat）。
      */
     async loadModelsForConfig(
       apiConfig: Partial<Omit<AcuV2ApiConfig, 'customApiFormat'>> & { customApiFormat?: string },
@@ -173,6 +173,8 @@ export const useApiPresetStore = defineStore('acu-v2-api-presets', {
         String(apiConfig.url || ''),
         String(apiConfig.apiKey || ''),
         String(apiConfig.customApiFormat || ''),
+        // 「拉取模型列表」是用户的显式刷新动作：跳过探活缓存读，避免 5 分钟 TTL 吞掉新配置
+        { force: true },
       );
       if (!result.success) {
         this.modelOptions = [];

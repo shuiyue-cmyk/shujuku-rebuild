@@ -8,13 +8,14 @@ function createHarness(options: { tags?: string; chat?: any[]; send?: boolean; r
   let chatIdentity = 'chat-a';
   let pending: any = null;
   let taskStopped = false;
+  let taskRunning = false;
   const autoContinueStates = [...(options.autoContinueStates ?? [])];
   const continuePreparedTurn: any = { identity, instruction: { instruction: '自动续写的下一轮文本' } };
   const retryCurrentTurn = vi.fn(async () => ({ retryHostGeneration: true }));
   const continueTask = vi.fn(async () => ({ preparedTurn: continuePreparedTurn }));
   const runtime = {
     getChatIdentity: () => chatIdentity, getChat: () => chat,
-    readPendingHostTurn: () => pending ? { settings: { loopTags: options.tags ?? '<ok>', minGenerationTokens: options.minTokens ?? 0 }, pending, taskStopped } : null,
+    readPendingHostTurn: () => pending ? { settings: { loopTags: options.tags ?? '<ok>', minGenerationTokens: options.minTokens ?? 0 }, pending, taskStopped, taskRunning } : null,
     readAutoContinueState: vi.fn(() => autoContinueStates.length ? autoContinueStates.shift()! : { eligible: false, delaySeconds: 0 }),
     retryCurrentTurn,
     continueTask,
@@ -45,7 +46,7 @@ function createHarness(options: { tags?: string; chat?: any[]; send?: boolean; r
     countTokens: async () => options.tokens ?? 2000,
     ...(options.invalidatePendingAutoFill ? { invalidatePendingAutoFill: options.invalidatePendingAutoFill } : {}),
   });
-  return { bridge, runtime, hostInput, retryCurrentTurn, continueTask, wait, setChat: (value: any[]) => { chat = value; }, setChatIdentity: (value: string) => { chatIdentity = value; }, setTaskStopped: (value: boolean) => { taskStopped = value; } };
+  return { bridge, runtime, hostInput, retryCurrentTurn, continueTask, wait, setChat: (value: any[]) => { chat = value; }, setChatIdentity: (value: string) => { chatIdentity = value; }, setTaskStopped: (value: boolean) => { taskStopped = value; }, setTaskRunning: (value: boolean) => { taskRunning = value; } };
 }
 
 describe('ContinuationHostGenerationBridge_ACU', () => {
@@ -560,5 +561,25 @@ describe('ContinuationHostGenerationBridge_ACU', () => {
 
     expect(h.runtime.confirmCurrentTurn).toHaveBeenCalledWith(identity, 1);
     expect(invalidatePendingAutoFill).not.toHaveBeenCalled();
+  });
+
+  it('auto-retry yields when manual continue already promoted the task (taskRunning)', async () => {
+    vi.useFakeTimers();
+    try {
+      let harnessRef: any = null;
+      const h = createHarness({ onWait: () => { harnessRef.setTaskRunning(true); } });
+      harnessRef = h;
+      h.hostInput.send.mockImplementation(() => { h.bridge.onGenerationStarted(7); return true; });
+      h.hostInput.retryGeneration.mockImplementation(() => { h.bridge.onGenerationStarted(8); return true; });
+      await h.bridge.send(prepared);
+      h.setChat([{ is_user: true }, { is_user: false, mes: '坏标签正文', message_id: 9 }]);
+      const ended = h.bridge.onGenerationEnded(9, 7); // 坏标签 reject → retry_ready → autoRetry 睡 3s；wait 回调点 taskRunning
+      await vi.advanceTimersByTimeAsync(10_000);
+      await ended;
+      expect(h.retryCurrentTurn).not.toHaveBeenCalled();
+      expect(h.hostInput.retryGeneration).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

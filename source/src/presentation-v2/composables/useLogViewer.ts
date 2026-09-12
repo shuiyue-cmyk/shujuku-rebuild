@@ -67,7 +67,8 @@ export function useLogViewer() {
   const tagFilter = ref('all');
   const keyword = ref('');
   const paused = ref(false);
-  const pendingEntries = ref<LogEntry[]>([]);
+  // 暂停期积压只计数、恢复时整体丢弃；封顶与显示窗口一致，避免逐条展开拷贝拖成 O(n^2)
+  const pendingBuf: LogEntry[] = [];
   const autoScroll = ref(true);
   // 采集状态由「Debug 问题上报」卡片统一管理；此处只读展示
   const debugLogEnabled = ref(isDebugLogEnabled());
@@ -83,19 +84,21 @@ export function useLogViewer() {
     ...knownTags.value.map(tag => ({ value: tag, label: tag })),
   ]);
 
-  const filteredLogs = computed(() => {
+  function filterEntries(entries: LogEntry[]): LogEntry[] {
     const needle = keyword.value.trim().toLowerCase();
-    return logs.value.filter(entry => {
+    return entries.filter(entry => {
       if (levelFilter.value !== 'all' && entry.level !== levelFilter.value) return false;
       if (tagFilter.value !== 'all' && entry.tag !== tagFilter.value) return false;
       if (needle && !entry.message.toLowerCase().includes(needle)) return false;
       return true;
     });
-  });
+  }
+
+  const filteredLogs = computed(() => filterEntries(logs.value));
 
   const visibleLogs = computed(() => filteredLogs.value.slice().reverse());
   const filteredCount = computed(() => filteredLogs.value.length);
-  const pendingCount = computed(() => pendingEntries.value.length);
+  const pendingCount = ref(0);
   const statusLabel = computed(() => {
     if (paused.value) return pendingCount.value ? `已暂停，${pendingCount.value} 条待显示` : '已暂停';
     return '实时更新中';
@@ -145,7 +148,8 @@ export function useLogViewer() {
   function setPaused(value: boolean): void {
     paused.value = value;
     if (!value) {
-      pendingEntries.value = [];
+      pendingBuf.length = 0;
+      pendingCount.value = 0;
       pendingAppend.length = 0;
       refresh();
     }
@@ -153,7 +157,8 @@ export function useLogViewer() {
 
   function clearAll(): void {
     clearLogs('logViewer.clearAll');
-    pendingEntries.value = [];
+    pendingBuf.length = 0;
+    pendingCount.value = 0;
     pendingAppend.length = 0;
     hiddenByWindow.value = 0;
     refresh();
@@ -162,7 +167,8 @@ export function useLogViewer() {
   }
 
   function exportFiltered(): void {
-    const exportData = filteredLogs.value.map(entry => ({
+    // 导出按当前筛选取全量缓冲：显示窗口只 300 条，报障证据不能按显示窗口丢
+    const exportData = filterEntries(getAllLogs()).map(entry => ({
       time: new Date(entry.timestamp).toISOString(),
       level: entry.level,
       tag: entry.tag,
@@ -171,7 +177,7 @@ export function useLogViewer() {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     downloadJson(`acu-logs-${stamp}.json`, { exportedAt: new Date().toISOString(), clearHistory: getClearHistory_ACU(), logs: exportData });
     message.value = null;
-    toast.success(`已导出 ${exportData.length} 条日志。`);
+    toast.success(`已按当前筛选导出 ${exportData.length} 条日志（全量缓冲）。`);
   }
 
   onMounted(() => {
@@ -180,7 +186,9 @@ export function useLogViewer() {
       // 逐条只做 O(1) 累积：整表拷贝/排序放到本帧一次的 flushAppend 里。
       if (!knownTags.value.includes(entry.tag)) knownTags.value = getKnownTags();
       if (paused.value) {
-        pendingEntries.value = [...pendingEntries.value, entry];
+        pendingBuf.push(entry);
+        if (pendingBuf.length > LOG_VIEW_MAX_ENTRIES_ACU) pendingBuf.shift();
+        pendingCount.value = pendingBuf.length;
         return;
       }
       pendingAppend.push(entry);
@@ -188,7 +196,9 @@ export function useLogViewer() {
     });
     // 清空不产日志条目，必须订阅清空事件：否则页面继续显示已清空的旧数组（收起重开才刷新）。
     unsubscribeClear = subscribeToClear(() => {
-      pendingEntries.value = [];
+      pendingAppend.length = 0; // 清空广播前丢弃在飞 rAF 待追加队列：否则旧条目落进已清空的列表（幽灵日志）
+      pendingBuf.length = 0;
+      pendingCount.value = 0;
       refresh();
     });
   });

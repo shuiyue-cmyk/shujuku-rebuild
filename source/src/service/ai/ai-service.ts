@@ -46,7 +46,7 @@ export function normalizeStatusCustomApiFormat_ACU(value: unknown): string {
  * 从自定义 API 端点获取可用模型列表
  * 纯业务逻辑：发送 HTTP 请求、解析响应、返回模型列表
  * 不涉及 UI（toast、状态显示由 presentation 层负责）
- * @param customApiFormat 接口协议（预设级，四值白名单）；缺省/非法降级 ''，
+ * @param customApiFormat 接口协议（预设级，五值白名单）；缺省/非法降级 ''，
  *                        TT 后端据此把模型列表来源切到对应协议（claude_messages→Claude、
  *                        gemini_interactions→Makersuite），不传则恒按 openai_compat 探活。
  */
@@ -67,13 +67,13 @@ function cloneModelsResult_ACU(result: FetchModelsResult): FetchModelsResult {
     return { ...result, models: result.models ? [...result.models] : undefined };
 }
 
-export async function fetchAvailableModels_ACU(apiUrl: string, apiKey: string, customApiFormat?: string): Promise<FetchModelsResult> {
+export async function fetchAvailableModels_ACU(apiUrl: string, apiKey: string, customApiFormat?: string, options?: { force?: boolean }): Promise<FetchModelsResult> {
     if (!apiUrl) {
         return { success: false, error: '请输入API基础URL。' };
     }
     const key = modelListCacheKey_ACU(apiUrl, apiKey, customApiFormat);
     const now = Date.now();
-    const hit = modelListCache_ACU.get(key);
+    const hit = options?.force ? undefined : modelListCache_ACU.get(key);
     if (hit && now - hit.at < (hit.result.success ? MODEL_LIST_TTL_MS_ACU : MODEL_LIST_FAIL_TTL_MS_ACU)) {
         return cloneModelsResult_ACU(hit.result);
     }
@@ -140,6 +140,7 @@ async function fetchAvailableModelsUncached_ACU(apiUrl: string, apiKey: string, 
     try {
         response = await fetch(statusUrl, {
             method: 'POST',
+            redirect: 'error', // 307/308 会把 POST 原样重放到重定向目标：SSRF 守卫只校发起前 URL，禁止重定向
             headers: { ..._getHeaders(), 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
             signal: controller.signal,

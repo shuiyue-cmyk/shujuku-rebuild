@@ -228,7 +228,7 @@ describe('ApiPage', () => {
     await new Promise(r => setTimeout(r, 0));
 
     expect(fetchModels).toHaveBeenCalledTimes(1);
-    expect(fetchModels).toHaveBeenCalledWith('https://beta.test', '', 'claude_messages');
+    expect(fetchModels).toHaveBeenCalledWith('https://beta.test', '', 'claude_messages', { force: true });
 
     mount.__resetAcuV2MountForTests();
   });
@@ -243,7 +243,7 @@ describe('ApiPage', () => {
     await new Promise(r => setTimeout(r, 0));
     await new Promise(r => setTimeout(r, 0));
 
-    expect(fetchModels).toHaveBeenCalledWith('https://beta.test', '', 'openai_compat');
+    expect(fetchModels).toHaveBeenCalledWith('https://beta.test', '', 'openai_compat', { force: true });
 
     mount.__resetAcuV2MountForTests();
   });

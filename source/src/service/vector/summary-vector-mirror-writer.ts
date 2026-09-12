@@ -34,13 +34,13 @@ import type {
     TableStorageFrameV2_ACU,
 } from '../table/storage-frame-v2-types';
 import { hashUserInput_ACU, isSummaryOrOutlineTable_ACU, logDebug_ACU, logWarn_ACU } from '../../shared/utils';
-import { deleteVectorIndexFile_ACU } from '../../data/storage/vector-index-st-files-storage';
 import { normalizeSummaryVectorIndexScope_ACU, toChatIsolationSlotKey_ACU } from '../../shared/summary-vector-index-scope';
 import { buildPreparedRows_ACU, buildRowChunkTexts_ACU, findSummaryTable_ACU } from './summary-vector-index-archive-service';
 import { getEffectiveSummaryVectorIndexConfig_ACU, validateSummaryVectorIndexConfig_ACU } from './vector-memory-config';
 import { SUMMARY_VECTOR_SOURCE_TEXT_VERSION_ACU } from './summary-vector-row-fingerprint';
 import { resolveSummaryVectorMirrorHead_ACU, summaryVectorEmbeddingIdentityEquals_ACU } from './summary-vector-mirror-resolver';
 import {
+    discardSummaryVectorMirrorPreparedFiles_ACU,
     encodeSummaryVectorMirrorVector_ACU,
     finalizeSummaryVectorMirrorFiles_ACU,
     loadSummaryVectorMirrorManifest_ACU,
@@ -510,14 +510,9 @@ export async function flushSummaryVectorMirrorNow_ACU(options: {
     } catch (error: any) {
         restoreIsolatedData_ACU(snapshots);
         // 提交失败 → 本次不会再 finalize，prepared pack 永远不会被引用（GC 出于保护 finalize 窗口
-        // 而保留所有 prepared pack），不主动回收就会永久累积。此处显式丢弃并留下可检索告警。
-        if (packPersist?.file?.path) {
-            try {
-                const discarded = await deleteVectorIndexFile_ACU(packPersist.file.path);
-                logWarn_ACU(`[向量镜像] delta 提交失败，已丢弃未引用的 prepared pack：${packPersist.file.path}（删除结果 ${JSON.stringify(discarded)}）`);
-            } catch (cleanupError: any) {
-                logWarn_ACU(`[向量镜像] delta 提交失败，且 prepared pack 清理失败（将由 GC 保留，需人工关注）：${packPersist.file.path}`, cleanupError?.message || cleanupError);
-            }
+        // 而保留所有 prepared pack），不主动回收就会永久累积。走统一回收（含 ok 检查与 registry 注销）。
+        if (packPersist?.file) {
+            await discardSummaryVectorMirrorPreparedFiles_ACU([packPersist.file], 'delta 提交失败');
         }
         return emptyResult_ACU({
             reason: 'vector_mirror_commit_failed',

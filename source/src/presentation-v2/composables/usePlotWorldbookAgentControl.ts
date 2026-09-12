@@ -1,4 +1,4 @@
-import { computed, ref } from 'vue';
+import { computed, onScopeDispose, ref } from 'vue';
 import { AGENT_CONTEXT_SETTINGS_LIMITS_ACU } from '../../shared/defaults';
 import type {
   AgentContextSettings_ACU,
@@ -157,6 +157,11 @@ function disableLegacyAgentWorldbookControl_ACU(options: { clearSnapshot?: boole
 }
 
 export function usePlotWorldbookAgentControl() {
+  let activeSkillifyAbort: AbortController | null = null;
+  onScopeDispose(() => {
+    activeSkillifyAbort?.abort();
+    activeSkillifyAbort = null;
+  });
   const toast = useToastStore();
   const dialog = useDialogStore();
   const mode = ref<AgentWorldbookControlMode_ACU>('disabled');
@@ -517,6 +522,9 @@ export function usePlotWorldbookAgentControl() {
     const confirmed = await dialog.confirm(plotCopy.agentControl.skillify.confirm);
     if (!confirmed) return false;
     busy.value = 'skillify';
+    // skillify 批次此前无人可中止（signal 恒 undefined）：面板卸载即作废本批——游标已持久化，重新发起可续跑。
+    const skillifyAbort = new AbortController();
+    activeSkillifyAbort = skillifyAbort;
     let progressToastId: string | null = null;
     try {
       const progressOptions = { durationMs: 0, muteable: false, dismissible: false };
@@ -552,6 +560,7 @@ export function usePlotWorldbookAgentControl() {
         maxConcurrency: maxSkillifyConcurrency.value,
         // 显式勾选的条目是一次性目标，不该被上一批的全量游标带着走；只有整库续跑才复用游标。
         cursor: hasExplicitSelection ? undefined : skillifyCursor.value,
+        signal: skillifyAbort.signal,
         ...optionsPatch,
         onProgress: notifyProgress,
       });
@@ -592,6 +601,7 @@ export function usePlotWorldbookAgentControl() {
       }
       return false;
     } finally {
+      if (activeSkillifyAbort === skillifyAbort) activeSkillifyAbort = null;
       busy.value = null;
     }
   }

@@ -11,7 +11,7 @@ export interface ContinuationHostTurnRuntime_ACU {
   getChatIdentity(): string;
   getChat(): any[];
   retryCurrentTurn(): Promise<{ retryHostGeneration?: boolean }>;
-  readPendingHostTurn(): { settings: { loopTags: string; retryDelaySeconds?: number; minGenerationTokens?: number }; pending: { identity: TurnAttemptIdentity_ACU; capture: ContinuationHostGenerationCapture_ACU; status: 'awaiting_generation' | 'retry_ready' | 'exhausted' }; taskStopped?: boolean } | null;
+  readPendingHostTurn(): { settings: { loopTags: string; retryDelaySeconds?: number; minGenerationTokens?: number }; pending: { identity: TurnAttemptIdentity_ACU; capture: ContinuationHostGenerationCapture_ACU; status: 'awaiting_generation' | 'retry_ready' | 'exhausted' }; taskStopped?: boolean; taskRunning?: boolean } | null;
   readAutoContinueState(): { eligible: boolean; delaySeconds: number };
   continueTask(): Promise<{ preparedTurn?: ContinuationPreparedTurnInstruction_ACU; retryHostGeneration?: boolean }>;
   recordHostTurn(input: { identity: TurnAttemptIdentity_ACU; capture: ContinuationHostGenerationCapture_ACU }): Promise<unknown>;
@@ -369,7 +369,7 @@ export class ContinuationHostGenerationBridge_ACU {
     if (beforeRetry?.pending.status !== 'retry_ready' || beforeRetry.pending.identity.attemptId !== identity.attemptId) return;
     // 等待期间用户点了停止（或任务已失败）→ 放弃自动重试：否则 retryCurrentTurn 会把任务置回
     // running 并清空 stopReason，等于静默撤销用户的停止并多烧一次宿主生成。
-    if (beforeRetry.taskStopped) return;
+    if (beforeRetry.taskStopped || beforeRetry.taskRunning) return;
     const action = await this.dependencies.runtime.retryCurrentTurn();
     if (!action.retryHostGeneration) return;
     await this.retryHostGeneration();
@@ -401,7 +401,20 @@ export class ContinuationHostGenerationBridge_ACU {
    * 楼层形状与发送时的捕获快照对不上（用户删掉了指令楼或更早的正文）就放弃：
    * 此时 regenerate 会误删上一轮正文，应由调用方回到 Agent 重新规划。
    */
+  private retryInFlight_ACU = false;
+
   async retryHostGeneration(): Promise<boolean> {
+    // 手动/自动两条重试同走本方法，record 之前都有 await 空隙；同步互斥锁让后到者在第一个 await 前就让位。
+    if (this.retryInFlight_ACU) return false;
+    this.retryInFlight_ACU = true;
+    try {
+      return await this.retryHostGenerationInner_ACU();
+    } finally {
+      this.retryInFlight_ACU = false;
+    }
+  }
+
+  private async retryHostGenerationInner_ACU(): Promise<boolean> {
     const runtime = this.dependencies.runtime;
     const snapshot = runtime.readPendingHostTurn();
     if (!snapshot || snapshot.pending.status !== 'retry_ready') return false;

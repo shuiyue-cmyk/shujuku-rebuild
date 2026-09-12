@@ -2036,7 +2036,10 @@ function maskSensitiveInLogValue(value, depth = 0, seen = new WeakSet()) {
         return value
             .replace(/(Authorization\s*:\s*Bearer\s+)([^\s"',}\n]+)/gi, '$1***')
             .replace(/(Bearer\s+)(sk-[A-Za-z0-9-_]+)/g, '$1***')
-            .replace(/("[A-Za-z0-9_-]*(?:api[_-]?key|apikey|authorization|token|password|secret)"\s*:\s*")([^"]+)(")/gi, '$1***$3');
+            .replace(/("[A-Za-z0-9_-]*(?:api[_-]?key|apikey|authorization|token|password|secret)"\s*:\s*")([^"]+)(")/gi, '$1***$3')
+            // 与 normalizeLogArg_ACU 的 [L4] 规则对齐：Error 分支走本函数，此前缺裸 key=value 与独立 sk- 形态
+            .replace(/\b([A-Za-z0-9_]*(?:api[_-]?key|apikey|authorization|token|password|secret|auth|bearer|accessToken|access_token))\b(\s*[:=]\s*)(?!["']|bearer\b)[^\s"',;}\n]+/gi, '$1$2***')
+            .replace(/\bsk-[A-Za-z0-9_-]{16,}/g, 'sk-***');
     }
     if (depth > 6 || value === null || value === undefined)
         return depth > 6 ? '[Truncated]' : value;
@@ -4961,6 +4964,7 @@ async function requestRerankBatch_ACU(request) {
     try {
         response = await fetch(request.endpoint, {
             method: 'POST',
+            redirect: 'error', // 307/308 会把 POST 原样重放到重定向目标：SSRF 守卫只校发起前 URL，禁止重定向
             headers: buildRerankHeaders_ACU(request.apiKey),
             body: JSON.stringify(payload),
             signal: controller.signal,
@@ -5168,7 +5172,47 @@ async function saveChatToHostStrict_ACU() {
     if (typeof SillyTavern_API_ACU?.saveChat !== 'function') {
         throw new Error('宿主 saveChat 不可用，无法提交破坏性聊天数据变更。');
     }
-    await SillyTavern_API_ACU.saveChat();
+    // TT 的 integrity 冲突未确认路径不抛错：confirm 弹窗选否 → window.location.reload() 后 promise 照常 resolve，
+    // resolve 本身不能当落盘证据。若返回时本页已开始卸载，后续 publish/GC 会把注册表写成与盘上旧数据错配的状态——直接失败。
+    // 注：读回比对不可行——getContext 暴露的是 chatMetadata（非 chat_metadata），且 integrity 是只 mint 一次、
+    // 永不轮转的 uuid，前后比对恒相等；saveChat 全路径 resolve undefined，返回值亦无信号。
+    let unloading = false;
+    const markUnloading = () => { unloading = true; };
+    const listenTargets = [];
+    try {
+        const g = globalThis;
+        const wins = [];
+        if (g?.window)
+            wins.push(g.window);
+        if (g?.window?.parent && g.window.parent !== g.window)
+            wins.push(g.window.parent);
+        for (const win of wins) {
+            if (typeof win?.addEventListener === 'function' && typeof win?.removeEventListener === 'function') {
+                listenTargets.push(win);
+            }
+        }
+    }
+    catch { /* 取 parent 失败即只听本窗（下面 windows 为空则跳过） */ }
+    for (const win of listenTargets) {
+        try {
+            win.addEventListener('pagehide', markUnloading);
+        }
+        catch { /* 忽略 */ }
+    }
+    try {
+        await SillyTavern_API_ACU.saveChat();
+    }
+    finally {
+        for (const win of listenTargets) {
+            try {
+                win.removeEventListener('pagehide', markUnloading);
+            }
+            catch { /* 忽略 */ }
+        }
+    }
+    if (unloading) {
+        throw new Error('宿主页面在保存返回时已开始卸载（疑似 integrity 冲突未确认覆盖），中止本事务的破坏性变更。');
+    }
     notifyPostChatSaveListeners_ACU();
 }
 // ═══ 宿主动作 ═══
@@ -48010,6 +48054,7 @@ async function requestEmbeddingsOnce_ACU(endpoint, model, input, headers) {
     assertSafeHttpEndpoint_ACU(endpoint);
     const response = await fetchEmbeddingWithTimeout_ACU(endpoint, {
         method: 'POST',
+        redirect: 'error', // 307/308 会把 POST 原样重放到重定向目标：SSRF 守卫只校发起前 URL，禁止重定向
         headers,
         body: JSON.stringify({ model, input }),
     }, model);
@@ -50382,6 +50427,39 @@ function decodeSummaryVectorMirrorVector_ACU(encoded) {
 }
 async function registerPrepared_ACU(file) {
     await registerVectorIndexFiles_ACU([{ ...file, publicationState: 'prepared' }]);
+}
+/**
+ * 失败/放弃路径显式回收未引用的 prepared 文件：GC 为护 finalize 窗口对 prepared 一律 retain，
+ * 不主动删即永久累积；删除成功后同步注销 registry，避免「文件已删、registry 仍挂着 prepared」的幽灵条目。
+ */
+async function discardSummaryVectorMirrorPreparedFiles_ACU(files, context) {
+    const deletedPaths = [];
+    for (const file of files) {
+        if (!file?.path)
+            continue;
+        try {
+            // delete 返回 {ok:false} 不抛错：只有 ok:true（已删或确认不存在）才能注销 registry，
+            // 否则 registry 丢跟踪、文件仍在盘上，变成 GC 永久不可见的孤儿。
+            const deleted = await deleteVectorIndexFile_ACU(file.path);
+            if (deleted?.ok) {
+                deletedPaths.push(file.path);
+            }
+            else {
+                logWarn_ACU(`[向量镜像] ${context}：丢弃未引用 prepared 文件未成功（交由 GC 保留，需人工关注）：${file.path}`, deleted?.error || '');
+            }
+        }
+        catch (error) {
+            logWarn_ACU(`[向量镜像] ${context}：丢弃未引用 prepared 文件失败（交由 GC 保留，需人工关注）：${file.path}`, error?.message || error);
+        }
+    }
+    if (deletedPaths.length > 0) {
+        try {
+            await unregisterVectorIndexFiles_ACU(deletedPaths);
+        }
+        catch (error) {
+            logWarn_ACU(`[向量镜像] ${context}：registry 注销已删文件失败：${deletedPaths.join(',')}`, error?.message || error);
+        }
+    }
 }
 async function finalizeSummaryVectorMirrorFiles_ACU(files) {
     const published = files
@@ -55514,15 +55592,9 @@ async function flushSummaryVectorMirrorNow_ACU(options = {}) {
     catch (error) {
         restoreIsolatedData_ACU(snapshots);
         // 提交失败 → 本次不会再 finalize，prepared pack 永远不会被引用（GC 出于保护 finalize 窗口
-        // 而保留所有 prepared pack），不主动回收就会永久累积。此处显式丢弃并留下可检索告警。
-        if (packPersist?.file?.path) {
-            try {
-                const discarded = await deleteVectorIndexFile_ACU(packPersist.file.path);
-                logWarn_ACU(`[向量镜像] delta 提交失败，已丢弃未引用的 prepared pack：${packPersist.file.path}（删除结果 ${JSON.stringify(discarded)}）`);
-            }
-            catch (cleanupError) {
-                logWarn_ACU(`[向量镜像] delta 提交失败，且 prepared pack 清理失败（将由 GC 保留，需人工关注）：${packPersist.file.path}`, cleanupError?.message || cleanupError);
-            }
+        // 而保留所有 prepared pack），不主动回收就会永久累积。走统一回收（含 ok 检查与 registry 注销）。
+        if (packPersist?.file) {
+            await discardSummaryVectorMirrorPreparedFiles_ACU([packPersist.file], 'delta 提交失败');
         }
         return emptyResult_ACU$1({
             reason: 'vector_mirror_commit_failed',
@@ -55788,12 +55860,16 @@ async function snapshotSummaryVectorMirrorExcludingRows_ACU(options) {
     }
     const rows = selectRetainedVectorMirrorRows_ACU(head.head, options.excludedRowIds);
     const usedPackHashes = new Set(rows.flatMap((row) => row.chunks.map((chunk) => chunk.packHash)));
+    const baseAtCapture = locateSummaryVectorMirrorBase_ACU(chat, getCurrentIsolationKey_ACU());
     return {
         kind: 'ready',
         sourceTableKey,
         embedding: { ...head.checkpoint.embedding },
         rows,
         packRefs: head.packRefs.filter((ref) => usedPackHashes.has(ref.packHash)).map((ref) => ({ ...ref })),
+        expectedBaseFingerprint: baseAtCapture?.frame.checkpoint?.kind === 'full'
+            ? getTableDataFingerprint_ACU(baseAtCapture.frame.checkpoint.data)
+            : '',
     };
 }
 async function stripSummaryVectorMirrorFrames_ACU(chat, isolationKey, sourceTableKey) {
@@ -55915,6 +55991,16 @@ async function publishSummaryVectorMirrorRowRemovalSnapshot_ACU(snapshot) {
             workingDataMode: 'none',
         }, async (ctx) => {
             ctx.assertFresh?.('vector_mirror_row_removal:before_write');
+            // 镜像 flush 走 derived_metadata 不 bump 修订号，assertFresh 看不见快照之后的行写：以快照指纹复核当前 head，失配即放弃发布（交回队列按新头重放）。
+            if (snapshot.expectedBaseFingerprint) {
+                const freshBase = locateSummaryVectorMirrorBase_ACU(chat, isolationKey);
+                const freshFingerprint = freshBase?.frame.checkpoint?.kind === 'full'
+                    ? getTableDataFingerprint_ACU(freshBase.frame.checkpoint.data)
+                    : '';
+                if (freshFingerprint !== snapshot.expectedBaseFingerprint) {
+                    throw new Error('summary_vector_mirror_publish_stale_base：快照之后源表已有新写入，剩余行发布放弃，按新头重放。');
+                }
+            }
             await ctx.runCommit(async () => {
                 for (const ref of collectSummaryVectorMirrorFrameRefs_ACU(chat, isolationKey)) {
                     if (ref.frame.summaryVectorIndexFrame) {
@@ -56156,6 +56242,7 @@ async function rebuildSummaryVectorMirror_ACU(options) {
     const requiredPackHashes = [...new Set(rows.flatMap((row) => row.chunks.map((chunk) => chunk.packHash)))];
     const missingPackRefs = requiredPackHashes.filter((packHash) => !packRefsByHash.has(packHash));
     if (missingPackRefs.length > 0) {
+        await discardSummaryVectorMirrorPreparedFiles_ACU(files, '重建引用缺 pack');
         return emptyResult_ACU({
             reason: 'rebuild_repair_pack_reference_missing',
             errors: [`重建引用的 pack 缺少可达路径：${missingPackRefs.join(',')}`],
@@ -56173,6 +56260,7 @@ async function rebuildSummaryVectorMirror_ACU(options) {
             embedding = { ...existingHead.checkpoint.embedding };
         }
         else {
+            await discardSummaryVectorMirrorPreparedFiles_ACU(files, '空重建放弃非法 embedding');
             try {
                 await stripSummaryVectorMirrorFrames_ACU(chat, isolationKey, selected.summaryKey);
                 return emptyResult_ACU({
@@ -56189,17 +56277,27 @@ async function rebuildSummaryVectorMirror_ACU(options) {
             }
         }
     }
-    const manifestPersist = await persistSummaryVectorMirrorManifestPrepared_ACU({
-        chatKey: scope.chatKey,
-        isolationKey: scope.isolationKey,
-        sourceTableKey: scope.sourceTableKey,
-        rows: {
-            schema: 'summary_vector_mirror_manifest',
-            version: 1,
-            sourceTableKey: selected.summaryKey,
-            rows: rows.map((row) => ({ rowId: row.rowId, chunks: row.chunks })),
-        },
-    });
+    let manifestPersist;
+    try {
+        manifestPersist = await persistSummaryVectorMirrorManifestPrepared_ACU({
+            chatKey: scope.chatKey,
+            isolationKey: scope.isolationKey,
+            sourceTableKey: scope.sourceTableKey,
+            rows: {
+                schema: 'summary_vector_mirror_manifest',
+                version: 1,
+                sourceTableKey: selected.summaryKey,
+                rows: rows.map((row) => ({ rowId: row.rowId, chunks: row.chunks })),
+            },
+        });
+    }
+    catch (error) {
+        await discardSummaryVectorMirrorPreparedFiles_ACU(files, '重建 manifest 上传失败');
+        return emptyResult_ACU({
+            reason: 'rebuild_commit_failed',
+            errors: [error?.message || String(error || '重建 manifest 上传失败')],
+        });
+    }
     files.push(manifestPersist.file);
     const checkpoint = {
         kind: 'vector_full',
@@ -56265,6 +56363,7 @@ async function rebuildSummaryVectorMirror_ACU(options) {
             else
                 delete snapshot.message.TavernDB_ACU_IsolatedData;
         }
+        await discardSummaryVectorMirrorPreparedFiles_ACU(files, '重建落盘失败');
         return emptyResult_ACU({
             reason: 'rebuild_commit_failed',
             errors: [error?.message || String(error || '重建落盘失败')],
@@ -84603,6 +84702,7 @@ async function postChatCompletion_ACU(body, signal) {
     try {
         res = await fetch('/api/backends/chat-completions/generate', {
             method: 'POST',
+            redirect: 'error', // 307/308 会把 POST 原样重放到重定向目标：SSRF 守卫只校发起前 URL，禁止重定向
             headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
             signal: signal || undefined,
@@ -84794,6 +84894,7 @@ async function callAIWithResolvedPreset_ACU(messages, resolved, signal, lifecycl
         try {
             response = await fetch('/api/backends/chat-completions/generate', {
                 method: 'POST',
+                redirect: 'error', // 307/308 会把 POST 原样重放到重定向目标：SSRF 守卫只校发起前 URL，禁止重定向
                 headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
                 signal: timeoutController.signal,
@@ -90018,7 +90119,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.5.3" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.5.4" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -99660,6 +99761,16 @@ function validateSummaryVectorIndexConfig_ACU(configInput) {
     if (!config.embeddingEndpoint) {
         errors.push('缺少 embeddingEndpoint');
     }
+    else {
+        // 端点安全性并入配置校验：不安全端点收敛为 config_invalid（terminal 通道），
+        // 不再漏到网关运行期抛裸 Error 被镜像链路按 retryable 白烧重试额度。
+        try {
+            assertSafeHttpEndpoint_ACU(String(config.embeddingEndpoint));
+        }
+        catch (endpointError) {
+            errors.push(`embeddingEndpoint 不安全：${String(endpointError?.message || endpointError)}`);
+        }
+    }
     if (!config.embeddingModel) {
         errors.push('缺少 embeddingModel');
     }
@@ -102449,17 +102560,25 @@ async function foldSummaryVectorMirrorAtBoundary_ACU(params) {
             row.chunks = row.chunks.map((ref) => ({ packHash, chunkIndex: ref.chunkIndex }));
         });
     }
-    const manifestPersist = await persistSummaryVectorMirrorManifestPrepared_ACU({
-        chatKey: scope.chatKey,
-        isolationKey: scope.isolationKey,
-        sourceTableKey: scope.sourceTableKey,
-        rows: {
-            schema: 'summary_vector_mirror_manifest',
-            version: 1,
-            sourceTableKey,
-            rows: rows.map((row) => ({ rowId: row.rowId, chunks: row.chunks })),
-        },
-    });
+    let manifestPersist;
+    try {
+        manifestPersist = await persistSummaryVectorMirrorManifestPrepared_ACU({
+            chatKey: scope.chatKey,
+            isolationKey: scope.isolationKey,
+            sourceTableKey: scope.sourceTableKey,
+            rows: {
+                schema: 'summary_vector_mirror_manifest',
+                version: 1,
+                sourceTableKey,
+                rows: rows.map((row) => ({ rowId: row.rowId, chunks: row.chunks })),
+            },
+        });
+    }
+    catch (error) {
+        // pack 已 prepared、manifest 失败：抛出不回填引用即成孤儿（GC 对 prepared 一律 retain）。
+        await discardSummaryVectorMirrorPreparedFiles_ACU(files, '镜像折叠 manifest 上传失败');
+        throw error;
+    }
     files.push(manifestPersist.file);
     const checkpoint = {
         kind: 'vector_full',
@@ -102474,8 +102593,10 @@ async function foldSummaryVectorMirrorAtBoundary_ACU(params) {
         packRefs: packHash ? [{ packHash, path: files[0].path, chunkCount: mergedChunks.length, byteLength: files[0].byteSize }] : [],
     };
     const anchorFrame = getFrame_ACU(params.chat, params.isolationKey, params.boundaryAnchorIndex);
-    if (!anchorFrame)
+    if (!anchorFrame) {
+        await discardSummaryVectorMirrorPreparedFiles_ACU(files, '镜像折叠锚点缺失');
         throw new Error('向量镜像折叠失败：锚点 frame 不存在。');
+    }
     const existing = anchorFrame.summaryVectorIndexFrame && typeof anchorFrame.summaryVectorIndexFrame === 'object'
         ? anchorFrame.summaryVectorIndexFrame
         : { version: 3, sourceTableKey, logEntries: [] };
@@ -103052,7 +103173,15 @@ async function ensureV2BoundaryCheckpointForRetainedBufferCore_ACU(chat, boundar
             }
         }
         catch (error) {
-            snapshots.forEach((snapshot, messageIndex) => restoreMessageFieldSnapshot_ACU(chat[messageIndex], snapshot));
+            for (const [messageIndex, snapshot] of snapshots) {
+                // 单项还原异常不得中断其余楼层回滚：冻结子对象等个别楼层还原失败时，其余楼层必须回到保存前状态。
+                try {
+                    restoreMessageFieldSnapshot_ACU(chat[messageIndex], snapshot);
+                }
+                catch (restoreError) {
+                    logWarn_ACU(`[ACU-V2] 边界回滚楼层 #${messageIndex} 异常（继续回滚其余楼层）:`, restoreError?.message || restoreError);
+                }
+            }
             return {
                 success: false,
                 changed: false,
@@ -107477,7 +107606,7 @@ function normalizeStatusCustomApiFormat_ACU(value) {
  * 从自定义 API 端点获取可用模型列表
  * 纯业务逻辑：发送 HTTP 请求、解析响应、返回模型列表
  * 不涉及 UI（toast、状态显示由 presentation 层负责）
- * @param customApiFormat 接口协议（预设级，四值白名单）；缺省/非法降级 ''，
+ * @param customApiFormat 接口协议（预设级，五值白名单）；缺省/非法降级 ''，
  *                        TT 后端据此把模型列表来源切到对应协议（claude_messages→Claude、
  *                        gemini_interactions→Makersuite），不传则恒按 openai_compat 探活。
  */
@@ -107494,13 +107623,13 @@ function modelListCacheKey_ACU(apiUrl, apiKey, customApiFormat) {
 function cloneModelsResult_ACU(result) {
     return { ...result, models: result.models ? [...result.models] : undefined };
 }
-async function fetchAvailableModels_ACU(apiUrl, apiKey, customApiFormat) {
+async function fetchAvailableModels_ACU(apiUrl, apiKey, customApiFormat, options) {
     if (!apiUrl) {
         return { success: false, error: '请输入API基础URL。' };
     }
     const key = modelListCacheKey_ACU(apiUrl, apiKey, customApiFormat);
     const now = Date.now();
-    const hit = modelListCache_ACU.get(key);
+    const hit = options?.force ? undefined : modelListCache_ACU.get(key);
     if (hit && now - hit.at < (hit.result.success ? MODEL_LIST_TTL_MS_ACU : MODEL_LIST_FAIL_TTL_MS_ACU)) {
         return cloneModelsResult_ACU(hit.result);
     }
@@ -107563,6 +107692,7 @@ async function fetchAvailableModelsUncached_ACU(apiUrl, apiKey, customApiFormat)
     try {
         response = await fetch(statusUrl, {
             method: 'POST',
+            redirect: 'error', // 307/308 会把 POST 原样重放到重定向目标：SSRF 守卫只校发起前 URL，禁止重定向
             headers: { ...getHostRequestHeaders_ACU(), 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
             signal: controller.signal,
@@ -116806,7 +116936,7 @@ async function fetchModelsAndConnect_ACU() {
         // 契约：fetchAvailableModels_ACU(apiUrl, apiKey, customApiFormat?)，第三参默认 ''。
         // 不传协议时 ai-service 无法按 custom_api_format 分流，模型列表探测与正式调用会走不同通道。
         const customApiFormat = String(settings_ACU.apiConfig?.customApiFormat || '');
-        const result = await fetchAvailableModels_ACU(apiUrl, apiKey, customApiFormat);
+        const result = await fetchAvailableModels_ACU(apiUrl, apiKey, customApiFormat, { force: true }); // 测试连接是显式验证动作：不能被 5min TTL/30s 失败负缓存吞掉重试
         if (!result.success) {
             throw new Error(result.error || '未知错误');
         }
@@ -126931,7 +127061,7 @@ class ContinuationOrchestrator_ACU {
         // 任务被用户停止（或已带错误暂停）时，retry_ready 的待重试轮不得被自动重试复活：
         // 桥的自动重试只认 pending.status，若不带上这个位，用户在重试等待窗内点停止会被静默撤销。
         const taskStopped = task.stopReason !== null || task.status === 'failed';
-        return { settings: envelope.settings, pending: task.pendingHostTurn, taskStopped };
+        return { settings: envelope.settings, pending: task.pendingHostTurn, taskStopped, taskRunning: task.status === 'running' };
     }
     async pauseForHostResultFailure(identity) {
         return this.pauseHostTurn_ACU(identity, 'CONTINUATION_TASK_STATE_INVALID', '宿主正文无法唯一归属当前轮次', 'state_invalid');
@@ -127259,6 +127389,9 @@ class ContinuationOrchestrator_ACU {
         this.invalidateLease_ACU(chatIdentity);
         if (replanInstruction)
             await this.recordUserMessage_ACU(replanInstruction, '要求重新规划大纲');
+        // 与 continueTask 同型登记控制器：否则 UI 重规划路径 planOutline_ACU 取不到 signal，「停止」无法中断这条最长 8192 token 的大纲请求。
+        const controller = new AbortController();
+        abortControllersByChat_ACU.set(chatIdentity, controller);
         return this.withLease_ACU(async (_identity, lease) => {
             const taskId = this.requireTask_ACU(this.requireEnvelope_ACU(this.dependencies.store.readPersisted())).taskId;
             try {
@@ -127268,6 +127401,10 @@ class ContinuationOrchestrator_ACU {
             catch (error) {
                 await this.pauseWithError_ACU(chatIdentity, taskId, error, 'outline_call', '阶段规划失败');
                 throw error;
+            }
+            finally {
+                if (abortControllersByChat_ACU.get(chatIdentity) === controller)
+                    abortControllersByChat_ACU.delete(chatIdentity);
             }
         });
     }
@@ -131033,19 +131170,84 @@ const SEARCH_HIT_OVERHEAD_ACU = 60;
 const SEARCH_REGEX_MAX_LENGTH_ACU = 300;
 /** 正则搜索的总时间护栏（毫秒）：跨行累计超时即停止收集，避免病态模式长占主线程。 */
 const SEARCH_REGEX_TIME_BUDGET_MS_ACU = 1500;
+/** 单行参与正则匹配的长度上限：病态模式在超长单行上的一次 exec 就能独占主线程分钟级，静态闸漏网时的硬保险。 */
+const SEARCH_REGEX_LINE_CAP_ACU = 8000;
 /**
  * 灾难性回溯风险启发式。长度上限拦不住 `(a+)+b` 这类短而病态的模式，而 exec 在主线程同步执行，
  * 一旦回溯爆炸会把界面卡死到用户无法操作（正则由模型产出，可被卡片正文提示注入诱导）。
  * 保守判定：命中即拒绝执行并给出改写提示——宁可让模型换个写法，也不赌单次 exec 的耗时。
  */
 function hasReDoSRisk_ACU(pattern) {
-    // 嵌套量词：组内已含量词，整组又被量词修饰，如 (a+)+ / (.*)+ / (ab*)*
-    if (/\([^()]*[+*]\)\s*(?:[+*]|\{\d+,\s*\})/.test(pattern))
-        return true;
+    // 泛化嵌套量词（star height≥2 的保守近似）：任意量词组内只要再出现 `+`/`*`/`{m,n}` 量词即拒绝。
+    // 覆盖 `(a+)+` 单层形态，也覆盖 `((a)+)+`、`(((x*)y)z*)*` 这类旧式漏检的多层嵌套。
+    const marks = []; // 每个未闭合组体内（含嵌套）是否已出现量词
+    let inClass = false;
+    for (let i = 0; i < pattern.length; i++) {
+        const c = pattern[i];
+        if (c === '\\') {
+            i++;
+            continue;
+        }
+        if (inClass) {
+            if (c === ']')
+                inClass = false;
+            continue;
+        }
+        if (c === '[') {
+            inClass = true;
+            continue;
+        }
+        if (c === '(') {
+            marks.push(false);
+            continue;
+        }
+        if (c === ')') {
+            if (!marks.length)
+                break;
+            const inner = marks.pop();
+            const quantEnd = redosQuantifierEndAt_ACU(pattern, i + 1);
+            if (quantEnd !== null) {
+                if (inner)
+                    return true;
+                if (marks.length)
+                    marks[marks.length - 1] = true;
+                i = quantEnd - 1;
+            }
+            else if (marks.length) {
+                marks[marks.length - 1] = marks[marks.length - 1] || inner;
+            }
+            continue;
+        }
+        if (!marks.length)
+            continue;
+        if (c === '*' || c === '+') {
+            marks[marks.length - 1] = true;
+            continue;
+        }
+        if (c === '{') {
+            const m = /^\{\d+,\d*\}/.exec(pattern.slice(i));
+            if (m) {
+                marks[marks.length - 1] = true;
+                i += m[0].length - 1;
+            }
+        }
+    }
     // 相同分支的交替被量化，如 (a|a)+ / (|x)+
     if (/\(([^()|]*)\|\1\)\s*(?:[+*]|\{\d+,\s*\})/.test(pattern))
         return true;
     return false;
+}
+/** 位置 j 起若为量词（加号、星号、花括号量词，允许可惰性修饰 ?），返回量词结束后的下标。 */
+function redosQuantifierEndAt_ACU(pattern, j) {
+    const c = pattern[j];
+    if (c === '*' || c === '+')
+        return j + 1 + (pattern[j + 1] === '?' ? 1 : 0);
+    if (c === '{') {
+        const m = /^\{\d+(,\d*)?\}\??/.exec(pattern.slice(j));
+        if (m && (!m[1] || m[1].includes(',')))
+            return j + m[0].length;
+    }
+    return null;
 }
 /** 匹配词居中开窗截断单行，沿用奶龙code createMatchLineSnippet 的思路。 */
 function createAgentMatchSnippet_ACU(line, matchStart, matchLength, limit = SEARCH_LINE_SNIPPET_LIMIT_ACU) {
@@ -131257,7 +131459,9 @@ function runAgentSearch_ACU(call, context) {
                 truncated = true;
                 break;
             }
-            const matched = regex.exec(line.text);
+            // 正则模式对超长行截断匹配（8000 字符后的内容不参与命中——防单行回溯爆炸；字面搜索不截断）。
+            const execText = call.isRegex && line.text.length > SEARCH_REGEX_LINE_CAP_ACU ? line.text.slice(0, SEARCH_REGEX_LINE_CAP_ACU) : line.text;
+            const matched = regex.exec(execText);
             if (!matched)
                 continue;
             const snippet = createAgentMatchSnippet_ACU(line.text, matched.index, matched[0].length);
@@ -134141,6 +134345,13 @@ class ContinuationHostGenerationBridge_ACU {
         this.startedByChat = new Map();
         this.stateListeners = new Set();
         this.localRetryClaim = null;
+        /**
+         * 用宿主自己的重新生成/生成链路重试当前轮，不再让 Agent 另造一条请求。
+         * 本轮正文已在末楼时走 regenerate（宿主会删掉该楼）；正文尚未产出时对指令楼 generate。
+         * 楼层形状与发送时的捕获快照对不上（用户删掉了指令楼或更早的正文）就放弃：
+         * 此时 regenerate 会误删上一轮正文，应由调用方回到 Agent 重新规划。
+         */
+        this.retryInFlight_ACU = false;
     }
     /** 订阅桥驱动的持久化状态变更；页面无需猜测宿主事件何时完成。 */
     subscribeStateChanges(listener) {
@@ -134462,7 +134673,7 @@ class ContinuationHostGenerationBridge_ACU {
             return;
         // 等待期间用户点了停止（或任务已失败）→ 放弃自动重试：否则 retryCurrentTurn 会把任务置回
         // running 并清空 stopReason，等于静默撤销用户的停止并多烧一次宿主生成。
-        if (beforeRetry.taskStopped)
+        if (beforeRetry.taskStopped || beforeRetry.taskRunning)
             return;
         const action = await this.dependencies.runtime.retryCurrentTurn();
         if (!action.retryHostGeneration)
@@ -134492,13 +134703,19 @@ class ContinuationHostGenerationBridge_ACU {
             return null;
         return claim;
     }
-    /**
-     * 用宿主自己的重新生成/生成链路重试当前轮，不再让 Agent 另造一条请求。
-     * 本轮正文已在末楼时走 regenerate（宿主会删掉该楼）；正文尚未产出时对指令楼 generate。
-     * 楼层形状与发送时的捕获快照对不上（用户删掉了指令楼或更早的正文）就放弃：
-     * 此时 regenerate 会误删上一轮正文，应由调用方回到 Agent 重新规划。
-     */
     async retryHostGeneration() {
+        // 手动/自动两条重试同走本方法，record 之前都有 await 空隙；同步互斥锁让后到者在第一个 await 前就让位。
+        if (this.retryInFlight_ACU)
+            return false;
+        this.retryInFlight_ACU = true;
+        try {
+            return await this.retryHostGenerationInner_ACU();
+        }
+        finally {
+            this.retryInFlight_ACU = false;
+        }
+    }
+    async retryHostGenerationInner_ACU() {
         const runtime = this.dependencies.runtime;
         const snapshot = runtime.readPendingHostTurn();
         if (!snapshot || snapshot.pending.status !== 'retry_ready')
@@ -141231,7 +141448,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260912-09";
+        const stamp = "20260912-19";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -158864,12 +159081,14 @@ const useApiPresetStore = defineStore('acu-v2-api-presets', {
         },
         /**
          * 模型探活（status）：customApiFormat 允许未归一化的草稿值，
-         * service 侧按四值白名单校验、非法降级 ''（等价 TT 默认 openai_compat）。
+         * service 侧按五值白名单校验、非法降级 ''（等价 TT 默认 openai_compat）。
          */
         async loadModelsForConfig(apiConfig) {
             this.modelLoadStatus = 'loading';
             this.modelLoadError = '';
-            const result = await fetchAvailableModels_ACU(String(apiConfig.url || ''), String(apiConfig.apiKey || ''), String(apiConfig.customApiFormat || ''));
+            const result = await fetchAvailableModels_ACU(String(apiConfig.url || ''), String(apiConfig.apiKey || ''), String(apiConfig.customApiFormat || ''), 
+            // 「拉取模型列表」是用户的显式刷新动作：跳过探活缓存读，避免 5 分钟 TTL 吞掉新配置
+            { force: true });
             if (!result.success) {
                 this.modelOptions = [];
                 this.modelLoadStatus = 'error';
@@ -167926,6 +168145,10 @@ function withRenderFallback(label, fallback, build) {
         if (seen <= 3) {
             logError_ACU(`[ACU-V2] dashboard ${label} 计算异常，已降级:`, error);
         }
+        else if (seen === 4) {
+            // 第 4 次起静默=证据缺口：留一条可数上限记录，读者能区分「无降级」与「已封顶」。
+            logError_ACU(`[ACU-V2] dashboard ${label} 持续计算异常（已第 ${seen} 次降级），后续同类降级不再逐条记录，恢复成功后重新计数。`, error);
+        }
         return fallback;
     }
 }
@@ -168722,8 +168945,10 @@ var _sfc_main$D = /*@__PURE__*/ defineComponent({
         function syncFeaturePageGates() {
             routerStore.syncFeatureGate(FEATURE_GATE_CONTENT_REPLACE, dashboard.contentReplaceGateEnabled.value);
             routerStore.syncFeatureGate(FEATURE_GATE_PLOT, plotStore.enabled === true);
-            routerStore.syncFeatureGate(FEATURE_GATE_CONTINUATION, dashboard.advancedToggles.value.some((item) => item.key === "continuationPageEnabled" && item.value));
-            routerStore.syncFeatureGate(FEATURE_GATE_VECTOR_INDEX, dashboard.advancedToggles.value.some((item) => item.key === "summaryVectorIndexModeEnabled" && item.value));
+            // gate 必须读 settings 权威源：advancedToggles 带渲染降级（抛错返回空表），
+            // 从它派生会把「读不到」误判成「开关关了」而隐藏功能页入口。
+            routerStore.syncFeatureGate(FEATURE_GATE_CONTINUATION, settings_ACU.continuationPageEnabled !== false);
+            routerStore.syncFeatureGate(FEATURE_GATE_VECTOR_INDEX, settings_ACU.summaryVectorIndexModeDefault === true);
         }
         function goToHealthAction(pageId) {
             routerStore.setActivePage(pageId);
@@ -168796,8 +169021,8 @@ var _sfc_main$D = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-v2-dashboard-page[data-v-1d8acb4d] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-dashboard-page__toggle-list[data-v-1d8acb4d] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\r\n  margin-top: 14px;\n}\n.acu-v2-dashboard-page__health-list[data-v-1d8acb4d] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  min-width: 0;\n}\n.acu-v2-dashboard-page__health-item[data-v-1d8acb4d] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: 30px minmax(0, 1fr) max-content;\r\n  column-gap: 10px;\r\n  row-gap: 8px;\r\n  align-items: center;\r\n  padding: 10px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\r\n  transition:\r\n    border-color 0.15s ease,\r\n    background 0.15s ease;\n}\n.acu-v2-dashboard-page__health-item--error[data-v-1d8acb4d] {\r\n  border-color: color-mix(in srgb, var(--acu-danger) 38%, var(--acu-border));\n}\n.acu-v2-dashboard-page__health-icon[data-v-1d8acb4d] {\r\n  width: 30px;\r\n  height: 30px;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-2);\r\n  color: var(--acu-text-2);\n}\n.acu-v2-dashboard-page__health-item--ok .acu-v2-dashboard-page__health-icon[data-v-1d8acb4d] {\r\n  color: var(--acu-success);\r\n  background: color-mix(in srgb, var(--acu-success) 10%, transparent);\n}\n.acu-v2-dashboard-page__health-item--warning\r\n  .acu-v2-dashboard-page__health-icon[data-v-1d8acb4d] {\r\n  color: var(--acu-warning);\r\n  background: color-mix(in srgb, var(--acu-warning) 12%, transparent);\n}\n.acu-v2-dashboard-page__health-item--error .acu-v2-dashboard-page__health-icon[data-v-1d8acb4d] {\r\n  color: var(--acu-danger);\r\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\n}\n.acu-v2-dashboard-page__health-body[data-v-1d8acb4d] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\n}\n.acu-v2-dashboard-page__health-heading[data-v-1d8acb4d] {\r\n  min-width: 0;\n}\n.acu-v2-dashboard-page__health-heading strong[data-v-1d8acb4d] {\r\n  min-width: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 650;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-dashboard-page__health-body p[data-v-1d8acb4d] {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-dashboard-page__health-side[data-v-1d8acb4d] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: flex-end;\r\n  gap: 8px;\r\n  justify-self: end;\n}\n.acu-v2-dashboard-page__health-action[data-v-1d8acb4d] {\r\n  white-space: nowrap;\n}\n@media (max-width: 860px) {\n.acu-v2-dashboard-page[data-v-1d8acb4d] {\r\n    padding: 14px;\n}\n.acu-v2-dashboard-page__health-item[data-v-1d8acb4d] {\r\n    grid-template-columns: 30px minmax(0, 1fr);\r\n    align-items: center;\n}\n.acu-v2-dashboard-page__health-side[data-v-1d8acb4d] {\r\n    grid-column: 2;\r\n    align-items: flex-start;\r\n    justify-self: start;\r\n    flex-direction: row;\r\n    flex-wrap: wrap;\n}\n.acu-v2-dashboard-page__health-action[data-v-1d8acb4d] {\r\n    justify-self: start;\n}\n}\r\n", "src/presentation-v2/pages/DashboardPage.vue#style-0-1d8acb4d");
-var DashboardPage_vue_vue_type_style_index_0_scoped_1d8acb4d_lang = null;
+injectSfcStyle("\n.acu-v2-dashboard-page[data-v-e585c9c7] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-dashboard-page__toggle-list[data-v-e585c9c7] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\r\n  margin-top: 14px;\n}\n.acu-v2-dashboard-page__health-list[data-v-e585c9c7] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  min-width: 0;\n}\n.acu-v2-dashboard-page__health-item[data-v-e585c9c7] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: 30px minmax(0, 1fr) max-content;\r\n  column-gap: 10px;\r\n  row-gap: 8px;\r\n  align-items: center;\r\n  padding: 10px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\r\n  transition:\r\n    border-color 0.15s ease,\r\n    background 0.15s ease;\n}\n.acu-v2-dashboard-page__health-item--error[data-v-e585c9c7] {\r\n  border-color: color-mix(in srgb, var(--acu-danger) 38%, var(--acu-border));\n}\n.acu-v2-dashboard-page__health-icon[data-v-e585c9c7] {\r\n  width: 30px;\r\n  height: 30px;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-2);\r\n  color: var(--acu-text-2);\n}\n.acu-v2-dashboard-page__health-item--ok .acu-v2-dashboard-page__health-icon[data-v-e585c9c7] {\r\n  color: var(--acu-success);\r\n  background: color-mix(in srgb, var(--acu-success) 10%, transparent);\n}\n.acu-v2-dashboard-page__health-item--warning\r\n  .acu-v2-dashboard-page__health-icon[data-v-e585c9c7] {\r\n  color: var(--acu-warning);\r\n  background: color-mix(in srgb, var(--acu-warning) 12%, transparent);\n}\n.acu-v2-dashboard-page__health-item--error .acu-v2-dashboard-page__health-icon[data-v-e585c9c7] {\r\n  color: var(--acu-danger);\r\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\n}\n.acu-v2-dashboard-page__health-body[data-v-e585c9c7] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\n}\n.acu-v2-dashboard-page__health-heading[data-v-e585c9c7] {\r\n  min-width: 0;\n}\n.acu-v2-dashboard-page__health-heading strong[data-v-e585c9c7] {\r\n  min-width: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 650;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-v2-dashboard-page__health-body p[data-v-e585c9c7] {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-dashboard-page__health-side[data-v-e585c9c7] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: flex-end;\r\n  gap: 8px;\r\n  justify-self: end;\n}\n.acu-v2-dashboard-page__health-action[data-v-e585c9c7] {\r\n  white-space: nowrap;\n}\n@media (max-width: 860px) {\n.acu-v2-dashboard-page[data-v-e585c9c7] {\r\n    padding: 14px;\n}\n.acu-v2-dashboard-page__health-item[data-v-e585c9c7] {\r\n    grid-template-columns: 30px minmax(0, 1fr);\r\n    align-items: center;\n}\n.acu-v2-dashboard-page__health-side[data-v-e585c9c7] {\r\n    grid-column: 2;\r\n    align-items: flex-start;\r\n    justify-self: start;\r\n    flex-direction: row;\r\n    flex-wrap: wrap;\n}\n.acu-v2-dashboard-page__health-action[data-v-e585c9c7] {\r\n    justify-self: start;\n}\n}\r\n", "src/presentation-v2/pages/DashboardPage.vue#style-0-e585c9c7");
+var DashboardPage_vue_vue_type_style_index_0_scoped_e585c9c7_lang = null;
 
 const _hoisted_1$D = { class: "acu-v2-dashboard-page" };
 const _hoisted_2$x = { class: "acu-v2-dashboard-page__health-list" };
@@ -168924,7 +169149,7 @@ function _sfc_render$D(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	})]);
 }
-var DashboardPage = /* @__PURE__ */ _export_sfc(_sfc_main$D, [["render", _sfc_render$D], ["__scopeId", "data-v-1d8acb4d"]]);
+var DashboardPage = /* @__PURE__ */ _export_sfc(_sfc_main$D, [["render", _sfc_render$D], ["__scopeId", "data-v-e585c9c7"]]);
 
 var _sfc_main$C = /*@__PURE__*/ defineComponent({
     __name: 'TableSelector',
@@ -173311,6 +173536,11 @@ function disableLegacyAgentWorldbookControl_ACU(options = {}) {
         saveSettings_ACU();
 }
 function usePlotWorldbookAgentControl() {
+    let activeSkillifyAbort = null;
+    onScopeDispose(() => {
+        activeSkillifyAbort?.abort();
+        activeSkillifyAbort = null;
+    });
     const toast = useToastStore();
     const dialog = useDialogStore();
     const mode = ref('disabled');
@@ -173646,6 +173876,9 @@ function usePlotWorldbookAgentControl() {
         if (!confirmed)
             return false;
         busy.value = 'skillify';
+        // skillify 批次此前无人可中止（signal 恒 undefined）：面板卸载即作废本批——游标已持久化，重新发起可续跑。
+        const skillifyAbort = new AbortController();
+        activeSkillifyAbort = skillifyAbort;
         let progressToastId = null;
         try {
             const progressOptions = { durationMs: 0, muteable: false, dismissible: false };
@@ -173684,6 +173917,7 @@ function usePlotWorldbookAgentControl() {
                 maxConcurrency: maxSkillifyConcurrency.value,
                 // 显式勾选的条目是一次性目标，不该被上一批的全量游标带着走；只有整库续跑才复用游标。
                 cursor: hasExplicitSelection ? undefined : skillifyCursor.value,
+                signal: skillifyAbort.signal,
                 ...optionsPatch,
                 onProgress: notifyProgress,
             });
@@ -173727,6 +173961,8 @@ function usePlotWorldbookAgentControl() {
             return false;
         }
         finally {
+            if (activeSkillifyAbort === skillifyAbort)
+                activeSkillifyAbort = null;
             busy.value = null;
         }
     }
@@ -185533,7 +185769,8 @@ function useLogViewer() {
     const tagFilter = ref('all');
     const keyword = ref('');
     const paused = ref(false);
-    const pendingEntries = ref([]);
+    // 暂停期积压只计数、恢复时整体丢弃；封顶与显示窗口一致，避免逐条展开拷贝拖成 O(n^2)
+    const pendingBuf = [];
     const autoScroll = ref(true);
     // 采集状态由「Debug 问题上报」卡片统一管理；此处只读展示
     const debugLogEnabled = ref(isDebugLogEnabled());
@@ -185547,9 +185784,9 @@ function useLogViewer() {
         { value: 'all', label: '全部模块' },
         ...knownTags.value.map(tag => ({ value: tag, label: tag })),
     ]);
-    const filteredLogs = computed(() => {
+    function filterEntries(entries) {
         const needle = keyword.value.trim().toLowerCase();
-        return logs.value.filter(entry => {
+        return entries.filter(entry => {
             if (levelFilter.value !== 'all' && entry.level !== levelFilter.value)
                 return false;
             if (tagFilter.value !== 'all' && entry.tag !== tagFilter.value)
@@ -185558,10 +185795,11 @@ function useLogViewer() {
                 return false;
             return true;
         });
-    });
+    }
+    const filteredLogs = computed(() => filterEntries(logs.value));
     const visibleLogs = computed(() => filteredLogs.value.slice().reverse());
     const filteredCount = computed(() => filteredLogs.value.length);
-    const pendingCount = computed(() => pendingEntries.value.length);
+    const pendingCount = ref(0);
     const statusLabel = computed(() => {
         if (paused.value)
             return pendingCount.value ? `已暂停，${pendingCount.value} 条待显示` : '已暂停';
@@ -185610,14 +185848,16 @@ function useLogViewer() {
     function setPaused(value) {
         paused.value = value;
         if (!value) {
-            pendingEntries.value = [];
+            pendingBuf.length = 0;
+            pendingCount.value = 0;
             pendingAppend.length = 0;
             refresh();
         }
     }
     function clearAll() {
         clearLogs('logViewer.clearAll');
-        pendingEntries.value = [];
+        pendingBuf.length = 0;
+        pendingCount.value = 0;
         pendingAppend.length = 0;
         hiddenByWindow.value = 0;
         refresh();
@@ -185625,7 +185865,8 @@ function useLogViewer() {
         toast.success('日志缓冲区已清空。');
     }
     function exportFiltered() {
-        const exportData = filteredLogs.value.map(entry => ({
+        // 导出按当前筛选取全量缓冲：显示窗口只 300 条，报障证据不能按显示窗口丢
+        const exportData = filterEntries(getAllLogs()).map(entry => ({
             time: new Date(entry.timestamp).toISOString(),
             level: entry.level,
             tag: entry.tag,
@@ -185634,7 +185875,7 @@ function useLogViewer() {
         const stamp = new Date().toISOString().replace(/[:.]/g, '-');
         downloadJson$1(`acu-logs-${stamp}.json`, { exportedAt: new Date().toISOString(), clearHistory: getClearHistory_ACU(), logs: exportData });
         message.value = null;
-        toast.success(`已导出 ${exportData.length} 条日志。`);
+        toast.success(`已按当前筛选导出 ${exportData.length} 条日志（全量缓冲）。`);
     }
     onMounted(() => {
         refresh();
@@ -185643,7 +185884,10 @@ function useLogViewer() {
             if (!knownTags.value.includes(entry.tag))
                 knownTags.value = getKnownTags();
             if (paused.value) {
-                pendingEntries.value = [...pendingEntries.value, entry];
+                pendingBuf.push(entry);
+                if (pendingBuf.length > LOG_VIEW_MAX_ENTRIES_ACU)
+                    pendingBuf.shift();
+                pendingCount.value = pendingBuf.length;
                 return;
             }
             pendingAppend.push(entry);
@@ -185651,7 +185895,9 @@ function useLogViewer() {
         });
         // 清空不产日志条目，必须订阅清空事件：否则页面继续显示已清空的旧数组（收起重开才刷新）。
         unsubscribeClear = subscribeToClear(() => {
-            pendingEntries.value = [];
+            pendingAppend.length = 0; // 清空广播前丢弃在飞 rAF 待追加队列：否则旧条目落进已清空的列表（幽灵日志）
+            pendingBuf.length = 0;
+            pendingCount.value = 0;
             refresh();
         });
     });
@@ -185811,7 +186057,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260912-09";
+        const stamp = "20260912-19";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -185820,7 +186066,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.5.3";
+        const v = "9.5.4";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {
@@ -185844,9 +186090,10 @@ function maskSensitiveString(str) {
     return str
         .replace(/(Authorization\s*:\s*Bearer\s+)([^\s"',}\n]+)/gi, '$1***')
         .replace(/(Bearer\s+)(sk-[A-Za-z0-9-_]+)/g, '$1***')
-        .replace(/([?&](?:api[_-]?key|token|authorization)=)([^&#\s"',}]+)/gi, '$1***')
+        .replace(/([?&](?:api[_-]?key|apikey|key|secret|token|authorization)=)([^&#\s"',}]+)/gi, '$1***')
         .replace(/("(?:api[_-]?key|apikey|authorization|token|password|secret)"\s*:\s*")([^"]+)(")/gi, '$1***$3')
-        .replace(/(^|[\s"',{;])(x-api-key|x-opencode-session|api[_-]?key|apikey|token|password|secret)(\s*[:=]\s*)(?!["\'])([^\s"',;}\n]+)/gi, '$1$2$3***');
+        .replace(/(^|[\s"',{;])(x-api-key|x-opencode-session|api[_-]?key|apikey|token|password|secret)(\s*[:=]\s*)(?!["\'])([^\s"',;}\n]+)/gi, '$1$2$3***')
+        .replace(/\bsk-[A-Za-z0-9_-]{16,}/g, 'sk-***');
 }
 /** 递归脱敏对象中的敏感字段（API 请求/响应快照可能含 Authorization/key 回显） */
 function maskSensitiveFields(value, depth = 0, seen = new WeakSet()) {
@@ -185875,6 +186122,32 @@ function maskSensitiveFields(value, depth = 0, seen = new WeakSet()) {
         return out;
     }
     return value;
+}
+/** 两份 Debug 导出共用的表格快照：敏感列按列名脱敏，字符串单元格过掩码规则 */
+/** 单元可见性：导出供导出路径回归测试 */
+function buildDebugTablesForTests_ACU() { return buildDebugTables_ACU(); }
+function buildDebugTables_ACU() {
+    const tables = {};
+    const data = currentJsonTableData_ACU || {};
+    for (const [key, sheet] of Object.entries(data)) {
+        if (key === 'mate')
+            continue;
+        const content = Array.isArray(sheet?.content) ? sheet.content : [];
+        const rows = Math.max(0, content.length - 1);
+        const headers = Array.isArray(content[0]) ? content[0].map(String) : [];
+        const sensitiveCols = new Set(headers.map((h, idx) => isSensitiveKey(h) ? idx : -1).filter((idx) => idx !== -1));
+        const sampleRows = content.slice(1, 4).map((r) => Array.isArray(r) ? r.slice(0, 8).map((c, colIdx) => {
+            if (sensitiveCols.has(colIdx))
+                return '***';
+            if (typeof c === 'string') {
+                const masked = maskSensitiveString(c);
+                return masked.length > 200 ? masked.slice(0, 200) + '…' : masked;
+            }
+            return c;
+        }) : r);
+        tables[key] = { rows, headers, ...(sampleRows.length ? { sampleRows } : {}) };
+    }
+    return tables;
 }
 function downloadJson(filename, data) {
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -185966,7 +186239,7 @@ function useDebugPanel() {
                     nonPrefillSupportPreset: activePreset?.nonPrefillSupport,
                     apiMode: settings_ACU?.apiMode || '',
                     apiConfig: {
-                        url: typeof cfg.url === 'string' ? cfg.url : '',
+                        url: typeof cfg.url === 'string' ? maskSensitiveString(cfg.url) : '',
                         model: typeof cfg.model === 'string' ? cfg.model : '',
                         apiKey: maskSecret(cfg.apiKey),
                         temperature: cfg.temperature,
@@ -185974,27 +186247,9 @@ function useDebugPanel() {
                     },
                     plotEnabled: settings_ACU?.plotSettings?.enabled === true,
                 };
-                const tables = {};
+                let tables = {};
                 try {
-                    const data = currentJsonTableData_ACU || {};
-                    for (const [key, sheet] of Object.entries(data)) {
-                        if (key === 'mate')
-                            continue;
-                        const content = Array.isArray(sheet?.content) ? sheet.content : [];
-                        const rows = Math.max(0, content.length - 1);
-                        const headers = Array.isArray(content[0]) ? content[0].map(String) : [];
-                        const sensitiveCols = new Set(headers.map((h, idx) => isSensitiveKey(h) ? idx : -1).filter((idx) => idx !== -1));
-                        const sampleRows = content.slice(1, 4).map((r) => Array.isArray(r) ? r.slice(0, 8).map((c, colIdx) => {
-                            if (sensitiveCols.has(colIdx))
-                                return '***';
-                            if (typeof c === 'string') {
-                                const masked = maskSensitiveString(c);
-                                return masked.length > 200 ? masked.slice(0, 200) + '…' : masked;
-                            }
-                            return c;
-                        }) : r);
-                        tables[key] = { rows, headers, ...(sampleRows.length ? { sampleRows } : {}) };
-                    }
+                    tables = buildDebugTables_ACU();
                 }
                 catch { }
                 let settingsSnapshot = null;
@@ -186116,7 +186371,7 @@ function useDebugPanel() {
             nonPrefillSupportPreset: activePreset?.nonPrefillSupport,
             apiMode: settings_ACU?.apiMode || '',
             apiConfig: {
-                url: typeof cfg.url === 'string' ? cfg.url : '',
+                url: typeof cfg.url === 'string' ? maskSensitiveString(cfg.url) : '',
                 model: typeof cfg.model === 'string' ? cfg.model : '',
                 apiKey: maskSecret(cfg.apiKey),
                 temperature: cfg.temperature,
@@ -186124,18 +186379,9 @@ function useDebugPanel() {
             },
             plotEnabled: settings_ACU?.plotSettings?.enabled === true,
         };
-        const tables = {};
+        let tables = {};
         try {
-            const data = currentJsonTableData_ACU || {};
-            for (const [key, sheet] of Object.entries(data)) {
-                if (key === 'mate')
-                    continue;
-                const content = Array.isArray(sheet?.content) ? sheet.content : [];
-                const rows = Math.max(0, content.length - 1);
-                const headers = Array.isArray(content[0]) ? content[0].map(String) : [];
-                const sampleRows = content.slice(1, 4).map((r) => Array.isArray(r) ? r.slice(0, 8).map((c) => typeof c === 'string' && c.length > 200 ? c.slice(0, 200) + '…' : c) : r);
-                tables[key] = { rows, headers, ...(sampleRows.length ? { sampleRows } : {}) };
-            }
+            tables = buildDebugTables_ACU();
         }
         catch { /* 表统计失败不影响导出 */ }
         let settingsSnapshot = null;

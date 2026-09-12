@@ -4,6 +4,7 @@ const h = vi.hoisted(() => ({
   chat: [] as any[], table: null as any, isolationKey: 'race',
   embeddingStarted: null as any, releaseEmbedding: null as any,
   saveStrict: vi.fn(), finalize: vi.fn(), persistPack: vi.fn(), persistManifest: vi.fn(),
+  discard: vi.fn(async () => {}),
   resolveHead: vi.fn(), loadPack: vi.fn(),
 }));
 const deferred = () => {
@@ -60,6 +61,7 @@ vi.mock('../../../src/service/vector/summary-vector-mirror-resolver', () => ({
   computeSummaryVectorMirrorCheckpointRevision_ACU: () => 'revision',
 }));
 vi.mock('../../../src/service/vector/summary-vector-mirror-storage', () => ({
+  discardSummaryVectorMirrorPreparedFiles_ACU: (...args: any[]) => h.discard(...args),
   encodeSummaryVectorMirrorVector_ACU: () => 'encoded',
   finalizeSummaryVectorMirrorFiles_ACU: (...args: any[]) => h.finalize(...args),
   loadSummaryVectorMirrorManifest_ACU: async () => null,
@@ -192,5 +194,19 @@ describe('summary vector mirror revision race', () => {
     expect(h.persistManifest).not.toHaveBeenCalled();
     expect(h.saveStrict).not.toHaveBeenCalled();
     expect(h.chat[0].TavernDB_ACU_IsolatedData).toEqual(before);
+  });
+  it('行删发布：快照后源表 base 指纹漂移（并发行写）→ 拒绝发布不落旧行', async () => {
+    const { snapshotSummaryVectorMirrorExcludingRows_ACU } = await import(
+      '../../../src/service/vector/summary-vector-mirror-rebuild'
+    );
+    const snapshot = await snapshotSummaryVectorMirrorExcludingRows_ACU({
+      excludedRowIds: ['row-2'],
+      sourceTableKey: 'sheet_summary',
+    });
+    expect(snapshot.kind).toBe('ready');
+    (snapshot as any).expectedBaseFingerprint = 'tampered-fingerprint-after-capture';
+    const result = await publishSummaryVectorMirrorRowRemovalSnapshot_ACU(snapshot);
+    expect(result.success).toBe(false);
+    expect(String((result.errors || []).join(' '))).toContain('summary_vector_mirror_publish_stale_base');
   });
 });
