@@ -90119,7 +90119,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.5.4" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.5.5" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -141448,7 +141448,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260912-19";
+        const stamp = "20260912-20";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -186057,7 +186057,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260912-19";
+        const stamp = "20260912-20";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -186066,7 +186066,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.5.4";
+        const v = "9.5.5";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {
@@ -187514,21 +187514,41 @@ var _sfc_main$a = /*@__PURE__*/ defineComponent({
         const shell = useRootShellStore();
         const containerRef = ref(null);
         function resetScroll() {
-            if (containerRef.value)
-                containerRef.value.scrollTop = 0;
+            const el = containerRef.value;
+            if (!el)
+                return;
+            // 先断在飞的 smooth 滚动动画（面板导航的 scrollTo smooth / 手指 momentum）：
+            // 直接 scrollTop=0 杀不掉它们，新页会被拖回旧位置而错位。
+            try {
+                if (typeof el.scrollTo === 'function') {
+                    el.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+                }
+            }
+            catch { /* 无 instant 形态的引擎走下面同步复位 */ }
+            el.scrollTop = 0;
+            el.scrollLeft = 0;
+        }
+        function resetScrollSettled() {
+            resetScroll();
+            // remount/异步挂载后内容高度变化，再断言一次顶部。
+            void nextTick(() => {
+                resetScroll();
+                acuRequestAnimationFrame(() => resetScroll());
+            });
         }
         onMounted(resetScroll);
-        // 切页时重置滚动；mount 模块在 close 时也会触发 requestScrollReset
-        watch(() => router.activePageId, resetScroll);
+        // 切页 / 重开 remount 时重置滚动；mount 模块在 close 时也会触发 requestScrollReset
+        watch(() => router.activePageId, resetScrollSettled);
+        watch(() => shell.openRefreshTick, resetScrollSettled);
         watch(() => shell.scrollResetTick, resetScroll);
-        const __returned__ = { router, shell, containerRef, resetScroll };
+        const __returned__ = { router, shell, containerRef, resetScroll, resetScrollSettled };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.acu-v2-main[data-v-25f57639] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  overflow: auto;\r\n  scrollbar-gutter: stable;\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-main[data-v-25f57639] .acu-v2-dashboard-page,\r\n.acu-v2-main[data-v-25f57639] .acu-v2-advanced-tools-page,\r\n.acu-v2-main[data-v-25f57639] .acu-v2-basic-config-page,\r\n.acu-v2-main[data-v-25f57639] .acu-v2-form-fill-page,\r\n.acu-v2-main[data-v-25f57639] .acu-v2-api-page,\r\n.acu-v2-main[data-v-25f57639] .acu-v2-content-replace-page,\r\n.acu-v2-main[data-v-25f57639] .acu-v2-data-mgmt-page,\r\n.acu-v2-main[data-v-25f57639] .acu-v2-developer-page,\r\n.acu-v2-main[data-v-25f57639] .acu-v2-plot-page,\r\n.acu-v2-main[data-v-25f57639] .acu-v2-table-page,\r\n.acu-v2-main[data-v-25f57639] .acu-v2-vector-index-page {\r\n  padding: var(--acu-page-padding, 20px);\r\n  gap: var(--acu-page-gap, 14px);\n}\n.acu-v2-main__empty[data-v-25f57639] {\r\n  padding: var(--acu-space-6, 24px);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  color: var(--acu-text-3);\n}\n@media (max-width: 720px) {\n.acu-v2-main[data-v-25f57639] .acu-v2-dashboard-page,\r\n  .acu-v2-main[data-v-25f57639] .acu-v2-advanced-tools-page,\r\n  .acu-v2-main[data-v-25f57639] .acu-v2-basic-config-page,\r\n  .acu-v2-main[data-v-25f57639] .acu-v2-form-fill-page,\r\n  .acu-v2-main[data-v-25f57639] .acu-v2-api-page,\r\n  .acu-v2-main[data-v-25f57639] .acu-v2-import-page,\r\n  .acu-v2-main[data-v-25f57639] .acu-v2-content-replace-page,\r\n  .acu-v2-main[data-v-25f57639] .acu-v2-data-mgmt-page,\r\n  .acu-v2-main[data-v-25f57639] .acu-v2-developer-page,\r\n  .acu-v2-main[data-v-25f57639] .acu-v2-plot-page,\r\n  .acu-v2-main[data-v-25f57639] .acu-v2-table-page,\r\n  .acu-v2-main[data-v-25f57639] .acu-v2-vector-index-page {\r\n    padding: var(--acu-page-padding-compact, 14px);\n}\n}\r\n", "src/presentation-v2/components/MainArea.vue#style-0-25f57639");
-var MainArea_vue_vue_type_style_index_0_scoped_25f57639_lang = null;
+injectSfcStyle("\n.acu-v2-main[data-v-a14ebf0a] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  overflow: auto;\r\n  scrollbar-gutter: stable;\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\n}\n.acu-v2-main[data-v-a14ebf0a] .acu-v2-dashboard-page,\r\n.acu-v2-main[data-v-a14ebf0a] .acu-v2-advanced-tools-page,\r\n.acu-v2-main[data-v-a14ebf0a] .acu-v2-basic-config-page,\r\n.acu-v2-main[data-v-a14ebf0a] .acu-v2-form-fill-page,\r\n.acu-v2-main[data-v-a14ebf0a] .acu-v2-api-page,\r\n.acu-v2-main[data-v-a14ebf0a] .acu-v2-content-replace-page,\r\n.acu-v2-main[data-v-a14ebf0a] .acu-v2-data-mgmt-page,\r\n.acu-v2-main[data-v-a14ebf0a] .acu-v2-developer-page,\r\n.acu-v2-main[data-v-a14ebf0a] .acu-v2-plot-page,\r\n.acu-v2-main[data-v-a14ebf0a] .acu-v2-table-page,\r\n.acu-v2-main[data-v-a14ebf0a] .acu-v2-vector-index-page {\r\n  padding: var(--acu-page-padding, 20px);\r\n  gap: var(--acu-page-gap, 14px);\n}\n.acu-v2-main__empty[data-v-a14ebf0a] {\r\n  padding: var(--acu-space-6, 24px);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  color: var(--acu-text-3);\n}\n@media (max-width: 720px) {\n.acu-v2-main[data-v-a14ebf0a] .acu-v2-dashboard-page,\r\n  .acu-v2-main[data-v-a14ebf0a] .acu-v2-advanced-tools-page,\r\n  .acu-v2-main[data-v-a14ebf0a] .acu-v2-basic-config-page,\r\n  .acu-v2-main[data-v-a14ebf0a] .acu-v2-form-fill-page,\r\n  .acu-v2-main[data-v-a14ebf0a] .acu-v2-api-page,\r\n  .acu-v2-main[data-v-a14ebf0a] .acu-v2-import-page,\r\n  .acu-v2-main[data-v-a14ebf0a] .acu-v2-content-replace-page,\r\n  .acu-v2-main[data-v-a14ebf0a] .acu-v2-data-mgmt-page,\r\n  .acu-v2-main[data-v-a14ebf0a] .acu-v2-developer-page,\r\n  .acu-v2-main[data-v-a14ebf0a] .acu-v2-plot-page,\r\n  .acu-v2-main[data-v-a14ebf0a] .acu-v2-table-page,\r\n  .acu-v2-main[data-v-a14ebf0a] .acu-v2-vector-index-page {\r\n    padding: var(--acu-page-padding-compact, 14px);\n}\n}\r\n", "src/presentation-v2/components/MainArea.vue#style-0-a14ebf0a");
+var MainArea_vue_vue_type_style_index_0_scoped_a14ebf0a_lang = null;
 
 const _hoisted_1$a = {
 	ref: "containerRef",
@@ -187548,7 +187568,7 @@ function _sfc_render$a(_ctx, _cache, $props, $setup, $data, $options) {
 		/* NEED_PATCH */
 	);
 }
-var MainArea = /* @__PURE__ */ _export_sfc(_sfc_main$a, [["render", _sfc_render$a], ["__scopeId", "data-v-25f57639"]]);
+var MainArea = /* @__PURE__ */ _export_sfc(_sfc_main$a, [["render", _sfc_render$a], ["__scopeId", "data-v-a14ebf0a"]]);
 
 var _sfc_main$9 = /*@__PURE__*/ defineComponent({
     __name: 'Sidebar',

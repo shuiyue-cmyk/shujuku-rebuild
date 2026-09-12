@@ -10,21 +10,42 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue';
+import { ref, nextTick, onMounted, watch } from 'vue';
 import { useRouterStore } from '../stores/router-store';
 import { useRootShellStore } from '../stores/root-shell-store';
+import { acuRequestAnimationFrame } from '../bootstrap/host-env';
 
 const router = useRouterStore();
 const shell = useRootShellStore();
 const containerRef = ref<HTMLElement | null>(null);
 
 function resetScroll() {
-  if (containerRef.value) containerRef.value.scrollTop = 0;
+  const el = containerRef.value;
+  if (!el) return;
+  // 先断在飞的 smooth 滚动动画（面板导航的 scrollTo smooth / 手指 momentum）：
+  // 直接 scrollTop=0 杀不掉它们，新页会被拖回旧位置而错位。
+  try {
+    if (typeof el.scrollTo === 'function') {
+      el.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+    }
+  } catch { /* 无 instant 形态的引擎走下面同步复位 */ }
+  el.scrollTop = 0;
+  el.scrollLeft = 0;
+}
+
+function resetScrollSettled() {
+  resetScroll();
+  // remount/异步挂载后内容高度变化，再断言一次顶部。
+  void nextTick(() => {
+    resetScroll();
+    acuRequestAnimationFrame(() => resetScroll());
+  });
 }
 
 onMounted(resetScroll);
-// 切页时重置滚动；mount 模块在 close 时也会触发 requestScrollReset
-watch(() => router.activePageId, resetScroll);
+// 切页 / 重开 remount 时重置滚动；mount 模块在 close 时也会触发 requestScrollReset
+watch(() => router.activePageId, resetScrollSettled);
+watch(() => shell.openRefreshTick, resetScrollSettled);
 watch(() => shell.scrollResetTick, resetScroll);
 </script>
 
