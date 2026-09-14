@@ -361,6 +361,16 @@ describe('敏感键脱敏', () => {
     expect(out).toContain('"authority":"should-stay"');
   });
 
+  it('非枚举自有属性走结构化兜底分支时同样按键名打码（此前只判值形态，密钥会随值一起漏出）', () => {
+    const carrier: Record<string, any> = {};
+    Object.defineProperty(carrier, 'embeddingApiKey', { value: 'plain-secret-value', enumerable: false });
+    Object.defineProperty(carrier, 'username', { value: 'visible', enumerable: false });
+    const out = formatArgs(['[ACU]', carrier]);
+    expect(out).toContain('embeddingApiKey=***');
+    expect(out).not.toContain('plain-secret-value');
+    expect(out).toContain('username=visible');
+  });
+
   it('字符串内联 JSON 形态脱敏：复合键 "embeddingApiKey":"x" 被打码', () => {
     const out = formatArgs(['config={"embeddingApiKey":"leak-me","model":"m1"}']);
     expect(out).toContain('"embeddingApiKey":"***"');

@@ -125,7 +125,6 @@ vi.mock('../../src/service/settings/settings-service', () => ({
   removeDataIsolationHistory_ACU: vi.fn(),
   switchIsolationProfile_ACU: vi.fn(),
   setSummaryVectorIndexMode_ACU: vi.fn(),
-  setZeroTkOccupyMode_ACU: vi.fn(),
 }));
 
 vi.mock('../../src/data/storage/tavern-storage', () => ({

@@ -65,7 +65,6 @@ async function mountBasicConfigPage(settings = createSettings()) {
   vi.doMock('../../../src/service/settings/settings-service', () => ({
     saveSettings_ACU: vi.fn(() => ({ saved: true, storageType: 'memory' })),
     setGlobalPlotEnabled_ACU: vi.fn((enabled: boolean) => { settings.plotSettings.enabled = enabled; }),
-    setZeroTkOccupyMode_ACU: vi.fn((enabled: boolean) => { settings.zeroTkOccupyModeDefault = enabled; }),
     setSummaryVectorIndexMode_ACU: vi.fn((enabled: boolean) => { settings.summaryVectorIndexModeDefault = enabled; }),
   }));
   vi.doMock('../../../src/service/chat/chat-service', () => ({

@@ -61,7 +61,6 @@ async function mountDeveloperPage() {
   vi.doMock('../../src/service/settings/settings-service', () => ({
     saveSettings_ACU: saveSettings,
     setGlobalPlotEnabled_ACU: vi.fn(),
-    setZeroTkOccupyMode_ACU: vi.fn(),
     setSummaryVectorIndexMode_ACU: vi.fn(),
   }));
   vi.doMock('../../src/service/table/storage-mode', () => ({

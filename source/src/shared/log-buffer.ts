@@ -194,7 +194,9 @@ function normalizeLogArg_ACU(arg: any): string {
       ? arg.constructor.name
       : 'Object';
     const ownProperties = Object.getOwnPropertyNames(arg || {})
-      .map((key) => `${key}=${normalizeLogArg_ACU(arg[key])}`)
+      // 与上方对象分支一致：键名本身敏感时直接掩码，不能只依赖值形态判断
+      // （非枚举自有属性的对象走此分支，键名如 embeddingApiKey 此前会连同值一起漏出）。
+      .map((key) => `${key}=${isSensitiveLogKey(key) ? '***' : normalizeLogArg_ACU(arg[key])}`)
       .join(', ');
     if (ownProperties) return `${constructorName}{${ownProperties}}`;
     const stringValue = String(arg);

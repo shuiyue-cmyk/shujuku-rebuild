@@ -2116,7 +2116,9 @@ function normalizeLogArg_ACU(arg) {
             ? arg.constructor.name
             : 'Object';
         const ownProperties = Object.getOwnPropertyNames(arg || {})
-            .map((key) => `${key}=${normalizeLogArg_ACU(arg[key])}`)
+            // 与上方对象分支一致：键名本身敏感时直接掩码，不能只依赖值形态判断
+            // （非枚举自有属性的对象走此分支，键名如 embeddingApiKey 此前会连同值一起漏出）。
+            .map((key) => `${key}=${isSensitiveLogKey(key) ? '***' : normalizeLogArg_ACU(arg[key])}`)
             .join(', ');
         if (ownProperties)
             return `${constructorName}{${ownProperties}}`;
@@ -90183,7 +90185,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.5.10" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.6.1" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -186185,7 +186187,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.5.10";
+        const v = "9.6.1";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {

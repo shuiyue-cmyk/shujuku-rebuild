@@ -190,7 +190,16 @@ interface AutoCardUpdaterAPI {
     reoptimizeMessage(messageIndex: any): Promise<boolean>;
     cancelContentOptimization(reason?: any): boolean;
     deleteInjectedEntries(): Promise<boolean>;
-    setOutlineEntryEnabled(enabled: any): Promise<boolean>;
+    /**
+     * 入参已被忽略：0TK 占用模式恒开启（见 `shared/defaults.ts` 的 `zeroTkOccupyMode: true`），
+     * 大纲条目因而恒为 disabled，原开关已随该模式一并剥离。
+     * 无论传什么都是 no-op：正常路径恒返回 true，内部读写异常时返回 false。
+     */
+    setOutlineEntryEnabled(): Promise<boolean>;
+    /**
+     * ⚠️ 已剥离，运行时不存在：0TK 占用模式恒开启后，该方法与对应设置项、UI 开关一并删除，
+     * 调用会抛 TypeError。此处仅作历史契约留痕，不要在代码中调用。
+     */
     setZeroTkOccupyMode(modeEnabled: any): Promise<boolean>;
     getWorldbookEntrySkillMeta(bookName: any, uid: any): Promise<any | null>;
     listWorldbookSkillMetas(bookNames?: string[] | string): Promise<any[]>;

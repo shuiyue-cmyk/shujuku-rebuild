@@ -126,7 +126,6 @@ async function mountFormFillPage(
   vi.doMock('../../../src/service/settings/settings-service', () => ({
     saveSettings_ACU: saveSettings,
     setGlobalPlotEnabled_ACU: vi.fn((enabled: boolean) => { settings.plotSettings = { ...(settings.plotSettings || {}), enabled }; }),
-    setZeroTkOccupyMode_ACU: vi.fn((enabled: boolean) => { settings.zeroTkOccupyModeDefault = enabled; }),
     setSummaryVectorIndexMode_ACU: vi.fn((enabled: boolean) => { settings.summaryVectorIndexModeDefault = enabled; }),
   }));
   vi.doMock('../../../src/service/chat/chat-service', () => ({

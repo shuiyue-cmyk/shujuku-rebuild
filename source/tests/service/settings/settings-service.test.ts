@@ -295,7 +295,6 @@ import {
   buildDefaultSettings_ACU,
   applyTemplateScopeForCurrentChat_ACU,
   persistCurrentTemplatePresetName_ACU,
-  setZeroTkOccupyMode_ACU,
   applyCombinedSettingsImport_ACU,
   _set_settingsStorageReadyForSave_ACU,
 } from '../../../src/service/settings/settings-service';

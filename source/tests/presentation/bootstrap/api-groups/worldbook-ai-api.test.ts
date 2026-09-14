@@ -30,7 +30,6 @@ vi.mock('../../../../src/shared/utils', () => ({
 }));
 vi.mock('../../../../src/shared/env', () => ({ topLevelWindow_ACU: {} }));
 vi.mock('../../../../src/service/chat/chat-service', () => ({ getChatArray_ACU: vi.fn() }));
-vi.mock('../../../../src/service/settings/settings-service', () => ({ setZeroTkOccupyMode_ACU: vi.fn() }));
 vi.mock('../../../../src/service/worldbook/pipeline', () => ({ deleteAllGeneratedEntries_ACU: vi.fn(), updateReadableLorebookEntry_ACU: vi.fn() }));
 vi.mock('../../../../src/service/worldbook/injection-engine', () => ({ updateOutlineTableEntry_ACU: vi.fn() }));
 vi.mock('../../../../src/service/runtime/helpers-remaining', () => ({ formatJsonToReadable_ACU: vi.fn() }));
