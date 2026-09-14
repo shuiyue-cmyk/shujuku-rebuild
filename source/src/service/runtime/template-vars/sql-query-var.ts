@@ -305,13 +305,12 @@ export class TableQueryBuilder {
    *   having("COUNT(*) > 1")  → HAVING COUNT(*) > 1
    */
   having(expression: string): TableQueryBuilder {
-    // C1：HAVING 表达式做轻量只读校验——拒绝写语句关键字/分号/子查询逃逸（片段模式，非完整 SELECT）
+    // 只拦分号：HAVING 片段会被拼进单条 SELECT，分号是唯一能切开语句的分隔符；
+    // 原先的关键词词表会误拒合法表达式（如 REPLACE(备注,'a','b')、CASE … END），
+    // 而它对不依赖分号的注入本就无效。多语句另有 _executeQuery 的多语句门兜底。
     const rawExpr = String(expression || '');
-    const stripped = rawExpr.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/'[^']*'|"[^"]*"/g, ' ');
-    const tokens = stripped.toUpperCase().match(/[A-Z_]+/g) || [];
-    const forbidden = new Set(['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'REPLACE', 'TRUNCATE', 'VACUUM', 'ATTACH', 'DETACH', 'PRAGMA']);
-    if (rawExpr.includes(';') || tokens.some(t => forbidden.has(t))) {
-      throw new Error('[ORM] having 表达式包含不允许的 SQL 关键字或分号');
+    if (rawExpr.includes(';')) {
+      throw new Error('[ORM] having 表达式不允许包含分号');
     }
     this._having = rawExpr;
     return this;

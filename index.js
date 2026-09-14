@@ -47263,6 +47263,7 @@ async function deleteSummaryVectorHotCacheByScope_ACU(scope) {
         return false;
     }
 }
+/** 返回值即失败通道：false 表示整表清空失败，调用方须据此告警。 */
 async function clearSummaryVectorHotCache_ACU() {
     try {
         const db = await openDb_ACU$1();
@@ -47270,16 +47271,22 @@ async function clearSummaryVectorHotCache_ACU() {
             const tx = db.transaction(STORE_NAME_ACU$1, 'readwrite');
             const store = tx.objectStore(STORE_NAME_ACU$1);
             const request = store.clear();
-            request.onsuccess = () => resolve();
             request.onerror = () => reject(request.error || new Error('清空交火向量热缓存失败'));
-            tx.oncomplete = () => db.close();
+            // 与同文件 delete* 对齐：事务提交后才算成功，否则事务层 abort 会被已结算的 promise 吞掉
+            tx.oncomplete = () => {
+                db.close();
+                resolve();
+            };
             tx.onerror = () => {
                 db.close();
                 reject(tx.error || new Error('清空交火向量热缓存事务失败'));
             };
         });
+        return true;
     }
-    catch { }
+    catch {
+        return false;
+    }
 }
 async function estimateSummaryVectorHotCache_ACU(indexId) {
     try {
@@ -49854,12 +49861,6 @@ async function trimVectorIndexTempCacheToBudget_ACU(maxBytes = VECTOR_TEMP_CACHE
         // 淘汰失败不影响读写链路，下次 put 会再次尝试。
     }
 }
-async function deleteVectorIndexCachedShard_ACU(indexId, shardId) {
-    try {
-        await runStore_ACU('readwrite', (store) => store.delete(makeKey_ACU(indexId, shardId)));
-    }
-    catch { }
-}
 /** 返回值即失败通道：false 表示该 indexId 的临时缓存未清干净，调用方须据此告警。 */
 async function deleteVectorIndexCacheByIndex_ACU(indexId) {
     try {
@@ -49892,11 +49893,31 @@ async function deleteVectorIndexCacheByIndex_ACU(indexId) {
         return false;
     }
 }
+/** 返回值即失败通道：false 表示整表清空失败，调用方须据此告警。 */
 async function clearVectorIndexTempCache_ACU() {
     try {
-        await runStore_ACU('readwrite', (store) => store.clear());
+        // 不用通用 runStore_ACU：它在 request.onsuccess 就 resolve（读操作合适），
+        // 而清空必须等事务提交才算成功，否则事务层 abort 会被已结算的 promise 吞掉。
+        const db = await openDb_ACU();
+        await new Promise((resolve, reject) => {
+            const tx = db.transaction(STORE_NAME_ACU, 'readwrite');
+            const store = tx.objectStore(STORE_NAME_ACU);
+            const request = store.clear();
+            request.onerror = () => reject(request.error || new Error('清空向量临时缓存失败'));
+            tx.oncomplete = () => {
+                db.close();
+                resolve();
+            };
+            tx.onerror = () => {
+                db.close();
+                reject(tx.error || new Error('清空向量临时缓存事务失败'));
+            };
+        });
+        return true;
     }
-    catch { }
+    catch {
+        return false;
+    }
 }
 async function estimateVectorIndexTempCache_ACU(indexId) {
     try {
@@ -51152,7 +51173,10 @@ async function cleanupManifestFilesExcept_ACU(previousManifest, retainedPaths) {
     }
     await unregisterVectorIndexFiles_ACU(deletedPaths);
     if (previousManifest.indexId && !Array.from(retainedPaths).some((path) => path.includes(previousManifest.indexId))) {
-        await deleteVectorIndexCacheByIndex_ACU(previousManifest.indexId);
+        // helper 以返回值报失败（不抛错）；此处为尽力清理，失败仅记录。
+        if ((await deleteVectorIndexCacheByIndex_ACU(previousManifest.indexId)) === false) {
+            logWarn_ACU(`[交火向量索引] 临时缓存清理失败：indexId=${previousManifest.indexId}，残留将在后续读取时自愈。`);
+        }
     }
 }
 function collectManifestReachableFiles_ACU(rawManifest, context) {
@@ -53129,8 +53153,13 @@ async function deleteSummaryVectorIndexExternal_ACU(manifest) {
     const retainedPaths = new Set();
     await cleanupManifestFilesExcept_ACU(manifest, retainedPaths);
     if (manifest.indexId) {
-        await deleteVectorIndexCacheByIndex_ACU(manifest.indexId);
-        await deleteSummaryVectorHotCacheByIndex_ACU(manifest.indexId);
+        // helper 以返回值报失败（不抛错）；此处为尽力清理，失败仅记录。
+        if ((await deleteVectorIndexCacheByIndex_ACU(manifest.indexId)) === false) {
+            logWarn_ACU(`[交火向量索引] 临时缓存清理失败：indexId=${manifest.indexId}，残留将在后续读取时自愈。`);
+        }
+        if ((await deleteSummaryVectorHotCacheByIndex_ACU(manifest.indexId)) === false) {
+            logWarn_ACU(`[交火向量索引] 热缓存清理失败：indexId=${manifest.indexId}，残留将在后续读取时自愈。`);
+        }
     }
 }
 function collectManifestRowsForRepair_ACU(manifest) {
@@ -55703,8 +55732,14 @@ async function cleanupScopesEverywhere_ACU(scopes, chatKeys) {
     // IDB 清理支持 partial scope：只传 chatKey 即可清空该聊天全部热缓存与 flush 任务，
     // 覆盖 registry 里已无文件但 IDB 仍有残留的情况。
     for (const chatKey of chatKeys) {
-        await deleteSummaryVectorHotCacheByScope_ACU({ chatKey, isolationKey: '', sourceTableKey: '' });
-        await clearSummaryVectorFlushTasksByScope_ACU({ chatKey, isolationKey: '', sourceTableKey: '' });
+        // 失败仅记录：此处为删聊天后的尽力清理，权威文件由后续 GC 兜底。
+        const scope = { chatKey, isolationKey: '', sourceTableKey: '' };
+        if ((await deleteSummaryVectorHotCacheByScope_ACU(scope)) === false) {
+            logWarn_ACU(`[交火向量索引] 删除聊天后热缓存清理失败：chatKey=${chatKey}，残留将在后续读取时自愈。`);
+        }
+        if ((await clearSummaryVectorFlushTasksByScope_ACU(scope)) === false) {
+            logWarn_ACU(`[交火向量索引] 删除聊天后 flush 任务清理失败：chatKey=${chatKey}，残留将在后续读取时自愈。`);
+        }
     }
     if (scopes.length === 0)
         return 0;
@@ -56812,6 +56847,7 @@ async function flushSummaryVectorIndexTaskNow_ACU(scopeKey) {
         // 除了可安全派生的默认空槽 task 外，其他旧格式没有足够身份字段可证明归属。
         const message = `旧版 flush task 缺少可验证三元 scope，已从队列中清理：task=${task.scopeKey}`;
         clearFlushTimer_ACU(task.scopeKey);
+        // 刻意忽略返回值：此处已发出 legacy_scope_purged 事件留痕，失败也会在下一轮 restore 重试。
         await deleteSummaryVectorFlushTask_ACU(task.scopeKey);
         logSummaryVectorIndexIdentityEvent_ACU('debug', 'flush', 'legacy_scope_purged', {
             scopeFingerprint: task.scopeKey,
@@ -57087,6 +57123,7 @@ async function restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU() {
         // isolationKey==='' 是未开隔离的合法默认槽；不能用真值判断当 legacy 清掉。
         if (typeof task.isolationKey !== 'string' || task.scopeKey !== activeScopeKey) {
             clearFlushTimer_ACU(task.scopeKey);
+            // 刻意忽略返回值：此处已发出 legacy_scope_purged 事件留痕，失败也会在下一轮 restore 重试。
             await deleteSummaryVectorFlushTask_ACU(task.scopeKey);
             logSummaryVectorIndexIdentityEvent_ACU('debug', 'flush', 'legacy_scope_purged', {
                 scopeFingerprint: task.scopeKey,
@@ -90146,7 +90183,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.5.7" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.5.8" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -91635,13 +91672,12 @@ class TableQueryBuilder {
      *   having("COUNT(*) > 1")  → HAVING COUNT(*) > 1
      */
     having(expression) {
-        // C1：HAVING 表达式做轻量只读校验——拒绝写语句关键字/分号/子查询逃逸（片段模式，非完整 SELECT）
+        // 只拦分号：HAVING 片段会被拼进单条 SELECT，分号是唯一能切开语句的分隔符；
+        // 原先的关键词词表会误拒合法表达式（如 REPLACE(备注,'a','b')、CASE … END），
+        // 而它对不依赖分号的注入本就无效。多语句另有 _executeQuery 的多语句门兜底。
         const rawExpr = String(expression || '');
-        const stripped = rawExpr.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/'[^']*'|"[^"]*"/g, ' ');
-        const tokens = stripped.toUpperCase().match(/[A-Z_]+/g) || [];
-        const forbidden = new Set(['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'REPLACE', 'TRUNCATE', 'VACUUM', 'ATTACH', 'DETACH', 'PRAGMA']);
-        if (rawExpr.includes(';') || tokens.some(t => forbidden.has(t))) {
-            throw new Error('[ORM] having 表达式包含不允许的 SQL 关键字或分号');
+        if (rawExpr.includes(';')) {
+            throw new Error('[ORM] having 表达式不允许包含分号');
         }
         this._having = rawExpr;
         return this;
@@ -116531,11 +116567,13 @@ function evaluateNewMessageAction_ACU(liveChat, isAutoUpdating, coreApisReady, w
  * 数据驱动降窗的最坏代价只是「新聊天头 3 轮各多等 5s」，宁保守勿抢跑。
  *
  * ── [W5] 无死循环自证 ──
- * 重跑只是再走一次既有自动链入口（填表 + 正文替换）。本库正文替换写回走
- * setChatMessages(..., { refresh: 'affected' })（service/chat/chat-service.ts:1154），
- * 宿主只在 createChatMessages 路径派发 MESSAGE_RECEIVED（ST 源码 chat_message.ts:385 / :403），
- * refresh:'affected' 不产 MESSAGE_RECEIVED → MVU 不会被本库写回拉起重新解析 → 不会再产生新的 ended
- * → 重跑自身不再触发第二轮重跑。第二重保险：W5 的触发判据是「收到 ended 时本楼已在 W1/W3 登记」，
+ * 重跑只是再走一次既有自动链入口（填表 + 正文替换）。写作回路径有两态，均不产生「新消息」：
+ * ① 宿主未提供 setChatMessages（未观察到，见 shared/host-api.ts 注释）→ 走降级路径：
+ *    原地改 chat[i].mes 后 saveChat + emit MESSAGE_UPDATED（chat-gateway.ts 的 emitMessageUpdated_ACU）；
+ * ② 宿主若提供 setChatMessages，则由 options.refresh 控制刷新范围。
+ * 因此本库侧证据只能保证：写回不是「新增消息」形态。至于宿主侧 MVU 究竟监听哪个事件、
+ * 会不会被这次写回拉起重新解析，属宿主内部行为，本注释不作断言。
+ * 第二重保险（与宿主行为无关，仅凭本库自身记账）：W5 的触发判据是「收到 ended 时本楼已在 W1/W3 登记」，
  * 而自动轮的登记发生在 ended 之后（挂起中放行的那轮还没跑完/没登记），天然区分、不会自激。
  */
 // ═══ 协议常量 ═══
@@ -120506,18 +120544,28 @@ async function deleteCurrentSummaryVectorIndexFromChat_ACU() {
     const changed = await commitVectorMetadataPatchesBatch_ACU(entries);
     const scopeHintList = Array.from(scopeHints.values());
     for (const hint of scopeHintList) {
-        await deleteSummaryVectorHotCacheByScope_ACU(hint);
-        await clearSummaryVectorFlushTasksByScope_ACU(hint);
+        // 两个 helper 以返回值报失败（不抛错）；此处为尽力清理，失败仅记录，不改变本函数返回值语义。
+        const hintLabel = `${hint.isolationKey}/${hint.sourceTableKey}`;
+        if ((await deleteSummaryVectorHotCacheByScope_ACU(hint)) === false) {
+            logWarn_ACU(`[交火向量索引] 热缓存清理失败（${hintLabel}），残留将在后续读取时自愈。`);
+        }
+        if ((await clearSummaryVectorFlushTasksByScope_ACU(hint)) === false) {
+            logWarn_ACU(`[交火向量索引] flush 任务清理失败（${hintLabel}），残留将在后续读取时自愈。`);
+        }
     }
     const gcResult = await cleanupUnreachableSummaryVectorIndexFiles_ACU({ scopeHints: scopeHintList });
     return changed || gcResult.deletedPaths.length > 0 || gcResult.failedDeletes.length > 0;
 }
 
+/** 返回 false 表示至少一个缓存未清干净（两个 helper 以返回值报失败，不抛错）。 */
 async function clearAllSummaryVectorIndexCaches_ACU() {
-    await Promise.all([
+    const [tempCacheCleared, hotCacheCleared] = await Promise.all([
         clearVectorIndexTempCache_ACU(),
         clearSummaryVectorHotCache_ACU(),
     ]);
+    // 严格取 true：两个 helper 的契约是 Promise<boolean>；若写成 `!== false`，
+    // 未来误引入一个 Promise<void> 的 helper（undefined）会被静默当成清理成功（fail-open）。
+    return tempCacheCleared === true && hotCacheCleared === true;
 }
 function normalizeErrorMessage_ACU(error) {
     if (error instanceof Error)
@@ -141495,7 +141543,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260914-16";
+        const stamp = "20260914-17";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -179703,9 +179751,14 @@ function useVectorIndexConfig() {
             return;
         maintenanceBusy.value = true;
         try {
-            await clearAllSummaryVectorIndexCaches_ACU();
+            const fullyCleared = await clearAllSummaryVectorIndexCaches_ACU();
             await refreshIndexStatus(false);
-            notify('success', '交火索引临时缓存与热缓存已清空。权威外置文件和聊天记录不会被删除。', { muteable: false });
+            if (fullyCleared === false) {
+                notify('warning', '交火索引缓存未能完全清空（部分存储不可用），请重试。权威外置文件和聊天记录不会被删除。', { muteable: false });
+            }
+            else {
+                notify('success', '交火索引临时缓存与热缓存已清空。权威外置文件和聊天记录不会被删除。', { muteable: false });
+            }
         }
         catch (error) {
             notify('error', `清空交火索引缓存失败：${error?.message || '未知错误'}`, { muteable: false });
@@ -186121,7 +186174,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260914-16";
+        const stamp = "20260914-17";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -186130,7 +186183,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.5.7";
+        const v = "9.5.8";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {

@@ -655,6 +655,24 @@ describe('sql-query-var', () => {
         const result = builder.groupBy('状态').having('COUNT(*) > 1').all();
         expect(result).toHaveLength(1);
       });
+
+      it('含分号直接拒绝（分号是唯一能切开语句的分隔符）', () => {
+        const builder = new TableQueryBuilder('重要人物表');
+        expect(() => builder.having('1; DROP TABLE inventory; --')).toThrow();
+      });
+
+      it('整词 END 不再被误拒：CASE…END 经完整 ORM 路径可执行', () => {
+        const builder = new TableQueryBuilder('背包物品表');
+        // having 片段不过列名翻译，故此处用物理列名 quantity
+        const rows = builder.groupBy('类别').having('SUM(CASE WHEN quantity > 0 THEN 1 ELSE 0 END) >= 1').all();
+        expect(rows).toHaveLength(3);
+      });
+
+      it('整词 REPLACE 不再被误拒：REPLACE() 经完整 ORM 路径可执行', () => {
+        const builder = new TableQueryBuilder('背包物品表');
+        const rows = builder.groupBy('类别').having("REPLACE(category, '道具', '装备') = '装备'").all();
+        expect(rows).toHaveLength(1);
+      });
     });
 
     describe('distinct', () => {

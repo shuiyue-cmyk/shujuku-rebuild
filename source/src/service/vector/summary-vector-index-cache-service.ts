@@ -23,11 +23,15 @@ export interface SummaryVectorIndexCachePreloadResult_ACU {
     chatStateCleared?: boolean;
 }
 
-export async function clearAllSummaryVectorIndexCaches_ACU(): Promise<void> {
-    await Promise.all([
+/** 返回 false 表示至少一个缓存未清干净（两个 helper 以返回值报失败，不抛错）。 */
+export async function clearAllSummaryVectorIndexCaches_ACU(): Promise<boolean> {
+    const [tempCacheCleared, hotCacheCleared] = await Promise.all([
         clearVectorIndexTempCache_ACU(),
         clearSummaryVectorHotCache_ACU(),
     ]);
+    // 严格取 true：两个 helper 的契约是 Promise<boolean>；若写成 `!== false`，
+    // 未来误引入一个 Promise<void> 的 helper（undefined）会被静默当成清理成功（fail-open）。
+    return tempCacheCleared === true && hotCacheCleared === true;
 }
 
 function normalizeErrorMessage_ACU(error: unknown): string {

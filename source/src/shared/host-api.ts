@@ -26,9 +26,23 @@ export interface IToastrAPI_ACU {
 export interface SillyTavernACUExtensions {
     /** SillyTavern 的 Chat 数组（大写 C，某些版本的 API 使用） */
     readonly Chat?: SillyTavern.ChatMessage[];
-    /** 设置聊天消息 */
+    /**
+     * 设置聊天消息。⚠️ `SillyTavern_API_ACU`（即宿主 `getContext()` 暴露的对象）**未观察到**提供此 API，
+     * 声明仅用于兼容可能存在的旧宿主/未来宿主。注意它与 `window.TavernHelper.setChatMessages`
+     * （酒馆助手注入，见 @types/function/index.d.ts）**不是同一个对象**，勿混用。
+     * 调用点一律先做 `typeof === 'function'` 守卫，不可用时降级为
+     * 「原地改 chat[i].mes + saveChat + emit MESSAGE_UPDATED」（见 chat-gateway.ts / chat-service.ts）。
+     * `options.refresh` 的语义借用酒馆助手 `setChatMessages` 的同名选项
+     * （`@types/function/chat_message.d.ts` 声明 `refresh?: 'none' | 'affected' | 'all'`）；
+     * 宿主 `getContext()` 对象本身无此契约。
+     */
     readonly setChatMessages?: (messages: SillyTavern.ChatMessage[], options?: { refresh?: string; [key: string]: any }) => Promise<void>;
-    /** 获取世界书列表 */
+    /**
+     * 获取世界书列表。⚠️ `SillyTavern_API_ACU` 同样**未观察到**提供此 API
+     * （仓内 @types 对 getWorldBooks/getWorldInfoNames 均无声明，运行时靠可选链探测）；
+     * 调用点在 worldbook-gateway.ts 中按 getWorldBooks → getWorldInfoNames 顺序降级，
+     * TT 裸环境下 getWorldBooks 恒为空。
+     */
     readonly getWorldBooks?: () => Promise<string[]>;
     /** 当前角色 ID（数字索引） */
     readonly this_chid?: number;

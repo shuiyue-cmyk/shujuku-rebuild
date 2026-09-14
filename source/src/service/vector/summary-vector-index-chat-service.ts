@@ -243,8 +243,14 @@ export async function deleteCurrentSummaryVectorIndexFromChat_ACU(): Promise<boo
 
     const scopeHintList = Array.from(scopeHints.values());
     for (const hint of scopeHintList) {
-        await deleteSummaryVectorHotCacheByScope_ACU(hint);
-        await clearSummaryVectorFlushTasksByScope_ACU(hint);
+        // 两个 helper 以返回值报失败（不抛错）；此处为尽力清理，失败仅记录，不改变本函数返回值语义。
+        const hintLabel = `${hint.isolationKey}/${hint.sourceTableKey}`;
+        if ((await deleteSummaryVectorHotCacheByScope_ACU(hint)) === false) {
+            logWarn_ACU(`[交火向量索引] 热缓存清理失败（${hintLabel}），残留将在后续读取时自愈。`);
+        }
+        if ((await clearSummaryVectorFlushTasksByScope_ACU(hint)) === false) {
+            logWarn_ACU(`[交火向量索引] flush 任务清理失败（${hintLabel}），残留将在后续读取时自愈。`);
+        }
     }
     const gcResult = await cleanupUnreachableSummaryVectorIndexFiles_ACU({ scopeHints: scopeHintList });
     return changed || gcResult.deletedPaths.length > 0 || gcResult.failedDeletes.length > 0;

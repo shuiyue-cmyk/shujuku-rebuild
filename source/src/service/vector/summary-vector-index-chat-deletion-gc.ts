@@ -78,8 +78,14 @@ async function cleanupScopesEverywhere_ACU(
     // IDB 清理支持 partial scope：只传 chatKey 即可清空该聊天全部热缓存与 flush 任务，
     // 覆盖 registry 里已无文件但 IDB 仍有残留的情况。
     for (const chatKey of chatKeys) {
-        await deleteSummaryVectorHotCacheByScope_ACU({ chatKey, isolationKey: '', sourceTableKey: '' });
-        await clearSummaryVectorFlushTasksByScope_ACU({ chatKey, isolationKey: '', sourceTableKey: '' });
+        // 失败仅记录：此处为删聊天后的尽力清理，权威文件由后续 GC 兜底。
+        const scope = { chatKey, isolationKey: '', sourceTableKey: '' };
+        if ((await deleteSummaryVectorHotCacheByScope_ACU(scope)) === false) {
+            logWarn_ACU(`[交火向量索引] 删除聊天后热缓存清理失败：chatKey=${chatKey}，残留将在后续读取时自愈。`);
+        }
+        if ((await clearSummaryVectorFlushTasksByScope_ACU(scope)) === false) {
+            logWarn_ACU(`[交火向量索引] 删除聊天后 flush 任务清理失败：chatKey=${chatKey}，残留将在后续读取时自愈。`);
+        }
     }
     if (scopes.length === 0) return 0;
     const gcResult = await cleanupUnreachableSummaryVectorIndexFiles_ACU({ scopeHints: scopes });

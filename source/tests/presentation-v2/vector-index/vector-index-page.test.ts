@@ -101,7 +101,7 @@ async function mountVectorIndexPage(opts: {
     return result;
   });
   const getLastIndex = vi.fn(() => 5);
-  const clearCache = vi.fn(async () => undefined);
+  const clearCache = vi.fn(async () => true);
   const deleteIndex = vi.fn(async () => true);
   const getStats = vi.fn(async () => ({
     status: 'ready',
@@ -455,6 +455,25 @@ describe('VectorIndexPage', () => {
     expect(clearCache).toHaveBeenCalledTimes(1);
     expect(deleteIndex).not.toHaveBeenCalled();
     expect(document.body.textContent || '').toContain('交火索引临时缓存与热缓存已清空');
+
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('清缓存未完全成功时报 warning 文案而非「已清空」', async () => {
+    const { mount, clearCache } = await mountVectorIndexPage();
+    clearCache.mockResolvedValueOnce(false);
+
+    const clearButton = Array.from(document.querySelectorAll('button'))
+      .find(b => /清空临时缓存/.test(b.textContent || '')) as HTMLButtonElement | undefined;
+    expect(clearButton).not.toBeUndefined();
+
+    clearButton!.click();
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+
+    const text = document.body.textContent || '';
+    expect(text).toContain('未能完全清空');
+    expect(text).not.toContain('交火索引临时缓存与热缓存已清空');
 
     mount.__resetAcuV2MountForTests();
   });

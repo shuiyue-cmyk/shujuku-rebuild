@@ -176,12 +176,6 @@ export async function trimVectorIndexTempCacheToBudget_ACU(
     }
 }
 
-export async function deleteVectorIndexCachedShard_ACU(indexId: string, shardId: string): Promise<void> {
-    try {
-        await runStore_ACU<undefined>('readwrite', (store) => store.delete(makeKey_ACU(indexId, shardId)) as IDBRequest<undefined>);
-    } catch {}
-}
-
 /** 返回值即失败通道：false 表示该 indexId 的临时缓存未清干净，调用方须据此告警。 */
 export async function deleteVectorIndexCacheByIndex_ACU(indexId: string): Promise<boolean> {
     try {
@@ -214,10 +208,30 @@ export async function deleteVectorIndexCacheByIndex_ACU(indexId: string): Promis
     }
 }
 
-export async function clearVectorIndexTempCache_ACU(): Promise<void> {
+/** 返回值即失败通道：false 表示整表清空失败，调用方须据此告警。 */
+export async function clearVectorIndexTempCache_ACU(): Promise<boolean> {
     try {
-        await runStore_ACU<undefined>('readwrite', (store) => store.clear() as IDBRequest<undefined>);
-    } catch {}
+        // 不用通用 runStore_ACU：它在 request.onsuccess 就 resolve（读操作合适），
+        // 而清空必须等事务提交才算成功，否则事务层 abort 会被已结算的 promise 吞掉。
+        const db = await openDb_ACU();
+        await new Promise<void>((resolve, reject) => {
+            const tx = db.transaction(STORE_NAME_ACU, 'readwrite');
+            const store = tx.objectStore(STORE_NAME_ACU);
+            const request = store.clear();
+            request.onerror = () => reject(request.error || new Error('清空向量临时缓存失败'));
+            tx.oncomplete = () => {
+                db.close();
+                resolve();
+            };
+            tx.onerror = () => {
+                db.close();
+                reject(tx.error || new Error('清空向量临时缓存事务失败'));
+            };
+        });
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 export async function estimateVectorIndexTempCache_ACU(indexId?: string): Promise<{ bytes: number; count: number }> {

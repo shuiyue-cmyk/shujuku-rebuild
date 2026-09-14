@@ -514,9 +514,13 @@ export function useVectorIndexConfig() {
     if (maintenanceBusy.value) return;
     maintenanceBusy.value = true;
     try {
-      await clearAllSummaryVectorIndexCaches_ACU();
+      const fullyCleared = await clearAllSummaryVectorIndexCaches_ACU();
       await refreshIndexStatus(false);
-      notify('success', '交火索引临时缓存与热缓存已清空。权威外置文件和聊天记录不会被删除。', { muteable: false });
+      if (fullyCleared === false) {
+        notify('warning', '交火索引缓存未能完全清空（部分存储不可用），请重试。权威外置文件和聊天记录不会被删除。', { muteable: false });
+      } else {
+        notify('success', '交火索引临时缓存与热缓存已清空。权威外置文件和聊天记录不会被删除。', { muteable: false });
+      }
     } catch (error: any) {
       notify('error', `清空交火索引缓存失败：${error?.message || '未知错误'}`, { muteable: false });
     } finally {

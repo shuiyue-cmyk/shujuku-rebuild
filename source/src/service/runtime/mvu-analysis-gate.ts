@@ -52,11 +52,13 @@
  * 数据驱动降窗的最坏代价只是「新聊天头 3 轮各多等 5s」，宁保守勿抢跑。
  *
  * ── [W5] 无死循环自证 ──
- * 重跑只是再走一次既有自动链入口（填表 + 正文替换）。本库正文替换写回走
- * setChatMessages(..., { refresh: 'affected' })（service/chat/chat-service.ts:1154），
- * 宿主只在 createChatMessages 路径派发 MESSAGE_RECEIVED（ST 源码 chat_message.ts:385 / :403），
- * refresh:'affected' 不产 MESSAGE_RECEIVED → MVU 不会被本库写回拉起重新解析 → 不会再产生新的 ended
- * → 重跑自身不再触发第二轮重跑。第二重保险：W5 的触发判据是「收到 ended 时本楼已在 W1/W3 登记」，
+ * 重跑只是再走一次既有自动链入口（填表 + 正文替换）。写作回路径有两态，均不产生「新消息」：
+ * ① 宿主未提供 setChatMessages（未观察到，见 shared/host-api.ts 注释）→ 走降级路径：
+ *    原地改 chat[i].mes 后 saveChat + emit MESSAGE_UPDATED（chat-gateway.ts 的 emitMessageUpdated_ACU）；
+ * ② 宿主若提供 setChatMessages，则由 options.refresh 控制刷新范围。
+ * 因此本库侧证据只能保证：写回不是「新增消息」形态。至于宿主侧 MVU 究竟监听哪个事件、
+ * 会不会被这次写回拉起重新解析，属宿主内部行为，本注释不作断言。
+ * 第二重保险（与宿主行为无关，仅凭本库自身记账）：W5 的触发判据是「收到 ended 时本楼已在 W1/W3 登记」，
  * 而自动轮的登记发生在 ended 之后（挂起中放行的那轮还没跑完/没登记），天然区分、不会自激。
  */
 

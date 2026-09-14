@@ -553,22 +553,29 @@ export async function deleteSummaryVectorHotCacheByScope_ACU(scope: VectorIndexH
     }
 }
 
-export async function clearSummaryVectorHotCache_ACU(): Promise<void> {
+/** 返回值即失败通道：false 表示整表清空失败，调用方须据此告警。 */
+export async function clearSummaryVectorHotCache_ACU(): Promise<boolean> {
     try {
         const db = await openDb_ACU();
         await new Promise<void>((resolve, reject) => {
             const tx = db.transaction(STORE_NAME_ACU, 'readwrite');
             const store = tx.objectStore(STORE_NAME_ACU);
             const request = store.clear();
-            request.onsuccess = () => resolve();
             request.onerror = () => reject(request.error || new Error('清空交火向量热缓存失败'));
-            tx.oncomplete = () => db.close();
+            // 与同文件 delete* 对齐：事务提交后才算成功，否则事务层 abort 会被已结算的 promise 吞掉
+            tx.oncomplete = () => {
+                db.close();
+                resolve();
+            };
             tx.onerror = () => {
                 db.close();
                 reject(tx.error || new Error('清空交火向量热缓存事务失败'));
             };
         });
-    } catch {}
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 export async function estimateSummaryVectorHotCache_ACU(indexId?: string): Promise<{ bytes: number; count: number }> {

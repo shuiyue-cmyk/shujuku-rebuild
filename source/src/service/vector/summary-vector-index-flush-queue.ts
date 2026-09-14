@@ -433,6 +433,7 @@ export async function flushSummaryVectorIndexTaskNow_ACU(scopeKey: string): Prom
         // 除了可安全派生的默认空槽 task 外，其他旧格式没有足够身份字段可证明归属。
         const message = `旧版 flush task 缺少可验证三元 scope，已从队列中清理：task=${task.scopeKey}`;
         clearFlushTimer_ACU(task.scopeKey);
+        // 刻意忽略返回值：此处已发出 legacy_scope_purged 事件留痕，失败也会在下一轮 restore 重试。
         await deleteSummaryVectorFlushTask_ACU(task.scopeKey);
         logSummaryVectorIndexIdentityEvent_ACU('debug', 'flush', 'legacy_scope_purged', {
             scopeFingerprint: task.scopeKey,
@@ -722,6 +723,7 @@ export async function restoreSummaryVectorIndexFlushQueueForCurrentChat_ACU(): P
         // isolationKey==='' 是未开隔离的合法默认槽；不能用真值判断当 legacy 清掉。
         if (typeof task.isolationKey !== 'string' || task.scopeKey !== activeScopeKey) {
             clearFlushTimer_ACU(task.scopeKey);
+            // 刻意忽略返回值：此处已发出 legacy_scope_purged 事件留痕，失败也会在下一轮 restore 重试。
             await deleteSummaryVectorFlushTask_ACU(task.scopeKey);
             logSummaryVectorIndexIdentityEvent_ACU('debug', 'flush', 'legacy_scope_purged', {
                 scopeFingerprint: task.scopeKey,
