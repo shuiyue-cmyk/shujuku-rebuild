@@ -36,8 +36,8 @@ describe('deleteCurrentSummaryVectorIndexFromChat_ACU', () => {
       },
     }];
     const saveChat = vi.fn(async () => undefined);
-    const deleteHotByScope = vi.fn(async () => undefined);
-    const clearFlushByScope = vi.fn(async () => undefined);
+    const deleteHotByScope = vi.fn(async () => true);
+    const clearFlushByScope = vi.fn(async () => true);
     const saveStrict = vi.fn(async () => undefined);
     const cleanupUnreachable = vi.fn(async () => ({
       scannedRegisteredFileCount: 1,
@@ -114,6 +114,75 @@ describe('deleteCurrentSummaryVectorIndexFromChat_ACU', () => {
     expect(deleteHotByScope).toHaveBeenCalledWith(expectedScope);
     expect(clearFlushByScope).toHaveBeenCalledWith(expectedScope);
     expect(cleanupUnreachable).toHaveBeenCalledWith({ scopeHints: [expectedScope] });
+  });
+
+  it('热缓存/flush 任务清理未显式返回 true 时记录警告（失败不再静默）', async () => {
+    const manifest = {
+      status: 'ready',
+      indexId: 'idx-current',
+      chatKey: 'chat-data',
+      isolationKey: 'alpha',
+      sourceTableKey: 'sheet_summary',
+    } as any;
+    const chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        alpha: {
+          summaryVectorIndexManifest: manifest,
+          summaryVectorIndexState: { manifest, rows: [{ rowKey: 'r1', status: 'active' }], chunks: [] },
+        },
+      },
+    }];
+    const deleteHotByScope = vi.fn(async () => undefined);
+    const clearFlushByScope = vi.fn(async () => undefined);
+    const logWarn = vi.fn();
+
+    vi.doMock('../../../src/service/chat/chat-service', () => ({
+      getChatArray_ACU: () => chat,
+      saveChatToHost_ACU: vi.fn(async () => undefined),
+    }));
+    vi.doMock('../../../src/data/gateways/chat-gateway', () => ({
+      getChatArray_ACU: () => chat,
+      saveChatToHost_ACU: vi.fn(async () => undefined),
+      saveChatToHostStrict_ACU: vi.fn(async () => undefined),
+    }));
+    vi.doMock('../../../src/service/runtime/state-manager', () => ({
+      currentChatFileIdentifier_ACU: 'chat-data',
+      currentJsonTableData_ACU: { sheet_summary: { name: '纪要表' } },
+      getCurrentIsolationKey_ACU: () => 'alpha',
+    }));
+    vi.doMock('../../../src/service/vector/summary-vector-index-state-service', () => ({
+      getAggregatedSummaryVectorIndexSnapshot_ACU: () => ({
+        summaryVectorIndexState: { manifest, rows: [{ rowKey: 'r1', status: 'active' }], chunks: [] },
+        layers: [{
+          messageIndex: 0,
+          isolationKey: 'alpha',
+          summaryVectorIndexState: { manifest, rows: [{ rowKey: 'r1', status: 'active' }], chunks: [] },
+          tagData: chat[0].TavernDB_ACU_IsolatedData.alpha,
+        }],
+        rowOwners: new Map(),
+      }),
+      assignSummaryVectorIndexStateToTagData_ACU: vi.fn(),
+    }));
+    vi.doMock('../../../src/data/storage/vector-index-hot-cache', () => ({
+      deleteSummaryVectorHotCacheByScope_ACU: deleteHotByScope,
+      clearSummaryVectorFlushTasksByScope_ACU: clearFlushByScope,
+    }));
+    vi.doMock('../../../src/service/vector/summary-vector-index-storage-service', () => ({
+      cleanupUnreachableSummaryVectorIndexFiles_ACU: vi.fn(async () => ({ deletedPaths: [], failedDeletes: [] })),
+    }));
+    // 展开原模块，避免 mock 工厂缺导出（本仓高频坑）
+    vi.doMock('../../../src/shared/utils', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('../../../src/shared/utils')>()),
+      logWarn_ACU: logWarn,
+    }));
+
+    const { deleteCurrentSummaryVectorIndexFromChat_ACU } = await import('../../../src/service/vector/summary-vector-index-chat-service');
+    await deleteCurrentSummaryVectorIndexFromChat_ACU();
+
+    const warned = logWarn.mock.calls.map(call => String(call[0]));
+    expect(warned.some(text => text.includes('热缓存清理失败'))).toBe(true);
+    expect(warned.some(text => text.includes('flush 任务清理失败'))).toBe(true);
   });
 });
 

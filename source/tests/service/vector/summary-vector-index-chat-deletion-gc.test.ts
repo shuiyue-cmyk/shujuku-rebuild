@@ -43,6 +43,7 @@ import {
   cleanupSummaryVectorIndexForDeletedChat_ACU,
   sweepOrphanSummaryVectorIndexFiles_ACU,
 } from '../../../src/service/vector/summary-vector-index-chat-deletion-gc';
+import { logWarn_ACU } from '../../../src/shared/utils';
 
 function registryFile(path: string, scope?: { chatKey: string; isolationKey: string; sourceTableKey: string }): any {
   return { path, role: 'snapshot', publicationState: 'published', ...(scope ? { scope } : {}) };
@@ -55,8 +56,8 @@ describe('cleanupSummaryVectorIndexForDeletedChat_ACU 安全边界', () => {
     h.registryFiles = [];
     h.listAliveChats.mockImplementation(async () => h.aliveChatNames);
     h.aliveChatNames = new Set<string>();
-    h.deleteHotCacheByScope.mockResolvedValue(undefined);
-    h.clearFlushTasksByScope.mockResolvedValue(undefined);
+    h.deleteHotCacheByScope.mockResolvedValue(true);
+    h.clearFlushTasksByScope.mockResolvedValue(true);
     h.safeGc.mockResolvedValue({ deletedPaths: [], retainedPaths: [] });
     h.decodeScope.mockReturnValue(null);
   });
@@ -118,6 +119,18 @@ describe('cleanupSummaryVectorIndexForDeletedChat_ACU 安全边界', () => {
     expect(h.deleteHotCacheByScope).toHaveBeenCalledWith({ chatKey: 'deleted-chat', isolationKey: '', sourceTableKey: '' });
     expect(h.safeGc).not.toHaveBeenCalled();
   });
+
+  it('热缓存/flush 任务清理未显式返回 true 时记录警告（失败不再静默）', async () => {
+    h.registryFiles = [];
+    h.deleteHotCacheByScope.mockResolvedValueOnce(undefined);
+    h.clearFlushTasksByScope.mockResolvedValueOnce(undefined);
+
+    await cleanupSummaryVectorIndexForDeletedChat_ACU('deleted-chat.jsonl');
+
+    const warned = vi.mocked(logWarn_ACU).mock.calls.map(call => String(call[0]));
+    expect(warned.some(text => text.includes('删除聊天后热缓存清理失败'))).toBe(true);
+    expect(warned.some(text => text.includes('删除聊天后 flush 任务清理失败'))).toBe(true);
+  });
 });
 
 describe('sweepOrphanSummaryVectorIndexFiles_ACU 孤儿清扫', () => {
@@ -127,8 +140,8 @@ describe('sweepOrphanSummaryVectorIndexFiles_ACU 孤儿清扫', () => {
     h.registryFiles = [];
     h.listAliveChats.mockImplementation(async () => h.aliveChatNames);
     h.aliveChatNames = new Set<string>();
-    h.deleteHotCacheByScope.mockResolvedValue(undefined);
-    h.clearFlushTasksByScope.mockResolvedValue(undefined);
+    h.deleteHotCacheByScope.mockResolvedValue(true);
+    h.clearFlushTasksByScope.mockResolvedValue(true);
     h.safeGc.mockResolvedValue({ deletedPaths: [], retainedPaths: [] });
     h.decodeScope.mockReturnValue(null);
     globalThis.localStorage?.removeItem?.('TavernDB_ACU_vector_orphan_sweep_last_run');

@@ -478,7 +478,9 @@ export class TableQueryBuilder {
   }
 
   /**
-   * 生成 SQL（调试用）
+   * 生成 SQL（调试/断言用）。
+   * ⚠️ 只做拼接、**不经过 `_executeQuery` 的多语句只读门**，故仅供测试与文档展示；
+   * 任何真正执行的路径都必须走 `_executeQuery`（gate 在 `_rejectIfMultiStatement`）。
    */
   toSQL(): string {
     return this._buildSelect('*');

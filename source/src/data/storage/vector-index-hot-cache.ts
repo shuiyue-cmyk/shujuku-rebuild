@@ -1095,7 +1095,7 @@ export async function clearSummaryVectorFlushTasksByScope_ACU(scope: VectorIndex
     }
     let allCleared = true;
     for (const task of tasks) {
-        if ((await deleteSummaryVectorFlushTask_ACU(task.scopeKey)) === false) allCleared = false;
+        if ((await deleteSummaryVectorFlushTask_ACU(task.scopeKey)) !== true) allCleared = false;
     }
     return allCleared;
 }

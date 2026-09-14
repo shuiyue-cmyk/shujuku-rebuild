@@ -79,6 +79,7 @@ vi.mock('../../../src/service/vector/vector-memory-config', () => ({
 import {
   abortSummaryVectorIndexSnapshotPublication_ACU,
   collectSummaryVectorIndexReachability_ACU,
+  deleteSummaryVectorIndexExternal_ACU,
   cleanupUnreachableSummaryVectorIndexFiles_ACU,
   finalizeSummaryVectorIndexSnapshotPublication_ACU,
   inspectSummaryVectorIndexHealth_ACU,
@@ -135,6 +136,18 @@ describe('summary-vector-index-storage-service V2 单文件读取', () => {
     h.register.mockResolvedValue(undefined);
     h.remove.mockResolvedValue({ ok: true });
     h.unregister.mockResolvedValue(undefined);
+  });
+
+  it('外置索引删除后缓存清理未显式返回 true 时逐处记录警告（失败不再静默）', async () => {
+    // h.remove/h.unregister 已默认成功；两个 by-index 删除 helper 为 vi.fn()（返回 undefined），
+    // 在 fail-closed 判据（!== true）下均告警。
+    await deleteSummaryVectorIndexExternal_ACU(manifest_ACU());
+
+    const warned = h.logWarn.mock.calls.map(call => String(call[0]));
+    // 「临时缓存清理失败」共 2 条：cleanupManifestFilesExcept_ACU 与 deleteSummaryVectorIndexExternal_ACU
+    // 会对同一 indexId 各清一次（各自告警）；热缓存只在后者清一次。
+    expect(warned.filter(text => text.includes('临时缓存清理失败'))).toHaveLength(2);
+    expect(warned.filter(text => text.includes('热缓存清理失败'))).toHaveLength(1);
   });
 
   it('T4：完整 V2 identity 读取时跳过热缓存查询与回填，只回源一次', async () => {

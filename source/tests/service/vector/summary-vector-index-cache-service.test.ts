@@ -56,8 +56,8 @@ describe('summary vector missing external file recovery helpers', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.clearLayer.mockResolvedValue(true);
-    h.deleteTemp.mockResolvedValue(undefined);
-    h.deleteHot.mockResolvedValue(undefined);
+    h.deleteTemp.mockResolvedValue(true);
+    h.deleteHot.mockResolvedValue(true);
     h.clearFlush.mockResolvedValue(2);
     h.loadChunks.mockResolvedValue([]);
     h.snapshot = null;
@@ -150,8 +150,8 @@ describe('summary vector invalid external file recovery', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.clearLayer.mockResolvedValue(true);
-    h.deleteTemp.mockResolvedValue(undefined);
-    h.deleteHot.mockResolvedValue(undefined);
+    h.deleteTemp.mockResolvedValue(true);
+    h.deleteHot.mockResolvedValue(true);
     h.clearFlush.mockResolvedValue(1);
     h.loadChunks.mockResolvedValue([]);
     h.snapshot = null;

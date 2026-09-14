@@ -80,10 +80,10 @@ async function cleanupScopesEverywhere_ACU(
     for (const chatKey of chatKeys) {
         // 失败仅记录：此处为删聊天后的尽力清理，权威文件由后续 GC 兜底。
         const scope = { chatKey, isolationKey: '', sourceTableKey: '' };
-        if ((await deleteSummaryVectorHotCacheByScope_ACU(scope)) === false) {
+        if ((await deleteSummaryVectorHotCacheByScope_ACU(scope)) !== true) {
             logWarn_ACU(`[交火向量索引] 删除聊天后热缓存清理失败：chatKey=${chatKey}，残留将在后续读取时自愈。`);
         }
-        if ((await clearSummaryVectorFlushTasksByScope_ACU(scope)) === false) {
+        if ((await clearSummaryVectorFlushTasksByScope_ACU(scope)) !== true) {
             logWarn_ACU(`[交火向量索引] 删除聊天后 flush 任务清理失败：chatKey=${chatKey}，残留将在后续读取时自愈。`);
         }
     }

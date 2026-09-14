@@ -47788,7 +47788,7 @@ async function clearSummaryVectorFlushTasksByScope_ACU(scope) {
     }
     let allCleared = true;
     for (const task of tasks) {
-        if ((await deleteSummaryVectorFlushTask_ACU(task.scopeKey)) === false)
+        if ((await deleteSummaryVectorFlushTask_ACU(task.scopeKey)) !== true)
             allCleared = false;
     }
     return allCleared;
@@ -51174,7 +51174,7 @@ async function cleanupManifestFilesExcept_ACU(previousManifest, retainedPaths) {
     await unregisterVectorIndexFiles_ACU(deletedPaths);
     if (previousManifest.indexId && !Array.from(retainedPaths).some((path) => path.includes(previousManifest.indexId))) {
         // helper 以返回值报失败（不抛错）；此处为尽力清理，失败仅记录。
-        if ((await deleteVectorIndexCacheByIndex_ACU(previousManifest.indexId)) === false) {
+        if ((await deleteVectorIndexCacheByIndex_ACU(previousManifest.indexId)) !== true) {
             logWarn_ACU(`[交火向量索引] 临时缓存清理失败：indexId=${previousManifest.indexId}，残留将在后续读取时自愈。`);
         }
     }
@@ -53154,10 +53154,10 @@ async function deleteSummaryVectorIndexExternal_ACU(manifest) {
     await cleanupManifestFilesExcept_ACU(manifest, retainedPaths);
     if (manifest.indexId) {
         // helper 以返回值报失败（不抛错）；此处为尽力清理，失败仅记录。
-        if ((await deleteVectorIndexCacheByIndex_ACU(manifest.indexId)) === false) {
+        if ((await deleteVectorIndexCacheByIndex_ACU(manifest.indexId)) !== true) {
             logWarn_ACU(`[交火向量索引] 临时缓存清理失败：indexId=${manifest.indexId}，残留将在后续读取时自愈。`);
         }
-        if ((await deleteSummaryVectorHotCacheByIndex_ACU(manifest.indexId)) === false) {
+        if ((await deleteSummaryVectorHotCacheByIndex_ACU(manifest.indexId)) !== true) {
             logWarn_ACU(`[交火向量索引] 热缓存清理失败：indexId=${manifest.indexId}，残留将在后续读取时自愈。`);
         }
     }
@@ -55734,10 +55734,10 @@ async function cleanupScopesEverywhere_ACU(scopes, chatKeys) {
     for (const chatKey of chatKeys) {
         // 失败仅记录：此处为删聊天后的尽力清理，权威文件由后续 GC 兜底。
         const scope = { chatKey, isolationKey: '', sourceTableKey: '' };
-        if ((await deleteSummaryVectorHotCacheByScope_ACU(scope)) === false) {
+        if ((await deleteSummaryVectorHotCacheByScope_ACU(scope)) !== true) {
             logWarn_ACU(`[交火向量索引] 删除聊天后热缓存清理失败：chatKey=${chatKey}，残留将在后续读取时自愈。`);
         }
-        if ((await clearSummaryVectorFlushTasksByScope_ACU(scope)) === false) {
+        if ((await clearSummaryVectorFlushTasksByScope_ACU(scope)) !== true) {
             logWarn_ACU(`[交火向量索引] 删除聊天后 flush 任务清理失败：chatKey=${chatKey}，残留将在后续读取时自愈。`);
         }
     }
@@ -90183,7 +90183,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.5.8" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.5.9" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -91841,7 +91841,9 @@ class TableQueryBuilder {
         return result.values[0][0] === 1;
     }
     /**
-     * 生成 SQL（调试用）
+     * 生成 SQL（调试/断言用）。
+     * ⚠️ 只做拼接、**不经过 `_executeQuery` 的多语句只读门**，故仅供测试与文档展示；
+     * 任何真正执行的路径都必须走 `_executeQuery`（gate 在 `_rejectIfMultiStatement`）。
      */
     toSQL() {
         return this._buildSelect('*');
@@ -102093,7 +102095,7 @@ async function cleanupVectorManifestsFromSnapshots_ACU(snapshots) {
             // 否则「热缓存/flush 任务没清干净」会被静默当成清空成功。
             const hotCacheCleared = await deleteSummaryVectorHotCacheByScope_ACU(hint);
             const flushTasksCleared = await clearSummaryVectorFlushTasksByScope_ACU(hint);
-            if (hotCacheCleared === false || flushTasksCleared === false) {
+            if (hotCacheCleared !== true || flushTasksCleared !== true) {
                 const warning = `向量热缓存或 flush 任务清理失败（${hint.isolationKey}/${hint.sourceTableKey}）`;
                 warnings.push(warning);
                 logWarn_ACU(`[硬清空] ${warning}`);
@@ -120546,10 +120548,10 @@ async function deleteCurrentSummaryVectorIndexFromChat_ACU() {
     for (const hint of scopeHintList) {
         // 两个 helper 以返回值报失败（不抛错）；此处为尽力清理，失败仅记录，不改变本函数返回值语义。
         const hintLabel = `${hint.isolationKey}/${hint.sourceTableKey}`;
-        if ((await deleteSummaryVectorHotCacheByScope_ACU(hint)) === false) {
+        if ((await deleteSummaryVectorHotCacheByScope_ACU(hint)) !== true) {
             logWarn_ACU(`[交火向量索引] 热缓存清理失败（${hintLabel}），残留将在后续读取时自愈。`);
         }
-        if ((await clearSummaryVectorFlushTasksByScope_ACU(hint)) === false) {
+        if ((await clearSummaryVectorFlushTasksByScope_ACU(hint)) !== true) {
             logWarn_ACU(`[交火向量索引] flush 任务清理失败（${hintLabel}），残留将在后续读取时自愈。`);
         }
     }
@@ -120619,13 +120621,13 @@ async function clearLatestSummaryVectorIndexStateUnderScopeLock_ACU(params, reas
             if (result.status === 'rejected') {
                 logWarn_ACU(`[交火向量索引] ${reason} pointer 已删除，但${label}缓存清理失败，将继续重建:`, result.reason);
             }
-            else if (result.value === false) {
+            else if (result.value !== true) {
                 logWarn_ACU(`[交火向量索引] ${reason} pointer 已删除，但${label}缓存清理失败，将继续重建。`);
             }
         });
         return {
             chatStateCleared,
-            cacheCleared: cacheResults.every((result) => result.status === 'fulfilled' && result.value !== false),
+            cacheCleared: cacheResults.every((result) => result.status === 'fulfilled' && result.value === true),
             flushTaskCountCleared,
         };
     });
@@ -186183,7 +186185,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.5.8";
+        const v = "9.5.9";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {

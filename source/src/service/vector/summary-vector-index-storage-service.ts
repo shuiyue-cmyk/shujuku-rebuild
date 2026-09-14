@@ -785,7 +785,7 @@ async function cleanupManifestFilesExcept_ACU(
     await unregisterVectorIndexFiles_ACU(deletedPaths);
     if (previousManifest.indexId && !Array.from(retainedPaths).some((path) => path.includes(previousManifest.indexId))) {
         // helper 以返回值报失败（不抛错）；此处为尽力清理，失败仅记录。
-        if ((await deleteVectorIndexCacheByIndex_ACU(previousManifest.indexId)) === false) {
+        if ((await deleteVectorIndexCacheByIndex_ACU(previousManifest.indexId)) !== true) {
             logWarn_ACU(`[交火向量索引] 临时缓存清理失败：indexId=${previousManifest.indexId}，残留将在后续读取时自愈。`);
         }
     }
@@ -2879,10 +2879,10 @@ export async function deleteSummaryVectorIndexExternal_ACU(manifest: ChatSummary
     await cleanupManifestFilesExcept_ACU(manifest, retainedPaths);
     if (manifest.indexId) {
         // helper 以返回值报失败（不抛错）；此处为尽力清理，失败仅记录。
-        if ((await deleteVectorIndexCacheByIndex_ACU(manifest.indexId)) === false) {
+        if ((await deleteVectorIndexCacheByIndex_ACU(manifest.indexId)) !== true) {
             logWarn_ACU(`[交火向量索引] 临时缓存清理失败：indexId=${manifest.indexId}，残留将在后续读取时自愈。`);
         }
-        if ((await deleteSummaryVectorHotCacheByIndex_ACU(manifest.indexId)) === false) {
+        if ((await deleteSummaryVectorHotCacheByIndex_ACU(manifest.indexId)) !== true) {
             logWarn_ACU(`[交火向量索引] 热缓存清理失败：indexId=${manifest.indexId}，残留将在后续读取时自愈。`);
         }
     }

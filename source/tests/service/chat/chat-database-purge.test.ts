@@ -110,7 +110,7 @@ describe('purgeCurrentChatDatabaseState_ACU', () => {
     expect(mocks.saveStrict).toHaveBeenCalledTimes(1);
   });
 
-  it('热缓存清理 helper 返回 false 时降级为 warning（不再静默当成功）', async () => {
+  it('热缓存清理 helper 未显式返回 true 时降级为 warning（不再静默当成功）', async () => {
     mocks.chat = [{
       TavernDB_ACU_IsolatedData: {
         '': {
@@ -122,7 +122,7 @@ describe('purgeCurrentChatDatabaseState_ACU', () => {
       },
     }];
     // helper 内部已把失败降级为返回值（不再抛错），purge 必须查返回值才会告警
-    mocks.clearHotCache.mockResolvedValueOnce(false);
+    mocks.clearHotCache.mockResolvedValueOnce(undefined);
 
     const result = await purgeCurrentChatDatabaseState_ACU();
 

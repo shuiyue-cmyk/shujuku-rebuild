@@ -105,13 +105,13 @@ async function clearLatestSummaryVectorIndexStateUnderScopeLock_ACU(
             const label = index === 0 ? '临时' : '热';
             if (result.status === 'rejected') {
                 logWarn_ACU(`[交火向量索引] ${reason} pointer 已删除，但${label}缓存清理失败，将继续重建:`, result.reason);
-            } else if (result.value === false) {
+            } else if (result.value !== true) {
                 logWarn_ACU(`[交火向量索引] ${reason} pointer 已删除，但${label}缓存清理失败，将继续重建。`);
             }
         });
         return {
             chatStateCleared,
-            cacheCleared: cacheResults.every((result) => result.status === 'fulfilled' && result.value !== false),
+            cacheCleared: cacheResults.every((result) => result.status === 'fulfilled' && result.value === true),
             flushTaskCountCleared,
         };
     });

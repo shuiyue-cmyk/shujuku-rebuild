@@ -269,7 +269,7 @@ async function cleanupVectorManifestsFromSnapshots_ACU(
             // 否则「热缓存/flush 任务没清干净」会被静默当成清空成功。
             const hotCacheCleared = await deleteSummaryVectorHotCacheByScope_ACU(hint);
             const flushTasksCleared = await clearSummaryVectorFlushTasksByScope_ACU(hint);
-            if (hotCacheCleared === false || flushTasksCleared === false) {
+            if (hotCacheCleared !== true || flushTasksCleared !== true) {
                 const warning = `向量热缓存或 flush 任务清理失败（${hint.isolationKey}/${hint.sourceTableKey}）`;
                 warnings.push(warning);
                 logWarn_ACU(`[硬清空] ${warning}`);
