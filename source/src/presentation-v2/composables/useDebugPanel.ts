@@ -99,9 +99,6 @@ function maskSensitiveFields(value: unknown, depth = 0, seen = new WeakSet<objec
 }
 
 /** 两份 Debug 导出共用的表格快照：敏感列按列名脱敏，字符串单元格过掩码规则 */
-/** 单元可见性：导出供导出路径回归测试 */
-export function buildDebugTablesForTests_ACU(): ReturnType<typeof buildDebugTables_ACU> { return buildDebugTables_ACU(); }
-
 function buildDebugTables_ACU(): Record<string, { rows: number; headers: string[]; sampleRows?: unknown[][] }> {
   const tables: Record<string, { rows: number; headers: string[]; sampleRows?: unknown[][] }> = {};
   const data = currentJsonTableData_ACU || {};

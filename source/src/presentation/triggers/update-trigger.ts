@@ -35,10 +35,11 @@ import {
       return false;
   }
 
-  export function exportCombinedSettings_ACU() {    const promptSegments = getCharCardPromptFromUI_ACU();
+  export function exportCombinedSettings_ACU() {
+    const promptSegments = getCharCardPromptFromUI_ACU();
     if (!promptSegments || promptSegments.length === 0) {
       showToastr_ACU('warning', '没有可导出的提示词。');
-      return;
+      return false;
     }
 
     try {
@@ -76,8 +77,10 @@ import {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
         showToastr_ACU('success', '合并配置已成功导出！');
+        return true;
     } catch (error) {
         logError_ACU('导出合并配置失败:', error);
         showToastr_ACU('error', '导出合并配置失败，请检查控制台获取详情。');
+        return false;
     }
   }

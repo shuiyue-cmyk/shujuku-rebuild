@@ -33,6 +33,17 @@ function isTemplateSqlReadOnly_ACU(sql: string): boolean {
   return result.valid;
 }
 
+/**
+ * 表达式路径（ORM / db.expr / db.calc）专用注入门：只以「多语句」为判据。
+ * 这些路径的 SQL 恒以单条 SELECT 前缀执行，单条 SELECT 无法产生写副作用；若套用整条语句的
+ * 关键词词表（含 END/REPLACE/UPDATE 等整词），会把 CASE … END、REPLACE(...) 这类合法表达式误拒。
+ * 注意：{[sql ...]} 原生路径必须保留完整词表校验（`WITH cte AS(…) INSERT INTO` 是真实写操作）。
+ */
+function isMultiStatementSql_ACU(sql: string): boolean {
+  const result = validateReadOnlySql_ACU(sql);
+  return !result.valid && result.reason === 'multiple_statements';
+}
+
 // 安全 ORM/条件表达式结构白名单：仅允许方法链调用（db.标识符(.标识符(参数))*) 与
 // 末尾比较（> 3 / == "x" 等）。字符串字面量先替换为占位，黑名单模式再兜底。
 const DB_EXPR_BLACKLIST_RE_ACU =
@@ -546,14 +557,34 @@ export class TableQueryBuilder {
     return sql;
   }
 
+  /**
+   * ORM 专用多语句兜底门：命中时按 throwOnQueryError 抛错，否则返回 true 由调用方早退。
+   * 只认「多语句」这一个理由，避免误伤含 END/REPLACE 等词表的合法 SELECT 表达式。
+   */
+  private _rejectIfMultiStatement(sql: string, phase: string): boolean {
+    if (!isMultiStatementSql_ACU(sql)) return false;
+    if (this.options.throwOnQueryError === true) throw new Error('orm_query_multiple_statements');
+    logWarn_ACU(`[ORM] 拒绝执行多语句查询（${phase}）: ${String(sql).slice(0, 120)}`);
+    return true;
+  }
+
   private _executeQuery(sql: string): { columns: string[]; values: any[][] } {
     if (!isTemplateQueryRuntimeReady_ACU('ORM')) {
       if (this.options.throwOnQueryError === true) throw new Error('orm_runtime_not_ready');
       return { columns: [], values: [] };
     }
+    // ORM 构建的 SQL 与 {[sql...]} 共享同一注入面：sum/avg/max/min/get/list 的列名参数来自
+    // 模板与 AI 内容，resolveColumnName 未命中时原样返回，会被拼进 SUM(...) 等表达式；
+    // 而表达式结构白名单在判定前把引号内文本替换为 ""，故夹带在引号里的 `; DROP ...` 骗得过它，
+    // 最终 sql.js exec 会执行多语句。
+    // 判据刻意只取「多语句」（理由见 isMultiStatementSql_ACU）：若套用整条语句的关键词词表，
+    // 会把 CASE … END、REPLACE(...) 这类合法表达式误拒成空结果。
+    if (this._rejectIfMultiStatement(sql, '翻译前')) return { columns: [], values: [] };
     try {
       const provider = getStorageProvider();
       const executableSql = resolveCurrentRuntimeReadSql_ACU(sql).sql;
+      // 与 {[sql...]} 路径一致做翻译后复检：改名器若引入分号同样要拦。
+      if (this._rejectIfMultiStatement(executableSql, '翻译后')) return { columns: [], values: [] };
       const result = provider.executeQuery(executableSql, undefined, {
         suppressErrorLog: this.options.suppressQueryErrorLog === true,
       });
@@ -619,11 +650,18 @@ function execExpr(expression: string): string | number | null {
       logWarn_ACU('[db.expr] 空表达式');
       return null;
     }
-    // H1 加固：db.expr 以 SELECT 包裹校验只读（拒绝写语句/多语句）
-    if (!isTemplateSqlReadOnly_ACU(`SELECT ${expression.trim()}`)) return null;
+    // H1 加固：db.expr 以 SELECT 包裹，故只须拦多语句（单条 SELECT 无写副作用）；
+    // 套用整条语句的关键词词表会把 CASE … END / REPLACE(...) 误拒成 null。
+    if (isMultiStatementSql_ACU(`SELECT ${expression.trim()}`)) {
+      logWarn_ACU(`[db.expr] 拒绝执行多语句表达式: ${expression.trim().slice(0, 120)}`);
+      return null;
+    }
     if (!isTemplateQueryRuntimeReady_ACU('db.expr')) return null;
     const translatedExpr = resolveTemplateReadSql_ACU(expression.trim());
-    if (!isTemplateSqlReadOnly_ACU(`SELECT ${translatedExpr}`)) return null;
+    if (isMultiStatementSql_ACU(`SELECT ${translatedExpr}`)) {
+      logWarn_ACU(`[db.expr] 拒绝执行多语句表达式（翻译后）: ${String(translatedExpr).slice(0, 120)}`);
+      return null;
+    }
     const sql = `SELECT ${translatedExpr}`;
     const provider = getStorageProvider();
     const result = provider.executeQuery(sql);
@@ -690,8 +728,11 @@ function execCalc(expression: string): number | null {
       logWarn_ACU(`[db.calc] 表达式包含未定义变量: ${expression}`);
       return null;
     }
-    // H1 加固：算术表达式以 SELECT 包裹校验只读
-    if (!isTemplateSqlReadOnly_ACU(`SELECT ${processed}`)) return null;
+    // H1 加固：算术表达式以 SELECT 包裹，故只须拦多语句（原因同 db.expr）
+    if (isMultiStatementSql_ACU(`SELECT ${processed}`)) {
+      logWarn_ACU(`[db.calc] 拒绝执行多语句表达式: ${String(processed).slice(0, 120)}`);
+      return null;
+    }
     if (!isTemplateQueryRuntimeReady_ACU('db.calc')) return null;
     const provider = getStorageProvider();
     const result = provider.executeQuery(`SELECT ${processed}`);

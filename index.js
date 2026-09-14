@@ -47187,11 +47187,12 @@ async function getSummaryVectorHotCacheChunks_ACU(options) {
         return null;
     }
 }
+/** 返回值即失败通道：false 表示该 indexId 的热缓存未清干净，调用方须据此告警。 */
 async function deleteSummaryVectorHotCacheByIndex_ACU(indexId) {
     try {
         const targetIndexId = normalizeKeyPart_ACU(indexId);
         if (!targetIndexId)
-            return;
+            return true;
         const db = await openDb_ACU$1();
         await new Promise((resolve, reject) => {
             const tx = db.transaction(STORE_NAME_ACU$1, 'readwrite');
@@ -47215,16 +47216,20 @@ async function deleteSummaryVectorHotCacheByIndex_ACU(indexId) {
                 reject(tx.error || new Error('清理交火向量热缓存事务失败'));
             };
         });
+        return true;
     }
-    catch { }
+    catch {
+        return false;
+    }
 }
+/** 返回值即失败通道：false 表示该作用域热缓存未清干净，调用方须据此告警（勿静默吞错）。 */
 async function deleteSummaryVectorHotCacheByScope_ACU(scope) {
     try {
         const chatKey = normalizeKeyPart_ACU(scope.chatKey);
         const isolationKey = normalizeKeyPart_ACU(scope.isolationKey);
         const sourceTableKey = normalizeKeyPart_ACU(scope.sourceTableKey);
         if (!chatKey && !isolationKey && !sourceTableKey)
-            return;
+            return true;
         const db = await openDb_ACU$1();
         await new Promise((resolve, reject) => {
             const tx = db.transaction(STORE_NAME_ACU$1, 'readwrite');
@@ -47252,8 +47257,11 @@ async function deleteSummaryVectorHotCacheByScope_ACU(scope) {
                 reject(tx.error || new Error('按作用域清理交火向量热缓存事务失败'));
             };
         });
+        return true;
     }
-    catch { }
+    catch {
+        return false;
+    }
 }
 async function clearSummaryVectorHotCache_ACU() {
     try {
@@ -47751,17 +47759,32 @@ async function markSummaryVectorFlushTaskReadyIfGenerationMatchesStrict_ACU(scop
     }
     return completed;
 }
+/** 返回值即失败通道：strict 版删除后会复读校验，false 表示任务可能残留（会在后继 replay 复活已删数据）。 */
 async function deleteSummaryVectorFlushTask_ACU(scopeKey) {
     try {
         await deleteSummaryVectorFlushTaskStrict_ACU(scopeKey);
+        return true;
     }
-    catch { }
+    catch {
+        return false;
+    }
 }
 async function clearSummaryVectorFlushTasksByScope_ACU(scope) {
-    const tasks = await listSummaryVectorFlushTasks_ACU(scope);
-    for (const task of tasks) {
-        await deleteSummaryVectorFlushTask_ACU(task.scopeKey);
+    let tasks;
+    try {
+        tasks = await listSummaryVectorFlushTasks_ACU(scope);
     }
+    catch {
+        // list 自身把异常兜成 []，但「列举失败」与「确实没有任务」语义不同：
+        // 前者不能返回 true，否则调用方会把未清干净的残留当成已清空。
+        return false;
+    }
+    let allCleared = true;
+    for (const task of tasks) {
+        if ((await deleteSummaryVectorFlushTask_ACU(task.scopeKey)) === false)
+            allCleared = false;
+    }
+    return allCleared;
 }
 async function estimateSummaryVectorFlushTasks_ACU(scope) {
     const tasks = await listSummaryVectorFlushTasks_ACU(scope);
@@ -49837,6 +49860,7 @@ async function deleteVectorIndexCachedShard_ACU(indexId, shardId) {
     }
     catch { }
 }
+/** 返回值即失败通道：false 表示该 indexId 的临时缓存未清干净，调用方须据此告警。 */
 async function deleteVectorIndexCacheByIndex_ACU(indexId) {
     try {
         const db = await openDb_ACU();
@@ -49862,8 +49886,11 @@ async function deleteVectorIndexCacheByIndex_ACU(indexId) {
                 reject(tx.error || new Error('清理向量临时缓存事务失败'));
             };
         });
+        return true;
     }
-    catch { }
+    catch {
+        return false;
+    }
 }
 async function clearVectorIndexTempCache_ACU() {
     try {
@@ -83965,36 +83992,36 @@ function reconcileApiBindingForCurrentChat_ACU() {
     return { applied: true, presetName: preset.name };
 }
 // ═══ 写操作（事务式：快照 → 修改 → 保存 → 失败回滚） ═══
-function clone$8(value) {
+function clone$7(value) {
     return JSON.parse(JSON.stringify(value ?? null));
 }
 function snapshotApiFields_ACU() {
     ensureApiSettingsShape_ACU();
     return {
         apiMode: settings_ACU.apiMode,
-        apiConfig: clone$8(settings_ACU.apiConfig),
+        apiConfig: clone$7(settings_ACU.apiConfig),
         tavernProfile: settings_ACU.tavernProfile,
-        apiPresets: clone$8(settings_ACU.apiPresets),
+        apiPresets: clone$7(settings_ACU.apiPresets),
         defaultApiPresetName: settings_ACU.defaultApiPresetName,
-        apiPresetBindingsByChat: clone$8(settings_ACU.apiPresetBindingsByChat),
+        apiPresetBindingsByChat: clone$7(settings_ACU.apiPresetBindingsByChat),
         tableApiPreset: settings_ACU.tableApiPreset,
         plotApiPreset: settings_ACU.plotApiPreset,
-        tableApiPresetOverridesByName: clone$8(settings_ACU.tableApiPresetOverridesByName),
-        plotTaskApiPresetOverridesById: clone$8(settings_ACU.plotTaskApiPresetOverridesById),
+        tableApiPresetOverridesByName: clone$7(settings_ACU.tableApiPresetOverridesByName),
+        plotTaskApiPresetOverridesById: clone$7(settings_ACU.plotTaskApiPresetOverridesById),
         contentOptimizationApiPreset: settings_ACU.contentOptimizationSettings?.apiPreset,
     };
 }
 function restoreApiFields_ACU(snapshot) {
     settings_ACU.apiMode = snapshot.apiMode;
-    settings_ACU.apiConfig = clone$8(snapshot.apiConfig);
+    settings_ACU.apiConfig = clone$7(snapshot.apiConfig);
     settings_ACU.tavernProfile = snapshot.tavernProfile;
-    settings_ACU.apiPresets = clone$8(snapshot.apiPresets);
+    settings_ACU.apiPresets = clone$7(snapshot.apiPresets);
     settings_ACU.defaultApiPresetName = snapshot.defaultApiPresetName;
-    settings_ACU.apiPresetBindingsByChat = clone$8(snapshot.apiPresetBindingsByChat);
+    settings_ACU.apiPresetBindingsByChat = clone$7(snapshot.apiPresetBindingsByChat);
     settings_ACU.tableApiPreset = snapshot.tableApiPreset;
     settings_ACU.plotApiPreset = snapshot.plotApiPreset;
-    settings_ACU.tableApiPresetOverridesByName = clone$8(snapshot.tableApiPresetOverridesByName);
-    settings_ACU.plotTaskApiPresetOverridesById = clone$8(snapshot.plotTaskApiPresetOverridesById);
+    settings_ACU.tableApiPresetOverridesByName = clone$7(snapshot.tableApiPresetOverridesByName);
+    settings_ACU.plotTaskApiPresetOverridesById = clone$7(snapshot.plotTaskApiPresetOverridesById);
     if (settings_ACU.contentOptimizationSettings && typeof settings_ACU.contentOptimizationSettings === 'object') {
         settings_ACU.contentOptimizationSettings.apiPreset = snapshot.contentOptimizationApiPreset;
     }
@@ -84097,7 +84124,7 @@ function setActivePresetForCurrentChat_ACU(name) {
     const chatKey = getCurrentChatKey_ACU();
     settings_ACU.apiPresetBindingsByChat[chatKey] = { presetName: preset.name, updatedAt: Date.now() };
     settings_ACU.apiMode = preset.apiMode;
-    settings_ACU.apiConfig = clone$8(preset.apiConfig);
+    settings_ACU.apiConfig = clone$7(preset.apiConfig);
     return finalizeSave_ACU(snapshot);
 }
 /** 保存/新建预设；oldName 存在时为重命名，原子更新所有引用 */
@@ -84146,7 +84173,7 @@ function saveApiPreset_ACU$1(presetInput, originalName = '') {
             updatedAt: Date.now(),
         };
         settings_ACU.apiMode = preset.apiMode;
-        settings_ACU.apiConfig = clone$8(preset.apiConfig);
+        settings_ACU.apiConfig = clone$7(preset.apiConfig);
     }
     const result = finalizeSave_ACU(snapshot);
     if (!result.ok)
@@ -84182,7 +84209,7 @@ function deleteApiPreset_ACU$1(name) {
             const fallback = findPresetByName_ACU(settings_ACU.apiPresets, fallbackName);
             if (fallback) {
                 settings_ACU.apiMode = fallback.apiMode;
-                settings_ACU.apiConfig = clone$8(fallback.apiConfig);
+                settings_ACU.apiConfig = clone$7(fallback.apiConfig);
             }
         }
     }
@@ -90119,7 +90146,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.5.6" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.5.7" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -91375,6 +91402,16 @@ function isTemplateSqlReadOnly_ACU(sql) {
     }
     return result.valid;
 }
+/**
+ * 表达式路径（ORM / db.expr / db.calc）专用注入门：只以「多语句」为判据。
+ * 这些路径的 SQL 恒以单条 SELECT 前缀执行，单条 SELECT 无法产生写副作用；若套用整条语句的
+ * 关键词词表（含 END/REPLACE/UPDATE 等整词），会把 CASE … END、REPLACE(...) 这类合法表达式误拒。
+ * 注意：{[sql ...]} 原生路径必须保留完整词表校验（`WITH cte AS(…) INSERT INTO` 是真实写操作）。
+ */
+function isMultiStatementSql_ACU(sql) {
+    const result = validateReadOnlySql_ACU(sql);
+    return !result.valid && result.reason === 'multiple_statements';
+}
 // 安全 ORM/条件表达式结构白名单：仅允许方法链调用（db.标识符(.标识符(参数))*) 与
 // 末尾比较（> 3 / == "x" 等）。字符串字面量先替换为占位，黑名单模式再兜底。
 const DB_EXPR_BLACKLIST_RE_ACU = /constructor|__proto__|prototype|\beval\b|\bfetch\b|\bFunction\b|\brequire\b|\bimport\b|\bnew\s+\w|=>|;|globalThis|window\.|document\.|\bprocess\b|alert|confirm|prompt|\.open\(/gi;
@@ -91836,15 +91873,38 @@ class TableQueryBuilder {
         }
         return sql;
     }
+    /**
+     * ORM 专用多语句兜底门：命中时按 throwOnQueryError 抛错，否则返回 true 由调用方早退。
+     * 只认「多语句」这一个理由，避免误伤含 END/REPLACE 等词表的合法 SELECT 表达式。
+     */
+    _rejectIfMultiStatement(sql, phase) {
+        if (!isMultiStatementSql_ACU(sql))
+            return false;
+        if (this.options.throwOnQueryError === true)
+            throw new Error('orm_query_multiple_statements');
+        logWarn_ACU(`[ORM] 拒绝执行多语句查询（${phase}）: ${String(sql).slice(0, 120)}`);
+        return true;
+    }
     _executeQuery(sql) {
         if (!isTemplateQueryRuntimeReady_ACU('ORM')) {
             if (this.options.throwOnQueryError === true)
                 throw new Error('orm_runtime_not_ready');
             return { columns: [], values: [] };
         }
+        // ORM 构建的 SQL 与 {[sql...]} 共享同一注入面：sum/avg/max/min/get/list 的列名参数来自
+        // 模板与 AI 内容，resolveColumnName 未命中时原样返回，会被拼进 SUM(...) 等表达式；
+        // 而表达式结构白名单在判定前把引号内文本替换为 ""，故夹带在引号里的 `; DROP ...` 骗得过它，
+        // 最终 sql.js exec 会执行多语句。
+        // 判据刻意只取「多语句」（理由见 isMultiStatementSql_ACU）：若套用整条语句的关键词词表，
+        // 会把 CASE … END、REPLACE(...) 这类合法表达式误拒成空结果。
+        if (this._rejectIfMultiStatement(sql, '翻译前'))
+            return { columns: [], values: [] };
         try {
             const provider = getStorageProvider();
             const executableSql = resolveCurrentRuntimeReadSql_ACU(sql).sql;
+            // 与 {[sql...]} 路径一致做翻译后复检：改名器若引入分号同样要拦。
+            if (this._rejectIfMultiStatement(executableSql, '翻译后'))
+                return { columns: [], values: [] };
             const result = provider.executeQuery(executableSql, undefined, {
                 suppressErrorLog: this.options.suppressQueryErrorLog === true,
             });
@@ -91913,14 +91973,19 @@ function execExpr(expression) {
             logWarn_ACU('[db.expr] 空表达式');
             return null;
         }
-        // H1 加固：db.expr 以 SELECT 包裹校验只读（拒绝写语句/多语句）
-        if (!isTemplateSqlReadOnly_ACU(`SELECT ${expression.trim()}`))
+        // H1 加固：db.expr 以 SELECT 包裹，故只须拦多语句（单条 SELECT 无写副作用）；
+        // 套用整条语句的关键词词表会把 CASE … END / REPLACE(...) 误拒成 null。
+        if (isMultiStatementSql_ACU(`SELECT ${expression.trim()}`)) {
+            logWarn_ACU(`[db.expr] 拒绝执行多语句表达式: ${expression.trim().slice(0, 120)}`);
             return null;
+        }
         if (!isTemplateQueryRuntimeReady_ACU('db.expr'))
             return null;
         const translatedExpr = resolveTemplateReadSql_ACU(expression.trim());
-        if (!isTemplateSqlReadOnly_ACU(`SELECT ${translatedExpr}`))
+        if (isMultiStatementSql_ACU(`SELECT ${translatedExpr}`)) {
+            logWarn_ACU(`[db.expr] 拒绝执行多语句表达式（翻译后）: ${String(translatedExpr).slice(0, 120)}`);
             return null;
+        }
         const sql = `SELECT ${translatedExpr}`;
         const provider = getStorageProvider();
         const result = provider.executeQuery(sql);
@@ -91996,9 +92061,11 @@ function execCalc(expression) {
             logWarn_ACU(`[db.calc] 表达式包含未定义变量: ${expression}`);
             return null;
         }
-        // H1 加固：算术表达式以 SELECT 包裹校验只读
-        if (!isTemplateSqlReadOnly_ACU(`SELECT ${processed}`))
+        // H1 加固：算术表达式以 SELECT 包裹，故只须拦多语句（原因同 db.expr）
+        if (isMultiStatementSql_ACU(`SELECT ${processed}`)) {
+            logWarn_ACU(`[db.calc] 拒绝执行多语句表达式: ${String(processed).slice(0, 120)}`);
             return null;
+        }
         if (!isTemplateQueryRuntimeReady_ACU('db.calc'))
             return null;
         const provider = getStorageProvider();
@@ -96899,7 +96966,7 @@ function clearCurrentChatPlotScopeState_ACU() {
 }
 
 const ROW_ID_ALIASES = new Set(['id', 'rowid', 'row-id', 'row_id', '行号']);
-function clone$7(value) {
+function clone$6(value) {
     return JSON.parse(JSON.stringify(value));
 }
 function isRowIdAlias(value) {
@@ -96926,7 +96993,7 @@ function normalizeSheetGuideRowIds_ACU(guideData) {
     if (!guideData || typeof guideData !== 'object' || Array.isArray(guideData)) {
         return { guideData, changed: false, blockers: ['Sheet Guide 必须是对象。'] };
     }
-    const candidate = clone$7(guideData);
+    const candidate = clone$6(guideData);
     const blockers = [];
     let changed = false;
     for (const [key, sheet] of Object.entries(candidate)) {
@@ -100452,7 +100519,6 @@ function loadSettings_ACU() {
     // 只能补缺失字段，绝不能在版本刷新时覆盖用户已经填写的模型、API、召回参数或提示词。
     if (globalMeta_ACU.vectorMemoryConfigGlobal && typeof globalMeta_ACU.vectorMemoryConfigGlobal === 'object' && !Array.isArray(globalMeta_ACU.vectorMemoryConfigGlobal)) {
         const vectorConfig = globalMeta_ACU.vectorMemoryConfigGlobal;
-        const cloneDefaultValue_ACU = (value) => JSON.parse(JSON.stringify(value));
         const fillMissing_ACU = (key, value) => {
             if (typeof vectorConfig[key] === 'undefined' || vectorConfig[key] === null || vectorConfig[key] === '') {
                 vectorConfig[key] = cloneDefaultValue_ACU(value);
@@ -101987,10 +102053,19 @@ async function cleanupVectorManifestsFromSnapshots_ACU(snapshots) {
     }
     for (const hint of scopeHints.values()) {
         try {
-            await deleteSummaryVectorHotCacheByScope_ACU(hint);
-            await clearSummaryVectorFlushTasksByScope_ACU(hint);
+            // 两个 helper 已把失败降级为返回值（不再抛错），必须查返回值，
+            // 否则「热缓存/flush 任务没清干净」会被静默当成清空成功。
+            const hotCacheCleared = await deleteSummaryVectorHotCacheByScope_ACU(hint);
+            const flushTasksCleared = await clearSummaryVectorFlushTasksByScope_ACU(hint);
+            if (hotCacheCleared === false || flushTasksCleared === false) {
+                const warning = `向量热缓存或 flush 任务清理失败（${hint.isolationKey}/${hint.sourceTableKey}）`;
+                warnings.push(warning);
+                logWarn_ACU(`[硬清空] ${warning}`);
+            }
         }
         catch (error) {
+            // 防御性兜底：两个 helper 当前契约都是「不抛错、以返回值报失败」，
+            // 此处仅为防未来有人破坏该契约时把异常打穿上层。
             const warning = `向量热缓存或 flush 任务清理失败（${hint.isolationKey}/${hint.sourceTableKey}）：${error?.message || String(error || '未知错误')}`;
             warnings.push(warning);
             logWarn_ACU(`[硬清空] ${warning}`, error);
@@ -120484,18 +120559,25 @@ async function clearLatestSummaryVectorIndexStateUnderScopeLock_ACU(params, reas
             isolationKey: params.isolationKey,
             indexId: params.indexId,
         });
+        // 两个 helper 现已把失败降级为返回值（不再抛错）；同时保留 allSettled 的隔离能力
+        // （helper 未来若抛错仍应被隔离成「未清干净」而不是打穿上层）。两种失败形态都要认，
+        // 否则光看 rejected 会让告警分支与 cacheCleared 恒为真，等于静默吞掉清理失败。
         const cacheResults = await Promise.allSettled([
             deleteVectorIndexCacheByIndex_ACU(params.indexId),
             deleteSummaryVectorHotCacheByIndex_ACU(params.indexId),
         ]);
         cacheResults.forEach((result, index) => {
+            const label = index === 0 ? '临时' : '热';
             if (result.status === 'rejected') {
-                logWarn_ACU(`[交火向量索引] ${reason} pointer 已删除，但${index === 0 ? '临时' : '热'}缓存清理失败，将继续重建:`, result.reason);
+                logWarn_ACU(`[交火向量索引] ${reason} pointer 已删除，但${label}缓存清理失败，将继续重建:`, result.reason);
+            }
+            else if (result.value === false) {
+                logWarn_ACU(`[交火向量索引] ${reason} pointer 已删除，但${label}缓存清理失败，将继续重建。`);
             }
         });
         return {
             chatStateCleared,
-            cacheCleared: cacheResults.every((result) => result.status === 'fulfilled'),
+            cacheCleared: cacheResults.every((result) => result.status === 'fulfilled' && result.value !== false),
             flushTaskCountCleared,
         };
     });
@@ -134257,10 +134339,10 @@ class ContinuationAgentTurnPlanner_ACU {
 }
 
 /**
- * service/loop/loop-evaluator.ts — 循环生成结果评估核心逻辑
+ * service/loop/loop-evaluator.ts — 循环标签校验
  * 从 presentation/triggers/auto-loop.ts 的 onLoopGenerationEnded_ACU 中提取
  *
- * 只负责「评估 AI 回复是否满足循环条件」，不涉及 UI（toast/按钮/文本框）。
+ * 只负责「校验 AI 回复是否带齐循环标签」，不涉及 UI（toast/按钮/文本框）。
  */
 /**
  * 验证循环标签是否存在于内容中
@@ -134278,47 +134360,6 @@ function validateLoopTags_ACU(content, tags) {
         }
     }
     return true;
-}
-/**
- * 评估循环生成结果，决定下一步动作
- *
- * @param chat - 当前聊天记录数组
- * @param loopSettings - 循环设置
- * @param planningGuard - 规划守卫状态
- * @returns LoopEvaluationResult 包含 action 和 reason
- */
-function evaluateLoopGenerationResult_ACU(chat, loopSettings, planningGuard) {
-    if (!chat || chat.length === 0) {
-        return { action: 'ignore', reason: 'Chat is empty' };
-    }
-    // 检查规划守卫
-    if (planningGuard.inProgress) {
-        return { action: 'ignore', reason: 'Planning in progress' };
-    }
-    if (planningGuard.ignoreNextGenerationEndedCount > 0) {
-        return { action: 'ignore', reason: `Ignoring planning-triggered event (${planningGuard.ignoreNextGenerationEndedCount} left)` };
-    }
-    const lastMessage = chat[chat.length - 1];
-    // 检查是否是规划层
-    if (lastMessage.is_user && lastMessage._qrf_from_planning) {
-        return { action: 'wait', reason: 'Detected planning layer, waiting for AI reply' };
-    }
-    // 最后一条是用户消息（无规划标记）
-    if (lastMessage.is_user) {
-        return { action: 'wait', reason: 'Last message is user message without planning mark, need to wait' };
-    }
-    // 检查是否来自当前角色
-    const activeChar = getCurrentCharacterFallback_ACU();
-    const activeCharName = activeChar?.name;
-    if (activeCharName && lastMessage.name && lastMessage.name !== activeCharName) {
-        return { action: 'ignore', reason: `AI reply from different character (${lastMessage.name} != ${activeCharName})` };
-    }
-    // 验证标签
-    const tagsOk = validateLoopTags_ACU(lastMessage.mes, loopSettings.loopTags);
-    if (tagsOk) {
-        return { action: 'continue', reason: 'Tags validation passed' };
-    }
-    return { action: 'retry_delete', reason: 'Tags validation failed' };
 }
 
 function normalizeGenerationEventContext_ACU(input) {
@@ -137704,7 +137745,7 @@ function buildDefaultGameTemplate_ACU() {
 
 // Chat metadata stores scope/guide outside message fields, so both containers are snapshotted explicitly below.
 const MESSAGE_FIELDS = ['TavernDB_ACU_IsolatedData', 'TavernDB_ACU_Data', 'TavernDB_ACU_SummaryData', 'TavernDB_ACU_IndependentData', 'TavernDB_ACU_Identity', 'TavernDB_ACU_ModifiedKeys', 'TavernDB_ACU_UpdateGroupKeys', 'TavernDB_ACU_TableHeaderGuide', '_acu_local_template_base_state_seeded'];
-function clone$6(value) { return value === undefined ? value : JSON.parse(JSON.stringify(value)); }
+function clone$5(value) { return value === undefined ? value : JSON.parse(JSON.stringify(value)); }
 function prepareTemplate(templateData) {
     if (!templateData || typeof templateData !== 'object' || Array.isArray(templateData))
         throw new Error('初始化模板必须是对象。');
@@ -137724,11 +137765,11 @@ function prepareTemplate(templateData) {
     const result = {};
     for (const [key, value] of Object.entries(normalizedTemplateData))
         if (!key.startsWith('sheet_'))
-            result[key] = clone$6(value);
+            result[key] = clone$5(value);
     entries.forEach(([oldKey, source], index) => {
         if (!source || typeof source !== 'object' || Array.isArray(source))
             throw new Error(`初始化模板 Sheet 无效：${oldKey}`);
-        const sheet = clone$6(source);
+        const sheet = clone$5(source);
         if (!Array.isArray(sheet.content) || !Array.isArray(sheet.content[0]) || sheet.content[0][0] !== 'row_id')
             throw new Error(`初始化模板 Sheet 缺少 row_id 表头：${oldKey}`);
         if (sheet.content.slice(1).some((row) => !Array.isArray(row)))
@@ -137758,7 +137799,7 @@ function prepareTemplate(templateData) {
     return { templateData: result, normalizationAudit: normalization.audits };
 }
 function snapshotMessages(chat) {
-    return chat.filter(message => message && typeof message === 'object').map(message => ({ message, fields: MESSAGE_FIELDS.map(field => ({ field, had: Object.prototype.hasOwnProperty.call(message, field), value: clone$6(message[field]) })) }));
+    return chat.filter(message => message && typeof message === 'object').map(message => ({ message, fields: MESSAGE_FIELDS.map(field => ({ field, had: Object.prototype.hasOwnProperty.call(message, field), value: clone$5(message[field]) })) }));
 }
 function restoreMessages(snapshots) {
     for (const snapshot of snapshots)
@@ -137801,8 +137842,8 @@ async function resetCurrentChatTableStateFromTemplate_ACU(templateData, options 
             const firstMessage = chat[0];
             const chatIdentity = getActiveChatStorageIdentity_ACU(chat);
             const messageSnapshots = snapshotMessages(chat);
-            const previousScope = clone$6(peekChatScopedConfigContainer_ACU(chat));
-            const previousGuide = clone$6(peekChatSheetGuideContainer_ACU(chat));
+            const previousScope = clone$5(peekChatScopedConfigContainer_ACU(chat));
+            const previousGuide = clone$5(peekChatSheetGuideContainer_ACU(chat));
             let primarySaveAttempted = false;
             try {
                 for (const message of chat) {
@@ -137847,8 +137888,8 @@ async function resetCurrentChatTableStateFromTemplate_ACU(templateData, options 
                     throw new Error('目标聊天已切换，已取消初始化提交。');
                 primarySaveAttempted = true;
                 await saveChatToHostStrict_ACU();
-                _set_currentJsonTableData_ACU(clone$6(prepared));
-                return { saved: true, messageIndex: targetIndex, runtimeReady: true, normalizedTemplateData: clone$6(prepared), normalizationAudit };
+                _set_currentJsonTableData_ACU(clone$5(prepared));
+                return { saved: true, messageIndex: targetIndex, runtimeReady: true, normalizedTemplateData: clone$5(prepared), normalizationAudit };
             }
             catch (error) {
                 restoreMessages(messageSnapshots);
@@ -138705,7 +138746,7 @@ async function migrateLegacySummaryVectorIndex_ACU() {
 function exportCurrentJsonData_ACU() {
     if (!currentJsonTableData_ACU) {
         showToastr_ACU('warning', '没有可导出的数据库。请先开始一个对话。');
-        return;
+        return false;
     }
     try {
         const chatName = currentChatFileIdentifier_ACU || 'current_chat';
@@ -138723,10 +138764,12 @@ function exportCurrentJsonData_ACU() {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
         showToastr_ACU('success', '数据库JSON文件已成功导出！');
+        return true;
     }
     catch (error) {
         logError_ACU('导出JSON数据失败:', error);
         showToastr_ACU('error', '导出JSON失败，请检查控制台获取详情。');
+        return false;
     }
 }
 function exportTableTemplate_ACU({ scope = 'global' } = {}) {
@@ -138815,24 +138858,24 @@ async function overrideLatestLayerWithTemplate_ACU() {
         '• 此操作仅影响最新的一条AI消息\n' +
         '• 删除最新层的聊天数据后即可恢复正常\n\n' +
         '确定要继续吗？')) {
-        return;
+        return false;
     }
     const chat = getChatArray_ACU();
     if (!chat || chat.length === 0) {
         showToastr_ACU('error', '聊天记录为空，无法执行覆盖操作。');
-        return;
+        return false;
     }
     // 解析通用模板
     const templateData = parseTableTemplateJson_ACU({ stripSeedRows: true });
     if (!templateData) {
         showToastr_ACU('error', '无法解析通用模板，请检查模板格式。');
-        return;
+        return false;
     }
     // 检查是否有AI消息
     const hasAiMessage = chat.some((msg) => !msg.is_user);
     if (!hasAiMessage) {
         showToastr_ACU('error', '聊天记录中没有AI消息，无法执行覆盖操作。');
-        return;
+        return false;
     }
     // 调用 service 层核心逻辑执行覆盖
     const modifiedCount = await overrideLatestLayerWithTemplateCore_ACU(templateData);
@@ -138841,9 +138884,11 @@ async function overrideLatestLayerWithTemplate_ACU() {
         await loadOrCreateJsonTableFromChatHistory_ACU();
         await refreshMergedDataAndNotifyWithUI_ACU();
         showToastr_ACU('success', `已使用通用模板覆盖最新层的${Object.keys(templateData).filter(k => k.startsWith('sheet_')).length}个表格数据。`);
+        return true;
     }
     else {
         showToastr_ACU('warning', '没有找到需要覆盖的表格数据。');
+        return false;
     }
 }
 async function resetTableTemplate_ACU({ showToast = true, updatePresetSelection = true, _refreshUi = true, overwriteReason = 'reset_template', scope = 'global', source = '' } = {}) {
@@ -138991,7 +139036,7 @@ function exportCombinedSettings_ACU() {
     const promptSegments = getCharCardPromptFromUI_ACU();
     if (!promptSegments || promptSegments.length === 0) {
         showToastr_ACU('warning', '没有可导出的提示词。');
-        return;
+        return false;
     }
     try {
         // [修复] 合并导出应导出“当前模板”（localStorage/内存中的模板），并兼容旧模板缺少顺序编号的情况
@@ -139028,10 +139073,12 @@ function exportCombinedSettings_ACU() {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
         showToastr_ACU('success', '合并配置已成功导出！');
+        return true;
     }
     catch (error) {
         logError_ACU('导出合并配置失败:', error);
         showToastr_ACU('error', '导出合并配置失败，请检查控制台获取详情。');
+        return false;
     }
 }
 
@@ -141448,7 +141495,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260912-20";
+        const stamp = "20260914-16";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -158981,7 +159028,7 @@ const apiCopy = {
  * 所有写操作委托 service/api-preset-service，不再直接改 settings_ACU。
  * 保存失败时 service 已回滚内存，store 同步恢复快照并传播失败结果。
  */
-function clone$5(value) {
+function clone$4(value) {
     return JSON.parse(JSON.stringify(value ?? null));
 }
 function getCurrentConfigAsPreset(name) {
@@ -159047,7 +159094,7 @@ const useApiPresetStore = defineStore('acu-v2-api-presets', {
         refreshFromSettings() {
             ensureApiSettingsShape_ACU();
             this.currentChatKey = getCurrentChatKey_ACU();
-            this.presets = clone$5(settings_ACU.apiPresets);
+            this.presets = clone$4(settings_ACU.apiPresets);
             const defaultName = findPresetByName_ACU(this.presets, settings_ACU.defaultApiPresetName)
                 ? settings_ACU.defaultApiPresetName
                 : '';
@@ -160753,7 +160800,7 @@ var ApiConfigPanel = /* @__PURE__ */ _export_sfc(_sfc_main$U, [["render", _sfc_r
 // 引用字段的写入必须走 service（校验预设存在），删除/重命名预设时
 // 由 api-preset-service 原子清理，本模块只负责单点写入。
 // ═══════════════════════════════════════════════════════════════
-function clone$4(value) {
+function clone$3(value) {
     return JSON.parse(JSON.stringify(value ?? null));
 }
 function ensureContentOptimizationShape_ACU() {
@@ -160777,7 +160824,7 @@ function snapshotRefFields_ACU(target, taskId = '') {
         case 'optimization':
             return { contentOptimizationApiPreset: settings_ACU.contentOptimizationSettings.apiPreset };
         case 'vector_keyword':
-            return { vectorKeywordApiPreset: clone$4(getCurrentVectorMemoryConfig_ACU().keywordApiPreset) };
+            return { vectorKeywordApiPreset: clone$3(getCurrentVectorMemoryConfig_ACU().keywordApiPreset) };
     }
 }
 function restoreRefFields_ACU(target, snapshot, taskId = '') {
@@ -160864,7 +160911,7 @@ function setFeatureApiPreset_ACU(target, presetName, options = {}) {
  * Vue 组件只读写本 store；旧 settings_ACU 与 service 调用集中在这里。
  * 与 api-preset-store 一致：单下拉、当前活动 / 全局默认、抽屉里增删改。
  */
-function clone$3(value) {
+function clone$2(value) {
     return JSON.parse(JSON.stringify(value ?? null));
 }
 function ensureSettingsShape$1() {
@@ -160903,7 +160950,7 @@ function readPresetList() {
         if (!name || seen.has(name))
             continue;
         seen.add(name);
-        out.push({ name, raw: clone$3(normalized) });
+        out.push({ name, raw: clone$2(normalized) });
     }
     return out;
 }
@@ -160949,10 +160996,10 @@ function normalizeImportedPresetPayloads(parsed) {
 }
 function getDefaultPlotPresetRawForV2() {
     const normalized = normalizePlotPresetExcludeRules_ACU({
-        ...clone$3(DEFAULT_PLOT_SETTINGS_ACU),
+        ...clone$2(DEFAULT_PLOT_SETTINGS_ACU),
         name: '',
     });
-    return clone$3(normalized && typeof normalized === 'object' ? normalized : { name: '', plotTasks: [] });
+    return clone$2(normalized && typeof normalized === 'object' ? normalized : { name: '', plotTasks: [] });
 }
 const usePlotPresetStore = defineStore('acu-v2-plot-presets', {
     state: () => ({
@@ -161585,7 +161632,7 @@ const FALLBACKS = {
     autoUpdateTokenThreshold: DEFAULT_AUTO_UPDATE_TOKEN_THRESHOLD_ACU,
     tableMaxRetries: 3,
 };
-function clone$2(value) {
+function clone$1(value) {
     return JSON.parse(JSON.stringify(value ?? null));
 }
 function normalizeNumber(key, value) {
@@ -161855,7 +161902,7 @@ function useFormFillSettings() {
     }
     function savePrompt() {
         const prepared = preparePromptForSave(promptSegments.value);
-        const result = setCharCardPrompt_ACU(clone$2(prepared));
+        const result = setCharCardPrompt_ACU(clone$1(prepared));
         if (!result.ok) {
             message.value = { kind: "error", text: result.message || "提示词保存失败。", scope: "prompt" };
             return;
@@ -168147,9 +168194,6 @@ const dashboardCopy = {
 };
 
 let deferLogRefresh = false;
-function clone$1(value) {
-    return JSON.parse(JSON.stringify(value ?? null));
-}
 const reportedRenderFallbackCounts = new Map();
 function withRenderFallback(label, fallback, build) {
     // 同 label 多病因时放行前 3 次：首因必留证据，持续刷屏仍压住；
@@ -186077,7 +186121,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260912-20";
+        const stamp = "20260914-16";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -186086,7 +186130,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.5.6";
+        const v = "9.5.7";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {
@@ -186144,8 +186188,6 @@ function maskSensitiveFields(value, depth = 0, seen = new WeakSet()) {
     return value;
 }
 /** 两份 Debug 导出共用的表格快照：敏感列按列名脱敏，字符串单元格过掩码规则 */
-/** 单元可见性：导出供导出路径回归测试 */
-function buildDebugTablesForTests_ACU() { return buildDebugTables_ACU(); }
 function buildDebugTables_ACU() {
     const tables = {};
     const data = currentJsonTableData_ACU || {};

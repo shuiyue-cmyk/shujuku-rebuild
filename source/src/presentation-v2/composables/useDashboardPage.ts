@@ -142,10 +142,6 @@ interface Snapshot {
 
 let deferLogRefresh = false;
 
-function clone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value ?? null));
-}
-
 const reportedRenderFallbackCounts = new Map<string, number>();
 
 function withRenderFallback<T>(label: string, fallback: T, build: () => T): T {

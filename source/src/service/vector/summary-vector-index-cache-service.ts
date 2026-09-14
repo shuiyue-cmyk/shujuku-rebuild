@@ -90,18 +90,24 @@ async function clearLatestSummaryVectorIndexStateUnderScopeLock_ACU(
             isolationKey: params.isolationKey,
             indexId: params.indexId,
         });
+        // 两个 helper 现已把失败降级为返回值（不再抛错）；同时保留 allSettled 的隔离能力
+        // （helper 未来若抛错仍应被隔离成「未清干净」而不是打穿上层）。两种失败形态都要认，
+        // 否则光看 rejected 会让告警分支与 cacheCleared 恒为真，等于静默吞掉清理失败。
         const cacheResults = await Promise.allSettled([
             deleteVectorIndexCacheByIndex_ACU(params.indexId),
             deleteSummaryVectorHotCacheByIndex_ACU(params.indexId),
         ]);
         cacheResults.forEach((result, index) => {
+            const label = index === 0 ? '临时' : '热';
             if (result.status === 'rejected') {
-                logWarn_ACU(`[交火向量索引] ${reason} pointer 已删除，但${index === 0 ? '临时' : '热'}缓存清理失败，将继续重建:`, result.reason);
+                logWarn_ACU(`[交火向量索引] ${reason} pointer 已删除，但${label}缓存清理失败，将继续重建:`, result.reason);
+            } else if (result.value === false) {
+                logWarn_ACU(`[交火向量索引] ${reason} pointer 已删除，但${label}缓存清理失败，将继续重建。`);
             }
         });
         return {
             chatStateCleared,
-            cacheCleared: cacheResults.every((result) => result.status === 'fulfilled'),
+            cacheCleared: cacheResults.every((result) => result.status === 'fulfilled' && result.value !== false),
             flushTaskCountCleared,
         };
     });

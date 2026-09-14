@@ -182,7 +182,8 @@ export async function deleteVectorIndexCachedShard_ACU(indexId: string, shardId:
     } catch {}
 }
 
-export async function deleteVectorIndexCacheByIndex_ACU(indexId: string): Promise<void> {
+/** 返回值即失败通道：false 表示该 indexId 的临时缓存未清干净，调用方须据此告警。 */
+export async function deleteVectorIndexCacheByIndex_ACU(indexId: string): Promise<boolean> {
     try {
         const db = await openDb_ACU();
         await new Promise<void>((resolve, reject) => {
@@ -207,7 +208,10 @@ export async function deleteVectorIndexCacheByIndex_ACU(indexId: string): Promis
                 reject(tx.error || new Error('清理向量临时缓存事务失败'));
             };
         });
-    } catch {}
+        return true;
+    } catch {
+        return false;
+    }
 }
 
 export async function clearVectorIndexTempCache_ACU(): Promise<void> {

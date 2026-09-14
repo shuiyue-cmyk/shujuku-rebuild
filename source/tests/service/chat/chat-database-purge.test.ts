@@ -110,6 +110,27 @@ describe('purgeCurrentChatDatabaseState_ACU', () => {
     expect(mocks.saveStrict).toHaveBeenCalledTimes(1);
   });
 
+  it('热缓存清理 helper 返回 false 时降级为 warning（不再静默当成功）', async () => {
+    mocks.chat = [{
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          storageFrame: {
+            version: 2,
+            summaryVectorIndexFrame: { sourceTableKey: 'sheet_summary' },
+          },
+        },
+      },
+    }];
+    // helper 内部已把失败降级为返回值（不再抛错），purge 必须查返回值才会告警
+    mocks.clearHotCache.mockResolvedValueOnce(false);
+
+    const result = await purgeCurrentChatDatabaseState_ACU();
+
+    expect(result.saved).toBe(true);
+    expect(result.cleanupWarnings?.join(' ')).toContain('向量热缓存或 flush 任务清理失败');
+    expect(mocks.saveStrict).toHaveBeenCalledTimes(1);
+  });
+
   it('只有镜像 frame、没有 legacy manifest 时仍收集 sourceTableKey 作为 GC scopeHint', async () => {
     mocks.chat = [{
       TavernDB_ACU_IsolatedData: {

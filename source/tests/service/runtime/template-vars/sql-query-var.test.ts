@@ -295,6 +295,37 @@ describe('sql-query-var', () => {
       });
     });
 
+    describe('列名参数注入防护', () => {
+      it('列名夹带多语句时被多语句门拒绝，不会执行 DROP', () => {
+        const rowCountBefore = _engine.query('SELECT COUNT(*) FROM inventory;').values[0][0] as number;
+        expect(rowCountBefore).toBe(3);
+
+        // 引号内文本在结构白名单判定前被替换为 ""，黑名单与链式正则都看不见其中的 `;`
+        // （H2 加固的已知盲区），因此必须由执行前的多语句门兜住。
+        const result = evaluateOrmExpression('db.背包物品表.sum("row_id) FROM inventory; DROP TABLE inventory; --")');
+
+        expect(result).toBe('0');
+        expect(vi.mocked(logWarn_ACU)).toHaveBeenCalledWith(expect.stringContaining('拒绝执行多语句查询'));
+        expect(_engine.query('SELECT COUNT(*) FROM inventory;').values[0][0]).toBe(rowCountBefore);
+      });
+
+      it('合法表达式含 CASE…END 不被多语句门误拒（门只认多语句，不套关键词词表）', () => {
+        const result = evaluateOrmExpression(
+          'db.背包物品表.where("物品名称", "铁剑").value("CASE WHEN 数量 > 0 THEN 1 ELSE 0 END")',
+        );
+
+        expect(result).toBe('1');
+        expect(vi.mocked(logWarn_ACU)).not.toHaveBeenCalledWith(expect.stringContaining('拒绝执行多语句查询'));
+      });
+
+      it('db.expr 的 CASE…END 同样不被误拒（同族路径共用只认多语句的判据）', () => {
+        const result = evaluateOrmExpression('db.expr("CASE WHEN 1 = 1 THEN 1 ELSE 0 END")');
+
+        expect(result).toBe('1');
+        expect(vi.mocked(logWarn_ACU)).not.toHaveBeenCalledWith(expect.stringContaining('拒绝执行多语句表达式'));
+      });
+    });
+
     describe('exists', () => {
       it('存在返回 true', () => {
         const builder = new TableQueryBuilder('背包物品表');

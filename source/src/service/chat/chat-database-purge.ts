@@ -265,9 +265,18 @@ async function cleanupVectorManifestsFromSnapshots_ACU(
 
     for (const hint of scopeHints.values()) {
         try {
-            await deleteSummaryVectorHotCacheByScope_ACU(hint);
-            await clearSummaryVectorFlushTasksByScope_ACU(hint);
+            // 两个 helper 已把失败降级为返回值（不再抛错），必须查返回值，
+            // 否则「热缓存/flush 任务没清干净」会被静默当成清空成功。
+            const hotCacheCleared = await deleteSummaryVectorHotCacheByScope_ACU(hint);
+            const flushTasksCleared = await clearSummaryVectorFlushTasksByScope_ACU(hint);
+            if (hotCacheCleared === false || flushTasksCleared === false) {
+                const warning = `向量热缓存或 flush 任务清理失败（${hint.isolationKey}/${hint.sourceTableKey}）`;
+                warnings.push(warning);
+                logWarn_ACU(`[硬清空] ${warning}`);
+            }
         } catch (error: any) {
+            // 防御性兜底：两个 helper 当前契约都是「不抛错、以返回值报失败」，
+            // 此处仅为防未来有人破坏该契约时把异常打穿上层。
             const warning = `向量热缓存或 flush 任务清理失败（${hint.isolationKey}/${hint.sourceTableKey}）：${error?.message || String(error || '未知错误')}`;
             warnings.push(warning);
             logWarn_ACU(`[硬清空] ${warning}`, error);

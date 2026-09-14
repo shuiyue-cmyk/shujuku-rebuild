@@ -703,7 +703,6 @@ export   function loadSettings_ACU() {
       // 只能补缺失字段，绝不能在版本刷新时覆盖用户已经填写的模型、API、召回参数或提示词。
       if (globalMeta_ACU.vectorMemoryConfigGlobal && typeof globalMeta_ACU.vectorMemoryConfigGlobal === 'object' && !Array.isArray(globalMeta_ACU.vectorMemoryConfigGlobal)) {
           const vectorConfig = globalMeta_ACU.vectorMemoryConfigGlobal as any;
-          const cloneDefaultValue_ACU = (value: any) => JSON.parse(JSON.stringify(value));
           const fillMissing_ACU = (key: string, value: any) => {
               if (typeof vectorConfig[key] === 'undefined' || vectorConfig[key] === null || vectorConfig[key] === '') {
                   vectorConfig[key] = cloneDefaultValue_ACU(value);
