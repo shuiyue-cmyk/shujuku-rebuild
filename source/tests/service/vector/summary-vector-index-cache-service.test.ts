@@ -9,9 +9,10 @@ const h = vi.hoisted(() => ({
   snapshot: null as any,
   buildScope: vi.fn(),
   runExclusive: vi.fn(),
+  logWarn: vi.fn(),
 }));
 
-vi.mock('../../../src/shared/utils', () => ({ logDebug_ACU: vi.fn(), logWarn_ACU: vi.fn() }));
+vi.mock('../../../src/shared/utils', () => ({ logDebug_ACU: vi.fn(), logWarn_ACU: (...args: any[]) => h.logWarn(...args) }));
 vi.mock('../../../src/data/storage/vector-index-temp-cache', () => ({
   clearVectorIndexTempCache_ACU: vi.fn(),
   deleteVectorIndexCacheByIndex_ACU: (...args: any[]) => h.deleteTemp(...args),
@@ -105,6 +106,23 @@ describe('summary vector missing external file recovery helpers', () => {
       JSON.stringify({ chatKey: 'chat-a', isolationKey: 'alpha', sourceTableKey: 'summary-source' }),
       expect.any(Function),
     );
+  });
+
+  it('缓存清理 helper 未显式返回 true 时逐处记录警告且不报告清理干净', async () => {
+    // 喂 undefined（而非显式 false）：`undefined === false` 为假，故若告警判据被改回 `=== false`
+    // 则本用例的告警断言失败；同时锚定 cacheCleared 的严格 `=== true` 聚合（undefined 不算成功）。
+    h.deleteTemp.mockResolvedValue(undefined);
+    h.deleteHot.mockResolvedValue(undefined);
+
+    await expect(clearLatestSummaryVectorIndexStateForMissingExternalFiles_ACU({
+      messageIndex: 2,
+      isolationKey: 'alpha',
+      indexId: 'idx-missing',
+      sourceTableKey: 'summary-source',
+    })).resolves.toEqual({ chatStateCleared: true, cacheCleared: false, flushTaskCountCleared: 2 });
+
+    expect(h.logWarn).toHaveBeenCalledWith(expect.stringContaining('临时缓存清理失败，将继续重建'));
+    expect(h.logWarn).toHaveBeenCalledWith(expect.stringContaining('热缓存清理失败，将继续重建'));
   });
 
   it('预热时严格删除抛错会返回稳定原因且不入队', async () => {

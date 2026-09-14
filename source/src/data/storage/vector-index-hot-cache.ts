@@ -1089,8 +1089,8 @@ export async function clearSummaryVectorFlushTasksByScope_ACU(scope: VectorIndex
     try {
         tasks = await listSummaryVectorFlushTasks_ACU(scope);
     } catch {
-        // list 自身把异常兜成 []，但「列举失败」与「确实没有任务」语义不同：
-        // 前者不能返回 true，否则调用方会把未清干净的残留当成已清空。
+        // list 目前自身把异常兜成 []，故本分支当下不可达；保留是为防它日后改为抛错——
+        // 那种情况下不能返回 true，否则调用方会把未清干净的残留当成已清空。
         return false;
     }
     let allCleared = true;

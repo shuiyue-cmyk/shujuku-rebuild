@@ -47782,8 +47782,8 @@ async function clearSummaryVectorFlushTasksByScope_ACU(scope) {
         tasks = await listSummaryVectorFlushTasks_ACU(scope);
     }
     catch {
-        // list 自身把异常兜成 []，但「列举失败」与「确实没有任务」语义不同：
-        // 前者不能返回 true，否则调用方会把未清干净的残留当成已清空。
+        // list 目前自身把异常兜成 []，故本分支当下不可达；保留是为防它日后改为抛错——
+        // 那种情况下不能返回 true，否则调用方会把未清干净的残留当成已清空。
         return false;
     }
     let allCleared = true;
@@ -90183,7 +90183,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.5.9" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.5.10" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -141545,7 +141545,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260914-17";
+        const stamp = "20260914-18";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -186176,7 +186176,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260914-17";
+        const stamp = "20260914-18";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -186185,7 +186185,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.5.9";
+        const v = "9.5.10";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {
