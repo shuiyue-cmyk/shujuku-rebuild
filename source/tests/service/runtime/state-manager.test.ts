@@ -43,6 +43,8 @@ import {
   isRecentUserSendIntent_ACU,
   recordLastUserSend_ACU,
   recordGenerationContext_ACU,
+  consumeGenerationContextForEnded_ACU,
+  discardLatestGenerationContext_ACU,
   isQuietLikeGeneration_ACU,
   isRecentUserSend_ACU,
   shouldProcessPlotForGeneration_ACU,
@@ -208,6 +210,36 @@ describe('recordGenerationContext_ACU', () => {
     expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU()).toBe(false);
   });
 
+  it('dry-run 上下文不入配对：真实 STARTED 之后插入的 dry-run 不会吞掉真实 ENDED', () => {
+    const real = recordGenerationContext_ACU('normal', {}, false);
+    // 宿主 token 计数的 dry-run：只派发 STARTED、不发 ENDED
+    recordGenerationContext_ACU('normal', {}, true);
+
+    const consumed = consumeGenerationContextForEnded_ACU();
+    expect(consumed?.seq).toBe(real.seq);
+    expect(consumed?.dryRun).toBe(false);
+    // dry-run 上下文已被丢掉，不再残留为下一轮的幽灵配对
+    expect(generationGate_ACU.activeGenerations).toHaveLength(0);
+  });
+
+  it('栈里只剩 dry-run 上下文时按无配对处理，不冒充真实生成', () => {
+    recordGenerationContext_ACU('normal', {}, true);
+    expect(consumeGenerationContextForEnded_ACU()).toBeNull();
+  });
+
+  it('dryRun 为非布尔真值时同样不入配对（与门控的真值口径同进同退）', () => {
+    const real = recordGenerationContext_ACU('normal', {}, false);
+    recordGenerationContext_ACU('normal', {}, 1 as any);
+    expect(consumeGenerationContextForEnded_ACU()?.seq).toBe(real.seq);
+  });
+
+  it('GENERATION_STOPPED 同样跳过未闭合的 dry-run，返回真实上下文（桥侧绑定见 host-generation-bridge 单测）', () => {
+    const real = recordGenerationContext_ACU('normal', {}, false);
+    recordGenerationContext_ACU('normal', {}, true);   // dry-run：不会被「停止」，但会占住栈顶
+    expect(discardLatestGenerationContext_ACU()?.seq).toBe(real.seq);
+    expect(generationGate_ACU.activeGenerations).toHaveLength(0);
+  });
+
 });
 
 // ═══ isQuietLikeGeneration_ACU ═══
@@ -309,9 +341,13 @@ describe('shouldProcessAutoTableUpdateForGenerationEnded_ACU', () => {
     expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU()).toBe(true);
   });
 
-  it('dryRun 时返回 false', () => {
+  it('dry-run 上下文不入配对：其后 ENDED 走无配对路径（签名缺失时保守放行）', () => {
     recordGenerationContext_ACU('normal', {}, true);
-    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU()).toBe(false);
+    // dry-run 只发 STARTED、不发 ENDED（GENERATION_ENDED 唯一 emit 点 hideStopButton 带 NOOP 守卫）
+    // ⇒ 它不能充当配对上下文，弹栈时被丢弃；「配对 dryRun ⇒ 跳过」现在只由显式传入上下文的判据承担
+    // （见同族 describe 的 paired({ dryRun: true }) 用例）。
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU()).toBe(true);
+    expect(generationGate_ACU.activeGenerations).toHaveLength(0);
   });
 
   it('quiet 类型时返回 false', () => {
@@ -413,6 +449,22 @@ describe('shouldProcessAutoTableUpdateForGenerationEnded_ACU 无配对 ENDED 的
     // 配对拒绝不写无配对原因，也不登记签名。
     expect(mockLogAutoFillSkip).not.toHaveBeenCalled();
     expect(generationGate_ACU.lastEndedFloorSignature_ACU).toEqual(signature(2, 9));
+  });
+
+  it('真实生成被未闭合的 dry-run 压在栈顶时仍放行（此前会双双静默跳过填表与正文替换）', () => {
+    generationGate_ACU.lastEndedFloorSignature_ACU = signature(2, 9);
+    recordGenerationContext_ACU('normal', {}, false);   // 真实生成的 STARTED
+    recordGenerationContext_ACU('normal', {}, true);    // dry-run STARTED：宿主不发它的 ENDED
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(undefined, signature(3, 10))).toBe(true);
+    expect(mockLogAutoFillSkip).not.toHaveBeenCalled();
+    expect(generationGate_ACU.lastEndedFloorSignature_ACU).toEqual(signature(3, 10));
+  });
+
+  it('栈里只剩 dry-run 上下文 + 零产出签名 → 仍按无配对丢弃（不误开自动链）', () => {
+    generationGate_ACU.lastEndedFloorSignature_ACU = signature(2, 9);
+    recordGenerationContext_ACU('normal', {}, true);
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(undefined, signature(2, 9))).toBe(false);
+    expect(mockLogAutoFillSkip).toHaveBeenCalledWith('unpaired_ended_no_new_output', { aiFloorCount: 2, latestAiMessageId: 9 });
   });
 
   it('配对普通生成即使零产出也照样放行（收紧不碰配对路径），但会登记当次签名', () => {

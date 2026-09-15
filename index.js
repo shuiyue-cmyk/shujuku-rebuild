@@ -90185,7 +90185,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.6.1" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.6.2" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -99229,12 +99229,40 @@ function recordGenerationContext_ACU(type, params, dryRun, preSignature) {
     return context;
 }
 /**
+ * 丢掉栈顶未闭合的 dry-run 上下文，返回下一条真实上下文（或 null）。
+ *
+ * ⚠️ 为什么必须丢（2026-09-15）：宿主对 dry-run 生成（token 计数）只派发 GENERATION_STARTED、
+ * 不派发配对的 GENERATION_ENDED——GENERATION_ENDED 的唯一 emit 点是 hideStopButton，而它带
+ * NOOP 守卫（停止按钮从未显示就什么都不做），dry-run 秒回、按钮从不显示。这类上下文永远等不到
+ * 自己的 ended，一旦压在栈顶就会把下一条**真实** ENDED/STOPPED 配错（ENDED 侧表现为自动填表与
+ * 自动正文替换被静默跳过、只留 debug 级 quiet_or_background_generation；STOPPED 侧表现为把 dry 的
+ * seq 交给续写桥、等待轮不转 retry_ready）。dry-run 不产楼，其上下文对配对本无价值，故直接丢弃。
+ * 前提来源：本仓既有注释（GENERATION_ENDED 唯一 emit 点是 hideStopButton）＋ TT `src/scripts/macros.js`
+ * 的 `(type, _params, isDryRun) => { if (isDryRun) return; ... }`（证明 dry-run STARTED 确实会发）
+ * ＋ 上游姊妹插件 biotracker PR #12 在两宿主上的实测结论（dry-run 只 STARTED 不闭合、靠自愈兜底）。
+ * quiet 刻意不在此列：quiet 是真实耗时的生成、会显示停止按钮因而有配对的 ended，既有判定依赖它。
+ *
+ * 口径用真值而非 `=== true`，与同文件 shouldProcessPlot／shouldProcessSummaryVectorIndex／
+ * shouldProcessAutoTableUpdate 的 `if (dryRun)` 保持一致：宿主若把 dryRun 传成非布尔真值，
+ * 两处判定必须同进同退，否则仍会「配错但不丢」。
+ */
+function popUnclosedDryRunContexts_ACU() {
+    let context = generationGate_ACU.activeGenerations.pop() || null;
+    while (context && context.dryRun) {
+        logDebug_ACU('[状态管理] 丢弃未闭合的 dry-run 生成上下文（dry-run 只发 STARTED、不发 ENDED）');
+        context = generationGate_ACU.activeGenerations.pop() || null;
+    }
+    return context;
+}
+/**
  * 宿主的 GENERATION_STOPPED 不携带 generation id，只能关闭最近一个未结束生成。
  * 这比让陈旧上下文持续污染下一次 GENERATION_ENDED 更安全。
+ * 未闭合的 dry-run 上下文一并丢弃：dry-run 不可能被「停止」（它没有停止按钮），
+ * 被它占住栈顶只会让真实被停的那一轮拿不到自己的 seq。
  */
 function discardLatestGenerationContext_ACU() {
     removeExpiredGenerationContexts_ACU();
-    return generationGate_ACU.activeGenerations.pop() || null;
+    return popUnclosedDryRunContexts_ACU();
 }
 function isQuietLikeGeneration_ACU(type, params) {
     if (type === 'quiet')
@@ -99293,10 +99321,12 @@ function shouldProcessSummaryVectorIndexForGeneration_ACU(type, params, dryRun) 
  * 消费与本次 GENERATION_ENDED 对应的最近生成上下文。
  * 事件 API 没有 generation id，因此按完成顺序（栈）配对；配合 makeFirst，避免其他插件在
  * 同一 ended 回调里新开 quiet 生成后覆盖当前正文生成的判定。
+ * 栈顶未闭合的 dry-run 上下文由 popUnclosedDryRunContexts_ACU 丢弃（理由见该函数注释）；
+ * 全被丢光则按「无配对」处理（下游用 AI 楼签名判零产出，不会误开自动链）。
  */
 function consumeGenerationContextForEnded_ACU() {
     removeExpiredGenerationContexts_ACU();
-    const activeContext = generationGate_ACU.activeGenerations.pop();
+    const activeContext = popUnclosedDryRunContexts_ACU();
     // lastGeneration 仅保留给旧调用方。已有受追踪生成全部消费后，不能重复使用最后一个
     // quiet 上下文，否则下一次无关 GENERATION_ENDED 会被持续误拦截。
     return activeContext || (generationGate_ACU.generationSeq === 0 ? generationGate_ACU.lastGeneration : null);
@@ -99361,6 +99391,9 @@ function shouldProcessAutoTableUpdateForGenerationEnded_ACU(context, currentSign
         rememberEndedFloorSignature_ACU(currentSignature);
         return true;
     }
+    // 纵深防御：dry-run 上下文现在已在弹栈时被丢弃（见 popUnclosedDryRunContexts_ACU），
+    // 故这是**仅显式传入 dry 上下文时可达**（生产路径只剩测试，调用方 init.ts 传的是弹栈结果）。
+    // 保留是因为它表达的是判定语义本身：dry-run 轮次不该拉自动链。
     if (g.dryRun)
         return false;
     if (isQuietLikeGeneration_ACU(g.type, g.params))
@@ -141547,7 +141580,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260914-18";
+        const stamp = "20260915-04";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -186178,7 +186211,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260914-18";
+        const stamp = "20260915-04";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -186187,7 +186220,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.6.1";
+        const v = "9.6.2";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {
