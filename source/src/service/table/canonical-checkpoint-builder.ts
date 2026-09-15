@@ -60,6 +60,8 @@ export interface BuildCanonicalFullCheckpointOptions_ACU {
   manualRefillProgress?: ManualRefillProgressV2_ACU;
   migrationProvenance?: TableMigrationProvenanceV1_ACU;
   fallbackProvenance?: ManualRefillTemplateRootProvenanceV1_ACU;
+  /** Checkpoint 导入恢复声明的数据覆盖楼层；见 TableCheckpointV2_ACU.restoreUpToAiFloor。 */
+  restoreUpToAiFloor?: number;
   context?: CanonicalCheckpointValidationContext_ACU;
 }
 
@@ -76,6 +78,9 @@ export function buildCanonicalFullCheckpoint_ACU(
     ...(options.manualRefillProgress ? { manualRefillProgress: deepClone_ACU(options.manualRefillProgress) } : {}),
     ...(options.migrationProvenance ? { migrationProvenance: deepClone_ACU(options.migrationProvenance) } : {}),
     ...(options.fallbackProvenance ? { fallbackProvenance: deepClone_ACU(options.fallbackProvenance) } : {}),
+    ...(Number.isInteger(options.restoreUpToAiFloor) && Number(options.restoreUpToAiFloor) > 0
+      ? { restoreUpToAiFloor: Number(options.restoreUpToAiFloor) }
+      : {}),
   };
   return validateCandidate_ACU(checkpoint, { ...options.context, reason: options.reason });
 }

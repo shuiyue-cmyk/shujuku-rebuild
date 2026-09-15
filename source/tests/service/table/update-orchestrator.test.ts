@@ -110,7 +110,7 @@ vi.mock('../../../src/service/ai/prompt-builder', () => ({
   },
 }));
 
-const { mockChatArrayForSeedStage, mockIndependentTableStates, mockGetChatArray_ACU, mockClearManualRefillIncrementalDataInRange, mockClearManualRefillSheetDataInRange, mockCommitManualRefillSheetSnapshot, mockEstablishManualRefillTemplateRoot, mockEnsureManualCatchUpAnchor, mockEnsureBoundaryCheckpoint, mockShouldRotateBoundaryCheckpoint, mockPurgeSheetKeysFromChatHistoryHard } = vi.hoisted(() => {
+const { mockChatArrayForSeedStage, mockIndependentTableStates, mockGetChatArray_ACU, mockClearManualRefillIncrementalDataInRange, mockClearManualRefillSheetDataInRange, mockCommitManualRefillSheetSnapshot, mockEstablishManualRefillTemplateRoot, mockEnsureManualCatchUpAnchor, mockEnsureBoundaryCheckpoint, mockShouldRotateBoundaryCheckpoint, mockPurgeSheetKeysFromChatHistoryHard, mockRollbackManualRefillRangeSnapshot, mockCleanupCheckpointVectorIndexManifests } = vi.hoisted(() => {
   const chatArray: any[] = [];
   const independentTableStates: Record<string, any> = {};
   return {
@@ -125,6 +125,8 @@ const { mockChatArrayForSeedStage, mockIndependentTableStates, mockGetChatArray_
     mockEnsureBoundaryCheckpoint: vi.fn().mockResolvedValue({ success: true, changed: false, skipped: true }),
     mockShouldRotateBoundaryCheckpoint: vi.fn(() => false),
     mockPurgeSheetKeysFromChatHistoryHard: vi.fn().mockResolvedValue({ changed: true, changedCount: 1 }),
+    mockRollbackManualRefillRangeSnapshot: vi.fn().mockResolvedValue({ success: true, restoredCount: 1 }),
+    mockCleanupCheckpointVectorIndexManifests: vi.fn().mockResolvedValue([]),
   };
 });
 vi.mock('../../../src/service/chat/chat-service', () => ({
@@ -133,6 +135,8 @@ vi.mock('../../../src/service/chat/chat-service', () => ({
   clearManualRefillIncrementalDataInRange_ACU: mockClearManualRefillIncrementalDataInRange,
   clearManualRefillSheetDataInRange_ACU: mockClearManualRefillSheetDataInRange,
   commitManualRefillSheetSnapshotInRangeAtomic_ACU: mockCommitManualRefillSheetSnapshot,
+  cleanupCheckpointVectorIndexManifestsAfterCommit_ACU: mockCleanupCheckpointVectorIndexManifests,
+  rollbackManualRefillRangeSnapshotAtomic_ACU: mockRollbackManualRefillRangeSnapshot,
   establishManualRefillTemplateRoot_ACU: mockEstablishManualRefillTemplateRoot,
   ensureManualCatchUpAnchorBeforeTarget_ACU: mockEnsureManualCatchUpAnchor,
   ensureV2BoundaryCheckpointForRetainedBuffer_ACU: mockEnsureBoundaryCheckpoint,
@@ -283,8 +287,22 @@ vi.mock('../../../src/service/table/table-write-transaction', () => ({
 
 const mockEnqueueSummaryVectorIndexFlush = vi.fn().mockResolvedValue({ queued: true, scopeKey: 'test-scope' });
 vi.mock('../../../src/service/vector/summary-vector-index-flush-queue', () => ({ enqueueSummaryVectorIndexFlush_ACU: (...args: any[]) => mockEnqueueSummaryVectorIndexFlush(...args) }));
+
+// 纪要向量索引的「聚合快照」走 data/gateways/chat-gateway（不是被 mock 的 chat-service），
+// 要断言整表重建的排除集就必须让它看到同一份 chat；用 importOriginal 保留其余导出，避免部分 mock 击穿。
+const gatewayChatHolder = vi.hoisted(() => ({ chat: [] as any[] }));
+vi.mock('../../../src/data/gateways/chat-gateway', async (importOriginal) => ({
+  ...(await importOriginal<any>()),
+  getChatArray_ACU: () => gatewayChatHolder.chat,
+}));
 const mockArchiveSummaryVectorIndexNow = vi.fn();
-vi.mock('../../../src/service/vector/summary-vector-index-archive-service', () => ({ archiveSummaryVectorIndexNow_ACU: (...args: any[]) => mockArchiveSummaryVectorIndexNow(...args) }));
+const mockFindSummaryTable = vi.fn(() => ({ summaryKey: 'sheet_0', table: { name: '纪要表' } }));
+vi.mock('../../../src/service/vector/summary-vector-index-archive-service', () => ({
+  archiveSummaryVectorIndexNow_ACU: (...args: any[]) => mockArchiveSummaryVectorIndexNow(...args),
+  // 编排器的「整表排除是否安全」判据要看交火镜像重建的目标表（findSummaryTable_ACU 取第一张纪要表）；
+  // 默认给 sheet_0，多表用例自行覆写。
+  findSummaryTable_ACU: (...args: any[]) => mockFindSummaryTable(...args),
+}));
 
 const mockEnsureSummaryVectorMirrorAfterTableFill = vi.fn().mockResolvedValue({
   attempted: false,
@@ -410,10 +428,13 @@ import {
 
 beforeEach(() => {
   mockChatArrayForSeedStage.length = 0;
+  gatewayChatHolder.chat = [];
   Object.keys(mockIndependentTableStates).forEach(key => delete mockIndependentTableStates[key]);
   mockGetChatArray_ACU.mockImplementation(() => mockChatArrayForSeedStage);
   mockClearManualRefillIncrementalDataInRange.mockResolvedValue(0);
   mockClearManualRefillSheetDataInRange.mockResolvedValue(0);
+  mockRollbackManualRefillRangeSnapshot.mockResolvedValue({ success: true, restoredCount: 1 });
+  mockCleanupCheckpointVectorIndexManifests.mockResolvedValue([]);
   mockCommitManualRefillSheetSnapshot.mockResolvedValue({ success: true, changed: true, clearedCount: 1, checkpointCount: 1, targetMessageIndex: 0 });
   mockEstablishManualRefillTemplateRoot.mockResolvedValue({ success: true, changed: true, targetMessageIndex: 0 });
   mockEnsureManualCatchUpAnchor.mockResolvedValue({ status: 'ready', checkpointMessageIndex: 0 });
@@ -2325,7 +2346,10 @@ describe('orchestrateManualUpdate_ACU', () => {
     expect(result.success).toBe(true);
     // 只清理本次范围内的选中表，不触碰范围外数据与未选中的表。
     expect(clearManualRefillSheetDataInRange_ACU).toHaveBeenCalledTimes(1);
-    expect(clearManualRefillSheetDataInRange_ACU).toHaveBeenCalledWith(expect.any(Array), ['sheet_0']);
+    expect(clearManualRefillSheetDataInRange_ACU).toHaveBeenCalledWith(expect.any(Array), ['sheet_0'], expect.objectContaining({
+      onRollbackSnapshot: expect.any(Function),
+      deferExternalVectorCleanup: expect.any(Function),
+    }));
     expect(clearManualRefillIncrementalDataInRange_ACU).not.toHaveBeenCalled();
     expect(clearTableDataAtFloors_ACU).not.toHaveBeenCalled();
     expect(mockPurgeSheetKeysFromChatHistoryHard).not.toHaveBeenCalled();
@@ -2862,7 +2886,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     );
 
     // 清理已发生且 reload 期间 runtime 变化：必须走 failManualRefillSession，
-    // 不回滚、保留删除，按已提交事实刷新对齐（不能裸返回造成净损失假象）。
+    // 该用例未提供清理回滚句柄 ⇒ 无从回滚、保留删除，按已提交事实刷新对齐（不能裸返回造成净损失假象）。
     expect(result.success).toBe(false);
     expect(result.error).toContain('表格运行时在确认期间发生变化');
     expect(processBatch).not.toHaveBeenCalled();
@@ -2870,7 +2894,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     expect(mockRefreshData).toHaveBeenCalled();
   });
 
-  it('重填每个 chunk 的 loadAllChatMessages 窗口 runtime 变化：首 chunk 零提交时回滚快照', async () => {
+  it('重填每个 chunk 的 loadAllChatMessages 窗口 runtime 变化：首 chunk 零提交时失败返回（本用例无回滚句柄，不触发清理回滚）', async () => {
     const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
     const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
     const { loadAllChatMessages_ACU } = await import('../../../src/service/worldbook/pipeline');
@@ -2905,8 +2929,8 @@ describe('orchestrateManualUpdate_ACU', () => {
       { clearBeforeUpdate: true, executionSnapshot: { sheetKeys: ['sheet_0', 'sheet_1'] } },
     );
 
-    // 破坏性清理已发生、chunk 前复检发现 runtime 变化：失败返回且不回滚
-    // （清理不可逆、保留删除），按已提交事实刷新对齐，不得把 stale target 带入 AI 调用。
+    // 破坏性清理已发生、chunk 前复检发现 runtime 变化：失败返回且不整段回滚
+    // （本用例未提供回滚句柄），按已提交事实刷新对齐，不得把 stale target 带入 AI 调用。
     expect(result.success).toBe(false);
     expect(result.error).toContain('表格运行时在确认期间发生变化');
     expect(processBatch).not.toHaveBeenCalled();
@@ -3133,11 +3157,188 @@ describe('orchestrateManualUpdate_ACU', () => {
     expect(result.success).toBe(true);
     // 无 full checkpoint 也直接清理范围内选中表，让用户可以从头开始填表。
     expect(mockClearManualRefillSheetDataInRange).toHaveBeenCalledTimes(1);
-    expect(mockClearManualRefillSheetDataInRange).toHaveBeenCalledWith([0, 2], ['sheet_0']);
+    expect(mockClearManualRefillSheetDataInRange).toHaveBeenCalledWith([0, 2], ['sheet_0'], expect.objectContaining({
+      onRollbackSnapshot: expect.any(Function),
+      deferExternalVectorCleanup: expect.any(Function),
+    }));
     expect(mockReloadStorageProvider).toHaveBeenCalled();
     // 清理后必须补写完整单表 checkpoint，否则新增量将没有回放锚点。
     expect(commitManualRefillSheetSnapshotInRangeAtomic_ACU).toHaveBeenCalledTimes(1);
     expect(mockClearManualRefillIncrementalDataInRange).not.toHaveBeenCalled();
+  });
+
+  // 上游 issue #18 第四条：先清后填 + AI 首次调用失败 ⇒ 旧数据已删、无恢复手段。
+  // 零提交（没有任何 bucket 提交过）必须整段回滚清理，且不能删掉外置向量文件。
+  it('零提交失败时回滚清理、保留外置向量文件并如实提示用户', async () => {
+    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
+    const { parseTableTemplateJson_ACU } = await import('../../../src/shared/utils');
+    vi.mocked(parseTableTemplateJson_ACU).mockReturnValue({
+      mate: { type: 'acu' },
+      sheet_0: { name: '测试表A', updateConfig: { groupId: 0 }, content: [['row_id', '值A']] },
+    });
+    vi.mocked(getChatArray_ACU).mockReturnValue([
+      { is_user: false, mes: 'AI回复1' },
+      { is_user: true, mes: '用户2' },
+      { is_user: false, mes: 'AI回复3' },
+    ]);
+    mockSettings.maxConcurrentGroups = 1;
+    mockSettings.manualUpdateContextDepth = 0;
+    mockSettings.manualUpdateBatchSize = 1;
+    mockSettings.tableMaxRetries = 1;
+    mockCurrentJsonTableData = { sheet_0: { name: '测试表A', updateConfig: {}, content: [['row_id', '值A'], ['1', '旧A']] } };
+    const rollbackHandle = { entries: [{ index: 0, snapshot: {} }], sheetKeys: ['sheet_0'] };
+    const pendingManifests = [{ indexId: 'vec-1', sourceTableKey: 'sheet_0' }];
+    mockClearManualRefillSheetDataInRange.mockImplementationOnce(async (_indices: number[], _keys: string[], options: any) => {
+      options?.onRollbackSnapshot?.(rollbackHandle);
+      options?.deferExternalVectorCleanup?.(pendingManifests);
+      return 1;
+    });
+    // AI 首次调用即失败（如 404）：清理已落盘，但没有任何 bucket 提交。
+    mockCallCustomOpenAI.mockRejectedValueOnce(new Error('API 404'));
+    const refreshData = vi.fn().mockResolvedValue(undefined);
+
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), refreshData, { clearBeforeUpdate: true });
+
+    expect(result.success).toBe(false);
+    expect(mockRollbackManualRefillRangeSnapshot).toHaveBeenCalledTimes(1);
+    expect(mockRollbackManualRefillRangeSnapshot).toHaveBeenCalledWith(rollbackHandle);
+    expect(result.rolledBackCleanup).toBe(true);
+    expect(result.error).toContain('已回滚清理');
+    expect(result.committedBucketCount).toBe(0);
+    expect(result.committedDataBucketCount).toBe(0);
+    // 回滚后帧仍引用旧 manifest：外置向量文件必须还在。
+    expect(mockCleanupCheckpointVectorIndexManifests).not.toHaveBeenCalled();
+    expect(refreshData).toHaveBeenCalled();
+  });
+
+  it('已有 bucket 提交后失败时不回滚清理，并执行推迟的外置向量文件删除', async () => {
+    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
+    const { parseTableTemplateJson_ACU } = await import('../../../src/shared/utils');
+    vi.mocked(parseTableTemplateJson_ACU).mockReturnValue({
+      mate: { type: 'acu' },
+      sheet_0: { name: '测试表A', updateConfig: { groupId: 0 }, content: [['row_id', '值A']] },
+    });
+    vi.mocked(getChatArray_ACU).mockReturnValue([
+      { is_user: false, mes: 'AI回复1' },
+      { is_user: true, mes: '用户2' },
+      { is_user: false, mes: 'AI回复3' },
+    ]);
+    mockSettings.maxConcurrentGroups = 1;
+    mockSettings.manualUpdateContextDepth = 0;
+    mockSettings.manualUpdateBatchSize = 1;
+    mockSettings.tableMaxRetries = 1;
+    mockCurrentJsonTableData = { sheet_0: { name: '测试表A', updateConfig: {}, content: [['row_id', '值A'], ['1', '旧A']] } };
+    const rollbackHandle = { entries: [{ index: 0, snapshot: {} }], sheetKeys: ['sheet_0'] };
+    const pendingManifests = [{ indexId: 'vec-1', sourceTableKey: 'sheet_0' }];
+    mockClearManualRefillSheetDataInRange.mockImplementationOnce(async (_indices: number[], _keys: string[], options: any) => {
+      options?.onRollbackSnapshot?.(rollbackHandle);
+      options?.deferExternalVectorCleanup?.(pendingManifests);
+      return 1;
+    });
+    // 第一个 bucket 真实写入（modifiedKeys 非空），第二个 bucket 的 AI 调用失败。
+    mockCallCustomOpenAI
+      .mockResolvedValueOnce('<tableEdit>sheet_0</tableEdit>')
+      .mockRejectedValueOnce(new Error('API 404'));
+    mockParseAndApplyTableEdits.mockImplementation((aiResponse: string, tableData: any) => {
+      if (String(aiResponse).includes('sheet_0')) {
+        tableData.sheet_0.content.push([String(tableData.sheet_0.content.length), '已写入']);
+        return { success: true, modifiedKeys: ['sheet_0'], appliedEdits: 1 };
+      }
+      return { success: false, modifiedKeys: [], appliedEdits: 0 };
+    });
+    const refreshData = vi.fn().mockResolvedValue(undefined);
+
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), refreshData, { clearBeforeUpdate: true });
+
+    expect(result.success).toBe(false);
+    // 已提交成果必须保留：整段回滚会覆盖它。
+    expect(mockRollbackManualRefillRangeSnapshot).not.toHaveBeenCalled();
+    expect(result.rolledBackCleanup).toBeUndefined();
+    expect(result.committedBucketCount).toBe(1);
+    expect(result.committedDataBucketCount).toBe(1);
+    // 已有提交 ⇒ 确定不回滚 ⇒ 此时才删推迟的外置向量文件。
+    expect(mockCleanupCheckpointVectorIndexManifests).toHaveBeenCalledTimes(1);
+    expect(mockCleanupCheckpointVectorIndexManifests).toHaveBeenCalledWith(pendingManifests);
+  });
+
+  it('手动重填被回放根准入阻断时告诉用户怎么办，且判据仍是 fail-closed（上游 #18 第六条）', async () => {
+    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
+    const { parseTableTemplateJson_ACU } = await import('../../../src/shared/utils');
+    vi.mocked(parseTableTemplateJson_ACU).mockReturnValue({
+      mate: { type: 'acu' },
+      sheet_0: { name: '测试表A', updateConfig: { groupId: 0 }, content: [['row_id', '值A']] },
+    });
+    // 最新 AI 楼层（#4）挂着 full 回放根；skipUpdateFloors=1 把重填范围末尾停在 #2 ⇒ 末尾早于根。
+    vi.mocked(getChatArray_ACU).mockReturnValue([
+      { is_user: false, mes: 'AI1' },
+      { is_user: true, mes: '用户2' },
+      { is_user: false, mes: 'AI3' },
+      { is_user: true, mes: '用户4' },
+      {
+        is_user: false,
+        mes: 'AI5',
+        TavernDB_ACU_IsolatedData: {
+          '': {
+            _acu_storage_version: 2,
+            storageFrame: {
+              version: 2,
+              checkpoint: { kind: 'full', reason: 'init', createdAt: 1, data: { mate: {} } },
+              logEntries: [],
+            },
+          },
+        },
+      },
+    ]);
+    mockSettings.manualUpdateContextDepth = 0;
+    mockSettings.skipUpdateFloors = 1;
+    mockCurrentJsonTableData = { sheet_0: { name: '测试表A', updateConfig: {}, content: [['row_id', '值A']] } };
+
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), vi.fn().mockResolvedValue(undefined), { clearBeforeUpdate: true });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('手动重填被回放根准入阻断');
+    // 新增的只是「怎么办」：点名真实设置名与单位，否则用户会把消息下标当成楼层号。
+    expect(result.error).toContain('跳过最新回复数');
+    expect(result.error).toContain('聊天消息下标');
+    // 判据一字未改：阻断仍发生在破坏性清理之前，一条数据都不许删。
+    expect(mockClearManualRefillSheetDataInRange).not.toHaveBeenCalled();
+    expect(mockCallCustomOpenAI).not.toHaveBeenCalled();
+  });
+
+  it('清理后因表身份失败而中止（非 AI 调用失败）时同样零提交回滚清理', async () => {
+    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
+    const { parseTableTemplateJson_ACU } = await import('../../../src/shared/utils');
+    // 模板只声明另一张表：选中表的身份无法在当前基底里证明 ⇒ 清理后（而非 AI 调用时）失败。
+    vi.mocked(parseTableTemplateJson_ACU).mockReturnValue({
+      mate: { type: 'acu' },
+      sheet_other: { name: '另一张表', updateConfig: { groupId: 0 }, content: [['row_id', '值']] },
+    } as any);
+    vi.mocked(getChatArray_ACU).mockReturnValue([
+      { is_user: false, mes: 'AI回复1' },
+      { is_user: true, mes: '用户2' },
+      { is_user: false, mes: 'AI回复3' },
+    ]);
+    mockSettings.manualUpdateContextDepth = 0;
+    mockSettings.manualUpdateBatchSize = 1;
+    mockSettings.skipUpdateFloors = 0;
+    mockCurrentJsonTableData = { sheet_0: { name: '测试表A', updateConfig: {}, content: [['row_id', '值A'], ['1', '旧A']] } };
+    const rollbackHandle = { entries: [{ index: 0, snapshot: {} }], sheetKeys: ['sheet_0'] };
+    mockClearManualRefillSheetDataInRange.mockImplementationOnce(async (_indices: number[], _keys: string[], options: any) => {
+      options?.onRollbackSnapshot?.(rollbackHandle);
+      return 1;
+    });
+
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), vi.fn().mockResolvedValue(undefined), { clearBeforeUpdate: true });
+
+    // 回滚与失败原因无关：只要清理已发生且零提交，旧数据就必须回来。
+    expect(result.success).toBe(false);
+    expect(result.committedBucketCount).toBe(0);
+    // 钉住机制而非只钉「已回滚清理」那句话：失败的确来自表身份这一步（不是 AI 调用）。
+    expect(result.error).toContain('表身份重绑定失败');
+    expect(mockRollbackManualRefillRangeSnapshot).toHaveBeenCalledTimes(1);
+    expect(result.rolledBackCleanup).toBe(true);
+    expect(result.error).toContain('已回滚清理');
+    expect(mockCallCustomOpenAI).not.toHaveBeenCalled();
   });
 
   it('范围末端 full checkpoint 被目标表全覆盖时禁用跨根 staging：清理后建模板临时根，各层普通 persist', async () => {
@@ -3207,7 +3408,10 @@ describe('orchestrateManualUpdate_ACU', () => {
     const result = await orchestrateManualUpdate_ACU(['sheet_0'], processBatch, mockRefreshData, { clearBeforeUpdate: true });
 
     expect(result.success).toBe(true);
-    expect(mockClearManualRefillSheetDataInRange).toHaveBeenCalledWith([0, 2, 4], ['sheet_0']);
+    expect(mockClearManualRefillSheetDataInRange).toHaveBeenCalledWith([0, 2, 4], ['sheet_0'], expect.objectContaining({
+      onRollbackSnapshot: expect.any(Function),
+      deferExternalVectorCleanup: expect.any(Function),
+    }));
     expect(commitManualRefillSheetSnapshotInRangeAtomic_ACU).toHaveBeenCalledWith(expect.objectContaining({
       isolationKey: '',
       targetMessageIndices: [0, 2, 4],
@@ -3265,7 +3469,7 @@ describe('orchestrateManualUpdate_ACU', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('AI 调用失败');
-    // pre 段失败：post 段（[4]）不得写入聊天帧；清理已发生且不可逆，不回滚。
+    // pre 段失败：post 段（[4]）不得写入聊天帧；已提交 bucket 保留、不整段回滚清理。
     expect(mockPersistTablesToChatMessage).not.toHaveBeenCalled();
     expect(mockRefreshData).toHaveBeenCalled();
     expect(mockCommitManualRefillSheetSnapshot).not.toHaveBeenCalled();
@@ -3348,7 +3552,10 @@ describe('orchestrateManualUpdate_ACU', () => {
       });
 
       expect(result.success).toBe(true);
-      expect(mockClearManualRefillSheetDataInRange).toHaveBeenCalledWith([0, 2, 4], ['sheet_0']);
+      expect(mockClearManualRefillSheetDataInRange).toHaveBeenCalledWith([0, 2, 4], ['sheet_0'], expect.objectContaining({
+      onRollbackSnapshot: expect.any(Function),
+      deferExternalVectorCleanup: expect.any(Function),
+    }));
       expect(mockCommitStagedSheetsAtFullBoundaryAtomic).toHaveBeenCalledTimes(1);
       const commitOptions = mockCommitStagedSheetsAtFullBoundaryAtomic.mock.calls[0][1];
       const fingerprintAfterCleanup = fingerprintOf(chat[4].TavernDB_ACU_IsolatedData[''].storageFrame);
@@ -3673,7 +3880,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
 
     expect(result).toEqual(expect.objectContaining({ success: false, error: expect.stringContaining('strict save failed') }));
-    // 清理不可逆、失败不回滚：已提交 bucket 保留，仅按聊天记录重新同步运行时。
+    // 已提交 bucket 保留、不整段回滚（只有「零提交且清理交回了句柄」才会回滚清理），仅按聊天记录重新同步运行时。
     expect(mockRefreshData).toHaveBeenCalled();
     expect(mockEnsureBoundaryCheckpoint).not.toHaveBeenCalled();
   });
@@ -3708,7 +3915,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
 
     expect(result.success).toBe(false);
-    // 清理不可逆、失败不回滚：已提交 bucket 保留，仅按聊天记录重新同步运行时。
+    // 已提交 bucket 保留、不整段回滚（只有「零提交且清理交回了句柄」才会回滚清理），仅按聊天记录重新同步运行时。
     expect(mockRefreshData).toHaveBeenCalled();
     expect(commitManualRefillSheetSnapshotInRangeAtomic_ACU).not.toHaveBeenCalled();
     expect(mockEnsureBoundaryCheckpoint).not.toHaveBeenCalled();
@@ -3752,7 +3959,7 @@ describe('orchestrateManualUpdate_ACU', () => {
     expect(loadAllChatMessages_ACU).toHaveBeenCalledTimes(4);
     expect(loadCallCount).toBe(4);
     // 同步失败发生在已有 bucket 提交之后，保留已填数据并按聊天记录重新同步。
-    // 清理不可逆、失败不回滚：已提交 bucket 保留，仅按聊天记录重新同步运行时。
+    // 已提交 bucket 保留、不整段回滚（只有「零提交且清理交回了句柄」才会回滚清理），仅按聊天记录重新同步运行时。
     expect(mockRefreshData).toHaveBeenCalled();
     expect(commitManualRefillSheetSnapshotInRangeAtomic_ACU).not.toHaveBeenCalled();
     expect(mockEnsureBoundaryCheckpoint).not.toHaveBeenCalled();
@@ -3891,11 +4098,11 @@ describe('orchestrateManualUpdate_ACU', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('终止');
-    // 清理不可逆、失败不回滚：已提交 bucket 保留，仅按聊天记录重新同步运行时。
+    // 已提交 bucket 保留、不整段回滚（只有「零提交且清理交回了句柄」才会回滚清理），仅按聊天记录重新同步运行时。
     expect(mockRefreshData).toHaveBeenCalled();
   });
 
-  it('手动重填一个 bucket 都未成功就失败时不回滚，保留清理结果', async () => {
+  it('手动重填清理未交回可回滚句柄时失败不回滚，仅按已提交事实对齐运行时', async () => {
     const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
     vi.mocked(getChatArray_ACU).mockReturnValue([
       { is_user: true },
@@ -3910,9 +4117,44 @@ describe('orchestrateManualUpdate_ACU', () => {
     const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
 
     expect(result.success).toBe(false);
+    // 名实相符：清理没交回句柄（beforeEach 的清理 mock 不调 onRollbackSnapshot）⇒ 无从回滚，
+    // 这两条负向断言才是「无句柄就不回滚」这个保证本身（缺了它们，去掉句柄守卫也照样绿）。
+    expect(mockRollbackManualRefillRangeSnapshot).not.toHaveBeenCalled();
+    expect(result.rolledBackCleanup).toBeUndefined();
     expect(mockRefreshData).toHaveBeenCalled();
   });
 
+  it('回滚未能完成（部分楼层身份不符/保存失败）时如实报未完成，不谎报已回滚', async () => {
+    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
+    vi.mocked(getChatArray_ACU).mockReturnValue([
+      { is_user: false, mes: 'AI回复1' },
+      { is_user: true, mes: '用户2' },
+      { is_user: false, mes: 'AI回复3' },
+    ]);
+    mockSettings.manualUpdateContextDepth = 0;
+    mockSettings.manualUpdateBatchSize = 1;
+    mockCurrentJsonTableData = { sheet_0: { name: '测试表A', updateConfig: {}, content: [['row_id', '值A'], ['1', '旧A']] } };
+    const rollbackHandle = { entries: [{ index: 0, snapshot: {} }], sheetKeys: ['sheet_0'] };
+    mockClearManualRefillSheetDataInRange.mockImplementationOnce(async (_indices: number[], _keys: string[], options: any) => {
+      options?.onRollbackSnapshot?.(rollbackHandle);
+      return 1;
+    });
+    mockRollbackManualRefillRangeSnapshot.mockResolvedValueOnce({
+      success: false,
+      restoredCount: 0,
+      skippedIndexes: [0],
+      error: '聊天在重填期间被改动：已恢复 0 条，跳过 1 个楼层（0）',
+    });
+    mockCallCustomOpenAI.mockRejectedValueOnce(new Error('API 404'));
+
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+
+    expect(result.success).toBe(false);
+    expect(result.rolledBackCleanup).toBeUndefined();
+    // 用户必须知道「没回滚成功、要按备份恢复」，而不是被一句「已回滚清理」骗过去。
+    expect(result.error).toContain('回滚清理未完成');
+    expect(result.error).toContain('请从聊天备份恢复');
+  });
 
   it('boundary checkpoint 建立失败时保留成功结果并返回 checkpointWarning', async () => {
     const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
@@ -6393,9 +6635,74 @@ describe('processGroupedRuntimeChunk_ACU', () => {
 
   it('空分组直接成功且不调用 AI', async () => {
     const result = await processGroupedRuntimeChunk_ACU([], 'manual_independent');
-    expect(result).toEqual({ success: true, failedGroups: [], committedBucketCount: 0 });
+    expect(result).toEqual({ success: true, failedGroups: [], committedBucketCount: 0, committedDataBucketCount: 0 });
     expect(mockPrepareAIInput).not.toHaveBeenCalled();
     expect(mockCallCustomOpenAI).not.toHaveBeenCalled();
+  });
+
+  // 上游 issue #18 第三条：计数若只按「bucket 是否提交」统计，会把零 operation 的伪提交
+  // （persist 对零 operation + 有填表事件仍 saved:true，帧里只有进度/事件）当成已写入数据。
+  it('零 operation 伪提交计入提交批次但不计入数据批次', async () => {
+    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
+    const { parseTableTemplateJson_ACU } = await import('../../../src/shared/utils');
+    vi.mocked(getChatArray_ACU).mockReturnValue([{ is_user: true }, { is_user: false, mes: 'AI回复' }]);
+    vi.mocked(parseTableTemplateJson_ACU).mockReturnValue({
+      mate: { type: 'acu' },
+      sheet_0: { name: '表A', content: [['row_id', '值'], ['1', 'base-a']] },
+    } as any);
+    mockCallCustomOpenAI.mockResolvedValueOnce('<tableEdit>sheet_0</tableEdit>');
+    // 解析成功但没有任何实际编辑：帧仍会被保存（进度/事件），modifiedKeys 为空。
+    mockParseAndApplyTableEditsToData.mockImplementationOnce(() => ({ success: true, modifiedKeys: [], appliedEdits: 0 }));
+
+    const result = await processGroupedRuntimeChunk_ACU([
+      { key: 'group_a', groupId: 0, indices: [1], batchSize: 2, sheetKeys: ['sheet_0'], requestOptions: null },
+    ], 'manual_independent');
+
+    expect(result).toEqual(expect.objectContaining({ success: true, committedBucketCount: 1, committedDataBucketCount: 0 }));
+    expect(mockPersistTablesToChatMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('modifiedKeys 非空时两个计数同步递增', async () => {
+    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
+    vi.mocked(getChatArray_ACU).mockReturnValue([{ is_user: true }, { is_user: false, mes: 'AI回复' }]);
+    mockCallCustomOpenAI.mockResolvedValueOnce('<tableEdit>sheet_0</tableEdit>');
+
+    const result = await processGroupedRuntimeChunk_ACU([
+      { key: 'group_a', groupId: 0, indices: [1], batchSize: 2, sheetKeys: ['sheet_0'], requestOptions: null },
+    ], 'manual_independent');
+
+    expect(result).toEqual(expect.objectContaining({ success: true, committedBucketCount: 1, committedDataBucketCount: 1 }));
+  });
+
+  it('伪提交与真实提交混合时两个计数各自正确', async () => {
+    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
+    const { parseTableTemplateJson_ACU } = await import('../../../src/shared/utils');
+    vi.mocked(getChatArray_ACU).mockReturnValue([
+      { is_user: true, mes: '用户0' },
+      { is_user: false, mes: '历史 AI 回复1' },
+      { is_user: true, mes: '用户2' },
+      { is_user: false, mes: '最新 AI 回复3' },
+    ]);
+    vi.mocked(parseTableTemplateJson_ACU).mockReturnValue({
+      mate: { type: 'acu' },
+      sheet_0: { name: '表A', content: [['row_id', '值'], ['1', 'base-a']] },
+    } as any);
+    mockCallCustomOpenAI
+      .mockResolvedValueOnce('<tableEdit>sheet_0 空操作</tableEdit>')
+      .mockResolvedValueOnce('<tableEdit>sheet_0 真实写入</tableEdit>');
+    mockParseAndApplyTableEditsToData
+      .mockImplementationOnce(() => ({ success: true, modifiedKeys: [], appliedEdits: 0 }))
+      .mockImplementationOnce((_aiResponse: string, tableData: any) => {
+        tableData.sheet_0.content.push(['9', '真实写入']);
+        return { success: true, modifiedKeys: ['sheet_0'], appliedEdits: 1 };
+      });
+
+    const result = await processGroupedRuntimeChunk_ACU([
+      { key: 'group_a', groupId: 0, indices: [1], batchSize: 1, sheetKeys: ['sheet_0'], requestOptions: null },
+      { key: 'group_b', groupId: 1, indices: [3], batchSize: 1, sheetKeys: ['sheet_0'], requestOptions: null },
+    ], 'manual_independent');
+
+    expect(result).toEqual(expect.objectContaining({ success: true, committedBucketCount: 2, committedDataBucketCount: 1 }));
   });
 
   it('迁移失败时拒绝整组处理且不触发 AI 或持久化', async () => {
@@ -6411,6 +6718,7 @@ describe('processGroupedRuntimeChunk_ACU', () => {
       failedGroups: ['group_a', 'group_b'],
       error: 'mixed storage evidence insufficient',
       committedBucketCount: 0,
+      committedDataBucketCount: 0,
     });
     expect(mockCallCustomOpenAI).not.toHaveBeenCalled();
     expect(mockPersistTablesToChatMessage).not.toHaveBeenCalled();
@@ -8719,7 +9027,10 @@ describe('orchestrateManualUpdate_ACU — 手动重填纪要向量镜像 wiring'
     expect(result.success).toBe(true);
     // 当前表仍含 1 至 4，但重填范围仅含 AI 楼层 3、4；清理目标不得由当前完整表反推。
     expect(mockClearManualRefillSheetDataInRange).toHaveBeenCalledTimes(1);
-    expect(mockClearManualRefillSheetDataInRange).toHaveBeenCalledWith([4, 6], ['sheet_0']);
+    expect(mockClearManualRefillSheetDataInRange).toHaveBeenCalledWith([4, 6], ['sheet_0'], expect.objectContaining({
+      onRollbackSnapshot: expect.any(Function),
+      deferExternalVectorCleanup: expect.any(Function),
+    }));
     expect(mockReloadStorageProvider).toHaveBeenCalled();
     expect(commitManualRefillSheetSnapshotInRangeAtomic_ACU).toHaveBeenCalledTimes(1);
     expect(mockArchiveSummaryVectorIndexNow).not.toHaveBeenCalled();
@@ -8739,10 +9050,10 @@ describe('orchestrateManualUpdate_ACU — 手动重填纪要向量镜像 wiring'
     expect(mockClearManualRefillIncrementalDataInRange).not.toHaveBeenCalled();
   });
 
-  it('手动重填范围含无法精确归属的纪要表操作时，在清理前拒绝删除向量', async () => {
+  it('手动重填范围含无法精确归属的纪要表操作时，改为整表重建索引而不是中止（上游 #18 第八条）', async () => {
     const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
-    const { isSummaryOrOutlineTable_ACU } = await import('../../../src/shared/utils');
-    vi.mocked(getChatArray_ACU).mockReturnValue([
+    const { isSummaryOrOutlineTable_ACU, logWarn_ACU } = await import('../../../src/shared/utils');
+    const summaryChat = [
       { is_user: true, mes: '用户0' },
       {
         is_user: false,
@@ -8762,10 +9073,23 @@ describe('orchestrateManualUpdate_ACU — 手动重填纪要向量镜像 wiring'
                 }],
               }],
             },
+            // 该表已有索引行：整表重建必须把它们一并排除，否则会留下陈旧行。
+            // 这条输入是必须的——不给索引，`excludedRowIds` 恒为空，断言就失去鉴别力。
+            summaryVectorIndexState: {
+              version: 1,
+              sourceTableKey: 'sheet_0',
+              sourceTableName: '纪要表',
+              rows: [
+                { rowId: '9', rowKey: 'rowkey-9', status: 'active' },
+                { rowId: '10', rowKey: 'rowkey-10', status: 'active' },
+              ],
+            },
           },
         },
       },
-    ]);
+    ];
+    vi.mocked(getChatArray_ACU).mockReturnValue(summaryChat);
+    gatewayChatHolder.chat = summaryChat;
     mockSettings.manualUpdateContextDepth = 1;
     mockSettings.manualUpdateBatchSize = 1;
     mockSettings = { ...mockSettings, summaryVectorIndexModeEnabled: true };
@@ -8774,6 +9098,7 @@ describe('orchestrateManualUpdate_ACU — 手动重填纪要向量镜像 wiring'
     mockSnapshotSummaryVectorMirrorExcludingRowsNow.mockClear();
     mockPublishSummaryVectorMirrorRowRemovalSnapshotNow.mockClear();
     mockClearManualRefillSheetDataInRange.mockClear();
+    vi.mocked(logWarn_ACU).mockClear();
     vi.mocked(isSummaryOrOutlineTable_ACU).mockImplementation((name: any) => name === '纪要表');
     mockCurrentJsonTableData = {
       sheet_0: { name: '纪要表', updateConfig: {}, content: [['row_id', '事件'], ['3', '旧值']] },
@@ -8782,13 +9107,81 @@ describe('orchestrateManualUpdate_ACU — 手动重填纪要向量镜像 wiring'
     const result = await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
     vi.mocked(isSummaryOrOutlineTable_ACU).mockImplementation(() => false);
 
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('无法精确识别纪要表 sheet_0 的 sheet_replace 操作历史 row_id');
-    expect(mockClearManualRefillSheetDataInRange).not.toHaveBeenCalled();
-    expect(mockArchiveSummaryVectorIndexNow).not.toHaveBeenCalled();
-    expect(mockRebuildCurrentSummaryVectorIndexNow).not.toHaveBeenCalled();
-    expect(mockSnapshotSummaryVectorMirrorExcludingRowsNow).not.toHaveBeenCalled();
-    expect(mockPublishSummaryVectorMirrorRowRemovalSnapshotNow).not.toHaveBeenCalled();
+    // 判据已按上游建议改变：整表替换类操作天生没有行级信息 ⇒ 不再中止整次重填，而是把该纪要表的
+    // 当前索引整体排除（随后重建）。原「清理前拒绝删向量」的安全属性由「排除集只会是超集」承担：
+    // 不会留下陈旧行；交火索引是派生数据，多排除只多一次重建。
+    expect(result.error || '').not.toContain('无法精确识别纪要表');
+    expect(
+      vi.mocked(logWarn_ACU).mock.calls.some(([msg]: any[]) => String(msg).includes('改为整表重建索引')),
+    ).toBe(true);
+    expect(mockClearManualRefillSheetDataInRange).toHaveBeenCalled();
+    // 真正的「整表重建」证据：排除集必须是「枚举集 ∪ 该表当前索引全部 row_id」。
+    // 只断言日志的话，把 removedRowIds 回退成「仅枚举集」本用例仍会绿（枚举集这里为空）。
+    const excludeCall = mockSnapshotSummaryVectorMirrorExcludingRowsNow.mock.calls.at(-1)?.[0] as any;
+    expect(excludeCall?.excludedRowIds).toEqual(['10', '9']);
+    expect(excludeCall?.sourceTableKey).toBe('sheet_0');
+  });
+
+  it('本次清理的纪要表不是交火镜像重建的目标表时，不并其整表行号进排除集（避免误删镜像活行）', async () => {
+    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
+    const { isSummaryOrOutlineTable_ACU, logWarn_ACU } = await import('../../../src/shared/utils');
+    // 交火镜像的重建目标只有第一张纪要表（sheet_mirror）；本次要清的是另一张（sheet_0）。
+    // 排除集是按 rowId 全局匹配的 ⇒ 若把 sheet_0 的整表行号并进去，会误删 sheet_mirror 里同号的活行，
+    // 而重建只服务 sheet_mirror 之外的表时又没人补 ⇒ 该判据必须挡住。
+    mockFindSummaryTable.mockReturnValueOnce({ summaryKey: 'sheet_mirror', table: { name: '纪要表' } } as any);
+    vi.mocked(isSummaryOrOutlineTable_ACU).mockImplementation((name: any) => name === '纪要表');
+    const summaryChat = [
+      { is_user: true, mes: '用户0' },
+      {
+        is_user: false,
+        mes: 'AI回复1',
+        TavernDB_ACU_IsolatedData: {
+          '': {
+            _acu_storage_version: 2,
+            storageFrame: {
+              version: 2,
+              checkpoint: undefined,
+              logEntries: [{
+                seq: 1, entryId: 'enumerable-op', createdAt: 1, source: 'manual_crud', targetMessageIndex: 1, aiFloor: 1,
+                filledSheetKeys: ['sheet_0'], changedSheetKeys: ['sheet_0'], groupKeys: [],
+                operations: [
+                  { kind: 'row_upsert', sheetKey: 'sheet_0', rowId: '3' },
+                  // 整表替换：没有行级信息 ⇒ 该表被标记「请求整表重建」，正是本用例要挡住的形态。
+                  { kind: 'sheet_replace', sheetKey: 'sheet_0', reason: 'manual_crud', sheet: { name: '纪要表', content: [['row_id', '事件'], ['4', 'x']] } },
+                ],
+              }],
+            },
+            summaryVectorIndexState: {
+              version: 1,
+              sourceTableKey: 'sheet_0',
+              sourceTableName: '纪要表',
+              rows: [
+                { rowId: '9', rowKey: 'rowkey-9', status: 'active' },
+                { rowId: '10', rowKey: 'rowkey-10', status: 'active' },
+              ],
+            },
+          },
+        },
+      },
+    ];
+    vi.mocked(getChatArray_ACU).mockReturnValue(summaryChat);
+    gatewayChatHolder.chat = summaryChat;
+    mockSettings.manualUpdateContextDepth = 1;
+    mockSettings.manualUpdateBatchSize = 1;
+    mockSettings = { ...mockSettings, summaryVectorIndexModeEnabled: true };
+    mockSnapshotSummaryVectorMirrorExcludingRowsNow.mockClear();
+    vi.mocked(logWarn_ACU).mockClear();
+    mockCurrentJsonTableData = { sheet_0: { name: '纪要表', updateConfig: {}, content: [['row_id', '事件'], ['3', '旧值']] } };
+
+    await orchestrateManualUpdate_ACU(['sheet_0'], vi.fn().mockResolvedValue({ success: true }), mockRefreshData, { clearBeforeUpdate: true });
+    vi.mocked(isSummaryOrOutlineTable_ACU).mockImplementation(() => false);
+
+    // 只排除能精确定位的那一行；整表行号（9/10）不许并进来。
+    const excludeCall = mockSnapshotSummaryVectorMirrorExcludingRowsNow.mock.calls.at(-1)?.[0] as any;
+    expect(excludeCall?.excludedRowIds).toEqual(['3']);
+    expect(
+      vi.mocked(logWarn_ACU).mock.calls.some(([msg]: any[]) => String(msg).includes('本次不整表排除纪要表 sheet_0')),
+    ).toBe(true);
   });
 
   it('手动重填范围含 sql_sheet_batch 纪要表 INSERT 时，按语句里的 row_id 清理向量', async () => {
@@ -8848,7 +9241,10 @@ describe('orchestrateManualUpdate_ACU — 手动重填纪要向量镜像 wiring'
     vi.mocked(isSummaryOrOutlineTable_ACU).mockImplementation(() => false);
 
     expect(result.success, result.error).toBe(true);
-    expect(mockClearManualRefillSheetDataInRange).toHaveBeenCalledWith([1], ['sheet_0']);
+    expect(mockClearManualRefillSheetDataInRange).toHaveBeenCalledWith([1], ['sheet_0'], expect.objectContaining({
+      onRollbackSnapshot: expect.any(Function),
+      deferExternalVectorCleanup: expect.any(Function),
+    }));
     expect(mockArchiveSummaryVectorIndexNow).not.toHaveBeenCalled();
     expect(mockSnapshotSummaryVectorMirrorExcludingRowsNow).toHaveBeenCalledWith({
       excludedRowIds: ['1', '2'],

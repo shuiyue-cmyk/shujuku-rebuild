@@ -53,6 +53,21 @@ export interface TableCheckpointRestoreResult_ACU {
   error?: string;
 }
 
+export interface TableCheckpointRestoreOptions_ACU {
+  /**
+   * 这份数据实际覆盖到第几楼（AI 楼层，1 基）。缺省 = 现行行为：
+   * 追平前沿即恢复帧所在的最新 AI 楼层，剩余楼层视为已填（「一键追平」显示已追平）。
+   * 填写后前沿下修到该楼层，追平从「该楼层 + 1」开始规划；对所有被恢复的表生效。
+   */
+  restoredUpToAiFloor?: number;
+}
+
+/** 归一化覆盖楼层声明：仅接受正整数，其他一律视为未填写。 */
+function normalizeRestoredUpToAiFloor_ACU(value: unknown): number | undefined {
+  const floor = Number(value);
+  return Number.isInteger(floor) && floor > 0 ? floor : undefined;
+}
+
 function cloneJson_ACU<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
 function isRecord_ACU(value: unknown): value is Record<string, any> { return !!value && typeof value === 'object' && !Array.isArray(value); }
 function assertSafeJsonValue_ACU(value: unknown, path = '$'): void {
@@ -318,10 +333,16 @@ async function runCheckpointDerivedRefresh_ACU(
   };
 }
 
-export async function restoreTableCheckpointToLatestAi_ACU(parsed: TableCheckpointFileV1_ACU): Promise<TableCheckpointRestoreResult_ACU> {
+export async function restoreTableCheckpointToLatestAi_ACU(
+  parsed: TableCheckpointFileV1_ACU,
+  options: TableCheckpointRestoreOptions_ACU = {},
+): Promise<TableCheckpointRestoreResult_ACU> {
   let checked: TableCheckpointFileV1_ACU;
   let chat: any[];
   let targetMessageIndex: number;
+  // 恢复帧 reason 必须仍是 init：shouldCheckpoint 只认 init/migration，改成别的会让
+  // 恢复不写 checkpoint。覆盖楼层声明因此走 checkpoint 的进度载体字段，而不是动 reason。
+  const restoredUpToAiFloor = normalizeRestoredUpToAiFloor_ACU(options.restoredUpToAiFloor);
   let isolationKey: string;
   let provider: ReturnType<typeof getStorageProvider>;
   let rollbackStrategy: RuntimeRollbackStrategy_ACU;
@@ -367,7 +388,7 @@ export async function restoreTableCheckpointToLatestAi_ACU(parsed: TableCheckpoi
         if (!templateState || !setCurrentChatTemplateScopeState_ACU(templateState, { isolationKey, reason: 'checkpoint_import' })) throw new Error('Checkpoint 模板作用域恢复失败。');
         if (!setChatSheetGuideDataForIsolationKey_ACU(isolationKey, checked.guideSnapshot.data, { reason: 'checkpoint_import', syncTemplateScope: false })) throw new Error('Checkpoint 指导表恢复失败。');
         const sheetKeys = Object.keys(checked.tableSnapshot).filter(key => key.startsWith('sheet_'));
-        const persisted = await persistTablesToChatMessage_ACU({ targetMessageIndex, tableData: checked.tableSnapshot, targetSheetKeys: sheetKeys, trackingSheetKeys: sheetKeys, filledSheetKeys: sheetKeys, trackAsUpdate: false, source: 'import', operations: [{ kind: 'data_replace', data: checked.tableSnapshot, reason: 'import' }], strictSave: true, assumeCommitLock: true, transactionContext });
+        const persisted = await persistTablesToChatMessage_ACU({ targetMessageIndex, tableData: checked.tableSnapshot, targetSheetKeys: sheetKeys, trackingSheetKeys: sheetKeys, filledSheetKeys: sheetKeys, trackAsUpdate: false, source: 'import', operations: [{ kind: 'data_replace', data: checked.tableSnapshot, reason: 'import' }], strictSave: true, assumeCommitLock: true, ...(restoredUpToAiFloor === undefined ? {} : { restoreUpToAiFloor: restoredUpToAiFloor }), transactionContext });
         if (!persisted.saved) throw new Error(persisted.error || 'Checkpoint 持久化失败。');
         return { clearedCount: cleared.clearedCount, restoredMessageIndex: persisted.messageIndex ?? targetMessageIndex };
       }, [{ kind: 'all' }]);

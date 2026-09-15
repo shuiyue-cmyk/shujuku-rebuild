@@ -7,7 +7,8 @@
 import { currentChatFileIdentifier_ACU, isAutoUpdatingCard_ACU, pendingFinalGenerationGreenlights_ACU, wasStoppedByUser_ACU, _set_isAutoUpdatingCard_ACU, _set_manualExtraHint_ACU, _set_wasStoppedByUser_ACU } from '../runtime/state-manager';
 import { readIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
 import { callCustomOpenAI_ACU, RetryableAiResponseError_ACU } from '../ai/prompt-builder';
-import { clearManualRefillSheetDataInRange_ACU, commitManualRefillSheetSnapshotInRangeAtomic_ACU, ensureManualCatchUpAnchorBeforeTarget_ACU, ensureV2BoundaryCheckpointForRetainedBuffer_ACU, establishManualRefillTemplateRoot_ACU, getChatArray_ACU, shouldRotateV2BoundaryCheckpointForRetainedBuffer_ACU } from '../chat/chat-service';
+import { clearManualRefillSheetDataInRange_ACU, cleanupCheckpointVectorIndexManifestsAfterCommit_ACU, commitManualRefillSheetSnapshotInRangeAtomic_ACU, ensureManualCatchUpAnchorBeforeTarget_ACU, ensureV2BoundaryCheckpointForRetainedBuffer_ACU, establishManualRefillTemplateRoot_ACU, getChatArray_ACU, rollbackManualRefillRangeSnapshotAtomic_ACU, shouldRotateV2BoundaryCheckpointForRetainedBuffer_ACU } from '../chat/chat-service';
+import type { ManualRefillRangeRollbackHandle_ACU } from '../chat/chat-service';
 import { coreApisAreReady_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU, settings_ACU, _set_currentJsonTableData_ACU } from '../runtime/state-manager';
 import { resolveManualUpdateBatchSize_ACU, resolveManualUpdateContextDepth_ACU } from './manual-update-settings';
 import { checkAutoMergeTrigger_ACU, prepareAutoMergeBatches_ACU, executeAutoMergeBatch_ACU, finalizeAutoMerge_ACU } from '../summary/merge-logic';
@@ -23,6 +24,7 @@ import {
   type SummaryVectorMirrorRowRemovalSnapshot_ACU,
 } from '../vector/summary-vector-index-rebuild-service';
 import { getAggregatedSummaryVectorIndexSnapshot_ACU } from '../vector/summary-vector-index-state-service';
+import { findSummaryTable_ACU } from '../vector/summary-vector-index-archive-service';
 import { getCurrentWorldbookConfig_ACU } from '../settings/settings-readers';
 import { getLatestV2FullCheckpointMessageIndex_ACU, resolveTableHistoryStateFromChat_ACU } from './table-history';
 import { planManualCatchUpWaves_ACU, type ManualCatchUpPlan_ACU } from './manual-fill-planner';
@@ -110,6 +112,22 @@ function collectManualRefillSummaryVectorCleanup_ACU(targetMessageIndices: numbe
 
     const sourceTableKeySet = new Set(summarySourceTableKeys);
     const removedRowIdsBySourceTable = new Map(summarySourceTableKeys.map((sheetKey) => [sheetKey, new Set<string>()]));
+    // [整表重建] 无法从历史操作精确识别受影响 row_id 的纪要表：**不再中止整次重填**，改为「该表整表重建索引」
+    // —— 把它的当前索引全部 row_id 一并排除，随后由索引重建流程重新建好。
+    // 依据：①整表替换类操作（sheet_replace 等）天生没有行级信息；②交火索引是**派生数据**，多排除只会多一次
+    // 重建，不会破坏表数据；③原实现的 throw 发生在破坏性清理**之前**，会让用户整次重填白做（上游 issue #18 第八条）。
+    // 定向枚举成功的表仍走精确排除，不受影响。
+    const rebuildWholeIndexTableKeys = new Set<string>();
+    const markWholeIndexRebuild = (sheetKey: string): void => {
+        if (sourceTableKeySet.has(sheetKey)) {
+            rebuildWholeIndexTableKeys.add(sheetKey);
+            logWarn_ACU(`[交火模式纪要索引] 手动重填清理无法精确识别纪要表 ${sheetKey} 的受影响 row_id，改为整表重建索引。`);
+            return;
+        }
+        // 操作无法归属到具体表：对所有纪要表整表重建（保守方向：不会留下陈旧行）。
+        summarySourceTableKeys.forEach((key) => rebuildWholeIndexTableKeys.add(key));
+        logWarn_ACU('[交火模式纪要索引] 手动重填清理遇到无法归属的纪要表操作，改为整表重建索引。');
+    };
     const chat = getChatArray_ACU();
     for (const messageIndex of targetMessageIndices) {
         const message = chat?.[messageIndex];
@@ -123,7 +141,8 @@ function collectManualRefillSummaryVectorCleanup_ACU(targetMessageIndices: numbe
                     if (!sourceTableKeySet.has(sheetKey)) continue;
                     const rowId = String(rowOperation.rowId || '').trim();
                     if (!rowId) {
-                        throw new Error(`手动重填清理前无法确认纪要表 ${sheetKey} 的历史 row_id。`);
+                        markWholeIndexRebuild(sheetKey);
+                        continue;
                     }
                     removedRowIdsBySourceTable.get(sheetKey)!.add(rowId);
                     continue;
@@ -133,39 +152,83 @@ function collectManualRefillSummaryVectorCleanup_ACU(targetMessageIndices: numbe
                     if (!sourceTableKeySet.has(sheetKey)) continue;
                     const extracted = extractRowIdsFromSqlSheetBatch_ACU(operation);
                     if (!extracted.ok) {
-                        throw new Error(`手动重填清理前无法精确识别纪要表 ${sheetKey} 的 sql_sheet_batch 操作历史 row_id。`);
+                        markWholeIndexRebuild(sheetKey);
+                        continue;
                     }
                     extracted.rowIds.forEach((rowId) => removedRowIdsBySourceTable.get(sheetKey)!.add(rowId));
                     continue;
                 }
-                if (kind === 'data_replace' || kind === 'sql_batch' || kind === 'table_edit_dsl') {
-                    throw new Error(`手动重填清理前无法精确识别操作 ${kind} 影响的纪要表历史 row_id。`);
+                if (kind === 'sheet_replace' || kind === 'data_replace' || kind === 'sql_batch' || kind === 'table_edit_dsl') {
+                    markWholeIndexRebuild(sheetKey);
+                    continue;
                 }
                 if (sourceTableKeySet.has(sheetKey)) {
-                    throw new Error(`手动重填清理前无法精确识别纪要表 ${sheetKey} 的 ${kind || 'unknown'} 操作历史 row_id。`);
+                    markWholeIndexRebuild(sheetKey);
+                    continue;
                 }
                 if (!kind || !sheetKey) {
-                    throw new Error(`手动重填清理前无法确认目标范围内操作 ${kind || 'unknown'} 是否影响纪要表。`);
+                    markWholeIndexRebuild(sheetKey);
                 }
             }
         }
     }
 
 
-    const currentIndex = getAggregatedSummaryVectorIndexSnapshot_ACU()?.summaryVectorIndexState || null;
-    return summarySourceTableKeys.flatMap((sourceTableKey) => {
-        const removedRowIds = Array.from(removedRowIdsBySourceTable.get(sourceTableKey) || []).sort();
-        const hasCurrentIndex = currentIndex?.sourceTableKey === sourceTableKey
-            && Array.isArray(currentIndex.rows)
-            && currentIndex.rows.some((row) => row.status !== 'removed');
-        if (hasCurrentIndex && removedRowIds.length === 0) {
-            throw new Error(`手动重填清理前无法从目标范围识别纪要表 ${sourceTableKey} 的历史 row_id。`);
+    const aggregatedIndex = getAggregatedSummaryVectorIndexSnapshot_ACU();
+    // 索引行按「层的 sourceTableKey」归属：聚合快照只保留最新一层的表身份，只按它判断会让
+    // 其它纪要表被报成「整表重建」却只排除枚举集 —— 既然要整表重建，就必须真的排除该表全部索引行。
+    const indexRowIdsBySourceTable = new Map<string, Set<string>>();
+    for (const layer of aggregatedIndex?.layers || []) {
+        const state = layer?.summaryVectorIndexState as any;
+        const ownerTableKey = typeof state?.sourceTableKey === 'string' ? state.sourceTableKey : '';
+        if (!ownerTableKey) continue;
+        const bucket = indexRowIdsBySourceTable.get(ownerTableKey) || new Set<string>();
+        for (const row of state.rows || []) {
+            if (row?.status === 'removed') continue;
+            const rowId = String(row?.rowId || '').trim();
+            if (rowId) bucket.add(rowId);
         }
-        return [{ sourceTableKey, removedRowIds }];
+        indexRowIdsBySourceTable.set(ownerTableKey, bucket);
+    }
+    // 层里读不到该表的身份时回落到聚合快照（单一纪要表场景下两者等价）。
+    const aggregatedIndexRowIds_ACU = (sourceTableKey: string): string[] => {
+        const state = aggregatedIndex?.summaryVectorIndexState as any;
+        if (state?.sourceTableKey !== sourceTableKey || !Array.isArray(state.rows)) return [];
+        return state.rows
+            .filter((row: any) => row?.status !== 'removed' && String(row?.rowId || '').trim())
+            .map((row: any) => String(row.rowId));
+    };
+    // 整表排除要生效，必须满足两个前提：①排除集是按 rowId **全局**匹配的（selectRetainedVectorMirrorRows），
+    // 跨表并入整表行号会误删镜像表里同号的活行；②整表排除靠「镜像被清空 ⇒ 随后的 initial 重建补回来」，
+    // 而重建只服务 findSummaryTable_ACU() 认定的第一张纪要表。⇒ 只有「本次只清这一张纪要表、且它就是那张表」
+    // 时整表排除才既有效又安全；其余情况保持精确排除并如实记录，不谎报整表重建。
+    const mirrorRebuildTableKey = findSummaryTable_ACU()?.summaryKey || '';
+    const wholeIndexRebuildAllowed = summarySourceTableKeys.length === 1 && summarySourceTableKeys[0] === mirrorRebuildTableKey;
+    return summarySourceTableKeys.map((sourceTableKey) => {
+        const enumerated = Array.from(removedRowIdsBySourceTable.get(sourceTableKey) || []);
+        const layerRowIds = Array.from(indexRowIdsBySourceTable.get(sourceTableKey) || []);
+        const indexRowIds = layerRowIds.length > 0 ? layerRowIds : aggregatedIndexRowIds_ACU(sourceTableKey);
+        // 定向枚举为空的兜底沿用原意图（原有索引在、却一条都没识别出来 ⇒ 不能默认「无需清理」），
+        // 只是处置从「中止」改成「整表重建」。
+        const rebuildWholeIndex = rebuildWholeIndexTableKeys.has(sourceTableKey)
+            || (enumerated.length === 0 && indexRowIds.length > 0);
+        if (!rebuildWholeIndex) return { sourceTableKey, removedRowIds: enumerated.sort() };
+        if (!rebuildWholeIndexTableKeys.has(sourceTableKey)) {
+            logWarn_ACU(`[交火模式纪要索引] 手动重填清理未能从目标范围识别纪要表 ${sourceTableKey} 的 row_id（索引在、证据为空），改为整表重建索引。`);
+        }
+        if (!wholeIndexRebuildAllowed) {
+            logWarn_ACU(`[交火模式纪要索引] 本次不整表排除纪要表 ${sourceTableKey} 的索引行：整表排除依赖「镜像被清空 ⇒ 首张纪要表 initial 重建补回」，前提是「本次只清这一张纪要表且它就是镜像所属表 ${mirrorRebuildTableKey || '未识别'}」，本次清理了 ${summarySourceTableKeys.length} 张纪要表（首张 ${summarySourceTableKeys[0] || '无'}）；而排除集在镜像侧是按 rowId 全局匹配的，跨表并入整表行号会误删镜像表的同号活行。该表索引行待其自身完整重建时收敛。`);
+            return { sourceTableKey, removedRowIds: enumerated.sort() };
+        }
+        return { sourceTableKey, removedRowIds: [...new Set([...enumerated, ...indexRowIds])].sort() };
     });
 }
 
 function collectManualRefillExcludedSummaryRowIds_ACU(cleanups: ManualRefillSummaryVectorCleanup_ACU[]): string[] {
+    // 已知边界（改造前既有行为，本批未动）：排除集在这里被扁平成「按 rowId 全局匹配」的一个数组，
+    // 而快照只服务 cleanups[0] 那张表的镜像 ⇒ 多纪要表场景下，另一张表「定向枚举」出的 rowId 仍可能
+    // 命中这张表镜像里的同号活行。整表行号已被上游闸门挡在门外（见 collectManualRefillSummaryVectorCleanup_ACU），
+    // 枚举集这条路径要彻底修需把排除集改成按表传递（要动镜像选择 API），留待专门批次。
     return [...new Set(cleanups.flatMap((cleanup) => cleanup.removedRowIds.map((rowId) => String(rowId || '').trim()).filter(Boolean)))].sort();
 }
 
@@ -340,12 +403,27 @@ export interface ManualUpdateResult {
     checkpointWarning?: string;
     outcome?: 'complete' | 'no_work' | 'stopped' | 'sync_pending' | 'blocked' | 'integrity_failed' | 'progress_metadata_failed';
     committedBucketCount?: number;
+    /**
+     * 真正写入过表数据的批次计数（依据 applyResult.modifiedKeys 非空，即解析器报告改动过表/行）。
+     * committedBucketCount 含「零 operation 的伪提交」——persist 对「零 operation + 有填表事件」
+     * 仍返回 saved:true，帧里只有进度/事件，没有表数据；UI 只能按本计数宣称「已保留数据」，
+     * 否则会把伪提交说成已保留成果（上游 issue #18 第三条）。
+     * 口径边界：只初始化建表（keysToSave 含 initializedKeys 而 modifiedKeys 为空）的批次不计入，
+     * 即本计数只会**少报**、不会把没写数据的批次算成写了——UI 因此是「宁少说不多说」的方向。
+     */
+    committedDataBucketCount?: number;
     /** 是否至少有一个 bucket 已严格提交到聊天记录。 */
     dataCommitted?: boolean;
     /** 至少一次终态 bounded replay 已确认可读取已提交状态。 */
     replayVerified?: boolean;
     /** terminal manualRefillProgress 是否已严格保存。 */
     terminalProgressSaved?: boolean;
+    /**
+     * 手动重填失败时是否已回滚清理（仅零提交失败会发生）。
+     * true 表示聊天里的旧数据已按清理前快照完整恢复并落盘——UI 必须如实告知用户，
+     * 否则用户会以为数据已删（上游 issue #18 第四条）。
+     */
+    rolledBackCleanup?: boolean;
     /** 面向 UI/恢复诊断的稳定失败分类；不得依赖错误文案解析。 */
     diagnosticCode?: 'anchor_preflight_blocked' | 'replay_anchor_missing' | 'replay_missing_selected_sheet' | 'replay_requires_checkpoint_convergence' | 'replay_data_mismatch' | 'replay_failed' | 'catch_up_migration_failed' | 'catch_up_migration_reload_failed' | 'catch_up_migration_changed_topology' | 'catch_up_runtime_changed_after_confirmation' | 'provisional_bridge_required' | 'provisional_baseline_unreconstructable' | 'provisional_bridge_conflict' | 'bridge_finalize_failed' | 'bridge_replay_mismatch' | 'provisional_recovery_required' | 'stale_bucket_after_boundary_checkpoint' | 'staging_plan_failed' | 'boundary_commit_failed' | TableFillBoundaryDiagnosticCode_ACU;
     catchUpPlan?: ManualCatchUpPlan_ACU;
@@ -2257,9 +2335,9 @@ async function processGroupedRuntimeChunkCore_ACU(
         performanceRunId?: string;
         performanceParentSpanId?: string;
     } = {}
-): Promise<{ success: boolean; failedGroups: string[]; error?: string; aborted?: boolean; committedBucketCount: number; diagnosticCode?: ManualUpdateResult['diagnosticCode'] }> {
+): Promise<{ success: boolean; failedGroups: string[]; error?: string; aborted?: boolean; committedBucketCount: number; committedDataBucketCount: number; diagnosticCode?: ManualUpdateResult['diagnosticCode'] }> {
     if (!Array.isArray(groups) || groups.length === 0) {
-        return { success: true, failedGroups: [], committedBucketCount: 0 };
+        return { success: true, failedGroups: [], committedBucketCount: 0, committedDataBucketCount: 0 };
     }
     const schedulingIdentitySnapshot = cloneTableDataSnapshot_ACU(currentJsonTableData_ACU);
 
@@ -2270,6 +2348,7 @@ async function processGroupedRuntimeChunkCore_ACU(
             failedGroups: groups.map(group => group.key),
             error: sanitizeRetryFeedback_ACU(migration.error || '旧存储迁移失败，已阻止本次填表。', MAX_WARN_ERROR_LENGTH_ACU),
             committedBucketCount: 0,
+            committedDataBucketCount: 0,
         };
     }
     if (migration.migrated) {
@@ -2285,6 +2364,7 @@ async function processGroupedRuntimeChunkCore_ACU(
                     MAX_WARN_ERROR_LENGTH_ACU,
                 ),
                 committedBucketCount: 0,
+                committedDataBucketCount: 0,
                 diagnosticCode: 'catch_up_migration_changed_topology',
             };
         }
@@ -2326,11 +2406,12 @@ async function processGroupedRuntimeChunkCore_ACU(
             failedGroups: groups.map(group => group.key),
             error: sanitizeRetryFeedback_ACU(message, MAX_WARN_ERROR_LENGTH_ACU),
             committedBucketCount: 0,
+            committedDataBucketCount: 0,
         };
     }
     if (scopedGroups.length === 0) {
         logDebug_ACU('[TemplateScope] 所有分组的目标表都不在模板范围内，本次无需填表。');
-        return { success: true, failedGroups: [], committedBucketCount: 0 };
+        return { success: true, failedGroups: [], committedBucketCount: 0, committedDataBucketCount: 0 };
     }
 
     const transactionBuckets = new Map<string, {
@@ -2389,6 +2470,9 @@ async function processGroupedRuntimeChunkCore_ACU(
     };
     const isStopped = () => options.abortController?.signal.aborted === true || (options.respectGlobalStop !== false && wasStoppedByUser_ACU);
     let committedBucketCount = 0;
+    // 与 committedBucketCount 分开计数：伪提交（帧只落进度/事件，modifiedKeys 为空）会推进前者
+    // 但不产生任何表数据，UI 与编排器只有后者能证明「真的写了数据」。
+    let committedDataBucketCount = 0;
     let aborted = false;
     for (let bucketIndex = 0; bucketIndex < orderedBuckets.length; bucketIndex++) {
         if (isStopped()) {
@@ -2704,6 +2788,9 @@ async function processGroupedRuntimeChunkCore_ACU(
             });
             if (applyResult.success) {
                 const nextCommittedBucketCount = committedBucketCount + 1;
+                if (Array.isArray(applyResult.modifiedKeys) && applyResult.modifiedKeys.length > 0) {
+                    committedDataBucketCount += 1;
+                }
                 options.onBucketCommitted?.({
                     saveTargetIndex: bucket.saveTargetIndex,
                     messageIndices: replacementMessageIndices,
@@ -2750,11 +2837,11 @@ async function processGroupedRuntimeChunkCore_ACU(
     }
 
     if (aborted) {
-        return { success: false, failedGroups: [...failedGroups], error: '手动更新已终止。', aborted: true, committedBucketCount };
+        return { success: false, failedGroups: [...failedGroups], error: '手动更新已终止。', aborted: true, committedBucketCount, committedDataBucketCount };
     }
     return failedGroups.size > 0
-        ? { success: false, failedGroups: [...failedGroups], error: firstError || '统一提交失败。', committedBucketCount }
-        : { success: true, failedGroups: [], committedBucketCount };
+        ? { success: false, failedGroups: [...failedGroups], error: firstError || '统一提交失败。', committedBucketCount, committedDataBucketCount }
+        : { success: true, failedGroups: [], committedBucketCount, committedDataBucketCount };
 }
 
 export function processGroupedRuntimeChunk_ACU(
@@ -4103,6 +4190,9 @@ export async function orchestrateManualCatchUp_ACU(
         return count + waveBuckets;
     }, 0);
     let committedBucketCount = 0;
+    // 与 committedBucketCount 成对返回给 UI：前者含「零 operation 伪提交」（只落进度/事件帧），
+    // 后者只在 applyResult.modifiedKeys 非空时递增，是「真的写了表数据」的唯一依据。
+    let committedDataBucketCount = 0;
     let activeWaveIndex = 0;
     let lastCommittedBucketTargetIndex: number | null = null;
     const completedSheetMessageIndexByKey: Record<string, number> = {};
@@ -4303,6 +4393,7 @@ export async function orchestrateManualCatchUp_ACU(
                         success: false, outcome: 'integrity_failed',
                         error: `跨根 staging 收敛失败：${settleError.error}`,
                         committedBucketCount, catchUpPlan: plan,
+                        committedDataBucketCount,
                         dataCommitted: committedBucketCount > 0,
                         replayVerified: false,
                         terminalProgressSaved: false,
@@ -4315,6 +4406,7 @@ export async function orchestrateManualCatchUp_ACU(
                     success: false, outcome: 'stopped',
                     error: terminalError ? `手动追平已终止；终态进度保存失败：${terminalError}` : '手动追平已终止。',
                     committedBucketCount, catchUpPlan: plan,
+                    committedDataBucketCount,
                     dataCommitted: committedBucketCount > 0,
                     replayVerified: false,
                     terminalProgressSaved: !terminalError,
@@ -4346,6 +4438,7 @@ export async function orchestrateManualCatchUp_ACU(
                             success: false, outcome: 'integrity_failed',
                             error: `跨根 staging 收敛失败：${settleError.error}`,
                             committedBucketCount, catchUpPlan: plan,
+                            committedDataBucketCount,
                             dataCommitted: committedBucketCount > 0,
                             replayVerified: false,
                             terminalProgressSaved: false,
@@ -4358,6 +4451,7 @@ export async function orchestrateManualCatchUp_ACU(
                         success: false, outcome: 'stopped',
                         error: terminalError ? `手动追平已终止；终态进度保存失败：${terminalError}` : '手动追平已终止。',
                         committedBucketCount, catchUpPlan: plan,
+                        committedDataBucketCount,
                         dataCommitted: committedBucketCount > 0,
                         replayVerified: false,
                         terminalProgressSaved: !terminalError,
@@ -4390,6 +4484,7 @@ export async function orchestrateManualCatchUp_ACU(
                             error: terminalError ? `跨根 staging 汇合失败：${settleError.error}；终态进度保存失败：${terminalError}` : `跨根 staging 汇合失败：${settleError.error}`,
                             committedBucketCount,
                             catchUpPlan: plan,
+                            committedDataBucketCount,
                             dataCommitted: committedBucketCount > 0,
                             replayVerified: false,
                             terminalProgressSaved: !terminalError,
@@ -4446,6 +4541,7 @@ export async function orchestrateManualCatchUp_ACU(
                     },
                 });
                 committedBucketCount += result.committedBucketCount;
+                committedDataBucketCount += result.committedDataBucketCount;
                 if (!result.success) {
                     const outcome = result.aborted ? 'stopped' : undefined;
                     const primaryError = result.error || (result.aborted ? '手动追平已终止。' : '手动追平失败。');
@@ -4460,6 +4556,7 @@ export async function orchestrateManualCatchUp_ACU(
                             error: `${primaryError}；跨根 staging 收敛失败：${settleError.error}`,
                             committedBucketCount,
                             catchUpPlan: plan,
+                            committedDataBucketCount,
                             dataCommitted: committedBucketCount > 0,
                             replayVerified: false,
                             terminalProgressSaved: false,
@@ -4474,6 +4571,7 @@ export async function orchestrateManualCatchUp_ACU(
                         error: terminalError ? `${primaryError}；终态进度保存失败：${terminalError}` : primaryError,
                         committedBucketCount,
                         catchUpPlan: plan,
+                        committedDataBucketCount,
                         dataCommitted: committedBucketCount > 0,
                         replayVerified: false,
                         terminalProgressSaved: !terminalError,
@@ -4496,6 +4594,7 @@ export async function orchestrateManualCatchUp_ACU(
                     error: `跨根 staging 收敛失败：${settleError.error}`,
                     committedBucketCount,
                     catchUpPlan: plan,
+                    committedDataBucketCount,
                     dataCommitted: committedBucketCount > 0,
                     replayVerified: false,
                     terminalProgressSaved: false,
@@ -4523,6 +4622,7 @@ export async function orchestrateManualCatchUp_ACU(
                 outcome: 'integrity_failed',
                 error: `手动追平持久化完整性校验失败：${replayVerification.error}${reloadError ? `；聊天状态回载失败：${reloadError}` : '；已从聊天持久化状态回载运行时。'}`,
                 committedBucketCount,
+                committedDataBucketCount,
                 dataCommitted: committedBucketCount > 0,
                 replayVerified: false,
                 terminalProgressSaved: false,
@@ -4542,6 +4642,7 @@ export async function orchestrateManualCatchUp_ACU(
                     outcome: 'progress_metadata_failed',
                     error: `手动追平数据已提交且世界书同步待重试，但终态进度保存失败：${terminalError}`,
                     committedBucketCount,
+                    committedDataBucketCount,
                     dataCommitted: committedBucketCount > 0,
                     replayVerified: true,
                     terminalProgressSaved: false,
@@ -4552,6 +4653,7 @@ export async function orchestrateManualCatchUp_ACU(
                 success: true,
                 outcome: 'sync_pending',
                 committedBucketCount,
+                committedDataBucketCount,
                 dataCommitted: committedBucketCount > 0,
                 replayVerified: true,
                 terminalProgressSaved: true,
@@ -4567,13 +4669,14 @@ export async function orchestrateManualCatchUp_ACU(
                 outcome: 'progress_metadata_failed',
                 error: `手动追平数据与世界书同步已完成，但终态进度保存失败：${terminalError}`,
                 committedBucketCount,
+                committedDataBucketCount,
                 dataCommitted: committedBucketCount > 0,
                 replayVerified: true,
                 terminalProgressSaved: false,
                 catchUpPlan: plan,
             };
         }
-        return { success: true, outcome: 'complete', committedBucketCount, dataCommitted: committedBucketCount > 0, replayVerified: true, terminalProgressSaved: true, catchUpPlan: plan };
+        return { success: true, outcome: 'complete', committedBucketCount, committedDataBucketCount, dataCommitted: committedBucketCount > 0, replayVerified: true, terminalProgressSaved: true, catchUpPlan: plan };
     } catch (error: any) {
         const primaryError = error?.message || String(error || '手动追平执行异常。');
         // 终态不变量：failed 只能在 staging 已汇合或丢弃后写入。
@@ -4586,6 +4689,7 @@ export async function orchestrateManualCatchUp_ACU(
                 error: `${primaryError}；跨根 staging 收敛失败：${settleError.error}`,
                 committedBucketCount,
                 catchUpPlan: plan,
+                committedDataBucketCount,
                 dataCommitted: committedBucketCount > 0,
                 replayVerified: false,
                 terminalProgressSaved: false,
@@ -4599,6 +4703,7 @@ export async function orchestrateManualCatchUp_ACU(
             error: terminalError ? `${primaryError}；终态进度保存失败：${terminalError}` : primaryError,
             committedBucketCount,
             catchUpPlan: plan,
+            committedDataBucketCount,
             dataCommitted: committedBucketCount > 0,
             replayVerified: false,
             terminalProgressSaved: !terminalError,
@@ -4690,6 +4795,8 @@ export async function orchestrateManualUpdate_ACU(
     } = {},
 ): Promise<ManualUpdateResult> {
     let committedBucketCount = 0;
+    // 与 committedBucketCount 分开计数：伪提交（帧只落进度/事件，modifiedKeys 为空）推前者不推后者。
+    let committedDataBucketCount = 0;
     // 跨根 staging 作用域（仅 manualRefillEnabled 且跨根时启用；提升到函数级以便
     // chunk 循环内 settle 与收尾共用）。non-null 断言仅在 requiresBoundaryStaging
     // 分支内使用，普通路径保持 null。
@@ -4697,27 +4804,94 @@ export async function orchestrateManualUpdate_ACU(
     let stagingRun: TableFillStagingRunContext_ACU | null = null;
     let stagingSession: TableFillStagingSession_ACU | null = null;
     let boundaryCommitted = false;
-    // 破坏性清理是否已开始：清理一旦开始即不可逆（失败不回滚、不恢复已删数据），
-    // 后续任何失败都必须走 failManualRefillSession 对齐运行时，而不是裸抛。
+    // 破坏性清理是否已开始：清理一旦开始，后续任何失败都必须走 failManualRefillSession
+    // 对齐运行时（或整段回滚），而不是裸抛。
     let refillCleanupStarted = false;
+    // 清理前快照句柄（清理成功时由 chat-service 交回）与推迟删除的外置向量文件清单。
+    // 两者都只服务「零提交失败要回滚」这一条路径：帧回滚后旧 manifest 必须仍可解析，
+    // 所以外置文件删除不能与清理同拍，只能推迟到确定不回滚（已有 bucket 提交）之后。
+    let refillRollbackHandle: ManualRefillRangeRollbackHandle_ACU | null = null;
+    let deferredRefillVectorManifests: any[] = [];
+    let deferredRefillVectorCleanupFlushed = false;
     let manualRefillSummarySourceTableKeys: string[] = [];
-    // 手动重填失败语义（计划 §5.5 / §5.6，已删除旧 snapshot/rollback 机制）：
-    // 破坏性清理不可逆，失败绝不回滚、绝不恢复已删数据；已提交的 bucket 成果保留，
-    // 仅按聊天记录里的已提交事实重新对齐运行时快照，避免界面显示与持久化不一致。
+    /**
+     * 执行被推迟的外置向量文件删除。与回滚互斥：零提交时永不删除（帧与外置文件必须一致），
+     * 已有提交则本会话不再回滚，此时才真正删。
+     */
+    const flushDeferredRefillVectorCleanup = async (): Promise<void> => {
+        if (deferredRefillVectorCleanupFlushed || committedBucketCount <= 0) return;
+        deferredRefillVectorCleanupFlushed = true;
+        if (deferredRefillVectorManifests.length === 0) return;
+        const manifests = deferredRefillVectorManifests;
+        deferredRefillVectorManifests = [];
+        try {
+            const warnings = await cleanupCheckpointVectorIndexManifestsAfterCommit_ACU(manifests);
+            warnings.forEach(warning => logWarn_ACU(`[Manual Refill] 外置向量文件清理警告：${warning}`));
+        } catch (error: any) {
+            // 删除失败只是留下不可达文件，后续 GC 会回收，绝不影响已提交的数据结果。
+            logWarn_ACU('[Manual Refill] 推迟的外置向量文件清理失败:', error);
+        }
+    };
+    /**
+     * 零提交时回滚破坏性清理（失败路径与「清理了但一条数据批次都没写」的收尾路径共用）。
+     *
+     * 只在「本次一个 bucket 都没提交」时执行：已提交过就绝不回滚——那会覆盖已落地的写入。
+     * 句柄一次性消费；此刻外置向量文件尚未删除（推迟删除以本次有提交为条件），故无需补偿。
+     * 回滚按消息身份指纹逐条校验：聊天在重填期间被改动时只恢复仍匹配的楼层，并如实回报未完成。
+     */
+    const rollbackRefillCleanupOnZeroCommit = async (): Promise<{ rolledBackCleanup: boolean; rollbackNote: string }> => {
+        if (!refillCleanupStarted || !refillRollbackHandle || committedBucketCount > 0) {
+            return { rolledBackCleanup: false, rollbackNote: '' };
+        }
+        const handle = refillRollbackHandle;
+        // 一次性消费：同一次会话不允许回滚两次。
+        refillRollbackHandle = null;
+        try {
+            const rollback = await rollbackManualRefillRangeSnapshotAtomic_ACU(handle);
+            if (rollback.success === true) {
+                logDebug_ACU(`[Manual Refill] 零提交后已回滚清理，恢复 ${rollback.restoredCount} 条消息的清理前状态。`);
+                return { rolledBackCleanup: true, rollbackNote: '本次未写入任何数据，已回滚清理' };
+            }
+            logError_ACU('[Manual Refill] 零提交后的清理回滚未完成:', rollback.error, rollback.skippedIndexes);
+            return {
+                rolledBackCleanup: false,
+                rollbackNote: `本次未写入任何数据，但回滚清理未完成（${rollback.error || '未知错误'}），请从聊天备份恢复`,
+            };
+        } catch (error: any) {
+            logError_ACU('[Manual Refill] 零提交后的清理回滚异常:', error);
+            return {
+                rolledBackCleanup: false,
+                rollbackNote: `本次未写入任何数据，但回滚清理异常（${error?.message || String(error)}），请从聊天备份恢复`,
+            };
+        }
+    };
+    // 手动重填失败语义：清理删掉的数据只在「零提交」时可恢复——此时用清理前快照整段回滚并落盘，
+    // 否则 AI 首次调用失败（如 404）会留下「旧数据已删、新数据未写」的净损失（上游 issue #18 第四条）。
+    // 已提交过 bucket 就绝不回滚：那会覆盖已落地的写入，与 provisional bridge 的零提交回滚语义一致。
     // 手动追平/自动填表路径的 staging 汇合失败会自行返回 integrity_failed，不在此回滚。
     const failManualRefillSession = async (failureError: string): Promise<ManualUpdateResult> => {
+        const { rolledBackCleanup, rollbackNote } = await rollbackRefillCleanupOnZeroCommit();
         // 清理失败或 bucket 失败后：运行时快照可能停在中间态，必须按聊天记录里的
         // 已提交事实重新同步，否则界面会显示与持久化结果不一致的数据。
-        // 不回滚、不恢复已删数据；已提交成果保留。
         try {
             await loadAllChatMessages_ACU();
+            // 回滚改写了聊天持久化态：SQLite 运行时是按被清理后的聊天建立的，必须按恢复后的态重建。
+            if (rolledBackCleanup) {
+                const reloadResult = await reloadStorageProvider();
+                if (!reloadResult?.ok) {
+                    logWarn_ACU('[Manual Refill] 回滚清理后重载存储运行时未完成:', reloadResult?.error || reloadResult?.failureCode || '');
+                }
+            }
             await refreshData();
         } catch (refreshError) {
             logWarn_ACU('[Manual Refill] 失败后刷新运行时数据失败:', refreshError);
         }
         return {
             success: false,
-            error: failureError,
+            error: rollbackNote ? `${failureError}（${rollbackNote}）` : failureError,
+            committedBucketCount,
+            committedDataBucketCount,
+            ...(rolledBackCleanup ? { rolledBackCleanup: true } : {}),
         };
     };
     // 跨根 staging 汇合：边界前 bucket 只进入 run 级目标表 overlay（不写聊天 V2 frame），
@@ -4880,7 +5054,17 @@ export async function orchestrateManualUpdate_ACU(
             });
             if (!refillAdmission.allow) {
                 logDebug_ACU(`[手动重填准入] 阻断：${refillAdmission.reason}（refillTarget=${refillTargetIndex}, isolationKey=[${currentIsolationKey || '无标签'}]）。`);
-                return { success: false, error: `手动重填被回放根准入阻断${refillAdmission.reason}` };
+                // [指引] 准入本身是 fail-closed（写目标早于回放根会产生永不回放的历史），**判据不改**；
+                // 这里只把「怎样才能继续」写进面向用户的报错，避免上游反馈里「照报错看不出下一步」的死路感
+                // （上游 issue #18 第六条：报错只给坐标、用户只能反复试参数）。
+                return {
+                    success: false,
+                    error: `手动重填被回放根准入阻断${refillAdmission.reason}`
+                        + '处理办法：本次重填范围的末尾必须不早于上面那条回放根所在的消息。'
+                        + '把「跳过最新回复数」（或表单设置里的「最新层不填表」开关）调小或设为 0——每减 1，范围末尾就往后挪一个 AI 楼层；'
+                        + '范围末尾只由该跳过量决定，改上下文深度不会移动它。'
+                        + '注意：报错里的两个数字都是聊天消息下标（从 0 起计），不是楼层号。',
+                };
             }
 
             // 跨根 staging 判定：重填范围首个目标早于原 full checkpoint 时，
@@ -5028,14 +5212,19 @@ export async function orchestrateManualUpdate_ACU(
                 manualRefillSummarySourceTableKeys = summaryVectorCleanups.map((cleanup) => cleanup.sourceTableKey);
                 // 必须在 clear 之前拍摄 head：范围内 purge 会删掉镜像，模板根会改 C 指纹。
                 summaryVectorRemovalSnapshot = await snapshotManualRefillSummaryVectors_ACU(summaryVectorCleanups);
-                // 破坏性清理不可逆：一旦开始，后续任何失败都不回滚、不恢复已删数据。
+                // 清理成功时 chat-service 把「清理前消息字段快照」交回：零提交失败要用它整段回滚。
+                // 外置向量文件删除同样被推迟——帧回滚后旧 manifest 必须仍能解析到文件。
                 refillCleanupStarted = true;
-                await clearManualRefillSheetDataInRange_ACU(contextScopeIndices, targetKeys);
+                await clearManualRefillSheetDataInRange_ACU(contextScopeIndices, targetKeys, {
+                    onRollbackSnapshot: (handle) => { refillRollbackHandle = handle; },
+                    deferExternalVectorCleanup: (manifests) => { deferredRefillVectorManifests = manifests; },
+                });
             } catch (error: any) {
                 logError_ACU('[Manual Refill] 清理本次范围内选中表旧数据失败:', error);
                 const failureError = error?.message || '手动重填清理本次范围内选中表旧数据失败。';
-                // 清理已部分发生且不可逆：不回滚、不恢复已删数据，但必须按聊天记录里的已提交
-                // 事实重新对齐运行时快照（:4192 契约），否则 SQLite runtime 停在清理中间态。
+                // 清理自身失败时 chat-service 已原位恢复 live chat（快照句柄未交回、也不会落盘），
+                // 因此这里没有可回滚的对象；但仍必须走 failManualRefillSession 对齐运行时快照
+                // （:4192 契约），否则 SQLite runtime 停在清理中间态。
                 return await failManualRefillSession(failureError);
             }
             logDebug_ACU(`[Manual Refill] 已清理 AI 楼层 ${contextScopeIndices.join('、')} 上选中表的 checkpoint 与增量；将在全部重填成功后提交完整单表 checkpoint。`);
@@ -5094,12 +5283,12 @@ export async function orchestrateManualUpdate_ACU(
                 const fullIndexAfterCleanup = getLatestV2FullCheckpointMessageIndex_ACU(liveChatAfterCleanup, currentIsolationKey);
                 if (fullIndexAfterCleanup !== originalFullIndex) {
                     logError_ACU(`[Manual Refill] 清理后原 full checkpoint 位置变化：清理前 #${originalFullIndex}，清理后 #${fullIndexAfterCleanup}；跨根 staging 失去汇合目标。`);
-                    return await failManualRefillSession(`手动重填清理后原 full checkpoint 位置发生变化（清理前 #${originalFullIndex}，清理后 #${fullIndexAfterCleanup}），无法建立跨根 staging 汇合目标；已在 AI 调用前停止。已清理的数据不可恢复，请检查该聊天的 checkpoint 布局后重试。`);
+                    return await failManualRefillSession(`手动重填清理后原 full checkpoint 位置发生变化（清理前 #${originalFullIndex}，清理后 #${fullIndexAfterCleanup}），无法建立跨根 staging 汇合目标；已在 AI 调用前停止。本次未写入任何数据时会自动回滚清理，请检查该聊天的 checkpoint 布局后重试。`);
                 }
                 const fingerprintAfterCleanup = readOriginalFullFrameFingerprint_ACU(liveChatAfterCleanup, currentIsolationKey, originalFullIndex);
                 if (!fingerprintAfterCleanup) {
                     logError_ACU(`[Manual Refill] 清理后原 full checkpoint #${originalFullIndex} 不再是正式 full 根，无法读取指纹。`);
-                    return await failManualRefillSession(`手动重填清理后原 full checkpoint（#${originalFullIndex}）已不存在或不再是正式 full 根，无法建立跨根 staging；已在 AI 调用前停止。已清理的数据不可恢复，请检查该聊天的 checkpoint 布局后重试。`);
+                    return await failManualRefillSession(`手动重填清理后原 full checkpoint（#${originalFullIndex}）已不存在或不再是正式 full 根，无法建立跨根 staging；已在 AI 调用前停止。本次未写入任何数据时会自动回滚清理，请检查该聊天的 checkpoint 布局后重试。`);
                 }
                 stagingRun = createTableFillStagingRunContext_ACU({
                     runId: boundaryPlan.scope.runId,
@@ -5121,13 +5310,13 @@ export async function orchestrateManualUpdate_ACU(
         // 覆盖“首次复检通过 → 所有异步边界 → AI 调用”之间的窗口。显式提供快照即要求保护，
         // 无论是否重填路径，都必须在调用 AI 前 fail-closed。
         // 注意：重填路径执行到这里时，破坏性清理与 reload 已经发生。若 runtime 在此间变化，
-        // 直接 return 会绕过 failManualRefillSession，导致“旧数据已清、新数据未写”的净损失。
-        // 因此重填路径必须走 failManualRefillSession（不回滚、保留删除，按已提交事实对齐运行时）。
+        // 直接 return 会绕过 failManualRefillSession，导致「旧数据已清、新数据未写」的净损失。
+        // 因此重填路径必须走 failManualRefillSession（零提交时回滚清理，已提交时按已提交事实对齐运行时）。
         if (options.executionSnapshot !== undefined) {
             if (!runtimeSheetKeysMatchSnapshot_ACU(manualUpdateSnapshotKeys)) {
                 logWarn_ACU('[Manual Update] runtime 在 AI 调用前一刻变化，已阻止手动更新（快照未匹配）。');
                 if (manualRefillEnabled) {
-                    return await failManualRefillSession('表格运行时在确认期间发生变化，已取消本次手动填表；已清理的数据不可恢复，请确认后重试。');
+                    return await failManualRefillSession('表格运行时在确认期间发生变化，已取消本次手动填表；若本次未写入任何数据，将自动回滚清理，请确认后重试。');
                 }
                 return { success: false, error: '表格运行时在确认期间发生变化，已取消本次手动填表，请确认后重试。' };
             }
@@ -5222,13 +5411,13 @@ export async function orchestrateManualUpdate_ACU(
             // runtime 可能被 purge/表集合变化。必须在 processGroupedRuntimeChunk_ACU
             // 之前最后一次核对确认前快照，否则会把 stale target 带入 AI/持久化链路。
             // 重填路径：破坏性清理已发生，失败必须走 failManualRefillSession
-            // （零提交恢复 snapshot，已保留成果并刷新），不得裸返回。
+            // （零提交回滚清理，已提交则保留成果并刷新），不得裸返回。
             // 普通路径：结构化失败返回。
             if (options.executionSnapshot !== undefined) {
                 if (!runtimeSheetKeysMatchSnapshot_ACU(manualUpdateSnapshotKeys)) {
                     logWarn_ACU(`[Manual Update] runtime 在第 ${chunkIndex} 批 AI 调用前一刻变化，已阻止该批执行（快照未匹配）。`);
                     if (manualRefillEnabled) {
-                        return await failManualRefillSession('表格运行时在确认期间发生变化，已取消本次手动填表；已清理的数据不可恢复，请确认后重试。');
+                        return await failManualRefillSession('表格运行时在确认期间发生变化，已取消本次手动填表；若本次未写入任何数据，将自动回滚清理，请确认后重试。');
                     }
                     return { success: false, error: '表格运行时在确认期间发生变化，已取消本次手动填表，请确认后重试。' };
                 }
@@ -5246,6 +5435,9 @@ export async function orchestrateManualUpdate_ACU(
                         replaceExistingIncremental: false,
                     });
                     committedBucketCount += chunkResult.committedBucketCount;
+                    committedDataBucketCount += chunkResult.committedDataBucketCount;
+                    // 已有提交 ⇒ 本会话不再回滚清理，此时才执行被推迟的外置向量文件删除。
+                    await flushDeferredRefillVectorCleanup();
                     if (!chunkResult.success) {
                         chunkResult.failedGroups.forEach(key => {
                             failedGroups.push({ key, error: chunkResult.error || '手动更新失败或被终止。' });
@@ -5283,6 +5475,8 @@ export async function orchestrateManualUpdate_ACU(
                                 syncAfterCommit: false,
                             });
                             committedBucketCount += preResult.committedBucketCount;
+                            committedDataBucketCount += preResult.committedDataBucketCount;
+                            await flushDeferredRefillVectorCleanup();
                             if (!preResult.success) {
                                 failedGroups.push({ key: group.key, error: preResult.error || '边界前 staging 提交失败。' });
                                 groupFailed = true;
@@ -5313,6 +5507,8 @@ export async function orchestrateManualUpdate_ACU(
                                 replaceExistingIncremental: false,
                             });
                             committedBucketCount += postResult.committedBucketCount;
+                            committedDataBucketCount += postResult.committedDataBucketCount;
+                            await flushDeferredRefillVectorCleanup();
                             if (!postResult.success) {
                                 failedGroups.push({ key: group.key, error: postResult.error || '边界后提交失败。' });
                                 break;
@@ -5330,7 +5526,7 @@ export async function orchestrateManualUpdate_ACU(
                     if (rebaselined.ok === false) {
                         logWarn_ACU(`[Manual Update] ${rebaselined.error}`);
                         if (manualRefillEnabled) {
-                            return await failManualRefillSession(`${rebaselined.error}已清理的数据不可恢复，已提交的批次已保留。`);
+                            return await failManualRefillSession(`${rebaselined.error}已提交的批次已保留；若本次未写入任何数据，将自动回滚清理。`);
                         }
                         return { success: false, error: rebaselined.error };
                     }
@@ -5446,7 +5642,30 @@ export async function orchestrateManualUpdate_ACU(
             logWarn_ACU('自动合并总结检测失败:', e);
         }
 
-        return { success: true, autoMergeTriggered, autoMergeSuccess, checkpointWarning };
+        // 收尾：本次做过破坏性清理却一条数据批次都没写进去（例如范围内没有可填分组、分组全被模板范围挡掉）。
+        // 与失败路径同源处理——回滚清理，避免「旧数据已删、什么都没写」还报成功的净损失。
+        const zeroCommitRollback = await rollbackRefillCleanupOnZeroCommit();
+        if (zeroCommitRollback.rollbackNote && !zeroCommitRollback.rolledBackCleanup) {
+            // 清理需要回滚却没回滚成功：不能报成功，必须让用户按备份恢复。
+            return { success: false, error: zeroCommitRollback.rollbackNote, committedBucketCount, committedDataBucketCount };
+        }
+        if (zeroCommitRollback.rolledBackCleanup) {
+            // 回滚改写了聊天持久化态：运行时是按被清理后的聊天建立的，必须按恢复后的态重建。
+            try {
+                await loadAllChatMessages_ACU();
+                const reloadResult = await reloadStorageProvider();
+                if (!reloadResult?.ok) {
+                    logWarn_ACU('[Manual Refill] 回滚清理后重载存储运行时未完成:', reloadResult?.error || reloadResult?.failureCode || '');
+                }
+                await refreshData();
+            } catch (refreshError) {
+                logWarn_ACU('[Manual Refill] 回滚清理后刷新运行时数据失败:', refreshError);
+            }
+        }
+        return {
+            success: true, autoMergeTriggered, autoMergeSuccess, checkpointWarning, committedBucketCount, committedDataBucketCount,
+            ...(zeroCommitRollback.rolledBackCleanup ? { rolledBackCleanup: true } : {}),
+        };
     } catch (error: any) {
         // 破坏性清理尚未开始：异常原样抛出（可能是普通路径的配置/准入错误，或
         // 发生在清理之前的规划错误），不吞掉，由上层按既有方式处理。
@@ -5455,7 +5674,7 @@ export async function orchestrateManualUpdate_ACU(
         }
         const failureError = error?.message || String(error || '手动更新执行异常。');
         logError_ACU('[Manual Update] 执行过程中发生未处理异常:', error);
-        // 清理已开始：不可逆，不回滚、不恢复已删数据；失败按已提交事实对齐运行时。
+        // 清理已开始：零提交时由 failManualRefillSession 回滚清理，已提交时按已提交事实对齐运行时。
         return await failManualRefillSession(failureError);
     } finally {
         _set_manualExtraHint_ACU('');

@@ -193,6 +193,16 @@ export interface TableCheckpointV2_ACU {
   manualRefillProgress?: ManualRefillProgressV2_ACU;
   migrationProvenance?: TableMigrationProvenanceV1_ACU;
   fallbackProvenance?: ManualRefillTemplateRootProvenanceV1_ACU;
+  /**
+   * Checkpoint 导入恢复时由用户声明的数据覆盖楼层（单位：AI 楼层，1 基）。
+   *
+   * 导入恢复把数据写在该帧所在的最新 AI 楼层，回放只能看到「该帧 filledSheetKeys 覆盖全部表」，
+   * 于是追平进度前沿被算成最新楼层，剩余楼层永远不会被规划（表现为「已追平，无需调用 AI」）。
+   * 该字段是这块快照的进度载体：存在时意为「本次填表只保证覆盖到第 N 楼」，
+   * 追平前沿（table-history 的 lastTrackedUpdateAiFloor）用 N 替代该帧楼层。
+   * 缺省/非法值 = 现行行为（前沿即该帧楼层）。仅 checkpoint 导入恢复路径写入。
+   */
+  restoreUpToAiFloor?: number;
 }
 
 /** 同一 V2 frame 内的单表恢复基底；不承担 mate 或其他根级元数据。 */
@@ -493,6 +503,12 @@ export interface TableMutationLogEntryV2_ACU extends TableMutationEventV2_ACU {
   source: TableMutationSourceV2_ACU;
   targetMessageIndex: number;
   aiFloor: number;
+  /**
+   * 同 `TableCheckpointV2_ACU.restoreUpToAiFloor` 的进度载体：full checkpoint 被降级成
+   * log entry 时（边界轮转）由 downgrade 原样带过来，否则声明会随 checkpoint 一起蒸发、
+   * 追平前沿又跳回该帧楼层（导入声明的修复在轮转后静默失效）。
+   */
+  restoreUpToAiFloor?: number;
   operations: TableMutationOperationV2_ACU[];
   /** 兼容旧 V2 derived patch log；新写入不再使用。 */
   patches?: TablePatchV2_ACU[];

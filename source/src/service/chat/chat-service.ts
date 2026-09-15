@@ -119,6 +119,62 @@ export interface ManualRefillSheetBaselineReplaceResult_ACU {
     error?: string;
 }
 
+/**
+ * 单条消息在「手动重填预清理」之前的字段快照（IsolatedData + Identity 深拷 + 原位恢复表）。
+ * 不透明：只由 messageFieldSnapshot_ACU 产出、由 restoreMessageFieldSnapshot_ACU 消费。
+ */
+export interface ManualRefillMessageFieldSnapshot_ACU {
+    hadIsolatedData: boolean;
+    originalIsolatedData: any;
+    isolatedData: any;
+    hadIdentity: boolean;
+    originalIdentity: any;
+    identity: any;
+    originals: WeakMap<object, any>;
+}
+
+/**
+ * 手动重填破坏性清理的可回滚句柄：清理触及消息的清理前快照 + 消息身份指纹 + 清理实际生效的表键。
+ * 只在清理成功后交给调用方——清理失败时清理内部已自行原位恢复，不需要也不应再回滚。
+ */
+export interface ManualRefillRangeRollbackHandle_ACU {
+    /**
+     * `fingerprint` 是清理前该楼层消息的身份指纹；回滚按它确认「这一楼还是原来那条消息」。
+     * 重填可能耗时数分钟，其间用户可能删除/重掷/滑动消息，届时索引会指向另一条消息——
+     * 那种情况下宁可不恢复该楼，也不能把快照写到别的楼层上。
+     */
+    entries: Array<{ index: number; snapshot: ManualRefillMessageFieldSnapshot_ACU; fingerprint: string }>;
+    /** 清理实际生效的表键（含同显示名别名代与 SQL 物理表名），回滚写事务按它声明写集。 */
+    sheetKeys: string[];
+}
+
+/**
+ * 消息身份指纹：优先取不可变标记 `send_date` / `extra.gen_id`，`id` 放最后 —— `id` 有可能只是
+ * 按位置生成的（本库 pipeline 的派生视图就按位置复刻 `id: idx`，第三方宿主也可能如此），
+ * 那种 id 在删楼后会「同位置不同消息都匹配」，等于没有身份，此时并入正文兜底。
+ * `swipe_id` 缺失同理（换 swipe 承载的是另一份数据）。两者都会让指纹变成「宁可少恢复一两条，
+ * 也不把快照写到另一条消息上」的保守方向。
+ * 已知代价：宿主继续生成（continue/append）会在原位改写 `send_date`，那一层会被判为身份不符而跳过回滚。
+ */
+function buildMessageIdentityFingerprint_ACU(msg: any): string {
+    const stableId = String(msg?.send_date ?? msg?.extra?.gen_id ?? msg?.id ?? '').trim();
+    const positionLikeId = !msg?.send_date && !msg?.extra?.gen_id && /^\d+$/.test(stableId);
+    const hasSwipe = Number.isInteger(msg?.swipe_id);
+    const contentFallback = stableId && hasSwipe && !positionLikeId ? '' : `|mes:${String(msg?.mes ?? '')}`;
+    return `${stableId}|${hasSwipe ? String(msg.swipe_id) : ''}|${msg?.is_user ? 'user' : 'ai'}${contentFallback}`;
+}
+
+/** 手动重填范围清理的可选出口；不提供时保持「清理即终态」的旧语义。 */
+export interface ClearManualRefillSheetDataInRangeOptions_ACU {
+    /** 清理成功时回调，交回可回滚句柄，供「零提交失败」整段回滚。 */
+    onRollbackSnapshot?: (handle: ManualRefillRangeRollbackHandle_ACU) => void;
+    /**
+     * 提供时不在清理内删除外置向量文件，改为把待删 manifest 交给调用方推迟删除。
+     * 清理与删除同拍时，零提交回滚会把帧修好、外置文件却已经没了（帧与外置文件必须一致）。
+     */
+    deferExternalVectorCleanup?: (manifests: any[]) => void;
+}
+
 async function deleteVectorIndexManifestFromTagData_ACU(
     tagData: any,
     options: { deleteExternal?: boolean; onManifest?: (manifest: any) => void } = {},
@@ -532,6 +588,7 @@ function downgradeV2FullCheckpointAtIndex_ACU(chat: any[], isolationKey: string,
         }
     }
     const sheetKeys = Object.keys(fallbackData).filter(key => key.startsWith('sheet_'));
+    const declaredRestoreFloor = Number((checkpoint as any).restoreUpToAiFloor);
     const downgradeEntry: TableMutationLogEntryV2_ACU = {
         seq,
         entryId: `downgraded-checkpoint-${messageIndex}-${checkpoint.createdAt || Date.now()}`,
@@ -539,6 +596,9 @@ function downgradeV2FullCheckpointAtIndex_ACU(chat: any[], isolationKey: string,
         source: 'system',
         targetMessageIndex: messageIndex,
         aiFloor: countAiFloorAtMessage_ACU(chat, messageIndex),
+        // 导入声明的覆盖楼层必须随降级一起保留：丢掉它等于把前沿退回该帧楼层，
+        // 「已追平」的误报会在下一次边界轮转后复现（上游 issue #18 第五条）。
+        ...(Number.isInteger(declaredRestoreFloor) && declaredRestoreFloor > 0 ? { restoreUpToAiFloor: declaredRestoreFloor } : {}),
         filledSheetKeys: sheetKeys,
         changedSheetKeys: sheetKeys,
         groupKeys: [],
@@ -2472,15 +2532,7 @@ function applyCandidateMessageFields_ACU(liveMessage: any, candidateMessage: any
     }
 }
 
-function messageFieldSnapshot_ACU(msg: any): {
-    hadIsolatedData: boolean;
-    originalIsolatedData: any;
-    isolatedData: any;
-    hadIdentity: boolean;
-    originalIdentity: any;
-    identity: any;
-    originals: WeakMap<object, any>;
-} {
+function messageFieldSnapshot_ACU(msg: any): ManualRefillMessageFieldSnapshot_ACU {
     const originals = new WeakMap<object, any>();
     return {
         hadIsolatedData: Object.prototype.hasOwnProperty.call(msg, 'TavernDB_ACU_IsolatedData'),
@@ -2532,7 +2584,7 @@ function restoreMessageFieldValueInPlace_ACU(target: any, snapshot: any, origina
     return restoreTarget;
 }
 
-function restoreMessageFieldSnapshot_ACU(msg: any, snapshot: ReturnType<typeof messageFieldSnapshot_ACU>): void {
+function restoreMessageFieldSnapshot_ACU(msg: any, snapshot: ManualRefillMessageFieldSnapshot_ACU): void {
     if (!msg) return;
     if (snapshot.hadIsolatedData) {
         msg.TavernDB_ACU_IsolatedData = snapshot.originalIsolatedData;
@@ -2961,7 +3013,11 @@ export async function replaceManualRefillSheetBaselineInRangeAtomic_ACU(
     });
 }
 
-async function clearManualRefillSheetDataInRangeCore_ACU(targetMessageIndices: number[], targetSheetKeys: string[] | null = null): Promise<number> {
+async function clearManualRefillSheetDataInRangeCore_ACU(
+    targetMessageIndices: number[],
+    targetSheetKeys: string[] | null = null,
+    options: ClearManualRefillSheetDataInRangeOptions_ACU = {},
+): Promise<number> {
     if (!targetMessageIndices || targetMessageIndices.length === 0) return 0;
     if (!Array.isArray(targetSheetKeys) || targetSheetKeys.length === 0) {
         throw new Error('手动重填范围清理必须指定目标表。');
@@ -2976,8 +3032,12 @@ async function clearManualRefillSheetDataInRangeCore_ACU(targetMessageIndices: n
     let clearedCount = 0;
 
     const normalizedIndices = targetMessageIndices.filter((idx): idx is number => Number.isInteger(idx) && idx >= 0 && idx < chat.length);
-    const snapshots = new Map<number, ReturnType<typeof messageFieldSnapshot_ACU>>();
-    normalizedIndices.forEach(idx => snapshots.set(idx, messageFieldSnapshot_ACU(chat[idx])));
+    const snapshots = new Map<number, ManualRefillMessageFieldSnapshot_ACU>();
+    const fingerprints = new Map<number, string>();
+    normalizedIndices.forEach(idx => {
+        snapshots.set(idx, messageFieldSnapshot_ACU(chat[idx]));
+        fingerprints.set(idx, buildMessageIdentityFingerprint_ACU(chat[idx]));
+    });
     // 候选克隆上执行清理：strict save 失败时 live chat 保持原位，不产生半写清理。
     // 计划 §5.5：清理自身失败不半写；只有 strict save 成功才把候选改动 apply 到 live。
     const vectorManifestsToDeleteAfterCommit: any[] = [];
@@ -3010,8 +3070,19 @@ async function clearManualRefillSheetDataInRangeCore_ACU(targetMessageIndices: n
             // 由调用方（orchestrator）把清理视为失败处理（保留删除语义，不恢复已删数据）。
             normalizedIndices.forEach(idx => applyCandidateMessageFields_ACU(chat[idx], candidateChat[idx]));
             await saveChatToHostStrict_ACU();
-            // strict save 成功后才删除外置向量文件；清理失败仅记录警告，不影响已提交清理。
-            await cleanupVectorIndexManifestsAfterCommit_ACU(vectorManifestsToDeleteAfterCommit);
+            // 外置向量文件删除时机：调用方要求推迟时不在此删除（它在确定不回滚之后自己删），
+            // 否则同拍删除会让零提交回滚留下「帧恢复了、外置文件没了」的不一致。
+            if (options.deferExternalVectorCleanup) {
+                options.deferExternalVectorCleanup(vectorManifestsToDeleteAfterCommit);
+            } else {
+                // strict save 成功后才删除外置向量文件；清理失败仅记录警告，不影响已提交清理。
+                await cleanupVectorIndexManifestsAfterCommit_ACU(vectorManifestsToDeleteAfterCommit);
+            }
+            // 成功才交回句柄：清理失败路径内部已原位恢复，交出去只会让调用方多写一次等价的聊天。
+            options.onRollbackSnapshot?.({
+                entries: normalizedIndices.map(index => ({ index, snapshot: snapshots.get(index)!, fingerprint: fingerprints.get(index) || '' })),
+                sheetKeys: [...targetAliases.sheetKeys],
+            });
             logDebug_ACU(`[手动重填预清理] 共清理 ${clearedCount} 条消息的选中表范围内旧数据，聊天已严格保存。`);
         }
         return clearedCount;
@@ -3024,7 +3095,11 @@ async function clearManualRefillSheetDataInRangeCore_ACU(targetMessageIndices: n
     }
 }
 
-export async function clearManualRefillSheetDataInRange_ACU(targetMessageIndices: number[], targetSheetKeys: string[] | null = null): Promise<number> {
+export async function clearManualRefillSheetDataInRange_ACU(
+    targetMessageIndices: number[],
+    targetSheetKeys: string[] | null = null,
+    options: ClearManualRefillSheetDataInRangeOptions_ACU = {},
+): Promise<number> {
     if (!Array.isArray(targetSheetKeys) || targetSheetKeys.length === 0) {
         throw new Error('手动重填范围清理必须指定目标表。');
     }
@@ -3035,7 +3110,72 @@ export async function clearManualRefillSheetDataInRange_ACU(targetMessageIndices
         isolationKey: getCurrentIsolationKey_ACU(),
         writeSet,
         maintenanceMode: 'exclusive',
-    }, () => clearManualRefillSheetDataInRangeCore_ACU(targetMessageIndices, targetSheetKeys));
+    }, () => clearManualRefillSheetDataInRangeCore_ACU(targetMessageIndices, targetSheetKeys, options));
+}
+
+/**
+ * 手动重填「零提交失败」后的原子回滚：把清理前的消息字段快照写回聊天并严格保存。
+ *
+ * 只允许在没有 bucket 提交过时调用：已提交成果必须保留，整段回滚会覆盖它
+ * （与 provisional bridge 的零提交回滚语义一致）。
+ * 原位恢复而非替换对象：帧对象可能已被其它模块持有引用（与清理自身的失败恢复同策略）。
+ * 外置向量文件无需恢复——调用方在清理阶段已把它们的删除推迟到「确定不回滚」之后。
+ *
+ * 逐条按身份指纹校验后才恢复：聊天在重填期间被改动（删楼/重掷/滑动）时索引会错位，
+ * 此时跳过该条并如实报告 partial 失败——成功只在每条都恢复到原消息时才算成立（不得谎报）。
+ */
+export async function rollbackManualRefillRangeSnapshotAtomic_ACU(
+    handle: ManualRefillRangeRollbackHandle_ACU,
+): Promise<{ success: boolean; restoredCount: number; skippedIndexes: number[]; error?: string }> {
+    const entries = Array.isArray(handle?.entries) ? handle.entries : [];
+    if (entries.length === 0) return { success: true, restoredCount: 0, skippedIndexes: [] };
+    const chat = getChatArray_ACU();
+    if (!chat || chat.length === 0) {
+        return { success: false, restoredCount: 0, skippedIndexes: entries.map(entry => entry.index), error: '聊天记录为空，无法回滚手动重填清理。' };
+    }
+    const writeSet = Array.isArray(handle.sheetKeys) && handle.sheetKeys.length > 0
+        ? handle.sheetKeys.map(sheetKey => ({ kind: 'sheet' as const, sheetKey }))
+        : [{ kind: 'all' as const }];
+    return runTableWriteTransaction_ACU({
+        source: 'system_cleanup',
+        reason: 'rollbackManualRefillSheetDataInRange',
+        isolationKey: getCurrentIsolationKey_ACU(),
+        writeSet,
+        maintenanceMode: 'exclusive',
+    }, async () => {
+        let restoredCount = 0;
+        const skippedIndexes: number[] = [];
+        for (const entry of entries) {
+            const message = chat[entry.index];
+            // 清理后外部改楼/截断会让索引失真：身份不符一律不恢复，宁可少恢复也不能写错楼层。
+            const fingerprintMatches = !!message
+                && !message.is_user
+                && buildMessageIdentityFingerprint_ACU(message) === entry.fingerprint;
+            if (!fingerprintMatches) {
+                skippedIndexes.push(entry.index);
+                continue;
+            }
+            restoreMessageFieldSnapshot_ACU(message, entry.snapshot);
+            restoredCount += 1;
+        }
+        const allRestored = skippedIndexes.length === 0;
+        try {
+            await saveChatToHostStrict_ACU();
+            logDebug_ACU(`[手动重填回滚] 已按清理前快照恢复 ${restoredCount} 条消息的选中表数据并严格保存。`);
+            return allRestored
+                ? { success: true, restoredCount, skippedIndexes }
+                : {
+                    success: false,
+                    restoredCount,
+                    skippedIndexes,
+                    error: `聊天在重填期间被改动：已恢复 ${restoredCount} 条，跳过 ${skippedIndexes.length} 个楼层（${skippedIndexes.join('、')}）——这些楼层不是清理时的原消息，未恢复以免把快照写到错误楼层上。`,
+                };
+        } catch (error: any) {
+            // 保存失败时内存已是恢复态、聊天文件仍是清理态：如实报错，由调用方提示用户按备份恢复，
+            // 绝不在这里二次改写帧（没有清理态快照，改写只会造成更深的偏差）。
+            return { success: false, restoredCount, skippedIndexes, error: error?.message || String(error || '手动重填清理回滚保存失败。') };
+        }
+    });
 }
 
 function purgeTargetSheetKeysFromMessage_ACU(msg: any, targetSheetKeys: string[], _messageIndex: number): boolean {

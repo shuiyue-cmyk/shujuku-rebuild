@@ -348,6 +348,18 @@ async function clickDialogCheckbox(label: string): Promise<void> {
   await Promise.resolve();
 }
 
+/** 导入 Checkpoint 的可选「覆盖到第几楼」步骤：留空 → 不声明，填值 → 声明该楼层。 */
+async function submitCheckpointFloorPrompt(value: string): Promise<void> {
+  await Promise.resolve();
+  const layer = document.querySelector<HTMLElement>('.acu-dialog-layer');
+  expect(layer).not.toBeNull();
+  const input = layer!.querySelector<HTMLInputElement>('.acu-dialog__field input');
+  expect(input).not.toBeNull();
+  input!.value = value;
+  input!.dispatchEvent(new Event('input', { bubbles: true }));
+  await clickDialogButton('下一步');
+}
+
 describe('DataMgmtPage', () => {
   it('隐藏旧数据管理入口，仅保留备份 Checkpoint 与删除清理面板', async () => {
     const { mount } = await mountDataMgmtPage();
@@ -856,13 +868,60 @@ describe('DataMgmtPage', () => {
     await new Promise(r => setTimeout(r, 0));
 
     expect(parseCheckpoint).toHaveBeenCalledWith('{}');
+    // 第一步是可选覆盖楼层声明：不留空也可以继续，此阶段绝不触发恢复。
+    expect(document.querySelector('.acu-dialog-layer')?.textContent).toContain('这份数据覆盖到第几楼');
+    expect(restoreCheckpoint).not.toHaveBeenCalled();
+
+    await submitCheckpointFloorPrompt('');
     expect(document.querySelector('.acu-dialog-layer')?.textContent).toContain('恢复当前聊天 Checkpoint');
     expect(document.querySelector('.acu-dialog-layer')?.textContent).toContain('来源模式：native；目标模式：native');
     expect(document.querySelector('.acu-dialog-layer')?.textContent).toContain('全部 AI 楼层、所有隔离标识');
     expect(document.querySelector('.acu-dialog-layer')?.textContent).toContain('当前激活隔离键的最新 AI 楼层');
     expect(document.querySelector('.acu-dialog-layer')?.textContent).toContain('后续更新将使用该模板');
     expect(document.querySelector('.acu-dialog-layer')?.textContent).toContain('全局模板和聊天正文不变');
+    expect(document.querySelector('.acu-dialog-layer')?.textContent).toContain('未声明覆盖楼层');
     expect(restoreCheckpoint).not.toHaveBeenCalled();
+
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('导入 Checkpoint 的覆盖楼层声明两向传递：留空不声明、填值声明该楼层、非法值拒绝执行', async () => {
+    const { mount, parseCheckpoint, restoreCheckpoint } = await mountDataMgmtPage();
+    const file = new File(['{}'], 'checkpoint.json', { type: 'application/json' });
+    Object.defineProperty(FileReader.prototype, 'readAsText', {
+      configurable: true,
+      value: function(this: FileReader) {
+        Object.defineProperty(this, 'result', { configurable: true, value: '{}' });
+        this.onload?.(new ProgressEvent('load'));
+      },
+    });
+    const pickFile = async () => {
+      const input = Array.from(document.querySelectorAll<HTMLInputElement>('.acu-v2-data-mgmt-page__checkpoint-section input[type="file"]'))[0];
+      Object.defineProperty(input!, 'files', { configurable: true, value: [file] });
+      input!.dispatchEvent(new Event('change', { bubbles: true }));
+      await new Promise(r => setTimeout(r, 0));
+    };
+
+    // 不填 ⇒ 与旧行为一致：不声明覆盖楼层
+    await pickFile();
+    await submitCheckpointFloorPrompt('');
+    await clickDialogButton('恢复 Checkpoint');
+    expect(restoreCheckpoint).toHaveBeenLastCalledWith(expect.anything(), { restoredUpToAiFloor: undefined });
+
+    // 填了 ⇒ 声明该楼层，确认文案同步说明追平起点
+    restoreCheckpoint.mockClear();
+    await pickFile();
+    await submitCheckpointFloorPrompt('91');
+    expect(document.querySelector('.acu-dialog-layer')?.textContent).toContain('已声明数据只覆盖到第 91 楼：恢复后追平会从第 92 楼开始规划');
+    await clickDialogButton('恢复 Checkpoint');
+    expect(restoreCheckpoint).toHaveBeenLastCalledWith(expect.anything(), { restoredUpToAiFloor: 91 });
+
+    // 非法值 ⇒ 不执行恢复
+    restoreCheckpoint.mockClear();
+    await pickFile();
+    await submitCheckpointFloorPrompt('abc');
+    expect(restoreCheckpoint).not.toHaveBeenCalled();
+    expect(parseCheckpoint).toHaveBeenCalledTimes(3);
 
     mount.__resetAcuV2MountForTests();
   });
@@ -886,6 +945,7 @@ describe('DataMgmtPage', () => {
     Object.defineProperty(input!, 'files', { configurable: true, value: [file] });
     input!.dispatchEvent(new Event('change', { bubbles: true }));
     await new Promise(r => setTimeout(r, 0));
+    await submitCheckpointFloorPrompt('');
     await clickDialogButton('恢复 Checkpoint');
     expect(document.querySelector('.acu-v2-toast--success')?.textContent).toContain('实际存储：native');
 
@@ -897,6 +957,7 @@ describe('DataMgmtPage', () => {
     Object.defineProperty(partialInput!, 'files', { configurable: true, value: [file] });
     partialInput!.dispatchEvent(new Event('change', { bubbles: true }));
     await new Promise(r => setTimeout(r, 0));
+    await submitCheckpointFloorPrompt('');
     await clickDialogButton('恢复 Checkpoint');
     expect(document.querySelector('.acu-v2-toast--warning')?.textContent).toContain('部分成功');
     expect(document.querySelector('.acu-v2-toast--warning')?.textContent).toContain('运行时数据不一致');
@@ -913,6 +974,7 @@ describe('DataMgmtPage', () => {
     Object.defineProperty(fallbackInput!, 'files', { configurable: true, value: [file] });
     fallbackInput!.dispatchEvent(new Event('change', { bubbles: true }));
     await new Promise(r => setTimeout(r, 0));
+    await submitCheckpointFloorPrompt('');
     await clickDialogButton('恢复 Checkpoint');
     const warningToasts = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-toast--warning'));
     expect(warningToasts.at(-1)?.textContent).toContain('目标设置为 SQLite，实际存储 fallback 为 native');
@@ -922,6 +984,7 @@ describe('DataMgmtPage', () => {
     Object.defineProperty(missingConditionInput!, 'files', { configurable: true, value: [file] });
     missingConditionInput!.dispatchEvent(new Event('change', { bubbles: true }));
     await new Promise(r => setTimeout(r, 0));
+    await submitCheckpointFloorPrompt('');
     await clickDialogButton('恢复 Checkpoint');
     const finalWarningToasts = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-toast--warning'));
     expect(finalWarningToasts.at(-1)?.textContent).toContain('恢复后置条件缺失');
@@ -931,6 +994,7 @@ describe('DataMgmtPage', () => {
     Object.defineProperty(failedInput!, 'files', { configurable: true, value: [file] });
     failedInput!.dispatchEvent(new Event('change', { bubbles: true }));
     await new Promise(r => setTimeout(r, 0));
+    await submitCheckpointFloorPrompt('');
     await clickDialogButton('恢复 Checkpoint');
     expect(document.querySelector('.acu-v2-toast--error')?.textContent).toContain('恢复 Checkpoint 失败：strict failed');
 

@@ -39,6 +39,30 @@ const INJECTION_TARGET_RESOLVE_TIMEOUT_MS = 1500;
 const RESOLVE_TIMEOUT: unique symbol = Symbol('injection-target-resolve-timeout');
 
 /**
+ * 追平收尾文案里的批次计数。
+ * committedBucketCount 含「零 operation 的伪提交」（persist 对零 operation + 有填表事件仍返回
+ * saved:true，帧里只有进度/事件）：只有 committedDataBucketCount 能证明真的写了表数据，
+ * 否则会把伪提交说成「已保留数据」，让用户以为数据已经补上（上游 issue #18 第三条）。
+ */
+function describeCommittedBuckets(
+  result: { committedBucketCount?: number; committedDataBucketCount?: number },
+  completed: boolean,
+): string {
+  const committedBuckets = result.committedBucketCount || 0;
+  const dataBuckets = result.committedDataBucketCount || 0;
+  const progressOnlySuffix = committedBuckets > dataBuckets ? `（另有 ${committedBuckets - dataBuckets} 个仅落进度的 bucket）` : '';
+  if (dataBuckets === 0 && committedBuckets > 0) {
+    return completed
+      ? `未写入数据（只落了进度，${committedBuckets} 个已提交 bucket）`
+      : `未写入数据（只落了进度）`;
+  }
+  if (dataBuckets === 0) return completed ? '未写入表格数据' : '未写入任何数据';
+  return completed
+    ? `共写入 ${dataBuckets} 个数据 bucket${progressOnlySuffix}`
+    : `已保留 ${dataBuckets} 个已写入数据的 bucket${progressOnlySuffix}`;
+}
+
+/**
  * 确认弹窗用的世界书注入目标描述：大规模历史回填会一次生成上百条 TavernDB 条目，
  * 用户必须在确认前看到它们将写入哪本世界书（默认是角色卡绑定的主世界书，而不是
  * 用户新建的外挂数据库世界书）。解析失败或超时不阻断确认流程，只降级为提示文案。
@@ -463,7 +487,7 @@ export function useManualUpdate(): ManualUpdateState {
       const injectionTargetLabel = await describeInjectionTargetForConfirm();
       const confirmed = await dialogStore.confirm({
         title: '执行手动填表',
-        message: `即将执行手动填表。\n\n当前 full checkpoint：${checkpointFloorsLabel.value}\n本次重填范围：${manualRefillRangeLabel.value}\n选中表：${selectedSheetSummary.value}\n世界书注入目标：${injectionTargetLabel}（填表结果会写入该世界书的 TavernDB 条目）\n\n高风险操作：系统会先删除本次重填范围内选中表的 checkpoint 与 V2 增量日志，再以清理后的状态作为填表基底重新填写，最后写入新的单表 checkpoint。\n如果被删除的 checkpoint 是这些表唯一的数据基线，此前楼层的表格数据将无法恢复。\n\n范围外的 checkpoint、范围外聊天记录的表格数据和未选中的表不会被删除。执行失败或中途终止时不会回滚：已清理的旧数据不会恢复，已成功提交的批次会保留，运行时会按聊天记录中的已提交结果重新对齐。`,
+        message: `即将执行手动填表。\n\n当前 full checkpoint：${checkpointFloorsLabel.value}\n本次重填范围：${manualRefillRangeLabel.value}\n选中表：${selectedSheetSummary.value}\n世界书注入目标：${injectionTargetLabel}（填表结果会写入该世界书的 TavernDB 条目）\n\n高风险操作：系统会先删除本次重填范围内选中表的 checkpoint 与 V2 增量日志，再以清理后的状态作为填表基底重新填写，最后写入新的单表 checkpoint。\n如果被删除的 checkpoint 是这些表唯一的数据基线，此前楼层的表格数据将无法恢复。\n\n范围外的 checkpoint、范围外聊天记录的表格数据和未选中的表不会被删除。执行失败或中途终止时：本次只要提交过任何批次（含只落了进度、未写入数据的批次）就不会回滚——已清理的旧数据不会恢复，运行时会按聊天记录中的已提交结果重新对齐；只有本次一个批次都没提交时，才会自动回滚清理并恢复被删除的旧数据。`,
         dangerMessage: checkpointRiskMessage.value || undefined,
         confirmLabel: '确认并继续',
         cancelLabel: '取消',
@@ -528,15 +552,22 @@ export function useManualUpdate(): ManualUpdateState {
             executionSnapshot: { sheetKeys: snapshotRuntimeKeys },
           },
         );
+      // 零提交时 service 层已回滚清理（失败路径与「清理了却一条数据都没写」的收尾路径都会置位）：
+      // 必须显式告诉用户数据没有丢，否则提示会被读成「旧数据已被清掉」。
+      const rollbackNote = result.rolledBackCleanup ? '（本次未写入任何数据，已回滚清理。）' : '';
+      // 成功+回滚时不能说「完成」：本次一个数据批次都没写进去，只是把删掉的旧数据还回来了。
+      const successText = result.rolledBackCleanup
+        ? '手动填表未写入任何数据，已回滚清理。'
+        : `${result.autoMergeTriggered
+            ? `手动填表完成;自动合并总结${result.autoMergeSuccess ? '已完成' : '未完成'}。`
+            : '手动填表完成。'}`;
       finishToast(
-        result.success ? (result.checkpointWarning ? 'warning' : 'success') : (abortRequested || result.error?.includes('终止') ? 'warning' : 'error'),
+        result.success ? (result.checkpointWarning || result.rolledBackCleanup ? 'warning' : 'success') : (abortRequested || result.error?.includes('终止') ? 'warning' : 'error'),
         result.success
-          ? `${result.autoMergeTriggered
-              ? `手动填表完成;自动合并总结${result.autoMergeSuccess ? '已完成' : '未完成'}。`
-              : '手动填表完成。'}${result.checkpointWarning
+          ? `${successText}${result.rolledBackCleanup ? '' : rollbackNote}${result.checkpointWarning
                 ? ` 但 AI 楼层保留边界 checkpoint 建立失败：${result.checkpointWarning}`
                 : ''}`
-          : (abortRequested ? '手动填表任务已由用户终止。' : (result.error || '手动填表失败。')),
+          : (abortRequested ? `手动填表任务已由用户终止。${rollbackNote}` : `${result.error || '手动填表失败。'}${rollbackNote}`),
       );
     } catch (error: any) {
       finishToast('error', error?.message || '手动填表执行异常。');
@@ -665,9 +696,9 @@ export function useManualUpdate(): ManualUpdateState {
       } else if (result.outcome === 'blocked') {
         finishToast('error', result.error || '手动追平已在调用 AI 前阻止：V2 存储锚点无法安全修复。');
       } else if (result.outcome === 'stopped' || catchUpAbortController.signal.aborted) {
-        finishToast('warning', `手动追平已终止；已保留 ${result.committedBucketCount || 0} 个已提交 bucket。`);
+        finishToast('warning', `手动追平已终止；${describeCommittedBuckets(result, false)}。`);
       } else if (result.success) {
-        finishToast('success', `手动追平完成，共提交 ${result.committedBucketCount || 0} 个 bucket。`);
+        finishToast('success', `手动追平完成，${describeCommittedBuckets(result, true)}。`);
       } else {
         finishToast('error', result.error || '手动追平失败。');
       }

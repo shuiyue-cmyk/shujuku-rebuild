@@ -121,7 +121,6 @@ async function mountDashboardPage(
     chatFileIdentifier?: string;
     developerOptionsEnabled?: boolean;
     warnLogEnabled?: boolean;
-    failStorageSwitch?: boolean;
     historyState?: Record<string, unknown>;
     templateData?: Record<string, unknown> | null;
     failHistory?: boolean;
@@ -242,12 +241,6 @@ async function mountDashboardPage(
   vi.doMock("../../../src/service/table/storage-mode", () => ({
     getCurrentStorageMode: () => settings.storageMode,
     isSqliteMode: () => settings.storageMode === "sqlite",
-  }));
-  vi.doMock("../../../src/service/table/table-storage-strategy", () => ({
-    switchStorageMode: vi.fn(async (mode: string) => {
-      if (options.failStorageSwitch) throw new Error("switch failed");
-      settings.storageMode = mode;
-    }),
   }));
   vi.doMock("../../../src/service/vector/vector-memory-config", () => ({
     getCurrentVectorMemoryConfig_ACU: () => settings.vectorMemoryConfig || {},

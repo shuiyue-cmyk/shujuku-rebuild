@@ -219,7 +219,6 @@ async function mountFormFillPage(
   }));
   vi.doMock('../../../src/service/table/table-storage-strategy', () => ({
     reloadStorageProvider: vi.fn(async () => {}),
-    switchStorageMode: vi.fn(async (mode: string) => { settings.storageMode = mode; }),
   }));
   vi.doMock('../../../src/service/table/update-orchestrator', () => ({
     orchestrateManualUpdate_ACU: orchestrate,
@@ -840,8 +839,9 @@ describe('FormFillPage · 手动填表面板', () => {
     expect(dialogText).toContain('会先删除本次重填范围内选中表的 checkpoint 与 V2 增量日志');
     expect(dialogText).toContain('此前楼层的表格数据将无法恢复');
     expect(dialogText).toContain('范围外的 checkpoint、范围外聊天记录的表格数据和未选中的表不会被删除');
-    // orchestrator 的失败语义是不回滚：文案不得再承诺回滚，且要显示世界书注入目标。
-    expect(dialogText).toContain('执行失败或中途终止时不会回滚');
+    // 零提交回滚语义：本次提交过任何批次（含只落进度的伪提交）就不回滚；一个批次都没提交才整段回滚清理。
+    expect(dialogText).toContain('本次只要提交过任何批次（含只落了进度、未写入数据的批次）就不会回滚');
+    expect(dialogText).toContain('只有本次一个批次都没提交时，才会自动回滚清理并恢复被删除的旧数据');
     expect(dialogText).not.toContain('会回滚到本次操作前的状态');
     expect(dialogText).toContain('世界书注入目标：角色卡绑定世界书 · CharBookFF');
     expect(dialogText).not.toContain('第二次破坏性确认');
@@ -861,6 +861,44 @@ describe('FormFillPage · 手动填表面板', () => {
       onProgress: expect.any(Function),
     }));
     expect(manualExtraHintSetter).not.toHaveBeenCalled();
+
+    mount.__resetAcuV2MountForTests();
+  });
+
+  // 上游 issue #18 第四条：零提交失败时 service 已回滚清理并落盘，toast 必须如实告知。
+  it('手动填表零提交失败时提示已回滚清理', async () => {
+    const { mount, orchestrate } = await mountFormFillPage();
+    orchestrate.mockResolvedValueOnce({ success: false, error: '模型 404：API 不可用。', rolledBackCleanup: true });
+
+    const button = Array.from(document.querySelectorAll('button'))
+      .find(btn => btn.textContent?.includes('执行手动填表')) as HTMLButtonElement;
+    button.click();
+    await waitForDialogLayer();
+    await clickDialogButton('确认并继续');
+    await new Promise(r => setTimeout(r, 0));
+
+    const rolledBackToast = document.querySelector('.acu-toast-viewport')?.textContent || '';
+    expect(rolledBackToast).toContain('模型 404：API 不可用。');
+    expect(rolledBackToast).toContain('已回滚清理');
+
+    mount.__resetAcuV2MountForTests();
+  });
+
+  // 已提交过批次时 service 不回滚（成果必须保留），UI 不得再声称回滚过。
+  it('手动填表已提交后失败时不提示回滚', async () => {
+    const { mount, orchestrate } = await mountFormFillPage();
+    orchestrate.mockResolvedValueOnce({ success: false, error: '模型 404：API 不可用。' });
+
+    const button = Array.from(document.querySelectorAll('button'))
+      .find(btn => btn.textContent?.includes('执行手动填表')) as HTMLButtonElement;
+    button.click();
+    await waitForDialogLayer();
+    await clickDialogButton('确认并继续');
+    await new Promise(r => setTimeout(r, 0));
+
+    const keptToast = document.querySelector('.acu-toast-viewport')?.textContent || '';
+    expect(keptToast).toContain('模型 404：API 不可用。');
+    expect(keptToast).not.toContain('已回滚清理');
 
     mount.__resetAcuV2MountForTests();
   });
@@ -1133,7 +1171,58 @@ describe('FormFillPage · 手动填表面板', () => {
 
     releaseCatchUp();
     await new Promise(r => setTimeout(r, 0));
-    expect(document.querySelector('.acu-toast-viewport')?.textContent || '').toContain('已保留 1 个已提交 bucket');
+    // 契约变更（issue #18 第三条）：committedBucketCount=1 但没有 committedDataBucketCount
+    // 证据时只是「零 operation 伪提交」，文案不得再说「已保留数据」。
+    const stoppedToastText = document.querySelector('.acu-toast-viewport')?.textContent || '';
+    expect(stoppedToastText).toContain('手动追平已终止');
+    expect(stoppedToastText).toContain('未写入数据（只落了进度）');
+    expect(stoppedToastText).not.toContain('已保留 1 个已提交 bucket');
+
+    mount.__resetAcuV2MountForTests();
+  });
+
+  // 上游 issue #18 第三条：计数文案必须区分「真的写了数据」与「零 operation 伪提交（只落进度）」。
+  it('追平完成文案按数据批次计数', async () => {
+    const { mount, orchestrateCatchUp } = await mountFormFillPage();
+    orchestrateCatchUp.mockResolvedValueOnce({
+      success: true,
+      outcome: 'complete',
+      committedBucketCount: 2,
+      committedDataBucketCount: 2,
+    });
+    const button = Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
+      .find(btn => btn.textContent?.includes('一键追平所选表未填楼层'))!;
+
+    button.click();
+    await new Promise(r => setTimeout(r, 0));
+    await clickDialogButton('确认追平');
+    await new Promise(r => setTimeout(r, 0));
+
+    const dataToastText = document.querySelector('.acu-toast-viewport')?.textContent || '';
+    expect(dataToastText).toContain('手动追平完成，共写入 2 个数据 bucket');
+
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('追平两个 bucket 都是零 operation 伪提交时如实说未写入数据', async () => {
+    const { mount, orchestrateCatchUp } = await mountFormFillPage();
+    orchestrateCatchUp.mockResolvedValueOnce({
+      success: true,
+      outcome: 'complete',
+      committedBucketCount: 2,
+      committedDataBucketCount: 0,
+    });
+    const button = Array.from(document.querySelectorAll<HTMLButtonElement>('button'))
+      .find(btn => btn.textContent?.includes('一键追平所选表未填楼层'))!;
+
+    button.click();
+    await new Promise(r => setTimeout(r, 0));
+    await clickDialogButton('确认追平');
+    await new Promise(r => setTimeout(r, 0));
+
+    const pseudoToastText = document.querySelector('.acu-toast-viewport')?.textContent || '';
+    expect(pseudoToastText).toContain('未写入数据（只落了进度，2 个已提交 bucket）');
+    expect(pseudoToastText).not.toContain('共写入 2 个数据 bucket');
 
     mount.__resetAcuV2MountForTests();
   });

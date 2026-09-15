@@ -138,7 +138,9 @@ const RULES: HintRule[] = [
   },
   {
     id: 'http-429',
-    test: /\b429\b|rate[ _-]?limit|too many requests|quota|insufficient (balance|funds)|exceeded your current|resource[ _-]?exhausted|请求过于频繁|限流|额度不足|余额不足|欠费|配额/,
+    // 裸 `quota` 只在**不**是「字段名带 quota、值为 false」形态时才命中：中转站错误体常把
+    // `quota_error:false` / `"quota_error": false` 原样回显，此前会把 HTTP 400 误报成限流/余额不足。
+    test: /\b429\b|rate[ _-]?limit|too many requests|quota(?![\w-]*["']?\s*[:=]\s*false)|insufficient (balance|funds)|exceeded your current|resource[ _-]?exhausted|请求过于频繁|限流|额度不足|余额不足|欠费|配额/,
     summary: '请求过于频繁被限流，或账户额度 / 余额已用完（429）。',
     steps: [
       '先等 1–2 分钟再重试；短时间内连续重试只会让限流更久。',
@@ -577,11 +579,33 @@ const RULES: HintRule[] = [
 ];
 
 /**
+ * V8 栈帧行：`    at fn (file:line:col)` / `    at file:line:col` / `    at fn (native)`。
+ * 位置段要求「先有路径样式的 `./\\` 再跟 `:行:列`」，且允许路径含空格/CJK（`at Foo (/x/my app/a.js:1:1)`）：
+ * 收紧过头会让真栈帧漏剥、函数名继续误触发关键词规则；放宽过头则会把 `at 12:34:56` 这类正文行也吃掉。
+ * 已知漏剥（都无插件函数名，不影响本规则要修的那类误报）：`at <anonymous>:1:1`、`at eval (eval:1:1)`、
+ * 以及 Chromium 合并 eval 帧（形如 `at eval (eval at <anonymous> (url:1:1), <anonymous>:1:1)`，括号嵌套）。
+ */
+const STACK_FRAME_LINE_RE = /^\s*at\s+(?:async\s+)?(?:.*?\s+\()?(?:[^()]*[./\\][^()]*:\d+:\d+|native)\)?\s*$/;
+
+/**
+ * 去掉 Error 合并进来的栈帧行（`    at foo (url:1:2)`）。
+ * 日志缓冲会把 Error 的 stack 并进 message（见 shared/log-buffer 的 Error 分支），而栈帧里的
+ * **函数名**会误触发关键词规则：实证一次普通填表失败因栈内 `collectManualRefillSummaryVectorCleanup_ACU`
+ * 命中 `/vector/`，被提示成「交火/Embedding 排查」。只按栈帧形态过滤，不改正文文本。
+ */
+function stripStackFrameLines(message: string): string {
+  return String(message ?? '')
+    .split('\n')
+    .filter(line => !STACK_FRAME_LINE_RE.test(line))
+    .join('\n');
+}
+
+/**
  * 为一条日志匹配处理建议。只对 error 级日志给建议；warn / debug 返回 null。
  */
 export function resolveLogErrorHint(entry: Pick<LogEntry, 'level' | 'tag' | 'message'>): LogErrorHint | null {
   if (entry.level !== 'error') return null;
-  const haystack = `${entry.tag} ${entry.message}`.toLowerCase();
+  const haystack = `${entry.tag} ${stripStackFrameLines(entry.message)}`.toLowerCase();
   for (const rule of RULES) {
     const matched = typeof rule.test === 'function' ? rule.test(haystack) : rule.test.test(haystack);
     if (matched) return { id: rule.id, summary: rule.summary, steps: rule.steps };

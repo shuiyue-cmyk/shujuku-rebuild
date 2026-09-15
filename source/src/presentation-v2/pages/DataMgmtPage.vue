@@ -458,6 +458,7 @@ import {
 } from "../composables/useDataManagement";
 import { dataMgmtCopy } from "../copy/data-mgmt-copy";
 import { useDialogStore } from "../stores/dialog-store";
+import { useToastStore } from "../stores/toast-store";
 import type { MixedStorageCommitAction_ACU } from "../../shared/models/mixed-storage-commit-action";
 
 /**
@@ -512,6 +513,7 @@ const resetDefaultsCleanupOptions: Array<{
 ];
 
 const dialogStore = useDialogStore();
+const toast = useToastStore();
 const flow = useDataManagement();
 const runtimeDiagnostic = useSqliteRuntimeDiagnostic();
 const historyExpanded = ref(false);
@@ -574,18 +576,46 @@ async function onImportTableCheckpoint(file: File): Promise<void> {
   if (!checkpoint) return;
   const sourceStorageMode = checkpoint.source.storageMode;
   const targetStorageMode = flow.getCheckpointTargetStorageMode();
+  const restoredUpToAiFloor = await dialogStore.prompt({
+    title: "这份数据覆盖到第几楼",
+    message:
+      "可选。按 AI 楼层填写这份 Checkpoint 数据真正写到的最后一楼；留空表示按现有行为处理" +
+      "（追平进度前沿取最新 AI 楼层，一键追平会显示已追平）。\n" +
+      "填写后，恢复出来的表格会从「该楼层 + 1」开始被一键追平/自动填表规划；" +
+      "填得比恢复帧所在楼层还晚时按恢复帧楼层处理（不会超过数据实际所在的位置）。",
+    label: "覆盖到第几楼（AI 楼层，可留空）",
+    placeholder: "例如 91；留空表示不声明",
+    confirmLabel: "下一步",
+    requireNonEmpty: false,
+  });
+  if (restoredUpToAiFloor === null) return;
+  const trimmedFloor = restoredUpToAiFloor.trim();
+  let restoredUpToAiFloorValue: number | undefined;
+  if (trimmedFloor) {
+    // 只认十进制正整数：`Number()` 会把 "1e3"、"0x10"、"  12 " 之类也当合法楼层。
+    const parsedFloor = /^\d+$/.test(trimmedFloor) ? Number(trimmedFloor) : NaN;
+    if (!Number.isInteger(parsedFloor) || parsedFloor <= 0) {
+      toast.warning("覆盖楼层需要是正整数（AI 楼层）；本次未执行恢复。");
+      return;
+    }
+    restoredUpToAiFloorValue = parsedFloor;
+  }
+  const floorNote = restoredUpToAiFloorValue === undefined
+    ? "未声明覆盖楼层：追平进度前沿按现有行为取最新 AI 楼层。"
+    : `已声明数据只覆盖到第 ${restoredUpToAiFloorValue} 楼：恢复后追平会从第 ${restoredUpToAiFloorValue + 1} 楼开始规划。`;
   const confirmed = await dialogStore.confirm({
     title: "恢复当前聊天 Checkpoint",
     message: `导入将清空当前聊天全部 AI 楼层、所有隔离标识的本地表格数据。
 仅在当前激活隔离键的最新 AI 楼层重建文件中的表格数据。
 当前聊天表格模板会切换为文件模板，后续更新将使用该模板。
-全局模板和聊天正文不变。来源模式：${sourceStorageMode}；目标模式：${targetStorageMode}。确认继续？`,
+全局模板和聊天正文不变。来源模式：${sourceStorageMode}；目标模式：${targetStorageMode}。
+${floorNote}确认继续？`,
     confirmLabel: "恢复 Checkpoint",
     confirmVariant: "danger",
   });
   if (!confirmed) return;
   if (runtimeDiagnostic.busy.value) return;
-  void flow.restoreTableCheckpoint(checkpoint);
+  void flow.restoreTableCheckpoint(checkpoint, { restoredUpToAiFloor: restoredUpToAiFloorValue });
 }
 
 async function onDeleteLocalData(mode: "current" | "all"): Promise<void> {

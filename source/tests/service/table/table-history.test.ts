@@ -103,6 +103,148 @@ describe('resolveTableHistoryStateFromChat_ACU', () => {
     expect(state.lastTrackedUpdateAiFloor).toBe(2);
   });
 
+  // ─── Checkpoint 导入恢复的覆盖楼层声明 ───
+  /** 恢复帧落在最新 AI 楼层（AI 楼层 2），前方再放一个纯空帧模拟历史楼层。 */
+  function restoreFrameChat(restoreUpToAiFloor?: number) {
+    return [
+      { is_user: true },
+      v2Message({ version: 2, logEntries: [] }),
+      { is_user: true },
+      v2Message({
+        version: 2,
+        checkpoint: {
+          kind: 'full',
+          createdAt: 1,
+          reason: 'init',
+          data: { mate: {}, sheet_0: { name: '表A', content: [['row_id'], ['1']] } },
+          event: { filledSheetKeys: ['sheet_0'], changedSheetKeys: ['sheet_0'], groupKeys: [] },
+          ...(restoreUpToAiFloor === undefined ? {} : { restoreUpToAiFloor }),
+        },
+        logEntries: [],
+      }),
+    ];
+  }
+
+  it('未声明覆盖楼层时，追平前沿仍是恢复帧所在楼层（保持既有行为）', () => {
+    const state = resolveTableHistoryStateFromChat_ACU(restoreFrameChat(), {
+      sheetKey: 'sheet_0',
+      isSummaryTable: false,
+      isolationKey: '',
+      settings,
+    });
+
+    expect(state.hasAnyData).toBe(true);
+    expect(state.hasTrackedUpdate).toBe(true);
+    expect(state.lastTrackedUpdateAiFloor).toBe(2);
+  });
+
+  it('声明覆盖楼层后，追平前沿下修到该楼层，剩余楼层可被规划', () => {
+    const state = resolveTableHistoryStateFromChat_ACU(restoreFrameChat(1), {
+      sheetKey: 'sheet_0',
+      isSummaryTable: false,
+      isolationKey: '',
+      settings,
+    });
+
+    expect(state.hasTrackedUpdate).toBe(true);
+    expect(state.lastTrackedUpdateAiFloor).toBe(1);
+  });
+
+  it('声明楼层超过恢复帧楼层时按帧楼层夹取，非法声明一律忽略', () => {
+    const oversized = resolveTableHistoryStateFromChat_ACU(restoreFrameChat(99), {
+      sheetKey: 'sheet_0',
+      isSummaryTable: false,
+      isolationKey: '',
+      settings,
+    });
+    expect(oversized.lastTrackedUpdateAiFloor).toBe(2);
+
+    for (const invalid of [0, -3, 1.5]) {
+      const state = resolveTableHistoryStateFromChat_ACU(restoreFrameChat(invalid), {
+        sheetKey: 'sheet_0',
+        isSummaryTable: false,
+        isolationKey: '',
+        settings,
+      });
+      expect(state.lastTrackedUpdateAiFloor).toBe(2);
+    }
+  });
+
+  it('边界轮转把 full checkpoint 降级成 entry 后，声明仍随 entry 生效（前沿不回跳）', () => {
+    // 降级 entry 由 downgradeV2FullCheckpointAtIndex_ACU 产出：没有 checkpoint，只有 entry，
+    // 并把原 checkpoint 的声明原样带过来。丢了它前沿就会跳回该 entry 楼层（误报「已追平」）。
+    const chat = [
+      { is_user: true },
+      v2Message({ version: 2, logEntries: [] }),
+      { is_user: true },
+      v2Message({
+        version: 2,
+        logEntries: [{
+          seq: 0,
+          entryId: 'downgraded-checkpoint-3-1',
+          createdAt: 1,
+          source: 'system',
+          targetMessageIndex: 3,
+          aiFloor: 2,
+          restoreUpToAiFloor: 1,
+          filledSheetKeys: ['sheet_0'],
+          changedSheetKeys: ['sheet_0'],
+          groupKeys: [],
+          operations: [{ kind: 'data_replace', data: { mate: {}, sheet_0: { name: '表A', content: [['row_id'], ['1']] } }, reason: 'checkpoint_fallback' }],
+        }],
+      }),
+    ];
+
+    const state = resolveTableHistoryStateFromChat_ACU(chat, {
+      sheetKey: 'sheet_0',
+      isSummaryTable: false,
+      isolationKey: '',
+      settings,
+    });
+
+    expect(state.hasTrackedUpdate).toBe(true);
+    expect(state.lastTrackedUpdateAiFloor).toBe(1);
+
+    // 同一 entry 去掉声明时回到 entry 楼层＝改造前行为（证明上面那条断言确实由声明承重）。
+    const withoutDeclaration = JSON.parse(JSON.stringify(chat));
+    delete withoutDeclaration[3].TavernDB_ACU_IsolatedData[''].storageFrame.logEntries[0].restoreUpToAiFloor;
+    const declaredState = resolveTableHistoryStateFromChat_ACU(withoutDeclaration, {
+      sheetKey: 'sheet_0',
+      isSummaryTable: false,
+      isolationKey: '',
+      settings,
+    });
+    expect(declaredState.lastTrackedUpdateAiFloor).toBe(2);
+  });
+
+  it('声明只下修基线：恢复后真实的更高楼层填表仍会推进前沿', () => {
+    const chat = restoreFrameChat(1);
+    chat.push(v2Message({
+      version: 2,
+      logEntries: [{
+        seq: 1,
+        entryId: 'v2_refill_1',
+        createdAt: 3,
+        source: 'manual_catch_up',
+        targetMessageIndex: 3,
+        aiFloor: 3,
+        filledSheetKeys: ['sheet_0'],
+        changedSheetKeys: ['sheet_0'],
+        groupKeys: [],
+        operations: [{ kind: 'sheet_replace', sheetKey: 'sheet_0', sheet: { name: '表A', content: [['row_id'], ['1']] }, reason: 'system' }],
+      }],
+    }));
+
+    const state = resolveTableHistoryStateFromChat_ACU(chat, {
+      sheetKey: 'sheet_0',
+      isSummaryTable: false,
+      isolationKey: '',
+      settings,
+    });
+
+    expect(state.lastTrackedUpdateAiFloor).toBe(3);
+  });
+
   it('不把前端写入 changedSheetKeys / sheet_replace 视为已填表更新', () => {
     const chat = [
       v2Message({

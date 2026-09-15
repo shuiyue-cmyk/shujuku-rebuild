@@ -51,6 +51,8 @@ export interface TableChatPersistOptions_ACU {
   forceCheckpoint?: boolean;
   checkpointReason?: TableCheckpointV2_ACU['reason'];
   manualRefillProgress?: ManualRefillProgressV2_ACU;
+  /** 导入恢复声明的数据覆盖楼层；透传到 V2 persist，随 full checkpoint 固化。 */
+  restoreUpToAiFloor?: number;
   /** 在本次 V2 entry 写入前替换指定 bucket 的历史增量。 */
   replaceExistingIncremental?: ReplaceExistingIncrementalOptions_ACU;
   /** 调用方已处于 transactionContext.runCommit 临界区内时使用，避免嵌套 commit 锁。 */
@@ -143,6 +145,7 @@ async function persistTablesToChatMessageWithLockOption_ACU(
     forceCheckpoint,
     checkpointReason,
     manualRefillProgress,
+    restoreUpToAiFloor,
     replaceExistingIncremental,
     assumeCommitLock,
     strictSave,
@@ -240,6 +243,7 @@ async function persistTablesToChatMessageWithLockOption_ACU(
         forceCheckpoint: forceCheckpoint === true || strategy.mode === 'empty',
         checkpointReason: checkpointReason || (strategy.mode === 'empty' ? 'init' : undefined),
         manualRefillProgress,
+        restoreUpToAiFloor,
         replaceExistingIncremental,
         isolationKey: currentIsolationKey,
         revisionWriteSet,

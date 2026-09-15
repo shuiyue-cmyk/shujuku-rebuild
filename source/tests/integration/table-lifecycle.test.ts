@@ -137,6 +137,7 @@ import { getCurrentIsolationKey_ACU } from '../../src/service/runtime/state-mana
 import { buildTableDelta_ACU, applyTableDelta_ACU, isDeltaTagData_ACU, isCheckpointTagData_ACU } from '../../src/service/table/table-delta';
 import { persistTableMutationLogV2_ACU } from '../../src/service/table/storage-frame-v2-persist';
 import { loadTableStateFromFramesV2_ACU } from '../../src/service/table/storage-frame-v2-replay';
+import { resolveTableHistoryStatesFromChat_ACU } from '../../src/service/table/table-history';
 import { getHiddenChronicleRowIdsAfterBigSummaryInsert_ACU, projectFlightModeHiddenChronicleRows_ACU } from '../../src/service/flight-mode/flight-mode-hidden-rows';
 import type { TableWriteTransactionContext_ACU } from '../../src/service/table/table-write-transaction';
 
@@ -724,5 +725,75 @@ describe.skip('I2: 旧 V1 增量存储端到端链路（V2 迁移后废弃）', 
     const legacyExplicit = { ...legacy, _acu_storage_mode: 'legacy' };
     expect(isCheckpointTagData_ACU(legacyExplicit)).toBe(true);
     expect(isDeltaTagData_ACU(legacyExplicit)).toBe(false);
+  });
+});
+
+describe('Checkpoint 导入恢复的覆盖楼层声明', () => {
+  /** 导入恢复先清空全部 AI 楼层数据，再只在最新 AI 楼层写一次 init full checkpoint。 */
+  function seedRestoreChat(): any[] {
+    return [
+      { is_user: false, mes: 'AI 1' },
+      { is_user: true, mes: '用户 1' },
+      { is_user: false, mes: 'AI 2' },
+    ];
+  }
+
+  function persistImportBaseline(restoreUpToAiFloor?: number) {
+    return persistTableMutationLogV2_ACU({
+      targetMessageIndex: 2,
+      source: 'import',
+      afterData: buildV2BaseData_ACU(),
+      operations: [],
+      filledSheetKeys: ['sheet_a', 'sheet_b'],
+      candidateChangedSheetKeys: ['sheet_a', 'sheet_b'],
+      checkpointReason: 'init',
+      ...(restoreUpToAiFloor === undefined ? {} : { restoreUpToAiFloor }),
+      isolationKey: '',
+      writeSet: [{ kind: 'all' }],
+      revisionWriteSet: [{ kind: 'all' }],
+      assumeCommitLock: true,
+      transactionContext: makeTestTransactionContext_ACU(null, [{ kind: 'all' }]),
+    });
+  }
+
+  function readFloor(sheetKey = 'sheet_a'): number {
+    return resolveTableHistoryStatesFromChat_ACU(mockChat, [{
+      sheetKey,
+      isSummaryTable: false,
+      isolationKey: '',
+      settings: mockSettings,
+    }]).get(sheetKey)!.lastTrackedUpdateAiFloor;
+  }
+
+  it('声明覆盖楼层随 init checkpoint 固化，并把追平前沿下修到该楼层', async () => {
+    mockChat.push(...seedRestoreChat());
+    const result = await persistImportBaseline(1);
+    expect(result.saved).toBe(true);
+
+    const checkpoint = mockChat[2].TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint;
+    expect(checkpoint.reason).toBe('init');
+    expect(checkpoint.restoreUpToAiFloor).toBe(1);
+    expect(readFloor()).toBe(1);
+    expect(readFloor('sheet_b')).toBe(1);
+  });
+
+  it('不声明覆盖楼层时不写该字段，前沿仍是恢复帧所在楼层（逐字保持旧行为）', async () => {
+    mockChat.push(...seedRestoreChat());
+    const result = await persistImportBaseline();
+    expect(result.saved).toBe(true);
+
+    const checkpoint = mockChat[2].TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint;
+    expect(checkpoint.reason).toBe('init');
+    expect(Object.prototype.hasOwnProperty.call(checkpoint, 'restoreUpToAiFloor')).toBe(false);
+    expect(readFloor()).toBe(2);
+  });
+
+  it('声明楼层超过恢复帧楼层时按帧楼层夹取', async () => {
+    mockChat.push(...seedRestoreChat());
+    await persistImportBaseline(99);
+
+    const checkpoint = mockChat[2].TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint;
+    expect(checkpoint.restoreUpToAiFloor).toBe(2);
+    expect(readFloor()).toBe(2);
   });
 });

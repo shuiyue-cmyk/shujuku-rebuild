@@ -55,6 +55,22 @@ describe('table checkpoint transfer', () => {
   it('在解析阶段拒绝模板与指导表的 sheet 集合分裂', () => { const invalid = { ...checkpoint, templateSnapshot: { ...checkpoint.templateSnapshot, data: { ...data, sheet_1: { name: '模板独有表', content: [['row_id']] } } } }; expect(parseTableCheckpointFile_ACU(JSON.stringify(invalid))).toMatchObject({ success: false }); });
   it('恢复预检使用纯读取快照，不通过 getter 隐式迁移 metadata', async () => { h.snapshotError = new Error('snapshot failed'); await restoreTableCheckpointToLatestAi_ACU(checkpoint); expect(h.peekScope).not.toHaveBeenCalled(); expect(h.peekGuide).not.toHaveBeenCalled(); h.snapshotError = null; h.hasClearRuntime = false; await restoreTableCheckpointToLatestAi_ACU(checkpoint); expect(h.peekScope).not.toHaveBeenCalled(); expect(h.peekGuide).not.toHaveBeenCalled(); h.hasClearRuntime = true; await restoreTableCheckpointToLatestAi_ACU(checkpoint); expect(h.peekScope).toHaveBeenCalledWith(h.chat); expect(h.peekGuide).toHaveBeenCalledWith(h.chat); });
   it('以一次严格 data_replace 保存完整 checkpoint，并将实际快照表标记为 filled', async () => { const result = await restoreTableCheckpointToLatestAi_ACU(checkpoint); expect(result).toMatchObject({ success: true, restoredMessageIndex: 1 }); expect(h.persist).toHaveBeenCalledWith(expect.objectContaining({ strictSave: true, targetSheetKeys: ['sheet_0'], trackingSheetKeys: ['sheet_0'], filledSheetKeys: ['sheet_0'], operations: [{ kind: 'data_replace', data, reason: 'import' }] })); expect(h.strictSave).not.toHaveBeenCalled(); });
+  it('未声明覆盖楼层时不向持久化层传递 restoreUpToAiFloor（与旧行为逐字一致）', async () => {
+    await restoreTableCheckpointToLatestAi_ACU(checkpoint);
+    const options = h.persist.mock.calls[0][0];
+    expect(options).toMatchObject({ strictSave: true, source: 'import' });
+    expect(Object.prototype.hasOwnProperty.call(options, 'restoreUpToAiFloor')).toBe(false);
+  });
+  it('声明覆盖楼层时透传给持久化层；非法声明按未声明处理', async () => {
+    await restoreTableCheckpointToLatestAi_ACU(checkpoint, { restoredUpToAiFloor: 91 });
+    expect(h.persist.mock.calls[0][0]).toMatchObject({ restoreUpToAiFloor: 91 });
+
+    for (const invalid of [0, -3, 1.5, Number('abc')]) {
+      h.persist.mockClear();
+      await restoreTableCheckpointToLatestAi_ACU(checkpoint, { restoredUpToAiFloor: invalid });
+      expect(Object.prototype.hasOwnProperty.call(h.persist.mock.calls[0][0], 'restoreUpToAiFloor')).toBe(false);
+    }
+  });
   it('持久化失败时恢复聊天、scope、guide 与 provider 旧状态', async () => { h.providerData = { ...data, sheet_0: { ...data.sheet_0, name: '旧表' } }; h.persist.mockResolvedValue({ saved: false, error: 'strict failed' }); const result = await restoreTableCheckpointToLatestAi_ACU(checkpoint); expect(result).toMatchObject({ success: false, error: 'strict failed' }); expect(h.chat[1].TavernDB_ACU_Data).toEqual({ old: true }); expect(h.setScope).toHaveBeenLastCalledWith({ version: 1, old: true }); expect(h.setGuideContainer).toHaveBeenLastCalledWith({ version: 1, tags: {} }); expect(h.replace).toHaveBeenLastCalledWith(h.providerData); expect(h.strictSave).toHaveBeenCalledTimes(1); expect(h.cleanup).not.toHaveBeenCalled(); });
   it('旧运行时为空且 SQLite snapshot 为 null 时明确清空 provider', async () => { h.runtimeSnapshot = null; h.persist.mockResolvedValue({ saved: false, error: 'strict failed' }); await restoreTableCheckpointToLatestAi_ACU(checkpoint); expect(h.clearRuntime).toHaveBeenCalledTimes(1); expect(h.restoreRuntime).not.toHaveBeenCalled(); expect(h.replace).toHaveBeenCalledTimes(1); });
   it('有效二进制快照在持久化失败后优先恢复且不回放 JSON', async () => { h.providerData = data; h.runtimeSnapshot = new Uint8Array([1, 2, 3]); h.persist.mockResolvedValue({ saved: false, error: 'strict failed' }); await restoreTableCheckpointToLatestAi_ACU(checkpoint); expect(h.restoreRuntime).toHaveBeenCalledWith(h.runtimeSnapshot); expect(h.replace).toHaveBeenCalledTimes(1); });

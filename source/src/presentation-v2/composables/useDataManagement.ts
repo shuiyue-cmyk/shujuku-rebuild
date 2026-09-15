@@ -29,7 +29,7 @@ import { applyTemplateSnapshotToScope_ACU, getDefaultTemplateSnapshot_ACU } from
 import { clearCurrentChatTemplateSnapshots_ACU, sanitizeChatSheetsObject_ACU } from '../../service/template/chat-scope';
 import { clearCurrentTableLocks_ACU } from '../../service/runtime/helpers-table-lock';
 import { clearCurrentChatPlotPresetOverride_ACU } from '../../service/plot/plot-logic';
-import { buildCurrentTableCheckpoint_ACU, parseTableCheckpointFile_ACU, restoreTableCheckpointToLatestAi_ACU, type TableCheckpointFileV1_ACU } from '../../service/table/table-checkpoint-transfer';
+import { buildCurrentTableCheckpoint_ACU, parseTableCheckpointFile_ACU, restoreTableCheckpointToLatestAi_ACU, type TableCheckpointFileV1_ACU, type TableCheckpointRestoreOptions_ACU } from '../../service/table/table-checkpoint-transfer';
 import { buildRegisteredMixedStorageSnapshotTransfer_ACU, commitRegisteredMixedStorageDecision_ACU, getActiveMixedStorageDecisionSummary_ACU, type MixedStorageDecisionSummary_ACU } from '../../service/table/mixed-storage-decision-registry';
 import type { MixedStorageCommitAction_ACU } from '../../shared/models/mixed-storage-commit-action';
 import { commitPreparedV2Recovery_ACU, prepareV2Recovery_ACU, scanV2IsolationDiagnostics_ACU, type V2IsolationDiagnostic_ACU, type V2RecoverySummary_ACU } from '../../service/table/table-v2-recovery-service';
@@ -547,10 +547,13 @@ export function useDataManagement() {
     }
   }
 
-  async function restoreTableCheckpoint(checkpoint: TableCheckpointFileV1_ACU): Promise<void> {
+  async function restoreTableCheckpoint(
+    checkpoint: TableCheckpointFileV1_ACU,
+    options: TableCheckpointRestoreOptions_ACU = {},
+  ): Promise<void> {
     busyAction.value = 'restore-checkpoint';
     try {
-      const result = await restoreTableCheckpointToLatestAi_ACU(checkpoint);
+      const result = await restoreTableCheckpointToLatestAi_ACU(checkpoint, options);
       if (!result.success) throw new Error(result.error || 'Checkpoint 恢复失败。');
       refresh();
       message.value = null;

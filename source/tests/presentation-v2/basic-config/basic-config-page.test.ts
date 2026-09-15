@@ -81,9 +81,6 @@ async function mountBasicConfigPage(settings = createSettings()) {
   vi.doMock('../../../src/service/table/storage-mode', () => ({
     getCurrentStorageMode: () => settings.storageMode,
   }));
-  vi.doMock('../../../src/service/table/table-storage-strategy', () => ({
-    switchStorageMode: vi.fn(async (mode: string) => { settings.storageMode = mode; }),
-  }));
   vi.doMock('../../../src/service/table/table-history', () => ({
     resolveTableHistoryStatesFromChat_ACU: (_chat: any[], optsList: any[]) => {
       const map = new Map<string, any>();

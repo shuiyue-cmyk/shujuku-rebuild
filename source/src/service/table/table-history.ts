@@ -63,6 +63,20 @@ function v2ScheduleFilledFloor_ACU(tagData: any, sheetKey: string): number {
     return Math.max(fullFloor, sheetFloor);
 }
 
+/**
+ * [Checkpoint 导入恢复] 读取 full checkpoint 上的覆盖楼层声明，并夹取到该帧真实楼层。
+ *
+ * 导入恢复把快照写在该帧所在的最新 AI 楼层，帧的 filledSheetKeys 又是全部表，
+ * 单看帧位置会把追平前沿算成最新楼层——剩余楼层永远不会被规划（误报「已追平」）。
+ * 声明存在时改用声明值，使追平从「声明楼层 + 1」开始；声明缺失/非法时返回 0，
+ * 调用方回落到帧楼层，保持既有行为逐字不变。
+ */
+function v2RestoreUpToAiFloor_ACU(tagData: any, messageAiFloor: number): number {
+    const value = Number(tagData?.storageFrame?.checkpoint?.restoreUpToAiFloor);
+    if (!Number.isInteger(value) || value <= 0) return 0;
+    return messageAiFloor > 0 ? Math.min(value, messageAiFloor) : value;
+}
+
 function v2EntryAiFloor_ACU(entry: any, fallbackAiFloor: number): number {
     const value = Number(entry?.aiFloor);
     return Number.isFinite(value) && value > 0 ? value : fallbackAiFloor;
@@ -133,7 +147,9 @@ function v2FrameTrackedUpdateFloor_ACU(tagData: any, sheetKey: string, messageAi
     let latestFloor = v2ScheduleFilledFloor_ACU(tagData, sheetKey);
     const checkpointEvent = tagData.storageFrame.checkpoint?.event;
     if (v2EventTracksFill_ACU(checkpointEvent, sheetKey)) {
-        latestFloor = Math.max(latestFloor, messageAiFloor);
+        // 导入恢复帧：声明覆盖楼层存在时用声明值，否则沿用该帧楼层。
+        const restoreUpToAiFloor = v2RestoreUpToAiFloor_ACU(tagData, messageAiFloor);
+        latestFloor = Math.max(latestFloor, restoreUpToAiFloor > 0 ? restoreUpToAiFloor : messageAiFloor);
     }
     const sheetCheckpointEvent = tagData.storageFrame.perSheetCheckpoints?.[sheetKey]?.event;
     if (v2EventTracksFill_ACU(sheetCheckpointEvent, sheetKey)) {
@@ -141,7 +157,14 @@ function v2FrameTrackedUpdateFloor_ACU(tagData: any, sheetKey: string, messageAi
     }
     for (const entry of tagData.storageFrame.logEntries || []) {
         if (v2EventTracksFill_ACU(entry, sheetKey)) {
-            latestFloor = Math.max(latestFloor, v2EntryAiFloor_ACU(entry, messageAiFloor));
+            const entryFloor = v2EntryAiFloor_ACU(entry, messageAiFloor);
+            // 降级 entry 可能带着原 full checkpoint 的覆盖楼层声明（边界轮转时保留下来的）：
+            // 与 checkpoint 分支同口径——声明存在时用它（再夹取到该 entry 楼层），否则用 entry 楼层。
+            const entryDeclaredFloor = Number(entry?.restoreUpToAiFloor);
+            const effectiveEntryFloor = Number.isInteger(entryDeclaredFloor) && entryDeclaredFloor > 0
+                ? Math.min(entryDeclaredFloor, entryFloor)
+                : entryFloor;
+            latestFloor = Math.max(latestFloor, effectiveEntryFloor);
         }
     }
     return latestFloor;

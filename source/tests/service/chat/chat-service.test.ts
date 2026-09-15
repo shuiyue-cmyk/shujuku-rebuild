@@ -125,6 +125,8 @@ import {
   replaceManualRefillSheetBaselineInRangeAtomic_ACU,
   commitManualRefillSheetSnapshotInRangeAtomic_ACU,
   clearManualRefillIncrementalDataInRange_ACU,
+  clearManualRefillSheetDataInRange_ACU,
+  rollbackManualRefillRangeSnapshotAtomic_ACU,
   clearTableDataAtFloors_ACU,
   deleteLocalDataInChatCore_ACU,
   deleteLocalDataWithScope_ACU,
@@ -1919,7 +1921,7 @@ describe('ensureV2BoundaryCheckpointForRetainedBuffer_ACU', () => {
           storageFrame: {
             version: 2,
             ...(index === 0
-              ? { checkpoint: { kind: 'full', createdAt: 1, reason, data: structuredClone(preAnchorData) } }
+              ? { checkpoint: { kind: 'full', createdAt: 1, reason, data: structuredClone(preAnchorData), restoreUpToAiFloor: 2 } }
               : {}),
             logEntries: [],
           },
@@ -1947,6 +1949,9 @@ describe('ensureV2BoundaryCheckpointForRetainedBuffer_ACU', () => {
     // 指纹一致：降级 entry 的 data 与降级前 checkpoint.data 指纹完全相同，证明无损。
     expect(getTableDataFingerprint_ACU(formerRoot.logEntries[0].operations[0].data))
       .toBe(getTableDataFingerprint_ACU(preAnchorData));
+    // 导入声明的覆盖楼层必须随降级一起保留：丢了它前沿会退回该 entry 楼层，
+    // 「已追平」的误报会在下一次边界轮转后复现（上游 issue #18 第五条）。
+    expect(formerRoot.logEntries[0].restoreUpToAiFloor).toBe(2);
     // 单根不变量：降级后全局只剩 anchor 的 compaction full。
     expect(chat[23].TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint).toEqual(expect.objectContaining({
       kind: 'full',
@@ -4800,5 +4805,194 @@ describe('向量外置文件删除必须晚于聊天保存', () => {
 
     expect(count).toBe(1);
     expect(mockDeleteSummaryVectorIndexExternal).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ═══ 手动重填范围清理的可回滚句柄（上游 issue #18 第四条：零提交失败必须能回滚）═══
+describe('clearManualRefillSheetDataInRange_ACU 的可回滚句柄与外置向量清理推迟', () => {
+  function makeRollbackTargetMessage(manifest: any, messageId?: string, mes = 'AI目标层'): any {
+    return {
+      is_user: false,
+      mes,
+      ...(messageId ? { send_date: messageId } : {}),
+      TavernDB_ACU_Identity: { enabled: false, code: '' },
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          independentData: { sheet_0: { name: '物品表' }, sheet_1: { name: '纪要表' } },
+          modifiedKeys: ['sheet_0', 'sheet_1'],
+          updateGroupKeys: ['sheet_0', 'sheet_1'],
+          storageFrame: {
+            version: 2,
+            checkpoint: {
+              kind: 'full',
+              reason: 'manual',
+              data: {
+                sheet_0: { name: '物品表', content: [['row_id'], ['keep']] },
+                sheet_1: { name: '纪要表', content: [['row_id'], ['old']] },
+              },
+            },
+            logEntries: [{
+              seq: 1,
+              operations: [{ kind: 'row_upsert', sheetKey: 'sheet_1', rowId: 'r1', cells: ['x'] }],
+              filledSheetKeys: ['sheet_0', 'sheet_1'],
+              changedSheetKeys: ['sheet_0', 'sheet_1'],
+              groupKeys: ['sheet_0', 'sheet_1'],
+              writeSet: [{ kind: 'sheet', sheetKey: 'sheet_0' }, { kind: 'sheet', sheetKey: 'sheet_1' }],
+            }],
+          },
+          summaryVectorIndexManifest: manifest,
+          summaryVectorIndexState: { manifest },
+        },
+      },
+    };
+  }
+
+  it('清理成功交回可回滚句柄并推迟外置向量文件删除，回滚后帧与落盘都恢复清理前状态', async () => {
+    const manifest = { indexId: 'idx-refill-rollback', files: [{ path: 'idx-refill-rollback.snapshot', role: 'snapshot' }] };
+    const chat = [makeRollbackTargetMessage(manifest)];
+    mockGetChatArray.mockReturnValue(chat);
+    const handles: any[] = [];
+    const deferred: any[] = [];
+
+    const clearedCount = await clearManualRefillSheetDataInRange_ACU([0], ['sheet_1'], {
+      onRollbackSnapshot: (handle: any) => handles.push(handle),
+      deferExternalVectorCleanup: (manifests: any[]) => deferred.push(...manifests),
+    });
+
+    expect(clearedCount).toBe(1);
+    expect(mockSaveChatToHostStrict).toHaveBeenCalledTimes(1);
+    // 帧里的数据确实被清了，否则本用例没有证明力。
+    const purgedFrame = chat[0].TavernDB_ACU_IsolatedData[''].storageFrame;
+    expect(purgedFrame.checkpoint.data.sheet_1).toBeUndefined();
+    expect(purgedFrame.logEntries[0].operations).toEqual([]);
+    // 推迟删除：清理阶段绝不删外置文件，否则零提交回滚会留下「帧回来了、外置文件没了」。
+    expect(deferred).toEqual([manifest]);
+    expect(mockDeleteSummaryVectorIndexExternal).not.toHaveBeenCalled();
+    expect(handles).toHaveLength(1);
+    expect(handles[0].sheetKeys).toContain('sheet_1');
+
+    const rollback = await rollbackManualRefillRangeSnapshotAtomic_ACU(handles[0]);
+
+    expect(rollback).toEqual({ success: true, restoredCount: 1, skippedIndexes: [] });
+    // 回滚必须落盘：内存修好、聊天文件还是清理态等于没回滚。
+    expect(mockSaveChatToHostStrict).toHaveBeenCalledTimes(2);
+    const restoredTagData = chat[0].TavernDB_ACU_IsolatedData[''];
+    expect(restoredTagData.storageFrame.checkpoint.data.sheet_1).toEqual({ name: '纪要表', content: [['row_id'], ['old']] });
+    expect(restoredTagData.storageFrame.logEntries[0].operations).toEqual([{ kind: 'row_upsert', sheetKey: 'sheet_1', rowId: 'r1', cells: ['x'] }]);
+    expect(restoredTagData.summaryVectorIndexManifest).toEqual(manifest);
+    expect(restoredTagData.modifiedKeys).toEqual(['sheet_0', 'sheet_1']);
+  });
+
+  it('聊天在重填期间被改动时按身份跳过错位楼层，不把快照写到别的楼层上', async () => {
+    const manifest = { indexId: 'idx-refill-rollback-shift', files: [] };
+    const chat = [
+      makeRollbackTargetMessage(manifest, 'm0'),
+      makeRollbackTargetMessage(manifest, 'm1'),
+      makeRollbackTargetMessage(manifest, 'm2'),
+    ];
+    mockGetChatArray.mockReturnValue(chat);
+    const handles: any[] = [];
+    await clearManualRefillSheetDataInRange_ACU([0, 1, 2], ['sheet_1'], {
+      onRollbackSnapshot: (handle: any) => handles.push(handle),
+    });
+    // 重填期间用户删掉了中间一楼：索引 1 现在指向原来的 m2。
+    chat.splice(1, 1);
+
+    const rollback = await rollbackManualRefillRangeSnapshotAtomic_ACU(handles[0]);
+
+    expect(rollback.success).toBe(false);
+    expect(rollback.restoredCount).toBe(1);
+    expect(rollback.skippedIndexes).toEqual([1, 2]);
+    expect(rollback.error).toContain('不是清理时的原消息');
+    // 身份仍匹配的 m0 恢复；错位的 m2 必须保持清理态——把 m1 的快照写进去比不恢复更糟。
+    expect(chat[0].TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint.data.sheet_1)
+      .toEqual({ name: '纪要表', content: [['row_id'], ['old']] });
+    expect(chat[1].TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint.data.sheet_1).toBeUndefined();
+    expect(chat[1].TavernDB_ACU_IsolatedData[''].storageFrame.logEntries[0].operations).toEqual([]);
+  });
+
+  it('宿主不给任何稳定 id 时用正文兜底：楼层错位同样跳过（不靠「还是 AI 楼」放行）', async () => {
+    const manifest = { indexId: 'idx-refill-rollback-mes', files: [] };
+    // 三个 id 字段全缺（含本库 loadAllChatMessages 会复刻的位置派生 id），只有正文可区分。
+    const chat = [
+      makeRollbackTargetMessage(manifest, undefined, '目标层A'),
+      makeRollbackTargetMessage(manifest, undefined, '目标层B'),
+    ];
+    mockGetChatArray.mockReturnValue(chat);
+    const handles: any[] = [];
+    await clearManualRefillSheetDataInRange_ACU([0, 1], ['sheet_1'], {
+      onRollbackSnapshot: (handle: any) => handles.push(handle),
+    });
+    // 删掉第一楼：索引 0 现在指向原来的「目标层B」。
+    chat.shift();
+
+    const rollback = await rollbackManualRefillRangeSnapshotAtomic_ACU(handles[0]);
+
+    expect(rollback.success).toBe(false);
+    expect(rollback.skippedIndexes).toEqual([0, 1]);
+    // 指纹若退化成「只要还是 AI 楼就恢复」，这里会把 A 的快照写进 B。
+    expect(chat[0].TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint.data.sheet_1).toBeUndefined();
+  });
+
+  it('纯数字 id（按位置派生）不算可靠身份：删楼后同号楼层必须跳过', async () => {
+    const manifest = { indexId: 'idx-refill-rollback-positional-id', files: [] };
+    // 宿主/派生视图可能给出「按位置生成」的 id：删楼后同位置仍是同一个号，但已经是另一条消息。
+    const chat = [
+      { is_user: false, mes: '目标层A', id: '0', swipe_id: 0, TavernDB_ACU_Identity: { enabled: false, code: '' }, TavernDB_ACU_IsolatedData: makeRollbackTargetMessage(manifest).TavernDB_ACU_IsolatedData },
+      { is_user: false, mes: '目标层B', id: '1', swipe_id: 0, TavernDB_ACU_Identity: { enabled: false, code: '' }, TavernDB_ACU_IsolatedData: makeRollbackTargetMessage(manifest).TavernDB_ACU_IsolatedData },
+    ];
+    mockGetChatArray.mockReturnValue(chat);
+    const handles: any[] = [];
+    await clearManualRefillSheetDataInRange_ACU([0, 1], ['sheet_1'], {
+      onRollbackSnapshot: (handle: any) => handles.push(handle),
+    });
+    // 删掉第一楼并按位置重新编号：索引 0 的 id 又是 '0'，但消息已是原来的 B。
+    chat.splice(0, 1);
+    chat[0].id = '0';
+
+    const rollback = await rollbackManualRefillRangeSnapshotAtomic_ACU(handles[0]);
+
+    expect(rollback.success).toBe(false);
+    expect(rollback.skippedIndexes).toEqual([0, 1]);
+    // 位置号相同也必须靠正文判出「不是原消息」，否则会把 A 的快照写进 B。
+    expect(chat[0].TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint.data.sheet_1).toBeUndefined();
+  });
+
+  it('swipe 变化同样视为身份不符：不把快照恢复到换过 swipe 的楼层', async () => {
+    const manifest = { indexId: 'idx-refill-rollback-swipe', files: [] };
+    const chat = [makeRollbackTargetMessage(manifest, 'm0')];
+    chat[0].swipe_id = 0;
+    mockGetChatArray.mockReturnValue(chat);
+    const handles: any[] = [];
+    await clearManualRefillSheetDataInRange_ACU([0], ['sheet_1'], {
+      onRollbackSnapshot: (handle: any) => handles.push(handle),
+    });
+    // 用户在该楼重掷 / 切换 swipe：这一楼承载的数据已不是清理时那一份。
+    chat[0].swipe_id = 1;
+
+    const rollback = await rollbackManualRefillRangeSnapshotAtomic_ACU(handles[0]);
+
+    expect(rollback.success).toBe(false);
+    expect(rollback.skippedIndexes).toEqual([0]);
+    expect(rollback.error).toContain('已恢复 0 条');
+    // 必须保持清理态：把旧 swipe 的快照写进新 swipe 等于污染另一份数据。
+    expect(chat[0].TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint.data.sheet_1).toBeUndefined();
+  });
+
+  it('回滚保存失败时如实返回失败，不谎报已回滚', async () => {
+    const manifest = { indexId: 'idx-refill-rollback-save-fail', files: [] };
+    const chat = [makeRollbackTargetMessage(manifest)];
+    mockGetChatArray.mockReturnValue(chat);
+    const handles: any[] = [];
+    await clearManualRefillSheetDataInRange_ACU([0], ['sheet_1'], {
+      onRollbackSnapshot: (handle: any) => handles.push(handle),
+    });
+    mockSaveChatToHostStrict.mockRejectedValueOnce(new Error('rollback save failed'));
+
+    const rollback = await rollbackManualRefillRangeSnapshotAtomic_ACU(handles[0]);
+
+    expect(rollback.success).toBe(false);
+    expect(rollback.error).toContain('rollback save failed');
   });
 });
