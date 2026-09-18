@@ -297,6 +297,7 @@ import {
   persistCurrentTemplatePresetName_ACU,
   applyCombinedSettingsImport_ACU,
   _set_settingsStorageReadyForSave_ACU,
+  summarizeSettingsForLog_ACU,
 } from '../../../src/service/settings/settings-service';
 
 beforeEach(() => {
@@ -960,6 +961,20 @@ describe('loadSettings_ACU', () => {
     expect(mockSettings.templateAssistantPromptSegments).toEqual(customized);
     expect(mockSettings.templateAssistantPromptForceDefaultVersion)
       .toBe('test-template-assistant-prompt-force-default');
+  });
+
+  it('日志摘要里的密钥一律全掩码，不留首尾字符（网安：部分掩码会降低爆破空间）', () => {
+    const secret = 'sk-abcdefghij12345678';
+    const summary = summarizeSettingsForLog_ACU({
+      apiMode: 'custom',
+      apiConfig: { url: 'https://api.test/v1', model: 'm', apiKey: secret },
+      apiPresets: [{ name: 'p1', apiConfig: { url: 'https://api.test/v1', model: 'm', apiKey: secret } }],
+    });
+    expect(summary.apiConfig.apiKey).toBe('***');
+    expect(summary.apiPresets[0].apiKey).toBe('***');
+    // 原密钥材料不得以任何子串形式残留（改回 slice(0,3) 时本用例变红）。
+    expect(JSON.stringify(summary)).not.toContain('sk-abcdefghij12345678');
+    expect(JSON.stringify(summary)).not.toContain('sk-');
   });
 
 });

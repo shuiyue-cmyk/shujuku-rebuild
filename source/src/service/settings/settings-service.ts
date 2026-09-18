@@ -265,14 +265,13 @@ function relaxStoredOriginalDefaultDdls_ACU(templateObj: any): boolean {
   return changed;
 }
 
-/** R1：settings 日志脱敏摘要——仅暴露少量结构信息，所有 apiKey/密钥字段一律掩码 */
+/** R1：settings 日志脱敏摘要——仅暴露少量结构信息，所有 apiKey/密钥字段一律全掩码（不留首尾字符） */
 function maskSecret_ACU(value: unknown): string {
-  if (typeof value !== 'string' || !value) return String(value ?? '');
-  if (value.length <= 8) return '***';
-  return `${value.slice(0, 3)}***${value.slice(-3)}`;
+  if (typeof value !== 'string' || !value) return typeof value === 'string' ? value : String(value ?? '');
+  return '***';
 }
 
-function summarizeSettingsForLog_ACU(settings: any): Record<string, any> {
+export function summarizeSettingsForLog_ACU(settings: any): Record<string, any> {
   if (!settings || typeof settings !== 'object') return {};
   const safe: Record<string, any> = {
     apiMode: settings.apiMode,

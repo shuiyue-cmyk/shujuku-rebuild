@@ -8,6 +8,7 @@ import { computed, reactive, ref } from 'vue';
 import { DEFAULT_MERGE_SUMMARY_PROMPT_ACU, DEFAULT_MERGE_SUMMARY_PROMPT_SQL_ACU } from '../../shared/defaults-json.js';
 import { normalizeIsolationCode_ACU } from '../../shared/data-constants';
 import { ensureSheetOrderNumbers_ACU, logError_ACU, parseTableTemplateJson_ACU } from '../../shared/utils';
+import { maskSensitiveText_ACU } from '../../shared/log-buffer';
 import { readIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
 import { currentChatFileIdentifier_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU, settings_ACU } from '../../service/runtime/state-manager';
 import {
@@ -340,7 +341,7 @@ export function useDataManagement() {
       toast.success('合并配置已导入：提示词、合并设置和全局模板已更新。', { muteable: false });
     } catch (e: any) {
       logError_ACU('[ACU-V2] importCombinedSettings failed', e);
-      setMessage(message, 'error', `合并导入失败：${e?.message || '未知错误'}`);
+      setMessage(message, 'error', `合并导入失败：${maskSensitiveText_ACU(e?.message || '未知错误')}`);
     } finally {
       busyAction.value = '';
     }
@@ -388,7 +389,7 @@ export function useDataManagement() {
     } catch (e: any) {
       logError_ACU('[ACU-V2] exportTableCheckpoint failed', e);
       message.value = null;
-      toast.error(`导出 Checkpoint 失败：${e?.message || '未知错误'}`);
+      toast.error(`导出 Checkpoint 失败：${maskSensitiveText_ACU(e?.message || '未知错误')}`);
     }
   }
 
@@ -407,7 +408,7 @@ export function useDataManagement() {
     } catch (e: any) {
       logError_ACU('[ACU-V2] exportMixedStorageSnapshots failed', e);
       mixedStorageDecision.value = getActiveMixedStorageDecisionSummary_ACU();
-      toast.error(`导出混合存储快照失败：${e?.message || '未知错误'}`);
+      toast.error(`导出混合存储快照失败：${maskSensitiveText_ACU(e?.message || '未知错误')}`);
     } finally {
       busyAction.value = '';
     }
@@ -426,14 +427,14 @@ export function useDataManagement() {
       if (result.status === 'committed') {
         toast.success(action === 'keep_v2' ? '已保留 V2 数据并清理冗余 legacy 数据。' : '已提交经验证的混合存储合并候选。');
       } else if (result.status === 'committed_postcondition_failed') {
-        toast.warning(`数据已保存，但后置校验失败：${result.error || '未知错误'}。请重新加载当前聊天后核对数据。`, { muteable: false, durationMs: 6000 });
+        toast.warning(`数据已保存，但后置校验失败：${maskSensitiveText_ACU(result.error || '未知错误')}。请重新加载当前聊天后核对数据。`, { muteable: false, durationMs: 6000 });
       } else {
-        toast.error(`混合存储提交失败：${result.error || '未知错误'}`);
+        toast.error(`混合存储提交失败：${maskSensitiveText_ACU(result.error || '未知错误')}`);
       }
     } catch (e: any) {
       logError_ACU('[ACU-V2] commitMixedStorageDecision failed', e);
       mixedStorageDecision.value = getActiveMixedStorageDecisionSummary_ACU();
-      toast.error(`混合存储决议已失效：${e?.message || '未知错误'}`);
+      toast.error(`混合存储决议已失效：${maskSensitiveText_ACU(e?.message || '未知错误')}`);
     } finally {
       busyAction.value = '';
     }
@@ -451,7 +452,7 @@ export function useDataManagement() {
     } catch (e: any) {
       logError_ACU('[ACU-V2] scanV2IsolationDiagnostics failed', e);
       v2IsolationDiagnostics.value = [];
-      toast.error(`V2 隔离域诊断失败：${e?.message || '未知错误'}`);
+      toast.error(`V2 隔离域诊断失败：${maskSensitiveText_ACU(e?.message || '未知错误')}`);
     } finally {
       busyAction.value = '';
     }
@@ -478,7 +479,7 @@ export function useDataManagement() {
     } catch (e: any) {
       logError_ACU('[ACU-V2] prepareV2Recovery failed', e);
       v2RecoverySummary.value = null;
-      toast.error(`V2 恢复诊断失败：${e?.message || '未知错误'}`);
+      toast.error(`V2 恢复诊断失败：${maskSensitiveText_ACU(e?.message || '未知错误')}`);
     } finally {
       busyAction.value = '';
     }
@@ -501,7 +502,7 @@ export function useDataManagement() {
       toast.success(`已导出 ${backups.length} 份 V2 恢复原始 frame 备份。`);
     } catch (e: any) {
       logError_ACU('[ACU-V2] exportV2RecoveryBackups failed', e);
-      toast.error(`导出 V2 恢复备份失败：${e?.message || '未知错误'}`);
+      toast.error(`导出 V2 恢复备份失败：${maskSensitiveText_ACU(e?.message || '未知错误')}`);
     }
   }
 
@@ -519,13 +520,13 @@ export function useDataManagement() {
         toast.success('V2 恢复已保存；原始 frame 已写入隔离备份。');
       } else if (result.status === 'committed_postcondition_failed') {
         v2RecoverySummary.value = null;
-        toast.warning(`V2 恢复已保存，但后置校验失败：${result.error || '未知错误'}。请重新加载当前聊天核对数据。`, { muteable: false, durationMs: 6000 });
+        toast.warning(`V2 恢复已保存，但后置校验失败：${maskSensitiveText_ACU(result.error || '未知错误')}。请重新加载当前聊天核对数据。`, { muteable: false, durationMs: 6000 });
       } else {
-        toast.error(`V2 恢复提交失败：${result.error || '未知错误'}`);
+        toast.error(`V2 恢复提交失败：${maskSensitiveText_ACU(result.error || '未知错误')}`);
       }
     } catch (e: any) {
       logError_ACU('[ACU-V2] commitV2Recovery failed', e);
-      toast.error(`V2 恢复提交异常：${e?.message || '未知错误'}`);
+      toast.error(`V2 恢复提交异常：${maskSensitiveText_ACU(e?.message || '未知错误')}`);
     } finally {
       busyAction.value = '';
     }
@@ -540,7 +541,7 @@ export function useDataManagement() {
     } catch (e: any) {
       logError_ACU('[ACU-V2] parseTableCheckpoint failed', e);
       message.value = null;
-      toast.error(`Checkpoint 文件无效：${e?.message || '未知错误'}`);
+      toast.error(`Checkpoint 文件无效：${maskSensitiveText_ACU(e?.message || '未知错误')}`);
       return null;
     } finally {
       busyAction.value = '';
@@ -581,7 +582,7 @@ export function useDataManagement() {
           providerFallback ? '目标设置为 SQLite，实际存储 fallback 为 native' : '',
           ...warnings,
         ].filter(Boolean).join('；');
-        toast.warning(`Checkpoint 已恢复到${targetMessage}，但属于部分成功：${providerMessage}；${reasons}。`, { muteable: false, durationMs: 6000 });
+        toast.warning(`Checkpoint 已恢复到${targetMessage}，但属于部分成功：${maskSensitiveText_ACU(providerMessage)}；${maskSensitiveText_ACU(reasons)}。`, { muteable: false, durationMs: 6000 });
       } else {
         toast.success(`Checkpoint 已恢复到${targetMessage}；${providerMessage}。`, { muteable: false });
       }
@@ -590,7 +591,7 @@ export function useDataManagement() {
     } catch (e: any) {
       logError_ACU('[ACU-V2] restoreTableCheckpoint failed', e);
       message.value = null;
-      toast.error(`恢复 Checkpoint 失败：${e?.message || '未知错误'}`, { muteable: false });
+      toast.error(`恢复 Checkpoint 失败：${maskSensitiveText_ACU(e?.message || '未知错误')}`, { muteable: false });
     } finally {
       busyAction.value = '';
     }
@@ -806,7 +807,7 @@ export function useDataManagement() {
     await refreshMergedDataAndNotify_ACU();
     refresh();
     if (result.cleanupWarnings?.length) {
-      toast.warning(`本地数据已全部硬清空（${result.clearedMessageCount} 条消息）。警告：${result.cleanupWarnings[0]}`, { muteable: false, durationMs: 6000 });
+      toast.warning(`本地数据已全部硬清空（${result.clearedMessageCount} 条消息）。警告：${maskSensitiveText_ACU(result.cleanupWarnings[0])}`, { muteable: false, durationMs: 6000 });
     } else {
       const removed = result.removedMetadata.length ? `，移除元数据：${result.removedMetadata.join('、')}` : '';
       toast.success(`已删除所有本地数据（${result.clearedMessageCount} 条消息）${removed}。`, { muteable: false });

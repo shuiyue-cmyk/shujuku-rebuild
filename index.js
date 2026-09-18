@@ -2136,6 +2136,14 @@ function formatArgs(args) {
     return args.map(normalizeLogArg_ACU).join(' ');
 }
 /**
+ * 对一段面向用户可见面的文本做敏感信息脱敏（toast、错误提示、诊断文案）。
+ * 与日志写入侧同规则：日志缓冲的 Error 分支已掩码，但 toast/上游回显原文是旁路，
+ * 上游把请求头回显进错误体时会绕过日志脱敏直达 UI，故展示前必须过这一层。
+ */
+function maskSensitiveText_ACU(value) {
+    return normalizeLogArg_ACU(value);
+}
+/**
  * 设置 debug 级别日志是否写入缓冲区
  * 关闭时 debug 日志不会进入内存缓冲区，也不会通知订阅者，大幅减少性能开销
  */
@@ -90236,7 +90244,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.6.3" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.6.4" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -100243,13 +100251,11 @@ function relaxStoredOriginalDefaultDdls_ACU(templateObj) {
     });
     return changed;
 }
-/** R1：settings 日志脱敏摘要——仅暴露少量结构信息，所有 apiKey/密钥字段一律掩码 */
+/** R1：settings 日志脱敏摘要——仅暴露少量结构信息，所有 apiKey/密钥字段一律全掩码（不留首尾字符） */
 function maskSecret_ACU(value) {
     if (typeof value !== 'string' || !value)
-        return String(value ?? '');
-    if (value.length <= 8)
-        return '***';
-    return `${value.slice(0, 3)}***${value.slice(-3)}`;
+        return typeof value === 'string' ? value : String(value ?? '');
+    return '***';
 }
 function summarizeSettingsForLog_ACU(settings) {
     if (!settings || typeof settings !== 'object')
@@ -108009,7 +108015,9 @@ async function fetchAvailableModelsUncached_ACU(apiUrl, apiKey, customApiFormat)
         clearTimeout(probeTimer);
     }
     if (!response.ok) {
-        const errorText = await response.text();
+        // 上游/代理可能把请求头（含 Authorization / x-api-key）回显进错误体：
+        // 该字符串会一路进 toast（不过日志脱敏），展示前必须先脱敏。
+        const errorText = maskSensitiveText_ACU(await response.text());
         const status = response.status;
         let errorMessage = `API端点状态检查失败: ${status} ${response.statusText}.`;
         try {
@@ -132433,6 +132441,10 @@ class AgentWebClient_ACU {
     async searchSearxng_ACU(query, baseUrl, options = {}) {
         if (!baseUrl.trim())
             return { hits: [], note: 'SearXNG 实例地址未配置（续写设置 → 网页检索 → SearXNG 实例地址，如 https://searx.example.org；可自建实例或选用公共实例）' };
+        // 客户端侧闸门：baseUrl 会被服务端拿去出网，内网/非法地址在此直接拒绝，不发请求。
+        const denied = evaluateSearxngBaseUrlPolicy_ACU(baseUrl);
+        if (denied)
+            return { hits: [], note: `SearXNG 实例地址被拒绝：${denied}` };
         try {
             // TT DTO 全透传（见 TT tests/search-routes-contract.test.mjs 三键断言）：
             // preferences/categories 为 Option，有值才填，空（或全空白）不填。
@@ -132501,6 +132513,28 @@ function enabledEncyclopediaSources_ACU(settings) {
     if (settings.sources.baidu)
         list.push('baidu');
     return list;
+}
+/**
+ * SearXNG 实例地址的客户端侧闸门（纵深防御，服务端仍是权威校验）。
+ *
+ * baseUrl 会被 TT 服务端拿去出网抓取，客户端零校验时 `http://内网IP:端口` 这类值可直达服务端。
+ * 不能直接复用 evaluateWebUrlPolicy_ACU：它连 localhost 都拦，而 `http://localhost:8888`
+ * 是文档化的自建实例用法（测试亦锁定）。故 loopback（含自定义端口）放行，其余一律沿用抓取策略
+ * （直连 IP / 私网 / 非标端口 / 黑名单域名全部拦截）。
+ */
+function evaluateSearxngBaseUrlPolicy_ACU(rawBaseUrl) {
+    const trimmed = String(rawBaseUrl ?? '').trim();
+    let host = '';
+    try {
+        host = new URL(trimmed).hostname.toLowerCase();
+    }
+    catch {
+        return '实例地址格式非法（必须是完整的 http(s) 地址）';
+    }
+    const bareHost = host.replace(/^\[|\]$/g, '');
+    if (bareHost === 'localhost' || bareHost === '127.0.0.1' || bareHost === '::1')
+        return null;
+    return evaluateWebUrlPolicy_ACU(trimmed, [], undefined);
 }
 
 function unique_ACU(values) {
@@ -141943,7 +141977,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260915-17";
+        const stamp = "20260918-11";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -182377,7 +182411,7 @@ function useDataManagement() {
         }
         catch (e) {
             logError_ACU('[ACU-V2] importCombinedSettings failed', e);
-            setMessage$1(message, 'error', `合并导入失败：${e?.message || '未知错误'}`);
+            setMessage$1(message, 'error', `合并导入失败：${maskSensitiveText_ACU(e?.message || '未知错误')}`);
         }
         finally {
             busyAction.value = '';
@@ -182426,7 +182460,7 @@ function useDataManagement() {
         catch (e) {
             logError_ACU('[ACU-V2] exportTableCheckpoint failed', e);
             message.value = null;
-            toast.error(`导出 Checkpoint 失败：${e?.message || '未知错误'}`);
+            toast.error(`导出 Checkpoint 失败：${maskSensitiveText_ACU(e?.message || '未知错误')}`);
         }
     }
     function exportMixedStorageSnapshots() {
@@ -182445,7 +182479,7 @@ function useDataManagement() {
         catch (e) {
             logError_ACU('[ACU-V2] exportMixedStorageSnapshots failed', e);
             mixedStorageDecision.value = getActiveMixedStorageDecisionSummary_ACU();
-            toast.error(`导出混合存储快照失败：${e?.message || '未知错误'}`);
+            toast.error(`导出混合存储快照失败：${maskSensitiveText_ACU(e?.message || '未知错误')}`);
         }
         finally {
             busyAction.value = '';
@@ -182465,16 +182499,16 @@ function useDataManagement() {
                 toast.success(action === 'keep_v2' ? '已保留 V2 数据并清理冗余 legacy 数据。' : '已提交经验证的混合存储合并候选。');
             }
             else if (result.status === 'committed_postcondition_failed') {
-                toast.warning(`数据已保存，但后置校验失败：${result.error || '未知错误'}。请重新加载当前聊天后核对数据。`, { muteable: false, durationMs: 6000 });
+                toast.warning(`数据已保存，但后置校验失败：${maskSensitiveText_ACU(result.error || '未知错误')}。请重新加载当前聊天后核对数据。`, { muteable: false, durationMs: 6000 });
             }
             else {
-                toast.error(`混合存储提交失败：${result.error || '未知错误'}`);
+                toast.error(`混合存储提交失败：${maskSensitiveText_ACU(result.error || '未知错误')}`);
             }
         }
         catch (e) {
             logError_ACU('[ACU-V2] commitMixedStorageDecision failed', e);
             mixedStorageDecision.value = getActiveMixedStorageDecisionSummary_ACU();
-            toast.error(`混合存储决议已失效：${e?.message || '未知错误'}`);
+            toast.error(`混合存储决议已失效：${maskSensitiveText_ACU(e?.message || '未知错误')}`);
         }
         finally {
             busyAction.value = '';
@@ -182494,7 +182528,7 @@ function useDataManagement() {
         catch (e) {
             logError_ACU('[ACU-V2] scanV2IsolationDiagnostics failed', e);
             v2IsolationDiagnostics.value = [];
-            toast.error(`V2 隔离域诊断失败：${e?.message || '未知错误'}`);
+            toast.error(`V2 隔离域诊断失败：${maskSensitiveText_ACU(e?.message || '未知错误')}`);
         }
         finally {
             busyAction.value = '';
@@ -182527,7 +182561,7 @@ function useDataManagement() {
         catch (e) {
             logError_ACU('[ACU-V2] prepareV2Recovery failed', e);
             v2RecoverySummary.value = null;
-            toast.error(`V2 恢复诊断失败：${e?.message || '未知错误'}`);
+            toast.error(`V2 恢复诊断失败：${maskSensitiveText_ACU(e?.message || '未知错误')}`);
         }
         finally {
             busyAction.value = '';
@@ -182552,7 +182586,7 @@ function useDataManagement() {
         }
         catch (e) {
             logError_ACU('[ACU-V2] exportV2RecoveryBackups failed', e);
-            toast.error(`导出 V2 恢复备份失败：${e?.message || '未知错误'}`);
+            toast.error(`导出 V2 恢复备份失败：${maskSensitiveText_ACU(e?.message || '未知错误')}`);
         }
     }
     async function commitV2Recovery(confirmOrphanDataReplace) {
@@ -182570,15 +182604,15 @@ function useDataManagement() {
             }
             else if (result.status === 'committed_postcondition_failed') {
                 v2RecoverySummary.value = null;
-                toast.warning(`V2 恢复已保存，但后置校验失败：${result.error || '未知错误'}。请重新加载当前聊天核对数据。`, { muteable: false, durationMs: 6000 });
+                toast.warning(`V2 恢复已保存，但后置校验失败：${maskSensitiveText_ACU(result.error || '未知错误')}。请重新加载当前聊天核对数据。`, { muteable: false, durationMs: 6000 });
             }
             else {
-                toast.error(`V2 恢复提交失败：${result.error || '未知错误'}`);
+                toast.error(`V2 恢复提交失败：${maskSensitiveText_ACU(result.error || '未知错误')}`);
             }
         }
         catch (e) {
             logError_ACU('[ACU-V2] commitV2Recovery failed', e);
-            toast.error(`V2 恢复提交异常：${e?.message || '未知错误'}`);
+            toast.error(`V2 恢复提交异常：${maskSensitiveText_ACU(e?.message || '未知错误')}`);
         }
         finally {
             busyAction.value = '';
@@ -182595,7 +182629,7 @@ function useDataManagement() {
         catch (e) {
             logError_ACU('[ACU-V2] parseTableCheckpoint failed', e);
             message.value = null;
-            toast.error(`Checkpoint 文件无效：${e?.message || '未知错误'}`);
+            toast.error(`Checkpoint 文件无效：${maskSensitiveText_ACU(e?.message || '未知错误')}`);
             return null;
         }
         finally {
@@ -182634,7 +182668,7 @@ function useDataManagement() {
                     providerFallback ? '目标设置为 SQLite，实际存储 fallback 为 native' : '',
                     ...warnings,
                 ].filter(Boolean).join('；');
-                toast.warning(`Checkpoint 已恢复到${targetMessage}，但属于部分成功：${providerMessage}；${reasons}。`, { muteable: false, durationMs: 6000 });
+                toast.warning(`Checkpoint 已恢复到${targetMessage}，但属于部分成功：${maskSensitiveText_ACU(providerMessage)}；${maskSensitiveText_ACU(reasons)}。`, { muteable: false, durationMs: 6000 });
             }
             else {
                 toast.success(`Checkpoint 已恢复到${targetMessage}；${providerMessage}。`, { muteable: false });
@@ -182647,7 +182681,7 @@ function useDataManagement() {
         catch (e) {
             logError_ACU('[ACU-V2] restoreTableCheckpoint failed', e);
             message.value = null;
-            toast.error(`恢复 Checkpoint 失败：${e?.message || '未知错误'}`, { muteable: false });
+            toast.error(`恢复 Checkpoint 失败：${maskSensitiveText_ACU(e?.message || '未知错误')}`, { muteable: false });
         }
         finally {
             busyAction.value = '';
@@ -182859,7 +182893,7 @@ function useDataManagement() {
         await refreshMergedDataAndNotify_ACU();
         refresh();
         if (result.cleanupWarnings?.length) {
-            toast.warning(`本地数据已全部硬清空（${result.clearedMessageCount} 条消息）。警告：${result.cleanupWarnings[0]}`, { muteable: false, durationMs: 6000 });
+            toast.warning(`本地数据已全部硬清空（${result.clearedMessageCount} 条消息）。警告：${maskSensitiveText_ACU(result.cleanupWarnings[0])}`, { muteable: false, durationMs: 6000 });
         }
         else {
             const removed = result.removedMetadata.length ? `，移除元数据：${result.removedMetadata.join('、')}` : '';
@@ -186661,7 +186695,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260915-17";
+        const stamp = "20260918-11";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -186670,7 +186704,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.6.3";
+        const v = "9.6.4";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {
@@ -186678,11 +186712,11 @@ function getPluginVersion() {
     }
 }
 function maskSecret(value) {
+    // 密钥一律全掩码：此前返回前后各 3 字符（如 sk-***123），6 个有效字符会显著降低爆破空间，
+    // 且该值会进入可被转发的 acu-debug-*.json 导出包。
     if (typeof value !== 'string' || !value)
-        return String(value ?? '');
-    if (value.length <= 8)
-        return '***';
-    return `${value.slice(0, 3)}***${value.slice(-3)}`;
+        return typeof value === 'string' ? value : String(value ?? '');
+    return '***';
 }
 const SENSITIVE_KEYS = /^(api[_-]?key|apikey|key|token|authorization|auth|password|proxy[_-]?password|secret|bearer|accessToken|access_token)$/i;
 // 复合键后缀：embeddingApiKey / rerankApiKey 这类以敏感词结尾但带前缀的键，锚定式漏网（与 log-buffer 同规则）。

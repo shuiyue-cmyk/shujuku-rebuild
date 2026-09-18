@@ -14,6 +14,7 @@ export {
 import { getHostRequestHeaders_ACU as _getHeaders } from '../../data/gateways/ai-gateway';
 import { withOpencodeSessionHeader_ACU } from './api-call';
 import { hashUserInput_ACU, logDebug_ACU } from '../../shared/utils';
+import { maskSensitiveText_ACU } from '../../shared/log-buffer';
 
 // ============================================================
 // 模型列表获取
@@ -157,7 +158,9 @@ async function fetchAvailableModelsUncached_ACU(apiUrl: string, apiKey: string, 
     }
 
     if (!response.ok) {
-        const errorText = await response.text();
+        // 上游/代理可能把请求头（含 Authorization / x-api-key）回显进错误体：
+        // 该字符串会一路进 toast（不过日志脱敏），展示前必须先脱敏。
+        const errorText = maskSensitiveText_ACU(await response.text());
         const status = response.status;
         let errorMessage = `API端点状态检查失败: ${status} ${response.statusText}.`;
         try {

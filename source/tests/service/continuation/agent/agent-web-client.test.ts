@@ -11,6 +11,7 @@ import {
   AgentWebClient_ACU,
   collapseWhitespace_ACU,
   enabledEncyclopediaSources_ACU,
+  evaluateSearxngBaseUrlPolicy_ACU,
   evaluateWebUrlPolicy_ACU,
   extractReadableText_ACU,
   parseBlockedDomains_ACU,
@@ -166,6 +167,24 @@ describe('AgentWebClient_ACU 通用搜索与网页抓取（TT 路由实态）', 
     const omitted = await client.webSearch('Tauri', { searchProvider: 'searxng', searxngBaseUrl: 'http://localhost:8888' });
     expect(omitted.hits).toHaveLength(1);
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('SearXNG 实例地址闸门：自建 loopback 放行，内网/非法协议不出网', async () => {
+    // 自建实例是文档化用法（含自定义端口），必须放行。
+    expect(evaluateSearxngBaseUrlPolicy_ACU('http://localhost:8888')).toBeNull();
+    expect(evaluateSearxngBaseUrlPolicy_ACU('http://127.0.0.1:8888')).toBeNull();
+    expect(evaluateSearxngBaseUrlPolicy_ACU('https://searx.example.org')).toBeNull();
+    // 内网直连与非法协议必须在客户端拦下，不发请求。
+    expect(evaluateSearxngBaseUrlPolicy_ACU('http://192.168.1.10:8888')).not.toBeNull();
+    expect(evaluateSearxngBaseUrlPolicy_ACU('http://10.0.0.5/')).not.toBeNull();
+    expect(evaluateSearxngBaseUrlPolicy_ACU('file:///etc/passwd')).not.toBeNull();
+    expect(evaluateSearxngBaseUrlPolicy_ACU('not a url')).not.toBeNull();
+
+    const { client, fetch } = client_ACU(() => textResponse_ACU(''));
+    const blocked = await client.webSearch('q', { searchProvider: 'searxng', searxngBaseUrl: 'http://192.168.1.10:8888' });
+    expect(blocked.hits).toEqual([]);
+    expect(blocked.note).toContain('被拒绝');
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('SearXNG 未填地址时给出可操作提示且不出网；实例失败时说明原因', async () => {

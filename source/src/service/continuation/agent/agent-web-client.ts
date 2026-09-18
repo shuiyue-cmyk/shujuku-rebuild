@@ -362,6 +362,9 @@ export class AgentWebClient_ACU {
 
   private async searchSearxng_ACU(query: string, baseUrl: string, options: SearxngSearchOptions_ACU = {}): Promise<{ hits: AgentWebSearchHit_ACU[]; note: string }> {
     if (!baseUrl.trim()) return { hits: [], note: 'SearXNG 实例地址未配置（续写设置 → 网页检索 → SearXNG 实例地址，如 https://searx.example.org；可自建实例或选用公共实例）' };
+    // 客户端侧闸门：baseUrl 会被服务端拿去出网，内网/非法地址在此直接拒绝，不发请求。
+    const denied = evaluateSearxngBaseUrlPolicy_ACU(baseUrl);
+    if (denied) return { hits: [], note: `SearXNG 实例地址被拒绝：${denied}` };
     try {
       // TT DTO 全透传（见 TT tests/search-routes-contract.test.mjs 三键断言）：
       // preferences/categories 为 Option，有值才填，空（或全空白）不填。
@@ -421,4 +424,25 @@ export function enabledEncyclopediaSources_ACU(settings: Pick<ContinuationWebRes
   if (settings.sources.wikipediaEn) list.push('wikipedia_en');
   if (settings.sources.baidu) list.push('baidu');
   return list;
+}
+
+/**
+ * SearXNG 实例地址的客户端侧闸门（纵深防御，服务端仍是权威校验）。
+ *
+ * baseUrl 会被 TT 服务端拿去出网抓取，客户端零校验时 `http://内网IP:端口` 这类值可直达服务端。
+ * 不能直接复用 evaluateWebUrlPolicy_ACU：它连 localhost 都拦，而 `http://localhost:8888`
+ * 是文档化的自建实例用法（测试亦锁定）。故 loopback（含自定义端口）放行，其余一律沿用抓取策略
+ * （直连 IP / 私网 / 非标端口 / 黑名单域名全部拦截）。
+ */
+export function evaluateSearxngBaseUrlPolicy_ACU(rawBaseUrl: string): string | null {
+  const trimmed = String(rawBaseUrl ?? '').trim();
+  let host = '';
+  try {
+    host = new URL(trimmed).hostname.toLowerCase();
+  } catch {
+    return '实例地址格式非法（必须是完整的 http(s) 地址）';
+  }
+  const bareHost = host.replace(/^\[|\]$/g, '');
+  if (bareHost === 'localhost' || bareHost === '127.0.0.1' || bareHost === '::1') return null;
+  return evaluateWebUrlPolicy_ACU(trimmed, [], undefined);
 }

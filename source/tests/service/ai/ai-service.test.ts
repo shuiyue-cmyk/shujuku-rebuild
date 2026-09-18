@@ -169,6 +169,21 @@ describe('fetchAvailableModels_ACU', () => {
     expect(badAddr.error).toMatch(/地址|模型/i);
   });
 
+  it('上游错误体回显请求头时，返回的错误文案先脱敏（不把密钥带进 toast）', async () => {
+    mockFetch.mockResolvedValue({
+      ok: false,
+      status: 500,
+      statusText: 'Internal Server Error',
+      text: async () => 'proxy error: Authorization: Bearer sk-abcdefghij12345678 echoed',
+    });
+
+    const result = await fetchAvailableModels_ACU('https://api.test', 'key');
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('500');
+    expect(result.error).not.toContain('sk-abcdefghij12345678');
+    expect(result.error).toContain('***');
+  });
+
   it('HTTP 错误时返回错误信息（纯文本错误体）', async () => {
     mockFetch.mockResolvedValue({
       ok: false,

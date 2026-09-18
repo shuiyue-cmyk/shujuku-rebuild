@@ -214,6 +214,15 @@ export function formatArgs(args: any[]): string {
 }
 
 /**
+ * 对一段面向用户可见面的文本做敏感信息脱敏（toast、错误提示、诊断文案）。
+ * 与日志写入侧同规则：日志缓冲的 Error 分支已掩码，但 toast/上游回显原文是旁路，
+ * 上游把请求头回显进错误体时会绕过日志脱敏直达 UI，故展示前必须过这一层。
+ */
+export function maskSensitiveText_ACU(value: unknown): string {
+  return normalizeLogArg_ACU(value);
+}
+
+/**
  * 设置 debug 级别日志是否写入缓冲区
  * 关闭时 debug 日志不会进入内存缓冲区，也不会通知订阅者，大幅减少性能开销
  */

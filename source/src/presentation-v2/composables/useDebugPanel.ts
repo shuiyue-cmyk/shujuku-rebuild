@@ -51,9 +51,10 @@ function getPluginVersion(): string {
 }
 
 function maskSecret(value: unknown): string {
-  if (typeof value !== 'string' || !value) return String(value ?? '');
-  if (value.length <= 8) return '***';
-  return `${value.slice(0, 3)}***${value.slice(-3)}`;
+  // 密钥一律全掩码：此前返回前后各 3 字符（如 sk-***123），6 个有效字符会显著降低爆破空间，
+  // 且该值会进入可被转发的 acu-debug-*.json 导出包。
+  if (typeof value !== 'string' || !value) return typeof value === 'string' ? value : String(value ?? '');
+  return '***';
 }
 
 const SENSITIVE_KEYS = /^(api[_-]?key|apikey|key|token|authorization|auth|password|proxy[_-]?password|secret|bearer|accessToken|access_token)$/i;
