@@ -107,6 +107,7 @@ import {
 import {
   projectFlightModeHiddenChronicleRows_ACU
 } from '../../flight-mode/flight-mode-hidden-rows';
+import { isAiFloor_ACU } from '../../../shared/ai-floor';
 
 const AUTHOR_SQL_TABLE_IDENTIFIER_ACU = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -428,7 +429,7 @@ function resolvePromptRowWindow_ACU(
             const prefix = msg.is_user ? getUserName_ACU() : msg.name || '角色';
             let content = msg.mes || msg.message || '';
 
-            if (!msg.is_user && (extractTags || extractRules.length > 0 || excludeTags || excludeRules.length > 0)) {
+            if (isAiFloor_ACU(msg) && (extractTags || extractRules.length > 0 || excludeTags || excludeRules.length > 0)) {
                 content = applyContextTagFilters_ACU(content, { extractTags, extractRules, excludeTags, excludeRules });
             }
             if (typeof content === 'string' && content) {

@@ -29,6 +29,7 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({
 import {
   resolveLatestAiFloor_ACU,
   resolveAiFloorSignature_ACU,
+  resolveAiFloorSignatureEx_ACU,
   shouldSkipDuplicateAutoTableFill_ACU,
   recordAutoTableFillProcessedForFloor_ACU,
 } from '../../../src/service/table/auto-fill-echo-guard';
@@ -85,7 +86,7 @@ describe('resolveLatestAiFloor_ACU', () => {
 
 // [152 收紧] 无配对 GENERATION_ENDED 的「新 AI 楼证据」签名：门控拿它判「零产出假事件」。
 describe('resolveAiFloorSignature_ACU', () => {
-  it('AI 楼数按 !is_user 计数并含 narrator 系统楼，末楼身份与 resolveLatestAiFloor_ACU 同源', () => {
+  it('AI 楼数按宽档口径计数（含 narrator、排除隐藏楼与工具楼），末楼身份与 resolveLatestAiFloor_ACU 同源', () => {
     const chat = [
       { is_user: false, message_id: 3 },
       { is_user: true, message_id: 4 },
@@ -95,6 +96,22 @@ describe('resolveAiFloorSignature_ACU', () => {
     expect(resolveAiFloorSignature_ACU(chat)).toEqual({ aiFloorCount: 3, latestAiMessageId: 7 });
     // 同一份聊天里两套口径必须落在同一栋楼上——签名不许自带第二套 AI 楼判定。
     expect(resolveAiFloorSignature_ACU(chat).latestAiMessageId).toBe(resolveLatestAiFloor_ACU(chat)!.messageId);
+  });
+
+  it('TT 2.3.0 工具楼与隐藏楼（is_system）不计入楼数，也不充当末楼身份', () => {
+    const chat = [
+      { is_user: false, message_id: 3 },
+      { is_user: true, message_id: 4 },
+      { is_user: false, message_id: 7, mes: 'AI 正文' },
+      // 旧工具调用结果的一等角色：is_system 标记、无 extra
+      { role: 'tool', is_system: true, is_user: false, message_id: 8, mes: '搜索结果', tool_call_id: 'call_1' },
+      // is_system 在 ST/TT 本义是「隐藏消息」
+      { is_user: false, is_system: true, message_id: 9, mes: '隐藏楼' },
+    ];
+    expect(resolveAiFloorSignature_ACU(chat)).toEqual({ aiFloorCount: 2, latestAiMessageId: 7 });
+    expect(resolveLatestAiFloor_ACU(chat)).toEqual({ messageIndex: 2, messageId: 7 });
+    expect(resolveAiFloorSignatureEx_ACU(chat).latestContentHash)
+      .toBe(resolveAiFloorSignatureEx_ACU(chat.slice(0, 3)).latestContentHash);
   });
 
   it('推演④：查看器 send_if_empty 只写 user 楼 → 签名逐字不变（可判为零产出）', () => {

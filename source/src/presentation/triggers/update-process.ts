@@ -70,6 +70,7 @@ import {
 import {
   collectV2CheckpointFloorsFromChat_ACU
 } from '../../service/table/table-history';
+import { isAiFloor_ACU } from '../../shared/ai-floor';
 
 // ============================================================
 // UI 辅助函数
@@ -140,7 +141,7 @@ function buildLegacyManualRefillRangeLabel_ACU(): string {
         const chat = getChatArray_ACU();
         if (!Array.isArray(chat) || chat.length === 0) return '暂无可重填 AI 楼层';
         const aiItems = chat
-            .map((msg: any, index: number) => msg && !msg.is_user ? { index, aiFloor: 0 } : null)
+            .map((msg: any, index: number) => isAiFloor_ACU(msg) ? { index, aiFloor: 0 } : null)
             .filter((item): item is { index: number; aiFloor: number } => item !== null);
         aiItems.forEach((item, index) => { item.aiFloor = index + 1; });
         const skip = Number.isFinite(Number(settings_ACU.skipUpdateFloors)) ? Math.max(0, Math.floor(Number(settings_ACU.skipUpdateFloors))) : 0;

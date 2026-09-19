@@ -31,6 +31,7 @@ import {
 } from './agent-worldbook-read';
 import { normalizeAmCode_ACU } from '../worldbook-context';
 import { applyContextTagFilters_ACU } from '../../runtime/helpers-context-tags';
+import { isAiFloor_ACU } from '../../../shared/ai-floor';
 
 export const AGENT_TABLE_TOKEN_PREFIX_ACU = '$TABLE:';
 export const AGENT_STORY_RANGE_TOKEN_PREFIX_ACU = '$STORY_RANGE:';
@@ -112,7 +113,7 @@ function listAgentStoryFloors_ACU(source: AgentStoryFloorSource_ACU): AgentStory
   const chat = Array.isArray(source.chat) ? source.chat : [];
   return chat
     .map((message, index) => ({ index, text: messageText_ACU(message, source.contextRules) }))
-    .filter(item => chat[item.index] && !chat[item.index].is_user && item.text);
+    .filter(item => isAiFloor_ACU(chat[item.index]) && item.text);
 }
 
 function agentStoryWindowSize_ACU(source: AgentStoryFloorSource_ACU): number {
@@ -325,7 +326,7 @@ export function renderAgentStoryText_ACU(context: AgentResolveContext_ACU): stri
   const settledThrough = Math.min(context.settledThroughIndex, highestIndex);
   const floors = chat
     .map((message, index) => ({ index, text: messageText_ACU(message, context.contextRules) }))
-    .filter(item => chat[item.index] && !chat[item.index].is_user && item.text);
+    .filter(item => isAiFloor_ACU(chat[item.index]) && item.text);
   if (!floors.length) return '当前聊天还没有 AI 产出的正文楼层。';
 
   const window = Math.max(0, context.storyWindowFloors ?? AGENT_STORY_WINDOW_DEFAULT_ACU);

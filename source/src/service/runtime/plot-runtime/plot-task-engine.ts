@@ -134,6 +134,7 @@ import {
   hasUsableWorldbookSkillMeta_ACU,
   resolveAgentWorldbookFilterAvailability_ACU
 } from '../../agent/agent-worldbook-skill-meta';
+import { isAiFloor_ACU } from '../../../shared/ai-floor';
 
   type PlotWorldbookAgentMode_ACU = 'normal' | 'agent-controlled';
 
@@ -262,8 +263,7 @@ import {
 
       for (let i = contextEndIndex; i >= 0 && aiCount < contextTurnCount; i--) {
         const msg = chat[i];
-        if (!msg) continue;
-        if (msg.is_user) continue;
+        if (!isAiFloor_ACU(msg)) continue;
         if (msg._qrf_from_planning) continue;
 
         let content = msg.mes;

@@ -26,6 +26,7 @@ import { getSheetColumnProjection_ACU } from '../../shared/ddl-utils';
 import { canonicalizeDisplayName_ACU } from '../../shared/sheet-identity';
 import { applyGuideMetadataToSheet_ACU, isSameSheetHeader_ACU } from '../template/guide-metadata-overlay';
 import { repairLegacyAutoMergedRowTails_ACU, repairLegacyOrphanIdentityColumn_ACU } from '../../shared/canonical-row-normalizer';
+import { isAiFloor_ACU, countAiFloors_ACU } from '../../shared/ai-floor';
 
 /**
  * Legacy entry point retained for callers that need in-place normalization.
@@ -328,7 +329,7 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
                           if (!independentTableStates_ACU[storedSheetKey]) {
                               independentTableStates_ACU[storedSheetKey] = {};
                           }
-                          const currentAiFloor = chat.slice(0, i + 1).filter(m => !m.is_user).length;
+                          const currentAiFloor = countAiFloors_ACU(chat.slice(0, i + 1));
                           independentTableStates_ACU[storedSheetKey].lastUpdatedAiFloor = currentAiFloor;
                       }
                   }
@@ -371,7 +372,7 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
 
                           if (wasUpdated) {
                               if (!independentTableStates_ACU[storedSheetKey]) independentTableStates_ACU[storedSheetKey] = {};
-                              const currentAiFloor = chat.slice(0, i + 1).filter(m => !m.is_user).length;
+                              const currentAiFloor = countAiFloors_ACU(chat.slice(0, i + 1));
                               independentTableStates_ACU[storedSheetKey].lastUpdatedAiFloor = currentAiFloor;
                           }
                       }
@@ -403,7 +404,7 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
                       mergedData[k] = JSON.parse(JSON.stringify(standardData[k]));
                       foundSheets[k] = true;
                       if (!independentTableStates_ACU[k]) independentTableStates_ACU[k] = {};
-                      const currentAiFloor = chat.slice(0, i + 1).filter(m => !m.is_user).length;
+                      const currentAiFloor = countAiFloors_ACU(chat.slice(0, i + 1));
                       independentTableStates_ACU[k].lastUpdatedAiFloor = currentAiFloor;
                   });
               }
@@ -427,7 +428,7 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
                       mergedData[k] = JSON.parse(JSON.stringify(summaryData[k]));
                       foundSheets[k] = true;
                       if (!independentTableStates_ACU[k]) independentTableStates_ACU[k] = {};
-                      const currentAiFloor = chat.slice(0, i + 1).filter(m => !m.is_user).length;
+                      const currentAiFloor = countAiFloors_ACU(chat.slice(0, i + 1));
                       independentTableStates_ACU[k].lastUpdatedAiFloor = currentAiFloor;
                   });
               }
@@ -455,7 +456,7 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
                       if (!independentTableStates_ACU[sheetKey]) {
                           independentTableStates_ACU[sheetKey] = {};
                       }
-                      const currentAiFloor = chat.slice(0, deltaIndex + 1).filter((m: any) => !m.is_user).length;
+                      const currentAiFloor = countAiFloors_ACU(chat.slice(0, deltaIndex + 1));
                       independentTableStates_ACU[sheetKey].lastUpdatedAiFloor = currentAiFloor;
                   } catch (e) {
                       logError_ACU(`[表格重建] 应用 delta 失败: sheetKey=${sheetKey}, 楼层=#${deltaIndex}`, e);
@@ -763,7 +764,7 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
       if (!Array.isArray(chat) || chat.length === 0) return false;
       const hasAnyUserMessage = chat.some(m => m && m.is_user);
       if (hasAnyUserMessage) return false;
-      const firstAiIndex = chat.findIndex(m => m && !m.is_user);
+      const firstAiIndex = chat.findIndex(isAiFloor_ACU);
       return firstAiIndex !== -1;
   }
 
@@ -771,7 +772,7 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
   export function isSingleAiNoUserChat_ACU(chat: any[]) {
       if (!Array.isArray(chat) || chat.length === 0) return false;
       const userCount = chat.filter(m => m && m.is_user).length;
-      const aiCount = chat.filter(m => m && !m.is_user).length;
+      const aiCount = countAiFloors_ACU(chat);
       return userCount === 0 && aiCount === 1;
   }
 
@@ -868,7 +869,7 @@ export function migrateContentNullToRowId(data: Record<string, any> | null): Rec
           return false;
       }
 
-      const firstAiIndex = chat.findIndex(m => m && !m.is_user);
+      const firstAiIndex = chat.findIndex(isAiFloor_ACU);
       if (firstAiIndex === -1) {
           logWarn_ACU('[InitialCheckpoint] 找不到第一楼AI消息');
           return false;

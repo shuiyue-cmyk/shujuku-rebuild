@@ -13,6 +13,7 @@ import {
   getCurrentCharacterFallback_ACU
 } from '../host/host-state-service';
 import type { AiFloorSignatureEx_ACU } from './state-manager';
+import { countAiModelOutputFloors_ACU, isAiFloor_ACU, isAiModelOutputFloor_ACU } from '../../shared/ai-floor';
 
 export type MessageAction = 'skip' | 'update_only' | 'optimize_parallel' | 'optimize_then_update' | 'optimize_manual';
 
@@ -34,7 +35,7 @@ export interface AutoFillIntent_ACU {
     capturedAt: number;
     /** 捕获时聊天数组长度 */
     capturedChatLength: number;
-    /** 捕获时 AI 楼层数（!is_user 且非 narrator 的楼层） */
+    /** 捕获时模型产出的 AI 楼层数（窄档：非 user、非 is_system、非 role:'tool'、非 narrator；见 shared/ai-floor） */
     capturedAiFloorCount: number;
     /** 捕获时对应的生成序号；状态接口不可靠时为 undefined，不假造 */
     generationSeq?: number;
@@ -63,29 +64,13 @@ export interface MessageActionResult {
 }
 
 /**
- * 判断一条消息是否属于「AI 楼层」。
- * 宿主语义（@types/iframe/exported.sillytavern.d.ts）：
- *   - role === 'user'  <=> is_user
- *   - role === 'system' <=> extra?.type === 'narrator' && !is_user
- *   - role === 'assistant' <=> extra?.type !== 'narrator' && !is_user
- * 因此 AI 楼层 = !is_user 且非 narrator 系统旁白。仅凭 !is_user 会把系统消息误当 AI。
+ * 「模型产出的 AI 楼」判定与计数已收敛到 shared/ai-floor.ts 的**窄档**谓词
+ * （isAiModelOutputFloor_ACU / countAiModelOutputFloors_ACU）：
+ * 非 user、非 system（隐藏楼、TT 2.3.0 起的一等 role:'tool' 工具楼）、非 narrator 旁白。
+ *
+ * 勿在本文件另立第二套标准。按楼层取序号的场景（配对签名、自动填表身份、删除范围）
+ * 用宽档 isAiFloor_ACU（含 narrator），与窄档的差异是既存设计，两档均被测试锁定。
  */
-export function isAiMessage_ACU(message: any): boolean {
-    if (!message || typeof message !== 'object') return false;
-    if (message.is_user) return false;
-    const extraType = message?.extra?.type;
-    if (extraType === 'narrator') return false;
-    return true;
-}
-
-export function countAiMessages_ACU(liveChat: any[]): number {
-    if (!Array.isArray(liveChat)) return 0;
-    let count = 0;
-    for (const message of liveChat) {
-        if (isAiMessage_ACU(message)) count += 1;
-    }
-    return count;
-}
 
 export interface ResolveGeneratedAiOptions_ACU {
     liveChat: any[];
@@ -115,12 +100,12 @@ export function resolveGeneratedAiMessageIndex_ACU(options: ResolveGeneratedAiOp
 
     const isAi = (index: number): boolean => {
         if (index < 0 || index >= liveChat.length) return false;
-        return isAiMessage_ACU(liveChat[index]);
+        return isAiModelOutputFloor_ACU(liveChat[index]);
     };
 
     const capturedLength = Number.isInteger(intent.capturedChatLength) ? (intent.capturedChatLength as number) : -1;
     const capturedAiCount = Number.isInteger(intent.capturedAiFloorCount) ? (intent.capturedAiFloorCount as number) : -1;
-    const liveAiCount = countAiMessages_ACU(liveChat);
+    const liveAiCount = countAiModelOutputFloors_ACU(liveChat);
 
     // 1. 消息对象的稳定 message_id 与数组索引不是同一概念。仓库既有逻辑同样通过
     //    message_id 反查 runtime index（chat-service.ts / plot-logic.ts）。只接受唯一 AI 命中。
@@ -226,12 +211,12 @@ export function evaluateNewMessageAction_ACU(
     const lastMessage = liveChat[lastMessageIndex];
 
     // 显式索引无效：调度层已解析出索引，但楼层已被删除/越界 → 专用原因，不笼统复用 last_message_not_ai。
-    if (resolvedMessageIndex !== undefined && (!lastMessage || lastMessage.is_user || !isAiMessage_ACU(lastMessage))) {
+    if (resolvedMessageIndex !== undefined && (!lastMessage || lastMessage.is_user || !isAiModelOutputFloor_ACU(lastMessage))) {
         return { action: 'skip', reason: 'Resolved message is not an AI reply', skipReason: 'resolved_message_not_ai' };
     }
 
     // 无 intent 的历史路径：保持"最后一条 AI 消息"语义（若尾部不是 AI 则跳过）。
-    if (resolvedMessageIndex === undefined && (!lastMessage || lastMessage.is_user)) {
+    if (resolvedMessageIndex === undefined && (!lastMessage || !isAiFloor_ACU(lastMessage))) {
         return { action: 'skip', reason: 'Last message is not an AI reply', skipReason: 'last_message_not_ai' };
     }
 

@@ -324,7 +324,7 @@ describe('mainInitialize_ACU GENERATION_STARTED 复位终止残留', () => {
 // [152 收紧] GENERATION_ENDED 监听器必须把「新 AI 楼证据」签名交给门控：宿主 ended 只由 hideStopButton
 // 派发，外部插件（sr 提示词查看器直接 Generate + stopGeneration、酒馆助手 generate/generateRaw、MVU 额外
 // 模型收尾）会凭空补一条无配对的 ended，此前一律放行去拉填表 + 正文替换链，W1/W3 判重拦不住「该楼未处理过 /
-// 首轮在飞」。签名由监听器读一次聊天数组派生（!is_user 口径，含 narrator），门控据此丢弃零产出假事件。
+// 首轮在飞」。签名由监听器读一次聊天数组派生（宽档口径：含 narrator、排除 is_system），门控据此丢弃零产出假事件。
 describe('mainInitialize_ACU GENERATION_ENDED 无配对假事件收紧', () => {
   // 本组用例会改写「内部 ended 专吞」的返回值并挂假定时器，无论断言是否命中都必须还原，
   // 否则后面的 GENERATION_ENDED 用例会静默早退（mockReturnValue 不是 vi.clearAllMocks 能清掉的）。
@@ -349,6 +349,24 @@ describe('mainInitialize_ACU GENERATION_ENDED 无配对假事件收紧', () => {
     expect(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).toHaveBeenCalledWith(null, { aiFloorCount: 2, latestAiMessageId: 7 });
     expect(m.handleNewMessage).toHaveBeenCalledTimes(1);
     expect(m.handleNewMessage).toHaveBeenCalledWith('GENERATION_ENDED', expect.objectContaining({ eventMessageId: 8 }));
+  });
+
+  it('TT 2.3.0 工具楼既不进签名也不进 capturedAiFloorCount（宽窄两档都排除 is_system）', async () => {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    vi.mocked(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).mockReturnValue(true);
+    m.consumeGenerationContext.mockReturnValue(null);
+    m.api.chat = [
+      { is_user: false, message_id: 5 },
+      { is_user: true, message_id: 6 },
+      { is_user: false, message_id: 7 },
+      { role: 'tool', is_system: true, is_user: false, message_id: 8, mes: '搜索结果', tool_call_id: 'call_1' },
+    ];
+
+    m.generationEndedHandler!(9);
+
+    // 宽档（签名）与窄档（捕获楼数）都不把工具楼算作 AI 楼
+    expect(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).toHaveBeenCalledWith(null, { aiFloorCount: 2, latestAiMessageId: 7 });
+    expect(m.handleNewMessage).toHaveBeenCalledWith('GENERATION_ENDED', expect.objectContaining({ capturedAiFloorCount: 2 }));
   });
 
   it('无配对 + 门控判「零产出」丢弃时不再派发自动填表链（不再烧填表 / 正文替换 AI）', async () => {
@@ -492,6 +510,28 @@ describe('mainInitialize_ACU 续写宿主生成事件上下文', () => {
     vi.mocked(sm.isQuietLikeGeneration_ACU).mockReturnValue(false);
     m.generationEndedHandler!(42);
     expect(bridge.claimsGenerationEnded).toHaveBeenLastCalledWith(3, { allowOrdinaryLooseClaim: false, automaticTrigger: true, quietLike: false, dryRun: false });
+  });
+
+  it('TT 2.3.0：Agent 断点续连（params.agentResume）不开放普通宽松认领', async () => {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    vi.mocked(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).mockReturnValue(true);
+    const bridge = bridge_ACU(false);
+
+    // 宿主 resumeAgentRunInChat 以 { agentResume: true, runId } 作第三参派发 STARTED：
+    // 形态上既不是 quiet、也没有 automatic_trigger，只按前三者判会误判成普通前台生成。
+    vi.mocked(sm.isQuietLikeGeneration_ACU).mockReturnValue(false);
+    m.generationStartedHandler!('normal', { agentResume: true, runId: 'run-1' }, false);
+
+    expect(bridge.onGenerationStarted).toHaveBeenCalledTimes(1);
+    expect(bridge.onGenerationStarted.mock.calls[0][1]).toEqual({
+      allowOrdinaryLooseClaim: false, automaticTrigger: false, quietLike: false, dryRun: false,
+    });
+
+    // ENDED 侧同口径：宿主续连的收尾不得被认成等待中的续写轮
+    m.consumeGenerationContext.mockReturnValue({ seq: 4, type: 'normal', params: { agentResume: true, runId: 'run-1' }, dryRun: false, at: 1 });
+    vi.mocked(sm.isQuietLikeGeneration_ACU).mockReturnValue(false);
+    m.generationEndedHandler!(43);
+    expect(bridge.claimsGenerationEnded).toHaveBeenLastCalledWith(4, { allowOrdinaryLooseClaim: false, automaticTrigger: false, quietLike: false, dryRun: false });
   });
 });
 

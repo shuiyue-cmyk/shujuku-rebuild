@@ -1,4 +1,5 @@
-import { countAiMessages_ACU, resolveGeneratedAiMessageIndex_ACU, type AutoFillIntent_ACU } from '../runtime/message-handler';
+import { resolveGeneratedAiMessageIndex_ACU, type AutoFillIntent_ACU } from '../runtime/message-handler';
+import { countAiModelOutputFloors_ACU } from '../../shared/ai-floor';
 import { validateLoopTags_ACU } from '../loop/loop-evaluator';
 import { countTextTokens_ACU } from '../ai/token-counter';
 import { logAgentSession_ACU } from './agent/agent-session-log';
@@ -130,7 +131,7 @@ export class ContinuationHostGenerationBridge_ACU {
     const capture: ContinuationHostGenerationCapture_ACU = {
       capturedAt: this.dependencies.now(),
       capturedChatLength: Array.isArray(chat) ? chat.length : 0,
-      capturedAiFloorCount: Array.isArray(chat) ? chat.filter(message => message && !message.is_user && message?.extra?.type !== 'narrator').length : 0,
+      capturedAiFloorCount: countAiModelOutputFloors_ACU(chat),
       generationSeq: null,
     };
     await runtime.recordHostTurn({ identity: prepared.identity, capture });
@@ -425,7 +426,7 @@ export class ContinuationHostGenerationBridge_ACU {
       logAgentSession_ACU({ kind: 'run_failed', title: '放弃宿主重发', detail: '楼层已与发送时不一致（承载指令的用户楼或上一轮正文已被删除），直接重发会落错位置。请发送一条消息让主 Agent 按现存楼层重新规划。', ok: false });
       return false;
     }
-    const aiCount = countAiMessages_ACU(chat);
+    const aiCount = countAiModelOutputFloors_ACU(chat);
     const capture: ContinuationHostGenerationCapture_ACU = {
       capturedAt: this.dependencies.now(),
       capturedChatLength: mode === 'regenerate' ? Math.max(0, chat.length - 1) : chat.length,

@@ -58,6 +58,7 @@ import {
 import {
   replaceDbSqlVariables
 } from '../runtime/template-vars/sql-query-var';
+import { isAiFloor_ACU } from '../../shared/ai-floor';
 /**
  * service/optimization/content-optimization.ts — 正文优化服务逻辑
  * 从 src/core/02_storage_and_profile.js:630~1325 迁移而来。
@@ -129,7 +130,7 @@ import {
       // $7: 前文上下文（仅AI输出）
       const chat = getChatArray_ACU();
       const contextMessages = chat
-        .filter(msg => !msg.is_user)
+        .filter(isAiFloor_ACU)
         .slice(-10) // 最近10条AI消息
         .map(msg => `assistant："${msg.mes || ''}"`)
         .join('\n');

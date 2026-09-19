@@ -23,19 +23,12 @@ import {
 } from '../../data/storage/optimization-cache-storage';
 import { logDebug_ACU } from '../../shared/utils';
 import { sha256HexSync_ACU } from '../../shared/sha256-sync';
+import { isAiFloor_ACU } from '../../shared/ai-floor';
 import type { AiFloorSignature_ACU, AiFloorSignatureEx_ACU } from '../runtime/state-manager';
 
 export interface AutoFillFloor_ACU {
     messageIndex: number;
     messageId: any;
-}
-
-/**
- * AI 楼判定的唯一口径：!is_user（含 narrator 系统楼）。
- * resolveLatestAiFloor_ACU 与 resolveAiFloorSignature_ACU 共用，杜绝再造第二套标准。
- */
-function isAiFloor_ACU(message: any): boolean {
-    return !!message && !message.is_user;
 }
 
 /**
@@ -54,7 +47,8 @@ export function resolveLatestAiFloor_ACU(chat: any): AutoFillFloor_ACU | null {
 
 /**
  * GENERATION_ENDED 的「新 AI 楼输出」签名：AI 楼数 + 最新 AI 楼 message_id。
- * 与 resolveLatestAiFloor_ACU 严格同口径（AI 楼 = !is_user，含 narrator）。
+ * 与 resolveLatestAiFloor_ACU 严格同口径（共用 shared/ai-floor 的宽档谓词 isAiFloor_ACU：
+ * 非 user、非 system、非 role:'tool'，含 narrator 旁白）。
  *
  * 用途：宿主 GENERATION_ENDED 只由 hideStopButton 派发，外部插件收尾/停止会凭空补一条；
  * 这类事件没有配对上下文，门控此前一律放行。连续两次签名完全相同 ⇒ 期间零新 AI 楼 ⇒ 假事件，

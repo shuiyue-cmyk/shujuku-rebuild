@@ -101,6 +101,10 @@ import {
   logAutoFillSkip_ACU
 } from '../../../shared/trigger-diagnostics';
 import {
+  countAiFloors_ACU,
+  countAiModelOutputFloors_ACU
+} from '../../../shared/ai-floor';
+import {
   waitForMvuAnalysisToSettle_ACU
 } from '../../../service/runtime/mvu-analysis-gate';
 
@@ -466,7 +470,7 @@ import {
             capturedChatLength: intent.capturedChatLength,
             capturedAiFloorCount: intent.capturedAiFloorCount,
             liveChatLength: liveChat.length,
-            liveAiFloorCount: liveChat.filter((message: any) => message && !message.is_user && message?.extra?.type !== 'narrator').length,
+            liveAiFloorCount: countAiModelOutputFloors_ACU(liveChat),
             candidateIndexes: resolution.candidates,
           });
           return;
@@ -481,7 +485,7 @@ import {
             capturedChatLength: intent.capturedChatLength,
             capturedAiFloorCount: intent.capturedAiFloorCount,
             liveChatLength: liveChat.length,
-            liveAiFloorCount: liveChat.filter((message: any) => message && !message.is_user && message?.extra?.type !== 'narrator').length,
+            liveAiFloorCount: countAiModelOutputFloors_ACU(liveChat),
           });
           return;
         }
@@ -539,7 +543,7 @@ import {
               eventType,
               eventMessageId: intent?.eventMessageId,
               messageId: intent?.eventMessageId,
-              aiFloorCount: liveChat.filter((message: any) => message && !message.is_user && message?.extra?.type !== 'narrator').length,
+              aiFloorCount: countAiFloors_ACU(liveChat),
               inFlight: isAutoUpdatingCard_ACU,
           });
           return;

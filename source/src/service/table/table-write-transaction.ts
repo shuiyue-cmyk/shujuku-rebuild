@@ -2,6 +2,7 @@ import type { TableDataObject_ACU } from '../../shared/models/table-data';
 import type { TableMutationSourceV2_ACU, TableWriteConflictUnitV2_ACU } from './storage-frame-v2-types';
 import { currentChatFileIdentifier_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU } from '../runtime/state-manager';
 import { deepClone_ACU } from '../../shared/utils';
+import { isAiFloor_ACU } from '../../shared/ai-floor';
 
 type ReleaseLock_ACU = () => void;
 type LockMode_ACU = 'read' | 'write';
@@ -261,11 +262,11 @@ export function resolveTableWriteTargetMessageIndex_ACU(
 
   if (Number.isInteger(requestedTargetMessageIndex) && requestedTargetMessageIndex !== -1) {
     const index = requestedTargetMessageIndex as number;
-    return chat[index] && !chat[index].is_user ? index : -1;
+    return isAiFloor_ACU(chat[index]) ? index : -1;
   }
 
   for (let i = chat.length - 1; i >= 0; i -= 1) {
-    if (chat[i] && !chat[i].is_user) return i;
+    if (isAiFloor_ACU(chat[i])) return i;
   }
   return -1;
 }

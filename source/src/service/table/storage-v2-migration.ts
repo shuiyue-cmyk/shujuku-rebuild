@@ -16,6 +16,7 @@ import { buildCanonicalFullCheckpoint_ACU } from './canonical-checkpoint-builder
 import { auditTableDataForUpgrade_ACU, getTableDataFingerprint_ACU, type UpgradeAuditResult_ACU } from './table-data-upgrade-audit';
 import { repairTableDataFromAudit_ACU, type RepairResult_ACU } from './table-data-repair';
 import { loadTableStateFromFramesV2Detailed_ACU } from './storage-frame-v2-replay';
+import { isAiFloor_ACU, isDataBearingMessage_ACU } from '../../shared/ai-floor';
 
 export interface LegacyToV2MigrationOptions_ACU {
   data: Record<string, any> | null;
@@ -121,7 +122,7 @@ function findLegacyRowBearingSheetsMissingFromMerged_ACU(
 function countAiFloor_ACU(chat: any[], messageIndex: number): number {
   let count = 0;
   for (let i = 0; i <= messageIndex && i < chat.length; i += 1) {
-    if (chat[i] && !chat[i].is_user) count += 1;
+    if (isAiFloor_ACU(chat[i])) count += 1;
   }
   return count;
 }
@@ -145,7 +146,7 @@ function resolveMigrationSkipUpdateFloors_ACU(data: Record<string, any> | null |
 function findMigrationTargetAiMessage_ACU(chat: any[], skipUpdateFloors: number): { message: any; index: number } | null {
   const aiMessages: { message: any; index: number }[] = [];
   for (let i = 0; i < chat.length; i += 1) {
-    if (chat[i] && !chat[i].is_user) aiMessages.push({ message: chat[i], index: i });
+    if (isAiFloor_ACU(chat[i])) aiMessages.push({ message: chat[i], index: i });
   }
   if (aiMessages.length === 0) return null;
 
@@ -604,7 +605,7 @@ export async function migrateLegacyStorageToV2OnLoad_ACU(
   let canRebuild = false;
   let selfHealedMixedConflict = false;
   let supersededV2Frames: NonNullable<TableMigrationAuditBackupV1_ACU['supersededV2Frames']> = [];
-  const hasV2History = chat.some(message => !message?.is_user
+  const hasV2History = chat.some(message => isDataBearingMessage_ACU(message)
     && hasV2TableHistoryEvidence_ACU(readIsolatedTagData_ACU(message, options.isolationKey)));
   if (hasV2History) {
     mixedDecision = await evaluateMixedStorageDecision_ACU({

@@ -31,6 +31,7 @@ import { getCurrentCharPrimaryLorebook_ACU } from '../../service/worldbook/world
 import { topLevelWindow_ACU } from '../../shared/env';
 import { useDialogStore } from '../stores/dialog-store';
 import { useToastStore } from '../stores/toast-store';
+import { isAiFloor_ACU } from '../../shared/ai-floor';
 
 type MessageKind = 'info' | 'success' | 'warning' | 'error';
 
@@ -197,7 +198,7 @@ function resolveManualRefillRangeSummary_ACU(manualDepth: number): ManualRefillR
   const chat = getChatArray_ACU();
   if (!Array.isArray(chat) || chat.length === 0) return null;
   const aiItems = chat
-    .map((msg: any, index: number) => (msg && !msg.is_user ? { index, aiFloor: 0 } : null))
+    .map((msg: any, index: number) => (isAiFloor_ACU(msg) ? { index, aiFloor: 0 } : null))
     .filter((item): item is { index: number; aiFloor: number } => item !== null);
   aiItems.forEach((item, idx) => { item.aiFloor = idx + 1; });
   const skip = normalizeNonNegativeInteger(settings_ACU.skipUpdateFloors, 0);

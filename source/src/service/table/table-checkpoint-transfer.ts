@@ -14,6 +14,7 @@ import { persistTablesToChatMessage_ACU } from './table-service';
 import { runTableWriteTransaction_ACU } from './table-write-transaction';
 import { repairLegacyAutoMergedRowTails_ACU } from '../../shared/canonical-row-normalizer';
 import { validateCanonicalCheckpointData_ACU } from '../../shared/canonical-checkpoint-validator';
+import { isDataBearingMessage_ACU } from '../../shared/ai-floor';
 
 const CHECKPOINT_FORMAT_ACU = 'acu-table-checkpoint' as const;
 const CHECKPOINT_VERSION_ACU = 1 as const;
@@ -248,7 +249,7 @@ export function buildCurrentTableCheckpoint_ACU(): TableCheckpointFileV1_ACU {
 type MessageFieldSnapshot_ACU = { msg: any; fields: Record<string, { exists: boolean; value: any }> };
 const RESTORE_MESSAGE_FIELDS_ACU = ['TavernDB_ACU_Data', 'TavernDB_ACU_SummaryData', 'TavernDB_ACU_IndependentData', 'TavernDB_ACU_Identity', 'TavernDB_ACU_IsolatedData', 'TavernDB_ACU_ModifiedKeys', 'TavernDB_ACU_UpdateGroupKeys'];
 function captureMessageSnapshots_ACU(chat: any[]): MessageFieldSnapshot_ACU[] {
-  return chat.filter(msg => msg && !msg.is_user).map(msg => ({ msg, fields: RESTORE_MESSAGE_FIELDS_ACU.reduce((out: Record<string, { exists: boolean; value: any }>, key) => {
+  return chat.filter(isDataBearingMessage_ACU).map(msg => ({ msg, fields: RESTORE_MESSAGE_FIELDS_ACU.reduce((out: Record<string, { exists: boolean; value: any }>, key) => {
     const exists = Object.prototype.hasOwnProperty.call(msg, key);
     out[key] = { exists, value: exists ? cloneJson_ACU(msg[key]) : undefined };
     return out;

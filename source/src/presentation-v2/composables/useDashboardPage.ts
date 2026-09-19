@@ -69,6 +69,7 @@ import {
 import {
   useDevOptions
 } from "./useDevOptions";
+import { countAiFloors_ACU } from '../../shared/ai-floor';
 
 type MessageKind = "info" | "success" | "warning" | "error";
 type HealthKind = "ok" | "info" | "warning" | "error";
@@ -195,7 +196,7 @@ function currentSheetKeys(): string[] {
 
 function countAiMessages(): number {
   try {
-    return getChatArray_ACU().filter((msg: any) => msg && !msg.is_user).length;
+    return countAiFloors_ACU(getChatArray_ACU());
   } catch {
     return 0;
   }

@@ -25,6 +25,7 @@ import { collectSheetIdentityCanonicals_ACU, mergeLegacySheetIdentities_ACU, typ
 import { runTableWriteTransaction_ACU } from './table-write-transaction';
 import { getUiSurface_ACU, showUiSurfaceToast_ACU } from '../../shared/ui-surface-registry';
 import { buildReplayOptionsFingerprint_ACU, computeReplayHeadRevisionDigest_ACU, validateV2ReplayEvidenceFresh_ACU } from './v2-replay-session';
+import { isAiFloor_ACU } from '../../shared/ai-floor';
 
 interface V2FrameRef_ACU {
   messageIndex: number;
@@ -550,7 +551,10 @@ function getV2FrameRefs_ACU(chat: any[], isolationKey: string): V2FrameRef_ACU[]
   for (let i = 0; i < chat.length; i += 1) {
     const message = chat[i];
     if (!message || message.is_user) continue;
-    aiFloor += 1;
+    // 载体纳入保持宽（隐藏楼仍可能挂帧），但**编号**必须用宽档 AI 楼口径：
+    // 该值经 applyEventToScheduleSummary 写入持久化的 lastFilledAiFloor/lastChangedAiFloor，
+    // 而调度侧拿它与宽档总数（countAiFloors_ACU）比较；口径不一致会让未记录楼层数被压到 0 以下而停更。
+    if (isAiFloor_ACU(message)) aiFloor += 1;
 
     const tagData = readIsolatedTagData_ACU(message, isolationKey) as any;
     if (isReplayableV2TagData_ACU(tagData)) {
@@ -3241,7 +3245,7 @@ export async function createCompatTransitionCheckpointFromTolerantReplay_ACU(
 ): Promise<boolean> {
   const targetMessageIndex = (() => {
     for (let index = chat.length - 1; index >= 0; index -= 1) {
-      if (chat[index] && !chat[index].is_user) return index;
+      if (isAiFloor_ACU(chat[index])) return index;
     }
     return -1;
   })();

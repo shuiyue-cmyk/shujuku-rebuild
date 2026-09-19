@@ -1561,6 +1561,33 @@ describe('commitCurrentFloorTemplateChanges_ACU', () => {
     expect(message.TavernDB_ACU_Identity).toBeUndefined();
   });
 
+  it('TT 2.3.0：末楼是工具楼（is_system）时，未指定目标的模板提交落回真正的 AI 楼', async () => {
+    const aiMessage = { is_user: false } as any;
+    const userMessage = { is_user: true } as any;
+    // 旧工具调用结果的一等角色：is_system 标记 + 带正文，不得被当成落点
+    const toolMessage = { role: 'tool', is_system: true, is_user: false, mes: '搜索结果', tool_call_id: 'call_1' } as any;
+    mocks.chat.push(aiMessage, userMessage, toolMessage);
+    const templateSource = { mate: { type: 'acu' }, sheet_a: sheetA, sheet_b: sheetB };
+
+    const result = await commitCurrentFloorTemplateChanges_ACU({
+      isolationKey: '',
+      sheetChanges: [{
+        kind: 'operations',
+        sheetKey: 'sheet_a',
+        targetSheetData: sheetA,
+        operations: [{ kind: 'meta_update', sheetKey: 'sheet_a', meta: { name: 'A' } }],
+      }],
+      guideData: { sheet_a: { name: 'A' }, sheet_b: { name: 'B' } },
+      templateSource,
+      syncTemplateScope: true,
+      createdAt: 30,
+    });
+
+    expect(result).toMatchObject({ saved: true, mode: 'v2_commit', messageIndex: 0 });
+    expect(aiMessage.TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint).toMatchObject({ kind: 'full', reason: 'init' });
+    expect(toolMessage.TavernDB_ACU_IsolatedData).toBeUndefined();
+  });
+
   it('native pristine 提交不生成、校验或写回 DDL', async () => {
     const message = { is_user: false } as any;
     mocks.chat.push(message);

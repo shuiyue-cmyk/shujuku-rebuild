@@ -76,7 +76,8 @@ export interface GenerationContext_ACU {
 /**
  * [152 收紧] 「新 AI 楼证据」签名：GENERATION_ENDED 到达时聊天里 AI 楼层的规模与末楼身份。
  * 口径与 service/table/auto-fill-echo-guard.ts resolveLatestAiFloor_ACU 完全一致
- * （AI 楼 = !is_user，含 narrator 系统楼）；由调用方（init 的 GENERATION_ENDED 监听器）读一次
+ * （宽档 AI 楼 = 非 user、非 is_system、非 role:'tool'，含 narrator 系统楼；见 shared/ai-floor）；
+ * 由调用方（init 的 GENERATION_ENDED 监听器）读一次
  * 聊天数组算好后传进门控，门控自身不碰 chat-gateway，避免依赖反向。
  */
 export interface AiFloorSignature_ACU {

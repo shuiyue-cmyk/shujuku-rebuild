@@ -150,7 +150,7 @@ async function fetchAvailableModelsUncached_ACU(apiUrl: string, apiKey: string, 
         // 仅折叠探活中断为结构化失败（返回 FetchModelsResult，调用方 UI 才能正确落到错误态）；
         // 其余网络层异常保持原有抛出行为不变。
         if (e?.name === 'AbortError' || /abort/i.test(String(e?.message || ''))) {
-            return { success: false, error: `API 端点状态检查超时：${MODEL_PROBE_TIMEOUT_MS_ACU / 1000} 秒内无响应，请检查端点地址与网络后重试。` };
+            return { success: false, error: `API 端点状态检查超时：${MODEL_PROBE_TIMEOUT_MS_ACU / 1000} 秒内无响应，请检查端点地址与网络后重试。（若 TauriTavern 弹出了「允许连接到自定义端点？」授权窗，等待授权同样计入这段时间——请先在弹窗中点击「信任并连接」再重试）` };
         }
         throw e;
     } finally {
@@ -181,6 +181,13 @@ async function fetchAvailableModelsUncached_ACU(apiUrl: string, apiKey: string, 
 
     const data = await response.json();
     logDebug_ACU('获取到的模型数据:', data);
+
+    // TT 2.3.0 起连接用户自定义端点需在宿主原生弹窗里「信任并连接」（SSRF 加固）；用户点「取消」时
+    // status 路由以 HTTP 200 + { cancelled: true, data: [] } 返回。此处必须指向那个弹窗——否则
+    // 用户只会看到「列表为空」，不知道第一步该做什么。
+    if (data && data.cancelled === true) {
+        return { success: false, error: '已取消连接自定义端点。请在 TauriTavern 弹出的「允许连接到自定义端点？」授权窗中点击「信任并连接」后重试。' };
+    }
 
     let modelsList: any[] = [];
     if (data && data.models && Array.isArray(data.models)) {

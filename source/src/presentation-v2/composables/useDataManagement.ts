@@ -35,6 +35,7 @@ import { buildRegisteredMixedStorageSnapshotTransfer_ACU, commitRegisteredMixedS
 import type { MixedStorageCommitAction_ACU } from '../../shared/models/mixed-storage-commit-action';
 import { commitPreparedV2Recovery_ACU, prepareV2Recovery_ACU, scanV2IsolationDiagnostics_ACU, type V2IsolationDiagnostic_ACU, type V2RecoverySummary_ACU } from '../../service/table/table-v2-recovery-service';
 import { useToastStore } from '../stores/toast-store';
+import { countAiFloors_ACU } from '../../shared/ai-floor';
 
 export type DataMgmtMessageKind = 'info' | 'success' | 'warning' | 'error';
 
@@ -126,7 +127,7 @@ function downloadJson(filename: string, data: unknown): void {
 
 function getAiMessageCount(): number {
   const chat = getChatArray_ACU();
-  return Array.isArray(chat) ? chat.filter((msg: any) => !msg?.is_user).length : 0;
+  return countAiFloors_ACU(chat);
 }
 
 function buildCombinedExportPayload(): Record<string, unknown> {

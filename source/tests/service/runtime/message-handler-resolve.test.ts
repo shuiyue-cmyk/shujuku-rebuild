@@ -5,8 +5,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   resolveGeneratedAiMessageIndex_ACU,
-  isAiMessage_ACU,
-  countAiMessages_ACU,
   type AutoFillIntent_ACU,
 } from '../../../src/service/runtime/message-handler';
 
@@ -29,32 +27,6 @@ const narrator = { is_user: false, mes: '旁白', extra: { type: 'narrator' } };
 function chatWith(messages: any[]): any[] {
   return messages;
 }
-
-describe('isAiMessage_ACU', () => {
-  it('识别 AI 楼层', () => {
-    expect(isAiMessage_ACU(ai)).toBe(true);
-  });
-  it('排除用户楼层', () => {
-    expect(isAiMessage_ACU(user)).toBe(false);
-  });
-  it('排除 narrator 系统旁白', () => {
-    expect(isAiMessage_ACU(narrator)).toBe(false);
-  });
-  it('排除 null/非对象', () => {
-    expect(isAiMessage_ACU(null)).toBe(false);
-    expect(isAiMessage_ACU(undefined)).toBe(false);
-    expect(isAiMessage_ACU('x')).toBe(false);
-  });
-});
-
-describe('countAiMessages_ACU', () => {
-  it('统计 AI 楼层数（排除用户与旁白）', () => {
-    expect(countAiMessages_ACU([user, ai, narrator, ai])).toBe(2);
-  });
-  it('非数组返回 0', () => {
-    expect(countAiMessages_ACU(null as any)).toBe(0);
-  });
-});
 
 describe('resolveGeneratedAiMessageIndex_ACU', () => {
   it('精确命中：eventMessageId 指向 AI 楼层 → resolved', () => {

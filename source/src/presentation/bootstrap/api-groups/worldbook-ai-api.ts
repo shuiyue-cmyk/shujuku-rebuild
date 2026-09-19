@@ -20,6 +20,7 @@ import {
     listWorldbookSkillMetas_ACU,
 } from '../../../service/agent/agent-worldbook-skill-meta';
 import type { ApiGroupContext } from './callback-api';
+import { isAiFloor_ACU } from '../../../shared/ai-floor';
 
 declare const SillyTavern: any;
 
@@ -210,7 +211,7 @@ export function createWorldbookAiApi(_ctx: ApiGroupContext): Record<string, Func
 
                 for (let i = chat.length - 1; i >= 0 && turnCount < maxTurns; i--) {
                     const msg = chat[i];
-                    if (msg && !msg.is_user && msg.mes) {
+                    if (isAiFloor_ACU(msg) && msg.mes) {
                         aiMessages.unshift(msg.mes);
                         turnCount++;
                     }

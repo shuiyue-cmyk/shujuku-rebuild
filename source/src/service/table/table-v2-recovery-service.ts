@@ -13,6 +13,7 @@ import { detectPhysicalTableNameCollisions_ACU, type PhysicalTableNameCollision_
 import { loadTableStateFromFramesV2Detailed_ACU, type TableReplayCompatibilityRepairV2_ACU } from './storage-frame-v2-replay';
 import type { TableMutationOperationV2_ACU, TablePatchV2_ACU, TableStorageFrameV2_ACU, TableV2RecoveryBackup_ACU } from './storage-frame-v2-types';
 import { runTableWriteTransaction_ACU } from './table-write-transaction';
+import { isAiFloor_ACU } from '../../shared/ai-floor';
 
 type RecoveryKind_ACU = 'repaired_full_checkpoint' | 'confirmed_orphan_data_replace' | 'temporary_sheet_anchor_convergence' | 'redundant_full_checkpoint_convergence' | 'restored_from_recovery_backup';
 export type V2RecoveryStatus_ACU = 'recoverable_repaired_checkpoint' | 'recoverable_orphan_data_replace' | 'recoverable_temporary_sheet_anchor' | 'recoverable_compat_tolerant_replay' | 'recoverable_redundant_full_checkpoint' | 'recoverable_from_recovery_backup' | 'unrecoverable_late_checkpoint_artifacts' | 'unrecoverable_no_base' | 'unrecoverable_identity_conflict' | 'unrecoverable';
@@ -66,7 +67,7 @@ function getFrameFingerprint_ACU(frame: TableStorageFrameV2_ACU): string {
 function countAiFloorInChat_ACU(chat: any[], messageIndex: number): number {
   let count = 0;
   for (let i = 0; i <= messageIndex && i < chat.length; i += 1) {
-    if (chat[i] && !chat[i].is_user) count += 1;
+    if (isAiFloor_ACU(chat[i])) count += 1;
   }
   return count;
 }

@@ -11,6 +11,7 @@ import type { TableDataObject_ACU } from '../../shared/models/table-data';
 import { restoreLegacyRowIdentity_ACU } from '../../shared/canonical-row-normalizer';
 import { validateCanonicalCheckpointData_ACU } from '../../shared/canonical-checkpoint-validator';
 import type { CompatTransitionCheckpointV1_ACU, Spv79TransitionCheckpointV1_ACU } from './storage-frame-v2-types';
+import { isAiFloor_ACU } from '../../shared/ai-floor';
 
 export interface Spv79TransitionCheckpointRef_ACU {
   messageIndex: number;
@@ -98,7 +99,7 @@ export function findLatestSpv79TransitionCheckpoint_ACU(
   for (let messageIndex = 0; messageIndex <= upperBound; messageIndex += 1) {
     const message = chat[messageIndex];
     if (!message || message.is_user) continue;
-    aiFloor += 1;
+    if (isAiFloor_ACU(message)) aiFloor += 1;
     const tagData = readIsolatedTagData_ACU(message, isolationKey) as any;
     const checkpoint = tagData?.spv79TransitionCheckpoint;
     if (isCheckpoint_ACU(checkpoint)) latest = { messageIndex, aiFloor, checkpoint };
@@ -120,7 +121,7 @@ export function findLatestCompatTransitionCheckpoint_ACU(
   for (let messageIndex = 0; messageIndex <= upperBound; messageIndex += 1) {
     const message = chat[messageIndex];
     if (!message || message.is_user) continue;
-    aiFloor += 1;
+    if (isAiFloor_ACU(message)) aiFloor += 1;
     const tagData = readIsolatedTagData_ACU(message, isolationKey) as any;
     const checkpoint = tagData?.compatTransitionCheckpoint;
     if (isCompatCheckpoint_ACU(checkpoint)) latest = { messageIndex, aiFloor, checkpoint };

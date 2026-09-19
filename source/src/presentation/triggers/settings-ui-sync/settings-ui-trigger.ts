@@ -104,6 +104,7 @@ import {
 import {
   logAutoFillSkip_ACU
 } from '../../../shared/trigger-diagnostics';
+import { countAiFloors_ACU } from '../../../shared/ai-floor';
 
 function buildAutoUpdateProgressLabel_ACU(event: Partial<CardUpdateProgressEvent>): string {
     if (Number.isFinite(event.currentBatch) && Number.isFinite(event.totalBatches)) {
@@ -225,7 +226,7 @@ let pendingAutoUpdatePerformanceContext_ACU: { runId?: string; parentSpanId?: st
     if (!preCheck.canProceed) {
       logDebug_ACU(`ACU Auto-Trigger: ${preCheck.reason} Skipping.`);
       logAutoFillSkip_ACU('preconditions_failed', {
-        aiFloorCount: allChatMessages_ACU.filter((message: any) => !message.is_user).length,
+        aiFloorCount: countAiFloors_ACU(allChatMessages_ACU),
         inFlight: isAutoUpdatingCard_ACU,
         preconditionReason: preCheck.code,
       });
@@ -238,7 +239,7 @@ let pendingAutoUpdatePerformanceContext_ACU: { runId?: string; parentSpanId?: st
       return;
     }
 
-    let totalAiMessages = liveChat.filter(m => !m.is_user).length;
+    let totalAiMessages = countAiFloors_ACU(liveChat);
 
     // [重构] 调用 service 层楼层增加延迟逻辑
     const delayResult = await handleFloorIncreaseDelay_ACU(

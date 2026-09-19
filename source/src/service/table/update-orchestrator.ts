@@ -96,6 +96,7 @@ import { commitPreparedV2Recovery_ACU, prepareV2Recovery_ACU } from './table-v2-
 import { isV2TagData_ACU, resolveTableStorageStrategy_ACU } from './storage-strategy-resolver';
 import { getHiddenChronicleRowIdsAfterBigSummaryInsert_ACU } from '../flight-mode/flight-mode-hidden-rows';
 import { getCurrentFlightModeState_ACU, stageFlightModeHiddenRowIds_ACU } from '../flight-mode/flight-mode-state';
+import { isAiFloor_ACU, isDataBearingMessage_ACU } from '../../shared/ai-floor';
 
 interface ManualRefillSummaryVectorCleanup_ACU {
     sourceTableKey: string;
@@ -3769,7 +3770,7 @@ export async function processUpdatesBatch_ACU(
 
 function collectEffectiveAiMessageIndices_ACU(chat: any[]): number[] {
     const allAiMessageIndices = chat
-        .map((message: any, index: number) => !message?.is_user ? index : -1)
+        .map((message: any, index: number) => isAiFloor_ACU(message) ? index : -1)
         .filter((index: number) => index >= 0);
     const skipped = Math.max(0, Math.trunc(Number(settings_ACU.skipUpdateFloors) || 0));
     return skipped > 0 ? allAiMessageIndices.slice(0, -skipped) : allAiMessageIndices;
@@ -4737,7 +4738,7 @@ async function ensureManualRefillAnchorHealth_ACU(
         // 零根检测只针对增量重填：clearBeforeUpdate 路径清理后会自行补写单表快照/模板
         // 临时根（零根是其合法中间态），增量路径则会在 persist 层撞隐式 migration 拒绝。
         if (!options.checkZeroRoot) return null;
-        const hasFrames = chat.some(message => message && !message.is_user && isV2TagData_ACU(readIsolatedTagData_ACU(message, isolationKey)));
+        const hasFrames = chat.some(message => isDataBearingMessage_ACU(message) && isV2TagData_ACU(readIsolatedTagData_ACU(message, isolationKey)));
         if (hasFrames && !hasAnyV2Checkpoint_ACU(chat, isolationKey)) {
             return 'V2 orchestrateManualUpdate:anchor_preflight 检测到零根状态：该隔离键存在 V2 storage frame 但没有任何 full checkpoint 锚点，persist 层将拒绝隐式 migration checkpoint。';
         }
@@ -4943,7 +4944,7 @@ export async function orchestrateManualUpdate_ACU(
         }
 
         const allAiMessageIndices = liveChat
-            .map((msg: any, index: number) => !msg.is_user ? index : -1)
+            .map((msg: any, index: number) => isAiFloor_ACU(msg) ? index : -1)
             .filter((index: number) => index !== -1);
 
         if (allAiMessageIndices.length === 0) {

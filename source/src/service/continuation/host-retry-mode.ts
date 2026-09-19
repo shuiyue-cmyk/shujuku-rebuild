@@ -1,4 +1,4 @@
-import { countAiMessages_ACU, isAiMessage_ACU } from '../runtime/message-handler';
+import { countAiModelOutputFloors_ACU, isAiModelOutputFloor_ACU } from '../../shared/ai-floor';
 import type { ContinuationHostGenerationCapture_ACU } from './model';
 
 export type ContinuationHostRetryMode_ACU = 'regenerate' | 'generate';
@@ -18,9 +18,9 @@ export type ContinuationHostRetryMode_ACU = 'regenerate' | 'generate';
  */
 export function resolveHostRetryMode_ACU(chat: readonly unknown[], capture: ContinuationHostGenerationCapture_ACU): ContinuationHostRetryMode_ACU | null {
   if (!Array.isArray(chat) || !chat.length) return null;
-  const aiCount = countAiMessages_ACU(chat as unknown[]);
+  const aiCount = countAiModelOutputFloors_ACU(chat as unknown[]);
   const last = chat[chat.length - 1];
-  if (aiCount === capture.capturedAiFloorCount + 1 && isAiMessage_ACU(last)) return 'regenerate';
-  if (aiCount === capture.capturedAiFloorCount && !isAiMessage_ACU(last)) return 'generate';
+  if (aiCount === capture.capturedAiFloorCount + 1 && isAiModelOutputFloor_ACU(last)) return 'regenerate';
+  if (aiCount === capture.capturedAiFloorCount && !isAiModelOutputFloor_ACU(last)) return 'generate';
   return null;
 }

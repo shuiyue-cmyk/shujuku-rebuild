@@ -3222,6 +3222,51 @@ describe('loadTableStateFromFramesV2_ACU', () => {
     }
   });
 
+  it('TT 2.3.0：工具楼穿插时 scheduleSummary 的 aiFloor 仍按宽档 AI 楼编号（否则自动填表停更）', async () => {
+    const previousIndependentStates = independentTableStates_ACU;
+    _set_independentTableStates_ACU({});
+    const rootData = makeDslCheckpointData();
+    const introducedSheet = {
+      uid: 'new_sheet', name: '新增表', content: [['row_id', '值']], sourceData: {}, updateConfig: {}, exportConfig: {}, orderNo: 2,
+    } as any;
+    const framedMessage = {
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            checkpoint: { kind: 'full', createdAt: 1, reason: 'init', data: rootData },
+            perSheetCheckpoints: {
+              sheet_new: {
+                kind: 'sheet_full', createdAt: 2, reason: 'schema_change', sheetKey: 'sheet_new', data: introducedSheet,
+                timeline: { kind: 'sheet_introduction', activateAtMessageIndex: 0, afterSeq: 0 },
+                event: { filledSheetKeys: ['sheet_new'], changedSheetKeys: ['sheet_new'], groupKeys: [] },
+              },
+            },
+            logEntries: [],
+          },
+        },
+      },
+    };
+    const chat = [
+      { is_user: false },
+      { is_user: true },
+      // 工具楼（is_system + role:'tool'）不算 AI 楼 ⇒ 挂帧那楼是第 2 个 AI 楼
+      { role: 'tool', is_system: true, is_user: false, mes: '搜索结果', tool_call_id: 'call_1' },
+      framedMessage,
+    ];
+
+    try {
+      const summary = collectScheduleSummaryFromFramesV2_ACU(chat, '');
+      // 编号若按原始「非 user」计数会得 3，与调度侧宽档总数口径不符
+      // ⇒ effectiveUnrecordedFloors 被压到 0 以下 ⇒ 自动填表判定长期不成立。
+      expect(summary.sheet_new).toEqual({ lastFilledAiFloor: 2, lastChangedAiFloor: 2 });
+    } finally {
+      _set_independentTableStates_ACU(previousIndependentStates);
+    }
+  });
+
   it('多个 introduction 按 afterSeq 在 entry 之间激活，且不改变 data_replace 的全局语义', async () => {
     const rootData = makeDslCheckpointData();
     const sheetEarly = { uid: 'early', name: '早表', content: [['row_id', '值']], sourceData: {}, updateConfig: {}, exportConfig: {}, orderNo: 2 } as any;

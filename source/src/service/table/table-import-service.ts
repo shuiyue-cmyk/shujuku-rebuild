@@ -15,6 +15,7 @@ import {
 import { repairTableDataFromAudit_ACU } from './table-data-repair';
 import { runTableUpdateCommit_ACU } from './table-update-commit';
 import { validateSqliteTemplateDataStrict_ACU } from './sqlite-template-validation';
+import { isAiFloor_ACU } from '../../shared/ai-floor';
 
 export type ImportTableJsonFailureStage_ACU = 'input' | 'runtime_restore' | 'preflight' | 'commit' | 'post_commit_runtime';
 export type ImportTableJsonIssue_ACU = UpgradeAuditIssue_ACU | {
@@ -44,7 +45,7 @@ function resolveLatestAiMessageIndex_ACU(): number {
   const chat = getChatArray_ACU();
   if (!Array.isArray(chat) || chat.length === 0) return -1;
   for (let i = chat.length - 1; i >= 0; i -= 1) {
-    if (chat[i] && !chat[i].is_user) return i;
+    if (isAiFloor_ACU(chat[i])) return i;
   }
   return -1;
 }

@@ -25,6 +25,7 @@ import {
     validateSingleFileSnapshotIdentity_ACU,
     type VectorIndexSingleSnapshotBlob_ACU,
 } from './summary-vector-index-storage-service';
+import { isAiFloor_ACU } from '../../shared/ai-floor';
 
 function getCurrentSummaryVectorIndexSourceTableKey_ACU(): string {
     const tables = currentJsonTableData_ACU && typeof currentJsonTableData_ACU === 'object'
@@ -80,7 +81,7 @@ export async function tryRecoverSummaryVectorIndexFromExternalSnapshot_ACU(): Pr
     ): Promise<boolean> => {
         const chat = getChatArray_ACU();
         if (!Array.isArray(chat) || chat.length === 0) return false;
-        const targetIndex = chat.map((message: any, index: number) => message && !message.is_user ? index : -1)
+        const targetIndex = chat.map((message: any, index: number) => isAiFloor_ACU(message) ? index : -1)
             .filter((index: number) => index >= 0)
             .pop() ?? -1;
         if (targetIndex < 0) return false;

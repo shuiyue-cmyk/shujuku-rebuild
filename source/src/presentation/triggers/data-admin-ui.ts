@@ -84,6 +84,7 @@ import {
 import {
   migrateLegacySummaryVectorIndexToContentAddressed_ACU
 } from '../../service/vector/summary-vector-index-archive-service';
+import { isAiFloor_ACU, countAiFloors_ACU } from '../../shared/ai-floor';
 /**
  * presentation/triggers/data-admin-ui.ts — 导入/导出/重置 UI
  * 从 features/data/01_data_admin.js 迁移而来
@@ -186,7 +187,7 @@ import {
           return;
       }
 
-      const aiMessageCount = chat.filter((msg: any) => !msg.is_user).length;
+      const aiMessageCount = countAiFloors_ACU(chat);
       const outcome = await deleteLocalDataWithScope_ACU(mode, startFloor, endFloor);
 
       // aiCount === 0 时不再提前 return：范围覆盖全部（含 0 层）的 all 请求会走 purge，
@@ -417,7 +418,7 @@ import {
       }
 
       // 检查是否有AI消息
-      const hasAiMessage = chat.some((msg: any) => !msg.is_user);
+      const hasAiMessage = chat.some(isAiFloor_ACU);
       if (!hasAiMessage) {
           showToastr_ACU('error', '聊天记录中没有AI消息，无法执行覆盖操作。');
           return false;

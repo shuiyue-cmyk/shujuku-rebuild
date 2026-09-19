@@ -24,6 +24,7 @@ import {
 } from './agent-skillify-service';
 import { resolveAgentWorldbookScopeBookNames_ACU } from './agent-worldbook-config-meta';
 import { rankAgentWorldbookCandidates_ACU, type AgentWorldbookRankingQuery_ACU } from './agent-worldbook-ranking';
+import { isAiFloor_ACU } from '../../shared/ai-floor';
 
 export interface AgentWorldbookRef_ACU {
   bookName: string;
@@ -121,7 +122,7 @@ function collectRecentAiLayerPairs_ACU(
   const pairs: Array<{ user?: AgentContextMessage_ACU; ai: AgentContextMessage_ACU }> = [];
   for (let i = messages.length - 1; i >= 0 && pairs.length < limit; i--) {
     const ai = messages[i];
-    if (!ai || ai.is_user || ai._qrf_from_planning) continue;
+    if (!isAiFloor_ACU(ai) || ai._qrf_from_planning) continue;
     const previous = i > 0 && messages[i - 1]?.is_user ? messages[i - 1] : undefined;
     pairs.unshift({ user: previous, ai });
   }

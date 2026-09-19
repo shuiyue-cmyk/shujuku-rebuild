@@ -73,6 +73,77 @@ describe('mixed-storage-evidence', () => {
     }
  });
 
+  // 写入侧用宽档口径算 targetAiFloor（非 user、非 is_system、非 role:'tool'），
+  // 读侧必须同口径，否则锚点之前存在隐藏楼/工具楼时 targetMatchesAnchor 会恒为 false。
+  it('锚点之前存在隐藏楼时 targetMatchesAnchor 仍成立（读侧与写侧同为宽档口径）', async () => {
+    const data = { sheet_0: sheet('背包'), sheet_1: sheet('任务') } as any;
+    const provenance = { ...migrationProvenance(), targetMessageIndex: 3, targetAiFloor: 2 };
+    const chat = [
+      { is_user: false, TavernDB_ACU_Data: { sheet_0: data.sheet_0 } },
+      { is_user: true },
+      // 隐藏楼（is_system）：不算 AI 楼，故锚点仍是第 2 个 AI 楼
+      { is_user: false, is_system: true, mes: '隐藏楼' },
+      {
+        is_user: false,
+        TavernDB_ACU_IsolatedData: {
+          'tag-a': { _acu_storage_version: 2, storageFrame: { version: 2, headRevision: 'checkpoint:migration', checkpoint: { kind: 'full', createdAt: 10, reason: 'migration', data, migrationProvenance: provenance }, logEntries: [] } },
+        },
+      },
+    ];
+
+    const evidence = await collectMixedStorageEvidence_ACU({ chat, isolationKey: 'tag-a', isolationConfig: { enabled: true, code: 'tag-a' }, legacyCandidateData: data });
+
+    expect(evidence.v2.anchor).toEqual(expect.objectContaining({ status: 'anchored', messageIndex: 3, aiFloor: 2 }));
+    expect(evidence.v2.provenance).toEqual(expect.objectContaining({ present: true, targetMatchesAnchor: true }));
+  });
+
+  it('锚点之前存在 TT 2.3.0 工具楼时 targetMatchesAnchor 仍成立', async () => {
+    const data = { sheet_0: sheet('背包'), sheet_1: sheet('任务') } as any;
+    const provenance = { ...migrationProvenance(), targetMessageIndex: 3, targetAiFloor: 2 };
+    const chat = [
+      { is_user: false, TavernDB_ACU_Data: { sheet_0: data.sheet_0 } },
+      { is_user: true },
+      { role: 'tool', is_system: true, is_user: false, mes: '搜索结果', tool_call_id: 'call_1' },
+      {
+        is_user: false,
+        TavernDB_ACU_IsolatedData: {
+          'tag-a': { _acu_storage_version: 2, storageFrame: { version: 2, headRevision: 'checkpoint:migration', checkpoint: { kind: 'full', createdAt: 10, reason: 'migration', data, migrationProvenance: provenance }, logEntries: [] } },
+        },
+      },
+    ];
+
+    const evidence = await collectMixedStorageEvidence_ACU({ chat, isolationKey: 'tag-a', isolationConfig: { enabled: true, code: 'tag-a' }, legacyCandidateData: data });
+
+    expect(evidence.v2.anchor).toEqual(expect.objectContaining({ status: 'anchored', messageIndex: 3, aiFloor: 2 }));
+    expect(evidence.v2.provenance).toEqual(expect.objectContaining({ present: true, targetMatchesAnchor: true }));
+  });
+
+  // 存疑转正用例：full checkpoint 本身落在隐藏楼上时，证据锚点必须与回放侧一致可见
+  // （回放侧 getV2FrameRefs_ACU 载体宽纳入；collectV2FullCheckpointIndices_ACU 全量扫描）。
+  // 若证据收集跳过隐藏楼，会判 missing 而回放侧正常加载 ⇒ 迁移决策与回放根分叉。
+  it('full checkpoint 落在隐藏楼上时锚点仍然可见（载体宽纳入＋宽档编号）', async () => {
+    const data = { sheet_0: sheet('背包'), sheet_1: sheet('任务') } as any;
+    const provenance = { ...migrationProvenance(), targetMessageIndex: 2, targetAiFloor: 1 };
+    const chat = [
+      { is_user: false, TavernDB_ACU_Data: { sheet_0: data.sheet_0 } },
+      { is_user: true },
+      {
+        is_user: false,
+        is_system: true,
+        mes: '隐藏楼',
+        TavernDB_ACU_IsolatedData: {
+          'tag-a': { _acu_storage_version: 2, storageFrame: { version: 2, headRevision: 'checkpoint:migration', checkpoint: { kind: 'full', createdAt: 10, reason: 'migration', data, migrationProvenance: provenance }, logEntries: [] } },
+        },
+      },
+    ];
+
+    const evidence = await collectMixedStorageEvidence_ACU({ chat, isolationKey: 'tag-a', isolationConfig: { enabled: true, code: 'tag-a' }, legacyCandidateData: data });
+
+    // 隐藏楼不算 AI 楼 ⇒ 锚点 aiFloor 为 1（与前一个 AI 楼同号，归因到它，不压垮调度比较）
+    expect(evidence.v2.anchor).toEqual(expect.objectContaining({ status: 'anchored', messageIndex: 2, aiFloor: 1 }));
+    expect(evidence.v2.provenance).toEqual(expect.objectContaining({ present: true, targetMatchesAnchor: true }));
+  });
+
   it('无 full checkpoint 但存在 V2 log 时保留 fail-closed 证据，不伪造 replay 成功', async () => {
     const data = { sheet_0: sheet('背包') } as any;
     const chat = [{ is_user: false, TavernDB_ACU_IsolatedData: { '': { _acu_storage_version: 2, storageFrame: { version: 2, headRevision: 'orphan', logEntries: [{ seq: 1 }] } } } }];

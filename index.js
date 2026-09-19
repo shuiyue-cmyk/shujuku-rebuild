@@ -42852,6 +42852,66 @@ function repairTableDataFromAudit_ACU(audit, _options = {}) {
 }
 
 /**
+ * shared/ai-floor.ts — 聊天消息判定的唯一出处（三个口径，勿在各业务文件另立标准）
+ *
+ * 背景（TT 2.3.0）：宿主为 SillyTavern 旧工具调用结果引入了一等角色 `{role: 'tool'}`，
+ * 其形态为 `{ role: 'tool', is_system: true, is_user: false, send_date, mes, tool_call_id, error }`
+ * 且**没有 `extra`**，经 `chat.push` 持久进聊天、并被宿主 prompt 白名单放行。
+ * 本库此前一律用 `!is_user` 判「AI 楼」，于是隐藏楼与工具楼都被算成 AI 楼 ⇒ 楼层序号与计数整体漂移。
+ *
+ * 两个位必须分清（宿主 v2.3.0 实测）：
+ * - `role === 'tool'` 是**类型位**，是工具结果的角色事实（TT 文档：历史重放只以 role 为角色事实）。
+ * - `is_system` 是**隐藏位**，可被用户 `/hide`、`/unhide` 改写（chats.js 的 hideChatMessageRange），
+ *   且本义就是「隐藏消息」，宿主自身的「真实 AI 消息」判据亦为 `!is_user && !is_system`
+ *   （macros.js、message-generation-info.js、script.js 的 overswipe 判定等）。
+ * 因此判「AI 楼」要**两个位都看**：只判 is_system 会漏掉被 /unhide 过的工具楼，只判 role 会漏掉隐藏楼。
+ *
+ * 三个口径：
+ * - 宽档 `isAiFloor_ACU`：非 user、非 system、非 role:'tool'。**含 narrator 旁白**。
+ *   用途＝「按楼层取序号/计数/身份」：配对签名、自动填表触发身份、删除楼层范围、帧写入目标楼。
+ * - 窄档 `isAiModelOutputFloor_ACU`：宽档再排除 narrator 旁白。
+ *   用途＝「本轮是否新增了模型正文输出」的计数。narrator 分流是既存设计，两档均被测试锁定，勿合并。
+ * - 数据承载档 `isDataBearingMessage_ACU`：**任意非 user 消息**（含隐藏楼、工具楼、narrator）。
+ *   用途＝「哪些消息可能挂着本库的表数据」：全仓清理/purge、导入前快照、迁移与零根检测的扫描。
+ *   ⚠️ **数据承载 ≠ AI 楼**：被用户隐藏的 AI 楼仍然可能带表数据，清理与快照必须覆盖它；
+ *   把这些路径收窄成 AI 楼会把数据留在原地（清理漏做）或让预校验与实际执行分叉。
+ */
+/** 判断一个聊天消息是否为「AI 楼」（宽档：含 narrator 旁白，排除隐藏楼与工具楼）。 */
+function isAiFloor_ACU(message) {
+    if (!message || typeof message !== 'object')
+        return false;
+    if (message.is_user)
+        return false;
+    if (message.is_system)
+        return false;
+    // 类型位：TT 2.3.0 的一等工具楼。is_system 可被 /unhide 清掉，故此判据不可省。
+    if (message.role === 'tool')
+        return false;
+    return true;
+}
+/** 统计 AI 楼总数（宽档）。 */
+function countAiFloors_ACU(chat) {
+    return Array.isArray(chat) ? chat.filter(isAiFloor_ACU).length : 0;
+}
+/** 判断一个聊天消息是否为「模型产出的 AI 楼」（窄档：宽档再排除 narrator 旁白）。 */
+function isAiModelOutputFloor_ACU(message) {
+    if (!isAiFloor_ACU(message))
+        return false;
+    return message.extra?.type !== 'narrator';
+}
+/** 统计模型产出的 AI 楼总数（窄档）。 */
+function countAiModelOutputFloors_ACU(chat) {
+    return Array.isArray(chat) ? chat.filter(isAiModelOutputFloor_ACU).length : 0;
+}
+/**
+ * 判断一个聊天消息是否可能承载本库的表数据（数据承载档：任意非 user 消息）。
+ * 用于清理/purge、快照、迁移与零根检测这类「宁可多扫不可漏扫」的路径。
+ */
+function isDataBearingMessage_ACU(message) {
+    return !!message && typeof message === 'object' && !message.is_user;
+}
+
+/**
  * service/table/compat-transition-checkpoint.ts — 过渡回放根（spv79 专用 + 通用兼容）
  *
  * 由 spv79-transition-checkpoint.ts 迁入并泛化：
@@ -42910,7 +42970,8 @@ function findLatestSpv79TransitionCheckpoint_ACU(chat, isolationKey, maxMessageI
         const message = chat[messageIndex];
         if (!message || message.is_user)
             continue;
-        aiFloor += 1;
+        if (isAiFloor_ACU(message))
+            aiFloor += 1;
         const tagData = readIsolatedTagData_ACU(message, isolationKey);
         const checkpoint = tagData?.spv79TransitionCheckpoint;
         if (isCheckpoint_ACU(checkpoint))
@@ -42930,7 +42991,8 @@ function findLatestCompatTransitionCheckpoint_ACU(chat, isolationKey, maxMessage
         const message = chat[messageIndex];
         if (!message || message.is_user)
             continue;
-        aiFloor += 1;
+        if (isAiFloor_ACU(message))
+            aiFloor += 1;
         const tagData = readIsolatedTagData_ACU(message, isolationKey);
         const checkpoint = tagData?.compatTransitionCheckpoint;
         if (isCompatCheckpoint_ACU(checkpoint))
@@ -43506,10 +43568,10 @@ function resolveTableWriteTargetMessageIndex_ACU(chat, requestedTargetMessageInd
         return -1;
     if (Number.isInteger(requestedTargetMessageIndex) && requestedTargetMessageIndex !== -1) {
         const index = requestedTargetMessageIndex;
-        return chat[index] && !chat[index].is_user ? index : -1;
+        return isAiFloor_ACU(chat[index]) ? index : -1;
     }
     for (let i = chat.length - 1; i >= 0; i -= 1) {
-        if (chat[i] && !chat[i].is_user)
+        if (isAiFloor_ACU(chat[i]))
             return i;
     }
     return -1;
@@ -44049,7 +44111,11 @@ function getV2FrameRefs_ACU(chat, isolationKey) {
         const message = chat[i];
         if (!message || message.is_user)
             continue;
-        aiFloor += 1;
+        // 载体纳入保持宽（隐藏楼仍可能挂帧），但**编号**必须用宽档 AI 楼口径：
+        // 该值经 applyEventToScheduleSummary 写入持久化的 lastFilledAiFloor/lastChangedAiFloor，
+        // 而调度侧拿它与宽档总数（countAiFloors_ACU）比较；口径不一致会让未记录楼层数被压到 0 以下而停更。
+        if (isAiFloor_ACU(message))
+            aiFloor += 1;
         const tagData = readIsolatedTagData_ACU(message, isolationKey);
         if (isReplayableV2TagData_ACU(tagData)) {
             refs.push({ messageIndex: i, aiFloor, frame: tagData.storageFrame });
@@ -46524,7 +46590,7 @@ async function replaySpv79DuplicateRowIdHistory_ACU(chatArg, isolationKey) {
 async function createCompatTransitionCheckpointFromTolerantReplay_ACU(chat, isolationKey) {
     const targetMessageIndex = (() => {
         for (let index = chat.length - 1; index >= 0; index -= 1) {
-            if (chat[index] && !chat[index].is_user)
+            if (isAiFloor_ACU(chat[index]))
                 return index;
         }
         return -1;
@@ -49186,7 +49252,7 @@ function getLatestAiMessageIndexFromChat_ACU(chat) {
     if (!Array.isArray(chat))
         return -1;
     for (let i = chat.length - 1; i >= 0; i -= 1) {
-        if (chat[i] && !chat[i].is_user)
+        if (isAiFloor_ACU(chat[i]))
             return i;
     }
     return -1;
@@ -49218,7 +49284,7 @@ function countAiMessagesUpToIndex_ACU(chat, messageIndex) {
         return 0;
     let count = 0;
     for (let i = 0; i <= messageIndex && i < chat.length; i += 1) {
-        if (chat[i] && !chat[i].is_user)
+        if (isAiFloor_ACU(chat[i]))
             count += 1;
     }
     return count;
@@ -49230,7 +49296,7 @@ function collectV2CheckpointFloorsFromChat_ACU(chat, isolationKey) {
     let aiFloor = 0;
     for (let i = 0; i < chat.length; i += 1) {
         const msg = chat[i];
-        if (!msg || msg.is_user)
+        if (!isAiFloor_ACU(msg))
             continue;
         aiFloor += 1;
         const tagData = readIsolatedTagData_ACU(msg, isolationKey);
@@ -49278,7 +49344,7 @@ function resolveTableHistoryStatesFromChat_ACU(chat, optionsList) {
     let aiFloor = 0;
     let latestAiMessageIndex = -1;
     for (let index = 0; index < safeChat.length; index += 1) {
-        if (safeChat[index] && !safeChat[index].is_user) {
+        if (isAiFloor_ACU(safeChat[index])) {
             aiFloor += 1;
             latestAiMessageIndex = index;
         }
@@ -54141,7 +54207,7 @@ function resolveTargetMessageIndex_ACU(preferredIndex) {
     const normalizedPreferredIndex = Math.floor(Number(preferredIndex));
     if (Number.isFinite(normalizedPreferredIndex)) {
         const preferredMessage = chat[normalizedPreferredIndex];
-        if (preferredMessage && !preferredMessage.is_user) {
+        if (isAiFloor_ACU(preferredMessage)) {
             return normalizedPreferredIndex;
         }
         logWarn_ACU('[纪要向量索引] 指定归档目标楼层无效，回退到最新 AI 楼层:', preferredIndex);
@@ -58160,13 +58226,13 @@ function appendMutationLogEntry_ACU(frame, options) {
 function findTargetAiMessage_ACU(chat, targetMessageIndex) {
     if (targetMessageIndex !== undefined && targetMessageIndex !== -1) {
         const message = chat[targetMessageIndex];
-        if (message && !message.is_user) {
+        if (isAiFloor_ACU(message)) {
             return { message, index: targetMessageIndex };
         }
         return null;
     }
     for (let i = chat.length - 1; i >= 0; i -= 1) {
-        if (chat[i] && !chat[i].is_user) {
+        if (isAiFloor_ACU(chat[i])) {
             return { message: chat[i], index: i };
         }
     }
@@ -58219,7 +58285,7 @@ function buildReplacementPurgedCandidateChat_ACU(chat, isolationKey, targetMessa
 function countAiFloor_ACU$1(chat, messageIndex) {
     let count = 0;
     for (let i = 0; i <= messageIndex && i < chat.length; i += 1) {
-        if (chat[i] && !chat[i].is_user)
+        if (isAiFloor_ACU(chat[i]))
             count += 1;
     }
     return count;
@@ -59033,7 +59099,7 @@ function classifyTemplateCommitStorageStateAfterDeletedSheets_ACU(chat, isolatio
         return classifyTemplateCommitStorageState_ACU(chat, isolationKey);
     const simulatedChat = deepClone_ACU(chat);
     for (const message of simulatedChat) {
-        if (message && !message.is_user)
+        if (isDataBearingMessage_ACU(message))
             purgeSheetKeysFromMessage_ACU(message, deletedSheetKeys);
     }
     return classifyTemplateCommitStorageState_ACU(simulatedChat, isolationKey);
@@ -61707,7 +61773,7 @@ async function commitCurrentFloorTemplateChanges_ACU(options) {
                     hardDeleteCheckpointCreated = true;
                     const candidateChat = deepClone_ACU(chat);
                     for (const message of candidateChat) {
-                        if (message && !message.is_user)
+                        if (isDataBearingMessage_ACU(message))
                             purgeSheetKeysFromMessage_ACU(message, deletedSheetKeys);
                     }
                     candidateChat[target.index].TavernDB_ACU_IsolatedData = isolatedData;
@@ -63901,7 +63967,10 @@ async function collectMixedStorageEvidence_ACU(options) {
         const message = chat[messageIndex];
         if (!message || message.is_user)
             continue;
-        aiFloor += 1;
+        // 载体纳入保持宽（隐藏楼/工具楼仍可能挂帧，收窄会丢帧——回放侧 getV2FrameRefs_ACU 同构），
+        // 但**编号**必须用宽档 AI 楼口径（与写入侧 provenance.targetAiFloor 同口径，否则 targetMatchesAnchor 恒 false）。
+        if (isAiFloor_ACU(message))
+            aiFloor += 1;
         const legacy = collectLegacyMessageEvidence_ACU(message, messageIndex, aiFloor, options.isolationKey, options.isolationConfig, allowedSheetKeys, lastFilledAiFloorBySheet, lastChangedAiFloorBySheet);
         if (legacy) {
             legacyMessages.push(legacy);
@@ -64221,13 +64290,13 @@ function removeLegacy_ACU(chat, isolationKey, isolationConfig) {
 }
 function latestSafeAiTarget_ACU(chat, isolationKey) {
     for (let index = chat.length - 1; index >= 0; index -= 1) {
-        if (!chat[index] || chat[index].is_user || isV2TagData_ACU(readIsolatedTagData_ACU(chat[index], isolationKey)))
+        if (!isAiFloor_ACU(chat[index]) || isV2TagData_ACU(readIsolatedTagData_ACU(chat[index], isolationKey)))
             continue;
         return index;
     }
     return null;
 }
-function aiFloor_ACU(chat, index) { return chat.slice(0, index + 1).filter(message => message && !message.is_user).length; }
+function aiFloor_ACU(chat, index) { return countAiFloors_ACU(chat.slice(0, index + 1)); }
 /**
  * 写入新 migration 根后，同一隔离键下其余 full checkpoint（原 V2 anchor 及更早的根）
  * 必须同事务降级，否则形成多根：回放只认最后一个 full，之前增量全部失效，且后续
@@ -64810,7 +64879,7 @@ function findLegacyRowBearingSheetsMissingFromMerged_ACU(mergedData, legacyRowBe
 function countAiFloor_ACU(chat, messageIndex) {
     let count = 0;
     for (let i = 0; i <= messageIndex && i < chat.length; i += 1) {
-        if (chat[i] && !chat[i].is_user)
+        if (isAiFloor_ACU(chat[i]))
             count += 1;
     }
     return count;
@@ -64832,7 +64901,7 @@ function resolveMigrationSkipUpdateFloors_ACU(data, inheritedSkip) {
 function findMigrationTargetAiMessage_ACU(chat, skipUpdateFloors) {
     const aiMessages = [];
     for (let i = 0; i < chat.length; i += 1) {
-        if (chat[i] && !chat[i].is_user)
+        if (isAiFloor_ACU(chat[i]))
             aiMessages.push({ message: chat[i], index: i });
     }
     if (aiMessages.length === 0)
@@ -65230,7 +65299,7 @@ async function migrateLegacyStorageToV2OnLoad_ACU(options) {
     let canRebuild = false;
     let selfHealedMixedConflict = false;
     let supersededV2Frames = [];
-    const hasV2History = chat.some(message => !message?.is_user
+    const hasV2History = chat.some(message => isDataBearingMessage_ACU(message)
         && hasV2TableHistoryEvidence_ACU(readIsolatedTagData_ACU(message, options.isolationKey)));
     if (hasV2History) {
         mixedDecision = await evaluateMixedStorageDecision_ACU({
@@ -65886,7 +65955,7 @@ async function mergeAllIndependentTablesLegacyV1_ACU() {
                         if (!independentTableStates_ACU[storedSheetKey]) {
                             independentTableStates_ACU[storedSheetKey] = {};
                         }
-                        const currentAiFloor = chat.slice(0, i + 1).filter(m => !m.is_user).length;
+                        const currentAiFloor = countAiFloors_ACU(chat.slice(0, i + 1));
                         independentTableStates_ACU[storedSheetKey].lastUpdatedAiFloor = currentAiFloor;
                     }
                 }
@@ -65927,7 +65996,7 @@ async function mergeAllIndependentTablesLegacyV1_ACU() {
                         if (wasUpdated) {
                             if (!independentTableStates_ACU[storedSheetKey])
                                 independentTableStates_ACU[storedSheetKey] = {};
-                            const currentAiFloor = chat.slice(0, i + 1).filter(m => !m.is_user).length;
+                            const currentAiFloor = countAiFloors_ACU(chat.slice(0, i + 1));
                             independentTableStates_ACU[storedSheetKey].lastUpdatedAiFloor = currentAiFloor;
                         }
                     }
@@ -65962,7 +66031,7 @@ async function mergeAllIndependentTablesLegacyV1_ACU() {
                     foundSheets[k] = true;
                     if (!independentTableStates_ACU[k])
                         independentTableStates_ACU[k] = {};
-                    const currentAiFloor = chat.slice(0, i + 1).filter(m => !m.is_user).length;
+                    const currentAiFloor = countAiFloors_ACU(chat.slice(0, i + 1));
                     independentTableStates_ACU[k].lastUpdatedAiFloor = currentAiFloor;
                 });
             }
@@ -65990,7 +66059,7 @@ async function mergeAllIndependentTablesLegacyV1_ACU() {
                     foundSheets[k] = true;
                     if (!independentTableStates_ACU[k])
                         independentTableStates_ACU[k] = {};
-                    const currentAiFloor = chat.slice(0, i + 1).filter(m => !m.is_user).length;
+                    const currentAiFloor = countAiFloors_ACU(chat.slice(0, i + 1));
                     independentTableStates_ACU[k].lastUpdatedAiFloor = currentAiFloor;
                 });
             }
@@ -66016,7 +66085,7 @@ async function mergeAllIndependentTablesLegacyV1_ACU() {
                     if (!independentTableStates_ACU[sheetKey]) {
                         independentTableStates_ACU[sheetKey] = {};
                     }
-                    const currentAiFloor = chat.slice(0, deltaIndex + 1).filter((m) => !m.is_user).length;
+                    const currentAiFloor = countAiFloors_ACU(chat.slice(0, deltaIndex + 1));
                     independentTableStates_ACU[sheetKey].lastUpdatedAiFloor = currentAiFloor;
                 }
                 catch (e) {
@@ -66307,7 +66376,7 @@ function isNewChatGreetingStage_ACU(chat) {
     const hasAnyUserMessage = chat.some(m => m && m.is_user);
     if (hasAnyUserMessage)
         return false;
-    const firstAiIndex = chat.findIndex(m => m && !m.is_user);
+    const firstAiIndex = chat.findIndex(isAiFloor_ACU);
     return firstAiIndex !== -1;
 }
 // [健全性] 你要求的监视点：任何"仅单一AI楼层、没有任何User回复"的聊天记录，都不进行世界书注入
@@ -66315,7 +66384,7 @@ function isSingleAiNoUserChat_ACU(chat) {
     if (!Array.isArray(chat) || chat.length === 0)
         return false;
     const userCount = chat.filter(m => m && m.is_user).length;
-    const aiCount = chat.filter(m => m && !m.is_user).length;
+    const aiCount = countAiFloors_ACU(chat);
     return userCount === 0 && aiCount === 1;
 }
 function messageHasTableDataForCurrentIsolation_ACU(message, isolationKey) {
@@ -66410,7 +66479,7 @@ async function writeInitialTemplateCheckpoint_ACU(templateObj, { reason = 'initi
         logWarn_ACU(`[InitialCheckpoint] 检测到旧存储，禁止写入 init checkpoint，等待迁移流程处理。reason=${preStrategy.reason}`);
         return false;
     }
-    const firstAiIndex = chat.findIndex(m => m && !m.is_user);
+    const firstAiIndex = chat.findIndex(isAiFloor_ACU);
     if (firstAiIndex === -1) {
         logWarn_ACU('[InitialCheckpoint] 找不到第一楼AI消息');
         return false;
@@ -71413,7 +71482,7 @@ function getLatestAIMessageContent_ACU() {
     }
     for (let i = chat.length - 1; i >= 0; i--) {
         const message = chat[i];
-        if (message && !message.is_user) {
+        if (isAiFloor_ACU(message)) {
             return typeof message.mes === 'string' ? message.mes : '';
         }
     }
@@ -81805,7 +81874,7 @@ async function prepareAIInput_ACU(messages, updateMode = 'standard', targetSheet
         messagesText += messages.map((msg) => {
             const prefix = msg.is_user ? getUserName_ACU() : msg.name || '角色';
             let content = msg.mes || msg.message || '';
-            if (!msg.is_user && (extractTags || extractRules.length > 0 || excludeTags || excludeRules.length > 0)) {
+            if (isAiFloor_ACU(msg) && (extractTags || extractRules.length > 0 || excludeTags || excludeRules.length > 0)) {
                 content = applyContextTagFilters_ACU(content, { extractTags, extractRules, excludeTags, excludeRules });
             }
             if (typeof content === 'string' && content) {
@@ -85449,7 +85518,7 @@ async function getOptimizationPlaceholders_ACU(userMessage = '') {
         // $7: 前文上下文（仅AI输出）
         const chat = getChatArray_ACU();
         const contextMessages = chat
-            .filter(msg => !msg.is_user)
+            .filter(isAiFloor_ACU)
             .slice(-10) // 最近10条AI消息
             .map(msg => `assistant："${msg.mes || ''}"`)
             .join('\n');
@@ -86821,18 +86890,18 @@ function getLastOptimizedMessageIndex_ACU() {
     const chat = getChatArray_ACU();
     const cachedBase = getLastOptimizationBase_ACU();
     if (cachedBase?.messageId != null) {
-        const runtimeIndex = chat.findIndex((msg) => msg && !msg.is_user && msg.message_id === cachedBase.messageId);
+        const runtimeIndex = chat.findIndex((msg) => isAiFloor_ACU(msg) && msg.message_id === cachedBase.messageId);
         if (runtimeIndex >= 0)
             return runtimeIndex;
     }
-    if (Number.isInteger(cachedBase?.messageIndex) && cachedBase.messageIndex >= 0 && chat[cachedBase.messageIndex] && !chat[cachedBase.messageIndex].is_user) {
+    if (Number.isInteger(cachedBase?.messageIndex) && cachedBase.messageIndex >= 0 && isAiFloor_ACU(chat[cachedBase.messageIndex])) {
         return cachedBase.messageIndex;
     }
     let latestIndex = -1;
     let latestTimestamp = -1;
     for (let i = 0; i < chat.length; i++) {
         const msg = chat[i];
-        if (!msg || msg.is_user)
+        if (!isAiFloor_ACU(msg))
             continue;
         const extra = msg.extra || {};
         const ts = Number(extra._acu_last_optimized_at || 0);
@@ -88308,7 +88377,7 @@ function collectRecentAiLayerPairs_ACU(messages, layerLimit) {
     const pairs = [];
     for (let i = messages.length - 1; i >= 0 && pairs.length < limit; i--) {
         const ai = messages[i];
-        if (!ai || ai.is_user || ai._qrf_from_planning)
+        if (!isAiFloor_ACU(ai) || ai._qrf_from_planning)
             continue;
         const previous = i > 0 && messages[i - 1]?.is_user ? messages[i - 1] : undefined;
         pairs.unshift({ user: previous, ai });
@@ -89028,9 +89097,7 @@ async function buildPlotSharedContext_ACU(plotSettings, userMessage, runtimeOpti
         const extracted = [];
         for (let i = contextEndIndex; i >= 0 && aiCount < contextTurnCount; i--) {
             const msg = chat[i];
-            if (!msg)
-                continue;
-            if (msg.is_user)
+            if (!isAiFloor_ACU(msg))
                 continue;
             if (msg._qrf_from_planning)
                 continue;
@@ -90244,7 +90311,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.6.4" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.6.5" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -103067,7 +103134,7 @@ function resolveRetainedCheckpointBoundary_ACU(chat, retainCount) {
     const dataMessageIndices = [];
     for (let i = 0; i < chat.length; i++) {
         const msg = chat[i];
-        if (msg && !msg.is_user) {
+        if (isAiFloor_ACU(msg)) {
             aiMessageIndices.push(i);
         }
         if (messageHasLocalLayerData_ACU(msg)) {
@@ -103162,7 +103229,7 @@ function resolvePeriodicCheckpointBoundary_ACU(chat, retainCount) {
     const dataMessageIndices = [];
     for (let i = 0; i < chat.length; i++) {
         const msg = chat[i];
-        if (msg && !msg.is_user) {
+        if (isAiFloor_ACU(msg)) {
             aiMessageIndices.push(i);
         }
         if (messageHasLocalLayerData_ACU(msg)) {
@@ -103232,7 +103299,7 @@ function resolvePeriodicCheckpointBoundary_ACU(chat, retainCount) {
 function countAiFloorAtMessage_ACU(chat, messageIndex) {
     let count = 0;
     for (let i = 0; i <= messageIndex && i < chat.length; i += 1) {
-        if (chat[i] && !chat[i].is_user)
+        if (isAiFloor_ACU(chat[i]))
             count += 1;
     }
     return count;
@@ -103527,7 +103594,7 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(chat, boundaryAnchorInde
         enabled: settings_ACU.dataIsolationEnabled,
         code: settings_ACU.dataIsolationCode,
     };
-    const aiCountAtTrigger = chat.reduce((count, message) => count + (message && !message.is_user ? 1 : 0), 0);
+    const aiCountAtTrigger = countAiFloors_ACU(chat);
     const retainCount = settings_ACU.retainRecentLayers || 0;
     const compactionProvenance = {
         version: 1,
@@ -103824,7 +103891,7 @@ function getOriginalContent_ACU(messageIndex) {
     if (cachedBase?.baseContent) {
         const chat = getChatArray_ACU();
         if (cachedBase.messageId != null) {
-            const matchedIndex = chat.findIndex(msg => msg && !msg.is_user && msg.message_id === cachedBase.messageId);
+            const matchedIndex = chat.findIndex(msg => isAiFloor_ACU(msg) && msg.message_id === cachedBase.messageId);
             if (matchedIndex === messageIndex) {
                 return cachedBase.baseContent;
             }
@@ -104303,7 +104370,7 @@ async function ensureManualCatchUpAnchorBeforeTarget_ACU(targetMessageIndex, iso
             logDebug_ACU(`[追平锚点预检] blocked：聊天记录为空（target=${targetMessageIndex}, isolationKey=[${isolationKey || '无标签'}]）。`);
             return { status: 'blocked', error: '聊天记录为空，无法验证手动追平锚点。' };
         }
-        const aiMessageIndices = chat.map((message, index) => !message?.is_user ? index : -1).filter(index => index >= 0);
+        const aiMessageIndices = chat.map((message, index) => isAiFloor_ACU(message) ? index : -1).filter(index => index >= 0);
         if (!Number.isInteger(targetMessageIndex) || targetMessageIndex < 0 || !chat[targetMessageIndex] || chat[targetMessageIndex].is_user) {
             logDebug_ACU(`[追平锚点预检] blocked：目标楼层无效（target=${targetMessageIndex}）。`);
             return { status: 'blocked', error: '手动追平目标楼层无效，无法验证 V2 锚点。' };
@@ -104475,20 +104542,18 @@ function isFullRangeDeletionRequest_ACU(startFloor, endFloor, aiMessageCount) {
     return (startFloor === null || startFloor <= 1)
         && (endFloor === null || endFloor >= aiMessageCount);
 }
-/** 统计当前聊天的 AI 楼层总数（与 deleteLocalDataInChatCoreInner_ACU 的口径一致）。 */
-function countAiMessages_ACU$1(chat) {
-    return Array.isArray(chat) ? chat.filter((msg) => !msg?.is_user).length : 0;
-}
 /**
  * 把 1-based AI 楼层范围换算为聊天数组中的物理消息索引（只含 AI 消息）。
  * startFloor/endFloor 为 null 分别表示从第一层 / 到最后一层；越界自动 clamp。
  * 整楼层删除与按表删除共用此口径，避免两条路径对「第 N 层」的解释漂移。
+ * 注意：楼层编号沿用宽档 AI 楼口径，与 UI 的楼层总数（useDataManagement 的 getAiMessageCount）
+ * 同源 ⇒ 用户所见楼层与删除范围自洽；隐藏楼/工具楼不占编号，但「完全清空」路径覆盖全部楼层。
  */
 function resolveAiMessageIndicesInFloorRange_ACU(chat, startFloor, endFloor) {
     if (!Array.isArray(chat) || chat.length === 0)
         return [];
     const aiMessageIndices = chat
-        .map((msg, index) => (!msg?.is_user) ? index : -1)
+        .map((msg, index) => isAiFloor_ACU(msg) ? index : -1)
         .filter((index) => index !== -1);
     if (aiMessageIndices.length === 0)
         return [];
@@ -104521,7 +104586,7 @@ async function deleteLocalDataInChatCoreInner_ACU(mode = 'current', startFloor =
     const vectorManifestsToDeleteAfterCommit = [];
     const targetIdentity = settings_ACU.dataIsolationEnabled ? settings_ACU.dataIsolationCode : null;
     const currentIsolationKey = getCurrentIsolationKey_ACU();
-    const aiMessageCount = countAiMessages_ACU$1(chat);
+    const aiMessageCount = countAiFloors_ACU(chat);
     if (aiMessageCount === 0) {
         return 0;
     }
@@ -104690,7 +104755,7 @@ async function deleteLocalDataWithScope_ACU(mode = 'current', startFloor = null,
         const deletedCount = await clearManualRefillSheetDataInRange_ACU(targetMessageIndices, normalizedSheetKeys);
         return { path: 'range', deletedCount, sheetKeys: normalizedSheetKeys };
     }
-    const aiMessageCount = countAiMessages_ACU$1(chat);
+    const aiMessageCount = countAiFloors_ACU(chat);
     const isFullRange = isFullRangeDeletionRequest_ACU(startFloor, endFloor, aiMessageCount);
     const path = (mode === 'all' && isFullRange) ? 'purge' : 'range';
     if (expectedPath && expectedPath !== path) {
@@ -104722,7 +104787,7 @@ async function overrideLatestLayerWithTemplateCore_ACU(templateData) {
     // 找到最新的一条AI消息
     let latestAiIndex = -1;
     for (let i = chat.length - 1; i >= 0; i--) {
-        if (!chat[i].is_user) {
+        if (isAiFloor_ACU(chat[i])) {
             latestAiIndex = i;
             break;
         }
@@ -105031,7 +105096,7 @@ function resolveManualRefillReplayAnchor_ACU(chat, isolationKey, targetMessageIn
             fullCheckpointIndices.push(index);
     }
     const firstTargetAiIndex = [...new Set(targetMessageIndices)]
-        .filter((index) => Number.isInteger(index) && index >= 0 && index < chat.length && !chat[index]?.is_user)
+        .filter((index) => Number.isInteger(index) && index >= 0 && index < chat.length && isAiFloor_ACU(chat[index]))
         .sort((left, right) => left - right)[0] ?? -1;
     return { fullCheckpointIndices, fallbackRootIndex: earliestV2FrameIndex >= 0 ? earliestV2FrameIndex : firstTargetAiIndex };
 }
@@ -105168,11 +105233,11 @@ async function commitManualRefillSheetSnapshotInRangeAtomic_ACU(options) {
             return { success: false, changed: false, clearedCount: 0, checkpointCount: 0, error: '聊天记录为空，无法提交手动重填最终快照。' };
         }
         const normalizedIndices = [...new Set(options.targetMessageIndices.filter((idx) => Number.isInteger(idx) && idx >= 0 && idx < chat.length))].sort((a, b) => a - b);
-        const completedMessageIndex = [...normalizedIndices].reverse().find(idx => !chat[idx]?.is_user);
+        const completedMessageIndex = [...normalizedIndices].reverse().find(idx => isAiFloor_ACU(chat[idx]));
         if (completedMessageIndex === undefined) {
             return { success: false, changed: false, clearedCount: 0, checkpointCount: 0, error: '手动重填最终快照提交失败：目标消息范围不含 AI 回复楼层。' };
         }
-        const completedAiFloor = chat.slice(0, completedMessageIndex + 1).filter(msg => msg && !msg.is_user).length;
+        const completedAiFloor = countAiFloors_ACU(chat.slice(0, completedMessageIndex + 1));
         const anchor = resolveManualRefillReplayAnchor_ACU(chat, options.isolationKey, normalizedIndices);
         if (anchor.fullCheckpointIndices.length > 1) {
             return { success: false, changed: false, clearedCount: 0, checkpointCount: 0, error: `手动重填最终快照提交失败：isolationKey ${options.isolationKey} 存在多个整库 full checkpoint（${anchor.fullCheckpointIndices.join(', ')}），必须先完成完整性修复。` };
@@ -105643,7 +105708,7 @@ async function rollbackManualRefillRangeSnapshotAtomic_ACU(handle) {
             const message = chat[entry.index];
             // 清理后外部改楼/截断会让索引失真：身份不符一律不恢复，宁可少恢复也不能写错楼层。
             const fingerprintMatches = !!message
-                && !message.is_user
+                && isAiFloor_ACU(message)
                 && buildMessageIdentityFingerprint_ACU(message) === entry.fingerprint;
             if (!fingerprintMatches) {
                 skippedIndexes.push(entry.index);
@@ -106463,7 +106528,7 @@ async function updateCardUpdateStatusDisplay_ACU() {
         return;
     }
     const chatHistory = getChatArray_ACU();
-    const totalMessages = chatHistory.filter(msg => !msg.is_user).length;
+    const totalMessages = countAiFloors_ACU(chatHistory);
     $totalMessagesDisplay.text(`上下文总层数: ${totalMessages} (仅计算AI回复楼层)`);
     const totalAiMessages = totalMessages;
     if (!currentJsonTableData_ACU) {
@@ -108007,7 +108072,7 @@ async function fetchAvailableModelsUncached_ACU(apiUrl, apiKey, customApiFormat)
         // 仅折叠探活中断为结构化失败（返回 FetchModelsResult，调用方 UI 才能正确落到错误态）；
         // 其余网络层异常保持原有抛出行为不变。
         if (e?.name === 'AbortError' || /abort/i.test(String(e?.message || ''))) {
-            return { success: false, error: `API 端点状态检查超时：${MODEL_PROBE_TIMEOUT_MS_ACU / 1000} 秒内无响应，请检查端点地址与网络后重试。` };
+            return { success: false, error: `API 端点状态检查超时：${MODEL_PROBE_TIMEOUT_MS_ACU / 1000} 秒内无响应，请检查端点地址与网络后重试。（若 TauriTavern 弹出了「允许连接到自定义端点？」授权窗，等待授权同样计入这段时间——请先在弹窗中点击「信任并连接」再重试）` };
         }
         throw e;
     }
@@ -108039,6 +108104,12 @@ async function fetchAvailableModelsUncached_ACU(apiUrl, apiKey, customApiFormat)
     }
     const data = await response.json();
     logDebug_ACU('获取到的模型数据:', data);
+    // TT 2.3.0 起连接用户自定义端点需在宿主原生弹窗里「信任并连接」（SSRF 加固）；用户点「取消」时
+    // status 路由以 HTTP 200 + { cancelled: true, data: [] } 返回。此处必须指向那个弹窗——否则
+    // 用户只会看到「列表为空」，不知道第一步该做什么。
+    if (data && data.cancelled === true) {
+        return { success: false, error: '已取消连接自定义端点。请在 TauriTavern 弹出的「允许连接到自定义端点？」授权窗中点击「信任并连接」后重试。' };
+    }
     let modelsList = [];
     if (data && data.models && Array.isArray(data.models)) {
         modelsList = data.models;
@@ -109082,7 +109153,7 @@ function buildAutoUpdatePlan_ACU(liveChat, tableData, settings, isolationKey, pe
     })));
     // 预计算所有 AI 消息索引
     const allAiMessageIndices = liveChat
-        .map((msg, index) => !msg.is_user ? index : -1)
+        .map((msg, index) => isAiFloor_ACU(msg) ? index : -1)
         .filter((index) => index !== -1);
     const totalAiMessages = allAiMessageIndices.length;
     // 统一的全局默认参数
@@ -109410,7 +109481,7 @@ async function handleFloorIncreaseDelay_ACU(totalAiMessages, lastTotalAiMessages
         const liveChat = getChatArray();
         if (!liveChat || liveChat.length === 0)
             return null;
-        const newTotal = liveChat.filter((m) => !m.is_user).length;
+        const newTotal = countAiFloors_ACU(liveChat);
         setLastTotalAiMessages(newTotal);
         return { liveChat, totalAiMessages: newTotal };
     }
@@ -109438,13 +109509,6 @@ async function handleFloorIncreaseDelay_ACU(totalAiMessages, lastTotalAiMessages
  * 失败姿态：任何存储/环境异常一律 fail-open（放行填表），宁可多跑一次也不静默漏填。
  */
 /**
- * AI 楼判定的唯一口径：!is_user（含 narrator 系统楼）。
- * resolveLatestAiFloor_ACU 与 resolveAiFloorSignature_ACU 共用，杜绝再造第二套标准。
- */
-function isAiFloor_ACU(message) {
-    return !!message && !message.is_user;
-}
-/**
  * 取当前聊天里最新的 AI 楼层——自动填表触发身份就落在这一楼上。
  * 拿不到（空聊天 / 无 AI 楼 / message_id 缺失）时返回 null，调用方据此放行。
  */
@@ -109460,7 +109524,8 @@ function resolveLatestAiFloor_ACU(chat) {
 }
 /**
  * GENERATION_ENDED 的「新 AI 楼输出」签名：AI 楼数 + 最新 AI 楼 message_id。
- * 与 resolveLatestAiFloor_ACU 严格同口径（AI 楼 = !is_user，含 narrator）。
+ * 与 resolveLatestAiFloor_ACU 严格同口径（共用 shared/ai-floor 的宽档谓词 isAiFloor_ACU：
+ * 非 user、非 system、非 role:'tool'，含 narrator 旁白）。
  *
  * 用途：宿主 GENERATION_ENDED 只由 hideStopButton 派发，外部插件收尾/停止会凭空补一条；
  * 这类事件没有配对上下文，门控此前一律放行。连续两次签名完全相同 ⇒ 期间零新 AI 楼 ⇒ 假事件，
@@ -110794,7 +110859,7 @@ function getFrameFingerprint_ACU(frame) {
 function countAiFloorInChat_ACU(chat, messageIndex) {
     let count = 0;
     for (let i = 0; i <= messageIndex && i < chat.length; i += 1) {
-        if (chat[i] && !chat[i].is_user)
+        if (isAiFloor_ACU(chat[i]))
             count += 1;
     }
     return count;
@@ -114608,7 +114673,7 @@ async function processUpdatesBatch_ACU(indicesToUpdate, mode, options, executeUp
 }
 function collectEffectiveAiMessageIndices_ACU(chat) {
     const allAiMessageIndices = chat
-        .map((message, index) => !message?.is_user ? index : -1)
+        .map((message, index) => isAiFloor_ACU(message) ? index : -1)
         .filter((index) => index >= 0);
     const skipped = Math.max(0, Math.trunc(Number(settings_ACU.skipUpdateFloors) || 0));
     return skipped > 0 ? allAiMessageIndices.slice(0, -skipped) : allAiMessageIndices;
@@ -115522,7 +115587,7 @@ async function ensureManualRefillAnchorHealth_ACU(liveChat, isolationKey, option
         // 临时根（零根是其合法中间态），增量路径则会在 persist 层撞隐式 migration 拒绝。
         if (!options.checkZeroRoot)
             return null;
-        const hasFrames = chat.some(message => message && !message.is_user && isV2TagData_ACU(readIsolatedTagData_ACU(message, isolationKey)));
+        const hasFrames = chat.some(message => isDataBearingMessage_ACU(message) && isV2TagData_ACU(readIsolatedTagData_ACU(message, isolationKey)));
         if (hasFrames && !hasAnyV2Checkpoint_ACU(chat, isolationKey)) {
             return 'V2 orchestrateManualUpdate:anchor_preflight 检测到零根状态：该隔离键存在 V2 storage frame 但没有任何 full checkpoint 锚点，persist 层将拒绝隐式 migration checkpoint。';
         }
@@ -115716,7 +115781,7 @@ async function orchestrateManualUpdate_ACU(targetKeys, processBatch, refreshData
             return { success: false, error: '聊天记录为空，无法更新。' };
         }
         const allAiMessageIndices = liveChat
-            .map((msg, index) => !msg.is_user ? index : -1)
+            .map((msg, index) => isAiFloor_ACU(msg) ? index : -1)
             .filter((index) => index !== -1);
         if (allAiMessageIndices.length === 0) {
             return { success: false, error: '尚未检测到AI回复，无法执行手动更新。' };
@@ -116548,7 +116613,7 @@ async function triggerAutomaticUpdateIfNeeded_ACU(performanceContext) {
         if (!preCheck.canProceed) {
             logDebug_ACU(`ACU Auto-Trigger: ${preCheck.reason} Skipping.`);
             logAutoFillSkip_ACU('preconditions_failed', {
-                aiFloorCount: allChatMessages_ACU.filter((message) => !message.is_user).length,
+                aiFloorCount: countAiFloors_ACU(allChatMessages_ACU),
                 inFlight: isAutoUpdatingCard_ACU,
                 preconditionReason: preCheck.code,
             });
@@ -116559,7 +116624,7 @@ async function triggerAutomaticUpdateIfNeeded_ACU(performanceContext) {
             logAutoFillSkip_ACU('empty_chat');
             return;
         }
-        let totalAiMessages = liveChat.filter(m => !m.is_user).length;
+        let totalAiMessages = countAiFloors_ACU(liveChat);
         // [重构] 调用 service 层楼层增加延迟逻辑
         const delayResult = await handleFloorIncreaseDelay_ACU(totalAiMessages, lastTotalAiMessages_ACU, AUTO_UPDATE_FLOOR_INCREASE_DELAY_ACU, getChatArray_ACU, _set_lastTotalAiMessages_ACU);
         if (delayResult === null) {
@@ -116752,34 +116817,6 @@ function getSelectedManualSheetKeys_ACU() {
  * 只负责「验证新消息是否应该触发更新 + 决定执行模式」，不涉及 UI（toast/防抖定时器）。
  */
 /**
- * 判断一条消息是否属于「AI 楼层」。
- * 宿主语义（@types/iframe/exported.sillytavern.d.ts）：
- *   - role === 'user'  <=> is_user
- *   - role === 'system' <=> extra?.type === 'narrator' && !is_user
- *   - role === 'assistant' <=> extra?.type !== 'narrator' && !is_user
- * 因此 AI 楼层 = !is_user 且非 narrator 系统旁白。仅凭 !is_user 会把系统消息误当 AI。
- */
-function isAiMessage_ACU(message) {
-    if (!message || typeof message !== 'object')
-        return false;
-    if (message.is_user)
-        return false;
-    const extraType = message?.extra?.type;
-    if (extraType === 'narrator')
-        return false;
-    return true;
-}
-function countAiMessages_ACU(liveChat) {
-    if (!Array.isArray(liveChat))
-        return 0;
-    let count = 0;
-    for (const message of liveChat) {
-        if (isAiMessage_ACU(message))
-            count += 1;
-    }
-    return count;
-}
-/**
  * 解析本轮 AI 楼层（纯函数，不依赖 timer / 宿主状态）。
  *
  * 顺序：
@@ -116802,11 +116839,11 @@ function resolveGeneratedAiMessageIndex_ACU(options) {
     const isAi = (index) => {
         if (index < 0 || index >= liveChat.length)
             return false;
-        return isAiMessage_ACU(liveChat[index]);
+        return isAiModelOutputFloor_ACU(liveChat[index]);
     };
     const capturedLength = Number.isInteger(intent.capturedChatLength) ? intent.capturedChatLength : -1;
     const capturedAiCount = Number.isInteger(intent.capturedAiFloorCount) ? intent.capturedAiFloorCount : -1;
-    const liveAiCount = countAiMessages_ACU(liveChat);
+    const liveAiCount = countAiModelOutputFloors_ACU(liveChat);
     // 1. 消息对象的稳定 message_id 与数组索引不是同一概念。仓库既有逻辑同样通过
     //    message_id 反查 runtime index（chat-service.ts / plot-logic.ts）。只接受唯一 AI 命中。
     if (Number.isInteger(intent.eventMessageId)) {
@@ -116892,11 +116929,11 @@ function evaluateNewMessageAction_ACU(liveChat, isAutoUpdating, coreApisReady, w
     const lastMessageIndex = resolvedMessageIndex !== undefined ? resolvedMessageIndex : liveChat.length - 1;
     const lastMessage = liveChat[lastMessageIndex];
     // 显式索引无效：调度层已解析出索引，但楼层已被删除/越界 → 专用原因，不笼统复用 last_message_not_ai。
-    if (resolvedMessageIndex !== undefined && (!lastMessage || lastMessage.is_user || !isAiMessage_ACU(lastMessage))) {
+    if (resolvedMessageIndex !== undefined && (!lastMessage || lastMessage.is_user || !isAiModelOutputFloor_ACU(lastMessage))) {
         return { action: 'skip', reason: 'Resolved message is not an AI reply', skipReason: 'resolved_message_not_ai' };
     }
     // 无 intent 的历史路径：保持"最后一条 AI 消息"语义（若尾部不是 AI 则跳过）。
-    if (resolvedMessageIndex === undefined && (!lastMessage || lastMessage.is_user)) {
+    if (resolvedMessageIndex === undefined && (!lastMessage || !isAiFloor_ACU(lastMessage))) {
         return { action: 'skip', reason: 'Last message is not an AI reply', skipReason: 'last_message_not_ai' };
     }
     // 检查是否来自当前角色
@@ -117771,7 +117808,7 @@ async function handleNewMessageDebounced_ACU(eventType = 'unknown_acu', intent) 
                         capturedChatLength: intent.capturedChatLength,
                         capturedAiFloorCount: intent.capturedAiFloorCount,
                         liveChatLength: liveChat.length,
-                        liveAiFloorCount: liveChat.filter((message) => message && !message.is_user && message?.extra?.type !== 'narrator').length,
+                        liveAiFloorCount: countAiModelOutputFloors_ACU(liveChat),
                         candidateIndexes: resolution.candidates,
                     });
                     return;
@@ -117786,7 +117823,7 @@ async function handleNewMessageDebounced_ACU(eventType = 'unknown_acu', intent) 
                         capturedChatLength: intent.capturedChatLength,
                         capturedAiFloorCount: intent.capturedAiFloorCount,
                         liveChatLength: liveChat.length,
-                        liveAiFloorCount: liveChat.filter((message) => message && !message.is_user && message?.extra?.type !== 'narrator').length,
+                        liveAiFloorCount: countAiModelOutputFloors_ACU(liveChat),
                     });
                     return;
                 }
@@ -117831,7 +117868,7 @@ async function handleNewMessageDebounced_ACU(eventType = 'unknown_acu', intent) 
                     eventType,
                     eventMessageId: intent?.eventMessageId,
                     messageId: intent?.eventMessageId,
-                    aiFloorCount: liveChat.filter((message) => message && !message.is_user && message?.extra?.type !== 'narrator').length,
+                    aiFloorCount: countAiFloors_ACU(liveChat),
                     inFlight: isAutoUpdatingCard_ACU,
                 });
                 return;
@@ -118313,7 +118350,7 @@ function buildLegacyManualRefillRangeLabel_ACU() {
         if (!Array.isArray(chat) || chat.length === 0)
             return '暂无可重填 AI 楼层';
         const aiItems = chat
-            .map((msg, index) => msg && !msg.is_user ? { index, aiFloor: 0 } : null)
+            .map((msg, index) => isAiFloor_ACU(msg) ? { index, aiFloor: 0 } : null)
             .filter((item) => item !== null);
         aiItems.forEach((item, index) => { item.aiFloor = index + 1; });
         const skip = Number.isFinite(Number(settings_ACU.skipUpdateFloors)) ? Math.max(0, Math.floor(Number(settings_ACU.skipUpdateFloors))) : 0;
@@ -119294,6 +119331,237 @@ async function wakeDormantColumn_ACU(sheetKey, hiddenName, options = {}) {
         presetName: resolveActiveTemplatePresetName_ACU({ fallbackToGlobal: true }),
         signal: options.signal,
     });
+}
+
+/**
+ * shared/host-bridge.ts — 宿主（ST / TT / Luker）适配桥（隔离层）
+ *
+ * 目的：数据库核心的 TT（TauriTavern）针对性适配全部集中在此，业务文件
+ * 通过本桥访问宿主信息，不直接触碰 `__TAURITAVERN__` 等 TT 内部 ABI。
+ * 这样业务文件保持「纯 ST 标准 API」形态，上游（AlbusKen/shujuku）发布更新时
+ * 只同步业务文件、桥层不动，从而兼顾「TT 差异化适配」与「上游更新采纳」。
+ *
+ * TT 环境判定：TT 是 Tauri 壳 + SillyTavern 1.18 前端，注入 `__TAURITAVERN__` ABI
+ * 与 `__TAURITAVERN_MAIN_READY__`。核心差异点：宿主异步引导、扩展与 host ready 存在
+ * 竞态，因此核心启动、菜单注入须额外等待 TT 就绪。
+ */
+function tauriWindow() {
+    return (typeof window !== 'undefined' ? window : globalThis);
+}
+/** 判定宿主类型：TT / Luker 扩展 / 纯 SillyTavern，顺时针检测 */
+function getAcuHostKind() {
+    const w = tauriWindow();
+    if (w.__TAURITAVERN__)
+        return 'tauritavern';
+    if (w.Luker?.getContext)
+        return 'luker';
+    return 'sillytavern';
+}
+/** 是否跑在 TauriTavern 下 */
+function isAcuTauriRuntime() {
+    return getAcuHostKind() === 'tauritavern';
+}
+/**
+ * 取 TT 就绪 Promise/标志。TT 主线程由 init.js 异步引导，先于扩展注册完成
+ * 的 APP_READY 不代表 TT 内部 ABI 就绪；`__TAURITAVERN__?.ready` 可能是个
+ * Promise（可 await），也可能是布尔完成标志。
+ */
+function getAcuTauriReady() {
+    const w = tauriWindow();
+    const ready = w.__TAURITAVERN__?.ready || w.__TAURITAVERN_MAIN_READY__;
+    if (ready && typeof ready.then === 'function') {
+        return { ready: false, promise: ready };
+    }
+    // [L1] 宽容处理：TT ABI 的 ready 除布尔/Promise 外还可能是真值对象（如完成标记对象），
+    // 一律按真值视为就绪；仅 promise-like 走上面的等待分支。
+    return { ready: Boolean(ready), promise: null };
+}
+/**
+ * 等待宿主 API 就绪（扩展可安全初始化）。
+ * - ST/Luker：等 window.SillyTavern.getContext() 返回带核心字段的快照。
+ * - TT：在此基础上额外等 __TAURITAVERN__?.ready（异步 promise 或布尔），
+ *   避免扩展在 TT 内部 ABI（store/Agent/菜单）就绪前初始化。
+ */
+async function waitForAcuHostReady(maxWaitMs = 15000) {
+    const start = Date.now();
+    const getContextReady = () => {
+        try {
+            const w = tauriWindow();
+            if (typeof w.SillyTavern?.getContext !== 'function')
+                return false;
+            const ctx = w.SillyTavern.getContext();
+            return !!(ctx?.eventSource && ctx?.eventTypes && typeof ctx?.saveSettingsDebounced === 'function');
+        }
+        catch {
+            return false;
+        }
+    };
+    while (Date.now() - start < maxWaitMs) {
+        // [H1] 每轮重估宿主类型：TT 的 __TAURITAVERN__ ABI 可能晚于扩展注入，
+        // 循环外只读一次会把 tauri 固化为 false，导致 TT 下跳过 __TAURITAVERN__.ready 等待。
+        const isTauri = isAcuTauriRuntime();
+        if (getContextReady()) {
+            if (!isTauri)
+                return true;
+            // TT：getContext 就绪后再等 TT ABI
+            const { ready, promise } = getAcuTauriReady();
+            if (ready)
+                return true;
+            if (promise) {
+                let promiseResolved = false;
+                let promiseRejected = false;
+                try {
+                    await Promise.race([
+                        promise.then(() => { promiseResolved = true; }).catch(() => { promiseRejected = true; }),
+                        new Promise((r) => setTimeout(r, Math.max(0, maxWaitMs - (Date.now() - start)))),
+                    ]);
+                }
+                catch {
+                    promiseRejected = true;
+                }
+                if (promiseResolved)
+                    return true;
+                if (promiseRejected) {
+                    // TT ready 被拒绝：不直接回退为成功，继续轮询等待 TT 恢复或超时
+                }
+                else if (getAcuTauriReady().ready) {
+                    return true;
+                }
+            }
+        }
+        await new Promise((r) => setTimeout(r, 100));
+    }
+    // [H1] 终判同样用当轮重估值，不用循环外的固化快照
+    const finalIsTauri = isAcuTauriRuntime();
+    return finalIsTauri ? (getAcuTauriReady().ready && getContextReady()) : getContextReady();
+}
+/**
+ * 本插件适配与验证所依据的 TauriTavern 最低版本。
+ * 2.3.0 起宿主把工具调用结果升为一等楼层（`{role:'tool', is_system:true}`）、新增 TOOL_CALLS_* 事件、
+ * 引入 Agent 断点续连的 `{agentResume:true}` 生成事件，并变更了结构写入与保存管线契约。
+ */
+const ACU_REQUIRED_TAURITAVERN_VERSION = '2.3.0';
+/** 解析 `major.minor.patch` 形式的版本串；不可解析返回 null（不猜）。 */
+function parseAcuVersionParts(value) {
+    const text = String(value ?? '').trim().replace(/^v/i, '');
+    const match = text.match(/^(\d+)\.(\d+)\.(\d+)/);
+    if (!match)
+        return null;
+    return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+/** 比较两个版本串：a<b 返回 -1、a===b 返回 0、a>b 返回 1；任一不可解析返回 null。 */
+function compareAcuVersions(a, b) {
+    const left = parseAcuVersionParts(a);
+    const right = parseAcuVersionParts(b);
+    if (!left || !right)
+        return null;
+    for (let i = 0; i < 3; i += 1) {
+        if (left[i] !== right[i])
+            return left[i] < right[i] ? -1 : 1;
+    }
+    return 0;
+}
+/**
+ * 读 TauriTavern 自身版本号（`tauriVersion`，取自宿主 crates/tauritavern 的 Cargo 版本）。
+ * 走宿主文档化的第三方 ABI `__TAURITAVERN__.invoke.safeInvoke('get_client_version')`。
+ * 非 TT 宿主、ABI 不可用或调用失败一律返回 null（**不做猜测**）。
+ */
+async function readAcuTauriVersion() {
+    if (!isAcuTauriRuntime())
+        return null;
+    const w = tauriWindow();
+    const safeInvoke = w.__TAURITAVERN__?.invoke?.safeInvoke;
+    if (typeof safeInvoke !== 'function')
+        return null;
+    try {
+        const info = await safeInvoke('get_client_version');
+        const version = typeof info?.tauriVersion === 'string' ? info.tauriVersion.trim() : '';
+        return version || null;
+    }
+    catch {
+        return null;
+    }
+}
+/**
+ * TT 版本是否低于要求。**读不到版本时返回 false（fail-open，不打扰用户）**：
+ * `get_client_version` 与 `safeInvoke` 自 TT v1.6.5 起就存在，读失败属异常而非「版本过旧」，
+ * 若把失败当成过旧就会对纯 ST / 读取偶发失败的用户误报。
+ */
+function isAcuTauriVersionOutdated(version, required = ACU_REQUIRED_TAURITAVERN_VERSION) {
+    const compared = compareAcuVersions(version, required);
+    return compared === null ? false : compared < 0;
+}
+
+/**
+ * presentation/bootstrap/tauri-version-gate.ts — TauriTavern 版本闸门提醒
+ *
+ * 本插件的楼层识别、填表与追平链路是按 TauriTavern 2.3.0 的宿主语义适配并验证的
+ * （一等工具楼层 `{role:'tool', is_system:true}`、TOOL_CALLS_* 事件、Agent 断点续连的
+ * `{agentResume:true}` 生成事件、结构写入与保存管线契约）。低于该版本时这些行为未经验证。
+ *
+ * 因此在 TT 宿主下于启动时读一次宿主版本，低于所需版本就弹模态提醒（**每次启动都提醒**，
+ * 不依赖任何持久化状态）。非 TT 宿主不参与判定；版本读取失败按 fail-open 处理不打扰
+ * （判据见 shared/host-bridge.ts 的 isAcuTauriVersionOutdated）。
+ */
+/** 同一次页面加载内只提醒一次（init 可能被重入，避免叠窗）。 */
+let tauriVersionNotified_ACU = false;
+/** 组装提醒正文（纯函数，便于测试）。 */
+function buildAcuTauriVersionWarningHtml_ACU(currentVersion, requiredVersion = ACU_REQUIRED_TAURITAVERN_VERSION) {
+    const current = escapeHtml_ACU$1(String(currentVersion || '未知'));
+    const required = escapeHtml_ACU$1(String(requiredVersion || ''));
+    return [
+        '<h3>建议升级 TauriTavern</h3>',
+        `<p>检测到当前 TauriTavern 版本为 <b>${current}</b>，低于本插件适配与验证所需的 <b>${required}</b>。</p>`,
+        `<p>本插件的楼层识别与自动填表是按 ${required} 的宿主行为适配并验证的（工具调用结果作为独立楼层、生成事件与结构写入契约的变更）。低于该版本时行为未经验证，可能出现楼层识别偏差、填表或追平异常。</p>`,
+        `<p>请升级到 <b>${required}</b> 或更高版本后重新加载页面。可在 TauriTavern 内检查更新，或从官方 Releases 下载：<br>github.com/Darkatse/TauriTavern/releases</p>`,
+    ].join('');
+}
+/** 取宿主弹窗 API（ST 标准能力，经 getContext 暴露；取不到时返回 null 由调用方兜底）。 */
+function resolveAcuPopupApi_ACU() {
+    try {
+        const w = (typeof window !== 'undefined' ? window : globalThis);
+        const ctx = w.SillyTavern?.getContext?.() ?? SillyTavern_API_ACU;
+        const callGenericPopup = ctx?.callGenericPopup;
+        const textType = ctx?.POPUP_TYPE?.TEXT;
+        if (typeof callGenericPopup !== 'function' || textType === undefined)
+            return null;
+        return { show: (html) => callGenericPopup(html, textType, '') };
+    }
+    catch {
+        return null;
+    }
+}
+/**
+ * 启动时调用：TT 宿主且版本低于所需版本时提醒用户升级。
+ * @returns 是否真的发出了提醒（供测试断言）
+ */
+async function notifyAcuTauriVersionIfOutdated_ACU() {
+    if (tauriVersionNotified_ACU)
+        return false;
+    if (!isAcuTauriRuntime())
+        return false;
+    let version = null;
+    try {
+        version = await readAcuTauriVersion();
+    }
+    catch {
+        version = null;
+    }
+    if (!isAcuTauriVersionOutdated(version)) {
+        logDebug_ACU(`[版本闸门] TauriTavern 版本满足要求或读取不到（version=${version ?? 'unavailable'}），不提醒。`);
+        return false;
+    }
+    tauriVersionNotified_ACU = true;
+    const html = buildAcuTauriVersionWarningHtml_ACU(version);
+    const popup = resolveAcuPopupApi_ACU();
+    if (!popup) {
+        // 弹窗 API 不可用（极旧宿主/被裁剪的前端）时退化为 toast，不静默丢弃提醒。
+        showToastr_ACU('warning', `当前 TauriTavern 版本 ${escapeHtml_ACU$1(String(version))} 低于本插件所需的 ${ACU_REQUIRED_TAURITAVERN_VERSION}，建议升级后重新加载。`, '版本提醒');
+        return true;
+    }
+    // 不 await：模态窗由用户自行关闭，不得阻塞插件初始化。
+    void popup.show(html);
+    return true;
 }
 
 /**
@@ -120791,7 +121059,7 @@ async function tryRecoverSummaryVectorIndexFromExternalSnapshot_ACU() {
         const chat = getChatArray_ACU();
         if (!Array.isArray(chat) || chat.length === 0)
             return false;
-        const targetIndex = chat.map((message, index) => message && !message.is_user ? index : -1)
+        const targetIndex = chat.map((message, index) => isAiFloor_ACU(message) ? index : -1)
             .filter((index) => index >= 0)
             .pop() ?? -1;
         if (targetIndex < 0)
@@ -124309,11 +124577,11 @@ function stripLegacyContinuationLoopFields_ACU(source) {
 function resolveHostRetryMode_ACU(chat, capture) {
     if (!Array.isArray(chat) || !chat.length)
         return null;
-    const aiCount = countAiMessages_ACU(chat);
+    const aiCount = countAiModelOutputFloors_ACU(chat);
     const last = chat[chat.length - 1];
-    if (aiCount === capture.capturedAiFloorCount + 1 && isAiMessage_ACU(last))
+    if (aiCount === capture.capturedAiFloorCount + 1 && isAiModelOutputFloor_ACU(last))
         return 'regenerate';
-    if (aiCount === capture.capturedAiFloorCount && !isAiMessage_ACU(last))
+    if (aiCount === capture.capturedAiFloorCount && !isAiModelOutputFloor_ACU(last))
         return 'generate';
     return null;
 }
@@ -131161,7 +131429,7 @@ function listAgentStoryFloors_ACU(source) {
     const chat = Array.isArray(source.chat) ? source.chat : [];
     return chat
         .map((message, index) => ({ index, text: messageText_ACU(message, source.contextRules) }))
-        .filter(item => chat[item.index] && !chat[item.index].is_user && item.text);
+        .filter(item => isAiFloor_ACU(chat[item.index]) && item.text);
 }
 function agentStoryWindowSize_ACU(source) {
     return Math.max(0, source.storyWindowFloors ?? AGENT_STORY_WINDOW_DEFAULT_ACU);
@@ -131356,7 +131624,7 @@ function renderAgentStoryText_ACU(context) {
     const settledThrough = Math.min(context.settledThroughIndex, highestIndex);
     const floors = chat
         .map((message, index) => ({ index, text: messageText_ACU(message, context.contextRules) }))
-        .filter(item => chat[item.index] && !chat[item.index].is_user && item.text);
+        .filter(item => isAiFloor_ACU(chat[item.index]) && item.text);
     if (!floors.length)
         return '当前聊天还没有 AI 产出的正文楼层。';
     const window = Math.max(0, context.storyWindowFloors ?? AGENT_STORY_WINDOW_DEFAULT_ACU);
@@ -134919,7 +135187,7 @@ class ContinuationHostGenerationBridge_ACU {
         const capture = {
             capturedAt: this.dependencies.now(),
             capturedChatLength: Array.isArray(chat) ? chat.length : 0,
-            capturedAiFloorCount: Array.isArray(chat) ? chat.filter(message => message && !message.is_user && message?.extra?.type !== 'narrator').length : 0,
+            capturedAiFloorCount: countAiModelOutputFloors_ACU(chat),
             generationSeq: null,
         };
         await runtime.recordHostTurn({ identity: prepared.identity, capture });
@@ -135251,7 +135519,7 @@ class ContinuationHostGenerationBridge_ACU {
             logAgentSession_ACU({ kind: 'run_failed', title: '放弃宿主重发', detail: '楼层已与发送时不一致（承载指令的用户楼或上一轮正文已被删除），直接重发会落错位置。请发送一条消息让主 Agent 按现存楼层重新规划。', ok: false });
             return false;
         }
-        const aiCount = countAiMessages_ACU(chat);
+        const aiCount = countAiModelOutputFloors_ACU(chat);
         const capture = {
             capturedAt: this.dependencies.now(),
             capturedChatLength: mode === 'regenerate' ? Math.max(0, chat.length - 1) : chat.length,
@@ -136031,6 +136299,9 @@ function mainInitialize_ACU() {
         mainInitializeDone_ACU = true;
         logDebug_ACU('AutoCardUpdater Initialization successful! Core APIs loaded.');
         showToastr_ACU('success', '数据库已加载！', '数据库');
+        // [版本闸门] TT 宿主低于 2.3.0 时弹模态提醒升级。不 await：模态窗由用户自行关闭，
+        // 不得阻塞后续初始化；非 TT 宿主与版本读取失败都按 fail-open 不打扰。
+        void notifyAcuTauriVersionIfOutdated_ACU();
         loadSettings_ACU();
         // S0-4：注册插件保存后的 checkpoint 保管库同步（删楼恢复的影子基线）。
         installCheckpointDeleteGuard_ACU();
@@ -136125,8 +136396,12 @@ function mainInitialize_ACU() {
                         // 对非 quiet/非 dryRun/非自动触发的生成开放宽松认领（spv8.9.2 状态法），桥内部只在
                         // 存在未绑定序列号的等待轮时才会认领。
                         const quietLike = isQuietLikeGeneration_ACU(type, params);
+                        // TT 2.3.0：Agent 断点续连以 { agentResume: true, runId } 作为第三参派发 STARTED，
+                        // 形态上不含 automatic_trigger/quiet_prompt，会被误判成「普通前台生成」而吃宽松认领。
+                        // 它不是本轮用户生成，不许被续写桥认领。
+                        const agentResume = params?.agentResume === true;
                         getContinuationHostGenerationBridge_ACU()?.onGenerationStarted(context.seq, {
-                            allowOrdinaryLooseClaim: !dryRun && !quietLike && !params?.automatic_trigger,
+                            allowOrdinaryLooseClaim: !dryRun && !quietLike && !params?.automatic_trigger && !agentResume,
                             automaticTrigger: Boolean(params?.automatic_trigger),
                             quietLike,
                             dryRun: Boolean(dryRun),
@@ -136155,13 +136430,14 @@ function mainInitialize_ACU() {
                         return;
                     }
                     const continuationBridge = getContinuationHostGenerationBridge_ACU();
-                    // 认领事件按"会不会产生正文楼层"分类：quiet/dryRun/自动触发的生成不许走普通宽松认领，
+                    // 认领事件按"会不会产生正文楼层"分类：quiet/dryRun/自动触发/Agent 断点续连的生成不许走普通宽松认领，
                     // 否则会误杀等待中的续写轮。分类结果直接交给桥，桥再据此决定普通认领与
                     // 「自己发起的那一次交火重试」认领（见 host-generation-bridge 的 localRetryClaim）。
                     const quietLike = generationContext ? isQuietLikeGeneration_ACU(generationContext.type, generationContext.params) : false;
                     const automaticTrigger = Boolean(generationContext?.params?.automatic_trigger);
+                    const agentResume = generationContext?.params?.agentResume === true;
                     const continuationEventContext = {
-                        allowOrdinaryLooseClaim: !generationContext || (!generationContext.dryRun && !quietLike && !automaticTrigger),
+                        allowOrdinaryLooseClaim: !generationContext || (!generationContext.dryRun && !quietLike && !automaticTrigger && !agentResume),
                         automaticTrigger,
                         quietLike,
                         dryRun: Boolean(generationContext?.dryRun),
@@ -136187,7 +136463,7 @@ function mainInitialize_ACU() {
                             isolationKey: getCurrentIsolationKey_ACU(),
                             capturedAt: Date.now(),
                             capturedChatLength: chatAtCapture.length,
-                            capturedAiFloorCount: chatAtCapture.filter((m) => m && !m.is_user && m?.extra?.type !== 'narrator').length,
+                            capturedAiFloorCount: countAiModelOutputFloors_ACU(chatAtCapture),
                             // generationSeq 仅在 generationGate 已产生过生成上下文时可靠；否则不假造。
                             generationSeq: generationGate_ACU.generationSeq > 0 ? generationGate_ACU.generationSeq : undefined,
                             // [配对零产出证据] 仅配对携带 STARTED 时刻的扩展签名；无配对时为 undefined，下游直接放行。
@@ -136211,7 +136487,7 @@ function mainInitialize_ACU() {
                             chatKey: currentChatFileIdentifier_ACU,
                             isolationKey: getCurrentIsolationKey_ACU(),
                             capturedChatLength: chatAtCapture.length,
-                            capturedAiFloorCount: chatAtCapture.filter((m) => m && !m.is_user && m?.extra?.type !== 'narrator').length,
+                            capturedAiFloorCount: countAiModelOutputFloors_ACU(chatAtCapture),
                             lastGenerationType: generationGate_ACU.lastGeneration?.type,
                         });
                     }
@@ -136601,7 +136877,7 @@ function resolveLatestAiMessageIndex_ACU() {
     if (!Array.isArray(chat) || chat.length === 0)
         return -1;
     for (let i = chat.length - 1; i >= 0; i -= 1) {
-        if (chat[i] && !chat[i].is_user)
+        if (isAiFloor_ACU(chat[i]))
             return i;
     }
     return -1;
@@ -136853,7 +137129,7 @@ function createCoreDataApi(ctx) {
                 const chatHistory = SillyTavern_API_ACU.chat || [];
                 const currentThreshold = getEffectiveAutoUpdateThreshold_ACU('manual_update');
                 const allAiMessageIndices = chatHistory
-                    .map((msg, index) => !msg.is_user ? index : -1)
+                    .map((msg, index) => isAiFloor_ACU(msg) ? index : -1)
                     .filter((index) => index !== -1);
                 const numberOfAiMessages = allAiMessageIndices.length;
                 let sliceStartIndex = 0;
@@ -136866,7 +137142,7 @@ function createCoreDataApi(ctx) {
                 }
                 if (sliceStartIndex > 0 &&
                     chatHistory[sliceStartIndex] &&
-                    !chatHistory[sliceStartIndex].is_user &&
+                    isAiFloor_ACU(chatHistory[sliceStartIndex]) &&
                     chatHistory[sliceStartIndex - 1] &&
                     chatHistory[sliceStartIndex - 1].is_user) {
                     sliceStartIndex = sliceStartIndex - 1;
@@ -138318,7 +138594,7 @@ async function resetCurrentChatTableStateFromTemplate_ACU(templateData, options 
             const chat = getChatArray_ACU();
             if (!Array.isArray(chat))
                 throw new Error('当前聊天记录不可用，已取消初始化提交。');
-            const targetIndex = chat.findIndex(message => message && !message.is_user);
+            const targetIndex = chat.findIndex(isAiFloor_ACU);
             if (targetIndex < 0)
                 throw new Error('当前聊天不存在可写入初始化 checkpoint 的 AI 楼层。');
             const firstMessage = chat[0];
@@ -138351,7 +138627,7 @@ async function resetCurrentChatTableStateFromTemplate_ACU(templateData, options 
                 const checkpoint = buildCanonicalFullCheckpoint_ACU({
                     createdAt: Date.now(), reason: 'init', data: prepared,
                     event: { filledSheetKeys: [], changedSheetKeys: Object.keys(prepared).filter(key => key.startsWith('sheet_')).sort(), groupKeys: [] },
-                    context: { messageIndex: targetIndex, aiFloor: chat.slice(0, targetIndex + 1).filter(message => message && !message.is_user).length, isolationKey },
+                    context: { messageIndex: targetIndex, aiFloor: countAiFloors_ACU(chat.slice(0, targetIndex + 1)), isolationKey },
                 });
                 if (!checkpoint.checkpoint)
                     throw new Error(checkpoint.error);
@@ -139138,7 +139414,7 @@ async function deleteLocalDataInChat_ACU(mode = 'current', startFloor = null, en
         showToastr_ACU('warning', '聊天记录为空，无法执行删除操作。');
         return;
     }
-    const aiMessageCount = chat.filter((msg) => !msg.is_user).length;
+    const aiMessageCount = countAiFloors_ACU(chat);
     const outcome = await deleteLocalDataWithScope_ACU(mode, startFloor, endFloor);
     // aiCount === 0 时不再提前 return：范围覆盖全部（含 0 层）的 all 请求会走 purge，
     // purge 仍需清理用户首条消息字段与 chat[0] scope/guide 镜像。
@@ -139354,7 +139630,7 @@ async function overrideLatestLayerWithTemplate_ACU() {
         return false;
     }
     // 检查是否有AI消息
-    const hasAiMessage = chat.some((msg) => !msg.is_user);
+    const hasAiMessage = chat.some(isAiFloor_ACU);
     if (!hasAiMessage) {
         showToastr_ACU('error', '聊天记录中没有AI消息，无法执行覆盖操作。');
         return false;
@@ -141041,7 +141317,7 @@ function createWorldbookAiApi(_ctx) {
                 let turnCount = 0;
                 for (let i = chat.length - 1; i >= 0 && turnCount < maxTurns; i--) {
                     const msg = chat[i];
-                    if (msg && !msg.is_user && msg.mes) {
+                    if (isAiFloor_ACU(msg) && msg.mes) {
                         aiMessages.unshift(msg.mes);
                         turnCount++;
                     }
@@ -141977,7 +142253,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260918-11";
+        const stamp = "20260919-08";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -168730,7 +169006,7 @@ function currentSheetKeys$1() {
 }
 function countAiMessages() {
     try {
-        return getChatArray_ACU().filter((msg) => msg && !msg.is_user).length;
+        return countAiFloors_ACU(getChatArray_ACU());
     }
     catch {
         return 0;
@@ -169953,7 +170229,7 @@ function resolveManualRefillRangeSummary_ACU(manualDepth) {
     if (!Array.isArray(chat) || chat.length === 0)
         return null;
     const aiItems = chat
-        .map((msg, index) => (msg && !msg.is_user ? { index, aiFloor: 0 } : null))
+        .map((msg, index) => (isAiFloor_ACU(msg) ? { index, aiFloor: 0 } : null))
         .filter((item) => item !== null);
     aiItems.forEach((item, idx) => { item.aiFloor = idx + 1; });
     const skip = normalizeNonNegativeInteger(settings_ACU.skipUpdateFloors, 0);
@@ -181767,7 +182043,7 @@ function buildCurrentTableCheckpoint_ACU() {
 }
 const RESTORE_MESSAGE_FIELDS_ACU = ['TavernDB_ACU_Data', 'TavernDB_ACU_SummaryData', 'TavernDB_ACU_IndependentData', 'TavernDB_ACU_Identity', 'TavernDB_ACU_IsolatedData', 'TavernDB_ACU_ModifiedKeys', 'TavernDB_ACU_UpdateGroupKeys'];
 function captureMessageSnapshots_ACU(chat) {
-    return chat.filter(msg => msg && !msg.is_user).map(msg => ({ msg, fields: RESTORE_MESSAGE_FIELDS_ACU.reduce((out, key) => {
+    return chat.filter(isDataBearingMessage_ACU).map(msg => ({ msg, fields: RESTORE_MESSAGE_FIELDS_ACU.reduce((out, key) => {
             const exists = Object.prototype.hasOwnProperty.call(msg, key);
             out[key] = { exists, value: exists ? cloneJson_ACU(msg[key]) : undefined };
             return out;
@@ -182200,7 +182476,7 @@ function downloadJson$3(filename, data) {
 }
 function getAiMessageCount() {
     const chat = getChatArray_ACU();
-    return Array.isArray(chat) ? chat.filter((msg) => !msg?.is_user).length : 0;
+    return countAiFloors_ACU(chat);
 }
 function buildCombinedExportPayload() {
     const templateObj = parseTableTemplateJson_ACU({ stripSeedRows: false });
@@ -186576,109 +186852,6 @@ function useLogViewer() {
 }
 
 /**
- * shared/host-bridge.ts — 宿主（ST / TT / Luker）适配桥（隔离层）
- *
- * 目的：数据库核心的 TT（TauriTavern）针对性适配全部集中在此，业务文件
- * 通过本桥访问宿主信息，不直接触碰 `__TAURITAVERN__` 等 TT 内部 ABI。
- * 这样业务文件保持「纯 ST 标准 API」形态，上游（AlbusKen/shujuku）发布更新时
- * 只同步业务文件、桥层不动，从而兼顾「TT 差异化适配」与「上游更新采纳」。
- *
- * TT 环境判定：TT 是 Tauri 壳 + SillyTavern 1.18 前端，注入 `__TAURITAVERN__` ABI
- * 与 `__TAURITAVERN_MAIN_READY__`。核心差异点：宿主异步引导、扩展与 host ready 存在
- * 竞态，因此核心启动、菜单注入须额外等待 TT 就绪。
- */
-function tauriWindow() {
-    return (typeof window !== 'undefined' ? window : globalThis);
-}
-/** 判定宿主类型：TT / Luker 扩展 / 纯 SillyTavern，顺时针检测 */
-function getAcuHostKind() {
-    const w = tauriWindow();
-    if (w.__TAURITAVERN__)
-        return 'tauritavern';
-    if (w.Luker?.getContext)
-        return 'luker';
-    return 'sillytavern';
-}
-/** 是否跑在 TauriTavern 下 */
-function isAcuTauriRuntime() {
-    return getAcuHostKind() === 'tauritavern';
-}
-/**
- * 取 TT 就绪 Promise/标志。TT 主线程由 init.js 异步引导，先于扩展注册完成
- * 的 APP_READY 不代表 TT 内部 ABI 就绪；`__TAURITAVERN__?.ready` 可能是个
- * Promise（可 await），也可能是布尔完成标志。
- */
-function getAcuTauriReady() {
-    const w = tauriWindow();
-    const ready = w.__TAURITAVERN__?.ready || w.__TAURITAVERN_MAIN_READY__;
-    if (ready && typeof ready.then === 'function') {
-        return { ready: false, promise: ready };
-    }
-    // [L1] 宽容处理：TT ABI 的 ready 除布尔/Promise 外还可能是真值对象（如完成标记对象），
-    // 一律按真值视为就绪；仅 promise-like 走上面的等待分支。
-    return { ready: Boolean(ready), promise: null };
-}
-/**
- * 等待宿主 API 就绪（扩展可安全初始化）。
- * - ST/Luker：等 window.SillyTavern.getContext() 返回带核心字段的快照。
- * - TT：在此基础上额外等 __TAURITAVERN__?.ready（异步 promise 或布尔），
- *   避免扩展在 TT 内部 ABI（store/Agent/菜单）就绪前初始化。
- */
-async function waitForAcuHostReady(maxWaitMs = 15000) {
-    const start = Date.now();
-    const getContextReady = () => {
-        try {
-            const w = tauriWindow();
-            if (typeof w.SillyTavern?.getContext !== 'function')
-                return false;
-            const ctx = w.SillyTavern.getContext();
-            return !!(ctx?.eventSource && ctx?.eventTypes && typeof ctx?.saveSettingsDebounced === 'function');
-        }
-        catch {
-            return false;
-        }
-    };
-    while (Date.now() - start < maxWaitMs) {
-        // [H1] 每轮重估宿主类型：TT 的 __TAURITAVERN__ ABI 可能晚于扩展注入，
-        // 循环外只读一次会把 tauri 固化为 false，导致 TT 下跳过 __TAURITAVERN__.ready 等待。
-        const isTauri = isAcuTauriRuntime();
-        if (getContextReady()) {
-            if (!isTauri)
-                return true;
-            // TT：getContext 就绪后再等 TT ABI
-            const { ready, promise } = getAcuTauriReady();
-            if (ready)
-                return true;
-            if (promise) {
-                let promiseResolved = false;
-                let promiseRejected = false;
-                try {
-                    await Promise.race([
-                        promise.then(() => { promiseResolved = true; }).catch(() => { promiseRejected = true; }),
-                        new Promise((r) => setTimeout(r, Math.max(0, maxWaitMs - (Date.now() - start)))),
-                    ]);
-                }
-                catch {
-                    promiseRejected = true;
-                }
-                if (promiseResolved)
-                    return true;
-                if (promiseRejected) {
-                    // TT ready 被拒绝：不直接回退为成功，继续轮询等待 TT 恢复或超时
-                }
-                else if (getAcuTauriReady().ready) {
-                    return true;
-                }
-            }
-        }
-        await new Promise((r) => setTimeout(r, 100));
-    }
-    // [H1] 终判同样用当轮重估值，不用循环外的固化快照
-    const finalIsTauri = isAcuTauriRuntime();
-    return finalIsTauri ? (getAcuTauriReady().ready && getContextReady()) : getContextReady();
-}
-
-/**
  * useDebugPanel — 高级工具「Debug」卡片：傻瓜式问题上报
  *
  * 用法：用户遇到可复现问题 → 打开 Debug → 复现 → 导出 .json → 把文件喂给
@@ -186695,7 +186868,7 @@ async function waitForAcuHostReady(maxWaitMs = 15000) {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260918-11";
+        const stamp = "20260919-08";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -186704,7 +186877,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.6.4";
+        const v = "9.6.5";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {

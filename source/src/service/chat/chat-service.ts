@@ -48,6 +48,7 @@ import { validateCanonicalCheckpoint_ACU } from '../../shared/canonical-checkpoi
 import { buildCanonicalFullCheckpoint_ACU, buildCanonicalSheetCheckpoint_ACU } from '../table/canonical-checkpoint-builder';
 import { getTableDataFingerprint_ACU } from '../table/table-data-upgrade-audit';
 import { purgeCurrentChatDatabaseState_ACU, type ChatDatabasePurgeResult_ACU } from './chat-database-purge';
+import { isAiFloor_ACU, countAiFloors_ACU } from '../../shared/ai-floor';
 
 // ─── 业务逻辑函数（从 presentation 层搬迁） ───
 
@@ -381,7 +382,7 @@ function resolveRetainedCheckpointBoundary_ACU(chat: any[], retainCount: number)
     const dataMessageIndices: number[] = [];
     for (let i = 0; i < chat.length; i++) {
         const msg = chat[i];
-        if (msg && !msg.is_user) {
+        if (isAiFloor_ACU(msg)) {
             aiMessageIndices.push(i);
         }
         if (messageHasLocalLayerData_ACU(msg)) {
@@ -480,7 +481,7 @@ function resolvePeriodicCheckpointBoundary_ACU(chat: any[], retainCount: number)
     const dataMessageIndices: number[] = [];
     for (let i = 0; i < chat.length; i++) {
         const msg = chat[i];
-        if (msg && !msg.is_user) {
+        if (isAiFloor_ACU(msg)) {
             aiMessageIndices.push(i);
         }
         if (messageHasLocalLayerData_ACU(msg)) {
@@ -552,7 +553,7 @@ function resolvePeriodicCheckpointBoundary_ACU(chat: any[], retainCount: number)
 function countAiFloorAtMessage_ACU(chat: any[], messageIndex: number): number {
     let count = 0;
     for (let i = 0; i <= messageIndex && i < chat.length; i += 1) {
-        if (chat[i] && !chat[i].is_user) count += 1;
+        if (isAiFloor_ACU(chat[i])) count += 1;
     }
     return count;
 }
@@ -872,7 +873,7 @@ async function writeV2BoundaryCheckpointBeforePurge_ACU(
         enabled: settings_ACU.dataIsolationEnabled,
         code: settings_ACU.dataIsolationCode,
     };
-    const aiCountAtTrigger = chat.reduce((count, message) => count + (message && !message.is_user ? 1 : 0), 0);
+    const aiCountAtTrigger = countAiFloors_ACU(chat);
     const retainCount = settings_ACU.retainRecentLayers || 0;
     const compactionProvenance = {
         version: 1 as const,
@@ -1194,7 +1195,7 @@ export function getOriginalContent_ACU(messageIndex: number) {
     if (cachedBase?.baseContent) {
         const chat = getChatArray_ACU();
         if (cachedBase.messageId != null) {
-            const matchedIndex = chat.findIndex(msg => msg && !msg.is_user && msg.message_id === cachedBase.messageId);
+            const matchedIndex = chat.findIndex(msg => isAiFloor_ACU(msg) && msg.message_id === cachedBase.messageId);
             if (matchedIndex === messageIndex) {
                 return cachedBase.baseContent;
             }
@@ -1706,7 +1707,7 @@ export async function ensureManualCatchUpAnchorBeforeTarget_ACU(
             logDebug_ACU(`[追平锚点预检] blocked：聊天记录为空（target=${targetMessageIndex}, isolationKey=[${isolationKey || '无标签'}]）。`);
             return { status: 'blocked', error: '聊天记录为空，无法验证手动追平锚点。' };
         }
-        const aiMessageIndices = chat.map((message, index) => !message?.is_user ? index : -1).filter(index => index >= 0);
+        const aiMessageIndices = chat.map((message, index) => isAiFloor_ACU(message) ? index : -1).filter(index => index >= 0);
         if (!Number.isInteger(targetMessageIndex) || targetMessageIndex < 0 || !chat[targetMessageIndex] || chat[targetMessageIndex].is_user) {
             logDebug_ACU(`[追平锚点预检] blocked：目标楼层无效（target=${targetMessageIndex}）。`);
             return { status: 'blocked', error: '手动追平目标楼层无效，无法验证 V2 锚点。' };
@@ -1880,15 +1881,12 @@ export function isFullRangeDeletionRequest_ACU(
         && (endFloor === null || endFloor >= aiMessageCount);
 }
 
-/** 统计当前聊天的 AI 楼层总数（与 deleteLocalDataInChatCoreInner_ACU 的口径一致）。 */
-export function countAiMessages_ACU(chat: any[] | null | undefined): number {
-    return Array.isArray(chat) ? chat.filter((msg: any) => !msg?.is_user).length : 0;
-}
-
 /**
  * 把 1-based AI 楼层范围换算为聊天数组中的物理消息索引（只含 AI 消息）。
  * startFloor/endFloor 为 null 分别表示从第一层 / 到最后一层；越界自动 clamp。
  * 整楼层删除与按表删除共用此口径，避免两条路径对「第 N 层」的解释漂移。
+ * 注意：楼层编号沿用宽档 AI 楼口径，与 UI 的楼层总数（useDataManagement 的 getAiMessageCount）
+ * 同源 ⇒ 用户所见楼层与删除范围自洽；隐藏楼/工具楼不占编号，但「完全清空」路径覆盖全部楼层。
  */
 export function resolveAiMessageIndicesInFloorRange_ACU(
     chat: any[] | null | undefined,
@@ -1897,7 +1895,7 @@ export function resolveAiMessageIndicesInFloorRange_ACU(
 ): number[] {
     if (!Array.isArray(chat) || chat.length === 0) return [];
     const aiMessageIndices = chat
-        .map((msg: any, index: number) => (!msg?.is_user) ? index : -1)
+        .map((msg: any, index: number) => isAiFloor_ACU(msg) ? index : -1)
         .filter((index: number) => index !== -1);
     if (aiMessageIndices.length === 0) return [];
     const startAiIndex = startFloor ? Math.max(0, startFloor - 1) : 0;
@@ -1936,7 +1934,7 @@ async function deleteLocalDataInChatCoreInner_ACU(
     const targetIdentity = settings_ACU.dataIsolationEnabled ? settings_ACU.dataIsolationCode : null;
     const currentIsolationKey = getCurrentIsolationKey_ACU();
 
-    const aiMessageCount = countAiMessages_ACU(chat);
+    const aiMessageCount = countAiFloors_ACU(chat);
     if (aiMessageCount === 0) {
         return 0;
     }
@@ -2129,7 +2127,7 @@ export async function deleteLocalDataWithScope_ACU(
         const deletedCount = await clearManualRefillSheetDataInRange_ACU(targetMessageIndices, normalizedSheetKeys);
         return { path: 'range', deletedCount, sheetKeys: normalizedSheetKeys };
     }
-    const aiMessageCount = countAiMessages_ACU(chat);
+    const aiMessageCount = countAiFloors_ACU(chat);
     const isFullRange = isFullRangeDeletionRequest_ACU(startFloor, endFloor, aiMessageCount);
     const path: 'purge' | 'range' = (mode === 'all' && isFullRange) ? 'purge' : 'range';
 
@@ -2167,7 +2165,7 @@ export async function overrideLatestLayerWithTemplateCore_ACU(templateData: any)
     // 找到最新的一条AI消息
     let latestAiIndex = -1;
     for (let i = chat.length - 1; i >= 0; i--) {
-        if (!chat[i].is_user) {
+        if (isAiFloor_ACU(chat[i])) {
             latestAiIndex = i;
             break;
         }
@@ -2497,7 +2495,7 @@ function resolveManualRefillReplayAnchor_ACU(chat: any[], isolationKey: string, 
     }
 
     const firstTargetAiIndex = [...new Set(targetMessageIndices)]
-        .filter((index): index is number => Number.isInteger(index) && index >= 0 && index < chat.length && !chat[index]?.is_user)
+        .filter((index): index is number => Number.isInteger(index) && index >= 0 && index < chat.length && isAiFloor_ACU(chat[index]))
         .sort((left, right) => left - right)[0] ?? -1;
     return { fullCheckpointIndices, fallbackRootIndex: earliestV2FrameIndex >= 0 ? earliestV2FrameIndex : firstTargetAiIndex };
 }
@@ -2637,11 +2635,11 @@ export async function commitManualRefillSheetSnapshotInRangeAtomic_ACU(
         }
 
         const normalizedIndices = [...new Set(options.targetMessageIndices.filter((idx): idx is number => Number.isInteger(idx) && idx >= 0 && idx < chat.length))].sort((a, b) => a - b);
-        const completedMessageIndex = [...normalizedIndices].reverse().find(idx => !chat[idx]?.is_user);
+        const completedMessageIndex = [...normalizedIndices].reverse().find(idx => isAiFloor_ACU(chat[idx]));
         if (completedMessageIndex === undefined) {
             return { success: false, changed: false, clearedCount: 0, checkpointCount: 0, error: '手动重填最终快照提交失败：目标消息范围不含 AI 回复楼层。' };
         }
-        const completedAiFloor = chat.slice(0, completedMessageIndex + 1).filter(msg => msg && !msg.is_user).length;
+        const completedAiFloor = countAiFloors_ACU(chat.slice(0, completedMessageIndex + 1));
         const anchor = resolveManualRefillReplayAnchor_ACU(chat, options.isolationKey, normalizedIndices);
         if (anchor.fullCheckpointIndices.length > 1) {
             return { success: false, changed: false, clearedCount: 0, checkpointCount: 0, error: `手动重填最终快照提交失败：isolationKey ${options.isolationKey} 存在多个整库 full checkpoint（${anchor.fullCheckpointIndices.join(', ')}），必须先完成完整性修复。` };
@@ -3149,7 +3147,7 @@ export async function rollbackManualRefillRangeSnapshotAtomic_ACU(
             const message = chat[entry.index];
             // 清理后外部改楼/截断会让索引失真：身份不符一律不恢复，宁可少恢复也不能写错楼层。
             const fingerprintMatches = !!message
-                && !message.is_user
+                && isAiFloor_ACU(message)
                 && buildMessageIdentityFingerprint_ACU(message) === entry.fingerprint;
             if (!fingerprintMatches) {
                 skippedIndexes.push(entry.index);

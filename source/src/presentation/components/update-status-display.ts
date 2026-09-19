@@ -7,6 +7,7 @@ import { isSummaryOrOutlineTable_ACU, logDebug_ACU, logError_ACU } from '../../s
 import { getActiveTemplatePresetMeta_ACU } from '../../service/template/template-preset-service';
 import { resolveTableHistoryStateFromChat_ACU } from '../../service/table/table-history';
 import { $popupInstance_ACU, $cardUpdateStatusDisplay_ACU } from '../state/ui-refs';
+import { countAiFloors_ACU } from '../../shared/ai-floor';
 /**
  * presentation/components/update-status-display.ts — 运行时状态/更新显示 UI
  * 从 features/runtime/01_runtime_state.js 迁移而来
@@ -36,7 +37,7 @@ import { $popupInstance_ACU, $cardUpdateStatusDisplay_ACU } from '../state/ui-re
     }
 
     const chatHistory = getChatArray_ACU();
-    const totalMessages = chatHistory.filter(msg => !msg.is_user).length;
+    const totalMessages = countAiFloors_ACU(chatHistory);
     $totalMessagesDisplay.text(`上下文总层数: ${totalMessages} (仅计算AI回复楼层)`);
 
     const totalAiMessages = totalMessages;

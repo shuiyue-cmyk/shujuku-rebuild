@@ -143,6 +143,20 @@ describe('fetchAvailableModels_ACU', () => {
     expect(result.error).toContain('未能解析');
   });
 
+  it('TT 2.3.0：宿主授权弹窗被取消（HTTP 200 + cancelled）时文案指向该弹窗，而不是含糊的「列表为空」', async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ cancelled: true, data: [] }),
+    });
+
+    const result = await fetchAvailableModels_ACU('https://api.test', 'key');
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('允许连接到自定义端点？');
+    expect(result.error).toContain('信任并连接');
+    // 退回通用文案会让用户不知道第一步要去点弹窗
+    expect(result.error).not.toContain('列表为空');
+  });
+
   it('HTTP 错误时返回错误信息（JSON 错误体）', async () => {
     mockFetch.mockResolvedValue({
       ok: false,
@@ -343,6 +357,8 @@ describe('fetchAvailableModels_ACU', () => {
       expect(result.success).toBe(false);
       expect(result.error).toContain('超时');
       expect(result.error).toContain('15');
+      // 授权窗等待也计入这 15s：超时文案须给出「先去点弹窗」的出路，否则用户只会反复重试
+      expect(result.error).toContain('信任并连接');
       // 收敛后清掉探活定时器，不留悬挂句柄
       expect(vi.getTimerCount()).toBe(0);
     } finally {

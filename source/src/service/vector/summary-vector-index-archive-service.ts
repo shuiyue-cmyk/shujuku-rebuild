@@ -47,6 +47,7 @@ import {
 import { hashUserInput_ACU, isSummaryOrOutlineTable_ACU, logDebug_ACU, logWarn_ACU } from '../../shared/utils';
 import { hashSummaryVectorSourceText_ACU } from './summary-vector-row-fingerprint';
 import { normalizeSummaryVectorIndexScope_ACU, serializeSummaryVectorIndexScope_ACU } from '../../shared/summary-vector-index-scope';
+import { isAiFloor_ACU } from '../../shared/ai-floor';
 
 type SummaryVectorIndexArchiveMode_ACU = 'append' | 'sync';
 
@@ -516,7 +517,7 @@ function resolveTargetMessageIndex_ACU(preferredIndex?: number): number {
     const normalizedPreferredIndex = Math.floor(Number(preferredIndex));
     if (Number.isFinite(normalizedPreferredIndex)) {
         const preferredMessage = chat[normalizedPreferredIndex];
-        if (preferredMessage && !preferredMessage.is_user) {
+        if (isAiFloor_ACU(preferredMessage)) {
             return normalizedPreferredIndex;
         }
         logWarn_ACU('[纪要向量索引] 指定归档目标楼层无效，回退到最新 AI 楼层:', preferredIndex);

@@ -14,6 +14,7 @@ import { hasV2TableHistoryEvidence_ACU, isV2TagData_ACU } from './storage-strate
 import type { TableMigrationProvenanceV1_ACU, TableStorageFrameV2_ACU } from './storage-frame-v2-types';
 import { loadTableStateFromFramesV2Detailed_ACU, type TableReplayCompatibilityRepairV2_ACU } from './storage-frame-v2-replay';
 import { getTableDataFingerprint_ACU } from './table-data-upgrade-audit';
+import { isAiFloor_ACU } from '../../shared/ai-floor';
 
 export type MixedStorageLegacyLocation_ACU =
   | 'isolated_independent'
@@ -294,7 +295,9 @@ export async function collectMixedStorageEvidence_ACU(
   for (let messageIndex = 0; messageIndex < chat.length; messageIndex += 1) {
     const message = chat[messageIndex];
     if (!message || message.is_user) continue;
-    aiFloor += 1;
+    // 载体纳入保持宽（隐藏楼/工具楼仍可能挂帧，收窄会丢帧——回放侧 getV2FrameRefs_ACU 同构），
+    // 但**编号**必须用宽档 AI 楼口径（与写入侧 provenance.targetAiFloor 同口径，否则 targetMatchesAnchor 恒 false）。
+    if (isAiFloor_ACU(message)) aiFloor += 1;
     const legacy = collectLegacyMessageEvidence_ACU(message, messageIndex, aiFloor, options.isolationKey, options.isolationConfig, allowedSheetKeys, lastFilledAiFloorBySheet, lastChangedAiFloorBySheet);
     if (legacy) {
       legacyMessages.push(legacy);

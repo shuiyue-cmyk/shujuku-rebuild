@@ -25,6 +25,8 @@ import { findLatestTransitionCheckpoint_ACU } from './compat-transition-checkpoi
 import { reconcileRevealedSheetWithTemplate_ACU } from '../template/chat-template-reconciler';
 import { assertSummaryVectorMirrorFrameInvariantsV2_ACU } from '../vector/summary-vector-mirror-resolver';
 import { scheduleSummaryVectorMirrorFlushAfterPersist_ACU } from '../vector/summary-vector-index-flush-queue';
+import { isAiFloor_ACU } from '../../shared/ai-floor';
+import { isDataBearingMessage_ACU } from '../../shared/ai-floor';
 
 export interface TableCheckpointGenerationConfig_ACU {
   maxEntriesAfterCheckpoint: number;
@@ -357,14 +359,14 @@ function appendMutationLogEntry_ACU(
 function findTargetAiMessage_ACU(chat: any[], targetMessageIndex: number | undefined): { message: any; index: number } | null {
   if (targetMessageIndex !== undefined && targetMessageIndex !== -1) {
     const message = chat[targetMessageIndex];
-    if (message && !message.is_user) {
+    if (isAiFloor_ACU(message)) {
       return { message, index: targetMessageIndex };
     }
     return null;
   }
 
   for (let i = chat.length - 1; i >= 0; i -= 1) {
-    if (chat[i] && !chat[i].is_user) {
+    if (isAiFloor_ACU(chat[i])) {
       return { message: chat[i], index: i };
     }
   }
@@ -444,7 +446,7 @@ export function buildReplacementPurgedCandidateChat_ACU(
 function countAiFloor_ACU(chat: any[], messageIndex: number): number {
   let count = 0;
   for (let i = 0; i <= messageIndex && i < chat.length; i += 1) {
-    if (chat[i] && !chat[i].is_user) count += 1;
+    if (isAiFloor_ACU(chat[i])) count += 1;
   }
   return count;
 }
@@ -1359,7 +1361,7 @@ function classifyTemplateCommitStorageStateAfterDeletedSheets_ACU(
   if (deletedSheetKeys.length === 0) return classifyTemplateCommitStorageState_ACU(chat, isolationKey);
   const simulatedChat = deepClone_ACU(chat);
   for (const message of simulatedChat) {
-    if (message && !message.is_user) purgeSheetKeysFromMessage_ACU(message, deletedSheetKeys);
+    if (isDataBearingMessage_ACU(message)) purgeSheetKeysFromMessage_ACU(message, deletedSheetKeys);
   }
   return classifyTemplateCommitStorageState_ACU(simulatedChat, isolationKey);
 }
@@ -4282,7 +4284,7 @@ export async function commitCurrentFloorTemplateChanges_ACU(
 
         const candidateChat = deepClone_ACU(chat);
         for (const message of candidateChat) {
-          if (message && !message.is_user) purgeSheetKeysFromMessage_ACU(message, deletedSheetKeys);
+          if (isDataBearingMessage_ACU(message)) purgeSheetKeysFromMessage_ACU(message, deletedSheetKeys);
         }
         candidateChat[target.index].TavernDB_ACU_IsolatedData = isolatedData;
         const candidateValidationError = await validateHardDeleteCandidate_ACU(

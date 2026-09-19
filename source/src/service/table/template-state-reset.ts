@@ -12,6 +12,7 @@ import { runTableWriteTransaction_ACU } from './table-write-transaction';
 import { buildChatSheetGuideDataFromTemplateObj_ACU, clearCurrentChatTemplateSnapshots_ACU, ensureStableRowIdsForSheetContent_ACU, setChatSheetGuideDataForIsolationKey_ACU } from '../template/chat-scope';
 import { normalizeTemplateRowIds_ACU, type TemplateRowIdNormalizationAudit_ACU } from '../template/template-row-id-normalizer';
 import { logWarn_ACU } from '../../shared/utils';
+import { isAiFloor_ACU, countAiFloors_ACU } from '../../shared/ai-floor';
 
 type ResetResult = {
   saved: boolean; messageIndex?: number; runtimeReady?: boolean; postCommitWarning?: string; error?: string;
@@ -109,7 +110,7 @@ export async function resetCurrentChatTableStateFromTemplate_ACU(
     }, async (transactionContext) => transactionContext.runCommit(async () => {
       const chat = getChatArray_ACU();
       if (!Array.isArray(chat)) throw new Error('当前聊天记录不可用，已取消初始化提交。');
-      const targetIndex = chat.findIndex(message => message && !message.is_user);
+      const targetIndex = chat.findIndex(isAiFloor_ACU);
       if (targetIndex < 0) throw new Error('当前聊天不存在可写入初始化 checkpoint 的 AI 楼层。');
       const firstMessage = chat[0];
       const chatIdentity = getActiveChatStorageIdentity_ACU(chat);
@@ -139,7 +140,7 @@ export async function resetCurrentChatTableStateFromTemplate_ACU(
         const checkpoint = buildCanonicalFullCheckpoint_ACU({
           createdAt: Date.now(), reason: 'init', data: prepared as any,
           event: { filledSheetKeys: [], changedSheetKeys: Object.keys(prepared).filter(key => key.startsWith('sheet_')).sort(), groupKeys: [] },
-          context: { messageIndex: targetIndex, aiFloor: chat.slice(0, targetIndex + 1).filter(message => message && !message.is_user).length, isolationKey },
+          context: { messageIndex: targetIndex, aiFloor: countAiFloors_ACU(chat.slice(0, targetIndex + 1)), isolationKey },
         });
         if (!checkpoint.checkpoint) throw new Error(checkpoint.error);
         // S2-4：frame 拼装 + 单根断言收敛到 persist 层统一入口，违例抛错走下方快照回滚

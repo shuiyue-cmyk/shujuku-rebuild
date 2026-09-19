@@ -13,6 +13,7 @@ import { getCurrentStorageMode } from './storage-mode';
 import { didSqliteFallbackAfterReload_ACU, reloadStorageProvider } from './table-storage-strategy';
 import { auditTableDataForUpgrade_ACU, getTableDataFingerprint_ACU } from './table-data-upgrade-audit';
 import type { MixedStorageCommitAction_ACU } from '../../shared/models/mixed-storage-commit-action';
+import { countAiFloors_ACU, isAiFloor_ACU } from '../../shared/ai-floor';
 
 export type { MixedStorageCommitAction_ACU } from '../../shared/models/mixed-storage-commit-action';
 export type MixedStorageCommitStatus_ACU = 'committed' | 'commit_failed_rolled_back' | 'committed_postcondition_failed';
@@ -46,12 +47,12 @@ function removeLegacy_ACU(chat: any[], isolationKey: string, isolationConfig: Re
 }
 function latestSafeAiTarget_ACU(chat: any[], isolationKey: string): number | null {
   for (let index = chat.length - 1; index >= 0; index -= 1) {
-    if (!chat[index] || chat[index].is_user || isV2TagData_ACU(readIsolatedTagData_ACU(chat[index], isolationKey))) continue;
+    if (!isAiFloor_ACU(chat[index]) || isV2TagData_ACU(readIsolatedTagData_ACU(chat[index], isolationKey))) continue;
     return index;
   }
   return null;
 }
-function aiFloor_ACU(chat: any[], index: number): number { return chat.slice(0, index + 1).filter(message => message && !message.is_user).length; }
+function aiFloor_ACU(chat: any[], index: number): number { return countAiFloors_ACU(chat.slice(0, index + 1)); }
 
 /**
  * 写入新 migration 根后，同一隔离键下其余 full checkpoint（原 V2 anchor 及更早的根）

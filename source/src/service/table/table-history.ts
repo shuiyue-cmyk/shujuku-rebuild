@@ -1,6 +1,7 @@
 import type { ACUMessage } from '../../shared/host-api';
 import { hasAnyTableData_ACU, readIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
 import { isV2TagData_ACU } from './storage-strategy-resolver';
+import { isAiFloor_ACU } from '../../shared/ai-floor';
 
 export interface TableHistoryState_ACU {
     latestAiMessageIndex: number;
@@ -222,7 +223,7 @@ function getTrackedUpdateFloorInMessage_ACU(msg: any, options: ResolveTableHisto
 export function getLatestAiMessageIndexFromChat_ACU(chat: ACUMessage[] | any[]): number {
     if (!Array.isArray(chat)) return -1;
     for (let i = chat.length - 1; i >= 0; i -= 1) {
-        if (chat[i] && !chat[i].is_user) return i;
+        if (isAiFloor_ACU(chat[i])) return i;
     }
     return -1;
 }
@@ -255,7 +256,7 @@ export function countAiMessagesUpToIndex_ACU(chat: ACUMessage[] | any[], message
     if (!Array.isArray(chat) || messageIndex < 0) return 0;
     let count = 0;
     for (let i = 0; i <= messageIndex && i < chat.length; i += 1) {
-        if (chat[i] && !chat[i].is_user) count += 1;
+        if (isAiFloor_ACU(chat[i])) count += 1;
     }
     return count;
 }
@@ -269,7 +270,7 @@ export function collectV2CheckpointFloorsFromChat_ACU(
     let aiFloor = 0;
     for (let i = 0; i < chat.length; i += 1) {
         const msg = chat[i];
-        if (!msg || msg.is_user) continue;
+        if (!isAiFloor_ACU(msg)) continue;
         aiFloor += 1;
         const tagData = readIsolatedTagData_ACU(msg, isolationKey) as any;
         if (!isV2TagData_ACU(tagData)) continue;
@@ -322,7 +323,7 @@ export function resolveTableHistoryStatesFromChat_ACU(
     let aiFloor = 0;
     let latestAiMessageIndex = -1;
     for (let index = 0; index < safeChat.length; index += 1) {
-        if (safeChat[index] && !safeChat[index].is_user) {
+        if (isAiFloor_ACU(safeChat[index])) {
             aiFloor += 1;
             latestAiMessageIndex = index;
         }

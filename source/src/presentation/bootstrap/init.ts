@@ -85,6 +85,8 @@ import {
   getChatArray_ACU
 } from '../../data/gateways/chat-gateway';
 import { resolveAiFloorSignature_ACU, resolveAiFloorSignatureEx_ACU } from '../../service/table/auto-fill-echo-guard';
+import { countAiModelOutputFloors_ACU } from '../../shared/ai-floor';
+import { notifyAcuTauriVersionIfOutdated_ACU } from './tauri-version-gate';
 import {
   refreshMergedDataAndNotifyWithUI_ACU
 } from '../components/pipeline-ui-helpers';
@@ -585,6 +587,9 @@ export   function mainInitialize_ACU() {
       mainInitializeDone_ACU = true;
       logDebug_ACU('AutoCardUpdater Initialization successful! Core APIs loaded.');
       showToastr_ACU('success', '数据库已加载！', '数据库');
+      // [版本闸门] TT 宿主低于 2.3.0 时弹模态提醒升级。不 await：模态窗由用户自行关闭，
+      // 不得阻塞后续初始化；非 TT 宿主与版本读取失败都按 fail-open 不打扰。
+      void notifyAcuTauriVersionIfOutdated_ACU();
 
       loadSettings_ACU();
       // S0-4：注册插件保存后的 checkpoint 保管库同步（删楼恢复的影子基线）。
@@ -690,8 +695,12 @@ export   function mainInitialize_ACU() {
               // 对非 quiet/非 dryRun/非自动触发的生成开放宽松认领（spv8.9.2 状态法），桥内部只在
               // 存在未绑定序列号的等待轮时才会认领。
               const quietLike = isQuietLikeGeneration_ACU(type, params);
+              // TT 2.3.0：Agent 断点续连以 { agentResume: true, runId } 作为第三参派发 STARTED，
+              // 形态上不含 automatic_trigger/quiet_prompt，会被误判成「普通前台生成」而吃宽松认领。
+              // 它不是本轮用户生成，不许被续写桥认领。
+              const agentResume = params?.agentResume === true;
               getContinuationHostGenerationBridge_ACU()?.onGenerationStarted(context.seq, {
-                allowOrdinaryLooseClaim: !dryRun && !quietLike && !params?.automatic_trigger,
+                allowOrdinaryLooseClaim: !dryRun && !quietLike && !params?.automatic_trigger && !agentResume,
                 automaticTrigger: Boolean(params?.automatic_trigger),
                 quietLike,
                 dryRun: Boolean(dryRun),
@@ -718,13 +727,14 @@ export   function mainInitialize_ACU() {
                   return;
                 }
                 const continuationBridge = getContinuationHostGenerationBridge_ACU();
-                // 认领事件按"会不会产生正文楼层"分类：quiet/dryRun/自动触发的生成不许走普通宽松认领，
+                // 认领事件按"会不会产生正文楼层"分类：quiet/dryRun/自动触发/Agent 断点续连的生成不许走普通宽松认领，
                 // 否则会误杀等待中的续写轮。分类结果直接交给桥，桥再据此决定普通认领与
                 // 「自己发起的那一次交火重试」认领（见 host-generation-bridge 的 localRetryClaim）。
                 const quietLike = generationContext ? isQuietLikeGeneration_ACU(generationContext.type, generationContext.params) : false;
                 const automaticTrigger = Boolean(generationContext?.params?.automatic_trigger);
+                const agentResume = generationContext?.params?.agentResume === true;
                 const continuationEventContext = {
-                  allowOrdinaryLooseClaim: !generationContext || (!generationContext.dryRun && !quietLike && !automaticTrigger),
+                  allowOrdinaryLooseClaim: !generationContext || (!generationContext.dryRun && !quietLike && !automaticTrigger && !agentResume),
                   automaticTrigger,
                   quietLike,
                   dryRun: Boolean(generationContext?.dryRun),
@@ -750,7 +760,7 @@ export   function mainInitialize_ACU() {
                       isolationKey: getCurrentIsolationKey_ACU(),
                       capturedAt: Date.now(),
                       capturedChatLength: chatAtCapture.length,
-                      capturedAiFloorCount: chatAtCapture.filter((m: any) => m && !m.is_user && m?.extra?.type !== 'narrator').length,
+                      capturedAiFloorCount: countAiModelOutputFloors_ACU(chatAtCapture),
                       // generationSeq 仅在 generationGate 已产生过生成上下文时可靠；否则不假造。
                       generationSeq: generationGate_ACU.generationSeq > 0 ? generationGate_ACU.generationSeq : undefined,
                       // [配对零产出证据] 仅配对携带 STARTED 时刻的扩展签名；无配对时为 undefined，下游直接放行。
@@ -773,7 +783,7 @@ export   function mainInitialize_ACU() {
                     chatKey: currentChatFileIdentifier_ACU,
                     isolationKey: getCurrentIsolationKey_ACU(),
                     capturedChatLength: chatAtCapture.length,
-                    capturedAiFloorCount: chatAtCapture.filter((m: any) => m && !m.is_user && m?.extra?.type !== 'narrator').length,
+                    capturedAiFloorCount: countAiModelOutputFloors_ACU(chatAtCapture),
                     lastGenerationType: generationGate_ACU.lastGeneration?.type,
                   });
                 }

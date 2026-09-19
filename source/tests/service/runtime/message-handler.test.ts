@@ -173,6 +173,28 @@ describe('evaluateNewMessageAction_ACU', () => {
 
       expect(result).toMatchObject({ action: 'skip', skipReason: 'resolved_message_not_ai' });
     });
+
+    // 两条路径刻意不同口径（勿"统一"）：显式索引是调度层解析出的「本轮模型正文楼」，用窄档
+    // （narrator 不算模型正文）；无 intent 的历史路径保持「最后一条 AI 消息」语义，用宽档。
+    it('末楼是 narrator 旁白：显式索引路径拒绝、无 intent 历史路径放行（刻意不对称）', () => {
+      const narrator = { is_user: false, mes: '系统旁白', extra: { type: 'narrator' } };
+
+      const explicit = evaluateNewMessageAction_ACU([narrator], false, true, false, {}, 0);
+      expect(explicit).toMatchObject({ action: 'skip', skipReason: 'resolved_message_not_ai' });
+
+      const historical = evaluateNewMessageAction_ACU([narrator], false, true, false, {});
+      expect(historical.action).not.toBe('skip');
+    });
+
+    it('末楼是 TT 2.3.0 工具楼：两条路径都拒绝（工具楼不是 AI 回复）', () => {
+      const toolFloor = { role: 'tool', is_system: true, is_user: false, mes: '搜索结果', tool_call_id: 'call_1' };
+
+      const explicit = evaluateNewMessageAction_ACU([toolFloor], false, true, false, {}, 0);
+      expect(explicit).toMatchObject({ action: 'skip', skipReason: 'resolved_message_not_ai' });
+
+      const historical = evaluateNewMessageAction_ACU([toolFloor], false, true, false, {});
+      expect(historical).toMatchObject({ action: 'skip', skipReason: 'last_message_not_ai' });
+    });
   });
 
   // ═══ optimize 场景 ═══

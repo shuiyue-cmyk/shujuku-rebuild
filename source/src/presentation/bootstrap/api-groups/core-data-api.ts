@@ -21,6 +21,7 @@ import { getCurrentWorldbookConfig_ACU } from '../../../service/settings/setting
 import { enqueueSummaryVectorIndexFlush_ACU } from '../../../service/vector/summary-vector-index-flush-queue';
 import { importTableJsonThroughCommit_ACU } from '../../../service/table/table-import-service';
 import type { ApiGroupContext } from './callback-api';
+import { isAiFloor_ACU } from '../../../shared/ai-floor';
 
 function shouldPersistImportedTableJson_ACU(options: any): boolean {
     if (!options || typeof options !== 'object') return true;
@@ -107,7 +108,7 @@ export function createCoreDataApi(ctx: ApiGroupContext): Record<string, Function
                 const currentThreshold = getEffectiveAutoUpdateThreshold_ACU('manual_update');
 
                 const allAiMessageIndices = chatHistory
-                    .map((msg: any, index: number) => !msg.is_user ? index : -1)
+                    .map((msg: any, index: number) => isAiFloor_ACU(msg) ? index : -1)
                     .filter((index: number) => index !== -1);
 
                 const numberOfAiMessages = allAiMessageIndices.length;
@@ -123,7 +124,7 @@ export function createCoreDataApi(ctx: ApiGroupContext): Record<string, Function
 
                 if (sliceStartIndex > 0 &&
                     chatHistory[sliceStartIndex] &&
-                    !chatHistory[sliceStartIndex].is_user &&
+                    isAiFloor_ACU(chatHistory[sliceStartIndex]) &&
                     chatHistory[sliceStartIndex - 1] &&
                     chatHistory[sliceStartIndex - 1].is_user)
                 {

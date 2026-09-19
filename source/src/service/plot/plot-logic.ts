@@ -46,6 +46,7 @@ import {
   getLastOptimizationBase_ACU,
   setLastOptimizationBase_ACU
 } from '../optimization/content-optimization';
+import { isAiFloor_ACU } from '../../shared/ai-floor';
 
 // ═══ 循环提示词/提示词组兼容 ═══
 
@@ -911,11 +912,11 @@ export function getLastOptimizedMessageIndex_ACU() {
     const cachedBase = getLastOptimizationBase_ACU();
 
     if (cachedBase?.messageId != null) {
-    const runtimeIndex = chat.findIndex((msg: any) => msg && !msg.is_user && msg.message_id === cachedBase.messageId);
+    const runtimeIndex = chat.findIndex((msg: any) => isAiFloor_ACU(msg) && msg.message_id === cachedBase.messageId);
       if (runtimeIndex >= 0) return runtimeIndex;
     }
 
-    if (Number.isInteger(cachedBase?.messageIndex) && cachedBase.messageIndex >= 0 && chat[cachedBase.messageIndex] && !chat[cachedBase.messageIndex].is_user) {
+    if (Number.isInteger(cachedBase?.messageIndex) && cachedBase.messageIndex >= 0 && isAiFloor_ACU(chat[cachedBase.messageIndex])) {
       return cachedBase.messageIndex;
     }
 
@@ -923,7 +924,7 @@ export function getLastOptimizedMessageIndex_ACU() {
     let latestTimestamp = -1;
     for (let i = 0; i < chat.length; i++) {
       const msg = chat[i];
-      if (!msg || msg.is_user) continue;
+      if (!isAiFloor_ACU(msg)) continue;
       const extra = msg.extra || {};
       const ts = Number(extra._acu_last_optimized_at || 0);
       if (extra._acu_original_content && ts >= latestTimestamp) {

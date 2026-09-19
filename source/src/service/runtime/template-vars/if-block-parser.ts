@@ -30,6 +30,7 @@ import {
 import {
   projectFlightModeHiddenChronicleRows_ACU
 } from '../../flight-mode/flight-mode-hidden-rows';
+import { isAiFloor_ACU } from '../../../shared/ai-floor';
 
   /**
    * 解析条件模板（支持 else 和嵌套）
@@ -197,7 +198,7 @@ import {
 
     for (let i = chat.length - 1; i >= 0; i--) {
       const message = chat[i];
-      if (message && !message.is_user) {
+      if (isAiFloor_ACU(message)) {
         return typeof message.mes === 'string' ? message.mes : '';
       }
     }

@@ -98,3 +98,61 @@ export async function waitForAcuHostReady(maxWaitMs = 15000): Promise<boolean> {
   const finalIsTauri = isAcuTauriRuntime();
   return finalIsTauri ? (getAcuTauriReady().ready && getContextReady()) : getContextReady();
 }
+
+/**
+ * 本插件适配与验证所依据的 TauriTavern 最低版本。
+ * 2.3.0 起宿主把工具调用结果升为一等楼层（`{role:'tool', is_system:true}`）、新增 TOOL_CALLS_* 事件、
+ * 引入 Agent 断点续连的 `{agentResume:true}` 生成事件，并变更了结构写入与保存管线契约。
+ */
+export const ACU_REQUIRED_TAURITAVERN_VERSION = '2.3.0';
+
+/** 解析 `major.minor.patch` 形式的版本串；不可解析返回 null（不猜）。 */
+export function parseAcuVersionParts(value: unknown): [number, number, number] | null {
+  const text = String(value ?? '').trim().replace(/^v/i, '');
+  const match = text.match(/^(\d+)\.(\d+)\.(\d+)/);
+  if (!match) return null;
+  return [Number(match[1]), Number(match[2]), Number(match[3])];
+}
+
+/** 比较两个版本串：a<b 返回 -1、a===b 返回 0、a>b 返回 1；任一不可解析返回 null。 */
+export function compareAcuVersions(a: unknown, b: unknown): number | null {
+  const left = parseAcuVersionParts(a);
+  const right = parseAcuVersionParts(b);
+  if (!left || !right) return null;
+  for (let i = 0; i < 3; i += 1) {
+    if (left[i] !== right[i]) return left[i] < right[i] ? -1 : 1;
+  }
+  return 0;
+}
+
+/**
+ * 读 TauriTavern 自身版本号（`tauriVersion`，取自宿主 crates/tauritavern 的 Cargo 版本）。
+ * 走宿主文档化的第三方 ABI `__TAURITAVERN__.invoke.safeInvoke('get_client_version')`。
+ * 非 TT 宿主、ABI 不可用或调用失败一律返回 null（**不做猜测**）。
+ */
+export async function readAcuTauriVersion(): Promise<string | null> {
+  if (!isAcuTauriRuntime()) return null;
+  const w = tauriWindow();
+  const safeInvoke = w.__TAURITAVERN__?.invoke?.safeInvoke;
+  if (typeof safeInvoke !== 'function') return null;
+  try {
+    const info = await safeInvoke('get_client_version');
+    const version = typeof info?.tauriVersion === 'string' ? info.tauriVersion.trim() : '';
+    return version || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * TT 版本是否低于要求。**读不到版本时返回 false（fail-open，不打扰用户）**：
+ * `get_client_version` 与 `safeInvoke` 自 TT v1.6.5 起就存在，读失败属异常而非「版本过旧」，
+ * 若把失败当成过旧就会对纯 ST / 读取偶发失败的用户误报。
+ */
+export function isAcuTauriVersionOutdated(
+  version: unknown,
+  required: string = ACU_REQUIRED_TAURITAVERN_VERSION,
+): boolean {
+  const compared = compareAcuVersions(version, required);
+  return compared === null ? false : compared < 0;
+}
