@@ -1200,9 +1200,7 @@ export function getOriginalContent_ACU(messageIndex: number) {
                 return cachedBase.baseContent;
             }
         }
-        if (cachedBase.messageIndex === messageIndex) {
-            return cachedBase.baseContent;
-        }
+        // 不再按楼号回退：楼号会因删楼整体位移，命中同一楼号不代表同一楼层。
     }
 
     const chat = getChatArray_ACU();

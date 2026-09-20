@@ -204,6 +204,13 @@ export function validateAgentConversationFloorRecord_ACU(raw: unknown): AgentCon
     updatedAt: typeof raw.updatedAt === 'number' && raw.updatedAt >= 0 ? raw.updatedAt : 0,
     segment,
   };
+  const compaction = readFloorCompaction_ACU(raw);
+  if (compaction) record.compaction = compaction;
+  return record;
+}
+
+/** 独立校验段头，展示窗口不需要为读取压缩标记而校验整个消息段。 */
+function readFloorCompaction_ACU(raw: Record<string, unknown>): AgentConversationCompactionMark_ACU | null {
   if (Object.prototype.hasOwnProperty.call(raw, 'compaction')) {
     const compaction = validateCompactionMark_ACU(raw.compaction);
     if (!compaction) {
@@ -214,9 +221,9 @@ export function validateAgentConversationFloorRecord_ACU(raw: unknown): AgentCon
         false,
       ));
     }
-    record.compaction = compaction;
+    return compaction;
   }
-  return record;
+  return null;
 }
 
 /** 读取当前生效的压缩标记；与模型投影相同，选择 compactedThroughId 最大的合法标记。 */
@@ -261,7 +268,7 @@ function buildHandoffMessage_ACU(mark: AgentConversationCompactionMark_ACU): Age
  */
 export function readAgentConversation_ACU(chat?: any[]): AgentConversationSnapshot_ACU {
   const messages = Array.isArray(chat) ? chat : getChatArray_ACU();
-  let collected: AgentConversationMessage_ACU[] = [];
+  const collected: AgentConversationMessage_ACU[] = [];
   let updatedAt = 0;
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
@@ -270,14 +277,17 @@ export function readAgentConversation_ACU(chat?: any[]): AgentConversationSnapsh
     const raw = (message as Record<string, unknown>)[AGENT_CONVERSATION_FIELD_ACU];
     const record = validateAgentConversationFloorRecord_ACU(raw);
     if (record) {
-      collected = [...collected, ...record.segment];
+      // 逐条 push，不要 collected = [...collected, ...segment]——那是每楼整表复制，
+      // 大量分段会使拼接退化成 O(n²)。
+      for (const item of record.segment) collected.push(item);
       updatedAt = Math.max(updatedAt, record.updatedAt);
       continue;
     }
     // v1 全量快照：它是当时的完整会话，充当基线段——之前收集的段全部被它覆盖。
     const legacy = validateAgentConversationSnapshot_ACU(raw);
     if (legacy) {
-      collected = [...legacy.messages];
+      collected.length = 0;
+      for (const item of legacy.messages) collected.push(item);
       updatedAt = Math.max(updatedAt, legacy.updatedAt);
     }
   }
@@ -302,33 +312,50 @@ export function readAgentConversation_ACU(chat?: any[]): AgentConversationSnapsh
  * 而是把每一份压缩标记的交接报告合成 handoff 消息插在它的截止位置上。
  *
  * 与 readAgentConversation_ACU（模型通道）的区别：模型通道只保留最新标记之后的内容，
- * 时间线保留全部原始消息——用户在 UI 里仍能回看交接文件之前的历史，并直观看到
- * 「AI 可见性从哪条交接文件开始」。删除承载标记的楼层后，该标记连同其 handoff 一起消失。
+ * 默认保留全部原始消息；展示方可传尾部窗口，窗口不改变持久记录或模型视图。
+ * 删除承载标记的楼层后，该标记连同其 handoff 一起消失。
  * @param chat 聊天数组，缺省取当前聊天
- * @returns 按时间顺序的完整消息数组（含合成的 handoff 条目）
+ * @param options.maxEntries 尾部窗口：交接报告与普通消息共同计入上限；不改变持久历史。
+ * @returns 按时间顺序的消息数组（含合成的 handoff 条目）
  */
-export function readAgentConversationTimeline_ACU(chat?: any[]): AgentConversationMessage_ACU[] {
+export function readAgentConversationTimeline_ACU(chat?: any[], options?: { maxEntries?: number }): AgentConversationMessage_ACU[] {
   const messages = Array.isArray(chat) ? chat : getChatArray_ACU();
-  let collected: AgentConversationMessage_ACU[] = [];
+  const maxEntries = options?.maxEntries;
+  const limit = typeof maxEntries === 'number' && Number.isSafeInteger(maxEntries) && maxEntries > 0 ? maxEntries : Infinity;
+  const segments: unknown[][] = [];
   const marksById = new Map<number, AgentConversationCompactionMark_ACU>();
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
     if (!message || typeof message !== 'object') continue;
     if (!Object.prototype.hasOwnProperty.call(message, AGENT_CONVERSATION_FIELD_ACU)) continue;
     const raw = (message as Record<string, unknown>)[AGENT_CONVERSATION_FIELD_ACU];
-    const record = validateAgentConversationFloorRecord_ACU(raw);
-    if (record) {
-      collected = [...collected, ...record.segment];
-      if (record.compaction) {
-        const existing = marksById.get(record.compaction.compactedThroughId);
-        if (!existing || record.compaction.at > existing.at) marksById.set(record.compaction.compactedThroughId, record.compaction);
+    if (!isRecord_ACU(raw)) continue;
+    if (raw.schemaVersion === AGENT_CONVERSATION_SEGMENT_SCHEMA_VERSION_ACU && Array.isArray(raw.segment)) {
+      segments.push(raw.segment);
+      const compaction = readFloorCompaction_ACU(raw);
+      if (compaction) {
+        const existing = marksById.get(compaction.compactedThroughId);
+        if (!existing || compaction.at > existing.at) marksById.set(compaction.compactedThroughId, compaction);
       }
       continue;
     }
-    const legacy = validateAgentConversationSnapshot_ACU(raw);
-    if (legacy) collected = [...legacy.messages];
+    if (raw.schemaVersion === AGENT_CONVERSATION_SCHEMA_VERSION_ACU && Array.isArray(raw.messages)) {
+      segments.length = 0;
+      segments.push(raw.messages);
+    }
   }
-  const marks = [...marksById.values()].sort((a, b) => a.compactedThroughId - b.compactedThroughId);
+  // 先扫描段头保留 v1 基线/压缩标记语义，再从尾部只物化窗口所需的合法消息。
+  // 仍需 O(楼层数) 扫描，但不再为最近 N 条复制、校验全部历史正文。
+  const collected: AgentConversationMessage_ACU[] = [];
+  for (let s = segments.length - 1; s >= 0 && collected.length < limit; s -= 1) {
+    const segment = segments[s];
+    for (let i = segment.length - 1; i >= 0 && collected.length < limit; i -= 1) {
+      const item = validateMessage_ACU(segment[i]);
+      if (item) collected.push(item);
+    }
+  }
+  collected.reverse();
+  const marks = [...marksById.values()].sort((a, b) => a.compactedThroughId - b.compactedThroughId).slice(-limit);
   if (!marks.length) return collected;
   const latestThroughId = marks[marks.length - 1].compactedThroughId;
   const describe = (mark: AgentConversationCompactionMark_ACU): string =>
@@ -349,7 +376,14 @@ export function readAgentConversationTimeline_ACU(chat?: any[]): AgentConversati
     timeline.push({ ...buildHandoffMessage_ACU(marks[markIndex]), digest: describe(marks[markIndex]) });
     markIndex += 1;
   }
-  return timeline;
+  return applyTimelineWindow_ACU(timeline, options?.maxEntries);
+}
+
+/** 仅限制展示结果，不修改底层段记录；未提供合法正整数时保持完整读取。 */
+function applyTimelineWindow_ACU(timeline: AgentConversationMessage_ACU[], maxEntries?: number): AgentConversationMessage_ACU[] {
+  return typeof maxEntries === 'number' && Number.isSafeInteger(maxEntries) && maxEntries > 0
+    ? timeline.slice(-maxEntries)
+    : timeline;
 }
 
 function floorRecordOf_ACU(container: Record<string, unknown>): AgentConversationFloorRecord_ACU {

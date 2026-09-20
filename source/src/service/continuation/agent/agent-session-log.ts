@@ -53,7 +53,7 @@ export interface AgentSessionEntryPatch_ACU {
 }
 
 /** 会话条目上限。超出后丢最旧的，避免长循环把 UI 内存撑爆。 */
-const SESSION_ENTRY_LIMIT_ACU = 300;
+export const SESSION_ENTRY_LIMIT_ACU = 300;
 
 /** 单条 detail 的字符上限。会话流展示要点，不承载完整提示词或正文。 */
 const SESSION_DETAIL_LIMIT_ACU = 2000;

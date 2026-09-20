@@ -3,7 +3,7 @@ import { ContinuationHostGenerationBridge_ACU } from '../../../src/service/conti
 
 const identity = { chatIdentity: 'chat-a', taskId: 'task-a', stageId: 'stage-a', revision: 1, nodeId: 'node-a', turnId: 'turn-a', attemptId: 'attempt-a' };
 
-function createHarness(options: { tags?: string; chat?: any[]; send?: boolean; retry?: boolean; minTokens?: number; tokens?: number; onWait?: () => void; autoContinueStates?: Array<{ eligible: boolean; delaySeconds: number }>; invalidatePendingAutoFill?: () => void } = {}) {
+function createHarness(options: { tags?: string; chat?: any[]; send?: boolean; retry?: boolean; minTokens?: number; tokens?: number; onWait?: () => void; autoContinueStates?: Array<{ eligible: boolean; delaySeconds: number; chatIdentity?: string; taskId?: string | null }>; invalidatePendingAutoFill?: () => void } = {}) {
   let chat = options.chat ?? [{ is_user: true }];
   let chatIdentity = 'chat-a';
   let pending: any = null;
@@ -113,6 +113,23 @@ describe('ContinuationHostGenerationBridge_ACU', () => {
     expect(h.hostInput.send).toHaveBeenLastCalledWith('自动续写的下一轮文本');
     // send(1) + ENDED finally(2) + 自动续写的 send 落盘(3) + 自动续写 finally(4)
     expect(listener).toHaveBeenCalledTimes(4);
+  });
+
+  it('轮次延迟等待窗内切到另一聊天 → 不接管别的聊天的任务', async () => {
+    const h = createHarness({
+      autoContinueStates: [
+        { eligible: true, delaySeconds: 5, chatIdentity: 'chat-a', taskId: 'task-a' },
+        { eligible: true, delaySeconds: 5, chatIdentity: 'chat-b', taskId: 'task-b' },
+      ],
+    });
+    h.hostInput.send.mockImplementationOnce(() => { h.bridge.onGenerationStarted(7); return true; });
+    await h.bridge.send(prepared);
+    h.setChat([{ is_user: true }, { is_user: false, mes: '<ok>正文', message_id: 9 }]);
+
+    await h.bridge.onGenerationEnded(9, 7);
+
+    expect(h.continueTask).not.toHaveBeenCalled();
+    expect(h.hostInput.send).toHaveBeenCalledOnce();
   });
 
   it('重试等待窗内用户点停止 → 放弃自动重试，不复活任务也不重发宿主生成', async () => {

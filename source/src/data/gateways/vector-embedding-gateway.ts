@@ -125,7 +125,11 @@ async function throwEmbeddingHttpErrorAsync_ACU(
     endpoint: string,
     model: string,
 ): Promise<never> {
-    const raw = await response.text().catch((): string => response.statusText);
+    // 响应体停滞被看门狗中断时必须透出 AbortError（调用方折叠成超时），不能吞成 statusText。
+    const raw = await response.text().catch((bodyError: any): string => {
+        if (bodyError?.name === 'AbortError') throw bodyError;
+        return response.statusText;
+    });
     const { providerCode, providerMessage } = parseEmbeddingErrorBody_ACU(raw);
     const kind = classifyEmbeddingHttpError_ACU(response.status);
     const retryAfterMs = parseRetryAfterMs_ACU(response.headers.get('Retry-After'));
@@ -154,11 +158,13 @@ async function fetchEmbeddingWithTimeout_ACU(
     endpoint: string,
     init: RequestInit,
     model: string,
+    signal: AbortSignal,
 ): Promise<Response> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), VECTOR_EMBEDDING_TIMEOUT_MS_ACU);
+    // 计时器由调用方持有并覆盖「fetch＋响应体消费」整段：只包 fetch 的话，
+    // 上游只回响应头、正文停滞时看门狗已解除，请求永久挂起。已分类错误原样抛，
+    // 调用方 catch 里同样原样抛——否则契约错误会被改写成 retryable 而多烧一次重试。
     try {
-        return await fetch(endpoint, { ...init, signal: controller.signal });
+        return await fetch(endpoint, { ...init, signal });
     } catch (error: any) {
         const isAbort = error?.name === 'AbortError';
         const rawReason = error?.message || String(error || '未知错误');
@@ -174,8 +180,6 @@ async function fetchEmbeddingWithTimeout_ACU(
             endpoint,
             model,
         });
-    } finally {
-        clearTimeout(timer);
     }
 }
 
@@ -188,39 +192,60 @@ async function requestEmbeddingsOnce_ACU(
     // 端点安全校验：与主 API 同口径（仅 http(s)、拒私网/回环/非标端口）。守卫抛错即 fail-closed，
     // 避免用户可配置端点被指向内网，或在非 TLS 端点上明文外发 Authorization。
     assertSafeHttpEndpoint_ACU(endpoint);
-    const response = await fetchEmbeddingWithTimeout_ACU(endpoint, {
-        method: 'POST',
-        redirect: 'error', // 307/308 会把 POST 原样重放到重定向目标：SSRF 守卫只校发起前 URL，禁止重定向
-        headers,
-        body: JSON.stringify({ model, input }),
-    }, model);
-    if (!response.ok) {
-        await throwEmbeddingHttpErrorAsync_ACU(response, endpoint, model);
-    }
-    const rawBody = await response.text().catch((): string => '');
-    let payload: any;
+    // 看门狗覆盖「fetch＋响应体消费」整段：成功路径行为不变，只是解除时机移到读完正文之后。
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), VECTOR_EMBEDDING_TIMEOUT_MS_ACU);
     try {
-        payload = JSON.parse(rawBody);
-    } catch (_error) {
-        throw new VectorEmbeddingError_ACU({
-            kind: 'provider-contract',
-            message: `Embedding 响应不是合法 JSON（前 200 字符：${rawBody.slice(0, 200)}）。`,
-            httpStatus: response.status,
-            endpoint,
-            model,
+        const response = await fetchEmbeddingWithTimeout_ACU(endpoint, {
+            method: 'POST',
+            redirect: 'error', // 307/308 会把 POST 原样重放到重定向目标：SSRF 守卫只校发起前 URL，禁止重定向
+            headers,
+            body: JSON.stringify({ model, input }),
+        }, model, controller.signal);
+        if (!response.ok) {
+            await throwEmbeddingHttpErrorAsync_ACU(response, endpoint, model);
+        }
+        const rawBody = await response.text().catch((bodyError: any): string => {
+            if (bodyError?.name === 'AbortError') throw bodyError;
+            return '';
         });
+        let payload: any;
+        try {
+            payload = JSON.parse(rawBody);
+        } catch (_error) {
+            throw new VectorEmbeddingError_ACU({
+                kind: 'provider-contract',
+                message: `Embedding 响应不是合法 JSON（前 200 字符：${rawBody.slice(0, 200)}）。`,
+                httpStatus: response.status,
+                endpoint,
+                model,
+            });
+        }
+        const normalized = normalizeEmbeddingResponse_ACU(payload);
+        if (normalized.length === 0) {
+            throw new VectorEmbeddingError_ACU({
+                kind: 'provider-contract',
+                message: 'Embedding 响应中没有可用向量。',
+                httpStatus: response.status,
+                endpoint,
+                model,
+            });
+        }
+        return normalized;
+    } catch (error: any) {
+        if (isVectorEmbeddingError_ACU(error)) throw error;
+        if (error?.name === 'AbortError') {
+            throw new VectorEmbeddingError_ACU({
+                kind: 'retryable',
+                message: `Embedding 请求超时（${VECTOR_EMBEDDING_TIMEOUT_MS_ACU}ms，已中断）：目标服务响应过慢或网络不通。请稍后重试；持续超时请检查本机网络/代理，或换用响应更快的 embedding 服务。网关内将自动快速重试一次。`,
+                endpoint,
+                model,
+            });
+        }
+        throw error;
+    } finally {
+        clearTimeout(timer);
     }
-    const normalized = normalizeEmbeddingResponse_ACU(payload);
-    if (normalized.length === 0) {
-        throw new VectorEmbeddingError_ACU({
-            kind: 'provider-contract',
-            message: 'Embedding 响应中没有可用向量。',
-            httpStatus: response.status,
-            endpoint,
-            model,
-        });
-    }
-    return normalized;
 }
 
 export async function createEmbeddings_ACU(request: VectorEmbeddingRequest_ACU): Promise<VectorEmbeddingResult_ACU[]> {

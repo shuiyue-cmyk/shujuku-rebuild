@@ -56,6 +56,25 @@ interface V2FrameRef_ACU {
  */
 const inflightV2Replays_ACU = new Map<string, Promise<TableReplayResultV2_ACU | null>>();
 
+/**
+ * chat 数组的身份令牌：`String(chat)` 走 `Array.join`，对象楼层只编码长度
+ * （`{…}` 全变成 `[object Object]`），等长的两个不同聊天会算出同一个 key。
+ * TT 切聊天是同页 emit、无 reload，A 的冷回放尚未 settle 时 B 的加载合并到达
+ * 即会命中——B 拿到 A 的表数据当基线。WeakMap 只认数组对象身份：同数组并发
+ * （唯一被测形态）行为不变，跨数组共享被禁。调用方若传 clone（每次新数组）
+ * 即天然退出去重——只是多做一次全量回放的 fail-open，无串味风险。
+ */
+const chatIdentityTokens_ACU = new WeakMap<object, number>();
+let chatIdentitySeq_ACU = 0;
+
+function chatIdentityToken_ACU(chat: any[]): string {
+    const existing = chatIdentityTokens_ACU.get(chat);
+    if (existing !== undefined) return String(existing);
+    chatIdentitySeq_ACU += 1;
+    chatIdentityTokens_ACU.set(chat, chatIdentitySeq_ACU);
+    return String(chatIdentitySeq_ACU);
+}
+
 function buildInflightReplayKey_ACU(
   chat: any[],
   isolationKey: string,
@@ -71,11 +90,11 @@ function buildInflightReplayKey_ACU(
   if (Number(options.yieldBudgetMs) > 0) return null;
   return [
     'chat-ref',
-    // chat 引用（数组对象身份）。同一数组内容原地变化时引用仍相同，但调用方
-    // 若在两次调用间原地 mutate chat（fill run 每批提交），in-flight 窗口内
-    // 引用相同而内容不同——由调用方保证 fill 提交不在并发 replay 窗口内发生
-    // （commit lock 内串行），否则此处只合并同一时刻的请求，语义安全。
-    String(chat),
+    // chat 数组对象身份（WeakMap 令牌）。同一数组内容原地变化时令牌仍相同，
+    // 若调用方在两次调用间原地 mutate chat（fill run 每批提交），in-flight
+    // 窗口内令牌相同而内容不同——由调用方保证 fill 提交不在并发 replay 窗口
+    // 内发生（commit lock 内串行），否则此处只合并同一时刻的请求，语义安全。
+    chatIdentityToken_ACU(chat),
     'iso', isolationKey,
     'max', options.maxMessageIndex ?? 'latest',
     'struct', structureMappingDigest || '',

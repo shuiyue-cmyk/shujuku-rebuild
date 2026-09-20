@@ -513,6 +513,12 @@ describe('ContinuationPage', () => {
     expect(el.querySelectorAll('.acu-v2-continuation-materials__turn--current')).toHaveLength(1);
     expect(el.querySelectorAll('.acu-v2-continuation-materials__turn--planned')).toHaveLength(1);
     expect(el.textContent).toContain('第 0 阶段');
+    expect(el.textContent).not.toContain('最终试探');
+    const historyStage = el.querySelector<HTMLDetailsElement>('.acu-v2-continuation-materials__block')!;
+    expect(historyStage.open).toBe(false);
+    historyStage.open = true;
+    historyStage.dispatchEvent(new Event('toggle'));
+    await nextTick();
     expect(el.textContent).toContain('最终试探');
     expect(el.textContent).toContain('旧 revision（1）');
 

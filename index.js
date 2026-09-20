@@ -4968,43 +4968,56 @@ async function requestRerankBatch_ACU(request) {
     // 避免用户可配置端点被指向内网，或在非 TLS 端点上明文外发 Authorization。
     assertSafeHttpEndpoint_ACU(request.endpoint);
     // 超时可中断：rerank 在发送前同步链路上，挂起的上游不允许无限阻塞生成。
+    // 看门狗覆盖「fetch＋响应体消费」整段：只包 fetch 的话，上游只回响应头、
+    // 正文停滞时计时器已解除，请求永久挂起。成功路径行为不变。
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), VECTOR_RERANK_TIMEOUT_MS_ACU);
-    let response;
+    const rerankTimeout_ACU = () => new Error(`Rerank 请求超时（${VECTOR_RERANK_TIMEOUT_MS_ACU}ms，${request.batchLabel}），已中断。`);
     try {
-        response = await fetch(request.endpoint, {
-            method: 'POST',
-            redirect: 'error', // 307/308 会把 POST 原样重放到重定向目标：SSRF 守卫只校发起前 URL，禁止重定向
-            headers: buildRerankHeaders_ACU(request.apiKey),
-            body: JSON.stringify(payload),
-            signal: controller.signal,
+        let response;
+        try {
+            response = await fetch(request.endpoint, {
+                method: 'POST',
+                redirect: 'error', // 307/308 会把 POST 原样重放到重定向目标：SSRF 守卫只校发起前 URL，禁止重定向
+                headers: buildRerankHeaders_ACU(request.apiKey),
+                body: JSON.stringify(payload),
+                signal: controller.signal,
+            });
+        }
+        catch (error) {
+            const rawReason = error?.message || String(error || '未知错误');
+            // 既有分类点：跨源被拒与真断网在浏览器侧同形（不透明 TypeError），归类为 CORS 并给出处置建议。
+            throw new Error(error?.name === 'AbortError'
+                ? `Rerank 请求超时（${VECTOR_RERANK_TIMEOUT_MS_ACU}ms，${request.batchLabel}），已中断。`
+                : isCrossOriginFetchRejection_ACU(error)
+                    ? `Rerank 请求网络失败（${rawReason}，${request.batchLabel}）：${VECTOR_CROSS_ORIGIN_FAILURE_HINT_ACU}`
+                    : `Rerank 请求网络失败（${request.batchLabel}）：${rawReason}`);
+        }
+        if (!response.ok) {
+            const detail = await response.text().catch((bodyError) => {
+                if (bodyError?.name === 'AbortError')
+                    throw rerankTimeout_ACU();
+                return response.statusText;
+            });
+            throw new Error(`Rerank 请求失败（${request.batchLabel}）: ${response.status} ${detail}`);
+        }
+        const rawBody = await response.text().catch((bodyError) => {
+            if (bodyError?.name === 'AbortError')
+                throw rerankTimeout_ACU();
+            return '';
         });
-    }
-    catch (error) {
-        const rawReason = error?.message || String(error || '未知错误');
-        // 既有分类点：跨源被拒与真断网在浏览器侧同形（不透明 TypeError），归类为 CORS 并给出处置建议。
-        throw new Error(error?.name === 'AbortError'
-            ? `Rerank 请求超时（${VECTOR_RERANK_TIMEOUT_MS_ACU}ms，${request.batchLabel}），已中断。`
-            : isCrossOriginFetchRejection_ACU(error)
-                ? `Rerank 请求网络失败（${rawReason}，${request.batchLabel}）：${VECTOR_CROSS_ORIGIN_FAILURE_HINT_ACU}`
-                : `Rerank 请求网络失败（${request.batchLabel}）：${rawReason}`);
+        let responsePayload;
+        try {
+            responsePayload = JSON.parse(rawBody);
+        }
+        catch (_error) {
+            throw new Error(`Rerank 响应不是合法 JSON（${request.batchLabel}，前 200 字符：${rawBody.slice(0, 200)}）。`);
+        }
+        return extractRerankResults_ACU(responsePayload);
     }
     finally {
         clearTimeout(timer);
     }
-    if (!response.ok) {
-        const detail = await response.text().catch(() => response.statusText);
-        throw new Error(`Rerank 请求失败（${request.batchLabel}）: ${response.status} ${detail}`);
-    }
-    const rawBody = await response.text().catch(() => '');
-    let responsePayload;
-    try {
-        responsePayload = JSON.parse(rawBody);
-    }
-    catch (_error) {
-        throw new Error(`Rerank 响应不是合法 JSON（${request.batchLabel}，前 200 字符：${rawBody.slice(0, 200)}）。`);
-    }
-    return extractRerankResults_ACU(responsePayload);
 }
 /**
  * 对 documents 做 rerank，返回全局 index 上的评分。
@@ -43912,6 +43925,24 @@ function computeReplayHeadRevisionDigest_ACU(chat, isolationKey) {
  * 重复调用，不缓存历史结果（与计划「有界 in-flight」一致，无跨调用泄漏）。
  */
 const inflightV2Replays_ACU = new Map();
+/**
+ * chat 数组的身份令牌：`String(chat)` 走 `Array.join`，对象楼层只编码长度
+ * （`{…}` 全变成 `[object Object]`），等长的两个不同聊天会算出同一个 key。
+ * TT 切聊天是同页 emit、无 reload，A 的冷回放尚未 settle 时 B 的加载合并到达
+ * 即会命中——B 拿到 A 的表数据当基线。WeakMap 只认数组对象身份：同数组并发
+ * （唯一被测形态）行为不变，跨数组共享被禁。调用方若传 clone（每次新数组）
+ * 即天然退出去重——只是多做一次全量回放的 fail-open，无串味风险。
+ */
+const chatIdentityTokens_ACU = new WeakMap();
+let chatIdentitySeq_ACU = 0;
+function chatIdentityToken_ACU(chat) {
+    const existing = chatIdentityTokens_ACU.get(chat);
+    if (existing !== undefined)
+        return String(existing);
+    chatIdentitySeq_ACU += 1;
+    chatIdentityTokens_ACU.set(chat, chatIdentitySeq_ACU);
+    return String(chatIdentitySeq_ACU);
+}
 function buildInflightReplayKey_ACU(chat, isolationKey, options, structureMappingDigest = '') {
     if (options.updateRuntimeState)
         return null;
@@ -43928,11 +43959,11 @@ function buildInflightReplayKey_ACU(chat, isolationKey, options, structureMappin
         return null;
     return [
         'chat-ref',
-        // chat 引用（数组对象身份）。同一数组内容原地变化时引用仍相同，但调用方
-        // 若在两次调用间原地 mutate chat（fill run 每批提交），in-flight 窗口内
-        // 引用相同而内容不同——由调用方保证 fill 提交不在并发 replay 窗口内发生
-        // （commit lock 内串行），否则此处只合并同一时刻的请求，语义安全。
-        String(chat),
+        // chat 数组对象身份（WeakMap 令牌）。同一数组内容原地变化时令牌仍相同，
+        // 若调用方在两次调用间原地 mutate chat（fill run 每批提交），in-flight
+        // 窗口内令牌相同而内容不同——由调用方保证 fill 提交不在并发 replay 窗口
+        // 内发生（commit lock 内串行），否则此处只合并同一时刻的请求，语义安全。
+        chatIdentityToken_ACU(chat),
         'iso', isolationKey,
         'max', options.maxMessageIndex ?? 'latest',
         'struct', structureMappingDigest || '',
@@ -48108,7 +48139,12 @@ function parseEmbeddingErrorBody_ACU(raw) {
     }
 }
 async function throwEmbeddingHttpErrorAsync_ACU(response, endpoint, model) {
-    const raw = await response.text().catch(() => response.statusText);
+    // 响应体停滞被看门狗中断时必须透出 AbortError（调用方折叠成超时），不能吞成 statusText。
+    const raw = await response.text().catch((bodyError) => {
+        if (bodyError?.name === 'AbortError')
+            throw bodyError;
+        return response.statusText;
+    });
     const { providerCode, providerMessage } = parseEmbeddingErrorBody_ACU(raw);
     const kind = classifyEmbeddingHttpError_ACU(response.status);
     const retryAfterMs = parseRetryAfterMs_ACU(response.headers.get('Retry-After'));
@@ -48131,11 +48167,12 @@ const VECTOR_EMBEDDING_TIMEOUT_MS_ACU = 45000;
 const VECTOR_EMBEDDING_MAX_ATTEMPTS_ACU = 2;
 /** 重试前等待 Retry-After 的上界：查询路径在发送前同步阻塞，不允许长等待。 */
 const VECTOR_EMBEDDING_RETRY_WAIT_MAX_MS_ACU = 5000;
-async function fetchEmbeddingWithTimeout_ACU(endpoint, init, model) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), VECTOR_EMBEDDING_TIMEOUT_MS_ACU);
+async function fetchEmbeddingWithTimeout_ACU(endpoint, init, model, signal) {
+    // 计时器由调用方持有并覆盖「fetch＋响应体消费」整段：只包 fetch 的话，
+    // 上游只回响应头、正文停滞时看门狗已解除，请求永久挂起。已分类错误原样抛，
+    // 调用方 catch 里同样原样抛——否则契约错误会被改写成 retryable 而多烧一次重试。
     try {
-        return await fetch(endpoint, { ...init, signal: controller.signal });
+        return await fetch(endpoint, { ...init, signal });
     }
     catch (error) {
         const isAbort = error?.name === 'AbortError';
@@ -48153,48 +48190,70 @@ async function fetchEmbeddingWithTimeout_ACU(endpoint, init, model) {
             model,
         });
     }
-    finally {
-        clearTimeout(timer);
-    }
 }
 async function requestEmbeddingsOnce_ACU(endpoint, model, input, headers) {
     // 端点安全校验：与主 API 同口径（仅 http(s)、拒私网/回环/非标端口）。守卫抛错即 fail-closed，
     // 避免用户可配置端点被指向内网，或在非 TLS 端点上明文外发 Authorization。
     assertSafeHttpEndpoint_ACU(endpoint);
-    const response = await fetchEmbeddingWithTimeout_ACU(endpoint, {
-        method: 'POST',
-        redirect: 'error', // 307/308 会把 POST 原样重放到重定向目标：SSRF 守卫只校发起前 URL，禁止重定向
-        headers,
-        body: JSON.stringify({ model, input }),
-    }, model);
-    if (!response.ok) {
-        await throwEmbeddingHttpErrorAsync_ACU(response, endpoint, model);
-    }
-    const rawBody = await response.text().catch(() => '');
-    let payload;
+    // 看门狗覆盖「fetch＋响应体消费」整段：成功路径行为不变，只是解除时机移到读完正文之后。
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), VECTOR_EMBEDDING_TIMEOUT_MS_ACU);
     try {
-        payload = JSON.parse(rawBody);
-    }
-    catch (_error) {
-        throw new VectorEmbeddingError_ACU({
-            kind: 'provider-contract',
-            message: `Embedding 响应不是合法 JSON（前 200 字符：${rawBody.slice(0, 200)}）。`,
-            httpStatus: response.status,
-            endpoint,
-            model,
+        const response = await fetchEmbeddingWithTimeout_ACU(endpoint, {
+            method: 'POST',
+            redirect: 'error', // 307/308 会把 POST 原样重放到重定向目标：SSRF 守卫只校发起前 URL，禁止重定向
+            headers,
+            body: JSON.stringify({ model, input }),
+        }, model, controller.signal);
+        if (!response.ok) {
+            await throwEmbeddingHttpErrorAsync_ACU(response, endpoint, model);
+        }
+        const rawBody = await response.text().catch((bodyError) => {
+            if (bodyError?.name === 'AbortError')
+                throw bodyError;
+            return '';
         });
+        let payload;
+        try {
+            payload = JSON.parse(rawBody);
+        }
+        catch (_error) {
+            throw new VectorEmbeddingError_ACU({
+                kind: 'provider-contract',
+                message: `Embedding 响应不是合法 JSON（前 200 字符：${rawBody.slice(0, 200)}）。`,
+                httpStatus: response.status,
+                endpoint,
+                model,
+            });
+        }
+        const normalized = normalizeEmbeddingResponse_ACU(payload);
+        if (normalized.length === 0) {
+            throw new VectorEmbeddingError_ACU({
+                kind: 'provider-contract',
+                message: 'Embedding 响应中没有可用向量。',
+                httpStatus: response.status,
+                endpoint,
+                model,
+            });
+        }
+        return normalized;
     }
-    const normalized = normalizeEmbeddingResponse_ACU(payload);
-    if (normalized.length === 0) {
-        throw new VectorEmbeddingError_ACU({
-            kind: 'provider-contract',
-            message: 'Embedding 响应中没有可用向量。',
-            httpStatus: response.status,
-            endpoint,
-            model,
-        });
+    catch (error) {
+        if (isVectorEmbeddingError_ACU(error))
+            throw error;
+        if (error?.name === 'AbortError') {
+            throw new VectorEmbeddingError_ACU({
+                kind: 'retryable',
+                message: `Embedding 请求超时（${VECTOR_EMBEDDING_TIMEOUT_MS_ACU}ms，已中断）：目标服务响应过慢或网络不通。请稍后重试；持续超时请检查本机网络/代理，或换用响应更快的 embedding 服务。网关内将自动快速重试一次。`,
+                endpoint,
+                model,
+            });
+        }
+        throw error;
     }
-    return normalized;
+    finally {
+        clearTimeout(timer);
+    }
 }
 async function createEmbeddings_ACU(request) {
     const endpoint = String(request.endpoint || '').trim();
@@ -85984,18 +86043,35 @@ function setLastOptimizationBase_ACU(payload = {}) {
         messageIndex: Number.isInteger(payload.messageIndex) ? payload.messageIndex : -1,
         messageId: payload.messageId ?? null,
         baseContent: typeof payload.baseContent === 'string' ? payload.baseContent : '',
+        // 盖章：这个槽是全插件共用的一条记录，跨聊天同楼号会撞车 ⇒ 读取侧按聊天划界。
+        chatKey: String(currentChatFileIdentifier_ACU || ''),
         updatedAt: Date.now()
     };
     lastOptimizedMessageMeta_ACU = cache;
     saveOptimizationBaseToCache_ACU(cache);
     return cache;
 }
+/**
+ * 缓存条目是否属于当前聊天。
+ * 旧版本条目没有聊天章（无法判别），保持可用以免打断既有「重新优化」；
+ * 有章就必须与当前聊天一致——否则那是别的聊天留下的原文，拿过来会把外来正文钉进本楼。
+ */
+function isOptimizationBaseInCurrentChat_ACU(cache) {
+    if (!cache?.chatKey)
+        return true;
+    return String(cache.chatKey) === String(currentChatFileIdentifier_ACU || '');
+}
 function getLastOptimizationBase_ACU() {
     if (lastOptimizedMessageMeta_ACU?.baseContent) {
-        return lastOptimizedMessageMeta_ACU;
+        if (!isOptimizationBaseInCurrentChat_ACU(lastOptimizedMessageMeta_ACU)) {
+            lastOptimizedMessageMeta_ACU = null;
+        }
+        else {
+            return lastOptimizedMessageMeta_ACU;
+        }
     }
     const cachedBase = loadOptimizationBaseFromCache_ACU();
-    if (cachedBase?.baseContent) {
+    if (cachedBase?.baseContent && isOptimizationBaseInCurrentChat_ACU(cachedBase)) {
         lastOptimizedMessageMeta_ACU = cachedBase;
         return cachedBase;
     }
@@ -90311,7 +90387,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.6.5" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.6.6" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -103896,9 +103972,7 @@ function getOriginalContent_ACU(messageIndex) {
                 return cachedBase.baseContent;
             }
         }
-        if (cachedBase.messageIndex === messageIndex) {
-            return cachedBase.baseContent;
-        }
+        // 不再按楼号回退：楼号会因删楼整体位移，命中同一楼号不代表同一楼层。
     }
     const chat = getChatArray_ACU();
     if (!chat || !chat[messageIndex]) {
@@ -108003,7 +108077,8 @@ async function fetchAvailableModels_ACU(apiUrl, apiKey, customApiFormat, options
     if (hit && now - hit.at < (hit.result.success ? MODEL_LIST_TTL_MS_ACU : MODEL_LIST_FAIL_TTL_MS_ACU)) {
         return cloneModelsResult_ACU(hit.result);
     }
-    const inflight = modelListInflight_ACU.get(key);
+    // force 的语义是「重新探一次」：在飞请求可能正卡在慢响应上，复用它会让刷新永久挂着。
+    const inflight = options?.force ? undefined : modelListInflight_ACU.get(key);
     if (inflight)
         return inflight.then(cloneModelsResult_ACU);
     const pending = fetchAvailableModelsUncached_ACU(apiUrl, apiKey, customApiFormat).then((result) => {
@@ -108026,6 +108101,17 @@ async function fetchAvailableModels_ACU(apiUrl, apiKey, customApiFormat, options
 function __clearModelListCacheForTests_ACU() {
     modelListCache_ACU.clear();
     modelListInflight_ACU.clear();
+}
+/** 探活窗口内的中止判定：fetch 阶段与响应体消费阶段共用同一口径。 */
+function isProbeAbort_ACU(e) {
+    return e?.name === 'AbortError' || /abort/i.test(String(e?.message || ''));
+}
+/** 探活超时的统一出口：必须返回结构化失败，裸抛会让「测试连接」停在加载中。 */
+function probeTimeoutResult_ACU() {
+    return {
+        success: false,
+        error: `API 端点状态检查超时：${MODEL_PROBE_TIMEOUT_MS_ACU / 1000} 秒内无响应，请检查端点地址与网络后重试。（若 TauriTavern 弹出了「允许连接到自定义端点？」授权窗，等待授权同样计入这段时间——请先在弹窗中点击「信任并连接」再重试）`,
+    };
 }
 async function fetchAvailableModelsUncached_ACU(apiUrl, apiKey, customApiFormat) {
     if (!apiUrl) {
@@ -108055,7 +108141,8 @@ async function fetchAvailableModelsUncached_ACU(apiUrl, apiKey, customApiFormat)
         "custom_include_headers": withOpencodeSessionHeader_ACU(sanitizedKey ? `Authorization: Bearer ${sanitizedKey}` : "", apiUrl)
     };
     // 探活专用 15s AbortController：不设超时的探活会挂在无响应端点上，UI 状态停在"正在检查"。
-    // 仅对本次 fetch 生效；响应头到达后读 body 不再受此定时约束（轻量响应，无实际影响）。
+    // 窗口必须覆盖到响应体消费完成：上游只回响应头、正文停滞时，只包 fetch 等于没有超时，
+    // 探活 promise 还会常驻 inflight（后续请求连同 force 一起挂死）。
     const controller = new AbortController();
     const probeTimer = setTimeout(() => controller.abort(), MODEL_PROBE_TIMEOUT_MS_ACU);
     let response;
@@ -108069,6 +108156,7 @@ async function fetchAvailableModelsUncached_ACU(apiUrl, apiKey, customApiFormat)
         });
     }
     catch (e) {
+        clearTimeout(probeTimer);
         // 仅折叠探活中断为结构化失败（返回 FetchModelsResult，调用方 UI 才能正确落到错误态）；
         // 其余网络层异常保持原有抛出行为不变。
         if (e?.name === 'AbortError' || /abort/i.test(String(e?.message || ''))) {
@@ -108076,57 +108164,71 @@ async function fetchAvailableModelsUncached_ACU(apiUrl, apiKey, customApiFormat)
         }
         throw e;
     }
+    // 看门狗在此处解除：下面的 await response.text()/json() 都落在窗口内，
+    // 窗口内被中止一律折叠成结构化超时（裸抛会让 UI 停在加载中）。
+    try {
+        if (!response.ok) {
+            // 上游/代理可能把请求头（含 Authorization / x-api-key）回显进错误体：
+            // 该字符串会一路进 toast（不过日志脱敏），展示前必须先脱敏。
+            const errorText = maskSensitiveText_ACU(await response.text());
+            const status = response.status;
+            let errorMessage = `API端点状态检查失败: ${status} ${response.statusText}.`;
+            try {
+                const errorJson = JSON.parse(errorText);
+                // 上游标准体是 {error:{message:...}}：直接插值只会得到 [object Object]，用户看不到原因。
+                const detailText = typeof errorJson?.error === 'string'
+                    ? errorJson.error
+                    : (typeof errorJson?.error?.message === 'string' ? errorJson.error.message
+                        : (typeof errorJson?.message === 'string' ? errorJson.message : errorText));
+                errorMessage += ` 详情: ${String(detailText).slice(0, 300)}`;
+            }
+            catch (e) {
+                errorMessage += ` 详情: ${errorText}`;
+            }
+            // status 可操作映射：文案保留 {status} 数字与关键词形状，供 log-error-hints
+            //（http-401 / http-404 等规则按状态码与关键短语匹配）直接复用。
+            if (status === 401) {
+                errorMessage += ' 请检查 API Key 是否正确、完整且未过期（401 unauthorized：API Key 无效）。';
+            }
+            else if (status === 404) {
+                errorMessage += ' 请检查接口地址是否完整、模型名是否存在（404 not found：模型不存在或地址错误，可点「拉取模型列表」重选）。';
+            }
+            return { success: false, error: errorMessage };
+        }
+        const data = await response.json();
+        logDebug_ACU('获取到的模型数据:', data);
+        // TT 2.3.0 起连接用户自定义端点需在宿主原生弹窗里「信任并连接」（SSRF 加固）；用户点「取消」时
+        // status 路由以 HTTP 200 + { cancelled: true, data: [] } 返回。此处必须指向那个弹窗——否则
+        // 用户只会看到「列表为空」，不知道第一步该做什么。
+        if (data && data.cancelled === true) {
+            return { success: false, error: '已取消连接自定义端点。请在 TauriTavern 弹出的「允许连接到自定义端点？」授权窗中点击「信任并连接」后重试。' };
+        }
+        let modelsList = [];
+        if (data && data.models && Array.isArray(data.models)) {
+            modelsList = data.models;
+        }
+        else if (data && data.data && Array.isArray(data.data)) {
+            modelsList = data.data;
+        }
+        else if (Array.isArray(data)) {
+            modelsList = data;
+        }
+        const modelNames = modelsList
+            .map((model) => typeof model === 'string' ? model : model.id)
+            .filter(Boolean);
+        if (modelNames.length === 0) {
+            return { success: false, error: '未能解析模型数据或列表为空。' };
+        }
+        return { success: true, models: modelNames };
+    }
+    catch (bodyError) {
+        if (isProbeAbort_ACU(bodyError))
+            return probeTimeoutResult_ACU();
+        throw bodyError;
+    }
     finally {
         clearTimeout(probeTimer);
     }
-    if (!response.ok) {
-        // 上游/代理可能把请求头（含 Authorization / x-api-key）回显进错误体：
-        // 该字符串会一路进 toast（不过日志脱敏），展示前必须先脱敏。
-        const errorText = maskSensitiveText_ACU(await response.text());
-        const status = response.status;
-        let errorMessage = `API端点状态检查失败: ${status} ${response.statusText}.`;
-        try {
-            const errorJson = JSON.parse(errorText);
-            errorMessage += ` 详情: ${errorJson.error || errorJson.message || errorText}`;
-        }
-        catch (e) {
-            errorMessage += ` 详情: ${errorText}`;
-        }
-        // status 可操作映射：文案保留 {status} 数字与关键词形状，供 log-error-hints
-        //（http-401 / http-404 等规则按状态码与关键短语匹配）直接复用。
-        if (status === 401) {
-            errorMessage += ' 请检查 API Key 是否正确、完整且未过期（401 unauthorized：API Key 无效）。';
-        }
-        else if (status === 404) {
-            errorMessage += ' 请检查接口地址是否完整、模型名是否存在（404 not found：模型不存在或地址错误，可点「拉取模型列表」重选）。';
-        }
-        return { success: false, error: errorMessage };
-    }
-    const data = await response.json();
-    logDebug_ACU('获取到的模型数据:', data);
-    // TT 2.3.0 起连接用户自定义端点需在宿主原生弹窗里「信任并连接」（SSRF 加固）；用户点「取消」时
-    // status 路由以 HTTP 200 + { cancelled: true, data: [] } 返回。此处必须指向那个弹窗——否则
-    // 用户只会看到「列表为空」，不知道第一步该做什么。
-    if (data && data.cancelled === true) {
-        return { success: false, error: '已取消连接自定义端点。请在 TauriTavern 弹出的「允许连接到自定义端点？」授权窗中点击「信任并连接」后重试。' };
-    }
-    let modelsList = [];
-    if (data && data.models && Array.isArray(data.models)) {
-        modelsList = data.models;
-    }
-    else if (data && data.data && Array.isArray(data.data)) {
-        modelsList = data.data;
-    }
-    else if (Array.isArray(data)) {
-        modelsList = data;
-    }
-    const modelNames = modelsList
-        .map((model) => typeof model === 'string' ? model : model.id)
-        .filter(Boolean);
-    if (modelNames.length === 0) {
-        return { success: false, error: '未能解析模型数据或列表为空。' };
-    }
-    return { success: true, models: modelNames };
 }
 
 /**
@@ -125981,14 +126083,21 @@ function validateAgentConversationFloorRecord_ACU(raw) {
         updatedAt: typeof raw.updatedAt === 'number' && raw.updatedAt >= 0 ? raw.updatedAt : 0,
         segment,
     };
+    const compaction = readFloorCompaction_ACU(raw);
+    if (compaction)
+        record.compaction = compaction;
+    return record;
+}
+/** 独立校验段头，展示窗口不需要为读取压缩标记而校验整个消息段。 */
+function readFloorCompaction_ACU(raw) {
     if (Object.prototype.hasOwnProperty.call(raw, 'compaction')) {
         const compaction = validateCompactionMark_ACU(raw.compaction);
         if (!compaction) {
             throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_AGENT_SNAPSHOT_INVALID', 'load', 'Agent 会话压缩标记版本或字段无效', false));
         }
-        record.compaction = compaction;
+        return compaction;
     }
-    return record;
+    return null;
 }
 /** 读取当前生效的压缩标记；与模型投影相同，选择 compactedThroughId 最大的合法标记。 */
 function readActiveAgentConversationCompactionMark_ACU(chat) {
@@ -126035,7 +126144,7 @@ function buildHandoffMessage_ACU(mark) {
  */
 function readAgentConversation_ACU(chat) {
     const messages = Array.isArray(chat) ? chat : getChatArray_ACU();
-    let collected = [];
+    const collected = [];
     let updatedAt = 0;
     for (let index = 0; index < messages.length; index += 1) {
         const message = messages[index];
@@ -126046,14 +126155,19 @@ function readAgentConversation_ACU(chat) {
         const raw = message[AGENT_CONVERSATION_FIELD_ACU];
         const record = validateAgentConversationFloorRecord_ACU(raw);
         if (record) {
-            collected = [...collected, ...record.segment];
+            // 逐条 push，不要 collected = [...collected, ...segment]——那是每楼整表复制，
+            // 大量分段会使拼接退化成 O(n²)。
+            for (const item of record.segment)
+                collected.push(item);
             updatedAt = Math.max(updatedAt, record.updatedAt);
             continue;
         }
         // v1 全量快照：它是当时的完整会话，充当基线段——之前收集的段全部被它覆盖。
         const legacy = validateAgentConversationSnapshot_ACU(raw);
         if (legacy) {
-            collected = [...legacy.messages];
+            collected.length = 0;
+            for (const item of legacy.messages)
+                collected.push(item);
             updatedAt = Math.max(updatedAt, legacy.updatedAt);
         }
     }
@@ -126078,14 +126192,17 @@ function readAgentConversation_ACU(chat) {
  * 而是把每一份压缩标记的交接报告合成 handoff 消息插在它的截止位置上。
  *
  * 与 readAgentConversation_ACU（模型通道）的区别：模型通道只保留最新标记之后的内容，
- * 时间线保留全部原始消息——用户在 UI 里仍能回看交接文件之前的历史，并直观看到
- * 「AI 可见性从哪条交接文件开始」。删除承载标记的楼层后，该标记连同其 handoff 一起消失。
+ * 默认保留全部原始消息；展示方可传尾部窗口，窗口不改变持久记录或模型视图。
+ * 删除承载标记的楼层后，该标记连同其 handoff 一起消失。
  * @param chat 聊天数组，缺省取当前聊天
- * @returns 按时间顺序的完整消息数组（含合成的 handoff 条目）
+ * @param options.maxEntries 尾部窗口：交接报告与普通消息共同计入上限；不改变持久历史。
+ * @returns 按时间顺序的消息数组（含合成的 handoff 条目）
  */
-function readAgentConversationTimeline_ACU(chat) {
+function readAgentConversationTimeline_ACU(chat, options) {
     const messages = Array.isArray(chat) ? chat : getChatArray_ACU();
-    let collected = [];
+    const maxEntries = options?.maxEntries;
+    const limit = typeof maxEntries === 'number' && Number.isSafeInteger(maxEntries) && maxEntries > 0 ? maxEntries : Infinity;
+    const segments = [];
     const marksById = new Map();
     for (let index = 0; index < messages.length; index += 1) {
         const message = messages[index];
@@ -126094,21 +126211,36 @@ function readAgentConversationTimeline_ACU(chat) {
         if (!Object.prototype.hasOwnProperty.call(message, AGENT_CONVERSATION_FIELD_ACU))
             continue;
         const raw = message[AGENT_CONVERSATION_FIELD_ACU];
-        const record = validateAgentConversationFloorRecord_ACU(raw);
-        if (record) {
-            collected = [...collected, ...record.segment];
-            if (record.compaction) {
-                const existing = marksById.get(record.compaction.compactedThroughId);
-                if (!existing || record.compaction.at > existing.at)
-                    marksById.set(record.compaction.compactedThroughId, record.compaction);
+        if (!isRecord_ACU$5(raw))
+            continue;
+        if (raw.schemaVersion === AGENT_CONVERSATION_SEGMENT_SCHEMA_VERSION_ACU && Array.isArray(raw.segment)) {
+            segments.push(raw.segment);
+            const compaction = readFloorCompaction_ACU(raw);
+            if (compaction) {
+                const existing = marksById.get(compaction.compactedThroughId);
+                if (!existing || compaction.at > existing.at)
+                    marksById.set(compaction.compactedThroughId, compaction);
             }
             continue;
         }
-        const legacy = validateAgentConversationSnapshot_ACU(raw);
-        if (legacy)
-            collected = [...legacy.messages];
+        if (raw.schemaVersion === AGENT_CONVERSATION_SCHEMA_VERSION_ACU && Array.isArray(raw.messages)) {
+            segments.length = 0;
+            segments.push(raw.messages);
+        }
     }
-    const marks = [...marksById.values()].sort((a, b) => a.compactedThroughId - b.compactedThroughId);
+    // 先扫描段头保留 v1 基线/压缩标记语义，再从尾部只物化窗口所需的合法消息。
+    // 仍需 O(楼层数) 扫描，但不再为最近 N 条复制、校验全部历史正文。
+    const collected = [];
+    for (let s = segments.length - 1; s >= 0 && collected.length < limit; s -= 1) {
+        const segment = segments[s];
+        for (let i = segment.length - 1; i >= 0 && collected.length < limit; i -= 1) {
+            const item = validateMessage_ACU(segment[i]);
+            if (item)
+                collected.push(item);
+        }
+    }
+    collected.reverse();
+    const marks = [...marksById.values()].sort((a, b) => a.compactedThroughId - b.compactedThroughId).slice(-limit);
     if (!marks.length)
         return collected;
     const latestThroughId = marks[marks.length - 1].compactedThroughId;
@@ -126129,7 +126261,13 @@ function readAgentConversationTimeline_ACU(chat) {
         timeline.push({ ...buildHandoffMessage_ACU(marks[markIndex]), digest: describe(marks[markIndex]) });
         markIndex += 1;
     }
-    return timeline;
+    return applyTimelineWindow_ACU(timeline, options?.maxEntries);
+}
+/** 仅限制展示结果，不修改底层段记录；未提供合法正整数时保持完整读取。 */
+function applyTimelineWindow_ACU(timeline, maxEntries) {
+    return typeof maxEntries === 'number' && Number.isSafeInteger(maxEntries) && maxEntries > 0
+        ? timeline.slice(-maxEntries)
+        : timeline;
 }
 function floorRecordOf_ACU(container) {
     const raw = container[AGENT_CONVERSATION_FIELD_ACU];
@@ -127841,12 +127979,19 @@ class ContinuationOrchestrator_ACU {
      * 自动续写资格（只读）：一轮正文确认成功后，桥据此决定是否延迟触发下一轮。
      * 只有「暂停且无停止原因、无待处理正文、无遗留错误、阶段可继续」的任务才有资格；
      * 用户停止、时长/阶段数上限、大纲预览待确认、循环失败都会让资格消失。
+     *
+     * 输出必须同时交出资格与这份资格的归属（chatIdentity + taskId）：本方法读的是
+     * 「调用那一刻的当前聊天」，延迟链若只比 eligible，切聊天（导入/恢复走不重载的
+     * 同页换聊天）就会把 A 的延迟续写落到 B 的合格任务上。对照 retry 链——它的
+     * retryHostGenerationInner 与 getMatchingLocalRetryClaim 都核过聊天身份，
+     * 此前只有本链没核。（用函数名而非行号引用，行号会漂移。）
      */
     readAutoContinueState() {
+        const chatIdentity = this.dependencies.getChatIdentity();
         const envelope = this.dependencies.store.readPersisted();
         const task = envelope?.activeTask;
         if (!envelope || !task)
-            return { eligible: false, delaySeconds: 0 };
+            return { eligible: false, delaySeconds: 0, chatIdentity, taskId: null };
         const stage = task.activeStageId ? task.stages.find(item => item.stageId === task.activeStageId) ?? null : null;
         const stageContinuable = !stage || ['running', 'completed'].includes(stage.status);
         const eligible = task.status === 'paused'
@@ -127854,7 +127999,7 @@ class ContinuationOrchestrator_ACU {
             && task.lastError === null
             && !task.pendingHostTurn
             && stageContinuable;
-        return { eligible, delaySeconds: Math.max(0, envelope.settings.loopDelaySeconds) };
+        return { eligible, delaySeconds: Math.max(0, envelope.settings.loopDelaySeconds), chatIdentity, taskId: task.taskId };
     }
     /** Read-only bridge input; it never derives reload state or writes the envelope. */
     readPendingHostTurn() {
@@ -135406,11 +135551,16 @@ class ContinuationHostGenerationBridge_ACU {
      */
     async autoContinueAfterTurn_ACU() {
         const runtime = this.dependencies.runtime;
-        const state = runtime.readAutoContinueState();
-        if (!state.eligible)
+        const scheduled = runtime.readAutoContinueState();
+        if (!scheduled.eligible)
             return;
-        await this.dependencies.wait(state.delaySeconds * 1000);
-        if (!runtime.readAutoContinueState().eligible)
+        await this.dependencies.wait(scheduled.delaySeconds * 1000);
+        const current = runtime.readAutoContinueState();
+        // 资格是按「当前聊天」算的：等待窗内换了聊天（导入/恢复走同页换聊天、不重载）
+        // 或任务被换掉时，这一轮的自动链不得去接管另一个聊天的合格任务。
+        if (!current.eligible)
+            return;
+        if (scheduled.chatIdentity !== current.chatIdentity || scheduled.taskId !== current.taskId)
             return;
         try {
             const result = await runtime.continueTask();
@@ -142253,7 +142403,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260919-08";
+        const stamp = "20260920-12";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -175943,6 +176093,22 @@ var _sfc_main$m = /*@__PURE__*/ defineComponent({
         const clearPending = ref(false);
         const activeVolume = computed(() => materials.snapshot.value?.storyArc.find(entry => entry.scope === 'volume' && !entry.retired && entry.status === 'active') ?? null);
         const historyStages = computed(() => (props.task?.stages ?? []).filter(stage => stage.stageId !== props.activeStage?.stageId));
+        const expandedHistoryStages = ref(new Set());
+        function toggleHistoryStage(stage, event) {
+            if (event.currentTarget.open)
+                expandedHistoryStages.value.add(stage.stageId);
+            else
+                expandedHistoryStages.value.delete(stage.stageId);
+        }
+        watch(() => props.task?.taskId, () => expandedHistoryStages.value.clear());
+        watchChatChanged_ACU(() => expandedHistoryStages.value.clear());
+        watch(historyStages, stages => {
+            const current = new Set(stages.map(stage => stage.stageId));
+            for (const stage of expandedHistoryStages.value) {
+                if (!current.has(stage))
+                    expandedHistoryStages.value.delete(stage);
+            }
+        });
         function displayRevision(stage) {
             return stage.revisions.find(revision => revision.revision === stage.activeRevision)
                 ?? stage.revisions.reduce((latest, revision) => !latest || revision.revision > latest.revision ? revision : latest, null);
@@ -176023,14 +176189,14 @@ var _sfc_main$m = /*@__PURE__*/ defineComponent({
                 syncOutlineDraft();
         }, { immediate: true });
         __expose({ reload });
-        const __returned__ = { props, emit, TABS, HOOK_STATUS_LABELS, HOOK_IMPORTANCE_LABELS, REVEAL_STATUS_LABELS, CHRONOLOGY_PRECISION_LABELS, ARC_STATUS_LABELS, WEB_REF_SOURCE_LABELS, WEB_REF_STATUS_LABELS, TEMPO_LABELS, ROLE_LABELS, PACING_LABELS, FUNCTION_LABELS, MAINLINE_LABELS, TIME_LABELS, INFERRED_FIELD_LABELS, activeTab, materials, outlineDraft, outlineError, outlineDirty, clearPending, activeVolume, historyStages, displayRevision, olderRevisions, remainingTurns, stageTotalTurns, turnPosition, turnState, syncOutlineDraft, onOutlineInput, saveOutline, reload, requestClear, confirmClear, ref, AcuButton, AcuTextarea };
+        const __returned__ = { props, emit, TABS, HOOK_STATUS_LABELS, HOOK_IMPORTANCE_LABELS, REVEAL_STATUS_LABELS, CHRONOLOGY_PRECISION_LABELS, ARC_STATUS_LABELS, WEB_REF_SOURCE_LABELS, WEB_REF_STATUS_LABELS, TEMPO_LABELS, ROLE_LABELS, PACING_LABELS, FUNCTION_LABELS, MAINLINE_LABELS, TIME_LABELS, INFERRED_FIELD_LABELS, activeTab, materials, outlineDraft, outlineError, outlineDirty, clearPending, activeVolume, historyStages, expandedHistoryStages, toggleHistoryStage, displayRevision, olderRevisions, remainingTurns, stageTotalTurns, turnPosition, turnState, syncOutlineDraft, onOutlineInput, saveOutline, reload, requestClear, confirmClear, ref, AcuButton, AcuTextarea };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.acu-v2-continuation-materials[data-v-dc9d5023] { display: grid; gap: 12px;\n}\n.acu-v2-continuation-materials__tabs[data-v-dc9d5023] { display: flex; flex-wrap: wrap; align-items: center; gap: 6px;\n}\n.acu-v2-continuation-materials__tab[data-v-dc9d5023] { padding: 5px 12px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 22%, transparent); border-radius: 999px; background: transparent; color: var(--acu-text-2); cursor: pointer; font: inherit; font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__tab--active[data-v-dc9d5023] { border-color: color-mix(in srgb, var(--acu-primary, #5b8def) 55%, transparent); background: color-mix(in srgb, var(--acu-primary, #5b8def) 14%, transparent); color: var(--acu-text-1);\n}\n.acu-v2-continuation-materials__tab-actions[data-v-dc9d5023] { display: flex; gap: 6px; margin-left: auto;\n}\n.acu-v2-continuation-materials__confirm[data-v-dc9d5023] { margin: 0; padding: 10px; border: 1px solid color-mix(in srgb, var(--acu-danger, #d65b5b) 40%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--acu-danger, #d65b5b) 7%, transparent); color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__confirm-actions[data-v-dc9d5023] { display: inline-flex; gap: 6px; margin-left: 8px; vertical-align: middle;\n}\n.acu-v2-continuation-materials__outline[data-v-dc9d5023] { display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__empty[data-v-dc9d5023] { margin: 0; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__meta[data-v-dc9d5023] { margin: 0; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap;\n}\n.acu-v2-continuation-materials__error[data-v-dc9d5023] { margin: 0; color: var(--acu-danger, #d65b5b); white-space: pre-wrap; font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__actions[data-v-dc9d5023] { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px;\n}\n.acu-v2-continuation-materials__block[data-v-dc9d5023] { padding: 10px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 20%, transparent); border-radius: 6px; display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__block > summary[data-v-dc9d5023] { cursor: pointer; color: var(--acu-text-1);\n}\n.acu-v2-continuation-materials__block--current[data-v-dc9d5023] { border-color: color-mix(in srgb, var(--acu-primary, #5b8def) 45%, transparent);\n}\n.acu-v2-continuation-materials__list[data-v-dc9d5023] { display: flex; flex-direction: column; gap: 6px; padding-left: 22px; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__outline-summary[data-v-dc9d5023], .acu-v2-continuation-materials__outline-node[data-v-dc9d5023] { padding: 10px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 16%, transparent); border-radius: 6px; display: grid; gap: 5px;\n}\n.acu-v2-continuation-materials__outline-heading[data-v-dc9d5023] { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--acu-text-1); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__outline-nodes[data-v-dc9d5023] { display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__turns[data-v-dc9d5023] { display: grid; gap: 5px; margin: 0; padding-left: 22px; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__turns > li[data-v-dc9d5023] { display: flex; flex-wrap: wrap; align-items: center; gap: 6px;\n}\n.acu-v2-continuation-materials__turn--done[data-v-dc9d5023] { color: var(--acu-text-3);\n}\n.acu-v2-continuation-materials__turn--current[data-v-dc9d5023] { padding: 5px 7px; margin-left: -7px; border-radius: 4px; background: color-mix(in srgb, var(--acu-primary, #5b8def) 14%, transparent); color: var(--acu-text-1);\n}\n.acu-v2-continuation-materials__turn--planned[data-v-dc9d5023] { color: var(--acu-text-2);\n}\n.acu-v2-continuation-materials__cards[data-v-dc9d5023] { display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__card[data-v-dc9d5023] { padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 16%, transparent); border-radius: 6px; display: grid; gap: 4px;\n}\n.acu-v2-continuation-materials__card--retired[data-v-dc9d5023] { opacity: 0.55;\n}\n.acu-v2-continuation-materials__card > summary.acu-v2-continuation-materials__card-head[data-v-dc9d5023] { cursor: pointer; list-style: none;\n}\n.acu-v2-continuation-materials__card-meta a[data-v-dc9d5023] { color: inherit; word-break: break-all;\n}\n.acu-v2-continuation-materials__card-head[data-v-dc9d5023] { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--acu-text-1); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__card-body[data-v-dc9d5023] { margin: 0; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap;\n}\n.acu-v2-continuation-materials__card-meta[data-v-dc9d5023] { margin: 0; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap;\n}\n.acu-v2-continuation-materials__badge[data-v-dc9d5023] { padding: 1px 8px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 30%, transparent); color: var(--acu-text-2); font-size: 11px;\n}\n.acu-v2-continuation-materials__badge--primary[data-v-dc9d5023] { border-color: color-mix(in srgb, var(--acu-primary, #5b8def) 55%, transparent); color: var(--acu-text-1); background: color-mix(in srgb, var(--acu-primary, #5b8def) 12%, transparent);\n}\n.acu-v2-continuation-materials__badge--muted[data-v-dc9d5023] { opacity: 0.8;\n}\n.acu-v2-continuation-materials__json[data-v-dc9d5023] { display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__json > summary[data-v-dc9d5023] { cursor: pointer; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__history[data-v-dc9d5023] { display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__history-revision[data-v-dc9d5023] { padding: 8px; border-left: 2px solid color-mix(in srgb, var(--acu-text-3) 28%, transparent);\n}\r\n\r\n/* 手机窄屏：刷新/清空按钮换到独立一行靠右，避免和页签挤成两行半。 */\n@media (max-width: 640px) {\n.acu-v2-continuation-materials__tab-actions[data-v-dc9d5023] { margin-left: 0; width: 100%; justify-content: flex-end;\n}\n.acu-v2-continuation-materials__confirm-actions[data-v-dc9d5023] { display: flex; margin: 8px 0 0;\n}\n}\r\n", "src/presentation-v2/components/ContinuationMaterialsPanel.vue#style-0-dc9d5023");
-var ContinuationMaterialsPanel_vue_vue_type_style_index_0_scoped_dc9d5023_lang = null;
+injectSfcStyle("\n.acu-v2-continuation-materials[data-v-4c2bb65c] { display: grid; gap: 12px;\n}\n.acu-v2-continuation-materials__tabs[data-v-4c2bb65c] { display: flex; flex-wrap: wrap; align-items: center; gap: 6px;\n}\n.acu-v2-continuation-materials__tab[data-v-4c2bb65c] { padding: 5px 12px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 22%, transparent); border-radius: 999px; background: transparent; color: var(--acu-text-2); cursor: pointer; font: inherit; font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__tab--active[data-v-4c2bb65c] { border-color: color-mix(in srgb, var(--acu-primary, #5b8def) 55%, transparent); background: color-mix(in srgb, var(--acu-primary, #5b8def) 14%, transparent); color: var(--acu-text-1);\n}\n.acu-v2-continuation-materials__tab-actions[data-v-4c2bb65c] { display: flex; gap: 6px; margin-left: auto;\n}\n.acu-v2-continuation-materials__confirm[data-v-4c2bb65c] { margin: 0; padding: 10px; border: 1px solid color-mix(in srgb, var(--acu-danger, #d65b5b) 40%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--acu-danger, #d65b5b) 7%, transparent); color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__confirm-actions[data-v-4c2bb65c] { display: inline-flex; gap: 6px; margin-left: 8px; vertical-align: middle;\n}\n.acu-v2-continuation-materials__outline[data-v-4c2bb65c] { display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__empty[data-v-4c2bb65c] { margin: 0; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__meta[data-v-4c2bb65c] { margin: 0; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap;\n}\n.acu-v2-continuation-materials__error[data-v-4c2bb65c] { margin: 0; color: var(--acu-danger, #d65b5b); white-space: pre-wrap; font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__actions[data-v-4c2bb65c] { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px;\n}\n.acu-v2-continuation-materials__block[data-v-4c2bb65c] { padding: 10px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 20%, transparent); border-radius: 6px; display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__block > summary[data-v-4c2bb65c] { cursor: pointer; color: var(--acu-text-1);\n}\n.acu-v2-continuation-materials__block--current[data-v-4c2bb65c] { border-color: color-mix(in srgb, var(--acu-primary, #5b8def) 45%, transparent);\n}\n.acu-v2-continuation-materials__list[data-v-4c2bb65c] { display: flex; flex-direction: column; gap: 6px; padding-left: 22px; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__outline-summary[data-v-4c2bb65c], .acu-v2-continuation-materials__outline-node[data-v-4c2bb65c] { padding: 10px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 16%, transparent); border-radius: 6px; display: grid; gap: 5px;\n}\n.acu-v2-continuation-materials__outline-heading[data-v-4c2bb65c] { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--acu-text-1); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__outline-nodes[data-v-4c2bb65c] { display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__turns[data-v-4c2bb65c] { display: grid; gap: 5px; margin: 0; padding-left: 22px; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__turns > li[data-v-4c2bb65c] { display: flex; flex-wrap: wrap; align-items: center; gap: 6px;\n}\n.acu-v2-continuation-materials__turn--done[data-v-4c2bb65c] { color: var(--acu-text-3);\n}\n.acu-v2-continuation-materials__turn--current[data-v-4c2bb65c] { padding: 5px 7px; margin-left: -7px; border-radius: 4px; background: color-mix(in srgb, var(--acu-primary, #5b8def) 14%, transparent); color: var(--acu-text-1);\n}\n.acu-v2-continuation-materials__turn--planned[data-v-4c2bb65c] { color: var(--acu-text-2);\n}\n.acu-v2-continuation-materials__cards[data-v-4c2bb65c] { display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__card[data-v-4c2bb65c] { padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 16%, transparent); border-radius: 6px; display: grid; gap: 4px;\n}\n.acu-v2-continuation-materials__card--retired[data-v-4c2bb65c] { opacity: 0.55;\n}\n.acu-v2-continuation-materials__card > summary.acu-v2-continuation-materials__card-head[data-v-4c2bb65c] { cursor: pointer; list-style: none;\n}\n.acu-v2-continuation-materials__card-meta a[data-v-4c2bb65c] { color: inherit; word-break: break-all;\n}\n.acu-v2-continuation-materials__card-head[data-v-4c2bb65c] { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--acu-text-1); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__card-body[data-v-4c2bb65c] { margin: 0; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap;\n}\n.acu-v2-continuation-materials__card-meta[data-v-4c2bb65c] { margin: 0; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap;\n}\n.acu-v2-continuation-materials__badge[data-v-4c2bb65c] { padding: 1px 8px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 30%, transparent); color: var(--acu-text-2); font-size: 11px;\n}\n.acu-v2-continuation-materials__badge--primary[data-v-4c2bb65c] { border-color: color-mix(in srgb, var(--acu-primary, #5b8def) 55%, transparent); color: var(--acu-text-1); background: color-mix(in srgb, var(--acu-primary, #5b8def) 12%, transparent);\n}\n.acu-v2-continuation-materials__badge--muted[data-v-4c2bb65c] { opacity: 0.8;\n}\n.acu-v2-continuation-materials__json[data-v-4c2bb65c] { display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__json > summary[data-v-4c2bb65c] { cursor: pointer; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__history[data-v-4c2bb65c] { display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__history-revision[data-v-4c2bb65c] { padding: 8px; border-left: 2px solid color-mix(in srgb, var(--acu-text-3) 28%, transparent);\n}\r\n\r\n/* 手机窄屏：刷新/清空按钮换到独立一行靠右，避免和页签挤成两行半。 */\n@media (max-width: 640px) {\n.acu-v2-continuation-materials__tab-actions[data-v-4c2bb65c] { margin-left: 0; width: 100%; justify-content: flex-end;\n}\n.acu-v2-continuation-materials__confirm-actions[data-v-4c2bb65c] { display: flex; margin: 8px 0 0;\n}\n}\r\n", "src/presentation-v2/components/ContinuationMaterialsPanel.vue#style-0-4c2bb65c");
+var ContinuationMaterialsPanel_vue_vue_type_style_index_0_scoped_4c2bb65c_lang = null;
 
 const _hoisted_1$m = { class: "acu-v2-continuation-materials" };
 const _hoisted_2$k = { class: "acu-v2-continuation-materials__tabs" };
@@ -176088,236 +176254,237 @@ const _hoisted_34$2 = {
 	key: 1,
 	class: "acu-v2-continuation-materials__empty"
 };
-const _hoisted_35$1 = {
+const _hoisted_35$1 = ["open", "onToggle"];
+const _hoisted_36$1 = {
 	key: 0,
 	class: "acu-v2-continuation-materials__outline-summary"
 };
-const _hoisted_36$1 = { class: "acu-v2-continuation-materials__outline-heading" };
-const _hoisted_37$1 = { class: "acu-v2-continuation-materials__badge" };
+const _hoisted_37$1 = { class: "acu-v2-continuation-materials__outline-heading" };
 const _hoisted_38$1 = { class: "acu-v2-continuation-materials__badge" };
 const _hoisted_39$1 = { class: "acu-v2-continuation-materials__badge" };
-const _hoisted_40 = { class: "acu-v2-continuation-materials__card-body" };
-const _hoisted_41 = { class: "acu-v2-continuation-materials__list" };
-const _hoisted_42 = {
+const _hoisted_40 = { class: "acu-v2-continuation-materials__badge" };
+const _hoisted_41 = { class: "acu-v2-continuation-materials__card-body" };
+const _hoisted_42 = { class: "acu-v2-continuation-materials__list" };
+const _hoisted_43 = {
 	key: 1,
 	class: "acu-v2-continuation-materials__empty"
 };
-const _hoisted_43 = {
+const _hoisted_44 = {
 	key: 0,
 	class: "acu-v2-continuation-materials__history"
 };
-const _hoisted_44 = { class: "acu-v2-continuation-materials__list" };
-const _hoisted_45 = {
-	key: 0,
-	class: "acu-v2-continuation-materials__meta"
-};
+const _hoisted_45 = { class: "acu-v2-continuation-materials__list" };
 const _hoisted_46 = {
-	key: 1,
+	key: 0,
 	class: "acu-v2-continuation-materials__meta"
 };
 const _hoisted_47 = {
+	key: 1,
+	class: "acu-v2-continuation-materials__meta"
+};
+const _hoisted_48 = {
 	key: 2,
 	class: "acu-v2-continuation-materials__error"
 };
-const _hoisted_48 = {
+const _hoisted_49 = {
 	class: "acu-v2-continuation-materials__block",
 	open: ""
-};
-const _hoisted_49 = {
-	key: 0,
-	class: "acu-v2-continuation-materials__badge"
 };
 const _hoisted_50 = {
 	key: 0,
-	class: "acu-v2-continuation-materials__empty"
+	class: "acu-v2-continuation-materials__badge"
 };
 const _hoisted_51 = {
+	key: 0,
+	class: "acu-v2-continuation-materials__empty"
+};
+const _hoisted_52 = {
 	key: 1,
 	class: "acu-v2-continuation-materials__cards"
 };
-const _hoisted_52 = { class: "acu-v2-continuation-materials__card-head" };
-const _hoisted_53 = { class: "acu-v2-continuation-materials__badge" };
+const _hoisted_53 = { class: "acu-v2-continuation-materials__card-head" };
 const _hoisted_54 = { class: "acu-v2-continuation-materials__badge" };
-const _hoisted_55 = {
+const _hoisted_55 = { class: "acu-v2-continuation-materials__badge" };
+const _hoisted_56 = {
 	key: 0,
 	class: "acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--muted"
 };
-const _hoisted_56 = { class: "acu-v2-continuation-materials__card-body" };
-const _hoisted_57 = { class: "acu-v2-continuation-materials__card-meta" };
-const _hoisted_58 = { class: "acu-v2-continuation-materials__json" };
-const _hoisted_59 = {
+const _hoisted_57 = { class: "acu-v2-continuation-materials__card-body" };
+const _hoisted_58 = { class: "acu-v2-continuation-materials__card-meta" };
+const _hoisted_59 = { class: "acu-v2-continuation-materials__json" };
+const _hoisted_60 = {
 	key: 0,
 	class: "acu-v2-continuation-materials__error"
 };
-const _hoisted_60 = { class: "acu-v2-continuation-materials__actions" };
-const _hoisted_61 = {
+const _hoisted_61 = { class: "acu-v2-continuation-materials__actions" };
+const _hoisted_62 = {
 	class: "acu-v2-continuation-materials__block",
 	open: ""
-};
-const _hoisted_62 = {
-	key: 0,
-	class: "acu-v2-continuation-materials__badge"
 };
 const _hoisted_63 = {
 	key: 0,
-	class: "acu-v2-continuation-materials__empty"
+	class: "acu-v2-continuation-materials__badge"
 };
 const _hoisted_64 = {
+	key: 0,
+	class: "acu-v2-continuation-materials__empty"
+};
+const _hoisted_65 = {
 	key: 1,
 	class: "acu-v2-continuation-materials__cards"
 };
-const _hoisted_65 = { class: "acu-v2-continuation-materials__card-head" };
-const _hoisted_66 = { class: "acu-v2-continuation-materials__badge" };
-const _hoisted_67 = {
+const _hoisted_66 = { class: "acu-v2-continuation-materials__card-head" };
+const _hoisted_67 = { class: "acu-v2-continuation-materials__badge" };
+const _hoisted_68 = {
 	key: 0,
 	class: "acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--muted"
 };
-const _hoisted_68 = {
+const _hoisted_69 = {
 	key: 1,
 	class: "acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--muted"
 };
-const _hoisted_69 = { class: "acu-v2-continuation-materials__card-body" };
-const _hoisted_70 = { class: "acu-v2-continuation-materials__card-meta" };
-const _hoisted_71 = { class: "acu-v2-continuation-materials__json" };
-const _hoisted_72 = {
+const _hoisted_70 = { class: "acu-v2-continuation-materials__card-body" };
+const _hoisted_71 = { class: "acu-v2-continuation-materials__card-meta" };
+const _hoisted_72 = { class: "acu-v2-continuation-materials__json" };
+const _hoisted_73 = {
 	key: 0,
 	class: "acu-v2-continuation-materials__error"
 };
-const _hoisted_73 = { class: "acu-v2-continuation-materials__actions" };
-const _hoisted_74 = {
+const _hoisted_74 = { class: "acu-v2-continuation-materials__actions" };
+const _hoisted_75 = {
 	class: "acu-v2-continuation-materials__block",
 	open: ""
-};
-const _hoisted_75 = {
-	key: 0,
-	class: "acu-v2-continuation-materials__badge"
 };
 const _hoisted_76 = {
 	key: 0,
-	class: "acu-v2-continuation-materials__empty"
+	class: "acu-v2-continuation-materials__badge"
 };
 const _hoisted_77 = {
+	key: 0,
+	class: "acu-v2-continuation-materials__empty"
+};
+const _hoisted_78 = {
 	key: 1,
 	class: "acu-v2-continuation-materials__cards"
 };
-const _hoisted_78 = { class: "acu-v2-continuation-materials__card-head" };
-const _hoisted_79 = { class: "acu-v2-continuation-materials__card-body" };
-const _hoisted_80 = { class: "acu-v2-continuation-materials__card-meta" };
-const _hoisted_81 = { class: "acu-v2-continuation-materials__json" };
-const _hoisted_82 = {
+const _hoisted_79 = { class: "acu-v2-continuation-materials__card-head" };
+const _hoisted_80 = { class: "acu-v2-continuation-materials__card-body" };
+const _hoisted_81 = { class: "acu-v2-continuation-materials__card-meta" };
+const _hoisted_82 = { class: "acu-v2-continuation-materials__json" };
+const _hoisted_83 = {
 	key: 0,
 	class: "acu-v2-continuation-materials__error"
 };
-const _hoisted_83 = { class: "acu-v2-continuation-materials__actions" };
-const _hoisted_84 = {
+const _hoisted_84 = { class: "acu-v2-continuation-materials__actions" };
+const _hoisted_85 = {
 	class: "acu-v2-continuation-materials__block",
 	open: ""
 };
-const _hoisted_85 = {
+const _hoisted_86 = {
 	key: 0,
 	class: "acu-v2-continuation-materials__badge"
 };
-const _hoisted_86 = {
+const _hoisted_87 = {
 	key: 0,
 	class: "acu-v2-continuation-materials__empty"
 };
-const _hoisted_87 = {
+const _hoisted_88 = {
 	key: 1,
 	class: "acu-v2-continuation-materials__cards"
 };
-const _hoisted_88 = { class: "acu-v2-continuation-materials__card-head" };
-const _hoisted_89 = { class: "acu-v2-continuation-materials__badge" };
-const _hoisted_90 = {
+const _hoisted_89 = { class: "acu-v2-continuation-materials__card-head" };
+const _hoisted_90 = { class: "acu-v2-continuation-materials__badge" };
+const _hoisted_91 = {
 	key: 0,
 	class: "acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--muted"
 };
-const _hoisted_91 = { class: "acu-v2-continuation-materials__card-body" };
 const _hoisted_92 = { class: "acu-v2-continuation-materials__card-body" };
-const _hoisted_93 = { class: "acu-v2-continuation-materials__card-meta" };
-const _hoisted_94 = { class: "acu-v2-continuation-materials__json" };
-const _hoisted_95 = {
+const _hoisted_93 = { class: "acu-v2-continuation-materials__card-body" };
+const _hoisted_94 = { class: "acu-v2-continuation-materials__card-meta" };
+const _hoisted_95 = { class: "acu-v2-continuation-materials__json" };
+const _hoisted_96 = {
 	key: 0,
 	class: "acu-v2-continuation-materials__error"
 };
-const _hoisted_96 = { class: "acu-v2-continuation-materials__actions" };
-const _hoisted_97 = {
+const _hoisted_97 = { class: "acu-v2-continuation-materials__actions" };
+const _hoisted_98 = {
 	key: 0,
 	class: "acu-v2-continuation-materials__meta"
-};
-const _hoisted_98 = {
-	key: 1,
-	class: "acu-v2-continuation-materials__error"
 };
 const _hoisted_99 = {
+	key: 1,
+	class: "acu-v2-continuation-materials__error"
+};
+const _hoisted_100 = {
 	key: 2,
 	class: "acu-v2-continuation-materials__empty"
 };
-const _hoisted_100 = {
+const _hoisted_101 = {
 	key: 3,
 	class: "acu-v2-continuation-materials__cards"
 };
-const _hoisted_101 = { class: "acu-v2-continuation-materials__card-head" };
-const _hoisted_102 = { class: "acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--primary" };
-const _hoisted_103 = {
+const _hoisted_102 = { class: "acu-v2-continuation-materials__card-head" };
+const _hoisted_103 = { class: "acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--primary" };
+const _hoisted_104 = {
 	key: 0,
 	class: "acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--muted"
 };
-const _hoisted_104 = {
+const _hoisted_105 = {
 	key: 1,
 	class: "acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--muted"
 };
-const _hoisted_105 = { class: "acu-v2-continuation-materials__card-body" };
-const _hoisted_106 = {
+const _hoisted_106 = { class: "acu-v2-continuation-materials__card-body" };
+const _hoisted_107 = {
 	key: 0,
 	class: "acu-v2-continuation-materials__card-body"
 };
-const _hoisted_107 = { class: "acu-v2-continuation-materials__card-meta" };
-const _hoisted_108 = ["href"];
-const _hoisted_109 = { class: "acu-v2-continuation-materials__json" };
-const _hoisted_110 = {
+const _hoisted_108 = { class: "acu-v2-continuation-materials__card-meta" };
+const _hoisted_109 = ["href"];
+const _hoisted_110 = { class: "acu-v2-continuation-materials__json" };
+const _hoisted_111 = {
 	key: 0,
 	class: "acu-v2-continuation-materials__error"
 };
-const _hoisted_111 = { class: "acu-v2-continuation-materials__actions" };
-const _hoisted_112 = {
+const _hoisted_112 = { class: "acu-v2-continuation-materials__actions" };
+const _hoisted_113 = {
 	key: 0,
 	class: "acu-v2-continuation-materials__meta"
 };
-const _hoisted_113 = {
+const _hoisted_114 = {
 	key: 1,
 	class: "acu-v2-continuation-materials__error"
 };
-const _hoisted_114 = {
+const _hoisted_115 = {
 	key: 2,
 	class: "acu-v2-continuation-materials__empty"
 };
-const _hoisted_115 = {
+const _hoisted_116 = {
 	key: 3,
 	class: "acu-v2-continuation-materials__cards"
 };
-const _hoisted_116 = { class: "acu-v2-continuation-materials__card-head" };
-const _hoisted_117 = { class: "acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--primary" };
-const _hoisted_118 = { class: "acu-v2-continuation-materials__badge" };
-const _hoisted_119 = {
+const _hoisted_117 = { class: "acu-v2-continuation-materials__card-head" };
+const _hoisted_118 = { class: "acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--primary" };
+const _hoisted_119 = { class: "acu-v2-continuation-materials__badge" };
+const _hoisted_120 = {
 	key: 0,
 	class: "acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--muted"
 };
-const _hoisted_120 = { class: "acu-v2-continuation-materials__card-body" };
-const _hoisted_121 = {
+const _hoisted_121 = { class: "acu-v2-continuation-materials__card-body" };
+const _hoisted_122 = {
 	key: 0,
 	class: "acu-v2-continuation-materials__card-body"
 };
-const _hoisted_122 = {
+const _hoisted_123 = {
 	key: 1,
 	class: "acu-v2-continuation-materials__card-meta"
 };
-const _hoisted_123 = { class: "acu-v2-continuation-materials__card-meta" };
-const _hoisted_124 = { class: "acu-v2-continuation-materials__json" };
-const _hoisted_125 = {
+const _hoisted_124 = { class: "acu-v2-continuation-materials__card-meta" };
+const _hoisted_125 = { class: "acu-v2-continuation-materials__json" };
+const _hoisted_126 = {
 	key: 0,
 	class: "acu-v2-continuation-materials__error"
 };
-const _hoisted_126 = { class: "acu-v2-continuation-materials__actions" };
+const _hoisted_127 = { class: "acu-v2-continuation-materials__actions" };
 function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("div", _hoisted_1$m, [
 		createBaseVNode("div", _hoisted_2$k, [(openBlock(), createElementBlock(
@@ -176621,24 +176788,26 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 						return openBlock(), createElementBlock("details", {
 							key: stage.stageId,
 							class: "acu-v2-continuation-materials__block",
-							open: ""
-						}, [
-							createBaseVNode(
-								"summary",
-								null,
-								"第 " + toDisplayString(stage.stageNumber) + " 阶段 · " + toDisplayString(stage.status) + " · " + toDisplayString(stage.completedTurns) + " / " + toDisplayString($setup.stageTotalTurns(stage)) + " 轮",
-								1
-								/* TEXT */
-							),
-							(openBlock(true), createElementBlock(
+							open: $setup.expandedHistoryStages.has(stage.stageId),
+							onToggle: ($event) => $setup.toggleHistoryStage(stage, $event)
+						}, [createBaseVNode(
+							"summary",
+							null,
+							"第 " + toDisplayString(stage.stageNumber) + " 阶段 · " + toDisplayString(stage.status) + " · " + toDisplayString(stage.completedTurns) + " / " + toDisplayString($setup.stageTotalTurns(stage)) + " 轮",
+							1
+							/* TEXT */
+						), $setup.expandedHistoryStages.has(stage.stageId) ? (openBlock(), createElementBlock(
+							Fragment,
+							{ key: 0 },
+							[(openBlock(true), createElementBlock(
 								Fragment,
 								null,
 								renderList([$setup.displayRevision(stage)], (revision) => {
 									return openBlock(), createElementBlock(
 										Fragment,
 										{ key: revision?.revision ?? "no-revision" },
-										[revision ? (openBlock(), createElementBlock("section", _hoisted_35$1, [
-											createBaseVNode("p", _hoisted_36$1, [
+										[revision ? (openBlock(), createElementBlock("section", _hoisted_36$1, [
+											createBaseVNode("p", _hoisted_37$1, [
 												createBaseVNode(
 													"strong",
 													null,
@@ -176648,21 +176817,21 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 												),
 												createBaseVNode(
 													"span",
-													_hoisted_37$1,
+													_hoisted_38$1,
 													"revision " + toDisplayString(revision.revision),
 													1
 													/* TEXT */
 												),
 												createBaseVNode(
 													"span",
-													_hoisted_38$1,
+													_hoisted_39$1,
 													toDisplayString(revision.frozen ? "已冻结" : "待确认"),
 													1
 													/* TEXT */
 												),
 												createBaseVNode(
 													"span",
-													_hoisted_39$1,
+													_hoisted_40,
 													"职责：" + toDisplayString($setup.ROLE_LABELS[revision.outline.role ?? ""] ?? revision.outline.role ?? "未标注"),
 													1
 													/* TEXT */
@@ -176670,12 +176839,12 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 											]),
 											createBaseVNode(
 												"p",
-												_hoisted_40,
+												_hoisted_41,
 												"阶段目标：" + toDisplayString(revision.outline.goal),
 												1
 												/* TEXT */
 											),
-											createBaseVNode("ol", _hoisted_41, [(openBlock(true), createElementBlock(
+											createBaseVNode("ol", _hoisted_42, [(openBlock(true), createElementBlock(
 												Fragment,
 												null,
 												renderList(revision.outline.nodes, (node) => {
@@ -176720,15 +176889,14 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 												128
 												/* KEYED_FRAGMENT */
 											))])
-										])) : (openBlock(), createElementBlock("p", _hoisted_42, "该阶段没有可展示的 revision。"))],
+										])) : (openBlock(), createElementBlock("p", _hoisted_43, "该阶段没有可展示的 revision。"))],
 										64
 										/* STABLE_FRAGMENT */
 									);
 								}),
 								128
 								/* KEYED_FRAGMENT */
-							)),
-							$setup.olderRevisions(stage).length ? (openBlock(), createElementBlock("details", _hoisted_43, [createBaseVNode(
+							)), $setup.olderRevisions(stage).length ? (openBlock(), createElementBlock("details", _hoisted_44, [createBaseVNode(
 								"summary",
 								null,
 								"旧 revision（" + toDisplayString($setup.olderRevisions(stage).length) + "）",
@@ -176747,7 +176915,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 										"revision " + toDisplayString(revision.revision) + " · " + toDisplayString(revision.reason) + " · " + toDisplayString(revision.outline.title),
 										1
 										/* TEXT */
-									), createBaseVNode("ol", _hoisted_44, [(openBlock(true), createElementBlock(
+									), createBaseVNode("ol", _hoisted_45, [(openBlock(true), createElementBlock(
 										Fragment,
 										null,
 										renderList(revision.outline.nodes, (node) => {
@@ -176769,8 +176937,10 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 								}),
 								128
 								/* KEYED_FRAGMENT */
-							))])) : createCommentVNode("v-if", true)
-						]);
+							))])) : createCommentVNode("v-if", true)],
+							64
+							/* STABLE_FRAGMENT */
+						)) : createCommentVNode("v-if", true)], 40, _hoisted_35$1);
 					}),
 					128
 					/* KEYED_FRAGMENT */
@@ -176794,12 +176964,12 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 				)),
 				$setup.materials.snapshot.value ? (openBlock(), createElementBlock(
 					"p",
-					_hoisted_45,
+					_hoisted_46,
 					" 结算水位：楼层 " + toDisplayString($setup.materials.snapshot.value.settledThroughIndex) + " · 伏笔 " + toDisplayString($setup.materials.snapshot.value.hooks.length) + " 条 · 信息差 " + toDisplayString($setup.materials.snapshot.value.infoGap.length) + " 条 · 长期约束 " + toDisplayString($setup.materials.snapshot.value.constraints.length) + " 条 · 故事时间 " + toDisplayString($setup.materials.snapshot.value.chronology.length) + " 条 · 修订号 " + toDisplayString($setup.materials.snapshot.value.revisions.hooks) + "/" + toDisplayString($setup.materials.snapshot.value.revisions.infoGap) + "/" + toDisplayString($setup.materials.snapshot.value.revisions.constraints) + "/" + toDisplayString($setup.materials.snapshot.value.revisions.chronology),
 					1
 					/* TEXT */
 				)) : createCommentVNode("v-if", true),
-				$setup.materials.snapshot.value ? (openBlock(), createElementBlock("p", _hoisted_46, [$setup.materials.diagnostics.value.adoptedIndex === null ? (openBlock(), createElementBlock(
+				$setup.materials.snapshot.value ? (openBlock(), createElementBlock("p", _hoisted_47, [$setup.materials.diagnostics.value.adoptedIndex === null ? (openBlock(), createElementBlock(
 					Fragment,
 					{ key: 0 },
 					[createTextVNode(" 当前聊天没有任何楼层带有资料快照。快照由子代理结算后写到当时的末楼，并跟着该楼层走：该楼被删除、重新生成或 swipe 时，资料会回退到更早楼层的快照；若此前只写过一次，就会回到空。 ")],
@@ -176857,19 +177027,19 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 				))])) : createCommentVNode("v-if", true),
 				$setup.materials.loadError.value ? (openBlock(), createElementBlock(
 					"p",
-					_hoisted_47,
+					_hoisted_48,
 					toDisplayString($setup.materials.loadError.value),
 					1
 					/* TEXT */
 				)) : createCommentVNode("v-if", true),
 				createCommentVNode(" 伏笔账本 "),
-				createBaseVNode("details", _hoisted_48, [
+				createBaseVNode("details", _hoisted_49, [
 					createBaseVNode("summary", null, [createTextVNode(
 						"伏笔账本 · " + toDisplayString($setup.materials.snapshot.value?.hooks.length ?? 0) + " 条",
 						1
 						/* TEXT */
-					), $setup.materials.modules.hooks.dirty ? (openBlock(), createElementBlock("span", _hoisted_49, "未保存")) : createCommentVNode("v-if", true)]),
-					!$setup.materials.snapshot.value?.hooks.length ? (openBlock(), createElementBlock("p", _hoisted_50, "还没有伏笔条目。")) : (openBlock(), createElementBlock("div", _hoisted_51, [(openBlock(true), createElementBlock(
+					), $setup.materials.modules.hooks.dirty ? (openBlock(), createElementBlock("span", _hoisted_50, "未保存")) : createCommentVNode("v-if", true)]),
+					!$setup.materials.snapshot.value?.hooks.length ? (openBlock(), createElementBlock("p", _hoisted_51, "还没有伏笔条目。")) : (openBlock(), createElementBlock("div", _hoisted_52, [(openBlock(true), createElementBlock(
 						Fragment,
 						null,
 						renderList($setup.materials.snapshot.value.hooks, (hook) => {
@@ -176880,7 +177050,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 									class: normalizeClass(["acu-v2-continuation-materials__card", { "acu-v2-continuation-materials__card--retired": hook.retired }])
 								},
 								[
-									createBaseVNode("p", _hoisted_52, [
+									createBaseVNode("p", _hoisted_53, [
 										createBaseVNode(
 											"strong",
 											null,
@@ -176890,21 +177060,21 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 										),
 										createBaseVNode(
 											"span",
-											_hoisted_53,
+											_hoisted_54,
 											toDisplayString($setup.HOOK_STATUS_LABELS[hook.status] ?? hook.status),
 											1
 											/* TEXT */
 										),
 										createBaseVNode(
 											"span",
-											_hoisted_54,
+											_hoisted_55,
 											toDisplayString($setup.HOOK_IMPORTANCE_LABELS[hook.importance] ?? hook.importance),
 											1
 											/* TEXT */
 										),
 										hook.retired ? (openBlock(), createElementBlock(
 											"span",
-											_hoisted_55,
+											_hoisted_56,
 											"已退休" + toDisplayString(hook.retiredReason ? `：${hook.retiredReason}` : ""),
 											1
 											/* TEXT */
@@ -176912,12 +177082,12 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 									]),
 									createBaseVNode(
 										"p",
-										_hoisted_56,
+										_hoisted_57,
 										toDisplayString(hook.summary),
 										1
 										/* TEXT */
 									),
-									createBaseVNode("p", _hoisted_57, [createTextVNode(
+									createBaseVNode("p", _hoisted_58, [createTextVNode(
 										"植入楼层 " + toDisplayString(hook.plantedIndex) + " · 最近更新楼层 " + toDisplayString(hook.updatedIndex),
 										1
 										/* TEXT */
@@ -176940,7 +177110,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 						128
 						/* KEYED_FRAGMENT */
 					))])),
-					createBaseVNode("details", _hoisted_58, [
+					createBaseVNode("details", _hoisted_59, [
 						_cache[31] || (_cache[31] = createBaseVNode(
 							"summary",
 							null,
@@ -176955,12 +177125,12 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 						}, null, 8, ["model-value"]),
 						$setup.materials.modules.hooks.error ? (openBlock(), createElementBlock(
 							"p",
-							_hoisted_59,
+							_hoisted_60,
 							toDisplayString($setup.materials.modules.hooks.error),
 							1
 							/* TEXT */
 						)) : createCommentVNode("v-if", true),
-						createBaseVNode("div", _hoisted_60, [createVNode($setup["AcuButton"], {
+						createBaseVNode("div", _hoisted_61, [createVNode($setup["AcuButton"], {
 							disabled: !$setup.materials.modules.hooks.dirty,
 							onClick: _cache[2] || (_cache[2] = ($event) => $setup.materials.discard("hooks"))
 						}, {
@@ -176986,13 +177156,13 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 					])
 				]),
 				createCommentVNode(" 认知与信息差 "),
-				createBaseVNode("details", _hoisted_61, [
+				createBaseVNode("details", _hoisted_62, [
 					createBaseVNode("summary", null, [createTextVNode(
 						"认知与信息差 · " + toDisplayString($setup.materials.snapshot.value?.infoGap.length ?? 0) + " 条",
 						1
 						/* TEXT */
-					), $setup.materials.modules.infoGap.dirty ? (openBlock(), createElementBlock("span", _hoisted_62, "未保存")) : createCommentVNode("v-if", true)]),
-					!$setup.materials.snapshot.value?.infoGap.length ? (openBlock(), createElementBlock("p", _hoisted_63, "还没有信息差条目。")) : (openBlock(), createElementBlock("div", _hoisted_64, [(openBlock(true), createElementBlock(
+					), $setup.materials.modules.infoGap.dirty ? (openBlock(), createElementBlock("span", _hoisted_63, "未保存")) : createCommentVNode("v-if", true)]),
+					!$setup.materials.snapshot.value?.infoGap.length ? (openBlock(), createElementBlock("p", _hoisted_64, "还没有信息差条目。")) : (openBlock(), createElementBlock("div", _hoisted_65, [(openBlock(true), createElementBlock(
 						Fragment,
 						null,
 						renderList($setup.materials.snapshot.value.infoGap, (gap) => {
@@ -177003,7 +177173,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 									class: normalizeClass(["acu-v2-continuation-materials__card", { "acu-v2-continuation-materials__card--retired": gap.retired }])
 								},
 								[
-									createBaseVNode("p", _hoisted_65, [
+									createBaseVNode("p", _hoisted_66, [
 										createBaseVNode(
 											"strong",
 											null,
@@ -177020,21 +177190,21 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 										),
 										createBaseVNode(
 											"span",
-											_hoisted_66,
+											_hoisted_67,
 											toDisplayString($setup.REVEAL_STATUS_LABELS[gap.revealStatus] ?? gap.revealStatus),
 											1
 											/* TEXT */
 										),
 										gap.revealIndex !== null ? (openBlock(), createElementBlock(
 											"span",
-											_hoisted_67,
+											_hoisted_68,
 											"揭示楼层 " + toDisplayString(gap.revealIndex),
 											1
 											/* TEXT */
 										)) : createCommentVNode("v-if", true),
 										gap.retired ? (openBlock(), createElementBlock(
 											"span",
-											_hoisted_68,
+											_hoisted_69,
 											"已退休" + toDisplayString(gap.retiredReason ? `：${gap.retiredReason}` : ""),
 											1
 											/* TEXT */
@@ -177042,14 +177212,14 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 									]),
 									createBaseVNode(
 										"p",
-										_hoisted_69,
+										_hoisted_70,
 										"客观事实：" + toDisplayString(gap.objectiveFact),
 										1
 										/* TEXT */
 									),
 									createBaseVNode(
 										"p",
-										_hoisted_70,
+										_hoisted_71,
 										"读者已知：" + toDisplayString(gap.readerKnown || "（未记录）"),
 										1
 										/* TEXT */
@@ -177080,7 +177250,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 						128
 						/* KEYED_FRAGMENT */
 					))])),
-					createBaseVNode("details", _hoisted_71, [
+					createBaseVNode("details", _hoisted_72, [
 						_cache[34] || (_cache[34] = createBaseVNode(
 							"summary",
 							null,
@@ -177095,12 +177265,12 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 						}, null, 8, ["model-value"]),
 						$setup.materials.modules.infoGap.error ? (openBlock(), createElementBlock(
 							"p",
-							_hoisted_72,
+							_hoisted_73,
 							toDisplayString($setup.materials.modules.infoGap.error),
 							1
 							/* TEXT */
 						)) : createCommentVNode("v-if", true),
-						createBaseVNode("div", _hoisted_73, [createVNode($setup["AcuButton"], {
+						createBaseVNode("div", _hoisted_74, [createVNode($setup["AcuButton"], {
 							disabled: !$setup.materials.modules.infoGap.dirty,
 							onClick: _cache[5] || (_cache[5] = ($event) => $setup.materials.discard("infoGap"))
 						}, {
@@ -177126,13 +177296,13 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 					])
 				]),
 				createCommentVNode(" 长期约束 "),
-				createBaseVNode("details", _hoisted_74, [
+				createBaseVNode("details", _hoisted_75, [
 					createBaseVNode("summary", null, [createTextVNode(
 						"长期约束 · " + toDisplayString($setup.materials.snapshot.value?.constraints.length ?? 0) + " 条",
 						1
 						/* TEXT */
-					), $setup.materials.modules.constraints.dirty ? (openBlock(), createElementBlock("span", _hoisted_75, "未保存")) : createCommentVNode("v-if", true)]),
-					!$setup.materials.snapshot.value?.constraints.length ? (openBlock(), createElementBlock("p", _hoisted_76, "还没有长期约束。")) : (openBlock(), createElementBlock("div", _hoisted_77, [(openBlock(true), createElementBlock(
+					), $setup.materials.modules.constraints.dirty ? (openBlock(), createElementBlock("span", _hoisted_76, "未保存")) : createCommentVNode("v-if", true)]),
+					!$setup.materials.snapshot.value?.constraints.length ? (openBlock(), createElementBlock("p", _hoisted_77, "还没有长期约束。")) : (openBlock(), createElementBlock("div", _hoisted_78, [(openBlock(true), createElementBlock(
 						Fragment,
 						null,
 						renderList($setup.materials.snapshot.value.constraints, (constraint) => {
@@ -177140,7 +177310,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 								key: constraint.id,
 								class: "acu-v2-continuation-materials__card"
 							}, [
-								createBaseVNode("p", _hoisted_78, [createBaseVNode(
+								createBaseVNode("p", _hoisted_79, [createBaseVNode(
 									"strong",
 									null,
 									toDisplayString(constraint.id),
@@ -177149,12 +177319,12 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 								)]),
 								createBaseVNode(
 									"p",
-									_hoisted_79,
+									_hoisted_80,
 									toDisplayString(constraint.text),
 									1
 									/* TEXT */
 								),
-								createBaseVNode("p", _hoisted_80, [createTextVNode(
+								createBaseVNode("p", _hoisted_81, [createTextVNode(
 									"登记楼层 " + toDisplayString(constraint.createdIndex),
 									1
 									/* TEXT */
@@ -177174,7 +177344,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 						128
 						/* KEYED_FRAGMENT */
 					))])),
-					createBaseVNode("details", _hoisted_81, [
+					createBaseVNode("details", _hoisted_82, [
 						_cache[37] || (_cache[37] = createBaseVNode(
 							"summary",
 							null,
@@ -177189,12 +177359,12 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 						}, null, 8, ["model-value"]),
 						$setup.materials.modules.constraints.error ? (openBlock(), createElementBlock(
 							"p",
-							_hoisted_82,
+							_hoisted_83,
 							toDisplayString($setup.materials.modules.constraints.error),
 							1
 							/* TEXT */
 						)) : createCommentVNode("v-if", true),
-						createBaseVNode("div", _hoisted_83, [createVNode($setup["AcuButton"], {
+						createBaseVNode("div", _hoisted_84, [createVNode($setup["AcuButton"], {
 							disabled: !$setup.materials.modules.constraints.dirty,
 							onClick: _cache[8] || (_cache[8] = ($event) => $setup.materials.discard("constraints"))
 						}, {
@@ -177220,13 +177390,13 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 					])
 				]),
 				createCommentVNode(" 故事年代学账本 "),
-				createBaseVNode("details", _hoisted_84, [
+				createBaseVNode("details", _hoisted_85, [
 					createBaseVNode("summary", null, [createTextVNode(
 						"故事年代学账本 · " + toDisplayString($setup.materials.snapshot.value?.chronology.length ?? 0) + " 条",
 						1
 						/* TEXT */
-					), $setup.materials.modules.chronology.dirty ? (openBlock(), createElementBlock("span", _hoisted_85, "未保存")) : createCommentVNode("v-if", true)]),
-					!$setup.materials.snapshot.value?.chronology.length ? (openBlock(), createElementBlock("p", _hoisted_86, "还没有已结算的故事时间记录。时间事实由结算维护代理依据真实正文登记；大纲里的时间字段是计划。")) : (openBlock(), createElementBlock("div", _hoisted_87, [(openBlock(true), createElementBlock(
+					), $setup.materials.modules.chronology.dirty ? (openBlock(), createElementBlock("span", _hoisted_86, "未保存")) : createCommentVNode("v-if", true)]),
+					!$setup.materials.snapshot.value?.chronology.length ? (openBlock(), createElementBlock("p", _hoisted_87, "还没有已结算的故事时间记录。时间事实由结算维护代理依据真实正文登记；大纲里的时间字段是计划。")) : (openBlock(), createElementBlock("div", _hoisted_88, [(openBlock(true), createElementBlock(
 						Fragment,
 						null,
 						renderList($setup.materials.snapshot.value.chronology, (entry) => {
@@ -177237,7 +177407,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 									class: normalizeClass(["acu-v2-continuation-materials__card", { "acu-v2-continuation-materials__card--retired": entry.retired }])
 								},
 								[
-									createBaseVNode("p", _hoisted_88, [
+									createBaseVNode("p", _hoisted_89, [
 										createBaseVNode(
 											"strong",
 											null,
@@ -177254,14 +177424,14 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 										),
 										createBaseVNode(
 											"span",
-											_hoisted_89,
+											_hoisted_90,
 											toDisplayString($setup.CHRONOLOGY_PRECISION_LABELS[entry.precision] ?? entry.precision),
 											1
 											/* TEXT */
 										),
 										entry.retired ? (openBlock(), createElementBlock(
 											"span",
-											_hoisted_90,
+											_hoisted_91,
 											"已作废" + toDisplayString(entry.retiredReason ? `：${entry.retiredReason}` : ""),
 											1
 											/* TEXT */
@@ -177269,21 +177439,21 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 									]),
 									createBaseVNode(
 										"p",
-										_hoisted_91,
+										_hoisted_92,
 										"累计经过：" + toDisplayString(entry.elapsed),
 										1
 										/* TEXT */
 									),
 									createBaseVNode(
 										"p",
-										_hoisted_92,
+										_hoisted_93,
 										"时间转换：" + toDisplayString(entry.transition),
 										1
 										/* TEXT */
 									),
 									createBaseVNode(
 										"p",
-										_hoisted_93,
+										_hoisted_94,
 										"证据楼层 " + toDisplayString(entry.evidenceIndexes.join("、")) + " · 结算楼层 " + toDisplayString(entry.updatedIndex),
 										1
 										/* TEXT */
@@ -177296,7 +177466,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 						128
 						/* KEYED_FRAGMENT */
 					))])),
-					createBaseVNode("details", _hoisted_94, [
+					createBaseVNode("details", _hoisted_95, [
 						_cache[40] || (_cache[40] = createBaseVNode(
 							"summary",
 							null,
@@ -177311,12 +177481,12 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 						}, null, 8, ["model-value"]),
 						$setup.materials.modules.chronology.error ? (openBlock(), createElementBlock(
 							"p",
-							_hoisted_95,
+							_hoisted_96,
 							toDisplayString($setup.materials.modules.chronology.error),
 							1
 							/* TEXT */
 						)) : createCommentVNode("v-if", true),
-						createBaseVNode("div", _hoisted_96, [createVNode($setup["AcuButton"], {
+						createBaseVNode("div", _hoisted_97, [createVNode($setup["AcuButton"], {
 							disabled: !$setup.materials.modules.chronology.dirty,
 							onClick: _cache[11] || (_cache[11] = ($event) => $setup.materials.discard("chronology"))
 						}, {
@@ -177358,19 +177528,19 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 				)),
 				$setup.materials.snapshot.value ? (openBlock(), createElementBlock(
 					"p",
-					_hoisted_97,
+					_hoisted_98,
 					" 条目 " + toDisplayString($setup.materials.snapshot.value.webRefs.length) + " 条（活跃 " + toDisplayString($setup.materials.snapshot.value.webRefs.filter((entry) => !entry.retired).length) + "）· 修订号 " + toDisplayString($setup.materials.snapshot.value.revisions.webRefs),
 					1
 					/* TEXT */
 				)) : createCommentVNode("v-if", true),
 				$setup.materials.loadError.value ? (openBlock(), createElementBlock(
 					"p",
-					_hoisted_98,
+					_hoisted_99,
 					toDisplayString($setup.materials.loadError.value),
 					1
 					/* TEXT */
 				)) : createCommentVNode("v-if", true),
-				!$setup.materials.snapshot.value?.webRefs.length ? (openBlock(), createElementBlock("p", _hoisted_99, " 还没有百科资料。在续写设置里勾选「启用开场百科检索」后，新任务第一次规划前会自动检索；主 Agent 之后也可按需派工 web-researcher。 ")) : (openBlock(), createElementBlock("div", _hoisted_100, [(openBlock(true), createElementBlock(
+				!$setup.materials.snapshot.value?.webRefs.length ? (openBlock(), createElementBlock("p", _hoisted_100, " 还没有百科资料。在续写设置里勾选「启用开场百科检索」后，新任务第一次规划前会自动检索；主 Agent 之后也可按需派工 web-researcher。 ")) : (openBlock(), createElementBlock("div", _hoisted_101, [(openBlock(true), createElementBlock(
 					Fragment,
 					null,
 					renderList($setup.materials.snapshot.value.webRefs, (ref) => {
@@ -177381,7 +177551,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 								class: normalizeClass(["acu-v2-continuation-materials__card", { "acu-v2-continuation-materials__card--retired": ref.retired }])
 							},
 							[
-								createBaseVNode("summary", _hoisted_101, [
+								createBaseVNode("summary", _hoisted_102, [
 									createBaseVNode(
 										"strong",
 										null,
@@ -177398,7 +177568,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 									),
 									createBaseVNode(
 										"span",
-										_hoisted_102,
+										_hoisted_103,
 										toDisplayString($setup.WEB_REF_SOURCE_LABELS[ref.source] ?? ref.source),
 										1
 										/* TEXT */
@@ -177423,14 +177593,14 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 									)),
 									ref.sourceStatus !== "ok" ? (openBlock(), createElementBlock(
 										"span",
-										_hoisted_103,
+										_hoisted_104,
 										toDisplayString($setup.WEB_REF_STATUS_LABELS[ref.sourceStatus] ?? ref.sourceStatus),
 										1
 										/* TEXT */
 									)) : createCommentVNode("v-if", true),
 									ref.retired ? (openBlock(), createElementBlock(
 										"span",
-										_hoisted_104,
+										_hoisted_105,
 										"已退休" + toDisplayString(ref.retiredReason ? `：${ref.retiredReason}` : ""),
 										1
 										/* TEXT */
@@ -177438,24 +177608,24 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 								]),
 								createBaseVNode(
 									"p",
-									_hoisted_105,
+									_hoisted_106,
 									toDisplayString(ref.brief),
 									1
 									/* TEXT */
 								),
 								ref.summary ? (openBlock(), createElementBlock(
 									"p",
-									_hoisted_106,
+									_hoisted_107,
 									toDisplayString(ref.summary),
 									1
 									/* TEXT */
 								)) : createCommentVNode("v-if", true),
-								createBaseVNode("p", _hoisted_107, [
+								createBaseVNode("p", _hoisted_108, [
 									createBaseVNode("a", {
 										href: ref.url,
 										target: "_blank",
 										rel: "noopener noreferrer"
-									}, toDisplayString(ref.url), 9, _hoisted_108),
+									}, toDisplayString(ref.url), 9, _hoisted_109),
 									ref.query ? (openBlock(), createElementBlock(
 										Fragment,
 										{ key: 0 },
@@ -177487,7 +177657,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 					128
 					/* KEYED_FRAGMENT */
 				))])),
-				createBaseVNode("details", _hoisted_109, [
+				createBaseVNode("details", _hoisted_110, [
 					_cache[44] || (_cache[44] = createBaseVNode(
 						"summary",
 						null,
@@ -177509,12 +177679,12 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 					}, null, 8, ["model-value"]),
 					$setup.materials.modules.webRefs.error ? (openBlock(), createElementBlock(
 						"p",
-						_hoisted_110,
+						_hoisted_111,
 						toDisplayString($setup.materials.modules.webRefs.error),
 						1
 						/* TEXT */
 					)) : createCommentVNode("v-if", true),
-					createBaseVNode("div", _hoisted_111, [createVNode($setup["AcuButton"], {
+					createBaseVNode("div", _hoisted_112, [createVNode($setup["AcuButton"], {
 						disabled: !$setup.materials.modules.webRefs.dirty,
 						onClick: _cache[14] || (_cache[14] = ($event) => $setup.materials.discard("webRefs"))
 					}, {
@@ -177555,19 +177725,19 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 				)),
 				$setup.materials.snapshot.value ? (openBlock(), createElementBlock(
 					"p",
-					_hoisted_112,
+					_hoisted_113,
 					" 总纲 " + toDisplayString($setup.materials.snapshot.value.storyArc.length) + " 条 · 修订号 " + toDisplayString($setup.materials.snapshot.value.revisions.storyArc),
 					1
 					/* TEXT */
 				)) : createCommentVNode("v-if", true),
 				$setup.materials.loadError.value ? (openBlock(), createElementBlock(
 					"p",
-					_hoisted_113,
+					_hoisted_114,
 					toDisplayString($setup.materials.loadError.value),
 					1
 					/* TEXT */
 				)) : createCommentVNode("v-if", true),
-				!$setup.materials.snapshot.value?.storyArc.length ? (openBlock(), createElementBlock("p", _hoisted_114, " 还没有故事总纲。开始规划后主 Agent 会先派工 arc-architect 立总纲。 ")) : (openBlock(), createElementBlock("div", _hoisted_115, [(openBlock(true), createElementBlock(
+				!$setup.materials.snapshot.value?.storyArc.length ? (openBlock(), createElementBlock("p", _hoisted_115, " 还没有故事总纲。开始规划后主 Agent 会先派工 arc-architect 立总纲。 ")) : (openBlock(), createElementBlock("div", _hoisted_116, [(openBlock(true), createElementBlock(
 					Fragment,
 					null,
 					renderList($setup.materials.snapshot.value.storyArc, (arc) => {
@@ -177578,7 +177748,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 								class: normalizeClass(["acu-v2-continuation-materials__card", { "acu-v2-continuation-materials__card--retired": arc.retired }])
 							},
 							[
-								createBaseVNode("p", _hoisted_116, [
+								createBaseVNode("p", _hoisted_117, [
 									createBaseVNode(
 										"strong",
 										null,
@@ -177588,14 +177758,14 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 									),
 									createBaseVNode(
 										"span",
-										_hoisted_117,
+										_hoisted_118,
 										toDisplayString(arc.scope === "story" ? "全书方向" : "卷台阶"),
 										1
 										/* TEXT */
 									),
 									createBaseVNode(
 										"span",
-										_hoisted_118,
+										_hoisted_119,
 										toDisplayString($setup.ARC_STATUS_LABELS[arc.status] ?? arc.status),
 										1
 										/* TEXT */
@@ -177609,7 +177779,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 									),
 									arc.retired ? (openBlock(), createElementBlock(
 										"span",
-										_hoisted_119,
+										_hoisted_120,
 										"已退休" + toDisplayString(arc.retiredReason ? `：${arc.retiredReason}` : ""),
 										1
 										/* TEXT */
@@ -177617,28 +177787,28 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 								]),
 								createBaseVNode(
 									"p",
-									_hoisted_120,
+									_hoisted_121,
 									"方向：" + toDisplayString(arc.direction),
 									1
 									/* TEXT */
 								),
 								arc.escalation ? (openBlock(), createElementBlock(
 									"p",
-									_hoisted_121,
+									_hoisted_122,
 									"冲突高度：" + toDisplayString(arc.escalation),
 									1
 									/* TEXT */
 								)) : createCommentVNode("v-if", true),
 								arc.withheld ? (openBlock(), createElementBlock(
 									"p",
-									_hoisted_122,
+									_hoisted_123,
 									"禁翻底牌：" + toDisplayString(arc.withheld),
 									1
 									/* TEXT */
 								)) : createCommentVNode("v-if", true),
 								createBaseVNode(
 									"p",
-									_hoisted_123,
+									_hoisted_124,
 									" 已承载阶段：" + toDisplayString(arc.stageNumbers.length ? arc.stageNumbers.join("、") : "（尚未承载）"),
 									1
 									/* TEXT */
@@ -177651,7 +177821,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 					128
 					/* KEYED_FRAGMENT */
 				))])),
-				createBaseVNode("details", _hoisted_124, [
+				createBaseVNode("details", _hoisted_125, [
 					_cache[49] || (_cache[49] = createBaseVNode(
 						"summary",
 						null,
@@ -177666,12 +177836,12 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 					}, null, 8, ["model-value"]),
 					$setup.materials.modules.storyArc.error ? (openBlock(), createElementBlock(
 						"p",
-						_hoisted_125,
+						_hoisted_126,
 						toDisplayString($setup.materials.modules.storyArc.error),
 						1
 						/* TEXT */
 					)) : createCommentVNode("v-if", true),
-					createBaseVNode("div", _hoisted_126, [createVNode($setup["AcuButton"], {
+					createBaseVNode("div", _hoisted_127, [createVNode($setup["AcuButton"], {
 						disabled: !$setup.materials.modules.storyArc.dirty,
 						onClick: _cache[17] || (_cache[17] = ($event) => $setup.materials.discard("storyArc"))
 					}, {
@@ -177701,7 +177871,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 		))
 	]);
 }
-var ContinuationMaterialsPanel = /* @__PURE__ */ _export_sfc(_sfc_main$m, [["render", _sfc_render$m], ["__scopeId", "data-v-dc9d5023"]]);
+var ContinuationMaterialsPanel = /* @__PURE__ */ _export_sfc(_sfc_main$m, [["render", _sfc_render$m], ["__scopeId", "data-v-4c2bb65c"]]);
 
 /** 连续高压轮上限的可配置上界。页面是 .vue，不能直接 import 服务层常量，由本组合式函数中转。 */
 const CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_UI_ACU = CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_ACU;
@@ -178193,15 +178363,15 @@ function useContinuationSession() {
     }
     /**
      * 从持久会话回灌历史条目。切换聊天后也应调用：不同聊天的会话记录互不相干。
-     * 回灌用完整时间线而不是模型投影视图：压缩不删原始消息，用户在界面上仍能
-     * 回看交接文件之前的历史；交接文件本身按发生位置插在时间线里。
+     * 回灌用展示时间线而不是模型投影视图，交接文件按截止位置插入。
+     * 只读取日志容量内的尾部窗口（含交接条目）；更早历史仍完整保存在聊天中。
      * 读取失败不影响页面可用性——回灌只是历史展示，实时通道仍然工作。
      */
     function hydrate() {
         if (hasAgentSessionEntries_ACU())
             return;
         try {
-            const timeline = readAgentConversationTimeline_ACU();
+            const timeline = readAgentConversationTimeline_ACU(undefined, { maxEntries: SESSION_ENTRY_LIMIT_ACU });
             if (timeline.length)
                 hydrateAgentSessionLog_ACU(timeline.map(projectMessage_ACU));
         }
@@ -178838,8 +179008,8 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-v2-continuation-page[data-v-f6ccc365] { min-height: 100%; padding: 20px; display: grid; gap: 18px;\n}\n.acu-v2-continuation-page__layout[data-v-f6ccc365] { align-items: start;\n}\n.acu-v2-continuation-page__actions[data-v-f6ccc365] { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 12px;\n}\n.acu-v2-continuation-page__actions--start[data-v-f6ccc365] { justify-content: flex-start; margin-top: 0; margin-bottom: 12px;\n}\n.acu-v2-continuation-page__file-input[data-v-f6ccc365] { display: none;\n}\n.acu-v2-continuation-page__error[data-v-f6ccc365] { color: var(--acu-danger, #d65b5b); white-space: pre-wrap;\n}\n.acu-v2-continuation-page__meta[data-v-f6ccc365] { color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap;\n}\n.acu-v2-continuation-page__settings-grid[data-v-f6ccc365] { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start;\n}\n.acu-v2-continuation-page__settings-grid label[data-v-f6ccc365] { display: grid; gap: 5px; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-page__settings-grid select[data-v-f6ccc365] { min-height: 30px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 30%, transparent); border-radius: 4px; background: var(--acu-bg-2); color: var(--acu-text-1);\n}\n.acu-v2-continuation-page__toggles[data-v-f6ccc365] { display: flex; flex-wrap: wrap; gap: 14px; margin: 14px 0;\n}\n.acu-v2-continuation-page__groups[data-v-f6ccc365] { display: flex; flex-direction: column; gap: 8px; margin-top: 4px;\n}\n.acu-v2-continuation-page__group[data-v-f6ccc365] {\r\n  border: 1px solid var(--acu-border, color-mix(in srgb, var(--acu-text-3) 18%, transparent));\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-bg-2) 72%, transparent);\n}\n.acu-v2-continuation-page__group[data-v-f6ccc365] .acu-disclosure-group__header { border-radius: var(--acu-radius-sm);\n}\n.acu-v2-continuation-page__group[data-v-f6ccc365] .acu-disclosure-group__body { gap: 12px; padding: 12px;\n}\n.acu-v2-continuation-page__group[data-v-f6ccc365] .acu-disclosure-group__meta { max-width: 55%; overflow: hidden; text-overflow: ellipsis;\n}\n.acu-v2-continuation-page__group .acu-v2-continuation-page__actions[data-v-f6ccc365] { margin-top: 0;\n}\n.acu-v2-continuation-page__subheading[data-v-f6ccc365] { margin: 4px 0 0; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px); font-weight: 600;\n}\n.acu-v2-continuation-page__subheading[data-v-f6ccc365]:first-child { margin-top: 0;\n}\n@media (max-width: 860px) {\n.acu-v2-continuation-page[data-v-f6ccc365] { padding: 14px;\n}\n}\n@media (max-width: 640px) {\n.acu-v2-continuation-page[data-v-f6ccc365] { padding: 10px; gap: 12px;\n}\n.acu-v2-continuation-page__settings-grid[data-v-f6ccc365] { grid-template-columns: 1fr;\n}\n.acu-v2-continuation-page__actions[data-v-f6ccc365] > * { flex: 1 1 auto;\n}\n.acu-v2-continuation-page__group[data-v-f6ccc365] .acu-disclosure-group__meta { display: none;\n}\n}\r\n", "src/presentation-v2/pages/ContinuationPage.vue#style-0-f6ccc365");
-var ContinuationPage_vue_vue_type_style_index_0_scoped_f6ccc365_lang = null;
+injectSfcStyle("\n.acu-v2-continuation-page[data-v-ad1b4f2a] { min-height: 100%; padding: 20px; display: grid; gap: 18px;\n}\n.acu-v2-continuation-page__layout[data-v-ad1b4f2a] { align-items: start;\n}\n.acu-v2-continuation-page__actions[data-v-ad1b4f2a] { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 12px;\n}\n.acu-v2-continuation-page__actions--start[data-v-ad1b4f2a] { justify-content: flex-start; margin-top: 0; margin-bottom: 12px;\n}\n.acu-v2-continuation-page__file-input[data-v-ad1b4f2a] { display: none;\n}\n.acu-v2-continuation-page__error[data-v-ad1b4f2a] { color: var(--acu-danger, #d65b5b); white-space: pre-wrap;\n}\n.acu-v2-continuation-page__meta[data-v-ad1b4f2a] { color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap;\n}\n.acu-v2-continuation-page__settings-grid[data-v-ad1b4f2a] { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start;\n}\n.acu-v2-continuation-page__settings-grid label[data-v-ad1b4f2a] { display: grid; gap: 5px; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-page__settings-grid select[data-v-ad1b4f2a] { min-height: 30px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 30%, transparent); border-radius: 4px; background: var(--acu-bg-2); color: var(--acu-text-1);\n}\n.acu-v2-continuation-page__toggles[data-v-ad1b4f2a] { display: flex; flex-wrap: wrap; gap: 14px; margin: 14px 0;\n}\n.acu-v2-continuation-page__groups[data-v-ad1b4f2a] { display: flex; flex-direction: column; gap: 8px; margin-top: 4px;\n}\n.acu-v2-continuation-page__group[data-v-ad1b4f2a] {\r\n  border: 1px solid var(--acu-border, color-mix(in srgb, var(--acu-text-3) 18%, transparent));\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-bg-2) 72%, transparent);\n}\n.acu-v2-continuation-page__group[data-v-ad1b4f2a] .acu-disclosure-group__header { border-radius: var(--acu-radius-sm);\n}\n.acu-v2-continuation-page__group[data-v-ad1b4f2a] .acu-disclosure-group__body { gap: 12px; padding: 12px;\n}\n.acu-v2-continuation-page__group[data-v-ad1b4f2a] .acu-disclosure-group__meta { max-width: 55%; overflow: hidden; text-overflow: ellipsis;\n}\n.acu-v2-continuation-page__group .acu-v2-continuation-page__actions[data-v-ad1b4f2a] { margin-top: 0;\n}\n.acu-v2-continuation-page__subheading[data-v-ad1b4f2a] { margin: 4px 0 0; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px); font-weight: 600;\n}\n.acu-v2-continuation-page__subheading[data-v-ad1b4f2a]:first-child { margin-top: 0;\n}\n@media (max-width: 860px) {\n.acu-v2-continuation-page[data-v-ad1b4f2a] { padding: 14px;\n}\n}\n@media (max-width: 640px) {\n.acu-v2-continuation-page[data-v-ad1b4f2a] { padding: 10px; gap: 12px;\n}\n.acu-v2-continuation-page__settings-grid[data-v-ad1b4f2a] { grid-template-columns: 1fr;\n}\n.acu-v2-continuation-page__actions[data-v-ad1b4f2a] > * { flex: 1 1 auto;\n}\n.acu-v2-continuation-page__group[data-v-ad1b4f2a] .acu-disclosure-group__meta { display: none;\n}\n}\r\n", "src/presentation-v2/pages/ContinuationPage.vue#style-0-ad1b4f2a");
+var ContinuationPage_vue_vue_type_style_index_0_scoped_ad1b4f2a_lang = null;
 
 const _hoisted_1$l = { class: "acu-v2-continuation-page" };
 const _hoisted_2$j = {
@@ -178888,7 +179058,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("section", _hoisted_1$l, [
 		createVNode($setup["AcuPanel"], {
 			title: "Agent 会话",
-			description: "像和 coding agent 对话一样使用：随时输入、随时打断。主 Agent 按需派工子代理并管理大纲，最终正文仍由酒馆模型生成。"
+			description: "像和 coding agent 对话一样使用：随时输入、随时打断。主 Agent 按需派工子代理并管理大纲，最终正文仍由酒馆模型生成。会话流最多显示最近 300 条，单条详情最多 2000 字；更早的持久记录仍保存在聊天中。"
 		}, {
 			default: withCtx(() => [createVNode($setup["ContinuationChat"], {
 				task: $setup.runtime.task.value,
@@ -179849,7 +180019,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 		})) : createCommentVNode("v-if", true)
 	]);
 }
-var ContinuationPage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-f6ccc365"]]);
+var ContinuationPage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-ad1b4f2a"]]);
 
 var _sfc_main$k = /*@__PURE__*/ defineComponent({
     __name: 'AcuStatsList',
@@ -185952,6 +186122,13 @@ function useSqlConsole() {
             return 'success';
         return isSqliteAvailable.value ? 'info' : 'warning';
     });
+    /**
+     * 换聊天后清空上一次查询结果：结果行属于切换前的聊天，
+     * 继续显示会让人照着旧行对新聊天下 SQL（写路径按当前隔离键落库）。
+     */
+    function clearResult() {
+        result.value = emptyResult();
+    }
     function refresh() {
         isSqliteAvailable.value = isSqliteMode();
     }
@@ -186061,6 +186238,7 @@ function useSqlConsole() {
         statusLabel,
         statusKind,
         refresh,
+        clearResult,
         setSql,
         clearSql,
         showTables,
@@ -186205,7 +186383,7 @@ const RULES = [
         test: /context[ _-]?length|maximum context|context window|too many tokens|tokens? (exceed|limit|too long)|prompt is too long|input is too long|max_tokens.*(exceed|invalid)|超出.*(上下文|长度)|上下文.*(超限|过长)|token.*超/,
         summary: '发送给模型的内容太长，超出了模型的上下文上限。',
         steps: [
-            '填表：到「填表规则」把「批处理大小」/「上下文楼层数」调小一些。',
+            '填表：到「填表规则」把「批处理层数」/「填表上下文层数」调小一些。',
             '智能续写：调小「正文可读窗口楼数」「会话自动总结阈值」与各项读取预算。',
             '换用上下文更大的模型，或精简过长的自定义提示词与世界书条目。',
         ],
@@ -186216,7 +186394,7 @@ const RULES = [
         summary: '服务商认为请求内容有问题（400）：通常是模型名或某个参数不被支持。',
         steps: [
             '到「API」页确认模型名拼写正确，最好通过「拉取模型列表」选择。',
-            '如果调整过 temperature / top_p 等高级参数或开启了「严格 JSON」，先恢复默认再试。',
+            '如果调整过 temperature / top_p 等高级参数，先恢复默认再试（「严格 JSON」开关已移除，无需寻找）。',
             '换一个模型试试：部分模型不支持 system 角色或某些字段。',
         ],
     },
@@ -186428,7 +186606,7 @@ const RULES = [
         steps: [
             '这通常是模型偶发抖动，直接重试一次。',
             '频繁出现时换用指令遵循更好的模型（更大参数、或官方渠道）。',
-            '填表可到「填表规则」开启「严格 JSON」或降低 temperature；检查自定义提示词是否要求了额外的输出格式。',
+            '填表可到「填表规则」降低 temperature 或精简自定义提示词；「严格 JSON」开关已移除，无需寻找。',
         ],
     },
     {
@@ -186569,7 +186747,7 @@ const RULES = [
         summary: '填表 / 数据合并流程失败。',
         steps: [
             SEE_PREVIOUS_LOG,
-            '到「填表规则」把批处理大小调小后重试。',
+            '到「填表规则」把「批处理层数」调小后重试。',
             '可到「填表工作台」使用手动填表 / 重填。',
         ],
     },
@@ -186868,7 +187046,7 @@ function useLogViewer() {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260919-08";
+        const stamp = "20260920-12";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -186877,7 +187055,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.6.5";
+        const v = "9.6.6";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {
@@ -187367,6 +187545,8 @@ var _sfc_main$c = /*@__PURE__*/ defineComponent({
                 logListRef.value.scrollTop = 0;
         }
         onMounted(sqlFlow.refresh);
+        // 换聊天即清空上一次查询结果：表里的行属于切换前的聊天，照着旧行点历史执行会把数据写进新聊天。
+        watchChatChanged_ACU(() => { sqlFlow.clearResult(); });
         watch(() => logFlow.visibleLogs.value.length, scrollLogListToTop, { flush: 'post' });
         const __returned__ = { sqlFlow, logFlow, debugFlow, logListRef, hintCache, hintFor, panelNavItems, onSqlEditorKeydown, formatTime, formatSqlCell, logLevelVariant, setLogLevelFilter, scrollLogListToTop, AcuBadge, AcuButton, AcuFormRow, AcuInput, AcuMessage, AcuMobilePanelNav, AcuPanel, AcuPanelGrid, AcuSelect, AcuTextarea, AcuToggle, get advancedToolsCopy() { return advancedToolsCopy; } };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
@@ -187374,8 +187554,8 @@ var _sfc_main$c = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-v2-advanced-tools-page[data-v-3319b194] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-advanced-tools-page__sql-panel[data-v-3319b194],\r\n.acu-v2-advanced-tools-page__log-panel[data-v-3319b194],\r\n.acu-v2-advanced-tools-page__debug-panel[data-v-3319b194] {\r\n  min-width: 0;\n}\n.acu-v2-advanced-tools-page__debug-actions[data-v-3319b194] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__quick-actions[data-v-3319b194],\r\n.acu-v2-advanced-tools-page__log-actions[data-v-3319b194] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-textarea[data-v-3319b194] {\r\n  font-family: var(--acu-font-mono);\r\n  min-height: 210px;\r\n  white-space: pre;\n}\n.acu-v2-advanced-tools-page__sql-actions[data-v-3319b194] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\r\n  justify-content: flex-end;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-advanced-tools-page__sql-status[data-v-3319b194] {\r\n  margin-left: auto;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.5;\n}\n.acu-v2-advanced-tools-page__sql-status--success[data-v-3319b194] {\r\n  color: var(--acu-success);\n}\n.acu-v2-advanced-tools-page__sql-status--warning[data-v-3319b194] {\r\n  color: var(--acu-warning);\n}\n.acu-v2-advanced-tools-page__sql-status--error[data-v-3319b194] {\r\n  color: var(--acu-danger);\n}\n.acu-v2-advanced-tools-page__sql-result-section[data-v-3319b194],\r\n.acu-v2-advanced-tools-page__sql-history-section[data-v-3319b194] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-v2-advanced-tools-page__sql-history-section[data-v-3319b194] {\r\n  padding-top: 12px;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n}\n.acu-v2-advanced-tools-page__section-title[data-v-3319b194] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 600;\r\n  line-height: 1.35;\n}\n.acu-v2-advanced-tools-page__empty[data-v-3319b194] {\r\n  min-height: 96px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: center;\r\n  border: 0;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__empty--compact[data-v-3319b194] {\r\n  min-height: 72px;\n}\n.acu-v2-advanced-tools-page__empty--log[data-v-3319b194] {\r\n  min-height: 180px;\r\n  border: 0;\n}\n.acu-v2-advanced-tools-page__sql-table-wrap[data-v-3319b194] {\r\n  max-height: 330px;\r\n  overflow: auto;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-result-table[data-v-3319b194] {\r\n  width: 100%;\r\n  border-collapse: collapse;\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-advanced-tools-page__sql-result-table th[data-v-3319b194],\r\n.acu-v2-advanced-tools-page__sql-result-table td[data-v-3319b194] {\r\n  max-width: 300px;\r\n  padding: 7px 10px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  text-align: left;\r\n  white-space: nowrap;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\n}\n.acu-v2-advanced-tools-page__sql-result-table th[data-v-3319b194] {\r\n  position: sticky;\r\n  top: 0;\r\n  z-index: 1;\r\n  background: var(--acu-bg-1);\r\n  color: var(--acu-text-1);\r\n  font-weight: 600;\n}\n.acu-v2-advanced-tools-page__sql-result-table tbody tr[data-v-3319b194]:nth-child(even) {\r\n  background: color-mix(in srgb, var(--acu-text-3) 5%, transparent);\n}\n.acu-v2-advanced-tools-page__cell-null[data-v-3319b194],\r\n.acu-v2-advanced-tools-page__empty-cell[data-v-3319b194] {\r\n  color: var(--acu-text-3);\r\n  font-style: italic;\n}\n.acu-v2-advanced-tools-page__sql-result-meta[data-v-3319b194] {\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: right;\n}\n.acu-v2-advanced-tools-page__sql-error[data-v-3319b194] {\r\n  margin: 0;\r\n  min-height: 96px;\r\n  padding: 12px;\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-danger) 8%, transparent);\r\n  color: var(--acu-danger);\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__filter-grid[data-v-3319b194] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 12px;\r\n  align-items: stretch;\n}\n.acu-v2-advanced-tools-page__keyword-row[data-v-3319b194] {\r\n  grid-column: 1 / -1;\n}\n.acu-v2-advanced-tools-page__log-control-row[data-v-3319b194] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  min-width: 0;\n}\n.acu-v2-advanced-tools-page__log-control-main[data-v-3319b194] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 10px 14px;\r\n  align-items: center;\r\n  justify-content: space-between;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-3319b194] {\r\n  width: max-content;\r\n  max-width: 100%;\r\n  display: grid;\r\n  grid-template-columns: max-content max-content;\r\n  gap: 10px 18px;\r\n  align-items: center;\r\n  justify-content: flex-start;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-3319b194] .acu-toggle {\r\n  width: max-content;\r\n  max-width: none;\r\n  min-width: max-content;\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-3319b194] .acu-toggle__label {\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__hint[data-v-3319b194] {\r\n  max-width: 100%;\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\r\n  overflow-wrap: anywhere;\n}\n.acu-v2-advanced-tools-page__sql-history-list[data-v-3319b194],\r\n.acu-v2-advanced-tools-page__log-list[data-v-3319b194] {\r\n  overflow: auto;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-list[data-v-3319b194] {\r\n  max-height: 230px;\n}\n.acu-v2-advanced-tools-page__log-list[data-v-3319b194] {\r\n  min-height: 360px;\r\n  max-height: 58vh;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-3319b194],\r\n.acu-v2-advanced-tools-page__log-row[data-v-3319b194] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 8px;\r\n  align-items: baseline;\r\n  padding: 7px 10px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-3319b194] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: stretch;\r\n  gap: 6px;\r\n  padding-block: 9px;\r\n  border: 0;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  background: transparent;\r\n  color: inherit;\r\n  cursor: pointer;\r\n  font: inherit;\r\n  text-align: left;\r\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-advanced-tools-page__log-row[data-v-3319b194] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: stretch;\r\n  gap: 6px;\r\n  padding-block: 9px;\n}\n.acu-v2-advanced-tools-page__log-meta[data-v-3319b194] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 6px 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-history-meta[data-v-3319b194] {\r\n  flex-wrap: nowrap;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-3319b194]:last-child,\r\n.acu-v2-advanced-tools-page__log-row[data-v-3319b194]:last-child {\r\n  border-bottom: 0;\n}\n.acu-v2-advanced-tools-page__sql-history-item--failure[data-v-3319b194],\r\n.acu-v2-advanced-tools-page__log-row--error[data-v-3319b194] {\r\n  background: color-mix(in srgb, var(--acu-danger) 7%, transparent);\n}\n.acu-v2-advanced-tools-page__log-row--warn[data-v-3319b194] {\r\n  background: color-mix(in srgb, var(--acu-warning) 6%, transparent);\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-3319b194]:hover {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-3319b194]:focus-visible {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\r\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\r\n  outline: none;\n}\n.acu-v2-advanced-tools-page__log-time[data-v-3319b194],\r\n.acu-v2-advanced-tools-page__log-tag[data-v-3319b194],\r\n.acu-v2-advanced-tools-page__log-message[data-v-3319b194] {\r\n  min-width: 0;\r\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-advanced-tools-page__log-time[data-v-3319b194] {\r\n  color: var(--acu-text-3);\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__log-tag[data-v-3319b194] {\r\n  flex: 1 1 180px;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  color: var(--acu-text-2);\n}\n.acu-v2-advanced-tools-page__log-message[data-v-3319b194] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__log-body[data-v-3319b194] {\r\n  display: block;\r\n  width: 100%;\n}\n.acu-v2-advanced-tools-page__log-hint[data-v-3319b194] {\r\n  min-width: 0;\r\n  margin-top: 2px;\r\n  border-left: 2px solid color-mix(in srgb, var(--acu-warning) 70%, transparent);\r\n  border-radius: 0 var(--acu-radius-sm) var(--acu-radius-sm) 0;\r\n  background: color-mix(in srgb, var(--acu-warning) 6%, var(--acu-bg-1));\r\n  font-family: var(--acu-font-sans, inherit);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__log-hint-summary[data-v-3319b194] {\r\n  display: flex;\r\n  align-items: baseline;\r\n  gap: 6px;\r\n  padding: 6px 10px;\r\n  color: var(--acu-text-2);\r\n  cursor: pointer;\r\n  list-style: none;\r\n  user-select: none;\n}\n.acu-v2-advanced-tools-page__log-hint-summary[data-v-3319b194]::-webkit-details-marker {\r\n  display: none;\n}\n.acu-v2-advanced-tools-page__log-hint-summary[data-v-3319b194]:hover {\r\n  background: var(--acu-hover-overlay);\n}\n.acu-v2-advanced-tools-page__log-hint-summary[data-v-3319b194]:focus-visible {\r\n  outline: none;\r\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-v2-advanced-tools-page__log-hint-icon[data-v-3319b194] {\r\n  flex: 0 0 auto;\r\n  color: var(--acu-warning);\r\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-advanced-tools-page__log-hint-text[data-v-3319b194] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  overflow-wrap: anywhere;\n}\n.acu-v2-advanced-tools-page__log-hint-toggle[data-v-3319b194] {\r\n  flex: 0 0 auto;\r\n  color: var(--acu-accent);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__log-hint-toggle[data-v-3319b194]::after {\r\n  content: ' ▾';\n}\n.acu-v2-advanced-tools-page__log-hint[open] .acu-v2-advanced-tools-page__log-hint-toggle[data-v-3319b194]::after {\r\n  content: ' ▴';\n}\n.acu-v2-advanced-tools-page__log-hint-steps[data-v-3319b194] {\r\n  margin: 0;\r\n  padding: 2px 10px 8px 30px;\r\n  color: var(--acu-text-2);\n}\n.acu-v2-advanced-tools-page__log-hint-steps li[data-v-3319b194] {\r\n  margin: 2px 0;\r\n  overflow-wrap: anywhere;\n}\n@media (max-width: 1080px) {\n.acu-v2-advanced-tools-page[data-v-3319b194] {\r\n    padding: 14px;\n}\n.acu-v2-advanced-tools-page__sql-actions[data-v-3319b194] {\r\n    justify-content: stretch;\n}\n.acu-v2-advanced-tools-page__sql-status[data-v-3319b194] {\r\n    width: 100%;\r\n    margin-left: 0;\r\n    text-align: right;\n}\n.acu-v2-advanced-tools-page__filter-grid[data-v-3319b194] {\r\n    grid-template-columns: 1fr;\n}\n.acu-v2-advanced-tools-page__log-control-main[data-v-3319b194] {\r\n    align-items: stretch;\r\n    flex-direction: column;\r\n    justify-content: flex-start;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-3319b194] {\r\n    align-self: flex-start;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-3319b194],\r\n  .acu-v2-advanced-tools-page__log-row[data-v-3319b194] {\r\n    padding-inline: 9px;\n}\n}\r\n", "src/presentation-v2/pages/AdvancedToolsPage.vue#style-0-3319b194");
-var AdvancedToolsPage_vue_vue_type_style_index_0_scoped_3319b194_lang = null;
+injectSfcStyle("\n.acu-v2-advanced-tools-page[data-v-2685d6d8] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-advanced-tools-page__sql-panel[data-v-2685d6d8],\r\n.acu-v2-advanced-tools-page__log-panel[data-v-2685d6d8],\r\n.acu-v2-advanced-tools-page__debug-panel[data-v-2685d6d8] {\r\n  min-width: 0;\n}\n.acu-v2-advanced-tools-page__debug-actions[data-v-2685d6d8] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__quick-actions[data-v-2685d6d8],\r\n.acu-v2-advanced-tools-page__log-actions[data-v-2685d6d8] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-textarea[data-v-2685d6d8] {\r\n  font-family: var(--acu-font-mono);\r\n  min-height: 210px;\r\n  white-space: pre;\n}\n.acu-v2-advanced-tools-page__sql-actions[data-v-2685d6d8] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\r\n  justify-content: flex-end;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-advanced-tools-page__sql-status[data-v-2685d6d8] {\r\n  margin-left: auto;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.5;\n}\n.acu-v2-advanced-tools-page__sql-status--success[data-v-2685d6d8] {\r\n  color: var(--acu-success);\n}\n.acu-v2-advanced-tools-page__sql-status--warning[data-v-2685d6d8] {\r\n  color: var(--acu-warning);\n}\n.acu-v2-advanced-tools-page__sql-status--error[data-v-2685d6d8] {\r\n  color: var(--acu-danger);\n}\n.acu-v2-advanced-tools-page__sql-result-section[data-v-2685d6d8],\r\n.acu-v2-advanced-tools-page__sql-history-section[data-v-2685d6d8] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-v2-advanced-tools-page__sql-history-section[data-v-2685d6d8] {\r\n  padding-top: 12px;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n}\n.acu-v2-advanced-tools-page__section-title[data-v-2685d6d8] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 600;\r\n  line-height: 1.35;\n}\n.acu-v2-advanced-tools-page__empty[data-v-2685d6d8] {\r\n  min-height: 96px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: center;\r\n  border: 0;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__empty--compact[data-v-2685d6d8] {\r\n  min-height: 72px;\n}\n.acu-v2-advanced-tools-page__empty--log[data-v-2685d6d8] {\r\n  min-height: 180px;\r\n  border: 0;\n}\n.acu-v2-advanced-tools-page__sql-table-wrap[data-v-2685d6d8] {\r\n  max-height: 330px;\r\n  overflow: auto;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-result-table[data-v-2685d6d8] {\r\n  width: 100%;\r\n  border-collapse: collapse;\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-advanced-tools-page__sql-result-table th[data-v-2685d6d8],\r\n.acu-v2-advanced-tools-page__sql-result-table td[data-v-2685d6d8] {\r\n  max-width: 300px;\r\n  padding: 7px 10px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  text-align: left;\r\n  white-space: nowrap;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\n}\n.acu-v2-advanced-tools-page__sql-result-table th[data-v-2685d6d8] {\r\n  position: sticky;\r\n  top: 0;\r\n  z-index: 1;\r\n  background: var(--acu-bg-1);\r\n  color: var(--acu-text-1);\r\n  font-weight: 600;\n}\n.acu-v2-advanced-tools-page__sql-result-table tbody tr[data-v-2685d6d8]:nth-child(even) {\r\n  background: color-mix(in srgb, var(--acu-text-3) 5%, transparent);\n}\n.acu-v2-advanced-tools-page__cell-null[data-v-2685d6d8],\r\n.acu-v2-advanced-tools-page__empty-cell[data-v-2685d6d8] {\r\n  color: var(--acu-text-3);\r\n  font-style: italic;\n}\n.acu-v2-advanced-tools-page__sql-result-meta[data-v-2685d6d8] {\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: right;\n}\n.acu-v2-advanced-tools-page__sql-error[data-v-2685d6d8] {\r\n  margin: 0;\r\n  min-height: 96px;\r\n  padding: 12px;\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-danger) 8%, transparent);\r\n  color: var(--acu-danger);\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__filter-grid[data-v-2685d6d8] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 12px;\r\n  align-items: stretch;\n}\n.acu-v2-advanced-tools-page__keyword-row[data-v-2685d6d8] {\r\n  grid-column: 1 / -1;\n}\n.acu-v2-advanced-tools-page__log-control-row[data-v-2685d6d8] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  min-width: 0;\n}\n.acu-v2-advanced-tools-page__log-control-main[data-v-2685d6d8] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 10px 14px;\r\n  align-items: center;\r\n  justify-content: space-between;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-2685d6d8] {\r\n  width: max-content;\r\n  max-width: 100%;\r\n  display: grid;\r\n  grid-template-columns: max-content max-content;\r\n  gap: 10px 18px;\r\n  align-items: center;\r\n  justify-content: flex-start;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-2685d6d8] .acu-toggle {\r\n  width: max-content;\r\n  max-width: none;\r\n  min-width: max-content;\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-2685d6d8] .acu-toggle__label {\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__hint[data-v-2685d6d8] {\r\n  max-width: 100%;\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\r\n  overflow-wrap: anywhere;\n}\n.acu-v2-advanced-tools-page__sql-history-list[data-v-2685d6d8],\r\n.acu-v2-advanced-tools-page__log-list[data-v-2685d6d8] {\r\n  overflow: auto;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-list[data-v-2685d6d8] {\r\n  max-height: 230px;\n}\n.acu-v2-advanced-tools-page__log-list[data-v-2685d6d8] {\r\n  min-height: 360px;\r\n  max-height: 58vh;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-2685d6d8],\r\n.acu-v2-advanced-tools-page__log-row[data-v-2685d6d8] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 8px;\r\n  align-items: baseline;\r\n  padding: 7px 10px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-2685d6d8] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: stretch;\r\n  gap: 6px;\r\n  padding-block: 9px;\r\n  border: 0;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  background: transparent;\r\n  color: inherit;\r\n  cursor: pointer;\r\n  font: inherit;\r\n  text-align: left;\r\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-advanced-tools-page__log-row[data-v-2685d6d8] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: stretch;\r\n  gap: 6px;\r\n  padding-block: 9px;\n}\n.acu-v2-advanced-tools-page__log-meta[data-v-2685d6d8] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 6px 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-history-meta[data-v-2685d6d8] {\r\n  flex-wrap: nowrap;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-2685d6d8]:last-child,\r\n.acu-v2-advanced-tools-page__log-row[data-v-2685d6d8]:last-child {\r\n  border-bottom: 0;\n}\n.acu-v2-advanced-tools-page__sql-history-item--failure[data-v-2685d6d8],\r\n.acu-v2-advanced-tools-page__log-row--error[data-v-2685d6d8] {\r\n  background: color-mix(in srgb, var(--acu-danger) 7%, transparent);\n}\n.acu-v2-advanced-tools-page__log-row--warn[data-v-2685d6d8] {\r\n  background: color-mix(in srgb, var(--acu-warning) 6%, transparent);\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-2685d6d8]:hover {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-2685d6d8]:focus-visible {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\r\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\r\n  outline: none;\n}\n.acu-v2-advanced-tools-page__log-time[data-v-2685d6d8],\r\n.acu-v2-advanced-tools-page__log-tag[data-v-2685d6d8],\r\n.acu-v2-advanced-tools-page__log-message[data-v-2685d6d8] {\r\n  min-width: 0;\r\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-advanced-tools-page__log-time[data-v-2685d6d8] {\r\n  color: var(--acu-text-3);\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__log-tag[data-v-2685d6d8] {\r\n  flex: 1 1 180px;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  color: var(--acu-text-2);\n}\n.acu-v2-advanced-tools-page__log-message[data-v-2685d6d8] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__log-body[data-v-2685d6d8] {\r\n  display: block;\r\n  width: 100%;\n}\n.acu-v2-advanced-tools-page__log-hint[data-v-2685d6d8] {\r\n  min-width: 0;\r\n  margin-top: 2px;\r\n  border-left: 2px solid color-mix(in srgb, var(--acu-warning) 70%, transparent);\r\n  border-radius: 0 var(--acu-radius-sm) var(--acu-radius-sm) 0;\r\n  background: color-mix(in srgb, var(--acu-warning) 6%, var(--acu-bg-1));\r\n  font-family: var(--acu-font-sans, inherit);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__log-hint-summary[data-v-2685d6d8] {\r\n  display: flex;\r\n  align-items: baseline;\r\n  gap: 6px;\r\n  padding: 6px 10px;\r\n  color: var(--acu-text-2);\r\n  cursor: pointer;\r\n  list-style: none;\r\n  user-select: none;\n}\n.acu-v2-advanced-tools-page__log-hint-summary[data-v-2685d6d8]::-webkit-details-marker {\r\n  display: none;\n}\n.acu-v2-advanced-tools-page__log-hint-summary[data-v-2685d6d8]:hover {\r\n  background: var(--acu-hover-overlay);\n}\n.acu-v2-advanced-tools-page__log-hint-summary[data-v-2685d6d8]:focus-visible {\r\n  outline: none;\r\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-v2-advanced-tools-page__log-hint-icon[data-v-2685d6d8] {\r\n  flex: 0 0 auto;\r\n  color: var(--acu-warning);\r\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-advanced-tools-page__log-hint-text[data-v-2685d6d8] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  overflow-wrap: anywhere;\n}\n.acu-v2-advanced-tools-page__log-hint-toggle[data-v-2685d6d8] {\r\n  flex: 0 0 auto;\r\n  color: var(--acu-accent);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__log-hint-toggle[data-v-2685d6d8]::after {\r\n  content: ' ▾';\n}\n.acu-v2-advanced-tools-page__log-hint[open] .acu-v2-advanced-tools-page__log-hint-toggle[data-v-2685d6d8]::after {\r\n  content: ' ▴';\n}\n.acu-v2-advanced-tools-page__log-hint-steps[data-v-2685d6d8] {\r\n  margin: 0;\r\n  padding: 2px 10px 8px 30px;\r\n  color: var(--acu-text-2);\n}\n.acu-v2-advanced-tools-page__log-hint-steps li[data-v-2685d6d8] {\r\n  margin: 2px 0;\r\n  overflow-wrap: anywhere;\n}\n@media (max-width: 1080px) {\n.acu-v2-advanced-tools-page[data-v-2685d6d8] {\r\n    padding: 14px;\n}\n.acu-v2-advanced-tools-page__sql-actions[data-v-2685d6d8] {\r\n    justify-content: stretch;\n}\n.acu-v2-advanced-tools-page__sql-status[data-v-2685d6d8] {\r\n    width: 100%;\r\n    margin-left: 0;\r\n    text-align: right;\n}\n.acu-v2-advanced-tools-page__filter-grid[data-v-2685d6d8] {\r\n    grid-template-columns: 1fr;\n}\n.acu-v2-advanced-tools-page__log-control-main[data-v-2685d6d8] {\r\n    align-items: stretch;\r\n    flex-direction: column;\r\n    justify-content: flex-start;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-2685d6d8] {\r\n    align-self: flex-start;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-2685d6d8],\r\n  .acu-v2-advanced-tools-page__log-row[data-v-2685d6d8] {\r\n    padding-inline: 9px;\n}\n}\r\n", "src/presentation-v2/pages/AdvancedToolsPage.vue#style-0-2685d6d8");
+var AdvancedToolsPage_vue_vue_type_style_index_0_scoped_2685d6d8_lang = null;
 
 const _hoisted_1$c = { class: "acu-v2-advanced-tools-page" };
 const _hoisted_2$b = {
@@ -187967,7 +188147,7 @@ function _sfc_render$c(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	})]);
 }
-var AdvancedToolsPage = /* @__PURE__ */ _export_sfc(_sfc_main$c, [["render", _sfc_render$c], ["__scopeId", "data-v-3319b194"]]);
+var AdvancedToolsPage = /* @__PURE__ */ _export_sfc(_sfc_main$c, [["render", _sfc_render$c], ["__scopeId", "data-v-2685d6d8"]]);
 
 const developerCopy = {
     panels: {
@@ -188219,6 +188399,10 @@ function readInitialActiveId(featureGates, isSqliteMode) {
     const persisted = readSection(SECTION_KEY$2);
     if (persisted && isKnownPage(persisted.activePageId)) {
         const activePageId = normalizePageId(persisted.activePageId) || persisted.activePageId;
+        // 重载后先留出可操作入口，避免重型续写页因历史数据异常反复卡住面板。
+        // 只影响新 store 初始化；本次会话内仍允许主动进入并保留当前页。
+        if (activePageId === 'continuation')
+            return defaultVisiblePageId();
         const page = ACU_V2_PAGE_REGISTRY.find(p => p.id === activePageId);
         const initialState = {
             activePageId,

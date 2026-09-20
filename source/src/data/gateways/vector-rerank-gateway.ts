@@ -120,42 +120,55 @@ async function requestRerankBatch_ACU(request: RerankBatchRequest_ACU): Promise<
     // 避免用户可配置端点被指向内网，或在非 TLS 端点上明文外发 Authorization。
     assertSafeHttpEndpoint_ACU(request.endpoint);
     // 超时可中断：rerank 在发送前同步链路上，挂起的上游不允许无限阻塞生成。
+    // 看门狗覆盖「fetch＋响应体消费」整段：只包 fetch 的话，上游只回响应头、
+    // 正文停滞时计时器已解除，请求永久挂起。成功路径行为不变。
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), VECTOR_RERANK_TIMEOUT_MS_ACU);
-    let response: Response;
+    const rerankTimeout_ACU = (): Error => new Error(
+        `Rerank 请求超时（${VECTOR_RERANK_TIMEOUT_MS_ACU}ms，${request.batchLabel}），已中断。`,
+    );
     try {
-        response = await fetch(request.endpoint, {
-            method: 'POST',
-            redirect: 'error', // 307/308 会把 POST 原样重放到重定向目标：SSRF 守卫只校发起前 URL，禁止重定向
-            headers: buildRerankHeaders_ACU(request.apiKey),
-            body: JSON.stringify(payload),
-            signal: controller.signal,
+        let response: Response;
+        try {
+            response = await fetch(request.endpoint, {
+                method: 'POST',
+                redirect: 'error', // 307/308 会把 POST 原样重放到重定向目标：SSRF 守卫只校发起前 URL，禁止重定向
+                headers: buildRerankHeaders_ACU(request.apiKey),
+                body: JSON.stringify(payload),
+                signal: controller.signal,
+            });
+        } catch (error: any) {
+            const rawReason = error?.message || String(error || '未知错误');
+            // 既有分类点：跨源被拒与真断网在浏览器侧同形（不透明 TypeError），归类为 CORS 并给出处置建议。
+            throw new Error(error?.name === 'AbortError'
+                ? `Rerank 请求超时（${VECTOR_RERANK_TIMEOUT_MS_ACU}ms，${request.batchLabel}），已中断。`
+                : isCrossOriginFetchRejection_ACU(error)
+                    ? `Rerank 请求网络失败（${rawReason}，${request.batchLabel}）：${VECTOR_CROSS_ORIGIN_FAILURE_HINT_ACU}`
+                    : `Rerank 请求网络失败（${request.batchLabel}）：${rawReason}`);
+        }
+
+        if (!response.ok) {
+            const detail = await response.text().catch((bodyError: any): string => {
+                if (bodyError?.name === 'AbortError') throw rerankTimeout_ACU();
+                return response.statusText;
+            });
+            throw new Error(`Rerank 请求失败（${request.batchLabel}）: ${response.status} ${detail}`);
+        }
+
+        const rawBody = await response.text().catch((bodyError: any): string => {
+            if (bodyError?.name === 'AbortError') throw rerankTimeout_ACU();
+            return '';
         });
-    } catch (error: any) {
-        const rawReason = error?.message || String(error || '未知错误');
-        // 既有分类点：跨源被拒与真断网在浏览器侧同形（不透明 TypeError），归类为 CORS 并给出处置建议。
-        throw new Error(error?.name === 'AbortError'
-            ? `Rerank 请求超时（${VECTOR_RERANK_TIMEOUT_MS_ACU}ms，${request.batchLabel}），已中断。`
-            : isCrossOriginFetchRejection_ACU(error)
-                ? `Rerank 请求网络失败（${rawReason}，${request.batchLabel}）：${VECTOR_CROSS_ORIGIN_FAILURE_HINT_ACU}`
-                : `Rerank 请求网络失败（${request.batchLabel}）：${rawReason}`);
+        let responsePayload: any;
+        try {
+            responsePayload = JSON.parse(rawBody);
+        } catch (_error) {
+            throw new Error(`Rerank 响应不是合法 JSON（${request.batchLabel}，前 200 字符：${rawBody.slice(0, 200)}）。`);
+        }
+        return extractRerankResults_ACU(responsePayload);
     } finally {
         clearTimeout(timer);
     }
-
-    if (!response.ok) {
-        const detail = await response.text().catch(() => response.statusText);
-        throw new Error(`Rerank 请求失败（${request.batchLabel}）: ${response.status} ${detail}`);
-    }
-
-    const rawBody = await response.text().catch((): string => '');
-    let responsePayload: any;
-    try {
-        responsePayload = JSON.parse(rawBody);
-    } catch (_error) {
-        throw new Error(`Rerank 响应不是合法 JSON（${request.batchLabel}，前 200 字符：${rawBody.slice(0, 200)}）。`);
-    }
-    return extractRerankResults_ACU(responsePayload);
 }
 
 /**

@@ -162,6 +162,37 @@ describe('resolveLogErrorHint', () => {
     expect(hint?.steps.join(' ')).not.toContain('检查浏览器的广告拦截 / 安全插件是否拦截了 .wasm 文件下载');
   });
 
+  it('指引只引用页面上真实存在的设置名，且不再引导已移除的「严格 JSON」开关', () => {
+    const fillSteps = resolveLogErrorHint({
+      level: 'error',
+      tag: '手动补填',
+      message: "API请求失败: 400 This model's maximum context length is 128000 tokens",
+    })?.steps.join(' ') ?? '';
+    expect(fillSteps).toContain('「批处理层数」');
+    expect(fillSteps).toContain('「填表上下文层数」');
+    expect(fillSteps).not.toContain('批处理大小');
+    expect(fillSteps).not.toContain('上下文楼层数');
+
+    for (const message of [
+      'Primary JSON parse failed for: "{...". Attempting sanitization pipeline...',
+      '[TemplateAssistant] draft 解析失败',
+    ]) {
+      const hint = resolveLogErrorHint({ level: 'error', tag: 'AI请求', message });
+      const steps = hint?.steps.join(' ') ?? '';
+      expect(hint).not.toBeNull();
+      expect(steps).not.toMatch(/开启「严格 JSON」/);
+      expect(steps).not.toMatch(/可到「填表规则」开启/);
+    }
+
+    const refill = resolveLogErrorHint({ level: 'error', tag: '手动补填', message: '[Manual Refill] 分组执行或同步聊天失败: Error: boom' });
+    expect(refill?.steps.join(' ')).toContain('「批处理层数」');
+
+    // http-400 那条也不得引导已移除的开关（与 json-ai-output 同口径）。
+    const badRequest = resolveLogErrorHint({ level: 'error', tag: 'AI请求', message: 'API请求失败: 400 unsupported parameter: top_k' });
+    expect(badRequest?.id).toBe('http-400');
+    expect(badRequest?.steps.join(' ') ?? '').not.toMatch(/开启了「严格 JSON」/);
+  });
+
   it('规则 ID 唯一', () => {
     expect(new Set(LOG_ERROR_HINT_RULE_IDS).size).toBe(LOG_ERROR_HINT_RULE_IDS.length);
   });

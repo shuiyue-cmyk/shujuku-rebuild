@@ -253,6 +253,34 @@ describe('getOriginalContent_ACU', () => {
     expect(getOriginalContent_ACU(1)).toBe('原始内容');
   });
 
+  it('缓存楼号相同但 message_id 已换楼时不得取外来原文（删楼位移）', () => {
+    mockGetLastOptimizationBase.mockReturnValue({
+      messageIndex: 1,
+      messageId: 'msgA',
+      baseContent: 'A 楼原文',
+    });
+    mockGetChatArray.mockReturnValue([
+      { is_user: true },
+      { is_user: false, message_id: 'msgB', extra: { _acu_original_content: 'B 楼自己的原文' } },
+    ]);
+    // 宿主 MESSAGE_DELETED 在 splice 之后才派发且不携带被删标识：删楼后楼号整体位移，
+    // 继续按楼号命中＝把别楼正文当本楼原文，并被永久钉进该楼 extra。
+    expect(getOriginalContent_ACU(1)).toBe('B 楼自己的原文');
+  });
+
+  it('message_id 确认命中当前楼时缓存优先于 extra', () => {
+    mockGetLastOptimizationBase.mockReturnValue({
+      messageIndex: 1,
+      messageId: 'msgB',
+      baseContent: '缓存原文',
+    });
+    mockGetChatArray.mockReturnValue([
+      { is_user: true },
+      { is_user: false, message_id: 'msgB', extra: { _acu_original_content: 'extra 原文' } },
+    ]);
+    expect(getOriginalContent_ACU(1)).toBe('缓存原文');
+  });
+
   it('从 extra 获取原始内容', () => {
     mockGetLastOptimizationBase.mockReturnValue(null);
     mockGetChatArray.mockReturnValue([

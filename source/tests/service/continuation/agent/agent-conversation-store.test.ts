@@ -151,6 +151,57 @@ describe('会话分段读取', () => {
 });
 
 describe('会话时间线（展示通道）', () => {
+  it('尾部窗口不校验窗口外正文（千楼规模）', () => {
+    let textReads = 0;
+    const chat = Array.from({ length: 1000 }, (_, floor) => ({
+      [AGENT_CONVERSATION_FIELD_ACU]: floorRecordWith(Array.from({ length: 10 }, (_, n) => ({
+        ...message_ACU(floor * 10 + n + 1, 'agent', ''),
+        get text() { textReads += 1; return '正文'; },
+      }))),
+    }));
+    const result = readAgentConversationTimeline_ACU(chat, { maxEntries: 300 });
+    expect(result).toHaveLength(300);
+    expect(result[0].id).toBe(9701);
+    expect(textReads).toBeLessThanOrEqual(600);
+  });
+
+  it('窗口保持 v1 基线替换与重复压缩标记择新语义', () => {
+    const chat = [
+      { [AGENT_CONVERSATION_FIELD_ACU]: floorRecordWith([message_ACU(1, 'agent', '被覆盖')], { compaction: { compactedThroughId: 1, report: '旧交接', at: 1 } }) },
+      { [AGENT_CONVERSATION_FIELD_ACU]: snapshotWith([message_ACU(2, 'user', '基线'), message_ACU(3, 'agent', '基线末条')]) },
+      { [AGENT_CONVERSATION_FIELD_ACU]: floorRecordWith([null, message_ACU(4, 'tool', '末条')], { compaction: { compactedThroughId: 1, report: '新交接', at: 2 } }) },
+    ];
+    const full = readAgentConversationTimeline_ACU(chat);
+    for (const maxEntries of [1, 2, 3, 4, 10]) {
+      expect(readAgentConversationTimeline_ACU(chat, { maxEntries })).toEqual(full.slice(-maxEntries));
+    }
+  });
+
+  it('窗口外损坏的压缩标记仍报错，不把权威错误静默藏掉', () => {
+    const chat = [
+      { [AGENT_CONVERSATION_FIELD_ACU]: floorRecordWith([], { compaction: { compactedThroughId: 1, report: '', at: 1 } }) },
+      { [AGENT_CONVERSATION_FIELD_ACU]: floorRecordWith([message_ACU(2, 'agent', '最近')]) },
+    ];
+    expect(() => readAgentConversationTimeline_ACU(chat, { maxEntries: 1 })).toThrow(ContinuationValidationError_ACU);
+  });
+
+  it.each([0, -1, 1.5, NaN, Infinity])('无效窗口 %s 保持完整读取', maxEntries => {
+    const chat = [{ [AGENT_CONVERSATION_FIELD_ACU]: floorRecordWith([message_ACU(1, 'agent', 'a'), message_ACU(2, 'agent', 'b')]) }];
+    expect(readAgentConversationTimeline_ACU(chat, { maxEntries })).toHaveLength(2);
+  });
+
+  it('展示窗口包含交接条目且不修改完整历史或模型视图', () => {
+    const chat = Array.from({ length: 6 }, (_, i) => ({
+      [AGENT_CONVERSATION_FIELD_ACU]: floorRecordWith([message_ACU(i + 1, 'agent', `消息${i + 1}`)], { compaction: { compactedThroughId: i + 1, report: `交接${i + 1}`, at: i + 1 } }),
+    }));
+    const before = JSON.stringify(chat);
+    const full = readAgentConversationTimeline_ACU(chat);
+    expect(readAgentConversationTimeline_ACU(chat, { maxEntries: 3 })).toEqual(full.slice(-3));
+    expect(JSON.stringify(chat)).toBe(before);
+    expect(readAgentConversationTimeline_ACU(chat)).toHaveLength(12);
+    expect(readAgentConversation_ACU(chat).nextId).toBe(7);
+  });
+
   it('保留全部原始消息，交接报告按截止位置插入且最新一份标注 AI 可见性边界', () => {
     const chat = [
       { mes: 'a', [AGENT_CONVERSATION_FIELD_ACU]: floorRecordWith([message_ACU(1, 'turn', '早期通告'), message_ACU(2, 'agent', '早期输出')]) },
@@ -207,6 +258,16 @@ describe('会话时间线（展示通道）', () => {
 });
 
 describe('会话落盘', () => {
+  it('超过 400 条且已有压缩标记时追加仍保留全部持久历史', async () => {
+    const original = Array.from({ length: 600 }, (_, i) => message_ACU(i + 1, 'agent', `历史${i + 1}`));
+    const chat: any[] = [{ mes: 'a', [AGENT_CONVERSATION_FIELD_ACU]: floorRecordWith(original, { compaction: { compactedThroughId: 500, report: '交接', at: 1 } }) }];
+    useChat(chat);
+    await appendPreparedAgentConversationMessages_ACU(chat, [message_ACU(601, 'agent', '新消息')]);
+    expect(chat[0][AGENT_CONVERSATION_FIELD_ACU].segment).toHaveLength(601);
+    expect(chat[0][AGENT_CONVERSATION_FIELD_ACU].segment.slice(0, 600)).toEqual(original);
+    expect(readAgentConversation_ACU(chat).nextId).toBe(602);
+  });
+
   it('段追加写入末楼并跳过已存在的 id；空聊天不写盘', async () => {
     const chat: any[] = [{ mes: 'a' }, { mes: 'b' }];
     useChat(chat);

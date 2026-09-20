@@ -5830,6 +5830,22 @@ describe('deriveSheetLifecycleFromFramesV2_ACU', () => {
     expect(first?.metrics?.frameCount).toBe(62);
   });
 
+  it('阶段 G2：等长但内容不同的 chat 数组不共享 in-flight 回放（按数组身份，而非长度）', async () => {
+    const { chat: chatA } = buildLongHistoryFixture_ACU();
+    const { chat: chatB } = buildLongHistoryFixture_ACU();
+    // 同长度、同表结构、不同单元格内容：模拟 TT 同页切聊天（CHAT_CHANGED 同页 emit、无 reload），
+    // A 的冷回放尚未 settle 时 B 的加载合并到达，两者在 in-flight 窗口内重叠。
+    // 改末帧 data_replace 载荷（每帧末尾的 data_replace 会覆盖同帧前面的 row_upsert，改前面无效）。
+    chatB[61].TavernDB_ACU_IsolatedData[''].storageFrame.logEntries[0].operations[10].data.sheet_0.content[1][1] = '另一聊天的值';
+    const [a, b] = await Promise.all([
+      loadTableStateFromFramesV2Detailed_ACU(chatA, '', { updateRuntimeState: false }),
+      loadTableStateFromFramesV2Detailed_ACU(chatB, '', { updateRuntimeState: false }),
+    ]);
+    expect(a?.metrics?.replayShareCount).toBe(0);
+    expect(b?.metrics?.replayShareCount).toBe(0);
+    expect(a?.data).not.toEqual(b?.data);
+  });
+
   it('阶段 G2：不同 boundary 的并发调用不共享（各跑各的全量回放）', async () => {
     const { chat } = buildLongHistoryFixture_ACU();
 

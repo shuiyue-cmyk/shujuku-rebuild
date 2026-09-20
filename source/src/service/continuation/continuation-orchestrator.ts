@@ -485,11 +485,18 @@ export class ContinuationOrchestrator_ACU {
    * 自动续写资格（只读）：一轮正文确认成功后，桥据此决定是否延迟触发下一轮。
    * 只有「暂停且无停止原因、无待处理正文、无遗留错误、阶段可继续」的任务才有资格；
    * 用户停止、时长/阶段数上限、大纲预览待确认、循环失败都会让资格消失。
+   *
+   * 输出必须同时交出资格与这份资格的归属（chatIdentity + taskId）：本方法读的是
+   * 「调用那一刻的当前聊天」，延迟链若只比 eligible，切聊天（导入/恢复走不重载的
+   * 同页换聊天）就会把 A 的延迟续写落到 B 的合格任务上。对照 retry 链——它的
+   * retryHostGenerationInner 与 getMatchingLocalRetryClaim 都核过聊天身份，
+   * 此前只有本链没核。（用函数名而非行号引用，行号会漂移。）
    */
-  readAutoContinueState(): { eligible: boolean; delaySeconds: number } {
+  readAutoContinueState(): { eligible: boolean; delaySeconds: number; chatIdentity: string | undefined; taskId: string | null } {
+    const chatIdentity = this.dependencies.getChatIdentity();
     const envelope = this.dependencies.store.readPersisted();
     const task = envelope?.activeTask;
-    if (!envelope || !task) return { eligible: false, delaySeconds: 0 };
+    if (!envelope || !task) return { eligible: false, delaySeconds: 0, chatIdentity, taskId: null };
     const stage = task.activeStageId ? task.stages.find(item => item.stageId === task.activeStageId) ?? null : null;
     const stageContinuable = !stage || ['running', 'completed'].includes(stage.status);
     const eligible = task.status === 'paused'
@@ -497,7 +504,7 @@ export class ContinuationOrchestrator_ACU {
       && task.lastError === null
       && !task.pendingHostTurn
       && stageContinuable;
-    return { eligible, delaySeconds: Math.max(0, envelope.settings.loopDelaySeconds) };
+    return { eligible, delaySeconds: Math.max(0, envelope.settings.loopDelaySeconds), chatIdentity, taskId: task.taskId };
   }
 
   /** Read-only bridge input; it never derives reload state or writes the envelope. */

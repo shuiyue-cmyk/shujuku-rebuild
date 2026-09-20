@@ -1,5 +1,6 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import {
+  SESSION_ENTRY_LIMIT_ACU,
   clearAgentSessionLog_ACU,
   hasAgentSessionEntries_ACU,
   hydrateAgentSessionLog_ACU,
@@ -10,7 +11,9 @@ import {
   type AgentSessionEntry_ACU,
   type AgentSessionEventInput_ACU,
 } from '../../service/continuation/agent/agent-session-log';
-import { readAgentConversationTimeline_ACU } from '../../service/continuation/agent/agent-conversation-store';
+import {
+  readAgentConversationTimeline_ACU,
+} from '../../service/continuation/agent/agent-conversation-store';
 import type { AgentConversationMessage_ACU } from '../../service/continuation/agent/agent-model';
 
 /**
@@ -48,14 +51,14 @@ export function useContinuationSession() {
 
   /**
    * 从持久会话回灌历史条目。切换聊天后也应调用：不同聊天的会话记录互不相干。
-   * 回灌用完整时间线而不是模型投影视图：压缩不删原始消息，用户在界面上仍能
-   * 回看交接文件之前的历史；交接文件本身按发生位置插在时间线里。
+   * 回灌用展示时间线而不是模型投影视图，交接文件按截止位置插入。
+   * 只读取日志容量内的尾部窗口（含交接条目）；更早历史仍完整保存在聊天中。
    * 读取失败不影响页面可用性——回灌只是历史展示，实时通道仍然工作。
    */
   function hydrate(): void {
     if (hasAgentSessionEntries_ACU()) return;
     try {
-      const timeline = readAgentConversationTimeline_ACU();
+      const timeline = readAgentConversationTimeline_ACU(undefined, { maxEntries: SESSION_ENTRY_LIMIT_ACU });
       if (timeline.length) hydrateAgentSessionLog_ACU(timeline.map(projectMessage_ACU));
     } catch { /* 持久会话不可读时保持空会话流，实时事件仍会显示。 */ }
     sync();

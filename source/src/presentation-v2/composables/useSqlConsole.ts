@@ -93,6 +93,14 @@ export function useSqlConsole() {
     return isSqliteAvailable.value ? 'info' : 'warning';
   });
 
+  /**
+   * 换聊天后清空上一次查询结果：结果行属于切换前的聊天，
+   * 继续显示会让人照着旧行对新聊天下 SQL（写路径按当前隔离键落库）。
+   */
+  function clearResult(): void {
+    result.value = emptyResult();
+  }
+
   function refresh(): void {
     isSqliteAvailable.value = isSqliteMode();
   }
@@ -212,6 +220,7 @@ export function useSqlConsole() {
     statusLabel,
     statusKind,
     refresh,
+    clearResult,
     setSql,
     clearSql,
     showTables,

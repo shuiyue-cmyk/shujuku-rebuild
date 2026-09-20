@@ -281,6 +281,7 @@ import AcuTextarea from '../components/_lib/AcuTextarea.vue';
 import AcuToggle from '../components/_lib/AcuToggle.vue';
 import { type LogEntry, type LogLevel } from '../../shared/log-buffer';
 import { useSqlConsole } from '../composables/useSqlConsole';
+import { watchChatChanged_ACU } from '../composables/useChatChangedListener';
 import { type LogErrorHint, resolveLogErrorHint } from '../composables/log-error-hints';
 import { type LogLevelFilter, useLogViewer } from '../composables/useLogViewer';
 import { useDebugPanel } from '../composables/useDebugPanel';
@@ -351,6 +352,8 @@ async function scrollLogListToTop(): Promise<void> {
 }
 
 onMounted(sqlFlow.refresh);
+// 换聊天即清空上一次查询结果：表里的行属于切换前的聊天，照着旧行点历史执行会把数据写进新聊天。
+watchChatChanged_ACU(() => { sqlFlow.clearResult(); });
 watch(() => logFlow.visibleLogs.value.length, scrollLogListToTop, { flush: 'post' });
 </script>
 

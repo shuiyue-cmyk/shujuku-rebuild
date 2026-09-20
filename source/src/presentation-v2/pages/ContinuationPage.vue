@@ -1,6 +1,6 @@
 <template>
   <section class="acu-v2-continuation-page">
-    <AcuPanel title="Agent 会话" description="像和 coding agent 对话一样使用：随时输入、随时打断。主 Agent 按需派工子代理并管理大纲，最终正文仍由酒馆模型生成。">
+    <AcuPanel title="Agent 会话" description="像和 coding agent 对话一样使用：随时输入、随时打断。主 Agent 按需派工子代理并管理大纲，最终正文仍由酒馆模型生成。会话流最多显示最近 300 条，单条详情最多 2000 字；更早的持久记录仍保存在聊天中。">
       <ContinuationChat
         :task="runtime.task.value"
         :entries="session.entries.value"

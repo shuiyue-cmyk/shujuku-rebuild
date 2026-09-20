@@ -248,12 +248,17 @@ describe('ContinuationOrchestrator_ACU', () => {
 
     // 非最后一轮的确认同样落 paused：自动续写与手动继续都从这个状态出发。
     expect(store.readPersisted()!.activeTask).toMatchObject({ status: 'paused', stopReason: null, lastError: null, pendingHostTurn: null });
-    expect(orchestrator.readAutoContinueState()).toEqual({ eligible: true, delaySeconds: 5 });
+    expect(orchestrator.readAutoContinueState()).toMatchObject({
+      eligible: true,
+      delaySeconds: 5,
+      chatIdentity: 'chat-a',
+      taskId: store.readPersisted()!.activeTask!.taskId,
+    });
   });
 
   it('denies auto-continue for stopped tasks, recorded errors, and pending host turns', async () => {
     const { orchestrator, store } = createOrchestrator();
-    expect(orchestrator.readAutoContinueState()).toEqual({ eligible: false, delaySeconds: 0 });
+    expect(orchestrator.readAutoContinueState()).toMatchObject({ eligible: false, delaySeconds: 0 });
 
     await orchestrator.createTask({ originInstruction: '推进剧情' });
     await orchestrator.continueTask();

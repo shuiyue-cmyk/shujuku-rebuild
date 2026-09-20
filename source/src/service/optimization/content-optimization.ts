@@ -660,6 +660,8 @@ import { isAiFloor_ACU } from '../../shared/ai-floor';
       messageIndex: Number.isInteger(payload.messageIndex) ? payload.messageIndex : -1,
       messageId: payload.messageId ?? null,
       baseContent: typeof payload.baseContent === 'string' ? payload.baseContent : '',
+      // 盖章：这个槽是全插件共用的一条记录，跨聊天同楼号会撞车 ⇒ 读取侧按聊天划界。
+      chatKey: String(currentChatFileIdentifier_ACU || ''),
       updatedAt: Date.now()
     };
 
@@ -669,13 +671,27 @@ import { isAiFloor_ACU } from '../../shared/ai-floor';
     return cache;
   }
 
+  /**
+   * 缓存条目是否属于当前聊天。
+   * 旧版本条目没有聊天章（无法判别），保持可用以免打断既有「重新优化」；
+   * 有章就必须与当前聊天一致——否则那是别的聊天留下的原文，拿过来会把外来正文钉进本楼。
+   */
+  function isOptimizationBaseInCurrentChat_ACU(cache: any): boolean {
+    if (!cache?.chatKey) return true;
+    return String(cache.chatKey) === String(currentChatFileIdentifier_ACU || '');
+  }
+
   export function getLastOptimizationBase_ACU() {
     if (lastOptimizedMessageMeta_ACU?.baseContent) {
-      return lastOptimizedMessageMeta_ACU;
+      if (!isOptimizationBaseInCurrentChat_ACU(lastOptimizedMessageMeta_ACU)) {
+        lastOptimizedMessageMeta_ACU = null;
+      } else {
+        return lastOptimizedMessageMeta_ACU;
+      }
     }
 
     const cachedBase = loadOptimizationBaseFromCache_ACU();
-    if (cachedBase?.baseContent) {
+    if (cachedBase?.baseContent && isOptimizationBaseInCurrentChat_ACU(cachedBase)) {
       lastOptimizedMessageMeta_ACU = cachedBase;
       return cachedBase;
     }

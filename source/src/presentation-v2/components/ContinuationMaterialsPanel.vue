@@ -89,9 +89,11 @@
           v-for="stage in historyStages"
           :key="stage.stageId"
           class="acu-v2-continuation-materials__block"
-          open
+          :open="expandedHistoryStages.has(stage.stageId)"
+          @toggle="toggleHistoryStage(stage, $event)"
         >
           <summary>第 {{ stage.stageNumber }} 阶段 · {{ stage.status }} · {{ stage.completedTurns }} / {{ stageTotalTurns(stage) }} 轮</summary>
+          <template v-if="expandedHistoryStages.has(stage.stageId)">
           <template v-for="revision in [displayRevision(stage)]" :key="revision?.revision ?? 'no-revision'">
             <section v-if="revision" class="acu-v2-continuation-materials__outline-summary">
               <p class="acu-v2-continuation-materials__outline-heading"><strong>{{ revision.outline.title }}</strong><span class="acu-v2-continuation-materials__badge">revision {{ revision.revision }}</span><span class="acu-v2-continuation-materials__badge">{{ revision.frozen ? '已冻结' : '待确认' }}</span><span class="acu-v2-continuation-materials__badge">职责：{{ ROLE_LABELS[revision.outline.role ?? ''] ?? revision.outline.role ?? '未标注' }}</span></p>
@@ -109,6 +111,7 @@
               <ol class="acu-v2-continuation-materials__list"><li v-for="node in revision.outline.nodes" :key="node.id"><strong>{{ node.title }}</strong>：{{ node.goal }}</li></ol>
             </details>
           </details>
+          </template>
         </details>
       </template>
     </template>
@@ -367,6 +370,7 @@ import { computed, onMounted, ref, watch } from 'vue';
 import AcuButton from './_lib/AcuButton.vue';
 import AcuTextarea from './_lib/AcuTextarea.vue';
 import { useContinuationMaterials } from '../composables/useContinuationMaterials';
+import { watchChatChanged_ACU } from '../composables/useChatChangedListener';
 import type { ContinuationStage_ACU, ContinuationTask_ACU, StageOutline_ACU, StageRevision_ACU } from '../../service/continuation/model'; // arch-ok: 仅类型导入，用于 props 标注，编译后无运行时依赖
 
 const props = defineProps<{
@@ -415,6 +419,21 @@ const outlineDirty = ref(false);
 const clearPending = ref(false);
 const activeVolume = computed(() => materials.snapshot.value?.storyArc.find(entry => entry.scope === 'volume' && !entry.retired && entry.status === 'active') ?? null);
 const historyStages = computed(() => (props.task?.stages ?? []).filter(stage => stage.stageId !== props.activeStage?.stageId));
+const expandedHistoryStages = ref(new Set<string>());
+
+function toggleHistoryStage(stage: ContinuationStage_ACU, event: Event): void {
+  if ((event.currentTarget as HTMLDetailsElement).open) expandedHistoryStages.value.add(stage.stageId);
+  else expandedHistoryStages.value.delete(stage.stageId);
+}
+
+watch(() => props.task?.taskId, () => expandedHistoryStages.value.clear());
+watchChatChanged_ACU(() => expandedHistoryStages.value.clear());
+watch(historyStages, stages => {
+  const current = new Set(stages.map(stage => stage.stageId));
+  for (const stage of expandedHistoryStages.value) {
+    if (!current.has(stage)) expandedHistoryStages.value.delete(stage);
+  }
+});
 
 function displayRevision(stage: ContinuationStage_ACU): StageRevision_ACU | null {
   return stage.revisions.find(revision => revision.revision === stage.activeRevision)

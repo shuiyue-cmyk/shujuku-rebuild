@@ -259,6 +259,16 @@ describe('router-store · 高手模式可见性', () => {
 });
 
 describe('router-store · 切页 + 持久化', () => {
+  it('冷启动不恢复智能续写页，但仍允许用户主动进入', async () => {
+    persistAdvancedMode('continuation');
+    const m = await freshImport();
+    m.pinia.setActivePinia(m.pinia.createPinia());
+    const r = m.router.useRouterStore();
+    expect(r.activePageId).toBe('dashboard');
+    r.setActivePage('continuation');
+    expect(r.activePageId).toBe('continuation');
+  });
+
   it('未持久化时默认页是 basic-config', async () => {
     const m = await freshImport();
     m.pinia.setActivePinia(m.pinia.createPinia());

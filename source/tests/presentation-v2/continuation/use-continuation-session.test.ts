@@ -38,6 +38,11 @@ beforeEach(() => {
 });
 
 describe('useContinuationSession', () => {
+  it('首次挂载向展示读取端传入有界窗口', () => {
+    const { app } = mountSession_ACU();
+    expect(harness.readTimeline).toHaveBeenCalledWith(undefined, { maxEntries: 300 });
+    app.unmount();
+  });
   it('挂载时把持久会话时间线按消息种类投影成会话流条目，交接文件是独立条目', () => {
     harness.readTimeline.mockReturnValue([
       { id: 'm1', kind: 'turn', text: '开始新的一轮规划', digest: '第 2 阶段 · 第 1 轮', createdAt: 1, turnKey: 'stage-1#1' },

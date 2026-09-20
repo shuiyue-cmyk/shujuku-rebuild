@@ -13,7 +13,7 @@ export interface ContinuationHostTurnRuntime_ACU {
   getChat(): any[];
   retryCurrentTurn(): Promise<{ retryHostGeneration?: boolean }>;
   readPendingHostTurn(): { settings: { loopTags: string; retryDelaySeconds?: number; minGenerationTokens?: number }; pending: { identity: TurnAttemptIdentity_ACU; capture: ContinuationHostGenerationCapture_ACU; status: 'awaiting_generation' | 'retry_ready' | 'exhausted' }; taskStopped?: boolean; taskRunning?: boolean } | null;
-  readAutoContinueState(): { eligible: boolean; delaySeconds: number };
+  readAutoContinueState(): { eligible: boolean; delaySeconds: number; chatIdentity?: string; taskId?: string | null };
   continueTask(): Promise<{ preparedTurn?: ContinuationPreparedTurnInstruction_ACU; retryHostGeneration?: boolean }>;
   recordHostTurn(input: { identity: TurnAttemptIdentity_ACU; capture: ContinuationHostGenerationCapture_ACU }): Promise<unknown>;
   bindHostTurnGeneration(identity: TurnAttemptIdentity_ACU, generationSeq: number): Promise<void>;
@@ -322,10 +322,14 @@ export class ContinuationHostGenerationBridge_ACU {
    */
   private async autoContinueAfterTurn_ACU(): Promise<void> {
     const runtime = this.dependencies.runtime;
-    const state = runtime.readAutoContinueState();
-    if (!state.eligible) return;
-    await this.dependencies.wait(state.delaySeconds * 1_000);
-    if (!runtime.readAutoContinueState().eligible) return;
+    const scheduled = runtime.readAutoContinueState();
+    if (!scheduled.eligible) return;
+    await this.dependencies.wait(scheduled.delaySeconds * 1_000);
+    const current = runtime.readAutoContinueState();
+    // 资格是按「当前聊天」算的：等待窗内换了聊天（导入/恢复走同页换聊天、不重载）
+    // 或任务被换掉时，这一轮的自动链不得去接管另一个聊天的合格任务。
+    if (!current.eligible) return;
+    if (scheduled.chatIdentity !== current.chatIdentity || scheduled.taskId !== current.taskId) return;
     try {
       const result = await runtime.continueTask();
       if (result.retryHostGeneration) await this.retryHostGeneration();

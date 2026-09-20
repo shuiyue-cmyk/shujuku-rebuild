@@ -45,6 +45,47 @@ beforeEach(() => {
 });
 
 describe('fetchAvailableModels_ACU', () => {
+  it('响应头之后正文停滞 ⇒ 探活窗口到点返回结构化超时，不会无限挂起', async () => {
+    vi.useFakeTimers();
+    try {
+      // 真实语义：signal 被 abort 后，尚未读完的响应体会以 AbortError 拒绝（undici 行为）。
+      const abortRejection = (signal: any) => new Promise<any>((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(Object.assign(new Error('Aborted'), { name: 'AbortError' })));
+      });
+      mockFetch.mockImplementationOnce((_url: string, init: any) => Promise.resolve({
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        text: () => abortRejection(init.signal),
+        json: () => abortRejection(init.signal),
+      }));
+      const pending = fetchAvailableModels_ACU('https://stalled.example/v1', 'sk-stalled');
+      // 探活前还有一道 SSRF 守卫的动态 import，需要多刷几个微任务才真正发出请求。
+      for (let i = 0; i < 30; i++) await Promise.resolve();
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(15_000);
+      const result = await pending;
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('端点状态检查超时');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('卡死的在飞探活不会被后续请求（含 force）复用', async () => {
+    let releaseFirst: (v: any) => void = () => {};
+    mockFetch.mockImplementationOnce(() => new Promise((resolve) => { releaseFirst = resolve; }));
+    const first = fetchAvailableModels_ACU('https://hang.example/v1', 'sk-hang');
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    mockFetch.mockResolvedValueOnce({ ok: true, status: 200, statusText: 'OK', json: async () => ({ models: [{ id: 'ok-after-hang' }] }) });
+    const retried = await fetchAvailableModels_ACU('https://hang.example/v1', 'sk-hang', undefined, { force: true });
+    expect(retried.success).toBe(true);
+    expect(retried.models).toContain('ok-after-hang');
+    releaseFirst({ ok: true, status: 200, statusText: 'OK', json: async () => ({ models: [{ id: 'late' }] }) });
+    await first;
+  });
+
   it('apiUrl 为空时返回错误', async () => {
     const result = await fetchAvailableModels_ACU('', 'key');
     expect(result.success).toBe(false);

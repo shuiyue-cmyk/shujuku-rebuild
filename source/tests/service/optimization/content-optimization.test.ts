@@ -11,6 +11,7 @@ const {
   mockFindProcessed,
   mockRecordProcessed,
   mockFilterExclusions,
+  mockChatKey,
 } = vi.hoisted(() => ({
   mockSettings: {
     contentOptimizationSettings: { maxOptimizations: 10, loopCount: 1, retryCount: 3 },
@@ -27,6 +28,8 @@ const {
     dropped: [],
     ranges: [],
   })),
+  // 聊天作用域可拨：正文优化基准按 chatKey 隔离，用例里靠它模拟「切聊天」。
+  mockChatKey: { value: 'test-chat' },
 }));
 
 vi.mock('../../../src/shared/defaults-json.js', () => ({
@@ -36,7 +39,7 @@ vi.mock('../../../src/shared/defaults-json.js', () => ({
 vi.mock('../../../src/service/runtime/state-manager', () => ({
   settings_ACU: mockSettings,
   currentJsonTableData_ACU: null,
-  currentChatFileIdentifier_ACU: 'test-chat',
+  get currentChatFileIdentifier_ACU() { return mockChatKey.value; },
 }));
 
 vi.mock('../../../src/data/gateways/chat-gateway', () => ({
@@ -178,6 +181,35 @@ describe('getLastOptimizationBase_ACU', () => {
     const result = getLastOptimizationBase_ACU();
     expect(result).not.toBeNull();
     expect(result!.baseContent).toBe('持久化内容');
+  });
+
+  it('写入时盖上当前聊天章', () => {
+    mockChatKey.value = 'chat-a';
+    const result = setLastOptimizationBase_ACU({ messageIndex: 2, messageId: 'm2', baseContent: '甲楼原文' });
+    expect(result.chatKey).toBe('chat-a');
+    mockChatKey.value = 'test-chat';
+  });
+
+  it('切聊天后外来基准作废：内存镜像与持久层都不命中', () => {
+    mockChatKey.value = 'chat-a';
+    setLastOptimizationBase_ACU({ messageIndex: 2, messageId: 'm2', baseContent: '甲楼原文' });
+    mockChatKey.value = 'chat-b';
+    mockLoadCache.mockReturnValue(null);
+    expect(getLastOptimizationBase_ACU()).toBeNull();
+
+    // 持久层里带着上一个聊天章的条目同样不得回放给当前聊天。
+    mockLoadCache.mockReturnValue({ messageIndex: 2, messageId: 'm2', baseContent: '甲楼原文', chatKey: 'chat-a' });
+    expect(getLastOptimizationBase_ACU()).toBeNull();
+
+    mockChatKey.value = 'test-chat';
+    mockLoadCache.mockReturnValue(null);
+  });
+
+  it('旧版本未盖章的缓存保持可用（不炸既有「重新优化」）', () => {
+    setLastOptimizationBase_ACU({ baseContent: '' });
+    mockLoadCache.mockReturnValue({ messageIndex: 1, baseContent: '遗留原文' });
+    expect(getLastOptimizationBase_ACU()?.baseContent).toBe('遗留原文');
+    mockLoadCache.mockReturnValue(null);
   });
 
   it('无任何缓存时返回 null', () => {

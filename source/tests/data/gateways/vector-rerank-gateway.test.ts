@@ -251,4 +251,28 @@ describe('createRerankScores_ACU 分批', () => {
     expect(await createRerankScores_ACU({ endpoint: 'https://rerank.test', model: 'm', query: 'q', documents: ['', '  '] })).toEqual([]);
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it('响应头到达后响应体停滞 → 看门狗仍中断（覆盖 body 读取）', async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn((_url: unknown, init: any) => Promise.resolve({
+        ok: true, status: 200, statusText: 'OK',
+        text: () => new Promise<string>((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => {
+            reject(Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' }));
+          });
+        }),
+      } as unknown as Response));
+    vi.stubGlobal('fetch', fetchMock);
+      const promise = createRerankScores_ACU({
+        endpoint: 'https://rerank.test', model: 'm', query: 'q', documents: ['a'],
+      });
+      const assertion = expect(promise).rejects.toThrow('请求超时');
+      await vi.runAllTimersAsync();
+      await assertion;
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

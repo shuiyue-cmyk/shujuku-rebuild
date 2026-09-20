@@ -380,4 +380,36 @@ describe('createEmbeddings_ACU 错误结构化分类（T3）', () => {
       httpStatus: 200,
     });
   });
+
+  it('响应头到达后响应体停滞 → 看门狗仍中断并归类 retryable（两次尝试都停滞）', async () => {
+    vi.useFakeTimers();
+    try {
+      // 上游只回响应头、正文永不结束：fetch 已 resolve，看门狗若只包 fetch 就永远不响。
+      const fetchMock = vi.fn((_url: unknown, init: any) => Promise.resolve({
+        ok: true, status: 200, statusText: 'OK', headers: new Headers(),
+        text: () => new Promise<string>((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => {
+            reject(Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' }));
+          });
+        }),
+      } as unknown as Response));
+    vi.stubGlobal('fetch', fetchMock);
+      const promise = createEmbeddings_ACU({
+        endpoint: 'https://embedding.test/v1',
+        apiKey: 'sk-1',
+        model: 'm',
+        input: ['x'],
+      });
+      const assertion = expect(promise).rejects.toMatchObject({
+        name: 'VectorEmbeddingError_ACU',
+        kind: 'retryable',
+      });
+      await vi.runAllTimersAsync();
+      await assertion;
+      await expect(promise.catch((error) => error.message)).resolves.toContain('超时');
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

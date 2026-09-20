@@ -68,6 +68,9 @@ function readInitialActiveId(featureGates: Record<string, boolean>, isSqliteMode
   const persisted = readSection<PersistedRouter>(SECTION_KEY);
   if (persisted && isKnownPage(persisted.activePageId)) {
     const activePageId = normalizePageId(persisted.activePageId) || persisted.activePageId;
+    // 重载后先留出可操作入口，避免重型续写页因历史数据异常反复卡住面板。
+    // 只影响新 store 初始化；本次会话内仍允许主动进入并保留当前页。
+    if (activePageId === 'continuation') return defaultVisiblePageId();
     const page = ACU_V2_PAGE_REGISTRY.find(p => p.id === activePageId);
     const initialState: RouterState = {
       activePageId,

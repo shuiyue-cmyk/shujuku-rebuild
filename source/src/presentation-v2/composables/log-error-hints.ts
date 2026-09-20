@@ -164,7 +164,7 @@ const RULES: HintRule[] = [
     test: /context[ _-]?length|maximum context|context window|too many tokens|tokens? (exceed|limit|too long)|prompt is too long|input is too long|max_tokens.*(exceed|invalid)|超出.*(上下文|长度)|上下文.*(超限|过长)|token.*超/,
     summary: '发送给模型的内容太长，超出了模型的上下文上限。',
     steps: [
-      '填表：到「填表规则」把「批处理大小」/「上下文楼层数」调小一些。',
+      '填表：到「填表规则」把「批处理层数」/「填表上下文层数」调小一些。',
       '智能续写：调小「正文可读窗口楼数」「会话自动总结阈值」与各项读取预算。',
       '换用上下文更大的模型，或精简过长的自定义提示词与世界书条目。',
     ],
@@ -175,7 +175,7 @@ const RULES: HintRule[] = [
     summary: '服务商认为请求内容有问题（400）：通常是模型名或某个参数不被支持。',
     steps: [
       '到「API」页确认模型名拼写正确，最好通过「拉取模型列表」选择。',
-      '如果调整过 temperature / top_p 等高级参数或开启了「严格 JSON」，先恢复默认再试。',
+      '如果调整过 temperature / top_p 等高级参数，先恢复默认再试（「严格 JSON」开关已移除，无需寻找）。',
       '换一个模型试试：部分模型不支持 system 角色或某些字段。',
     ],
   },
@@ -396,7 +396,7 @@ const RULES: HintRule[] = [
     steps: [
       '这通常是模型偶发抖动，直接重试一次。',
       '频繁出现时换用指令遵循更好的模型（更大参数、或官方渠道）。',
-      '填表可到「填表规则」开启「严格 JSON」或降低 temperature；检查自定义提示词是否要求了额外的输出格式。',
+      '填表可到「填表规则」降低 temperature 或精简自定义提示词；「严格 JSON」开关已移除，无需寻找。',
     ],
   },
   {
@@ -541,7 +541,7 @@ const RULES: HintRule[] = [
     summary: '填表 / 数据合并流程失败。',
     steps: [
       SEE_PREVIOUS_LOG,
-      '到「填表规则」把批处理大小调小后重试。',
+      '到「填表规则」把「批处理层数」调小后重试。',
       '可到「填表工作台」使用手动填表 / 重填。',
     ],
   },
