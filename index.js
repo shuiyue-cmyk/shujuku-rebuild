@@ -90387,7 +90387,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.6.6" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.6.7" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -117487,7 +117487,15 @@ async function runMvuRerun_ACU(messageId, chatKey, hasReplacement, hasTableFill)
     try {
         // 先清记录再重跑：W3 只比 messageId，不清就永远不会再填；W1 比内容指纹，MVU 改写正文后本就不拦，
         // 一并清除是为了让「重跑成功」重新获得一份干净的完成凭证，而不是留着上一轮的旧指纹。
-        const removed = removeAutoChainProcessedForMessage_ACU(messageId, chatKey);
+        // 但「忽略MVU更新」开后替换永不参与重跑：替换凭证必须保留，否则清掉后后续正常事件会
+        // 在 MVU 碰过的楼上重跑正文替换，违背「MVU 结束后也不重跑」的设置承诺——只清填表那条。
+        const ignoreMvuUpdate_ACU = isIgnoreMvuUpdateEnabled_ACU();
+        const removed = ignoreMvuUpdate_ACU
+            ? {
+                content_replacement: 0,
+                auto_table_fill: removeChainProcessedByMessageId_ACU('auto_table_fill', messageId, chatKey),
+            }
+            : removeAutoChainProcessedForMessage_ACU(messageId, chatKey);
         logDebug_ACU(`[MVU联动] 解析完成联动重跑：清除 messageId=${messageId} 判重记录（正文替换 ${removed.content_replacement} 条 / 自动填表 ${removed.auto_table_fill} 条；命中 替换=${hasReplacement} 填表=${hasTableFill}）`);
         await mvuRerunHandler_ACU?.();
     }
@@ -142403,7 +142411,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260920-12";
+        const stamp = "20260921-16";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -187046,7 +187054,7 @@ function useLogViewer() {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260920-12";
+        const stamp = "20260921-16";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -187055,7 +187063,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.6.6";
+        const v = "9.6.7";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {

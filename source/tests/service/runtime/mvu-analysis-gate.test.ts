@@ -528,6 +528,10 @@ describe('⑦ [W5] 解析完成 / 手动重试联动重跑', () => {
       await vi.advanceTimersByTimeAsync(MVU_RERUN_DEBOUNCE_MS_ACU + 1);
 
       expect(rerun).toHaveBeenCalledTimes(1);
+      // 忽略模式下填表触发的重跑不得捎带清掉替换凭证，否则后续正常事件会在
+      // MVU 改过的楼上重跑正文替换（设置承诺「MVU 结束后也不重跑」替换）。
+      expect(findAutoTableFillProcessedEntry_ACU(11, 'chat-a')).toBeNull();
+      expect(findAutoOptimizationProcessedEntry_ACU(11, 'chat-a')).not.toBeNull();
     } finally {
       delete h.settings.contentOptimizationSettings;
     }

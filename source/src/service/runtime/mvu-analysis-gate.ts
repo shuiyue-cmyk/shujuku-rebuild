@@ -71,6 +71,7 @@ import {
   findAutoOptimizationProcessedEntry_ACU,
   findAutoTableFillProcessedEntry_ACU,
   removeAutoChainProcessedForMessage_ACU,
+  removeChainProcessedByMessageId_ACU,
 } from '../../data/storage/optimization-cache-storage';
 import { resolveLatestAiFloor_ACU } from '../table/auto-fill-echo-guard';
 import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
@@ -490,7 +491,15 @@ async function runMvuRerun_ACU(
   try {
     // 先清记录再重跑：W3 只比 messageId，不清就永远不会再填；W1 比内容指纹，MVU 改写正文后本就不拦，
     // 一并清除是为了让「重跑成功」重新获得一份干净的完成凭证，而不是留着上一轮的旧指纹。
-    const removed = removeAutoChainProcessedForMessage_ACU(messageId, chatKey);
+    // 但「忽略MVU更新」开后替换永不参与重跑：替换凭证必须保留，否则清掉后后续正常事件会
+    // 在 MVU 碰过的楼上重跑正文替换，违背「MVU 结束后也不重跑」的设置承诺——只清填表那条。
+    const ignoreMvuUpdate_ACU = isIgnoreMvuUpdateEnabled_ACU();
+    const removed = ignoreMvuUpdate_ACU
+      ? {
+          content_replacement: 0,
+          auto_table_fill: removeChainProcessedByMessageId_ACU('auto_table_fill', messageId, chatKey),
+        }
+      : removeAutoChainProcessedForMessage_ACU(messageId, chatKey);
     logDebug_ACU(
       `[MVU联动] 解析完成联动重跑：清除 messageId=${messageId} 判重记录（正文替换 ${removed.content_replacement} 条 / 自动填表 ${removed.auto_table_fill} 条；命中 替换=${hasReplacement} 填表=${hasTableFill}）`,
     );
