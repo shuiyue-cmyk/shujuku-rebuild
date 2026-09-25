@@ -805,3 +805,45 @@ describe('mainInitialize_ACU 配对零产出证据传递', () => {
   });
 });
 
+// TT 帧架构：续写基线调度必须挂在生产 bootstrap 链上（与删楼守卫并列），
+// 否则 boundary/bridge 的 notify 无监听、删楼嫁接无恢复适配，生产侧 dormant。
+// 本用例不直接 import scheduler：只走 init 生产链，断言 notify 能搬运基线。
+describe('mainInitialize_ACU 续写资料基线调度接线（TT-only）', () => {
+  it('生产链 import 后 notify 把续写基线搬到表格 checkpoint 楼', async () => {
+    const { mainInitialize_ACU } = await import('../../../src/presentation/bootstrap/init');
+    mainInitialize_ACU();
+    // 只经生产链与同步原语，不直接引用 scheduler 模块。
+    const sync = await import('../../../src/service/chat/material-checkpoint-sync');
+    const store = await import('../../../src/service/continuation/agent/agent-module-store');
+    const model = await import('../../../src/service/continuation/agent/agent-model');
+
+    const hookEntry = {
+      id: 'H1', summary: '伏笔 H1', status: 'planted', importance: 'mid',
+      plantedIndex: 0, updatedIndex: 0, plannedPayoff: '', retired: false, retiredReason: '',
+    };
+    const chat: any[] = [
+      {
+        mes: 'a', is_user: false,
+        [model.AGENT_MODULE_FIELD_ACU]: {
+          schemaVersion: 1, settledThroughIndex: 0, updatedAt: 1,
+          revisions: { hooks: 0, infoGap: 0, constraints: 0, storyArc: 0, chronology: 0, webRefs: 0 },
+          hooks: [hookEntry], infoGap: [], constraints: [],
+        },
+      },
+      { mes: 'b', is_user: false },
+      {
+        mes: 'c', is_user: false,
+        TavernDB_ACU_IsolatedData: {
+          '': { storageFrame: { version: 2, checkpoint: { kind: 'full', reason: 'init', data: {} }, logEntries: [] }, _acu_storage_version: 2 },
+        },
+      },
+    ];
+
+    sync.notifyMaterialCheckpointFloor_ACU(chat, 2);
+
+    expect(chat[2][model.AGENT_MODULE_FIELD_ACU]?.checkpoint).toBeDefined();
+    expect(chat[2][model.AGENT_MODULE_FIELD_ACU].checkpoint.snapshot.hooks.map((item: { id: string }) => item.id)).toEqual(['H1']);
+    expect(store.readAgentModuleSnapshot_ACU(chat).hooks.map(item => item.id)).toEqual(['H1']);
+  });
+});
+

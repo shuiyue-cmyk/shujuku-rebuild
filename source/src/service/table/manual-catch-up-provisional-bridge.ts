@@ -19,6 +19,7 @@ import {
   getChatArray_ACU,
   saveChatToHostStrict_ACU
 } from '../../data/gateways/chat-gateway';
+import { notifyMaterialCheckpointFloor_ACU } from '../chat/material-checkpoint-sync';
 import {
   readIsolatedDataContainer_ACU,
   readIsolatedTagData_ACU,
@@ -621,6 +622,7 @@ export async function establishProvisionalBridge_ACU(
       committed = await ctx.runCommit(async () => {
         ctx.assertFresh('bridge direct chat mutation after commit lock');
         const before = JSON.parse(JSON.stringify(chat));
+        notifyMaterialCheckpointFloor_ACU(candidateChat, rangeStartMessageIndex);
         try {
           chat.length = 0;
           chat.push(...candidateChat);
@@ -848,6 +850,7 @@ export async function finalizeProvisionalBridge_ACU(
       committed = await ctx.runCommit(async () => {
         ctx.assertFresh('bridge direct chat mutation after commit lock');
         const before = JSON.parse(JSON.stringify(chat));
+        notifyMaterialCheckpointFloor_ACU(candidateChat, bridge.originalFullCheckpointIndex);
         try {
           chat.length = 0;
           chat.push(...candidateChat);
@@ -955,6 +958,7 @@ export async function rollbackProvisionalBridge_ACU(
       committed = await ctx.runCommit(async () => {
         ctx.assertFresh('bridge direct chat mutation after commit lock');
         const before = JSON.parse(JSON.stringify(chat));
+        notifyMaterialCheckpointFloor_ACU(candidateChat, bridge.originalFullCheckpointIndex);
         try {
           chat.length = 0;
           chat.push(...candidateChat);

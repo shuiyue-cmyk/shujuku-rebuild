@@ -5,6 +5,7 @@ import { allocateStableSheetKeys_ACU, assertNoPhysicalTableNameCollision_ACU } f
 import { normalizeCanonicalTableRows_ACU } from '../../shared/canonical-row-normalizer';
 import { buildSheetTableAliasMap_ACU } from '../../shared/sql-read-resolver';
 import { buildCanonicalFullCheckpoint_ACU } from './canonical-checkpoint-builder';
+import { notifyMaterialCheckpointFloor_ACU, restoreMaterialCheckpointFields_ACU, snapshotMaterialCheckpointFields_ACU } from '../chat/material-checkpoint-sync';
 import { writeInitFullCheckpointFrameV2_ACU } from './storage-frame-v2-persist';
 import { hydrateTableDataStrict_ACU } from './sqlite-template-validation';
 import { getCurrentStorageMode } from './storage-mode';
@@ -134,6 +135,10 @@ export async function resetCurrentChatTableStateFromTemplate_ACU(
       const previousScope = clone(peekChatScopedConfigContainer_ACU(chat));
       const previousGuide = clone(peekChatSheetGuideContainer_ACU(chat));
       let primarySaveAttempted = false;
+      // TT 帧架构语义：重置只搬表格 full 根、正文不动，因此续写资料保留、
+      // 基线跟随到新 init 根（与 bridge/boundary 的 notify 口径一致）。
+      // 不清空资料字段：清空会误删与正文仍对应的用户故事资产。
+      let materialSnapshots: ReturnType<typeof snapshotMaterialCheckpointFields_ACU> | null = null;
       try {
         for (const message of chat) {
           if (!message || message.is_user) continue;
@@ -168,6 +173,8 @@ export async function resetCurrentChatTableStateFromTemplate_ACU(
           presetName: options.presetName || '', source: options.source || 'game_init',
         });
         if (!guideUpdated) throw new Error('初始化模板无法原子写入 guide 与 template scope。');
+        materialSnapshots = snapshotMaterialCheckpointFields_ACU(chat);
+        notifyMaterialCheckpointFloor_ACU(chat, targetIndex);
         if (!scopeStillCurrent() || getChatArray_ACU() !== chat || chat[0] !== firstMessage || getActiveChatStorageIdentity_ACU(chat) !== chatIdentity) throw new Error('目标聊天已切换，已取消初始化提交。');
         primarySaveAttempted = true;
         await saveChatToHostStrict_ACU();
@@ -175,6 +182,7 @@ export async function resetCurrentChatTableStateFromTemplate_ACU(
         return { saved: true, messageIndex: targetIndex, runtimeReady: true, normalizedTemplateData: clone(prepared), normalizationAudit };
       } catch (error: any) {
         restoreMessages(messageSnapshots);
+        if (materialSnapshots) restoreMaterialCheckpointFields_ACU(chat, materialSnapshots);
         setChatScopedConfigContainer_ACU(chat, previousScope);
         setChatSheetGuideContainer_ACU(chat, previousGuide);
         if (primarySaveAttempted) {

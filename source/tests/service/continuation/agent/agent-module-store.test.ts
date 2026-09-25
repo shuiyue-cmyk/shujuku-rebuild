@@ -47,9 +47,10 @@ describe('Agent 资料快照存储', () => {
     expect(readAgentModuleSnapshot_ACU([{ mes: 'a' }]).settledThroughIndex).toBe(-1);
   });
 
-  it('删楼后残留的越界水位被钳制回当前最后一楼', () => {
+  it('读取不再把基线里的水位钳到当前数组长度', () => {
     const chat: any[] = [{ mes: 'a', [AGENT_MODULE_FIELD_ACU]: snapshotAt_ACU(9) }];
-    expect(readAgentModuleSnapshot_ACU(chat).settledThroughIndex).toBe(0);
+    expect(readAgentModuleSnapshot_ACU(chat).settledThroughIndex).toBe(9);
+    expect(chat[0][AGENT_MODULE_FIELD_ACU].schemaVersion).toBe(1);
   });
 
   it('水位之前删除中间楼层时不复用旧快照，按前缀失配安全回退', async () => {
@@ -181,7 +182,13 @@ describe('Agent 资料快照存储', () => {
     // 有合法快照时诊断记录采用楼层且不标记抢救。
     const chatOk: any[] = [{ mes: 'a', [AGENT_MODULE_FIELD_ACU]: snapshotAt_ACU(0) }];
     readAgentModuleSnapshot_ACU(chatOk);
-    expect(readAgentModuleSnapshotDiagnostics_ACU()).toEqual({ candidates: [{ index: 0, valid: true, problems: [] }], adoptedIndex: 0, salvaged: false });
+    expect(readAgentModuleSnapshotDiagnostics_ACU()).toEqual({
+      candidates: [{ index: 0, valid: true, problems: [] }],
+      adoptedIndex: 0,
+      salvaged: false,
+      checkpointIndex: 0,
+      foldedDeltaCount: 0,
+    });
     readAgentModuleSnapshot_ACU([{ mes: 'a' }]);
     expect(readAgentModuleSnapshotDiagnostics_ACU().adoptedIndex).toBeNull();
   });
@@ -194,16 +201,17 @@ describe('Agent 资料快照存储', () => {
     // 水位只由结算子代理成功交付时显式推进：写盘时快照声明多少就是多少。
     await writeAgentModuleSnapshot_ACU(chat, 1, snapshotAt_ACU(0, { hooks: [hook_ACU('H1') as any] }));
     expect(saveChat).toHaveBeenCalledOnce();
-    expect(chat[1][AGENT_MODULE_FIELD_ACU].settledThroughIndex).toBe(0);
+    expect(chat[1][AGENT_MODULE_FIELD_ACU].schemaVersion).toBe(3);
+    expect(readAgentModuleSnapshot_ACU(chat).settledThroughIndex).toBe(0);
     expect(readAgentModuleSnapshot_ACU(chat).hooks).toHaveLength(1);
 
-    // 显式声明的水位如实落盘；越界声明（超过目标楼层 / 负值）被钳制回合法区间。
+    // 显式声明的水位如实进入折叠；越界声明（超过目标楼层 / 负值）在写入时钳回合法区间。
     await writeAgentModuleSnapshot_ACU(chat, 1, snapshotAt_ACU(1));
-    expect(chat[1][AGENT_MODULE_FIELD_ACU].settledThroughIndex).toBe(1);
+    expect(readAgentModuleSnapshot_ACU(chat).settledThroughIndex).toBe(1);
     await writeAgentModuleSnapshot_ACU(chat, 1, snapshotAt_ACU(9));
-    expect(chat[1][AGENT_MODULE_FIELD_ACU].settledThroughIndex).toBe(1);
+    expect(readAgentModuleSnapshot_ACU(chat).settledThroughIndex).toBe(1);
     await writeAgentModuleSnapshot_ACU(chat, 1, snapshotAt_ACU(-1));
-    expect(chat[1][AGENT_MODULE_FIELD_ACU].settledThroughIndex).toBe(0);
+    expect(readAgentModuleSnapshot_ACU(chat).settledThroughIndex).toBe(0);
   });
 
   it('写盘失败时还原楼层字段而不留下半成品', async () => {
@@ -401,12 +409,12 @@ describe('Agent 资料快照落盘修订号复核（用户手动保存防冲）'
 
     await writeAgentModuleSnapshot_ACU(chat, 1, snapshotAt_ACU(0, { revisions: { hooks: 1, infoGap: 0, constraints: 0, storyArc: 0, chronology: 0, webRefs: 0 }, hooks: [hook_ACU('H1') as any] }));
     expect(saveChat).toHaveBeenCalledOnce();
-    expect(chat[1][AGENT_MODULE_FIELD_ACU].hooks[0].id).toBe('H1');
+    expect(readAgentModuleSnapshot_ACU(chat).hooks[0].id).toBe('H1');
 
     // 楼层低于写入快照（子代理正常推进修订）同样落盘。
     await writeAgentModuleSnapshot_ACU(chat, 1, snapshotAt_ACU(0, { revisions: { hooks: 2, infoGap: 0, constraints: 0, storyArc: 0, chronology: 0, webRefs: 0 } }));
     expect(saveChat).toHaveBeenCalledTimes(2);
-    expect(chat[1][AGENT_MODULE_FIELD_ACU].revisions.hooks).toBe(2);
+    expect(readAgentModuleSnapshot_ACU(chat).revisions.hooks).toBe(2);
   });
 
   it('用户手动保存（修订号整体 +1）不受防冲影响，照常落盘', async () => {
@@ -417,7 +425,7 @@ describe('Agent 资料快照落盘修订号复核（用户手动保存防冲）'
     const saved = await replaceAgentModuleSnapshotByUser_ACU({ hooks: [hook_ACU('用户编辑') as any] }, chat);
 
     expect(saved.revisions).toMatchObject({ hooks: 2, infoGap: 2, constraints: 2, storyArc: 2, chronology: 2, webRefs: 2 });
-    expect(chat[1][AGENT_MODULE_FIELD_ACU].hooks[0].id).toBe('用户编辑');
+    expect(readAgentModuleSnapshot_ACU(chat).hooks[0].id).toBe('用户编辑');
     expect(saveChat).toHaveBeenCalledOnce();
   });
 });

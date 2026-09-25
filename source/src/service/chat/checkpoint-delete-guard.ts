@@ -34,6 +34,13 @@ import { collectScheduleSummaryFromFramesV2_ACU, loadTableStateFromFramesV2Detai
 import { getTableDataFingerprint_ACU } from '../table/table-data-upgrade-audit';
 import { isV2TagData_ACU } from '../table/storage-strategy-resolver';
 import { assertSingleActiveFullCheckpointV2_ACU } from '../table/storage-frame-v2-persist';
+import {
+  assertMaterialContinuationCheckpoint_ACU,
+  captureMaterialCheckpointRecovery_ACU,
+  graftMaterialContinuationCheckpoint_ACU,
+  restoreMaterialCheckpointFields_ACU,
+  snapshotMaterialCheckpointFields_ACU,
+} from './material-checkpoint-sync';
 import { runTableWriteTransaction_ACU } from '../table/table-write-transaction';
 import { currentChatFileIdentifier_ACU, getCurrentIsolationKey_ACU } from '../runtime/state-manager';
 import { deepClone_ACU, logDebug_ACU, logError_ACU, logWarn_ACU } from '../../shared/utils';
@@ -56,10 +63,17 @@ interface CheckpointVaultFrameEntry_ACU {
     compatTransitionCheckpoint: any | null;
 }
 
+interface MaterialCheckpointVaultEntry_ACU {
+    messageRef: any;
+    continuation: { swipeId: string; snapshot: unknown } | null;
+}
+
 interface CheckpointVaultState_ACU {
     chatKey: string;
     /** isolationKey → 按楼层序的 frame 条目（含 log-only 信标）。 */
     entriesByIsolationKey: Map<string, CheckpointVaultFrameEntry_ACU[]>;
+    /** 续写基线，按楼层序。与表格产物同一轮嫁接（TT-only）。 */
+    materialEntries: MaterialCheckpointVaultEntry_ACU[];
 }
 
 export interface CheckpointDeleteRecoveryResult_ACU {
@@ -93,6 +107,7 @@ export function captureCheckpointVaultForCurrentChat_ACU(chatArg?: any[]): void 
     const chat = Array.isArray(chatArg) ? chatArg : getChatArray_ACU();
     const chatKey = String(currentChatFileIdentifier_ACU || '');
     const entriesByIsolationKey = new Map<string, CheckpointVaultFrameEntry_ACU[]>();
+    const materialEntries: MaterialCheckpointVaultEntry_ACU[] = [];
 
     for (const message of chat) {
         if (!message || message.is_user) continue;
@@ -129,7 +144,15 @@ export function captureCheckpointVaultForCurrentChat_ACU(chatArg?: any[]): void 
         }
     }
 
-    vault_ACU = { chatKey, entriesByIsolationKey };
+    for (const message of chat) {
+        if (!message || message.is_user) continue;
+        const captured = captureMaterialCheckpointRecovery_ACU(message);
+        const continuation = captured?.continuation ?? null;
+        if (!continuation) continue;
+        materialEntries.push({ messageRef: message, continuation });
+    }
+
+    vault_ACU = { chatKey, entriesByIsolationKey, materialEntries };
 }
 
 /** 切聊 / 测试清理。 */
@@ -272,7 +295,9 @@ export async function recoverLostCheckpointsAfterMessageDeletion_ACU(): Promise<
             lostItems.push({ entry, isolationKey, vaultIndex });
         });
     }
-    if (lostItems.length === 0) return { recovered: false, graftedCount: 0 };
+    const presentMessagesForVault = presentMessages;
+    const hasLostMaterial = (vault_ACU.materialEntries || []).some(entry => !presentMessagesForVault.has(entry.messageRef) && !!entry.continuation);
+    if (lostItems.length === 0 && !hasLostMaterial) return { recovered: false, graftedCount: 0 };
 
     return runTableWriteTransaction_ACU({
         source: 'system_cleanup',
@@ -299,6 +324,8 @@ export async function recoverLostCheckpointsAfterMessageDeletion_ACU(): Promise<
         const affectedIsolationKeys = new Set<string>();
         const survivingChat = deepClone_ACU(chat);
         const transitionTargets = new Map<string, any>();
+        const materialSnapshots = snapshotMaterialCheckpointFields_ACU(chat);
+        const graftTargetByLostMessage = new Map<any, any>();
         try {
             // 逆序处理：同 sheetKey 冲突时"原始位置更靠后的产物"先占位，更早的被
             // 目标已有判定跳过——幸存者/更新者优先的语义由同一条规则统一表达。
@@ -314,6 +341,7 @@ export async function recoverLostCheckpointsAfterMessageDeletion_ACU(): Promise<
                     continue;
                 }
                 snapshotTarget(target.message);
+                graftTargetByLostMessage.set(entry.messageRef, target.message);
                 const frame = ensureTargetFrame_ACU(target.message, isolationKey);
                 const targetIndex = chat.indexOf(target.message);
 
@@ -399,6 +427,34 @@ export async function recoverLostCheckpointsAfterMessageDeletion_ACU(): Promise<
                 }
             }
 
+            const presentMessagesForMaterial = new Set<any>(chat);
+            for (let lostIndex = vault_ACU!.materialEntries.length - 1; lostIndex >= 0; lostIndex -= 1) {
+                const material = vault_ACU!.materialEntries[lostIndex];
+                if (presentMessagesForMaterial.has(material.messageRef)) continue;
+                if (!material.continuation) continue;
+                const preferred = graftTargetByLostMessage.get(material.messageRef);
+                let targetMessage = preferred;
+                if (!targetMessage) {
+                    for (let index = lostIndex + 1; index < vault_ACU!.materialEntries.length; index += 1) {
+                        const candidate = vault_ACU!.materialEntries[index];
+                        if (presentMessagesForMaterial.has(candidate.messageRef)) {
+                            targetMessage = candidate.messageRef;
+                            break;
+                        }
+                    }
+                }
+                if (!targetMessage) {
+                    for (let index = chat.length - 1; index >= 0; index -= 1) {
+                        if (chat[index] && !chat[index].is_user) {
+                            targetMessage = chat[index];
+                            break;
+                        }
+                    }
+                }
+                if (!targetMessage) continue;
+                if (graftMaterialContinuationCheckpoint_ACU(targetMessage, material.continuation)) graftedCount += 1;
+            }
+
             if (graftedCount === 0) {
                 // 全部被"目标已有"跳过或无处嫁接：无写入即无需保存。
                 return { recovered: false, graftedCount: 0 };
@@ -408,6 +464,8 @@ export async function recoverLostCheckpointsAfterMessageDeletion_ACU(): Promise<
                 const violation = assertSingleActiveFullCheckpointV2_ACU(chat, isolationKey, 'delete_recovery');
                 if (violation) throw new Error(violation);
             }
+            const continuationViolation = assertMaterialContinuationCheckpoint_ACU(chat);
+            if (continuationViolation) throw new Error(continuationViolation);
 
             await saveChatToHostStrict_ACU();
             captureCheckpointVaultForCurrentChat_ACU(chat);
@@ -415,6 +473,7 @@ export async function recoverLostCheckpointsAfterMessageDeletion_ACU(): Promise<
             return { recovered: true, graftedCount };
         } catch (error: any) {
             restoreSnapshots();
+            restoreMaterialCheckpointFields_ACU(chat, materialSnapshots);
             const message = error?.message || String(error || '删楼 checkpoint 恢复失败。');
             logError_ACU(`[删楼守卫] 删楼 checkpoint 前移恢复失败，已回滚改动（保管库保留，下次删楼事件重试）：${message}`);
             return { recovered: false, graftedCount: 0, error: message };

@@ -332,7 +332,40 @@ export interface AgentWebRefEntry_ACU {
   retiredReason: string;
 }
 
-/** 楼层锚定的全量快照。读取=从尾向前找最近的合法快照，删楼即自动回退。 */
+/**
+ * 楼层帧 schema（TT-only）。checkpoint 是全量基线，deltas 是其后的模块写集。
+ * schema 1 的全量快照只在读取时归一成基线，成功写入才升到本版本。
+ * TT 形状：六模块（hooks/infoGap/constraints/storyArc/chronology/webRefs），无
+ * userRequirements 整表替换、无 pendingFixes 字段；fingerprint 仍由快照携带，
+ * 帧折叠不复制 simulation 耦合。
+ */
+export const AGENT_MODULE_FRAME_SCHEMA_VERSION_ACU = 3 as const;
+
+/** 一次结算写进承载楼层的增量。seq 只排序全聊天的写入先后，不参与跨楼折叠顺序（折叠按楼层序）。 */
+export interface AgentModuleFloorDelta_ACU {
+  seq: number;
+  /** 写入时该楼的 swipe 身份。折叠只叠加与楼层当前 swipe 相同的条目。 */
+  swipeId: string;
+  /** 变更条目。六模块均为带 id 的 upsert 子集。 */
+  writes: Partial<Pick<AgentModuleSnapshot_ACU, AgentWritableModule_ACU>>;
+  removedIds?: Partial<Record<AgentWritableModule_ACU, string[]>>;
+  revisions: Partial<AgentModuleRevisions_ACU>;
+  /** 本条显式推进的结算水位。省略表示不改水位。 */
+  settledThroughIndex?: number;
+  updatedAt: number;
+}
+
+/** 挂在单个楼层上的资料帧。 */
+export interface AgentModuleFloorFrame_ACU {
+  schemaVersion: typeof AGENT_MODULE_FRAME_SCHEMA_VERSION_ACU;
+  checkpoint?: {
+    swipeId: string;
+    snapshot: AgentModuleSnapshot_ACU;
+  };
+  deltas: AgentModuleFloorDelta_ACU[];
+}
+
+/** 楼层锚定的全量快照。帧架构下读取=从最近基线起按楼层顺序叠加当前 swipe 的 delta，删楼即自动退出折叠。 */
 export interface AgentModuleSnapshot_ACU {
   schemaVersion: typeof AGENT_MODULE_SCHEMA_VERSION_ACU;
   settledThroughIndex: number;

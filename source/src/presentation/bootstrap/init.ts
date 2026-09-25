@@ -63,6 +63,7 @@ import {
   hydrateStorageProviderFromSnapshot_ACU
 } from '../../service/table/table-storage-strategy';
 import { captureCheckpointVaultForCurrentChat_ACU, installCheckpointDeleteGuard_ACU } from '../../service/chat/checkpoint-delete-guard';
+import { installMaterialCheckpointScheduler_ACU } from '../../service/continuation/agent/agent-checkpoint-scheduler';
 import { auditDormantDataIntegrity_ACU } from '../../service/template/dormant-data-service';
 import { getUiSurface_ACU, showUiSurfaceToast_ACU } from '../../shared/ui-surface-registry';
 import {
@@ -597,6 +598,8 @@ export   function mainInitialize_ACU() {
       loadSettings_ACU();
       // S0-4：注册插件保存后的 checkpoint 保管库同步（删楼恢复的影子基线）。
       installCheckpointDeleteGuard_ACU();
+      // TT 帧架构：续写基线跟随表格 checkpoint 落层 + 删楼恢复适配（与删楼守卫并列，函数幂等）。
+      installMaterialCheckpointScheduler_ACU();
       // Register the bridge before generation events are subscribed. Runtime
       // migration remains page-owned so no chat persistence is touched at startup.
       getContinuationRuntime_ACU();
