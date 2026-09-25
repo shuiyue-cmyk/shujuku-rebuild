@@ -307,6 +307,7 @@ export interface AgentModuleRevisions_ACU {
   storyArc: number;
   chronology: number;
   webRefs: number;
+  userRequirements: number;
 }
 
 /**
@@ -390,8 +391,9 @@ export interface AgentWebRefEntry_ACU {
 /**
  * 楼层帧 schema（TT-only）。checkpoint 是全量基线，deltas 是其后的模块写集。
  * schema 1 的全量快照只在读取时归一成基线，成功写入才升到本版本。
- * TT 形状：六模块（hooks/infoGap/constraints/storyArc/chronology/webRefs），无
- * userRequirements 整表替换；pendingFixes 随快照携带并参与帧折叠，
+ * TT 形状：六个 id 键模块（hooks/infoGap/constraints/storyArc/chronology/webRefs）
+ * 加 userRequirements 字符串单例（整表替换，不进分栏矩阵）；
+ * pendingFixes 随快照携带并参与帧折叠，
  * fingerprint 仍由快照携带，帧折叠不复制 simulation 耦合。
  */
 export const AGENT_MODULE_FRAME_SCHEMA_VERSION_ACU = 3 as const;
@@ -401,8 +403,10 @@ export interface AgentModuleFloorDelta_ACU {
   seq: number;
   /** 写入时该楼的 swipe 身份。折叠只叠加与楼层当前 swipe 相同的条目。 */
   swipeId: string;
-  /** 变更条目。六模块均为带 id 的 upsert 子集。 */
+  /** 变更条目。六个 id 键模块均为带 id 的 upsert 子集；userRequirements 单例走顶层字段。 */
   writes: Partial<Pick<AgentModuleSnapshot_ACU, AgentWritableModule_ACU>>;
+  /** 用户要求单例的整表替换（字符串数组全量）。与 writes 可同时出现；折叠时整体替换。 */
+  userRequirements?: string[];
   removedIds?: Partial<Record<AgentWritableModule_ACU, string[]>>;
   /** 逐栏增量写入：模块 → ID → 栏目。与整条 writes 可同时出现；折叠先叠整条再叠逐栏。 */
   fieldUpserts?: AgentModuleFieldUpserts_ACU;
@@ -451,6 +455,8 @@ export interface AgentModuleSnapshot_ACU {
   storyArc: AgentStoryArcEntry_ACU[];
   chronology: AgentChronologyEntry_ACU[];
   webRefs: AgentWebRefEntry_ACU[];
+  /** 用户在 Agent 会话里提过的要求，由 requirements-maintainer 全量替换维护（字符串单例，不进分栏矩阵）。 */
+  userRequirements: string[];
   /** 最近一次容错提交没能入库的模块。旧快照缺该字段时读取为空数组。 */
   pendingFixes: AgentPendingFix_ACU[];
 }
@@ -459,7 +465,7 @@ export const AGENT_WRITABLE_MODULES_ACU = ['hooks', 'infoGap', 'constraints', 's
 export type AgentWritableModule_ACU = typeof AGENT_WRITABLE_MODULES_ACU[number];
 
 /**
- * 各模块的栏目矩阵（TT 六模块形状，无 userRequirements 整表单例）。
+ * 各模块的栏目矩阵（TT 六个 id 键模块；userRequirements 为字符串单例，不进分栏矩阵）。
  * required 为提升为完整领域条目的必填栏目；consistencyGroups 为不可拆开提交的
  * 跨字段一致性组（组内栏目必须同批提交或此前已齐）。S1 只做声明与缺栏计算，
  * 不在折叠/写入路径强制拒绝——partial 记录只进入受控分栏视图，不投影领域数组。
@@ -497,10 +503,12 @@ export const AGENT_MODULE_FIELD_MATRIX_ACU: Record<AgentWritableModule_ACU, Agen
   },
 };
 
-export const AGENT_SUBAGENT_NAMES_ACU = ['arc-architect', 'hook-cognition-maintainer', 'mainline-planner', 'beat-planner', 'continuity-reviewer', 'web-researcher', 'instruction-composer'] as const;
+export const AGENT_SUBAGENT_NAMES_ACU = ['arc-architect', 'hook-cognition-maintainer', 'mainline-planner', 'beat-planner', 'continuity-reviewer', 'web-researcher', 'instruction-composer', 'requirements-maintainer'] as const;
 export type AgentSubagentName_ACU = typeof AGENT_SUBAGENT_NAMES_ACU[number];
 
 export const AGENT_WEB_RESEARCHER_NAME_ACU = 'web-researcher';
+
+export const AGENT_REQUIREMENTS_MAINTAINER_NAME_ACU = 'requirements-maintainer';
 
 export const AGENT_INSTRUCTION_COMPOSER_NAME_ACU = 'instruction-composer';
 

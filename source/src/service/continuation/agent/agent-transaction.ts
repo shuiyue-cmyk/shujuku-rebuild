@@ -6,7 +6,8 @@
  * 违规模块保持原值并写入 snapshot.pendingFixes。核心防线仍是「漏写不等于删除」。
  *
  * TT 适配（相对上游 787afc1）：保留 allowedEvidenceIndexes 年代学 AI 楼层门
- * （P1 加固，不弱化）；六模块形状，无 userRequirements 分支。
+ * （P1 加固，不弱化）；六个 id 键模块走写集事务，userRequirements 单例只保留
+ * 修订号（全量替换走快照整写，不经 delta）。
  */
 
 import { ContinuationValidationError_ACU, createContinuationError_ACU } from '../model';
@@ -653,6 +654,7 @@ export function applyAgentModuleDelta_ACU(
       storyArc: snapshot.revisions.storyArc + (applied.includes('storyArc') ? 1 : 0),
       chronology: snapshot.revisions.chronology + (applied.includes('chronology') ? 1 : 0),
       webRefs: snapshot.revisions.webRefs,
+      userRequirements: snapshot.revisions.userRequirements,
     },
   };
   return { snapshot: next, pendingFixes: pending, appliedModules: applied };

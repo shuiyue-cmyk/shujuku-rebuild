@@ -106,13 +106,14 @@ export function buildEmptyAgentModuleSnapshot_ACU(): AgentModuleSnapshot_ACU {
     schemaVersion: AGENT_MODULE_SCHEMA_VERSION_ACU,
     settledThroughIndex: -1,
     updatedAt: 0,
-    revisions: { hooks: 0, infoGap: 0, constraints: 0, storyArc: 0, chronology: 0, webRefs: 0 },
+    revisions: { hooks: 0, infoGap: 0, constraints: 0, storyArc: 0, chronology: 0, webRefs: 0, userRequirements: 0 },
     hooks: [],
     infoGap: [],
     constraints: [],
     storyArc: [],
     chronology: [],
     webRefs: [],
+    userRequirements: [],
     pendingFixes: [],
   };
 }
@@ -285,6 +286,12 @@ function validateConstraintEntry_ACU(raw: unknown): AgentConstraintEntry_ACU | n
   return { id, text, reason: readText_ACU(raw.reason), createdIndex: readIndex_ACU(raw.createdIndex) };
 }
 
+function validateUserRequirementLine_ACU(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const text = raw.trim();
+  return text ? text : null;
+}
+
 /** 取一段文本的首句，用作旧条目缺失 brief 时的兼容兜底。 */
 export function firstSentence_ACU(text: string): string {
   const flat = String(text ?? '').replace(/\s+/g, ' ').trim();
@@ -348,6 +355,12 @@ export function validateAgentModuleSnapshot_ACU(raw: unknown): AgentModuleSnapsh
   if (validatedChronology.some(entry => entry === null)) return null;
   if (Object.prototype.hasOwnProperty.call(raw, 'webRefs') && !Array.isArray(raw.webRefs)) return null;
   const webRefs = Array.isArray(raw.webRefs) ? raw.webRefs : [];
+  // userRequirements 晚于早期快照加入：缺字段兼容为空清单；字段一旦存在就必须是字符串数组，
+  // 且每条 trim 后非空——静默丢掉用户要求比暂时回退旧快照更危险。
+  if (Object.prototype.hasOwnProperty.call(raw, 'userRequirements') && !Array.isArray(raw.userRequirements)) return null;
+  const userRequirementsRaw = Array.isArray(raw.userRequirements) ? raw.userRequirements : [];
+  const validatedUserRequirements = userRequirementsRaw.map(validateUserRequirementLine_ACU);
+  if (validatedUserRequirements.some(entry => entry === null)) return null;
   // pendingFixes：v1 快照没有该字段，缺字段兼容为空数组；字段一旦出现就必须整体合法，
   // 否则调用方无法判断哪些模块需要修复，回退上一份完整快照比静默丢弃更安全。
   const pendingPresent = Object.prototype.hasOwnProperty.call(raw, 'pendingFixes');
@@ -367,6 +380,7 @@ export function validateAgentModuleSnapshot_ACU(raw: unknown): AgentModuleSnapsh
       storyArc: Math.max(0, readIndex_ACU(raw.revisions.storyArc)),
       chronology: Math.max(0, readIndex_ACU(raw.revisions.chronology)),
       webRefs: Math.max(0, readIndex_ACU(raw.revisions.webRefs)),
+      userRequirements: Math.max(0, readIndex_ACU(raw.revisions.userRequirements)),
     },
     hooks: raw.hooks.flatMap(item => { const entry = validateHookEntry_ACU(item); return entry ? [entry] : []; }),
     infoGap: raw.infoGap.flatMap(item => { const entry = validateInfoGapEntry_ACU(item); return entry ? [entry] : []; }),
@@ -374,6 +388,7 @@ export function validateAgentModuleSnapshot_ACU(raw: unknown): AgentModuleSnapsh
     storyArc: validatedStoryArc as AgentStoryArcEntry_ACU[],
     chronology: validatedChronology as AgentChronologyEntry_ACU[],
     webRefs: webRefs.flatMap(item => { const entry = validateWebRefEntry_ACU(item); return entry ? [entry] : []; }),
+    userRequirements: validatedUserRequirements as string[],
     pendingFixes,
   };
 }
@@ -443,6 +458,7 @@ export function salvageAgentModuleSnapshot_ACU(raw: unknown): { snapshot: AgentM
       storyArc: Math.max(0, readIndex_ACU(revisions.storyArc)),
       chronology: Math.max(0, readIndex_ACU(revisions.chronology)),
       webRefs: Math.max(0, readIndex_ACU(revisions.webRefs)),
+      userRequirements: Math.max(0, readIndex_ACU(revisions.userRequirements)),
     },
     hooks: pick(raw.hooks, validateHookEntry_ACU, 'hooks'),
     infoGap: pick(raw.infoGap, validateInfoGapEntry_ACU, 'infoGap'),
@@ -450,6 +466,7 @@ export function salvageAgentModuleSnapshot_ACU(raw: unknown): { snapshot: AgentM
     storyArc: pick(raw.storyArc, validateStoryArcEntry_ACU, 'storyArc'),
     chronology: pick(raw.chronology, validateChronologyEntry_ACU, 'chronology'),
     webRefs: pick(raw.webRefs, validateWebRefEntry_ACU, 'webRefs'),
+    userRequirements: pick(raw.userRequirements, validateUserRequirementLine_ACU, 'userRequirements'),
     pendingFixes: pendingFixes ?? [],
   };
   return { snapshot, problems };
@@ -571,6 +588,7 @@ export async function writeAgentModuleSnapshot_ACU(chat: any[], targetIndex: num
     ['storyArc', floorSnapshot.revisions.storyArc, snapshot.revisions.storyArc],
     ['chronology', floorSnapshot.revisions.chronology, snapshot.revisions.chronology],
     ['webRefs', floorSnapshot.revisions.webRefs, snapshot.revisions.webRefs],
+    ['userRequirements', floorSnapshot.revisions.userRequirements, snapshot.revisions.userRequirements],
   ];
   for (const [name, floorRevision, incomingRevision] of revisionPairs) {
     if (floorRevision > incomingRevision) revisionDrifts.push(`${name} 楼层=${floorRevision} 写入=${incomingRevision}`);
@@ -680,6 +698,7 @@ export async function replaceAgentModuleSnapshotByUser_ACU(raw: unknown, chat?: 
       storyArc: current.revisions.storyArc + 1,
       chronology: current.revisions.chronology + 1,
       webRefs: current.revisions.webRefs + 1,
+      userRequirements: current.revisions.userRequirements + 1,
     },
   };
   const validated = validateAgentModuleSnapshot_ACU(merged);
@@ -691,6 +710,7 @@ export async function replaceAgentModuleSnapshotByUser_ACU(raw: unknown, chat?: 
     ['故事总纲 storyArc', merged.storyArc, validated.storyArc],
     ['故事年代学账本 chronology', merged.chronology, validated.chronology],
     ['百科资料库 webRefs', merged.webRefs, validated.webRefs],
+    ['用户要求 userRequirements', merged.userRequirements, validated.userRequirements],
   ];
   for (const [label, input, accepted] of checks) {
     const inputLength = Array.isArray(input) ? input.length : 0;

@@ -6,9 +6,10 @@
  * schema 1 全量快照只在内存里充当 swipe 0 的基线，成功写入才替换成 schema 3。
  *
  * TT 适配说明（相对上游 d404b0f）：
- * - 六模块形状（hooks/infoGap/constraints/storyArc/chronology/webRefs），无
- *   userRequirements 整表替换分支；pendingFixes 随快照携带并参与折叠/差分，
- *   与上游 pendingFixes 语义对齐（TT 六模块子集）；
+ * - 六个 id 键模块（hooks/infoGap/constraints/storyArc/chronology/webRefs）加
+ *   userRequirements 字符串单例整表替换（顶层 delta 字段，不进分栏矩阵）；
+ *   pendingFixes 随快照携带并参与折叠/差分，
+ *   与上游 pendingFixes 语义对齐（TT 六模块子集 + 单例）；
  * - 不耦合 simulation（scheduler/ledger 引用全部剥离）；
  * - P1 前缀指纹语义由 deps.isSnapshotPrefixCompatible 注入：legacy 与 checkpoint
  *   基线在采纳前必须通过指纹兼容检查，否则跳过（删楼/替换后拒绝复用旧基线）。
@@ -117,6 +118,7 @@ function semanticPayload_ACU(snapshot: AgentModuleSnapshot_ACU): string {
     storyArc: snapshot.storyArc,
     chronology: snapshot.chronology,
     webRefs: snapshot.webRefs,
+    userRequirements: snapshot.userRequirements ?? [],
     pendingFixes: snapshot.pendingFixes ?? [],
   });
 }
@@ -154,6 +156,7 @@ function parseDelta_ACU(raw: unknown, deps: AgentModuleFrameDeps_ACU): AgentModu
     swipeId: raw.swipeId,
     writes: raw.writes as AgentModuleFloorDelta_ACU['writes'],
     revisions: raw.revisions as AgentModuleFloorDelta_ACU['revisions'],
+    ...(Array.isArray(raw.userRequirements) ? { userRequirements: raw.userRequirements as string[] } : {}),
     ...(isRecord_ACU(raw.removedIds) ? { removedIds: raw.removedIds as AgentModuleFloorDelta_ACU['removedIds'] } : {}),
     ...(raw.settledThroughIndex === undefined ? {} : { settledThroughIndex: raw.settledThroughIndex as number }),
     updatedAt: typeof raw.updatedAt === 'number' && raw.updatedAt >= 0 ? raw.updatedAt : 0,
@@ -166,6 +169,7 @@ function parseDelta_ACU(raw: unknown, deps: AgentModuleFrameDeps_ACU): AgentModu
     revisions: cloneJson_ACU(raw.revisions) as Partial<AgentModuleRevisions_ACU>,
     updatedAt: typeof raw.updatedAt === 'number' && raw.updatedAt >= 0 ? raw.updatedAt : 0,
   };
+  if (Array.isArray(raw.userRequirements)) delta.userRequirements = cloneJson_ACU(raw.userRequirements) as string[];
   // 逐栏增量不参与领域快照的严格校验（applyDelta/validateSnapshot 只看整条 writes），
   // 内容清洗下沉到视图折叠与写入规划（矩阵白名单 + unset/value 显式区分），此处只透传。
   if (isRecord_ACU(raw.fieldUpserts)) delta.fieldUpserts = cloneJson_ACU(raw.fieldUpserts) as AgentModuleFieldUpserts_ACU;
@@ -246,6 +250,10 @@ function applyDelta_ACU(snapshot: AgentModuleSnapshot_ACU, delta: AgentModuleFlo
       delta.removedIds?.[key],
     );
   }
+  // 用户要求单例：整表替换，不进分栏矩阵。
+  if (Object.prototype.hasOwnProperty.call(delta, 'userRequirements') && delta.userRequirements !== undefined) {
+    next.userRequirements = cloneJson_ACU(delta.userRequirements);
+  }
   next.revisions = { ...next.revisions, ...delta.revisions };
   if (typeof delta.settledThroughIndex === 'number') next.settledThroughIndex = delta.settledThroughIndex;
   // pendingFixes 不是分栏模块：整份随快照携带。delta.writes 透传该键时整体替换，
@@ -293,7 +301,19 @@ function diffSnapshot_ACU(before: AgentModuleSnapshot_ACU, after: AgentModuleSna
     (writes as Record<string, unknown>).pendingFixes = cloneJson_ACU(after.pendingFixes ?? []);
     changed = true;
   }
+  const beforeRequirements = JSON.stringify(before.userRequirements ?? []);
+  const afterRequirements = JSON.stringify(after.userRequirements ?? []);
+  let userRequirements: string[] | undefined;
+  if (beforeRequirements !== afterRequirements) {
+    userRequirements = cloneJson_ACU(after.userRequirements ?? []);
+    changed = true;
+  }
+  if (before.revisions.userRequirements !== after.revisions.userRequirements) {
+    revisions.userRequirements = after.revisions.userRequirements;
+    changed = true;
+  }
   const delta: AgentModuleFloorDelta_ACU = { seq, swipeId, writes, revisions, updatedAt: after.updatedAt };
+  if (userRequirements !== undefined) delta.userRequirements = userRequirements;
   if (Object.keys(removedIds).length) delta.removedIds = removedIds;
   if (before.settledThroughIndex !== after.settledThroughIndex) {
     delta.settledThroughIndex = after.settledThroughIndex;

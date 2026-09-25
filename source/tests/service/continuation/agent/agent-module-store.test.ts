@@ -77,6 +77,28 @@ describe('Agent 资料快照存储', () => {
     expect(chat[0][AGENT_MODULE_FIELD_ACU].schemaVersion).toBe(1);
   });
 
+  it('空快照自带空用户要求清单及其修订号', () => {
+    const empty = buildEmptyAgentModuleSnapshot_ACU();
+    expect(empty.userRequirements).toEqual([]);
+    expect(empty.revisions.userRequirements).toBe(0);
+  });
+
+  it('旧快照缺 userRequirements 时兼容为空清单；字段一旦出现就必须整体合法', () => {
+    const legacy = {
+      schemaVersion: 1, settledThroughIndex: 2, updatedAt: 1,
+      revisions: { hooks: 1, infoGap: 0, constraints: 0, storyArc: 0 },
+      hooks: [hook_ACU('H1')], infoGap: [], constraints: [],
+    };
+    const loaded = validateAgentModuleSnapshot_ACU(legacy);
+    expect(loaded!.userRequirements).toEqual([]);
+    expect(loaded!.revisions.userRequirements).toBe(0);
+    expect(loaded!.hooks).toHaveLength(1);
+    expect(validateAgentModuleSnapshot_ACU({ ...legacy, userRequirements: [''] })).toBeNull();
+    expect(validateAgentModuleSnapshot_ACU({ ...legacy, userRequirements: [1] })).toBeNull();
+    expect(validateAgentModuleSnapshot_ACU({ ...legacy, userRequirements: '不是数组' })).toBeNull();
+    expect(validateAgentModuleSnapshot_ACU({ ...legacy, userRequirements: ['不要提前揭底牌', '用第一人称'] })!.userRequirements).toEqual(['不要提前揭底牌', '用第一人称']);
+  });
+
   it('水位之前删除中间楼层时不复用旧快照，按前缀失配安全回退', async () => {
     const chat: any[] = [{ mes: 'a' }, { mes: 'b' }, { mes: 'c' }, { mes: 'd' }];
     const saveChat = vi.fn().mockResolvedValue(undefined);

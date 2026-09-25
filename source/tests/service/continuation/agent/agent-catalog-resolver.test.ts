@@ -66,6 +66,7 @@ describe('Agent 目录渲染', () => {
     expect(catalog).not.toContain('arc-architect');
     expect(catalog).not.toContain('outline-architect');
     expect(catalog).not.toContain('instruction-composer');
+    expect(catalog).not.toContain('requirements-maintainer');
   });
 
   it('资料模块目录说明谁能写，长期约束标注仅主 Agent 可登记', () => {
@@ -89,6 +90,15 @@ describe('Agent 目录渲染', () => {
   it('未知代理名查不到定义', () => {
     expect(findAgentSubagentDefinition_ACU('hook-cognition-maintainer')?.kind).toBe('maintain');
     expect(findAgentSubagentDefinition_ACU('不存在的代理')).toBeNull();
+  });
+
+  it('用户要求模块进资料目录与读集词汇表，维护子代理可按名查到但不进主 Agent 目录', () => {
+    const moduleCatalog = renderAgentModuleCatalog_ACU();
+    expect(moduleCatalog).toContain('$USER_REQUIREMENTS');
+    expect(moduleCatalog).toContain('requirements-maintainer');
+    expect(renderAgentReadCatalog_ACU()).toContain('$USER_REQUIREMENTS');
+    expect(findAgentSubagentDefinition_ACU('requirements-maintainer')).toMatchObject({ kind: 'maintain', promptKey: 'requirementsMaintainer' });
+    expect(renderAgentSubagentCatalog_ACU()).not.toContain('name: requirements-maintainer');
   });
 });
 

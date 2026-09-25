@@ -48,6 +48,7 @@ export const CONTINUATION_ROLE_OUTPUT_TOKEN_FLOORS_ACU: Readonly<Record<Continua
   finalReviewer: 4096,
   webResearcher: 8192,
   instructionComposer: 4096,
+  requirementsMaintainer: 4096,
 };
 
 /**
