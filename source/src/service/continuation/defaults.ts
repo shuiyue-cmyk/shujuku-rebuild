@@ -155,6 +155,12 @@ export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V28_ACU = 'spv3.6-continu
  * 直接以本版本承载固定工作流；谱系哈希与上游 V29 主会话段一致。）
  */
 export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V29_ACU = 'spv3.7-continuation-fixed-workflow-v29';
+/**
+ * V30 将总纲和阶段大纲生命周期也纳入 open_round 固定工作流；主 Agent 只给焦点，
+ * 不再直接派工 arc-architect、outline-architect 或 instruction-composer。
+ * （对标上游 V31，上游 V30 在 TT 链中即本树 V29。）
+ */
+export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V30_ACU = 'spv3.8-continuation-structure-bootstrap-v30';
 
 /**
  * 连续高压轮上限的默认值。8 轮约等于 8000 字全程没有喘息——这才是病态；
@@ -251,7 +257,7 @@ export function buildDefaultContinuationSettings_ACU(): ContinuationSettings_ACU
     agentApiPresets: buildDefaultContinuationAgentApiPresets_ACU(),
     outlinePrompt: buildDefaultContinuationOutlinePrompt_ACU(),
     agentPrompts: buildDefaultContinuationAgentPrompts_ACU(),
-    promptForceDefaultVersion: CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V29_ACU,
+    promptForceDefaultVersion: CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V30_ACU,
   };
 }
 

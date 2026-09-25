@@ -618,13 +618,13 @@ export interface AgentBlockAction_ACU {
   unresolved: string[];
 }
 
-/** 每轮一次的开局决策。固定工作流据此自治执行，主 Agent 不再逐个派管线角色。 */
+/** 每轮一次的开局决策。固定工作流据此自治执行，主 Agent 不再逐个派管线角色；
+ * 总纲与阶段大纲由程序固定工作流内部维护，不再经 open_round 开关直派。 */
 export interface AgentOpenRoundAction_ACU {
   kind: 'open_round';
   thought: string;
   focus: string;
   summary: string;
-  dispatchArcArchitect: boolean;
   dispatchWebResearcher: boolean;
 }
 
