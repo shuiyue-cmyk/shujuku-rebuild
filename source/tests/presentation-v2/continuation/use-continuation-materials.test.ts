@@ -95,4 +95,29 @@ describe('useContinuationMaterials chat binding', () => {
     expect(d.replace).not.toHaveBeenCalled();
     expect(d.getChat()[0]).toEqual({ kind: 'b' });
   });
+
+  it('用户要求按字符串数组提交，保存失败时不覆盖编辑中的 JSON 草稿', async () => {
+    const d = await setup();
+    const materials = d.useContinuationMaterials();
+    materials.reload();
+    materials.updateDraft('userRequirements', JSON.stringify(['已有要求', '新增要求'], null, 2));
+    d.replace.mockRejectedValueOnce(new Error('写入失败'));
+
+    expect(await materials.save('userRequirements')).toBe(false);
+    expect(materials.modules.userRequirements.dirty).toBe(true);
+    expect(JSON.parse(materials.modules.userRequirements.draft)).toEqual(['已有要求', '新增要求']);
+    expect(materials.modules.userRequirements.error).toContain('写入失败');
+
+    d.replace.mockImplementationOnce(async (raw: any, explicitChat?: any[]) => {
+      const target = explicitChat || d.getChat();
+      target[0] = { ...target[0], saved: raw };
+      const base = snapshot('saved');
+      return { ...base, userRequirements: ['已有要求', '新增要求'], revisions: { ...base.revisions, userRequirements: 2 } };
+    });
+    expect(await materials.save('userRequirements')).toBe(true);
+    expect(materials.snapshot.value?.userRequirements).toEqual(['已有要求', '新增要求']);
+    expect(materials.modules.userRequirements.dirty).toBe(false);
+    expect(JSON.parse(materials.modules.userRequirements.draft)).toEqual(['已有要求', '新增要求']);
+    expect(d.replace).toHaveBeenCalled();
+  });
 });

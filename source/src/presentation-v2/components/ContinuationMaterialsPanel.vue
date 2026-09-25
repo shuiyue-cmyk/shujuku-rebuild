@@ -386,29 +386,26 @@
     <!-- 用户要求：Agent 会话里用户累计提出的任务要求 -->
     <template v-else-if="activeTab === 'userRequirements'">
       <p class="acu-v2-continuation-materials__meta">
-        用户要求由 requirements-maintainer 在会话历史压缩后整理，创建任务时会把初始要求机械写成首条。
-        也可以在这里手动修正；保存走严格校验：必须是字符串数组，空串或非字符串条目会整份拒绝。
+        用户要求由 requirements-maintainer 在会话历史压缩后整理，创建任务时会把初始要求写成首条；每个标签是一条要求，保存时自动转换为字符串数组。
       </p>
       <p v-if="materials.snapshot.value" class="acu-v2-continuation-materials__meta">
         条目 {{ materials.snapshot.value.userRequirements.length }} 条 · 修订号 {{ materials.snapshot.value.revisions.userRequirements }}
       </p>
       <p v-if="materials.loadError.value" class="acu-v2-continuation-materials__error">{{ materials.loadError.value }}</p>
-      <p v-if="!materials.snapshot.value?.userRequirements.length" class="acu-v2-continuation-materials__empty">
-        还没有用户要求条目。创建任务后会写入初始要求；之后在 Agent 会话里补充的实质要求会在历史压缩后合并进来。
+      <p v-if="materials.snapshot.value && !materials.snapshot.value.userRequirements.length" class="acu-v2-continuation-materials__empty">
+        还没有用户要求条目。创建任务后会写入初始要求；之后在 Agent 会话里补充的实质要求会在历史压缩后合并进来。可点击新增标签手动添加。
       </p>
-      <ol v-else class="acu-v2-continuation-materials__list">
-        <li v-for="(line, index) in materials.snapshot.value.userRequirements" :key="`${index}-${line}`">{{ line }}</li>
-      </ol>
-      <details class="acu-v2-continuation-materials__json">
-        <summary>编辑原始 JSON</summary>
-        <p class="acu-v2-continuation-materials__card-meta">必须是字符串数组，例如 ["不要提前揭底牌","继续用第一人称"]。空数组表示清空；空串条目会被拒绝。</p>
-        <AcuTextarea :model-value="materials.modules.userRequirements.draft" :rows="10" @update:model-value="value => materials.updateDraft('userRequirements', value)" />
-        <p v-if="materials.modules.userRequirements.error" class="acu-v2-continuation-materials__error">{{ materials.modules.userRequirements.error }}</p>
-        <div class="acu-v2-continuation-materials__actions">
-          <AcuButton :disabled="!materials.modules.userRequirements.dirty" @click="materials.discard('userRequirements')">放弃修改</AcuButton>
-          <AcuButton variant="primary" :loading="materials.modules.userRequirements.saving" :disabled="!materials.modules.userRequirements.dirty" @click="materials.save('userRequirements')">保存用户要求</AcuButton>
-        </div>
-      </details>
+      <UserRequirementsEditor
+        editor-id="continuation"
+        :items="requirementItems"
+        :dirty="materials.modules.userRequirements.dirty"
+        :error="materials.modules.userRequirements.error"
+        :saving="materials.modules.userRequirements.saving"
+        :disabled="!materials.snapshot.value || busy"
+        @update:items="updateRequirementItems"
+        @discard="materials.discard('userRequirements')"
+        @save="materials.save('userRequirements')"
+      />
     </template>
 
     <!-- 故事总纲：结构化展示 + JSON 编辑 -->
@@ -462,6 +459,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import AcuButton from './_lib/AcuButton.vue';
 import AcuTextarea from './_lib/AcuTextarea.vue';
+import UserRequirementsEditor from './UserRequirementsEditor.vue';
 import { useContinuationMaterials, CONTINUATION_MATERIAL_MODULE_LABELS_ACU } from '../composables/useContinuationMaterials';
 import { watchChatChanged_ACU } from '../composables/useChatChangedListener';
 import { buildContinuationPendingFixCards_ACU } from '../continuation/pending-fix-cards';
@@ -550,6 +548,20 @@ function formatTimestamp(value: number): string {
 
 const activeTab = ref<TabId>('outline');
 const materials = useContinuationMaterials();
+
+const requirementItems = computed<string[]>(() => {
+  try {
+    const parsed: unknown = JSON.parse(materials.modules.userRequirements.draft);
+    return Array.isArray(parsed) && parsed.every(item => typeof item === 'string') ? parsed : [];
+  } catch {
+    return [];
+  }
+});
+
+function updateRequirementItems(items: string[]): void {
+  materials.updateDraft('userRequirements', JSON.stringify(items, null, 2));
+  materials.modules.userRequirements.error = '';
+}
 const selectedRepairModules = ref<AgentWritableModule_ACU[]>([]);
 const pendingFixCards = computed(() => buildContinuationPendingFixCards_ACU(materials.snapshot.value?.pendingFixes));
 const materialStatusCards = computed(() => buildMaterialCompletionCards_ACU({
