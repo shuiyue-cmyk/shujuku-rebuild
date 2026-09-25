@@ -318,6 +318,20 @@ export function useContinuationRuntime() {
     return run_ACU(() => runtime.orchestrator.continueTask());
   }
 
+  /** 定向补足资料，不生成或发送宿主正文。 */
+  async function repairPendingMaterials(
+    modules: readonly import('../../service/continuation/agent/agent-model').AgentWritableModule_ACU[],
+  ): Promise<boolean> {
+    if (!modules.length) return false;
+    let outcome: Awaited<ReturnType<typeof runtime.orchestrator.repairPendingMaterials>> | null = null;
+    const completed = await run_ACU(async () => (outcome = await runtime.orchestrator.repairPendingMaterials({ modules })));
+    if (completed && outcome) {
+      if (outcome.failedModules.length) toast.info(`已保留成功模块；仍待补足：${outcome.failedModules.join('、')}`);
+      else toast.success('已完成所选智能续写资料模块的定向补足。');
+    }
+    return completed;
+  }
+
   /**
    * 停止 Agent 循环与酒馆正文。刻意不经 run_ACU：busy 恰好在循环运行期间为 true，
    * 走 busy 闸会把停止请求静默吞掉——而那正是用户最需要停止的时刻。
@@ -498,6 +512,7 @@ export function useContinuationRuntime() {
     initialize,
     isAwaitingHostResult,
     originInstruction,
+    repairPendingMaterials,
     refresh,
     replanRemaining,
     replanRemainingWithInstruction,

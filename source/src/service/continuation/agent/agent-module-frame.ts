@@ -158,6 +158,7 @@ function semanticPayload_ACU(snapshot: AgentModuleSnapshot_ACU): string {
     chronology: snapshot.chronology,
     webRefs: snapshot.webRefs,
     userRequirements: snapshot.userRequirements ?? [],
+    materialCompletion: snapshot.materialCompletion,
     pendingFixes: snapshot.pendingFixes ?? [],
   });
 }
@@ -197,6 +198,7 @@ function parseDelta_ACU(raw: unknown, deps: AgentModuleFrameDeps_ACU): AgentModu
     revisions: raw.revisions as AgentModuleFloorDelta_ACU['revisions'],
     ...(Array.isArray(raw.userRequirements) ? { userRequirements: raw.userRequirements as string[] } : {}),
     ...(isRecord_ACU(raw.removedIds) ? { removedIds: raw.removedIds as AgentModuleFloorDelta_ACU['removedIds'] } : {}),
+    ...(isRecord_ACU(raw.materialCompletion) ? { materialCompletion: raw.materialCompletion as unknown as AgentModuleFloorDelta_ACU['materialCompletion'] } : {}),
     ...(raw.settledThroughIndex === undefined ? {} : { settledThroughIndex: raw.settledThroughIndex as number }),
     updatedAt: typeof raw.updatedAt === 'number' && raw.updatedAt >= 0 ? raw.updatedAt : 0,
   });
@@ -213,6 +215,7 @@ function parseDelta_ACU(raw: unknown, deps: AgentModuleFrameDeps_ACU): AgentModu
   // 内容清洗下沉到视图折叠与写入规划（矩阵白名单 + unset/value 显式区分），此处只透传。
   if (isRecord_ACU(raw.fieldUpserts)) delta.fieldUpserts = cloneJson_ACU(raw.fieldUpserts) as AgentModuleFieldUpserts_ACU;
   if (isRecord_ACU(raw.removedIds)) delta.removedIds = cloneJson_ACU(raw.removedIds) as AgentModuleFloorDelta_ACU['removedIds'];
+  if (isRecord_ACU(raw.materialCompletion)) delta.materialCompletion = cloneJson_ACU(applied.materialCompletion);
   if (typeof raw.settledThroughIndex === 'number' && Number.isInteger(raw.settledThroughIndex) && raw.settledThroughIndex >= 0) {
     delta.settledThroughIndex = raw.settledThroughIndex;
   }
@@ -301,6 +304,7 @@ function applyDelta_ACU(snapshot: AgentModuleSnapshot_ACU, delta: AgentModuleFlo
     next.pendingFixes = cloneJson_ACU((delta.writes as Record<string, unknown>).pendingFixes) as AgentModuleSnapshot_ACU['pendingFixes'];
   }
   if (!Array.isArray(next.pendingFixes)) next.pendingFixes = [];
+  if (delta.materialCompletion !== undefined) next.materialCompletion = cloneJson_ACU(delta.materialCompletion);
   next.updatedAt = delta.updatedAt;
   return next;
 }
@@ -354,6 +358,10 @@ function diffSnapshot_ACU(before: AgentModuleSnapshot_ACU, after: AgentModuleSna
   const delta: AgentModuleFloorDelta_ACU = { seq, swipeId, writes, revisions, updatedAt: after.updatedAt };
   if (userRequirements !== undefined) delta.userRequirements = userRequirements;
   if (Object.keys(removedIds).length) delta.removedIds = removedIds;
+  if (JSON.stringify(before.materialCompletion) !== JSON.stringify(after.materialCompletion)) {
+    delta.materialCompletion = cloneJson_ACU(after.materialCompletion);
+    changed = true;
+  }
   if (before.settledThroughIndex !== after.settledThroughIndex) {
     delta.settledThroughIndex = after.settledThroughIndex;
     changed = true;

@@ -83,7 +83,7 @@ function violationOf_ACU(error: unknown): { message: string; details?: Record<st
 }
 
 function clonePendingFixes_ACU(pending: readonly AgentPendingFix_ACU[]): AgentPendingFix_ACU[] {
-  return pending.map(item => ({ ...item, violations: item.violations.map(violation => ({ ...violation })) }));
+  return pending.map(item => ({ ...item, violations: item.violations.map(violation => ({ ...violation })), acceptedKeys: [...(item.acceptedKeys ?? [])] }));
 }
 
 function recordPendingFix_ACU(
@@ -96,9 +96,14 @@ function recordPendingFix_ACU(
 ): void {
   const path = typeof details?.path === 'string' && details.path ? details.path : module;
   const violation = { path, message };
+  const now = Date.now();
   const found = pending.findIndex(item => item.module === module);
   if (found >= 0) {
     const previous = pending[found];
+    const prevAccepted = [...(previous.acceptedKeys ?? [])];
+    const prevRangeStart = typeof previous.rangeStartIndex === 'number' ? previous.rangeStartIndex : previous.firstFailedAtIndex;
+    const prevRangeEnd = typeof previous.rangeEndIndex === 'number' ? previous.rangeEndIndex : previous.firstFailedAtIndex;
+    const prevCreated = typeof previous.createdAt === 'number' ? previous.createdAt : now;
     pending[found] = {
       module,
       agentName: agentName || previous.agentName,
@@ -106,10 +111,19 @@ function recordPendingFix_ACU(
       attempts: previous.attempts + 1,
       firstFailedAtIndex: previous.firstFailedAtIndex,
       lastError: message,
+      source: 'transaction_rejected',
+      completion: prevAccepted.length ? 'partial' : 'failed',
+      rangeStartIndex: prevRangeStart,
+      rangeEndIndex: Math.max(prevRangeEnd, index),
+      acceptedKeys: prevAccepted,
+      createdAt: prevCreated,
+      updatedAt: now,
     };
     return;
   }
-  pending.push({ module, agentName, violations: [violation], attempts: 1, firstFailedAtIndex: index, lastError: message });
+  pending.push({ module, agentName, violations: [violation], attempts: 1, firstFailedAtIndex: index, lastError: message,
+    source: 'transaction_rejected', completion: 'failed', rangeStartIndex: index, rangeEndIndex: index,
+    acceptedKeys: [], createdAt: now, updatedAt: now });
 }
 
 function clearPendingModule_ACU(pending: AgentPendingFix_ACU[], module: AgentPendingFix_ACU['module']): void {
