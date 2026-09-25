@@ -22,7 +22,7 @@ import {
 } from '../../shared/host-api';
 import {
   currentChatFileIdentifier_ACU,
-  consumeGenerationContextForEnded_ACU,
+  resolveGenerationContextForEnded_ACU,
   discardLatestGenerationContext_ACU,
   generationGate_ACU,
   getCurrentIsolationKey_ACU,
@@ -81,8 +81,7 @@ import {
   loadAllChatMessages_ACU
 } from '../../service/worldbook/pipeline';
 import {
-  emitMessageUpdated_ACU,
-  getChatArray_ACU
+  emitMessageUpdated_ACU
 } from '../../data/gateways/chat-gateway';
 import { resolveAiFloorSignature_ACU, resolveAiFloorSignatureEx_ACU } from '../../service/table/auto-fill-echo-guard';
 import { countAiModelOutputFloors_ACU } from '../../shared/ai-floor';
@@ -136,6 +135,10 @@ import { bindContinuationInternalAiGenerationStarted_ACU, consumeContinuationInt
 import { getContinuationHostGenerationBridge_ACU } from '../../service/continuation/host-generation-bridge-registry';
 import { getContinuationRuntime_ACU } from '../../service/continuation/continuation-runtime';
 import { attachMvuAnalysisGate_ACU } from '../../service/runtime/mvu-analysis-gate';
+import {
+  capturePlotRuntimeScope_ACU,
+  isSamePlotRuntimeScope_ACU,
+} from '../../service/runtime/plot-runtime/plot-runtime-scope';
 
 // ═══ [H2/M4] 启动期重建链互斥守卫 ═══
 // 背景：启动时可能存在两条并发的重建链——chatId 可用路径的 setTimeout(initWithChatId, 1000)
@@ -711,6 +714,8 @@ export   function mainInitialize_ACU() {
         if (SillyTavern_API_ACU.eventTypes.GENERATION_STOPPED) {
           SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.GENERATION_STOPPED, () => {
             try {
+              // TT 的 GENERATION_STOPPED 是本轮停止事实：立即使已排队的旧自动填表回调失效。
+              _set_wasStoppedByUser_ACU(true);
               const discarded = discardLatestGenerationContext_ACU();
               // 被中止的生成不会再有 GENERATION_ENDED；通知桥把等待中的续写轮转为可重试，避免卡死。
               void getContinuationHostGenerationBridge_ACU()?.onGenerationStopped(discarded?.seq);
@@ -720,7 +725,21 @@ export   function mainInitialize_ACU() {
         if (SillyTavern_API_ACU.eventTypes.GENERATION_ENDED) {
             const onGenerationEnded = (message_id: any) => {
                 logDebug_ACU(`ACU GENERATION_ENDED event for message_id: ${message_id}`);
-                const generationContext = consumeGenerationContextForEnded_ACU();
+                const chatAtCapture = SillyTavern_API_ACU?.chat || [];
+                let endedSignatureEx: AiFloorSignatureEx_ACU | undefined;
+                try {
+                    endedSignatureEx = resolveAiFloorSignatureEx_ACU(chatAtCapture);
+                } catch {
+                    endedSignatureEx = undefined;
+                }
+                const generationEndMatch = resolveGenerationContextForEnded_ACU(endedSignatureEx);
+                if (generationEndMatch.status === 'ambiguous') {
+                    // TT 的 ENDED 无 generation id；并发时不能把 quiet/普通上下文按 LIFO 硬配。
+                    // 歧义事件不交给 continuation 桥或普通自动链，防止 quiet 触发前台链路。
+                    logDebug_ACU(`ACU GENERATION_ENDED 配对歧义，fail closed: message_id=${message_id}`);
+                    return;
+                }
+                const generationContext = generationEndMatch.context;
                 const internalRequest = consumeContinuationInternalAiGenerationEnded_ACU(generationContext?.seq);
                 if (internalRequest) {
                   logDebug_ACU(`ACU 忽略 continuation 内部 ${internalRequest.source} GENERATION_ENDED: ${internalRequest.requestId}`);
@@ -749,7 +768,6 @@ export   function mainInitialize_ACU() {
                 // [触发修复] 原子捕获完整意图快照：事件参数只作为锚点，不承诺是 AI 数组下标。
                 // makeFirst 可能早于宿主把本轮 AI 回复追加进 chat，因此必须记录捕获时边界，
                 // 由 resolveGeneratedAiMessageIndex_ACU 在防抖回调中按唯一候选规则解析。
-                const chatAtCapture = SillyTavern_API_ACU?.chat || [];
                 const eventMessageId = typeof message_id === 'number' && Number.isInteger(message_id)
                   ? message_id
                   : undefined;
@@ -761,15 +779,15 @@ export   function mainInitialize_ACU() {
                       capturedAt: Date.now(),
                       capturedChatLength: chatAtCapture.length,
                       capturedAiFloorCount: countAiModelOutputFloors_ACU(chatAtCapture),
-                      // generationSeq 仅在 generationGate 已产生过生成上下文时可靠；否则不假造。
-                      generationSeq: generationGate_ACU.generationSeq > 0 ? generationGate_ACU.generationSeq : undefined,
+                      // 已配对时必须携带该轮自己的 seq；并发下不能用全局最新 seq 冒充较早 ENDED。
+                      generationSeq: generationContext?.seq ?? (generationGate_ACU.generationSeq > 0 ? generationGate_ACU.generationSeq : undefined),
                       // [配对零产出证据] 仅配对携带 STARTED 时刻的扩展签名；无配对时为 undefined，下游直接放行。
                       preSignature: generationContext?.preSignature ?? undefined,
                   }
                   : undefined;
                 // [152 收紧] 「新 AI 楼证据」签名：本事件时刻的 AI 楼数 + 最新 AI 楼 message_id（含 narrator，
                 // 与 auto-fill-echo-guard 同口径）。聊天数组在这里读一次，交给门控自行决定无配对假 ended 的去留。
-                const endedFloorSignature_ACU = resolveAiFloorSignature_ACU(getChatArray_ACU());
+                const endedFloorSignature_ACU = resolveAiFloorSignature_ACU(chatAtCapture);
                 if (shouldProcessAutoTableUpdateForGenerationEnded_ACU(generationContext, endedFloorSignature_ACU)) {
                   handleNewMessageDebounced_ACU('GENERATION_ENDED', autoFillIntent);
                 } else if (generationContext) {
@@ -818,6 +836,17 @@ export   function mainInitialize_ACU() {
             if (params?._qrf_processed_by_hook) return;
             const shouldProcessSummaryVectorIndex = shouldProcessSummaryVectorIndexForGeneration_ACU(type, params, dryRun);
             const shouldProcessPlot = shouldProcessPlotForGeneration_ACU(type, params, dryRun);
+            const plotScope_ACU = shouldProcessPlot ? capturePlotRuntimeScope_ACU() : null;
+            const plotScopeStillCurrent_ACU = (): boolean => {
+              if (!plotScope_ACU) return true;
+              const currentScope = capturePlotRuntimeScope_ACU();
+              if (plotScope_ACU.reliable && currentScope.reliable) {
+                return isSamePlotRuntimeScope_ACU(plotScope_ACU, currentScope);
+              }
+              return plotScope_ACU.chatId === currentScope.chatId
+                && plotScope_ACU.characterId === currentScope.characterId
+                && plotScope_ACU.isolationKey === currentScope.isolationKey;
+            };
             const shouldEnsureInitialSeed = !dryRun
               && type !== 'regenerate'
               && !params?.automatic_trigger
@@ -850,7 +879,22 @@ export   function mainInitialize_ACU() {
             const lastMessage = chat[lastMessageIndex];
 
             // [重构] 调用 service 层策略1编排
-            const s1 = await orchestrateAfterCommandsStrategy1_ACU(lastMessage, lastMessageIndex, runOptimizationLogicWithUI_ACU);
+            if (!plotScopeStillCurrent_ACU()) {
+              logWarn_ACU('[剧情推进] GENERATION_AFTER_COMMANDS 作用域已变化，放弃策略1结果写回');
+              return;
+            }
+
+            const s1 = await orchestrateAfterCommandsStrategy1_ACU(
+              lastMessage,
+              lastMessageIndex,
+              runOptimizationLogicWithUI_ACU,
+              plotScope_ACU ? { runtimeScope: plotScope_ACU } : undefined,
+            );
+
+            if (!plotScopeStillCurrent_ACU()) {
+              logWarn_ACU('[剧情推进] GENERATION_AFTER_COMMANDS 作用域已变化，放弃策略1结果写回');
+              return;
+            }
 
             if (s1.action !== 'no_match') {
               // 策略1匹配，根据结果做 UI 操作
@@ -898,7 +942,20 @@ export   function mainInitialize_ACU() {
             const textInBox = getSendTextareaValue_ACU();
 
             // [重构] 调用 service 层策略2编排
-            const s2 = await orchestrateAfterCommandsStrategy2_ACU(String(textInBox || ''), runOptimizationLogicWithUI_ACU);
+            if (!plotScopeStillCurrent_ACU()) {
+              logWarn_ACU('[剧情推进] GENERATION_AFTER_COMMANDS 作用域已变化，放弃策略2结果写回');
+              return;
+            }
+            const s2 = await orchestrateAfterCommandsStrategy2_ACU(
+              String(textInBox || ''),
+              runOptimizationLogicWithUI_ACU,
+              plotScope_ACU ? { runtimeScope: plotScope_ACU } : undefined,
+            );
+
+            if (!plotScopeStillCurrent_ACU()) {
+              logWarn_ACU('[剧情推进] GENERATION_AFTER_COMMANDS 作用域已变化，放弃策略2结果写回');
+              return;
+            }
 
             switch (s2.action) {
               case 'aborted':

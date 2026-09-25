@@ -2,7 +2,7 @@
  * tests/service/ai/prompt-api-call.test.ts
  * AI API 调用 — prompt 组装 + 流式/非流式响应处理 单元测试
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const {
   mockSettings,
@@ -159,6 +159,10 @@ beforeEach(() => {
   mockSettings.promptTemplateSettings = { enabled: true };
 
   mockApplyExcludeRulesToText.mockImplementation((text: string) => text);
+  mockParseIfBlocksInContent.mockImplementation((text: string) => text);
+  mockParseRandomTags.mockImplementation((text: string) => text);
+  mockReplaceRandomVariables.mockImplementation((text: string) => text);
+  mockReplaceDbSqlVariables.mockImplementation((text: string) => text);
   mockGetApiConfigByPreset.mockReturnValue({
     apiMode: 'custom',
     apiConfig: { useMainApi: true, url: '', model: '', max_tokens: 4096 },
@@ -168,6 +172,10 @@ beforeEach(() => {
   mockGetCharDescription.mockReturnValue('角色描述');
   mockGetPlotFromHistory.mockReturnValue('上轮剧情');
   mockIsGenerateRawAvailable.mockReturnValue(true);
+});
+
+afterEach(() => {
+  delete (globalThis as any).EjsTemplate;
 });
 
 // ═══ handleApiResponse_ACU（流式输出开关已剥离，恒非流式） ═══
@@ -196,6 +204,13 @@ describe('handleApiResponse_ACU', () => {
     };
     const result = await handleApiResponse_ACU(mockResponse);
     expect(result).toBeNull();
+  });
+
+  it('非流式模式：响应体读取 AbortError 必须原样重抛', async () => {
+    const abortError = new DOMException('body read aborted', 'AbortError');
+    const mockResponse = { json: vi.fn().mockRejectedValue(abortError) };
+
+    await expect(handleApiResponse_ACU(mockResponse, false)).rejects.toBe(abortError);
   });
 
   it('非流式模式：未知格式返回 null', async () => {
@@ -324,11 +339,12 @@ describe('callCustomOpenAI_ACU — prompt 组装', () => {
 
     expect(resolveTableWorldbookContent).toHaveBeenCalledWith('人物关系表');
     expect(resolveTableWorldbookContent).toHaveBeenCalledWith('不存在的表');
-    expect(ejsEvaluate).toHaveBeenCalledWith('表:<worldbook_context>\n关系正文\n</worldbook_context> 未知:{{不存在的表}}');
+    expect(ejsEvaluate).toHaveBeenCalledTimes(1);
+    expect(ejsEvaluate.mock.calls[0][0]).not.toContain('<worldbook_context>\n关系正文\n</worldbook_context>');
+    expect(ejsEvaluate.mock.calls[0][0]).toContain('未知:{{不存在的表}}');
     const content = JSON.parse(mockFetch.mock.calls[0][1].body).messages[0].content;
     expect(content).toContain('<worldbook_context>\n关系正文\n</worldbook_context>');
     expect(content).toContain('{{不存在的表}}');
-    delete (globalThis as any).EjsTemplate;
   });
 
   it('$9 按填表上下文排除规则过滤（带 <worldbook_data> 边界包裹）', async () => {
@@ -341,6 +357,183 @@ describe('callCustomOpenAI_ACU — prompt 组装', () => {
 
     expect(mockApplyExcludeRulesToText).toHaveBeenCalledWith(expect.stringContaining('已排除的世界书正文'), expect.any(Object));
     expect(JSON.parse(mockFetch.mock.calls[0][1].body).messages[0].content).toBe('<worldbook_data>\n过滤后的世界书\n</worldbook_data>');
+  });
+});
+
+describe('callCustomOpenAI_ACU — 不可信内容模板隔离', () => {
+  const UNTRUSTED_ATTACK = [
+    '<%= "UNTRUSTED_EJS" %>',
+    '<random min="1" max="1" />',
+    '$random:untrusted',
+    '{[sql "SELECT \'UNTRUSTED_SQL\'"]}',
+    '{[db.untrusted.all()]}',
+    '<if seed="UNTRUSTED_IF">UNTRUSTED_IF_BRANCH</if>',
+    '{{untrusted.worldbook.token}}',
+  ].join('|');
+  const EXECUTED_MARKERS = [
+    'EJS_EXECUTED', 'RANDOM_EXECUTED', 'RANDOM_VAR_EXECUTED',
+    'SQL_EXECUTED', 'ORM_EXECUTED', 'IF_EXECUTED',
+  ];
+
+  const replaceLiteral = (text: string, needle: string, replacement: string): string => text.split(needle).join(replacement);
+
+  function installActiveTemplateMocks(): void {
+    (globalThis as any).EjsTemplate = {
+      evalTemplate: vi.fn(async (content: string) => content
+        .replace(/<%=\s*["']UNTRUSTED_EJS["']\s*%>/g, 'EJS_EXECUTED')
+        .replace(/<%=\s*["']TRUSTED_EJS["']\s*%>/g, 'EJS_TRUSTED_RAN')),
+    };
+    mockParseRandomTags.mockImplementation((text: string) => text
+      .replace(/<random min="1" max="1" \/>/g, 'RANDOM_EXECUTED')
+      .replace(/<random min="7" max="7" \/>/g, '7'));
+    mockReplaceRandomVariables.mockImplementation((text: string) => text.replace(/\$random:untrusted/g, 'RANDOM_VAR_EXECUTED'));
+    mockReplaceDbSqlVariables.mockImplementation((text: string) => {
+      let rendered = replaceLiteral(text, '{[sql "SELECT \'UNTRUSTED_SQL\'"]}', 'SQL_EXECUTED');
+      rendered = replaceLiteral(rendered, '{[sql "SELECT TRUSTED_SQL"]}', 'SQL_TRUSTED_RAN');
+      rendered = replaceLiteral(rendered, '{[db.untrusted.all()]}', 'ORM_EXECUTED');
+      return replaceLiteral(rendered, '{[db.trusted.all()]}', 'ORM_TRUSTED_RAN');
+    });
+    mockParseIfBlocksInContent.mockImplementation((text: string) => {
+      const rendered = replaceLiteral(text, '<if seed="TRUSTED_IF">TRUSTED_IF_BRANCH</if>', 'IF_TRUSTED_RAN');
+      return replaceLiteral(rendered, '<if seed="UNTRUSTED_IF">UNTRUSTED_IF_BRANCH</if>', 'IF_EXECUTED');
+    });
+  }
+
+  beforeEach(() => {
+    mockGetApiConfigByPreset.mockReturnValue({
+      apiMode: 'custom',
+      apiConfig: { url: 'https://api.example.com', model: 'gpt-4', max_tokens: 4096 },
+    });
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ choices: [{ message: { content: 'AI回复' } }] }),
+    });
+    installActiveTemplateMocks();
+  });
+
+  it.each([
+    {
+      source: '$0 表格文本',
+      prompt: '$0',
+      dynamic: { tableDataText: UNTRUSTED_ATTACK },
+      configure: () => {},
+    },
+    {
+      source: '$1 聊天文本',
+      prompt: '$1',
+      dynamic: { messagesText: UNTRUSTED_ATTACK },
+      configure: () => {},
+    },
+    {
+      source: '$4 世界书文本',
+      prompt: '$4',
+      dynamic: { worldbookContent: UNTRUSTED_ATTACK },
+      configure: () => {},
+    },
+    {
+      source: '$6 上轮规划文本',
+      prompt: '$6',
+      dynamic: {},
+      configure: () => mockGetPlotFromHistory.mockReturnValue(UNTRUSTED_ATTACK),
+    },
+    {
+      source: '$8 手工提示文本',
+      prompt: '$8',
+      dynamic: { manualExtraHint: UNTRUSTED_ATTACK },
+      configure: () => {},
+    },
+    {
+      source: '$9 世界书排除文本',
+      prompt: '$9',
+      dynamic: { worldbookDatabaseExcludedContent: UNTRUSTED_ATTACK },
+      configure: () => {},
+    },
+    {
+      source: '$U 用户设定',
+      prompt: '$U',
+      dynamic: {},
+      configure: () => mockGetPersonaDescription.mockReturnValue(UNTRUSTED_ATTACK),
+    },
+    {
+      source: '$C 角色设定',
+      prompt: '$C',
+      dynamic: {},
+      configure: () => mockGetCharDescription.mockReturnValue(UNTRUSTED_ATTACK),
+    },
+  ])('$source 在所有模板处理器执行时不可见，出站时仍完整保留', async ({ prompt, dynamic, configure }) => {
+    configure();
+    mockSettings.charCardPrompt = [{ role: 'USER', content: prompt }];
+    const resolveTableWorldbookContent = vi.fn(async () => UNTRUSTED_ATTACK);
+
+    await callCustomOpenAI_ACU({ ...dynamic, resolveTableWorldbookContent });
+
+    for (const processor of [
+      (globalThis as any).EjsTemplate.evalTemplate,
+      mockParseRandomTags,
+      mockReplaceRandomVariables,
+      mockReplaceDbSqlVariables,
+      mockParseIfBlocksInContent,
+    ]) {
+      expect(processor).toHaveBeenCalled();
+      for (const call of processor.mock.calls) expect(call[0]).not.toContain(UNTRUSTED_ATTACK);
+    }
+    expect(resolveTableWorldbookContent).not.toHaveBeenCalled();
+    const content = JSON.parse(mockFetch.mock.calls[0][1].body).messages[0].content;
+    expect(content).toContain(UNTRUSTED_ATTACK);
+    for (const marker of EXECUTED_MARKERS) expect(content).not.toContain(marker);
+  });
+
+  it('resolveTableWorldbookContent 的返回内容同样在所有模板处理器执行时不可见', async () => {
+    mockSettings.charCardPrompt = [{ role: 'USER', content: '表世界书:{{trusted.worldbook}}' }];
+    const resolveTableWorldbookContent = vi.fn(async () => UNTRUSTED_ATTACK);
+
+    await callCustomOpenAI_ACU({ resolveTableWorldbookContent });
+
+    expect(resolveTableWorldbookContent).toHaveBeenCalledWith('trusted.worldbook');
+    const content = JSON.parse(mockFetch.mock.calls[0][1].body).messages[0].content;
+    expect(content).toContain(UNTRUSTED_ATTACK);
+    for (const marker of EXECUTED_MARKERS) expect(content).not.toContain(marker);
+  });
+
+  it('随机源重复且不可信值猜中首个 nonce 时仍选择无碰撞 token 并完整恢复', async () => {
+    const fixedUuid = '11111111-1111-4111-8111-111111111111';
+    const predictedToken = `__ACU_TABLE_FILL_UNTRUSTED_${fixedUuid}_0__`;
+    const tablePayload = `${predictedToken}|TABLE_PAYLOAD_SENTINEL`;
+    const chatPayload = 'CHAT_PAYLOAD_SENTINEL';
+    const randomUuidSpy = vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(fixedUuid as `${string}-${string}-${string}-${string}-${string}`);
+    mockSettings.charCardPrompt = [{ role: 'USER', content: '$0|$1' }];
+
+    try {
+      await callCustomOpenAI_ACU({ tableDataText: tablePayload, messagesText: chatPayload });
+    } finally {
+      randomUuidSpy.mockRestore();
+    }
+
+    const content = JSON.parse(mockFetch.mock.calls[0][1].body).messages[0].content;
+    expect(content).toContain(tablePayload);
+    expect(content).toContain(chatPayload);
+  });
+
+  it('可信 charCardPrompt 自身的 EJS/random/SQL/ORM/if 模板仍会执行', async () => {
+    mockSettings.charCardPrompt = [{
+      role: 'USER',
+      content: [
+        '<%= "TRUSTED_EJS" %>',
+        '<random min="7" max="7" />',
+        '{[sql "SELECT TRUSTED_SQL"]}',
+        '{[db.trusted.all()]}',
+        '<if seed="TRUSTED_IF">TRUSTED_IF_BRANCH</if>',
+      ].join('|'),
+    }];
+
+    await callCustomOpenAI_ACU({});
+
+    const content = JSON.parse(mockFetch.mock.calls[0][1].body).messages[0].content;
+    expect(content).toContain('EJS_TRUSTED_RAN');
+    expect(content).toContain('7');
+    expect(content).toContain('SQL_TRUSTED_RAN');
+    expect(content).toContain('ORM_TRUSTED_RAN');
+    expect(content).toContain('IF_TRUSTED_RAN');
   });
 });
 
@@ -572,6 +765,12 @@ describe('handleApiResponse_ACU 响应解析', () => {
       text: async () => 'data: {"choices":[{"delta":{}}]}\ndata: [DONE]\n',
     });
     expect(result).toBeNull();
+  });
+
+  it('流式模式：响应体读取 AbortError 必须原样重抛', async () => {
+    const abortError = new DOMException('stream body read aborted', 'AbortError');
+
+    await expect(handleApiResponse_ACU({ text: vi.fn().mockRejectedValue(abortError) }, true)).rejects.toBe(abortError);
   });
 
   it('streamingEnabled 关闭时走 JSON 解析', async () => {

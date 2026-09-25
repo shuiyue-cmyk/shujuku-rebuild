@@ -189,6 +189,29 @@ export function upsertTemplatePreset_ACU(nameRaw: string, templateStr: string) {
     return saveTemplatePresetsStore_ACU(s);
 }
 
+export function renameTemplatePreset_ACU(nameRaw: string, newNameRaw: string): { ok: boolean; code?: string; error?: string } {
+    const name = String(nameRaw || '').trim();
+    const newName = String(newNameRaw || '').trim();
+    if (!name || !newName) return { ok: false, code: 'invalid_name', error: '模板预设名称不能为空。' };
+    if (name === newName) return { ok: false, code: 'same_name', error: '新名称不能与旧名称相同。' };
+    const store = loadTemplatePresetsStore_ACU();
+    const presets = store.presets && typeof store.presets === 'object' ? store.presets : {};
+    const source = presets[name];
+    if (!source || typeof source !== 'object') return { ok: false, code: 'source_not_found', error: '找不到源模板预设。' };
+    if (Object.prototype.hasOwnProperty.call(presets, newName)) {
+        return { ok: false, code: 'target_exists', error: '目标模板预设名称已存在。' };
+    }
+    const next = {
+        ...store,
+        presets: { ...presets, [newName]: { ...source, updatedAt: Date.now() } },
+    };
+    delete next.presets[name];
+    if (!saveTemplatePresetsStore_ACU(next)) {
+        return { ok: false, code: 'storage_error', error: '保存模板预设库失败。' };
+    }
+    return { ok: true };
+}
+
 export function deleteTemplatePreset_ACU(nameRaw: string) {
     const name = String(nameRaw || '').trim();
     if (!name) return false;
@@ -448,14 +471,21 @@ function applyMergePlanToCandidate_ACU(
     candidateData: Record<string, any>,
     templateData: Record<string, any>,
     mergePlan: Record<string, import('./template-data-preflight').TemplateSheetMergePlan_ACU>,
-): void {
+): { ok: boolean; errors: string[] } {
+    const errors: string[] = [];
     for (const [sheetKey, plan] of Object.entries(mergePlan)) {
         const candidateSheet = candidateData?.[sheetKey];
         const templateSheet = templateData?.[sheetKey];
-        if (!candidateSheet || typeof candidateSheet !== 'object' || !templateSheet || typeof templateSheet !== 'object') continue;
+        if (!candidateSheet || typeof candidateSheet !== 'object' || !templateSheet || typeof templateSheet !== 'object') {
+            errors.push(`表 ${sheetKey} 缺少 merge candidate 或 template 数据。`);
+            continue;
+        }
         const candidateContent = Array.isArray(candidateSheet.content) ? candidateSheet.content : [];
         const templateContent = Array.isArray(templateSheet.content) ? templateSheet.content : [];
-        if (candidateContent.length === 0 || templateContent.length === 0) continue;
+        if (candidateContent.length === 0 || templateContent.length === 0) {
+            errors.push(`表 ${sheetKey} 的 merge 数据为空。`);
+            continue;
+        }
         const headerWidth = Array.isArray(candidateContent[0]) ? candidateContent[0].length : 0;
         const templateRowByRowId = new Map<string, unknown[]>();
         for (const row of templateContent.slice(1)) {
@@ -463,34 +493,50 @@ function applyMergePlanToCandidate_ACU(
             const rowId = String(row[0] ?? '').trim();
             if (rowId) templateRowByRowId.set(rowId, row);
         }
-        // 插入行：业务键未命中 → 追加模板行（补齐到表头宽度）
         for (const rowId of plan.insertRowIds) {
             const templateRow = templateRowByRowId.get(rowId);
-            if (!templateRow) continue;
+            if (!templateRow) {
+                errors.push(`表 ${sheetKey} 的插入计划 row_id=${rowId} 未在模板中找到。`);
+                continue;
+            }
             const cells = [...templateRow];
             while (cells.length < headerWidth) cells.push(null);
             candidateContent.push(cells);
         }
-        // 覆盖行：template-wins → 用模板行替换既有行（按 row_id 匹配）
-        if (plan.overrideRowIds.length > 0) {
-            const candidateRowIndexById = new Map<string, number>();
-            for (let index = 1; index < candidateContent.length; index += 1) {
-                const row = candidateContent[index];
-                if (!Array.isArray(row)) continue;
-                const rowId = String(row[0] ?? '').trim();
-                if (rowId) candidateRowIndexById.set(rowId, index);
-            }
-            for (const rowId of plan.overrideRowIds) {
-                const templateRow = templateRowByRowId.get(rowId);
-                if (!templateRow) continue;
-                const index = candidateRowIndexById.get(rowId);
-                if (index === undefined) continue; // 既有行不存在则不覆盖
-                const cells = [...templateRow];
-                while (cells.length < headerWidth) cells.push(null);
-                candidateContent[index] = cells;
+        const candidateRowIndexById = new Map<string, number>();
+        for (let index = 1; index < candidateContent.length; index += 1) {
+            const row = candidateContent[index];
+            if (!Array.isArray(row)) continue;
+            const rowId = String(row[0] ?? '').trim();
+            if (rowId) candidateRowIndexById.set(rowId, index);
+        }
+        const mappings = Array.isArray(plan.overrideMappings) && plan.overrideMappings.length > 0
+            ? plan.overrideMappings
+            : plan.overrideRowIds.map(templateRowId => ({ templateRowId, runtimeRowId: templateRowId }));
+        const mappedTemplateRowIds = new Set(mappings.map(mapping => mapping.templateRowId));
+        for (const legacyRowId of plan.overrideRowIds) {
+            if (!mappedTemplateRowIds.has(legacyRowId)) {
+                errors.push(`表 ${sheetKey} 的覆盖计划 row_id=${legacyRowId} 没有对应 runtime 映射。`);
             }
         }
+        for (const mapping of mappings) {
+            const templateRow = templateRowByRowId.get(mapping.templateRowId);
+            if (!templateRow) {
+                errors.push(`表 ${sheetKey} 的覆盖计划 template row_id=${mapping.templateRowId} 未找到。`);
+                continue;
+            }
+            const index = candidateRowIndexById.get(mapping.runtimeRowId);
+            if (index === undefined) {
+                errors.push(`表 ${sheetKey} 的覆盖计划 runtime row_id=${mapping.runtimeRowId} 未找到。`);
+                continue;
+            }
+            const cells = [...templateRow];
+            cells[0] = mapping.runtimeRowId;
+            while (cells.length < headerWidth) cells.push(null);
+            candidateContent[index] = cells;
+        }
     }
+    return { ok: errors.length === 0, errors };
 }
 
 // ═══ 模板作用域持久化（纯数据操作） ═══
@@ -939,9 +985,27 @@ async function applyChatTemplateSnapshotWithReconciliationInternal_ACU(templateD
     // 未命中 → 插入；命中且 template-wins → 覆盖；命中且 keep-current → 保留 runtime；
     // 命中且 reject → preflight 已返回 blocker，直接拒绝提交。
     if (effectiveDataMode === 'merge') {
+        // reconcile 的 audit 是模板 key → 当前 runtime key 的唯一解析证据。
+        // merge preflight 不能直接按模板 key 去查 baseline，否则表 key 发生迁移时会
+        // 把业务键冲突误判成 INSERT，随后又因 candidateData 没有模板 key 而静默跳过。
+        const auditEntries = Array.isArray(plan.audit) ? plan.audit : [];
+        const resolvedSheetKeyByTemplateKey = new Map<string, string>();
+        for (const audit of auditEntries) {
+            const templateSheetKey = String(audit?.templateSheetKey || '').trim();
+            const resolvedSheetKey = String(audit?.resolvedSheetKey || '').trim();
+            if (templateSheetKey && resolvedSheetKey) resolvedSheetKeyByTemplateKey.set(templateSheetKey, resolvedSheetKey);
+        }
+        const preflightRuntimeData = JSON.parse(JSON.stringify(baselineData));
+        for (const [templateSheetKey, resolvedSheetKey] of resolvedSheetKeyByTemplateKey) {
+            if (templateSheetKey === resolvedSheetKey) continue;
+            const runtimeSheet = preflightRuntimeData[resolvedSheetKey];
+            if (runtimeSheet && targetTemplateData?.[templateSheetKey]) {
+                preflightRuntimeData[templateSheetKey] = JSON.parse(JSON.stringify(runtimeSheet));
+            }
+        }
         const preflight = preflightTemplateDataImport_ACU({
             templateData: targetTemplateData,
-            runtimeData: baselineData,
+            runtimeData: preflightRuntimeData,
             dataMode: 'merge',
             conflictPolicy,
         });
@@ -957,19 +1021,35 @@ async function applyChatTemplateSnapshotWithReconciliationInternal_ACU(templateD
             // introduced 表的模板数据已由 reconcile 带入 candidateData（asIntroducedSheet_ACU），
             // 若再按 mergePlan 追加会重复 INSERT 同一 UNIQUE 键。只对 matched 表应用合并。
             const introducedKeys = new Set(
-                plan.audit
+                auditEntries
                     .filter(item => item.match === 'introduced')
-                    .map(item => item.resolvedSheetKey),
+                    .map(item => String(item.resolvedSheetKey || '').trim()),
             );
-            const matchedMergePlan: Record<string, import('./template-data-preflight').TemplateSheetMergePlan_ACU> = {};
-            for (const [sheetKey, sheetPlan] of Object.entries(preflight.mergePlan)) {
-                if (!introducedKeys.has(sheetKey)) matchedMergePlan[sheetKey] = sheetPlan;
+            const mergeTemplateData = JSON.parse(JSON.stringify(targetTemplateData));
+            for (const [templateSheetKey, resolvedSheetKey] of resolvedSheetKeyByTemplateKey) {
+                if (templateSheetKey === resolvedSheetKey) continue;
+                const templateSheet = targetTemplateData?.[templateSheetKey];
+                if (templateSheet) mergeTemplateData[resolvedSheetKey] = JSON.parse(JSON.stringify(templateSheet));
             }
-            applyMergePlanToCandidate_ACU(
+            const matchedMergePlan: Record<string, import('./template-data-preflight').TemplateSheetMergePlan_ACU> = {};
+            for (const [templateSheetKey, sheetPlan] of Object.entries(preflight.mergePlan)) {
+                const resolvedSheetKey = resolvedSheetKeyByTemplateKey.get(templateSheetKey) || templateSheetKey;
+                if (introducedKeys.has(resolvedSheetKey)) continue;
+                matchedMergePlan[resolvedSheetKey] = { ...sheetPlan, sheetKey: resolvedSheetKey };
+            }
+            const mergeApplication = applyMergePlanToCandidate_ACU(
                 plan.candidateData,
-                targetTemplateData,
+                mergeTemplateData,
                 matchedMergePlan,
             );
+            if (!mergeApplication.ok) {
+                return {
+                    saved: false,
+                    blockers: mergeApplication.errors,
+                    error: mergeApplication.errors.join('；'),
+                    importAudit: preflight.audits,
+                };
+            }
         }
     }
     logDebug_ACU(`[TemplateScope] 模板协调计划已生成: requestId=${requestId}, baseRevision=${baseRevision}, changes=${plan.sheetChanges.map(change => `${change.kind}:${change.sheetKey}`).join(',') || 'none'}, deleted=${plan.deletedSheetKeys.join(',') || 'none'}`);

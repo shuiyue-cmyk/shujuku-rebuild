@@ -199,6 +199,70 @@ describe('sql read resolver', () => {
     expect(columns.get('wu_pin_ming_cheng')).toBe('item_name');
   });
 
+  it('declared columnAliases 按 physical key 注册，并同时消费 target 与 supplemental 声明', () => {
+    const ddl = `CREATE TABLE inventory (
+      row_id INTEGER PRIMARY KEY, -- 行号
+      current_location TEXT -- 当前地点
+    );`;
+    const target = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: {
+        uid: 'inventory', name: '状态表',
+        sourceData: { ddl, columnAliases: { current_location: ['目标旧名'] } },
+        content: [['row_id', '当前地点']],
+      },
+    } as any;
+    const supplemental = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: {
+        uid: 'inventory', name: '状态表',
+        sourceData: { ddl, columnAliases: { current_location: ['补充旧名'] } },
+        content: [['row_id', '当前地点']],
+      },
+    } as any;
+
+    const result = buildSheetColumnAliasMap_ACU(target, { supplementalSources: [supplemental] });
+    const tableName = [...result.aliases.keys()][0];
+    const columns = result.aliases.get(tableName)!;
+
+    expect(columns.get('目标旧名')).toBe('current_location');
+    expect(columns.get('补充旧名')).toBe('current_location');
+    expect(result.sourceByAlias.get(tableName)?.get('目标旧名')).toBe('declared_display_alias');
+    expect(result.sourceByAlias.get(tableName)?.get('补充旧名')).toBe('declared_display_alias');
+  });
+
+  it('declared columnAliases 同一历史名指向不同 physical 列时 fail-closed', () => {
+    const ddl = `CREATE TABLE inventory (
+      row_id INTEGER PRIMARY KEY, -- 行号
+      current_location TEXT, -- 当前地点
+      quantity INTEGER -- 数量
+    );`;
+    const target = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: {
+        uid: 'inventory', name: '状态表',
+        sourceData: {
+          ddl,
+          columnAliases: {
+            current_location: ['冲突旧名'],
+            quantity: ['冲突旧名'],
+          },
+        },
+        content: [['row_id', '当前地点', '数量']],
+      },
+    } as any;
+
+    const result = buildSheetColumnAliasMap_ACU(target);
+    const tableName = [...result.aliases.keys()][0];
+
+    expect(result.aliases.get(tableName)?.has('冲突旧名')).toBe(false);
+    expect(result.conflicts.get(tableName)).toEqual(new Set(['冲突旧名']));
+    expect(result.conflictCandidates.get(tableName)?.get('冲突旧名')).toEqual(expect.arrayContaining([
+      { target: 'current_location', evidence: 'declared_display_alias' },
+      { target: 'quantity', evidence: 'declared_display_alias' },
+    ]));
+  });
+
   it('target-first registry：fallback 目标仅用同名 supplemental 表头证实 authored DDL 别名', () => {
     const target = {
       mate: { type: 'acu', version: 1 },

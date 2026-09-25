@@ -6,13 +6,20 @@ import { createPinia, setActivePinia } from 'pinia';
 
 const runtimeMock = vi.hoisted(() => {
   let currentData: Record<string, any> = {};
+  let currentChatIdentity = 'chat-a';
   return {
     get currentJsonTableData_ACU() {
       return currentData;
     },
+    get currentChatFileIdentifier_ACU() {
+      return currentChatIdentity;
+    },
     getCurrentData: () => currentData,
     resetCurrentData: () => {
       currentData = {};
+    },
+    setCurrentChatIdentity: (value: string) => {
+      currentChatIdentity = value;
     },
     _set_currentJsonTableData_ACU: vi.fn((next: Record<string, any>) => {
       currentData = next;
@@ -253,6 +260,7 @@ describe('useVisualizerSave', () => {
   beforeEach(() => {
     setActivePinia(createPinia());
     runtimeMock.resetCurrentData();
+    runtimeMock.setCurrentChatIdentity('chat-a');
     vi.clearAllMocks();
     serviceMock.preflightSchemaMigrations_ACU.mockReset();
     serviceMock.preflightSchemaMigrations_ACU.mockResolvedValue({ changedSheetKeys: [], blockers: [], operations: [] });
@@ -293,6 +301,49 @@ describe('useVisualizerSave', () => {
     }));
     expect(store.dirty).toBe(false);
     expect(store.lastSavedTarget).toBe('data');
+  });
+
+  it('数据保存不会把同时存在的模板变化标成已保存', async () => {
+    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    const { useVisualizerSave } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerSave');
+    const store = useVisualizerStore();
+    const initialData = {
+      mate: { type: 'chatSheets', version: 1 },
+      sheet_test_vz2: sheet(),
+    };
+    store.loadSnapshot(initialData, ['sheet_test_vz2'], 'chat-a::iso-test');
+    runtimeMock._set_currentJsonTableData_ACU(JSON.parse(JSON.stringify(initialData)));
+    store.updateCell(0, 1, '数据已改');
+    store.tempData.sheet_test_vz2.name = '模板改名未保存';
+    store.setDirty(true);
+
+    const saved = await useVisualizerSave().saveToChat();
+
+    expect(saved).toBe(false);
+    expect(store.dirty).toBe(true);
+    expect(store.templateBaseData?.sheet_test_vz2.name).toBe('角色状态');
+    expect(toastMock.error).toHaveBeenCalledWith(expect.stringContaining('模板'), { muteable: false });
+  });
+
+  it('聊天身份变化后拒绝把旧聊天草稿写入当前聊天', async () => {
+    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    const { useVisualizerSave } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerSave');
+    const store = useVisualizerStore();
+    const initialData = {
+      mate: { type: 'chatSheets', version: 1 },
+      sheet_test_vz2: sheet(),
+    };
+    store.loadSnapshot(initialData, ['sheet_test_vz2'], 'chat-a::iso-test');
+    runtimeMock._set_currentJsonTableData_ACU(JSON.parse(JSON.stringify(initialData)));
+    store.updateCell(0, 1, '来自 A');
+    serviceMock.replayData = null;
+    runtimeMock.setCurrentChatIdentity('chat-b');
+
+    const saved = await useVisualizerSave().saveToChat();
+
+    expect(saved).toBe(false);
+    expect(serviceMock.runTableWriteTransaction_ACU).not.toHaveBeenCalled();
+    expect(runtimeMock.getCurrentData().sheet_test_vz2.content[1][1]).toBe('A');
   });
 
   it('新增行保存时分配 highestNumericId+1 的 row_id，并生成可重放的 row_upsert', async () => {

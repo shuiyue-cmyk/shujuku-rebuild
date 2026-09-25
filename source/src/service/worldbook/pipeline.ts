@@ -54,6 +54,9 @@ import {
   getImportStablePrefix_ACU
 } from '../../shared/constants';
 import {
+  getAutoMergedOrderScopeKey_ACU
+} from '../summary/auto-merge-scope';
+import {
   logDebug_ACU,
   logError_ACU,
   logWarn_ACU,
@@ -670,7 +673,8 @@ function migrateLegacyAutoMergedOrderBeforeTailRepair_ACU(data: Record<string, a
             if (!Array.isArray(row) || row.length !== header.length + 1 || row[row.length - 1] !== 'auto_merged') return;
             const rowId = String(row[0] ?? '').trim();
             const autoMergedOrder = ((settings_ACU as any).autoMergedOrder ||= {}) as Record<string, any[]>;
-            const order = Array.isArray(autoMergedOrder[sheetKey]) ? autoMergedOrder[sheetKey] : (autoMergedOrder[sheetKey] = []);
+            const orderScopeKey = getAutoMergedOrderScopeKey_ACU(sheetKey);
+            const order = Array.isArray(autoMergedOrder[orderScopeKey]) ? autoMergedOrder[orderScopeKey] : (autoMergedOrder[orderScopeKey] = []);
             if (!rowId || order.some(id => String(id) === rowId)) return;
             order.push(rowId);
             changed = true;

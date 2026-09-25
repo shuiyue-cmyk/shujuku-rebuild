@@ -21,11 +21,15 @@ import { CHARACTER_SCOPE_DEFAULT_KEY_ACU, getCurrentCharacterScopeKey_ACU, getLe
  * 旧版 characterSettings 以聊天文件名为键；升级后首次访问某张角色卡时，
  * 把当前聊天对应的旧条目搬到角色卡键下，避免用户已有的填表世界书选择丢失。
  */
+function isSettingsRecord_ACU(value: unknown): value is Record<string, any> {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
 function migrateLegacyChatScopedCharSettings_ACU(charId: string): boolean {
     const legacyKey = getLegacyChatScopeKey_ACU();
     if (legacyKey === charId || legacyKey === CHARACTER_SCOPE_DEFAULT_KEY_ACU) return false;
-    const legacy = settings_ACU.characterSettings[legacyKey];
-    if (!legacy || typeof legacy !== 'object' || !legacy.worldbookConfig || typeof legacy.worldbookConfig !== 'object') return false;
+    const legacy = settings_ACU.characterSettings?.[legacyKey];
+    if (!isSettingsRecord_ACU(legacy) || !isSettingsRecord_ACU(legacy.worldbookConfig)) return false;
     settings_ACU.characterSettings[charId] = JSON.parse(JSON.stringify(legacy));
     delete settings_ACU.characterSettings[legacyKey];
     logDebug_ACU(`Migrated chat-scoped character settings "${legacyKey}" -> "${charId}"`);
@@ -65,15 +69,15 @@ export function getCurrentCharSettings_ACU() {
     ) {
         return settings_ACU.characterSettings[charId];
     }
-    if (!settings_ACU.characterSettings) {
+    if (!isSettingsRecord_ACU(settings_ACU.characterSettings)) {
         settings_ACU.characterSettings = {};
     }
-    if (!settings_ACU.characterSettings[charId]) {
+    if (!isSettingsRecord_ACU(settings_ACU.characterSettings[charId])) {
         migrateLegacyChatScopedCharSettings_ACU(charId);
     }
     // 0TK 占用模式恒开启（开关已剥离）：大纲/纪要索引条目不占用上下文
     const zeroTkOccupyMode = true;
-    if (!settings_ACU.characterSettings[charId]) {
+    if (!isSettingsRecord_ACU(settings_ACU.characterSettings[charId])) {
         const worldbookConfigForNewChat = JSON.parse(JSON.stringify(defaultWorldbookConfig_ACU));
         worldbookConfigForNewChat.zeroTkOccupyMode = zeroTkOccupyMode;
         worldbookConfigForNewChat.outlineEntryEnabled = !zeroTkOccupyMode;

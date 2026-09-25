@@ -302,6 +302,8 @@ import {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockPersistSettingsToStorage.mockReset().mockReturnValue(true);
+  mockSaveGlobalMeta.mockReset().mockReturnValue(true);
   mockGetConfigStorage.mockReset().mockReturnValue(undefined);
   mockIsIndexedDbAvailable.mockReset().mockReturnValue(false);
   mockReadProfileSettings.mockReset().mockReturnValue(null);
@@ -470,6 +472,14 @@ describe('saveSettings_ACU', () => {
     expect(mockSaveGlobalMeta).toHaveBeenCalledTimes(1);
   });
 
+  it('宿主仅能内存保存时明确返回 memory warning', () => {
+    mockGetConfigStorage.mockReturnValue({ _isTavern: true, _lastPersistenceStatus: 'memory' });
+    const result = saveSettings_ACU();
+    expect(result.saved).toBe(true);
+    expect(result.storageType).toBe('memory');
+    expect(result.warning).toContain('刷新后会丢失');
+  });
+
   it('非 tavern + IndexedDB 可用时返回 indexeddb 并带 warning', () => {
     mockGetConfigStorage.mockReturnValue({ _isTavern: false });
     mockIsIndexedDbAvailable.mockReturnValue(true);
@@ -494,6 +504,24 @@ describe('saveSettings_ACU', () => {
     expect(result.saved).toBe(false);
     expect(result.storageType).toBe('memory');
     expect(result.error).toBeDefined();
+  });
+
+  it('profile 持久化失败时返回 storage_error，不再谎报保存成功', () => {
+    mockPersistSettingsToStorage.mockReturnValue(false);
+
+    const result = saveSettings_ACU();
+
+    expect(result).toMatchObject({ saved: false, storageType: 'memory', code: 'storage_error' });
+    expect(result.error).toContain('保存设置到存储失败');
+  });
+
+  it('global meta 持久化失败时同样返回 storage_error', () => {
+    mockSaveGlobalMeta.mockReturnValue(false);
+
+    const result = saveSettings_ACU();
+
+    expect(result).toMatchObject({ saved: false, storageType: 'memory', code: 'storage_error' });
+    expect(result.error).toContain('保存全局元信息失败');
   });
 });
 

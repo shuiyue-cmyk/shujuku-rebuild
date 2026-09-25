@@ -43,6 +43,7 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({
   isAutoUpdatingCard_ACU: false,
   wasStoppedByUser_ACU: false,
   getCurrentIsolationKey_ACU: () => '',
+  getAutoFillStopEpoch_ACU: () => 0,
   _set_coreApisAreReady_ACU: vi.fn(),
   _set_lastTotalAiMessages_ACU: vi.fn(),
   _set_allChatMessages_ACU: vi.fn(),

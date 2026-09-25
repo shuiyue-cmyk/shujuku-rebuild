@@ -3,7 +3,7 @@ import { countAiModelOutputFloors_ACU } from '../../shared/ai-floor';
 import { validateLoopTags_ACU } from '../loop/loop-evaluator';
 import { countTextTokens_ACU } from '../ai/token-counter';
 import { logAgentSession_ACU } from './agent/agent-session-log';
-import { resolveHostRetryMode_ACU } from './host-retry-mode';
+import { hostBoundaryFingerprint_ACU, hostMessageFingerprint_ACU, isHostSendBoundaryIntact_ACU, resolveHostRetryMode_ACU } from './host-retry-mode';
 import type { ContinuationPreparedTurnInstruction_ACU } from './stage-execution-engine';
 import type { ContinuationHostGenerationCapture_ACU, TurnAttemptIdentity_ACU } from './model';
 import type { ContinuationHostTurnAdapter_ACU } from './host-turn-adapter';
@@ -65,6 +65,7 @@ export interface ContinuationHostGenerationBridgeDependencies_ACU {
 }
 
 type StartedHostGeneration_ACU = { identity: TurnAttemptIdentity_ACU; sequence: number; bind: Promise<void> };
+type ArmedAttempt_ACU = { identity: TurnAttemptIdentity_ACU; createdAt: number };
 type LocalRetryClaim_ACU = { identity: TurnAttemptIdentity_ACU; mode: 'generate' | 'regenerate'; createdAt: number; sequence: number | null; consumed: boolean };
 
 /**
@@ -81,6 +82,7 @@ type LocalRetryClaim_ACU = { identity: TurnAttemptIdentity_ACU; mode: 'generate'
  */
 export class ContinuationHostGenerationBridge_ACU {
   private sendingIdentity: TurnAttemptIdentity_ACU | null = null;
+  private readonly armedByChat = new Map<string, ArmedAttempt_ACU>();
   private readonly startedByChat = new Map<string, StartedHostGeneration_ACU>();
   private readonly stateListeners = new Set<() => void>();
   private localRetryClaim: LocalRetryClaim_ACU | null = null;
@@ -100,6 +102,19 @@ export class ContinuationHostGenerationBridge_ACU {
     }
   }
 
+  private armAttempt_ACU(identity: TurnAttemptIdentity_ACU): void {
+    this.armedByChat.set(identity.chatIdentity, { identity, createdAt: this.dependencies.now() });
+  }
+
+  private hasMatchingArmedAttempt_ACU(identity: TurnAttemptIdentity_ACU): boolean {
+    const armed = this.armedByChat.get(identity.chatIdentity);
+    return !!armed && armed.identity.attemptId === identity.attemptId;
+  }
+
+  private consumeArmedAttempt_ACU(identity: TurnAttemptIdentity_ACU): void {
+    if (this.hasMatchingArmedAttempt_ACU(identity)) this.armedByChat.delete(identity.chatIdentity);
+  }
+
   /** 打断酒馆正在进行的正文生成。用户点停止时必须先走这里，否则正文写完仍会确认并自动续写。 */
   stopHostGeneration(): void {
     this.dependencies.hostInput.stopGeneration();
@@ -108,6 +123,7 @@ export class ContinuationHostGenerationBridge_ACU {
   /** 桥内存中是否持有该聊天的活认领（发送窗口内或已认领生成开始）。用于区分真在飞与重载后的滞留态。 */
   hasLiveClaim(chatIdentity: string): boolean {
     if (this.sendingIdentity?.chatIdentity === chatIdentity) return true;
+    if (this.armedByChat.has(chatIdentity)) return true;
     return this.startedByChat.has(chatIdentity);
   }
 
@@ -121,7 +137,11 @@ export class ContinuationHostGenerationBridge_ACU {
    * @returns 是否确实删除了一条认领（供测试与日志断言）
    */
   invalidateStartedByChat(chatIdentity: string): boolean {
-    return this.startedByChat.delete(chatIdentity);
+    const startedCleared = this.startedByChat.delete(chatIdentity);
+    const armedCleared = this.armedByChat.delete(chatIdentity);
+    if (this.sendingIdentity?.chatIdentity === chatIdentity) this.sendingIdentity = null;
+    if (this.localRetryClaim?.identity.chatIdentity === chatIdentity) this.localRetryClaim = null;
+    return startedCleared || armedCleared;
   }
 
   async send(prepared: ContinuationPreparedTurnInstruction_ACU): Promise<boolean> {
@@ -133,12 +153,21 @@ export class ContinuationHostGenerationBridge_ACU {
       capturedChatLength: Array.isArray(chat) ? chat.length : 0,
       capturedAiFloorCount: countAiModelOutputFloors_ACU(chat),
       generationSeq: null,
+      instructionIndex: Array.isArray(chat) ? chat.length : 0,
+      instructionFingerprint: hostMessageFingerprint_ACU({ is_user: true, mes: prepared.instruction.instruction }),
+      boundaryFingerprint: hostBoundaryFingerprint_ACU(Array.isArray(chat) ? chat : []),
     };
     await runtime.recordHostTurn({ identity: prepared.identity, capture });
+    if (!isHostSendBoundaryIntact_ACU(runtime.getChat(), capture)) {
+      try { await runtime.pauseForHostResultFailure(prepared.identity); } catch { /* state already changed */ }
+      return false;
+    }
+    this.armAttempt_ACU(prepared.identity);
     this.sendingIdentity = prepared.identity;
     this.notifyStateChanges_ACU();
     try {
       if (!this.dependencies.hostInput.send(prepared.instruction.instruction)) {
+        this.consumeArmedAttempt_ACU(prepared.identity);
         await runtime.pauseForHostInputFailure(prepared.identity);
         return false;
       }
@@ -161,7 +190,7 @@ export class ContinuationHostGenerationBridge_ACU {
     const identity = this.sendingIdentity;
     if (identity && identity.chatIdentity === runtime.getChatIdentity()) {
       const pending = runtime.readPendingHostTurn();
-      if (!pending || pending.pending.identity.attemptId !== identity.attemptId || pending.pending.capture.generationSeq !== null) return false;
+      if (!pending || pending.pending.identity.attemptId !== identity.attemptId || pending.pending.capture.generationSeq !== null || !this.hasMatchingArmedAttempt_ACU(identity)) return false;
       this.startedByChat.set(identity.chatIdentity, { identity, sequence, bind: runtime.bindHostTurnGeneration(identity, sequence) });
       if (this.localRetryClaim?.identity.attemptId === identity.attemptId) this.localRetryClaim = null;
       return true;
@@ -174,6 +203,7 @@ export class ContinuationHostGenerationBridge_ACU {
     if (!snapshot || snapshot.pending.status !== 'awaiting_generation' || snapshot.pending.capture.generationSeq !== null) return false;
     const pendingIdentity = snapshot.pending.identity;
     if (localRetryClaim && pendingIdentity.attemptId !== localRetryClaim.identity.attemptId) return false;
+    if (!this.hasMatchingArmedAttempt_ACU(pendingIdentity)) return false;
     this.startedByChat.set(chatIdentity, { identity: pendingIdentity, sequence, bind: runtime.bindHostTurnGeneration(pendingIdentity, sequence) });
     if (localRetryClaim) this.localRetryClaim = null;
     return true;
@@ -194,6 +224,7 @@ export class ContinuationHostGenerationBridge_ACU {
     const snapshot = runtime.readPendingHostTurn();
     if (!snapshot || snapshot.pending.status !== 'awaiting_generation') return false;
     if (localRetryClaim && snapshot.pending.identity.attemptId !== localRetryClaim.identity.attemptId) return false;
+    if (!this.hasMatchingArmedAttempt_ACU(snapshot.pending.identity)) return false;
     const boundSequence = snapshot.pending.capture.generationSeq ?? started?.sequence ?? null;
     return boundSequence === null || sequence === undefined || boundSequence === sequence;
   }
@@ -212,6 +243,7 @@ export class ContinuationHostGenerationBridge_ACU {
     // 宽松路径没有 started 记录：身份以持久化等待轮为准。
     const claimedIdentity = started?.identity ?? this.dependencies.runtime.readPendingHostTurn()?.pending.identity;
     if (!claimedIdentity) return;
+    this.consumeArmedAttempt_ACU(claimedIdentity);
     try {
       if (started) await started.bind;
       const snapshot = this.dependencies.runtime.readPendingHostTurn();
@@ -293,16 +325,20 @@ export class ContinuationHostGenerationBridge_ACU {
       // GENERATION_ENDED：条目留在 Map 里就是永久残留——回到该聊天时宽松 STARTED 被存在性
       // 判定挡下、宽松 ENDED 被陈旧序列号挡下，续写链死锁到刷新。必须就地清掉。
       if (started) this.startedByChat.delete(chatIdentity);
+      this.armedByChat.delete(chatIdentity);
       return;
     }
+    if (!started && !this.hasMatchingArmedAttempt_ACU(snapshot.pending.identity)) return;
     const boundSequence = snapshot.pending.capture.generationSeq ?? started?.sequence ?? null;
     if (boundSequence !== null && sequence !== undefined && boundSequence !== sequence) {
       // 中止事件属于别的生成：只有当它正好是本条认领的那次生成时才清理（那次生成已经死了，
       // 不会再有 ENDED）；等待轮真正绑定的生成仍在飞时保留认领，不能误删。
       if (started && sequence === started.sequence) this.startedByChat.delete(chatIdentity);
+      this.armedByChat.delete(chatIdentity);
       return;
     }
     this.startedByChat.delete(chatIdentity);
+    this.armedByChat.delete(chatIdentity);
     if (this.localRetryClaim?.identity.attemptId === snapshot.pending.identity.attemptId) this.localRetryClaim = null;
     if (started) {
       try { await started.bind; } catch { /* 绑定失败不阻碍中止转换 */ }
@@ -431,19 +467,33 @@ export class ContinuationHostGenerationBridge_ACU {
       return false;
     }
     const aiCount = countAiModelOutputFloors_ACU(chat);
+    const instructionIndex = mode === 'regenerate' ? chat.length - 2 : chat.length - 1;
+    const instruction = chat[instructionIndex];
+    if (!instruction || typeof instruction !== 'object' || Array.isArray(instruction)) return false;
     const capture: ContinuationHostGenerationCapture_ACU = {
       capturedAt: this.dependencies.now(),
       capturedChatLength: mode === 'regenerate' ? Math.max(0, chat.length - 1) : chat.length,
       capturedAiFloorCount: mode === 'regenerate' ? Math.max(0, aiCount - 1) : aiCount,
       generationSeq: null,
+      instructionIndex,
+      instructionFingerprint: hostMessageFingerprint_ACU(instruction as Record<string, unknown>),
+      boundaryFingerprint: hostBoundaryFingerprint_ACU(chat),
     };
     await runtime.recordHostTurn({ identity: snapshot.pending.identity, capture });
+    const afterRecord = runtime.readPendingHostTurn();
+    const afterChat = runtime.getChat();
+    if (!afterRecord || afterRecord.pending.status !== 'awaiting_generation' || afterRecord.pending.identity.attemptId !== snapshot.pending.identity.attemptId || resolveHostRetryMode_ACU(afterChat, afterRecord.pending.capture) !== mode) {
+      try { await runtime.pauseForHostResultFailure(snapshot.pending.identity); } catch { /* state already changed */ }
+      return false;
+    }
+    this.armAttempt_ACU(snapshot.pending.identity);
     this.localRetryClaim = { identity: snapshot.pending.identity, mode, createdAt: this.dependencies.now(), sequence: null, consumed: false };
     this.sendingIdentity = snapshot.pending.identity;
     this.notifyStateChanges_ACU();
     try {
       if (!this.dependencies.hostInput.retryGeneration(mode)) {
         this.localRetryClaim = null;
+        this.consumeArmedAttempt_ACU(snapshot.pending.identity);
         await runtime.pauseForHostInputFailure(snapshot.pending.identity);
         return false;
       }

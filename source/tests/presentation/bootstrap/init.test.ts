@@ -48,10 +48,13 @@ const m = vi.hoisted(() => ({
   ensureSeedCheckpoint: vi.fn(async () => false),
   recordGenerationContext: vi.fn(() => ({ seq: 1 })),
   consumeGenerationContext: vi.fn(() => ({ seq: 3, type: 'normal', params: {}, dryRun: false, at: 1 })),
+  generationEndMatchStatus: 'none' as 'none' | 'matched' | 'ambiguous',
   continuationBridge: undefined as undefined | { onGenerationStarted: any; claimsGenerationEnded: any; onGenerationEnded: any },
   handleNewMessage: vi.fn(),
   wasStoppedByUser: false,
   setWasStoppedByUser: vi.fn((value: boolean) => { m.wasStoppedByUser = value; }),
+  capturePlotScope: vi.fn(),
+  isSamePlotScope: vi.fn(),
 }));
 
 vi.mock('../../../src/shared/host-api', () => ({ SillyTavern_API_ACU: m.api }));
@@ -62,9 +65,22 @@ vi.mock('../../../src/service/runtime/helpers-remaining', () => ({ ensureInitial
 vi.mock('../../../src/service/table/runtime-only-pending-flush', () => ({ flushRuntimeOnlyPendingChanges_ACU: (...args: any[]) => m.runtimeOnlyFlush(...args) }));
 vi.mock('../../../src/service/runtime/state-manager', () => ({
   chatMutationDebounceTimer_ACU: null, _set_chatMutationDebounceTimer_ACU: m.setChatMutationTimer, generationGate_ACU: m.gate,
-  get currentChatFileIdentifier_ACU() { return m.currentChatKey; }, currentJsonTableData_ACU: null, consumeGenerationContextForEnded_ACU: (...args: any[]) => m.consumeGenerationContext(...args), discardLatestGenerationContext_ACU: vi.fn(), getCurrentIsolationKey_ACU: vi.fn(() => ''), markUserSendIntent_ACU: vi.fn(), isProcessing_Plot_ACU: false, isQuietLikeGeneration_ACU: vi.fn(), isRecentUserSendIntent_ACU: vi.fn(), recordGenerationContext_ACU: m.recordGenerationContext, recordLastUserSend_ACU: vi.fn(), settings_ACU: { plotSettings: {} }, shouldProcessAutoTableUpdateForGenerationEnded_ACU: vi.fn(), shouldProcessPlotForGeneration_ACU: vi.fn(), shouldProcessSummaryVectorIndexForGeneration_ACU: (...args: any[]) => m.shouldProcessSummary(...args),
+  get currentChatFileIdentifier_ACU() { return m.currentChatKey; }, currentJsonTableData_ACU: null,
+  resolveGenerationContextForEnded_ACU: (...args: any[]) => {
+    const context = m.consumeGenerationContext(...args);
+    return {
+      status: m.generationEndMatchStatus === 'ambiguous' ? 'ambiguous' : context ? 'matched' : 'none',
+      context: m.generationEndMatchStatus === 'ambiguous' ? null : context,
+    };
+  },
+  consumeGenerationContextForEnded_ACU: (...args: any[]) => m.consumeGenerationContext(...args), discardLatestGenerationContext_ACU: vi.fn(), getCurrentIsolationKey_ACU: vi.fn(() => ''), markUserSendIntent_ACU: vi.fn(), isProcessing_Plot_ACU: false, isQuietLikeGeneration_ACU: vi.fn(), isRecentUserSendIntent_ACU: vi.fn(), recordGenerationContext_ACU: m.recordGenerationContext, recordLastUserSend_ACU: vi.fn(), settings_ACU: { plotSettings: {} }, shouldProcessAutoTableUpdateForGenerationEnded_ACU: vi.fn(), shouldProcessPlotForGeneration_ACU: vi.fn(), shouldProcessSummaryVectorIndexForGeneration_ACU: (...args: any[]) => m.shouldProcessSummary(...args),
   _set_allChatMessages_ACU: m.setMessages, _set_currentChatFileIdentifier_ACU: (value: string) => { m.currentChatKey = value; m.setChat(value); }, _set_currentJsonTableData_ACU: m.setData, _set_independentTableStates_ACU: m.setTables, _set_isProcessing_Plot_ACU: vi.fn(), _set_lastTotalAiMessages_ACU: m.setTotal, _set_wasStoppedByUser_ACU: m.setWasStoppedByUser, abortOnChatMutation_ACU: vi.fn(), clearAutoFillDebounce_ACU: (...args: any[]) => m.clearAutoFillDebounce(...args), getChatMutationAbortSignal_ACU: () => null,
 }));
+vi.mock('../../../src/service/runtime/plot-runtime/plot-runtime-scope', () => ({
+  capturePlotRuntimeScope_ACU: (...args: any[]) => m.capturePlotScope(...args),
+  isSamePlotRuntimeScope_ACU: (...args: any[]) => m.isSamePlotScope(...args),
+}));
+
 vi.mock('../../../src/service/settings/settings-service', () => ({ applyTemplateScopeForCurrentChat_ACU: vi.fn(), loadSettings_ACU: vi.fn(), isSettingsStorageReadyForSave_ACU: vi.fn(() => true) }));
 vi.mock('../../../src/service/worldbook/injection-engine', () => ({ resetScriptStateForNewChat_ACU: m.resetScript }));
 // 续写宿主生成桥注册表：默认无注册实例（get 返回 undefined，init.ts 的 ?. 全部短路），
@@ -84,7 +100,10 @@ vi.mock('../../../src/presentation/components/pipeline-ui-helpers', () => ({ ref
 
 vi.mock('../../../src/shared/defaults-json.js', () => ({ DEFAULT_PLOT_SETTINGS_ACU: { loopSettings: {} } }));
 vi.mock('../../../src/shared/utils', () => ({ cleanChatName_ACU: vi.fn((name: string) => name), logDebug_ACU: vi.fn(), logError_ACU: vi.fn(), logWarn_ACU: vi.fn() }));
-vi.mock('../../../src/service/plot/plot-orchestrator', () => ({ orchestrateAfterCommandsStrategy1_ACU: vi.fn(), orchestrateAfterCommandsStrategy2_ACU: vi.fn() }));
+vi.mock('../../../src/service/plot/plot-orchestrator', () => ({
+  orchestrateAfterCommandsStrategy1_ACU: (...args: any[]) => m.orchestrate(...args),
+  orchestrateAfterCommandsStrategy2_ACU: (...args: any[]) => m.orchestrate(...args),
+}));
 vi.mock('../../../src/shared/host-input', () => ({ getSendTextareaValue_ACU: vi.fn(), setSendTextareaValue_ACU: vi.fn() }));
 vi.mock('../../../src/presentation/components/plot-planning-ui', () => ({ runOptimizationLogicWithUI_ACU: vi.fn() }));
 vi.mock('../../../src/presentation/components/summary-vector-index-ui', () => ({ processSummaryVectorIndexBeforeGenerationWithUI_ACU: (...args: any[]) => m.processBeforeGen(...args), shouldRebuildSummaryVectorIndexWithUI_ACU: (...args: any[]) => m.shouldRebuild(...args), rebuildCurrentSummaryVectorIndexWithUI_ACU: (...args: any[]) => m.rebuild(...args) }));
@@ -137,10 +156,24 @@ beforeEach(() => {
   m.orchestrate.mockResolvedValue({ action: 'passthrough' });
   m.shouldProcessSummary.mockReturnValue(false);
   m.wasStoppedByUser = false;
+  m.capturePlotScope.mockImplementation(() => ({
+    chatId: m.currentChatKey || 'chat-a',
+    characterId: m.currentChatKey === 'chat-b' ? 'char-b' : 'char-a',
+    isolationKey: '',
+    reliable: true,
+  }));
+  m.isSamePlotScope.mockImplementation((before: any, after: any) => (
+    before?.reliable === true
+    && after?.reliable === true
+    && before.chatId === after.chatId
+    && before.characterId === after.characterId
+    && before.isolationKey === after.isolationKey
+  ));
   // 事件桥与生成上下文消费口每轮回到「无注册桥 / 无上下文」的默认形态，
   // 避免续写事件用例的 mock 实现泄漏到后面的用例。
   m.continuationBridge = undefined;
   m.consumeGenerationContext.mockReturnValue(undefined);
+  m.generationEndMatchStatus = 'none';
   m.recordGenerationContext.mockReturnValue({ seq: 1 });
   Object.assign(m.gate, { lastUserMessageId: 7, lastUserMessageText: 'stale', lastUserMessageAt: 1, lastUserSendIntentAt: 2, lastGeneration: { stale: true }, generationSeq: 3, activeGenerations: [{ seq: 3 }] });
 });
@@ -308,6 +341,48 @@ describe('mainInitialize_ACU seed 前物化 runtime-only 未落盘变更', () =>
   });
 });
 
+describe('mainInitialize_ACU 剧情最终写回作用域复检', () => {
+  it('策略1规划期间切聊后不得改写原消息', async () => {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    vi.mocked(sm.shouldProcessPlotForGeneration_ACU).mockReturnValue(true);
+    const originalMessage = { is_user: true, mes: 'A 输入' };
+    m.api.chat = [originalMessage];
+    m.currentChatKey = 'chat-a';
+    let release!: (value: any) => void;
+    m.orchestrate.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+
+    const running = m.afterCommandsHandler!('normal', {}, false);
+    await vi.waitFor(() => expect(m.orchestrate).toHaveBeenCalled());
+    m.currentChatKey = 'chat-b';
+    m.api.chat = [{ is_user: true, mes: 'B 输入' }];
+    release({ action: 'planned', finalMessage: 'A 规划结果', originalMessage: 'A 输入', lastMessageIndex: 0 });
+    await running;
+
+    expect(originalMessage.mes).toBe('A 输入');
+  });
+
+  it('策略2规划期间切聊后不得写入 B 的输入框', async () => {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    vi.mocked(sm.shouldProcessPlotForGeneration_ACU).mockReturnValue(true);
+    const hostInput = await import('../../../src/shared/host-input');
+    vi.mocked(hostInput.getSendTextareaValue_ACU).mockReturnValue('A 输入');
+    m.api.chat = [{ is_user: false, mes: 'A AI' }];
+    m.currentChatKey = 'chat-a';
+    let release!: (value: any) => void;
+    m.orchestrate
+      .mockResolvedValueOnce({ action: 'no_match' })
+      .mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+
+    const running = m.afterCommandsHandler!('normal', {}, false);
+    await vi.waitFor(() => expect(m.orchestrate).toHaveBeenCalledTimes(2));
+    m.currentChatKey = 'chat-b';
+    release({ action: 'planned', finalMessage: 'A 规划结果' });
+    await running;
+
+    expect(hostInput.setSendTextareaValue_ACU).not.toHaveBeenCalled();
+  });
+});
+
 describe('mainInitialize_ACU GENERATION_STARTED 复位终止残留', () => {
   it('宿主开始生成时把残留 true 复位为 false', () => {
     m.wasStoppedByUser = true;
@@ -349,6 +424,26 @@ describe('mainInitialize_ACU GENERATION_ENDED 无配对假事件收紧', () => {
     expect(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).toHaveBeenCalledWith(null, { aiFloorCount: 2, latestAiMessageId: 7 });
     expect(m.handleNewMessage).toHaveBeenCalledTimes(1);
     expect(m.handleNewMessage).toHaveBeenCalledWith('GENERATION_ENDED', expect.objectContaining({ eventMessageId: 8 }));
+  });
+
+  it('并发配对无法唯一证明时 fail closed，不把 quiet 结束误派发为普通自动链', async () => {
+    const sm = await import('../../../src/service/runtime/state-manager');
+    const internal = await import('../../../src/service/continuation/internal-ai-events');
+    vi.mocked(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).mockReturnValue(true);
+    m.generationEndMatchStatus = 'ambiguous';
+    m.consumeGenerationContext.mockReturnValue({ seq: 9, type: 'quiet', params: { quiet_prompt: '后台' }, dryRun: false, at: 1 });
+    m.api.chat = [{ is_user: false, message_id: 5, mes: 'old' }, { is_user: false, message_id: 7, mes: 'new' }];
+
+    m.generationEndedHandler!(8);
+
+    expect(m.consumeGenerationContext).toHaveBeenCalledWith({
+      aiFloorCount: 2,
+      latestAiMessageId: 7,
+      latestContentHash: expect.any(String),
+    });
+    expect(internal.consumeContinuationInternalAiGenerationEnded_ACU).not.toHaveBeenCalled();
+    expect(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).not.toHaveBeenCalled();
+    expect(m.handleNewMessage).not.toHaveBeenCalled();
   });
 
   it('TT 2.3.0 工具楼既不进签名也不进 capturedAiFloorCount（宽窄两档都排除 is_system）', async () => {

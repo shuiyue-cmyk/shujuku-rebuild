@@ -139,6 +139,9 @@ describe('preflightTemplateDataImport_ACU', () => {
       });
       expect(result.ok).toBe(true);
       expect(result.mergePlan?.sheet_a.overrideRowIds).toEqual(['1']);
+      expect(result.mergePlan?.sheet_a.overrideMappings).toEqual([
+        { templateRowId: '1', runtimeRowId: '9' },
+      ]);
       expect(result.mergePlan?.sheet_a.matchedRowIds).toEqual([]);
     });
 

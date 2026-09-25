@@ -1,4 +1,6 @@
 import { reactive, ref } from 'vue';
+import { currentChatFileIdentifier_ACU } from '../../service/runtime/state-manager';
+import { getChatArray_ACU } from '../../data/gateways/chat-gateway';
 import {
   readAgentModuleSnapshot_ACU,
   readAgentModuleSnapshotDiagnostics_ACU,
@@ -58,6 +60,9 @@ export function useContinuationMaterials() {
   const loadError = ref('');
   /** 最近一次读取的来源诊断：采用了哪一楼、是否宽容抢救、有哪些损坏楼层。 */
   const diagnostics = ref<AgentModuleSnapshotReadDiagnostics_ACU>({ candidates: [], adoptedIndex: null, salvaged: false });
+  let loadedChat: any[] | null = null;
+  let loadedChatIdentity = '';
+
   const modules = reactive<Record<ContinuationMaterialModule_ACU, ModuleDraftState_ACU>>({
     hooks: emptyModuleState_ACU(),
     infoGap: emptyModuleState_ACU(),
@@ -72,13 +77,19 @@ export function useContinuationMaterials() {
   }
 
   function reload(): void {
+    const chat = getChatArray_ACU();
+    const identity = String(currentChatFileIdentifier_ACU || '');
     try {
-      const current = readAgentModuleSnapshot_ACU();
+      const current = readAgentModuleSnapshot_ACU(chat);
+      loadedChat = chat;
+      loadedChatIdentity = identity;
       snapshot.value = current;
       diagnostics.value = readAgentModuleSnapshotDiagnostics_ACU();
       for (const module of CONTINUATION_MATERIAL_MODULES_ACU) resetModule(module, current);
       loadError.value = '';
     } catch (caught) {
+      loadedChat = null;
+      loadedChatIdentity = '';
       snapshot.value = null;
       for (const module of CONTINUATION_MATERIAL_MODULES_ACU) modules[module] = emptyModuleState_ACU();
       loadError.value = errorMessage_ACU(caught);
@@ -98,6 +109,12 @@ export function useContinuationMaterials() {
   async function save(module: ContinuationMaterialModule_ACU): Promise<boolean> {
     const state = modules[module];
     if (state.saving) return false;
+    const currentIdentity = String(currentChatFileIdentifier_ACU || '');
+    const currentChat = getChatArray_ACU();
+    if (!loadedChat || loadedChatIdentity !== currentIdentity || loadedChat !== currentChat) {
+      state.error = '聊天已切换，资料草稿已失效；请重新载入当前聊天。';
+      return false;
+    }
     let parsed: unknown;
     try {
       parsed = JSON.parse(state.draft);
@@ -112,7 +129,11 @@ export function useContinuationMaterials() {
     state.saving = true;
     try {
       // 只提交本模块：写入侧按 merge 语义保留其余模块的磁盘值，不会覆盖别的模块。
-      const saved = await replaceAgentModuleSnapshotByUser_ACU({ [module]: parsed });
+      const saved = await replaceAgentModuleSnapshotByUser_ACU({ [module]: parsed }, loadedChat);
+      if (String(currentChatFileIdentifier_ACU || '') !== loadedChatIdentity || getChatArray_ACU() !== loadedChat) {
+        state.error = '聊天已在保存期间切换，旧资料结果未更新当前页面。';
+        return false;
+      }
       snapshot.value = saved;
       resetModule(module, saved);
       toast.success(`${CONTINUATION_MATERIAL_MODULE_LABELS_ACU[module]}已保存，修订号已推进。`);

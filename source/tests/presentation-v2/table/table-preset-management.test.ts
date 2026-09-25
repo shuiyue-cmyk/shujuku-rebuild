@@ -9,6 +9,7 @@ async function importManagement() {
   vi.resetModules();
   const deleteTemplatePreset = vi.fn(() => true);
   const applyTemplatePresetToCurrent = vi.fn(async () => ({ presetName: '', isDefault: true }));
+  const renameTemplatePreset = vi.fn(() => ({ ok: true }));
   const openVisualizerSurface = vi.fn(async () => true);
   const ensureTemplateRecoveryOrDeleteCurrentIsolationData = vi.fn(async () => ({ success: true, dataWasReset: false }));
   let activeTemplateMode = 'inherit_global';
@@ -32,6 +33,7 @@ async function importManagement() {
     resolveActiveTemplatePresetName_ACU: () => 'global-A',
     resolveTemplateForExport_ACU: resolveTemplateForExport,
     upsertTemplatePreset_ACU: vi.fn(() => true),
+    renameTemplatePreset_ACU: renameTemplatePreset,
   }));
   vi.doMock('../../../src/service/template/chat-scope', () => ({
     sanitizeChatSheetsObject_ACU: (value: any) => value,
@@ -66,6 +68,7 @@ async function importManagement() {
     management: useTablePresetManagement(),
     deleteTemplatePreset,
     applyTemplatePresetToCurrent,
+    renameTemplatePreset,
     openVisualizerSurface,
     resolveTemplateForExport,
     ensureTemplateRecoveryOrDeleteCurrentIsolationData,
@@ -199,6 +202,22 @@ describe('useTablePresetManagement', () => {
 
     await management.setAsDefault('__runtime__');
     expect(toast.items.at(-1)).toMatchObject({ kind: 'warning', text: '当前生效模板不是全局预设，不能设为默认。' });
+  });
+
+  it('重命名后切换全局模板失败时回滚重命名', async () => {
+    const { management, applyTemplatePresetToCurrent, renameTemplatePreset } = await importManagement();
+    applyTemplatePresetToCurrent.mockResolvedValueOnce({ saved: false, error: '模拟全局切换失败' });
+    const { useDialogStore } = await import('../../../src/presentation-v2/stores/dialog-store');
+    const dialog = useDialogStore();
+
+    const pending = management.renamePreset('global-A');
+    await new Promise(r => setTimeout(r, 0));
+    dialog.inputValue = 'global-renamed';
+    dialog.submitActive();
+    await pending;
+
+    expect(renameTemplatePreset).toHaveBeenNthCalledWith(1, 'global-A', 'global-renamed');
+    expect(renameTemplatePreset).toHaveBeenNthCalledWith(2, 'global-renamed', 'global-A');
   });
 
   it('editPreset 在恢复守卫失败时不调用切换', async () => {

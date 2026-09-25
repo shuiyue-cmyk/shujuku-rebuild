@@ -3324,12 +3324,12 @@ function filterOptimizationsByExcludeRules_ACU(originalContent, optimizations, o
     return { kept, dropped, ranges };
 }
 /**
- * 应用优化到正文
+ * 应用优化到正文并返回应用统计。
  * @param originalContent 原始正文
  * @param optimizations AI 返回的优化建议列表
  * @param options 可选排除规则（正文替换页「标签排除规则」）；命中排除段的建议整条不写回
  */
-function applyOptimizations_ACU(originalContent, optimizations, options) {
+function applyOptimizationsWithStats_ACU(originalContent, optimizations, options) {
     let result = originalContent;
     let appliedCount = 0;
     let failedCount = 0;
@@ -3371,7 +3371,20 @@ function applyOptimizations_ACU(originalContent, optimizations, options) {
     if (failedItems.length > 0) {
         console.warn('[正文优化] 以下优化项未能应用:', failedItems);
     }
-    return result;
+    return {
+        content: result,
+        appliedCount,
+        failedCount,
+        failedItems,
+        effectiveCount: effectiveOptimizations.length,
+    };
+}
+/**
+ * 兼容旧调用方的字符串返回契约。
+ * 需要区分 no-op 的调用方应使用 applyOptimizationsWithStats_ACU。
+ */
+function applyOptimizations_ACU(originalContent, optimizations, options) {
+    return applyOptimizationsWithStats_ACU(originalContent, optimizations, options).content;
 }
 
 /**
@@ -3700,30 +3713,36 @@ function getTavernSettingsNamespace_ACU() {
         root.__userscripts[TAVERN_SETTINGS_NAMESPACE_ACU] = {};
     return root.__userscripts[TAVERN_SETTINGS_NAMESPACE_ACU];
 }
+/**
+ * 触发酒馆设置保存。同步宿主函数明确返回 false 或抛错时返回 failed；
+ * 没有宿主保存函数时保留内存值但返回 memory，调用方不得把它当成已落盘。
+ * 宿主异步 debounce 的 Promise 不能同步确认，按已调度保存处理。
+ */
 function persistTavernSettings_ACU() {
     try {
         tryReadBridgeFromTop_ACU();
+        const hostWindow = typeof window !== 'undefined' ? window : null;
         if (typeof tavernSaveSettingsFn_ACU === 'function') {
-            tavernSaveSettingsFn_ACU();
-            return;
+            return tavernSaveSettingsFn_ACU() === false ? 'failed' : 'saved';
         }
         if (typeof topLevelWindow_ACU.saveSettingsDebounced === 'function') {
-            topLevelWindow_ACU.saveSettingsDebounced();
-            return;
+            return topLevelWindow_ACU.saveSettingsDebounced() === false ? 'failed' : 'saved';
         }
-        if (typeof window.saveSettingsDebounced === 'function') {
-            window.saveSettingsDebounced();
-            return;
+        if (typeof hostWindow?.saveSettingsDebounced === 'function') {
+            return hostWindow.saveSettingsDebounced() === false ? 'failed' : 'saved';
         }
-        if (typeof topLevelWindow_ACU.saveSettings === 'function')
-            topLevelWindow_ACU.saveSettings();
-        else if (typeof window.saveSettings === 'function')
-            window.saveSettings();
-        else
-            logWarn_ACU('[TavernStorage] 找不到任何可用的 saveSettings 函数');
+        if (typeof topLevelWindow_ACU.saveSettings === 'function') {
+            return topLevelWindow_ACU.saveSettings() === false ? 'failed' : 'saved';
+        }
+        if (typeof hostWindow?.saveSettings === 'function') {
+            return hostWindow.saveSettings() === false ? 'failed' : 'saved';
+        }
+        logWarn_ACU('[TavernStorage] 找不到任何可用的 saveSettings 函数');
+        return 'memory';
     }
     catch (e) {
         logWarn_ACU('[TavernStorage] 持久化到酒馆设置失败, 回退到内存模式:', e);
+        return 'failed';
     }
 }
 // ── IndexedDB 配置缓存 ──
@@ -3732,6 +3751,7 @@ const CONFIG_IDB_STORE_NAME_ACU = 'kv';
 let configIdbPromise_ACU = null;
 const configIdbCache_ACU = new Map();
 const configIdbDeletedKeys_ACU = new Set();
+let lastConfigPersistenceStatus_ACU = 'other';
 let configIdbCacheLoaded_ACU = false;
 let configIdbCacheLoadingPromise_ACU = null;
 let configIdbCacheLoadFailed_ACU = false;
@@ -3865,26 +3885,65 @@ function getConfigStorage_ACU() {
         },
         setItem: (key, value) => {
             const v = String(value);
+            if (!hasTavern)
+                lastConfigPersistenceStatus_ACU = 'other';
+            let status = 'saved';
+            const hadPrevious = hasTavern && Object.prototype.hasOwnProperty.call(ns, key);
+            const previous = hadPrevious ? ns[key] : undefined;
             if (hasTavern) {
                 ns[key] = v;
-                persistTavernSettings_ACU();
+                status = persistTavernSettings_ACU();
+                lastConfigPersistenceStatus_ACU = status;
+                if (status === 'failed') {
+                    if (hadPrevious)
+                        ns[key] = previous;
+                    else
+                        delete ns[key];
+                }
             }
             else if (!FORBID_BROWSER_LOCAL_STORAGE_FOR_CONFIG_ACU && storage_ACU?.setItem) {
                 storage_ACU.setItem(key, v);
             }
-            void configIdbSetCached_ACU(key, v);
+            if (hasTavern && status === 'failed') {
+                if (hadPrevious)
+                    void configIdbSetCached_ACU(key, previous);
+                else
+                    void configIdbRemoveCached_ACU(key);
+            }
+            else {
+                void configIdbSetCached_ACU(key, v);
+            }
+            return !hasTavern || status !== 'failed';
         },
         removeItem: (key) => {
+            if (!hasTavern)
+                lastConfigPersistenceStatus_ACU = 'other';
+            let status = 'saved';
+            const hadPrevious = hasTavern && Object.prototype.hasOwnProperty.call(ns, key);
+            const previous = hadPrevious ? ns[key] : undefined;
             if (hasTavern) {
                 delete ns[key];
-                persistTavernSettings_ACU();
+                status = persistTavernSettings_ACU();
+                lastConfigPersistenceStatus_ACU = status;
+                if (status === 'failed' && hadPrevious)
+                    ns[key] = previous;
             }
             else if (!FORBID_BROWSER_LOCAL_STORAGE_FOR_CONFIG_ACU && storage_ACU?.removeItem) {
                 storage_ACU.removeItem(key);
             }
-            void configIdbRemoveCached_ACU(key);
+            if (hasTavern && status === 'failed') {
+                if (hadPrevious)
+                    void configIdbSetCached_ACU(key, previous);
+            }
+            else {
+                void configIdbRemoveCached_ACU(key);
+            }
+            return !hasTavern || status !== 'failed';
         },
         _isTavern: hasTavern,
+        get _lastPersistenceStatus() {
+            return lastConfigPersistenceStatus_ACU;
+        },
     };
 }
 function migrateKeyToTavernStorageIfNeeded_ACU(key) {
@@ -3913,6 +3972,7 @@ function _resetTavernStorageState_ACU() {
     tavernExtensionSettingsRoot_ACU = null;
     tavernSaveSettingsFn_ACU = null;
     tavernBridgeErrorReported_ACU = false;
+    lastConfigPersistenceStatus_ACU = 'other';
     _tavernBridgeInitCompleted_ACU = false;
     _tavernRootUnavailableWarnReported_ACU = false;
 }
@@ -4692,20 +4752,23 @@ function sanitizeSettingsForProfileSave_ACU(settingsObj) {
  * 纯数据层的 settings 持久化（只做写存储，不做业务编排）
  * @param settingsObj 要持久化的 settings 对象（由调用方传入）
  * @param isolationCode 已规范化的隔离码（由 service 层传入）
+ * @returns 仅在 profile 存储确认写入成功时为 true；配额、序列化或宿主错误为 false
  */
 function persistSettingsToStorage_ACU(settingsObj, isolationCode) {
     try {
         if (!settingsObj)
-            return;
+            return false;
         const store = getConfigStorage_ACU();
         const code = isolationCode ?? '';
         const payloadObj = sanitizeSettingsForProfileSave_ACU(settingsObj);
         payloadObj.dataIsolationCode = code;
         const payload = JSON.stringify(payloadObj);
-        store.setItem(getProfileSettingsKey_ACU(code), payload);
+        const writeResult = store.setItem(getProfileSettingsKey_ACU(code), payload);
+        return writeResult !== false;
     }
     catch (error) {
         logError_ACU('Failed to persist settings to storage:', error);
+        return false;
     }
 }
 
@@ -5314,15 +5377,23 @@ async function listAllHostChatNames_ACU() {
                 return null;
             }
             const payload = await response.json();
-            // 无聊天时部分版本返回 {error: true}，视为空集而非失败。
-            if (payload && typeof payload === 'object' && !Array.isArray(payload) && payload.error) {
-                continue;
+            // TT character-routes.js 的完整响应契约是数组（无角色/无聊天均为 []）。
+            // 2xx error 对象、旧版对象形态或畸形 entry 都不能证明枚举完整，否则 GC
+            // 会把「无法枚举」误判成「没有存活聊天」并删除向量。
+            if (!Array.isArray(payload)) {
+                logWarn_ACU(`[ChatGateway] 角色聊天响应不是数组，无法证明枚举完整：${avatar}`);
+                return null;
             }
-            const entries = Array.isArray(payload) ? payload : Object.values(payload || {});
-            for (const entry of entries) {
-                const fileName = String(entry?.file_name || '').trim();
-                if (!fileName)
-                    continue;
+            for (const entry of payload) {
+                if (!entry || typeof entry !== 'object' || Array.isArray(entry) || typeof entry.file_name !== 'string') {
+                    logWarn_ACU(`[ChatGateway] 角色聊天响应包含畸形 entry，无法证明枚举完整：${avatar}`);
+                    return null;
+                }
+                const fileName = entry.file_name.trim();
+                if (!fileName) {
+                    logWarn_ACU(`[ChatGateway] 角色聊天响应包含空 file_name，无法证明枚举完整：${avatar}`);
+                    return null;
+                }
                 const normalized = cleanChatName_ACU(fileName);
                 if (normalized)
                     names.add(normalized);
@@ -35665,25 +35736,30 @@ function createStableRowIdReservation_ACU(rows) {
     return reserved;
 }
 /**
- * Allocates an ID greater than every already-reserved canonical positive integer
- * and reserves it immediately. Gaps from deleted rows are intentionally not reused:
- * row_id is a stable identity, not a display position.
- * This is only for newly created rows; it must not be used to rewrite persisted IDs.
+ * Allocates an ID greater than every already-reserved positive integer and
+ * reserves it immediately. Decimal spellings such as `01` remain untouched in
+ * `reserved`, but contribute their SQLite INTEGER value to the maximum so a
+ * newly allocated canonical ID cannot collide with them. Unsafe integers fail
+ * closed instead of being silently ignored.
  */
 function allocateStableRowId_ACU(reserved) {
-    let maxRowId = 0;
-    for (const value of reserved) {
-        if (!/^[1-9]\d*$/.test(value))
+    const maxSafeInteger = BigInt(Number.MAX_SAFE_INTEGER);
+    let maxRowId = 0n;
+    for (const rawValue of reserved) {
+        const value = String(rawValue ?? '').trim();
+        if (!/^\d+$/.test(value))
             continue;
-        const numericId = Number(value);
-        if (Number.isSafeInteger(numericId) && String(numericId) === value) {
-            maxRowId = Math.max(maxRowId, numericId);
+        const numericId = BigInt(value);
+        if (numericId > maxSafeInteger) {
+            throw new Error('无法分配 row_id：已达到正安全整数上限。');
         }
+        if (numericId > maxRowId)
+            maxRowId = numericId;
     }
-    if (maxRowId >= Number.MAX_SAFE_INTEGER) {
+    if (maxRowId >= maxSafeInteger) {
         throw new Error('无法分配 row_id：已达到正安全整数上限。');
     }
-    const rowId = String(maxRowId + 1);
+    const rowId = String(maxRowId + 1n);
     reserved.add(rowId);
     return rowId;
 }
@@ -40467,6 +40543,116 @@ function clearRuntimePerformanceSpans_ACU() {
     nextSpanId_ACU = 1;
 }
 
+/**
+ * SQL/DSL 协议标记清理。
+ *
+ * `<tableEdit>` 允许使用 HTML 注释包裹正文，但 SQL 字符串字面量、注释和
+ * quoted identifier 中的同名文本属于用户数据，不能用全局正则删除。
+ */
+function stripHtmlCommentMarkersOutsideSqlLiterals_ACU(input) {
+    const text = String(input ?? '');
+    let output = '';
+    let index = 0;
+    let state = 'normal';
+    while (index < text.length) {
+        const char = text[index];
+        const next = text[index + 1];
+        if (state === 'normal') {
+            if (text.startsWith('<!--', index)) {
+                index += 4;
+                continue;
+            }
+            if (text.startsWith('-->', index)) {
+                index += 3;
+                continue;
+            }
+            if (char === '-' && next === '-') {
+                output += char;
+                index += 1;
+                state = 'line_comment';
+                continue;
+            }
+            if (char === '/' && next === '*') {
+                output += char;
+                index += 1;
+                state = 'block_comment';
+                continue;
+            }
+            if (char === "'") {
+                output += char;
+                index += 1;
+                state = 'single';
+                continue;
+            }
+            if (char === '"') {
+                output += char;
+                index += 1;
+                state = 'double';
+                continue;
+            }
+            if (char === '`') {
+                output += char;
+                index += 1;
+                state = 'backtick';
+                continue;
+            }
+            if (char === '[') {
+                output += char;
+                index += 1;
+                state = 'bracket';
+                continue;
+            }
+            output += char;
+            index += 1;
+            continue;
+        }
+        if (state === 'line_comment') {
+            output += char;
+            index += 1;
+            if (char === '\n' || char === '\r')
+                state = 'normal';
+            continue;
+        }
+        if (state === 'block_comment') {
+            if (char === '*' && next === '/') {
+                output += char;
+                output += next;
+                index += 2;
+                state = 'normal';
+                continue;
+            }
+            output += char;
+            index += 1;
+            continue;
+        }
+        // SQL quoted strings/identifiers use doubled closing characters. Copy
+        // them verbatim and only leave the quote state on an unescaped terminator.
+        if (state === 'bracket' && char === ']' && next === ']') {
+            output += char;
+            output += next;
+            index += 2;
+            continue;
+        }
+        if ((state === 'single' && char === "'")
+            || (state === 'double' && char === '"')
+            || (state === 'backtick' && char === '`')
+            || (state === 'bracket' && char === ']')) {
+            output += char;
+            index += 1;
+            if (index < text.length && text[index] === char) {
+                output += text[index];
+                index += 1;
+                continue;
+            }
+            state = 'normal';
+            continue;
+        }
+        output += char;
+        index += 1;
+    }
+    return output;
+}
+
 const P1_COLUMN_CONSTRAINT_TOKENS_ACU = new Set(['AS', 'CHECK', 'COLLATE', 'CONSTRAINT', 'DEFAULT', 'FOREIGN', 'GENERATED', 'NOT', 'PRIMARY', 'REFERENCES', 'UNIQUE']);
 function canonicalJson_ACU$1(value) {
     if (Array.isArray(value))
@@ -41033,6 +41219,15 @@ function mutationTarget(sql, values) {
     }
     return keyword(action, 'DELETE') && keyword(values[actionIndex + 1], 'FROM') ? qualifiedTail(sql, values, actionIndex + 2) : undefined;
 }
+function skipCteMaterializationHint_ACU(values, index, depth) {
+    if (values[index]?.depth === depth && keyword(values[index], 'MATERIALIZED'))
+        return index + 1;
+    if (values[index]?.depth === depth && keyword(values[index], 'NOT')
+        && values[index + 1]?.depth === depth && keyword(values[index + 1], 'MATERIALIZED')) {
+        return index + 2;
+    }
+    return index;
+}
 function cteScopes(values) {
     const result = [];
     for (let withIndex = 0; withIndex < values.length; withIndex += 1) {
@@ -41058,7 +41253,7 @@ function cteScopes(values) {
             if (!keyword(values[index], 'AS'))
                 break;
             names.push(name.value.toLowerCase());
-            index += 1;
+            index = skipCteMaterializationHint_ACU(values, index + 1, depth);
             if (!values[index] || values[index].depth !== depth + 1)
                 break;
             const definitionDepth = values[index].depth;
@@ -41396,9 +41591,7 @@ targetTableName) {
     // 排除函数调用、AS 后别名、限定符点号左侧、关键字。已处理的 token 用 start 去重。
     for (let index = 0; index < values.length; index += 1) {
         const token = values[index];
-        if (token.quote !== null)
-            continue;
-        if (READ_COLUMN_KEYWORDS_ACU.has(token.value.toUpperCase()))
+        if (isNonColumnKeyword_ACU(values, index))
             continue;
         if (isFunctionCall_ACU(sql, values, index))
             continue;
@@ -41414,11 +41607,37 @@ targetTableName) {
 }
 const READ_SCOPE_TERMINATORS_ACU = new Set(['UNION', 'EXCEPT', 'INTERSECT']);
 const READ_FROM_TERMINATORS_ACU = new Set(['WHERE', 'GROUP', 'HAVING', 'ORDER', 'LIMIT', 'OFFSET', 'UNION', 'EXCEPT', 'INTERSECT', 'WINDOW']);
-const READ_ALIAS_STOP_WORDS_ACU = new Set(['ON', 'USING', 'JOIN', 'LEFT', 'RIGHT', 'FULL', 'INNER', 'CROSS', 'NATURAL', 'WHERE', 'GROUP', 'HAVING', 'ORDER', 'LIMIT', 'OFFSET', 'UNION', 'EXCEPT', 'INTERSECT', 'WINDOW']);
-const READ_COLUMN_KEYWORDS_ACU = new Set(['SELECT', 'FROM', 'JOIN', 'AS', 'ON', 'WHERE', 'GROUP', 'ORDER', 'HAVING', 'LIMIT', 'OFFSET', 'UNION', 'EXCEPT', 'INTERSECT', 'WITH', 'RECURSIVE', 'DISTINCT', 'BY', 'AND', 'OR', 'NOT', 'IN', 'IS', 'NULL', 'LIKE', 'BETWEEN', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'ASC', 'DESC', 'COLLATE', 'USING']);
+const READ_ALIAS_STOP_WORDS_ACU = new Set(['ON', 'USING', 'JOIN', 'LEFT', 'RIGHT', 'FULL', 'INNER', 'CROSS', 'NATURAL', 'INDEXED', 'NOT', 'WHERE', 'GROUP', 'HAVING', 'ORDER', 'LIMIT', 'OFFSET', 'UNION', 'EXCEPT', 'INTERSECT', 'WINDOW']);
+const READ_COLUMN_KEYWORDS_ACU = new Set([
+    'SELECT', 'FROM', 'JOIN', 'AS', 'ON', 'WHERE', 'GROUP', 'ORDER', 'HAVING', 'LIMIT', 'OFFSET',
+    'UNION', 'EXCEPT', 'INTERSECT', 'WITH', 'RECURSIVE', 'DISTINCT', 'BY', 'AND', 'OR', 'NOT', 'IN', 'IS',
+    'NULL', 'LIKE', 'GLOB', 'MATCH', 'REGEXP', 'ESCAPE', 'BETWEEN', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END',
+    'ASC', 'DESC', 'COLLATE', 'USING', 'TRUE', 'FALSE', 'CURRENT', 'CURRENT_DATE', 'CURRENT_TIME',
+    'CURRENT_TIMESTAMP', 'PARTITION', 'OVER', 'WINDOW', 'PRECEDING', 'FOLLOWING', 'UNBOUNDED', 'RANGE',
+    'ROWS', 'EXCLUDE', 'FILTER', 'MATERIALIZED', 'DO', 'CONFLICT', 'RETURNING', 'VALUES', 'SET',
+]);
+function isReadAliasStopWord_ACU(token) {
+    return !!token && token.quote === null && READ_ALIAS_STOP_WORDS_ACU.has(token.value.toUpperCase());
+}
 function isFunctionCall_ACU(sql, values, index) {
     const token = values[index];
     return !!token && /^\s*\(/.test(sql.slice(token.end));
+}
+function isNonColumnKeyword_ACU(values, index) {
+    const token = values[index];
+    if (!token || token.quote !== null)
+        return false;
+    const value = token.value.toUpperCase();
+    // PARTITION is grammar in `PARTITION BY`, but the identifier after BY is a
+    // real column expression. Other context-sensitive window words stay
+    // conservatively protected because their adjacent names are window objects,
+    // not entity columns.
+    if (value === 'PARTITION') {
+        const previous = values[index - 1];
+        if (previous && previous.depth === token.depth && keyword(previous, 'BY'))
+            return false;
+    }
+    return READ_COLUMN_KEYWORDS_ACU.has(value);
 }
 function findReadScope_ACU(scopes, values, index) {
     const token = values[index];
@@ -41573,7 +41792,7 @@ function collectReadScopes_ACU(sql, values, normalizedTables, onTableReference) 
             }
             if (!keyword(values[cursor], 'AS'))
                 break;
-            cursor += 1;
+            cursor = skipCteMaterializationHint_ACU(values, cursor + 1, depth);
             const definition = scopes.find(scope => scope.start === cursor && scope.depth === depth + 1);
             if (!definition)
                 break;
@@ -41593,7 +41812,7 @@ function collectReadScopes_ACU(sql, values, normalizedTables, onTableReference) 
                 const aliasIndex = nested ? compoundScopeEnd_ACU(values, nested) : -1;
                 const marker = aliasIndex >= 0 ? values[aliasIndex] : undefined;
                 const alias = keyword(marker, 'AS') ? values[aliasIndex + 1] : marker;
-                if (nested && alias?.depth === scope.depth && !READ_ALIAS_STOP_WORDS_ACU.has(alias.value.toUpperCase())) {
+                if (nested && alias?.depth === scope.depth && !isReadAliasStopWord_ACU(alias)) {
                     const aliasKey = alias.value.toLowerCase();
                     scope.derivedSources.set(aliasKey, nested.outputs);
                     if (nested.outputs.size === 0)
@@ -41643,7 +41862,7 @@ function collectReadScopes_ACU(sql, values, normalizedTables, onTableReference) 
             let alias;
             if (keyword(next, 'AS'))
                 alias = values[cursor + 1]?.depth === scope.depth ? values[cursor + 1] : undefined;
-            else if (next?.depth === scope.depth && !READ_ALIAS_STOP_WORDS_ACU.has(next.value.toUpperCase()) && !next.commaBefore)
+            else if (next?.depth === scope.depth && !isReadAliasStopWord_ACU(next) && !next.commaBefore)
                 alias = next;
             if (alias)
                 scope.aliases.set(alias.value.toLowerCase(), physicalName);
@@ -41711,7 +41930,7 @@ function rebindSqlReadIdentifiers_ACU(sql, tableAliases, columnAliases = new Map
                 || (previous && previous.depth === token.depth && keyword(previous, 'AS'))
                 || (next && next.depth === token.depth && /^\s*\.\s*$/.test(sql.slice(token.end, next.start)))
                 || isFunctionCall_ACU(sql, values, index)
-                || token.quote === null && READ_COLUMN_KEYWORDS_ACU.has(token.value.toUpperCase()))
+                || isNonColumnKeyword_ACU(values, index))
                 continue;
             const scope = findReadScope_ACU(scopes, values, index);
             if (!scope)
@@ -41789,7 +42008,7 @@ function rebindSqlReadIdentifiers_ACU(sql, tableAliases, columnAliases = new Map
                 }
                 if (!keyword(values[cursor], 'AS'))
                     break;
-                cursor += 1;
+                cursor = skipCteMaterializationHint_ACU(values, cursor + 1, depth);
                 while (values[cursor] && values[cursor].depth >= depth + 1)
                     cursor += 1;
                 if (!values[cursor]?.commaBefore || values[cursor].depth !== depth)
@@ -42051,17 +42270,14 @@ function buildSheetColumnAliasMap_ACU(targetData, options = {}) {
     const addColumnAlias = (tableColumns, tableEvidence, tableConflictCandidates, tableConflicts, source, target, evidence) => {
         const sourceKey = String(source).toLowerCase();
         const targetKey = String(target).toLowerCase();
-        if (!sourceKey || sourceKey === targetKey)
+        if (!sourceKey || sourceKey === targetKey || tableConflicts.has(sourceKey))
             return;
         const existing = tableColumns.get(sourceKey);
         if (existing && existing.toLowerCase() !== targetKey) {
-            // 同一别名指向不同真实列 → 双向删除并记冲突（与表别名同语义）。
-            recordConflictCandidate(tableConflictCandidates, sourceKey, existing, tableEvidence.get(existing.toLowerCase()) || evidence);
+            // 同一历史别名指向不同真实列：永久删除该别名并保留双方证据。
+            recordConflictCandidate(tableConflictCandidates, sourceKey, existing, tableEvidence.get(sourceKey) || evidence);
             recordConflictCandidate(tableConflictCandidates, sourceKey, target, evidence);
-            if (tableColumns.get(existing.toLowerCase()) === existing)
-                tableColumns.delete(existing.toLowerCase());
             tableColumns.delete(sourceKey);
-            tableEvidence.delete(existing.toLowerCase());
             tableEvidence.delete(sourceKey);
             tableConflicts.add(sourceKey);
             return;
@@ -42070,6 +42286,49 @@ function buildSheetColumnAliasMap_ACU(targetData, options = {}) {
             return;
         tableColumns.set(sourceKey, target);
         tableEvidence.set(sourceKey, evidence);
+    };
+    const registerDeclaredColumnAliases = (sourceSheet, physicalName, mappings) => {
+        const rawColumnAliases = sourceSheet?.sourceData?.columnAliases;
+        if (!rawColumnAliases || typeof rawColumnAliases !== 'object' || Array.isArray(rawColumnAliases))
+            return;
+        const targetByIdentity = new Map();
+        const ambiguousIdentities = new Set();
+        const addTargetIdentity = (rawName, sqlName) => {
+            const identity = canonicalizeDisplayName_ACU(rawName);
+            if (!identity || ambiguousIdentities.has(identity))
+                return;
+            const existing = targetByIdentity.get(identity);
+            if (existing && existing.toLowerCase() !== sqlName.toLowerCase()) {
+                targetByIdentity.delete(identity);
+                ambiguousIdentities.add(identity);
+                return;
+            }
+            targetByIdentity.set(identity, sqlName);
+        };
+        for (const mapping of mappings) {
+            addTargetIdentity(mapping.displayName, mapping.sqlName);
+            addTargetIdentity(mapping.sqlName, mapping.sqlName);
+        }
+        const tableColumns = aliases.get(physicalName) || new Map();
+        const tableConflicts = conflicts.get(physicalName) || new Set();
+        const tableConflictCandidates = conflictCandidates.get(physicalName) || new Map();
+        const tableEvidence = sourceByAlias.get(physicalName) || new Map();
+        for (const [sourceColumn, historicalAliases] of Object.entries(rawColumnAliases)) {
+            const sourceIdentity = canonicalizeDisplayName_ACU(sourceColumn);
+            const targetSqlName = !ambiguousIdentities.has(sourceIdentity) ? targetByIdentity.get(sourceIdentity) : undefined;
+            if (!targetSqlName)
+                continue;
+            for (const alias of Array.isArray(historicalAliases) ? historicalAliases : []) {
+                addColumnAlias(tableColumns, tableEvidence, tableConflictCandidates, tableConflicts, String(alias ?? ''), targetSqlName, 'declared_display_alias');
+            }
+        }
+        aliases.set(physicalName, tableColumns);
+        if (tableConflicts.size > 0)
+            conflicts.set(physicalName, tableConflicts);
+        if (tableEvidence.size > 0)
+            sourceByAlias.set(physicalName, tableEvidence);
+        if (tableConflictCandidates.size > 0)
+            conflictCandidates.set(physicalName, tableConflictCandidates);
     };
     if (!targetData || typeof targetData !== 'object') {
         return { aliases, conflicts, sourceByAlias, conflictCandidates };
@@ -42123,6 +42382,7 @@ function buildSheetColumnAliasMap_ACU(targetData, options = {}) {
             sourceByAlias.set(physicalName, tableEvidence);
         if (tableConflictCandidates.size > 0)
             conflictCandidates.set(physicalName, tableConflictCandidates);
+        registerDeclaredColumnAliases(sheet, physicalName, resolved.columnMap.mappings);
     }
     // ── supplemental 别名证据：authored_ddl（唯一 canonical 显示名映射）──
     const targetSheetByCanonicalName = new Map();
@@ -42221,26 +42481,11 @@ function buildSheetColumnAliasMap_ACU(targetData, options = {}) {
                 }
             }
             // declared_display_alias：sourceData.columnAliases 声明的历史显示名。
-            const rawColumnAliases = sheet?.sourceData?.columnAliases;
-            if (rawColumnAliases && typeof rawColumnAliases === 'object' && !Array.isArray(rawColumnAliases)) {
-                const targetCanonicalToSql = new Map();
-                const targetSheet = targetData[target.sheetKey];
-                const targetDescriptor = getRuntimeEffectiveSchema_ACU(targetSheet);
-                for (const mapping of resolveSheetColumns_ACU(targetSheet, targetSheet?.uid || target.sheetKey, target.physicalName, targetDescriptor).columnMap.mappings) {
-                    const canonical = canonicalizeDisplayName_ACU(mapping.displayName);
-                    if (canonical && !targetCanonicalToSql.has(canonical))
-                        targetCanonicalToSql.set(canonical, mapping.sqlName);
-                }
-                for (const [physicalName, aliases] of Object.entries(rawColumnAliases)) {
-                    const physicalCanonical = canonicalizeDisplayName_ACU(physicalName);
-                    const targetSqlName = physicalCanonical ? targetCanonicalToSql.get(physicalCanonical) : undefined;
-                    if (!targetSqlName)
-                        continue; // 物理名未唯一命中目标列 → 不注册
-                    for (const alias of Array.isArray(aliases) ? aliases : []) {
-                        addColumnAlias(tableColumns, tableEvidence, tableConflictCandidates, tableConflicts, String(alias ?? ''), targetSqlName, 'declared_display_alias');
-                    }
-                }
-            }
+            // 声明键既兼容当前 physical column name，也兼容当前显示名；两者若在
+            // 目标 schema 中产生一对多，立即放弃该声明而不任选一列。
+            const targetSheet = targetData[target.sheetKey];
+            const targetDescriptor = getRuntimeEffectiveSchema_ACU(targetSheet);
+            registerDeclaredColumnAliases(sheet, target.physicalName, resolveSheetColumns_ACU(targetSheet, targetSheet?.uid || target.sheetKey, target.physicalName, targetDescriptor).columnMap.mappings);
             aliases.set(target.physicalName, tableColumns);
             if (tableConflicts.size > 0)
                 conflicts.set(target.physicalName, tableConflicts);
@@ -43353,8 +43598,9 @@ function mergeLegacySheetIdentities_ACU(state, preferredKeysArg) {
                         continue;
                     }
                     winner.content.push(mapped);
-                    if (rowId)
-                        winnerRowIndexById.set(rowId, winner.content.length - 1);
+                    // winnerRowIndexById deliberately contains only rows that existed in
+                    // the original winner. A later loser row with the same legacy ID is a
+                    // distinct tolerant-replay row, not an override of an earlier append.
                     appendedRows += 1;
                 }
             }
@@ -44719,7 +44965,7 @@ function splitSqlStatementsForReplay_ACU(sql) {
 }
 function normalizeSqlStatementsForReplay_ACU(statements) {
     return statements
-        .flatMap(statement => splitSqlStatementsForReplay_ACU(String(statement || '').replace(/<!--|-->/g, '').trim()))
+        .flatMap(statement => splitSqlStatementsForReplay_ACU(stripHtmlCommentMarkersOutsideSqlLiterals_ACU(String(statement || '')).trim()))
         .map(statement => normalizeStatementValues(normalizeSqlStructure(statement)))
         .filter(Boolean);
 }
@@ -45427,7 +45673,7 @@ function parseDslArgs_ACU(argsString) {
     }
 }
 function extractTableEditDslCommands_ACU(text) {
-    const cleaned = String(text || '').replace(/<!--|-->/g, '');
+    const cleaned = stripHtmlCommentMarkersOutsideSqlLiterals_ACU(String(text || ''));
     const commands = [];
     const commandPattern = /(?:insertRow|updateRow|deleteRow)\s*\(/g;
     let searchStart = 0;
@@ -48410,7 +48656,12 @@ async function executeEmbeddingBatchPlan_ACU(plan, options) {
         const message = firstFailure.error instanceof Error ? firstFailure.error.message : String(firstFailure.error || 'Embedding 批次失败');
         throw new EmbeddingBatchExecutionError_ACU(message, firstFailure.batch, firstFailure.error);
     }
-    return { embeddings: slots.map(vector => vector || []), stats };
+    const embeddings = slots.map(vector => vector || []);
+    const dimensions = [...new Set(embeddings.map(vector => vector.length))];
+    if (embeddings.length > 0 && dimensions.length !== 1) {
+        throw new Error(`Embedding 维度不一致：期望全部为 ${dimensions[0] ?? 0}，实际为 ${dimensions.join('、')}。`);
+    }
+    return { embeddings, stats };
 }
 
 /**
@@ -50718,10 +50969,12 @@ async function persistSummaryVectorMirrorPackPrepared_ACU(params) {
             scope,
             publicationState: 'prepared',
         };
-        await registerPrepared_ACU(file);
+        // 内容寻址路径已经存在：复用对象，不得把它降级成当前事务的 prepared。
+        // 当前聊天是否可达由 commit/rollback 决定，失败路径也不能删除该既有对象。
         return {
             ref: { packHash, path, chunkCount: blob.chunks.length, byteLength: json.length },
             file,
+            createdNew: false,
         };
     }
     const uploaded = await uploadVectorIndexJsonFile_ACU({
@@ -50746,6 +50999,7 @@ async function persistSummaryVectorMirrorPackPrepared_ACU(params) {
             byteLength: Number(uploaded.ref.byteSize) || JSON.stringify(blob).length,
         },
         file: uploaded.ref,
+        createdNew: true,
     };
 }
 async function persistSummaryVectorMirrorManifestPrepared_ACU(params) {
@@ -55459,19 +55713,28 @@ function planUnmirroredEntryDeltasV2_ACU(timelineEntries, appliedTableEntryIds, 
     const mirrored = new Set(appliedTableEntryIds);
     const alreadyInHead = new Set([...alreadyMirroredRowIds].map((rowId) => String(rowId || '').trim()).filter(Boolean));
     const plans = [];
+    const refreshed = new Set();
     let before = new Set(rowIdsAtCheckpoint);
     for (const entry of timelineEntries) {
         const after = new Set(entry.rowIdsAfter);
         if (!mirrored.has(entry.entryId)) {
             const added = [...after].filter((rowId) => !before.has(rowId) && !alreadyInHead.has(rowId)).sort();
             const removed = [...before].filter((rowId) => !after.has(rowId)).sort();
-            if (added.length > 0 || removed.length > 0) {
+            // timeline 观察的是稳定 rowId，无法从 rowId 集合本身区分正文是否变化。
+            // 对当前 head 中仍稳定存在的行，在首个未镜像 entry 生成一次 refresh；
+            // 后续 entry 复用同一轮最终实时文本生成的向量，避免同 rowId 永久沿用旧 pack。
+            const refresh = [...after].filter((rowId) => (before.has(rowId)
+                && alreadyInHead.has(rowId)
+                && !refreshed.has(rowId))).sort();
+            refresh.forEach((rowId) => refreshed.add(rowId));
+            if (added.length > 0 || removed.length > 0 || refresh.length > 0) {
                 plans.push({
                     messageIndex: entry.messageIndex,
                     entryId: entry.entryId,
                     commitRevision: entry.commitRevision,
                     added,
                     removed,
+                    ...(refresh.length > 0 ? { refreshed: refresh } : {}),
                 });
             }
         }
@@ -55635,7 +55898,10 @@ async function flushSummaryVectorMirrorNow_ACU(options = {}) {
     }
     const baseRevision = captureTableRuntimeRevisionForWriteSet_ACU([{ kind: 'sheet', sheetKey: selected.summaryKey }], { isolationKey });
     const rowsById = new Map(prepared.rows.map((row) => [row.rowId, row]));
-    const addedRowIds = [...new Set(plans.flatMap((plan) => plan.added))];
+    const addedRowIds = [...new Set(plans.flatMap((plan) => [
+            ...plan.added,
+            ...(plan.refreshed || []),
+        ]))];
     const missingAdded = addedRowIds.filter((rowId) => !rowsById.has(rowId));
     if (missingAdded.length > 0) {
         logWarn_ACU(`[向量镜像] 新增 rowId 在实时纪要表中找不到，本轮跳过这些行：${missingAdded.join(',')}`);
@@ -55757,48 +56023,57 @@ async function flushSummaryVectorMirrorNow_ACU(options = {}) {
                         logDebug_ACU(`[向量镜像] 丢弃已失效来源 entry 的 delta：entryId=${plan.entryId}, messageIndex=${plan.messageIndex}`);
                         continue;
                     }
-                    const operations = [];
-                    for (const rowId of plan.removed) {
-                        operations.push({ kind: 'row_remove', rowId });
-                    }
-                    for (const rowId of plan.added) {
-                        const chunks = chunkRefsByRowId.get(rowId);
-                        if (!chunks || chunks.length === 0)
-                            continue;
-                        const row = rowsById.get(rowId);
-                        operations.push({
-                            kind: 'row_add',
-                            rowId,
-                            chunks,
-                            vectorSourceHash: row?.vectorSourceHash || '',
-                        });
-                    }
-                    if (operations.length === 0)
-                        continue;
                     const mirror = frame.summaryVectorIndexFrame && typeof frame.summaryVectorIndexFrame === 'object'
                         ? frame.summaryVectorIndexFrame
                         : { version: 3, sourceTableKey: selected.summaryKey, logEntries: [] };
-                    const nextSeq = Math.max(0, ...(mirror.logEntries || []).map((entry) => Number(entry.seq) || 0)) + 1;
-                    const delta = {
-                        seq: nextSeq,
-                        entryId: generateVectorDeltaEntryId_ACU(),
-                        createdAt: Date.now(),
-                        sourceTableEntry: {
-                            entryId: plan.entryId,
-                            commitRevision: plan.commitRevision,
-                            messageIndex: plan.messageIndex,
-                        },
-                        embedding,
-                        packRefs: packPersist ? [packPersist.ref] : [],
-                        operations,
-                        skippedRowCount: plan.added.filter((rowId) => !chunkRefsByRowId.has(rowId)).length || undefined,
+                    let nextSeq = Math.max(0, ...(mirror.logEntries || []).map((entry) => Number(entry.seq) || 0));
+                    const appendDelta = (operations, deltaPack = null, skippedRowCount) => {
+                        if (operations.length === 0)
+                            return;
+                        nextSeq += 1;
+                        const delta = {
+                            seq: nextSeq,
+                            entryId: generateVectorDeltaEntryId_ACU(),
+                            createdAt: Date.now(),
+                            sourceTableEntry: {
+                                entryId: plan.entryId,
+                                commitRevision: plan.commitRevision,
+                                messageIndex: plan.messageIndex,
+                            },
+                            embedding,
+                            packRefs: deltaPack ? [deltaPack.ref] : [],
+                            operations,
+                            ...(skippedRowCount ? { skippedRowCount } : {}),
+                        };
+                        mirror.logEntries = [...(mirror.logEntries || []), delta];
+                        writtenDeltaCount += 1;
                     };
+                    // refresh 必须拆成同一来源 entry 的 remove/add 两条 delta：
+                    // 既有链校验禁止同一 delta 内重复操作同一 rowId，而两条 delta
+                    // 保持 rowId 身份不变并原子替换其 pack 引用。
+                    const refreshesWithChunks = (plan.refreshed || []).filter((rowId) => ((chunkRefsByRowId.get(rowId)?.length || 0) > 0));
+                    appendDelta([
+                        ...plan.removed.map((rowId) => ({ kind: 'row_remove', rowId })),
+                        ...refreshesWithChunks.map((rowId) => ({ kind: 'row_remove', rowId })),
+                    ]);
+                    const additions = [...plan.added, ...refreshesWithChunks];
+                    appendDelta(additions.flatMap((rowId) => {
+                        const chunks = chunkRefsByRowId.get(rowId);
+                        if (!chunks || chunks.length === 0)
+                            return [];
+                        const row = rowsById.get(rowId);
+                        return [{
+                                kind: 'row_add',
+                                rowId,
+                                chunks,
+                                vectorSourceHash: row?.vectorSourceHash || '',
+                            }];
+                    }), packPersist, additions.filter((rowId) => !chunkRefsByRowId.has(rowId)).length || undefined);
                     frame.summaryVectorIndexFrame = {
                         ...mirror,
                         sourceTableKey: selected.summaryKey,
-                        logEntries: [...(mirror.logEntries || []), delta],
+                        logEntries: [...(mirror.logEntries || [])],
                     };
-                    writtenDeltaCount += 1;
                 }
                 if (writtenDeltaCount === 0)
                     return;
@@ -55810,7 +56085,7 @@ async function flushSummaryVectorMirrorNow_ACU(options = {}) {
         restoreIsolatedData_ACU(snapshots);
         // 提交失败 → 本次不会再 finalize，prepared pack 永远不会被引用（GC 出于保护 finalize 窗口
         // 而保留所有 prepared pack），不主动回收就会永久累积。走统一回收（含 ok 检查与 registry 注销）。
-        if (packPersist?.file) {
+        if (packPersist?.file && packPersist.createdNew !== false) {
             await discardSummaryVectorMirrorPreparedFiles_ACU([packPersist.file], 'delta 提交失败');
         }
         return emptyResult_ACU$1({
@@ -55819,7 +56094,7 @@ async function flushSummaryVectorMirrorNow_ACU(options = {}) {
             retryability: 'retryable',
         });
     }
-    if (packPersist) {
+    if (packPersist && packPersist.createdNew !== false) {
         try {
             await finalizeSummaryVectorMirrorFiles_ACU([packPersist.file]);
         }
@@ -56353,10 +56628,12 @@ async function rebuildSummaryVectorMirror_ACU(options) {
                 if (!refs || refs.length === 0)
                     continue;
                 let valid = true;
+                const liveSourceHash = String(preparedById.get(rowId)?.vectorSourceHash || '');
                 for (const ref of refs) {
                     const packRef = headPackRefsByHash.get(ref.packHash);
                     const pack = await loadSummaryVectorMirrorPack_ACU({ packHash: ref.packHash, path: packRef?.path || '', chunkCount: 0, byteLength: 0 });
-                    if (!pack || !pack.chunks[ref.chunkIndex]) {
+                    const packed = pack?.chunks?.[ref.chunkIndex];
+                    if (!packed || (liveSourceHash && String(packed.textHash || '') !== liveSourceHash)) {
                         valid = false;
                         break;
                     }
@@ -56450,7 +56727,8 @@ async function rebuildSummaryVectorMirror_ACU(options) {
             dimension: embedding.dimension,
             chunks: packChunks,
         });
-        files.push(packPersist.file);
+        if (packPersist.createdNew !== false)
+            files.push(packPersist.file);
         packRefsByHash.set(packPersist.ref.packHash, { ...packPersist.ref });
         chunkSources.forEach((source, index) => {
             const list = newRefsByRow.get(source.rowId) || [];
@@ -57658,10 +57936,11 @@ async function establishProvisionalBridge_ACU(runId, selectedSheetKeys, rangeSta
     return runTableWriteTransaction_ACU({
         source: 'manual_fill',
         reason: 'establishManualCatchUpProvisionalBridge',
+        chatKey,
         isolationKey,
         writeSet: [{ kind: 'all' }],
         maintenanceMode: 'exclusive',
-    }, async () => {
+    }, async (ctx) => {
         const chat = getChatArray_ACU();
         if (!Array.isArray(chat) || chat.length === 0) {
             return { ok: false, error: '聊天记录为空，无法建立 provisional bridge。' };
@@ -57827,28 +58106,44 @@ async function establishProvisionalBridge_ACU(runId, selectedSheetKeys, rangeSta
         catch (error) {
             return { ok: false, error: `provisional bridge 候选 replay 验证异常：${error?.message || String(error)}`, diagnosticCode: 'bridge_replay_mismatch' };
         }
-        // 6. strict save，失败完整回滚。
-        const before = JSON.parse(JSON.stringify(chat));
+        // 6. strict save，失败完整回滚；聊天直写必须纳入事务 runCommit，推进 runtime revision。
         try {
-            chat.length = 0;
-            chat.push(...candidateChat);
-            writeMessageIdentity_ACU(provisionalMessage, {
-                enabled: settings_ACU.dataIsolationEnabled,
-                code: settings_ACU.dataIsolationCode,
-            });
-            await saveChatToHostStrict_ACU();
+            ctx.assertFresh('establish provisional bridge before chat mutation');
         }
         catch (error) {
-            chat.length = 0;
-            chat.push(...before);
+            return { ok: false, error: `provisional bridge runtime revision 已过期：${error?.message || String(error)}` };
+        }
+        let committed;
+        try {
+            committed = await ctx.runCommit(async () => {
+                ctx.assertFresh('bridge direct chat mutation after commit lock');
+                const before = JSON.parse(JSON.stringify(chat));
+                try {
+                    chat.length = 0;
+                    chat.push(...candidateChat);
+                    writeMessageIdentity_ACU(provisionalMessage, {
+                        enabled: settings_ACU.dataIsolationEnabled,
+                        code: settings_ACU.dataIsolationCode,
+                    });
+                    await saveChatToHostStrict_ACU();
+                    return {
+                        ok: true,
+                        bridge,
+                        provisionalRootIndex: rangeStartMessageIndex,
+                    };
+                }
+                catch (error) {
+                    chat.length = 0;
+                    chat.push(...before);
+                    throw error;
+                }
+            }, [{ kind: 'all' }]);
+        }
+        catch (error) {
             return { ok: false, error: `provisional bridge 建立严格保存失败：${error?.message || String(error)}` };
         }
         logDebug_ACU(`[ManualCatchUpBridge] 已建立 provisional full checkpoint：runId=${runId}, root=${rangeStartMessageIndex}, originalFull=${originalFullCheckpointIndex}, sheets=${selectedSheetKeys.join('、')}。`);
-        return {
-            ok: true,
-            bridge,
-            provisionalRootIndex: rangeStartMessageIndex,
-        };
+        return committed;
     });
 }
 /**
@@ -57874,10 +58169,11 @@ async function finalizeProvisionalBridge_ACU(runId, options) {
     return runTableWriteTransaction_ACU({
         source: 'manual_fill',
         reason: 'finalizeManualCatchUpProvisionalBridge',
+        chatKey,
         isolationKey,
         writeSet: [{ kind: 'all' }],
         maintenanceMode: 'exclusive',
-    }, async () => {
+    }, async (ctx) => {
         const chat = getChatArray_ACU();
         const bridge = readActiveProvisionalBridge_ACU(chat, isolationKey);
         if (!bridge) {
@@ -58019,20 +58315,42 @@ async function finalizeProvisionalBridge_ACU(runId, options) {
         catch (error) {
             return { ok: false, error: `bridge finalize 候选 replay 验证异常：${error?.message || String(error)}`, diagnosticCode: 'bridge_replay_mismatch' };
         }
-        // 6. strict save，失败原位回滚。
-        const before = JSON.parse(JSON.stringify(chat));
+        // 6. strict save，失败原位回滚；聊天直写纳入事务 runCommit，推进 runtime revision。
         try {
-            chat.length = 0;
-            chat.push(...candidateChat);
-            writeMessageIdentity_ACU(originalMessage, {
-                enabled: settings_ACU.dataIsolationEnabled,
-                code: settings_ACU.dataIsolationCode,
-            });
-            await saveChatToHostStrict_ACU();
+            ctx.assertFresh('finalize provisional bridge before chat mutation');
         }
         catch (error) {
-            chat.length = 0;
-            chat.push(...before);
+            return { ok: false, error: `bridge finalize runtime revision 已过期：${error?.message || String(error)}`, diagnosticCode: 'bridge_finalize_failed' };
+        }
+        let committed;
+        try {
+            committed = await ctx.runCommit(async () => {
+                ctx.assertFresh('bridge direct chat mutation after commit lock');
+                const before = JSON.parse(JSON.stringify(chat));
+                try {
+                    chat.length = 0;
+                    chat.push(...candidateChat);
+                    writeMessageIdentity_ACU(originalMessage, {
+                        enabled: settings_ACU.dataIsolationEnabled,
+                        code: settings_ACU.dataIsolationCode,
+                    });
+                    await saveChatToHostStrict_ACU();
+                    return {
+                        ok: true,
+                        finalizeSummary: {
+                            selectedSheetKeys: [...bridge.selectedSheetKeys],
+                            originalFullCheckpointIndex: bridge.originalFullCheckpointIndex,
+                        },
+                    };
+                }
+                catch (error) {
+                    chat.length = 0;
+                    chat.push(...before);
+                    throw error;
+                }
+            }, [{ kind: 'all' }]);
+        }
+        catch (error) {
             return { ok: false, error: `bridge finalize 严格保存失败：${error?.message || String(error)}`, diagnosticCode: 'bridge_finalize_failed' };
         }
         logDebug_ACU(`[ManualCatchUpBridge] 已原子汇合：runId=${runId}, originalFull=${bridge.originalFullCheckpointIndex}, sheets=${bridge.selectedSheetKeys.join('、')}, cleanup=${cleanupEvidence.length}。`);
@@ -58040,13 +58358,7 @@ async function finalizeProvisionalBridge_ACU(runId, options) {
             changedSheetKeys: [...bridge.selectedSheetKeys],
             reason: 'provisional_bridge_finalize',
         });
-        return {
-            ok: true,
-            finalizeSummary: {
-                selectedSheetKeys: [...bridge.selectedSheetKeys],
-                originalFullCheckpointIndex: bridge.originalFullCheckpointIndex,
-            },
-        };
+        return committed;
     });
 }
 /**
@@ -58057,13 +58369,15 @@ async function finalizeProvisionalBridge_ACU(runId, options) {
  */
 async function rollbackProvisionalBridge_ACU(runId, options = {}) {
     const isolationKey = options.isolationKey ?? getCurrentIsolationKey_ACU();
+    const chatKey = options.chatKey ?? currentChatFileIdentifier_ACU;
     return runTableWriteTransaction_ACU({
         source: 'manual_fill',
         reason: 'rollbackManualCatchUpProvisionalBridge',
+        chatKey,
         isolationKey,
         writeSet: [{ kind: 'all' }],
         maintenanceMode: 'exclusive',
-    }, async () => {
+    }, async (ctx) => {
         const chat = getChatArray_ACU();
         const bridge = readActiveProvisionalBridge_ACU(chat, isolationKey);
         if (!bridge)
@@ -58102,19 +58416,35 @@ async function rollbackProvisionalBridge_ACU(runId, options = {}) {
                 provisionalMessage.TavernDB_ACU_IsolatedData = provisionalContainer;
             }
         }
-        const before = JSON.parse(JSON.stringify(chat));
         try {
-            chat.length = 0;
-            chat.push(...candidateChat);
-            await saveChatToHostStrict_ACU();
+            ctx.assertFresh('rollback provisional bridge before chat mutation');
         }
         catch (error) {
-            chat.length = 0;
-            chat.push(...before);
+            return { ok: false, error: `provisional bridge rollback runtime revision 已过期：${error?.message || String(error)}` };
+        }
+        let committed;
+        try {
+            committed = await ctx.runCommit(async () => {
+                ctx.assertFresh('bridge direct chat mutation after commit lock');
+                const before = JSON.parse(JSON.stringify(chat));
+                try {
+                    chat.length = 0;
+                    chat.push(...candidateChat);
+                    await saveChatToHostStrict_ACU();
+                    return { ok: true };
+                }
+                catch (error) {
+                    chat.length = 0;
+                    chat.push(...before);
+                    throw error;
+                }
+            }, [{ kind: 'all' }]);
+        }
+        catch (error) {
             return { ok: false, error: `provisional bridge rollback 严格保存失败：${error?.message || String(error)}` };
         }
         logDebug_ACU(`[ManualCatchUpBridge] 已回滚 provisional bridge：runId=${runId}。`);
-        return { ok: true };
+        return committed;
     });
 }
 /**
@@ -62424,6 +62754,7 @@ function preflightTemplateDataImport_ACU(options) {
             insertRowIds: [],
             conflictRowIds: [],
             rejectedRowIds: [],
+            overrideMappings: [],
             overrideRowIds: [],
         };
         for (const identity of audit.rowIdentities) {
@@ -62452,6 +62783,7 @@ function preflightTemplateDataImport_ACU(options) {
             else {
                 if (policy === 'template-wins') {
                     plan.overrideRowIds.push(identity.rowId);
+                    plan.overrideMappings.push({ templateRowId: identity.rowId, runtimeRowId: existing });
                     audit.keptRowCount += 1;
                 }
                 else {
@@ -62523,6 +62855,31 @@ function upsertTemplatePreset_ACU(nameRaw, templateStr) {
     s.presets = s.presets && typeof s.presets === 'object' ? s.presets : {};
     s.presets[name] = { templateStr: String(templateStr || ''), updatedAt: Date.now() };
     return saveTemplatePresetsStore_ACU(s);
+}
+function renameTemplatePreset_ACU(nameRaw, newNameRaw) {
+    const name = String(nameRaw || '').trim();
+    const newName = String(newNameRaw || '').trim();
+    if (!name || !newName)
+        return { ok: false, code: 'invalid_name', error: '模板预设名称不能为空。' };
+    if (name === newName)
+        return { ok: false, code: 'same_name', error: '新名称不能与旧名称相同。' };
+    const store = loadTemplatePresetsStore_ACU();
+    const presets = store.presets && typeof store.presets === 'object' ? store.presets : {};
+    const source = presets[name];
+    if (!source || typeof source !== 'object')
+        return { ok: false, code: 'source_not_found', error: '找不到源模板预设。' };
+    if (Object.prototype.hasOwnProperty.call(presets, newName)) {
+        return { ok: false, code: 'target_exists', error: '目标模板预设名称已存在。' };
+    }
+    const next = {
+        ...store,
+        presets: { ...presets, [newName]: { ...source, updatedAt: Date.now() } },
+    };
+    delete next.presets[name];
+    if (!saveTemplatePresetsStore_ACU(next)) {
+        return { ok: false, code: 'storage_error', error: '保存模板预设库失败。' };
+    }
+    return { ok: true };
 }
 function deleteTemplatePreset_ACU(nameRaw) {
     const name = String(nameRaw || '').trim();
@@ -62778,15 +63135,20 @@ function parseImportedTemplateData_ACU(templateData, importOptions) {
  * 所有追加行都保留模板行原样（row_id 已由规范化器分配，业务值取模板）。
  */
 function applyMergePlanToCandidate_ACU(candidateData, templateData, mergePlan) {
+    const errors = [];
     for (const [sheetKey, plan] of Object.entries(mergePlan)) {
         const candidateSheet = candidateData?.[sheetKey];
         const templateSheet = templateData?.[sheetKey];
-        if (!candidateSheet || typeof candidateSheet !== 'object' || !templateSheet || typeof templateSheet !== 'object')
+        if (!candidateSheet || typeof candidateSheet !== 'object' || !templateSheet || typeof templateSheet !== 'object') {
+            errors.push(`表 ${sheetKey} 缺少 merge candidate 或 template 数据。`);
             continue;
+        }
         const candidateContent = Array.isArray(candidateSheet.content) ? candidateSheet.content : [];
         const templateContent = Array.isArray(templateSheet.content) ? templateSheet.content : [];
-        if (candidateContent.length === 0 || templateContent.length === 0)
+        if (candidateContent.length === 0 || templateContent.length === 0) {
+            errors.push(`表 ${sheetKey} 的 merge 数据为空。`);
             continue;
+        }
         const headerWidth = Array.isArray(candidateContent[0]) ? candidateContent[0].length : 0;
         const templateRowByRowId = new Map();
         for (const row of templateContent.slice(1)) {
@@ -62796,41 +63158,54 @@ function applyMergePlanToCandidate_ACU(candidateData, templateData, mergePlan) {
             if (rowId)
                 templateRowByRowId.set(rowId, row);
         }
-        // 插入行：业务键未命中 → 追加模板行（补齐到表头宽度）
         for (const rowId of plan.insertRowIds) {
             const templateRow = templateRowByRowId.get(rowId);
-            if (!templateRow)
+            if (!templateRow) {
+                errors.push(`表 ${sheetKey} 的插入计划 row_id=${rowId} 未在模板中找到。`);
                 continue;
+            }
             const cells = [...templateRow];
             while (cells.length < headerWidth)
                 cells.push(null);
             candidateContent.push(cells);
         }
-        // 覆盖行：template-wins → 用模板行替换既有行（按 row_id 匹配）
-        if (plan.overrideRowIds.length > 0) {
-            const candidateRowIndexById = new Map();
-            for (let index = 1; index < candidateContent.length; index += 1) {
-                const row = candidateContent[index];
-                if (!Array.isArray(row))
-                    continue;
-                const rowId = String(row[0] ?? '').trim();
-                if (rowId)
-                    candidateRowIndexById.set(rowId, index);
-            }
-            for (const rowId of plan.overrideRowIds) {
-                const templateRow = templateRowByRowId.get(rowId);
-                if (!templateRow)
-                    continue;
-                const index = candidateRowIndexById.get(rowId);
-                if (index === undefined)
-                    continue; // 既有行不存在则不覆盖
-                const cells = [...templateRow];
-                while (cells.length < headerWidth)
-                    cells.push(null);
-                candidateContent[index] = cells;
+        const candidateRowIndexById = new Map();
+        for (let index = 1; index < candidateContent.length; index += 1) {
+            const row = candidateContent[index];
+            if (!Array.isArray(row))
+                continue;
+            const rowId = String(row[0] ?? '').trim();
+            if (rowId)
+                candidateRowIndexById.set(rowId, index);
+        }
+        const mappings = Array.isArray(plan.overrideMappings) && plan.overrideMappings.length > 0
+            ? plan.overrideMappings
+            : plan.overrideRowIds.map(templateRowId => ({ templateRowId, runtimeRowId: templateRowId }));
+        const mappedTemplateRowIds = new Set(mappings.map(mapping => mapping.templateRowId));
+        for (const legacyRowId of plan.overrideRowIds) {
+            if (!mappedTemplateRowIds.has(legacyRowId)) {
+                errors.push(`表 ${sheetKey} 的覆盖计划 row_id=${legacyRowId} 没有对应 runtime 映射。`);
             }
         }
+        for (const mapping of mappings) {
+            const templateRow = templateRowByRowId.get(mapping.templateRowId);
+            if (!templateRow) {
+                errors.push(`表 ${sheetKey} 的覆盖计划 template row_id=${mapping.templateRowId} 未找到。`);
+                continue;
+            }
+            const index = candidateRowIndexById.get(mapping.runtimeRowId);
+            if (index === undefined) {
+                errors.push(`表 ${sheetKey} 的覆盖计划 runtime row_id=${mapping.runtimeRowId} 未找到。`);
+                continue;
+            }
+            const cells = [...templateRow];
+            cells[0] = mapping.runtimeRowId;
+            while (cells.length < headerWidth)
+                cells.push(null);
+            candidateContent[index] = cells;
+        }
     }
+    return { ok: errors.length === 0, errors };
 }
 // ═══ 模板作用域持久化（纯数据操作） ═══
 function persistTemplateScopeSelectionState_ACU(presetName, { source = 'ui', updateGlobal = false, save = true, persistChatScope = undefined, templateSource = null, guideData = null, archivePreviousChatScope = false, scopeMode = undefined, registerChatPresetEntry = undefined } = {}) {
@@ -63241,9 +63616,29 @@ async function applyChatTemplateSnapshotWithReconciliationInternal_ACU(templateD
     // 未命中 → 插入；命中且 template-wins → 覆盖；命中且 keep-current → 保留 runtime；
     // 命中且 reject → preflight 已返回 blocker，直接拒绝提交。
     if (effectiveDataMode === 'merge') {
+        // reconcile 的 audit 是模板 key → 当前 runtime key 的唯一解析证据。
+        // merge preflight 不能直接按模板 key 去查 baseline，否则表 key 发生迁移时会
+        // 把业务键冲突误判成 INSERT，随后又因 candidateData 没有模板 key 而静默跳过。
+        const auditEntries = Array.isArray(plan.audit) ? plan.audit : [];
+        const resolvedSheetKeyByTemplateKey = new Map();
+        for (const audit of auditEntries) {
+            const templateSheetKey = String(audit?.templateSheetKey || '').trim();
+            const resolvedSheetKey = String(audit?.resolvedSheetKey || '').trim();
+            if (templateSheetKey && resolvedSheetKey)
+                resolvedSheetKeyByTemplateKey.set(templateSheetKey, resolvedSheetKey);
+        }
+        const preflightRuntimeData = JSON.parse(JSON.stringify(baselineData));
+        for (const [templateSheetKey, resolvedSheetKey] of resolvedSheetKeyByTemplateKey) {
+            if (templateSheetKey === resolvedSheetKey)
+                continue;
+            const runtimeSheet = preflightRuntimeData[resolvedSheetKey];
+            if (runtimeSheet && targetTemplateData?.[templateSheetKey]) {
+                preflightRuntimeData[templateSheetKey] = JSON.parse(JSON.stringify(runtimeSheet));
+            }
+        }
         const preflight = preflightTemplateDataImport_ACU({
             templateData: targetTemplateData,
-            runtimeData: baselineData,
+            runtimeData: preflightRuntimeData,
             dataMode: 'merge',
             conflictPolicy,
         });
@@ -63258,15 +63653,33 @@ async function applyChatTemplateSnapshotWithReconciliationInternal_ACU(templateD
         if (preflight.mergePlan && Object.keys(preflight.mergePlan).length > 0) {
             // introduced 表的模板数据已由 reconcile 带入 candidateData（asIntroducedSheet_ACU），
             // 若再按 mergePlan 追加会重复 INSERT 同一 UNIQUE 键。只对 matched 表应用合并。
-            const introducedKeys = new Set(plan.audit
+            const introducedKeys = new Set(auditEntries
                 .filter(item => item.match === 'introduced')
-                .map(item => item.resolvedSheetKey));
-            const matchedMergePlan = {};
-            for (const [sheetKey, sheetPlan] of Object.entries(preflight.mergePlan)) {
-                if (!introducedKeys.has(sheetKey))
-                    matchedMergePlan[sheetKey] = sheetPlan;
+                .map(item => String(item.resolvedSheetKey || '').trim()));
+            const mergeTemplateData = JSON.parse(JSON.stringify(targetTemplateData));
+            for (const [templateSheetKey, resolvedSheetKey] of resolvedSheetKeyByTemplateKey) {
+                if (templateSheetKey === resolvedSheetKey)
+                    continue;
+                const templateSheet = targetTemplateData?.[templateSheetKey];
+                if (templateSheet)
+                    mergeTemplateData[resolvedSheetKey] = JSON.parse(JSON.stringify(templateSheet));
             }
-            applyMergePlanToCandidate_ACU(plan.candidateData, targetTemplateData, matchedMergePlan);
+            const matchedMergePlan = {};
+            for (const [templateSheetKey, sheetPlan] of Object.entries(preflight.mergePlan)) {
+                const resolvedSheetKey = resolvedSheetKeyByTemplateKey.get(templateSheetKey) || templateSheetKey;
+                if (introducedKeys.has(resolvedSheetKey))
+                    continue;
+                matchedMergePlan[resolvedSheetKey] = { ...sheetPlan, sheetKey: resolvedSheetKey };
+            }
+            const mergeApplication = applyMergePlanToCandidate_ACU(plan.candidateData, mergeTemplateData, matchedMergePlan);
+            if (!mergeApplication.ok) {
+                return {
+                    saved: false,
+                    blockers: mergeApplication.errors,
+                    error: mergeApplication.errors.join('；'),
+                    importAudit: preflight.audits,
+                };
+            }
         }
     }
     logDebug_ACU(`[TemplateScope] 模板协调计划已生成: requestId=${requestId}, baseRevision=${baseRevision}, changes=${plan.sheetChanges.map(change => `${change.kind}:${change.sheetKey}`).join(',') || 'none'}, deleted=${plan.deletedSheetKeys.join(',') || 'none'}`);
@@ -64110,6 +64523,7 @@ async function collectMixedStorageEvidence_ACU(options) {
                 && JSON.stringify(rawProvenance.legacySourceAiFloors) === JSON.stringify(sourceAiFloors),
             legacyFingerprintMatchesCandidate: candidateFingerprint === null ? null : rawProvenance.legacyDataFingerprint === candidateFingerprint,
         };
+    const staticEvidence = collectV2SheetKeyEvidenceStatically_ACU(chat, options.isolationKey);
     const fingerprintsComparable = candidateFingerprint !== null && replay.fingerprint !== null;
     return {
         isolationKey: options.isolationKey,
@@ -64124,6 +64538,7 @@ async function collectMixedStorageEvidence_ACU(options) {
             },
             sheetCoverage,
             replay,
+            staticEvidence,
             provenance,
         },
         comparison: { fingerprintsComparable, fingerprintsEqual: fingerprintsComparable ? candidateFingerprint === replay.fingerprint : null },
@@ -64330,7 +64745,7 @@ function removeLegacy_ACU(chat, isolationKey, isolationConfig) {
         if (!message)
             continue;
         const isolated = cloneIsolatedData_ACU(message);
-        if (isolated && !isV2TagData_ACU(isolated[isolationKey])) {
+        if (isolated && !hasV2TableHistoryEvidence_ACU(isolated[isolationKey])) {
             delete isolated[isolationKey];
             if (Object.keys(isolated).length === 0)
                 delete message.TavernDB_ACU_IsolatedData;
@@ -64438,7 +64853,8 @@ function sameEvidence_ACU(left, right) {
         && left.legacy.sourceFingerprint === right.legacy.sourceFingerprint
         && left.v2.replay.fingerprint === right.v2.replay.fingerprint
         && stableJson_ACU$1(left.v2.anchor) === stableJson_ACU$1(right.v2.anchor)
-        && stableJson_ACU$1(left.v2.frames) === stableJson_ACU$1(right.v2.frames);
+        && stableJson_ACU$1(left.v2.frames) === stableJson_ACU$1(right.v2.frames)
+        && stableJson_ACU$1(left.v2.staticEvidence) === stableJson_ACU$1(right.v2.staticEvidence);
 }
 function v2Projection_ACU(chat, isolationKey) {
     return chat.map((message, messageIndex) => {
@@ -64768,6 +65184,15 @@ async function evaluateMixedStorageDecision_ACU(options) {
         && options.isolationKey === getCurrentIsolationKey_ACU();
     if (!scopeMatches)
         diagnostics.push('scope_isolation_mismatch');
+    const staticV2 = evidence.v2.staticEvidence;
+    if (staticV2.malformedSlots.length > 0)
+        diagnostics.push('v2_slot_malformed');
+    if (staticV2.hasUndecodableRegion)
+        diagnostics.push('v2_static_scan_undecodable');
+    const legacySheetKeys = new Set(Object.keys(repairedLegacyData).filter(key => key.startsWith('sheet_')));
+    if (staticV2.sheetKeys.some(sheetKey => !legacySheetKeys.has(sheetKey))) {
+        diagnostics.push('v2_static_sheets_not_covered_by_legacy');
+    }
     // 细化子因：区分 anchor 缺失形态与 replay 具体失败原因（T7）
     if (evidence.v2.replay.status !== 'success') {
         diagnostics.push('v2_replay_unavailable');
@@ -64781,10 +65206,6 @@ async function evaluateMixedStorageDecision_ACU(options) {
             diagnostics.push('v2_replay_failed');
         }
     }
-    if (evidence.v2.frames.some(frame => frame.logEntryCount === 0 && frame.perSheetCheckpointKeys.length === 0
-        && evidence.v2.anchor.messageIndex === null)) {
-        diagnostics.push('v2_slot_malformed');
-    }
     if (evidence.v2.replay.requiresCheckpointConvergence || evidence.v2.replay.compatibilityRepairs?.length)
         diagnostics.push('v2_requires_checkpoint_convergence');
     if (legacyAudit.status === 'unrecoverable' || legacyRepair.requiresConfirmation)
@@ -64795,7 +65216,10 @@ async function evaluateMixedStorageDecision_ACU(options) {
         diagnostics.push('legacy_v2_fingerprints_differ');
     let kind;
     let frozenMergeCandidate;
-    if (evidence.v2.replay.status !== 'success') {
+    if (staticV2.malformedSlots.length > 0 || staticV2.hasUndecodableRegion) {
+        kind = 'blocked_malformed_v2';
+    }
+    else if (evidence.v2.replay.status !== 'success') {
         kind = 'blocked_replay_unavailable';
     }
     else if (evidence.v2.replay.requiresCheckpointConvergence || evidence.v2.replay.compatibilityRepairs?.length) {
@@ -67802,7 +68226,7 @@ function resolveSnapshotMate_ACU(tableData) {
     return JSON.parse(JSON.stringify(DEFAULT_MATE_ACU));
 }
 function normalizeSqlStatementsForRuntimeLog_ACU(sqlStatements) {
-    const cleaned = String(sqlStatements || '').replace(/<!--|-->/g, '').trim();
+    const cleaned = stripHtmlCommentMarkersOutsideSqlLiterals_ACU(String(sqlStatements || '')).trim();
     if (!cleaned)
         return [];
     return splitSqlStatements(cleaned)
@@ -68545,6 +68969,27 @@ function repairSqlInsertValueCountMismatch_ACU(values, columnCount, suppliedRowI
     }
     throw new Error(`${context} 的值数量与列数量不一致。`);
 }
+function isInsertSelectStatement_ACU(statement) {
+    try {
+        const tokens = tokenizeSqlMutationIdentifiers_ACU(statement);
+        const actionIndex = getSqlMutationActionIndex_ACU(tokens);
+        const action = tokens[actionIndex];
+        if (!isSqlMutationKeyword_ACU(action, 'INSERT'))
+            return false;
+        if (isSqlMutationKeyword_ACU(tokens[actionIndex + 1], 'OR')
+            && isSqlMutationKeyword_ACU(tokens[actionIndex + 2], 'REPLACE'))
+            return false;
+        const target = getSqlMutationTargetToken_ACU(statement, tokens);
+        const suffix = statement.slice(target.end).trim();
+        if (!suffix.startsWith('('))
+            return false;
+        const columns = extractSqlInsertColumns_ACU(statement, tokens, target, 'AI INSERT');
+        return /^SELECT\b/i.test(statement.slice(columns.closingParenEnd).trim());
+    }
+    catch {
+        return false;
+    }
+}
 /**
  * Makes ordinary AI-authored INSERT statements self-describing before execution and V2 logging.
  * SQLite REPLACE / INSERT OR REPLACE forms retain their native semantics and are persisted unchanged.
@@ -68560,6 +69005,10 @@ function repairSqlInsertValueCountMismatch_ACU(values, columnCount, suppliedRowI
  */
 function materializeSystemRowIdsForSqlInserts_ACU(statements, tableData, additionalReservations, options) {
     const reservations = buildRowIdReservationsByRuntimeTable_ACU(tableData, additionalReservations);
+    const effectiveStatements = statements.filter(statement => statement.trim());
+    if (effectiveStatements.length > 1 && effectiveStatements.some(isInsertSelectStatement_ACU)) {
+        throw new Error('混合批次包含 INSERT SELECT 与其他 mutation：为避免按批前快照物化，已拒绝执行。');
+    }
     return statements.map((statement, statementIndex) => {
         const context = `AI INSERT 第 ${statementIndex + 1} 条`;
         const tokens = tokenizeSqlMutationIdentifiers_ACU(statement);
@@ -70024,7 +70473,7 @@ async function applySqlEditsToTableDataSnapshot_ACU(sqlStatements, tableData, _u
     const engine = new SqliteEngine();
     const syncBridge = new SyncBridge(engine);
     try {
-        const cleaned = sqlStatements.replace(/<!--|-->/g, '').trim();
+        const cleaned = stripHtmlCommentMarkersOutsideSqlLiterals_ACU(sqlStatements).trim();
         if (!cleaned) {
             return { success: true, modifiedKeys: [], appliedEdits: 0, workingData: JSON.parse(JSON.stringify(tableData || {})) };
         }
@@ -70467,13 +70916,13 @@ function parseCalcExpressionValue_ACU(expr, context) {
             return { success: false, value: null, error: `cell 路径格式错误: ${cellPath}` };
         }
         const [tableName, rowName, colName] = parts.map((p) => p.trim());
-        const cellValue = getCellValue_ACU(tableName, rowName, colName, context.allTablesJson);
-        if (cellValue === null || cellValue === undefined || cellValue === '') {
-            return { success: false, value: null, error: `cell 值不存在: ${cellPath}` };
+        const cellResult = getCellValue_ACU(context.allTablesJson, tableName, rowName, colName);
+        if (!cellResult?.success || cellResult.value === null || cellResult.value === undefined || cellResult.value === '') {
+            return { success: false, value: null, error: cellResult?.error || `cell 值不存在: ${cellPath}` };
         }
-        const numValue = parseFloat(cellValue);
+        const numValue = parseFloat(cellResult.value);
         if (isNaN(numValue)) {
-            return { success: false, value: null, error: `cell 值不是数字: ${cellPath} = ${cellValue}` };
+            return { success: false, value: null, error: `cell 值不是数字: ${cellPath} = ${cellResult.value}` };
         }
         return { success: true, value: numValue, error: null };
     }
@@ -70520,17 +70969,17 @@ function evaluateCalcExpression_ACU(expr, context) {
         return { success: false, value: null, error: '表达式为空' };
     }
     let processedExpr = expr.trim();
-    processedExpr = processedExpr.replace(/cell:([^+\-*/%()\s]+)/gi, (match, cellPath) => {
+    processedExpr = processedExpr.replace(/cell:([^/]+\/[^/]+\/[^+\-*%()\s]+)/gi, (match, cellPath) => {
         const parts = cellPath.split('/');
         if (parts.length !== 3) {
             return 'NaN';
         }
         const [tableName, rowName, colName] = parts.map((p) => p.trim());
-        const cellValue = getCellValue_ACU(tableName, rowName, colName, context.allTablesJson);
-        if (cellValue === null || cellValue === undefined || cellValue === '') {
+        const cellResult = getCellValue_ACU(context.allTablesJson, tableName, rowName, colName);
+        if (!cellResult?.success || cellResult.value === null || cellResult.value === undefined || cellResult.value === '') {
             return 'NaN';
         }
-        const numValue = parseFloat(cellValue);
+        const numValue = parseFloat(cellResult.value);
         return isNaN(numValue) ? 'NaN' : String(numValue);
     });
     processedExpr = processedExpr.replace(/\$random:([a-zA-Z_][a-zA-Z0-9_]*)/gi, (match, id) => {
@@ -72010,6 +72459,150 @@ function getCharDescription_ACU(win) {
     catch {
         return '';
     }
+}
+
+/**
+ * service/runtime/plot-runtime/plot-runtime-phase.ts
+ * 剧情推进 — 阶段化错误模型
+ *
+ * 目标：让每次顶层异常都能安全标识具体阶段与错误类别，
+ * 且日志/返回值只走白名单摘要，不泄露用户输入、提示词、世界书正文或堆栈正文。
+ */
+const PLOT_RUNTIME_PHASES_ACU = [
+    'clear_final_generation_greenlights',
+    'build_shared_context',
+    'resolve_agent_availability',
+    'execute_tasks',
+    'persist_plot',
+];
+function isPlotRuntimePhase_ACU(value) {
+    return typeof value === 'string' && PLOT_RUNTIME_PHASES_ACU.includes(value);
+}
+/**
+ * 阶段错误包装器：保存 phase 与原始 cause，但任何日志/摘要都只输出白名单。
+ * message 用于编程内部分类（不在日志/UI 中直接呈现）。
+ */
+class PlotStageError_ACU extends Error {
+    constructor(phase, message, cause) {
+        super(message);
+        this.name = 'PlotStageError_ACU';
+        this.phase = phase;
+        this.cause = cause;
+    }
+}
+function isPlotStageError_ACU(error) {
+    if (!error || typeof error !== 'object')
+        return false;
+    const candidate = error;
+    return candidate.name === 'PlotStageError_ACU' && isPlotRuntimePhase_ACU(candidate.phase);
+}
+/**
+ * 阶段错误的 cause 安全摘要：只输出白名单类别，不复制 cause 的 message/stack。
+ */
+function summarizePlotStageErrorCause_ACU(cause) {
+    // 已安全摘要对象（clearFinalGenerationGreenlights 直接透传的 error）不得二次压缩为 unknown。
+    if (cause && typeof cause === 'object' && typeof cause.category === 'string') {
+        const normalized = normalizeSafePreflightSummary_ACU(cause);
+        if (Object.keys(normalized).length > 0)
+            return normalized;
+    }
+    if (isStrictLorebookReadError_ACU$1(cause)) {
+        return { category: 'strict_lorebook_read', ...summarizeStrictLorebookReadError_ACU$1(cause) };
+    }
+    if (isLorebookReadAbortedError_ACU(cause))
+        return { category: 'aborted' };
+    if (cause && typeof cause === 'object') {
+        const name = cause.name;
+        if (typeof name === 'string' && name)
+            return { category: 'known', name };
+    }
+    const summarized = summarizeLorebookRuntimeError_ACU(cause);
+    if (summarized)
+        return summarized;
+    return { category: 'unknown' };
+}
+/**
+ * 阶段错误安全摘要：只输出 phase + cause 摘要。
+ */
+function summarizePlotStageError_ACU(error) {
+    if (!isPlotStageError_ACU(error))
+        return null;
+    return {
+        category: 'stage',
+        phase: error.phase,
+        cause: summarizePlotStageErrorCause_ACU(error.cause),
+    };
+}
+
+function normalizeRequiredScopePart_ACU(value) {
+    const normalized = typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
+    return normalized && normalized !== 'unknown_chat_init' ? normalized : null;
+}
+function capturePlotRuntimeScope_ACU() {
+    const chatId = normalizeRequiredScopePart_ACU(currentChatFileIdentifier_ACU);
+    const characterId = normalizeRequiredScopePart_ACU(getCurrentCharacterId_ACU());
+    return {
+        chatId,
+        characterId,
+        isolationKey: String(getCurrentIsolationKey_ACU() ?? ''),
+        reliable: !!chatId && !!characterId,
+    };
+}
+function isSamePlotRuntimeScope_ACU(before, after) {
+    return before.reliable
+        && after.reliable
+        && before.chatId === after.chatId
+        && before.characterId === after.characterId
+        && before.isolationKey === after.isolationKey;
+}
+function normalizeLorebookNames_ACU(raw) {
+    const candidates = [raw?.primary, ...(Array.isArray(raw?.additional) ? raw.additional : [])];
+    const seen = new Set();
+    return candidates.reduce((names, candidate) => {
+        if (typeof candidate !== 'string')
+            return names;
+        const name = candidate.trim();
+        if (name && !seen.has(name)) {
+            seen.add(name);
+            names.push(name);
+        }
+        return names;
+    }, []);
+}
+function isTransientLorebookNotFoundError_ACU(error) {
+    return classifyLorebookReadError_ACU(error) === 'lorebook_not_found';
+}
+function summarizePlotRuntimeScope_ACU(scope) {
+    return {
+        chatId: scope.chatId,
+        characterId: scope.characterId,
+        isolationKey: scope.isolationKey,
+        reliable: scope.reliable,
+    };
+}
+function summarizePlotRuntimeError_ACU(error) {
+    if (isStrictLorebookReadError_ACU$1(error)) {
+        return { category: 'strict_lorebook_read', ...summarizeStrictLorebookReadError_ACU$1(error) };
+    }
+    if (isPlotStageError_ACU(error)) {
+        return summarizePlotStageError_ACU(error);
+    }
+    if (isLorebookReadAbortedError_ACU(error)) {
+        return { category: 'aborted' };
+    }
+    let category = 'unknown';
+    if (error && typeof error === 'object' && typeof error.name === 'string') {
+        const name = error.name;
+        if (name === 'CharacterLorebookScopeChangedError_ACU' || name === 'CharacterWorldbookApiUnavailableError_ACU' || name === 'CharacterWorldbookBindingContractError_ACU') {
+            return { category: 'character_binding', name };
+        }
+    }
+    if (isTransientLorebookNotFoundError_ACU(error)) {
+        category = 'lorebook_not_found';
+    }
+    return {
+        category,
+    };
 }
 
 const ALIAS = Symbol.for('yaml.alias');
@@ -82449,6 +83042,62 @@ class RetryableAiResponseError_ACU extends Error {
         this.name = 'RetryableAiResponseError';
     }
 }
+function createPromptTemplateNonce_ACU() {
+    try {
+        const randomUUID = globalThis?.crypto?.randomUUID;
+        if (typeof randomUUID === 'function') {
+            const uuid = String(randomUUID.call(globalThis.crypto) || '');
+            if (uuid)
+                return uuid.replace(/[^a-zA-Z0-9_-]/g, '');
+        }
+    }
+    catch { /* 老宿主无 crypto 时走带进程内熵的兜底 */ }
+    return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+}
+/**
+ * 把不可信 payload 变成对 EJS/random/SQL/ORM/if 均惰性的 nonce token。
+ * 所有候选 token 都对本轮可信模板与全部不可信源做包含检查；即使随机源重复或
+ * payload 猜中候选，也会继续换一个 token，避免恢复时覆盖/串值。
+ */
+function createUntrustedTemplateGuard_ACU(reservedValues) {
+    const occupiedTexts = reservedValues.map(value => value === null || value === undefined ? '' : String(value));
+    const tokenValues = new Map();
+    const valueTokens = new Map();
+    let tokenIndex = 0;
+    const buildToken = () => {
+        for (let attempt = 0; attempt < 1024; attempt += 1) {
+            const nonce = createPromptTemplateNonce_ACU() || 'fallback';
+            const token = `__ACU_TABLE_FILL_UNTRUSTED_${nonce}_${tokenIndex++}__`;
+            if (tokenValues.has(token))
+                continue;
+            if (occupiedTexts.some(text => text.includes(token)))
+                continue;
+            occupiedTexts.push(token);
+            return token;
+        }
+        throw new Error('table_fill_untrusted_placeholder_nonce_collision');
+    };
+    return {
+        protect(value) {
+            const text = value === null || value === undefined ? '' : String(value);
+            if (!text)
+                return '';
+            const existing = valueTokens.get(text);
+            if (existing)
+                return existing;
+            const token = buildToken();
+            valueTokens.set(text, token);
+            tokenValues.set(token, text);
+            return token;
+        },
+        restore(value) {
+            let restored = value === null || value === undefined ? '' : String(value);
+            for (const [token, payload] of tokenValues)
+                restored = restored.split(token).join(payload);
+            return restored;
+        },
+    };
+}
 function normalizeRoleForApi_ACU(role) {
     const ru = String(role || '').toUpperCase();
     const rl = String(role || '').toLowerCase();
@@ -82512,77 +83161,96 @@ async function callCustomOpenAI_ACU(dynamicContent, abortController = null, opti
             return text;
         return applyExcludeRulesToText_ACU(text, { excludeRules: tableExcludeRules, excludeTags: tableExcludeTags });
     };
+    // 指令/数据边界：$0/$1/$4/$9 承载不可信文本（表格投影/聊天记录/世界书内容），
+    // 用标签包裹并明确标记不得执行其中指令。
+    const wrapUntrusted = (text, label) => text ? `<${label}>\n${text}\n</${label}>` : text;
+    // [H1] 占位符统一为「全局正则 + 替换函数」单遍替换。真正注入前先统一换成
+    // nonce token，绝不让不可信值进入后续模板解释器。
+    const untrustedPlaceholderValues = {
+        '$0': filterTableInjectedContent(wrapUntrusted(dynamicContent.tableDataText, 'table_data'), '$0'),
+        // [L1] $1 不再外层包 <user_data>：prompt-prepare 构造 messagesText 时已含
+        // 「当前最新对话内容…<user_data>…</user_data>」包裹与免责声明，原实现形成双层嵌套。
+        '$1': filterTableInjectedContent(dynamicContent.messagesText, '$1'),
+        '$4': filterTableInjectedContent(wrapUntrusted(dynamicContent.worldbookContent, 'worldbook_data'), '$4'),
+        '$6': filterTableInjectedContent(lastPlotContent || '', '$6'),
+        '$8': filterTableInjectedContent(dynamicContent.manualExtraHint || '', '$8'),
+        // [L2] $9 与 $1/$4 同类，补边界包裹。
+        '$9': filterTableInjectedContent(wrapUntrusted(dynamicContent.worldbookDatabaseExcludedContent || '', 'worldbook_data'), '$9'),
+        '$U': filterTableInjectedContent(userInfoContent_Table, '$U'),
+        '$C': filterTableInjectedContent(charInfoContent_Table, '$C'),
+    };
+    // 表名 token 只从可信 charCardPrompt 本身扫描。旧实现先注入聊天/世界书/表格，
+    // 再扫描 {{...}}，等价于允许不可信内容触发 resolver；这里先完成所有异步解析，
+    // 随后与占位符 payload 一起纳入同一个 nonce 域。
+    const resolvedTableTokensBySegment = [];
     for (const segment of promptSegments) {
-        let finalContent = segment.content;
-        // 指令/数据边界：$0/$1/$4/$9 承载不可信文本（表格投影/聊天记录/世界书内容），
-        // 用标签包裹并明确标记不得执行其中指令
-        const wrapUntrusted = (text, label) => text ? `<${label}>\n${text}\n</${label}>` : text;
-        // [H1] 占位符统一为「全局正则 + 替换函数」单遍替换：
-        // - 字符串第二参数会把值中的 $&/$`/$'/$0 等当作特殊模式展开（模板片段被复制进包裹块内部），
-        //   替换函数的返回值永远按字面量插入；
-        // - 单遍扫描同时避免先注入的值中恰好含有后续占位符（如 $6）被二次展开。
-        const placeholderValues = {
-            '$0': filterTableInjectedContent(wrapUntrusted(dynamicContent.tableDataText, 'table_data'), '$0'),
-            // [L1] $1 不再外层包 <user_data>：prompt-prepare 构造 messagesText 时已含
-            // 「当前最新对话内容…<user_data>…</user_data>」包裹与免责声明，原实现形成双层嵌套。
-            '$1': filterTableInjectedContent(dynamicContent.messagesText, '$1'),
-            '$4': filterTableInjectedContent(wrapUntrusted(dynamicContent.worldbookContent, 'worldbook_data'), '$4'),
-            '$6': filterTableInjectedContent(lastPlotContent || '', '$6'),
-            '$8': filterTableInjectedContent(dynamicContent.manualExtraHint || '', '$8'),
-            // [L2] $9 与 $1/$4 同类，补边界包裹。
-            '$9': filterTableInjectedContent(wrapUntrusted(dynamicContent.worldbookDatabaseExcludedContent || '', 'worldbook_data'), '$9'),
-            '$U': filterTableInjectedContent(userInfoContent_Table, '$U'),
-            '$C': filterTableInjectedContent(charInfoContent_Table, '$C'),
-        };
-        finalContent = finalContent.replace(/\$(?:0|1|4|6|8|9|U|C)/g, (match) => placeholderValues[match] ?? match);
-        if (typeof dynamicContent?.resolveTableWorldbookContent === 'function') {
-            const tableTokens = [];
-            const seenTableTokens = new Set();
-            for (const match of finalContent.matchAll(/\{\{([^{}]+)\}\}/g)) {
-                const raw = String(match[0] || '');
-                if (!raw || seenTableTokens.has(raw))
-                    continue;
-                seenTableTokens.add(raw);
-                tableTokens.push({ raw, tableName: String(match[1] || '') });
-            }
-            for (const token of tableTokens) {
-                try {
-                    const resolvedContent = await dynamicContent.resolveTableWorldbookContent(token.tableName);
-                    if (typeof resolvedContent === 'string') {
-                        finalContent = finalContent.split(token.raw).join(resolvedContent);
-                    }
-                }
-                catch (error) {
-                    logWarn_ACU(`[填表] 无法解析表名占位符 "${token.tableName}"，保留原 token。`, error);
-                }
-            }
-        }
-        if (typeof globalThis.EjsTemplate?.evalTemplate === 'function') {
+        const trustedContent = String(segment?.content ?? '');
+        const resolvedTokens = [];
+        const seenTableTokens = new Set();
+        for (const match of trustedContent.matchAll(/\{\{([^{}]+)\}\}/g)) {
+            const raw = String(match[0] || '');
+            if (!raw || seenTableTokens.has(raw))
+                continue;
+            seenTableTokens.add(raw);
+            if (typeof dynamicContent?.resolveTableWorldbookContent !== 'function')
+                continue;
+            const tableName = String(match[1] || '');
             try {
-                finalContent = await globalThis.EjsTemplate.evalTemplate(finalContent);
-                logDebug_ACU('[填表] 已通过 st-prompt-template 处理提示词');
+                const resolvedContent = await dynamicContent.resolveTableWorldbookContent(tableName);
+                if (typeof resolvedContent === 'string')
+                    resolvedTokens.push({ raw, value: resolvedContent });
             }
-            catch (e) {
-                logWarn_ACU('[填表] st-prompt-template 处理失败，使用原始内容:', e);
+            catch (error) {
+                logWarn_ACU(`[填表] 无法解析表名占位符 "${tableName}"，保留原 token。`, error);
             }
         }
-        finalContent = parseRandomTags_ACU(finalContent);
-        finalContent = replaceRandomVariables_ACU(finalContent);
-        // [P4] {[db...]}/{[sql...]} 值替换（SQLite 模式下，在 <if> 之前执行）
-        finalContent = replaceDbSqlVariables(finalContent);
-        if (settings_ACU.promptTemplateSettings?.enabled !== false) {
-            // 填表条件必须与本次 $1 实际读取的 AI 上下文一致，不能越过批次边界读取聊天最新层。
-            const conditionalSeedContent = typeof dynamicContent?.conditionalSeedContent === 'string'
-                ? dynamicContent.conditionalSeedContent
-                : getLatestAIMessageContent_ACU();
-            const templateContext = {
-                seedContent: conditionalSeedContent,
-                allTablesJson: currentJsonTableData_ACU,
-                plotContent: lastPlotContent || ''
-            };
-            finalContent = parseIfBlocksInContent_ACU(finalContent, templateContext, 0);
+        resolvedTableTokensBySegment.push(resolvedTokens);
+    }
+    const untrustedGuard = createUntrustedTemplateGuard_ACU([
+        ...promptSegments.map(segment => segment?.content ?? ''),
+        ...Object.values(untrustedPlaceholderValues),
+        ...resolvedTableTokensBySegment.flat().map(token => token.value),
+    ]);
+    try {
+        for (let segmentIndex = 0; segmentIndex < promptSegments.length; segmentIndex += 1) {
+            const segment = promptSegments[segmentIndex];
+            let finalContent = String(segment?.content ?? '');
+            finalContent = finalContent.replace(/\$(?:0|1|4|6|8|9|U|C)/g, (match) => (untrustedGuard.protect(untrustedPlaceholderValues[match])));
+            for (const token of resolvedTableTokensBySegment[segmentIndex] || []) {
+                finalContent = finalContent.split(token.raw).join(untrustedGuard.protect(token.value));
+            }
+            if (typeof globalThis.EjsTemplate?.evalTemplate === 'function') {
+                try {
+                    finalContent = await globalThis.EjsTemplate.evalTemplate(finalContent);
+                    logDebug_ACU('[填表] 已通过 st-prompt-template 处理提示词');
+                }
+                catch (e) {
+                    logWarn_ACU('[填表] st-prompt-template 处理失败，使用原始内容:', e);
+                }
+            }
+            finalContent = parseRandomTags_ACU(finalContent);
+            finalContent = replaceRandomVariables_ACU(finalContent);
+            // [P4] {[db...]}/{[sql...]} 值替换（SQLite 模式下，在 <if> 之前执行）
+            finalContent = replaceDbSqlVariables(finalContent);
+            if (settings_ACU.promptTemplateSettings?.enabled !== false) {
+                // 填表条件必须与本次 $1 实际读取的 AI 上下文一致，不能越过批次边界读取聊天最新层。
+                const conditionalSeedContent = typeof dynamicContent?.conditionalSeedContent === 'string'
+                    ? dynamicContent.conditionalSeedContent
+                    : getLatestAIMessageContent_ACU();
+                const templateContext = {
+                    seedContent: conditionalSeedContent,
+                    allTablesJson: currentJsonTableData_ACU,
+                    plotContent: lastPlotContent || ''
+                };
+                finalContent = parseIfBlocksInContent_ACU(finalContent, templateContext, 0);
+            }
+            messages.push({ role: normalizeRoleForApi_ACU(segment.role), content: finalContent });
         }
-        messages.push({ role: normalizeRoleForApi_ACU(segment.role), content: finalContent });
+    }
+    finally {
+        // 全部模板处理完成后才把不可信 payload 一次性放回出站文本。
+        for (const message of messages)
+            message.content = untrustedGuard.restore(message.content);
     }
     logDebug_ACU('Final messages array being sent to API:', messages);
     logDebug_ACU(`使用API预设: ${effectiveTableApiPreset || '当前配置'}, 模式: ${effectiveApiMode}`);
@@ -82687,6 +83355,10 @@ async function parseNonStreamResponse_ACU(response, onUsage) {
         return null;
     }
     catch (e) {
+        // response.json() 是响应体读取阶段；AbortError 来自用户取消/上层超时信号，
+        // 不可降级为 null，否则调用层会把取消/超时误报成可重试的模型响应错误。
+        if (e?.name === 'AbortError')
+            throw e;
         logError_ACU('[parseNonStreamResponse] Failed to parse response:', e);
         return null;
     }
@@ -82752,6 +83424,10 @@ async function parseStreamResponse_ACU(response, onUsage) {
         return result || null;
     }
     catch (e) {
+        // response.text() 可能在流尚未读完时因用户取消/内部超时而抛 AbortError。
+        // 解析失败可降级为 null，但控制流取消必须穿透到调用层分类。
+        if (e?.name === 'AbortError')
+            throw e;
         logError_ACU('[parseStreamResponse] Failed to parse stream:', e);
         return null;
     }
@@ -83534,6 +84210,8 @@ function parseAndApplyTableEditsToData_ACU(aiResponse, tableData, updateMode = '
                 if (!parsed || parsed.command !== 'insertRow')
                     return;
                 const tableIndex = parsed.args?.[0];
+                if (!Number.isSafeInteger(tableIndex) || tableIndex < 0 || tableIndex >= sheets.length)
+                    return;
                 const table = sheets[tableIndex];
                 if (!table || !table.name)
                     return;
@@ -83581,6 +84259,18 @@ function parseAndApplyTableEditsToData_ACU(aiResponse, tableData, updateMode = '
             logWarn_ACU('[表格编辑] restoreSeedRows 失败:', e);
         }
     };
+    const isIndexInRange_ACU = (value, length) => Number.isSafeInteger(value) && value >= 0 && value < length;
+    const isPlainRecord_ACU = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+    const parseColumnIndex_ACU = (value, length) => {
+        if (!/^(0|[1-9]\d*)$/.test(value))
+            return null;
+        const index = Number(value);
+        return isIndexInRange_ACU(index, length) ? index : null;
+    };
+    const markInvalidEdit_ACU = (line, detail) => {
+        failedEdits++;
+        logWarn_ACU(`[表格编辑] 指令索引无效: ${detail}; command="${line}"`);
+    };
     // 逐条应用编辑指令
     finalCommandLines.forEach(line => {
         const parsed = parseTableEditCommandLine_ACU(line);
@@ -83594,9 +84284,13 @@ function parseAndApplyTableEditsToData_ACU(aiResponse, tableData, updateMode = '
             switch (command) {
                 case 'insertRow': {
                     const [tableIndex, data] = args;
+                    if (!isIndexInRange_ACU(tableIndex, sheets.length)) {
+                        markInvalidEdit_ACU(line, `tableIndex=${String(tableIndex)} is not a non-negative safe integer in [0, ${sheets.length})`);
+                        break;
+                    }
                     const table = sheets[tableIndex];
                     if (!table || !table.name) {
-                        logWarn_ACU(`Table at index ${tableIndex} not found or has no name. Skipping insertRow.`);
+                        markInvalidEdit_ACU(line, `tableIndex=${tableIndex} does not identify a named table`);
                         break;
                     }
                     materializeSeedRowsIfNeeded_ACU(table);
@@ -83651,12 +84345,24 @@ function parseAndApplyTableEditsToData_ACU(aiResponse, tableData, updateMode = '
                 }
                 case 'deleteRow': {
                     const [tableIndex, rowIndex] = args;
+                    if (!isIndexInRange_ACU(tableIndex, sheets.length)) {
+                        markInvalidEdit_ACU(line, `tableIndex=${String(tableIndex)} is not a non-negative safe integer in [0, ${sheets.length})`);
+                        break;
+                    }
+                    if (!Number.isSafeInteger(rowIndex) || rowIndex < 0) {
+                        markInvalidEdit_ACU(line, `rowIndex=${String(rowIndex)} is not a non-negative safe integer`);
+                        break;
+                    }
                     const table = sheets[tableIndex];
                     if (!table || !table.name) {
-                        logWarn_ACU(`Table at index ${tableIndex} not found or has no name. Skipping deleteRow.`);
+                        markInvalidEdit_ACU(line, `tableIndex=${tableIndex} does not identify a named table`);
                         break;
                     }
                     materializeSeedRowsIfNeeded_ACU(table);
+                    if (!Array.isArray(table.content) || !isIndexInRange_ACU(rowIndex, Math.max(0, table.content.length - 1))) {
+                        markInvalidEdit_ACU(line, `rowIndex=${rowIndex} is outside the table data-row range`);
+                        break;
+                    }
                     const sheetKey = sheetKeysForIndexing[tableIndex];
                     const isSummaryTable = isSummaryOrOutlineTable_ACU(table.name);
                     if (isSummaryTable) {
@@ -83699,12 +84405,35 @@ function parseAndApplyTableEditsToData_ACU(aiResponse, tableData, updateMode = '
                 }
                 case 'updateRow': {
                     const [tableIndex, rowIndex, data] = args;
+                    if (!isIndexInRange_ACU(tableIndex, sheets.length)) {
+                        markInvalidEdit_ACU(line, `tableIndex=${String(tableIndex)} is not a non-negative safe integer in [0, ${sheets.length})`);
+                        break;
+                    }
+                    if (!Number.isSafeInteger(rowIndex) || rowIndex < 0) {
+                        markInvalidEdit_ACU(line, `rowIndex=${String(rowIndex)} is not a non-negative safe integer`);
+                        break;
+                    }
+                    if (!isPlainRecord_ACU(data)) {
+                        markInvalidEdit_ACU(line, 'update data must be a JSON object keyed by column index');
+                        break;
+                    }
                     const table = sheets[tableIndex];
                     if (!table || !table.name) {
-                        logWarn_ACU(`Table at index ${tableIndex} not found or has no name. Skipping updateRow.`);
+                        markInvalidEdit_ACU(line, `tableIndex=${tableIndex} does not identify a named table`);
                         break;
                     }
                     materializeSeedRowsIfNeeded_ACU(table);
+                    if (!Array.isArray(table.content) || !isIndexInRange_ACU(rowIndex, Math.max(0, table.content.length - 1))) {
+                        markInvalidEdit_ACU(line, `rowIndex=${rowIndex} is outside the table data-row range`);
+                        break;
+                    }
+                    const targetRow = table.content[rowIndex + 1];
+                    const columnCount = Array.isArray(targetRow) ? Math.max(0, targetRow.length - 1) : 0;
+                    const columnIndexes = Object.keys(data).map(key => parseColumnIndex_ACU(key, columnCount));
+                    if (columnIndexes.some(index => index === null)) {
+                        markInvalidEdit_ACU(line, `column indexes must be non-negative safe integers in [0, ${columnCount})`);
+                        break;
+                    }
                     const sheetKey = sheetKeysForIndexing[tableIndex];
                     const isSummaryTable = isSummaryOrOutlineTable_ACU(table.name);
                     if (isSummaryTable) {
@@ -84693,6 +85422,22 @@ function sanitizeExcludeBodyForPresetFields_ACU(rawExclude, effectiveApiConfig) 
     }
     return normalizeExcludeBodyParamsForSillyTavern_ACU(rawKeys.join(', '));
 }
+const MAX_UPSTREAM_ERROR_BODY_LENGTH_ACU = 2048;
+/**
+ * 上游错误体可能回显请求头、Cookie 或 API key；它在错误消息里会继续进入日志/UI，
+ * 因而必须先脱敏再限长。无敏感信息的短错误体保持逐字不变。
+ */
+function sanitizeUpstreamErrorBodyForDisplay_ACU(raw) {
+    let text = String(raw ?? '')
+        .replace(/((?:proxy-)?authorization\s*:\s*)(?:bearer|basic)\s+[^\s"',}\r\n]+/gi, '$1***')
+        .replace(/\b(bearer|basic)\s+[a-z0-9._~+/=-]+/gi, '$1 ***')
+        .replace(/((?:"|')?(?:proxy-authorization|authorization|(?:x[-_])?api[-_]?key|set-cookie|cookie)(?:"|')?\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,}\]]+)/gi, '$1***')
+        .replace(/^(\s*(?:set-cookie|cookie)\s*:\s*).+$/gim, '$1***');
+    if (text.length > MAX_UPSTREAM_ERROR_BODY_LENGTH_ACU) {
+        text = `${text.slice(0, MAX_UPSTREAM_ERROR_BODY_LENGTH_ACU - 1)}…`;
+    }
+    return text;
+}
 /**
  * fix1 调试快照头脱敏（__ACU_DEBUG_LAST_API_BODY__）：头名保留、值打码为 ***。
  * 覆盖 Authorization: Bearer / Basic 形态、x-api-key / api-key、自动补的 x-opencode-session。
@@ -84935,7 +85680,7 @@ async function postChatCompletion_ACU(body, signal) {
         throw e;
     }
     if (!res.ok) {
-        const errTxt = await res.text();
+        const errTxt = sanitizeUpstreamErrorBodyForDisplay_ACU(await res.text());
         throw new AgentApiHttpError_ACU(res.status, `API请求失败: ${res.status} ${errTxt}`);
     }
     const requestWantsStream = body?.stream === true;
@@ -85135,7 +85880,7 @@ async function callAIWithResolvedPreset_ACU(messages, resolved, signal, lifecycl
         }
         try {
             if (!response.ok) {
-                const errTxt = await response.text();
+                const errTxt = sanitizeUpstreamErrorBodyForDisplay_ACU(await response.text());
                 throw new Error(`API 请求失败: ${response.status} ${errTxt}`);
             }
             assertNotAborted_ACU(signal);
@@ -85144,9 +85889,15 @@ async function callAIWithResolvedPreset_ACU(messages, resolved, signal, lifecycl
             return typeof content === 'string' && content.trim() ? content.trim() : null;
         }
         catch (error) {
-            // 响应体读取阶段被超时计时器掐断：报超时而不是底层网络错文；外部取消仍按取消上报。
-            // 同上：挂 TimeoutError 名，走 isRetryable 的按名放行分支。
-            if (error?.name === 'AbortError' && !signal?.aborted && timeoutController.signal.aborted) {
+            // 响应体读取阶段被外部 signal 取消时，与 fetch 阶段使用同一用户取消语义。
+            if (error?.name === 'AbortError' && signal?.aborted) {
+                const cancelled = new Error('请求已取消');
+                cancelled.name = 'AbortError';
+                throw cancelled;
+            }
+            // 响应体读取阶段被超时计时器掐断：报超时而不是底层网络错文。
+            // 挂 TimeoutError 名，走 isRetryable 的按名放行分支。
+            if (error?.name === 'AbortError' && timeoutController.signal.aborted) {
                 const timeout = new Error(`内部 AI 请求超时（${INTERNAL_AI_FETCH_TIMEOUT_MS_ACU / 1000}s），已中断。`);
                 timeout.name = 'TimeoutError';
                 throw timeout;
@@ -85696,14 +86447,25 @@ async function performContentOptimization_ACU(content, options = {}) {
             if (exclusion.dropped.length > 0) {
                 logDebug_ACU(`[正文优化] 循环 ${currentLoop}/${totalLoops} 有 ${exclusion.dropped.length} 个优化项命中标签排除规则，已按写回保护丢弃（不写回、不计入替换数）`);
             }
-            const optimizedContent = applyOptimizations_ACU(content, exclusion.kept);
+            const applied = applyOptimizationsWithStats_ACU(content, exclusion.kept);
+            if (exclusion.kept.length > 0 && applied.appliedCount === 0) {
+                logWarn_ACU(`[正文优化] 循环 ${currentLoop}/${totalLoops} 没有可应用的优化项，放弃本轮写回`);
+                return {
+                    success: false,
+                    noOp: true,
+                    error: 'AI 返回的优化建议均未匹配到正文',
+                    failedCount: applied.failedCount,
+                };
+            }
             logDebug_ACU(`[正文优化] 循环 ${currentLoop}/${totalLoops} 完成，共 ${exclusion.kept.length} 个优化项` +
                 (exclusion.dropped.length > 0 ? `（另有 ${exclusion.dropped.length} 个被排除规则丢弃）` : ''));
             return {
                 success: true,
                 optimizations: exclusion.kept,
                 summary: parsed.summary,
-                optimizedContent: optimizedContent
+                optimizedContent: applied.content,
+                appliedCount: applied.appliedCount,
+                failedCount: applied.failedCount
             };
         }
         catch (error) {
@@ -87236,7 +87998,32 @@ async function savePlotToLatestMessage_ACU(force = false, options = {}) {
     }
     // ── P1: 本轮 pending 快照化（对象引用防旧回调 + roundId 持久化身份）──
     const roundRef = tempPlotToSave_ACU;
-    const roundChatId = currentChatFileIdentifier_ACU || '';
+    const roundChatId = typeof roundRef === 'object' && roundRef !== null
+        ? String(roundRef.chatId || currentChatFileIdentifier_ACU || '')
+        : (currentChatFileIdentifier_ACU || '');
+    const roundScope = typeof roundRef === 'object' && roundRef !== null
+        ? roundRef.runtimeScope
+        : undefined;
+    const isRoundScopeCurrent_ACU = () => {
+        if (!roundScope)
+            return true;
+        const currentScope = capturePlotRuntimeScope_ACU();
+        if (roundScope.reliable && currentScope?.reliable) {
+            return isSamePlotRuntimeScope_ACU(roundScope, currentScope);
+        }
+        return roundScope.chatId === currentScope?.chatId
+            && roundScope.characterId === currentScope?.characterId
+            && roundScope.isolationKey === currentScope?.isolationKey;
+    };
+    const supersedeIfRoundScopeChanged_ACU = () => {
+        if (isRoundScopeCurrent_ACU())
+            return null;
+        logWarn_ACU('[剧情推进] [Plot] 作用域已切换，放弃本轮剧情写回');
+        if (tempPlotToSave_ACU === roundRef) {
+            _set_tempPlotToSave_ACU(null);
+        }
+        return { status: 'superseded', reason: 'chat_changed' };
+    };
     let plotContent;
     let userInputHash;
     let finalMessageHash;
@@ -87260,6 +88047,16 @@ async function savePlotToLatestMessage_ACU(force = false, options = {}) {
         userInputText = roundRef?.userInputText ?? null;
         taskResults = Array.isArray(roundRef?.taskResults) ? roundRef.taskResults : null;
         logDebug_ACU('[剧情推进] [Plot] 使用新格式，roundId:', roundId || '(兼容)', '，用户输入哈希:', userInputHash, '，原始文本长度:', userInputText?.length || 0);
+    }
+    const scopeOutcomeBeforeLookup = supersedeIfRoundScopeChanged_ACU();
+    if (scopeOutcomeBeforeLookup)
+        return scopeOutcomeBeforeLookup;
+    if (roundChatId && (currentChatFileIdentifier_ACU || '') !== roundChatId) {
+        logWarn_ACU(`[剧情推进] [Plot] 聊天已切换（${roundChatId} → ${currentChatFileIdentifier_ACU || '(未知)'}），放弃本轮写回`);
+        if (tempPlotToSave_ACU === roundRef) {
+            _set_tempPlotToSave_ACU(null);
+        }
+        return { status: 'superseded', reason: 'chat_changed' };
     }
     if (!plotContent) {
         logWarn_ACU('[剧情推进] [Plot] plotContent 为空，无法保存');
@@ -87343,6 +88140,9 @@ async function savePlotToLatestMessage_ACU(force = false, options = {}) {
     };
     // ── P3: 写入并提交（立即 / 延迟共用）──
     const writeAndCommit = async (found) => {
+        const scopeOutcomeBeforeWrite = supersedeIfRoundScopeChanged_ACU();
+        if (scopeOutcomeBeforeWrite)
+            return scopeOutcomeBeforeWrite;
         const target = found.msg;
         if (roundId) {
             target._qrf_plot_round_id = roundId;
@@ -87404,6 +88204,11 @@ async function savePlotToLatestMessage_ACU(force = false, options = {}) {
             return;
         pollAttempts++;
         // T1.3: 被更新轮次取代 → 终止本轮
+        const scopeOutcome = supersedeIfRoundScopeChanged_ACU();
+        if (scopeOutcome) {
+            delayedFinished = true;
+            return;
+        }
         if (tempPlotToSave_ACU !== null && tempPlotToSave_ACU !== roundRef) {
             logWarn_ACU('[剧情推进] [Plot] 检测到新一轮 pending，放弃本轮延迟提交');
             delayedFinished = true;
@@ -87456,156 +88261,28 @@ async function flushPlotPendingSave_ACU() {
         ? String(tempPlotToSave_ACU.chatId || '')
         : '';
     const currentChatId = currentChatFileIdentifier_ACU || '';
+    const pendingScope = typeof tempPlotToSave_ACU === 'object' && tempPlotToSave_ACU !== null
+        ? tempPlotToSave_ACU.runtimeScope
+        : undefined;
+    if (pendingScope) {
+        const currentScope = capturePlotRuntimeScope_ACU();
+        const scopeMatches = pendingScope.reliable && currentScope?.reliable
+            ? isSamePlotRuntimeScope_ACU(pendingScope, currentScope)
+            : pendingScope.chatId === currentScope?.chatId
+                && pendingScope.characterId === currentScope?.characterId
+                && pendingScope.isolationKey === currentScope?.isolationKey;
+        if (!scopeMatches) {
+            logWarn_ACU('[剧情推进] [Plot] flush 检测到残留 pending 属于其他作用域，丢弃以避免跨作用域误写');
+            _set_tempPlotToSave_ACU(null);
+            return { status: 'superseded', reason: 'chat_changed' };
+        }
+    }
     if (pendingChatId && pendingChatId !== currentChatId) {
         logWarn_ACU(`[剧情推进] [Plot] flush 检测到残留 pending 属于其他聊天（${pendingChatId}），丢弃以避免跨聊天误写`);
         _set_tempPlotToSave_ACU(null);
         return { status: 'superseded', reason: 'chat_changed' };
     }
     return await savePlotToLatestMessage_ACU(true, { syncOnly: true });
-}
-
-/**
- * service/runtime/plot-runtime/plot-runtime-phase.ts
- * 剧情推进 — 阶段化错误模型
- *
- * 目标：让每次顶层异常都能安全标识具体阶段与错误类别，
- * 且日志/返回值只走白名单摘要，不泄露用户输入、提示词、世界书正文或堆栈正文。
- */
-const PLOT_RUNTIME_PHASES_ACU = [
-    'clear_final_generation_greenlights',
-    'build_shared_context',
-    'resolve_agent_availability',
-    'execute_tasks',
-    'persist_plot',
-];
-function isPlotRuntimePhase_ACU(value) {
-    return typeof value === 'string' && PLOT_RUNTIME_PHASES_ACU.includes(value);
-}
-/**
- * 阶段错误包装器：保存 phase 与原始 cause，但任何日志/摘要都只输出白名单。
- * message 用于编程内部分类（不在日志/UI 中直接呈现）。
- */
-class PlotStageError_ACU extends Error {
-    constructor(phase, message, cause) {
-        super(message);
-        this.name = 'PlotStageError_ACU';
-        this.phase = phase;
-        this.cause = cause;
-    }
-}
-function isPlotStageError_ACU(error) {
-    if (!error || typeof error !== 'object')
-        return false;
-    const candidate = error;
-    return candidate.name === 'PlotStageError_ACU' && isPlotRuntimePhase_ACU(candidate.phase);
-}
-/**
- * 阶段错误的 cause 安全摘要：只输出白名单类别，不复制 cause 的 message/stack。
- */
-function summarizePlotStageErrorCause_ACU(cause) {
-    // 已安全摘要对象（clearFinalGenerationGreenlights 直接透传的 error）不得二次压缩为 unknown。
-    if (cause && typeof cause === 'object' && typeof cause.category === 'string') {
-        const normalized = normalizeSafePreflightSummary_ACU(cause);
-        if (Object.keys(normalized).length > 0)
-            return normalized;
-    }
-    if (isStrictLorebookReadError_ACU$1(cause)) {
-        return { category: 'strict_lorebook_read', ...summarizeStrictLorebookReadError_ACU$1(cause) };
-    }
-    if (isLorebookReadAbortedError_ACU(cause))
-        return { category: 'aborted' };
-    if (cause && typeof cause === 'object') {
-        const name = cause.name;
-        if (typeof name === 'string' && name)
-            return { category: 'known', name };
-    }
-    const summarized = summarizeLorebookRuntimeError_ACU(cause);
-    if (summarized)
-        return summarized;
-    return { category: 'unknown' };
-}
-/**
- * 阶段错误安全摘要：只输出 phase + cause 摘要。
- */
-function summarizePlotStageError_ACU(error) {
-    if (!isPlotStageError_ACU(error))
-        return null;
-    return {
-        category: 'stage',
-        phase: error.phase,
-        cause: summarizePlotStageErrorCause_ACU(error.cause),
-    };
-}
-
-function normalizeRequiredScopePart_ACU(value) {
-    const normalized = typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '';
-    return normalized && normalized !== 'unknown_chat_init' ? normalized : null;
-}
-function capturePlotRuntimeScope_ACU() {
-    const chatId = normalizeRequiredScopePart_ACU(currentChatFileIdentifier_ACU);
-    const characterId = normalizeRequiredScopePart_ACU(getCurrentCharacterId_ACU());
-    return {
-        chatId,
-        characterId,
-        isolationKey: String(getCurrentIsolationKey_ACU() ?? ''),
-        reliable: !!chatId && !!characterId,
-    };
-}
-function isSamePlotRuntimeScope_ACU(before, after) {
-    return before.reliable
-        && after.reliable
-        && before.chatId === after.chatId
-        && before.characterId === after.characterId
-        && before.isolationKey === after.isolationKey;
-}
-function normalizeLorebookNames_ACU(raw) {
-    const candidates = [raw?.primary, ...(Array.isArray(raw?.additional) ? raw.additional : [])];
-    const seen = new Set();
-    return candidates.reduce((names, candidate) => {
-        if (typeof candidate !== 'string')
-            return names;
-        const name = candidate.trim();
-        if (name && !seen.has(name)) {
-            seen.add(name);
-            names.push(name);
-        }
-        return names;
-    }, []);
-}
-function isTransientLorebookNotFoundError_ACU(error) {
-    return classifyLorebookReadError_ACU(error) === 'lorebook_not_found';
-}
-function summarizePlotRuntimeScope_ACU(scope) {
-    return {
-        chatId: scope.chatId,
-        characterId: scope.characterId,
-        isolationKey: scope.isolationKey,
-        reliable: scope.reliable,
-    };
-}
-function summarizePlotRuntimeError_ACU(error) {
-    if (isStrictLorebookReadError_ACU$1(error)) {
-        return { category: 'strict_lorebook_read', ...summarizeStrictLorebookReadError_ACU$1(error) };
-    }
-    if (isPlotStageError_ACU(error)) {
-        return summarizePlotStageError_ACU(error);
-    }
-    if (isLorebookReadAbortedError_ACU(error)) {
-        return { category: 'aborted' };
-    }
-    let category = 'unknown';
-    if (error && typeof error === 'object' && typeof error.name === 'string') {
-        const name = error.name;
-        if (name === 'CharacterLorebookScopeChangedError_ACU' || name === 'CharacterWorldbookApiUnavailableError_ACU' || name === 'CharacterWorldbookBindingContractError_ACU') {
-            return { category: 'character_binding', name };
-        }
-    }
-    if (isTransientLorebookNotFoundError_ACU(error)) {
-        category = 'lorebook_not_found';
-    }
-    return {
-        category,
-    };
 }
 
 function createPlotWorldbookReadContext_ACU(options) {
@@ -88681,29 +89358,6 @@ function shouldSendPlotTaskToAgent_ACU(task) {
     const triggerWhen = String(task?.triggerWhen || '').trim();
     return !!(description || triggerWhen);
 }
-function hasDependencyCycle_ACU(taskIds, tasksById) {
-    const visiting = new Set();
-    const visited = new Set();
-    const visit = (taskId) => {
-        if (visited.has(taskId))
-            return false;
-        if (visiting.has(taskId))
-            return true;
-        visiting.add(taskId);
-        const deps = Array.isArray(tasksById.get(taskId)?.agentControl?.dependsOnTaskIds)
-            ? tasksById.get(taskId).agentControl.dependsOnTaskIds
-            : [];
-        for (const dep of deps) {
-            const depId = normalizeId_ACU(dep);
-            if (taskIds.has(depId) && visit(depId))
-                return true;
-        }
-        visiting.delete(taskId);
-        visited.add(taskId);
-        return false;
-    };
-    return Array.from(taskIds).some(visit);
-}
 function sortEffectiveTasks_ACU(tasks) {
     return tasks
         .map((task, index) => ({ task, index }))
@@ -88720,12 +89374,89 @@ function sortEffectiveTasks_ACU(tasks) {
     })
         .map(item => item.task);
 }
+function taskDependencyIds_ACU(task) {
+    const dependencies = [];
+    for (const dependency of Array.isArray(task?.agentControl?.dependsOnTaskIds)
+        ? task.agentControl.dependsOnTaskIds
+        : []) {
+        const dependencyId = normalizeId_ACU(dependency);
+        if (dependencyId)
+            dependencies.push(dependencyId);
+    }
+    return [...new Set(dependencies)];
+}
+function validateAndTopoSortTaskGraph_ACU(effectiveTasks, allKnownTasks) {
+    const effectiveById = new Map(effectiveTasks.map((task, index) => [normalizeId_ACU(task?.id), { task, index }]));
+    const knownById = new Map(allKnownTasks.map(task => [normalizeId_ACU(task?.id), task]));
+    const effectiveIds = new Set(effectiveById.keys());
+    const edges = new Map();
+    for (const taskId of effectiveIds) {
+        const task = effectiveById.get(taskId)?.task;
+        const dependencies = taskDependencyIds_ACU(task);
+        for (const dependencyId of dependencies) {
+            if (!knownById.has(dependencyId)) {
+                return { tasks: effectiveTasks, reason: 'task_dependency_missing' };
+            }
+            if (!effectiveIds.has(dependencyId)) {
+                return { tasks: effectiveTasks, reason: 'task_dependency_not_selected' };
+            }
+            const dependency = effectiveById.get(dependencyId)?.task;
+            const dependencyStage = normalizePositiveInteger_ACU$2(dependency?.stage, 1);
+            const taskStage = normalizePositiveInteger_ACU$2(task?.stage, 1);
+            // 同 stage 会在 plot runtime 中 Promise.all 并发，无法保证 prerequisite 产出先于 dependent。
+            if (dependencyStage >= taskStage) {
+                return { tasks: effectiveTasks, reason: 'task_dependency_stage_conflict' };
+            }
+            const taskEdges = edges.get(dependencyId) || [];
+            taskEdges.push(taskId);
+            edges.set(dependencyId, taskEdges);
+        }
+    }
+    const indegree = new Map([...effectiveIds].map(taskId => [taskId, 0]));
+    for (const dependents of edges.values()) {
+        for (const taskId of dependents)
+            indegree.set(taskId, (indegree.get(taskId) || 0) + 1);
+    }
+    const compareTasks = (leftId, rightId) => {
+        const left = effectiveById.get(leftId);
+        const right = effectiveById.get(rightId);
+        const stageDiff = normalizePositiveInteger_ACU$2(left?.task?.stage, 1) - normalizePositiveInteger_ACU$2(right?.task?.stage, 1);
+        if (stageDiff !== 0)
+            return stageDiff;
+        const orderDiff = normalizeNonNegativeInteger_ACU$2(left?.task?.order, 0) - normalizeNonNegativeInteger_ACU$2(right?.task?.order, 0);
+        if (orderDiff !== 0)
+            return orderDiff;
+        return (left?.index || 0) - (right?.index || 0);
+    };
+    const ready = [...effectiveIds].filter(taskId => (indegree.get(taskId) || 0) === 0).sort(compareTasks);
+    const ordered = [];
+    while (ready.length > 0) {
+        const taskId = ready.shift();
+        ordered.push(effectiveById.get(taskId).task);
+        for (const dependentId of edges.get(taskId) || []) {
+            const next = (indegree.get(dependentId) || 0) - 1;
+            indegree.set(dependentId, next);
+            if (next === 0) {
+                ready.push(dependentId);
+                ready.sort(compareTasks);
+            }
+        }
+    }
+    if (ordered.length !== effectiveTasks.length) {
+        return { tasks: effectiveTasks, reason: 'task_dependency_cycle' };
+    }
+    return { tasks: ordered };
+}
 function normalizeTaskPlan_ACU(rawPlan, enabledTasks, userOrderedTasks = []) {
     const normalizedTasks = enabledTasks.map((task, index) => normalizePlotTask_ACU(task, { index, fallbackTask: task }));
     const normalizedUserOrderedTasks = userOrderedTasks.map((task, index) => normalizePlotTask_ACU(task, { index, fallbackTask: task }));
+    const allKnownTasks = [...normalizedTasks, ...normalizedUserOrderedTasks];
     if (!Array.isArray(rawPlan)) {
         if (normalizedTasks.length === 0 && normalizedUserOrderedTasks.length > 0) {
-            return { plan: [], effectiveTasks: sortEffectiveTasks_ACU(normalizedUserOrderedTasks) };
+            const graph = validateAndTopoSortTaskGraph_ACU(sortEffectiveTasks_ACU(normalizedUserOrderedTasks), allKnownTasks);
+            return graph.reason
+                ? { plan: [], effectiveTasks: enabledTasks, reason: graph.reason }
+                : { plan: [], effectiveTasks: graph.tasks };
         }
         if (normalizedTasks.length === 0)
             return { plan: [], effectiveTasks: [] };
@@ -88734,7 +89465,6 @@ function normalizeTaskPlan_ACU(rawPlan, enabledTasks, userOrderedTasks = []) {
     const tasksById = new Map(normalizedTasks.map(task => [String(task.id), task]));
     const plan = [];
     const effectiveTasks = [];
-    const selectedIds = new Set();
     for (const item of rawPlan) {
         const taskId = normalizeId_ACU(item?.taskId);
         const sourceTask = tasksById.get(taskId);
@@ -88749,7 +89479,6 @@ function normalizeTaskPlan_ACU(rawPlan, enabledTasks, userOrderedTasks = []) {
         const effectiveOrder = normalizeNonNegativeInteger_ACU$2(item?.effectiveOrder, sourceTask.order || 0);
         plan.push({ taskId, run, effectiveStage, effectiveOrder, mode: String(item?.mode || '').trim(), reason: String(item?.reason || '').trim() });
         if (run) {
-            selectedIds.add(taskId);
             effectiveTasks.push({ ...sourceTask, stage: effectiveStage, order: effectiveOrder, __agentEffective: true });
         }
     }
@@ -88761,16 +89490,21 @@ function normalizeTaskPlan_ACU(rawPlan, enabledTasks, userOrderedTasks = []) {
         effectiveTasks.push(task);
     }
     if (plan.length === 0) {
-        if (effectiveTasks.length > 0)
-            return { plan: [], effectiveTasks: sortEffectiveTasks_ACU(effectiveTasks) };
+        if (effectiveTasks.length > 0) {
+            const graph = validateAndTopoSortTaskGraph_ACU(sortEffectiveTasks_ACU(effectiveTasks), allKnownTasks);
+            return graph.reason
+                ? { plan: [], effectiveTasks: enabledTasks, reason: graph.reason }
+                : { plan: [], effectiveTasks: graph.tasks };
+        }
         if (normalizedTasks.length === 0)
             return { plan: [], effectiveTasks: [] };
         return { plan: [], effectiveTasks: enabledTasks, reason: 'no_valid_task_plan_items' };
     }
-    if (selectedIds.size > 0 && hasDependencyCycle_ACU(selectedIds, tasksById)) {
-        return { plan: [], effectiveTasks: enabledTasks, reason: 'task_dependency_cycle' };
+    const graph = validateAndTopoSortTaskGraph_ACU(sortEffectiveTasks_ACU(effectiveTasks), allKnownTasks);
+    if (graph.reason) {
+        return { plan: [], effectiveTasks: enabledTasks, reason: graph.reason };
     }
-    return { plan, effectiveTasks: sortEffectiveTasks_ACU(effectiveTasks) };
+    return { plan, effectiveTasks: graph.tasks };
 }
 function createAgentDecisionShards_ACU(summaries, candidateLimit, configuredConcurrency, minTkBudget, maxTkBudget) {
     const candidates = summaries.slice(0, normalizePositiveInteger_ACU$2(candidateLimit, summaries.length || 1));
@@ -89681,6 +90415,25 @@ async function executeSinglePlotTask_ACU(task, sharedContext, runtimeOptions = {
 }
 async function runPlotTasksRuntime_ACU(plotSettings, userMessage, runtimeOptions = {}) {
     const { inputForHash = userMessage, hasExistingUserMessage = false } = runtimeOptions;
+    const initialScope = runtimeOptions.runtimeScope || capturePlotRuntimeScope_ACU();
+    const isRuntimeScopeCurrent_ACU = () => {
+        const currentScope = capturePlotRuntimeScope_ACU();
+        if (initialScope?.reliable && currentScope?.reliable) {
+            return isSamePlotRuntimeScope_ACU(initialScope, currentScope);
+        }
+        return initialScope?.chatId === currentScope?.chatId
+            && initialScope?.characterId === currentScope?.characterId
+            && initialScope?.isolationKey === currentScope?.isolationKey;
+    };
+    const scopeChangedResult_ACU = (successfulResults = [], failedResults = [], aggregatedTags = new Map(), enabledTaskCount = 0) => ({
+        finalMessage: null,
+        successfulResults,
+        failedResults,
+        aggregatedTags,
+        enabledTaskCount,
+        scopeChanged: true,
+        errorMessage: '剧情规划作用域已变化，已放弃本轮写回。',
+    });
     // ── P4-T4.1: 入口 flush 上一轮残留 pending ──
     // 下一轮开始意味着用户已发送新消息，上一轮目标用户消息必然已在 chat 中，
     // 因此这里只做一次同步查找 + 写入 + 提交，不起定时器。
@@ -89764,12 +90517,18 @@ async function runPlotTasksRuntime_ACU(plotSettings, userMessage, runtimeOptions
             : 'sequential';
         let agentDecisionPromise = null;
         async function applyAgentFinalGreenlights_ACU(agentDecision) {
+            if (!isRuntimeScopeCurrent_ACU())
+                return false;
             const finalGenerationGreenlights = agentDecision.active === true && Array.isArray(agentDecision.finalGenerationGreenlights)
                 ? agentDecision.finalGenerationGreenlights
                 : [];
             _set_pendingFinalGenerationGreenlights_ACU(finalGenerationGreenlights);
             if (agentDecision.active === true) {
                 const written = await writeFinalGenerationGreenlights_ACU(finalGenerationGreenlights);
+                if (!isRuntimeScopeCurrent_ACU()) {
+                    _set_pendingFinalGenerationGreenlights_ACU([]);
+                    return false;
+                }
                 if (!written && finalGenerationGreenlights.length > 0) {
                     // 写入未生效时放行条目在世界书里仍是禁用态，原生注入不会包含它们；
                     // 生成不阻断（缺内容比漏内容安全），但必须可观测。
@@ -89778,6 +90537,7 @@ async function runPlotTasksRuntime_ACU(plotSettings, userMessage, runtimeOptions
                     });
                 }
             }
+            return true;
         }
         if (agentWorldbookControl && agentExecutionMode === 'concurrent') {
             sharedContext.forceNormalWorldbook = true;
@@ -89801,7 +90561,9 @@ async function runPlotTasksRuntime_ACU(plotSettings, userMessage, runtimeOptions
                 signal: abortController_ACU?.signal,
             });
             sharedContext.agentDecision = agentDecision;
-            await applyAgentFinalGreenlights_ACU(agentDecision);
+            const greenlightsApplied = await applyAgentFinalGreenlights_ACU(agentDecision);
+            if (!greenlightsApplied)
+                return scopeChangedResult_ACU();
             if (agentDecision.active === true) {
                 enabledTasks = Array.isArray(agentDecision.effectiveTasks) ? agentDecision.effectiveTasks : [];
             }
@@ -89901,13 +90663,21 @@ async function runPlotTasksRuntime_ACU(plotSettings, userMessage, runtimeOptions
         if (agentDecisionPromise) {
             const agentDecision = await agentDecisionPromise;
             checkPlotAbortRequested_ACU();
-            await applyAgentFinalGreenlights_ACU(agentDecision);
+            const greenlightsApplied = await applyAgentFinalGreenlights_ACU(agentDecision);
+            if (!greenlightsApplied)
+                return scopeChangedResult_ACU(successfulResults, failedResults, aggregatedTags, enabledTasks.length);
+        }
+        if (!isRuntimeScopeCurrent_ACU()) {
+            return scopeChangedResult_ACU(successfulResults, failedResults, aggregatedTags, enabledTasks.length);
         }
         const finalMessage = buildFinalPlotInjectionMessage_ACU(sharedContext.finalSystemDirectiveContent, successfulResults, aggregatedTags, aggregatedInjectOnlyTagNames);
         const saveContent = buildPlotSaveContentFromTaskResults_ACU(successfulResults);
         const userInputHash = hashUserInput_ACU(inputForHash);
         const finalMessageHash = hashUserInput_ACU(finalMessage);
         const roundId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+        if (!isRuntimeScopeCurrent_ACU()) {
+            return scopeChangedResult_ACU(successfulResults, failedResults, aggregatedTags, enabledTasks.length);
+        }
         const chatId = currentChatFileIdentifier_ACU || '';
         _set_tempPlotToSave_ACU({
             content: saveContent,
@@ -89918,6 +90688,7 @@ async function runPlotTasksRuntime_ACU(plotSettings, userMessage, runtimeOptions
             taskResults: successfulResults,
             // P1-T1.1: 绑定当前聊天标识，供 flush/延迟路径跨聊天校验
             chatId,
+            runtimeScope: initialScope,
         });
         // 对象引用仅用于识别旧延迟回调是否被新 pending 取代；roundId 才是消息持久化身份。
         logDebug_ACU('[剧情推进] [Plot] 已暂存plot数据，roundId:', roundId, '，用户输入哈希:', userInputHash, '，原始文本长度:', inputForHash?.length || 0);
@@ -90352,7 +91123,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.6.8" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.6.9" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -90400,6 +91171,7 @@ async function runOptimizationLogic_ACU(userMessage, options = {}) {
     runOptimizationLogic_ACU.__inFlight = true;
     runOptimizationLogic_ACU.__inFlightText = String(userMessage || '');
     let originalUserInputForAbort_ACU = userMessage || '';
+    let plotAbortController_ACU = null;
     try {
         planningGuard_ACU.inProgress = true;
         const currentSettings = settings_ACU.plotSettings || {};
@@ -90410,11 +91182,40 @@ async function runOptimizationLogic_ACU(userMessage, options = {}) {
         if (!plotSettings.enabled || isFlightModeActive_ACU()) {
             return { success: false, skipped: true, reason: 'disabled' };
         }
-        _set_abortController_ACU(new AbortController());
+        plotAbortController_ACU = new AbortController();
+        _set_abortController_ACU(plotAbortController_ACU);
+        trackAbortController_ACU(plotAbortController_ACU);
         const runtimeResult = await runPlotTasksRuntime_ACU(plotSettings, userMessage, {
             inputForHash,
             hasExistingUserMessage,
+            runtimeScope: initialScope,
         });
+        const currentScope = capturePlotRuntimeScope_ACU();
+        const scopeStillCurrent = initialScope.reliable
+            ? isSamePlotRuntimeScope_ACU(initialScope, currentScope)
+            : initialScope.chatId === currentScope.chatId
+                && initialScope.characterId === currentScope.characterId
+                && initialScope.isolationKey === currentScope.isolationKey;
+        if (!scopeStillCurrent) {
+            logDebug_ACU('[剧情推进] 规划作用域已变化，放弃本轮结果写回。', {
+                initialScope: summarizePlotRuntimeScope_ACU(initialScope),
+                currentScope: summarizePlotRuntimeScope_ACU(currentScope),
+            });
+            return {
+                success: false,
+                errorType: 'scope_changed',
+                errorMessage: '剧情规划作用域已变化，已放弃本轮写回。',
+                scopeChanged: true,
+            };
+        }
+        if (runtimeResult?.scopeChanged) {
+            return {
+                success: false,
+                errorType: 'scope_changed',
+                errorMessage: runtimeResult.errorMessage || '剧情规划作用域已变化，已放弃本轮写回。',
+                scopeChanged: true,
+            };
+        }
         if (!runtimeResult?.finalMessage) {
             if (runtimeResult?.abortedByStageFailure) {
                 return {
@@ -90490,6 +91291,9 @@ async function runOptimizationLogic_ACU(userMessage, options = {}) {
         };
     }
     finally {
+        if (plotAbortController_ACU) {
+            untrackAbortController_ACU(plotAbortController_ACU);
+        }
         planningGuard_ACU.inProgress = false;
         _set_abortController_ACU(null);
         runOptimizationLogic_ACU.__inFlight = false;
@@ -90976,13 +91780,29 @@ async function initializeJsonTableInChatHistory_ACU() {
  * 注意：不再内部调用 refreshMergedDataAndNotify，调用方按需自行刷新。
  */
 async function loadOrCreateJsonTableFromChatHistory_ACU() {
+    const initialChat = getChatArray_ACU();
+    const initialChatKey = String(currentChatFileIdentifier_ACU || '');
+    const initialIsolationKey = String(getCurrentIsolationKey_ACU() || '');
+    const scopeStillCurrent = () => {
+        const currentChat = getChatArray_ACU();
+        return currentChat === initialChat
+            && String(currentChatFileIdentifier_ACU || '') === initialChatKey
+            && String(getCurrentIsolationKey_ACU() || '') === initialIsolationKey;
+    };
+    const scopeChangedResult = () => ({
+        loaded: false,
+        source: 'empty',
+        error: 'table_load_scope_changed',
+    });
     _set_currentJsonTableData_ACU(null);
     logDebug_ACU('Attempting to load database from chat history...');
-    const chat = getChatArray_ACU();
+    const chat = initialChat;
     applyTemplateScopeForCurrentChat_ACU();
     if (!chat || chat.length === 0) {
         logDebug_ACU('Chat history is empty. Initializing new database.');
         const initResult = await initializeJsonTableInChatHistory_ACU();
+        if (!scopeStillCurrent())
+            return scopeChangedResult();
         return {
             loaded: initResult.initialized,
             source: 'initialized',
@@ -90991,14 +91811,20 @@ async function loadOrCreateJsonTableFromChatHistory_ACU() {
         };
     }
     const mergedData = await mergeAllIndependentTables_ACU();
+    if (!scopeStillCurrent())
+        return scopeChangedResult();
     if (mergedData) {
         const canonicalData = JSON.parse(JSON.stringify(mergedData));
+        if (!scopeStillCurrent())
+            return scopeChangedResult();
         _set_currentJsonTableData_ACU(canonicalData);
         logDebug_ACU('Database content successfully merged (tag-aware) and loaded into memory.');
         return { loaded: true, source: 'merged', data: canonicalData };
     }
     logDebug_ACU('No database found for current tag in chat history. Initializing a new one.');
     const initResult = await initializeJsonTableInChatHistory_ACU();
+    if (!scopeStillCurrent())
+        return scopeChangedResult();
     return {
         loaded: initResult.initialized,
         source: 'initialized',
@@ -94058,6 +94884,19 @@ async function resolveAgentWorldbookFilterAvailability_ACU(readContext) {
     return { ...base, available: true, reason: 'available' };
 }
 
+function getAutoMergedOrderScopeKey_ACU(summaryKey) {
+    // 用 namespace 读取，兼容只提供部分 state-manager mock 的旧集成测试；
+    // 正式运行时仍读取 live binding，不把 chat/isolation 降级为全局单槽。
+    const chatKey = currentChatFileIdentifier_ACU || '';
+    const isolationGetter = getCurrentIsolationKey_ACU;
+    const isolationKey = typeof isolationGetter === 'function' ? isolationGetter() : '';
+    return JSON.stringify([
+        String(chatKey),
+        String(isolationKey || ''),
+        String(summaryKey || ''),
+    ]);
+}
+
 // pipeline.ts
 // 从 05_core_tail.js 迁入
 async function updateReadableLorebookEntry_ACU(createIfNeeded = false, isImport = false, targetLorebookOverride = null, dataOverride = null) {
@@ -94611,7 +95450,8 @@ function migrateLegacyAutoMergedOrderBeforeTailRepair_ACU(data) {
                 return;
             const rowId = String(row[0] ?? '').trim();
             const autoMergedOrder = ((_a = settings_ACU).autoMergedOrder || (_a.autoMergedOrder = {}));
-            const order = Array.isArray(autoMergedOrder[sheetKey]) ? autoMergedOrder[sheetKey] : (autoMergedOrder[sheetKey] = []);
+            const orderScopeKey = getAutoMergedOrderScopeKey_ACU(sheetKey);
+            const order = Array.isArray(autoMergedOrder[orderScopeKey]) ? autoMergedOrder[orderScopeKey] : (autoMergedOrder[orderScopeKey] = []);
             if (!rowId || order.some(id => String(id) === rowId))
                 return;
             order.push(rowId);
@@ -96068,21 +96908,20 @@ async function updateSummaryTableEntries_ACU(summaryTable, isImport = false, tar
     try {
         const allEntries = await getLorebookEntries_ACU(primaryLorebookName);
         const usedOrders = buildUsedOrderSet_ACU(allEntries);
-        // --- 1. Delete old summary entries ---
-        // 用户要求：外部导入每次导入前不清理（允许多批并存，避免后一批覆盖前一批）
-        if (!isImport) {
-            const uidsToDelete = allEntries
+        // 外部导入允许多批并存；普通刷新记录旧受管条目，但必须等新条目创建成功后再删除。
+        const oldManagedEntryUids = isImport
+            ? []
+            : allEntries
                 .filter(e => e.comment && (e.comment.startsWith(SUMMARY_ENTRY_PREFIX) || e.comment.startsWith(SMALL_SUMMARY_PREFIX)))
                 .map(e => e.uid);
-            if (uidsToDelete.length > 0) {
-                await deleteLorebookEntries_ACU(primaryLorebookName, uidsToDelete);
-                logDebug_ACU(`Deleted ${uidsToDelete.length} old summary lorebook entries.`);
-            }
-        }
-        // --- 2. Re-create entries from the table ---
+        // --- 1. Re-create entries from the table ---
         const projectedSummary = summaryTable?.content?.length > 0 ? projectWorldbookTable_ACU(summaryTable) : { headers: [], rows: [] };
         const summaryRows = projectedSummary.rows;
         if (summaryRows.length === 0) {
+            if (oldManagedEntryUids.length > 0) {
+                await deleteLorebookEntries_ACU(primaryLorebookName, oldManagedEntryUids);
+                logDebug_ACU(`Deleted ${oldManagedEntryUids.length} old summary lorebook entries.`);
+            }
             logDebug_ACU('No summary rows to create entries for.');
             return;
         }
@@ -96091,8 +96930,9 @@ async function updateSummaryTableEntries_ACU(summaryTable, isImport = false, tar
         const headers = projectedSummary.headers;
         const keywordColumnIndex = headers.indexOf('编码索引');
         if (keywordColumnIndex === -1) {
-            logError_ACU('Cannot find "编码索引" column in 总结表. Cannot process summary entries.', { table: summaryTable?.name || '总结表', lorebook: primaryLorebookName, isolationPrefix: isoPrefix });
-            return;
+            const message = 'Cannot find "编码索引" column in 总结表. Cannot process summary entries.';
+            logError_ACU(message, { table: summaryTable?.name || '总结表', lorebook: primaryLorebookName, isolationPrefix: isoPrefix });
+            throw new Error(message);
         }
         const entriesToCreate = [];
         // [优化] 总结表"按表占深度"：所有总结行共用同一个 order(深度)，避免 N 行占 N 个深度
@@ -96138,9 +96978,14 @@ async function updateSummaryTableEntries_ACU(summaryTable, isImport = false, tar
                 logWarn_ACU('[SummaryOrderFix] Failed to enforce shared order for summary entries:', e);
             }
         }
+        if (oldManagedEntryUids.length > 0) {
+            await deleteLorebookEntries_ACU(primaryLorebookName, oldManagedEntryUids);
+            logDebug_ACU(`Deleted ${oldManagedEntryUids.length} old summary lorebook entries.`);
+        }
     }
     catch (error) {
         logError_ACU('Failed to update summary lorebook entries:', error);
+        throw error;
     }
 }
 async function updateImportantPersonsRelatedEntries_ACU(importantPersonsTable, isImport = false, targetLorebookOverride = null) {
@@ -96158,36 +97003,36 @@ async function updateImportantPersonsRelatedEntries_ACU(importantPersonsTable, i
     const PERSON_ENTRY_PREFIX = isoPrefix + basePersonEntryPrefix;
     const basePersonIndexComment = isImport ? `${IMPORT_PREFIX}TavernDB-ACU-ImportantPersonsIndex` : 'TavernDB-ACU-ImportantPersonsIndex';
     const PERSON_INDEX_COMMENT = isoPrefix + basePersonIndexComment;
+    const PERSONS_HEADER_COMMENT = isoPrefix + 'TavernDB-ACU-PersonsHeader';
     const personsCfg = ensureExportConfigDefaults_ACU(importantPersonsTable?.exportConfig, importantPersonsTable?.name || '重要人物表');
     const personsEntryPlacement = normalizePlacementConfig_ACU(personsCfg.fixedEntryPlacement, getFixedPlacementDefaultsForTable_ACU(importantPersonsTable?.name || '重要人物表').entry);
     const personsIndexPlacement = normalizePlacementConfig_ACU(personsCfg.fixedIndexPlacement, getFixedPlacementDefaultsForTable_ACU(importantPersonsTable?.name || '重要人物表').index);
     try {
         const allEntries = await getLorebookEntries_ACU(primaryLorebookName);
         const usedOrders = buildUsedOrderSet_ACU(allEntries);
-        // --- 1. 全量删除 ---
-        // 用户要求：外部导入每次导入前不清理（允许多批并存，避免后一批覆盖前一批）
-        if (!isImport) {
-            // 找出所有由插件管理的旧条目 (人物条目 + 索引条目)
-            const uidsToDelete = allEntries
-                .filter(e => e.comment && (e.comment.startsWith(PERSON_ENTRY_PREFIX) || e.comment === PERSON_INDEX_COMMENT || e.comment.includes('PersonsHeader')))
+        // 外部导入允许多批并存；普通刷新必须先创建成功，再删除旧受管条目。
+        const oldManagedEntryUids = isImport
+            ? []
+            : allEntries
+                .filter(e => e.comment && (e.comment.startsWith(PERSON_ENTRY_PREFIX) || e.comment === PERSON_INDEX_COMMENT || e.comment === PERSONS_HEADER_COMMENT))
                 .map(e => e.uid);
-            if (uidsToDelete.length > 0) {
-                await deleteLorebookEntries_ACU(primaryLorebookName, uidsToDelete);
-                logDebug_ACU(`Deleted ${uidsToDelete.length} old person-related lorebook entries.`);
-            }
-        }
-        // --- 2. 全量重建 ---
+        // --- 1. 全量重建 ---
         const projectedPersons = importantPersonsTable?.content?.length > 0 ? projectWorldbookTable_ACU(importantPersonsTable) : { headers: [], rows: [] };
         const personRows = projectedPersons.rows;
         if (personRows.length === 0) {
+            if (oldManagedEntryUids.length > 0) {
+                await deleteLorebookEntries_ACU(primaryLorebookName, oldManagedEntryUids);
+                logDebug_ACU(`Deleted ${oldManagedEntryUids.length} old person-related lorebook entries.`);
+            }
             logDebug_ACU('No important persons to create entries for.');
-            return; // 如果没有人物，删除后直接返回
+            return;
         }
         const headers = projectedPersons.headers;
         const nameColumnIndex = headers.indexOf('姓名') !== -1 ? headers.indexOf('姓名') : headers.indexOf('角色名');
         if (nameColumnIndex === -1) {
-            logError_ACU('Cannot find "姓名" or "角色名" column in 重要人物表. Cannot process person entries.', { table: importantPersonsTable?.name || '重要人物表', lorebook: primaryLorebookName, isolationPrefix: isoPrefix });
-            return;
+            const message = 'Cannot find "姓名" or "角色名" column in 重要人物表. Cannot process person entries.';
+            logError_ACU(message, { table: importantPersonsTable?.name || '重要人物表', lorebook: primaryLorebookName, isolationPrefix: isoPrefix });
+            throw new Error(message);
         }
         const personEntriesToCreate = [];
         const personNames = [];
@@ -96237,7 +97082,9 @@ async function updateImportantPersonsRelatedEntries_ACU(importantPersonsTable, i
         const personsHeaderContent = `# ${importantPersonsTable.name}\n\n| ${headers.join(' | ')} |\n|${headers.map(() => '---').join('|')}|`;
         const personsHeaderEntryData = applyPlacementToEntry_ACU({
             // [修复] 外部导入时 PersonsHeader 也必须带外部导入前缀，避免被清理逻辑误删
-            comment: isoPrefix + (isImport ? `${IMPORT_PREFIX}TavernDB-ACU-PersonsHeader` : 'TavernDB-ACU-PersonsHeader'),
+            comment: isImport
+                ? isoPrefix + `${IMPORT_PREFIX}TavernDB-ACU-PersonsHeader`
+                : PERSONS_HEADER_COMMENT,
             content: personsHeaderContent,
             keys: [isoPrefix + (isImport ? `${IMPORT_PREFIX}TavernDB-ACU-PersonsHeader-Key` : 'TavernDB-ACU-PersonsHeader-Key')],
             enabled: true,
@@ -96294,9 +97141,14 @@ async function updateImportantPersonsRelatedEntries_ACU(importantPersonsTable, i
                 logWarn_ACU('[PersonsOrderFix] Failed to enforce grouped orders for important persons:', e);
             }
         }
+        if (oldManagedEntryUids.length > 0) {
+            await deleteLorebookEntries_ACU(primaryLorebookName, oldManagedEntryUids);
+            logDebug_ACU(`Deleted ${oldManagedEntryUids.length} old person-related lorebook entries.`);
+        }
     }
     catch (error) {
         logError_ACU('Failed to update important persons related lorebook entries:', error);
+        throw error;
     }
 }
 
@@ -99121,12 +99973,15 @@ function getCurrentCharacterScopeKey_ACU() {
  * 旧版 characterSettings 以聊天文件名为键；升级后首次访问某张角色卡时，
  * 把当前聊天对应的旧条目搬到角色卡键下，避免用户已有的填表世界书选择丢失。
  */
+function isSettingsRecord_ACU(value) {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+}
 function migrateLegacyChatScopedCharSettings_ACU(charId) {
     const legacyKey = getLegacyChatScopeKey_ACU();
     if (legacyKey === charId || legacyKey === CHARACTER_SCOPE_DEFAULT_KEY_ACU)
         return false;
-    const legacy = settings_ACU.characterSettings[legacyKey];
-    if (!legacy || typeof legacy !== 'object' || !legacy.worldbookConfig || typeof legacy.worldbookConfig !== 'object')
+    const legacy = settings_ACU.characterSettings?.[legacyKey];
+    if (!isSettingsRecord_ACU(legacy) || !isSettingsRecord_ACU(legacy.worldbookConfig))
         return false;
     settings_ACU.characterSettings[charId] = JSON.parse(JSON.stringify(legacy));
     delete settings_ACU.characterSettings[legacyKey];
@@ -99163,15 +100018,15 @@ function getCurrentCharSettings_ACU() {
         && settings_ACU.characterSettings?.[charId]) {
         return settings_ACU.characterSettings[charId];
     }
-    if (!settings_ACU.characterSettings) {
+    if (!isSettingsRecord_ACU(settings_ACU.characterSettings)) {
         settings_ACU.characterSettings = {};
     }
-    if (!settings_ACU.characterSettings[charId]) {
+    if (!isSettingsRecord_ACU(settings_ACU.characterSettings[charId])) {
         migrateLegacyChatScopedCharSettings_ACU(charId);
     }
     // 0TK 占用模式恒开启（开关已剥离）：大纲/纪要索引条目不占用上下文
     const zeroTkOccupyMode = true;
-    if (!settings_ACU.characterSettings[charId]) {
+    if (!isSettingsRecord_ACU(settings_ACU.characterSettings[charId])) {
         const worldbookConfigForNewChat = JSON.parse(JSON.stringify(defaultWorldbookConfig_ACU));
         worldbookConfigForNewChat.zeroTkOccupyMode = zeroTkOccupyMode;
         worldbookConfigForNewChat.outlineEntryEnabled = !zeroTkOccupyMode;
@@ -99351,6 +100206,9 @@ const generationGate_ACU = {
     lastGeneration: null,
     generationSeq: 0,
     activeGenerations: [],
+    // 并发 STARTED/ENDED 在 TT 事件面上没有可关联 id；一旦无法唯一配对，
+    // 在同一批上下文 TTL 内 fail closed，防止后续无配对事件误开普通自动链。
+    generationEndMatchQuarantineUntil_ACU: 0,
     // [152 收紧] 上一次门控「放行」时的 AI 楼签名；null = 启动后尚未放行过（此时无配对 ENDED 保守放行）。
     lastEndedFloorSignature_ACU: null,
 };
@@ -99485,19 +100343,60 @@ function shouldProcessSummaryVectorIndexForGeneration_ACU(type, params, dryRun) 
     logDebug_ACU(`[状态管理] shouldProcessSummaryVectorIndex: type=${type}, dryRun=${dryRun}, globalEnabled=${globalEnabled}, worldbookProjection=${worldbookProjectionEnabled}, freshMsg=${fresh.hasFreshUserMessage}, freshIntent=${fresh.hasFreshIntent}, result=${fresh.result}`);
     return fresh.result;
 }
+function isGenerationEndMatchQuarantined_ACU(now = Date.now()) {
+    const until = generationGate_ACU.generationEndMatchQuarantineUntil_ACU;
+    if (!until)
+        return false;
+    if (now < until)
+        return true;
+    generationGate_ACU.generationEndMatchQuarantineUntil_ACU = 0;
+    return false;
+}
+function isSameAiFloorSignatureEx_ACU(previous, current) {
+    return isSameAiFloorSignature_ACU(previous, current)
+        && previous?.latestContentHash === current?.latestContentHash;
+}
 /**
- * 消费与本次 GENERATION_ENDED 对应的最近生成上下文。
- * 事件 API 没有 generation id，因此按完成顺序（栈）配对；配合 makeFirst，避免其他插件在
- * 同一 ended 回调里新开 quiet 生成后覆盖当前正文生成的判定。
- * 栈顶未闭合的 dry-run 上下文由 popUnclosedDryRunContexts_ACU 丢弃（理由见该函数注释）；
- * 全被丢光则按「无配对」处理（下游用 AI 楼签名判零产出，不会误开自动链）。
+ * 消费与本次 GENERATION_ENDED 对应的生成上下文。
+ *
+ * TT 的 GENERATION_STARTED/ENDED 不携带可关联的 generation id；同时存在多个在飞生成时，
+ * LIFO 不能证明 ENDED 属于 normal 还是 quiet。这里只在活动上下文唯一时配对；多上下文时
+ * 用各自 preSignature 与 ENDED 签名做诊断，但无法形成唯一证明便 fail closed，并清空
+ * 已失去归属的上下文。短 TTL 隔离后续无配对 ENDED，避免它们被误当普通前台生成。
  */
-function consumeGenerationContextForEnded_ACU() {
-    removeExpiredGenerationContexts_ACU();
-    const activeContext = popUnclosedDryRunContexts_ACU();
-    // lastGeneration 仅保留给旧调用方。已有受追踪生成全部消费后，不能重复使用最后一个
-    // quiet 上下文，否则下一次无关 GENERATION_ENDED 会被持续误拦截。
-    return activeContext || (generationGate_ACU.generationSeq === 0 ? generationGate_ACU.lastGeneration : null);
+function resolveGenerationContextForEnded_ACU(endedSignature) {
+    const now = Date.now();
+    removeExpiredGenerationContexts_ACU(now);
+    if (isGenerationEndMatchQuarantined_ACU(now)) {
+        generationGate_ACU.activeGenerations = [];
+        return { status: 'ambiguous', context: null };
+    }
+    // dry-run 只有 STARTED、没有 ENDED；它们不参与任何配对，位置在栈底也不能留下幽灵。
+    const candidates = generationGate_ACU.activeGenerations.filter(context => !context.dryRun);
+    generationGate_ACU.activeGenerations = candidates;
+    if (candidates.length === 0) {
+        const legacyContext = generationGate_ACU.generationSeq === 0 ? generationGate_ACU.lastGeneration : null;
+        return legacyContext
+            ? { status: 'matched', context: legacyContext }
+            : { status: 'none', context: null };
+    }
+    if (candidates.length === 1) {
+        const context = candidates[0];
+        generationGate_ACU.activeGenerations = [];
+        return { status: 'matched', context };
+    }
+    const changedSinceStart = candidates.filter(context => (context.preSignature
+        && endedSignature
+        && !isSameAiFloorSignatureEx_ACU(context.preSignature, endedSignature))).length;
+    generationGate_ACU.activeGenerations = [];
+    generationGate_ACU.generationEndMatchQuarantineUntil_ACU = now + GENERATION_CONTEXT_TTL_MS_ACU;
+    logDebug_ACU(`[状态管理] GENERATION_ENDED 配对歧义 fail closed: active=${candidates.length}`
+        + `, preSignatureChanged=${changedSinceStart}, endedSignature=${endedSignature ? 'present' : 'missing'}`);
+    return { status: 'ambiguous', context: null };
+}
+/** 兼容只需要 context 的旧调用方；需要区分 none/ambiguous 的生产入口必须使用 resolver。 */
+function consumeGenerationContextForEnded_ACU(endedSignature) {
+    return resolveGenerationContextForEnded_ACU(endedSignature).context;
 }
 /**
  * 两份 AI 楼签名是否完全相同（楼数与最新 AI 楼 message_id 都相等）。
@@ -99546,6 +100445,8 @@ function shouldProcessAutoTableUpdateForGenerationEnded_ACU(context, currentSign
     // f425367：认领分支不再短路 return——续写桥只管归属确认/标签校验/自动续轮，
     // 填表与正文优化按各自时机独立触发；调用方可显式传入已消费的 context 复用判定。
     const g = context === undefined ? consumeGenerationContextForEnded_ACU() : context;
+    if (isGenerationEndMatchQuarantined_ACU())
+        return false;
     if (!g) {
         // [152 收紧] 宿主 GENERATION_ENDED 唯一 emit 点是 hideStopButton，外部插件（酒馆助手 generate/generateRaw、
         // sr 提示词查看器直接 Generate + stopGeneration、MVU 额外模型收尾）都会凭空派发 ended。这类事件没有配对的
@@ -99679,6 +100580,8 @@ function _set_independentTableStates_ACU(v) { independentTableStates_ACU = v; }
 // ═══ 从 plot-editors.ts 迁移的业务状态 ═══
 let isAutoUpdatingCard_ACU = false;
 let wasStoppedByUser_ACU = false;
+// 用户停止会使当前自动填表代次失效；排队中的旧回调必须携带并校验停止代次。
+let autoFillStopEpoch_ACU = 0;
 let autoFillDebounceTimer_ACU = null;
 let chatMutationDebounceTimer_ACU = null;
 let currentAbortController_ACU = null;
@@ -99727,7 +100630,12 @@ function abortOnChatMutation_ACU() {
 function _set_currentAbortController_ACU(v) { currentAbortController_ACU = v; }
 function _set_isAutoUpdatingCard_ACU(v) { isAutoUpdatingCard_ACU = v; }
 function _set_manualExtraHint_ACU(v) { manualExtraHint_ACU = v; }
-function _set_wasStoppedByUser_ACU(v) { wasStoppedByUser_ACU = v; }
+function getAutoFillStopEpoch_ACU() { return autoFillStopEpoch_ACU; }
+function _set_wasStoppedByUser_ACU(v) {
+    wasStoppedByUser_ACU = v;
+    if (v === true)
+        autoFillStopEpoch_ACU += 1;
+}
 function _set_autoFillDebounceTimer_ACU(v) { autoFillDebounceTimer_ACU = v; }
 /**
  * 作废在途的自动填表防抖定时器。
@@ -100504,12 +101412,27 @@ function saveSettings_ACU() {
         if (code)
             addDataIsolationHistory_ACU(code, { save: false });
         normalizeDataIsolationHistory_ACU(globalMeta_ACU.isolationCodeList);
-        saveGlobalMeta_ACU();
+        if (!saveGlobalMeta_ACU()) {
+            return { saved: false, storageType: 'memory', code: 'storage_error', error: '保存全局元信息失败。' };
+        }
     }
-    // 数据层：纯存储持久化
-    persistSettingsToStorage_ACU(settings_ACU, code);
+    // 数据层：纯存储持久化。门面会把配额、序列化、宿主存储异常收敛为 false；
+    // 不能继续向下返回 saved=true，否则事务型调用方会误以为配置已落盘而不回滚。
+    try {
+        if (!persistSettingsToStorage_ACU(settings_ACU, code)) {
+            return { saved: false, storageType: 'memory', code: 'storage_error', error: '保存设置到存储失败。' };
+        }
+    }
+    catch (error) {
+        // 防御未来门面实现变更：即便持久化层意外抛出，也必须走同一失败契约。
+        logError_ACU('Failed to save settings to storage:', error);
+        return { saved: false, storageType: 'memory', code: 'storage_error', error: '保存设置到存储失败。' };
+    }
     try {
         const store = (getConfigStorage_ACU)();
+        if (store && store._lastPersistenceStatus === 'memory') {
+            return { saved: true, storageType: 'memory', code: 'tavern_unavailable', warning: '当前未连接酒馆设置：本次修改仅保存在内存中，刷新后会丢失。' };
+        }
         if (store && !store._isTavern) {
             if ((isIndexedDbAvailable_ACU)()) {
                 void (initTavernSettingsBridge_ACU)();
@@ -101384,8 +102307,9 @@ function applyCombinedSettingsImport_ACU(combinedData) {
         for (const field of FIELDS) {
             settings_ACU[field] = snapshot[field];
         }
-        logError_ACU('[合并配置导入] 保存失败，已回滚全部导入字段。', saveResult.error || saveResult.warning || '');
-        throw new Error(saveResult.warning || saveResult.error || '合并配置保存失败，已回滚。');
+        const cause = saveResult.error || saveResult.warning || '';
+        logError_ACU('[合并配置导入] 保存失败，已回滚全部导入字段。', cause);
+        throw new Error(cause ? `合并配置保存失败，已回滚：${cause}` : '合并配置保存失败，已回滚。');
     }
     return modifiedFields;
 }
@@ -101399,8 +102323,9 @@ function applyCombinedSettingsImport_ACU(combinedData) {
  * 楼层帧里没有对应数据、表格状态显示未初始、填表基底（聊天回放）看不到它们，
  * AI 把已存在的行重新 INSERT，提交时撞 live SQLite 的 UNIQUE 约束或把行数翻倍。
  *
- * 本模块按 (chatKey, isolationKey) 登记「哪些表有未落盘的运行时变更」；
- * 真正的落盘由 runtime-only-pending-flush 在下一次普通持久化写入 / 填表开始前完成。
+ * 本模块按 (chatKey, isolationKey) 登记「哪些表有未落盘的运行时变更」以及
+ * 已被删除但仍需写回聊天的 tombstone；真正的落盘由 runtime-only-pending-flush
+ * 在下一次普通持久化写入 / 填表开始前完成。
  * 这里刻意不依赖任何 service 模块，避免与提交模型形成循环导入。
  */
 const pendingByScope_ACU = new Map();
@@ -101435,20 +102360,35 @@ function extractPendingSheetKeysFromWriteSet_ACU(writeSet) {
 }
 function markRuntimeOnlyPendingSheets_ACU(scope, pending) {
     const scopeKey = buildRuntimeOnlyPendingScopeKey_ACU(scope);
-    const state = pendingByScope_ACU.get(scopeKey) || { all: false, sheetKeys: new Set() };
+    const state = pendingByScope_ACU.get(scopeKey) || {
+        all: false,
+        sheetKeys: new Set(),
+        deletedSheetKeys: new Set(),
+    };
     if (pending.all)
         state.all = true;
     for (const sheetKey of pending.sheetKeys) {
         if (typeof sheetKey === 'string' && sheetKey.startsWith('sheet_'))
             state.sheetKeys.add(sheetKey);
     }
+    for (const sheetKey of pending.deletedSheetKeys || []) {
+        if (typeof sheetKey === 'string' && sheetKey.startsWith('sheet_')) {
+            state.deletedSheetKeys.add(sheetKey);
+            state.sheetKeys.delete(sheetKey);
+        }
+    }
     pendingByScope_ACU.set(scopeKey, state);
 }
 function readRuntimeOnlyPendingSheets_ACU(scope) {
     const state = pendingByScope_ACU.get(buildRuntimeOnlyPendingScopeKey_ACU(scope));
-    if (!state || (!state.all && state.sheetKeys.size === 0))
+    if (!state || (!state.all && state.sheetKeys.size === 0 && state.deletedSheetKeys.size === 0))
         return null;
-    return { all: state.all, sheetKeys: [...state.sheetKeys].sort() };
+    const deletedSheetKeys = [...state.deletedSheetKeys].sort();
+    return {
+        all: state.all,
+        sheetKeys: [...state.sheetKeys].sort(),
+        ...(deletedSheetKeys.length > 0 ? { deletedSheetKeys } : {}),
+    };
 }
 function hasRuntimeOnlyPendingSheets_ACU(scope) {
     return readRuntimeOnlyPendingSheets_ACU(scope) !== null;
@@ -101474,12 +102414,14 @@ function clearRuntimeOnlyPendingSheetKeys_ACU(scope, sheetKeys, options) {
     if (!state)
         return;
     for (const sheetKey of sheetKeys) {
-        if (typeof sheetKey === 'string')
+        if (typeof sheetKey === 'string') {
             state.sheetKeys.delete(sheetKey);
+            state.deletedSheetKeys.delete(sheetKey);
+        }
     }
     if (options?.dropAllFlag)
         state.all = false;
-    if (!state.all && state.sheetKeys.size === 0) {
+    if (!state.all && state.sheetKeys.size === 0 && state.deletedSheetKeys.size === 0) {
         pendingByScope_ACU.delete(scopeKey);
     }
 }
@@ -101582,16 +102524,24 @@ function resolvePendingScope_ACU(options) {
  * skipChatSave 的外部写入只改了 live runtime：登记受影响的表，等下一次普通持久化写入
  * 或填表开始前统一物化进聊天，否则这些行永远不会进入楼层帧与填表基底。
  */
-function markRuntimeOnlyPendingAfterSkipChatSave_ACU(options, revisionWriteSet, tableData) {
+function markRuntimeOnlyPendingAfterSkipChatSave_ACU(options, revisionWriteSet, tableData, preApplyData) {
     if (!EXTERNAL_MUTATION_SOURCES_ACU.has(options.source))
         return;
     const candidate = extractPendingSheetKeysFromWriteSet_ACU(revisionWriteSet ?? options.writeSet);
+    const postSheetKeys = Object.keys(tableData || {}).filter(key => key.startsWith('sheet_'));
+    const preSheetKeys = Object.keys(preApplyData || {}).filter(key => key.startsWith('sheet_'));
+    const postSheetKeySet = new Set(postSheetKeys);
+    const deletedSheetKeys = (candidate.all ? preSheetKeys : candidate.sheetKeys)
+        .filter(sheetKey => !postSheetKeySet.has(sheetKey));
     const pending = candidate.all
-        ? { all: false, sheetKeys: Object.keys(tableData || {}).filter(key => key.startsWith('sheet_')) }
+        ? { all: false, sheetKeys: postSheetKeys }
         : candidate;
-    if (!pending.all && pending.sheetKeys.length === 0)
+    if (!pending.all && pending.sheetKeys.length === 0 && deletedSheetKeys.length === 0)
         return;
-    markRuntimeOnlyPendingSheets_ACU(resolvePendingScope_ACU(options), pending);
+    markRuntimeOnlyPendingSheets_ACU(resolvePendingScope_ACU(options), {
+        ...pending,
+        deletedSheetKeys,
+    });
 }
 /**
  * 普通持久化提交前先把已登记的 runtime-only 变更写回聊天；失败只记 warn，
@@ -101708,6 +102658,11 @@ async function runTableUpdateCommit_ACU(options, apply) {
                 let rollbackBeforePersist;
                 try {
                     assertExpectedCommitScope_ACU(options, '应用前');
+                    const preApplyData = workingData
+                        ? cloneTableData_ACU(workingData)
+                        : options.initialData
+                            ? cloneTableData_ACU(options.initialData)
+                            : null;
                     const applied = await apply({ transactionContext, workingData });
                     if (!applied.success || !applied.tableData) {
                         throw new TableUpdateCommitError_ACU(applied.error || `${options.reason}: update apply failed`, applied.errorCategory || 'infrastructure');
@@ -101758,7 +102713,7 @@ async function runTableUpdateCommit_ACU(options, apply) {
                         }
                     }
                     else {
-                        markRuntimeOnlyPendingAfterSkipChatSave_ACU(options, revisionWriteSet, applied.tableData);
+                        markRuntimeOnlyPendingAfterSkipChatSave_ACU(options, revisionWriteSet, applied.tableData, preApplyData);
                     }
                     _set_currentJsonTableData_ACU(cloneTableData_ACU(applied.tableData));
                     return {
@@ -101848,12 +102803,12 @@ function isAutoMergedSummaryRow_ACU(summaryKey, row) {
     if (!Array.isArray(row))
         return false;
     const rowId = String(row[0] ?? '').trim();
-    const storedOrder = settings_ACU.autoMergedOrder?.[summaryKey];
+    const storedOrder = settings_ACU.autoMergedOrder?.[getAutoMergedOrderScopeKey_ACU(summaryKey)];
     return (Array.isArray(storedOrder) && storedOrder.some((id) => String(id) === rowId))
         || row[row.length - 1] === 'auto_merged';
 }
 function getAutoMergedOrder_ACU(summaryKey) {
-    const storedOrder = settings_ACU.autoMergedOrder?.[summaryKey];
+    const storedOrder = settings_ACU.autoMergedOrder?.[getAutoMergedOrderScopeKey_ACU(summaryKey)];
     return Array.isArray(storedOrder) ? storedOrder.map((id) => String(id)) : [];
 }
 function checkAutoMergeTrigger_ACU() {
@@ -102034,8 +102989,13 @@ async function executeAutoMergeBatch_ACU(prepared, batch, accumulatedSummary) {
 async function finalizeAutoMerge_ACU(prepared, accumulatedSummary) {
     const { summaryKey, endIndex } = prepared;
     if (!summaryKey || accumulatedSummary.length === 0)
-        return { mergedRows: 0 };
+        return { mergedRows: 0, success: true };
     const table = currentJsonTableData_ACU[summaryKey];
+    const previousTableContent = table.content;
+    const hadPreviousAutoMergedOrder = Object.prototype.hasOwnProperty.call(settings_ACU, 'autoMergedOrder');
+    const previousAutoMergedOrder = hadPreviousAutoMergedOrder
+        ? JSON.parse(JSON.stringify(settings_ACU.autoMergedOrder))
+        : undefined;
     const originalContent = table.content.slice(1);
     let actualEndIndex = 0;
     let foundCount = 0;
@@ -102059,36 +103019,60 @@ async function finalizeAutoMerge_ACU(prepared, accumulatedSummary) {
     table.content = [table.content[0], ...newSummaryContent];
     if (!settings_ACU.autoMergedOrder)
         settings_ACU.autoMergedOrder = {};
-    if (!settings_ACU.autoMergedOrder[summaryKey])
-        settings_ACU.autoMergedOrder[summaryKey] = [];
-    const orderList = settings_ACU.autoMergedOrder[summaryKey];
+    const orderScopeKey = getAutoMergedOrderScopeKey_ACU(summaryKey);
+    if (!settings_ACU.autoMergedOrder[orderScopeKey])
+        settings_ACU.autoMergedOrder[orderScopeKey] = [];
+    const orderList = settings_ACU.autoMergedOrder[orderScopeKey];
     accumulatedSummary.forEach((row) => {
         if (row && row[0] !== null && row[0] !== undefined && !orderList.includes(row[0])) {
             orderList.push(row[0]);
         }
     });
+    const rollbackLiveState_ACU = () => {
+        table.content = previousTableContent;
+        if (hadPreviousAutoMergedOrder) {
+            settings_ACU.autoMergedOrder = previousAutoMergedOrder;
+        }
+        else {
+            delete settings_ACU.autoMergedOrder;
+        }
+    };
     const keysToSave = [summaryKey];
     const writeSet = keysToSave.map(sheetKey => ({ kind: 'sheet', sheetKey }));
-    await runTableUpdateCommit_ACU({
-        source: 'merge_summary',
-        reason: 'auto_merge_summary',
-        writeSet,
-        revisionWriteSet: writeSet,
-        initialData: currentJsonTableData_ACU,
-        targetMessageIndex: getLastMessageIndex_ACU(),
-        targetSheetKeys: keysToSave,
-        updateGroupKeys: keysToSave,
-        trackingSheetKeys: keysToSave,
-        trackAsUpdate: true,
-        operations: [{ kind: 'sheet_replace', sheetKey: summaryKey, sheet: currentJsonTableData_ACU[summaryKey], reason: 'system' }],
-    }, () => ({
-        success: true,
-        value: null,
-        tableData: currentJsonTableData_ACU,
-        mutationResult: { changes: keysToSave.length, errors: [] },
-    }));
+    let commitResult;
+    try {
+        commitResult = await runTableUpdateCommit_ACU({
+            source: 'merge_summary',
+            reason: 'auto_merge_summary',
+            writeSet,
+            revisionWriteSet: writeSet,
+            initialData: currentJsonTableData_ACU,
+            targetMessageIndex: getLastMessageIndex_ACU(),
+            targetSheetKeys: keysToSave,
+            updateGroupKeys: keysToSave,
+            trackingSheetKeys: keysToSave,
+            trackAsUpdate: true,
+            operations: [{ kind: 'sheet_replace', sheetKey: summaryKey, sheet: currentJsonTableData_ACU[summaryKey], reason: 'system' }],
+        }, () => ({
+            success: true,
+            value: null,
+            tableData: currentJsonTableData_ACU,
+            mutationResult: { changes: keysToSave.length, errors: [] },
+        }));
+    }
+    catch (error) {
+        rollbackLiveState_ACU();
+        logWarn_ACU('[自动合并] 提交异常，已回滚运行时合并结果:', error);
+        return { success: false, mergedRows: 0, error: error instanceof Error ? error.message : String(error) };
+    }
+    if (!commitResult || commitResult.success !== true) {
+        rollbackLiveState_ACU();
+        const error = commitResult?.error || '自动合并提交失败';
+        logWarn_ACU(`[自动合并] 提交失败，已回滚运行时合并结果: ${error}`);
+        return { success: false, mergedRows: 0, error };
+    }
     await updateReadableLorebookEntry_ACU(true);
-    return { mergedRows: accumulatedSummary.length };
+    return { success: true, mergedRows: accumulatedSummary.length };
 }
 
 var mergeLogic = /*#__PURE__*/Object.freeze({
@@ -102859,6 +103843,7 @@ async function foldSummaryVectorMirrorAtBoundary_ACU(params) {
     });
     const files = [];
     let packHash = '';
+    let packFile = null;
     if (mergedChunks.length > 0) {
         const packPersist = await persistSummaryVectorMirrorPackPrepared_ACU({
             chatKey: scope.chatKey,
@@ -102869,7 +103854,9 @@ async function foldSummaryVectorMirrorAtBoundary_ACU(params) {
             chunks: mergedChunks,
         });
         packHash = packPersist.ref.packHash;
-        files.push(packPersist.file);
+        packFile = packPersist.file;
+        if (packPersist.createdNew !== false)
+            files.push(packFile);
         rows.forEach((row) => {
             row.chunks = row.chunks.map((ref) => ({ packHash, chunkIndex: ref.chunkIndex }));
         });
@@ -102904,7 +103891,9 @@ async function foldSummaryVectorMirrorAtBoundary_ACU(params) {
         rowCount: rows.length,
         vectorRevision: computeSummaryVectorMirrorCheckpointRevision_ACU(rows),
         manifestRef: manifestPersist.ref,
-        packRefs: packHash ? [{ packHash, path: files[0].path, chunkCount: mergedChunks.length, byteLength: files[0].byteSize }] : [],
+        packRefs: packHash && packFile
+            ? [{ packHash, path: packFile.path, chunkCount: mergedChunks.length, byteLength: packFile.byteSize }]
+            : [],
     };
     const anchorFrame = getFrame_ACU(params.chat, params.isolationKey, params.boundaryAnchorIndex);
     if (!anchorFrame) {
@@ -102996,7 +103985,7 @@ async function cleanupVectorIndexManifestsAfterCommit_ACU(manifests) {
  * 仅供已持有独占表写事务的复合恢复流程使用。
  * 调用方必须在一次严格聊天保存成功后，再调用 cleanupCheckpointVectorIndexManifestsAfterCommit_ACU。
  */
-async function clearAllAiTableDataForCheckpointRestore_ACU() {
+async function clearAllAiTableDataForCheckpointRestore_ACU(isolationKey, isolationConfig) {
     const chat = getChatArray_ACU();
     if (!Array.isArray(chat) || chat.length === 0) {
         return { clearedCount: 0, vectorManifestsToDeleteAfterCommit: [] };
@@ -103007,41 +103996,44 @@ async function clearAllAiTableDataForCheckpointRestore_ACU() {
         if (!msg || msg.is_user)
             continue;
         let changed = false;
-        if (msg.TavernDB_ACU_Data) {
-            delete msg.TavernDB_ACU_Data;
-            changed = true;
-        }
-        if (msg.TavernDB_ACU_SummaryData) {
-            delete msg.TavernDB_ACU_SummaryData;
-            changed = true;
-        }
-        if (msg.TavernDB_ACU_IndependentData) {
-            delete msg.TavernDB_ACU_IndependentData;
-            changed = true;
-        }
-        if (msg.TavernDB_ACU_Identity !== undefined) {
-            delete msg.TavernDB_ACU_Identity;
-            changed = true;
-        }
-        if (msg.TavernDB_ACU_IsolatedData) {
-            const isolatedData = msg.TavernDB_ACU_IsolatedData;
-            if (isolatedData && typeof isolatedData === 'object' && !Array.isArray(isolatedData)) {
-                for (const key of Object.keys(isolatedData)) {
-                    await deleteVectorIndexManifestFromTagData_ACU(isolatedData[key], {
-                        deleteExternal: false,
-                        onManifest: manifest => vectorManifestsToDeleteAfterCommit.push(manifest),
-                    });
-                }
+        // top-level legacy 载荷只属于其 Identity 对应的隔离域。Checkpoint 恢复不得
+        // 借当前 beta 恢复之名删除同聊天 alpha/gamma 的旧历史或身份标识。
+        if (isLegacyMatchForIsolation_ACU(msg, isolationConfig)) {
+            if (msg.TavernDB_ACU_Data) {
+                delete msg.TavernDB_ACU_Data;
+                changed = true;
             }
-            delete msg.TavernDB_ACU_IsolatedData;
-            changed = true;
+            if (msg.TavernDB_ACU_SummaryData) {
+                delete msg.TavernDB_ACU_SummaryData;
+                changed = true;
+            }
+            if (msg.TavernDB_ACU_IndependentData) {
+                delete msg.TavernDB_ACU_IndependentData;
+                changed = true;
+            }
+            if (msg.TavernDB_ACU_ModifiedKeys) {
+                delete msg.TavernDB_ACU_ModifiedKeys;
+                changed = true;
+            }
+            if (msg.TavernDB_ACU_UpdateGroupKeys) {
+                delete msg.TavernDB_ACU_UpdateGroupKeys;
+                changed = true;
+            }
+            if (msg.TavernDB_ACU_Identity !== undefined) {
+                delete msg.TavernDB_ACU_Identity;
+                changed = true;
+            }
         }
-        if (msg.TavernDB_ACU_ModifiedKeys) {
-            delete msg.TavernDB_ACU_ModifiedKeys;
-            changed = true;
-        }
-        if (msg.TavernDB_ACU_UpdateGroupKeys) {
-            delete msg.TavernDB_ACU_UpdateGroupKeys;
+        const isolatedData = msg.TavernDB_ACU_IsolatedData;
+        if (isolatedData && typeof isolatedData === 'object' && !Array.isArray(isolatedData)
+            && Object.prototype.hasOwnProperty.call(isolatedData, isolationKey)) {
+            await deleteVectorIndexManifestFromTagData_ACU(isolatedData[isolationKey], {
+                deleteExternal: false,
+                onManifest: manifest => vectorManifestsToDeleteAfterCommit.push(manifest),
+            });
+            delete isolatedData[isolationKey];
+            if (Object.keys(isolatedData).length === 0)
+                delete msg.TavernDB_ACU_IsolatedData;
             changed = true;
         }
         if (changed)
@@ -108913,6 +109905,19 @@ async function executeContentOptimization_ACU(messageIndex) {
                     }
                     break;
                 }
+                if (result.optimizedContent === currentContent) {
+                    logDebug_ACU(`[正文优化] 第 ${loop} 轮没有实际正文变化，放弃写回`);
+                    if (totalOptimizations.length === 0) {
+                        if (config.seamlessMode) {
+                            hideOptimizationOverlay_ACU();
+                        }
+                        else {
+                            hideOptimizationProgressToast_ACU();
+                        }
+                        return false;
+                    }
+                    break;
+                }
                 if (!result.optimizations || result.optimizations.length === 0) {
                     logDebug_ACU(`[正文优化] 第 ${loop} 轮无需优化，原文已足够好`);
                     if (loop === 1) {
@@ -109492,8 +110497,13 @@ async function executeAutoUpdatePlan_ACU(plan, settings, setAutoUpdating, ops, p
                     const batchResult = await executeAutoMergeBatch_ACU(prepared, prepared.batches[i], acc);
                     acc = batchResult.accumulatedSummary;
                 }
-                await finalizeAutoMerge_ACU(prepared, acc);
-                autoMergeSuccess = true;
+                const mergeResult = await finalizeAutoMerge_ACU(prepared, acc);
+                if (mergeResult?.success !== true) {
+                    logWarn_ACU('[自动合并] 提交失败或返回无效结果，自动合并未成功。', mergeResult?.error);
+                }
+                else {
+                    autoMergeSuccess = true;
+                }
             }
         }
         catch (e) {
@@ -110328,10 +111338,11 @@ async function commitStagedSheetsAtFullBoundaryAtomic_ACU(runId, options) {
     return runTableWriteTransaction_ACU({
         source: 'manual_fill',
         reason: 'commitStagedSheetsAtFullBoundaryAtomic',
+        chatKey,
         isolationKey,
         writeSet: targetSheetKeys.map(sheetKey => ({ kind: 'sheet', sheetKey })),
         maintenanceMode: 'exclusive',
-    }, async () => {
+    }, async (ctx) => {
         if (String(currentChatFileIdentifier_ACU || '') !== String(chatKey || '')
             || String(getCurrentIsolationKey_ACU() || '') !== String(isolationKey || '')) {
             return failBoundary_ACU('staging_scope_changed', 'boundary commit 复检失败：chatKey 或 isolationKey 已切换。');
@@ -110511,30 +111522,46 @@ async function commitStagedSheetsAtFullBoundaryAtomic_ACU(runId, options) {
             || String(getCurrentIsolationKey_ACU() || '') !== String(isolationKey || '')) {
             return failBoundary_ACU('staging_chat_scope_mismatch', `boundary commit 拒绝执行：候选校验期间聊天或隔离标识已切换（staging=${String(chatKey || '') || '无标识'}, current=${String(currentChatFileIdentifier_ACU || '') || '无标识'}），已丢弃本次 staging 汇合。`);
         }
-        const before = JSON.parse(JSON.stringify(chat));
         try {
-            chat.length = 0;
-            chat.push(...candidateChat);
-            writeMessageIdentity_ACU(candidateOriginalMessage, {
-                enabled: settings_ACU.dataIsolationEnabled,
-                code: settings_ACU.dataIsolationCode,
-            });
-            await saveChatToHostStrict_ACU();
+            ctx.assertFresh('boundary commit before chat mutation');
         }
         catch (error) {
-            chat.length = 0;
-            chat.push(...before);
+            return failBoundary_ACU('boundary_commit_failed', `boundary commit runtime revision 已过期：${error?.message || String(error)}`);
+        }
+        let commitResult;
+        try {
+            commitResult = await ctx.runCommit(async () => {
+                ctx.assertFresh('boundary commit after commit lock');
+                const before = JSON.parse(JSON.stringify(chat));
+                try {
+                    chat.length = 0;
+                    chat.push(...candidateChat);
+                    writeMessageIdentity_ACU(candidateOriginalMessage, {
+                        enabled: settings_ACU.dataIsolationEnabled,
+                        code: settings_ACU.dataIsolationCode,
+                    });
+                    await saveChatToHostStrict_ACU();
+                    return {
+                        ok: true,
+                        boundaryCommitSummary: {
+                            selectedSheetKeys: [...targetSheetKeys],
+                            originalFullCheckpointIndex: options.originalFullIndex,
+                        },
+                        verifiedHeadSnapshot: candidateHeadData ? JSON.parse(JSON.stringify(candidateHeadData)) : {},
+                    };
+                }
+                catch (error) {
+                    chat.length = 0;
+                    chat.push(...before);
+                    throw error;
+                }
+            }, targetSheetKeys.map(sheetKey => ({ kind: 'sheet', sheetKey })));
+        }
+        catch (error) {
             return failBoundary_ACU('boundary_strict_save_failed', `boundary commit 严格保存失败：${error?.message || String(error)}`);
         }
         logDebug_ACU(`[TableFillBoundaryStaging] 已原子汇合：runId=${runId}, originalFull=${options.originalFullIndex}, sheets=${targetSheetKeys.join('、')}。`);
-        return {
-            ok: true,
-            boundaryCommitSummary: {
-                selectedSheetKeys: [...targetSheetKeys],
-                originalFullCheckpointIndex: options.originalFullIndex,
-            },
-            verifiedHeadSnapshot: candidateHeadData ? JSON.parse(JSON.stringify(candidateHeadData)) : {},
-        };
+        return commitResult;
     });
 }
 async function publishVerifiedBoundaryHead_ACU(input) {
@@ -110744,7 +111771,7 @@ function serializeSheetContent_ACU(sheet) {
  * 回放到目标楼层，找出运行时内容与聊天不一致的表。回放失败时保守地返回全部候选表：
  * 多写一条与既有状态相同的 sheet_replace 是幂等的，漏写才会丢数据。
  */
-async function resolveDivergedSheetKeys_ACU(chat, isolationKey, targetMessageIndex, runtimeData, candidateSheetKeys) {
+async function resolveDivergedSheetKeys_ACU(chat, isolationKey, targetMessageIndex, runtimeData, candidateSheetKeys, includeReplaySheets = false) {
     try {
         const replay = await loadTableStateFromFramesV2Detailed_ACU(chat, isolationKey, {
             maxMessageIndex: targetMessageIndex,
@@ -110754,7 +111781,13 @@ async function resolveDivergedSheetKeys_ACU(chat, isolationKey, targetMessageInd
         const replayed = replay?.data;
         if (!replayed)
             return candidateSheetKeys;
-        return candidateSheetKeys.filter(sheetKey => (serializeSheetContent_ACU(replayed[sheetKey]) !== serializeSheetContent_ACU(runtimeData[sheetKey])));
+        const comparedSheetKeys = includeReplaySheets
+            ? [...new Set([
+                    ...candidateSheetKeys,
+                    ...Object.keys(replayed).filter(key => key.startsWith('sheet_')),
+                ])]
+            : candidateSheetKeys;
+        return comparedSheetKeys.filter(sheetKey => (serializeSheetContent_ACU(replayed[sheetKey]) !== serializeSheetContent_ACU(runtimeData[sheetKey])));
     }
     catch (error) {
         logWarn_ACU('[RuntimeOnlyFlush] 回放比对失败，按全部登记表落盘。', error);
@@ -110781,12 +111814,14 @@ async function flushRuntimeOnlyPendingChanges_ACU(reason) {
     if (!runtimeData)
         return { flushed: false, sheetKeys: [], error: 'runtime snapshot unavailable' };
     const runtimeSheetKeys = Object.keys(runtimeData).filter(key => key.startsWith('sheet_'));
+    const deletedSheetKeys = pending.deletedSheetKeys || [];
     const candidateSheetKeys = pending.all
-        ? runtimeSheetKeys
-        : pending.sheetKeys.filter(sheetKey => runtimeSheetKeys.includes(sheetKey));
-    if (candidateSheetKeys.length === 0) {
-        // 登记的表已不在运行时（被删除/重载），没有可落盘的内容。
-        // 按集合清除：只撤销 T0 登记本身；快照读取窗口内并发写者新登记的表不在 T0 集合内，不受影响。
+        ? [...new Set([...runtimeSheetKeys, ...deletedSheetKeys])]
+        : [...new Set([...pending.sheetKeys, ...deletedSheetKeys])];
+    const requiresFullSnapshot = pending.all || deletedSheetKeys.length > 0
+        || candidateSheetKeys.some(sheetKey => !runtimeSheetKeys.includes(sheetKey));
+    if (candidateSheetKeys.length === 0 && !requiresFullSnapshot) {
+        // 无待落盘表且没有删除 tombstone：登记已由并发写者消化。
         clearRuntimeOnlyPendingSheetKeys_ACU(scope, pending.sheetKeys, { dropAllFlag: pending.all });
         return { flushed: false, sheetKeys: [] };
     }
@@ -110795,8 +111830,8 @@ async function flushRuntimeOnlyPendingChanges_ACU(reason) {
     if (targetMessageIndex < 0) {
         return { flushed: false, sheetKeys: [], error: 'no AI message to persist runtime-only changes' };
     }
-    const divergedSheetKeys = await resolveDivergedSheetKeys_ACU(chat, scope.isolationKey, targetMessageIndex, runtimeData, candidateSheetKeys);
-    if (divergedSheetKeys.length === 0) {
+    const divergedSheetKeys = await resolveDivergedSheetKeys_ACU(chat, scope.isolationKey, targetMessageIndex, runtimeData, candidateSheetKeys, pending.all);
+    if (divergedSheetKeys.length === 0 && !requiresFullSnapshot) {
         // T0 候选集与回放一致，无需落盘：按集合清除 T0 候选（回放比对窗口内并发写者新登记
         // 的表不在 T0 集合内，不受影响）；持锁后的最终确认仍由事务内重算兜底。
         clearRuntimeOnlyPendingSheetKeys_ACU(scope, candidateSheetKeys, { dropAllFlag: pending.all });
@@ -110817,7 +111852,9 @@ async function flushRuntimeOnlyPendingChanges_ACU(reason) {
         source: 'system',
         reason: `runtime_only_flush:${reason}`,
         isolationKey: scope.isolationKey,
-        writeSet: candidateSheetKeys.map(sheetKey => ({ kind: 'sheet', sheetKey })),
+        writeSet: requiresFullSnapshot
+            ? [{ kind: 'all' }]
+            : candidateSheetKeys.map(sheetKey => ({ kind: 'sheet', sheetKey })),
         // 运行时本身没有变化，只是把它写回聊天：不推进 runtime revision，
         // 否则会让并发填表已捕获的 baseRevision 误判为冲突。
         revisionWriteSet: [],
@@ -110843,34 +111880,41 @@ async function flushRuntimeOnlyPendingChanges_ACU(reason) {
             return { success: false, error: 'runtime snapshot unavailable', errorCategory: 'infrastructure' };
         }
         const freshSheetKeys = Object.keys(freshData).filter(key => key.startsWith('sheet_'));
+        const freshDeletedSheetKeys = pending.deletedSheetKeys || [];
         const freshCandidates = pending.all
-            ? freshSheetKeys
-            : pending.sheetKeys.filter(sheetKey => freshSheetKeys.includes(sheetKey));
+            ? [...new Set([...freshSheetKeys, ...freshDeletedSheetKeys])]
+            : [...new Set([...pending.sheetKeys, ...freshDeletedSheetKeys])];
         const freshChat = getChatArray_ACU();
         const freshTargetMessageIndex = getLatestTableAppendMessageIndexFromChat_ACU(freshChat, scope.isolationKey, settings_ACU);
         if (freshTargetMessageIndex < 0) {
             return { success: false, error: 'no AI message to persist runtime-only changes', errorCategory: 'precondition' };
         }
-        if (freshCandidates.length === 0) {
+        const freshRequiresFullSnapshot = pending.all || freshDeletedSheetKeys.length > 0
+            || freshCandidates.some(sheetKey => !freshSheetKeys.includes(sheetKey));
+        if (freshCandidates.length === 0 && !freshRequiresFullSnapshot) {
             // 登记表在持锁期间已从运行时消失：无可落盘内容，与 T0 同语义（按 T0 登记集合清空）。
             // 清账在持锁中执行：mark 同样只在提交锁内发生，清账与并发 mark 互斥，不存在
             // 「放锁到清除之间」的误清窗口。
             clearRuntimeOnlyPendingSheetKeys_ACU(scope, pending.sheetKeys, { dropAllFlag: pending.all });
             return { success: false, error: NOTHING_TO_FLUSH_ERROR_ACU, errorCategory: 'precondition' };
         }
-        const freshDivergedSheetKeys = await resolveDivergedSheetKeys_ACU(freshChat, scope.isolationKey, freshTargetMessageIndex, freshData, freshCandidates);
-        if (freshDivergedSheetKeys.length === 0) {
+        const freshDivergedSheetKeys = await resolveDivergedSheetKeys_ACU(freshChat, scope.isolationKey, freshTargetMessageIndex, freshData, freshCandidates, pending.all);
+        if (freshDivergedSheetKeys.length === 0 && !freshRequiresFullSnapshot) {
             // 并发写者已把内容物化进聊天：与回放一致，无需落盘。持锁内按重算后的候选集条件化清空；
             // 锁等待期间并发登记的新表不在 T0 候选内，不受影响。
             clearRuntimeOnlyPendingSheetKeys_ACU(scope, freshCandidates, { dropAllFlag: pending.all });
             return { success: false, error: NOTHING_TO_FLUSH_ERROR_ACU, errorCategory: 'precondition' };
         }
-        const freshOperations = freshDivergedSheetKeys.map(sheetKey => ({
-            kind: 'sheet_replace',
-            sheetKey,
-            sheet: cloneJson_ACU$1(freshData[sheetKey]),
-            reason: 'system',
-        }));
+        const hasMissingSheet = freshRequiresFullSnapshot && (freshDivergedSheetKeys.length === 0
+            || freshDivergedSheetKeys.some(sheetKey => !Object.prototype.hasOwnProperty.call(freshData, sheetKey)));
+        const freshOperations = hasMissingSheet
+            ? [{ kind: 'data_replace', data: cloneJson_ACU$1(freshData), reason: 'system' }]
+            : freshDivergedSheetKeys.map(sheetKey => ({
+                kind: 'sheet_replace',
+                sheetKey,
+                sheet: cloneJson_ACU$1(freshData[sheetKey]),
+                reason: 'system',
+            }));
         flushedSheetKeys = freshDivergedSheetKeys;
         flushedMessageIndex = freshTargetMessageIndex;
         // 成功清除在持锁中执行（apply 回调末尾，先于 persist）：只清除本次实际落盘的表集合。
@@ -111088,6 +112132,16 @@ function getPlanSourceFrame_ACU(plan) {
     const tagData = readIsolatedTagData_ACU(message, plan.isolationKey);
     return isV2TagData_ACU(tagData) ? tagData.storageFrame : null;
 }
+function getPlanBackupFrame_ACU(plan) {
+    if (!Number.isInteger(plan.sourceMessageIndex))
+        return null;
+    const message = plan.chat[plan.sourceMessageIndex];
+    const tagData = readIsolatedTagData_ACU(message, plan.isolationKey);
+    const backup = tagData?.recoveryBackup;
+    return backup && typeof backup === 'object' && backup.storageFrame && typeof backup.storageFrame === 'object'
+        ? backup.storageFrame
+        : null;
+}
 function planAffectedFramesUnchanged_ACU(plan) {
     // 单根收敛会改写多个 full 帧：任一受影响帧在计划创建后变化，计划即失效。
     // 校验全部冗余 full 帧 + 根帧指纹，缺一即拒绝（P4-5）。
@@ -111102,6 +112156,12 @@ function planAffectedFramesUnchanged_ACU(plan) {
     const sourceFrame = getPlanSourceFrame_ACU(plan);
     if (!sourceFrame || getFrameFingerprint_ACU(sourceFrame) !== plan.sourceFrameFingerprint) {
         return '恢复源 frame 已变化，请重新诊断。';
+    }
+    if (plan.backupFrameFingerprint) {
+        const backupFrame = getPlanBackupFrame_ACU(plan);
+        if (!backupFrame || getFrameFingerprint_ACU(backupFrame) !== plan.backupFrameFingerprint) {
+            return '恢复备份 frame 已变化，请重新诊断。';
+        }
     }
     return null;
 }
@@ -111476,6 +112536,9 @@ async function diagnoseV2Recovery_ACU(chat, isolationKey) {
         const backup = tagData.recoveryBackup;
         if (!backup || typeof backup !== 'object' || !backup.storageFrame || typeof backup.storageFrame !== 'object')
             continue;
+        const liveFrame = isV2TagData_ACU(tagData) ? tagData.storageFrame : null;
+        if (!liveFrame)
+            continue;
         const backupCheckpoint = backup.storageFrame.checkpoint;
         if (!backupCheckpoint || backupCheckpoint.kind !== 'full' || !backupCheckpoint.data)
             continue;
@@ -111491,7 +112554,15 @@ async function diagnoseV2Recovery_ACU(chat, isolationKey) {
             requiresConfirmation: false,
             message: `检测到无锚点 V2 空信封，但其 tagData 保留 recoveryBackup（kind=${backup.recoveryKind || 'unknown'}）；可用备份中的 full checkpoint 数据重建 integrity_repair 根。应用修复时原始 frame 会保留为隔离备份。`,
         };
-        return { summary, plan: { ...summary, kind: 'restored_from_recovery_backup', chat, chatKey: String(currentChatFileIdentifier_ACU || '').trim(), sourceFrameFingerprint: getFrameFingerprint_ACU(backup.storageFrame), candidateData: repair.candidateData || candidateData } };
+        return { summary, plan: {
+                ...summary,
+                kind: 'restored_from_recovery_backup',
+                chat,
+                chatKey: String(currentChatFileIdentifier_ACU || '').trim(),
+                sourceFrameFingerprint: getFrameFingerprint_ACU(liveFrame),
+                backupFrameFingerprint: getFrameFingerprint_ACU(backup.storageFrame),
+                candidateData: repair.candidateData || candidateData,
+            } };
     }
     return { summary: { status: 'unrecoverable_no_base', isolationKey, requiresConfirmation: false, message: '仅检测到无 base 的 V2 日志；无法编造恢复数据。' } };
 }
@@ -114052,6 +115123,16 @@ async function executeAutoFillStagingGroups_ACU(groups, mode, options = {}) {
         templateFingerprint,
     });
     stagingSession = createTableFillStagingSession_ACU(stagingRun);
+    const failFastAfterSegmentError = async (error) => {
+        await stagingSession?.discard();
+        stagingSession = null;
+        return {
+            success: false,
+            failedGroups: [...new Set([...failedGroups, ...normalizedGroups.map(group => group.key)])],
+            error,
+            committedBucketCount,
+        };
+    };
     const settleStagingBoundary = async () => {
         if (!boundaryPlan || boundaryCommitted)
             return { ok: true };
@@ -114109,7 +115190,7 @@ async function executeAutoFillStagingGroups_ACU(groups, mode, options = {}) {
             if (!preResult.success) {
                 failedGroups.add(group.key);
                 firstError = firstError || preResult.error || '边界前 staging 提交失败。';
-                break;
+                return failFastAfterSegmentError(firstError);
             }
         }
         // 首个 post 段提交前收敛 staging：边界前累计快照原子折叠回原根；零 staging 则丢弃。
@@ -114121,7 +115202,7 @@ async function executeAutoFillStagingGroups_ACU(groups, mode, options = {}) {
             if (!settleResult.ok) {
                 failedGroups.add(group.key);
                 firstError = firstError || `跨根 staging 汇合失败：${settleResult.error}`;
-                break;
+                return failFastAfterSegmentError(firstError);
             }
         }
         for (const postSegment of postSegments) {
@@ -114146,7 +115227,7 @@ async function executeAutoFillStagingGroups_ACU(groups, mode, options = {}) {
             if (!postResult.success) {
                 failedGroups.add(group.key);
                 firstError = firstError || postResult.error || '边界后持久化提交失败。';
-                break;
+                return failFastAfterSegmentError(firstError);
             }
         }
     }
@@ -114259,6 +115340,17 @@ async function executeCardUpdateCore_ACU(messagesToUse, saveTargetIndex, isImpor
                 }
                 emitProgress({ phase: 'parsing' });
                 const aiResponse = collectResult.aiResponse;
+                if (isSqliteMode()
+                    && typeof collectResult.tableEditText === 'string'
+                    && collectResult.tableEditText.trim()
+                    && !isSqlContent(collectResult.tableEditText)) {
+                    return {
+                        success: false,
+                        modifiedKeys: [],
+                        error: 'SQLite 填表仅接受 SQL tableEdit；拒绝非 SQL 输出，未进入 JSON snapshot 分支。',
+                        errorCategory: 'model',
+                    };
+                }
                 const isSqlTableEdit = isSqliteMode() && typeof collectResult.tableEditText === 'string' && isSqlContent(collectResult.tableEditText);
                 if (isSqlTableEdit) {
                     const writeSet = Array.isArray(targetSheetKeys) && targetSheetKeys.length > 0
@@ -114449,6 +115541,17 @@ async function executeCardUpdateCore_ACU(messagesToUse, saveTargetIndex, isImpor
                         return { success: false, error: sanitizeRetryFeedback_ACU(parseResult?.error || '解析或应用AI更新时出错'), errorCategory: 'model' };
                     }
                     applySpecialIndexSequenceToSummaryTables_ACU(workingTableData);
+                    if (Array.isArray(targetSheetKeys) && targetSheetKeys.length > 0) {
+                        const allowedTargetKeys = new Set(targetSheetKeys);
+                        const unauthorizedKeys = parsedKeys.filter(sheetKey => !allowedTargetKeys.has(sheetKey));
+                        if (unauthorizedKeys.length > 0) {
+                            return {
+                                success: false,
+                                error: `填表越权修改了非目标表：${unauthorizedKeys.join('、')}。`,
+                                errorCategory: 'model',
+                            };
+                        }
+                    }
                     const revisionWriteSet = parsedKeys.map(sheetKey => ({ kind: 'sheet', sheetKey }));
                     if (isImportMode) {
                         emitProgress({ phase: 'chunk_done' });
@@ -114907,6 +116010,15 @@ async function ensureStrictlyReplayableHistoryForCatchUp_ACU(targetMessageIndex)
  * 按聊天中已提交的 scheduleSummary/事件事实规划并执行所选表的后缀追平。
  * 不扫描或声称修复历史内部空洞；一期只处理每表连续前沿后的缺口。
  */
+function executionSnapshotContextStillMatches_ACU(snapshot) {
+    if (!snapshot || (snapshot.chatIdentity === undefined && snapshot.isolationKey === undefined))
+        return true;
+    if (snapshot.chatIdentity !== undefined && String(currentChatFileIdentifier_ACU || '') !== snapshot.chatIdentity)
+        return false;
+    if (snapshot.isolationKey !== undefined && String(getCurrentIsolationKey_ACU() || '') !== snapshot.isolationKey)
+        return false;
+    return true;
+}
 async function orchestrateManualCatchUp_ACU(targetKeys, refreshData, options = {}) {
     if (isAutoUpdatingCard_ACU) {
         return { success: false, error: '数据库更新正在进行中，请稍候。' };
@@ -114914,11 +116026,35 @@ async function orchestrateManualCatchUp_ACU(targetKeys, refreshData, options = {
     if (!coreApisAreReady_ACU) {
         return { success: false, error: 'API未就绪。' };
     }
+    if (options.executionSnapshot !== undefined && !executionSnapshotContextStillMatches_ACU(options.executionSnapshot)) {
+        return {
+            success: false,
+            outcome: 'blocked',
+            error: '聊天已切换，已取消追平，请重新确认目标。',
+            committedBucketCount: 0,
+            dataCommitted: false,
+            replayVerified: false,
+            terminalProgressSaved: false,
+            diagnosticCode: 'catch_up_chat_changed_after_confirmation',
+        };
+    }
     // 追平规划前必须先完成 legacy→V2 迁移：迁移会按 skipUpdateFloors 在后方楼层创建
     // migration full checkpoint。若等到 chunk 执行时才迁移，第一 bucket 的目标楼层早于
     // 新锚点，persist 会以 target < latestFullCheckpoint fail-fast 拒绝，用户已经白白
     // 支付了一次 AI 调用。迁移成功后必须重载存储运行时与聊天，再重新规划与重新预检。
     const migration = await ensureLegacyStorageMigratedBeforeWrite_ACU('orchestrateManualCatchUp:preplan');
+    if (options.executionSnapshot !== undefined && !executionSnapshotContextStillMatches_ACU(options.executionSnapshot)) {
+        return {
+            success: false,
+            outcome: 'blocked',
+            error: '聊天已切换，已取消追平，请重新确认目标。',
+            committedBucketCount: 0,
+            dataCommitted: false,
+            replayVerified: false,
+            terminalProgressSaved: false,
+            diagnosticCode: 'catch_up_chat_changed_after_confirmation',
+        };
+    }
     if (!migration.success) {
         return {
             success: false,
@@ -114934,6 +116070,18 @@ async function orchestrateManualCatchUp_ACU(targetKeys, refreshData, options = {
         // 迁移改写聊天持久化拓扑：内存 runtime、模板与聊天数组都必须基于新状态重建，
         // 否则规划会建立在迁移前的陈旧快照上。
         const reloadResult = await reloadStorageProvider();
+        if (options.executionSnapshot !== undefined && !executionSnapshotContextStillMatches_ACU(options.executionSnapshot)) {
+            return {
+                success: false,
+                outcome: 'blocked',
+                error: '聊天已切换，已取消追平，请重新确认目标。',
+                committedBucketCount: 0,
+                dataCommitted: false,
+                replayVerified: false,
+                terminalProgressSaved: false,
+                diagnosticCode: 'catch_up_chat_changed_after_confirmation',
+            };
+        }
         if (!reloadResult?.ok) {
             return {
                 success: false,
@@ -114962,6 +116110,19 @@ async function orchestrateManualCatchUp_ACU(targetKeys, refreshData, options = {
     // 显式提供（即使 sheetKeys 为空/非法）→ 必须 fail-closed，禁止静默降级。
     const executionSnapshot = options.executionSnapshot?.sheetKeys;
     if (options.executionSnapshot !== undefined) {
+        if (!executionSnapshotContextStillMatches_ACU(options.executionSnapshot)) {
+            return {
+                success: false,
+                outcome: 'blocked',
+                error: '聊天已切换，已取消追平，请重新确认目标。',
+                catchUpPlan: plan,
+                committedBucketCount: 0,
+                dataCommitted: false,
+                replayVerified: false,
+                terminalProgressSaved: false,
+                diagnosticCode: 'catch_up_chat_changed_after_confirmation',
+            };
+        }
         if (!runtimeSheetKeysMatchSnapshot_ACU(executionSnapshot)) {
             logWarn_ACU('[手动追平] runtime 表集合在确认期间变化，已阻止执行（快照未匹配）。');
             return {
@@ -115095,6 +116256,21 @@ async function orchestrateManualCatchUp_ACU(targetKeys, refreshData, options = {
     // staging 只是 run 级内存状态（未写任何聊天帧），二检阻断直接丢弃 staging 返回，
     // 不遗留任何持久化拓扑改写，无需 rollback。
     if (options.executionSnapshot !== undefined) {
+        if (!executionSnapshotContextStillMatches_ACU(options.executionSnapshot)) {
+            stagingRun = null;
+            boundaryPlan = null;
+            return {
+                success: false,
+                outcome: 'blocked',
+                error: '聊天已切换，已取消追平，请重新确认目标。',
+                catchUpPlan: plan,
+                committedBucketCount: 0,
+                dataCommitted: false,
+                replayVerified: false,
+                terminalProgressSaved: false,
+                diagnosticCode: 'catch_up_chat_changed_before_ai',
+            };
+        }
         if (!runtimeSheetKeysMatchSnapshot_ACU(executionSnapshot)) {
             logWarn_ACU('[手动追平] runtime 在 AI 调用前一刻变化，已阻止执行（快照未匹配）。');
             stagingRun = null;
@@ -115828,6 +117004,9 @@ async function orchestrateManualUpdate_ACU(targetKeys, processBatch, refreshData
         return { ok: true };
     };
     try {
+        if (options.executionSnapshot !== undefined && !executionSnapshotContextStillMatches_ACU(options.executionSnapshot)) {
+            return { success: false, error: '聊天已切换，已取消本次手动填表，请重新确认目标。' };
+        }
         if (isAutoUpdatingCard_ACU) {
             return { success: false, error: '数据库更新正在进行中，请稍候...' };
         }
@@ -115839,7 +117018,13 @@ async function orchestrateManualUpdate_ACU(targetKeys, processBatch, refreshData
             return { success: false, error: 'API未配置，无法更新数据库。' };
         }
         await loadAllChatMessages_ACU();
+        if (options.executionSnapshot !== undefined && !executionSnapshotContextStillMatches_ACU(options.executionSnapshot)) {
+            return { success: false, error: '聊天已切换，已取消本次手动填表，请重新确认目标。' };
+        }
         await refreshData();
+        if (options.executionSnapshot !== undefined && !executionSnapshotContextStillMatches_ACU(options.executionSnapshot)) {
+            return { success: false, error: '聊天已切换，已取消本次手动填表，请重新确认目标。' };
+        }
         if (!currentJsonTableData_ACU) {
             return { success: false, error: '数据库未加载。' };
         }
@@ -115925,6 +117110,9 @@ async function orchestrateManualUpdate_ACU(targetKeys, processBatch, refreshData
         // 重新对齐（本任务自身的 commit 不是外部修改），其余时刻只读。
         let manualUpdateSnapshotKeys = options.executionSnapshot?.sheetKeys;
         if (options.executionSnapshot !== undefined) {
+            if (!executionSnapshotContextStillMatches_ACU(options.executionSnapshot)) {
+                return { success: false, error: '聊天已切换，已取消本次手动填表，请重新确认目标。' };
+            }
             if (!runtimeSheetKeysMatchSnapshot_ACU(manualUpdateSnapshotKeys)) {
                 logWarn_ACU('[Manual Update] runtime 在确认期间变化，已阻止手动更新（快照未匹配）。');
                 return { success: false, error: '表格运行时在确认期间发生变化，已取消本次手动填表，请确认后重试。' };
@@ -116020,6 +117208,9 @@ async function orchestrateManualUpdate_ACU(targetKeys, processBatch, refreshData
             // 等待期间 runtime 可能被 purge/表集合变化。必须紧邻破坏性清理再次核对，
             // 覆盖“第一次复检通过 → await provider ready → 清理开始”之间的窗口。
             if (options.executionSnapshot !== undefined) {
+                if (!executionSnapshotContextStillMatches_ACU(options.executionSnapshot)) {
+                    return { success: false, error: '聊天已切换，已取消本次手动填表，请重新确认目标。' };
+                }
                 if (!runtimeSheetKeysMatchSnapshot_ACU(manualUpdateSnapshotKeys)) {
                     logWarn_ACU('[Manual Refill] runtime 在清理前一刻变化，已阻止破坏性重填（快照未匹配）。');
                     return { success: false, error: '表格运行时在确认期间发生变化，已取消本次手动填表，请确认后重试。' };
@@ -116207,6 +117398,12 @@ async function orchestrateManualUpdate_ACU(targetKeys, processBatch, refreshData
         // 直接 return 会绕过 failManualRefillSession，导致「旧数据已清、新数据未写」的净损失。
         // 因此重填路径必须走 failManualRefillSession（零提交时回滚清理，已提交时按已提交事实对齐运行时）。
         if (options.executionSnapshot !== undefined) {
+            if (!executionSnapshotContextStillMatches_ACU(options.executionSnapshot)) {
+                if (manualRefillEnabled) {
+                    return await failManualRefillSession('聊天已切换，已取消本次手动填表；若本次未写入任何数据，将自动回滚清理，请重新确认目标。');
+                }
+                return { success: false, error: '聊天已切换，已取消本次手动填表，请重新确认目标。' };
+            }
             if (!runtimeSheetKeysMatchSnapshot_ACU(manualUpdateSnapshotKeys)) {
                 logWarn_ACU('[Manual Update] runtime 在 AI 调用前一刻变化，已阻止手动更新（快照未匹配）。');
                 if (manualRefillEnabled) {
@@ -116306,6 +117503,12 @@ async function orchestrateManualUpdate_ACU(targetKeys, processBatch, refreshData
             // （零提交回滚清理，已提交则保留成果并刷新），不得裸返回。
             // 普通路径：结构化失败返回。
             if (options.executionSnapshot !== undefined) {
+                if (!executionSnapshotContextStillMatches_ACU(options.executionSnapshot)) {
+                    if (manualRefillEnabled) {
+                        return await failManualRefillSession('聊天已切换，已取消本次手动填表；若本次未写入任何数据，将自动回滚清理，请重新确认目标。');
+                    }
+                    return { success: false, error: '聊天已切换，已取消本次手动填表，请重新确认目标。' };
+                }
                 if (!runtimeSheetKeysMatchSnapshot_ACU(manualUpdateSnapshotKeys)) {
                     logWarn_ACU(`[Manual Update] runtime 在第 ${chunkIndex} 批 AI 调用前一刻变化，已阻止该批执行（快照未匹配）。`);
                     if (manualRefillEnabled) {
@@ -116520,8 +117723,13 @@ async function orchestrateManualUpdate_ACU(targetKeys, processBatch, refreshData
                     const batchResult = await executeAutoMergeBatch_ACU(prepared, prepared.batches[i], acc);
                     acc = batchResult.accumulatedSummary;
                 }
-                await finalizeAutoMerge_ACU(prepared, acc);
-                autoMergeSuccess = true;
+                const mergeResult = await finalizeAutoMerge_ACU(prepared, acc);
+                if (mergeResult?.success !== true) {
+                    logWarn_ACU('[自动合并] 提交失败或返回无效结果，自动合并未成功。', mergeResult?.error);
+                }
+                else {
+                    autoMergeSuccess = true;
+                }
             }
         }
         catch (e) {
@@ -117545,6 +118753,9 @@ function resetMvuAnalysisGateForTest_ACU() {
 /**
  * presentation/triggers/settings-ui-sync/settings-ui-connect.ts
  */
+// 每次自动填表事件都有独立 runId；停止代次变化后，旧 run 不得再清标记或排新链。
+let autoFillRunSequence_ACU = 0;
+let latestAutoFillRunId_ACU = null;
 async function fetchModelsAndConnect_ACU() {
     if (!$popupInstance_ACU ||
         !$customApiUrlInput_ACU ||
@@ -117750,7 +118961,11 @@ async function runIgnoreMvuEarlyReplace_ACU(eventType, intent, scheduledChatKey,
             && earlyResult.action !== 'optimize_then_update')
             return false;
         logDebug_ACU('[MVU联动] 忽略MVU更新已开启，正文替换不等闸门直接开跑');
-        await executeContentOptimization_ACU(earlyResult.lastMessageIndex);
+        const earlyReplaceSucceeded = await executeContentOptimization_ACU(earlyResult.lastMessageIndex);
+        if (earlyReplaceSucceeded !== true) {
+            logDebug_ACU('[MVU联动] 早跑替换未成功，交由正常管线接管');
+            return false;
+        }
         return true;
     }
     catch (error) {
@@ -117766,13 +118981,32 @@ async function handleNewMessageDebounced_ACU(eventType = 'unknown_acu', intent) 
     // 这里以排程时点的聊天/隔离为基线，无论有没有 intent 都在回调里复检一次。
     const scheduledChatKey_ACU = intent?.chatKey ?? currentChatFileIdentifier_ACU;
     const scheduledIsolationKey_ACU = intent?.isolationKey ?? getCurrentIsolationKey_ACU();
+    const scheduledRunId_ACU = `auto-fill-${++autoFillRunSequence_ACU}`;
+    const scheduledStopEpoch_ACU = getAutoFillStopEpoch_ACU();
+    latestAutoFillRunId_ACU = scheduledRunId_ACU;
+    const isCurrentAutoFillRun_ACU = () => (latestAutoFillRunId_ACU === scheduledRunId_ACU
+        && getAutoFillStopEpoch_ACU() === scheduledStopEpoch_ACU);
+    const stopIfAutoFillRunStale_ACU = (stage) => {
+        // 停止代次是跨异步阶段的硬闸；runId 只在防抖回调入场时判定，
+        // 不能把已获 MVU 闸门所有权的首个回调误判为旧回调。
+        if (getAutoFillStopEpoch_ACU() === scheduledStopEpoch_ACU)
+            return false;
+        logDebug_ACU(`[新消息] 自动填表 run ${scheduledRunId_ACU} 已因停止代次失效（stage=${stage}），放弃旧回调`);
+        return true;
+    };
     clearTimeout(autoFillDebounceTimer_ACU);
     _set_autoFillDebounceTimer_ACU(setTimeout(async () => {
+        if (latestAutoFillRunId_ACU !== scheduledRunId_ACU) {
+            logDebug_ACU(`[新消息] 自动填表 run ${scheduledRunId_ACU} 已被更新事件取代，放弃旧回调`);
+            return;
+        }
+        if (stopIfAutoFillRunStale_ACU('debounce'))
+            return;
         const performanceSpan = startRuntimePerformanceSpan_ACU('new-message-pipeline', {
             settings: settings_ACU,
             metrics: { source: eventType },
         });
-        const performanceContext = { runId: performanceSpan.id, parentSpanId: performanceSpan.id };
+        const performanceContext = { runId: scheduledRunId_ACU, parentSpanId: performanceSpan.id };
         try {
             // 新一轮消息评估：清掉上一轮填表「终止」残留，避免永久 user_aborted。
             _set_wasStoppedByUser_ACU(false);
@@ -117790,6 +119024,8 @@ async function handleNewMessageDebounced_ACU(eventType = 'unknown_acu', intent) 
             if (ignoreMvuUpdate_ACU && !isMvuRerun_ACU) {
                 earlyReplaceDone_ACU = await runIgnoreMvuEarlyReplace_ACU(eventType, intent, scheduledChatKey_ACU, scheduledIsolationKey_ACU);
             }
+            if (stopIfAutoFillRunStale_ACU('after_early_replace'))
+                return;
             const skipReplace_ACU = (ignoreMvuUpdate_ACU && isMvuRerun_ACU) || earlyReplaceDone_ACU;
             // [W4 延后闸门] MVU 用「额外模型解析」时，自动填表与正文替换都要等解析结束后再跑。
             // 消费点选在这里的理由：本函数是两条自动链的唯一入口（正文替换 executeContentOptimization_ACU
@@ -117799,6 +119035,8 @@ async function handleNewMessageDebounced_ACU(eventType = 'unknown_acu', intent) 
             // MVU 未装 / 未启用 / 开关关闭 → 同步立即放行，与闸门上线前逐字一致。
             // 「忽略MVU更新」开后替换分支已早跑，此处闸门实际只拦填表（正常轮靠 skipReplace 跳过替换）。
             const mvuGate_ACU = await waitForMvuAnalysisToSettle_ACU();
+            if (stopIfAutoFillRunStale_ACU('after_mvu_gate'))
+                return;
             if (mvuGate_ACU.mergedIntoExisting) {
                 // [防双跑] 本次触发并入了他人在飞等待：创建者放行后会按最新楼独自处理，
                 // 合并方继续跑=同楼正文替换/填表双跑各烧一次 AI（2026-09-05 日志实证），直接放弃本轮。
@@ -117818,6 +119056,8 @@ async function handleNewMessageDebounced_ACU(eventType = 'unknown_acu', intent) 
             finally {
                 loadSpan.end();
             }
+            if (stopIfAutoFillRunStale_ACU('after_chat_load'))
+                return;
             // [触发修复] chatKey / isolationKey 校验：防抖期间切聊天或切隔离必须立即丢弃，不污染新会话。
             // 复检不再以 intent 存在为前提：无 intent 时按排程时点基线比对，同样丢弃跨聊填表。
             {
@@ -117870,6 +119110,8 @@ async function handleNewMessageDebounced_ACU(eventType = 'unknown_acu', intent) 
                         return;
                     }
                     liveChat = getChatArray_ACU();
+                    if (stopIfAutoFillRunStale_ACU('materialization_wait'))
+                        return;
                     resolution = resolveGeneratedAiMessageIndex_ACU({ liveChat, intent });
                     retries += 1;
                 }
@@ -117934,6 +119176,8 @@ async function handleNewMessageDebounced_ACU(eventType = 'unknown_acu', intent) 
                     return;
                 }
             }
+            if (stopIfAutoFillRunStale_ACU('before_evaluate'))
+                return;
             // [重构] 调用 service 层的 evaluateNewMessageAction_ACU 进行决策
             const result = evaluateNewMessageAction_ACU(liveChat, isAutoUpdatingCard_ACU, coreApisAreReady_ACU, wasStoppedByUser_ACU, settings_ACU.contentOptimizationSettings, resolvedMessageIndex);
             logDebug_ACU(`[NewMessage] Evaluation result: action=${result.action}, reason=${result.reason}`);
@@ -117952,9 +119196,13 @@ async function handleNewMessageDebounced_ACU(eventType = 'unknown_acu', intent) 
                 case 'optimize_parallel':
                     if (skipReplace_ACU) {
                         logDebug_ACU('[MVU联动] 忽略MVU更新已开启，W5 重跑跳过正文替换，只跑填表');
+                        if (stopIfAutoFillRunStale_ACU('before_trigger'))
+                            break;
                         await triggerAutomaticUpdateIfNeeded_ACU(performanceContext);
                         break;
                     }
+                    if (stopIfAutoFillRunStale_ACU('before_parallel'))
+                        break;
                     logDebug_ACU('[正文优化] 并行模式已启用，正文优化与填表将同时进行...');
                     await Promise.all([
                         executeContentOptimization_ACU(result.lastMessageIndex),
@@ -117967,18 +119215,28 @@ async function handleNewMessageDebounced_ACU(eventType = 'unknown_acu', intent) 
                         break;
                     }
                     logDebug_ACU('[正文优化] 手动确认模式：等待用户确认后再填表...');
+                    if (stopIfAutoFillRunStale_ACU('before_manual_optimize'))
+                        break;
                     await executeContentOptimization_ACU(result.lastMessageIndex);
                     break;
                 case 'optimize_then_update':
                     if (skipReplace_ACU) {
                         logDebug_ACU('[MVU联动] 忽略MVU更新已开启，W5 重跑跳过正文替换，只跑填表');
+                        if (stopIfAutoFillRunStale_ACU('before_trigger'))
+                            break;
                         await triggerAutomaticUpdateIfNeeded_ACU(performanceContext);
                         break;
                     }
+                    if (stopIfAutoFillRunStale_ACU('before_then_update_optimize'))
+                        break;
                     await executeContentOptimization_ACU(result.lastMessageIndex);
+                    if (stopIfAutoFillRunStale_ACU('after_then_update_optimize'))
+                        break;
                     await triggerAutomaticUpdateIfNeeded_ACU(performanceContext);
                     break;
                 case 'update_only':
+                    if (stopIfAutoFillRunStale_ACU('before_trigger'))
+                        break;
                     await triggerAutomaticUpdateIfNeeded_ACU(performanceContext);
                     break;
             }
@@ -118698,8 +119956,9 @@ async function handleManualUpdate_ACU() {
  *   自身的 purge / 清空 / compaction 删楼都以插件保存收尾，保存同步会以当前聊天为
  *   权威重建 vault，因此插件侧的删除天然不会被本模块复活（防"删了重生"语义保持）。
  * - 恢复点：MESSAGE_DELETED 调度轮开头（冷回放之前）。丢失产物嫁接到其原位置之后
- *   第一个幸存 frame 楼层：帧内 checkpoint 先于 logEntries 回放，嫁接后顺序与原
- *   语义完全一致；被删楼层自身的 logEntries 不恢复（删楼 = 撤销该楼编辑）。
+ *   第一个幸存 frame 楼层：帧内 checkpoint 先于 logEntries 回放；过渡根必须从删楼后的
+ *   幸存历史重算 data/cutoff 并通过严格回放校验，无法证明安全时拒绝保存。被删楼层自身
+ *   的 logEntries 不恢复（删楼 = 撤销该楼编辑）。
  *
  * 残余竞态（接受并记录）：删楼后调度防抖窗口（1.2s）内若插件恰好完成一次保存，
  * post-save 同步会先丢弃待恢复产物。生成 / 填表落盘耗时远大于该窗口，实际不可达。
@@ -118823,6 +120082,42 @@ function findGraftTargetMessage_ACU(chat, presentMessages, entries, lostIndex, i
     return null;
 }
 /**
+ * 过渡根不是普通 frame：它的 data/cutoff 是“截至某个 operation 的完整快照”。
+ * 删掉承载楼层后不能只把对象搬到后继楼层，否则原 cutoff 会落在新的物理索引
+ * 上并吞掉真实后缀。这里从幸存聊天重新跑兼容回放，生成新的完整快照与 cutoff；
+ * 若没有可证明的 full 基底、身份归并或 canonical 校验失败，交给调用方阻止保存。
+ */
+async function rebuildDeletedTransition_ACU(survivingChat, isolationKey, targetMessage) {
+    const tolerant = await replayWithLegacyTolerances_ACU(survivingChat, isolationKey);
+    if (tolerant.toleranceReport.identityRemaps.length > 0) {
+        throw new Error(`[删楼守卫] isolationKey=[${isolationKey || '无标签'}] 的幸存历史含身份归并，无法安全重建过渡根。`);
+    }
+    const data = reindexSpv79TransitionState_ACU(tolerant.data);
+    const normalization = normalizeCanonicalTableRows_ACU(data);
+    if (normalization.errors.length > 0 || normalization.removedRows.length > 0) {
+        throw new Error(`[删楼守卫] isolationKey=[${isolationKey || '无标签'}] 的幸存历史无法通过 canonical 行校验，拒绝重建过渡根。`);
+    }
+    let scheduleSummary;
+    try {
+        scheduleSummary = collectScheduleSummaryFromFramesV2_ACU(survivingChat, isolationKey);
+    }
+    catch (_) {
+        scheduleSummary = undefined;
+    }
+    return {
+        targetMessage,
+        checkpoint: {
+            version: 1,
+            kind: 'compat_replay_transition',
+            createdAt: Date.now(),
+            data: deepClone_ACU(data),
+            cutoff: tolerant.cutoff,
+            ...(scheduleSummary === undefined ? {} : { scheduleSummary }),
+            tolerances: ['delete_recovery_rebuild'],
+        },
+    };
+}
+/**
  * MESSAGE_DELETED 后的前移恢复：把被删楼层携带的不可替代产物嫁接到最近的幸存楼层。
  * 在冷回放之前调用；无丢失时零写入零保存。
  */
@@ -118870,6 +120165,8 @@ async function recoverLostCheckpointsAfterMessageDeletion_ACU() {
         };
         let graftedCount = 0;
         const affectedIsolationKeys = new Set();
+        const survivingChat = deepClone_ACU(chat);
+        const transitionTargets = new Map();
         try {
             // 逆序处理：同 sheetKey 冲突时"原始位置更靠后的产物"先占位，更早的被
             // 目标已有判定跳过——幸存者/更新者优先的语义由同一条规则统一表达。
@@ -118878,6 +120175,9 @@ async function recoverLostCheckpointsAfterMessageDeletion_ACU() {
                 const entries = vault_ACU.entriesByIsolationKey.get(isolationKey);
                 const target = findGraftTargetMessage_ACU(chat, presentMessages, entries, vaultIndex, isolationKey);
                 if (!target) {
+                    if (entry.spv79TransitionCheckpoint || entry.compatTransitionCheckpoint) {
+                        throw new Error(`[删楼守卫] isolationKey=[${isolationKey || '无标签'}] 的丢失过渡根无处重建，拒绝保存。`);
+                    }
                     logError_ACU(`[删楼守卫] isolationKey=[${isolationKey || '无标签'}] 的丢失 checkpoint 无处嫁接（聊天已无 AI 楼层），保留保管库等待下次机会。`);
                     continue;
                 }
@@ -118934,18 +120234,33 @@ async function recoverLostCheckpointsAfterMessageDeletion_ACU() {
                         logWarn_ACU(`[删楼守卫] 被删楼层携带的 ${sheetKey} per-sheet checkpoint（timeline=${checkpoint.timeline?.kind || 'legacy'}）已前移嫁接到楼层 #${targetIndex}。`);
                     }
                 }
-                const tagData = target.message.TavernDB_ACU_IsolatedData[isolationKey];
-                if (entry.spv79TransitionCheckpoint && !tagData.spv79TransitionCheckpoint) {
-                    tagData.spv79TransitionCheckpoint = deepClone_ACU(entry.spv79TransitionCheckpoint);
-                    graftedCount += 1;
-                    logWarn_ACU(`[删楼守卫] SPv7.9 过渡根已嫁接到楼层 #${targetIndex}；其 cutoff 楼层索引可能因删除漂移，请留意后续回放告警。`);
-                }
-                if (entry.compatTransitionCheckpoint && !tagData.compatTransitionCheckpoint) {
-                    tagData.compatTransitionCheckpoint = deepClone_ACU(entry.compatTransitionCheckpoint);
-                    graftedCount += 1;
-                    logWarn_ACU(`[删楼守卫] 兼容过渡根已嫁接到楼层 #${targetIndex}；其 cutoff 楼层索引可能因删除漂移，请留意后续回放告警。`);
+                if (entry.spv79TransitionCheckpoint || entry.compatTransitionCheckpoint) {
+                    // 过渡根的 cutoff/data 必须在删楼后的幸存历史上重算，不能深拷贝旧值。
+                    transitionTargets.set(isolationKey, target.message);
                 }
                 affectedIsolationKeys.add(isolationKey);
+            }
+            const rebuiltTransitions = new Map();
+            for (const [isolationKey, targetMessage] of transitionTargets) {
+                const rebuilt = await rebuildDeletedTransition_ACU(survivingChat, isolationKey, targetMessage);
+                rebuiltTransitions.set(isolationKey, rebuilt);
+                const isolatedData = targetMessage.TavernDB_ACU_IsolatedData;
+                const tagData = isolatedData[isolationKey];
+                delete tagData.spv79TransitionCheckpoint;
+                delete tagData.compatTransitionCheckpoint;
+                tagData.compatTransitionCheckpoint = rebuilt.checkpoint;
+                graftedCount += 1;
+                logWarn_ACU(`[删楼守卫] isolationKey=[${isolationKey || '无标签'}] 的过渡根已按幸存历史重建并校验 cutoff。`);
+            }
+            for (const [isolationKey, rebuilt] of rebuiltTransitions) {
+                const tagData = rebuilt.targetMessage.TavernDB_ACU_IsolatedData[isolationKey];
+                const replay = await loadTableStateFromFramesV2Detailed_ACU(chat, isolationKey, {
+                    updateRuntimeState: false,
+                    compatibilityMode: 'disabled',
+                });
+                if (!replay || getTableDataFingerprint_ACU(replay.data) !== getTableDataFingerprint_ACU(tagData.compatTransitionCheckpoint.data)) {
+                    throw new Error(`[删楼守卫] isolationKey=[${isolationKey || '无标签'}] 的重建过渡根严格回放校验失败，拒绝保存。`);
+                }
             }
             if (graftedCount === 0) {
                 // 全部被"目标已有"跳过或无处嫁接：无写入即无需保存。
@@ -119676,7 +120991,7 @@ function prepareStrategy1Context_ACU(lastMessage) {
  * 职责：准备上下文 → 调用规划 → 判断结果 → 返回结果
  * 不负责：写回 params.prompt、更新消息、清空输入框、停止生成、删除消息（这些由 presentation 层做）
  */
-async function orchestrateAfterCommandsStrategy1_ACU(lastMessage, lastMessageIndex, runPlanning) {
+async function orchestrateAfterCommandsStrategy1_ACU(lastMessage, lastMessageIndex, runPlanning, runtimeOptions = {}) {
     // 1. 准备策略1上下文
     const context = prepareStrategy1Context_ACU(lastMessage);
     if (!context) {
@@ -119687,6 +121002,7 @@ async function orchestrateAfterCommandsStrategy1_ACU(lastMessage, lastMessageInd
     _set_isProcessing_Plot_ACU(true);
     try {
         const finalMessage = await runPlanning(messageToProcess, {
+            ...runtimeOptions,
             originalUserInput: messageToProcess,
             hasExistingUserMessage: true,
         });
@@ -119736,7 +121052,7 @@ async function orchestrateAfterCommandsStrategy1_ACU(lastMessage, lastMessageInd
  * 职责：调用规划 → 返回结果
  * 不负责：读取/写回输入框、停止生成（这些由 presentation 层做）
  */
-async function orchestrateAfterCommandsStrategy2_ACU(textInBox, runPlanning) {
+async function orchestrateAfterCommandsStrategy2_ACU(textInBox, runPlanning, runtimeOptions = {}) {
     if (!textInBox || !String(textInBox).trim()) {
         return { action: 'skip' };
     }
@@ -119744,6 +121060,7 @@ async function orchestrateAfterCommandsStrategy2_ACU(textInBox, runPlanning) {
     _set_isProcessing_Plot_ACU(true);
     try {
         const finalMessage = await runPlanning(originalInputText, {
+            ...runtimeOptions,
             originalUserInput: originalInputText,
             hasExistingUserMessage: false,
         });
@@ -120408,17 +121725,25 @@ async function materializeSummaryVectorMirrorHead_ACU(head, live) {
     }
     const rows = [];
     const chunks = [];
+    const incompleteRowIds = new Set();
+    const contentMismatchedRowIds = new Set();
     let fallbackOrder = 0;
     for (const [rowId, refs] of head.head) {
         const liveRow = live?.byRowId.get(rowId);
         const chunkIds = [];
+        const rowChunks = [];
+        const liveSourceHash = normalizeText_ACU(liveRow?.vectorSourceHash);
+        let contentMismatch = false;
         refs.forEach((ref, sequence) => {
             const packed = packByHash.get(ref.packHash)?.chunks?.[ref.chunkIndex];
             if (!packed)
                 return;
+            if (liveSourceHash && normalizeText_ACU(packed.textHash) !== liveSourceHash) {
+                contentMismatch = true;
+            }
             const chunkId = `${rowId}:${sequence}`;
             chunkIds.push(chunkId);
-            chunks.push({
+            rowChunks.push({
                 chunkId,
                 rowKey: liveRow?.rowKey || rowId,
                 rowOrder: liveRow?.rowOrder ?? fallbackOrder,
@@ -120428,8 +121753,15 @@ async function materializeSummaryVectorMirrorHead_ACU(head, live) {
                 textHash: packed.textHash,
             });
         });
+        if (refs.length === 0 || chunkIds.length !== refs.length)
+            incompleteRowIds.add(rowId);
         if (chunkIds.length === 0)
             continue;
+        if (contentMismatch) {
+            contentMismatchedRowIds.add(rowId);
+            continue;
+        }
+        chunks.push(...rowChunks);
         rows.push({
             rowKey: liveRow?.rowKey || rowId,
             rowId,
@@ -120444,7 +121776,7 @@ async function materializeSummaryVectorMirrorHead_ACU(head, live) {
         });
         fallbackOrder += 1;
     }
-    return { rows, chunks };
+    return { rows, chunks, incompleteRowIds, contentMismatchedRowIds };
 }
 function isSingleFileSnapshotManifest_ACU(manifest) {
     if (!manifest)
@@ -120762,7 +122094,10 @@ async function processSummaryVectorIndexBeforeGeneration_ACU(options = {}) {
         return { success: false, skipped: true, reason: `mirror_${head.status}` };
     }
     const materialized = await materializeSummaryVectorMirrorHead_ACU(head, liveRows);
-    if (head.head.size > 0 && materialized.rows.length === 0) {
+    if (head.head.size > 0
+        && (materialized.rows.length === 0
+            || materialized.incompleteRowIds.size > 0
+            || materialized.contentMismatchedRowIds.size > 0)) {
         const repaired = await rebuildSummaryVectorMirror_ACU({ reason: 'rebuild_repair' });
         if (repaired.success && !repaired.skipped) {
             head = await resolveHead();
@@ -120770,8 +122105,19 @@ async function processSummaryVectorIndexBeforeGeneration_ACU(options = {}) {
                 const retried = await materializeSummaryVectorMirrorHead_ACU(head, liveRows);
                 materialized.rows = retried.rows;
                 materialized.chunks = retried.chunks;
+                materialized.incompleteRowIds = retried.incompleteRowIds;
+                materialized.contentMismatchedRowIds = retried.contentMismatchedRowIds;
             }
         }
+    }
+    if (materialized.incompleteRowIds.size > 0) {
+        logWarn_ACU('[交火模式纪要索引] pack/chunk 引用仍不完整，拒绝使用残缺索引:', {
+            rowIds: [...materialized.incompleteRowIds],
+        });
+        return { success: false, skipped: true, reason: 'mirror_pack_incomplete' };
+    }
+    if (materialized.contentMismatchedRowIds.size > 0) {
+        return { success: false, skipped: true, reason: 'mirror_content_hash_mismatch' };
     }
     let rows = materialized.rows;
     let chunks = materialized.chunks;
@@ -122691,40 +124037,66 @@ function normalizeContinuationMaxAutomaticStages_ACU(value, fallback = 6) {
     return normalizeOptionalInteger_ACU(value, fallback, 1, 'maxAutomaticStages');
 }
 
+function messageFingerprintText_ACU(message) {
+    const record = message && typeof message === 'object' && !Array.isArray(message) ? message : {};
+    const payload = JSON.stringify({
+        is_user: record.is_user === true,
+        is_system: record.is_system === true,
+        role: String(record.role ?? ''),
+        name: String(record.name ?? ''),
+        mes: String(record.mes ?? ''),
+    });
+    let hash = 0x811c9dc5;
+    for (let index = 0; index < payload.length; index += 1) {
+        hash ^= payload.charCodeAt(index);
+        hash = Math.imul(hash, 0x01000193);
+    }
+    return `mf-${(hash >>> 0).toString(16).padStart(8, '0')}`;
+}
+function getStableMessageIdentity_ACU(message) {
+    const record = message && typeof message === 'object' && !Array.isArray(message) ? message : {};
+    const rawId = record.message_id ?? record.id;
+    const messageId = (typeof rawId === 'string' || (typeof rawId === 'number' && Number.isFinite(rawId))) ? rawId : undefined;
+    return { ...(messageId === undefined ? {} : { messageId }), messageFingerprint: messageFingerprintText_ACU(record) };
+}
+function completionSurvives_ACU(entry, chat, chatLength, used) {
+    const hasDurableIdentity = entry.messageId !== undefined || entry.messageFingerprint !== undefined;
+    if (!chat)
+        return !hasDurableIdentity && typeof entry.messageIndex === 'number' ? entry.messageIndex < chatLength : !hasDurableIdentity;
+    if (!hasDurableIdentity)
+        return typeof entry.messageIndex === 'number' && entry.messageIndex < chat.length;
+    for (let index = 0; index < chat.length; index += 1) {
+        if (used.has(index))
+            continue;
+        const identity = getStableMessageIdentity_ACU(chat[index]);
+        if (entry.messageId !== undefined && identity.messageId !== entry.messageId)
+            continue;
+        if (entry.messageFingerprint !== undefined && identity.messageFingerprint !== entry.messageFingerprint)
+            continue;
+        used.add(index);
+        return true;
+    }
+    return false;
+}
 /**
- * 按聊天实际长度重算阶段硬游标。
- *
- * 每轮确认时把正文楼层号写进 timeline.turn_completed.messageIndex。退楼层后那些
- * 下标不再落在 chat 内，对应轮次视为未完成——游标跟着对话走，而不是停在首楼里
- * 回退前的阶段。没有任何带 messageIndex 的完成记录时保持原游标，避免旧信封被误回退。
- *
- * @param task 当前任务
- * @param chatLength 当前聊天数组长度
- * @returns 游标已对齐的任务；无需改动时返回原对象
+ * 按聊天实际楼层重算阶段硬游标。
+ * 新写入的完成记录带稳定 message identity；旧记录没有 identity 时才回退到旧下标兼容。
  */
-function reconcileTaskCursorFromChat_ACU(task, chatLength) {
-    if (!Number.isInteger(chatLength) || chatLength < 0)
+function reconcileTaskCursorFromChat_ACU(task, chatLength, chat) {
+    const effectiveLength = Array.isArray(chat) ? chat.length : chatLength;
+    if (!Number.isInteger(effectiveLength) || effectiveLength < 0)
         return task;
     const completions = task.timeline.filter(entry => entry.kind === 'turn_completed' && entry.stageId);
     const survivingByStage = new Map();
     const hasAnchorByStage = new Map();
     for (const entry of completions) {
         const stageId = entry.stageId;
-        if (typeof entry.messageIndex === 'number')
+        if (typeof entry.messageIndex === 'number' || entry.messageId !== undefined || entry.messageFingerprint !== undefined)
             hasAnchorByStage.set(stageId, true);
         const surviving = survivingByStage.get(stageId) ?? 0;
-        if (typeof entry.messageIndex === 'number') {
-            if (entry.messageIndex < chatLength)
-                survivingByStage.set(stageId, surviving + 1);
-            else
-                survivingByStage.set(stageId, surviving);
-        }
-        else {
-            survivingByStage.set(stageId, surviving + 1);
-        }
+        survivingByStage.set(stageId, surviving + (completionSurvives_ACU(entry, chat, effectiveLength, new Set()) ? 1 : 0));
     }
-    // 从前往后扫：一旦某阶段因楼层消失而未完成，其后没有任何存活完成的阶段应废弃，
-    // 否则主 Agent 会把它们当成「下一阶段已在」再排一份新大纲。
+    // 从前往后扫：一旦某阶段因楼层消失而未完成，其后没有任何存活完成的阶段应废弃。
     let firstOpenIndex = -1;
     let changed = false;
     const stages = task.stages.map((stage, index) => {
@@ -122732,25 +124104,19 @@ function reconcileTaskCursorFromChat_ACU(task, chatLength) {
         const totalTurns = revision?.outline.totalTurns ?? 0;
         const hasAnchor = hasAnchorByStage.get(stage.stageId) === true;
         if (!hasAnchor) {
-            if (stage.status !== 'completed' && stage.status !== 'abandoned' && stage.status !== 'failed' && firstOpenIndex < 0) {
+            if (stage.status !== 'completed' && stage.status !== 'abandoned' && stage.status !== 'failed' && firstOpenIndex < 0)
                 firstOpenIndex = index;
-            }
             return stage;
         }
         const recorded = completions.filter(entry => entry.stageId === stage.stageId).length;
+        const used = new Set();
         let surviving = 0;
         for (const entry of completions) {
             if (entry.stageId !== stage.stageId)
                 continue;
-            if (typeof entry.messageIndex === 'number') {
-                if (entry.messageIndex < chatLength)
-                    surviving += 1;
-                else
-                    break;
-            }
-            else {
-                surviving += 1;
-            }
+            if (!completionSurvives_ACU(entry, chat, effectiveLength, used))
+                break;
+            surviving += 1;
         }
         surviving = Math.min(surviving, recorded, totalTurns);
         const cursor = cursorFromCompletedTurns_ACU(revision, surviving);
@@ -122765,12 +124131,8 @@ function reconcileTaskCursorFromChat_ACU(task, chatLength) {
         }
         if (!fullyDone && firstOpenIndex < 0)
             firstOpenIndex = index;
-        if (stage.completedTurns === surviving
-            && stage.activeNodeIndex === cursor.nodeIndex
-            && stage.activeTurnIndex === cursor.turnIndex
-            && stage.status === nextStatus) {
+        if (stage.completedTurns === surviving && stage.activeNodeIndex === cursor.nodeIndex && stage.activeTurnIndex === cursor.turnIndex && stage.status === nextStatus)
             return stage;
-        }
         changed = true;
         return { ...stage, completedTurns: surviving, activeNodeIndex: cursor.nodeIndex, activeTurnIndex: cursor.turnIndex, status: nextStatus };
     });
@@ -122795,14 +124157,12 @@ function reconcileTaskCursorFromChat_ACU(task, chatLength) {
         return task;
     return { ...task, activeStageId, stages };
 }
-/**
- * 把信封里的任务游标按聊天长度对齐。任务为空时原样返回。
- */
-function reconcileContinuationEnvelopeCursor_ACU(envelope, chatLength) {
+/** 把信封里的任务游标按聊天楼层对齐。 */
+function reconcileContinuationEnvelopeCursor_ACU(envelope, chatLength, chat) {
     const task = envelope.activeTask;
     if (!task)
         return envelope;
-    const next = reconcileTaskCursorFromChat_ACU(task, chatLength);
+    const next = reconcileTaskCursorFromChat_ACU(task, chatLength, chat);
     return next === task ? envelope : { ...envelope, activeTask: next };
 }
 /**
@@ -124307,7 +125667,7 @@ function validateTimeline_ACU(raw) {
         if (!isRecord_ACU$6(entry))
             fail_ACU$2('CONTINUATION_ENVELOPE_INVALID', `时间线条目必须是对象：${path}`);
         for (const key of Object.keys(entry))
-            if (!['id', 'at', 'kind', 'stageId', 'revision', 'nodeId', 'turnId', 'attemptId', 'messageIndex', 'errorCode'].includes(key))
+            if (!['id', 'at', 'kind', 'stageId', 'revision', 'nodeId', 'turnId', 'attemptId', 'messageIndex', 'messageId', 'messageFingerprint', 'errorCode'].includes(key))
                 fail_ACU$2('CONTINUATION_ENVELOPE_INVALID', `时间线存在未知字段：${path}.${key}`);
         const result = { id: requireString_ACU(entry.id, `${path}.id`), at: requireInteger_ACU(entry.at, `${path}.at`, 0), kind: requireEnum_ACU(entry.kind, TIMELINE_KINDS_ACU, `${path}.kind`) };
         for (const key of ['stageId', 'nodeId', 'turnId', 'attemptId'])
@@ -124316,6 +125676,13 @@ function validateTimeline_ACU(raw) {
         for (const key of ['revision', 'messageIndex'])
             if (key in entry)
                 result[key] = requireInteger_ACU(entry[key], `${path}.${key}`, 0);
+        if ('messageId' in entry) {
+            if (typeof entry.messageId !== 'string' && typeof entry.messageId !== 'number')
+                fail_ACU$2('CONTINUATION_ENVELOPE_INVALID', `messageId 必须是字符串或数字：${path}.messageId`);
+            result.messageId = entry.messageId;
+        }
+        if ('messageFingerprint' in entry)
+            result.messageFingerprint = requireString_ACU(entry.messageFingerprint, `${path}.messageFingerprint`);
         if ('errorCode' in entry)
             result.errorCode = requireString_ACU(entry.errorCode, `${path}.errorCode`);
         return result;
@@ -124326,13 +125693,13 @@ function validatePendingHostTurn_ACU(raw) {
         return null;
     if (!isRecord_ACU$6(raw))
         fail_ACU$2('CONTINUATION_ENVELOPE_INVALID', 'pendingHostTurn 必须是对象或 null');
-    requireKeys_ACU(raw, ['identity', 'capture', 'retryCount', 'status'], 'activeTask.pendingHostTurn');
+    requireKeys_ACU(raw, ['identity', 'capture', 'retryCount', 'status'], 'activeTask.pendingHostTurn', ['evaluationSettings']);
     if (!isRecord_ACU$6(raw.identity))
         fail_ACU$2('CONTINUATION_ENVELOPE_INVALID', 'pendingHostTurn.identity 必须是对象');
     requireKeys_ACU(raw.identity, ['chatIdentity', 'taskId', 'stageId', 'revision', 'nodeId', 'turnId', 'attemptId'], 'activeTask.pendingHostTurn.identity');
     if (!isRecord_ACU$6(raw.capture))
         fail_ACU$2('CONTINUATION_ENVELOPE_INVALID', 'pendingHostTurn.capture 必须是对象');
-    requireKeys_ACU(raw.capture, ['capturedAt', 'capturedChatLength', 'capturedAiFloorCount', 'generationSeq'], 'activeTask.pendingHostTurn.capture');
+    requireKeys_ACU(raw.capture, ['capturedAt', 'capturedChatLength', 'capturedAiFloorCount', 'generationSeq'], 'activeTask.pendingHostTurn.capture', ['instructionIndex', 'instructionFingerprint', 'boundaryFingerprint']);
     return {
         identity: {
             chatIdentity: requireString_ACU(raw.identity.chatIdentity, 'pendingHostTurn.identity.chatIdentity'),
@@ -124348,9 +125715,25 @@ function validatePendingHostTurn_ACU(raw) {
             capturedChatLength: requireInteger_ACU(raw.capture.capturedChatLength, 'pendingHostTurn.capture.capturedChatLength', 0),
             capturedAiFloorCount: requireInteger_ACU(raw.capture.capturedAiFloorCount, 'pendingHostTurn.capture.capturedAiFloorCount', 0),
             generationSeq: raw.capture.generationSeq === null ? null : requireInteger_ACU(raw.capture.generationSeq, 'pendingHostTurn.capture.generationSeq', 1),
+            ...(raw.capture.instructionIndex === undefined ? {} : { instructionIndex: requireInteger_ACU(raw.capture.instructionIndex, 'pendingHostTurn.capture.instructionIndex', 0) }),
+            ...(raw.capture.instructionFingerprint === undefined ? {} : { instructionFingerprint: requireString_ACU(raw.capture.instructionFingerprint, 'pendingHostTurn.capture.instructionFingerprint') }),
+            ...(raw.capture.boundaryFingerprint === undefined ? {} : { boundaryFingerprint: requireString_ACU(raw.capture.boundaryFingerprint, 'pendingHostTurn.capture.boundaryFingerprint') }),
         },
         retryCount: requireInteger_ACU(raw.retryCount, 'pendingHostTurn.retryCount', 0),
         status: requireEnum_ACU(raw.status, ['awaiting_generation', 'retry_ready', 'exhausted'], 'pendingHostTurn.status'),
+        ...(raw.evaluationSettings === undefined ? {} : (() => {
+            if (!isRecord_ACU$6(raw.evaluationSettings))
+                fail_ACU$2('CONTINUATION_ENVELOPE_INVALID', 'pendingHostTurn.evaluationSettings 必须是对象');
+            requireKeys_ACU(raw.evaluationSettings, ['loopTags', 'retryDelaySeconds', 'minGenerationTokens', 'generationRetryLimit'], 'pendingHostTurn.evaluationSettings');
+            return {
+                evaluationSettings: {
+                    loopTags: requireString_ACU(raw.evaluationSettings.loopTags, 'pendingHostTurn.evaluationSettings.loopTags'),
+                    retryDelaySeconds: requireInteger_ACU(raw.evaluationSettings.retryDelaySeconds, 'pendingHostTurn.evaluationSettings.retryDelaySeconds', 0),
+                    minGenerationTokens: requireInteger_ACU(raw.evaluationSettings.minGenerationTokens, 'pendingHostTurn.evaluationSettings.minGenerationTokens', 0),
+                    generationRetryLimit: requireInteger_ACU(raw.evaluationSettings.generationRetryLimit, 'pendingHostTurn.evaluationSettings.generationRetryLimit', 0),
+                },
+            };
+        })()),
     };
 }
 function validateTask_ACU(raw, settings) {
@@ -124505,7 +125888,7 @@ class FirstFloorContinuationStore_ACU {
     read() {
         const context = captureChatContext_ACU();
         const envelope = readRawEnvelope_ACU(context.firstMessage);
-        return envelope === null ? null : reconcileContinuationEnvelopeCursor_ACU(derivePausedContinuationEnvelopeAfterReload_ACU(envelope), Array.isArray(context.chat) ? context.chat.length : 0);
+        return envelope === null ? null : reconcileContinuationEnvelopeCursor_ACU(derivePausedContinuationEnvelopeAfterReload_ACU(envelope), Array.isArray(context.chat) ? context.chat.length : 0, Array.isArray(context.chat) ? context.chat : undefined);
     }
     /** Reads the validated persisted snapshot without applying reload recovery. Runtime state machines must use this. */
     readPersisted() {
@@ -124636,29 +126019,82 @@ function stripLegacyContinuationLoopFields_ACU(source) {
     return stripLegacyLoopPromptFields_ACU(source);
 }
 
+/** Hash the pre-send floor shape/content, excluding plugin envelope fields. */
+function hostBoundaryFingerprint_ACU(chat) {
+    const payload = JSON.stringify(chat.map(message => {
+        const record = message && typeof message === 'object' && !Array.isArray(message) ? message : {};
+        return {
+            messageId: record.message_id ?? null,
+            isUser: record.is_user === true,
+            isSystem: record.is_system === true,
+            role: String(record.role ?? ''),
+            name: String(record.name ?? ''),
+            mes: String(record.mes ?? ''),
+            swipeId: String(record.swipe_id ?? ''),
+        };
+    }));
+    let hash = 0x811c9dc5;
+    for (let index = 0; index < payload.length; index += 1) {
+        hash ^= payload.charCodeAt(index);
+        hash = Math.imul(hash, 0x01000193);
+    }
+    return `bf-${(hash >>> 0).toString(16).padStart(8, '0')}`;
+}
+/** Stable, non-content identity for the instruction floor used by host retry. */
+function hostMessageFingerprint_ACU(message) {
+    const text = JSON.stringify({
+        is_user: message.is_user === true,
+        mes: String(message.mes ?? ''),
+        name: String(message.name ?? ''),
+    });
+    let hash = 0x811c9dc5;
+    for (let index = 0; index < text.length; index += 1) {
+        hash ^= text.charCodeAt(index);
+        hash = Math.imul(hash, 0x01000193);
+    }
+    return `fp-${(hash >>> 0).toString(16).padStart(8, '0')}`;
+}
+function hasInstructionAnchor_ACU(chat, capture) {
+    if (!Number.isInteger(capture.instructionIndex) || typeof capture.instructionFingerprint !== 'string')
+        return false;
+    const index = capture.instructionIndex;
+    if (index < 0 || index >= chat.length)
+        return false;
+    const message = chat[index];
+    if (!message || typeof message !== 'object' || Array.isArray(message))
+        return false;
+    const record = message;
+    return record.is_user === true && hostMessageFingerprint_ACU(record) === capture.instructionFingerprint;
+}
 /**
  * 依据发送时捕获的快照判断「让宿主重试当前轮」是否仍然安全，以及该用哪条原语。
  *
- * 捕获快照里的 AI 楼数是本轮正文产生之前的基数（regenerate 重试时已预减掉将被删的那楼），
- * 因此只看 AI 楼数与末楼类型就能判定楼层是否还是发送时的形状：
- * - AI 楼数比基数多一：本轮正文已存在于末楼，走 regenerate（宿主会删掉它再生成）；
- * - AI 楼数等于基数且末楼是用户楼：正文还没产出（生成报错/被中止后已被删），对承载指令的用户楼 generate；
- * - 其余形状（用户手动删掉了指令楼、连带删了更早的正文……）：重试原语找不到正确的落点，
- *   regenerate 会误删上一轮正文，必须放弃重试、回到 Agent 重新规划。
- * @param chat 当前聊天数组
- * @param capture 等待轮记录的捕获快照
- * @returns 可安全执行的重试模式；楼层已不匹配时为 null
+ * AI 楼数只能说明“可能多了一楼”，不能说明这楼属于本轮。必须同时锁定发送时的
+ * 指令用户楼和尾部相对形状；旧快照没有锚点时直接 fail-closed，避免删错楼或改投新用户消息。
  */
 function resolveHostRetryMode_ACU(chat, capture) {
-    if (!Array.isArray(chat) || !chat.length)
+    if (!Array.isArray(chat) || !chat.length || !hasInstructionAnchor_ACU(chat, capture))
         return null;
     const aiCount = countAiModelOutputFloors_ACU(chat);
     const last = chat[chat.length - 1];
-    if (aiCount === capture.capturedAiFloorCount + 1 && isAiModelOutputFloor_ACU(last))
+    const instructionIndex = capture.instructionIndex;
+    if (aiCount === capture.capturedAiFloorCount + 1
+        && isAiModelOutputFloor_ACU(last)
+        && chat.length === instructionIndex + 2)
         return 'regenerate';
-    if (aiCount === capture.capturedAiFloorCount && !isAiModelOutputFloor_ACU(last))
+    if (aiCount === capture.capturedAiFloorCount
+        && !isAiModelOutputFloor_ACU(last)
+        && chat.length === instructionIndex + 1)
         return 'generate';
     return null;
+}
+/** The pre-send boundary must still be unchanged before the adapter is called. */
+function isHostSendBoundaryIntact_ACU(chat, capture) {
+    if (!Array.isArray(chat) || chat.length !== capture.capturedChatLength)
+        return false;
+    if (capture.boundaryFingerprint !== undefined && hostBoundaryFingerprint_ACU(chat) !== capture.boundaryFingerprint)
+        return false;
+    return countAiModelOutputFloors_ACU(chat) === capture.capturedAiFloorCount;
 }
 
 /**
@@ -126083,8 +127519,15 @@ function readActiveAgentConversationCompactionMark_ACU(chat) {
             continue;
         const raw = message[AGENT_CONVERSATION_FIELD_ACU];
         const record = validateAgentConversationFloorRecord_ACU(raw);
-        if (record?.compaction && (!active || record.compaction.compactedThroughId > active.compactedThroughId))
-            active = record.compaction;
+        if (record) {
+            if (record.compaction && (!active || record.compaction.compactedThroughId > active.compactedThroughId))
+                active = record.compaction;
+            continue;
+        }
+        // v1 全量快照是新的权威基线：它替换此前的段，也必须让旧段的压缩标记失效，
+        // 否则会把已被基线覆盖的消息再次投影成 handoff。
+        if (validateAgentConversationSnapshot_ACU(raw))
+            active = null;
     }
     if (!active)
         return null;
@@ -126199,6 +127642,8 @@ function readAgentConversationTimeline_ACU(chat, options) {
         if (raw.schemaVersion === AGENT_CONVERSATION_SCHEMA_VERSION_ACU && Array.isArray(raw.messages)) {
             segments.length = 0;
             segments.push(raw.messages);
+            // 与模型投影一致：v1 基线替换旧段时，旧段的 compaction marks 一并失效。
+            marksById.clear();
         }
     }
     // 先扫描段头保留 v1 基线/压缩标记语义，再从尾部只物化窗口所需的合法消息。
@@ -126438,6 +127883,41 @@ function readText_ACU$1(value) {
 }
 function readIndex_ACU(value) {
     return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : -1;
+}
+/**
+ * 计算结算水位之前聊天前缀的短指纹。优先使用稳定 message_id；没有 ID 时仍把
+ * 楼层位置、角色、正文纳入哈希，因此删除或替换水位之前的楼层必然改变指纹。
+ */
+function chatPrefixFingerprint_ACU(messages, throughIndex) {
+    const end = Math.min(Math.max(throughIndex, -1), messages.length - 1);
+    let hash = 2166136261;
+    const add = (text) => {
+        for (let index = 0; index < text.length; index += 1) {
+            hash ^= text.charCodeAt(index);
+            hash = Math.imul(hash, 16777619);
+        }
+        hash ^= 0x1f;
+        hash = Math.imul(hash, 16777619);
+    };
+    add(`count:${end + 1}`);
+    for (let index = 0; index <= end; index += 1) {
+        const message = isRecord_ACU$4(messages[index]) ? messages[index] : {};
+        const stableId = message.message_id ?? message.id ?? '';
+        add(`${index}:${String(stableId)}:${String(message.role ?? '')}:${message.is_user ? 1 : 0}:${message.is_system ? 1 : 0}:${readText_ACU$1(message.mes)}`);
+    }
+    return `${end + 1}:${(hash >>> 0).toString(16).padStart(8, '0')}`;
+}
+/** 在水位合法推进后刷新前缀指纹；调用方必须在同一轮确认聊天未被替换。 */
+function refreshAgentModuleSnapshotChatPrefix_ACU(snapshot, chat) {
+    return {
+        ...snapshot,
+        settledPrefixFingerprint: chatPrefixFingerprint_ACU(chat, snapshot.settledThroughIndex),
+    };
+}
+function isChatPrefixCompatible_ACU(snapshot, messages) {
+    if (!snapshot.settledPrefixFingerprint)
+        return true;
+    return snapshot.settledPrefixFingerprint === chatPrefixFingerprint_ACU(messages, snapshot.settledThroughIndex);
 }
 function readEnum_ACU(value, allowed, fallback) {
     return typeof value === 'string' && allowed.includes(value) ? value : fallback;
@@ -126694,8 +128174,10 @@ function validateAgentModuleSnapshot_ACU(raw) {
     const settledThroughIndex = readIndex_ACU(raw.settledThroughIndex);
     if (settledThroughIndex < 0)
         return null;
-    // storyArc 晚于前三个模块加入，存量楼层的快照里没有这个键。写成必需会让全部历史快照
-    // 被判非法、资料静默回退成空，因此这里按「有则校验、无则空数组」处理。
+    // storyArc 晚于前三个模块加入，存量楼层的快照里没有这个键。缺字段兼容为空，
+    // 但字段一旦出现就必须是数组；否则“损坏总纲”会被静默当成空总纲并推进写入。
+    if (Object.prototype.hasOwnProperty.call(raw, 'storyArc') && !Array.isArray(raw.storyArc))
+        return null;
     const storyArc = Array.isArray(raw.storyArc) ? raw.storyArc : [];
     const validatedStoryArc = storyArc.map(validateStoryArcEntry_ACU);
     // 总纲条目不能像普通搜索命中一样被悄悄过滤；任一结构损坏都应让读取端回退上一份完整快照。
@@ -126715,6 +128197,9 @@ function validateAgentModuleSnapshot_ACU(raw) {
     return {
         schemaVersion: AGENT_MODULE_SCHEMA_VERSION_ACU,
         settledThroughIndex,
+        ...(typeof raw.settledPrefixFingerprint === 'string' && raw.settledPrefixFingerprint
+            ? { settledPrefixFingerprint: raw.settledPrefixFingerprint }
+            : {}),
         updatedAt: typeof raw.updatedAt === 'number' && raw.updatedAt >= 0 ? raw.updatedAt : 0,
         revisions: {
             hooks: Math.max(0, readIndex_ACU(raw.revisions.hooks)),
@@ -126762,6 +128247,9 @@ function salvageAgentModuleSnapshot_ACU(raw) {
     const snapshot = {
         schemaVersion: AGENT_MODULE_SCHEMA_VERSION_ACU,
         settledThroughIndex: Math.max(0, settledThroughIndex),
+        ...(typeof raw.settledPrefixFingerprint === 'string' && raw.settledPrefixFingerprint
+            ? { settledPrefixFingerprint: raw.settledPrefixFingerprint }
+            : {}),
         updatedAt: typeof raw.updatedAt === 'number' && raw.updatedAt >= 0 ? raw.updatedAt : 0,
         revisions: {
             hooks: Math.max(0, readIndex_ACU(revisions.hooks)),
@@ -126800,6 +128288,7 @@ function readAgentModuleSnapshot_ACU(chat) {
     snapshot.settledThroughIndex > highestIndex ? { ...snapshot, settledThroughIndex: highestIndex } : snapshot);
     const diagnostics = { candidates: [], adoptedIndex: null, salvaged: false };
     let firstBroken = null;
+    let incompatibleSnapshotSeen = false;
     for (let index = highestIndex; index >= 0; index -= 1) {
         const message = messages[index];
         if (!message || typeof message !== 'object')
@@ -126809,17 +128298,25 @@ function readAgentModuleSnapshot_ACU(chat) {
         const raw = message[AGENT_MODULE_FIELD_ACU];
         const snapshot = validateAgentModuleSnapshot_ACU(raw);
         if (snapshot) {
+            if (!isChatPrefixCompatible_ACU(snapshot, messages)) {
+                incompatibleSnapshotSeen = true;
+                diagnostics.candidates.push({ index, valid: false, problems: ['结算水位之前的聊天前缀已变化（删楼、替换或重排），拒绝复用此快照'] });
+                continue;
+            }
             diagnostics.candidates.push({ index, valid: true, problems: [] });
             diagnostics.adoptedIndex = index;
             lastReadDiagnostics_ACU = diagnostics;
             return clamp(snapshot);
         }
         const salvaged = salvageAgentModuleSnapshot_ACU(raw);
+        const salvagedCompatible = !salvaged || isChatPrefixCompatible_ACU(salvaged.snapshot, messages);
         diagnostics.candidates.push({ index, valid: false, problems: salvaged?.problems ?? ['快照不是对象'] });
-        if (!firstBroken)
+        if (!salvagedCompatible)
+            incompatibleSnapshotSeen = true;
+        if (!firstBroken && !incompatibleSnapshotSeen)
             firstBroken = { index, raw };
     }
-    if (firstBroken) {
+    if (firstBroken && !incompatibleSnapshotSeen) {
         const salvaged = salvageAgentModuleSnapshot_ACU(firstBroken.raw);
         if (salvaged) {
             diagnostics.adoptedIndex = firstBroken.index;
@@ -126851,6 +128348,9 @@ async function writeAgentModuleSnapshot_ACU(chat, targetIndex, snapshot) {
     const hadPrevious = Object.prototype.hasOwnProperty.call(container, AGENT_MODULE_FIELD_ACU);
     const previous = container[AGENT_MODULE_FIELD_ACU];
     const settledThroughIndex = Math.min(Math.max(snapshot.settledThroughIndex, 0), targetIndex);
+    if (snapshot.settledPrefixFingerprint && snapshot.settledPrefixFingerprint !== chatPrefixFingerprint_ACU(chat, settledThroughIndex)) {
+        throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_AGENT_SNAPSHOT_INVALID', 'agent_persist', '资料快照引用的聊天前缀已变化，拒绝写入以避免删楼后按旧下标结算', false, { targetIndex, settledThroughIndex }));
+    }
     // 乐观锁复核：在飞 turn 的快照基准是它开始时读到的楼层修订号；期间用户手动保存会把六类
     // 修订号整体 +1（replaceAgentModuleSnapshotByUser_ACU），旧基准整份写入会静默冲掉用户内容。
     // 落盘前重读当前生效快照，任一类「楼层比写入快照新」即放弃落盘并记日志；正常路径零影响。
@@ -126870,10 +128370,15 @@ async function writeAgentModuleSnapshot_ACU(chat, targetIndex, snapshot) {
     }
     if (revisionDrifts.length > 0) {
         console.warn(`[SP·数据库][续写资料] 检测到楼层快照修订号已被外部更新（疑似用户手动保存），放弃本次写入防止整份覆盖：${revisionDrifts.join('；')}（目标楼层 ${targetIndex}）`);
-        return;
+        throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_AGENT_WRITE_REJECTED', 'agent_persist', '资料快照修订号已漂移，写入被拒绝以停止当前结算', false, { targetIndex, revisionDrifts }));
     }
     try {
-        container[AGENT_MODULE_FIELD_ACU] = { ...snapshot, settledThroughIndex, updatedAt: Date.now() };
+        container[AGENT_MODULE_FIELD_ACU] = {
+            ...snapshot,
+            settledThroughIndex,
+            settledPrefixFingerprint: snapshot.settledPrefixFingerprint ?? chatPrefixFingerprint_ACU(chat, settledThroughIndex),
+            updatedAt: Date.now(),
+        };
         await saveChatToHostStrict_ACU();
     }
     catch (error) {
@@ -127551,11 +129056,20 @@ const epochsByChat_ACU = new Map();
  * 用户点停止或中途插话时要立刻见效，就必须真的 abort 掉在飞的请求。
  */
 const abortControllersByChat_ACU = new Map();
+const deadlineTimersByChat_ACU = new Map();
 function fail_ACU$1(code, message) {
     throw new ContinuationValidationError_ACU(createContinuationError_ACU(code, 'persist', message, false));
 }
 function cloneOutline_ACU(outline) {
     return { ...outline, nodes: outline.nodes.map(node => ({ ...node, turns: node.turns.map(turn => ({ ...turn })) })) };
+}
+function pendingEvaluationSettings_ACU(settings) {
+    return {
+        loopTags: settings.loopTags,
+        retryDelaySeconds: settings.retryDelaySeconds,
+        minGenerationTokens: settings.minGenerationTokens,
+        generationRetryLimit: settings.generationRetryLimit,
+    };
 }
 function rejectOutlineEdit_ACU(message, details) {
     throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_AGENT_WRITE_REJECTED', 'agent_loop', message, false, details));
@@ -127703,7 +129217,7 @@ function identityMatchesCurrentTurn_ACU(task, identity) {
         && pending.identity.revision === identity.revision && pending.identity.nodeId === identity.nodeId
         && pending.identity.turnId === identity.turnId && pending.identity.attemptId === identity.attemptId);
 }
-function advanceConfirmedTurn_ACU(task, now, timeline, messageIndex) {
+function advanceConfirmedTurn_ACU(task, now, timeline, messageIndex, messageIdentity) {
     const stage = getActiveStage_ACU(task);
     const revision = getActiveRevision_ACU(stage);
     const node = revision.outline.nodes[stage.activeNodeIndex];
@@ -127717,7 +129231,15 @@ function advanceConfirmedTurn_ACU(task, now, timeline, messageIndex) {
         : stage.activeTurnIndex + 1 < node.turns.length
             ? { ...stage, activeTurnIndex: stage.activeTurnIndex + 1, completedTurns }
             : { ...stage, activeNodeIndex: stage.activeNodeIndex + 1, activeTurnIndex: 0, completedTurns };
-    const entries = [...task.timeline, timeline('turn_completed', now, { stageId: stage.stageId, revision: stage.activeRevision, nodeId: node.id, turnId: turn.id, ...(messageIndex !== undefined ? { messageIndex } : {}) })];
+    const entries = [...task.timeline, timeline('turn_completed', now, {
+            stageId: stage.stageId,
+            revision: stage.activeRevision,
+            nodeId: node.id,
+            turnId: turn.id,
+            ...(messageIndex !== undefined ? { messageIndex } : {}),
+            ...(messageIdentity?.messageId !== undefined ? { messageId: messageIdentity.messageId } : {}),
+            ...(messageIdentity?.messageFingerprint !== undefined ? { messageFingerprint: messageIdentity.messageFingerprint } : {}),
+        })];
     if (isFinalTurn)
         entries.push(timeline('stage_completed', now, { stageId: stage.stageId, revision: stage.activeRevision }));
     return { ...task, updatedAt: now, stages: task.stages.map(item => item.stageId === stage.stageId ? nextStage : item), timeline: entries };
@@ -127725,6 +129247,13 @@ function advanceConfirmedTurn_ACU(task, now, timeline, messageIndex) {
 class ContinuationOrchestrator_ACU {
     constructor(dependencies) {
         this.dependencies = dependencies;
+    }
+    readEnvelopeWithReconciledCursor_ACU() {
+        const envelope = this.requireEnvelope_ACU(this.dependencies.store.readPersisted());
+        const task = this.requireTask_ACU(envelope);
+        const chat = getChatArray_ACU();
+        const nextTask = reconcileTaskCursorFromChat_ACU(task, Array.isArray(chat) ? chat.length : 0, Array.isArray(chat) ? chat : undefined);
+        return nextTask === task ? envelope : { ...envelope, activeTask: nextTask };
     }
     /**
      * 创建任务。不再预先规划大纲：大纲由主 Agent 在循环内按需派工大纲子代理创建，
@@ -127757,7 +129286,8 @@ class ContinuationOrchestrator_ACU {
             let result = null;
             await this.dependencies.store.updatePersistedAtomically(current => {
                 const envelope = this.requireEnvelope_ACU(current);
-                const task = this.requireTask_ACU(envelope);
+                const chat = getChatArray_ACU();
+                const task = reconcileTaskCursorFromChat_ACU(this.requireTask_ACU(envelope), Array.isArray(chat) ? chat.length : 0, Array.isArray(chat) ? chat : undefined);
                 const stage = getActiveStage_ACU(task);
                 const revision = getActiveRevision_ACU(stage);
                 if (task.status !== 'awaiting_outline_review' || stage.status !== 'awaiting_review' || revision.frozen) {
@@ -127804,8 +129334,9 @@ class ContinuationOrchestrator_ACU {
             let started = null;
             await this.dependencies.store.updatePersistedAtomically(current => {
                 const envelope = this.requireEnvelope_ACU(current);
-                const chatLength = Array.isArray(getChatArray_ACU()) ? getChatArray_ACU().length : 0;
-                const task = reconcileTaskCursorFromChat_ACU(this.requireTask_ACU(envelope), chatLength);
+                const chat = getChatArray_ACU();
+                const chatLength = Array.isArray(chat) ? chat.length : 0;
+                const task = reconcileTaskCursorFromChat_ACU(this.requireTask_ACU(envelope), chatLength, Array.isArray(chat) ? chat : undefined);
                 // 等待宿主结果时只有"桥内存里仍有本次生成的活认领"才是真在飞；
                 // 重载或事件丢失后的滞留等待轮无法再被归属，丢弃后从当前进度重新继续。
                 const staleAwaitingTurn = task.pendingHostTurn?.status === 'awaiting_generation';
@@ -127857,19 +129388,29 @@ class ContinuationOrchestrator_ACU {
                 return started;
             }, { chatIdentity });
             const task = started.activeTask;
-            if (task.status !== 'running')
+            if (task.status !== 'running') {
+                this.clearDeadlineTimer_ACU(chatIdentity);
                 return taskResult_ACU(started);
+            }
+            this.scheduleDeadline_ACU(chatIdentity, task.taskId, task.deadlineAt);
             if (task.pendingHostTurn?.status === 'retry_ready') {
+                const stoppedForDeadline = await this.stopIfDeadlineReached_ACU(chatIdentity, task.taskId, lease);
+                if (stoppedForDeadline)
+                    return taskResult_ACU(stoppedForDeadline);
                 return { ...taskResult_ACU(started), retryHostGeneration: true };
             }
             const controller = new AbortController();
             abortControllersByChat_ACU.set(chatIdentity, controller);
             try {
                 const preparedTurn = await this.dependencies.executionEngine.prepareCurrentTurnInstruction(() => this.isLeaseCurrent_ACU(chatIdentity, lease), undefined, async (instruction) => (await this.applyOutlineOpWithinLease_ACU(chatIdentity, lease, instruction, 'running')).opResult, controller.signal);
+                const stoppedForDeadline = await this.stopIfDeadlineReached_ACU(chatIdentity, task.taskId, lease);
+                if (stoppedForDeadline)
+                    return taskResult_ACU(stoppedForDeadline);
+                this.assertLeaseCurrent_ACU(chatIdentity, lease, 'turn_call');
                 return { ...taskResult_ACU(this.dependencies.store.readPersisted() ?? started), preparedTurn };
             }
             catch (error) {
-                await this.pauseWithError_ACU(chatIdentity, task.taskId, error, 'turn_call', '每轮指令生成失败');
+                await this.pauseWithError_ACU(chatIdentity, task.taskId, error, 'turn_call', '每轮指令生成失败', lease);
                 throw error;
             }
             finally {
@@ -127879,18 +129420,30 @@ class ContinuationOrchestrator_ACU {
         });
     }
     async retryCurrentTurn() {
-        return this.withLease_ACU(async (chatIdentity) => {
+        return this.withLease_ACU(async (chatIdentity, lease) => {
             let started = null;
             await this.dependencies.store.updatePersistedAtomically(current => {
+                this.assertLeaseCurrent_ACU(chatIdentity, lease, 'generation_evaluate');
                 const envelope = this.requireEnvelope_ACU(current);
                 const task = this.requireTask_ACU(envelope);
                 if (task.pendingHostTurn?.status !== 'retry_ready') {
                     fail_ACU$1('CONTINUATION_TASK_STATE_INVALID', '当前没有可重试的宿主正文轮次');
                 }
                 const now = this.dependencies.now();
+                if (task.deadlineAt !== null && now >= task.deadlineAt) {
+                    started = this.stopEnvelope_ACU(envelope, 'duration_reached', now);
+                    return started;
+                }
                 started = { ...envelope, activeTask: { ...task, status: 'running', stopReason: null, lastError: null, updatedAt: now } };
                 return started;
             }, { chatIdentity });
+            this.assertLeaseCurrent_ACU(chatIdentity, lease, 'generation_evaluate');
+            const activeTask = started.activeTask;
+            if (activeTask.status !== 'running') {
+                this.clearDeadlineTimer_ACU(chatIdentity);
+                return taskResult_ACU(started);
+            }
+            this.scheduleDeadline_ACU(chatIdentity, activeTask.taskId, activeTask.deadlineAt);
             return { ...taskResult_ACU(started), retryHostGeneration: true };
         });
     }
@@ -127900,9 +129453,10 @@ class ContinuationOrchestrator_ACU {
         if (input.identity.chatIdentity !== chatIdentity) {
             throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'host_send', '宿主发送所属聊天已变化', false));
         }
-        return this.withLease_ACU(async () => {
+        return this.withLease_ACU(async (currentChatIdentity, lease) => {
             let result = null;
             await this.dependencies.store.updatePersistedAtomically(current => {
+                this.assertLeaseCurrent_ACU(currentChatIdentity, lease, 'host_send');
                 const envelope = this.requireEnvelope_ACU(current);
                 const task = this.requireTask_ACU(envelope);
                 const existing = task.pendingHostTurn;
@@ -127919,12 +129473,21 @@ class ContinuationOrchestrator_ACU {
                         ...task,
                         status: 'running',
                         updatedAt: now,
-                        pendingHostTurn: { identity: input.identity, capture: input.capture, retryCount, status: 'awaiting_generation' },
+                        pendingHostTurn: {
+                            identity: input.identity,
+                            capture: input.capture,
+                            retryCount,
+                            status: 'awaiting_generation',
+                            evaluationSettings: retrying && existing?.evaluationSettings
+                                ? existing.evaluationSettings
+                                : pendingEvaluationSettings_ACU(envelope.settings),
+                        },
                         timeline: [...task.timeline, this.timeline_ACU('turn_sent', now, { stageId: input.identity.stageId, revision: input.identity.revision, nodeId: input.identity.nodeId, turnId: input.identity.turnId, attemptId: input.identity.attemptId })],
                     },
                 };
                 return result;
             }, { chatIdentity });
+            this.assertLeaseCurrent_ACU(currentChatIdentity, lease, 'host_send');
             return taskResult_ACU(result);
         });
     }
@@ -127936,8 +129499,9 @@ class ContinuationOrchestrator_ACU {
         const chatIdentity = this.requireChatIdentity_ACU();
         if (identity.chatIdentity !== chatIdentity)
             throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'host_send', '宿主生成所属聊天已变化', false));
-        await this.withLease_ACU(async () => {
+        await this.withLease_ACU(async (currentChatIdentity, lease) => {
             await this.dependencies.store.updatePersistedAtomically(current => {
+                this.assertLeaseCurrent_ACU(currentChatIdentity, lease, 'host_send');
                 const envelope = this.requireEnvelope_ACU(current);
                 const task = this.requireTask_ACU(envelope);
                 const pending = task.pendingHostTurn;
@@ -127946,6 +129510,7 @@ class ContinuationOrchestrator_ACU {
                 }
                 return { ...envelope, activeTask: { ...task, pendingHostTurn: { ...pending, capture: { ...pending.capture, generationSeq } } } };
             }, { chatIdentity });
+            this.assertLeaseCurrent_ACU(currentChatIdentity, lease, 'host_send');
         });
     }
     /**
@@ -127985,7 +129550,13 @@ class ContinuationOrchestrator_ACU {
         // 任务被用户停止（或已带错误暂停）时，retry_ready 的待重试轮不得被自动重试复活：
         // 桥的自动重试只认 pending.status，若不带上这个位，用户在重试等待窗内点停止会被静默撤销。
         const taskStopped = task.stopReason !== null || task.status === 'failed';
-        return { settings: envelope.settings, pending: task.pendingHostTurn, taskStopped, taskRunning: task.status === 'running' };
+        const evaluationSettings = task.pendingHostTurn.evaluationSettings;
+        return {
+            settings: evaluationSettings ? { ...envelope.settings, ...evaluationSettings } : envelope.settings,
+            pending: task.pendingHostTurn,
+            taskStopped,
+            taskRunning: task.status === 'running',
+        };
     }
     async pauseForHostResultFailure(identity) {
         return this.pauseHostTurn_ACU(identity, 'CONTINUATION_TASK_STATE_INVALID', '宿主正文无法唯一归属当前轮次', 'state_invalid');
@@ -128026,9 +129597,10 @@ class ContinuationOrchestrator_ACU {
         if (identity.chatIdentity !== chatIdentity) {
             throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'generation_evaluate', '正文结果所属聊天已变化', false));
         }
-        return this.withLease_ACU(async () => {
+        return this.withLease_ACU(async (currentChatIdentity, lease) => {
             let result = null;
             await this.dependencies.store.updatePersistedAtomically(current => {
+                this.assertLeaseCurrent_ACU(currentChatIdentity, lease, 'generation_evaluate');
                 const envelope = this.requireEnvelope_ACU(current);
                 const task = this.requireTask_ACU(envelope);
                 const pending = task.pendingHostTurn;
@@ -128037,13 +129609,15 @@ class ContinuationOrchestrator_ACU {
                 }
                 const now = this.dependencies.now();
                 const timelineFields = { stageId: identity.stageId, revision: identity.revision, nodeId: identity.nodeId, turnId: identity.turnId, attemptId: identity.attemptId, ...(messageIndex !== undefined ? { messageIndex } : {}), errorCode: error.code };
-                if (pending.retryCount >= envelope.settings.generationRetryLimit) {
+                const retryLimit = pending.evaluationSettings?.generationRetryLimit ?? envelope.settings.generationRetryLimit;
+                if (pending.retryCount >= retryLimit) {
                     result = { ...envelope, activeTask: { ...task, status: 'paused', updatedAt: now, stopReason: 'generation_retry_exhausted', lastError: { ...error, retryable: false }, pendingHostTurn: { ...pending, status: 'exhausted' }, timeline: [...task.timeline, this.timeline_ACU('failed', now, timelineFields)] } };
                     return result;
                 }
                 result = { ...envelope, activeTask: { ...task, status: 'paused', updatedAt: now, lastError: error, pendingHostTurn: { ...pending, retryCount: pending.retryCount + 1, status: 'retry_ready' }, timeline: [...task.timeline, this.timeline_ACU('turn_retry', now, timelineFields)] } };
                 return result;
             }, { chatIdentity });
+            this.assertLeaseCurrent_ACU(currentChatIdentity, lease, 'generation_evaluate');
             return taskResult_ACU(result);
         });
     }
@@ -128057,9 +129631,10 @@ class ContinuationOrchestrator_ACU {
         if (identity.chatIdentity !== chatIdentity) {
             throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'generation_evaluate', '生成中止事件所属聊天已变化', false));
         }
-        return this.withLease_ACU(async () => {
+        return this.withLease_ACU(async (currentChatIdentity, lease) => {
             let result = null;
             await this.dependencies.store.updatePersistedAtomically(current => {
+                this.assertLeaseCurrent_ACU(currentChatIdentity, lease, 'generation_evaluate');
                 const envelope = this.requireEnvelope_ACU(current);
                 const task = this.requireTask_ACU(envelope);
                 const pending = task.pendingHostTurn;
@@ -128071,6 +129646,7 @@ class ContinuationOrchestrator_ACU {
                 result = { ...envelope, activeTask: { ...task, status: 'paused', updatedAt: now, lastError: error, pendingHostTurn: { ...pending, status: 'retry_ready' }, timeline: [...task.timeline, this.timeline_ACU('turn_retry', now, { stageId: identity.stageId, revision: identity.revision, nodeId: identity.nodeId, turnId: identity.turnId, attemptId: identity.attemptId, errorCode: error.code })] } };
                 return result;
             }, { chatIdentity });
+            this.assertLeaseCurrent_ACU(currentChatIdentity, lease, 'generation_evaluate');
             return taskResult_ACU(result);
         });
     }
@@ -128089,6 +129665,7 @@ class ContinuationOrchestrator_ACU {
             this.assertLeaseCurrent_ACU(chatIdentity, lease);
             let advanced = null;
             await this.dependencies.store.updatePersistedAtomically(current => {
+                this.assertLeaseCurrent_ACU(chatIdentity, lease, 'generation_evaluate');
                 const envelope = this.requireEnvelope_ACU(current);
                 const task = this.requireTask_ACU(envelope);
                 if (task.status !== 'running' || task.pendingHostTurn?.status !== 'awaiting_generation' || !identityMatchesCurrentTurn_ACU(task, identity)) {
@@ -128097,7 +129674,12 @@ class ContinuationOrchestrator_ACU {
                 const now = this.dependencies.now();
                 const stage = getActiveStage_ACU(task);
                 const isLastTurn = stage.completedTurns + 1 === getActiveRevision_ACU(stage).outline.totalTurns;
-                const progressed = advanceConfirmedTurn_ACU(task, now, this.timeline_ACU.bind(this), messageIndex);
+                const chat = getChatArray_ACU();
+                const message = typeof messageIndex === 'number' ? chat[messageIndex] : undefined;
+                const messageIdentity = message && typeof message === 'object' && !Array.isArray(message)
+                    ? getStableMessageIdentity_ACU(message)
+                    : undefined;
+                const progressed = advanceConfirmedTurn_ACU(task, now, this.timeline_ACU.bind(this), messageIndex, messageIdentity);
                 const completedTurn = {
                     ...progressed,
                     pendingHostTurn: null,
@@ -128121,11 +129703,17 @@ class ContinuationOrchestrator_ACU {
                 advanced = { ...envelope, activeTask: { ...completedTurn, status: 'paused', updatedAt: now } };
                 return advanced;
             }, { chatIdentity });
+            this.assertLeaseCurrent_ACU(chatIdentity, lease, 'generation_evaluate');
+            if (advanced.activeTask.stopReason !== null)
+                this.clearDeadlineTimer_ACU(chatIdentity);
+            else
+                this.scheduleDeadline_ACU(chatIdentity, advanced.activeTask.taskId, advanced.activeTask.deadlineAt);
             return taskResult_ACU(advanced);
         });
     }
     async stopTask() {
         const chatIdentity = this.requireChatIdentity_ACU();
+        this.clearDeadlineTimer_ACU(chatIdentity);
         const task = this.requireTask_ACU(this.requireEnvelope_ACU(this.dependencies.store.readPersisted()));
         const guard = guardForTask_ACU(chatIdentity, task);
         this.invalidateLease_ACU(chatIdentity);
@@ -128183,6 +129771,8 @@ class ContinuationOrchestrator_ACU {
                     return envelope;
                 }, guardForTask_ACU(chatIdentity, created.task));
             });
+            if (envelope?.activeTask)
+                this.scheduleDeadline_ACU(chatIdentity, envelope.activeTask.taskId, envelope.activeTask.deadlineAt);
             return { ...taskResult_ACU(envelope), created: true, interrupted: false, disposition: 'continue_now', shouldContinue: true };
         }
         const initialMessageDigest = existing.status === 'running' && existing.pendingHostTurn?.status !== 'awaiting_generation'
@@ -128248,6 +129838,8 @@ class ContinuationOrchestrator_ACU {
                 return envelope;
             }, guardForTask_ACU(chatIdentity, beforeResume));
         });
+        if (envelope?.activeTask && disposition === 'continue_now')
+            this.scheduleDeadline_ACU(chatIdentity, envelope.activeTask.taskId, envelope.activeTask.deadlineAt);
         return {
             ...taskResult_ACU(envelope),
             created: false,
@@ -128267,7 +129859,7 @@ class ContinuationOrchestrator_ACU {
      */
     async replaceActiveOutline(input) {
         return this.withLease_ACU(async (chatIdentity) => {
-            const envelope = this.requireEnvelope_ACU(this.dependencies.store.readPersisted());
+            const envelope = this.readEnvelopeWithReconciledCursor_ACU();
             const task = this.requireTask_ACU(envelope);
             if (task.status === 'running' || task.status === 'stopping_after_inflight') {
                 fail_ACU$1('CONTINUATION_OPERATION_BUSY', '循环正在运行，请先停止再手动编辑大纲');
@@ -128288,10 +129880,12 @@ class ContinuationOrchestrator_ACU {
      */
     async clearContinuationData() {
         const chatIdentity = this.requireChatIdentity_ACU();
+        this.clearDeadlineTimer_ACU(chatIdentity);
         const existing = this.dependencies.store.readPersisted()?.activeTask ?? null;
         this.invalidateLease_ACU(chatIdentity);
         // 清空后重建任务时，残留的桥认领会把宽松认领永久挡在外面——必须一起作废。
         this.invalidateHostClaim_ACU(chatIdentity);
+        this.stopHostGeneration_ACU(chatIdentity);
         const envelope = await this.withLease_ACU(async () => {
             let result = null;
             await this.dependencies.store.updatePersistedAtomically(current => {
@@ -128317,13 +129911,20 @@ class ContinuationOrchestrator_ACU {
         const controller = new AbortController();
         abortControllersByChat_ACU.set(chatIdentity, controller);
         return this.withLease_ACU(async (_identity, lease) => {
-            const taskId = this.requireTask_ACU(this.requireEnvelope_ACU(this.dependencies.store.readPersisted())).taskId;
+            const taskId = this.requireTask_ACU(this.readEnvelopeWithReconciledCursor_ACU()).taskId;
+            const stoppedBeforeReplan = await this.stopIfDeadlineReached_ACU(chatIdentity, taskId, lease);
+            if (stoppedBeforeReplan)
+                return taskResult_ACU(stoppedBeforeReplan);
             try {
                 const outcome = await this.applyOutlineOpWithinLease_ACU(chatIdentity, lease, replanInstruction, 'paused');
+                if (outcome.envelope.activeTask?.stopReason === 'duration_reached')
+                    this.clearDeadlineTimer_ACU(chatIdentity);
+                else if (outcome.envelope.activeTask)
+                    this.scheduleDeadline_ACU(chatIdentity, outcome.envelope.activeTask.taskId, outcome.envelope.activeTask.deadlineAt);
                 return taskResult_ACU(outcome.envelope, outcome.planning);
             }
             catch (error) {
-                await this.pauseWithError_ACU(chatIdentity, taskId, error, 'outline_call', '阶段规划失败');
+                await this.pauseWithError_ACU(chatIdentity, taskId, error, 'outline_call', '阶段规划失败', lease);
                 throw error;
             }
             finally {
@@ -128344,7 +129945,7 @@ class ContinuationOrchestrator_ACU {
      * @returns 操作结果、最新 envelope 与规划摘要
      */
     async applyOutlineOpWithinLease_ACU(chatIdentity, lease, instruction, endStatus) {
-        const envelope = this.requireEnvelope_ACU(this.dependencies.store.readPersisted());
+        const envelope = this.readEnvelopeWithReconciledCursor_ACU();
         const task = this.requireTask_ACU(envelope);
         if (task.stopReason !== null)
             fail_ACU$1('CONTINUATION_TASK_STATE_INVALID', '已停止的任务不可规划大纲');
@@ -128364,7 +129965,7 @@ class ContinuationOrchestrator_ACU {
      * 主 Agent 文本协议不调用本事务；大纲问题由它委派 outline-architect 处理。
      */
     async applyOutlineEditsWithinLease_ACU(chatIdentity, _lease, edits, endStatus) {
-        const envelope = this.requireEnvelope_ACU(this.dependencies.store.readPersisted());
+        const envelope = this.readEnvelopeWithReconciledCursor_ACU();
         const task = this.requireTask_ACU(envelope);
         if (task.stopReason !== null)
             fail_ACU$1('CONTINUATION_TASK_STATE_INVALID', '已停止的任务不可编辑大纲');
@@ -128451,6 +130052,9 @@ class ContinuationOrchestrator_ACU {
         const context = { envelope, task, stage: null, reason: 'initial', replanInstruction: instruction };
         const planned = await this.planOutline_ACU(context, chatIdentity, lease, stageId, 1);
         this.assertLeaseCurrent_ACU(chatIdentity, lease);
+        const stoppedForDeadline = await this.stopIfDeadlineReached_ACU(chatIdentity, task.taskId, lease);
+        if (stoppedForDeadline)
+            return { opResult: { op: 'create', requiresReview: false, stopped: 'duration_reached', summary: '总时长已到，任务已停止' }, envelope: stoppedForDeadline };
         const stageNumber = task.runStageCount + 1;
         let result = null;
         await this.dependencies.store.updatePersistedAtomically(current => {
@@ -128488,6 +130092,9 @@ class ContinuationOrchestrator_ACU {
         const context = { envelope, task, stage: null, reason: 'auto_next_stage', replanInstruction: instruction };
         const planned = await this.planOutline_ACU(context, chatIdentity, lease, nextStageId, 1);
         this.assertLeaseCurrent_ACU(chatIdentity, lease);
+        const stoppedForDeadline = await this.stopIfDeadlineReached_ACU(chatIdentity, task.taskId, lease);
+        if (stoppedForDeadline)
+            return { opResult: { op: 'continue', requiresReview: false, stopped: 'duration_reached', summary: '总时长已到，任务已停止' }, envelope: stoppedForDeadline };
         const stageNumber = task.runStageCount + 1;
         let result = null;
         await this.dependencies.store.updatePersistedAtomically(current => {
@@ -128520,6 +130127,9 @@ class ContinuationOrchestrator_ACU {
         const nextRevisionNumber = current.revision + 1;
         const planned = await this.planOutline_ACU(context, chatIdentity, lease, stage.stageId, nextRevisionNumber, constraints);
         this.assertLeaseCurrent_ACU(chatIdentity, lease);
+        const stoppedForDeadline = await this.stopIfDeadlineReached_ACU(chatIdentity, task.taskId, lease);
+        if (stoppedForDeadline)
+            return { opResult: { op: 'revise', requiresReview: false, stopped: 'duration_reached', summary: '总时长已到，任务已停止' }, envelope: stoppedForDeadline };
         let result = null;
         await this.dependencies.store.updatePersistedAtomically(currentEnvelope => {
             const env = this.requireEnvelope_ACU(currentEnvelope);
@@ -128548,11 +130158,13 @@ class ContinuationOrchestrator_ACU {
             fail_ACU$1('CONTINUATION_TASK_STATE_INVALID', '放弃当前任务并新建必须经过明确确认');
         }
         const chatIdentity = this.requireChatIdentity_ACU();
+        this.clearDeadlineTimer_ACU(chatIdentity);
         const sourceTask = this.requireTask_ACU(this.requireEnvelope_ACU(this.dependencies.store.readPersisted()));
         const sourceGuard = guardForTask_ACU(chatIdentity, sourceTask);
         this.invalidateLease_ACU(chatIdentity);
         // 被放弃的轮次不会再有归属它的生成结束：清掉桥认领，新任务才能正常宽松认领。
         this.invalidateHostClaim_ACU(chatIdentity);
+        this.stopHostGeneration_ACU(chatIdentity);
         await this.withLease_ACU(async () => {
             await this.dependencies.store.updatePersistedAtomically(current => {
                 const envelope = this.requireEnvelope_ACU(current);
@@ -128583,14 +130195,17 @@ class ContinuationOrchestrator_ACU {
      * 循环或规划失败后的统一暂停记录。单阶段事务化后失败不留中间状态，
      * 这里只负责把任务落到 paused 并记录 lastError，让用户可以直接再继续。
      */
-    async pauseWithError_ACU(chatIdentity, taskId, error, phase, fallbackMessage) {
-        if (error instanceof ContinuationValidationError_ACU && error.error.code === 'CONTINUATION_INTERNAL_REQUEST_STALE') {
+    async pauseWithError_ACU(chatIdentity, taskId, error, phase, fallbackMessage, lease) {
+        if (error instanceof ContinuationValidationError_ACU && error.error.code === 'CONTINUATION_INTERNAL_REQUEST_STALE')
             return;
-        }
+        if (lease && !this.isLeaseCurrent_ACU(chatIdentity, lease))
+            return;
         const lastError = error instanceof ContinuationValidationError_ACU ? error.error : createContinuationError_ACU('CONTINUATION_INTERNAL_AI_REQUEST_FAILED', phase, fallbackMessage, false);
         try {
             await this.dependencies.store.updatePersistedAtomically(current => {
                 const envelope = this.requireEnvelope_ACU(current);
+                if (lease && !this.isLeaseCurrent_ACU(chatIdentity, lease))
+                    return envelope;
                 const task = this.requireTask_ACU(envelope);
                 if (task.taskId !== taskId || task.stopReason !== null || !['running', 'paused', 'failed'].includes(task.status))
                     return envelope;
@@ -128649,6 +130264,99 @@ class ContinuationOrchestrator_ACU {
             fail_ACU$1('CONTINUATION_TASK_NOT_FOUND', '当前聊天没有智能续写任务');
         return envelope.activeTask;
     }
+    clearDeadlineTimer_ACU(chatIdentity) {
+        const timer = deadlineTimersByChat_ACU.get(chatIdentity);
+        if (timer !== undefined) {
+            clearTimeout(timer);
+            deadlineTimersByChat_ACU.delete(chatIdentity);
+        }
+    }
+    scheduleDeadline_ACU(chatIdentity, taskId, deadlineAt) {
+        this.clearDeadlineTimer_ACU(chatIdentity);
+        if (deadlineAt === null || !Number.isFinite(deadlineAt))
+            return;
+        const arm = () => {
+            const current = this.dependencies.store.readPersisted()?.activeTask ?? null;
+            if (!current || current.taskId !== taskId || current.deadlineAt !== deadlineAt || current.stopReason !== null) {
+                this.clearDeadlineTimer_ACU(chatIdentity);
+                return;
+            }
+            const remaining = deadlineAt - this.dependencies.now();
+            if (remaining > 0) {
+                deadlineTimersByChat_ACU.set(chatIdentity, setTimeout(arm, Math.min(remaining, 2147000000)));
+                return;
+            }
+            void this.expireDeadline_ACU(chatIdentity, taskId, deadlineAt).catch(() => undefined);
+        };
+        const remaining = deadlineAt - this.dependencies.now();
+        if (remaining <= 0) {
+            void this.expireDeadline_ACU(chatIdentity, taskId, deadlineAt).catch(() => undefined);
+            return;
+        }
+        deadlineTimersByChat_ACU.set(chatIdentity, setTimeout(arm, Math.min(remaining, 2147000000)));
+    }
+    async expireDeadline_ACU(chatIdentity, taskId, deadlineAt) {
+        const current = this.dependencies.store.readPersisted()?.activeTask ?? null;
+        if (!current || current.taskId !== taskId || current.deadlineAt !== deadlineAt || current.stopReason !== null) {
+            this.clearDeadlineTimer_ACU(chatIdentity);
+            return;
+        }
+        if (this.dependencies.now() < deadlineAt) {
+            this.scheduleDeadline_ACU(chatIdentity, taskId, deadlineAt);
+            return;
+        }
+        this.invalidateLease_ACU(chatIdentity);
+        try {
+            this.stopHostGeneration_ACU(chatIdentity);
+        }
+        catch { /* watchdog 仍需落盘停止态 */ }
+        try {
+            await this.withLease_ACU(async (currentChatIdentity, lease) => {
+                await this.dependencies.store.updatePersistedAtomically(currentEnvelope => {
+                    this.assertLeaseCurrent_ACU(currentChatIdentity, lease);
+                    const envelope = this.requireEnvelope_ACU(currentEnvelope);
+                    const task = this.requireTask_ACU(envelope);
+                    if (task.taskId !== taskId || task.deadlineAt !== deadlineAt || task.stopReason !== null || this.dependencies.now() < deadlineAt)
+                        return envelope;
+                    return this.stopEnvelope_ACU(envelope, 'duration_reached', this.dependencies.now());
+                }, { chatIdentity });
+            });
+            this.clearDeadlineTimer_ACU(chatIdentity);
+        }
+        catch {
+            // 旧 timer / 被用户操作取消的 watchdog 不得覆盖新运行。
+        }
+    }
+    /** 在任何宿主发送或规划结果交付前再次检查 deadline；返回已停止信封时调用方必须放弃 prepared turn。 */
+    async stopIfDeadlineReached_ACU(chatIdentity, taskId, lease) {
+        const now = this.dependencies.now();
+        const envelope = this.requireEnvelope_ACU(this.dependencies.store.readPersisted());
+        const task = this.requireTask_ACU(envelope);
+        if (task.stopReason !== null)
+            return task.stopReason === 'duration_reached' ? envelope : null;
+        if (task.taskId !== taskId || task.deadlineAt === null || now < task.deadlineAt)
+            return null;
+        let stopped = null;
+        try {
+            await this.dependencies.store.updatePersistedAtomically(currentEnvelope => {
+                if (!this.isLeaseCurrent_ACU(chatIdentity, lease))
+                    throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'turn_call', '智能续写操作已失效', false));
+                const current = this.requireEnvelope_ACU(currentEnvelope);
+                const currentTask = this.requireTask_ACU(current);
+                if (currentTask.taskId !== taskId || currentTask.stopReason !== null || currentTask.deadlineAt === null || this.dependencies.now() < currentTask.deadlineAt)
+                    return current;
+                stopped = this.stopEnvelope_ACU(current, 'duration_reached', this.dependencies.now());
+                return stopped;
+            }, { chatIdentity });
+        }
+        catch (error) {
+            if (!(error instanceof ContinuationValidationError_ACU && error.error.code === 'CONTINUATION_INTERNAL_REQUEST_STALE'))
+                throw error;
+        }
+        if (stopped)
+            this.clearDeadlineTimer_ACU(chatIdentity);
+        return stopped;
+    }
     stopEnvelope_ACU(envelope, reason, now) {
         const task = this.requireTask_ACU(envelope);
         // 停止即放弃对等待中宿主生成的归属；清掉等待轮，之后继续/恢复不会被它卡死。
@@ -128659,9 +130367,10 @@ class ContinuationOrchestrator_ACU {
         const chatIdentity = this.requireChatIdentity_ACU();
         if (identity.chatIdentity !== chatIdentity)
             throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'host_send', '宿主发送所属聊天已变化', false));
-        return this.withLease_ACU(async () => {
+        return this.withLease_ACU(async (currentChatIdentity, lease) => {
             let result = null;
             await this.dependencies.store.updatePersistedAtomically(current => {
+                this.assertLeaseCurrent_ACU(currentChatIdentity, lease, 'host_send');
                 const envelope = this.requireEnvelope_ACU(current);
                 const task = this.requireTask_ACU(envelope);
                 if (!task.pendingHostTurn || task.pendingHostTurn.status !== 'awaiting_generation' || !identityMatchesCurrentTurn_ACU(task, identity)) {
@@ -128672,6 +130381,7 @@ class ContinuationOrchestrator_ACU {
                 result = { ...envelope, activeTask: { ...task, status: 'paused', updatedAt: now, stopReason, lastError: error, pendingHostTurn: { ...task.pendingHostTurn, status: 'exhausted' }, timeline: [...task.timeline, this.timeline_ACU('failed', now, { stageId: identity.stageId, revision: identity.revision, nodeId: identity.nodeId, turnId: identity.turnId, attemptId: identity.attemptId, errorCode: error.code })] } };
                 return result;
             }, { chatIdentity });
+            this.assertLeaseCurrent_ACU(currentChatIdentity, lease, 'host_send');
             return taskResult_ACU(result);
         });
     }
@@ -128691,7 +130401,15 @@ class ContinuationOrchestrator_ACU {
         const lease = { id: this.dependencies.allocateId('lease'), epoch: epochsByChat_ACU.get(chatIdentity) ?? 0 };
         leasesByChat_ACU.set(chatIdentity, lease);
         try {
-            return await work(chatIdentity, lease);
+            const result = await work(chatIdentity, lease);
+            this.assertLeaseCurrent_ACU(chatIdentity, lease);
+            return result;
+        }
+        catch (error) {
+            if (!this.isLeaseCurrent_ACU(chatIdentity, lease) && !(error instanceof ContinuationValidationError_ACU && error.error.code === 'CONTINUATION_INTERNAL_REQUEST_STALE')) {
+                throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'outline_call', '智能续写操作已失效', false));
+            }
+            throw error;
         }
         finally {
             if (leasesByChat_ACU.get(chatIdentity) === lease)
@@ -128728,9 +130446,12 @@ class ContinuationOrchestrator_ACU {
             // 但让停止本身抛错会让用户连「停止」都点不动。
         }
     }
-    assertLeaseCurrent_ACU(chatIdentity, lease) {
+    stopHostGeneration_ACU(chatIdentity) {
+        this.dependencies.stopHostGeneration?.(chatIdentity);
+    }
+    assertLeaseCurrent_ACU(chatIdentity, lease, phase = 'outline_call') {
         if (!this.isLeaseCurrent_ACU(chatIdentity, lease)) {
-            throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'outline_call', '智能续写操作已失效', false));
+            throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', phase, '智能续写操作已失效', false));
         }
     }
 }
@@ -129081,6 +130802,12 @@ const fields_ACU = ['effectiveConstraints', 'decisions', 'completedItems', 'pend
 function cleanText_ACU(value) {
     return typeof value === 'string' ? value.trim() : '';
 }
+function isLeaseLossError_ACU(error) {
+    if (!error || typeof error !== 'object')
+        return false;
+    const candidate = error;
+    return candidate.name === 'AbortError' || candidate.error?.code === 'CONTINUATION_INTERNAL_REQUEST_STALE';
+}
 function cleanList_ACU(value) {
     return Array.isArray(value) ? [...new Set(value.map(cleanText_ACU).filter(Boolean))] : [];
 }
@@ -129166,7 +130893,9 @@ async function summarizeAgentHandoff_ACU(input) {
             const proposed = await input.semanticAdapter.summarize({ previous: input.previous, messages: input.messages, allowedReadKeys });
             state = { ...state, currentGoal: cleanText_ACU(proposed.currentGoal) || state.currentGoal, ...Object.fromEntries(fields_ACU.map(field => [field, field === 'readKeys' || field === 'recentTurns' ? state[field] : cleanList_ACU(proposed[field]).length ? cleanList_ACU(proposed[field]) : state[field]])) };
         }
-        catch {
+        catch (error) {
+            if (isLeaseLossError_ACU(error))
+                throw error;
             degraded = true;
             degradationReason = 'semantic_summary_failed';
         }
@@ -129843,9 +131572,9 @@ function assertVolumeLifecycle_ACU(previous, next, completedStageNumbers) {
             reject_ACU(`卷台阶 ${volume.id} 不可跳过 active 直接从 ${prior.status} 变为 ${volume.status}`, { id: volume.id, from: prior.status, to: volume.status });
         }
     }
-    if (previouslyActive.length > 1) {
-        reject_ACU(`写入前存在 ${previouslyActive.length} 个 active 卷，无法判定阶段承载归属`, { activeIds: previouslyActive.map(volume => volume.id) });
-    }
+    // 旧快照可能已经因并发/历史写入留下多个 active 卷；只要本次原子写集应用后
+    // 恢复为一个 active，就允许先 retire 旧卷完成修复。真正的歧义由下面的
+    // next 状态唯一性校验拦截，而不是把可修复的旧状态永久锁死。
     for (const volume of volumes) {
         if (previousById.has(volume.id))
             continue;
@@ -129897,7 +131626,7 @@ function assertVolumeLifecycle_ACU(previous, next, completedStageNumbers) {
  * 2. retire 必须命中既有条目并给理由；漏写不等于删除。
  * 3. 任一条目失败即整份 delta 拒绝，不做部分登记。
  */
-function applyChronologyDelta_ACU(existing, items, settledIndex) {
+function applyChronologyDelta_ACU(existing, items, settledIndex, allowedEvidenceIndexes) {
     const byId = new Map(existing.map(entry => [entry.id, entry]));
     for (const item of items) {
         if (!item.id.trim())
@@ -129920,6 +131649,12 @@ function applyChronologyDelta_ACU(existing, items, settledIndex) {
         const evidenceIndexes = normalizeEvidenceIndexes_ACU(item.evidenceIndexes);
         if (!evidenceIndexes || !evidenceIndexes.length) {
             reject_ACU(`年代学条目 ${item.id} 的 evidenceIndexes 必须是非空的非负整数楼层数组`, { id: item.id, evidenceIndexes: item.evidenceIndexes });
+        }
+        if (allowedEvidenceIndexes) {
+            const nonAi = evidenceIndexes.filter(index => !allowedEvidenceIndexes.has(index));
+            if (nonAi.length) {
+                reject_ACU(`年代学条目 ${item.id} 的 evidenceIndexes 只能引用 AI 正文楼层，不能引用用户、system 或 tool 楼：${nonAi.join('、')}`, { id: item.id, nonAi });
+            }
         }
         const future = evidenceIndexes.filter(index => index > settledIndex);
         if (future.length) {
@@ -130043,7 +131778,7 @@ function applyStoryArcPatches_ACU(entries, patches) {
  * @param settledIndex 本次结算的水位楼层，用于记录条目变动楼层
  * @returns 应用后的新快照，被写入模块的 revision 各自 +1
  */
-function applyAgentModuleDelta_ACU(snapshot, delta, allowedWrites, settledIndex, completedStageNumbers = []) {
+function applyAgentModuleDelta_ACU(snapshot, delta, allowedWrites, settledIndex, completedStageNumbers = [], allowedEvidenceIndexes) {
     assertWritePermission_ACU(delta, allowedWrites);
     assertExpectedRevisions_ACU(delta, snapshot);
     const touched = collectTouchedModules_ACU(delta);
@@ -130066,7 +131801,9 @@ function applyAgentModuleDelta_ACU(snapshot, delta, allowedWrites, settledIndex,
     }
     if (storyArcTouched)
         assertVolumeLifecycle_ACU(snapshot.storyArc, storyArc, new Set(completedStageNumbers));
-    const chronology = chronologyTouched ? applyChronologyDelta_ACU(snapshot.chronology, delta.chronology, settledIndex) : snapshot.chronology;
+    const chronology = chronologyTouched
+        ? applyChronologyDelta_ACU(snapshot.chronology, delta.chronology, settledIndex, allowedEvidenceIndexes)
+        : snapshot.chronology;
     return {
         ...snapshot,
         hooks,
@@ -131108,7 +132845,10 @@ function normalizeStoryArcShape_ACU(payload, rawDelta) {
     return merged;
 }
 function parseAgentMaintainerOutputDraft_ACU(payload) {
-    const rawDelta = isRecord_ACU$3(payload.delta) ? payload.delta : {};
+    if (!Object.prototype.hasOwnProperty.call(payload, 'delta') || !isRecord_ACU$3(payload.delta)) {
+        failProtocol_ACU('维护/总纲契约必须包含 delta 对象；无变化也要返回 delta: {}');
+    }
+    const rawDelta = payload.delta;
     const rejected = [];
     const hooks = parseHookItems_ACU(rawDelta.hooks, rejected);
     const infoGap = parseInfoGapItems_ACU(rawDelta.infoGap, rejected);
@@ -131776,7 +133516,7 @@ function renderAgentUnsettledHistory_ACU(context) {
     const lines = [];
     for (let index = start; index < context.chat.length; index += 1) {
         const message = context.chat[index];
-        if (!message || message.is_user)
+        if (!isAiFloor_ACU(message))
             continue;
         const text = messageText_ACU(message, context.contextRules);
         if (text)
@@ -132423,8 +134163,8 @@ function runAgentSearch_ACU(call, context) {
  *
  * 状态机：
  * - B > M 直接整批打回；
- * - 否则 H + B > S 且 B > F 时打回，持续要求缩小到 F 以下；
- * - B <= F 时放行，由既有总结机制处理超长上下文。
+ * - 否则 H + B > S 时整批打回；F 只作为可操作的目标批次大小，不是越过 S 的豁免；
+ * - 只有完整上下文仍不超过 S 时才放行。
  *
  * 打回报告不含正文，只含各目标实测 token 数、四量与剩余额度，尾附修正协议。
  * 门禁统一作用于三条注入路径：主 Agent 工具批次、子代理工具轮次、派工种子材料。
@@ -132469,7 +134209,7 @@ function buildRejectionReport_ACU(reason, items, itemTokens, batchTokens, state,
     }
     else {
         const headroom = Math.max(0, historyTokenBudget - contextTokens);
-        lines.push(`原因：上下文临近总结阈值。当前上下文实测 ${contextTokens} tokens，总结阈值 ${historyTokenBudget} tokens（阈值前余量 ${headroom} tokens）；本批次 ${batchTokens} tokens 大于精读兜底额度 ${budget.effectiveFallbackTokens} tokens。请持续缩小读取范围，直到单批次不超过 ${budget.effectiveFallbackTokens} tokens；届时会放行并由总结机制处理超长上下文。`);
+        lines.push(`原因：上下文临近总结阈值。当前上下文实测 ${contextTokens} tokens，总结阈值 ${historyTokenBudget} tokens（阈值前余量 ${headroom} tokens）；本批次 ${batchTokens} tokens 会把完整上下文推过阈值。精读兜底额度 ${budget.effectiveFallbackTokens} tokens 也不是越过阈值的豁免，请持续缩小读取范围，直到单批次不超过该额度且总量仍留有余量。`);
     }
     lines.push('本批次各目标的实测大小：', ...itemLines);
     const nextLimit = reason === 'near-compaction-overflow' ? budget.effectiveFallbackTokens : budget.effectiveMaxReadTokens;
@@ -132505,8 +134245,7 @@ async function gateAgentReadBatch_ACU(items, state, config, contextTokens, count
     // 每个工具批次独立判定：不存在跨批次累计额度。
     if (batchTokens > budget.effectiveMaxReadTokens)
         return decide('read-batch-too-large');
-    if (config.historyTokenBudget > 0 && contextTokens > 0 && contextTokens + batchTokens > config.historyTokenBudget
-        && batchTokens > budget.effectiveFallbackTokens) {
+    if (config.historyTokenBudget > 0 && contextTokens > 0 && contextTokens + batchTokens > config.historyTokenBudget) {
         return decide('near-compaction-overflow');
     }
     void state;
@@ -132568,6 +134307,33 @@ const WEB_REQUEST_TIMEOUT_MS_ACU = 20000;
 const SEARCH_RESULT_LIMIT_ACU = 8;
 /** 百科检索候选条数上限。 */
 const ENCYCLOPEDIA_CANDIDATE_LIMIT_ACU = 6;
+function abortError_ACU() {
+    const error = new Error('请求已取消');
+    error.name = 'AbortError';
+    return error;
+}
+function throwIfAborted_ACU(signal) {
+    if (signal?.aborted)
+        throw abortError_ACU();
+}
+function isAbortError_ACU(error) {
+    return !!error && typeof error === 'object' && error.name === 'AbortError';
+}
+function readBodyWithAbort_ACU(promise, signal) {
+    if (!signal)
+        return promise;
+    if (signal.aborted)
+        return Promise.reject(abortError_ACU());
+    return new Promise((resolve, reject) => {
+        const onAbort = () => {
+            cleanup();
+            reject(abortError_ACU());
+        };
+        const cleanup = () => signal.removeEventListener('abort', onAbort);
+        signal.addEventListener('abort', onAbort, { once: true });
+        promise.then(value => { cleanup(); resolve(value); }, error => { cleanup(); reject(error); });
+    });
+}
 const MEDIAWIKI_ENDPOINTS_ACU = {
     moegirl: { api: 'https://zh.moegirl.org.cn/api.php', page: 'https://zh.moegirl.org.cn/' },
     wikipedia_zh: { api: 'https://zh.wikipedia.org/w/api.php', page: 'https://zh.wikipedia.org/wiki/' },
@@ -132716,32 +134482,55 @@ class AgentWebClient_ACU {
     constructor(dependencies = defaultDependencies_ACU$2) {
         this.dependencies = dependencies;
     }
-    /** 出网 fetch（百科 API 与 TT 同源路由），带超时。 */
-    async fetchDirect_ACU(url, init) {
+    /** 出网 fetch（百科 API 与 TT 同源路由），超时覆盖响应头与响应体读取阶段。 */
+    async fetchDirect_ACU(url, init, signal) {
+        throwIfAborted_ACU(signal);
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), WEB_REQUEST_TIMEOUT_MS_ACU);
-        try {
-            return await this.dependencies.fetch(url, { ...init, signal: controller.signal });
+        let removeAbortListener = () => { };
+        const onExternalAbort = () => controller.abort();
+        if (signal) {
+            signal.addEventListener('abort', onExternalAbort, { once: true });
+            removeAbortListener = () => signal.removeEventListener('abort', onExternalAbort);
+            if (signal.aborted)
+                controller.abort();
         }
-        finally {
+        const timer = setTimeout(() => controller.abort(), WEB_REQUEST_TIMEOUT_MS_ACU);
+        const cleanup = () => {
             clearTimeout(timer);
+            removeAbortListener();
+            removeAbortListener = () => { };
+        };
+        try {
+            const response = await this.dependencies.fetch(url, { ...init, signal: controller.signal });
+            return { response, signal: controller.signal, cleanup };
+        }
+        catch (error) {
+            cleanup();
+            throw error;
         }
     }
-    async fetchMediawikiJson_ACU(source, params) {
+    async fetchMediawikiJson_ACU(source, params, signal) {
         const search = new URLSearchParams({ ...params, format: 'json', origin: '*', utf8: '1' });
         const url = `${MEDIAWIKI_ENDPOINTS_ACU[source].api}?${search.toString()}`;
+        let lease = null;
         try {
-            const response = await this.fetchDirect_ACU(url, { method: 'GET' });
+            lease = await this.fetchDirect_ACU(url, { method: 'GET' }, signal);
+            const response = lease.response;
             if (!response.ok)
                 return { ok: false, reason: `${AGENT_ENCYCLOPEDIA_SOURCE_LABELS_ACU[source]} 返回 HTTP ${response.status}` };
-            const data = await response.json();
+            const data = await readBodyWithAbort_ACU(response.json(), lease.signal);
             if (data && typeof data === 'object' && data.error) {
                 return { ok: false, reason: `${AGENT_ENCYCLOPEDIA_SOURCE_LABELS_ACU[source]} API 错误：${String(data.error.info ?? data.error.code ?? '未知')}` };
             }
             return { ok: true, data };
         }
         catch (error) {
+            if (signal?.aborted || (isAbortError_ACU(error) && signal?.aborted))
+                throw error;
             return { ok: false, reason: `${AGENT_ENCYCLOPEDIA_SOURCE_LABELS_ACU[source]} 请求失败（网络不可达或被浏览器拦截）：${error instanceof Error ? error.message : String(error)}` };
+        }
+        finally {
+            lease?.cleanup();
         }
     }
     /**
@@ -132749,7 +134538,8 @@ class AgentWebClient_ACU {
      * 萌娘百科关闭了 list=search，改用 opensearch（前缀匹配，返回标题与链接）；维基用全文 search。
      * 百度百科需要上游 /api/search/visit 转发，TT 未提供该路由，直接返回不可用说明。
      */
-    async searchEncyclopedia(source, query) {
+    async searchEncyclopedia(source, query, signal) {
+        throwIfAborted_ACU(signal);
         const trimmed = query.trim();
         if (!trimmed)
             return { candidates: [], note: '检索词为空' };
@@ -132757,7 +134547,7 @@ class AgentWebClient_ACU {
             return { candidates: [], note: '百度百科需要经酒馆服务器转发（上游 /api/search/visit），TT 当前未提供该路由；请用萌娘百科 / 维基百科或 SearXNG 通道' };
         }
         if (source === 'moegirl') {
-            const result = await this.fetchMediawikiJson_ACU(source, { action: 'opensearch', search: trimmed, limit: String(ENCYCLOPEDIA_CANDIDATE_LIMIT_ACU), redirects: 'resolve' });
+            const result = await this.fetchMediawikiJson_ACU(source, { action: 'opensearch', search: trimmed, limit: String(ENCYCLOPEDIA_CANDIDATE_LIMIT_ACU), redirects: 'resolve' }, signal);
             if (result.ok === false)
                 return { candidates: [], note: result.reason };
             const titles = Array.isArray(result.data) ? result.data[1] : [];
@@ -132771,7 +134561,7 @@ class AgentWebClient_ACU {
             }));
             return { candidates, note: candidates.length ? '' : '萌娘百科 opensearch 无候选（它按标题前缀匹配，试试角色全名、作品名或去掉修饰词）' };
         }
-        const result = await this.fetchMediawikiJson_ACU(source, { action: 'query', list: 'search', srsearch: trimmed, srlimit: String(ENCYCLOPEDIA_CANDIDATE_LIMIT_ACU) });
+        const result = await this.fetchMediawikiJson_ACU(source, { action: 'query', list: 'search', srsearch: trimmed, srlimit: String(ENCYCLOPEDIA_CANDIDATE_LIMIT_ACU) }, signal);
         if (result.ok === false)
             return { candidates: [], note: result.reason };
         const hits = result.data?.query?.search;
@@ -132787,7 +134577,8 @@ class AgentWebClient_ACU {
      * @param title 词条标题（可来自 searchEncyclopedia 的候选）
      * @param charLimit 原文字数上限
      */
-    async readEncyclopedia(source, title, charLimit) {
+    async readEncyclopedia(source, title, charLimit, signal) {
+        throwIfAborted_ACU(signal);
         const trimmed = title.trim();
         if (source === 'baidu') {
             return { source, title: trimmed, url: `https://baike.baidu.com/item/${encodeURIComponent(trimmed)}`, text: '', status: 'unavailable', note: '百度百科需要经酒馆服务器转发（上游 /api/search/visit），TT 当前未提供该路由；请用萌娘百科 / 维基百科或 SearXNG 通道' };
@@ -132795,7 +134586,7 @@ class AgentWebClient_ACU {
         const url = encyclopediaPageUrl_ACU(source, trimmed || title);
         if (!trimmed)
             return { source, title: '', url, text: '', status: 'unavailable', note: '词条标题为空' };
-        const result = await this.fetchMediawikiJson_ACU(source, { action: 'query', prop: 'extracts', explaintext: '1', exlimit: '1', exsectionformat: 'plain', redirects: '1', titles: trimmed });
+        const result = await this.fetchMediawikiJson_ACU(source, { action: 'query', prop: 'extracts', explaintext: '1', exlimit: '1', exsectionformat: 'plain', redirects: '1', titles: trimmed }, signal);
         if (result.ok === false)
             return { source, title: trimmed, url, text: '', status: 'unavailable', note: result.reason };
         const pages = result.data?.query?.pages;
@@ -132815,22 +134606,25 @@ class AgentWebClient_ACU {
      * @param query 检索词
      * @param settings 网页检索设置（提供方、SearXNG 地址与可选透传键）
      */
-    async webSearch(query, settings) {
+    async webSearch(query, settings, signal) {
+        throwIfAborted_ACU(signal);
         const trimmed = query.trim();
         if (!trimmed)
             return { hits: [], note: '检索词为空' };
         const provider = settings.searchProvider;
         if (provider === 'searxng')
-            return this.searchSearxng_ACU(trimmed, settings.searxngBaseUrl, settings);
+            return this.searchSearxng_ACU(trimmed, settings.searxngBaseUrl, settings, signal);
         return { hits: [], note: `${provider} 需要酒馆服务器「网页搜索」转发（上游 /api/search/${provider}），TT 仅提供 /api/search/searxng；请把搜索引擎切换为 SearXNG（自建或公共实例）后再搜` };
     }
-    async searchSearxng_ACU(query, baseUrl, options = {}) {
+    async searchSearxng_ACU(query, baseUrl, options = {}, signal) {
+        throwIfAborted_ACU(signal);
         if (!baseUrl.trim())
             return { hits: [], note: 'SearXNG 实例地址未配置（续写设置 → 网页检索 → SearXNG 实例地址，如 https://searx.example.org；可自建实例或选用公共实例）' };
         // 客户端侧闸门：baseUrl 会被服务端拿去出网，内网/非法地址在此直接拒绝，不发请求。
         const denied = evaluateSearxngBaseUrlPolicy_ACU(baseUrl);
         if (denied)
             return { hits: [], note: `SearXNG 实例地址被拒绝：${denied}` };
+        let lease = null;
         try {
             // TT DTO 全透传（见 TT tests/search-routes-contract.test.mjs 三键断言）：
             // preferences/categories 为 Option，有值才填，空（或全空白）不填。
@@ -132841,17 +134635,22 @@ class AgentWebClient_ACU {
             const categories = options.categories?.trim();
             if (categories)
                 body.categories = categories;
-            const response = await this.fetchDirect_ACU('/api/search/searxng', {
+            lease = await this.fetchDirect_ACU('/api/search/searxng', {
                 method: 'POST',
                 headers: { ...this.dependencies.hostHeaders(), 'Content-Type': 'application/json' },
                 body: JSON.stringify(body),
-            });
-            if (!response.ok)
-                return { hits: [], note: `SearXNG 请求失败（HTTP ${response.status}）：实例地址可能填错、实例离线，或实例拒绝了该查询` };
-            return { hits: parseSearxngHtml_ACU(await response.text()), note: '' };
+            }, signal);
+            if (!lease.response.ok)
+                return { hits: [], note: `SearXNG 请求失败（HTTP ${lease.response.status}）：实例地址可能填错、实例离线，或实例拒绝了该查询` };
+            return { hits: parseSearxngHtml_ACU(await readBodyWithAbort_ACU(lease.response.text(), lease.signal)), note: '' };
         }
         catch (error) {
+            if (signal?.aborted || (isAbortError_ACU(error) && signal?.aborted))
+                throw error;
             return { hits: [], note: `SearXNG 请求异常：${error instanceof Error ? error.message : String(error)}` };
+        }
+        finally {
+            lease?.cleanup();
         }
     }
     /**
@@ -132861,7 +134660,8 @@ class AgentWebClient_ACU {
      * @param settings 黑名单与字数上限
      * @param hostOrigin 酒馆自身 origin，用于拒绝抓自己
      */
-    async webRead(url, settings, hostOrigin) {
+    async webRead(url, settings, hostOrigin, signal) {
+        throwIfAborted_ACU(signal);
         const trimmed = String(url ?? '').trim();
         const denied = evaluateWebUrlPolicy_ACU(trimmed, parseBlockedDomains_ACU(settings.blockedDomains), hostOrigin);
         if (denied)
@@ -133063,6 +134863,13 @@ function rejectDelegation_ACU(message, details) {
 function subagentFailed_ACU(message, retryable, details) {
     return new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_AGENT_SUBAGENT_FAILED', 'agent_delegate', message, retryable, details));
 }
+function throwIfSubagentAborted_ACU(signal) {
+    if (!signal?.aborted)
+        return;
+    const error = new Error('子代理请求已取消');
+    error.name = 'AbortError';
+    throw error;
+}
 function selectPromptSegments_ACU(settings, definition) {
     return settings.agentPrompts[definition.promptKey];
 }
@@ -133093,6 +134900,18 @@ function insertBeforeTrailingPrefill_ACU(messages, extra) {
     if (last && last.role === 'assistant')
         return [...messages.slice(0, -1), extra, last];
     return [...messages, extra];
+}
+/**
+ * 子代理读取预算状态文本。子代理提示词一次渲染即固定，预算这类随工具轮变化的实时状态
+ * 由运行时在首轮注入、并在每次工具批次后追加刷新；本侧门禁是单批次独立判定，额度不跨批累计。
+ */
+function renderSubagentReadBudgetNote_ACU(params) {
+    const remaining = Math.max(0, params.maxToolRounds - params.toolRoundsUsed);
+    return [
+        `【读取预算状态】单批次读取上限约 ${params.maxReadTokens} tokens；临近总结阈值时只有不超过 ${params.fallbackTokens} tokens 的精读批次会被放行。`,
+        `工具轮次剩余 ${remaining} / ${params.maxToolRounds}（本次派工已累计放行读取约 ${params.grantedTokens} tokens，仅遥测、不扣减后续批次额度）。`,
+        '按预算分配调阅：先 search 定位，再用窄地址（楼层区间/表格行区间/模块 ID）精读；轮次见底就基于已有资料交付，缺口如实标注「信息不足」，不许硬编。',
+    ].join('\n');
 }
 function researcherProtocolError_ACU(message) {
     throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_AGENT_PROTOCOL_INVALID', 'agent_delegate', message, true));
@@ -133185,6 +135004,16 @@ class AgentSubagentRuntime_ACU {
         const isResearch = definition.kind === 'research';
         const webSettings = input.settings.webResearch;
         const pageCache = { pages: new Map(), byUrl: new Map(), pagesUsed: 0 };
+        // 网页检索天然要多轮「搜 → 读 → 补搜」，工具轮上限独立于普通子代理的 maxExtraReads。
+        const maxToolRounds = Math.max(0, isResearch ? webSettings.maxToolRounds : input.budget.maxExtraReads);
+        const readBudget = resolveAgentReadBudget_ACU(gate.config);
+        const renderReadBudgetNote = (roundsUsed) => renderSubagentReadBudgetNote_ACU({
+            maxReadTokens: readBudget.effectiveMaxReadTokens,
+            fallbackTokens: readBudget.effectiveFallbackTokens,
+            maxToolRounds,
+            toolRoundsUsed: roundsUsed,
+            grantedTokens: gate.state.grantedTokens,
+        });
         const rendered = await renderContinuationPrompt_ACU(selectPromptSegments_ACU(input.settings, definition), {
             $AGENT_READ_MATERIALS: () => materials,
             $AGENT_TASK: () => input.delegation.prompt,
@@ -133217,12 +135046,12 @@ class AgentSubagentRuntime_ACU {
         const prefill = PROMPT_KEY_PREFILLS_ACU[definition.promptKey];
         // 总纲卷数计划是随设置变化的运行时指令，不进提示词模板；但它必须落在尾部预填充之前——
         // 追加在预填充之后会让对话以一条 user 消息收尾，预填充失效，模型会另起一段回复而不是续写 JSON。
-        const baseMessages = definition.promptKey === 'arcArchitect'
+        const baseMessagesInitial = definition.promptKey === 'arcArchitect'
             ? insertBeforeTrailingPrefill_ACU(rendered.messages, { role: 'user', content: renderStoryArcVolumePlanInstruction_ACU(input.settings) })
             : rendered.messages;
+        // 预算状态同样是运行时信息；首轮先给上限，之后随每个工具批次刷新剩余轮次与遥测。
+        const baseMessages = insertBeforeTrailingPrefill_ACU(baseMessagesInitial, { role: 'user', content: renderReadBudgetNote(0) });
         const retries = normalizeContinuationInternalAiRetryLimit_ACU(input.settings.internalAiRetryLimit);
-        // 网页检索天然要多轮「搜 → 读 → 补搜」，工具轮上限独立于普通子代理的 maxExtraReads。
-        const maxToolRounds = Math.max(0, isResearch ? webSettings.maxToolRounds : input.budget.maxExtraReads);
         // 小循环的追加消息：子代理自己的输出（assistant）与工具结果/纠正提示（user）。
         const transcript = [];
         /**
@@ -133235,6 +135064,19 @@ class AgentSubagentRuntime_ACU {
         let protocolRejections = 0;
         let attempt = 0;
         let lastReason = '';
+        const assertOutgoingWithinBudget_ACU = async (messages) => {
+            const budget = input.settings.agentHistoryTokenBudget;
+            if (budget <= 0)
+                return;
+            const outgoingTokens = await measureAgentPromptTokens_ACU(messages, countTokens_ACU);
+            if (outgoingTokens > budget) {
+                rejectDelegation_ACU(`${definition.name} 的完整出站上下文超出 agentHistoryTokenBudget，拒绝发送`, {
+                    agentName: definition.name,
+                    outgoingTokens,
+                    budget,
+                });
+            }
+        };
         // 本次派工的累计用量。只有每次已观测调用都报告某字段时，该字段才具备可求和的完整性。
         let usageTotal = null;
         const addCompleteCount = (current, incoming) => (current !== undefined && incoming !== undefined ? current + incoming : undefined);
@@ -133300,9 +135142,11 @@ class AgentSubagentRuntime_ACU {
                 throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_delegate', '子代理请求已失效', false));
             }
             // 传输错误（502/网络抖动）按设置延时重试；协议/契约拒绝仍走小循环内的对话级立即重试。
-            const raw = await callContinuationInternalAiWithRetry_ACU(() => this.dependencies.callInternalAi(pendingResearchEvidence
+            const outgoingMessages = pendingResearchEvidence
                 ? insertBeforeTrailingPrefill_ACU([...baseMessages, ...transcript], { role: 'user', content: pendingResearchEvidence })
-                : [...baseMessages, ...transcript], input.preset, identity, input.signal, callOptions), {
+                : [...baseMessages, ...transcript];
+            await assertOutgoingWithinBudget_ACU(outgoingMessages);
+            const raw = await callContinuationInternalAiWithRetry_ACU(() => this.dependencies.callInternalAi(outgoingMessages, input.preset, identity, input.signal, callOptions), {
                 transportRetries: retries,
                 retryDelaySeconds: input.settings.retryDelaySeconds,
                 isCurrent: () => input.isCurrent(identity) && !input.signal?.aborted,
@@ -133313,7 +135157,22 @@ class AgentSubagentRuntime_ACU {
             }
             const rawText = String(raw ?? '').trim();
             // 工具批次优先于契约解析：输出里出现任意 read/search 对象即视为继续调阅。
-            const toolCalls = isResearch ? parseAgentResearcherToolCalls_ACU(raw, prefill) : parseAgentSubagentToolCalls_ACU(raw, prefill);
+            let toolCalls = null;
+            try {
+                toolCalls = isResearch ? parseAgentResearcherToolCalls_ACU(raw, prefill) : parseAgentSubagentToolCalls_ACU(raw, prefill);
+            }
+            catch (error) {
+                if (error instanceof ContinuationValidationError_ACU && error.error.code === 'CONTINUATION_AGENT_SUBAGENT_FAILED')
+                    throw error;
+                lastReason = compactAgentProtocolError_ACU(error);
+                protocolRejections += 1;
+                if (protocolRejections > retries) {
+                    throw subagentFailed_ACU(`${definition.name} 连续 ${retries + 1} 次返回不符合契约`, false, { agentName: definition.name, lastReason });
+                }
+                transcript.push({ role: 'assistant', content: rawText || '(空输出)' });
+                transcript.push({ role: 'user', content: `你上一次的工具输出没有被采纳。原因：${lastReason}\n请修正后重新输出完整的 read/search 批次，或直接交付契约 JSON。` });
+                continue;
+            }
             if (toolCalls) {
                 // 当前输出正是对上一批临时网页正文的归纳机会。只持久保留模型显式给出的短笔记。
                 if (isResearch && pendingResearchEvidence) {
@@ -133335,17 +135194,18 @@ class AgentSubagentRuntime_ACU {
                 transcript.push({ role: 'assistant', content: rawText || '(空输出)' });
                 if (toolRoundsUsed >= maxToolRounds) {
                     transcript.push({ role: 'user', content: isResearch
-                            ? `工具轮次已用尽（上限 ${maxToolRounds} 轮）。请基于已抓到的页面输出契约 JSON；没查到的实体在 summary 里如实列出，不许伪造。`
-                            : `read/search 轮次已用尽（上限 ${maxToolRounds} 轮）。请基于已有资料输出契约 JSON；确实缺失的信息在结果里标注「信息不足」，不许伪造。` });
+                            ? `工具轮次已用尽（上限 ${maxToolRounds} 轮）。请基于已抓到的页面输出契约 JSON；没查到的实体在 summary 里如实列出，不许伪造。\n\n${renderReadBudgetNote(toolRoundsUsed)}`
+                            : `read/search 轮次已用尽（上限 ${maxToolRounds} 轮）。请基于已有资料输出契约 JSON；确实缺失的信息在结果里标注「信息不足」，不许伪造。\n\n${renderReadBudgetNote(toolRoundsUsed)}` });
                     continue;
                 }
                 toolRoundsUsed += 1;
-                const toolResult = await this.executeToolCalls_ACU(toolCalls, input.resolveContext, gate, expandedReads, isResearch ? { settings: input.settings, cache: pageCache } : undefined);
+                const toolResult = await this.executeToolCalls_ACU(toolCalls, input.resolveContext, gate, expandedReads, isResearch ? { settings: input.settings, cache: pageCache } : undefined, input.signal);
+                const refreshedToolResult = `${toolResult}\n\n${renderReadBudgetNote(toolRoundsUsed)}`;
                 if (isResearch) {
-                    pendingResearchEvidence = `【本次临时网页检索结果】\n以下网页正文仅供本次回答归纳。若还要继续调用工具，请把本次保留的事实压缩写入每个工具对象的 notes 字段（字符串或字符串数组，建议每页 1–3 条），系统不会在后续历史中保留网页原文。\n\n${toolResult}`;
+                    pendingResearchEvidence = `【本次临时网页检索结果】\n以下网页正文仅供本次回答归纳。若还要继续调用工具，请把本次保留的事实压缩写入每个工具对象的 notes 字段（字符串或字符串数组，建议每页 1–3 条），系统不会在后续历史中保留网页原文。\n\n${refreshedToolResult}`;
                 }
                 else {
-                    transcript.push({ role: 'user', content: toolResult });
+                    transcript.push({ role: 'user', content: refreshedToolResult });
                 }
                 continue;
             }
@@ -133475,12 +135335,32 @@ class AgentSubagentRuntime_ACU {
         const prefill = AGENT_PREFILLS_ACU.reviewer;
         const retries = normalizeContinuationInternalAiRetryLimit_ACU(input.settings.internalAiRetryLimit);
         const maxToolRounds = Math.max(0, input.settings.finalReview.maxExtraReads);
+        const readBudget = resolveAgentReadBudget_ACU(gate.config);
+        const renderReadBudgetNote = (roundsUsed) => renderSubagentReadBudgetNote_ACU({
+            maxReadTokens: readBudget.effectiveMaxReadTokens,
+            fallbackTokens: readBudget.effectiveFallbackTokens,
+            maxToolRounds,
+            toolRoundsUsed: roundsUsed,
+            grantedTokens: gate.state.grantedTokens,
+        });
+        // 终审与普通派工同一预算语义：首轮给出上限，每个工具批次后刷新剩余轮次与遥测；注入点必须在尾部预填充之前。
+        const baseMessages = insertBeforeTrailingPrefill_ACU(rendered.messages, { role: 'user', content: renderReadBudgetNote(0) });
         const transcript = [];
         const expandedReads = [];
         let toolRoundsUsed = 0;
         let protocolRejections = 0;
         let attempt = 0;
         let lastReason = '';
+        const fullCountTokens = createAgentTokenCounter_ACU();
+        const assertFinalOutgoingWithinBudget_ACU = async (messages) => {
+            const budget = input.settings.agentHistoryTokenBudget;
+            if (budget <= 0)
+                return;
+            const outgoingTokens = await measureAgentPromptTokens_ACU(messages, fullCountTokens);
+            if (outgoingTokens > budget) {
+                throw subagentFailed_ACU('终审完整出站上下文超出 agentHistoryTokenBudget，终审未执行。', false, { outgoingTokens, budget });
+            }
+        };
         let usageTotal = null;
         const addCompleteCount = (current, incoming) => (current !== undefined && incoming !== undefined ? current + incoming : undefined);
         const callOptions = {
@@ -133509,7 +135389,9 @@ class AgentSubagentRuntime_ACU {
             if (!input.isCurrent(identity)) {
                 throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_delegate', '终审请求已失效', false));
             }
-            const raw = await callContinuationInternalAiWithRetry_ACU(() => this.dependencies.callInternalAi([...rendered.messages, ...transcript], preset, identity, input.signal, callOptions), {
+            const outgoingMessages = [...baseMessages, ...transcript];
+            await assertFinalOutgoingWithinBudget_ACU(outgoingMessages);
+            const raw = await callContinuationInternalAiWithRetry_ACU(() => this.dependencies.callInternalAi(outgoingMessages, preset, identity, input.signal, callOptions), {
                 transportRetries: retries,
                 retryDelaySeconds: input.settings.retryDelaySeconds,
                 isCurrent: () => input.isCurrent(identity) && !input.signal?.aborted,
@@ -133519,15 +135401,29 @@ class AgentSubagentRuntime_ACU {
                 throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_delegate', '终审结果已失效', false));
             }
             const rawText = String(raw ?? '').trim();
-            const toolCalls = parseAgentSubagentToolCalls_ACU(raw, prefill);
+            let toolCalls = null;
+            try {
+                toolCalls = parseAgentSubagentToolCalls_ACU(raw, prefill);
+            }
+            catch (error) {
+                lastReason = compactAgentProtocolError_ACU(error);
+                protocolRejections += 1;
+                if (protocolRejections > retries) {
+                    throw subagentFailed_ACU(`最终审查连续 ${retries + 1} 次返回不符合契约`, false, { lastReason });
+                }
+                transcript.push({ role: 'assistant', content: rawText || '(空输出)' });
+                transcript.push({ role: 'user', content: `你上一次的工具输出没有被采纳。原因：${lastReason}\n请修正后重新输出完整的 read/search 批次，或直接交付终审 JSON。` });
+                continue;
+            }
             if (toolCalls) {
                 transcript.push({ role: 'assistant', content: rawText || '(空输出)' });
                 if (toolRoundsUsed >= maxToolRounds) {
-                    transcript.push({ role: 'user', content: `read/search 轮次已用尽（上限 ${maxToolRounds} 轮）。请依据已有证据输出终审 JSON；无法证实的内容写为未验证，不许臆测。` });
+                    transcript.push({ role: 'user', content: `read/search 轮次已用尽（上限 ${maxToolRounds} 轮）。请依据已有证据输出终审 JSON；无法证实的内容写为未验证，不许臆测。\n\n${renderReadBudgetNote(toolRoundsUsed)}` });
                     continue;
                 }
                 toolRoundsUsed += 1;
-                transcript.push({ role: 'user', content: await this.executeToolCalls_ACU(toolCalls, input.resolveContext, gate, expandedReads) });
+                const toolResult = await this.executeToolCalls_ACU(toolCalls, input.resolveContext, gate, expandedReads, undefined, input.signal);
+                transcript.push({ role: 'user', content: `${toolResult}\n\n${renderReadBudgetNote(toolRoundsUsed)}` });
                 continue;
             }
             try {
@@ -133560,7 +135456,8 @@ class AgentSubagentRuntime_ACU {
      * 执行子代理的一个工具批次并渲染结果文本。
      * 与主循环同一门禁语义：批内去重与已放行地址拆分、整批过门禁、打回报告直接作为结果回灌。
      */
-    async executeToolCalls_ACU(calls, context, gate, expandedReads, research) {
+    async executeToolCalls_ACU(calls, context, gate, expandedReads, research, signal) {
+        throwIfSubagentAborted_ACU(signal);
         const fresh = [];
         const duplicated = [];
         const seenInBatch = new Set();
@@ -133572,7 +135469,9 @@ class AgentSubagentRuntime_ACU {
                     webSections.push(`出网工具 ${call.kind} 只有 web-researcher 可用，本次未执行。`);
                     continue;
                 }
-                webSections.push(await this.executeWebToolCall_ACU(call, research.settings, research.cache, expandedReads));
+                throwIfSubagentAborted_ACU(signal);
+                webSections.push(await this.executeWebToolCall_ACU(call, research.settings, research.cache, expandedReads, signal));
+                throwIfSubagentAborted_ACU(signal);
                 continue;
             }
             if (call.kind === 'read') {
@@ -133629,17 +135528,26 @@ class AgentSubagentRuntime_ACU {
      * 结果文本带句柄，契约里的 pageRef 据此回填。同一 URL 重抓复用旧句柄、不计页数。
      * TT 语境：SearXNG 命中只给标题/链接/摘要（TT 无通用网页抓取，链接用于定位百科词条再精读）。
      */
-    async executeWebToolCall_ACU(call, settings, cache, expandedReads) {
+    async executeWebToolCall_ACU(call, settings, cache, expandedReads, signal) {
+        throwIfSubagentAborted_ACU(signal);
         const client = this.dependencies.webClient ?? (this.dependencies.webClient = new AgentWebClient_ACU());
         const webSettings = settings.webResearch;
         const registerPage = (page, query) => {
             const existing = cache.byUrl.get(page.url);
-            if (existing)
+            if (existing) {
+                const previous = cache.pages.get(existing);
+                // 失败页不能成为永久遮蔽：同一 URL 重试成功后替换其内容；已有成功页则保留稳定快照。
+                if (previous?.status !== 'ok' || !previous.text) {
+                    cache.pages.set(existing, { ...page, query });
+                    if (page.status === 'ok' && page.text)
+                        cache.pagesUsed += 1;
+                }
                 return existing;
+            }
             const handle = `P${cache.pages.size + 1}`;
             cache.pages.set(handle, { ...page, query });
             cache.byUrl.set(page.url, handle);
-            if (page.status === 'ok')
+            if (page.status === 'ok' && page.text)
                 cache.pagesUsed += 1;
             return handle;
         };
@@ -133659,7 +135567,7 @@ class AgentSubagentRuntime_ACU {
             if (!sources.length)
                 return `### 百科检索「${call.query}」\n没有可用的百科来源（设置里全部关闭）。请改用 web_search。`;
             const disabled = call.sources.filter(source => !enabledEncyclopediaSources_ACU(webSettings).includes(source));
-            const results = await Promise.all(sources.filter(source => !disabled.includes(source)).map(async (source) => ({ source, ...(await client.searchEncyclopedia(source, call.query)) })));
+            const results = await Promise.all(sources.filter(source => !disabled.includes(source)).map(async (source) => ({ source, ...(await client.searchEncyclopedia(source, call.query, signal)) })));
             expandedReads.push(`encyclopedia_search "${call.query}"`);
             const lines = [];
             for (const result of results) {
@@ -133684,14 +135592,16 @@ class AgentSubagentRuntime_ACU {
             const exhausted = pagesExhausted();
             if (exhausted)
                 return `### 百科精读「${call.title}」\n${exhausted}`;
-            const page = await client.readEncyclopedia(call.source, call.title, webSettings.pageCharLimit);
-            const reused = cache.byUrl.has(page.url);
+            const page = await client.readEncyclopedia(call.source, call.title, webSettings.pageCharLimit, signal);
+            const existingHandle = cache.byUrl.get(page.url);
+            const existingPage = existingHandle ? cache.pages.get(existingHandle) : undefined;
+            const reused = existingPage?.status === 'ok' && !!existingPage.text;
             const handle = registerPage(page, call.title);
             expandedReads.push(`encyclopedia_read ${call.source}:${call.title}`);
             return renderPage(handle, page, reused);
         }
         if (call.kind === 'web_search') {
-            const result = await client.webSearch(call.query, webSettings);
+            const result = await client.webSearch(call.query, webSettings, signal);
             expandedReads.push(`web_search "${call.query}"`);
             if (!result.hits.length)
                 return `### 网页搜索「${call.query}」\n无结果${result.note ? `：${result.note}` : ''}。换更短的关键词、加上作品名，或改用 encyclopedia_search。`;
@@ -133701,8 +135611,10 @@ class AgentSubagentRuntime_ACU {
         const exhausted = pagesExhausted();
         if (exhausted)
             return `### 网页抓取 ${call.url}\n${exhausted}`;
-        const page = await client.webRead(call.url, webSettings, this.dependencies.hostOrigin?.());
-        const reused = cache.byUrl.has(page.url);
+        const page = await client.webRead(call.url, webSettings, this.dependencies.hostOrigin?.(), signal);
+        const existingHandle = cache.byUrl.get(page.url);
+        const existingPage = existingHandle ? cache.pages.get(existingHandle) : undefined;
+        const reused = existingPage?.status === 'ok' && !!existingPage.text;
         const handle = registerPage(page, call.url);
         expandedReads.push(`web_read ${call.url}`);
         return renderPage(handle, page, reused);
@@ -134177,11 +136089,35 @@ class ContinuationAgentTurnPlanner_ACU {
         let maintenanceConvergenceAvailable = false;
         // 上次迭代耗尽后恢复时收敛到最后一次迭代：派工被禁用，主 Agent 必须基于已有证据交付或阻断。
         const iterationStart = resumedState ? Math.min(Math.max(1, resumedState.nextIteration), budget.maxIterations) : 1;
+        // 只有已经成功追加到持久会话的 outcome 才能进入恢复账本。会话提交失败时，
+        // ledger 仍可能有本轮新结果，但它们不能被下一次运行当成已读证据。
+        let committedOutcomeCount = resumedState ? ledger.outcomes.length : 0;
+        let activeLedgerCheckpoint = null;
+        const captureLedgerCheckpoint_ACU = () => ({
+            delegationsUsed: ledger.delegationsUsed,
+            perAgent: new Map(ledger.perAgent),
+            outcomesLength: ledger.outcomes.length,
+        });
+        const rollbackUncommittedLedger_ACU = () => {
+            if (!activeLedgerCheckpoint)
+                return;
+            if (ledger.outcomes.length > committedOutcomeCount)
+                ledger.outcomes.length = committedOutcomeCount;
+            ledger.delegationsUsed = activeLedgerCheckpoint.delegationsUsed;
+            ledger.perAgent.clear();
+            for (const [name, count] of activeLedgerCheckpoint.perAgent)
+                ledger.perAgent.set(name, count);
+            activeLedgerCheckpoint = null;
+        };
         const persistRunState = (nextIteration) => saveAgentRunState_ACU(identitySeed.chatIdentity, {
             taskId: identitySeed.taskId,
             cursorKey: cursorKeyOf(),
             nextIteration,
-            ledger: { delegationsUsed: ledger.delegationsUsed, perAgent: Object.fromEntries(ledger.perAgent), outcomes: ledger.outcomes },
+            ledger: {
+                delegationsUsed: ledger.delegationsUsed,
+                perAgent: Object.fromEntries(ledger.perAgent),
+                outcomes: ledger.outcomes.slice(0, committedOutcomeCount),
+            },
             finalReview,
         });
         let totalAttempts = 0;
@@ -134199,87 +136135,90 @@ class ContinuationAgentTurnPlanner_ACU {
         beginAgentSessionRun_ACU(describeRunLabel_ACU(context), resumedState
             ? `从中断点恢复：继续第 ${iterationStart} 次迭代，已保留 ${ledger.outcomes.length} 条已完成结果`
             : context.execution.turn?.goal ?? '本轮目标待大纲确定', resumedState !== null);
-        // 阈值统计的是主 Agent 实际读取的完整上下文，而不只是会话历史。开销部分（提示词骨架、
-        // 正文摘取、资料目录等）按首次迭代的真实渲染结果实测并记忆化；历史哨兵那条不发送，不计入。
-        // 压缩判定与读取门禁共用这一口径，量到的就是发出去的。
-        const counter = createAgentTokenCounter_ACU(this.dependencies.countTokens ?? countAgentTokens_ACU);
-        let overheadTokensCache = null;
-        const measureOverhead = async () => {
-            if (overheadTokensCache === null) {
-                const rendered = await this.renderMainPrompt_ACU(request, context, ledger, budget, iterationStart, toolUsage, gateConfig);
-                overheadTokensCache = await measureAgentPromptTokens_ACU(rendered.filter(message => !message.content.includes(HISTORY_SENTINEL_ACU)), counter);
+        try {
+            // 阈值统计的是主 Agent 实际读取的完整上下文，而不只是会话历史。开销部分（提示词骨架、
+            // 正文摘取、资料目录等）按首次迭代的真实渲染结果实测并记忆化；历史哨兵那条不发送，不计入。
+            // 压缩判定与读取门禁共用这一口径，量到的就是发出去的。
+            const counter = createAgentTokenCounter_ACU(this.dependencies.countTokens ?? countAgentTokens_ACU);
+            let overheadTokensCache = null;
+            const measureOverhead = async () => {
+                if (overheadTokensCache === null) {
+                    const rendered = await this.renderMainPrompt_ACU(request, context, ledger, budget, iterationStart, toolUsage, gateConfig);
+                    overheadTokensCache = await measureAgentPromptTokens_ACU(rendered.filter(message => !message.content.includes(HISTORY_SENTINEL_ACU)), counter);
+                }
+                return overheadTokensCache;
+            };
+            // 会话在 beginAgentSessionRun_ACU 之后打开：压缩/阈值通知按时间顺序
+            // 落在本次运行的分隔条之后，用户能看出它属于哪一次运行。
+            const handoffSemanticAdapter = createAgentHandoffSemanticSummaryAdapter_ACU(async (messages) => {
+                const base = request.createInternalRequestIdentity(0);
+                if (!request.isInternalRequestCurrent(base))
+                    throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_loop', '交接摘要请求已失效', false));
+                const identity = {
+                    ...base,
+                    requestId: `${base.requestId || base.attemptId || 'turn'}-handoff-summary`,
+                    source: 'handoff_summary',
+                };
+                return this.dependencies.callInternalAi(messages, preset, identity, request.signal, { promptCacheEnabled: false, cacheScope: 'handoff-summary', needsJsonFormat: true });
+            });
+            const session = await this.openConversation_ACU(chat, request, conversationTurnKeyOf(), counter, measureOverhead, handoffSemanticAdapter);
+            if (request.settings.finalReview.enabled) {
+                finalReview = resumedState?.finalReview ?? readFinalReviewStateFromConversation_ACU(session.snapshot(), identitySeed.taskId, session.turnKey) ?? finalReview;
+                postReviewDecisionAvailable = finalReview.status === 'feedback_ready';
             }
-            return overheadTokensCache;
-        };
-        // 会话在 beginAgentSessionRun_ACU 之后打开：压缩/阈值通知按时间顺序
-        // 落在本次运行的分隔条之后，用户能看出它属于哪一次运行。
-        const handoffSemanticAdapter = createAgentHandoffSemanticSummaryAdapter_ACU(async (messages) => {
-            const base = request.createInternalRequestIdentity(0);
-            if (!request.isInternalRequestCurrent(base))
-                throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_loop', '交接摘要请求已失效', false));
-            const identity = {
-                ...base,
-                requestId: `${base.requestId || base.attemptId || 'turn'}-handoff-summary`,
-                source: 'handoff_summary',
-            };
-            return this.dependencies.callInternalAi(messages, preset, identity, request.signal, { promptCacheEnabled: false, cacheScope: 'handoff-summary', needsJsonFormat: true });
-        });
-        const session = await this.openConversation_ACU(chat, request, conversationTurnKeyOf(), counter, measureOverhead, handoffSemanticAdapter);
-        if (request.settings.finalReview.enabled) {
-            finalReview = resumedState?.finalReview ?? readFinalReviewStateFromConversation_ACU(session.snapshot(), identitySeed.taskId, session.turnKey) ?? finalReview;
-            postReviewDecisionAvailable = finalReview.status === 'feedback_ready';
-        }
-        else {
-            finalReview = { ...finalReview, status: 'consumed' };
-        }
-        const recordFinalReviewState = async () => {
-            if (!request.settings.finalReview.enabled)
-                return;
-            session.record([{
-                    kind: 'runtime',
-                    text: renderFinalReviewStateRecord_ACU(identitySeed.taskId, finalReview),
-                    digest: FINAL_REVIEW_STATE_DIGEST_ACU,
-                    turnKey: session.turnKey,
-                }]);
-            await session.flush();
-        };
-        /** 门禁的 H：主 Agent 当前实际读取的完整上下文（骨架开销 + 实时会话历史）。 */
-        const measureContextTokens = async () => (await measureOverhead()) + await measureAgentPromptTokens_ACU(session.history(), counter);
-        // 换轮通告只在游标真的变了时追加：同一轮内的中断恢复不重复通告，否则模型会以为又开了一轮。
-        if (session.turnKey && lastAnnouncedTurnKey_ACU(session.snapshot()) !== session.turnKey) {
-            session.record([{ kind: 'turn', text: buildAgentTurnAnnouncement_ACU(context), digest: describeRunLabel_ACU(context), turnKey: session.turnKey }]);
-            await session.flush();
-        }
-        // 缓存写入 reviewing 后进程若中断，不能重复付费审查。改为可诊断的反馈，让主 Agent 明确裁决。
-        if (request.settings.finalReview.enabled && finalReview.status === 'reviewing') {
-            finalReview = {
-                ...finalReview,
-                status: 'feedback_ready',
-                feedback: renderFinalReviewFeedback_ACU('interrupted', finalReview.candidateFingerprint, finalReview.candidateSummary, '终审请求在拿到可用结论前中断，未将其视为通过。请依据现有资料修订、补证或 block。'),
-            };
-            session.record([{ kind: 'tool', text: finalReview.feedback, digest: '发送前终审中断', turnKey: session.turnKey }]);
-            await session.flush();
-            await recordFinalReviewState();
-            persistRunState(iterationStart);
-            postReviewDecisionAvailable = true;
-        }
-        /** 把本次动作新产生的运行时结论作为工具消息追加进会话，让下一次迭代按真实 role 读到它。 */
-        const commitOutcomes = async (before) => {
-            const fresh = ledger.outcomes.slice(before);
-            if (fresh.length) {
+            else {
+                finalReview = { ...finalReview, status: 'consumed' };
+            }
+            const recordFinalReviewState = async () => {
+                if (!request.settings.finalReview.enabled)
+                    return;
                 session.record([{
-                        kind: 'tool',
-                        text: renderAgentToolResults_ACU(fresh),
-                        digest: fresh.map(outcome => `${outcome.agentName}${outcome.ok ? '成功' : '未采用'}`).join('、'),
+                        kind: 'runtime',
+                        text: renderFinalReviewStateRecord_ACU(identitySeed.taskId, finalReview),
+                        digest: FINAL_REVIEW_STATE_DIGEST_ACU,
                         turnKey: session.turnKey,
                     }]);
+                await session.flush();
+            };
+            /** 门禁的 H：主 Agent 当前实际读取的完整上下文（骨架开销 + 实时会话历史）。 */
+            const measureContextTokens = async () => (await measureOverhead()) + await measureAgentPromptTokens_ACU(session.history(), counter);
+            // 换轮通告只在游标真的变了时追加：同一轮内的中断恢复不重复通告，否则模型会以为又开了一轮。
+            if (session.turnKey && lastAnnouncedTurnKey_ACU(session.snapshot()) !== session.turnKey) {
+                session.record([{ kind: 'turn', text: buildAgentTurnAnnouncement_ACU(context), digest: describeRunLabel_ACU(context), turnKey: session.turnKey }]);
+                await session.flush();
             }
-            await session.flush();
-        };
-        try {
+            // 缓存写入 reviewing 后进程若中断，不能重复付费审查。改为可诊断的反馈，让主 Agent 明确裁决。
+            if (request.settings.finalReview.enabled && finalReview.status === 'reviewing') {
+                finalReview = {
+                    ...finalReview,
+                    status: 'feedback_ready',
+                    feedback: renderFinalReviewFeedback_ACU('interrupted', finalReview.candidateFingerprint, finalReview.candidateSummary, '终审请求在拿到可用结论前中断，未将其视为通过。请依据现有资料修订、补证或 block。'),
+                };
+                session.record([{ kind: 'tool', text: finalReview.feedback, digest: '发送前终审中断', turnKey: session.turnKey }]);
+                await session.flush();
+                await recordFinalReviewState();
+                persistRunState(iterationStart);
+                postReviewDecisionAvailable = true;
+            }
+            /** 把本次动作新产生的运行时结论作为工具消息追加进会话，让下一次迭代按真实 role 读到它。 */
+            const commitOutcomes = async (before) => {
+                const fresh = ledger.outcomes.slice(before);
+                if (fresh.length) {
+                    session.record([{
+                            kind: 'tool',
+                            text: renderAgentToolResults_ACU(fresh),
+                            digest: fresh.map(outcome => `${outcome.agentName}${outcome.ok ? '成功' : '未采用'}`).join('、'),
+                            turnKey: session.turnKey,
+                        }]);
+                }
+                await session.flush();
+                committedOutcomeCount = ledger.outcomes.length;
+                activeLedgerCheckpoint = null;
+            };
             // 开场检索：新任务第一次规划、资料库为空时，先把原作设定查进百科资料库再让主 Agent 开跑。
             // 受控入口，不消耗主 Agent 的派工额度；失败只记结果不掐断规划。
             if (this.shouldRunOpeningResearch_ACU(request, context, resumedState !== null)) {
+                activeLedgerCheckpoint = captureLedgerCheckpoint_ACU();
                 const outcomesBefore = ledger.outcomes.length;
                 snapshot = await this.runOpeningResearch_ACU(request, context, ledger, budget, chat, snapshot, apiDependencies);
                 await commitOutcomes(outcomesBefore);
@@ -134301,6 +136240,7 @@ class ContinuationAgentTurnPlanner_ACU {
                 context.execution = request.readContext();
                 resetLedgerForAuthorityChange();
                 currentIteration = iteration;
+                activeLedgerCheckpoint = captureLedgerCheckpoint_ACU();
                 persistRunState(iteration);
                 const noExecutableOutline = !context.execution.turn;
                 const outlineMaintenanceReserveAvailable = !maintenanceConvergenceAvailable
@@ -134470,6 +136410,7 @@ class ContinuationAgentTurnPlanner_ACU {
             // 中断即存档（block 除外，其缓存已清）：迭代中途的失败保留已完成的派工结论，
             // 用户再发送时据此从当前迭代恢复而不是从头重跑。
             if (!(error instanceof ContinuationValidationError_ACU && error.error.code === 'CONTINUATION_AGENT_BLOCKED')) {
+                rollbackUncommittedLedger_ACU();
                 persistRunState(Math.min(currentIteration, budget.maxIterations));
             }
             if (!terminalLogged) {
@@ -134529,6 +136470,10 @@ class ContinuationAgentTurnPlanner_ACU {
             });
             if (compaction.mark) {
                 const candidate = compaction.mark;
+                const leaseProbe = request.createInternalRequestIdentity(0);
+                if (request.signal?.aborted || !request.isInternalRequestCurrent(leaseProbe)) {
+                    throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_loop', '交接摘要完成时租约已失效，拒绝写入压缩标记', false));
+                }
                 let committed = false;
                 try {
                     if (await this.dependencies.writeCompactionMark(chat, candidate)) {
@@ -134852,6 +136797,12 @@ class ContinuationAgentTurnPlanner_ACU {
      * 不受波次并发限制、失败不抛——开场检索是锦上添花，网络不通不该让整轮规划失败。
      */
     async runOpeningResearch_ACU(request, context, ledger, budget, chat, snapshot, apiDependencies) {
+        const chatAnchor = chat.slice();
+        const assertChatUnchanged_ACU = () => {
+            if (chat.length !== chatAnchor.length || chat.some((message, index) => message !== chatAnchor[index])) {
+                throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_loop', '开场检索在途期间聊天楼层发生变化', false));
+            }
+        };
         const delegation = { agentName: AGENT_WEB_RESEARCHER_NAME_ACU, prompt: buildOpeningResearchPrompt_ACU(context.originInstruction), reads: [] };
         const entryId = logAgentSession_ACU({ kind: 'delegation', agentName: delegation.agentName, title: '开场百科检索执行中', detail: delegation.prompt, status: 'running' });
         try {
@@ -134866,28 +136817,31 @@ class ContinuationAgentTurnPlanner_ACU {
                 isCurrent: identity => request.isInternalRequestCurrent(identity),
                 signal: request.signal,
             });
+            assertChatUnchanged_ACU();
             const settled = this.settleResearcherResult_ACU(result, snapshot);
+            if (settled.snapshot !== snapshot) {
+                // 落盘守卫与 runParallelDelegations 的信封写同强度：子代理在途期间用户可能已停止任务
+                // （signal abort / 租约作废），此时楼层扩展字段绝不能照常写入末楼。
+                const leaseProbe = request.createInternalRequestIdentity(0);
+                if (request.signal?.aborted || !request.isInternalRequestCurrent(leaseProbe)) {
+                    throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_loop', '开场百科检索完成时租约已失效', false));
+                }
+                // 先提交快照，再改内存投影、记成功 outcome；写盘失败时 catch 只能记录失败，
+                // 不能让 ledger 声称正文/百科结果已经与快照一起提交。
+                await this.persistSnapshot_ACU(chat, settled.snapshot);
+                context.moduleSnapshot = settled.snapshot;
+            }
             ledger.outcomes.push(settled.outcome);
             updateAgentSession_ACU(entryId, {
                 title: `开场百科检索${settled.outcome.ok ? '完成' : '未采用'}${result.usage ? ` · ${formatAgentUsageLabel_ACU(result.usage)}` : ''}`,
                 detail: settled.outcome.ok ? [settled.outcome.summary, settled.outcome.detail].filter(Boolean).join('\n') : settled.outcome.rejectedReason,
                 ok: settled.outcome.ok,
             });
-            if (settled.snapshot !== snapshot) {
-                // 落盘守卫与 runParallelDelegations 的信封写同强度：子代理在途期间用户可能已停止任务
-                // （signal abort / 租约作废），此时楼层扩展字段绝不能照常写入末楼。
-                const leaseProbe = request.createInternalRequestIdentity(0);
-                if (request.signal?.aborted || !request.isInternalRequestCurrent(leaseProbe)) {
-                    // 内存快照仍返回：调用方（plan）随后会因同一判定抛 STALE，不影响最终结果。
-                    return settled.snapshot;
-                }
-                context.moduleSnapshot = settled.snapshot;
-                await this.persistSnapshot_ACU(chat, settled.snapshot);
-            }
             return settled.snapshot;
         }
         catch (error) {
-            if (error instanceof ContinuationValidationError_ACU && error.error.code === 'CONTINUATION_INTERNAL_REQUEST_STALE')
+            if (error instanceof ContinuationValidationError_ACU
+                && (error.error.code === 'CONTINUATION_INTERNAL_REQUEST_STALE' || error.error.code === 'CONTINUATION_AGENT_WRITE_REJECTED'))
                 throw error;
             const reason = compactAgentProtocolError_ACU(error);
             updateAgentSession_ACU(entryId, { title: '开场百科检索失败', detail: `${reason}\n主 Agent 将在没有百科资料库的情况下继续规划；需要时它仍可派工 web-researcher 重试。`, ok: false });
@@ -134931,6 +136885,15 @@ class ContinuationAgentTurnPlanner_ACU {
     }
     async runDelegations(action, request, context, ledger, budget, chat, snapshot, apiDependencies, outlineMaintenanceReserveAvailable = false) {
         const waveLimit = resolveWaveLimit_ACU(request.settings, budget);
+        const chatAnchor = chat.slice();
+        const assertChatUnchanged_ACU = () => {
+            if (chat.length !== chatAnchor.length || chat.some((message, index) => message !== chatAnchor[index])) {
+                throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_loop', '子代理在途期间聊天楼层发生变化，拒绝用未见楼层结算', false));
+            }
+        };
+        const aiEvidenceIndexes = new Set();
+        chat.forEach((message, index) => { if (isAiFloor_ACU(message))
+            aiEvidenceIndexes.add(index); });
         const outlineDelegations = action.delegations.filter(item => item.agentName === AGENT_OUTLINE_AGENT_NAME_ACU);
         const normalDelegations = action.delegations.filter(item => item.agentName !== AGENT_OUTLINE_AGENT_NAME_ACU);
         let usedOutlineMaintenanceReserve = false;
@@ -134982,6 +136945,7 @@ class ContinuationAgentTurnPlanner_ACU {
             let result;
             try {
                 result = await request.applyOutline(delegation.prompt);
+                assertChatUnchanged_ACU();
             }
             catch (error) {
                 const message = error instanceof ContinuationValidationError_ACU ? error.error.message : error instanceof Error ? error.message : String(error);
@@ -135073,6 +137037,7 @@ class ContinuationAgentTurnPlanner_ACU {
                 return { delegation, result: null, error };
             }
         }));
+        assertChatUnchanged_ACU();
         let nextSnapshot = snapshot;
         let snapshotChanged = false;
         for (const item of settled) {
@@ -135086,12 +137051,12 @@ class ContinuationAgentTurnPlanner_ACU {
             if (result.maintainer) {
                 try {
                     const delta = mergeAgentDeltaRevisions_ACU(result.maintainer.delta, result.readRevisions);
-                    const applied = applyAgentModuleDelta_ACU(nextSnapshot, delta, result.writes, chat.length - 1);
+                    const applied = applyAgentModuleDelta_ACU(nextSnapshot, delta, result.writes, chat.length - 1, [], aiEvidenceIndexes);
                     // 结算派工成功交付契约即推进水位到当轮末楼：空 delta（这段楼层没有新增伏笔/信息差）
                     // 同样代表已被处理过，不推水位会让同一区间每轮重复要求结算、白烧派工。
                     const settledTarget = chat.length - 1;
                     if (applied !== nextSnapshot || applied.settledThroughIndex < settledTarget) {
-                        nextSnapshot = { ...applied, settledThroughIndex: Math.max(applied.settledThroughIndex, settledTarget) };
+                        nextSnapshot = refreshAgentModuleSnapshotChatPrefix_ACU({ ...applied, settledThroughIndex: Math.max(applied.settledThroughIndex, settledTarget) }, chat);
                         snapshotChanged = true;
                     }
                     const proposals = result.maintainer.delta.constraintProposals;
@@ -135174,13 +137139,13 @@ class ContinuationAgentTurnPlanner_ACU {
             settleOutcome(item.delegation, { agentName: result.agentName, ok: false, summary: '', detail: '', rejectedReason: '子代理没有返回可用输出' }, result.usage);
         }
         if (snapshotChanged) {
+            assertChatUnchanged_ACU();
             // 落盘守卫与信封写同强度：子代理在途期间用户可能已停止任务（signal abort / 租约作废），
             // 此时楼层扩展字段绝不能照常写入——信封写有 withLease + assertLeaseCurrent，
             // 而 agent-module-store 的写只校验目标楼层存在，守卫必须在这一层补上。
             const leaseProbe = request.createInternalRequestIdentity(0);
             if (request.signal?.aborted || !request.isInternalRequestCurrent(leaseProbe)) {
-                // 内存快照仍返回：调用方（plan）随后会因同一判定抛 STALE，不影响最终结果。
-                return { snapshot: nextSnapshot, usedOutlineMaintenanceReserve };
+                throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_loop', '资料快照落盘前租约已失效', false));
             }
             context.moduleSnapshot = nextSnapshot;
             context.settledThroughIndex = nextSnapshot.settledThroughIndex;
@@ -135251,6 +137216,7 @@ class ContinuationHostGenerationBridge_ACU {
     constructor(dependencies) {
         this.dependencies = dependencies;
         this.sendingIdentity = null;
+        this.armedByChat = new Map();
         this.startedByChat = new Map();
         this.stateListeners = new Set();
         this.localRetryClaim = null;
@@ -135275,6 +137241,17 @@ class ContinuationHostGenerationBridge_ACU {
             catch { /* 观察者失败不能影响正文确认链 */ }
         }
     }
+    armAttempt_ACU(identity) {
+        this.armedByChat.set(identity.chatIdentity, { identity, createdAt: this.dependencies.now() });
+    }
+    hasMatchingArmedAttempt_ACU(identity) {
+        const armed = this.armedByChat.get(identity.chatIdentity);
+        return !!armed && armed.identity.attemptId === identity.attemptId;
+    }
+    consumeArmedAttempt_ACU(identity) {
+        if (this.hasMatchingArmedAttempt_ACU(identity))
+            this.armedByChat.delete(identity.chatIdentity);
+    }
     /** 打断酒馆正在进行的正文生成。用户点停止时必须先走这里，否则正文写完仍会确认并自动续写。 */
     stopHostGeneration() {
         this.dependencies.hostInput.stopGeneration();
@@ -135282,6 +137259,8 @@ class ContinuationHostGenerationBridge_ACU {
     /** 桥内存中是否持有该聊天的活认领（发送窗口内或已认领生成开始）。用于区分真在飞与重载后的滞留态。 */
     hasLiveClaim(chatIdentity) {
         if (this.sendingIdentity?.chatIdentity === chatIdentity)
+            return true;
+        if (this.armedByChat.has(chatIdentity))
             return true;
         return this.startedByChat.has(chatIdentity);
     }
@@ -135295,7 +137274,13 @@ class ContinuationHostGenerationBridge_ACU {
      * @returns 是否确实删除了一条认领（供测试与日志断言）
      */
     invalidateStartedByChat(chatIdentity) {
-        return this.startedByChat.delete(chatIdentity);
+        const startedCleared = this.startedByChat.delete(chatIdentity);
+        const armedCleared = this.armedByChat.delete(chatIdentity);
+        if (this.sendingIdentity?.chatIdentity === chatIdentity)
+            this.sendingIdentity = null;
+        if (this.localRetryClaim?.identity.chatIdentity === chatIdentity)
+            this.localRetryClaim = null;
+        return startedCleared || armedCleared;
     }
     async send(prepared) {
         const runtime = this.dependencies.runtime;
@@ -135307,12 +137292,24 @@ class ContinuationHostGenerationBridge_ACU {
             capturedChatLength: Array.isArray(chat) ? chat.length : 0,
             capturedAiFloorCount: countAiModelOutputFloors_ACU(chat),
             generationSeq: null,
+            instructionIndex: Array.isArray(chat) ? chat.length : 0,
+            instructionFingerprint: hostMessageFingerprint_ACU({ is_user: true, mes: prepared.instruction.instruction }),
+            boundaryFingerprint: hostBoundaryFingerprint_ACU(Array.isArray(chat) ? chat : []),
         };
         await runtime.recordHostTurn({ identity: prepared.identity, capture });
+        if (!isHostSendBoundaryIntact_ACU(runtime.getChat(), capture)) {
+            try {
+                await runtime.pauseForHostResultFailure(prepared.identity);
+            }
+            catch { /* state already changed */ }
+            return false;
+        }
+        this.armAttempt_ACU(prepared.identity);
         this.sendingIdentity = prepared.identity;
         this.notifyStateChanges_ACU();
         try {
             if (!this.dependencies.hostInput.send(prepared.instruction.instruction)) {
+                this.consumeArmedAttempt_ACU(prepared.identity);
                 await runtime.pauseForHostInputFailure(prepared.identity);
                 return false;
             }
@@ -135335,7 +137332,7 @@ class ContinuationHostGenerationBridge_ACU {
         const identity = this.sendingIdentity;
         if (identity && identity.chatIdentity === runtime.getChatIdentity()) {
             const pending = runtime.readPendingHostTurn();
-            if (!pending || pending.pending.identity.attemptId !== identity.attemptId || pending.pending.capture.generationSeq !== null)
+            if (!pending || pending.pending.identity.attemptId !== identity.attemptId || pending.pending.capture.generationSeq !== null || !this.hasMatchingArmedAttempt_ACU(identity))
                 return false;
             this.startedByChat.set(identity.chatIdentity, { identity, sequence, bind: runtime.bindHostTurnGeneration(identity, sequence) });
             if (this.localRetryClaim?.identity.attemptId === identity.attemptId)
@@ -135353,6 +137350,8 @@ class ContinuationHostGenerationBridge_ACU {
             return false;
         const pendingIdentity = snapshot.pending.identity;
         if (localRetryClaim && pendingIdentity.attemptId !== localRetryClaim.identity.attemptId)
+            return false;
+        if (!this.hasMatchingArmedAttempt_ACU(pendingIdentity))
             return false;
         this.startedByChat.set(chatIdentity, { identity: pendingIdentity, sequence, bind: runtime.bindHostTurnGeneration(pendingIdentity, sequence) });
         if (localRetryClaim)
@@ -135378,6 +137377,8 @@ class ContinuationHostGenerationBridge_ACU {
             return false;
         if (localRetryClaim && snapshot.pending.identity.attemptId !== localRetryClaim.identity.attemptId)
             return false;
+        if (!this.hasMatchingArmedAttempt_ACU(snapshot.pending.identity))
+            return false;
         const boundSequence = snapshot.pending.capture.generationSeq ?? started?.sequence ?? null;
         return boundSequence === null || sequence === undefined || boundSequence === sequence;
     }
@@ -135397,6 +137398,7 @@ class ContinuationHostGenerationBridge_ACU {
         const claimedIdentity = started?.identity ?? this.dependencies.runtime.readPendingHostTurn()?.pending.identity;
         if (!claimedIdentity)
             return;
+        this.consumeArmedAttempt_ACU(claimedIdentity);
         try {
             if (started)
                 await started.bind;
@@ -135490,17 +137492,22 @@ class ContinuationHostGenerationBridge_ACU {
             // 判定挡下、宽松 ENDED 被陈旧序列号挡下，续写链死锁到刷新。必须就地清掉。
             if (started)
                 this.startedByChat.delete(chatIdentity);
+            this.armedByChat.delete(chatIdentity);
             return;
         }
+        if (!started && !this.hasMatchingArmedAttempt_ACU(snapshot.pending.identity))
+            return;
         const boundSequence = snapshot.pending.capture.generationSeq ?? started?.sequence ?? null;
         if (boundSequence !== null && sequence !== undefined && boundSequence !== sequence) {
             // 中止事件属于别的生成：只有当它正好是本条认领的那次生成时才清理（那次生成已经死了，
             // 不会再有 ENDED）；等待轮真正绑定的生成仍在飞时保留认领，不能误删。
             if (started && sequence === started.sequence)
                 this.startedByChat.delete(chatIdentity);
+            this.armedByChat.delete(chatIdentity);
             return;
         }
         this.startedByChat.delete(chatIdentity);
+        this.armedByChat.delete(chatIdentity);
         if (this.localRetryClaim?.identity.attemptId === snapshot.pending.identity.attemptId)
             this.localRetryClaim = null;
         if (started) {
@@ -135643,19 +137650,37 @@ class ContinuationHostGenerationBridge_ACU {
             return false;
         }
         const aiCount = countAiModelOutputFloors_ACU(chat);
+        const instructionIndex = mode === 'regenerate' ? chat.length - 2 : chat.length - 1;
+        const instruction = chat[instructionIndex];
+        if (!instruction || typeof instruction !== 'object' || Array.isArray(instruction))
+            return false;
         const capture = {
             capturedAt: this.dependencies.now(),
             capturedChatLength: mode === 'regenerate' ? Math.max(0, chat.length - 1) : chat.length,
             capturedAiFloorCount: mode === 'regenerate' ? Math.max(0, aiCount - 1) : aiCount,
             generationSeq: null,
+            instructionIndex,
+            instructionFingerprint: hostMessageFingerprint_ACU(instruction),
+            boundaryFingerprint: hostBoundaryFingerprint_ACU(chat),
         };
         await runtime.recordHostTurn({ identity: snapshot.pending.identity, capture });
+        const afterRecord = runtime.readPendingHostTurn();
+        const afterChat = runtime.getChat();
+        if (!afterRecord || afterRecord.pending.status !== 'awaiting_generation' || afterRecord.pending.identity.attemptId !== snapshot.pending.identity.attemptId || resolveHostRetryMode_ACU(afterChat, afterRecord.pending.capture) !== mode) {
+            try {
+                await runtime.pauseForHostResultFailure(snapshot.pending.identity);
+            }
+            catch { /* state already changed */ }
+            return false;
+        }
+        this.armAttempt_ACU(snapshot.pending.identity);
         this.localRetryClaim = { identity: snapshot.pending.identity, mode, createdAt: this.dependencies.now(), sequence: null, consumed: false };
         this.sendingIdentity = snapshot.pending.identity;
         this.notifyStateChanges_ACU();
         try {
             if (!this.dependencies.hostInput.retryGeneration(mode)) {
                 this.localRetryClaim = null;
+                this.consumeArmedAttempt_ACU(snapshot.pending.identity);
                 await runtime.pauseForHostInputFailure(snapshot.pending.identity);
                 return false;
             }
@@ -135947,6 +137972,7 @@ function createRuntime_ACU() {
         },
         hasLiveHostClaim: chatIdentity => bridgeRef?.hasLiveClaim(chatIdentity) ?? false,
         invalidateHostClaim: chatIdentity => { bridgeRef?.invalidateStartedByChat(chatIdentity); },
+        stopHostGeneration: () => { bridgeRef?.stopHostGeneration(); },
         buildFallbackSettings: buildInitialContinuationSettings_ACU,
         onSettingsReplaced: writeGlobalContinuationSettings_ACU,
     });
@@ -136536,6 +138562,8 @@ function mainInitialize_ACU() {
             if (SillyTavern_API_ACU.eventTypes.GENERATION_STOPPED) {
                 SillyTavern_API_ACU.eventSource.on(SillyTavern_API_ACU.eventTypes.GENERATION_STOPPED, () => {
                     try {
+                        // TT 的 GENERATION_STOPPED 是本轮停止事实：立即使已排队的旧自动填表回调失效。
+                        _set_wasStoppedByUser_ACU(true);
                         const discarded = discardLatestGenerationContext_ACU();
                         // 被中止的生成不会再有 GENERATION_ENDED；通知桥把等待中的续写轮转为可重试，避免卡死。
                         void getContinuationHostGenerationBridge_ACU()?.onGenerationStopped(discarded?.seq);
@@ -136546,7 +138574,22 @@ function mainInitialize_ACU() {
             if (SillyTavern_API_ACU.eventTypes.GENERATION_ENDED) {
                 const onGenerationEnded = (message_id) => {
                     logDebug_ACU(`ACU GENERATION_ENDED event for message_id: ${message_id}`);
-                    const generationContext = consumeGenerationContextForEnded_ACU();
+                    const chatAtCapture = SillyTavern_API_ACU?.chat || [];
+                    let endedSignatureEx;
+                    try {
+                        endedSignatureEx = resolveAiFloorSignatureEx_ACU(chatAtCapture);
+                    }
+                    catch {
+                        endedSignatureEx = undefined;
+                    }
+                    const generationEndMatch = resolveGenerationContextForEnded_ACU(endedSignatureEx);
+                    if (generationEndMatch.status === 'ambiguous') {
+                        // TT 的 ENDED 无 generation id；并发时不能把 quiet/普通上下文按 LIFO 硬配。
+                        // 歧义事件不交给 continuation 桥或普通自动链，防止 quiet 触发前台链路。
+                        logDebug_ACU(`ACU GENERATION_ENDED 配对歧义，fail closed: message_id=${message_id}`);
+                        return;
+                    }
+                    const generationContext = generationEndMatch.context;
                     const internalRequest = consumeContinuationInternalAiGenerationEnded_ACU(generationContext?.seq);
                     if (internalRequest) {
                         logDebug_ACU(`ACU 忽略 continuation 内部 ${internalRequest.source} GENERATION_ENDED: ${internalRequest.requestId}`);
@@ -136575,7 +138618,6 @@ function mainInitialize_ACU() {
                     // [触发修复] 原子捕获完整意图快照：事件参数只作为锚点，不承诺是 AI 数组下标。
                     // makeFirst 可能早于宿主把本轮 AI 回复追加进 chat，因此必须记录捕获时边界，
                     // 由 resolveGeneratedAiMessageIndex_ACU 在防抖回调中按唯一候选规则解析。
-                    const chatAtCapture = SillyTavern_API_ACU?.chat || [];
                     const eventMessageId = typeof message_id === 'number' && Number.isInteger(message_id)
                         ? message_id
                         : undefined;
@@ -136587,15 +138629,15 @@ function mainInitialize_ACU() {
                             capturedAt: Date.now(),
                             capturedChatLength: chatAtCapture.length,
                             capturedAiFloorCount: countAiModelOutputFloors_ACU(chatAtCapture),
-                            // generationSeq 仅在 generationGate 已产生过生成上下文时可靠；否则不假造。
-                            generationSeq: generationGate_ACU.generationSeq > 0 ? generationGate_ACU.generationSeq : undefined,
+                            // 已配对时必须携带该轮自己的 seq；并发下不能用全局最新 seq 冒充较早 ENDED。
+                            generationSeq: generationContext?.seq ?? (generationGate_ACU.generationSeq > 0 ? generationGate_ACU.generationSeq : undefined),
                             // [配对零产出证据] 仅配对携带 STARTED 时刻的扩展签名；无配对时为 undefined，下游直接放行。
                             preSignature: generationContext?.preSignature ?? undefined,
                         }
                         : undefined;
                     // [152 收紧] 「新 AI 楼证据」签名：本事件时刻的 AI 楼数 + 最新 AI 楼 message_id（含 narrator，
                     // 与 auto-fill-echo-guard 同口径）。聊天数组在这里读一次，交给门控自行决定无配对假 ended 的去留。
-                    const endedFloorSignature_ACU = resolveAiFloorSignature_ACU(getChatArray_ACU());
+                    const endedFloorSignature_ACU = resolveAiFloorSignature_ACU(chatAtCapture);
                     if (shouldProcessAutoTableUpdateForGenerationEnded_ACU(generationContext, endedFloorSignature_ACU)) {
                         handleNewMessageDebounced_ACU('GENERATION_ENDED', autoFillIntent);
                     }
@@ -136644,6 +138686,18 @@ function mainInitialize_ACU() {
                             return;
                         const shouldProcessSummaryVectorIndex = shouldProcessSummaryVectorIndexForGeneration_ACU(type, params, dryRun);
                         const shouldProcessPlot = shouldProcessPlotForGeneration_ACU(type, params, dryRun);
+                        const plotScope_ACU = shouldProcessPlot ? capturePlotRuntimeScope_ACU() : null;
+                        const plotScopeStillCurrent_ACU = () => {
+                            if (!plotScope_ACU)
+                                return true;
+                            const currentScope = capturePlotRuntimeScope_ACU();
+                            if (plotScope_ACU.reliable && currentScope.reliable) {
+                                return isSamePlotRuntimeScope_ACU(plotScope_ACU, currentScope);
+                            }
+                            return plotScope_ACU.chatId === currentScope.chatId
+                                && plotScope_ACU.characterId === currentScope.characterId
+                                && plotScope_ACU.isolationKey === currentScope.isolationKey;
+                        };
                         const shouldEnsureInitialSeed = !dryRun
                             && type !== 'regenerate'
                             && !params?.automatic_trigger
@@ -136678,7 +138732,15 @@ function mainInitialize_ACU() {
                         const lastMessageIndex = chat.length - 1;
                         const lastMessage = chat[lastMessageIndex];
                         // [重构] 调用 service 层策略1编排
-                        const s1 = await orchestrateAfterCommandsStrategy1_ACU(lastMessage, lastMessageIndex, runOptimizationLogicWithUI_ACU);
+                        if (!plotScopeStillCurrent_ACU()) {
+                            logWarn_ACU('[剧情推进] GENERATION_AFTER_COMMANDS 作用域已变化，放弃策略1结果写回');
+                            return;
+                        }
+                        const s1 = await orchestrateAfterCommandsStrategy1_ACU(lastMessage, lastMessageIndex, runOptimizationLogicWithUI_ACU, plotScope_ACU ? { runtimeScope: plotScope_ACU } : undefined);
+                        if (!plotScopeStillCurrent_ACU()) {
+                            logWarn_ACU('[剧情推进] GENERATION_AFTER_COMMANDS 作用域已变化，放弃策略1结果写回');
+                            return;
+                        }
                         if (s1.action !== 'no_match') {
                             // 策略1匹配，根据结果做 UI 操作
                             switch (s1.action) {
@@ -136732,7 +138794,15 @@ function mainInitialize_ACU() {
                             return;
                         const textInBox = getSendTextareaValue_ACU();
                         // [重构] 调用 service 层策略2编排
-                        const s2 = await orchestrateAfterCommandsStrategy2_ACU(String(textInBox || ''), runOptimizationLogicWithUI_ACU);
+                        if (!plotScopeStillCurrent_ACU()) {
+                            logWarn_ACU('[剧情推进] GENERATION_AFTER_COMMANDS 作用域已变化，放弃策略2结果写回');
+                            return;
+                        }
+                        const s2 = await orchestrateAfterCommandsStrategy2_ACU(String(textInBox || ''), runOptimizationLogicWithUI_ACU, plotScope_ACU ? { runtimeScope: plotScope_ACU } : undefined);
+                        if (!plotScopeStillCurrent_ACU()) {
+                            logWarn_ACU('[剧情推进] GENERATION_AFTER_COMMANDS 作用域已变化，放弃策略2结果写回');
+                            return;
+                        }
                         switch (s2.action) {
                             case 'aborted':
                                 if (s2.manual) {
@@ -136995,8 +139065,7 @@ function createCallbackApi(ctx) {
     };
 }
 
-function resolveLatestAiMessageIndex_ACU() {
-    const chat = getChatArray_ACU();
+function resolveLatestAiMessageIndex_ACU(chat = getChatArray_ACU()) {
     if (!Array.isArray(chat) || chat.length === 0)
         return -1;
     for (let i = chat.length - 1; i >= 0; i -= 1) {
@@ -137005,8 +139074,7 @@ function resolveLatestAiMessageIndex_ACU() {
     }
     return -1;
 }
-function hasV2FullCheckpointAtOrBeforeTarget_ACU(targetMessageIndex, isolationKey) {
-    const chat = getChatArray_ACU();
+function hasV2FullCheckpointAtOrBeforeTarget_ACU(targetMessageIndex, isolationKey, chat = getChatArray_ACU()) {
     if (!Array.isArray(chat) || targetMessageIndex < 0)
         return false;
     return chat.slice(0, targetMessageIndex + 1).some(message => {
@@ -137014,7 +139082,106 @@ function hasV2FullCheckpointAtOrBeforeTarget_ACU(targetMessageIndex, isolationKe
         return isV2TagData_ACU(tagData) && tagData.storageFrame.checkpoint?.kind === 'full';
     });
 }
+function isRuntimeRestoreFailure_ACU(result) {
+    return result.success === false;
+}
+/**
+ * 所有导入 runtime replace 都必须经过同一把 runtime 写事务。
+ * 旧实现直接 await provider.replaceAllData：切聊或并发提交可以在 await
+ * 期间把旧聊天快照发布到当前 runtime，且不会推进 revision。现在锁、scope
+ * 复检和 runCommit 都在同一事务边界内完成。
+ */
+async function restoreRuntimeDataInTransaction_ACU(input) {
+    try {
+        return await runTableWriteTransaction_ACU({
+            source: 'system_reload',
+            reason: 'importRuntimeRestore',
+            chatKey: input.chatKey,
+            isolationKey: input.isolationKey,
+            writeSet: [{ kind: 'all' }],
+            maintenanceMode: 'exclusive',
+            workingDataMode: 'none',
+        }, async (ctx) => {
+            if (!input.scopeStillCurrent()) {
+                return {
+                    success: false,
+                    error: 'import_scope_changed: runtime restore 开始前作用域已切换。',
+                    scopeChanged: true,
+                };
+            }
+            let provider;
+            try {
+                provider = getStorageProvider();
+            }
+            catch (error) {
+                return {
+                    success: false,
+                    error: error?.message || String(error),
+                    scopeChanged: false,
+                };
+            }
+            if (!provider || typeof provider.replaceAllData !== 'function') {
+                return {
+                    success: false,
+                    error: '当前存储 provider 不支持全量替换命令。',
+                    scopeChanged: false,
+                };
+            }
+            let runtimeData = null;
+            try {
+                await ctx.runCommit(async () => {
+                    if (!input.scopeStillCurrent()) {
+                        throw new Error('import_scope_changed: runtime replace 前作用域已切换。');
+                    }
+                    ctx.assertFresh('import runtime restore before provider replace');
+                    const replaceResult = await provider.replaceAllData(input.data);
+                    if (!replaceResult?.success) {
+                        throw new Error(replaceResult?.error || '运行时全量替换失败。');
+                    }
+                    if (!input.scopeStillCurrent()) {
+                        throw new Error('import_scope_changed: runtime replace 后作用域已切换。');
+                    }
+                    ctx.assertFresh('import runtime restore after provider replace');
+                    const currentData = typeof provider.getCurrentData === 'function'
+                        ? provider.getCurrentData()
+                        : null;
+                    runtimeData = (currentData || input.data);
+                }, [{ kind: 'all' }]);
+            }
+            catch (error) {
+                return {
+                    success: false,
+                    error: error?.message || String(error),
+                    scopeChanged: !input.scopeStillCurrent() || String(error?.message || error).includes('import_scope_changed'),
+                };
+            }
+            return {
+                success: true,
+                tableData: runtimeData || input.data,
+            };
+        });
+    }
+    catch (error) {
+        return {
+            success: false,
+            error: error?.message || String(error),
+            scopeChanged: !input.scopeStillCurrent(),
+        };
+    }
+}
 async function importTableJsonThroughCommit_ACU(jsonString, options = {}) {
+    const initialChat = getChatArray_ACU();
+    const initialChatKey = String(currentChatFileIdentifier_ACU || '');
+    const initialIsolationKey = String(getCurrentIsolationKey_ACU() || '');
+    const scopeStillCurrent = () => getChatArray_ACU() === initialChat
+        && String(currentChatFileIdentifier_ACU || '') === initialChatKey
+        && String(getCurrentIsolationKey_ACU() || '') === initialIsolationKey;
+    const scopeChangedResult = () => ({
+        success: false,
+        persisted: false,
+        failureStage: 'preflight',
+        error: 'import_scope_changed: 聊天或隔离作用域已切换，已取消导入。',
+    });
     let newData;
     try {
         newData = JSON.parse(jsonString);
@@ -137041,15 +139208,27 @@ async function importTableJsonThroughCommit_ACU(jsonString, options = {}) {
     const importedTableData = sanitizeChatSheetsObject_ACU(newData, { ensureMate: true });
     const persist = options.persist !== false;
     if (!persist) {
-        const provider = getStorageProvider();
-        if (typeof provider.replaceAllData !== 'function') {
-            return { success: false, persisted: false, failureStage: 'runtime_restore', error: '当前存储 provider 不支持全量替换命令。' };
+        const restoreResult = await restoreRuntimeDataInTransaction_ACU({
+            data: importedTableData,
+            chatKey: initialChatKey,
+            isolationKey: initialIsolationKey,
+            scopeStillCurrent,
+        });
+        if (isRuntimeRestoreFailure_ACU(restoreResult)) {
+            try {
+                await reloadStorageProvider();
+            }
+            catch (_) {
+                // 保留原始 replace/scope 错误；reload 失败不能掩盖首次失败。
+            }
+            return {
+                success: false,
+                persisted: false,
+                failureStage: 'runtime_restore',
+                error: restoreResult.error,
+            };
         }
-        const replaceResult = await provider.replaceAllData(importedTableData);
-        if (!replaceResult.success) {
-            return { success: false, persisted: false, failureStage: 'runtime_restore', error: replaceResult.error || '运行时全量替换失败。' };
-        }
-        const runtimeData = (provider.getCurrentData() || importedTableData);
+        const runtimeData = restoreResult.tableData;
         const sheetKeys = Object.keys(runtimeData).filter(k => k.startsWith('sheet_'));
         const hasSummaryTables = Object.keys(runtimeData)
             .filter(k => k.startsWith('sheet_'))
@@ -137096,12 +139275,15 @@ async function importTableJsonThroughCommit_ACU(jsonString, options = {}) {
     else {
         logDebug_ACU('[TableImport] 当前为 native 存储模式，跳过 SQLite hydrate 预检。');
     }
+    if (!scopeStillCurrent())
+        return scopeChangedResult();
     const sheetKeys = Object.keys(candidateData).filter(k => k.startsWith('sheet_'));
-    const targetMessageIndex = resolveLatestAiMessageIndex_ACU();
+    const targetMessageIndex = resolveLatestAiMessageIndex_ACU(initialChat);
     const commitResult = await runTableUpdateCommit_ACU({
         source: 'import',
         reason: 'importTableAsJson',
-        isolationKey: getCurrentIsolationKey_ACU(),
+        chatKey: initialChatKey,
+        isolationKey: initialIsolationKey,
         writeSet: [{ kind: 'all' }],
         revisionWriteSet: [{ kind: 'all' }],
         initialData: currentJsonTableData_ACU,
@@ -137112,7 +139294,10 @@ async function importTableJsonThroughCommit_ACU(jsonString, options = {}) {
         trackAsUpdate: false,
         strictSave: true,
     }, async () => {
-        const hasExistingAnchor = hasV2FullCheckpointAtOrBeforeTarget_ACU(targetMessageIndex, getCurrentIsolationKey_ACU());
+        if (!scopeStillCurrent()) {
+            return { success: false, error: 'import_scope_changed: 提交前作用域已切换。', errorCategory: 'precondition' };
+        }
+        const hasExistingAnchor = hasV2FullCheckpointAtOrBeforeTarget_ACU(targetMessageIndex, initialIsolationKey, initialChat);
         return {
             success: true,
             value: true,
@@ -137132,21 +139317,22 @@ async function importTableJsonThroughCommit_ACU(jsonString, options = {}) {
             error: commitResult.error || '导入数据提交失败。',
         };
     }
-    const provider = getStorageProvider();
-    if (typeof provider.replaceAllData !== 'function') {
+    const runtimeRestore = await restoreRuntimeDataInTransaction_ACU({
+        data: commitResult.tableData,
+        chatKey: initialChatKey,
+        isolationKey: initialIsolationKey,
+        scopeStillCurrent,
+    });
+    if (isRuntimeRestoreFailure_ACU(runtimeRestore)) {
         await reloadStorageProvider();
-        return { success: false, persisted: true, failureStage: 'post_commit_runtime', error: '导入数据已保存，但当前存储 provider 不支持运行时全量替换；已尝试重新加载运行时。' };
-    }
-    try {
-        const replaceResult = await provider.replaceAllData(commitResult.tableData);
-        if (!replaceResult.success) {
-            await reloadStorageProvider();
-            return { success: false, persisted: true, failureStage: 'post_commit_runtime', error: `导入数据已保存，但运行时全量替换失败；已尝试重新加载运行时：${replaceResult.error || '未知错误'}` };
-        }
-    }
-    catch (error) {
-        await reloadStorageProvider();
-        return { success: false, persisted: true, failureStage: 'post_commit_runtime', error: `导入数据已保存，但运行时全量替换异常；已尝试重新加载运行时：${error instanceof Error ? error.message : String(error)}` };
+        return {
+            success: false,
+            persisted: true,
+            failureStage: 'post_commit_runtime',
+            error: runtimeRestore.scopeChanged
+                ? runtimeRestore.error
+                : `导入数据已保存，但运行时全量替换失败；已尝试重新加载运行时：${runtimeRestore.error}`,
+        };
     }
     const hasSummaryTables = Object.keys(commitResult.tableData)
         .filter(k => k.startsWith('sheet_'))
@@ -138688,6 +140874,19 @@ function restoreMessages(snapshots) {
             field.had ? snapshot.message[field.field] = field.value : delete snapshot.message[field.field];
 }
 async function resetCurrentChatTableStateFromTemplate_ACU(templateData, options = {}) {
+    const initialChat = getChatArray_ACU();
+    const initialChatKey = String(currentChatFileIdentifier_ACU || '');
+    const initialIsolationKey = String(getCurrentIsolationKey_ACU() || '');
+    const scopeStillCurrent = () => {
+        const currentChat = getChatArray_ACU();
+        return currentChat === initialChat
+            && String(currentChatFileIdentifier_ACU || '') === initialChatKey
+            && String(getCurrentIsolationKey_ACU() || '') === initialIsolationKey;
+    };
+    const scopeChangedResult = () => ({
+        saved: false,
+        error: '目标聊天或隔离作用域已切换，已取消初始化提交。',
+    });
     let prepared;
     let guideData;
     let normalizationAudit;
@@ -138698,20 +140897,24 @@ async function resetCurrentChatTableStateFromTemplate_ACU(templateData, options 
         guideData = buildChatSheetGuideDataFromTemplateObj_ACU(prepared, { stripSeedRows: false });
         if (!guideData)
             throw new Error('无法从初始化模板生成聊天指导表。');
+        if (!scopeStillCurrent())
+            return scopeChangedResult();
         if (getCurrentStorageMode() === 'sqlite') {
             // 运行时模板注入路径（initGameSession/模板面板）与 table-import-service.ts:132 语义一致：
             // 非法显式 DDL 允许降级为 fallback schema，避免「导入面板能过、API 注入被硬拦」的不一致。
             // 持久化契约校验（storage-frame-v2-persist.ts:3190）保持严格，不在此处放宽。
             await hydrateTableDataStrict_ACU(prepared, { allowRuntimeDdlFallback: true });
+            if (!scopeStillCurrent())
+                return scopeChangedResult();
         }
     }
     catch (error) {
         return { saved: false, error: error?.message || String(error) };
     }
-    const isolationKey = getCurrentIsolationKey_ACU();
+    const isolationKey = initialIsolationKey;
     try {
         return await runTableWriteTransaction_ACU({
-            source: 'template_assistant', reason: options.reason || 'resetCurrentChatTableStateFromTemplate', isolationKey,
+            source: 'template_assistant', reason: options.reason || 'resetCurrentChatTableStateFromTemplate', chatKey: initialChatKey, isolationKey,
             writeSet: [{ kind: 'all' }], maintenanceMode: 'exclusive',
         }, async (transactionContext) => transactionContext.runCommit(async () => {
             const chat = getChatArray_ACU();
@@ -138765,7 +140968,7 @@ async function resetCurrentChatTableStateFromTemplate_ACU(templateData, options 
                 });
                 if (!guideUpdated)
                     throw new Error('初始化模板无法原子写入 guide 与 template scope。');
-                if (getChatArray_ACU() !== chat || chat[0] !== firstMessage || getActiveChatStorageIdentity_ACU(chat) !== chatIdentity)
+                if (!scopeStillCurrent() || getChatArray_ACU() !== chat || chat[0] !== firstMessage || getActiveChatStorageIdentity_ACU(chat) !== chatIdentity)
                     throw new Error('目标聊天已切换，已取消初始化提交。');
                 primarySaveAttempted = true;
                 await saveChatToHostStrict_ACU();
@@ -141532,6 +143735,12 @@ function createAgentWorldbookApi(_ctx) {
     const deleteAgentWorldbookSkillMeta = async function (bookName, uid) {
         try {
             const result = await deleteWorldbookEntrySkillMeta_ACU(String(bookName || ''), uid);
+            if (result.updated) {
+                const takeover = await takeoverWorldbookGreenlights_ACU();
+                if (takeover.failed > 0) {
+                    throw new Error(`Skill 元数据已删除，但 active snapshot 对账失败：${takeover.reason || 'unknown'}`);
+                }
+            }
             return { success: true, result };
         }
         catch (e) {
@@ -141617,7 +143826,12 @@ function createAgentWorldbookApi(_ctx) {
                 const normalizedBookNames = Array.isArray(bookNames) ? bookNames : [];
                 const result = await clearWorldbookSkillMetaBlocks_ACU(normalizedBookNames);
                 const hasErrors = Array.isArray(result.errors) && result.errors.length > 0;
-                const success = result.failed === 0 && !hasErrors;
+                let takeoverFailed = false;
+                if (result.cleared > 0) {
+                    const takeover = await takeoverWorldbookGreenlights_ACU();
+                    takeoverFailed = takeover.failed > 0;
+                }
+                const success = result.failed === 0 && !hasErrors && !takeoverFailed;
                 return {
                     success,
                     error: success ? undefined : '清除 Agent 世界书 Skill 元数据未完全完成。',
@@ -142376,7 +144590,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260922-09";
+        const stamp = "20260925-05";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -166063,6 +168277,14 @@ const useRootShellStore = defineStore('acu-v2-root-shell', {
 });
 
 const TEMP_ROW_ID_PREFIX_ACU = '__acu_vis_tmp_row_';
+function currentVisualizerContextKey_ACU() {
+    return `${String(currentChatFileIdentifier_ACU || '')}::${String(getCurrentIsolationKey_ACU() || '')}`;
+}
+function assertVisualizerContextMatches_ACU(expectedContextKey) {
+    if (expectedContextKey && currentVisualizerContextKey_ACU() !== expectedContextKey) {
+        throw new Error('聊天身份已变化，已阻止旧草稿写入当前聊天。');
+    }
+}
 function ensurePendingOps_ACU(state) {
     var _a, _b, _c;
     if (!state.pendingDataOps || typeof state.pendingDataOps !== 'object') {
@@ -166282,7 +168504,10 @@ async function refreshVisualizerRuntimeFromReplay_ACU(isolationKey) {
     }
     return replay.data;
 }
-async function applyVisualizerPendingDataOps_ACU(state) {
+async function applyVisualizerPendingDataOps_ACU(state, expectedContextKey = '') {
+    if (expectedContextKey && currentVisualizerContextKey_ACU() !== expectedContextKey) {
+        return { success: false, changed: false, error: '聊天身份已变化，已阻止旧草稿写入当前聊天。' };
+    }
     const pending = ensurePendingOps_ACU(state);
     if (pending.committed) {
         try {
@@ -166300,6 +168525,9 @@ async function applyVisualizerPendingDataOps_ACU(state) {
     if (!hasVisualizerPendingDataOps_ACU(state))
         return { success: true, changed: false };
     const migration = await ensureLegacyStorageMigratedBeforeWrite_ACU('visualizer_save_v2_replay');
+    if (expectedContextKey && currentVisualizerContextKey_ACU() !== expectedContextKey) {
+        return { success: false, changed: false, error: '聊天身份已变化，已阻止旧草稿写入当前聊天。' };
+    }
     if (!migration.success)
         return { success: false, changed: false, error: migration.error || '旧存储迁移失败，已阻止可视化编辑器保存。' };
     if (migration.migrated)
@@ -166315,6 +168543,9 @@ async function applyVisualizerPendingDataOps_ACU(state) {
         // afterData must be ops(V2 replay base). Runtime snapshots can carry seedRows /
         // type drift / unrelated fields and falsely fail batch candidate validation.
         const replay = await loadTableStateFromFramesV2Detailed_ACU(chat, isolationKey, { updateRuntimeState: false });
+        if (expectedContextKey && currentVisualizerContextKey_ACU() !== expectedContextKey) {
+            return { success: false, changed: false, error: '聊天身份已变化，已阻止旧草稿写入当前聊天。' };
+        }
         if (!replay) {
             return { success: false, changed: false, error: 'V2 replay 未产生表格数据，已阻止可视化编辑器保存。' };
         }
@@ -166330,6 +168561,7 @@ async function applyVisualizerPendingDataOps_ACU(state) {
             writeSet,
             initialData: replay.data,
         }, async (transactionContext, workingData) => {
+            assertVisualizerContextMatches_ACU(expectedContextKey);
             if (!workingData)
                 throw new Error('运行时表格数据为空，已阻止可视化编辑器保存。');
             const data = workingData;
@@ -166406,6 +168638,7 @@ async function applyVisualizerPendingDataOps_ACU(state) {
                     operations,
                 };
             });
+            assertVisualizerContextMatches_ACU(expectedContextKey);
             const saved = await persistTableMutationLogBatchV2_ACU({
                 source: 'manual_crud',
                 afterData: data,
@@ -166551,6 +168784,8 @@ const useVisualizerStore = defineStore('acu-v2-visualizer', {
         assistantLatestResult: null,
         assistantTurns: [],
         assistantRiskConfirmations: {},
+        draftContextKey: '',
+        draftContextInvalid: false,
     }),
     getters: {
         sheetItems(state) {
@@ -166614,7 +168849,7 @@ const useVisualizerStore = defineStore('acu-v2-visualizer', {
         setSaving(saving) {
             this.isSaving = saving;
         },
-        loadSnapshot(data, orderedKeys = []) {
+        loadSnapshot(data, orderedKeys = [], contextKey = '') {
             const nextData = cloneData$3(data || { mate: { type: 'chatSheets', version: 1 } });
             if (!nextData.mate || typeof nextData.mate !== 'object') {
                 nextData.mate = { type: 'chatSheets', version: 1 };
@@ -166625,6 +168860,8 @@ const useVisualizerStore = defineStore('acu-v2-visualizer', {
             this.sheetOrder = nextOrder;
             this.templateBaseData = cloneData$3(nextData);
             this.templateBaseSheetOrder = [...nextOrder];
+            this.draftContextKey = String(contextKey || '');
+            this.draftContextInvalid = false;
             this.deletedSheetKeys = [];
             resetVisualizerPendingDataOps_ACU(this);
             this.lockDirty = false;
@@ -166955,6 +169192,10 @@ const useVisualizerStore = defineStore('acu-v2-visualizer', {
             ];
             this.setDirty(true);
         },
+        invalidateDraftContext() {
+            if (this.draftContextKey)
+                this.draftContextInvalid = true;
+        },
         requestExternalRefresh() {
             if (!this.isActive)
                 return 'ignored';
@@ -166988,6 +169229,8 @@ const useVisualizerStore = defineStore('acu-v2-visualizer', {
             this.entrySnapshot = null;
             this.assistantUserRequest = '';
             this.assistantTableApiPreset = '';
+            this.draftContextKey = '';
+            this.draftContextInvalid = false;
             this.clearAssistantDraftState();
             return {
                 shouldCloseShell: snapshot ? !snapshot.wasShellOpen : false,
@@ -167559,18 +169802,27 @@ function useTablePresetManagement() {
         if (!newName || newName === name)
             return;
         await run(async () => {
-            if (!upsertTemplatePreset_ACU(newName, preset.templateStr))
-                throw new Error('重命名失败。');
-            deleteTemplatePreset_ACU(name);
-            if (defaultPresetName.value === name) {
-                const result = await applyTemplatePresetToCurrent_ACU(newName, {
-                    source: 'v2_table_drawer_rename',
-                    updateGlobal: true,
-                    save: true,
-                    persistChatScope: false,
-                });
-                if (!result)
-                    throw new Error('重命名后切换全局模板预设失败。');
+            const renamed = renameTemplatePreset_ACU(name, newName);
+            if (!renamed.ok)
+                throw new Error(renamed.error || '重命名失败。');
+            try {
+                if (defaultPresetName.value === name) {
+                    const result = await applyTemplatePresetToCurrent_ACU(newName, {
+                        source: 'v2_table_drawer_rename',
+                        updateGlobal: true,
+                        save: true,
+                        persistChatScope: false,
+                    });
+                    if (!result || (typeof result === 'object' && 'saved' in result && result.saved === false)) {
+                        throw new Error('重命名后切换全局模板预设失败。');
+                    }
+                }
+            }
+            catch (error) {
+                const rollback = renameTemplatePreset_ACU(newName, name);
+                if (!rollback.ok)
+                    throw new Error(`${error instanceof Error ? error.message : String(error)}；回滚重命名失败：${rollback.error || '未知错误'}`);
+                throw error;
             }
             toast.success(`预设已重命名为「${newName}」。`);
         });
@@ -168099,23 +170351,28 @@ function useTableTemplatePresets() {
         if (!newName)
             return;
         await run(async () => {
-            if (!upsertTemplatePreset_ACU(newName, preset.templateStr))
-                throw new Error('重命名全局模板预设失败。');
-            if (newName !== oldName)
-                deleteTemplatePreset_ACU(oldName);
-            if (selectedGlobalPreset.value === oldName) {
-                const result = await applyTemplatePresetToCurrent_ACU(newName, {
-                    source: 'v2_table_global_rename',
-                    updateGlobal: true,
-                    save: true,
-                    persistChatScope: false,
-                    signal: templateOperationController.signal,
-                });
-                if (!result)
-                    throw new Error('重命名后切换全局模板预设失败。');
-                if (typeof result === 'object' && result.saved === false) {
-                    throw new Error(typeof result.error === 'string' && result.error ? result.error : '重命名后切换全局模板预设失败。');
+            const renamed = renameTemplatePreset_ACU(oldName, newName);
+            if (!renamed.ok)
+                throw new Error(renamed.error || '重命名全局模板预设失败。');
+            try {
+                if (selectedGlobalPreset.value === oldName) {
+                    const result = await applyTemplatePresetToCurrent_ACU(newName, {
+                        source: 'v2_table_global_rename',
+                        updateGlobal: true,
+                        save: true,
+                        persistChatScope: false,
+                        signal: templateOperationController.signal,
+                    });
+                    if (!result || (typeof result === 'object' && 'saved' in result && result.saved === false)) {
+                        throw new Error('重命名后切换全局模板预设失败。');
+                    }
                 }
+            }
+            catch (error) {
+                const rollback = renameTemplatePreset_ACU(newName, oldName);
+                if (!rollback.ok)
+                    throw new Error(`${error instanceof Error ? error.message : String(error)}；回滚重命名失败：${rollback.error || '未知错误'}`);
+                throw error;
             }
             message.value = null;
         });
@@ -168700,15 +170957,61 @@ function getCurrentEffectiveTemplateText_ACU() {
  */
 async function persistFlightModeState_ACU(next) {
     const chat = getChatArray_ACU();
-    const container = normalizeChatScopedConfigContainer_ACU(getChatScopedConfigContainer_ACU(chat));
+    const chatIdentity = String(currentChatFileIdentifier_ACU || '');
+    const originalContainer = getChatScopedConfigContainer_ACU(chat);
+    const container = normalizeChatScopedConfigContainer_ACU(originalContainer);
     const isolationKey = String(getCurrentIsolationKey_ACU() ?? '');
     const states = container.flightModeByIsolationKey;
     container.flightModeByIsolationKey = {
         ...(states && typeof states === 'object' && !Array.isArray(states) ? states : {}),
         [isolationKey]: normalizeFlightModeState_ACU(next),
     };
-    setChatScopedConfigContainer_ACU(chat, container);
-    await saveChatToHost_ACU();
+    try {
+        if (getChatArray_ACU() !== chat || String(currentChatFileIdentifier_ACU || '') !== chatIdentity) {
+            throw new Error('聊天已切换，飞行模式状态未写入当前聊天。');
+        }
+        setChatScopedConfigContainer_ACU(chat, container);
+        await saveChatToHost_ACU();
+        if (getChatArray_ACU() !== chat || String(currentChatFileIdentifier_ACU || '') !== chatIdentity) {
+            throw new Error('聊天已在飞行模式状态保存期间切换。');
+        }
+    }
+    catch (error) {
+        // 状态写入必须与模板提交形成同一失败边界：先恢复内存容器，再尽力把回滚写回宿主。
+        if (getChatArray_ACU() === chat && String(currentChatFileIdentifier_ACU || '') === chatIdentity) {
+            try {
+                setChatScopedConfigContainer_ACU(chat, originalContainer);
+                await saveChatToHost_ACU();
+            }
+            catch (_) {
+                // 保留原始失败原因；补偿失败会在调用方的模板补偿结果中报告。
+            }
+        }
+        throw error;
+    }
+}
+async function compensateTemplateCommit_ACU(originalTemplate, options) {
+    if (!originalTemplate)
+        return { ok: false, error: '没有可验证的原始模板，无法补偿模板提交。' };
+    try {
+        const result = await applyChatTemplateSnapshotWithReconciliation_ACU(originalTemplate, {
+            source: options.source,
+            presetName: options.presetName || '',
+            hardDeleteMissingSheets: options.hardDeleteMissingSheets,
+            destructiveChangeConfirmed: options.hardDeleteMissingSheets === true,
+        });
+        if (!result?.saved) {
+            return {
+                ok: false,
+                error: result?.error || '补偿模板提交失败。',
+                blockers: result?.blockers || [],
+            };
+        }
+        return { ok: true };
+    }
+    catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
 }
 async function enableFlightMode_ACU() {
     const currentState = getCurrentFlightModeState_ACU();
@@ -168753,21 +171056,50 @@ async function enableFlightMode_ACU() {
     }
     // 协调层按显示名派生真实 key（大总结 → sheet_da_zong_jie），提交后必须重新解析。
     const resolved = findSheetByName_ACU(currentJsonTableData_ACU, FLIGHT_MODE_BIG_SUMMARY_SHEET_NAME_ACU);
-    if (!resolved)
-        return { ok: false, reason: 'big_summary_sheet_key_unresolved', visibleChronicleRowCount: check.visibleChronicleRowCount };
-    await persistFlightModeState_ACU({
-        enabled: true,
-        enabledAt: Date.now(),
-        hiddenRowIds: [],
-        bigSummarySheetKey: resolved.key,
-        archive: {
-            chronicleExportConfig: originalExportConfig,
-            templateScope: effectiveScopeBeforeEnable === null ? undefined : cloneValue_ACU(effectiveScopeBeforeEnable),
-            templateScopeWasAbsent: scopeBeforeEnable === null,
-            // 必须记录正式提交后的作用域文本，而不是 nextTemplate：协调层会重派 key 并规范化结构。
-            enabledTemplateStr: getCurrentEffectiveTemplateText_ACU() || undefined,
-        },
-    });
+    if (!resolved) {
+        const compensation = await compensateTemplateCommit_ACU(template, {
+            source: 'flight_mode_enable_key_resolution_rollback',
+            presetName: effectiveScopeBeforeEnable?.presetName || '',
+            hardDeleteMissingSheets: true,
+        });
+        return {
+            ok: false,
+            reason: 'big_summary_sheet_key_unresolved',
+            visibleChronicleRowCount: check.visibleChronicleRowCount,
+            ...(compensation.ok ? {} : { error: compensation.error || '模板补偿失败。', blockers: compensation.blockers || [] }),
+        };
+    }
+    try {
+        await persistFlightModeState_ACU({
+            enabled: true,
+            enabledAt: Date.now(),
+            hiddenRowIds: [],
+            bigSummarySheetKey: resolved.key,
+            archive: {
+                chronicleExportConfig: originalExportConfig,
+                templateScope: effectiveScopeBeforeEnable === null ? undefined : cloneValue_ACU(effectiveScopeBeforeEnable),
+                templateScopeWasAbsent: scopeBeforeEnable === null,
+                // 必须记录正式提交后的作用域文本，而不是 nextTemplate：协调层会重派 key 并规范化结构。
+                enabledTemplateStr: getCurrentEffectiveTemplateText_ACU() || undefined,
+            },
+        });
+    }
+    catch (error) {
+        const compensation = await compensateTemplateCommit_ACU(template, {
+            source: 'flight_mode_enable_state_rollback',
+            presetName: effectiveScopeBeforeEnable?.presetName || '',
+            hardDeleteMissingSheets: true,
+        });
+        return {
+            ok: false,
+            reason: 'state_persist_failed',
+            visibleChronicleRowCount: check.visibleChronicleRowCount,
+            error: compensation.ok
+                ? (error instanceof Error ? error.message : String(error))
+                : `${error instanceof Error ? error.message : String(error)}；模板补偿失败：${compensation.error || '未知错误'}`,
+            blockers: compensation.blockers || [],
+        };
+    }
     setSpecialIndexLockEnabled_ACU(resolved.key, false);
     return { ok: true, visibleChronicleRowCount: check.visibleChronicleRowCount };
 }
@@ -168795,6 +171127,7 @@ async function disableFlightMode_ACU(options = {}) {
     }
     const enabledTemplateStr = String(archive?.enabledTemplateStr || '');
     const currentTemplateStr = getCurrentEffectiveTemplateText_ACU();
+    const enabledTemplateForRollback = parseTemplateScope_ACU({ templateStr: currentTemplateStr || enabledTemplateStr });
     if (enabledTemplateStr && currentTemplateStr && enabledTemplateStr !== currentTemplateStr && !options.confirmTemplateScopeChange) {
         return { ok: false, reason: 'template_scope_changed' };
     }
@@ -168815,12 +171148,29 @@ async function disableFlightMode_ACU(options = {}) {
             ...(committed?.blockers?.length ? { blockers: committed.blockers } : {}),
         };
     }
-    await persistFlightModeState_ACU({
-        enabled: false,
-        enabledAt: 0,
-        hiddenRowIds: [],
-        bigSummarySheetKey: bigSummaryKey,
-    });
+    try {
+        await persistFlightModeState_ACU({
+            enabled: false,
+            enabledAt: 0,
+            hiddenRowIds: [],
+            bigSummarySheetKey: bigSummaryKey,
+        });
+    }
+    catch (error) {
+        const compensation = await compensateTemplateCommit_ACU(enabledTemplateForRollback, {
+            source: 'flight_mode_disable_state_rollback',
+            presetName: restorePresetName,
+            hardDeleteMissingSheets: false,
+        });
+        return {
+            ok: false,
+            reason: 'state_persist_failed',
+            error: compensation.ok
+                ? (error instanceof Error ? error.message : String(error))
+                : `${error instanceof Error ? error.message : String(error)}；模板补偿失败：${compensation.error || '未知错误'}`,
+            blockers: compensation.blockers || [],
+        };
+    }
     deleteTableLocksForSheet_ACU(bigSummaryKey);
     return { ok: true };
 }
@@ -170261,6 +172611,11 @@ async function describeInjectionTargetForConfirm() {
             clearTimeout(timeoutHandle);
     }
 }
+function currentManualExecutionContext_ACU() {
+    const chatIdentity = String(currentChatFileIdentifier_ACU || '');
+    const isolationKey = String(getCurrentIsolationKey_ACU() || '');
+    return { chatIdentity, isolationKey, key: `${chatIdentity}::${isolationKey}` };
+}
 function currentSheetKeys() {
     try {
         return getSortedSheetKeys_ACU(getCurrentTableDisplayData_ACU() || {});
@@ -170290,7 +172645,9 @@ function runtimeExecutionSheetKeys() {
  * 任一变化（purge、表删除、新增表、外部直接写 Ref 篡改选择）都会 fail-closed 阻断，
  * 避免在确认文案与最终执行目标不一致的情况下继续破坏性操作。
  */
-function runtimeTargetsStillMatch(snapshotKeys, requestedKeys) {
+function runtimeTargetsStillMatch(snapshotKeys, requestedKeys, expectedContext) {
+    if (expectedContext && currentManualExecutionContext_ACU().key !== expectedContext.key)
+        return false;
     if (!requestedKeys.length || !hasRuntimeTableData_ACU())
         return false;
     const currentKeys = runtimeExecutionSheetKeys();
@@ -170566,6 +172923,7 @@ function useManualUpdate() {
         selectedManualTableKeys.value = resolveManualSelection(runtimeExecutionSheetKeys());
         manualContextDepth.value = resolveManualContextDepth();
         manualBatchSize.value = resolveManualBatchSize();
+        manualExtraHint.value = '';
         refreshTick.value++;
     }
     function setManualContextDepth(value) {
@@ -170605,6 +172963,7 @@ function useManualUpdate() {
         // 也防止任何外部直接写 Ref 绕过 setter 隔离后仍被这里放行。
         // 在弹确认框前建立不可变快照：确认文案与最终执行目标必须来自同一快照。
         const requestedTargetKeys = selectedManualTableKeys.value.slice();
+        const snapshotContext = currentManualExecutionContext_ACU();
         const snapshotRuntimeKeys = runtimeExecutionSheetKeys();
         const runtimeKeys = new Set(snapshotRuntimeKeys);
         const validTargetKeys = requestedTargetKeys.filter((key) => runtimeKeys.has(key));
@@ -170615,6 +172974,10 @@ function useManualUpdate() {
         manualUpdateBusy.value = true;
         try {
             const injectionTargetLabel = await describeInjectionTargetForConfirm();
+            if (currentManualExecutionContext_ACU().key !== snapshotContext.key) {
+                toast.warning('聊天已切换，已取消本次手动填表，请重新确认目标。');
+                return;
+            }
             const confirmed = await dialogStore.confirm({
                 title: '执行手动填表',
                 message: `即将执行手动填表。\n\n当前 full checkpoint：${checkpointFloorsLabel.value}\n本次重填范围：${manualRefillRangeLabel.value}\n选中表：${selectedSheetSummary.value}\n世界书注入目标：${injectionTargetLabel}（填表结果会写入该世界书的 TavernDB 条目）\n\n高风险操作：系统会先删除本次重填范围内选中表的 checkpoint 与 V2 增量日志，再以清理后的状态作为填表基底重新填写，最后写入新的单表 checkpoint。\n如果被删除的 checkpoint 是这些表唯一的数据基线，此前楼层的表格数据将无法恢复。\n\n范围外的 checkpoint、范围外聊天记录的表格数据和未选中的表不会被删除。执行失败或中途终止时：本次只要提交过任何批次（含只落了进度、未写入数据的批次）就不会回滚——已清理的旧数据不会恢复，运行时会按聊天记录中的已提交结果重新对齐；只有本次一个批次都没提交时，才会自动回滚清理并恢复被删除的旧数据。`,
@@ -170630,8 +172993,11 @@ function useManualUpdate() {
             // 确认后 TOCTOU 复检：确认期间 runtime 可能被 purge/表删除/新增表改变。
             // 若当前 runtime 表集合与确认前快照不一致，或目标已失效，必须 fail-closed 阻断，
             // 不得静默缩减/替换执行目标后继续破坏性重填。
-            if (!runtimeTargetsStillMatch(snapshotRuntimeKeys, requestedTargetKeys)) {
-                toast.warning('表格运行时在确认期间发生变化，已取消本次手动填表，请确认后重试。');
+            if (!runtimeTargetsStillMatch(snapshotRuntimeKeys, requestedTargetKeys, snapshotContext)) {
+                const message = currentManualExecutionContext_ACU().key !== snapshotContext.key
+                    ? '聊天已切换，已取消本次手动填表，请重新确认目标。'
+                    : '表格运行时在确认期间发生变化，已取消本次手动填表，请确认后重试。';
+                toast.warning(message);
                 return;
             }
             const targetManualTableKeys = requestedTargetKeys.slice();
@@ -170657,7 +173023,11 @@ function useManualUpdate() {
                 clearBeforeUpdate,
                 onProgress: handleProgress,
                 // 把确认前快照传给 service 层：orchestrator 在破坏性清理前会再次校验 runtime。
-                executionSnapshot: { sheetKeys: snapshotRuntimeKeys },
+                executionSnapshot: {
+                    sheetKeys: snapshotRuntimeKeys,
+                    chatIdentity: snapshotContext.chatIdentity,
+                    isolationKey: snapshotContext.isolationKey,
+                },
             });
             // 零提交时 service 层已回滚清理（失败路径与「清理了却一条数据都没写」的收尾路径都会置位）：
             // 必须显式告诉用户数据没有丢，否则提示会被读成「旧数据已被清掉」。
@@ -170736,6 +173106,7 @@ function useManualUpdate() {
         // 执行边界校验（确认前）：追平同样绝不允许把模板表当作执行目标。
         // 弹确认框前建立不可变快照：确认文案与最终执行目标必须来自同一快照。
         const requestedTargetKeys = selectedManualTableKeys.value.slice();
+        const snapshotContext = currentManualExecutionContext_ACU();
         const snapshotRuntimeKeys = runtimeExecutionSheetKeys();
         const runtimeKeys = new Set(snapshotRuntimeKeys);
         const validTargetKeys = requestedTargetKeys.filter((key) => runtimeKeys.has(key));
@@ -170751,6 +173122,10 @@ function useManualUpdate() {
                 return;
             }
             const plan = planningResult.plan;
+            if (currentManualExecutionContext_ACU().key !== snapshotContext.key) {
+                finishToast('warning', '聊天已切换，已取消本次追平，请重新确认目标。');
+                return;
+            }
             if (!plan.waves.length) {
                 finishToast('info', '所选表已追平，无需调用 AI 或写入数据。');
                 return;
@@ -170768,8 +173143,11 @@ function useManualUpdate() {
             // 确认后 TOCTOU 复检：确认期间 runtime 可能被 purge/表删除/新增表改变。
             // 追平计划基于确认前快照生成，若当前 runtime 表集合与快照不一致，
             // 必须重新规划并要求用户重新确认，避免“确认的计划”与“执行的目标”不一致。
-            if (!runtimeTargetsStillMatch(snapshotRuntimeKeys, requestedTargetKeys)) {
-                finishToast('warning', '表格运行时在确认期间发生变化，已取消本次追平，请重新确认目标。');
+            if (!runtimeTargetsStillMatch(snapshotRuntimeKeys, requestedTargetKeys, snapshotContext)) {
+                const message = currentManualExecutionContext_ACU().key !== snapshotContext.key
+                    ? '聊天已切换，已取消本次追平，请重新确认目标。'
+                    : '表格运行时在确认期间发生变化，已取消本次追平，请重新确认目标。';
+                finishToast('warning', message);
                 return;
             }
             progressToastId = null;
@@ -170781,7 +173159,11 @@ function useManualUpdate() {
                 onProgress: event => notifyProgress(progressLabel(event), requestCatchUpAbort),
                 // 把确认前快照传给 service 层：orchestrator 内部会再次校验 runtime 一致性，
                 // 使 TOCTOU 防护延伸到 UI 复检之后的异步窗口。
-                executionSnapshot: { sheetKeys: snapshotRuntimeKeys },
+                executionSnapshot: {
+                    sheetKeys: snapshotRuntimeKeys,
+                    chatIdentity: snapshotContext.chatIdentity,
+                    isolationKey: snapshotContext.isolationKey,
+                },
             });
             if (result.outcome === 'sync_pending') {
                 showCatchUpSyncPending();
@@ -174210,8 +176592,25 @@ function useAgentWorldbookEntries(options = {}) {
         if (result.entry && typeof result.entry.comment === 'string') {
             updateEntrySkillMetaLocal(bookName, uid, result.entry.comment);
         }
-        if (result.updated)
-            await notifySkillMetaChanged();
+        if (result.updated) {
+            if (options.onSkillMetaChanged) {
+                try {
+                    const syncResult = await options.onSkillMetaChanged();
+                    if (syncResult === false)
+                        throw new Error('active snapshot 对账返回失败');
+                }
+                catch (cause) {
+                    logError_ACU('[ACU-V2] Skill meta 删除后接管同步失败', cause);
+                    throw new Error(`Skill 元数据已删除，但 active snapshot 对账失败：${cause?.message || 'unknown'}`);
+                }
+            }
+            else {
+                const takeover = await takeoverWorldbookGreenlights_ACU();
+                if (takeover.failed > 0) {
+                    throw new Error(`Skill 元数据已删除，但 active snapshot 对账失败：${takeover.reason || 'unknown'}`);
+                }
+            }
+        }
     }
     function toggleGroupExpanded(bookName) {
         groups.value = groups.value.map(group => group.bookName === bookName ? { ...group, expanded: !group.expanded } : group);
@@ -175942,6 +178341,8 @@ function useContinuationMaterials() {
     const loadError = ref('');
     /** 最近一次读取的来源诊断：采用了哪一楼、是否宽容抢救、有哪些损坏楼层。 */
     const diagnostics = ref({ candidates: [], adoptedIndex: null, salvaged: false });
+    let loadedChat = null;
+    let loadedChatIdentity = '';
     const modules = reactive({
         hooks: emptyModuleState_ACU(),
         infoGap: emptyModuleState_ACU(),
@@ -175954,8 +178355,12 @@ function useContinuationMaterials() {
         modules[module] = { draft: moduleDraftText_ACU(current, module), dirty: false, error: '', saving: false };
     }
     function reload() {
+        const chat = getChatArray_ACU();
+        const identity = String(currentChatFileIdentifier_ACU || '');
         try {
-            const current = readAgentModuleSnapshot_ACU();
+            const current = readAgentModuleSnapshot_ACU(chat);
+            loadedChat = chat;
+            loadedChatIdentity = identity;
             snapshot.value = current;
             diagnostics.value = readAgentModuleSnapshotDiagnostics_ACU();
             for (const module of CONTINUATION_MATERIAL_MODULES_ACU)
@@ -175963,6 +178368,8 @@ function useContinuationMaterials() {
             loadError.value = '';
         }
         catch (caught) {
+            loadedChat = null;
+            loadedChatIdentity = '';
             snapshot.value = null;
             for (const module of CONTINUATION_MATERIAL_MODULES_ACU)
                 modules[module] = emptyModuleState_ACU();
@@ -175983,6 +178390,12 @@ function useContinuationMaterials() {
         const state = modules[module];
         if (state.saving)
             return false;
+        const currentIdentity = String(currentChatFileIdentifier_ACU || '');
+        const currentChat = getChatArray_ACU();
+        if (!loadedChat || loadedChatIdentity !== currentIdentity || loadedChat !== currentChat) {
+            state.error = '聊天已切换，资料草稿已失效；请重新载入当前聊天。';
+            return false;
+        }
         let parsed;
         try {
             parsed = JSON.parse(state.draft);
@@ -175998,7 +178411,11 @@ function useContinuationMaterials() {
         state.saving = true;
         try {
             // 只提交本模块：写入侧按 merge 语义保留其余模块的磁盘值，不会覆盖别的模块。
-            const saved = await replaceAgentModuleSnapshotByUser_ACU({ [module]: parsed });
+            const saved = await replaceAgentModuleSnapshotByUser_ACU({ [module]: parsed }, loadedChat);
+            if (String(currentChatFileIdentifier_ACU || '') !== loadedChatIdentity || getChatArray_ACU() !== loadedChat) {
+                state.error = '聊天已在保存期间切换，旧资料结果未更新当前页面。';
+                return false;
+            }
             snapshot.value = saved;
             resetModule(module, saved);
             toast.success(`${CONTINUATION_MATERIAL_MODULE_LABELS_ACU[module]}已保存，修订号已推进。`);
@@ -176065,7 +178482,11 @@ var _sfc_main$m = /*@__PURE__*/ defineComponent({
                 expandedHistoryStages.value.delete(stage.stageId);
         }
         watch(() => props.task?.taskId, () => expandedHistoryStages.value.clear());
-        watchChatChanged_ACU(() => expandedHistoryStages.value.clear());
+        watchChatChanged_ACU(() => {
+            expandedHistoryStages.value.clear();
+            materials.reload();
+            syncOutlineDraft();
+        });
         watch(historyStages, stages => {
             const current = new Set(stages.map(stage => stage.stageId));
             for (const stage of expandedHistoryStages.value) {
@@ -176159,8 +178580,8 @@ var _sfc_main$m = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-v2-continuation-materials[data-v-4c2bb65c] { display: grid; gap: 12px;\n}\n.acu-v2-continuation-materials__tabs[data-v-4c2bb65c] { display: flex; flex-wrap: wrap; align-items: center; gap: 6px;\n}\n.acu-v2-continuation-materials__tab[data-v-4c2bb65c] { padding: 5px 12px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 22%, transparent); border-radius: 999px; background: transparent; color: var(--acu-text-2); cursor: pointer; font: inherit; font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__tab--active[data-v-4c2bb65c] { border-color: color-mix(in srgb, var(--acu-primary, #5b8def) 55%, transparent); background: color-mix(in srgb, var(--acu-primary, #5b8def) 14%, transparent); color: var(--acu-text-1);\n}\n.acu-v2-continuation-materials__tab-actions[data-v-4c2bb65c] { display: flex; gap: 6px; margin-left: auto;\n}\n.acu-v2-continuation-materials__confirm[data-v-4c2bb65c] { margin: 0; padding: 10px; border: 1px solid color-mix(in srgb, var(--acu-danger, #d65b5b) 40%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--acu-danger, #d65b5b) 7%, transparent); color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__confirm-actions[data-v-4c2bb65c] { display: inline-flex; gap: 6px; margin-left: 8px; vertical-align: middle;\n}\n.acu-v2-continuation-materials__outline[data-v-4c2bb65c] { display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__empty[data-v-4c2bb65c] { margin: 0; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__meta[data-v-4c2bb65c] { margin: 0; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap;\n}\n.acu-v2-continuation-materials__error[data-v-4c2bb65c] { margin: 0; color: var(--acu-danger, #d65b5b); white-space: pre-wrap; font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__actions[data-v-4c2bb65c] { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px;\n}\n.acu-v2-continuation-materials__block[data-v-4c2bb65c] { padding: 10px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 20%, transparent); border-radius: 6px; display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__block > summary[data-v-4c2bb65c] { cursor: pointer; color: var(--acu-text-1);\n}\n.acu-v2-continuation-materials__block--current[data-v-4c2bb65c] { border-color: color-mix(in srgb, var(--acu-primary, #5b8def) 45%, transparent);\n}\n.acu-v2-continuation-materials__list[data-v-4c2bb65c] { display: flex; flex-direction: column; gap: 6px; padding-left: 22px; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__outline-summary[data-v-4c2bb65c], .acu-v2-continuation-materials__outline-node[data-v-4c2bb65c] { padding: 10px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 16%, transparent); border-radius: 6px; display: grid; gap: 5px;\n}\n.acu-v2-continuation-materials__outline-heading[data-v-4c2bb65c] { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--acu-text-1); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__outline-nodes[data-v-4c2bb65c] { display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__turns[data-v-4c2bb65c] { display: grid; gap: 5px; margin: 0; padding-left: 22px; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__turns > li[data-v-4c2bb65c] { display: flex; flex-wrap: wrap; align-items: center; gap: 6px;\n}\n.acu-v2-continuation-materials__turn--done[data-v-4c2bb65c] { color: var(--acu-text-3);\n}\n.acu-v2-continuation-materials__turn--current[data-v-4c2bb65c] { padding: 5px 7px; margin-left: -7px; border-radius: 4px; background: color-mix(in srgb, var(--acu-primary, #5b8def) 14%, transparent); color: var(--acu-text-1);\n}\n.acu-v2-continuation-materials__turn--planned[data-v-4c2bb65c] { color: var(--acu-text-2);\n}\n.acu-v2-continuation-materials__cards[data-v-4c2bb65c] { display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__card[data-v-4c2bb65c] { padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 16%, transparent); border-radius: 6px; display: grid; gap: 4px;\n}\n.acu-v2-continuation-materials__card--retired[data-v-4c2bb65c] { opacity: 0.55;\n}\n.acu-v2-continuation-materials__card > summary.acu-v2-continuation-materials__card-head[data-v-4c2bb65c] { cursor: pointer; list-style: none;\n}\n.acu-v2-continuation-materials__card-meta a[data-v-4c2bb65c] { color: inherit; word-break: break-all;\n}\n.acu-v2-continuation-materials__card-head[data-v-4c2bb65c] { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--acu-text-1); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__card-body[data-v-4c2bb65c] { margin: 0; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap;\n}\n.acu-v2-continuation-materials__card-meta[data-v-4c2bb65c] { margin: 0; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap;\n}\n.acu-v2-continuation-materials__badge[data-v-4c2bb65c] { padding: 1px 8px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 30%, transparent); color: var(--acu-text-2); font-size: 11px;\n}\n.acu-v2-continuation-materials__badge--primary[data-v-4c2bb65c] { border-color: color-mix(in srgb, var(--acu-primary, #5b8def) 55%, transparent); color: var(--acu-text-1); background: color-mix(in srgb, var(--acu-primary, #5b8def) 12%, transparent);\n}\n.acu-v2-continuation-materials__badge--muted[data-v-4c2bb65c] { opacity: 0.8;\n}\n.acu-v2-continuation-materials__json[data-v-4c2bb65c] { display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__json > summary[data-v-4c2bb65c] { cursor: pointer; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__history[data-v-4c2bb65c] { display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__history-revision[data-v-4c2bb65c] { padding: 8px; border-left: 2px solid color-mix(in srgb, var(--acu-text-3) 28%, transparent);\n}\r\n\r\n/* 手机窄屏：刷新/清空按钮换到独立一行靠右，避免和页签挤成两行半。 */\n@media (max-width: 640px) {\n.acu-v2-continuation-materials__tab-actions[data-v-4c2bb65c] { margin-left: 0; width: 100%; justify-content: flex-end;\n}\n.acu-v2-continuation-materials__confirm-actions[data-v-4c2bb65c] { display: flex; margin: 8px 0 0;\n}\n}\r\n", "src/presentation-v2/components/ContinuationMaterialsPanel.vue#style-0-4c2bb65c");
-var ContinuationMaterialsPanel_vue_vue_type_style_index_0_scoped_4c2bb65c_lang = null;
+injectSfcStyle("\n.acu-v2-continuation-materials[data-v-c0d18dc0] { display: grid; gap: 12px;\n}\n.acu-v2-continuation-materials__tabs[data-v-c0d18dc0] { display: flex; flex-wrap: wrap; align-items: center; gap: 6px;\n}\n.acu-v2-continuation-materials__tab[data-v-c0d18dc0] { padding: 5px 12px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 22%, transparent); border-radius: 999px; background: transparent; color: var(--acu-text-2); cursor: pointer; font: inherit; font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__tab--active[data-v-c0d18dc0] { border-color: color-mix(in srgb, var(--acu-primary, #5b8def) 55%, transparent); background: color-mix(in srgb, var(--acu-primary, #5b8def) 14%, transparent); color: var(--acu-text-1);\n}\n.acu-v2-continuation-materials__tab-actions[data-v-c0d18dc0] { display: flex; gap: 6px; margin-left: auto;\n}\n.acu-v2-continuation-materials__confirm[data-v-c0d18dc0] { margin: 0; padding: 10px; border: 1px solid color-mix(in srgb, var(--acu-danger, #d65b5b) 40%, transparent); border-radius: 6px; background: color-mix(in srgb, var(--acu-danger, #d65b5b) 7%, transparent); color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__confirm-actions[data-v-c0d18dc0] { display: inline-flex; gap: 6px; margin-left: 8px; vertical-align: middle;\n}\n.acu-v2-continuation-materials__outline[data-v-c0d18dc0] { display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__empty[data-v-c0d18dc0] { margin: 0; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__meta[data-v-c0d18dc0] { margin: 0; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap;\n}\n.acu-v2-continuation-materials__error[data-v-c0d18dc0] { margin: 0; color: var(--acu-danger, #d65b5b); white-space: pre-wrap; font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__actions[data-v-c0d18dc0] { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px;\n}\n.acu-v2-continuation-materials__block[data-v-c0d18dc0] { padding: 10px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 20%, transparent); border-radius: 6px; display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__block > summary[data-v-c0d18dc0] { cursor: pointer; color: var(--acu-text-1);\n}\n.acu-v2-continuation-materials__block--current[data-v-c0d18dc0] { border-color: color-mix(in srgb, var(--acu-primary, #5b8def) 45%, transparent);\n}\n.acu-v2-continuation-materials__list[data-v-c0d18dc0] { display: flex; flex-direction: column; gap: 6px; padding-left: 22px; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__outline-summary[data-v-c0d18dc0], .acu-v2-continuation-materials__outline-node[data-v-c0d18dc0] { padding: 10px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 16%, transparent); border-radius: 6px; display: grid; gap: 5px;\n}\n.acu-v2-continuation-materials__outline-heading[data-v-c0d18dc0] { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--acu-text-1); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__outline-nodes[data-v-c0d18dc0] { display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__turns[data-v-c0d18dc0] { display: grid; gap: 5px; margin: 0; padding-left: 22px; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__turns > li[data-v-c0d18dc0] { display: flex; flex-wrap: wrap; align-items: center; gap: 6px;\n}\n.acu-v2-continuation-materials__turn--done[data-v-c0d18dc0] { color: var(--acu-text-3);\n}\n.acu-v2-continuation-materials__turn--current[data-v-c0d18dc0] { padding: 5px 7px; margin-left: -7px; border-radius: 4px; background: color-mix(in srgb, var(--acu-primary, #5b8def) 14%, transparent); color: var(--acu-text-1);\n}\n.acu-v2-continuation-materials__turn--planned[data-v-c0d18dc0] { color: var(--acu-text-2);\n}\n.acu-v2-continuation-materials__cards[data-v-c0d18dc0] { display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__card[data-v-c0d18dc0] { padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 16%, transparent); border-radius: 6px; display: grid; gap: 4px;\n}\n.acu-v2-continuation-materials__card--retired[data-v-c0d18dc0] { opacity: 0.55;\n}\n.acu-v2-continuation-materials__card > summary.acu-v2-continuation-materials__card-head[data-v-c0d18dc0] { cursor: pointer; list-style: none;\n}\n.acu-v2-continuation-materials__card-meta a[data-v-c0d18dc0] { color: inherit; word-break: break-all;\n}\n.acu-v2-continuation-materials__card-head[data-v-c0d18dc0] { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--acu-text-1); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__card-body[data-v-c0d18dc0] { margin: 0; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap;\n}\n.acu-v2-continuation-materials__card-meta[data-v-c0d18dc0] { margin: 0; color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap;\n}\n.acu-v2-continuation-materials__badge[data-v-c0d18dc0] { padding: 1px 8px; border-radius: 999px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 30%, transparent); color: var(--acu-text-2); font-size: 11px;\n}\n.acu-v2-continuation-materials__badge--primary[data-v-c0d18dc0] { border-color: color-mix(in srgb, var(--acu-primary, #5b8def) 55%, transparent); color: var(--acu-text-1); background: color-mix(in srgb, var(--acu-primary, #5b8def) 12%, transparent);\n}\n.acu-v2-continuation-materials__badge--muted[data-v-c0d18dc0] { opacity: 0.8;\n}\n.acu-v2-continuation-materials__json[data-v-c0d18dc0] { display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__json > summary[data-v-c0d18dc0] { cursor: pointer; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-materials__history[data-v-c0d18dc0] { display: grid; gap: 8px;\n}\n.acu-v2-continuation-materials__history-revision[data-v-c0d18dc0] { padding: 8px; border-left: 2px solid color-mix(in srgb, var(--acu-text-3) 28%, transparent);\n}\r\n\r\n/* 手机窄屏：刷新/清空按钮换到独立一行靠右，避免和页签挤成两行半。 */\n@media (max-width: 640px) {\n.acu-v2-continuation-materials__tab-actions[data-v-c0d18dc0] { margin-left: 0; width: 100%; justify-content: flex-end;\n}\n.acu-v2-continuation-materials__confirm-actions[data-v-c0d18dc0] { display: flex; margin: 8px 0 0;\n}\n}\r\n", "src/presentation-v2/components/ContinuationMaterialsPanel.vue#style-0-c0d18dc0");
+var ContinuationMaterialsPanel_vue_vue_type_style_index_0_scoped_c0d18dc0_lang = null;
 
 const _hoisted_1$m = { class: "acu-v2-continuation-materials" };
 const _hoisted_2$k = { class: "acu-v2-continuation-materials__tabs" };
@@ -177835,7 +180256,7 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 		))
 	]);
 }
-var ContinuationMaterialsPanel = /* @__PURE__ */ _export_sfc(_sfc_main$m, [["render", _sfc_render$m], ["__scopeId", "data-v-4c2bb65c"]]);
+var ContinuationMaterialsPanel = /* @__PURE__ */ _export_sfc(_sfc_main$m, [["render", _sfc_render$m], ["__scopeId", "data-v-c0d18dc0"]]);
 
 /** 连续高压轮上限的可配置上界。页面是 .vue，不能直接 import 服务层常量，由本组合式函数中转。 */
 const CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_UI_ACU = CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_ACU;
@@ -177870,6 +180291,24 @@ function useContinuationRuntime() {
     let activeAction = null;
     // 用户点停止后递增：挡住「发送已落盘、continueTask 尚未启动」这一空档把停止吞掉再开跑。
     let stopEpoch = 0;
+    const viewChatIdentity = ref(String(currentChatFileIdentifier_ACU || ''));
+    let viewEpoch = 0;
+    function currentViewIdentity_ACU() {
+        return String(currentChatFileIdentifier_ACU || '');
+    }
+    function captureViewToken_ACU() {
+        return { identity: currentViewIdentity_ACU(), epoch: viewEpoch };
+    }
+    function isViewCurrent_ACU(token) {
+        return currentViewIdentity_ACU() === token.identity && viewEpoch === token.epoch;
+    }
+    function acceptEnvelope_ACU(value, token) {
+        if (!isViewCurrent_ACU(token))
+            return false;
+        envelope.value = value;
+        viewChatIdentity.value = token.identity;
+        return true;
+    }
     // 正文确认与自动续写由宿主事件异步触发，不会经过页面动作。订阅桥的状态提交通知，
     // 使「等待宿主正文」在 confirmCurrentTurn 后立即从权威快照刷新。
     const subscribeStateChanges = runtime.bridge.subscribeStateChanges;
@@ -177932,10 +180371,20 @@ function useContinuationRuntime() {
         });
     }
     function refresh() {
+        const identity = currentViewIdentity_ACU();
+        if (identity !== viewChatIdentity.value) {
+            viewChatIdentity.value = identity;
+            viewEpoch += 1;
+        }
+        const token = captureViewToken_ACU();
         try {
-            envelope.value = runtime.read();
+            const next = runtime.read();
+            if (!acceptEnvelope_ACU(next, token))
+                return;
         }
         catch (error) {
+            if (!isViewCurrent_ACU(token))
+                return;
             envelope.value = null;
             notifyErrorToast_ACU(errorMessage_ACU(error), { muteable: false });
         }
@@ -177969,10 +180418,13 @@ function useContinuationRuntime() {
     function run_ACU(action, replaceActive = false, suppressErrorToast = false, onError) {
         if (busy.value && !replaceActive)
             return Promise.resolve(false);
+        const token = captureViewToken_ACU();
         busy.value = true;
         const completion = Promise.resolve()
             .then(action)
             .then(async (result) => {
+            if (!isViewCurrent_ACU(token))
+                return false;
             if ('retryHostGeneration' in result && result.retryHostGeneration) {
                 // 上一轮正文中断/失败后的恢复走宿主（酒馆）自己的重发，不经过 Agent。此分支只由用户
                 // 动作到达（自动重试链走桥内部，不经 run_ACU），必须留痕并解释消息去向——
@@ -177980,19 +180432,27 @@ function useContinuationRuntime() {
                 logAgentSession_ACU({ kind: 'protocol_retry', title: '重发上一轮正文', detail: '上一轮酒馆正文未正常完成，先让酒馆直接重新生成；本次发送的消息会在正文完成后的下一轮由主 Agent 读取。' });
                 toast.info('上一轮正文未完成，已让酒馆直接重新生成；你的消息会在下一轮被主 Agent 读取。');
                 const sent = await runtime.bridge.retryHostGeneration();
+                if (!isViewCurrent_ACU(token))
+                    return false;
                 if (!sent)
                     notifyErrorToast_ACU('宿主重新生成不可用，智能续写已暂停。', { muteable: false });
             }
             else if ('preparedTurn' in result && result.preparedTurn) {
                 const sent = await runtime.bridge.send(result.preparedTurn);
+                if (!isViewCurrent_ACU(token))
+                    return false;
                 if (!sent)
                     notifyErrorToast_ACU('宿主输入不可用，智能续写已暂停。', { muteable: false });
             }
-            envelope.value = 'envelope' in result ? result.envelope : result;
+            const nextEnvelope = 'envelope' in result ? result.envelope : result;
+            if (!acceptEnvelope_ACU(nextEnvelope, token))
+                return false;
             refresh();
             return true;
         })
             .catch(error => {
+            if (!isViewCurrent_ACU(token))
+                return false;
             onError?.(error);
             if (suppressErrorToast) {
                 refresh();
@@ -178070,9 +180530,13 @@ function useContinuationRuntime() {
             return false;
         const actionBeforeMessage = activeAction;
         const epochAtStart = stopEpoch;
+        const viewToken = captureViewToken_ACU();
         try {
             const result = await runtime.orchestrator.sendAgentMessage({ text });
-            envelope.value = result.envelope;
+            if (!isViewCurrent_ACU(viewToken))
+                return true;
+            if (!acceptEnvelope_ACU(result.envelope, viewToken))
+                return true;
             refresh();
             if (result.disposition === 'queued_after_host') {
                 toast.info('消息已排队，会在当前正文完成后生效。');
@@ -178086,6 +180550,8 @@ function useContinuationRuntime() {
                 notifyErrorToast_ACU('消息已保存，但返回了无法执行的后续动作。', { muteable: false });
                 return false;
             }
+            if (!isViewCurrent_ACU(viewToken))
+                return true;
             if (stopEpoch !== epochAtStart)
                 return true;
             let startFailure = '';
@@ -178098,6 +180564,8 @@ function useContinuationRuntime() {
             return true;
         }
         catch (error) {
+            if (!isViewCurrent_ACU(viewToken))
+                return false;
             notifyErrorToast_ACU(errorMessage_ACU(error), { muteable: false });
             refresh();
             return false;
@@ -178115,24 +180583,30 @@ function useContinuationRuntime() {
      */
     async function stopTask() {
         stopEpoch += 1;
+        const token = captureViewToken_ACU();
         if (isAgentSessionRunning_ACU()) {
             logAgentSession_ACU({ kind: 'run_failed', title: '已停止', detail: '用户停止', ok: false });
         }
         try {
             const result = await runtime.orchestrator.stopTask();
-            envelope.value = result.envelope;
+            if (isViewCurrent_ACU(token))
+                acceptEnvelope_ACU(result.envelope, token);
         }
         catch (error) {
+            if (!isViewCurrent_ACU(token))
+                return;
             notifyErrorToast_ACU(errorMessage_ACU(error), { muteable: false });
         }
         finally {
-            try {
-                runtime.bridge.stopHostGeneration();
+            if (isViewCurrent_ACU(token)) {
+                try {
+                    runtime.bridge.stopHostGeneration();
+                }
+                catch {
+                    // 宿主 API 不可用时仍保留已落盘的停止态，避免按钮停了任务没停。
+                }
+                refresh();
             }
-            catch {
-                // 宿主 API 不可用时仍保留已落盘的停止态，避免按钮停了任务没停。
-            }
-            refresh();
         }
     }
     async function replanRemaining() {
@@ -178164,13 +180638,18 @@ function useContinuationRuntime() {
     async function saveSettings(settings) {
         if (busy.value)
             return 'busy';
+        const token = captureViewToken_ACU();
         busy.value = true;
         try {
-            envelope.value = await runtime.orchestrator.replaceSettings({ settings });
+            const nextEnvelope = await runtime.orchestrator.replaceSettings({ settings });
+            if (!acceptEnvelope_ACU(nextEnvelope, token))
+                return 'stale';
             refresh();
             return 'saved';
         }
         catch (error) {
+            if (!isViewCurrent_ACU(token))
+                return 'stale';
             if (error instanceof ContinuationValidationError_ACU && error.error.code === 'CONTINUATION_OPERATION_BUSY')
                 return 'busy';
             notifyErrorToast_ACU(errorMessage_ACU(error), { muteable: false });
@@ -178242,15 +180721,19 @@ function useContinuationRuntime() {
     async function clearData() {
         if (busy.value)
             return false;
+        const token = captureViewToken_ACU();
         busy.value = true;
         try {
             const result = await runtime.orchestrator.clearContinuationData();
-            envelope.value = result.envelope;
+            if (!isViewCurrent_ACU(token) || !acceptEnvelope_ACU(result.envelope, token))
+                return false;
             refresh();
             toast.success('已清空续写任务、会话记录与本地资料，正文未改动。');
             return true;
         }
         catch (error) {
+            if (!isViewCurrent_ACU(token))
+                return false;
             notifyErrorToast_ACU(errorMessage_ACU(error), { muteable: false });
             refresh();
             return false;
@@ -178273,6 +180756,8 @@ function useContinuationRuntime() {
         acceptOutline,
         busy,
         canContinue,
+        chatIdentity: viewChatIdentity,
+        settingsIdentity: viewChatIdentity,
         createTask,
         continueTask,
         initialize,
@@ -178386,10 +180871,12 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
     setup(__props, { expose: __expose }) {
         __expose();
         const runtime = useContinuationRuntime();
+        const runtimeSettingsIdentity = runtime.settingsIdentity ?? computed(() => currentDraftChatIdentity());
         const dialog = useDialogStore();
         const session = useContinuationSession();
         const { apiStore, followActiveApiLabel, apiPresetSelectOptions: continuationApiPresetOptions } = useApiPresetSelectOptions();
         const settingsDraft = ref(null);
+        const draftChatIdentity = ref(String(currentChatFileIdentifier_ACU || ''));
         const outlineDraft = ref('');
         const messageDraft = ref('');
         const messageSending = ref(false);
@@ -178612,8 +181099,23 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
                 confirmCountdownSeconds: 5,
             });
         }
+        function currentDraftChatIdentity() {
+            return String(currentChatFileIdentifier_ACU || '');
+        }
+        function ensureCurrentDraftChat() {
+            if (draftChatIdentity.value === currentDraftChatIdentity())
+                return true;
+            messageDraft.value = '';
+            outlineDraft.value = '';
+            settingsDraft.value = null;
+            settingsError.value = '';
+            settingsNotice.value = '聊天已切换，旧草稿已清空；请重新载入当前聊天。';
+            return false;
+        }
         /** 会话发送：没有任务时创建任务，运行中会打断当前迭代并带着这句话重新开始。 */
         async function sendMessage(text) {
+            if (!ensureCurrentDraftChat())
+                return;
             if (messageSending.value)
                 return;
             // 仅在本次发送将创建新任务（首次发送）时弹确认框；取消则保留草稿不发送。
@@ -178781,6 +181283,9 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
         async function saveSettingsNow() {
             if (!settingsDraft.value)
                 return;
+            if (!ensureCurrentDraftChat())
+                return;
+            const saveChatIdentity = currentDraftChatIdentity();
             if (JSON.stringify(settingsDraft.value) === lastPersistedSettingsJson)
                 return;
             if (runtime.busy.value) {
@@ -178798,6 +181303,13 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
                 return;
             }
             const outcome = await runtime.saveSettings(candidate);
+            if (saveChatIdentity !== currentDraftChatIdentity()) {
+                settingsDraft.value = null;
+                settingsError.value = '聊天已切换，设置草稿未写入当前聊天。';
+                return;
+            }
+            if (outcome === 'stale')
+                return;
             if (outcome === 'saved') {
                 settingsError.value = '';
                 settingsNotice.value = '';
@@ -178947,9 +181459,25 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
                 void saveSettingsNow();
             }
         });
-        watchChatChanged_ACU(refreshAll);
+        watchChatChanged_ACU(() => {
+            const nextIdentity = currentDraftChatIdentity();
+            if (nextIdentity !== draftChatIdentity.value) {
+                messageDraft.value = '';
+                outlineDraft.value = '';
+                settingsDraft.value = null;
+                settingsError.value = '';
+                settingsNotice.value = '聊天已切换，旧草稿已清空；请重新载入当前聊天。';
+                lastPersistedSettingsJson = '';
+                draftChatIdentity.value = nextIdentity;
+            }
+            refreshAll();
+        });
         watch(useChatMutationTick(), refreshAfterChatMutation);
-        watch(runtime.settings, settings => {
+        watch([runtimeSettingsIdentity, runtime.settings], ([sourceIdentity, settings]) => {
+            // settings 视图与聊天身份一起提交。迟到的 A 结果即使触发了响应式更新，也不得重建 B 的草稿。
+            const identity = String(sourceIdentity ?? currentDraftChatIdentity());
+            if (identity !== currentDraftChatIdentity() || identity !== draftChatIdentity.value)
+                return;
             // 每次刷新信封都会产生新的 settings 引用；只有持久化内容真的变了（保存成功、切换聊天）
             // 才重建草稿。否则运行期间的每次状态刷新都会把用户尚未保存的改动悄悄冲掉。
             const persistedJson = settings ? JSON.stringify(cloneSettings(settings)) : '';
@@ -178966,14 +181494,14 @@ var _sfc_main$l = /*@__PURE__*/ defineComponent({
             scheduleSettingsSave();
         }, { deep: true });
         watch(() => `${runtime.activeStage.value?.stageId ?? ''}:${runtime.activeRevision.value?.revision ?? ''}`, syncOutlineDraft, { immediate: true });
-        const __returned__ = { runtime, dialog, session, apiStore, followActiveApiLabel, continuationApiPresetOptions, settingsDraft, outlineDraft, messageDraft, messageSending, outlineDraftError, settingsError, settingsNotice, materialsPanel, clock, get countdownTimer() { return countdownTimer; }, set countdownTimer(v) { countdownTimer = v; }, stageText, deadlineText, continuationApiPresetValue, applyContinuationApiPreset, continuationRoleOptions, maxConsecutivePressureTurnsMax, INHERIT_CHANNEL_VALUE, agentChannelRoles, webSearchProviderOptions, expandedGroups, isGroupExpanded, toggleGroup, runGroupMeta, contextGroupMeta, budgetGroupMeta, finalReviewGroupMeta, webResearchGroupMeta, channelGroupMeta, rulesGroupMeta, agentChannelOptions, agentChannelValue, applyAgentChannel, saveSettingsImmediately, cloneSettings, syncOutlineDraft, parseOutlineDraft, acceptOutlineDraft, confirmFirstSendRpmWarning, sendMessage, saveOutline, clearData, requiredInteger, requiredBoundedInteger, requiredRangeInteger, normalizedReadBudget, normalizeSettingsDraft, presetExists, get lastPersistedSettingsJson() { return lastPersistedSettingsJson; }, set lastPersistedSettingsJson(v) { lastPersistedSettingsJson = v; }, get settingsSaveTimer() { return settingsSaveTimer; }, set settingsSaveTimer(v) { settingsSaveTimer = v; }, scheduleSettingsSave, saveSettingsNow, promptGroups, promptGroupMeta, promptList, addPrompt, deletePrompt, movePrompt, updatePrompt, restorePrompt, promptImportInput, promptIoError, promptIoNotice, exportPrompts, onImportPromptsFile, refreshAll, refreshAfterChatMutation, AcuButton, AcuCheckbox, AcuDisclosureGroup, AcuFormRow, AcuInput, AcuPanel, AcuPanelGrid, AcuPromptSegments, AcuRulePairList, AcuSelect, AcuTextarea, ContinuationChat, ContinuationMaterialsPanel };
+        const __returned__ = { runtime, runtimeSettingsIdentity, dialog, session, apiStore, followActiveApiLabel, continuationApiPresetOptions, settingsDraft, draftChatIdentity, outlineDraft, messageDraft, messageSending, outlineDraftError, settingsError, settingsNotice, materialsPanel, clock, get countdownTimer() { return countdownTimer; }, set countdownTimer(v) { countdownTimer = v; }, stageText, deadlineText, continuationApiPresetValue, applyContinuationApiPreset, continuationRoleOptions, maxConsecutivePressureTurnsMax, INHERIT_CHANNEL_VALUE, agentChannelRoles, webSearchProviderOptions, expandedGroups, isGroupExpanded, toggleGroup, runGroupMeta, contextGroupMeta, budgetGroupMeta, finalReviewGroupMeta, webResearchGroupMeta, channelGroupMeta, rulesGroupMeta, agentChannelOptions, agentChannelValue, applyAgentChannel, saveSettingsImmediately, cloneSettings, syncOutlineDraft, parseOutlineDraft, acceptOutlineDraft, confirmFirstSendRpmWarning, currentDraftChatIdentity, ensureCurrentDraftChat, sendMessage, saveOutline, clearData, requiredInteger, requiredBoundedInteger, requiredRangeInteger, normalizedReadBudget, normalizeSettingsDraft, presetExists, get lastPersistedSettingsJson() { return lastPersistedSettingsJson; }, set lastPersistedSettingsJson(v) { lastPersistedSettingsJson = v; }, get settingsSaveTimer() { return settingsSaveTimer; }, set settingsSaveTimer(v) { settingsSaveTimer = v; }, scheduleSettingsSave, saveSettingsNow, promptGroups, promptGroupMeta, promptList, addPrompt, deletePrompt, movePrompt, updatePrompt, restorePrompt, promptImportInput, promptIoError, promptIoNotice, exportPrompts, onImportPromptsFile, refreshAll, refreshAfterChatMutation, AcuButton, AcuCheckbox, AcuDisclosureGroup, AcuFormRow, AcuInput, AcuPanel, AcuPanelGrid, AcuPromptSegments, AcuRulePairList, AcuSelect, AcuTextarea, ContinuationChat, ContinuationMaterialsPanel };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.acu-v2-continuation-page[data-v-ad1b4f2a] { min-height: 100%; padding: 20px; display: grid; gap: 18px;\n}\n.acu-v2-continuation-page__layout[data-v-ad1b4f2a] { align-items: start;\n}\n.acu-v2-continuation-page__actions[data-v-ad1b4f2a] { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 12px;\n}\n.acu-v2-continuation-page__actions--start[data-v-ad1b4f2a] { justify-content: flex-start; margin-top: 0; margin-bottom: 12px;\n}\n.acu-v2-continuation-page__file-input[data-v-ad1b4f2a] { display: none;\n}\n.acu-v2-continuation-page__error[data-v-ad1b4f2a] { color: var(--acu-danger, #d65b5b); white-space: pre-wrap;\n}\n.acu-v2-continuation-page__meta[data-v-ad1b4f2a] { color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap;\n}\n.acu-v2-continuation-page__settings-grid[data-v-ad1b4f2a] { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start;\n}\n.acu-v2-continuation-page__settings-grid label[data-v-ad1b4f2a] { display: grid; gap: 5px; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-page__settings-grid select[data-v-ad1b4f2a] { min-height: 30px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 30%, transparent); border-radius: 4px; background: var(--acu-bg-2); color: var(--acu-text-1);\n}\n.acu-v2-continuation-page__toggles[data-v-ad1b4f2a] { display: flex; flex-wrap: wrap; gap: 14px; margin: 14px 0;\n}\n.acu-v2-continuation-page__groups[data-v-ad1b4f2a] { display: flex; flex-direction: column; gap: 8px; margin-top: 4px;\n}\n.acu-v2-continuation-page__group[data-v-ad1b4f2a] {\r\n  border: 1px solid var(--acu-border, color-mix(in srgb, var(--acu-text-3) 18%, transparent));\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-bg-2) 72%, transparent);\n}\n.acu-v2-continuation-page__group[data-v-ad1b4f2a] .acu-disclosure-group__header { border-radius: var(--acu-radius-sm);\n}\n.acu-v2-continuation-page__group[data-v-ad1b4f2a] .acu-disclosure-group__body { gap: 12px; padding: 12px;\n}\n.acu-v2-continuation-page__group[data-v-ad1b4f2a] .acu-disclosure-group__meta { max-width: 55%; overflow: hidden; text-overflow: ellipsis;\n}\n.acu-v2-continuation-page__group .acu-v2-continuation-page__actions[data-v-ad1b4f2a] { margin-top: 0;\n}\n.acu-v2-continuation-page__subheading[data-v-ad1b4f2a] { margin: 4px 0 0; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px); font-weight: 600;\n}\n.acu-v2-continuation-page__subheading[data-v-ad1b4f2a]:first-child { margin-top: 0;\n}\n@media (max-width: 860px) {\n.acu-v2-continuation-page[data-v-ad1b4f2a] { padding: 14px;\n}\n}\n@media (max-width: 640px) {\n.acu-v2-continuation-page[data-v-ad1b4f2a] { padding: 10px; gap: 12px;\n}\n.acu-v2-continuation-page__settings-grid[data-v-ad1b4f2a] { grid-template-columns: 1fr;\n}\n.acu-v2-continuation-page__actions[data-v-ad1b4f2a] > * { flex: 1 1 auto;\n}\n.acu-v2-continuation-page__group[data-v-ad1b4f2a] .acu-disclosure-group__meta { display: none;\n}\n}\r\n", "src/presentation-v2/pages/ContinuationPage.vue#style-0-ad1b4f2a");
-var ContinuationPage_vue_vue_type_style_index_0_scoped_ad1b4f2a_lang = null;
+injectSfcStyle("\n.acu-v2-continuation-page[data-v-078f13a8] { min-height: 100%; padding: 20px; display: grid; gap: 18px;\n}\n.acu-v2-continuation-page__layout[data-v-078f13a8] { align-items: start;\n}\n.acu-v2-continuation-page__actions[data-v-078f13a8] { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 12px;\n}\n.acu-v2-continuation-page__actions--start[data-v-078f13a8] { justify-content: flex-start; margin-top: 0; margin-bottom: 12px;\n}\n.acu-v2-continuation-page__file-input[data-v-078f13a8] { display: none;\n}\n.acu-v2-continuation-page__error[data-v-078f13a8] { color: var(--acu-danger, #d65b5b); white-space: pre-wrap;\n}\n.acu-v2-continuation-page__meta[data-v-078f13a8] { color: var(--acu-text-3); font-size: var(--acu-font-size-body, 12px); white-space: pre-wrap;\n}\n.acu-v2-continuation-page__settings-grid[data-v-078f13a8] { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start;\n}\n.acu-v2-continuation-page__settings-grid label[data-v-078f13a8] { display: grid; gap: 5px; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-continuation-page__settings-grid select[data-v-078f13a8] { min-height: 30px; border: 1px solid color-mix(in srgb, var(--acu-text-3) 30%, transparent); border-radius: 4px; background: var(--acu-bg-2); color: var(--acu-text-1);\n}\n.acu-v2-continuation-page__toggles[data-v-078f13a8] { display: flex; flex-wrap: wrap; gap: 14px; margin: 14px 0;\n}\n.acu-v2-continuation-page__groups[data-v-078f13a8] { display: flex; flex-direction: column; gap: 8px; margin-top: 4px;\n}\n.acu-v2-continuation-page__group[data-v-078f13a8] {\r\n  border: 1px solid var(--acu-border, color-mix(in srgb, var(--acu-text-3) 18%, transparent));\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-bg-2) 72%, transparent);\n}\n.acu-v2-continuation-page__group[data-v-078f13a8] .acu-disclosure-group__header { border-radius: var(--acu-radius-sm);\n}\n.acu-v2-continuation-page__group[data-v-078f13a8] .acu-disclosure-group__body { gap: 12px; padding: 12px;\n}\n.acu-v2-continuation-page__group[data-v-078f13a8] .acu-disclosure-group__meta { max-width: 55%; overflow: hidden; text-overflow: ellipsis;\n}\n.acu-v2-continuation-page__group .acu-v2-continuation-page__actions[data-v-078f13a8] { margin-top: 0;\n}\n.acu-v2-continuation-page__subheading[data-v-078f13a8] { margin: 4px 0 0; color: var(--acu-text-2); font-size: var(--acu-font-size-body, 12px); font-weight: 600;\n}\n.acu-v2-continuation-page__subheading[data-v-078f13a8]:first-child { margin-top: 0;\n}\n@media (max-width: 860px) {\n.acu-v2-continuation-page[data-v-078f13a8] { padding: 14px;\n}\n}\n@media (max-width: 640px) {\n.acu-v2-continuation-page[data-v-078f13a8] { padding: 10px; gap: 12px;\n}\n.acu-v2-continuation-page__settings-grid[data-v-078f13a8] { grid-template-columns: 1fr;\n}\n.acu-v2-continuation-page__actions[data-v-078f13a8] > * { flex: 1 1 auto;\n}\n.acu-v2-continuation-page__group[data-v-078f13a8] .acu-disclosure-group__meta { display: none;\n}\n}\r\n", "src/presentation-v2/pages/ContinuationPage.vue#style-0-078f13a8");
+var ContinuationPage_vue_vue_type_style_index_0_scoped_078f13a8_lang = null;
 
 const _hoisted_1$l = { class: "acu-v2-continuation-page" };
 const _hoisted_2$j = {
@@ -179983,7 +182511,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 		})) : createCommentVNode("v-if", true)
 	]);
 }
-var ContinuationPage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-ad1b4f2a"]]);
+var ContinuationPage = /* @__PURE__ */ _export_sfc(_sfc_main$l, [["render", _sfc_render$l], ["__scopeId", "data-v-078f13a8"]]);
 
 var _sfc_main$k = /*@__PURE__*/ defineComponent({
     __name: 'AcuStatsList',
@@ -182309,7 +184837,10 @@ async function restoreTableCheckpointToLatestAi_ACU(parsed, options = {}) {
     try {
         const result = await runTableWriteTransaction_ACU({ source: 'import', reason: 'restoreTableCheckpoint', isolationKey, writeSet: [{ kind: 'all' }], maintenanceMode: 'exclusive' }, async (transactionContext) => {
             return transactionContext.runCommit(async () => {
-                const cleared = await clearAllAiTableDataForCheckpointRestore_ACU();
+                const cleared = await clearAllAiTableDataForCheckpointRestore_ACU(isolationKey, {
+                    enabled: settings_ACU.dataIsolationEnabled,
+                    code: settings_ACU.dataIsolationCode,
+                });
                 vectorManifests = cleared.vectorManifestsToDeleteAfterCommit;
                 const replaced = await provider.replaceAllData(cloneJson_ACU(checked.tableSnapshot));
                 if (!replaced?.success)
@@ -182580,6 +185111,113 @@ function normalizeRetainRecentLayers(value) {
         return 0;
     return Math.floor(n);
 }
+function cloneSettingsSnapshot(settings) {
+    try {
+        return JSON.parse(JSON.stringify(settings));
+    }
+    catch {
+        return null;
+    }
+}
+function restoreSettingsSnapshot(settings, snapshot) {
+    if (!snapshot || !settings || typeof settings !== 'object')
+        return;
+    for (const key of Object.keys(settings)) {
+        if (!Object.prototype.hasOwnProperty.call(snapshot, key))
+            delete settings[key];
+    }
+    Object.assign(settings, snapshot);
+}
+function rollbackSettingsSnapshot(settings, snapshot) {
+    if (!snapshot)
+        return '无法创建 settings 回滚快照。';
+    restoreSettingsSnapshot(settings, snapshot);
+    try {
+        const result = saveSettings_ACU();
+        if (result && result.saved === false)
+            return result.error || 'settings 回滚保存失败。';
+    }
+    catch (error) {
+        return error instanceof Error ? error.message : String(error);
+    }
+    return null;
+}
+function captureChatField_ACU(firstMessage, key) {
+    return {
+        key,
+        existed: !!firstMessage && Object.prototype.hasOwnProperty.call(firstMessage, key),
+        value: firstMessage ? cloneSettingsSnapshot(firstMessage[key]) : null,
+    };
+}
+function restoreChatField_ACU(firstMessage, field) {
+    if (!firstMessage)
+        return;
+    if (field.existed)
+        firstMessage[field.key] = cloneSettingsSnapshot(field.value);
+    else
+        delete firstMessage[field.key];
+}
+function captureResetTransaction_ACU() {
+    const settings = cloneSettingsSnapshot(settings_ACU);
+    if (!settings)
+        return null;
+    const chat = getChatArray_ACU();
+    const firstMessage = Array.isArray(chat) && chat[0] && typeof chat[0] === 'object'
+        ? chat[0]
+        : null;
+    return {
+        settings,
+        chat,
+        firstMessage,
+        chatIdentity: String(currentChatFileIdentifier_ACU || ''),
+        scopedConfig: peekChatScopedConfigContainer_ACU(chat),
+        sheetGuide: peekChatSheetGuideContainer_ACU(chat),
+        metadataSnapshot: snapshotChatMetadataFields_ACU([
+            CHAT_SCOPED_CONFIG_FIELD_ACU,
+            CHAT_SHEET_GUIDE_FIELD_ACU,
+        ]),
+        fields: [
+            captureChatField_ACU(firstMessage, CHAT_SCOPED_CONFIG_FIELD_ACU),
+            captureChatField_ACU(firstMessage, CHAT_SHEET_GUIDE_FIELD_ACU),
+            captureChatField_ACU(firstMessage, LEGACY_CHAT_TABLE_HEADER_GUIDE_FIELD_ACU),
+        ],
+    };
+}
+async function rollbackResetTransaction_ACU(snapshot) {
+    const errors = [];
+    if (getChatArray_ACU() !== snapshot.chat || String(currentChatFileIdentifier_ACU || '') !== snapshot.chatIdentity) {
+        return '聊天身份已切换，未执行跨聊天回滚。';
+    }
+    const settingsError = rollbackSettingsSnapshot(settings_ACU, snapshot.settings);
+    if (settingsError)
+        errors.push(settingsError);
+    try {
+        setChatScopedConfigContainer_ACU(snapshot.chat, snapshot.scopedConfig);
+    }
+    catch (error) {
+        errors.push(`聊天 scope 回滚失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+    try {
+        setChatSheetGuideContainer_ACU(snapshot.chat, snapshot.sheetGuide);
+    }
+    catch (error) {
+        errors.push(`guide 回滚失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+    snapshot.fields.forEach(field => restoreChatField_ACU(snapshot.firstMessage, field));
+    try {
+        restoreChatMetadataFields_ACU(snapshot.metadataSnapshot);
+    }
+    catch (error) {
+        errors.push(`聊天 metadata 回滚失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+    try {
+        await saveChatToHost_ACU();
+    }
+    catch (error) {
+        errors.push(`聊天回滚落盘失败：${error instanceof Error ? error.message : String(error)}`);
+    }
+    return errors.length > 0 ? errors.join('；') : null;
+}
 async function readFileText$1(file) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -182795,6 +185433,7 @@ function useDataManagement() {
     }
     async function importCombinedSettings(file) {
         busyAction.value = 'import-combined';
+        let settingsSnapshot = null;
         try {
             const text = await readFileText$1(file);
             const combinedData = JSON.parse(text);
@@ -182802,6 +185441,7 @@ function useDataManagement() {
                 throw new Error('"prompt" 的值必须是数组。');
             if (!combinedData?.template || typeof combinedData.template !== 'object')
                 throw new Error('缺少有效的 "template" 对象。');
+            settingsSnapshot = cloneSettingsSnapshot(settings_ACU);
             applyCombinedSettingsImport_ACU(combinedData);
             const applied = await applyTemplateSnapshotToScope_ACU(combinedData.template, {
                 scope: 'global',
@@ -182820,8 +185460,12 @@ function useDataManagement() {
             toast.success('合并配置已导入：提示词、合并设置和全局模板已更新。', { muteable: false });
         }
         catch (e) {
+            const rollbackError = settingsSnapshot ? rollbackSettingsSnapshot(settings_ACU, settingsSnapshot) : null;
             logError_ACU('[ACU-V2] importCombinedSettings failed', e);
-            setMessage$1(message, 'error', `合并导入失败：${maskSensitiveText_ACU(e?.message || '未知错误')}`);
+            const rollbackText = settingsSnapshot
+                ? (rollbackError ? `；settings 回滚失败：${rollbackError}` : '；已回滚已保存的 settings')
+                : '';
+            setMessage$1(message, 'error', `合并导入失败：${maskSensitiveText_ACU(e?.message || '未知错误')}${rollbackText}`);
         }
         finally {
             busyAction.value = '';
@@ -183104,7 +185748,11 @@ function useDataManagement() {
             return;
         }
         busyAction.value = 'reset-defaults';
+        let resetSnapshot = null;
         try {
+            resetSnapshot = captureResetTransaction_ACU();
+            if (!resetSnapshot)
+                throw new Error('无法创建恢复默认操作快照。');
             const snapshot = cleanup.restoreTemplateAndPrompts ? getDefaultTemplateSnapshot_ACU() : null;
             if (cleanup.restoreTemplateAndPrompts && !snapshot?.templateStr)
                 throw new Error('无法解析默认模板。');
@@ -183158,8 +185806,12 @@ function useDataManagement() {
                 || cleanup.clearTableOrder
                 || cleanup.clearTableLocks
                 || cleanup.clearPlotSnapshots;
-            if (shouldSaveSettings)
-                saveSettings_ACU();
+            if (shouldSaveSettings) {
+                const settingsSaveResult = saveSettings_ACU();
+                if (settingsSaveResult && settingsSaveResult.saved === false) {
+                    throw new Error(settingsSaveResult.error || '恢复默认 settings 保存失败。');
+                }
+            }
             const shouldRefreshTableData = cleanup.restoreTemplateAndPrompts
                 || cleanup.clearTemplateSnapshots
                 || cleanup.clearTableOrder
@@ -183173,9 +185825,10 @@ function useDataManagement() {
             toast.success('已按所选项目恢复默认配置。');
         }
         catch (e) {
+            const rollbackError = resetSnapshot ? await rollbackResetTransaction_ACU(resetSnapshot) : null;
             logError_ACU('[ACU-V2] resetAllDefaults failed', e);
             message.value = null;
-            toast.error('恢复默认失败，详情见运行日志。');
+            toast.error(rollbackError ? `恢复默认失败：${rollbackError}。` : '恢复默认失败，详情见运行日志。');
         }
         finally {
             busyAction.value = '';
@@ -185446,6 +188099,10 @@ const useContentReplaceStore = defineStore('acu-v2-content-replace', {
                 return;
             }
             const messageIndex = getLastOptimizedMessageIndex_ACU();
+            const chatAtStart = getChatArray_ACU();
+            const messageAtStart = chatAtStart[messageIndex];
+            const chatIdentityAtStart = String(currentChatFileIdentifier_ACU || '');
+            const messageIdAtStart = messageAtStart?.message_id;
             this.lastOptimizedMessageIndex = messageIndex;
             if (messageIndex < 0) {
                 setMessage(this, 'warning', '当前还没有已被正文替换过的 AI 回复。');
@@ -185457,6 +188114,15 @@ const useContentReplaceStore = defineStore('acu-v2-content-replace', {
                 if (!originalContent)
                     throw new Error('无法获取上次替换前的原文。');
                 const result = await performContentOptimization_ACU(originalContent, { currentLoop: 1, userMessage: '' });
+                const currentChat = getChatArray_ACU();
+                const currentMessage = currentChat[messageIndex];
+                const chatChanged = Boolean(chatIdentityAtStart || messageAtStart)
+                    && (currentChat !== chatAtStart
+                        || String(currentChatFileIdentifier_ACU || '') !== chatIdentityAtStart
+                        || currentMessage !== messageAtStart
+                        || (messageIdAtStart != null && currentMessage?.message_id !== messageIdAtStart));
+                if (chatChanged)
+                    throw new Error('聊天已切换，旧正文的优化结果已拒绝写回。');
                 if (!result?.success)
                     throw new Error(result?.error || '正文替换失败。');
                 if (!Array.isArray(result.optimizations) || result.optimizations.length === 0) {
@@ -186037,6 +188703,11 @@ var ContentReplacePage = /* @__PURE__ */ _export_sfc(_sfc_main$d, [["render", _s
  */
 const SQL_CONSOLE_MAX_HISTORY = 50;
 const sqlHistory = ref([]);
+function currentSqlConsoleContext() {
+    const chatIdentity = String(currentChatFileIdentifier_ACU || '');
+    const isolationKey = String(getCurrentIsolationKey_ACU() || '');
+    return { chatIdentity, isolationKey, key: `${chatIdentity}::${isolationKey}` };
+}
 function isSqlConsoleQuery(sql) {
     return isReadOnlySqlStatement_ACU(sql);
 }
@@ -186051,9 +188722,9 @@ function emptyResult() {
         error: '',
     };
 }
-function addHistory(sql, success) {
+function addHistory(sql, success, context = currentSqlConsoleContext()) {
     sqlHistory.value = [
-        { sql, timestamp: Date.now(), success },
+        { sql, timestamp: Date.now(), success, chatIdentity: context.chatIdentity, isolationKey: context.isolationKey },
         ...sqlHistory.value,
     ].slice(0, SQL_CONSOLE_MAX_HISTORY);
 }
@@ -186066,7 +188737,10 @@ function useSqlConsole() {
     const busyAction = ref('');
     const isSqliteAvailable = ref(false);
     const result = shallowRef(emptyResult());
-    const history = computed(() => sqlHistory.value);
+    const history = computed(() => {
+        const context = currentSqlConsoleContext();
+        return sqlHistory.value.filter(item => item.chatIdentity === context.chatIdentity && item.isolationKey === context.isolationKey);
+    });
     const hasSqlText = computed(() => sqlText.value.trim().length > 0);
     const statusLabel = computed(() => {
         if (busyAction.value === 'execute')
@@ -186093,6 +188767,9 @@ function useSqlConsole() {
     function clearResult() {
         result.value = emptyResult();
     }
+    function clearHistory() {
+        sqlHistory.value = [];
+    }
     function refresh() {
         isSqliteAvailable.value = isSqliteMode();
     }
@@ -186111,6 +188788,11 @@ function useSqlConsole() {
         void executeCurrent();
     }
     function useHistoryItem(item) {
+        const context = currentSqlConsoleContext();
+        if (item.chatIdentity !== context.chatIdentity || item.isolationKey !== context.isolationKey) {
+            toast.warning('该 SQL 历史属于其他聊天，已拒绝填入当前上下文。');
+            return;
+        }
         sqlText.value = item.sql;
         toast.info('已把历史 SQL 填入编辑器。');
     }
@@ -186126,10 +188808,16 @@ function useSqlConsole() {
             toast.error('SQL 控制台仅在 SQLite 模式下可用。');
             return;
         }
+        const executionContext = currentSqlConsoleContext();
         busyAction.value = 'execute';
         const startTime = performance.now();
         try {
             const provider = await ensureStorageProviderReady_ACU();
+            if (currentSqlConsoleContext().key !== executionContext.key) {
+                result.value = { ...emptyResult(), kind: 'error', error: '聊天已切换，旧 SQL 已拒绝执行。' };
+                toast.error('聊天已切换，旧 SQL 已拒绝执行。');
+                return;
+            }
             if (isSqlConsoleQuery(sql)) {
                 const queryResult = provider.executeQuery(resolveCurrentRuntimeReadSql_ACU(sql).sql);
                 const elapsedMs = (performance.now() - startTime).toFixed(1);
@@ -186141,7 +188829,7 @@ function useSqlConsole() {
                     rowCount: queryResult.rowCount,
                     elapsedMs,
                 };
-                addHistory(sql, true);
+                addHistory(sql, true, executionContext);
                 toast.success(queryResult.rowCount === 0 ? '查询成功，没有返回行。' : `查询成功，返回 ${queryResult.rowCount} 行。`);
                 logDebug_ACU(`[ACU-V2 SQL Console] query ok: ${queryResult.rowCount} rows, ${elapsedMs}ms`);
                 return;
@@ -186149,7 +188837,7 @@ function useSqlConsole() {
             const commitResult = await runSqliteRuntimeMutationCommit_ACU({
                 source: 'raw_sql_mutation',
                 reason: 'sql_console_v2_mutation',
-                isolationKey: getCurrentIsolationKey_ACU(),
+                isolationKey: executionContext.isolationKey,
                 writeSet: [{ kind: 'all' }],
                 revisionWriteSet: [{ kind: 'all' }],
                 initialData: currentJsonTableData_ACU,
@@ -186161,12 +188849,17 @@ function useSqlConsole() {
                 sql,
                 mapValue: () => null,
             });
+            if (currentSqlConsoleContext().key !== executionContext.key) {
+                result.value = { ...emptyResult(), kind: 'error', error: '聊天已切换，旧 SQL 已拒绝执行。' };
+                toast.error('聊天已切换，旧 SQL 已拒绝执行。');
+                return;
+            }
             const mutationResult = commitResult.mutationResult || { changes: 0, errors: commitResult.error ? [commitResult.error] : [] };
             const elapsedMs = (performance.now() - startTime).toFixed(1);
             if (!commitResult.success || mutationResult.errors.length > 0) {
                 const error = mutationResult.errors.join('\n') || commitResult.error || '执行失败';
                 result.value = { ...emptyResult(), kind: 'error', elapsedMs, error };
-                addHistory(sql, false);
+                addHistory(sql, false, executionContext);
                 toast.error('执行失败，请检查结果区中的错误信息。');
                 return;
             }
@@ -186176,7 +188869,7 @@ function useSqlConsole() {
                 changes: mutationResult.changes,
                 elapsedMs,
             };
-            addHistory(sql, true);
+            addHistory(sql, true, executionContext);
             toast.success(`执行成功，${mutationResult.changes} 行受影响。`);
             logDebug_ACU(`[ACU-V2 SQL Console] mutation ok: ${mutationResult.changes} changes, ${elapsedMs}ms`);
         }
@@ -186184,7 +188877,7 @@ function useSqlConsole() {
             const elapsedMs = (performance.now() - startTime).toFixed(1);
             const error = e?.message || String(e);
             result.value = { ...emptyResult(), kind: 'error', elapsedMs, error };
-            addHistory(sql, false);
+            addHistory(sql, false, executionContext);
             toast.error('执行失败，请检查结果区中的错误信息。');
             logError_ACU(`[ACU-V2 SQL Console] execute failed: ${error}`);
         }
@@ -186203,6 +188896,7 @@ function useSqlConsole() {
         statusKind,
         refresh,
         clearResult,
+        clearHistory,
         setSql,
         clearSql,
         showTables,
@@ -186586,7 +189280,7 @@ const RULES = [
     // ─── 向量 / 存储 / 检查点 ───
     {
         id: 'vector',
-        test: /embedding|rerank|向量|vector/,
+        test: /\bembedding\b|\brerank\b|向量|\bvector\b/,
         summary: '交火模式（向量索引）相关操作失败。',
         steps: [
             '到「交火模式」页检查 Embedding / Rerank 的接口地址、密钥和模型名，确认服务商支持该接口。',
@@ -187010,7 +189704,7 @@ function useLogViewer() {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260922-09";
+        const stamp = "20260925-05";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -187019,7 +189713,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.6.8";
+        const v = "9.6.9";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {
@@ -187510,7 +190204,10 @@ var _sfc_main$c = /*@__PURE__*/ defineComponent({
         }
         onMounted(sqlFlow.refresh);
         // 换聊天即清空上一次查询结果：表里的行属于切换前的聊天，照着旧行点历史执行会把数据写进新聊天。
-        watchChatChanged_ACU(() => { sqlFlow.clearResult(); });
+        watchChatChanged_ACU(() => {
+            sqlFlow.clearResult();
+            sqlFlow.clearHistory();
+        });
         watch(() => logFlow.visibleLogs.value.length, scrollLogListToTop, { flush: 'post' });
         const __returned__ = { sqlFlow, logFlow, debugFlow, logListRef, hintCache, hintFor, panelNavItems, onSqlEditorKeydown, formatTime, formatSqlCell, logLevelVariant, setLogLevelFilter, scrollLogListToTop, AcuBadge, AcuButton, AcuFormRow, AcuInput, AcuMessage, AcuMobilePanelNav, AcuPanel, AcuPanelGrid, AcuSelect, AcuTextarea, AcuToggle, get advancedToolsCopy() { return advancedToolsCopy; } };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
@@ -187518,8 +190215,8 @@ var _sfc_main$c = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-v2-advanced-tools-page[data-v-2685d6d8] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-advanced-tools-page__sql-panel[data-v-2685d6d8],\r\n.acu-v2-advanced-tools-page__log-panel[data-v-2685d6d8],\r\n.acu-v2-advanced-tools-page__debug-panel[data-v-2685d6d8] {\r\n  min-width: 0;\n}\n.acu-v2-advanced-tools-page__debug-actions[data-v-2685d6d8] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__quick-actions[data-v-2685d6d8],\r\n.acu-v2-advanced-tools-page__log-actions[data-v-2685d6d8] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-textarea[data-v-2685d6d8] {\r\n  font-family: var(--acu-font-mono);\r\n  min-height: 210px;\r\n  white-space: pre;\n}\n.acu-v2-advanced-tools-page__sql-actions[data-v-2685d6d8] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\r\n  justify-content: flex-end;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-advanced-tools-page__sql-status[data-v-2685d6d8] {\r\n  margin-left: auto;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.5;\n}\n.acu-v2-advanced-tools-page__sql-status--success[data-v-2685d6d8] {\r\n  color: var(--acu-success);\n}\n.acu-v2-advanced-tools-page__sql-status--warning[data-v-2685d6d8] {\r\n  color: var(--acu-warning);\n}\n.acu-v2-advanced-tools-page__sql-status--error[data-v-2685d6d8] {\r\n  color: var(--acu-danger);\n}\n.acu-v2-advanced-tools-page__sql-result-section[data-v-2685d6d8],\r\n.acu-v2-advanced-tools-page__sql-history-section[data-v-2685d6d8] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-v2-advanced-tools-page__sql-history-section[data-v-2685d6d8] {\r\n  padding-top: 12px;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n}\n.acu-v2-advanced-tools-page__section-title[data-v-2685d6d8] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 600;\r\n  line-height: 1.35;\n}\n.acu-v2-advanced-tools-page__empty[data-v-2685d6d8] {\r\n  min-height: 96px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: center;\r\n  border: 0;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__empty--compact[data-v-2685d6d8] {\r\n  min-height: 72px;\n}\n.acu-v2-advanced-tools-page__empty--log[data-v-2685d6d8] {\r\n  min-height: 180px;\r\n  border: 0;\n}\n.acu-v2-advanced-tools-page__sql-table-wrap[data-v-2685d6d8] {\r\n  max-height: 330px;\r\n  overflow: auto;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-result-table[data-v-2685d6d8] {\r\n  width: 100%;\r\n  border-collapse: collapse;\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-advanced-tools-page__sql-result-table th[data-v-2685d6d8],\r\n.acu-v2-advanced-tools-page__sql-result-table td[data-v-2685d6d8] {\r\n  max-width: 300px;\r\n  padding: 7px 10px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  text-align: left;\r\n  white-space: nowrap;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\n}\n.acu-v2-advanced-tools-page__sql-result-table th[data-v-2685d6d8] {\r\n  position: sticky;\r\n  top: 0;\r\n  z-index: 1;\r\n  background: var(--acu-bg-1);\r\n  color: var(--acu-text-1);\r\n  font-weight: 600;\n}\n.acu-v2-advanced-tools-page__sql-result-table tbody tr[data-v-2685d6d8]:nth-child(even) {\r\n  background: color-mix(in srgb, var(--acu-text-3) 5%, transparent);\n}\n.acu-v2-advanced-tools-page__cell-null[data-v-2685d6d8],\r\n.acu-v2-advanced-tools-page__empty-cell[data-v-2685d6d8] {\r\n  color: var(--acu-text-3);\r\n  font-style: italic;\n}\n.acu-v2-advanced-tools-page__sql-result-meta[data-v-2685d6d8] {\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: right;\n}\n.acu-v2-advanced-tools-page__sql-error[data-v-2685d6d8] {\r\n  margin: 0;\r\n  min-height: 96px;\r\n  padding: 12px;\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-danger) 8%, transparent);\r\n  color: var(--acu-danger);\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__filter-grid[data-v-2685d6d8] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 12px;\r\n  align-items: stretch;\n}\n.acu-v2-advanced-tools-page__keyword-row[data-v-2685d6d8] {\r\n  grid-column: 1 / -1;\n}\n.acu-v2-advanced-tools-page__log-control-row[data-v-2685d6d8] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  min-width: 0;\n}\n.acu-v2-advanced-tools-page__log-control-main[data-v-2685d6d8] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 10px 14px;\r\n  align-items: center;\r\n  justify-content: space-between;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-2685d6d8] {\r\n  width: max-content;\r\n  max-width: 100%;\r\n  display: grid;\r\n  grid-template-columns: max-content max-content;\r\n  gap: 10px 18px;\r\n  align-items: center;\r\n  justify-content: flex-start;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-2685d6d8] .acu-toggle {\r\n  width: max-content;\r\n  max-width: none;\r\n  min-width: max-content;\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-2685d6d8] .acu-toggle__label {\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__hint[data-v-2685d6d8] {\r\n  max-width: 100%;\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\r\n  overflow-wrap: anywhere;\n}\n.acu-v2-advanced-tools-page__sql-history-list[data-v-2685d6d8],\r\n.acu-v2-advanced-tools-page__log-list[data-v-2685d6d8] {\r\n  overflow: auto;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-list[data-v-2685d6d8] {\r\n  max-height: 230px;\n}\n.acu-v2-advanced-tools-page__log-list[data-v-2685d6d8] {\r\n  min-height: 360px;\r\n  max-height: 58vh;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-2685d6d8],\r\n.acu-v2-advanced-tools-page__log-row[data-v-2685d6d8] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 8px;\r\n  align-items: baseline;\r\n  padding: 7px 10px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-2685d6d8] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: stretch;\r\n  gap: 6px;\r\n  padding-block: 9px;\r\n  border: 0;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  background: transparent;\r\n  color: inherit;\r\n  cursor: pointer;\r\n  font: inherit;\r\n  text-align: left;\r\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-advanced-tools-page__log-row[data-v-2685d6d8] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: stretch;\r\n  gap: 6px;\r\n  padding-block: 9px;\n}\n.acu-v2-advanced-tools-page__log-meta[data-v-2685d6d8] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 6px 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-history-meta[data-v-2685d6d8] {\r\n  flex-wrap: nowrap;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-2685d6d8]:last-child,\r\n.acu-v2-advanced-tools-page__log-row[data-v-2685d6d8]:last-child {\r\n  border-bottom: 0;\n}\n.acu-v2-advanced-tools-page__sql-history-item--failure[data-v-2685d6d8],\r\n.acu-v2-advanced-tools-page__log-row--error[data-v-2685d6d8] {\r\n  background: color-mix(in srgb, var(--acu-danger) 7%, transparent);\n}\n.acu-v2-advanced-tools-page__log-row--warn[data-v-2685d6d8] {\r\n  background: color-mix(in srgb, var(--acu-warning) 6%, transparent);\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-2685d6d8]:hover {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-2685d6d8]:focus-visible {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\r\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\r\n  outline: none;\n}\n.acu-v2-advanced-tools-page__log-time[data-v-2685d6d8],\r\n.acu-v2-advanced-tools-page__log-tag[data-v-2685d6d8],\r\n.acu-v2-advanced-tools-page__log-message[data-v-2685d6d8] {\r\n  min-width: 0;\r\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-advanced-tools-page__log-time[data-v-2685d6d8] {\r\n  color: var(--acu-text-3);\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__log-tag[data-v-2685d6d8] {\r\n  flex: 1 1 180px;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  color: var(--acu-text-2);\n}\n.acu-v2-advanced-tools-page__log-message[data-v-2685d6d8] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__log-body[data-v-2685d6d8] {\r\n  display: block;\r\n  width: 100%;\n}\n.acu-v2-advanced-tools-page__log-hint[data-v-2685d6d8] {\r\n  min-width: 0;\r\n  margin-top: 2px;\r\n  border-left: 2px solid color-mix(in srgb, var(--acu-warning) 70%, transparent);\r\n  border-radius: 0 var(--acu-radius-sm) var(--acu-radius-sm) 0;\r\n  background: color-mix(in srgb, var(--acu-warning) 6%, var(--acu-bg-1));\r\n  font-family: var(--acu-font-sans, inherit);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__log-hint-summary[data-v-2685d6d8] {\r\n  display: flex;\r\n  align-items: baseline;\r\n  gap: 6px;\r\n  padding: 6px 10px;\r\n  color: var(--acu-text-2);\r\n  cursor: pointer;\r\n  list-style: none;\r\n  user-select: none;\n}\n.acu-v2-advanced-tools-page__log-hint-summary[data-v-2685d6d8]::-webkit-details-marker {\r\n  display: none;\n}\n.acu-v2-advanced-tools-page__log-hint-summary[data-v-2685d6d8]:hover {\r\n  background: var(--acu-hover-overlay);\n}\n.acu-v2-advanced-tools-page__log-hint-summary[data-v-2685d6d8]:focus-visible {\r\n  outline: none;\r\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-v2-advanced-tools-page__log-hint-icon[data-v-2685d6d8] {\r\n  flex: 0 0 auto;\r\n  color: var(--acu-warning);\r\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-advanced-tools-page__log-hint-text[data-v-2685d6d8] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  overflow-wrap: anywhere;\n}\n.acu-v2-advanced-tools-page__log-hint-toggle[data-v-2685d6d8] {\r\n  flex: 0 0 auto;\r\n  color: var(--acu-accent);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__log-hint-toggle[data-v-2685d6d8]::after {\r\n  content: ' ▾';\n}\n.acu-v2-advanced-tools-page__log-hint[open] .acu-v2-advanced-tools-page__log-hint-toggle[data-v-2685d6d8]::after {\r\n  content: ' ▴';\n}\n.acu-v2-advanced-tools-page__log-hint-steps[data-v-2685d6d8] {\r\n  margin: 0;\r\n  padding: 2px 10px 8px 30px;\r\n  color: var(--acu-text-2);\n}\n.acu-v2-advanced-tools-page__log-hint-steps li[data-v-2685d6d8] {\r\n  margin: 2px 0;\r\n  overflow-wrap: anywhere;\n}\n@media (max-width: 1080px) {\n.acu-v2-advanced-tools-page[data-v-2685d6d8] {\r\n    padding: 14px;\n}\n.acu-v2-advanced-tools-page__sql-actions[data-v-2685d6d8] {\r\n    justify-content: stretch;\n}\n.acu-v2-advanced-tools-page__sql-status[data-v-2685d6d8] {\r\n    width: 100%;\r\n    margin-left: 0;\r\n    text-align: right;\n}\n.acu-v2-advanced-tools-page__filter-grid[data-v-2685d6d8] {\r\n    grid-template-columns: 1fr;\n}\n.acu-v2-advanced-tools-page__log-control-main[data-v-2685d6d8] {\r\n    align-items: stretch;\r\n    flex-direction: column;\r\n    justify-content: flex-start;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-2685d6d8] {\r\n    align-self: flex-start;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-2685d6d8],\r\n  .acu-v2-advanced-tools-page__log-row[data-v-2685d6d8] {\r\n    padding-inline: 9px;\n}\n}\r\n", "src/presentation-v2/pages/AdvancedToolsPage.vue#style-0-2685d6d8");
-var AdvancedToolsPage_vue_vue_type_style_index_0_scoped_2685d6d8_lang = null;
+injectSfcStyle("\n.acu-v2-advanced-tools-page[data-v-0ccbee42] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-advanced-tools-page__sql-panel[data-v-0ccbee42],\r\n.acu-v2-advanced-tools-page__log-panel[data-v-0ccbee42],\r\n.acu-v2-advanced-tools-page__debug-panel[data-v-0ccbee42] {\r\n  min-width: 0;\n}\n.acu-v2-advanced-tools-page__debug-actions[data-v-0ccbee42] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__quick-actions[data-v-0ccbee42],\r\n.acu-v2-advanced-tools-page__log-actions[data-v-0ccbee42] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-textarea[data-v-0ccbee42] {\r\n  font-family: var(--acu-font-mono);\r\n  min-height: 210px;\r\n  white-space: pre;\n}\n.acu-v2-advanced-tools-page__sql-actions[data-v-0ccbee42] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\r\n  justify-content: flex-end;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-advanced-tools-page__sql-status[data-v-0ccbee42] {\r\n  margin-left: auto;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.5;\n}\n.acu-v2-advanced-tools-page__sql-status--success[data-v-0ccbee42] {\r\n  color: var(--acu-success);\n}\n.acu-v2-advanced-tools-page__sql-status--warning[data-v-0ccbee42] {\r\n  color: var(--acu-warning);\n}\n.acu-v2-advanced-tools-page__sql-status--error[data-v-0ccbee42] {\r\n  color: var(--acu-danger);\n}\n.acu-v2-advanced-tools-page__sql-result-section[data-v-0ccbee42],\r\n.acu-v2-advanced-tools-page__sql-history-section[data-v-0ccbee42] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-v2-advanced-tools-page__sql-history-section[data-v-0ccbee42] {\r\n  padding-top: 12px;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n}\n.acu-v2-advanced-tools-page__section-title[data-v-0ccbee42] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 600;\r\n  line-height: 1.35;\n}\n.acu-v2-advanced-tools-page__empty[data-v-0ccbee42] {\r\n  min-height: 96px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: center;\r\n  border: 0;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__empty--compact[data-v-0ccbee42] {\r\n  min-height: 72px;\n}\n.acu-v2-advanced-tools-page__empty--log[data-v-0ccbee42] {\r\n  min-height: 180px;\r\n  border: 0;\n}\n.acu-v2-advanced-tools-page__sql-table-wrap[data-v-0ccbee42] {\r\n  max-height: 330px;\r\n  overflow: auto;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-result-table[data-v-0ccbee42] {\r\n  width: 100%;\r\n  border-collapse: collapse;\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-advanced-tools-page__sql-result-table th[data-v-0ccbee42],\r\n.acu-v2-advanced-tools-page__sql-result-table td[data-v-0ccbee42] {\r\n  max-width: 300px;\r\n  padding: 7px 10px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  text-align: left;\r\n  white-space: nowrap;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\n}\n.acu-v2-advanced-tools-page__sql-result-table th[data-v-0ccbee42] {\r\n  position: sticky;\r\n  top: 0;\r\n  z-index: 1;\r\n  background: var(--acu-bg-1);\r\n  color: var(--acu-text-1);\r\n  font-weight: 600;\n}\n.acu-v2-advanced-tools-page__sql-result-table tbody tr[data-v-0ccbee42]:nth-child(even) {\r\n  background: color-mix(in srgb, var(--acu-text-3) 5%, transparent);\n}\n.acu-v2-advanced-tools-page__cell-null[data-v-0ccbee42],\r\n.acu-v2-advanced-tools-page__empty-cell[data-v-0ccbee42] {\r\n  color: var(--acu-text-3);\r\n  font-style: italic;\n}\n.acu-v2-advanced-tools-page__sql-result-meta[data-v-0ccbee42] {\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: right;\n}\n.acu-v2-advanced-tools-page__sql-error[data-v-0ccbee42] {\r\n  margin: 0;\r\n  min-height: 96px;\r\n  padding: 12px;\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-danger) 8%, transparent);\r\n  color: var(--acu-danger);\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__filter-grid[data-v-0ccbee42] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 12px;\r\n  align-items: stretch;\n}\n.acu-v2-advanced-tools-page__keyword-row[data-v-0ccbee42] {\r\n  grid-column: 1 / -1;\n}\n.acu-v2-advanced-tools-page__log-control-row[data-v-0ccbee42] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  min-width: 0;\n}\n.acu-v2-advanced-tools-page__log-control-main[data-v-0ccbee42] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 10px 14px;\r\n  align-items: center;\r\n  justify-content: space-between;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-0ccbee42] {\r\n  width: max-content;\r\n  max-width: 100%;\r\n  display: grid;\r\n  grid-template-columns: max-content max-content;\r\n  gap: 10px 18px;\r\n  align-items: center;\r\n  justify-content: flex-start;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-0ccbee42] .acu-toggle {\r\n  width: max-content;\r\n  max-width: none;\r\n  min-width: max-content;\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-0ccbee42] .acu-toggle__label {\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__hint[data-v-0ccbee42] {\r\n  max-width: 100%;\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\r\n  overflow-wrap: anywhere;\n}\n.acu-v2-advanced-tools-page__sql-history-list[data-v-0ccbee42],\r\n.acu-v2-advanced-tools-page__log-list[data-v-0ccbee42] {\r\n  overflow: auto;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-list[data-v-0ccbee42] {\r\n  max-height: 230px;\n}\n.acu-v2-advanced-tools-page__log-list[data-v-0ccbee42] {\r\n  min-height: 360px;\r\n  max-height: 58vh;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-0ccbee42],\r\n.acu-v2-advanced-tools-page__log-row[data-v-0ccbee42] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 8px;\r\n  align-items: baseline;\r\n  padding: 7px 10px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-0ccbee42] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: stretch;\r\n  gap: 6px;\r\n  padding-block: 9px;\r\n  border: 0;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  background: transparent;\r\n  color: inherit;\r\n  cursor: pointer;\r\n  font: inherit;\r\n  text-align: left;\r\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-advanced-tools-page__log-row[data-v-0ccbee42] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: stretch;\r\n  gap: 6px;\r\n  padding-block: 9px;\n}\n.acu-v2-advanced-tools-page__log-meta[data-v-0ccbee42] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 6px 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-history-meta[data-v-0ccbee42] {\r\n  flex-wrap: nowrap;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-0ccbee42]:last-child,\r\n.acu-v2-advanced-tools-page__log-row[data-v-0ccbee42]:last-child {\r\n  border-bottom: 0;\n}\n.acu-v2-advanced-tools-page__sql-history-item--failure[data-v-0ccbee42],\r\n.acu-v2-advanced-tools-page__log-row--error[data-v-0ccbee42] {\r\n  background: color-mix(in srgb, var(--acu-danger) 7%, transparent);\n}\n.acu-v2-advanced-tools-page__log-row--warn[data-v-0ccbee42] {\r\n  background: color-mix(in srgb, var(--acu-warning) 6%, transparent);\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-0ccbee42]:hover {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-0ccbee42]:focus-visible {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\r\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\r\n  outline: none;\n}\n.acu-v2-advanced-tools-page__log-time[data-v-0ccbee42],\r\n.acu-v2-advanced-tools-page__log-tag[data-v-0ccbee42],\r\n.acu-v2-advanced-tools-page__log-message[data-v-0ccbee42] {\r\n  min-width: 0;\r\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-advanced-tools-page__log-time[data-v-0ccbee42] {\r\n  color: var(--acu-text-3);\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__log-tag[data-v-0ccbee42] {\r\n  flex: 1 1 180px;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  color: var(--acu-text-2);\n}\n.acu-v2-advanced-tools-page__log-message[data-v-0ccbee42] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__log-body[data-v-0ccbee42] {\r\n  display: block;\r\n  width: 100%;\n}\n.acu-v2-advanced-tools-page__log-hint[data-v-0ccbee42] {\r\n  min-width: 0;\r\n  margin-top: 2px;\r\n  border-left: 2px solid color-mix(in srgb, var(--acu-warning) 70%, transparent);\r\n  border-radius: 0 var(--acu-radius-sm) var(--acu-radius-sm) 0;\r\n  background: color-mix(in srgb, var(--acu-warning) 6%, var(--acu-bg-1));\r\n  font-family: var(--acu-font-sans, inherit);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__log-hint-summary[data-v-0ccbee42] {\r\n  display: flex;\r\n  align-items: baseline;\r\n  gap: 6px;\r\n  padding: 6px 10px;\r\n  color: var(--acu-text-2);\r\n  cursor: pointer;\r\n  list-style: none;\r\n  user-select: none;\n}\n.acu-v2-advanced-tools-page__log-hint-summary[data-v-0ccbee42]::-webkit-details-marker {\r\n  display: none;\n}\n.acu-v2-advanced-tools-page__log-hint-summary[data-v-0ccbee42]:hover {\r\n  background: var(--acu-hover-overlay);\n}\n.acu-v2-advanced-tools-page__log-hint-summary[data-v-0ccbee42]:focus-visible {\r\n  outline: none;\r\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-v2-advanced-tools-page__log-hint-icon[data-v-0ccbee42] {\r\n  flex: 0 0 auto;\r\n  color: var(--acu-warning);\r\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-advanced-tools-page__log-hint-text[data-v-0ccbee42] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  overflow-wrap: anywhere;\n}\n.acu-v2-advanced-tools-page__log-hint-toggle[data-v-0ccbee42] {\r\n  flex: 0 0 auto;\r\n  color: var(--acu-accent);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__log-hint-toggle[data-v-0ccbee42]::after {\r\n  content: ' ▾';\n}\n.acu-v2-advanced-tools-page__log-hint[open] .acu-v2-advanced-tools-page__log-hint-toggle[data-v-0ccbee42]::after {\r\n  content: ' ▴';\n}\n.acu-v2-advanced-tools-page__log-hint-steps[data-v-0ccbee42] {\r\n  margin: 0;\r\n  padding: 2px 10px 8px 30px;\r\n  color: var(--acu-text-2);\n}\n.acu-v2-advanced-tools-page__log-hint-steps li[data-v-0ccbee42] {\r\n  margin: 2px 0;\r\n  overflow-wrap: anywhere;\n}\n@media (max-width: 1080px) {\n.acu-v2-advanced-tools-page[data-v-0ccbee42] {\r\n    padding: 14px;\n}\n.acu-v2-advanced-tools-page__sql-actions[data-v-0ccbee42] {\r\n    justify-content: stretch;\n}\n.acu-v2-advanced-tools-page__sql-status[data-v-0ccbee42] {\r\n    width: 100%;\r\n    margin-left: 0;\r\n    text-align: right;\n}\n.acu-v2-advanced-tools-page__filter-grid[data-v-0ccbee42] {\r\n    grid-template-columns: 1fr;\n}\n.acu-v2-advanced-tools-page__log-control-main[data-v-0ccbee42] {\r\n    align-items: stretch;\r\n    flex-direction: column;\r\n    justify-content: flex-start;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-0ccbee42] {\r\n    align-self: flex-start;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-0ccbee42],\r\n  .acu-v2-advanced-tools-page__log-row[data-v-0ccbee42] {\r\n    padding-inline: 9px;\n}\n}\r\n", "src/presentation-v2/pages/AdvancedToolsPage.vue#style-0-0ccbee42");
+var AdvancedToolsPage_vue_vue_type_style_index_0_scoped_0ccbee42_lang = null;
 
 const _hoisted_1$c = { class: "acu-v2-advanced-tools-page" };
 const _hoisted_2$b = {
@@ -188111,7 +190808,7 @@ function _sfc_render$c(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	})]);
 }
-var AdvancedToolsPage = /* @__PURE__ */ _export_sfc(_sfc_main$c, [["render", _sfc_render$c], ["__scopeId", "data-v-2685d6d8"]]);
+var AdvancedToolsPage = /* @__PURE__ */ _export_sfc(_sfc_main$c, [["render", _sfc_render$c], ["__scopeId", "data-v-0ccbee42"]]);
 
 const developerCopy = {
     panels: {
@@ -189544,6 +192241,9 @@ function createDefaultSheet(key, name) {
     sheet.sourceData.ddl = generateDDL(sheet, key);
     return sheet;
 }
+function currentVisualizerContextKey$1() {
+    return `${String(currentChatFileIdentifier_ACU || '')}::${String(getCurrentIsolationKey_ACU() || '')}`;
+}
 function buildLockDrafts(orderedKeys, data) {
     const drafts = {};
     orderedKeys.forEach(key => {
@@ -189572,13 +192272,18 @@ function useVisualizerData() {
         }
     }
     async function loadFromCurrentContext() {
+        const contextKey = currentVisualizerContextKey$1();
         visualizer.setLoading(true);
         refreshTemplatePresetLabel();
         try {
             let data = currentJsonTableData_ACU;
             if (!hasSheetData(data)) {
                 await loadAllChatMessages_ACU();
+                if (currentVisualizerContextKey$1() !== contextKey)
+                    return false;
                 const merged = await mergeAllIndependentTables_ACU();
+                if (currentVisualizerContextKey$1() !== contextKey)
+                    return false;
                 if (hasSheetData(merged)) {
                     const stableKeys = getSortedSheetKeys_ACU(merged);
                     data = reorderDataBySheetKeys_ACU(merged, stableKeys);
@@ -189586,12 +192291,14 @@ function useVisualizerData() {
                 }
             }
             if (!hasSheetData(data)) {
-                visualizer.loadSnapshot({ mate: { type: 'chatSheets', version: 1 } }, []);
+                visualizer.loadSnapshot({ mate: { type: 'chatSheets', version: 1 } }, [], contextKey);
                 visualizer.loadLockDrafts({});
                 return true;
             }
             const orderedKeys = buildOrderedKeys(data);
-            visualizer.loadSnapshot(data, orderedKeys);
+            if (currentVisualizerContextKey$1() !== contextKey)
+                return false;
+            visualizer.loadSnapshot(data, orderedKeys, contextKey);
             visualizer.loadLockDrafts(buildLockDrafts(orderedKeys, data));
             return true;
         }
@@ -190028,6 +192735,13 @@ async function preflightSchemaMigrations_ACU(input) {
 function cloneData$1(value) {
     return JSON.parse(JSON.stringify(value));
 }
+function currentVisualizerContextKey() {
+    return `${String(currentChatFileIdentifier_ACU || '')}::${String(getCurrentIsolationKey_ACU() || '')}`;
+}
+function visualizerDraftBelongsToCurrentChat(visualizer) {
+    return !visualizer.draftContextKey
+        || (!visualizer.draftContextInvalid && visualizer.draftContextKey === currentVisualizerContextKey());
+}
 function applySpecialIndexSequenceFromDrafts(data, lockDrafts) {
     Object.keys(data || {}).forEach(sheetKey => {
         if (!sheetKey.startsWith('sheet_'))
@@ -190336,6 +193050,13 @@ async function saveCurrentDataToChat(sheetKeysToSave, deletedSheetKeys) {
 function useVisualizerSave(interactions = {}) {
     const visualizer = useVisualizerStore();
     const toastStore = useToastStore();
+    function rejectChangedSaveContext() {
+        toastStore.error('聊天已切换，旧的可视化草稿已失效；请重新载入当前聊天后再保存。', { muteable: false });
+        return false;
+    }
+    function saveContextStillMatches(contextKey) {
+        return visualizerDraftBelongsToCurrentChat(visualizer) && currentVisualizerContextKey() === contextKey;
+    }
     async function runSaving(task) {
         if (visualizer.isSaving)
             return false;
@@ -190355,6 +193076,11 @@ function useVisualizerSave(interactions = {}) {
     }
     async function saveDataToCurrentMessage() {
         return runSaving(async () => {
+            if (!visualizerDraftBelongsToCurrentChat(visualizer)) {
+                toastStore.error('聊天已切换，旧的可视化草稿已失效；请重新载入当前聊天后再保存。', { muteable: false });
+                return false;
+            }
+            const saveContextKey = currentVisualizerContextKey();
             const deletedSheetKeys = [...new Set((visualizer.deletedSheetKeys || [])
                     .filter(key => typeof key === 'string' && key.startsWith('sheet_')))];
             const hasDataChanges = hasVisualizerPendingDataOps_ACU(visualizer);
@@ -190362,9 +193088,22 @@ function useVisualizerSave(interactions = {}) {
                 toastStore.error('行数据增量与整表删除无法原子提交；请分别保存行数据和删表操作。', { muteable: false });
                 return false;
             }
+            const templateChanges = classifyVisualizerTemplateChanges_ACU(visualizer.templateBaseData, visualizer.tempData || {});
+            const deletedSheetKeySet = new Set(deletedSheetKeys);
+            const baseOrderWithoutDeleted = (visualizer.templateBaseSheetOrder || []).filter(key => !deletedSheetKeySet.has(key));
+            const currentOrderWithoutDeleted = (visualizer.sheetOrder || []).filter(key => !deletedSheetKeySet.has(key));
+            const hasPendingTemplateChanges = templateChanges.addedSheetKeys.length > 0
+                || templateChanges.schemaChangedSheetKeys.length > 0
+                || templateChanges.metadataChangedSheetKeys.length > 0
+                || templateChanges.mateChanged
+                || JSON.stringify(baseOrderWithoutDeleted) !== JSON.stringify(currentOrderWithoutDeleted);
+            if (hasDataChanges && hasPendingTemplateChanges) {
+                toastStore.error('数据保存不能混入未提交的模板变化；请先保存模板，再保存数据。', { muteable: false });
+                return false;
+            }
             const hasLockChanges = visualizer.lockDirty;
             const result = hasDataChanges
-                ? await applyVisualizerPendingDataOps_ACU(visualizer)
+                ? await applyVisualizerPendingDataOps_ACU(visualizer, saveContextKey)
                 : { success: true, changed: false };
             if (!result.success) {
                 toastStore.error(result.error || '数据保存失败。', { muteable: false });
@@ -190430,6 +193169,11 @@ function useVisualizerSave(interactions = {}) {
     }
     async function saveTemplateToCurrentChat() {
         return runSaving(async () => {
+            if (!visualizerDraftBelongsToCurrentChat(visualizer)) {
+                toastStore.error('聊天已切换，旧的可视化草稿已失效；请重新载入当前聊天后再保存。', { muteable: false });
+                return false;
+            }
+            const saveContextKey = currentVisualizerContextKey();
             const commitMateOnlyTemplateChange = async (options) => {
                 const guideIsolationKey = getCurrentIsolationKey_ACU();
                 // 1. fail-closed 前置：模板基线必须存在且包含 sheet，否则无法证明 sheet 投影一致。
@@ -190451,6 +193195,8 @@ function useVisualizerSave(interactions = {}) {
                     throw new Error('无法为当前模板结构生成聊天指导表。');
                 }
                 // 3. switchMode 分流。
+                if (!saveContextStillMatches(saveContextKey))
+                    return rejectChangedSaveContext();
                 const switchMode = resolveTemplateSwitchMode_ACU(getChatArray_ACU(), guideIsolationKey);
                 logDebug_ACU(`[ACU-V2 Visualizer] saveTemplateToCurrentChat mate-only 分流: mode=${switchMode.mode}${switchMode.mode === 'blocked' ? `, reason=${switchMode.reason}` : ''}。`);
                 if (switchMode.mode === 'blocked') {
@@ -190477,6 +193223,8 @@ function useVisualizerSave(interactions = {}) {
                     // 因此投影校验可正常执行。传 pristineOverride: true 会掩盖 R2 场景
                     // （摘要索引锁静默改写数据行导致的 sheet 投影漂移），把「无法证明仅 mate 变化」
                     // 的状态伪装成保存成功。计划 :77 与风险 R2 明确禁止此行为。
+                    if (!saveContextStillMatches(saveContextKey))
+                        return rejectChangedSaveContext();
                     commitResult = await commitCurrentFloorTemplateScopeOnly_ACU({
                         isolationKey: guideIsolationKey,
                         baselineData: visualizer.templateBaseData,
@@ -190491,6 +193239,8 @@ function useVisualizerSave(interactions = {}) {
                 }
                 else {
                     // inherit 模式：直接走 scope-only（不得改走结构提交，它会因空 sheetChanges 拒绝）。
+                    if (!saveContextStillMatches(saveContextKey))
+                        return rejectChangedSaveContext();
                     commitResult = await commitCurrentFloorTemplateScopeOnly_ACU({
                         isolationKey: guideIsolationKey,
                         baselineData: visualizer.templateBaseData,
@@ -190504,6 +193254,8 @@ function useVisualizerSave(interactions = {}) {
                     });
                 }
                 // 5. 失败处理：投影不一致时追加可执行指引。
+                if (!saveContextStillMatches(saveContextKey))
+                    return rejectChangedSaveContext();
                 if (!commitResult.saved) {
                     const errorText = commitResult.error || '全局配置保存失败。';
                     const projectionMismatch = errorText.includes('scope-only 模板提交要求 baseline 与 candidate 的持久化 Sheet 投影完全一致');
@@ -190819,6 +193571,8 @@ function useVisualizerSave(interactions = {}) {
             //   后续追平撞 fail-fast。
             // - inherit：有实质数据，走 commitCurrentFloorTemplateChanges_ACU（原有语义）。
             // - blocked：状态无法判定或已损坏，fail-closed 阻止。
+            if (!saveContextStillMatches(saveContextKey))
+                return rejectChangedSaveContext();
             const switchMode = resolveTemplateSwitchMode_ACU(getChatArray_ACU(), guideIsolationKey);
             logDebug_ACU(`[ACU-V2 Visualizer] saveTemplateToCurrentChat 分流: mode=${switchMode.mode}${switchMode.mode === 'blocked' ? `, reason=${switchMode.reason}` : ''}, deletedSheetKeys=${deletedSheetKeys.join(',') || 'none'}, changedSheetKeys=${changedSheetKeys.join(',') || 'none'}。`);
             if (switchMode.mode === 'blocked') {
@@ -190852,6 +193606,8 @@ function useVisualizerSave(interactions = {}) {
                 const scopeOnlyBaseline = visualizer.templateBaseData && Object.keys(visualizer.templateBaseData).length > 0
                     ? visualizer.templateBaseData
                     : orderedData;
+                if (!saveContextStillMatches(saveContextKey))
+                    return rejectChangedSaveContext();
                 commitResult = await commitCurrentFloorTemplateScopeOnly_ACU({
                     isolationKey: guideIsolationKey,
                     baselineData: scopeOnlyBaseline,
@@ -190863,6 +193619,8 @@ function useVisualizerSave(interactions = {}) {
                     reason: 'visualizer_v2_template_scope_only',
                     pristineOverride: true,
                 });
+                if (!saveContextStillMatches(saveContextKey))
+                    return rejectChangedSaveContext();
                 if (!commitResult.saved) {
                     toastStore.error(commitResult.error || '模板/结构保存失败。', { muteable: false });
                     return false;
@@ -190898,6 +193656,8 @@ function useVisualizerSave(interactions = {}) {
                     reason: 'visualizer_v2_schema_change',
                     baseRevision,
                 });
+                if (!saveContextStillMatches(saveContextKey))
+                    return rejectChangedSaveContext();
                 if (!commitResult.saved) {
                     toastStore.error(commitResult.error || '模板/结构保存失败。', { muteable: false });
                     return false;
@@ -191000,6 +193760,10 @@ function useVisualizerSave(interactions = {}) {
     }
     async function saveTemplateToGlobal() {
         return runSaving(async () => {
+            if (!visualizerDraftBelongsToCurrentChat(visualizer)) {
+                toastStore.error('聊天已切换，旧的可视化草稿已失效；请重新载入当前聊天后再保存。', { muteable: false });
+                return false;
+            }
             if (hasVisualizerPendingDataOps_ACU(visualizer)) {
                 toastStore.error('存在未保存的数据增量；本次是模板保存，已阻止混合提交。', { muteable: false });
                 return false;
@@ -194017,8 +196781,14 @@ async function runTemplateAssistantSession_ACU(input) {
     assertTemplateAssistantSessionActive_ACU(input.guard);
     if (finalPreflight.blockers.length > 0)
         throw new Error(`schema migration 最终 preflight 失败：${finalPreflight.blockers.join('；')}`);
-    const v3RowIdGuardFindings = lastResult?.draft && isTemplateAssistantV3Draft_ACU(lastResult.draft)
-        ? collectV3RowIdGuardFindings_ACU(originalTempData, compileResult.candidateData, currentSheetKey, String(input.userRequest || ''))
+    const lastV3Draft = lastResult?.draft && isTemplateAssistantV3Draft_ACU(lastResult.draft)
+        ? lastResult.draft
+        : null;
+    const v3GuardTargetSheetKey = lastV3Draft?.result.action === 'replace'
+        ? String(lastV3Draft.result.sheetKey || currentSheetKey || '')
+        : String(currentSheetKey || '');
+    const v3RowIdGuardFindings = lastV3Draft
+        ? collectV3RowIdGuardFindings_ACU(originalTempData, compileResult.candidateData, v3GuardTargetSheetKey, String(input.userRequest || ''))
         : [];
     const finalDraft = lastResult?.draft
         || (protocolVersion === 3 ? buildTemplateAssistantNoopDraftV3_ACU(originalBaseFingerprint, currentSheetKey) : buildTemplateAssistantNoopDraft_ACU(originalBaseFingerprint, currentSheetKey));
@@ -194502,6 +197272,53 @@ function getTurnApplyPayload(turn) {
     }
     return null;
 }
+function rowIdOf(row) {
+    return Array.isArray(row) ? String(row[0] ?? '').trim() : '';
+}
+function recordAssistantCandidateDataOps(visualizer, previousData, candidateData) {
+    for (const [sheetKey, candidateSheet] of Object.entries(candidateData || {})) {
+        if (!sheetKey.startsWith('sheet_') || !candidateSheet || typeof candidateSheet !== 'object')
+            continue;
+        const previousSheet = previousData?.[sheetKey];
+        if (!previousSheet || typeof previousSheet !== 'object')
+            continue;
+        const previousRows = Array.isArray(previousSheet.content) ? previousSheet.content.slice(1) : [];
+        const candidateRows = Array.isArray(candidateSheet.content) ? candidateSheet.content.slice(1) : [];
+        const previousById = new Map();
+        for (const row of previousRows) {
+            const rowId = rowIdOf(row);
+            if (rowId)
+                previousById.set(rowId, row);
+        }
+        const candidateIds = new Set();
+        const headers = Array.isArray(candidateSheet.content?.[0]) ? candidateSheet.content[0] : [];
+        for (const row of candidateRows) {
+            const rowId = rowIdOf(row);
+            if (!rowId)
+                continue;
+            candidateIds.add(rowId);
+            const previousRow = previousById.get(rowId);
+            if (!previousRow) {
+                recordVisualizerRowInsert_ACU(visualizer, sheetKey, rowId);
+                continue;
+            }
+            for (let columnIndex = 1; columnIndex < headers.length; columnIndex += 1) {
+                const columnName = String(headers[columnIndex] ?? '').trim();
+                if (!columnName)
+                    continue;
+                const nextValue = row[columnIndex] === undefined ? '' : row[columnIndex];
+                const previousValue = previousRow[columnIndex] === undefined ? '' : previousRow[columnIndex];
+                if (String(nextValue) !== String(previousValue)) {
+                    recordVisualizerCellUpdate_ACU(visualizer, sheetKey, rowId, columnName, nextValue);
+                }
+            }
+        }
+        for (const [rowId] of previousById) {
+            if (!candidateIds.has(rowId))
+                recordVisualizerRowDelete_ACU(visualizer, sheetKey, rowId);
+        }
+    }
+}
 function useVisualizerAssistant() {
     const visualizer = useVisualizerStore();
     const toastStore = useToastStore();
@@ -194865,6 +197682,8 @@ function useVisualizerAssistant() {
     }
     function applyCompileResultToVisualizer(payload) {
         assertVisualizerDataOpsEditable_ACU(visualizer);
+        const previousData = cloneData(visualizer.tempData || {});
+        recordAssistantCandidateDataOps(visualizer, previousData, payload.candidateData || {});
         visualizer.tempData = cloneData(payload.candidateData || {});
         visualizer.sheetOrder = Array.isArray(payload.orderedSheetKeys) ? [...payload.orderedSheetKeys] : [];
         applySheetOrderNumbers_ACU(visualizer.tempData, visualizer.sheetOrder);
@@ -197181,6 +200000,15 @@ var _sfc_main$1 = /*@__PURE__*/ defineComponent({
                 return;
             void data.loadFromCurrentContext();
         });
+        watchChatChanged_ACU(() => {
+            if (!visualizer.isActive)
+                return;
+            if (visualizer.dirty) {
+                visualizer.invalidateDraftContext();
+                return;
+            }
+            void data.loadFromCurrentContext();
+        });
         watch(() => visualizer.currentSheetKey, () => {
             currentDataPage.value = 1;
             clearDataCellEditing();
@@ -197205,8 +200033,8 @@ var _sfc_main$1 = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-visualizer-surface[data-v-548becb1] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: grid;\r\n  grid-template-columns: 260px minmax(0, 1fr);\r\n  overflow: hidden;\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__sidebar[data-v-548becb1] {\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  padding: 24px 12px 16px;\r\n  overflow-y: auto;\r\n  border-right: 1px solid var(--acu-border-2);\r\n  background: var(--acu-sidebar-bg);\n}\n.acu-visualizer-surface__main[data-v-548becb1] {\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  overflow: hidden;\r\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar[data-v-548becb1] {\r\n  flex: 0 0 auto;\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\r\n  min-height: 50px;\r\n  padding: 8px 12px 8px 16px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar-context[data-v-548becb1] {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  flex: 1 1 auto;\r\n  gap: 10px;\n}\n.acu-visualizer-surface__mobile-menu[data-v-548becb1] {\r\n  display: none;\r\n  flex: 0 0 auto;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  box-shadow: none;\n}\n.acu-visualizer-surface__mobile-menu[data-v-548becb1]:hover:not(:disabled) {\r\n  background: transparent;\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__context-items[data-v-548becb1] {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  flex: 1 1 auto;\r\n  justify-content: flex-start;\r\n  gap: 16px;\n}\n.acu-visualizer-surface__context-item[data-v-548becb1] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 2px;\n}\n.acu-visualizer-surface__context-item[data-v-548becb1]:first-child {\r\n  flex: 0 1 auto;\r\n  max-width: min(560px, 42vw);\n}\n.acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item[data-v-548becb1] {\r\n  flex: 0 0 auto;\r\n  max-width: min(260px, 20vw);\n}\n.acu-visualizer-surface__context-item span[data-v-548becb1] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.2;\n}\n.acu-visualizer-surface__context-item strong[data-v-548becb1] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 600;\r\n  line-height: 1.25;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__context-item:first-child strong[data-v-548becb1] {\r\n  overflow: visible;\r\n  text-overflow: clip;\r\n  white-space: normal;\r\n  word-break: break-word;\n}\n.acu-visualizer-surface__context-badge[data-v-548becb1] {\r\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__conflict[data-v-548becb1] {\r\n  flex: 0 0 auto;\r\n  margin: 12px 16px 0;\n}\n.acu-visualizer-surface__conflict-actions[data-v-548becb1] {\r\n  display: inline-flex;\r\n  flex-wrap: wrap;\r\n  gap: 6px;\r\n  margin-left: 8px;\n}\n.acu-visualizer-surface__data-toolbar[data-v-548becb1],\r\n.acu-visualizer-surface__data-toolbar-actions[data-v-548becb1],\r\n.acu-visualizer-surface__database-toolbar[data-v-548becb1],\r\n.acu-visualizer-surface__pagination[data-v-548becb1],\r\n.acu-visualizer-surface__pagination-pages[data-v-548becb1],\r\n.acu-visualizer-surface__card-header[data-v-548becb1] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__workspace[data-v-548becb1] {\r\n  flex: 1 1 auto;\r\n  min-height: 0;\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\r\n  overflow: auto;\r\n  padding: 16px;\n}\n.acu-visualizer-surface__workspace--assistant[data-v-548becb1] {\r\n  overflow: hidden;\r\n  padding: 0;\n}\n.acu-visualizer-surface__loading[data-v-548becb1] {\r\n  min-height: 140px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  gap: 8px;\r\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__mode-tabs[data-v-548becb1] {\r\n  flex: 0 0 auto;\r\n  width: min(360px, 42vw);\n}\n.acu-visualizer-surface__close[data-v-548becb1] {\r\n  width: 30px;\r\n  height: 30px;\r\n  flex: 0 0 auto;\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  line-height: 1;\r\n  border-radius: var(--acu-radius-sm);\n}\n.acu-visualizer-surface__close[data-v-548becb1]:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__data-toolbar[data-v-548becb1] {\r\n  flex: 0 0 auto;\r\n  justify-content: space-between;\r\n  padding: 4px 0 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__data-toolbar-actions[data-v-548becb1] {\r\n  flex: 0 0 auto;\r\n  justify-content: flex-end;\n}\n.acu-visualizer-surface__pagination[data-v-548becb1] {\r\n  flex: 0 0 auto;\r\n  justify-content: center;\r\n  gap: 14px;\r\n  padding: 6px 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-visualizer-surface__pagination-pages[data-v-548becb1] {\r\n  min-width: 0;\r\n  flex-wrap: wrap;\r\n  justify-content: center;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__page-button[data-v-548becb1] {\r\n  width: 34px;\r\n  min-width: 34px;\r\n  height: 34px;\r\n  padding: 0;\r\n  border: 1px solid var(--acu-border);\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 500;\n}\n.acu-visualizer-surface__page-button[data-v-548becb1]:hover:not(:disabled) {\r\n  border-color: var(--acu-accent);\r\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__page-button--active[data-v-548becb1],\r\n.acu-visualizer-surface__page-button--active[data-v-548becb1]:hover:not(:disabled) {\r\n  border-color: var(--acu-accent);\r\n  background: var(--acu-accent);\r\n  color: var(--acu-on-accent);\n}\n.acu-visualizer-surface__page-button[data-v-548becb1]:disabled:not(\r\n    .acu-visualizer-surface__page-button--active\r\n  ) {\r\n  border-color: var(--acu-border);\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-2);\r\n  opacity: 1;\r\n  cursor: default;\n}\n.acu-visualizer-surface__page-jump[data-v-548becb1] {\r\n  flex: 0 0 64px;\r\n  width: 64px;\n}\n.acu-visualizer-surface__page-jump[data-v-548becb1] .acu-input {\r\n  min-height: 34px;\r\n  border: 1px solid var(--acu-border) !important;\r\n  background: var(--acu-bg-0) !important;\r\n  text-align: center;\r\n  font-size: var(--acu-font-size-body-lg, 13px) !important;\r\n  font-variant-numeric: tabular-nums;\n}\n.acu-visualizer-surface__data-range[data-v-548becb1] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__database-toolbar[data-v-548becb1] {\r\n  flex: 0 0 auto;\r\n  padding: 0 0 4px;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__database-toolbar h2[data-v-548becb1] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  font-weight: 700;\r\n  line-height: 1.2;\n}\n.acu-visualizer-surface__database-toolbar p[data-v-548becb1] {\r\n  margin: 5px 0 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: var(--acu-line-height-readable, 1.55);\n}\n.acu-visualizer-surface__empty[data-v-548becb1] {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1.55;\n}\n.acu-visualizer-surface__card-grid[data-v-548becb1] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));\r\n  gap: 12px;\n}\n.acu-visualizer-surface__data-card[data-v-548becb1] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  height: 100%;\r\n  padding: 16px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\n}\n.acu-visualizer-surface__card-header strong[data-v-548becb1] {\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-panel-title, 15px);\n}\n.acu-visualizer-surface__card-header span[data-v-548becb1] {\r\n  min-width: 0;\r\n  margin-right: auto;\r\n  overflow: hidden;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__card-header[data-v-548becb1] .acu-icon-btn {\r\n  background: transparent;\n}\n.acu-visualizer-surface__card-header[data-v-548becb1]\r\n  .acu-icon-btn--default:hover:not(:disabled) {\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    transparent;\n}\n.acu-visualizer-surface__card-header[data-v-548becb1] .acu-icon-btn--accent {\r\n  background: var(--acu-accent-glow);\r\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__card-header[data-v-548becb1]\r\n  .acu-icon-btn--danger:hover:not(:disabled) {\r\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\n}\n.acu-visualizer-surface__fields[data-v-548becb1] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__field-row[data-v-548becb1] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 8px;\r\n  align-items: stretch;\n}\n.acu-visualizer-surface__field-row.is-wide[data-v-548becb1] {\r\n  grid-template-columns: minmax(0, 1fr);\n}\n.acu-visualizer-surface__field[data-v-548becb1] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\r\n  padding: 2px;\r\n  border: 1px solid transparent;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\r\n  transition:\r\n    background 0.15s ease,\r\n    border-color 0.15s ease,\r\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-surface__field[data-v-548becb1] .acu-textarea {\r\n  flex: 1 1 auto;\r\n  min-height: 34px;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.45;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  overflow-wrap: break-word;\n}\n.acu-visualizer-surface__field-preview[data-v-548becb1] {\r\n  width: 100%;\r\n  min-height: 34px;\r\n  box-sizing: border-box;\r\n  padding: 8px 10px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-2);\r\n  color: var(--acu-text-1);\r\n  cursor: text;\r\n  display: block;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.45;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  overflow-wrap: break-word;\r\n  transition:\r\n    background 0.15s ease,\r\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-surface__field-preview[data-v-548becb1]:hover,\r\n.acu-visualizer-surface__field-preview[data-v-548becb1]:focus-visible {\r\n  outline: none;\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    var(--acu-bg-2);\r\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-visualizer-surface__field-preview.is-empty[data-v-548becb1] {\r\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__field-label[data-v-548becb1] {\r\n  min-width: 0;\r\n  min-height: 24px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 6px;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 600;\n}\n.acu-visualizer-surface__field-label > span[data-v-548becb1]:first-child {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__field-locks[data-v-548becb1] {\r\n  flex: 0 0 auto;\r\n  min-width: 51px;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: flex-end;\r\n  gap: 3px;\r\n  opacity: 0.44;\r\n  transition: opacity 0.15s ease;\n}\n.acu-visualizer-surface__field:hover .acu-visualizer-surface__field-locks[data-v-548becb1],\r\n.acu-visualizer-surface__field:focus-within\r\n  .acu-visualizer-surface__field-locks[data-v-548becb1],\r\n.acu-visualizer-surface__field.is-actions-active\r\n  .acu-visualizer-surface__field-locks[data-v-548becb1],\r\n.acu-visualizer-surface__field.is-locked .acu-visualizer-surface__field-locks[data-v-548becb1],\r\n.acu-visualizer-surface__field.is-special-index\r\n  .acu-visualizer-surface__field-locks[data-v-548becb1] {\r\n  opacity: 1;\n}\n.acu-visualizer-surface__field-locks[data-v-548becb1] .acu-icon-btn {\r\n  --acu-icon-btn-size: 24px;\r\n  --acu-icon-btn-font-size: 11px;\r\n  width: 24px;\r\n  height: 24px;\r\n  background: transparent !important;\n}\n.acu-visualizer-surface__field-locks[data-v-548becb1]\r\n  .acu-icon-btn--default:hover:not(:disabled) {\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    transparent;\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__field-locks[data-v-548becb1] .acu-icon-btn--accent {\r\n  color: var(--acu-warning) !important;\r\n  background: color-mix(in srgb, var(--acu-warning) 16%, transparent) !important;\n}\n.acu-visualizer-surface__field-locks[data-v-548becb1]\r\n  .acu-icon-btn--accent:hover:not(:disabled) {\r\n  color: var(--acu-warning) !important;\r\n  background: color-mix(in srgb, var(--acu-warning) 22%, transparent) !important;\n}\n.acu-visualizer-surface__field.is-locked[data-v-548becb1] {\r\n  border-color: var(--acu-border);\r\n  background: color-mix(in srgb, var(--acu-warning) 8%, transparent);\n}\n.acu-visualizer-surface__field.is-actions-active[data-v-548becb1]:not(.is-locked) {\r\n  background: color-mix(in srgb, var(--acu-accent) 6%, transparent);\n}\n.acu-visualizer-surface__footer[data-v-548becb1] {\r\n  flex: 0 0 auto;\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\r\n  padding: 12px 16px;\r\n  border-top: 1px solid var(--acu-border-2);\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__footer-actions[data-v-548becb1] {\r\n  display: flex;\r\n  gap: 8px;\r\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__footer-actions[data-v-548becb1] .acu-btn {\r\n  min-width: 132px;\n}\n.acu-visualizer-surface__mobile-nav-layer[data-v-548becb1] {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100%;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  min-height: 100vh;\r\n  min-height: 100dvh;\r\n  z-index: 9350;\r\n  display: none;\r\n  align-items: stretch;\r\n  justify-content: flex-start;\r\n  padding: var(--acu-safe-top, 0px) var(--acu-safe-right, 0px) var(--acu-safe-bottom, 0px) var(--acu-safe-left, 0px);\r\n  overflow: hidden;\r\n  background: rgba(0, 0, 0, 0.58);\r\n  pointer-events: auto;\r\n  overscroll-behavior: contain;\r\n  animation: visualizer-mobile-nav-layer-in-548becb1 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing[data-v-548becb1] {\r\n  pointer-events: auto;\r\n  animation: visualizer-mobile-nav-layer-out-548becb1 0.15s ease-in both;\n}\n.acu-visualizer-surface__mobile-nav[data-v-548becb1] {\r\n  width: 360px;\r\n  max-width: calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\r\n  height: 100%;\r\n  max-height: 100%;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  align-self: stretch;\r\n  flex: 0 1 360px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  padding: 24px 12px 16px;\r\n  overflow-y: auto;\r\n  border-right: 0;\r\n  background: var(--acu-sidebar-bg);\r\n  box-shadow: var(--acu-shadow);\r\n  pointer-events: auto;\r\n  animation: visualizer-mobile-nav-drawer-in-548becb1 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing\r\n  .acu-visualizer-surface__mobile-nav[data-v-548becb1] {\r\n  animation: visualizer-mobile-nav-drawer-out-548becb1 0.15s ease-in both;\n}\n@supports (width: min(360px, calc(100% - 24px))) {\n.acu-visualizer-surface__mobile-nav[data-v-548becb1] {\r\n    width: min(360px, calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\r\n    flex: 0 0 min(360px, calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n}\n}\n@supports (width: 100dvw) {\n.acu-visualizer-surface__mobile-nav[data-v-548becb1] {\r\n    max-width: calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\n}\n}\n@supports (height: 100dvh) {\n.acu-visualizer-surface__mobile-nav[data-v-548becb1] {\r\n    height: 100%;\r\n    max-height: 100%;\n}\n}\n@keyframes visualizer-mobile-nav-layer-in-548becb1 {\nfrom {\r\n    opacity: 0;\n}\nto {\r\n    opacity: 1;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-in-548becb1 {\nfrom {\r\n    transform: translateX(-100%);\n}\nto {\r\n    transform: translateX(0);\n}\n}\n@keyframes visualizer-mobile-nav-layer-out-548becb1 {\nfrom {\r\n    opacity: 1;\n}\nto {\r\n    opacity: 0;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-out-548becb1 {\nfrom {\r\n    transform: translateX(0);\n}\nto {\r\n    transform: translateX(-100%);\n}\n}\n@media (max-width: 1024px) {\n.acu-visualizer-surface[data-v-548becb1] {\r\n    grid-template-columns: 220px minmax(0, 1fr);\n}\n.acu-visualizer-surface__card-grid[data-v-548becb1] {\r\n    grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));\n}\n.acu-visualizer-surface__topbar[data-v-548becb1] {\r\n    flex-wrap: wrap;\n}\n.acu-visualizer-surface__mode-tabs[data-v-548becb1] {\r\n    order: 3;\r\n    width: min(420px, 100%);\n}\n}\n@media (max-width: 767px) {\n.acu-visualizer-surface[data-v-548becb1] {\r\n    grid-template-columns: 1fr;\r\n    grid-template-rows: minmax(0, 1fr);\n}\n.acu-visualizer-surface__sidebar[data-v-548becb1] {\r\n    display: none;\n}\n.acu-visualizer-surface__topbar[data-v-548becb1] {\r\n    display: grid;\r\n    grid-template-columns: minmax(0, 1fr) auto;\r\n    gap: 8px;\r\n    min-height: 0;\r\n    padding: 8px;\n}\n.acu-visualizer-surface__topbar-context[data-v-548becb1] {\r\n    grid-column: 1;\r\n    display: grid;\r\n    grid-template-columns: auto minmax(0, 1fr) auto;\r\n    align-items: center;\r\n    gap: 8px;\r\n    min-width: 0;\n}\n.acu-visualizer-surface__mobile-menu[data-v-548becb1] {\r\n    display: inline-flex;\n}\n.acu-visualizer-surface__context-items[data-v-548becb1] {\r\n    display: grid;\r\n    grid-template-columns: repeat(2, minmax(0, 1fr));\r\n    gap: 8px;\n}\n.acu-visualizer-surface__context-item[data-v-548becb1]:first-child,\r\n  .acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item[data-v-548becb1] {\r\n    max-width: none;\n}\n.acu-visualizer-surface__mobile-nav-layer[data-v-548becb1] {\r\n    display: flex;\n}\n.acu-visualizer-surface__close[data-v-548becb1] {\r\n    grid-column: 2;\r\n    grid-row: 1;\r\n    align-self: center;\n}\n.acu-visualizer-surface__mode-tabs[data-v-548becb1] {\r\n    grid-column: 1 / -1;\r\n    width: 100%;\n}\n.acu-visualizer-surface__workspace[data-v-548becb1] {\r\n    padding: 10px;\n}\n.acu-visualizer-surface__data-toolbar[data-v-548becb1],\r\n  .acu-visualizer-surface__database-toolbar[data-v-548becb1] {\r\n    align-items: stretch;\r\n    flex-direction: column;\n}\n.acu-visualizer-surface__data-toolbar[data-v-548becb1] .acu-btn,\r\n  .acu-visualizer-surface__database-toolbar[data-v-548becb1] .acu-btn {\r\n    width: 100%;\n}\n.acu-visualizer-surface__data-toolbar-actions[data-v-548becb1] {\r\n    align-items: stretch;\r\n    flex-direction: column;\n}\n.acu-visualizer-surface__pagination[data-v-548becb1] {\r\n    align-items: center;\r\n    flex-direction: row;\r\n    flex-wrap: wrap;\r\n    gap: 6px;\r\n    padding: 2px 0 6px;\n}\n.acu-visualizer-surface__pagination-pages[data-v-548becb1] {\r\n    flex: 0 1 auto;\r\n    align-items: center;\r\n    flex-direction: row;\r\n    flex-wrap: wrap;\r\n    gap: 5px;\n}\n.acu-visualizer-surface__page-button[data-v-548becb1] {\r\n    width: 36px;\r\n    min-width: 36px;\r\n    height: 34px;\r\n    flex: 0 0 36px;\n}\n.acu-visualizer-surface__page-jump[data-v-548becb1] {\r\n    flex: 0 0 54px;\r\n    width: 54px;\n}\n.acu-visualizer-surface__footer[data-v-548becb1] {\r\n    display: grid;\r\n    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);\r\n    align-items: center;\r\n    gap: 8px;\r\n    padding: 8px;\n}\n.acu-visualizer-surface__footer > span[data-v-548becb1] {\r\n    min-width: 0;\r\n    overflow: hidden;\r\n    text-overflow: ellipsis;\r\n    white-space: nowrap;\n}\n.acu-visualizer-surface__footer-actions[data-v-548becb1] {\r\n    display: grid;\r\n    grid-template-columns: repeat(2, minmax(0, 1fr));\r\n    gap: 6px;\n}\n.acu-visualizer-surface__footer-actions[data-v-548becb1] .acu-btn {\r\n    min-width: 0;\r\n    width: 100%;\n}\n}\n@media (max-width: 480px) {\n.acu-visualizer-surface__card-grid[data-v-548becb1] {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__fields[data-v-548becb1] {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__mode-tabs[data-v-548becb1] {\r\n    width: 100%;\n}\n.acu-visualizer-surface__conflict-actions[data-v-548becb1] {\r\n    display: flex;\r\n    margin: 8px 0 0;\n}\n.acu-visualizer-surface__footer[data-v-548becb1] {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__footer > span[data-v-548becb1] {\r\n    display: none;\n}\n}\r\n", "src/presentation-v2/surfaces/visualizer/VisualizerSurface.vue#style-0-548becb1");
-var VisualizerSurface_vue_vue_type_style_index_0_scoped_548becb1_lang = null;
+injectSfcStyle("\n.acu-visualizer-surface[data-v-e050fa51] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: grid;\r\n  grid-template-columns: 260px minmax(0, 1fr);\r\n  overflow: hidden;\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__sidebar[data-v-e050fa51] {\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  padding: 24px 12px 16px;\r\n  overflow-y: auto;\r\n  border-right: 1px solid var(--acu-border-2);\r\n  background: var(--acu-sidebar-bg);\n}\n.acu-visualizer-surface__main[data-v-e050fa51] {\r\n  min-width: 0;\r\n  min-height: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  overflow: hidden;\r\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar[data-v-e050fa51] {\r\n  flex: 0 0 auto;\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\r\n  min-height: 50px;\r\n  padding: 8px 12px 8px 16px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  background: var(--acu-bg-0);\n}\n.acu-visualizer-surface__topbar-context[data-v-e050fa51] {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  flex: 1 1 auto;\r\n  gap: 10px;\n}\n.acu-visualizer-surface__mobile-menu[data-v-e050fa51] {\r\n  display: none;\r\n  flex: 0 0 auto;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  box-shadow: none;\n}\n.acu-visualizer-surface__mobile-menu[data-v-e050fa51]:hover:not(:disabled) {\r\n  background: transparent;\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__context-items[data-v-e050fa51] {\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  flex: 1 1 auto;\r\n  justify-content: flex-start;\r\n  gap: 16px;\n}\n.acu-visualizer-surface__context-item[data-v-e050fa51] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 2px;\n}\n.acu-visualizer-surface__context-item[data-v-e050fa51]:first-child {\r\n  flex: 0 1 auto;\r\n  max-width: min(560px, 42vw);\n}\n.acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item[data-v-e050fa51] {\r\n  flex: 0 0 auto;\r\n  max-width: min(260px, 20vw);\n}\n.acu-visualizer-surface__context-item span[data-v-e050fa51] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.2;\n}\n.acu-visualizer-surface__context-item strong[data-v-e050fa51] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 600;\r\n  line-height: 1.25;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__context-item:first-child strong[data-v-e050fa51] {\r\n  overflow: visible;\r\n  text-overflow: clip;\r\n  white-space: normal;\r\n  word-break: break-word;\n}\n.acu-visualizer-surface__context-badge[data-v-e050fa51] {\r\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__conflict[data-v-e050fa51] {\r\n  flex: 0 0 auto;\r\n  margin: 12px 16px 0;\n}\n.acu-visualizer-surface__conflict-actions[data-v-e050fa51] {\r\n  display: inline-flex;\r\n  flex-wrap: wrap;\r\n  gap: 6px;\r\n  margin-left: 8px;\n}\n.acu-visualizer-surface__data-toolbar[data-v-e050fa51],\r\n.acu-visualizer-surface__data-toolbar-actions[data-v-e050fa51],\r\n.acu-visualizer-surface__database-toolbar[data-v-e050fa51],\r\n.acu-visualizer-surface__pagination[data-v-e050fa51],\r\n.acu-visualizer-surface__pagination-pages[data-v-e050fa51],\r\n.acu-visualizer-surface__card-header[data-v-e050fa51] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__workspace[data-v-e050fa51] {\r\n  flex: 1 1 auto;\r\n  min-height: 0;\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\r\n  overflow: auto;\r\n  padding: 16px;\n}\n.acu-visualizer-surface__workspace--assistant[data-v-e050fa51] {\r\n  overflow: hidden;\r\n  padding: 0;\n}\n.acu-visualizer-surface__loading[data-v-e050fa51] {\r\n  min-height: 140px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  gap: 8px;\r\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__mode-tabs[data-v-e050fa51] {\r\n  flex: 0 0 auto;\r\n  width: min(360px, 42vw);\n}\n.acu-visualizer-surface__close[data-v-e050fa51] {\r\n  width: 30px;\r\n  height: 30px;\r\n  flex: 0 0 auto;\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  line-height: 1;\r\n  border-radius: var(--acu-radius-sm);\n}\n.acu-visualizer-surface__close[data-v-e050fa51]:hover {\r\n  background: var(--acu-hover-overlay);\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__data-toolbar[data-v-e050fa51] {\r\n  flex: 0 0 auto;\r\n  justify-content: space-between;\r\n  padding: 4px 0 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__data-toolbar-actions[data-v-e050fa51] {\r\n  flex: 0 0 auto;\r\n  justify-content: flex-end;\n}\n.acu-visualizer-surface__pagination[data-v-e050fa51] {\r\n  flex: 0 0 auto;\r\n  justify-content: center;\r\n  gap: 14px;\r\n  padding: 6px 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\n}\n.acu-visualizer-surface__pagination-pages[data-v-e050fa51] {\r\n  min-width: 0;\r\n  flex-wrap: wrap;\r\n  justify-content: center;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__page-button[data-v-e050fa51] {\r\n  width: 34px;\r\n  min-width: 34px;\r\n  height: 34px;\r\n  padding: 0;\r\n  border: 1px solid var(--acu-border);\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 500;\n}\n.acu-visualizer-surface__page-button[data-v-e050fa51]:hover:not(:disabled) {\r\n  border-color: var(--acu-accent);\r\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__page-button--active[data-v-e050fa51],\r\n.acu-visualizer-surface__page-button--active[data-v-e050fa51]:hover:not(:disabled) {\r\n  border-color: var(--acu-accent);\r\n  background: var(--acu-accent);\r\n  color: var(--acu-on-accent);\n}\n.acu-visualizer-surface__page-button[data-v-e050fa51]:disabled:not(\r\n    .acu-visualizer-surface__page-button--active\r\n  ) {\r\n  border-color: var(--acu-border);\r\n  background: var(--acu-bg-0);\r\n  color: var(--acu-text-2);\r\n  opacity: 1;\r\n  cursor: default;\n}\n.acu-visualizer-surface__page-jump[data-v-e050fa51] {\r\n  flex: 0 0 64px;\r\n  width: 64px;\n}\n.acu-visualizer-surface__page-jump[data-v-e050fa51] .acu-input {\r\n  min-height: 34px;\r\n  border: 1px solid var(--acu-border) !important;\r\n  background: var(--acu-bg-0) !important;\r\n  text-align: center;\r\n  font-size: var(--acu-font-size-body-lg, 13px) !important;\r\n  font-variant-numeric: tabular-nums;\n}\n.acu-visualizer-surface__data-range[data-v-e050fa51] {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__database-toolbar[data-v-e050fa51] {\r\n  flex: 0 0 auto;\r\n  padding: 0 0 4px;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__database-toolbar h2[data-v-e050fa51] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-page-title, 22px);\r\n  font-weight: 700;\r\n  line-height: 1.2;\n}\n.acu-visualizer-surface__database-toolbar p[data-v-e050fa51] {\r\n  margin: 5px 0 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: var(--acu-line-height-readable, 1.55);\n}\n.acu-visualizer-surface__empty[data-v-e050fa51] {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  line-height: 1.55;\n}\n.acu-visualizer-surface__card-grid[data-v-e050fa51] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr));\r\n  gap: 12px;\n}\n.acu-visualizer-surface__data-card[data-v-e050fa51] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\r\n  height: 100%;\r\n  padding: 16px;\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\n}\n.acu-visualizer-surface__card-header strong[data-v-e050fa51] {\r\n  color: var(--acu-text-1);\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-panel-title, 15px);\n}\n.acu-visualizer-surface__card-header span[data-v-e050fa51] {\r\n  min-width: 0;\r\n  margin-right: auto;\r\n  overflow: hidden;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__card-header[data-v-e050fa51] .acu-icon-btn {\r\n  background: transparent;\n}\n.acu-visualizer-surface__card-header[data-v-e050fa51]\r\n  .acu-icon-btn--default:hover:not(:disabled) {\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    transparent;\n}\n.acu-visualizer-surface__card-header[data-v-e050fa51] .acu-icon-btn--accent {\r\n  background: var(--acu-accent-glow);\r\n  color: var(--acu-accent);\n}\n.acu-visualizer-surface__card-header[data-v-e050fa51]\r\n  .acu-icon-btn--danger:hover:not(:disabled) {\r\n  background: color-mix(in srgb, var(--acu-danger) 12%, transparent);\n}\n.acu-visualizer-surface__fields[data-v-e050fa51] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\n}\n.acu-visualizer-surface__field-row[data-v-e050fa51] {\r\n  min-width: 0;\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 8px;\r\n  align-items: stretch;\n}\n.acu-visualizer-surface__field-row.is-wide[data-v-e050fa51] {\r\n  grid-template-columns: minmax(0, 1fr);\n}\n.acu-visualizer-surface__field[data-v-e050fa51] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 4px;\r\n  padding: 2px;\r\n  border: 1px solid transparent;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\r\n  transition:\r\n    background 0.15s ease,\r\n    border-color 0.15s ease,\r\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-surface__field[data-v-e050fa51] .acu-textarea {\r\n  flex: 1 1 auto;\r\n  min-height: 34px;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.45;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  overflow-wrap: break-word;\n}\n.acu-visualizer-surface__field-preview[data-v-e050fa51] {\r\n  width: 100%;\r\n  min-height: 34px;\r\n  box-sizing: border-box;\r\n  padding: 8px 10px;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: var(--acu-bg-2);\r\n  color: var(--acu-text-1);\r\n  cursor: text;\r\n  display: block;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.45;\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  overflow-wrap: break-word;\r\n  transition:\r\n    background 0.15s ease,\r\n    box-shadow 0.15s ease;\n}\n.acu-visualizer-surface__field-preview[data-v-e050fa51]:hover,\r\n.acu-visualizer-surface__field-preview[data-v-e050fa51]:focus-visible {\r\n  outline: none;\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    var(--acu-bg-2);\r\n  box-shadow: 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-visualizer-surface__field-preview.is-empty[data-v-e050fa51] {\r\n  color: var(--acu-text-3);\n}\n.acu-visualizer-surface__field-label[data-v-e050fa51] {\r\n  min-width: 0;\r\n  min-height: 24px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 6px;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  font-weight: 600;\n}\n.acu-visualizer-surface__field-label > span[data-v-e050fa51]:first-child {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\n}\n.acu-visualizer-surface__field-locks[data-v-e050fa51] {\r\n  flex: 0 0 auto;\r\n  min-width: 51px;\r\n  display: inline-flex;\r\n  align-items: center;\r\n  justify-content: flex-end;\r\n  gap: 3px;\r\n  opacity: 0.44;\r\n  transition: opacity 0.15s ease;\n}\n.acu-visualizer-surface__field:hover .acu-visualizer-surface__field-locks[data-v-e050fa51],\r\n.acu-visualizer-surface__field:focus-within\r\n  .acu-visualizer-surface__field-locks[data-v-e050fa51],\r\n.acu-visualizer-surface__field.is-actions-active\r\n  .acu-visualizer-surface__field-locks[data-v-e050fa51],\r\n.acu-visualizer-surface__field.is-locked .acu-visualizer-surface__field-locks[data-v-e050fa51],\r\n.acu-visualizer-surface__field.is-special-index\r\n  .acu-visualizer-surface__field-locks[data-v-e050fa51] {\r\n  opacity: 1;\n}\n.acu-visualizer-surface__field-locks[data-v-e050fa51] .acu-icon-btn {\r\n  --acu-icon-btn-size: 24px;\r\n  --acu-icon-btn-font-size: 11px;\r\n  width: 24px;\r\n  height: 24px;\r\n  background: transparent !important;\n}\n.acu-visualizer-surface__field-locks[data-v-e050fa51]\r\n  .acu-icon-btn--default:hover:not(:disabled) {\r\n  background:\r\n    linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)),\r\n    transparent;\r\n  color: var(--acu-text-1);\n}\n.acu-visualizer-surface__field-locks[data-v-e050fa51] .acu-icon-btn--accent {\r\n  color: var(--acu-warning) !important;\r\n  background: color-mix(in srgb, var(--acu-warning) 16%, transparent) !important;\n}\n.acu-visualizer-surface__field-locks[data-v-e050fa51]\r\n  .acu-icon-btn--accent:hover:not(:disabled) {\r\n  color: var(--acu-warning) !important;\r\n  background: color-mix(in srgb, var(--acu-warning) 22%, transparent) !important;\n}\n.acu-visualizer-surface__field.is-locked[data-v-e050fa51] {\r\n  border-color: var(--acu-border);\r\n  background: color-mix(in srgb, var(--acu-warning) 8%, transparent);\n}\n.acu-visualizer-surface__field.is-actions-active[data-v-e050fa51]:not(.is-locked) {\r\n  background: color-mix(in srgb, var(--acu-accent) 6%, transparent);\n}\n.acu-visualizer-surface__footer[data-v-e050fa51] {\r\n  flex: 0 0 auto;\r\n  min-width: 0;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: 12px;\r\n  padding: 12px 16px;\r\n  border-top: 1px solid var(--acu-border-2);\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-visualizer-surface__footer-actions[data-v-e050fa51] {\r\n  display: flex;\r\n  gap: 8px;\r\n  flex: 0 0 auto;\n}\n.acu-visualizer-surface__footer-actions[data-v-e050fa51] .acu-btn {\r\n  min-width: 132px;\n}\n.acu-visualizer-surface__mobile-nav-layer[data-v-e050fa51] {\r\n  position: fixed;\r\n  top: 0;\r\n  right: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  inset: 0;\r\n  width: 100%;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100%;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  min-height: 100vh;\r\n  min-height: 100dvh;\r\n  z-index: 9350;\r\n  display: none;\r\n  align-items: stretch;\r\n  justify-content: flex-start;\r\n  padding: var(--acu-safe-top, 0px) var(--acu-safe-right, 0px) var(--acu-safe-bottom, 0px) var(--acu-safe-left, 0px);\r\n  overflow: hidden;\r\n  background: rgba(0, 0, 0, 0.58);\r\n  pointer-events: auto;\r\n  overscroll-behavior: contain;\r\n  animation: visualizer-mobile-nav-layer-in-e050fa51 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing[data-v-e050fa51] {\r\n  pointer-events: auto;\r\n  animation: visualizer-mobile-nav-layer-out-e050fa51 0.15s ease-in both;\n}\n.acu-visualizer-surface__mobile-nav[data-v-e050fa51] {\r\n  width: 360px;\r\n  max-width: calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\r\n  height: 100%;\r\n  max-height: 100%;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  align-self: stretch;\r\n  flex: 0 1 360px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  padding: 24px 12px 16px;\r\n  overflow-y: auto;\r\n  border-right: 0;\r\n  background: var(--acu-sidebar-bg);\r\n  box-shadow: var(--acu-shadow);\r\n  pointer-events: auto;\r\n  animation: visualizer-mobile-nav-drawer-in-e050fa51 0.18s ease-out both;\n}\n.acu-visualizer-surface__mobile-nav-layer.is-closing\r\n  .acu-visualizer-surface__mobile-nav[data-v-e050fa51] {\r\n  animation: visualizer-mobile-nav-drawer-out-e050fa51 0.15s ease-in both;\n}\n@supports (width: min(360px, calc(100% - 24px))) {\n.acu-visualizer-surface__mobile-nav[data-v-e050fa51] {\r\n    width: min(360px, calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\r\n    flex: 0 0 min(360px, calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px)));\n}\n}\n@supports (width: 100dvw) {\n.acu-visualizer-surface__mobile-nav[data-v-e050fa51] {\r\n    max-width: calc(100% - 24px - var(--acu-safe-left, 0px) - var(--acu-safe-right, 0px));\n}\n}\n@supports (height: 100dvh) {\n.acu-visualizer-surface__mobile-nav[data-v-e050fa51] {\r\n    height: 100%;\r\n    max-height: 100%;\n}\n}\n@keyframes visualizer-mobile-nav-layer-in-e050fa51 {\nfrom {\r\n    opacity: 0;\n}\nto {\r\n    opacity: 1;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-in-e050fa51 {\nfrom {\r\n    transform: translateX(-100%);\n}\nto {\r\n    transform: translateX(0);\n}\n}\n@keyframes visualizer-mobile-nav-layer-out-e050fa51 {\nfrom {\r\n    opacity: 1;\n}\nto {\r\n    opacity: 0;\n}\n}\n@keyframes visualizer-mobile-nav-drawer-out-e050fa51 {\nfrom {\r\n    transform: translateX(0);\n}\nto {\r\n    transform: translateX(-100%);\n}\n}\n@media (max-width: 1024px) {\n.acu-visualizer-surface[data-v-e050fa51] {\r\n    grid-template-columns: 220px minmax(0, 1fr);\n}\n.acu-visualizer-surface__card-grid[data-v-e050fa51] {\r\n    grid-template-columns: repeat(auto-fill, minmax(min(100%, 360px), 1fr));\n}\n.acu-visualizer-surface__topbar[data-v-e050fa51] {\r\n    flex-wrap: wrap;\n}\n.acu-visualizer-surface__mode-tabs[data-v-e050fa51] {\r\n    order: 3;\r\n    width: min(420px, 100%);\n}\n}\n@media (max-width: 767px) {\n.acu-visualizer-surface[data-v-e050fa51] {\r\n    grid-template-columns: 1fr;\r\n    grid-template-rows: minmax(0, 1fr);\n}\n.acu-visualizer-surface__sidebar[data-v-e050fa51] {\r\n    display: none;\n}\n.acu-visualizer-surface__topbar[data-v-e050fa51] {\r\n    display: grid;\r\n    grid-template-columns: minmax(0, 1fr) auto;\r\n    gap: 8px;\r\n    min-height: 0;\r\n    padding: 8px;\n}\n.acu-visualizer-surface__topbar-context[data-v-e050fa51] {\r\n    grid-column: 1;\r\n    display: grid;\r\n    grid-template-columns: auto minmax(0, 1fr) auto;\r\n    align-items: center;\r\n    gap: 8px;\r\n    min-width: 0;\n}\n.acu-visualizer-surface__mobile-menu[data-v-e050fa51] {\r\n    display: inline-flex;\n}\n.acu-visualizer-surface__context-items[data-v-e050fa51] {\r\n    display: grid;\r\n    grid-template-columns: repeat(2, minmax(0, 1fr));\r\n    gap: 8px;\n}\n.acu-visualizer-surface__context-item[data-v-e050fa51]:first-child,\r\n  .acu-visualizer-surface__context-item + .acu-visualizer-surface__context-item[data-v-e050fa51] {\r\n    max-width: none;\n}\n.acu-visualizer-surface__mobile-nav-layer[data-v-e050fa51] {\r\n    display: flex;\n}\n.acu-visualizer-surface__close[data-v-e050fa51] {\r\n    grid-column: 2;\r\n    grid-row: 1;\r\n    align-self: center;\n}\n.acu-visualizer-surface__mode-tabs[data-v-e050fa51] {\r\n    grid-column: 1 / -1;\r\n    width: 100%;\n}\n.acu-visualizer-surface__workspace[data-v-e050fa51] {\r\n    padding: 10px;\n}\n.acu-visualizer-surface__data-toolbar[data-v-e050fa51],\r\n  .acu-visualizer-surface__database-toolbar[data-v-e050fa51] {\r\n    align-items: stretch;\r\n    flex-direction: column;\n}\n.acu-visualizer-surface__data-toolbar[data-v-e050fa51] .acu-btn,\r\n  .acu-visualizer-surface__database-toolbar[data-v-e050fa51] .acu-btn {\r\n    width: 100%;\n}\n.acu-visualizer-surface__data-toolbar-actions[data-v-e050fa51] {\r\n    align-items: stretch;\r\n    flex-direction: column;\n}\n.acu-visualizer-surface__pagination[data-v-e050fa51] {\r\n    align-items: center;\r\n    flex-direction: row;\r\n    flex-wrap: wrap;\r\n    gap: 6px;\r\n    padding: 2px 0 6px;\n}\n.acu-visualizer-surface__pagination-pages[data-v-e050fa51] {\r\n    flex: 0 1 auto;\r\n    align-items: center;\r\n    flex-direction: row;\r\n    flex-wrap: wrap;\r\n    gap: 5px;\n}\n.acu-visualizer-surface__page-button[data-v-e050fa51] {\r\n    width: 36px;\r\n    min-width: 36px;\r\n    height: 34px;\r\n    flex: 0 0 36px;\n}\n.acu-visualizer-surface__page-jump[data-v-e050fa51] {\r\n    flex: 0 0 54px;\r\n    width: 54px;\n}\n.acu-visualizer-surface__footer[data-v-e050fa51] {\r\n    display: grid;\r\n    grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);\r\n    align-items: center;\r\n    gap: 8px;\r\n    padding: 8px;\n}\n.acu-visualizer-surface__footer > span[data-v-e050fa51] {\r\n    min-width: 0;\r\n    overflow: hidden;\r\n    text-overflow: ellipsis;\r\n    white-space: nowrap;\n}\n.acu-visualizer-surface__footer-actions[data-v-e050fa51] {\r\n    display: grid;\r\n    grid-template-columns: repeat(2, minmax(0, 1fr));\r\n    gap: 6px;\n}\n.acu-visualizer-surface__footer-actions[data-v-e050fa51] .acu-btn {\r\n    min-width: 0;\r\n    width: 100%;\n}\n}\n@media (max-width: 480px) {\n.acu-visualizer-surface__card-grid[data-v-e050fa51] {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__fields[data-v-e050fa51] {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__mode-tabs[data-v-e050fa51] {\r\n    width: 100%;\n}\n.acu-visualizer-surface__conflict-actions[data-v-e050fa51] {\r\n    display: flex;\r\n    margin: 8px 0 0;\n}\n.acu-visualizer-surface__footer[data-v-e050fa51] {\r\n    grid-template-columns: 1fr;\n}\n.acu-visualizer-surface__footer > span[data-v-e050fa51] {\r\n    display: none;\n}\n}\r\n", "src/presentation-v2/surfaces/visualizer/VisualizerSurface.vue#style-0-e050fa51");
+var VisualizerSurface_vue_vue_type_style_index_0_scoped_e050fa51_lang = null;
 
 const _hoisted_1$1 = {
 	class: "acu-visualizer-surface__sidebar",
@@ -197829,7 +200657,7 @@ function _sfc_render$1(_ctx, _cache, $props, $setup, $data, $options) {
 		/* NEED_HYDRATION */
 	);
 }
-var VisualizerSurface = /* @__PURE__ */ _export_sfc(_sfc_main$1, [["render", _sfc_render$1], ["__scopeId", "data-v-548becb1"]]);
+var VisualizerSurface = /* @__PURE__ */ _export_sfc(_sfc_main$1, [["render", _sfc_render$1], ["__scopeId", "data-v-e050fa51"]]);
 
 /**
  * appearance-store — 新 UI 外观偏好。

@@ -427,7 +427,11 @@ function toggleHistoryStage(stage: ContinuationStage_ACU, event: Event): void {
 }
 
 watch(() => props.task?.taskId, () => expandedHistoryStages.value.clear());
-watchChatChanged_ACU(() => expandedHistoryStages.value.clear());
+watchChatChanged_ACU(() => {
+  expandedHistoryStages.value.clear();
+  materials.reload();
+  syncOutlineDraft();
+});
 watch(historyStages, stages => {
   const current = new Set(stages.map(stage => stage.stageId));
   for (const stage of expandedHistoryStages.value) {

@@ -75,6 +75,37 @@ const SEARCH_RESULT_LIMIT_ACU = 8;
 /** 百科检索候选条数上限。 */
 const ENCYCLOPEDIA_CANDIDATE_LIMIT_ACU = 6;
 
+function abortError_ACU(): Error {
+  const error = new Error('请求已取消');
+  error.name = 'AbortError';
+  return error;
+}
+
+function throwIfAborted_ACU(signal?: AbortSignal | null): void {
+  if (signal?.aborted) throw abortError_ACU();
+}
+
+function isAbortError_ACU(error: unknown): boolean {
+  return !!error && typeof error === 'object' && (error as { name?: unknown }).name === 'AbortError';
+}
+
+function readBodyWithAbort_ACU<T>(promise: Promise<T>, signal?: AbortSignal | null): Promise<T> {
+  if (!signal) return promise;
+  if (signal.aborted) return Promise.reject(abortError_ACU());
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => {
+      cleanup();
+      reject(abortError_ACU());
+    };
+    const cleanup = (): void => signal.removeEventListener('abort', onAbort);
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      value => { cleanup(); resolve(value); },
+      error => { cleanup(); reject(error); },
+    );
+  });
+}
+
 const MEDIAWIKI_ENDPOINTS_ACU: Record<Exclude<AgentEncyclopediaSource_ACU, 'baidu'>, { api: string; page: string }> = {
   moegirl: { api: 'https://zh.moegirl.org.cn/api.php', page: 'https://zh.moegirl.org.cn/' },
   wikipedia_zh: { api: 'https://zh.wikipedia.org/w/api.php', page: 'https://zh.wikipedia.org/wiki/' },
@@ -258,30 +289,50 @@ function encyclopediaPageUrl_ACU(source: Exclude<AgentEncyclopediaSource_ACU, 'b
 export class AgentWebClient_ACU {
   constructor(private readonly dependencies: AgentWebClientDependencies_ACU = defaultDependencies_ACU) {}
 
-  /** 出网 fetch（百科 API 与 TT 同源路由），带超时。 */
-  private async fetchDirect_ACU(url: string, init?: RequestInit): Promise<Response> {
+  /** 出网 fetch（百科 API 与 TT 同源路由），超时覆盖响应头与响应体读取阶段。 */
+  private async fetchDirect_ACU(url: string, init?: RequestInit, signal?: AbortSignal | null): Promise<{ response: Response; signal: AbortSignal; cleanup: () => void }> {
+    throwIfAborted_ACU(signal);
     const controller = new AbortController();
+    let removeAbortListener = (): void => {};
+    const onExternalAbort = (): void => controller.abort();
+    if (signal) {
+      signal.addEventListener('abort', onExternalAbort, { once: true });
+      removeAbortListener = () => signal.removeEventListener('abort', onExternalAbort);
+      if (signal.aborted) controller.abort();
+    }
     const timer = setTimeout(() => controller.abort(), WEB_REQUEST_TIMEOUT_MS_ACU);
-    try {
-      return await this.dependencies.fetch(url, { ...init, signal: controller.signal });
-    } finally {
+    const cleanup = (): void => {
       clearTimeout(timer);
+      removeAbortListener();
+      removeAbortListener = () => {};
+    };
+    try {
+      const response = await this.dependencies.fetch(url, { ...init, signal: controller.signal });
+      return { response, signal: controller.signal, cleanup };
+    } catch (error) {
+      cleanup();
+      throw error;
     }
   }
 
-  private async fetchMediawikiJson_ACU(source: Exclude<AgentEncyclopediaSource_ACU, 'baidu'>, params: Record<string, string>): Promise<{ ok: true; data: any } | { ok: false; reason: string }> {
+  private async fetchMediawikiJson_ACU(source: Exclude<AgentEncyclopediaSource_ACU, 'baidu'>, params: Record<string, string>, signal?: AbortSignal | null): Promise<{ ok: true; data: any } | { ok: false; reason: string }> {
     const search = new URLSearchParams({ ...params, format: 'json', origin: '*', utf8: '1' });
     const url = `${MEDIAWIKI_ENDPOINTS_ACU[source].api}?${search.toString()}`;
+    let lease: { response: Response; signal: AbortSignal; cleanup: () => void } | null = null;
     try {
-      const response = await this.fetchDirect_ACU(url, { method: 'GET' });
+      lease = await this.fetchDirect_ACU(url, { method: 'GET' }, signal);
+      const response = lease.response;
       if (!response.ok) return { ok: false, reason: `${AGENT_ENCYCLOPEDIA_SOURCE_LABELS_ACU[source]} 返回 HTTP ${response.status}` };
-      const data = await response.json();
+      const data = await readBodyWithAbort_ACU(response.json(), lease.signal);
       if (data && typeof data === 'object' && data.error) {
         return { ok: false, reason: `${AGENT_ENCYCLOPEDIA_SOURCE_LABELS_ACU[source]} API 错误：${String(data.error.info ?? data.error.code ?? '未知')}` };
       }
       return { ok: true, data };
     } catch (error) {
+      if (signal?.aborted || (isAbortError_ACU(error) && signal?.aborted)) throw error;
       return { ok: false, reason: `${AGENT_ENCYCLOPEDIA_SOURCE_LABELS_ACU[source]} 请求失败（网络不可达或被浏览器拦截）：${error instanceof Error ? error.message : String(error)}` };
+    } finally {
+      lease?.cleanup();
     }
   }
 
@@ -290,14 +341,15 @@ export class AgentWebClient_ACU {
    * 萌娘百科关闭了 list=search，改用 opensearch（前缀匹配，返回标题与链接）；维基用全文 search。
    * 百度百科需要上游 /api/search/visit 转发，TT 未提供该路由，直接返回不可用说明。
    */
-  async searchEncyclopedia(source: AgentEncyclopediaSource_ACU, query: string): Promise<{ candidates: AgentEncyclopediaCandidate_ACU[]; note: string }> {
+  async searchEncyclopedia(source: AgentEncyclopediaSource_ACU, query: string, signal?: AbortSignal | null): Promise<{ candidates: AgentEncyclopediaCandidate_ACU[]; note: string }> {
+    throwIfAborted_ACU(signal);
     const trimmed = query.trim();
     if (!trimmed) return { candidates: [], note: '检索词为空' };
     if (source === 'baidu') {
       return { candidates: [], note: '百度百科需要经酒馆服务器转发（上游 /api/search/visit），TT 当前未提供该路由；请用萌娘百科 / 维基百科或 SearXNG 通道' };
     }
     if (source === 'moegirl') {
-      const result = await this.fetchMediawikiJson_ACU(source, { action: 'opensearch', search: trimmed, limit: String(ENCYCLOPEDIA_CANDIDATE_LIMIT_ACU), redirects: 'resolve' });
+      const result = await this.fetchMediawikiJson_ACU(source, { action: 'opensearch', search: trimmed, limit: String(ENCYCLOPEDIA_CANDIDATE_LIMIT_ACU), redirects: 'resolve' }, signal);
       if (result.ok === false) return { candidates: [], note: result.reason };
       const titles: unknown = Array.isArray(result.data) ? result.data[1] : [];
       const urls: unknown = Array.isArray(result.data) ? result.data[3] : [];
@@ -310,7 +362,7 @@ export class AgentWebClient_ACU {
       }));
       return { candidates, note: candidates.length ? '' : '萌娘百科 opensearch 无候选（它按标题前缀匹配，试试角色全名、作品名或去掉修饰词）' };
     }
-    const result = await this.fetchMediawikiJson_ACU(source, { action: 'query', list: 'search', srsearch: trimmed, srlimit: String(ENCYCLOPEDIA_CANDIDATE_LIMIT_ACU) });
+    const result = await this.fetchMediawikiJson_ACU(source, { action: 'query', list: 'search', srsearch: trimmed, srlimit: String(ENCYCLOPEDIA_CANDIDATE_LIMIT_ACU) }, signal);
     if (result.ok === false) return { candidates: [], note: result.reason };
     const hits: unknown = result.data?.query?.search;
     const candidates = (Array.isArray(hits) ? hits : []).flatMap(hit => {
@@ -326,14 +378,15 @@ export class AgentWebClient_ACU {
    * @param title 词条标题（可来自 searchEncyclopedia 的候选）
    * @param charLimit 原文字数上限
    */
-  async readEncyclopedia(source: AgentEncyclopediaSource_ACU, title: string, charLimit: number): Promise<AgentFetchedPage_ACU> {
+  async readEncyclopedia(source: AgentEncyclopediaSource_ACU, title: string, charLimit: number, signal?: AbortSignal | null): Promise<AgentFetchedPage_ACU> {
+    throwIfAborted_ACU(signal);
     const trimmed = title.trim();
     if (source === 'baidu') {
       return { source, title: trimmed, url: `https://baike.baidu.com/item/${encodeURIComponent(trimmed)}`, text: '', status: 'unavailable', note: '百度百科需要经酒馆服务器转发（上游 /api/search/visit），TT 当前未提供该路由；请用萌娘百科 / 维基百科或 SearXNG 通道' };
     }
     const url = encyclopediaPageUrl_ACU(source, trimmed || title);
     if (!trimmed) return { source, title: '', url, text: '', status: 'unavailable', note: '词条标题为空' };
-    const result = await this.fetchMediawikiJson_ACU(source, { action: 'query', prop: 'extracts', explaintext: '1', exlimit: '1', exsectionformat: 'plain', redirects: '1', titles: trimmed });
+    const result = await this.fetchMediawikiJson_ACU(source, { action: 'query', prop: 'extracts', explaintext: '1', exlimit: '1', exsectionformat: 'plain', redirects: '1', titles: trimmed }, signal);
     if (result.ok === false) return { source, title: trimmed, url, text: '', status: 'unavailable', note: result.reason };
     const pages = result.data?.query?.pages;
     const page = pages && typeof pages === 'object' ? Object.values(pages as Record<string, any>)[0] : null;
@@ -352,19 +405,22 @@ export class AgentWebClient_ACU {
    * @param query 检索词
    * @param settings 网页检索设置（提供方、SearXNG 地址与可选透传键）
    */
-  async webSearch(query: string, settings: Pick<ContinuationWebResearchSettings_ACU, 'searchProvider' | 'searxngBaseUrl'> & SearxngSearchOptions_ACU): Promise<{ hits: AgentWebSearchHit_ACU[]; note: string }> {
+  async webSearch(query: string, settings: Pick<ContinuationWebResearchSettings_ACU, 'searchProvider' | 'searxngBaseUrl'> & SearxngSearchOptions_ACU, signal?: AbortSignal | null): Promise<{ hits: AgentWebSearchHit_ACU[]; note: string }> {
+    throwIfAborted_ACU(signal);
     const trimmed = query.trim();
     if (!trimmed) return { hits: [], note: '检索词为空' };
     const provider: ContinuationWebSearchProvider_ACU = settings.searchProvider;
-    if (provider === 'searxng') return this.searchSearxng_ACU(trimmed, settings.searxngBaseUrl, settings);
+    if (provider === 'searxng') return this.searchSearxng_ACU(trimmed, settings.searxngBaseUrl, settings, signal);
     return { hits: [], note: `${provider} 需要酒馆服务器「网页搜索」转发（上游 /api/search/${provider}），TT 仅提供 /api/search/searxng；请把搜索引擎切换为 SearXNG（自建或公共实例）后再搜` };
   }
 
-  private async searchSearxng_ACU(query: string, baseUrl: string, options: SearxngSearchOptions_ACU = {}): Promise<{ hits: AgentWebSearchHit_ACU[]; note: string }> {
+  private async searchSearxng_ACU(query: string, baseUrl: string, options: SearxngSearchOptions_ACU = {}, signal?: AbortSignal | null): Promise<{ hits: AgentWebSearchHit_ACU[]; note: string }> {
+    throwIfAborted_ACU(signal);
     if (!baseUrl.trim()) return { hits: [], note: 'SearXNG 实例地址未配置（续写设置 → 网页检索 → SearXNG 实例地址，如 https://searx.example.org；可自建实例或选用公共实例）' };
     // 客户端侧闸门：baseUrl 会被服务端拿去出网，内网/非法地址在此直接拒绝，不发请求。
     const denied = evaluateSearxngBaseUrlPolicy_ACU(baseUrl);
     if (denied) return { hits: [], note: `SearXNG 实例地址被拒绝：${denied}` };
+    let lease: { response: Response; signal: AbortSignal; cleanup: () => void } | null = null;
     try {
       // TT DTO 全透传（见 TT tests/search-routes-contract.test.mjs 三键断言）：
       // preferences/categories 为 Option，有值才填，空（或全空白）不填。
@@ -373,15 +429,18 @@ export class AgentWebClient_ACU {
       if (preferences) body.preferences = preferences;
       const categories = options.categories?.trim();
       if (categories) body.categories = categories;
-      const response = await this.fetchDirect_ACU('/api/search/searxng', {
+      lease = await this.fetchDirect_ACU('/api/search/searxng', {
         method: 'POST',
         headers: { ...this.dependencies.hostHeaders(), 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-      });
-      if (!response.ok) return { hits: [], note: `SearXNG 请求失败（HTTP ${response.status}）：实例地址可能填错、实例离线，或实例拒绝了该查询` };
-      return { hits: parseSearxngHtml_ACU(await response.text()), note: '' };
+      }, signal);
+      if (!lease.response.ok) return { hits: [], note: `SearXNG 请求失败（HTTP ${lease.response.status}）：实例地址可能填错、实例离线，或实例拒绝了该查询` };
+      return { hits: parseSearxngHtml_ACU(await readBodyWithAbort_ACU(lease.response.text(), lease.signal)), note: '' };
     } catch (error) {
+      if (signal?.aborted || (isAbortError_ACU(error) && signal?.aborted)) throw error;
       return { hits: [], note: `SearXNG 请求异常：${error instanceof Error ? error.message : String(error)}` };
+    } finally {
+      lease?.cleanup();
     }
   }
 
@@ -392,7 +451,8 @@ export class AgentWebClient_ACU {
    * @param settings 黑名单与字数上限
    * @param hostOrigin 酒馆自身 origin，用于拒绝抓自己
    */
-  async webRead(url: string, settings: Pick<ContinuationWebResearchSettings_ACU, 'blockedDomains' | 'pageCharLimit'>, hostOrigin?: string): Promise<AgentFetchedPage_ACU> {
+  async webRead(url: string, settings: Pick<ContinuationWebResearchSettings_ACU, 'blockedDomains' | 'pageCharLimit'>, hostOrigin?: string, signal?: AbortSignal | null): Promise<AgentFetchedPage_ACU> {
+    throwIfAborted_ACU(signal);
     const trimmed = String(url ?? '').trim();
     const denied = evaluateWebUrlPolicy_ACU(trimmed, parseBlockedDomains_ACU(settings.blockedDomains), hostOrigin);
     if (denied) return { source: 'web', title: '', url: trimmed, text: '', status: 'blocked', note: denied };

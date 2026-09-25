@@ -4,7 +4,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const { mockSettings, mockGetChatArray, mockSaveChatToHost, mockSaveChatToHostStrict, mockSaveSettings, mockGetCurrentChatPlotScopeState, mockSetCurrentChatPlotScopeState, mockBuildChatPlotScopeState, mockGetCurrentRuntimePresetName, mockFindPresetByName, mockNormalizePresetSelection, mockIsDefaultPresetSelection, mockGetPresetBinding, mockSetPresetBinding, mockClearPresetBinding, mockEnsurePresetBindingsStore, mockEnsurePlotTasksCompat, mockApplyPresetToSettings, mockResetPlotSettingsToDefault, mockSyncEditableState, mockReplaceWithSnapshot, mockGetGlobalRevision, mockTempPlotToSaveRef, mockSetTempPlotToSave, mockPlanningGuard, mockCurrentChatFileIdentifierRef } = vi.hoisted(() => ({
+const { mockSettings, mockGetChatArray, mockSaveChatToHost, mockSaveChatToHostStrict, mockSaveSettings, mockGetCurrentChatPlotScopeState, mockSetCurrentChatPlotScopeState, mockBuildChatPlotScopeState, mockGetCurrentRuntimePresetName, mockFindPresetByName, mockNormalizePresetSelection, mockIsDefaultPresetSelection, mockGetPresetBinding, mockSetPresetBinding, mockClearPresetBinding, mockEnsurePresetBindingsStore, mockEnsurePlotTasksCompat, mockApplyPresetToSettings, mockResetPlotSettingsToDefault, mockSyncEditableState, mockReplaceWithSnapshot, mockGetGlobalRevision, mockTempPlotToSaveRef, mockSetTempPlotToSave, mockPlanningGuard, mockCurrentChatFileIdentifierRef, mockCapturePlotRuntimeScope, mockIsSamePlotRuntimeScope } = vi.hoisted(() => ({
   mockSettings: { plotSettings: { enabled: true, lastUsedPresetName: '', promptPresets: [] } } as any,
   mockGetChatArray: vi.fn(() => []),
   mockSaveChatToHost: vi.fn(),
@@ -31,6 +31,8 @@ const { mockSettings, mockGetChatArray, mockSaveChatToHost, mockSaveChatToHostSt
   mockSetTempPlotToSave: vi.fn(),
   mockPlanningGuard: { inProgress: false, ignoreNextGenerationEndedCount: 0 } as any,
   mockCurrentChatFileIdentifierRef: { value: 'test-chat' },
+  mockCapturePlotRuntimeScope: vi.fn(),
+  mockIsSamePlotRuntimeScope: vi.fn(),
 }));
 
 vi.mock('../../../../src/service/plot/plot-state', () => ({
@@ -48,6 +50,11 @@ vi.mock('../../../../src/service/runtime/state-manager', () => ({
     return mockTempPlotToSaveRef.value;
   },
   _set_tempPlotToSave_ACU: mockSetTempPlotToSave,
+}));
+
+vi.mock('../../../../src/service/runtime/plot-runtime/plot-runtime-scope', () => ({
+  capturePlotRuntimeScope_ACU: mockCapturePlotRuntimeScope,
+  isSamePlotRuntimeScope_ACU: mockIsSamePlotRuntimeScope,
 }));
 
 vi.mock('../../../../src/data/gateways/chat-gateway', () => ({
@@ -100,6 +107,14 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockTempPlotToSaveRef.value = null;
   mockCurrentChatFileIdentifierRef.value = 'test-chat';
+  mockCapturePlotRuntimeScope.mockReturnValue({ chatId: 'test-chat', characterId: 'char-1', isolationKey: '', reliable: true });
+  mockIsSamePlotRuntimeScope.mockImplementation((before: any, after: any) => (
+    before?.reliable === true
+    && after?.reliable === true
+    && before.chatId === after.chatId
+    && before.characterId === after.characterId
+    && before.isolationKey === after.isolationKey
+  ));
   mockSaveChatToHostStrict.mockResolvedValue(undefined);
   // _set_tempPlotToSave_ACU 的真实语义是更新模块级状态；mock 里通过 ref 联动，
   // 否则实现内 _set_tempPlotToSave_ACU(null) 后 ref.value 不会同步，断言失真。
@@ -262,6 +277,23 @@ describe('getPlotFromHistory_ACU', () => {
 
 // ═══ savePlotToLatestMessage_ACU ═══
 describe('savePlotToLatestMessage_ACU', () => {
+  it('pending 所属作用域已切换时不得把剧情写入新聊天', async () => {
+    const targetInNewChat = { is_user: true, mes: '你好', _qrf_plot_pending_hash: 'hash_你好' };
+    mockGetChatArray.mockReturnValue([targetInNewChat]);
+    mockCurrentChatFileIdentifierRef.value = 'chat-b';
+    mockCapturePlotRuntimeScope.mockReturnValue({ chatId: 'chat-b', characterId: 'char-2', isolationKey: 'iso-b', reliable: true });
+    mockTempPlotToSaveRef.value = {
+      content: '来自 A 的剧情',
+      userInputHash: 'hash_你好',
+      runtimeScope: { chatId: 'chat-a', characterId: 'char-1', isolationKey: '', reliable: true },
+    };
+
+    const out = await savePlotToLatestMessage_ACU(true);
+
+    expect(out).toMatchObject({ status: 'superseded' });
+    expect(targetInNewChat.qrf_plot).toBeUndefined();
+    expect(mockSaveChatToHostStrict).not.toHaveBeenCalled();
+  });
   it('flushPlotPendingSave_ACU：syncOnly 未命中时不启动定时器，直接返回 deferred', async () => {
     mockPlanningGuard.inProgress = false;
     mockPlanningGuard.ignoreNextGenerationEndedCount = 0;

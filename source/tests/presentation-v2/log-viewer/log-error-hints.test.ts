@@ -119,6 +119,11 @@ describe('resolveLogErrorHint', () => {
     expect(hintIdFor('embedding 维度不匹配：期望 1024，实际 768')).toBe('vector');
   });
 
+  it('裸串函数名里的 Vector 不触发 vector 规则（按词边界匹配）', () => {
+    expect(hintIdFor('手动重填被回放根准入阻断：collectManualRefillSummaryVectorCleanup_ACU')).toBe('checkpoint-replay');
+    expect(hintIdFor('vector index rebuild failed: boom')).toBe('vector');
+  });
+
   it('中转站回显 quota_error:false 时不再误报限流；真额度错误仍命中', () => {
     expect(hintIdFor('API请求失败: 400 {"error":{"message":"bad request","quota_error":false}}')).not.toBe('http-429');
     expect(hintIdFor('API请求失败: 400 {"error":{"message":"bad request","quota_error": false}}')).not.toBe('http-429');

@@ -43,6 +43,7 @@ import {
   isRecentUserSendIntent_ACU,
   recordLastUserSend_ACU,
   recordGenerationContext_ACU,
+  resolveGenerationContextForEnded_ACU,
   consumeGenerationContextForEnded_ACU,
   discardLatestGenerationContext_ACU,
   isQuietLikeGeneration_ACU,
@@ -87,6 +88,7 @@ beforeEach(() => {
   generationGate_ACU.lastGeneration = null;
   generationGate_ACU.generationSeq = 0;
   generationGate_ACU.activeGenerations = [];
+  (generationGate_ACU as any).generationEndMatchQuarantineUntil_ACU = 0;
   // [152 收紧] AI 楼签名是门控唯一的跨轮状态，每轮回到「启动后尚未放行」形态。
   // 清空后再断言一次：哪天有人把这个字段摘掉/改名（或换了个整对象重置），这里先红，
   // 而不是让「无配对 + 签名相同 → 丢弃」的用例静默假绿。
@@ -240,6 +242,46 @@ describe('recordGenerationContext_ACU', () => {
     expect(generationGate_ACU.activeGenerations).toHaveLength(0);
   });
 
+});
+
+describe('resolveGenerationContextForEnded_ACU — 并发结束配对', () => {
+  const pre0 = { aiFloorCount: 2, latestAiMessageId: 20, latestContentHash: 'pre-0' };
+  const pre1 = { aiFloorCount: 3, latestAiMessageId: 30, latestContentHash: 'pre-1' };
+  const endedAfterOutput = { aiFloorCount: 3, latestAiMessageId: 31, latestContentHash: 'ended-1' };
+  const endedQuiet = { aiFloorCount: 3, latestAiMessageId: 31, latestContentHash: 'ended-1' };
+
+  it('normal 与 quiet 反向交错时不能 LIFO 吃掉 quiet，签名无法唯一证明则 fail closed', () => {
+    recordGenerationContext_ACU('normal', {}, false, pre0);
+    recordGenerationContext_ACU('quiet', { quiet_prompt: '后台任务' }, false, pre0);
+
+    const result = resolveGenerationContextForEnded_ACU(endedAfterOutput);
+
+    expect(result).toEqual({ status: 'ambiguous', context: null });
+    expect(generationGate_ACU.activeGenerations).toHaveLength(0);
+    // 反向到达的第二个 ENDED 也不得把已失配的 normal 当成 quiet 的后续收尾。
+    expect(resolveGenerationContextForEnded_ACU(endedAfterOutput)).toEqual({ status: 'ambiguous', context: null });
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU(undefined, endedAfterOutput)).toBe(false);
+  });
+
+  it('即使两个上下文的 preSignature 不同，ENDED 无 id 时仍不把较早 normal 误认成 quiet 的收尾', () => {
+    recordGenerationContext_ACU('normal', {}, false, pre0);
+    recordGenerationContext_ACU('quiet', { quiet_prompt: '后台任务' }, false, pre1);
+
+    const result = resolveGenerationContextForEnded_ACU(endedQuiet);
+
+    expect(result.status).toBe('ambiguous');
+    expect(result.context).toBeNull();
+    expect(shouldProcessAutoTableUpdateForGenerationEnded_ACU()).toBe(false);
+  });
+
+  it('只剩一个上下文时按唯一活动上下文配对，不受 preSignature 是否变化影响', () => {
+    const normal = recordGenerationContext_ACU('normal', {}, false, pre0);
+
+    expect(resolveGenerationContextForEnded_ACU(endedAfterOutput)).toEqual({
+      status: 'matched',
+      context: normal,
+    });
+  });
 });
 
 // ═══ isQuietLikeGeneration_ACU ═══

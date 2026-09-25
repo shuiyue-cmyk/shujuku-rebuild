@@ -1052,6 +1052,54 @@ describe('runAgentDecisionForPlot_ACU', () => {
     expect(result.active).toBe(true);
   });
 
+  it('依赖任务 ID 不存在时 fail-closed，不把非法计划交给剧情运行时', async () => {
+    mockCallAIWithPreset.mockResolvedValue(JSON.stringify({
+      taskPlan: [
+        { taskId: 'prerequisite', run: true, effectiveStage: 1, effectiveOrder: 0 },
+        { taskId: 'dependent', run: true, effectiveStage: 2, effectiveOrder: 0 },
+      ],
+      plotGreenlights: {},
+      finalGenerationGreenlights: [],
+      fallbackMode: false,
+    }));
+
+    const result = await runAgentDecisionForPlot_ACU({
+      plotSettings: { agentWorldbookControl: { enabled: true, mode: 'agent' } },
+      userMessage: '继续',
+      sharedContext: {},
+      enabledTasks: [
+        { id: 'prerequisite', name: '前置', description: '先生成 recap', stage: 1, order: 0, enabled: true, promptGroup: { messages: [] } },
+        { id: 'dependent', name: '后置', description: '依赖 recap', stage: 2, order: 0, enabled: true, agentControl: { dependsOnTaskIds: ['missing'] }, promptGroup: { messages: [] } },
+      ],
+    });
+
+    expect(result).toMatchObject({ active: false, fallbackReason: 'task_dependency_missing' });
+  });
+
+  it('依赖任务 stage 不早于 dependent 时 fail-closed', async () => {
+    mockCallAIWithPreset.mockResolvedValue(JSON.stringify({
+      taskPlan: [
+        { taskId: 'dependent', run: true, effectiveStage: 1, effectiveOrder: 0 },
+        { taskId: 'prerequisite', run: true, effectiveStage: 2, effectiveOrder: 0 },
+      ],
+      plotGreenlights: {},
+      finalGenerationGreenlights: [],
+      fallbackMode: false,
+    }));
+
+    const result = await runAgentDecisionForPlot_ACU({
+      plotSettings: { agentWorldbookControl: { enabled: true, mode: 'agent' } },
+      userMessage: '继续',
+      sharedContext: {},
+      enabledTasks: [
+        { id: 'prerequisite', name: '前置', description: '先生成 recap', stage: 2, order: 0, enabled: true, promptGroup: { messages: [] } },
+        { id: 'dependent', name: '后置', description: '依赖 recap', stage: 1, order: 0, enabled: true, agentControl: { dependsOnTaskIds: ['prerequisite'] }, promptGroup: { messages: [] } },
+      ],
+    });
+
+    expect(result).toMatchObject({ active: false, fallbackReason: 'task_dependency_stage_conflict' });
+  });
+
   it('AbortError 立即终止且不被不可重试跳出降级为普通请求失败', async () => {
     const aborted = Object.assign(new Error('请求已取消'), { name: 'AbortError' });
     mockCallAIWithPreset.mockRejectedValue(aborted);

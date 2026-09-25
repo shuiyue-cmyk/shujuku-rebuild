@@ -4,7 +4,7 @@ const h = vi.hoisted(() => ({
   chat: [] as any[], providerData: null as any, templateData: null as any, guideData: null as any, scope: { version: 1, old: true } as any, guide: { version: 1, tags: {} } as any,
   strictSave: vi.fn(), clear: vi.fn(), cleanup: vi.fn().mockResolvedValue([]), replace: vi.fn(), restoreRuntime: vi.fn(), clearRuntime: vi.fn(), persist: vi.fn(), runtimeSnapshot: undefined as unknown, snapshotError: null as Error | null, hasClearRuntime: true, hasRestoreRuntime: true,
   peekScope: vi.fn(), peekGuide: vi.fn(),
-  setScope: vi.fn(), setGuideContainer: vi.fn(), setScopeState: vi.fn(), setGuideData: vi.fn(), applyScope: vi.fn(), reload: vi.fn(), deleteGenerated: vi.fn(), refreshMerged: vi.fn(), sanitizeTemplate: vi.fn(), sqliteMode: false, storageMode: 'native' as 'native' | 'sqlite',
+  setScope: vi.fn(), setGuideContainer: vi.fn(), setScopeState: vi.fn(), setGuideData: vi.fn(), applyScope: vi.fn(), reload: vi.fn(), deleteGenerated: vi.fn(), refreshMerged: vi.fn(), sanitizeTemplate: vi.fn(), sqliteMode: false, storageMode: 'native' as 'native' | 'sqlite', isolationKey: '',
 }));
 vi.mock('../../../src/shared/utils', () => ({ hashUserInput_ACU: (input: string) => {
   let hash = 2166136261;
@@ -18,7 +18,7 @@ vi.mock('../../../src/data/storage/chat-history', () => ({
 }));
 vi.mock('../../../src/data/gateways/chat-gateway', () => ({ saveChatToHostStrict_ACU: h.strictSave }));
 vi.mock('../../../src/service/chat/chat-service', () => ({ getChatArray_ACU: () => h.chat, clearAllAiTableDataForCheckpointRestore_ACU: h.clear, cleanupCheckpointVectorIndexManifestsAfterCommit_ACU: h.cleanup }));
-vi.mock('../../../src/service/runtime/state-manager', () => ({ getCurrentIsolationKey_ACU: () => '' }));
+vi.mock('../../../src/service/runtime/state-manager', () => ({ settings_ACU: { dataIsolationEnabled: true, dataIsolationCode: '' }, getCurrentIsolationKey_ACU: () => h.isolationKey }));
 vi.mock('../../../src/service/settings/settings-service', () => ({ applyTemplateScopeForCurrentChat_ACU: h.applyScope }));
 vi.mock('../../../src/service/worldbook/pipeline', () => ({ deleteAllGeneratedEntries_ACU: h.deleteGenerated, refreshMergedDataAndNotify_ACU: h.refreshMerged }));
 vi.mock('../../../src/service/table/storage-mode', () => ({ isSqliteMode: () => h.sqliteMode }));
@@ -34,6 +34,7 @@ vi.mock('../../../src/service/table/table-service', () => ({ persistTablesToChat
 vi.mock('../../../src/service/table/table-write-transaction', () => ({ runTableWriteTransaction_ACU: async (_: any, task: any) => task({ runCommit: async (fn: any) => fn(), assertFresh: vi.fn() }) }));
 
 import { buildCurrentTableCheckpoint_ACU, parseTableCheckpointFile_ACU, restoreTableCheckpointToLatestAi_ACU } from '../../../src/service/table/table-checkpoint-transfer';
+import { settings_ACU } from '../../../src/service/runtime/state-manager';
 
 const data = { mate: { type: 'acu', version: 1 }, sheet_0: { name: '表', content: [['row_id'], ['1']] } };
 const canonicalize = (value: any): any => Array.isArray(value) ? value.map(canonicalize) : value && typeof value === 'object' ? Object.keys(value).sort().reduce((out: any, key) => ({ ...out, [key]: canonicalize(value[key]) }), {}) : value;
@@ -47,7 +48,7 @@ const signCheckpoint = (payload: any) => ({ ...payload, integrity: { algorithm: 
 const checkpoint = signCheckpoint({ format: 'acu-table-checkpoint', version: 1, createdAt: 1, source: { storageMode: 'native' }, tableSnapshot: data, templateSnapshot: { data, presetName: '预设' }, guideSnapshot: { data } }) as any;
 
 describe('table checkpoint transfer', () => {
-  beforeEach(() => { vi.clearAllMocks(); h.chat = [{ is_user: true }, { is_user: false, TavernDB_ACU_Data: { old: true } }]; h.providerData = null; h.templateData = data; h.guideData = data; h.runtimeSnapshot = undefined; h.snapshotError = null; h.hasClearRuntime = true; h.hasRestoreRuntime = true; h.sqliteMode = false; h.storageMode = 'native'; h.scope = { version: 1, old: true }; h.guide = { version: 1, tags: {} }; h.peekScope.mockImplementation(() => h.scope); h.peekGuide.mockImplementation(() => h.guide); h.sanitizeTemplate.mockImplementation((source: any) => { const templateObj = typeof source === 'string' ? JSON.parse(source) : JSON.parse(JSON.stringify(source)); return { templateObj, templateStr: JSON.stringify(templateObj) }; }); h.replace.mockImplementation(async (next: any) => { h.providerData = next; return { success: true }; }); h.persist.mockResolvedValue({ saved: true, messageIndex: 1 }); h.clear.mockImplementation(async () => { delete h.chat[1].TavernDB_ACU_Data; return { clearedCount: 1, vectorManifestsToDeleteAfterCommit: [] }; }); h.setScopeState.mockImplementation((state: any) => { h.scope = state; return true; }); });
+  beforeEach(() => { vi.clearAllMocks(); h.chat = [{ is_user: true }, { is_user: false, TavernDB_ACU_Data: { old: true } }]; h.providerData = null; h.templateData = data; h.guideData = data; h.runtimeSnapshot = undefined; h.snapshotError = null; h.hasClearRuntime = true; h.hasRestoreRuntime = true; h.sqliteMode = false; h.storageMode = 'native'; h.isolationKey = ''; settings_ACU.dataIsolationEnabled = true; settings_ACU.dataIsolationCode = ''; h.scope = { version: 1, old: true }; h.guide = { version: 1, tags: {} }; h.peekScope.mockImplementation(() => h.scope); h.peekGuide.mockImplementation(() => h.guide); h.sanitizeTemplate.mockImplementation((source: any) => { const templateObj = typeof source === 'string' ? JSON.parse(source) : JSON.parse(JSON.stringify(source)); return { templateObj, templateStr: JSON.stringify(templateObj) }; }); h.replace.mockImplementation(async (next: any) => { h.providerData = next; return { success: true }; }); h.persist.mockResolvedValue({ saved: true, messageIndex: 1 }); h.clear.mockImplementation(async () => { delete h.chat[1].TavernDB_ACU_Data; return { clearedCount: 1, vectorManifestsToDeleteAfterCommit: [] }; }); h.setScopeState.mockImplementation((state: any) => { h.scope = state; return true; }); });
   it('在解析阶段拒绝非法 JSON、危险键与完整性不匹配', () => { expect(parseTableCheckpointFile_ACU('{')).toMatchObject({ success: false }); expect(parseTableCheckpointFile_ACU('{"format":"acu-table-checkpoint","__proto__":{}}')).toMatchObject({ success: false }); expect(parseTableCheckpointFile_ACU(JSON.stringify({ ...checkpoint, integrity: { algorithm: 'fnv1a', payloadHash: 'bad' } }))).toMatchObject({ success: false }); });
   it('在解析阶段拒绝与运行时表头不一致的指导表', () => { const mismatched = { ...checkpoint, guideSnapshot: { data: { ...data, sheet_0: { ...data.sheet_0, content: [['row_id', '额外列']] } } } }; expect(parseTableCheckpointFile_ACU(JSON.stringify(mismatched))).toMatchObject({ success: false }); });
   it('允许模板和指导表包含尚未物化到运行时的表', () => { const deferredSheet = { name: '未物化表', content: [['row_id', '名称']] }; const valid = signCheckpoint({ ...checkpoint, integrity: undefined, templateSnapshot: { ...checkpoint.templateSnapshot, data: { ...data, sheet_1: deferredSheet } }, guideSnapshot: { data: { ...data, sheet_1: deferredSheet } } }); expect(parseTableCheckpointFile_ACU(JSON.stringify(valid))).toMatchObject({ success: true }); });
@@ -55,6 +56,15 @@ describe('table checkpoint transfer', () => {
   it('在解析阶段拒绝模板与指导表的 sheet 集合分裂', () => { const invalid = { ...checkpoint, templateSnapshot: { ...checkpoint.templateSnapshot, data: { ...data, sheet_1: { name: '模板独有表', content: [['row_id']] } } } }; expect(parseTableCheckpointFile_ACU(JSON.stringify(invalid))).toMatchObject({ success: false }); });
   it('恢复预检使用纯读取快照，不通过 getter 隐式迁移 metadata', async () => { h.snapshotError = new Error('snapshot failed'); await restoreTableCheckpointToLatestAi_ACU(checkpoint); expect(h.peekScope).not.toHaveBeenCalled(); expect(h.peekGuide).not.toHaveBeenCalled(); h.snapshotError = null; h.hasClearRuntime = false; await restoreTableCheckpointToLatestAi_ACU(checkpoint); expect(h.peekScope).not.toHaveBeenCalled(); expect(h.peekGuide).not.toHaveBeenCalled(); h.hasClearRuntime = true; await restoreTableCheckpointToLatestAi_ACU(checkpoint); expect(h.peekScope).toHaveBeenCalledWith(h.chat); expect(h.peekGuide).toHaveBeenCalledWith(h.chat); });
   it('以一次严格 data_replace 保存完整 checkpoint，并将实际快照表标记为 filled', async () => { const result = await restoreTableCheckpointToLatestAi_ACU(checkpoint); expect(result).toMatchObject({ success: true, restoredMessageIndex: 1 }); expect(h.persist).toHaveBeenCalledWith(expect.objectContaining({ strictSave: true, targetSheetKeys: ['sheet_0'], trackingSheetKeys: ['sheet_0'], filledSheetKeys: ['sheet_0'], operations: [{ kind: 'data_replace', data, reason: 'import' }] })); expect(h.strictSave).not.toHaveBeenCalled(); });
+  it('将当前 isolation 及其配置传给清理边界，禁止误清其他标签', async () => {
+    h.isolationKey = 'beta';
+    settings_ACU.dataIsolationEnabled = true;
+    settings_ACU.dataIsolationCode = 'beta';
+
+    await restoreTableCheckpointToLatestAi_ACU(checkpoint);
+
+    expect(h.clear).toHaveBeenCalledWith('beta', { enabled: true, code: 'beta' });
+  });
   it('未声明覆盖楼层时不向持久化层传递 restoreUpToAiFloor（与旧行为逐字一致）', async () => {
     await restoreTableCheckpointToLatestAi_ACU(checkpoint);
     const options = h.persist.mock.calls[0][0];

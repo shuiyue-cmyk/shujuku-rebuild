@@ -6,6 +6,7 @@ import { startRuntimePerformanceSpan_ACU } from '../../shared/runtime-performanc
 import { SqliteEngine } from '../../data/sqlite/sqlite-engine';
 import { SyncBridge } from '../../data/sqlite/sync-bridge';
 import { normalizeSqlStructure, normalizeStatementValues } from '../../data/sqlite/sql-normalizer';
+import { stripHtmlCommentMarkersOutsideSqlLiterals_ACU } from './sql-protocol-markers';
 import type { TableCheckpointV2_ACU, TableMutationLogEntryV2_ACU, TableMutationOperationV2_ACU, TablePatchV2_ACU, TableSheetCheckpointV2_ACU, TableSheetLifecycleEntryV2_ACU, TableSheetLifecycleProjectionV2_ACU, TableStorageFrameV2_ACU } from './storage-frame-v2-types';
 import { isV2TagData_ACU } from './storage-strategy-resolver';
 import { writeMessageIdentity_ACU } from '../../data/repositories/chat-message-data-repo';
@@ -1193,7 +1194,7 @@ function splitSqlStatementsForReplay_ACU(sql: string): string[] {
 
 function normalizeSqlStatementsForReplay_ACU(statements: string[]): string[] {
   return statements
-    .flatMap(statement => splitSqlStatementsForReplay_ACU(String(statement || '').replace(/<!--|-->/g, '').trim()))
+    .flatMap(statement => splitSqlStatementsForReplay_ACU(stripHtmlCommentMarkersOutsideSqlLiterals_ACU(String(statement || '')).trim()))
     .map(statement => normalizeStatementValues(normalizeSqlStructure(statement)))
     .filter(Boolean);
 }
@@ -1990,7 +1991,7 @@ function parseDslArgs_ACU(argsString: string): any[] | null {
 }
 
 function extractTableEditDslCommands_ACU(text: string): string[] {
-  const cleaned = String(text || '').replace(/<!--|-->/g, '');
+  const cleaned = stripHtmlCommentMarkersOutsideSqlLiterals_ACU(String(text || ''));
   const commands: string[] = [];
   const commandPattern = /(?:insertRow|updateRow|deleteRow)\s*\(/g;
   let searchStart = 0;

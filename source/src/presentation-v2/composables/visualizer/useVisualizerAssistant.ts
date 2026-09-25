@@ -15,7 +15,12 @@ import {
   type TemplateAssistantSessionResult_ACU,
   type TemplateAssistantSessionRound_ACU,
 } from '../../../service/template-assistant/service';
-import { assertVisualizerDataOpsEditable_ACU } from '../../../service/visualizer/visualizer-data-ops';
+import {
+  assertVisualizerDataOpsEditable_ACU,
+  recordVisualizerCellUpdate_ACU,
+  recordVisualizerRowDelete_ACU,
+  recordVisualizerRowInsert_ACU,
+} from '../../../service/visualizer/visualizer-data-ops';
 import { useToastStore } from '../../stores/toast-store';
 import {
   useVisualizerStore,
@@ -287,6 +292,56 @@ export function getTurnApplyPayload(turn: VisualizerAssistantTurn): VisualizerAs
     };
   }
   return null;
+}
+
+function rowIdOf(row: unknown): string {
+  return Array.isArray(row) ? String(row[0] ?? '').trim() : '';
+}
+
+function recordAssistantCandidateDataOps(
+  visualizer: ReturnType<typeof useVisualizerStore>,
+  previousData: Record<string, any>,
+  candidateData: Record<string, any>,
+): void {
+  for (const [sheetKey, candidateSheet] of Object.entries(candidateData || {})) {
+    if (!sheetKey.startsWith('sheet_') || !candidateSheet || typeof candidateSheet !== 'object') continue;
+    const previousSheet = previousData?.[sheetKey];
+    if (!previousSheet || typeof previousSheet !== 'object') continue;
+
+    const previousRows = Array.isArray(previousSheet.content) ? previousSheet.content.slice(1) : [];
+    const candidateRows = Array.isArray(candidateSheet.content) ? candidateSheet.content.slice(1) : [];
+    const previousById = new Map<string, any[]>();
+    for (const row of previousRows) {
+      const rowId = rowIdOf(row);
+      if (rowId) previousById.set(rowId, row);
+    }
+    const candidateIds = new Set<string>();
+    const headers = Array.isArray(candidateSheet.content?.[0]) ? candidateSheet.content[0] : [];
+
+    for (const row of candidateRows) {
+      const rowId = rowIdOf(row);
+      if (!rowId) continue;
+      candidateIds.add(rowId);
+      const previousRow = previousById.get(rowId);
+      if (!previousRow) {
+        recordVisualizerRowInsert_ACU(visualizer, sheetKey, rowId);
+        continue;
+      }
+      for (let columnIndex = 1; columnIndex < headers.length; columnIndex += 1) {
+        const columnName = String(headers[columnIndex] ?? '').trim();
+        if (!columnName) continue;
+        const nextValue = row[columnIndex] === undefined ? '' : row[columnIndex];
+        const previousValue = previousRow[columnIndex] === undefined ? '' : previousRow[columnIndex];
+        if (String(nextValue) !== String(previousValue)) {
+          recordVisualizerCellUpdate_ACU(visualizer, sheetKey, rowId, columnName, nextValue);
+        }
+      }
+    }
+
+    for (const [rowId] of previousById) {
+      if (!candidateIds.has(rowId)) recordVisualizerRowDelete_ACU(visualizer, sheetKey, rowId);
+    }
+  }
 }
 
 export function useVisualizerAssistant() {
@@ -692,6 +747,8 @@ export function useVisualizerAssistant() {
 
   function applyCompileResultToVisualizer(payload: VisualizerAssistantTurnApplyPayload): boolean {
     assertVisualizerDataOpsEditable_ACU(visualizer);
+    const previousData = cloneData(visualizer.tempData || {});
+    recordAssistantCandidateDataOps(visualizer, previousData, payload.candidateData || {});
     visualizer.tempData = cloneData(payload.candidateData || {});
     visualizer.sheetOrder = Array.isArray(payload.orderedSheetKeys) ? [...payload.orderedSheetKeys] : [];
     applySheetOrderNumbers_ACU(visualizer.tempData, visualizer.sheetOrder);

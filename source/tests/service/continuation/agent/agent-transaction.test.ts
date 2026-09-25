@@ -147,6 +147,21 @@ describe('Agent 总纲写集事务', () => {
     expect(patched.settledThroughIndex).toBe(seeded.settledThroughIndex);
   });
 
+  it('多个 active 卷可由同一份合法写集先退休一个再修复', () => {
+    const base = baseSnapshot_ACU();
+    base.storyArc = [
+      storyArcItem_ACU(),
+      storyArcItem_ACU({ id: 'VOL-02', title: '第二卷', direction: '追查签名', escalation: '幕后势力灭口' }),
+    ];
+    const repaired = applyAgentModuleDelta_ACU(base, delta_ACU({
+      storyArc: [storyArcItem_ACU({ action: 'retire', id: 'VOL-01', reason: '第一卷已经收束' })],
+    }), ['storyArc'], 6);
+
+    expect(repaired.storyArc.filter(entry => entry.scope === 'volume' && !entry.retired && entry.status === 'active')).toEqual([
+      expect.objectContaining({ id: 'VOL-02' }),
+    ]);
+  });
+
   it('同一 active 卷可渐进登记多个已完成阶段，不会因单个阶段完成而切卷', () => {
     const seeded = applyAgentModuleDelta_ACU(baseSnapshot_ACU(), delta_ACU({
       storyArc: [
@@ -378,6 +393,13 @@ describe('Agent 年代学写集事务', () => {
 
     expect(() => applyAgentModuleDelta_ACU(baseSnapshot_ACU(), delta_ACU({ chronology: [chronologyItem_ACU({ evidenceIndexes: [] })] }), ['chronology'], 6)).toThrowError(/非空的非负整数楼层数组/);
     expect(() => applyAgentModuleDelta_ACU(baseSnapshot_ACU(), delta_ACU({ chronology: [chronologyItem_ACU({ evidenceIndexes: [1.5] })] }), ['chronology'], 6)).toThrowError(/非空的非负整数楼层数组/);
+  });
+
+  it('年代学证据只能引用 AI 正文楼层，不能引用用户或系统楼', () => {
+    const snapshot = baseSnapshot_ACU();
+    const input = delta_ACU({ chronology: [chronologyItem_ACU({ evidenceIndexes: [0] })] });
+    expect(() => applyAgentModuleDelta_ACU(snapshot, input, ['chronology'], 6, [], new Set([1, 3, 5]) as any)).toThrowError(/AI 正文楼层/);
+    expect(snapshot.chronology).toHaveLength(1);
   });
 
   it('upsert 的必填文本不能为空', () => {

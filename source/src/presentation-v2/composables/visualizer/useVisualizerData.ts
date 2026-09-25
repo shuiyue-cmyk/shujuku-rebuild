@@ -4,7 +4,9 @@ import { logWarn_ACU } from '../../../shared/utils';
 import { allocateStableSheetKeys_ACU, canonicalizeDisplayName_ACU } from '../../../shared/sheet-identity';
 import { generateDDL } from '../../../data/sqlite/schema-mapper';
 import {
+  currentChatFileIdentifier_ACU,
   currentJsonTableData_ACU,
+  getCurrentIsolationKey_ACU,
   _set_currentJsonTableData_ACU,
 } from '../../../service/runtime/state-manager';
 import {
@@ -70,6 +72,10 @@ function createDefaultSheet(key: string, name: string): Record<string, any> {
   return sheet;
 }
 
+function currentVisualizerContextKey(): string {
+  return `${String(currentChatFileIdentifier_ACU || '')}::${String(getCurrentIsolationKey_ACU() || '')}`;
+}
+
 function buildLockDrafts(orderedKeys: string[], data: Record<string, any>): Record<string, VisualizerLockDraft> {
   const drafts: Record<string, VisualizerLockDraft> = {};
   orderedKeys.forEach(key => {
@@ -100,6 +106,7 @@ export function useVisualizerData() {
   }
 
   async function loadFromCurrentContext(): Promise<boolean> {
+    const contextKey = currentVisualizerContextKey();
     visualizer.setLoading(true);
     refreshTemplatePresetLabel();
 
@@ -107,7 +114,9 @@ export function useVisualizerData() {
       let data = currentJsonTableData_ACU;
       if (!hasSheetData(data)) {
         await loadAllChatMessages_ACU();
+        if (currentVisualizerContextKey() !== contextKey) return false;
         const merged = await mergeAllIndependentTables_ACU();
+        if (currentVisualizerContextKey() !== contextKey) return false;
         if (hasSheetData(merged)) {
           const stableKeys = getSortedSheetKeys_ACU(merged);
           data = reorderDataBySheetKeys_ACU(merged, stableKeys);
@@ -116,13 +125,14 @@ export function useVisualizerData() {
       }
 
       if (!hasSheetData(data)) {
-        visualizer.loadSnapshot({ mate: { type: 'chatSheets', version: 1 } }, []);
+        visualizer.loadSnapshot({ mate: { type: 'chatSheets', version: 1 } }, [], contextKey);
         visualizer.loadLockDrafts({});
         return true;
       }
 
       const orderedKeys = buildOrderedKeys(data);
-      visualizer.loadSnapshot(data, orderedKeys);
+      if (currentVisualizerContextKey() !== contextKey) return false;
+      visualizer.loadSnapshot(data, orderedKeys, contextKey);
       visualizer.loadLockDrafts(buildLockDrafts(orderedKeys, data));
       return true;
     } catch (error) {

@@ -125,6 +125,8 @@ import {
   captureSqlTableApplyScope_ACU,
   extractRowIdsFromSqlSheetBatch_ACU,
   materializeSystemRowIdsForSqlInserts_ACU,
+  normalizeSqlStatementsForRuntimeLog_ACU,
+  rebindSqlMutationIdentifiers_ACU,
   rebindSqlMutationTableIdentifiers_ACU,
   SqlRuntimeSnapshotError_ACU,
   SqlRuntimeSchemaStaleError_ACU,
@@ -248,6 +250,47 @@ describe('rebindSqlMutationTableIdentifiers_ACU · 模板别名补充', () => {
       { requireKnownTables: true },
     )).toThrow('SQL 写入引用了歧义表名「protagonist_info」：该名称同时指向多张物理表，无法安全路由');
   });
+
+  it('显式传 null 补充源时，列重绑也不读当前聊天模板（调用方完全控制）', () => {
+    // 当前聊天模板：同名表 + 作者 DDL 列名 name（位置对齐“姓名”列）。
+    const snapshotTemplateDdl = `CREATE TABLE protagonist_info (\n  row_id INTEGER PRIMARY KEY,\n  name TEXT -- 姓名\n);`;
+    mockGetCurrentChatTemplateScopeState.mockReturnValue({
+      mode: 'chat_override',
+      templateStr: JSON.stringify({
+        mate: {},
+        sheet_zhujue: {
+          uid: 'protagonist',
+          name: '主角信息表',
+          sourceData: { ddl: snapshotTemplateDdl },
+          content: [['row_id', '姓名']],
+          updateConfig: {},
+          exportConfig: {},
+          orderNo: 0,
+        },
+      }),
+    });
+    // 历史快照：同名表，但列结构只来自快照自身（无作者 DDL）。
+    const snapshotData: any = {
+      mate: {},
+      sheet_zhujue: {
+        uid: 'protagonist',
+        name: '主角信息表',
+        content: [['row_id', '姓名']],
+        updateConfig: {},
+        exportConfig: {},
+        orderNo: 0,
+      },
+    };
+    const [rebound] = rebindSqlMutationIdentifiers_ACU(
+      ["UPDATE zhujuexinxibiao SET name = '阿不思' WHERE row_id = 1"],
+      snapshotData,
+      null,
+    );
+    // name 只是当前模板的作者 DDL 列名，不是快照 schema 的列：必须原样保留，
+    // 交给 SQLite 报 no such column，而不是误重绑为快照物理列。
+    expect(rebound).toContain('SET name =');
+    mockGetCurrentChatTemplateScopeState.mockReturnValue(null);
+  });
 });
 
 
@@ -338,6 +381,16 @@ describe('splitSqlStatements', () => {
 // ═══════════════════════════════════════════════════════════════
 // 纯函数测试：extractTableNamesFromStatements
 // ═══════════════════════════════════════════════════════════════
+describe('normalizeSqlStatementsForRuntimeLog_ACU', () => {
+  it('不删除 SQL 字符串字面量中的 HTML 标记', () => {
+    const [statement] = normalizeSqlStatementsForRuntimeLog_ACU(
+      "UPDATE inventory SET item_name = 'A<!--B-->C' WHERE row_id = 1;",
+    );
+
+    expect(statement).toBe("UPDATE inventory SET item_name = 'A<!--B-->C' WHERE row_id = 1");
+  });
+});
+
 describe('extractTableNamesFromStatements', () => {
   it('提取 INSERT INTO 的表名', () => {
     const result = extractTableNamesFromStatements(["INSERT INTO inventory VALUES (1, '铁剑', 3)"]);
@@ -603,6 +656,21 @@ describe('applySqlEditsToTableDataSnapshot_ACU', () => {
     const rows = (result.workingData as any).sheet_0.content.slice(1);
     expect(rows).toHaveLength(2);
     expect(rows[1].slice(1)).toEqual(['支线任务', '7']);
+  });
+
+  it('混合 mutation 与 INSERT SELECT 批次 fail-closed，不读取批前快照', async () => {
+    const inputSnapshot = JSON.parse(JSON.stringify(snapshotTableData));
+    const result = await applySqlEditsToTableDataSnapshot_ACU(
+      "UPDATE inventory SET quantity = 9 WHERE row_id = 1; INSERT INTO inventory (item_name, quantity) SELECT item_name, quantity FROM inventory WHERE row_id = 1;",
+      inputSnapshot,
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('混合批次');
+    expect(inputSnapshot.sheet_0.content).toEqual([
+      ['row_id', 'item_name', 'quantity'],
+      ['1', '铁剑', '3'],
+    ]);
   });
 
   it('7.3 双轨：runtime 目标为 fallback 拼音，SQL 用模板 authored 英文列名 → 写入成功', async () => {

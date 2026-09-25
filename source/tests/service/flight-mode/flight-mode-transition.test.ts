@@ -22,6 +22,7 @@ vi.mock('../../../src/data/storage/chat-history', () => ({
   setChatScopedConfigContainer_ACU: (_chat: any[], value: any) => { h.container = value; },
 }));
 vi.mock('../../../src/service/runtime/state-manager', () => ({
+  currentChatFileIdentifier_ACU: 'test-chat',
   get currentJsonTableData_ACU() { return h.tableData; },
   getCurrentIsolationKey_ACU: () => '',
 }));
@@ -121,6 +122,56 @@ describe('flight-mode-transition', () => {
       hardDeleteMissingSheets: true,
       destructiveChangeConfirmed: true,
     }));
+  });
+
+  it('启用提交成功但找不到真实大总结 key 时补偿模板，不留下半启用状态', async () => {
+    h.commit.mockImplementationOnce(async () => ({ saved: true, mode: 'v2_commit' }));
+
+    const result = await enableFlightMode_ACU();
+
+    expect(result).toMatchObject({ ok: false, reason: 'big_summary_sheet_key_unresolved' });
+    expect(h.commit).toHaveBeenCalledTimes(2);
+    expect(h.commit.mock.calls[1][0]).toMatchObject({
+      sheet_chronicle: { exportConfig: { entryType: 'keyword', extraIndexEnabled: true } },
+    });
+    expect(h.commit.mock.calls[1][0].sheet_acu_flight_big_summary).toBeUndefined();
+    expect(h.container).toBeNull();
+    expect(h.setLock).not.toHaveBeenCalled();
+  });
+
+  it('启用模板已提交但 flight state 落盘失败时补偿模板并回滚状态', async () => {
+    h.commit.mockImplementation(async () => {
+      h.tableData.sheet_da_zong_jie = { name: '大总结', content: [['row_id', '总结']] };
+      return { saved: true, mode: 'v2_commit' };
+    });
+    h.save.mockRejectedValueOnce(new Error('宿主保存失败'));
+
+    const result = await enableFlightMode_ACU();
+
+    expect(result).toMatchObject({ ok: false, reason: 'state_persist_failed' });
+    expect(h.commit).toHaveBeenCalledTimes(2);
+    expect(h.commit.mock.calls[1][0].sheet_acu_flight_big_summary).toBeUndefined();
+    expect(h.container).toBeNull();
+    expect(h.setLock).not.toHaveBeenCalled();
+  });
+
+  it('停用模板已恢复但 flight state 落盘失败时重新应用启用态模板', async () => {
+    h.container = { version: 1, flightMode: {
+      enabled: true, hiddenRowIds: ['1'], bigSummarySheetKey: 'sheet_da_zong_jie',
+      archive: {
+        templateScope: { templateStr: JSON.stringify(chronicleTemplate()), presetName: '预设' },
+        enabledTemplateStr: JSON.stringify(chronicleTemplate()),
+      },
+    } };
+    h.commit.mockResolvedValue({ saved: true, mode: 'v2_commit' });
+    h.save.mockRejectedValueOnce(new Error('宿主保存失败'));
+
+    const result = await disableFlightMode_ACU();
+
+    expect(result).toMatchObject({ ok: false, reason: 'state_persist_failed' });
+    expect(h.commit).toHaveBeenCalledTimes(2);
+    expect(h.container.flightMode).toMatchObject({ enabled: true, hiddenRowIds: ['1'] });
+    expect(h.deleteLock).not.toHaveBeenCalled();
   });
 
   it('提交失败时透传拒绝原因，且不写状态不设锁', async () => {

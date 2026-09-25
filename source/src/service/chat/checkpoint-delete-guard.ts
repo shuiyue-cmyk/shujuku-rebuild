@@ -15,8 +15,9 @@
  *   自身的 purge / 清空 / compaction 删楼都以插件保存收尾，保存同步会以当前聊天为
  *   权威重建 vault，因此插件侧的删除天然不会被本模块复活（防"删了重生"语义保持）。
  * - 恢复点：MESSAGE_DELETED 调度轮开头（冷回放之前）。丢失产物嫁接到其原位置之后
- *   第一个幸存 frame 楼层：帧内 checkpoint 先于 logEntries 回放，嫁接后顺序与原
- *   语义完全一致；被删楼层自身的 logEntries 不恢复（删楼 = 撤销该楼编辑）。
+ *   第一个幸存 frame 楼层：帧内 checkpoint 先于 logEntries 回放；过渡根必须从删楼后的
+ *   幸存历史重算 data/cutoff 并通过严格回放校验，无法证明安全时拒绝保存。被删楼层自身
+ *   的 logEntries 不恢复（删楼 = 撤销该楼编辑）。
  *
  * 残余竞态（接受并记录）：删楼后调度防抖窗口（1.2s）内若插件恰好完成一次保存，
  * post-save 同步会先丢弃待恢复产物。生成 / 填表落盘耗时远大于该窗口，实际不可达。
@@ -27,6 +28,10 @@ import {
     saveChatToHostStrict_ACU,
 } from '../../data/gateways/chat-gateway';
 import { readIsolatedDataContainer_ACU, readIsolatedTagData_ACU } from '../../data/repositories/chat-message-data-repo';
+import { normalizeCanonicalTableRows_ACU } from '../../shared/canonical-row-normalizer';
+import { reindexSpv79TransitionState_ACU } from '../table/compat-transition-checkpoint';
+import { collectScheduleSummaryFromFramesV2_ACU, loadTableStateFromFramesV2Detailed_ACU, replayWithLegacyTolerances_ACU } from '../table/storage-frame-v2-replay';
+import { getTableDataFingerprint_ACU } from '../table/table-data-upgrade-audit';
 import { isV2TagData_ACU } from '../table/storage-strategy-resolver';
 import { assertSingleActiveFullCheckpointV2_ACU } from '../table/storage-frame-v2-persist';
 import { runTableWriteTransaction_ACU } from '../table/table-write-transaction';
@@ -199,6 +204,54 @@ function findGraftTargetMessage_ACU(
     return null;
 }
 
+interface RebuiltTransition_ACU {
+    targetMessage: any;
+    checkpoint: Record<string, any>;
+}
+
+/**
+ * 过渡根不是普通 frame：它的 data/cutoff 是“截至某个 operation 的完整快照”。
+ * 删掉承载楼层后不能只把对象搬到后继楼层，否则原 cutoff 会落在新的物理索引
+ * 上并吞掉真实后缀。这里从幸存聊天重新跑兼容回放，生成新的完整快照与 cutoff；
+ * 若没有可证明的 full 基底、身份归并或 canonical 校验失败，交给调用方阻止保存。
+ */
+async function rebuildDeletedTransition_ACU(
+    survivingChat: any[],
+    isolationKey: string,
+    targetMessage: any,
+): Promise<RebuiltTransition_ACU> {
+    const tolerant = await replayWithLegacyTolerances_ACU(survivingChat, isolationKey);
+    if (tolerant.toleranceReport.identityRemaps.length > 0) {
+        throw new Error(`[删楼守卫] isolationKey=[${isolationKey || '无标签'}] 的幸存历史含身份归并，无法安全重建过渡根。`);
+    }
+
+    const data = reindexSpv79TransitionState_ACU(tolerant.data);
+    const normalization = normalizeCanonicalTableRows_ACU(data);
+    if (normalization.errors.length > 0 || normalization.removedRows.length > 0) {
+        throw new Error(`[删楼守卫] isolationKey=[${isolationKey || '无标签'}] 的幸存历史无法通过 canonical 行校验，拒绝重建过渡根。`);
+    }
+
+    let scheduleSummary: Record<string, any> | undefined;
+    try {
+        scheduleSummary = collectScheduleSummaryFromFramesV2_ACU(survivingChat, isolationKey);
+    } catch (_) {
+        scheduleSummary = undefined;
+    }
+
+    return {
+        targetMessage,
+        checkpoint: {
+            version: 1,
+            kind: 'compat_replay_transition',
+            createdAt: Date.now(),
+            data: deepClone_ACU(data),
+            cutoff: tolerant.cutoff,
+            ...(scheduleSummary === undefined ? {} : { scheduleSummary }),
+            tolerances: ['delete_recovery_rebuild'],
+        },
+    };
+}
+
 /**
  * MESSAGE_DELETED 后的前移恢复：把被删楼层携带的不可替代产物嫁接到最近的幸存楼层。
  * 在冷回放之前调用；无丢失时零写入零保存。
@@ -244,6 +297,8 @@ export async function recoverLostCheckpointsAfterMessageDeletion_ACU(): Promise<
 
         let graftedCount = 0;
         const affectedIsolationKeys = new Set<string>();
+        const survivingChat = deepClone_ACU(chat);
+        const transitionTargets = new Map<string, any>();
         try {
             // 逆序处理：同 sheetKey 冲突时"原始位置更靠后的产物"先占位，更早的被
             // 目标已有判定跳过——幸存者/更新者优先的语义由同一条规则统一表达。
@@ -252,6 +307,9 @@ export async function recoverLostCheckpointsAfterMessageDeletion_ACU(): Promise<
                 const entries = vault_ACU!.entriesByIsolationKey.get(isolationKey)!;
                 const target = findGraftTargetMessage_ACU(chat, presentMessages, entries, vaultIndex, isolationKey);
                 if (!target) {
+                    if (entry.spv79TransitionCheckpoint || entry.compatTransitionCheckpoint) {
+                        throw new Error(`[删楼守卫] isolationKey=[${isolationKey || '无标签'}] 的丢失过渡根无处重建，拒绝保存。`);
+                    }
                     logError_ACU(`[删楼守卫] isolationKey=[${isolationKey || '无标签'}] 的丢失 checkpoint 无处嫁接（聊天已无 AI 楼层），保留保管库等待下次机会。`);
                     continue;
                 }
@@ -310,18 +368,35 @@ export async function recoverLostCheckpointsAfterMessageDeletion_ACU(): Promise<
                     }
                 }
 
-                const tagData = target.message.TavernDB_ACU_IsolatedData[isolationKey];
-                if (entry.spv79TransitionCheckpoint && !tagData.spv79TransitionCheckpoint) {
-                    tagData.spv79TransitionCheckpoint = deepClone_ACU(entry.spv79TransitionCheckpoint);
-                    graftedCount += 1;
-                    logWarn_ACU(`[删楼守卫] SPv7.9 过渡根已嫁接到楼层 #${targetIndex}；其 cutoff 楼层索引可能因删除漂移，请留意后续回放告警。`);
-                }
-                if (entry.compatTransitionCheckpoint && !tagData.compatTransitionCheckpoint) {
-                    tagData.compatTransitionCheckpoint = deepClone_ACU(entry.compatTransitionCheckpoint);
-                    graftedCount += 1;
-                    logWarn_ACU(`[删楼守卫] 兼容过渡根已嫁接到楼层 #${targetIndex}；其 cutoff 楼层索引可能因删除漂移，请留意后续回放告警。`);
+                if (entry.spv79TransitionCheckpoint || entry.compatTransitionCheckpoint) {
+                    // 过渡根的 cutoff/data 必须在删楼后的幸存历史上重算，不能深拷贝旧值。
+                    transitionTargets.set(isolationKey, target.message);
                 }
                 affectedIsolationKeys.add(isolationKey);
+            }
+
+            const rebuiltTransitions = new Map<string, RebuiltTransition_ACU>();
+            for (const [isolationKey, targetMessage] of transitionTargets) {
+                const rebuilt = await rebuildDeletedTransition_ACU(survivingChat, isolationKey, targetMessage);
+                rebuiltTransitions.set(isolationKey, rebuilt);
+                const isolatedData = targetMessage.TavernDB_ACU_IsolatedData;
+                const tagData = isolatedData[isolationKey];
+                delete tagData.spv79TransitionCheckpoint;
+                delete tagData.compatTransitionCheckpoint;
+                tagData.compatTransitionCheckpoint = rebuilt.checkpoint;
+                graftedCount += 1;
+                logWarn_ACU(`[删楼守卫] isolationKey=[${isolationKey || '无标签'}] 的过渡根已按幸存历史重建并校验 cutoff。`);
+            }
+
+            for (const [isolationKey, rebuilt] of rebuiltTransitions) {
+                const tagData = rebuilt.targetMessage.TavernDB_ACU_IsolatedData[isolationKey];
+                const replay = await loadTableStateFromFramesV2Detailed_ACU(chat, isolationKey, {
+                    updateRuntimeState: false,
+                    compatibilityMode: 'disabled',
+                });
+                if (!replay || getTableDataFingerprint_ACU(replay.data) !== getTableDataFingerprint_ACU(tagData.compatTransitionCheckpoint.data)) {
+                    throw new Error(`[删楼守卫] isolationKey=[${isolationKey || '无标签'}] 的重建过渡根严格回放校验失败，拒绝保存。`);
+                }
             }
 
             if (graftedCount === 0) {

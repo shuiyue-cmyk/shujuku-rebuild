@@ -8,6 +8,7 @@ const harness = vi.hoisted(() => ({
   bridgeRetryHostGeneration: vi.fn(async () => true),
   bridgeSubscribe: vi.fn((listener: () => void) => { harness.bridgeStateListener = listener; return vi.fn(); }),
   bridgeStateListener: undefined as (() => void) | undefined,
+  currentChatIdentity: 'chat-a',
   continueTask: vi.fn(),
   retryCurrentTurn: vi.fn(),
   createTask: vi.fn(),
@@ -49,6 +50,9 @@ vi.mock('../../../src/service/continuation/continuation-runtime', () => ({
     read: harness.read,
   }),
 }));
+vi.mock('../../../src/service/runtime/state-manager', () => ({
+  get currentChatFileIdentifier_ACU() { return harness.currentChatIdentity; },
+}));
 vi.mock('../../../src/presentation-v2/stores/toast-store', () => ({
   useToastStore: () => ({ error: harness.toastError, success: harness.toastSuccess, info: harness.toastInfo }),
 }));
@@ -62,6 +66,7 @@ const preparedTurn = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  harness.currentChatIdentity = 'chat-a';
   harness.bridgeStateListener = undefined;
   harness.read.mockReturnValue(envelope);
   harness.initialize.mockResolvedValue(null);
@@ -182,6 +187,26 @@ describe('useContinuationRuntime', () => {
     expect(harness.replaceSettings).toHaveBeenCalledWith({ settings });
     expect(harness.acceptOutline).toHaveBeenCalledWith({ outline });
     expect(harness.bridgeSend).not.toHaveBeenCalled();
+  });
+
+  it('切聊天后迟到的旧设置保存结果不得写入当前 runtime 视图', async () => {
+    let release!: (value: unknown) => void;
+    const oldEnvelope = { schemaVersion: 1, settings: { marker: 'A' }, activeTask: null } as any;
+    const newEnvelope = { schemaVersion: 1, settings: { marker: 'B' }, activeTask: null } as any;
+    harness.replaceSettings.mockReturnValueOnce(new Promise(resolve => { release = resolve; }));
+    harness.read.mockReturnValue(oldEnvelope);
+    const { useContinuationRuntime } = await import('../../../src/presentation-v2/composables/useContinuationRuntime');
+    const continuation = useContinuationRuntime();
+    continuation.refresh();
+
+    const saving = continuation.saveSettings({ marker: 'A' } as any);
+    harness.currentChatIdentity = 'chat-b';
+    harness.read.mockReturnValue(newEnvelope);
+    continuation.refresh();
+    release(oldEnvelope);
+
+    await expect(saving).resolves.toBe('stale');
+    expect(continuation.settings.value).toEqual(newEnvelope.settings);
   });
 
   it('设置保存遇到操作互斥时返回 busy 且不弹错误吐司，其他错误返回 failed 并吐司', async () => {

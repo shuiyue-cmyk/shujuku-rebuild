@@ -290,10 +290,9 @@ function assertVolumeLifecycle_ACU(
     }
   }
 
-  if (previouslyActive.length > 1) {
-    reject_ACU(`写入前存在 ${previouslyActive.length} 个 active 卷，无法判定阶段承载归属`, { activeIds: previouslyActive.map(volume => volume.id) });
-  }
-
+  // 旧快照可能已经因并发/历史写入留下多个 active 卷；只要本次原子写集应用后
+  // 恢复为一个 active，就允许先 retire 旧卷完成修复。真正的歧义由下面的
+  // next 状态唯一性校验拦截，而不是把可修复的旧状态永久锁死。
   for (const volume of volumes) {
     if (previousById.has(volume.id)) continue;
     assertCompleteVolumeContract_ACU(volume, 'new');
@@ -347,7 +346,12 @@ function assertVolumeLifecycle_ACU(
  * 2. retire 必须命中既有条目并给理由；漏写不等于删除。
  * 3. 任一条目失败即整份 delta 拒绝，不做部分登记。
  */
-function applyChronologyDelta_ACU(existing: AgentChronologyEntry_ACU[], items: AgentChronologyDeltaItem_ACU[], settledIndex: number): AgentChronologyEntry_ACU[] {
+function applyChronologyDelta_ACU(
+  existing: AgentChronologyEntry_ACU[],
+  items: AgentChronologyDeltaItem_ACU[],
+  settledIndex: number,
+  allowedEvidenceIndexes?: ReadonlySet<number>,
+): AgentChronologyEntry_ACU[] {
   const byId = new Map(existing.map(entry => [entry.id, entry]));
   for (const item of items) {
     if (!item.id.trim()) reject_ACU('年代学条目缺少 id');
@@ -364,6 +368,12 @@ function applyChronologyDelta_ACU(existing: AgentChronologyEntry_ACU[], items: A
     const evidenceIndexes = normalizeEvidenceIndexes_ACU(item.evidenceIndexes);
     if (!evidenceIndexes || !evidenceIndexes.length) {
       reject_ACU(`年代学条目 ${item.id} 的 evidenceIndexes 必须是非空的非负整数楼层数组`, { id: item.id, evidenceIndexes: item.evidenceIndexes });
+    }
+    if (allowedEvidenceIndexes) {
+      const nonAi = evidenceIndexes.filter(index => !allowedEvidenceIndexes.has(index));
+      if (nonAi.length) {
+        reject_ACU(`年代学条目 ${item.id} 的 evidenceIndexes 只能引用 AI 正文楼层，不能引用用户、system 或 tool 楼：${nonAi.join('、')}`, { id: item.id, nonAi });
+      }
     }
     const future = evidenceIndexes.filter(index => index > settledIndex);
     if (future.length) {
@@ -487,6 +497,7 @@ export function applyAgentModuleDelta_ACU(
   allowedWrites: readonly string[],
   settledIndex: number,
   completedStageNumbers: readonly number[] = [],
+  allowedEvidenceIndexes?: ReadonlySet<number>,
 ): AgentModuleSnapshot_ACU {
   assertWritePermission_ACU(delta, allowedWrites);
   assertExpectedRevisions_ACU(delta, snapshot);
@@ -506,7 +517,9 @@ export function applyAgentModuleDelta_ACU(
     assertSingleActiveStoryScope_ACU(storyArc);
   }
   if (storyArcTouched) assertVolumeLifecycle_ACU(snapshot.storyArc, storyArc, new Set(completedStageNumbers));
-  const chronology = chronologyTouched ? applyChronologyDelta_ACU(snapshot.chronology, delta.chronology, settledIndex) : snapshot.chronology;
+  const chronology = chronologyTouched
+    ? applyChronologyDelta_ACU(snapshot.chronology, delta.chronology, settledIndex, allowedEvidenceIndexes)
+    : snapshot.chronology;
   return {
     ...snapshot,
     hooks,

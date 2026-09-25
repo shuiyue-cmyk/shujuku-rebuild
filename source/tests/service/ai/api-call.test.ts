@@ -212,6 +212,26 @@ describe('callAIWithPreset_ACU', () => {
     expect(isRetryableAiRequestError_ACU(error)).toBe(true);
   });
 
+  it('上游错误体进入 AgentApiHttpError 前脱敏敏感值并限长', async () => {
+    const leakedBody = [
+      'Authorization: Bearer bearer-secret-value',
+      'api-key: api-secret-value',
+      'Cookie: session=cookie-secret-value; theme=dark',
+      'x'.repeat(5000),
+    ].join('\n');
+    mockFetch.mockResolvedValue({ ok: false, status: 502, text: () => Promise.resolve(leakedBody) });
+
+    const error = await postChatCompletion_ACU({ stream: false }).catch(e => e);
+
+    expect(error).toBeInstanceOf(AgentApiHttpError_ACU);
+    expect(error.status).toBe(502);
+    expect(error.message).toContain('***');
+    expect(error.message).not.toContain('bearer-secret-value');
+    expect(error.message).not.toContain('api-secret-value');
+    expect(error.message).not.toContain('cookie-secret-value');
+    expect(error.message.length).toBeLessThanOrEqual(2100);
+  });
+
   it('isRetryableAiRequestError_ACU 只放行瞬时失败，AbortError 一律立停', () => {
     const aborted = Object.assign(new Error('The user aborted a request.'), { name: 'AbortError' });
     expect(isRetryableAiRequestError_ACU(aborted)).toBe(false);
@@ -896,6 +916,47 @@ describe('callAIWithResolvedPreset_ACU 传输超时', () => {
       expect(failure).toBeInstanceOf(Error);
       expect((failure as Error).message).toContain('内部 AI 请求超时');
       expect((failure as Error).message).toContain('120');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('非流式响应体读取期间外部 abort 仍上报用户取消且不重试', async () => {
+    const controller = new AbortController();
+    mockFetch.mockResolvedValue({ ok: true });
+    let rejectBody!: (error: unknown) => void;
+    mockHandleApiResponse.mockImplementation(() => new Promise((_resolve, reject) => { rejectBody = reject; }));
+
+    const pending = callAIWithResolvedPreset_ACU([{ role: 'user', content: '你好' }], resolved, controller.signal);
+    await vi.waitFor(() => expect(mockHandleApiResponse).toHaveBeenCalled());
+    controller.abort();
+    const abortError = new DOMException('body read aborted', 'AbortError');
+    rejectBody(abortError);
+
+    const failure = await pending.catch((error: Error) => error);
+    expect(failure.name).toBe('AbortError');
+    expect(failure.message).toBe('请求已取消');
+    expect(isRetryableAiRequestError_ACU(failure)).toBe(false);
+  });
+
+  it('流式响应体读取期间内部超时映射为 TimeoutError', async () => {
+    vi.useFakeTimers();
+    try {
+      mockSettings.streamingEnabled = true;
+      mockFetch.mockResolvedValue({ ok: true });
+      let rejectBody!: (error: unknown) => void;
+      mockHandleApiResponse.mockImplementation(() => new Promise((_resolve, reject) => { rejectBody = reject; }));
+
+      const pending = callAIWithResolvedPreset_ACU([{ role: 'user', content: '你好' }], resolved);
+      await vi.waitFor(() => expect(mockHandleApiResponse).toHaveBeenCalled());
+      await vi.advanceTimersByTimeAsync(120_000);
+      const abortError = new DOMException('stream body read aborted', 'AbortError');
+      rejectBody(abortError);
+
+      const failure = await pending.catch((error: Error) => error);
+      expect(failure.name).toBe('TimeoutError');
+      expect(failure.message).toContain('内部 AI 请求超时');
+      expect(isRetryableAiRequestError_ACU(failure)).toBe(true);
     } finally {
       vi.useRealTimers();
     }

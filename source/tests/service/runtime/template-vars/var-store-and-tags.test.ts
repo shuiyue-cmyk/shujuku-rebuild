@@ -10,9 +10,11 @@ vi.mock('../../../../src/shared/utils', () => ({
 }));
 
 vi.mock('../../../../src/service/runtime/template-vars/cell-utils', () => ({
-  getCellValue_ACU: vi.fn((_tables: any, _row: string, _col: string, allTablesJson: any) => {
-    if (_tables === '属性表' && _row === '攻击力' && _col === '数值') return 25;
-    return null;
+  getCellValue_ACU: vi.fn((_allTablesJson: any, tableName: string, rowName: string, colName: string) => {
+    if (tableName === '属性表' && rowName === '攻击力' && colName === '数值') {
+      return { success: true, value: 25, rawValue: '25' };
+    }
+    return { success: false, value: null, error: '未找到单元格' };
   }),
 }));
 

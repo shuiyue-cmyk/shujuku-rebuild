@@ -30,19 +30,22 @@ import {
 import {
   extractTableEditInner_ACU
 } from '../ai/prompt-builder';
+import {
+  getAutoMergedOrderScopeKey_ACU
+} from './auto-merge-scope';
 
 // ═══ 自动合并纪要：触发检查 ═══
 
 function isAutoMergedSummaryRow_ACU(summaryKey: string, row: unknown): boolean {
     if (!Array.isArray(row)) return false;
     const rowId = String(row[0] ?? '').trim();
-    const storedOrder = settings_ACU.autoMergedOrder?.[summaryKey];
+    const storedOrder = settings_ACU.autoMergedOrder?.[getAutoMergedOrderScopeKey_ACU(summaryKey)];
     return (Array.isArray(storedOrder) && storedOrder.some((id: unknown) => String(id) === rowId))
         || row[row.length - 1] === 'auto_merged';
 }
 
 function getAutoMergedOrder_ACU(summaryKey: string): string[] {
-    const storedOrder = settings_ACU.autoMergedOrder?.[summaryKey];
+    const storedOrder = settings_ACU.autoMergedOrder?.[getAutoMergedOrderScopeKey_ACU(summaryKey)];
     return Array.isArray(storedOrder) ? storedOrder.map((id: unknown) => String(id)) : [];
 }
 
@@ -274,12 +277,17 @@ export async function executeAutoMergeBatch_ACU(
 export async function finalizeAutoMerge_ACU(
     prepared: AutoMergePrepared,
     accumulatedSummary: any[],
-): Promise<{ mergedRows: number }> {
+): Promise<{ mergedRows: number; success: boolean; error?: string }> {
     const { summaryKey, endIndex } = prepared;
 
-    if (!summaryKey || accumulatedSummary.length === 0) return { mergedRows: 0 };
+    if (!summaryKey || accumulatedSummary.length === 0) return { mergedRows: 0, success: true };
 
     const table = currentJsonTableData_ACU[summaryKey];
+    const previousTableContent = table.content;
+    const hadPreviousAutoMergedOrder = Object.prototype.hasOwnProperty.call(settings_ACU, 'autoMergedOrder');
+    const previousAutoMergedOrder = hadPreviousAutoMergedOrder
+        ? JSON.parse(JSON.stringify(settings_ACU.autoMergedOrder))
+        : undefined;
     const originalContent = table.content.slice(1);
 
     let actualEndIndex = 0;
@@ -306,36 +314,61 @@ export async function finalizeAutoMerge_ACU(
     table.content = [table.content[0], ...newSummaryContent];
 
     if (!settings_ACU.autoMergedOrder) settings_ACU.autoMergedOrder = {} as Record<string, any>;
-    if (!settings_ACU.autoMergedOrder[summaryKey]) settings_ACU.autoMergedOrder[summaryKey] = [] as any[];
+    const orderScopeKey = getAutoMergedOrderScopeKey_ACU(summaryKey);
+    if (!settings_ACU.autoMergedOrder[orderScopeKey]) settings_ACU.autoMergedOrder[orderScopeKey] = [] as any[];
 
-    const orderList: any[] = settings_ACU.autoMergedOrder[summaryKey];
+    const orderList: any[] = settings_ACU.autoMergedOrder[orderScopeKey];
     accumulatedSummary.forEach((row: any[]) => {
         if (row && row[0] !== null && row[0] !== undefined && !orderList.includes(row[0])) {
             orderList.push(row[0]);
         }
     });
 
+    const rollbackLiveState_ACU = (): void => {
+        table.content = previousTableContent;
+        if (hadPreviousAutoMergedOrder) {
+            settings_ACU.autoMergedOrder = previousAutoMergedOrder;
+        } else {
+            delete settings_ACU.autoMergedOrder;
+        }
+    };
+
     const keysToSave = [summaryKey];
     const writeSet = keysToSave.map(sheetKey => ({ kind: 'sheet' as const, sheetKey }));
-    await runTableUpdateCommit_ACU<null>({
-        source: 'merge_summary',
-        reason: 'auto_merge_summary',
-        writeSet,
-        revisionWriteSet: writeSet,
-        initialData: currentJsonTableData_ACU as any,
-        targetMessageIndex: getLastMessageIndex_ACU(),
-        targetSheetKeys: keysToSave,
-        updateGroupKeys: keysToSave,
-        trackingSheetKeys: keysToSave,
-        trackAsUpdate: true,
-        operations: [{ kind: 'sheet_replace', sheetKey: summaryKey, sheet: (currentJsonTableData_ACU as any)[summaryKey], reason: 'system' }],
-    }, () => ({
-        success: true,
-        value: null,
-        tableData: currentJsonTableData_ACU as any,
-        mutationResult: { changes: keysToSave.length, errors: [] },
-    }));
+    let commitResult: any;
+    try {
+        commitResult = await runTableUpdateCommit_ACU<null>({
+            source: 'merge_summary',
+            reason: 'auto_merge_summary',
+            writeSet,
+            revisionWriteSet: writeSet,
+            initialData: currentJsonTableData_ACU as any,
+            targetMessageIndex: getLastMessageIndex_ACU(),
+            targetSheetKeys: keysToSave,
+            updateGroupKeys: keysToSave,
+            trackingSheetKeys: keysToSave,
+            trackAsUpdate: true,
+            operations: [{ kind: 'sheet_replace', sheetKey: summaryKey, sheet: (currentJsonTableData_ACU as any)[summaryKey], reason: 'system' }],
+        }, () => ({
+            success: true,
+            value: null,
+            tableData: currentJsonTableData_ACU as any,
+            mutationResult: { changes: keysToSave.length, errors: [] },
+        }));
+    } catch (error) {
+        rollbackLiveState_ACU();
+        logWarn_ACU('[自动合并] 提交异常，已回滚运行时合并结果:', error);
+        return { success: false, mergedRows: 0, error: error instanceof Error ? error.message : String(error) };
+    }
+
+    if (!commitResult || commitResult.success !== true) {
+        rollbackLiveState_ACU();
+        const error = commitResult?.error || '自动合并提交失败';
+        logWarn_ACU(`[自动合并] 提交失败，已回滚运行时合并结果: ${error}`);
+        return { success: false, mergedRows: 0, error };
+    }
+
     await updateReadableLorebookEntry_ACU(true);
 
-    return { mergedRows: accumulatedSummary.length };
+    return { success: true, mergedRows: accumulatedSummary.length };
 }

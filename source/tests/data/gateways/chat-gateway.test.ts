@@ -179,9 +179,10 @@ describe('listAllHostChatNames_ACU', () => {
     characters?: any[] | null;
     contextGroups?: any;
     chatsByAvatar?: Record<string, string[]>;
+    chatsPayloads?: Record<string, unknown>;
     chatsHttpStatus?: number;
   }) {
-    const { characters, contextGroups, chatsByAvatar = {}, chatsHttpStatus = 200 } = options;
+    const { characters, contextGroups, chatsByAvatar = {}, chatsPayloads, chatsHttpStatus = 200 } = options;
     if (characters !== null) mockSillyTavern.characters = characters;
     vi.stubGlobal('SillyTavern', {
       getContext: () => (contextGroups === undefined ? {} : { groups: contextGroups }),
@@ -192,7 +193,9 @@ describe('listAllHostChatNames_ACU', () => {
         return {
           ok: chatsHttpStatus === 200,
           status: chatsHttpStatus,
-          json: async () => (chatsByAvatar[avatar] || []).map(fileName => ({ file_name: fileName })),
+          json: async () => Object.prototype.hasOwnProperty.call(chatsPayloads || {}, avatar)
+            ? chatsPayloads![avatar]
+            : (chatsByAvatar[avatar] || []).map(fileName => ({ file_name: fileName })),
         };
       }
       return { ok: false, status: 404, json: async () => ({}) };
@@ -255,6 +258,21 @@ describe('listAllHostChatNames_ACU', () => {
       contextGroups: [],
       chatsHttpStatus: 500,
     });
+    expect(await listAllHostChatNames_ACU()).toBeNull();
+  });
+
+  it.each([
+    { name: '2xx error 对象', payload: { error: true } },
+    { name: '2xx 未知对象', payload: { unexpected: 'shape' } },
+    { name: '数组中的畸形 entry', payload: [null] },
+    { name: '非字符串 file_name', payload: [{ file_name: 123 }] },
+  ])('$name 必须返回 null，不得伪装成完整空枚举', async ({ payload }) => {
+    stubHost({
+      characters: [{ avatar: 'aria.png' }],
+      contextGroups: [],
+      chatsPayloads: { 'aria.png': payload },
+    });
+
     expect(await listAllHostChatNames_ACU()).toBeNull();
   });
 });

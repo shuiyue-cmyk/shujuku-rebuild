@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
-const { mockCallAIWithPreset, mockLogError, mockCompileTemplateAssistantDraft, mockBuildTemplateAssistantCumulativeCompileResult, mockPreflightSchemaMigrations } = vi.hoisted(() => ({
+const { mockCallAIWithPreset, mockLogError, mockCompileTemplateAssistantDraft, mockBuildTemplateAssistantCumulativeCompileResult, mockCollectV3RowIdGuardFindings, mockPreflightSchemaMigrations } = vi.hoisted(() => ({
   mockCallAIWithPreset: vi.fn(),
   mockLogError: vi.fn(),
   mockPreflightSchemaMigrations: vi.fn(async () => ({ changedSheetKeys: [], blockers: [], operations: [] })),
@@ -24,6 +24,7 @@ const { mockCallAIWithPreset, mockLogError, mockCompileTemplateAssistantDraft, m
     lockChanges: [],
     schemaMigrationIntents: {},
   })),
+  mockCollectV3RowIdGuardFindings: vi.fn(() => []),
 }));
 
 vi.mock('../../../src/service/ai/api-call', () => ({
@@ -64,6 +65,7 @@ vi.mock('../../../src/service/worldbook/injection-engine', async () => {
 vi.mock('../../../src/service/template-assistant/compiler', () => ({
   compileTemplateAssistantDraft_ACU: mockCompileTemplateAssistantDraft,
   buildTemplateAssistantCumulativeCompileResult_ACU: mockBuildTemplateAssistantCumulativeCompileResult,
+  collectV3RowIdGuardFindings_ACU: mockCollectV3RowIdGuardFindings,
 }));
 
 vi.mock('../../../src/service/table/schema-migration-preflight', () => ({
@@ -111,6 +113,8 @@ describe('template assistant service', () => {
     mockCallAIWithPreset.mockReset();
     mockLogError.mockReset();
     mockCompileTemplateAssistantDraft.mockReset();
+    mockCollectV3RowIdGuardFindings.mockReset();
+    mockCollectV3RowIdGuardFindings.mockReturnValue([]);
     mockPreflightSchemaMigrations.mockReset();
     mockPreflightSchemaMigrations.mockResolvedValue({ changedSheetKeys: [], blockers: [], operations: [] });
     mockCompileTemplateAssistantDraft.mockImplementation((input: any) => ({
@@ -839,6 +843,69 @@ describe('template assistant service', () => {
     expect(result.draft.result).toBeUndefined();
   });
 
+
+  it('v3 row_id 守卫以 result.action=replace 的实际目标表为检查对象', async () => {
+    const tempData: any = buildTempData_ACU();
+    tempData.sheet_b = {
+      uid: 'sheet_b',
+      name: 'B表',
+      orderNo: 1,
+      content: [['row_id', '标题'], ['1', '保留'], ['2', '被漏掉']],
+      sourceData: { note: 'b', initNode: '', insertNode: '', updateNode: '', deleteNode: '' },
+      updateConfig: {},
+      exportConfig: {},
+    };
+    const candidateData = structuredClone(tempData);
+    candidateData.sheet_b.content = [['row_id', '标题'], ['1', '保留']];
+    const fp = buildTemplateAssistantFingerprint_ACU(tempData);
+    const fullSheet = {
+      name: 'B表', domain: 'chat', type: 'dynamic', enable: true, required: false,
+      content: candidateData.sheet_b.content,
+      sourceData: { ddl: 'CREATE TABLE b (row_id INTEGER PRIMARY KEY)' },
+      updateConfig: {}, exportConfig: {},
+    };
+    mockCallAIWithPreset.mockResolvedValue(`<templateAssistantDraft>${JSON.stringify({
+      protocolVersion: 3,
+      mode: 'single_sheet_full_replace',
+      requestId: 'req-cross-replace',
+      baseFingerprint: fp,
+      atomic: true,
+      selectedSheetKey: 'sheet_a',
+      summary: '替换 B',
+      warnings: [],
+      result: { action: 'replace', sheetKey: 'sheet_b', sheet: fullSheet },
+    })}</templateAssistantDraft>`);
+    mockCompileTemplateAssistantDraft.mockReturnValueOnce({
+      candidateData,
+      orderedSheetKeys: ['sheet_a', 'sheet_b'],
+      deletedSheetKeys: [],
+      focusSheetKey: 'sheet_b',
+      diff: { addedSheets: [], deletedSheets: [], renamedSheets: [], movedSheets: [], patchedSourceDataSheets: [], patchedUpdateConfigSheets: [], patchedExportConfigSheets: [], patchedContentSheets: [{ sheetKey: 'sheet_b', name: 'B表', changes: ['单表完整替换'] }], patchedSchemaSheets: [], patchedLockSheets: [], globalInjectionChanged: false },
+      highRiskItems: [],
+      lockChanges: [],
+      schemaMigrationIntents: {},
+    });
+    const finding = { code: 'row_id_set_reduction' as const, sheetKey: 'sheet_b', missingRowIds: ['2'] };
+    mockCollectV3RowIdGuardFindings.mockReturnValue([finding]);
+
+    const result = await runTemplateAssistantSession_ACU({
+      tempData,
+      currentSheetKey: 'sheet_a',
+      sheetOrder: ['sheet_a', 'sheet_b'],
+      userRequest: '调整 B 表内容',
+      maxRounds: 1,
+      maxRepairRetries: 0,
+      protocolVersion: 3,
+    });
+
+    expect(mockCollectV3RowIdGuardFindings).toHaveBeenCalledWith(
+      tempData,
+      candidateData,
+      'sheet_b',
+      '调整 B 表内容',
+    );
+    expect(result.session.v3RowIdGuardFindings).toEqual([finding]);
+  });
 
   it('协议一致性门禁：默认 v3 请求下 AI 返回 v2 draft 会被拒绝（validate）', async () => {
     const tempData = buildTempData_ACU();

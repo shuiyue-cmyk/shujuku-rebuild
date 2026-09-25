@@ -28,6 +28,7 @@ vi.mock('../../../src/data/storage/chat-history', () => ({
   setChatSheetGuideContainer_ACU: (_chat: any[], value: any) => { mocks.guide = value; },
 }));
 vi.mock('../../../src/service/runtime/state-manager', () => ({
+  currentChatFileIdentifier_ACU: 'chat-a',
   getCurrentIsolationKey_ACU: () => '', settings_ACU: mocks.settings,
   _set_currentJsonTableData_ACU: mocks.setRuntime,
 }));
@@ -191,6 +192,23 @@ describe('resetCurrentChatTableStateFromTemplate_ACU', () => {
     expect(mocks.guide).toEqual(oldGuide);
     expect(mocks.saveStrict).not.toHaveBeenCalled();
     expect(mocks.setRuntime).not.toHaveBeenCalled();
+  });
+
+  it('hydrate await 期间切换聊天时 fail-closed，不把模板写入新聊天', async () => {
+    mocks.settings.storageMode = 'sqlite';
+    const beforeB = { is_user: false, TavernDB_ACU_IsolatedData: { '': { storageFrame: { version: 2, checkpoint: { kind: 'full', data: { sheet_b: {} } }, logEntries: [] } } } };
+    mocks.hydrateStrict.mockReset().mockImplementationOnce(async () => {
+      mocks.swappedChat = [beforeB];
+    });
+
+    const result = await resetCurrentChatTableStateFromTemplate_ACU({
+      sheet_role: { uid: 'sheet_role', name: 'Role', content: [['row_id', 'name']] },
+    });
+
+    expect(result.saved).toBe(false);
+    expect(result.error).toContain('切换');
+    expect(mocks.saveStrict).not.toHaveBeenCalled();
+    expect(mocks.swappedChat?.[0]).toBe(beforeB);
   });
 
   it('聊天在提交中切换时恢复原聊天状态且拒绝保存', async () => {

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   getChatArray: vi.fn(),
   getCurrentIsolationKey: vi.fn(() => ''),
+  chatIdentifier: 'chat-a',
   sanitizeChatSheetsObject: vi.fn((data: any) => data),
   replaceAllData: vi.fn().mockResolvedValue({ success: true }),
   getCurrentData: vi.fn(),
@@ -18,6 +19,7 @@ vi.mock('../../../src/service/chat/chat-service', () => ({
 
 vi.mock('../../../src/service/runtime/state-manager', () => ({
   currentJsonTableData_ACU: { mate: { type: 'acu', version: 1 } },
+  get currentChatFileIdentifier_ACU() { return mocks.chatIdentifier; },
   getCurrentIsolationKey_ACU: mocks.getCurrentIsolationKey,
 }));
 
@@ -51,11 +53,18 @@ vi.mock('../../../src/service/table/storage-mode', () => ({
 }));
 
 import { importTableJsonThroughCommit_ACU } from '../../../src/service/table/table-import-service';
+import {
+  _resetTableWriteTransactionLocksForTest_ACU,
+  captureTableRuntimeRevisionForWriteSet_ACU,
+  runTableWriteTransaction_ACU,
+} from '../../../src/service/table/table-write-transaction';
 
 describe('importTableJsonThroughCommit_ACU', () => {
   beforeEach(() => {
+    _resetTableWriteTransactionLocksForTest_ACU();
     vi.clearAllMocks();
     mocks.isSqliteMode.mockReturnValue(false);
+    mocks.chatIdentifier = 'chat-a';
     // clearAllMocks 不会清空上个用例未消费的 mockResolvedValueOnce 队列。
     mocks.validateSqliteTemplateDataStrict.mockReset().mockResolvedValue({ success: true });
     mocks.getChatArray.mockReturnValue([{ is_user: true }, { is_user: false, mes: 'AI回复' }]);
@@ -179,6 +188,178 @@ describe('importTableJsonThroughCommit_ACU', () => {
     expect(result.persisted).toBe(false);
     expect(result.tableData).toEqual(importedData);
     expect(mocks.replaceAllData).toHaveBeenCalledWith(importedData);
+    expect(mocks.runTableUpdateCommit).not.toHaveBeenCalled();
+  });
+
+  it('persist:false 的 runtime restore 在事务中推进 revision，旧基线随后拒绝', async () => {
+    const importedData = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: { name: '背包', content: [['row_id', '物品'], ['1', '铁剑']] },
+    };
+    const writeSet = [{ kind: 'all' as const }];
+    const oldRevision = captureTableRuntimeRevisionForWriteSet_ACU(writeSet, {
+      chatKey: mocks.chatIdentifier,
+      isolationKey: '',
+    });
+
+    const result = await importTableJsonThroughCommit_ACU(JSON.stringify(importedData), { persist: false });
+
+    expect(result.success).toBe(true);
+    const newRevision = captureTableRuntimeRevisionForWriteSet_ACU(writeSet, {
+      chatKey: mocks.chatIdentifier,
+      isolationKey: '',
+    });
+    expect(newRevision).not.toBe(oldRevision);
+
+    let conflict: unknown = null;
+    try {
+      await runTableWriteTransaction_ACU({
+        source: 'manual_fill',
+        reason: 'stale-after-runtime-restore',
+        chatKey: mocks.chatIdentifier,
+        isolationKey: '',
+        writeSet,
+        baseRevision: oldRevision,
+        workingDataMode: 'none',
+      }, async ctx => {
+        ctx.assertFresh('stale-after-runtime-restore');
+      });
+    } catch (error) {
+      conflict = error;
+    }
+    expect(String(conflict)).toContain('runtime revision conflict');
+  });
+
+  it('persist:false provider replace await 期间切换聊天时 fail-closed 并重载当前 runtime', async () => {
+    const chatA = [{ is_user: false, mes: 'A' }];
+    const chatB = [{ is_user: false, mes: 'B' }];
+    const importedData = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: { name: '背包', content: [['row_id', '物品'], ['1', '铁剑']] },
+    };
+    let releaseReplace!: (value: any) => void;
+    mocks.getChatArray.mockReturnValue(chatA);
+    mocks.replaceAllData.mockImplementationOnce(() => new Promise(resolve => {
+      releaseReplace = resolve;
+    }));
+
+    const importPromise = importTableJsonThroughCommit_ACU(JSON.stringify(importedData), { persist: false });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    mocks.getChatArray.mockReturnValue(chatB);
+    mocks.chatIdentifier = 'chat-b';
+    releaseReplace({ success: true });
+
+    const result = await importPromise;
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('scope');
+    expect(mocks.reloadStorageProvider).toHaveBeenCalledOnce();
+  });
+
+  it('持久化导入的 provider replace 也必须在 runtime restore 事务中推进 revision', async () => {
+    const importedData = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: { name: '背包', content: [['row_id', '物品'], ['1', '铁剑']] },
+    };
+    const writeSet = [{ kind: 'all' as const }];
+    const oldRevision = captureTableRuntimeRevisionForWriteSet_ACU(writeSet, {
+      chatKey: mocks.chatIdentifier,
+      isolationKey: '',
+    });
+
+    const result = await importTableJsonThroughCommit_ACU(JSON.stringify(importedData));
+
+    expect(result.success).toBe(true);
+    const newRevision = captureTableRuntimeRevisionForWriteSet_ACU(writeSet, {
+      chatKey: mocks.chatIdentifier,
+      isolationKey: '',
+    });
+    expect(newRevision).not.toBe(oldRevision);
+  });
+
+  it('runtime restore 与并发 all 写事务共享维护锁，replace 不会越过锁', async () => {
+    const importedData = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: { name: '背包', content: [['row_id', '物品'], ['1', '铁剑']] },
+    };
+    let releaseHolder!: () => void;
+    let holderAcquired!: () => void;
+    const holderReady = new Promise<void>(resolve => { holderAcquired = resolve; });
+    const holderGate = new Promise<void>(resolve => { releaseHolder = resolve; });
+    const holder = runTableWriteTransaction_ACU({
+      source: 'manual_crud',
+      reason: 'hold-runtime-lock',
+      chatKey: mocks.chatIdentifier,
+      isolationKey: '',
+      writeSet: [{ kind: 'all' }],
+      maintenanceMode: 'shared',
+      workingDataMode: 'none',
+    }, async () => {
+      holderAcquired();
+      await holderGate;
+    });
+    await holderReady;
+
+    const importPromise = importTableJsonThroughCommit_ACU(JSON.stringify(importedData), { persist: false });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mocks.replaceAllData).not.toHaveBeenCalled();
+
+    releaseHolder();
+    await holder;
+    const result = await importPromise;
+    expect(result.success).toBe(true);
+    expect(mocks.replaceAllData).toHaveBeenCalledOnce();
+  });
+
+  it('runtime replace 失败时不推进 revision，并保持失败结果', async () => {
+    const importedData = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: { name: '背包', content: [['row_id', '物品'], ['1', '铁剑']] },
+    };
+    const writeSet = [{ kind: 'all' as const }];
+    const oldRevision = captureTableRuntimeRevisionForWriteSet_ACU(writeSet, {
+      chatKey: mocks.chatIdentifier,
+      isolationKey: '',
+    });
+    mocks.replaceAllData.mockResolvedValueOnce({ success: false, error: 'hydrate failed' });
+
+    const result = await importTableJsonThroughCommit_ACU(JSON.stringify(importedData), { persist: false });
+
+    expect(result).toEqual({
+      success: false,
+      persisted: false,
+      failureStage: 'runtime_restore',
+      error: 'hydrate failed',
+    });
+    const afterFailureRevision = captureTableRuntimeRevisionForWriteSet_ACU(writeSet, {
+      chatKey: mocks.chatIdentifier,
+      isolationKey: '',
+    });
+    expect(afterFailureRevision).toBe(oldRevision);
+  });
+
+  it('SQLite preflight await 期间切换聊天时 fail-closed，不提交到新聊天', async () => {
+    const importedData = {
+      mate: { type: 'acu', version: 1 },
+      sheet_0: { name: '背包', content: [['row_id', '物品'], ['1', '铁剑']] },
+    };
+    const chatA = [{ is_user: false, mes: 'A' }];
+    const chatB = [{ is_user: false, mes: 'B' }];
+    let releasePreflight!: (value: any) => void;
+    mocks.isSqliteMode.mockReturnValue(true);
+    mocks.getChatArray.mockReturnValue(chatA);
+    mocks.validateSqliteTemplateDataStrict.mockReset().mockImplementation(() => new Promise(resolve => {
+      releasePreflight = resolve;
+    }));
+
+    const importPromise = importTableJsonThroughCommit_ACU(JSON.stringify(importedData));
+    await Promise.resolve();
+    mocks.getChatArray.mockReturnValue(chatB);
+    mocks.chatIdentifier = 'chat-b';
+    releasePreflight({ success: true });
+
+    const result = await importPromise;
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('scope');
     expect(mocks.runTableUpdateCommit).not.toHaveBeenCalled();
   });
 

@@ -55,10 +55,23 @@ vi.mock('../../../src/service/ai/api-call', () => ({
   callAIWithPreset_ACU: vi.fn(),
 }));
 
-vi.mock('../../../src/shared/text-optimization', () => ({
-  applyOptimizations_ACU: vi.fn((content: string) => content),
-  filterOptimizationsByExcludeRules_ACU: mockFilterExclusions,
-}));
+vi.mock('../../../src/shared/text-optimization', () => {
+  const mockApplyOptimizations = vi.fn((content: string) => content);
+  return {
+    applyOptimizations_ACU: mockApplyOptimizations,
+    applyOptimizationsWithStats_ACU: vi.fn((content: string) => {
+      const nextContent = mockApplyOptimizations(content);
+      return {
+        content: nextContent,
+        appliedCount: nextContent === content ? 0 : 1,
+        failedCount: nextContent === content ? 1 : 0,
+        failedItems: [],
+        effectiveCount: 1,
+      };
+    }),
+    filterOptimizationsByExcludeRules_ACU: mockFilterExclusions,
+  };
+});
 
 vi.mock('../../../src/shared/utils', () => ({
   logDebug_ACU: vi.fn(),
@@ -296,6 +309,27 @@ describe('performContentOptimization_ACU', () => {
     expect(result.optimizedContent).toBe('优化后的内容');
   });
 
+  it('所有建议都未匹配时返回 no-op 失败，不生成可写回正文', async () => {
+    const { callAIWithPreset_ACU } = await import('../../../src/service/ai/api-call');
+    const { applyOptimizationsWithStats_ACU } = await import('../../../src/shared/text-optimization');
+    vi.mocked(callAIWithPreset_ACU).mockResolvedValue(JSON.stringify({
+      optimizations: [{ type: 'replace', original: '不存在的文本', optimized: '新文本', plan: '改写' }],
+      summary: '无匹配',
+    }));
+    vi.mocked(applyOptimizationsWithStats_ACU).mockReturnValueOnce({
+      content: '原始内容',
+      appliedCount: 0,
+      failedCount: 1,
+      failedItems: [],
+      effectiveCount: 1,
+    });
+
+    const { performContentOptimization_ACU } = await import('../../../src/service/optimization/content-optimization');
+    const result = await performContentOptimization_ACU('原始内容', { currentLoop: 1 });
+    expect(result).toMatchObject({ success: false, noOp: true });
+    expect(result).not.toHaveProperty('optimizedContent');
+  });
+
   it('最大替换项数同步进提示词数量行（默认 1-10 按配置改写）', async () => {
     const { callAIWithPreset_ACU } = await import('../../../src/service/ai/api-call');
     vi.mocked(callAIWithPreset_ACU).mockResolvedValue(JSON.stringify({
@@ -384,7 +418,7 @@ describe('标签排除规则写回保护接线（performContentOptimization_ACU�
 
   it('命中排除段的建议被丢弃：不进入 result.optimizations、不参与写回、不占「共 N 处改进」', async () => {
     const { callAIWithPreset_ACU } = await import('../../../src/service/ai/api-call');
-    const { applyOptimizations_ACU } = await import('../../../src/shared/text-optimization');
+    const { applyOptimizationsWithStats_ACU } = await import('../../../src/shared/text-optimization');
     const content = '夜色漫过屋檐。<!-- 作者注：伏笔保持原样 -->';
     const kept = [{ type: 'replace', original: '夜色漫过屋檐', optimized: '夜色漫过瓦檐', plan: '改写' }];
     const dropped = [{ index: 2, original: '伏笔保持原样', reason: '命中排除段 9-26', range: { start: 9, end: 26 } }];
@@ -416,7 +450,7 @@ describe('标签排除规则写回保护接线（performContentOptimization_ACU�
       { excludeRules: COMMENT_RULES, excludeTags: '' },
     );
     // 写回只喂保留下来的建议
-    expect(vi.mocked(applyOptimizations_ACU).mock.calls.some(call => call[1] === kept)).toBe(true);
+    expect(vi.mocked(applyOptimizationsWithStats_ACU).mock.calls.some(call => call[1] === kept)).toBe(true);
   });
 
   it('未配置排除规则时行为不变：全部建议原样透传（回归锁）', async () => {

@@ -77,6 +77,16 @@ export type PendingVisualizerDataOps_ACU = {
     };
 };
 
+function currentVisualizerContextKey_ACU(): string {
+  return `${String(currentChatFileIdentifier_ACU || '')}::${String(getCurrentIsolationKey_ACU() || '')}`;
+}
+
+function assertVisualizerContextMatches_ACU(expectedContextKey: string): void {
+  if (expectedContextKey && currentVisualizerContextKey_ACU() !== expectedContextKey) {
+    throw new Error('聊天身份已变化，已阻止旧草稿写入当前聊天。');
+  }
+}
+
 function ensurePendingOps_ACU(state: any): PendingVisualizerDataOps_ACU {
     if (!state.pendingDataOps || typeof state.pendingDataOps !== 'object') {
         resetVisualizerPendingDataOps_ACU(state);
@@ -302,7 +312,10 @@ async function refreshVisualizerRuntimeFromReplay_ACU(isolationKey: string): Pro
     return replay.data;
 }
 
-export async function applyVisualizerPendingDataOps_ACU(state: any): Promise<{ success: boolean; changed: boolean; changedSheetKeys?: string[]; insertedRowIds?: Record<string, string>; canonicalData?: any; error?: string }> {
+export async function applyVisualizerPendingDataOps_ACU(state: any, expectedContextKey = ''): Promise<{ success: boolean; changed: boolean; changedSheetKeys?: string[]; insertedRowIds?: Record<string, string>; canonicalData?: any; error?: string }> {
+    if (expectedContextKey && currentVisualizerContextKey_ACU() !== expectedContextKey) {
+        return { success: false, changed: false, error: '聊天身份已变化，已阻止旧草稿写入当前聊天。' };
+    }
     const pending = ensurePendingOps_ACU(state);
     if (pending.committed) {
         try {
@@ -319,6 +332,9 @@ export async function applyVisualizerPendingDataOps_ACU(state: any): Promise<{ s
     if (!hasVisualizerPendingDataOps_ACU(state)) return { success: true, changed: false };
 
     const migration = await ensureLegacyStorageMigratedBeforeWrite_ACU('visualizer_save_v2_replay');
+    if (expectedContextKey && currentVisualizerContextKey_ACU() !== expectedContextKey) {
+        return { success: false, changed: false, error: '聊天身份已变化，已阻止旧草稿写入当前聊天。' };
+    }
     if (!migration.success) return { success: false, changed: false, error: migration.error || '旧存储迁移失败，已阻止可视化编辑器保存。' };
     if (migration.migrated) await reloadStorageProvider();
 
@@ -333,6 +349,9 @@ export async function applyVisualizerPendingDataOps_ACU(state: any): Promise<{ s
         // afterData must be ops(V2 replay base). Runtime snapshots can carry seedRows /
         // type drift / unrelated fields and falsely fail batch candidate validation.
         const replay = await loadTableStateFromFramesV2Detailed_ACU(chat, isolationKey, { updateRuntimeState: false });
+        if (expectedContextKey && currentVisualizerContextKey_ACU() !== expectedContextKey) {
+            return { success: false, changed: false, error: '聊天身份已变化，已阻止旧草稿写入当前聊天。' };
+        }
         if (!replay) {
             return { success: false, changed: false, error: 'V2 replay 未产生表格数据，已阻止可视化编辑器保存。' };
         }
@@ -348,6 +367,7 @@ export async function applyVisualizerPendingDataOps_ACU(state: any): Promise<{ s
             writeSet,
             initialData: replay.data,
         }, async (transactionContext, workingData) => {
+            assertVisualizerContextMatches_ACU(expectedContextKey);
             if (!workingData) throw new Error('运行时表格数据为空，已阻止可视化编辑器保存。');
             const data = workingData as any;
             const operationsBySheet = new Map<string, TableMutationOperationV2_ACU[]>();
@@ -415,6 +435,7 @@ export async function applyVisualizerPendingDataOps_ACU(state: any): Promise<{ s
                     operations,
                 };
             });
+            assertVisualizerContextMatches_ACU(expectedContextKey);
             const saved = await persistTableMutationLogBatchV2_ACU({
                 source: 'manual_crud',
                 afterData: data,

@@ -494,6 +494,7 @@ import AcuPanel from "../../components/_lib/AcuPanel.vue";
 import AcuSegmentedControl from "../../components/_lib/AcuSegmentedControl.vue";
 import AcuTextarea from "../../components/_lib/AcuTextarea.vue";
 import { useUiCloseGuard } from "../../composables/useUiCloseGuard";
+import { watchChatChanged_ACU } from "../../composables/useChatChangedListener";
 import { useVisualizerConfigEditing } from "../../composables/visualizer/useVisualizerConfigEditing";
 import { useVisualizerData } from "../../composables/visualizer/useVisualizerData";
 import { useVisualizerSave } from "../../composables/visualizer/useVisualizerSave";
@@ -1337,6 +1338,15 @@ watch(
     void data.loadFromCurrentContext();
   },
 );
+
+watchChatChanged_ACU(() => {
+  if (!visualizer.isActive) return;
+  if (visualizer.dirty) {
+    visualizer.invalidateDraftContext();
+    return;
+  }
+  void data.loadFromCurrentContext();
+});
 
 watch(
   () => visualizer.currentSheetKey,

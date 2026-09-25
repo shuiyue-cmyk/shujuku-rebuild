@@ -426,7 +426,7 @@ export interface ManualUpdateResult {
      */
     rolledBackCleanup?: boolean;
     /** 面向 UI/恢复诊断的稳定失败分类；不得依赖错误文案解析。 */
-    diagnosticCode?: 'anchor_preflight_blocked' | 'replay_anchor_missing' | 'replay_missing_selected_sheet' | 'replay_requires_checkpoint_convergence' | 'replay_data_mismatch' | 'replay_failed' | 'catch_up_migration_failed' | 'catch_up_migration_reload_failed' | 'catch_up_migration_changed_topology' | 'catch_up_runtime_changed_after_confirmation' | 'provisional_bridge_required' | 'provisional_baseline_unreconstructable' | 'provisional_bridge_conflict' | 'bridge_finalize_failed' | 'bridge_replay_mismatch' | 'provisional_recovery_required' | 'stale_bucket_after_boundary_checkpoint' | 'staging_plan_failed' | 'boundary_commit_failed' | TableFillBoundaryDiagnosticCode_ACU;
+    diagnosticCode?: 'anchor_preflight_blocked' | 'replay_anchor_missing' | 'replay_missing_selected_sheet' | 'replay_requires_checkpoint_convergence' | 'replay_data_mismatch' | 'replay_failed' | 'catch_up_migration_failed' | 'catch_up_migration_reload_failed' | 'catch_up_migration_changed_topology' | 'catch_up_runtime_changed_after_confirmation' | 'catch_up_chat_changed_after_confirmation' | 'catch_up_chat_changed_before_ai' | 'provisional_bridge_required' | 'provisional_baseline_unreconstructable' | 'provisional_bridge_conflict' | 'bridge_finalize_failed' | 'bridge_replay_mismatch' | 'provisional_recovery_required' | 'stale_bucket_after_boundary_checkpoint' | 'staging_plan_failed' | 'boundary_commit_failed' | TableFillBoundaryDiagnosticCode_ACU;
     catchUpPlan?: ManualCatchUpPlan_ACU;
 }
 
@@ -2970,6 +2970,17 @@ export async function executeAutoFillStagingGroups_ACU(
     });
     stagingSession = createTableFillStagingSession_ACU(stagingRun);
 
+    const failFastAfterSegmentError = async (error: string) => {
+        await stagingSession?.discard();
+        stagingSession = null;
+        return {
+            success: false as const,
+            failedGroups: [...new Set([...failedGroups, ...normalizedGroups.map(group => group.key)])],
+            error,
+            committedBucketCount,
+        };
+    };
+
     const settleStagingBoundary = async (): Promise<{ ok: true } | { ok: false; error: string; diagnosticCode?: string }> => {
         if (!boundaryPlan || boundaryCommitted) return { ok: true };
         if (!stagingRun || stagingRun.overlay.stagedBucketCount === 0) {
@@ -3028,7 +3039,7 @@ export async function executeAutoFillStagingGroups_ACU(
             if (!preResult.success) {
                 failedGroups.add(group.key);
                 firstError = firstError || preResult.error || '边界前 staging 提交失败。';
-                break;
+                return failFastAfterSegmentError(firstError);
             }
         }
 
@@ -3041,7 +3052,7 @@ export async function executeAutoFillStagingGroups_ACU(
             if (!settleResult.ok) {
                 failedGroups.add(group.key);
                 firstError = firstError || `跨根 staging 汇合失败：${(settleResult as { ok: false; error: string }).error}`;
-                break;
+                return failFastAfterSegmentError(firstError);
             }
         }
 
@@ -3067,7 +3078,7 @@ export async function executeAutoFillStagingGroups_ACU(
             if (!postResult.success) {
                 failedGroups.add(group.key);
                 firstError = firstError || postResult.error || '边界后持久化提交失败。';
-                break;
+                return failFastAfterSegmentError(firstError);
             }
         }
     }
@@ -3215,6 +3226,18 @@ export async function executeCardUpdateCore_ACU(
 
                 emitProgress({ phase: 'parsing' });
                 const aiResponse = collectResult.aiResponse;
+
+                if (isSqliteMode()
+                    && typeof collectResult.tableEditText === 'string'
+                    && collectResult.tableEditText.trim()
+                    && !isSqlContent(collectResult.tableEditText)) {
+                    return {
+                        success: false,
+                        modifiedKeys: [],
+                        error: 'SQLite 填表仅接受 SQL tableEdit；拒绝非 SQL 输出，未进入 JSON snapshot 分支。',
+                        errorCategory: 'model',
+                    };
+                }
 
                 const isSqlTableEdit = isSqliteMode() && typeof collectResult.tableEditText === 'string' && isSqlContent(collectResult.tableEditText);
 
@@ -3421,6 +3444,17 @@ export async function executeCardUpdateCore_ACU(
                     }
 
                     applySpecialIndexSequenceToSummaryTables_ACU(workingTableData);
+                    if (Array.isArray(targetSheetKeys) && targetSheetKeys.length > 0) {
+                        const allowedTargetKeys = new Set(targetSheetKeys);
+                        const unauthorizedKeys = parsedKeys.filter(sheetKey => !allowedTargetKeys.has(sheetKey));
+                        if (unauthorizedKeys.length > 0) {
+                            return {
+                                success: false,
+                                error: `填表越权修改了非目标表：${unauthorizedKeys.join('、')}。`,
+                                errorCategory: 'model' as const,
+                            };
+                        }
+                    }
                     const revisionWriteSet = parsedKeys.map(sheetKey => ({ kind: 'sheet' as const, sheetKey }));
                     if (isImportMode) {
                         emitProgress({ phase: 'chunk_done' });
@@ -3951,6 +3985,13 @@ async function ensureStrictlyReplayableHistoryForCatchUp_ACU(
  * 按聊天中已提交的 scheduleSummary/事件事实规划并执行所选表的后缀追平。
  * 不扫描或声称修复历史内部空洞；一期只处理每表连续前沿后的缺口。
  */
+function executionSnapshotContextStillMatches_ACU(snapshot: { chatIdentity?: string; isolationKey?: string } | undefined): boolean {
+    if (!snapshot || (snapshot.chatIdentity === undefined && snapshot.isolationKey === undefined)) return true;
+    if (snapshot.chatIdentity !== undefined && String(currentChatFileIdentifier_ACU || '') !== snapshot.chatIdentity) return false;
+    if (snapshot.isolationKey !== undefined && String(getCurrentIsolationKey_ACU() || '') !== snapshot.isolationKey) return false;
+    return true;
+}
+
 export async function orchestrateManualCatchUp_ACU(
     targetKeys: string[],
     refreshData: () => Promise<{ degraded?: boolean } | void>,
@@ -3963,7 +4004,11 @@ export async function orchestrateManualCatchUp_ACU(
          * 重新校验当前 runtime 与快照的一致性；若 runtime 在确认期间被 purge
          * 或表集合变化，直接 fail-closed 阻断，防止展示回退/陈旧目标继续执行。
          */
-        executionSnapshot?: { sheetKeys: string[] };
+        executionSnapshot?: {
+            sheetKeys: string[];
+            chatIdentity?: string;
+            isolationKey?: string;
+        };
     } = {},
 ): Promise<ManualUpdateResult> {
     if (isAutoUpdatingCard_ACU) {
@@ -3972,12 +4017,36 @@ export async function orchestrateManualCatchUp_ACU(
     if (!coreApisAreReady_ACU) {
         return { success: false, error: 'API未就绪。' };
     }
+    if (options.executionSnapshot !== undefined && !executionSnapshotContextStillMatches_ACU(options.executionSnapshot)) {
+        return {
+            success: false,
+            outcome: 'blocked',
+            error: '聊天已切换，已取消追平，请重新确认目标。',
+            committedBucketCount: 0,
+            dataCommitted: false,
+            replayVerified: false,
+            terminalProgressSaved: false,
+            diagnosticCode: 'catch_up_chat_changed_after_confirmation',
+        };
+    }
 
     // 追平规划前必须先完成 legacy→V2 迁移：迁移会按 skipUpdateFloors 在后方楼层创建
     // migration full checkpoint。若等到 chunk 执行时才迁移，第一 bucket 的目标楼层早于
     // 新锚点，persist 会以 target < latestFullCheckpoint fail-fast 拒绝，用户已经白白
     // 支付了一次 AI 调用。迁移成功后必须重载存储运行时与聊天，再重新规划与重新预检。
     const migration = await ensureLegacyStorageMigratedBeforeWrite_ACU('orchestrateManualCatchUp:preplan');
+    if (options.executionSnapshot !== undefined && !executionSnapshotContextStillMatches_ACU(options.executionSnapshot)) {
+        return {
+            success: false,
+            outcome: 'blocked',
+            error: '聊天已切换，已取消追平，请重新确认目标。',
+            committedBucketCount: 0,
+            dataCommitted: false,
+            replayVerified: false,
+            terminalProgressSaved: false,
+            diagnosticCode: 'catch_up_chat_changed_after_confirmation',
+        };
+    }
     if (!migration.success) {
         return {
             success: false,
@@ -3993,6 +4062,18 @@ export async function orchestrateManualCatchUp_ACU(
         // 迁移改写聊天持久化拓扑：内存 runtime、模板与聊天数组都必须基于新状态重建，
         // 否则规划会建立在迁移前的陈旧快照上。
         const reloadResult = await reloadStorageProvider();
+        if (options.executionSnapshot !== undefined && !executionSnapshotContextStillMatches_ACU(options.executionSnapshot)) {
+            return {
+                success: false,
+                outcome: 'blocked',
+                error: '聊天已切换，已取消追平，请重新确认目标。',
+                committedBucketCount: 0,
+                dataCommitted: false,
+                replayVerified: false,
+                terminalProgressSaved: false,
+                diagnosticCode: 'catch_up_chat_changed_after_confirmation',
+            };
+        }
         if (!reloadResult?.ok) {
             return {
                 success: false,
@@ -4023,6 +4104,19 @@ export async function orchestrateManualCatchUp_ACU(
     // 显式提供（即使 sheetKeys 为空/非法）→ 必须 fail-closed，禁止静默降级。
     const executionSnapshot = options.executionSnapshot?.sheetKeys;
     if (options.executionSnapshot !== undefined) {
+        if (!executionSnapshotContextStillMatches_ACU(options.executionSnapshot)) {
+            return {
+                success: false,
+                outcome: 'blocked',
+                error: '聊天已切换，已取消追平，请重新确认目标。',
+                catchUpPlan: plan,
+                committedBucketCount: 0,
+                dataCommitted: false,
+                replayVerified: false,
+                terminalProgressSaved: false,
+                diagnosticCode: 'catch_up_chat_changed_after_confirmation',
+            };
+        }
         if (!runtimeSheetKeysMatchSnapshot_ACU(executionSnapshot)) {
             logWarn_ACU('[手动追平] runtime 表集合在确认期间变化，已阻止执行（快照未匹配）。');
             return {
@@ -4163,6 +4257,21 @@ export async function orchestrateManualCatchUp_ACU(
     // staging 只是 run 级内存状态（未写任何聊天帧），二检阻断直接丢弃 staging 返回，
     // 不遗留任何持久化拓扑改写，无需 rollback。
     if (options.executionSnapshot !== undefined) {
+        if (!executionSnapshotContextStillMatches_ACU(options.executionSnapshot)) {
+            stagingRun = null;
+            boundaryPlan = null;
+            return {
+                success: false,
+                outcome: 'blocked',
+                error: '聊天已切换，已取消追平，请重新确认目标。',
+                catchUpPlan: plan,
+                committedBucketCount: 0,
+                dataCommitted: false,
+                replayVerified: false,
+                terminalProgressSaved: false,
+                diagnosticCode: 'catch_up_chat_changed_before_ai',
+            };
+        }
         if (!runtimeSheetKeysMatchSnapshot_ACU(executionSnapshot)) {
             logWarn_ACU('[手动追平] runtime 在 AI 调用前一刻变化，已阻止执行（快照未匹配）。');
             stagingRun = null;
@@ -4792,7 +4901,11 @@ export async function orchestrateManualUpdate_ACU(
          * 之前重新校验当前 runtime 与快照的一致性；runtime 若在确认期间被 purge
          * 或表集合变化，直接 fail-closed 阻断，防止对已失效目标执行破坏性重填。
          */
-        executionSnapshot?: { sheetKeys: string[] };
+        executionSnapshot?: {
+            sheetKeys: string[];
+            chatIdentity?: string;
+            isolationKey?: string;
+        };
     } = {},
 ): Promise<ManualUpdateResult> {
     let committedBucketCount = 0;
@@ -4919,6 +5032,9 @@ export async function orchestrateManualUpdate_ACU(
     };
 
     try {
+        if (options.executionSnapshot !== undefined && !executionSnapshotContextStillMatches_ACU(options.executionSnapshot)) {
+            return { success: false, error: '聊天已切换，已取消本次手动填表，请重新确认目标。' };
+        }
         if (isAutoUpdatingCard_ACU) {
             return { success: false, error: '数据库更新正在进行中，请稍候...' };
         }
@@ -4933,7 +5049,13 @@ export async function orchestrateManualUpdate_ACU(
         }
 
         await loadAllChatMessages_ACU();
+        if (options.executionSnapshot !== undefined && !executionSnapshotContextStillMatches_ACU(options.executionSnapshot)) {
+            return { success: false, error: '聊天已切换，已取消本次手动填表，请重新确认目标。' };
+        }
         await refreshData();
+        if (options.executionSnapshot !== undefined && !executionSnapshotContextStillMatches_ACU(options.executionSnapshot)) {
+            return { success: false, error: '聊天已切换，已取消本次手动填表，请重新确认目标。' };
+        }
 
         if (!currentJsonTableData_ACU) {
             return { success: false, error: '数据库未加载。' };
@@ -5029,6 +5151,9 @@ export async function orchestrateManualUpdate_ACU(
         // 重新对齐（本任务自身的 commit 不是外部修改），其余时刻只读。
         let manualUpdateSnapshotKeys: string[] | undefined = options.executionSnapshot?.sheetKeys;
         if (options.executionSnapshot !== undefined) {
+            if (!executionSnapshotContextStillMatches_ACU(options.executionSnapshot)) {
+                return { success: false, error: '聊天已切换，已取消本次手动填表，请重新确认目标。' };
+            }
             if (!runtimeSheetKeysMatchSnapshot_ACU(manualUpdateSnapshotKeys)) {
                 logWarn_ACU('[Manual Update] runtime 在确认期间变化，已阻止手动更新（快照未匹配）。');
                 return { success: false, error: '表格运行时在确认期间发生变化，已取消本次手动填表，请确认后重试。' };
@@ -5127,6 +5252,9 @@ export async function orchestrateManualUpdate_ACU(
             // 等待期间 runtime 可能被 purge/表集合变化。必须紧邻破坏性清理再次核对，
             // 覆盖“第一次复检通过 → await provider ready → 清理开始”之间的窗口。
             if (options.executionSnapshot !== undefined) {
+                if (!executionSnapshotContextStillMatches_ACU(options.executionSnapshot)) {
+                    return { success: false, error: '聊天已切换，已取消本次手动填表，请重新确认目标。' };
+                }
                 if (!runtimeSheetKeysMatchSnapshot_ACU(manualUpdateSnapshotKeys)) {
                     logWarn_ACU('[Manual Refill] runtime 在清理前一刻变化，已阻止破坏性重填（快照未匹配）。');
                     return { success: false, error: '表格运行时在确认期间发生变化，已取消本次手动填表，请确认后重试。' };
@@ -5314,6 +5442,12 @@ export async function orchestrateManualUpdate_ACU(
         // 直接 return 会绕过 failManualRefillSession，导致「旧数据已清、新数据未写」的净损失。
         // 因此重填路径必须走 failManualRefillSession（零提交时回滚清理，已提交时按已提交事实对齐运行时）。
         if (options.executionSnapshot !== undefined) {
+            if (!executionSnapshotContextStillMatches_ACU(options.executionSnapshot)) {
+                if (manualRefillEnabled) {
+                    return await failManualRefillSession('聊天已切换，已取消本次手动填表；若本次未写入任何数据，将自动回滚清理，请重新确认目标。');
+                }
+                return { success: false, error: '聊天已切换，已取消本次手动填表，请重新确认目标。' };
+            }
             if (!runtimeSheetKeysMatchSnapshot_ACU(manualUpdateSnapshotKeys)) {
                 logWarn_ACU('[Manual Update] runtime 在 AI 调用前一刻变化，已阻止手动更新（快照未匹配）。');
                 if (manualRefillEnabled) {
@@ -5415,6 +5549,12 @@ export async function orchestrateManualUpdate_ACU(
             // （零提交回滚清理，已提交则保留成果并刷新），不得裸返回。
             // 普通路径：结构化失败返回。
             if (options.executionSnapshot !== undefined) {
+                if (!executionSnapshotContextStillMatches_ACU(options.executionSnapshot)) {
+                    if (manualRefillEnabled) {
+                        return await failManualRefillSession('聊天已切换，已取消本次手动填表；若本次未写入任何数据，将自动回滚清理，请重新确认目标。');
+                    }
+                    return { success: false, error: '聊天已切换，已取消本次手动填表，请重新确认目标。' };
+                }
                 if (!runtimeSheetKeysMatchSnapshot_ACU(manualUpdateSnapshotKeys)) {
                     logWarn_ACU(`[Manual Update] runtime 在第 ${chunkIndex} 批 AI 调用前一刻变化，已阻止该批执行（快照未匹配）。`);
                     if (manualRefillEnabled) {
@@ -5636,8 +5776,12 @@ export async function orchestrateManualUpdate_ACU(
                     const batchResult = await executeAutoMergeBatch_ACU(prepared, prepared.batches[i], acc);
                     acc = batchResult.accumulatedSummary;
                 }
-                await finalizeAutoMerge_ACU(prepared, acc);
-                autoMergeSuccess = true;
+                const mergeResult = await finalizeAutoMerge_ACU(prepared, acc);
+                if (mergeResult?.success !== true) {
+                    logWarn_ACU('[自动合并] 提交失败或返回无效结果，自动合并未成功。', mergeResult?.error);
+                } else {
+                    autoMergeSuccess = true;
+                }
             }
         } catch (e) {
             logWarn_ACU('自动合并总结检测失败:', e);

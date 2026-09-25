@@ -852,11 +852,30 @@ describe('executeAutoUpdatePlan_ACU', () => {
     vi.mocked(mergeLogic.checkAutoMergeTrigger_ACU).mockReturnValue({ shouldTrigger: true, mergeCount: 5 });
     vi.mocked(mergeLogic.prepareAutoMergeBatches_ACU).mockReturnValue({ batches: [{ startIndex: 0, endIndex: 5 }] } as any);
     vi.mocked(mergeLogic.executeAutoMergeBatch_ACU).mockResolvedValue({ accumulatedSummary: ['合并结果'] } as any);
-    vi.mocked(mergeLogic.finalizeAutoMerge_ACU).mockResolvedValue(undefined);
+    vi.mocked(mergeLogic.finalizeAutoMerge_ACU).mockResolvedValue({ success: true, mergedRows: 1 } as any);
 
     const result = await executeAutoUpdatePlan_ACU(plan, baseSettings, mockSetAutoUpdating, ops);
     expect(result.autoMergeTriggered).toBe(true);
     expect(result.autoMergeSuccess).toBe(true);
+  });
+
+  it('自动合并 commit 失败时不把 autoMergeSuccess 报成 true', async () => {
+    const plan = {
+      tablesToUpdate: [],
+      updateGroups: {
+        'group_a': { indices: [1], batchSize: 2, groupId: 0, sheetKeys: ['sheet_0'], sheetNames: ['表A'] },
+      },
+    };
+    const ops = makeOps();
+    const mergeLogic = await import('../../../src/service/summary/merge-logic');
+    vi.mocked(mergeLogic.checkAutoMergeTrigger_ACU).mockReturnValue({ shouldTrigger: true, mergeCount: 5 });
+    vi.mocked(mergeLogic.prepareAutoMergeBatches_ACU).mockReturnValue({ batches: [{ startIndex: 0, endIndex: 5 }] } as any);
+    vi.mocked(mergeLogic.executeAutoMergeBatch_ACU).mockResolvedValue({ accumulatedSummary: ['合并结果'] } as any);
+    vi.mocked(mergeLogic.finalizeAutoMerge_ACU).mockResolvedValue({ success: false, mergedRows: 0 } as any);
+
+    const result = await executeAutoUpdatePlan_ACU(plan, baseSettings, mockSetAutoUpdating, ops);
+    expect(result.autoMergeTriggered).toBe(true);
+    expect(result.autoMergeSuccess).toBe(false);
   });
 
   it('purgeOldLayerData 失败不影响整体结果', async () => {

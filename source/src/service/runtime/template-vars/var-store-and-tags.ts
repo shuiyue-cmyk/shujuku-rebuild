@@ -135,13 +135,13 @@ import { getCellValue_ACU } from './cell-utils';
         return { success: false, value: null, error: `cell 路径格式错误: ${cellPath}` };
       }
     const [tableName, rowName, colName] = parts.map((p: string) => p.trim());
-      const cellValue: any = getCellValue_ACU(tableName, rowName, colName, context.allTablesJson);
-      if (cellValue === null || cellValue === undefined || cellValue === '') {
-        return { success: false, value: null, error: `cell 值不存在: ${cellPath}` };
+      const cellResult = getCellValue_ACU(context.allTablesJson, tableName, rowName, colName);
+      if (!cellResult?.success || cellResult.value === null || cellResult.value === undefined || cellResult.value === '') {
+        return { success: false, value: null, error: cellResult?.error || `cell 值不存在: ${cellPath}` };
       }
-      const numValue = parseFloat(cellValue);
+      const numValue = parseFloat(cellResult.value);
       if (isNaN(numValue)) {
-        return { success: false, value: null, error: `cell 值不是数字: ${cellPath} = ${cellValue}` };
+        return { success: false, value: null, error: `cell 值不是数字: ${cellPath} = ${cellResult.value}` };
       }
       return { success: true, value: numValue, error: null };
     }
@@ -195,17 +195,17 @@ import { getCellValue_ACU } from './cell-utils';
 
     let processedExpr = expr.trim();
     
-    processedExpr = processedExpr.replace(/cell:([^+\-*/%()\s]+)/gi, (match, cellPath) => {
+    processedExpr = processedExpr.replace(/cell:([^/]+\/[^/]+\/[^+\-*%()\s]+)/gi, (match, cellPath) => {
       const parts = cellPath.split('/');
       if (parts.length !== 3) {
         return 'NaN';
       }
     const [tableName, rowName, colName] = parts.map((p: string) => p.trim());
-      const cellValue: any = getCellValue_ACU(tableName, rowName, colName, context.allTablesJson);
-      if (cellValue === null || cellValue === undefined || cellValue === '') {
+      const cellResult = getCellValue_ACU(context.allTablesJson, tableName, rowName, colName);
+      if (!cellResult?.success || cellResult.value === null || cellResult.value === undefined || cellResult.value === '') {
         return 'NaN';
       }
-      const numValue = parseFloat(cellValue);
+      const numValue = parseFloat(cellResult.value);
       return isNaN(numValue) ? 'NaN' : String(numValue);
     });
 

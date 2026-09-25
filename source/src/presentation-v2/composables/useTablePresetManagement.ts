@@ -21,6 +21,7 @@ import {
   listTemplatePresetNames_ACU,
   resolveActiveTemplatePresetName_ACU,
   resolveTemplateForExport_ACU,
+  renameTemplatePreset_ACU,
   upsertTemplatePreset_ACU,
 } from '../../service/template/template-preset-service';
 import { sanitizeChatSheetsObject_ACU } from '../../service/template/chat-scope';
@@ -385,16 +386,24 @@ export function useTablePresetManagement() {
     const newName = raw.trim();
     if (!newName || newName === name) return;
     await run(async () => {
-      if (!upsertTemplatePreset_ACU(newName, preset.templateStr)) throw new Error('重命名失败。');
-      deleteTemplatePreset_ACU(name);
-      if (defaultPresetName.value === name) {
-        const result = await applyTemplatePresetToCurrent_ACU(newName, {
-          source: 'v2_table_drawer_rename',
-          updateGlobal: true,
-          save: true,
-          persistChatScope: false,
-        });
-        if (!result) throw new Error('重命名后切换全局模板预设失败。');
+      const renamed = renameTemplatePreset_ACU(name, newName);
+      if (!renamed.ok) throw new Error(renamed.error || '重命名失败。');
+      try {
+        if (defaultPresetName.value === name) {
+          const result = await applyTemplatePresetToCurrent_ACU(newName, {
+            source: 'v2_table_drawer_rename',
+            updateGlobal: true,
+            save: true,
+            persistChatScope: false,
+          });
+          if (!result || (typeof result === 'object' && 'saved' in result && result.saved === false)) {
+            throw new Error('重命名后切换全局模板预设失败。');
+          }
+        }
+      } catch (error) {
+        const rollback = renameTemplatePreset_ACU(newName, name);
+        if (!rollback.ok) throw new Error(`${error instanceof Error ? error.message : String(error)}；回滚重命名失败：${rollback.error || '未知错误'}`);
+        throw error;
       }
       toast.success(`预设已重命名为「${newName}」。`);
     });

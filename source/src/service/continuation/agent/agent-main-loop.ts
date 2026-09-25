@@ -16,6 +16,7 @@
  */
 
 import { getChatArray_ACU } from '../../../data/gateways/chat-gateway';
+import { isAiFloor_ACU } from '../../../shared/ai-floor';
 import { logDebug_ACU } from '../../../shared/utils';
 import { normalizeContinuationInternalAiRetryLimit_ACU } from '../defaults';
 import { callContinuationInternalAi_ACU, callContinuationInternalAiWithRetry_ACU, CONTINUATION_ROLE_OUTPUT_TOKEN_FLOORS_ACU, formatAgentUsageLabel_ACU, type AiUsageMetadata_ACU, type ContinuationInternalAiCallOptions_ACU } from '../internal-ai-call';
@@ -32,7 +33,7 @@ import { AGENT_PREFILLS_ACU, AGENT_RUNTIME_SNAPSHOT_TEMPLATE_ACU } from './agent
 import { beginAgentSessionRun_ACU, logAgentSession_ACU, updateAgentSession_ACU } from './agent-session-log';
 import { AGENT_FINAL_REVIEW_STATUSES_ACU, clearAgentRunState_ACU, readAgentRunState_ACU, saveAgentRunState_ACU, type AgentFinalReviewResumeState_ACU } from './agent-run-cache';
 import { findAgentSubagentDefinition_ACU, renderAgentModuleCatalog_ACU, renderAgentReadCatalog_ACU, renderAgentSubagentCatalog_ACU } from './agent-catalog';
-import { findUnregisteredStageNumbers_ACU, hasActiveStoryArc_ACU, hasActiveStoryArcVolume_ACU, readAgentModuleSnapshot_ACU, renderAgentConstraints_ACU, renderAgentWebRefsCatalog_ACU, writeAgentModuleSnapshot_ACU } from './agent-module-store';
+import { findUnregisteredStageNumbers_ACU, hasActiveStoryArc_ACU, hasActiveStoryArcVolume_ACU, readAgentModuleSnapshot_ACU, refreshAgentModuleSnapshotChatPrefix_ACU, renderAgentConstraints_ACU, renderAgentWebRefsCatalog_ACU, writeAgentModuleSnapshot_ACU } from './agent-module-store';
 import {
   appendAgentConversation_ACU,
   appendPreparedAgentConversationMessages_ACU,
@@ -499,11 +500,33 @@ export class ContinuationAgentTurnPlanner_ACU {
     let maintenanceConvergenceAvailable = false;
     // 上次迭代耗尽后恢复时收敛到最后一次迭代：派工被禁用，主 Agent 必须基于已有证据交付或阻断。
     const iterationStart = resumedState ? Math.min(Math.max(1, resumedState.nextIteration), budget.maxIterations) : 1;
+    // 只有已经成功追加到持久会话的 outcome 才能进入恢复账本。会话提交失败时，
+    // ledger 仍可能有本轮新结果，但它们不能被下一次运行当成已读证据。
+    let committedOutcomeCount = resumedState ? ledger.outcomes.length : 0;
+    type LedgerCheckpoint_ACU = { delegationsUsed: number; perAgent: Map<string, number>; outcomesLength: number };
+    let activeLedgerCheckpoint: LedgerCheckpoint_ACU | null = null;
+    const captureLedgerCheckpoint_ACU = (): LedgerCheckpoint_ACU => ({
+      delegationsUsed: ledger.delegationsUsed,
+      perAgent: new Map(ledger.perAgent),
+      outcomesLength: ledger.outcomes.length,
+    });
+    const rollbackUncommittedLedger_ACU = (): void => {
+      if (!activeLedgerCheckpoint) return;
+      if (ledger.outcomes.length > committedOutcomeCount) ledger.outcomes.length = committedOutcomeCount;
+      ledger.delegationsUsed = activeLedgerCheckpoint.delegationsUsed;
+      ledger.perAgent.clear();
+      for (const [name, count] of activeLedgerCheckpoint.perAgent) ledger.perAgent.set(name, count);
+      activeLedgerCheckpoint = null;
+    };
     const persistRunState = (nextIteration: number): void => saveAgentRunState_ACU(identitySeed.chatIdentity, {
       taskId: identitySeed.taskId,
       cursorKey: cursorKeyOf(),
       nextIteration,
-      ledger: { delegationsUsed: ledger.delegationsUsed, perAgent: Object.fromEntries(ledger.perAgent), outcomes: ledger.outcomes },
+      ledger: {
+        delegationsUsed: ledger.delegationsUsed,
+        perAgent: Object.fromEntries(ledger.perAgent),
+        outcomes: ledger.outcomes.slice(0, committedOutcomeCount),
+      },
       finalReview,
     });
     let totalAttempts = 0;
@@ -524,6 +547,7 @@ export class ContinuationAgentTurnPlanner_ACU {
         : context.execution.turn?.goal ?? '本轮目标待大纲确定',
       resumedState !== null,
     );
+    try {
     // 阈值统计的是主 Agent 实际读取的完整上下文，而不只是会话历史。开销部分（提示词骨架、
     // 正文摘取、资料目录等）按首次迭代的真实渲染结果实测并记忆化；历史哨兵那条不发送，不计入。
     // 压缩判定与读取门禁共用这一口径，量到的就是发出去的。
@@ -600,12 +624,14 @@ export class ContinuationAgentTurnPlanner_ACU {
         }]);
       }
       await session.flush();
+      committedOutcomeCount = ledger.outcomes.length;
+      activeLedgerCheckpoint = null;
     };
 
-    try {
       // 开场检索：新任务第一次规划、资料库为空时，先把原作设定查进百科资料库再让主 Agent 开跑。
       // 受控入口，不消耗主 Agent 的派工额度；失败只记结果不掐断规划。
       if (this.shouldRunOpeningResearch_ACU(request, context, resumedState !== null)) {
+        activeLedgerCheckpoint = captureLedgerCheckpoint_ACU();
         const outcomesBefore = ledger.outcomes.length;
         snapshot = await this.runOpeningResearch_ACU(request, context, ledger, budget, chat, snapshot, apiDependencies);
         await commitOutcomes(outcomesBefore);
@@ -627,6 +653,7 @@ export class ContinuationAgentTurnPlanner_ACU {
         context.execution = request.readContext();
         resetLedgerForAuthorityChange();
         currentIteration = iteration;
+        activeLedgerCheckpoint = captureLedgerCheckpoint_ACU();
         persistRunState(iteration);
         const noExecutableOutline = !context.execution.turn;
         const outlineMaintenanceReserveAvailable = !maintenanceConvergenceAvailable
@@ -811,6 +838,7 @@ export class ContinuationAgentTurnPlanner_ACU {
       // 中断即存档（block 除外，其缓存已清）：迭代中途的失败保留已完成的派工结论，
       // 用户再发送时据此从当前迭代恢复而不是从头重跑。
       if (!(error instanceof ContinuationValidationError_ACU && error.error.code === 'CONTINUATION_AGENT_BLOCKED')) {
+        rollbackUncommittedLedger_ACU();
         persistRunState(Math.min(currentIteration, budget.maxIterations));
       }
       if (!terminalLogged) {
@@ -877,6 +905,10 @@ export class ContinuationAgentTurnPlanner_ACU {
       });
       if (compaction.mark) {
         const candidate = compaction.mark;
+        const leaseProbe = request.createInternalRequestIdentity(0);
+        if (request.signal?.aborted || !request.isInternalRequestCurrent(leaseProbe)) {
+          throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_loop', '交接摘要完成时租约已失效，拒绝写入压缩标记', false));
+        }
         let committed = false;
         try {
           if (await this.dependencies.writeCompactionMark(chat, candidate)) {
@@ -1270,6 +1302,12 @@ export class ContinuationAgentTurnPlanner_ACU {
     snapshot: AgentModuleSnapshot_ACU,
     apiDependencies?: ContinuationApiPresetDependencies_ACU,
   ): Promise<AgentModuleSnapshot_ACU> {
+    const chatAnchor = chat.slice();
+    const assertChatUnchanged_ACU = (): void => {
+      if (chat.length !== chatAnchor.length || chat.some((message, index) => message !== chatAnchor[index])) {
+        throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_loop', '开场检索在途期间聊天楼层发生变化', false));
+      }
+    };
     const delegation: AgentDelegation_ACU = { agentName: AGENT_WEB_RESEARCHER_NAME_ACU, prompt: buildOpeningResearchPrompt_ACU(context.originInstruction), reads: [] };
     const entryId = logAgentSession_ACU({ kind: 'delegation', agentName: delegation.agentName, title: '开场百科检索执行中', detail: delegation.prompt, status: 'running' });
     try {
@@ -1284,27 +1322,30 @@ export class ContinuationAgentTurnPlanner_ACU {
         isCurrent: identity => request.isInternalRequestCurrent(identity),
         signal: request.signal,
       });
+      assertChatUnchanged_ACU();
       const settled = this.settleResearcherResult_ACU(result, snapshot);
+      if (settled.snapshot !== snapshot) {
+        // 落盘守卫与 runParallelDelegations 的信封写同强度：子代理在途期间用户可能已停止任务
+        // （signal abort / 租约作废），此时楼层扩展字段绝不能照常写入末楼。
+        const leaseProbe = request.createInternalRequestIdentity(0);
+        if (request.signal?.aborted || !request.isInternalRequestCurrent(leaseProbe)) {
+          throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_loop', '开场百科检索完成时租约已失效', false));
+        }
+        // 先提交快照，再改内存投影、记成功 outcome；写盘失败时 catch 只能记录失败，
+        // 不能让 ledger 声称正文/百科结果已经与快照一起提交。
+        await this.persistSnapshot_ACU(chat, settled.snapshot);
+        context.moduleSnapshot = settled.snapshot;
+      }
       ledger.outcomes.push(settled.outcome);
       updateAgentSession_ACU(entryId, {
         title: `开场百科检索${settled.outcome.ok ? '完成' : '未采用'}${result.usage ? ` · ${formatAgentUsageLabel_ACU(result.usage)}` : ''}`,
         detail: settled.outcome.ok ? [settled.outcome.summary, settled.outcome.detail].filter(Boolean).join('\n') : settled.outcome.rejectedReason,
         ok: settled.outcome.ok,
       });
-      if (settled.snapshot !== snapshot) {
-        // 落盘守卫与 runParallelDelegations 的信封写同强度：子代理在途期间用户可能已停止任务
-        // （signal abort / 租约作废），此时楼层扩展字段绝不能照常写入末楼。
-        const leaseProbe = request.createInternalRequestIdentity(0);
-        if (request.signal?.aborted || !request.isInternalRequestCurrent(leaseProbe)) {
-          // 内存快照仍返回：调用方（plan）随后会因同一判定抛 STALE，不影响最终结果。
-          return settled.snapshot;
-        }
-        context.moduleSnapshot = settled.snapshot;
-        await this.persistSnapshot_ACU(chat, settled.snapshot);
-      }
       return settled.snapshot;
     } catch (error) {
-      if (error instanceof ContinuationValidationError_ACU && error.error.code === 'CONTINUATION_INTERNAL_REQUEST_STALE') throw error;
+      if (error instanceof ContinuationValidationError_ACU
+        && (error.error.code === 'CONTINUATION_INTERNAL_REQUEST_STALE' || error.error.code === 'CONTINUATION_AGENT_WRITE_REJECTED')) throw error;
       const reason = compactAgentProtocolError_ACU(error);
       updateAgentSession_ACU(entryId, { title: '开场百科检索失败', detail: `${reason}\n主 Agent 将在没有百科资料库的情况下继续规划；需要时它仍可派工 web-researcher 重试。`, ok: false });
       ledger.outcomes.push({ agentName: delegation.agentName, ok: false, summary: '', detail: '', rejectedReason: `开场百科检索失败：${reason}` });
@@ -1358,6 +1399,14 @@ export class ContinuationAgentTurnPlanner_ACU {
     outlineMaintenanceReserveAvailable = false,
   ): Promise<{ snapshot: AgentModuleSnapshot_ACU; usedOutlineMaintenanceReserve: boolean }> {
     const waveLimit = resolveWaveLimit_ACU(request.settings, budget);
+    const chatAnchor = chat.slice();
+    const assertChatUnchanged_ACU = (): void => {
+      if (chat.length !== chatAnchor.length || chat.some((message, index) => message !== chatAnchor[index])) {
+        throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_loop', '子代理在途期间聊天楼层发生变化，拒绝用未见楼层结算', false));
+      }
+    };
+    const aiEvidenceIndexes = new Set<number>();
+    chat.forEach((message, index) => { if (isAiFloor_ACU(message)) aiEvidenceIndexes.add(index); });
     const outlineDelegations = action.delegations.filter(item => item.agentName === AGENT_OUTLINE_AGENT_NAME_ACU);
     const normalDelegations = action.delegations.filter(item => item.agentName !== AGENT_OUTLINE_AGENT_NAME_ACU);
     let usedOutlineMaintenanceReserve = false;
@@ -1409,6 +1458,7 @@ export class ContinuationAgentTurnPlanner_ACU {
       let result: AgentOutlineOpResult_ACU;
       try {
         result = await request.applyOutline(delegation.prompt);
+        assertChatUnchanged_ACU();
       } catch (error) {
         const message = error instanceof ContinuationValidationError_ACU ? error.error.message : error instanceof Error ? error.message : String(error);
         updateAgentSession_ACU(entryId, { title: '大纲操作失败', detail: message, ok: false });
@@ -1500,6 +1550,7 @@ export class ContinuationAgentTurnPlanner_ACU {
         return { delegation, result: null, error };
       }
     }));
+    assertChatUnchanged_ACU();
 
     let nextSnapshot = snapshot;
     let snapshotChanged = false;
@@ -1515,12 +1566,15 @@ export class ContinuationAgentTurnPlanner_ACU {
       if (result.maintainer) {
         try {
           const delta = mergeAgentDeltaRevisions_ACU(result.maintainer.delta, result.readRevisions);
-          const applied = applyAgentModuleDelta_ACU(nextSnapshot, delta, result.writes, chat.length - 1);
+          const applied = applyAgentModuleDelta_ACU(nextSnapshot, delta, result.writes, chat.length - 1, [], aiEvidenceIndexes);
           // 结算派工成功交付契约即推进水位到当轮末楼：空 delta（这段楼层没有新增伏笔/信息差）
           // 同样代表已被处理过，不推水位会让同一区间每轮重复要求结算、白烧派工。
           const settledTarget = chat.length - 1;
           if (applied !== nextSnapshot || applied.settledThroughIndex < settledTarget) {
-            nextSnapshot = { ...applied, settledThroughIndex: Math.max(applied.settledThroughIndex, settledTarget) };
+            nextSnapshot = refreshAgentModuleSnapshotChatPrefix_ACU(
+              { ...applied, settledThroughIndex: Math.max(applied.settledThroughIndex, settledTarget) },
+              chat,
+            );
             snapshotChanged = true;
           }
           const proposals = result.maintainer.delta.constraintProposals;
@@ -1596,13 +1650,13 @@ export class ContinuationAgentTurnPlanner_ACU {
     }
 
     if (snapshotChanged) {
+      assertChatUnchanged_ACU();
       // 落盘守卫与信封写同强度：子代理在途期间用户可能已停止任务（signal abort / 租约作废），
       // 此时楼层扩展字段绝不能照常写入——信封写有 withLease + assertLeaseCurrent，
       // 而 agent-module-store 的写只校验目标楼层存在，守卫必须在这一层补上。
       const leaseProbe = request.createInternalRequestIdentity(0);
       if (request.signal?.aborted || !request.isInternalRequestCurrent(leaseProbe)) {
-        // 内存快照仍返回：调用方（plan）随后会因同一判定抛 STALE，不影响最终结果。
-        return { snapshot: nextSnapshot, usedOutlineMaintenanceReserve };
+        throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_loop', '资料快照落盘前租约已失效', false));
       }
       context.moduleSnapshot = nextSnapshot;
       context.settledThroughIndex = nextSnapshot.settledThroughIndex;

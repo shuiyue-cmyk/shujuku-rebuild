@@ -383,7 +383,7 @@ describe('recoverLostCheckpointsAfterMessageDeletion_ACU', () => {
     expect(frame.logEntries).toEqual([{ seq: 5, operations: [] }]);
   });
 
-  it('过渡根丢失时原样嫁接到后继楼层 tagData', async () => {
+  it('过渡根无法从幸存历史重建时阻止保存，不把旧 cutoff 原样嫁接', async () => {
     const transition = { kind: 'spv79_duplicate_row_id_transition', cutoff: { messageIndex: 0 }, data: { sheet_0: {} } };
     const transitionMsg = aiMsg('transition', logFrame([]), { spv79TransitionCheckpoint: transition });
     const incMsg = aiMsg('inc', logFrame());
@@ -394,7 +394,9 @@ describe('recoverLostCheckpointsAfterMessageDeletion_ACU', () => {
     chat.splice(0, 1);
     const result = await recoverLostCheckpointsAfterMessageDeletion_ACU();
 
-    expect(result.recovered).toBe(true);
-    expect(incMsg.TavernDB_ACU_IsolatedData[''].spv79TransitionCheckpoint).toEqual(transition);
+    expect(result.recovered).toBe(false);
+    expect(result.error).toContain('full checkpoint');
+    expect(incMsg.TavernDB_ACU_IsolatedData[''].spv79TransitionCheckpoint).toBeUndefined();
+    expect(mockSaveChatToHostStrict).not.toHaveBeenCalled();
   });
 });

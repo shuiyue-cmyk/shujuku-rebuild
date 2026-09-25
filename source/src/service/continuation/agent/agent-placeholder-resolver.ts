@@ -360,7 +360,7 @@ export function renderAgentUnsettledHistory_ACU(context: AgentResolveContext_ACU
   const lines: string[] = [];
   for (let index = start; index < context.chat.length; index += 1) {
     const message = context.chat[index];
-    if (!message || message.is_user) continue;
+    if (!isAiFloor_ACU(message)) continue;
     const text = messageText_ACU(message, context.contextRules);
     if (text) lines.push(`【楼层 ${index}】\n${text}`);
   }

@@ -6,6 +6,8 @@ const h = vi.hoisted(() => ({
   saveStrict: vi.fn(), finalize: vi.fn(), persistPack: vi.fn(), persistManifest: vi.fn(),
   discard: vi.fn(async () => {}),
   resolveHead: vi.fn(), loadPack: vi.fn(),
+  timelineCheckpointRowIds: [] as string[],
+  timelineEntryRowIds: ['r1'] as string[],
 }));
 const deferred = () => {
   let resolve!: (value: any) => void;
@@ -48,7 +50,13 @@ vi.mock('../../../src/service/vector/summary-vector-index-archive-service', () =
   buildRowChunkTexts_ACU: (text: string) => [text],
 }));
 vi.mock('../../../src/service/table/summary-sheet-rowid-timeline', () => ({
-  collectSummarySheetRowIdTimelineV2_ACU: async () => ({ status: 'ok', rowIdsAtCheckpoint: [], entries: [{ messageIndex: 0, entryId: 'table-entry', commitRevision: 'r1', seq: 1, rowIdsAfter: ['r1'] }], duplicates: [], emptyRowIdCount: 0 }),
+  collectSummarySheetRowIdTimelineV2_ACU: async () => ({
+    status: 'ok',
+    rowIdsAtCheckpoint: [...h.timelineCheckpointRowIds],
+    entries: [{ messageIndex: 0, entryId: 'table-entry', commitRevision: 'r1', seq: 1, rowIdsAfter: [...h.timelineEntryRowIds] }],
+    duplicates: [],
+    emptyRowIdCount: 0,
+  }),
 }));
 
 vi.mock('../../../src/service/vector/summary-vector-mirror-resolver', () => ({
@@ -94,6 +102,8 @@ function resetFixture() {
   h.persistManifest.mockReset(); h.persistManifest.mockResolvedValue({ ref: { manifestHash: 'manifest', path: 'manifest-path', byteLength: 1 }, file: { path: 'manifest-path', byteSize: 1 } });
   h.resolveHead.mockReset(); h.resolveHead.mockResolvedValue({ status: 'ok', chainConflict: false, stale: false, head: new Map(), appliedTableEntryIds: [], packRefs: [], checkpoint: { embedding: { endpointFingerprint: 'fingerprint', model: 'model', dimension: 2, sourceTextVersion: 2 } } });
   h.loadPack.mockReset(); h.loadPack.mockResolvedValue(null);
+  h.timelineCheckpointRowIds = [];
+  h.timelineEntryRowIds = ['r1'];
 }
 
 async function changeSourceTableDuringEmbedding() {
@@ -128,6 +138,26 @@ describe('summary vector mirror revision race', () => {
     await expectStalePublicationBlocked(() => rebuildSummaryVectorMirror_ACU({ reason: 'initial' }), 'rebuild_commit_failed');
   });
 
+  it('同 rowId 的未镜像 table entry 写入 remove/add refresh delta', async () => {
+    h.timelineCheckpointRowIds = ['r1'];
+    h.timelineEntryRowIds = ['r1'];
+    h.resolveHead.mockResolvedValue({
+      status: 'ok', chainConflict: false, stale: false,
+      head: new Map([['r1', [{ packHash: 'old-pack', chunkIndex: 0 }]]]),
+      appliedTableEntryIds: [],
+      packRefs: [{ packHash: 'old-pack', path: 'old-pack-path', chunkCount: 1, byteLength: 9 }],
+      checkpoint: { embedding: { endpointFingerprint: 'fingerprint', model: 'model', dimension: 2, sourceTextVersion: 2 } },
+    });
+    h.releaseEmbedding.resolve();
+
+    await expect(flushSummaryVectorMirrorNow_ACU({ isolationKey: h.isolationKey, sourceTableKey: 'sheet_summary' })).resolves.toMatchObject({ success: true });
+
+    const deltas = h.chat[0].TavernDB_ACU_IsolatedData[h.isolationKey].storageFrame.summaryVectorIndexFrame.logEntries;
+    expect(deltas.map((delta: any) => delta.operations[0].kind)).toEqual(['row_remove', 'row_add']);
+    expect(deltas[1].operations[0]).toMatchObject({ rowId: 'r1', vectorSourceHash: 'hash-r1' });
+    expect(h.persistPack).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     ['flush', () => flushSummaryVectorMirrorNow_ACU({ isolationKey: h.isolationKey, sourceTableKey: 'sheet_summary' }), 'vector_mirror_commit_failed'],
     ['rebuild', () => rebuildSummaryVectorMirror_ACU({ reason: 'initial' }), 'rebuild_commit_failed'],
@@ -150,7 +180,7 @@ describe('summary vector mirror revision race', () => {
       appliedTableEntryIds: [], packRefs: [oldPack],
       checkpoint: { embedding: { endpointFingerprint: 'fingerprint', model: 'model', dimension: 2, sourceTextVersion: 2 } },
     });
-    h.loadPack.mockResolvedValue({ chunks: [{}] });
+    h.loadPack.mockResolvedValue({ chunks: [{ textHash: 'hash-r1' }] });
     const checkpointPackRefs: any[] = [];
     h.saveStrict.mockImplementation(async () => {
       checkpointPackRefs.push(...(h.chat[0].TavernDB_ACU_IsolatedData[h.isolationKey].storageFrame.summaryVectorIndexFrame?.checkpoint?.packRefs || []));
@@ -160,6 +190,39 @@ describe('summary vector mirror revision race', () => {
 
     expect(h.persistPack).not.toHaveBeenCalled();
     expect(checkpointPackRefs).toContainEqual(oldPack);
+  });
+
+  it('rebuild_repair 发现 pack textHash 落后于实时行时重新 embedding', async () => {
+    h.resolveHead.mockResolvedValue({
+      status: 'ok', chainConflict: false, stale: false,
+      head: new Map([['r1', [{ packHash: 'old-pack', chunkIndex: 0 }]]]),
+      appliedTableEntryIds: [], packRefs: [{ packHash: 'old-pack', path: 'old-pack-path', chunkCount: 1, byteLength: 9 }],
+      checkpoint: { embedding: { endpointFingerprint: 'fingerprint', model: 'model', dimension: 2, sourceTextVersion: 2 } },
+    });
+    h.loadPack.mockResolvedValue({ chunks: [{ textHash: 'stale-hash' }] });
+    h.releaseEmbedding.resolve();
+
+    await expect(rebuildSummaryVectorMirror_ACU({ reason: 'rebuild_repair' })).resolves.toMatchObject({ success: true });
+
+    expect(h.persistPack).toHaveBeenCalledTimes(1);
+  });
+
+  it('rebuild_user 提交失败时不丢弃复用的旧内容寻址 pack', async () => {
+    h.releaseEmbedding.resolve();
+    h.persistPack.mockResolvedValue({
+      ref: { packHash: 'old-pack', path: 'old-pack-path', chunkCount: 1, byteLength: 1 },
+      file: { path: 'old-pack-path', byteSize: 1, publicationState: 'published' },
+      createdNew: false,
+    });
+    h.saveStrict.mockRejectedValueOnce(new Error('strict save failed'));
+
+    await expect(rebuildSummaryVectorMirror_ACU({ reason: 'rebuild_user' })).resolves.toMatchObject({
+      success: false,
+      reason: 'rebuild_commit_failed',
+    });
+
+    const discardedFiles = h.discard.mock.calls.flatMap((call: any[]) => Array.isArray(call[0]) ? call[0] : []);
+    expect(discardedFiles.some((file: any) => file?.path === 'old-pack-path')).toBe(false);
   });
 
   it('row-removal publish 的 strict save 失败会恢复已有镜像 frame', async () => {

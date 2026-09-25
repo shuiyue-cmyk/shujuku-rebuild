@@ -253,6 +253,21 @@ describe('自动正文替换入口判重（executeContentOptimization_ACU）', (
     expect(h.perform).toHaveBeenCalledTimes(2);
   });
 
+  it('所有建议都未匹配时返回 no-op，不写回原文也不登记防重', async () => {
+    h.perform.mockResolvedValue({
+      success: true,
+      optimizations: [{ type: 'replace', original: '不存在的片段', optimized: '不会被写入', plan: '改写' }],
+      summary: '没有可应用项',
+      optimizedContent: LONG_ENOUGH,
+    });
+
+    const result = await executeContentOptimization_ACU(1);
+
+    expect(result).toBe(false);
+    expect(h.replace).not.toHaveBeenCalled();
+    expect(h.processed.size).toBe(0);
+  });
+
   it('手动确认模式（autoApply=false）写回成功后同样登记，回声第二次直接跳过', async () => {
     (settings_ACU as any).contentOptimizationSettings.seamlessMode = false;
     (settings_ACU as any).contentOptimizationSettings.autoApply = false;

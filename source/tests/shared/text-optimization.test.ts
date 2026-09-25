@@ -58,6 +58,7 @@ import {
   trimPunctuation_ACU,
   processSingleQuotes_ACU,
   applyOptimizations_ACU,
+  applyOptimizationsWithStats_ACU,
   filterOptimizationsByExcludeRules_ACU,
   collectOptimizationExcludeRanges_ACU,
 } from '../../src/shared/text-optimization';
@@ -274,6 +275,13 @@ describe('applyOptimizations_ACU', () => {
 
   it('空优化列表返回原文', () => {
     expect(applyOptimizations_ACU('原文', [])).toBe('原文');
+  });
+
+  it('匹配失败时返回 no-op 统计而不是可写回的成功结果', () => {
+    const result = applyOptimizationsWithStats_ACU('你好世界', [
+      { type: 'replace', original: '不存在的文本', optimized: '替换' },
+    ]);
+    expect(result).toMatchObject({ content: '你好世界', appliedCount: 0, failedCount: 1 });
   });
 
   it('匹配失败时原文不变', () => {

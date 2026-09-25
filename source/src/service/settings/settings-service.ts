@@ -439,14 +439,28 @@ export function saveSettings_ACU(): SaveSettingsResult_ACU {
     globalMeta_ACU.activeIsolationCode = code;
     if (code) addDataIsolationHistory_ACU(code, { save: false });
     normalizeDataIsolationHistory_ACU(globalMeta_ACU.isolationCodeList);
-    saveGlobalMeta_ACU();
+    if (!saveGlobalMeta_ACU()) {
+      return { saved: false, storageType: 'memory', code: 'storage_error', error: '保存全局元信息失败。' };
+    }
   }
 
-  // 数据层：纯存储持久化
-  persistSettingsToStorage_ACU(settings_ACU, code);
+  // 数据层：纯存储持久化。门面会把配额、序列化、宿主存储异常收敛为 false；
+  // 不能继续向下返回 saved=true，否则事务型调用方会误以为配置已落盘而不回滚。
+  try {
+    if (!persistSettingsToStorage_ACU(settings_ACU, code)) {
+      return { saved: false, storageType: 'memory', code: 'storage_error', error: '保存设置到存储失败。' };
+    }
+  } catch (error) {
+    // 防御未来门面实现变更：即便持久化层意外抛出，也必须走同一失败契约。
+    logError_ACU('Failed to save settings to storage:', error);
+    return { saved: false, storageType: 'memory', code: 'storage_error', error: '保存设置到存储失败。' };
+  }
 
   try {
       const store = (getConfigStorage_ACU)();
+      if (store && store._lastPersistenceStatus === 'memory') {
+          return { saved: true, storageType: 'memory', code: 'tavern_unavailable', warning: '当前未连接酒馆设置：本次修改仅保存在内存中，刷新后会丢失。' };
+      }
       if (store && !store._isTavern) {
           if ((isIndexedDbAvailable_ACU)()) {
               void (initTavernSettingsBridge_ACU)();
@@ -1345,8 +1359,9 @@ export function applyCombinedSettingsImport_ACU(combinedData: any): string[] {
         for (const field of FIELDS) {
             (settings_ACU as Record<string, unknown>)[field] = snapshot[field];
         }
-        logError_ACU('[合并配置导入] 保存失败，已回滚全部导入字段。', saveResult.error || saveResult.warning || '');
-        throw new Error(saveResult.warning || saveResult.error || '合并配置保存失败，已回滚。');
+        const cause = saveResult.error || saveResult.warning || '';
+        logError_ACU('[合并配置导入] 保存失败，已回滚全部导入字段。', cause);
+        throw new Error(cause ? `合并配置保存失败，已回滚：${cause}` : '合并配置保存失败，已回滚。');
     }
     return modifiedFields;
 }

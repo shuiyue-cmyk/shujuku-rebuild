@@ -1,34 +1,63 @@
 import type { ContinuationEnvelope_ACU, ContinuationStage_ACU, ContinuationTask_ACU, StageRevision_ACU } from './model';
 
+type CompletionEntry_ACU = ContinuationTask_ACU['timeline'][number];
+
+function messageFingerprintText_ACU(message: unknown): string {
+  const record = message && typeof message === 'object' && !Array.isArray(message) ? message as Record<string, unknown> : {};
+  const payload = JSON.stringify({
+    is_user: record.is_user === true,
+    is_system: record.is_system === true,
+    role: String(record.role ?? ''),
+    name: String(record.name ?? ''),
+    mes: String(record.mes ?? ''),
+  });
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < payload.length; index += 1) {
+    hash ^= payload.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `mf-${(hash >>> 0).toString(16).padStart(8, '0')}`;
+}
+
+export function getStableMessageIdentity_ACU(message: unknown): { messageId?: string | number; messageFingerprint: string } {
+  const record = message && typeof message === 'object' && !Array.isArray(message) ? message as Record<string, unknown> : {};
+  const rawId = record.message_id ?? record.id;
+  const messageId = (typeof rawId === 'string' || (typeof rawId === 'number' && Number.isFinite(rawId))) ? rawId : undefined;
+  return { ...(messageId === undefined ? {} : { messageId }), messageFingerprint: messageFingerprintText_ACU(record) };
+}
+
+function completionSurvives_ACU(entry: CompletionEntry_ACU, chat: readonly unknown[] | undefined, chatLength: number, used: Set<number>): boolean {
+  const hasDurableIdentity = entry.messageId !== undefined || entry.messageFingerprint !== undefined;
+  if (!chat) return !hasDurableIdentity && typeof entry.messageIndex === 'number' ? entry.messageIndex < chatLength : !hasDurableIdentity;
+  if (!hasDurableIdentity) return typeof entry.messageIndex === 'number' && entry.messageIndex < chat.length;
+  for (let index = 0; index < chat.length; index += 1) {
+    if (used.has(index)) continue;
+    const identity = getStableMessageIdentity_ACU(chat[index]);
+    if (entry.messageId !== undefined && identity.messageId !== entry.messageId) continue;
+    if (entry.messageFingerprint !== undefined && identity.messageFingerprint !== entry.messageFingerprint) continue;
+    used.add(index);
+    return true;
+  }
+  return false;
+}
+
 /**
- * 按聊天实际长度重算阶段硬游标。
- *
- * 每轮确认时把正文楼层号写进 timeline.turn_completed.messageIndex。退楼层后那些
- * 下标不再落在 chat 内，对应轮次视为未完成——游标跟着对话走，而不是停在首楼里
- * 回退前的阶段。没有任何带 messageIndex 的完成记录时保持原游标，避免旧信封被误回退。
- *
- * @param task 当前任务
- * @param chatLength 当前聊天数组长度
- * @returns 游标已对齐的任务；无需改动时返回原对象
+ * 按聊天实际楼层重算阶段硬游标。
+ * 新写入的完成记录带稳定 message identity；旧记录没有 identity 时才回退到旧下标兼容。
  */
-export function reconcileTaskCursorFromChat_ACU(task: ContinuationTask_ACU, chatLength: number): ContinuationTask_ACU {
-  if (!Number.isInteger(chatLength) || chatLength < 0) return task;
+export function reconcileTaskCursorFromChat_ACU(task: ContinuationTask_ACU, chatLength: number, chat?: readonly unknown[]): ContinuationTask_ACU {
+  const effectiveLength = Array.isArray(chat) ? chat.length : chatLength;
+  if (!Number.isInteger(effectiveLength) || effectiveLength < 0) return task;
   const completions = task.timeline.filter(entry => entry.kind === 'turn_completed' && entry.stageId);
   const survivingByStage = new Map<string, number>();
   const hasAnchorByStage = new Map<string, boolean>();
   for (const entry of completions) {
     const stageId = entry.stageId as string;
-    if (typeof entry.messageIndex === 'number') hasAnchorByStage.set(stageId, true);
+    if (typeof entry.messageIndex === 'number' || entry.messageId !== undefined || entry.messageFingerprint !== undefined) hasAnchorByStage.set(stageId, true);
     const surviving = survivingByStage.get(stageId) ?? 0;
-    if (typeof entry.messageIndex === 'number') {
-      if (entry.messageIndex < chatLength) survivingByStage.set(stageId, surviving + 1);
-      else survivingByStage.set(stageId, surviving);
-    } else {
-      survivingByStage.set(stageId, surviving + 1);
-    }
+    survivingByStage.set(stageId, surviving + (completionSurvives_ACU(entry, chat, effectiveLength, new Set()) ? 1 : 0));
   }
-  // 从前往后扫：一旦某阶段因楼层消失而未完成，其后没有任何存活完成的阶段应废弃，
-  // 否则主 Agent 会把它们当成「下一阶段已在」再排一份新大纲。
+  // 从前往后扫：一旦某阶段因楼层消失而未完成，其后没有任何存活完成的阶段应废弃。
   let firstOpenIndex = -1;
   let changed = false;
   const stages = task.stages.map((stage, index) => {
@@ -36,21 +65,16 @@ export function reconcileTaskCursorFromChat_ACU(task: ContinuationTask_ACU, chat
     const totalTurns = revision?.outline.totalTurns ?? 0;
     const hasAnchor = hasAnchorByStage.get(stage.stageId) === true;
     if (!hasAnchor) {
-      if (stage.status !== 'completed' && stage.status !== 'abandoned' && stage.status !== 'failed' && firstOpenIndex < 0) {
-        firstOpenIndex = index;
-      }
+      if (stage.status !== 'completed' && stage.status !== 'abandoned' && stage.status !== 'failed' && firstOpenIndex < 0) firstOpenIndex = index;
       return stage;
     }
     const recorded = completions.filter(entry => entry.stageId === stage.stageId).length;
+    const used = new Set<number>();
     let surviving = 0;
     for (const entry of completions) {
       if (entry.stageId !== stage.stageId) continue;
-      if (typeof entry.messageIndex === 'number') {
-        if (entry.messageIndex < chatLength) surviving += 1;
-        else break;
-      } else {
-        surviving += 1;
-      }
+      if (!completionSurvives_ACU(entry, chat, effectiveLength, used)) break;
+      surviving += 1;
     }
     surviving = Math.min(surviving, recorded, totalTurns);
     const cursor = cursorFromCompletedTurns_ACU(revision, surviving);
@@ -62,14 +86,7 @@ export function reconcileTaskCursorFromChat_ACU(task: ContinuationTask_ACU, chat
       nextStatus = 'running';
     }
     if (!fullyDone && firstOpenIndex < 0) firstOpenIndex = index;
-    if (
-      stage.completedTurns === surviving
-      && stage.activeNodeIndex === cursor.nodeIndex
-      && stage.activeTurnIndex === cursor.turnIndex
-      && stage.status === nextStatus
-    ) {
-      return stage;
-    }
+    if (stage.completedTurns === surviving && stage.activeNodeIndex === cursor.nodeIndex && stage.activeTurnIndex === cursor.turnIndex && stage.status === nextStatus) return stage;
     changed = true;
     return { ...stage, completedTurns: surviving, activeNodeIndex: cursor.nodeIndex, activeTurnIndex: cursor.turnIndex, status: nextStatus };
   });
@@ -93,13 +110,11 @@ export function reconcileTaskCursorFromChat_ACU(task: ContinuationTask_ACU, chat
   return { ...task, activeStageId, stages };
 }
 
-/**
- * 把信封里的任务游标按聊天长度对齐。任务为空时原样返回。
- */
-export function reconcileContinuationEnvelopeCursor_ACU(envelope: ContinuationEnvelope_ACU, chatLength: number): ContinuationEnvelope_ACU {
+/** 把信封里的任务游标按聊天楼层对齐。 */
+export function reconcileContinuationEnvelopeCursor_ACU(envelope: ContinuationEnvelope_ACU, chatLength: number, chat?: readonly unknown[]): ContinuationEnvelope_ACU {
   const task = envelope.activeTask;
   if (!task) return envelope;
-  const next = reconcileTaskCursorFromChat_ACU(task, chatLength);
+  const next = reconcileTaskCursorFromChat_ACU(task, chatLength, chat);
   return next === task ? envelope : { ...envelope, activeTask: next };
 }
 

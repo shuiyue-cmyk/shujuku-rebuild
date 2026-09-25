@@ -195,14 +195,23 @@ export async function listAllHostChatNames_ACU(): Promise<Set<string> | null> {
                 return null;
             }
             const payload = await response.json();
-            // 无聊天时部分版本返回 {error: true}，视为空集而非失败。
-            if (payload && typeof payload === 'object' && !Array.isArray(payload) && (payload as any).error) {
-                continue;
+            // TT character-routes.js 的完整响应契约是数组（无角色/无聊天均为 []）。
+            // 2xx error 对象、旧版对象形态或畸形 entry 都不能证明枚举完整，否则 GC
+            // 会把「无法枚举」误判成「没有存活聊天」并删除向量。
+            if (!Array.isArray(payload)) {
+                logWarn_ACU(`[ChatGateway] 角色聊天响应不是数组，无法证明枚举完整：${avatar}`);
+                return null;
             }
-            const entries = Array.isArray(payload) ? payload : Object.values(payload || {});
-            for (const entry of entries) {
-                const fileName = String((entry as any)?.file_name || '').trim();
-                if (!fileName) continue;
+            for (const entry of payload) {
+                if (!entry || typeof entry !== 'object' || Array.isArray(entry) || typeof (entry as any).file_name !== 'string') {
+                    logWarn_ACU(`[ChatGateway] 角色聊天响应包含畸形 entry，无法证明枚举完整：${avatar}`);
+                    return null;
+                }
+                const fileName = (entry as any).file_name.trim();
+                if (!fileName) {
+                    logWarn_ACU(`[ChatGateway] 角色聊天响应包含空 file_name，无法证明枚举完整：${avatar}`);
+                    return null;
+                }
                 const normalized = cleanChatName_ACU(fileName);
                 if (normalized) names.add(normalized);
             }

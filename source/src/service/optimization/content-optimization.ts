@@ -17,7 +17,7 @@ import {
   callAIWithPreset_ACU
 } from '../ai/api-call';
 import {
-  applyOptimizations_ACU,
+  applyOptimizationsWithStats_ACU,
   filterOptimizationsByExcludeRules_ACU
 } from '../../shared/text-optimization';
 import {
@@ -303,7 +303,16 @@ import { isAiFloor_ACU } from '../../shared/ai-floor';
          if (exclusion.dropped.length > 0) {
            logDebug_ACU(`[正文优化] 循环 ${currentLoop}/${totalLoops} 有 ${exclusion.dropped.length} 个优化项命中标签排除规则，已按写回保护丢弃（不写回、不计入替换数）`);
          }
-         const optimizedContent = applyOptimizations_ACU(content, exclusion.kept);
+         const applied = applyOptimizationsWithStats_ACU(content, exclusion.kept);
+         if (exclusion.kept.length > 0 && applied.appliedCount === 0) {
+           logWarn_ACU(`[正文优化] 循环 ${currentLoop}/${totalLoops} 没有可应用的优化项，放弃本轮写回`);
+           return {
+             success: false,
+             noOp: true,
+             error: 'AI 返回的优化建议均未匹配到正文',
+             failedCount: applied.failedCount,
+           };
+         }
          
          logDebug_ACU(`[正文优化] 循环 ${currentLoop}/${totalLoops} 完成，共 ${exclusion.kept.length} 个优化项` +
            (exclusion.dropped.length > 0 ? `（另有 ${exclusion.dropped.length} 个被排除规则丢弃）` : ''));
@@ -312,7 +321,9 @@ import { isAiFloor_ACU } from '../../shared/ai-floor';
            success: true,
            optimizations: exclusion.kept,
            summary: parsed.summary,
-           optimizedContent: optimizedContent
+           optimizedContent: applied.content,
+           appliedCount: applied.appliedCount,
+           failedCount: applied.failedCount
          };
          
        } catch (error) {

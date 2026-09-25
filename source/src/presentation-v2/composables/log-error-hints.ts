@@ -413,7 +413,7 @@ const RULES: HintRule[] = [
   // ─── 向量 / 存储 / 检查点 ───
   {
     id: 'vector',
-    test: /embedding|rerank|向量|vector/,
+    test: /\bembedding\b|\brerank\b|向量|\bvector\b/,
     summary: '交火模式（向量索引）相关操作失败。',
     steps: [
       '到「交火模式」页检查 Embedding / Rerank 的接口地址、密钥和模型名，确认服务商支持该接口。',

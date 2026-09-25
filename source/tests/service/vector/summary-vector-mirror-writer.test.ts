@@ -51,6 +51,24 @@ describe('planUnmirroredEntryDeltasV2_ACU', () => {
     );
     expect(plans).toEqual([]);
   });
+
+  it('同一 rowId 内容可能变化时为已存在的稳定行生成 refresh delta', () => {
+    const plans = planUnmirroredEntryDeltasV2_ACU(
+      [{ messageIndex: 1, entryId: 'e-content-update', commitRevision: 'r2', seq: 1, rowIdsAfter: ['1'] }],
+      [],
+      ['1'],
+      ['1'],
+    );
+
+    expect(plans).toEqual([{
+      messageIndex: 1,
+      entryId: 'e-content-update',
+      commitRevision: 'r2',
+      added: [],
+      removed: [],
+      refreshed: ['1'],
+    }]);
+  });
 });
 
 describe('findTouchedSummarySheetKey_ACU', () => {

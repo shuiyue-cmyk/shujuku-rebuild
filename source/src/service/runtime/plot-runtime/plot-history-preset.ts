@@ -31,6 +31,10 @@ import {
   logWarn_ACU
 } from '../../../shared/utils';
 import {
+  capturePlotRuntimeScope_ACU,
+  isSamePlotRuntimeScope_ACU
+} from './plot-runtime-scope';
+import {
   applyPlotPresetToSettings_ACU,
   clearPlotPresetBindingForChat_ACU,
   ensurePlotPresetBindingsStore_ACU,
@@ -362,7 +366,30 @@ import {
 
     // ── P1: 本轮 pending 快照化（对象引用防旧回调 + roundId 持久化身份）──
     const roundRef = tempPlotToSave_ACU;
-    const roundChatId = currentChatFileIdentifier_ACU || '';
+    const roundChatId = typeof roundRef === 'object' && roundRef !== null
+      ? String((roundRef as any).chatId || currentChatFileIdentifier_ACU || '')
+      : (currentChatFileIdentifier_ACU || '');
+    const roundScope = typeof roundRef === 'object' && roundRef !== null
+      ? (roundRef as any).runtimeScope
+      : undefined;
+    const isRoundScopeCurrent_ACU = (): boolean => {
+      if (!roundScope) return true;
+      const currentScope = capturePlotRuntimeScope_ACU();
+      if (roundScope.reliable && currentScope?.reliable) {
+        return isSamePlotRuntimeScope_ACU(roundScope, currentScope);
+      }
+      return roundScope.chatId === currentScope?.chatId
+        && roundScope.characterId === currentScope?.characterId
+        && roundScope.isolationKey === currentScope?.isolationKey;
+    };
+    const supersedeIfRoundScopeChanged_ACU = (): PlotSaveOutcome_ACU | null => {
+      if (isRoundScopeCurrent_ACU()) return null;
+      logWarn_ACU('[剧情推进] [Plot] 作用域已切换，放弃本轮剧情写回');
+      if (tempPlotToSave_ACU === roundRef) {
+        _set_tempPlotToSave_ACU(null);
+      }
+      return { status: 'superseded', reason: 'chat_changed' };
+    };
     let plotContent: string;
     let userInputHash: string | null;
     let finalMessageHash: string | null;
@@ -385,6 +412,16 @@ import {
       userInputText = roundRef?.userInputText ?? null;
       taskResults = Array.isArray(roundRef?.taskResults) ? roundRef.taskResults : null;
       logDebug_ACU('[剧情推进] [Plot] 使用新格式，roundId:', roundId || '(兼容)', '，用户输入哈希:', userInputHash, '，原始文本长度:', userInputText?.length || 0);
+    }
+
+    const scopeOutcomeBeforeLookup = supersedeIfRoundScopeChanged_ACU();
+    if (scopeOutcomeBeforeLookup) return scopeOutcomeBeforeLookup;
+    if (roundChatId && (currentChatFileIdentifier_ACU || '') !== roundChatId) {
+      logWarn_ACU(`[剧情推进] [Plot] 聊天已切换（${roundChatId} → ${currentChatFileIdentifier_ACU || '(未知)'}），放弃本轮写回`);
+      if (tempPlotToSave_ACU === roundRef) {
+        _set_tempPlotToSave_ACU(null);
+      }
+      return { status: 'superseded', reason: 'chat_changed' };
     }
 
     if (!plotContent) {
@@ -473,6 +510,8 @@ import {
 
     // ── P3: 写入并提交（立即 / 延迟共用）──
     const writeAndCommit = async (found: { msg: any; index: number }): Promise<PlotSaveOutcome_ACU> => {
+      const scopeOutcomeBeforeWrite = supersedeIfRoundScopeChanged_ACU();
+      if (scopeOutcomeBeforeWrite) return scopeOutcomeBeforeWrite;
       const target = found.msg;
       if (roundId) {
         target._qrf_plot_round_id = roundId;
@@ -542,6 +581,11 @@ import {
       pollAttempts++;
 
       // T1.3: 被更新轮次取代 → 终止本轮
+      const scopeOutcome = supersedeIfRoundScopeChanged_ACU();
+      if (scopeOutcome) {
+        delayedFinished = true;
+        return;
+      }
       if (tempPlotToSave_ACU !== null && tempPlotToSave_ACU !== roundRef) {
         logWarn_ACU('[剧情推进] [Plot] 检测到新一轮 pending，放弃本轮延迟提交');
         delayedFinished = true;
@@ -598,6 +642,22 @@ import {
       ? String(tempPlotToSave_ACU.chatId || '')
       : '';
     const currentChatId = currentChatFileIdentifier_ACU || '';
+    const pendingScope = typeof tempPlotToSave_ACU === 'object' && tempPlotToSave_ACU !== null
+      ? (tempPlotToSave_ACU as any).runtimeScope
+      : undefined;
+    if (pendingScope) {
+      const currentScope = capturePlotRuntimeScope_ACU();
+      const scopeMatches = pendingScope.reliable && currentScope?.reliable
+        ? isSamePlotRuntimeScope_ACU(pendingScope, currentScope)
+        : pendingScope.chatId === currentScope?.chatId
+          && pendingScope.characterId === currentScope?.characterId
+          && pendingScope.isolationKey === currentScope?.isolationKey;
+      if (!scopeMatches) {
+        logWarn_ACU('[剧情推进] [Plot] flush 检测到残留 pending 属于其他作用域，丢弃以避免跨作用域误写');
+        _set_tempPlotToSave_ACU(null);
+        return { status: 'superseded', reason: 'chat_changed' };
+      }
+    }
 
     if (pendingChatId && pendingChatId !== currentChatId) {
       logWarn_ACU(`[剧情推进] [Plot] flush 检测到残留 pending 属于其他聊天（${pendingChatId}），丢弃以避免跨聊天误写`);

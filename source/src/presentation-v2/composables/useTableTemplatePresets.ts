@@ -13,6 +13,7 @@ import {
   parseImportedTemplateData_ACU,
   resolveActiveTemplatePresetName_ACU,
   resolveTemplateForExport_ACU,
+  renameTemplatePreset_ACU,
   upsertTemplatePreset_ACU,
 } from '../../service/template/template-preset-service';
 import {
@@ -566,20 +567,25 @@ export function useTableTemplatePresets() {
     const newName = raw.trim();
     if (!newName) return;
     await run(async () => {
-      if (!upsertTemplatePreset_ACU(newName, preset.templateStr)) throw new Error('重命名全局模板预设失败。');
-      if (newName !== oldName) deleteTemplatePreset_ACU(oldName);
-      if (selectedGlobalPreset.value === oldName) {
-        const result = await applyTemplatePresetToCurrent_ACU(newName, {
-          source: 'v2_table_global_rename',
-          updateGlobal: true,
-          save: true,
-          persistChatScope: false,
-          signal: templateOperationController.signal,
-        });
-        if (!result) throw new Error('重命名后切换全局模板预设失败。');
-        if (typeof result === 'object' && result.saved === false) {
-          throw new Error(typeof result.error === 'string' && result.error ? result.error : '重命名后切换全局模板预设失败。');
+      const renamed = renameTemplatePreset_ACU(oldName, newName);
+      if (!renamed.ok) throw new Error(renamed.error || '重命名全局模板预设失败。');
+      try {
+        if (selectedGlobalPreset.value === oldName) {
+          const result = await applyTemplatePresetToCurrent_ACU(newName, {
+            source: 'v2_table_global_rename',
+            updateGlobal: true,
+            save: true,
+            persistChatScope: false,
+            signal: templateOperationController.signal,
+          });
+          if (!result || (typeof result === 'object' && 'saved' in result && result.saved === false)) {
+            throw new Error('重命名后切换全局模板预设失败。');
+          }
         }
+      } catch (error) {
+        const rollback = renameTemplatePreset_ACU(newName, oldName);
+        if (!rollback.ok) throw new Error(`${error instanceof Error ? error.message : String(error)}；回滚重命名失败：${rollback.error || '未知错误'}`);
+        throw error;
       }
       message.value = null;
     });

@@ -118,6 +118,7 @@ vi.mock('../../../src/service/vector/summary-vector-mirror-fold', () => ({
 
 import {
   replaceChatMessage_ACU,
+  clearAllAiTableDataForCheckpointRestore_ACU,
   getOriginalContent_ACU,
   purgeOldLayerData_ACU,
   ensureV2BoundaryCheckpointForRetainedBuffer_ACU,
@@ -185,6 +186,58 @@ beforeEach(() => {
   mockCleanupUnreachable.mockResolvedValue({ deletedPaths: [], retainedPaths: [], failedDeletes: [] });
   mockFoldVectorMirror.mockResolvedValue({ folded: false, files: [] });
   mockFinalizeFoldedVectorMirror.mockResolvedValue(undefined);
+});
+
+describe('clearAllAiTableDataForCheckpointRestore_ACU', () => {
+  it('只清理当前 isolation，保留同聊天 alpha 的 V2、Identity 与向量 manifest', async () => {
+    const alphaFrame = {
+      version: 2,
+      headRevision: 'checkpoint:alpha',
+      checkpoint: { kind: 'full', createdAt: 1, reason: 'init', data: { sheet_alpha: { content: [['row_id'], ['1']] } } },
+      logEntries: [],
+    };
+    const betaFrame = {
+      version: 2,
+      headRevision: 'checkpoint:beta',
+      checkpoint: { kind: 'full', createdAt: 2, reason: 'init', data: { sheet_beta: { content: [['row_id'], ['1']] } } },
+      logEntries: [],
+    };
+    const alphaManifest = { indexId: 'alpha-index', status: 'ready' };
+    const betaManifest = { indexId: 'beta-index', status: 'ready' };
+    const chat = [
+      {
+        is_user: false,
+        TavernDB_ACU_Identity: 'alpha',
+        TavernDB_ACU_Data: { sheet_alpha: { content: [['row_id'], ['1']] } },
+        TavernDB_ACU_IsolatedData: {
+          alpha: {
+            _acu_storage_version: 2,
+            storageFrame: alphaFrame,
+            summaryVectorIndexManifest: alphaManifest,
+          },
+          beta: {
+            _acu_storage_version: 2,
+            storageFrame: betaFrame,
+            summaryVectorIndexManifest: betaManifest,
+          },
+        },
+      },
+    ];
+    mockGetChatArray.mockReturnValue(chat);
+
+    const result = await clearAllAiTableDataForCheckpointRestore_ACU(
+      'beta',
+      { enabled: true, code: 'beta' },
+    );
+
+    const container = chat[0].TavernDB_ACU_IsolatedData;
+    expect(container.alpha.storageFrame).toBe(alphaFrame);
+    expect(container.alpha.summaryVectorIndexManifest).toEqual(alphaManifest);
+    expect(container.beta).toBeUndefined();
+    expect(chat[0].TavernDB_ACU_Identity).toBe('alpha');
+    expect(chat[0].TavernDB_ACU_Data).toEqual({ sheet_alpha: { content: [['row_id'], ['1']] } });
+    expect(result.vectorManifestsToDeleteAfterCommit).toEqual([betaManifest]);
+  });
 });
 
 // ═══ replaceChatMessage_ACU ═══

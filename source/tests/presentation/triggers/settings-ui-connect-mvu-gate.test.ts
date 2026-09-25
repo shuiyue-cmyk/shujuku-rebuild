@@ -42,6 +42,7 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({
   AI_MATERIALIZATION_RETRY_DELAY_MS_ACU: 100,
   get currentChatFileIdentifier_ACU() { return m.chatKey; },
   getCurrentIsolationKey_ACU: () => '',
+  getAutoFillStopEpoch_ACU: () => 0,
   coreApisAreReady_ACU: true,
   settings_ACU: m.settings,
 }));
@@ -264,6 +265,26 @@ describe('忽略MVU更新：替换早跑不等闸门，填表照旧等；W5 重�
     } finally {
       m.settings.contentOptimizationSettings = {};
     }
+  });
+
+  it('早跑替换失败时不标记 earlyReplaceDone，正常轮必须接管', async () => {
+    const mvu = installFakeMvu(true);
+    const es = createFakeEventSource();
+    attachMvuAnalysisGate_ACU({ eventSource: es });
+    m.settings.contentOptimizationSettings = { ignoreMvuUpdate: true };
+    m.executeContentOptimization.mockResolvedValueOnce(false as any);
+
+    const promise = handleNewMessageDebounced_ACU('GENERATION_ENDED', { ...baseIntent });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(m.executeContentOptimization).toHaveBeenCalledTimes(1);
+
+    mvu.during = false;
+    es.emit(MVU_ANALYSIS_ENDED_EVENT_ACU);
+    await vi.advanceTimersByTimeAsync(0);
+    await promise;
+
+    expect(m.executeContentOptimization).toHaveBeenCalledTimes(2);
+    expect(m.triggerAutomaticUpdateIfNeeded).toHaveBeenCalledTimes(1);
   });
 
   it('W5 重跑（MVU_ANALYSIS_ENDED）只跑填表，不再跑替换', async () => {

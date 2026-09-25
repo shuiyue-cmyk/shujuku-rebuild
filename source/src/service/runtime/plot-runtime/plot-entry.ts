@@ -9,6 +9,8 @@ import {
 import {
   planningGuard_ACU,
   settings_ACU,
+  trackAbortController_ACU,
+  untrackAbortController_ACU,
   _set_abortController_ACU
 } from '../state-manager';
 import {
@@ -20,6 +22,7 @@ import {
 } from './plot-task-engine';
 import {
   capturePlotRuntimeScope_ACU,
+  isSamePlotRuntimeScope_ACU,
   summarizePlotRuntimeError_ACU,
   summarizePlotRuntimeScope_ACU
 } from './plot-runtime-scope';
@@ -34,6 +37,11 @@ import {
 } from './plot-runtime-phase';
 
 const PLOT_RUNTIME_BUILD_VERSION_ACU = (globalThis as any).__ACU_BUILD_VERSION__ || 'unknown';
+type PlotRuntimeResult_ACU = Awaited<ReturnType<typeof runPlotTasksRuntime_ACU>> & {
+  abortedByStageFailure?: boolean;
+  failedStage?: string;
+  scopeChanged?: boolean;
+};
 
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
@@ -81,6 +89,7 @@ function isTaskAbortedError_ACU(error: unknown): boolean {
     (runOptimizationLogic_ACU as any).__inFlightText = String(userMessage || '');
 
     let originalUserInputForAbort_ACU = userMessage || '';
+    let plotAbortController_ACU: AbortController | null = null;
     try {
       planningGuard_ACU.inProgress = true;
 
@@ -94,12 +103,43 @@ function isTaskAbortedError_ACU(error: unknown): boolean {
         return { success: false, skipped: true, reason: 'disabled' };
       }
 
-      _set_abortController_ACU(new AbortController());
+      plotAbortController_ACU = new AbortController();
+      _set_abortController_ACU(plotAbortController_ACU);
+      trackAbortController_ACU(plotAbortController_ACU);
 
       const runtimeResult = await runPlotTasksRuntime_ACU(plotSettings, userMessage, {
         inputForHash,
         hasExistingUserMessage,
-      });
+        runtimeScope: initialScope,
+      }) as PlotRuntimeResult_ACU;
+
+      const currentScope = capturePlotRuntimeScope_ACU();
+      const scopeStillCurrent = initialScope.reliable
+        ? isSamePlotRuntimeScope_ACU(initialScope, currentScope)
+        : initialScope.chatId === currentScope.chatId
+          && initialScope.characterId === currentScope.characterId
+          && initialScope.isolationKey === currentScope.isolationKey;
+      if (!scopeStillCurrent) {
+        logDebug_ACU('[剧情推进] 规划作用域已变化，放弃本轮结果写回。', {
+          initialScope: summarizePlotRuntimeScope_ACU(initialScope),
+          currentScope: summarizePlotRuntimeScope_ACU(currentScope),
+        });
+        return {
+          success: false,
+          errorType: 'scope_changed',
+          errorMessage: '剧情规划作用域已变化，已放弃本轮写回。',
+          scopeChanged: true,
+        };
+      }
+
+      if (runtimeResult?.scopeChanged) {
+        return {
+          success: false,
+          errorType: 'scope_changed',
+          errorMessage: runtimeResult.errorMessage || '剧情规划作用域已变化，已放弃本轮写回。',
+          scopeChanged: true,
+        };
+      }
 
       if (!runtimeResult?.finalMessage) {
         if (runtimeResult?.abortedByStageFailure) {
@@ -174,6 +214,9 @@ function isTaskAbortedError_ACU(error: unknown): boolean {
         errorMessage: '剧情规划大师在处理时发生错误。',
       };
     } finally {
+        if (plotAbortController_ACU) {
+          untrackAbortController_ACU(plotAbortController_ACU);
+        }
         planningGuard_ACU.inProgress = false;
         _set_abortController_ACU(null);
         (runOptimizationLogic_ACU as any).__inFlight = false;

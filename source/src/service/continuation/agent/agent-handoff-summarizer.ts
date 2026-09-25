@@ -21,6 +21,12 @@ function cleanText_ACU(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function isLeaseLossError_ACU(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { name?: unknown; error?: { code?: unknown } };
+  return candidate.name === 'AbortError' || candidate.error?.code === 'CONTINUATION_INTERNAL_REQUEST_STALE';
+}
+
 function cleanList_ACU(value: unknown): string[] {
   return Array.isArray(value) ? [...new Set(value.map(cleanText_ACU).filter(Boolean))] : [];
 }
@@ -99,7 +105,8 @@ export async function summarizeAgentHandoff_ACU(input: { previous: AgentHandoffS
       const allowedReadKeys = state.readKeys;
       const proposed = await input.semanticAdapter.summarize({ previous: input.previous, messages: input.messages, allowedReadKeys });
       state = { ...state, currentGoal: cleanText_ACU(proposed.currentGoal) || state.currentGoal, ...Object.fromEntries(fields_ACU.map(field => [field, field === 'readKeys' || field === 'recentTurns' ? state[field] : cleanList_ACU(proposed[field]).length ? cleanList_ACU(proposed[field]) : state[field]])) } as AgentHandoffSummaryStateV2_ACU;
-    } catch {
+    } catch (error) {
+      if (isLeaseLossError_ACU(error)) throw error;
       degraded = true;
       degradationReason = 'semantic_summary_failed';
     }

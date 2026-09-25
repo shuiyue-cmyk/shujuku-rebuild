@@ -79,6 +79,7 @@ async function resolveDivergedSheetKeys_ACU(
   targetMessageIndex: number,
   runtimeData: TableDataObject_ACU,
   candidateSheetKeys: string[],
+  includeReplaySheets = false,
 ): Promise<string[]> {
   try {
     const replay = await loadTableStateFromFramesV2Detailed_ACU(chat, isolationKey, {
@@ -88,7 +89,13 @@ async function resolveDivergedSheetKeys_ACU(
     });
     const replayed = replay?.data as Record<string, unknown> | undefined;
     if (!replayed) return candidateSheetKeys;
-    return candidateSheetKeys.filter(sheetKey => (
+    const comparedSheetKeys = includeReplaySheets
+      ? [...new Set([
+        ...candidateSheetKeys,
+        ...Object.keys(replayed).filter(key => key.startsWith('sheet_')),
+      ])]
+      : candidateSheetKeys;
+    return comparedSheetKeys.filter(sheetKey => (
       serializeSheetContent_ACU(replayed[sheetKey]) !== serializeSheetContent_ACU((runtimeData as Record<string, unknown>)[sheetKey])
     ));
   } catch (error) {
@@ -117,12 +124,14 @@ export async function flushRuntimeOnlyPendingChanges_ACU(reason: string): Promis
   if (!runtimeData) return { flushed: false, sheetKeys: [], error: 'runtime snapshot unavailable' };
 
   const runtimeSheetKeys = Object.keys(runtimeData).filter(key => key.startsWith('sheet_'));
+  const deletedSheetKeys = pending.deletedSheetKeys || [];
   const candidateSheetKeys = pending.all
-    ? runtimeSheetKeys
-    : pending.sheetKeys.filter(sheetKey => runtimeSheetKeys.includes(sheetKey));
-  if (candidateSheetKeys.length === 0) {
-    // 登记的表已不在运行时（被删除/重载），没有可落盘的内容。
-    // 按集合清除：只撤销 T0 登记本身；快照读取窗口内并发写者新登记的表不在 T0 集合内，不受影响。
+    ? [...new Set([...runtimeSheetKeys, ...deletedSheetKeys])]
+    : [...new Set([...pending.sheetKeys, ...deletedSheetKeys])];
+  const requiresFullSnapshot = pending.all || deletedSheetKeys.length > 0
+    || candidateSheetKeys.some(sheetKey => !runtimeSheetKeys.includes(sheetKey));
+  if (candidateSheetKeys.length === 0 && !requiresFullSnapshot) {
+    // 无待落盘表且没有删除 tombstone：登记已由并发写者消化。
     clearRuntimeOnlyPendingSheetKeys_ACU(scope, pending.sheetKeys, { dropAllFlag: pending.all });
     return { flushed: false, sheetKeys: [] };
   }
@@ -133,8 +142,15 @@ export async function flushRuntimeOnlyPendingChanges_ACU(reason: string): Promis
     return { flushed: false, sheetKeys: [], error: 'no AI message to persist runtime-only changes' };
   }
 
-  const divergedSheetKeys = await resolveDivergedSheetKeys_ACU(chat, scope.isolationKey, targetMessageIndex, runtimeData, candidateSheetKeys);
-  if (divergedSheetKeys.length === 0) {
+  const divergedSheetKeys = await resolveDivergedSheetKeys_ACU(
+    chat,
+    scope.isolationKey,
+    targetMessageIndex,
+    runtimeData,
+    candidateSheetKeys,
+    pending.all,
+  );
+  if (divergedSheetKeys.length === 0 && !requiresFullSnapshot) {
     // T0 候选集与回放一致，无需落盘：按集合清除 T0 候选（回放比对窗口内并发写者新登记
     // 的表不在 T0 集合内，不受影响）；持锁后的最终确认仍由事务内重算兜底。
     clearRuntimeOnlyPendingSheetKeys_ACU(scope, candidateSheetKeys, { dropAllFlag: pending.all });
@@ -156,7 +172,9 @@ export async function flushRuntimeOnlyPendingChanges_ACU(reason: string): Promis
     source: 'system',
     reason: `runtime_only_flush:${reason}`,
     isolationKey: scope.isolationKey,
-    writeSet: candidateSheetKeys.map(sheetKey => ({ kind: 'sheet' as const, sheetKey })),
+    writeSet: requiresFullSnapshot
+      ? [{ kind: 'all' as const }]
+      : candidateSheetKeys.map(sheetKey => ({ kind: 'sheet' as const, sheetKey })),
     // 运行时本身没有变化，只是把它写回聊天：不推进 runtime revision，
     // 否则会让并发填表已捕获的 baseRevision 误判为冲突。
     revisionWriteSet: [],
@@ -181,34 +199,50 @@ export async function flushRuntimeOnlyPendingChanges_ACU(reason: string): Promis
       return { success: false as const, error: 'runtime snapshot unavailable', errorCategory: 'infrastructure' as const };
     }
     const freshSheetKeys = Object.keys(freshData).filter(key => key.startsWith('sheet_'));
+    const freshDeletedSheetKeys = pending.deletedSheetKeys || [];
     const freshCandidates = pending.all
-      ? freshSheetKeys
-      : pending.sheetKeys.filter(sheetKey => freshSheetKeys.includes(sheetKey));
+      ? [...new Set([...freshSheetKeys, ...freshDeletedSheetKeys])]
+      : [...new Set([...pending.sheetKeys, ...freshDeletedSheetKeys])];
     const freshChat = getChatArray_ACU();
     const freshTargetMessageIndex = getLatestTableAppendMessageIndexFromChat_ACU(freshChat, scope.isolationKey, settings_ACU);
     if (freshTargetMessageIndex < 0) {
       return { success: false as const, error: 'no AI message to persist runtime-only changes', errorCategory: 'precondition' as const };
     }
-    if (freshCandidates.length === 0) {
+    const freshRequiresFullSnapshot = pending.all || freshDeletedSheetKeys.length > 0
+      || freshCandidates.some(sheetKey => !freshSheetKeys.includes(sheetKey));
+    if (freshCandidates.length === 0 && !freshRequiresFullSnapshot) {
       // 登记表在持锁期间已从运行时消失：无可落盘内容，与 T0 同语义（按 T0 登记集合清空）。
       // 清账在持锁中执行：mark 同样只在提交锁内发生，清账与并发 mark 互斥，不存在
       // 「放锁到清除之间」的误清窗口。
       clearRuntimeOnlyPendingSheetKeys_ACU(scope, pending.sheetKeys, { dropAllFlag: pending.all });
       return { success: false as const, error: NOTHING_TO_FLUSH_ERROR_ACU, errorCategory: 'precondition' as const };
     }
-    const freshDivergedSheetKeys = await resolveDivergedSheetKeys_ACU(freshChat, scope.isolationKey, freshTargetMessageIndex, freshData, freshCandidates);
-    if (freshDivergedSheetKeys.length === 0) {
+    const freshDivergedSheetKeys = await resolveDivergedSheetKeys_ACU(
+      freshChat,
+      scope.isolationKey,
+      freshTargetMessageIndex,
+      freshData,
+      freshCandidates,
+      pending.all,
+    );
+    if (freshDivergedSheetKeys.length === 0 && !freshRequiresFullSnapshot) {
       // 并发写者已把内容物化进聊天：与回放一致，无需落盘。持锁内按重算后的候选集条件化清空；
       // 锁等待期间并发登记的新表不在 T0 候选内，不受影响。
       clearRuntimeOnlyPendingSheetKeys_ACU(scope, freshCandidates, { dropAllFlag: pending.all });
       return { success: false as const, error: NOTHING_TO_FLUSH_ERROR_ACU, errorCategory: 'precondition' as const };
     }
-    const freshOperations: TableMutationOperationV2_ACU[] = freshDivergedSheetKeys.map(sheetKey => ({
-      kind: 'sheet_replace',
-      sheetKey,
-      sheet: cloneJson_ACU((freshData as Record<string, any>)[sheetKey]) as Sheet_ACU,
-      reason: 'system',
-    }));
+    const hasMissingSheet = freshRequiresFullSnapshot && (
+      freshDivergedSheetKeys.length === 0
+      || freshDivergedSheetKeys.some(sheetKey => !Object.prototype.hasOwnProperty.call(freshData, sheetKey))
+    );
+    const freshOperations: TableMutationOperationV2_ACU[] = hasMissingSheet
+      ? [{ kind: 'data_replace', data: cloneJson_ACU(freshData), reason: 'system' }]
+      : freshDivergedSheetKeys.map(sheetKey => ({
+        kind: 'sheet_replace',
+        sheetKey,
+        sheet: cloneJson_ACU((freshData as Record<string, any>)[sheetKey]) as Sheet_ACU,
+        reason: 'system',
+      }));
     flushedSheetKeys = freshDivergedSheetKeys;
     flushedMessageIndex = freshTargetMessageIndex;
     // 成功清除在持锁中执行（apply 回调末尾，先于 persist）：只清除本次实际落盘的表集合。

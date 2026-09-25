@@ -101,4 +101,25 @@ describe('canonical-row-normalizer', () => {
     expect(repairLegacyAutoMergedRowTails_ACU(data)).toEqual([]);
     expect(data.sheet_0.seedRows).toEqual([['2', '种子', 'auto_merged']]);
   });
+
+  it('历史前导零 row_id 保持原值，新空身份分配到 SQLite 不冲突的下一整数', () => {
+    const data: any = {
+      sheet_0: {
+        content: [['row_id', '名称'], ['01', '旧行'], [null, '新行']],
+        seedRows: [],
+      },
+    };
+
+    const identity = restoreLegacyRowIdentity_ACU(data);
+    const normalization = normalizeCanonicalTableRows_ACU(data);
+
+    expect(data.sheet_0.content).toEqual([
+      ['row_id', '名称'],
+      ['01', '旧行'],
+      ['2', '新行'],
+    ]);
+    expect(identity.repairs).toContainEqual({ sheetKey: 'sheet_0', rowIndex: 2, code: 'assigned_row_id' });
+    expect(normalization.errors).toEqual([]);
+    expect(normalization.removedRows).toEqual([]);
+  });
 });

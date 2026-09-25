@@ -234,6 +234,36 @@ describe('table-v2-recovery-service', () => {
   });
 
 
+  it('recoveryBackup 恢复计划校验 live source frame，prepare 后可立即提交', async () => {
+    const backupFrame = frame({ kind: 'full', createdAt: 1, reason: 'init', data: data([['1', '备份行']]) });
+    const liveFrame = frame(undefined, []);
+    h.chat = [{
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: liveFrame,
+          recoveryBackup: {
+            version: 1,
+            createdAt: 2,
+            recoveryKind: 'temporary_sheet_anchor_convergence',
+            sourceMessageIndex: 0,
+            failedMessageIndex: 0,
+            storageFrame: backupFrame,
+          },
+        },
+      },
+    }];
+
+    const prepared = await prepareV2Recovery_ACU();
+    expect(prepared).toMatchObject({ status: 'recoverable_from_recovery_backup', requiresConfirmation: false });
+
+    const result = await commitPreparedV2Recovery_ACU(prepared.planId!);
+
+    expect(result).toEqual({ status: 'committed', planId: prepared.planId });
+    expect(h.chat[0].TavernDB_ACU_IsolatedData[''].storageFrame.checkpoint.reason).toBe('integrity_repair');
+  });
+
   it('后续 operation 引用被重复身份修复重映射的 row_id 时拒绝猜测', async () => {
     const source = frame({ kind: 'full', createdAt: 1, reason: 'init', data: data([['1', '铁剑'], [' 1 ', '副本']]) });
     h.chat = chatWithFrame(source);

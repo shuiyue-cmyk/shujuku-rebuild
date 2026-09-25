@@ -67,6 +67,7 @@ import {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  _resetTavernStorageState_ACU();
   configIdbCache_ACU.clear();
   configIdbDeletedKeys_ACU.clear();
   // 清理 mockTopLevelWindow 上的属性
@@ -184,7 +185,8 @@ describe('getConfigStorage_ACU', () => {
     };
     const store = getConfigStorage_ACU();
     // 写入
-    store.setItem('test_key', 'test_value');
+    expect(store.setItem('test_key', 'test_value')).toBe(true);
+    expect(store._lastPersistenceStatus).toBe('memory');
     // 读取
     expect(store.getItem('test_key')).toBe('test_value');
     expect(store._isTavern).toBe(true);
@@ -203,11 +205,50 @@ describe('getConfigStorage_ACU', () => {
     expect(configIdbCache_ACU.get('new_key')).toBe('new_value');
   });
 
+  it('Tavern 保存函数抛错时 removeItem 返回 false，并恢复旧值', () => {
+    _resetTavernStorageState_ACU();
+    const saveError = vi.fn(() => { throw new Error('host save failed'); });
+    mockTopLevelWindow[TAVERN_BRIDGE_GLOBAL_KEY_ACU] = {
+      extension_settings: {
+        __userscripts: {
+          [TAVERN_SETTINGS_NAMESPACE_ACU]: { host_key: 'old_value' },
+        },
+      },
+      saveSettings: saveError,
+    };
+
+    const store = getConfigStorage_ACU();
+
+    expect(store.removeItem('host_key')).toBe(false);
+    expect(store.getItem('host_key')).toBe('old_value');
+    expect(configIdbGetCached_ACU('host_key')).toBe('old_value');
+  });
+
   it('removeItem 同时清除 IDB 缓存', () => {
     configIdbCache_ACU.set('del_key', 'del_value');
     const store = getConfigStorage_ACU();
     store.removeItem('del_key');
     expect(configIdbDeletedKeys_ACU.has('del_key')).toBe(true);
+  });
+
+  it('Tavern 保存函数抛错时 setItem 返回 false，并恢复旧值', () => {
+    _resetTavernStorageState_ACU();
+    const saveError = vi.fn(() => { throw new Error('host save failed'); });
+    mockTopLevelWindow[TAVERN_BRIDGE_GLOBAL_KEY_ACU] = {
+      extension_settings: {
+        __userscripts: {
+          [TAVERN_SETTINGS_NAMESPACE_ACU]: { host_key: 'old_value' },
+        },
+      },
+      saveSettings: saveError,
+    };
+
+    const store = getConfigStorage_ACU();
+
+    expect(store.setItem('host_key', 'new_value')).toBe(false);
+    expect(store.getItem('host_key')).toBe('old_value');
+    expect(configIdbGetCached_ACU('host_key')).toBe('old_value');
+    expect(saveError).toHaveBeenCalledTimes(1);
   });
 });
 

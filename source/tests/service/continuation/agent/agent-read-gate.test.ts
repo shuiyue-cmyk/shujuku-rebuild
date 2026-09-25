@@ -68,9 +68,13 @@ describe('读取门禁状态机', () => {
     expect(big.report).toContain('临近总结阈值');
     expect(big.report).toContain('精读兜底额度 50 tokens');
 
-    // B <= F：已经精细到最小读取，放行，随后越阈交给压缩机制。
+    // 即使 B <= F，也不能放行一个会把完整上下文推过 S 的批次；否则下一次主请求必超限。
     const small = await gateAgentReadBatch_ACU([{ label: '$SMALL', text: 'x'.repeat(40) }], createAgentReadGateState_ACU(), nearThreshold, 980, countByLength_ACU);
-    expect(small.allowed).toBe(true);
+    expect(small).toMatchObject({ allowed: false, reason: 'near-compaction-overflow' });
+
+    // 真正留有余量的小批次仍可放行。
+    const fits = await gateAgentReadBatch_ACU([{ label: '$FITS', text: 'x'.repeat(40) }], createAgentReadGateState_ACU(), nearThreshold, 950, countByLength_ACU);
+    expect(fits.allowed).toBe(true);
   });
 
   it('不同批次不累计：每批次都低于上限时，即使遥测账本已很大仍放行', async () => {

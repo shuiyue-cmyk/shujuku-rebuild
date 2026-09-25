@@ -268,7 +268,7 @@ describe('updateSummaryTableEntries_ACU', () => {
     expect(mockGetLorebookEntries).not.toHaveBeenCalled();
   });
 
-  it('非导入模式先删除旧条目再创建', async () => {
+  it('非导入模式创建新条目后再删除旧条目', async () => {
     mockGetLorebookEntries.mockResolvedValue([
       { uid: 1, comment: '总结条目1' },
       { uid: 2, comment: '总结条目2' },
@@ -276,6 +276,15 @@ describe('updateSummaryTableEntries_ACU', () => {
     await updateSummaryTableEntries_ACU(summaryTable);
     expect(mockDeleteLorebookEntries).toHaveBeenCalledWith('test-lorebook', [1, 2]);
     expect(mockCreateLorebookEntries).toHaveBeenCalled();
+  });
+
+  it('替换创建失败时向调用方返回失败，且旧总结条目不被删除', async () => {
+    mockGetLorebookEntries.mockResolvedValue([{ uid: 1, comment: '总结条目1' }]);
+    mockCreateLorebookEntries.mockRejectedValueOnce(new Error('create failed'));
+
+    await expect(updateSummaryTableEntries_ACU(summaryTable)).rejects.toThrow('create failed');
+
+    expect(mockDeleteLorebookEntries).not.toHaveBeenCalled();
   });
 
   it('导入模式不删除旧条目', async () => {
@@ -321,12 +330,12 @@ describe('updateSummaryTableEntries_ACU', () => {
     expect(entry.content).not.toContain('历史秘密');
   });
 
-  it('无"编码索引"列时记录错误', async () => {
+  it('无"编码索引"列时记录错误并返回失败', async () => {
     const badTable = {
       name: '总结表',
       content: [['', '其他列'], ['', '数据']],
     };
-    await updateSummaryTableEntries_ACU(badTable);
+    await expect(updateSummaryTableEntries_ACU(badTable)).rejects.toThrow(/编码索引/);
     expect(mockLogError).toHaveBeenCalledWith(
       expect.stringContaining('编码索引'),
       expect.objectContaining({ table: '总结表', lorebook: expect.any(String) }),
@@ -354,9 +363,9 @@ describe('updateSummaryTableEntries_ACU', () => {
     expect(createArgs[1].length).toBe(1); // 只有 1 行有效
   });
 
-  it('异常时记录错误', async () => {
+  it('异常时记录错误并返回失败', async () => {
     mockGetLorebookEntries.mockRejectedValue(new Error('网络错误'));
-    await updateSummaryTableEntries_ACU(summaryTable);
+    await expect(updateSummaryTableEntries_ACU(summaryTable)).rejects.toThrow('网络错误');
     expect(mockLogError).toHaveBeenCalledWith(expect.stringContaining('Failed to update summary'), expect.any(Error));
   });
 });
@@ -384,13 +393,22 @@ describe('updateImportantPersonsRelatedEntries_ACU', () => {
     expect(mockGetLorebookEntries).not.toHaveBeenCalled();
   });
 
-  it('非导入模式先删除旧条目', async () => {
+  it('非导入模式创建新条目后再删除旧条目', async () => {
     mockGetLorebookEntries.mockResolvedValue([
       { uid: 1, comment: '重要人物条目1' },
       { uid: 2, comment: 'TavernDB-ACU-ImportantPersonsIndex' },
     ]);
     await updateImportantPersonsRelatedEntries_ACU(personsTable);
     expect(mockDeleteLorebookEntries).toHaveBeenCalledWith('test-lorebook', [1, 2]);
+  });
+
+  it('替换创建失败时向调用方返回失败，且旧人物条目不被删除', async () => {
+    mockGetLorebookEntries.mockResolvedValue([{ uid: 1, comment: 'TavernDB-ACU-PersonsHeader' }]);
+    mockCreateLorebookEntries.mockRejectedValueOnce(new Error('create persons failed'));
+
+    await expect(updateImportantPersonsRelatedEntries_ACU(personsTable)).rejects.toThrow('create persons failed');
+
+    expect(mockDeleteLorebookEntries).not.toHaveBeenCalled();
   });
 
   it('导入模式不删除旧条目', async () => {
@@ -406,6 +424,19 @@ describe('updateImportantPersonsRelatedEntries_ACU', () => {
     expect(mockGetInjectionTargetLorebook).not.toHaveBeenCalled();
     expect(mockGetLorebookEntries).toHaveBeenCalledWith('target-book');
     expect(mockCreateLorebookEntries).toHaveBeenCalledWith('target-book', expect.any(Array));
+  });
+
+  it('非导入刷新只删除精确受管 PersonsHeader，不删除评论中碰巧含该文本的第三方条目', async () => {
+    mockGetIsolationPrefix.mockReturnValue('ACU-[test]-');
+    mockGetLorebookEntries.mockResolvedValue([
+      { uid: 1, comment: 'ACU-[test]-TavernDB-ACU-PersonsHeader' },
+      { uid: 99, comment: '用户笔记：PersonsHeader 的使用说明' },
+    ]);
+
+    await updateImportantPersonsRelatedEntries_ACU(personsTable);
+
+    expect(mockDeleteLorebookEntries).toHaveBeenCalledWith('test-lorebook', [1]);
+    expect(mockDeleteLorebookEntries).not.toHaveBeenCalledWith('test-lorebook', expect.arrayContaining([99]));
   });
 
   it('创建人物条目 + 表头 + 索引', async () => {
@@ -453,12 +484,12 @@ describe('updateImportantPersonsRelatedEntries_ACU', () => {
     expect(person.content).not.toContain('历史秘密');
   });
 
-  it('无"姓名"或"角色名"列时记录错误', async () => {
+  it('无"姓名"或"角色名"列时记录错误并返回失败', async () => {
     const badTable = {
       name: '重要人物表',
       content: [['', '其他列'], ['', '数据']],
     };
-    await updateImportantPersonsRelatedEntries_ACU(badTable);
+    await expect(updateImportantPersonsRelatedEntries_ACU(badTable)).rejects.toThrow(/姓名/);
     expect(mockLogError).toHaveBeenCalledWith(
       expect.stringContaining('姓名'),
       expect.objectContaining({ table: '重要人物表', lorebook: expect.any(String) }),
@@ -478,9 +509,9 @@ describe('updateImportantPersonsRelatedEntries_ACU', () => {
     expect(createArgs[1][0].comment).toContain('ACU-[test]-');
   });
 
-  it('异常时记录错误', async () => {
+  it('异常时记录错误并返回失败', async () => {
     mockGetLorebookEntries.mockRejectedValue(new Error('网络错误'));
-    await updateImportantPersonsRelatedEntries_ACU(personsTable);
+    await expect(updateImportantPersonsRelatedEntries_ACU(personsTable)).rejects.toThrow('网络错误');
     expect(mockLogError).toHaveBeenCalledWith(expect.stringContaining('Failed to update important persons'), expect.any(Error));
   });
 });

@@ -79,6 +79,11 @@ vi.mock('../../../src/data/storage/chat-history', async importOriginal => {
 });
 
 import { ensureLegacyStorageMigratedBeforeWrite_ACU } from '../../../src/service/table/table-service';
+import {
+  _resetTableWriteTransactionLocksForTest_ACU,
+  captureTableRuntimeRevisionForWriteSet_ACU,
+  runTableWriteTransaction_ACU,
+} from '../../../src/service/table/table-write-transaction';
 import { hasAnyV2Checkpoint_ACU, persistTableMutationLogV2_ACU } from '../../../src/service/table/storage-frame-v2-persist';
 import { loadTableStateFromFramesV2Detailed_ACU } from '../../../src/service/table/storage-frame-v2-replay';
 
@@ -127,6 +132,7 @@ function buildLegacyCatchUpChat(): any[] {
 
 describe('manual catch-up provisional bridge 真实失败基线（t1）', () => {
   beforeEach(() => {
+    _resetTableWriteTransactionLocksForTest_ACU();
     mocks.chat.length = 0;
     mocks.currentJsonTableData = null;
     mocks.saveChat.mockClear();
@@ -288,6 +294,7 @@ describe('manual catch-up provisional bridge 状态机（t4）', () => {
   }
 
   beforeEach(() => {
+    _resetTableWriteTransactionLocksForTest_ACU();
     mocks.chat.length = 0;
     mocks.currentJsonTableData = null;
     mocks.saveChat.mockClear();
@@ -336,6 +343,46 @@ describe('manual catch-up provisional bridge 状态机（t4）', () => {
     expect(bridgeOnRoot?.runId).toBe(runId);
     expect(bridgeOnRoot?.phase).toBe('provisional_active');
     expect(bridgeOnRoot?.originalFullCheckpointIndex).toBe(6);
+  });
+
+  it('establish bridge 推进 runtime revision，旧 revision 事务必须拒绝', async () => {
+    mocks.chat.push(...buildV2ChatWithFormalFull());
+    const writeSet = [{ kind: 'all' as const }];
+    const oldRevision = captureTableRuntimeRevisionForWriteSet_ACU(writeSet, {
+      chatKey: mocks.chatIdentifier,
+      isolationKey: mocks.isolationKey,
+    });
+
+    const result = await establishProvisionalBridge_ACU('run-bridge-revision', ['sheet_a'], 0, 6, {
+      selectedSheetBaselines: { sheet_a: { lastCompletedAiFloor: 0, headerOnly: true } },
+      templateData: { sheet_a: sheet('表A', [['row_id', '值']]) },
+      chatKey: mocks.chatIdentifier,
+      isolationKey: mocks.isolationKey,
+    });
+    expect(result.ok).toBe(true);
+    const newRevision = captureTableRuntimeRevisionForWriteSet_ACU(writeSet, {
+      chatKey: mocks.chatIdentifier,
+      isolationKey: mocks.isolationKey,
+    });
+    expect(newRevision).not.toBe(oldRevision);
+
+    let conflict: unknown = null;
+    try {
+      await runTableWriteTransaction_ACU({
+        source: 'manual_fill',
+        reason: 'stale-after-bridge',
+        chatKey: mocks.chatIdentifier,
+        isolationKey: mocks.isolationKey,
+        writeSet,
+        baseRevision: oldRevision,
+        workingDataMode: 'none',
+      }, async ctx => {
+        ctx.assertFresh('stale-after-bridge');
+      });
+    } catch (error) {
+      conflict = error;
+    }
+    expect(String(conflict)).toContain('runtime revision conflict');
   });
 
   it('建立 provisional bridge 后，真实 replay 到临时根能恢复 selected sheet header 基线', async () => {
@@ -527,6 +574,7 @@ describe('manual catch-up provisional bridge 写入准入（t5）', () => {
   }
 
   beforeEach(() => {
+    _resetTableWriteTransactionLocksForTest_ACU();
     mocks.chat.length = 0;
     mocks.currentJsonTableData = null;
     mocks.saveChat.mockClear();

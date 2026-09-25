@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createAgentHandoffSemanticSummaryAdapter_ACU, summarizeAgentHandoff_ACU } from '../../../../src/service/continuation/agent/agent-handoff-summarizer';
 import type { AgentConversationMessage_ACU, AgentHandoffSummaryStateV2_ACU } from '../../../../src/service/continuation/agent/agent-model';
+import { ContinuationValidationError_ACU, createContinuationError_ACU } from '../../../../src/service/continuation/model';
 
 const count = async (text: string): Promise<number> => text.length;
 const message = (id: number, kind: AgentConversationMessage_ACU['kind'], text: string, extra: Partial<AgentConversationMessage_ACU> = {}): AgentConversationMessage_ACU => ({ id, kind, text, digest: '', turnKey: 'turn-a', at: 1, ...extra });
@@ -64,6 +65,26 @@ describe('summarizeAgentHandoff_ACU', () => {
     expect(result.degraded).toBe(false);
     expect(result.state.readKeys).toEqual(['$TABLE:纪要表:1-2']);
     expect(result.state.recentTurns).toEqual(['turn-real']);
+  });
+
+  it('stale 与 AbortError 不得被吞掉并降级为可提交摘要', async () => {
+    const stale = new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_handoff', '租约已失效', false));
+    await expect(summarizeAgentHandoff_ACU({
+      previous: null,
+      messages: [message(1, 'turn', '当前目标')],
+      maxTokens: 2000,
+      countTokens: count,
+      semanticAdapter: { summarize: async () => { throw stale; } },
+    })).rejects.toBe(stale);
+
+    const aborted = Object.assign(new Error('请求已取消'), { name: 'AbortError' });
+    await expect(summarizeAgentHandoff_ACU({
+      previous: null,
+      messages: [message(1, 'turn', '当前目标')],
+      maxTokens: 2000,
+      countTokens: count,
+      semanticAdapter: { summarize: async () => { throw aborted; } },
+    })).rejects.toBe(aborted);
   });
 
   it('falls back to a bounded deterministic report when semantic summarization fails', async () => {

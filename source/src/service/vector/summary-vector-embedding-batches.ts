@@ -151,5 +151,10 @@ export async function executeEmbeddingBatchPlan_ACU<T extends EmbeddingBatchSour
         const message = firstFailure.error instanceof Error ? firstFailure.error.message : String(firstFailure.error || 'Embedding 批次失败');
         throw new EmbeddingBatchExecutionError_ACU(message, firstFailure.batch, firstFailure.error);
     }
-    return { embeddings: slots.map(vector => vector || []), stats };
+    const embeddings = slots.map(vector => vector || []);
+    const dimensions = [...new Set(embeddings.map(vector => vector.length))];
+    if (embeddings.length > 0 && dimensions.length !== 1) {
+        throw new Error(`Embedding 维度不一致：期望全部为 ${dimensions[0] ?? 0}，实际为 ${dimensions.join('、')}。`);
+    }
+    return { embeddings, stats };
 }

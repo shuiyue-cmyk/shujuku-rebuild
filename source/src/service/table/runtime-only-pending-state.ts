@@ -7,8 +7,9 @@
  * 楼层帧里没有对应数据、表格状态显示未初始、填表基底（聊天回放）看不到它们，
  * AI 把已存在的行重新 INSERT，提交时撞 live SQLite 的 UNIQUE 约束或把行数翻倍。
  *
- * 本模块按 (chatKey, isolationKey) 登记「哪些表有未落盘的运行时变更」；
- * 真正的落盘由 runtime-only-pending-flush 在下一次普通持久化写入 / 填表开始前完成。
+ * 本模块按 (chatKey, isolationKey) 登记「哪些表有未落盘的运行时变更」以及
+ * 已被删除但仍需写回聊天的 tombstone；真正的落盘由 runtime-only-pending-flush
+ * 在下一次普通持久化写入 / 填表开始前完成。
  * 这里刻意不依赖任何 service 模块，避免与提交模型形成循环导入。
  */
 
@@ -21,11 +22,14 @@ export type RuntimeOnlyPendingSnapshot_ACU = {
   /** true 表示曾有 kind:'all' 的写入，需按当前运行时全部表处理。 */
   all: boolean;
   sheetKeys: string[];
+  /** 已在 runtime 中删除、但仍需写回聊天以阻止旧表复活。 */
+  deletedSheetKeys?: string[];
 };
 
 type PendingState_ACU = {
   all: boolean;
   sheetKeys: Set<string>;
+  deletedSheetKeys: Set<string>;
 };
 
 type PendingFlusher_ACU = (reason: string) => Promise<RuntimeOnlyPendingFlushResult_ACU>;
@@ -72,21 +76,36 @@ export function extractPendingSheetKeysFromWriteSet_ACU(
 
 export function markRuntimeOnlyPendingSheets_ACU(
   scope: RuntimeOnlyPendingScope_ACU,
-  pending: { all: boolean; sheetKeys: readonly string[] },
+  pending: { all: boolean; sheetKeys: readonly string[]; deletedSheetKeys?: readonly string[] },
 ): void {
   const scopeKey = buildRuntimeOnlyPendingScopeKey_ACU(scope);
-  const state = pendingByScope_ACU.get(scopeKey) || { all: false, sheetKeys: new Set<string>() };
+  const state = pendingByScope_ACU.get(scopeKey) || {
+    all: false,
+    sheetKeys: new Set<string>(),
+    deletedSheetKeys: new Set<string>(),
+  };
   if (pending.all) state.all = true;
   for (const sheetKey of pending.sheetKeys) {
     if (typeof sheetKey === 'string' && sheetKey.startsWith('sheet_')) state.sheetKeys.add(sheetKey);
+  }
+  for (const sheetKey of pending.deletedSheetKeys || []) {
+    if (typeof sheetKey === 'string' && sheetKey.startsWith('sheet_')) {
+      state.deletedSheetKeys.add(sheetKey);
+      state.sheetKeys.delete(sheetKey);
+    }
   }
   pendingByScope_ACU.set(scopeKey, state);
 }
 
 export function readRuntimeOnlyPendingSheets_ACU(scope: RuntimeOnlyPendingScope_ACU): RuntimeOnlyPendingSnapshot_ACU | null {
   const state = pendingByScope_ACU.get(buildRuntimeOnlyPendingScopeKey_ACU(scope));
-  if (!state || (!state.all && state.sheetKeys.size === 0)) return null;
-  return { all: state.all, sheetKeys: [...state.sheetKeys].sort() };
+  if (!state || (!state.all && state.sheetKeys.size === 0 && state.deletedSheetKeys.size === 0)) return null;
+  const deletedSheetKeys = [...state.deletedSheetKeys].sort();
+  return {
+    all: state.all,
+    sheetKeys: [...state.sheetKeys].sort(),
+    ...(deletedSheetKeys.length > 0 ? { deletedSheetKeys } : {}),
+  };
 }
 
 export function hasRuntimeOnlyPendingSheets_ACU(scope: RuntimeOnlyPendingScope_ACU): boolean {
@@ -118,10 +137,13 @@ export function clearRuntimeOnlyPendingSheetKeys_ACU(
   const state = pendingByScope_ACU.get(scopeKey);
   if (!state) return;
   for (const sheetKey of sheetKeys) {
-    if (typeof sheetKey === 'string') state.sheetKeys.delete(sheetKey);
+    if (typeof sheetKey === 'string') {
+      state.sheetKeys.delete(sheetKey);
+      state.deletedSheetKeys.delete(sheetKey);
+    }
   }
   if (options?.dropAllFlag) state.all = false;
-  if (!state.all && state.sheetKeys.size === 0) {
+  if (!state.all && state.sheetKeys.size === 0 && state.deletedSheetKeys.size === 0) {
     pendingByScope_ACU.delete(scopeKey);
   }
 }

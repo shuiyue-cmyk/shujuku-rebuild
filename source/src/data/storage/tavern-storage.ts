@@ -186,20 +186,37 @@ export function getTavernSettingsNamespace_ACU(): any {
     return root.__userscripts[TAVERN_SETTINGS_NAMESPACE_ACU];
 }
 
-export function persistTavernSettings_ACU(): void {
+export type TavernSettingsPersistStatus_ACU = 'saved' | 'memory' | 'failed';
+
+/**
+ * 触发酒馆设置保存。同步宿主函数明确返回 false 或抛错时返回 failed；
+ * 没有宿主保存函数时保留内存值但返回 memory，调用方不得把它当成已落盘。
+ * 宿主异步 debounce 的 Promise 不能同步确认，按已调度保存处理。
+ */
+export function persistTavernSettings_ACU(): TavernSettingsPersistStatus_ACU {
     try {
         tryReadBridgeFromTop_ACU();
+        const hostWindow = typeof window !== 'undefined' ? (window as any) : null;
         if (typeof tavernSaveSettingsFn_ACU === 'function') {
-            tavernSaveSettingsFn_ACU();
-            return;
+            return tavernSaveSettingsFn_ACU() === false ? 'failed' : 'saved';
         }
-        if (typeof (topLevelWindow_ACU as any).saveSettingsDebounced === 'function') { (topLevelWindow_ACU as any).saveSettingsDebounced(); return; }
-        if (typeof (window as any).saveSettingsDebounced === 'function') { (window as any).saveSettingsDebounced(); return; }
-        if (typeof (topLevelWindow_ACU as any).saveSettings === 'function') (topLevelWindow_ACU as any).saveSettings();
-        else if (typeof (window as any).saveSettings === 'function') (window as any).saveSettings();
-        else logWarn_ACU('[TavernStorage] 找不到任何可用的 saveSettings 函数');
+        if (typeof (topLevelWindow_ACU as any).saveSettingsDebounced === 'function') {
+            return (topLevelWindow_ACU as any).saveSettingsDebounced() === false ? 'failed' : 'saved';
+        }
+        if (typeof hostWindow?.saveSettingsDebounced === 'function') {
+            return hostWindow.saveSettingsDebounced() === false ? 'failed' : 'saved';
+        }
+        if (typeof (topLevelWindow_ACU as any).saveSettings === 'function') {
+            return (topLevelWindow_ACU as any).saveSettings() === false ? 'failed' : 'saved';
+        }
+        if (typeof hostWindow?.saveSettings === 'function') {
+            return hostWindow.saveSettings() === false ? 'failed' : 'saved';
+        }
+        logWarn_ACU('[TavernStorage] 找不到任何可用的 saveSettings 函数');
+        return 'memory';
     } catch (e) {
         logWarn_ACU('[TavernStorage] 持久化到酒馆设置失败, 回退到内存模式:', e);
+        return 'failed';
     }
 }
 
@@ -209,6 +226,7 @@ export const CONFIG_IDB_STORE_NAME_ACU = 'kv';
 export let configIdbPromise_ACU: Promise<any> | null = null;
 export const configIdbCache_ACU = new Map<string, any>();
 export const configIdbDeletedKeys_ACU = new Set<string>();
+let lastConfigPersistenceStatus_ACU: TavernSettingsPersistStatus_ACU | 'other' = 'other';
 export let configIdbCacheLoaded_ACU = false;
 export let configIdbCacheLoadingPromise_ACU: Promise<void> | null = null;
 export let configIdbCacheLoadFailed_ACU = false;
@@ -331,26 +349,55 @@ export function getConfigStorage_ACU(): any {
             if (!FORBID_BROWSER_LOCAL_STORAGE_FOR_CONFIG_ACU && storage_ACU?.getItem) return storage_ACU.getItem(key);
             return null;
         },
-        setItem: (key: string, value: any) => {
+        setItem: (key: string, value: any): boolean => {
             const v = String(value);
+            if (!hasTavern) lastConfigPersistenceStatus_ACU = 'other';
+            let status: TavernSettingsPersistStatus_ACU = 'saved';
+            const hadPrevious = hasTavern && Object.prototype.hasOwnProperty.call(ns, key);
+            const previous = hadPrevious ? ns[key] : undefined;
             if (hasTavern) {
                 ns[key] = v;
-                persistTavernSettings_ACU();
+                status = persistTavernSettings_ACU();
+                lastConfigPersistenceStatus_ACU = status;
+                if (status === 'failed') {
+                    if (hadPrevious) ns[key] = previous;
+                    else delete ns[key];
+                }
             } else if (!FORBID_BROWSER_LOCAL_STORAGE_FOR_CONFIG_ACU && storage_ACU?.setItem) {
                 storage_ACU.setItem(key, v);
             }
-            void configIdbSetCached_ACU(key, v);
+            if (hasTavern && status === 'failed') {
+                if (hadPrevious) void configIdbSetCached_ACU(key, previous);
+                else void configIdbRemoveCached_ACU(key);
+            } else {
+                void configIdbSetCached_ACU(key, v);
+            }
+            return !hasTavern || status !== 'failed';
         },
-        removeItem: (key: string) => {
+        removeItem: (key: string): boolean => {
+            if (!hasTavern) lastConfigPersistenceStatus_ACU = 'other';
+            let status: TavernSettingsPersistStatus_ACU = 'saved';
+            const hadPrevious = hasTavern && Object.prototype.hasOwnProperty.call(ns, key);
+            const previous = hadPrevious ? ns[key] : undefined;
             if (hasTavern) {
                 delete ns[key];
-                persistTavernSettings_ACU();
+                status = persistTavernSettings_ACU();
+                lastConfigPersistenceStatus_ACU = status;
+                if (status === 'failed' && hadPrevious) ns[key] = previous;
             } else if (!FORBID_BROWSER_LOCAL_STORAGE_FOR_CONFIG_ACU && storage_ACU?.removeItem) {
                 storage_ACU.removeItem(key);
             }
-            void configIdbRemoveCached_ACU(key);
+            if (hasTavern && status === 'failed') {
+                if (hadPrevious) void configIdbSetCached_ACU(key, previous);
+            } else {
+                void configIdbRemoveCached_ACU(key);
+            }
+            return !hasTavern || status !== 'failed';
         },
         _isTavern: hasTavern,
+        get _lastPersistenceStatus() {
+            return lastConfigPersistenceStatus_ACU;
+        },
     };
 }
 
@@ -376,6 +423,7 @@ export function _resetTavernStorageState_ACU(): void {
     tavernExtensionSettingsRoot_ACU = null;
     tavernSaveSettingsFn_ACU = null;
     tavernBridgeErrorReported_ACU = false;
+    lastConfigPersistenceStatus_ACU = 'other';
     _tavernBridgeInitCompleted_ACU = false;
     _tavernRootUnavailableWarnReported_ACU = false;
 }

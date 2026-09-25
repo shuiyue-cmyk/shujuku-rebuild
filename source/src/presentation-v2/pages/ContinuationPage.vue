@@ -355,12 +355,15 @@ import { watchChatChanged_ACU, useChatMutationTick } from '../composables/useCha
 import { CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_UI_ACU, useContinuationRuntime } from '../composables/useContinuationRuntime';
 import { useContinuationSession } from '../composables/useContinuationSession';
 import { useDialogStore } from '../stores/dialog-store';
+import { currentChatFileIdentifier_ACU } from '../../service/runtime/state-manager';
 
 const runtime = useContinuationRuntime();
+const runtimeSettingsIdentity = runtime.settingsIdentity ?? computed(() => currentDraftChatIdentity());
 const dialog = useDialogStore();
 const session = useContinuationSession();
 const { apiStore, followActiveApiLabel, apiPresetSelectOptions: continuationApiPresetOptions } = useApiPresetSelectOptions();
 const settingsDraft = ref<ContinuationSettings_ACU | null>(null);
+const draftChatIdentity = ref(String(currentChatFileIdentifier_ACU || ''));
 const outlineDraft = ref('');
 const messageDraft = ref('');
 const messageSending = ref(false);
@@ -596,8 +599,23 @@ async function confirmFirstSendRpmWarning(): Promise<boolean> {
   });
 }
 
+function currentDraftChatIdentity(): string {
+  return String(currentChatFileIdentifier_ACU || '');
+}
+
+function ensureCurrentDraftChat(): boolean {
+  if (draftChatIdentity.value === currentDraftChatIdentity()) return true;
+  messageDraft.value = '';
+  outlineDraft.value = '';
+  settingsDraft.value = null;
+  settingsError.value = '';
+  settingsNotice.value = '聊天已切换，旧草稿已清空；请重新载入当前聊天。';
+  return false;
+}
+
 /** 会话发送：没有任务时创建任务，运行中会打断当前迭代并带着这句话重新开始。 */
 async function sendMessage(text: string): Promise<void> {
+  if (!ensureCurrentDraftChat()) return;
   if (messageSending.value) return;
   // 仅在本次发送将创建新任务（首次发送）时弹确认框；取消则保留草稿不发送。
   if (!runtime.task.value && !(await confirmFirstSendRpmWarning())) return;
@@ -756,6 +774,8 @@ function scheduleSettingsSave(): void {
 
 async function saveSettingsNow(): Promise<void> {
   if (!settingsDraft.value) return;
+  if (!ensureCurrentDraftChat()) return;
+  const saveChatIdentity = currentDraftChatIdentity();
   if (JSON.stringify(settingsDraft.value) === lastPersistedSettingsJson) return;
   if (runtime.busy.value) {
     // 有续写操作正在执行时不抢租约，稍后重试本次保存。
@@ -771,6 +791,12 @@ async function saveSettingsNow(): Promise<void> {
     return;
   }
   const outcome = await runtime.saveSettings(candidate);
+  if (saveChatIdentity !== currentDraftChatIdentity()) {
+    settingsDraft.value = null;
+    settingsError.value = '聊天已切换，设置草稿未写入当前聊天。';
+    return;
+  }
+  if (outcome === 'stale') return;
   if (outcome === 'saved') {
     settingsError.value = '';
     settingsNotice.value = '';
@@ -929,9 +955,24 @@ onBeforeUnmount(() => {
     void saveSettingsNow();
   }
 });
-watchChatChanged_ACU(refreshAll);
+watchChatChanged_ACU(() => {
+  const nextIdentity = currentDraftChatIdentity();
+  if (nextIdentity !== draftChatIdentity.value) {
+    messageDraft.value = '';
+    outlineDraft.value = '';
+    settingsDraft.value = null;
+    settingsError.value = '';
+    settingsNotice.value = '聊天已切换，旧草稿已清空；请重新载入当前聊天。';
+    lastPersistedSettingsJson = '';
+    draftChatIdentity.value = nextIdentity;
+  }
+  refreshAll();
+});
 watch(useChatMutationTick(), refreshAfterChatMutation);
-watch(runtime.settings, settings => {
+watch([runtimeSettingsIdentity, runtime.settings], ([sourceIdentity, settings]) => {
+  // settings 视图与聊天身份一起提交。迟到的 A 结果即使触发了响应式更新，也不得重建 B 的草稿。
+  const identity = String(sourceIdentity ?? currentDraftChatIdentity());
+  if (identity !== currentDraftChatIdentity() || identity !== draftChatIdentity.value) return;
   // 每次刷新信封都会产生新的 settings 引用；只有持久化内容真的变了（保存成功、切换聊天）
   // 才重建草稿。否则运行期间的每次状态刷新都会把用户尚未保存的改动悄悄冲掉。
   const persistedJson = settings ? JSON.stringify(cloneSettings(settings)) : '';

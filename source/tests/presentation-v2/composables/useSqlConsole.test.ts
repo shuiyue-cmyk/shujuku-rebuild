@@ -10,11 +10,13 @@ function mockSqlConsoleDeps(opts: {
   queryResult?: { columns: string[]; values: any[][]; rowCount: number };
   mutationResult?: { changes: number; errors: string[] };
   queryError?: Error;
+  deferProviderReady?: boolean;
 }) {
   const executeQuery = vi.fn(() => {
     if (opts.queryError) throw opts.queryError;
     return opts.queryResult ?? { columns: ['name'], values: [['items']], rowCount: 1 };
   });
+  let currentChatIdentity = 'chat-a';
   const executeMutation = vi.fn(() => opts.mutationResult ?? { changes: 2, errors: [] });
   const provider = {
     executeQuery,
@@ -23,7 +25,14 @@ function mockSqlConsoleDeps(opts: {
   };
   const getStorageProvider = vi.fn(() => provider);
   const resolveCurrentRuntimeReadSql = vi.fn((sql: string) => ({ sql, tableRebindCount: 0, columnRebindCount: 0 }));
-  const ensureStorageProviderReady = vi.fn(async () => provider);
+  let releaseProviderReady: (() => void) | null = null;
+  const providerReadyPromise = opts.deferProviderReady
+    ? new Promise<void>((resolve) => { releaseProviderReady = resolve; })
+    : Promise.resolve();
+  const ensureStorageProviderReady = vi.fn(async () => {
+    await providerReadyPromise;
+    return provider;
+  });
 
   vi.doMock('../../../src/service/table/storage-mode', () => ({
     isSqliteMode: () => opts.sqlite !== false,
@@ -36,7 +45,7 @@ function mockSqlConsoleDeps(opts: {
   vi.doMock('../../../src/service/runtime/state-manager', () => ({
     settings_ACU: { toastMuteEnabled: false },
     currentJsonTableData_ACU: { mate: { type: 'acu', version: 1 }, sheet_0: { name: 'T', content: [['row_id'], ['1']] } },
-    currentChatFileIdentifier_ACU: 'chat-a',
+    get currentChatFileIdentifier_ACU() { return currentChatIdentity; },
     isAutoUpdatingCard_ACU: false,
     getCurrentIsolationKey_ACU: vi.fn(() => 'iso-a'),
     _set_currentJsonTableData_ACU: vi.fn(),
@@ -60,7 +69,15 @@ function mockSqlConsoleDeps(opts: {
     resolveCurrentRuntimeReadSql_ACU: resolveCurrentRuntimeReadSql,
   }));
 
-  return { executeQuery, executeMutation, getStorageProvider, resolveCurrentRuntimeReadSql };
+  return {
+    executeQuery,
+    executeMutation,
+    getStorageProvider,
+    resolveCurrentRuntimeReadSql,
+    ensureStorageProviderReady,
+    setChatIdentity: (value: string) => { currentChatIdentity = value; },
+    releaseProviderReady: () => releaseProviderReady?.(),
+  };
 }
 
 beforeEach(() => {
@@ -125,6 +142,35 @@ describe('useSqlConsole', () => {
     expect(flow.result.value.error).toContain('no such table');
     expect(flow.history.value[0]).toMatchObject({ success: false });
     expect(toast.items.at(-1)).toMatchObject({ kind: 'error' });
+  });
+
+  it('聊天切换会清空 SQL 历史，历史项不能被当作当前聊天执行', async () => {
+    const deps = mockSqlConsoleDeps({});
+    const { flow } = await freshFlow();
+    flow.sqlText.value = "UPDATE item SET name = 'A';";
+    await flow.executeCurrent();
+    expect(flow.history.value).toHaveLength(1);
+
+    deps.setChatIdentity('chat-b');
+    flow.clearResult();
+    flow.clearHistory();
+
+    expect(flow.history.value).toHaveLength(0);
+  });
+
+  it('provider 等待期间切换聊天会拒绝旧 SQL 执行', async () => {
+    const deps = mockSqlConsoleDeps({ deferProviderReady: true });
+    const { flow } = await freshFlow();
+    flow.sqlText.value = "UPDATE item SET name = 'A';";
+    const pending = flow.executeCurrent();
+    await Promise.resolve();
+    deps.setChatIdentity('chat-b');
+    deps.releaseProviderReady();
+    await pending;
+
+    expect(deps.executeMutation).not.toHaveBeenCalled();
+    expect(flow.history.value).toHaveLength(0);
+    expect(flow.result.value.kind).toBe('error');
   });
 
   it('非 SQLite 模式下拒绝执行', async () => {

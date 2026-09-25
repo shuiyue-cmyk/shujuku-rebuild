@@ -201,6 +201,36 @@ describe('mixed-storage-commit', () => {
     expect(chatRef.value).not.toEqual(before);
   });
 
+  it('决策创建后出现畸形 V2 槽时拒绝 keep_v2，且不得删除该槽', async () => {
+    const legacy = { sheet_0: sheet([['1', '药水']]) } as any;
+    chatRef.value = buildChat(legacy, structuredClone(legacy));
+    const decision = await decisionFor(chatRef.value, legacy);
+    const malformedTag = {
+      _acu_storage_version: 2,
+      storageFrame: {
+        version: 2,
+        headRevision: 'checkpoint:malformed',
+        checkpoint: {
+          kind: 'full',
+          createdAt: 3,
+          reason: 'init',
+          data: {
+            ...structuredClone(legacy),
+            sheet_bad: { ...sheet([['1', '不可丢数据']]), uid: 'bad', name: '坏槽独有表' },
+          },
+        },
+        logEntries: 'broken',
+      },
+    };
+    chatRef.value.push({ is_user: false, TavernDB_ACU_IsolatedData: { '': malformedTag } });
+
+    const result = await commitMixedStorageDecision_ACU({ decision, action: 'keep_v2', isolationConfig: { enabled: false, code: '' } });
+
+    expect(result).toMatchObject({ status: 'commit_failed_rolled_back', error: expect.stringContaining('evidence changed') });
+    expect(saveStrict).not.toHaveBeenCalled();
+    expect(chatRef.value.at(-1)?.TavernDB_ACU_IsolatedData?.['']).toBe(malformedTag);
+  });
+
   it('提交前 chat scope 漂移时零保存、零 mutation', async () => {
     const legacy = { sheet_0: sheet([['1', '药水']]) } as any;
     chatRef.value = buildChat(legacy, structuredClone(legacy));

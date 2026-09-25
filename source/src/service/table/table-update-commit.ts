@@ -205,14 +205,23 @@ function markRuntimeOnlyPendingAfterSkipChatSave_ACU(
   options: RunTableUpdateCommitOptions_ACU,
   revisionWriteSet: TableWriteConflictUnitV2_ACU[] | undefined,
   tableData: TableDataObject_ACU,
+  preApplyData: TableDataObject_ACU | null,
 ): void {
   if (!EXTERNAL_MUTATION_SOURCES_ACU.has(options.source)) return;
   const candidate = extractPendingSheetKeysFromWriteSet_ACU(revisionWriteSet ?? options.writeSet);
+  const postSheetKeys = Object.keys(tableData || {}).filter(key => key.startsWith('sheet_'));
+  const preSheetKeys = Object.keys(preApplyData || {}).filter(key => key.startsWith('sheet_'));
+  const postSheetKeySet = new Set(postSheetKeys);
+  const deletedSheetKeys = (candidate.all ? preSheetKeys : candidate.sheetKeys)
+    .filter(sheetKey => !postSheetKeySet.has(sheetKey));
   const pending = candidate.all
-    ? { all: false, sheetKeys: Object.keys(tableData || {}).filter(key => key.startsWith('sheet_')) }
+    ? { all: false, sheetKeys: postSheetKeys }
     : candidate;
-  if (!pending.all && pending.sheetKeys.length === 0) return;
-  markRuntimeOnlyPendingSheets_ACU(resolvePendingScope_ACU(options), pending);
+  if (!pending.all && pending.sheetKeys.length === 0 && deletedSheetKeys.length === 0) return;
+  markRuntimeOnlyPendingSheets_ACU(resolvePendingScope_ACU(options), {
+    ...pending,
+    deletedSheetKeys,
+  });
 }
 
 /**
@@ -338,6 +347,11 @@ export async function runTableUpdateCommit_ACU<T>(
         let rollbackBeforePersist: (() => void | Promise<void>) | undefined;
         try {
           assertExpectedCommitScope_ACU(options, '应用前');
+          const preApplyData = workingData
+            ? cloneTableData_ACU(workingData)
+            : options.initialData
+              ? cloneTableData_ACU(options.initialData)
+              : null;
           const applied = await apply({ transactionContext, workingData });
           if (!applied.success || !applied.tableData) {
             throw new TableUpdateCommitError_ACU(applied.error || `${options.reason}: update apply failed`, applied.errorCategory || 'infrastructure');
@@ -391,7 +405,7 @@ export async function runTableUpdateCommit_ACU<T>(
               );
             }
           } else {
-            markRuntimeOnlyPendingAfterSkipChatSave_ACU(options, revisionWriteSet, applied.tableData);
+            markRuntimeOnlyPendingAfterSkipChatSave_ACU(options, revisionWriteSet, applied.tableData, preApplyData);
           }
 
           _set_currentJsonTableData_ACU(cloneTableData_ACU(applied.tableData));

@@ -10,7 +10,7 @@ import {
   type FlightModeState_ACU,
 } from '../../shared/models/flight-mode-model';
 import type { Sheet_ACU } from '../../shared/models/table-data';
-import { currentJsonTableData_ACU, getCurrentIsolationKey_ACU } from '../runtime/state-manager';
+import { currentChatFileIdentifier_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU } from '../runtime/state-manager';
 import { deleteTableLocksForSheet_ACU, setSpecialIndexLockEnabled_ACU } from '../runtime/helpers-table-lock';
 import { applyChatTemplateSnapshotWithReconciliation_ACU } from '../template/template-preset-service';
 import {
@@ -26,7 +26,7 @@ import {
 
 export type FlightModeTransitionResult_ACU = {
   ok: boolean;
-  reason?: 'already_enabled' | 'already_disabled' | 'chronicle_not_found' | 'too_many_visible_chronicle_rows' | 'template_unavailable' | 'big_summary_sheet_key_conflict' | 'restore_archive_missing' | 'template_scope_changed' | 'commit_failed' | 'big_summary_sheet_key_unresolved';
+  reason?: 'already_enabled' | 'already_disabled' | 'chronicle_not_found' | 'too_many_visible_chronicle_rows' | 'template_unavailable' | 'big_summary_sheet_key_conflict' | 'restore_archive_missing' | 'template_scope_changed' | 'commit_failed' | 'big_summary_sheet_key_unresolved' | 'state_persist_failed';
   visibleChronicleRowCount?: number;
   /** 提交层的原始拒绝原因，直接透传给 UI，不改写不省略。 */
   error?: string;
@@ -102,15 +102,61 @@ function getCurrentEffectiveTemplateText_ACU(): string | null {
  */
 async function persistFlightModeState_ACU(next: FlightModeState_ACU): Promise<void> {
   const chat = getChatArray_ACU();
-  const container = normalizeChatScopedConfigContainer_ACU(getChatScopedConfigContainer_ACU(chat));
+  const chatIdentity = String(currentChatFileIdentifier_ACU || '');
+  const originalContainer = getChatScopedConfigContainer_ACU(chat);
+  const container = normalizeChatScopedConfigContainer_ACU(originalContainer);
   const isolationKey = String(getCurrentIsolationKey_ACU() ?? '');
   const states = container.flightModeByIsolationKey;
   container.flightModeByIsolationKey = {
     ...(states && typeof states === 'object' && !Array.isArray(states) ? states : {}),
     [isolationKey]: normalizeFlightModeState_ACU(next),
   };
-  setChatScopedConfigContainer_ACU(chat, container);
-  await saveChatToHost_ACU();
+  try {
+    if (getChatArray_ACU() !== chat || String(currentChatFileIdentifier_ACU || '') !== chatIdentity) {
+      throw new Error('聊天已切换，飞行模式状态未写入当前聊天。');
+    }
+    setChatScopedConfigContainer_ACU(chat, container);
+    await saveChatToHost_ACU();
+    if (getChatArray_ACU() !== chat || String(currentChatFileIdentifier_ACU || '') !== chatIdentity) {
+      throw new Error('聊天已在飞行模式状态保存期间切换。');
+    }
+  } catch (error) {
+    // 状态写入必须与模板提交形成同一失败边界：先恢复内存容器，再尽力把回滚写回宿主。
+    if (getChatArray_ACU() === chat && String(currentChatFileIdentifier_ACU || '') === chatIdentity) {
+      try {
+        setChatScopedConfigContainer_ACU(chat, originalContainer);
+        await saveChatToHost_ACU();
+      } catch (_) {
+        // 保留原始失败原因；补偿失败会在调用方的模板补偿结果中报告。
+      }
+    }
+    throw error;
+  }
+}
+
+async function compensateTemplateCommit_ACU(
+  originalTemplate: Record<string, any> | null,
+  options: { source: string; presetName?: string; hardDeleteMissingSheets?: boolean },
+): Promise<{ ok: boolean; error?: string; blockers?: string[] }> {
+  if (!originalTemplate) return { ok: false, error: '没有可验证的原始模板，无法补偿模板提交。' };
+  try {
+    const result: any = await applyChatTemplateSnapshotWithReconciliation_ACU(originalTemplate, {
+      source: options.source,
+      presetName: options.presetName || '',
+      hardDeleteMissingSheets: options.hardDeleteMissingSheets,
+      destructiveChangeConfirmed: options.hardDeleteMissingSheets === true,
+    });
+    if (!result?.saved) {
+      return {
+        ok: false,
+        error: result?.error || '补偿模板提交失败。',
+        blockers: result?.blockers || [],
+      };
+    }
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 export async function enableFlightMode_ACU(): Promise<FlightModeTransitionResult_ACU> {
@@ -158,21 +204,50 @@ export async function enableFlightMode_ACU(): Promise<FlightModeTransitionResult
 
   // 协调层按显示名派生真实 key（大总结 → sheet_da_zong_jie），提交后必须重新解析。
   const resolved = findSheetByName_ACU(currentJsonTableData_ACU, FLIGHT_MODE_BIG_SUMMARY_SHEET_NAME_ACU);
-  if (!resolved) return { ok: false, reason: 'big_summary_sheet_key_unresolved', visibleChronicleRowCount: check.visibleChronicleRowCount };
+  if (!resolved) {
+    const compensation = await compensateTemplateCommit_ACU(template, {
+      source: 'flight_mode_enable_key_resolution_rollback',
+      presetName: effectiveScopeBeforeEnable?.presetName || '',
+      hardDeleteMissingSheets: true,
+    });
+    return {
+      ok: false,
+      reason: 'big_summary_sheet_key_unresolved',
+      visibleChronicleRowCount: check.visibleChronicleRowCount,
+      ...(compensation.ok ? {} : { error: compensation.error || '模板补偿失败。', blockers: compensation.blockers || [] }),
+    };
+  }
 
-  await persistFlightModeState_ACU({
-    enabled: true,
-    enabledAt: Date.now(),
-    hiddenRowIds: [],
-    bigSummarySheetKey: resolved.key,
-    archive: {
-      chronicleExportConfig: originalExportConfig,
-      templateScope: effectiveScopeBeforeEnable === null ? undefined : cloneValue_ACU(effectiveScopeBeforeEnable),
-      templateScopeWasAbsent: scopeBeforeEnable === null,
-      // 必须记录正式提交后的作用域文本，而不是 nextTemplate：协调层会重派 key 并规范化结构。
-      enabledTemplateStr: getCurrentEffectiveTemplateText_ACU() || undefined,
-    },
-  });
+  try {
+    await persistFlightModeState_ACU({
+      enabled: true,
+      enabledAt: Date.now(),
+      hiddenRowIds: [],
+      bigSummarySheetKey: resolved.key,
+      archive: {
+        chronicleExportConfig: originalExportConfig,
+        templateScope: effectiveScopeBeforeEnable === null ? undefined : cloneValue_ACU(effectiveScopeBeforeEnable),
+        templateScopeWasAbsent: scopeBeforeEnable === null,
+        // 必须记录正式提交后的作用域文本，而不是 nextTemplate：协调层会重派 key 并规范化结构。
+        enabledTemplateStr: getCurrentEffectiveTemplateText_ACU() || undefined,
+      },
+    });
+  } catch (error) {
+    const compensation = await compensateTemplateCommit_ACU(template, {
+      source: 'flight_mode_enable_state_rollback',
+      presetName: effectiveScopeBeforeEnable?.presetName || '',
+      hardDeleteMissingSheets: true,
+    });
+    return {
+      ok: false,
+      reason: 'state_persist_failed',
+      visibleChronicleRowCount: check.visibleChronicleRowCount,
+      error: compensation.ok
+        ? (error instanceof Error ? error.message : String(error))
+        : `${error instanceof Error ? error.message : String(error)}；模板补偿失败：${compensation.error || '未知错误'}`,
+      blockers: compensation.blockers || [],
+    };
+  }
   setSpecialIndexLockEnabled_ACU(resolved.key, false);
   return { ok: true, visibleChronicleRowCount: check.visibleChronicleRowCount };
 }
@@ -202,6 +277,7 @@ export async function disableFlightMode_ACU(options: DisableFlightModeOptions_AC
 
   const enabledTemplateStr = String(archive?.enabledTemplateStr || '');
   const currentTemplateStr = getCurrentEffectiveTemplateText_ACU();
+  const enabledTemplateForRollback = parseTemplateScope_ACU({ templateStr: currentTemplateStr || enabledTemplateStr });
   if (enabledTemplateStr && currentTemplateStr && enabledTemplateStr !== currentTemplateStr && !options.confirmTemplateScopeChange) {
     return { ok: false, reason: 'template_scope_changed' };
   }
@@ -224,12 +300,28 @@ export async function disableFlightMode_ACU(options: DisableFlightModeOptions_AC
     };
   }
 
-  await persistFlightModeState_ACU({
-    enabled: false,
-    enabledAt: 0,
-    hiddenRowIds: [],
-    bigSummarySheetKey: bigSummaryKey,
-  });
+  try {
+    await persistFlightModeState_ACU({
+      enabled: false,
+      enabledAt: 0,
+      hiddenRowIds: [],
+      bigSummarySheetKey: bigSummaryKey,
+    });
+  } catch (error) {
+    const compensation = await compensateTemplateCommit_ACU(enabledTemplateForRollback, {
+      source: 'flight_mode_disable_state_rollback',
+      presetName: restorePresetName,
+      hardDeleteMissingSheets: false,
+    });
+    return {
+      ok: false,
+      reason: 'state_persist_failed',
+      error: compensation.ok
+        ? (error instanceof Error ? error.message : String(error))
+        : `${error instanceof Error ? error.message : String(error)}；模板补偿失败：${compensation.error || '未知错误'}`,
+      blockers: compensation.blockers || [],
+    };
+  }
   deleteTableLocksForSheet_ACU(bigSummaryKey);
   return { ok: true };
 }

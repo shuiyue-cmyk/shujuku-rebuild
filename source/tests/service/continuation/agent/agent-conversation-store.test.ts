@@ -96,6 +96,17 @@ describe('会话分段读取', () => {
     expect(snapshot.nextId).toBe(7);
   });
 
+  it('v1 基线替换旧段时清除其后的旧 compaction marks', () => {
+    const chat = [
+      { mes: 'a', [AGENT_CONVERSATION_FIELD_ACU]: floorRecordWith([message_ACU(1, 'agent', '旧段')], { compaction: { compactedThroughId: 1, report: '旧交接', at: 1 } }) },
+      { mes: 'b', [AGENT_CONVERSATION_FIELD_ACU]: snapshotWith([message_ACU(5, 'user', 'v1 基线')]) },
+    ];
+
+    expect(readActiveAgentConversationCompactionMark_ACU(chat)).toBeNull();
+    expect(readAgentConversation_ACU(chat).messages.map(item => item.text)).toEqual(['v1 基线']);
+    expect(readAgentConversationTimeline_ACU(chat).map(item => item.text)).toEqual(['v1 基线']);
+  });
+
   it('压缩标记做非破坏投影：交接消息置前，删掉承载楼即撤销压缩', () => {
     const early = { mes: 'a', [AGENT_CONVERSATION_FIELD_ACU]: floorRecordWith([message_ACU(1, 'turn', '早期通告', { turnKey: 't1' }), message_ACU(2, 'agent', '早期输出', { turnKey: 't1' })]) };
     const late = { mes: 'b', [AGENT_CONVERSATION_FIELD_ACU]: floorRecordWith([message_ACU(3, 'agent', '最近输出')], { compaction: { compactedThroughId: 2, report: '交接报告内容', at: 1 } }) };

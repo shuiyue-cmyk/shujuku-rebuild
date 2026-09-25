@@ -44,6 +44,8 @@ export interface PersistSummaryVectorMirrorPackParams_ACU {
 export interface PersistSummaryVectorMirrorFileResult_ACU<TRef> {
     ref: TRef;
     file: SummaryVectorIndexExternalFileRef_ACU;
+    /** true=本事务新建，失败时可安全 discard；false=复用既有内容寻址对象。 */
+    createdNew?: boolean;
 }
 
 function encodeVectorToF32B64_ACU(vector: number[]): string {
@@ -171,10 +173,12 @@ export async function persistSummaryVectorMirrorPackPrepared_ACU(
             scope,
             publicationState: 'prepared',
         };
-        await registerPrepared_ACU(file);
+        // 内容寻址路径已经存在：复用对象，不得把它降级成当前事务的 prepared。
+        // 当前聊天是否可达由 commit/rollback 决定，失败路径也不能删除该既有对象。
         return {
             ref: { packHash, path, chunkCount: blob.chunks.length, byteLength: json.length },
             file,
+            createdNew: false,
         };
     }
     const uploaded = await uploadVectorIndexJsonFile_ACU({
@@ -199,6 +203,7 @@ export async function persistSummaryVectorMirrorPackPrepared_ACU(
             byteLength: Number(uploaded.ref.byteSize) || JSON.stringify(blob).length,
         },
         file: uploaded.ref,
+        createdNew: true,
     };
 }
 

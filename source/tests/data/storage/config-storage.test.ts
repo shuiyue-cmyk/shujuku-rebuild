@@ -56,8 +56,9 @@ describe('persistSettingsToStorage_ACU', () => {
 
   it('正常写入存储', () => {
     const settings = { apiConfig: { url: 'http://test' } };
-    persistSettingsToStorage_ACU(settings, 'iso_code');
+    const persisted = persistSettingsToStorage_ACU(settings, 'iso_code');
 
+    expect(persisted).toBe(true);
     expect(mockGetConfigStorage).toHaveBeenCalled();
     expect(mockSanitizeSettingsForProfileSave).toHaveBeenCalledWith(settings);
     expect(mockGetProfileSettingsKey).toHaveBeenCalledWith('iso_code');
@@ -91,24 +92,32 @@ describe('persistSettingsToStorage_ACU', () => {
     expect(parsed.dataIsolationCode).toBe('code');
   });
 
-  it('存储抛错时记录错误日志', () => {
+  it('存储抛错时记录错误日志并返回 false', () => {
     mockGetConfigStorage.mockImplementation(() => {
       throw new Error('storage error');
     });
-    persistSettingsToStorage_ACU({ key: 'value' }, 'code');
+    const persisted = persistSettingsToStorage_ACU({ key: 'value' }, 'code');
 
+    expect(persisted).toBe(false);
     expect(mockLogError).toHaveBeenCalledWith(
       'Failed to persist settings to storage:',
       expect.any(Error),
     );
   });
 
-  it('setItem 抛错时记录错误日志', () => {
+  it('底层存储明确返回 false 时向调用方传播失败', () => {
+    mockStore.setItem.mockReturnValue(false);
+
+    expect(persistSettingsToStorage_ACU({ key: 'value' }, 'code')).toBe(false);
+  });
+
+  it('setItem 抛错时记录错误日志并返回 false', () => {
     mockStore.setItem.mockImplementation(() => {
       throw new Error('write error');
     });
-    persistSettingsToStorage_ACU({ key: 'value' }, 'code');
+    const persisted = persistSettingsToStorage_ACU({ key: 'value' }, 'code');
 
+    expect(persisted).toBe(false);
     expect(mockLogError).toHaveBeenCalledWith(
       'Failed to persist settings to storage:',
       expect.any(Error),

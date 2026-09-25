@@ -7,6 +7,7 @@ import { auditTableDataForUpgrade_ACU, type UpgradeAuditResult_ACU } from './tab
 import { repairTableDataFromAudit_ACU, type RepairResult_ACU } from './table-data-repair';
 
 export type MixedStorageDecisionKind_ACU =
+  | 'blocked_malformed_v2'
   | 'blocked_replay_unavailable'
   | 'blocked_checkpoint_convergence'
   | 'blocked_legacy_requires_confirmation'
@@ -240,6 +241,13 @@ export async function evaluateMixedStorageDecision_ACU(
     && initialChatIdentifier === String(currentChatFileIdentifier_ACU || '').trim()
     && options.isolationKey === getCurrentIsolationKey_ACU();
   if (!scopeMatches) diagnostics.push('scope_isolation_mismatch');
+  const staticV2 = evidence.v2.staticEvidence;
+  if (staticV2.malformedSlots.length > 0) diagnostics.push('v2_slot_malformed');
+  if (staticV2.hasUndecodableRegion) diagnostics.push('v2_static_scan_undecodable');
+  const legacySheetKeys = new Set(Object.keys(repairedLegacyData).filter(key => key.startsWith('sheet_')));
+  if (staticV2.sheetKeys.some(sheetKey => !legacySheetKeys.has(sheetKey))) {
+    diagnostics.push('v2_static_sheets_not_covered_by_legacy');
+  }
   // 细化子因：区分 anchor 缺失形态与 replay 具体失败原因（T7）
   if (evidence.v2.replay.status !== 'success') {
     diagnostics.push('v2_replay_unavailable');
@@ -251,10 +259,6 @@ export async function evaluateMixedStorageDecision_ACU(
       diagnostics.push('v2_replay_failed');
     }
   }
-  if (evidence.v2.frames.some(frame => frame.logEntryCount === 0 && frame.perSheetCheckpointKeys.length === 0
-    && evidence.v2.anchor.messageIndex === null)) {
-    diagnostics.push('v2_slot_malformed');
-  }
   if (evidence.v2.replay.requiresCheckpointConvergence || evidence.v2.replay.compatibilityRepairs?.length) diagnostics.push('v2_requires_checkpoint_convergence');
   if (legacyAudit.status === 'unrecoverable' || legacyRepair.requiresConfirmation) diagnostics.push('legacy_requires_confirmation');
   if (evidence.comparison.fingerprintsEqual === true) diagnostics.push('legacy_v2_fingerprints_equal');
@@ -262,7 +266,9 @@ export async function evaluateMixedStorageDecision_ACU(
 
   let kind: MixedStorageDecisionKind_ACU;
   let frozenMergeCandidate: TableDataObject_ACU | undefined;
-  if (evidence.v2.replay.status !== 'success') {
+  if (staticV2.malformedSlots.length > 0 || staticV2.hasUndecodableRegion) {
+    kind = 'blocked_malformed_v2';
+  } else if (evidence.v2.replay.status !== 'success') {
     kind = 'blocked_replay_unavailable';
   } else if (evidence.v2.replay.requiresCheckpointConvergence || evidence.v2.replay.compatibilityRepairs?.length) {
     kind = 'blocked_checkpoint_convergence';

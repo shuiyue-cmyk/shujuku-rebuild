@@ -683,3 +683,86 @@ describe('sql mutation column rebind', () => {
     expect(result).toBe("UPDATE beibaowupinbiao SET xi_xiang_guan_wu_pin = 'x' WHERE row_id = 1");
   });
 
+  it('读写重绑均保护 SQLite 非列 token，但仍重绑引号标识符', () => {
+    const columns = new Map([
+      ['true', 'enabled'],
+      ['false', 'disabled'],
+      ['current_date', 'today'],
+      ['current_time', 'clock'],
+      ['current_timestamp', 'created_at'],
+      ['glob', 'pattern'],
+      ['match', 'matcher'],
+      ['regexp', 'regex'],
+      ['partition', 'partition_col'],
+      ['over', 'window_name'],
+      ['window', 'window_alias'],
+    ]);
+    const tableAliases = new Map([['t', 'runtime_t']]);
+    const columnAliases = new Map([['runtime_t', columns]]);
+
+    expect(rebindSqlReadIdentifiers_ACU(
+      "SELECT TRUE, FALSE, CURRENT_DATE, CURRENT_TIME, CURRENT_TIMESTAMP FROM t WHERE name GLOB 'x*' AND name MATCH 'x' AND name REGEXP 'x'",
+      tableAliases,
+      columnAliases,
+    ).sql).toBe(
+      "SELECT TRUE, FALSE, CURRENT_DATE, CURRENT_TIME, CURRENT_TIMESTAMP FROM runtime_t WHERE name GLOB 'x*' AND name MATCH 'x' AND name REGEXP 'x'",
+    );
+    expect(rebindSqlReadIdentifiers_ACU(
+      'SELECT rank() OVER over FROM t WINDOW window AS (PARTITION BY partition ORDER BY window)',
+      tableAliases,
+      columnAliases,
+    ).sql).toBe(
+      'SELECT rank() OVER over FROM runtime_t WINDOW window AS (PARTITION BY partition_col ORDER BY window)',
+    );
+    expect(rebindSqlReadIdentifiers_ACU(
+      'SELECT "true", "glob" FROM t',
+      tableAliases,
+      columnAliases,
+    ).sql).toBe('SELECT "enabled", "pattern" FROM runtime_t');
+
+    expect(rebindSqlMutationColumnsByTarget_ACU([
+      "UPDATE runtime_t SET note = ? WHERE enabled = TRUE AND disabled = FALSE AND created_at = CURRENT_TIMESTAMP AND name GLOB 'x*' AND name MATCH 'x' AND name REGEXP 'x'",
+    ], columnAliases)[0]).toBe(
+      "UPDATE runtime_t SET note = ? WHERE enabled = TRUE AND disabled = FALSE AND created_at = CURRENT_TIMESTAMP AND name GLOB 'x*' AND name MATCH 'x' AND name REGEXP 'x'",
+    );
+    expect(rebindSqlMutationColumnsByTarget_ACU([
+      'UPDATE runtime_t SET note = ? WHERE flag = "true"',
+    ], columnAliases)[0]).toBe('UPDATE runtime_t SET note = ? WHERE flag = "enabled"');
+  });
+
+  it('CTE 的 AS MATERIALIZED / NOT MATERIALIZED 形式不被当成物理表', () => {
+    const tableAliases = new Map([
+      ['source', 'runtime_source'],
+      ['target', 'runtime_target'],
+      ['cte', 'runtime_cte'],
+    ]);
+    for (const hint of ['MATERIALIZED', 'NOT MATERIALIZED']) {
+      const mutation = `WITH cte AS ${hint} (SELECT x FROM source) UPDATE target SET x = 1 WHERE x IN (SELECT x FROM cte)`;
+      expect(rebindSqlMutationTableReferences_ACU([mutation], tableAliases, { requireKnownTables: true })[0]).toBe(
+        `WITH cte AS ${hint} (SELECT x FROM runtime_source) UPDATE runtime_target SET x = 1 WHERE x IN (SELECT x FROM cte)`,
+      );
+      const read = `WITH cte AS ${hint} (SELECT x AS out FROM source) SELECT out FROM cte`;
+      expect(rebindSqlReadIdentifiers_ACU(read, tableAliases, new Map()).sql).toBe(
+        `WITH cte AS ${hint} (SELECT x AS out FROM runtime_source) SELECT out FROM cte`,
+      );
+    }
+  });
+
+  it('INDEXED BY / NOT INDEXED 不作为表别名，未限定表名同步重绑', () => {
+    const tableAliases = new Map([['old_t', 'runtime_t']]);
+    const columnAliases = new Map([
+      ['runtime_t', new Map([['name', 'physical_name']])],
+    ]);
+
+    expect(rebindSqlReadIdentifiers_ACU(
+      'SELECT old_t.name FROM old_t INDEXED BY idx',
+      tableAliases,
+      columnAliases,
+    ).sql).toBe('SELECT runtime_t.physical_name FROM runtime_t INDEXED BY idx');
+    expect(rebindSqlReadIdentifiers_ACU(
+      'SELECT old_t.name FROM old_t NOT INDEXED',
+      tableAliases,
+      columnAliases,
+    ).sql).toBe('SELECT runtime_t.physical_name FROM runtime_t NOT INDEXED');
+  });
+

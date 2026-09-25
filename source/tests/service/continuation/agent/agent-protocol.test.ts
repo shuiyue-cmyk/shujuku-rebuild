@@ -125,6 +125,11 @@ describe('主 Agent 动作解析', () => {
     expect(() => parseAgentMaintainerOutput_ACU({ delta: { infoGap: [{ action: 'patch', id: 'E1', revealStatus: '瞎写' }] } })).toThrowError(/revealStatus 非法/);
   });
 
+  it('维护契约必须有 delta，summary-only 不能伪装成成功写集', () => {
+    expect(() => parseAgentMaintainerOutput_ACU({ summary: '没有变化' })).toThrowError(/delta/);
+    expect(parseAgentMaintainerOutput_ACU({ summary: '没有变化', delta: {} }).delta.hooks).toEqual([]);
+  });
+
   it('总纲写集保留卷完成依据与续卷依据，并拒绝非法完成阶段编号', () => {
     const output = parseAgentMaintainerOutput_ACU({
       summary: '第一卷已收束并扩充第二卷',

@@ -340,15 +340,13 @@ export function buildSheetColumnAliasMap_ACU(
   ): void => {
     const sourceKey = String(source).toLowerCase();
     const targetKey = String(target).toLowerCase();
-    if (!sourceKey || sourceKey === targetKey) return;
+    if (!sourceKey || sourceKey === targetKey || tableConflicts.has(sourceKey)) return;
     const existing = tableColumns.get(sourceKey);
     if (existing && existing.toLowerCase() !== targetKey) {
-      // 同一别名指向不同真实列 → 双向删除并记冲突（与表别名同语义）。
-      recordConflictCandidate(tableConflictCandidates, sourceKey, existing, tableEvidence.get(existing.toLowerCase()) || evidence);
+      // 同一历史别名指向不同真实列：永久删除该别名并保留双方证据。
+      recordConflictCandidate(tableConflictCandidates, sourceKey, existing, tableEvidence.get(sourceKey) || evidence);
       recordConflictCandidate(tableConflictCandidates, sourceKey, target, evidence);
-      if (tableColumns.get(existing.toLowerCase()) === existing) tableColumns.delete(existing.toLowerCase());
       tableColumns.delete(sourceKey);
-      tableEvidence.delete(existing.toLowerCase());
       tableEvidence.delete(sourceKey);
       tableConflicts.add(sourceKey);
       return;
@@ -356,6 +354,51 @@ export function buildSheetColumnAliasMap_ACU(
     if (tableColumns.has(sourceKey)) return;
     tableColumns.set(sourceKey, target);
     tableEvidence.set(sourceKey, evidence);
+  };
+
+  const registerDeclaredColumnAliases = (
+    sourceSheet: any,
+    physicalName: string,
+    mappings: ReadonlyArray<{ sourceIndex: number; displayName: string; sqlName: string; required: boolean }>,
+  ): void => {
+    const rawColumnAliases = (sourceSheet?.sourceData as Record<string, any> | undefined)?.columnAliases;
+    if (!rawColumnAliases || typeof rawColumnAliases !== 'object' || Array.isArray(rawColumnAliases)) return;
+
+    const targetByIdentity = new Map<string, string>();
+    const ambiguousIdentities = new Set<string>();
+    const addTargetIdentity = (rawName: unknown, sqlName: string): void => {
+      const identity = canonicalizeDisplayName_ACU(rawName);
+      if (!identity || ambiguousIdentities.has(identity)) return;
+      const existing = targetByIdentity.get(identity);
+      if (existing && existing.toLowerCase() !== sqlName.toLowerCase()) {
+        targetByIdentity.delete(identity);
+        ambiguousIdentities.add(identity);
+        return;
+      }
+      targetByIdentity.set(identity, sqlName);
+    };
+    for (const mapping of mappings) {
+      addTargetIdentity(mapping.displayName, mapping.sqlName);
+      addTargetIdentity(mapping.sqlName, mapping.sqlName);
+    }
+
+    const tableColumns = aliases.get(physicalName) || new Map<string, string>();
+    const tableConflicts = conflicts.get(physicalName) || new Set<string>();
+    const tableConflictCandidates = conflictCandidates.get(physicalName) || new Map<string, SheetColumnAliasConflictCandidate_ACU[]>();
+    const tableEvidence = sourceByAlias.get(physicalName) || new Map<string, SheetColumnAliasEvidence_ACU>();
+    for (const [sourceColumn, historicalAliases] of Object.entries(rawColumnAliases)) {
+      const sourceIdentity = canonicalizeDisplayName_ACU(sourceColumn);
+      const targetSqlName = !ambiguousIdentities.has(sourceIdentity) ? targetByIdentity.get(sourceIdentity) : undefined;
+      if (!targetSqlName) continue;
+      for (const alias of Array.isArray(historicalAliases) ? historicalAliases : []) {
+        addColumnAlias(tableColumns, tableEvidence, tableConflictCandidates, tableConflicts,
+          String(alias ?? ''), targetSqlName, 'declared_display_alias');
+      }
+    }
+    aliases.set(physicalName, tableColumns);
+    if (tableConflicts.size > 0) conflicts.set(physicalName, tableConflicts);
+    if (tableEvidence.size > 0) sourceByAlias.set(physicalName, tableEvidence);
+    if (tableConflictCandidates.size > 0) conflictCandidates.set(physicalName, tableConflictCandidates);
   };
 
   if (!targetData || typeof targetData !== 'object') {
@@ -413,6 +456,7 @@ export function buildSheetColumnAliasMap_ACU(
     if (tableConflicts.size > 0) conflicts.set(physicalName, tableConflicts);
     if (tableEvidence.size > 0) sourceByAlias.set(physicalName, tableEvidence);
     if (tableConflictCandidates.size > 0) conflictCandidates.set(physicalName, tableConflictCandidates);
+    registerDeclaredColumnAliases(sheet, physicalName, resolved.columnMap.mappings);
   }
 
   // ── supplemental 别名证据：authored_ddl（唯一 canonical 显示名映射）──
@@ -507,34 +551,24 @@ export function buildSheetColumnAliasMap_ACU(
         }
       }
       // declared_display_alias：sourceData.columnAliases 声明的历史显示名。
-      const rawColumnAliases = (sheet?.sourceData as Record<string, any> | undefined)?.columnAliases;
-      if (rawColumnAliases && typeof rawColumnAliases === 'object' && !Array.isArray(rawColumnAliases)) {
-        const targetCanonicalToSql = new Map<string, string>();
-        const targetSheet = (targetData as any)[target.sheetKey];
-        const targetDescriptor = getRuntimeEffectiveSchema_ACU(targetSheet) as {
-          columnMap?: {
-            mappings?: Array<{ sourceIndex?: number; displayName?: string; sqlName?: string; required?: boolean }>;
-          } | null | undefined;
+      // 声明键既兼容当前 physical column name，也兼容当前显示名；两者若在
+      // 目标 schema 中产生一对多，立即放弃该声明而不任选一列。
+      const targetSheet = (targetData as any)[target.sheetKey];
+      const targetDescriptor = getRuntimeEffectiveSchema_ACU(targetSheet) as {
+        columnMap?: {
+          mappings?: Array<{ sourceIndex?: number; displayName?: string; sqlName?: string; required?: boolean }>;
         } | null | undefined;
-        for (const mapping of resolveSheetColumns_ACU(
+      } | null | undefined;
+      registerDeclaredColumnAliases(
+        sheet,
+        target.physicalName,
+        resolveSheetColumns_ACU(
           targetSheet,
           targetSheet?.uid || target.sheetKey,
           target.physicalName,
           targetDescriptor,
-        ).columnMap.mappings) {
-          const canonical = canonicalizeDisplayName_ACU(mapping.displayName);
-          if (canonical && !targetCanonicalToSql.has(canonical)) targetCanonicalToSql.set(canonical, mapping.sqlName);
-        }
-        for (const [physicalName, aliases] of Object.entries(rawColumnAliases)) {
-          const physicalCanonical = canonicalizeDisplayName_ACU(physicalName);
-          const targetSqlName = physicalCanonical ? targetCanonicalToSql.get(physicalCanonical) : undefined;
-          if (!targetSqlName) continue; // 物理名未唯一命中目标列 → 不注册
-          for (const alias of Array.isArray(aliases) ? aliases : []) {
-            addColumnAlias(tableColumns, tableEvidence, tableConflictCandidates, tableConflicts,
-              String(alias ?? ''), targetSqlName, 'declared_display_alias');
-          }
-        }
-      }
+        ).columnMap.mappings,
+      );
       aliases.set(target.physicalName, tableColumns);
       if (tableConflicts.size > 0) conflicts.set(target.physicalName, tableConflicts);
       if (tableEvidence.size > 0) sourceByAlias.set(target.physicalName, tableEvidence);

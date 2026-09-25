@@ -1207,6 +1207,27 @@ describe('runPlotTasksRuntime_ACU', () => {
     expect(mockSavePlotToLatestMessage).toHaveBeenCalledWith(true);
   });
 
+  it('最终 pending/plot 写入前作用域变化时不写回', async () => {
+    const plotSettings = {
+      tasks: [{
+        id: 'scope-final-write', name: '作用域最终写入', stage: 1, order: 1, maxRetries: 1,
+        promptGroup: [{ role: 'user', content: '推进剧情' }],
+      }],
+    };
+    mockCallApiWithPlotPreset.mockImplementation(async () => {
+      mockCapturePlotRuntimeScope.mockReturnValue({ chatId: 'chat-2', characterId: '2', isolationKey: 'iso-b', reliable: true });
+      return '结果';
+    });
+
+    const result = await runPlotTasksRuntime_ACU(plotSettings, '当前输入', {
+      runtimeScope: { chatId: 'chat-1', characterId: '1', isolationKey: '', reliable: true },
+    });
+
+    expect(result).toMatchObject({ finalMessage: null, scopeChanged: true });
+    expect(mockSetTempPlotToSave).not.toHaveBeenCalled();
+    expect(mockSavePlotToLatestMessage).not.toHaveBeenCalled();
+  });
+
   it('条件模板检测内容组合用户+AI 输入（composeSeedMatchContent：AI-only 会漏用户触发的 seed 条件）', async () => {
     const { getLatestUserMessageContent_ACU } = await import('../../../../src/service/runtime/template-vars');
     vi.mocked(getLatestUserMessageContent_ACU).mockReturnValue('玩家：发动突袭');

@@ -845,6 +845,30 @@ import { isAiFloor_ACU } from '../../../shared/ai-floor';
 
   export async function runPlotTasksRuntime_ACU(plotSettings: Record<string, any>, userMessage: string, runtimeOptions: any = {}) {
     const { inputForHash = userMessage, hasExistingUserMessage = false } = runtimeOptions;
+    const initialScope = runtimeOptions.runtimeScope || capturePlotRuntimeScope_ACU();
+    const isRuntimeScopeCurrent_ACU = (): boolean => {
+      const currentScope = capturePlotRuntimeScope_ACU();
+      if (initialScope?.reliable && currentScope?.reliable) {
+        return isSamePlotRuntimeScope_ACU(initialScope, currentScope);
+      }
+      return initialScope?.chatId === currentScope?.chatId
+        && initialScope?.characterId === currentScope?.characterId
+        && initialScope?.isolationKey === currentScope?.isolationKey;
+    };
+    const scopeChangedResult_ACU = (
+      successfulResults: any[] = [],
+      failedResults: any[] = [],
+      aggregatedTags: Map<string, any> = new Map(),
+      enabledTaskCount = 0,
+    ) => ({
+      finalMessage: null as string | null,
+      successfulResults,
+      failedResults,
+      aggregatedTags,
+      enabledTaskCount,
+      scopeChanged: true,
+      errorMessage: '剧情规划作用域已变化，已放弃本轮写回。',
+    });
 
     // ── P4-T4.1: 入口 flush 上一轮残留 pending ──
     // 下一轮开始意味着用户已发送新消息，上一轮目标用户消息必然已在 chat 中，
@@ -933,13 +957,18 @@ import { isAiFloor_ACU } from '../../../shared/ai-floor';
       : 'sequential';
     let agentDecisionPromise: Promise<AgentDecisionResult_ACU> | null = null;
 
-    async function applyAgentFinalGreenlights_ACU(agentDecision: AgentDecisionResult_ACU): Promise<void> {
+    async function applyAgentFinalGreenlights_ACU(agentDecision: AgentDecisionResult_ACU): Promise<boolean> {
+      if (!isRuntimeScopeCurrent_ACU()) return false;
       const finalGenerationGreenlights = agentDecision.active === true && Array.isArray(agentDecision.finalGenerationGreenlights)
         ? agentDecision.finalGenerationGreenlights
         : [];
       _set_pendingFinalGenerationGreenlights_ACU(finalGenerationGreenlights);
       if (agentDecision.active === true) {
         const written = await writeFinalGenerationGreenlights_ACU(finalGenerationGreenlights);
+        if (!isRuntimeScopeCurrent_ACU()) {
+          _set_pendingFinalGenerationGreenlights_ACU([]);
+          return false;
+        }
         if (!written && finalGenerationGreenlights.length > 0) {
           // 写入未生效时放行条目在世界书里仍是禁用态，原生注入不会包含它们；
           // 生成不阻断（缺内容比漏内容安全），但必须可观测。
@@ -948,6 +977,7 @@ import { isAiFloor_ACU } from '../../../shared/ai-floor';
           });
         }
       }
+      return true;
     }
 
     if (agentWorldbookControl && agentExecutionMode === 'concurrent') {
@@ -971,7 +1001,8 @@ import { isAiFloor_ACU } from '../../../shared/ai-floor';
         signal: abortController_ACU?.signal,
       });
       sharedContext.agentDecision = agentDecision;
-      await applyAgentFinalGreenlights_ACU(agentDecision);
+      const greenlightsApplied = await applyAgentFinalGreenlights_ACU(agentDecision);
+      if (!greenlightsApplied) return scopeChangedResult_ACU();
       if (agentDecision.active === true) {
         enabledTasks = Array.isArray(agentDecision.effectiveTasks) ? agentDecision.effectiveTasks : [];
       }
@@ -1086,7 +1117,12 @@ import { isAiFloor_ACU } from '../../../shared/ai-floor';
     if (agentDecisionPromise) {
       const agentDecision = await agentDecisionPromise;
       checkPlotAbortRequested_ACU();
-      await applyAgentFinalGreenlights_ACU(agentDecision);
+      const greenlightsApplied = await applyAgentFinalGreenlights_ACU(agentDecision);
+      if (!greenlightsApplied) return scopeChangedResult_ACU(successfulResults, failedResults, aggregatedTags, enabledTasks.length);
+    }
+
+    if (!isRuntimeScopeCurrent_ACU()) {
+      return scopeChangedResult_ACU(successfulResults, failedResults, aggregatedTags, enabledTasks.length);
     }
 
     const finalMessage = buildFinalPlotInjectionMessage_ACU(
@@ -1099,6 +1135,9 @@ import { isAiFloor_ACU } from '../../../shared/ai-floor';
     const userInputHash = hashUserInput_ACU(inputForHash);
     const finalMessageHash = hashUserInput_ACU(finalMessage);
     const roundId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    if (!isRuntimeScopeCurrent_ACU()) {
+      return scopeChangedResult_ACU(successfulResults, failedResults, aggregatedTags, enabledTasks.length);
+    }
     const chatId = currentChatFileIdentifier_ACU || '';
     _set_tempPlotToSave_ACU({
       content: saveContent,
@@ -1109,6 +1148,7 @@ import { isAiFloor_ACU } from '../../../shared/ai-floor';
       taskResults: successfulResults,
       // P1-T1.1: 绑定当前聊天标识，供 flush/延迟路径跨聊天校验
       chatId,
+      runtimeScope: initialScope,
     });
     // 对象引用仅用于识别旧延迟回调是否被新 pending 取代；roundId 才是消息持久化身份。
     logDebug_ACU('[剧情推进] [Plot] 已暂存plot数据，roundId:', roundId, '，用户输入哈希:', userInputHash, '，原始文本长度:', inputForHash?.length || 0);

@@ -200,24 +200,21 @@ function projectWorldbookTable_ACU(table: any): { headers: string[]; rows: any[]
     try {
         const allEntries = await getLorebookEntries_ACU(primaryLorebookName);
         const usedOrders = buildUsedOrderSet_ACU(allEntries);
-        
-        // --- 1. Delete old summary entries ---
-        // 用户要求：外部导入每次导入前不清理（允许多批并存，避免后一批覆盖前一批）
-        if (!isImport) {
-            const uidsToDelete = allEntries
+        // 外部导入允许多批并存；普通刷新记录旧受管条目，但必须等新条目创建成功后再删除。
+        const oldManagedEntryUids = isImport
+            ? []
+            : allEntries
                 .filter(e => e.comment && (e.comment.startsWith(SUMMARY_ENTRY_PREFIX) || e.comment.startsWith(SMALL_SUMMARY_PREFIX)))
                 .map(e => e.uid);
 
-            if (uidsToDelete.length > 0) {
-                await deleteLorebookEntries_ACU(primaryLorebookName, uidsToDelete);
-                logDebug_ACU(`Deleted ${uidsToDelete.length} old summary lorebook entries.`);
-            }
-        }
-
-        // --- 2. Re-create entries from the table ---
+        // --- 1. Re-create entries from the table ---
         const projectedSummary = summaryTable?.content?.length > 0 ? projectWorldbookTable_ACU(summaryTable) : { headers: [], rows: [] };
         const summaryRows = projectedSummary.rows;
         if (summaryRows.length === 0) {
+            if (oldManagedEntryUids.length > 0) {
+                await deleteLorebookEntries_ACU(primaryLorebookName, oldManagedEntryUids);
+                logDebug_ACU(`Deleted ${oldManagedEntryUids.length} old summary lorebook entries.`);
+            }
             logDebug_ACU('No summary rows to create entries for.');
             return;
         }
@@ -230,8 +227,9 @@ function projectWorldbookTable_ACU(table: any): { headers: string[]; rows: any[]
         const headers = projectedSummary.headers;
         const keywordColumnIndex = headers.indexOf('编码索引');
         if (keywordColumnIndex === -1) {
-            logError_ACU('Cannot find "编码索引" column in 总结表. Cannot process summary entries.', { table: summaryTable?.name || '总结表', lorebook: primaryLorebookName, isolationPrefix: isoPrefix });
-            return;
+            const message = 'Cannot find "编码索引" column in 总结表. Cannot process summary entries.';
+            logError_ACU(message, { table: summaryTable?.name || '总结表', lorebook: primaryLorebookName, isolationPrefix: isoPrefix });
+            throw new Error(message);
         }
 
         const entriesToCreate: any[] = [];
@@ -282,9 +280,14 @@ function projectWorldbookTable_ACU(table: any): { headers: string[]; rows: any[]
                 logWarn_ACU('[SummaryOrderFix] Failed to enforce shared order for summary entries:', e);
             }
         }
+        if (oldManagedEntryUids.length > 0) {
+            await deleteLorebookEntries_ACU(primaryLorebookName, oldManagedEntryUids);
+            logDebug_ACU(`Deleted ${oldManagedEntryUids.length} old summary lorebook entries.`);
+        }
 
     } catch(error) {
         logError_ACU('Failed to update summary lorebook entries:', error);
+        throw error;
     }
   }
 
@@ -303,6 +306,7 @@ function projectWorldbookTable_ACU(table: any): { headers: string[]; rows: any[]
     const PERSON_ENTRY_PREFIX = isoPrefix + basePersonEntryPrefix;
     const basePersonIndexComment = isImport ? `${IMPORT_PREFIX}TavernDB-ACU-ImportantPersonsIndex` : 'TavernDB-ACU-ImportantPersonsIndex';
     const PERSON_INDEX_COMMENT = isoPrefix + basePersonIndexComment;
+    const PERSONS_HEADER_COMMENT = isoPrefix + 'TavernDB-ACU-PersonsHeader';
     const personsCfg = ensureExportConfigDefaults_ACU(importantPersonsTable?.exportConfig, importantPersonsTable?.name || '重要人物表');
     const personsEntryPlacement = normalizePlacementConfig_ACU(
         personsCfg.fixedEntryPlacement,
@@ -317,33 +321,31 @@ function projectWorldbookTable_ACU(table: any): { headers: string[]; rows: any[]
         const allEntries = await getLorebookEntries_ACU(primaryLorebookName);
         const usedOrders = buildUsedOrderSet_ACU(allEntries);
         
-        // --- 1. 全量删除 ---
-        // 用户要求：外部导入每次导入前不清理（允许多批并存，避免后一批覆盖前一批）
-        if (!isImport) {
-            // 找出所有由插件管理的旧条目 (人物条目 + 索引条目)
-            const uidsToDelete = allEntries
-                .filter(e => e.comment && (e.comment.startsWith(PERSON_ENTRY_PREFIX) || e.comment === PERSON_INDEX_COMMENT || e.comment.includes('PersonsHeader')))
+        // 外部导入允许多批并存；普通刷新必须先创建成功，再删除旧受管条目。
+        const oldManagedEntryUids = isImport
+            ? []
+            : allEntries
+                .filter(e => e.comment && (e.comment.startsWith(PERSON_ENTRY_PREFIX) || e.comment === PERSON_INDEX_COMMENT || e.comment === PERSONS_HEADER_COMMENT))
                 .map(e => e.uid);
 
-            if (uidsToDelete.length > 0) {
-                await deleteLorebookEntries_ACU(primaryLorebookName, uidsToDelete);
-                logDebug_ACU(`Deleted ${uidsToDelete.length} old person-related lorebook entries.`);
-            }
-        }
-
-        // --- 2. 全量重建 ---
+        // --- 1. 全量重建 ---
         const projectedPersons = importantPersonsTable?.content?.length > 0 ? projectWorldbookTable_ACU(importantPersonsTable) : { headers: [], rows: [] };
         const personRows = projectedPersons.rows;
         if (personRows.length === 0) {
+            if (oldManagedEntryUids.length > 0) {
+                await deleteLorebookEntries_ACU(primaryLorebookName, oldManagedEntryUids);
+                logDebug_ACU(`Deleted ${oldManagedEntryUids.length} old person-related lorebook entries.`);
+            }
             logDebug_ACU('No important persons to create entries for.');
-            return; // 如果没有人物，删除后直接返回
+            return;
         }
 
         const headers = projectedPersons.headers;
         const nameColumnIndex = headers.indexOf('姓名') !== -1 ? headers.indexOf('姓名') : headers.indexOf('角色名');
         if (nameColumnIndex === -1) {
-            logError_ACU('Cannot find "姓名" or "角色名" column in 重要人物表. Cannot process person entries.', { table: importantPersonsTable?.name || '重要人物表', lorebook: primaryLorebookName, isolationPrefix: isoPrefix });
-            return;
+            const message = 'Cannot find "姓名" or "角色名" column in 重要人物表. Cannot process person entries.';
+            logError_ACU(message, { table: importantPersonsTable?.name || '重要人物表', lorebook: primaryLorebookName, isolationPrefix: isoPrefix });
+            throw new Error(message);
         }
 
         const personEntriesToCreate: any[] = [];
@@ -398,7 +400,9 @@ function projectWorldbookTable_ACU(table: any): { headers: string[]; rows: any[]
         const personsHeaderContent = `# ${importantPersonsTable.name}\n\n| ${headers.join(' | ')} |\n|${headers.map(() => '---').join('|')}|`;
         const personsHeaderEntryData = applyPlacementToEntry_ACU({
             // [修复] 外部导入时 PersonsHeader 也必须带外部导入前缀，避免被清理逻辑误删
-            comment: isoPrefix + (isImport ? `${IMPORT_PREFIX}TavernDB-ACU-PersonsHeader` : 'TavernDB-ACU-PersonsHeader'),
+            comment: isImport
+                ? isoPrefix + `${IMPORT_PREFIX}TavernDB-ACU-PersonsHeader`
+                : PERSONS_HEADER_COMMENT,
             content: personsHeaderContent,
             keys: [isoPrefix + (isImport ? `${IMPORT_PREFIX}TavernDB-ACU-PersonsHeader-Key` : 'TavernDB-ACU-PersonsHeader-Key')],
             enabled: true,
@@ -454,8 +458,13 @@ function projectWorldbookTable_ACU(table: any): { headers: string[]; rows: any[]
                 logWarn_ACU('[PersonsOrderFix] Failed to enforce grouped orders for important persons:', e);
             }
         }
+        if (oldManagedEntryUids.length > 0) {
+            await deleteLorebookEntries_ACU(primaryLorebookName, oldManagedEntryUids);
+            logDebug_ACU(`Deleted ${oldManagedEntryUids.length} old person-related lorebook entries.`);
+        }
 
     } catch(error) {
         logError_ACU('Failed to update important persons related lorebook entries:', error);
+        throw error;
     }
   }

@@ -1,12 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ContinuationHostGenerationBridge_ACU } from '../../../src/service/continuation/host-generation-bridge';
+import { hostBoundaryFingerprint_ACU, hostMessageFingerprint_ACU } from '../../../src/service/continuation/host-retry-mode';
 
 const identity = { chatIdentity: 'chat-a', taskId: 'task-a', stageId: 'stage-a', revision: 1, nodeId: 'node-a', turnId: 'turn-a', attemptId: 'attempt-a' };
 
-function createHarness(options: { tags?: string; chat?: any[]; send?: boolean; retry?: boolean; minTokens?: number; tokens?: number; onWait?: () => void; autoContinueStates?: Array<{ eligible: boolean; delaySeconds: number; chatIdentity?: string; taskId?: string | null }>; invalidatePendingAutoFill?: () => void } = {}) {
+function createHarness(options: { tags?: string; chat?: any[]; pending?: any; send?: boolean; retry?: boolean; minTokens?: number; tokens?: number; onWait?: () => void; onRecord?: () => void; autoContinueStates?: Array<{ eligible: boolean; delaySeconds: number; chatIdentity?: string; taskId?: string | null }>; invalidatePendingAutoFill?: () => void } = {}) {
   let chat = options.chat ?? [{ is_user: true }];
   let chatIdentity = 'chat-a';
-  let pending: any = null;
+  let pending: any = options.pending ?? null;
   let taskStopped = false;
   let taskRunning = false;
   const autoContinueStates = [...(options.autoContinueStates ?? [])];
@@ -19,7 +20,14 @@ function createHarness(options: { tags?: string; chat?: any[]; send?: boolean; r
     readAutoContinueState: vi.fn(() => autoContinueStates.length ? autoContinueStates.shift()! : { eligible: false, delaySeconds: 0 }),
     retryCurrentTurn,
     continueTask,
-    recordHostTurn: vi.fn(async ({ identity: sent, capture }) => { pending = { identity: sent, capture, retryCount: pending?.retryCount ?? 0, status: 'awaiting_generation' }; }),
+    recordHostTurn: vi.fn(async ({ identity: sent, capture }) => {
+      options.onRecord?.();
+      const last = chat[chat.length - 1];
+      const effectiveCapture = last?.is_user === true
+        ? { ...capture, instructionIndex: chat.length - 1, instructionFingerprint: hostMessageFingerprint_ACU(last) }
+        : capture;
+      pending = { identity: sent, capture: effectiveCapture, retryCount: pending?.retryCount ?? 0, status: 'awaiting_generation' };
+    }),
     bindHostTurnGeneration: vi.fn(async (_identity, generationSeq) => { pending = { ...pending, capture: { ...pending.capture, generationSeq } }; }),
     confirmCurrentTurn: vi.fn(async () => { pending = null; }),
     rejectHostTurnForMissingTags: vi.fn(async () => { pending = { ...pending, status: 'retry_ready' }; }),
@@ -158,6 +166,16 @@ describe('ContinuationHostGenerationBridge_ACU', () => {
     expect(h.runtime.confirmCurrentTurn).toHaveBeenCalledWith(identity, 1);
   });
 
+  it('record 持久化期间同长度改写前置楼层时不得继续发送', async () => {
+    let mutate: (() => void) | null = null;
+    const h = createHarness({ onRecord: () => mutate?.() });
+    mutate = () => h.setChat([{ is_user: true, mes: '被改写' }]);
+
+    await expect(h.bridge.send(prepared)).resolves.toBe(false);
+    expect(h.hostInput.send).not.toHaveBeenCalled();
+    expect(h.runtime.pauseForHostResultFailure).toHaveBeenCalledWith(identity);
+  });
+
   it('pauses instead of claiming a host send whose input adapter is unavailable', async () => {
     const h = createHarness({ send: false });
     await expect(h.bridge.send(prepared)).resolves.toBe(false);
@@ -179,7 +197,7 @@ describe('ContinuationHostGenerationBridge_ACU', () => {
     expect(h.hostInput.retryGeneration).toHaveBeenCalledWith('regenerate');
     expect(h.runtime.recordHostTurn).toHaveBeenLastCalledWith({
       identity,
-      capture: { capturedAt: 100, capturedChatLength: 1, capturedAiFloorCount: 0, generationSeq: null },
+      capture: { capturedAt: 100, capturedChatLength: 1, capturedAiFloorCount: 0, generationSeq: null, instructionIndex: 0, instructionFingerprint: hostMessageFingerprint_ACU({ is_user: true }), boundaryFingerprint: hostBoundaryFingerprint_ACU([{ is_user: true }, { is_user: false, mes: '正文', message_id: 9 }]) },
     });
     expect(h.runtime.confirmCurrentTurn).not.toHaveBeenCalled();
   });
@@ -363,11 +381,25 @@ describe('ContinuationHostGenerationBridge_ACU', () => {
     expect(h.hostInput.send).toHaveBeenCalledOnce();
   });
 
+  it('重载后只有 pending、没有 armed attempt 时拒绝普通生成宽松认领', () => {
+    const pending = {
+      identity,
+      capture: { capturedAt: 1, capturedChatLength: 1, capturedAiFloorCount: 0, generationSeq: null },
+      retryCount: 0,
+      status: 'awaiting_generation',
+    };
+    const h = createHarness({ pending });
+
+    expect(h.bridge.onGenerationStarted(7, true)).toBe(false);
+    expect(h.bridge.claimsGenerationEnded(7, true)).toBe(false);
+    expect(h.runtime.bindHostTurnGeneration).not.toHaveBeenCalled();
+  });
+
   it('claims and confirms the ended generation in loose mode when no synchronous start pairing exists', async () => {
     const h = createHarness();
     // 宿主 GENERATION_STARTED 在发送返回后的微任务里才送达：不模拟同步配对。
     await expect(h.bridge.send(prepared)).resolves.toBe(true);
-    expect(h.bridge.hasLiveClaim('chat-a')).toBe(false);
+    expect(h.bridge.hasLiveClaim('chat-a')).toBe(true);
     h.setChat([{ is_user: true }, { is_user: false, mes: '<ok>正文', message_id: 9 }]);
 
     expect(h.bridge.claimsGenerationEnded(7, false)).toBe(false);
@@ -428,7 +460,7 @@ describe('ContinuationHostGenerationBridge_ACU', () => {
     expect(h.hostInput.retryGeneration).toHaveBeenCalledWith('generate');
     expect(h.runtime.recordHostTurn).toHaveBeenLastCalledWith({
       identity,
-      capture: { capturedAt: 100, capturedChatLength: 2, capturedAiFloorCount: 1, generationSeq: null },
+      capture: { capturedAt: 100, capturedChatLength: 2, capturedAiFloorCount: 1, generationSeq: null, instructionIndex: 1, instructionFingerprint: hostMessageFingerprint_ACU({ is_user: true, mes: '主 Agent 的指令' }), boundaryFingerprint: hostBoundaryFingerprint_ACU([{ is_user: false, mes: '开场' }, { is_user: true, mes: '主 Agent 的指令' }]) },
     });
   });
 
@@ -470,7 +502,7 @@ describe('ContinuationHostGenerationBridge_ACU', () => {
     expect(h.bridge.hasLiveClaim('chat-a')).toBe(false);
 
     // 反过来：中止事件属于第三方生成（9）时不能误删仍在飞的认领。
-    await h.runtime.recordHostTurn({ identity, capture: { capturedAt: 300, capturedChatLength: 1, capturedAiFloorCount: 0, generationSeq: null } });
+    await h.bridge.send(prepared);
     expect(h.bridge.onGenerationStarted(9, true)).toBe(true);
     await h.bridge.onGenerationStopped(11);
     expect(h.bridge.hasLiveClaim('chat-a')).toBe(true);
@@ -485,7 +517,7 @@ describe('ContinuationHostGenerationBridge_ACU', () => {
     // orchestrator 的停止/放弃/清空出口调用它；随后同一聊天重建等待轮应能重新宽松认领。
     expect(h.bridge.invalidateStartedByChat('chat-a')).toBe(true);
     expect(h.bridge.invalidateStartedByChat('chat-a')).toBe(false);
-    await h.runtime.recordHostTurn({ identity, capture: { capturedAt: 200, capturedChatLength: 1, capturedAiFloorCount: 0, generationSeq: null } });
+    await h.bridge.send(prepared);
 
     expect(h.bridge.onGenerationStarted(9, true)).toBe(true);
     expect(h.bridge.claimsGenerationEnded(9, true)).toBe(true);

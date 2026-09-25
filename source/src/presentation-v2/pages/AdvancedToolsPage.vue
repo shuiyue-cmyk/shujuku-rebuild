@@ -353,7 +353,10 @@ async function scrollLogListToTop(): Promise<void> {
 
 onMounted(sqlFlow.refresh);
 // 换聊天即清空上一次查询结果：表里的行属于切换前的聊天，照着旧行点历史执行会把数据写进新聊天。
-watchChatChanged_ACU(() => { sqlFlow.clearResult(); });
+watchChatChanged_ACU(() => {
+  sqlFlow.clearResult();
+  sqlFlow.clearHistory();
+});
 watch(() => logFlow.visibleLogs.value.length, scrollLogListToTop, { flush: 'post' });
 </script>
 

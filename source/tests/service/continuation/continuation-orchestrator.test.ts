@@ -4,6 +4,9 @@ import { FirstFloorContinuationStore_ACU } from '../../../src/service/continuati
 import { ContinuationOrchestrator_ACU } from '../../../src/service/continuation/continuation-orchestrator';
 import { buildDefaultContinuationSettings_ACU } from '../../../src/service/continuation/defaults';
 import { ContinuationValidationError_ACU, createContinuationError_ACU } from '../../../src/service/continuation/model';
+import { countAiModelOutputFloors_ACU } from '../../../src/shared/ai-floor';
+import { hostMessageFingerprint_ACU } from '../../../src/service/continuation/host-retry-mode';
+import { getChatArray_ACU } from '../../../src/data/gateways/chat-gateway';
 import { _set_SillyTavern_API_ACU } from '../../../src/shared/host-api';
 
 /** 每三轮一个低压轮，满足默认 0.3 的低压占比与连续高压上限，避免固定件本身就违反节奏规则。 */
@@ -30,7 +33,7 @@ const outline = {
  * 执行引擎桩：模拟主 Agent 的大纲行为——没有可执行大纲（无阶段或阶段已完成）时
  * 先通过注入的回调派工大纲子代理，review/stopped 时按真实循环的行为抛错中止。
  */
-function createOrchestrator(options: { preview?: boolean; planner?: ReturnType<typeof vi.fn>; hasLiveHostClaim?: () => boolean; invalidateHostClaim?: (chatIdentity: string) => void; conversation?: ReturnType<typeof vi.fn>; onSettingsReplaced?: ReturnType<typeof vi.fn> } = {}) {
+function createOrchestrator(options: { preview?: boolean; planner?: ReturnType<typeof vi.fn>; hasLiveHostClaim?: () => boolean; invalidateHostClaim?: (chatIdentity: string) => void; stopHostGeneration?: (chatIdentity: string) => void; conversation?: ReturnType<typeof vi.fn>; onSettingsReplaced?: ReturnType<typeof vi.fn> } = {}) {
   const planner = options.planner ?? vi.fn().mockResolvedValue({ outline, attempts: 1, requiresReview: !!options.preview, apiPreset: { presetName: 'preset-a', source: 'fixed', reason: 'fixed_preset' } });
   let sequence = 0;
   const store = new FirstFloorContinuationStore_ACU();
@@ -63,15 +66,32 @@ function createOrchestrator(options: { preview?: boolean; planner?: ReturnType<t
     appendAgentConversation, clearAgentModules, clearAgentConversation,
     ...(options.hasLiveHostClaim ? { hasLiveHostClaim: options.hasLiveHostClaim } : {}),
     ...(options.invalidateHostClaim ? { invalidateHostClaim: options.invalidateHostClaim } : {}),
+    ...(options.stopHostGeneration ? { stopHostGeneration: options.stopHostGeneration } : {}),
     ...(options.onSettingsReplaced ? { onSettingsReplaced: options.onSettingsReplaced } : {}),
   });
   return { orchestrator, planner, store, executionEngine, appendAgentConversation, clearAgentModules, clearAgentConversation };
 }
 
 async function recordPendingHostTurn(orchestrator: ContinuationOrchestrator_ACU, identity: any): Promise<void> {
+  const chat = getChatArray_ACU();
+  let instructionIndex = chat.length - 1;
+  for (let index = chat.length - 1; index >= 0; index -= 1) {
+    if (chat[index]?.is_user === true) {
+      instructionIndex = index;
+      break;
+    }
+  }
+  const instruction = chat[instructionIndex] ?? {};
   await orchestrator.recordHostTurn({
     identity,
-    capture: { capturedAt: 1_000, capturedChatLength: 1, capturedAiFloorCount: 0, generationSeq: 1 },
+    capture: {
+      capturedAt: 1_000,
+      capturedChatLength: chat.length,
+      capturedAiFloorCount: countAiModelOutputFloors_ACU(chat),
+      generationSeq: 1,
+      instructionIndex,
+      instructionFingerprint: hostMessageFingerprint_ACU(instruction),
+    },
   });
 }
 
@@ -101,7 +121,7 @@ async function expectCode(action: () => Promise<unknown>, code: string) {
 }
 
 describe('ContinuationOrchestrator_ACU', () => {
-  beforeEach(() => _set_SillyTavern_API_ACU({ chat: [{}], chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn().mockResolvedValue(undefined) } as any));
+  beforeEach(() => _set_SillyTavern_API_ACU({ chat: [{ is_user: true, mes: '测试指令' }], chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat: vi.fn().mockResolvedValue(undefined) } as any));
 
   it('creates the task instantly without planning; the agent-driven continue creates the frozen first stage', async () => {
     const { orchestrator, store, planner } = createOrchestrator();
@@ -137,6 +157,22 @@ describe('ContinuationOrchestrator_ACU', () => {
     expect(store.readPersisted()!.activeTask!.status).toBe('running');
   });
 
+  it('pending 评估使用发送时设置快照，不读取之后的设置修改', async () => {
+    const { orchestrator, store } = createOrchestrator();
+    await orchestrator.createTask({ originInstruction: '推进剧情' });
+    await orchestrator.continueTask();
+    const task = store.readPersisted()!.activeTask!;
+    const stage = task.stages[0];
+    const revision = stage.revisions[0];
+    const identity = { chatIdentity: 'chat-a', taskId: task.taskId, stageId: stage.stageId, revision: 1, nodeId: revision.outline.nodes[0].id, turnId: revision.outline.nodes[0].turns[0].id, attemptId: 'attempt-settings-snapshot' };
+    await recordPendingHostTurn(orchestrator, identity);
+    const before = orchestrator.readPendingHostTurn()!;
+    const changed = { ...before.settings, loopTags: '<new>', minGenerationTokens: 999, generationRetryLimit: 9 };
+    await orchestrator.replaceSettings({ settings: changed });
+    const after = orchestrator.readPendingHostTurn()!;
+    expect(after.settings).toEqual(before.settings);
+  });
+
   it('keeps preview revisions mutable until acceptance and rejects blank task input', async () => {
     const { orchestrator, store } = createOrchestrator({ preview: true });
     await expectCode(() => orchestrator.createTask({ originInstruction: '   ' }), 'CONTINUATION_ORIGIN_INSTRUCTION_EMPTY');
@@ -167,6 +203,68 @@ describe('ContinuationOrchestrator_ACU', () => {
     const result = await orchestrator.continueTask();
     expect(result.task.stopReason).toBe('duration_reached');
     expect(executionEngine.prepareCurrentTurnInstruction).toHaveBeenCalledTimes(1);
+  });
+
+  it('deadline 已过时 retryCurrentTurn 不得重发宿主生成', async () => {
+    let now = 1_000;
+    const { orchestrator, store } = createOrchestrator();
+    (orchestrator as any).dependencies.now = () => now;
+    await orchestrator.createTask({ originInstruction: '推进剧情' });
+    const stored = store.readPersisted()!;
+    stored.settings = { ...stored.settings, totalDurationMinutes: 1 };
+    await store.replaceAtomically(stored, { chatIdentity: 'chat-a' });
+    await orchestrator.continueTask();
+    const task = store.readPersisted()!.activeTask!;
+    const stage = task.stages[0];
+    const revision = stage.revisions[0];
+    const identity = { chatIdentity: 'chat-a', taskId: task.taskId, stageId: stage.stageId, revision: 1, nodeId: revision.outline.nodes[0].id, turnId: revision.outline.nodes[0].turns[0].id, attemptId: 'attempt-deadline-retry' };
+    await recordPendingHostTurn(orchestrator, identity);
+    await orchestrator.rejectHostTurnForMissingTags({ identity, messageIndex: 1 });
+    now = 61_001;
+
+    const result = await orchestrator.retryCurrentTurn();
+    expect(result.retryHostGeneration).not.toBe(true);
+    expect(store.readPersisted()!.activeTask).toMatchObject({ status: 'paused', stopReason: 'duration_reached' });
+  });
+
+  it('规划完成后跨过 deadline 不得再把 prepared turn 交给宿主', async () => {
+    let now = 1_000;
+    const { orchestrator, store, executionEngine } = createOrchestrator();
+    (orchestrator as any).dependencies.now = () => now;
+    await orchestrator.createTask({ originInstruction: '推进剧情' });
+    const stored = store.readPersisted()!;
+    stored.settings = { ...stored.settings, totalDurationMinutes: 1 };
+    await store.replaceAtomically(stored, { chatIdentity: 'chat-a' });
+    let resolvePrepared!: (value: any) => void;
+    executionEngine.prepareCurrentTurnInstruction = vi.fn(() => new Promise(resolve => { resolvePrepared = resolve; }));
+
+    const running = orchestrator.continueTask();
+    await vi.waitFor(() => { expect(executionEngine.prepareCurrentTurnInstruction).toHaveBeenCalledOnce(); });
+    now = 61_001;
+    resolvePrepared({ identity: {}, instruction: { instruction: '过期文本', attempts: 1 } });
+    const result = await running;
+
+    expect(result.preparedTurn).toBeUndefined();
+    expect(store.readPersisted()!.activeTask).toMatchObject({ status: 'paused', stopReason: 'duration_reached' });
+  });
+
+  it('deadline watchdog 在没有后续用户动作时也会自动停止', async () => {
+    vi.useFakeTimers();
+    try {
+      let now = 1_000;
+      const { orchestrator, store } = createOrchestrator();
+      (orchestrator as any).dependencies.now = () => now;
+      await orchestrator.createTask({ originInstruction: '推进剧情' });
+      const stored = store.readPersisted()!;
+      stored.settings = { ...stored.settings, totalDurationMinutes: 1 };
+      await store.replaceAtomically(stored, { chatIdentity: 'chat-a' });
+      await orchestrator.continueTask();
+      now = 61_001;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(store.readPersisted()!.activeTask).toMatchObject({ status: 'paused', stopReason: 'duration_reached' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('opens a new duration window from a user message without rebuilding the current stage', async () => {
@@ -317,6 +415,40 @@ describe('ContinuationOrchestrator_ACU', () => {
     expect(revision).toMatchObject({ reason: 'manual_replan', replanInstruction: '收束当前冲突', frozen: true });
   });
 
+  it('重规划写入口先按稳定楼层身份回退已删除的 completed prefix', async () => {
+    const { orchestrator, planner, store } = createOrchestrator();
+    await orchestrator.createTask({ originInstruction: '推进剧情' });
+    await orchestrator.continueTask();
+    const task = store.readPersisted()!.activeTask!;
+    const stage = task.stages[0];
+    const revision = stage.revisions[0];
+    const identity = { chatIdentity: 'chat-a', taskId: task.taskId, stageId: stage.stageId, revision: 1, nodeId: revision.outline.nodes[0].id, turnId: revision.outline.nodes[0].turns[0].id, attemptId: 'attempt-replan-delete' };
+    const chat = getChatArray_ACU();
+    chat[0].message_id = 'floor-0';
+    await recordPendingHostTurn(orchestrator, identity);
+    chat.push({ is_user: false, mes: '本轮正文', message_id: 'floor-1' });
+    await orchestrator.confirmCurrentTurn(identity, 1);
+
+    const persisted = store.readPersisted()!;
+    persisted.activeTask!.stages[0].revisions[0].outline.nodes[0].turns[0].goal = '已完成目标';
+    await store.replaceAtomically(persisted, { chatIdentity: 'chat-a' });
+    chat.splice(1, 1);
+
+    planner.mockResolvedValue({
+      outline: {
+        ...outline,
+        nodes: [{ ...outline.nodes[0], turns: outline.nodes[0].turns.map((turn, index) => index === 0 ? { ...turn, goal: '新规划目标' } : turn) }],
+      },
+      attempts: 1,
+      requiresReview: false,
+      apiPreset: { presetName: 'preset-a', source: 'fixed', reason: 'fixed_preset' },
+    } as any);
+
+    const result = await orchestrator.replanRemaining({ instruction: '按现存楼层重规划' });
+    const nextRevision = result.task.stages[0].revisions.find(item => item.revision === 2)!;
+    expect(nextRevision.outline.nodes[0].turns[0].goal).toBe('新规划目标');
+  });
+
   it('persists a host-turn identity before dispatch and rejects a mismatched attempt result', async () => {
     const { orchestrator, store } = createOrchestrator();
     await orchestrator.createTask({ originInstruction: '推进剧情' });
@@ -453,7 +585,7 @@ describe('ContinuationOrchestrator_ACU', () => {
     const stage = task.stages[0];
     const revision = stage.revisions[0];
     const identity = { chatIdentity: 'chat-a', taskId: task.taskId, stageId: stage.stageId, revision: 1, nodeId: revision.outline.nodes[0].id, turnId: revision.outline.nodes[0].turns[0].id, attemptId: 'attempt-host-a' };
-    await orchestrator.recordHostTurn({ identity, capture: { capturedAt: 1_000, capturedChatLength: 1, capturedAiFloorCount: 1, generationSeq: 1 } });
+    await orchestrator.recordHostTurn({ identity, capture: { capturedAt: 1_000, capturedChatLength: 2, capturedAiFloorCount: 1, generationSeq: 1, instructionIndex: 1, instructionFingerprint: hostMessageFingerprint_ACU(chat[1]) } });
     await orchestrator.failHostTurnForStoppedGeneration(identity);
     expect(store.readPersisted()!.activeTask!.pendingHostTurn).toMatchObject({ status: 'retry_ready' });
 
@@ -518,6 +650,78 @@ describe('ContinuationOrchestrator_ACU', () => {
     expect((error as ContinuationValidationError_ACU).error.code).toBe('CONTINUATION_INTERNAL_REQUEST_STALE');
     expect(store.readPersisted()!.activeTask).toMatchObject({ status: 'paused', stopReason: 'manual' });
     expect(store.readPersisted()!.activeTask!.stages).toEqual([]);
+  });
+
+  it('旧运行的延迟错误不得覆盖同一 task 的新运行', async () => {
+    const { orchestrator, store, executionEngine } = createOrchestrator();
+    let rejectFirst: ((error: Error) => void) | undefined;
+    executionEngine.prepareCurrentTurnInstruction = vi.fn()
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectFirst = reject; }))
+      .mockImplementationOnce(async () => ({ identity: {}, instruction: { instruction: '新运行文本', attempts: 1 } }));
+
+    await orchestrator.createTask({ originInstruction: '推进剧情' });
+    const firstRun = orchestrator.continueTask().catch(error => error);
+    await vi.waitFor(() => { expect(rejectFirst).toBeDefined(); });
+
+    await orchestrator.sendAgentMessage({ text: '切换到新运行' });
+    await orchestrator.continueTask();
+    rejectFirst!(new Error('旧运行网络错误'));
+    await expect(firstRun).resolves.toBeInstanceOf(Error);
+
+    expect(store.readPersisted()!.activeTask).toMatchObject({ status: 'running', stopReason: null, lastError: null });
+  });
+
+  it('停止发生在 recordHostTurn 持久化期间时，旧调用不得返回可发送结果', async () => {
+    const { orchestrator, store } = createOrchestrator();
+    await orchestrator.createTask({ originInstruction: '推进剧情' });
+    await orchestrator.continueTask();
+    const task = store.readPersisted()!.activeTask!;
+    const stage = task.stages[0];
+    const revision = stage.revisions[0];
+    const identity = { chatIdentity: 'chat-a', taskId: task.taskId, stageId: stage.stageId, revision: 1, nodeId: revision.outline.nodes[0].id, turnId: revision.outline.nodes[0].turns[0].id, attemptId: 'attempt-final-fence' };
+    const chat = getChatArray_ACU();
+    const originalChat = [...chat];
+    let releaseSave!: () => void;
+    const saveGate = new Promise<void>(resolve => { releaseSave = resolve; });
+    const saveChat = vi.fn(async () => { await saveGate; });
+    _set_SillyTavern_API_ACU({ chat: originalChat, chatId: 'chat-a', getCurrentChatId: () => 'chat-a', saveChat } as any);
+
+    const recording = orchestrator.recordHostTurn({ identity, capture: { capturedAt: 1_000, capturedChatLength: originalChat.length, capturedAiFloorCount: 0, generationSeq: null, instructionIndex: 0, instructionFingerprint: hostMessageFingerprint_ACU(originalChat[0]) } });
+    await vi.waitFor(() => { expect(saveChat).toHaveBeenCalled(); });
+    const stopping = orchestrator.stopTask();
+    releaseSave();
+    await expectCode(() => recording, 'CONTINUATION_INTERNAL_REQUEST_STALE');
+    await stopping;
+  });
+
+  it('clearContinuationData 先停止在飞宿主生成，再清理任务状态', async () => {
+    const stopHostGeneration = vi.fn();
+    const { orchestrator, store } = createOrchestrator({ stopHostGeneration });
+    await orchestrator.createTask({ originInstruction: '推进剧情' });
+    await orchestrator.continueTask();
+    const current = orchestrator.readPendingHostTurn();
+    expect(current).toBeNull();
+    const persisted = store.readPersisted()!.activeTask!;
+    const stage = persisted.stages[0];
+    const revision = stage.revisions[0];
+    await recordPendingHostTurn(orchestrator, { chatIdentity: 'chat-a', taskId: persisted.taskId, stageId: stage.stageId, revision: 1, nodeId: revision.outline.nodes[0].id, turnId: revision.outline.nodes[0].turns[0].id, attemptId: 'attempt-clear' });
+    expect(orchestrator.readPendingHostTurn()!.pending.status).toBe('awaiting_generation');
+    await orchestrator.clearContinuationData();
+    expect(stopHostGeneration).toHaveBeenCalledWith('chat-a');
+  });
+
+  it('abandonAndCreate 先停止在飞宿主生成，再写入新任务', async () => {
+    const stopHostGeneration = vi.fn();
+    const { orchestrator, store } = createOrchestrator({ stopHostGeneration });
+    await orchestrator.createTask({ originInstruction: '旧任务' });
+    await orchestrator.continueTask();
+    const persisted = store.readPersisted()!.activeTask!;
+    const stage = persisted.stages[0];
+    const revision = stage.revisions[0];
+    await recordPendingHostTurn(orchestrator, { chatIdentity: 'chat-a', taskId: persisted.taskId, stageId: stage.stageId, revision: 1, nodeId: revision.outline.nodes[0].id, turnId: revision.outline.nodes[0].turns[0].id, attemptId: 'attempt-abandon' });
+    expect(orchestrator.readPendingHostTurn()!.pending.status).toBe('awaiting_generation');
+    await orchestrator.abandonAndCreate({ originInstruction: '新任务', confirmAbandon: true });
+    expect(stopHostGeneration).toHaveBeenCalledWith('chat-a');
   });
 
   it('stops after the initial stage when the automatic stage limit is one', async () => {

@@ -4,7 +4,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockSettings, mockLoopState, mockPlanningGuard, mockRunPlotTasks, mockLogError, mockCaptureScope, mockFlightModeActive } = vi.hoisted(() => ({
+const { mockSettings, mockLoopState, mockPlanningGuard, mockRunPlotTasks, mockLogError, mockCaptureScope, mockFlightModeActive, mockTrackAbortController, mockUntrackAbortController } = vi.hoisted(() => ({
   mockSettings: {
     plotSettings: { enabled: true },
     streamingEnabled: false,
@@ -15,6 +15,8 @@ const { mockSettings, mockLoopState, mockPlanningGuard, mockRunPlotTasks, mockLo
   mockLogError: vi.fn(),
   mockCaptureScope: vi.fn(),
   mockFlightModeActive: vi.fn(() => false),
+  mockTrackAbortController: vi.fn(),
+  mockUntrackAbortController: vi.fn(),
 }));
 
 vi.mock('../../../../src/shared/defaults-json.js', () => ({
@@ -26,6 +28,8 @@ vi.mock('../../../../src/service/runtime/state-manager', () => ({
   planningGuard_ACU: mockPlanningGuard,
   abortController_ACU: null,
   _set_abortController_ACU: vi.fn(),
+  trackAbortController_ACU: mockTrackAbortController,
+  untrackAbortController_ACU: mockUntrackAbortController,
 }));
 
 vi.mock('../../../../src/shared/utils', () => ({
@@ -39,6 +43,13 @@ vi.mock('../../../../src/service/runtime/plot-runtime/plot-task-engine', () => (
 
 vi.mock('../../../../src/service/runtime/plot-runtime/plot-runtime-scope', () => ({
   capturePlotRuntimeScope_ACU: mockCaptureScope,
+  isSamePlotRuntimeScope_ACU: (before: any, after: any) => (
+    before?.reliable === true
+    && after?.reliable === true
+    && before.chatId === after.chatId
+    && before.characterId === after.characterId
+    && before.isolationKey === after.isolationKey
+  ),
   summarizePlotRuntimeScope_ACU: (scope: any) => scope,
   summarizePlotRuntimeError_ACU: () => ({ category: 'unknown' }),
 }));
@@ -75,6 +86,39 @@ describe('runOptimizationLogic_ACU', () => {
     expect(result.successCount).toBe(1);
     expect(result.failCount).toBe(0);
     expect(result.aggregatedTagNames).toContain('战斗');
+  });
+
+  it('规划期间作用域切换时拒绝返回可写回结果', async () => {
+    let release!: (value: any) => void;
+    mockRunPlotTasks.mockImplementationOnce(() => new Promise(resolve => { release = resolve; }));
+    const promise = runOptimizationLogic_ACU('继续');
+    mockCaptureScope.mockReturnValue({ chatId: 'chat-2', characterId: '2', isolationKey: 'iso-b', reliable: true });
+    release({
+      finalMessage: '不应写回',
+      successfulResults: [],
+      failedResults: [],
+      enabledTaskCount: 1,
+      aggregatedTags: new Map(),
+    });
+
+    const result = await promise;
+    expect(result).toMatchObject({ success: false, errorType: 'scope_changed' });
+  });
+
+  it('规划 controller 纳入 active abort 集合并在 finally 释放', async () => {
+    mockRunPlotTasks.mockResolvedValue({
+      finalMessage: '结果',
+      successfulResults: [],
+      failedResults: [],
+      enabledTaskCount: 1,
+      aggregatedTags: new Map(),
+    });
+
+    await runOptimizationLogic_ACU('继续');
+
+    expect(mockTrackAbortController).toHaveBeenCalledWith(expect.any(AbortController));
+    const controller = mockTrackAbortController.mock.calls[0][0];
+    expect(mockUntrackAbortController).toHaveBeenCalledWith(controller);
   });
 
   it('剧情推进未启用时跳过', async () => {

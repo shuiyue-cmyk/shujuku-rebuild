@@ -57,7 +57,9 @@ export interface TemplateSheetMergePlan_ACU {
   insertRowIds: string[];
   conflictRowIds: string[];
   rejectedRowIds: string[];
-  /** conflictPolicy=template-wins 时，用模板行覆盖既有行的 row_id 列表 */
+  /** conflictPolicy=template-wins 时，模板行到 runtime 行的显式映射。 */
+  overrideMappings: Array<{ templateRowId: string; runtimeRowId: string }>;
+  /** 兼容旧调用方的模板 row_id 列表。 */
   overrideRowIds: string[];
 }
 
@@ -285,6 +287,7 @@ export function preflightTemplateDataImport_ACU(options: TemplateDataPreflightOp
       insertRowIds: [],
       conflictRowIds: [],
       rejectedRowIds: [],
+      overrideMappings: [],
       overrideRowIds: [],
     };
 
@@ -313,6 +316,7 @@ export function preflightTemplateDataImport_ACU(options: TemplateDataPreflightOp
       } else {
         if (policy === 'template-wins') {
           plan.overrideRowIds.push(identity.rowId);
+          plan.overrideMappings.push({ templateRowId: identity.rowId, runtimeRowId: existing });
           audit.keptRowCount += 1;
         } else {
           plan.matchedRowIds.push(identity.rowId);

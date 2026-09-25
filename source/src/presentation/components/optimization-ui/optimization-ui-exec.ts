@@ -422,6 +422,19 @@ import {
             break;
           }
           
+          if (result.optimizedContent === currentContent) {
+            logDebug_ACU(`[正文优化] 第 ${loop} 轮没有实际正文变化，放弃写回`);
+            if (totalOptimizations.length === 0) {
+              if (config.seamlessMode) {
+                hideOptimizationOverlay_ACU();
+              } else {
+                hideOptimizationProgressToast_ACU();
+              }
+              return false;
+            }
+            break;
+          }
+
           if (!result.optimizations || result.optimizations.length === 0) {
             logDebug_ACU(`[正文优化] 第 ${loop} 轮无需优化，原文已足够好`);
             if (loop === 1) {

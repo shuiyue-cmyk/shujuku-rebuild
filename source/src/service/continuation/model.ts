@@ -348,6 +348,8 @@ export interface ContinuationSettings_ACU {
   promptForceDefaultVersion?: string;
 }
 
+export type ContinuationPendingEvaluationSettings_ACU = Pick<ContinuationSettings_ACU, 'loopTags' | 'retryDelaySeconds' | 'minGenerationTokens' | 'generationRetryLimit'>;
+
 export interface ContinuationEnvelope_ACU {
   schemaVersion: typeof CONTINUATION_SCHEMA_VERSION_ACU;
   settings: ContinuationSettings_ACU;
@@ -408,6 +410,11 @@ export interface ContinuationHostGenerationCapture_ACU {
   capturedChatLength: number;
   capturedAiFloorCount: number;
   generationSeq: number | null;
+  /** 宿主发送后承载本轮指令的用户楼位置与稳定指纹；旧快照缺失时重试必须 fail-closed。 */
+  instructionIndex?: number;
+  instructionFingerprint?: string;
+  /** Hash of the pre-send chat boundary, used across the record await. */
+  boundaryFingerprint?: string;
 }
 
 export interface ContinuationPendingHostTurn_ACU {
@@ -415,6 +422,8 @@ export interface ContinuationPendingHostTurn_ACU {
   capture: ContinuationHostGenerationCapture_ACU;
   retryCount: number;
   status: 'awaiting_generation' | 'retry_ready' | 'exhausted';
+  /** Settings captured when this attempt was armed; legacy pending records fall back to current settings. */
+  evaluationSettings?: ContinuationPendingEvaluationSettings_ACU;
 }
 
 export type ContinuationInternalAiSource_ACU = 'outline' | 'turn_instruction' | 'agent_main' | 'agent_subagent' | 'handoff_summary';
@@ -452,6 +461,9 @@ export interface ContinuationTimelineEntry_ACU {
   turnId?: string;
   attemptId?: string;
   messageIndex?: number;
+  /** Stable host message identity used for cursor recovery after insertions/deletions. */
+  messageId?: string | number;
+  messageFingerprint?: string;
   errorCode?: ContinuationErrorCode_ACU;
 }
 

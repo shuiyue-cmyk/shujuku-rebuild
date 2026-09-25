@@ -5,7 +5,7 @@
 
 import { getChatArray_ACU, saveChatToHost_ACU } from '../../data/gateways/chat-gateway';
 import { logDebug_ACU, logError_ACU, logWarn_ACU, parseTableTemplateJson_ACU } from '../../shared/utils';
-import { currentJsonTableData_ACU, getCurrentIsolationKey_ACU, settings_ACU, _set_currentJsonTableData_ACU } from '../runtime/state-manager';
+import { currentChatFileIdentifier_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU, settings_ACU, _set_currentJsonTableData_ACU } from '../runtime/state-manager';
 import { applyTemplateScopeForCurrentChat_ACU } from '../settings/settings-service';
 import {
   attachSeedRowsToCurrentDataFromGuide_ACU,
@@ -392,14 +392,30 @@ export async function loadOrCreateJsonTableFromChatHistory_ACU(): Promise<{
   /** 本轮当前聊天回放得到的 canonical 快照，供 SQLite hydrate 显式使用。 */
   data?: TableDataObject_ACU | null;
 }> {
+  const initialChat = getChatArray_ACU();
+  const initialChatKey = String(currentChatFileIdentifier_ACU || '');
+  const initialIsolationKey = String(getCurrentIsolationKey_ACU() || '');
+  const scopeStillCurrent = () => {
+    const currentChat = getChatArray_ACU();
+    return currentChat === initialChat
+      && String(currentChatFileIdentifier_ACU || '') === initialChatKey
+      && String(getCurrentIsolationKey_ACU() || '') === initialIsolationKey;
+  };
+  const scopeChangedResult = () => ({
+    loaded: false,
+    source: 'empty' as const,
+    error: 'table_load_scope_changed',
+  });
+
   _set_currentJsonTableData_ACU(null);
   logDebug_ACU('Attempting to load database from chat history...');
 
-  const chat = getChatArray_ACU();
+  const chat = initialChat;
   applyTemplateScopeForCurrentChat_ACU();
   if (!chat || chat.length === 0) {
     logDebug_ACU('Chat history is empty. Initializing new database.');
     const initResult = await initializeJsonTableInChatHistory_ACU();
+    if (!scopeStillCurrent()) return scopeChangedResult();
     return {
       loaded: initResult.initialized,
       source: 'initialized',
@@ -409,9 +425,11 @@ export async function loadOrCreateJsonTableFromChatHistory_ACU(): Promise<{
   }
 
   const mergedData = await mergeAllIndependentTables_ACU();
+  if (!scopeStillCurrent()) return scopeChangedResult();
 
   if (mergedData) {
     const canonicalData = JSON.parse(JSON.stringify(mergedData)) as TableDataObject_ACU;
+    if (!scopeStillCurrent()) return scopeChangedResult();
     _set_currentJsonTableData_ACU(canonicalData);
     logDebug_ACU('Database content successfully merged (tag-aware) and loaded into memory.');
     return { loaded: true, source: 'merged', data: canonicalData };
@@ -419,6 +437,7 @@ export async function loadOrCreateJsonTableFromChatHistory_ACU(): Promise<{
 
   logDebug_ACU('No database found for current tag in chat history. Initializing a new one.');
   const initResult = await initializeJsonTableInChatHistory_ACU();
+  if (!scopeStillCurrent()) return scopeChangedResult();
   return {
     loaded: initResult.initialized,
     source: 'initialized',

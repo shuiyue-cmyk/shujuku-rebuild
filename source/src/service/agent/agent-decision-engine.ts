@@ -419,27 +419,6 @@ function shouldSendPlotTaskToAgent_ACU(task: any): boolean {
   return !!(description || triggerWhen);
 }
 
-function hasDependencyCycle_ACU(taskIds: Set<string>, tasksById: Map<string, any>): boolean {
-  const visiting = new Set<string>();
-  const visited = new Set<string>();
-  const visit = (taskId: string): boolean => {
-    if (visited.has(taskId)) return false;
-    if (visiting.has(taskId)) return true;
-    visiting.add(taskId);
-    const deps = Array.isArray(tasksById.get(taskId)?.agentControl?.dependsOnTaskIds)
-      ? tasksById.get(taskId).agentControl.dependsOnTaskIds
-      : [];
-    for (const dep of deps) {
-      const depId = normalizeId_ACU(dep);
-      if (taskIds.has(depId) && visit(depId)) return true;
-    }
-    visiting.delete(taskId);
-    visited.add(taskId);
-    return false;
-  };
-  return Array.from(taskIds).some(visit);
-}
-
 function sortEffectiveTasks_ACU(tasks: any[]): any[] {
   return tasks
     .map((task, index) => ({ task, index }))
@@ -455,12 +434,92 @@ function sortEffectiveTasks_ACU(tasks: any[]): any[] {
     .map(item => item.task);
 }
 
+function taskDependencyIds_ACU(task: any): string[] {
+  const dependencies: string[] = [];
+  for (const dependency of Array.isArray(task?.agentControl?.dependsOnTaskIds)
+    ? task.agentControl.dependsOnTaskIds
+    : []) {
+    const dependencyId = normalizeId_ACU(dependency);
+    if (dependencyId) dependencies.push(dependencyId);
+  }
+  return [...new Set(dependencies)];
+}
+
+function validateAndTopoSortTaskGraph_ACU(
+  effectiveTasks: any[],
+  allKnownTasks: any[],
+): { tasks: any[]; reason?: string } {
+  const effectiveById = new Map(effectiveTasks.map((task, index) => [normalizeId_ACU(task?.id), { task, index }]));
+  const knownById = new Map(allKnownTasks.map(task => [normalizeId_ACU(task?.id), task]));
+  const effectiveIds = new Set(effectiveById.keys());
+  const edges = new Map<string, string[]>();
+
+  for (const taskId of effectiveIds) {
+    const task = effectiveById.get(taskId)?.task;
+    const dependencies = taskDependencyIds_ACU(task);
+    for (const dependencyId of dependencies) {
+      if (!knownById.has(dependencyId)) {
+        return { tasks: effectiveTasks, reason: 'task_dependency_missing' };
+      }
+      if (!effectiveIds.has(dependencyId)) {
+        return { tasks: effectiveTasks, reason: 'task_dependency_not_selected' };
+      }
+      const dependency = effectiveById.get(dependencyId)?.task;
+      const dependencyStage = normalizePositiveInteger_ACU(dependency?.stage, 1);
+      const taskStage = normalizePositiveInteger_ACU(task?.stage, 1);
+      // 同 stage 会在 plot runtime 中 Promise.all 并发，无法保证 prerequisite 产出先于 dependent。
+      if (dependencyStage >= taskStage) {
+        return { tasks: effectiveTasks, reason: 'task_dependency_stage_conflict' };
+      }
+      const taskEdges = edges.get(dependencyId) || [];
+      taskEdges.push(taskId);
+      edges.set(dependencyId, taskEdges);
+    }
+  }
+
+  const indegree = new Map([...effectiveIds].map(taskId => [taskId, 0]));
+  for (const dependents of edges.values()) {
+    for (const taskId of dependents) indegree.set(taskId, (indegree.get(taskId) || 0) + 1);
+  }
+  const compareTasks = (leftId: string, rightId: string): number => {
+    const left = effectiveById.get(leftId);
+    const right = effectiveById.get(rightId);
+    const stageDiff = normalizePositiveInteger_ACU(left?.task?.stage, 1) - normalizePositiveInteger_ACU(right?.task?.stage, 1);
+    if (stageDiff !== 0) return stageDiff;
+    const orderDiff = normalizeNonNegativeInteger_ACU(left?.task?.order, 0) - normalizeNonNegativeInteger_ACU(right?.task?.order, 0);
+    if (orderDiff !== 0) return orderDiff;
+    return (left?.index || 0) - (right?.index || 0);
+  };
+  const ready = [...effectiveIds].filter(taskId => (indegree.get(taskId) || 0) === 0).sort(compareTasks);
+  const ordered: any[] = [];
+  while (ready.length > 0) {
+    const taskId = ready.shift()!;
+    ordered.push(effectiveById.get(taskId)!.task);
+    for (const dependentId of edges.get(taskId) || []) {
+      const next = (indegree.get(dependentId) || 0) - 1;
+      indegree.set(dependentId, next);
+      if (next === 0) {
+        ready.push(dependentId);
+        ready.sort(compareTasks);
+      }
+    }
+  }
+  if (ordered.length !== effectiveTasks.length) {
+    return { tasks: effectiveTasks, reason: 'task_dependency_cycle' };
+  }
+  return { tasks: ordered };
+}
+
 function normalizeTaskPlan_ACU(rawPlan: unknown, enabledTasks: any[], userOrderedTasks: any[] = []): { plan: AgentTaskPlanItem_ACU[]; effectiveTasks: any[]; reason?: string } {
   const normalizedTasks = enabledTasks.map((task, index) => normalizePlotTask_ACU(task, { index, fallbackTask: task }));
   const normalizedUserOrderedTasks = userOrderedTasks.map((task, index) => normalizePlotTask_ACU(task, { index, fallbackTask: task }));
+  const allKnownTasks = [...normalizedTasks, ...normalizedUserOrderedTasks];
   if (!Array.isArray(rawPlan)) {
     if (normalizedTasks.length === 0 && normalizedUserOrderedTasks.length > 0) {
-      return { plan: [], effectiveTasks: sortEffectiveTasks_ACU(normalizedUserOrderedTasks) };
+      const graph = validateAndTopoSortTaskGraph_ACU(sortEffectiveTasks_ACU(normalizedUserOrderedTasks), allKnownTasks);
+      return graph.reason
+        ? { plan: [], effectiveTasks: enabledTasks, reason: graph.reason }
+        : { plan: [], effectiveTasks: graph.tasks };
     }
     if (normalizedTasks.length === 0) return { plan: [], effectiveTasks: [] };
     return { plan: [], effectiveTasks: enabledTasks, reason: 'missing_task_plan' };
@@ -468,7 +527,6 @@ function normalizeTaskPlan_ACU(rawPlan: unknown, enabledTasks: any[], userOrdere
   const tasksById = new Map(normalizedTasks.map(task => [String(task.id), task]));
   const plan: AgentTaskPlanItem_ACU[] = [];
   const effectiveTasks: any[] = [];
-  const selectedIds = new Set<string>();
 
   for (const item of rawPlan) {
     const taskId = normalizeId_ACU((item as any)?.taskId);
@@ -483,7 +541,6 @@ function normalizeTaskPlan_ACU(rawPlan: unknown, enabledTasks: any[], userOrdere
     const effectiveOrder = normalizeNonNegativeInteger_ACU((item as any)?.effectiveOrder, sourceTask.order || 0);
     plan.push({ taskId, run, effectiveStage, effectiveOrder, mode: String((item as any)?.mode || '').trim(), reason: String((item as any)?.reason || '').trim() });
     if (run) {
-      selectedIds.add(taskId);
       effectiveTasks.push({ ...sourceTask, stage: effectiveStage, order: effectiveOrder, __agentEffective: true });
     }
   }
@@ -496,14 +553,20 @@ function normalizeTaskPlan_ACU(rawPlan: unknown, enabledTasks: any[], userOrdere
   }
 
   if (plan.length === 0) {
-    if (effectiveTasks.length > 0) return { plan: [], effectiveTasks: sortEffectiveTasks_ACU(effectiveTasks) };
+    if (effectiveTasks.length > 0) {
+      const graph = validateAndTopoSortTaskGraph_ACU(sortEffectiveTasks_ACU(effectiveTasks), allKnownTasks);
+      return graph.reason
+        ? { plan: [], effectiveTasks: enabledTasks, reason: graph.reason }
+        : { plan: [], effectiveTasks: graph.tasks };
+    }
     if (normalizedTasks.length === 0) return { plan: [], effectiveTasks: [] };
     return { plan: [], effectiveTasks: enabledTasks, reason: 'no_valid_task_plan_items' };
   }
-  if (selectedIds.size > 0 && hasDependencyCycle_ACU(selectedIds, tasksById)) {
-    return { plan: [], effectiveTasks: enabledTasks, reason: 'task_dependency_cycle' };
+  const graph = validateAndTopoSortTaskGraph_ACU(sortEffectiveTasks_ACU(effectiveTasks), allKnownTasks);
+  if (graph.reason) {
+    return { plan: [], effectiveTasks: enabledTasks, reason: graph.reason };
   }
-  return { plan, effectiveTasks: sortEffectiveTasks_ACU(effectiveTasks) };
+  return { plan, effectiveTasks: graph.tasks };
 }
 
 interface AgentDecisionShard_ACU {

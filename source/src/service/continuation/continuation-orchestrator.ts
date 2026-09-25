@@ -1,11 +1,11 @@
 import { getChatArray_ACU } from '../../data/gateways/chat-gateway';
 import { buildDefaultContinuationSettings_ACU } from './defaults';
 import { FirstFloorContinuationStore_ACU } from './continuation-store';
-import { reconcileTaskCursorFromChat_ACU } from './stage-cursor';
+import { getStableMessageIdentity_ACU, reconcileTaskCursorFromChat_ACU } from './stage-cursor';
 import { resolveHostRetryMode_ACU } from './host-retry-mode';
 import { acceptPlannedStageRevision_ACU, ContinuationOutlinePlanner_ACU, createPlannedStageRevision_ACU, freezePlannedStageRevision_ACU, type ContinuationOutlinePlanningResult_ACU } from './outline-planner';
 import { listStageOutlineTurns_ACU, resolveContinuationTurnRange_ACU, resolveStageOutlinePacingContext_ACU, validateReplannedStageOutline_ACU, validateStageOutlinePacing_ACU } from './outline-schema';
-import { CONTINUATION_RECOVERABLE_STOP_REASONS_ACU, ContinuationValidationError_ACU, createContinuationError_ACU, type ContinuationEnvelope_ACU, type ContinuationError_ACU, type ContinuationHostGenerationCapture_ACU, type ContinuationReplanConstraints_ACU, type ContinuationRevisionReason_ACU, type ContinuationSettings_ACU, type ContinuationStage_ACU, type ContinuationTask_ACU, type ContinuationWriteGuard_ACU, type StageOutline_ACU, type StageRevision_ACU, type TurnAttemptIdentity_ACU } from './model';
+import { CONTINUATION_RECOVERABLE_STOP_REASONS_ACU, ContinuationValidationError_ACU, createContinuationError_ACU, type ContinuationEnvelope_ACU, type ContinuationError_ACU, type ContinuationHostGenerationCapture_ACU, type ContinuationPendingEvaluationSettings_ACU, type ContinuationReplanConstraints_ACU, type ContinuationRevisionReason_ACU, type ContinuationSettings_ACU, type ContinuationStage_ACU, type ContinuationTask_ACU, type ContinuationWriteGuard_ACU, type StageOutline_ACU, type StageRevision_ACU, type TurnAttemptIdentity_ACU } from './model';
 import { StageExecutionEngine_ACU, type ContinuationPreparedTurnInstruction_ACU, type ContinuationExecutionSnapshot_ACU } from './stage-execution-engine';
 import type { AgentConversationAppend_ACU, AgentOutlineEditOp_ACU, AgentOutlineOpResult_ACU } from './agent/agent-model';
 import { appendAgentConversationToChat_ACU, clearAgentConversationField_ACU } from './agent/agent-conversation-store';
@@ -61,6 +61,8 @@ export interface ContinuationOrchestratorDependencies_ACU {
    * host-generation-bridge.invalidateStartedByChat）。缺省不做任何事（测试注入场景）。
    */
   invalidateHostClaim?: (chatIdentity: string) => void;
+  /** 取消该聊天当前仍在宿主侧运行的正文生成。 */
+  stopHostGeneration?: (chatIdentity: string) => void;
   /** 把消息追加进主 Agent 的持久会话记录。缺省用楼层锚定存储。 */
   appendAgentConversation?: (appends: readonly AgentConversationAppend_ACU[]) => Promise<boolean>;
   /** 清除楼层上的资料快照字段。缺省用楼层锚定存储。 */
@@ -82,6 +84,7 @@ const epochsByChat_ACU = new Map<string, number>();
  * 用户点停止或中途插话时要立刻见效，就必须真的 abort 掉在飞的请求。
  */
 const abortControllersByChat_ACU = new Map<string, AbortController>();
+const deadlineTimersByChat_ACU = new Map<string, ReturnType<typeof setTimeout>>();
 
 function fail_ACU(code: 'CONTINUATION_OPERATION_BUSY' | 'CONTINUATION_ORIGIN_INSTRUCTION_EMPTY' | 'CONTINUATION_TASK_NOT_FOUND' | 'CONTINUATION_TASK_STATE_INVALID', message: string): never {
   throw new ContinuationValidationError_ACU(createContinuationError_ACU(code, 'persist', message, false));
@@ -89,6 +92,15 @@ function fail_ACU(code: 'CONTINUATION_OPERATION_BUSY' | 'CONTINUATION_ORIGIN_INS
 
 function cloneOutline_ACU(outline: StageOutline_ACU): StageOutline_ACU {
   return { ...outline, nodes: outline.nodes.map(node => ({ ...node, turns: node.turns.map(turn => ({ ...turn })) })) };
+}
+
+function pendingEvaluationSettings_ACU(settings: ContinuationSettings_ACU): ContinuationPendingEvaluationSettings_ACU {
+  return {
+    loopTags: settings.loopTags,
+    retryDelaySeconds: settings.retryDelaySeconds,
+    minGenerationTokens: settings.minGenerationTokens,
+    generationRetryLimit: settings.generationRetryLimit,
+  };
 }
 
 function rejectOutlineEdit_ACU(message: string, details?: Record<string, unknown>): never {
@@ -229,7 +241,7 @@ function identityMatchesCurrentTurn_ACU(task: ContinuationTask_ACU, identity: Tu
   );
 }
 
-function advanceConfirmedTurn_ACU(task: ContinuationTask_ACU, now: number, timeline: (kind: ContinuationTask_ACU['timeline'][number]['kind'], at: number, fields?: Omit<ContinuationTask_ACU['timeline'][number], 'id' | 'at' | 'kind'>) => ContinuationTask_ACU['timeline'][number], messageIndex?: number): ContinuationTask_ACU {
+function advanceConfirmedTurn_ACU(task: ContinuationTask_ACU, now: number, timeline: (kind: ContinuationTask_ACU['timeline'][number]['kind'], at: number, fields?: Omit<ContinuationTask_ACU['timeline'][number], 'id' | 'at' | 'kind'>) => ContinuationTask_ACU['timeline'][number], messageIndex?: number, messageIdentity?: { messageId?: string | number; messageFingerprint?: string }): ContinuationTask_ACU {
   const stage = getActiveStage_ACU(task);
   const revision = getActiveRevision_ACU(stage);
   const node = revision.outline.nodes[stage.activeNodeIndex];
@@ -242,7 +254,15 @@ function advanceConfirmedTurn_ACU(task: ContinuationTask_ACU, now: number, timel
     : stage.activeTurnIndex + 1 < node.turns.length
       ? { ...stage, activeTurnIndex: stage.activeTurnIndex + 1, completedTurns }
       : { ...stage, activeNodeIndex: stage.activeNodeIndex + 1, activeTurnIndex: 0, completedTurns };
-  const entries = [...task.timeline, timeline('turn_completed', now, { stageId: stage.stageId, revision: stage.activeRevision, nodeId: node.id, turnId: turn.id, ...(messageIndex !== undefined ? { messageIndex } : {}) })];
+  const entries = [...task.timeline, timeline('turn_completed', now, {
+    stageId: stage.stageId,
+    revision: stage.activeRevision,
+    nodeId: node.id,
+    turnId: turn.id,
+    ...(messageIndex !== undefined ? { messageIndex } : {}),
+    ...(messageIdentity?.messageId !== undefined ? { messageId: messageIdentity.messageId } : {}),
+    ...(messageIdentity?.messageFingerprint !== undefined ? { messageFingerprint: messageIdentity.messageFingerprint } : {}),
+  })];
   if (isFinalTurn) entries.push(timeline('stage_completed', now, { stageId: stage.stageId, revision: stage.activeRevision }));
   return { ...task, updatedAt: now, stages: task.stages.map(item => item.stageId === stage.stageId ? nextStage : item), timeline: entries };
 }
@@ -250,6 +270,14 @@ function advanceConfirmedTurn_ACU(task: ContinuationTask_ACU, now: number, timel
 
 export class ContinuationOrchestrator_ACU {
   constructor(private readonly dependencies: ContinuationOrchestratorDependencies_ACU) {}
+
+  private readEnvelopeWithReconciledCursor_ACU(): ContinuationEnvelope_ACU {
+    const envelope = this.requireEnvelope_ACU(this.dependencies.store.readPersisted());
+    const task = this.requireTask_ACU(envelope);
+    const chat = getChatArray_ACU();
+    const nextTask = reconcileTaskCursorFromChat_ACU(task, Array.isArray(chat) ? chat.length : 0, Array.isArray(chat) ? chat : undefined);
+    return nextTask === task ? envelope : { ...envelope, activeTask: nextTask };
+  }
 
   /**
    * 创建任务。不再预先规划大纲：大纲由主 Agent 在循环内按需派工大纲子代理创建，
@@ -283,7 +311,8 @@ export class ContinuationOrchestrator_ACU {
       let result: ContinuationEnvelope_ACU | null = null;
       await this.dependencies.store.updatePersistedAtomically(current => {
         const envelope = this.requireEnvelope_ACU(current);
-        const task = this.requireTask_ACU(envelope);
+        const chat = getChatArray_ACU();
+        const task = reconcileTaskCursorFromChat_ACU(this.requireTask_ACU(envelope), Array.isArray(chat) ? chat.length : 0, Array.isArray(chat) ? chat : undefined);
         const stage = getActiveStage_ACU(task);
         const revision = getActiveRevision_ACU(stage);
         if (task.status !== 'awaiting_outline_review' || stage.status !== 'awaiting_review' || revision.frozen) {
@@ -332,8 +361,9 @@ export class ContinuationOrchestrator_ACU {
       let started: ContinuationEnvelope_ACU | null = null;
       await this.dependencies.store.updatePersistedAtomically(current => {
         const envelope = this.requireEnvelope_ACU(current);
-        const chatLength = Array.isArray(getChatArray_ACU()) ? getChatArray_ACU().length : 0;
-        const task = reconcileTaskCursorFromChat_ACU(this.requireTask_ACU(envelope), chatLength);
+        const chat = getChatArray_ACU();
+        const chatLength = Array.isArray(chat) ? chat.length : 0;
+        const task = reconcileTaskCursorFromChat_ACU(this.requireTask_ACU(envelope), chatLength, Array.isArray(chat) ? chat : undefined);
         // 等待宿主结果时只有"桥内存里仍有本次生成的活认领"才是真在飞；
         // 重载或事件丢失后的滞留等待轮无法再被归属，丢弃后从当前进度重新继续。
         const staleAwaitingTurn = task.pendingHostTurn?.status === 'awaiting_generation';
@@ -385,8 +415,14 @@ export class ContinuationOrchestrator_ACU {
         return started;
       }, { chatIdentity });
       const task = started!.activeTask!;
-      if (task.status !== 'running') return taskResult_ACU(started!);
+      if (task.status !== 'running') {
+        this.clearDeadlineTimer_ACU(chatIdentity);
+        return taskResult_ACU(started!);
+      }
+      this.scheduleDeadline_ACU(chatIdentity, task.taskId, task.deadlineAt);
       if (task.pendingHostTurn?.status === 'retry_ready') {
+        const stoppedForDeadline = await this.stopIfDeadlineReached_ACU(chatIdentity, task.taskId, lease);
+        if (stoppedForDeadline) return taskResult_ACU(stoppedForDeadline);
         return { ...taskResult_ACU(started!), retryHostGeneration: true };
       }
       const controller = new AbortController();
@@ -398,9 +434,12 @@ export class ContinuationOrchestrator_ACU {
           async instruction => (await this.applyOutlineOpWithinLease_ACU(chatIdentity, lease, instruction, 'running')).opResult,
           controller.signal,
         );
+        const stoppedForDeadline = await this.stopIfDeadlineReached_ACU(chatIdentity, task.taskId, lease);
+        if (stoppedForDeadline) return taskResult_ACU(stoppedForDeadline);
+        this.assertLeaseCurrent_ACU(chatIdentity, lease, 'turn_call');
         return { ...taskResult_ACU(this.dependencies.store.readPersisted() ?? started!), preparedTurn };
       } catch (error) {
-        await this.pauseWithError_ACU(chatIdentity, task.taskId, error, 'turn_call', '每轮指令生成失败');
+        await this.pauseWithError_ACU(chatIdentity, task.taskId, error, 'turn_call', '每轮指令生成失败', lease);
         throw error;
       } finally {
         if (abortControllersByChat_ACU.get(chatIdentity) === controller) abortControllersByChat_ACU.delete(chatIdentity);
@@ -409,18 +448,30 @@ export class ContinuationOrchestrator_ACU {
   }
 
   async retryCurrentTurn(): Promise<ContinuationHostTurnActionResult_ACU> {
-    return this.withLease_ACU(async chatIdentity => {
+    return this.withLease_ACU(async (chatIdentity, lease) => {
       let started: ContinuationEnvelope_ACU | null = null;
       await this.dependencies.store.updatePersistedAtomically(current => {
+        this.assertLeaseCurrent_ACU(chatIdentity, lease, 'generation_evaluate');
         const envelope = this.requireEnvelope_ACU(current);
         const task = this.requireTask_ACU(envelope);
         if (task.pendingHostTurn?.status !== 'retry_ready') {
           fail_ACU('CONTINUATION_TASK_STATE_INVALID', '当前没有可重试的宿主正文轮次');
         }
         const now = this.dependencies.now();
+        if (task.deadlineAt !== null && now >= task.deadlineAt) {
+          started = this.stopEnvelope_ACU(envelope, 'duration_reached', now);
+          return started;
+        }
         started = { ...envelope, activeTask: { ...task, status: 'running', stopReason: null, lastError: null, updatedAt: now } };
         return started;
       }, { chatIdentity });
+      this.assertLeaseCurrent_ACU(chatIdentity, lease, 'generation_evaluate');
+      const activeTask = started!.activeTask!;
+      if (activeTask.status !== 'running') {
+        this.clearDeadlineTimer_ACU(chatIdentity);
+        return taskResult_ACU(started!);
+      }
+      this.scheduleDeadline_ACU(chatIdentity, activeTask.taskId, activeTask.deadlineAt);
       return { ...taskResult_ACU(started!), retryHostGeneration: true };
     });
   }
@@ -431,9 +482,10 @@ export class ContinuationOrchestrator_ACU {
     if (input.identity.chatIdentity !== chatIdentity) {
       throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'host_send', '宿主发送所属聊天已变化', false));
     }
-    return this.withLease_ACU(async () => {
+    return this.withLease_ACU(async (currentChatIdentity, lease) => {
       let result: ContinuationEnvelope_ACU | null = null;
       await this.dependencies.store.updatePersistedAtomically(current => {
+        this.assertLeaseCurrent_ACU(currentChatIdentity, lease, 'host_send');
         const envelope = this.requireEnvelope_ACU(current);
         const task = this.requireTask_ACU(envelope);
         const existing = task.pendingHostTurn;
@@ -450,12 +502,21 @@ export class ContinuationOrchestrator_ACU {
             ...task,
             status: 'running',
             updatedAt: now,
-            pendingHostTurn: { identity: input.identity, capture: input.capture, retryCount, status: 'awaiting_generation' },
+            pendingHostTurn: {
+              identity: input.identity,
+              capture: input.capture,
+              retryCount,
+              status: 'awaiting_generation',
+              evaluationSettings: retrying && existing?.evaluationSettings
+                ? existing.evaluationSettings
+                : pendingEvaluationSettings_ACU(envelope.settings),
+            },
             timeline: [...task.timeline, this.timeline_ACU('turn_sent', now, { stageId: input.identity.stageId, revision: input.identity.revision, nodeId: input.identity.nodeId, turnId: input.identity.turnId, attemptId: input.identity.attemptId })],
           },
         };
         return result;
       }, { chatIdentity });
+      this.assertLeaseCurrent_ACU(currentChatIdentity, lease, 'host_send');
       return taskResult_ACU(result!);
     });
   }
@@ -468,8 +529,9 @@ export class ContinuationOrchestrator_ACU {
   async bindHostTurnGeneration(identity: TurnAttemptIdentity_ACU, generationSeq: number): Promise<void> {
     const chatIdentity = this.requireChatIdentity_ACU();
     if (identity.chatIdentity !== chatIdentity) throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'host_send', '宿主生成所属聊天已变化', false));
-    await this.withLease_ACU(async () => {
+    await this.withLease_ACU(async (currentChatIdentity, lease) => {
       await this.dependencies.store.updatePersistedAtomically(current => {
+        this.assertLeaseCurrent_ACU(currentChatIdentity, lease, 'host_send');
         const envelope = this.requireEnvelope_ACU(current);
         const task = this.requireTask_ACU(envelope);
         const pending = task.pendingHostTurn;
@@ -478,6 +540,7 @@ export class ContinuationOrchestrator_ACU {
         }
         return { ...envelope, activeTask: { ...task, pendingHostTurn: { ...pending, capture: { ...pending.capture, generationSeq } } } };
       }, { chatIdentity });
+      this.assertLeaseCurrent_ACU(currentChatIdentity, lease, 'host_send');
     });
   }
 
@@ -516,7 +579,13 @@ export class ContinuationOrchestrator_ACU {
     // 任务被用户停止（或已带错误暂停）时，retry_ready 的待重试轮不得被自动重试复活：
     // 桥的自动重试只认 pending.status，若不带上这个位，用户在重试等待窗内点停止会被静默撤销。
     const taskStopped = task.stopReason !== null || task.status === 'failed';
-    return { settings: envelope.settings, pending: task.pendingHostTurn, taskStopped, taskRunning: task.status === 'running' };
+    const evaluationSettings = task.pendingHostTurn.evaluationSettings;
+    return {
+      settings: evaluationSettings ? { ...envelope.settings, ...evaluationSettings } : envelope.settings,
+      pending: task.pendingHostTurn,
+      taskStopped,
+      taskRunning: task.status === 'running',
+    };
   }
 
   async pauseForHostResultFailure(identity: TurnAttemptIdentity_ACU): Promise<ContinuationOrchestratorResult_ACU> {
@@ -568,9 +637,10 @@ export class ContinuationOrchestrator_ACU {
     if (identity.chatIdentity !== chatIdentity) {
       throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'generation_evaluate', '正文结果所属聊天已变化', false));
     }
-    return this.withLease_ACU(async () => {
+    return this.withLease_ACU(async (currentChatIdentity, lease) => {
       let result: ContinuationEnvelope_ACU | null = null;
       await this.dependencies.store.updatePersistedAtomically(current => {
+        this.assertLeaseCurrent_ACU(currentChatIdentity, lease, 'generation_evaluate');
         const envelope = this.requireEnvelope_ACU(current);
         const task = this.requireTask_ACU(envelope);
         const pending = task.pendingHostTurn;
@@ -579,13 +649,15 @@ export class ContinuationOrchestrator_ACU {
         }
         const now = this.dependencies.now();
         const timelineFields = { stageId: identity.stageId, revision: identity.revision, nodeId: identity.nodeId, turnId: identity.turnId, attemptId: identity.attemptId, ...(messageIndex !== undefined ? { messageIndex } : {}), errorCode: error.code };
-        if (pending.retryCount >= envelope.settings.generationRetryLimit) {
+        const retryLimit = pending.evaluationSettings?.generationRetryLimit ?? envelope.settings.generationRetryLimit;
+        if (pending.retryCount >= retryLimit) {
           result = { ...envelope, activeTask: { ...task, status: 'paused', updatedAt: now, stopReason: 'generation_retry_exhausted', lastError: { ...error, retryable: false }, pendingHostTurn: { ...pending, status: 'exhausted' }, timeline: [...task.timeline, this.timeline_ACU('failed', now, timelineFields)] } };
           return result;
         }
         result = { ...envelope, activeTask: { ...task, status: 'paused', updatedAt: now, lastError: error, pendingHostTurn: { ...pending, retryCount: pending.retryCount + 1, status: 'retry_ready' }, timeline: [...task.timeline, this.timeline_ACU('turn_retry', now, timelineFields)] } };
         return result;
       }, { chatIdentity });
+      this.assertLeaseCurrent_ACU(currentChatIdentity, lease, 'generation_evaluate');
       return taskResult_ACU(result!);
     });
   }
@@ -600,9 +672,10 @@ export class ContinuationOrchestrator_ACU {
     if (identity.chatIdentity !== chatIdentity) {
       throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'generation_evaluate', '生成中止事件所属聊天已变化', false));
     }
-    return this.withLease_ACU(async () => {
+    return this.withLease_ACU(async (currentChatIdentity, lease) => {
       let result: ContinuationEnvelope_ACU | null = null;
       await this.dependencies.store.updatePersistedAtomically(current => {
+        this.assertLeaseCurrent_ACU(currentChatIdentity, lease, 'generation_evaluate');
         const envelope = this.requireEnvelope_ACU(current);
         const task = this.requireTask_ACU(envelope);
         const pending = task.pendingHostTurn;
@@ -614,6 +687,7 @@ export class ContinuationOrchestrator_ACU {
         result = { ...envelope, activeTask: { ...task, status: 'paused', updatedAt: now, lastError: error, pendingHostTurn: { ...pending, status: 'retry_ready' }, timeline: [...task.timeline, this.timeline_ACU('turn_retry', now, { stageId: identity.stageId, revision: identity.revision, nodeId: identity.nodeId, turnId: identity.turnId, attemptId: identity.attemptId, errorCode: error.code })] } };
         return result;
       }, { chatIdentity });
+      this.assertLeaseCurrent_ACU(currentChatIdentity, lease, 'generation_evaluate');
       return taskResult_ACU(result!);
     });
   }
@@ -633,6 +707,7 @@ export class ContinuationOrchestrator_ACU {
       this.assertLeaseCurrent_ACU(chatIdentity, lease);
       let advanced: ContinuationEnvelope_ACU | null = null;
       await this.dependencies.store.updatePersistedAtomically(current => {
+        this.assertLeaseCurrent_ACU(chatIdentity, lease, 'generation_evaluate');
         const envelope = this.requireEnvelope_ACU(current);
         const task = this.requireTask_ACU(envelope);
         if (task.status !== 'running' || task.pendingHostTurn?.status !== 'awaiting_generation' || !identityMatchesCurrentTurn_ACU(task, identity)) {
@@ -641,7 +716,12 @@ export class ContinuationOrchestrator_ACU {
         const now = this.dependencies.now();
         const stage = getActiveStage_ACU(task);
         const isLastTurn = stage.completedTurns + 1 === getActiveRevision_ACU(stage).outline.totalTurns;
-        const progressed = advanceConfirmedTurn_ACU(task, now, this.timeline_ACU.bind(this), messageIndex);
+        const chat = getChatArray_ACU();
+        const message = typeof messageIndex === 'number' ? chat[messageIndex] : undefined;
+        const messageIdentity = message && typeof message === 'object' && !Array.isArray(message)
+          ? getStableMessageIdentity_ACU(message)
+          : undefined;
+        const progressed = advanceConfirmedTurn_ACU(task, now, this.timeline_ACU.bind(this), messageIndex, messageIdentity);
         const completedTurn: ContinuationTask_ACU = {
           ...progressed,
           pendingHostTurn: null,
@@ -665,12 +745,16 @@ export class ContinuationOrchestrator_ACU {
         advanced = { ...envelope, activeTask: { ...completedTurn, status: 'paused', updatedAt: now } };
         return advanced;
       }, { chatIdentity });
+      this.assertLeaseCurrent_ACU(chatIdentity, lease, 'generation_evaluate');
+      if (advanced!.activeTask!.stopReason !== null) this.clearDeadlineTimer_ACU(chatIdentity);
+      else this.scheduleDeadline_ACU(chatIdentity, advanced!.activeTask!.taskId, advanced!.activeTask!.deadlineAt);
       return taskResult_ACU(advanced!);
     });
   }
 
   async stopTask(): Promise<ContinuationOrchestratorResult_ACU> {
     const chatIdentity = this.requireChatIdentity_ACU();
+    this.clearDeadlineTimer_ACU(chatIdentity);
     const task = this.requireTask_ACU(this.requireEnvelope_ACU(this.dependencies.store.readPersisted()));
     const guard = guardForTask_ACU(chatIdentity, task);
     this.invalidateLease_ACU(chatIdentity);
@@ -729,6 +813,7 @@ export class ContinuationOrchestrator_ACU {
           return envelope;
         }, guardForTask_ACU(chatIdentity, created.task));
       });
+      if (envelope?.activeTask) this.scheduleDeadline_ACU(chatIdentity, envelope.activeTask.taskId, envelope.activeTask.deadlineAt);
       return { ...taskResult_ACU(envelope!), created: true, interrupted: false, disposition: 'continue_now', shouldContinue: true };
     }
 
@@ -796,6 +881,7 @@ export class ContinuationOrchestrator_ACU {
         return envelope;
       }, guardForTask_ACU(chatIdentity, beforeResume));
     });
+    if (envelope?.activeTask && disposition === 'continue_now') this.scheduleDeadline_ACU(chatIdentity, envelope.activeTask.taskId, envelope.activeTask.deadlineAt);
 
     return {
       ...taskResult_ACU(envelope!),
@@ -817,7 +903,7 @@ export class ContinuationOrchestrator_ACU {
    */
   async replaceActiveOutline(input: ReplaceActiveOutlineInput_ACU): Promise<ContinuationOrchestratorResult_ACU> {
     return this.withLease_ACU(async chatIdentity => {
-      const envelope = this.requireEnvelope_ACU(this.dependencies.store.readPersisted());
+      const envelope = this.readEnvelopeWithReconciledCursor_ACU();
       const task = this.requireTask_ACU(envelope);
       if (task.status === 'running' || task.status === 'stopping_after_inflight') {
         fail_ACU('CONTINUATION_OPERATION_BUSY', '循环正在运行，请先停止再手动编辑大纲');
@@ -839,10 +925,12 @@ export class ContinuationOrchestrator_ACU {
    */
   async clearContinuationData(): Promise<ClearContinuationDataResult_ACU> {
     const chatIdentity = this.requireChatIdentity_ACU();
+    this.clearDeadlineTimer_ACU(chatIdentity);
     const existing = this.dependencies.store.readPersisted()?.activeTask ?? null;
     this.invalidateLease_ACU(chatIdentity);
     // 清空后重建任务时，残留的桥认领会把宽松认领永久挡在外面——必须一起作废。
     this.invalidateHostClaim_ACU(chatIdentity);
+    this.stopHostGeneration_ACU(chatIdentity);
     const envelope = await this.withLease_ACU(async () => {
       let result: ContinuationEnvelope_ACU | null = null;
       await this.dependencies.store.updatePersistedAtomically(current => {
@@ -868,12 +956,16 @@ export class ContinuationOrchestrator_ACU {
     const controller = new AbortController();
     abortControllersByChat_ACU.set(chatIdentity, controller);
     return this.withLease_ACU(async (_identity, lease) => {
-      const taskId = this.requireTask_ACU(this.requireEnvelope_ACU(this.dependencies.store.readPersisted())).taskId;
+      const taskId = this.requireTask_ACU(this.readEnvelopeWithReconciledCursor_ACU()).taskId;
+      const stoppedBeforeReplan = await this.stopIfDeadlineReached_ACU(chatIdentity, taskId, lease);
+      if (stoppedBeforeReplan) return taskResult_ACU(stoppedBeforeReplan);
       try {
         const outcome = await this.applyOutlineOpWithinLease_ACU(chatIdentity, lease, replanInstruction, 'paused');
+        if (outcome.envelope.activeTask?.stopReason === 'duration_reached') this.clearDeadlineTimer_ACU(chatIdentity);
+        else if (outcome.envelope.activeTask) this.scheduleDeadline_ACU(chatIdentity, outcome.envelope.activeTask.taskId, outcome.envelope.activeTask.deadlineAt);
         return taskResult_ACU(outcome.envelope, outcome.planning);
       } catch (error) {
-        await this.pauseWithError_ACU(chatIdentity, taskId, error, 'outline_call', '阶段规划失败');
+        await this.pauseWithError_ACU(chatIdentity, taskId, error, 'outline_call', '阶段规划失败', lease);
         throw error;
       } finally {
         if (abortControllersByChat_ACU.get(chatIdentity) === controller) abortControllersByChat_ACU.delete(chatIdentity);
@@ -893,7 +985,7 @@ export class ContinuationOrchestrator_ACU {
    * @returns 操作结果、最新 envelope 与规划摘要
    */
   async applyOutlineOpWithinLease_ACU(chatIdentity: string, lease: Lease_ACU, instruction: string, endStatus: 'running' | 'paused'): Promise<{ opResult: AgentOutlineOpResult_ACU; envelope: ContinuationEnvelope_ACU; planning?: ContinuationOrchestratorResult_ACU['planning'] }> {
-    const envelope = this.requireEnvelope_ACU(this.dependencies.store.readPersisted());
+    const envelope = this.readEnvelopeWithReconciledCursor_ACU();
     const task = this.requireTask_ACU(envelope);
     if (task.stopReason !== null) fail_ACU('CONTINUATION_TASK_STATE_INVALID', '已停止的任务不可规划大纲');
     const stage = task.activeStageId ? task.stages.find(item => item.stageId === task.activeStageId) ?? null : null;
@@ -910,7 +1002,7 @@ export class ContinuationOrchestrator_ACU {
    * 主 Agent 文本协议不调用本事务；大纲问题由它委派 outline-architect 处理。
    */
   async applyOutlineEditsWithinLease_ACU(chatIdentity: string, _lease: Lease_ACU, edits: readonly AgentOutlineEditOp_ACU[], endStatus: 'running' | 'paused'): Promise<{ summary: string }> {
-    const envelope = this.requireEnvelope_ACU(this.dependencies.store.readPersisted());
+    const envelope = this.readEnvelopeWithReconciledCursor_ACU();
     const task = this.requireTask_ACU(envelope);
     if (task.stopReason !== null) fail_ACU('CONTINUATION_TASK_STATE_INVALID', '已停止的任务不可编辑大纲');
     const stage = task.activeStageId ? task.stages.find(item => item.stageId === task.activeStageId) ?? null : null;
@@ -1007,6 +1099,8 @@ export class ContinuationOrchestrator_ACU {
     const context: ContinuationPlanningContext_ACU = { envelope, task, stage: null, reason: 'initial', replanInstruction: instruction };
     const planned = await this.planOutline_ACU(context, chatIdentity, lease, stageId, 1);
     this.assertLeaseCurrent_ACU(chatIdentity, lease);
+    const stoppedForDeadline = await this.stopIfDeadlineReached_ACU(chatIdentity, task.taskId, lease);
+    if (stoppedForDeadline) return { opResult: { op: 'create', requiresReview: false, stopped: 'duration_reached', summary: '总时长已到，任务已停止' }, envelope: stoppedForDeadline };
     const stageNumber = task.runStageCount + 1;
     let result: ContinuationEnvelope_ACU | null = null;
     await this.dependencies.store.updatePersistedAtomically(current => {
@@ -1045,6 +1139,8 @@ export class ContinuationOrchestrator_ACU {
     const context: ContinuationPlanningContext_ACU = { envelope, task, stage: null, reason: 'auto_next_stage', replanInstruction: instruction };
     const planned = await this.planOutline_ACU(context, chatIdentity, lease, nextStageId, 1);
     this.assertLeaseCurrent_ACU(chatIdentity, lease);
+    const stoppedForDeadline = await this.stopIfDeadlineReached_ACU(chatIdentity, task.taskId, lease);
+    if (stoppedForDeadline) return { opResult: { op: 'continue', requiresReview: false, stopped: 'duration_reached', summary: '总时长已到，任务已停止' }, envelope: stoppedForDeadline };
     const stageNumber = task.runStageCount + 1;
     let result: ContinuationEnvelope_ACU | null = null;
     await this.dependencies.store.updatePersistedAtomically(current => {
@@ -1078,6 +1174,8 @@ export class ContinuationOrchestrator_ACU {
     const nextRevisionNumber = current.revision + 1;
     const planned = await this.planOutline_ACU(context, chatIdentity, lease, stage.stageId, nextRevisionNumber, constraints);
     this.assertLeaseCurrent_ACU(chatIdentity, lease);
+    const stoppedForDeadline = await this.stopIfDeadlineReached_ACU(chatIdentity, task.taskId, lease);
+    if (stoppedForDeadline) return { opResult: { op: 'revise', requiresReview: false, stopped: 'duration_reached', summary: '总时长已到，任务已停止' }, envelope: stoppedForDeadline };
     let result: ContinuationEnvelope_ACU | null = null;
     await this.dependencies.store.updatePersistedAtomically(currentEnvelope => {
       const env = this.requireEnvelope_ACU(currentEnvelope);
@@ -1107,11 +1205,13 @@ export class ContinuationOrchestrator_ACU {
       fail_ACU('CONTINUATION_TASK_STATE_INVALID', '放弃当前任务并新建必须经过明确确认');
     }
     const chatIdentity = this.requireChatIdentity_ACU();
+    this.clearDeadlineTimer_ACU(chatIdentity);
     const sourceTask = this.requireTask_ACU(this.requireEnvelope_ACU(this.dependencies.store.readPersisted()));
     const sourceGuard = guardForTask_ACU(chatIdentity, sourceTask);
     this.invalidateLease_ACU(chatIdentity);
     // 被放弃的轮次不会再有归属它的生成结束：清掉桥认领，新任务才能正常宽松认领。
     this.invalidateHostClaim_ACU(chatIdentity);
+    this.stopHostGeneration_ACU(chatIdentity);
     await this.withLease_ACU(async () => {
       await this.dependencies.store.updatePersistedAtomically(current => {
         const envelope = this.requireEnvelope_ACU(current);
@@ -1144,14 +1244,14 @@ export class ContinuationOrchestrator_ACU {
    * 循环或规划失败后的统一暂停记录。单阶段事务化后失败不留中间状态，
    * 这里只负责把任务落到 paused 并记录 lastError，让用户可以直接再继续。
    */
-  private async pauseWithError_ACU(chatIdentity: string, taskId: string, error: unknown, phase: 'turn_call' | 'outline_call', fallbackMessage: string): Promise<void> {
-    if (error instanceof ContinuationValidationError_ACU && error.error.code === 'CONTINUATION_INTERNAL_REQUEST_STALE') {
-      return;
-    }
+  private async pauseWithError_ACU(chatIdentity: string, taskId: string, error: unknown, phase: 'turn_call' | 'outline_call', fallbackMessage: string, lease?: Lease_ACU): Promise<void> {
+    if (error instanceof ContinuationValidationError_ACU && error.error.code === 'CONTINUATION_INTERNAL_REQUEST_STALE') return;
+    if (lease && !this.isLeaseCurrent_ACU(chatIdentity, lease)) return;
     const lastError = error instanceof ContinuationValidationError_ACU ? error.error : createContinuationError_ACU('CONTINUATION_INTERNAL_AI_REQUEST_FAILED', phase, fallbackMessage, false);
     try {
       await this.dependencies.store.updatePersistedAtomically(current => {
         const envelope = this.requireEnvelope_ACU(current);
+        if (lease && !this.isLeaseCurrent_ACU(chatIdentity, lease)) return envelope;
         const task = this.requireTask_ACU(envelope);
         if (task.taskId !== taskId || task.stopReason !== null || !['running', 'paused', 'failed'].includes(task.status)) return envelope;
         return { ...envelope, activeTask: { ...task, status: 'paused', updatedAt: this.dependencies.now(), lastError, timeline: [...task.timeline, this.timeline_ACU('failed', this.dependencies.now(), { errorCode: lastError.code })] } };
@@ -1212,6 +1312,90 @@ export class ContinuationOrchestrator_ACU {
     return envelope.activeTask;
   }
 
+  private clearDeadlineTimer_ACU(chatIdentity: string): void {
+    const timer = deadlineTimersByChat_ACU.get(chatIdentity);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      deadlineTimersByChat_ACU.delete(chatIdentity);
+    }
+  }
+
+  private scheduleDeadline_ACU(chatIdentity: string, taskId: string, deadlineAt: number | null): void {
+    this.clearDeadlineTimer_ACU(chatIdentity);
+    if (deadlineAt === null || !Number.isFinite(deadlineAt)) return;
+    const arm = (): void => {
+      const current = this.dependencies.store.readPersisted()?.activeTask ?? null;
+      if (!current || current.taskId !== taskId || current.deadlineAt !== deadlineAt || current.stopReason !== null) {
+        this.clearDeadlineTimer_ACU(chatIdentity);
+        return;
+      }
+      const remaining = deadlineAt - this.dependencies.now();
+      if (remaining > 0) {
+        deadlineTimersByChat_ACU.set(chatIdentity, setTimeout(arm, Math.min(remaining, 2_147_000_000)));
+        return;
+      }
+      void this.expireDeadline_ACU(chatIdentity, taskId, deadlineAt).catch((): void => undefined);
+    };
+    const remaining = deadlineAt - this.dependencies.now();
+    if (remaining <= 0) {
+      void this.expireDeadline_ACU(chatIdentity, taskId, deadlineAt).catch((): void => undefined);
+      return;
+    }
+    deadlineTimersByChat_ACU.set(chatIdentity, setTimeout(arm, Math.min(remaining, 2_147_000_000)));
+  }
+
+  private async expireDeadline_ACU(chatIdentity: string, taskId: string, deadlineAt: number): Promise<void> {
+    const current = this.dependencies.store.readPersisted()?.activeTask ?? null;
+    if (!current || current.taskId !== taskId || current.deadlineAt !== deadlineAt || current.stopReason !== null) {
+      this.clearDeadlineTimer_ACU(chatIdentity);
+      return;
+    }
+    if (this.dependencies.now() < deadlineAt) {
+      this.scheduleDeadline_ACU(chatIdentity, taskId, deadlineAt);
+      return;
+    }
+    this.invalidateLease_ACU(chatIdentity);
+    try { this.stopHostGeneration_ACU(chatIdentity); } catch { /* watchdog 仍需落盘停止态 */ }
+    try {
+      await this.withLease_ACU(async (currentChatIdentity, lease) => {
+        await this.dependencies.store.updatePersistedAtomically(currentEnvelope => {
+          this.assertLeaseCurrent_ACU(currentChatIdentity, lease);
+          const envelope = this.requireEnvelope_ACU(currentEnvelope);
+          const task = this.requireTask_ACU(envelope);
+          if (task.taskId !== taskId || task.deadlineAt !== deadlineAt || task.stopReason !== null || this.dependencies.now() < deadlineAt) return envelope;
+          return this.stopEnvelope_ACU(envelope, 'duration_reached', this.dependencies.now());
+        }, { chatIdentity });
+      });
+      this.clearDeadlineTimer_ACU(chatIdentity);
+    } catch {
+      // 旧 timer / 被用户操作取消的 watchdog 不得覆盖新运行。
+    }
+  }
+
+  /** 在任何宿主发送或规划结果交付前再次检查 deadline；返回已停止信封时调用方必须放弃 prepared turn。 */
+  private async stopIfDeadlineReached_ACU(chatIdentity: string, taskId: string, lease: Lease_ACU): Promise<ContinuationEnvelope_ACU | null> {
+    const now = this.dependencies.now();
+    const envelope = this.requireEnvelope_ACU(this.dependencies.store.readPersisted());
+    const task = this.requireTask_ACU(envelope);
+    if (task.stopReason !== null) return task.stopReason === 'duration_reached' ? envelope : null;
+    if (task.taskId !== taskId || task.deadlineAt === null || now < task.deadlineAt) return null;
+    let stopped: ContinuationEnvelope_ACU | null = null;
+    try {
+      await this.dependencies.store.updatePersistedAtomically(currentEnvelope => {
+        if (!this.isLeaseCurrent_ACU(chatIdentity, lease)) throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'turn_call', '智能续写操作已失效', false));
+        const current = this.requireEnvelope_ACU(currentEnvelope);
+        const currentTask = this.requireTask_ACU(current);
+        if (currentTask.taskId !== taskId || currentTask.stopReason !== null || currentTask.deadlineAt === null || this.dependencies.now() < currentTask.deadlineAt) return current;
+        stopped = this.stopEnvelope_ACU(current, 'duration_reached', this.dependencies.now());
+        return stopped;
+      }, { chatIdentity });
+    } catch (error) {
+      if (!(error instanceof ContinuationValidationError_ACU && error.error.code === 'CONTINUATION_INTERNAL_REQUEST_STALE')) throw error;
+    }
+    if (stopped) this.clearDeadlineTimer_ACU(chatIdentity);
+    return stopped;
+  }
+
   private stopEnvelope_ACU(envelope: ContinuationEnvelope_ACU, reason: 'manual' | 'duration_reached' | 'stage_limit_reached', now: number): ContinuationEnvelope_ACU {
     const task = this.requireTask_ACU(envelope);
     // 停止即放弃对等待中宿主生成的归属；清掉等待轮，之后继续/恢复不会被它卡死。
@@ -1222,9 +1406,10 @@ export class ContinuationOrchestrator_ACU {
   private async pauseHostTurn_ACU(identity: TurnAttemptIdentity_ACU, code: 'CONTINUATION_HOST_INPUT_UNAVAILABLE' | 'CONTINUATION_TASK_STATE_INVALID', message: string, stopReason: 'host_input_unavailable' | 'state_invalid'): Promise<ContinuationOrchestratorResult_ACU> {
     const chatIdentity = this.requireChatIdentity_ACU();
     if (identity.chatIdentity !== chatIdentity) throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'host_send', '宿主发送所属聊天已变化', false));
-    return this.withLease_ACU(async () => {
+    return this.withLease_ACU(async (currentChatIdentity, lease) => {
       let result: ContinuationEnvelope_ACU | null = null;
       await this.dependencies.store.updatePersistedAtomically(current => {
+        this.assertLeaseCurrent_ACU(currentChatIdentity, lease, 'host_send');
         const envelope = this.requireEnvelope_ACU(current);
         const task = this.requireTask_ACU(envelope);
         if (!task.pendingHostTurn || task.pendingHostTurn.status !== 'awaiting_generation' || !identityMatchesCurrentTurn_ACU(task, identity)) {
@@ -1235,6 +1420,7 @@ export class ContinuationOrchestrator_ACU {
         result = { ...envelope, activeTask: { ...task, status: 'paused', updatedAt: now, stopReason, lastError: error, pendingHostTurn: { ...task.pendingHostTurn, status: 'exhausted' }, timeline: [...task.timeline, this.timeline_ACU('failed', now, { stageId: identity.stageId, revision: identity.revision, nodeId: identity.nodeId, turnId: identity.turnId, attemptId: identity.attemptId, errorCode: error.code })] } };
         return result;
       }, { chatIdentity });
+      this.assertLeaseCurrent_ACU(currentChatIdentity, lease, 'host_send');
       return taskResult_ACU(result!);
     });
   }
@@ -1254,8 +1440,16 @@ export class ContinuationOrchestrator_ACU {
     if (leasesByChat_ACU.has(chatIdentity)) fail_ACU('CONTINUATION_OPERATION_BUSY', '当前聊天已有智能续写操作正在执行');
     const lease: Lease_ACU = { id: this.dependencies.allocateId('lease'), epoch: epochsByChat_ACU.get(chatIdentity) ?? 0 };
     leasesByChat_ACU.set(chatIdentity, lease);
-    try { return await work(chatIdentity, lease); }
-    finally { if (leasesByChat_ACU.get(chatIdentity) === lease) leasesByChat_ACU.delete(chatIdentity); }
+    try {
+      const result = await work(chatIdentity, lease);
+      this.assertLeaseCurrent_ACU(chatIdentity, lease);
+      return result;
+    } catch (error) {
+      if (!this.isLeaseCurrent_ACU(chatIdentity, lease) && !(error instanceof ContinuationValidationError_ACU && error.error.code === 'CONTINUATION_INTERNAL_REQUEST_STALE')) {
+        throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'outline_call', '智能续写操作已失效', false));
+      }
+      throw error;
+    } finally { if (leasesByChat_ACU.get(chatIdentity) === lease) leasesByChat_ACU.delete(chatIdentity); }
   }
 
   private invalidateLease_ACU(chatIdentity: string): void {
@@ -1287,9 +1481,13 @@ export class ContinuationOrchestrator_ACU {
     }
   }
 
-  private assertLeaseCurrent_ACU(chatIdentity: string, lease: Lease_ACU): void {
+  private stopHostGeneration_ACU(chatIdentity: string): void {
+    this.dependencies.stopHostGeneration?.(chatIdentity);
+  }
+
+  private assertLeaseCurrent_ACU(chatIdentity: string, lease: Lease_ACU, phase: 'outline_call' | 'turn_call' | 'host_send' | 'generation_evaluate' | 'agent_persist' = 'outline_call'): void {
     if (!this.isLeaseCurrent_ACU(chatIdentity, lease)) {
-      throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'outline_call', '智能续写操作已失效', false));
+      throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', phase, '智能续写操作已失效', false));
     }
   }
 }

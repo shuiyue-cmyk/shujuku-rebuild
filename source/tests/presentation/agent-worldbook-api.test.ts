@@ -491,7 +491,7 @@ describe('createAgentWorldbookApi', () => {
     expect(mockDeleteMeta).toHaveBeenCalledWith('主世界书', 1);
   });
 
-  it('deleteWorldbookEntrySkillMeta 作为计划名别名复用删除 API', async () => {
+  it('deleteWorldbookEntrySkillMeta 成功后同步对账 active snapshot', async () => {
     const api = createAgentWorldbookApi({} as any);
 
     const result = await api.deleteWorldbookEntrySkillMeta('主世界书', 1);
@@ -499,6 +499,7 @@ describe('createAgentWorldbookApi', () => {
     expect(result.success).toBe(true);
     expect(result.result.updated).toBe(true);
     expect(mockDeleteMeta).toHaveBeenCalledWith('主世界书', 1);
+    expect(mockTakeover).toHaveBeenCalledTimes(1);
   });
 
   it('clearAgentWorldbookSkillMetas 成功清理时返回 success=true', async () => {
@@ -512,6 +513,7 @@ describe('createAgentWorldbookApi', () => {
       result: { total: 1, cleared: 1, skipped: 0, failed: 0, errors: [] },
     });
     expect(mockClearMeta).toHaveBeenCalledWith(['主世界书']);
+    expect(mockTakeover).toHaveBeenCalledTimes(1);
   });
 
   it('clearAgentWorldbookSkillMetas 含 failed/errors 时返回 success=false 并透传详情', async () => {

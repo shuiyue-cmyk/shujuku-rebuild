@@ -1338,7 +1338,7 @@ describe('refreshMergedDataAndNotify_ACU', () => {
 
     const result = await refreshMergedDataAndNotify_ACU();
 
-    expect(mockSettings.autoMergedOrder).toEqual({ sheet_3NoMc1wI: ['1'] });
+    expect(mockSettings.autoMergedOrder).toEqual({ [JSON.stringify(['test-chat', '', 'sheet_3NoMc1wI'])]: ['1'] });
     expect(mockSaveSettings).toHaveBeenCalledTimes(1);
     expect(mergedData.sheet_3NoMc1wI.content).toEqual([
       ['row_id', '内容'],

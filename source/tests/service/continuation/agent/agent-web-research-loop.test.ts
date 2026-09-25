@@ -122,6 +122,54 @@ const RESEARCH_REPLIES_ACU = [
   '{"summary":"入库 1 条","delta":{"expectedRevisions":{"webRefs":0},"webRefs":[{"action":"upsert","pageRef":"P1","name":"鲁迪乌斯·格雷拉特","brief":"《无职转生》主角，转生的前尼特魔术师。","tags":["人物"],"detail":"身份：布耶纳村贵族长男。能力：帝级土系魔术。"}]}}',
 ];
 
+describe('网页页面缓存', () => {
+  it('同 URL 首次失败后重试成功必须替换失败缓存，不得继续遮蔽成功页面', async () => {
+    const replies = [
+      '{"action":"encyclopedia_read","source":"moegirl","title":"洛琪希"}',
+      '{"action":"encyclopedia_read","source":"moegirl","title":"洛琪希"}',
+      JSON.stringify({ summary: '入库成功页面', delta: { expectedRevisions: { webRefs: 0 }, webRefs: [{ action: 'upsert', pageRef: 'P1', name: '洛琪希', brief: '家庭教师', detail: '擅长水系魔术' }] } }),
+    ];
+    let readCount = 0;
+    const runtime = new AgentSubagentRuntime_ACU({
+      resolveApiPreset: (() => preset_ACU) as any,
+      callInternalAi: async () => replies.shift() ?? null,
+      webClient: {
+        searchEncyclopedia: async () => ({ candidates: [], note: '' }),
+        readEncyclopedia: async () => {
+          readCount += 1;
+          return readCount === 1
+            ? { source: 'moegirl', title: '洛琪希', url: 'https://zh.moegirl.org.cn/洛琪希', text: '', status: 'unavailable', note: '临时失败' }
+            : { source: 'moegirl', title: '洛琪希', url: 'https://zh.moegirl.org.cn/洛琪希', text: '洛琪希擅长水系魔术。', status: 'ok', note: '' };
+        },
+        webSearch: async () => ({ hits: [], note: '' }),
+        webRead: async url => ({ source: 'web', title: '', url, text: '', status: 'unavailable', note: '' }),
+      } as any,
+    });
+    const settings = buildDefaultContinuationSettings_ACU();
+    settings.webResearch.enabled = true;
+    const result = await runtime.run({
+      delegation: { agentName: 'web-researcher', prompt: '查设定', reads: [] },
+      settings,
+      resolveContext: {
+        chat: chat_ACU(),
+        moduleSnapshot: buildEmptyAgentModuleSnapshot_ACU(),
+        settledThroughIndex: 0,
+        execution: runningContext_ACU(),
+        originInstruction: '查设定',
+        recentTurnCount: 1,
+        tableData: {},
+      } as any,
+      budget: { maxIterations: 4, maxDelegations: 4, maxSameAgent: 2, maxConcurrent: 1, maxReads: 8, maxExtraReads: 2 },
+      preset: preset_ACU as any,
+      createIdentity: (_name, attempt) => ({ taskId: 't', stageId: 's', turnId: 'u', attemptId: `a-${attempt}`, source: 'agent_subagent' }) as any,
+      isCurrent: () => true,
+    });
+
+    expect(readCount).toBe(2);
+    expect(result.researcher?.items[0]).toMatchObject({ sourceStatus: 'ok', url: 'https://zh.moegirl.org.cn/洛琪希' });
+  });
+});
+
 describe('开场百科检索', () => {
   it('功能开启且新任务资料库为空时，先跑 web-researcher 写入资料库，主 Agent 第一次调用就能在运行时快照里看到预览', async () => {
     const h = harness_ACU({ enabled: true, mainReplies: ['{"action":"block","reason":"测试到此为止"}'], subReplies: RESEARCH_REPLIES_ACU });

@@ -221,6 +221,36 @@ describe('useVisualizerAssistant', () => {
     expect(visualizer.currentSheet.content[1][2]).toBe('警觉');
   });
 
+  it('应用 AI 单元格候选会生成可保存的行级 pending op', async () => {
+    const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
+    const { useVisualizerAssistant } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerAssistant');
+    const visualizer = useVisualizerStore();
+    const baseData = {
+      mate: { type: 'chatSheets', version: 1 },
+      sheet_a: {
+        uid: 'sheet_a', name: 'A表', orderNo: 0,
+        content: [['row_id', '姓名'], ['1', '旧名字']],
+        sourceData: {}, updateConfig: {}, exportConfig: {},
+      },
+    };
+    visualizer.loadSnapshot(baseData, ['sheet_a']);
+    mockRunSession.mockImplementation(async (input: any) => buildResult(input, {
+      compileResult: {
+        candidateData: {
+          ...baseData,
+          sheet_a: { ...baseData.sheet_a, content: [['row_id', '姓名'], ['1', '新名字']] },
+        },
+      },
+    }));
+
+    const assistant = useVisualizerAssistant();
+    assistant.userRequest.value = '改姓名';
+    await assistant.run();
+    expect(assistant.applyLatestDraft()).toBe(true);
+
+    expect(visualizer.pendingDataOps?.updatesByRow?.['sheet_a::1']?.data?.姓名).toBe('新名字');
+  });
+
   it('saving 状态下应用 AI 草稿会在任何草稿写入前拒绝', async () => {
     const { useVisualizerStore } = await import('../../../src/presentation-v2/stores/visualizer-store');
     const { useVisualizerAssistant } = await import('../../../src/presentation-v2/composables/visualizer/useVisualizerAssistant');

@@ -55,6 +55,7 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({
   AI_MATERIALIZATION_RETRY_DELAY_MS_ACU: 100,
   currentChatFileIdentifier_ACU: 'chat-a',
   getCurrentIsolationKey_ACU: () => '',
+  getAutoFillStopEpoch_ACU: () => 0,
   get coreApisAreReady_ACU() { return true; },
   settings_ACU: m.settings,
   _set_coreApisAreReady_ACU: vi.fn(),

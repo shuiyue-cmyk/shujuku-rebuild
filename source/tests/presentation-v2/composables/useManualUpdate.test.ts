@@ -8,6 +8,7 @@ let displayTableData: any = {
 };
 let templateDisplayData: any = null;
 let templateParseThrows = false;
+let currentChatIdentity = 'chat-a';
 let worldbookInjectionTarget: string | undefined = undefined;
 let primaryLorebookName: string | null = '主世界书';
 let primaryLorebookNeverResolves = false;
@@ -43,6 +44,7 @@ async function importManualUpdate() {
 
   vi.doMock('../../../src/service/runtime/state-manager', () => ({
     currentJsonTableData_ACU: currentJsonTableData,
+    get currentChatFileIdentifier_ACU() { return currentChatIdentity; },
     settings_ACU: settings,
     abortAllActiveRequests_ACU: vi.fn(),
     _set_isAutoUpdatingCard_ACU: vi.fn(),
@@ -110,10 +112,12 @@ async function importManualUpdate() {
     prepareManualCatchUpPlan_ACU,
     refreshMergedDataAndNotify_ACU,
     setWasStoppedByUser,
+    setChatIdentity: (value: string) => { currentChatIdentity = value; },
   };
 }
 
 beforeEach(() => {
+  currentChatIdentity = 'chat-a';
   displayTableData = {
     sheet_0: { name: '物品表', content: [['row_id', '名称']] },
   };
@@ -470,6 +474,27 @@ describe('useManualUpdate purge 后执行边界守卫', () => {
     expect(toast.items.some(item => item.kind === 'warning' && item.text.includes('确认期间发生变化'))).toBe(true);
     // UI 复检失败分支同样经 finally refresh()：purge 后 selection 被清空，不残留失效目标
     expect(manual.selectedManualTableKeys.value).toEqual([]);
+    __resetToastStoreForTests();
+  });
+
+  it('确认期间切换聊天但表集合相同：runManualUpdate 必须阻断', async () => {
+    const { useManualUpdate, dialog, toast, orchestrateManualUpdate_ACU, setChatIdentity, __resetToastStoreForTests } = await importManualUpdate();
+    orchestrateManualUpdate_ACU.mockResolvedValue({ success: true });
+    const manual = useManualUpdate();
+    displayTableData = {
+      sheet_0: { name: 'A 表', content: [['row_id', '名称']] },
+      sheet_1: { name: 'B 表', content: [['row_id', '名称']] },
+    };
+    manual.setManualSelectedKeys(['sheet_0']);
+
+    const pending = manual.runManualUpdate();
+    await waitForCondition(() => dialog.active?.title === '执行手动填表', '确认弹窗出现');
+    setChatIdentity('chat-b');
+    dialog.submitActive();
+    await pending;
+
+    expect(orchestrateManualUpdate_ACU).not.toHaveBeenCalled();
+    expect(toast.items.some(item => item.kind === 'warning' && item.text.includes('聊天已切换'))).toBe(true);
     __resetToastStoreForTests();
   });
 

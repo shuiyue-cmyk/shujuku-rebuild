@@ -843,10 +843,15 @@ function validateTimeline_ACU(raw: unknown): any[] {
   return raw.map((entry, index) => {
     const path = `activeTask.timeline[${index}]`;
     if (!isRecord_ACU(entry)) fail_ACU('CONTINUATION_ENVELOPE_INVALID', `时间线条目必须是对象：${path}`);
-    for (const key of Object.keys(entry)) if (!['id', 'at', 'kind', 'stageId', 'revision', 'nodeId', 'turnId', 'attemptId', 'messageIndex', 'errorCode'].includes(key)) fail_ACU('CONTINUATION_ENVELOPE_INVALID', `时间线存在未知字段：${path}.${key}`);
+    for (const key of Object.keys(entry)) if (!['id', 'at', 'kind', 'stageId', 'revision', 'nodeId', 'turnId', 'attemptId', 'messageIndex', 'messageId', 'messageFingerprint', 'errorCode'].includes(key)) fail_ACU('CONTINUATION_ENVELOPE_INVALID', `时间线存在未知字段：${path}.${key}`);
     const result: Record<string, unknown> = { id: requireString_ACU(entry.id, `${path}.id`), at: requireInteger_ACU(entry.at, `${path}.at`, 0), kind: requireEnum_ACU(entry.kind, TIMELINE_KINDS_ACU, `${path}.kind`) };
     for (const key of ['stageId', 'nodeId', 'turnId', 'attemptId'] as const) if (key in entry) result[key] = requireString_ACU(entry[key], `${path}.${key}`);
     for (const key of ['revision', 'messageIndex'] as const) if (key in entry) result[key] = requireInteger_ACU(entry[key], `${path}.${key}`, 0);
+    if ('messageId' in entry) {
+      if (typeof entry.messageId !== 'string' && typeof entry.messageId !== 'number') fail_ACU('CONTINUATION_ENVELOPE_INVALID', `messageId 必须是字符串或数字：${path}.messageId`);
+      result.messageId = entry.messageId;
+    }
+    if ('messageFingerprint' in entry) result.messageFingerprint = requireString_ACU(entry.messageFingerprint, `${path}.messageFingerprint`);
     if ('errorCode' in entry) result.errorCode = requireString_ACU(entry.errorCode, `${path}.errorCode`);
     return result;
   });
@@ -855,11 +860,11 @@ function validateTimeline_ACU(raw: unknown): any[] {
 function validatePendingHostTurn_ACU(raw: unknown): ContinuationEnvelope_ACU['activeTask'] extends infer T ? T extends { pendingHostTurn?: infer P } ? P : never : never {
   if (raw === null || raw === undefined) return null as any;
   if (!isRecord_ACU(raw)) fail_ACU('CONTINUATION_ENVELOPE_INVALID', 'pendingHostTurn 必须是对象或 null');
-  requireKeys_ACU(raw, ['identity', 'capture', 'retryCount', 'status'], 'activeTask.pendingHostTurn');
+  requireKeys_ACU(raw, ['identity', 'capture', 'retryCount', 'status'], 'activeTask.pendingHostTurn', ['evaluationSettings']);
   if (!isRecord_ACU(raw.identity)) fail_ACU('CONTINUATION_ENVELOPE_INVALID', 'pendingHostTurn.identity 必须是对象');
   requireKeys_ACU(raw.identity, ['chatIdentity', 'taskId', 'stageId', 'revision', 'nodeId', 'turnId', 'attemptId'], 'activeTask.pendingHostTurn.identity');
   if (!isRecord_ACU(raw.capture)) fail_ACU('CONTINUATION_ENVELOPE_INVALID', 'pendingHostTurn.capture 必须是对象');
-  requireKeys_ACU(raw.capture, ['capturedAt', 'capturedChatLength', 'capturedAiFloorCount', 'generationSeq'], 'activeTask.pendingHostTurn.capture');
+  requireKeys_ACU(raw.capture, ['capturedAt', 'capturedChatLength', 'capturedAiFloorCount', 'generationSeq'], 'activeTask.pendingHostTurn.capture', ['instructionIndex', 'instructionFingerprint', 'boundaryFingerprint']);
   return {
     identity: {
       chatIdentity: requireString_ACU(raw.identity.chatIdentity, 'pendingHostTurn.identity.chatIdentity'),
@@ -875,9 +880,24 @@ function validatePendingHostTurn_ACU(raw: unknown): ContinuationEnvelope_ACU['ac
       capturedChatLength: requireInteger_ACU(raw.capture.capturedChatLength, 'pendingHostTurn.capture.capturedChatLength', 0),
       capturedAiFloorCount: requireInteger_ACU(raw.capture.capturedAiFloorCount, 'pendingHostTurn.capture.capturedAiFloorCount', 0),
       generationSeq: raw.capture.generationSeq === null ? null : requireInteger_ACU(raw.capture.generationSeq, 'pendingHostTurn.capture.generationSeq', 1),
+      ...(raw.capture.instructionIndex === undefined ? {} : { instructionIndex: requireInteger_ACU(raw.capture.instructionIndex, 'pendingHostTurn.capture.instructionIndex', 0) }),
+      ...(raw.capture.instructionFingerprint === undefined ? {} : { instructionFingerprint: requireString_ACU(raw.capture.instructionFingerprint, 'pendingHostTurn.capture.instructionFingerprint') }),
+      ...(raw.capture.boundaryFingerprint === undefined ? {} : { boundaryFingerprint: requireString_ACU(raw.capture.boundaryFingerprint, 'pendingHostTurn.capture.boundaryFingerprint') }),
     },
     retryCount: requireInteger_ACU(raw.retryCount, 'pendingHostTurn.retryCount', 0),
     status: requireEnum_ACU(raw.status, ['awaiting_generation', 'retry_ready', 'exhausted'] as const, 'pendingHostTurn.status'),
+    ...(raw.evaluationSettings === undefined ? {} : (() => {
+      if (!isRecord_ACU(raw.evaluationSettings)) fail_ACU('CONTINUATION_ENVELOPE_INVALID', 'pendingHostTurn.evaluationSettings 必须是对象');
+      requireKeys_ACU(raw.evaluationSettings, ['loopTags', 'retryDelaySeconds', 'minGenerationTokens', 'generationRetryLimit'], 'pendingHostTurn.evaluationSettings');
+      return {
+        evaluationSettings: {
+          loopTags: requireString_ACU(raw.evaluationSettings.loopTags, 'pendingHostTurn.evaluationSettings.loopTags'),
+          retryDelaySeconds: requireInteger_ACU(raw.evaluationSettings.retryDelaySeconds, 'pendingHostTurn.evaluationSettings.retryDelaySeconds', 0),
+          minGenerationTokens: requireInteger_ACU(raw.evaluationSettings.minGenerationTokens, 'pendingHostTurn.evaluationSettings.minGenerationTokens', 0),
+          generationRetryLimit: requireInteger_ACU(raw.evaluationSettings.generationRetryLimit, 'pendingHostTurn.evaluationSettings.generationRetryLimit', 0),
+        },
+      };
+    })()),
   } as any;
 }
 
@@ -1011,6 +1031,7 @@ export class FirstFloorContinuationStore_ACU {
     return envelope === null ? null : reconcileContinuationEnvelopeCursor_ACU(
       derivePausedContinuationEnvelopeAfterReload_ACU(envelope),
       Array.isArray(context.chat) ? context.chat.length : 0,
+      Array.isArray(context.chat) ? context.chat : undefined,
     );
   }
 

@@ -9,6 +9,7 @@ const mockSaveSkill = vi.fn();
 const mockDeleteSkill = vi.fn();
 const mockSnapshot = vi.fn(() => ({ active: false, books: {} }));
 const mockRefreshSnapshot = vi.fn(async () => mockSnapshot());
+const mockTakeover = vi.fn(async () => ({ updated: true, failed: 0, snapshot: mockSnapshot() }));
 const mockGetBookEntries = vi.fn();
 const mockSetBookEntries = vi.fn();
 
@@ -24,6 +25,7 @@ async function getComposable(onSkillMetaChanged?: () => Promise<unknown>) {
   vi.doMock('../../../src/service/agent/agent-worldbook-config-meta', () => ({ resolveAgentWorldbookScopeBookNames_ACU: mockResolveScope }));
   vi.doMock('../../../src/service/agent/agent-worldbook-takeover', () => ({
     refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU: mockRefreshSnapshot,
+    takeoverWorldbookGreenlights_ACU: mockTakeover,
   }));
   vi.doMock('../../../src/service/agent/agent-worldbook-skill-meta', () => ({
     parseWorldbookSkillMetaFromComment_ACU: (comment: string) => comment.includes('ACU_SKILL_META_START') ? { description: '已有', triggerWhen: '测试' } : null,
@@ -50,6 +52,7 @@ beforeEach(() => {
   mockDeleteSkill.mockReset();
   mockGetBookEntries.mockReset();
   mockSetBookEntries.mockReset();
+  mockTakeover.mockClear();
   mockSnapshot.mockReturnValue({ active: false, books: {} });
   mockRefreshSnapshot.mockImplementation(async () => mockSnapshot());
 });
@@ -190,6 +193,30 @@ describe('useAgentWorldbookEntries', () => {
     expect(mockDeleteSkill).toHaveBeenCalledWith('AgentBook', 2);
     expect(notify).toHaveBeenCalledTimes(1);
     expect(c.groups.value[0].entries[0]).toMatchObject({ hasSkill: false, label: '关闭' });
+  });
+
+  it('删除 Skill meta 的外部同步返回 false 时向 UI 返回失败，不能留下可复活 snapshot', async () => {
+    mockResolveScope.mockResolvedValue(['AgentBook']);
+    mockGetEntries.mockResolvedValue({ AgentBook: [{ uid: 2, comment: withSkill('关闭'), enabled: false, type: 'selective' }] });
+    mockDeleteSkill.mockResolvedValue({ updated: true, entry: { uid: 2, comment: '关闭' } });
+    const c = await getComposable(async () => false);
+
+    await c.loadEntries();
+    await expect(c.deleteEntrySkillMeta('AgentBook', 2)).rejects.toThrow(/active snapshot 对账失败/);
+
+    expect(c.groups.value[0].entries[0]).toMatchObject({ hasSkill: false, label: '关闭' });
+  });
+
+  it('无外部同步回调时，删除 Skill meta 仍由 UI 入口同步对账 active snapshot', async () => {
+    mockResolveScope.mockResolvedValue(['AgentBook']);
+    mockGetEntries.mockResolvedValue({ AgentBook: [{ uid: 2, comment: withSkill('关闭'), enabled: false, type: 'selective' }] });
+    mockDeleteSkill.mockResolvedValue({ updated: true, entry: { uid: 2, comment: '关闭' } });
+    const c = await getComposable();
+
+    await c.loadEntries();
+    await c.deleteEntrySkillMeta('AgentBook', 2);
+
+    expect(mockTakeover).toHaveBeenCalledTimes(1);
   });
 
   it('接管同步失败不会回滚已写入的 Skill 元数据', async () => {

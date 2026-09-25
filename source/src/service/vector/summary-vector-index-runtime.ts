@@ -446,7 +446,12 @@ function filterChunksByLiveSummaryTable_ACU(
 async function materializeSummaryVectorMirrorHead_ACU(
     head: SummaryVectorMirrorHeadResult_ACU,
     live: LiveSummaryVectorRows_ACU | null,
-): Promise<{ rows: ChatSummaryVectorIndexRow_ACU[]; chunks: ChatSummaryVectorIndexChunk_ACU[] }> {
+): Promise<{
+    rows: ChatSummaryVectorIndexRow_ACU[];
+    chunks: ChatSummaryVectorIndexChunk_ACU[];
+    incompleteRowIds: Set<string>;
+    contentMismatchedRowIds: Set<string>;
+}> {
     const packByHash = new Map<string, Awaited<ReturnType<typeof loadSummaryVectorMirrorPack_ACU>>>();
     for (const packRef of head.packRefs) {
         const pack = await loadSummaryVectorMirrorPack_ACU(packRef);
@@ -454,16 +459,24 @@ async function materializeSummaryVectorMirrorHead_ACU(
     }
     const rows: ChatSummaryVectorIndexRow_ACU[] = [];
     const chunks: ChatSummaryVectorIndexChunk_ACU[] = [];
+    const incompleteRowIds = new Set<string>();
+    const contentMismatchedRowIds = new Set<string>();
     let fallbackOrder = 0;
     for (const [rowId, refs] of head.head) {
         const liveRow = live?.byRowId.get(rowId);
         const chunkIds: string[] = [];
+        const rowChunks: ChatSummaryVectorIndexChunk_ACU[] = [];
+        const liveSourceHash = normalizeText_ACU(liveRow?.vectorSourceHash);
+        let contentMismatch = false;
         refs.forEach((ref, sequence) => {
             const packed = packByHash.get(ref.packHash)?.chunks?.[ref.chunkIndex];
             if (!packed) return;
+            if (liveSourceHash && normalizeText_ACU(packed.textHash) !== liveSourceHash) {
+                contentMismatch = true;
+            }
             const chunkId = `${rowId}:${sequence}`;
             chunkIds.push(chunkId);
-            chunks.push({
+            rowChunks.push({
                 chunkId,
                 rowKey: liveRow?.rowKey || rowId,
                 rowOrder: liveRow?.rowOrder ?? fallbackOrder,
@@ -473,7 +486,13 @@ async function materializeSummaryVectorMirrorHead_ACU(
                 textHash: packed.textHash,
             });
         });
+        if (refs.length === 0 || chunkIds.length !== refs.length) incompleteRowIds.add(rowId);
         if (chunkIds.length === 0) continue;
+        if (contentMismatch) {
+            contentMismatchedRowIds.add(rowId);
+            continue;
+        }
+        chunks.push(...rowChunks);
         rows.push({
             rowKey: liveRow?.rowKey || rowId,
             rowId,
@@ -488,7 +507,7 @@ async function materializeSummaryVectorMirrorHead_ACU(
         });
         fallbackOrder += 1;
     }
-    return { rows, chunks };
+    return { rows, chunks, incompleteRowIds, contentMismatchedRowIds };
 }
 
 function isSingleFileSnapshotManifest_ACU(manifest: ChatSummaryVectorIndexManifest_ACU | null | undefined): manifest is ChatSummaryVectorIndexManifest_ACU {
@@ -809,7 +828,14 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
         return { success: false, skipped: true, reason: `mirror_${head.status}` };
     }
     const materialized = await materializeSummaryVectorMirrorHead_ACU(head, liveRows);
-    if (head.head.size > 0 && materialized.rows.length === 0) {
+    if (
+        head.head.size > 0
+        && (
+            materialized.rows.length === 0
+            || materialized.incompleteRowIds.size > 0
+            || materialized.contentMismatchedRowIds.size > 0
+        )
+    ) {
         const repaired = await rebuildSummaryVectorMirror_ACU({ reason: 'rebuild_repair' });
         if (repaired.success && !repaired.skipped) {
             head = await resolveHead();
@@ -817,8 +843,19 @@ export async function processSummaryVectorIndexBeforeGeneration_ACU(
                 const retried = await materializeSummaryVectorMirrorHead_ACU(head, liveRows);
                 materialized.rows = retried.rows;
                 materialized.chunks = retried.chunks;
+                materialized.incompleteRowIds = retried.incompleteRowIds;
+                materialized.contentMismatchedRowIds = retried.contentMismatchedRowIds;
             }
         }
+    }
+    if (materialized.incompleteRowIds.size > 0) {
+        logWarn_ACU('[交火模式纪要索引] pack/chunk 引用仍不完整，拒绝使用残缺索引:', {
+            rowIds: [...materialized.incompleteRowIds],
+        });
+        return { success: false, skipped: true, reason: 'mirror_pack_incomplete' };
+    }
+    if (materialized.contentMismatchedRowIds.size > 0) {
+        return { success: false, skipped: true, reason: 'mirror_content_hash_mismatch' };
     }
     let rows: ChatSummaryVectorIndexRow_ACU[] = materialized.rows;
     let chunks: ChatSummaryVectorIndexChunk_ACU[] = materialized.chunks;

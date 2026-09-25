@@ -449,8 +449,12 @@ export async function executeAutoUpdatePlan_ACU(
                 const batchResult = await executeAutoMergeBatch_ACU(prepared, prepared.batches[i], acc);
                 acc = batchResult.accumulatedSummary;
             }
-            await finalizeAutoMerge_ACU(prepared, acc);
-            autoMergeSuccess = true;
+            const mergeResult = await finalizeAutoMerge_ACU(prepared, acc);
+            if (mergeResult?.success !== true) {
+                logWarn_ACU('[自动合并] 提交失败或返回无效结果，自动合并未成功。', mergeResult?.error);
+            } else {
+                autoMergeSuccess = true;
+            }
         }
     } catch (e) {
         logWarn_ACU('自动合并总结检测失败:', e);

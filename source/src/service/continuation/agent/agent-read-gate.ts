@@ -12,8 +12,8 @@
  *
  * 状态机：
  * - B > M 直接整批打回；
- * - 否则 H + B > S 且 B > F 时打回，持续要求缩小到 F 以下；
- * - B <= F 时放行，由既有总结机制处理超长上下文。
+ * - 否则 H + B > S 时整批打回；F 只作为可操作的目标批次大小，不是越过 S 的豁免；
+ * - 只有完整上下文仍不超过 S 时才放行。
  *
  * 打回报告不含正文，只含各目标实测 token 数、四量与剩余额度，尾附修正协议。
  * 门禁统一作用于三条注入路径：主 Agent 工具批次、子代理工具轮次、派工种子材料。
@@ -113,7 +113,7 @@ function buildRejectionReport_ACU(
     lines.push(`原因：本次 read/search 工具批次需要 ${batchTokens} tokens，超过单批次上限 ${budget.effectiveMaxReadTokens} tokens。该上限不跨批次累计；缩小本批内容后可在下一轮继续读取。`);
   } else {
     const headroom = Math.max(0, historyTokenBudget - contextTokens);
-    lines.push(`原因：上下文临近总结阈值。当前上下文实测 ${contextTokens} tokens，总结阈值 ${historyTokenBudget} tokens（阈值前余量 ${headroom} tokens）；本批次 ${batchTokens} tokens 大于精读兜底额度 ${budget.effectiveFallbackTokens} tokens。请持续缩小读取范围，直到单批次不超过 ${budget.effectiveFallbackTokens} tokens；届时会放行并由总结机制处理超长上下文。`);
+    lines.push(`原因：上下文临近总结阈值。当前上下文实测 ${contextTokens} tokens，总结阈值 ${historyTokenBudget} tokens（阈值前余量 ${headroom} tokens）；本批次 ${batchTokens} tokens 会把完整上下文推过阈值。精读兜底额度 ${budget.effectiveFallbackTokens} tokens 也不是越过阈值的豁免，请持续缩小读取范围，直到单批次不超过该额度且总量仍留有余量。`);
   }
   lines.push('本批次各目标的实测大小：', ...itemLines);
   const nextLimit = reason === 'near-compaction-overflow' ? budget.effectiveFallbackTokens : budget.effectiveMaxReadTokens;
@@ -156,8 +156,7 @@ export async function gateAgentReadBatch_ACU(
 
   // 每个工具批次独立判定：不存在跨批次累计额度。
   if (batchTokens > budget.effectiveMaxReadTokens) return decide('read-batch-too-large');
-  if (config.historyTokenBudget > 0 && contextTokens > 0 && contextTokens + batchTokens > config.historyTokenBudget
-    && batchTokens > budget.effectiveFallbackTokens) {
+  if (config.historyTokenBudget > 0 && contextTokens > 0 && contextTokens + batchTokens > config.historyTokenBudget) {
     return decide('near-compaction-overflow');
   }
   void state;

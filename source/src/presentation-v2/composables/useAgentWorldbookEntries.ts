@@ -1,7 +1,10 @@
 import { ref, shallowRef } from 'vue';
 import { getLorebookEntriesByNames_ACU } from '../../service/worldbook/pipeline';
 import { getLorebookEntries_ACU, setLorebookEntries_ACU } from '../../data/gateways/worldbook-gateway';
-import { refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU } from '../../service/agent/agent-worldbook-takeover';
+import {
+  refreshPlotAgentWorldbookSnapshotFromWorldbooks_ACU,
+  takeoverWorldbookGreenlights_ACU,
+} from '../../service/agent/agent-worldbook-takeover';
 import {
   buildWorldbookSnapshotEntryIndexByBook_ACU,
   getWorldbookSnapshotEntryForDisplay_ACU,
@@ -231,7 +234,22 @@ export function useAgentWorldbookEntries(options: UseAgentWorldbookEntriesOption
     if (result.entry && typeof result.entry.comment === 'string') {
       updateEntrySkillMetaLocal(bookName, uid, result.entry.comment);
     }
-    if (result.updated) await notifySkillMetaChanged();
+    if (result.updated) {
+      if (options.onSkillMetaChanged) {
+        try {
+          const syncResult = await options.onSkillMetaChanged();
+          if (syncResult === false) throw new Error('active snapshot 对账返回失败');
+        } catch (cause: any) {
+          logError_ACU('[ACU-V2] Skill meta 删除后接管同步失败', cause);
+          throw new Error(`Skill 元数据已删除，但 active snapshot 对账失败：${cause?.message || 'unknown'}`);
+        }
+      } else {
+        const takeover = await takeoverWorldbookGreenlights_ACU();
+        if (takeover.failed > 0) {
+          throw new Error(`Skill 元数据已删除，但 active snapshot 对账失败：${takeover.reason || 'unknown'}`);
+        }
+      }
+    }
   }
 
   function toggleGroupExpanded(bookName: string): void {

@@ -323,16 +323,22 @@ export function filterOptimizationsByExcludeRules_ACU(
 }
 
 /**
- * 应用优化到正文
+ * 应用优化到正文并返回应用统计。
  * @param originalContent 原始正文
  * @param optimizations AI 返回的优化建议列表
  * @param options 可选排除规则（正文替换页「标签排除规则」）；命中排除段的建议整条不写回
  */
-export function applyOptimizations_ACU(
+export function applyOptimizationsWithStats_ACU(
   originalContent: string,
   optimizations: any[],
   options?: OptimizationExcludeOptions_ACU | null,
-): string {
+): {
+  content: string;
+  appliedCount: number;
+  failedCount: number;
+  failedItems: any[];
+  effectiveCount: number;
+} {
   let result = originalContent;
   let appliedCount = 0;
   let failedCount = 0;
@@ -387,5 +393,23 @@ export function applyOptimizations_ACU(
     console.warn('[正文优化] 以下优化项未能应用:', failedItems);
   }
 
-  return result;
+  return {
+    content: result,
+    appliedCount,
+    failedCount,
+    failedItems,
+    effectiveCount: effectiveOptimizations.length,
+  };
+}
+
+/**
+ * 兼容旧调用方的字符串返回契约。
+ * 需要区分 no-op 的调用方应使用 applyOptimizationsWithStats_ACU。
+ */
+export function applyOptimizations_ACU(
+  originalContent: string,
+  optimizations: any[],
+  options?: OptimizationExcludeOptions_ACU | null,
+): string {
+  return applyOptimizationsWithStats_ACU(originalContent, optimizations, options).content;
 }

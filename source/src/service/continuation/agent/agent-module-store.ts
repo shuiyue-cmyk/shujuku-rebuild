@@ -45,6 +45,43 @@ function readIndex_ACU(value: unknown): number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0 ? value : -1;
 }
 
+/**
+ * 计算结算水位之前聊天前缀的短指纹。优先使用稳定 message_id；没有 ID 时仍把
+ * 楼层位置、角色、正文纳入哈希，因此删除或替换水位之前的楼层必然改变指纹。
+ */
+function chatPrefixFingerprint_ACU(messages: any[], throughIndex: number): string {
+  const end = Math.min(Math.max(throughIndex, -1), messages.length - 1);
+  let hash = 2166136261;
+  const add = (text: string): void => {
+    for (let index = 0; index < text.length; index += 1) {
+      hash ^= text.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    hash ^= 0x1f;
+    hash = Math.imul(hash, 16777619);
+  };
+  add(`count:${end + 1}`);
+  for (let index = 0; index <= end; index += 1) {
+    const message = isRecord_ACU(messages[index]) ? messages[index] : {};
+    const stableId = message.message_id ?? message.id ?? '';
+    add(`${index}:${String(stableId)}:${String(message.role ?? '')}:${message.is_user ? 1 : 0}:${message.is_system ? 1 : 0}:${readText_ACU(message.mes)}`);
+  }
+  return `${end + 1}:${(hash >>> 0).toString(16).padStart(8, '0')}`;
+}
+
+/** 在水位合法推进后刷新前缀指纹；调用方必须在同一轮确认聊天未被替换。 */
+export function refreshAgentModuleSnapshotChatPrefix_ACU(snapshot: AgentModuleSnapshot_ACU, chat: any[]): AgentModuleSnapshot_ACU {
+  return {
+    ...snapshot,
+    settledPrefixFingerprint: chatPrefixFingerprint_ACU(chat, snapshot.settledThroughIndex),
+  };
+}
+
+function isChatPrefixCompatible_ACU(snapshot: AgentModuleSnapshot_ACU, messages: any[]): boolean {
+  if (!snapshot.settledPrefixFingerprint) return true;
+  return snapshot.settledPrefixFingerprint === chatPrefixFingerprint_ACU(messages, snapshot.settledThroughIndex);
+}
+
 function readEnum_ACU(value: unknown, allowed: readonly string[], fallback: string): string {
   return typeof value === 'string' && allowed.includes(value) ? value : fallback;
 }
@@ -280,8 +317,9 @@ export function validateAgentModuleSnapshot_ACU(raw: unknown): AgentModuleSnapsh
   if (!Array.isArray(raw.hooks) || !Array.isArray(raw.infoGap) || !Array.isArray(raw.constraints)) return null;
   const settledThroughIndex = readIndex_ACU(raw.settledThroughIndex);
   if (settledThroughIndex < 0) return null;
-  // storyArc 晚于前三个模块加入，存量楼层的快照里没有这个键。写成必需会让全部历史快照
-  // 被判非法、资料静默回退成空，因此这里按「有则校验、无则空数组」处理。
+  // storyArc 晚于前三个模块加入，存量楼层的快照里没有这个键。缺字段兼容为空，
+  // 但字段一旦出现就必须是数组；否则“损坏总纲”会被静默当成空总纲并推进写入。
+  if (Object.prototype.hasOwnProperty.call(raw, 'storyArc') && !Array.isArray(raw.storyArc)) return null;
   const storyArc = Array.isArray(raw.storyArc) ? raw.storyArc : [];
   const validatedStoryArc = storyArc.map(validateStoryArcEntry_ACU);
   // 总纲条目不能像普通搜索命中一样被悄悄过滤；任一结构损坏都应让读取端回退上一份完整快照。
@@ -297,6 +335,9 @@ export function validateAgentModuleSnapshot_ACU(raw: unknown): AgentModuleSnapsh
   return {
     schemaVersion: AGENT_MODULE_SCHEMA_VERSION_ACU,
     settledThroughIndex,
+    ...(typeof raw.settledPrefixFingerprint === 'string' && raw.settledPrefixFingerprint
+      ? { settledPrefixFingerprint: raw.settledPrefixFingerprint }
+      : {}),
     updatedAt: typeof raw.updatedAt === 'number' && raw.updatedAt >= 0 ? raw.updatedAt : 0,
     revisions: {
       hooks: Math.max(0, readIndex_ACU(raw.revisions.hooks)),
@@ -335,6 +376,9 @@ function salvageAgentModuleSnapshot_ACU(raw: unknown): { snapshot: AgentModuleSn
   const snapshot: AgentModuleSnapshot_ACU = {
     schemaVersion: AGENT_MODULE_SCHEMA_VERSION_ACU,
     settledThroughIndex: Math.max(0, settledThroughIndex),
+    ...(typeof raw.settledPrefixFingerprint === 'string' && raw.settledPrefixFingerprint
+      ? { settledPrefixFingerprint: raw.settledPrefixFingerprint }
+      : {}),
     updatedAt: typeof raw.updatedAt === 'number' && raw.updatedAt >= 0 ? raw.updatedAt : 0,
     revisions: {
       hooks: Math.max(0, readIndex_ACU(revisions.hooks)),
@@ -387,6 +431,7 @@ export function readAgentModuleSnapshot_ACU(chat?: any[]): AgentModuleSnapshot_A
   );
   const diagnostics: AgentModuleSnapshotReadDiagnostics_ACU = { candidates: [], adoptedIndex: null, salvaged: false };
   let firstBroken: { index: number; raw: unknown } | null = null;
+  let incompatibleSnapshotSeen = false;
   for (let index = highestIndex; index >= 0; index -= 1) {
     const message = messages[index];
     if (!message || typeof message !== 'object') continue;
@@ -394,16 +439,23 @@ export function readAgentModuleSnapshot_ACU(chat?: any[]): AgentModuleSnapshot_A
     const raw = (message as Record<string, unknown>)[AGENT_MODULE_FIELD_ACU];
     const snapshot = validateAgentModuleSnapshot_ACU(raw);
     if (snapshot) {
+      if (!isChatPrefixCompatible_ACU(snapshot, messages)) {
+        incompatibleSnapshotSeen = true;
+        diagnostics.candidates.push({ index, valid: false, problems: ['结算水位之前的聊天前缀已变化（删楼、替换或重排），拒绝复用此快照'] });
+        continue;
+      }
       diagnostics.candidates.push({ index, valid: true, problems: [] });
       diagnostics.adoptedIndex = index;
       lastReadDiagnostics_ACU = diagnostics;
       return clamp(snapshot);
     }
     const salvaged = salvageAgentModuleSnapshot_ACU(raw);
+    const salvagedCompatible = !salvaged || isChatPrefixCompatible_ACU(salvaged.snapshot, messages);
     diagnostics.candidates.push({ index, valid: false, problems: salvaged?.problems ?? ['快照不是对象'] });
-    if (!firstBroken) firstBroken = { index, raw };
+    if (!salvagedCompatible) incompatibleSnapshotSeen = true;
+    if (!firstBroken && !incompatibleSnapshotSeen) firstBroken = { index, raw };
   }
-  if (firstBroken) {
+  if (firstBroken && !incompatibleSnapshotSeen) {
     const salvaged = salvageAgentModuleSnapshot_ACU(firstBroken.raw);
     if (salvaged) {
       diagnostics.adoptedIndex = firstBroken.index;
@@ -436,6 +488,15 @@ export async function writeAgentModuleSnapshot_ACU(chat: any[], targetIndex: num
   const hadPrevious = Object.prototype.hasOwnProperty.call(container, AGENT_MODULE_FIELD_ACU);
   const previous = container[AGENT_MODULE_FIELD_ACU];
   const settledThroughIndex = Math.min(Math.max(snapshot.settledThroughIndex, 0), targetIndex);
+  if (snapshot.settledPrefixFingerprint && snapshot.settledPrefixFingerprint !== chatPrefixFingerprint_ACU(chat, settledThroughIndex)) {
+    throw new ContinuationValidationError_ACU(createContinuationError_ACU(
+      'CONTINUATION_AGENT_SNAPSHOT_INVALID',
+      'agent_persist',
+      '资料快照引用的聊天前缀已变化，拒绝写入以避免删楼后按旧下标结算',
+      false,
+      { targetIndex, settledThroughIndex },
+    ));
+  }
   // 乐观锁复核：在飞 turn 的快照基准是它开始时读到的楼层修订号；期间用户手动保存会把六类
   // 修订号整体 +1（replaceAgentModuleSnapshotByUser_ACU），旧基准整份写入会静默冲掉用户内容。
   // 落盘前重读当前生效快照，任一类「楼层比写入快照新」即放弃落盘并记日志；正常路径零影响。
@@ -454,10 +515,21 @@ export async function writeAgentModuleSnapshot_ACU(chat: any[], targetIndex: num
   }
   if (revisionDrifts.length > 0) {
     console.warn(`[SP·数据库][续写资料] 检测到楼层快照修订号已被外部更新（疑似用户手动保存），放弃本次写入防止整份覆盖：${revisionDrifts.join('；')}（目标楼层 ${targetIndex}）`);
-    return;
+    throw new ContinuationValidationError_ACU(createContinuationError_ACU(
+      'CONTINUATION_AGENT_WRITE_REJECTED',
+      'agent_persist',
+      '资料快照修订号已漂移，写入被拒绝以停止当前结算',
+      false,
+      { targetIndex, revisionDrifts },
+    ));
   }
   try {
-    container[AGENT_MODULE_FIELD_ACU] = { ...snapshot, settledThroughIndex, updatedAt: Date.now() };
+    container[AGENT_MODULE_FIELD_ACU] = {
+      ...snapshot,
+      settledThroughIndex,
+      settledPrefixFingerprint: snapshot.settledPrefixFingerprint ?? chatPrefixFingerprint_ACU(chat, settledThroughIndex),
+      updatedAt: Date.now(),
+    };
     await saveChatToHostStrict_ACU();
   } catch (error) {
     if (hadPrevious) container[AGENT_MODULE_FIELD_ACU] = previous;

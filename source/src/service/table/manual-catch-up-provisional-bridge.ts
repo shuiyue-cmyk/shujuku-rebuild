@@ -432,10 +432,11 @@ export async function establishProvisionalBridge_ACU(
   return runTableWriteTransaction_ACU({
     source: 'manual_fill',
     reason: 'establishManualCatchUpProvisionalBridge',
+    chatKey,
     isolationKey,
     writeSet: [{ kind: 'all' }],
     maintenanceMode: 'exclusive',
-  }, async () => {
+  }, async (ctx) => {
     const chat = getChatArray_ACU();
     if (!Array.isArray(chat) || chat.length === 0) {
       return { ok: false, error: '聊天记录为空，无法建立 provisional bridge。' };
@@ -609,27 +610,41 @@ export async function establishProvisionalBridge_ACU(
       return { ok: false, error: `provisional bridge 候选 replay 验证异常：${error?.message || String(error)}`, diagnosticCode: 'bridge_replay_mismatch' };
     }
 
-    // 6. strict save，失败完整回滚。
-    const before = JSON.parse(JSON.stringify(chat));
+    // 6. strict save，失败完整回滚；聊天直写必须纳入事务 runCommit，推进 runtime revision。
     try {
-      chat.length = 0;
-      chat.push(...candidateChat);
-      writeMessageIdentity_ACU(provisionalMessage, {
-        enabled: settings_ACU.dataIsolationEnabled,
-        code: settings_ACU.dataIsolationCode,
-      });
-      await saveChatToHostStrict_ACU();
+      ctx.assertFresh('establish provisional bridge before chat mutation');
     } catch (error: any) {
-      chat.length = 0;
-      chat.push(...before);
+      return { ok: false, error: `provisional bridge runtime revision 已过期：${error?.message || String(error)}` };
+    }
+    let committed: { ok: true; bridge: ManualCatchUpProvisionalBridgeV1_ACU; provisionalRootIndex: number };
+    try {
+      committed = await ctx.runCommit(async () => {
+        ctx.assertFresh('bridge direct chat mutation after commit lock');
+        const before = JSON.parse(JSON.stringify(chat));
+        try {
+          chat.length = 0;
+          chat.push(...candidateChat);
+          writeMessageIdentity_ACU(provisionalMessage, {
+            enabled: settings_ACU.dataIsolationEnabled,
+            code: settings_ACU.dataIsolationCode,
+          });
+          await saveChatToHostStrict_ACU();
+          return {
+            ok: true as const,
+            bridge,
+            provisionalRootIndex: rangeStartMessageIndex,
+          };
+        } catch (error: any) {
+          chat.length = 0;
+          chat.push(...before);
+          throw error;
+        }
+      }, [{ kind: 'all' }]);
+    } catch (error: any) {
       return { ok: false, error: `provisional bridge 建立严格保存失败：${error?.message || String(error)}` };
     }
     logDebug_ACU(`[ManualCatchUpBridge] 已建立 provisional full checkpoint：runId=${runId}, root=${rangeStartMessageIndex}, originalFull=${originalFullCheckpointIndex}, sheets=${selectedSheetKeys.join('、')}。`);
-    return {
-      ok: true,
-      bridge,
-      provisionalRootIndex: rangeStartMessageIndex,
-    };
+    return committed;
   });
 }
 
@@ -669,10 +684,11 @@ export async function finalizeProvisionalBridge_ACU(
   return runTableWriteTransaction_ACU({
     source: 'manual_fill',
     reason: 'finalizeManualCatchUpProvisionalBridge',
+    chatKey,
     isolationKey,
     writeSet: [{ kind: 'all' }],
     maintenanceMode: 'exclusive',
-  }, async () => {
+  }, async (ctx) => {
     const chat = getChatArray_ACU();
     const bridge = readActiveProvisionalBridge_ACU(chat, isolationKey);
     if (!bridge) {
@@ -821,33 +837,47 @@ export async function finalizeProvisionalBridge_ACU(
       return { ok: false, error: `bridge finalize 候选 replay 验证异常：${error?.message || String(error)}`, diagnosticCode: 'bridge_replay_mismatch' };
     }
 
-    // 6. strict save，失败原位回滚。
-    const before = JSON.parse(JSON.stringify(chat));
+    // 6. strict save，失败原位回滚；聊天直写纳入事务 runCommit，推进 runtime revision。
     try {
-      chat.length = 0;
-      chat.push(...candidateChat);
-      writeMessageIdentity_ACU(originalMessage, {
-        enabled: settings_ACU.dataIsolationEnabled,
-        code: settings_ACU.dataIsolationCode,
-      });
-      await saveChatToHostStrict_ACU();
+      ctx.assertFresh('finalize provisional bridge before chat mutation');
     } catch (error: any) {
-      chat.length = 0;
-      chat.push(...before);
-      return { ok: false, error: `bridge finalize 严格保存失败：${error?.message ||String(error)}`, diagnosticCode: 'bridge_finalize_failed' };
+      return { ok: false, error: `bridge finalize runtime revision 已过期：${error?.message || String(error)}`, diagnosticCode: 'bridge_finalize_failed' };
+    }
+    let committed: { ok: true; finalizeSummary: { selectedSheetKeys: string[]; originalFullCheckpointIndex: number } };
+    try {
+      committed = await ctx.runCommit(async () => {
+        ctx.assertFresh('bridge direct chat mutation after commit lock');
+        const before = JSON.parse(JSON.stringify(chat));
+        try {
+          chat.length = 0;
+          chat.push(...candidateChat);
+          writeMessageIdentity_ACU(originalMessage, {
+            enabled: settings_ACU.dataIsolationEnabled,
+            code: settings_ACU.dataIsolationCode,
+          });
+          await saveChatToHostStrict_ACU();
+          return {
+            ok: true as const,
+            finalizeSummary: {
+              selectedSheetKeys: [...bridge.selectedSheetKeys],
+              originalFullCheckpointIndex: bridge.originalFullCheckpointIndex,
+            },
+          };
+        } catch (error: any) {
+          chat.length = 0;
+          chat.push(...before);
+          throw error;
+        }
+      }, [{ kind: 'all' }]);
+    } catch (error: any) {
+      return { ok: false, error: `bridge finalize 严格保存失败：${error?.message || String(error)}`, diagnosticCode: 'bridge_finalize_failed' };
     }
     logDebug_ACU(`[ManualCatchUpBridge] 已原子汇合：runId=${runId}, originalFull=${bridge.originalFullCheckpointIndex}, sheets=${bridge.selectedSheetKeys.join('、')}, cleanup=${cleanupEvidence.length}。`);
     scheduleSummaryVectorMirrorFlushAfterPersist_ACU({
       changedSheetKeys: [...bridge.selectedSheetKeys],
       reason: 'provisional_bridge_finalize',
     });
-    return {
-      ok: true,
-      finalizeSummary: {
-        selectedSheetKeys: [...bridge.selectedSheetKeys],
-        originalFullCheckpointIndex: bridge.originalFullCheckpointIndex,
-      },
-    };
+    return committed;
   });
 }
 
@@ -866,14 +896,16 @@ export async function rollbackProvisionalBridge_ACU(
   } = {},
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const isolationKey = options.isolationKey ?? getCurrentIsolationKey_ACU();
+  const chatKey = options.chatKey ?? currentChatFileIdentifier_ACU;
 
   return runTableWriteTransaction_ACU({
     source: 'manual_fill',
     reason: 'rollbackManualCatchUpProvisionalBridge',
+    chatKey,
     isolationKey,
     writeSet: [{ kind: 'all' }],
     maintenanceMode: 'exclusive',
-  }, async () => {
+  }, async (ctx) => {
     const chat = getChatArray_ACU();
     const bridge = readActiveProvisionalBridge_ACU(chat, isolationKey);
     if (!bridge) return { ok: true };
@@ -913,18 +945,32 @@ export async function rollbackProvisionalBridge_ACU(
       }
     }
 
-    const before = JSON.parse(JSON.stringify(chat));
     try {
-      chat.length =0;
-      chat.push(...candidateChat);
-      await saveChatToHostStrict_ACU();
+      ctx.assertFresh('rollback provisional bridge before chat mutation');
     } catch (error: any) {
-      chat.length = 0;
-      chat.push(...before);
+      return { ok: false, error: `provisional bridge rollback runtime revision 已过期：${error?.message || String(error)}` };
+    }
+    let committed: { ok: true };
+    try {
+      committed = await ctx.runCommit(async () => {
+        ctx.assertFresh('bridge direct chat mutation after commit lock');
+        const before = JSON.parse(JSON.stringify(chat));
+        try {
+          chat.length = 0;
+          chat.push(...candidateChat);
+          await saveChatToHostStrict_ACU();
+          return { ok: true as const };
+        } catch (error: any) {
+          chat.length = 0;
+          chat.push(...before);
+          throw error;
+        }
+      }, [{ kind: 'all' }]);
+    } catch (error: any) {
       return { ok: false, error: `provisional bridge rollback 严格保存失败：${error?.message || String(error)}` };
     }
     logDebug_ACU(`[ManualCatchUpBridge] 已回滚 provisional bridge：runId=${runId}。`);
-    return { ok: true };
+    return committed;
   });
 }
 

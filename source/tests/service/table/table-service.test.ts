@@ -714,6 +714,27 @@ describe('loadOrCreateJsonTableFromChatHistory_ACU', () => {
     expect(mockDeleteAllGeneratedEntries).toHaveBeenCalledTimes(1);
   });
 
+  it('merge await 期间切换聊天时不发布旧聊天数据', async () => {
+    const chatA = [{ is_user: false, mes: 'A' }];
+    const chatB = [{ is_user: false, mes: 'B' }];
+    let releaseMerge!: (value: any) => void;
+    mockGetChatArray.mockReturnValue(chatA);
+    mockMergeAllIndependentTables.mockImplementation(() => new Promise(resolve => {
+      releaseMerge = resolve;
+    }));
+
+    const loadPromise = loadOrCreateJsonTableFromChatHistory_ACU();
+    await Promise.resolve();
+    mockGetChatArray.mockReturnValue(chatB);
+    mockSetCurrentJsonTableData.mockClear();
+    releaseMerge({ sheet_0: { name: 'A表', content: [['row_id'], ['1', 'A数据']] } });
+
+    const result = await loadPromise;
+    expect(result.loaded).toBe(false);
+    expect(result.error).toContain('scope');
+    expect(mockSetCurrentJsonTableData).not.toHaveBeenCalled();
+  });
+
   it('有合并数据时返回 source=merged', async () => {
     mockGetChatArray.mockReturnValue([
       { is_user: false, mes: 'AI回复' },

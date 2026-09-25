@@ -886,7 +886,10 @@ function normalizeStoryArcShape_ACU(payload: Record<string, unknown>, rawDelta: 
 }
 
 export function parseAgentMaintainerOutputDraft_ACU(payload: Record<string, unknown>): AgentMaintainerOutputDraft_ACU {
-  const rawDelta = isRecord_ACU(payload.delta) ? payload.delta : {};
+  if (!Object.prototype.hasOwnProperty.call(payload, 'delta') || !isRecord_ACU(payload.delta)) {
+    failProtocol_ACU('维护/总纲契约必须包含 delta 对象；无变化也要返回 delta: {}');
+  }
+  const rawDelta = payload.delta;
   const rejected: AgentContractRejection_ACU[] = [];
   const hooks = parseHookItems_ACU(rawDelta.hooks, rejected);
   const infoGap = parseInfoGapItems_ACU(rawDelta.infoGap, rejected);

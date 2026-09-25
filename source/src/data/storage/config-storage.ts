@@ -20,17 +20,20 @@ import { getConfigStorage_ACU } from './tavern-storage';
  * 纯数据层的 settings 持久化（只做写存储，不做业务编排）
  * @param settingsObj 要持久化的 settings 对象（由调用方传入）
  * @param isolationCode 已规范化的隔离码（由 service 层传入）
+ * @returns 仅在 profile 存储确认写入成功时为 true；配额、序列化或宿主错误为 false
  */
-export function persistSettingsToStorage_ACU(settingsObj?: any, isolationCode?: string) {
+export function persistSettingsToStorage_ACU(settingsObj?: any, isolationCode?: string): boolean {
     try {
-        if (!settingsObj) return;
+        if (!settingsObj) return false;
         const store = getConfigStorage_ACU();
         const code = isolationCode ?? '';
         const payloadObj = sanitizeSettingsForProfileSave_ACU(settingsObj);
         payloadObj.dataIsolationCode = code;
         const payload = JSON.stringify(payloadObj);
-        store.setItem(getProfileSettingsKey_ACU(code), payload);
+        const writeResult = store.setItem(getProfileSettingsKey_ACU(code), payload);
+        return writeResult !== false;
     } catch (error) {
         logError_ACU('Failed to persist settings to storage:', error);
+        return false;
     }
 }

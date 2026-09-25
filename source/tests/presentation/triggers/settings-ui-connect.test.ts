@@ -13,7 +13,11 @@ const m = vi.hoisted(() => ({
   logError: vi.fn(),
   // 「终止」残留的可观测状态：setter 写入，评估入口读取处（live getter）反映同一值。
   wasStoppedByUser: false,
-  setWasStoppedByUser: vi.fn((value: boolean) => { m.wasStoppedByUser = value; }),
+  stopEpoch: 0,
+  setWasStoppedByUser: vi.fn((value: boolean) => {
+    m.wasStoppedByUser = value;
+    if (value === true) m.stopEpoch += 1;
+  }),
 }));
 
 vi.mock('../../../src/presentation/components/plot-editors', () => ({
@@ -30,6 +34,7 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({
   AI_MATERIALIZATION_RETRY_DELAY_MS_ACU: 100,
   get currentChatFileIdentifier_ACU() { return m.chatKey; },
   getCurrentIsolationKey_ACU: () => '',
+  getAutoFillStopEpoch_ACU: () => m.stopEpoch,
   coreApisAreReady_ACU: true,
   settings_ACU: { contentOptimizationSettings: {} },
 }));
@@ -51,6 +56,7 @@ afterEach(() => {
   m.autoFillTimer = null;
   m.chatKey = 'chat-a';
   m.wasStoppedByUser = false;
+  m.stopEpoch = 0;
 });
 
 describe('handleNewMessageDebounced_ACU 防抖隔离', () => {
@@ -134,6 +140,27 @@ describe('handleNewMessageDebounced_ACU 管线异常兜底', () => {
     expect(m.triggerAutomaticUpdateIfNeeded).not.toHaveBeenCalled();
   });
 });
+describe('handleNewMessageDebounced_ACU 停止代次', () => {
+  beforeEach(() => {
+    m.loadAllChatMessages.mockResolvedValue(undefined);
+    m.evaluateNewMessageAction.mockReturnValue({ action: 'update_only', reason: 'ok', lastMessageIndex: 1 });
+  });
+
+  it('停止后已排队的旧回调不得清零停止标记或重新排填表', async () => {
+    vi.useFakeTimers();
+    const { handleNewMessageDebounced_ACU } = await import('../../../src/presentation/triggers/settings-ui-sync/settings-ui-connect');
+
+    const promise = handleNewMessageDebounced_ACU('GENERATION_ENDED');
+    m.setWasStoppedByUser(true); // 用户在 500ms 防抖窗口内停止
+    await vi.advanceTimersByTimeAsync(500);
+    await promise;
+
+    expect(m.setWasStoppedByUser).not.toHaveBeenCalledWith(false);
+    expect(m.evaluateNewMessageAction).not.toHaveBeenCalled();
+    expect(m.triggerAutomaticUpdateIfNeeded).not.toHaveBeenCalled();
+  });
+});
+
 // 自动填表死锁到用户手动重填一次。评估入口必须先复位，再读值传给评估闸。
 // 自动填表「终止」后 wasStoppedByUser 残留 true 会让评估闸永久 user_aborted，
 // 自动填表死锁到用户手动重填一次。评估入口必须先复位，再读值传给评估闸。

@@ -249,6 +249,24 @@ function sanitizeExcludeBodyForPresetFields_ACU(rawExclude: string, effectiveApi
   return normalizeExcludeBodyParamsForSillyTavern_ACU(rawKeys.join(', '));
 }
 
+const MAX_UPSTREAM_ERROR_BODY_LENGTH_ACU = 2048;
+
+/**
+ * 上游错误体可能回显请求头、Cookie 或 API key；它在错误消息里会继续进入日志/UI，
+ * 因而必须先脱敏再限长。无敏感信息的短错误体保持逐字不变。
+ */
+function sanitizeUpstreamErrorBodyForDisplay_ACU(raw: unknown): string {
+  let text = String(raw ?? '')
+    .replace(/((?:proxy-)?authorization\s*:\s*)(?:bearer|basic)\s+[^\s"',}\r\n]+/gi, '$1***')
+    .replace(/\b(bearer|basic)\s+[a-z0-9._~+/=-]+/gi, '$1 ***')
+    .replace(/((?:"|')?(?:proxy-authorization|authorization|(?:x[-_])?api[-_]?key|set-cookie|cookie)(?:"|')?\s*[:=]\s*)(?:"[^"\r\n]*"|'[^'\r\n]*'|[^\s,}\]]+)/gi, '$1***')
+    .replace(/^(\s*(?:set-cookie|cookie)\s*:\s*).+$/gim, '$1***');
+  if (text.length > MAX_UPSTREAM_ERROR_BODY_LENGTH_ACU) {
+    text = `${text.slice(0, MAX_UPSTREAM_ERROR_BODY_LENGTH_ACU - 1)}…`;
+  }
+  return text;
+}
+
 /**
  * fix1 调试快照头脱敏（__ACU_DEBUG_LAST_API_BODY__）：头名保留、值打码为 ***。
  * 覆盖 Authorization: Bearer / Basic 形态、x-api-key / api-key、自动补的 x-opencode-session。
@@ -489,7 +507,7 @@ export async function postChatCompletion_ACU(body: unknown, signal?: AbortSignal
         throw e;
     }
     if (!res.ok) {
-        const errTxt = await res.text();
+        const errTxt = sanitizeUpstreamErrorBodyForDisplay_ACU(await res.text());
         throw new AgentApiHttpError_ACU(res.status, `API请求失败: ${res.status} ${errTxt}`);
     }
     const requestWantsStream = (body as any)?.stream === true;
@@ -733,7 +751,7 @@ export async function callAIWithResolvedPreset_ACU(
       }
       try {
         if (!response.ok) {
-            const errTxt = await response.text();
+            const errTxt = sanitizeUpstreamErrorBodyForDisplay_ACU(await response.text());
             throw new Error(`API 请求失败: ${response.status} ${errTxt}`);
         }
         assertNotAborted_ACU(signal);
@@ -741,9 +759,15 @@ export async function callAIWithResolvedPreset_ACU(
         const content = await handleApiResponse_ACU(response, requestWantsStream, lifecycle?.onUsage);
         return typeof content === 'string' && content.trim() ? content.trim() : null;
       } catch (error: any) {
-        // 响应体读取阶段被超时计时器掐断：报超时而不是底层网络错文；外部取消仍按取消上报。
-        // 同上：挂 TimeoutError 名，走 isRetryable 的按名放行分支。
-        if (error?.name === 'AbortError' && !signal?.aborted && timeoutController.signal.aborted) {
+        // 响应体读取阶段被外部 signal 取消时，与 fetch 阶段使用同一用户取消语义。
+        if (error?.name === 'AbortError' && signal?.aborted) {
+          const cancelled = new Error('请求已取消');
+          cancelled.name = 'AbortError';
+          throw cancelled;
+        }
+        // 响应体读取阶段被超时计时器掐断：报超时而不是底层网络错文。
+        // 挂 TimeoutError 名，走 isRetryable 的按名放行分支。
+        if (error?.name === 'AbortError' && timeoutController.signal.aborted) {
             const timeout = new Error(`内部 AI 请求超时（${INTERNAL_AI_FETCH_TIMEOUT_MS_ACU / 1000}s），已中断。`);
             timeout.name = 'TimeoutError';
             throw timeout;

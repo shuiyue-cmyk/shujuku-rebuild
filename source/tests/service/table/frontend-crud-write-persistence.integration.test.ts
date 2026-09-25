@@ -107,6 +107,7 @@ import { readIsolatedTagData_ACU } from '../../../src/data/repositories/chat-mes
 import { flushRuntimeOnlyPendingChanges_ACU } from '../../../src/service/table/runtime-only-pending-flush';
 import { clearRuntimeOnlyPendingSheets_ACU, readRuntimeOnlyPendingSheets_ACU } from '../../../src/service/table/runtime-only-pending-state';
 import { _set_currentChatFileIdentifier_ACU } from '../../../src/service/runtime/state-manager';
+import { createSqlApi } from '../../../src/presentation/bootstrap/api-groups/sql-api';
 
 const pendingScope = () => ({ chatKey: mocks.chatIdentifier, isolationKey: '' });
 
@@ -187,6 +188,38 @@ describe('前端 CRUD 写入的真实持久化链路', () => {
 
     // 再次写回：运行时与聊天一致，不再产生新的帧写入。
     expect(await flushRuntimeOnlyPendingChanges_ACU('again')).toEqual({ flushed: false, sheetKeys: [] });
+  });
+
+  it('SQL API skipChatSave DROP → flush → provider reload 后表不能复活', async () => {
+    expect((await frontendInsertRow('删除前', '1')).success).toBe(true);
+
+    const api = createSqlApi({} as any);
+    const dropped = await api.executeSqlMutation({
+      sql: 'DROP TABLE tongshizhuangtaibiao;',
+      skipChatSave: true,
+      skipNotify: true,
+    });
+    expect(dropped.errors).toEqual([]);
+    expect(mocks.provider.getCurrentData().sheet_tong_shi).toBeUndefined();
+    expect(readRuntimeOnlyPendingSheets_ACU(pendingScope())).toEqual({
+      all: false,
+      sheetKeys: [],
+      deletedSheetKeys: ['sheet_tong_shi'],
+    });
+
+    const flush = await flushRuntimeOnlyPendingChanges_ACU('after-sql-drop');
+    expect(flush.flushed).toBe(true);
+    const replay = await loadTableStateFromFramesV2Detailed_ACU(mocks.chat, '', {
+      maxMessageIndex: 0,
+      updateRuntimeState: false,
+    });
+    expect(replay?.data?.sheet_tong_shi).toBeUndefined();
+    expect((readIsolatedTagData_ACU(mocks.chat[0], '') as any).storageFrame.logEntries
+      .some((entry: any) => entry.operations?.some((operation: any) => operation.kind === 'data_replace'))).toBe(true);
+
+    const reload = await mocks.provider.loadFromData(replay!.data);
+    expect(reload.error).toBeUndefined();
+    expect(mocks.provider.getCurrentData().sheet_tong_shi).toBeUndefined();
   });
 
   it('skipChatSave 写入后的普通写入会先把之前的运行时行一并落盘（已有 checkpoint 时也成立）', async () => {

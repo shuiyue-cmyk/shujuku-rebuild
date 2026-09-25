@@ -23,6 +23,7 @@ import {
   getChatArray_ACU
 } from '../../../service/chat/chat-service';
 import {
+  currentChatFileIdentifier_ACU,
   currentJsonTableData_ACU,
   getCurrentIsolationKey_ACU,
   settings_ACU,
@@ -146,6 +147,15 @@ type GlobalTemplateSaveResult =
 
 function cloneData<T>(value: T): T {
   return JSON.parse(JSON.stringify(value));
+}
+
+function currentVisualizerContextKey(): string {
+  return `${String(currentChatFileIdentifier_ACU || '')}::${String(getCurrentIsolationKey_ACU() || '')}`;
+}
+
+function visualizerDraftBelongsToCurrentChat(visualizer: ReturnType<typeof useVisualizerStore>): boolean {
+  return !visualizer.draftContextKey
+    || (!visualizer.draftContextInvalid && visualizer.draftContextKey === currentVisualizerContextKey());
 }
 
 function applySpecialIndexSequenceFromDrafts(
@@ -486,6 +496,15 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
   const visualizer = useVisualizerStore();
   const toastStore = useToastStore();
 
+  function rejectChangedSaveContext(): false {
+    toastStore.error('聊天已切换，旧的可视化草稿已失效；请重新载入当前聊天后再保存。', { muteable: false });
+    return false;
+  }
+
+  function saveContextStillMatches(contextKey: string): boolean {
+    return visualizerDraftBelongsToCurrentChat(visualizer) && currentVisualizerContextKey() === contextKey;
+  }
+
   async function runSaving(task: () => Promise<boolean>): Promise<boolean> {
     if (visualizer.isSaving) return false;
     visualizer.setSaving(true);
@@ -503,6 +522,11 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
 
   async function saveDataToCurrentMessage(): Promise<boolean> {
     return runSaving(async () => {
+      if (!visualizerDraftBelongsToCurrentChat(visualizer)) {
+        toastStore.error('聊天已切换，旧的可视化草稿已失效；请重新载入当前聊天后再保存。', { muteable: false });
+        return false;
+      }
+      const saveContextKey = currentVisualizerContextKey();
       const deletedSheetKeys = [...new Set((visualizer.deletedSheetKeys || [])
         .filter(key => typeof key === 'string' && key.startsWith('sheet_')),
       )];
@@ -511,9 +535,22 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
         toastStore.error('行数据增量与整表删除无法原子提交；请分别保存行数据和删表操作。', { muteable: false });
         return false;
       }
+      const templateChanges = classifyVisualizerTemplateChanges_ACU(visualizer.templateBaseData, visualizer.tempData || {});
+      const deletedSheetKeySet = new Set(deletedSheetKeys);
+      const baseOrderWithoutDeleted = (visualizer.templateBaseSheetOrder || []).filter(key => !deletedSheetKeySet.has(key));
+      const currentOrderWithoutDeleted = (visualizer.sheetOrder || []).filter(key => !deletedSheetKeySet.has(key));
+      const hasPendingTemplateChanges = templateChanges.addedSheetKeys.length > 0
+        || templateChanges.schemaChangedSheetKeys.length > 0
+        || templateChanges.metadataChangedSheetKeys.length > 0
+        || templateChanges.mateChanged
+        || JSON.stringify(baseOrderWithoutDeleted) !== JSON.stringify(currentOrderWithoutDeleted);
+      if (hasDataChanges && hasPendingTemplateChanges) {
+        toastStore.error('数据保存不能混入未提交的模板变化；请先保存模板，再保存数据。', { muteable: false });
+        return false;
+      }
       const hasLockChanges = visualizer.lockDirty;
       const result = hasDataChanges
-        ? await applyVisualizerPendingDataOps_ACU(visualizer)
+        ? await applyVisualizerPendingDataOps_ACU(visualizer, saveContextKey)
         : { success: true, changed: false };
       if (!result.success) {
         toastStore.error(result.error || '数据保存失败。', { muteable: false });
@@ -584,6 +621,11 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
 
   async function saveTemplateToCurrentChat(): Promise<boolean> {
     return runSaving(async () => {
+      if (!visualizerDraftBelongsToCurrentChat(visualizer)) {
+        toastStore.error('聊天已切换，旧的可视化草稿已失效；请重新载入当前聊天后再保存。', { muteable: false });
+        return false;
+      }
+      const saveContextKey = currentVisualizerContextKey();
       const commitMateOnlyTemplateChange = async (options: { hasPendingLocks: boolean }): Promise<boolean> => {
         const guideIsolationKey = getCurrentIsolationKey_ACU();
         // 1. fail-closed 前置：模板基线必须存在且包含 sheet，否则无法证明 sheet 投影一致。
@@ -605,7 +647,8 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
           throw new Error('无法为当前模板结构生成聊天指导表。');
         }
         // 3. switchMode 分流。
-        const switchMode = resolveTemplateSwitchMode_ACU(getChatArray_ACU(), guideIsolationKey);
+        if (!saveContextStillMatches(saveContextKey)) return rejectChangedSaveContext();
+      const switchMode = resolveTemplateSwitchMode_ACU(getChatArray_ACU(), guideIsolationKey);
         logDebug_ACU(`[ACU-V2 Visualizer] saveTemplateToCurrentChat mate-only 分流: mode=${switchMode.mode}${switchMode.mode === 'blocked' ? `, reason=${switchMode.reason}` : ''}。`);
         if (switchMode.mode === 'blocked') {
           toastStore.error(`模板保存已阻止：${switchMode.reason}`, { muteable: false });
@@ -630,6 +673,7 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
           // 因此投影校验可正常执行。传 pristineOverride: true 会掩盖 R2 场景
           // （摘要索引锁静默改写数据行导致的 sheet 投影漂移），把「无法证明仅 mate 变化」
           // 的状态伪装成保存成功。计划 :77 与风险 R2 明确禁止此行为。
+          if (!saveContextStillMatches(saveContextKey)) return rejectChangedSaveContext();
           commitResult = await commitCurrentFloorTemplateScopeOnly_ACU({
             isolationKey: guideIsolationKey,
             baselineData: visualizer.templateBaseData as any,
@@ -643,6 +687,7 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
           });
         } else {
           // inherit 模式：直接走 scope-only（不得改走结构提交，它会因空 sheetChanges 拒绝）。
+          if (!saveContextStillMatches(saveContextKey)) return rejectChangedSaveContext();
           commitResult = await commitCurrentFloorTemplateScopeOnly_ACU({
             isolationKey: guideIsolationKey,
             baselineData: visualizer.templateBaseData as any,
@@ -656,6 +701,7 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
           });
         }
         // 5. 失败处理：投影不一致时追加可执行指引。
+        if (!saveContextStillMatches(saveContextKey)) return rejectChangedSaveContext();
         if (!commitResult.saved) {
           const errorText = commitResult.error || '全局配置保存失败。';
           const projectionMismatch = errorText.includes('scope-only 模板提交要求 baseline 与 candidate 的持久化 Sheet 投影完全一致');
@@ -971,6 +1017,7 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
       //   后续追平撞 fail-fast。
       // - inherit：有实质数据，走 commitCurrentFloorTemplateChanges_ACU（原有语义）。
       // - blocked：状态无法判定或已损坏，fail-closed 阻止。
+      if (!saveContextStillMatches(saveContextKey)) return rejectChangedSaveContext();
       const switchMode = resolveTemplateSwitchMode_ACU(getChatArray_ACU(), guideIsolationKey);
       logDebug_ACU(`[ACU-V2 Visualizer] saveTemplateToCurrentChat 分流: mode=${switchMode.mode}${switchMode.mode === 'blocked' ? `, reason=${switchMode.reason}` : ''}, deletedSheetKeys=${deletedSheetKeys.join(',') || 'none'}, changedSheetKeys=${changedSheetKeys.join(',') || 'none'}。`);
       if (switchMode.mode === 'blocked') {
@@ -1003,7 +1050,8 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
         const scopeOnlyBaseline = visualizer.templateBaseData && Object.keys(visualizer.templateBaseData).length > 0
           ? visualizer.templateBaseData
           : orderedData;
-        commitResult = await commitCurrentFloorTemplateScopeOnly_ACU({
+        if (!saveContextStillMatches(saveContextKey)) return rejectChangedSaveContext();
+          commitResult = await commitCurrentFloorTemplateScopeOnly_ACU({
           isolationKey: guideIsolationKey,
           baselineData: scopeOnlyBaseline as any,
           candidateData: orderedData as any,
@@ -1014,6 +1062,7 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
           reason: 'visualizer_v2_template_scope_only',
           pristineOverride: true,
         });
+        if (!saveContextStillMatches(saveContextKey)) return rejectChangedSaveContext();
         if (!commitResult.saved) {
           toastStore.error(commitResult.error || '模板/结构保存失败。', { muteable: false });
           return false;
@@ -1047,6 +1096,7 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
           reason: 'visualizer_v2_schema_change',
           baseRevision,
         });
+        if (!saveContextStillMatches(saveContextKey)) return rejectChangedSaveContext();
         if (!commitResult.saved) {
           toastStore.error(commitResult.error || '模板/结构保存失败。', { muteable: false });
           return false;
@@ -1140,6 +1190,10 @@ export function useVisualizerSave(interactions: VisualizerSaveInteractions = {})
 
   async function saveTemplateToGlobal(): Promise<boolean> {
     return runSaving(async () => {
+      if (!visualizerDraftBelongsToCurrentChat(visualizer)) {
+        toastStore.error('聊天已切换，旧的可视化草稿已失效；请重新载入当前聊天后再保存。', { muteable: false });
+        return false;
+      }
       if (hasVisualizerPendingDataOps_ACU(visualizer)) {
         toastStore.error('存在未保存的数据增量；本次是模板保存，已阻止混合提交。', { muteable: false });
         return false;

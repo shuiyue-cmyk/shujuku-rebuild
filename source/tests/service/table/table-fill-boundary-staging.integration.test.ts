@@ -93,6 +93,11 @@ vi.mock('../../../src/service/table/storage-frame-v2-replay', async importOrigin
 import { buildCanonicalFullCheckpoint_ACU } from '../../../src/service/table/canonical-checkpoint-builder';
 import { commitStagedSheetsAtFullBoundaryAtomic_ACU } from '../../../src/service/table/table-fill-boundary-staging';
 import { loadTableStateFromFramesV2Detailed_ACU } from '../../../src/service/table/storage-frame-v2-replay';
+import {
+  _resetTableWriteTransactionLocksForTest_ACU,
+  captureTableRuntimeRevisionForWriteSet_ACU,
+  runTableWriteTransaction_ACU,
+} from '../../../src/service/table/table-write-transaction';
 
 function sheet(name: string, rows: any[][] = [['row_id', '值']]) {
   return {
@@ -177,6 +182,7 @@ function buildV2ChatWithFormalFull(): any[] {
 
 describe('commitStagedSheetsAtFullBoundaryAtomic_ACU 边界汇合（计划 5.4）', () => {
   beforeEach(() => {
+    _resetTableWriteTransactionLocksForTest_ACU();
     mocks.chat.length = 0;
     mocks.currentJsonTableData = null;
     mocks.saveChat.mockClear();
@@ -230,6 +236,47 @@ describe('commitStagedSheetsAtFullBoundaryAtomic_ACU 边界汇合（计划 5.4�
     expect(replay).toBeTruthy();
     expect(replay?.baseKind).toBe('full_checkpoint');
     expect(JSON.stringify(replay?.data?.sheet_a?.content)).toEqual(JSON.stringify(stagedSnapshot.sheet_a.content));
+  });
+
+  it('boundary commit 推进 runtime revision，旧 revision 事务必须拒绝', async () => {
+    mocks.chat.push(...buildV2ChatWithFormalFull());
+    const writeSet = [{ kind: 'sheet' as const, sheetKey: 'sheet_a' }];
+    const oldRevision = captureTableRuntimeRevisionForWriteSet_ACU(writeSet, {
+      chatKey: mocks.chatIdentifier,
+      isolationKey: mocks.isolationKey,
+    });
+
+    const result = await commitStagedSheetsAtFullBoundaryAtomic_ACU('run-revision-boundary', {
+      originalFullIndex: 6,
+      stagedSnapshot: { sheet_a: sheet('表A', [['row_id', '值'], ['1', 'a1'], ['2', 'a2'], ['3', 'a3']]) },
+      targetSheetKeys: ['sheet_a'],
+      chatKey: mocks.chatIdentifier,
+      isolationKey: mocks.isolationKey,
+    });
+    expect(result.ok).toBe(true);
+    const newRevision = captureTableRuntimeRevisionForWriteSet_ACU(writeSet, {
+      chatKey: mocks.chatIdentifier,
+      isolationKey: mocks.isolationKey,
+    });
+    expect(newRevision).not.toBe(oldRevision);
+
+    let conflict: unknown = null;
+    try {
+      await runTableWriteTransaction_ACU({
+        source: 'manual_fill',
+        reason: 'stale-after-boundary',
+        chatKey: mocks.chatIdentifier,
+        isolationKey: mocks.isolationKey,
+        writeSet,
+        baseRevision: oldRevision,
+        workingDataMode: 'none',
+      }, async ctx => {
+        ctx.assertFresh('stale-after-boundary');
+      });
+    } catch (error) {
+      conflict = error;
+    }
+    expect(String(conflict)).toContain('runtime revision conflict');
   });
 
   it('多个 full checkpoint 时 fail-closed，不写任何 sheet_rebase', async () => {

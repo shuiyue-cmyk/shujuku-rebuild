@@ -9,7 +9,7 @@ import type { SqlQueryResult } from '../../shared/table-storage-provider';
 import { logDebug_ACU, logError_ACU } from '../../shared/utils';
 import { ensureStorageProviderReady_ACU } from '../../service/table/table-storage-strategy';
 import { isSqliteMode } from '../../service/table/storage-mode';
-import { currentJsonTableData_ACU, getCurrentIsolationKey_ACU } from '../../service/runtime/state-manager';
+import { currentChatFileIdentifier_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU } from '../../service/runtime/state-manager';
 import { runSqliteRuntimeMutationCommit_ACU } from '../../service/table/table-update-commit';
 import { isReadOnlySqlStatement_ACU } from '../../service/runtime/template-vars/read-only-sql-validation';
 import { resolveCurrentRuntimeReadSql_ACU } from '../../service/runtime/read-query-resolver';
@@ -28,6 +28,8 @@ export interface SqlHistoryItem {
   sql: string;
   timestamp: number;
   success: boolean;
+  chatIdentity: string;
+  isolationKey: string;
 }
 
 export interface SqlResultState {
@@ -43,6 +45,14 @@ export interface SqlResultState {
 export const SQL_CONSOLE_MAX_HISTORY = 50;
 
 const sqlHistory = ref<SqlHistoryItem[]>([]);
+
+type SqlConsoleContext = { chatIdentity: string; isolationKey: string; key: string };
+
+function currentSqlConsoleContext(): SqlConsoleContext {
+  const chatIdentity = String(currentChatFileIdentifier_ACU || '');
+  const isolationKey = String(getCurrentIsolationKey_ACU() || '');
+  return { chatIdentity, isolationKey, key: `${chatIdentity}::${isolationKey}` };
+}
 
 export function isSqlConsoleQuery(sql: string): boolean {
   return isReadOnlySqlStatement_ACU(sql);
@@ -60,9 +70,9 @@ function emptyResult(): SqlResultState {
   };
 }
 
-function addHistory(sql: string, success: boolean): void {
+function addHistory(sql: string, success: boolean, context = currentSqlConsoleContext()): void {
   sqlHistory.value = [
-    { sql, timestamp: Date.now(), success },
+    { sql, timestamp: Date.now(), success, chatIdentity: context.chatIdentity, isolationKey: context.isolationKey },
     ...sqlHistory.value,
   ].slice(0, SQL_CONSOLE_MAX_HISTORY);
 }
@@ -78,7 +88,10 @@ export function useSqlConsole() {
   const isSqliteAvailable = ref(false);
   const result = shallowRef<SqlResultState>(emptyResult());
 
-  const history = computed(() => sqlHistory.value);
+  const history = computed(() => {
+    const context = currentSqlConsoleContext();
+    return sqlHistory.value.filter(item => item.chatIdentity === context.chatIdentity && item.isolationKey === context.isolationKey);
+  });
   const hasSqlText = computed(() => sqlText.value.trim().length > 0);
   const statusLabel = computed(() => {
     if (busyAction.value === 'execute') return '执行中...';
@@ -99,6 +112,10 @@ export function useSqlConsole() {
    */
   function clearResult(): void {
     result.value = emptyResult();
+  }
+
+  function clearHistory(): void {
+    sqlHistory.value = [];
   }
 
   function refresh(): void {
@@ -124,6 +141,11 @@ export function useSqlConsole() {
   }
 
   function useHistoryItem(item: SqlHistoryItem): void {
+    const context = currentSqlConsoleContext();
+    if (item.chatIdentity !== context.chatIdentity || item.isolationKey !== context.isolationKey) {
+      toast.warning('该 SQL 历史属于其他聊天，已拒绝填入当前上下文。');
+      return;
+    }
     sqlText.value = item.sql;
     toast.info('已把历史 SQL 填入编辑器。');
   }
@@ -142,11 +164,17 @@ export function useSqlConsole() {
       return;
     }
 
+    const executionContext = currentSqlConsoleContext();
     busyAction.value = 'execute';
     const startTime = performance.now();
 
     try {
       const provider = await ensureStorageProviderReady_ACU();
+      if (currentSqlConsoleContext().key !== executionContext.key) {
+        result.value = { ...emptyResult(), kind: 'error', error: '聊天已切换，旧 SQL 已拒绝执行。' };
+        toast.error('聊天已切换，旧 SQL 已拒绝执行。');
+        return;
+      }
       if (isSqlConsoleQuery(sql)) {
         const queryResult = provider.executeQuery(resolveCurrentRuntimeReadSql_ACU(sql).sql);
         const elapsedMs = (performance.now() - startTime).toFixed(1);
@@ -158,7 +186,7 @@ export function useSqlConsole() {
           rowCount: queryResult.rowCount,
           elapsedMs,
         };
-        addHistory(sql, true);
+        addHistory(sql, true, executionContext);
         toast.success(queryResult.rowCount === 0 ? '查询成功，没有返回行。' : `查询成功，返回 ${queryResult.rowCount} 行。`);
         logDebug_ACU(`[ACU-V2 SQL Console] query ok: ${queryResult.rowCount} rows, ${elapsedMs}ms`);
         return;
@@ -167,7 +195,7 @@ export function useSqlConsole() {
       const commitResult = await runSqliteRuntimeMutationCommit_ACU<null>({
         source: 'raw_sql_mutation',
         reason: 'sql_console_v2_mutation',
-        isolationKey: getCurrentIsolationKey_ACU(),
+        isolationKey: executionContext.isolationKey,
         writeSet: [{ kind: 'all' as const }],
         revisionWriteSet: [{ kind: 'all' as const }],
         initialData: currentJsonTableData_ACU as any,
@@ -179,12 +207,17 @@ export function useSqlConsole() {
         sql,
         mapValue: () => null,
       });
+      if (currentSqlConsoleContext().key !== executionContext.key) {
+        result.value = { ...emptyResult(), kind: 'error', error: '聊天已切换，旧 SQL 已拒绝执行。' };
+        toast.error('聊天已切换，旧 SQL 已拒绝执行。');
+        return;
+      }
       const mutationResult = commitResult.mutationResult || { changes: 0, errors: commitResult.error ? [commitResult.error] : [] };
       const elapsedMs = (performance.now() - startTime).toFixed(1);
       if (!commitResult.success || mutationResult.errors.length > 0) {
         const error = mutationResult.errors.join('\n') || commitResult.error || '执行失败';
         result.value = { ...emptyResult(), kind: 'error', elapsedMs, error };
-        addHistory(sql, false);
+        addHistory(sql, false, executionContext);
         toast.error('执行失败，请检查结果区中的错误信息。');
         return;
       }
@@ -195,14 +228,14 @@ export function useSqlConsole() {
         changes: mutationResult.changes,
         elapsedMs,
       };
-      addHistory(sql, true);
+      addHistory(sql, true, executionContext);
       toast.success(`执行成功，${mutationResult.changes} 行受影响。`);
       logDebug_ACU(`[ACU-V2 SQL Console] mutation ok: ${mutationResult.changes} changes, ${elapsedMs}ms`);
     } catch (e: any) {
       const elapsedMs = (performance.now() - startTime).toFixed(1);
       const error = e?.message || String(e);
       result.value = { ...emptyResult(), kind: 'error', elapsedMs, error };
-      addHistory(sql, false);
+      addHistory(sql, false, executionContext);
       toast.error('执行失败，请检查结果区中的错误信息。');
       logError_ACU(`[ACU-V2 SQL Console] execute failed: ${error}`);
     } finally {
@@ -221,6 +254,7 @@ export function useSqlConsole() {
     statusKind,
     refresh,
     clearResult,
+    clearHistory,
     setSql,
     clearSql,
     showTables,

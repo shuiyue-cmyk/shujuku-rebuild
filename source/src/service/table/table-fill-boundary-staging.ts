@@ -688,10 +688,11 @@ export async function commitStagedSheetsAtFullBoundaryAtomic_ACU(
   return runTableWriteTransaction_ACU({
     source: 'manual_fill',
     reason: 'commitStagedSheetsAtFullBoundaryAtomic',
+    chatKey,
     isolationKey,
     writeSet: targetSheetKeys.map(sheetKey => ({ kind: 'sheet' as const, sheetKey })),
     maintenanceMode: 'exclusive',
-  }, async () => {
+  }, async (ctx) => {
     if (String(currentChatFileIdentifier_ACU || '') !== String(chatKey || '')
       || String(getCurrentIsolationKey_ACU() || '') !== String(isolationKey || '')) {
       return failBoundary_ACU('staging_scope_changed', 'boundary commit 复检失败：chatKey 或 isolationKey 已切换。');
@@ -904,29 +905,44 @@ export async function commitStagedSheetsAtFullBoundaryAtomic_ACU(
         `boundary commit 拒绝执行：候选校验期间聊天或隔离标识已切换（staging=${String(chatKey || '') || '无标识'}, current=${String(currentChatFileIdentifier_ACU || '') || '无标识'}），已丢弃本次 staging 汇合。`,
       );
     }
-    const before = JSON.parse(JSON.stringify(chat));
     try {
-      chat.length = 0;
-      chat.push(...candidateChat);
-      writeMessageIdentity_ACU(candidateOriginalMessage, {
-        enabled: settings_ACU.dataIsolationEnabled,
-        code: settings_ACU.dataIsolationCode,
-      });
-      await saveChatToHostStrict_ACU();
+      ctx.assertFresh('boundary commit before chat mutation');
     } catch (error: any) {
-      chat.length = 0;
-      chat.push(...before);
+      return failBoundary_ACU('boundary_commit_failed', `boundary commit runtime revision 已过期：${error?.message || String(error)}`);
+    }
+
+    let commitResult: TableFillBoundaryCommitSuccess_ACU;
+    try {
+      commitResult = await ctx.runCommit(async () => {
+        ctx.assertFresh('boundary commit after commit lock');
+        const before = JSON.parse(JSON.stringify(chat));
+        try {
+          chat.length = 0;
+          chat.push(...candidateChat);
+          writeMessageIdentity_ACU(candidateOriginalMessage, {
+            enabled: settings_ACU.dataIsolationEnabled,
+            code: settings_ACU.dataIsolationCode,
+          });
+          await saveChatToHostStrict_ACU();
+          return {
+            ok: true as const,
+            boundaryCommitSummary: {
+              selectedSheetKeys: [...targetSheetKeys],
+              originalFullCheckpointIndex: options.originalFullIndex,
+            },
+            verifiedHeadSnapshot: candidateHeadData ? JSON.parse(JSON.stringify(candidateHeadData)) : {},
+          };
+        } catch (error: any) {
+          chat.length = 0;
+          chat.push(...before);
+          throw error;
+        }
+      }, targetSheetKeys.map(sheetKey => ({ kind: 'sheet' as const, sheetKey })));
+    } catch (error: any) {
       return failBoundary_ACU('boundary_strict_save_failed', `boundary commit 严格保存失败：${error?.message || String(error)}`);
     }
     logDebug_ACU(`[TableFillBoundaryStaging] 已原子汇合：runId=${runId}, originalFull=${options.originalFullIndex}, sheets=${targetSheetKeys.join('、')}。`);
-    return {
-      ok: true,
-      boundaryCommitSummary: {
-        selectedSheetKeys: [...targetSheetKeys],
-        originalFullCheckpointIndex: options.originalFullIndex,
-      },
-      verifiedHeadSnapshot: candidateHeadData ? JSON.parse(JSON.stringify(candidateHeadData)) : {},
-    };
+    return commitResult;
   });
 }
 

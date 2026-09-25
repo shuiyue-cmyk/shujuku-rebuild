@@ -5,7 +5,7 @@ import { validateMigrationProvenanceV1_ACU } from '../../shared/canonical-checkp
 import type { MixedStorageDecisionBackupV1_ACU } from './storage-frame-v2-types';
 import type { TableDataObject_ACU } from '../../shared/models/table-data';
 import { currentChatFileIdentifier_ACU, getCurrentIsolationKey_ACU } from '../runtime/state-manager';
-import { isV2TagData_ACU } from './storage-strategy-resolver';
+import { hasV2TableHistoryEvidence_ACU, isV2TagData_ACU } from './storage-strategy-resolver';
 import { buildCanonicalFullCheckpoint_ACU } from './canonical-checkpoint-builder';
 import type { MixedStorageDecision_ACU } from './mixed-storage-decision';
 import { collectMixedStorageEvidence_ACU } from './mixed-storage-evidence';
@@ -31,7 +31,7 @@ function removeLegacy_ACU(chat: any[], isolationKey: string, isolationConfig: Re
   for (const message of chat) {
     if (!message) continue;
     const isolated = cloneIsolatedData_ACU(message) as Record<string, any>;
-    if (isolated && !isV2TagData_ACU(isolated[isolationKey])) {
+    if (isolated && !hasV2TableHistoryEvidence_ACU(isolated[isolationKey])) {
       delete isolated[isolationKey];
       if (Object.keys(isolated).length === 0) delete message.TavernDB_ACU_IsolatedData;
       else message.TavernDB_ACU_IsolatedData = isolated;
@@ -133,7 +133,8 @@ function sameEvidence_ACU(left: MixedStorageDecision_ACU['evidence'], right: Mix
     && left.legacy.sourceFingerprint === right.legacy.sourceFingerprint
     && left.v2.replay.fingerprint === right.v2.replay.fingerprint
     && stableJson_ACU(left.v2.anchor) === stableJson_ACU(right.v2.anchor)
-    && stableJson_ACU(left.v2.frames) === stableJson_ACU(right.v2.frames);
+    && stableJson_ACU(left.v2.frames) === stableJson_ACU(right.v2.frames)
+    && stableJson_ACU(left.v2.staticEvidence) === stableJson_ACU(right.v2.staticEvidence);
 }
 function v2Projection_ACU(chat: any[], isolationKey: string): unknown[] {
   return chat.map((message, messageIndex) => {

@@ -43,4 +43,17 @@ describe('stable-row-id-allocator', () => {
 
     expect(() => allocateStableRowId_ACU(reserved)).toThrow('正安全整数上限');
   });
+
+  it('按 SQLite 整数值预留前导零 ID，不重写既有身份且分配更高 ID', () => {
+    const reserved = createStableRowIdReservation_ACU([['01'], ['0002']]);
+
+    expect(allocateStableRowId_ACU(reserved)).toBe('3');
+    expect([...reserved]).toEqual(['01', '0002', '3']);
+  });
+
+  it('超出安全整数上限的既有规范数字 ID 明确失败，不静默复用低位 ID', () => {
+    const reserved = createStableRowIdReservation_ACU([['9007199254740993']]);
+
+    expect(() => allocateStableRowId_ACU(reserved)).toThrow('正安全整数上限');
+  });
 });

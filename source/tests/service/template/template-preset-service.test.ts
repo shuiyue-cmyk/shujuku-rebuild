@@ -150,6 +150,7 @@ import {
   listTemplatePresetNames_ACU,
   getTemplatePreset_ACU,
   upsertTemplatePreset_ACU,
+  renameTemplatePreset_ACU,
   deleteTemplatePreset_ACU,
   getTemplatePresetDisplayName_ACU,
   ensureUniqueTemplatePresetName_ACU,
@@ -256,6 +257,19 @@ describe('upsertTemplatePreset_ACU', () => {
   });
   it('空名称返回 false', () => {
     expect(upsertTemplatePreset_ACU('', '{}')).toBe(false);
+  });
+});
+
+describe('renameTemplatePreset_ACU', () => {
+  it('目标名称已存在时拒绝重命名并保留两个预设', () => {
+    upsertTemplatePreset_ACU('源', '{"source":true}');
+    upsertTemplatePreset_ACU('目标', '{"target":true}');
+
+    const result = renameTemplatePreset_ACU('源', '目标');
+
+    expect(result).toMatchObject({ ok: false, code: 'target_exists' });
+    expect(getTemplatePreset_ACU('源')?.templateStr).toBe('{"source":true}');
+    expect(getTemplatePreset_ACU('目标')?.templateStr).toBe('{"target":true}');
   });
 });
 
@@ -1110,6 +1124,86 @@ describe('applyChatTemplateSnapshotWithReconciliation_ACU', () => {
     expect(reconcileChatTemplate_ACU).not.toHaveBeenCalled();
     expect(commitCurrentFloorTemplateChanges_ACU).not.toHaveBeenCalled();
     expect(commitCurrentFloorTemplateScopeOnly_ACU).not.toHaveBeenCalled();
+  });
+
+  it('template-wins 按业务键把模板值写入 runtime row_id，而不是静默跳过', async () => {
+    const runtime = {
+      mate: { type: 'chatSheets', version: 1 },
+      sheet_live: {
+        uid: 'sheet_live', name: '背包', orderNo: 0,
+        content: [['row_id', 'code', 'name'], ['9', 'C1', '旧值']],
+        sourceData: { ddl: 'CREATE TABLE sheet_live (row_id INTEGER PRIMARY KEY, code TEXT UNIQUE, name TEXT);' },
+        updateConfig: {}, exportConfig: {},
+      },
+    };
+    const template = {
+      ...runtime,
+      sheet_live: {
+        ...runtime.sheet_live,
+        content: [['row_id', 'code', 'name'], ['1', 'C1', '新值']],
+      },
+    };
+    vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockReturnValue({ templateObj: template, templateStr: JSON.stringify(template) } as any);
+    vi.mocked(loadTableStateFromFramesV2_ACU).mockResolvedValue(runtime as any);
+    vi.mocked(reconcileChatTemplate_ACU).mockImplementation(async () => ({
+      candidateData: JSON.parse(JSON.stringify(runtime)),
+      sheetChanges: [],
+      deletedSheetKeys: [],
+      blockers: [],
+      audit: [],
+    }) as any);
+    vi.mocked(commitCurrentFloorTemplateScopeOnly_ACU).mockResolvedValue({ saved: true, mode: 'scope_only' } as any);
+
+    const result = await applyChatTemplateSnapshotWithReconciliation_ACU(template, {
+      dataMode: 'merge',
+      conflictPolicy: 'template-wins',
+    });
+
+    expect(result).toMatchObject({ saved: true });
+    const submitted = vi.mocked(commitCurrentFloorTemplateScopeOnly_ACU).mock.calls.at(-1)?.[0] as any;
+    expect(submitted.candidateData.sheet_live.content[1]).toEqual(['9', 'C1', '新值']);
+  });
+
+  it('template-wins 在模板 key 与 runtime key 不同时仍按业务键覆盖 runtime row_id', async () => {
+    const runtime = {
+      mate: { type: 'chatSheets', version: 1 },
+      sheet_runtime: {
+        uid: 'sheet_runtime', name: '背包', orderNo: 0,
+        content: [['row_id', 'code', 'name'], ['9', 'C1', '旧值']],
+        sourceData: { ddl: 'CREATE TABLE sheet_runtime (row_id INTEGER PRIMARY KEY, code TEXT UNIQUE, name TEXT);' },
+        updateConfig: {}, exportConfig: {},
+      },
+    };
+    const template = {
+      ...runtime,
+      sheet_template: {
+        ...runtime.sheet_runtime,
+        uid: 'sheet_template',
+        content: [['row_id', 'code', 'name'], ['1', 'C1', '新值']],
+      },
+    };
+    delete (template as any).sheet_runtime;
+    vi.mocked(sanitizeTemplateSnapshotForChat_ACU).mockReturnValue({ templateObj: template, templateStr: JSON.stringify(template) } as any);
+    vi.mocked(loadTableStateFromFramesV2_ACU).mockResolvedValue(runtime as any);
+    vi.mocked(reconcileChatTemplate_ACU).mockImplementation(async () => ({
+      candidateData: JSON.parse(JSON.stringify(runtime)),
+      sheetChanges: [],
+      deletedSheetKeys: [],
+      blockers: [],
+      audit: [{
+        sheetKey: 'sheet_runtime', templateSheetKey: 'sheet_template', resolvedSheetKey: 'sheet_runtime', match: 'matched',
+      }],
+    }) as any);
+    vi.mocked(commitCurrentFloorTemplateScopeOnly_ACU).mockResolvedValue({ saved: true, mode: 'scope_only' } as any);
+
+    const result = await applyChatTemplateSnapshotWithReconciliation_ACU(template, {
+      dataMode: 'merge',
+      conflictPolicy: 'template-wins',
+    });
+
+    expect(result).toMatchObject({ saved: true });
+    const submitted = vi.mocked(commitCurrentFloorTemplateScopeOnly_ACU).mock.calls.at(-1)?.[0] as any;
+    expect(submitted.candidateData.sheet_runtime.content[1]).toEqual(['9', 'C1', '新值']);
   });
 
   it('已有持久化表格数据时保留模板既有 key，继续走严格协调', async () => {

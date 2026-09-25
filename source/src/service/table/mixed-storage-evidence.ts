@@ -83,6 +83,7 @@ export interface MixedStorageEvidence_ACU {
       requiresCheckpointConvergence?: boolean;
       compatibilityRepairs?: TableReplayCompatibilityRepairV2_ACU[];
     };
+    staticEvidence: V2StaticSheetEvidence_ACU;
     provenance: {
       present: boolean;
       value?: TableMigrationProvenanceV1_ACU;
@@ -376,6 +377,7 @@ export async function collectMixedStorageEvidence_ACU(
         && JSON.stringify(rawProvenance.legacySourceAiFloors) === JSON.stringify(sourceAiFloors),
       legacyFingerprintMatchesCandidate: candidateFingerprint === null ? null : rawProvenance.legacyDataFingerprint === candidateFingerprint,
     };
+  const staticEvidence = collectV2SheetKeyEvidenceStatically_ACU(chat, options.isolationKey);
   const fingerprintsComparable = candidateFingerprint !== null && replay.fingerprint !== null;
   return {
     isolationKey: options.isolationKey,
@@ -390,6 +392,7 @@ export async function collectMixedStorageEvidence_ACU(
       },
       sheetCoverage,
       replay,
+      staticEvidence,
       provenance,
     },
     comparison: { fingerprintsComparable, fingerprintsEqual: fingerprintsComparable ? candidateFingerprint === replay.fingerprint : null },

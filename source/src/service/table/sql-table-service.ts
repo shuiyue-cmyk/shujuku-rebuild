@@ -38,6 +38,7 @@ import {
 } from '../runtime/template-vars/name-mapper';
 import { parseDDLTableName, generateDDL, generateInserts, resolveEffectiveDDL } from '../../data/sqlite/schema-mapper';
 import { normalizeSqlStructure, normalizeStatementValues } from '../../data/sqlite/sql-normalizer';
+import { stripHtmlCommentMarkersOutsideSqlLiterals_ACU } from './sql-protocol-markers';
 import { ensureStableRowIdsForSheetContent_ACU, getEffectiveSeedRowsForSheet_ACU, getCurrentChatTemplateScopeState_ACU, sanitizeTemplateSnapshotForChat_ACU, shouldUseInitialSeedRows_ACU } from '../template/chat-scope';
 import { isSqlActiveTemplateSheet_ACU, projectSqlActiveTemplateData_ACU } from '../../shared/sql-active-template';
 import { getTemplatePreset_ACU } from '../template/template-preset-service';
@@ -126,7 +127,7 @@ function resolveSnapshotMate_ACU(tableData: TableDataObject_ACU): Mate_ACU {
 }
 
 export function normalizeSqlStatementsForRuntimeLog_ACU(sqlStatements: string): string[] {
-  const cleaned = String(sqlStatements || '').replace(/<!--|-->/g, '').trim();
+  const cleaned = stripHtmlCommentMarkersOutsideSqlLiterals_ACU(String(sqlStatements || '')).trim();
   if (!cleaned) return [];
   return splitSqlStatements(cleaned)
     .map(stmt => normalizeStatementValues(normalizeSqlStructure(stmt)))
@@ -956,6 +957,24 @@ function repairSqlInsertValueCountMismatch_ACU(
   throw new Error(`${context} 的值数量与列数量不一致。`);
 }
 
+function isInsertSelectStatement_ACU(statement: string): boolean {
+  try {
+    const tokens = tokenizeSqlMutationIdentifiers_ACU(statement);
+    const actionIndex = getSqlMutationActionIndex_ACU(tokens);
+    const action = tokens[actionIndex];
+    if (!isSqlMutationKeyword_ACU(action, 'INSERT')) return false;
+    if (isSqlMutationKeyword_ACU(tokens[actionIndex + 1], 'OR')
+      && isSqlMutationKeyword_ACU(tokens[actionIndex + 2], 'REPLACE')) return false;
+    const target = getSqlMutationTargetToken_ACU(statement, tokens);
+    const suffix = statement.slice(target.end).trim();
+    if (!suffix.startsWith('(')) return false;
+    const columns = extractSqlInsertColumns_ACU(statement, tokens, target, 'AI INSERT');
+    return /^SELECT\b/i.test(statement.slice(columns.closingParenEnd).trim());
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Makes ordinary AI-authored INSERT statements self-describing before execution and V2 logging.
  * SQLite REPLACE / INSERT OR REPLACE forms retain their native semantics and are persisted unchanged.
@@ -976,6 +995,10 @@ export function materializeSystemRowIdsForSqlInserts_ACU(
   options?: { selectQueryRunner?: SqlMaterializeSelectQueryRunner_ACU },
 ): string[] {
   const reservations = buildRowIdReservationsByRuntimeTable_ACU(tableData, additionalReservations);
+  const effectiveStatements = statements.filter(statement => statement.trim());
+  if (effectiveStatements.length > 1 && effectiveStatements.some(isInsertSelectStatement_ACU)) {
+    throw new Error('混合批次包含 INSERT SELECT 与其他 mutation：为避免按批前快照物化，已拒绝执行。');
+  }
   return statements.map((statement, statementIndex) => {
     const context = `AI INSERT 第 ${statementIndex + 1} 条`;
     const tokens = tokenizeSqlMutationIdentifiers_ACU(statement);
@@ -2574,7 +2597,7 @@ export async function applySqlEditsToTableDataSnapshot_ACU(
   const engine = new SqliteEngine();
   const syncBridge = new SyncBridge(engine);
   try {
-    const cleaned = sqlStatements.replace(/<!--|-->/g, '').trim();
+    const cleaned = stripHtmlCommentMarkersOutsideSqlLiterals_ACU(sqlStatements).trim();
     if (!cleaned) {
       return { success: true, modifiedKeys: [], appliedEdits: 0, workingData: JSON.parse(JSON.stringify(tableData || {})) };
     }

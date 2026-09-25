@@ -3,7 +3,7 @@ import { hashUserInput_ACU, logDebug_ACU, parseTableTemplateJson_ACU } from '../
 import { peekChatScopedConfigContainer_ACU, peekChatSheetGuideContainer_ACU, setChatScopedConfigContainer_ACU, setChatSheetGuideContainer_ACU } from '../../data/storage/chat-history';
 import { saveChatToHostStrict_ACU } from '../../data/gateways/chat-gateway';
 import { getChatArray_ACU, clearAllAiTableDataForCheckpointRestore_ACU, cleanupCheckpointVectorIndexManifestsAfterCommit_ACU } from '../chat/chat-service';
-import { getCurrentIsolationKey_ACU } from '../runtime/state-manager';
+import { getCurrentIsolationKey_ACU, settings_ACU } from '../runtime/state-manager';
 import { applyTemplateScopeForCurrentChat_ACU } from '../settings/settings-service';
 import { buildChatTemplateScopeStateFromCurrent_ACU, getChatSheetGuideDataForIsolationKey_ACU, getCurrentChatTemplateScopeState_ACU, normalizeGuideData_ACU, sanitizeChatSheetsObject_ACU, sanitizeTemplateSnapshotForChat_ACU, setChatSheetGuideDataForIsolationKey_ACU, setCurrentChatTemplateScopeState_ACU } from '../template/chat-scope';
 import { deleteAllGeneratedEntries_ACU, refreshMergedDataAndNotify_ACU } from '../worldbook/pipeline';
@@ -381,7 +381,10 @@ export async function restoreTableCheckpointToLatestAi_ACU(
   try {
     const result = await runTableWriteTransaction_ACU({ source: 'import', reason: 'restoreTableCheckpoint', isolationKey, writeSet: [{ kind: 'all' }], maintenanceMode: 'exclusive' }, async (transactionContext) => {
       return transactionContext.runCommit(async () => {
-        const cleared = await clearAllAiTableDataForCheckpointRestore_ACU();
+        const cleared = await clearAllAiTableDataForCheckpointRestore_ACU(isolationKey, {
+          enabled: settings_ACU.dataIsolationEnabled,
+          code: settings_ACU.dataIsolationCode,
+        });
         vectorManifests = cleared.vectorManifestsToDeleteAfterCommit;
         const replaced = await provider.replaceAllData(cloneJson_ACU(checked.tableSnapshot));
         if (!replaced?.success) throw new Error(replaced?.error || 'Checkpoint 表格运行时恢复失败。');

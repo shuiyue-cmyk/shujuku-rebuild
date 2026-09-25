@@ -1,6 +1,6 @@
 import { getChatArray_ACU, saveChatToHostStrict_ACU } from '../../data/gateways/chat-gateway';
 import { getActiveChatStorageIdentity_ACU, peekChatScopedConfigContainer_ACU, peekChatSheetGuideContainer_ACU, setChatScopedConfigContainer_ACU, setChatSheetGuideContainer_ACU } from '../../data/storage/chat-history';
-import { getCurrentIsolationKey_ACU, settings_ACU, _set_currentJsonTableData_ACU } from '../runtime/state-manager';
+import { currentChatFileIdentifier_ACU, getCurrentIsolationKey_ACU, settings_ACU, _set_currentJsonTableData_ACU } from '../runtime/state-manager';
 import { allocateStableSheetKeys_ACU, assertNoPhysicalTableNameCollision_ACU } from '../../shared/sheet-identity';
 import { normalizeCanonicalTableRows_ACU } from '../../shared/canonical-row-normalizer';
 import { buildSheetTableAliasMap_ACU } from '../../shared/sql-read-resolver';
@@ -83,6 +83,20 @@ export async function resetCurrentChatTableStateFromTemplate_ACU(
   templateData: Record<string, any>,
   options: { presetName?: string; source?: string; reason?: string; resetExistingTableData?: boolean } = {},
 ): Promise<ResetResult> {
+  const initialChat = getChatArray_ACU();
+  const initialChatKey = String(currentChatFileIdentifier_ACU || '');
+  const initialIsolationKey = String(getCurrentIsolationKey_ACU() || '');
+  const scopeStillCurrent = () => {
+    const currentChat = getChatArray_ACU();
+    return currentChat === initialChat
+      && String(currentChatFileIdentifier_ACU || '') === initialChatKey
+      && String(getCurrentIsolationKey_ACU() || '') === initialIsolationKey;
+  };
+  const scopeChangedResult = (): ResetResult => ({
+    saved: false,
+    error: '目标聊天或隔离作用域已切换，已取消初始化提交。',
+  });
+
   let prepared: Record<string, any>;
   let guideData: Record<string, any>;
   let normalizationAudit: TemplateRowIdNormalizationAudit_ACU[];
@@ -92,20 +106,22 @@ export async function resetCurrentChatTableStateFromTemplate_ACU(
     normalizationAudit = preparedResult.normalizationAudit;
     guideData = buildChatSheetGuideDataFromTemplateObj_ACU(prepared, { stripSeedRows: false });
     if (!guideData) throw new Error('无法从初始化模板生成聊天指导表。');
+    if (!scopeStillCurrent()) return scopeChangedResult();
     if (getCurrentStorageMode() === 'sqlite') {
       // 运行时模板注入路径（initGameSession/模板面板）与 table-import-service.ts:132 语义一致：
       // 非法显式 DDL 允许降级为 fallback schema，避免「导入面板能过、API 注入被硬拦」的不一致。
       // 持久化契约校验（storage-frame-v2-persist.ts:3190）保持严格，不在此处放宽。
       await hydrateTableDataStrict_ACU(prepared, { allowRuntimeDdlFallback: true });
+      if (!scopeStillCurrent()) return scopeChangedResult();
     }
   } catch (error: any) {
     return { saved: false, error: error?.message || String(error) };
   }
 
-  const isolationKey = getCurrentIsolationKey_ACU();
+  const isolationKey = initialIsolationKey;
   try {
     return await runTableWriteTransaction_ACU({
-      source: 'template_assistant', reason: options.reason || 'resetCurrentChatTableStateFromTemplate', isolationKey,
+      source: 'template_assistant', reason: options.reason || 'resetCurrentChatTableStateFromTemplate', chatKey: initialChatKey, isolationKey,
       writeSet: [{ kind: 'all' }], maintenanceMode: 'exclusive',
     }, async (transactionContext) => transactionContext.runCommit(async () => {
       const chat = getChatArray_ACU();
@@ -152,7 +168,7 @@ export async function resetCurrentChatTableStateFromTemplate_ACU(
           presetName: options.presetName || '', source: options.source || 'game_init',
         });
         if (!guideUpdated) throw new Error('初始化模板无法原子写入 guide 与 template scope。');
-        if (getChatArray_ACU() !== chat || chat[0] !== firstMessage || getActiveChatStorageIdentity_ACU(chat) !== chatIdentity) throw new Error('目标聊天已切换，已取消初始化提交。');
+        if (!scopeStillCurrent() || getChatArray_ACU() !== chat || chat[0] !== firstMessage || getActiveChatStorageIdentity_ACU(chat) !== chatIdentity) throw new Error('目标聊天已切换，已取消初始化提交。');
         primarySaveAttempted = true;
         await saveChatToHostStrict_ACU();
         _set_currentJsonTableData_ACU(clone(prepared));

@@ -235,7 +235,13 @@ export function readActiveAgentConversationCompactionMark_ACU(chat?: any[]): Age
     if (!Object.prototype.hasOwnProperty.call(message, AGENT_CONVERSATION_FIELD_ACU)) continue;
     const raw = (message as Record<string, unknown>)[AGENT_CONVERSATION_FIELD_ACU];
     const record = validateAgentConversationFloorRecord_ACU(raw);
-    if (record?.compaction && (!active || record.compaction.compactedThroughId > active.compactedThroughId)) active = record.compaction;
+    if (record) {
+      if (record.compaction && (!active || record.compaction.compactedThroughId > active.compactedThroughId)) active = record.compaction;
+      continue;
+    }
+    // v1 全量快照是新的权威基线：它替换此前的段，也必须让旧段的压缩标记失效，
+    // 否则会把已被基线覆盖的消息再次投影成 handoff。
+    if (validateAgentConversationSnapshot_ACU(raw)) active = null;
   }
   if (!active) return null;
   if (!('summaryState' in active)) return { ...active };
@@ -342,6 +348,8 @@ export function readAgentConversationTimeline_ACU(chat?: any[], options?: { maxE
     if (raw.schemaVersion === AGENT_CONVERSATION_SCHEMA_VERSION_ACU && Array.isArray(raw.messages)) {
       segments.length = 0;
       segments.push(raw.messages);
+      // 与模型投影一致：v1 基线替换旧段时，旧段的 compaction marks 一并失效。
+      marksById.clear();
     }
   }
   // 先扫描段头保留 v1 基线/压缩标记语义，再从尾部只物化窗口所需的合法消息。

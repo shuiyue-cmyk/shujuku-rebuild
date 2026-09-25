@@ -50,6 +50,7 @@ import {
   coreApisAreReady_ACU,
   currentChatFileIdentifier_ACU,
   getCurrentIsolationKey_ACU,
+  getAutoFillStopEpoch_ACU,
   settings_ACU,
   _set_coreApisAreReady_ACU,
   _set_lastTotalAiMessages_ACU
@@ -107,6 +108,10 @@ import {
 import {
   waitForMvuAnalysisToSettle_ACU
 } from '../../../service/runtime/mvu-analysis-gate';
+
+  // 每次自动填表事件都有独立 runId；停止代次变化后，旧 run 不得再清标记或排新链。
+  let autoFillRunSequence_ACU = 0;
+  let latestAutoFillRunId_ACU: string | null = null;
 
   export async function fetchModelsAndConnect_ACU() {
     if (
@@ -330,7 +335,11 @@ import {
         && earlyResult.action !== 'optimize_manual'
         && earlyResult.action !== 'optimize_then_update') return false;
       logDebug_ACU('[MVU联动] 忽略MVU更新已开启，正文替换不等闸门直接开跑');
-      await executeContentOptimization_ACU(earlyResult.lastMessageIndex!);
+      const earlyReplaceSucceeded = await executeContentOptimization_ACU(earlyResult.lastMessageIndex!);
+      if (earlyReplaceSucceeded !== true) {
+        logDebug_ACU('[MVU联动] 早跑替换未成功，交由正常管线接管');
+        return false;
+      }
       return true;
     } catch (error) {
       logDebug_ACU('[MVU联动] 忽略MVU更新早跑失败，交由正常管线兜底:', error);
@@ -348,13 +357,32 @@ import {
     // 这里以排程时点的聊天/隔离为基线，无论有没有 intent 都在回调里复检一次。
     const scheduledChatKey_ACU = intent?.chatKey ?? currentChatFileIdentifier_ACU;
     const scheduledIsolationKey_ACU = intent?.isolationKey ?? getCurrentIsolationKey_ACU();
+    const scheduledRunId_ACU = `auto-fill-${++autoFillRunSequence_ACU}`;
+    const scheduledStopEpoch_ACU = getAutoFillStopEpoch_ACU();
+    latestAutoFillRunId_ACU = scheduledRunId_ACU;
+    const isCurrentAutoFillRun_ACU = (): boolean => (
+      latestAutoFillRunId_ACU === scheduledRunId_ACU
+      && getAutoFillStopEpoch_ACU() === scheduledStopEpoch_ACU
+    );
+    const stopIfAutoFillRunStale_ACU = (stage: string): boolean => {
+      // 停止代次是跨异步阶段的硬闸；runId 只在防抖回调入场时判定，
+      // 不能把已获 MVU 闸门所有权的首个回调误判为旧回调。
+      if (getAutoFillStopEpoch_ACU() === scheduledStopEpoch_ACU) return false;
+      logDebug_ACU(`[新消息] 自动填表 run ${scheduledRunId_ACU} 已因停止代次失效（stage=${stage}），放弃旧回调`);
+      return true;
+    };
     clearTimeout(autoFillDebounceTimer_ACU);
     _set_autoFillDebounceTimer_ACU(setTimeout(async () => {
+      if (latestAutoFillRunId_ACU !== scheduledRunId_ACU) {
+        logDebug_ACU(`[新消息] 自动填表 run ${scheduledRunId_ACU} 已被更新事件取代，放弃旧回调`);
+        return;
+      }
+      if (stopIfAutoFillRunStale_ACU('debounce')) return;
       const performanceSpan = startRuntimePerformanceSpan_ACU('new-message-pipeline', {
         settings: settings_ACU,
         metrics: { source: eventType },
       });
-      const performanceContext = { runId: performanceSpan.id, parentSpanId: performanceSpan.id };
+      const performanceContext = { runId: scheduledRunId_ACU, parentSpanId: performanceSpan.id };
       try {
       // 新一轮消息评估：清掉上一轮填表「终止」残留，避免永久 user_aborted。
       _set_wasStoppedByUser_ACU(false);
@@ -370,6 +398,7 @@ import {
       if (ignoreMvuUpdate_ACU && !isMvuRerun_ACU) {
         earlyReplaceDone_ACU = await runIgnoreMvuEarlyReplace_ACU(eventType, intent, scheduledChatKey_ACU, scheduledIsolationKey_ACU);
       }
+      if (stopIfAutoFillRunStale_ACU('after_early_replace')) return;
       const skipReplace_ACU = (ignoreMvuUpdate_ACU && isMvuRerun_ACU) || earlyReplaceDone_ACU;
 
       // [W4 延后闸门] MVU 用「额外模型解析」时，自动填表与正文替换都要等解析结束后再跑。
@@ -380,6 +409,7 @@ import {
       // MVU 未装 / 未启用 / 开关关闭 → 同步立即放行，与闸门上线前逐字一致。
       // 「忽略MVU更新」开后替换分支已早跑，此处闸门实际只拦填表（正常轮靠 skipReplace 跳过替换）。
       const mvuGate_ACU = await waitForMvuAnalysisToSettle_ACU();
+      if (stopIfAutoFillRunStale_ACU('after_mvu_gate')) return;
       if (mvuGate_ACU.mergedIntoExisting) {
         // [防双跑] 本次触发并入了他人在飞等待：创建者放行后会按最新楼独自处理，
         // 合并方继续跑=同楼正文替换/填表双跑各烧一次 AI（2026-09-05 日志实证），直接放弃本轮。
@@ -401,6 +431,7 @@ import {
       } finally {
         loadSpan.end();
       }
+      if (stopIfAutoFillRunStale_ACU('after_chat_load')) return;
 
       // [触发修复] chatKey / isolationKey 校验：防抖期间切聊天或切隔离必须立即丢弃，不污染新会话。
       // 复检不再以 intent 存在为前提：无 intent 时按排程时点基线比对，同样丢弃跨聊填表。
@@ -456,6 +487,7 @@ import {
             return;
           }
           liveChat = getChatArray_ACU();
+          if (stopIfAutoFillRunStale_ACU('materialization_wait')) return;
           resolution = resolveGeneratedAiMessageIndex_ACU({ liveChat, intent });
           retries += 1;
         }
@@ -525,6 +557,8 @@ import {
         }
       }
 
+      if (stopIfAutoFillRunStale_ACU('before_evaluate')) return;
+
       // [重构] 调用 service 层的 evaluateNewMessageAction_ACU 进行决策
       const result = evaluateNewMessageAction_ACU(
           liveChat,
@@ -553,9 +587,11 @@ import {
           case 'optimize_parallel':
               if (skipReplace_ACU) {
                 logDebug_ACU('[MVU联动] 忽略MVU更新已开启，W5 重跑跳过正文替换，只跑填表');
-                await triggerAutomaticUpdateIfNeeded_ACU(performanceContext);
+                if (stopIfAutoFillRunStale_ACU('before_trigger')) break;
+                 await triggerAutomaticUpdateIfNeeded_ACU(performanceContext);
                 break;
               }
+              if (stopIfAutoFillRunStale_ACU('before_parallel')) break;
               logDebug_ACU('[正文优化] 并行模式已启用，正文优化与填表将同时进行...');
               await Promise.all([
                   executeContentOptimization_ACU(result.lastMessageIndex!),
@@ -569,21 +605,26 @@ import {
                 break;
               }
               logDebug_ACU('[正文优化] 手动确认模式：等待用户确认后再填表...');
+              if (stopIfAutoFillRunStale_ACU('before_manual_optimize')) break;
               await executeContentOptimization_ACU(result.lastMessageIndex!);
               break;
 
           case 'optimize_then_update':
               if (skipReplace_ACU) {
                 logDebug_ACU('[MVU联动] 忽略MVU更新已开启，W5 重跑跳过正文替换，只跑填表');
-                await triggerAutomaticUpdateIfNeeded_ACU(performanceContext);
+                if (stopIfAutoFillRunStale_ACU('before_trigger')) break;
+                 await triggerAutomaticUpdateIfNeeded_ACU(performanceContext);
                 break;
               }
+              if (stopIfAutoFillRunStale_ACU('before_then_update_optimize')) break;
               await executeContentOptimization_ACU(result.lastMessageIndex!);
+              if (stopIfAutoFillRunStale_ACU('after_then_update_optimize')) break;
               await triggerAutomaticUpdateIfNeeded_ACU(performanceContext);
               break;
 
           case 'update_only':
-              await triggerAutomaticUpdateIfNeeded_ACU(performanceContext);
+              if (stopIfAutoFillRunStale_ACU('before_trigger')) break;
+                 await triggerAutomaticUpdateIfNeeded_ACU(performanceContext);
               break;
       }
       } catch (error) {

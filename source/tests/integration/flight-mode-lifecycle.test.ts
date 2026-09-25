@@ -27,6 +27,7 @@ vi.mock('../../src/data/storage/chat-history', () => ({
   setChatSheetGuideContainer_ACU: (_chat: any[], value: any) => { h.guide = value; },
 }));
 vi.mock('../../src/service/runtime/state-manager', () => ({
+  currentChatFileIdentifier_ACU: 'flight-mode-lifecycle',
   get currentJsonTableData_ACU() { return h.data; },
   _set_currentJsonTableData_ACU: (value: any) => { h.data = value; },
   getCurrentIsolationKey_ACU: () => '',

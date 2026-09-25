@@ -10,7 +10,8 @@ import { buildDefaultContentOptimizationPromptGroup_ACU } from '../../shared/def
 import { getOriginalContent_ACU, replaceChatMessage_ACU } from '../../service/chat/chat-service';
 import { performContentOptimization_ACU } from '../../service/optimization/content-optimization';
 import { getLastOptimizedMessageIndex_ACU } from '../../service/plot/plot-logic';
-import { settings_ACU } from '../../service/runtime/state-manager';
+import { currentChatFileIdentifier_ACU, settings_ACU } from '../../service/runtime/state-manager';
+import { getChatArray_ACU } from '../../data/gateways/chat-gateway';
 import { saveSettings_ACU } from '../../service/settings/settings-service';
 import { useToastStore } from './toast-store';
 
@@ -619,6 +620,10 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
         return;
       }
       const messageIndex = getLastOptimizedMessageIndex_ACU();
+      const chatAtStart = getChatArray_ACU();
+      const messageAtStart = chatAtStart[messageIndex];
+      const chatIdentityAtStart = String(currentChatFileIdentifier_ACU || '');
+      const messageIdAtStart = messageAtStart?.message_id;
       this.lastOptimizedMessageIndex = messageIndex;
       if (messageIndex < 0) {
         setMessage(this, 'warning', '当前还没有已被正文替换过的 AI 回复。');
@@ -629,6 +634,14 @@ export const useContentReplaceStore = defineStore('acu-v2-content-replace', {
         const originalContent = getOriginalContent_ACU(messageIndex);
         if (!originalContent) throw new Error('无法获取上次替换前的原文。');
         const result = await performContentOptimization_ACU(originalContent, { currentLoop: 1, userMessage: '' });
+        const currentChat = getChatArray_ACU();
+        const currentMessage = currentChat[messageIndex];
+        const chatChanged = Boolean(chatIdentityAtStart || messageAtStart)
+          && (currentChat !== chatAtStart
+            || String(currentChatFileIdentifier_ACU || '') !== chatIdentityAtStart
+            || currentMessage !== messageAtStart
+            || (messageIdAtStart != null && currentMessage?.message_id !== messageIdAtStart));
+        if (chatChanged) throw new Error('聊天已切换，旧正文的优化结果已拒绝写回。');
         if (!result?.success) throw new Error(result?.error || '正文替换失败。');
         if (!Array.isArray(result.optimizations) || result.optimizations.length === 0) {
           clearMessageAndToast(this, 'info', '原文已足够好，无需重新替换。', { muteable: false });

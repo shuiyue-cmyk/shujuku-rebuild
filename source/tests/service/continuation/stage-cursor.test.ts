@@ -65,6 +65,10 @@ function completed(stageId: string, turnId: string, messageIndex: number, id: st
   return { id, at: 1, kind: 'turn_completed', stageId, turnId, messageIndex };
 }
 
+function completedWithIdentity(stageId: string, turnId: string, messageIndex: number, id: string, messageId: string): ContinuationTask_ACU['timeline'][number] {
+  return { id, at: 1, kind: 'turn_completed', stageId, turnId, messageIndex, messageId } as ContinuationTask_ACU['timeline'][number];
+}
+
 describe('reconcileTaskCursorFromChat_ACU', () => {
   it('把已确认楼层被删掉的轮次回退，并保持硬游标与存活楼层对齐', () => {
     const stage = stageOf(1, 6, 3, 'running');
@@ -83,6 +87,33 @@ describe('reconcileTaskCursorFromChat_ACU', () => {
     expect(next).not.toBe(task);
     expect(next.stages[0]).toMatchObject({ completedTurns: 2, activeNodeIndex: 0, activeTurnIndex: 2, status: 'running' });
     expect(next.activeStageId).toBe('stage-1');
+  });
+
+  it('按稳定 message identity 识别中段删楼，而不是只比较旧数组下标', () => {
+    const stage = stageOf(1, 6, 3, 'running');
+    const chat = [
+      { message_id: 'floor-0' },
+      { message_id: 'floor-1' },
+      { message_id: 'floor-2' },
+      { message_id: 'floor-3' },
+      { message_id: 'floor-4' },
+      { message_id: 'floor-5' },
+      { message_id: 'floor-6' },
+    ];
+    const task = taskOf(
+      [stage],
+      [
+        completedWithIdentity('stage-1', 's1-t1', 1, 'c1', 'floor-1'),
+        completedWithIdentity('stage-1', 's1-t2', 3, 'c2', 'floor-3'),
+        completedWithIdentity('stage-1', 's1-t3', 5, 'c3', 'floor-5'),
+      ],
+      'stage-1',
+    );
+
+    const liveChat = chat.filter(message => message.message_id !== 'floor-3');
+    const next = reconcileTaskCursorFromChat_ACU(task, liveChat.length, liveChat as any);
+
+    expect(next.stages[0]).toMatchObject({ completedTurns: 1, activeNodeIndex: 0, activeTurnIndex: 1, status: 'running' });
   });
 
   it('回退到更早未完成阶段时，废弃其后没有任何存活完成的阶段', () => {

@@ -458,6 +458,58 @@ describe('parseAndApplyTableEdits_ACU — DSL 分支', () => {
     // 非 SQLite 模式不应调用 provider.applyEdits
     expect(mockApplyEdits).not.toHaveBeenCalled();
   });
+
+  it.each([
+    {
+      name: '负 rowIndex 不得删除表头',
+      response: '<tableEdit>deleteRow(0, -1)</tableEdit>',
+    },
+    {
+      name: '字符串 table 索引不得执行',
+      response: '<tableEdit>updateRow("0", 0, {"0": "tampered"})</tableEdit>',
+    },
+    {
+      name: '字符串 row 索引不得执行',
+      response: '<tableEdit>updateRow(0, "0", {"0": "tampered"})</tableEdit>',
+    },
+    {
+      name: '非规范 column 索引不得执行',
+      response: '<tableEdit>updateRow(0, 0, {"0.5": "tampered"})</tableEdit>',
+    },
+    {
+      name: '浮点 rowIndex 不得执行',
+      response: '<tableEdit>updateRow(0, 0.5, {"0": "tampered"})</tableEdit>',
+    },
+    {
+      name: '负 column 不得覆盖 row_id',
+      response: '<tableEdit>updateRow(0, 0, {"-1": "tampered-id"})</tableEdit>',
+    },
+    {
+      name: '越界 column 不得伪报应用成功',
+      response: '<tableEdit>updateRow(0, 0, {"99": "tampered"})</tableEdit>',
+    },
+    {
+      name: '越界 rowIndex 必须计为失败',
+      response: '<tableEdit>deleteRow(0, 99)</tableEdit>',
+    },
+    {
+      name: '越界 tableIndex 必须计为失败',
+      response: '<tableEdit>insertRow(99, {"0": "tampered"})</tableEdit>',
+    },
+  ])('$name', ({ response }) => {
+    const before = JSON.parse(JSON.stringify(mockCurrentJsonTableData.sheet_0.content));
+
+    const result: any = parseAndApplyTableEdits_ACU(response, 'standard');
+
+    expect(mockCurrentJsonTableData.sheet_0.content).toEqual(before);
+    expect(result).toMatchObject({
+      success: false,
+      appliedEdits: 0,
+      failedEdits: 1,
+      totalCommands: 1,
+      modifiedKeys: [],
+    });
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════

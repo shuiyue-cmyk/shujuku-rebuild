@@ -67,6 +67,15 @@ function mutationTarget(sql: string, values: Token_ACU[]): Token_ACU | undefined
 
 interface CteScope_ACU { name: string; depth: number; start: number; end: number; }
 
+function skipCteMaterializationHint_ACU(values: Token_ACU[], index: number, depth: number): number {
+  if (values[index]?.depth === depth && keyword(values[index], 'MATERIALIZED')) return index + 1;
+  if (values[index]?.depth === depth && keyword(values[index], 'NOT')
+    && values[index + 1]?.depth === depth && keyword(values[index + 1], 'MATERIALIZED')) {
+    return index + 2;
+  }
+  return index;
+}
+
 function cteScopes(values: Token_ACU[]): CteScope_ACU[] {
   const result: CteScope_ACU[] = [];
   for (let withIndex = 0; withIndex < values.length; withIndex += 1) {
@@ -87,7 +96,7 @@ function cteScopes(values: Token_ACU[]): CteScope_ACU[] {
       }
       if (!keyword(values[index], 'AS')) break;
       names.push(name.value.toLowerCase());
-      index += 1;
+      index = skipCteMaterializationHint_ACU(values, index + 1, depth);
       if (!values[index] || values[index].depth !== depth + 1) break;
       const definitionDepth = values[index].depth;
       while (values[index] && values[index].depth >= definitionDepth) index += 1;
@@ -459,8 +468,7 @@ function collectMutationColumnReplacements_ACU(
   // 排除函数调用、AS 后别名、限定符点号左侧、关键字。已处理的 token 用 start 去重。
   for (let index = 0; index < values.length; index += 1) {
     const token = values[index];
-    if (token.quote !== null) continue;
-    if (READ_COLUMN_KEYWORDS_ACU.has(token.value.toUpperCase())) continue;
+    if (isNonColumnKeyword_ACU(values, index)) continue;
     if (isFunctionCall_ACU(sql, values, index)) continue;
     const previous = values[index - 1];
     if (previous && previous.depth === token.depth && keyword(previous, 'AS')) continue;
@@ -494,12 +502,38 @@ interface ReadScope_ACU {
 
 const READ_SCOPE_TERMINATORS_ACU = new Set(['UNION', 'EXCEPT', 'INTERSECT']);
 const READ_FROM_TERMINATORS_ACU = new Set(['WHERE', 'GROUP', 'HAVING', 'ORDER', 'LIMIT', 'OFFSET', 'UNION', 'EXCEPT', 'INTERSECT', 'WINDOW']);
-const READ_ALIAS_STOP_WORDS_ACU = new Set(['ON', 'USING', 'JOIN', 'LEFT', 'RIGHT', 'FULL', 'INNER', 'CROSS', 'NATURAL', 'WHERE', 'GROUP', 'HAVING', 'ORDER', 'LIMIT', 'OFFSET', 'UNION', 'EXCEPT', 'INTERSECT', 'WINDOW']);
-const READ_COLUMN_KEYWORDS_ACU = new Set(['SELECT', 'FROM', 'JOIN', 'AS', 'ON', 'WHERE', 'GROUP', 'ORDER', 'HAVING', 'LIMIT', 'OFFSET', 'UNION', 'EXCEPT', 'INTERSECT', 'WITH', 'RECURSIVE', 'DISTINCT', 'BY', 'AND', 'OR', 'NOT', 'IN', 'IS', 'NULL', 'LIKE', 'BETWEEN', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'ASC', 'DESC', 'COLLATE', 'USING']);
+const READ_ALIAS_STOP_WORDS_ACU = new Set(['ON', 'USING', 'JOIN', 'LEFT', 'RIGHT', 'FULL', 'INNER', 'CROSS', 'NATURAL', 'INDEXED', 'NOT', 'WHERE', 'GROUP', 'HAVING', 'ORDER', 'LIMIT', 'OFFSET', 'UNION', 'EXCEPT', 'INTERSECT', 'WINDOW']);
+const READ_COLUMN_KEYWORDS_ACU = new Set([
+  'SELECT', 'FROM', 'JOIN', 'AS', 'ON', 'WHERE', 'GROUP', 'ORDER', 'HAVING', 'LIMIT', 'OFFSET',
+  'UNION', 'EXCEPT', 'INTERSECT', 'WITH', 'RECURSIVE', 'DISTINCT', 'BY', 'AND', 'OR', 'NOT', 'IN', 'IS',
+  'NULL', 'LIKE', 'GLOB', 'MATCH', 'REGEXP', 'ESCAPE', 'BETWEEN', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END',
+  'ASC', 'DESC', 'COLLATE', 'USING', 'TRUE', 'FALSE', 'CURRENT', 'CURRENT_DATE', 'CURRENT_TIME',
+  'CURRENT_TIMESTAMP', 'PARTITION', 'OVER', 'WINDOW', 'PRECEDING', 'FOLLOWING', 'UNBOUNDED', 'RANGE',
+  'ROWS', 'EXCLUDE', 'FILTER', 'MATERIALIZED', 'DO', 'CONFLICT', 'RETURNING', 'VALUES', 'SET',
+]);
+
+function isReadAliasStopWord_ACU(token: Token_ACU | undefined): boolean {
+  return !!token && token.quote === null && READ_ALIAS_STOP_WORDS_ACU.has(token.value.toUpperCase());
+}
 
 function isFunctionCall_ACU(sql: string, values: Token_ACU[], index: number): boolean {
   const token = values[index];
   return !!token && /^\s*\(/.test(sql.slice(token.end));
+}
+
+function isNonColumnKeyword_ACU(values: Token_ACU[], index: number): boolean {
+  const token = values[index];
+  if (!token || token.quote !== null) return false;
+  const value = token.value.toUpperCase();
+  // PARTITION is grammar in `PARTITION BY`, but the identifier after BY is a
+  // real column expression. Other context-sensitive window words stay
+  // conservatively protected because their adjacent names are window objects,
+  // not entity columns.
+  if (value === 'PARTITION') {
+    const previous = values[index - 1];
+    if (previous && previous.depth === token.depth && keyword(previous, 'BY')) return false;
+  }
+  return READ_COLUMN_KEYWORDS_ACU.has(value);
 }
 
 function findReadScope_ACU(scopes: ReadScope_ACU[], values: Token_ACU[], index: number): ReadScope_ACU | undefined {
@@ -653,7 +687,7 @@ function collectReadScopes_ACU(
         }
       }
       if (!keyword(values[cursor], 'AS')) break;
-      cursor += 1;
+      cursor = skipCteMaterializationHint_ACU(values, cursor + 1, depth);
       const definition = scopes.find(scope => scope.start === cursor && scope.depth === depth + 1);
       if (!definition) break;
       cteOutputs.set(name.value.toLowerCase(), explicitOutputs.size > 0 ? explicitOutputs : definition.outputs);
@@ -671,7 +705,7 @@ function collectReadScopes_ACU(
         const aliasIndex = nested ? compoundScopeEnd_ACU(values, nested) : -1;
         const marker = aliasIndex >= 0 ? values[aliasIndex] : undefined;
         const alias = keyword(marker, 'AS') ? values[aliasIndex + 1] : marker;
-        if (nested && alias?.depth === scope.depth && !READ_ALIAS_STOP_WORDS_ACU.has(alias.value.toUpperCase())) {
+        if (nested && alias?.depth === scope.depth && !isReadAliasStopWord_ACU(alias)) {
           const aliasKey = alias.value.toLowerCase();
           scope.derivedSources.set(aliasKey, nested.outputs);
           if (nested.outputs.size === 0) scope.unknownDerivedSources.add(aliasKey);
@@ -712,7 +746,7 @@ function collectReadScopes_ACU(
       const next = values[cursor];
       let alias: Token_ACU | undefined;
       if (keyword(next, 'AS')) alias = values[cursor + 1]?.depth === scope.depth ? values[cursor + 1] : undefined;
-      else if (next?.depth === scope.depth && !READ_ALIAS_STOP_WORDS_ACU.has(next.value.toUpperCase()) && !next.commaBefore) alias = next;
+      else if (next?.depth === scope.depth && !isReadAliasStopWord_ACU(next) && !next.commaBefore) alias = next;
       if (alias) scope.aliases.set(alias.value.toLowerCase(), physicalName);
       else {
         scope.aliases.set(tail.value.toLowerCase(), physicalName);
@@ -778,7 +812,7 @@ export function rebindSqlReadIdentifiers_ACU(
         || (previous && previous.depth === token.depth && keyword(previous, 'AS'))
         || (next && next.depth === token.depth && /^\s*\.\s*$/.test(sql.slice(token.end, next.start)))
         || isFunctionCall_ACU(sql, values, index)
-        || token.quote === null && READ_COLUMN_KEYWORDS_ACU.has(token.value.toUpperCase())) continue;
+        || isNonColumnKeyword_ACU(values, index)) continue;
       const scope = findReadScope_ACU(scopes, values, index);
       if (!scope) continue;
       const key = token.value.toLowerCase();
@@ -847,7 +881,7 @@ export function rebindSqlReadIdentifiers_ACU(
           }
         }
         if (!keyword(values[cursor], 'AS')) break;
-        cursor += 1;
+        cursor = skipCteMaterializationHint_ACU(values, cursor + 1, depth);
         while (values[cursor] && values[cursor].depth >= depth + 1) cursor += 1;
         if (!values[cursor]?.commaBefore || values[cursor].depth !== depth) break;
       }

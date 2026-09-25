@@ -421,6 +421,7 @@ import {
   collectGroupFillResponse_ACU,
   applyUnifiedGroupFillResponses_ACU,
   processGroupedRuntimeChunk_ACU,
+  executeAutoFillStagingGroups_ACU,
   runSummaryVectorFollowupAfterTableFill_ACU,
   type CardUpdateResult,
   type CardUpdateProgressEvent,
@@ -1546,6 +1547,58 @@ describe('executeCardUpdateCore_ACU', () => {
     expect(phases).toContain('parsing');
     expect(phases).toContain('saving');
     expect(phases).toContain('complete');
+  });
+
+  it('SQLite legacy 收到非 SQL tableEdit 时拒绝，不走 JSON snapshot 分支', async () => {
+    const { isSqliteMode } = await import('../../../src/service/table/storage-mode');
+    vi.mocked(isSqliteMode).mockReturnValue(true);
+    const liveApplyEdits = vi.fn();
+    mockEnsureStorageProviderReady.mockResolvedValue({
+      mode: 'sqlite',
+      isReady: () => true,
+      getCurrentData: () => mockCurrentJsonTableData,
+      applyEditsWithSystemRowIds: liveApplyEdits,
+    } as any);
+    mockPrepareAIInput.mockResolvedValue({ tableDataText: '模拟数据' });
+    mockCallCustomOpenAI.mockResolvedValue('<tableEdit>insertRow(0,{"0":"x"})</tableEdit>');
+    mockParseAndApplyTableEditsToData.mockReturnValue({ success: true, modifiedKeys: ['sheet_0'] });
+    mockCheckIfFirstTimeInit.mockResolvedValue(false);
+
+    const result = await executeCardUpdateCore_ACU(
+      [{ is_user: false, mes: 'AI回复' }],
+      0, false, 'auto_standard', false,
+      ['sheet_0'], null, new AbortController(),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('SQL');
+    expect(mockParseAndApplyTableEditsToData).not.toHaveBeenCalled();
+    expect(liveApplyEdits).not.toHaveBeenCalled();
+  });
+
+  it('legacy core 拒绝 parsedKeys 中的非 targetSheetKeys，发布前 fail-closed', async () => {
+    mockCurrentJsonTableData = {
+      sheet_0: { name: '目标表', content: [['row_id', '值'], ['1', '目标旧值']] },
+      sheet_1: { name: '非目标表', content: [['row_id', '值'], ['1', '非目标旧值']] },
+    };
+    mockPrepareAIInput.mockResolvedValue({ tableDataText: '模拟数据' });
+    mockCallCustomOpenAI.mockResolvedValue('<tableEdit>updateRow(1,0,{"0":"越权值"})</tableEdit>');
+    mockParseAndApplyTableEditsToData.mockImplementation((_response: string, tableData: any) => {
+      tableData.sheet_1.content[1][1] = '越权值';
+      return { success: true, modifiedKeys: ['sheet_1'], appliedEdits: 1, failedEdits: 0 };
+    });
+    mockCheckIfFirstTimeInit.mockResolvedValue(false);
+
+    const result = await executeCardUpdateCore_ACU(
+      [{ is_user: false, mes: 'AI回复' }],
+      0, false, 'auto_standard', false,
+      ['sheet_0'], null, new AbortController(),
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('非目标');
+    expect(mockPersistTablesToChatMessage).not.toHaveBeenCalled();
+    expect(mockCurrentJsonTableData.sheet_1.content[1][1]).toBe('非目标旧值');
   });
 
   it('将目标表转换为 sheet 级 writeSet，并把 transactionContext 传给持久化', async () => {
@@ -3995,12 +4048,31 @@ describe('orchestrateManualUpdate_ACU', () => {
     vi.mocked(checkAutoMergeTrigger_ACU).mockReturnValue({ shouldTrigger: true, mergeCount: 5 });
     vi.mocked(prepareAutoMergeBatches_ACU).mockReturnValue({ batches: [{ startIndex: 0, endIndex: 5 }] } as any);
     vi.mocked(executeAutoMergeBatch_ACU).mockResolvedValue({ accumulatedSummary: ['合并结果'] } as any);
-    vi.mocked(finalizeAutoMerge_ACU).mockResolvedValue(undefined);
+    vi.mocked(finalizeAutoMerge_ACU).mockResolvedValue({ success: true, mergedRows: 1 } as any);
 
     const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockProcessBatch, mockRefreshData);
     expect(result.success).toBe(true);
     expect(result.autoMergeTriggered).toBe(true);
     expect(result.autoMergeSuccess).toBe(true);
+  });
+
+  it('自动合并 commit 失败时不把 autoMergeSuccess 报成 true', async () => {
+    const { getChatArray_ACU } = await import('../../../src/service/chat/chat-service');
+    vi.mocked(getChatArray_ACU).mockReturnValue([
+      { is_user: true },
+      { is_user: false, mes: 'AI回复' },
+    ]);
+    mockCallCustomOpenAI.mockResolvedValue('<tableEdit>sheet_0</tableEdit>');
+
+    const { checkAutoMergeTrigger_ACU, prepareAutoMergeBatches_ACU, executeAutoMergeBatch_ACU, finalizeAutoMerge_ACU } = await import('../../../src/service/summary/merge-logic');
+    vi.mocked(checkAutoMergeTrigger_ACU).mockReturnValue({ shouldTrigger: true, mergeCount: 5 });
+    vi.mocked(prepareAutoMergeBatches_ACU).mockReturnValue({ batches: [{ startIndex: 0, endIndex: 5 }] } as any);
+    vi.mocked(executeAutoMergeBatch_ACU).mockResolvedValue({ accumulatedSummary: ['合并结果'] } as any);
+    vi.mocked(finalizeAutoMerge_ACU).mockResolvedValue({ success: false, mergedRows: 0 } as any);
+
+    const result = await orchestrateManualUpdate_ACU(['sheet_0'], mockProcessBatch, mockRefreshData);
+    expect(result.autoMergeTriggered).toBe(true);
+    expect(result.autoMergeSuccess).toBe(false);
   });
 
   it('finally 块中清理 manualExtraHint 和 isAutoUpdating', async () => {
@@ -6590,6 +6662,51 @@ describe('applyUnifiedGroupFillResponses_ACU', () => {
     expect(savePayload.tableData.sheet_1.content).toEqual([['row_id', 'value'], ['1', 'tpl-b'], ['2', 'tpl-c']]);
     expect(baseSnapshot.sheet_0.content).toEqual([['row_id', 'value']]);
     vi.mocked(isSqliteMode).mockReturnValue(false);
+  });
+});
+
+describe('executeAutoFillStagingGroups_ACU', () => {
+  it('pre 段失败后不再执行 post 段', async () => {
+    const chat = [
+      { is_user: false, mes: 'AI 0' },
+      { is_user: false, mes: 'AI 1' },
+      { is_user: false, mes: 'AI 2' },
+      {
+        is_user: false,
+        mes: 'AI 3',
+        TavernDB_ACU_IsolatedData: {
+          '': {
+            _acu_storage_version: 2,
+            storageFrame: {
+              version: 2,
+              checkpoint: { kind: 'full', data: { mate: { type: 'acu' }, sheet_0: { name: '表0', content: [['row_id', '值']] } } },
+              logEntries: [],
+            },
+          },
+        },
+      },
+      { is_user: false, mes: 'AI 4' },
+      { is_user: false, mes: 'AI 5' },
+    ];
+    mockGetChatArray_ACU.mockReturnValue(chat);
+    mockCurrentJsonTableData = {
+      mate: { type: 'acu' },
+      sheet_0: { name: '表0', content: [['row_id', '值'], ['1', '旧值']] },
+    };
+    mockEnsureLegacyStorageMigratedBeforeWrite.mockReset().mockResolvedValue({ success: false, migrated: false, error: 'pre failure' });
+    mockCommitStagedSheetsAtFullBoundaryAtomic.mockClear();
+    mockPersistTablesToChatMessage.mockClear();
+
+    const result = await executeAutoFillStagingGroups_ACU(
+      [{ key: 'g1', groupId: 0, indices: [1, 5], batchSize: 1, sheetKeys: ['sheet_0'], requestOptions: null }],
+      'auto_standard',
+      { boundary: { fullCheckpointIndices: [3], requiresBoundaryStaging: true } },
+    );
+
+    expect(result.success).toBe(false);
+    expect(mockEnsureLegacyStorageMigratedBeforeWrite).toHaveBeenCalledTimes(1);
+    expect(mockCommitStagedSheetsAtFullBoundaryAtomic).not.toHaveBeenCalled();
+    expect(mockPersistTablesToChatMessage).not.toHaveBeenCalled();
   });
 });
 

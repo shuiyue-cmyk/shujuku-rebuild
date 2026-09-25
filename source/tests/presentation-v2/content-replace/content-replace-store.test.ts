@@ -45,11 +45,22 @@ async function setupStore() {
     summary: '完成',
   }));
   const replaceChatMessage = vi.fn(async () => true);
+  let currentChatIdentity = 'chat-a';
+  let currentChat = [
+    { message_id: 'a-0', mes: '开场' },
+    { message_id: 'a-1', mes: '用户' },
+    { message_id: 'a-2', mes: '旧句子' },
+  ];
+  const getChatArray = vi.fn(() => currentChat);
   const getOriginalContent = vi.fn(() => '旧句子');
   const getLastOptimizedMessageIndex = vi.fn(() => 2);
 
   vi.doMock('../../../src/service/runtime/state-manager', () => ({
     settings_ACU: settings,
+    get currentChatFileIdentifier_ACU() { return currentChatIdentity; },
+  }));
+  vi.doMock('../../../src/data/gateways/chat-gateway', () => ({
+    getChatArray_ACU: getChatArray,
   }));
   vi.doMock('../../../src/service/settings/settings-service', () => ({
     saveSettings_ACU: saveSettings,
@@ -81,6 +92,10 @@ async function setupStore() {
     replaceChatMessage,
     getOriginalContent,
     getLastOptimizedMessageIndex,
+    setChat: (identity: string, chat: any[]) => {
+      currentChatIdentity = identity;
+      currentChat = chat;
+    },
     toast,
   };
 }
@@ -211,6 +226,31 @@ describe('useContentReplaceStore', () => {
     expect(store.testOutput).toContain('优化完成：1 处建议');
     expect(store.message).toBeNull();
     expect(toast.items.map(item => item.text)).toContain('正文替换测试完成。');
+  });
+
+  it('重新优化等待期间切换聊天会拒绝旧 index 写回', async () => {
+    const { store, performOptimization, replaceChatMessage, setChat } = await setupStore();
+    store.setBoolean('enabled', true);
+    let resolveOptimization: ((value: any) => void) | null = null;
+    performOptimization.mockImplementation(() => new Promise(resolve => { resolveOptimization = resolve; }));
+
+    const pending = store.reoptimizeLatest();
+    await Promise.resolve();
+    setChat('chat-b', [
+      { message_id: 'b-0', mes: 'B 开场' },
+      { message_id: 'b-1', mes: 'B 用户' },
+      { message_id: 'b-2', mes: 'B 原文' },
+    ]);
+    resolveOptimization?.({
+      success: true,
+      optimizations: [{ original: '旧句子', optimized: 'A 新句子', plan: '改写' }],
+      optimizedContent: 'A 新句子',
+      summary: '完成',
+    });
+    await pending;
+
+    expect(replaceChatMessage).not.toHaveBeenCalled();
+    expect(store.message?.kind).toBe('error');
   });
 
   it('重新优化最近一次会读取原文、优化并写回聊天消息', async () => {

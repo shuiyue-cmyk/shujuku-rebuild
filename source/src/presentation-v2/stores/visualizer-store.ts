@@ -109,6 +109,8 @@ interface VisualizerState {
   assistantLatestResult: any | null;
   assistantTurns: VisualizerAssistantTurnState[];
   assistantRiskConfirmations: Record<string, boolean>;
+  draftContextKey: string;
+  draftContextInvalid: boolean;
 }
 
 function cloneData<T>(value: T): T {
@@ -193,6 +195,8 @@ export const useVisualizerStore = defineStore('acu-v2-visualizer', {
     assistantLatestResult: null,
     assistantTurns: [],
     assistantRiskConfirmations: {},
+    draftContextKey: '',
+    draftContextInvalid: false,
   }),
   getters: {
     sheetItems(state): VisualizerSheetItem[] {
@@ -251,7 +255,7 @@ export const useVisualizerStore = defineStore('acu-v2-visualizer', {
     setSaving(saving: boolean): void {
       this.isSaving = saving;
     },
-    loadSnapshot(data: Record<string, any>, orderedKeys: string[] = []): void {
+    loadSnapshot(data: Record<string, any>, orderedKeys: string[] = [], contextKey = ''): void {
       const nextData = cloneData(data || { mate: { type: 'chatSheets', version: 1 } });
       if (!nextData.mate || typeof nextData.mate !== 'object') {
         nextData.mate = { type: 'chatSheets', version: 1 };
@@ -263,6 +267,8 @@ export const useVisualizerStore = defineStore('acu-v2-visualizer', {
       this.sheetOrder = nextOrder;
       this.templateBaseData = cloneData(nextData);
       this.templateBaseSheetOrder = [...nextOrder];
+      this.draftContextKey = String(contextKey || '');
+      this.draftContextInvalid = false;
       this.deletedSheetKeys = [];
       resetVisualizerPendingDataOps_ACU(this);
       this.lockDirty = false;
@@ -550,6 +556,9 @@ export const useVisualizerStore = defineStore('acu-v2-visualizer', {
       ];
       this.setDirty(true);
     },
+    invalidateDraftContext(): void {
+      if (this.draftContextKey) this.draftContextInvalid = true;
+    },
     requestExternalRefresh(): 'ignored' | 'refreshed' | 'conflicted' {
       if (!this.isActive) return 'ignored';
       if (this.dirty) {
@@ -582,6 +591,8 @@ export const useVisualizerStore = defineStore('acu-v2-visualizer', {
       this.entrySnapshot = null;
       this.assistantUserRequest = '';
       this.assistantTableApiPreset = '';
+      this.draftContextKey = '';
+      this.draftContextInvalid = false;
       this.clearAssistantDraftState();
       return {
         shouldCloseShell: snapshot ? !snapshot.wasShellOpen : false,

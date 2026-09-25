@@ -11,6 +11,9 @@ import { useDialogStore } from '../../../src/presentation-v2/stores/dialog-store
 const mountedApps = new Set<{ unmount: () => void }>();
 const chatTick = ref(0);
 const chatMutationTick = ref(0);
+const materialsReload = vi.fn();
+const settingsIdentity = ref('chat-a');
+let currentChatIdentity = 'chat-a';
 const task = ref<any>(null);
 const activeStage = ref<any>(null);
 const activeRevision = ref<any>(null);
@@ -40,7 +43,7 @@ vi.mock('../../../src/presentation-v2/composables/useContinuationRuntime', () =>
     activeStage, activeRevision, activeNode, activeTurn, busy, canContinue, continueTask, initialize,
     isAwaitingHostResult: awaitingHostResult, originInstruction, refresh,
     retryCurrentTurn, acceptOutline, sendAgentMessage, saveActiveOutline, clearData, restorePromptDefault,
-    saveSettings, settings, statusText, stopTask, task,
+    saveSettings, settings, settingsIdentity, statusText, stopTask, task,
   }),
   // 连续高压轮上限输入框的上界常量：组件从 composable 取，mock 缺了它会整页渲染失败。
   CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_UI_ACU: 20,
@@ -50,11 +53,15 @@ vi.mock('../../../src/presentation-v2/composables/useContinuationMaterials', () 
     snapshot: materialsSnapshot,
     loadError: ref(''),
     modules: {},
-    reload: vi.fn(),
+    reload: materialsReload,
     save: vi.fn(),
     discard: vi.fn(),
     updateDraft: vi.fn(),
   }),
+}));
+vi.mock('../../../src/service/runtime/state-manager', () => ({
+  settings_ACU: { apiPresets: [] },
+  get currentChatFileIdentifier_ACU() { return currentChatIdentity; },
 }));
 vi.mock('../../../src/presentation-v2/composables/useChatChangedListener', () => ({
   useChatChangedTick: () => chatTick,
@@ -170,6 +177,8 @@ beforeEach(() => {
   statusText.value = '尚未创建任务';
   chatTick.value = 0;
   chatMutationTick.value = 0;
+  currentChatIdentity = 'chat-a';
+  settingsIdentity.value = 'chat-a';
   vi.clearAllMocks();
   sendAgentMessage.mockResolvedValue(true);
 });
@@ -442,6 +451,45 @@ describe('ContinuationPage', () => {
     chatTick.value += 1;
     await nextTick();
     expect(refresh).toHaveBeenCalledOnce();
+    app.unmount();
+  });
+
+  it('聊天切换会清空未发送消息并重载资料草稿', async () => {
+    setTask();
+    const { app, el } = await mountPage();
+    const input = chatInput(el);
+    typeInto(input, '只属于 A 的未发送消息');
+    await nextTick();
+    materialsReload.mockClear();
+
+    currentChatIdentity = 'chat-b';
+    chatTick.value += 1;
+    await nextTick();
+
+    expect(input.value).toBe('');
+    expect(materialsReload).toHaveBeenCalledOnce();
+    app.unmount();
+  });
+
+  it('切到 B 后迟到的 A 设置结果不能回写，B 自己的设置仍可加载', async () => {
+    setTask();
+    setSettings();
+    const { app, el } = await mountPage();
+    expect(el.textContent).toContain('正文重试次数');
+
+    currentChatIdentity = 'chat-b';
+    chatTick.value += 1;
+    await nextTick();
+    settingsIdentity.value = 'chat-a';
+    settings.value = { ...settings.value!, loopTags: 'A-late' };
+    await nextTick();
+
+    expect(el.textContent).not.toContain('正文重试次数');
+
+    settingsIdentity.value = 'chat-b';
+    settings.value = { ...settings.value!, loopTags: 'B-current' };
+    await nextTick();
+    expect(el.textContent).toContain('正文重试次数');
     app.unmount();
   });
 

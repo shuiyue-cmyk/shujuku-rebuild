@@ -302,6 +302,45 @@ describe('processSummaryVectorIndexBeforeGeneration_ACU hybrid retrieval', () =>
     expect(content).toContain('dense summary');
   });
 
+  it('部分 pack/chunk 缺失时触发 repair，repair 未恢复前 fail-closed', async () => {
+    const second = row_ACU('second', 2, 'second row');
+    h.rows = [h.rows[0], second];
+    h.chunks = [h.chunks[0]];
+    h.preparedRows = h.rows.map((row: any) => ({
+      rowKey: row.rowKey,
+      rowId: row.rowId,
+      rowOrder: row.rowOrder,
+      timeSpan: row.timeSpan,
+      location: row.location,
+      summary: row.summary,
+      indexCode: row.indexCode,
+      chronicleText: '',
+      vectorSourceHash: `hash-${row.rowId}`,
+      vectorSourceText: row.summary,
+    }));
+
+    const result = await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'secret relic', source: 'partial-pack' });
+
+    expect(h.rebuild).toHaveBeenCalledWith({ reason: 'rebuild_repair' });
+    expect(result).toMatchObject({ success: false, skipped: true, reason: 'mirror_pack_incomplete' });
+    expect(h.createEntries).not.toHaveBeenCalled();
+  });
+
+  it('实时 vectorSourceHash 与 pack 不一致时触发 repair 且不使用旧 dense/BM25 内容', async () => {
+    h.config.summaryIndexMinScore = 0.95;
+    h.preparedRows = h.preparedRows.map((row: any) => ({
+      ...row,
+      vectorSourceHash: `updated-${row.rowId}`,
+      vectorSourceText: `updated ${row.summary}`,
+    }));
+
+    const result = await processSummaryVectorIndexBeforeGeneration_ACU({ userInput: 'find secret relic', source: 'content-hash-mismatch' });
+
+    expect(h.rebuild).toHaveBeenCalledWith({ reason: 'rebuild_repair' });
+    expect(result.success).toBe(false);
+    expect(createdContent_ACU()).not.toContain('dense summary');
+  });
+
   it('hybrid 关闭时保持纯 dense 路径，不注入 BM25-only 候选', async () => {
     h.config.summaryIndexHybridRetrievalEnabled = false;
     h.config.summaryIndexMinScore = 0.95;

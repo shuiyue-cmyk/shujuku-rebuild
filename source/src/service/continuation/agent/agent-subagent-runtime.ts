@@ -48,7 +48,7 @@ import {
   type AgentFetchedPage_ACU,
 } from './agent-web-client';
 import { buildAgentFinalReviewEvidence_ACU, type AgentFinalReviewEvidence_ACU } from './agent-final-review-context';
-import { createAgentTokenCounter_ACU } from './agent-token-budget';
+import { createAgentTokenCounter_ACU, measureAgentPromptTokens_ACU } from './agent-token-budget';
 import {
   buildAgentWorldbookScanText_ACU,
   renderAgentStoryCatalog_ACU,
@@ -65,6 +65,7 @@ import { runAgentSearch_ACU } from './agent-search';
 import {
   createAgentReadGateState_ACU,
   gateAgentReadBatch_ACU,
+  resolveAgentReadBudget_ACU,
   type AgentGateItem_ACU,
   type AgentReadGateConfig_ACU,
   type AgentReadGateState_ACU,
@@ -237,6 +238,13 @@ function subagentFailed_ACU(message: string, retryable: boolean, details?: Recor
   return new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_AGENT_SUBAGENT_FAILED', 'agent_delegate', message, retryable, details));
 }
 
+function throwIfSubagentAborted_ACU(signal?: AbortSignal | null): void {
+  if (!signal?.aborted) return;
+  const error = new Error('子代理请求已取消');
+  error.name = 'AbortError';
+  throw error;
+}
+
 function selectPromptSegments_ACU(settings: ContinuationSettings_ACU, definition: AgentSubagentDefinition_ACU): unknown {
   return settings.agentPrompts[definition.promptKey];
 }
@@ -281,6 +289,21 @@ export function insertBeforeTrailingPrefill_ACU(
   const last = messages[messages.length - 1];
   if (last && last.role === 'assistant') return [...messages.slice(0, -1), extra, last];
   return [...messages, extra];
+}
+
+/**
+ * 子代理读取预算状态文本。子代理提示词一次渲染即固定，预算这类随工具轮变化的实时状态
+ * 由运行时在首轮注入、并在每次工具批次后追加刷新；本侧门禁是单批次独立判定，额度不跨批累计。
+ */
+function renderSubagentReadBudgetNote_ACU(params: {
+  maxReadTokens: number; fallbackTokens: number; maxToolRounds: number; toolRoundsUsed: number; grantedTokens: number;
+}): string {
+  const remaining = Math.max(0, params.maxToolRounds - params.toolRoundsUsed);
+  return [
+    `【读取预算状态】单批次读取上限约 ${params.maxReadTokens} tokens；临近总结阈值时只有不超过 ${params.fallbackTokens} tokens 的精读批次会被放行。`,
+    `工具轮次剩余 ${remaining} / ${params.maxToolRounds}（本次派工已累计放行读取约 ${params.grantedTokens} tokens，仅遥测、不扣减后续批次额度）。`,
+    '按预算分配调阅：先 search 定位，再用窄地址（楼层区间/表格行区间/模块 ID）精读；轮次见底就基于已有资料交付，缺口如实标注「信息不足」，不许硬编。',
+  ].join('\n');
 }
 
 function researcherProtocolError_ACU(message: string): never {
@@ -380,6 +403,16 @@ export class AgentSubagentRuntime_ACU {
     const isResearch = definition.kind === 'research';
     const webSettings = input.settings.webResearch;
     const pageCache: ResearcherPageCache_ACU = { pages: new Map(), byUrl: new Map(), pagesUsed: 0 };
+    // 网页检索天然要多轮「搜 → 读 → 补搜」，工具轮上限独立于普通子代理的 maxExtraReads。
+    const maxToolRounds = Math.max(0, isResearch ? webSettings.maxToolRounds : input.budget.maxExtraReads);
+    const readBudget = resolveAgentReadBudget_ACU(gate.config);
+    const renderReadBudgetNote = (roundsUsed: number): string => renderSubagentReadBudgetNote_ACU({
+      maxReadTokens: readBudget.effectiveMaxReadTokens,
+      fallbackTokens: readBudget.effectiveFallbackTokens,
+      maxToolRounds,
+      toolRoundsUsed: roundsUsed,
+      grantedTokens: gate.state.grantedTokens,
+    });
     const rendered = await renderContinuationPrompt_ACU(selectPromptSegments_ACU(input.settings, definition), {
       $AGENT_READ_MATERIALS: () => materials,
       $AGENT_TASK: () => input.delegation.prompt,
@@ -413,12 +446,12 @@ export class AgentSubagentRuntime_ACU {
     const prefill = PROMPT_KEY_PREFILLS_ACU[definition.promptKey];
     // 总纲卷数计划是随设置变化的运行时指令，不进提示词模板；但它必须落在尾部预填充之前——
     // 追加在预填充之后会让对话以一条 user 消息收尾，预填充失效，模型会另起一段回复而不是续写 JSON。
-    const baseMessages = definition.promptKey === 'arcArchitect'
+    const baseMessagesInitial = definition.promptKey === 'arcArchitect'
       ? insertBeforeTrailingPrefill_ACU(rendered.messages, { role: 'user', content: renderStoryArcVolumePlanInstruction_ACU(input.settings) })
       : rendered.messages;
+    // 预算状态同样是运行时信息；首轮先给上限，之后随每个工具批次刷新剩余轮次与遥测。
+    const baseMessages = insertBeforeTrailingPrefill_ACU(baseMessagesInitial, { role: 'user', content: renderReadBudgetNote(0) });
     const retries = normalizeContinuationInternalAiRetryLimit_ACU(input.settings.internalAiRetryLimit);
-    // 网页检索天然要多轮「搜 → 读 → 补搜」，工具轮上限独立于普通子代理的 maxExtraReads。
-    const maxToolRounds = Math.max(0, isResearch ? webSettings.maxToolRounds : input.budget.maxExtraReads);
     // 小循环的追加消息：子代理自己的输出（assistant）与工具结果/纠正提示（user）。
     const transcript: Array<{ role: string; content: string }> = [];
     /**
@@ -431,6 +464,18 @@ export class AgentSubagentRuntime_ACU {
     let protocolRejections = 0;
     let attempt = 0;
     let lastReason = '';
+    const assertOutgoingWithinBudget_ACU = async (messages: Array<{ role: string; content: string }>): Promise<void> => {
+      const budget = input.settings.agentHistoryTokenBudget;
+      if (budget <= 0) return;
+      const outgoingTokens = await measureAgentPromptTokens_ACU(messages, countTokens_ACU);
+      if (outgoingTokens > budget) {
+        rejectDelegation_ACU(`${definition.name} 的完整出站上下文超出 agentHistoryTokenBudget，拒绝发送`, {
+          agentName: definition.name,
+          outgoingTokens,
+          budget,
+        });
+      }
+    };
     // 本次派工的累计用量。只有每次已观测调用都报告某字段时，该字段才具备可求和的完整性。
     let usageTotal: AiUsageMetadata_ACU | null = null;
     const addCompleteCount = (current: number | undefined, incoming: number | undefined): number | undefined => (
@@ -499,11 +544,13 @@ export class AgentSubagentRuntime_ACU {
         throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_delegate', '子代理请求已失效', false));
       }
       // 传输错误（502/网络抖动）按设置延时重试；协议/契约拒绝仍走小循环内的对话级立即重试。
+      const outgoingMessages = pendingResearchEvidence
+        ? insertBeforeTrailingPrefill_ACU([...baseMessages, ...transcript], { role: 'user', content: pendingResearchEvidence })
+        : [...baseMessages, ...transcript];
+      await assertOutgoingWithinBudget_ACU(outgoingMessages);
       const raw = await callContinuationInternalAiWithRetry_ACU(
         () => this.dependencies.callInternalAi(
-          pendingResearchEvidence
-            ? insertBeforeTrailingPrefill_ACU([...baseMessages, ...transcript], { role: 'user', content: pendingResearchEvidence })
-            : [...baseMessages, ...transcript],
+          outgoingMessages,
           input.preset,
           identity,
           input.signal,
@@ -522,7 +569,20 @@ export class AgentSubagentRuntime_ACU {
       const rawText = String(raw ?? '').trim();
 
       // 工具批次优先于契约解析：输出里出现任意 read/search 对象即视为继续调阅。
-      const toolCalls = isResearch ? parseAgentResearcherToolCalls_ACU(raw, prefill) : parseAgentSubagentToolCalls_ACU(raw, prefill);
+      let toolCalls: Array<AgentToolCall_ACU | AgentWebToolCall_ACU> | null = null;
+      try {
+        toolCalls = isResearch ? parseAgentResearcherToolCalls_ACU(raw, prefill) : parseAgentSubagentToolCalls_ACU(raw, prefill);
+      } catch (error) {
+        if (error instanceof ContinuationValidationError_ACU && error.error.code === 'CONTINUATION_AGENT_SUBAGENT_FAILED') throw error;
+        lastReason = compactAgentProtocolError_ACU(error);
+        protocolRejections += 1;
+        if (protocolRejections > retries) {
+          throw subagentFailed_ACU(`${definition.name} 连续 ${retries + 1} 次返回不符合契约`, false, { agentName: definition.name, lastReason });
+        }
+        transcript.push({ role: 'assistant', content: rawText || '(空输出)' });
+        transcript.push({ role: 'user', content: `你上一次的工具输出没有被采纳。原因：${lastReason}\n请修正后重新输出完整的 read/search 批次，或直接交付契约 JSON。` });
+        continue;
+      }
       if (toolCalls) {
         // 当前输出正是对上一批临时网页正文的归纳机会。只持久保留模型显式给出的短笔记。
         if (isResearch && pendingResearchEvidence) {
@@ -543,16 +603,17 @@ export class AgentSubagentRuntime_ACU {
         transcript.push({ role: 'assistant', content: rawText || '(空输出)' });
         if (toolRoundsUsed >= maxToolRounds) {
           transcript.push({ role: 'user', content: isResearch
-            ? `工具轮次已用尽（上限 ${maxToolRounds} 轮）。请基于已抓到的页面输出契约 JSON；没查到的实体在 summary 里如实列出，不许伪造。`
-            : `read/search 轮次已用尽（上限 ${maxToolRounds} 轮）。请基于已有资料输出契约 JSON；确实缺失的信息在结果里标注「信息不足」，不许伪造。` });
+            ? `工具轮次已用尽（上限 ${maxToolRounds} 轮）。请基于已抓到的页面输出契约 JSON；没查到的实体在 summary 里如实列出，不许伪造。\n\n${renderReadBudgetNote(toolRoundsUsed)}`
+            : `read/search 轮次已用尽（上限 ${maxToolRounds} 轮）。请基于已有资料输出契约 JSON；确实缺失的信息在结果里标注「信息不足」，不许伪造。\n\n${renderReadBudgetNote(toolRoundsUsed)}` });
           continue;
         }
         toolRoundsUsed += 1;
-        const toolResult = await this.executeToolCalls_ACU(toolCalls, input.resolveContext, gate, expandedReads, isResearch ? { settings: input.settings, cache: pageCache } : undefined);
+        const toolResult = await this.executeToolCalls_ACU(toolCalls, input.resolveContext, gate, expandedReads, isResearch ? { settings: input.settings, cache: pageCache } : undefined, input.signal);
+        const refreshedToolResult = `${toolResult}\n\n${renderReadBudgetNote(toolRoundsUsed)}`;
         if (isResearch) {
-          pendingResearchEvidence = `【本次临时网页检索结果】\n以下网页正文仅供本次回答归纳。若还要继续调用工具，请把本次保留的事实压缩写入每个工具对象的 notes 字段（字符串或字符串数组，建议每页 1–3 条），系统不会在后续历史中保留网页原文。\n\n${toolResult}`;
+          pendingResearchEvidence = `【本次临时网页检索结果】\n以下网页正文仅供本次回答归纳。若还要继续调用工具，请把本次保留的事实压缩写入每个工具对象的 notes 字段（字符串或字符串数组，建议每页 1–3 条），系统不会在后续历史中保留网页原文。\n\n${refreshedToolResult}`;
         } else {
-          transcript.push({ role: 'user', content: toolResult });
+          transcript.push({ role: 'user', content: refreshedToolResult });
         }
         continue;
       }
@@ -682,12 +743,31 @@ export class AgentSubagentRuntime_ACU {
     const prefill = AGENT_PREFILLS_ACU.reviewer;
     const retries = normalizeContinuationInternalAiRetryLimit_ACU(input.settings.internalAiRetryLimit);
     const maxToolRounds = Math.max(0, input.settings.finalReview.maxExtraReads);
+    const readBudget = resolveAgentReadBudget_ACU(gate.config);
+    const renderReadBudgetNote = (roundsUsed: number): string => renderSubagentReadBudgetNote_ACU({
+      maxReadTokens: readBudget.effectiveMaxReadTokens,
+      fallbackTokens: readBudget.effectiveFallbackTokens,
+      maxToolRounds,
+      toolRoundsUsed: roundsUsed,
+      grantedTokens: gate.state.grantedTokens,
+    });
+    // 终审与普通派工同一预算语义：首轮给出上限，每个工具批次后刷新剩余轮次与遥测；注入点必须在尾部预填充之前。
+    const baseMessages = insertBeforeTrailingPrefill_ACU(rendered.messages, { role: 'user', content: renderReadBudgetNote(0) });
     const transcript: Array<{ role: string; content: string }> = [];
     const expandedReads: string[] = [];
     let toolRoundsUsed = 0;
     let protocolRejections = 0;
     let attempt = 0;
     let lastReason = '';
+    const fullCountTokens = createAgentTokenCounter_ACU();
+    const assertFinalOutgoingWithinBudget_ACU = async (messages: Array<{ role: string; content: string }>): Promise<void> => {
+      const budget = input.settings.agentHistoryTokenBudget;
+      if (budget <= 0) return;
+      const outgoingTokens = await measureAgentPromptTokens_ACU(messages, fullCountTokens);
+      if (outgoingTokens > budget) {
+        throw subagentFailed_ACU('终审完整出站上下文超出 agentHistoryTokenBudget，终审未执行。', false, { outgoingTokens, budget });
+      }
+    };
     let usageTotal: AiUsageMetadata_ACU | null = null;
     const addCompleteCount = (current: number | undefined, incoming: number | undefined): number | undefined => (
       current !== undefined && incoming !== undefined ? current + incoming : undefined
@@ -718,8 +798,10 @@ export class AgentSubagentRuntime_ACU {
       if (!input.isCurrent(identity)) {
         throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_delegate', '终审请求已失效', false));
       }
+      const outgoingMessages = [...baseMessages, ...transcript];
+      await assertFinalOutgoingWithinBudget_ACU(outgoingMessages);
       const raw = await callContinuationInternalAiWithRetry_ACU(
-        () => this.dependencies.callInternalAi([...rendered.messages, ...transcript], preset, identity, input.signal, callOptions),
+        () => this.dependencies.callInternalAi(outgoingMessages, preset, identity, input.signal, callOptions),
         {
           transportRetries: retries,
           retryDelaySeconds: input.settings.retryDelaySeconds,
@@ -731,15 +813,28 @@ export class AgentSubagentRuntime_ACU {
         throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_delegate', '终审结果已失效', false));
       }
       const rawText = String(raw ?? '').trim();
-      const toolCalls = parseAgentSubagentToolCalls_ACU(raw, prefill);
+      let toolCalls: AgentToolCall_ACU[] | null = null;
+      try {
+        toolCalls = parseAgentSubagentToolCalls_ACU(raw, prefill);
+      } catch (error) {
+        lastReason = compactAgentProtocolError_ACU(error);
+        protocolRejections += 1;
+        if (protocolRejections > retries) {
+          throw subagentFailed_ACU(`最终审查连续 ${retries + 1} 次返回不符合契约`, false, { lastReason });
+        }
+        transcript.push({ role: 'assistant', content: rawText || '(空输出)' });
+        transcript.push({ role: 'user', content: `你上一次的工具输出没有被采纳。原因：${lastReason}\n请修正后重新输出完整的 read/search 批次，或直接交付终审 JSON。` });
+        continue;
+      }
       if (toolCalls) {
         transcript.push({ role: 'assistant', content: rawText || '(空输出)' });
         if (toolRoundsUsed >= maxToolRounds) {
-          transcript.push({ role: 'user', content: `read/search 轮次已用尽（上限 ${maxToolRounds} 轮）。请依据已有证据输出终审 JSON；无法证实的内容写为未验证，不许臆测。` });
+          transcript.push({ role: 'user', content: `read/search 轮次已用尽（上限 ${maxToolRounds} 轮）。请依据已有证据输出终审 JSON；无法证实的内容写为未验证，不许臆测。\n\n${renderReadBudgetNote(toolRoundsUsed)}` });
           continue;
         }
         toolRoundsUsed += 1;
-        transcript.push({ role: 'user', content: await this.executeToolCalls_ACU(toolCalls, input.resolveContext, gate, expandedReads) });
+        const toolResult = await this.executeToolCalls_ACU(toolCalls, input.resolveContext, gate, expandedReads, undefined, input.signal);
+        transcript.push({ role: 'user', content: `${toolResult}\n\n${renderReadBudgetNote(toolRoundsUsed)}` });
         continue;
       }
       try {
@@ -778,7 +873,9 @@ export class AgentSubagentRuntime_ACU {
     gate: SubagentGate_ACU,
     expandedReads: string[],
     research?: { settings: ContinuationSettings_ACU; cache: ResearcherPageCache_ACU },
+    signal?: AbortSignal | null,
   ): Promise<string> {
+    throwIfSubagentAborted_ACU(signal);
     const fresh: SubagentMaterial_ACU[] = [];
     const duplicated: string[] = [];
     const seenInBatch = new Set<string>();
@@ -790,7 +887,9 @@ export class AgentSubagentRuntime_ACU {
           webSections.push(`出网工具 ${call.kind} 只有 web-researcher 可用，本次未执行。`);
           continue;
         }
-        webSections.push(await this.executeWebToolCall_ACU(call, research.settings, research.cache, expandedReads));
+        throwIfSubagentAborted_ACU(signal);
+        webSections.push(await this.executeWebToolCall_ACU(call, research.settings, research.cache, expandedReads, signal));
+        throwIfSubagentAborted_ACU(signal);
         continue;
       }
       if (call.kind === 'read') {
@@ -844,16 +943,26 @@ export class AgentSubagentRuntime_ACU {
     settings: ContinuationSettings_ACU,
     cache: ResearcherPageCache_ACU,
     expandedReads: string[],
+    signal?: AbortSignal | null,
   ): Promise<string> {
+    throwIfSubagentAborted_ACU(signal);
     const client = this.dependencies.webClient ?? (this.dependencies.webClient = new AgentWebClient_ACU());
     const webSettings = settings.webResearch;
     const registerPage = (page: AgentFetchedPage_ACU, query: string): string => {
       const existing = cache.byUrl.get(page.url);
-      if (existing) return existing;
+      if (existing) {
+        const previous = cache.pages.get(existing);
+        // 失败页不能成为永久遮蔽：同一 URL 重试成功后替换其内容；已有成功页则保留稳定快照。
+        if (previous?.status !== 'ok' || !previous.text) {
+          cache.pages.set(existing, { ...page, query });
+          if (page.status === 'ok' && page.text) cache.pagesUsed += 1;
+        }
+        return existing;
+      }
       const handle = `P${cache.pages.size + 1}`;
       cache.pages.set(handle, { ...page, query });
       cache.byUrl.set(page.url, handle);
-      if (page.status === 'ok') cache.pagesUsed += 1;
+      if (page.status === 'ok' && page.text) cache.pagesUsed += 1;
       return handle;
     };
     const renderPage = (handle: string, page: AgentFetchedPage_ACU, reused: boolean): string => {
@@ -870,7 +979,7 @@ export class AgentSubagentRuntime_ACU {
       const sources = call.sources.length ? call.sources : enabledEncyclopediaSources_ACU(webSettings);
       if (!sources.length) return `### 百科检索「${call.query}」\n没有可用的百科来源（设置里全部关闭）。请改用 web_search。`;
       const disabled = call.sources.filter(source => !enabledEncyclopediaSources_ACU(webSettings).includes(source));
-      const results = await Promise.all(sources.filter(source => !disabled.includes(source)).map(async source => ({ source, ...(await client.searchEncyclopedia(source, call.query)) })));
+      const results = await Promise.all(sources.filter(source => !disabled.includes(source)).map(async source => ({ source, ...(await client.searchEncyclopedia(source, call.query, signal)) })));
       expandedReads.push(`encyclopedia_search "${call.query}"`);
       const lines: string[] = [];
       for (const result of results) {
@@ -890,14 +999,16 @@ export class AgentSubagentRuntime_ACU {
       }
       const exhausted = pagesExhausted();
       if (exhausted) return `### 百科精读「${call.title}」\n${exhausted}`;
-      const page = await client.readEncyclopedia(call.source, call.title, webSettings.pageCharLimit);
-      const reused = cache.byUrl.has(page.url);
+      const page = await client.readEncyclopedia(call.source, call.title, webSettings.pageCharLimit, signal);
+      const existingHandle = cache.byUrl.get(page.url);
+      const existingPage = existingHandle ? cache.pages.get(existingHandle) : undefined;
+      const reused = existingPage?.status === 'ok' && !!existingPage.text;
       const handle = registerPage(page, call.title);
       expandedReads.push(`encyclopedia_read ${call.source}:${call.title}`);
       return renderPage(handle, page, reused);
     }
     if (call.kind === 'web_search') {
-      const result = await client.webSearch(call.query, webSettings);
+      const result = await client.webSearch(call.query, webSettings, signal);
       expandedReads.push(`web_search "${call.query}"`);
       if (!result.hits.length) return `### 网页搜索「${call.query}」\n无结果${result.note ? `：${result.note}` : ''}。换更短的关键词、加上作品名，或改用 encyclopedia_search。`;
       const lines = result.hits.map((hit, index) => `${index + 1}. 「${hit.title || '（无标题）'}」${hit.url ? `｜${hit.url}` : ''}${hit.snippet ? `\n   ${hit.snippet.slice(0, 200)}` : ''}`);
@@ -905,8 +1016,10 @@ export class AgentSubagentRuntime_ACU {
     }
     const exhausted = pagesExhausted();
     if (exhausted) return `### 网页抓取 ${call.url}\n${exhausted}`;
-    const page = await client.webRead(call.url, webSettings, this.dependencies.hostOrigin?.());
-    const reused = cache.byUrl.has(page.url);
+    const page = await client.webRead(call.url, webSettings, this.dependencies.hostOrigin?.(), signal);
+    const existingHandle = cache.byUrl.get(page.url);
+    const existingPage = existingHandle ? cache.pages.get(existingHandle) : undefined;
+    const reused = existingPage?.status === 'ok' && !!existingPage.text;
     const handle = registerPage(page, call.url);
     expandedReads.push(`web_read ${call.url}`);
     return renderPage(handle, page, reused);

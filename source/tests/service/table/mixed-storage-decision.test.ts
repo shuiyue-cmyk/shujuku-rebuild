@@ -223,6 +223,35 @@ describe('mixed-storage-decision', () => {
     expect(decision.diagnosticCodes).toContain('merge_candidate_conflict');
   });
 
+  it('合法锚点旁存在坏 logEntries 的畸形 V2 槽时 fail-closed', async () => {
+    const legacyData = { sheet_0: sheet([['1', '药水']]) } as any;
+    const malformedOnlyData = {
+      sheet_0: sheet([['1', '药水']]),
+      sheet_bad: { ...sheet([['1', '不可丢数据']]), uid: 'bad', name: '坏槽独有表' },
+    } as any;
+    const chat = buildChat(legacyData, structuredClone(legacyData));
+    chat.push({
+      is_user: false,
+      TavernDB_ACU_IsolatedData: {
+        '': {
+          _acu_storage_version: 2,
+          storageFrame: {
+            version: 2,
+            headRevision: 'checkpoint:malformed',
+            checkpoint: { kind: 'full', createdAt: 3, reason: 'init', data: malformedOnlyData },
+            logEntries: 'broken',
+          },
+        },
+      },
+    });
+
+    const decision = await evaluate(chat, legacyData);
+
+    expect(decision.kind).toBe('blocked_malformed_v2');
+    expect(decision.diagnosticCodes).toEqual(expect.arrayContaining(['v2_slot_malformed', 'v2_static_scan_undecodable']));
+    expect(decision.allowedActions).not.toContain('keep_v2');
+  });
+
   it('冻结 decision 时不会冻结 live chat reference', async () => {
     const legacyData = { sheet_0: sheet([['1', '药水']]) } as any;
     const chat = buildChat(legacyData, structuredClone(legacyData));

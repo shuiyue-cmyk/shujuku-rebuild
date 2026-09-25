@@ -336,6 +336,8 @@ export interface AgentWebRefEntry_ACU {
 export interface AgentModuleSnapshot_ACU {
   schemaVersion: typeof AGENT_MODULE_SCHEMA_VERSION_ACU;
   settledThroughIndex: number;
+  /** 结算水位之前聊天前缀的稳定指纹；用于识别删楼/替换导致的原始下标漂移。 */
+  settledPrefixFingerprint?: string;
   updatedAt: number;
   revisions: AgentModuleRevisions_ACU;
   hooks: AgentHookEntry_ACU[];

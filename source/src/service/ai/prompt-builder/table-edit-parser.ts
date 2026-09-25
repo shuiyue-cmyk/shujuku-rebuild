@@ -279,6 +279,7 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
                 const parsed = parseTableEditCommandLine_ACU(line);
                 if (!parsed || parsed.command !== 'insertRow') return;
                 const tableIndex = parsed.args?.[0];
+                if (!Number.isSafeInteger(tableIndex) || (tableIndex as number) < 0 || (tableIndex as number) >= sheets.length) return;
                 const table = sheets[tableIndex];
                 if (!table || !table.name) return;
                 if (!isSummaryOrOutlineTable_ACU(table.name)) return;
@@ -314,6 +315,23 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
         } catch (e) { logWarn_ACU('[表格编辑] restoreSeedRows 失败:', e); }
     };
 
+    const isIndexInRange_ACU = (value: unknown, length: number): value is number =>
+        Number.isSafeInteger(value) && (value as number) >= 0 && (value as number) < length;
+
+    const isPlainRecord_ACU = (value: unknown): value is Record<string, any> =>
+        value !== null && typeof value === 'object' && !Array.isArray(value);
+
+    const parseColumnIndex_ACU = (value: string, length: number): number | null => {
+        if (!/^(0|[1-9]\d*)$/.test(value)) return null;
+        const index = Number(value);
+        return isIndexInRange_ACU(index, length) ? index : null;
+    };
+
+    const markInvalidEdit_ACU = (line: string, detail: string) => {
+        failedEdits++;
+        logWarn_ACU(`[表格编辑] 指令索引无效: ${detail}; command="${line}"`);
+    };
+
     // 逐条应用编辑指令
     finalCommandLines.forEach(line => {
         const parsed = parseTableEditCommandLine_ACU(line);
@@ -328,9 +346,13 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
             switch (command) {
                 case 'insertRow': {
                     const [tableIndex, data] = args;
+                    if (!isIndexInRange_ACU(tableIndex, sheets.length)) {
+                        markInvalidEdit_ACU(line, `tableIndex=${String(tableIndex)} is not a non-negative safe integer in [0, ${sheets.length})`);
+                        break;
+                    }
                     const table = sheets[tableIndex];
                     if (!table || !table.name) {
-                        logWarn_ACU(`Table at index ${tableIndex} not found or has no name. Skipping insertRow.`);
+                        markInvalidEdit_ACU(line, `tableIndex=${tableIndex} does not identify a named table`);
                         break;
                     }
                     materializeSeedRowsIfNeeded_ACU(table);
@@ -384,12 +406,24 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
                 }
                 case 'deleteRow': {
                     const [tableIndex, rowIndex] = args;
+                    if (!isIndexInRange_ACU(tableIndex, sheets.length)) {
+                        markInvalidEdit_ACU(line, `tableIndex=${String(tableIndex)} is not a non-negative safe integer in [0, ${sheets.length})`);
+                        break;
+                    }
+                    if (!Number.isSafeInteger(rowIndex) || (rowIndex as number) < 0) {
+                        markInvalidEdit_ACU(line, `rowIndex=${String(rowIndex)} is not a non-negative safe integer`);
+                        break;
+                    }
                     const table = sheets[tableIndex];
                     if (!table || !table.name) {
-                        logWarn_ACU(`Table at index ${tableIndex} not found or has no name. Skipping deleteRow.`);
+                        markInvalidEdit_ACU(line, `tableIndex=${tableIndex} does not identify a named table`);
                         break;
                     }
                     materializeSeedRowsIfNeeded_ACU(table);
+                    if (!Array.isArray(table.content) || !isIndexInRange_ACU(rowIndex, Math.max(0, table.content.length - 1))) {
+                        markInvalidEdit_ACU(line, `rowIndex=${rowIndex} is outside the table data-row range`);
+                        break;
+                    }
                     const sheetKey = sheetKeysForIndexing[tableIndex];
                     const isSummaryTable = isSummaryOrOutlineTable_ACU(table.name);
 
@@ -433,12 +467,35 @@ import { allocateStableRowId_ACU, createStableRowIdReservation_ACU } from '../..
                 }
                 case 'updateRow': {
                     const [tableIndex, rowIndex, data] = args;
+                    if (!isIndexInRange_ACU(tableIndex, sheets.length)) {
+                        markInvalidEdit_ACU(line, `tableIndex=${String(tableIndex)} is not a non-negative safe integer in [0, ${sheets.length})`);
+                        break;
+                    }
+                    if (!Number.isSafeInteger(rowIndex) || (rowIndex as number) < 0) {
+                        markInvalidEdit_ACU(line, `rowIndex=${String(rowIndex)} is not a non-negative safe integer`);
+                        break;
+                    }
+                    if (!isPlainRecord_ACU(data)) {
+                        markInvalidEdit_ACU(line, 'update data must be a JSON object keyed by column index');
+                        break;
+                    }
                     const table = sheets[tableIndex];
                     if (!table || !table.name) {
-                        logWarn_ACU(`Table at index ${tableIndex} not found or has no name. Skipping updateRow.`);
+                        markInvalidEdit_ACU(line, `tableIndex=${tableIndex} does not identify a named table`);
                         break;
                     }
                     materializeSeedRowsIfNeeded_ACU(table);
+                    if (!Array.isArray(table.content) || !isIndexInRange_ACU(rowIndex, Math.max(0, table.content.length - 1))) {
+                        markInvalidEdit_ACU(line, `rowIndex=${rowIndex} is outside the table data-row range`);
+                        break;
+                    }
+                    const targetRow = table.content[rowIndex + 1];
+                    const columnCount = Array.isArray(targetRow) ? Math.max(0, targetRow.length - 1) : 0;
+                    const columnIndexes = Object.keys(data).map(key => parseColumnIndex_ACU(key, columnCount));
+                    if (columnIndexes.some(index => index === null)) {
+                        markInvalidEdit_ACU(line, `column indexes must be non-negative safe integers in [0, ${columnCount})`);
+                        break;
+                    }
                     const sheetKey = sheetKeysForIndexing[tableIndex];
                     const isSummaryTable = isSummaryOrOutlineTable_ACU(table.name);
 

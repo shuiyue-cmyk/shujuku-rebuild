@@ -15,24 +15,28 @@ export function createStableRowIdReservation_ACU(rows: unknown[] | null | undefi
 }
 
 /**
- * Allocates an ID greater than every already-reserved canonical positive integer
- * and reserves it immediately. Gaps from deleted rows are intentionally not reused:
- * row_id is a stable identity, not a display position.
- * This is only for newly created rows; it must not be used to rewrite persisted IDs.
+ * Allocates an ID greater than every already-reserved positive integer and
+ * reserves it immediately. Decimal spellings such as `01` remain untouched in
+ * `reserved`, but contribute their SQLite INTEGER value to the maximum so a
+ * newly allocated canonical ID cannot collide with them. Unsafe integers fail
+ * closed instead of being silently ignored.
  */
 export function allocateStableRowId_ACU(reserved: Set<string>): string {
-  let maxRowId = 0;
-  for (const value of reserved) {
-    if (!/^[1-9]\d*$/.test(value)) continue;
-    const numericId = Number(value);
-    if (Number.isSafeInteger(numericId) && String(numericId) === value) {
-      maxRowId = Math.max(maxRowId, numericId);
+  const maxSafeInteger = BigInt(Number.MAX_SAFE_INTEGER);
+  let maxRowId = 0n;
+  for (const rawValue of reserved) {
+    const value = String(rawValue ?? '').trim();
+    if (!/^\d+$/.test(value)) continue;
+    const numericId = BigInt(value);
+    if (numericId > maxSafeInteger) {
+      throw new Error('无法分配 row_id：已达到正安全整数上限。');
     }
+    if (numericId > maxRowId) maxRowId = numericId;
   }
-  if (maxRowId >= Number.MAX_SAFE_INTEGER) {
+  if (maxRowId >= maxSafeInteger) {
     throw new Error('无法分配 row_id：已达到正安全整数上限。');
   }
-  const rowId = String(maxRowId + 1);
+  const rowId = String(maxRowId + 1n);
   reserved.add(rowId);
   return rowId;
 }

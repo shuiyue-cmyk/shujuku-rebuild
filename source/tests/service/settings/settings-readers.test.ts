@@ -103,6 +103,19 @@ describe('getCurrentCharSettings_ACU', () => {
     expect(mockSettings.characterSettings).not.toBeNull();
     expect(result.worldbookConfig.enabled).toBe(true);
   });
+  it('角色条目为损坏的原始值时恢复为可用对象', () => {
+    mockSettings.characterSettings['test-char'] = 'corrupted';
+    const result = getCurrentCharSettings_ACU();
+    expect(result).toEqual(expect.objectContaining({ worldbookConfig: expect.any(Object) }));
+    expect(result.worldbookConfig.enabled).toBe(true);
+    expect(mockSettings.characterSettings['test-char']).toBe(result);
+  });
+  it('characterSettings 为数组时恢复为按角色键索引的对象', () => {
+    mockSettings.characterSettings = [] as any;
+    const result = getCurrentCharSettings_ACU();
+    expect(Array.isArray(mockSettings.characterSettings)).toBe(false);
+    expect(result.worldbookConfig.enabled).toBe(true);
+  });
   it('深度合并默认配置后字段完整', () => {
     mockSettings.characterSettings['test-char'] = {
       worldbookConfig: { enabled: false },

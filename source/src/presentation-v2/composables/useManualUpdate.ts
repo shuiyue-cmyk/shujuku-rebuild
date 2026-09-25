@@ -1,6 +1,7 @@
 import { computed, ref, type ComputedRef, type Ref } from 'vue';
 import {
   settings_ACU,
+  currentChatFileIdentifier_ACU,
   abortAllActiveRequests_ACU,
   _set_isAutoUpdatingCard_ACU,
   _set_manualExtraHint_ACU,
@@ -114,6 +115,18 @@ export interface ManualUpdateState {
   runManualCatchUp: () => Promise<void>;
 }
 
+interface ManualExecutionContext_ACU {
+  chatIdentity: string;
+  isolationKey: string;
+  key: string;
+}
+
+function currentManualExecutionContext_ACU(): ManualExecutionContext_ACU {
+  const chatIdentity = String(currentChatFileIdentifier_ACU || '');
+  const isolationKey = String(getCurrentIsolationKey_ACU() || '');
+  return { chatIdentity, isolationKey, key: `${chatIdentity}::${isolationKey}` };
+}
+
 function currentSheetKeys(): string[] {
   try {
     return getSortedSheetKeys_ACU(getCurrentTableDisplayData_ACU() || {});
@@ -142,7 +155,12 @@ function runtimeExecutionSheetKeys(): string[] {
  * 任一变化（purge、表删除、新增表、外部直接写 Ref 篡改选择）都会 fail-closed 阻断，
  * 避免在确认文案与最终执行目标不一致的情况下继续破坏性操作。
  */
-function runtimeTargetsStillMatch(snapshotKeys: string[], requestedKeys: string[]): boolean {
+function runtimeTargetsStillMatch(
+  snapshotKeys: string[],
+  requestedKeys: string[],
+  expectedContext?: ManualExecutionContext_ACU,
+): boolean {
+  if (expectedContext && currentManualExecutionContext_ACU().key !== expectedContext.key) return false;
   if (!requestedKeys.length || !hasRuntimeTableData_ACU()) return false;
   const currentKeys = runtimeExecutionSheetKeys();
   if (currentKeys.length !== snapshotKeys.length) return false;
@@ -431,6 +449,7 @@ export function useManualUpdate(): ManualUpdateState {
     selectedManualTableKeys.value = resolveManualSelection(runtimeExecutionSheetKeys());
     manualContextDepth.value = resolveManualContextDepth();
     manualBatchSize.value = resolveManualBatchSize();
+    manualExtraHint.value = '';
     refreshTick.value++;
   }
 
@@ -475,6 +494,7 @@ export function useManualUpdate(): ManualUpdateState {
     // 也防止任何外部直接写 Ref 绕过 setter 隔离后仍被这里放行。
     // 在弹确认框前建立不可变快照：确认文案与最终执行目标必须来自同一快照。
     const requestedTargetKeys = selectedManualTableKeys.value.slice();
+    const snapshotContext = currentManualExecutionContext_ACU();
     const snapshotRuntimeKeys = runtimeExecutionSheetKeys();
     const runtimeKeys = new Set(snapshotRuntimeKeys);
     const validTargetKeys = requestedTargetKeys.filter((key) => runtimeKeys.has(key));
@@ -486,6 +506,10 @@ export function useManualUpdate(): ManualUpdateState {
     manualUpdateBusy.value = true;
     try {
       const injectionTargetLabel = await describeInjectionTargetForConfirm();
+      if (currentManualExecutionContext_ACU().key !== snapshotContext.key) {
+        toast.warning('聊天已切换，已取消本次手动填表，请重新确认目标。');
+        return;
+      }
       const confirmed = await dialogStore.confirm({
         title: '执行手动填表',
         message: `即将执行手动填表。\n\n当前 full checkpoint：${checkpointFloorsLabel.value}\n本次重填范围：${manualRefillRangeLabel.value}\n选中表：${selectedSheetSummary.value}\n世界书注入目标：${injectionTargetLabel}（填表结果会写入该世界书的 TavernDB 条目）\n\n高风险操作：系统会先删除本次重填范围内选中表的 checkpoint 与 V2 增量日志，再以清理后的状态作为填表基底重新填写，最后写入新的单表 checkpoint。\n如果被删除的 checkpoint 是这些表唯一的数据基线，此前楼层的表格数据将无法恢复。\n\n范围外的 checkpoint、范围外聊天记录的表格数据和未选中的表不会被删除。执行失败或中途终止时：本次只要提交过任何批次（含只落了进度、未写入数据的批次）就不会回滚——已清理的旧数据不会恢复，运行时会按聊天记录中的已提交结果重新对齐；只有本次一个批次都没提交时，才会自动回滚清理并恢复被删除的旧数据。`,
@@ -500,8 +524,11 @@ export function useManualUpdate(): ManualUpdateState {
       // 确认后 TOCTOU 复检：确认期间 runtime 可能被 purge/表删除/新增表改变。
       // 若当前 runtime 表集合与确认前快照不一致，或目标已失效，必须 fail-closed 阻断，
       // 不得静默缩减/替换执行目标后继续破坏性重填。
-      if (!runtimeTargetsStillMatch(snapshotRuntimeKeys, requestedTargetKeys)) {
-        toast.warning('表格运行时在确认期间发生变化，已取消本次手动填表，请确认后重试。');
+      if (!runtimeTargetsStillMatch(snapshotRuntimeKeys, requestedTargetKeys, snapshotContext)) {
+        const message = currentManualExecutionContext_ACU().key !== snapshotContext.key
+          ? '聊天已切换，已取消本次手动填表，请重新确认目标。'
+          : '表格运行时在确认期间发生变化，已取消本次手动填表，请确认后重试。';
+        toast.warning(message);
         return;
       }
       const targetManualTableKeys = requestedTargetKeys.slice();
@@ -550,7 +577,11 @@ export function useManualUpdate(): ManualUpdateState {
             clearBeforeUpdate,
             onProgress: handleProgress,
             // 把确认前快照传给 service 层：orchestrator 在破坏性清理前会再次校验 runtime。
-            executionSnapshot: { sheetKeys: snapshotRuntimeKeys },
+            executionSnapshot: {
+              sheetKeys: snapshotRuntimeKeys,
+              chatIdentity: snapshotContext.chatIdentity,
+              isolationKey: snapshotContext.isolationKey,
+            },
           },
         );
       // 零提交时 service 层已回滚清理（失败路径与「清理了却一条数据都没写」的收尾路径都会置位）：
@@ -629,6 +660,7 @@ export function useManualUpdate(): ManualUpdateState {
     // 执行边界校验（确认前）：追平同样绝不允许把模板表当作执行目标。
     // 弹确认框前建立不可变快照：确认文案与最终执行目标必须来自同一快照。
     const requestedTargetKeys = selectedManualTableKeys.value.slice();
+    const snapshotContext = currentManualExecutionContext_ACU();
     const snapshotRuntimeKeys = runtimeExecutionSheetKeys();
     const runtimeKeys = new Set(snapshotRuntimeKeys);
     const validTargetKeys = requestedTargetKeys.filter((key) => runtimeKeys.has(key));
@@ -645,6 +677,10 @@ export function useManualUpdate(): ManualUpdateState {
         return;
       }
       const plan = planningResult.plan;
+      if (currentManualExecutionContext_ACU().key !== snapshotContext.key) {
+        finishToast('warning', '聊天已切换，已取消本次追平，请重新确认目标。');
+        return;
+      }
       if (!plan.waves.length) {
         finishToast('info', '所选表已追平，无需调用 AI 或写入数据。');
         return;
@@ -667,8 +703,11 @@ export function useManualUpdate(): ManualUpdateState {
       // 确认后 TOCTOU 复检：确认期间 runtime 可能被 purge/表删除/新增表改变。
       // 追平计划基于确认前快照生成，若当前 runtime 表集合与快照不一致，
       // 必须重新规划并要求用户重新确认，避免“确认的计划”与“执行的目标”不一致。
-      if (!runtimeTargetsStillMatch(snapshotRuntimeKeys, requestedTargetKeys)) {
-        finishToast('warning', '表格运行时在确认期间发生变化，已取消本次追平，请重新确认目标。');
+      if (!runtimeTargetsStillMatch(snapshotRuntimeKeys, requestedTargetKeys, snapshotContext)) {
+        const message = currentManualExecutionContext_ACU().key !== snapshotContext.key
+          ? '聊天已切换，已取消本次追平，请重新确认目标。'
+          : '表格运行时在确认期间发生变化，已取消本次追平，请重新确认目标。';
+        finishToast('warning', message);
         return;
       }
       progressToastId = null;
@@ -683,7 +722,11 @@ export function useManualUpdate(): ManualUpdateState {
           onProgress: event => notifyProgress(progressLabel(event), requestCatchUpAbort),
           // 把确认前快照传给 service 层：orchestrator 内部会再次校验 runtime 一致性，
           // 使 TOCTOU 防护延伸到 UI 复检之后的异步窗口。
-          executionSnapshot: { sheetKeys: snapshotRuntimeKeys },
+          executionSnapshot: {
+              sheetKeys: snapshotRuntimeKeys,
+              chatIdentity: snapshotContext.chatIdentity,
+              isolationKey: snapshotContext.isolationKey,
+            },
         },
       );
       if (result.outcome === 'sync_pending') {

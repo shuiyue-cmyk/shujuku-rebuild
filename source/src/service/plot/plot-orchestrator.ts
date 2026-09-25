@@ -116,7 +116,8 @@ export interface Strategy2Result {
 export async function orchestrateAfterCommandsStrategy1_ACU(
     lastMessage: any,
     lastMessageIndex: number,
-    runPlanning: PlanningFn
+    runPlanning: PlanningFn,
+    runtimeOptions: Record<string, any> = {}
 ): Promise<Strategy1Result> {
     // 1. 准备策略1上下文
     const context = prepareStrategy1Context_ACU(lastMessage);
@@ -130,6 +131,7 @@ export async function orchestrateAfterCommandsStrategy1_ACU(
     _set_isProcessing_Plot_ACU(true);
     try {
         const finalMessage = await runPlanning(messageToProcess, {
+            ...runtimeOptions,
             originalUserInput: messageToProcess,
             hasExistingUserMessage: true,
         });
@@ -185,7 +187,8 @@ export async function orchestrateAfterCommandsStrategy1_ACU(
  */
 export async function orchestrateAfterCommandsStrategy2_ACU(
     textInBox: string,
-    runPlanning: PlanningFn
+    runPlanning: PlanningFn,
+    runtimeOptions: Record<string, any> = {}
 ): Promise<Strategy2Result> {
     if (!textInBox || !String(textInBox).trim()) {
         return { action: 'skip' };
@@ -196,6 +199,7 @@ export async function orchestrateAfterCommandsStrategy2_ACU(
     _set_isProcessing_Plot_ACU(true);
     try {
         const finalMessage = await runPlanning(originalInputText, {
+            ...runtimeOptions,
             originalUserInput: originalInputText,
             hasExistingUserMessage: false,
         });

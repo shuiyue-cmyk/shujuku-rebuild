@@ -24,7 +24,7 @@ import { logDebug_ACU, logError_ACU, logWarn_ACU, isSummaryOrOutlineTable_ACU } 
 import { getLastOptimizationBase_ACU, setLastOptimizationBase_ACU } from '../optimization/content-optimization';
 import { settings_ACU, currentChatFileIdentifier_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU } from '../runtime/state-manager';
 import { sanitizeSheetForStorage_ACU } from '../template/chat-scope';
-import { MESSAGE_TABLE_FIELDS_ACU, clearTableFieldsForIsolation_ACU, collectSheetIdentityAliasesForPurge_ACU, purgeManualRefillIncrementalSheetKeysFromMessage_ACU, purgeSheetKeysFromMessage_ACU, purgeSheetKeysFromMessageForIsolation_ACU, readIsolatedDataContainer_ACU, readIsolatedTagData_ACU, writeMessageIdentity_ACU } from '../../data/repositories/chat-message-data-repo';
+import { MESSAGE_TABLE_FIELDS_ACU, clearTableFieldsForIsolation_ACU, collectSheetIdentityAliasesForPurge_ACU, isLegacyMatchForIsolation_ACU, purgeManualRefillIncrementalSheetKeysFromMessage_ACU, purgeSheetKeysFromMessage_ACU, purgeSheetKeysFromMessageForIsolation_ACU, readIsolatedDataContainer_ACU, readIsolatedTagData_ACU, writeMessageIdentity_ACU } from '../../data/repositories/chat-message-data-repo';
 import { MAX_CHECKPOINT_RISK_DETAILS_ACU, scanTargetKeysResidue_ACU } from '../../data/repositories/target-keys-diagnostics';
 import { LEGACY_CHAT_TABLE_HEADER_GUIDE_FIELD_ACU } from '../../data/storage/chat-history';
 import { peekChatScopedConfigContainer_ACU, peekChatSheetGuideContainer_ACU, setChatScopedConfigContainer_ACU, setChatSheetGuideContainer_ACU } from '../../data/storage/chat-history';
@@ -33,6 +33,7 @@ import { runTableUpdateCommit_ACU } from '../table/table-update-commit';
 import { getLatestAiMessageIndexFromChat_ACU, resolveTableHistoryStateFromChat_ACU } from '../table/table-history';
 import { cleanupUnreachableSummaryVectorIndexFiles_ACU, deleteSummaryVectorIndexExternal_ACU } from '../vector/summary-vector-index-storage-service';
 import { assignSummaryVectorIndexStateToTagData_ACU, readSummaryVectorIndexStateFromTagData_ACU } from '../vector/summary-vector-index-state-service';
+import type { IsolationConfig_ACU } from '../../data/models/chat-message-data';
 import type { ChatSummaryVectorIndexManifest_ACU, SummaryVectorIndexExternalFileRef_ACU, SummaryVectorIndexSafeGcScopeHint_ACU } from '../vector/summary-vector-index-types';
 import { finalizeFoldedSummaryVectorMirrorFiles_ACU, foldSummaryVectorMirrorAtBoundary_ACU } from '../vector/summary-vector-mirror-fold';
 import { runScopedRetentionGcAfterFlush_ACU } from '../vector/summary-vector-index-chat-deletion-gc';
@@ -214,7 +215,10 @@ async function cleanupVectorIndexManifestsAfterCommit_ACU(manifests: any[]): Pro
  * 仅供已持有独占表写事务的复合恢复流程使用。
  * 调用方必须在一次严格聊天保存成功后，再调用 cleanupCheckpointVectorIndexManifestsAfterCommit_ACU。
  */
-export async function clearAllAiTableDataForCheckpointRestore_ACU(): Promise<{
+export async function clearAllAiTableDataForCheckpointRestore_ACU(
+    isolationKey: string,
+    isolationConfig: Readonly<IsolationConfig_ACU>,
+): Promise<{
     clearedCount: number;
     vectorManifestsToDeleteAfterCommit: any[];
 }> {
@@ -228,25 +232,30 @@ export async function clearAllAiTableDataForCheckpointRestore_ACU(): Promise<{
     for (const msg of chat) {
         if (!msg || msg.is_user) continue;
         let changed = false;
-        if (msg.TavernDB_ACU_Data) { delete msg.TavernDB_ACU_Data; changed = true; }
-        if (msg.TavernDB_ACU_SummaryData) { delete msg.TavernDB_ACU_SummaryData; changed = true; }
-        if (msg.TavernDB_ACU_IndependentData) { delete msg.TavernDB_ACU_IndependentData; changed = true; }
-        if (msg.TavernDB_ACU_Identity !== undefined) { delete msg.TavernDB_ACU_Identity; changed = true; }
-        if (msg.TavernDB_ACU_IsolatedData) {
-            const isolatedData = msg.TavernDB_ACU_IsolatedData;
-            if (isolatedData && typeof isolatedData === 'object' && !Array.isArray(isolatedData)) {
-                for (const key of Object.keys(isolatedData)) {
-                    await deleteVectorIndexManifestFromTagData_ACU(isolatedData[key], {
-                        deleteExternal: false,
-                        onManifest: manifest => vectorManifestsToDeleteAfterCommit.push(manifest),
-                    });
-                }
-            }
-            delete msg.TavernDB_ACU_IsolatedData;
+
+        // top-level legacy 载荷只属于其 Identity 对应的隔离域。Checkpoint 恢复不得
+        // 借当前 beta 恢复之名删除同聊天 alpha/gamma 的旧历史或身份标识。
+        if (isLegacyMatchForIsolation_ACU(msg, isolationConfig)) {
+            if (msg.TavernDB_ACU_Data) { delete msg.TavernDB_ACU_Data; changed = true; }
+            if (msg.TavernDB_ACU_SummaryData) { delete msg.TavernDB_ACU_SummaryData; changed = true; }
+            if (msg.TavernDB_ACU_IndependentData) { delete msg.TavernDB_ACU_IndependentData; changed = true; }
+            if (msg.TavernDB_ACU_ModifiedKeys) { delete msg.TavernDB_ACU_ModifiedKeys; changed = true; }
+            if (msg.TavernDB_ACU_UpdateGroupKeys) { delete msg.TavernDB_ACU_UpdateGroupKeys; changed = true; }
+            if (msg.TavernDB_ACU_Identity !== undefined) { delete msg.TavernDB_ACU_Identity; changed = true; }
+        }
+
+        const isolatedData = msg.TavernDB_ACU_IsolatedData;
+        if (isolatedData && typeof isolatedData === 'object' && !Array.isArray(isolatedData)
+            && Object.prototype.hasOwnProperty.call(isolatedData, isolationKey)) {
+            await deleteVectorIndexManifestFromTagData_ACU(isolatedData[isolationKey], {
+                deleteExternal: false,
+                onManifest: manifest => vectorManifestsToDeleteAfterCommit.push(manifest),
+            });
+            delete isolatedData[isolationKey];
+            if (Object.keys(isolatedData).length === 0) delete msg.TavernDB_ACU_IsolatedData;
             changed = true;
         }
-        if (msg.TavernDB_ACU_ModifiedKeys) { delete msg.TavernDB_ACU_ModifiedKeys; changed = true; }
-        if (msg.TavernDB_ACU_UpdateGroupKeys) { delete msg.TavernDB_ACU_UpdateGroupKeys; changed = true; }
+
         if (changed) clearedCount += 1;
     }
     return { clearedCount, vectorManifestsToDeleteAfterCommit };

@@ -2379,8 +2379,14 @@ export async function runTemplateAssistantSession_ACU(input: TemplateAssistantSe
     // 最终 preflight 为异步操作，返回后同样需要再次确认会话未被取消，才能提交成功结果。
     assertTemplateAssistantSessionActive_ACU(input.guard);
     if (finalPreflight.blockers.length > 0) throw new Error(`schema migration 最终 preflight 失败：${finalPreflight.blockers.join('；')}`);
-    const v3RowIdGuardFindings = lastResult?.draft && isTemplateAssistantV3Draft_ACU(lastResult.draft)
-        ? collectV3RowIdGuardFindings_ACU(originalTempData, compileResult.candidateData, currentSheetKey, String(input.userRequest || ''))
+    const lastV3Draft = lastResult?.draft && isTemplateAssistantV3Draft_ACU(lastResult.draft)
+        ? lastResult.draft
+        : null;
+    const v3GuardTargetSheetKey = lastV3Draft?.result.action === 'replace'
+        ? String(lastV3Draft.result.sheetKey || currentSheetKey || '')
+        : String(currentSheetKey || '');
+    const v3RowIdGuardFindings = lastV3Draft
+        ? collectV3RowIdGuardFindings_ACU(originalTempData, compileResult.candidateData, v3GuardTargetSheetKey, String(input.userRequest || ''))
         : [];
     const finalDraft = lastResult?.draft
         || (protocolVersion === 3 ? buildTemplateAssistantNoopDraftV3_ACU(originalBaseFingerprint, currentSheetKey) : buildTemplateAssistantNoopDraft_ACU(originalBaseFingerprint, currentSheetKey));

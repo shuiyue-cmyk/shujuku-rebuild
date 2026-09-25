@@ -4,7 +4,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const { mockSettings, mockCurrentJsonTableData, mockSendConnectionManager, mockExtractTableEditInner, mockBuildCustomBody } = vi.hoisted(() => {
+const { mockSettings, mockCurrentJsonTableData, mockChatKey, mockIsolationKey, mockSendConnectionManager, mockExtractTableEditInner, mockBuildCustomBody } = vi.hoisted(() => {
   const mockSettings: any = {
     autoMergeEnabled: true,
     autoMergeThreshold: 5,
@@ -28,13 +28,16 @@ const { mockSettings, mockCurrentJsonTableData, mockSendConnectionManager, mockE
   const mockSendConnectionManager = vi.fn();
   const mockExtractTableEditInner = vi.fn(() => '');
   const mockBuildCustomBody = vi.fn(() => ({ messages: [], model: 'gpt-4', max_tokens: 4096, temperature: 1.0, top_p: 0.95, stream: false }));
-  return { mockSettings, mockCurrentJsonTableData, mockSendConnectionManager, mockExtractTableEditInner, mockBuildCustomBody };
+  const mockChatKey = { value: 'test-chat' };
+  const mockIsolationKey = { value: '' };
+  return { mockSettings, mockCurrentJsonTableData, mockChatKey, mockIsolationKey, mockSendConnectionManager, mockExtractTableEditInner, mockBuildCustomBody };
 });
 
 vi.mock('../../../src/service/runtime/state-manager', () => ({
   settings_ACU: mockSettings,
   currentJsonTableData_ACU: mockCurrentJsonTableData,
-  currentChatFileIdentifier_ACU: 'test-chat',
+  get currentChatFileIdentifier_ACU() { return mockChatKey.value; },
+  getCurrentIsolationKey_ACU: vi.fn(() => mockIsolationKey.value),
 }));
 
 vi.mock('../../../src/shared/utils', () => ({
@@ -105,6 +108,8 @@ beforeEach(() => {
   mockSettings.autoMergeEnabled = true;
   mockSettings.autoMergeThreshold = 5;
   mockSettings.autoMergeReserve = 0;
+  mockChatKey.value = 'test-chat';
+  mockIsolationKey.value = '';
   delete mockSettings.autoMergedOrder;
   mockCurrentJsonTableData.sheet_0.name = '纪要表';
   mockCurrentJsonTableData.sheet_0.content = [
@@ -154,13 +159,32 @@ describe('checkAutoMergeTrigger_ACU', () => {
     expect(result.shouldTrigger).toBe(false);
   });
   it('autoMergedOrder 中的 row_id 不计入，普通 AM 行仍参与合并', () => {
-    mockSettings.autoMergedOrder = { sheet_0: ['1', '2', '3', '4', '5', '6'] };
+    mockSettings.autoMergedOrder = { [JSON.stringify(['test-chat', '', 'sheet_0'])]: ['1', '2', '3', '4', '5', '6'] };
     mockCurrentJsonTableData.sheet_0.content[7][1] = 'AM-普通纪要';
     const result = checkAutoMergeTrigger_ACU();
     expect(result).toEqual({ shouldTrigger: false });
     mockSettings.autoMergeThreshold = 1;
     expect(checkAutoMergeTrigger_ACU()).toMatchObject({ shouldTrigger: true, mergeCount: 1, summaryCount: 1 });
   });
+  it('autoMergedOrder 不跨 chat/isolation 复用', async () => {
+    mockSettings.autoMergeThreshold = 1;
+    await finalizeAutoMerge_ACU(
+      { summaryKey: 'sheet_0', endIndex: 1 } as any,
+      [['1', 'A 的合并行', '', '']],
+    );
+
+    mockChatKey.value = 'chat-b';
+    mockCurrentJsonTableData.sheet_0.content = [
+      ['row_id', '事件', '时间', '状态'],
+      ['1', 'B 的普通行', '', ''],
+    ];
+    expect(checkAutoMergeTrigger_ACU()).toMatchObject({ shouldTrigger: true, summaryCount: 1 });
+
+    mockChatKey.value = 'chat-a';
+    mockIsolationKey.value = 'isolation-b';
+    expect(checkAutoMergeTrigger_ACU()).toMatchObject({ shouldTrigger: true, summaryCount: 1 });
+  });
+
   it('已合并行不计入', () => {
     // 标记所有行为已合并
     for (let i = 1; i < mockCurrentJsonTableData.sheet_0.content.length; i++) {
@@ -303,6 +327,25 @@ describe('finalizeAutoMerge_ACU', () => {
     expect(result.mergedRows).toBe(0);
   });
 
+  it('commit 失败时回滚 live 内容与 autoMergedOrder，不刷新世界书且不报成功', async () => {
+    const { updateReadableLorebookEntry_ACU } = await import('../../../src/service/worldbook/pipeline');
+    vi.mocked(updateReadableLorebookEntry_ACU).mockClear();
+    mockSettings.autoMergedOrder = { [JSON.stringify(['test-chat', '', 'sheet_0'])]: ['7'] };
+    const beforeContent = JSON.parse(JSON.stringify(mockCurrentJsonTableData.sheet_0.content));
+    const beforeOrder = JSON.parse(JSON.stringify(mockSettings.autoMergedOrder));
+    mockRunTableUpdateCommit.mockResolvedValueOnce({ success: false, error: 'persist failed' } as any);
+
+    const result = await finalizeAutoMerge_ACU(
+      { summaryKey: 'sheet_0', endIndex: 3 } as any,
+      [['8', '不应落盘', '', '']],
+    );
+
+    expect(result).toMatchObject({ success: false, mergedRows: 0 });
+    expect(mockCurrentJsonTableData.sheet_0.content).toEqual(beforeContent);
+    expect(mockSettings.autoMergedOrder).toEqual(beforeOrder);
+    expect(updateReadableLorebookEntry_ACU).not.toHaveBeenCalled();
+  });
+
   it('有累积行时写入表格并保存', async () => {
     const { updateReadableLorebookEntry_ACU } = await import('../../../src/service/worldbook/pipeline');
     vi.mocked(updateReadableLorebookEntry_ACU).mockResolvedValue(undefined);
@@ -324,7 +367,7 @@ describe('finalizeAutoMerge_ACU', () => {
     expect(updateReadableLorebookEntry_ACU).toHaveBeenCalled();
     expect(mockCurrentJsonTableData.sheet_0.content.slice(1, 3)).toEqual(accumulatedSummary);
     expect(mockCurrentJsonTableData.sheet_0.content.slice(1).every((row: any[]) => row.length === 4)).toBe(true);
-    expect(mockSettings.autoMergedOrder.sheet_0).toEqual(['8', '9']);
+    expect(mockSettings.autoMergedOrder[JSON.stringify(['test-chat', '', 'sheet_0'])]).toEqual(['8', '9']);
   });
 });
 

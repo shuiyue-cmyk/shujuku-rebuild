@@ -306,7 +306,9 @@ export function mergeLegacySheetIdentities_ACU(
             continue;
           }
           winner.content.push(mapped);
-          if (rowId) winnerRowIndexById.set(rowId, winner.content.length - 1);
+          // winnerRowIndexById deliberately contains only rows that existed in
+          // the original winner. A later loser row with the same legacy ID is a
+          // distinct tolerant-replay row, not an override of an earlier append.
           appendedRows += 1;
         }
       }

@@ -51,6 +51,7 @@ interface RecoveryPlan_ACU extends V2RecoverySummary_ACU {
   chat: any[];
   chatKey: string;
   sourceFrameFingerprint: string;
+  backupFrameFingerprint?: string;
   redundantFullIndices?: number[];
   redundantFrameFingerprints?: Array<{ messageIndex: number; fingerprint: string }>;
   candidateData: TableDataObject_ACU;
@@ -226,6 +227,16 @@ function getPlanSourceFrame_ACU(plan: RecoveryPlan_ACU): TableStorageFrameV2_ACU
   const tagData = readIsolatedTagData_ACU(message, plan.isolationKey);
   return isV2TagData_ACU(tagData) ? tagData.storageFrame : null;
 }
+function getPlanBackupFrame_ACU(plan: RecoveryPlan_ACU): TableStorageFrameV2_ACU | null {
+  if (!Number.isInteger(plan.sourceMessageIndex)) return null;
+  const message = plan.chat[plan.sourceMessageIndex as number];
+  const tagData = readIsolatedTagData_ACU(message, plan.isolationKey) as any;
+  const backup = tagData?.recoveryBackup;
+  return backup && typeof backup === 'object' && backup.storageFrame && typeof backup.storageFrame === 'object'
+    ? backup.storageFrame as TableStorageFrameV2_ACU
+    : null;
+}
+
 function planAffectedFramesUnchanged_ACU(plan: RecoveryPlan_ACU): string | null {
   // 单根收敛会改写多个 full 帧：任一受影响帧在计划创建后变化，计划即失效。
   // 校验全部冗余 full 帧 + 根帧指纹，缺一即拒绝（P4-5）。
@@ -240,6 +251,12 @@ function planAffectedFramesUnchanged_ACU(plan: RecoveryPlan_ACU): string | null 
   const sourceFrame = getPlanSourceFrame_ACU(plan);
   if (!sourceFrame || getFrameFingerprint_ACU(sourceFrame) !== plan.sourceFrameFingerprint) {
     return '恢复源 frame 已变化，请重新诊断。';
+  }
+  if (plan.backupFrameFingerprint) {
+    const backupFrame = getPlanBackupFrame_ACU(plan);
+    if (!backupFrame || getFrameFingerprint_ACU(backupFrame) !== plan.backupFrameFingerprint) {
+      return '恢复备份 frame 已变化，请重新诊断。';
+    }
   }
   return null;
 }
@@ -605,6 +622,8 @@ async function diagnoseV2Recovery_ACU(chat: any[], isolationKey: string): Promis
     if (!tagData || typeof tagData !== 'object') continue;
     const backup = tagData.recoveryBackup as TableV2RecoveryBackup_ACU | undefined;
     if (!backup || typeof backup !== 'object' || !backup.storageFrame || typeof backup.storageFrame !== 'object') continue;
+    const liveFrame = isV2TagData_ACU(tagData) ? tagData.storageFrame : null;
+    if (!liveFrame) continue;
     const backupCheckpoint = backup.storageFrame.checkpoint;
     if (!backupCheckpoint || backupCheckpoint.kind !== 'full' || !backupCheckpoint.data) continue;
     const candidateData = backupCheckpoint.data as TableDataObject_ACU;
@@ -619,7 +638,15 @@ async function diagnoseV2Recovery_ACU(chat: any[], isolationKey: string): Promis
       requiresConfirmation: false,
       message: `检测到无锚点 V2 空信封，但其 tagData 保留 recoveryBackup（kind=${backup.recoveryKind || 'unknown'}）；可用备份中的 full checkpoint 数据重建 integrity_repair 根。应用修复时原始 frame 会保留为隔离备份。`,
     };
-    return { summary, plan: { ...summary, kind: 'restored_from_recovery_backup', chat, chatKey: String(currentChatFileIdentifier_ACU || '').trim(), sourceFrameFingerprint: getFrameFingerprint_ACU(backup.storageFrame), candidateData: repair.candidateData || candidateData } };
+    return { summary, plan: {
+      ...summary,
+      kind: 'restored_from_recovery_backup',
+      chat,
+      chatKey: String(currentChatFileIdentifier_ACU || '').trim(),
+      sourceFrameFingerprint: getFrameFingerprint_ACU(liveFrame),
+      backupFrameFingerprint: getFrameFingerprint_ACU(backup.storageFrame),
+      candidateData: repair.candidateData || candidateData,
+    } };
   }
   return { summary: { status: 'unrecoverable_no_base', isolationKey, requiresConfirmation: false, message: '仅检测到无 base 的 V2 日志；无法编造恢复数据。' } };
 }

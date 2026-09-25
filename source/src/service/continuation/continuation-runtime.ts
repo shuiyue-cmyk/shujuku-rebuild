@@ -245,6 +245,7 @@ function createRuntime_ACU(): ContinuationRuntime_ACU {
     },
     hasLiveHostClaim: chatIdentity => bridgeRef?.hasLiveClaim(chatIdentity) ?? false,
     invalidateHostClaim: chatIdentity => { bridgeRef?.invalidateStartedByChat(chatIdentity); },
+    stopHostGeneration: () => { bridgeRef?.stopHostGeneration(); },
     buildFallbackSettings: buildInitialContinuationSettings_ACU,
     onSettingsReplaced: writeGlobalContinuationSettings_ACU,
   });

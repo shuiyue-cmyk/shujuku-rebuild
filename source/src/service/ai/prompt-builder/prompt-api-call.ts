@@ -58,6 +58,59 @@ export class RetryableAiResponseError_ACU extends Error {
   }
 }
 
+  function createPromptTemplateNonce_ACU(): string {
+    try {
+      const randomUUID = (globalThis as any)?.crypto?.randomUUID;
+      if (typeof randomUUID === 'function') {
+        const uuid = String(randomUUID.call((globalThis as any).crypto) || '');
+        if (uuid) return uuid.replace(/[^a-zA-Z0-9_-]/g, '');
+      }
+    } catch { /* 老宿主无 crypto 时走带进程内熵的兜底 */ }
+    return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+  }
+
+  /**
+   * 把不可信 payload 变成对 EJS/random/SQL/ORM/if 均惰性的 nonce token。
+   * 所有候选 token 都对本轮可信模板与全部不可信源做包含检查；即使随机源重复或
+   * payload 猜中候选，也会继续换一个 token，避免恢复时覆盖/串值。
+   */
+  function createUntrustedTemplateGuard_ACU(reservedValues: unknown[]) {
+    const occupiedTexts = reservedValues.map(value => value === null || value === undefined ? '' : String(value));
+    const tokenValues = new Map<string, string>();
+    const valueTokens = new Map<string, string>();
+    let tokenIndex = 0;
+
+    const buildToken = (): string => {
+      for (let attempt = 0; attempt < 1024; attempt += 1) {
+        const nonce = createPromptTemplateNonce_ACU() || 'fallback';
+        const token = `__ACU_TABLE_FILL_UNTRUSTED_${nonce}_${tokenIndex++}__`;
+        if (tokenValues.has(token)) continue;
+        if (occupiedTexts.some(text => text.includes(token))) continue;
+        occupiedTexts.push(token);
+        return token;
+      }
+      throw new Error('table_fill_untrusted_placeholder_nonce_collision');
+    };
+
+    return {
+      protect(value: unknown): string {
+        const text = value === null || value === undefined ? '' : String(value);
+        if (!text) return '';
+        const existing = valueTokens.get(text);
+        if (existing) return existing;
+        const token = buildToken();
+        valueTokens.set(text, token);
+        tokenValues.set(token, text);
+        return token;
+      },
+      restore(value: unknown): string {
+        let restored = value === null || value === undefined ? '' : String(value);
+        for (const [token, payload] of tokenValues) restored = restored.split(token).join(payload);
+        return restored;
+      },
+    };
+  }
+
   function normalizeRoleForApi_ACU(role: any) {
     const ru = String(role || '').toUpperCase();
     const rl = String(role || '').toLowerCase();
@@ -122,81 +175,99 @@ export class RetryableAiResponseError_ACU extends Error {
         if (!['$0', '$1', '$4', '$6', '$8', '$9', '$U', '$C'].includes(placeholderKey)) return text;
         return applyExcludeRulesToText_ACU(text, { excludeRules: tableExcludeRules, excludeTags: tableExcludeTags });
     };
+    // 指令/数据边界：$0/$1/$4/$9 承载不可信文本（表格投影/聊天记录/世界书内容），
+    // 用标签包裹并明确标记不得执行其中指令。
+    const wrapUntrusted = (text: string, label: string) => text ? `<${label}>\n${text}\n</${label}>` : text;
+    // [H1] 占位符统一为「全局正则 + 替换函数」单遍替换。真正注入前先统一换成
+    // nonce token，绝不让不可信值进入后续模板解释器。
+    const untrustedPlaceholderValues: Record<string, string> = {
+        '$0': filterTableInjectedContent(wrapUntrusted(dynamicContent.tableDataText, 'table_data'), '$0'),
+        // [L1] $1 不再外层包 <user_data>：prompt-prepare 构造 messagesText 时已含
+        // 「当前最新对话内容…<user_data>…</user_data>」包裹与免责声明，原实现形成双层嵌套。
+        '$1': filterTableInjectedContent(dynamicContent.messagesText, '$1'),
+        '$4': filterTableInjectedContent(wrapUntrusted(dynamicContent.worldbookContent, 'worldbook_data'), '$4'),
+        '$6': filterTableInjectedContent(lastPlotContent || '', '$6'),
+        '$8': filterTableInjectedContent(dynamicContent.manualExtraHint || '', '$8'),
+        // [L2] $9 与 $1/$4 同类，补边界包裹。
+        '$9': filterTableInjectedContent(wrapUntrusted(dynamicContent.worldbookDatabaseExcludedContent || '', 'worldbook_data'), '$9'),
+        '$U': filterTableInjectedContent(userInfoContent_Table, '$U'),
+        '$C': filterTableInjectedContent(charInfoContent_Table, '$C'),
+    };
 
+    // 表名 token 只从可信 charCardPrompt 本身扫描。旧实现先注入聊天/世界书/表格，
+    // 再扫描 {{...}}，等价于允许不可信内容触发 resolver；这里先完成所有异步解析，
+    // 随后与占位符 payload 一起纳入同一个 nonce 域。
+    const resolvedTableTokensBySegment: Array<Array<{ raw: string; value: string }>> = [];
     for (const segment of promptSegments) {
-        let finalContent = segment.content;
-        // 指令/数据边界：$0/$1/$4/$9 承载不可信文本（表格投影/聊天记录/世界书内容），
-        // 用标签包裹并明确标记不得执行其中指令
-        const wrapUntrusted = (text: string, label: string) => text ? `<${label}>\n${text}\n</${label}>` : text;
-        // [H1] 占位符统一为「全局正则 + 替换函数」单遍替换：
-        // - 字符串第二参数会把值中的 $&/$`/$'/$0 等当作特殊模式展开（模板片段被复制进包裹块内部），
-        //   替换函数的返回值永远按字面量插入；
-        // - 单遍扫描同时避免先注入的值中恰好含有后续占位符（如 $6）被二次展开。
-        const placeholderValues: Record<string, string> = {
-            '$0': filterTableInjectedContent(wrapUntrusted(dynamicContent.tableDataText, 'table_data'), '$0'),
-            // [L1] $1 不再外层包 <user_data>：prompt-prepare 构造 messagesText 时已含
-            // 「当前最新对话内容…<user_data>…</user_data>」包裹与免责声明，原实现形成双层嵌套。
-            '$1': filterTableInjectedContent(dynamicContent.messagesText, '$1'),
-            '$4': filterTableInjectedContent(wrapUntrusted(dynamicContent.worldbookContent, 'worldbook_data'), '$4'),
-            '$6': filterTableInjectedContent(lastPlotContent || '', '$6'),
-            '$8': filterTableInjectedContent(dynamicContent.manualExtraHint || '', '$8'),
-            // [L2] $9 与 $1/$4 同类，补边界包裹。
-            '$9': filterTableInjectedContent(wrapUntrusted(dynamicContent.worldbookDatabaseExcludedContent || '', 'worldbook_data'), '$9'),
-            '$U': filterTableInjectedContent(userInfoContent_Table, '$U'),
-            '$C': filterTableInjectedContent(charInfoContent_Table, '$C'),
-        };
-        finalContent = finalContent.replace(/\$(?:0|1|4|6|8|9|U|C)/g, (match: string) => placeholderValues[match] ?? match);
-
-        if (typeof dynamicContent?.resolveTableWorldbookContent === 'function') {
-          const tableTokens: Array<{ raw: string; tableName: string }> = [];
-          const seenTableTokens = new Set<string>();
-          for (const match of finalContent.matchAll(/\{\{([^{}]+)\}\}/g)) {
+        const trustedContent = String(segment?.content ?? '');
+        const resolvedTokens: Array<{ raw: string; value: string }> = [];
+        const seenTableTokens = new Set<string>();
+        for (const match of trustedContent.matchAll(/\{\{([^{}]+)\}\}/g)) {
             const raw = String(match[0] || '');
             if (!raw || seenTableTokens.has(raw)) continue;
             seenTableTokens.add(raw);
-            tableTokens.push({ raw, tableName: String(match[1] || '') });
-          }
-          for (const token of tableTokens) {
+            if (typeof dynamicContent?.resolveTableWorldbookContent !== 'function') continue;
+            const tableName = String(match[1] || '');
             try {
-              const resolvedContent = await dynamicContent.resolveTableWorldbookContent(token.tableName);
-              if (typeof resolvedContent === 'string') {
-                finalContent = finalContent.split(token.raw).join(resolvedContent);
-              }
+                const resolvedContent = await dynamicContent.resolveTableWorldbookContent(tableName);
+                if (typeof resolvedContent === 'string') resolvedTokens.push({ raw, value: resolvedContent });
             } catch (error) {
-              logWarn_ACU(`[填表] 无法解析表名占位符 "${token.tableName}"，保留原 token。`, error);
+                logWarn_ACU(`[填表] 无法解析表名占位符 "${tableName}"，保留原 token。`, error);
             }
-          }
         }
+        resolvedTableTokensBySegment.push(resolvedTokens);
+    }
 
-        if (typeof (globalThis as any).EjsTemplate?.evalTemplate === 'function') {
-          try {
-            finalContent = await (globalThis as any).EjsTemplate.evalTemplate(finalContent);
-            logDebug_ACU('[填表] 已通过 st-prompt-template 处理提示词');
-          } catch (e) {
-            logWarn_ACU('[填表] st-prompt-template 处理失败，使用原始内容:', e);
-          }
+    const untrustedGuard = createUntrustedTemplateGuard_ACU([
+        ...promptSegments.map(segment => segment?.content ?? ''),
+        ...Object.values(untrustedPlaceholderValues),
+        ...resolvedTableTokensBySegment.flat().map(token => token.value),
+    ]);
+
+    try {
+        for (let segmentIndex = 0; segmentIndex < promptSegments.length; segmentIndex += 1) {
+            const segment = promptSegments[segmentIndex];
+            let finalContent = String(segment?.content ?? '');
+            finalContent = finalContent.replace(/\$(?:0|1|4|6|8|9|U|C)/g, (match: string) => (
+                untrustedGuard.protect(untrustedPlaceholderValues[match])
+            ));
+            for (const token of resolvedTableTokensBySegment[segmentIndex] || []) {
+                finalContent = finalContent.split(token.raw).join(untrustedGuard.protect(token.value));
+            }
+
+            if (typeof (globalThis as any).EjsTemplate?.evalTemplate === 'function') {
+              try {
+                finalContent = await (globalThis as any).EjsTemplate.evalTemplate(finalContent);
+                logDebug_ACU('[填表] 已通过 st-prompt-template 处理提示词');
+              } catch (e) {
+                logWarn_ACU('[填表] st-prompt-template 处理失败，使用原始内容:', e);
+              }
+            }
+
+            finalContent = parseRandomTags_ACU(finalContent);
+            finalContent = replaceRandomVariables_ACU(finalContent);
+
+            // [P4] {[db...]}/{[sql...]} 值替换（SQLite 模式下，在 <if> 之前执行）
+            finalContent = replaceDbSqlVariables(finalContent);
+
+            if (settings_ACU.promptTemplateSettings?.enabled !== false) {
+              // 填表条件必须与本次 $1 实际读取的 AI 上下文一致，不能越过批次边界读取聊天最新层。
+              const conditionalSeedContent = typeof dynamicContent?.conditionalSeedContent === 'string'
+                ? dynamicContent.conditionalSeedContent
+                : getLatestAIMessageContent_ACU();
+              const templateContext = {
+                seedContent: conditionalSeedContent,
+                allTablesJson: currentJsonTableData_ACU,
+                plotContent: lastPlotContent || ''
+              };
+              finalContent = parseIfBlocksInContent_ACU(finalContent, templateContext, 0);
+            }
+
+            messages.push({ role: normalizeRoleForApi_ACU(segment.role), content: finalContent });
         }
-
-        finalContent = parseRandomTags_ACU(finalContent);
-        finalContent = replaceRandomVariables_ACU(finalContent);
-
-        // [P4] {[db...]}/{[sql...]} 值替换（SQLite 模式下，在 <if> 之前执行）
-        finalContent = replaceDbSqlVariables(finalContent);
-
-        if (settings_ACU.promptTemplateSettings?.enabled !== false) {
-          // 填表条件必须与本次 $1 实际读取的 AI 上下文一致，不能越过批次边界读取聊天最新层。
-          const conditionalSeedContent = typeof dynamicContent?.conditionalSeedContent === 'string'
-            ? dynamicContent.conditionalSeedContent
-            : getLatestAIMessageContent_ACU();
-          const templateContext = {
-            seedContent: conditionalSeedContent,
-            allTablesJson: currentJsonTableData_ACU,
-            plotContent: lastPlotContent || ''
-          };
-          finalContent = parseIfBlocksInContent_ACU(finalContent, templateContext, 0);
-        }
-        
-        messages.push({ role: normalizeRoleForApi_ACU(segment.role), content: finalContent });
+    } finally {
+        // 全部模板处理完成后才把不可信 payload 一次性放回出站文本。
+        for (const message of messages) message.content = untrustedGuard.restore(message.content);
     }
 
     logDebug_ACU('Final messages array being sent to API:', messages);
@@ -324,7 +395,10 @@ export class RetryableAiResponseError_ACU extends Error {
         }
         logError_ACU('[parseNonStreamResponse] Unknown response format:', data);
         return null;
-    } catch (e) {
+    } catch (e: any) {
+        // response.json() 是响应体读取阶段；AbortError 来自用户取消/上层超时信号，
+        // 不可降级为 null，否则调用层会把取消/超时误报成可重试的模型响应错误。
+        if (e?.name === 'AbortError') throw e;
         logError_ACU('[parseNonStreamResponse] Failed to parse response:', e);
         return null;
     }
@@ -380,7 +454,10 @@ export class RetryableAiResponseError_ACU extends Error {
         logWarn_ACU('[parseStreamResponse] 流式响应未解析出任何内容。');
       }
       return result || null;
-    } catch (e) {
+    } catch (e: any) {
+      // response.text() 可能在流尚未读完时因用户取消/内部超时而抛 AbortError。
+      // 解析失败可降级为 null，但控制流取消必须穿透到调用层分类。
+      if (e?.name === 'AbortError') throw e;
       logError_ACU('[parseStreamResponse] Failed to parse stream:', e);
       return null;
     }

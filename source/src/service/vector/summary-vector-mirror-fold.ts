@@ -108,6 +108,7 @@ export async function foldSummaryVectorMirrorAtBoundary_ACU(params: {
     });
     const files: SummaryVectorIndexExternalFileRef_ACU[] = [];
     let packHash = '';
+    let packFile: SummaryVectorIndexExternalFileRef_ACU | null = null;
     if (mergedChunks.length > 0) {
         const packPersist = await persistSummaryVectorMirrorPackPrepared_ACU({
             chatKey: scope.chatKey,
@@ -118,7 +119,8 @@ export async function foldSummaryVectorMirrorAtBoundary_ACU(params: {
             chunks: mergedChunks,
         });
         packHash = packPersist.ref.packHash;
-        files.push(packPersist.file);
+        packFile = packPersist.file;
+        if (packPersist.createdNew !== false) files.push(packFile);
         rows.forEach((row) => {
             row.chunks = row.chunks.map((ref) => ({ packHash, chunkIndex: ref.chunkIndex }));
         });
@@ -154,7 +156,9 @@ export async function foldSummaryVectorMirrorAtBoundary_ACU(params: {
         rowCount: rows.length,
         vectorRevision: computeSummaryVectorMirrorCheckpointRevision_ACU(rows),
         manifestRef: manifestPersist.ref,
-        packRefs: packHash ? [{ packHash, path: files[0].path, chunkCount: mergedChunks.length, byteLength: files[0].byteSize }] : [],
+        packRefs: packHash && packFile
+            ? [{ packHash, path: packFile.path, chunkCount: mergedChunks.length, byteLength: packFile.byteSize }]
+            : [],
     };
 
     const anchorFrame = getFrame_ACU(params.chat, params.isolationKey, params.boundaryAnchorIndex);

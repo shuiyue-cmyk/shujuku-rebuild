@@ -69,6 +69,8 @@ export interface UnmirroredEntryDeltaPlanV2_ACU {
     commitRevision: string | null;
     added: string[];
     removed: string[];
+    /** 已存在且 rowId 集合未变的行；对应 table entry 可能改了正文，需重新生成向量。 */
+    refreshed?: string[];
 }
 
 function emptyResult_ACU(partial: Partial<SummaryVectorMirrorFlushResult_ACU>): SummaryVectorMirrorFlushResult_ACU {
@@ -132,19 +134,30 @@ export function planUnmirroredEntryDeltasV2_ACU(
         [...alreadyMirroredRowIds].map((rowId) => String(rowId || '').trim()).filter(Boolean),
     );
     const plans: UnmirroredEntryDeltaPlanV2_ACU[] = [];
+    const refreshed = new Set<string>();
     let before = new Set(rowIdsAtCheckpoint);
     for (const entry of timelineEntries) {
         const after = new Set(entry.rowIdsAfter);
         if (!mirrored.has(entry.entryId)) {
             const added = [...after].filter((rowId) => !before.has(rowId) && !alreadyInHead.has(rowId)).sort();
             const removed = [...before].filter((rowId) => !after.has(rowId)).sort();
-            if (added.length > 0 || removed.length > 0) {
+            // timeline 观察的是稳定 rowId，无法从 rowId 集合本身区分正文是否变化。
+            // 对当前 head 中仍稳定存在的行，在首个未镜像 entry 生成一次 refresh；
+            // 后续 entry 复用同一轮最终实时文本生成的向量，避免同 rowId 永久沿用旧 pack。
+            const refresh = [...after].filter((rowId) => (
+                before.has(rowId)
+                && alreadyInHead.has(rowId)
+                && !refreshed.has(rowId)
+            )).sort();
+            refresh.forEach((rowId) => refreshed.add(rowId));
+            if (added.length > 0 || removed.length > 0 || refresh.length > 0) {
                 plans.push({
                     messageIndex: entry.messageIndex,
                     entryId: entry.entryId,
                     commitRevision: entry.commitRevision,
                     added,
                     removed,
+                    ...(refresh.length > 0 ? { refreshed: refresh } : {}),
                 });
             }
         }
@@ -338,7 +351,10 @@ export async function flushSummaryVectorMirrorNow_ACU(options: {
         { isolationKey },
     );
     const rowsById = new Map(prepared.rows.map((row) => [row.rowId, row]));
-    const addedRowIds = [...new Set(plans.flatMap((plan) => plan.added))];
+    const addedRowIds = [...new Set(plans.flatMap((plan) => [
+        ...plan.added,
+        ...(plan.refreshed || []),
+    ]))];
     const missingAdded = addedRowIds.filter((rowId) => !rowsById.has(rowId));
     if (missingAdded.length > 0) {
         logWarn_ACU(`[向量镜像] 新增 rowId 在实时纪要表中找不到，本轮跳过这些行：${missingAdded.join(',')}`);
@@ -415,7 +431,7 @@ export async function flushSummaryVectorMirrorNow_ACU(options: {
         }
     }
 
-    let packPersist: { ref: SummaryVectorPackRef_ACU; file: SummaryVectorIndexExternalFileRef_ACU } | null = null;
+    let packPersist: { ref: SummaryVectorPackRef_ACU; file: SummaryVectorIndexExternalFileRef_ACU; createdNew?: boolean } | null = null;
     const chunkRefsByRowId = new Map<string, SummaryVectorChunkRef_ACU[]>();
     if (chunkSources.length > 0) {
         const packChunks: SummaryVectorIndexContentPackChunk_ACU[] = chunkSources.map((source, index) => ({
@@ -462,46 +478,64 @@ export async function flushSummaryVectorMirrorNow_ACU(options: {
                         logDebug_ACU(`[向量镜像] 丢弃已失效来源 entry 的 delta：entryId=${plan.entryId}, messageIndex=${plan.messageIndex}`);
                         continue;
                     }
-                    const operations: SummaryVectorIndexMirrorOperationV2_ACU[] = [];
-                    for (const rowId of plan.removed) {
-                        operations.push({ kind: 'row_remove', rowId });
-                    }
-                    for (const rowId of plan.added) {
-                        const chunks = chunkRefsByRowId.get(rowId);
-                        if (!chunks || chunks.length === 0) continue;
-                        const row = rowsById.get(rowId);
-                        operations.push({
-                            kind: 'row_add',
-                            rowId,
-                            chunks,
-                            vectorSourceHash: row?.vectorSourceHash || '',
-                        });
-                    }
-                    if (operations.length === 0) continue;
                     const mirror: SummaryVectorIndexMirrorFrameV2_ACU = frame.summaryVectorIndexFrame && typeof frame.summaryVectorIndexFrame === 'object'
                         ? frame.summaryVectorIndexFrame
                         : { version: 3, sourceTableKey: selected.summaryKey, logEntries: [] };
-                    const nextSeq = Math.max(0, ...(mirror.logEntries || []).map((entry) => Number(entry.seq) || 0)) + 1;
-                    const delta: SummaryVectorIndexMirrorLogEntryV2_ACU = {
-                        seq: nextSeq,
-                        entryId: generateVectorDeltaEntryId_ACU(),
-                        createdAt: Date.now(),
-                        sourceTableEntry: {
-                            entryId: plan.entryId,
-                            commitRevision: plan.commitRevision,
-                            messageIndex: plan.messageIndex,
-                        },
-                        embedding,
-                        packRefs: packPersist ? [packPersist.ref] : [],
-                        operations,
-                        skippedRowCount: plan.added.filter((rowId) => !chunkRefsByRowId.has(rowId)).length || undefined,
+                    let nextSeq = Math.max(0, ...(mirror.logEntries || []).map((entry) => Number(entry.seq) || 0));
+                    const appendDelta = (
+                        operations: SummaryVectorIndexMirrorOperationV2_ACU[],
+                        deltaPack: typeof packPersist = null,
+                        skippedRowCount?: number,
+                    ) => {
+                        if (operations.length === 0) return;
+                        nextSeq += 1;
+                        const delta: SummaryVectorIndexMirrorLogEntryV2_ACU = {
+                            seq: nextSeq,
+                            entryId: generateVectorDeltaEntryId_ACU(),
+                            createdAt: Date.now(),
+                            sourceTableEntry: {
+                                entryId: plan.entryId,
+                                commitRevision: plan.commitRevision,
+                                messageIndex: plan.messageIndex,
+                            },
+                            embedding,
+                            packRefs: deltaPack ? [deltaPack.ref] : [],
+                            operations,
+                            ...(skippedRowCount ? { skippedRowCount } : {}),
+                        };
+                        mirror.logEntries = [...(mirror.logEntries || []), delta];
+                        writtenDeltaCount += 1;
                     };
+
+                    // refresh 必须拆成同一来源 entry 的 remove/add 两条 delta：
+                    // 既有链校验禁止同一 delta 内重复操作同一 rowId，而两条 delta
+                    // 保持 rowId 身份不变并原子替换其 pack 引用。
+                    const refreshesWithChunks = (plan.refreshed || []).filter((rowId) => (
+                        (chunkRefsByRowId.get(rowId)?.length || 0) > 0
+                    ));
+                    appendDelta([
+                        ...plan.removed.map((rowId): SummaryVectorIndexMirrorOperationV2_ACU => ({ kind: 'row_remove', rowId })),
+                        ...refreshesWithChunks.map((rowId): SummaryVectorIndexMirrorOperationV2_ACU => ({ kind: 'row_remove', rowId })),
+                    ]);
+
+                    const additions = [...plan.added, ...refreshesWithChunks];
+                    appendDelta(additions.flatMap((rowId) => {
+                        const chunks = chunkRefsByRowId.get(rowId);
+                        if (!chunks || chunks.length === 0) return [];
+                        const row = rowsById.get(rowId);
+                        return [{
+                            kind: 'row_add' as const,
+                            rowId,
+                            chunks,
+                            vectorSourceHash: row?.vectorSourceHash || '',
+                        }];
+                    }), packPersist, additions.filter((rowId) => !chunkRefsByRowId.has(rowId)).length || undefined);
+
                     frame.summaryVectorIndexFrame = {
                         ...mirror,
                         sourceTableKey: selected.summaryKey,
-                        logEntries: [...(mirror.logEntries || []), delta],
+                        logEntries: [...(mirror.logEntries || [])],
                     };
-                    writtenDeltaCount += 1;
                 }
                 if (writtenDeltaCount === 0) return;
                 await saveChatToHostStrict_ACU();
@@ -511,7 +545,7 @@ export async function flushSummaryVectorMirrorNow_ACU(options: {
         restoreIsolatedData_ACU(snapshots);
         // 提交失败 → 本次不会再 finalize，prepared pack 永远不会被引用（GC 出于保护 finalize 窗口
         // 而保留所有 prepared pack），不主动回收就会永久累积。走统一回收（含 ok 检查与 registry 注销）。
-        if (packPersist?.file) {
+        if (packPersist?.file && packPersist.createdNew !== false) {
             await discardSummaryVectorMirrorPreparedFiles_ACU([packPersist.file], 'delta 提交失败');
         }
         return emptyResult_ACU({
@@ -521,7 +555,7 @@ export async function flushSummaryVectorMirrorNow_ACU(options: {
         });
     }
 
-    if (packPersist) {
+    if (packPersist && packPersist.createdNew !== false) {
         try {
             await finalizeSummaryVectorMirrorFiles_ACU([packPersist.file]);
         } catch (error: any) {

@@ -278,4 +278,26 @@ describe('mergeLegacySheetIdentities_ACU', () => {
       ['2', '旧行'],
     ]);
   });
+
+  it('loser 内重复 row_id 的独立行全部保留，不把后追加行误当 winner 覆盖', () => {
+    const state = {
+      sheet_old_hash: makeSheet('背包', [['1', 'A'], ['1', 'B']]),
+      [NEW_KEY]: makeSheet('背包', []),
+    } as any;
+
+    const result = mergeLegacySheetIdentities_ACU(state, [NEW_KEY]);
+
+    expect(state[NEW_KEY].content).toEqual([
+      ['row_id', 'name'],
+      ['1', 'A'],
+      ['1', 'B'],
+    ]);
+    expect(result.remaps[0]).toEqual(expect.objectContaining({
+      fromKey: 'sheet_old_hash',
+      toKey: NEW_KEY,
+      overriddenRows: 0,
+      appendedRows: 2,
+      conflictingRowIds: [],
+    }));
+  });
 });

@@ -52,6 +52,17 @@ describe('Agent 资料快照存储', () => {
     expect(readAgentModuleSnapshot_ACU(chat).settledThroughIndex).toBe(0);
   });
 
+  it('水位之前删除中间楼层时不复用旧快照，按前缀失配安全回退', async () => {
+    const chat: any[] = [{ mes: 'a' }, { mes: 'b' }, { mes: 'c' }, { mes: 'd' }];
+    const saveChat = vi.fn().mockResolvedValue(undefined);
+    _set_SillyTavern_API_ACU({ chat, saveChat } as any);
+    await writeAgentModuleSnapshot_ACU(chat, 3, snapshotAt_ACU(3, { hooks: [hook_ACU('H1') as any] }));
+
+    chat.splice(1, 1);
+
+    expect(readAgentModuleSnapshot_ACU(chat).hooks).toEqual([]);
+  });
+
   it('未揭示条目携带揭示楼层时读取阶段就把楼层清空', () => {
     const validated = validateAgentModuleSnapshot_ACU({
       schemaVersion: 1,
@@ -82,6 +93,19 @@ describe('Agent 资料快照存储', () => {
       ...base,
       storyArc: [{ ...base.storyArc[0], targetStageRange: { min: 6, max: 4 } }],
     })).toBeNull();
+  });
+
+  it('storyArc 已出现但不是数组时整份快照非法，并回退到上一份合法快照', () => {
+    const story = { id: 'VOL-01', scope: 'volume', title: '卷一', direction: 'd', escalation: 'e', withheld: '', status: 'active', stageNumbers: [], completionStageNumber: null, completionState: '', continuationRationale: '', retired: false, retiredReason: '' };
+    const good = snapshotAt_ACU(0, { revisions: { hooks: 0, infoGap: 0, constraints: 0, storyArc: 1, chronology: 0, webRefs: 0 }, storyArc: [story] as any });
+    const malformed = { ...good, settledThroughIndex: 1, storyArc: '不是数组' };
+
+    expect(validateAgentModuleSnapshot_ACU(malformed)).toBeNull();
+    const chat: any[] = [
+      { mes: 'a', [AGENT_MODULE_FIELD_ACU]: good },
+      { mes: 'b', [AGENT_MODULE_FIELD_ACU]: malformed },
+    ];
+    expect(readAgentModuleSnapshot_ACU(chat).storyArc).toEqual([expect.objectContaining({ id: 'VOL-01' })]);
   });
 
   it('空快照初始化 chronology 为空账本且 revision 为 0', () => {
@@ -329,14 +353,18 @@ describe('Agent 资料快照落盘修订号复核（用户手动保存防冲）'
     const stale = snapshotAt_ACU(0, { revisions: { hooks: 1, infoGap: 0, constraints: 0, storyArc: 0, chronology: 0, webRefs: 0 }, hooks: [hook_ACU('子代理伏笔') as any] });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     let warnTexts: string[] = [];
+    let writeError: unknown;
     try {
       await writeAgentModuleSnapshot_ACU(chat, 1, stale);
+    } catch (error) {
+      writeError = error;
     } finally {
       // mockRestore 会清空调用记录：必须在 restore 前快照。
       warnTexts = warn.mock.calls.map(args => args.map(String).join(' '));
       warn.mockRestore();
     }
 
+    expect(writeError).toMatchObject({ error: { code: 'CONTINUATION_AGENT_WRITE_REJECTED' } });
     expect(warnTexts.some(text => text.includes('放弃本次写入防止整份覆盖'))).toBe(true);
     expect(warnTexts.some(text => text.includes('hooks 楼层=2 写入=1'))).toBe(true);
     expect(saveChat).not.toHaveBeenCalled();
@@ -353,12 +381,16 @@ describe('Agent 资料快照落盘修订号复核（用户手动保存防冲）'
     _set_SillyTavern_API_ACU({ chat, saveChat: vi.fn().mockResolvedValue(undefined) } as any);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     let warnTexts: string[] = [];
+    let writeError: unknown;
     try {
       await writeAgentModuleSnapshot_ACU(chat, 1, snapshotAt_ACU(0, { revisions: { hooks: 2, infoGap: 1, constraints: 0, storyArc: 2, chronology: 0, webRefs: 0 } }));
+    } catch (error) {
+      writeError = error;
     } finally {
       warnTexts = warn.mock.calls.map(args => args.map(String).join(' '));
       warn.mockRestore();
     }
+    expect(writeError).toMatchObject({ error: { code: 'CONTINUATION_AGENT_WRITE_REJECTED' } });
     expect(warnTexts.some(text => text.includes('storyArc 楼层=3 写入=2'))).toBe(true);
   });
 

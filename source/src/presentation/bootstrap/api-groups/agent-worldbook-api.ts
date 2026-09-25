@@ -110,6 +110,12 @@ export function createAgentWorldbookApi(_ctx: ApiGroupContext): Record<string, F
     const deleteAgentWorldbookSkillMeta = async function(bookName: any, uid: any) {
         try {
             const result = await deleteWorldbookEntrySkillMeta_ACU(String(bookName || ''), uid);
+            if (result.updated) {
+                const takeover = await takeoverWorldbookGreenlights_ACU();
+                if (takeover.failed > 0) {
+                    throw new Error(`Skill 元数据已删除，但 active snapshot 对账失败：${takeover.reason || 'unknown'}`);
+                }
+            }
             return { success: true, result };
         } catch (e) {
             logError_ACU('deleteAgentWorldbookSkillMeta failed:', e);
@@ -202,7 +208,12 @@ export function createAgentWorldbookApi(_ctx: ApiGroupContext): Record<string, F
                 const normalizedBookNames = Array.isArray(bookNames) ? bookNames : [];
                 const result = await clearWorldbookSkillMetaBlocks_ACU(normalizedBookNames);
                 const hasErrors = Array.isArray(result.errors) && result.errors.length > 0;
-                const success = result.failed === 0 && !hasErrors;
+                let takeoverFailed = false;
+                if (result.cleared > 0) {
+                    const takeover = await takeoverWorldbookGreenlights_ACU();
+                    takeoverFailed = takeover.failed > 0;
+                }
+                const success = result.failed === 0 && !hasErrors && !takeoverFailed;
                 return {
                     success,
                     error: success ? undefined : '清除 Agent 世界书 Skill 元数据未完全完成。',

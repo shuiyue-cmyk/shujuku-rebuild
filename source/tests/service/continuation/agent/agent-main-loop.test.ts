@@ -7,7 +7,7 @@ import { appendAgentConversation_ACU, buildEmptyAgentConversation_ACU } from '..
 import { buildEmptyAgentWorldbookSnapshot_ACU } from '../../../../src/service/continuation/agent/agent-worldbook-read';
 import { buildDefaultContinuationSettings_ACU } from '../../../../src/service/continuation/defaults';
 import { ContinuationValidationError_ACU, type ContinuationInternalAiRequestIdentity_ACU } from '../../../../src/service/continuation/model';
-import { readAgentSessionLog_ACU, resetAgentSessionLogForTests_ACU } from '../../../../src/service/continuation/agent/agent-session-log';
+import { isAgentSessionRunning_ACU, readAgentSessionLog_ACU, resetAgentSessionLogForTests_ACU } from '../../../../src/service/continuation/agent/agent-session-log';
 import { readAgentRunState_ACU, resetAgentRunCacheForTests_ACU } from '../../../../src/service/continuation/agent/agent-run-cache';
 import type { AgentConversationCompactionMark_ACU, AgentConversationCompactionMarkV2_ACU, AgentConversationMessage_ACU, AgentConversationSnapshot_ACU, AgentModuleSnapshot_ACU, AgentOutlineOpResult_ACU, AgentRunBudget_ACU, ContinuationAgentTurnPlanRequest_ACU } from '../../../../src/service/continuation/agent/agent-model';
 
@@ -99,7 +99,10 @@ function harness_ACU(options: {
   subReplies?: string[];
   handoffReplies?: string[];
   compactionWrite?: 'success' | 'false' | 'throw';
+  failToolResultWrite?: boolean;
+  mutateChatDuringSubagent?: (chat: any[]) => void;
   mutatePersistedCompactionMark?: (mark: AgentConversationCompactionMarkV2_ACU) => AgentConversationCompactionMark_ACU | null;
+  readCompactionMark?: () => AgentConversationCompactionMark_ACU | null;
   budget?: Partial<AgentRunBudget_ACU>;
   snapshot?: AgentModuleSnapshot_ACU;
   isCurrent?: (identity: ContinuationInternalAiRequestIdentity_ACU) => boolean;
@@ -133,7 +136,12 @@ function harness_ACU(options: {
   const subagentRuntime = new AgentSubagentRuntime_ACU({
     resolveApiPreset: (() => preset_ACU) as any,
     resolveAgentApiPreset: (() => preset_ACU) as any,
-    callInternalAi: async messages => { subCalls.push(messages); return subReplies.shift() ?? '{"summary":"空","recommendation":"随便推进"}'; },
+    callInternalAi: async messages => {
+      subCalls.push(messages);
+      const reply = subReplies.shift() ?? '{"summary":"空","recommendation":"随便推进"}';
+      options.mutateChatDuringSubagent?.(chat);
+      return reply;
+    },
   });
 
   const planner = new ContinuationAgentTurnPlanner_ACU({
@@ -153,6 +161,9 @@ function harness_ACU(options: {
     readConversation: () => conversation,
     // 分段落盘的内存替身：把新消息接到会话尾部，与真实实现同样按 id 去重。
     appendConversationMessages: async (_chat, prepared: readonly AgentConversationMessage_ACU[]) => {
+      if (options.failToolResultWrite && prepared.some(message => message.kind === 'tool')) {
+        throw new Error('simulated tool result persistence failure');
+      }
       const existing = new Set(conversation.messages.map(message => message.id));
       const fresh = prepared.filter(message => !existing.has(message.id));
       if (!fresh.length) return false;
@@ -161,7 +172,7 @@ function harness_ACU(options: {
       conversationWrites.push(conversation);
       return true;
     },
-    readCompactionMark: () => persistedCompactionMark,
+    readCompactionMark: options.readCompactionMark ?? (() => persistedCompactionMark),
     // 压缩标记的内存替身：保存权威 V2 mark，并应用与 readAgentConversation_ACU 相同的投影。
     writeCompactionMark: async (_chat, mark) => {
       if (options.compactionWrite === 'throw') throw new Error('simulated compaction write failure');
@@ -317,6 +328,48 @@ describe('主 Agent 会话记录', () => {
     expect(handoffEntry?.title).toContain('此前内容对当前 AI 不可见');
     expect(handoffEntry?.detail).toBe(messages[0].text);
     expect(h.handoffCalls).toHaveLength(2);
+  });
+
+  it('交接摘要完成后租约失效时不得写入压缩标记', async () => {
+    let turnInstructionChecks = 0;
+    const leaseChecks: string[] = [];
+    const h = harness_ACU({
+      conversation: overBudgetConversation_ACU('守门人'.repeat(400)),
+      historyTokenBudget: 200,
+      countTokens: fillerTokens_ACU,
+      mainReplies: ['{"action":"finalize","instruction":"不应发送"}'],
+      context: nextTurnContext_ACU,
+      isCurrent: identity => {
+        leaseChecks.push(identity.source);
+        if (identity.source === 'handoff_summary') {
+          handoffFinished = true;
+          return true;
+        }
+        return turnInstructionChecks++ === 0;
+      },
+    });
+
+    let error: unknown;
+    try { await h.planner.plan(h.request); } catch (caught) { error = caught; }
+    expect(h.handoffCalls.length).toBeGreaterThan(0);
+    expect(leaseChecks).toContain('turn_instruction');
+    expect(error).toMatchObject({ error: { code: 'CONTINUATION_INTERNAL_REQUEST_STALE' } });
+    expect(h.conversation().messages.some(message => message.kind === 'handoff')).toBe(false);
+  });
+
+  it('begin session 后初始化异常会清理 running 并记录失败', async () => {
+    const h = harness_ACU({
+      conversation: overBudgetConversation_ACU('守门人'.repeat(400)),
+      historyTokenBudget: 200,
+      countTokens: fillerTokens_ACU,
+      context: nextTurnContext_ACU,
+      mainReplies: ['{"action":"finalize","instruction":"不应发送"}'],
+      readCompactionMark: () => { throw new Error('simulated compaction read failure'); },
+    });
+
+    await expect(h.planner.plan(h.request)).rejects.toThrow(/simulated compaction read failure/);
+    expect(isAgentSessionRunning_ACU()).toBe(false);
+    expect(readAgentSessionLog_ACU().some(entry => entry.kind === 'run_failed')).toBe(true);
   });
 
   it('同一轮内到达阈值只登记不压缩，留到下一轮开始时再做', async () => {
@@ -658,6 +711,23 @@ describe('主 Agent 循环收敛', () => {
     expect(readAgentSessionLog_ACU().some(entry => entry.kind === 'run_resumed')).toBe(true);
     // 成功交付后缓存清除，下一轮全新开始。
     expect(readAgentRunState_ACU('chat-resume', 'task-1', 'stage-1#0#turn-2')).toBeNull();
+  });
+
+  it('会话提交失败时不得把未落盘 outcome 留在 run ledger', async () => {
+    const identity = (attempt: number) => ({ chatIdentity: 'chat-outcome-fail', taskId: 'task-1', stageId: 'stage-1', turnId: 'turn-2', attemptId: `a-${attempt}`, source: 'turn_instruction' }) as any;
+    const h = harness_ACU({
+      failToolResultWrite: true,
+      mainReplies: [
+        '{"action":"delegate","delegations":[{"agentName":"hook-cognition-maintainer","prompt":"结算正文","reads":[]}]}',
+        '{"action":"finalize","instruction":"不应继续"}',
+      ],
+      subReplies: [JSON.stringify({ summary: '已结算', delta: { hooks: [{ action: 'upsert', id: 'H1', summary: '晶屑' }] } })],
+    });
+    h.request.createInternalRequestIdentity = identity;
+
+    await expect(h.planner.plan(h.request)).rejects.toThrow(/simulated tool result persistence failure/);
+    const state = readAgentRunState_ACU('chat-outcome-fail', 'task-1', 'stage-1#0#turn-2#arc:1#settled:3');
+    expect(state?.ledger.outcomes).toEqual([]);
   });
 
   it('终审关闭时 finalize 沿用原交付路径，不调用 final-reviewer', async () => {
@@ -1197,7 +1267,7 @@ describe('派工与写集落盘', () => {
         summary: '结算了晶屑与三日行程',
         delta: {
           hooks: [{ action: 'upsert', id: 'H1', summary: '守门人手中的黑色晶屑', status: 'planted', importance: 'high', plantedIndex: 3 }],
-          chronology: [{ action: 'upsert', id: 'T1', anchor: '抵达禁区外围的第三日', elapsed: '自开篇约三日', precision: 'approximate', transition: '主角一行赶路三日抵达禁区外围', evidenceIndexes: [2, 3] }],
+          chronology: [{ action: 'upsert', id: 'T1', anchor: '抵达禁区外围的第三日', elapsed: '自开篇约三日', precision: 'approximate', transition: '主角一行赶路三日抵达禁区外围', evidenceIndexes: [3] }],
         },
       })],
     });
@@ -1209,7 +1279,7 @@ describe('派工与写集落盘', () => {
     expect(h.written).toHaveLength(1);
     expect(h.written[0].snapshot.hooks).toHaveLength(1);
     expect(h.written[0].snapshot.chronology).toHaveLength(1);
-    expect(h.written[0].snapshot.chronology[0]).toMatchObject({ id: 'T1', anchor: '抵达禁区外围的第三日', evidenceIndexes: [2, 3], updatedIndex: 3 });
+    expect(h.written[0].snapshot.chronology[0]).toMatchObject({ id: 'T1', anchor: '抵达禁区外围的第三日', evidenceIndexes: [3], updatedIndex: 3 });
     expect(h.written[0].snapshot.revisions).toMatchObject({ hooks: 1, chronology: 1 });
     expect(h.written[0].snapshot.settledThroughIndex).toBe(3);
 
@@ -1273,6 +1343,36 @@ describe('派工与写集落盘', () => {
     await h.planner.plan(h.request);
     expect(h.written).toHaveLength(0);
     expect(h.mainCalls[1][findIndex_ACU(h.mainCalls[1], '结果 1')].content).toContain('未采用');
+  });
+
+  it('子代理在途新增聊天楼层时不得用未见楼层结算', async () => {
+    const h = harness_ACU({
+      mainReplies: [
+        '{"action":"delegate","delegations":[{"agentName":"hook-cognition-maintainer","prompt":"结算","reads":[]}]}',
+        '{"action":"finalize","instruction":"不应使用新楼层"}',
+      ],
+      subReplies: [JSON.stringify({ summary: '结算旧楼层', delta: {} })],
+      mutateChatDuringSubagent: chat => { chat.push({ mes: '子代理返回后新增的用户楼', is_user: true }); },
+    });
+
+    await expect(h.planner.plan(h.request)).rejects.toMatchObject({ error: { code: 'CONTINUATION_INTERNAL_REQUEST_STALE' } });
+    expect(h.written).toHaveLength(0);
+  });
+
+  it('maintainer 缺 delta 不得把未结算楼层推进水位', async () => {
+    const h = harness_ACU({
+      mainReplies: [
+        '{"action":"delegate","delegations":[{"agentName":"hook-cognition-maintainer","prompt":"结算","reads":[]}]}',
+        '{"action":"finalize","instruction":"在没有结算结果时交付"}',
+      ],
+      subReplies: ['{"summary":"没有变化"}'],
+    });
+    h.request.settings.internalAiRetryLimit = 0;
+
+    await h.planner.plan(h.request);
+
+    expect(h.written).toHaveLength(0);
+    expect(h.mainCalls[1].map(message => message.content).join('\n')).toContain('未采用');
   });
 
   it('种子读集超预算的派工被拒绝，但不影响同波次其他子代理', async () => {
@@ -1419,6 +1519,29 @@ describe('子代理运行时', () => {
     expect(result.maintainer?.delta.hooks).toHaveLength(1);
   });
 
+  it('未结算正文只注入 AI 楼，不把 system/tool 楼当作历史证据', async () => {
+    replies = [JSON.stringify({ summary: '只结算正文', delta: {} })];
+    const base = input_ACU();
+    const result = await runtime.run({
+      ...base,
+      resolveContext: {
+        ...base.resolveContext,
+        settledThroughIndex: -1,
+        chat: [
+          { mes: '系统提示：不要结算我', is_system: true },
+          { mes: '用户指令：推进', is_user: true },
+          { mes: '正文楼：守门人挡住门', is_user: false },
+        ],
+      },
+    } as any);
+
+    const prompt = calls[0].map(message => message.content).join('\n');
+    expect(prompt).toContain('正文楼：守门人挡住门');
+    expect(prompt).not.toContain('系统提示：不要结算我');
+    expect(prompt).not.toContain('用户指令：推进');
+    expect(result.iterations).toBe(1);
+  });
+
   it('子代理输出 read 工具批次时执行调阅并把结果回灌，随后继续小循环', async () => {
     replies = [
       '{"action":"read","reads":["$TABLE:角色表"]}',
@@ -1460,13 +1583,18 @@ describe('子代理运行时', () => {
   });
 
   it('连续返回不符合契约时抛出子代理失败，且把拒绝理由喂回下一次尝试', async () => {
-    replies = ['不是 JSON', '{"delta":{"hooks":[{"action":"delete","id":"H1"}]}}'];
+    replies = [
+      '{"delta":{"hooks":[{"action":"delete","id":"H1"}]}}',
+      '{"delta":{"hooks":[{"action":"delete","id":"H1"}]}}',
+      '{"delta":{"hooks":[{"action":"delete","id":"H1"}]}}',
+      '{"delta":{"hooks":[{"action":"delete","id":"H1"}]}}',
+    ];
     const settings = buildDefaultContinuationSettings_ACU();
     settings.internalAiRetryLimit = 1;
     // 第 2 次回复结构合法但 H1 非法：进入条目修补轮（2 轮），模型始终不重发 H1 修正版 → 失败。
-    await expect(runtime.run(input_ACU({ settings } as any))).rejects.toMatchObject({ error: { code: 'CONTINUATION_AGENT_SUBAGENT_FAILED', details: { rejected: [{ module: 'hooks', id: 'H1' }] } } });
-    expect(calls).toHaveLength(4);
-    expect(calls[1].map(message => message.content).join('\n')).toContain('没有被采纳');
+    await expect(runtime.run(input_ACU({ settings } as any))).rejects.toMatchObject({ error: { code: 'CONTINUATION_AGENT_SUBAGENT_FAILED', details: { rejected: expect.arrayContaining([expect.objectContaining({ module: 'hooks', id: 'H1' })]) } } });
+    expect(calls).toHaveLength(3);
+    expect(calls[1].map(message => message.content).join('\n')).toContain('需要修正的条目');
     const repair = calls[2].map(message => message.content).join('\n');
     expect(repair).toContain('需要修正的条目');
     expect(repair).toContain('hooks[0]（id=H1）');

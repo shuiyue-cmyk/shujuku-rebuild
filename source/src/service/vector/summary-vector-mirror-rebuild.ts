@@ -480,10 +480,12 @@ export async function rebuildSummaryVectorMirror_ACU(options: {
                 const refs = head.head.get(rowId);
                 if (!refs || refs.length === 0) continue;
                 let valid = true;
+                const liveSourceHash = String(preparedById.get(rowId)?.vectorSourceHash || '');
                 for (const ref of refs) {
                     const packRef = headPackRefsByHash.get(ref.packHash);
                     const pack = await loadSummaryVectorMirrorPack_ACU({ packHash: ref.packHash, path: packRef?.path || '', chunkCount: 0, byteLength: 0 });
-                    if (!pack || !pack.chunks[ref.chunkIndex]) {
+                    const packed = pack?.chunks?.[ref.chunkIndex];
+                    if (!packed || (liveSourceHash && String(packed.textHash || '') !== liveSourceHash)) {
                         valid = false;
                         break;
                     }
@@ -577,7 +579,7 @@ export async function rebuildSummaryVectorMirror_ACU(options: {
             dimension: embedding.dimension,
             chunks: packChunks,
         });
-        files.push(packPersist.file);
+        if (packPersist.createdNew !== false) files.push(packPersist.file);
         packRefsByHash.set(packPersist.ref.packHash, { ...packPersist.ref });
         chunkSources.forEach((source, index) => {
             const list = newRefsByRow.get(source.rowId) || [];

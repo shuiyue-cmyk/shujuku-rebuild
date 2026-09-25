@@ -48,6 +48,21 @@ describe('summary-vector-embedding-batches', () => {
     expect(result.stats).toMatchObject({ plannedBatchCount: 3, completedBatchCount: 3, successfulBatchCount: 3 });
   });
 
+  it('跨批返回不同维度时整批拒绝，不返回可混合落盘的 vectors', async () => {
+    const plan = planEmbeddingBatches_ACU([
+      { rowKey: 'a', text: 'a' },
+      { rowKey: 'b', text: 'b' },
+    ], { maxRowsPerRequest: 1, maxInputCharsPerRequest: 10 });
+
+    await expect(executeEmbeddingBatchPlan_ACU(plan, {
+      maxConcurrentRequests: 2,
+      requestEmbeddings: async input => [{
+        index: 0,
+        embedding: input[0] === 'a' ? [1, 0] : [1, 0, 0],
+      }],
+    })).rejects.toThrow(/维度不一致.*2.*3/);
+  });
+
   it('recovers only missing sources inside the failed-response batch', async () => {
     const plan = planEmbeddingBatches_ACU([{ rowKey: 'a', text: 'a' }, { rowKey: 'b', text: 'b' }], { maxRowsPerRequest: 2, maxInputCharsPerRequest: 10 });
     const requests: string[][] = [];

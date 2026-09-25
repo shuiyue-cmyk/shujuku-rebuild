@@ -102,6 +102,37 @@ describe('AgentWebClient_ACU 百科通道（TT 直连）', () => {
     expect(String(fetch.mock.calls[0][0])).toContain('origin=*');
   });
 
+  it('百科响应体读取阶段也必须响应取消信号', async () => {
+    const controller = new AbortController();
+    const { client } = client_ACU(() => ({ ok: true, json: () => new Promise(() => {}) } as any));
+    const pending = client.readEncyclopedia('wikipedia_zh', '长正文', 4000, controller.signal);
+    await Promise.resolve();
+    controller.abort();
+
+    const outcome = await Promise.race([
+      pending.then(() => 'resolved', error => error instanceof Error && error.name === 'AbortError' ? 'aborted' : 'other'),
+      new Promise<string>(resolve => setTimeout(() => resolve('not-aborted'), 50)),
+    ]);
+    expect(outcome).toBe('aborted');
+  });
+
+  it('响应体一直未结束时仍受请求超时保护', async () => {
+    vi.useFakeTimers();
+    try {
+      const { client } = client_ACU(() => ({ ok: true, json: () => new Promise(() => {}) } as any));
+      const pending = client.readEncyclopedia('wikipedia_zh', '超时正文', 4000);
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(20000);
+      const result = await Promise.race([
+        pending,
+        new Promise<'timeout'>(resolve => setTimeout(() => resolve('timeout'), 0)),
+      ]);
+      expect(result).toMatchObject({ status: 'unavailable' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('维基百科 list=search 无命中与词条缺失都以说明文本返回而不抛错', async () => {
     const { client } = client_ACU(url => {
       if (url.includes('list=search')) return jsonResponse_ACU({ query: { search: [] } });
