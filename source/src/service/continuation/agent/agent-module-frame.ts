@@ -15,12 +15,19 @@
 
 import {
   AGENT_MODULE_FIELD_ACU,
+  AGENT_MODULE_FIELD_MATRIX_ACU,
   AGENT_MODULE_FRAME_SCHEMA_VERSION_ACU,
   AGENT_WRITABLE_MODULES_ACU,
   type AgentModuleFloorDelta_ACU,
   type AgentModuleFloorFrame_ACU,
+  type AgentModuleFieldRecord_ACU,
+  type AgentModuleFieldSnapshot_ACU,
+  type AgentModuleFieldUpserts_ACU,
+  type AgentModuleFieldValue_ACU,
+  type AgentModuleFieldWrite_ACU,
   type AgentModuleRevisions_ACU,
   type AgentModuleSnapshot_ACU,
+  type AgentWritableModule_ACU,
 } from './agent-model';
 
 export interface AgentModuleFrameDeps_ACU {
@@ -46,6 +53,8 @@ export interface AgentModuleFoldResult_ACU {
   foldedDeltaCount: number;
   /** 折叠范围内是否纳入过基线或 delta。空聊天为 false。 */
   contributed: boolean;
+  /** 折叠派生的分栏视图（只读，绝不写回持久帧）。完整领域数组只来自整条 writes；partial 记录只出现在这里。 */
+  fields: AgentModuleFieldSnapshot_ACU;
 }
 
 interface ParsedLegacy_ACU {
@@ -155,6 +164,9 @@ function parseDelta_ACU(raw: unknown, deps: AgentModuleFrameDeps_ACU): AgentModu
     revisions: cloneJson_ACU(raw.revisions) as Partial<AgentModuleRevisions_ACU>,
     updatedAt: typeof raw.updatedAt === 'number' && raw.updatedAt >= 0 ? raw.updatedAt : 0,
   };
+  // 逐栏增量不参与领域快照的严格校验（applyDelta/validateSnapshot 只看整条 writes），
+  // 内容清洗下沉到视图折叠与写入规划（矩阵白名单 + unset/value 显式区分），此处只透传。
+  if (isRecord_ACU(raw.fieldUpserts)) delta.fieldUpserts = cloneJson_ACU(raw.fieldUpserts) as AgentModuleFieldUpserts_ACU;
   if (isRecord_ACU(raw.removedIds)) delta.removedIds = cloneJson_ACU(raw.removedIds) as AgentModuleFloorDelta_ACU['removedIds'];
   if (typeof raw.settledThroughIndex === 'number' && Number.isInteger(raw.settledThroughIndex) && raw.settledThroughIndex >= 0) {
     delta.settledThroughIndex = raw.settledThroughIndex;
@@ -276,6 +288,121 @@ function diffSnapshot_ACU(before: AgentModuleSnapshot_ACU, after: AgentModuleSna
   return changed ? delta : null;
 }
 
+function emptyFieldView_ACU(): AgentModuleFieldSnapshot_ACU {
+  return { records: {} };
+}
+
+function seedFieldViewFromSnapshot_ACU(snapshot: AgentModuleSnapshot_ACU, updatedAt: number): AgentModuleFieldSnapshot_ACU {
+  const view = emptyFieldView_ACU();
+  syncAllModuleRecordsToView_ACU(view, snapshot, updatedAt);
+  return view;
+}
+
+function syncModuleRecordToView_ACU(
+  view: AgentModuleFieldSnapshot_ACU,
+  module: AgentWritableModule_ACU,
+  items: readonly unknown[],
+  updatedAt: number,
+): void {
+  const matrix = AGENT_MODULE_FIELD_MATRIX_ACU[module];
+  const bucket: Record<string, AgentModuleFieldRecord_ACU> = {};
+  for (const item of items) {
+    if (!isRecord_ACU(item)) continue;
+    const id = entryId_ACU(item);
+    if (!id) continue;
+    const fields: Record<string, AgentModuleFieldValue_ACU> = {};
+    for (const key of matrix.fields) {
+      if (Object.prototype.hasOwnProperty.call(item, key)) {
+        fields[key] = { value: cloneJson_ACU((item as Record<string, unknown>)[key]), revision: 0, updatedAt };
+      }
+    }
+    bucket[id] = { module, id, status: 'legacy_unknown', fields, missingFields: [], updatedAt };
+  }
+  view.records[module] = bucket;
+}
+
+function syncAllModuleRecordsToView_ACU(view: AgentModuleFieldSnapshot_ACU, snapshot: AgentModuleSnapshot_ACU, updatedAt: number): void {
+  for (const key of AGENT_WRITABLE_MODULES_ACU) {
+    syncModuleRecordToView_ACU(view, key, snapshot[key] as unknown as unknown[], updatedAt);
+  }
+}
+
+/**
+ * 每条 delta 后的按 ID 对账：领域数组中的条目覆盖同名分栏记录（整条写入/提升为权威），
+ * 从领域数组消失的 legacy_unknown 记录同步删除；fieldUpserts 留下的 partial 记录
+ * 不在领域数组中，必须保留在受控视图里。不能用整桶重建——那会抹掉 partial。
+ */
+function reconcileFieldViewWithSnapshot_ACU(view: AgentModuleFieldSnapshot_ACU, snapshot: AgentModuleSnapshot_ACU, updatedAt: number): void {
+  for (const key of AGENT_WRITABLE_MODULES_ACU) {
+    const items = snapshot[key] as unknown as unknown[];
+    const bucket = (view.records[key] ??= {});
+    const matrix = AGENT_MODULE_FIELD_MATRIX_ACU[key];
+    const domainIds = new Set<string>();
+    for (const item of items) {
+      if (!isRecord_ACU(item)) continue;
+      const id = entryId_ACU(item);
+      if (!id) continue;
+      domainIds.add(id);
+      const fields: Record<string, AgentModuleFieldValue_ACU> = {};
+      for (const field of matrix.fields) {
+        if (Object.prototype.hasOwnProperty.call(item, field)) {
+          fields[field] = { value: cloneJson_ACU((item as Record<string, unknown>)[field]), revision: 0, updatedAt };
+        }
+      }
+      bucket[id] = { module: key, id, status: 'legacy_unknown', fields, missingFields: [], updatedAt };
+    }
+    for (const id of Object.keys(bucket)) {
+      if (!domainIds.has(id) && bucket[id].status === 'legacy_unknown') delete bucket[id];
+    }
+  }
+}
+
+function recomputeFieldRecordStatus_ACU(record: AgentModuleFieldRecord_ACU): void {
+  const matrix = AGENT_MODULE_FIELD_MATRIX_ACU[record.module];
+  record.missingFields = matrix.required.filter(key => !(key in record.fields));
+  record.status = record.missingFields.length ? 'partial' : 'complete';
+}
+
+function applyFieldUpsertsToView_ACU(
+  view: AgentModuleFieldSnapshot_ACU,
+  upserts: AgentModuleFieldUpserts_ACU,
+  updatedAt: number,
+): AgentModuleFieldSnapshot_ACU {
+  const next: AgentModuleFieldSnapshot_ACU = { records: {} };
+  for (const key of AGENT_WRITABLE_MODULES_ACU) {
+    const bucket = view.records[key];
+    if (bucket) next.records[key] = cloneJson_ACU(bucket) as Record<string, AgentModuleFieldRecord_ACU>;
+  }
+  for (const key of AGENT_WRITABLE_MODULES_ACU) {
+    const moduleUpserts = upserts[key];
+    if (!moduleUpserts) continue;
+    const matrix = AGENT_MODULE_FIELD_MATRIX_ACU[key];
+    const bucket = (next.records[key] ??= {});
+    for (const [id, fieldWrites] of Object.entries(moduleUpserts)) {
+      const stableId = String(id ?? '').trim();
+      if (!stableId || !isRecord_ACU(fieldWrites)) continue;
+      const record = (bucket[stableId] ??= { module: key, id: stableId, status: 'partial', fields: {}, missingFields: [], updatedAt: 0 });
+      for (const [field, write] of Object.entries(fieldWrites as Record<string, AgentModuleFieldWrite_ACU>)) {
+        if (!matrix.fields.includes(field)) continue;
+        if (write && typeof write === 'object' && (write as AgentModuleFieldWrite_ACU).unset === true) {
+          delete record.fields[field];
+          continue;
+        }
+        if (!write || typeof write !== 'object' || !Object.prototype.hasOwnProperty.call(write, 'value')) continue;
+        const previous = record.fields[field];
+        record.fields[field] = {
+          value: cloneJson_ACU((write as AgentModuleFieldWrite_ACU).value),
+          revision: (previous?.revision ?? 0) + 1,
+          updatedAt,
+        };
+      }
+      record.updatedAt = updatedAt;
+      recomputeFieldRecordStatus_ACU(record);
+    }
+  }
+  return next;
+}
+
 function fieldOf_ACU(message: unknown): unknown {
   if (!isRecord_ACU(message) || !Object.prototype.hasOwnProperty.call(message, AGENT_MODULE_FIELD_ACU)) return undefined;
   return message[AGENT_MODULE_FIELD_ACU];
@@ -333,6 +460,7 @@ export function foldAgentModuleSnapshot_ACU(
   // P1：任一基线（legacy / schema3 checkpoint / 抢救快照）前缀指纹失配，
   // 即证明水位前发生过删楼/替换/重排——宽容抢救整体禁用，失配落空快照。
   let incompatibleSeen = false;
+  let view = emptyFieldView_ACU();
   const end = Math.min(throughIndex, chat.length - 1);
 
   for (let index = 0; index <= end; index += 1) {
@@ -350,6 +478,7 @@ export function foldAgentModuleSnapshot_ACU(
       candidates.push({ index, valid: true, problems: [] });
       if (!sawSchema3Checkpoint && swipeId === '0') {
         snapshot = cloneJson_ACU(parsed.snapshot);
+        view = seedFieldViewFromSnapshot_ACU(snapshot, parsed.snapshot.updatedAt);
         contributed = true;
         checkpointIndex = index;
         adoptedIndex = index;
@@ -376,6 +505,7 @@ export function foldAgentModuleSnapshot_ACU(
         candidates[candidates.length - 1].problems.push('结算水位之前的聊天前缀已变化（删楼、替换或重排），拒绝复用此基线');
       } else {
         snapshot = cloneJson_ACU(parsed.frame.checkpoint.snapshot);
+        view = seedFieldViewFromSnapshot_ACU(snapshot, parsed.frame.checkpoint.snapshot.updatedAt);
         contributed = true;
         sawSchema3Checkpoint = true;
         checkpointIndex = index;
@@ -386,6 +516,8 @@ export function foldAgentModuleSnapshot_ACU(
     for (const delta of parsed.frame.deltas) {
       if (delta.swipeId !== swipeId) continue;
       snapshot = applyDelta_ACU(snapshot, delta);
+      if (delta.fieldUpserts) view = applyFieldUpsertsToView_ACU(view, delta.fieldUpserts, delta.updatedAt);
+      reconcileFieldViewWithSnapshot_ACU(view, snapshot, delta.updatedAt);
       contributed = true;
       foldedDeltaCount += 1;
       if (adoptedIndex === null) adoptedIndex = index;
@@ -395,6 +527,7 @@ export function foldAgentModuleSnapshot_ACU(
   if (!contributed && salvage && !incompatibleSeen) {
     return {
       snapshot: cloneJson_ACU(salvage.snapshot),
+      fields: seedFieldViewFromSnapshot_ACU(salvage.snapshot, salvage.snapshot.updatedAt),
       candidates,
       adoptedIndex: salvage.index,
       salvaged: true,
@@ -405,6 +538,7 @@ export function foldAgentModuleSnapshot_ACU(
   }
   return {
     snapshot,
+    fields: view,
     candidates,
     adoptedIndex: contributed ? adoptedIndex : null,
     salvaged: false,
@@ -537,6 +671,76 @@ export function planAgentModuleSnapshotWrite_ACU(
       previous,
       value,
     });
+  });
+  return { changed: assignments.length > 0, assignments };
+}
+
+/**
+ * 规划一次逐栏写入：只把 fieldUpserts 作为一条 delta 追加到目标楼层，
+ * 不产生 checkpoint、不触碰领域数组；缺栏记录经折叠只进入受控分栏视图。
+ * 不修改传入的 chat。无有效栏目时返回 changed=false。
+ */
+export function planAgentModuleFieldWrite_ACU(
+  chat: unknown[],
+  targetIndex: number,
+  fieldUpserts: AgentModuleFieldUpserts_ACU,
+  deps: AgentModuleFrameDeps_ACU,
+): AgentModuleWritePlan_ACU {
+  if (!Number.isInteger(targetIndex) || targetIndex < 0 || targetIndex >= chat.length) {
+    return { changed: false, assignments: [] };
+  }
+  // 目标种类门（fail-closed）：目标楼已有字段但不是 schema-3 帧（legacy 全量 / broken）
+  // 时拒绝逐栏写入。appendDelta 的读—改—写会把整楼替换为仅一条 field delta 的帧：
+  // legacy 全量永久消失（field delta 不投影领域数组），broken 楼丧失抢救机会。
+  // legacy 先经整条写入迁移，broken 保留抢救路径；与 T1 迁移纪律一致。
+  const existing = fieldOf_ACU(chat[targetIndex]);
+  if (existing !== undefined && parseField_ACU(existing, deps).kind !== 'frame') {
+    return { changed: false, assignments: [] };
+  }
+  const cleaned: AgentModuleFieldUpserts_ACU = {};
+  let hasWrite = false;
+  for (const key of AGENT_WRITABLE_MODULES_ACU) {
+    const moduleUpserts = fieldUpserts[key];
+    if (!moduleUpserts || !isRecord_ACU(moduleUpserts)) continue;
+    const matrix = AGENT_MODULE_FIELD_MATRIX_ACU[key];
+    const kept: Record<string, Record<string, AgentModuleFieldWrite_ACU>> = {};
+    for (const [rawId, writes] of Object.entries(moduleUpserts)) {
+      const id = String(rawId ?? '').trim();
+      if (!id || !isRecord_ACU(writes)) continue;
+      const keptFields: Record<string, AgentModuleFieldWrite_ACU> = {};
+      for (const [field, write] of Object.entries(writes as Record<string, AgentModuleFieldWrite_ACU>)) {
+        if (!matrix.fields.includes(field)) continue;
+        if (write && typeof write === 'object' && (write as AgentModuleFieldWrite_ACU).unset === true) {
+          keptFields[field] = { unset: true };
+          continue;
+        }
+        if (!write || typeof write !== 'object' || !Object.prototype.hasOwnProperty.call(write, 'value')) continue;
+        keptFields[field] = { value: cloneJson_ACU((write as AgentModuleFieldWrite_ACU).value) };
+      }
+      if (Object.keys(keptFields).length) {
+        kept[id] = keptFields;
+        hasWrite = true;
+      }
+    }
+    if (Object.keys(kept).length) cleaned[key] = kept;
+  }
+  if (!hasWrite) return { changed: false, assignments: [] };
+  const scratch = chat.map(message => (isRecord_ACU(message) ? { ...message } : message));
+  const delta: AgentModuleFloorDelta_ACU = {
+    seq: maxSeq_ACU(scratch, deps) + 1,
+    swipeId: readMessageSwipeId_ACU(scratch[targetIndex]),
+    writes: {},
+    fieldUpserts: cleaned,
+    revisions: {},
+    updatedAt: Date.now(),
+  };
+  appendDelta_ACU(scratch, targetIndex, delta, deps);
+  const assignments: AgentModuleWritePlan_ACU['assignments'] = [];
+  scratch.forEach((message, index) => {
+    const previous = fieldOf_ACU(chat[index]);
+    const value = fieldOf_ACU(message);
+    if (JSON.stringify(previous) === JSON.stringify(value)) return;
+    assignments.push({ index, existed: previous !== undefined, previous, value });
   });
   return { changed: assignments.length > 0, assignments };
 }

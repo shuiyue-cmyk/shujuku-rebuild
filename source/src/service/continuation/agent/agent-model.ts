@@ -302,6 +302,54 @@ export interface AgentModuleRevisions_ACU {
   webRefs: number;
 }
 
+/**
+ * 单栏写入值。value 的存在性显式表示：unset 为 true 表示撤销该栏（回到未写状态），
+ * 否则 value 必须是该模块栏目矩阵允许的 JSON 值；缺省、`null`、合法空值、未写入、读取失败不得混同。
+ */
+export interface AgentModuleFieldWrite_ACU {
+  value?: unknown;
+  unset?: boolean;
+}
+
+/**
+ * 一次逐栏写集：模块 → ID → 栏目 → 写入值。只点名本次提交的栏目；
+ * 原已提交栏目未被点名即原样保留。
+ */
+export type AgentModuleFieldUpserts_ACU = Partial<Record<AgentWritableModule_ACU, Record<string, Record<string, AgentModuleFieldWrite_ACU>>>>;
+
+/** 分栏条目状态：complete 可投影为完整领域条目；partial 仅在受控分栏视图可见；legacy_unknown 来自旧整条快照、按完整处理但来源不可逐栏拆分。 */
+export const AGENT_MODULE_FIELD_STATUSES_ACU = ['complete', 'partial', 'legacy_unknown'] as const;
+export type AgentModuleFieldStatus_ACU = typeof AGENT_MODULE_FIELD_STATUSES_ACU[number];
+
+/** 单条已接受的分栏栏目值及其修订身份。 */
+export interface AgentModuleFieldValue_ACU {
+  value: unknown;
+  revision: number;
+  updatedAt: number;
+}
+
+/** 一个 (module, ID) 的分栏记录：已提交栏目、缺栏与投影状态。 */
+export interface AgentModuleFieldRecord_ACU {
+  module: AgentWritableModule_ACU;
+  id: string;
+  status: AgentModuleFieldStatus_ACU;
+  fields: Record<string, AgentModuleFieldValue_ACU>;
+  missingFields: string[];
+  updatedAt: number;
+}
+
+/** 折叠派生的分栏视图：只读，绝不写回持久帧。 */
+export interface AgentModuleFieldSnapshot_ACU {
+  records: Partial<Record<AgentWritableModule_ACU, Record<string, AgentModuleFieldRecord_ACU>>>;
+}
+
+/** 一个模块的栏目矩阵：允许逐栏写入的栏目白名单、提升为完整条目的必填栏目、不可拆开的跨字段一致性组。 */
+export interface AgentModuleFieldMatrixEntry_ACU {
+  fields: readonly string[];
+  required: readonly string[];
+  consistencyGroups: ReadonlyArray<readonly string[]>;
+}
+
 /** 百科资料库条目的来源渠道。TT 可行通道：moegirl / wikipedia_zh / wikipedia_en 走浏览器直连
  * MediaWiki API；baidu 与 web（任意网页）需要酒馆服务器转发路由（上游 /api/search/visit），
  * TT 当前未提供，对应来源在客户端以不可用说明返回而不出网。 */
@@ -349,6 +397,8 @@ export interface AgentModuleFloorDelta_ACU {
   /** 变更条目。六模块均为带 id 的 upsert 子集。 */
   writes: Partial<Pick<AgentModuleSnapshot_ACU, AgentWritableModule_ACU>>;
   removedIds?: Partial<Record<AgentWritableModule_ACU, string[]>>;
+  /** 逐栏增量写入：模块 → ID → 栏目。与整条 writes 可同时出现；折叠先叠整条再叠逐栏。 */
+  fieldUpserts?: AgentModuleFieldUpserts_ACU;
   revisions: Partial<AgentModuleRevisions_ACU>;
   /** 本条显式推进的结算水位。省略表示不改水位。 */
   settledThroughIndex?: number;
@@ -383,6 +433,45 @@ export interface AgentModuleSnapshot_ACU {
 
 export const AGENT_WRITABLE_MODULES_ACU = ['hooks', 'infoGap', 'constraints', 'storyArc', 'chronology', 'webRefs'] as const;
 export type AgentWritableModule_ACU = typeof AGENT_WRITABLE_MODULES_ACU[number];
+
+/**
+ * 各模块的栏目矩阵（TT 六模块形状，无 userRequirements 整表单例）。
+ * required 为提升为完整领域条目的必填栏目；consistencyGroups 为不可拆开提交的
+ * 跨字段一致性组（组内栏目必须同批提交或此前已齐）。S1 只做声明与缺栏计算，
+ * 不在折叠/写入路径强制拒绝——partial 记录只进入受控分栏视图，不投影领域数组。
+ */
+export const AGENT_MODULE_FIELD_MATRIX_ACU: Record<AgentWritableModule_ACU, AgentModuleFieldMatrixEntry_ACU> = {
+  hooks: {
+    fields: ['summary', 'status', 'importance', 'plantedIndex', 'updatedIndex', 'plannedPayoff', 'retired', 'retiredReason'],
+    required: ['summary', 'status', 'importance', 'plantedIndex', 'updatedIndex', 'plannedPayoff', 'retired', 'retiredReason'],
+    consistencyGroups: [],
+  },
+  infoGap: {
+    fields: ['topic', 'objectiveFact', 'readerKnown', 'characterKnowledge', 'revealStatus', 'revealIndex', 'retired', 'retiredReason'],
+    required: ['topic', 'objectiveFact', 'readerKnown', 'characterKnowledge', 'revealStatus', 'revealIndex', 'retired', 'retiredReason'],
+    consistencyGroups: [['revealStatus', 'revealIndex']],
+  },
+  constraints: {
+    fields: ['text', 'reason', 'createdIndex'],
+    required: ['text', 'reason', 'createdIndex'],
+    consistencyGroups: [],
+  },
+  storyArc: {
+    fields: ['scope', 'title', 'direction', 'escalation', 'withheld', 'status', 'stageNumbers', 'completionStageNumber', 'completionState', 'continuationRationale', 'narrativeRole', 'targetStageRange', 'targetTimeSpan', 'progressCeiling', 'sustainingThreads', 'payoffTargets', 'completionRationale', 'retired', 'retiredReason'],
+    required: ['scope', 'title', 'direction', 'escalation', 'withheld', 'status', 'stageNumbers', 'completionStageNumber', 'completionState', 'continuationRationale', 'retired', 'retiredReason'],
+    consistencyGroups: [],
+  },
+  chronology: {
+    fields: ['anchor', 'elapsed', 'precision', 'transition', 'evidenceIndexes', 'updatedIndex', 'retired', 'retiredReason'],
+    required: ['anchor', 'elapsed', 'precision', 'transition', 'evidenceIndexes', 'updatedIndex', 'retired', 'retiredReason'],
+    consistencyGroups: [],
+  },
+  webRefs: {
+    fields: ['title', 'source', 'url', 'query', 'tags', 'brief', 'summary', 'sourceStatus', 'fetchedAt', 'retired', 'retiredReason'],
+    required: ['title', 'source', 'url', 'query', 'tags', 'brief', 'summary', 'sourceStatus', 'fetchedAt', 'retired', 'retiredReason'],
+    consistencyGroups: [],
+  },
+};
 
 export const AGENT_SUBAGENT_NAMES_ACU = ['arc-architect', 'hook-cognition-maintainer', 'mainline-planner', 'beat-planner', 'continuity-reviewer', 'web-researcher'] as const;
 export type AgentSubagentName_ACU = typeof AGENT_SUBAGENT_NAMES_ACU[number];
