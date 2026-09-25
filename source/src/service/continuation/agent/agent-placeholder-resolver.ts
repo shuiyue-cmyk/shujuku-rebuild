@@ -10,11 +10,13 @@ import type { StageTurn_ACU, StageTurnPacing_ACU } from '../model';
 import { describeStageTempo_ACU } from '../outline-schema';
 import type { ContinuationAgentExecutionContext_ACU } from '../stage-execution-engine';
 import {
+  AGENT_MODULE_FIELD_MATRIX_ACU,
   AGENT_STORY_TAIL_FLOORS_DEFAULT_ACU,
   AGENT_STORY_WINDOW_DEFAULT_ACU,
   type AgentModuleSnapshot_ACU,
 } from './agent-model';
 import {
+  readAgentModuleFoldState_ACU,
   renderAgentChronology_ACU,
   renderAgentChronologyByIds_ACU,
   renderAgentConstraintsByIds_ACU,
@@ -126,6 +128,11 @@ function agentStoryWindowSize_ACU(source: AgentStoryFloorSource_ACU): number {
 export function listAgentStoryWindowFloors_ACU(source: AgentStoryFloorSource_ACU): AgentStoryFloor_ACU[] {
   const window = agentStoryWindowSize_ACU(source);
   return window > 0 ? listAgentStoryFloors_ACU(source).slice(-window) : [];
+}
+
+/** 与正文目录共用的 AI 正文楼层判断；证据校验不受读取窗口限制。 */
+export function agentStoryEvidenceFloorIndexes_ACU(chat: any[]): ReadonlySet<number> {
+  return new Set(listAgentStoryFloors_ACU({ chat }).map(floor => floor.index));
 }
 
 /**
@@ -579,7 +586,7 @@ function resolveWorldbookToken_ACU(token: string, context: AgentResolveContext_A
  * @param context 解析上下文
  * @returns { title, text } 分节标题与正文；未知 token 的 text 会明确说明不可读
  */
-export function resolveAgentReadToken_ACU(token: string, context: AgentResolveContext_ACU): { title: string; text: string } {
+export function resolveAgentReadToken_ACU(token: string, context: AgentResolveContext_ACU): { title: string; text: string; status?: 'failed' } {
   const normalized = String(token ?? '').trim();
   if (normalized.startsWith(AGENT_TABLE_TOKEN_PREFIX_ACU)) return resolveTableToken_ACU(normalized, context);
   if (normalized.startsWith(AGENT_WORLDBOOK_TOKEN_PREFIX_ACU)) return resolveWorldbookToken_ACU(normalized, context);
@@ -625,6 +632,32 @@ export function resolveAgentReadToken_ACU(token: string, context: AgentResolveCo
       title: webRefIds.length ? `百科资料库条目 ${webRefIds.join('、')}（外部参考，非本故事事实）` : '百科资料库（全部活跃条目摘要；外部参考，非本故事事实）',
       text: renderAgentWebRefsByIds_ACU(context.moduleSnapshot, webRefIds.length ? webRefIds : undefined),
     };
+  }
+
+  if (normalized.startsWith('$FIELD:')) {
+    const match = /^\$FIELD:(storyArc|hooks|infoGap|chronology|webRefs|constraints):([^:]+)(?::([^:]+))?$/.exec(normalized);
+    if (!match) return { title: '资料栏目', text: '栏目地址非法：$FIELD:模块:ID[:栏目]。' };
+    const [, moduleName, rawId, field] = match;
+    // 模型可控 id 不得命中原型链：空/超长/原型关键名一律按非法地址拒绝，不进入查找。
+    const id = String(rawId ?? '').trim();
+    if (!id || id.length > 128 || ['__proto__', 'prototype', 'constructor'].includes(id)) {
+      return { title: '资料栏目', text: '栏目地址非法：$FIELD:模块:ID[:栏目]。' };
+    }
+    const module = moduleName as keyof typeof AGENT_MODULE_FIELD_MATRIX_ACU;
+    if (field && !AGENT_MODULE_FIELD_MATRIX_ACU[module].fields.includes(field)) return { title: '资料栏目', text: `栏目 ${module}.${field} 不在受控字段矩阵中。` };
+    const folded = readAgentModuleFoldState_ACU(context.chat);
+    if (folded.salvaged || folded.candidates.some(item => !item.valid)) return { title: '资料栏目读取失败', text: '资料帧校验失败；不得将损坏数据解释为空状态。', status: 'failed' };
+    const bucket = folded.fields.records[module];
+    const record = bucket && Object.prototype.hasOwnProperty.call(bucket, id)
+      ? bucket[id] as (typeof bucket)[string]
+      : undefined;
+    return { title: `资料栏目 ${module}#${id}`, text: JSON.stringify(record
+      ? { module, id, status: record.status, missingFields: record.missingFields,
+        fields: field
+          ? { [field]: record.fields && Object.prototype.hasOwnProperty.call(record.fields, field) ? record.fields[field] : null }
+          : record.fields,
+        revisions: folded.snapshot.revisions[module] }
+      : { module, id, status: 'unwritten', missingFields: AGENT_MODULE_FIELD_MATRIX_ACU[module].required, revisions: folded.snapshot.revisions[module] }) };
   }
 
   const title = READ_TOKEN_TITLES_ACU[normalized] ?? normalized;

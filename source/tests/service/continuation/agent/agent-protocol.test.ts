@@ -243,9 +243,20 @@ describe('子代理输出解析', () => {
     expect(output.delta.chronology[1]).toMatchObject({ action: 'retire', id: 'T0', reason: '证据楼层已被删除' });
   });
 
+  it('年代学栏级修补正向解析：只带要改的字段进 chronologyPatches', () => {
+    const output = parseAgentMaintainerOutput_ACU({
+      summary: '修正时间锚',
+      delta: { chronology: [{ action: 'patch', id: 'T1', anchor: '隔日' }] },
+    });
+    expect(output.delta.chronology).toEqual([]);
+    expect(output.delta.chronologyPatches).toEqual([{ id: 'T1', anchor: '隔日' }]);
+  });
+
   it('年代学写集的非法 action、precision、空证据与非整数证据全部拒绝', () => {
     const item = { action: 'upsert', id: 'T1', anchor: '入城后的第七天', elapsed: '约十七日', precision: 'approximate', transition: '休整七日', evidenceIndexes: [4] };
-    expect(() => parseAgentMaintainerOutput_ACU({ delta: { chronology: [{ ...item, action: 'patch' }] } })).toThrowError(/action 必须是 upsert \/ retire/);
+    // S11-TT：patch 已是合法栏级动作（至少带一栏，否则拒绝）；未知 action 仍整条拒绝。
+    expect(() => parseAgentMaintainerOutput_ACU({ delta: { chronology: [{ ...item, action: 'delete' }] } })).toThrowError(/action 必须是 upsert \/ patch \/ retire/);
+    expect(() => parseAgentMaintainerOutput_ACU({ delta: { chronology: [{ action: 'patch', id: 'T1' }] } })).toThrowError(/至少要带一个/);
     expect(() => parseAgentMaintainerOutput_ACU({ delta: { chronology: [{ ...item, precision: '大概吧' }] } })).toThrowError(/precision 必须是 exact \/ approximate \/ unknown/);
     expect(() => parseAgentMaintainerOutput_ACU({ delta: { chronology: [{ ...item, evidenceIndexes: [] }] } })).toThrowError(/evidenceIndexes 必须是非空数组/);
     expect(() => parseAgentMaintainerOutput_ACU({ delta: { chronology: [{ ...item, evidenceIndexes: [1.5] }] } })).toThrowError(/必须是非负整数楼层号/);

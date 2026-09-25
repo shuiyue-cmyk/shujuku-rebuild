@@ -86,6 +86,45 @@ function cloneJson_ACU<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+function isWritableModuleKey_ACU(value: string): value is AgentWritableModule_ACU {
+  return (AGENT_WRITABLE_MODULES_ACU as readonly string[]).includes(value);
+}
+
+function isFieldWrite_ACU(value: unknown): value is AgentModuleFieldWrite_ACU {
+  return isRecord_ACU(value) && (value.unset === true || Object.prototype.hasOwnProperty.call(value, 'value'));
+}
+
+/**
+ * 解析逐栏写集（S11-TT 融合提交的帧侧严格门）。
+ * 结构损坏——模块/ID/栏目层不是对象、写入值既无 value 也非 unset、ID 为空——返回
+ * null，由调用方把整条记录判为不可折叠并留下诊断；未知模块或栏目名只忽略，
+ * 给后续版本新增栏目留余地。TT 六模块子集：userRequirements 单例不进分栏矩阵。
+ */
+export function parseAgentModuleFieldUpserts_ACU(raw: unknown): AgentModuleFieldUpserts_ACU | null {
+  if (!isRecord_ACU(raw)) return null;
+  const parsed: AgentModuleFieldUpserts_ACU = {};
+  for (const [moduleKey, moduleUpserts] of Object.entries(raw)) {
+    if (!isRecord_ACU(moduleUpserts)) return null;
+    if (!isWritableModuleKey_ACU(moduleKey)) continue;
+    const matrix = AGENT_MODULE_FIELD_MATRIX_ACU[moduleKey];
+    const kept: Record<string, Record<string, AgentModuleFieldWrite_ACU>> = {};
+    for (const [rawId, writes] of Object.entries(moduleUpserts)) {
+      if (!isRecord_ACU(writes)) return null;
+      const id = String(rawId ?? '').trim();
+      if (!id) return null;
+      const keptFields: Record<string, AgentModuleFieldWrite_ACU> = {};
+      for (const [field, write] of Object.entries(writes)) {
+        if (!isFieldWrite_ACU(write)) return null;
+        if (!matrix.fields.includes(field)) continue;
+        keptFields[field] = write.unset === true ? { unset: true } : { value: cloneJson_ACU(write.value) };
+      }
+      if (Object.keys(keptFields).length) kept[id] = { ...(kept[id] ?? {}), ...keptFields };
+    }
+    if (Object.keys(kept).length) parsed[moduleKey] = kept;
+  }
+  return parsed;
+}
+
 export function readMessageSwipeId_ACU(message: unknown): string {
   if (!isRecord_ACU(message)) return '0';
   const swipeId = message.swipe_id;

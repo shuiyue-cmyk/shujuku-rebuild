@@ -34,6 +34,7 @@ async function setup() {
   }));
   vi.doMock('../../../src/service/continuation/agent/agent-module-store', () => ({
     readAgentModuleSnapshot_ACU: vi.fn(() => snapshot('a')),
+    readAgentModuleFieldSnapshot_ACU: vi.fn(() => ({ records: {} })),
     readAgentModuleSnapshotDiagnostics_ACU: vi.fn(() => ({ candidates: [], adoptedIndex: 0, salvaged: false })),
     replaceAgentModuleSnapshotByUser_ACU: replace,
   }));

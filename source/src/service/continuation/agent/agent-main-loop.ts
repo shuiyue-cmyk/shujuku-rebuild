@@ -38,7 +38,7 @@ import {
 import { beginAgentSessionRun_ACU, logAgentSession_ACU, updateAgentSession_ACU } from './agent-session-log';
 import { AGENT_FINAL_REVIEW_STATUSES_ACU, clearAgentRunState_ACU, readAgentRunState_ACU, saveAgentRunState_ACU, type AgentFinalReviewResumeState_ACU } from './agent-run-cache';
 import { findAgentSubagentDefinition_ACU, renderAgentModuleCatalog_ACU, renderAgentReadCatalog_ACU, renderAgentSubagentCatalog_ACU } from './agent-catalog';
-import { findUnregisteredStageNumbers_ACU, hasActiveStoryArc_ACU, hasActiveStoryArcVolume_ACU, readAgentModuleSnapshot_ACU, refreshAgentModuleSnapshotChatPrefix_ACU, renderAgentConstraints_ACU, renderAgentWebRefsCatalog_ACU, writeAgentModuleSnapshot_ACU } from './agent-module-store';
+import { commitAgentModuleFieldWrites_ACU, findUnregisteredStageNumbers_ACU, hasActiveStoryArc_ACU, hasActiveStoryArcVolume_ACU, readAgentModuleSnapshot_ACU, refreshAgentModuleSnapshotChatPrefix_ACU, renderAgentConstraints_ACU, renderAgentWebRefsCatalog_ACU, writeAgentModuleSnapshot_ACU } from './agent-module-store';
 import {
   appendAgentConversation_ACU,
   appendPreparedAgentConversationMessages_ACU,
@@ -88,8 +88,10 @@ import {
 } from './agent-read-gate';
 import { AgentSubagentRuntime_ACU, type AgentSubagentRunResult_ACU } from './agent-subagent-runtime';
 import {
+  assertFieldWriteSettleable_ACU,
   continuationBeatObligation_ACU,
   continuationMajorTurn_ACU,
+  continuationWorkflowContractTouched_ACU,
   runContinuationAgentWorkflow_ACU,
   type ContinuationWorkflowAgentPayload_ACU,
   type ContinuationWorkflowResult_ACU,
@@ -1463,6 +1465,7 @@ export class ContinuationAgentTurnPlanner_ACU {
       readRevisions: result.readRevisions,
       writes: result.writes,
       noChange: Boolean(result.maintainer && /no_change/.test(result.maintainer.summary)),
+      usedFieldWrites: result.usedFieldWrites,
     });
     const incomingWaterline = context.moduleSnapshot.settledThroughIndex;
     // 年代学证据门与派工结算路径同式：只允许引用 AI 正文楼层。
@@ -1482,6 +1485,8 @@ export class ContinuationAgentTurnPlanner_ACU {
       settledIndex: Math.max(0, chat.length - 1),
       completedStageNumbers: context.execution.task.stages.filter(stage => stage.status === 'completed').map(stage => stage.stageNumber),
       allowedEvidenceIndexes: aiEvidenceIndexes,
+      // S11-TT：工作流内已即时保存的栏目从帧重读，不再走旧最终写集覆盖。
+      readCommittedSnapshot: () => readAgentModuleSnapshot_ACU(chat),
       runAgent: async call => {
         if (call.billing === 'opening') {
           const used = ledger.perAgent.get(call.agentName) ?? 0;
@@ -1502,6 +1507,11 @@ export class ContinuationAgentTurnPlanner_ACU {
           createIdentity: (_agentName, attempt) => ({ ...request.createInternalRequestIdentity(attempt), source: 'agent_subagent' }),
           isCurrent: identity => request.isInternalRequestCurrent(identity),
           signal: request.signal,
+          // S11-TT Mode F：固定工作流内的可写子代理同样经受控端口逐栏即时保存。
+          writeSql: async write => commitAgentModuleFieldWrites_ACU({
+            chat, targetIndex: chat.length - 1, sql: write.sql, role: write.role,
+            resolvePage: write.resolvePage, isCurrent: write.isCurrent,
+          }),
         });
         if (call.billing === 'opening') {
           ledger.delegationsUsed += 1;
@@ -1814,6 +1824,11 @@ export class ContinuationAgentTurnPlanner_ACU {
           createIdentity: (_agentName, attempt) => ({ ...request.createInternalRequestIdentity(attempt), source: 'agent_subagent' }),
           isCurrent: identity => request.isInternalRequestCurrent(identity),
           signal: request.signal,
+          // S11-TT Mode F：按需单独派工的可写子代理同样经受控端口逐栏即时保存。
+          writeSql: async write => commitAgentModuleFieldWrites_ACU({
+            chat, targetIndex: chat.length - 1, sql: write.sql, role: write.role,
+            resolvePage: write.resolvePage, isCurrent: write.isCurrent,
+          }),
         });
         return { delegation, result, error: null as unknown };
       } catch (error) {
@@ -1835,8 +1850,12 @@ export class ContinuationAgentTurnPlanner_ACU {
       const result = item.result;
       if (result.maintainer) {
         try {
+          // S11-TT：已即时保存的栏目从帧重读，不再走旧最终写集覆盖。
+          // 余量非空时不清零丢弃：先 fail-closed 拒绝，不流入重读交付。
+          assertFieldWriteSettleable_ACU({ agentName: result.agentName, usedFieldWrites: result.usedFieldWrites, contractTouched: continuationWorkflowContractTouched_ACU(result.maintainer.delta), researcherTouched: false });
+          const committed = result.usedFieldWrites ? readAgentModuleSnapshot_ACU(chat) : null;
           const delta = mergeAgentDeltaRevisions_ACU(result.maintainer.delta, result.readRevisions);
-          const applied = (await applyAgentModuleDeltaViaSql_ACU(nextSnapshot, delta, result.writes, chat.length - 1, [], aiEvidenceIndexes)).snapshot;
+          const applied = committed ?? (await applyAgentModuleDeltaViaSql_ACU(nextSnapshot, delta, result.writes, chat.length - 1, [], aiEvidenceIndexes)).snapshot;
           // 结算派工成功交付契约即推进水位到当轮末楼：空 delta（这段楼层没有新增伏笔/信息差）
           // 同样代表已被处理过，不推水位会让同一区间每轮重复要求结算、白烧派工。
           const settledTarget = chat.length - 1;
@@ -1866,11 +1885,15 @@ export class ContinuationAgentTurnPlanner_ACU {
       }
       if (result.arc) {
         try {
+          // S11-TT：已即时保存的栏目从帧重读，不再走旧最终写集覆盖。
+          // 余量非空时不清零丢弃：先 fail-closed 拒绝，不流入重读交付。
+          assertFieldWriteSettleable_ACU({ agentName: result.agentName, usedFieldWrites: result.usedFieldWrites, contractTouched: continuationWorkflowContractTouched_ACU(result.arc.delta), researcherTouched: false });
+          const committed = result.usedFieldWrites ? readAgentModuleSnapshot_ACU(chat) : null;
           const delta = mergeAgentDeltaRevisions_ACU(result.arc.delta, result.readRevisions);
           const completedStageNumbers = context.execution.task.stages
             .filter(stage => stage.status === 'completed')
             .map(stage => stage.stageNumber);
-          const applied = (await applyAgentModuleDeltaViaSql_ACU(nextSnapshot, delta, result.writes, chat.length - 1, completedStageNumbers)).snapshot;
+          const applied = committed ?? (await applyAgentModuleDeltaViaSql_ACU(nextSnapshot, delta, result.writes, chat.length - 1, completedStageNumbers)).snapshot;
           // 与结算分支的区别：只换快照，不推进 settledThroughIndex。
           // 立总纲不等于把未结算正文结算掉，推水位会让伏笔账本永久落后于剧情。
           if (applied !== nextSnapshot) { nextSnapshot = applied; snapshotChanged = true; }
@@ -1911,7 +1934,12 @@ export class ContinuationAgentTurnPlanner_ACU {
       }
       if (result.researcher) {
         // 与总纲分支同理：只换快照，不推进结算水位——百科条目不是正文事实。
-        const settled = await this.settleResearcherResult_ACU(result, nextSnapshot);
+        // S11-TT：已即时保存的栏目从帧重读，不再走旧最终写集覆盖。
+        // 余量非空时不清零丢弃：先 fail-closed 拒绝，不流入重读交付。
+        assertFieldWriteSettleable_ACU({ agentName: result.agentName, usedFieldWrites: result.usedFieldWrites, contractTouched: false, researcherTouched: result.researcher.items.length > 0 || (result.researcher.patches?.length ?? 0) > 0 });
+        const settled = result.usedFieldWrites
+          ? { snapshot: readAgentModuleSnapshot_ACU(chat), outcome: { agentName: result.agentName, ok: true, summary: result.researcher.summary || '百科资料库已逐栏保存', detail: `百科资料库已逐栏即时保存${result.expandedReads.length ? `；补充读取：${result.expandedReads.join('、')}` : ''}`, rejectedReason: '' } }
+          : await this.settleResearcherResult_ACU(result, nextSnapshot);
         if (settled.snapshot !== nextSnapshot) { nextSnapshot = settled.snapshot; snapshotChanged = true; }
         settleOutcome(item.delegation, settled.outcome, result.usage);
         continue;

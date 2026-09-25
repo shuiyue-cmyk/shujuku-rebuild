@@ -8,7 +8,7 @@
  * 无 simulation 耦合；容错提交经 options 形参走 TT 事务层（保留年代学证据门）。
  */
 
-import { ContinuationValidationError_ACU } from '../model';
+import { ContinuationValidationError_ACU, createContinuationError_ACU } from '../model';
 import type { ContinuationSettings_ACU } from '../model';
 import {
   AGENT_INSTRUCTION_COMPOSER_NAME_ACU,
@@ -56,6 +56,8 @@ export interface ContinuationWorkflowAgentPayload_ACU {
   researcher?: AgentResearcherOutput_ACU | null;
   readRevisions?: AgentModuleRevisions_ACU;
   writes?: readonly string[];
+  /** 即时写工具已执行；旧最终写集不得再覆盖本次保存的栏目。 */
+  usedFieldWrites?: boolean;
 }
 
 export interface ContinuationWorkflowStep_ACU {
@@ -87,6 +89,8 @@ export interface ContinuationWorkflowInput_ACU {
   /** 年代学证据白名单（AI 正文楼层下标）；缺省时不做楼层性质校验。 */
   allowedEvidenceIndexes?: ReadonlySet<number>;
   runAgent: (call: ContinuationWorkflowAgentCall_ACU) => Promise<ContinuationWorkflowAgentPayload_ACU>;
+  /** 已即时保存时读回提交后快照；不传则沿用传入快照（旧行为）。 */
+  readCommittedSnapshot?: () => AgentModuleSnapshot_ACU;
   runComposer: (call: { prompt: string; revisionFeedback: string; priorInstruction: string }) => Promise<AgentComposerOutput_ACU>;
   runFinalReview: (instruction: string, summary: string) => Promise<AgentFinalReviewerOutput_ACU>;
 }
@@ -138,8 +142,32 @@ function deltaTouched_ACU(delta: AgentMaintainerOutput_ACU['delta'] | null | und
   if (!delta) return false;
   return Boolean(
     delta.hooks.length || delta.hookPatches.length || delta.infoGap.length || delta.infoGapPatches.length
-    || delta.storyArc.length || delta.storyArcPatches.length || delta.chronology.length,
+    || delta.storyArc.length || delta.storyArcPatches.length || delta.chronology.length || (delta.chronologyPatches ?? []).length,
   );
+}
+
+/**
+ * S11-TT 交付/结算门：最终契约是否带非空余量（含 patch 通道）。
+ * 运行时交付前与各结算重读点共用同一口径。
+ */
+export function continuationWorkflowContractTouched_ACU(delta: AgentMaintainerOutput_ACU['delta'] | null | undefined): boolean {
+  return deltaTouched_ACU(delta);
+}
+
+/**
+ * S11-TT 结算门：已即时保存又带非空余量的契约不得流入结算。
+ * 余量非空不清零丢弃——直接 fail-closed 拒绝，由调用方按协议纠错处理。
+ */
+export function assertFieldWriteSettleable_ACU(input: { agentName: string; usedFieldWrites?: boolean; contractTouched: boolean; researcherTouched: boolean }): void {
+  if (input.usedFieldWrites && (input.contractTouched || input.researcherTouched)) {
+    throw new ContinuationValidationError_ACU(createContinuationError_ACU(
+      'CONTINUATION_AGENT_WRITE_REJECTED',
+      'agent_loop',
+      `子代理 ${input.agentName} 已用 write_sql 即时保存，最终契约仍带非空余量：余量不得静默丢弃，已拒绝结算`,
+      false,
+      { agentName: input.agentName },
+    ));
+  }
 }
 
 function repairableAgents_ACU(snapshot: AgentModuleSnapshot_ACU, settings: ContinuationSettings_ACU): string[] {
@@ -195,7 +223,15 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
     writes: readonly string[],
     readRevisions: AgentModuleRevisions_ACU | undefined,
     agentName: string,
+    usedFieldWrites?: boolean,
   ): Promise<void> => {
+    // S11-TT：已即时保存的栏目不再走旧最终写集覆盖，直接读回提交后快照。
+    // 余量非空时不清零丢弃：先 fail-closed 拒绝，不流入重读交付。
+    if (usedFieldWrites) {
+      assertFieldWriteSettleable_ACU({ agentName, usedFieldWrites, contractTouched: deltaTouched_ACU(output?.delta), researcherTouched: false });
+      if (input.readCommittedSnapshot) snapshot = input.readCommittedSnapshot();
+      return;
+    }
     if (!output || !deltaTouched_ACU(output.delta)) return;
     const delta = readRevisions ? mergeAgentDeltaRevisions_ACU(output.delta, readRevisions) : output.delta;
     const applied = await applyAgentModuleDeltaViaSql_ACU(snapshot, delta, writes, input.settledIndex, input.completedStageNumbers, input.allowedEvidenceIndexes, tolerantOptions_ACU(agentName));
@@ -210,7 +246,10 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
       prompt: `开局要求补充外部设定。焦点：${input.opening.focus}`,
     });
     steps.push({ agentName: WEB_NAME_ACU, status: web.ok ? 'ok' : 'failed', summary: web.summary });
-    if (web.ok && web.researcher && web.researcher.items.length) {
+    if (web.ok && web.usedFieldWrites) {
+      assertFieldWriteSettleable_ACU({ agentName: WEB_NAME_ACU, usedFieldWrites: web.usedFieldWrites, contractTouched: false, researcherTouched: (web.researcher?.items.length ?? 0) > 0 || (web.researcher?.patches?.length ?? 0) > 0 });
+      if (input.readCommittedSnapshot) snapshot = input.readCommittedSnapshot();
+    } else if (web.ok && web.researcher && (web.researcher.items.length || (web.researcher.patches ?? []).length)) {
       const applied = await applyAgentWebRefsDeltaViaSql_ACU(
         snapshot,
         web.researcher,
@@ -236,11 +275,18 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
     });
     if (!maintainer.ok) {
       steps.push({ agentName: MAINTAINER_NAME_ACU, status: 'failed', summary: maintainer.summary });
+    } else if (maintainer.usedFieldWrites) {
+      // S11-TT：结算已逐栏即时保存，直接读回提交后快照，不再走旧最终写集覆盖。
+      // 余量非空时不清零丢弃：先 fail-closed 拒绝，不流入重读交付。
+      assertFieldWriteSettleable_ACU({ agentName: MAINTAINER_NAME_ACU, usedFieldWrites: maintainer.usedFieldWrites, contractTouched: deltaTouched_ACU(maintainer.maintainer?.delta), researcherTouched: false });
+      if (input.readCommittedSnapshot) snapshot = input.readCommittedSnapshot();
+      snapshot = { ...snapshot, settledThroughIndex: Math.max(snapshot.settledThroughIndex, input.settledIndex) };
+      steps.push({ agentName: MAINTAINER_NAME_ACU, status: 'ok', summary: maintainer.summary });
     } else if (maintainer.noChange || !deltaTouched_ACU(maintainer.maintainer?.delta)) {
       steps.push({ agentName: MAINTAINER_NAME_ACU, status: 'no_change', summary: maintainer.summary || '结算没有新事实' });
       snapshot = { ...snapshot, settledThroughIndex: Math.max(snapshot.settledThroughIndex, input.settledIndex) };
     } else {
-      await applyMaintainerLike_ACU(maintainer.maintainer, maintainer.writes ?? ['hooks', 'infoGap', 'chronology'], maintainer.readRevisions, MAINTAINER_NAME_ACU);
+      await applyMaintainerLike_ACU(maintainer.maintainer, maintainer.writes ?? ['hooks', 'infoGap', 'chronology'], maintainer.readRevisions, MAINTAINER_NAME_ACU, maintainer.usedFieldWrites);
       snapshot = { ...snapshot, settledThroughIndex: Math.max(snapshot.settledThroughIndex, input.settledIndex) };
       steps.push({ agentName: MAINTAINER_NAME_ACU, status: 'ok', summary: maintainer.summary });
     }
@@ -310,10 +356,20 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
     const agentName = repairAgents[index] ?? 'repair';
     steps.push({ agentName, status: repair.ok ? 'ok' : 'failed', summary: repair.summary });
     if (!repair.ok) continue;
-    if (repair.researcher) {
-      snapshot = (await applyAgentWebRefsDeltaViaSql_ACU(snapshot, repair.researcher, repair.readRevisions?.webRefs, Date.now(), tolerantOptions_ACU(agentName))).snapshot;
+    if (repair.usedFieldWrites) {
+      assertFieldWriteSettleable_ACU({
+        agentName,
+        usedFieldWrites: repair.usedFieldWrites,
+        contractTouched: deltaTouched_ACU((repair.maintainer ?? repair.arc)?.delta),
+        researcherTouched: (repair.researcher?.items.length ?? 0) > 0 || (repair.researcher?.patches?.length ?? 0) > 0,
+      });
+      if (input.readCommittedSnapshot) snapshot = input.readCommittedSnapshot();
+    } else {
+      if (repair.researcher) {
+        snapshot = (await applyAgentWebRefsDeltaViaSql_ACU(snapshot, repair.researcher, repair.readRevisions?.webRefs, Date.now(), tolerantOptions_ACU(agentName))).snapshot;
+      }
+      await applyMaintainerLike_ACU(repair.maintainer ?? repair.arc, repair.writes ?? [], repair.readRevisions, agentName);
     }
-    await applyMaintainerLike_ACU(repair.maintainer ?? repair.arc, repair.writes ?? [], repair.readRevisions, agentName);
   }
   steps.push({
     agentName: AGENT_INSTRUCTION_COMPOSER_NAME_ACU,

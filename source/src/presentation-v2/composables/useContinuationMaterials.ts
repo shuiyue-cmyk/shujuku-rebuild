@@ -2,13 +2,14 @@ import { reactive, ref } from 'vue';
 import { currentChatFileIdentifier_ACU } from '../../service/runtime/state-manager';
 import { getChatArray_ACU } from '../../data/gateways/chat-gateway';
 import {
+  readAgentModuleFieldSnapshot_ACU,
   readAgentModuleSnapshot_ACU,
   readAgentModuleSnapshotDiagnostics_ACU,
   replaceAgentModuleSnapshotByUser_ACU,
   type AgentModuleSnapshotReadDiagnostics_ACU,
 } from '../../service/continuation/agent/agent-module-store';
 import { ContinuationValidationError_ACU } from '../../service/continuation/model';
-import type { AgentModuleSnapshot_ACU } from '../../service/continuation/agent/agent-model';
+import type { AgentModuleFieldSnapshot_ACU, AgentModuleSnapshot_ACU } from '../../service/continuation/agent/agent-model';
 import { useToastStore } from '../stores/toast-store';
 
 /** 用户可分模块编辑的资料。schemaVersion / settledThroughIndex 等运行时字段不进草稿。 */
@@ -59,6 +60,8 @@ export function useContinuationMaterials() {
   const toast = useToastStore();
   const snapshot = ref<AgentModuleSnapshot_ACU | null>(null);
   const loadError = ref('');
+  /** 分栏视图：partial 记录只出现在这里，面板据此按模块/ID 展示已写字段与缺栏。 */
+  const fieldSnapshot = ref<AgentModuleFieldSnapshot_ACU>({ records: {} });
   /** 最近一次读取的来源诊断：采用了哪一楼、是否宽容抢救、有哪些损坏楼层。 */
   const diagnostics = ref<AgentModuleSnapshotReadDiagnostics_ACU>({ candidates: [], adoptedIndex: null, salvaged: false, checkpointIndex: null, foldedDeltaCount: 0 });
   let loadedChat: any[] | null = null;
@@ -86,6 +89,8 @@ export function useContinuationMaterials() {
       loadedChat = chat;
       loadedChatIdentity = identity;
       snapshot.value = current;
+      // 与领域快照同一次折叠派生：partial 来自逐栏 delta，complete/legacy_unknown 来自领域数组。
+      fieldSnapshot.value = readAgentModuleFieldSnapshot_ACU(chat);
       diagnostics.value = readAgentModuleSnapshotDiagnostics_ACU();
       for (const module of CONTINUATION_MATERIAL_MODULES_ACU) resetModule(module, current);
       loadError.value = '';
@@ -93,6 +98,7 @@ export function useContinuationMaterials() {
       loadedChat = null;
       loadedChatIdentity = '';
       snapshot.value = null;
+      fieldSnapshot.value = { records: {} };
       for (const module of CONTINUATION_MATERIAL_MODULES_ACU) modules[module] = emptyModuleState_ACU();
       loadError.value = errorMessage_ACU(caught);
     }
@@ -148,5 +154,5 @@ export function useContinuationMaterials() {
     }
   }
 
-  return { snapshot, loadError, diagnostics, modules, reload, save, discard, updateDraft };
+  return { snapshot, loadError, diagnostics, fieldSnapshot, modules, reload, save, discard, updateDraft };
 }

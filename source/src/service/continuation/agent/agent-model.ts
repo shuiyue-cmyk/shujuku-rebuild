@@ -466,39 +466,42 @@ export type AgentWritableModule_ACU = typeof AGENT_WRITABLE_MODULES_ACU[number];
 
 /**
  * 各模块的栏目矩阵（TT 六个 id 键模块；userRequirements 为字符串单例，不进分栏矩阵）。
- * required 为提升为完整领域条目的必填栏目；consistencyGroups 为不可拆开提交的
- * 跨字段一致性组（组内栏目必须同批提交或此前已齐）。S1 只做声明与缺栏计算，
- * 不在折叠/写入路径强制拒绝——partial 记录只进入受控分栏视图，不投影领域数组。
+ * fields 是分栏视图可见的栏目（含机器栏），required 是提升为完整条目前模型必须显式
+ * 写过的栏目（合法空值也算写过；机器栏 updatedIndex/retired/retiredReason 等不进
+ * required，由提升时的领域事务补齐），consistencyGroups 是不可拆开校验的跨字段
+ * 一致性组（组内任一栏被写时，按合并后的有效值整体校验）。
+ * S1 只做声明与缺栏计算，不在折叠/写入路径强制拒绝——partial 记录只进入受控分栏视图，
+ * 不投影领域数组（T2 锁定：complete 同样不投影，完整条目只由整条 writes 路径产生）。
  */
 export const AGENT_MODULE_FIELD_MATRIX_ACU: Record<AgentWritableModule_ACU, AgentModuleFieldMatrixEntry_ACU> = {
   hooks: {
     fields: ['summary', 'status', 'importance', 'plantedIndex', 'updatedIndex', 'plannedPayoff', 'retired', 'retiredReason'],
-    required: ['summary', 'status', 'importance', 'plantedIndex', 'updatedIndex', 'plannedPayoff', 'retired', 'retiredReason'],
+    required: ['summary', 'status', 'importance', 'plantedIndex', 'plannedPayoff'],
     consistencyGroups: [],
   },
   infoGap: {
     fields: ['topic', 'objectiveFact', 'readerKnown', 'characterKnowledge', 'revealStatus', 'revealIndex', 'retired', 'retiredReason'],
-    required: ['topic', 'objectiveFact', 'readerKnown', 'characterKnowledge', 'revealStatus', 'revealIndex', 'retired', 'retiredReason'],
+    required: ['topic', 'objectiveFact', 'readerKnown', 'characterKnowledge', 'revealStatus'],
     consistencyGroups: [['revealStatus', 'revealIndex']],
   },
   constraints: {
     fields: ['text', 'reason', 'createdIndex'],
-    required: ['text', 'reason', 'createdIndex'],
+    required: ['text'],
     consistencyGroups: [],
   },
   storyArc: {
     fields: ['scope', 'title', 'direction', 'escalation', 'withheld', 'status', 'stageNumbers', 'completionStageNumber', 'completionState', 'continuationRationale', 'narrativeRole', 'targetStageRange', 'targetTimeSpan', 'progressCeiling', 'sustainingThreads', 'payoffTargets', 'completionRationale', 'retired', 'retiredReason'],
-    required: ['scope', 'title', 'direction', 'escalation', 'withheld', 'status', 'stageNumbers', 'completionStageNumber', 'completionState', 'continuationRationale', 'retired', 'retiredReason'],
+    required: ['scope', 'title', 'direction', 'escalation', 'withheld', 'status'],
     consistencyGroups: [],
   },
   chronology: {
     fields: ['anchor', 'elapsed', 'precision', 'transition', 'evidenceIndexes', 'updatedIndex', 'retired', 'retiredReason'],
-    required: ['anchor', 'elapsed', 'precision', 'transition', 'evidenceIndexes', 'updatedIndex', 'retired', 'retiredReason'],
+    required: ['anchor', 'elapsed', 'precision', 'transition', 'evidenceIndexes'],
     consistencyGroups: [],
   },
   webRefs: {
     fields: ['title', 'source', 'url', 'query', 'tags', 'brief', 'summary', 'sourceStatus', 'fetchedAt', 'retired', 'retiredReason'],
-    required: ['title', 'source', 'url', 'query', 'tags', 'brief', 'summary', 'sourceStatus', 'fetchedAt', 'retired', 'retiredReason'],
+    required: ['title', 'brief', 'url'],
     consistencyGroups: [],
   },
 };
@@ -714,6 +717,11 @@ export interface AgentModuleDelta_ACU {
   storyArc: AgentStoryArcDeltaItem_ACU[];
   storyArcPatches: AgentStoryArcPatch_ACU[];
   chronology: AgentChronologyDeltaItem_ACU[];
+  /**
+   * 年代学栏级修补（S11-TT 双模：Mode R 整行事务内的 patch 通道）。
+   * 可选以兼容旧写集构造；缺省视为空数组。
+   */
+  chronologyPatches?: AgentChronologyPatch_ACU[];
   constraintProposals: string[];
 }
 
@@ -752,6 +760,8 @@ export interface AgentResearcherOutput_ACU {
   summary: string;
   expectedRevision: number | undefined;
   items: AgentWebRefResolvedItem_ACU[];
+  /** 栏级修补；与 items 同一事务应用，失败整份拒绝。 */
+  patches?: AgentWebRefResolvedPatch_ACU[];
 }
 
 /** 总纲条目的句级修补：只有显式出现的字段会被修改。阶段进度回写通常只需 patch stageNumbers + status。 */
@@ -852,6 +862,46 @@ export interface AgentChronologyDeltaItem_ACU {
   transition: string;
   evidenceIndexes: number[];
   reason: string;
+}
+
+/**
+ * 年代学条目的栏级修补：只有显式出现的字段会被修改；证据补丁仍按结算水位校验。
+ * （S11-TT 双模：Mode R 整行事务内的 patch 通道；Mode F 逐栏路径另见帧内 plan。）
+ */
+export interface AgentChronologyPatch_ACU {
+  id: string;
+  anchor?: string;
+  elapsed?: string;
+  precision?: AgentChronologyPrecision_ACU;
+  transition?: string;
+  evidenceIndexes?: number[];
+}
+
+/**
+ * 百科资料库条目的栏级修补（契约形态，pageRef 尚未回填）。只有显式出现的字段会被修改。
+ */
+export interface AgentWebRefPatch_ACU {
+  id: string;
+  pageRef?: string;
+  title?: string;
+  tags?: string[];
+  brief?: string;
+  summary?: string;
+}
+
+/**
+ * 运行时回填后的百科条目修补：给了 pageRef 的会带回新来源字段，未给的只改内容栏。
+ */
+export interface AgentWebRefResolvedPatch_ACU {
+  id: string;
+  title?: string;
+  source?: AgentWebRefSource_ACU;
+  url?: string;
+  query?: string;
+  tags?: string[];
+  brief?: string;
+  summary?: string;
+  sourceStatus?: AgentWebRefStatus_ACU;
 }
 
 /** 子代理维护类的完整输出。资料不足时不再用 needMore 申请重跑，而是在小循环里直接输出 read 工具调用。 */

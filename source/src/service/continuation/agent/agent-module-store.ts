@@ -9,13 +9,22 @@
  */
 
 import { getChatArray_ACU, saveChatToHostStrict_ACU } from '../../../data/gateways/chat-gateway';
+import { getActiveChatStorageIdentity_ACU } from '../../../data/storage/chat-history';
 import { findLatestTableFullCheckpointIndex_ACU } from '../../chat/material-checkpoint-sync';
 import {
   foldAgentModuleSnapshot_ACU,
   planAgentModuleFieldWrite_ACU,
   planAgentModuleSnapshotWrite_ACU,
+  readMessageSwipeId_ACU,
+  type AgentModuleFoldResult_ACU,
   type AgentModuleFrameDeps_ACU,
 } from './agent-module-frame';
+import { materializeAgentModuleSqlView_ACU } from './agent-module-sql-view';
+import {
+  parseAgentModuleSqlFieldWrites_ACU,
+  type AgentModuleSqlFieldIntent_ACU,
+  type AgentModuleSqlFieldRejection_ACU,
+} from './agent-protocol';
 import { ContinuationValidationError_ACU, createContinuationError_ACU } from '../model';
 import {
   AGENT_BLOCK_CHAR_LIMIT_ACU,
@@ -24,6 +33,7 @@ import {
   AGENT_HOOK_STATUSES_ACU,
   AGENT_HOT_HOOK_LIMIT_ACU,
   AGENT_MODULE_FIELD_ACU,
+  AGENT_MODULE_FIELD_MATRIX_ACU,
   AGENT_MODULE_SCHEMA_VERSION_ACU,
   AGENT_MODULE_SCHEMA_VERSION_V1_ACU,
   AGENT_PENDING_FIX_CAP_ACU,
@@ -37,12 +47,15 @@ import {
   type AgentConstraintEntry_ACU,
   type AgentHookEntry_ACU,
   type AgentInfoGapEntry_ACU,
+  type AgentModuleFieldRecord_ACU,
   type AgentModuleFieldSnapshot_ACU,
   type AgentModuleFieldUpserts_ACU,
   type AgentModuleSnapshot_ACU,
   type AgentPendingFix_ACU,
   type AgentStoryArcEntry_ACU,
+  type AgentSubagentName_ACU,
   type AgentWebRefEntry_ACU,
+  type AgentWritableModule_ACU,
   isAgentWritableModule_ACU,
 } from './agent-model';
 
@@ -661,6 +674,335 @@ export async function writeAgentModuleFields_ACU(chat: any[], targetIndex: numbe
     }
     throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_AGENT_SNAPSHOT_INVALID', 'agent_persist', 'Agent 逐栏写入写盘失败，已还原楼层字段', false, { targetIndex, message: error instanceof Error ? error.message : String(error) }));
   }
+}
+
+/**
+ * 一次性折叠快照与分栏视图，并保留损坏帧的结构化诊断供提交门禁使用。
+ * （S11-TT：$FIELD 权威读取与融合提交共用同一折叠入口。）
+ */
+export function readAgentModuleFoldState_ACU(chat: any[]): AgentModuleFoldResult_ACU {
+  return foldAgentModuleSnapshot_ACU(chat, agentModuleFrameDeps_ACU());
+}
+
+/** 本次派工抓取成功的网页句柄；不得由模型自行指定来源 URL。 */
+export interface AgentFieldPage_ACU {
+  title: string;
+  source: AgentWebRefEntry_ACU['source'];
+  url: string;
+  query: string;
+  sourceStatus: AgentWebRefEntry_ACU['sourceStatus'];
+}
+
+export interface AgentModuleFieldAccepted_ACU { module: AgentWritableModule_ACU; id: string; field: string; revision: number }
+
+export interface AgentModuleFieldReceipt_ACU {
+  status: 'committed' | 'rejected' | 'persist_failed' | 'readback_failed';
+  accepted: AgentModuleFieldAccepted_ACU[];
+  rejected: AgentModuleSqlFieldRejection_ACU[];
+  /** null 表示保存/补偿后的当前状态无法确认；必须重新读取权威帧。 */
+  partials: Array<{ module: AgentWritableModule_ACU; id: string; missingFields: string[]; promotionError?: string }> | null;
+  revisions: AgentModuleSnapshot_ACU['revisions'] | null;
+  constraintProposals: string[];
+  sqlDiagnostics?: string;
+  recovery?: 'saved' | 'failed' | 'unavailable';
+}
+
+type FieldCommitModule_ACU = 'hooks' | 'infoGap' | 'storyArc' | 'chronology' | 'webRefs';
+
+const FIELD_COMMIT_ROLE_MODULES_ACU: Readonly<Partial<Record<AgentSubagentName_ACU, readonly AgentWritableModule_ACU[]>>> = {
+  'arc-architect': ['storyArc'],
+  'hook-cognition-maintainer': ['hooks', 'infoGap', 'chronology'],
+  'web-researcher': ['webRefs'],
+};
+
+function fieldCommitText_ACU(value: unknown): value is string { return typeof value === 'string'; }
+function fieldCommitNonempty_ACU(value: unknown): boolean { return fieldCommitText_ACU(value) && !!value.trim(); }
+function fieldCommitIndex_ACU(value: unknown): boolean { return typeof value === 'number' && Number.isInteger(value) && value >= 0; }
+function fieldCommitStringArray_ACU(value: unknown): boolean { return Array.isArray(value) && value.every(fieldCommitNonempty_ACU); }
+function fieldCommitRecord_ACU(value: unknown): value is Record<string, unknown> { return !!value && typeof value === 'object' && !Array.isArray(value); }
+function fieldCommitInList_ACU(value: unknown, list: readonly string[]): boolean { return fieldCommitText_ACU(value) && list.includes(value); }
+
+/** 显式栏目逐栏校验；null、合法空值与缺栏不可混淆。 */
+function fieldCommitProblem_ACU(module: FieldCommitModule_ACU, field: string, value: unknown, snapshot: AgentModuleSnapshot_ACU, evidence: ReadonlySet<number>): string | null {
+  switch (module) {
+    case 'hooks':
+      if (field === 'status') return fieldCommitInList_ACU(value, AGENT_HOOK_STATUSES_ACU) ? null : 'status 枚举非法';
+      if (field === 'importance') return fieldCommitInList_ACU(value, AGENT_HOOK_IMPORTANCES_ACU) ? null : 'importance 枚举非法';
+      if (field === 'plantedIndex') return fieldCommitIndex_ACU(value) && (value as number) <= snapshot.settledThroughIndex && evidence.has(value as number) ? null : 'plantedIndex 必须引用已结算正文楼层';
+      return field === 'summary' ? (fieldCommitNonempty_ACU(value) ? null : 'summary 必须为非空文本') : (fieldCommitText_ACU(value) ? null : '必须为字符串');
+    case 'infoGap':
+      if (field === 'revealStatus') return fieldCommitInList_ACU(value, AGENT_REVEAL_STATUSES_ACU) ? null : 'revealStatus 枚举非法';
+      if (field === 'revealIndex') return value === null || (fieldCommitIndex_ACU(value) && (value as number) <= snapshot.settledThroughIndex && evidence.has(value as number)) ? null : 'revealIndex 必须为空或已结算正文楼层';
+      if (field === 'characterKnowledge') return Array.isArray(value) && value.every(item => fieldCommitRecord_ACU(item) && fieldCommitNonempty_ACU(item.name) && fieldCommitText_ACU(item.knows)) ? null : 'characterKnowledge 需要带 name / knows 的数组';
+      return field === 'topic' ? (fieldCommitNonempty_ACU(value) ? null : 'topic 必须为非空文本') : (fieldCommitText_ACU(value) ? null : '必须为字符串');
+    case 'chronology':
+      if (field === 'precision') return fieldCommitInList_ACU(value, AGENT_CHRONOLOGY_PRECISIONS_ACU) ? null : 'precision 枚举非法';
+      if (field === 'evidenceIndexes') {
+        const indexes = normalizeEvidenceIndexes_ACU(value);
+        return indexes?.length && indexes.every(item => item <= snapshot.settledThroughIndex && evidence.has(item)) ? null : 'evidenceIndexes 必须是非空、已结算正文楼层数组';
+      }
+      return fieldCommitNonempty_ACU(value) ? null : '时间事实栏目必须为非空文本';
+    case 'storyArc':
+      if (field === 'scope') return fieldCommitInList_ACU(value, AGENT_STORY_ARC_SCOPES_ACU) ? null : 'scope 枚举非法';
+      if (field === 'status') return fieldCommitInList_ACU(value, AGENT_STORY_ARC_STATUSES_ACU) ? null : 'status 枚举非法';
+      if (field === 'narrativeRole') return fieldCommitInList_ACU(value, AGENT_VOLUME_NARRATIVE_ROLES_ACU) ? null : 'narrativeRole 枚举非法';
+      if (field === 'stageNumbers') return Array.isArray(value) && value.every(item => Number.isInteger(item) && item >= 1) ? null : 'stageNumbers 必须是正整数数组';
+      if (field === 'completionStageNumber') return value === null || (Number.isInteger(value) && (value as number) >= 1) ? null : 'completionStageNumber 必须为正整数或 null';
+      if (field === 'targetStageRange') return fieldCommitRecord_ACU(value) && Number.isInteger(value.min) && (value.min as number) >= 1 && Number.isInteger(value.max) && (value.max as number) >= (value.min as number) ? null : 'targetStageRange 需要 min/max 正整数且 max≥min';
+      if (field === 'sustainingThreads' || field === 'payoffTargets') return fieldCommitStringArray_ACU(value) ? null : '必须是非空字符串数组';
+      return ['title', 'direction'].includes(field) ? (fieldCommitNonempty_ACU(value) ? null : '必须为非空文本') : (fieldCommitText_ACU(value) ? null : '必须为字符串');
+    case 'webRefs':
+      if (field === 'tags') return Array.isArray(value) && value.every(fieldCommitNonempty_ACU) ? null : 'tags 必须是非空字符串数组';
+      return ['title', 'brief'].includes(field) ? (fieldCommitNonempty_ACU(value) ? null : '必须为非空文本') : (fieldCommitText_ACU(value) ? null : '必须为字符串');
+  }
+}
+
+function fieldCommitDomainRow_ACU(snapshot: AgentModuleSnapshot_ACU, module: FieldCommitModule_ACU, id: string): Record<string, unknown> | null {
+  return (snapshot[module] as unknown as Array<Record<string, unknown>>).find(item => item.id === id) ?? null;
+}
+
+function fieldCommitCanonical_ACU(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(fieldCommitCanonical_ACU).join(',')}]`;
+  if (value !== null && typeof value === 'object') {
+    const row = value as Record<string, unknown>;
+    return `{${Object.keys(row).sort().map(key => `${JSON.stringify(key)}:${fieldCommitCanonical_ACU(row[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function fieldCommitConfirmedPartials_ACU(fields: AgentModuleFieldSnapshot_ACU): NonNullable<AgentModuleFieldReceipt_ACU['partials']> {
+  const partials: NonNullable<AgentModuleFieldReceipt_ACU['partials']> = [];
+  for (const module of ['hooks', 'infoGap', 'storyArc', 'chronology', 'webRefs'] as const) {
+    for (const [id, record] of Object.entries(fields.records[module] ?? {})) {
+      if (record.status !== 'partial') continue;
+      partials.push({ module, id, missingFields: [...record.missingFields] });
+    }
+  }
+  return partials;
+}
+
+function fieldCommitNextWebRefId_ACU(snapshot: AgentModuleSnapshot_ACU, taken: ReadonlySet<string>): string {
+  let max = 0;
+  for (const id of [...snapshot.webRefs.map(entry => entry.id), ...taken]) {
+    const matched = /^WR-(\d+)$/.exec(id);
+    if (matched) max = Math.max(max, Number.parseInt(matched[1], 10));
+  }
+  return `WR-${String(max + 1).padStart(3, '0')}`;
+}
+
+const fieldCommitQueue_ACU = new WeakMap<unknown[], Promise<void>>();
+
+/**
+ * 融合提交（S11-TT 双模 Mode F 生产入口）。
+ *
+ * 上游 agent-module-field-commit.ts 在此拆解并入现有帧/plan 路径，不另起文件、
+ * 不另起写旁路：解析走受限 SQL 白名单（protocol），栏目校验走领域规则（本函数内
+ * fieldCommitProblem_ACU，与事务层同强度），复算走 SQL 分栏层（只校验不持久化），
+ * 持久化唯一形态是帧内 fieldUpserts delta（planAgentModuleFieldWrite_ACU），并受
+ * P1 三门约束——聊天身份/目标楼层门、帧损坏门、保存前后基线/折叠回读门。
+ * 有意不移植上游的领域提升（domainUpserts）：T2 锁定 partial/complete 均不投影
+ * 领域数组，完整条目只由整条 writes 路径产生；删除既有领域条目同样不支持，
+ * 请走整行 retire。
+ */
+export function commitAgentModuleFieldWrites_ACU(input: {
+  chat: any[];
+  targetIndex: number;
+  sql: string;
+  role: AgentSubagentName_ACU;
+  resolvePage?: (handle: string) => AgentFieldPage_ACU | null;
+  isCurrent?: () => boolean;
+}): Promise<AgentModuleFieldReceipt_ACU> {
+  const prior = fieldCommitQueue_ACU.get(input.chat) ?? Promise.resolve();
+  const run = prior.catch(() => {}).then(async (): Promise<AgentModuleFieldReceipt_ACU> => {
+    const parsed = parseAgentModuleSqlFieldWrites_ACU(input.sql, input.role);
+    const folded = readAgentModuleFoldState_ACU(input.chat);
+    const receipt: AgentModuleFieldReceipt_ACU = {
+      status: 'rejected', accepted: [], rejected: [...parsed.rejected],
+      partials: fieldCommitConfirmedPartials_ACU(folded.fields),
+      revisions: { ...folded.snapshot.revisions }, constraintProposals: parsed.constraintProposals,
+    };
+    if (input.isCurrent?.() === false || getChatArray_ACU() !== input.chat
+      || !input.chat[input.targetIndex] || (input.chat[input.targetIndex] as { is_user?: unknown }).is_user === true
+      || input.targetIndex !== input.chat.length - 1) {
+      receipt.rejected.push({ path: 'chat', reason: '当前聊天或目标楼层已变化' });
+      receipt.partials = null; receipt.revisions = null; return receipt;
+    }
+    if (folded.salvaged || folded.candidates.some(item => !item.valid)) {
+      receipt.rejected.push({ path: 'frame', reason: '资料帧损坏，拒绝在宽容抢救结果上写入' });
+      receipt.partials = null; receipt.revisions = null; return receipt;
+    }
+    const evidence = new Set<number>();
+    input.chat.forEach((message, index) => {
+      if (message && typeof message === 'object' && (message as { is_user?: unknown }).is_user !== true) evidence.add(index);
+    });
+    const now = Date.now();
+    const modules = FIELD_COMMIT_ROLE_MODULES_ACU[input.role] ?? [];
+    const upserts: AgentModuleFieldUpserts_ACU = {};
+    const accepted: AgentModuleFieldAccepted_ACU[] = [];
+    const reserved = new Set<string>();
+    for (const intent of parsed.intents) {
+      const module = intent.module as FieldCommitModule_ACU;
+      const path = `${module}#${intent.id || '(无 ID)'}`;
+      if (!modules.includes(intent.module)) { receipt.rejected.push({ path, reason: '角色无权写入该模块' }); continue; }
+      if (intent.kind === 'delete') { receipt.rejected.push({ path, reason: 'TT 逐栏路径不支持删除/退役：既有条目请走整行 retire，草稿请逐栏 unset' }); continue; }
+      const id = intent.id || (module === 'webRefs' && intent.kind === 'insert'
+        ? fieldCommitNextWebRefId_ACU(folded.snapshot, new Set([...reserved, ...Object.keys(folded.fields.records.webRefs ?? {})])) : '');
+      if (!id || id.includes('#') || ['__proto__', 'prototype', 'constructor'].includes(id) || id.length > 128) {
+        receipt.rejected.push({ path, reason: '条目 ID 无效' }); continue;
+      }
+      if (intent.expectedRevision !== folded.snapshot.revisions[module]) {
+        receipt.rejected.push({ path, reason: `revision_conflict: expected=${intent.expectedRevision}, actual=${folded.snapshot.revisions[module]}` }); continue;
+      }
+      const key = `${module}#${id}`;
+      const existing = fieldCommitDomainRow_ACU(folded.snapshot, module, id);
+      const record = folded.fields.records[module]?.[id];
+      if (intent.kind === 'insert' && (existing || record || reserved.has(key))) { receipt.rejected.push({ path, reason: 'id_exists' }); continue; }
+      if (intent.kind !== 'insert' && !existing && !record) { receipt.rejected.push({ path, reason: 'not_found' }); continue; }
+      if (existing?.retired) { receipt.rejected.push({ path, reason: 'retired: 已退役条目不可修改' }); continue; }
+      const writable: Record<string, unknown> = {};
+      for (const [field, raw] of Object.entries(intent.fields)) {
+        const fieldPath = `${path}.${field}`;
+        if (!AGENT_MODULE_FIELD_MATRIX_ACU[module].fields.includes(field) || ['retired', 'retiredReason', 'updatedIndex', 'fetchedAt', 'source', 'url', 'query', 'sourceStatus'].includes(field)) {
+          receipt.rejected.push({ path: fieldPath, reason: 'field_forbidden' }); continue;
+        }
+        if ((field === 'plantedIndex' && existing) || (field === 'scope' && existing && existing.scope !== raw)) {
+          receipt.rejected.push({ path: fieldPath, reason: '已登记的不可变栏目不能改写' }); continue;
+        }
+        const problem = fieldCommitProblem_ACU(module, field, raw, folded.snapshot, evidence);
+        if (problem) { receipt.rejected.push({ path: fieldPath, reason: problem }); continue; }
+        writable[field] = raw;
+      }
+      if (intent.pageRef) {
+        if (module !== 'webRefs') receipt.rejected.push({ path: `${path}.pageRef`, reason: 'field_forbidden' });
+        else {
+          const page = input.resolvePage?.(intent.pageRef) ?? null;
+          if (!page || page.sourceStatus !== 'ok' || !fieldCommitNonempty_ACU(page.url) || !fieldCommitNonempty_ACU(page.title)) {
+            receipt.rejected.push({ path: `${path}.pageRef`, reason: '页面句柄未在本次派工成功抓取' });
+          } else {
+            const urlProblem = fieldCommitProblem_ACU(module, 'title', page.title, folded.snapshot, evidence);
+            if (urlProblem) receipt.rejected.push({ path: `${path}.pageRef`, reason: urlProblem });
+            else {
+              writable.title = writable.title ?? page.title.trim();
+              (writable as Record<string, unknown>).__pageUrl_ACU = page.url.trim();
+            }
+          }
+        }
+      }
+      if (!Object.keys(writable).length) continue;
+      if (module === 'infoGap' && (Object.prototype.hasOwnProperty.call(writable, 'revealStatus') || Object.prototype.hasOwnProperty.call(writable, 'revealIndex'))) {
+        const baseline: Record<string, unknown> = existing ? { ...existing } : Object.fromEntries(Object.entries(record?.fields ?? {}).map(([field, entry]) => [field, entry.value]));
+        const merged = { ...baseline, ...writable };
+        if (merged.revealStatus !== undefined && (merged.revealIndex !== undefined || !!existing)) {
+          const status = merged.revealStatus;
+          const reveal = merged.revealIndex ?? null;
+          if ((status === 'unrevealed' && reveal !== null) || (status !== 'unrevealed' && reveal === null)) {
+            for (const field of ['revealStatus', 'revealIndex']) if (Object.prototype.hasOwnProperty.call(writable, field)) {
+              receipt.rejected.push({ path: `${path}.${field}`, reason: 'consistency_group: 揭示状态与楼层必须一致' }); delete writable[field];
+            }
+          }
+        }
+      }
+      if (!Object.keys(writable).length) continue;
+      const bucket = (upserts[module] ??= {});
+      const cell = (bucket[id] ??= {});
+      for (const [field, value] of Object.entries(writable)) {
+        if (field === '__pageUrl_ACU') continue;
+        cell[field] = { value };
+        accepted.push({ module, id, field, revision: 0 });
+      }
+      // pageRef 回填的 url 随 title 同批落栏（来源仍以工具回执为准，不信任模型手写）。
+      if (typeof (writable as Record<string, unknown>).__pageUrl_ACU === 'string') {
+        cell.url = { value: (writable as Record<string, unknown>).__pageUrl_ACU as string };
+        accepted.push({ module, id, field: 'url', revision: 0 });
+      }
+      if (intent.kind === 'insert') reserved.add(key);
+    }
+    if (!Object.keys(upserts).length) return receipt;
+    // SQL 分栏层复算门：白名单/乐观锁与帧侧同强度；失败即整批拒绝，不落帧。
+    let view: Awaited<ReturnType<typeof materializeAgentModuleSqlView_ACU>> | undefined;
+    try {
+      view = await materializeAgentModuleSqlView_ACU(folded.snapshot, folded.fields);
+      for (const [moduleKey, bucket] of Object.entries(upserts)) {
+        const module = moduleKey as AgentWritableModule_ACU;
+        view.applyFieldBatch({ module, expectedRevision: folded.snapshot.revisions[module], updatedAt: now, fieldWrites: bucket as Record<string, Record<string, { value?: unknown; unset?: boolean }>> });
+      }
+      const exported = view.exportDelta();
+      for (const [moduleKey, bucket] of Object.entries(upserts)) {
+        const got = (exported.fieldUpserts as Record<string, Record<string, Record<string, unknown>>> | undefined)?.[moduleKey];
+        if (fieldCommitCanonical_ACU(got ?? null) !== fieldCommitCanonical_ACU(bucket)) {
+          throw new Error(`模块 ${moduleKey} 的 SQL 分栏复算与计划写集不一致`);
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      receipt.rejected.push({ path: 'sql', reason: message });
+      receipt.sqlDiagnostics = message;
+      return receipt;
+    } finally { view?.dispose(); }
+    // 帧持久化门：基线快照 + 规划 + 保存 + 折叠回读，三者任一失败即补偿还原。
+    const asJson = (value: unknown): string | undefined => JSON.stringify(value);
+    const baselineIdentity = getActiveChatStorageIdentity_ACU(input.chat);
+    const baselineFloors = input.chat.map(message => ({
+      message,
+      swipeId: readMessageSwipeId_ACU(message),
+      existed: !!message && typeof message === 'object' && Object.prototype.hasOwnProperty.call(message, AGENT_MODULE_FIELD_ACU),
+      content: asJson((message as Record<string, unknown> | null)?.[AGENT_MODULE_FIELD_ACU]),
+    }));
+    const plan = planAgentModuleFieldWrite_ACU(input.chat, input.targetIndex, upserts, agentModuleFrameDeps_ACU());
+    if (!plan.changed) {
+      receipt.rejected.push({ path: 'frame', reason: '资料帧未能规划出可回读的写入' });
+      return receipt;
+    }
+    try {
+      for (const assignment of plan.assignments) {
+        const container = input.chat[assignment.index] as Record<string, unknown>;
+        if (assignment.value === undefined) delete container[AGENT_MODULE_FIELD_ACU];
+        else container[AGENT_MODULE_FIELD_ACU] = assignment.value;
+      }
+      await saveChatToHostStrict_ACU();
+    } catch (error) {
+      for (const assignment of plan.assignments) {
+        const container = input.chat[assignment.index] as Record<string, unknown>;
+        if (assignment.existed) container[AGENT_MODULE_FIELD_ACU] = assignment.previous;
+        else delete container[AGENT_MODULE_FIELD_ACU];
+      }
+      receipt.status = 'persist_failed';
+      receipt.recovery = 'unavailable';
+      receipt.partials = null; receipt.revisions = null;
+      receipt.rejected.push({ path: 'host', reason: error instanceof Error ? error.message : String(error) });
+      return receipt;
+    }
+    // 保存后回读门：聊天身份/基线楼层未被顶替，且逐栏记录可读回。
+    const intact = getChatArray_ACU() === input.chat && getActiveChatStorageIdentity_ACU(input.chat) === baselineIdentity
+      && input.chat.length === baselineFloors.length && baselineFloors.every((entry, index) => {
+        if (index === input.targetIndex) return input.chat[index] === entry.message && readMessageSwipeId_ACU(entry.message) === entry.swipeId;
+        return input.chat[index] === entry.message && readMessageSwipeId_ACU(entry.message) === entry.swipeId
+          && (Object.prototype.hasOwnProperty.call(entry.message as object, AGENT_MODULE_FIELD_ACU) === entry.existed)
+          && asJson(((entry.message as Record<string, unknown>)[AGENT_MODULE_FIELD_ACU])) === entry.content;
+      });
+    const confirmed = readAgentModuleFoldState_ACU(input.chat);
+    const expectedRecords = new Map<string, AgentModuleFieldRecord_ACU | null>();
+    for (const [moduleKey, bucket] of Object.entries(upserts)) {
+      for (const id of Object.keys(bucket)) {
+        expectedRecords.set(`${moduleKey}#${id}`, confirmed.fields.records[moduleKey as AgentWritableModule_ACU]?.[id] ?? null);
+      }
+    }
+    const readable = [...expectedRecords.values()].every(item => item !== null)
+      && !confirmed.salvaged && confirmed.candidates.every(item => item.valid);
+    if (!intact || !readable || input.isCurrent?.() === false) {
+      receipt.status = 'readback_failed';
+      receipt.recovery = 'saved';
+      receipt.rejected.push({ path: 'host', reason: '保存成功但回读未能确认逐栏记录' });
+      return receipt;
+    }
+    receipt.status = 'committed';
+    receipt.revisions = confirmed.snapshot.revisions;
+    receipt.partials = fieldCommitConfirmedPartials_ACU(confirmed.fields);
+    receipt.accepted = accepted.map(item => ({ ...item, revision: confirmed.fields.records[item.module]?.[item.id]?.fields[item.field]?.revision ?? 0 }));
+    return receipt;
+  });
+  fieldCommitQueue_ACU.set(input.chat, run.then(() => {}, () => {}));
+  return run;
 }
 
 function rejectSnapshotEdit_ACU(message: string, details?: Record<string, unknown>): never {
