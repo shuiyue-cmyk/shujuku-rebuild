@@ -826,25 +826,30 @@ export const AGENT_PROMPT_DEFAULT_LINEAGE_ACU: Record<keyof ContinuationAgentPro
   ],
   maintainer: [
     { hash: '1a711ac0', length: 516, slot: 'task', note: 'V30 结算任务段（尚未固定注入累计用户要求）' },
+    { hash: '159b622e', length: 553, slot: 'task', note: 'V32 结算任务段（尚未固化 readerKnown / characterKnowledge 知识渠道纪律）' },
     { hash: '5a04f739', length: 1141, slot: 'outputContract', note: 'V31 结算 JSON 写集协议（TT 对标上游 V32）' },
   ],
   mainlinePlanner: [
     { hash: '11188ac7', length: 559, slot: 'task', note: 'V17–V22 主线策划任务段（无完整阶段大纲注入，看不到本轮 pacing）' },
     { hash: 'abacb6be', length: 631, slot: 'task', note: 'V23 主线策划任务段（首条用户要求仅由本次任务裁剪，无 $USER_REQUIREMENTS）' },
     { hash: 'c21f99d9', length: 680, slot: 'task', note: 'V30 主线策划任务段（首条用户要求仅由本次任务裁剪）' },
+    { hash: '519c5c89', length: 710, slot: 'task', note: 'V32 主线策划任务段（尚未要求按 readerKnown / characterKnowledge 约束揭示与行动）' },
   ],
   beatPlanner: [
     { hash: '4fd1fd54', length: 452, slot: 'task', note: 'V17–V22 节拍策划任务段（无完整阶段大纲注入，看不到本轮 pacing）' },
     { hash: '0aa00887', length: 524, slot: 'task', note: 'V23 节拍策划任务段（首条用户要求仅由本次任务裁剪，无 $USER_REQUIREMENTS）' },
     { hash: 'abb5e7d2', length: 566, slot: 'task', note: 'V30 节拍策划任务段（首条用户要求仅由本次任务裁剪）' },
+    { hash: '65003ea2', length: 596, slot: 'task', note: 'V32 节拍策划任务段（尚未要求分别核对读者与角色知识边界）' },
   ],
   reviewer: [
     { hash: '338b41a7', length: 452, slot: 'task', note: 'V17–V22 连续性审查任务段（无用户初始要求与完整阶段大纲注入）' },
     { hash: '8f14e197', length: 573, slot: 'task', note: 'V30 连续性审查任务段（【用户初始要求】/$USER_INTENT）' },
+    { hash: 'adff6920', length: 587, slot: 'task', note: 'V32 连续性审查任务段（尚未审查知识获得渠道）' },
   ],
   finalReviewer: [
     { hash: '101fe8e2', length: 441, slot: 'task', note: 'V23 终审任务段（【用户初始要求】/$USER_INTENT，无 pacing 合规项）' },
     { hash: '77d8980a', length: 487, slot: 'task', note: 'V30 终审任务段（【用户初始要求】/$USER_INTENT）' },
+    { hash: '60176f6d', length: 501, slot: 'task', note: 'V32 终审任务段（尚未要求逐角色核对知识渠道）' },
   ],
   webResearcher: [
     { hash: '2d46cb2a', length: 606, slot: 'task', note: 'V30 网页检索任务段（【用户初始要求】/$USER_INTENT）' },
@@ -853,6 +858,7 @@ export const AGENT_PROMPT_DEFAULT_LINEAGE_ACU: Record<keyof ContinuationAgentPro
   instructionComposer: [
     { hash: '64dc636c', length: 737, slot: 'system', note: 'V30 编排系统段（用户初始要求）' },
     { hash: '99dfbfd7', length: 295, slot: 'task', note: 'V30 编排任务段（【用户初始要求】/$USER_INTENT）' },
+    { hash: '30330e60', length: 309, slot: 'task', note: 'V32 指令编排任务段（尚未把知识边界写入正文模型指令）' },
   ],
   requirementsMaintainer: [],
 };
@@ -884,28 +890,54 @@ function withContinuationSqlContract_ACU<T extends keyof typeof CONTINUATION_SQL
     : segment);
 }
 
+/**
+ * V33 信息边界纪律（TT 移植上游 0de0352）：续写链路分别维护 objectiveFact、
+ * readerKnown 与 characterKnowledge；角色新增知识必须能追溯到亲历、目击、听闻、
+ * 阅读、转述或可验证推断渠道。纪律只约束提示词，不经行视图泄漏任何边界外资料。
+ */
+const CONTINUATION_INFORMATION_BOUNDARY_RULES_ACU: Partial<Record<keyof ContinuationAgentPrompts_ACU, string>> = {
+  maintainer: '【信息边界纪律】维护 infoGap 时必须分别核对 objectiveFact、readerKnown 与 characterKnowledge：readerKnown 只能写读者已从正文获知的内容；每个角色的 knows 只能写该角色经亲历、目击、听闻、阅读、转述或可验证推断实际获得的内容，并在表述中保留知识渠道。客观事实存在不等于角色知道；渠道不明时保持未知并标注信息不足。',
+  mainlinePlanner: '【信息边界纪律】策划任何揭示、误判或角色行动前，先对照 infoGap 的 readerKnown 与逐角色 characterKnowledge。不得让角色使用只对读者可见、只存在于 objectiveFact、或没有亲历/目击/听闻/阅读/转述/可验证推断渠道的信息；若本轮安排角色获知新事实，建议中必须写清获得渠道。',
+  beatPlanner: '【信息边界纪律】信息差操作必须分别说明读者允许知道到哪一层、每个相关角色实际知道到哪一层，以及角色新增认知的获得渠道。不得把 readerKnown 当作 characterKnowledge，也不得因 objectiveFact 已登记就让角色自动全知；渠道不足时不安排揭示。',
+  reviewer: '【信息边界纪律】逐项审查待执行内容是否混淆 objectiveFact、readerKnown 与 characterKnowledge；角色使用某事实时，必须能追溯到亲历、目击、听闻、阅读、转述或可验证推断渠道。仅读者知道、仅客观存在或渠道不明的事实被角色使用时，至少判 revise。',
+  finalReviewer: '【信息边界纪律】对每名登场角色核对其言行所用事实是否存在于 characterKnowledge，且能由亲历、目击、听闻、阅读、转述或可验证推断渠道获得；同时核对正文没有越过 readerKnown 的计划揭示层。不得把 objectiveFact 或读者知识直接赋给角色。',
+  instructionComposer: '【信息边界纪律】写入正文模型指令时，明确区分 objectiveFact、readerKnown 与逐角色 characterKnowledge；角色只能依据其已有知识或本轮明确安排的获得渠道行动。若本轮增加角色认知，指令必须写清亲历、目击、听闻、阅读、转述或可验证推断渠道；禁止把读者知识直接赋给角色。',
+};
+
+function appendContinuationInformationBoundaryRule_ACU(
+  role: keyof ContinuationAgentPrompts_ACU,
+  segments: readonly ContinuationPromptSegment_ACU[],
+): ContinuationPromptSegment_ACU[] {
+  const rule = CONTINUATION_INFORMATION_BOUNDARY_RULES_ACU[role];
+  return cloneAgentPromptSegments_ACU(segments).map(segment => (
+    rule && findAgentPromptSlot_ACU([segment], 'task')
+      ? { ...segment, content: `${segment.content}\n\n${rule}` }
+      : segment
+  ));
+}
+
 export function buildDefaultAgentArcArchitectPrompt_ACU(): ContinuationPromptSegment_ACU[] {
   return withContinuationSqlContract_ACU('arcArchitect', cloneAgentPromptSegments_ACU(ARC_ARCHITECT_PROMPT_ACU));
 }
 
 export function buildDefaultAgentMaintainerPrompt_ACU(): ContinuationPromptSegment_ACU[] {
-  return withContinuationSqlContract_ACU('maintainer', cloneAgentPromptSegments_ACU(MAINTAINER_PROMPT_ACU));
+  return withContinuationSqlContract_ACU('maintainer', appendContinuationInformationBoundaryRule_ACU('maintainer', MAINTAINER_PROMPT_ACU));
 }
 
 export function buildDefaultAgentMainlinePlannerPrompt_ACU(): ContinuationPromptSegment_ACU[] {
-  return cloneAgentPromptSegments_ACU(MAINLINE_PLANNER_PROMPT_ACU);
+  return appendContinuationInformationBoundaryRule_ACU('mainlinePlanner', MAINLINE_PLANNER_PROMPT_ACU);
 }
 
 export function buildDefaultAgentBeatPlannerPrompt_ACU(): ContinuationPromptSegment_ACU[] {
-  return cloneAgentPromptSegments_ACU(BEAT_PLANNER_PROMPT_ACU);
+  return appendContinuationInformationBoundaryRule_ACU('beatPlanner', BEAT_PLANNER_PROMPT_ACU);
 }
 
 export function buildDefaultAgentReviewerPrompt_ACU(): ContinuationPromptSegment_ACU[] {
-  return cloneAgentPromptSegments_ACU(REVIEWER_PROMPT_ACU);
+  return appendContinuationInformationBoundaryRule_ACU('reviewer', REVIEWER_PROMPT_ACU);
 }
 
 export function buildDefaultAgentFinalReviewerPrompt_ACU(): ContinuationPromptSegment_ACU[] {
-  return cloneAgentPromptSegments_ACU(FINAL_REVIEWER_PROMPT_ACU);
+  return appendContinuationInformationBoundaryRule_ACU('finalReviewer', FINAL_REVIEWER_PROMPT_ACU);
 }
 
 export function buildDefaultAgentWebResearcherPrompt_ACU(): ContinuationPromptSegment_ACU[] {
@@ -913,7 +945,7 @@ export function buildDefaultAgentWebResearcherPrompt_ACU(): ContinuationPromptSe
 }
 
 export function buildDefaultAgentInstructionComposerPrompt_ACU(): ContinuationPromptSegment_ACU[] {
-  return cloneAgentPromptSegments_ACU(INSTRUCTION_COMPOSER_PROMPT_ACU);
+  return appendContinuationInformationBoundaryRule_ACU('instructionComposer', INSTRUCTION_COMPOSER_PROMPT_ACU);
 }
 
 export function buildDefaultAgentRequirementsMaintainerPrompt_ACU(): ContinuationPromptSegment_ACU[] {

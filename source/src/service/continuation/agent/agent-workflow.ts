@@ -23,9 +23,9 @@ import {
   type AgentReviewerOutput_ACU,
 } from './agent-model';
 import {
-  applyAgentConstraintRegistration_ACU,
-  applyAgentModuleDelta_ACU,
-  applyAgentWebRefsDelta_ACU,
+  applyAgentConstraintRegistrationViaSql_ACU,
+  applyAgentModuleDeltaViaSql_ACU,
+  applyAgentWebRefsDeltaViaSql_ACU,
   mergeAgentDeltaRevisions_ACU,
   type AgentModuleApplyOptions_ACU,
 } from './agent-transaction';
@@ -190,15 +190,15 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
     }
   };
 
-  const applyMaintainerLike_ACU = (
+  const applyMaintainerLike_ACU = async (
     output: AgentMaintainerOutput_ACU | null | undefined,
     writes: readonly string[],
     readRevisions: AgentModuleRevisions_ACU | undefined,
     agentName: string,
-  ): void => {
+  ): Promise<void> => {
     if (!output || !deltaTouched_ACU(output.delta)) return;
     const delta = readRevisions ? mergeAgentDeltaRevisions_ACU(output.delta, readRevisions) : output.delta;
-    const applied = applyAgentModuleDelta_ACU(snapshot, delta, writes, input.settledIndex, input.completedStageNumbers, input.allowedEvidenceIndexes, tolerantOptions_ACU(agentName));
+    const applied = await applyAgentModuleDeltaViaSql_ACU(snapshot, delta, writes, input.settledIndex, input.completedStageNumbers, input.allowedEvidenceIndexes, tolerantOptions_ACU(agentName));
     snapshot = applied.snapshot;
   };
 
@@ -211,7 +211,7 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
     });
     steps.push({ agentName: WEB_NAME_ACU, status: web.ok ? 'ok' : 'failed', summary: web.summary });
     if (web.ok && web.researcher && web.researcher.items.length) {
-      const applied = applyAgentWebRefsDelta_ACU(
+      const applied = await applyAgentWebRefsDeltaViaSql_ACU(
         snapshot,
         web.researcher,
         web.readRevisions?.webRefs,
@@ -240,7 +240,7 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
       steps.push({ agentName: MAINTAINER_NAME_ACU, status: 'no_change', summary: maintainer.summary || '结算没有新事实' });
       snapshot = { ...snapshot, settledThroughIndex: Math.max(snapshot.settledThroughIndex, input.settledIndex) };
     } else {
-      applyMaintainerLike_ACU(maintainer.maintainer, maintainer.writes ?? ['hooks', 'infoGap', 'chronology'], maintainer.readRevisions, MAINTAINER_NAME_ACU);
+      await applyMaintainerLike_ACU(maintainer.maintainer, maintainer.writes ?? ['hooks', 'infoGap', 'chronology'], maintainer.readRevisions, MAINTAINER_NAME_ACU);
       snapshot = { ...snapshot, settledThroughIndex: Math.max(snapshot.settledThroughIndex, input.settledIndex) };
       steps.push({ agentName: MAINTAINER_NAME_ACU, status: 'ok', summary: maintainer.summary });
     }
@@ -311,9 +311,9 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
     steps.push({ agentName, status: repair.ok ? 'ok' : 'failed', summary: repair.summary });
     if (!repair.ok) continue;
     if (repair.researcher) {
-      snapshot = applyAgentWebRefsDelta_ACU(snapshot, repair.researcher, repair.readRevisions?.webRefs, Date.now(), tolerantOptions_ACU(agentName)).snapshot;
+      snapshot = (await applyAgentWebRefsDeltaViaSql_ACU(snapshot, repair.researcher, repair.readRevisions?.webRefs, Date.now(), tolerantOptions_ACU(agentName))).snapshot;
     }
-    applyMaintainerLike_ACU(repair.maintainer ?? repair.arc, repair.writes ?? [], repair.readRevisions, agentName);
+    await applyMaintainerLike_ACU(repair.maintainer ?? repair.arc, repair.writes ?? [], repair.readRevisions, agentName);
   }
   steps.push({
     agentName: AGENT_INSTRUCTION_COMPOSER_NAME_ACU,
@@ -321,13 +321,13 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
     summary: composer.summary || (composer.instruction.trim() ? '已产出写作指令' : 'instruction 为空'),
   });
   if (composer.constraints) {
-    snapshot = applyAgentConstraintRegistration_ACU(
+    snapshot = (await applyAgentConstraintRegistrationViaSql_ACU(
       snapshot,
       composer.constraints.add,
       composer.constraints.retire,
       input.settledIndex,
       tolerantOptions_ACU(AGENT_INSTRUCTION_COMPOSER_NAME_ACU),
-    ).snapshot;
+    )).snapshot;
   }
 
   if (escalateBeforeRepair || needsPendingEscalation_ACU(snapshot, input.settings)) {
@@ -400,13 +400,13 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
       }
       instruction = revised.instruction.trim();
       if (revised.constraints) {
-        snapshot = applyAgentConstraintRegistration_ACU(
+        snapshot = (await applyAgentConstraintRegistrationViaSql_ACU(
           snapshot,
           revised.constraints.add,
           revised.constraints.retire,
           input.settledIndex,
           tolerantOptions_ACU(AGENT_INSTRUCTION_COMPOSER_NAME_ACU),
-        ).snapshot;
+        )).snapshot;
       }
       steps.push({ agentName: AGENT_INSTRUCTION_COMPOSER_NAME_ACU, status: 'ok', summary: '已按反馈增量修订' });
     }
