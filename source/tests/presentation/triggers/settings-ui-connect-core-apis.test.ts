@@ -212,11 +212,20 @@ describe('attemptToLoadCoreApis_ACU 装配三级后端', () => {
     await expect(listLorebooks_ACU()).resolves.toEqual([]);
   });
 
-  it('SillyTavern_API_ACU 仍被装配为 context Proxy', () => {
-    installTtLikeHost();
+  it('SillyTavern_API_ACU 仍被装配为 context Proxy', async () => {
+    const context = installTtLikeHost();
     attemptToLoadCoreApis_ACU();
     expect(SillyTavern_API_ACU).toBeTruthy();
     expect((SillyTavern_API_ACU as any).getWorldInfoNames).toBeDefined();
+    // 真实转发：标量属性读取与 'in' 判定均落到 context 真身
+    expect((SillyTavern_API_ACU as any).characterId).toBe(0);
+    expect((SillyTavern_API_ACU as any).chat).toBe(context.chat);
+    expect('getWorldInfoNames' in (SillyTavern_API_ACU as any)).toBe(true);
+    // 方法调用穿透 Proxy 抵达 context 的 spy：返回值与调用记录都来自主体
+    expect((SillyTavern_API_ACU as any).getWorldInfoNames()).toEqual(['剧情书', '设定书']);
+    expect(context.getWorldInfoNames).toHaveBeenCalledTimes(1);
+    await (SillyTavern_API_ACU as any).loadWorldInfo('剧情书');
+    expect(context.loadWorldInfo).toHaveBeenCalledWith('剧情书');
   });
 });
 

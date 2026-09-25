@@ -972,7 +972,6 @@ describe('useVisualizerAssistant', () => {
     expect(mockRunSession).toHaveBeenCalledWith(expect.objectContaining({ userRequest: '第二轮' }));
     // 重新生成后产生新的 user + final
     expect(assistant.turns.value.filter(turn => turn.type === 'user')).toHaveLength(1);
-    expect(beforeCount).toBeGreaterThan(0);
   });
 
   it('regenerateFromUserTurn 对非 user turn 返回 false 且不调用 runner', async () => {

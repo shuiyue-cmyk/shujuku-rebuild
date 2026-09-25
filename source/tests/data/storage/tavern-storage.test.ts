@@ -80,16 +80,16 @@ describe('常量导出', () => {
     expect(USE_TAVERN_SETTINGS_STORAGE_ACU).toBe(true);
   });
 
-  it('TAVERN_SETTINGS_NAMESPACE_ACU 包含前缀', () => {
-    expect(TAVERN_SETTINGS_NAMESPACE_ACU).toContain('ACU');
+  it('TAVERN_SETTINGS_NAMESPACE_ACU 钉值（基于 mock 前缀 ACU + src 模板）', () => {
+    expect(TAVERN_SETTINGS_NAMESPACE_ACU).toBe('ACU__userscript_settings_v1');
   });
 
-  it('TAVERN_BRIDGE_GLOBAL_KEY_ACU 是字符串', () => {
-    expect(typeof TAVERN_BRIDGE_GLOBAL_KEY_ACU).toBe('string');
+  it('TAVERN_BRIDGE_GLOBAL_KEY_ACU 钉值', () => {
+    expect(TAVERN_BRIDGE_GLOBAL_KEY_ACU).toBe('__ACU_USERSCRIPT_BRIDGE__');
   });
 
-  it('CONFIG_IDB_DB_NAME_ACU 包含前缀', () => {
-    expect(CONFIG_IDB_DB_NAME_ACU).toContain('ACU');
+  it('CONFIG_IDB_DB_NAME_ACU 钉值（基于 mock 前缀 ACU + src 模板）', () => {
+    expect(CONFIG_IDB_DB_NAME_ACU).toBe('ACU_config_v1');
   });
 
   it('CONFIG_IDB_STORE_NAME_ACU 是 kv', () => {

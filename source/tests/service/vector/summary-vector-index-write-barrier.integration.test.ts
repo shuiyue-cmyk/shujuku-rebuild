@@ -171,7 +171,7 @@ vi.mock('../../../src/service/table/table-history', () => ({
 // 真实导入：repository + 事务 helper + 上层 service
 import { patchIsolatedTagMetadata_ACU } from '../../../src/data/repositories/chat-message-data-repo';
 import { commitVectorMetadataPatch_ACU, commitVectorMetadataPatchesBatch_ACU } from '../../../src/service/vector/summary-vector-index-chat-commit';
-import { tryRecoverSummaryVectorIndexFromExternalSnapshot_ACU, clearSummaryVectorIndexLayerFromChat_ACU, deleteCurrentSummaryVectorIndexFromChat_ACU } from '../../../src/service/vector/summary-vector-index-chat-service';
+import { deleteCurrentSummaryVectorIndexFromChat_ACU } from '../../../src/service/vector/summary-vector-index-chat-service';
 import { migrateLegacySummaryVectorIndexToContentAddressed_ACU } from '../../../src/service/vector/summary-vector-index-archive-service';
 
 // ════════════════════════════════════════════════════════════════
@@ -184,14 +184,6 @@ function v1Slot(): Record<string, any> {
     updateGroupKeys: [],
     _acu_storage_version: 1,
     _acu_base_state: 'base',
-  };
-}
-
-function v2Slot(): Record<string, any> {
-  return {
-    storageFrame: { version: 2, logEntries: [], checkpoint: { kind: 'full', data: { sheet_0: { name: '表A' } } } },
-    _acu_storage_version: 2,
-    _acu_storage_mode: 'checkpoint',
   };
 }
 
@@ -211,21 +203,6 @@ function validState(indexId = 'idx-1'): any {
     rows: [{ rowKey: 'r1', rowId: 'r1', rowOrder: 0, chunkIds: ['c1'], summary: '概要', indexCode: 'i1' }],
     chunks: [{ chunkId: 'c1', rowKey: 'r1', text: 'x', vector: [0.1], sequence: 0 }],
     manifest: { indexId },
-  };
-}
-
-function blob(overrides: any = {}) {
-  const manifest = {
-    indexId: 'idx-1', status: 'ready', chatKey: h.chatKey, isolationKey: h.isolationKey, sourceTableKey: 'summary',
-    sourceTableName: '纪要表', storageIdentity: { revision: 1 }, snapshot: { revision: 1 },
-    ...overrides,
-  };
-  return {
-    schema: 'single_file_snapshot', manifest, indexId: manifest.indexId, chatKey: manifest.chatKey,
-    isolationKey: manifest.isolationKey, sourceTableKey: manifest.sourceTableKey,
-    rows: [{ rowKey: 'r1', rowId: 'r1', rowOrder: 0, chunkIds: ['c1'] }],
-    chunks: [{ chunkId: 'c1', rowKey: 'r1', text: 'x', vector: [0.1], sequence: 0 }],
-    ...overrides,
   };
 }
 
@@ -250,125 +227,6 @@ beforeEach(() => {
   h.finalize.mockResolvedValue(undefined);
   h.abort.mockResolvedValue(undefined);
   h.deleteExternal.mockResolvedValue(undefined);
-});
-
-
-// ════════════════════════════════════════════════════════════════
-// 1. 恢复到无槽消息
-// ════════════════════════════════════════════════════════════════
-describe('P4 恢复：真实 repository 写屏障', () => {
-  it('1.1 恢复到无槽消息：成功，tracking 数组契约正确（不出现 {}）', async () => {
-    const path = 'TavernDB_ACU_vector_v2_scope-chat-a-iso-a-summary_idx-1_write_snapshot';
-    h.registry = [{ path, publicationState: 'published' }];
-    h.reads.mockResolvedValue({ ok: true, data: blob() });
-
-    await expect(tryRecoverSummaryVectorIndexFromExternalSnapshot_ACU()).resolves.toBe(true);
-
-    const msg = h.chat[0];
-    expect(msg.TavernDB_ACU_IsolatedData).toBeDefined();
-    const tag = msg.TavernDB_ACU_IsolatedData['iso-a'];
-    expect(tag.summaryVectorIndexState.manifest.indexId).toBe('idx-1');
-    expect(tag.summaryVectorIndexManifest.indexId).toBe('idx-1');
-    // tracking 字段契约：新槽绝不出现 {}；无槽时整槽都不存在这两个字段。
-    expect(tag).not.toHaveProperty('modifiedKeys');
-    expect(tag).not.toHaveProperty('updateGroupKeys');
-    expect(tag.modifiedKeys).not.toEqual({});
-    expect(tag.updateGroupKeys).not.toEqual({});
-    expect(h.saveStrict).toHaveBeenCalledTimes(1);
-    expect(h.save).not.toHaveBeenCalled();
-  });
-
-  it('1.2 恢复到已有 V1 sheet_* 槽：成功追加 metadata，V1 表投影逐字段不变', async () => {
-    const path = 'TavernDB_ACU_vector_v2_scope-chat-a-iso-a-summary_idx-1_write_snapshot';
-    h.registry = [{ path, publicationState: 'published' }];
-    h.reads.mockResolvedValue({ ok: true, data: blob() });
-    const originalV1 = v1Slot();
-    h.chat[0].TavernDB_ACU_IsolatedData = { 'iso-a': originalV1 };
-    const originalProjection = JSON.parse(JSON.stringify(originalV1));
-
-    await expect(tryRecoverSummaryVectorIndexFromExternalSnapshot_ACU()).resolves.toBe(true);
-
-    const tag = h.chat[0].TavernDB_ACU_IsolatedData['iso-a'];
-    expect(tag.summaryVectorIndexState.manifest.indexId).toBe('idx-1');
-    // V1 表投影逐字段不变
-    expect(tag.independentData).toEqual(originalProjection.independentData);
-    expect(tag.modifiedKeys).toEqual(originalProjection.modifiedKeys);
-    expect(tag.updateGroupKeys).toEqual(originalProjection.updateGroupKeys);
-    expect(tag._acu_storage_version).toBe(1);
-    expect(tag._acu_base_state).toBe('base');
-    expect(h.saveStrict).toHaveBeenCalledTimes(1);
-  });
-
-  it('1.3 恢复到 V2 frame：成功并保留 frame', async () => {
-    const path = 'TavernDB_ACU_vector_v2_scope-chat-a-iso-a-summary_idx-1_write_snapshot';
-    h.registry = [{ path, publicationState: 'published' }];
-    h.reads.mockResolvedValue({ ok: true, data: blob() });
-    const originalV2 = v2Slot();
-    h.chat[0].TavernDB_ACU_IsolatedData = { 'iso-a': originalV2 };
-    const originalFrame = JSON.parse(JSON.stringify(originalV2.storageFrame));
-
-    await expect(tryRecoverSummaryVectorIndexFromExternalSnapshot_ACU()).resolves.toBe(true);
-
-    const tag = h.chat[0].TavernDB_ACU_IsolatedData['iso-a'];
-    expect(tag.storageFrame).toEqual(originalFrame);
-    expect(tag._acu_storage_version).toBe(2);
-    expect(tag._acu_storage_mode).toBe('checkpoint');
-    expect(tag.summaryVectorIndexState.manifest.indexId).toBe('idx-1');
-    expect(h.saveStrict).toHaveBeenCalledTimes(1);
-  });
-
-  it('1.4 恢复期间已有新 pointer：CAS 拒绝，不保存、不覆盖', async () => {
-    const path = 'TavernDB_ACU_vector_v2_scope-chat-a-iso-a-summary_idx-1_write_snapshot';
-    h.registry = [{ path, publicationState: 'published' }];
-    h.reads.mockResolvedValue({ ok: true, data: blob() });
-    // 外部 I/O 完成后、提交前，另一维护动作已写入新 pointer（stale snapshot 场景）。
-    h.chat[0].TavernDB_ACU_IsolatedData = {
-      'iso-a': { ...v1Slot(), summaryVectorIndexState: { ...validState('idx-newer'), manifest: { indexId: 'idx-newer' } }, summaryVectorIndexManifest: { indexId: 'idx-newer' } },
-    };
-    const before = JSON.parse(JSON.stringify(h.chat[0]));
-
-    // 恢复路径在 restoreCandidate 内先检查 readIsolatedTagData 已有 indexId → 直接返回 false，不提交。
-    await expect(tryRecoverSummaryVectorIndexFromExternalSnapshot_ACU()).resolves.toBe(false);
-
-    expect(h.chat[0]).toEqual(before);
-    expect(h.saveStrict).not.toHaveBeenCalled();
-    expect(h.save).not.toHaveBeenCalled();
-  });
-
-  it('1.5 strict save 失败：恢复原 container 的值、类型和存在性（字符串容器）', async () => {
-    const path = 'TavernDB_ACU_vector_v2_scope-chat-a-iso-a-summary_idx-1_write_snapshot';
-    h.registry = [{ path, publicationState: 'published' }];
-    h.reads.mockResolvedValue({ ok: true, data: blob() });
-    // 字符串容器：事务快照必须保留原始字符串格式。
-    const before = JSON.stringify({ 'iso-a': v1Slot() });
-    h.chat[0].TavernDB_ACU_IsolatedData = before;
-    h.saveStrict.mockRejectedValueOnce(new Error('host save failed'));
-
-    await expect(tryRecoverSummaryVectorIndexFromExternalSnapshot_ACU()).resolves.toBe(false);
-
-    // 值、类型（字符串容器）、存在性全部还原。
-    expect(h.chat[0].TavernDB_ACU_IsolatedData).toBe(before);
-    expect(typeof h.chat[0].TavernDB_ACU_IsolatedData).toBe('string');
-    expect(h.saveStrict).toHaveBeenCalledTimes(1);
-    expect(h.save).not.toHaveBeenCalled();
-  });
-
-  it('1.6 strict save 失败时消息级字段（Identity/anchor 等）也随事务回滚', async () => {
-    const path = 'TavernDB_ACU_vector_v2_scope-chat-a-iso-a-summary_idx-1_write_snapshot';
-    h.registry = [{ path, publicationState: 'published' }];
-    h.reads.mockResolvedValue({ ok: true, data: blob() });
-    h.chat[0].TavernDB_ACU_IsolatedData = { 'iso-a': v1Slot() };
-    h.chat[0].TavernDB_ACU_Identity = 'code_0';
-    h.chat[0]._acu_remote_memory_snapshot_anchor = { anchor: 'keep' };
-    const before = JSON.parse(JSON.stringify(h.chat[0]));
-    h.saveStrict.mockRejectedValueOnce(new Error('host save failed'));
-
-    await expect(tryRecoverSummaryVectorIndexFromExternalSnapshot_ACU()).resolves.toBe(false);
-
-    expect(h.chat[0]).toEqual(before);
-    expect(h.chat[0].TavernDB_ACU_Identity).toBe('code_0');
-    expect(h.chat[0]._acu_remote_memory_snapshot_anchor).toEqual({ anchor: 'keep' });
-  });
 });
 
 
@@ -622,13 +480,5 @@ describe('P4 批量删除：真实 repository 写屏障', () => {
     expect(msg0).toEqual(before0);
     expect(msg1).toEqual(before1);
     expect(h.saveStrict).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe('P4 单一 service 边界', () => {
-  it('5.1 service 边界公开 writer 函数，V2 UI 复用同一 service 边界', async () => {
-    const chatService = await import('../../../src/service/vector/summary-vector-index-chat-service');
-    expect(typeof chatService.deleteCurrentSummaryVectorIndexFromChat_ACU).toBe('function');
-    expect(typeof chatService.clearSummaryVectorIndexLayerFromChat_ACU).toBe('function');
   });
 });

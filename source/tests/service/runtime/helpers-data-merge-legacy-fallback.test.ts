@@ -9,7 +9,6 @@ import { beforeEach, describe, it, expect, vi } from 'vitest';
 
 vi.mock('../../../src/shared/env', () => ({
   topLevelWindow_ACU: {},
-  isLocalStorageDisabled_ACU: false,
 }));
 
 vi.mock('../../../src/shared/utils', () => ({

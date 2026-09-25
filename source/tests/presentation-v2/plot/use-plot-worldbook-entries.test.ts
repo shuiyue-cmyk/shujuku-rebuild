@@ -52,18 +52,6 @@ async function getComposable(presetSettings?: ReturnType<typeof createSettings>,
       ? { description: '已 Skill 化', triggerWhen: '测试触发', tk: 0, updatedBy: 'manual', updatedAt: 1 }
       : null,
     saveWorldbookEntrySkillMeta_ACU: mockSaveEntrySkillMeta,
-    stripWorldbookSkillMetaBlock_ACU: (comment: unknown) => String(comment || '').replace(/\n?<!--\s*ACU_SKILL_META_START\s*\n[\s\S]*?\nACU_SKILL_META_END\s*-->\n?/g, '').trim(),
-  }));
-  vi.doMock('../../../src/service/agent/agent-skillify-service', () => ({
-    getWorldbookEntryKeywordsForSkillify_ACU: vi.fn((entry: any) => Array.isArray(entry?.keys)
-      ? entry.keys
-      : (entry?.key ? [entry.key] : [])),
-    isDatabaseGeneratedWorldbookEntryForAgent_ACU: vi.fn((entry: any) => /^(?:ACU-\[[^\]]+\]-)?(?:TavernDB-ACU-|重要人物条目|总结条目|小总结条目)/.test(String(entry?.comment || entry?.name || ''))
-      && !String(entry?.comment || entry?.name || '').trim().startsWith('外部导入-')),
-    isWorldbookEntrySkillifyCandidate_ACU: vi.fn((entry: any) => entry?.enabled !== false
-      && String(entry?.type || '').trim().toLowerCase() !== 'constant'
-      && !/^(?:ACU-\[[^\]]+\]-)?(?:TavernDB-ACU-|重要人物条目|总结条目|小总结条目)/.test(String(entry?.comment || entry?.name || ''))
-      && !String(entry?.comment || entry?.name || '').trim().startsWith('AGENT_INTERNAL-')),
   }));
 
   const mod = await import('../../../src/presentation-v2/composables/usePlotWorldbookEntries');

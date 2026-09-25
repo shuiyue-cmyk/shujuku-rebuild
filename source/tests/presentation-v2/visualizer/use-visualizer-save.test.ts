@@ -170,7 +170,6 @@ vi.mock('../../../src/service/table/storage-mode', () => ({
   isSqliteMode: serviceMock.isSqliteMode,
 }));
 vi.mock('../../../src/service/table/storage-frame-v2-replay', () => ({
-  validateCurrentChatTableRecoveryWithGuide_ACU: serviceMock.validateCurrentChatTableRecoveryWithGuide_ACU || vi.fn(async () => ({ success: true })),
   hasStructuralReplayCompatibilityRepairs_ACU: vi.fn(() => false),
   loadTableStateFromFramesV2Detailed_ACU: vi.fn(async () => {
     // Data-save now uses V2 replay as the write base before persist.

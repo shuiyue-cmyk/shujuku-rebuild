@@ -16,8 +16,8 @@ import { buildLongHistoryFixture_ACU } from '../service/table/v2-long-history-fi
 import { loadTableStateFromFramesV2Detailed_ACU, loadTableStatesAtBoundariesFromFramesV2Detailed_ACU } from '../../src/service/table/storage-frame-v2-replay';
 
 // 复用既有测试的模块解析方式：真实 state-manager/chat-gateway，仅静音 log。
-vi.mock('../../../src/shared/utils', async () => {
-  const actual = await vi.importActual<any>('../../../src/shared/utils');
+vi.mock('../../src/shared/utils', async () => {
+  const actual = await vi.importActual<any>('../../src/shared/utils');
   return { ...actual, logDebug_ACU: () => {}, logWarn_ACU: () => {} };
 });
 
@@ -93,17 +93,17 @@ describe('阶段 J：长历史 replay 性能基准（本地可复现）', () => 
       }));
     }
     const seqElapsed = performance.now() - startSeq;
-    // 结果一致性：3 个 boundary 的 canonical data 严格深比较（vitest 原生，key 顺序无关）
-    const consistent = boundaries.every((boundary) => {
-      const a = fwd.get(boundary)?.data;
-      const b = seq.get(boundary)?.data;
-      try { expect(a).toEqual(b); return true; } catch { return false; }
-    });
+    // 结果一致性：3 个 boundary 的 canonical data 严格深比较（vitest 原生，key 顺序无关）。
+    // 一致性失败即红；性能计时本身不设门禁。
+    for (const boundary of boundaries) {
+      expect(fwd.get(boundary)?.data, `boundary ${boundary}：前向捕获与逐次冷 replay 结果不一致`).toEqual(
+        seq.get(boundary)?.data,
+      );
+    }
     // eslint-disable-next-line no-console
     console.table({
       forward_capture: { elapsedMs: fwdElapsed.toFixed(1), boundaryCount: fwd.size },
       sequential_cold: { elapsedMs: seqElapsed.toFixed(1), boundaryCount: seq.size },
-      consistent: consistent,
     });
   });
 

@@ -13,12 +13,6 @@ const {
 }));
 
 vi.mock('../../../src/data/gateways/ai-gateway', () => ({
-  isGenerateRawAvailable_ACU: vi.fn(() => true),
-  isConnectionManagerAvailable_ACU: vi.fn(() => false),
-  isTriggerSlashAvailable_ACU: vi.fn(() => false),
-  generateRaw_ACU: vi.fn(),
-  sendConnectionManagerRequest_ACU: vi.fn(),
-  triggerSlash_ACU: vi.fn(),
   getConnectionManagerProfiles_ACU: vi.fn(),
   getHostRequestHeaders_ACU: mockGetHostRequestHeaders,
 }));

@@ -58,29 +58,28 @@ describe('常量导出', () => {
     expect(CHAT_SCOPED_CONFIG_VERSION_ACU).toBe(1);
   });
 
-  it('CHAT_SHEET_GUIDE_FIELD_ACU 是字符串', () => {
-    expect(typeof CHAT_SHEET_GUIDE_FIELD_ACU).toBe('string');
+  it('CHAT_SHEET_GUIDE_FIELD_ACU 钉值', () => {
+    expect(CHAT_SHEET_GUIDE_FIELD_ACU).toBe('TavernDB_ACU_InternalSheetGuide');
   });
 
   it('CHAT_SHEET_GUIDE_VERSION_ACU 是 2', () => {
     expect(CHAT_SHEET_GUIDE_VERSION_ACU).toBe(2);
   });
 
-  it('LEGACY_CHAT_TABLE_HEADER_GUIDE_FIELD_ACU 是字符串', () => {
-    expect(typeof LEGACY_CHAT_TABLE_HEADER_GUIDE_FIELD_ACU).toBe('string');
+  it('LEGACY_CHAT_TABLE_HEADER_GUIDE_FIELD_ACU 钉值', () => {
+    expect(LEGACY_CHAT_TABLE_HEADER_GUIDE_FIELD_ACU).toBe('TavernDB_ACU_TableHeaderGuide');
   });
 
-  it('CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU 是字符串', () => {
-    expect(typeof CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU).toBe('string');
+  it('CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU 钉值', () => {
+    expect(CHAT_SHEET_GUIDE_SEED_ROWS_FIELD_ACU).toBe('seedRows');
   });
 
-  it('CHAT_TEMPLATE_ARCHIVE_OPTION_PREFIX_ACU 是字符串', () => {
-    expect(typeof CHAT_TEMPLATE_ARCHIVE_OPTION_PREFIX_ACU).toBe('string');
+  it('CHAT_TEMPLATE_ARCHIVE_OPTION_PREFIX_ACU 钉值', () => {
+    expect(CHAT_TEMPLATE_ARCHIVE_OPTION_PREFIX_ACU).toBe('__acu_chat_archive__:');
   });
 
-  it('MAX_CHAT_TEMPLATE_ARCHIVES_PER_TAG_ACU 是正整数', () => {
-    expect(MAX_CHAT_TEMPLATE_ARCHIVES_PER_TAG_ACU).toBeGreaterThan(0);
-    expect(Number.isInteger(MAX_CHAT_TEMPLATE_ARCHIVES_PER_TAG_ACU)).toBe(true);
+  it('MAX_CHAT_TEMPLATE_ARCHIVES_PER_TAG_ACU 钉数值', () => {
+    expect(MAX_CHAT_TEMPLATE_ARCHIVES_PER_TAG_ACU).toBe(8);
   });
 });
 

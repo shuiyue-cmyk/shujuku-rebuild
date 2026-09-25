@@ -4,7 +4,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const { mockSettings, mockCurrentJsonTableData, mockChatKey, mockIsolationKey, mockSendConnectionManager, mockExtractTableEditInner, mockBuildCustomBody } = vi.hoisted(() => {
+const { mockSettings, mockCurrentJsonTableData, mockChatKey, mockIsolationKey, mockExtractTableEditInner, mockBuildCustomBody } = vi.hoisted(() => {
   const mockSettings: any = {
     autoMergeEnabled: true,
     autoMergeThreshold: 5,
@@ -25,12 +25,11 @@ const { mockSettings, mockCurrentJsonTableData, mockChatKey, mockIsolationKey, m
       ],
     },
   };
-  const mockSendConnectionManager = vi.fn();
   const mockExtractTableEditInner = vi.fn(() => '');
   const mockBuildCustomBody = vi.fn(() => ({ messages: [], model: 'gpt-4', max_tokens: 4096, temperature: 1.0, top_p: 0.95, stream: false }));
   const mockChatKey = { value: 'test-chat' };
   const mockIsolationKey = { value: '' };
-  return { mockSettings, mockCurrentJsonTableData, mockChatKey, mockIsolationKey, mockSendConnectionManager, mockExtractTableEditInner, mockBuildCustomBody };
+  return { mockSettings, mockCurrentJsonTableData, mockChatKey, mockIsolationKey, mockExtractTableEditInner, mockBuildCustomBody };
 });
 
 vi.mock('../../../src/service/runtime/state-manager', () => ({
@@ -44,7 +43,6 @@ vi.mock('../../../src/shared/utils', () => ({
   logDebug_ACU: vi.fn(),
   logWarn_ACU: vi.fn(),
   logError_ACU: vi.fn(),
-  isSummaryOrOutlineTable_ACU: vi.fn((name: string) => name.includes('总结') || name.includes('纪要')),
 }));
 
 vi.mock('../../../src/shared/env', () => ({
@@ -58,9 +56,6 @@ vi.mock('../../../src/shared/defaults-json.js', () => ({
 }));
 
 vi.mock('../../../src/data/gateways/ai-gateway', () => ({
-  sendConnectionManagerRequest_ACU: mockSendConnectionManager,
-  isGenerateRawAvailable_ACU: vi.fn(() => false),
-  generateRaw_ACU: vi.fn(),
   getHostRequestHeaders_ACU: vi.fn(() => ({})),
 }));
 
@@ -87,7 +82,6 @@ vi.mock('../../../src/service/table/table-service', () => ({
 
 vi.mock('../../../src/service/ai/prompt-builder', () => ({
   handleApiResponse_ACU: vi.fn(),
-  postChatCompletion_ACU: vi.fn(),
   extractTableEditInner_ACU: mockExtractTableEditInner,
 }));
 

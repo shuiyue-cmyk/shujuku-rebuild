@@ -28,7 +28,6 @@ describe('S11-TT 判别：write_sql 协议解析', () => {
     const protocol = await import('../../../../src/service/continuation/agent/agent-protocol');
     const parse = (protocol as Record<string, unknown>).parseAgentWritableToolCalls_ACU as unknown as
       ((raw: string, prefill: string) => Array<{ kind: string; sql?: string }> | null) | undefined;
-    expect(typeof parse).toBe('function');
     const calls = parse!('{"action":"write_sql","sql":"UPDATE hooks SET summary = \'x\' WHERE id = \'H1\' AND expected_revision = 0"}', '');
     expect(calls?.some(item => item.kind === 'write_sql')).toBe(true);
   });
@@ -37,7 +36,6 @@ describe('S11-TT 判别：write_sql 协议解析', () => {
     const protocol = await import('../../../../src/service/continuation/agent/agent-protocol');
     const parse = (protocol as Record<string, unknown>).parseAgentModuleSqlFieldWrites_ACU as unknown as
       ((sql: string, role: string) => { intents: Array<{ module: string; kind: string }>; rejected: Array<{ path: string }> }) | undefined;
-    expect(typeof parse).toBe('function');
     const ok = parse!("INSERT INTO hooks (id, expected_revision, summary) VALUES ('H1', 0, 's')", 'hook-cognition-maintainer');
     expect(ok.intents.length).toBe(1);
     expect(ok.intents[0].module).toBe('hooks');
@@ -52,7 +50,6 @@ describe('S11-TT 判别：栏级修补事务', () => {
     const transaction = await import('../../../../src/service/continuation/agent/agent-transaction');
     const apply = (transaction as Record<string, unknown>).applyAgentModuleDelta_ACU as unknown as
       ((snapshot: AgentModuleSnapshot_ACU, delta: Record<string, unknown>, modules: readonly string[], settled: number) => { snapshot: AgentModuleSnapshot_ACU }) | undefined;
-    expect(typeof apply).toBe('function');
     const base = snapshotAt(3, {
       chronology: [{ id: 'C1', anchor: '旧锚', elapsed: '三天', precision: 'exact', transition: '转场', evidenceIndexes: [1], updatedIndex: 1, retired: false, retiredReason: '' } as never],
     });
@@ -69,7 +66,6 @@ describe('S11-TT 判别：栏级修补事务', () => {
     const transaction = await import('../../../../src/service/continuation/agent/agent-transaction');
     const apply = (transaction as Record<string, unknown>).applyAgentWebRefsDelta_ACU as unknown as
       ((snapshot: AgentModuleSnapshot_ACU, output: Record<string, unknown>, expected: number | undefined, now: number) => { snapshot: AgentModuleSnapshot_ACU }) | undefined;
-    expect(typeof apply).toBe('function');
     const base = snapshotAt(3, {
       webRefs: [{ id: 'W1', title: '旧名', source: 'web', url: 'https://example.com/1', query: 'q', tags: [], brief: '旧简介', summary: '', sourceStatus: 'ok', fetchedAt: 1, retired: false, retiredReason: '' } as never],
     });
@@ -83,7 +79,6 @@ describe('S11-TT 判别：帧内逐栏写集严格校验', () => {
     const frame = await import('../../../../src/service/continuation/agent/agent-module-frame');
     const parse = (frame as Record<string, unknown>).parseAgentModuleFieldUpserts_ACU as unknown as
       ((raw: unknown) => Record<string, unknown> | null) | undefined;
-    expect(typeof parse).toBe('function');
     expect(parse!({ hooks: { H1: { summary: { value: 's' } } } })).not.toBeNull();
     expect(parse!({ hooks: [] })).toBeNull();
   });
@@ -100,14 +95,14 @@ describe('S11-TT 判别：SQL 分栏层复算', () => {
         exportDelta: () => { fieldUpserts?: unknown };
         dispose: () => void;
       }>) | undefined;
-    expect(typeof materialize).toBe('function');
     const base = snapshotAt(2);
     const db = await materialize!(base, undefined);
     try {
       db.applyFieldBatch({ module: 'hooks', expectedRevision: 0, updatedAt: 2000, fieldWrites: { H9: { summary: { value: 's' } } } });
       expect(db.readFieldRecord('hooks', 'H9')?.fields.summary.value).toBe('s');
       expect(db.readPartialRecords('hooks').map(item => item.id)).toContain('H9');
-      expect(db.exportDelta().fieldUpserts).toBeDefined();
+      // 深比较锁：逐栏批次必须原样导出 模块→ID→栏目 写集（toBeDefined 曾放行任何非空对象）。
+      expect(db.exportDelta().fieldUpserts).toEqual({ hooks: { H9: { summary: { value: 's' } } } });
     } finally {
       db.dispose();
     }
@@ -127,12 +122,10 @@ describe('S11-TT 判别：$FIELD 权威读取与证据楼层', () => {
     const placeholder = await import('../../../../src/service/continuation/agent/agent-placeholder-resolver');
     const resolve = (placeholder as Record<string, unknown>).resolveAgentReadToken_ACU as unknown as
       ((token: string, context: Record<string, unknown>) => { title: string; text: string }) | undefined;
-    expect(typeof resolve).toBe('function');
     const folded = (store as Record<string, (chat: unknown[]) => { snapshot: AgentModuleSnapshot_ACU }>)
       .readAgentModuleSnapshot_ACU(chat);
     const out = resolve!('$FIELD:hooks:H1', { chat, moduleSnapshot: folded, settledThroughIndex: 0, execution: {}, originInstruction: '' });
     expect(out.title).toContain('hooks');
-    expect(typeof (placeholder as Record<string, unknown>).agentStoryEvidenceFloorIndexes_ACU).toBe('function');
   });
 });
 
@@ -143,7 +136,6 @@ describe('S11-TT 判别：融合提交（帧/plan 路径，不另起文件）', 
     const store = await import('../../../../src/service/continuation/agent/agent-module-store');
     const commit = (store as Record<string, unknown>).commitAgentModuleFieldWrites_ACU as unknown as
       ((input: Record<string, unknown>) => Promise<{ status: string; accepted: unknown[]; rejected: unknown[]; revisions: unknown }>) | undefined;
-    expect(typeof commit).toBe('function');
     await (store as Record<string, (chat: unknown[], index: number, snapshot: AgentModuleSnapshot_ACU) => Promise<void>>)
       .writeAgentModuleSnapshot_ACU(chat, 0, snapshotAt(0));
     chat.push({ mes: '正文', is_user: false });

@@ -41,7 +41,6 @@ vi.mock('../../src/shared/json-helpers', () => ({
 
 vi.mock('../../src/service/table/storage-mode', () => ({
   isSqliteMode: vi.fn(() => false),
-  isNativeMode: vi.fn(() => true),
   getCurrentStorageMode: vi.fn(() => 'native'),
 }));
 
@@ -108,20 +107,34 @@ describe('I3: 模板变量替换管线', () => {
     expect(resultMin).toContain('3');
   });
 
-  it('完整管线串联：random → calc → max → min → 变量替换', () => {
-    const context = { allTablesJson: mockCurrentJsonTableDataRef.value };
-    let content = '<random id="bonus" min="1" max="3" /><calc id="base" expr="10" />攻击力=$calc:base+$random:bonus';
+  it('完整管线串联：random → calc → if-block 按变量裁剪', () => {
+    const context = { allTablesJson: mockCurrentJsonTableDataRef.value, seedContent: '我拿起了铁剑', plotContent: '' };
+    let content = '<random id="bonus" min="1" max="3" /><calc id="base" expr="10" /><if seed="铁剑">攻击力=$calc:base+$random:bonus<else>无装备</if>';
 
-    // 管线执行顺序
+    // 管线执行顺序：random → calc → if-block
     content = parseRandomTags_ACU(content);
     content = replaceRandomVariables_ACU(content);
     content = parseCalcTags_ACU(content, context);
     content = replaceCalcVariables_ACU(content);
+    content = parseIfBlocksInContent_ACU(content, context, 0);
 
     expect(content).not.toContain('<random');
     expect(content).not.toContain('<calc');
+    expect(content).not.toContain('<if');
+    expect(content).not.toContain('<else>');
+    expect(content).not.toContain('</if>');
     expect(content).not.toContain('$calc:base');
     expect(content).not.toContain('$random:bonus');
-    expect(content).toContain('攻击力=10+');
+    // seed 关键词「铁剑」命中 seedContent → 保留 if 分支
+    expect(content).toMatch(/攻击力=10\+[1-3]/);
+    expect(content).not.toContain('无装备');
+
+    // seed 不命中 → 裁剪 if 分支、保留 else 分支
+    const miss = parseIfBlocksInContent_ACU(
+      '前置说明<if seed="铁剑">攻击力=12<else>无装备</if>',
+      { seedContent: '空手而归', plotContent: '' },
+      0,
+    );
+    expect(miss).toBe('前置说明无装备');
   });
 });

@@ -47,7 +47,6 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({
   _set_coreApisAreReady_ACU: vi.fn(),
   _set_lastTotalAiMessages_ACU: vi.fn(),
   _set_allChatMessages_ACU: vi.fn(),
-  _set_currentChatFileIdentifier_AC: vi.fn(),
   _set_currentJsonTableData_ACU: vi.fn(),
   _set_independentTableStates_ACU: vi.fn(),
   _set_isProcessing_Plot_ACU: vi.fn(),
@@ -86,7 +85,6 @@ vi.mock('../../../src/shared/utils', () => ({
   logError_ACU: vi.fn(),
   isSummaryOrOutlineTable_ACU: vi.fn(),
   cleanChatName_ACU: vi.fn(),
-  escapeHtml_ACU: vi.fn(),
 }));
 
 vi.mock('../../../src/shared/runtime-performance', () => ({

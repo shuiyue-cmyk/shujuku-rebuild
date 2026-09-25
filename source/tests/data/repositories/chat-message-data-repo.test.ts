@@ -2,7 +2,7 @@
  * tests/data/repositories/chat-message-data-repo.test.ts
  * 消息级表格数据 CRUD 单元测试
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 
 vi.mock('../../../src/shared/json-helpers', () => ({
   safeJsonParse_ACU: (json: string, fallback: any) => { try { return JSON.parse(json); } catch { return fallback; } },
@@ -20,7 +20,6 @@ import {
   readUpdateGroupKeys_ACU,
   isLegacyMatchForIsolation_ACU,
   writeIsolatedTagData_ACU,
-  isV1TablePayloadCandidate_ACU,
   LEGACY_V1_TABLE_WRITE_FORBIDDEN_ACU,
   writeMessageIdentity_ACU,
   purgeManualRefillIncrementalSheetKeysFromStorageFrameV2_ACU,
@@ -1734,6 +1733,9 @@ describe('clearAllTableFields_ACU', () => {
     expect(msg.TavernDB_ACU_UpdateGroupKeys).toBeUndefined();
     expect(msg._acu_local_template_base_state_seeded).toBeUndefined();
     // 非 ACU 字段保留
+    expect(msg.otherField).toBe('保留');
+  });
+});
 
 describe('scanResidualTableFields_ACU', () => {
   it('null / 非对象返回空数组', () => {
@@ -1749,8 +1751,8 @@ describe('scanResidualTableFields_ACU', () => {
     };
     expect(scanResidualTableFields_ACU(msg)).toEqual([
       'TavernDB_ACU_IsolatedData',
-      'TavernDB_ACU_ModifiedKeys',
       'TavernDB_ACU_Identity',
+      'TavernDB_ACU_ModifiedKeys',
     ]);
   });
 
@@ -1815,10 +1817,6 @@ describe('scanResidualFirstMessageScopeFields_ACU', () => {
       'TavernDB_ACU_InternalSheetGuide',
       'TavernDB_ACU_TableHeaderGuide',
     ]);
-  });
-});
-
-    expect(msg.otherField).toBe('保留');
   });
 });
 

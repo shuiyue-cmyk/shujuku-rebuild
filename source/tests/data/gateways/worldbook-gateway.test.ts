@@ -42,8 +42,9 @@ import {
   loadHostWorldInfoModule_ACU,
   resetHostWorldInfoModuleCache_ACU,
   getCurrentCharPrimaryLorebook_ACU,
-  getCharLorebooks_ACU,
 } from '../../../src/data/gateways/worldbook-gateway';
+import * as wb from '../../../src/data/gateways/worldbook-gateway';
+import * as char from '../../../src/data/gateways/character-gateway';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -462,14 +463,7 @@ describe('getCurrentCharPrimaryLorebook_ACU', () => {
 });
 
 describe('getCharLorebooks_ACU', () => {
-  it('API 不可用返回空对象', async () => {
-    const result = await getCharLorebooks_ACU();
-    expect(result).toEqual({ primary: '', additional: [] });
-  });
-
-  it('API 可用返回世界书列表', async () => {
-    const data = { primary: ['book1'], additional: ['book2'] };
-    mockTavernHelper.getCharLorebooks = vi.fn().mockResolvedValue(data);
-    expect(await getCharLorebooks_ACU()).toEqual(data);
+  it('worldbook-gateway 仅 re-export character-gateway 的同一实现', () => {
+    expect((wb as any).getCharLorebooks_ACU).toBe((char as any).getCharLorebooks_ACU);
   });
 });

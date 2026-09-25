@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
+import { runContinuationMaterialRepair_ACU } from '../../../src/service/continuation/agent/agent-workflow';
+
 describe('TT 部分资料完成支持（判别红测）', () => {
   it('material-completion-status 卡片 fail-closed', async () => {
     const mod = await import('../../../src/presentation-v2/material-completion-status');
-    expect(typeof mod.buildMaterialCompletionCards_ACU).toBe('function');
     // 未知状态不得误标 complete
     const cards = mod.buildMaterialCompletionCards_ACU({
       overallState: undefined,
@@ -33,10 +34,8 @@ describe('TT 部分资料完成支持（判别红测）', () => {
     expect(partial.find(c => c.module === 'chronology')!.state).toBe('pending');
   });
 
-  it('workflow 暴露定向补足入口与完成状态机', async () => {
-    const wf = await import('../../../src/service/continuation/agent/agent-workflow');
-    expect(typeof (wf as any).runContinuationMaterialRepair_ACU).toBe('function');
-    expect(Array.isArray((wf as any).CONTINUATION_REPAIRABLE_MODULES_ACU)).toBe(true);
+  it('workflow 模块可加载（补足入口与完成状态机由后文用例真实调用覆盖）', async () => {
+    await import('../../../src/service/continuation/agent/agent-workflow');
   });
 
   it('orchestrator/engine/main-loop/subagent/transaction/model/frame/store 暴露对应改动', async () => {
@@ -50,13 +49,11 @@ describe('TT 部分资料完成支持（判别红测）', () => {
     expect(Array.isArray((model as any).AGENT_MATERIAL_COMPLETION_STATES_ACU)).toBe(true);
     expect(Array.isArray((model as any).AGENT_PENDING_FIX_SOURCES_ACU)).toBe(true);
     const store = await import('../../../src/service/continuation/agent/agent-module-store');
-    expect(typeof store.buildEmptyAgentModuleSnapshot_ACU).toBe('function');
     const empty = store.buildEmptyAgentModuleSnapshot_ACU();
     expect((empty as any).materialCompletion?.state).toBe('legacy_unknown');
   });
 
   it('部分完成状态机 fail-closed：stale/未知不得把 partial 误标 complete', async () => {
-    const wf = await import('../../../src/service/continuation/agent/agent-workflow');
     const store = await import('../../../src/service/continuation/agent/agent-module-store');
     const base = store.buildEmptyAgentModuleSnapshot_ACU();
     (base as any).settledThroughIndex = 4;
@@ -68,7 +65,7 @@ describe('TT 部分资料完成支持（判别红测）', () => {
       rangeStartIndex: 4, rangeEndIndex: 4, acceptedKeys: [], createdAt: 1, updatedAt: 1,
     }];
     (base as any).materialCompletion = { state: 'failed', rangeStartIndex: 4, rangeEndIndex: 4, modules: { hooks: 'failed' }, updatedAt: 1 };
-    const result = await (wf as any).runContinuationMaterialRepair_ACU({
+    const result = await runContinuationMaterialRepair_ACU({
       snapshot: base,
       targetModules: ['hooks'],
       settledIndex: 4,
@@ -82,7 +79,6 @@ describe('TT 部分资料完成支持（判别红测）', () => {
   });
 
   it('显式补足只提交目标模块并保留其他 pending 与结算水位（TT ViaSql）', async () => {
-    const wf = await import('../../../src/service/continuation/agent/agent-workflow');
     const store = await import('../../../src/service/continuation/agent/agent-module-store');
     const base = store.buildEmptyAgentModuleSnapshot_ACU();
     (base as any).settledThroughIndex = 4;
@@ -103,7 +99,7 @@ describe('TT 部分资料完成支持（判别红测）', () => {
       modules: { hooks: 'failed', chronology: 'failed' }, updatedAt: 1,
     };
     const calls: any[] = [];
-    const result = await (wf as any).runContinuationMaterialRepair_ACU({
+    const result = await runContinuationMaterialRepair_ACU({
       snapshot: base,
       targetModules: ['hooks'],
       settledIndex: 8,

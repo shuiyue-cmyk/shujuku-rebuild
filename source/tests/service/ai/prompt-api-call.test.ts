@@ -14,10 +14,6 @@ const {
   mockGetApiConfigByPreset,
   mockGetPersonaDescription,
   mockGetCharDescription,
-  mockIsGenerateRawAvailable,
-  mockGenerateRaw,
-  mockSendConnectionManagerRequest,
-  mockTriggerSlash,
   mockGetConnectionManagerProfiles,
   mockGetHostRequestHeaders,
   mockApplyExcludeRulesToText,
@@ -50,10 +46,6 @@ const {
     mockGetApiConfigByPreset: vi.fn(),
     mockGetPersonaDescription: vi.fn(() => '用户设定'),
     mockGetCharDescription: vi.fn(() => '角色描述'),
-    mockIsGenerateRawAvailable: vi.fn(() => true),
-    mockGenerateRaw: vi.fn(),
-    mockSendConnectionManagerRequest: vi.fn(),
-    mockTriggerSlash: vi.fn(),
     mockGetConnectionManagerProfiles: vi.fn(() => []),
     mockGetHostRequestHeaders: vi.fn(() => ({ 'X-Custom': 'test' })),
     mockApplyExcludeRulesToText: vi.fn((text: string) => text),
@@ -89,10 +81,6 @@ vi.mock('../../../src/data/gateways/host-state-gateway', () => ({
 }));
 
 vi.mock('../../../src/data/gateways/ai-gateway', () => ({
-  isGenerateRawAvailable_ACU: mockIsGenerateRawAvailable,
-  generateRaw_ACU: mockGenerateRaw,
-  sendConnectionManagerRequest_ACU: mockSendConnectionManagerRequest,
-  triggerSlash_ACU: mockTriggerSlash,
   getConnectionManagerProfiles_ACU: mockGetConnectionManagerProfiles,
   getHostRequestHeaders_ACU: mockGetHostRequestHeaders,
 }));
@@ -171,7 +159,6 @@ beforeEach(() => {
   mockGetPersonaDescription.mockReturnValue('用户设定');
   mockGetCharDescription.mockReturnValue('角色描述');
   mockGetPlotFromHistory.mockReturnValue('上轮剧情');
-  mockIsGenerateRawAvailable.mockReturnValue(true);
 });
 
 afterEach(() => {

@@ -23,12 +23,6 @@ beforeEach(() => {
 });
 
 describe('SQL 修复提示（移植上游 9ee4f0f TT 子集）', () => {
-  it('renderWriteSqlRepair_ACU 存在且为函数', async () => {
-    const runtime = await import('../../../../src/service/continuation/agent/agent-subagent-runtime');
-    const render = (runtime as Record<string, unknown>).renderWriteSqlRepair_ACU;
-    expect(typeof render).toBe('function');
-  });
-
   it('字段数不一致时提示单引号要写成两个', async () => {
     const runtime = await import('../../../../src/service/continuation/agent/agent-subagent-runtime');
     const render = (runtime as Record<string, unknown>).renderWriteSqlRepair_ACU as unknown as
@@ -116,12 +110,6 @@ describe('SQL 修复提示（移植上游 9ee4f0f TT 子集）', () => {
 });
 
 describe('空总纲引导（移植上游 3c4beb9 TT 子集）', () => {
-  it('renderArcSqlBootstrap_ACU 存在且为函数', async () => {
-    const runtime = await import('../../../../src/service/continuation/agent/agent-subagent-runtime');
-    const render = (runtime as Record<string, unknown>).renderArcSqlBootstrap_ACU;
-    expect(typeof render).toBe('function');
-  });
-
   it('空总纲时提示先写一条 scope=story 的全书方向', async () => {
     const runtime = await import('../../../../src/service/continuation/agent/agent-subagent-runtime');
     const render = (runtime as Record<string, unknown>).renderArcSqlBootstrap_ACU as unknown as

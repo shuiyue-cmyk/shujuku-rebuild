@@ -126,11 +126,17 @@ describe('I2: AI 填表完整流程', () => {
 
     it('updateRow 指令不抛错且返回成功', () => {
       // updateRow 内部依赖 materializeSeedRowsIfNeeded_ACU 和 getTableLocksForSheet_ACU
-      // 集成测试验证函数不抛错，具体列更新逻辑由单元测试覆盖
       const aiResponse = '<tableEdit>updateRow(0, 0, {"0": "金剑", "1": "10"})</tableEdit>';
-      const result = parseAndApplyTableEdits_ACU(aiResponse, 'standard');
-      // 函数应返回成功（不抛错）
+      const result = parseAndApplyTableEdits_ACU(aiResponse, 'standard') as any;
+      // src 实际语义：应用了指令的块返回统计对象（布尔 true 仅属空块/无块零操作路径），
+      // 成功位收紧为 success === true，并锁定应用/失败计数。
       expect(result).toBeTruthy();
+      expect(result.success).toBe(true);
+      expect(result.appliedEdits).toBe(1);
+      expect(result.failedEdits).toBe(0);
+      // 行内容断言：row_id 不动，第 0/1 列按指令覆盖（content[1] = 第 0 数据行）。
+      const table = mockCurrentJsonTableDataRef.value.sheet_0;
+      expect(table.content[1]).toEqual(['1', '金剑', '10']);
     });
 
     it('deleteRow 指令正确删除行', () => {

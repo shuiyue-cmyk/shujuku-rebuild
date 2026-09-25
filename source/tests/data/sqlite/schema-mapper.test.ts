@@ -27,6 +27,7 @@ import {
   downgradeRowIdPrimaryKeyForLegacyReplay_ACU,
 } from '../../../src/shared/ddl-utils';
 import type { Sheet_ACU } from '../../../src/shared/models/table-data';
+import chineseDdlFixture from '../../fixtures/migrations/spv7.9/sql-ddl-chinese-comments.json';
 
 // ═══════════════════════════════════════════════════════════════
 // 辅助：构造最小 Sheet_ACU mock
@@ -1101,5 +1102,20 @@ describe('removeDDLColumnAtIndex_ACU', () => {
   name TEXT UNIQUE
 );`, 1)).toThrow('带有约束');
     expect(() => removeDDLColumnAtIndex_ACU('CREATE TABLE inventory (row_id INTEGER PRIMARY KEY, name TEXT, obsolete TEXT);', 2)).toThrow('多行列定义或表级约束');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// spv7.9 迁移 fixture：中文注释 DDL
+// （自原 tests/integration/sqlite-full-chain.test.ts 并入，断言保持不变）
+// ═══════════════════════════════════════════════════════════════
+describe('合成 spv7.9 中文 DDL fixture', () => {
+  it('合成 spv7.9 中文 DDL fixture 保留物理标识符与中文注释', () => {
+    const ddl = generateDDL(chineseDdlFixture as any);
+
+    expect(parseDDLTableName(ddl)).toBe('inventory');
+    expect(parseDDLColumnNames(ddl)).toEqual(['row_id', 'item_name', 'quantity']);
+    expect(ddl).toContain('-- 物品名');
+    expect(ddl).toContain('-- 数量');
   });
 });

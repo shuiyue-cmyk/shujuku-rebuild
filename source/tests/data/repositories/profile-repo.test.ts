@@ -45,7 +45,6 @@ vi.mock('../../../src/shared/defaults-json.js', () => ({
 }));
 
 import {
-  globalMeta_ACU,
   buildDefaultGlobalMeta_ACU,
   loadGlobalMeta_ACU,
   saveGlobalMeta_ACU,

@@ -6,7 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { parse } from 'yaml';
 import { setDebugLogEnabled } from '../../../src/shared/log-buffer';
 
-const { mockSettings, mockIsGenerateRawAvailable, mockGenerateRaw, mockSendConnectionManager, mockGetHeaders, mockHandleApiResponse, mockRateLimitSlot } = vi.hoisted(() => ({
+const { mockSettings, mockGetHeaders, mockHandleApiResponse, mockRateLimitSlot } = vi.hoisted(() => ({
   mockSettings: {
     apiMode: 'custom',
     apiConfig: { url: 'https://api.example.com', model: 'gpt-4', apiKey: 'sk-test', max_tokens: 4096 },
@@ -15,9 +15,6 @@ const { mockSettings, mockIsGenerateRawAvailable, mockGenerateRaw, mockSendConne
     streamingEnabled: false,
     apiPresets: [] as any[],
   } as any,
-  mockIsGenerateRawAvailable: vi.fn(() => true),
-  mockGenerateRaw: vi.fn(),
-  mockSendConnectionManager: vi.fn(),
   mockGetHeaders: vi.fn(() => ({ 'X-Custom': 'test' })),
   mockHandleApiResponse: vi.fn(),
   mockRateLimitSlot: vi.fn(async () => {}),
@@ -33,9 +30,6 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({
 }));
 
 vi.mock('../../../src/data/gateways/ai-gateway', () => ({
-  isGenerateRawAvailable_ACU: mockIsGenerateRawAvailable,
-  generateRaw_ACU: mockGenerateRaw,
-  sendConnectionManagerRequest_ACU: mockSendConnectionManager,
   getHostRequestHeaders_ACU: mockGetHeaders,
 }));
 
@@ -63,7 +57,6 @@ import {
   getApiConfigByPreset_ACU,
   callAIWithPreset_ACU,
   callAIWithResolvedPreset_ACU,
-  callCustomOpenAI_ACU_Direct,
   buildCustomApiRequestBody_ACU,
   postChatCompletion_ACU,
   withOpencodeSessionHeader_ACU,
@@ -125,7 +118,6 @@ describe('getApiConfigByPreset_ACU', () => {
   });
 });
 
-// ═══ callApi_ACU ═══
 // ═══ resolveApiConfigByPreset_ACU memo ═══
 describe('resolveApiConfigByPreset_ACU memo', () => {
   it('同名连续解析复用缓存：改包装不影响下次结果', () => {
@@ -295,7 +287,6 @@ describe('callAIWithPreset_ACU', () => {
 
 });
 
-// ═══ callCustomOpenAI_ACU_Direct ═══
 // ═══ buildCustomApiRequestBody_ACU ═══
 describe('buildCustomApiRequestBody_ACU', () => {
   it('max_tokens=0 不被回退为 20000', () => {
@@ -806,7 +797,6 @@ describe('callAIWithPreset_ACU 自定义模式 role 归一化', () => {
   });
 });
 
-// ═══ callApi_ACU 温度透传 ═══
 // ═══ callApiWithPlotPreset_ACU 温度透传 ═══
 describe('callApiWithPlotPreset_ACU 温度透传', () => {
   it('custom 模式 fetch body 使用配置温度', async () => {

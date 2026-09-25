@@ -11,7 +11,6 @@ import { beforeEach, describe, it, expect, vi } from 'vitest';
 // mock 掉所有依赖浏览器环境的模块
 vi.mock('../../../src/shared/env', () => ({
   topLevelWindow_ACU: {},
-  isLocalStorageDisabled_ACU: false,
 }));
 
 vi.mock('../../../src/shared/utils', () => ({

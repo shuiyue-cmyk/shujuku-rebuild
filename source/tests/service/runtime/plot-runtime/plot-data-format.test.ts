@@ -8,8 +8,6 @@ vi.mock('../../../../src/shared/utils', () => ({
   logDebug_ACU: vi.fn(),
   logWarn_ACU: vi.fn(),
   logError_ACU: vi.fn(),
-  isSummaryOrOutlineTable_ACU: vi.fn((name: string) => name.includes('总结') || name.includes('大纲') || name.includes('纪要')),
-  isStandardTable_ACU: vi.fn((name: string) => !name.includes('总结') && !name.includes('大纲') && !name.includes('纪要')),
 }));
 
 vi.mock('../../../../src/service/runtime/helpers-table-lock', () => ({

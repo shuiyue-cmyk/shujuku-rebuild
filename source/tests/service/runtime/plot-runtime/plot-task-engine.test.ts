@@ -12,7 +12,6 @@ const {
   mockSetCurrentJsonTableData,
   mockSetPendingFinalGenerationGreenlights,
   mockGetApiConfigByPreset,
-  mockCallApi,
   mockCallApiWithPlotPreset,
   mockGetCurrentCharacterWorldbookBinding,
   mockGetChatArray,
@@ -99,7 +98,6 @@ const {
     }),
     mockSetPendingFinalGenerationGreenlights: vi.fn(),
     mockGetApiConfigByPreset: vi.fn(),
-    mockCallApi: vi.fn(),
     mockCallApiWithPlotPreset: vi.fn(),
     mockGetCurrentCharacterWorldbookBinding: vi.fn(),
     mockGetChatArray: vi.fn(),
@@ -159,7 +157,6 @@ vi.mock('../../../../src/shared/defaults-json.js', () => ({
 }));
 
 vi.mock('../../../../src/service/ai/api-call', () => ({
-  callApi_ACU: mockCallApi,
   callApiWithPlotPreset_ACU: mockCallApiWithPlotPreset,
   getApiConfigByPreset_ACU: mockGetApiConfigByPreset,
 }));

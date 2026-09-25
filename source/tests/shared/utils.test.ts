@@ -268,7 +268,7 @@ describe('normalizePositiveInteger_ACU', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════
-// isSummaryOrOutlineTable_ACU / isStandardTable_ACU
+// isSummaryOrOutlineTable_ACU
 // ═══════════════════════════════════════════════════════════════
 describe('isSummaryOrOutlineTable_ACU', () => {
   it('总结表返回 true', () => {

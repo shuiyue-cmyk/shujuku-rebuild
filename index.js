@@ -91214,7 +91214,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.7.0" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.7.1" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -149924,7 +149924,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260925-15";
+        const stamp = "20260925-19";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -195766,7 +195766,7 @@ function useLogViewer() {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260925-15";
+        const stamp = "20260925-19";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -195775,7 +195775,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.7.0";
+        const v = "9.7.1";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {

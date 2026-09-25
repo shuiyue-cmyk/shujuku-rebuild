@@ -25,7 +25,6 @@ let _engine: SqliteEngine;
 // mock storage-mode
 vi.mock('../../../../src/service/table/storage-mode', () => ({
   isSqliteMode: vi.fn(() => true),
-  isNativeMode: vi.fn(() => false),
   getCurrentStorageMode: vi.fn(() => 'sqlite'),
 }));
 

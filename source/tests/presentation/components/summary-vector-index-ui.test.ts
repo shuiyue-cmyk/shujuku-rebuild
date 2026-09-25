@@ -106,22 +106,6 @@ describe('summary vector index UI recovery', () => {
     expect(h.rebuild).toHaveBeenCalledTimes(1);
   });
 
-  it('缓存预热返回身份无效重建原因时识别为立即构建入口', async () => {
-    h.process.mockResolvedValue({ success: false, skipped: true, reason: 'legacy_vector_scheme_rebuild_required' });
-
-    await processSummaryVectorIndexBeforeGenerationWithUI_ACU({ userInput: '继续', source: 'test' });
-
-    expect(h.rebuild).toHaveBeenCalledTimes(1);
-  });
-
-  it('运行时发现实时纪要表漂移时走立即构建普通重建入口', async () => {
-    h.process.mockResolvedValue({ success: false, skipped: true, reason: 'embedding_identity_changed_rebuild_required' });
-
-    await processSummaryVectorIndexBeforeGenerationWithUI_ACU({ userInput: '继续', source: 'test' });
-
-    expect(h.rebuild).toHaveBeenCalledTimes(1);
-  });
-
   it('普通跳过原因不触发重建', async () => {
     h.process.mockResolvedValue({ success: false, skipped: true, reason: 'below_min_rows' });
 

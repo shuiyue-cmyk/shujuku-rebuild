@@ -1,3 +1,4 @@
+// 红测使命已完成（TT 判别期全部转绿），本文件现为常驻回归锁：防止已修复语义被后续改动悄悄回退。
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { buildEmptyAgentModuleSnapshot_ACU, validateAgentModuleSnapshot_ACU } from '../../../src/service/continuation/agent/agent-module-store';

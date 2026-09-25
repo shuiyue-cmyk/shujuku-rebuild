@@ -174,7 +174,7 @@ describe('agent worldbook config/state meta', () => {
     Object.assign(new Error('Worldbook not found'), { name: 'AbortError' }),
     new Error('TaskAbortedByUser'),
     new Error('permission denied'),
-  ])('候选世界书读取的取消和非 not-found 错误继续传播', async error => {
+  ])('候选世界书读取的取消和非 not-found 错误继续传播: $message', async error => {
     mockGetEntries.mockRejectedValue(error);
     mockIsLorebookNotFoundError.mockReturnValue(false);
 

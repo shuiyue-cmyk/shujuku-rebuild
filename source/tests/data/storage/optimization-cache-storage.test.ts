@@ -2,7 +2,7 @@
  * tests/data/storage/optimization-cache-storage.test.ts
  * 正文优化基础缓存存储适配器 单元测试
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const {
   mockTopLevelWindow,
