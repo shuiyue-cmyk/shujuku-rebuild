@@ -28,6 +28,7 @@ import { hasActiveStoryArc_ACU } from './agent-module-store';
 import {
   compactAgentProtocolError_ACU,
   mergeAgentMaintainerOutputs_ACU,
+  parseAgentComposerOutput_ACU,
   parseAgentFinalReviewerOutput_ACU,
   parseAgentJsonPayload_ACU,
   parseAgentJsonPayloadDraft_ACU,
@@ -72,6 +73,7 @@ import {
 } from './agent-read-gate';
 import { AGENT_FINAL_REVIEWER_NAME_ACU } from './agent-model';
 import type {
+  AgentComposerOutput_ACU,
   AgentDelegation_ACU,
   AgentFinalReviewerOutput_ACU,
   AgentMaintainerOutput_ACU,
@@ -117,6 +119,8 @@ export interface AgentSubagentRunResult_ACU {
   reviewer: AgentReviewerOutput_ACU | null;
   /** web-researcher 的输出：pageRef 已回填成完整条目，主循环用 applyAgentWebRefsDelta_ACU 落库。 */
   researcher: AgentResearcherOutput_ACU | null;
+  /** instruction-composer 的写作指令；其它角色为 null。 */
+  composer: AgentComposerOutput_ACU | null;
   /** 有效轮次数：1（首轮）+ 实际用掉的工具轮次。 */
   iterations: number;
   attempts: number;
@@ -196,6 +200,7 @@ const PROMPT_KEY_PREFILLS_ACU: Record<AgentSubagentDefinition_ACU['promptKey'], 
   beatPlanner: AGENT_PREFILLS_ACU.planner,
   reviewer: AGENT_PREFILLS_ACU.reviewer,
   webResearcher: AGENT_PREFILLS_ACU.researcher,
+  instructionComposer: AGENT_PREFILLS_ACU.composer,
 };
 
 /** 各类子代理契约对象的判别键：解析器据此从模型全文中挑出正确的 JSON 对象。 */
@@ -205,6 +210,7 @@ const KIND_PAYLOAD_KEYS_ACU: Record<AgentSubagentKind_ACU, readonly string[]> = 
   plan: ['recommendation', 'summary'],
   review: ['verdict'],
   research: ['delta', 'summary'],
+  compose: ['instruction', 'summary'],
 };
 
 /** 一次派工内已抓取页面的句柄缓存：网页正文只在本次派工用于归纳，契约仅回填来源元数据。 */
@@ -228,6 +234,7 @@ const KIND_FIXED_WRITES_ACU: Record<AgentSubagentKind_ACU, readonly AgentWritabl
   plan: [],
   review: [],
   research: ['webRefs'],
+  compose: [],
 };
 
 function rejectDelegation_ACU(message: string, details?: Record<string, unknown>): never {
@@ -528,6 +535,7 @@ export class AgentSubagentRuntime_ACU {
       planner: null,
       reviewer: null,
       researcher: null,
+      composer: null,
       iterations: 1 + toolRoundsUsed,
       attempts: attempt,
       expandedReads: [...expandedReads],
@@ -632,6 +640,7 @@ export class AgentSubagentRuntime_ACU {
             planner: null,
             reviewer: null,
             researcher,
+            composer: null,
             iterations: 1 + toolRoundsUsed,
             attempts: attempt,
             expandedReads: [...expandedReads],
@@ -680,6 +689,7 @@ export class AgentSubagentRuntime_ACU {
           planner: definition.kind === 'plan' ? parseAgentPlannerOutput_ACU(payload) : null,
           reviewer: definition.kind === 'review' ? parseAgentReviewerOutput_ACU(payload) : null,
           researcher: null,
+          composer: definition.kind === 'compose' ? parseAgentComposerOutput_ACU(payload) : null,
           iterations: 1 + toolRoundsUsed,
           attempts: attempt,
           expandedReads: [...expandedReads],

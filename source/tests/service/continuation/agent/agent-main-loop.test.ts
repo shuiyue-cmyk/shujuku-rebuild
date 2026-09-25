@@ -1668,3 +1668,40 @@ describe('子代理运行时', () => {
     expect(calls).toHaveLength(0);
   });
 });
+
+describe('固定工作流开局（open_round）', () => {
+  it('open_round 走固定工作流交付写作指令，结算推进水位并刷新前缀指纹', async () => {
+    const h = harness_ACU({
+      mainReplies: ['{"thought":"开局","action":"open_round","focus":"守门人的回避"}'],
+      subReplies: [
+        JSON.stringify({
+          summary: '结算了黑色晶屑',
+          delta: { hooks: [{ action: 'upsert', id: 'H1', summary: '守门人手中的黑色晶屑', status: 'planted', importance: 'high', plantedIndex: 3 }] },
+        }),
+        JSON.stringify({ summary: '主线建议', recommendation: '安静地问一句', mustPreserve: [], risks: [] }),
+        JSON.stringify({ instruction: '从守门人的回避写起', summary: '试探' }),
+      ],
+    });
+    const result = await h.planner.plan(h.request);
+    expect(result.instruction).toBe('从守门人的回避写起');
+    expect(h.written).toHaveLength(1);
+    expect(h.written[0].snapshot.settledThroughIndex).toBe(3);
+    expect(h.written[0].snapshot.hooks).toHaveLength(1);
+    expect(h.written[0].snapshot.pendingFixes).toEqual([]);
+    // P1 前缀指纹：水位推进后必须刷新，否则真实写盘会被指纹门拒绝。
+    expect(typeof h.written[0].snapshot.settledPrefixFingerprint).toBe('string');
+  });
+
+  it('主 Agent 不能直接 delegate instruction-composer 与 final-reviewer', async () => {
+    const h = harness_ACU({
+      mainReplies: [
+        '{"action":"delegate","delegations":[{"agentName":"instruction-composer","prompt":"写指令","reads":[]}]}',
+        '{"action":"finalize","instruction":"最终指导"}',
+      ],
+    });
+    const result = await h.planner.plan(h.request);
+    expect(result.instruction).toBe('最终指导');
+    const feedback = h.mainCalls[1][findIndex_ACU(h.mainCalls[1], '结果 1')].content;
+    expect(feedback).toContain('固定工作流');
+  });
+});

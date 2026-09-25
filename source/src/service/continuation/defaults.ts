@@ -149,6 +149,12 @@ export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V27_ACU = 'spv3.5-continu
  * V28 maps every known historical default segment to its current slot and restores missing task segments.
  */
 export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V28_ACU = 'spv3.6-continuation-default-lineage-v28';
+/**
+ * V29 把主会话从逐轮派工改成开局决策。写作指令由 instruction-composer 产出，
+ * 结算、策划和条件审查交给固定工作流。（TT：跳过上游 V29 的用户要求维护分支，
+ * 直接以本版本承载固定工作流；谱系哈希与上游 V29 主会话段一致。）
+ */
+export const CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V29_ACU = 'spv3.7-continuation-fixed-workflow-v29';
 
 /**
  * 连续高压轮上限的默认值。8 轮约等于 8000 字全程没有喘息——这才是病态；
@@ -197,6 +203,10 @@ export function buildDefaultContinuationOutlinePrompt_ACU(): ContinuationPromptS
   return clonePromptSegments_ACU(DEFAULT_OUTLINE_PROMPT_ACU);
 }
 
+export function buildDefaultContinuationWorkflowSettings_ACU(): ContinuationSettings_ACU['workflow'] {
+  return { autoFixEnabled: true, autoFixMaxAttempts: 3, reviseLimit: 3, repairMaxExtraReads: 2 };
+}
+
 /** 全部渠道角色默认沿用全局渠道配置，保证旧信封无感迁移。 */
 export function buildDefaultContinuationAgentApiPresets_ACU(): ContinuationAgentApiPresets_ACU {
   const presets = {} as ContinuationAgentApiPresets_ACU;
@@ -230,6 +240,7 @@ export function buildDefaultContinuationSettings_ACU(): ContinuationSettings_ACU
     agentReadTokenBudget: AGENT_READ_TOKEN_BUDGET_DEFAULT_ACU,
     agentReadFallbackTokens: AGENT_READ_FALLBACK_TOKENS_DEFAULT_ACU,
     finalReview: { enabled: false, readTokenBudget: CONTINUATION_FINAL_REVIEW_READ_TOKEN_BUDGET_DEFAULT_ACU, maxExtraReads: CONTINUATION_FINAL_REVIEW_MAX_EXTRA_READS_DEFAULT_ACU },
+    workflow: buildDefaultContinuationWorkflowSettings_ACU(),
     webResearch: buildDefaultContinuationWebResearchSettings_ACU(),
     contextExtractRules: [],
     contextExcludeRules: [],
@@ -240,7 +251,7 @@ export function buildDefaultContinuationSettings_ACU(): ContinuationSettings_ACU
     agentApiPresets: buildDefaultContinuationAgentApiPresets_ACU(),
     outlinePrompt: buildDefaultContinuationOutlinePrompt_ACU(),
     agentPrompts: buildDefaultContinuationAgentPrompts_ACU(),
-    promptForceDefaultVersion: CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V28_ACU,
+    promptForceDefaultVersion: CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V29_ACU,
   };
 }
 

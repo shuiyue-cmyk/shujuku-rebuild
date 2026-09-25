@@ -7,7 +7,8 @@
  *
  * TT 适配说明（相对上游 d404b0f）：
  * - 六模块形状（hooks/infoGap/constraints/storyArc/chronology/webRefs），无
- *   userRequirements 整表替换分支，无 pendingFixes 字段；
+ *   userRequirements 整表替换分支；pendingFixes 随快照携带并参与折叠/差分，
+ *   与上游 pendingFixes 语义对齐（TT 六模块子集）；
  * - 不耦合 simulation（scheduler/ledger 引用全部剥离）；
  * - P1 前缀指纹语义由 deps.isSnapshotPrefixCompatible 注入：legacy 与 checkpoint
  *   基线在采纳前必须通过指纹兼容检查，否则跳过（删楼/替换后拒绝复用旧基线）。
@@ -116,6 +117,7 @@ function semanticPayload_ACU(snapshot: AgentModuleSnapshot_ACU): string {
     storyArc: snapshot.storyArc,
     chronology: snapshot.chronology,
     webRefs: snapshot.webRefs,
+    pendingFixes: snapshot.pendingFixes ?? [],
   });
 }
 
@@ -246,6 +248,12 @@ function applyDelta_ACU(snapshot: AgentModuleSnapshot_ACU, delta: AgentModuleFlo
   }
   next.revisions = { ...next.revisions, ...delta.revisions };
   if (typeof delta.settledThroughIndex === 'number') next.settledThroughIndex = delta.settledThroughIndex;
+  // pendingFixes 不是分栏模块：整份随快照携带。delta.writes 透传该键时整体替换，
+  // 否则保持基线值——折叠不丢待修复队列。
+  if (Object.prototype.hasOwnProperty.call(delta.writes, 'pendingFixes')) {
+    next.pendingFixes = cloneJson_ACU((delta.writes as Record<string, unknown>).pendingFixes) as AgentModuleSnapshot_ACU['pendingFixes'];
+  }
+  if (!Array.isArray(next.pendingFixes)) next.pendingFixes = [];
   next.updatedAt = delta.updatedAt;
   return next;
 }
@@ -278,6 +286,12 @@ function diffSnapshot_ACU(before: AgentModuleSnapshot_ACU, after: AgentModuleSna
       revisions[key] = after.revisions[key];
       changed = true;
     }
+  }
+  const beforeFixes = JSON.stringify(before.pendingFixes ?? []);
+  const afterFixes = JSON.stringify(after.pendingFixes ?? []);
+  if (beforeFixes !== afterFixes) {
+    (writes as Record<string, unknown>).pendingFixes = cloneJson_ACU(after.pendingFixes ?? []);
+    changed = true;
   }
   const delta: AgentModuleFloorDelta_ACU = { seq, swipeId, writes, revisions, updatedAt: after.updatedAt };
   if (Object.keys(removedIds).length) delta.removedIds = removedIds;

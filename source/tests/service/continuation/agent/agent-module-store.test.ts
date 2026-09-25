@@ -14,7 +14,7 @@ import {
   validateAgentModuleSnapshot_ACU,
   writeAgentModuleSnapshot_ACU,
 } from '../../../../src/service/continuation/agent/agent-module-store';
-import { AGENT_BLOCK_CHAR_LIMIT_ACU, AGENT_HOT_HOOK_LIMIT_ACU, AGENT_MODULE_FIELD_ACU, type AgentModuleSnapshot_ACU } from '../../../../src/service/continuation/agent/agent-model';
+import { AGENT_BLOCK_CHAR_LIMIT_ACU, AGENT_HOT_HOOK_LIMIT_ACU, AGENT_MODULE_FIELD_ACU, AGENT_MODULE_SCHEMA_VERSION_ACU, type AgentModuleSnapshot_ACU } from '../../../../src/service/continuation/agent/agent-model';
 import { ContinuationValidationError_ACU } from '../../../../src/service/continuation/model';
 import { _set_SillyTavern_API_ACU } from '../../../../src/shared/host-api';
 
@@ -50,6 +50,30 @@ describe('Agent 资料快照存储', () => {
   it('读取不再把基线里的水位钳到当前数组长度', () => {
     const chat: any[] = [{ mes: 'a', [AGENT_MODULE_FIELD_ACU]: snapshotAt_ACU(9) }];
     expect(readAgentModuleSnapshot_ACU(chat).settledThroughIndex).toBe(9);
+    expect(chat[0][AGENT_MODULE_FIELD_ACU].schemaVersion).toBe(AGENT_MODULE_SCHEMA_VERSION_ACU);
+  });
+
+  it('schema v1 缺 pendingFixes 时内存归一为空数组并升到当前版本，非法队列则拒绝', () => {
+    const legacy = {
+      schemaVersion: 1, settledThroughIndex: 2, updatedAt: 1,
+      revisions: { hooks: 1, infoGap: 0, constraints: 0, storyArc: 0, chronology: 0, webRefs: 0 },
+      hooks: [hook_ACU('H1')], infoGap: [], constraints: [],
+    };
+    const loaded = validateAgentModuleSnapshot_ACU(legacy);
+    expect(loaded!.schemaVersion).toBe(AGENT_MODULE_SCHEMA_VERSION_ACU);
+    expect(loaded!.pendingFixes).toEqual([]);
+    expect(loaded!.hooks).toHaveLength(1);
+    const current = validateAgentModuleSnapshot_ACU({ ...legacy, schemaVersion: AGENT_MODULE_SCHEMA_VERSION_ACU, pendingFixes: [] });
+    expect(current!.pendingFixes).toEqual([]);
+    expect(validateAgentModuleSnapshot_ACU({ ...legacy, schemaVersion: AGENT_MODULE_SCHEMA_VERSION_ACU, pendingFixes: '坏掉了' })).toBeNull();
+    expect(validateAgentModuleSnapshot_ACU({
+      ...legacy,
+      schemaVersion: AGENT_MODULE_SCHEMA_VERSION_ACU,
+      pendingFixes: [{ module: 'hooks', agentName: 'hook-cognition-maintainer', violations: [{ path: 'hooks', message: 'title 不能为空' }], attempts: 1, firstFailedAtIndex: 2, lastError: 'title 不能为空' }],
+    })!.pendingFixes).toHaveLength(1);
+    const chat: any[] = [{ mes: 'a', [AGENT_MODULE_FIELD_ACU]: legacy }];
+    expect(readAgentModuleSnapshot_ACU(chat).pendingFixes).toEqual([]);
+    expect(readAgentModuleSnapshot_ACU(chat).schemaVersion).toBe(AGENT_MODULE_SCHEMA_VERSION_ACU);
     expect(chat[0][AGENT_MODULE_FIELD_ACU].schemaVersion).toBe(1);
   });
 
