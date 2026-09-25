@@ -93,6 +93,53 @@ describe('阶段历史渲染', () => {
   });
 });
 
+describe('启用阶段大纲全文渲染（移植上游 renderEnabledStageOutline）', () => {
+  function activeFixture_ACU() {
+    const stage = { stageNumber: 2, status: 'active', activeRevision: 7, completedTurns: 3 };
+    const revision = {
+      revision: 7,
+      outline: {
+        schemaVersion: 1, title: '禁区渗透', goal: '建立滩头阵地', tempo: 'mixed', role: 'development', timeSpanGoal: '三日', totalTurns: 4,
+        nodes: [
+          {
+            id: 'n1', title: '试探', goal: '摸清守门人', suggestedTurns: 2, turns: [
+              { id: 't1', goal: '第一轮目标', pacing: 'setup', function: 'daily_world', mainlineDelta: 'hold', timeAdvance: 'same_day' },
+              { id: 't2', goal: '第二轮目标', pacing: 'pressure', function: 'conflict', mainlineDelta: 'step', timeAdvance: 'continuous' },
+            ],
+          },
+          {
+            id: 'n2', title: '突入', goal: '进入禁区', suggestedTurns: 2, turns: [
+              { id: 't3', goal: '第三轮目标', pacing: 'setup', function: 'transition', mainlineDelta: 'hold', timeAdvance: 'same_day' },
+              { id: 't4', goal: '第四轮目标', pacing: 'pressure', function: 'reveal', mainlineDelta: 'step', timeAdvance: 'days' },
+            ],
+          },
+        ],
+      },
+    };
+    return { stage, revision };
+  }
+
+  it('逐节点逐轮给出完成状态与修订号', async () => {
+    const h = await createHarness();
+    const { stage, revision } = activeFixture_ACU();
+    const text = h.runtime.renderEnabledStageOutline_ACU(stage as any, revision as any);
+    expect(text).toContain('第 2 阶段（active，活动 revision 7）');
+    expect(text).toContain('已完成轮数：3 / 4');
+    expect(text).toContain('节点「试探」：摸清守门人');
+    expect(text).toContain('节点「突入」：进入禁区');
+    expect(text).toContain('1. [已完成]');
+    expect(text).toContain('4. [未完成]');
+    expect(text).toContain('第四轮目标');
+    // 可读文本而非 JSON：与阶段历史同一防诱导口径。
+    expect(text).not.toContain('"totalTurns"');
+  });
+
+  it('没有活动大纲时如实说明', async () => {
+    const h = await createHarness();
+    expect(h.runtime.renderEnabledStageOutline_ACU(null, null)).toContain('当前没有正在启用的阶段大纲。');
+  });
+});
+
 describe('ContinuationRuntime_ACU migration', () => {
   it('先写入首楼权威状态，再成功清理废弃的 v2 循环字段', async () => {
     const h = await createHarness();

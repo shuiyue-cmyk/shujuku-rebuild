@@ -24,7 +24,7 @@ import {
 } from '../model';
 import { AGENT_PREFILLS_ACU } from './agent-defaults';
 import { findAgentSubagentDefinition_ACU, renderAgentReadCatalog_ACU, renderAgentWebToolCatalog_ACU, type AgentSubagentDefinition_ACU } from './agent-catalog';
-import { hasActiveStoryArc_ACU, readAgentModuleSnapshot_ACU } from './agent-module-store';
+import { hasActiveStoryArc_ACU, readAgentModuleFoldState_ACU, readAgentModuleSnapshot_ACU } from './agent-module-store';
 import { continuationWorkflowContractTouched_ACU } from './agent-workflow';
 import type { AgentFieldPage_ACU, AgentModuleFieldReceipt_ACU } from './agent-module-store';
 import { renderAgentUserRequirements_ACU } from './agent-user-requirements';
@@ -65,7 +65,7 @@ import {
   resolveAgentReadToken_ACU,
   type AgentResolveContext_ACU,
 } from './agent-placeholder-resolver';
-import { buildEmptyAgentWorldbookSnapshot_ACU, renderAgentWorldbookCatalog_ACU, renderAgentWorldbookHits_ACU } from './agent-worldbook-read';
+import { buildEmptyAgentWorldbookSnapshot_ACU, renderAgentWorldbookBrowseCatalog_ACU, renderAgentWorldbookCatalog_ACU, renderAgentWorldbookHits_ACU } from './agent-worldbook-read';
 import { renderAgentTableCatalog_ACU } from './agent-tables';
 import { runAgentSearch_ACU } from './agent-search';
 import {
@@ -409,6 +409,79 @@ function resolveMaterial_ACU(token: string, context: AgentResolveContext_ACU): S
   return { key: token, label: token, text: `### ${resolved.title}（${token}）\n${resolved.text}` };
 }
 
+/**
+ * 把写回执里的失败译成下一条 SQL 该怎么写，避免模型改去输出 delta 或整篇说明（移植上游 9ee4f0f TT 子集）。
+ * @param receipt 写回执
+ * @returns 修复提示文本；无失败时返回空字符串
+ */
+export function renderWriteSqlRepair_ACU(receipt: AgentModuleFieldReceipt_ACU): string {
+  const lines: string[] = [];
+  const fatal = receipt.rejected.find(item => item.path === 'host' || item.path === 'sql');
+  if (fatal?.reason.includes('字段数与值数量不一致')) {
+    lines.push('这条 SQL 没有解析，任何栏目都没写入。不是缺 id。正文里的单引号要写成两个单引号，否则一个值会被拆成好几段。id 和 expected_revision 可以不写。');
+  } else if (fatal?.reason.includes('领域快照')) {
+    lines.push('这条 SQL 被整句退回，没有写入。把要改的行放在同一次调用里再交。');
+  }
+  for (const item of receipt.rejected) {
+    if (item.path === 'host' || item.path === 'sql') continue;
+    if (item.reason.includes('必须是非空字符串数组')) lines.push(`${item.path} 要写成单引号包裹的 JSON 数组，例如 '["经营线"]'，不要用竖线或一整句中文。`);
+    else if (item.reason.startsWith('revision_conflict')) {
+      const module = item.path.split('#')[0] as keyof NonNullable<AgentModuleFieldReceipt_ACU['revisions']>;
+      const current = receipt.revisions?.[module];
+      lines.push(`${item.path} 是在改已有行。下一次 UPDATE 的 expected_revision 用 ${current ?? '回执 revisions 里该模块的当前值'}。新行 INSERT 固定写 0，不要改成这个号。`);
+    }
+    else if (item.reason === 'not_found') lines.push(`${item.path} 还没有记录，用 INSERT，不要 UPDATE。`);
+    else if (item.reason === 'id_exists') lines.push(`${item.path} 已有记录，用 UPDATE，不要再 INSERT。`);
+    else if (item.reason.includes('SET 不得指定')) lines.push('UPDATE 的 SET 里不要写 id 或 expected_revision，这两项只放在 WHERE。');
+  }
+  if ((receipt.partials ?? []).some(item => item.promotionError?.includes('active') || item.promotionError?.includes('sustainingThreads'))) {
+    lines.push('同一时刻只能有一条 volume 的 status 为 active，其余用 planned。scope=story 不要带卷级栏目。');
+  }
+  const drafts = (receipt.partials ?? []).filter(item => item.missingFields.length);
+  if (drafts.length) {
+    const ids = drafts.map(item => item.id).join('、');
+    const fields = [...new Set(drafts.flatMap(item => item.missingFields))].join('、');
+    const hasVolume = drafts.some(item => item.id.startsWith('VOL-'));
+    lines.push(`${ids} 的编号已经写上，不缺 id。还缺栏目：${fields}。用同一条 UPDATE 补这些栏目，id 和 expected_revision 可以不写。${hasVolume ? '不要再新开一条同样的卷。' : '还没有卷时，继续 INSERT 新卷，卷号会按 VOL-01 顺序补上。'}`);
+  }
+  return lines.join('\n');
+}
+
+/**
+ * 总纲还没建立时，直接要一条 SQL，不再把模型赶回 delta.storyArc（移植上游 3c4beb9 TT 子集）。
+ * @param chat 当前聊天
+ * @param remainingWriteRounds 剩余写轮数
+ * @returns 引导文本
+ */
+export function renderArcSqlBootstrap_ACU(chat: any[], remainingWriteRounds: number): string {
+  const lines = [
+    '总纲还不能执行。summary、Markdown、delta 和顶层 storyArc 数组都不会入库。',
+    remainingWriteRounds > 0
+      ? '请调用 write_sql。新行 INSERT 的 expected_revision 固定写 0。补已有行用当前模块修订号，同一条 sql 里的多条 UPDATE 都用这个号。'
+      : 'write_sql 轮次已用尽。不要再调用函数。只输出一个 JSON：{"sql":"INSERT 或 UPDATE"}。新行 INSERT 的 expected_revision 写 0；补已有行用当前模块修订号。',
+  ];
+  const folded = readAgentModuleFoldState_ACU(chat);
+  if (folded.salvaged || folded.candidates.some(item => !item.valid)) {
+    lines.push('资料帧状态不确定。先 read $FIELD:storyArc 读取权威帧，再决定补写。');
+    return lines.join('\n');
+  }
+  const revision = folded.snapshot.revisions.storyArc;
+  lines.push(`当前 story_arc 修订号是 ${revision}。新行 INSERT 的 expected_revision 固定写 0；补已有行才写 ${revision}。每条 INSERT 都必须带 withheld。`);
+  const records = Object.entries(folded.fields.records.storyArc ?? {});
+  if (!records.length) {
+    lines.push('现在没有任何总纲记录。把一条 scope=\'story\' 的全书方向和全部 volume 放进同一条 sql 一次写入，不要拆成多次调用。story 不要带 narrative_role、target_stage_range、sustaining_threads、payoff_targets。只有第一卷 status=\'active\'，其余 \'planned\'。');
+  } else {
+    lines.push('已有分栏记录，不要重发已保存栏目：');
+    for (const [id, record] of records) {
+      const saved = Object.keys(record.fields);
+      lines.push(`- ${id}（${record.status === 'complete' ? '已是正式条目' : '尚未成为正式条目'}）：已有 ${saved.join('、') || '无'}；缺 ${record.missingFields.join('、') || '无'}。`);
+    }
+    lines.push('缺栏用 UPDATE，WHERE 带 id 和上面的修订号。还没有的 id 才用 INSERT。');
+  }
+  lines.push('sustaining_threads 与 payoff_targets 必须是单引号包裹的 JSON 数组，例如 \'["经营线"]\'。target_stage_range 例如 \'{"min":6,"max":10}\'。字符串里的单引号写成两个单引号。');
+  return lines.join('\n');
+}
+
 /** 子代理运行时。一个实例可服务多次派工，自身不持有任何本轮状态。 */
 export class AgentSubagentRuntime_ACU {
   constructor(private readonly dependencies: AgentSubagentRuntimeDependencies_ACU = defaultDependencies_ACU) {}
@@ -483,7 +556,10 @@ export class AgentSubagentRuntime_ACU {
       $AGENT_READ_CATALOG: () => renderAgentReadCatalog_ACU(),
       $STORY_CATALOG: () => renderAgentStoryCatalog_ACU(input.resolveContext),
       $TABLE_CATALOG: () => renderAgentTableCatalog_ACU(input.resolveContext.tableData),
-      $WORLDBOOK_CATALOG: () => renderAgentWorldbookCatalog_ACU(input.resolveContext.worldbook ?? buildEmptyAgentWorldbookSnapshot_ACU(false)),
+      // 总纲按浏览口径拿目录自选条目；其余子代理保持普通清单（命中提示与读取门禁不变）。
+      $WORLDBOOK_CATALOG: () => definition.kind === 'arc'
+        ? renderAgentWorldbookBrowseCatalog_ACU(input.resolveContext.worldbook ?? buildEmptyAgentWorldbookSnapshot_ACU(false))
+        : renderAgentWorldbookCatalog_ACU(input.resolveContext.worldbook ?? buildEmptyAgentWorldbookSnapshot_ACU(false)),
       $WORLDBOOK_HITS: () => renderAgentWorldbookHits_ACU(input.resolveContext.worldbook ?? buildEmptyAgentWorldbookSnapshot_ACU(false), buildAgentWorldbookScanText_ACU(input.resolveContext)),
       $STORY_OVERVIEW: () => renderAgentStoryOverview_ACU({ tableData: input.resolveContext.tableData, recallCodes: input.resolveContext.recallCodes }, { maxRows: overviewMaxRows }),
       $STORY_TAIL: () => renderAgentStoryTail_ACU(input.resolveContext),
@@ -514,7 +590,7 @@ export class AgentSubagentRuntime_ACU {
     // S11-TT Mode F：可写角色经受控端口逐栏即时提交；只读角色与终审不提示该工具。
     const fieldWritable = !!input.writeSql && writes.length > 0 && !isRequirementsMaintainer;
     const baseMessagesWithFieldHint = fieldWritable
-      ? insertBeforeTrailingPrefill_ACU(baseMessages, { role: 'system', content: '可调用 {"action":"write_sql","sql":"受限 INSERT/UPDATE/DELETE SQL"} 逐栏即时提交。只写职责模块，用回执中的实际 revision 与 $FIELD:模块:ID[:栏目] 补缺栏；仅 status=committed 的 accepted 已保存；partials/revisions=null 表示恢复状态不确定，先重新读权威帧，不得按旧 revision 补写。一次工具轮优先一个写动作；最终契约不得重复提交已写栏目。' })
+      ? insertBeforeTrailingPrefill_ACU(baseMessages, { role: 'system', content: '可调用 {"action":"write_sql","sql":"受限 INSERT/UPDATE/DELETE SQL"} 逐栏即时提交。一次调用的 sql 可以包含多条语句，用分号隔开，不要拆成多次调用。id 和 expected_revision 可以不写：新行按 STORY-01、VOL-01、H001、E001、T001 顺序补号，修订号由系统按当前模块补上；显式写 expected_revision 时新行固定写 0，补已有行用回执 revisions 里的模块修订号。volume 没写 status 时第一条补 active、其余补 planned，同一时刻只能有一条 volume status 为 active；scope=story 不要写卷级栏目。sustaining_threads 与 payoff_targets 写成 \'["条目"]\'，target_stage_range 写成 \'{"min":6,"max":10}\'，字符串里的单引号写成两个单引号。只写职责模块，用回执中的实际 revision 与 $FIELD:模块:ID[:栏目] 补缺栏；仅 status=committed 的 accepted 已保存；partials/revisions=null 表示恢复状态不确定，先重新读权威帧，不得按旧 revision 补写。逐栏写入是草稿层，正式总纲条目仍须最终契约整条写入；最终契约不得重复提交已写栏目。' })
       : baseMessages;
     const retries = normalizeContinuationInternalAiRetryLimit_ACU(input.settings.internalAiRetryLimit);
     // 小循环的追加消息：子代理自己的输出（assistant）与工具结果/纠正提示（user）。
@@ -764,14 +840,16 @@ export class AgentSubagentRuntime_ACU {
                     return matched && !['__proto__', 'prototype', 'constructor'].includes(matched[2]) ? [`$FIELD:${matched[1]}:${matched[2]}`] : [];
                   }),
                 ])];
-                sections.push(JSON.stringify({ action: 'write_sql', ...receipt, readAddresses }));
+                const repair = renderWriteSqlRepair_ACU(receipt);
+                const receiptText = JSON.stringify({ action: 'write_sql', ...receipt, readAddresses });
+                sections.push(repair ? `${receiptText}\n${repair}` : receiptText);
               } catch (error) {
                 sections.push(JSON.stringify({ action: 'write_sql', status: 'rejected', accepted: [],
                   reason: error instanceof Error ? error.message : String(error) }));
               }
             }
             writeRoundsUsed += 1;
-            transcript.push({ role: 'user', content: `【逐栏即时提交回执】\n${sections.join('\n')}\n仅 status=committed 的 accepted 已保存；用回执中的实际 revision 与上面的 $FIELD 地址补缺栏，不要重复提交已保存栏目。${readCalls.length ? '' : '继续补栏或输出最终契约 JSON（最终契约里不要重复已写栏目）。'}` });
+            transcript.push({ role: 'user', content: `【逐栏即时提交回执】\n${sections.join('\n')}\n仅 status=committed 的 accepted 已保存；用回执中的实际 revision 与上面的 $FIELD 地址补缺栏，不要重复提交已保存栏目；同一模块的多条 UPDATE 请合并进同一条 sql 一次提交。${readCalls.length ? '' : '继续补栏或输出最终契约 JSON（最终契约里不要重复已写栏目）。'}` });
             if (!readCalls.length) continue;
           }
         }
@@ -876,13 +954,24 @@ export class AgentSubagentRuntime_ACU {
           outstanding = outstanding.filter(item => item.id && !nowAccepted.has(`${item.module}:${item.id}`));
           const pending: AgentContractRejection_ACU[] = [...outstanding, ...parsed.rejected];
           outstanding = pending;
-          // 总纲尚未建立时，一份没有任何 storyArc 写入的“成功”输出等于什么都没做——模型常把卷台阶写进 summary。
+          // 总纲尚未建立时，一份没有任何 storyArc 写入的"成功"输出等于什么都没做——模型常把卷台阶写进 summary。
           // 这种空写入不能交回主 Agent 白耗它的派工上限，先在这里索要真正的条目。
           const emptyArcBootstrap = definition.kind === 'arc'
             && !hasActiveStoryArc_ACU(input.resolveContext.moduleSnapshot)
             && !accumulated.delta.storyArc.length
             && !accumulated.delta.storyArcPatches.length;
           if (emptyArcBootstrap && !pending.length && !draft.truncated) {
+            if (input.writeSql) {
+              // 移植上游 3c4beb9 TT 子集：总纲空交付改为要求一条 SQL，不再索要 delta.storyArc。
+              const request = renderArcSqlBootstrap_ACU(input.resolveContext.chat, maxWriteRounds - writeRoundsUsed);
+              if (continuationsUsed >= maxContinuations) {
+                return deliverContract(accumulated, [{ module: 'storyArc', index: 0, id: '', reason: request }]);
+              }
+              continuationsUsed += 1;
+              transcript.push({ role: 'assistant', content: rawText || '(空输出)' });
+              transcript.push({ role: 'user', content: request });
+              continue;
+            }
             pending.push({ module: 'storyArc', index: 0, id: '', reason: '总纲尚未建立，但 delta.storyArc 为空。summary 里的文字不会写入任何东西：必须在 delta.storyArc 里给出 1 条 scope=story 的 upsert 与按【总纲卷数计划】数量的 scope=volume upsert，每条都带 id / title / direction / escalation / withheld / status 与卷级契约字段' });
           }
           if (!draft.truncated && !pending.length) {
@@ -940,7 +1029,11 @@ export class AgentSubagentRuntime_ACU {
         }
         // 被拒原文也要留在小循环对话里：模型必须看到自己上一次写了什么才能真正修正。
         transcript.push({ role: 'assistant', content: rawText || '(空输出)' });
-        transcript.push({ role: 'user', content: `你上一次的输出没有被采纳。原因：${lastReason}\n请修正后重新输出符合契约的 JSON 对象。` });
+        // 上游 3c4beb9+56540c9 TT 子集：带写端口的角色被协议拒绝时改指 write_sql，不再泛泛索要 JSON 契约。
+        const protocolRepair = input.writeSql && writes.length
+          ? `你上一次的输出没有被采纳。原因：${lastReason}\n不要写说明、Markdown 或 delta。${maxWriteRounds - writeRoundsUsed > 0 ? '调用一次 write_sql，把全部语句放进同一个 sql 参数。' : 'write_sql 轮次已用尽，不要再调用函数，只输出 {"sql":"全部 INSERT 或 UPDATE，用分号连在一起"}。'}新行 expected_revision 写 0，补已有行共用回执里的模块修订号。sustaining_threads 与 payoff_targets 写成 '["条目"]'。volume 同时只能有一条 active，其余 planned。`
+          : `你上一次的输出没有被采纳。原因：${lastReason}\n请修正后重新输出符合契约的 JSON 对象。`;
+        transcript.push({ role: 'user', content: protocolRepair });
       }
     }
 

@@ -823,9 +823,10 @@ function fieldCommitCanonical_ACU(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(fieldCommitCanonical_ACU).join(',')}]`;
   if (value !== null && typeof value === 'object') {
     const row = value as Record<string, unknown>;
-    return `{${Object.keys(row).sort().map(key => `${JSON.stringify(key)}:${fieldCommitCanonical_ACU(row[key])}`).join(',')}}`;
+    // JSON 落盘会丢掉 undefined。规划对象里的空可选栏目不能因此把整批更新判成不一致（上游 56540c9）。
+    return `{${Object.keys(row).filter(key => row[key] !== undefined).sort().map(key => `${JSON.stringify(key)}:${fieldCommitCanonical_ACU(row[key])}`).join(',')}}`;
   }
-  return JSON.stringify(value);
+  return JSON.stringify(value) ?? 'null';
 }
 
 function fieldCommitConfirmedPartials_ACU(fields: AgentModuleFieldSnapshot_ACU): NonNullable<AgentModuleFieldReceipt_ACU['partials']> {
@@ -846,6 +847,44 @@ function fieldCommitNextWebRefId_ACU(snapshot: AgentModuleSnapshot_ACU, taken: R
     if (matched) max = Math.max(max, Number.parseInt(matched[1], 10));
   }
   return `WR-${String(max + 1).padStart(3, '0')}`;
+}
+
+/** INSERT 省略 id 时的顺序补号（移植上游 2a8472e）：取同前缀最大号 +1，按宽度零填充。 */
+function nextSequentialId_ACU(prefix: string, width: number, taken: ReadonlySet<string>): string {
+  const pattern = new RegExp(`^${prefix}(\\d+)$`);
+  let max = 0;
+  for (const id of taken) {
+    const matched = pattern.exec(id);
+    if (matched) max = Math.max(max, Number(matched[1]));
+  }
+  return `${prefix}${String(max + 1).padStart(width, '0')}`;
+}
+
+/** 本模块全量已占用 id：领域行、逐栏记录、本批已受理逐栏写与预留集。 */
+function fieldCommitModuleTakenIds_ACU(
+  module: FieldCommitModule_ACU,
+  folded: AgentModuleFoldResult_ACU,
+  upserts: AgentModuleFieldUpserts_ACU,
+  reserved: ReadonlySet<string>,
+): Set<string> {
+  const taken = new Set<string>();
+  for (const row of folded.snapshot[module] as unknown as Array<{ id?: string }>) if (row?.id) taken.add(row.id);
+  for (const id of Object.keys(folded.fields.records[module] ?? {})) taken.add(id);
+  for (const id of Object.keys(upserts[module] ?? {})) taken.add(id);
+  const prefix = `${module}#`;
+  for (const key of reserved) if (key.startsWith(prefix)) taken.add(key.slice(prefix.length));
+  return taken;
+}
+
+/** story_arc 既有的 scope/status 视图：领域行 + 逐栏记录 + 本批已受理逐栏写（补号与 active 卷唯一性都看这里）。 */
+function fieldCommitStoryArcMeta_ACU(
+  folded: AgentModuleFoldResult_ACU,
+  upserts: AgentModuleFieldUpserts_ACU,
+): Array<{ scope?: unknown; status?: unknown; retired?: unknown }> {
+  const rows: Array<{ scope?: unknown; status?: unknown; retired?: unknown }> = folded.snapshot.storyArc.map(entry => ({ scope: entry.scope, status: entry.status, retired: entry.retired }));
+  for (const record of Object.values(folded.fields.records.storyArc ?? {})) rows.push({ scope: record.fields.scope?.value, status: record.fields.status?.value });
+  for (const values of Object.values(upserts.storyArc ?? {})) rows.push({ scope: values.scope?.value, status: values.status?.value });
+  return rows;
 }
 
 const fieldCommitQueue_ACU = new WeakMap<unknown[], Promise<void>>();
@@ -900,20 +939,47 @@ export function commitAgentModuleFieldWrites_ACU(input: {
     const reserved = new Set<string>();
     for (const intent of parsed.intents) {
       const module = intent.module as FieldCommitModule_ACU;
-      const path = `${module}#${intent.id || '(无 ID)'}`;
-      if (!modules.includes(intent.module)) { receipt.rejected.push({ path, reason: '角色无权写入该模块' }); continue; }
-      if (intent.kind === 'delete') { receipt.rejected.push({ path, reason: 'TT 逐栏路径不支持删除/退役：既有条目请走整行 retire，草稿请逐栏 unset' }); continue; }
-      const id = intent.id || (module === 'webRefs' && intent.kind === 'insert'
-        ? fieldCommitNextWebRefId_ACU(folded.snapshot, new Set([...reserved, ...Object.keys(folded.fields.records.webRefs ?? {})])) : '');
+      if (!modules.includes(intent.module)) { receipt.rejected.push({ path: `${module}#${intent.id || '(无 ID)'}`, reason: '角色无权写入该模块' }); continue; }
+      if (intent.kind === 'delete') { receipt.rejected.push({ path: `${module}#${intent.id || '(无 ID)'}`, reason: 'TT 逐栏路径不支持删除/退役：既有条目请走整行 retire，草稿请逐栏 unset' }); continue; }
+      // INSERT 省略 id 时按模块顺序补号（移植上游 2a8472e）：story_arc 分 STORY-/VOL- 前缀，其余补 H/E/T 或沿用 WR-。
+      if (intent.kind === 'insert' && !intent.id) {
+        const taken = fieldCommitModuleTakenIds_ACU(module, folded, upserts, reserved);
+        if (module === 'storyArc') {
+          const meta = fieldCommitStoryArcMeta_ACU(folded, upserts);
+          const volumeLike = intent.fields.scope === 'volume' || intent.fields.narrativeRole !== undefined
+            || intent.fields.targetStageRange !== undefined || intent.fields.sustainingThreads !== undefined || intent.fields.payoffTargets !== undefined;
+          const storyTaken = meta.some(row => row.scope === 'story' && row.retired !== true);
+          if (intent.fields.scope === 'story' || (!volumeLike && !storyTaken)) {
+            intent.id = nextSequentialId_ACU('STORY-', 2, taken);
+            if (intent.fields.scope === undefined) intent.fields.scope = 'story';
+          } else {
+            intent.id = nextSequentialId_ACU('VOL-', 2, taken);
+            if (intent.fields.scope === undefined) intent.fields.scope = 'volume';
+          }
+        } else if (module === 'hooks') intent.id = nextSequentialId_ACU('H', 3, taken);
+        else if (module === 'infoGap') intent.id = nextSequentialId_ACU('E', 3, taken);
+        else if (module === 'chronology') intent.id = nextSequentialId_ACU('T', 3, taken);
+        else intent.id = fieldCommitNextWebRefId_ACU(folded.snapshot, taken);
+      }
+      const id = intent.id;
+      const path = `${module}#${id || '(无 ID)'}`;
       if (!id || id.includes('#') || ['__proto__', 'prototype', 'constructor'].includes(id) || id.length > 128) {
         receipt.rejected.push({ path, reason: '条目 ID 无效' }); continue;
       }
-      if (intent.expectedRevision !== folded.snapshot.revisions[module]) {
-        receipt.rejected.push({ path, reason: `revision_conflict: expected=${intent.expectedRevision}, actual=${folded.snapshot.revisions[module]}` }); continue;
+      if (module === 'storyArc' && intent.kind === 'insert') {
+        if (intent.fields.scope === undefined && /^STORY-\d+$/.test(id)) intent.fields.scope = 'story';
+        if (intent.fields.scope === undefined && /^VOL-\d+$/.test(id)) intent.fields.scope = 'volume';
       }
       const key = `${module}#${id}`;
       const existing = fieldCommitDomainRow_ACU(folded.snapshot, module, id);
       const record = folded.fields.records[module]?.[id];
+      // 新行固定 0；省略修订号时按该规则自动补，模块修订号只约束显式写错的已有行（移植上游 56540c9+2a8472e）。
+      const newInsert = intent.kind === 'insert' && !existing && !record && !reserved.has(key);
+      if (intent.expectedRevision === undefined) intent.expectedRevision = newInsert ? 0 : folded.snapshot.revisions[module];
+      const revisionOk = intent.expectedRevision === folded.snapshot.revisions[module] || (newInsert && intent.expectedRevision === 0);
+      if (!revisionOk) {
+        receipt.rejected.push({ path, reason: `revision_conflict: expected=${intent.expectedRevision}, actual=${folded.snapshot.revisions[module]}` }); continue;
+      }
       if (intent.kind === 'insert' && (existing || record || reserved.has(key))) { receipt.rejected.push({ path, reason: 'id_exists' }); continue; }
       if (intent.kind !== 'insert' && !existing && !record) { receipt.rejected.push({ path, reason: 'not_found' }); continue; }
       if (existing?.retired) { receipt.rejected.push({ path, reason: 'retired: 已退役条目不可修改' }); continue; }
@@ -961,6 +1027,22 @@ export function commitAgentModuleFieldWrites_ACU(input: {
         }
       }
       if (!Object.keys(writable).length) continue;
+      // 行缺 status 时自动补：story 补 active；volume 首条补 active、其余补 planned。
+      // 上游 2a8472e 口径：只要没有领域行、基线（含已有草稿记录）与本批写入都没有 status 就补，
+      // 覆盖“INSERT 未带 scope → UPDATE 才补上 scope”的草稿完成路径；已显式写过 status 的不动。
+      if (module === 'storyArc' && !existing && !Object.prototype.hasOwnProperty.call(writable, 'status')) {
+        const baseline: Record<string, unknown> = Object.fromEntries(
+          Object.entries(record?.fields ?? {}).map(([field, entry]) => [field, entry.value]),
+        );
+        if (!Object.prototype.hasOwnProperty.call(baseline, 'status')) {
+          const scope = writable.scope ?? baseline.scope;
+          if (scope === 'story') writable.status = 'active';
+          if (scope === 'volume') {
+            const activeVolume = fieldCommitStoryArcMeta_ACU(folded, upserts).some(row => row.scope === 'volume' && row.status === 'active' && row.retired !== true);
+            writable.status = activeVolume ? 'planned' : 'active';
+          }
+        }
+      }
       const bucket = (upserts[module] ??= {});
       const cell = (bucket[id] ??= {});
       for (const [field, value] of Object.entries(writable)) {

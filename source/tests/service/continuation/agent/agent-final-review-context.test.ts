@@ -42,6 +42,9 @@ describe('终审世界书证据准备', () => {
     expect(evidence.worldbookEvidence).toContain('只知道铁门前发生的事。');
     expect(evidence.fixedReadKeys).toEqual(expect.arrayContaining(['$WORLDBOOK:设定集:7', '$WORLDBOOK:设定集:9']));
     expect(evidence.supplementalMaterials).toContain('世界书检索种子');
+    // 上游 6aaa0a2 TT 子集：终审不再附已启用目录——全文已经证据门注入，检索走 worldbook 域。
+    expect(evidence.supplementalMaterials).not.toContain('已启用世界书目录');
+    expect(evidence.gateItems.some(item => item.text.includes('旁人不得带离铁门。'))).toBe(true);
   });
 
   it('终审固定证据包含故事年代学账本，并把 $CHRONOLOGY 记入固定读地址', () => {

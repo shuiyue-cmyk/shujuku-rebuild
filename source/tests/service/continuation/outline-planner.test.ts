@@ -71,6 +71,39 @@ async function expectCode_ACU(action: () => Promise<unknown>, code: string) {
 }
 
 describe('ContinuationOutlinePlanner_ACU', () => {
+  it('提示词未引用总纲与启用大纲时，运行时补注入一份【当前故事总纲】【当前启用的阶段大纲】', async () => {
+    const { planner, callInternalAi } = createPlanner_ACU([tagOutline_ACU(6)]);
+    await planner.plan(request_ACU(settings_ACU(), {
+      resolvers: {
+        $ORIGIN_INSTRUCTION: () => '推进剧情',
+        $STORY_ARC: () => '总纲全文标记STORY',
+        $OUTLINE_WINDOW: () => '启用大纲全文标记OUTLINE',
+      },
+    }));
+    const messages = callInternalAi.mock.calls[0][0] as Array<{ role: string; content: string }>;
+    const appended = messages[messages.length - 1].content;
+    expect(appended).toContain('【当前故事总纲】');
+    expect(appended).toContain('总纲全文标记STORY');
+    expect(appended).toContain('【当前启用的阶段大纲】');
+    expect(appended).toContain('启用大纲全文标记OUTLINE');
+  });
+
+  it('提示词已经引用占位符时不重复追加注入；空总纲不注入', async () => {
+    const { planner, callInternalAi } = createPlanner_ACU([tagOutline_ACU(6)]);
+    const settings = { ...settings_ACU(), outlinePrompt: [{ role: 'user', content: '$STORY_ARC|$OUTLINE_WINDOW|$VALIDATION_ERRORS' }] };
+    await planner.plan(request_ACU(settings, {
+      resolvers: {
+        $STORY_ARC: () => '',
+        $OUTLINE_WINDOW: () => '启用大纲全文标记OUTLINE',
+      },
+    }));
+    const messages = callInternalAi.mock.calls[0][0] as Array<{ role: string; content: string }>;
+    const all = messages.map(item => item.content).join('\n');
+    expect(all).toContain('启用大纲全文标记OUTLINE');
+    expect(all).not.toContain('【当前故事总纲】');
+    expect(all).not.toContain('【当前启用的阶段大纲】');
+  });
+
   it('builds a validated outline from tag output with runtime-generated structure', async () => {
     const { planner, callInternalAi, resolveApiPreset } = createPlanner_ACU([tagOutline_ACU(6)]);
     const result = await planner.plan(request_ACU(settings_ACU(), { resolvers: { $ORIGIN_INSTRUCTION: () => '推进剧情' } }));

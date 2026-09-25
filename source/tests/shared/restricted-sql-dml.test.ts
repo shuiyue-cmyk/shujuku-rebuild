@@ -9,6 +9,14 @@ describe('受限 SQL DML', () => {
       { kind: 'delete', table: 'hooks', where: { id: 'H1', reason: 'old AND gone' } },
     ]);
   });
+  it('字段数与值数量不一致时解释引号拆值而非缺 id，并附具体计数（移植上游 9ee4f0f）', () => {
+    let message = '';
+    try { parseRestrictedSqlDml_ACU("INSERT INTO hooks (id, summary) VALUES ('H1')"); } catch (error) { message = error instanceof Error ? error.message : String(error); }
+    expect(message).toContain('INSERT 字段数与值数量不一致（2 个字段、1 个值）');
+    expect(message).toContain('不是缺 id');
+    expect(message).toContain('单引号要写成两个单引号');
+    expect(message).toContain('id 和 expected_revision 可以不写');
+  });
   it.each([
     'SELECT * FROM hooks;',
     'DROP TABLE hooks;',

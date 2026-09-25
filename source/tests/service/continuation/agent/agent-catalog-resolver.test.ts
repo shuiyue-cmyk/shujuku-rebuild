@@ -153,6 +153,36 @@ describe('Agent 读写集解析', () => {
     expect(text).toContain('大纲是计划，不是已经发生的事实');
   });
 
+  it('大纲窗口给出全部启用节点与逐轮目标，并标出本轮', () => {
+    const context = context_ACU();
+    const node2 = {
+      id: 'n2', title: '突入', goal: '进入禁区', turns: [
+        { id: 'turn-3', goal: '第三轮', pacing: 'setup', function: 'transition', mainlineDelta: 'hold', timeAdvance: 'same_day' },
+      ],
+    };
+    context.execution = {
+      ...context.execution,
+      revision: { ...context.execution!.revision!, outline: { ...context.execution!.revision!.outline, nodes: [context.execution!.node!, node2] } },
+      node: node2, turn: node2.turns[0] as any, turnNumber: 3, nodeTurnNumber: 1,
+    } as any;
+    const text = resolveAgentReadToken_ACU('$OUTLINE_WINDOW', context).text;
+    expect(text).toContain('当前启用的阶段大纲（全部节点与轮次');
+    expect(text).toContain('节点：[n1] 试探');
+    expect(text).toContain('节点：[n2] 突入');
+    expect(text).toContain('节点目标：进入禁区');
+    expect(text).toContain('第三轮');
+    expect(text).toContain('← 本轮');
+    expect(text).not.toContain('当前节点：');
+  });
+
+  it('大纲窗口旧快照没有 nodes 数组时回落到当前节点', () => {
+    const text = resolveAgentReadToken_ACU('$OUTLINE_WINDOW', context_ACU()).text;
+    expect(text).toContain('节点：[n1] 试探');
+    expect(text).toContain('第一轮');
+    expect(text).toContain('第二轮');
+    expect(text).toContain('← 本轮');
+  });
+
   it('无大纲与阶段已完成两种空态都指引 open_round 固定工作流准备大纲', () => {
     const noOutline = context_ACU();
     noOutline.execution = { ...noOutline.execution, stage: null, revision: null, node: null, turn: null, turnNumber: null, nodeTurnNumber: null } as any;

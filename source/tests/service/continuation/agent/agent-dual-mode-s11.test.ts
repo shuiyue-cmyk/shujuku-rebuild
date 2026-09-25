@@ -158,6 +158,120 @@ describe('S11-TT 判别：融合提交（帧/plan 路径，不另起文件）', 
   });
 });
 
+describe('S11-TT 判别：逐栏顺序补号 / 修订号自动分配 / 批量新行（移植上游 2a8472e+56540c9 TT 子集）', () => {
+  async function commitStore() {
+    const store = await import('../../../../src/service/continuation/agent/agent-module-store');
+    return (store as Record<string, unknown>).commitAgentModuleFieldWrites_ACU as unknown as
+      ((input: { chat: any[]; targetIndex: number; sql: string; role: string }) => Promise<{
+        status: string; accepted: Array<{ module: string; id: string; field: string }>; rejected: Array<{ path: string; reason: string }>;
+        partials: Array<{ module: string; id: string; missingFields: string[] }> | null; revisions: Record<string, number> | null;
+      }>);
+  }
+
+  it('INSERT 省略 id 与 expected_revision 时按 STORY-/VOL-/H001 顺序补号、卷状态一起补、修订号自动填', async () => {
+    const chat: any[] = [{ mes: 'a', is_user: false }];
+    _set_SillyTavern_API_ACU({ chat, saveChat: vi.fn().mockResolvedValue(undefined) } as any);
+    const commit = await commitStore();
+    const store = await import('../../../../src/service/continuation/agent/agent-module-store');
+    await (store as Record<string, (chat: unknown[], index: number, snapshot: AgentModuleSnapshot_ACU) => Promise<void>>)
+      .writeAgentModuleSnapshot_ACU(chat, 0, snapshotAt(0));
+    chat.push({ mes: '正文', is_user: false });
+    const sql = [
+      "INSERT INTO story_arc (title, direction, escalation, withheld) VALUES ('全书', '方向', '台阶', '底牌')",
+      "INSERT INTO story_arc (scope, title, direction, escalation, withheld, narrative_role, target_stage_range, target_time_span, progress_ceiling, sustaining_threads, payoff_targets) VALUES ('volume', '卷一', '方向', '台阶', '底牌', 'setup', '{\"min\":6,\"max\":10}', '十日', '到婚礼', '[\"线\"]', '[\"兑现\"]')",
+      "INSERT INTO story_arc (title, direction, escalation, withheld, narrative_role, target_stage_range, target_time_span, progress_ceiling, sustaining_threads, payoff_targets) VALUES ('卷二', '方向', '台阶', '底牌', 'development', '{\"min\":6,\"max\":10}', '十日', '到后宅', '[\"线\"]', '[\"兑现\"]')",
+    ].join('; ');
+    const receipt = await commit({ chat, targetIndex: 1, sql, role: 'arc-architect' });
+    expect(receipt.rejected.map(item => `${item.path}:${item.reason}`)).toEqual([]);
+    expect(receipt.status).toBe('committed');
+    const ids = Object.keys(readAgentModuleFieldSnapshot_ACU(chat).records.storyArc ?? {}).sort();
+    expect(ids).toEqual(['STORY-01', 'VOL-01', 'VOL-02']);
+    const records = readAgentModuleFieldSnapshot_ACU(chat).records.storyArc ?? {};
+    expect(records['VOL-01']?.fields.status.value).toBe('active');
+    expect(records['VOL-02']?.fields.status.value).toBe('planned');
+    expect(records['STORY-01']?.fields.scope.value).toBe('story');
+    const hooks = await commit({ chat, targetIndex: 1, sql: "INSERT INTO hooks (summary) VALUES ('信件')", role: 'hook-cognition-maintainer' });
+    expect(hooks.status).toBe('committed');
+    expect(Object.keys(readAgentModuleFieldSnapshot_ACU(chat).records.hooks ?? {})).toContain('H001');
+    // 省略 expected_revision 的 UPDATE 用当前模块修订号自动补上，能改已有行。
+    const renamed = await commit({ chat, targetIndex: 1, sql: "UPDATE story_arc SET title = '新全书' WHERE id = 'STORY-01'", role: 'arc-architect' });
+    expect(renamed.rejected.map(item => `${item.path}:${item.reason}`)).toEqual([]);
+    expect(readAgentModuleFieldSnapshot_ACU(chat).records.storyArc?.['STORY-01']?.fields.title.value).toBe('新全书');
+  });
+
+  it('同一条 SQL 一次写入多条新卷：新行固定 expected 0，不被同批模块修订号打成冲突（56540c9）', async () => {
+    const chat: any[] = [{ mes: 'a', is_user: false }];
+    _set_SillyTavern_API_ACU({ chat, saveChat: vi.fn().mockResolvedValue(undefined) } as any);
+    const commit = await commitStore();
+    const store = await import('../../../../src/service/continuation/agent/agent-module-store');
+    const base = snapshotAt(0);
+    await (store as Record<string, (chat: unknown[], index: number, snapshot: AgentModuleSnapshot_ACU) => Promise<void>>)
+      .writeAgentModuleSnapshot_ACU(chat, 0, { ...base, revisions: { ...base.revisions, storyArc: 2 } });
+    chat.push({ mes: '正文', is_user: false });
+    const insert = [
+      "INSERT INTO story_arc (id, scope, title, direction, escalation, status, expected_revision) VALUES ('STORY-01', 'story', '全书', '方向', '台阶', 'active', 0)",
+      "INSERT INTO story_arc (id, scope, title, direction, escalation, withheld, status, expected_revision) VALUES ('VOL-01', 'volume', '卷一', '方向', '台阶', '底', 'active', 0)",
+      "INSERT INTO story_arc (id, scope, title, direction, escalation, withheld, status, expected_revision) VALUES ('VOL-02', 'volume', '卷二', '方向', '台阶', '底', 'planned', 0)",
+    ].join('; ');
+    const inserted = await commit({ chat, targetIndex: 1, sql: insert, role: 'arc-architect' });
+    expect(inserted.rejected.filter(item => item.reason.includes('revision_conflict'))).toEqual([]);
+    expect(inserted.status).toBe('committed');
+    const revision = inserted.revisions?.storyArc;
+    const update = ['VOL-01', 'VOL-02'].map(id => `UPDATE story_arc SET escalation = '新台阶' WHERE id = '${id}' AND expected_revision = ${revision}`).join('; ');
+    const filled = await commit({ chat, targetIndex: 1, sql: update, role: 'arc-architect' });
+    expect(filled.rejected.map(item => `${item.path}:${item.reason}`)).toEqual([]);
+    expect(filled.status).toBe('committed');
+  });
+
+  it('逐栏 SQL 允许省略 expected_revision，非法值仍被拒（解析层）', async () => {
+    const protocol = await import('../../../../src/service/continuation/agent/agent-protocol');
+    const parse = (protocol as Record<string, unknown>).parseAgentModuleSqlFieldWrites_ACU as unknown as
+      ((sql: string, role: string) => { intents: Array<Record<string, unknown>>; rejected: Array<{ path: string; reason: string }> }) | undefined;
+    const omitted = parse!("INSERT INTO story_arc (title) VALUES ('全书')", 'arc-architect');
+    expect(omitted.rejected).toEqual([]);
+    expect(omitted.intents).toHaveLength(1);
+    expect(omitted.intents[0]).not.toHaveProperty('expectedRevision');
+    const updateNoRev = parse!("UPDATE hooks SET summary = 'x' WHERE id = 'H1'", 'hook-cognition-maintainer');
+    expect(updateNoRev.rejected).toEqual([]);
+    const negative = parse!("UPDATE hooks SET summary = 'x' WHERE id = 'H1' AND expected_revision = -1", 'hook-cognition-maintainer');
+    expect(negative.rejected.some(item => item.reason.includes('非负整数'))).toBe(true);
+  });
+
+  it('INSERT 缺 scope 与 status 的草稿，用 UPDATE 补上 scope 时同步补 status（2a8472e UPDATE 路径）', async () => {
+    const chat: any[] = [{ mes: 'a', is_user: false }];
+    _set_SillyTavern_API_ACU({ chat, saveChat: vi.fn().mockResolvedValue(undefined) } as any);
+    const commit = await commitStore();
+    const store = await import('../../../../src/service/continuation/agent/agent-module-store');
+    await (store as Record<string, (chat: unknown[], index: number, snapshot: AgentModuleSnapshot_ACU) => Promise<void>>)
+      .writeAgentModuleSnapshot_ACU(chat, 0, snapshotAt(0));
+    chat.push({ mes: '正文', is_user: false });
+    const drafted = await commit({ chat, targetIndex: 1, sql: "INSERT INTO story_arc (id, title, direction, escalation) VALUES ('A1', '卷甲', '方向', '台阶')", role: 'arc-architect' });
+    expect(drafted.rejected.map(item => `${item.path}:${item.reason}`)).toEqual([]);
+    expect(readAgentModuleFieldSnapshot_ACU(chat).records.storyArc?.['A1']?.fields.status).toBeUndefined();
+    const filled = await commit({ chat, targetIndex: 1, sql: "UPDATE story_arc SET scope = 'volume', withheld = '底牌' WHERE id = 'A1'", role: 'arc-architect' });
+    expect(filled.rejected.map(item => `${item.path}:${item.reason}`)).toEqual([]);
+    const record = readAgentModuleFieldSnapshot_ACU(chat).records.storyArc?.['A1'];
+    expect(record?.fields.scope.value).toBe('volume');
+    expect(record?.fields.status.value).toBe('active');
+  });
+
+  it('字段数不一致的整句错误穿透到逐栏提交入口，并解释引号拆分而非缺字段（9ee4f0f）', async () => {
+    const chat: any[] = [{ mes: 'a', is_user: false }];
+    _set_SillyTavern_API_ACU({ chat, saveChat: vi.fn().mockResolvedValue(undefined) } as any);
+    const commit = await commitStore();
+    const store = await import('../../../../src/service/continuation/agent/agent-module-store');
+    await (store as Record<string, (chat: unknown[], index: number, snapshot: AgentModuleSnapshot_ACU) => Promise<void>>)
+      .writeAgentModuleSnapshot_ACU(chat, 0, snapshotAt(0));
+    chat.push({ mes: '正文', is_user: false });
+    const error = await commit({ chat, targetIndex: 1, sql: "INSERT INTO story_arc (id, title, direction, expected_revision) VALUES ('S1', '很好', 3)", role: 'arc-architect' })
+      .then(() => null, e => e);
+    const message = JSON.stringify((error as Error)?.message ?? error);
+    expect(message).toContain('字段数与值数量不一致（4 个字段、3 个值）');
+    expect(message).toContain('不是缺 id');
+    expect(message).toContain('单引号要写成两个单引号');
+  });
+});
+
 describe('S11-TT 判别：工作流 usedFieldWrites 免重复覆盖', () => {
   it('已即时保存的栏目不再走旧最终写集覆盖，可读回提交后快照', async () => {
     const workflow = await import('../../../../src/service/continuation/agent/agent-workflow');
