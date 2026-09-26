@@ -211,7 +211,7 @@ function needsPendingEscalation_ACU(snapshot: AgentModuleSnapshot_ACU, settings:
 
 function formatFixes_ACU(fixes: readonly AgentPendingFix_ACU[]): string {
   if (!fixes.length) return '无';
-  return fixes.map(item => `${item.module} 第 ${item.attempts} 次：${item.violations.map(violation => violation.message).join('；') || item.lastError}`).join(' | ');
+  return fixes.map(item => `${item.module} 第 ${item.attempts} 次：${item.violations.map(violation => `${violation.path}: ${violation.message}`).join('；') || item.lastError}`).join(' | ');
 }
 
 function maintainerPrompt_ACU(focus: string, snapshot: AgentModuleSnapshot_ACU, repair: boolean): string {
@@ -593,12 +593,20 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
   if (!input.hasUnsettledHistory && !maintainerPending) {
     steps.push({ agentName: MAINTAINER_NAME_ACU, status: 'no_change', summary: '没有未结算正文，也没有待修复的结算模块' });
   } else {
-    const maintainer = await runSafe_ACU({
+    let maintainer = await runSafe_ACU({
       agentName: MAINTAINER_NAME_ACU,
       billing: 'pipeline',
       repair: false,
       prompt: maintainerPrompt_ACU(input.opening.focus, snapshot, false),
     });
+    // 结算块内定向修正（移植上游 333cae77 TT 子集）：首派后仍有 pendingFixes 即立即
+    // 定向重派，最多 reviseLimit 次。billing 保持 pipeline（不占用并行 repair 通道），
+    // targetModules 收窄到仍待修复的模块，prompt 带 path 级违规明细。
+    // truncated 不进重派（留给契约续写/旧并行通道）；S11 usedFieldWrites/readCommitted
+    // 结算与证据门在每次迭代内同式执行，不弱化。
+    let repairAttempts = 0;
+    const maxRepairAttempts = Math.max(0, input.settings.workflow.reviseLimit);
+    while (true) {
     const writes = (maintainer.writes ?? [...MAINTAINER_MODULES_ACU])
       .filter((module): module is AgentWritableModule_ACU => (MAINTAINER_MODULES_ACU as readonly string[]).includes(module));
     let completion: Exclude<AgentMaterialCompletionState_ACU, 'legacy_unknown'> = maintainer.completion
@@ -665,6 +673,24 @@ export async function runContinuationAgentWorkflow_ACU(input: ContinuationWorkfl
       steps.push({ agentName: MAINTAINER_NAME_ACU, status: 'failed', summary: `${maintainer.summary || '已保留部分资料'}；仍有待补条目` });
     } else {
       steps.push({ agentName: MAINTAINER_NAME_ACU, status: 'ok', summary: maintainer.summary });
+    }
+      const repairPending = snapshot.pendingFixes.filter(item =>
+        (MAINTAINER_MODULES_ACU as readonly string[]).includes(item.module)
+        && item.source !== 'truncated');
+      if (!repairPending.length || repairAttempts >= maxRepairAttempts) break;
+      repairAttempts += 1;
+      const repairModules = [...new Set(repairPending.map(item => item.module))];
+      maintainer = await runSafe_ACU({
+        agentName: MAINTAINER_NAME_ACU,
+        billing: 'pipeline',
+        repair: false,
+        targetModules: repairModules,
+        prompt: [
+          `上一轮资料写入仍有待修复项（第 ${repairAttempts} 次定向修正）：`,
+          formatFixes_ACU(repairPending),
+          '只修复上述模块和字段；不要重发已成功保存的其它模块。先 read 对应权威模块，再提交最小 write_sql；仍无法确定时明确返回 unresolvedIssues。',
+        ].join('\n'),
+      });
     }
   }
 

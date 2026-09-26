@@ -1598,6 +1598,7 @@ export class ContinuationAgentTurnPlanner_ACU {
         const repairReads = request.settings.workflow.repairMaxExtraReads;
         const result = await this.dependencies.subagentRuntime.run({
           delegation: { agentName: call.agentName, prompt: call.prompt, reads: [] },
+          targetModules: call.targetModules,
           settings: request.settings,
           resolveContext: context,
           budget: call.billing === 'repair' ? { ...budget, maxExtraReads: repairReads } : budget,

@@ -85,8 +85,11 @@ describe('复审必须修（判别红测）', () => {
     expect(fix!.attempts).toBe(1);
     expect(fix!.acceptedKeys).toContain('hooks:H1');
     expect(fix!.violations.map(item => item.message).join('')).toContain('H2');
-    // repair 步进不得报 ok
-    expect(result.steps.filter(step => step.agentName === 'hook-cognition-maintainer').map(step => step.status)).toEqual(['failed', 'failed']);
+    // repair 步进不得报 ok（上游 333cae77 起结算块内先定向重派 reviseLimit 次，
+    // 耗尽后旧并行 repair 通道再收残余：默认 reviseLimit=3 时共 4 次 pipeline + 1 次 repair，全部失败）
+    const maintainerStatuses = result.steps.filter(step => step.agentName === 'hook-cognition-maintainer').map(step => step.status);
+    expect(maintainerStatuses.every(status => status === 'failed')).toBe(true);
+    expect(maintainerStatuses).toHaveLength(1 + buildDefaultContinuationSettings_ACU().workflow.reviseLimit + 1);
   });
 
   it('2. 手工派工 partial 当成功且误推水位：被拒条目挂账且水位不推', async () => {
