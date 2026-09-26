@@ -651,9 +651,20 @@ function v19DefaultMainAgentNonRootSystemContents_ACU(): string[] {
   const current = buildDefaultAgentMainPrompt_ACU()
     .filter(segment => segment.role === 'user' && headings.some(heading => segment.content.startsWith(heading)))
     .map(segment => segment.content);
+  // 统一派遣策略后，当前默认的文本协议与子代理规则已含 beat 保底/reviewer 移除文案；
+  // V18 存量若已是新默认（测试按当前默认构造 V18 信封），同样视为未改写默认段，保证 system→user 迁移不残留。
+  let dispatched: string[] = [];
+  try {
+    dispatched = buildDefaultContinuationAgentPrompts_ACU().main
+      .filter(segment => segment.role === 'user' && headings.some(heading => segment.content.startsWith(heading)))
+      .map(segment => segment.content);
+  } catch {
+    dispatched = [];
+  }
   return [...new Set([
     ...historical,
     ...current,
+    ...dispatched,
     ...MAIN_AGENT_PROMPT_ACU
       .filter(segment => segment.content === AGENT_HISTORY_ANCHOR_TOKEN_ACU)
       .map(segment => segment.content),
@@ -1003,14 +1014,70 @@ export const CONTINUATION_V33_DEFAULT_LINEAGE_ACU = Object.fromEntries(
 ) as Record<keyof ContinuationAgentPrompts_ACU, Array<{ index: number; role: string; hash: string; length: number }>>;
 
 /**
+ * 统一资料维护派遣策略（TT 移植上游 3ba6460d 子集，本地 V34 重写）：
+ * 砍掉 continuity-reviewer 独立派遣后，大转折/冲突判定由 composer 自查（保守取舍）+ finalReviewer 兜底承接，
+ * 不得出现判定真空；beat-planner 第二轮起保底派遣、无真实操作时以 no_change 结束（单次调用，不突破派工预算/轮次上限）。
+ * 本地 V34 文本与上游 V36 不同，此处按本地槽位重写，不硬套上游 replace 串。
+ */
+export const CONTINUATION_CURRENT_MAIN_WORKFLOW_RULES_ACU = '【当前固定工作流补充】\nopen_round 的固定工作流遵循逻辑递进序：先完成正文资料结算，再让 mainline-planner 与 beat-planner 在同一层并发（两者写集不相交、判定互不依赖）；beat-planner 首轮且无伏笔义务时可以跳过，第二轮起保底派遣，由其以 no_change 结束无真实操作的轮次，不虚构钩子。不要派 continuity-reviewer；策划建议之间的冲突由 instruction-composer 自查并保守取舍，红线、硬事实与最终冲突由 finalReviewer 终审。特别重要的资料是 hooks、infoGap、chronology，不能只看目录摘要。';
+export const CONTINUATION_CURRENT_COMPOSER_RULES_ACU = '【当前冲突自查与资料清单】\n写作指令交付前必须通读并核对 hooks、infoGap、chronology，以及本轮结算和策划回执。检查策划建议之间、建议与本轮 pacing、建议与已结算硬事实或长期约束之间的冲突；冲突时采用更保守的一方，并在 summary 说明取舍，不得拼接互相矛盾的建议。';
+export const CONTINUATION_CURRENT_FINAL_REVIEW_RULES_ACU = '【当前终审补充】\n终审必须核对 hooks、infoGap、chronology 与本轮正文事实，检查红线、已结算硬事实、长期约束和策划冲突；发现冲突时拒绝不合规指导并列出可执行修正，不把 continuity-reviewer 作为独立派工角色。';
+
+export function appendCurrentDefaultRule_ACU(
+  segments: ContinuationPromptSegment_ACU[],
+  rule: string,
+): ContinuationPromptSegment_ACU[] {
+  const taskSegment = segments.find(segment => segment.content.includes('$AGENT_TASK'));
+  if (taskSegment) {
+    return segments.map(segment => segment === taskSegment
+      ? { ...segment, content: `${segment.content}\n\n${rule}` }
+      : segment);
+  }
+  return segments.map((segment, index) => index === segments.length - 1
+    ? { ...segment, content: `${segment.content}\n\n${rule}` }
+    : segment);
+}
+
+export function applyCurrentContinuationPromptRules_ACU(prompts: ContinuationAgentPrompts_ACU): ContinuationAgentPrompts_ACU {
+  const main = prompts.main.map(segment => {
+    let content = segment.content;
+    if (content.startsWith('我的行动规则：')) {
+      content = content
+        .replace('固定工作流负责结算、策划、条件审查和写作指令。', '固定工作流负责结算、策划和写作指令。')
+        .replace('不要 delegate hook-cognition-maintainer、mainline-planner、beat-planner、continuity-reviewer 或 instruction-composer。', '不要 delegate hook-cognition-maintainer、mainline-planner、beat-planner、continuity-reviewer 或 instruction-composer；这些角色由固定工作流按上述顺序处理，不单独派 continuity-reviewer。')
+        + `\n${CONTINUATION_CURRENT_MAIN_WORKFLOW_RULES_ACU}`;
+      return { ...segment, content };
+    }
+    if (content.startsWith('【子代理使用规则】')) {
+      content = content
+        .replace('结算、策划、条件审查和写作指令都由固定工作流执行。', '结算、策划和写作指令都由固定工作流执行。')
+        .replace('仅在本轮有伏笔操作义务时派 beat-planner，仅在策划冲突或大转折时派 continuity-reviewer，然后由 instruction-composer 写出 instruction', '第二轮起保底派 beat-planner（首轮且无伏笔义务时可跳过，无真实操作时由其以 no_change 结束），不再单独派 continuity-reviewer，然后由 instruction-composer 写出 instruction');
+      return { ...segment, content };
+    }
+    if (content.startsWith('【文本协议规范】')) {
+      content = content
+        .replace('执行结算、策划、条件审查、容错提交、自动修复和 instruction-composer', '执行结算、策划、容错提交、自动修复和 instruction-composer');
+      return { ...segment, content };
+    }
+    return segment;
+  });
+  return {
+    ...prompts,
+    main,
+    instructionComposer: appendCurrentDefaultRule_ACU(prompts.instructionComposer, CONTINUATION_CURRENT_COMPOSER_RULES_ACU),
+    finalReviewer: appendCurrentDefaultRule_ACU(prompts.finalReviewer, CONTINUATION_CURRENT_FINAL_REVIEW_RULES_ACU),
+  };
+}
+
+/**
  * 构造全部当前 Agent 默认提示词；SQL 只改变资料写集，其他 JSON 动作保持原协议。
  * @returns 十组提示词的深拷贝，可安全写入 settings
  */
 export function buildDefaultContinuationAgentPrompts_ACU(): ContinuationAgentPrompts_ACU {
   const previous = buildV33ContinuationAgentPrompts_ACU();
-  const current = { ...previous };
+  const v34: ContinuationAgentPrompts_ACU = { ...previous };
   for (const role of Object.keys(previous) as Array<keyof ContinuationAgentPrompts_ACU>) {
-    current[role] = previous[role].map(segment => ({ ...segment, content: v34Content_ACU(role, segment.content) }));
+    v34[role] = previous[role].map(segment => ({ ...segment, content: v34Content_ACU(role, segment.content) }));
   }
-  return current;
+  return applyCurrentContinuationPromptRules_ACU(v34);
 }

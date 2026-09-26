@@ -280,7 +280,7 @@ describe('S11-TT 判别：工作流 usedFieldWrites 免重复覆盖', () => {
       opening: { focus: '焦点', summary: '', dispatchWebResearcher: false },
       hasUnsettledHistory: true,
       beatObligation: false,
-      majorTurn: false,
+      turnNumber: 1,
       settledIndex: 6,
       completedStageNumbers: [],
       readCommittedSnapshot: () => { reread += 1; return committed; },

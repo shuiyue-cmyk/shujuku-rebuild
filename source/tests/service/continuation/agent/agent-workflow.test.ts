@@ -4,8 +4,6 @@ import { buildEmptyAgentModuleSnapshot_ACU } from '../../../../src/service/conti
 import type { AgentFinalReviewerOutput_ACU, AgentModuleDelta_ACU, AgentModuleSnapshot_ACU } from '../../../../src/service/continuation/agent/agent-model';
 import {
   continuationBeatObligation_ACU,
-  continuationContinuityReviewRequired_ACU,
-  continuationMajorTurn_ACU,
   runContinuationAgentWorkflow_ACU,
   type ContinuationWorkflowAgentCall_ACU,
   type ContinuationWorkflowAgentPayload_ACU,
@@ -35,7 +33,7 @@ function harness_ACU(patch: Partial<ContinuationWorkflowInput_ACU> = {}) {
     opening: { focus: '守门人的回避', summary: '试探', dispatchWebResearcher: false },
     hasUnsettledHistory: true,
     beatObligation: false,
-    majorTurn: false,
+    turnNumber: 1,
     settledIndex: 6,
     completedStageNumbers: [],
     runAgent: async call => {
@@ -56,7 +54,6 @@ function harness_ACU(patch: Partial<ContinuationWorkflowInput_ACU> = {}) {
         ok: true,
         summary: call.agentName,
         planner: { summary: '建议', recommendation: '安静地问一句', mustPreserve: [], risks: [] },
-        reviewer: { verdict: 'pass', reason: '无冲突', fixes: [] },
       };
     },
     runComposer: async call => {
@@ -70,16 +67,13 @@ function harness_ACU(patch: Partial<ContinuationWorkflowInput_ACU> = {}) {
 }
 
 describe('续写固定工作流（TT）', () => {
-  it('伏笔义务与大转折由程序判定', () => {
+  it('伏笔义务由程序判定（turnNumber 接管轮次判定）', () => {
     expect(continuationBeatObligation_ACU({ function: 'payoff', goal: '喝茶' })).toBe(true);
     expect(continuationBeatObligation_ACU({ goal: '回收旧伏笔' })).toBe(true);
     expect(continuationBeatObligation_ACU({ function: 'daily_bond', goal: '喝茶' })).toBe(false);
-    expect(continuationMajorTurn_ACU({ pacing: 'turn' })).toBe(true);
-    expect(continuationContinuityReviewRequired_ACU({ majorTurn: false, recommendations: ['两套方案互相冲突'], risks: [] })).toBe(true);
-    expect(continuationContinuityReviewRequired_ACU({ majorTurn: false, recommendations: ['安静地问一句'], risks: [] })).toBe(false);
   });
 
-  it('无伏笔义务且无冲突时跳过 beat 与审查，开局焦点进入结算与 composer', async () => {
+  it('首轮无伏笔义务时跳过 beat，开局焦点进入结算与 composer', async () => {
     const harness = harness_ACU();
     const result = await harness.run();
     expect(result.outcome).toBe('deliver');
@@ -89,12 +83,45 @@ describe('续写固定工作流（TT）', () => {
       'hook-cognition-maintainer:ok',
       'beat-planner:skipped',
       'mainline-planner:ok',
-      'continuity-reviewer:skipped',
       'instruction-composer:ok',
     ]);
     expect(harness.calls[0].prompt).toContain('守门人的回避');
     expect(harness.composerPrompts[0]).toContain('守门人的回避');
     expect(result.snapshot.revisions.hooks).toBe(1);
+  });
+
+  it('第二轮起即使没有伏笔义务也会保底派 beat-planner（no_change 出口）', async () => {
+    const harness = harness_ACU({ beatObligation: false, turnNumber: 2 });
+    await harness.run();
+    expect(harness.calls.map(call => call.agentName)).toEqual([
+      'hook-cognition-maintainer',
+      'mainline-planner',
+      'beat-planner',
+    ]);
+    expect(harness.calls.find(call => call.agentName === 'beat-planner')!.prompt).toContain('no_change');
+  });
+
+  it('砍掉 reviewer 后冲突由 composer 自查保守取舍（不得拼接矛盾建议）', async () => {
+    const harness = harness_ACU({
+      turnNumber: 2,
+      runAgent: async call => {
+        if (call.agentName === 'hook-cognition-maintainer') {
+          return {
+            ok: true,
+            summary: '结算完成',
+            maintainer: { summary: '结算完成', delta: delta_ACU() },
+            writes: ['hooks'],
+            readRevisions: snapshot_ACU().revisions,
+          } satisfies ContinuationWorkflowAgentPayload_ACU;
+        }
+        return { ok: true, summary: call.agentName, planner: { summary: '建议', recommendation: '两套方案互相冲突', mustPreserve: [], risks: [] } };
+      },
+    });
+    const result = await harness.run();
+    expect(harness.calls.map(call => call.agentName)).not.toContain('continuity-reviewer');
+    expect(result.steps.some(step => step.agentName === 'continuity-reviewer')).toBe(false);
+    expect(harness.composerPrompts[0]).toContain('保守');
+    expect(harness.composerPrompts[0]).toContain('不得原样拼接');
   });
 
   it('没有未结算正文时 maintainer 短路，不调用模型', async () => {
@@ -225,7 +252,6 @@ describe('续写固定工作流（TT）', () => {
           ok: true,
           summary: call.agentName,
           planner: { summary: '建议', recommendation: '安静地问一句', mustPreserve: [], risks: [] },
-          reviewer: { verdict: 'pass', reason: '无冲突', fixes: [] },
         };
       },
     });

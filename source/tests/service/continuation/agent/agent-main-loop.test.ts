@@ -1016,6 +1016,7 @@ describe('open_round 固定结构工作流', () => {
   });
   const maintainerReply_ACU = JSON.stringify({ summary: '没有新增资料', delta: { hooks: [], infoGap: [], chronology: [] } });
   const plannerReply_ACU = JSON.stringify({ summary: '主线建议', recommendation: '先观察守门人的回避', mustPreserve: [], risks: [] });
+  const beatReply_ACU = JSON.stringify({ summary: '本轮无节拍操作', recommendation: 'no_change', mustPreserve: [], risks: [] });
   const composerReply_ACU = JSON.stringify({ instruction: '按阶段大纲先观察守门人的回避。', summary: '完成本轮指令', constraints: { add: [], retire: [] } });
 
   it('总纲和阶段大纲都缺失时，open_round 先自动立总纲、再准备大纲并交付指令', async () => {
@@ -1023,7 +1024,7 @@ describe('open_round 固定结构工作流', () => {
       snapshot: buildEmptyAgentModuleSnapshot_ACU(),
       context: preOutlineContext_ACU,
       mainReplies: ['{"action":"open_round","focus":"接住守门人的回避"}'],
-      subReplies: [arcReply_ACU, maintainerReply_ACU, plannerReply_ACU, composerReply_ACU],
+      subReplies: [arcReply_ACU, maintainerReply_ACU, plannerReply_ACU, beatReply_ACU, composerReply_ACU],
       applyOutline: () => ({ op: 'create', requiresReview: false, stopped: null, summary: '已创建首个阶段大纲' }),
     });
     const original = h.request.applyOutline!;
@@ -1033,9 +1034,9 @@ describe('open_round 固定结构工作流', () => {
 
     expect(result.instruction).toBe('按阶段大纲先观察守门人的回避。');
     expect(h.outlineCalls).toEqual(['固定工作流根据当前 active 卷准备阶段大纲。焦点：接住守门人的回避']);
-    expect(h.presetRoles).toEqual(['main', 'arcArchitect', 'maintainer', 'mainlinePlanner', 'instructionComposer']);
+    expect(h.presetRoles).toEqual(['main', 'arcArchitect', 'maintainer', 'mainlinePlanner', 'beatPlanner', 'instructionComposer']);
     expect(h.written.some(write => write.snapshot.storyArc.some(item => item.id === 'VOL-01'))).toBe(true);
-    expect(h.subCalls).toHaveLength(4);
+    expect(h.subCalls).toHaveLength(5);
   });
 
   it('已有可用总纲但没有阶段大纲时，只自动准备大纲，不重复运行 arc-architect', async () => {
@@ -1043,7 +1044,7 @@ describe('open_round 固定结构工作流', () => {
       snapshot: snapshotWithArc_ACU(),
       context: preOutlineContext_ACU,
       mainReplies: ['{"action":"open_round","focus":"围绕晶屑继续试探"}'],
-      subReplies: [maintainerReply_ACU, plannerReply_ACU, composerReply_ACU],
+      subReplies: [maintainerReply_ACU, plannerReply_ACU, beatReply_ACU, composerReply_ACU],
       applyOutline: () => ({ op: 'continue', requiresReview: false, stopped: null, summary: '已继续下一阶段大纲' }),
     });
     const original = h.request.applyOutline!;
@@ -1053,8 +1054,8 @@ describe('open_round 固定结构工作流', () => {
 
     expect(result.instruction).toBe('按阶段大纲先观察守门人的回避。');
     expect(h.outlineCalls).toHaveLength(1);
-    expect(h.presetRoles).toEqual(['main', 'maintainer', 'mainlinePlanner', 'instructionComposer']);
-    expect(h.subCalls).toHaveLength(3);
+    expect(h.presetRoles).toEqual(['main', 'maintainer', 'mainlinePlanner', 'beatPlanner', 'instructionComposer']);
+    expect(h.subCalls).toHaveLength(4);
   });
 
   it('主 Agent 直接派工总纲、大纲和指令编排内部角色时全部拒绝，且不消耗子代理调用', async () => {
@@ -1159,21 +1160,21 @@ describe('派工与写集落盘', () => {
     const h = harness_ACU({
       mainReplies: [
         '{"action":"delegate","delegations":[{"agentName":"hook-cognition-maintainer","prompt":"结算","reads":["$HISTORY_UNSETTLED"],"writes":["$HOOKS_LEDGER"]}]}',
-        '{"action":"delegate","delegations":[{"agentName":"continuity-reviewer","prompt":"审查","reads":["$HOOKS_LEDGER"]}]}',
+        '{"action":"delegate","delegations":[{"agentName":"beat-planner","prompt":"策划","reads":["$HOOKS_LEDGER"]}]}',
         '{"action":"finalize","instruction":"指导"}',
       ],
       subReplies: [
         JSON.stringify({ summary: '埋设', delta: { hooks: [{ action: 'upsert', id: 'H1', summary: '黑色晶屑', status: 'planted', importance: 'high', plantedIndex: 3 }] } }),
-        '{"verdict":"pass","reason":"没有冲突"}',
+        '{"summary":"节拍建议","recommendation":"保持观察","mustPreserve":[],"risks":[]}',
       ],
     });
     await h.planner.plan(h.request);
 
-    const reviewerMaterials = h.subCalls[1].map(message => message.content).join('\n');
-    expect(reviewerMaterials).toContain('黑色晶屑');
+    const beatPlannerMaterials = h.subCalls[1].map(message => message.content).join('\n');
+    expect(beatPlannerMaterials).toContain('黑色晶屑');
     // 每一批派工结果是一条独立的工具消息，编号在批内从 1 起算。
-    const secondBatch = h.mainCalls[2][findIndex_ACU(h.mainCalls[2], 'continuity-reviewer｜成功')].content;
-    expect(secondBatch).toContain('判词：pass');
+    const secondBatch = h.mainCalls[2][findIndex_ACU(h.mainCalls[2], 'beat-planner｜成功')].content;
+    expect(secondBatch).toContain('保持观察');
     expect(secondBatch).not.toContain('hook-cognition-maintainer');
   });
 
@@ -1445,10 +1446,10 @@ describe('子代理运行时', () => {
   });
 
   it('读集对所有子代理开放，包括动态表名', async () => {
-    replies = ['{"verdict":"pass","reason":"无冲突"}'];
-    const result = await runtime.run(input_ACU({ delegation: { agentName: 'continuity-reviewer', prompt: '审查', reads: ['$TABLE:角色表'] } } as any));
+    replies = ['{"summary":"策划建议","recommendation":"保持观察","mustPreserve":[],"risks":[]}'];
+    const result = await runtime.run(input_ACU({ delegation: { agentName: 'beat-planner', prompt: '策划', reads: ['$TABLE:角色表'] } } as any));
     expect(calls[0].map(message => message.content).join('\n')).toContain('右臂有伤');
-    expect(result.reviewer?.verdict).toBe('pass');
+    expect(result.planner?.recommendation).toBe('保持观察');
   });
 
   it('协议修补耗尽时返回结构化 failed，保留拒绝理由供 workflow 挂账', async () => {
@@ -1569,6 +1570,7 @@ describe('固定工作流开局（open_round）', () => {
           delta: { hooks: [{ action: 'upsert', id: 'H1', summary: '守门人手中的黑色晶屑', status: 'planted', importance: 'high', plantedIndex: 3 }] },
         }),
         JSON.stringify({ summary: '主线建议', recommendation: '安静地问一句', mustPreserve: [], risks: [] }),
+        JSON.stringify({ summary: '本轮无节拍操作', recommendation: 'no_change', mustPreserve: [], risks: [] }),
         JSON.stringify({ instruction: '从守门人的回避写起', summary: '试探' }),
       ],
     });

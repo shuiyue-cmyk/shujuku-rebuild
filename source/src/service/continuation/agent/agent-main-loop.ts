@@ -90,7 +90,6 @@ import { AgentSubagentRuntime_ACU, type AgentSubagentRunResult_ACU } from './age
 import {
   assertFieldWriteSettleable_ACU,
   continuationBeatObligation_ACU,
-  continuationMajorTurn_ACU,
   continuationWorkflowContractTouched_ACU,
   recordWorkflowIssues_ACU,
   runContinuationAgentWorkflow_ACU,
@@ -1580,7 +1579,7 @@ export class ContinuationAgentTurnPlanner_ACU {
       },
       hasUnsettledHistory: !unsettled.startsWith('没有尚未结算的真实历史'),
       beatObligation: continuationBeatObligation_ACU(context.execution.turn),
-      majorTurn: continuationMajorTurn_ACU(context.execution.turn),
+      turnNumber: context.execution.turnNumber ?? 1,
       settledIndex: Math.max(0, chat.length - 1),
       completedStageNumbers: context.execution.task.stages.filter(stage => stage.status === 'completed').map(stage => stage.stageNumber),
       allowedEvidenceIndexes: aiEvidenceIndexes,

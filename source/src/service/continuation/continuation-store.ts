@@ -2,7 +2,7 @@ import { getChatArray_ACU, saveChatToHostStrict_ACU } from '../../data/gateways/
 import { getActiveChatStorageIdentity_ACU } from '../../data/storage/chat-history';
 import { buildDefaultContinuationSettings_ACU, buildDefaultContinuationOutlinePrompt_ACU, buildDefaultContinuationAgentApiPresets_ACU, buildDefaultContinuationWebResearchSettings_ACU, buildDefaultContinuationWorkflowSettings_ACU, CONTINUATION_FINAL_REVIEW_MAX_EXTRA_READS_DEFAULT_ACU, CONTINUATION_FINAL_REVIEW_READ_TOKEN_BUDGET_DEFAULT_ACU, CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_DEFAULT_ACU, CONTINUATION_MAX_CONSECUTIVE_PRESSURE_TURNS_MAX_ACU, CONTINUATION_MIN_GENERATION_TOKENS_DEFAULT_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V17_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V18_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V19_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V20_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V21_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V22_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V23_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V24_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V25_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V26_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V27_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V28_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V29_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V30_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V31_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V32_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V33_ACU, CONTINUATION_PROMPT_FORCE_DEFAULT_VERSION_V34_ACU, V23_DEFAULT_OUTLINE_ACK_SEGMENT_ACU, V23_DEFAULT_OUTLINE_METHOD_ACK_SEGMENT_ACU, V23_DEFAULT_OUTLINE_PACING_SEGMENT_ACU, V23_DEFAULT_OUTLINE_SYSTEM_SEGMENT_ACU, V24_OUTLINE_LONGFORM_PACING_CONTRACT_ACU, V26_DEFAULT_OUTLINE_CONTEXT_SEGMENT_ACU, V27_DEFAULT_OUTLINE_CONTEXT_SEGMENT_ACU, V31_DEFAULT_OUTLINE_CONTEXT_SEGMENT_ACU } from './defaults';
 import { reconcileContinuationEnvelopeCursor_ACU } from './stage-cursor';
-import { AGENT_FINAL_INSTRUCTION_TEMPLATE_ACU, AGENT_HISTORY_READ_RULE_V17_ACU, AGENT_HISTORY_READ_RULE_V18_ACU, AGENT_PROMPT_DEFAULT_LINEAGE_ACU, CONTINUATION_V33_DEFAULT_LINEAGE_ACU, buildV33ContinuationAgentPrompts_ACU, buildDefaultAgentArcArchitectPrompt_ACU, buildDefaultContinuationAgentPrompts_ACU, currentDefaultMainAgentHistoryGuide_ACU, currentDefaultMainAgentLayoutAnswer_ACU, findAgentPromptSlot_ACU, hashAgentPromptContent_ACU, isV18DefaultMainAgentNonRootSystemSegment_ACU, isV19DefaultMainAgentHistoryGuide_ACU, isV19DefaultMainAgentLayoutAnswer_ACU, isV19DefaultMainAgentRuntimeSegment_ACU, migrateV29DefaultMainAgentContentToV30_ACU, V20_DEFAULT_ARC_ARCHITECT_CONTRACT_ACU, V20_DEFAULT_ARC_ARCHITECT_EPISTEMOLOGY_ACU, V20_DEFAULT_ARC_ARCHITECT_PURPOSE_ACU, V20_DEFAULT_ARC_ARCHITECT_SYSTEM_ACU, V20_DEFAULT_ARC_ARCHITECT_TASK_ACU, V23_MAIN_AGENT_PACING_RULE_ACU, V24_MAIN_AGENT_PACING_RULE_ACU, V25_ARC_ARCHITECT_VOLUME_CAPACITY_CONTRACT_ACU, V26_FINAL_REVIEWER_CHRONOLOGY_RULES_ACU, V26_MAIN_AGENT_CHRONOLOGY_RULE_ACU, V26_MAINTAINER_CHRONOLOGY_CONTRACT_ACU, type AgentPromptSlotKey_ACU } from './agent/agent-defaults';
+import { AGENT_FINAL_INSTRUCTION_TEMPLATE_ACU, AGENT_HISTORY_READ_RULE_V17_ACU, AGENT_HISTORY_READ_RULE_V18_ACU, AGENT_PROMPT_DEFAULT_LINEAGE_ACU, CONTINUATION_CURRENT_COMPOSER_RULES_ACU, CONTINUATION_CURRENT_FINAL_REVIEW_RULES_ACU, CONTINUATION_CURRENT_MAIN_WORKFLOW_RULES_ACU, CONTINUATION_V33_DEFAULT_LINEAGE_ACU, buildV33ContinuationAgentPrompts_ACU, buildDefaultAgentArcArchitectPrompt_ACU, buildDefaultContinuationAgentPrompts_ACU, currentDefaultMainAgentHistoryGuide_ACU, currentDefaultMainAgentLayoutAnswer_ACU, findAgentPromptSlot_ACU, hashAgentPromptContent_ACU, isV18DefaultMainAgentNonRootSystemSegment_ACU, isV19DefaultMainAgentHistoryGuide_ACU, isV19DefaultMainAgentLayoutAnswer_ACU, isV19DefaultMainAgentRuntimeSegment_ACU, migrateV29DefaultMainAgentContentToV30_ACU, V20_DEFAULT_ARC_ARCHITECT_CONTRACT_ACU, V20_DEFAULT_ARC_ARCHITECT_EPISTEMOLOGY_ACU, V20_DEFAULT_ARC_ARCHITECT_PURPOSE_ACU, V20_DEFAULT_ARC_ARCHITECT_SYSTEM_ACU, V20_DEFAULT_ARC_ARCHITECT_TASK_ACU, V23_MAIN_AGENT_PACING_RULE_ACU, V24_MAIN_AGENT_PACING_RULE_ACU, V25_ARC_ARCHITECT_VOLUME_CAPACITY_CONTRACT_ACU, V26_FINAL_REVIEWER_CHRONOLOGY_RULES_ACU, V26_MAIN_AGENT_CHRONOLOGY_RULE_ACU, V26_MAINTAINER_CHRONOLOGY_CONTRACT_ACU, type AgentPromptSlotKey_ACU } from './agent/agent-defaults';
 import {
   AGENT_HISTORY_TOKEN_BUDGET_DEFAULT_ACU,
   AGENT_READ_FALLBACK_TOKENS_DEFAULT_ACU,
@@ -623,6 +623,54 @@ function migrateV33AgentPromptsToV34_ACU(raw: unknown): unknown {
       changed = true;
       return { ...segment, content: current[role][entry.index].content };
     });
+  }
+  // 统一派遣策略（TT 移植上游 3ba6460d 子集）：V33→V34  lineage 只覆盖 v34Content 的 SQL 改写，
+  // 调度语句（条件审查/beat 保底/reviewer 移除）与 composer 自查、终审兜底需按本地 V34 槽位幂等补齐，
+  // 否则历史版本迁移后仍停留在旧派遣文本（谱系回归即覆盖此情形）。用户改写段不命中旧原文则原样保留。
+  const migrateDispatch_ACU = (role: string, segments: unknown): unknown => {
+    if (!Array.isArray(segments)) return segments;
+    return segments.map(segment => {
+      if (!isRecord_ACU(segment) || typeof segment.content !== 'string') return segment;
+      let content = segment.content as string;
+      let touched = false;
+      if (role === 'main') {
+        if (content.startsWith('我的行动规则：')) {
+          const replaced = content
+            .replace('固定工作流负责结算、策划、条件审查和写作指令。', '固定工作流负责结算、策划和写作指令。')
+            .replace('不要 delegate hook-cognition-maintainer、mainline-planner、beat-planner、continuity-reviewer 或 instruction-composer。', '不要 delegate hook-cognition-maintainer、mainline-planner、beat-planner、continuity-reviewer 或 instruction-composer；这些角色由固定工作流按上述顺序处理，不单独派 continuity-reviewer。');
+          if (replaced !== content) { content = replaced; touched = true; }
+          if (!content.includes(CONTINUATION_CURRENT_MAIN_WORKFLOW_RULES_ACU)) {
+            content = `${content}\n${CONTINUATION_CURRENT_MAIN_WORKFLOW_RULES_ACU}`;
+            touched = true;
+          }
+        } else if (content.startsWith('【子代理使用规则】')) {
+          const replaced = content
+            .replace('结算、策划、条件审查和写作指令都由固定工作流执行。', '结算、策划和写作指令都由固定工作流执行。')
+            .replace('仅在本轮有伏笔操作义务时派 beat-planner，仅在策划冲突或大转折时派 continuity-reviewer，然后由 instruction-composer 写出 instruction', '第二轮起保底派 beat-planner（首轮且无伏笔义务时可跳过，无真实操作时由其以 no_change 结束），不再单独派 continuity-reviewer，然后由 instruction-composer 写出 instruction');
+          if (replaced !== content) { content = replaced; touched = true; }
+        } else if (content.startsWith('【文本协议规范】')) {
+          const replaced = (content as string).replace('执行结算、策划、条件审查、容错提交、自动修复和 instruction-composer', '执行结算、策划、容错提交、自动修复和 instruction-composer');
+          if (replaced !== content) { content = replaced; touched = true; }
+        }
+      } else if (role === 'instructionComposer') {
+        if ((content as string).includes('$AGENT_TASK') && !(content as string).includes(CONTINUATION_CURRENT_COMPOSER_RULES_ACU)) {
+          content = `${content}\n\n${CONTINUATION_CURRENT_COMPOSER_RULES_ACU}`;
+          touched = true;
+        }
+      } else if (role === 'finalReviewer') {
+        if ((content as string).includes('$AGENT_TASK') && !(content as string).includes(CONTINUATION_CURRENT_FINAL_REVIEW_RULES_ACU)) {
+          content = `${content}\n\n${CONTINUATION_CURRENT_FINAL_REVIEW_RULES_ACU}`;
+          touched = true;
+        }
+      }
+      if (!touched) return segment;
+      changed = true;
+      return { ...segment, content };
+    });
+  };
+  for (const role of ['main', 'instructionComposer', 'finalReviewer']) {
+    if (!Array.isArray((next as Record<string, unknown>)[role])) continue;
+    (next as Record<string, unknown>)[role] = migrateDispatch_ACU(role, (next as Record<string, unknown>)[role]);
   }
   return changed ? next : raw;
 }

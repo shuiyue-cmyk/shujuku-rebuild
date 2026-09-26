@@ -76,7 +76,7 @@ describe('必须修1：余量不得静默丢弃', () => {
       opening: { focus: '焦点', summary: '', dispatchWebResearcher: false },
       hasUnsettledHistory: true,
       beatObligation: false,
-      majorTurn: false,
+      turnNumber: 1,
       settledIndex: 6,
       completedStageNumbers: [],
       readCommittedSnapshot: () => snapshotAt(6),
