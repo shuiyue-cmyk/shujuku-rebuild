@@ -91214,7 +91214,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.7.1" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.7.2" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -125026,7 +125026,14 @@ function commitAgentModuleFieldWrites_ACU(input) {
                 if (merged.revealStatus !== undefined && (merged.revealIndex !== undefined || !!existing)) {
                     const status = merged.revealStatus;
                     const reveal = merged.revealIndex ?? null;
-                    if ((status === 'unrevealed' && reveal !== null) || (status !== 'unrevealed' && reveal === null)) {
+                    if (status === 'unrevealed' && reveal !== null
+                        && Object.prototype.hasOwnProperty.call(writable, 'revealStatus')
+                        && !Object.prototype.hasOwnProperty.call(writable, 'revealIndex')
+                        && Object.keys(writable).length === 1) {
+                        // 明确回退为未揭示时，旧资料残留的揭示楼层是可判定的脏字段；成对补写 null，避免把修复责任推回主会话。
+                        writable.revealIndex = null;
+                    }
+                    else if ((status === 'unrevealed' && reveal !== null) || (status !== 'unrevealed' && reveal === null)) {
                         for (const field of ['revealStatus', 'revealIndex'])
                             if (Object.prototype.hasOwnProperty.call(writable, field)) {
                                 receipt.rejected.push({ path: `${path}.${field}`, reason: 'consistency_group: 揭示状态与楼层必须一致' });
@@ -128753,9 +128760,21 @@ function v19DefaultMainAgentNonRootSystemContents_ACU() {
     const current = buildDefaultAgentMainPrompt_ACU()
         .filter(segment => segment.role === 'user' && headings.some(heading => segment.content.startsWith(heading)))
         .map(segment => segment.content);
+    // 统一派遣策略后，当前默认的文本协议与子代理规则已含 beat 保底/reviewer 移除文案；
+    // V18 存量若已是新默认（测试按当前默认构造 V18 信封），同样视为未改写默认段，保证 system→user 迁移不残留。
+    let dispatched = [];
+    try {
+        dispatched = buildDefaultContinuationAgentPrompts_ACU().main
+            .filter(segment => segment.role === 'user' && headings.some(heading => segment.content.startsWith(heading)))
+            .map(segment => segment.content);
+    }
+    catch {
+        dispatched = [];
+    }
     return [...new Set([
             ...historical,
             ...current,
+            ...dispatched,
             ...MAIN_AGENT_PROMPT_ACU
                 .filter(segment => segment.content === AGENT_HISTORY_ANCHOR_TOKEN_ACU)
                 .map(segment => segment.content),
@@ -129050,16 +129069,66 @@ const CONTINUATION_V33_DEFAULT_LINEAGE_ACU = Object.fromEntries(Object.keys(V33_
         })).filter(({ index }) => v34Content_ACU(role, segments[index].content) !== segments[index].content)];
 }));
 /**
+ * 统一资料维护派遣策略（TT 移植上游 3ba6460d 子集，本地 V34 重写）：
+ * 砍掉 continuity-reviewer 独立派遣后，大转折/冲突判定由 composer 自查（保守取舍）+ finalReviewer 兜底承接，
+ * 不得出现判定真空；beat-planner 第二轮起保底派遣、无真实操作时以 no_change 结束（单次调用，不突破派工预算/轮次上限）。
+ * 本地 V34 文本与上游 V36 不同，此处按本地槽位重写，不硬套上游 replace 串。
+ */
+const CONTINUATION_CURRENT_MAIN_WORKFLOW_RULES_ACU = '【当前固定工作流补充】\nopen_round 的固定工作流遵循逻辑递进序：先完成正文资料结算，再让 mainline-planner 与 beat-planner 在同一层并发（两者写集不相交、判定互不依赖）；beat-planner 首轮且无伏笔义务时可以跳过，第二轮起保底派遣，由其以 no_change 结束无真实操作的轮次，不虚构钩子。不要派 continuity-reviewer；策划建议之间的冲突由 instruction-composer 自查并保守取舍，红线、硬事实与最终冲突由 finalReviewer 终审。特别重要的资料是 hooks、infoGap、chronology，不能只看目录摘要。';
+const CONTINUATION_CURRENT_COMPOSER_RULES_ACU = '【当前冲突自查与资料清单】\n写作指令交付前必须通读并核对 hooks、infoGap、chronology，以及本轮结算和策划回执。检查策划建议之间、建议与本轮 pacing、建议与已结算硬事实或长期约束之间的冲突；冲突时采用更保守的一方，并在 summary 说明取舍，不得拼接互相矛盾的建议。';
+const CONTINUATION_CURRENT_FINAL_REVIEW_RULES_ACU = '【当前终审补充】\n终审必须核对 hooks、infoGap、chronology 与本轮正文事实，检查红线、已结算硬事实、长期约束和策划冲突；发现冲突时拒绝不合规指导并列出可执行修正，不把 continuity-reviewer 作为独立派工角色。';
+function appendCurrentDefaultRule_ACU(segments, rule) {
+    const taskSegment = segments.find(segment => segment.content.includes('$AGENT_TASK'));
+    if (taskSegment) {
+        return segments.map(segment => segment === taskSegment
+            ? { ...segment, content: `${segment.content}\n\n${rule}` }
+            : segment);
+    }
+    return segments.map((segment, index) => index === segments.length - 1
+        ? { ...segment, content: `${segment.content}\n\n${rule}` }
+        : segment);
+}
+function applyCurrentContinuationPromptRules_ACU(prompts) {
+    const main = prompts.main.map(segment => {
+        let content = segment.content;
+        if (content.startsWith('我的行动规则：')) {
+            content = content
+                .replace('固定工作流负责结算、策划、条件审查和写作指令。', '固定工作流负责结算、策划和写作指令。')
+                .replace('不要 delegate hook-cognition-maintainer、mainline-planner、beat-planner、continuity-reviewer 或 instruction-composer。', '不要 delegate hook-cognition-maintainer、mainline-planner、beat-planner、continuity-reviewer 或 instruction-composer；这些角色由固定工作流按上述顺序处理，不单独派 continuity-reviewer。')
+                + `\n${CONTINUATION_CURRENT_MAIN_WORKFLOW_RULES_ACU}`;
+            return { ...segment, content };
+        }
+        if (content.startsWith('【子代理使用规则】')) {
+            content = content
+                .replace('结算、策划、条件审查和写作指令都由固定工作流执行。', '结算、策划和写作指令都由固定工作流执行。')
+                .replace('仅在本轮有伏笔操作义务时派 beat-planner，仅在策划冲突或大转折时派 continuity-reviewer，然后由 instruction-composer 写出 instruction', '第二轮起保底派 beat-planner（首轮且无伏笔义务时可跳过，无真实操作时由其以 no_change 结束），不再单独派 continuity-reviewer，然后由 instruction-composer 写出 instruction');
+            return { ...segment, content };
+        }
+        if (content.startsWith('【文本协议规范】')) {
+            content = content
+                .replace('执行结算、策划、条件审查、容错提交、自动修复和 instruction-composer', '执行结算、策划、容错提交、自动修复和 instruction-composer');
+            return { ...segment, content };
+        }
+        return segment;
+    });
+    return {
+        ...prompts,
+        main,
+        instructionComposer: appendCurrentDefaultRule_ACU(prompts.instructionComposer, CONTINUATION_CURRENT_COMPOSER_RULES_ACU),
+        finalReviewer: appendCurrentDefaultRule_ACU(prompts.finalReviewer, CONTINUATION_CURRENT_FINAL_REVIEW_RULES_ACU),
+    };
+}
+/**
  * 构造全部当前 Agent 默认提示词；SQL 只改变资料写集，其他 JSON 动作保持原协议。
  * @returns 十组提示词的深拷贝，可安全写入 settings
  */
 function buildDefaultContinuationAgentPrompts_ACU() {
     const previous = buildV33ContinuationAgentPrompts_ACU();
-    const current = { ...previous };
+    const v34 = { ...previous };
     for (const role of Object.keys(previous)) {
-        current[role] = previous[role].map(segment => ({ ...segment, content: v34Content_ACU(role, segment.content) }));
+        v34[role] = previous[role].map(segment => ({ ...segment, content: v34Content_ACU(role, segment.content) }));
     }
-    return current;
+    return applyCurrentContinuationPromptRules_ACU(v34);
 }
 
 /** 宿主正文短于该 token 数视为截断或出错，触发与生成失败同构的自动重试。0 表示关闭。 */
@@ -130703,6 +130772,71 @@ function migrateV33AgentPromptsToV34_ACU(raw) {
             changed = true;
             return { ...segment, content: current[role][entry.index].content };
         });
+    }
+    // 统一派遣策略（TT 移植上游 3ba6460d 子集）：V33→V34  lineage 只覆盖 v34Content 的 SQL 改写，
+    // 调度语句（条件审查/beat 保底/reviewer 移除）与 composer 自查、终审兜底需按本地 V34 槽位幂等补齐，
+    // 否则历史版本迁移后仍停留在旧派遣文本（谱系回归即覆盖此情形）。用户改写段不命中旧原文则原样保留。
+    const migrateDispatch_ACU = (role, segments) => {
+        if (!Array.isArray(segments))
+            return segments;
+        return segments.map(segment => {
+            if (!isRecord_ACU$4(segment) || typeof segment.content !== 'string')
+                return segment;
+            let content = segment.content;
+            let touched = false;
+            if (role === 'main') {
+                if (content.startsWith('我的行动规则：')) {
+                    const replaced = content
+                        .replace('固定工作流负责结算、策划、条件审查和写作指令。', '固定工作流负责结算、策划和写作指令。')
+                        .replace('不要 delegate hook-cognition-maintainer、mainline-planner、beat-planner、continuity-reviewer 或 instruction-composer。', '不要 delegate hook-cognition-maintainer、mainline-planner、beat-planner、continuity-reviewer 或 instruction-composer；这些角色由固定工作流按上述顺序处理，不单独派 continuity-reviewer。');
+                    if (replaced !== content) {
+                        content = replaced;
+                        touched = true;
+                    }
+                    if (!content.includes(CONTINUATION_CURRENT_MAIN_WORKFLOW_RULES_ACU)) {
+                        content = `${content}\n${CONTINUATION_CURRENT_MAIN_WORKFLOW_RULES_ACU}`;
+                        touched = true;
+                    }
+                }
+                else if (content.startsWith('【子代理使用规则】')) {
+                    const replaced = content
+                        .replace('结算、策划、条件审查和写作指令都由固定工作流执行。', '结算、策划和写作指令都由固定工作流执行。')
+                        .replace('仅在本轮有伏笔操作义务时派 beat-planner，仅在策划冲突或大转折时派 continuity-reviewer，然后由 instruction-composer 写出 instruction', '第二轮起保底派 beat-planner（首轮且无伏笔义务时可跳过，无真实操作时由其以 no_change 结束），不再单独派 continuity-reviewer，然后由 instruction-composer 写出 instruction');
+                    if (replaced !== content) {
+                        content = replaced;
+                        touched = true;
+                    }
+                }
+                else if (content.startsWith('【文本协议规范】')) {
+                    const replaced = content.replace('执行结算、策划、条件审查、容错提交、自动修复和 instruction-composer', '执行结算、策划、容错提交、自动修复和 instruction-composer');
+                    if (replaced !== content) {
+                        content = replaced;
+                        touched = true;
+                    }
+                }
+            }
+            else if (role === 'instructionComposer') {
+                if (content.includes('$AGENT_TASK') && !content.includes(CONTINUATION_CURRENT_COMPOSER_RULES_ACU)) {
+                    content = `${content}\n\n${CONTINUATION_CURRENT_COMPOSER_RULES_ACU}`;
+                    touched = true;
+                }
+            }
+            else if (role === 'finalReviewer') {
+                if (content.includes('$AGENT_TASK') && !content.includes(CONTINUATION_CURRENT_FINAL_REVIEW_RULES_ACU)) {
+                    content = `${content}\n\n${CONTINUATION_CURRENT_FINAL_REVIEW_RULES_ACU}`;
+                    touched = true;
+                }
+            }
+            if (!touched)
+                return segment;
+            changed = true;
+            return { ...segment, content };
+        });
+    };
+    for (const role of ['main', 'instructionComposer', 'finalReviewer']) {
+        if (!Array.isArray(next[role]))
+            continue;
+        next[role] = migrateDispatch_ACU(role, next[role]);
     }
     return changed ? next : raw;
 }
@@ -132765,11 +132899,17 @@ function applyInfoGapDelta_ACU(existing, items, settledIndex) {
         }
         if (!item.topic.trim())
             reject_ACU(`信息差条目 ${item.id} 的 topic 不能为空`, { id: item.id });
-        // 未揭示的事件不允许携带揭示楼层，否则等于把计划写成了已发生事实。
+        const current = byId.get(item.id);
+        let revealIndex = item.revealIndex;
+        // 仅修复既有同处未揭示条目的历史回显残留；本地 fold 已把持久化 unrevealed 条目的 revealIndex 归一为 null，
+        // 上游“楼层号相同”判据恒不命中，故以既有同处 unrevealed 为准（脏楼层同值或已归一 null 均可修）；新建、显式变更或不同楼层仍拒绝。
         if (item.revealStatus === 'unrevealed' && item.revealIndex !== null) {
-            reject_ACU(`信息差条目 ${item.id} 标记为未揭示，揭示楼层必须为空`, { id: item.id, revealIndex: item.revealIndex });
+            if (current?.revealStatus === 'unrevealed' && (current.revealIndex === item.revealIndex || current.revealIndex === null))
+                revealIndex = null;
+            else
+                reject_ACU(`信息差条目 ${item.id} 标记为未揭示，揭示楼层必须为空`, { id: item.id, revealIndex: item.revealIndex });
         }
-        if (item.revealStatus !== 'unrevealed' && item.revealIndex === null) {
+        if (item.revealStatus !== 'unrevealed' && revealIndex === null) {
             reject_ACU(`信息差条目 ${item.id} 已揭示，必须给出揭示楼层`, { id: item.id });
         }
         byId.set(item.id, {
@@ -132779,7 +132919,7 @@ function applyInfoGapDelta_ACU(existing, items, settledIndex) {
             readerKnown: item.readerKnown,
             characterKnowledge: item.characterKnowledge,
             revealStatus: item.revealStatus,
-            revealIndex: item.revealIndex,
+            revealIndex,
             retired: false,
             retiredReason: '',
         });
@@ -132805,6 +132945,13 @@ function applyInfoGapPatches_ACU(entries, patches) {
             revealIndex: 'revealIndex' in patch ? patch.revealIndex : current.revealIndex,
         };
         // 合并结果必须满足与 upsert 相同的一致性规则：把计划写成事实的典型症状在 patch 路径同样要拦。
+        if (merged.revealStatus === 'unrevealed' && merged.revealIndex !== null
+            && patch.revealStatus === 'unrevealed'
+            && !Object.prototype.hasOwnProperty.call(patch, 'revealIndex')
+            && Object.keys(patch).length === 2) {
+            // 仅明确回退状态时，旧揭示楼层可确定是历史残留脏字段；成对清空，避免阻断主流程。
+            merged.revealIndex = null;
+        }
         if (merged.revealStatus === 'unrevealed' && merged.revealIndex !== null) {
             reject_ACU(`信息差条目 ${patch.id} patch 后标记为未揭示，揭示楼层必须同时清空（revealIndex 传 null）`, { id: patch.id, revealIndex: merged.revealIndex });
         }
@@ -133538,7 +133685,7 @@ async function applyAgentConstraintRegistrationViaSql_ACU(snapshot, add, retire,
 /**
  * service/continuation/agent/agent-workflow.ts — 续写固定工作流
  *
- * 程序按固定顺序驱动结算、策划、条件审查、容错提交、自动修复与写作指令编排。
+ * 程序按固定顺序驱动结算、策划、容错提交、自动修复与写作指令编排。
  * 主会话只提供开局参数，不再逐个派这些角色。模型调用通过端口注入，便于单测。
  *
  * TT 适配（相对上游 787afc1）：仅依赖 agent-model / agent-transaction / model，
@@ -133547,29 +133694,17 @@ async function applyAgentConstraintRegistrationViaSql_ACU(snapshot, add, retire,
 const MAINTAINER_NAME_ACU = 'hook-cognition-maintainer';
 const MAINLINE_NAME_ACU = 'mainline-planner';
 const BEAT_NAME_ACU = 'beat-planner';
-const REVIEWER_NAME_ACU = 'continuity-reviewer';
 const ARC_NAME_ACU = 'arc-architect';
 const WEB_NAME_ACU = 'web-researcher';
 const MAINTAINER_MODULES_ACU = ['hooks', 'infoGap', 'chronology'];
 const CONTINUATION_REPAIRABLE_MODULES_ACU = [...MAINTAINER_MODULES_ACU, 'storyArc', 'webRefs'];
 const BEAT_OBLIGATION_PATTERN_ACU = /伏笔|埋设|回收|误导|信息差|揭示/;
-const CONFLICT_PATTERN_ACU = /冲突|矛盾|红线/;
 function continuationBeatObligation_ACU(turn) {
     if (!turn)
         return false;
     if (turn.function === 'payoff' || turn.function === 'reveal')
         return true;
     return BEAT_OBLIGATION_PATTERN_ACU.test(turn.goal ?? '');
-}
-function continuationMajorTurn_ACU(turn) {
-    if (!turn)
-        return false;
-    return turn.pacing === 'turn' || turn.function === 'reveal';
-}
-function continuationContinuityReviewRequired_ACU(input) {
-    if (input.majorTurn)
-        return true;
-    return CONFLICT_PATTERN_ACU.test([...input.recommendations, ...input.risks].join('\n'));
 }
 function isStale_ACU(error) {
     return error instanceof ContinuationValidationError_ACU && error.error.code === 'CONTINUATION_INTERNAL_REQUEST_STALE';
@@ -133630,7 +133765,7 @@ function needsPendingEscalation_ACU(snapshot, settings) {
 function formatFixes_ACU(fixes) {
     if (!fixes.length)
         return '无';
-    return fixes.map(item => `${item.module} 第 ${item.attempts} 次：${item.violations.map(violation => violation.message).join('；') || item.lastError}`).join(' | ');
+    return fixes.map(item => `${item.module} 第 ${item.attempts} 次：${item.violations.map(violation => `${violation.path}: ${violation.message}`).join('；') || item.lastError}`).join(' | ');
 }
 function maintainerPrompt_ACU(focus, snapshot, repair) {
     const fixes = snapshot.pendingFixes.filter(item => MAINTAINER_MODULES_ACU.includes(item.module));
@@ -133915,8 +134050,6 @@ async function runContinuationAgentWorkflow_ACU(input) {
     let snapshot = input.snapshot;
     const steps = [];
     const plannerNotes = [];
-    const plannerRisks = [];
-    let reviewerNote = '';
     const pendingRangeStarts = snapshot.pendingFixes.map(item => item.rangeStartIndex).filter(index => Number.isInteger(index) && index >= 0);
     const settlementEndIndex = input.settledIndex;
     // 删楼后 settledIndex 可能小于旧 pending 的 rangeStart：起点钳到终点以内，
@@ -133965,94 +134098,123 @@ async function runContinuationAgentWorkflow_ACU(input) {
         steps.push({ agentName: MAINTAINER_NAME_ACU, status: 'no_change', summary: '没有未结算正文，也没有待修复的结算模块' });
     }
     else {
-        const maintainer = await runSafe_ACU({
+        let maintainer = await runSafe_ACU({
             agentName: MAINTAINER_NAME_ACU,
             billing: 'pipeline',
             repair: false,
             prompt: maintainerPrompt_ACU(input.opening.focus, snapshot, false),
         });
-        const writes = (maintainer.writes ?? [...MAINTAINER_MODULES_ACU])
-            .filter((module) => MAINTAINER_MODULES_ACU.includes(module));
-        let completion = maintainer.completion
-            ?? (!maintainer.ok ? 'failed' : maintainer.noChange || !deltaTouched_ACU(maintainer.maintainer?.delta) ? 'complete_no_change' : 'complete_changed');
-        let modules = completionModules_ACU(maintainer, writes, completion);
-        let appliedModules = [];
-        if (maintainer.ok && maintainer.usedFieldWrites) {
-            // S11-TT：结算已逐栏即时保存，直接读回提交后快照，不再走旧最终写集覆盖。
-            // 余量非空时不清零丢弃：先 fail-closed 拒绝，不流入重读交付。
-            assertFieldWriteSettleable_ACU({ agentName: MAINTAINER_NAME_ACU, usedFieldWrites: maintainer.usedFieldWrites, contractTouched: deltaTouched_ACU(maintainer.maintainer?.delta), researcherTouched: false });
-            if (input.readCommittedSnapshot) {
-                const before = snapshot;
-                snapshot = input.readCommittedSnapshot();
-                for (const module of writes) {
-                    if (snapshot.revisions[module] > before.revisions[module])
-                        appliedModules.push(module);
+        // 结算块内定向修正（移植上游 333cae77 TT 子集）：首派后仍有 pendingFixes 即立即
+        // 定向重派，最多 reviseLimit 次。billing 保持 pipeline（不占用并行 repair 通道），
+        // targetModules 收窄到仍待修复的模块，prompt 带 path 级违规明细。
+        // truncated 不进重派（留给契约续写/旧并行通道）；S11 usedFieldWrites/readCommitted
+        // 结算与证据门在每次迭代内同式执行，不弱化。
+        let repairAttempts = 0;
+        const maxRepairAttempts = Math.max(0, input.settings.workflow.reviseLimit);
+        while (true) {
+            const writes = (maintainer.writes ?? [...MAINTAINER_MODULES_ACU])
+                .filter((module) => MAINTAINER_MODULES_ACU.includes(module));
+            let completion = maintainer.completion
+                ?? (!maintainer.ok ? 'failed' : maintainer.noChange || !deltaTouched_ACU(maintainer.maintainer?.delta) ? 'complete_no_change' : 'complete_changed');
+            let modules = completionModules_ACU(maintainer, writes, completion);
+            let appliedModules = [];
+            if (maintainer.ok && maintainer.usedFieldWrites) {
+                // S11-TT：结算已逐栏即时保存，直接读回提交后快照，不再走旧最终写集覆盖。
+                // 余量非空时不清零丢弃：先 fail-closed 拒绝，不流入重读交付。
+                assertFieldWriteSettleable_ACU({ agentName: MAINTAINER_NAME_ACU, usedFieldWrites: maintainer.usedFieldWrites, contractTouched: deltaTouched_ACU(maintainer.maintainer?.delta), researcherTouched: false });
+                if (input.readCommittedSnapshot) {
+                    const before = snapshot;
+                    snapshot = input.readCommittedSnapshot();
+                    for (const module of writes) {
+                        if (snapshot.revisions[module] > before.revisions[module])
+                            appliedModules.push(module);
+                    }
                 }
             }
-        }
-        else {
-            appliedModules = maintainer.ok
-                ? await applyMaintainerLike_ACU(maintainer.maintainer, writes, maintainer.readRevisions, MAINTAINER_NAME_ACU)
-                : [];
-        }
-        const issues = [...(maintainer.unresolvedIssues ?? [])];
-        if (!maintainer.ok && !issues.length) {
-            for (const module of writes.length ? writes : [...MAINTAINER_MODULES_ACU]) {
-                issues.push({ module, source: 'invoke_failed', path: module, message: maintainer.summary || '维护子代理调用失败' });
-                modules[module] = 'failed';
+            else {
+                appliedModules = maintainer.ok
+                    ? await applyMaintainerLike_ACU(maintainer.maintainer, writes, maintainer.readRevisions, MAINTAINER_NAME_ACU)
+                    : [];
             }
-        }
-        if (issues.length) {
-            snapshot = recordWorkflowIssues_ACU(snapshot, issues, MAINTAINER_NAME_ACU, settlementStartIndex, settlementEndIndex, maintainer.acceptedKeys);
-            completion = appliedModules.length ? 'partial' : 'failed';
-        }
-        const transactionPending = snapshot.pendingFixes.filter(item => writes.includes(item.module));
-        if (transactionPending.length) {
-            for (const fix of transactionPending) {
-                const moduleAccepted = appliedModules.includes(fix.module) || acceptedKeysForModule_ACU(maintainer.acceptedKeys, fix.module).length > 0;
-                modules[fix.module] = moduleAccepted ? 'partial' : 'failed';
+            const issues = [...(maintainer.unresolvedIssues ?? [])];
+            if (!maintainer.ok && !issues.length) {
+                for (const module of writes.length ? writes : [...MAINTAINER_MODULES_ACU]) {
+                    issues.push({ module, source: 'invoke_failed', path: module, message: maintainer.summary || '维护子代理调用失败' });
+                    modules[module] = 'failed';
+                }
             }
-            completion = appliedModules.length ? 'partial' : 'failed';
-        }
-        else {
-            snapshot = clearCompletedPending_ACU(snapshot, modules);
-        }
-        const now = Date.now();
-        snapshot = {
-            ...snapshot,
-            materialCompletion: {
-                state: completion,
-                rangeStartIndex: settlementStartIndex,
-                rangeEndIndex: settlementEndIndex,
-                modules,
-                updatedAt: now,
-            },
-            updatedAt: Math.max(snapshot.updatedAt, now),
-        };
-        if (completion === 'complete_changed' || completion === 'complete_no_change') {
-            snapshot = { ...snapshot, settledThroughIndex: Math.max(snapshot.settledThroughIndex, input.settledIndex) };
-        }
-        if (!maintainer.ok || completion === 'failed') {
-            steps.push({ agentName: MAINTAINER_NAME_ACU, status: 'failed', summary: maintainer.summary });
-        }
-        else if (completion === 'complete_no_change') {
-            steps.push({ agentName: MAINTAINER_NAME_ACU, status: 'no_change', summary: maintainer.summary || '结算没有新事实' });
-        }
-        else if (completion === 'partial') {
-            steps.push({ agentName: MAINTAINER_NAME_ACU, status: 'failed', summary: `${maintainer.summary || '已保留部分资料'}；仍有待补条目` });
-        }
-        else {
-            steps.push({ agentName: MAINTAINER_NAME_ACU, status: 'ok', summary: maintainer.summary });
+            if (issues.length) {
+                snapshot = recordWorkflowIssues_ACU(snapshot, issues, MAINTAINER_NAME_ACU, settlementStartIndex, settlementEndIndex, maintainer.acceptedKeys);
+                completion = appliedModules.length ? 'partial' : 'failed';
+            }
+            const transactionPending = snapshot.pendingFixes.filter(item => writes.includes(item.module));
+            if (transactionPending.length) {
+                for (const fix of transactionPending) {
+                    const moduleAccepted = appliedModules.includes(fix.module) || acceptedKeysForModule_ACU(maintainer.acceptedKeys, fix.module).length > 0;
+                    modules[fix.module] = moduleAccepted ? 'partial' : 'failed';
+                }
+                completion = appliedModules.length ? 'partial' : 'failed';
+            }
+            else {
+                snapshot = clearCompletedPending_ACU(snapshot, modules);
+            }
+            const now = Date.now();
+            snapshot = {
+                ...snapshot,
+                materialCompletion: {
+                    state: completion,
+                    rangeStartIndex: settlementStartIndex,
+                    rangeEndIndex: settlementEndIndex,
+                    modules,
+                    updatedAt: now,
+                },
+                updatedAt: Math.max(snapshot.updatedAt, now),
+            };
+            if (completion === 'complete_changed' || completion === 'complete_no_change') {
+                snapshot = { ...snapshot, settledThroughIndex: Math.max(snapshot.settledThroughIndex, input.settledIndex) };
+            }
+            if (!maintainer.ok || completion === 'failed') {
+                steps.push({ agentName: MAINTAINER_NAME_ACU, status: 'failed', summary: maintainer.summary });
+            }
+            else if (completion === 'complete_no_change') {
+                steps.push({ agentName: MAINTAINER_NAME_ACU, status: 'no_change', summary: maintainer.summary || '结算没有新事实' });
+            }
+            else if (completion === 'partial') {
+                steps.push({ agentName: MAINTAINER_NAME_ACU, status: 'failed', summary: `${maintainer.summary || '已保留部分资料'}；仍有待补条目` });
+            }
+            else {
+                steps.push({ agentName: MAINTAINER_NAME_ACU, status: 'ok', summary: maintainer.summary });
+            }
+            const repairPending = snapshot.pendingFixes.filter(item => MAINTAINER_MODULES_ACU.includes(item.module)
+                && item.source !== 'truncated');
+            if (!repairPending.length || repairAttempts >= maxRepairAttempts)
+                break;
+            repairAttempts += 1;
+            const repairModules = [...new Set(repairPending.map(item => item.module))];
+            maintainer = await runSafe_ACU({
+                agentName: MAINTAINER_NAME_ACU,
+                billing: 'pipeline',
+                repair: false,
+                targetModules: repairModules,
+                prompt: [
+                    `上一轮资料写入仍有待修复项（第 ${repairAttempts} 次定向修正）：`,
+                    formatFixes_ACU(repairPending),
+                    '只修复上述模块和字段；不要重发已成功保存的其它模块。先 read 对应权威模块，再提交最小 write_sql；仍无法确定时明确返回 unresolvedIssues。',
+                ].join('\n'),
+            });
         }
     }
     const plannerCalls = [
         { agentName: MAINLINE_NAME_ACU, billing: 'pipeline', repair: false, prompt: `策划本轮场景。焦点：${input.opening.focus}` },
     ];
-    if (input.beatObligation) {
-        plannerCalls.push({ agentName: BEAT_NAME_ACU, billing: 'pipeline', repair: false, prompt: `本轮有伏笔操作义务。焦点：${input.opening.focus}` });
+    // 编排不变量：mainline-planner 与 beat-planner 写集不相交、判定互不依赖，属同层并发批（Promise.all）；
+    // beat-planner 第二轮起保底派遣（单次调用，不占 delegate 派工预算、不突破单代理上限），是否操作由其 no_change 出口判断，仅首轮且无义务时跳过。
+    const turnNumber_ACU = Number.isInteger(input.turnNumber) ? input.turnNumber : 1;
+    if (turnNumber_ACU >= 2 || input.beatObligation) {
+        plannerCalls.push({ agentName: BEAT_NAME_ACU, billing: 'pipeline', repair: false, prompt: `策划本轮伏笔操作与情绪节拍；本轮没有真实需要时明确 no_change，不虚构钩子。焦点：${input.opening.focus}` });
     }
     else {
-        steps.push({ agentName: BEAT_NAME_ACU, status: 'skipped', summary: '本轮没有伏笔操作义务' });
+        steps.push({ agentName: BEAT_NAME_ACU, status: 'skipped', summary: '首轮且无伏笔义务，节拍策划跳过' });
     }
     const planners = await Promise.all(plannerCalls.map(call => runSafe_ACU(call)));
     for (let index = 0; index < planners.length; index += 1) {
@@ -134060,27 +134222,7 @@ async function runContinuationAgentWorkflow_ACU(input) {
         steps.push({ agentName: plannerCalls[index].agentName, status: planner.ok ? 'ok' : 'failed', summary: planner.summary });
         if (planner.planner) {
             plannerNotes.push(planner.planner.recommendation);
-            plannerRisks.push(...planner.planner.risks);
         }
-    }
-    const reviewRequired = continuationContinuityReviewRequired_ACU({
-        majorTurn: input.majorTurn,
-        recommendations: plannerNotes,
-        risks: plannerRisks,
-    });
-    if (!reviewRequired) {
-        steps.push({ agentName: REVIEWER_NAME_ACU, status: 'skipped', summary: '没有策划冲突或大转折' });
-    }
-    else {
-        const reviewer = await runSafe_ACU({
-            agentName: REVIEWER_NAME_ACU,
-            billing: 'pipeline',
-            repair: false,
-            prompt: `审查策划是否冲突。焦点：${input.opening.focus}\n${plannerNotes.join('\n')}`,
-        });
-        steps.push({ agentName: REVIEWER_NAME_ACU, status: reviewer.ok ? 'ok' : 'failed', summary: reviewer.summary });
-        if (reviewer.reviewer)
-            reviewerNote = `${reviewer.reviewer.verdict} ${reviewer.reviewer.reason} ${reviewer.reviewer.fixes.join('；')}`;
     }
     const escalateBeforeRepair = needsPendingEscalation_ACU(snapshot, input.settings);
     const repairAgents = repairableAgents_ACU(snapshot, input.settings);
@@ -134088,9 +134230,8 @@ async function runContinuationAgentWorkflow_ACU(input) {
         `本轮焦点：${input.opening.focus}`,
         input.opening.summary ? `开局摘要：${input.opening.summary}` : '',
         `策划建议：${plannerNotes.join('\n') || '无'}`,
-        `审查结论：${reviewerNote || '未触发连续性审查'}`,
         `待修复：${formatFixes_ACU(snapshot.pendingFixes)}`,
-        '通读结算后的资料、用户要求与活跃约束，产出本轮写作指令。',
+        '通读结算后的资料、用户要求与活跃约束，产出本轮写作指令。产出前自查：策划建议之间是否互相冲突、是否与本轮 pacing 冲突、是否与已结算的硬事实/长期约束冲突；发现冲突时取更保守的一方并在 summary 注明取舍，不得原样拼接两份矛盾建议。',
     ].filter(Boolean).join('\n');
     const repairCalls = repairAgents.map(agentName => {
         const targetModules = repairModulesForAgent_ACU(snapshot, agentName);
@@ -136840,13 +136981,6 @@ const AGENT_SUBAGENT_DEFINITIONS_ACU = [
         description: '策划本轮伏笔操作与情绪节拍：给出埋设、强化、误导、回收的具体手法、信息差走到哪一步与收尾方式建议；低压轮允许无操作、安静闭合，不写正文、不改资料',
         triggers: ['本轮计划操作伏笔', '本轮信息差需要设置、使用或揭示（揭示后允许结束，不强制补新谜团）', '情绪节拍需要承接上轮残留'],
         promptKey: 'beatPlanner',
-    },
-    {
-        name: 'continuity-reviewer',
-        kind: 'review',
-        description: '审查策划结果的连续性与约束合规：输出 pass / revise / block 判词，只读不写',
-        triggers: ['策划结果之间存在冲突', '本轮触碰长期约束红线', '大阶段转折或伏笔密集轮次'],
-        promptKey: 'reviewer',
     },
     {
         name: AGENT_WEB_RESEARCHER_NAME_ACU,
@@ -139694,7 +139828,10 @@ class AgentSubagentRuntime_ACU {
             rejectDelegation_ACU(`目录里没有名为 ${input.delegation.agentName} 的子代理`, { agentName: input.delegation.agentName });
         }
         const isRequirementsMaintainer = definition.name === AGENT_REQUIREMENTS_MAINTAINER_NAME_ACU;
-        const writes = isRequirementsMaintainer ? ['userRequirements'] : [...KIND_FIXED_WRITES_ACU[definition.kind]];
+        const writes = isRequirementsMaintainer ? ['userRequirements']
+            : definition.kind === 'maintain' && input.targetModules?.length
+                ? [...KIND_FIXED_WRITES_ACU[definition.kind]].filter((module) => input.targetModules.includes(module))
+                : [...KIND_FIXED_WRITES_ACU[definition.kind]];
         const gate = {
             state: createAgentReadGateState_ACU(),
             config: {
@@ -141950,7 +142087,7 @@ class ContinuationAgentTurnPlanner_ACU {
             },
             hasUnsettledHistory: !unsettled.startsWith('没有尚未结算的真实历史'),
             beatObligation: continuationBeatObligation_ACU(context.execution.turn),
-            majorTurn: continuationMajorTurn_ACU(context.execution.turn),
+            turnNumber: context.execution.turnNumber ?? 1,
             settledIndex: Math.max(0, chat.length - 1),
             completedStageNumbers: context.execution.task.stages.filter(stage => stage.status === 'completed').map(stage => stage.stageNumber),
             allowedEvidenceIndexes: aiEvidenceIndexes,
@@ -141969,6 +142106,7 @@ class ContinuationAgentTurnPlanner_ACU {
                 const repairReads = request.settings.workflow.repairMaxExtraReads;
                 const result = await this.dependencies.subagentRuntime.run({
                     delegation: { agentName: call.agentName, prompt: call.prompt, reads: [] },
+                    targetModules: call.targetModules,
                     settings: request.settings,
                     resolveContext: context,
                     budget: call.billing === 'repair' ? { ...budget, maxExtraReads: repairReads } : budget,
@@ -149924,7 +150062,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260925-19";
+        const stamp = "20260926-14";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -195766,7 +195904,7 @@ function useLogViewer() {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260925-19";
+        const stamp = "20260926-14";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -195775,7 +195913,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.7.1";
+        const v = "9.7.2";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {
