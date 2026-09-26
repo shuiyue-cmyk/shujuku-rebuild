@@ -249,11 +249,15 @@ function applyInfoGapDelta_ACU(existing: AgentInfoGapEntry_ACU[], items: AgentIn
       continue;
     }
     if (!item.topic.trim()) reject_ACU(`信息差条目 ${item.id} 的 topic 不能为空`, { id: item.id });
-    // 未揭示的事件不允许携带揭示楼层，否则等于把计划写成了已发生事实。
+    const current = byId.get(item.id);
+    let revealIndex = item.revealIndex;
+    // 仅修复既有同处未揭示条目的历史回显残留；本地 fold 已把持久化 unrevealed 条目的 revealIndex 归一为 null，
+    // 上游“楼层号相同”判据恒不命中，故以既有同处 unrevealed 为准（脏楼层同值或已归一 null 均可修）；新建、显式变更或不同楼层仍拒绝。
     if (item.revealStatus === 'unrevealed' && item.revealIndex !== null) {
-      reject_ACU(`信息差条目 ${item.id} 标记为未揭示，揭示楼层必须为空`, { id: item.id, revealIndex: item.revealIndex });
+      if (current?.revealStatus === 'unrevealed' && (current.revealIndex === item.revealIndex || current.revealIndex === null)) revealIndex = null;
+      else reject_ACU(`信息差条目 ${item.id} 标记为未揭示，揭示楼层必须为空`, { id: item.id, revealIndex: item.revealIndex });
     }
-    if (item.revealStatus !== 'unrevealed' && item.revealIndex === null) {
+    if (item.revealStatus !== 'unrevealed' && revealIndex === null) {
       reject_ACU(`信息差条目 ${item.id} 已揭示，必须给出揭示楼层`, { id: item.id });
     }
     byId.set(item.id, {
@@ -263,7 +267,7 @@ function applyInfoGapDelta_ACU(existing: AgentInfoGapEntry_ACU[], items: AgentIn
       readerKnown: item.readerKnown,
       characterKnowledge: item.characterKnowledge,
       revealStatus: item.revealStatus,
-      revealIndex: item.revealIndex,
+      revealIndex,
       retired: false,
       retiredReason: '',
     });
@@ -288,6 +292,13 @@ function applyInfoGapPatches_ACU(entries: AgentInfoGapEntry_ACU[], patches: Agen
       revealIndex: 'revealIndex' in patch ? patch.revealIndex! : current.revealIndex,
     };
     // 合并结果必须满足与 upsert 相同的一致性规则：把计划写成事实的典型症状在 patch 路径同样要拦。
+    if (merged.revealStatus === 'unrevealed' && merged.revealIndex !== null
+      && patch.revealStatus === 'unrevealed'
+      && !Object.prototype.hasOwnProperty.call(patch, 'revealIndex')
+      && Object.keys(patch).length === 2) {
+      // 仅明确回退状态时，旧揭示楼层可确定是历史残留脏字段；成对清空，避免阻断主流程。
+      merged.revealIndex = null;
+    }
     if (merged.revealStatus === 'unrevealed' && merged.revealIndex !== null) {
       reject_ACU(`信息差条目 ${patch.id} patch 后标记为未揭示，揭示楼层必须同时清空（revealIndex 传 null）`, { id: patch.id, revealIndex: merged.revealIndex });
     }

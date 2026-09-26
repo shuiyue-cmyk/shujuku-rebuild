@@ -4,6 +4,7 @@ import {
   buildEmptyAgentModuleSnapshot_ACU,
   readAgentModuleFieldSnapshot_ACU,
 } from '../../../../src/service/continuation/agent/agent-module-store';
+import { AGENT_MODULE_FIELD_ACU } from '../../../../src/service/continuation/agent/agent-model';
 import type { AgentModuleSnapshot_ACU } from '../../../../src/service/continuation/agent/agent-model';
 import { _set_SillyTavern_API_ACU } from '../../../../src/shared/host-api';
 
@@ -298,5 +299,48 @@ describe('S11-TT 判别：工作流 usedFieldWrites 免重复覆盖', () => {
     });
     expect(reread).toBeGreaterThan(0);
     expect(result.snapshot.hooks.map(item => item.id)).toContain('HC');
+  });
+});
+
+describe('infoGap 回退自动修复（移植上游 a830de93 前半 TT 子集）', () => {
+  async function commitStore() {
+    const store = await import('../../../../src/service/continuation/agent/agent-module-store');
+    return (store as Record<string, unknown>).commitAgentModuleFieldWrites_ACU as unknown as
+      ((input: { chat: any[]; targetIndex: number; sql: string; role: string }) => Promise<{
+        status: string; accepted: Array<{ module: string; id: string; field: string }>; rejected: Array<{ path: string; reason: string }>;
+        partials: unknown; revisions: Record<string, number> | null;
+      }>);
+  }
+
+  it('信息差单独回退未揭示时自动清除旧揭示楼层，显式冲突楼层仍拒绝', async () => {
+    const snapshot = { ...buildEmptyAgentModuleSnapshot_ACU(), settledThroughIndex: 1 };
+    const chat: any[] = [
+      { is_user: false, mes: 'root', [AGENT_MODULE_FIELD_ACU]: snapshot },
+      { is_user: false, mes: 'tail' },
+    ];
+    _set_SillyTavern_API_ACU({ chat, saveChat: vi.fn().mockResolvedValue(undefined) } as any);
+    const commit = await commitStore();
+    const insert = "INSERT INTO info_gap (id, topic, objective_fact, reader_known, character_knowledge, reveal_status) VALUES ('G2', '秘密', '钥匙', '无人知道', '[]', 'unrevealed')";
+    expect((await commit({ chat, targetIndex: 1, sql: insert, role: 'hook-cognition-maintainer' })).status).toBe('committed');
+    const revealed = await commit({ chat, targetIndex: 1,
+      sql: "UPDATE info_gap SET reveal_status = 'revealed', reveal_index = 1 WHERE id = 'G2'",
+      role: 'hook-cognition-maintainer',
+    });
+    expect(revealed.status).toBe('committed');
+    const reset = await commit({ chat, targetIndex: 1,
+      sql: "UPDATE info_gap SET reveal_status = 'unrevealed' WHERE id = 'G2'",
+      role: 'hook-cognition-maintainer',
+    });
+    expect(reset.status).toBe('committed');
+    expect(reset.rejected).toEqual([]);
+    const fields = readAgentModuleFieldSnapshot_ACU(chat).records.infoGap?.['G2']?.fields;
+    expect(fields?.['revealStatus']?.value).toBe('unrevealed');
+    expect(fields?.['revealIndex']?.value).toBeNull();
+    const conflict = await commit({ chat, targetIndex: 1,
+      sql: "UPDATE info_gap SET reveal_status = 'unrevealed', reveal_index = 1 WHERE id = 'G2'",
+      role: 'hook-cognition-maintainer',
+    });
+    expect(conflict.status).toBe('rejected');
+    expect(conflict.rejected).toEqual(expect.arrayContaining([expect.objectContaining({ path: 'infoGap#G2.revealStatus' })]));
   });
 });

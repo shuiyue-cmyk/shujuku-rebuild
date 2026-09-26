@@ -312,11 +312,51 @@ describe('Agent 写集事务', () => {
   });
 
   it('信息差的揭示状态与揭示楼层必须自洽', () => {
-    const fakeReveal = delta_ACU({ expectedRevisions: { infoGap: 3 }, infoGap: [infoGapItem_ACU({ revealIndex: 6 })] });
+    // 适配 f385e0a5：同处未揭示条目的回显残留（E1+非空）已放行并清 null，此处用新建 E2 保留“未揭示不得携楼层”的拒绝语义。
+    const fakeReveal = delta_ACU({ expectedRevisions: { infoGap: 3 }, infoGap: [infoGapItem_ACU({ id: 'E2', revealIndex: 6 })] });
     expect(() => applyAgentModuleDelta_ACU(baseSnapshot_ACU(), fakeReveal, ['infoGap'], 6)).toThrowError(/揭示楼层必须为空/);
 
     const missingIndex = delta_ACU({ expectedRevisions: { infoGap: 3 }, infoGap: [infoGapItem_ACU({ revealStatus: 'partial' })] });
     expect(() => applyAgentModuleDelta_ACU(baseSnapshot_ACU(), missingIndex, ['infoGap'], 6)).toThrowError(/必须给出揭示楼层/);
+  });
+
+  it('upsert 回显残留时只清理同处未揭示条目（适配 fold 归一化，上游 f385e0a5）', () => {
+    // 本地 fold 已把持久化 unrevealed 条目的 revealIndex 归一为 null（见 validateInfoGapEntry_ACU），
+    // 上游“楼层号相同”判据恒不命中；此处既有同处 unrevealed 即判回显残留并清 null。
+    const foldedNull = baseSnapshot_ACU();
+    const repairedFolded = applyAgentModuleDelta_ACU(
+      foldedNull,
+      delta_ACU({ expectedRevisions: { infoGap: 3 }, infoGap: [infoGapItem_ACU({ revealIndex: 4 })] }),
+      ['infoGap'],
+      6,
+    ).snapshot;
+    expect(repairedFolded.infoGap[0]).toMatchObject({ revealStatus: 'unrevealed', revealIndex: null });
+
+    const existingDirty = baseSnapshot_ACU();
+    existingDirty.infoGap = existingDirty.infoGap.map(entry => ({ ...entry, revealIndex: 4 }));
+    const repaired = applyAgentModuleDelta_ACU(
+      existingDirty,
+      delta_ACU({ expectedRevisions: { infoGap: 3 }, infoGap: [infoGapItem_ACU({ revealIndex: 4 })] }),
+      ['infoGap'],
+      6,
+    ).snapshot;
+    expect(repaired.infoGap[0]).toMatchObject({ revealStatus: 'unrevealed', revealIndex: null });
+
+    const newInconsistent = delta_ACU({
+      expectedRevisions: { infoGap: 3 },
+      infoGap: [infoGapItem_ACU({ id: 'E2', revealIndex: 4 })],
+    });
+    expect(() => applyAgentModuleDelta_ACU(baseSnapshot_ACU(), newInconsistent, ['infoGap'], 6)).toThrowError(/揭示楼层必须为空/);
+
+    const differentDirtyIndex = delta_ACU({
+      expectedRevisions: { infoGap: 3 },
+      infoGap: [infoGapItem_ACU({ revealIndex: 5 })],
+    });
+    expect(() => applyAgentModuleDelta_ACU(existingDirty, differentDirtyIndex, ['infoGap'], 6)).toThrowError(/揭示楼层必须为空/);
+
+    const differentExistingStatus = baseSnapshot_ACU();
+    differentExistingStatus.infoGap = differentExistingStatus.infoGap.map(entry => ({ ...entry, revealStatus: 'partial' as const, revealIndex: 4 }));
+    expect(() => applyAgentModuleDelta_ACU(differentExistingStatus, delta_ACU({ expectedRevisions: { infoGap: 3 }, infoGap: [infoGapItem_ACU({ revealIndex: 4 })] }), ['infoGap'], 6)).toThrowError(/揭示楼层必须为空/);
   });
 
   it('patch 只改给定字段并保留其余字段，版本号照常递增', () => {
@@ -349,11 +389,14 @@ describe('Agent 写集事务', () => {
   it('信息差 patch 的合并结果必须满足揭示状态一致性', () => {
     const revealed = baseSnapshot_ACU();
     revealed.infoGap[0] = { ...revealed.infoGap[0], revealStatus: 'partial', revealIndex: 4 };
-    expect(() => applyAgentModuleDelta_ACU(revealed, delta_ACU({ infoGapPatches: [{ id: 'E1', revealStatus: 'unrevealed' }] }), ['infoGap'], 7))
-      .toThrowError(/揭示楼层必须同时清空/);
+    const reset = applyAgentModuleDelta_ACU(revealed, delta_ACU({ infoGapPatches: [{ id: 'E1', revealStatus: 'unrevealed' }] }), ['infoGap'], 7).snapshot;
+    expect(reset.infoGap[0]).toMatchObject({ revealStatus: 'unrevealed', revealIndex: null, topic: '守门人身份' });
 
     const fixed = applyAgentModuleDelta_ACU(revealed, delta_ACU({ infoGapPatches: [{ id: 'E1', revealStatus: 'unrevealed', revealIndex: null }] }), ['infoGap'], 7).snapshot;
     expect(fixed.infoGap[0]).toMatchObject({ revealStatus: 'unrevealed', revealIndex: null, topic: '守门人身份' });
+
+    expect(() => applyAgentModuleDelta_ACU(revealed, delta_ACU({ infoGapPatches: [{ id: 'E1', revealStatus: 'unrevealed', readerKnown: '另有线索' }] }), ['infoGap'], 7))
+      .toThrowError(/揭示楼层必须同时清空/);
   });
 
   it('空 delta 原样返回同一份快照，不产生无意义的版本递增', () => {
