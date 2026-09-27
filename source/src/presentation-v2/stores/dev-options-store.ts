@@ -8,13 +8,15 @@
  *   是否显示。开关 UI 在开发者一级页内；与总开关相互独立。
  * - vectorIndexAdvanced：交火模式页中的"召回参数"与"归档与分块"面板是否显示。
  * - warnLogEnabled：WARN 日志是否输出并写入运行日志，默认关闭。
+ *   这是 warn 采集的「常驻来源」，与 Debug 面板的临时采集各占一格（log-buffer 取或），
+ *   所以停止 Debug 不会关掉这里显式打开的常驻采集，本 store 也不会被 Debug 改写。
  * - apiReconfirm：API 预设变更后，其他使用 API 预设的位置是否标黄提醒二次确认。
  *   默认打开（保持现有行为）；关闭后全库不再标黄。缺省（老版本存量）视为打开。
  *
  * 新 UI 自有持久化，物理隔离于 settings_ACU。
  */
 import { defineStore } from 'pinia';
-import { setWarnLogEnabled as applyWarnLogEnabled } from '../../shared/log-buffer';
+import { setWarnLogEnabledByDevOption_ACU as applyWarnLogEnabled } from '../../shared/log-buffer';
 import { readSection, writeSection } from './persistence';
 
 const SECTION_KEY = 'devOptions';

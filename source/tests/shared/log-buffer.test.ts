@@ -19,16 +19,17 @@ import {
   formatArgs,
   _resetForTesting,
   setDebugLogEnabled,
-  setWarnLogEnabled,
+  setWarnLogEnabledByDevOption_ACU,
   isWarnLogEnabled,
   subscribeToClear,
 } from '../../src/shared/log-buffer';
 
 beforeEach(() => {
   _resetForTesting();
-  // 通用测试显式启用可选级别；默认关闭行为由独立用例验证
+  // 通用测试显式启用可选级别；默认关闭行为由独立用例验证。
+  // warn 走「常驻来源」（dev 选项）当夹具即可，双来源取或的矩阵见 warn-log-capture-sources.test.ts。
   setDebugLogEnabled(true);
-  setWarnLogEnabled(true);
+  setWarnLogEnabledByDevOption_ACU(true);
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -144,10 +145,10 @@ describe('clearLogs', () => {
   });
 
   it('记录调用方留痕供导出自查', () => {
-    clearLogs('debugPanel.startDebug');
+    clearLogs('debugPanel.stopDebug.autoExport');
     clearLogs('logViewer.clearAll');
     const history = getClearHistory_ACU();
-    expect(history.map(item => item.caller)).toEqual(['debugPanel.startDebug', 'logViewer.clearAll']);
+    expect(history.map(item => item.caller)).toEqual(['debugPanel.stopDebug.autoExport', 'logViewer.clearAll']);
     expect(history[0].at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 });
@@ -394,7 +395,7 @@ describe('敏感键脱敏', () => {
 describe('_resetForTesting', () => {
   it('重置所有状态', () => {
     pushLog('debug', ['[ACU]', '[SQL] test']);
-    setWarnLogEnabled(true);
+    setWarnLogEnabledByDevOption_ACU(true);
     subscribe(() => {});
     _resetForTesting();
     expect(getLogCount()).toBe(0);

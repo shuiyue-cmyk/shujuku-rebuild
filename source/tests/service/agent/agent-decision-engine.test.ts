@@ -850,9 +850,9 @@ describe('runAgentDecisionForPlot_ACU', () => {
   });
 
   it('全分片失败回退记 warn 并注明已回退原逻辑，不记 error', async () => {
-    const { isWarnLogEnabled, setWarnLogEnabled } = await import('../../../src/shared/log-buffer');
-    const prevWarnEnabled = isWarnLogEnabled();
-    setWarnLogEnabled(true);
+    // warn 采集走常驻来源开关；本用例只关心 console.warn 出声，结束就收回自己那一格
+    const { setWarnLogEnabledByDevOption_ACU } = await import('../../../src/shared/log-buffer');
+    setWarnLogEnabledByDevOption_ACU(true);
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
@@ -875,7 +875,7 @@ describe('runAgentDecisionForPlot_ACU', () => {
     } finally {
       warnSpy.mockRestore();
       errorSpy.mockRestore();
-      setWarnLogEnabled(prevWarnEnabled);
+      setWarnLogEnabledByDevOption_ACU(false);
     }
   });
 

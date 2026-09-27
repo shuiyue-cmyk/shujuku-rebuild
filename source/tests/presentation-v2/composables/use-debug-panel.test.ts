@@ -98,7 +98,7 @@ describe('useDebugPanel 跨 UI 开关', () => {
     expect(getAllLogs().some(e => e.message.includes('[repro]'))).toBe(true);
   });
 
-  it('复现：全新开始时清掉采集前旧日志', () => {
+  it('复现：全新开始不清空缓冲区，采集前的旧日志跟着一起导出', () => {
     setDebugLogEnabled(true);
     pushLog('debug', ['[repro] 采集前旧日志']);
     setDebugLogEnabled(false);
@@ -107,8 +107,8 @@ describe('useDebugPanel 跨 UI 开关', () => {
     const panel = mountPanel();
     expect(panel.active.value).toBe(false);
     panel.toggleDebug();
-    // 新会话开始，旧日志被清空
-    expect(getAllLogs().some(e => e.message.includes('[repro]'))).toBe(false);
+    // 语义变更：点「开始 Debug」不再 clearLogs，用户开着 Debug 之前攒的报错才是排查材料
+    expect(getAllLogs().some(e => e.message.includes('[repro]'))).toBe(true);
     panel.toggleDebug();
   });
 });

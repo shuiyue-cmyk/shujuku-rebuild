@@ -11,7 +11,7 @@ import {
   clearLogs,
   pushLog,
   setDebugLogEnabled,
-  setWarnLogEnabled,
+  setWarnLogEnabledByDevOption_ACU,
   _resetForTesting,
 } from '../../../src/shared/log-buffer';
 
@@ -46,7 +46,7 @@ beforeEach(() => {
   setActivePinia(createPinia());
   _resetForTesting();
   setDebugLogEnabled(true);
-  setWarnLogEnabled(true);
+  setWarnLogEnabledByDevOption_ACU(true);
 });
 
 describe('useLogViewer v9.5.4 修复', () => {

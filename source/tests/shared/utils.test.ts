@@ -57,7 +57,7 @@ import {
 import {
   _resetForTesting as resetLogBufferForTesting,
   getAllLogs,
-  setWarnLogEnabled,
+  setWarnLogEnabledByDevOption_ACU,
   subscribe,
 } from '../../src/shared/log-buffer';
 
@@ -608,7 +608,7 @@ describe('logWarn_ACU', () => {
 
   it('开启后恢复 console.warn、缓冲写入与订阅通知', () => {
     resetLogBufferForTesting();
-    setWarnLogEnabled(true);
+    setWarnLogEnabledByDevOption_ACU(true);
     const received: any[] = [];
     subscribe((entry) => received.push(entry));
     const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});

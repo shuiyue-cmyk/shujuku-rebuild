@@ -1967,6 +1967,7 @@ function readWarnLogEnabled() {
  *
  * 零 DOM 依赖的内存日志存储。
  * Error 始终写入；Debug / Warn 仅在对应采集开关开启时写入。
+ * Warn 的开关有两个互不覆盖的来源（开发者选项常驻 / Debug 面板临时），取「或」后生效。
  * presentation 层通过 subscribe 实时接收已写入的新日志并渲染到 UI。
  */
 // ═══════════════════════════════════════════════════════════════
@@ -2003,8 +2004,16 @@ const _clearHistory = [];
 const _clearSubscribers = new Set();
 /** debug 级别日志是否写入缓冲区（默认关闭，减少性能开销） */
 let _debugLogEnabled = false;
-/** warn 级别日志是否写入缓冲区（默认关闭，用户显式开启后才采集） */
-let _warnLogEnabled = readWarnLogEnabled();
+/**
+ * warn 级别日志是否写入缓冲区。有两个互不覆盖的开启来源，有效值 = 二者之或：
+ * - `_warnByDevOption`：开发者选项「WARN 日志」，用户显式持久化的常驻开关，不点 Debug 也生效；
+ * - `_warnByDebugCapture`：Debug 面板「开始 Debug」带来的临时开关，停止 Debug 时收回。
+ *
+ * 为什么不是一个布尔：两个入口曾写同一个变量，于是「停止 Debug」把该用户常驻的 warn 采集顺带关掉、
+ * 采集期间改任一开发者选项又把 Debug 的临时采集关掉。按来源分治后，每个入口只允许动自己那一格。
+ */
+let _warnByDevOption = readWarnLogEnabled();
+let _warnByDebugCapture = false;
 // ═══════════════════════════════════════════════════════════════
 // 公共 API
 // ═══════════════════════════════════════════════════════════════
@@ -2168,17 +2177,25 @@ function isDebugLogEnabled() {
     return _debugLogEnabled;
 }
 /**
- * 设置 warn 级别日志是否启用。
- * logWarn_ACU 复用此状态控制 console.warn，pushLog 复用此状态控制缓冲写入与订阅通知。
+ * 设置 warn 采集的「常驻来源」——开发者选项 warnLogEnabled 的唯一入口（dev-options-store）。
+ * 用户显式开了这项，不点 Debug 也要采 warn；这里置 false 只收回常驻那一格，
+ * 不会牵动 Debug 面板正在用的临时采集（有效值 = 常驻 ∪ 临时，见 isWarnLogEnabled）。
  */
-function setWarnLogEnabled(enabled) {
-    _warnLogEnabled = enabled;
+function setWarnLogEnabledByDevOption_ACU(enabled) {
+    _warnByDevOption = enabled === true;
 }
 /**
- * 获取 warn 级别日志是否启用
+ * 设置 warn 采集的「临时来源」——Debug 面板专用：开始 Debug 置 true，停止 Debug 置回 false。
+ * logWarn_ACU 的 console.warn 与 pushLog 的缓冲写入都只看两个来源的「或」，故此处不判断常驻值。
+ */
+function setWarnLogEnabledByDebugCapture_ACU(enabled) {
+    _warnByDebugCapture = enabled === true;
+}
+/**
+ * 获取 warn 级别日志是否启用（两个来源任一开启即启用）。
  */
 function isWarnLogEnabled() {
-    return _warnLogEnabled;
+    return _warnByDevOption || _warnByDebugCapture;
 }
 /**
  * 推送一条日志到缓冲区
@@ -2189,7 +2206,7 @@ function pushLog(level, args) {
     // 可选日志级别禁用时直接跳过，避免噪声与不必要的序列化开销
     if (level === 'debug' && !_debugLogEnabled)
         return;
-    if (level === 'warn' && !_warnLogEnabled)
+    if (level === 'warn' && !isWarnLogEnabled())
         return;
     const tag = extractTag(args);
     _knownTags.add(tag);
@@ -2336,7 +2353,8 @@ function _resetForTesting() {
     _clearHistory.length = 0;
     _clearSubscribers.clear();
     _debugLogEnabled = false;
-    _warnLogEnabled = false;
+    _warnByDevOption = false;
+    _warnByDebugCapture = false;
 }
 
 /**
@@ -91580,7 +91598,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.8.4" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.8.5" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -151261,7 +151279,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260927-14";
+        const stamp = "20260927-15";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -171266,6 +171284,8 @@ function __resetPersistenceForTests() {
  *   是否显示。开关 UI 在开发者一级页内；与总开关相互独立。
  * - vectorIndexAdvanced：交火模式页中的"召回参数"与"归档与分块"面板是否显示。
  * - warnLogEnabled：WARN 日志是否输出并写入运行日志，默认关闭。
+ *   这是 warn 采集的「常驻来源」，与 Debug 面板的临时采集各占一格（log-buffer 取或），
+ *   所以停止 Debug 不会关掉这里显式打开的常驻采集，本 store 也不会被 Debug 改写。
  * - apiReconfirm：API 预设变更后，其他使用 API 预设的位置是否标黄提醒二次确认。
  *   默认打开（保持现有行为）；关闭后全库不再标黄。缺省（老版本存量）视为打开。
  *
@@ -171294,7 +171314,7 @@ function persist$2(state) {
 const useDevOptionsStore = defineStore('acu-v2-dev-options', {
     state: () => {
         const state = loadFromStorage$1();
-        setWarnLogEnabled(state.warnLogEnabled);
+        setWarnLogEnabledByDevOption_ACU(state.warnLogEnabled);
         return state;
     },
     actions: {
@@ -171312,7 +171332,7 @@ const useDevOptionsStore = defineStore('acu-v2-dev-options', {
         },
         setWarnLogEnabled(enabled) {
             this.warnLogEnabled = !!enabled;
-            setWarnLogEnabled(this.warnLogEnabled);
+            setWarnLogEnabledByDevOption_ACU(this.warnLogEnabled);
             persist$2(this.$state);
         },
         setApiReconfirm(enabled) {
@@ -171326,7 +171346,7 @@ const useDevOptionsStore = defineStore('acu-v2-dev-options', {
             this.vectorIndexAdvanced = next.vectorIndexAdvanced;
             this.warnLogEnabled = next.warnLogEnabled;
             this.apiReconfirm = next.apiReconfirm;
-            setWarnLogEnabled(this.warnLogEnabled);
+            setWarnLogEnabledByDevOption_ACU(this.warnLogEnabled);
         },
     },
 });
@@ -197356,12 +197376,12 @@ function useLogViewer() {
  * - settingsSnapshot：全量 settings_ACU 脱敏快照
  * - worldbookDebug：最近一次世界书扫描（entryCount/baseScanLen/chatLen/triggeredCount/shouldUseWorker）
  * - lastApiBody：最近一次 buildCustomApiRequestBody 完整请求体（脱敏）与时间
- * - logs：log-buffer 全量日志（含 Debug 采集开启后的细粒度日志）
+ * - logs：调用那一刻 log-buffer 缓冲区全量（含点 Debug 之前攒下的 error，不按采集起始切片）
  * - tables：表名 + 行数 + 脱敏 sampleRows（前 3 行各前 8 列，超长截断）
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260927-14";
+        const stamp = "20260927-15";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -197370,7 +197390,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.8.4";
+        const v = "9.8.5";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {
@@ -197464,15 +197484,136 @@ function downloadJson(filename, data) {
     // 延迟 revoke：WebView2/部分内核在 click 后立即 revoke 会取消下载
     setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-/** Debug 开启时刻（模块级，与采集开关同寿命）：导出时只包含开启后的日志 */
+/**
+ * Debug 开启时刻（模块级，与采集开关同寿命）。
+ * 只用作导出 meta 的「本次采集起始」标注：导出内容 = 调用时的缓冲区全量，不再按它切片。
+ */
 let debugStartedAt_ACU = 0;
 /** 采集开关显示态（模块级）：与 log-buffer 真实开关一致，跨 UI 开关不丢。 */
 const debugActive_ACU = ref(false);
+/** 两条导出路径（手动 / 停止自动）共用同一文件名格式 */
+function debugExportFilename_ACU() {
+    return `acu-debug-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+}
+/**
+ * 两条 Debug 导出路径共用的 payload 构造：面板「导出 Debug 数据」与停止 Debug 的自动导出必须
+ * 出自同一函数，否则改字段 / 改脱敏只改到一处，两份导出件内容就不一致（此前正是两份复制代码）。
+ *
+ * 入参 logs 传「调用那一刻的缓冲区全量」（含点 Debug 之前攒下的 error）。
+ * `meta.debugStartedAt` 仍写：值取本次采集起始；面板没记到（采集被外部提前打开）时退化为
+ * 最早日志时间，再退化为当前时间——字段恒在，读的人一眼能看出这份包从什么时候开始采。
+ *
+ * 导出仅供测试当复用锚点（断言两条路径的产物就是本函数产物），业务侧一律走面板入口。
+ */
+function buildDebugExportPayload_ACU(logs) {
+    const effectiveStart = debugStartedAt_ACU || (logs[0]?.timestamp ?? Date.now());
+    const cfg = settings_ACU?.apiConfig || {};
+    const activePreset = (() => {
+        try {
+            const name = String(settings_ACU?.apiPresetBindingsByChat?.[String(currentChatFileIdentifier_ACU || '').trim()]?.presetName || settings_ACU?.defaultApiPresetName || '').trim();
+            if (!name)
+                return null;
+            const list = Array.isArray(settings_ACU?.apiPresets) ? settings_ACU.apiPresets : [];
+            return list.find((p) => p?.name === name) || null;
+        }
+        catch {
+            return null;
+        }
+    })();
+    const presetCfg = activePreset?.apiConfig || null;
+    const env = {
+        host: getAcuHostKind(),
+        buildStamp: getBuildStamp(),
+        version: getPluginVersion(),
+        exportedAt: new Date().toISOString(),
+        chatId: currentChatFileIdentifier_ACU,
+        streamingEnabled: presetCfg ? presetCfg.streamingEnabled === true : settings_ACU?.streamingEnabled === true,
+        streamingEnabledGlobal: settings_ACU?.streamingEnabled === true,
+        streamingEnabledPreset: presetCfg ? presetCfg.streamingEnabled === true : undefined,
+        reasoningEffort: presetCfg?.reasoningEffort || settings_ACU?.reasoningEffort || 'medium',
+        reasoningEffortPreset: presetCfg?.reasoningEffort,
+        reasoningEffortGlobal: settings_ACU?.reasoningEffort,
+        activePresetName: activePreset?.name || '',
+        worldbookSource: settings_ACU?.worldbookConfig?.source || settings_ACU?.characterSettings?.[String(currentChatFileIdentifier_ACU || '').trim()]?.worldbookConfig?.source || '',
+        formFillPromptLength: Array.isArray(settings_ACU?.charCardPrompt) ? settings_ACU.charCardPrompt.length : 0,
+        nonPrefillSupport: settings_ACU?.nonPrefillSupport === true,
+        nonPrefillSupportPreset: activePreset?.nonPrefillSupport,
+        apiMode: settings_ACU?.apiMode || '',
+        apiConfig: {
+            url: typeof cfg.url === 'string' ? maskSensitiveString(cfg.url) : '',
+            model: typeof cfg.model === 'string' ? cfg.model : '',
+            apiKey: maskSecret(cfg.apiKey),
+            temperature: cfg.temperature,
+            max_tokens: cfg.max_tokens,
+        },
+        plotEnabled: settings_ACU?.plotSettings?.enabled === true,
+    };
+    let tables = {};
+    try {
+        tables = buildDebugTables_ACU();
+    }
+    catch { /* 表统计失败不影响导出 */ }
+    let settingsSnapshot = null;
+    try {
+        settingsSnapshot = maskSensitiveFields(JSON.parse(JSON.stringify(settings_ACU)));
+    }
+    catch {
+        settingsSnapshot = '[Snapshot failed]';
+    }
+    const worldbookDebug = (() => {
+        try {
+            return globalThis.__ACU_DEBUG_LAST_WORLDBOOK__ || null;
+        }
+        catch {
+            return null;
+        }
+    })();
+    const lastApiBody = (() => {
+        try {
+            return globalThis.__ACU_DEBUG_LAST_API_BODY__ || null;
+        }
+        catch {
+            return null;
+        }
+    })();
+    const lastApiBodyAt = (() => {
+        try {
+            return globalThis.__ACU_DEBUG_LAST_API_BODY_AT__ || null;
+        }
+        catch {
+            return null;
+        }
+    })();
+    return {
+        meta: {
+            plugin: 'TTonly·数据库',
+            version: env.version,
+            buildStamp: env.buildStamp,
+            host: env.host,
+            exportedAt: env.exportedAt,
+            debugStartedAt: new Date(effectiveStart).toISOString(),
+        },
+        env,
+        settingsSnapshot,
+        worldbookDebug: worldbookDebug ? maskSensitiveFields(worldbookDebug) : null,
+        lastApiBody: lastApiBody ? maskSensitiveFields(lastApiBody) : null,
+        lastApiBodyAt: lastApiBodyAt ? new Date(lastApiBodyAt).toISOString() : null,
+        logCount: logs.length,
+        clearHistory: getClearHistory_ACU(),
+        logs: logs.map((e) => ({
+            time: new Date(e.timestamp).toISOString(),
+            level: e.level,
+            tag: e.tag,
+            message: maskSensitiveString(e.message),
+        })),
+        tables,
+    };
+}
 function useDebugPanel() {
     const toast = useToastStore();
     // 模块级共享：关闭/重开数据库 UI 只是组件卸载，采集开关（log-buffer 模块级）
     // 不受影响；按钮状态必须跟开关一致，否则出现“显示未开启、实际采集中”，
-    // 且再次点开始会 clearLogs 洗掉已采集的日志。
+    // 用户再点一次就会把 debugStartedAt 标注重置到更晚，导出 meta 里的采集起始对不上真实首轮复现。
     const active = debugActive_ACU;
     const entryCount = ref(0);
     let unsubscribe = null;
@@ -197482,146 +197623,50 @@ function useDebugPanel() {
         entryCount.value = getLogCount();
     }
     function startDebug() {
-        // 以本面板会话态为准（而非原始 flag）：flag 可能被外部提前打开，
-        // 此时旧日志不属于本次排查，必须清掉；只有本会话已在采集中才保留。
-        const alreadyCollecting = active.value;
         setDebugLogEnabled(true);
-        setWarnLogEnabled(true);
-        if (!alreadyCollecting) {
-            // 清空旧日志，让导出只含本次排查内容
-            clearLogs('debugPanel.startDebug');
+        // 只动 Debug 自己的 warn 来源：开发者选项已开启的常驻采集不归本面板管，不能被牵连。
+        setWarnLogEnabledByDebugCapture_ACU(true);
+        if (!active.value) {
+            // 刻意不清空缓冲区：用户通常是「问题已经发生过」才想起开 Debug，采集前攒下的 error
+            // 正是这次排查要一起导出的材料，在这里 clearLogs 等于把诊断现场洗掉。
+            // debugStartedAt 只留作导出 meta 的采集起始标注，不再是导出切片依据。
             debugStartedAt_ACU = Date.now();
         }
         active.value = true;
         refreshCount();
-        toast.info('Debug 采集已开启：请复现问题，完成后点「导出 Debug 数据」。');
+        toast.info('Debug 采集已开启：请复现问题，完成后点「导出 Debug 数据」（开启前的报错也会一起导出）。');
     }
     function stopDebug() {
         if (!active.value) {
             toast.warning('Debug 未开启，无需停止。');
             return;
         }
-        // 增强：停止时自动导出一次，避免用户忘记点导出
+        // 增强：停止时自动导出一次，避免用户忘记点导出。导出范围＝缓冲区全量（含采集前的 error）。
         try {
-            const allLogs = getAllLogs();
-            const logs = debugStartedAt_ACU ? allLogs.filter((e) => e.timestamp >= debugStartedAt_ACU) : allLogs;
+            const logs = getAllLogs();
             if (logs.length > 0) {
-                // 复用导出逻辑但不依赖 active 状态
-                const effectiveStart = debugStartedAt_ACU || (allLogs[0]?.timestamp ?? Date.now());
-                const cfg = settings_ACU?.apiConfig || {};
-                const activePreset = (() => {
-                    try {
-                        const name = String(settings_ACU?.apiPresetBindingsByChat?.[String(currentChatFileIdentifier_ACU || '').trim()]?.presetName || settings_ACU?.defaultApiPresetName || '').trim();
-                        if (!name)
-                            return null;
-                        const list = Array.isArray(settings_ACU?.apiPresets) ? settings_ACU.apiPresets : [];
-                        return list.find((p) => p?.name === name) || null;
-                    }
-                    catch {
-                        return null;
-                    }
-                })();
-                const presetCfg = activePreset?.apiConfig || null;
-                const env = {
-                    host: getAcuHostKind(),
-                    buildStamp: getBuildStamp(),
-                    version: getPluginVersion(),
-                    exportedAt: new Date().toISOString(),
-                    chatId: currentChatFileIdentifier_ACU,
-                    streamingEnabled: presetCfg ? presetCfg.streamingEnabled === true : settings_ACU?.streamingEnabled === true,
-                    streamingEnabledGlobal: settings_ACU?.streamingEnabled === true,
-                    streamingEnabledPreset: presetCfg ? presetCfg.streamingEnabled === true : undefined,
-                    reasoningEffort: presetCfg?.reasoningEffort || settings_ACU?.reasoningEffort || 'medium',
-                    reasoningEffortPreset: presetCfg?.reasoningEffort,
-                    reasoningEffortGlobal: settings_ACU?.reasoningEffort,
-                    activePresetName: activePreset?.name || '',
-                    worldbookSource: settings_ACU?.worldbookConfig?.source || settings_ACU?.characterSettings?.[String(currentChatFileIdentifier_ACU || '').trim()]?.worldbookConfig?.source || '',
-                    formFillPromptLength: Array.isArray(settings_ACU?.charCardPrompt) ? settings_ACU.charCardPrompt.length : 0,
-                    nonPrefillSupport: settings_ACU?.nonPrefillSupport === true,
-                    nonPrefillSupportPreset: activePreset?.nonPrefillSupport,
-                    apiMode: settings_ACU?.apiMode || '',
-                    apiConfig: {
-                        url: typeof cfg.url === 'string' ? maskSensitiveString(cfg.url) : '',
-                        model: typeof cfg.model === 'string' ? cfg.model : '',
-                        apiKey: maskSecret(cfg.apiKey),
-                        temperature: cfg.temperature,
-                        max_tokens: cfg.max_tokens,
-                    },
-                    plotEnabled: settings_ACU?.plotSettings?.enabled === true,
-                };
-                let tables = {};
-                try {
-                    tables = buildDebugTables_ACU();
-                }
-                catch { }
-                let settingsSnapshot = null;
-                try {
-                    settingsSnapshot = maskSensitiveFields(JSON.parse(JSON.stringify(settings_ACU)));
-                }
-                catch {
-                    settingsSnapshot = '[Snapshot failed]';
-                }
-                const worldbookDebug = (() => {
-                    try {
-                        return globalThis.__ACU_DEBUG_LAST_WORLDBOOK__ || null;
-                    }
-                    catch {
-                        return null;
-                    }
-                })();
-                const lastApiBody = (() => {
-                    try {
-                        return globalThis.__ACU_DEBUG_LAST_API_BODY__ || null;
-                    }
-                    catch {
-                        return null;
-                    }
-                })();
-                const lastApiBodyAt = (() => {
-                    try {
-                        return globalThis.__ACU_DEBUG_LAST_API_BODY_AT__ || null;
-                    }
-                    catch {
-                        return null;
-                    }
-                })();
-                const payload = {
-                    meta: {
-                        plugin: 'TTonly·数据库',
-                        version: env.version,
-                        buildStamp: env.buildStamp,
-                        host: env.host,
-                        exportedAt: env.exportedAt,
-                        debugStartedAt: new Date(effectiveStart).toISOString(),
-                    },
-                    env,
-                    settingsSnapshot,
-                    worldbookDebug: worldbookDebug ? maskSensitiveFields(worldbookDebug) : null,
-                    lastApiBody: lastApiBody ? maskSensitiveFields(lastApiBody) : null,
-                    lastApiBodyAt: lastApiBodyAt ? new Date(lastApiBodyAt).toISOString() : null,
-                    logCount: logs.length,
-                    clearHistory: getClearHistory_ACU(),
-                    logs: logs.map((e) => ({
-                        time: new Date(e.timestamp).toISOString(),
-                        level: e.level,
-                        tag: e.tag,
-                        message: maskSensitiveString(e.message),
-                    })),
-                    tables,
-                };
-                const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-                downloadJson(`acu-debug-${stamp}.json`, payload);
-                toast.success(`Debug 采集已停止，已自动导出 ${logs.length} 条日志。`);
+                const payload = buildDebugExportPayload_ACU(logs);
+                downloadJson(debugExportFilename_ACU(), payload);
+                // 清空只能在 downloadJson 成功返回之后：下载没成就把缓冲区留着，
+                // 否则「自动导出失败」会变成「日志也没了」，用户连手动导出的机会都被洗掉。
+                clearLogs('debugPanel.stopDebug.autoExport');
+                // blob 下载在页面内没有"已落盘"的回读信号，`a.click()` 不抛只能证明"已交给浏览器"，
+                // 因此措辞止步于此，不写成"导出成功/已保存"——用户按提示去下载列表确认才算闭环。
+                toast.success(`Debug 采集已停止，已生成 ${payload.logCount} 条日志的导出文件并交给浏览器下载（请在下载列表确认）。`);
             }
             else {
                 toast.success('Debug 采集已停止（无日志可导出）。');
             }
         }
         catch (e) {
-            toast.success('Debug 采集已停止（自动导出失败，请手动导出）。');
+            // 如实报错：这里曾走 toast.success，把失败说成成功，用户以为已经导出就不再手动导出。
+            // 提示本身也要脱敏：宿主/内核的错误文案可能回显带密钥的 URL。
+            // 指引必须可执行：未开启采集时「导出 Debug 数据」按钮是禁用的（composable 也有同语义守卫），
+            // 所以这里要让用户先重新「开始 Debug」——新语义下它不再清空缓冲区，保留的日志仍在。
+            toast.warning(`Debug 采集已停止，但自动导出失败：${maskSensitiveText_ACU(e?.message || '未知错误')}。日志缓冲区已保留，请重新点「开始 Debug」（现在不会清空日志），再点「导出 Debug 数据」手动导出。`, { muteable: false, durationMs: 8000 });
         }
         setDebugLogEnabled(false);
-        setWarnLogEnabled(false);
+        setWarnLogEnabledByDebugCapture_ACU(false);
         active.value = false;
         debugStartedAt_ACU = 0;
     }
@@ -197636,118 +197681,15 @@ function useDebugPanel() {
             toast.warning('请先开启 Debug 采集再导出。');
             return;
         }
-        const allLogs = getAllLogs();
-        // 仅当通过本页 startDebug 启动时才按时间切片；持久化 active 导致 startedAt===0 时不切片，避免空导出
-        const logs = debugStartedAt_ACU ? allLogs.filter((e) => e.timestamp >= debugStartedAt_ACU) : allLogs;
-        const effectiveStart = debugStartedAt_ACU || (allLogs[0]?.timestamp ?? Date.now());
-        const cfg = settings_ACU?.apiConfig || {};
-        const activePreset = (() => {
-            try {
-                const name = String(settings_ACU?.apiPresetBindingsByChat?.[String(currentChatFileIdentifier_ACU || '').trim()]?.presetName || settings_ACU?.defaultApiPresetName || '').trim();
-                if (!name)
-                    return null;
-                const list = Array.isArray(settings_ACU?.apiPresets) ? settings_ACU.apiPresets : [];
-                return list.find((p) => p?.name === name) || null;
-            }
-            catch {
-                return null;
-            }
-        })();
-        const presetCfg = activePreset?.apiConfig || null;
-        const env = {
-            host: getAcuHostKind(),
-            buildStamp: getBuildStamp(),
-            version: getPluginVersion(),
-            exportedAt: new Date().toISOString(),
-            chatId: currentChatFileIdentifier_ACU,
-            streamingEnabled: presetCfg ? presetCfg.streamingEnabled === true : settings_ACU?.streamingEnabled === true,
-            streamingEnabledGlobal: settings_ACU?.streamingEnabled === true,
-            streamingEnabledPreset: presetCfg ? presetCfg.streamingEnabled === true : undefined,
-            reasoningEffort: presetCfg?.reasoningEffort || settings_ACU?.reasoningEffort || 'medium',
-            reasoningEffortPreset: presetCfg?.reasoningEffort,
-            reasoningEffortGlobal: settings_ACU?.reasoningEffort,
-            activePresetName: activePreset?.name || '',
-            worldbookSource: settings_ACU?.worldbookConfig?.source || settings_ACU?.characterSettings?.[String(currentChatFileIdentifier_ACU || '').trim()]?.worldbookConfig?.source || '',
-            formFillPromptLength: Array.isArray(settings_ACU?.charCardPrompt) ? settings_ACU.charCardPrompt.length : 0,
-            nonPrefillSupport: settings_ACU?.nonPrefillSupport === true,
-            nonPrefillSupportPreset: activePreset?.nonPrefillSupport,
-            apiMode: settings_ACU?.apiMode || '',
-            apiConfig: {
-                url: typeof cfg.url === 'string' ? maskSensitiveString(cfg.url) : '',
-                model: typeof cfg.model === 'string' ? cfg.model : '',
-                apiKey: maskSecret(cfg.apiKey),
-                temperature: cfg.temperature,
-                max_tokens: cfg.max_tokens,
-            },
-            plotEnabled: settings_ACU?.plotSettings?.enabled === true,
-        };
-        let tables = {};
-        try {
-            tables = buildDebugTables_ACU();
-        }
-        catch { /* 表统计失败不影响导出 */ }
-        let settingsSnapshot = null;
-        try {
-            settingsSnapshot = maskSensitiveFields(JSON.parse(JSON.stringify(settings_ACU)));
-        }
-        catch {
-            settingsSnapshot = '[Snapshot failed]';
-        }
-        const worldbookDebug = (() => {
-            try {
-                return globalThis.__ACU_DEBUG_LAST_WORLDBOOK__ || null;
-            }
-            catch {
-                return null;
-            }
-        })();
-        const lastApiBody = (() => {
-            try {
-                return globalThis.__ACU_DEBUG_LAST_API_BODY__ || null;
-            }
-            catch {
-                return null;
-            }
-        })();
-        const lastApiBodyAt = (() => {
-            try {
-                return globalThis.__ACU_DEBUG_LAST_API_BODY_AT__ || null;
-            }
-            catch {
-                return null;
-            }
-        })();
-        const payload = {
-            meta: {
-                plugin: 'TTonly·数据库',
-                version: env.version,
-                buildStamp: env.buildStamp,
-                host: env.host,
-                exportedAt: env.exportedAt,
-                debugStartedAt: new Date(effectiveStart).toISOString(),
-            },
-            env,
-            settingsSnapshot,
-            worldbookDebug: worldbookDebug ? maskSensitiveFields(worldbookDebug) : null,
-            lastApiBody: lastApiBody ? maskSensitiveFields(lastApiBody) : null,
-            lastApiBodyAt: lastApiBodyAt ? new Date(lastApiBodyAt).toISOString() : null,
-            logCount: logs.length,
-            clearHistory: getClearHistory_ACU(),
-            logs: logs.map((e) => ({
-                time: new Date(e.timestamp).toISOString(),
-                level: e.level,
-                tag: e.tag,
-                message: maskSensitiveString(e.message),
-            })),
-            tables,
-        };
-        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-        downloadJson(`acu-debug-${stamp}.json`, payload);
-        toast.success(`已导出 ${logs.length} 条日志。`);
+        // 手动导出不清空：用户可以边复现边反复导出，只有停止 Debug 的自动导出才做收尾清空。
+        const payload = buildDebugExportPayload_ACU(getAllLogs());
+        downloadJson(debugExportFilename_ACU(), payload);
+        toast.success(`已生成 ${payload.logCount} 条日志的导出文件并交给浏览器下载（请在下载列表确认）。`);
     }
     onMounted(() => {
         // 进页不自动开启，但也不强关：如有关闭 UI 前开的采集（log-buffer 开关还在），
-        // 按钮必须显示“采集中”，否则用户会以为没开、重按开始把已采日志洗掉。
+        // 按钮必须显示“采集中”，否则用户会以为没开、重按开始把采集起始标注改到更晚，
+        // 导出 meta 里的 debugStartedAt 就对不上真实的第一次采集。
         active.value = isDebugLogEnabled();
         if (!active.value)
             debugStartedAt_ACU = 0;
@@ -197872,8 +197814,8 @@ var _sfc_main$c = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-v2-advanced-tools-page[data-v-0ccbee42] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-advanced-tools-page__sql-panel[data-v-0ccbee42],\r\n.acu-v2-advanced-tools-page__log-panel[data-v-0ccbee42],\r\n.acu-v2-advanced-tools-page__debug-panel[data-v-0ccbee42] {\r\n  min-width: 0;\n}\n.acu-v2-advanced-tools-page__debug-actions[data-v-0ccbee42] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__quick-actions[data-v-0ccbee42],\r\n.acu-v2-advanced-tools-page__log-actions[data-v-0ccbee42] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-textarea[data-v-0ccbee42] {\r\n  font-family: var(--acu-font-mono);\r\n  min-height: 210px;\r\n  white-space: pre;\n}\n.acu-v2-advanced-tools-page__sql-actions[data-v-0ccbee42] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\r\n  justify-content: flex-end;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-advanced-tools-page__sql-status[data-v-0ccbee42] {\r\n  margin-left: auto;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.5;\n}\n.acu-v2-advanced-tools-page__sql-status--success[data-v-0ccbee42] {\r\n  color: var(--acu-success);\n}\n.acu-v2-advanced-tools-page__sql-status--warning[data-v-0ccbee42] {\r\n  color: var(--acu-warning);\n}\n.acu-v2-advanced-tools-page__sql-status--error[data-v-0ccbee42] {\r\n  color: var(--acu-danger);\n}\n.acu-v2-advanced-tools-page__sql-result-section[data-v-0ccbee42],\r\n.acu-v2-advanced-tools-page__sql-history-section[data-v-0ccbee42] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-v2-advanced-tools-page__sql-history-section[data-v-0ccbee42] {\r\n  padding-top: 12px;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n}\n.acu-v2-advanced-tools-page__section-title[data-v-0ccbee42] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 600;\r\n  line-height: 1.35;\n}\n.acu-v2-advanced-tools-page__empty[data-v-0ccbee42] {\r\n  min-height: 96px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: center;\r\n  border: 0;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__empty--compact[data-v-0ccbee42] {\r\n  min-height: 72px;\n}\n.acu-v2-advanced-tools-page__empty--log[data-v-0ccbee42] {\r\n  min-height: 180px;\r\n  border: 0;\n}\n.acu-v2-advanced-tools-page__sql-table-wrap[data-v-0ccbee42] {\r\n  max-height: 330px;\r\n  overflow: auto;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-result-table[data-v-0ccbee42] {\r\n  width: 100%;\r\n  border-collapse: collapse;\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-advanced-tools-page__sql-result-table th[data-v-0ccbee42],\r\n.acu-v2-advanced-tools-page__sql-result-table td[data-v-0ccbee42] {\r\n  max-width: 300px;\r\n  padding: 7px 10px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  text-align: left;\r\n  white-space: nowrap;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\n}\n.acu-v2-advanced-tools-page__sql-result-table th[data-v-0ccbee42] {\r\n  position: sticky;\r\n  top: 0;\r\n  z-index: 1;\r\n  background: var(--acu-bg-1);\r\n  color: var(--acu-text-1);\r\n  font-weight: 600;\n}\n.acu-v2-advanced-tools-page__sql-result-table tbody tr[data-v-0ccbee42]:nth-child(even) {\r\n  background: color-mix(in srgb, var(--acu-text-3) 5%, transparent);\n}\n.acu-v2-advanced-tools-page__cell-null[data-v-0ccbee42],\r\n.acu-v2-advanced-tools-page__empty-cell[data-v-0ccbee42] {\r\n  color: var(--acu-text-3);\r\n  font-style: italic;\n}\n.acu-v2-advanced-tools-page__sql-result-meta[data-v-0ccbee42] {\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: right;\n}\n.acu-v2-advanced-tools-page__sql-error[data-v-0ccbee42] {\r\n  margin: 0;\r\n  min-height: 96px;\r\n  padding: 12px;\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-danger) 8%, transparent);\r\n  color: var(--acu-danger);\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__filter-grid[data-v-0ccbee42] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 12px;\r\n  align-items: stretch;\n}\n.acu-v2-advanced-tools-page__keyword-row[data-v-0ccbee42] {\r\n  grid-column: 1 / -1;\n}\n.acu-v2-advanced-tools-page__log-control-row[data-v-0ccbee42] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  min-width: 0;\n}\n.acu-v2-advanced-tools-page__log-control-main[data-v-0ccbee42] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 10px 14px;\r\n  align-items: center;\r\n  justify-content: space-between;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-0ccbee42] {\r\n  width: max-content;\r\n  max-width: 100%;\r\n  display: grid;\r\n  grid-template-columns: max-content max-content;\r\n  gap: 10px 18px;\r\n  align-items: center;\r\n  justify-content: flex-start;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-0ccbee42] .acu-toggle {\r\n  width: max-content;\r\n  max-width: none;\r\n  min-width: max-content;\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-0ccbee42] .acu-toggle__label {\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__hint[data-v-0ccbee42] {\r\n  max-width: 100%;\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\r\n  overflow-wrap: anywhere;\n}\n.acu-v2-advanced-tools-page__sql-history-list[data-v-0ccbee42],\r\n.acu-v2-advanced-tools-page__log-list[data-v-0ccbee42] {\r\n  overflow: auto;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-list[data-v-0ccbee42] {\r\n  max-height: 230px;\n}\n.acu-v2-advanced-tools-page__log-list[data-v-0ccbee42] {\r\n  min-height: 360px;\r\n  max-height: 58vh;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-0ccbee42],\r\n.acu-v2-advanced-tools-page__log-row[data-v-0ccbee42] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 8px;\r\n  align-items: baseline;\r\n  padding: 7px 10px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-0ccbee42] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: stretch;\r\n  gap: 6px;\r\n  padding-block: 9px;\r\n  border: 0;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  background: transparent;\r\n  color: inherit;\r\n  cursor: pointer;\r\n  font: inherit;\r\n  text-align: left;\r\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-advanced-tools-page__log-row[data-v-0ccbee42] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: stretch;\r\n  gap: 6px;\r\n  padding-block: 9px;\n}\n.acu-v2-advanced-tools-page__log-meta[data-v-0ccbee42] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 6px 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-history-meta[data-v-0ccbee42] {\r\n  flex-wrap: nowrap;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-0ccbee42]:last-child,\r\n.acu-v2-advanced-tools-page__log-row[data-v-0ccbee42]:last-child {\r\n  border-bottom: 0;\n}\n.acu-v2-advanced-tools-page__sql-history-item--failure[data-v-0ccbee42],\r\n.acu-v2-advanced-tools-page__log-row--error[data-v-0ccbee42] {\r\n  background: color-mix(in srgb, var(--acu-danger) 7%, transparent);\n}\n.acu-v2-advanced-tools-page__log-row--warn[data-v-0ccbee42] {\r\n  background: color-mix(in srgb, var(--acu-warning) 6%, transparent);\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-0ccbee42]:hover {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-0ccbee42]:focus-visible {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\r\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\r\n  outline: none;\n}\n.acu-v2-advanced-tools-page__log-time[data-v-0ccbee42],\r\n.acu-v2-advanced-tools-page__log-tag[data-v-0ccbee42],\r\n.acu-v2-advanced-tools-page__log-message[data-v-0ccbee42] {\r\n  min-width: 0;\r\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-advanced-tools-page__log-time[data-v-0ccbee42] {\r\n  color: var(--acu-text-3);\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__log-tag[data-v-0ccbee42] {\r\n  flex: 1 1 180px;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  color: var(--acu-text-2);\n}\n.acu-v2-advanced-tools-page__log-message[data-v-0ccbee42] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__log-body[data-v-0ccbee42] {\r\n  display: block;\r\n  width: 100%;\n}\n.acu-v2-advanced-tools-page__log-hint[data-v-0ccbee42] {\r\n  min-width: 0;\r\n  margin-top: 2px;\r\n  border-left: 2px solid color-mix(in srgb, var(--acu-warning) 70%, transparent);\r\n  border-radius: 0 var(--acu-radius-sm) var(--acu-radius-sm) 0;\r\n  background: color-mix(in srgb, var(--acu-warning) 6%, var(--acu-bg-1));\r\n  font-family: var(--acu-font-sans, inherit);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__log-hint-summary[data-v-0ccbee42] {\r\n  display: flex;\r\n  align-items: baseline;\r\n  gap: 6px;\r\n  padding: 6px 10px;\r\n  color: var(--acu-text-2);\r\n  cursor: pointer;\r\n  list-style: none;\r\n  user-select: none;\n}\n.acu-v2-advanced-tools-page__log-hint-summary[data-v-0ccbee42]::-webkit-details-marker {\r\n  display: none;\n}\n.acu-v2-advanced-tools-page__log-hint-summary[data-v-0ccbee42]:hover {\r\n  background: var(--acu-hover-overlay);\n}\n.acu-v2-advanced-tools-page__log-hint-summary[data-v-0ccbee42]:focus-visible {\r\n  outline: none;\r\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-v2-advanced-tools-page__log-hint-icon[data-v-0ccbee42] {\r\n  flex: 0 0 auto;\r\n  color: var(--acu-warning);\r\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-advanced-tools-page__log-hint-text[data-v-0ccbee42] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  overflow-wrap: anywhere;\n}\n.acu-v2-advanced-tools-page__log-hint-toggle[data-v-0ccbee42] {\r\n  flex: 0 0 auto;\r\n  color: var(--acu-accent);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__log-hint-toggle[data-v-0ccbee42]::after {\r\n  content: ' ▾';\n}\n.acu-v2-advanced-tools-page__log-hint[open] .acu-v2-advanced-tools-page__log-hint-toggle[data-v-0ccbee42]::after {\r\n  content: ' ▴';\n}\n.acu-v2-advanced-tools-page__log-hint-steps[data-v-0ccbee42] {\r\n  margin: 0;\r\n  padding: 2px 10px 8px 30px;\r\n  color: var(--acu-text-2);\n}\n.acu-v2-advanced-tools-page__log-hint-steps li[data-v-0ccbee42] {\r\n  margin: 2px 0;\r\n  overflow-wrap: anywhere;\n}\n@media (max-width: 1080px) {\n.acu-v2-advanced-tools-page[data-v-0ccbee42] {\r\n    padding: 14px;\n}\n.acu-v2-advanced-tools-page__sql-actions[data-v-0ccbee42] {\r\n    justify-content: stretch;\n}\n.acu-v2-advanced-tools-page__sql-status[data-v-0ccbee42] {\r\n    width: 100%;\r\n    margin-left: 0;\r\n    text-align: right;\n}\n.acu-v2-advanced-tools-page__filter-grid[data-v-0ccbee42] {\r\n    grid-template-columns: 1fr;\n}\n.acu-v2-advanced-tools-page__log-control-main[data-v-0ccbee42] {\r\n    align-items: stretch;\r\n    flex-direction: column;\r\n    justify-content: flex-start;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-0ccbee42] {\r\n    align-self: flex-start;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-0ccbee42],\r\n  .acu-v2-advanced-tools-page__log-row[data-v-0ccbee42] {\r\n    padding-inline: 9px;\n}\n}\r\n", "src/presentation-v2/pages/AdvancedToolsPage.vue#style-0-0ccbee42");
-var AdvancedToolsPage_vue_vue_type_style_index_0_scoped_0ccbee42_lang = null;
+injectSfcStyle("\n.acu-v2-advanced-tools-page[data-v-0d74c59c] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-advanced-tools-page__sql-panel[data-v-0d74c59c],\r\n.acu-v2-advanced-tools-page__log-panel[data-v-0d74c59c],\r\n.acu-v2-advanced-tools-page__debug-panel[data-v-0d74c59c] {\r\n  min-width: 0;\n}\n.acu-v2-advanced-tools-page__debug-actions[data-v-0d74c59c] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__quick-actions[data-v-0d74c59c],\r\n.acu-v2-advanced-tools-page__log-actions[data-v-0d74c59c] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-textarea[data-v-0d74c59c] {\r\n  font-family: var(--acu-font-mono);\r\n  min-height: 210px;\r\n  white-space: pre;\n}\n.acu-v2-advanced-tools-page__sql-actions[data-v-0d74c59c] {\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  align-items: center;\r\n  justify-content: flex-end;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-advanced-tools-page__sql-status[data-v-0d74c59c] {\r\n  margin-left: auto;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.5;\n}\n.acu-v2-advanced-tools-page__sql-status--success[data-v-0d74c59c] {\r\n  color: var(--acu-success);\n}\n.acu-v2-advanced-tools-page__sql-status--warning[data-v-0d74c59c] {\r\n  color: var(--acu-warning);\n}\n.acu-v2-advanced-tools-page__sql-status--error[data-v-0d74c59c] {\r\n  color: var(--acu-danger);\n}\n.acu-v2-advanced-tools-page__sql-result-section[data-v-0d74c59c],\r\n.acu-v2-advanced-tools-page__sql-history-section[data-v-0d74c59c] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 10px;\n}\n.acu-v2-advanced-tools-page__sql-history-section[data-v-0d74c59c] {\r\n  padding-top: 12px;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\n}\n.acu-v2-advanced-tools-page__section-title[data-v-0d74c59c] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body-lg, 13px);\r\n  font-weight: 600;\r\n  line-height: 1.35;\n}\n.acu-v2-advanced-tools-page__empty[data-v-0d74c59c] {\r\n  min-height: 96px;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: center;\r\n  border: 0;\r\n  border-top: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-bottom: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__empty--compact[data-v-0d74c59c] {\r\n  min-height: 72px;\n}\n.acu-v2-advanced-tools-page__empty--log[data-v-0d74c59c] {\r\n  min-height: 180px;\r\n  border: 0;\n}\n.acu-v2-advanced-tools-page__sql-table-wrap[data-v-0d74c59c] {\r\n  max-height: 330px;\r\n  overflow: auto;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-result-table[data-v-0d74c59c] {\r\n  width: 100%;\r\n  border-collapse: collapse;\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-body, 12px);\n}\n.acu-v2-advanced-tools-page__sql-result-table th[data-v-0d74c59c],\r\n.acu-v2-advanced-tools-page__sql-result-table td[data-v-0d74c59c] {\r\n  max-width: 300px;\r\n  padding: 7px 10px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  text-align: left;\r\n  white-space: nowrap;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\n}\n.acu-v2-advanced-tools-page__sql-result-table th[data-v-0d74c59c] {\r\n  position: sticky;\r\n  top: 0;\r\n  z-index: 1;\r\n  background: var(--acu-bg-1);\r\n  color: var(--acu-text-1);\r\n  font-weight: 600;\n}\n.acu-v2-advanced-tools-page__sql-result-table tbody tr[data-v-0d74c59c]:nth-child(even) {\r\n  background: color-mix(in srgb, var(--acu-text-3) 5%, transparent);\n}\n.acu-v2-advanced-tools-page__cell-null[data-v-0d74c59c],\r\n.acu-v2-advanced-tools-page__empty-cell[data-v-0d74c59c] {\r\n  color: var(--acu-text-3);\r\n  font-style: italic;\n}\n.acu-v2-advanced-tools-page__sql-result-meta[data-v-0d74c59c] {\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  text-align: right;\n}\n.acu-v2-advanced-tools-page__sql-error[data-v-0d74c59c] {\r\n  margin: 0;\r\n  min-height: 96px;\r\n  padding: 12px;\r\n  border: 0;\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-danger) 8%, transparent);\r\n  color: var(--acu-danger);\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  font-family: var(--acu-font-mono);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__filter-grid[data-v-0d74c59c] {\r\n  display: grid;\r\n  grid-template-columns: repeat(2, minmax(0, 1fr));\r\n  gap: 12px;\r\n  align-items: stretch;\n}\n.acu-v2-advanced-tools-page__keyword-row[data-v-0d74c59c] {\r\n  grid-column: 1 / -1;\n}\n.acu-v2-advanced-tools-page__log-control-row[data-v-0d74c59c] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 8px;\r\n  min-width: 0;\n}\n.acu-v2-advanced-tools-page__log-control-main[data-v-0d74c59c] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 10px 14px;\r\n  align-items: center;\r\n  justify-content: space-between;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-0d74c59c] {\r\n  width: max-content;\r\n  max-width: 100%;\r\n  display: grid;\r\n  grid-template-columns: max-content max-content;\r\n  gap: 10px 18px;\r\n  align-items: center;\r\n  justify-content: flex-start;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-0d74c59c] .acu-toggle {\r\n  width: max-content;\r\n  max-width: none;\r\n  min-width: max-content;\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-0d74c59c] .acu-toggle__label {\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__hint[data-v-0d74c59c] {\r\n  max-width: 100%;\r\n  margin: 0;\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\r\n  overflow-wrap: anywhere;\n}\n.acu-v2-advanced-tools-page__sql-history-list[data-v-0d74c59c],\r\n.acu-v2-advanced-tools-page__log-list[data-v-0d74c59c] {\r\n  overflow: auto;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 14%, transparent);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-list[data-v-0d74c59c] {\r\n  max-height: 230px;\n}\n.acu-v2-advanced-tools-page__log-list[data-v-0d74c59c] {\r\n  min-height: 360px;\r\n  max-height: 58vh;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-0d74c59c],\r\n.acu-v2-advanced-tools-page__log-row[data-v-0d74c59c] {\r\n  min-width: 0;\r\n  display: grid;\r\n  gap: 8px;\r\n  align-items: baseline;\r\n  padding: 7px 10px;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-0d74c59c] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: stretch;\r\n  gap: 6px;\r\n  padding-block: 9px;\r\n  border: 0;\r\n  border-bottom: 1px solid var(--acu-border-2);\r\n  background: transparent;\r\n  color: inherit;\r\n  cursor: pointer;\r\n  font: inherit;\r\n  text-align: left;\r\n  transition: background 0.15s ease, box-shadow 0.15s ease;\n}\n.acu-v2-advanced-tools-page__log-row[data-v-0d74c59c] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  align-items: stretch;\r\n  gap: 6px;\r\n  padding-block: 9px;\n}\n.acu-v2-advanced-tools-page__log-meta[data-v-0d74c59c] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-wrap: wrap;\r\n  gap: 6px 8px;\r\n  align-items: center;\n}\n.acu-v2-advanced-tools-page__sql-history-meta[data-v-0d74c59c] {\r\n  flex-wrap: nowrap;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-0d74c59c]:last-child,\r\n.acu-v2-advanced-tools-page__log-row[data-v-0d74c59c]:last-child {\r\n  border-bottom: 0;\n}\n.acu-v2-advanced-tools-page__sql-history-item--failure[data-v-0d74c59c],\r\n.acu-v2-advanced-tools-page__log-row--error[data-v-0d74c59c] {\r\n  background: color-mix(in srgb, var(--acu-danger) 7%, transparent);\n}\n.acu-v2-advanced-tools-page__log-row--warn[data-v-0d74c59c] {\r\n  background: color-mix(in srgb, var(--acu-warning) 6%, transparent);\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-0d74c59c]:hover {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\n}\n.acu-v2-advanced-tools-page__sql-history-item.acu-btn[data-v-0d74c59c]:focus-visible {\r\n  background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), transparent;\r\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\r\n  outline: none;\n}\n.acu-v2-advanced-tools-page__log-time[data-v-0d74c59c],\r\n.acu-v2-advanced-tools-page__log-tag[data-v-0d74c59c],\r\n.acu-v2-advanced-tools-page__log-message[data-v-0d74c59c] {\r\n  min-width: 0;\r\n  font-family: var(--acu-font-mono);\n}\n.acu-v2-advanced-tools-page__log-time[data-v-0d74c59c] {\r\n  color: var(--acu-text-3);\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__log-tag[data-v-0d74c59c] {\r\n  flex: 1 1 180px;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n  color: var(--acu-text-2);\n}\n.acu-v2-advanced-tools-page__log-message[data-v-0d74c59c] {\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  white-space: pre-wrap;\r\n  word-break: break-word;\r\n  background: transparent;\n}\n.acu-v2-advanced-tools-page__log-body[data-v-0d74c59c] {\r\n  display: block;\r\n  width: 100%;\n}\n.acu-v2-advanced-tools-page__log-hint[data-v-0d74c59c] {\r\n  min-width: 0;\r\n  margin-top: 2px;\r\n  border-left: 2px solid color-mix(in srgb, var(--acu-warning) 70%, transparent);\r\n  border-radius: 0 var(--acu-radius-sm) var(--acu-radius-sm) 0;\r\n  background: color-mix(in srgb, var(--acu-warning) 6%, var(--acu-bg-1));\r\n  font-family: var(--acu-font-sans, inherit);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\n}\n.acu-v2-advanced-tools-page__log-hint-summary[data-v-0d74c59c] {\r\n  display: flex;\r\n  align-items: baseline;\r\n  gap: 6px;\r\n  padding: 6px 10px;\r\n  color: var(--acu-text-2);\r\n  cursor: pointer;\r\n  list-style: none;\r\n  user-select: none;\n}\n.acu-v2-advanced-tools-page__log-hint-summary[data-v-0d74c59c]::-webkit-details-marker {\r\n  display: none;\n}\n.acu-v2-advanced-tools-page__log-hint-summary[data-v-0d74c59c]:hover {\r\n  background: var(--acu-hover-overlay);\n}\n.acu-v2-advanced-tools-page__log-hint-summary[data-v-0d74c59c]:focus-visible {\r\n  outline: none;\r\n  box-shadow: inset 0 0 0 2px var(--acu-accent-glow);\n}\n.acu-v2-advanced-tools-page__log-hint-icon[data-v-0d74c59c] {\r\n  flex: 0 0 auto;\r\n  color: var(--acu-warning);\r\n  font-size: var(--acu-font-size-caption, 11px);\n}\n.acu-v2-advanced-tools-page__log-hint-text[data-v-0d74c59c] {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  overflow-wrap: anywhere;\n}\n.acu-v2-advanced-tools-page__log-hint-toggle[data-v-0d74c59c] {\r\n  flex: 0 0 auto;\r\n  color: var(--acu-accent);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  white-space: nowrap;\n}\n.acu-v2-advanced-tools-page__log-hint-toggle[data-v-0d74c59c]::after {\r\n  content: ' ▾';\n}\n.acu-v2-advanced-tools-page__log-hint[open] .acu-v2-advanced-tools-page__log-hint-toggle[data-v-0d74c59c]::after {\r\n  content: ' ▴';\n}\n.acu-v2-advanced-tools-page__log-hint-steps[data-v-0d74c59c] {\r\n  margin: 0;\r\n  padding: 2px 10px 8px 30px;\r\n  color: var(--acu-text-2);\n}\n.acu-v2-advanced-tools-page__log-hint-steps li[data-v-0d74c59c] {\r\n  margin: 2px 0;\r\n  overflow-wrap: anywhere;\n}\n@media (max-width: 1080px) {\n.acu-v2-advanced-tools-page[data-v-0d74c59c] {\r\n    padding: 14px;\n}\n.acu-v2-advanced-tools-page__sql-actions[data-v-0d74c59c] {\r\n    justify-content: stretch;\n}\n.acu-v2-advanced-tools-page__sql-status[data-v-0d74c59c] {\r\n    width: 100%;\r\n    margin-left: 0;\r\n    text-align: right;\n}\n.acu-v2-advanced-tools-page__filter-grid[data-v-0d74c59c] {\r\n    grid-template-columns: 1fr;\n}\n.acu-v2-advanced-tools-page__log-control-main[data-v-0d74c59c] {\r\n    align-items: stretch;\r\n    flex-direction: column;\r\n    justify-content: flex-start;\n}\n.acu-v2-advanced-tools-page__toggles[data-v-0d74c59c] {\r\n    align-self: flex-start;\n}\n.acu-v2-advanced-tools-page__sql-history-item[data-v-0d74c59c],\r\n  .acu-v2-advanced-tools-page__log-row[data-v-0d74c59c] {\r\n    padding-inline: 9px;\n}\n}\r\n", "src/presentation-v2/pages/AdvancedToolsPage.vue#style-0-0d74c59c");
+var AdvancedToolsPage_vue_vue_type_style_index_0_scoped_0d74c59c_lang = null;
 
 const _hoisted_1$c = { class: "acu-v2-advanced-tools-page" };
 const _hoisted_2$b = {
@@ -198455,7 +198397,7 @@ function _sfc_render$c(_ctx, _cache, $props, $setup, $data, $options) {
 				}, 8, ["disabled", "onClick"])]), _cache[17] || (_cache[17] = createBaseVNode(
 					"p",
 					{ class: "acu-v2-advanced-tools-page__hint" },
-					" 使用步骤：① 点「开始 Debug」（自动开启全部采集并清空旧日志）→ ② 复现问题 → ③ 点「导出 Debug 数据」生成 .json 文件 → ④ 把文件交给开发者即可定位问题。 排查完成后记得「停止 Debug」。 ",
+					" 使用步骤：① 点「开始 Debug」（补开 debug / warn 采集，之前攒下的报错会一起保留导出）→ ② 复现问题 → ③ 点「导出 Debug 数据」生成 .json 文件 → ④ 把文件交给开发者即可定位问题。 排查完成后记得「停止 Debug」。 ",
 					-1
 					/* CACHED */
 				))]),
@@ -198465,7 +198407,7 @@ function _sfc_render$c(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	})]);
 }
-var AdvancedToolsPage = /* @__PURE__ */ _export_sfc(_sfc_main$c, [["render", _sfc_render$c], ["__scopeId", "data-v-0ccbee42"]]);
+var AdvancedToolsPage = /* @__PURE__ */ _export_sfc(_sfc_main$c, [["render", _sfc_render$c], ["__scopeId", "data-v-0d74c59c"]]);
 
 const developerCopy = {
     panels: {

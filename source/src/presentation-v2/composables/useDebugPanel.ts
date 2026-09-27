@@ -10,7 +10,7 @@
  * - settingsSnapshot：全量 settings_ACU 脱敏快照
  * - worldbookDebug：最近一次世界书扫描（entryCount/baseScanLen/chatLen/triggeredCount/shouldUseWorker）
  * - lastApiBody：最近一次 buildCustomApiRequestBody 完整请求体（脱敏）与时间
- * - logs：log-buffer 全量日志（含 Debug 采集开启后的细粒度日志）
+ * - logs：调用那一刻 log-buffer 缓冲区全量（含点 Debug 之前攒下的 error，不按采集起始切片）
  * - tables：表名 + 行数 + 脱敏 sampleRows（前 3 行各前 8 列，超长截断）
  */
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
@@ -20,10 +20,10 @@ import {
   getLogCount,
   getClearHistory_ACU,
   isDebugLogEnabled,
-  isWarnLogEnabled,
+  maskSensitiveText_ACU,
   subscribeToClear,
   setDebugLogEnabled,
-  setWarnLogEnabled,
+  setWarnLogEnabledByDebugCapture_ACU,
   subscribe,
   type LogEntry,
 } from '../../shared/log-buffer';
@@ -136,16 +136,115 @@ function downloadJson(filename: string, data: unknown): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-/** Debug 开启时刻（模块级，与采集开关同寿命）：导出时只包含开启后的日志 */
+/**
+ * Debug 开启时刻（模块级，与采集开关同寿命）。
+ * 只用作导出 meta 的「本次采集起始」标注：导出内容 = 调用时的缓冲区全量，不再按它切片。
+ */
 let debugStartedAt_ACU = 0;
 /** 采集开关显示态（模块级）：与 log-buffer 真实开关一致，跨 UI 开关不丢。 */
 const debugActive_ACU = ref(false);
+
+/** 两条导出路径（手动 / 停止自动）共用同一文件名格式 */
+function debugExportFilename_ACU(): string {
+  return `acu-debug-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+}
+
+/**
+ * 两条 Debug 导出路径共用的 payload 构造：面板「导出 Debug 数据」与停止 Debug 的自动导出必须
+ * 出自同一函数，否则改字段 / 改脱敏只改到一处，两份导出件内容就不一致（此前正是两份复制代码）。
+ *
+ * 入参 logs 传「调用那一刻的缓冲区全量」（含点 Debug 之前攒下的 error）。
+ * `meta.debugStartedAt` 仍写：值取本次采集起始；面板没记到（采集被外部提前打开）时退化为
+ * 最早日志时间，再退化为当前时间——字段恒在，读的人一眼能看出这份包从什么时候开始采。
+ *
+ * 导出仅供测试当复用锚点（断言两条路径的产物就是本函数产物），业务侧一律走面板入口。
+ */
+export function buildDebugExportPayload_ACU(logs: LogEntry[]) {
+  const effectiveStart = debugStartedAt_ACU || (logs[0]?.timestamp ?? Date.now());
+  const cfg = settings_ACU?.apiConfig || {};
+  const activePreset = (() => {
+    try {
+      const name = String((settings_ACU as any)?.apiPresetBindingsByChat?.[String(currentChatFileIdentifier_ACU || '').trim()]?.presetName || (settings_ACU as any)?.defaultApiPresetName || '').trim();
+      if (!name) return null;
+      const list = Array.isArray((settings_ACU as any)?.apiPresets) ? (settings_ACU as any).apiPresets : [];
+      return list.find((p: any) => p?.name === name) || null;
+    } catch { return null; }
+  })();
+  const presetCfg = activePreset?.apiConfig || null;
+  const env = {
+    host: getAcuHostKind(),
+    buildStamp: getBuildStamp(),
+    version: getPluginVersion(),
+    exportedAt: new Date().toISOString(),
+    chatId: currentChatFileIdentifier_ACU,
+    streamingEnabled: presetCfg ? presetCfg.streamingEnabled === true : settings_ACU?.streamingEnabled === true,
+    streamingEnabledGlobal: settings_ACU?.streamingEnabled === true,
+    streamingEnabledPreset: presetCfg ? presetCfg.streamingEnabled === true : undefined,
+    reasoningEffort: presetCfg?.reasoningEffort || (settings_ACU as any)?.reasoningEffort || 'medium',
+    reasoningEffortPreset: presetCfg?.reasoningEffort,
+    reasoningEffortGlobal: (settings_ACU as any)?.reasoningEffort,
+    activePresetName: activePreset?.name || '',
+    worldbookSource: (settings_ACU as any)?.worldbookConfig?.source || (settings_ACU as any)?.characterSettings?.[String(currentChatFileIdentifier_ACU || '').trim()]?.worldbookConfig?.source || '',
+    formFillPromptLength: Array.isArray((settings_ACU as any)?.charCardPrompt) ? (settings_ACU as any).charCardPrompt.length : 0,
+    nonPrefillSupport: settings_ACU?.nonPrefillSupport === true,
+    nonPrefillSupportPreset: activePreset?.nonPrefillSupport,
+    apiMode: settings_ACU?.apiMode || '',
+    apiConfig: {
+      url: typeof cfg.url === 'string' ? maskSensitiveString(cfg.url) : '',
+      model: typeof cfg.model === 'string' ? cfg.model : '',
+      apiKey: maskSecret(cfg.apiKey),
+      temperature: cfg.temperature,
+      max_tokens: cfg.max_tokens,
+    },
+    plotEnabled: settings_ACU?.plotSettings?.enabled === true,
+  };
+
+  let tables: Record<string, { rows: number; headers: string[]; sampleRows?: unknown[][] }> = {};
+  try { tables = buildDebugTables_ACU(); } catch { /* 表统计失败不影响导出 */ }
+
+  let settingsSnapshot: unknown = null;
+  try { settingsSnapshot = maskSensitiveFields(JSON.parse(JSON.stringify(settings_ACU))); } catch { settingsSnapshot = '[Snapshot failed]'; }
+  const worldbookDebug = (() => {
+    try { return (globalThis as any).__ACU_DEBUG_LAST_WORLDBOOK__ || null; } catch { return null; }
+  })();
+  const lastApiBody = (() => {
+    try { return (globalThis as any).__ACU_DEBUG_LAST_API_BODY__ || null; } catch { return null; }
+  })();
+  const lastApiBodyAt = (() => {
+    try { return (globalThis as any).__ACU_DEBUG_LAST_API_BODY_AT__ || null; } catch { return null; }
+  })();
+
+  return {
+    meta: {
+      plugin: 'TTonly·数据库',
+      version: env.version,
+      buildStamp: env.buildStamp,
+      host: env.host,
+      exportedAt: env.exportedAt,
+      debugStartedAt: new Date(effectiveStart).toISOString(),
+    },
+    env,
+    settingsSnapshot,
+    worldbookDebug: worldbookDebug ? maskSensitiveFields(worldbookDebug) : null,
+    lastApiBody: lastApiBody ? maskSensitiveFields(lastApiBody) : null,
+    lastApiBodyAt: lastApiBodyAt ? new Date(lastApiBodyAt).toISOString() : null,
+    logCount: logs.length,
+    clearHistory: getClearHistory_ACU(),
+    logs: logs.map((e) => ({
+      time: new Date(e.timestamp).toISOString(),
+      level: e.level,
+      tag: e.tag,
+      message: maskSensitiveString(e.message),
+    })),
+    tables,
+  };
+}
 
 export function useDebugPanel() {
   const toast = useToastStore();
   // 模块级共享：关闭/重开数据库 UI 只是组件卸载，采集开关（log-buffer 模块级）
   // 不受影响；按钮状态必须跟开关一致，否则出现“显示未开启、实际采集中”，
-  // 且再次点开始会 clearLogs 洗掉已采集的日志。
+  // 用户再点一次就会把 debugStartedAt 标注重置到更晚，导出 meta 里的采集起始对不上真实首轮复现。
   const active = debugActive_ACU;
   const entryCount = ref(0);
   let unsubscribe: (() => void) | null = null;
@@ -158,19 +257,18 @@ export function useDebugPanel() {
   }
 
   function startDebug(): void {
-    // 以本面板会话态为准（而非原始 flag）：flag 可能被外部提前打开，
-    // 此时旧日志不属于本次排查，必须清掉；只有本会话已在采集中才保留。
-    const alreadyCollecting = active.value;
     setDebugLogEnabled(true);
-    setWarnLogEnabled(true);
-    if (!alreadyCollecting) {
-      // 清空旧日志，让导出只含本次排查内容
-      clearLogs('debugPanel.startDebug');
+    // 只动 Debug 自己的 warn 来源：开发者选项已开启的常驻采集不归本面板管，不能被牵连。
+    setWarnLogEnabledByDebugCapture_ACU(true);
+    if (!active.value) {
+      // 刻意不清空缓冲区：用户通常是「问题已经发生过」才想起开 Debug，采集前攒下的 error
+      // 正是这次排查要一起导出的材料，在这里 clearLogs 等于把诊断现场洗掉。
+      // debugStartedAt 只留作导出 meta 的采集起始标注，不再是导出切片依据。
       debugStartedAt_ACU = Date.now();
     }
     active.value = true;
     refreshCount();
-    toast.info('Debug 采集已开启：请复现问题，完成后点「导出 Debug 数据」。');
+    toast.info('Debug 采集已开启：请复现问题，完成后点「导出 Debug 数据」（开启前的报错也会一起导出）。');
   }
 
   function stopDebug(): void {
@@ -178,98 +276,33 @@ export function useDebugPanel() {
       toast.warning('Debug 未开启，无需停止。');
       return;
     }
-    // 增强：停止时自动导出一次，避免用户忘记点导出
+    // 增强：停止时自动导出一次，避免用户忘记点导出。导出范围＝缓冲区全量（含采集前的 error）。
     try {
-      const allLogs = getAllLogs();
-      const logs: LogEntry[] = debugStartedAt_ACU ? allLogs.filter((e) => e.timestamp >= debugStartedAt_ACU) : allLogs;
+      const logs = getAllLogs();
       if (logs.length > 0) {
-        // 复用导出逻辑但不依赖 active 状态
-        const effectiveStart = debugStartedAt_ACU || (allLogs[0]?.timestamp ?? Date.now());
-        const cfg = settings_ACU?.apiConfig || {};
-        const activePreset = (() => {
-          try {
-            const name = String((settings_ACU as any)?.apiPresetBindingsByChat?.[String(currentChatFileIdentifier_ACU || '').trim()]?.presetName || (settings_ACU as any)?.defaultApiPresetName || '').trim();
-            if (!name) return null;
-            const list = Array.isArray((settings_ACU as any)?.apiPresets) ? (settings_ACU as any).apiPresets : [];
-            return list.find((p: any) => p?.name === name) || null;
-          } catch { return null; }
-        })();
-        const presetCfg = activePreset?.apiConfig || null;
-        const env = {
-          host: getAcuHostKind(),
-          buildStamp: getBuildStamp(),
-          version: getPluginVersion(),
-          exportedAt: new Date().toISOString(),
-          chatId: currentChatFileIdentifier_ACU,
-          streamingEnabled: presetCfg ? presetCfg.streamingEnabled === true : settings_ACU?.streamingEnabled === true,
-          streamingEnabledGlobal: settings_ACU?.streamingEnabled === true,
-          streamingEnabledPreset: presetCfg ? presetCfg.streamingEnabled === true : undefined,
-          reasoningEffort: presetCfg?.reasoningEffort || (settings_ACU as any)?.reasoningEffort || 'medium',
-          reasoningEffortPreset: presetCfg?.reasoningEffort,
-          reasoningEffortGlobal: (settings_ACU as any)?.reasoningEffort,
-          activePresetName: activePreset?.name || '',
-          worldbookSource: (settings_ACU as any)?.worldbookConfig?.source || (settings_ACU as any)?.characterSettings?.[String(currentChatFileIdentifier_ACU || '').trim()]?.worldbookConfig?.source || '',
-          formFillPromptLength: Array.isArray((settings_ACU as any)?.charCardPrompt) ? (settings_ACU as any).charCardPrompt.length : 0,
-          nonPrefillSupport: settings_ACU?.nonPrefillSupport === true,
-          nonPrefillSupportPreset: activePreset?.nonPrefillSupport,
-          apiMode: settings_ACU?.apiMode || '',
-          apiConfig: {
-            url: typeof cfg.url === 'string' ? maskSensitiveString(cfg.url) : '',
-            model: typeof cfg.model === 'string' ? cfg.model : '',
-            apiKey: maskSecret(cfg.apiKey),
-            temperature: cfg.temperature,
-            max_tokens: cfg.max_tokens,
-          },
-          plotEnabled: settings_ACU?.plotSettings?.enabled === true,
-        };
-        let tables: Record<string, { rows: number; headers: string[]; sampleRows?: unknown[][] }> = {};
-        try { tables = buildDebugTables_ACU(); } catch {}
-        let settingsSnapshot: unknown = null;
-        try { settingsSnapshot = maskSensitiveFields(JSON.parse(JSON.stringify(settings_ACU))); } catch { settingsSnapshot = '[Snapshot failed]'; }
-        const worldbookDebug = (() => {
-          try { return (globalThis as any).__ACU_DEBUG_LAST_WORLDBOOK__ || null; } catch { return null; }
-        })();
-        const lastApiBody = (() => {
-          try { return (globalThis as any).__ACU_DEBUG_LAST_API_BODY__ || null; } catch { return null; }
-        })();
-        const lastApiBodyAt = (() => {
-          try { return (globalThis as any).__ACU_DEBUG_LAST_API_BODY_AT__ || null; } catch { return null; }
-        })();
-        const payload = {
-          meta: {
-            plugin: 'TTonly·数据库',
-            version: env.version,
-            buildStamp: env.buildStamp,
-            host: env.host,
-            exportedAt: env.exportedAt,
-            debugStartedAt: new Date(effectiveStart).toISOString(),
-          },
-          env,
-          settingsSnapshot,
-          worldbookDebug: worldbookDebug ? maskSensitiveFields(worldbookDebug) : null,
-          lastApiBody: lastApiBody ? maskSensitiveFields(lastApiBody) : null,
-          lastApiBodyAt: lastApiBodyAt ? new Date(lastApiBodyAt).toISOString() : null,
-          logCount: logs.length,
-          clearHistory: getClearHistory_ACU(),
-          logs: logs.map((e) => ({
-            time: new Date(e.timestamp).toISOString(),
-            level: e.level,
-            tag: e.tag,
-            message: maskSensitiveString(e.message),
-          })),
-          tables,
-        };
-        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-        downloadJson(`acu-debug-${stamp}.json`, payload);
-        toast.success(`Debug 采集已停止，已自动导出 ${logs.length} 条日志。`);
+        const payload = buildDebugExportPayload_ACU(logs);
+        downloadJson(debugExportFilename_ACU(), payload);
+        // 清空只能在 downloadJson 成功返回之后：下载没成就把缓冲区留着，
+        // 否则「自动导出失败」会变成「日志也没了」，用户连手动导出的机会都被洗掉。
+        clearLogs('debugPanel.stopDebug.autoExport');
+        // blob 下载在页面内没有"已落盘"的回读信号，`a.click()` 不抛只能证明"已交给浏览器"，
+        // 因此措辞止步于此，不写成"导出成功/已保存"——用户按提示去下载列表确认才算闭环。
+        toast.success(`Debug 采集已停止，已生成 ${payload.logCount} 条日志的导出文件并交给浏览器下载（请在下载列表确认）。`);
       } else {
         toast.success('Debug 采集已停止（无日志可导出）。');
       }
     } catch (e) {
-      toast.success('Debug 采集已停止（自动导出失败，请手动导出）。');
+      // 如实报错：这里曾走 toast.success，把失败说成成功，用户以为已经导出就不再手动导出。
+      // 提示本身也要脱敏：宿主/内核的错误文案可能回显带密钥的 URL。
+      // 指引必须可执行：未开启采集时「导出 Debug 数据」按钮是禁用的（composable 也有同语义守卫），
+      // 所以这里要让用户先重新「开始 Debug」——新语义下它不再清空缓冲区，保留的日志仍在。
+      toast.warning(
+        `Debug 采集已停止，但自动导出失败：${maskSensitiveText_ACU((e as Error)?.message || '未知错误')}。日志缓冲区已保留，请重新点「开始 Debug」（现在不会清空日志），再点「导出 Debug 数据」手动导出。`,
+        { muteable: false, durationMs: 8000 },
+      );
     }
     setDebugLogEnabled(false);
-    setWarnLogEnabled(false);
+    setWarnLogEnabledByDebugCapture_ACU(false);
     active.value = false;
     debugStartedAt_ACU = 0;
   }
@@ -284,96 +317,16 @@ export function useDebugPanel() {
       toast.warning('请先开启 Debug 采集再导出。');
       return;
     }
-    const allLogs = getAllLogs();
-    // 仅当通过本页 startDebug 启动时才按时间切片；持久化 active 导致 startedAt===0 时不切片，避免空导出
-    const logs: LogEntry[] = debugStartedAt_ACU ? allLogs.filter((e) => e.timestamp >= debugStartedAt_ACU) : allLogs;
-    const effectiveStart = debugStartedAt_ACU || (allLogs[0]?.timestamp ?? Date.now());
-    const cfg = settings_ACU?.apiConfig || {};
-    const activePreset = (() => {
-      try {
-        const name = String((settings_ACU as any)?.apiPresetBindingsByChat?.[String(currentChatFileIdentifier_ACU || '').trim()]?.presetName || (settings_ACU as any)?.defaultApiPresetName || '').trim();
-        if (!name) return null;
-        const list = Array.isArray((settings_ACU as any)?.apiPresets) ? (settings_ACU as any).apiPresets : [];
-        return list.find((p: any) => p?.name === name) || null;
-      } catch { return null; }
-    })();
-    const presetCfg = activePreset?.apiConfig || null;
-    const env = {
-      host: getAcuHostKind(),
-      buildStamp: getBuildStamp(),
-      version: getPluginVersion(),
-      exportedAt: new Date().toISOString(),
-      chatId: currentChatFileIdentifier_ACU,
-      streamingEnabled: presetCfg ? presetCfg.streamingEnabled === true : settings_ACU?.streamingEnabled === true,
-      streamingEnabledGlobal: settings_ACU?.streamingEnabled === true,
-      streamingEnabledPreset: presetCfg ? presetCfg.streamingEnabled === true : undefined,
-      reasoningEffort: presetCfg?.reasoningEffort || (settings_ACU as any)?.reasoningEffort || 'medium',
-      reasoningEffortPreset: presetCfg?.reasoningEffort,
-      reasoningEffortGlobal: (settings_ACU as any)?.reasoningEffort,
-      activePresetName: activePreset?.name || '',
-      worldbookSource: (settings_ACU as any)?.worldbookConfig?.source || (settings_ACU as any)?.characterSettings?.[String(currentChatFileIdentifier_ACU || '').trim()]?.worldbookConfig?.source || '',
-      formFillPromptLength: Array.isArray((settings_ACU as any)?.charCardPrompt) ? (settings_ACU as any).charCardPrompt.length : 0,
-      nonPrefillSupport: settings_ACU?.nonPrefillSupport === true,
-      nonPrefillSupportPreset: activePreset?.nonPrefillSupport,
-      apiMode: settings_ACU?.apiMode || '',
-      apiConfig: {
-        url: typeof cfg.url === 'string' ? maskSensitiveString(cfg.url) : '',
-        model: typeof cfg.model === 'string' ? cfg.model : '',
-        apiKey: maskSecret(cfg.apiKey),
-        temperature: cfg.temperature,
-        max_tokens: cfg.max_tokens,
-      },
-      plotEnabled: settings_ACU?.plotSettings?.enabled === true,
-    };
-
-    let tables: Record<string, { rows: number; headers: string[]; sampleRows?: unknown[][] }> = {};
-    try { tables = buildDebugTables_ACU(); } catch { /* 表统计失败不影响导出 */ }
-
-    let settingsSnapshot: unknown = null;
-    try { settingsSnapshot = maskSensitiveFields(JSON.parse(JSON.stringify(settings_ACU))); } catch { settingsSnapshot = '[Snapshot failed]'; }
-    const worldbookDebug = (() => {
-      try { return (globalThis as any).__ACU_DEBUG_LAST_WORLDBOOK__ || null; } catch { return null; }
-    })();
-    const lastApiBody = (() => {
-      try { return (globalThis as any).__ACU_DEBUG_LAST_API_BODY__ || null; } catch { return null; }
-    })();
-    const lastApiBodyAt = (() => {
-      try { return (globalThis as any).__ACU_DEBUG_LAST_API_BODY_AT__ || null; } catch { return null; }
-    })();
-
-    const payload = {
-      meta: {
-        plugin: 'TTonly·数据库',
-        version: env.version,
-        buildStamp: env.buildStamp,
-        host: env.host,
-        exportedAt: env.exportedAt,
-        debugStartedAt: new Date(effectiveStart).toISOString(),
-      },
-      env,
-      settingsSnapshot,
-      worldbookDebug: worldbookDebug ? maskSensitiveFields(worldbookDebug) : null,
-      lastApiBody: lastApiBody ? maskSensitiveFields(lastApiBody) : null,
-      lastApiBodyAt: lastApiBodyAt ? new Date(lastApiBodyAt).toISOString() : null,
-      logCount: logs.length,
-      clearHistory: getClearHistory_ACU(),
-      logs: logs.map((e) => ({
-        time: new Date(e.timestamp).toISOString(),
-        level: e.level,
-        tag: e.tag,
-        message: maskSensitiveString(e.message),
-      })),
-      tables,
-    };
-
-    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    downloadJson(`acu-debug-${stamp}.json`, payload);
-    toast.success(`已导出 ${logs.length} 条日志。`);
+    // 手动导出不清空：用户可以边复现边反复导出，只有停止 Debug 的自动导出才做收尾清空。
+    const payload = buildDebugExportPayload_ACU(getAllLogs());
+    downloadJson(debugExportFilename_ACU(), payload);
+    toast.success(`已生成 ${payload.logCount} 条日志的导出文件并交给浏览器下载（请在下载列表确认）。`);
   }
 
   onMounted(() => {
     // 进页不自动开启，但也不强关：如有关闭 UI 前开的采集（log-buffer 开关还在），
-    // 按钮必须显示“采集中”，否则用户会以为没开、重按开始把已采日志洗掉。
+    // 按钮必须显示“采集中”，否则用户会以为没开、重按开始把采集起始标注改到更晚，
+    // 导出 meta 里的 debugStartedAt 就对不上真实的第一次采集。
     active.value = isDebugLogEnabled();
     if (!active.value) debugStartedAt_ACU = 0;
     refreshCount();

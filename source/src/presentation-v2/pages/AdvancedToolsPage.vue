@@ -257,7 +257,7 @@
         </div>
 
         <p class="acu-v2-advanced-tools-page__hint">
-          使用步骤：① 点「开始 Debug」（自动开启全部采集并清空旧日志）→ ② 复现问题 →
+          使用步骤：① 点「开始 Debug」（补开 debug / warn 采集，之前攒下的报错会一起保留导出）→ ② 复现问题 →
           ③ 点「导出 Debug 数据」生成 .json 文件 → ④ 把文件交给开发者即可定位问题。
           排查完成后记得「停止 Debug」。
         </p>

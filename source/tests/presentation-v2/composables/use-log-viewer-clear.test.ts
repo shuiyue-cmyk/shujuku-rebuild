@@ -1,7 +1,7 @@
 /**
  * useLogViewer — 清空缓冲区后视图必须刷新
  *
- * 复现：Debug 卡片「开始 Debug」会 clearLogs（模块级缓冲），但日志页只订阅 pushLog，
+ * 复现：运行日志的「清空」与停止 Debug 的自动导出都会 clearLogs（模块级缓冲），而日志页只订阅 pushLog，
  * 清空不通知 → 页面继续显示清空前的旧数组；收起重开才拉到真实（空）缓冲。
  *
  * @vitest-environment jsdom
@@ -14,7 +14,7 @@ import {
   clearLogs,
   pushLog,
   setDebugLogEnabled,
-  setWarnLogEnabled,
+  setWarnLogEnabledByDevOption_ACU,
   _resetForTesting,
 } from '../../../src/shared/log-buffer';
 
@@ -53,7 +53,7 @@ beforeEach(() => {
   setActivePinia(createPinia());
   _resetForTesting();
   setDebugLogEnabled(true);
-  setWarnLogEnabled(true);
+  setWarnLogEnabledByDevOption_ACU(true);
 });
 
 describe('useLogViewer 显示窗口', () => {
@@ -89,7 +89,7 @@ describe('useLogViewer 清空刷新', () => {
     await flush();
     expect(viewer.logs.value.length).toBe(1);
 
-    clearLogs('debugPanel.startDebug');
+    clearLogs('debugPanel.stopDebug.autoExport');
     await flush();
 
     expect(viewer.logs.value).toEqual([]);
@@ -100,7 +100,7 @@ describe('useLogViewer 清空刷新', () => {
     const viewer = mountViewer();
     pushLog('error', ['[ACU]', '旧']);
     await flush();
-    clearLogs('debugPanel.startDebug');
+    clearLogs('debugPanel.stopDebug.autoExport');
     await flush();
 
     pushLog('debug', ['[ACU]', '新']);
