@@ -565,18 +565,37 @@ let lastReadDiagnostics_ACU: AgentModuleSnapshotReadDiagnostics_ACU = {
   foldedDeltaCount: 0,
 };
 
+/**
+ * 帧折叠依赖单例。逐次新建对象会让 parseField 记忆化（外层键是 deps 实例）恒不命中，
+ * 四个依赖项都是模块级纯函数、不捕获逐次状态，因此冻结成单例安全。
+ */
+const AGENT_MODULE_FRAME_DEPS_ACU: AgentModuleFrameDeps_ACU = Object.freeze({
+  validateSnapshot: validateAgentModuleSnapshot_ACU,
+  salvageSnapshot: salvageAgentModuleSnapshot_ACU,
+  emptySnapshot: buildEmptyAgentModuleSnapshot_ACU,
+  isSnapshotPrefixCompatible: (snapshot: AgentModuleSnapshot_ACU, chat: readonly unknown[]) => isChatPrefixCompatible_ACU(snapshot, chat as any[]),
+});
+
 export function agentModuleFrameDeps_ACU(): AgentModuleFrameDeps_ACU {
-  return {
-    validateSnapshot: validateAgentModuleSnapshot_ACU,
-    salvageSnapshot: salvageAgentModuleSnapshot_ACU,
-    emptySnapshot: buildEmptyAgentModuleSnapshot_ACU,
-    isSnapshotPrefixCompatible: (snapshot, chat) => isChatPrefixCompatible_ACU(snapshot, chat as any[]),
-  };
+  return AGENT_MODULE_FRAME_DEPS_ACU;
 }
 
 /** 最近一次 readAgentModuleSnapshot_ACU 的诊断信息，供面板解释“为什么资料是空的/是旧的”。 */
 export function readAgentModuleSnapshotDiagnostics_ACU(): AgentModuleSnapshotReadDiagnostics_ACU {
   return lastReadDiagnostics_ACU;
+}
+
+/** 折叠并刷新「最近一次读取」诊断（所有读入口与写入前复核共用，保证诊断口径一致）。 */
+function foldAndRecordReadDiagnostics_ACU(messages: any[]): AgentModuleFoldResult_ACU {
+  const folded = foldAgentModuleSnapshot_ACU(messages, agentModuleFrameDeps_ACU());
+  lastReadDiagnostics_ACU = {
+    candidates: folded.candidates,
+    adoptedIndex: folded.adoptedIndex,
+    salvaged: folded.salvaged,
+    checkpointIndex: folded.checkpointIndex,
+    foldedDeltaCount: folded.foldedDeltaCount,
+  };
+  return folded;
 }
 
 /**
@@ -589,17 +608,8 @@ export function readAgentModuleSnapshotDiagnostics_ACU(): AgentModuleSnapshotRea
  */
 export function readAgentModuleSnapshot_ACU(chat?: any[]): AgentModuleSnapshot_ACU {
   const messages = Array.isArray(chat) ? chat : getChatArray_ACU();
-  const folded = foldAgentModuleSnapshot_ACU(messages, agentModuleFrameDeps_ACU());
-  lastReadDiagnostics_ACU = {
-    candidates: folded.candidates,
-    adoptedIndex: folded.adoptedIndex,
-    salvaged: folded.salvaged,
-    checkpointIndex: folded.checkpointIndex,
-    foldedDeltaCount: folded.foldedDeltaCount,
-  };
-  if (folded.salvaged) {
-    console.warn(`[SP·数据库][续写资料] 楼层 ${folded.adoptedIndex} 的资料快照未通过严格校验，已按宽容模式读取：${folded.candidates.find(item => item.index === folded.adoptedIndex)?.problems.join('；') ?? ''}`);
-  }
+  const folded = foldAndRecordReadDiagnostics_ACU(messages);
+  warnIfSalvagedRead_ACU(folded);
   return folded.snapshot;
 }
 
@@ -610,15 +620,16 @@ export function readAgentModuleSnapshot_ACU(chat?: any[]): AgentModuleSnapshot_A
  */
 export function readAgentModuleFieldSnapshot_ACU(chat?: any[]): AgentModuleFieldSnapshot_ACU {
   const messages = Array.isArray(chat) ? chat : getChatArray_ACU();
-  const folded = foldAgentModuleSnapshot_ACU(messages, agentModuleFrameDeps_ACU());
-  lastReadDiagnostics_ACU = {
-    candidates: folded.candidates,
-    adoptedIndex: folded.adoptedIndex,
-    salvaged: folded.salvaged,
-    checkpointIndex: folded.checkpointIndex,
-    foldedDeltaCount: folded.foldedDeltaCount,
-  };
-  return folded.fields;
+  return foldAndRecordReadDiagnostics_ACU(messages).fields;
+}
+
+/**
+ * 抢救读的诊断告警：资料快照未通过严格校验、被按宽容模式采纳。
+ * 读入口与写路径（乐观锁复核）共用一条——重构折叠链路时写路径最容易静默丢掉这条诊断。
+ */
+function warnIfSalvagedRead_ACU(folded: AgentModuleFoldResult_ACU): void {
+  if (!folded.salvaged) return;
+  console.warn(`[SP·数据库][续写资料] 楼层 ${folded.adoptedIndex} 的资料快照未通过严格校验，已按宽容模式读取：${folded.candidates.find(item => item.index === folded.adoptedIndex)?.problems.join('；') ?? ''}`);
 }
 
 /**
@@ -651,7 +662,12 @@ export async function writeAgentModuleSnapshot_ACU(chat: any[], targetIndex: num
   // 修订号整体 +1（replaceAgentModuleSnapshotByUser_ACU），旧基准整份写入会静默冲掉用户内容。
   // 落盘前重读当前生效快照，任一类「楼层比写入快照新」即放弃落盘并记日志；正常路径零影响。
   const revisionDrifts: string[] = [];
-  const floorSnapshot = readAgentModuleSnapshot_ACU(chat);
+  // 乐观锁复核需要的「当前生效资料」就是规划阶段要的那次折叠：同一次折叠结果贯穿
+  // 复核与规划（两者之间聊天零变更），省掉一次全量折叠。
+  const floorState = foldAndRecordReadDiagnostics_ACU(chat);
+  // 写路径的规划基线同样是「宽容模式采纳」的快照，诊断与读路径保持一致。
+  warnIfSalvagedRead_ACU(floorState);
+  const floorSnapshot = floorState.snapshot;
   const revisionPairs: Array<[string, number, number]> = [
     ['hooks', floorSnapshot.revisions.hooks, snapshot.revisions.hooks],
     ['infoGap', floorSnapshot.revisions.infoGap, snapshot.revisions.infoGap],
@@ -685,6 +701,7 @@ export async function writeAgentModuleSnapshot_ACU(chat: any[], targetIndex: num
     stamped,
     agentModuleFrameDeps_ACU(),
     findLatestTableFullCheckpointIndex_ACU(chat),
+    floorState,
   );
   if (!plan.changed) return;
   try {

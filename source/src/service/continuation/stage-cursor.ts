@@ -2,8 +2,44 @@ import type { ContinuationEnvelope_ACU, ContinuationStage_ACU, ContinuationTask_
 
 type CompletionEntry_ACU = ContinuationTask_ACU['timeline'][number];
 
+/**
+ * 调和层计数（仅测试打开）。生产路径只有一次布尔判断，行为与开销不受影响。
+ * fingerprints=真正算过整段 mes 指纹的次数（messageId 判定放行且完成记录带指纹时才算）；
+ * floorIdentities=本次调和建立的逐楼身份条目数； reconciles=调和调用次数。
+ */
+export interface StageCursorCounters_ACU {
+  fingerprints: number;
+  floorIdentities: number;
+  reconciles: number;
+}
+
+const cursorCounters_ACU: StageCursorCounters_ACU = { fingerprints: 0, floorIdentities: 0, reconciles: 0 };
+let cursorCountersEnabled_ACU = false;
+
+/** 仅供测试：打开计数并清零。 */
+export function __resetStageCursorCountersForTests_ACU(): void {
+  cursorCounters_ACU.fingerprints = 0;
+  cursorCounters_ACU.floorIdentities = 0;
+  cursorCounters_ACU.reconciles = 0;
+  cursorCountersEnabled_ACU = true;
+}
+
+/** 仅供测试：读取计数快照。 */
+export function __readStageCursorCountersForTests_ACU(): StageCursorCounters_ACU {
+  return { ...cursorCounters_ACU };
+}
+
+function isRecordMessage_ACU(message: unknown): message is Record<string, unknown> {
+  return !!message && typeof message === 'object' && !Array.isArray(message);
+}
+
+function messageIdOf_ACU(record: Record<string, unknown> | null): string | number | undefined {
+  const rawId = record ? (record.message_id ?? record.id) : undefined;
+  return (typeof rawId === 'string' || (typeof rawId === 'number' && Number.isFinite(rawId))) ? rawId : undefined;
+}
+
 function messageFingerprintText_ACU(message: unknown): string {
-  const record = message && typeof message === 'object' && !Array.isArray(message) ? message as Record<string, unknown> : {};
+  const record = isRecordMessage_ACU(message) ? message : {};
   const payload = JSON.stringify({
     is_user: record.is_user === true,
     is_system: record.is_system === true,
@@ -20,21 +56,62 @@ function messageFingerprintText_ACU(message: unknown): string {
 }
 
 export function getStableMessageIdentity_ACU(message: unknown): { messageId?: string | number; messageFingerprint: string } {
-  const record = message && typeof message === 'object' && !Array.isArray(message) ? message as Record<string, unknown> : {};
-  const rawId = record.message_id ?? record.id;
-  const messageId = (typeof rawId === 'string' || (typeof rawId === 'number' && Number.isFinite(rawId))) ? rawId : undefined;
-  return { ...(messageId === undefined ? {} : { messageId }), messageFingerprint: messageFingerprintText_ACU(record) };
+  const record = isRecordMessage_ACU(message) ? message : null;
+  const messageId = messageIdOf_ACU(record);
+  if (cursorCountersEnabled_ACU) cursorCounters_ACU.fingerprints += 1;
+  return { ...(messageId === undefined ? {} : { messageId }), messageFingerprint: messageFingerprintText_ACU(message) };
 }
 
-function completionSurvives_ACU(entry: CompletionEntry_ACU, chat: readonly unknown[] | undefined, chatLength: number, used: Set<number>): boolean {
+/**
+ * 一次调和内的逐楼身份条目。指纹按需计算并就地缓存：
+ * 完成记录带 messageId 且与本楼相等时，判定已经成立，指纹一个字节都不必算。
+ * 身份表是单次调和的局部量，不跨调用复用，因此不存在陈旧值问题。
+ */
+interface FloorIdentity_ACU {
+  message: unknown;
+  messageId: string | number | undefined;
+  fingerprint: string | null;
+}
+
+function floorIdentityOf_ACU(identity: FloorIdentity_ACU): string {
+  if (identity.fingerprint === null) {
+    identity.fingerprint = messageFingerprintText_ACU(identity.message);
+    if (cursorCountersEnabled_ACU) cursorCounters_ACU.fingerprints += 1;
+  }
+  return identity.fingerprint;
+}
+
+function buildFloorIdentities_ACU(chat: unknown): FloorIdentity_ACU[] {
+  const floors = chat as readonly unknown[];
+  const size = typeof floors.length === 'number' ? floors.length : 0;
+  const identities: FloorIdentity_ACU[] = new Array(size);
+  for (let index = 0; index < size; index += 1) {
+    const message = floors[index];
+    identities[index] = {
+      message,
+      messageId: messageIdOf_ACU(isRecordMessage_ACU(message) ? message : null),
+      fingerprint: null,
+    };
+  }
+  if (cursorCountersEnabled_ACU) cursorCounters_ACU.floorIdentities += size;
+  return identities;
+}
+
+function completionSurvives_ACU(
+  entry: CompletionEntry_ACU,
+  chat: readonly unknown[] | undefined,
+  chatLength: number,
+  identities: FloorIdentity_ACU[],
+  used: Set<number>,
+): boolean {
   const hasDurableIdentity = entry.messageId !== undefined || entry.messageFingerprint !== undefined;
   if (!chat) return !hasDurableIdentity && typeof entry.messageIndex === 'number' ? entry.messageIndex < chatLength : !hasDurableIdentity;
   if (!hasDurableIdentity) return typeof entry.messageIndex === 'number' && entry.messageIndex < chat.length;
   for (let index = 0; index < chat.length; index += 1) {
     if (used.has(index)) continue;
-    const identity = getStableMessageIdentity_ACU(chat[index]);
+    const identity = identities[index];
     if (entry.messageId !== undefined && identity.messageId !== entry.messageId) continue;
-    if (entry.messageFingerprint !== undefined && identity.messageFingerprint !== entry.messageFingerprint) continue;
+    if (entry.messageFingerprint !== undefined && floorIdentityOf_ACU(identity) !== entry.messageFingerprint) continue;
     used.add(index);
     return true;
   }
@@ -46,16 +123,20 @@ function completionSurvives_ACU(entry: CompletionEntry_ACU, chat: readonly unkno
  * 新写入的完成记录带稳定 message identity；旧记录没有 identity 时才回退到旧下标兼容。
  */
 export function reconcileTaskCursorFromChat_ACU(task: ContinuationTask_ACU, chatLength: number, chat?: readonly unknown[]): ContinuationTask_ACU {
+  if (cursorCountersEnabled_ACU) cursorCounters_ACU.reconciles += 1;
   const effectiveLength = Array.isArray(chat) ? chat.length : chatLength;
   if (!Number.isInteger(effectiveLength) || effectiveLength < 0) return task;
   const completions = task.timeline.filter(entry => entry.kind === 'turn_completed' && entry.stageId);
+  // 逐楼身份只建一次：旧实现是「每条完成记录从 0 楼扫全聊天、每楼每条都重算整段 mes 指纹」，
+  // 成本 O(完成数×楼层)。这里预计算一遍身份表（O(楼层)），指纹按需算、messageId 命中即短路。
+  const identities = chat ? buildFloorIdentities_ACU(chat) : [];
   const survivingByStage = new Map<string, number>();
   const hasAnchorByStage = new Map<string, boolean>();
   for (const entry of completions) {
     const stageId = entry.stageId as string;
     if (typeof entry.messageIndex === 'number' || entry.messageId !== undefined || entry.messageFingerprint !== undefined) hasAnchorByStage.set(stageId, true);
     const surviving = survivingByStage.get(stageId) ?? 0;
-    survivingByStage.set(stageId, surviving + (completionSurvives_ACU(entry, chat, effectiveLength, new Set()) ? 1 : 0));
+    survivingByStage.set(stageId, surviving + (completionSurvives_ACU(entry, chat, effectiveLength, identities, new Set()) ? 1 : 0));
   }
   // 从前往后扫：一旦某阶段因楼层消失而未完成，其后没有任何存活完成的阶段应废弃。
   let firstOpenIndex = -1;
@@ -73,7 +154,7 @@ export function reconcileTaskCursorFromChat_ACU(task: ContinuationTask_ACU, chat
     let surviving = 0;
     for (const entry of completions) {
       if (entry.stageId !== stage.stageId) continue;
-      if (!completionSurvives_ACU(entry, chat, effectiveLength, used)) break;
+      if (!completionSurvives_ACU(entry, chat, effectiveLength, identities, used)) break;
       surviving += 1;
     }
     surviving = Math.min(surviving, recorded, totalTurns);

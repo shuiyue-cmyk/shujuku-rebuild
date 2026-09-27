@@ -104,8 +104,78 @@ function applyAgentContextRules_ACU(text: string, rules?: AgentContextRules_ACU)
   return applyContextTagFilters_ACU(text, { extractTags: '', extractRules: rules.extractRules, excludeTags: '', excludeRules: rules.excludeRules }).trim();
 }
 
+/**
+ * 规则签名。上下文规则是纯数据（applyContextTagFilters 全程不改入参），
+ * 序列化一次的成本相对每楼每规则的整段扫描可忽略；每次现算而不是按规则对象
+ * 记忆化，是为了连「规则数组被原地改内容」这种情况也不串味。
+ */
+function contextRulesSignature_ACU(rules?: AgentContextRules_ACU): string {
+  if (!rules || (!rules.extractRules.length && !rules.excludeRules.length)) return '';
+  return JSON.stringify([rules.extractRules, rules.excludeRules]);
+}
+
+/**
+ * 楼层文本提取计数（仅测试打开）。生产路径只有一次布尔判断，行为与开销不受影响。
+ * textExtractions=真正跑过提取/排除规则的次数（记忆化未命中的楼层数）；
+ * textMemoHits=命中逐楼记忆化；floorListRebuilds=重建正文楼层数组的次数；
+ * floorListHits=直接复用记忆化楼层数组的次数；openingScanChars=开头摘要有界扫描
+ * 实际查看过的输入码元数（朴素压平恒等于全文长度）。
+ */
+export interface AgentPlaceholderResolverCounters_ACU {
+  textExtractions: number;
+  textMemoHits: number;
+  floorListRebuilds: number;
+  floorListHits: number;
+  openingScanChars: number;
+}
+
+const resolverCounters_ACU: AgentPlaceholderResolverCounters_ACU = { textExtractions: 0, textMemoHits: 0, floorListRebuilds: 0, floorListHits: 0, openingScanChars: 0 };
+let resolverCountersEnabled_ACU = false;
+
+/** 仅供测试：打开计数并清空全部记忆化（含构造「冷路径」对照）。 */
+export function __resetAgentPlaceholderResolverCachesForTests_ACU(): void {
+  resolverCounters_ACU.textExtractions = 0;
+  resolverCounters_ACU.textMemoHits = 0;
+  resolverCounters_ACU.floorListRebuilds = 0;
+  resolverCounters_ACU.floorListHits = 0;
+  resolverCounters_ACU.openingScanChars = 0;
+  resolverCountersEnabled_ACU = true;
+  messageTextMemo_ACU = new WeakMap();
+  storyFloorsMemo_ACU = new WeakMap();
+}
+
+/** 仅供测试：读取计数快照。 */
+export function __readAgentPlaceholderResolverCountersForTests_ACU(): AgentPlaceholderResolverCounters_ACU {
+  return { ...resolverCounters_ACU };
+}
+
+/**
+ * 逐楼文本记忆化。键＝楼层对象引用 + mes 字符串引用 + 规则签名。
+ *
+ * 失效不变式：mes 是字符串，JavaScript 字符串不可变——重赋值（正文编辑 / swipe 切换 /
+ * 重生成）必然产生新引用，引用相同即值相同；楼层被整体替换（宿主重新载入聊天）同样换引用。
+ * 因此「引用相同 ⇒ 提取结果相同」成立，不需要版本号。
+ * 规则签名挡在同一个键里，避免同一楼层按两套规则渲染时互相串味。
+ */
+interface MessageTextMemo_ACU { mes: string; rulesKey: string; text: string }
+let messageTextMemo_ACU: WeakMap<object, MessageTextMemo_ACU> = new WeakMap();
+
+function messageTextByRulesKey_ACU(message: any, rules: AgentContextRules_ACU | undefined, rulesKey: string): string {
+  const raw = String(message?.mes ?? '');
+  if (!message || typeof message !== 'object') return applyAgentContextRules_ACU(raw.trim(), rules);
+  const memo = messageTextMemo_ACU.get(message);
+  if (memo && memo.mes === raw && memo.rulesKey === rulesKey) {
+    if (resolverCountersEnabled_ACU) resolverCounters_ACU.textMemoHits += 1;
+    return memo.text;
+  }
+  if (resolverCountersEnabled_ACU) resolverCounters_ACU.textExtractions += 1;
+  const text = applyAgentContextRules_ACU(raw.trim(), rules);
+  messageTextMemo_ACU.set(message, { mes: raw, rulesKey, text });
+  return text;
+}
+
 function messageText_ACU(message: any, rules?: AgentContextRules_ACU): string {
-  return applyAgentContextRules_ACU(String(message?.mes ?? '').trim(), rules);
+  return messageTextByRulesKey_ACU(message, rules, contextRulesSignature_ACU(rules));
 }
 
 interface AgentStoryFloor_ACU {
@@ -113,11 +183,64 @@ interface AgentStoryFloor_ACU {
   text: string;
 }
 
+/**
+ * 正文楼层数组记忆化。键＝聊天数组引用 + 规则签名，值里另存一份逐楼校验指纹。
+ *
+ * 聊天数组本身是原地增长/删减的（chat.push / splice），单靠数组引用当键会漏掉
+ * 「同一数组内容变了」——所以每次命中前先做一遍 O(楼层) 的廉价校验：逐楼比对
+ * 「楼层对象引用 + mes 引用 + AI 楼判定」，全是引用比较与三个属性读取，不做任何
+ * 字符串扫描。任一项不同即整条作废并重建（重建时逐楼文本仍走上面的记忆化，
+ * 于是只有真正改过正文的楼层才重新跑规则）。
+ * 返回的数组与其中的 {index,text} 对象只读共享：全部调用点（窗口切片 / 计数 / 区间过滤）
+ * 都只读不改。
+ */
+interface StoryFloorsMemo_ACU {
+  rulesKey: string;
+  floors: AgentStoryFloor_ACU[];
+  refs: unknown[];
+  mesRefs: unknown[];
+  aiFlags: boolean[];
+}
+
+let storyFloorsMemo_ACU: WeakMap<unknown[], StoryFloorsMemo_ACU> = new WeakMap();
+const EMPTY_CHAT_ACU: any[] = [];
+
+function isStoryFloorsMemoFresh_ACU(chat: readonly any[], memo: StoryFloorsMemo_ACU, rulesKey: string): boolean {
+  if (memo.rulesKey !== rulesKey || memo.refs.length !== chat.length) return false;
+  for (let index = 0; index < chat.length; index += 1) {
+    const message = chat[index];
+    if (memo.refs[index] !== message) return false;
+    if (memo.aiFlags[index] !== isAiFloor_ACU(message) || memo.mesRefs[index] !== (message as { mes?: unknown } | null)?.mes) return false;
+  }
+  return true;
+}
+
 function listAgentStoryFloors_ACU(source: AgentStoryFloorSource_ACU): AgentStoryFloor_ACU[] {
-  const chat = Array.isArray(source.chat) ? source.chat : [];
-  return chat
-    .map((message, index) => ({ index, text: messageText_ACU(message, source.contextRules) }))
-    .filter(item => isAiFloor_ACU(chat[item.index]) && item.text);
+  const chat = Array.isArray(source.chat) ? source.chat : EMPTY_CHAT_ACU;
+  const rulesKey = contextRulesSignature_ACU(source.contextRules);
+  const memo = storyFloorsMemo_ACU.get(chat);
+  if (memo && isStoryFloorsMemoFresh_ACU(chat, memo, rulesKey)) {
+    if (resolverCountersEnabled_ACU) resolverCounters_ACU.floorListHits += 1;
+    return memo.floors;
+  }
+  if (resolverCountersEnabled_ACU) resolverCounters_ACU.floorListRebuilds += 1;
+  const floors: AgentStoryFloor_ACU[] = [];
+  const refs: unknown[] = [];
+  const mesRefs: unknown[] = [];
+  const aiFlags: boolean[] = [];
+  for (let index = 0; index < chat.length; index += 1) {
+    const message = chat[index];
+    // 非 AI 楼不进正文域：旧实现也提取了它们的文本，但那份文本随后被过滤丢弃，
+    // 而提取规则是纯函数，提取与不提取可观察行为一致（少一次无用功）。
+    const ai = isAiFloor_ACU(message);
+    const text = ai ? messageTextByRulesKey_ACU(message, source.contextRules, rulesKey) : '';
+    refs.push(message);
+    mesRefs.push((message as { mes?: unknown } | null)?.mes);
+    aiFlags.push(ai);
+    if (ai && text) floors.push({ index, text });
+  }
+  storyFloorsMemo_ACU.set(chat, { rulesKey, floors, refs, mesRefs, aiFlags });
+  return floors;
 }
 
 function agentStoryWindowSize_ACU(source: AgentStoryFloorSource_ACU): number {
@@ -159,9 +282,43 @@ function renderStoryFloors_ACU(floors: readonly AgentStoryFloor_ACU[]): string {
   return floors.map(floor => `【楼层 ${floor.index}】\n${floor.text}`).join('\n\n');
 }
 
+/**
+ * 开头摘要：等价于 `text.replace(/\s+/g,' ').trim()` 的前 40 字（超出补省略号），
+ * 但只扫到第 41 个输出字符就停。
+ *
+ * 等价论证（逐码元对齐，无任何近似）：
+ * - `replace(/\s+/g,' ')` 把每段极大空白游程替换成恰好一个空格，`trim()` 再去首尾空白；
+ *   trim 的空白集合与 `\s` 完全相同（WhiteSpace ∪ LineTerminator）。
+ * - 用 `/[^\s]/g` 定位下一个非空白码元，空白游程由引擎原生跳过，分段与 replace 一致；
+ *   首个非空白码元之前不补空格＝等价 trim 去首，扫描结束时的待补空格不输出＝等价 trim 去尾。
+ * - 输出长度首次超过 40 即等价「压平后长度 > 40」；扫描走完则压平长度 ≤ 40，原样返回不加省略号。
+ * - 全程按 UTF-16 码元处理，与 replace/slice 的码元语义一致（含代理对）。
+ * ⚠️ 任何固定前缀窗口（如先 slice(0,128) 再压平）都**不**等价：单个超长空白游程能把
+ * 第 40 个输出字符推到任意靠后的位置，因此只能按「已产出字符数」提前退出。
+ * 扫描器是模块级单例（每次调用入口重置 lastIndex）；本函数无回调、不可重入。
+ */
+const NON_WHITESPACE_ACU = /[^\s]/g;
+
 function storyOpening_ACU(text: string): string {
-  const flat = text.replace(/\s+/g, ' ').trim();
-  return flat.length <= 40 ? flat : `${flat.slice(0, 40)}…`;
+  NON_WHITESPACE_ACU.lastIndex = 0;
+  let opening = '';
+  let cursor = 0;
+  let scanned = 0;
+  let matched = NON_WHITESPACE_ACU.exec(text);
+  while (matched) {
+    const at = matched.index;
+    if (at + 1 > scanned) scanned = at + 1;
+    if (at > cursor && opening) opening += ' ';
+    cursor = at + 1;
+    opening += text[at];
+    if (opening.length > 40) {
+      if (resolverCountersEnabled_ACU) resolverCounters_ACU.openingScanChars += scanned;
+      return `${opening.slice(0, 40)}…`;
+    }
+    matched = NON_WHITESPACE_ACU.exec(text);
+  }
+  if (resolverCountersEnabled_ACU) resolverCounters_ACU.openingScanChars += text.length;
+  return opening;
 }
 
 /** 事件概览的最小入参。 */
@@ -333,9 +490,8 @@ export function renderAgentStoryText_ACU(context: AgentResolveContext_ACU): stri
   if (highestIndex < 0) return '当前聊天还没有任何楼层，也就没有已经发生的正文。';
   // 删楼后残留的水位可能指向已不存在的楼层，必须钳制，否则未结算段起点会越过末楼输出空段。
   const settledThrough = Math.min(context.settledThroughIndex, highestIndex);
-  const floors = chat
-    .map((message, index) => ({ index, text: messageText_ACU(message, context.contextRules) }))
-    .filter(item => isAiFloor_ACU(chat[item.index]) && item.text);
+  // 与正文目录/窗口共用同一次「AI 楼 + 文本」枚举（含记忆化），不再各自全量提取一遍。
+  const floors = listAgentStoryFloors_ACU({ chat, contextRules: context.contextRules });
   if (!floors.length) return '当前聊天还没有 AI 产出的正文楼层。';
 
   const window = Math.max(0, context.storyWindowFloors ?? AGENT_STORY_WINDOW_DEFAULT_ACU);

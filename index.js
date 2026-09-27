@@ -91318,7 +91318,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.8.0" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.8.1" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -120999,8 +120999,29 @@ function cloneAgentPromptSegments_ACU(segments) {
  * - P1 前缀指纹语义由 deps.isSnapshotPrefixCompatible 注入：legacy 与 checkpoint
  *   基线在采纳前必须通过指纹兼容检查，否则跳过（删楼/替换后拒绝复用旧基线）。
  */
+/**
+ * parseField 记忆化：外层键是 deps 实例（不同校验器口径互不串味），内层键是每楼
+ * 原始帧对象引用。写路径一律整体替换该字段对象（writeFrame_ACU 与
+ * agent-module-store 的 assignment 提交都是 `message[FIELD] = 新对象`），
+ * 因此换对象即天然失效，无需版本号。
+ */
+let fieldParseMemo_ACU = new WeakMap();
 function isRecord_ACU$a(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+const frameCounters_ACU = { folds: 0, fieldParses: 0, fieldMemoHits: 0 };
+let frameCountersEnabled_ACU = false;
+/** 仅供测试：打开计数并清零（含记忆化缓存清空，便于构造"冷路径"对照）。 */
+function __resetAgentModuleFrameCachesForTests_ACU() {
+    frameCounters_ACU.folds = 0;
+    frameCounters_ACU.fieldParses = 0;
+    frameCounters_ACU.fieldMemoHits = 0;
+    frameCountersEnabled_ACU = true;
+    fieldParseMemo_ACU = new WeakMap();
+}
+/** 仅供测试：读取计数快照。 */
+function __readAgentModuleFrameCountersForTests_ACU() {
+    return { ...frameCounters_ACU };
 }
 function cloneJson_ACU$2(value) {
     return JSON.parse(JSON.stringify(value));
@@ -121148,11 +121169,7 @@ function parseDelta_ACU(raw, deps) {
     }
     return delta;
 }
-function parseField_ACU(raw, deps) {
-    if (raw === undefined)
-        return { kind: 'empty' };
-    if (!isRecord_ACU$a(raw))
-        return { kind: 'broken', problems: ['资料字段不是对象'], salvaged: null };
+function parseFieldUncached_ACU(raw, deps) {
     if (raw.schemaVersion === AGENT_MODULE_FRAME_SCHEMA_VERSION_ACU) {
         if (!Array.isArray(raw.deltas))
             return { kind: 'broken', problems: ['schema 3 缺少 deltas 数组'], salvaged: null };
@@ -121186,6 +121203,49 @@ function parseField_ACU(raw, deps) {
         problems: salvaged?.problems ?? ['快照不是可折叠的资料帧'],
         salvaged: salvaged?.snapshot ?? null,
     };
+}
+function fieldParseCacheFor_ACU(deps) {
+    let cache = fieldParseMemo_ACU.get(deps);
+    if (!cache) {
+        cache = new WeakMap();
+        fieldParseMemo_ACU.set(deps, cache);
+    }
+    return cache;
+}
+/**
+ * problems 必须每次交出副本：foldAgentModuleSnapshot_ACU 会把"前缀指纹失配"文案
+ * push 进候选诊断（candidates[last].problems），若直接共享记忆化里的数组，
+ * 第二次折叠就会把同一帧误判成 invalid（帧损坏门会拒绝本可写入的聊天）。
+ * 其余字段（frame/legacy.snapshot）由 parseDelta/validateSnapshot 产出，本就是
+ * 与原始帧无别名的副本，且调用方一律只读（fold 走 cloneJson 复制后才改，
+ * readFrame_ACU / stripCurrentSwipeThrough_ACU 同样先整体 cloneJson），可安全共享。
+ */
+function withPrivateProblems_ACU(parsed) {
+    if (parsed.kind === 'frame' || parsed.kind === 'broken')
+        return { ...parsed, problems: parsed.problems.slice() };
+    return parsed;
+}
+/**
+ * 逐楼资料字段解析（记忆化入口）。深度解析含 applyDelta + validateSnapshot + 多次
+ * cloneJson，是折叠路径的大头；同一操作内对同一楼层重复折叠时必须复用。
+ */
+function parseField_ACU(raw, deps) {
+    if (raw === undefined)
+        return { kind: 'empty' };
+    if (!isRecord_ACU$a(raw))
+        return { kind: 'broken', problems: ['资料字段不是对象'], salvaged: null };
+    const cache = fieldParseCacheFor_ACU(deps);
+    const memo = cache.get(raw);
+    if (memo) {
+        if (frameCountersEnabled_ACU)
+            frameCounters_ACU.fieldMemoHits += 1;
+        return withPrivateProblems_ACU(memo);
+    }
+    if (frameCountersEnabled_ACU)
+        frameCounters_ACU.fieldParses += 1;
+    const parsed = parseFieldUncached_ACU(raw, deps);
+    cache.set(raw, parsed);
+    return withPrivateProblems_ACU(parsed);
 }
 function entryId_ACU$1(item) {
     if (!isRecord_ACU$a(item) || typeof item.id !== 'string')
@@ -121422,6 +121482,15 @@ function fieldOf_ACU(message) {
         return undefined;
     return message[AGENT_MODULE_FIELD_ACU];
 }
+/**
+ * 全聊天最大 delta 序号（深度解析口径）。
+ *
+ * 保留原因：逐栏写入规划（planAgentModuleFieldWrite_ACU）内部不做全量折叠，
+ * 同一操作内没有任何一处保证这些楼层已被深度解析过——这里必须自己解析，
+ * 否则损坏帧的 seq 会被算进序号，破坏「只统计 parseDelta 通过的 delta」口径。
+ * 记忆化后该扫描是 O(楼层) 次 WeakMap 查询，不再重复 applyDelta/validate/clone。
+ * 整条快照写入规划走的是折叠结果自带的 maxDeltaSeq，不需要本函数。
+ */
 function maxSeq_ACU(chat, deps) {
     let max = 0;
     for (const message of chat) {
@@ -121460,11 +121529,14 @@ function hasUsableSchema3Checkpoint_ACU(chat, deps) {
  * legacy 与 checkpoint 基线需通过 P1 指纹兼容检查（deps 注入），否则跳过该基线。
  */
 function foldAgentModuleSnapshot_ACU(chat, deps, throughIndex = chat.length - 1) {
+    if (frameCountersEnabled_ACU)
+        frameCounters_ACU.folds += 1;
     let snapshot = deps.emptySnapshot();
     let contributed = false;
     let sawSchema3Checkpoint = false;
     let checkpointIndex = null;
     let foldedDeltaCount = 0;
+    let maxDeltaSeq = 0;
     let adoptedIndex = null;
     const candidates = [];
     let salvage = null;
@@ -121528,6 +121600,9 @@ function foldAgentModuleSnapshot_ACU(chat, deps, throughIndex = chat.length - 1)
             }
         }
         for (const delta of parsed.frame.deltas) {
+            // 与 swipe 无关：全聊天最大序号的口径只看帧里解析通过的 delta。
+            if (delta.seq > maxDeltaSeq)
+                maxDeltaSeq = delta.seq;
             if (delta.swipeId !== swipeId)
                 continue;
             snapshot = applyDelta_ACU(snapshot, delta);
@@ -121549,6 +121624,7 @@ function foldAgentModuleSnapshot_ACU(chat, deps, throughIndex = chat.length - 1)
             salvaged: true,
             checkpointIndex: salvage.index,
             foldedDeltaCount: 0,
+            maxDeltaSeq,
             contributed: true,
         };
     }
@@ -121560,6 +121636,7 @@ function foldAgentModuleSnapshot_ACU(chat, deps, throughIndex = chat.length - 1)
         salvaged: false,
         checkpointIndex: contributed ? checkpointIndex : null,
         foldedDeltaCount,
+        maxDeltaSeq,
         contributed,
     };
 }
@@ -121633,10 +121710,26 @@ function appendDelta_ACU(chat, targetIndex, delta, deps) {
 /**
  * 规划一次快照写入：已有 schema 3 基线时只追加 delta；否则把首基线放到表格 checkpoint 楼或最新 AI 楼。
  * 不修改传入的 chat。
+ *
+ * `folded` 是调用方在同一操作内已折叠出的基线（写入路径先做乐观锁复核时已经折过一次），
+ * 必须是**这条 chat** 的折叠结果：传别的数组会让 seq 口径漂移，传错数组时由上面的自检兜底重折。
+ * scratch 是 chat 的浅拷贝、逐楼共用同一资料字段对象引用，折叠只读该引用与 swipe_id，
+ * 因此「折 chat」与「折 scratch」逐字段等价，复用它不改变任何规划判定。
  */
-function planAgentModuleSnapshotWrite_ACU(chat, targetIndex, next, deps, tableAnchorIndex) {
+/**
+ * 规划前的折叠来源自检：折叠结果必须来自同一条 chat。
+ * checkpointIndex 越界只可能是"折了另一条/更长的聊天"——那种情况下 maxDeltaSeq 口径会漂移，
+ * 宁可重折一次也不能拿错基线规划 seq。
+ */
+function isFoldResultForChat_ACU(folded, chatLength) {
+    return folded.checkpointIndex === null
+        || (folded.checkpointIndex >= 0 && folded.checkpointIndex < chatLength);
+}
+function planAgentModuleSnapshotWrite_ACU(chat, targetIndex, next, deps, tableAnchorIndex, folded) {
     const scratch = chat.map(message => (isRecord_ACU$a(message) ? { ...message } : message));
-    const before = foldAgentModuleSnapshot_ACU(scratch, deps);
+    const before = isFoldResultForChat_ACU(folded, chat.length)
+        ? folded
+        : foldAgentModuleSnapshot_ACU(scratch, deps);
     const clamped = {
         ...cloneJson_ACU$2(next),
         settledThroughIndex: clampWaterline_ACU(next.settledThroughIndex, targetIndex),
@@ -121646,7 +121739,9 @@ function planAgentModuleSnapshotWrite_ACU(chat, targetIndex, next, deps, tableAn
         return { changed: false, assignments: [] };
     }
     const base = before.contributed ? before.snapshot : deps.emptySnapshot();
-    const delta = diffSnapshot_ACU(base, clamped, readMessageSwipeId_ACU(scratch[targetIndex]), maxSeq_ACU(scratch, deps) + 1);
+    // 序号取折叠结果自带的 maxDeltaSeq：本次折叠已对全聊天逐楼深度解析过，口径与旧的
+    // maxSeq 扫描完全相同（只统计 parseDelta 通过的 delta），省掉一整趟全聊天解析。
+    const delta = diffSnapshot_ACU(base, clamped, readMessageSwipeId_ACU(scratch[targetIndex]), before.maxDeltaSeq + 1);
     // 失配的旧基线（swipe 切换/指纹失配）视为不可用：走建新 checkpoint 分支自愈，
     // 而不是在被折叠跳过的基线上继续追 delta。
     const hadUsableCheckpoint = hasUsableSchema3Checkpoint_ACU(scratch, deps);
@@ -124789,17 +124884,34 @@ let lastReadDiagnostics_ACU = {
     checkpointIndex: null,
     foldedDeltaCount: 0,
 };
+/**
+ * 帧折叠依赖单例。逐次新建对象会让 parseField 记忆化（外层键是 deps 实例）恒不命中，
+ * 四个依赖项都是模块级纯函数、不捕获逐次状态，因此冻结成单例安全。
+ */
+const AGENT_MODULE_FRAME_DEPS_ACU = Object.freeze({
+    validateSnapshot: validateAgentModuleSnapshot_ACU,
+    salvageSnapshot: salvageAgentModuleSnapshot_ACU,
+    emptySnapshot: buildEmptyAgentModuleSnapshot_ACU,
+    isSnapshotPrefixCompatible: (snapshot, chat) => isChatPrefixCompatible_ACU(snapshot, chat),
+});
 function agentModuleFrameDeps_ACU() {
-    return {
-        validateSnapshot: validateAgentModuleSnapshot_ACU,
-        salvageSnapshot: salvageAgentModuleSnapshot_ACU,
-        emptySnapshot: buildEmptyAgentModuleSnapshot_ACU,
-        isSnapshotPrefixCompatible: (snapshot, chat) => isChatPrefixCompatible_ACU(snapshot, chat),
-    };
+    return AGENT_MODULE_FRAME_DEPS_ACU;
 }
 /** 最近一次 readAgentModuleSnapshot_ACU 的诊断信息，供面板解释“为什么资料是空的/是旧的”。 */
 function readAgentModuleSnapshotDiagnostics_ACU() {
     return lastReadDiagnostics_ACU;
+}
+/** 折叠并刷新「最近一次读取」诊断（所有读入口与写入前复核共用，保证诊断口径一致）。 */
+function foldAndRecordReadDiagnostics_ACU(messages) {
+    const folded = foldAgentModuleSnapshot_ACU(messages, agentModuleFrameDeps_ACU());
+    lastReadDiagnostics_ACU = {
+        candidates: folded.candidates,
+        adoptedIndex: folded.adoptedIndex,
+        salvaged: folded.salvaged,
+        checkpointIndex: folded.checkpointIndex,
+        foldedDeltaCount: folded.foldedDeltaCount,
+    };
+    return folded;
 }
 /**
  * 读取当前生效的资料快照。
@@ -124811,17 +124923,8 @@ function readAgentModuleSnapshotDiagnostics_ACU() {
  */
 function readAgentModuleSnapshot_ACU(chat) {
     const messages = Array.isArray(chat) ? chat : getChatArray_ACU();
-    const folded = foldAgentModuleSnapshot_ACU(messages, agentModuleFrameDeps_ACU());
-    lastReadDiagnostics_ACU = {
-        candidates: folded.candidates,
-        adoptedIndex: folded.adoptedIndex,
-        salvaged: folded.salvaged,
-        checkpointIndex: folded.checkpointIndex,
-        foldedDeltaCount: folded.foldedDeltaCount,
-    };
-    if (folded.salvaged) {
-        console.warn(`[SP·数据库][续写资料] 楼层 ${folded.adoptedIndex} 的资料快照未通过严格校验，已按宽容模式读取：${folded.candidates.find(item => item.index === folded.adoptedIndex)?.problems.join('；') ?? ''}`);
-    }
+    const folded = foldAndRecordReadDiagnostics_ACU(messages);
+    warnIfSalvagedRead_ACU(folded);
     return folded.snapshot;
 }
 /**
@@ -124831,15 +124934,16 @@ function readAgentModuleSnapshot_ACU(chat) {
  */
 function readAgentModuleFieldSnapshot_ACU(chat) {
     const messages = Array.isArray(chat) ? chat : getChatArray_ACU();
-    const folded = foldAgentModuleSnapshot_ACU(messages, agentModuleFrameDeps_ACU());
-    lastReadDiagnostics_ACU = {
-        candidates: folded.candidates,
-        adoptedIndex: folded.adoptedIndex,
-        salvaged: folded.salvaged,
-        checkpointIndex: folded.checkpointIndex,
-        foldedDeltaCount: folded.foldedDeltaCount,
-    };
-    return folded.fields;
+    return foldAndRecordReadDiagnostics_ACU(messages).fields;
+}
+/**
+ * 抢救读的诊断告警：资料快照未通过严格校验、被按宽容模式采纳。
+ * 读入口与写路径（乐观锁复核）共用一条——重构折叠链路时写路径最容易静默丢掉这条诊断。
+ */
+function warnIfSalvagedRead_ACU(folded) {
+    if (!folded.salvaged)
+        return;
+    console.warn(`[SP·数据库][续写资料] 楼层 ${folded.adoptedIndex} 的资料快照未通过严格校验，已按宽容模式读取：${folded.candidates.find(item => item.index === folded.adoptedIndex)?.problems.join('；') ?? ''}`);
 }
 /**
  * 把快照写入指定楼层并真实提交到宿主（帧增量）。
@@ -124865,7 +124969,12 @@ async function writeAgentModuleSnapshot_ACU(chat, targetIndex, snapshot) {
     // 修订号整体 +1（replaceAgentModuleSnapshotByUser_ACU），旧基准整份写入会静默冲掉用户内容。
     // 落盘前重读当前生效快照，任一类「楼层比写入快照新」即放弃落盘并记日志；正常路径零影响。
     const revisionDrifts = [];
-    const floorSnapshot = readAgentModuleSnapshot_ACU(chat);
+    // 乐观锁复核需要的「当前生效资料」就是规划阶段要的那次折叠：同一次折叠结果贯穿
+    // 复核与规划（两者之间聊天零变更），省掉一次全量折叠。
+    const floorState = foldAndRecordReadDiagnostics_ACU(chat);
+    // 写路径的规划基线同样是「宽容模式采纳」的快照，诊断与读路径保持一致。
+    warnIfSalvagedRead_ACU(floorState);
+    const floorSnapshot = floorState.snapshot;
     const revisionPairs = [
         ['hooks', floorSnapshot.revisions.hooks, snapshot.revisions.hooks],
         ['infoGap', floorSnapshot.revisions.infoGap, snapshot.revisions.infoGap],
@@ -124888,7 +124997,7 @@ async function writeAgentModuleSnapshot_ACU(chat, targetIndex, snapshot) {
         settledThroughIndex,
         settledPrefixFingerprint: snapshot.settledPrefixFingerprint ?? chatPrefixFingerprint_ACU(chat, settledThroughIndex),
     };
-    const plan = planAgentModuleSnapshotWrite_ACU(chat, targetIndex, stamped, agentModuleFrameDeps_ACU(), findLatestTableFullCheckpointIndex_ACU(chat));
+    const plan = planAgentModuleSnapshotWrite_ACU(chat, targetIndex, stamped, agentModuleFrameDeps_ACU(), findLatestTableFullCheckpointIndex_ACU(chat), floorState);
     if (!plan.changed)
         return;
     try {
@@ -129724,8 +129833,28 @@ function normalizeContinuationMaxAutomaticStages_ACU(value, fallback = 6) {
     return normalizeOptionalInteger_ACU(value, fallback, 1, 'maxAutomaticStages');
 }
 
+const cursorCounters_ACU = { fingerprints: 0, floorIdentities: 0, reconciles: 0 };
+let cursorCountersEnabled_ACU = false;
+/** 仅供测试：打开计数并清零。 */
+function __resetStageCursorCountersForTests_ACU() {
+    cursorCounters_ACU.fingerprints = 0;
+    cursorCounters_ACU.floorIdentities = 0;
+    cursorCounters_ACU.reconciles = 0;
+    cursorCountersEnabled_ACU = true;
+}
+/** 仅供测试：读取计数快照。 */
+function __readStageCursorCountersForTests_ACU() {
+    return { ...cursorCounters_ACU };
+}
+function isRecordMessage_ACU(message) {
+    return !!message && typeof message === 'object' && !Array.isArray(message);
+}
+function messageIdOf_ACU(record) {
+    const rawId = record ? (record.message_id ?? record.id) : undefined;
+    return (typeof rawId === 'string' || (typeof rawId === 'number' && Number.isFinite(rawId))) ? rawId : undefined;
+}
 function messageFingerprintText_ACU(message) {
-    const record = message && typeof message === 'object' && !Array.isArray(message) ? message : {};
+    const record = isRecordMessage_ACU(message) ? message : {};
     const payload = JSON.stringify({
         is_user: record.is_user === true,
         is_system: record.is_system === true,
@@ -129741,12 +129870,37 @@ function messageFingerprintText_ACU(message) {
     return `mf-${(hash >>> 0).toString(16).padStart(8, '0')}`;
 }
 function getStableMessageIdentity_ACU(message) {
-    const record = message && typeof message === 'object' && !Array.isArray(message) ? message : {};
-    const rawId = record.message_id ?? record.id;
-    const messageId = (typeof rawId === 'string' || (typeof rawId === 'number' && Number.isFinite(rawId))) ? rawId : undefined;
-    return { ...(messageId === undefined ? {} : { messageId }), messageFingerprint: messageFingerprintText_ACU(record) };
+    const record = isRecordMessage_ACU(message) ? message : null;
+    const messageId = messageIdOf_ACU(record);
+    if (cursorCountersEnabled_ACU)
+        cursorCounters_ACU.fingerprints += 1;
+    return { ...(messageId === undefined ? {} : { messageId }), messageFingerprint: messageFingerprintText_ACU(message) };
 }
-function completionSurvives_ACU(entry, chat, chatLength, used) {
+function floorIdentityOf_ACU(identity) {
+    if (identity.fingerprint === null) {
+        identity.fingerprint = messageFingerprintText_ACU(identity.message);
+        if (cursorCountersEnabled_ACU)
+            cursorCounters_ACU.fingerprints += 1;
+    }
+    return identity.fingerprint;
+}
+function buildFloorIdentities_ACU(chat) {
+    const floors = chat;
+    const size = typeof floors.length === 'number' ? floors.length : 0;
+    const identities = new Array(size);
+    for (let index = 0; index < size; index += 1) {
+        const message = floors[index];
+        identities[index] = {
+            message,
+            messageId: messageIdOf_ACU(isRecordMessage_ACU(message) ? message : null),
+            fingerprint: null,
+        };
+    }
+    if (cursorCountersEnabled_ACU)
+        cursorCounters_ACU.floorIdentities += size;
+    return identities;
+}
+function completionSurvives_ACU(entry, chat, chatLength, identities, used) {
     const hasDurableIdentity = entry.messageId !== undefined || entry.messageFingerprint !== undefined;
     if (!chat)
         return !hasDurableIdentity && typeof entry.messageIndex === 'number' ? entry.messageIndex < chatLength : !hasDurableIdentity;
@@ -129755,10 +129909,10 @@ function completionSurvives_ACU(entry, chat, chatLength, used) {
     for (let index = 0; index < chat.length; index += 1) {
         if (used.has(index))
             continue;
-        const identity = getStableMessageIdentity_ACU(chat[index]);
+        const identity = identities[index];
         if (entry.messageId !== undefined && identity.messageId !== entry.messageId)
             continue;
-        if (entry.messageFingerprint !== undefined && identity.messageFingerprint !== entry.messageFingerprint)
+        if (entry.messageFingerprint !== undefined && floorIdentityOf_ACU(identity) !== entry.messageFingerprint)
             continue;
         used.add(index);
         return true;
@@ -129770,10 +129924,15 @@ function completionSurvives_ACU(entry, chat, chatLength, used) {
  * 新写入的完成记录带稳定 message identity；旧记录没有 identity 时才回退到旧下标兼容。
  */
 function reconcileTaskCursorFromChat_ACU(task, chatLength, chat) {
+    if (cursorCountersEnabled_ACU)
+        cursorCounters_ACU.reconciles += 1;
     const effectiveLength = Array.isArray(chat) ? chat.length : chatLength;
     if (!Number.isInteger(effectiveLength) || effectiveLength < 0)
         return task;
     const completions = task.timeline.filter(entry => entry.kind === 'turn_completed' && entry.stageId);
+    // 逐楼身份只建一次：旧实现是「每条完成记录从 0 楼扫全聊天、每楼每条都重算整段 mes 指纹」，
+    // 成本 O(完成数×楼层)。这里预计算一遍身份表（O(楼层)），指纹按需算、messageId 命中即短路。
+    const identities = chat ? buildFloorIdentities_ACU(chat) : [];
     const survivingByStage = new Map();
     const hasAnchorByStage = new Map();
     for (const entry of completions) {
@@ -129781,7 +129940,7 @@ function reconcileTaskCursorFromChat_ACU(task, chatLength, chat) {
         if (typeof entry.messageIndex === 'number' || entry.messageId !== undefined || entry.messageFingerprint !== undefined)
             hasAnchorByStage.set(stageId, true);
         const surviving = survivingByStage.get(stageId) ?? 0;
-        survivingByStage.set(stageId, surviving + (completionSurvives_ACU(entry, chat, effectiveLength, new Set()) ? 1 : 0));
+        survivingByStage.set(stageId, surviving + (completionSurvives_ACU(entry, chat, effectiveLength, identities, new Set()) ? 1 : 0));
     }
     // 从前往后扫：一旦某阶段因楼层消失而未完成，其后没有任何存活完成的阶段应废弃。
     let firstOpenIndex = -1;
@@ -129801,7 +129960,7 @@ function reconcileTaskCursorFromChat_ACU(task, chatLength, chat) {
         for (const entry of completions) {
             if (entry.stageId !== stage.stageId)
                 continue;
-            if (!completionSurvives_ACU(entry, chat, effectiveLength, used))
+            if (!completionSurvives_ACU(entry, chat, effectiveLength, identities, used))
                 break;
             surviving += 1;
         }
@@ -131816,7 +131975,22 @@ function validateTask_ACU(raw, settings) {
     })();
     return { taskId: requireString_ACU(raw.taskId, 'activeTask.taskId'), originInstruction: requireString_ACU(raw.originInstruction, 'activeTask.originInstruction'), status, createdAt: requireInteger_ACU(raw.createdAt, 'activeTask.createdAt', 0), updatedAt: requireInteger_ACU(raw.updatedAt, 'activeTask.updatedAt', 0), runStartedAt: raw.runStartedAt === null ? null : requireInteger_ACU(raw.runStartedAt, 'activeTask.runStartedAt', 0), deadlineAt: raw.deadlineAt === null ? null : requireInteger_ACU(raw.deadlineAt, 'activeTask.deadlineAt', 0), runStageCount, stageBudgetBaseCount, activeStageId, stages, timeline: validateTimeline_ACU(raw.timeline), stopReason, lastError: lastError, ...('pendingHostTurn' in raw ? { pendingHostTurn: validatePendingHostTurn_ACU(raw.pendingHostTurn) } : {}) };
 }
+const envelopeCounters_ACU = { envelopeValidations: 0, envelopeMemoHits: 0 };
+let envelopeCountersEnabled_ACU = false;
+/** 仅供测试：打开计数并清零（含记忆化清空，便于构造「冷路径」对照）。 */
+function __resetContinuationEnvelopeCachesForTests_ACU() {
+    envelopeCounters_ACU.envelopeValidations = 0;
+    envelopeCounters_ACU.envelopeMemoHits = 0;
+    envelopeCountersEnabled_ACU = true;
+    validatedEnvelopeMemo_ACU = new WeakMap();
+}
+/** 仅供测试：读取计数快照。 */
+function __readContinuationEnvelopeCountersForTests_ACU() {
+    return { ...envelopeCounters_ACU };
+}
 function validateContinuationEnvelope_ACU(raw, phase = 'load') {
+    if (envelopeCountersEnabled_ACU)
+        envelopeCounters_ACU.envelopeValidations += 1;
     try {
         if (!isRecord_ACU$4(raw))
             fail_ACU$2('CONTINUATION_ENVELOPE_INVALID', '智能续写状态必须是对象');
@@ -131867,9 +132041,42 @@ function assertChatContext_ACU(context) {
         fail_ACU$2('CONTINUATION_CHAT_CHANGED', '目标聊天已切换，拒绝写入');
     }
 }
+/**
+ * 信封校验结论记忆化：键是首楼 `_qrf_continuation` 字段的 raw 对象引用。
+ *
+ * 失效不变式（全仓 grep 实证，2026-09-27）：对 `_qrf_continuation` 的写入只有
+ *   ①replaceWithinQueue_ACU：`firstMessage[FIELD] = validatedCandidate`（整体替换新对象）；
+ *   ②restoreFirstFloorField_ACU：还原 previousValue 或 delete（整体替换/删除）；
+ *   ③宿主重新载入聊天：换新首楼对象与字段对象。
+ * 三条都不是对既有信封对象的原地 mutation，因此「引用相同 ⇒ 内容相同」成立，
+ * 换对象即天然失效，不需要版本号。
+ *
+ * 记忆化的是**校验结论**而不是交给调用方的对象：命中时交出深拷贝，保持
+ * 「每次 read 都拿到一份私有对象图」的既有契约（readPersisted 的返回值会流进
+ * orchestrator 的 mutator 与 reconcile 路径，共享引用被就地改会污染后续每一次读）。
+ * 未命中时把深拷贝留给记忆化、本次直接交出校验产物：每个 raw 仅多一次克隆，之后每次 read 省一整遍深校验。
+ */
+let validatedEnvelopeMemo_ACU = new WeakMap();
+function cloneValidatedEnvelope_ACU(envelope) {
+    // 校验产物是纯 JSON 数据（无 Date/Map/类实例），structuredClone 可用；
+    // 万一宿主环境缺失则退回 JSON 往返。
+    return typeof structuredClone === 'function' ? structuredClone(envelope) : JSON.parse(JSON.stringify(envelope));
+}
 function readRawEnvelope_ACU(firstMessage) {
     const raw = firstMessage[CONTINUATION_FIRST_FLOOR_FIELD_ACU];
-    return raw === undefined ? null : validateContinuationEnvelope_ACU(raw);
+    if (raw === undefined)
+        return null;
+    if (!isRecord_ACU$4(raw))
+        return validateContinuationEnvelope_ACU(raw);
+    const memo = validatedEnvelopeMemo_ACU.get(raw);
+    if (memo) {
+        if (envelopeCountersEnabled_ACU)
+            envelopeCounters_ACU.envelopeMemoHits += 1;
+        return cloneValidatedEnvelope_ACU(memo);
+    }
+    const validated = validateContinuationEnvelope_ACU(raw);
+    validatedEnvelopeMemo_ACU.set(raw, cloneValidatedEnvelope_ACU(validated));
+    return validated;
 }
 function restoreFirstFloorField_ACU(firstMessage, hadPreviousValue, previousValue) {
     if (hadPreviousValue)
@@ -131961,6 +132168,12 @@ class FirstFloorContinuationStore_ACU {
 }
 FirstFloorContinuationStore_ACU.writeTailsByChatIdentity_ACU = new Map();
 function derivePausedContinuationEnvelopeAfterReload_ACU(envelope) {
+    // 注意：这里的深校验**不是**对 readRawEnvelope_ACU 结果的冗余重复，删不得。
+    // 大纲校验会按 pacing 给缺失的软字段补默认并打 inferred 标记（outline-schema
+    // reconcileTurnSemantics / TURN_OPTIONAL_KEYS 的 default 策略），而对已补齐的对象
+    // 再校验一次不会重新打标——所以这一遍的效果正是「把 inferred 标记洗掉」。
+    // read 漏斗依赖这个副作用：交给运行时的信封不带 inferred 标记。
+    // 差分测试「read 的 inferred 语义」钉住该行为。
     const validated = validateContinuationEnvelope_ACU(envelope);
     const task = validated.activeTask;
     if (!task)
@@ -138417,14 +138630,96 @@ function applyAgentContextRules_ACU(text, rules) {
         return text;
     return applyContextTagFilters_ACU(text, { extractTags: '', extractRules: rules.extractRules, excludeTags: '', excludeRules: rules.excludeRules }).trim();
 }
+/**
+ * 规则签名。上下文规则是纯数据（applyContextTagFilters 全程不改入参），
+ * 序列化一次的成本相对每楼每规则的整段扫描可忽略；每次现算而不是按规则对象
+ * 记忆化，是为了连「规则数组被原地改内容」这种情况也不串味。
+ */
+function contextRulesSignature_ACU(rules) {
+    if (!rules || (!rules.extractRules.length && !rules.excludeRules.length))
+        return '';
+    return JSON.stringify([rules.extractRules, rules.excludeRules]);
+}
+const resolverCounters_ACU = { textExtractions: 0, textMemoHits: 0, floorListRebuilds: 0, floorListHits: 0, openingScanChars: 0 };
+let resolverCountersEnabled_ACU = false;
+/** 仅供测试：打开计数并清空全部记忆化（含构造「冷路径」对照）。 */
+function __resetAgentPlaceholderResolverCachesForTests_ACU() {
+    resolverCounters_ACU.textExtractions = 0;
+    resolverCounters_ACU.textMemoHits = 0;
+    resolverCounters_ACU.floorListRebuilds = 0;
+    resolverCounters_ACU.floorListHits = 0;
+    resolverCounters_ACU.openingScanChars = 0;
+    resolverCountersEnabled_ACU = true;
+    messageTextMemo_ACU = new WeakMap();
+    storyFloorsMemo_ACU = new WeakMap();
+}
+/** 仅供测试：读取计数快照。 */
+function __readAgentPlaceholderResolverCountersForTests_ACU() {
+    return { ...resolverCounters_ACU };
+}
+let messageTextMemo_ACU = new WeakMap();
+function messageTextByRulesKey_ACU(message, rules, rulesKey) {
+    const raw = String(message?.mes ?? '');
+    if (!message || typeof message !== 'object')
+        return applyAgentContextRules_ACU(raw.trim(), rules);
+    const memo = messageTextMemo_ACU.get(message);
+    if (memo && memo.mes === raw && memo.rulesKey === rulesKey) {
+        if (resolverCountersEnabled_ACU)
+            resolverCounters_ACU.textMemoHits += 1;
+        return memo.text;
+    }
+    if (resolverCountersEnabled_ACU)
+        resolverCounters_ACU.textExtractions += 1;
+    const text = applyAgentContextRules_ACU(raw.trim(), rules);
+    messageTextMemo_ACU.set(message, { mes: raw, rulesKey, text });
+    return text;
+}
 function messageText_ACU(message, rules) {
-    return applyAgentContextRules_ACU(String(message?.mes ?? '').trim(), rules);
+    return messageTextByRulesKey_ACU(message, rules, contextRulesSignature_ACU(rules));
+}
+let storyFloorsMemo_ACU = new WeakMap();
+const EMPTY_CHAT_ACU = [];
+function isStoryFloorsMemoFresh_ACU(chat, memo, rulesKey) {
+    if (memo.rulesKey !== rulesKey || memo.refs.length !== chat.length)
+        return false;
+    for (let index = 0; index < chat.length; index += 1) {
+        const message = chat[index];
+        if (memo.refs[index] !== message)
+            return false;
+        if (memo.aiFlags[index] !== isAiFloor_ACU(message) || memo.mesRefs[index] !== message?.mes)
+            return false;
+    }
+    return true;
 }
 function listAgentStoryFloors_ACU(source) {
-    const chat = Array.isArray(source.chat) ? source.chat : [];
-    return chat
-        .map((message, index) => ({ index, text: messageText_ACU(message, source.contextRules) }))
-        .filter(item => isAiFloor_ACU(chat[item.index]) && item.text);
+    const chat = Array.isArray(source.chat) ? source.chat : EMPTY_CHAT_ACU;
+    const rulesKey = contextRulesSignature_ACU(source.contextRules);
+    const memo = storyFloorsMemo_ACU.get(chat);
+    if (memo && isStoryFloorsMemoFresh_ACU(chat, memo, rulesKey)) {
+        if (resolverCountersEnabled_ACU)
+            resolverCounters_ACU.floorListHits += 1;
+        return memo.floors;
+    }
+    if (resolverCountersEnabled_ACU)
+        resolverCounters_ACU.floorListRebuilds += 1;
+    const floors = [];
+    const refs = [];
+    const mesRefs = [];
+    const aiFlags = [];
+    for (let index = 0; index < chat.length; index += 1) {
+        const message = chat[index];
+        // 非 AI 楼不进正文域：旧实现也提取了它们的文本，但那份文本随后被过滤丢弃，
+        // 而提取规则是纯函数，提取与不提取可观察行为一致（少一次无用功）。
+        const ai = isAiFloor_ACU(message);
+        const text = ai ? messageTextByRulesKey_ACU(message, source.contextRules, rulesKey) : '';
+        refs.push(message);
+        mesRefs.push(message?.mes);
+        aiFlags.push(ai);
+        if (ai && text)
+            floors.push({ index, text });
+    }
+    storyFloorsMemo_ACU.set(chat, { rulesKey, floors, refs, mesRefs, aiFlags });
+    return floors;
 }
 function agentStoryWindowSize_ACU(source) {
     return Math.max(0, source.storyWindowFloors ?? AGENT_STORY_WINDOW_DEFAULT_ACU);
@@ -138461,9 +138756,46 @@ function extractAgentRecallCodesFromChat_ACU(chat) {
 function renderStoryFloors_ACU(floors) {
     return floors.map(floor => `【楼层 ${floor.index}】\n${floor.text}`).join('\n\n');
 }
+/**
+ * 开头摘要：等价于 `text.replace(/\s+/g,' ').trim()` 的前 40 字（超出补省略号），
+ * 但只扫到第 41 个输出字符就停。
+ *
+ * 等价论证（逐码元对齐，无任何近似）：
+ * - `replace(/\s+/g,' ')` 把每段极大空白游程替换成恰好一个空格，`trim()` 再去首尾空白；
+ *   trim 的空白集合与 `\s` 完全相同（WhiteSpace ∪ LineTerminator）。
+ * - 用 `/[^\s]/g` 定位下一个非空白码元，空白游程由引擎原生跳过，分段与 replace 一致；
+ *   首个非空白码元之前不补空格＝等价 trim 去首，扫描结束时的待补空格不输出＝等价 trim 去尾。
+ * - 输出长度首次超过 40 即等价「压平后长度 > 40」；扫描走完则压平长度 ≤ 40，原样返回不加省略号。
+ * - 全程按 UTF-16 码元处理，与 replace/slice 的码元语义一致（含代理对）。
+ * ⚠️ 任何固定前缀窗口（如先 slice(0,128) 再压平）都**不**等价：单个超长空白游程能把
+ * 第 40 个输出字符推到任意靠后的位置，因此只能按「已产出字符数」提前退出。
+ * 扫描器是模块级单例（每次调用入口重置 lastIndex）；本函数无回调、不可重入。
+ */
+const NON_WHITESPACE_ACU = /[^\s]/g;
 function storyOpening_ACU(text) {
-    const flat = text.replace(/\s+/g, ' ').trim();
-    return flat.length <= 40 ? flat : `${flat.slice(0, 40)}…`;
+    NON_WHITESPACE_ACU.lastIndex = 0;
+    let opening = '';
+    let cursor = 0;
+    let scanned = 0;
+    let matched = NON_WHITESPACE_ACU.exec(text);
+    while (matched) {
+        const at = matched.index;
+        if (at + 1 > scanned)
+            scanned = at + 1;
+        if (at > cursor && opening)
+            opening += ' ';
+        cursor = at + 1;
+        opening += text[at];
+        if (opening.length > 40) {
+            if (resolverCountersEnabled_ACU)
+                resolverCounters_ACU.openingScanChars += scanned;
+            return `${opening.slice(0, 40)}…`;
+        }
+        matched = NON_WHITESPACE_ACU.exec(text);
+    }
+    if (resolverCountersEnabled_ACU)
+        resolverCounters_ACU.openingScanChars += text.length;
+    return opening;
 }
 /** 定位纪要表的一列：按表头包含关系匹配候选名，命中第一个。 */
 function findColumnIndex_ACU(header, candidates) {
@@ -138621,9 +138953,8 @@ function renderAgentStoryText_ACU(context) {
         return '当前聊天还没有任何楼层，也就没有已经发生的正文。';
     // 删楼后残留的水位可能指向已不存在的楼层，必须钳制，否则未结算段起点会越过末楼输出空段。
     const settledThrough = Math.min(context.settledThroughIndex, highestIndex);
-    const floors = chat
-        .map((message, index) => ({ index, text: messageText_ACU(message, context.contextRules) }))
-        .filter(item => isAiFloor_ACU(chat[item.index]) && item.text);
+    // 与正文目录/窗口共用同一次「AI 楼 + 文本」枚举（含记忆化），不再各自全量提取一遍。
+    const floors = listAgentStoryFloors_ACU({ chat, contextRules: context.contextRules });
     if (!floors.length)
         return '当前聊天还没有 AI 产出的正文楼层。';
     const window = Math.max(0, context.storyWindowFloors ?? AGENT_STORY_WINDOW_DEFAULT_ACU);
@@ -150512,7 +150843,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260927-07";
+        const stamp = "20260927-08";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -196423,7 +196754,7 @@ function useLogViewer() {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260927-07";
+        const stamp = "20260927-08";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -196432,7 +196763,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.8.0";
+        const v = "9.8.1";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {

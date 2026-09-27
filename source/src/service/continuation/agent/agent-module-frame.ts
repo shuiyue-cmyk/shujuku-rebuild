@@ -53,6 +53,12 @@ export interface AgentModuleFoldResult_ACU {
   salvaged: boolean;
   checkpointIndex: number | null;
   foldedDeltaCount: number;
+  /**
+   * 折叠范围内全部「已通过深度解析」的 delta 的最大 seq（与楼层当前 swipe 无关）。
+   * 供写入规划直接取下一条 delta 序号，省掉一次全聊天解析扫描；口径与旧的
+   * maxSeq 扫描完全一致（同样只统计 parseDelta 通过的 delta）。
+   */
+  maxDeltaSeq: number;
   /** 折叠范围内是否纳入过基线或 delta。空聊天为 false。 */
   contributed: boolean;
   /** 折叠派生的分栏视图（只读，绝不写回持久帧）。完整领域数组只来自整条 writes；partial 记录只出现在这里。 */
@@ -78,8 +84,44 @@ interface ParsedBroken_ACU {
 
 type ParsedField_ACU = { kind: 'empty' } | ParsedLegacy_ACU | ParsedFrame_ACU | ParsedBroken_ACU;
 
+/**
+ * parseField 记忆化：外层键是 deps 实例（不同校验器口径互不串味），内层键是每楼
+ * 原始帧对象引用。写路径一律整体替换该字段对象（writeFrame_ACU 与
+ * agent-module-store 的 assignment 提交都是 `message[FIELD] = 新对象`），
+ * 因此换对象即天然失效，无需版本号。
+ */
+let fieldParseMemo_ACU: WeakMap<AgentModuleFrameDeps_ACU, WeakMap<object, ParsedField_ACU>> = new WeakMap();
+
 function isRecord_ACU(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+/**
+ * 折叠层计数器（仅测试打开）。生产路径只有一次布尔判断，行为与开销不受影响。
+ * 口径：folds=foldAgentModuleSnapshot_ACU 调用次数；fieldParses=parseField 真实深度解析
+ * 次数（不含记忆化命中）；fieldMemoHits=按楼层原始帧对象引用命中的次数。
+ */
+export interface AgentModuleFrameCounters_ACU {
+  folds: number;
+  fieldParses: number;
+  fieldMemoHits: number;
+}
+
+const frameCounters_ACU: AgentModuleFrameCounters_ACU = { folds: 0, fieldParses: 0, fieldMemoHits: 0 };
+let frameCountersEnabled_ACU = false;
+
+/** 仅供测试：打开计数并清零（含记忆化缓存清空，便于构造"冷路径"对照）。 */
+export function __resetAgentModuleFrameCachesForTests_ACU(): void {
+  frameCounters_ACU.folds = 0;
+  frameCounters_ACU.fieldParses = 0;
+  frameCounters_ACU.fieldMemoHits = 0;
+  frameCountersEnabled_ACU = true;
+  fieldParseMemo_ACU = new WeakMap();
+}
+
+/** 仅供测试：读取计数快照。 */
+export function __readAgentModuleFrameCountersForTests_ACU(): AgentModuleFrameCounters_ACU {
+  return { ...frameCounters_ACU };
 }
 
 function cloneJson_ACU<T>(value: T): T {
@@ -222,9 +264,7 @@ function parseDelta_ACU(raw: unknown, deps: AgentModuleFrameDeps_ACU): AgentModu
   return delta;
 }
 
-function parseField_ACU(raw: unknown, deps: AgentModuleFrameDeps_ACU): ParsedField_ACU {
-  if (raw === undefined) return { kind: 'empty' };
-  if (!isRecord_ACU(raw)) return { kind: 'broken', problems: ['资料字段不是对象'], salvaged: null };
+function parseFieldUncached_ACU(raw: Record<string, unknown>, deps: AgentModuleFrameDeps_ACU): ParsedField_ACU {
   if (raw.schemaVersion === AGENT_MODULE_FRAME_SCHEMA_VERSION_ACU) {
     if (!Array.isArray(raw.deltas)) return { kind: 'broken', problems: ['schema 3 缺少 deltas 数组'], salvaged: null };
     const problems: string[] = [];
@@ -252,6 +292,47 @@ function parseField_ACU(raw: unknown, deps: AgentModuleFrameDeps_ACU): ParsedFie
     problems: salvaged?.problems ?? ['快照不是可折叠的资料帧'],
     salvaged: salvaged?.snapshot ?? null,
   };
+}
+
+function fieldParseCacheFor_ACU(deps: AgentModuleFrameDeps_ACU): WeakMap<object, ParsedField_ACU> {
+  let cache = fieldParseMemo_ACU.get(deps);
+  if (!cache) {
+    cache = new WeakMap<object, ParsedField_ACU>();
+    fieldParseMemo_ACU.set(deps, cache);
+  }
+  return cache;
+}
+
+/**
+ * problems 必须每次交出副本：foldAgentModuleSnapshot_ACU 会把"前缀指纹失配"文案
+ * push 进候选诊断（candidates[last].problems），若直接共享记忆化里的数组，
+ * 第二次折叠就会把同一帧误判成 invalid（帧损坏门会拒绝本可写入的聊天）。
+ * 其余字段（frame/legacy.snapshot）由 parseDelta/validateSnapshot 产出，本就是
+ * 与原始帧无别名的副本，且调用方一律只读（fold 走 cloneJson 复制后才改，
+ * readFrame_ACU / stripCurrentSwipeThrough_ACU 同样先整体 cloneJson），可安全共享。
+ */
+function withPrivateProblems_ACU(parsed: ParsedField_ACU): ParsedField_ACU {
+  if (parsed.kind === 'frame' || parsed.kind === 'broken') return { ...parsed, problems: parsed.problems.slice() };
+  return parsed;
+}
+
+/**
+ * 逐楼资料字段解析（记忆化入口）。深度解析含 applyDelta + validateSnapshot + 多次
+ * cloneJson，是折叠路径的大头；同一操作内对同一楼层重复折叠时必须复用。
+ */
+function parseField_ACU(raw: unknown, deps: AgentModuleFrameDeps_ACU): ParsedField_ACU {
+  if (raw === undefined) return { kind: 'empty' };
+  if (!isRecord_ACU(raw)) return { kind: 'broken', problems: ['资料字段不是对象'], salvaged: null };
+  const cache = fieldParseCacheFor_ACU(deps);
+  const memo = cache.get(raw);
+  if (memo) {
+    if (frameCountersEnabled_ACU) frameCounters_ACU.fieldMemoHits += 1;
+    return withPrivateProblems_ACU(memo);
+  }
+  if (frameCountersEnabled_ACU) frameCounters_ACU.fieldParses += 1;
+  const parsed = parseFieldUncached_ACU(raw, deps);
+  cache.set(raw, parsed);
+  return withPrivateProblems_ACU(parsed);
 }
 
 function entryId_ACU(item: unknown): string {
@@ -489,6 +570,15 @@ function fieldOf_ACU(message: unknown): unknown {
   return message[AGENT_MODULE_FIELD_ACU];
 }
 
+/**
+ * 全聊天最大 delta 序号（深度解析口径）。
+ *
+ * 保留原因：逐栏写入规划（planAgentModuleFieldWrite_ACU）内部不做全量折叠，
+ * 同一操作内没有任何一处保证这些楼层已被深度解析过——这里必须自己解析，
+ * 否则损坏帧的 seq 会被算进序号，破坏「只统计 parseDelta 通过的 delta」口径。
+ * 记忆化后该扫描是 O(楼层) 次 WeakMap 查询，不再重复 applyDelta/validate/clone。
+ * 整条快照写入规划走的是折叠结果自带的 maxDeltaSeq，不需要本函数。
+ */
 function maxSeq_ACU(chat: readonly unknown[], deps: AgentModuleFrameDeps_ACU): number {
   let max = 0;
   for (const message of chat) {
@@ -530,11 +620,13 @@ export function foldAgentModuleSnapshot_ACU(
   deps: AgentModuleFrameDeps_ACU,
   throughIndex = chat.length - 1,
 ): AgentModuleFoldResult_ACU {
+  if (frameCountersEnabled_ACU) frameCounters_ACU.folds += 1;
   let snapshot = deps.emptySnapshot();
   let contributed = false;
   let sawSchema3Checkpoint = false;
   let checkpointIndex: number | null = null;
   let foldedDeltaCount = 0;
+  let maxDeltaSeq = 0;
   let adoptedIndex: number | null = null;
   const candidates: AgentModuleFoldCandidate_ACU[] = [];
   let salvage: { index: number; snapshot: AgentModuleSnapshot_ACU; problems: string[] } | null = null;
@@ -595,6 +687,8 @@ export function foldAgentModuleSnapshot_ACU(
       }
     }
     for (const delta of parsed.frame.deltas) {
+      // 与 swipe 无关：全聊天最大序号的口径只看帧里解析通过的 delta。
+      if (delta.seq > maxDeltaSeq) maxDeltaSeq = delta.seq;
       if (delta.swipeId !== swipeId) continue;
       snapshot = applyDelta_ACU(snapshot, delta);
       if (delta.fieldUpserts) view = applyFieldUpsertsToView_ACU(view, delta.fieldUpserts, delta.updatedAt);
@@ -614,6 +708,7 @@ export function foldAgentModuleSnapshot_ACU(
       salvaged: true,
       checkpointIndex: salvage.index,
       foldedDeltaCount: 0,
+      maxDeltaSeq,
       contributed: true,
     };
   }
@@ -625,6 +720,7 @@ export function foldAgentModuleSnapshot_ACU(
     salvaged: false,
     checkpointIndex: contributed ? checkpointIndex : null,
     foldedDeltaCount,
+    maxDeltaSeq,
     contributed,
   };
 }
@@ -701,16 +797,34 @@ export interface AgentModuleWritePlan_ACU {
 /**
  * 规划一次快照写入：已有 schema 3 基线时只追加 delta；否则把首基线放到表格 checkpoint 楼或最新 AI 楼。
  * 不修改传入的 chat。
+ *
+ * `folded` 是调用方在同一操作内已折叠出的基线（写入路径先做乐观锁复核时已经折过一次），
+ * 必须是**这条 chat** 的折叠结果：传别的数组会让 seq 口径漂移，传错数组时由上面的自检兜底重折。
+ * scratch 是 chat 的浅拷贝、逐楼共用同一资料字段对象引用，折叠只读该引用与 swipe_id，
+ * 因此「折 chat」与「折 scratch」逐字段等价，复用它不改变任何规划判定。
  */
+/**
+ * 规划前的折叠来源自检：折叠结果必须来自同一条 chat。
+ * checkpointIndex 越界只可能是"折了另一条/更长的聊天"——那种情况下 maxDeltaSeq 口径会漂移，
+ * 宁可重折一次也不能拿错基线规划 seq。
+ */
+function isFoldResultForChat_ACU(folded: AgentModuleFoldResult_ACU, chatLength: number): boolean {
+  return folded.checkpointIndex === null
+    || (folded.checkpointIndex >= 0 && folded.checkpointIndex < chatLength);
+}
+
 export function planAgentModuleSnapshotWrite_ACU(
   chat: unknown[],
   targetIndex: number,
   next: AgentModuleSnapshot_ACU,
   deps: AgentModuleFrameDeps_ACU,
   tableAnchorIndex: number | null,
+  folded: AgentModuleFoldResult_ACU,
 ): AgentModuleWritePlan_ACU {
   const scratch = chat.map(message => (isRecord_ACU(message) ? { ...message } : message));
-  const before = foldAgentModuleSnapshot_ACU(scratch, deps);
+  const before = isFoldResultForChat_ACU(folded, chat.length)
+    ? folded
+    : foldAgentModuleSnapshot_ACU(scratch, deps);
   const clamped: AgentModuleSnapshot_ACU = {
     ...cloneJson_ACU(next),
     settledThroughIndex: clampWaterline_ACU(next.settledThroughIndex, targetIndex),
@@ -720,7 +834,9 @@ export function planAgentModuleSnapshotWrite_ACU(
     return { changed: false, assignments: [] };
   }
   const base = before.contributed ? before.snapshot : deps.emptySnapshot();
-  const delta = diffSnapshot_ACU(base, clamped, readMessageSwipeId_ACU(scratch[targetIndex]), maxSeq_ACU(scratch, deps) + 1);
+  // 序号取折叠结果自带的 maxDeltaSeq：本次折叠已对全聊天逐楼深度解析过，口径与旧的
+  // maxSeq 扫描完全相同（只统计 parseDelta 通过的 delta），省掉一整趟全聊天解析。
+  const delta = diffSnapshot_ACU(base, clamped, readMessageSwipeId_ACU(scratch[targetIndex]), before.maxDeltaSeq + 1);
   // 失配的旧基线（swipe 切换/指纹失配）视为不可用：走建新 checkpoint 分支自愈，
   // 而不是在被折叠跳过的基线上继续追 delta。
   const hadUsableCheckpoint = hasUsableSchema3Checkpoint_ACU(scratch, deps);

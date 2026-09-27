@@ -1247,7 +1247,33 @@ function validateTask_ACU(raw: unknown, settings: ContinuationSettings_ACU): Con
   return { taskId: requireString_ACU(raw.taskId, 'activeTask.taskId'), originInstruction: requireString_ACU(raw.originInstruction, 'activeTask.originInstruction'), status, createdAt: requireInteger_ACU(raw.createdAt, 'activeTask.createdAt', 0), updatedAt: requireInteger_ACU(raw.updatedAt, 'activeTask.updatedAt', 0), runStartedAt: raw.runStartedAt === null ? null : requireInteger_ACU(raw.runStartedAt, 'activeTask.runStartedAt', 0), deadlineAt: raw.deadlineAt === null ? null : requireInteger_ACU(raw.deadlineAt, 'activeTask.deadlineAt', 0), runStageCount, stageBudgetBaseCount, activeStageId, stages, timeline: validateTimeline_ACU(raw.timeline), stopReason, lastError: lastError as any, ...('pendingHostTurn' in raw ? { pendingHostTurn: validatePendingHostTurn_ACU(raw.pendingHostTurn) } : {}) } as ContinuationEnvelope_ACU['activeTask'];
 }
 
+/**
+ * 信封深校验计数（仅测试打开）。生产路径只有一次布尔判断，行为与开销不受影响。
+ * envelopeValidations=validateContinuationEnvelope_ACU 的真实调用次数（read 漏斗的深校验口径）。
+ */
+export interface ContinuationEnvelopeCounters_ACU {
+  envelopeValidations: number;
+  envelopeMemoHits: number;
+}
+
+const envelopeCounters_ACU: ContinuationEnvelopeCounters_ACU = { envelopeValidations: 0, envelopeMemoHits: 0 };
+let envelopeCountersEnabled_ACU = false;
+
+/** 仅供测试：打开计数并清零（含记忆化清空，便于构造「冷路径」对照）。 */
+export function __resetContinuationEnvelopeCachesForTests_ACU(): void {
+  envelopeCounters_ACU.envelopeValidations = 0;
+  envelopeCounters_ACU.envelopeMemoHits = 0;
+  envelopeCountersEnabled_ACU = true;
+  validatedEnvelopeMemo_ACU = new WeakMap();
+}
+
+/** 仅供测试：读取计数快照。 */
+export function __readContinuationEnvelopeCountersForTests_ACU(): ContinuationEnvelopeCounters_ACU {
+  return { ...envelopeCounters_ACU };
+}
+
 export function validateContinuationEnvelope_ACU(raw: unknown, phase: ContinuationErrorPhase_ACU = 'load'): ContinuationEnvelope_ACU {
+  if (envelopeCountersEnabled_ACU) envelopeCounters_ACU.envelopeValidations += 1;
   try {
     if (!isRecord_ACU(raw)) fail_ACU('CONTINUATION_ENVELOPE_INVALID', '智能续写状态必须是对象');
     requireKeys_ACU(raw, ['schemaVersion', 'settings', 'activeTask'], 'envelope');
@@ -1293,9 +1319,41 @@ function assertChatContext_ACU(context: ReturnType<typeof captureChatContext_ACU
   }
 }
 
+/**
+ * 信封校验结论记忆化：键是首楼 `_qrf_continuation` 字段的 raw 对象引用。
+ *
+ * 失效不变式（全仓 grep 实证，2026-09-27）：对 `_qrf_continuation` 的写入只有
+ *   ①replaceWithinQueue_ACU：`firstMessage[FIELD] = validatedCandidate`（整体替换新对象）；
+ *   ②restoreFirstFloorField_ACU：还原 previousValue 或 delete（整体替换/删除）；
+ *   ③宿主重新载入聊天：换新首楼对象与字段对象。
+ * 三条都不是对既有信封对象的原地 mutation，因此「引用相同 ⇒ 内容相同」成立，
+ * 换对象即天然失效，不需要版本号。
+ *
+ * 记忆化的是**校验结论**而不是交给调用方的对象：命中时交出深拷贝，保持
+ * 「每次 read 都拿到一份私有对象图」的既有契约（readPersisted 的返回值会流进
+ * orchestrator 的 mutator 与 reconcile 路径，共享引用被就地改会污染后续每一次读）。
+ * 未命中时把深拷贝留给记忆化、本次直接交出校验产物：每个 raw 仅多一次克隆，之后每次 read 省一整遍深校验。
+ */
+let validatedEnvelopeMemo_ACU: WeakMap<object, ContinuationEnvelope_ACU> = new WeakMap();
+
+function cloneValidatedEnvelope_ACU(envelope: ContinuationEnvelope_ACU): ContinuationEnvelope_ACU {
+  // 校验产物是纯 JSON 数据（无 Date/Map/类实例），structuredClone 可用；
+  // 万一宿主环境缺失则退回 JSON 往返。
+  return typeof structuredClone === 'function' ? structuredClone(envelope) : JSON.parse(JSON.stringify(envelope));
+}
+
 function readRawEnvelope_ACU(firstMessage: Record<string, unknown>): ContinuationEnvelope_ACU | null {
   const raw = firstMessage[CONTINUATION_FIRST_FLOOR_FIELD_ACU];
-  return raw === undefined ? null : validateContinuationEnvelope_ACU(raw);
+  if (raw === undefined) return null;
+  if (!isRecord_ACU(raw)) return validateContinuationEnvelope_ACU(raw);
+  const memo = validatedEnvelopeMemo_ACU.get(raw);
+  if (memo) {
+    if (envelopeCountersEnabled_ACU) envelopeCounters_ACU.envelopeMemoHits += 1;
+    return cloneValidatedEnvelope_ACU(memo);
+  }
+  const validated = validateContinuationEnvelope_ACU(raw);
+  validatedEnvelopeMemo_ACU.set(raw, cloneValidatedEnvelope_ACU(validated));
+  return validated;
 }
 
 function restoreFirstFloorField_ACU(firstMessage: Record<string, unknown>, hadPreviousValue: boolean, previousValue: unknown): void {
@@ -1393,6 +1451,12 @@ export class FirstFloorContinuationStore_ACU {
 }
 
 export function derivePausedContinuationEnvelopeAfterReload_ACU(envelope: ContinuationEnvelope_ACU): ContinuationEnvelope_ACU {
+  // 注意：这里的深校验**不是**对 readRawEnvelope_ACU 结果的冗余重复，删不得。
+  // 大纲校验会按 pacing 给缺失的软字段补默认并打 inferred 标记（outline-schema
+  // reconcileTurnSemantics / TURN_OPTIONAL_KEYS 的 default 策略），而对已补齐的对象
+  // 再校验一次不会重新打标——所以这一遍的效果正是「把 inferred 标记洗掉」。
+  // read 漏斗依赖这个副作用：交给运行时的信封不带 inferred 标记。
+  // 差分测试「read 的 inferred 语义」钉住该行为。
   const validated = validateContinuationEnvelope_ACU(envelope);
   const task = validated.activeTask;
   if (!task) return validated;
