@@ -46,7 +46,7 @@ import { ensureStableRowIdsForSheetContent_ACU, getEffectiveSeedRowsForSheet_ACU
 import { isSqlActiveTemplateSheet_ACU, projectSqlActiveTemplateData_ACU } from '../../shared/sql-active-template';
 import { getTemplatePreset_ACU } from '../template/template-preset-service';
 import { safeJsonParse_ACU } from '../../shared/json-helpers';
-import { assertNoPhysicalTableNameCollision_ACU, getPhysicalTableNameForSheet_ACU, PhysicalTableNameCollisionError_ACU, resolvePhysicalTableNames_ACU } from '../../shared/sheet-identity';
+import { assertNoPhysicalTableNameCollision_ACU, createPhysicalTableNameResolver_ACU, getPhysicalTableNameForSheet_ACU, PhysicalTableNameCollisionError_ACU, resolvePhysicalTableNames_ACU } from '../../shared/sheet-identity';
 import { buildColumnNameMap, getRuntimeEffectiveSchema_ACU, getSheetColumnProjection_ACU, parseDDLColumnInfos_ACU } from '../../shared/ddl-utils';
 import { rebindSqlMutationTableReferences_ACU, rebindSqlMutationColumnsByTarget_ACU, decodeSqlIdentifier_ACU } from '../../shared/sql-mutation-table-rebind';
 import { buildSheetTableAliasMap_ACU, buildSheetColumnAliasMap_ACU } from '../../shared/sql-read-resolver';
@@ -632,10 +632,12 @@ function buildRowIdReservationsByRuntimeTable_ACU(
   additionalReservations?: Map<string, Set<string>>,
 ): Map<string, Set<string>> {
   const reservations = new Map<string, Set<string>>();
+  // P1-7：整库物理表名只解析一次（惰性，解析点仍在下方 continue 之后）。
+  const physicalNames = createPhysicalTableNameResolver_ACU(tableData);
   for (const [sheetKey, value] of Object.entries(tableData || {})) {
     if (!sheetKey.startsWith('sheet_')) continue;
     const content = (value as any)?.content;
-    reservations.set(getPhysicalTableNameForSheet_ACU(tableData, sheetKey).toLowerCase(), createStableRowIdReservation_ACU(
+    reservations.set(physicalNames.get(sheetKey).toLowerCase(), createStableRowIdReservation_ACU(
       Array.isArray(content) ? content.slice(1) : [],
     ));
   }
@@ -730,6 +732,9 @@ export function freezeRuntimeSchemaFromData_ACU(
   if (!runtimeData || typeof runtimeData !== 'object') return null;
   const bySheetKey = new Map<string, FrozenSheetRuntimeSchema_ACU>();
   const activeKeys = activeSheetKeys ? activeSheetKeys : new Set(Object.keys(runtimeData).filter(key => key.startsWith('sheet_')));
+  // P1-7：物理表名整库只解析一次（惰性：解析点仍在下方 descriptor 守卫之后，
+  // 守卫命中提前 return 时与逐表形态一样一次都不解析、不抛撞名错）。
+  const physicalNames = createPhysicalTableNameResolver_ACU(runtimeData);
   for (const sheetKey of Object.keys(runtimeData).filter(key => key.startsWith('sheet_'))) {
     if (!isFrozenSchemaSheetKey_ACU(sheetKey, activeKeys)) continue;
     const sheet = (runtimeData as any)[sheetKey];
@@ -741,7 +746,7 @@ export function freezeRuntimeSchemaFromData_ACU(
       // 运行时表必须携带 descriptor；缺失视为 schema 契约损坏（fail-closed）。
       return null;
     }
-    const physicalTableName = getPhysicalTableNameForSheet_ACU(runtimeData, sheetKey);
+    const physicalTableName = physicalNames.get(sheetKey);
     bySheetKey.set(sheetKey, {
       sheetKey,
       physicalTableName,
@@ -2212,13 +2217,16 @@ export class SqlTableService implements ITableStorageProvider {
   private _validateRuntimeSchema_ACU(data: TableDataObject_ACU): void {
     const actualTables = new Set(this.engine.getTableNames());
     const runtimeSchemas = this.syncBridge.getRuntimeEffectiveSchemas_ACU();
+    // P1-7：整库物理表名只解析一次（惰性，解析点仍在下方 continue 之后：
+    // 休眠表被跳过时与逐表形态一样不解析、不抛撞名错）。
+    const physicalNames = createPhysicalTableNameResolver_ACU(data);
     for (const key of Object.keys(data).filter(key => key.startsWith('sheet_'))) {
       const sheet = (data as any)[key];
       if (!sheet || typeof sheet !== 'object') continue;
       // 休眠表（非首列空业务表头）不参与 runtime schema 校验：它们不建表、不进 SQLite，
       // 校验它们只会误报 schema_missing_table。
       if (!isSqlActiveTemplateSheet_ACU(sheet)) continue;
-      const runtimeTableName = getPhysicalTableNameForSheet_ACU(data, key);
+      const runtimeTableName = physicalNames.get(key);
       if (!actualTables.has(runtimeTableName)) {
         throw new Error(`schema_missing_table: ${key} (${runtimeTableName}) 未在 SQLite runtime 中创建。`);
       }
@@ -2245,6 +2253,8 @@ export class SqlTableService implements ITableStorageProvider {
     try {
       const ddlMap = new Map<string, string>();
       const runtimeSchemas = this.syncBridge.getRuntimeEffectiveSchemas_ACU();
+      // P1-7：整库物理表名只解析一次（惰性，解析点仍在下方 continue 之后）。
+      const physicalNames = createPhysicalTableNameResolver_ACU(data);
       for (const [key, value] of Object.entries(data)) {
         if (!key.startsWith('sheet_')) continue;
         const sheet = value as any;
@@ -2254,7 +2264,7 @@ export class SqlTableService implements ITableStorageProvider {
         if (!isSqlActiveTemplateSheet_ACU(sheet)) continue;
         // NameMapper 必须和 SQLite 实际采用的 schema 一致。直接读取 sourceData.ddl
         // 会在 fallback_invalid 场景留下无法映射运行时物理列名的陈旧映射。
-        const runtimeTableName = getPhysicalTableNameForSheet_ACU(data, key);
+        const runtimeTableName = physicalNames.get(key);
         const runtimeSchema = runtimeSchemas.get(key);
         if (!runtimeSchema) {
           logWarn_ACU(`[SqlTableService] 构建 NameMapper 失败: ${key} 缺少 SyncBridge 实际执行 schema。`);
@@ -2317,9 +2327,11 @@ export class SqlTableService implements ITableStorageProvider {
     const view = this._readCanonicalView_ACU();
     if (!view) return [];
     const keys: string[] = [];
+    // P1-7：整库物理表名只解析一次（惰性，解析点仍在下方 continue 之后）。
+    const physicalNames = createPhysicalTableNameResolver_ACU(view);
     for (const key of Object.keys(view)) {
       if (!key.startsWith('sheet_')) continue;
-      const runtimeTableName = getPhysicalTableNameForSheet_ACU(view, key);
+      const runtimeTableName = physicalNames.get(key);
       if (tableNames.includes(runtimeTableName)) keys.push(key);
     }
     return keys;
@@ -2413,13 +2425,15 @@ export class SqlTableService implements ITableStorageProvider {
         return isSqlActiveTemplateSheet_ACU(sheet);
     });
     const missingSheets: Record<string, any> = {};
+    // P1-7：整库物理表名只解析一次（惰性，解析点仍在下方 continue 之后）。
+    const physicalNames = createPhysicalTableNameResolver_ACU(templateData);
 
     for (const key of sheetKeys) {
       // 当前聊天模板是建表结构权威；currentJsonTableData_ACU 可能是旧运行时快照，不能让旧 DDL/CHECK 覆盖模板。
       const liveSheet = (this._readCanonicalView_ACU() as any)?.[key];
       const sheet = (templateData[key] as any) || liveSheet;
       if (!sheet) continue;
-      const runtimeTableName = getPhysicalTableNameForSheet_ACU(templateData, key);
+      const runtimeTableName = physicalNames.get(key);
       if (!existingTables.has(runtimeTableName)) {
         missingSheets[key] = sheet;
       }

@@ -83,6 +83,34 @@ function moduleTable_ACU(module: AgentWritableModule_ACU): string {
   return `${MODULE_TABLE_PREFIX_ACU}${module}`;
 }
 
+/* ═══════════════ 物化/释放结构计数（仅测试打开） ═══════════════
+ *
+ * P1-m 的一致性门要求「同一次提交内只物化一次视图、批末做一次完整复算」。
+ * 这两条不变量此前只能靠读代码确认；这里给出**结构量**口径（不是墙钟）：
+ *   materializations：new SqliteEngine + init + 建 schema + 全条目装载的次数
+ *   disposed：对应释放次数（物化失败路径也计入，与旧实现的 dispose 时机一致）
+ * 计数默认关闭（生产路径只有一次布尔判断），仅 __reset…ForTests 打开。
+ */
+interface AgentModuleSqlViewCounters_ACU {
+  materializations: number;
+  disposed: number;
+}
+
+const sqlViewCounters_ACU: AgentModuleSqlViewCounters_ACU = { materializations: 0, disposed: 0 };
+let sqlViewCountersEnabled_ACU = false;
+
+/** 仅供测试：打开计数并清零。 */
+export function __resetAgentModuleSqlViewCountersForTests_ACU(): void {
+  sqlViewCounters_ACU.materializations = 0;
+  sqlViewCounters_ACU.disposed = 0;
+  sqlViewCountersEnabled_ACU = true;
+}
+
+/** 仅供测试：读取计数快照。 */
+export function __readAgentModuleSqlViewCountersForTests_ACU(): AgentModuleSqlViewCounters_ACU {
+  return { ...sqlViewCounters_ACU };
+}
+
 /** SQL 视图层结构化失败：消息含模块与期望/实际 revision，供 fail-closed 诊断。 */
 export class AgentModuleSqlViewError_ACU extends Error {
   readonly module?: string;
@@ -536,6 +564,7 @@ export async function materializeAgentModuleSqlView_ACU(
   fieldsOrEngine?: AgentModuleFieldSnapshot_ACU | SqliteEngine,
   maybeEngine?: SqliteEngine,
 ): Promise<AgentModuleSqlView_ACU> {
+  if (sqlViewCountersEnabled_ACU) sqlViewCounters_ACU.materializations += 1;
   const db = (fieldsOrEngine instanceof SqliteEngine ? fieldsOrEngine : maybeEngine) ?? new SqliteEngine();
   const fields = fieldsOrEngine instanceof SqliteEngine ? undefined : fieldsOrEngine;
   try {
@@ -545,6 +574,7 @@ export async function materializeAgentModuleSqlView_ACU(
     loadFieldView_ACU(db, fields ? cloneJson_ACU(fields) : undefined);
   } catch (error) {
     db.dispose();
+    if (sqlViewCountersEnabled_ACU) sqlViewCounters_ACU.disposed += 1;
     if (error instanceof AgentModuleSqlViewError_ACU) throw error;
     throw new AgentModuleSqlViewError_ACU(`续写资料 SQL 视物化失败: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -557,6 +587,9 @@ export async function materializeAgentModuleSqlView_ACU(
     readSnapshot: () => readSnapshot_ACU(db),
     readFieldRecord: (module, id) => readFieldRecord_ACU(db, module, id),
     readPartialRecords: module => readPartialRecords_ACU(db, module),
-    dispose: () => db.dispose(),
+    dispose: () => {
+      db.dispose();
+      if (sqlViewCountersEnabled_ACU) sqlViewCounters_ACU.disposed += 1;
+    },
   };
 }

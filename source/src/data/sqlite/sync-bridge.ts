@@ -470,25 +470,20 @@ export class SyncBridge {
     }
 
     // 路径 2：当前算法重算。拼音冲突会抛错，此处降级为不命中，交由其它路径兜底。
+    // P1-7：整库重算结果按 metaMap 身份缓存（metaMap 每次导出新建，WeakMap 不留引用），
+    // 旧形态是「每张用户表重建 metadataData + 重解析整库」= O(T²) 次拼音。
+    // 缓存只放「重算结果 / 首次冲突异常」：命中冲突时仍按旧口径**每张表各发一条**
+    // 同样的 warn（可观测性不变），只是不再重算。回填 physicalTableName 不会让缓存失效，
+    // 因为它只被路径 1 消费，而路径 2 的输入只有 sheetKey + name。
     try {
-      const metadataData: TableDataObject_ACU = { mate: {} as Mate_ACU };
-      for (const [sheetKey, meta] of metaMap) {
-        metadataData[sheetKey] = {
-          uid: meta.uid,
-          name: meta.name,
-          sourceData: meta.sourceData || {},
-          content: [],
-          updateConfig: meta.updateConfig || {},
-          exportConfig: meta.exportConfig || {},
-          orderNo: meta.orderNo,
-        } as Sheet_ACU;
-      }
-      const physicalTableNames = resolvePhysicalTableNames_ACU(metadataData);
-      for (const [sheetKey, meta] of metaMap) {
-        if (physicalTableNames.get(sheetKey) === tableName) {
-          meta.physicalTableName = tableName;
-          return meta;
-        }
+      const resolved = this._resolvePhysicalNamesByMetaMap_ACU(metaMap);
+      if (resolved.error) throw resolved.error;
+      // 无冲突时物理名唯一（resolvePhysicalTableNames_ACU 对撞名 fail-loud），
+      // 反向索引与「按 metaMap 顺序找第一个命中」逐字等价。
+      const matched = resolved.byPhysicalName.get(tableName);
+      if (matched) {
+        matched.physicalTableName = tableName;
+        return matched;
       }
     } catch (e: any) {
       logWarn_ACU(`[SyncBridge] 物理名重算命中冲突，降级 DDL 别名识别: ${e?.message || e}`);
@@ -506,7 +501,49 @@ export class SyncBridge {
     }
     return null;
   }
+
+  /**
+   * 路径 2 的整库重算缓存（按 metaMap 身份）。
+   * 命中冲突时缓存异常对象本身，使每次路径 2 触发的 warn 文案与次数都不变。
+   */
+  private _resolvePhysicalNamesByMetaMap_ACU(
+    metaMap: Map<string, SheetMeta>,
+  ): { byPhysicalName: Map<string, SheetMeta>; error: unknown } {
+    const cached = metaPhysicalNameIndexCache_ACU.get(metaMap);
+    if (cached) return cached;
+    const entry: { byPhysicalName: Map<string, SheetMeta>; error: unknown } = {
+      byPhysicalName: new Map(),
+      error: null,
+    };
+    try {
+      const metadataData: TableDataObject_ACU = { mate: {} as Mate_ACU };
+      for (const [sheetKey, meta] of metaMap) {
+        metadataData[sheetKey] = {
+          uid: meta.uid,
+          name: meta.name,
+          sourceData: meta.sourceData || {},
+          content: [],
+          updateConfig: meta.updateConfig || {},
+          exportConfig: meta.exportConfig || {},
+          orderNo: meta.orderNo,
+        } as Sheet_ACU;
+      }
+      const physicalTableNames = resolvePhysicalTableNames_ACU(metadataData);
+      for (const [sheetKey, meta] of metaMap) {
+        const physicalName = physicalTableNames.get(sheetKey);
+        // 值只放 meta：消费点只用 meta，`sheetKey` 属于写了不读的死载荷，不随缓存扩散。
+        if (physicalName) entry.byPhysicalName.set(physicalName, meta);
+      }
+    } catch (error) {
+      entry.error = error;
+    }
+    metaPhysicalNameIndexCache_ACU.set(metaMap, entry);
+    return entry;
+  }
 }
+
+/** 路径 2 的整库重算缓存：键是每次导出新建的 metaMap，值随 metaMap 一起被回收。 */
+const metaPhysicalNameIndexCache_ACU = new WeakMap<Map<string, SheetMeta>, { byPhysicalName: Map<string, SheetMeta>; error: unknown }>();
 
 /** 元数据结构 */
 interface SheetMeta {

@@ -33635,11 +33635,54 @@ class PhysicalTableNameCollisionError_ACU extends Error {
 function canonicalizeDisplayName_ACU(value) {
     return String(value ?? '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('en-US');
 }
+/* ═══════════════════════ 拼音 slug 记忆化（P1-7） ═══════════════════════
+ *
+ * toAsciiSlug_ACU 是 (规范化名, maxLength) 的纯函数，代价全在 pinyin-pro 上。
+ * 它原本每次现算，而物理表名解析链（resolvePhysicalTableNames_ACU 每张表两次
+ * slug）被冻结循环、hydrate 校验、写批表名映射等热循环逐表重复调用，实测
+ * S=60 时一次冻结循环要跑 2S² = 7200 次拼音（S 20→60 耗时倍率 8.99，O(S²)）。
+ *
+ * 记忆化口径（与 shared/ddl-utils 的 DDL 解析记忆化同构）：
+ * - 键＝规范化名 + 截断长度，即该纯函数的**全部**入参；不含 sheetKey、聊天、
+ *   隔离键等任何作用域信息：slug 只由入参决定，跨作用域复用同一结果不会串味，
+ *   反而不带作用域才允许跨聊天命中。
+ * - 键不含 sheetKey 是刻意的：表改名后规范化名随之改变，旧条目自然失效，
+ *   不会像 sheetKey 键那样命中陈旧物理名。
+ * - 缓存条目数上限固定，超限整表清空（表名集合是有限集）；失败/异常路径不存在
+ *   （本函数不会抛），因此无需「失败不记忆化」分支。
+ * - 计数钩子仅测试打开（生产路径只有一次 Map 查找 + 一次布尔判断）。
+ */
+const SLUG_MEMO_LIMIT_ACU = 256;
+const slugMemo_ACU = new Map();
+const physicalNameCounters_ACU = { slugCalls: 0, slugComputes: 0, slugMemoHits: 0, physicalResolves: 0 };
+let physicalNameCountersEnabled_ACU = false;
+/** 仅供测试：打开计数并清空记忆化。 */
+function __resetSheetPhysicalNameMemoForTests_ACU() {
+    physicalNameCounters_ACU.slugCalls = 0;
+    physicalNameCounters_ACU.slugComputes = 0;
+    physicalNameCounters_ACU.slugMemoHits = 0;
+    physicalNameCounters_ACU.physicalResolves = 0;
+    physicalNameCountersEnabled_ACU = true;
+    slugMemo_ACU.clear();
+}
+/** 仅供测试：读取计数快照。 */
+function __readSheetPhysicalNameCountersForTests_ACU() {
+    return { ...physicalNameCounters_ACU };
+}
 /** Converts a display value to an ASCII slug using the locked pinyin-pro dictionary. */
 function toAsciiSlug_ACU(value, maxLength = MAX_SHEET_SLUG_LENGTH_ACU) {
     const canonical = canonicalizeDisplayName_ACU(value);
     if (!canonical)
         return '';
+    if (physicalNameCountersEnabled_ACU)
+        physicalNameCounters_ACU.slugCalls += 1;
+    const memoKey = `${maxLength}\u0000${canonical}`;
+    const memoized = slugMemo_ACU.get(memoKey);
+    if (memoized !== undefined) {
+        if (physicalNameCountersEnabled_ACU)
+            physicalNameCounters_ACU.slugMemoHits += 1;
+        return memoized;
+    }
     const romanized = pinyin(canonical, {
         toneType: 'none',
         traditional: true,
@@ -33647,13 +33690,19 @@ function toAsciiSlug_ACU(value, maxLength = MAX_SHEET_SLUG_LENGTH_ACU) {
         separator: '_',
         nonZh: 'consecutive',
     });
-    return romanized.normalize('NFKD')
+    const slug = romanized.normalize('NFKD')
         .replace(/[\u0300-\u036f]/g, '')
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '_')
         .replace(/^_+|_+$/g, '')
         .slice(0, Math.max(1, maxLength))
         .replace(/_+$/g, '');
+    if (physicalNameCountersEnabled_ACU)
+        physicalNameCounters_ACU.slugComputes += 1;
+    if (slugMemo_ACU.size >= SLUG_MEMO_LIMIT_ACU)
+        slugMemo_ACU.clear();
+    slugMemo_ACU.set(memoKey, slug);
+    return slug;
 }
 /** Returns an unreserved candidate only; callers must allocate before persisting it. */
 function buildStableSheetKeyCandidate_ACU(displayName) {
@@ -33668,6 +33717,8 @@ function buildStableSheetKeyCandidate_ACU(displayName) {
  * always agree. Duplicate slugs are a hard error (see the fail-loud note below).
  */
 function resolvePhysicalTableNames_ACU(data) {
+    if (physicalNameCountersEnabled_ACU)
+        physicalNameCounters_ACU.physicalResolves += 1;
     const entries = Object.keys(data || {})
         .filter(sheetKey => sheetKey.startsWith('sheet_'))
         .sort()
@@ -33714,13 +33765,30 @@ function getPhysicalTableNameFromResolvedMap_ACU(resolved, sheetKey) {
 function getPhysicalTableNameForSheet_ACU(data, sheetKey) {
     return getPhysicalTableNameFromResolvedMap_ACU(resolvePhysicalTableNames_ACU(data), sheetKey);
 }
+function createPhysicalTableNameResolver_ACU(data) {
+    let resolved = null;
+    return {
+        get(sheetKey) {
+            if (!resolved)
+                resolved = resolvePhysicalTableNames_ACU(data);
+            return getPhysicalTableNameFromResolvedMap_ACU(resolved, sheetKey);
+        },
+        get resolved() {
+            return resolved;
+        },
+    };
+}
 /** Use resolvePhysicalTableNames_ACU whenever collision arbitration is possible. */
 function resolvePhysicalTableName_ACU(sheet, sheetKey) {
     return physicalTableNameBase_ACU(sheet, sheetKey);
 }
 function physicalTableNameBase_ACU(sheet, sheetKey) {
     const displaySlug = toAsciiSlug_ACU(sheet?.name).replace(/_/g, '');
-    const keySlug = toAsciiSlug_ACU(String(sheetKey || '').replace(/^sheet_/, '')).replace(/_/g, '');
+    // 显示名 slug 非空时 keySlug 是死值（下面 `displaySlug || keySlug` 必然短路），
+    // 跳过计算只为省掉一次拼音；产出的 candidate 与旧写法逐字相同。
+    const keySlug = displaySlug
+        ? ''
+        : toAsciiSlug_ACU(String(sheetKey || '').replace(/^sheet_/, '')).replace(/_/g, '');
     let candidate = (displaySlug || keySlug || 'sheet').slice(0, MAX_PHYSICAL_TABLE_NAME_LENGTH_ACU);
     if (/^[0-9]/.test(candidate) || SQLITE_RESERVED_TABLE_PREFIXES_ACU.some(prefix => candidate.toLowerCase().startsWith(prefix))) {
         candidate = `table_${candidate}`;
@@ -36781,25 +36849,21 @@ class SyncBridge {
                 return meta;
         }
         // 路径 2：当前算法重算。拼音冲突会抛错，此处降级为不命中，交由其它路径兜底。
+        // P1-7：整库重算结果按 metaMap 身份缓存（metaMap 每次导出新建，WeakMap 不留引用），
+        // 旧形态是「每张用户表重建 metadataData + 重解析整库」= O(T²) 次拼音。
+        // 缓存只放「重算结果 / 首次冲突异常」：命中冲突时仍按旧口径**每张表各发一条**
+        // 同样的 warn（可观测性不变），只是不再重算。回填 physicalTableName 不会让缓存失效，
+        // 因为它只被路径 1 消费，而路径 2 的输入只有 sheetKey + name。
         try {
-            const metadataData = { mate: {} };
-            for (const [sheetKey, meta] of metaMap) {
-                metadataData[sheetKey] = {
-                    uid: meta.uid,
-                    name: meta.name,
-                    sourceData: meta.sourceData || {},
-                    content: [],
-                    updateConfig: meta.updateConfig || {},
-                    exportConfig: meta.exportConfig || {},
-                    orderNo: meta.orderNo,
-                };
-            }
-            const physicalTableNames = resolvePhysicalTableNames_ACU(metadataData);
-            for (const [sheetKey, meta] of metaMap) {
-                if (physicalTableNames.get(sheetKey) === tableName) {
-                    meta.physicalTableName = tableName;
-                    return meta;
-                }
+            const resolved = this._resolvePhysicalNamesByMetaMap_ACU(metaMap);
+            if (resolved.error)
+                throw resolved.error;
+            // 无冲突时物理名唯一（resolvePhysicalTableNames_ACU 对撞名 fail-loud），
+            // 反向索引与「按 metaMap 顺序找第一个命中」逐字等价。
+            const matched = resolved.byPhysicalName.get(tableName);
+            if (matched) {
+                matched.physicalTableName = tableName;
+                return matched;
             }
         }
         catch (e) {
@@ -36818,7 +36882,48 @@ class SyncBridge {
         }
         return null;
     }
+    /**
+     * 路径 2 的整库重算缓存（按 metaMap 身份）。
+     * 命中冲突时缓存异常对象本身，使每次路径 2 触发的 warn 文案与次数都不变。
+     */
+    _resolvePhysicalNamesByMetaMap_ACU(metaMap) {
+        const cached = metaPhysicalNameIndexCache_ACU.get(metaMap);
+        if (cached)
+            return cached;
+        const entry = {
+            byPhysicalName: new Map(),
+            error: null,
+        };
+        try {
+            const metadataData = { mate: {} };
+            for (const [sheetKey, meta] of metaMap) {
+                metadataData[sheetKey] = {
+                    uid: meta.uid,
+                    name: meta.name,
+                    sourceData: meta.sourceData || {},
+                    content: [],
+                    updateConfig: meta.updateConfig || {},
+                    exportConfig: meta.exportConfig || {},
+                    orderNo: meta.orderNo,
+                };
+            }
+            const physicalTableNames = resolvePhysicalTableNames_ACU(metadataData);
+            for (const [sheetKey, meta] of metaMap) {
+                const physicalName = physicalTableNames.get(sheetKey);
+                // 值只放 meta：消费点只用 meta，`sheetKey` 属于写了不读的死载荷，不随缓存扩散。
+                if (physicalName)
+                    entry.byPhysicalName.set(physicalName, meta);
+            }
+        }
+        catch (error) {
+            entry.error = error;
+        }
+        metaPhysicalNameIndexCache_ACU.set(metaMap, entry);
+        return entry;
+    }
 }
+/** 路径 2 的整库重算缓存：键是每次导出新建的 metaMap，值随 metaMap 一起被回收。 */
+const metaPhysicalNameIndexCache_ACU = new WeakMap();
 /**
  * 保留批量写入的可行动诊断，但绝不把 INSERT 的 VALUES（用户业务数据）传播到日志或 UI。
  */
@@ -68914,11 +69019,13 @@ function findSqlClosingParen_ACU(value, openingIndex, context) {
 }
 function buildRowIdReservationsByRuntimeTable_ACU(tableData, additionalReservations) {
     const reservations = new Map();
+    // P1-7：整库物理表名只解析一次（惰性，解析点仍在下方 continue 之后）。
+    const physicalNames = createPhysicalTableNameResolver_ACU(tableData);
     for (const [sheetKey, value] of Object.entries(tableData || {})) {
         if (!sheetKey.startsWith('sheet_'))
             continue;
         const content = value?.content;
-        reservations.set(getPhysicalTableNameForSheet_ACU(tableData, sheetKey).toLowerCase(), createStableRowIdReservation_ACU(Array.isArray(content) ? content.slice(1) : []));
+        reservations.set(physicalNames.get(sheetKey).toLowerCase(), createStableRowIdReservation_ACU(Array.isArray(content) ? content.slice(1) : []));
     }
     for (const [tableName, rowIds] of additionalReservations || []) {
         const reservation = reservations.get(tableName.toLowerCase()) || new Set();
@@ -68999,6 +69106,9 @@ function freezeRuntimeSchemaFromData_ACU(runtimeData, activeSheetKeys) {
         return null;
     const bySheetKey = new Map();
     const activeKeys = activeSheetKeys ? activeSheetKeys : new Set(Object.keys(runtimeData).filter(key => key.startsWith('sheet_')));
+    // P1-7：物理表名整库只解析一次（惰性：解析点仍在下方 descriptor 守卫之后，
+    // 守卫命中提前 return 时与逐表形态一样一次都不解析、不抛撞名错）。
+    const physicalNames = createPhysicalTableNameResolver_ACU(runtimeData);
     for (const sheetKey of Object.keys(runtimeData).filter(key => key.startsWith('sheet_'))) {
         if (!isFrozenSchemaSheetKey_ACU(sheetKey, activeKeys))
             continue;
@@ -69010,7 +69120,7 @@ function freezeRuntimeSchemaFromData_ACU(runtimeData, activeSheetKeys) {
             // 运行时表必须携带 descriptor；缺失视为 schema 契约损坏（fail-closed）。
             return null;
         }
-        const physicalTableName = getPhysicalTableNameForSheet_ACU(runtimeData, sheetKey);
+        const physicalTableName = physicalNames.get(sheetKey);
         bySheetKey.set(sheetKey, {
             sheetKey,
             physicalTableName,
@@ -70334,6 +70444,9 @@ class SqlTableService {
     _validateRuntimeSchema_ACU(data) {
         const actualTables = new Set(this.engine.getTableNames());
         const runtimeSchemas = this.syncBridge.getRuntimeEffectiveSchemas_ACU();
+        // P1-7：整库物理表名只解析一次（惰性，解析点仍在下方 continue 之后：
+        // 休眠表被跳过时与逐表形态一样不解析、不抛撞名错）。
+        const physicalNames = createPhysicalTableNameResolver_ACU(data);
         for (const key of Object.keys(data).filter(key => key.startsWith('sheet_'))) {
             const sheet = data[key];
             if (!sheet || typeof sheet !== 'object')
@@ -70342,7 +70455,7 @@ class SqlTableService {
             // 校验它们只会误报 schema_missing_table。
             if (!isSqlActiveTemplateSheet_ACU(sheet))
                 continue;
-            const runtimeTableName = getPhysicalTableNameForSheet_ACU(data, key);
+            const runtimeTableName = physicalNames.get(key);
             if (!actualTables.has(runtimeTableName)) {
                 throw new Error(`schema_missing_table: ${key} (${runtimeTableName}) 未在 SQLite runtime 中创建。`);
             }
@@ -70368,6 +70481,8 @@ class SqlTableService {
         try {
             const ddlMap = new Map();
             const runtimeSchemas = this.syncBridge.getRuntimeEffectiveSchemas_ACU();
+            // P1-7：整库物理表名只解析一次（惰性，解析点仍在下方 continue 之后）。
+            const physicalNames = createPhysicalTableNameResolver_ACU(data);
             for (const [key, value] of Object.entries(data)) {
                 if (!key.startsWith('sheet_'))
                     continue;
@@ -70380,7 +70495,7 @@ class SqlTableService {
                     continue;
                 // NameMapper 必须和 SQLite 实际采用的 schema 一致。直接读取 sourceData.ddl
                 // 会在 fallback_invalid 场景留下无法映射运行时物理列名的陈旧映射。
-                const runtimeTableName = getPhysicalTableNameForSheet_ACU(data, key);
+                const runtimeTableName = physicalNames.get(key);
                 const runtimeSchema = runtimeSchemas.get(key);
                 if (!runtimeSchema) {
                     logWarn_ACU(`[SqlTableService] 构建 NameMapper 失败: ${key} 缺少 SyncBridge 实际执行 schema。`);
@@ -70445,10 +70560,12 @@ class SqlTableService {
         if (!view)
             return [];
         const keys = [];
+        // P1-7：整库物理表名只解析一次（惰性，解析点仍在下方 continue 之后）。
+        const physicalNames = createPhysicalTableNameResolver_ACU(view);
         for (const key of Object.keys(view)) {
             if (!key.startsWith('sheet_'))
                 continue;
-            const runtimeTableName = getPhysicalTableNameForSheet_ACU(view, key);
+            const runtimeTableName = physicalNames.get(key);
             if (tableNames.includes(runtimeTableName))
                 keys.push(key);
         }
@@ -70535,13 +70652,15 @@ class SqlTableService {
             return isSqlActiveTemplateSheet_ACU(sheet);
         });
         const missingSheets = {};
+        // P1-7：整库物理表名只解析一次（惰性，解析点仍在下方 continue 之后）。
+        const physicalNames = createPhysicalTableNameResolver_ACU(templateData);
         for (const key of sheetKeys) {
             // 当前聊天模板是建表结构权威；currentJsonTableData_ACU 可能是旧运行时快照，不能让旧 DDL/CHECK 覆盖模板。
             const liveSheet = this._readCanonicalView_ACU()?.[key];
             const sheet = templateData[key] || liveSheet;
             if (!sheet)
                 continue;
-            const runtimeTableName = getPhysicalTableNameForSheet_ACU(templateData, key);
+            const runtimeTableName = physicalNames.get(key);
             if (!existingTables.has(runtimeTableName)) {
                 missingSheets[key] = sheet;
             }
@@ -91412,7 +91531,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.8.2" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.8.3" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -122095,6 +122214,18 @@ function isWritableModule_ACU(value) {
 function moduleTable_ACU(module) {
     return `${MODULE_TABLE_PREFIX_ACU}${module}`;
 }
+const sqlViewCounters_ACU = { materializations: 0, disposed: 0 };
+let sqlViewCountersEnabled_ACU = false;
+/** 仅供测试：打开计数并清零。 */
+function __resetAgentModuleSqlViewCountersForTests_ACU() {
+    sqlViewCounters_ACU.materializations = 0;
+    sqlViewCounters_ACU.disposed = 0;
+    sqlViewCountersEnabled_ACU = true;
+}
+/** 仅供测试：读取计数快照。 */
+function __readAgentModuleSqlViewCountersForTests_ACU() {
+    return { ...sqlViewCounters_ACU };
+}
 /** SQL 视图层结构化失败：消息含模块与期望/实际 revision，供 fail-closed 诊断。 */
 class AgentModuleSqlViewError_ACU extends Error {
     constructor(message, detail) {
@@ -122483,6 +122614,8 @@ function readSnapshot_ACU(engine) {
  * 第二参兼容两种形态：分栏快照（S11-TT 复算播种）或复用引擎（旧调用）；第三参为引擎。
  */
 async function materializeAgentModuleSqlView_ACU(snapshot, fieldsOrEngine, maybeEngine) {
+    if (sqlViewCountersEnabled_ACU)
+        sqlViewCounters_ACU.materializations += 1;
     const db = (fieldsOrEngine instanceof SqliteEngine ? fieldsOrEngine : maybeEngine) ?? new SqliteEngine();
     const fields = fieldsOrEngine instanceof SqliteEngine ? undefined : fieldsOrEngine;
     try {
@@ -122493,6 +122626,8 @@ async function materializeAgentModuleSqlView_ACU(snapshot, fieldsOrEngine, maybe
     }
     catch (error) {
         db.dispose();
+        if (sqlViewCountersEnabled_ACU)
+            sqlViewCounters_ACU.disposed += 1;
         if (error instanceof AgentModuleSqlViewError_ACU)
             throw error;
         throw new AgentModuleSqlViewError_ACU(`续写资料 SQL 视物化失败: ${error instanceof Error ? error.message : String(error)}`);
@@ -122506,7 +122641,11 @@ async function materializeAgentModuleSqlView_ACU(snapshot, fieldsOrEngine, maybe
         readSnapshot: () => readSnapshot_ACU(db),
         readFieldRecord: (module, id) => readFieldRecord_ACU(db, module, id),
         readPartialRecords: module => readPartialRecords_ACU(db, module),
-        dispose: () => db.dispose(),
+        dispose: () => {
+            db.dispose();
+            if (sqlViewCountersEnabled_ACU)
+                sqlViewCounters_ACU.disposed += 1;
+        },
     };
 }
 
@@ -150987,7 +151126,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260927-10";
+        const stamp = "20260927-12";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -197049,7 +197188,7 @@ function useLogViewer() {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260927-10";
+        const stamp = "20260927-12";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -197058,7 +197197,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.8.2";
+        const v = "9.8.3";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {

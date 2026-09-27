@@ -65,10 +65,67 @@ export function canonicalizeDisplayName_ACU(value: unknown): string {
   return String(value ?? '').normalize('NFKC').trim().replace(/\s+/g, ' ').toLocaleLowerCase('en-US');
 }
 
+/* ═══════════════════════ 拼音 slug 记忆化（P1-7） ═══════════════════════
+ *
+ * toAsciiSlug_ACU 是 (规范化名, maxLength) 的纯函数，代价全在 pinyin-pro 上。
+ * 它原本每次现算，而物理表名解析链（resolvePhysicalTableNames_ACU 每张表两次
+ * slug）被冻结循环、hydrate 校验、写批表名映射等热循环逐表重复调用，实测
+ * S=60 时一次冻结循环要跑 2S² = 7200 次拼音（S 20→60 耗时倍率 8.99，O(S²)）。
+ *
+ * 记忆化口径（与 shared/ddl-utils 的 DDL 解析记忆化同构）：
+ * - 键＝规范化名 + 截断长度，即该纯函数的**全部**入参；不含 sheetKey、聊天、
+ *   隔离键等任何作用域信息：slug 只由入参决定，跨作用域复用同一结果不会串味，
+ *   反而不带作用域才允许跨聊天命中。
+ * - 键不含 sheetKey 是刻意的：表改名后规范化名随之改变，旧条目自然失效，
+ *   不会像 sheetKey 键那样命中陈旧物理名。
+ * - 缓存条目数上限固定，超限整表清空（表名集合是有限集）；失败/异常路径不存在
+ *   （本函数不会抛），因此无需「失败不记忆化」分支。
+ * - 计数钩子仅测试打开（生产路径只有一次 Map 查找 + 一次布尔判断）。
+ */
+const SLUG_MEMO_LIMIT_ACU = 256;
+const slugMemo_ACU = new Map<string, string>();
+
+/** 拼音与整库解析的结构计数（仅测试打开；不设墙钟阈值）。 */
+export interface SheetPhysicalNameCounters_ACU {
+  /** toAsciiSlug_ACU 的总进入次数（含记忆化命中）。 */
+  slugCalls: number;
+  /** 真正跑过 pinyin-pro 的次数（记忆化未命中的键数）。 */
+  slugComputes: number;
+  /** 命中记忆化的次数。 */
+  slugMemoHits: number;
+  /** resolvePhysicalTableNames_ACU 真正解析整库的次数（O(S) 工作单元）。 */
+  physicalResolves: number;
+}
+
+const physicalNameCounters_ACU: SheetPhysicalNameCounters_ACU = { slugCalls: 0, slugComputes: 0, slugMemoHits: 0, physicalResolves: 0 };
+let physicalNameCountersEnabled_ACU = false;
+
+/** 仅供测试：打开计数并清空记忆化。 */
+export function __resetSheetPhysicalNameMemoForTests_ACU(): void {
+  physicalNameCounters_ACU.slugCalls = 0;
+  physicalNameCounters_ACU.slugComputes = 0;
+  physicalNameCounters_ACU.slugMemoHits = 0;
+  physicalNameCounters_ACU.physicalResolves = 0;
+  physicalNameCountersEnabled_ACU = true;
+  slugMemo_ACU.clear();
+}
+
+/** 仅供测试：读取计数快照。 */
+export function __readSheetPhysicalNameCountersForTests_ACU(): SheetPhysicalNameCounters_ACU {
+  return { ...physicalNameCounters_ACU };
+}
+
 /** Converts a display value to an ASCII slug using the locked pinyin-pro dictionary. */
 export function toAsciiSlug_ACU(value: unknown, maxLength = MAX_SHEET_SLUG_LENGTH_ACU): string {
   const canonical = canonicalizeDisplayName_ACU(value);
   if (!canonical) return '';
+  if (physicalNameCountersEnabled_ACU) physicalNameCounters_ACU.slugCalls += 1;
+  const memoKey = `${maxLength}\u0000${canonical}`;
+  const memoized = slugMemo_ACU.get(memoKey);
+  if (memoized !== undefined) {
+    if (physicalNameCountersEnabled_ACU) physicalNameCounters_ACU.slugMemoHits += 1;
+    return memoized;
+  }
   const romanized = pinyin(canonical, {
     toneType: 'none',
     traditional: true,
@@ -76,13 +133,17 @@ export function toAsciiSlug_ACU(value: unknown, maxLength = MAX_SHEET_SLUG_LENGT
     separator: '_',
     nonZh: 'consecutive',
   });
-  return romanized.normalize('NFKD')
+  const slug = romanized.normalize('NFKD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '')
     .slice(0, Math.max(1, maxLength))
     .replace(/_+$/g, '');
+  if (physicalNameCountersEnabled_ACU) physicalNameCounters_ACU.slugComputes += 1;
+  if (slugMemo_ACU.size >= SLUG_MEMO_LIMIT_ACU) slugMemo_ACU.clear();
+  slugMemo_ACU.set(memoKey, slug);
+  return slug;
 }
 
 /** Returns an unreserved candidate only; callers must allocate before persisting it. */
@@ -99,6 +160,7 @@ export function buildStableSheetKeyCandidate_ACU(displayName: unknown): string |
  * always agree. Duplicate slugs are a hard error (see the fail-loud note below).
  */
 export function resolvePhysicalTableNames_ACU(data: TableDataObject_ACU | Record<string, unknown>): Map<string, string> {
+  if (physicalNameCountersEnabled_ACU) physicalNameCounters_ACU.physicalResolves += 1;
   const entries = Object.keys(data || {})
     .filter(sheetKey => sheetKey.startsWith('sheet_'))
     .sort()
@@ -150,6 +212,45 @@ export function getPhysicalTableNameForSheet_ACU(data: TableDataObject_ACU | Rec
   return getPhysicalTableNameFromResolvedMap_ACU(resolvePhysicalTableNames_ACU(data), sheetKey);
 }
 
+/**
+ * 热循环用的惰性物理表名解析器：整库只 resolve 一次，之后全部查表。
+ *
+ * 等价性（逐字、逐异常、逐抛错时机）：对固定 data，resolvePhysicalTableNames_ACU
+ * 是纯函数，于是
+ *   getPhysicalTableNameForSheet_ACU(data, k)
+ *     ≡ getPhysicalTableNameFromResolvedMap_ACU(resolvePhysicalTableNames_ACU(data), k)
+ * 本解析器只做一件事：把右侧那次 resolve **延迟到第一次 get**。
+ * - 逐表路径在第 i 次 get 抛错时，本解析器也在第 i 次 get 抛同一个
+ *   PhysicalTableNameCollisionError_ACU（同一句话、同一 collisions 明细）；
+ * - 逐表路径在整循环都没走到解析点时（休眠表、缺 runtime schema descriptor 等
+ *   提前 return/continue）不解析、也就不会抛撞名错，本解析器同样一次都不解析。
+ * 因此把循环内的 `getPhysicalTableNameForSheet_ACU(data, k)` 换成
+ * `resolver.get(k)`（data 在循环内不变）是纯性能替换，不改任何判定。
+ * 碰撞消解规则完全由 resolvePhysicalTableNames_ACU 决定（fail-loud，不追加
+ * hash、不按入参集合分叉），两条路径不存在规则差异的可能。
+ */
+export interface PhysicalTableNameResolver_ACU {
+  /** 与 getPhysicalTableNameForSheet_ACU(data, sheetKey) 逐字同结果、同异常。 */
+  get(sheetKey: string): string;
+  /** 已解析的整库映射；首次 get 之前为 null（用于诊断与测试）。 */
+  readonly resolved: ReadonlyMap<string, string> | null;
+}
+
+export function createPhysicalTableNameResolver_ACU(
+  data: TableDataObject_ACU | Record<string, unknown>,
+): PhysicalTableNameResolver_ACU {
+  let resolved: ReadonlyMap<string, string> | null = null;
+  return {
+    get(sheetKey: string): string {
+      if (!resolved) resolved = resolvePhysicalTableNames_ACU(data);
+      return getPhysicalTableNameFromResolvedMap_ACU(resolved, sheetKey);
+    },
+    get resolved(): ReadonlyMap<string, string> | null {
+      return resolved;
+    },
+  };
+}
+
 /** Use resolvePhysicalTableNames_ACU whenever collision arbitration is possible. */
 export function resolvePhysicalTableName_ACU(sheet: Sheet_ACU | null | undefined, sheetKey: string): string {
   return physicalTableNameBase_ACU(sheet, sheetKey);
@@ -157,7 +258,11 @@ export function resolvePhysicalTableName_ACU(sheet: Sheet_ACU | null | undefined
 
 function physicalTableNameBase_ACU(sheet: Sheet_ACU | null | undefined, sheetKey: string): string {
   const displaySlug = toAsciiSlug_ACU(sheet?.name).replace(/_/g, '');
-  const keySlug = toAsciiSlug_ACU(String(sheetKey || '').replace(/^sheet_/, '')).replace(/_/g, '');
+  // 显示名 slug 非空时 keySlug 是死值（下面 `displaySlug || keySlug` 必然短路），
+  // 跳过计算只为省掉一次拼音；产出的 candidate 与旧写法逐字相同。
+  const keySlug = displaySlug
+    ? ''
+    : toAsciiSlug_ACU(String(sheetKey || '').replace(/^sheet_/, '')).replace(/_/g, '');
   let candidate = (displaySlug || keySlug || 'sheet').slice(0, MAX_PHYSICAL_TABLE_NAME_LENGTH_ACU);
   if (/^[0-9]/.test(candidate) || SQLITE_RESERVED_TABLE_PREFIXES_ACU.some(prefix => candidate.toLowerCase().startsWith(prefix))) {
     candidate = `table_${candidate}`;
