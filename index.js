@@ -49668,6 +49668,58 @@ async function deleteRegisteredVectorIndexFilesWhere_ACU(predicate) {
     return deletedPaths;
 }
 
+/**
+ * 纪要向量 scope 的**当前运行态**解析。
+ *
+ * 单独成叶模块的原因：storage-service / chat-service / cache-service 都要按同一口径
+ * 解析「当前 scope」，而它们能引用的既有模块（archive-service、flush-queue）都反向
+ * 依赖 storage-service，直接 import 会形成环。本模块只依赖 state-manager 与 shared，
+ * 因此三方都能安全引用，也保证 scopeKey 口径与 flush 队列完全一致。
+ */
+function normalizeText_ACU$3(value) {
+    return String(value ?? '').trim();
+}
+/**
+ * 定位当前（或指定的）纪要表。archive-service 的 findSummaryTable_ACU 委托到这里，
+ * 保证「纪要表是哪张」在全仓只有一份实现——两处判定漂移会让墓碑写到错误 scopeKey 上。
+ */
+function findSummaryTableSelection_ACU(sourceTableKey) {
+    if (!currentJsonTableData_ACU || typeof currentJsonTableData_ACU !== 'object') {
+        return null;
+    }
+    const requestedKey = normalizeText_ACU$3(sourceTableKey);
+    const candidateKeys = requestedKey ? [requestedKey] : Object.keys(currentJsonTableData_ACU);
+    const summaryKey = candidateKeys.find((key) => {
+        const table = currentJsonTableData_ACU[key];
+        return !!table?.name && isSummaryOrOutlineTable_ACU(String(table.name || ''));
+    });
+    if (!summaryKey)
+        return null;
+    const table = currentJsonTableData_ACU[summaryKey];
+    if (!table || !Array.isArray(table.content))
+        return null;
+    return {
+        summaryKey,
+        table,
+    };
+}
+/**
+ * 解析当前运行态的纪要向量 scope。无当前聊天标识或无可用纪要表时返回 null——
+ * 调用方必须据此按「无当前 scope」处理（统计按 0、清理放弃删除），
+ * 不得回退成无 scope 的全库口径。
+ */
+function resolveCurrentSummaryVectorScopeParts_ACU() {
+    const chatKey = normalizeText_ACU$3(currentChatFileIdentifier_ACU);
+    const sourceTableKey = normalizeText_ACU$3(findSummaryTableSelection_ACU()?.summaryKey);
+    if (!chatKey || !sourceTableKey)
+        return null;
+    return normalizeSummaryVectorIndexScope_ACU({
+        chatKey,
+        isolationKey: getCurrentIsolationKey_ACU(),
+        sourceTableKey,
+    });
+}
+
 function isLegacyMatchForMessage_ACU(msg, settings) {
     const msgIdentity = msg?.TavernDB_ACU_Identity;
     if (settings?.dataIsolationEnabled) {
@@ -54370,11 +54422,23 @@ async function getSummaryVectorIndexStats_ACU(manifest) {
     manifest = normalizeSummaryVectorIndexManifestForRead_ACU(manifest);
     const tempCache = await estimateVectorIndexTempCache_ACU(manifest?.indexId);
     const hotCache = await estimateSummaryVectorHotCache_ACU(manifest?.indexId);
-    const flushTasks = await estimateSummaryVectorFlushTasks_ACU(manifest ? {
-        chatKey: manifest.chatKey,
-        isolationKey: manifest.isolationKey,
-        sourceTableKey: manifest.sourceTableKey,
-    } : undefined);
+    const flushTasks = manifest
+        ? await estimateSummaryVectorFlushTasks_ACU({
+            chatKey: manifest.chatKey,
+            isolationKey: manifest.isolationKey,
+            sourceTableKey: manifest.sourceTableKey,
+        })
+        // manifest 为 null 时按**当前 scope** 统计：list 在无 scope 时匹配全部记录，
+        // 别的 scope 的残留失败任务会被算成当前索引的失败（这正是用户看到的"启动就有 1 失败"）。
+        // 当前 scope 解析不出来时**整段跳过 flush 统计**（全 0）：不能传空串兜底——
+        // list 会把空 isolationKey 归一成 'default'，于是变成"匹配所有 default 隔离的记录"
+        // （任意聊天、任意纪要表），等于又退回全库口径，用户的原始症状照旧出现。
+        : await (async () => {
+            const currentScope = resolveCurrentSummaryVectorScopeParts_ACU();
+            return currentScope
+                ? estimateSummaryVectorFlushTasks_ACU(currentScope)
+                : { total: 0, dirty: 0, queued: 0, flushing: 0, ready: 0, failedRetryable: 0, failedTerminal: 0, lastError: '' };
+        })();
     const cacheTotalBytes = tempCache.bytes + hotCache.bytes;
     const flushTaskFields = {
         flushTaskTotalCount: flushTasks.total,
@@ -54695,24 +54759,9 @@ function buildPreparedRowFingerprint_ACU(row) {
     return buildSummaryRowFingerprint_ACU(row);
 }
 function findSummaryTable_ACU(sourceTableKey) {
-    if (!currentJsonTableData_ACU || typeof currentJsonTableData_ACU !== 'object') {
-        return null;
-    }
-    const requestedKey = normalizeText_ACU$2(sourceTableKey);
-    const candidateKeys = requestedKey ? [requestedKey] : Object.keys(currentJsonTableData_ACU);
-    const summaryKey = candidateKeys.find((key) => {
-        const table = currentJsonTableData_ACU[key];
-        return !!table?.name && isSummaryOrOutlineTable_ACU(String(table.name || ''));
-    });
-    if (!summaryKey)
-        return null;
-    const table = currentJsonTableData_ACU[summaryKey];
-    if (!table || !Array.isArray(table.content))
-        return null;
-    return {
-        summaryKey,
-        table,
-    };
+    // 委托给叶模块：纪要表判定必须全仓单一实现，否则 flush 队列的 scopeKey 会与
+    // 状态面板/清理路径解析出的 scope 漂移。
+    return findSummaryTableSelection_ACU(sourceTableKey);
 }
 function splitSentences_ACU(text) {
     const normalized = normalizeText_ACU$2(text);
@@ -91531,7 +91580,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.8.3" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.8.4" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -128448,6 +128497,22 @@ async function deleteCurrentSummaryVectorIndexFromChat_ACU() {
             logWarn_ACU(`[交火向量索引] flush 任务清理失败（${hintLabel}），残留将在后续读取时自愈。`);
         }
     }
+    // 无聊天/无 manifest ⇒ scopeHints 为空，上面一条都没清。此处用当前 scope 兜底写墓碑：
+    // 只失效不删除，使在飞 runner 无法复活当前 scope 的归档队列。失败仅记录。
+    if (!scopeHintList.length) {
+        const currentScope = resolveCurrentSummaryVectorScopeParts_ACU();
+        if (currentScope) {
+            try {
+                await clearSummaryVectorIndexFlushQueueForCurrentScope_ACU({
+                    isolationKey: currentScope.isolationKey,
+                    sourceTableKey: currentScope.sourceTableKey,
+                });
+            }
+            catch (error) {
+                logWarn_ACU('[交火向量索引] 当前 scope 的 flush 队列墓碑写入失败，残留将在后续读取时自愈。', error);
+            }
+        }
+    }
     const gcResult = await cleanupUnreachableSummaryVectorIndexFiles_ACU({ scopeHints: scopeHintList });
     return changed || gcResult.deletedPaths.length > 0 || gcResult.failedDeletes.length > 0;
 }
@@ -128461,6 +128526,76 @@ async function clearAllSummaryVectorIndexCaches_ACU() {
     // 严格取 true：两个 helper 的契约是 Promise<boolean>；若写成 `!== false`，
     // 未来误引入一个 Promise<void> 的 helper（undefined）会被静默当成清理成功（fail-open）。
     return tempCacheCleared === true && hotCacheCleared === true;
+}
+/**
+ * 用户显式「清空临时缓存」时一并处理归档队列（flushTasks object store）。
+ *
+ * 协议顺序不可交换：
+ * 1. 先用既有墓碑协议失效**当前 scope**（带单调 generation），使在飞 runner 在发布前
+ *    的代次校验必然失败，无法复活当前 scope 的数据；
+ * 2. 再全量列出并逐条**严格删除**其它 scope 的记录（delete 复读校验，false 即未清干净）；
+ * 3. 当前 scope 的墓碑记录必须保留——删掉它等于放行在飞 runner 复活数据。
+ *
+ * 任何一步失败都不抛给 UI 吞掉，一律在返回值里 `failed: true` 如实上报。
+ */
+async function clearAllSummaryVectorIndexFlushQueues_ACU() {
+    const sourceTableKey = String(findSummaryTable_ACU()?.summaryKey || '').trim();
+    const isolationKey = String(getCurrentIsolationKey_ACU() ?? '');
+    let currentScopeKey = '';
+    try {
+        currentScopeKey = resolveCurrentSummaryVectorFlushScope_ACU({ isolationKey, sourceTableKey }).scopeKey;
+        await clearSummaryVectorIndexFlushQueueForCurrentScope_ACU({ isolationKey, sourceTableKey });
+    }
+    catch (error) {
+        // 墓碑没写成就不能删：删了等于放行在飞 runner 复活当前 scope 的数据。
+        // 区分"没有当前 scope"与"存储故障"：前者不是存储不可用，重试也不会变好。
+        const reason = findSummaryTable_ACU() == null ? 'no_current_scope' : 'tombstone_failed';
+        logWarn_ACU(`[交火向量索引] 清空归档队列：当前 scope 失效墓碑写入失败（${reason}），已放弃删除残留任务。`, error);
+        return { clearedCount: 0, currentScopeInvalidated: false, failed: true, reason };
+    }
+    let tasks = [];
+    try {
+        // 不带 scope 全量列出：scope 过滤对 legacy 空 isolationKey 任务不成立，
+        // 过滤后列出会把这类残留永久藏在 IndexedDB 里。
+        tasks = await listSummaryVectorFlushTasks_ACU();
+    }
+    catch (error) {
+        logWarn_ACU('[交火向量索引] 清空归档队列：列出残留任务失败。', error);
+        return { clearedCount: 0, currentScopeInvalidated: true, failed: true, reason: 'list_failed' };
+    }
+    let clearedCount = 0;
+    let deleteFailed = false;
+    for (const task of tasks) {
+        // 当前 scope 的墓碑必须留下：删掉它等于放行在飞 runner 复活当前 scope 的数据。
+        if (task.scopeKey === currentScopeKey)
+            continue;
+        // 严格取 true：delete 的 false 通道表示任务可能残留（后继 replay 会复活已删数据）。
+        if ((await deleteSummaryVectorFlushTask_ACU(task.scopeKey)) === true) {
+            clearedCount += 1;
+            continue;
+        }
+        deleteFailed = true;
+        logWarn_ACU(`[交火向量索引] 清空归档队列：残留任务删除失败：scope=${task.scopeKey}`);
+    }
+    // 清扫后再列一次做**复读校验**：list 自身把异常兜成 []（hot-cache 层既有契约），
+    // 一次"列出为空"不足以证明真的清干净；这里以"除当前 scope 墓碑外仍有残留"为准，
+    // 同时覆盖清扫期间并发重建任务的情况。
+    let residual = 0;
+    let residualUnknown = false;
+    try {
+        residual = (await listSummaryVectorFlushTasks_ACU()).filter(task => task.scopeKey !== currentScopeKey).length;
+    }
+    catch (error) {
+        logWarn_ACU('[交火向量索引] 清空归档队列：复读校验残留任务失败。', error);
+        residualUnknown = true;
+    }
+    if (deleteFailed)
+        return { clearedCount, currentScopeInvalidated: true, failed: true, reason: 'delete_failed' };
+    if (residualUnknown)
+        return { clearedCount, currentScopeInvalidated: true, failed: true, reason: 'list_failed' };
+    if (residual > 0)
+        return { clearedCount, currentScopeInvalidated: true, failed: true, reason: 'residual_left' };
+    return { clearedCount, currentScopeInvalidated: true, failed: false };
 }
 function normalizeErrorMessage_ACU(error) {
     if (error instanceof Error)
@@ -151126,7 +151261,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260927-12";
+        const stamp = "20260927-14";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -182593,8 +182728,8 @@ const _hoisted_9$d = { class: "acu-agent-advanced__grid" };
 const _hoisted_10$d = { class: "acu-agent-advanced__section" };
 const _hoisted_11$d = { class: "acu-agent-advanced__section-head" };
 const _hoisted_12$c = { class: "acu-agent-advanced__grid" };
-const _hoisted_13$a = { class: "acu-agent-advanced__section" };
-const _hoisted_14$a = { class: "acu-agent-advanced__section-head" };
+const _hoisted_13$b = { class: "acu-agent-advanced__section" };
+const _hoisted_14$b = { class: "acu-agent-advanced__section-head" };
 const _hoisted_15$a = { class: "acu-agent-advanced__prompt-scope" };
 const _hoisted_16$9 = { class: "acu-agent-advanced__prompt-actions" };
 const _hoisted_17$8 = { class: "acu-agent-advanced__prompt-head" };
@@ -182743,8 +182878,8 @@ function _sfc_render$s(_ctx, _cache, $props, $setup, $data, $options) {
 				}, null, 8, ["model-value", "disabled"])]),
 				_: 1
 			}, 8, ["label", "hint"])])]),
-			createBaseVNode("section", _hoisted_13$a, [
-				createBaseVNode("header", _hoisted_14$a, [createBaseVNode("div", null, [
+			createBaseVNode("section", _hoisted_13$b, [
+				createBaseVNode("header", _hoisted_14$b, [createBaseVNode("div", null, [
 					createBaseVNode(
 						"h4",
 						null,
@@ -184616,11 +184751,11 @@ const _hoisted_9$c = { class: "acu-v2-session-feed__user-text" };
 const _hoisted_10$c = { class: "acu-v2-session-feed__time" };
 const _hoisted_11$c = { class: "acu-v2-session-feed__thought" };
 const _hoisted_12$b = { class: "acu-v2-session-feed__thought-label" };
-const _hoisted_13$9 = {
+const _hoisted_13$a = {
 	key: 0,
 	class: "acu-v2-session-feed__thought-text"
 };
-const _hoisted_14$9 = ["onClick"];
+const _hoisted_14$a = ["onClick"];
 const _hoisted_15$9 = {
 	key: 0,
 	class: "acu-v2-session-feed__spinner"
@@ -184713,7 +184848,7 @@ function _sfc_render$p(_ctx, _cache, $props, $setup, $data, $options) {
 								/* TEXT */
 							), entry.detail ? (openBlock(), createElementBlock(
 								"p",
-								_hoisted_13$9,
+								_hoisted_13$a,
 								toDisplayString(entry.detail),
 								1
 								/* TEXT */
@@ -184782,7 +184917,7 @@ function _sfc_render$p(_ctx, _cache, $props, $setup, $data, $options) {
 											2
 											/* CLASS */
 										)) : createCommentVNode("v-if", true)
-									], 8, _hoisted_14$9),
+									], 8, _hoisted_14$a),
 									entry.detail && !$setup.isExpanded(entry) ? (openBlock(), createElementBlock("p", {
 										key: 0,
 										class: "acu-v2-session-feed__preview",
@@ -185635,8 +185770,8 @@ const _hoisted_9$a = { class: "acu-v2-continuation-materials__meta" };
 const _hoisted_10$a = { class: "acu-v2-continuation-materials__outline-summary" };
 const _hoisted_11$a = { class: "acu-v2-continuation-materials__outline-heading" };
 const _hoisted_12$a = { class: "acu-v2-continuation-materials__badge acu-v2-continuation-materials__badge--primary" };
-const _hoisted_13$8 = { class: "acu-v2-continuation-materials__badge" };
-const _hoisted_14$8 = { class: "acu-v2-continuation-materials__badge" };
+const _hoisted_13$9 = { class: "acu-v2-continuation-materials__badge" };
+const _hoisted_14$9 = { class: "acu-v2-continuation-materials__badge" };
 const _hoisted_15$8 = { class: "acu-v2-continuation-materials__badge" };
 const _hoisted_16$7 = { class: "acu-v2-continuation-materials__card-body" };
 const _hoisted_17$6 = { class: "acu-v2-continuation-materials__card-meta" };
@@ -186042,14 +186177,14 @@ function _sfc_render$m(_ctx, _cache, $props, $setup, $data, $options) {
 							),
 							createBaseVNode(
 								"span",
-								_hoisted_13$8,
+								_hoisted_13$9,
 								"职责：" + toDisplayString($setup.ROLE_LABELS[$props.activeRevision.outline.role ?? ""] ?? $props.activeRevision.outline.role ?? "未标注"),
 								1
 								/* TEXT */
 							),
 							createBaseVNode(
 								"span",
-								_hoisted_14$8,
+								_hoisted_14$9,
 								"revision " + toDisplayString($props.activeRevision.revision),
 								1
 								/* TEXT */
@@ -188927,8 +189062,8 @@ const _hoisted_9$9 = { class: "acu-v2-continuation-page__settings-grid" };
 const _hoisted_10$9 = { class: "acu-v2-continuation-page__settings-grid" };
 const _hoisted_11$9 = { class: "acu-v2-continuation-page__settings-grid" };
 const _hoisted_12$9 = { class: "acu-v2-continuation-page__toggles" };
-const _hoisted_13$7 = { class: "acu-v2-continuation-page__settings-grid" };
-const _hoisted_14$7 = { class: "acu-v2-continuation-page__settings-grid" };
+const _hoisted_13$8 = { class: "acu-v2-continuation-page__settings-grid" };
+const _hoisted_14$8 = { class: "acu-v2-continuation-page__settings-grid" };
 const _hoisted_15$7 = {
 	key: 0,
 	class: "acu-v2-continuation-page__error"
@@ -189643,7 +189778,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 										label: "百度百科（TT 暂不支持，请勿勾选）"
 									}, null, 8, ["modelValue"])
 								]),
-								createBaseVNode("div", _hoisted_13$7, [
+								createBaseVNode("div", _hoisted_13$8, [
 									createVNode($setup["AcuFormRow"], {
 										label: "搜索引擎",
 										hint: "百科查不到时的兜底搜索。TT 仅支持 SearXNG；其余选项需要酒馆服务器转发，TT 未提供对应路由。"
@@ -189735,7 +189870,7 @@ function _sfc_render$l(_ctx, _cache, $props, $setup, $data, $options) {
 								"给不同 Agent 分配不同 API 预设：例如主 Agent 用强模型，审查类子代理用便宜快速的模型。「跟随全局默认」即使用上方的 API 预设。",
 								-1
 								/* CACHED */
-							)), createBaseVNode("div", _hoisted_14$7, [(openBlock(), createElementBlock(
+							)), createBaseVNode("div", _hoisted_14$8, [(openBlock(), createElementBlock(
 								Fragment,
 								null,
 								renderList($setup.agentChannelRoles, (channel) => {
@@ -190625,12 +190760,26 @@ function useVectorIndexConfig() {
         maintenanceBusy.value = true;
         try {
             const fullyCleared = await clearAllSummaryVectorIndexCaches_ACU();
+            // 归档队列（flushTasks）此前无人清理，别的 scope 的残留失败任务会永久挂在状态面板上。
+            // 与缓存清理一并处理：有残留失败时必须走 warning，不允许显示成功。
+            const flushQueues = await clearAllSummaryVectorIndexFlushQueues_ACU();
             await refreshIndexStatus(false);
-            if (fullyCleared === false) {
-                notify('warning', '交火索引缓存未能完全清空（部分存储不可用），请重试。权威外置文件和聊天记录不会被删除。', { muteable: false });
+            const cleared = Math.max(0, Number(flushQueues?.clearedCount) || 0);
+            const queueNote = `归档队列一并处理（清理 ${cleared} 条残留）`;
+            // 三种未清干净的原因必须分别措辞：把"没加载聊天"说成"存储不可用、请重试"是谎报，
+            // 而且不加载聊天时重试永远不会成功。
+            const reason = flushQueues?.reason;
+            const noScopeHint = reason === 'no_current_scope' || reason === 'tombstone_failed';
+            if (fullyCleared === false || flushQueues?.failed) {
+                const cause = noScopeHint
+                    ? '未加载聊天或找不到纪要表，无法定位归档队列所属会话，本次未处理队列（打开聊天后可再清）'
+                    : reason === 'residual_left'
+                        ? '仍有残留任务未清掉'
+                        : '部分存储不可用，请重试';
+                notify('warning', `交火索引缓存未能完全清空（${cause}，${queueNote}）。权威外置文件和聊天记录不会被删除。`, { muteable: false });
             }
             else {
-                notify('success', '交火索引临时缓存与热缓存已清空。权威外置文件和聊天记录不会被删除。', { muteable: false });
+                notify('success', `交火索引临时缓存与热缓存已清空，${queueNote}。权威外置文件和聊天记录不会被删除。`, { muteable: false });
             }
         }
         catch (error) {
@@ -190732,6 +190881,7 @@ function useVectorIndexConfig() {
             {
                 label: '归档队列',
                 value: `${(stats?.flushTaskDirtyCount || 0) + (stats?.flushTaskQueuedCount || 0) + (stats?.flushTaskFlushingCount || 0)} 等待 / ${stats?.flushTaskFailedCount || 0} 失败`,
+                key: 'flushQueue',
             },
             {
                 label: '身份健康',
@@ -190832,6 +190982,7 @@ const vectorIndexCopy = {
  * 与保留策略不变。
  */
 const SHOW_LEGACY_VECTOR_MAINTENANCE_UI = false;
+const FLUSH_QUEUE_ERROR_MAX_CHARS = 60;
 var _sfc_main$i = /*@__PURE__*/ defineComponent({
     __name: 'VectorIndexPage',
     setup(__props, { expose: __expose }) {
@@ -190864,6 +191015,13 @@ var _sfc_main$i = /*@__PURE__*/ defineComponent({
             ? "使用默认提示词"
             : "已自定义提示词");
         const promptTemplateBadgeVariant = computed(() => vector.promptTemplateMode.value === "default" ? "neutral" : "accent");
+        const flushQueueLastError = computed(() => String(vector.indexStats.value?.flushTaskLastError || "").trim());
+        /** 面板只展示截断文本，完整原文放在 title 里，避免长错误撑破两列栅格。 */
+        function truncateFlushQueueError(text) {
+            return text.length > FLUSH_QUEUE_ERROR_MAX_CHARS
+                ? `${text.slice(0, FLUSH_QUEUE_ERROR_MAX_CHARS)}…`
+                : text;
+        }
         function confirmPromptClose() {
             if (!promptDrawerOpen.value || !vector.promptDirty.value)
                 return true;
@@ -190914,27 +191072,29 @@ var _sfc_main$i = /*@__PURE__*/ defineComponent({
             refreshAll();
         });
         useUiCloseGuard(confirmPromptClose);
-        const __returned__ = { SHOW_LEGACY_VECTOR_MAINTENANCE_UI, dialogStore, vector, vectorApiConfig, apiStore, followActiveApiLabel, keywordApiOptions, promptDrawerOpen, panelNavItems, ROLE_OPTIONS, promptSegmentsForView, keywordPromptEmpty, promptTemplateBadgeLabel, promptTemplateBadgeVariant, confirmPromptClose, onPromptUpdate, refreshAll, saveVectorApiConfig, onRerankBatchSizeChange, onDeleteCurrentIndex, AcuBadge, AcuButton, AcuFormRow, AcuInput, AcuMessage, AcuMobilePanelNav, AcuPanel, AcuPanelGrid, AcuSelect, AcuStatsList, AcuToggle, VectorIndexPromptDrawer, get RERANK_BATCH_SIZE_LIMITS() { return RERANK_BATCH_SIZE_LIMITS; }, get vectorIndexCopy() { return vectorIndexCopy; } };
+        const __returned__ = { SHOW_LEGACY_VECTOR_MAINTENANCE_UI, dialogStore, vector, vectorApiConfig, apiStore, followActiveApiLabel, keywordApiOptions, promptDrawerOpen, panelNavItems, ROLE_OPTIONS, promptSegmentsForView, keywordPromptEmpty, promptTemplateBadgeLabel, promptTemplateBadgeVariant, FLUSH_QUEUE_ERROR_MAX_CHARS, flushQueueLastError, truncateFlushQueueError, confirmPromptClose, onPromptUpdate, refreshAll, saveVectorApiConfig, onRerankBatchSizeChange, onDeleteCurrentIndex, AcuBadge, AcuButton, AcuFormRow, AcuInput, AcuMessage, AcuMobilePanelNav, AcuPanel, AcuPanelGrid, AcuSelect, AcuStatsList, AcuToggle, VectorIndexPromptDrawer, get RERANK_BATCH_SIZE_LIMITS() { return RERANK_BATCH_SIZE_LIMITS; }, get vectorIndexCopy() { return vectorIndexCopy; } };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
         return __returned__;
     }
 });
 
-injectSfcStyle("\n.acu-v2-vector-index-page[data-v-a713618f] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-vector-index-page__panel-stack[data-v-a713618f] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 16px;\n}\n.acu-v2-vector-index-page__number-grid[data-v-a713618f] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));\r\n  gap: 10px;\n}\n.acu-v2-vector-api-form[data-v-a713618f] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-v2-vector-api-form__section[data-v-a713618f] {\r\n  min-width: 0;\r\n  margin: 0;\r\n  padding: 0 0 18px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\n}\n.acu-v2-vector-api-form__section[data-v-a713618f]:last-of-type {\r\n  padding-bottom: 0;\r\n  border-bottom: 0;\n}\n.acu-v2-vector-api-form__section + .acu-v2-vector-api-form__section[data-v-a713618f] {\r\n  padding-top: 2px;\n}\n.acu-v2-vector-api-form__section legend[data-v-a713618f] {\r\n  width: 100%;\r\n  margin: 0 0 2px;\r\n  padding: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-weight: 700;\r\n  line-height: 1.35;\n}\n.acu-v2-vector-api-form__actions[data-v-a713618f] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-vector-index-page__hint[data-v-a713618f] {\r\n  margin: 0;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-3);\r\n  line-height: 1.55;\n}\n.acu-v2-vector-index-page__maintenance-spacer[data-v-a713618f] {\r\n  flex: 1 1 auto;\r\n  min-height: 0;\n}\n.acu-v2-vector-index-page__actions[data-v-a713618f] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-vector-index-page__prompt-actions[data-v-a713618f] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n@media (max-width: 860px) {\n.acu-v2-vector-index-page[data-v-a713618f] {\r\n    padding: 14px;\n}\n}\n.acu-v2-vector-api-form__instruction-textarea[data-v-a713618f] {\r\n  width: 100%;\r\n  min-height: 60px;\r\n  padding: 6px 8px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 24%, transparent);\r\n  border-radius: 4px;\r\n  background: var(--acu-bg-2, transparent);\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.5;\r\n  resize: vertical;\n}\n.acu-v2-vector-index-page__scope-allowlist[data-v-a713618f] {\r\n  width: 100%;\r\n  min-height: 72px;\r\n  padding: 6px 8px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 24%, transparent);\r\n  border-radius: 4px;\r\n  background: var(--acu-bg-2, transparent);\r\n  color: var(--acu-text-1);\r\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\r\n  font-size: var(--acu-font-size-small, 11px);\r\n  line-height: 1.5;\r\n  resize: vertical;\n}\r\n", "src/presentation-v2/pages/VectorIndexPage.vue#style-0-a713618f");
-var VectorIndexPage_vue_vue_type_style_index_0_scoped_a713618f_lang = null;
+injectSfcStyle("\n.acu-v2-vector-index-page[data-v-c0fcc17e] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-vector-index-page__panel-stack[data-v-c0fcc17e] {\r\n  min-width: 0;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 16px;\n}\n.acu-v2-vector-index-page__number-grid[data-v-c0fcc17e] {\r\n  display: grid;\r\n  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));\r\n  gap: 10px;\n}\n.acu-v2-vector-api-form[data-v-c0fcc17e] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n.acu-v2-vector-api-form__section[data-v-c0fcc17e] {\r\n  min-width: 0;\r\n  margin: 0;\r\n  padding: 0 0 18px;\r\n  border: 0;\r\n  border-bottom: 1px solid\r\n    color-mix(in srgb, var(--acu-text-3) 16%, transparent);\r\n  border-radius: 0;\r\n  background: transparent;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 12px;\n}\n.acu-v2-vector-api-form__section[data-v-c0fcc17e]:last-of-type {\r\n  padding-bottom: 0;\r\n  border-bottom: 0;\n}\n.acu-v2-vector-api-form__section + .acu-v2-vector-api-form__section[data-v-c0fcc17e] {\r\n  padding-top: 2px;\n}\n.acu-v2-vector-api-form__section legend[data-v-c0fcc17e] {\r\n  width: 100%;\r\n  margin: 0 0 2px;\r\n  padding: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-weight: 700;\r\n  line-height: 1.35;\n}\n.acu-v2-vector-api-form__actions[data-v-c0fcc17e] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-vector-index-page__hint[data-v-c0fcc17e] {\r\n  margin: 0;\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  color: var(--acu-text-3);\r\n  line-height: 1.55;\n}\n.acu-v2-vector-index-page__flush-queue[data-v-c0fcc17e] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 2px;\r\n  min-width: 0;\n}\n.acu-v2-vector-index-page__flush-queue-error[data-v-c0fcc17e] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.45;\r\n  word-break: break-all;\r\n  cursor: help;\n}\n.acu-v2-vector-index-page__maintenance-spacer[data-v-c0fcc17e] {\r\n  flex: 1 1 auto;\r\n  min-height: 0;\n}\n.acu-v2-vector-index-page__actions[data-v-c0fcc17e] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  flex-wrap: wrap;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n.acu-v2-vector-index-page__prompt-actions[data-v-c0fcc17e] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: 8px;\r\n  padding-top: 12px;\r\n  margin-top: 4px;\n}\n@media (max-width: 860px) {\n.acu-v2-vector-index-page[data-v-c0fcc17e] {\r\n    padding: 14px;\n}\n}\n.acu-v2-vector-api-form__instruction-textarea[data-v-c0fcc17e] {\r\n  width: 100%;\r\n  min-height: 60px;\r\n  padding: 6px 8px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 24%, transparent);\r\n  border-radius: 4px;\r\n  background: var(--acu-bg-2, transparent);\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.5;\r\n  resize: vertical;\n}\n.acu-v2-vector-index-page__scope-allowlist[data-v-c0fcc17e] {\r\n  width: 100%;\r\n  min-height: 72px;\r\n  padding: 6px 8px;\r\n  border: 1px solid color-mix(in srgb, var(--acu-text-3) 24%, transparent);\r\n  border-radius: 4px;\r\n  background: var(--acu-bg-2, transparent);\r\n  color: var(--acu-text-1);\r\n  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\r\n  font-size: var(--acu-font-size-small, 11px);\r\n  line-height: 1.5;\r\n  resize: vertical;\n}\r\n", "src/presentation-v2/pages/VectorIndexPage.vue#style-0-c0fcc17e");
+var VectorIndexPage_vue_vue_type_style_index_0_scoped_c0fcc17e_lang = null;
 
 const _hoisted_1$i = { class: "acu-v2-vector-index-page" };
 const _hoisted_2$h = { class: "acu-v2-vector-index-page__panel-stack" };
-const _hoisted_3$f = { class: "acu-v2-vector-index-page__actions" };
-const _hoisted_4$d = { class: "acu-v2-vector-index-page__number-grid" };
-const _hoisted_5$c = { class: "acu-v2-vector-index-page__panel-stack" };
-const _hoisted_6$b = { class: "acu-v2-vector-api-form__section" };
-const _hoisted_7$9 = { class: "acu-v2-vector-api-form__section" };
-const _hoisted_8$9 = { class: "acu-v2-vector-api-form__actions" };
-const _hoisted_9$8 = { class: "acu-v2-vector-index-page__prompt-actions" };
-const _hoisted_10$8 = { class: "acu-v2-vector-index-page__number-grid" };
-const _hoisted_11$8 = { class: "acu-v2-vector-index-page__number-grid" };
-const _hoisted_12$8 = ["value"];
+const _hoisted_3$f = { class: "acu-v2-vector-index-page__flush-queue" };
+const _hoisted_4$d = ["title"];
+const _hoisted_5$c = { class: "acu-v2-vector-index-page__actions" };
+const _hoisted_6$b = { class: "acu-v2-vector-index-page__number-grid" };
+const _hoisted_7$9 = { class: "acu-v2-vector-index-page__panel-stack" };
+const _hoisted_8$9 = { class: "acu-v2-vector-api-form__section" };
+const _hoisted_9$8 = { class: "acu-v2-vector-api-form__section" };
+const _hoisted_10$8 = { class: "acu-v2-vector-api-form__actions" };
+const _hoisted_11$8 = { class: "acu-v2-vector-index-page__prompt-actions" };
+const _hoisted_12$8 = { class: "acu-v2-vector-index-page__number-grid" };
+const _hoisted_13$7 = { class: "acu-v2-vector-index-page__number-grid" };
+const _hoisted_14$7 = ["value"];
 function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 	return openBlock(), createElementBlock("section", _hoisted_1$i, [
 		createVNode($setup["AcuMobilePanelNav"], { items: $setup.panelNavItems }, null, 8, ["items"]),
@@ -190953,7 +191113,20 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 					_: 1
 				}, 8, ["variant"])]),
 				default: withCtx(() => [
-					createVNode($setup["AcuStatsList"], { items: $setup.vector.statusStatsItems.value }, null, 8, ["items"]),
+					createVNode($setup["AcuStatsList"], { items: $setup.vector.statusStatsItems.value }, {
+						flushQueue: withCtx(() => [createBaseVNode("span", _hoisted_3$f, [createBaseVNode(
+							"span",
+							null,
+							toDisplayString(`${($setup.vector.indexStats.value?.flushTaskDirtyCount || 0) + ($setup.vector.indexStats.value?.flushTaskQueuedCount || 0) + ($setup.vector.indexStats.value?.flushTaskFlushingCount || 0)} 等待 / ${$setup.vector.indexStats.value?.flushTaskFailedCount || 0} 失败`),
+							1
+							/* TEXT */
+						), $setup.flushQueueLastError ? (openBlock(), createElementBlock("span", {
+							key: 0,
+							class: "acu-v2-vector-index-page__flush-queue-error",
+							title: $setup.flushQueueLastError
+						}, toDisplayString($setup.truncateFlushQueueError($setup.flushQueueLastError)), 9, _hoisted_4$d)) : createCommentVNode("v-if", true)])]),
+						_: 1
+					}, 8, ["items"]),
 					_cache[35] || (_cache[35] = createBaseVNode(
 						"p",
 						{ class: "acu-v2-vector-index-page__hint" },
@@ -190971,7 +191144,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 						-1
 						/* CACHED */
 					)),
-					createBaseVNode("div", _hoisted_3$f, [
+					createBaseVNode("div", _hoisted_5$c, [
 						createVNode($setup["AcuButton"], {
 							variant: "primary",
 							disabled: $setup.vector.buildBusy.value || $setup.vector.maintenanceBusy.value,
@@ -191068,7 +191241,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 						])]),
 						_: 1
 					}),
-					createBaseVNode("div", _hoisted_4$d, [createVNode($setup["AcuFormRow"], {
+					createBaseVNode("div", _hoisted_6$b, [createVNode($setup["AcuFormRow"], {
 						label: "上下文读取层数",
 						hint: "关键词生成时读取的最近对话层数；1 层 = 1 条 AI 回复 + 其上方 1 条用户输入。"
 					}, {
@@ -191095,7 +191268,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 					})])
 				]),
 				_: 1
-			}, 8, ["title", "description"])]), createBaseVNode("div", _hoisted_5$c, [createVNode($setup["AcuPanel"], {
+			}, 8, ["title", "description"])]), createBaseVNode("div", _hoisted_7$9, [createVNode($setup["AcuPanel"], {
 				id: "vector-index-api-panel",
 				title: $setup.vectorIndexCopy.panels.api.title,
 				description: $setup.vectorIndexCopy.panels.api.description
@@ -191107,7 +191280,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 						onSubmit: withModifiers($setup.saveVectorApiConfig, ["prevent"])
 					},
 					[
-						createBaseVNode("fieldset", _hoisted_6$b, [
+						createBaseVNode("fieldset", _hoisted_8$9, [
 							_cache[37] || (_cache[37] = createBaseVNode(
 								"legend",
 								null,
@@ -191143,7 +191316,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 								_: 1
 							})
 						]),
-						createBaseVNode("fieldset", _hoisted_7$9, [
+						createBaseVNode("fieldset", _hoisted_9$8, [
 							_cache[38] || (_cache[38] = createBaseVNode(
 								"legend",
 								null,
@@ -191236,7 +191409,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 							))]),
 							_: 1
 						})) : createCommentVNode("v-if", true),
-						createBaseVNode("div", _hoisted_8$9, [createVNode($setup["AcuButton"], {
+						createBaseVNode("div", _hoisted_10$8, [createVNode($setup["AcuButton"], {
 							variant: "primary",
 							"native-type": "submit"
 						}, {
@@ -191275,7 +191448,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 						/* CACHED */
 					)])]),
 					_: 1
-				})) : createCommentVNode("v-if", true), createBaseVNode("div", _hoisted_9$8, [createVNode($setup["AcuButton"], {
+				})) : createCommentVNode("v-if", true), createBaseVNode("div", _hoisted_11$8, [createVNode($setup["AcuButton"], {
 					variant: "primary",
 					onClick: _cache[12] || (_cache[12] = ($event) => $setup.promptDrawerOpen = true)
 				}, {
@@ -191296,7 +191469,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 				title: $setup.vectorIndexCopy.panels.recall.title,
 				description: $setup.vectorIndexCopy.panels.recall.description
 			}, {
-				default: withCtx(() => [createBaseVNode("div", _hoisted_10$8, [
+				default: withCtx(() => [createBaseVNode("div", _hoisted_12$8, [
 					createVNode($setup["AcuFormRow"], {
 						label: "触发阈值",
 						hint: "纪要有效行数达标后，发送前生成关键词并召回分块，未达标则保留原索引流程。"
@@ -191384,7 +191557,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 				description: $setup.vectorIndexCopy.panels.archive.description
 			}, {
 				default: withCtx(() => [
-					createBaseVNode("div", _hoisted_11$8, [
+					createBaseVNode("div", _hoisted_13$7, [
 						createVNode($setup["AcuFormRow"], {
 							label: "按句切分纪要正文",
 							hint: "默认关闭：每行一个向量（概览 + 纪要正文整体），索引体积只随行数增长。开启后按下方句数切分正文，召回更细但分片成倍增加；改动后需重建索引。"
@@ -191500,7 +191673,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 							spellcheck: "false",
 							placeholder: "每行一个 scope fingerprint",
 							onChange: _cache[26] || (_cache[26] = ($event) => $setup.vector.setV2WriteScopeAllowlist($event.target.value))
-						}, null, 40, _hoisted_12$8)]),
+						}, null, 40, _hoisted_14$7)]),
 						_: 1
 					})) : createCommentVNode("v-if", true)
 				]),
@@ -191530,7 +191703,7 @@ function _sfc_render$i(_ctx, _cache, $props, $setup, $data, $options) {
 		])
 	]);
 }
-var VectorIndexPage = /* @__PURE__ */ _export_sfc(_sfc_main$i, [["render", _sfc_render$i], ["__scopeId", "data-v-a713618f"]]);
+var VectorIndexPage = /* @__PURE__ */ _export_sfc(_sfc_main$i, [["render", _sfc_render$i], ["__scopeId", "data-v-c0fcc17e"]]);
 
 /**
  * useDormantData — 休眠数据可见性与唤醒（S3-4）的 UI 编排。
@@ -197188,7 +197361,7 @@ function useLogViewer() {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260927-12";
+        const stamp = "20260927-14";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -197197,7 +197370,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.8.3";
+        const v = "9.8.4";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {

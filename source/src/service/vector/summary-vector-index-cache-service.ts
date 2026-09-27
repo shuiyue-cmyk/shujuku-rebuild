@@ -1,14 +1,22 @@
 import { logDebug_ACU, logWarn_ACU } from '../../shared/utils';
+import { getCurrentIsolationKey_ACU } from '../runtime/state-manager';
 import { clearVectorIndexTempCache_ACU, deleteVectorIndexCacheByIndex_ACU } from '../../data/storage/vector-index-temp-cache';
-import { clearSummaryVectorHotCache_ACU, deleteSummaryVectorHotCacheByIndex_ACU } from '../../data/storage/vector-index-hot-cache';
+import {
+    clearSummaryVectorHotCache_ACU,
+    deleteSummaryVectorFlushTask_ACU,
+    deleteSummaryVectorHotCacheByIndex_ACU,
+    listSummaryVectorFlushTasks_ACU,
+} from '../../data/storage/vector-index-hot-cache';
 import { getLatestSummaryVectorIndexSnapshotState_ACU } from './summary-vector-index-state-service';
 import { loadSummaryVectorIndexChunksFromManifest_ACU } from './summary-vector-index-storage-service';
 import { clearSummaryVectorIndexLayerFromChat_ACU } from './summary-vector-index-chat-service';
 import {
     clearSummaryVectorIndexFlushQueueForCurrentScopeUnlocked_ACU,
+    clearSummaryVectorIndexFlushQueueForCurrentScope_ACU,
     resolveCurrentSummaryVectorFlushScope_ACU,
 } from './summary-vector-index-flush-queue';
 import {
+    findSummaryTable_ACU,
     runSummaryVectorIndexArchiveScopeMutationExclusive_ACU,
 } from './summary-vector-index-archive-service';
 
@@ -32,6 +40,94 @@ export async function clearAllSummaryVectorIndexCaches_ACU(): Promise<boolean> {
     // 严格取 true：两个 helper 的契约是 Promise<boolean>；若写成 `!== false`，
     // 未来误引入一个 Promise<void> 的 helper（undefined）会被静默当成清理成功（fail-open）。
     return tempCacheCleared === true && hotCacheCleared === true;
+}
+
+export interface ClearAllSummaryVectorIndexFlushQueuesResult_ACU {
+    /** 严格删除成功的其它 scope 残留任务数（当前 scope 的墓碑不计入）。 */
+    clearedCount: number;
+    /** 当前 scope 是否已按墓碑协议失效。 */
+    currentScopeInvalidated: boolean;
+    /** 任一步骤未能确认完成（未清干净）；调用方必须据此提示重试，不得报成功。 */
+    failed: boolean;
+    /**
+     * 未清干净/未处理的原因（供 UI 如实措辞，禁止一律说成"存储不可用"）：
+     * - `no_current_scope`：没加载聊天或找不到纪要表 ⇒ 当前 scope 无法解析，
+     *   按协议不删任何记录（墓碑都写不出来，删了等于放行在飞 runner 复活数据）；
+     *   用户打开聊天后再点即可生效。
+     * - `tombstone_failed`：墓碑写入失败 ⇒ 同样放弃删除。
+     * - `list_failed` / `delete_failed` / `residual_left`：存储层问题或仍有残留。
+     */
+    reason?: 'no_current_scope' | 'tombstone_failed' | 'list_failed' | 'delete_failed' | 'residual_left';
+}
+
+/**
+ * 用户显式「清空临时缓存」时一并处理归档队列（flushTasks object store）。
+ *
+ * 协议顺序不可交换：
+ * 1. 先用既有墓碑协议失效**当前 scope**（带单调 generation），使在飞 runner 在发布前
+ *    的代次校验必然失败，无法复活当前 scope 的数据；
+ * 2. 再全量列出并逐条**严格删除**其它 scope 的记录（delete 复读校验，false 即未清干净）；
+ * 3. 当前 scope 的墓碑记录必须保留——删掉它等于放行在飞 runner 复活数据。
+ *
+ * 任何一步失败都不抛给 UI 吞掉，一律在返回值里 `failed: true` 如实上报。
+ */
+export async function clearAllSummaryVectorIndexFlushQueues_ACU(): Promise<ClearAllSummaryVectorIndexFlushQueuesResult_ACU> {
+    const sourceTableKey = String(findSummaryTable_ACU()?.summaryKey || '').trim();
+    const isolationKey = String(getCurrentIsolationKey_ACU() ?? '');
+    let currentScopeKey = '';
+    try {
+        currentScopeKey = resolveCurrentSummaryVectorFlushScope_ACU({ isolationKey, sourceTableKey }).scopeKey;
+        await clearSummaryVectorIndexFlushQueueForCurrentScope_ACU({ isolationKey, sourceTableKey });
+    } catch (error) {
+        // 墓碑没写成就不能删：删了等于放行在飞 runner 复活当前 scope 的数据。
+        // 区分"没有当前 scope"与"存储故障"：前者不是存储不可用，重试也不会变好。
+        const reason = findSummaryTable_ACU() == null ? 'no_current_scope' : 'tombstone_failed';
+        logWarn_ACU(
+            `[交火向量索引] 清空归档队列：当前 scope 失效墓碑写入失败（${reason}），已放弃删除残留任务。`,
+            error,
+        );
+        return { clearedCount: 0, currentScopeInvalidated: false, failed: true, reason };
+    }
+
+    let tasks: Awaited<ReturnType<typeof listSummaryVectorFlushTasks_ACU>> = [];
+    try {
+        // 不带 scope 全量列出：scope 过滤对 legacy 空 isolationKey 任务不成立，
+        // 过滤后列出会把这类残留永久藏在 IndexedDB 里。
+        tasks = await listSummaryVectorFlushTasks_ACU();
+    } catch (error) {
+        logWarn_ACU('[交火向量索引] 清空归档队列：列出残留任务失败。', error);
+        return { clearedCount: 0, currentScopeInvalidated: true, failed: true, reason: 'list_failed' };
+    }
+
+    let clearedCount = 0;
+    let deleteFailed = false;
+    for (const task of tasks) {
+        // 当前 scope 的墓碑必须留下：删掉它等于放行在飞 runner 复活当前 scope 的数据。
+        if (task.scopeKey === currentScopeKey) continue;
+        // 严格取 true：delete 的 false 通道表示任务可能残留（后继 replay 会复活已删数据）。
+        if ((await deleteSummaryVectorFlushTask_ACU(task.scopeKey)) === true) {
+            clearedCount += 1;
+            continue;
+        }
+        deleteFailed = true;
+        logWarn_ACU(`[交火向量索引] 清空归档队列：残留任务删除失败：scope=${task.scopeKey}`);
+    }
+
+    // 清扫后再列一次做**复读校验**：list 自身把异常兜成 []（hot-cache 层既有契约），
+    // 一次"列出为空"不足以证明真的清干净；这里以"除当前 scope 墓碑外仍有残留"为准，
+    // 同时覆盖清扫期间并发重建任务的情况。
+    let residual = 0;
+    let residualUnknown = false;
+    try {
+        residual = (await listSummaryVectorFlushTasks_ACU()).filter(task => task.scopeKey !== currentScopeKey).length;
+    } catch (error) {
+        logWarn_ACU('[交火向量索引] 清空归档队列：复读校验残留任务失败。', error);
+        residualUnknown = true;
+    }
+    if (deleteFailed) return { clearedCount, currentScopeInvalidated: true, failed: true, reason: 'delete_failed' };
+    if (residualUnknown) return { clearedCount, currentScopeInvalidated: true, failed: true, reason: 'list_failed' };
+    if (residual > 0) return { clearedCount, currentScopeInvalidated: true, failed: true, reason: 'residual_left' };
+    return { clearedCount, currentScopeInvalidated: true, failed: false };
 }
 
 function normalizeErrorMessage_ACU(error: unknown): string {

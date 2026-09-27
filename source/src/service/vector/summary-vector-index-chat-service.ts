@@ -25,6 +25,8 @@ import {
     validateSingleFileSnapshotIdentity_ACU,
     type VectorIndexSingleSnapshotBlob_ACU,
 } from './summary-vector-index-storage-service';
+import { resolveCurrentSummaryVectorScopeParts_ACU } from './summary-vector-index-scope-resolver';
+import { clearSummaryVectorIndexFlushQueueForCurrentScope_ACU } from './summary-vector-index-flush-queue';
 import { isAiFloor_ACU } from '../../shared/ai-floor';
 
 function getCurrentSummaryVectorIndexSourceTableKey_ACU(): string {
@@ -251,6 +253,21 @@ export async function deleteCurrentSummaryVectorIndexFromChat_ACU(): Promise<boo
         }
         if ((await clearSummaryVectorFlushTasksByScope_ACU(hint)) !== true) {
             logWarn_ACU(`[交火向量索引] flush 任务清理失败（${hintLabel}），残留将在后续读取时自愈。`);
+        }
+    }
+    // 无聊天/无 manifest ⇒ scopeHints 为空，上面一条都没清。此处用当前 scope 兜底写墓碑：
+    // 只失效不删除，使在飞 runner 无法复活当前 scope 的归档队列。失败仅记录。
+    if (!scopeHintList.length) {
+        const currentScope = resolveCurrentSummaryVectorScopeParts_ACU();
+        if (currentScope) {
+            try {
+                await clearSummaryVectorIndexFlushQueueForCurrentScope_ACU({
+                    isolationKey: currentScope.isolationKey,
+                    sourceTableKey: currentScope.sourceTableKey,
+                });
+            } catch (error) {
+                logWarn_ACU('[交火向量索引] 当前 scope 的 flush 队列墓碑写入失败，残留将在后续读取时自愈。', error);
+            }
         }
     }
     const gcResult = await cleanupUnreachableSummaryVectorIndexFiles_ACU({ scopeHints: scopeHintList });

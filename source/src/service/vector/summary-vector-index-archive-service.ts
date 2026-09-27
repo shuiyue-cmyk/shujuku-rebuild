@@ -20,6 +20,7 @@ import {
     planEmbeddingBatches_ACU,
 } from './summary-vector-embedding-batches';
 import { buildVectorIndexSingleSnapshotV2FilePath_ACU } from '../../data/storage/vector-index-st-files-storage';
+import { findSummaryTableSelection_ACU } from './summary-vector-index-scope-resolver';
 import { currentChatFileIdentifier_ACU, currentJsonTableData_ACU, getCurrentIsolationKey_ACU, settings_ACU } from '../runtime/state-manager';
 import { getChatArray_ACU } from '../../data/gateways/chat-gateway';
 import { getLatestAiMessageIndexFromChat_ACU } from '../table/table-history';
@@ -44,7 +45,7 @@ import {
     finalizeSummaryVectorIndexSnapshotPublication_ACU,
     persistSummaryVectorIndexSnapshot_ACU,
 } from './summary-vector-index-storage-service';
-import { hashUserInput_ACU, isSummaryOrOutlineTable_ACU, logDebug_ACU, logWarn_ACU } from '../../shared/utils';
+import { hashUserInput_ACU, logDebug_ACU, logWarn_ACU } from '../../shared/utils';
 import { hashSummaryVectorSourceText_ACU } from './summary-vector-row-fingerprint';
 import { normalizeSummaryVectorIndexScope_ACU, serializeSummaryVectorIndexScope_ACU } from '../../shared/summary-vector-index-scope';
 import { isAiFloor_ACU } from '../../shared/ai-floor';
@@ -394,25 +395,9 @@ function buildPreparedRowFingerprint_ACU(row: SummaryVectorArchivePreparedRow_AC
 }
 
 export function findSummaryTable_ACU(sourceTableKey?: string): SummaryTableSelection_ACU | null {
-    if (!currentJsonTableData_ACU || typeof currentJsonTableData_ACU !== 'object') {
-        return null;
-    }
-
-    const requestedKey = normalizeText_ACU(sourceTableKey);
-    const candidateKeys = requestedKey ? [requestedKey] : Object.keys(currentJsonTableData_ACU);
-    const summaryKey = candidateKeys.find((key) => {
-        const table = currentJsonTableData_ACU[key];
-        return !!table?.name && isSummaryOrOutlineTable_ACU(String(table.name || ''));
-    });
-
-    if (!summaryKey) return null;
-    const table = currentJsonTableData_ACU[summaryKey];
-    if (!table || !Array.isArray(table.content)) return null;
-
-    return {
-        summaryKey,
-        table,
-    };
+    // 委托给叶模块：纪要表判定必须全仓单一实现，否则 flush 队列的 scopeKey 会与
+    // 状态面板/清理路径解析出的 scope 漂移。
+    return findSummaryTableSelection_ACU(sourceTableKey);
 }
 
 function splitSentences_ACU(text: string): string[] {

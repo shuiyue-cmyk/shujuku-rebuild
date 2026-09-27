@@ -67,6 +67,7 @@ async function mountVectorIndexPage(opts: {
   archiveResult?: any,
   migrationResult?: any,
   healthReport?: any,
+  stats?: Record<string, unknown>,
   devOptions?: Record<string, unknown>,
 } = {}) {
   vi.resetModules();
@@ -102,6 +103,7 @@ async function mountVectorIndexPage(opts: {
   });
   const getLastIndex = vi.fn(() => 5);
   const clearCache = vi.fn(async () => true);
+  const clearFlushQueues = vi.fn(async () => ({ clearedCount: 3, currentScopeInvalidated: true, failed: false }));
   const deleteIndex = vi.fn(async () => true);
   const getStats = vi.fn(async () => ({
     status: 'ready',
@@ -120,6 +122,7 @@ async function mountVectorIndexPage(opts: {
     flushTaskFlushingCount: 0,
     flushTaskFailedCount: 0,
     updatedAt: '2026-05-08T12:00:00.000Z',
+    ...(opts.stats || {}),
   }));
   const inspectHealth = vi.fn(async () => healthReport);
 
@@ -185,6 +188,7 @@ async function mountVectorIndexPage(opts: {
   }));
   vi.doMock('../../../src/service/vector/summary-vector-index-cache-service', () => ({
     clearAllSummaryVectorIndexCaches_ACU: clearCache,
+    clearAllSummaryVectorIndexFlushQueues_ACU: clearFlushQueues,
   }));
   vi.doMock('../../../src/service/vector/summary-vector-index-chat-service', () => ({
     deleteCurrentSummaryVectorIndexFromChat_ACU: deleteIndex,
@@ -208,6 +212,7 @@ async function mountVectorIndexPage(opts: {
     runTableUpdateCommit,
     updateLorebook,
     clearCache,
+    clearFlushQueues,
     deleteIndex,
     getStats,
   };
@@ -657,6 +662,97 @@ describe('VectorIndexPage', () => {
     const { mount } = await mountVectorIndexPage();
     expect(document.querySelector('.acu-v2-vector-index-page__scope-allowlist')).toBeNull();
     expect(document.body.textContent || '').not.toContain('V2 写入闸门');
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('清空临时缓存一并处理归档队列，成功文案含归档队列与条数', async () => {
+    const { mount, clearCache, clearFlushQueues } = await mountVectorIndexPage();
+
+    const clearButton = Array.from(document.querySelectorAll('button'))
+      .find(b => /清空临时缓存/.test(b.textContent || '')) as HTMLButtonElement | undefined;
+    expect(clearButton).not.toBeUndefined();
+
+    clearButton!.click();
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+
+    expect(clearCache).toHaveBeenCalledTimes(1);
+    expect(clearFlushQueues).toHaveBeenCalledTimes(1);
+    const text = document.body.textContent || '';
+    // 钉住真正的成功文案（含"清理 N 条残留"），不要用 dt 标签或裸数字这种恒真断言。
+    expect(text).toContain('交火索引临时缓存与热缓存已清空');
+    expect(text).toContain('清理 3 条残留');
+
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('归档队列残留未清干净时报 warning，绝不显示成功', async () => {
+    const { mount, clearFlushQueues } = await mountVectorIndexPage();
+    clearFlushQueues.mockResolvedValueOnce({ clearedCount: 1, currentScopeInvalidated: true, failed: true, reason: 'delete_failed' });
+
+    const clearButton = Array.from(document.querySelectorAll('button'))
+      .find(b => /清空临时缓存/.test(b.textContent || '')) as HTMLButtonElement | undefined;
+    expect(clearButton).not.toBeUndefined();
+
+    clearButton!.click();
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+
+    const text = document.body.textContent || '';
+    expect(text).toContain('未能完全清空');
+    expect(text).toContain('部分存储不可用');
+    expect(text).not.toContain('交火索引临时缓存与热缓存已清空');
+
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('没加载聊天导致队列未处理时不得谎报"存储不可用、请重试"', async () => {
+    // 回归锚点：曾经无论原因统一说"部分存储不可用，请重试"，而没加载聊天时
+    // 重试永远不会成功——那是既谎报又给出无效指引。
+    const { mount, clearFlushQueues } = await mountVectorIndexPage();
+    clearFlushQueues.mockResolvedValueOnce({ clearedCount: 0, currentScopeInvalidated: false, failed: true, reason: 'no_current_scope' });
+
+    const clearButton = Array.from(document.querySelectorAll('button'))
+      .find(b => /清空临时缓存/.test(b.textContent || '')) as HTMLButtonElement | undefined;
+    expect(clearButton).not.toBeUndefined();
+
+    clearButton!.click();
+    await new Promise(r => setTimeout(r, 0));
+    await new Promise(r => setTimeout(r, 0));
+
+    const text = document.body.textContent || '';
+    expect(text).toContain('未能完全清空');
+    expect(text).toContain('打开聊天后可再清');
+    expect(text).not.toContain('部分存储不可用');
+    expect(text).not.toContain('交火索引临时缓存与热缓存已清空');
+
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('归档队列行在有 lastError 时渲染可诊断文案，无时不渲染', async () => {
+    const { mount } = await mountVectorIndexPage({
+      stats: { flushTaskLastError: 'archive failed: provider 500' },
+    });
+
+    const panel = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-vector-index-page .acu-panel'))
+      .find(el => el.querySelector('.acu-panel__title')?.textContent?.includes('索引状态'))!;
+    const queueItem = Array.from(panel.querySelectorAll<HTMLElement>('.acu-stats__item'))
+      .find(item => item.querySelector('dt')?.textContent?.includes('归档队列'))!;
+    const errorNode = queueItem.querySelector('.acu-v2-vector-index-page__flush-queue-error');
+    expect(errorNode).not.toBeNull();
+    expect(errorNode?.getAttribute('title')).toBe('archive failed: provider 500');
+    expect(errorNode?.textContent).toContain('archive failed');
+
+    mount.__resetAcuV2MountForTests();
+  });
+
+  it('归档队列行在无 lastError 时不渲染错误文案', async () => {
+    const { mount } = await mountVectorIndexPage();
+
+    const panel = Array.from(document.querySelectorAll<HTMLElement>('.acu-v2-vector-index-page .acu-panel'))
+      .find(el => el.querySelector('.acu-panel__title')?.textContent?.includes('索引状态'))!;
+    expect(panel.querySelector('.acu-v2-vector-index-page__flush-queue-error')).toBeNull();
+
     mount.__resetAcuV2MountForTests();
   });
 });

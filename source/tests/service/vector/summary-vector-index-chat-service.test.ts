@@ -148,7 +148,7 @@ describe('deleteCurrentSummaryVectorIndexFromChat_ACU', () => {
     }));
     vi.doMock('../../../src/service/runtime/state-manager', () => ({
       currentChatFileIdentifier_ACU: 'chat-data',
-      currentJsonTableData_ACU: { sheet_summary: { name: '纪要表' } },
+      currentJsonTableData_ACU: { sheet_summary: { name: '纪要表', content: [['id'], ['r1']] } },
       getCurrentIsolationKey_ACU: () => 'alpha',
     }));
     vi.doMock('../../../src/service/vector/summary-vector-index-state-service', () => ({
@@ -183,6 +183,96 @@ describe('deleteCurrentSummaryVectorIndexFromChat_ACU', () => {
     const warned = logWarn.mock.calls.map(call => String(call[0]));
     expect(warned.some(text => text.includes('热缓存清理失败'))).toBe(true);
     expect(warned.some(text => text.includes('flush 任务清理失败'))).toBe(true);
+  });
+
+  it('无聊天/无 manifest 时仍为当前 scope 写 flush 墓碑，且返回值语义不变', async () => {
+    const clearCurrentScopeQueue = vi.fn(async () => 1);
+    const logWarn = vi.fn();
+    const cleanupUnreachable = vi.fn(async () => ({
+      scannedRegisteredFileCount: 0,
+      reachableFileCount: 0,
+      deletedPaths: [],
+      retainedPaths: [],
+      blockedByReachability: [],
+      failedDeletes: [],
+    }));
+
+    vi.doMock('../../../src/service/chat/chat-service', () => ({ getChatArray_ACU: () => [], saveChatToHost_ACU: vi.fn() }));
+    vi.doMock('../../../src/data/gateways/chat-gateway', () => ({
+      getChatArray_ACU: () => [],
+      saveChatToHost_ACU: vi.fn(),
+      saveChatToHostStrict_ACU: vi.fn(async () => undefined),
+    }));
+    vi.doMock('../../../src/service/runtime/state-manager', () => ({
+      currentChatFileIdentifier_ACU: 'chat-data',
+      currentJsonTableData_ACU: { sheet_summary: { name: '纪要表', content: [['id'], ['r1']] } },
+      getCurrentIsolationKey_ACU: () => 'alpha',
+    }));
+    // 无空层：layers 为空归聚为 null，scopeHints 永远空 → 旧实现一条都不清。
+    vi.doMock('../../../src/service/vector/summary-vector-index-state-service', () => ({
+      getAggregatedSummaryVectorIndexSnapshot_ACU: () => null,
+      assignSummaryVectorIndexStateToTagData_ACU: vi.fn(),
+    }));
+    vi.doMock('../../../src/data/storage/vector-index-hot-cache', () => ({
+      deleteSummaryVectorHotCacheByScope_ACU: vi.fn(async () => true),
+      clearSummaryVectorFlushTasksByScope_ACU: vi.fn(async () => true),
+    }));
+    vi.doMock('../../../src/service/vector/summary-vector-index-storage-service', () => ({
+      cleanupUnreachableSummaryVectorIndexFiles_ACU: cleanupUnreachable,
+    }));
+    vi.doMock('../../../src/service/vector/summary-vector-index-flush-queue', () => ({
+      clearSummaryVectorIndexFlushQueueForCurrentScope_ACU: (...args: any[]) => clearCurrentScopeQueue(...args),
+    }));
+    vi.doMock('../../../src/shared/utils', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('../../../src/shared/utils')>()),
+      logWarn_ACU: logWarn,
+    }));
+
+    const { deleteCurrentSummaryVectorIndexFromChat_ACU } = await import('../../../src/service/vector/summary-vector-index-chat-service');
+    const changed = await deleteCurrentSummaryVectorIndexFromChat_ACU();
+
+    expect(clearCurrentScopeQueue).toHaveBeenCalledWith({ isolationKey: 'alpha', sourceTableKey: 'sheet_summary' });
+    // 写墓碑不意味着索引/外置文件发生变化：返回值语义不得因此变 true。
+    expect(changed).toBe(false);
+  });
+
+  it('当前 scope 墓碑写入失败只 logWarn，不抛给 UI', async () => {
+    const logWarn = vi.fn();
+    const cleanupUnreachable = vi.fn(async () => ({ deletedPaths: [], failedDeletes: [] }));
+
+    vi.doMock('../../../src/service/chat/chat-service', () => ({ getChatArray_ACU: () => [], saveChatToHost_ACU: vi.fn() }));
+    vi.doMock('../../../src/data/gateways/chat-gateway', () => ({
+      getChatArray_ACU: () => [],
+      saveChatToHost_ACU: vi.fn(),
+      saveChatToHostStrict_ACU: vi.fn(async () => undefined),
+    }));
+    vi.doMock('../../../src/service/runtime/state-manager', () => ({
+      currentChatFileIdentifier_ACU: 'chat-data',
+      currentJsonTableData_ACU: { sheet_summary: { name: '纪要表', content: [['id'], ['r1']] } },
+      getCurrentIsolationKey_ACU: () => 'alpha',
+    }));
+    vi.doMock('../../../src/service/vector/summary-vector-index-state-service', () => ({
+      getAggregatedSummaryVectorIndexSnapshot_ACU: () => null,
+      assignSummaryVectorIndexStateToTagData_ACU: vi.fn(),
+    }));
+    vi.doMock('../../../src/data/storage/vector-index-hot-cache', () => ({
+      deleteSummaryVectorHotCacheByScope_ACU: vi.fn(async () => true),
+      clearSummaryVectorFlushTasksByScope_ACU: vi.fn(async () => true),
+    }));
+    vi.doMock('../../../src/service/vector/summary-vector-index-storage-service', () => ({
+      cleanupUnreachableSummaryVectorIndexFiles_ACU: cleanupUnreachable,
+    }));
+    vi.doMock('../../../src/service/vector/summary-vector-index-flush-queue', () => ({
+      clearSummaryVectorIndexFlushQueueForCurrentScope_ACU: vi.fn(async () => { throw new Error('tombstone write failed'); }),
+    }));
+    vi.doMock('../../../src/shared/utils', async (importOriginal) => ({
+      ...(await importOriginal<typeof import('../../../src/shared/utils')>()),
+      logWarn_ACU: logWarn,
+    }));
+
+    const { deleteCurrentSummaryVectorIndexFromChat_ACU } = await import('../../../src/service/vector/summary-vector-index-chat-service');
+    await expect(deleteCurrentSummaryVectorIndexFromChat_ACU()).resolves.toBe(false);
+    expect(logWarn.mock.calls.map(call => String(call[0])).some(text => text.includes('flush'))).toBe(true);
   });
 });
 

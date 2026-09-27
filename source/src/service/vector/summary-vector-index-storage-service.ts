@@ -85,6 +85,7 @@ import {
 import {
   getAllSummaryVectorIndexSnapshotLayers_ACU
 } from './summary-vector-index-state-service';
+import { resolveCurrentSummaryVectorScopeParts_ACU } from './summary-vector-index-scope-resolver';
 import {
     locateSummaryVectorMirrorBase_ACU,
     resolveSummaryVectorMirrorHead_ACU,
@@ -3398,11 +3399,23 @@ export async function getSummaryVectorIndexStats_ACU(manifest: ChatSummaryVector
     manifest = normalizeSummaryVectorIndexManifestForRead_ACU(manifest);
     const tempCache = await estimateVectorIndexTempCache_ACU(manifest?.indexId);
     const hotCache = await estimateSummaryVectorHotCache_ACU(manifest?.indexId);
-    const flushTasks = await estimateSummaryVectorFlushTasks_ACU(manifest ? {
-        chatKey: manifest.chatKey,
-        isolationKey: manifest.isolationKey,
-        sourceTableKey: manifest.sourceTableKey,
-    } : undefined);
+    const flushTasks = manifest
+        ? await estimateSummaryVectorFlushTasks_ACU({
+            chatKey: manifest.chatKey,
+            isolationKey: manifest.isolationKey,
+            sourceTableKey: manifest.sourceTableKey,
+        })
+    // manifest 为 null 时按**当前 scope** 统计：list 在无 scope 时匹配全部记录，
+    // 别的 scope 的残留失败任务会被算成当前索引的失败（这正是用户看到的"启动就有 1 失败"）。
+    // 当前 scope 解析不出来时**整段跳过 flush 统计**（全 0）：不能传空串兜底——
+    // list 会把空 isolationKey 归一成 'default'，于是变成"匹配所有 default 隔离的记录"
+    // （任意聊天、任意纪要表），等于又退回全库口径，用户的原始症状照旧出现。
+        : await (async () => {
+            const currentScope = resolveCurrentSummaryVectorScopeParts_ACU();
+            return currentScope
+                ? estimateSummaryVectorFlushTasks_ACU(currentScope)
+                : { total: 0, dirty: 0, queued: 0, flushing: 0, ready: 0, failedRetryable: 0, failedTerminal: 0, lastError: '' };
+        })();
     const cacheTotalBytes = tempCache.bytes + hotCache.bytes;
     const flushTaskFields = {
         flushTaskTotalCount: flushTasks.total,

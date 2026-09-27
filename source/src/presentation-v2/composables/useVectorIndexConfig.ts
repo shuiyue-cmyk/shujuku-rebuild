@@ -34,7 +34,8 @@ import {
   inspectSummaryVectorIndexHealth_ACU,
 } from '../../service/vector/summary-vector-index-storage-service';
 import {
-  clearAllSummaryVectorIndexCaches_ACU
+  clearAllSummaryVectorIndexCaches_ACU,
+  clearAllSummaryVectorIndexFlushQueues_ACU
 } from '../../service/vector/summary-vector-index-cache-service';
 import {
   deleteCurrentSummaryVectorIndexFromChat_ACU
@@ -515,11 +516,25 @@ export function useVectorIndexConfig() {
     maintenanceBusy.value = true;
     try {
       const fullyCleared = await clearAllSummaryVectorIndexCaches_ACU();
+      // 归档队列（flushTasks）此前无人清理，别的 scope 的残留失败任务会永久挂在状态面板上。
+      // 与缓存清理一并处理：有残留失败时必须走 warning，不允许显示成功。
+      const flushQueues = await clearAllSummaryVectorIndexFlushQueues_ACU();
       await refreshIndexStatus(false);
-      if (fullyCleared === false) {
-        notify('warning', '交火索引缓存未能完全清空（部分存储不可用），请重试。权威外置文件和聊天记录不会被删除。', { muteable: false });
+      const cleared = Math.max(0, Number(flushQueues?.clearedCount) || 0);
+      const queueNote = `归档队列一并处理（清理 ${cleared} 条残留）`;
+      // 三种未清干净的原因必须分别措辞：把"没加载聊天"说成"存储不可用、请重试"是谎报，
+      // 而且不加载聊天时重试永远不会成功。
+      const reason = flushQueues?.reason;
+      const noScopeHint = reason === 'no_current_scope' || reason === 'tombstone_failed';
+      if (fullyCleared === false || flushQueues?.failed) {
+        const cause = noScopeHint
+          ? '未加载聊天或找不到纪要表，无法定位归档队列所属会话，本次未处理队列（打开聊天后可再清）'
+          : reason === 'residual_left'
+            ? '仍有残留任务未清掉'
+            : '部分存储不可用，请重试';
+        notify('warning', `交火索引缓存未能完全清空（${cause}，${queueNote}）。权威外置文件和聊天记录不会被删除。`, { muteable: false });
       } else {
-        notify('success', '交火索引临时缓存与热缓存已清空。权威外置文件和聊天记录不会被删除。', { muteable: false });
+        notify('success', `交火索引临时缓存与热缓存已清空，${queueNote}。权威外置文件和聊天记录不会被删除。`, { muteable: false });
       }
     } catch (error: any) {
       notify('error', `清空交火索引缓存失败：${error?.message || '未知错误'}`, { muteable: false });
@@ -620,6 +635,7 @@ export function useVectorIndexConfig() {
       {
         label: '归档队列',
         value: `${(stats?.flushTaskDirtyCount || 0) + (stats?.flushTaskQueuedCount || 0) + (stats?.flushTaskFlushingCount || 0)} 等待 / ${stats?.flushTaskFailedCount || 0} 失败`,
+        key: 'flushQueue',
       },
       {
         label: '身份健康',

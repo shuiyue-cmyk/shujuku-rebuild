@@ -15,7 +15,23 @@
             }}</AcuBadge>
           </template>
 
-          <AcuStatsList :items="vector.statusStatsItems.value" />
+          <AcuStatsList :items="vector.statusStatsItems.value">
+            <!-- 具名插槽：失败数只给数字，用户无从判断是哪个 scope 在失败；
+                 这里补一行可诊断的最后错误原文（title 保留全文，正文截断防撑破面板）。 -->
+            <template #flushQueue>
+              <span class="acu-v2-vector-index-page__flush-queue">
+                <span>{{
+                  `${(vector.indexStats.value?.flushTaskDirtyCount || 0) + (vector.indexStats.value?.flushTaskQueuedCount || 0) + (vector.indexStats.value?.flushTaskFlushingCount || 0)} 等待 / ${vector.indexStats.value?.flushTaskFailedCount || 0} 失败`
+                }}</span>
+                <span
+                  v-if="flushQueueLastError"
+                  class="acu-v2-vector-index-page__flush-queue-error"
+                  :title="flushQueueLastError"
+                  >{{ truncateFlushQueueError(flushQueueLastError) }}</span
+                >
+              </span>
+            </template>
+          </AcuStatsList>
 
           <p class="acu-v2-vector-index-page__hint">
             发送前流程：关键词生成（可关闭）→ 用户输入与关键词合并 embedding →
@@ -547,6 +563,17 @@ const promptTemplateBadgeVariant = computed<AcuBadgeVariant>(() =>
   vector.promptTemplateMode.value === "default" ? "neutral" : "accent",
 );
 
+const FLUSH_QUEUE_ERROR_MAX_CHARS = 60;
+const flushQueueLastError = computed(() =>
+  String(vector.indexStats.value?.flushTaskLastError || "").trim(),
+);
+/** 面板只展示截断文本，完整原文放在 title 里，避免长错误撑破两列栅格。 */
+function truncateFlushQueueError(text: string): string {
+  return text.length > FLUSH_QUEUE_ERROR_MAX_CHARS
+    ? `${text.slice(0, FLUSH_QUEUE_ERROR_MAX_CHARS)}…`
+    : text;
+}
+
 function confirmPromptClose(): boolean | Promise<boolean> {
   if (!promptDrawerOpen.value || !vector.promptDirty.value) return true;
   return dialogStore.confirm({
@@ -679,6 +706,21 @@ useUiCloseGuard(confirmPromptClose);
   font-size: var(--acu-font-size-body, 12px);
   color: var(--acu-text-3);
   line-height: 1.55;
+}
+
+.acu-v2-vector-index-page__flush-queue {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.acu-v2-vector-index-page__flush-queue-error {
+  color: var(--acu-text-3);
+  font-size: var(--acu-font-size-caption, 11px);
+  line-height: 1.45;
+  word-break: break-all;
+  cursor: help;
 }
 
 .acu-v2-vector-index-page__maintenance-spacer {
