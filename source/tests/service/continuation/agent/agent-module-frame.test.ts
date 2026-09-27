@@ -267,4 +267,26 @@ describe('续写资料楼层增量折叠（TT-only 帧架构）', () => {
     expect(chat[2][AGENT_MODULE_FIELD_ACU]?.deltas).toHaveLength(1);
     expect(readAgentModuleSnapshot_ACU(chat).hooks.map(item => item.id)).toEqual(['H2', 'H3']);
   });
+
+  /**
+   * TT 2.3.0 的一等工具楼 `{role:'tool', is_system:true}` 会被 `chat.push` 成**物理尾楼**
+   * （src/scripts/tool-calling.js:1058-1089），且是「可被用户独立删除的真实楼层」
+   * （docs/CurrentState/ChatPayload.md §4）。checkpoint 落进这种楼＝资料挂在随时会消失的楼上，
+   * 用户一删就退回「无可用基线」，宽容抢救整条禁用。锚点判定必须走 shared/ai-floor。
+   */
+  it('尾楼是工具楼时，checkpoint 落在最近的 AI 楼而不是工具楼', async () => {
+    const chat: any[] = [
+      { mes: 'a', is_user: false },
+      { mes: 'b', is_user: false },
+      { role: 'tool', name: 'exa_search', is_system: true, is_user: false, mes: '{"tool":"result"}', tool_call_id: 'call_1', error: false },
+    ];
+    _set_SillyTavern_API_ACU({ chat, saveChat: vi.fn().mockResolvedValue(undefined) } as any);
+
+    await writeAgentModuleSnapshot_ACU(chat, 1, snapshotAt(1, { hooks: [hook('H1') as any] }));
+
+    // 工具楼不得承载帧数据（它可被独立删除，也没有 swipe_id）。
+    expect(chat[2][AGENT_MODULE_FIELD_ACU]).toBeUndefined();
+    expect(chat[1][AGENT_MODULE_FIELD_ACU]?.checkpoint?.snapshot.hooks.map((item: { id: string }) => item.id)).toEqual(['H1']);
+    expect(readAgentModuleSnapshot_ACU(chat).hooks.map(item => item.id)).toEqual(['H1']);
+  });
 });

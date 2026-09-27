@@ -1,4 +1,5 @@
 import { getChatArray_ACU } from '../../data/gateways/chat-gateway';
+import { isAiFloor_ACU } from '../../shared/ai-floor';
 import { sha256HexSync_ACU } from '../../shared/sha256-sync';
 import { buildDefaultContinuationSettings_ACU } from './defaults';
 import { FirstFloorContinuationStore_ACU } from './continuation-store';
@@ -11,7 +12,7 @@ import { StageExecutionEngine_ACU, type ContinuationPreparedTurnInstruction_ACU,
 import { AGENT_WRITABLE_MODULES_ACU, type AgentConversationAppend_ACU, type AgentModuleSnapshot_ACU, type AgentOutlineEditOp_ACU, type AgentOutlineOpResult_ACU, type AgentWritableModule_ACU } from './agent/agent-model';
 import { CONTINUATION_REPAIRABLE_MODULES_ACU, type ContinuationWorkflowStep_ACU } from './agent/agent-workflow';
 import { appendAgentConversationToChat_ACU, clearAgentConversationField_ACU } from './agent/agent-conversation-store';
-import { clearAgentModuleField_ACU, readAgentModuleSnapshot_ACU, writeAgentModuleSnapshot_ACU } from './agent/agent-module-store';
+import { clearAgentModuleField_ACU, readAgentModuleSnapshot_ACU, writeAgentModuleSnapshot_ACU, alignAgentModuleSnapshotToFloor_ACU } from './agent/agent-module-store';
 import { seedAgentUserRequirementsIfEmpty_ACU } from './agent/agent-user-requirements';
 import { clearAgentRunState_ACU } from './agent/agent-run-cache';
 import { clearAgentSessionLog_ACU, logAgentSession_ACU } from './agent/agent-session-log';
@@ -121,11 +122,20 @@ function messageContent_ACU(message: Record<string, unknown>): string {
 }
 
 function resolveContinuationMaterialAnchor_ACU(chat: any[], chatIdentity: string): ContinuationMaterialAnchor_ACU {
-  const messageIndex = chat.length - 1;
+  // 锚点必须落在 AI 楼上，不能无条件取物理尾楼：TT 2.3.0 的工具轮会把一等工具楼
+  // `{role:'tool', is_system:true}` push 成尾楼（src/scripts/tool-calling.js:1058-1089），它是
+  // 「可被用户独立删除、不承载剧情正文、且没有 swipe_id」的真实楼层（docs/CurrentState/ChatPayload.md §4）。
+  // 资料写进去＝挂在随时会消失的楼上（用户一删，下面的 assert 立即拒写迟到结果）；swipe_id 缺失还会让
+  // 锚点回退 '0'，使 swipe 切换后的比对失去意义。判定走 shared/ai-floor（本库唯一出处）。
+  let messageIndex = -1;
+  for (let index = chat.length - 1; index >= 0; index -= 1) {
+    if (isAiFloor_ACU(chat[index])) { messageIndex = index; break; }
+  }
   const message = messageIndex >= 0 && chat[messageIndex] && typeof chat[messageIndex] === 'object' && !Array.isArray(chat[messageIndex])
     ? chat[messageIndex] as Record<string, unknown>
     : null;
   if (!chatIdentity || !message) {
+    // 没有 AI 楼（空聊天／全是用户楼与工具楼）时 fail-closed：宁可拒绝补足，也不把资料写进用户楼。
     rejectMaterialRepair_ACU('CONTINUATION_AGENT_SNAPSHOT_INVALID', '当前聊天没有可承载资料补足结果的楼层');
   }
   const rawMessageId = message.message_id;
@@ -144,15 +154,27 @@ function resolveContinuationMaterialAnchor_ACU(chat: any[], chatIdentity: string
 }
 
 function assertContinuationMaterialAnchorCurrent_ACU(anchor: ContinuationMaterialAnchor_ACU, chat: any[], chatIdentity: string): void {
-  if (chat.length !== anchor.chatLength || chat.length - 1 !== anchor.messageIndex) {
+  // 只比物理长度 + 重新解析出的锚点是否还是同一楼。旧写法额外要求「锚点必须是尾楼」
+  // （chat.length - 1 === messageIndex），在锚点允许落在工具楼/隐藏楼之前后，会把合法锚点误判成迟到写入。
+  if (chat.length !== anchor.chatLength) {
     rejectMaterialRepair_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', '资料补足期间聊天楼层已变化，拒绝写入迟到结果');
   }
   const current = resolveContinuationMaterialAnchor_ACU(chat, chatIdentity);
-  if (current.chatIdentity !== anchor.chatIdentity || current.messageKey !== anchor.messageKey
+  if (current.chatIdentity !== anchor.chatIdentity || current.messageIndex !== anchor.messageIndex
+    || current.messageKey !== anchor.messageKey
     || current.swipeId !== anchor.swipeId || current.contentDigest !== anchor.contentDigest) {
     rejectMaterialRepair_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', '资料补足的冻结楼层或 swipe 已变化，拒绝写入迟到结果', { expected: anchor, actual: current });
   }
 }
+
+/**
+ * 测试钩子：暴露资料补足锚点的解析结果，供判别用例直接钉住「工具楼/隐藏楼不得成为锚点」。
+ * 业务路径请走 repairMaterials（锚点在其内部解析并二次校验），不要直接调用本钩子。
+ */
+export const __resolveContinuationMaterialAnchorForTests_ACU = resolveContinuationMaterialAnchor_ACU;
+
+/** 测试钩子：暴露锚点时效校验，钉住「锚点不必是物理尾楼」这条不变量（见 assert 内注释）。 */
+export const __assertContinuationMaterialAnchorCurrentForTests_ACU = assertContinuationMaterialAnchorCurrent_ACU;
 
 function materialAuthorityFingerprint_ACU(snapshot: AgentModuleSnapshot_ACU): string {
   return sha256HexSync_ACU(JSON.stringify(snapshot));
@@ -512,7 +534,11 @@ export class ContinuationOrchestrator_ACU {
           rejectMaterialRepair_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', '资料补足期间模块 revision、pending 或完成状态已变化，拒绝覆盖更新资料');
         }
         assertContinuationMaterialWriteSet_ACU(baseSnapshot, repair.snapshot, targets);
-        await writeAgentModuleSnapshot_ACU(currentChat, anchor.messageIndex, repair.snapshot);
+        // 锚点可以早于物理尾楼（尾楼是 TT 2.3.0 的工具楼或被 /hide 的隐藏楼时），而写入门会把水位
+        // 钳到承载楼并按钳后水位校验前缀指纹；不先对齐就会以「聊天前缀已变化」误导拒绝（见 align 的注释）。
+        // 必须排在 assertContinuationMaterialWriteSet_ACU 之后：那一步校验的是引擎交回来的原始快照。
+        const anchoredSnapshot = alignAgentModuleSnapshotToFloor_ACU(repair.snapshot, currentChat, anchor.messageIndex);
+        await writeAgentModuleSnapshot_ACU(currentChat, anchor.messageIndex, anchoredSnapshot);
         logAgentSession_ACU({
           kind: repair.failedModules.length ? 'run_failed' : 'run_completed',
           title: repair.failedModules.length ? '定向资料补足部分完成' : '定向资料补足完成',

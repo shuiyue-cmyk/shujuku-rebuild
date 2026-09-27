@@ -16,7 +16,9 @@ function normalizeMessageText_ACU(message: any): string {
 
 function resolveMessageRole_ACU(message: any): RemoteMemorySnapshotAnchor_ACU['role'] {
     if (message?.is_user) return 'user';
-    if (message?.is_system) return 'system';
+    // role 才是类型事实：TT 2.3.0 的一等工具楼默认 is_system:true，但用户 /unhide 会把它清成 false
+    // （src/scripts/chats.js:149-159），此时只看 is_system 会把工具结果标成 assistant。判据与 shared/ai-floor.ts 同源。
+    if (message?.is_system || message?.role === 'tool') return 'system';
     return 'assistant';
 }
 

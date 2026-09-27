@@ -9,6 +9,7 @@
  */
 
 import { getChatArray_ACU, saveChatToHostStrict_ACU } from '../../../data/gateways/chat-gateway';
+import { isAiFloor_ACU } from '../../../shared/ai-floor';
 import { getActiveChatStorageIdentity_ACU } from '../../../data/storage/chat-history';
 import { findLatestTableFullCheckpointIndex_ACU } from '../../chat/material-checkpoint-sync';
 import {
@@ -107,6 +108,37 @@ export function refreshAgentModuleSnapshotChatPrefix_ACU(snapshot: AgentModuleSn
     ...snapshot,
     settledPrefixFingerprint: chatPrefixFingerprint_ACU(chat, snapshot.settledThroughIndex),
   };
+}
+
+/**
+ * 把快照的结算水位与前缀指纹一起对齐到「实际承载楼」。
+ *
+ * writeAgentModuleSnapshot_ACU 的写入门会把水位钳到 targetIndex，并**按钳后的水位**校验前缀指纹。
+ * 所以拿一份水位更高的快照（例如主循环已把水位推到工具楼尾）写到更早的 AI 楼时，门会以
+ * 「资料快照引用的聊天前缀已变化」拒绝——聊天其实一个字没变，报错还会把排障带偏。
+ * 对齐后的语义是「本快照只声明结算到承载楼」：承载楼之后的楼层由下一轮结算重新推进水位，
+ * 内容不丢（折叠读的是全部楼层，与水位无关）。水位不高于承载楼时原样返回，不做无谓拷贝。
+ */
+export function alignAgentModuleSnapshotToFloor_ACU(
+  snapshot: AgentModuleSnapshot_ACU,
+  chat: any[],
+  targetIndex: number,
+): AgentModuleSnapshot_ACU {
+  if (snapshot.settledThroughIndex <= targetIndex) return snapshot;
+  // 钳水位前先按**原水位**校验一次旧前缀指纹。少了这一步，写入门的指纹比对会退化成恒等式
+  // （拿 fingerprint(targetIndex) 比 fingerprint(targetIndex)），等于把 P1 的前缀守卫在这条路径上
+  // 悄悄摘掉：覆盖面从 0..W 收窄到 0..targetIndex。失配说明补足期间 0..W 真的变了，
+  // 按写入门同款理由与错误码拒绝（不做「重算指纹把失配洗白」这种自愈）。
+  if (!isChatPrefixCompatible_ACU(snapshot, chat)) {
+    throw new ContinuationValidationError_ACU(createContinuationError_ACU(
+      'CONTINUATION_AGENT_SNAPSHOT_INVALID',
+      'agent_persist',
+      '资料快照引用的聊天前缀已变化，拒绝写入以避免删楼后按旧下标结算',
+      false,
+      { targetIndex, settledThroughIndex: snapshot.settledThroughIndex },
+    ));
+  }
+  return refreshAgentModuleSnapshotChatPrefix_ACU({ ...snapshot, settledThroughIndex: targetIndex }, chat);
 }
 
 function isChatPrefixCompatible_ACU(snapshot: AgentModuleSnapshot_ACU, messages: any[]): boolean {
@@ -947,7 +979,10 @@ export function commitAgentModuleFieldWrites_ACU(input: {
     }
     const evidence = new Set<number>();
     input.chat.forEach((message, index) => {
-      if (message && typeof message === 'object' && (message as { is_user?: unknown }).is_user !== true) evidence.add(index);
+      // 证据楼白名单必须与 SQL 事务路径同判据（agent-main-loop.ts 的 aiEvidenceIndexes 用 isAiFloor_ACU）：
+      // TT 2.3.0 的一等工具楼与被 /hide 的隐藏楼都不算「已结算正文楼层」。用旧的「非 user 即 AI」
+      // 会让同一份意图在逐栏提交路径能把伏笔锚到工具楼上、在整行 writes 路径被拒——同域不同判。
+      if (isAiFloor_ACU(message)) evidence.add(index);
     });
     const now = Date.now();
     const modules = FIELD_COMMIT_ROLE_MODULES_ACU[input.role] ?? [];

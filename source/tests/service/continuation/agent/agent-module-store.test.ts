@@ -1,9 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  alignAgentModuleSnapshotToFloor_ACU,
   buildEmptyAgentModuleSnapshot_ACU,
+  commitAgentModuleFieldWrites_ACU,
   readAgentModuleSnapshot_ACU,
   readAgentModuleSnapshotDiagnostics_ACU,
+  refreshAgentModuleSnapshotChatPrefix_ACU,
   replaceAgentModuleSnapshotByUser_ACU,
   renderAgentActiveVolumePlanningContext_ACU,
   renderAgentChronology_ACU,
@@ -482,5 +485,126 @@ describe('Agent 资料快照落盘修订号复核（用户手动保存防冲）'
     expect(saved.revisions).toMatchObject({ hooks: 2, infoGap: 2, constraints: 2, storyArc: 2, chronology: 2, webRefs: 2 });
     expect(readAgentModuleSnapshot_ACU(chat).hooks[0].id).toBe('用户编辑');
     expect(saveChat).toHaveBeenCalledOnce();
+  });
+});
+
+/**
+ * 水位对齐 —— 资料补足锚点可以早于物理尾楼（TT 2.3.0 的工具楼尾）时必须先对齐再写。
+ *
+ * 写入门（writeAgentModuleSnapshot_ACU）把水位钳到 targetIndex，却拿**钳后**水位去校验快照自带的
+ * 前缀指纹；主循环已把水位推到工具楼尾时，直接写到最近的 AI 楼会被判「聊天前缀已变化」——
+ * 聊天一个字没变，报错还把排障带偏。alignAgentModuleSnapshotToFloor_ACU 负责把水位与指纹一起对齐。
+ */
+describe('水位对齐（锚点早于结算水位）', () => {
+  it('不对齐会被前缀指纹门以误导性理由拒绝；对齐后写入成功且资料可读回', async () => {
+    const chat: any[] = [
+      { mes: 'a', is_user: false },
+      { role: 'tool', name: 'exa_search', is_system: true, is_user: false, mes: '{"result":"x"}', tool_call_id: 'c1' },
+    ];
+    _set_SillyTavern_API_ACU({ chat, saveChat: vi.fn().mockResolvedValue(undefined) } as any);
+
+    // 主循环的既有状态：水位推到物理尾楼（工具楼，index 1），并 stamp 了该水位的前缀指纹。
+    const settledAtTail = refreshAgentModuleSnapshotChatPrefix_ACU(
+      snapshotAt_ACU(1, { hooks: [hook_ACU('H1') as any] }),
+      chat,
+    );
+    expect(settledAtTail.settledPrefixFingerprint).toBeTruthy();
+
+    // 钉住失败面本身：谁把对齐挪走，这条就会红（而不是等到用户资料补足静默失败）。
+    await expect(writeAgentModuleSnapshot_ACU(chat, 0, settledAtTail)).rejects.toThrow(/前缀已变化/);
+
+    const aligned = alignAgentModuleSnapshotToFloor_ACU(settledAtTail, chat, 0);
+    expect(aligned.settledThroughIndex).toBe(0);
+    await writeAgentModuleSnapshot_ACU(chat, 0, aligned);
+    expect(readAgentModuleSnapshot_ACU(chat).hooks.map((item) => item.id)).toEqual(['H1']);
+  });
+
+  it('水位不高于承载楼时原样返回，不做无谓拷贝与指纹重算', () => {
+    const chat: any[] = [{ mes: 'a', is_user: false }, { mes: 'b', is_user: false }];
+    const snapshot = snapshotAt_ACU(1, { hooks: [hook_ACU('H1') as any] });
+
+    expect(alignAgentModuleSnapshotToFloor_ACU(snapshot, chat, 1)).toBe(snapshot);
+    expect(alignAgentModuleSnapshotToFloor_ACU(snapshot, chat, 3)).toBe(snapshot);
+  });
+
+  /**
+   * 钳水位前必须按**原水位**校验旧指纹：否则写入门的指纹比对退化成恒等式，
+   * P1 前缀守卫的覆盖面会从 0..W 悄悄收窄到 0..承载楼（补足期间改了水位内的正文楼也放过）。
+   */
+  it('补足期间 0..W 内的正文楼被改：对齐必须拒，不得重算指纹把失配洗白', () => {
+    const chat: any[] = [
+      { mes: 'a', is_user: false },
+      { role: 'tool', name: 'exa_search', is_system: true, is_user: false, mes: '{"result":"x"}', tool_call_id: 'c1' },
+    ];
+    _set_SillyTavern_API_ACU({ chat, saveChat: vi.fn().mockResolvedValue(undefined) } as any);
+    const settledAtTail = refreshAgentModuleSnapshotChatPrefix_ACU(
+      snapshotAt_ACU(1, { hooks: [hook_ACU('H1') as any] }),
+      chat,
+    );
+
+    chat[0].mes = 'TAMPERED';
+    expect(() => alignAgentModuleSnapshotToFloor_ACU(settledAtTail, chat, 0)).toThrow(/前缀已变化/);
+  });
+});
+
+/**
+ * 逐栏提交的「已结算正文楼层」白名单必须与 SQL 事务路径同判据。
+ *
+ * 整行 writes 路径的证据集用 isAiFloor_ACU（agent-main-loop.ts 的 aiEvidenceIndexes），逐栏提交路径
+ * 此前自建 `is_user !== true` ⇒ 同一份意图在两条路上判定相反：TT 2.3.0 的一等工具楼、被 /hide 的
+ * 隐藏楼都能被逐栏路径当成伏笔锚点，而整行路径会拒。判据统一走 shared/ai-floor（本库唯一出处）。
+ */
+describe('逐栏提交的证据楼白名单（与 SQL 事务路径同判据）', () => {
+  function hooksInsert(id: string, plantedIndex: number): string {
+    return `INSERT INTO hooks (id, summary, status, importance, planted_index, expected_revision) VALUES ('${id}', '伏笔', 'planted', 'mid', ${plantedIndex}, 0)`;
+  }
+
+  /** 每次都用全新聊天：被拒的逐栏提交仍会落一次帧（回执 status 恒 committed），会顶掉后续修订号。 */
+  function threeFloorChat(): any[] {
+    const chat: any[] = [
+      { mes: 'a', is_user: false },
+      { mes: '中间楼', is_user: false },
+      { mes: '正文', is_user: false },
+    ];
+    _set_SillyTavern_API_ACU({ chat, saveChat: vi.fn().mockResolvedValue(undefined) } as any);
+    return chat;
+  }
+
+  it('planted_index 指向 TT 2.3.0 工具楼必须被拒，该栏不落库', async () => {
+    const chat = threeFloorChat();
+    chat[1] = { role: 'tool', name: 'exa_search', is_system: true, is_user: false, mes: '{"result":"x"}', tool_call_id: 'c1' };
+    await writeAgentModuleSnapshot_ACU(chat, 2, snapshotAt_ACU(2));
+
+    // 注意：receipt.status 只反映「整批有没有落库」（persist/readback 失败才会是 persist_failed /
+    // readback_failed），逐栏拒绝不影响它；拒绝只体现在 rejected[]，且被拒字段不会进 accepted[]。
+    // 所以断言要看这两个清单，不能看 status。
+    const receipt = await commitAgentModuleFieldWrites_ACU({
+      chat, targetIndex: 2, role: 'hook-cognition-maintainer', sql: hooksInsert('HF1', 1),
+    } as any);
+    expect(receipt.rejected.some((item: { reason: string }) => /已结算正文楼层/.test(item.reason))).toBe(true);
+    expect(receipt.accepted.some((item: { id: string; field: string }) => item.id === 'HF1' && item.field === 'plantedIndex')).toBe(false);
+  });
+
+  it('planted_index 指向可见 AI 楼则通过（对照：白名单没有收紧过头）', async () => {
+    const chat = threeFloorChat();
+    await writeAgentModuleSnapshot_ACU(chat, 2, snapshotAt_ACU(2));
+
+    const receipt = await commitAgentModuleFieldWrites_ACU({
+      chat, targetIndex: 2, role: 'hook-cognition-maintainer', sql: hooksInsert('HF2', 0),
+    } as any);
+    expect(receipt.rejected).toEqual([]);
+    expect(receipt.accepted.some((item: { id: string; field: string }) => item.id === 'HF2' && item.field === 'plantedIndex')).toBe(true);
+  });
+
+  it('被 /hide 的隐藏楼同样不得作为伏笔锚点（is_system 是隐藏位，不是角色事实）', async () => {
+    const chat = threeFloorChat();
+    chat[1] = { mes: '（用户已隐藏）', is_user: false, is_system: true };
+    await writeAgentModuleSnapshot_ACU(chat, 2, snapshotAt_ACU(2));
+
+    const receipt = await commitAgentModuleFieldWrites_ACU({
+      chat, targetIndex: 2, role: 'hook-cognition-maintainer', sql: hooksInsert('HF3', 1),
+    } as any);
+    expect(receipt.rejected.some((item: { reason: string }) => /已结算正文楼层/.test(item.reason))).toBe(true);
+    expect(receipt.accepted.some((item: { id: string; field: string }) => item.id === 'HF3' && item.field === 'plantedIndex')).toBe(false);
   });
 });

@@ -31,6 +31,7 @@ import {
   type AgentModuleSnapshot_ACU,
   type AgentWritableModule_ACU,
 } from './agent-model';
+import { isAiFloor_ACU } from '../../../shared/ai-floor';
 
 export interface AgentModuleFrameDeps_ACU {
   validateSnapshot: (raw: unknown) => AgentModuleSnapshot_ACU | null;
@@ -173,13 +174,19 @@ export function readMessageSwipeId_ACU(message: unknown): string {
   return typeof swipeId === 'number' && Number.isInteger(swipeId) && swipeId >= 0 ? String(swipeId) : '0';
 }
 
-function isAiMessage_ACU(message: unknown): boolean {
-  return isRecord_ACU(message) && message.is_user !== true;
-}
-
+/**
+ * 逆序找最近的 AI 楼索引。
+ *
+ * 判定走 shared/ai-floor（本库唯一出处），**不能**用「非 user 即 AI」：TT 2.3.0 的工具轮会把一等
+ * 工具楼 `{role:'tool', is_system:true}` push 成物理尾楼（src/scripts/tool-calling.js:1058-1089），
+ * 而它是「可被用户独立删除、不承载剧情正文、且没有 swipe_id」的真实楼层
+ * （docs/CurrentState/ChatPayload.md §4）。把 checkpoint 写进去＝资料挂在随时会消失的楼上，
+ * 用户一删就退回「无可用基线」，宽容抢救整条禁用。
+ * 退化兜底（整条聊天一个 AI 楼都没有）保持既有行为：退回物理尾楼，此时本就没有剧情楼可挂。
+ */
 function latestAiIndex_ACU(chat: readonly unknown[]): number {
   for (let index = chat.length - 1; index >= 0; index -= 1) {
-    if (isAiMessage_ACU(chat[index])) return index;
+    if (isAiFloor_ACU(chat[index])) return index;
   }
   return Math.max(0, chat.length - 1);
 }
@@ -769,7 +776,9 @@ export function relocateContinuationCheckpoint_ACU(
 ): boolean {
   if (!Number.isInteger(anchorIndex) || anchorIndex < 0 || anchorIndex >= chat.length) return false;
   const anchor = chat[anchorIndex];
-  if (!isAiMessage_ACU(anchor)) return false;
+  // 帧写入目标楼用宽档（shared/ai-floor.ts 的口径划分）：工具楼可被用户独立删除、隐藏楼用户看不见，
+  // 两者都不能承载续写基线，否则基线随楼消失、宽容抢救整条退回「无可用基线」。
+  if (!isAiFloor_ACU(anchor)) return false;
   const folded = foldAgentModuleSnapshot_ACU(chat, deps, anchorIndex);
   if (!folded.contributed || folded.salvaged) return false;
   const before = JSON.stringify(chat.map(message => fieldOf_ACU(message)));
@@ -843,7 +852,7 @@ export function planAgentModuleSnapshotWrite_ACU(
   if (hadUsableCheckpoint) {
     if (delta) appendDelta_ACU(scratch, targetIndex, delta, deps);
   } else {
-    const tableAnchor = tableAnchorIndex !== null && isAiMessage_ACU(scratch[tableAnchorIndex]) ? tableAnchorIndex : null;
+    const tableAnchor = tableAnchorIndex !== null && isAiFloor_ACU(scratch[tableAnchorIndex]) ? tableAnchorIndex : null;
     const anchor = tableAnchor ?? latestAiIndex_ACU(scratch);
     const anchorMessage = scratch[anchor];
     if (isRecord_ACU(anchorMessage)) {

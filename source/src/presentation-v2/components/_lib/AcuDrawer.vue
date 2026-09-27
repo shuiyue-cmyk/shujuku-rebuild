@@ -127,6 +127,19 @@ function clearCloseTimer(): void {
   width: 100%; width: 100vw; width: 100dvw;
   height: 100%; height: 100vh; height: 100dvh;
   display: flex; justify-content: flex-end;
+  /* TT Android IME 键盘避让（必须在本层就地重算，不能靠继承）：
+     本层标 data-tt-mobile-surface="backdrop"。宿主 resolveImeSurfaceRoot 只有在打标值 ===
+     fullscreen-window 时才把该层当 IME root（它的第一分支是 #sheld，我们不在其中），backdrop 会一路
+     落到兜底分支——只看属性存在、不看值——把「最近的打标祖先」也就是本层选成 IME root
+     （mobile-ime-surface-controller.js:116-152）；原生侧随后把 --tt-ime-bottom **inline 写到本元素**，
+     并从上一个 target removeProperty（WebViewInsetsStyleApplier.kt applyImeBottom）⇒ 该变量是 surface-local。
+     而 --acu-safe-bottom 原本只声明在 #acu-app-v2（App.vue）：CSS 自定义属性在声明处完成替换、
+     后代只继承算好的值，于是本层拿到的 bottom 永远不含键盘高度，抽屉里的提示词编辑区被键盘遮住；
+     宿主也救不了——bottom 钳制那条规则硬绑 fullscreen-window（mobile-geometry-firewall.js:390），
+     通用规则只给 scroll-padding-bottom（:339-344），而本层 overflow:hidden、真正滚动的是 __body。
+     桌面 TT / 原版 ST 下两个宿主变量都不存在，max() 退化成 env() 与 0px，取值与继承来的完全一致。 */
+  --acu-native-safe-bottom: max(var(--tt-inset-bottom, 0px), var(--tt-ime-bottom, 0px), 0px);
+  --acu-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--acu-native-safe-bottom, 0px));
   padding: var(--acu-safe-top, 0px) var(--acu-safe-right, 0px) var(--acu-safe-bottom, 0px) var(--acu-safe-left, 0px);
   background: rgba(0, 0, 0, 0.38);
   overflow: hidden;

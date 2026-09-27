@@ -50072,7 +50072,9 @@ function normalizeMessageText_ACU(message) {
 function resolveMessageRole_ACU(message) {
     if (message?.is_user)
         return 'user';
-    if (message?.is_system)
+    // role 才是类型事实：TT 2.3.0 的一等工具楼默认 is_system:true，但用户 /unhide 会把它清成 false
+    // （src/scripts/chats.js:149-159），此时只看 is_system 会把工具结果标成 assistant。判据与 shared/ai-floor.ts 同源。
+    if (message?.is_system || message?.role === 'tool')
         return 'system';
     return 'assistant';
 }
@@ -91598,7 +91600,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.8.6" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.8.7" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -109213,11 +109215,15 @@ function createNativeStBackend_ACU(getStApi) {
     function mapChatMessage(msg, index, includeSwipes) {
         const isUser = msg?.is_user === true;
         const isSystem = msg?.is_system === true;
+        // role 才是类型事实：TT 2.3.0 的一等工具楼默认 is_system:true，但用户 /unhide 会把它清成
+        // false（src/scripts/chats.js:149-159）；此时只看 is_user/is_system 会把工具结果 JSON 映射成
+        // assistant，顺着 getChatMessages({role:'assistant'}) 污染模板与检索语料。判据与 shared/ai-floor.ts 同源。
+        const isTool = msg?.role === 'tool';
         const swipeId = typeof msg?.swipe_id === 'number' ? msg.swipe_id : 0;
         const base = {
             message_id: index,
             name: typeof msg?.name === 'string' ? msg.name : '',
-            role: isUser ? 'user' : isSystem ? 'system' : 'assistant',
+            role: isUser ? 'user' : (isSystem || isTool) ? 'system' : 'assistant',
             is_user: isUser,
             is_system: isSystem,
             is_hidden: isSystem,
@@ -109878,7 +109884,7 @@ function showOptimizationDiffDialogForLoop_ACU(messageIndex, result, callback) {
     const dialogHtml = `
       <div class="acu-optimization-dialog acu-dialog-classic" data-tt-mobile-surface="free-window" style="
         position: fixed;
-        top: 10px;
+        top: max(10px, env(safe-area-inset-top, 0px), var(--tt-inset-top, 0px));
         left: 50%;
         transform: translateX(-50%);
         background: var(--acu-bg-0, #24221f);
@@ -110059,7 +110065,7 @@ function showOptimizationResultDialog_ACU(messageIndex, result) {
     const dialogHtml = `
       <div class="acu-optimization-dialog acu-dialog-classic" data-tt-mobile-surface="free-window" style="
         position: fixed;
-        top: 10px;
+        top: max(10px, env(safe-area-inset-top, 0px), var(--tt-inset-top, 0px));
         left: 50%;
         transform: translateX(-50%);
         background: var(--acu-bg-0, #24221f);
@@ -110240,7 +110246,7 @@ function showReoptimizationDialog_ACU(messageIndex, result, originalContent) {
     const dialogHtml = `
       <div class="acu-optimization-dialog acu-dialog-classic" data-tt-mobile-surface="free-window" style="
         position: fixed;
-        top: 10px;
+        top: max(10px, env(safe-area-inset-top, 0px), var(--tt-inset-top, 0px));
         left: 50%;
         transform: translateX(-50%);
         background: var(--acu-bg-0, #24221f);
@@ -121402,12 +121408,19 @@ function readMessageSwipeId_ACU(message) {
     const swipeId = message.swipe_id;
     return typeof swipeId === 'number' && Number.isInteger(swipeId) && swipeId >= 0 ? String(swipeId) : '0';
 }
-function isAiMessage_ACU(message) {
-    return isRecord_ACU$a(message) && message.is_user !== true;
-}
+/**
+ * 逆序找最近的 AI 楼索引。
+ *
+ * 判定走 shared/ai-floor（本库唯一出处），**不能**用「非 user 即 AI」：TT 2.3.0 的工具轮会把一等
+ * 工具楼 `{role:'tool', is_system:true}` push 成物理尾楼（src/scripts/tool-calling.js:1058-1089），
+ * 而它是「可被用户独立删除、不承载剧情正文、且没有 swipe_id」的真实楼层
+ * （docs/CurrentState/ChatPayload.md §4）。把 checkpoint 写进去＝资料挂在随时会消失的楼上，
+ * 用户一删就退回「无可用基线」，宽容抢救整条禁用。
+ * 退化兜底（整条聊天一个 AI 楼都没有）保持既有行为：退回物理尾楼，此时本就没有剧情楼可挂。
+ */
 function latestAiIndex_ACU(chat) {
     for (let index = chat.length - 1; index >= 0; index -= 1) {
-        if (isAiMessage_ACU(chat[index]))
+        if (isAiFloor_ACU(chat[index]))
             return index;
     }
     return Math.max(0, chat.length - 1);
@@ -122011,7 +122024,9 @@ function relocateContinuationCheckpoint_ACU(chat, anchorIndex, deps) {
     if (!Number.isInteger(anchorIndex) || anchorIndex < 0 || anchorIndex >= chat.length)
         return false;
     const anchor = chat[anchorIndex];
-    if (!isAiMessage_ACU(anchor))
+    // 帧写入目标楼用宽档（shared/ai-floor.ts 的口径划分）：工具楼可被用户独立删除、隐藏楼用户看不见，
+    // 两者都不能承载续写基线，否则基线随楼消失、宽容抢救整条退回「无可用基线」。
+    if (!isAiFloor_ACU(anchor))
         return false;
     const folded = foldAgentModuleSnapshot_ACU(chat, deps, anchorIndex);
     if (!folded.contributed || folded.salvaged)
@@ -122075,7 +122090,7 @@ function planAgentModuleSnapshotWrite_ACU(chat, targetIndex, next, deps, tableAn
             appendDelta_ACU(scratch, targetIndex, delta, deps);
     }
     else {
-        const tableAnchor = tableAnchorIndex !== null && isAiMessage_ACU(scratch[tableAnchorIndex]) ? tableAnchorIndex : null;
+        const tableAnchor = tableAnchorIndex !== null && isAiFloor_ACU(scratch[tableAnchorIndex]) ? tableAnchorIndex : null;
         const anchor = tableAnchor ?? latestAiIndex_ACU(scratch);
         const anchorMessage = scratch[anchor];
         if (isRecord_ACU$a(anchorMessage)) {
@@ -124738,6 +124753,27 @@ function refreshAgentModuleSnapshotChatPrefix_ACU(snapshot, chat) {
         settledPrefixFingerprint: chatPrefixFingerprint_ACU(chat, snapshot.settledThroughIndex),
     };
 }
+/**
+ * 把快照的结算水位与前缀指纹一起对齐到「实际承载楼」。
+ *
+ * writeAgentModuleSnapshot_ACU 的写入门会把水位钳到 targetIndex，并**按钳后的水位**校验前缀指纹。
+ * 所以拿一份水位更高的快照（例如主循环已把水位推到工具楼尾）写到更早的 AI 楼时，门会以
+ * 「资料快照引用的聊天前缀已变化」拒绝——聊天其实一个字没变，报错还会把排障带偏。
+ * 对齐后的语义是「本快照只声明结算到承载楼」：承载楼之后的楼层由下一轮结算重新推进水位，
+ * 内容不丢（折叠读的是全部楼层，与水位无关）。水位不高于承载楼时原样返回，不做无谓拷贝。
+ */
+function alignAgentModuleSnapshotToFloor_ACU(snapshot, chat, targetIndex) {
+    if (snapshot.settledThroughIndex <= targetIndex)
+        return snapshot;
+    // 钳水位前先按**原水位**校验一次旧前缀指纹。少了这一步，写入门的指纹比对会退化成恒等式
+    // （拿 fingerprint(targetIndex) 比 fingerprint(targetIndex)），等于把 P1 的前缀守卫在这条路径上
+    // 悄悄摘掉：覆盖面从 0..W 收窄到 0..targetIndex。失配说明补足期间 0..W 真的变了，
+    // 按写入门同款理由与错误码拒绝（不做「重算指纹把失配洗白」这种自愈）。
+    if (!isChatPrefixCompatible_ACU(snapshot, chat)) {
+        throw new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_AGENT_SNAPSHOT_INVALID', 'agent_persist', '资料快照引用的聊天前缀已变化，拒绝写入以避免删楼后按旧下标结算', false, { targetIndex, settledThroughIndex: snapshot.settledThroughIndex }));
+    }
+    return refreshAgentModuleSnapshotChatPrefix_ACU({ ...snapshot, settledThroughIndex: targetIndex }, chat);
+}
 function isChatPrefixCompatible_ACU(snapshot, messages) {
     if (!snapshot.settledPrefixFingerprint)
         return true;
@@ -125576,7 +125612,10 @@ function commitAgentModuleFieldWrites_ACU(input) {
         }
         const evidence = new Set();
         input.chat.forEach((message, index) => {
-            if (message && typeof message === 'object' && message.is_user !== true)
+            // 证据楼白名单必须与 SQL 事务路径同判据（agent-main-loop.ts 的 aiEvidenceIndexes 用 isAiFloor_ACU）：
+            // TT 2.3.0 的一等工具楼与被 /hide 的隐藏楼都不算「已结算正文楼层」。用旧的「非 user 即 AI」
+            // 会让同一份意图在逐栏提交路径能把伏笔锚到工具楼上、在整行 writes 路径被拒——同域不同判。
+            if (isAiFloor_ACU(message))
                 evidence.add(index);
         });
         const now = Date.now();
@@ -126280,7 +126319,13 @@ function readTableCheckpointCadence_ACU() {
     };
 }
 function syncMaterialBaselinesToTableFloor_ACU(chat, anchorIndex) {
-    relocateContinuationCheckpoint_ACU(chat, anchorIndex, agentModuleFrameDeps_ACU());
+    const relocated = relocateContinuationCheckpoint_ACU(chat, anchorIndex, agentModuleFrameDeps_ACU());
+    if (!relocated) {
+        // 未搬迁有三种原因：锚点楼不是可见 AI 楼（TT 2.3.0 的工具楼、被 /hide 的隐藏楼）、本次没有
+        // 可折叠内容、或折叠结果来自宽容抢救。既有基线一律原样保留（不删不改），所以这不是错误，
+        // 但表格 checkpoint 与续写基线会短暂分叉，留一条 debug 痕迹便于报障时定位（不进常驻 warn）。
+        logDebug_ACU(`[续写资料] 基线未跟随表格 checkpoint 搬到楼层 ${anchorIndex}（该楼不是可见 AI 楼或本次无可折叠内容），沿用既有基线。`);
+    }
 }
 let installed_ACU = false;
 function installMaterialCheckpointScheduler_ACU() {
@@ -132852,9 +132897,14 @@ function defaultWait_ACU(ms) {
 function isRetryableContinuationTransportError_ACU(error) {
     if (error instanceof ContinuationValidationError_ACU)
         return false;
-    if (error instanceof DOMException && error.name === 'AbortError')
-        return false;
-    if (error instanceof Error && error.name === 'AbortError')
+    // 中止判定必须 duck typing，不能用裸 instanceof：油猴模式运行在酒馆助手创建的 iframe 中
+    // （shared/runtime-env.ts），TT 会给**同源子窗口**打 fetch 补丁（src/tauri/main/bootstrap.js 的
+    // patchWindow），中止错误由**宿主 realm** 的 new DOMException(text,'AbortError') 构造
+    // （src/tauri/main/kernel/abort-error.js:4-5）⇒ 本窗口的 instanceof DOMException / instanceof Error
+    // 双双落空，「用户已停止」会被误判成可重试并延时重打。宿主自己的判据 likewise 只看 name
+    // （同文件 isAbortError），本库 api-call.ts 亦同口径。ContinuationValidationError 是本 realm
+    // 自造的类，instanceof 判定安全，保留。
+    if (error?.name === 'AbortError')
         return false;
     return true;
 }
@@ -136293,11 +136343,23 @@ function messageContent_ACU(message) {
     return typeof message.mes === 'string' ? message.mes : typeof message.message === 'string' ? message.message : '';
 }
 function resolveContinuationMaterialAnchor_ACU(chat, chatIdentity) {
-    const messageIndex = chat.length - 1;
+    // 锚点必须落在 AI 楼上，不能无条件取物理尾楼：TT 2.3.0 的工具轮会把一等工具楼
+    // `{role:'tool', is_system:true}` push 成尾楼（src/scripts/tool-calling.js:1058-1089），它是
+    // 「可被用户独立删除、不承载剧情正文、且没有 swipe_id」的真实楼层（docs/CurrentState/ChatPayload.md §4）。
+    // 资料写进去＝挂在随时会消失的楼上（用户一删，下面的 assert 立即拒写迟到结果）；swipe_id 缺失还会让
+    // 锚点回退 '0'，使 swipe 切换后的比对失去意义。判定走 shared/ai-floor（本库唯一出处）。
+    let messageIndex = -1;
+    for (let index = chat.length - 1; index >= 0; index -= 1) {
+        if (isAiFloor_ACU(chat[index])) {
+            messageIndex = index;
+            break;
+        }
+    }
     const message = messageIndex >= 0 && chat[messageIndex] && typeof chat[messageIndex] === 'object' && !Array.isArray(chat[messageIndex])
         ? chat[messageIndex]
         : null;
     if (!chatIdentity || !message) {
+        // 没有 AI 楼（空聊天／全是用户楼与工具楼）时 fail-closed：宁可拒绝补足，也不把资料写进用户楼。
         rejectMaterialRepair_ACU('CONTINUATION_AGENT_SNAPSHOT_INVALID', '当前聊天没有可承载资料补足结果的楼层');
     }
     const rawMessageId = message.message_id;
@@ -136315,15 +136377,25 @@ function resolveContinuationMaterialAnchor_ACU(chat, chatIdentity) {
     };
 }
 function assertContinuationMaterialAnchorCurrent_ACU(anchor, chat, chatIdentity) {
-    if (chat.length !== anchor.chatLength || chat.length - 1 !== anchor.messageIndex) {
+    // 只比物理长度 + 重新解析出的锚点是否还是同一楼。旧写法额外要求「锚点必须是尾楼」
+    // （chat.length - 1 === messageIndex），在锚点允许落在工具楼/隐藏楼之前后，会把合法锚点误判成迟到写入。
+    if (chat.length !== anchor.chatLength) {
         rejectMaterialRepair_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', '资料补足期间聊天楼层已变化，拒绝写入迟到结果');
     }
     const current = resolveContinuationMaterialAnchor_ACU(chat, chatIdentity);
-    if (current.chatIdentity !== anchor.chatIdentity || current.messageKey !== anchor.messageKey
+    if (current.chatIdentity !== anchor.chatIdentity || current.messageIndex !== anchor.messageIndex
+        || current.messageKey !== anchor.messageKey
         || current.swipeId !== anchor.swipeId || current.contentDigest !== anchor.contentDigest) {
         rejectMaterialRepair_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', '资料补足的冻结楼层或 swipe 已变化，拒绝写入迟到结果', { expected: anchor, actual: current });
     }
 }
+/**
+ * 测试钩子：暴露资料补足锚点的解析结果，供判别用例直接钉住「工具楼/隐藏楼不得成为锚点」。
+ * 业务路径请走 repairMaterials（锚点在其内部解析并二次校验），不要直接调用本钩子。
+ */
+const __resolveContinuationMaterialAnchorForTests_ACU = resolveContinuationMaterialAnchor_ACU;
+/** 测试钩子：暴露锚点时效校验，钉住「锚点不必是物理尾楼」这条不变量（见 assert 内注释）。 */
+const __assertContinuationMaterialAnchorCurrentForTests_ACU = assertContinuationMaterialAnchorCurrent_ACU;
 function materialAuthorityFingerprint_ACU(snapshot) {
     return sha256HexSync_ACU(JSON.stringify(snapshot));
 }
@@ -136671,7 +136743,11 @@ class ContinuationOrchestrator_ACU {
                     rejectMaterialRepair_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', '资料补足期间模块 revision、pending 或完成状态已变化，拒绝覆盖更新资料');
                 }
                 assertContinuationMaterialWriteSet_ACU(baseSnapshot, repair.snapshot, targets);
-                await writeAgentModuleSnapshot_ACU(currentChat, anchor.messageIndex, repair.snapshot);
+                // 锚点可以早于物理尾楼（尾楼是 TT 2.3.0 的工具楼或被 /hide 的隐藏楼时），而写入门会把水位
+                // 钳到承载楼并按钳后水位校验前缀指纹；不先对齐就会以「聊天前缀已变化」误导拒绝（见 align 的注释）。
+                // 必须排在 assertContinuationMaterialWriteSet_ACU 之后：那一步校验的是引擎交回来的原始快照。
+                const anchoredSnapshot = alignAgentModuleSnapshotToFloor_ACU(repair.snapshot, currentChat, anchor.messageIndex);
+                await writeAgentModuleSnapshot_ACU(currentChat, anchor.messageIndex, anchoredSnapshot);
                 logAgentSession_ACU({
                     kind: repair.failedModules.length ? 'run_failed' : 'run_completed',
                     title: repair.failedModules.length ? '定向资料补足部分完成' : '定向资料补足完成',
@@ -144857,8 +144933,15 @@ function installSendIntentCaptureHooks_ACU() {
         if (ta && hooksState.enter !== ta) {
             ta.addEventListener('keydown', (e) => {
                 try {
-                    const key = e.key || e.code;
-                    if ((key === 'Enter' || key === 'NumpadEnter') && !e.shiftKey) {
+                    const keyEvent = e;
+                    // 输入法上屏的回车不是「发送」：TT 2.3.0 已在宿主侧修掉 WebKit 的事件倒序（PR #208），
+                    // 但本钩子是我们自己的监听器，仍会把上屏回车记成一次发送意图，而该意图是自动填表/剧情的
+                    // 真实门控（isRecentUserSendIntent_ACU 被 init.ts 与 state-manager.ts 消费）⇒ 必须自行过滤。
+                    // keyCode 229 是「IME 处理中」的历史判据，旧 WebKit/Safari 不填 isComposing。
+                    if (keyEvent.isComposing || keyEvent.keyCode === 229)
+                        return;
+                    const key = keyEvent.key || keyEvent.code;
+                    if ((key === 'Enter' || key === 'NumpadEnter') && !keyEvent.shiftKey) {
                         markUserSendIntent_ACU();
                     }
                 }
@@ -144890,6 +144973,11 @@ function installSendIntentCaptureHooks_ACU() {
         // ignore
     }
 }
+/**
+ * 测试钩子：直接安装发送意图捕获（业务路径由 mainInitialize / CHAT_CHANGED / 重装路径调用）。
+ * IME 上屏回车的过滤属于门控正确性，需要能在 jsdom 里按元素实例重绑后逐个事件断言。
+ */
+const __installSendIntentCaptureHooksForTests_ACU = installSendIntentCaptureHooks_ACU;
 /**
  * [mid-run 复检] 延迟重建链长 await 之间的低成本复检：排程时捕获的聊天身份/存储 epoch
  * 与当前值比对，不等 ⇒ 期间发生了切聊（或旧实例被 dispose），调用方 early return，避免脏写。
@@ -151279,7 +151367,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260927-16";
+        const stamp = "20260927-18";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -167719,8 +167807,8 @@ var _sfc_main$18 = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-dialog-layer[data-v-87804e78] {\r\n  position: fixed;\r\n  inset: 0;\r\n  z-index: 9600;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  padding:\r\n    calc(var(--acu-dialog-edge-gap, 18px) + var(--acu-safe-top, 0px))\r\n    calc(var(--acu-dialog-edge-gap, 18px) + var(--acu-safe-right, 0px))\r\n    calc(var(--acu-dialog-edge-gap, 18px) + var(--acu-safe-bottom, 0px))\r\n    calc(var(--acu-dialog-edge-gap, 18px) + var(--acu-safe-left, 0px));\r\n  background: rgba(0, 0, 0, 0.52);\r\n  pointer-events: auto;\r\n  animation: acu-dialog-layer-in-87804e78 0.16s ease-out both;\n}\n.acu-dialog-layer.is-closing[data-v-87804e78] {\r\n  pointer-events: none;\r\n  animation: acu-dialog-layer-out-87804e78 0.16s ease-in both;\n}\n.acu-dialog[data-v-87804e78] {\r\n  width: min(var(--acu-dialog-width, 440px), 100%);\r\n  max-height: min(var(--acu-dialog-max-height, 560px), calc(100vh - var(--acu-dialog-edge-gap, 18px) - var(--acu-dialog-edge-gap, 18px) - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px)));\r\n  max-height: min(var(--acu-dialog-max-height, 560px), calc(100dvh - var(--acu-dialog-edge-gap, 18px) - var(--acu-dialog-edge-gap, 18px) - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px)));\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--acu-page-gap, 14px);\r\n  padding: var(--acu-panel-padding, 16px);\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\r\n  color: var(--acu-text-1);\r\n  box-shadow: var(--acu-shadow);\r\n  overflow: auto;\r\n  animation: acu-dialog-panel-in-87804e78 0.16s ease-out both;\n}\n.acu-dialog__header[data-v-87804e78] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: var(--acu-panel-gap, 12px);\n}\n.acu-dialog__header h2[data-v-87804e78] {\r\n  min-width: 0;\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-panel-title, 15px);\r\n  line-height: 1.35;\r\n  font-weight: 700;\n}\n.acu-dialog__message[data-v-87804e78] {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\r\n  white-space: pre-wrap;\n}\n.acu-dialog__danger-message[data-v-87804e78] {\r\n  margin: 0;\r\n  padding: var(--acu-space-2, 8px) var(--acu-space-250, 10px);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-danger) 10%, transparent);\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-weight: 700;\r\n  line-height: 1.55;\r\n  white-space: pre-wrap;\n}\n.acu-dialog__field[data-v-87804e78] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--acu-space-150, 6px);\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.4;\n}\n.acu-dialog__checklist[data-v-87804e78] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--acu-space-250, 10px);\r\n  min-width: 0;\r\n  padding: var(--acu-space-250, 10px);\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-bg-2) 74%, transparent);\n}\n.acu-dialog__checklist[data-v-87804e78] .acu-checkbox {\r\n  width: 100%;\n}\n.acu-dialog__check-option[data-v-87804e78] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--acu-space-050, 2px);\r\n  min-width: 0;\n}\n.acu-dialog__check-label[data-v-87804e78] {\r\n  color: var(--acu-text-1);\r\n  font-weight: 600;\n}\n.acu-dialog__check-description[data-v-87804e78] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.45;\n}\n.acu-dialog__actions[data-v-87804e78] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: var(--acu-space-2, 8px);\r\n  flex-wrap: wrap;\r\n  padding-top: var(--acu-space-050, 2px);\n}\n.acu-dialog__actions--stacked[data-v-87804e78] .acu-btn {\r\n  flex: 1 1 var(--acu-dialog-choice-min-width, 128px);\n}\n.acu-dialog-layer.is-closing .acu-dialog[data-v-87804e78] {\r\n  animation: acu-dialog-panel-out-87804e78 0.16s ease-in both;\n}\n@keyframes acu-dialog-layer-in-87804e78 {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes acu-dialog-layer-out-87804e78 {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes acu-dialog-panel-in-87804e78 {\nfrom {\r\n    opacity: 0;\r\n    transform: translateY(6px);\n}\nto {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\n}\n@keyframes acu-dialog-panel-out-87804e78 {\nfrom {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\nto {\r\n    opacity: 0;\r\n    transform: translateY(6px);\n}\n}\n@media (max-width: 520px) {\n.acu-dialog-layer[data-v-87804e78] {\r\n    align-items: flex-end;\r\n    padding:\r\n      calc(var(--acu-dialog-edge-gap-compact, 12px) + var(--acu-safe-top, 0px))\r\n      calc(var(--acu-dialog-edge-gap-compact, 12px) + var(--acu-safe-right, 0px))\r\n      calc(var(--acu-dialog-edge-gap-compact, 12px) + var(--acu-safe-bottom, 0px))\r\n      calc(var(--acu-dialog-edge-gap-compact, 12px) + var(--acu-safe-left, 0px));\n}\n.acu-dialog[data-v-87804e78] {\r\n    width: 100%;\r\n    max-height: calc(100vh - var(--acu-dialog-edge-gap-compact, 12px) - var(--acu-dialog-edge-gap-compact, 12px) - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\r\n    max-height: calc(100dvh - var(--acu-dialog-edge-gap-compact, 12px) - var(--acu-dialog-edge-gap-compact, 12px) - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\n}\n.acu-dialog__actions[data-v-87804e78],\r\n  .acu-dialog__actions--stacked[data-v-87804e78] {\r\n    display: grid;\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/components/_lib/AcuDialogHost.vue#style-0-87804e78");
-var AcuDialogHost_vue_vue_type_style_index_0_scoped_87804e78_lang = null;
+injectSfcStyle("\n.acu-dialog-layer[data-v-e6612251] {\r\n  position: fixed;\r\n  inset: 0;\r\n  z-index: 9600;\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: center;\r\n  width: 100vw;\r\n  width: 100dvw;\r\n  height: 100vh;\r\n  height: 100dvh;\r\n  /* TT Android IME 键盘避让（必须在本层就地重算，不能靠继承）：\r\n     本层标 backdrop，宿主 resolveImeSurfaceRoot 的兜底分支会把「最近的打标祖先」——本层——选成\r\n     IME root（mobile-ime-surface-controller.js:123-144），原生侧把 --tt-ime-bottom inline 写到本元素\r\n     （WebViewInsetsStyleApplier.kt applyImeBottom，切目标时从旧 target 移除）⇒ 变量是 surface-local；\r\n     而 --acu-safe-bottom 只声明在 #acu-app-v2（App.vue），自定义属性在声明处替换、后代只继承算好的值，\r\n     本层与 .acu-dialog 的 max-height 拿到的都是不含键盘高度的旧值 ⇒ 对话框输入区被键盘遮住。\r\n     宿主的 bottom 钳制硬绑 fullscreen-window（mobile-geometry-firewall.js:390），backdrop 吃不到。\r\n     桌面 TT / 原版 ST 下两个宿主变量都不存在，max() 退化成 env() 与 0px，取值与继承来的完全一致。 */\r\n  --acu-native-safe-bottom: max(var(--tt-inset-bottom, 0px), var(--tt-ime-bottom, 0px), 0px);\r\n  --acu-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--acu-native-safe-bottom, 0px));\r\n  padding:\r\n    calc(var(--acu-dialog-edge-gap, 18px) + var(--acu-safe-top, 0px))\r\n    calc(var(--acu-dialog-edge-gap, 18px) + var(--acu-safe-right, 0px))\r\n    calc(var(--acu-dialog-edge-gap, 18px) + var(--acu-safe-bottom, 0px))\r\n    calc(var(--acu-dialog-edge-gap, 18px) + var(--acu-safe-left, 0px));\r\n  background: rgba(0, 0, 0, 0.52);\r\n  pointer-events: auto;\r\n  animation: acu-dialog-layer-in-e6612251 0.16s ease-out both;\n}\n.acu-dialog-layer.is-closing[data-v-e6612251] {\r\n  pointer-events: none;\r\n  animation: acu-dialog-layer-out-e6612251 0.16s ease-in both;\n}\n.acu-dialog[data-v-e6612251] {\r\n  width: min(var(--acu-dialog-width, 440px), 100%);\r\n  max-height: min(var(--acu-dialog-max-height, 560px), calc(100vh - var(--acu-dialog-edge-gap, 18px) - var(--acu-dialog-edge-gap, 18px) - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px)));\r\n  max-height: min(var(--acu-dialog-max-height, 560px), calc(100dvh - var(--acu-dialog-edge-gap, 18px) - var(--acu-dialog-edge-gap, 18px) - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px)));\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--acu-page-gap, 14px);\r\n  padding: var(--acu-panel-padding, 16px);\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-md);\r\n  background: var(--acu-bg-1);\r\n  color: var(--acu-text-1);\r\n  box-shadow: var(--acu-shadow);\r\n  overflow: auto;\r\n  animation: acu-dialog-panel-in-e6612251 0.16s ease-out both;\n}\n.acu-dialog__header[data-v-e6612251] {\r\n  display: flex;\r\n  align-items: center;\r\n  justify-content: space-between;\r\n  gap: var(--acu-panel-gap, 12px);\n}\n.acu-dialog__header h2[data-v-e6612251] {\r\n  min-width: 0;\r\n  margin: 0;\r\n  color: var(--acu-text-1);\r\n  font-size: var(--acu-font-size-panel-title, 15px);\r\n  line-height: 1.35;\r\n  font-weight: 700;\n}\n.acu-dialog__message[data-v-e6612251] {\r\n  margin: 0;\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.55;\r\n  white-space: pre-wrap;\n}\n.acu-dialog__danger-message[data-v-e6612251] {\r\n  margin: 0;\r\n  padding: var(--acu-space-2, 8px) var(--acu-space-250, 10px);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-danger) 10%, transparent);\r\n  color: var(--acu-danger);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  font-weight: 700;\r\n  line-height: 1.55;\r\n  white-space: pre-wrap;\n}\n.acu-dialog__field[data-v-e6612251] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--acu-space-150, 6px);\r\n  color: var(--acu-text-2);\r\n  font-size: var(--acu-font-size-body, 12px);\r\n  line-height: 1.4;\n}\n.acu-dialog__checklist[data-v-e6612251] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--acu-space-250, 10px);\r\n  min-width: 0;\r\n  padding: var(--acu-space-250, 10px);\r\n  border: 1px solid var(--acu-border);\r\n  border-radius: var(--acu-radius-sm);\r\n  background: color-mix(in srgb, var(--acu-bg-2) 74%, transparent);\n}\n.acu-dialog__checklist[data-v-e6612251] .acu-checkbox {\r\n  width: 100%;\n}\n.acu-dialog__check-option[data-v-e6612251] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: var(--acu-space-050, 2px);\r\n  min-width: 0;\n}\n.acu-dialog__check-label[data-v-e6612251] {\r\n  color: var(--acu-text-1);\r\n  font-weight: 600;\n}\n.acu-dialog__check-description[data-v-e6612251] {\r\n  color: var(--acu-text-3);\r\n  font-size: var(--acu-font-size-caption, 11px);\r\n  line-height: 1.45;\n}\n.acu-dialog__actions[data-v-e6612251] {\r\n  display: flex;\r\n  justify-content: flex-end;\r\n  gap: var(--acu-space-2, 8px);\r\n  flex-wrap: wrap;\r\n  padding-top: var(--acu-space-050, 2px);\n}\n.acu-dialog__actions--stacked[data-v-e6612251] .acu-btn {\r\n  flex: 1 1 var(--acu-dialog-choice-min-width, 128px);\n}\n.acu-dialog-layer.is-closing .acu-dialog[data-v-e6612251] {\r\n  animation: acu-dialog-panel-out-e6612251 0.16s ease-in both;\n}\n@keyframes acu-dialog-layer-in-e6612251 {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes acu-dialog-layer-out-e6612251 {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes acu-dialog-panel-in-e6612251 {\nfrom {\r\n    opacity: 0;\r\n    transform: translateY(6px);\n}\nto {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\n}\n@keyframes acu-dialog-panel-out-e6612251 {\nfrom {\r\n    opacity: 1;\r\n    transform: translateY(0);\n}\nto {\r\n    opacity: 0;\r\n    transform: translateY(6px);\n}\n}\n@media (max-width: 520px) {\n.acu-dialog-layer[data-v-e6612251] {\r\n    align-items: flex-end;\r\n    padding:\r\n      calc(var(--acu-dialog-edge-gap-compact, 12px) + var(--acu-safe-top, 0px))\r\n      calc(var(--acu-dialog-edge-gap-compact, 12px) + var(--acu-safe-right, 0px))\r\n      calc(var(--acu-dialog-edge-gap-compact, 12px) + var(--acu-safe-bottom, 0px))\r\n      calc(var(--acu-dialog-edge-gap-compact, 12px) + var(--acu-safe-left, 0px));\n}\n.acu-dialog[data-v-e6612251] {\r\n    width: 100%;\r\n    max-height: calc(100vh - var(--acu-dialog-edge-gap-compact, 12px) - var(--acu-dialog-edge-gap-compact, 12px) - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\r\n    max-height: calc(100dvh - var(--acu-dialog-edge-gap-compact, 12px) - var(--acu-dialog-edge-gap-compact, 12px) - var(--acu-safe-top, 0px) - var(--acu-safe-bottom, 0px));\n}\n.acu-dialog__actions[data-v-e6612251],\r\n  .acu-dialog__actions--stacked[data-v-e6612251] {\r\n    display: grid;\r\n    grid-template-columns: 1fr;\n}\n}\r\n", "src/presentation-v2/components/_lib/AcuDialogHost.vue#style-0-e6612251");
+var AcuDialogHost_vue_vue_type_style_index_0_scoped_e6612251_lang = null;
 
 const _hoisted_1$14 = { class: "acu-dialog__header" };
 const _hoisted_2$V = { class: "acu-dialog__message" };
@@ -167907,7 +167995,7 @@ function _sfc_render$18(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS */
 	)) : createCommentVNode("v-if", true)], 8, ["to"])) : createCommentVNode("v-if", true);
 }
-var AcuDialogHost = /* @__PURE__ */ _export_sfc(_sfc_main$18, [["render", _sfc_render$18], ["__scopeId", "data-v-87804e78"]]);
+var AcuDialogHost = /* @__PURE__ */ _export_sfc(_sfc_main$18, [["render", _sfc_render$18], ["__scopeId", "data-v-e6612251"]]);
 
 var _sfc_main$17 = /*@__PURE__*/ defineComponent({
     __name: 'AcuFileButton',
@@ -173080,8 +173168,8 @@ var _sfc_main$R = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-v2-drawer-layer[data-v-802430da] {\r\n  position: fixed; top: 0; right: 0; bottom: 0; left: 0; inset: 0; z-index: 9200;\r\n  width: 100%; width: 100vw; width: 100dvw;\r\n  height: 100%; height: 100vh; height: 100dvh;\r\n  display: flex; justify-content: flex-end;\r\n  padding: var(--acu-safe-top, 0px) var(--acu-safe-right, 0px) var(--acu-safe-bottom, 0px) var(--acu-safe-left, 0px);\r\n  background: rgba(0, 0, 0, 0.38);\r\n  overflow: hidden;\r\n  animation: acu-drawer-layer-in-802430da 0.18s ease-out both;\n}\n.acu-v2-drawer-layer.is-closing[data-v-802430da] {\r\n  pointer-events: none;\r\n  animation: acu-drawer-layer-out-802430da 0.15s ease-in both;\n}\n.acu-v2-drawer[data-v-802430da] {\r\n  max-width: 100%;\r\n  height: 100%; max-height: 100%;\r\n  display: flex; flex-direction: column;\r\n  background: var(--acu-bg-1);\r\n  border-left: 0;\r\n  box-shadow: var(--acu-shadow);\r\n  min-width: 0; min-height: 0;\r\n  overflow: hidden;\r\n  animation: acu-drawer-panel-in-802430da 0.18s ease-out both;\n}\n.acu-v2-drawer-layer.is-closing .acu-v2-drawer[data-v-802430da] {\r\n  animation: acu-drawer-panel-out-802430da 0.15s ease-in both;\n}\n@supports (max-height: 100dvh) {\n.acu-v2-drawer[data-v-802430da] { max-height: 100%;\n}\n}\n.acu-v2-drawer__header[data-v-802430da] {\r\n  flex: 0 0 auto;\r\n  display: flex; align-items: center; justify-content: space-between;\r\n  min-width: 0;\r\n  gap: var(--acu-panel-gap, 12px); padding: var(--acu-page-gap, 14px) var(--acu-panel-padding, 16px);\r\n  border-bottom: 0;\n}\n.acu-v2-drawer__header-left[data-v-802430da] { display: flex; align-items: center; gap: var(--acu-space-250, 10px); min-width: 0;\n}\n.acu-v2-drawer__header h3[data-v-802430da] { margin: 0; min-width: 0; font-size: var(--acu-font-size-panel-title, 15px); overflow-wrap: anywhere;\n}\n.acu-v2-drawer__body[data-v-802430da] {\r\n  flex: 1; min-height: 0;\r\n  min-width: 0; overflow-y: auto; overflow-x: hidden; padding: var(--acu-panel-padding, 16px);\r\n  display: flex; flex-direction: column; gap: var(--acu-page-gap, 14px);\n}\n@keyframes acu-drawer-layer-in-802430da {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes acu-drawer-panel-in-802430da {\nfrom { transform: translateX(100%);\n}\nto { transform: translateX(0);\n}\n}\n@keyframes acu-drawer-layer-out-802430da {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes acu-drawer-panel-out-802430da {\nfrom { transform: translateX(0);\n}\nto { transform: translateX(100%);\n}\n}\n@media (max-width: 860px) {\n.acu-v2-drawer[data-v-802430da] { width: 100vw !important; max-width: 100vw; border-left: 0;\n}\n}\r\n", "src/presentation-v2/components/_lib/AcuDrawer.vue#style-0-802430da");
-var AcuDrawer_vue_vue_type_style_index_0_scoped_802430da_lang = null;
+injectSfcStyle("\n.acu-v2-drawer-layer[data-v-86aab5d4] {\r\n  position: fixed; top: 0; right: 0; bottom: 0; left: 0; inset: 0; z-index: 9200;\r\n  width: 100%; width: 100vw; width: 100dvw;\r\n  height: 100%; height: 100vh; height: 100dvh;\r\n  display: flex; justify-content: flex-end;\r\n  /* TT Android IME 键盘避让（必须在本层就地重算，不能靠继承）：\r\n     本层标 data-tt-mobile-surface=\"backdrop\"。宿主 resolveImeSurfaceRoot 只有在打标值 ===\r\n     fullscreen-window 时才把该层当 IME root（它的第一分支是 #sheld，我们不在其中），backdrop 会一路\r\n     落到兜底分支——只看属性存在、不看值——把「最近的打标祖先」也就是本层选成 IME root\r\n     （mobile-ime-surface-controller.js:116-152）；原生侧随后把 --tt-ime-bottom **inline 写到本元素**，\r\n     并从上一个 target removeProperty（WebViewInsetsStyleApplier.kt applyImeBottom）⇒ 该变量是 surface-local。\r\n     而 --acu-safe-bottom 原本只声明在 #acu-app-v2（App.vue）：CSS 自定义属性在声明处完成替换、\r\n     后代只继承算好的值，于是本层拿到的 bottom 永远不含键盘高度，抽屉里的提示词编辑区被键盘遮住；\r\n     宿主也救不了——bottom 钳制那条规则硬绑 fullscreen-window（mobile-geometry-firewall.js:390），\r\n     通用规则只给 scroll-padding-bottom（:339-344），而本层 overflow:hidden、真正滚动的是 __body。\r\n     桌面 TT / 原版 ST 下两个宿主变量都不存在，max() 退化成 env() 与 0px，取值与继承来的完全一致。 */\r\n  --acu-native-safe-bottom: max(var(--tt-inset-bottom, 0px), var(--tt-ime-bottom, 0px), 0px);\r\n  --acu-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--acu-native-safe-bottom, 0px));\r\n  padding: var(--acu-safe-top, 0px) var(--acu-safe-right, 0px) var(--acu-safe-bottom, 0px) var(--acu-safe-left, 0px);\r\n  background: rgba(0, 0, 0, 0.38);\r\n  overflow: hidden;\r\n  animation: acu-drawer-layer-in-86aab5d4 0.18s ease-out both;\n}\n.acu-v2-drawer-layer.is-closing[data-v-86aab5d4] {\r\n  pointer-events: none;\r\n  animation: acu-drawer-layer-out-86aab5d4 0.15s ease-in both;\n}\n.acu-v2-drawer[data-v-86aab5d4] {\r\n  max-width: 100%;\r\n  height: 100%; max-height: 100%;\r\n  display: flex; flex-direction: column;\r\n  background: var(--acu-bg-1);\r\n  border-left: 0;\r\n  box-shadow: var(--acu-shadow);\r\n  min-width: 0; min-height: 0;\r\n  overflow: hidden;\r\n  animation: acu-drawer-panel-in-86aab5d4 0.18s ease-out both;\n}\n.acu-v2-drawer-layer.is-closing .acu-v2-drawer[data-v-86aab5d4] {\r\n  animation: acu-drawer-panel-out-86aab5d4 0.15s ease-in both;\n}\n@supports (max-height: 100dvh) {\n.acu-v2-drawer[data-v-86aab5d4] { max-height: 100%;\n}\n}\n.acu-v2-drawer__header[data-v-86aab5d4] {\r\n  flex: 0 0 auto;\r\n  display: flex; align-items: center; justify-content: space-between;\r\n  min-width: 0;\r\n  gap: var(--acu-panel-gap, 12px); padding: var(--acu-page-gap, 14px) var(--acu-panel-padding, 16px);\r\n  border-bottom: 0;\n}\n.acu-v2-drawer__header-left[data-v-86aab5d4] { display: flex; align-items: center; gap: var(--acu-space-250, 10px); min-width: 0;\n}\n.acu-v2-drawer__header h3[data-v-86aab5d4] { margin: 0; min-width: 0; font-size: var(--acu-font-size-panel-title, 15px); overflow-wrap: anywhere;\n}\n.acu-v2-drawer__body[data-v-86aab5d4] {\r\n  flex: 1; min-height: 0;\r\n  min-width: 0; overflow-y: auto; overflow-x: hidden; padding: var(--acu-panel-padding, 16px);\r\n  display: flex; flex-direction: column; gap: var(--acu-page-gap, 14px);\n}\n@keyframes acu-drawer-layer-in-86aab5d4 {\nfrom { opacity: 0;\n}\nto { opacity: 1;\n}\n}\n@keyframes acu-drawer-panel-in-86aab5d4 {\nfrom { transform: translateX(100%);\n}\nto { transform: translateX(0);\n}\n}\n@keyframes acu-drawer-layer-out-86aab5d4 {\nfrom { opacity: 1;\n}\nto { opacity: 0;\n}\n}\n@keyframes acu-drawer-panel-out-86aab5d4 {\nfrom { transform: translateX(0);\n}\nto { transform: translateX(100%);\n}\n}\n@media (max-width: 860px) {\n.acu-v2-drawer[data-v-86aab5d4] { width: 100vw !important; max-width: 100vw; border-left: 0;\n}\n}\r\n", "src/presentation-v2/components/_lib/AcuDrawer.vue#style-0-86aab5d4");
+var AcuDrawer_vue_vue_type_style_index_0_scoped_86aab5d4_lang = null;
 
 const _hoisted_1$Q = { class: "acu-v2-drawer__header" };
 const _hoisted_2$J = { class: "acu-v2-drawer__header-left" };
@@ -173130,7 +173218,7 @@ function _sfc_render$R(_ctx, _cache, $props, $setup, $data, $options) {
 		/* CLASS, NEED_HYDRATION */
 	)) : createCommentVNode("v-if", true);
 }
-var AcuDrawer = /* @__PURE__ */ _export_sfc(_sfc_main$R, [["render", _sfc_render$R], ["__scopeId", "data-v-802430da"]]);
+var AcuDrawer = /* @__PURE__ */ _export_sfc(_sfc_main$R, [["render", _sfc_render$R], ["__scopeId", "data-v-86aab5d4"]]);
 
 var _sfc_main$Q = /*@__PURE__*/ defineComponent({
     __name: 'AcuRulePairList',
@@ -197381,7 +197469,7 @@ function useLogViewer() {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260927-16";
+        const stamp = "20260927-18";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -197390,7 +197478,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.8.6";
+        const v = "9.8.7";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {

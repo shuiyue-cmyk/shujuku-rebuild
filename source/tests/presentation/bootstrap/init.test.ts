@@ -58,6 +58,8 @@ const m = vi.hoisted(() => ({
   // AI 楼判定的实际执行次数（GENERATION_ENDED 单次扫描的判别计数）。
   aiFloorReads: 0,
   logAutoFillSkip: vi.fn(),
+  // 发送意图标记（IME 过滤用例要断言它没被上屏回车触发）
+  markSendIntent: vi.fn(),
 }));
 
 vi.mock('../../../src/shared/host-api', () => ({ SillyTavern_API_ACU: m.api }));
@@ -76,7 +78,7 @@ vi.mock('../../../src/service/runtime/state-manager', () => ({
       context: m.generationEndMatchStatus === 'ambiguous' ? null : context,
     };
   },
-  consumeGenerationContextForEnded_ACU: (...args: any[]) => m.consumeGenerationContext(...args), discardLatestGenerationContext_ACU: vi.fn(), getCurrentIsolationKey_ACU: vi.fn(() => ''), markUserSendIntent_ACU: vi.fn(), isProcessing_Plot_ACU: false, isQuietLikeGeneration_ACU: vi.fn(), isRecentUserSendIntent_ACU: vi.fn(), recordGenerationContext_ACU: m.recordGenerationContext, recordLastUserSend_ACU: vi.fn(), settings_ACU: { plotSettings: {} }, shouldProcessAutoTableUpdateForGenerationEnded_ACU: vi.fn(), shouldProcessPlotForGeneration_ACU: vi.fn(), shouldProcessSummaryVectorIndexForGeneration_ACU: (...args: any[]) => m.shouldProcessSummary(...args),
+  consumeGenerationContextForEnded_ACU: (...args: any[]) => m.consumeGenerationContext(...args), discardLatestGenerationContext_ACU: vi.fn(), getCurrentIsolationKey_ACU: vi.fn(() => ''), markUserSendIntent_ACU: (...args: any[]) => m.markSendIntent(...args), isProcessing_Plot_ACU: false, isQuietLikeGeneration_ACU: vi.fn(), isRecentUserSendIntent_ACU: vi.fn(), recordGenerationContext_ACU: m.recordGenerationContext, recordLastUserSend_ACU: vi.fn(), settings_ACU: { plotSettings: {} }, shouldProcessAutoTableUpdateForGenerationEnded_ACU: vi.fn(), shouldProcessPlotForGeneration_ACU: vi.fn(), shouldProcessSummaryVectorIndexForGeneration_ACU: (...args: any[]) => m.shouldProcessSummary(...args),
   _set_allChatMessages_ACU: m.setMessages, _set_currentChatFileIdentifier_ACU: (value: string) => { m.currentChatKey = value; m.setChat(value); }, _set_currentJsonTableData_ACU: m.setData, _set_independentTableStates_ACU: m.setTables, _set_isProcessing_Plot_ACU: vi.fn(), _set_lastTotalAiMessages_ACU: m.setTotal, _set_wasStoppedByUser_ACU: m.setWasStoppedByUser, abortOnChatMutation_ACU: vi.fn(), clearAutoFillDebounce_ACU: (...args: any[]) => m.clearAutoFillDebounce(...args), getChatMutationAbortSignal_ACU: () => null,
 }));
 vi.mock('../../../src/service/runtime/plot-runtime/plot-runtime-scope', () => ({
@@ -957,5 +959,40 @@ describe('mainInitialize_ACU GENERATION_ENDED 单次扫描', () => {
     expect(m.aiFloorReads - before).toBe(m.api.chat.length);
     expect(sm.shouldProcessAutoTableUpdateForGenerationEnded_ACU).not.toHaveBeenCalled();
     expect(m.handleNewMessage).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * 发送意图钩子必须过滤输入法上屏的回车。
+ *
+ * TT 2.3.0 已在宿主侧修掉 WebKit 的中文输入法回车（PR #208「中文输入法上屏的回车不再触发发送」），
+ * 但我们自己的 keydown 钩子仍会把上屏回车记成一次「用户发送意图」，而该意图是自动填表/剧情的
+ * **真实门控**（isRecentUserSendIntent_ACU 被 init.ts:873,960 与 state-manager.ts:210 消费）
+ * ⇒ 窄口误触发。判据按 W3C：isComposing，外加 keyCode 229（旧 WebKit/Safari 不填 isComposing）。
+ */
+describe('发送意图钩子的 IME 过滤', () => {
+  it('输入法上屏的回车不记发送意图，真实回车才记', async () => {
+    const init = await import('../../../src/presentation/bootstrap/init');
+    document.body.innerHTML = '<button id="send_but"></button><textarea id="send_textarea"></textarea>';
+    // 复位「已绑定元素实例」记忆，让钩子按当前新元素重绑。
+    (window as any).__ACU_sendIntentHooksInstalled = null;
+    m.markSendIntent.mockClear();
+    init.__installSendIntentCaptureHooksForTests_ACU();
+
+    const ta = document.getElementById('send_textarea') as HTMLTextAreaElement;
+
+    ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, isComposing: true }));
+    expect(m.markSendIntent, 'isComposing 的上屏回车不是发送').not.toHaveBeenCalled();
+
+    const legacyIme = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true });
+    Object.defineProperty(legacyIme, 'keyCode', { value: 229 });
+    ta.dispatchEvent(legacyIme);
+    expect(m.markSendIntent, 'keyCode 229（旧 WebKit IME 处理中）不是发送').not.toHaveBeenCalled();
+
+    ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    expect(m.markSendIntent).toHaveBeenCalledTimes(1);
+
+    ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true, bubbles: true, cancelable: true }));
+    expect(m.markSendIntent, 'shift+Enter 是换行，既有行为不得回退').toHaveBeenCalledTimes(1);
   });
 });

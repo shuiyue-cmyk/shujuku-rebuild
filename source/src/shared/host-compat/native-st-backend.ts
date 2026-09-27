@@ -288,11 +288,15 @@ export function createNativeStBackend_ACU(getStApi: GetStApi_ACU): NativeStBacke
     function mapChatMessage(msg: any, index: number, includeSwipes: boolean): any {
         const isUser = msg?.is_user === true;
         const isSystem = msg?.is_system === true;
+        // role 才是类型事实：TT 2.3.0 的一等工具楼默认 is_system:true，但用户 /unhide 会把它清成
+        // false（src/scripts/chats.js:149-159）；此时只看 is_user/is_system 会把工具结果 JSON 映射成
+        // assistant，顺着 getChatMessages({role:'assistant'}) 污染模板与检索语料。判据与 shared/ai-floor.ts 同源。
+        const isTool = msg?.role === 'tool';
         const swipeId = typeof msg?.swipe_id === 'number' ? msg.swipe_id : 0;
         const base: Record<string, any> = {
             message_id: index,
             name: typeof msg?.name === 'string' ? msg.name : '',
-            role: isUser ? 'user' : isSystem ? 'system' : 'assistant',
+            role: isUser ? 'user' : (isSystem || isTool) ? 'system' : 'assistant',
             is_user: isUser,
             is_system: isSystem,
             is_hidden: isSystem,

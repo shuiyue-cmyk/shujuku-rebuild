@@ -153,4 +153,20 @@ describe('optimization-ui TT surface 打标', () => {
     expect(dialog!.getAttribute('data-tt-mobile-surface')).toBe('free-window');
     expect(backdrop!.getAttribute('data-tt-mobile-surface')).toBe('backdrop');
   });
+
+  /**
+   * `free-window` 在宿主 geometry firewall 里**零规则**，而且显式打标会让分类器提前 return
+   * （mobile-overlay-compat-controller.js:226-229），连准入时的一次性 nudge 都不会有
+   * ⇒ 顶部偏移必须我们自己吃安全区。硬编码 `top: 10px` 在 Android 非沉浸模式 / iOS 刘海机上
+   * 会顶进状态栏，正是宿主文档 docs/AndroidDevelopment.md:309-318 记录的原始 bug 形态。
+   */
+  it('对话框顶部偏移消费宿主安全区变量，不再硬编码', () => {
+    showOptimizationDiffDialogForLoop_ACU(3, makeResult(1, 2), vi.fn());
+
+    const dialog = document.querySelector<HTMLElement>('.acu-optimization-dialog');
+    const style = dialog!.getAttribute('style') || '';
+    expect(style).toContain('--tt-inset-top');
+    expect(style).toContain('safe-area-inset-top');
+    expect(style).not.toMatch(/top:\s*10px\s*;/);
+  });
 });

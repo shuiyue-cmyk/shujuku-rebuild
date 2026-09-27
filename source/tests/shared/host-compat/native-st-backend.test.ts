@@ -376,3 +376,33 @@ describe('聊天 / slash / 角色数据', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
+
+/**
+ * TT 2.3.0 的一等工具楼必须映射成 system，绝不能变成 assistant。
+ *
+ * 宿主事实：工具结果楼是 `{role:'tool', is_system:true, is_user:false, mes, tool_call_id, error}`
+ * （src/scripts/tool-calling.js:1058-1068）。默认 `is_system:true` 时旧映射恰好给出 system，
+ * 但用户 `/unhide` 会把 `is_system` 改回 false（src/scripts/chats.js:149-159），此时只看
+ * is_user/is_system 的映射会把它判成 **assistant**、正文是工具结果 JSON ⇒ 顺着
+ * `getChatMessages({role:'assistant'})` 混进模板与检索语料。这正是 shared/ai-floor.ts 头注释
+ * 警告过的「只判 is_system 会漏掉被 /unhide 过的工具楼」：role 才是类型事实。
+ */
+describe('TT 2.3.0 一等工具楼的角色映射', () => {
+  it('role:"tool" 一律映射为 system，被 /unhide 清掉 is_system 后也不得变成 assistant', async () => {
+    const ctx = buildContext({
+      chat: [
+        { name: '角色', mes: '回复', is_user: false },
+        { name: 'exa_search', mes: '{"result":"hidden"}', is_user: false, is_system: true, role: 'tool', tool_call_id: 'call_1' },
+        { name: 'exa_search', mes: '{"result":"unhidden"}', is_user: false, is_system: false, role: 'tool', tool_call_id: 'call_2' },
+      ],
+    });
+    const backend = createNativeStBackend_ACU(() => ctx);
+
+    const all = await backend.getChatMessages('0-2');
+    expect(all.map((m: any) => m.role)).toEqual(['assistant', 'system', 'system']);
+
+    // 判别点：按 assistant 过滤时不得混入工具结果 JSON。
+    const onlyAi = await backend.getChatMessages('0-2', { role: 'assistant' });
+    expect(onlyAi.map((m: any) => m.message)).toEqual(['回复']);
+  });
+});

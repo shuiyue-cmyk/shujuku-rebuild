@@ -8,9 +8,9 @@ vi.mock('../../../src/service/ai/api-call', () => ({
   callAIWithResolvedPreset_ACU: mockCallAIWithResolvedPreset_ACU,
 }));
 
-import { callContinuationInternalAi_ACU, formatAgentUsageLabel_ACU } from '../../../src/service/continuation/internal-ai-call';
+import { callContinuationInternalAi_ACU, formatAgentUsageLabel_ACU, isRetryableContinuationTransportError_ACU } from '../../../src/service/continuation/internal-ai-call';
 import type { ContinuationResolvedApiPreset_ACU } from '../../../src/service/continuation/api-preset';
-import type { ContinuationInternalAiRequestIdentity_ACU } from '../../../src/service/continuation/model';
+import { ContinuationValidationError_ACU, createContinuationError_ACU, type ContinuationInternalAiRequestIdentity_ACU } from '../../../src/service/continuation/model';
 
 const preset_ACU: ContinuationResolvedApiPreset_ACU = {
   presetName: 'route-preset',
@@ -166,5 +166,33 @@ describe('callContinuationInternalAi_ACU prompt cache key', () => {
     expect(nsA).toMatch(/^cont-agent-main-[0-9a-f]{8}$/);
     expect(nsB).toMatch(/^cont-agent-main-[0-9a-f]{8}$/);
     expect(nsB).not.toBe(nsA);
+  });
+});
+
+/**
+ * 中止判定必须 duck typing，不能用裸 instanceof。
+ *
+ * 油猴模式运行在酒馆助手创建的 iframe 中（shared/runtime-env.ts:5,18-19），TT 会给**同源子窗口**
+ * 打 fetch 补丁（src/tauri/main/bootstrap.js:236-258 的 patchWindow(openedWindow)），中止错误由
+ * **宿主 realm** 的 `new DOMException(text, 'AbortError')` 构造（src/tauri/main/kernel/abort-error.js:4-5）。
+ * 跨 realm 时本窗口的 `instanceof DOMException` / `instanceof Error` 双双落空 ⇒ 用户已停止的调用
+ * 被判成「可重试」并延时重打。宿主自己的判据 likewise 只看 name（同文件 isAbortError），
+ * 本库 api-call.ts:106-111 也早就是 duck typing，只有这一处漏了。
+ */
+describe('isRetryableContinuationTransportError_ACU', () => {
+  it('用户中止一律不可重试：跨 realm 形状（instanceof 认不出）也必须判出', () => {
+    // 同 realm 的 DOMException（回归护栏）
+    expect(isRetryableContinuationTransportError_ACU(new DOMException('The operation was aborted.', 'AbortError'))).toBe(false);
+    // 跨 realm：形状对得上但原型链不是本窗口的 DOMException / Error
+    expect(isRetryableContinuationTransportError_ACU({ name: 'AbortError', message: 'The operation was aborted.' })).toBe(false);
+    expect(isRetryableContinuationTransportError_ACU(Object.assign(Object.create(null), { name: 'AbortError' }))).toBe(false);
+  });
+
+  it('传输层错误可重试；续写自身的校验错误不可重试', () => {
+    expect(isRetryableContinuationTransportError_ACU(new Error('502 Bad Gateway'))).toBe(true);
+    expect(isRetryableContinuationTransportError_ACU(new TypeError('Failed to fetch'))).toBe(true);
+    expect(isRetryableContinuationTransportError_ACU(
+      new ContinuationValidationError_ACU(createContinuationError_ACU('CONTINUATION_INTERNAL_REQUEST_STALE', 'agent_persist', '已失效', false)),
+    )).toBe(false);
   });
 });

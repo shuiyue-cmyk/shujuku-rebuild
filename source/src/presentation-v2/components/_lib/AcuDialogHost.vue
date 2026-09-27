@@ -160,6 +160,16 @@ watch(
   width: 100dvw;
   height: 100vh;
   height: 100dvh;
+  /* TT Android IME 键盘避让（必须在本层就地重算，不能靠继承）：
+     本层标 backdrop，宿主 resolveImeSurfaceRoot 的兜底分支会把「最近的打标祖先」——本层——选成
+     IME root（mobile-ime-surface-controller.js:123-144），原生侧把 --tt-ime-bottom inline 写到本元素
+     （WebViewInsetsStyleApplier.kt applyImeBottom，切目标时从旧 target 移除）⇒ 变量是 surface-local；
+     而 --acu-safe-bottom 只声明在 #acu-app-v2（App.vue），自定义属性在声明处替换、后代只继承算好的值，
+     本层与 .acu-dialog 的 max-height 拿到的都是不含键盘高度的旧值 ⇒ 对话框输入区被键盘遮住。
+     宿主的 bottom 钳制硬绑 fullscreen-window（mobile-geometry-firewall.js:390），backdrop 吃不到。
+     桌面 TT / 原版 ST 下两个宿主变量都不存在，max() 退化成 env() 与 0px，取值与继承来的完全一致。 */
+  --acu-native-safe-bottom: max(var(--tt-inset-bottom, 0px), var(--tt-ime-bottom, 0px), 0px);
+  --acu-safe-bottom: max(env(safe-area-inset-bottom, 0px), var(--acu-native-safe-bottom, 0px));
   padding:
     calc(var(--acu-dialog-edge-gap, 18px) + var(--acu-safe-top, 0px))
     calc(var(--acu-dialog-edge-gap, 18px) + var(--acu-safe-right, 0px))

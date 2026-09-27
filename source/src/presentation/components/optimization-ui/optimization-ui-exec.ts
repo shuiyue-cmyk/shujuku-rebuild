@@ -166,7 +166,7 @@ import {
     const dialogHtml = `
       <div class="acu-optimization-dialog acu-dialog-classic" data-tt-mobile-surface="free-window" style="
         position: fixed;
-        top: 10px;
+        top: max(10px, env(safe-area-inset-top, 0px), var(--tt-inset-top, 0px));
         left: 50%;
         transform: translateX(-50%);
         background: var(--acu-bg-0, #24221f);

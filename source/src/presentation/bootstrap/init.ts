@@ -324,8 +324,14 @@ function installSendIntentCaptureHooks_ACU() {
     if (ta && hooksState.enter !== ta) {
       ta.addEventListener('keydown', (e: Event) => {
         try {
-          const key = (e as KeyboardEvent).key || (e as KeyboardEvent).code;
-          if ((key === 'Enter' || key === 'NumpadEnter') && !(e as KeyboardEvent).shiftKey) {
+          const keyEvent = e as KeyboardEvent;
+          // 输入法上屏的回车不是「发送」：TT 2.3.0 已在宿主侧修掉 WebKit 的事件倒序（PR #208），
+          // 但本钩子是我们自己的监听器，仍会把上屏回车记成一次发送意图，而该意图是自动填表/剧情的
+          // 真实门控（isRecentUserSendIntent_ACU 被 init.ts 与 state-manager.ts 消费）⇒ 必须自行过滤。
+          // keyCode 229 是「IME 处理中」的历史判据，旧 WebKit/Safari 不填 isComposing。
+          if (keyEvent.isComposing || keyEvent.keyCode === 229) return;
+          const key = keyEvent.key || keyEvent.code;
+          if ((key === 'Enter' || key === 'NumpadEnter') && !keyEvent.shiftKey) {
             markUserSendIntent_ACU();
           }
         } catch (err) {}
@@ -357,6 +363,12 @@ function installSendIntentCaptureHooks_ACU() {
     // ignore
   }
 }
+
+/**
+ * 测试钩子：直接安装发送意图捕获（业务路径由 mainInitialize / CHAT_CHANGED / 重装路径调用）。
+ * IME 上屏回车的过滤属于门控正确性，需要能在 jsdom 里按元素实例重绑后逐个事件断言。
+ */
+export const __installSendIntentCaptureHooksForTests_ACU = installSendIntentCaptureHooks_ACU;
 
 /**
  * [mid-run 复检] 延迟重建链长 await 之间的低成本复检：排程时捕获的聊天身份/存储 epoch
