@@ -35,8 +35,9 @@ import {
 import {
   isPlotStageError_ACU
 } from './plot-runtime-phase';
+import { readAcuBuildVersion_ACU } from '../../../shared/build-info';
 
-const PLOT_RUNTIME_BUILD_VERSION_ACU = (globalThis as any).__ACU_BUILD_VERSION__ || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = readAcuBuildVersion_ACU();
 type PlotRuntimeResult_ACU = Awaited<ReturnType<typeof runPlotTasksRuntime_ACU>> & {
   abortedByStageFailure?: boolean;
   failedStage?: string;

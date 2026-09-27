@@ -30,24 +30,15 @@ import {
 import { getAcuHostDocument } from '../bootstrap/host-document';
 import { useToastStore } from '../stores/toast-store';
 import { getAcuHostKind } from '../../shared/host-bridge';
+import { readAcuBuildStamp_ACU, readAcuBuildVersion_ACU } from '../../shared/build-info';
 import { settings_ACU, currentJsonTableData_ACU, currentChatFileIdentifier_ACU } from '../../service/runtime/state-manager';
 
 function getBuildStamp(): string {
-  try {
-    const stamp = (globalThis as any).__ACU_BUILD_STAMP__;
-    return typeof stamp === 'string' && stamp ? stamp : 'dev';
-  } catch {
-    return 'dev';
-  }
+  return readAcuBuildStamp_ACU();
 }
 
 function getPluginVersion(): string {
-  try {
-    const v = (globalThis as any).__ACU_BUILD_VERSION__;
-    return typeof v === 'string' && v ? v : 'unknown';
-  } catch {
-    return 'unknown';
-  }
+  return readAcuBuildVersion_ACU();
 }
 
 function maskSecret(value: unknown): string {

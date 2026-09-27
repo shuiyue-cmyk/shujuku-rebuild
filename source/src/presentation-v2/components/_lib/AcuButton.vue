@@ -1,16 +1,21 @@
 <template>
-  <button
-    :type="nativeType"
-    :disabled="disabled || loading"
+  <component
+    :is="isLink ? 'a' : 'button'"
+    :type="isLink ? undefined : nativeType"
+    :href="isActiveLink ? href : undefined"
+    :target="isActiveLink ? (target ?? '_blank') : undefined"
+    :rel="isActiveLink ? (rel ?? 'noopener noreferrer') : undefined"
+    :disabled="isLink ? undefined : (disabled || loading)"
+    :aria-disabled="isLink && (disabled || loading) ? 'true' : undefined"
     :title="title"
     class="acu-btn"
-    :class="[`acu-btn--${variant}`, sizeClass, { 'acu-btn--icon-only': iconOnly, 'acu-btn--loading': loading, 'acu-btn--block': block }]"
+    :class="[`acu-btn--${variant}`, sizeClass, { 'acu-btn--icon-only': iconOnly, 'acu-btn--loading': loading, 'acu-btn--block': block, 'acu-btn--disabled': isLink && (disabled || loading) }]"
     @click="$emit('click', $event)"
   >
     <i v-if="loading" class="fa-solid fa-spinner fa-spin acu-btn__spinner" />
     <slot v-if="!loading" />
     <slot v-else name="loading-text" />
-  </button>
+  </component>
 </template>
 
 <script setup lang="ts">
@@ -28,6 +33,17 @@ const props = withDefaults(defineProps<{
   block?: boolean;
   title?: string;
   nativeType?: 'button' | 'submit' | 'reset';
+  /**
+   * 给了 href 就渲染成 `<a>` 而不是 `<button>`：外链必须走真链接，宿主才会把它交给系统浏览器
+   * （桌面 TauriTavern 的 on_new_window 对 http(s) 外链调 opener().open_url 并 Deny 新窗，
+   * 移动端由 window.open 兼容层转 plugin:opener|open_url）。样式沿用同一套 .acu-btn，
+   * 所以不在页面里裸写锚点（那些样式是本组件的 scoped style，别处拿不到）。
+   */
+  href?: string;
+  /** 仅 href 模式生效；默认 `_blank`。 */
+  target?: string;
+  /** 仅 href 模式生效；默认 `noopener noreferrer`。 */
+  rel?: string;
 }>(), {
   variant: 'default',
   size: 'md',
@@ -37,6 +53,9 @@ const props = withDefaults(defineProps<{
   block: false,
   title: undefined,
   nativeType: 'button',
+  href: undefined,
+  target: undefined,
+  rel: undefined,
 });
 
 defineEmits<{
@@ -44,6 +63,10 @@ defineEmits<{
 }>();
 
 const sizeClass = computed(() => `acu-btn--${props.size}`);
+
+/** href 模式：渲染成锚点。禁用/加载中的锚点不给 href（留着会让"看起来禁用"的链接照样能中键打开）。 */
+const isLink = computed(() => !!props.href);
+const isActiveLink = computed(() => isLink.value && !props.disabled && !props.loading);
 </script>
 
 <style scoped>
@@ -54,6 +77,8 @@ const sizeClass = computed(() => `acu-btn--${props.size}`);
   color: var(--acu-text-1);
   border-radius: var(--acu-radius-sm);
   cursor: pointer;
+  /* href 模式渲染成 <a>：锚点默认带下划线，不去掉就和同一排的按钮不成套。 */
+  text-decoration: none;
   display: inline-flex; align-items: center; justify-content: center; gap: var(--acu-space-150, 6px);
   min-width: 0; max-width: 100%; box-sizing: border-box; overflow-wrap: anywhere;
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
@@ -68,6 +93,9 @@ const sizeClass = computed(() => `acu-btn--${props.size}`);
   background: linear-gradient(var(--acu-hover-overlay), var(--acu-hover-overlay)), var(--acu-bg-2);
 }
 .acu-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+/* 锚点没有 :disabled 伪类：href 模式的禁用态用类表达，视觉与 button:disabled 一致。 */
+.acu-btn--disabled { opacity: 0.5; cursor: not-allowed; }
+.acu-btn--disabled:hover { background: var(--acu-bg-2); }
 
 .acu-btn--primary {
   background: var(--acu-accent);

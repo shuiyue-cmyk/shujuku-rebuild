@@ -254,11 +254,18 @@
             <i class="fa-solid fa-download"></i>
             导出 Debug 数据
           </AcuButton>
+          <AcuButton
+            :href="debugIssueUrl"
+            title="在新标签页打开本插件的 GitHub issue 页面（已预填插件版本与上报清单，请附上导出的 Debug JSON）"
+          >
+            <i class="fa-brands fa-github"></i>
+            前往 GitHub 提交 issue
+          </AcuButton>
         </div>
 
         <p class="acu-v2-advanced-tools-page__hint">
           使用步骤：① 点「开始 Debug」（补开 debug / warn 采集，之前攒下的报错会一起保留导出）→ ② 复现问题 →
-          ③ 点「导出 Debug 数据」生成 .json 文件 → ④ 把文件交给开发者即可定位问题。
+          ③ 点「导出 Debug 数据」生成 .json 文件 → ④ 点「前往 GitHub 提交 issue」把文件作为附件提交（也可自行把文件交给开发者）。
           排查完成后记得「停止 Debug」。
         </p>
       </AcuPanel>
@@ -285,11 +292,15 @@ import { watchChatChanged_ACU } from '../composables/useChatChangedListener';
 import { type LogErrorHint, resolveLogErrorHint } from '../composables/log-error-hints';
 import { type LogLevelFilter, useLogViewer } from '../composables/useLogViewer';
 import { useDebugPanel } from '../composables/useDebugPanel';
+import { buildDebugIssueUrl_ACU } from '../composables/debug-issue-link';
 import { advancedToolsCopy } from '../copy/advanced-tools-copy';
 
 const sqlFlow = useSqlConsole();
 const logFlow = useLogViewer();
 const debugFlow = useDebugPanel();
+
+/** issue 链接在 setup 期算一次即可：版本号是构建期注入的常量，运行期不会变。 */
+const debugIssueUrl = buildDebugIssueUrl_ACU();
 const logListRef = ref<HTMLElement | null>(null);
 
 /** 日志条目不可变，按 id 缓存匹配结果，避免每次列表刷新都对全部条目重跑规则。 */
