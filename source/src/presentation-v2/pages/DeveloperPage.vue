@@ -77,6 +77,13 @@ const toggles = computed<DeveloperFieldItem[]>(() => {
       description: "打开时，API 预设在别处变化后其他使用该预设的位置会标黄提醒；关闭后不再标黄。",
       value: devOptions.apiReconfirm.value,
     },
+    {
+      key: "warnLogEnabled",
+      label: "WARN 日志",
+      description:
+        "常驻采集 WARN 级运行日志：开启后不点「开始 Debug」也会把 warn 写入运行日志与导出；关闭时（默认）不点 Debug 只有 error。开始 Debug 会临时补采 warn，停止 Debug 只收回临时那一路，不会动这里的常驻选择。",
+      value: devOptions.warnLogEnabled.value,
+    },
   ];
 });
 const maxConcurrentGroups = computed(
@@ -95,6 +102,11 @@ function handleToggleChange(key: string, value: boolean): void {
   }
   if (key === "apiReconfirm") {
     devOptions.setApiReconfirm(value);
+  }
+  // warn 采集的常驻来源：只走 store（内部再落 log-buffer 的常驻格），
+  // 不碰 Debug 面板那一路临时采集，两个入口各管自己那一格。
+  if (key === "warnLogEnabled") {
+    devOptions.setWarnLogEnabled(value);
   }
 }
 </script>

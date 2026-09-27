@@ -91598,7 +91598,7 @@ async function getAgentGreenlightWorldbookContentForPlot_ACU(apiSettings, agentG
  * 剧情推进 — 规划入口（runOptimizationLogic）
  * 从 helpers-plot-runtime.ts 拆出（L1401-L1512）
  */
-const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.8.5" || 'unknown';
+const PLOT_RUNTIME_BUILD_VERSION_ACU = "9.8.6" || 'unknown';
 /**
  * 精确取消判定：只认 AbortError / TaskAbortedByUser / 世界书读取取消分类，
  * 不再用 message.includes('aborted') 误伤普通错误；并对 null/undefined 拒绝值安全。
@@ -151279,7 +151279,7 @@ topLevelWindow_ACU.AutoCardUpdaterAPI = api;
 const BUILD_BADGE_ELEMENT_ID_ACU = 'acu-build-stamp-badge';
 function readBuildStamp_ACU() {
     try {
-        const stamp = "20260927-15";
+        const stamp = "20260927-16";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -197381,7 +197381,7 @@ function useLogViewer() {
  */
 function getBuildStamp() {
     try {
-        const stamp = "20260927-15";
+        const stamp = "20260927-16";
         return typeof stamp === 'string' && stamp ? stamp : 'dev';
     }
     catch {
@@ -197390,7 +197390,7 @@ function getBuildStamp() {
 }
 function getPluginVersion() {
     try {
-        const v = "9.8.5";
+        const v = "9.8.6";
         return typeof v === 'string' && v ? v : 'unknown';
     }
     catch {
@@ -198448,6 +198448,12 @@ var _sfc_main$b = /*@__PURE__*/ defineComponent({
                     description: "打开时，API 预设在别处变化后其他使用该预设的位置会标黄提醒；关闭后不再标黄。",
                     value: devOptions.apiReconfirm.value,
                 },
+                {
+                    key: "warnLogEnabled",
+                    label: "WARN 日志",
+                    description: "常驻采集 WARN 级运行日志：开启后不点「开始 Debug」也会把 warn 写入运行日志与导出；关闭时（默认）不点 Debug 只有 error。开始 Debug 会临时补采 warn，停止 Debug 只收回临时那一路，不会动这里的常驻选择。",
+                    value: devOptions.warnLogEnabled.value,
+                },
             ];
         });
         const maxConcurrentGroups = computed(() => settings.numberFields.value.find((field) => field.key === "maxConcurrentGroups")?.value ?? 1);
@@ -198461,6 +198467,11 @@ var _sfc_main$b = /*@__PURE__*/ defineComponent({
             if (key === "apiReconfirm") {
                 devOptions.setApiReconfirm(value);
             }
+            // warn 采集的常驻来源：只走 store（内部再落 log-buffer 的常驻格），
+            // 不碰 Debug 面板那一路临时采集，两个入口各管自己那一格。
+            if (key === "warnLogEnabled") {
+                devOptions.setWarnLogEnabled(value);
+            }
         }
         const __returned__ = { devOptions, settings, toggles, maxConcurrentGroups, handleToggleChange, AcuFormRow, AcuInput, AcuPanel, AcuPanelGrid, ToggleRow, get developerCopy() { return developerCopy; } };
         Object.defineProperty(__returned__, '__isScriptSetup', { enumerable: false, value: true });
@@ -198468,8 +198479,8 @@ var _sfc_main$b = /*@__PURE__*/ defineComponent({
     }
 });
 
-injectSfcStyle("\n.acu-v2-developer-page[data-v-3d62b725] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-developer-page__toggle-list[data-v-3d62b725] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n@media (max-width: 860px) {\n.acu-v2-developer-page[data-v-3d62b725] {\r\n    padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/DeveloperPage.vue#style-0-3d62b725");
-var DeveloperPage_vue_vue_type_style_index_0_scoped_3d62b725_lang = null;
+injectSfcStyle("\n.acu-v2-developer-page[data-v-57fd41a0] {\r\n  min-height: 100%;\r\n  min-width: 0;\r\n  padding: 20px;\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 18px;\n}\n.acu-v2-developer-page__toggle-list[data-v-57fd41a0] {\r\n  display: flex;\r\n  flex-direction: column;\r\n  gap: 14px;\n}\n@media (max-width: 860px) {\n.acu-v2-developer-page[data-v-57fd41a0] {\r\n    padding: 14px;\n}\n}\r\n", "src/presentation-v2/pages/DeveloperPage.vue#style-0-57fd41a0");
+var DeveloperPage_vue_vue_type_style_index_0_scoped_57fd41a0_lang = null;
 
 const _hoisted_1$b = { class: "acu-v2-developer-page" };
 const _hoisted_2$a = { class: "acu-v2-developer-page__toggle-list" };
@@ -198515,7 +198526,7 @@ function _sfc_render$b(_ctx, _cache, $props, $setup, $data, $options) {
 		_: 1
 	})]);
 }
-var DeveloperPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$b], ["__scopeId", "data-v-3d62b725"]]);
+var DeveloperPage = /* @__PURE__ */ _export_sfc(_sfc_main$b, [["render", _sfc_render$b], ["__scopeId", "data-v-57fd41a0"]]);
 
 /**
  * page-registry — 一级页静态注册表（plan §4.1 + §D24）
